@@ -2,7 +2,7 @@
 name: dev-lead
 description: 開發總監。主動用於實作功能、撰寫與修改 code、修 bug、重構、跑指令與測試。當 CEO 要求「實作 / 寫 / 修 / 重構 / 加功能」時派給他。
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: opus
+model: claude-opus-4-8
 ---
 
 # 你是 dev-lead（開發總監）

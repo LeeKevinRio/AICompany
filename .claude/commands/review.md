@@ -42,4 +42,11 @@ description: 跨廠商 code review — 呼叫 OpenAI Codex CLI 對目前 staged 
 ## 備註
 - `--sandbox read-only` 確保 Codex 只讀不改，符合審查只讀原則。
 - 若改用 ChatGPT 登入而非 API key，請先依 Codex CLI 文件完成 `codex login`。
-- TODO：依實際 Codex CLI 版本確認 `exec` 子指令與 flag 名稱，必要時調整。
+- 指令語法已對 **codex-cli 0.142.3** 驗證：`codex exec` 子指令存在，`-s, --sandbox read-only` 為合法值。
+- 替代方案：Codex 內建專門的 review 子指令，會以 Codex 原生格式輸出，可審查未提交的變更：
+
+  ```bash
+  codex exec review --uncommitted
+  ```
+
+  本流程預設採用上面步驟 2 的自訂 prompt 版本，因為它能固定以繁體中文輸出並在最後一行給出 `BLOCKING_ISSUES=true/false`，方便接回 qa-reviewer 的判斷流程。

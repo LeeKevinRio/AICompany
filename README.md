@@ -109,5 +109,5 @@ dev-lead  qa-reviewer creative-lead art-lead
 
 - [ ] 補上實際專案的程式碼目錄結構與技術棧。
 - [ ] 安裝建議的 skills（見 [`.claude/skills/README.md`](.claude/skills/README.md)）。
-- [ ] 依實際 Codex CLI 版本確認 `/review` 的指令與 flag。
+- [x] 依實際 Codex CLI 版本確認 `/review` 的指令與 flag。（已對 codex-cli 0.142.3 驗證）
 - [ ] 視需要調整各 agent 的 `model` 與工具權限。
