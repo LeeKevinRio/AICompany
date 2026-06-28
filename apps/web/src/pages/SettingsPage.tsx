@@ -1,7 +1,9 @@
-// Tab 3：設定。全域底/台預設、常用玩家管理、資料匯出、清空資料。
+// Tab 3：設定。全域底/台預設、規則預設、輸贏警戒線、常用玩家管理、資料匯出、清空資料。
+// 玩家名冊的「新增/管理」入口在「玩家」頁，這裡只放偏好設定。
 import { useState } from 'react';
 import { useAppData } from '../AppData';
 import { MAX_KNOWN_PLAYERS } from '../types';
+import { RulesFields } from '../components/RulesFields';
 
 function toNonNegInt(value: string): number {
   const n = Number(value);
@@ -99,6 +101,36 @@ export function SettingsPage() {
           </label>
         </div>
         <p className="setting-hint">新建牌局時套用此預設，進入牌局後仍可個別調整。</p>
+      </section>
+
+      <section className="card">
+        <h2>預設規則</h2>
+        <RulesFields
+          rules={globalSettings.defaultRules}
+          onChange={(defaultRules) =>
+            updateGlobalSettings({ ...globalSettings, defaultRules })
+          }
+        />
+      </section>
+
+      <section className="card">
+        <h2>輸贏警戒線</h2>
+        <p className="setting-hint">單場淨輸超過此金額時，排名條會紅色警示（0 = 關閉）。</p>
+        <label className="field" style={{ marginTop: 12 }}>
+          <span>金額（元）</span>
+          <input
+            type="number"
+            min={0}
+            className="tabular"
+            value={globalSettings.loseAlertThreshold}
+            onChange={(e) =>
+              updateGlobalSettings({
+                ...globalSettings,
+                loseAlertThreshold: toNonNegInt(e.target.value),
+              })
+            }
+          />
+        </label>
       </section>
 
       <section className="card">

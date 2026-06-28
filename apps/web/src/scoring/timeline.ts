@@ -3,8 +3,14 @@
 // 與 scoring.ts 一樣，本檔不依賴 React / DOM，純資料進出，方便單元測試與重用。
 // 全部建構在既有 scoreRound / scoreSession 之上，不改動既有計分邏輯。
 
-import type { Player, Round, Session, Settings } from '../types';
-import { calcUnitAmount, scoreRound } from './scoring';
+import type { Player, Round, Session, SessionRules, Settings } from '../types';
+import { DEFAULT_SESSION_RULES } from '../types';
+import { calcDong, calcUnitAmount, effectiveTai, scoreRound } from './scoring';
+
+/** 讀取 session 的規則；舊資料無 rules 欄位時回 DEFAULT_SESSION_RULES（全 0，行為不變）。 */
+export function rulesOf(session: Pick<Session, 'rules'>): SessionRules {
+  return session.rules ?? DEFAULT_SESSION_RULES;
+}
 
 /**
  * 走勢圖單一資料點：第 roundIndex 局結束後，各玩家的累計輸贏。
@@ -28,6 +34,7 @@ export function buildCumulativeTimeline(
   rounds: Round[],
   players: Player[],
   settings: Settings,
+  rules: SessionRules = DEFAULT_SESSION_RULES,
 ): TimelinePoint[] {
   const zero = (): Record<string, number> => {
     const r: Record<string, number> = {};
@@ -40,15 +47,22 @@ export function buildCumulativeTimeline(
   let running = zero();
   rounds.forEach((round, i) => {
     let delta: Record<string, number>;
+    let dong = 0;
     try {
-      delta = scoreRound(round, players, settings);
+      delta = scoreRound(round, players, settings, rules);
+      // 走勢圖以「淨額」呈現：自摸者付出的東錢算進他自己的曲線（單向流出，不分給他人）。
+      dong = calcDong(round, rules);
     } catch (err) {
       // 單局非法不該讓整張圖爆掉：視為無變化。
       console.error(`走勢圖：第 ${i + 1} 局計分失敗，視為 0 變化：`, err);
       delta = zero();
+      dong = 0;
     }
     const next = { ...running };
     for (const p of players) next[p.id] = (next[p.id] ?? 0) + (delta[p.id] ?? 0);
+    if (dong > 0 && next[round.winnerId] !== undefined) {
+      next[round.winnerId] -= dong;
+    }
     running = next;
     points.push({ roundIndex: i + 1, cumulative: next });
   });
@@ -60,8 +74,8 @@ export function buildCumulativeTimeline(
 
 /** 單一趣味標籤 */
 export interface Highlight {
-  /** 標籤種類 key（champion / gunKing / selfDrawKing / biggestRound） */
-  key: 'champion' | 'gunKing' | 'selfDrawKing' | 'biggestRound';
+  /** 標籤種類 key */
+  key: 'champion' | 'gunKing' | 'selfDrawKing' | 'biggestRound' | 'smallestRound';
   label: string; // 顯示名稱（如「本場冠軍」）
   playerName: string | null; // 對應玩家名（最慘烈一局為贏家名）
   detail: string; // 補充說明（金額 / 次數）
@@ -74,6 +88,11 @@ export interface SessionHighlights {
     string,
     { wins: number; selfDraws: number; gunned: number }
   >;
+  /** v2.1：本場公基金（東錢）累計金額。 */
+  kitty: number;
+  /** v2.1 建議做（匯率換算）：每局平均底台金額、平均台數。無局數時皆為 0。 */
+  avgRoundAmount: number;
+  avgTai: number;
 }
 
 /**
@@ -84,6 +103,7 @@ export function calcSessionHighlights(
   rounds: Round[],
   players: Player[],
   settings: Settings,
+  rules: SessionRules = DEFAULT_SESSION_RULES,
 ): SessionHighlights {
   const nameOf = (id: string | null) => players.find((p) => p.id === id)?.name ?? '—';
 
@@ -97,23 +117,41 @@ export function calcSessionHighlights(
 
   let biggestAmount = -1;
   let biggestWinnerId: string | null = null;
+  // v2.1 建議做：最快結束（台數最低）一局——以贏家單局收最少者代表。
+  let smallestAmount = Infinity;
+  let smallestWinnerId: string | null = null;
+
+  let kitty = 0;
+  let taiSum = 0;
+  let unitAmountSum = 0;
 
   for (const r of rounds) {
     if (!perPlayer[r.winnerId]) continue; // 防呆：winner 不在玩家清單
     perPlayer[r.winnerId].wins += 1;
     if (r.selfDraw) {
       perPlayer[r.winnerId].selfDraws += 1;
+      kitty += calcDong(r, rules);
     } else if (r.loserId && perPlayer[r.loserId]) {
       perPlayer[r.loserId].gunned += 1;
+      // 放槍損失用 r.tai（非 effectiveTai）是刻意的：自摸加台只在自摸時生效，
+      // 放槍不受自摸加台影響，故 tie-break 的損失金額以原始台數計。勿改成 effectiveTai。
       gunLoss[r.loserId] += calcUnitAmount(settings, r.tai);
     }
 
-    // 最慘烈一局：贏家單局收最多者
-    const amount = calcUnitAmount(settings, r.tai);
+    // 含自摸加台的有效台數 / 單注金額（供「最大/最快一局」與匯率換算）。
+    const eTai = effectiveTai(r, rules);
+    const amount = calcUnitAmount(settings, eTai);
+    taiSum += eTai;
+    unitAmountSum += amount;
+
     const won = r.selfDraw ? amount * (players.length - 1) : amount;
     if (won > biggestAmount) {
       biggestAmount = won;
       biggestWinnerId = r.winnerId;
+    }
+    if (won < smallestAmount) {
+      smallestAmount = won;
+      smallestWinnerId = r.winnerId;
     }
   }
 
@@ -127,7 +165,9 @@ export function calcSessionHighlights(
       let total = 0;
       for (const r of rounds) {
         try {
-          total += scoreRound(r, players, settings)[p.id] ?? 0;
+          total += scoreRound(r, players, settings, rules)[p.id] ?? 0;
+          // 公基金為自摸者單向流出，冠軍以「淨額」判定才公允。
+          if (r.selfDraw && r.winnerId === p.id) total -= calcDong(r, rules);
         } catch {
           // 非法局略過
         }
@@ -190,7 +230,7 @@ export function calcSessionHighlights(
       });
     }
 
-    // 最慘烈一局
+    // 最慘烈一局（贏家單局收最多）。要求金額 > 0 且確實有對應贏家。
     if (biggestWinnerId && biggestAmount > 0) {
       highlights.push({
         key: 'biggestRound',
@@ -199,9 +239,28 @@ export function calcSessionHighlights(
         detail: `單局 ${formatSigned(biggestAmount)}`,
       });
     }
+
+    // v2.1 建議做：最快結束一局（台數最低、贏家單局收最少）。
+    // guard 與「最慘烈一局」對齊：要求贏家存在、金額 > 0（排除 0 元邊界，避免只有一局
+    // 且金額為 0 時靜默輸出怪結果），且與最慘烈一局不同金額時才顯示（避免單局牌局兩標籤指同一局）。
+    if (
+      smallestWinnerId &&
+      smallestAmount > 0 &&
+      smallestAmount !== biggestAmount
+    ) {
+      highlights.push({
+        key: 'smallestRound',
+        label: '最快結束局',
+        playerName: nameOf(smallestWinnerId),
+        detail: `單局 ${formatSigned(smallestAmount)}`,
+      });
+    }
   }
 
-  return { highlights, perPlayer };
+  const avgRoundAmount = rounds.length > 0 ? Math.round(unitAmountSum / rounds.length) : 0;
+  const avgTai = rounds.length > 0 ? taiSum / rounds.length : 0;
+
+  return { highlights, perPlayer, kitty, avgRoundAmount, avgTai };
 }
 
 // ---- 玩家跨場彙整 ----
@@ -216,7 +275,7 @@ export interface PlayerSessionResult {
 
 export interface PlayerStats {
   name: string;
-  totalAmount: number; // 跨場總輸贏
+  totalAmount: number; // 跨場總輸贏（淨額，含自摸付出的東錢）
   sessionsPlayed: number; // 出場場次
   totalWins: number; // 總胡牌局數
   totalSelfDraws: number; // 總自摸局數
@@ -227,15 +286,24 @@ export interface PlayerStats {
   longestWinStreak: number; // 最長連贏場數（單場正收益）
   longestLoseStreak: number; // 最長連輸場數
   winRate: number; // 勝率（正收益場次佔比，0~1）
+  /** v2.1 建議做：近 5 場場均輸贏（不足 5 場以實際場數平均；無場次為 0）。 */
+  recentAvg: number;
 }
 
 /**
- * 以「玩家名字」為識別鍵，跨場彙整某玩家的統計。
- * 注意：v2 接受同名不同人會被合併的限制（見企劃技術風險表）。
+ * 跨場彙整核心：以 `matchPlayers` 在每場找出**所有**對應座位後加總統計。
+ * - 金額採「淨額」：底/台/自摸加台（含 session 規則）再扣掉自己付出的東錢。
+ * - 舊資料無 rules 欄位時用 DEFAULT_SESSION_RULES（全 0），行為與 v2 一致。
+ *
+ * 同一場可能有多個符合座位（例如同名、或回填後同 rosterId 的兩個座位）。
+ * 依 CEO 定案「同名＝同一人」，同場所有符合座位的貢獻（淨額、胡/自摸/放槍次數）
+ * 全部加總到該人，避免只取第一個座位而漏帳。每場最多一個符合座位時，
+ * 加總結果與舊版「取第一個」完全一致（零回歸）。
  */
-export function aggregatePlayerStats(
+function aggregateBy(
   sessions: Session[],
-  playerName: string,
+  displayName: string,
+  matchPlayers: (s: Session) => Player[],
 ): PlayerStats {
   const history: PlayerSessionResult[] = [];
   let totalWins = 0;
@@ -246,22 +314,28 @@ export function aggregatePlayerStats(
   const sorted = [...sessions].sort((a, b) => a.createdAt - b.createdAt);
 
   for (const s of sorted) {
-    const player = s.players.find((p) => p.name === playerName);
-    if (!player) continue;
+    const matched = matchPlayers(s);
+    if (matched.length === 0) continue;
 
+    const rules = rulesOf(s);
     let amount = 0;
     for (const r of s.rounds) {
-      try {
-        amount += scoreRound(r, s.players, s.settings)[player.id] ?? 0;
-      } catch {
-        // 非法局略過
-      }
-      if (r.winnerId === player.id) {
-        totalWins += 1;
-        if (r.selfDraw) totalSelfDraws += 1;
-      }
-      if (!r.selfDraw && r.loserId === player.id) {
-        totalGunned += 1;
+      // 同場所有符合座位都要加總；每場僅一個符合座位時等同舊版單一座位行為。
+      for (const player of matched) {
+        try {
+          amount += scoreRound(r, s.players, s.settings, rules)[player.id] ?? 0;
+          // 自己自摸付的東錢是淨流出，從淨額扣除。
+          if (r.selfDraw && r.winnerId === player.id) amount -= calcDong(r, rules);
+        } catch {
+          // 非法局略過
+        }
+        if (r.winnerId === player.id) {
+          totalWins += 1;
+          if (r.selfDraw) totalSelfDraws += 1;
+        }
+        if (!r.selfDraw && r.loserId === player.id) {
+          totalGunned += 1;
+        }
       }
     }
 
@@ -299,9 +373,12 @@ export function aggregatePlayerStats(
   }
 
   const winRate = history.length > 0 ? positiveCount / history.length : 0;
+  const last5 = recentTrend.slice(-5);
+  const recentAvg =
+    last5.length > 0 ? Math.round(last5.reduce((a, b) => a + b, 0) / last5.length) : 0;
 
   return {
-    name: playerName,
+    name: displayName,
     totalAmount,
     sessionsPlayed: history.length,
     totalWins,
@@ -312,7 +389,54 @@ export function aggregatePlayerStats(
     longestWinStreak,
     longestLoseStreak,
     winRate,
+    recentAvg,
   };
+}
+
+/**
+ * 以「玩家名字」為識別鍵，跨場彙整某玩家的統計。
+ * 注意：依 CEO 定案「同名＝同一人」，同一場有多個同名座位會全部加總（不漏帳）。
+ */
+export function aggregatePlayerStats(
+  sessions: Session[],
+  playerName: string,
+): PlayerStats {
+  return aggregateBy(sessions, playerName, (s) =>
+    s.players.filter((p) => p.name === playerName),
+  );
+}
+
+/**
+ * 以「玩家名字」彙整，但**只算尚未連結到名冊（rosterId == null）的同名場次**。
+ *
+ * 用於「名冊已有同名成員（已連結若干場）」與「仍有同名未連結場次」並存的過渡狀態：
+ * 名冊成員那邊以 aggregateByRosterId 聚合已連結場次，歷史「唯名字」卡片若仍用
+ * aggregatePlayerStats（純名字）會把已連結場次也算進去 → 雙重計算。改用本函式後，
+ * 歷史卡片只反映尚未歸入名冊的場次，與名冊成員的數字不重疊。
+ *
+ * matchPlayer 用 `p.rosterId == null` 同時涵蓋 null / undefined。
+ */
+export function aggregateUnlinkedByName(
+  sessions: Session[],
+  playerName: string,
+): PlayerStats {
+  return aggregateBy(sessions, playerName, (s) =>
+    s.players.filter((p) => p.name === playerName && p.rosterId == null),
+  );
+}
+
+/**
+ * v2.1：以 RosterPlayer.id 為識別鍵跨場彙整——以 rosterId 精準對應「同一個人」，
+ * 不受改名影響。`displayName` 通常傳名冊目前的顯示名稱。
+ */
+export function aggregateByRosterId(
+  sessions: Session[],
+  rosterId: string,
+  displayName: string,
+): PlayerStats {
+  return aggregateBy(sessions, displayName, (s) =>
+    s.players.filter((p) => p.rosterId === rosterId),
+  );
 }
 
 /** 從所有 session 蒐集出現過的玩家名字（去重，依出場次數排序） */

@@ -1,8 +1,8 @@
 // 即時排名條（記局頁頂部）。依視覺規範 7-2。
 // 含企劃 5-3 排名動畫：金額 rolling number、排名變動箭頭、贏家亮起。
 import { useEffect, useRef, useState } from 'react';
-import type { Player, Round, Settings } from '../types';
-import { scoreSession } from '../scoring/scoring';
+import type { Player, Round, SessionRules, Settings } from '../types';
+import { settleSession } from '../scoring/scoring';
 import { formatSigned } from '../scoring/timeline';
 import { playerColor } from './ui';
 
@@ -10,6 +10,9 @@ interface Props {
   rounds: Round[];
   players: Player[];
   settings: Settings;
+  rules: SessionRules;
+  /** v2.1 建議做：單場輸贏警戒線（0=關閉）。淨額輸超過此值時該行紅色警示。 */
+  loseAlertThreshold?: number;
 }
 
 interface Ranked {
@@ -66,10 +69,12 @@ function RankRow({
   item,
   arrow,
   flash,
+  alert,
 }: {
   item: Ranked;
   arrow: 'up' | 'down' | 'same';
   flash: boolean;
+  alert: boolean;
 }) {
   const shown = useRolling(item.amount);
   const tone = shown > 0 ? 'win' : shown < 0 ? 'lose' : 'zero';
@@ -77,9 +82,12 @@ function RankRow({
   // 正確的英文序數後綴（避免 2st/3st/4st）。
   const ordinal = item.rank === 1 ? '1st' : item.rank === 2 ? '2nd' : item.rank === 3 ? '3rd' : `${item.rank}th`;
   return (
-    <div className={`rank-row${flash ? ' winner-flash' : ''}`}>
+    <div className={`rank-row${flash ? ' winner-flash' : ''}${alert ? ' lose-alert' : ''}`}>
       <span className="rank-color-bar" style={{ background: playerColor(item.colorIndex) }} />
-      <span className="rank-name">{item.player.name}</span>
+      <span className="rank-name">
+        {alert && <span className="lose-alert-dot" aria-label="超過輸贏警戒線">⚠</span>}
+        {item.player.name}
+      </span>
       <span className={`rank-amt amt ${tone}`}>{formatSigned(shown)}</span>
       <span className="rank-meta">
         <span>{ordinal}</span>
@@ -89,10 +97,14 @@ function RankRow({
   );
 }
 
-export function RankBar({ rounds, players, settings }: Props) {
+export function RankBar({ rounds, players, settings, rules, loseAlertThreshold = 0 }: Props) {
+  // 排名以「淨額」呈現（含自摸付出的東錢），與結算一致。
   let totals: Record<string, number>;
+  let kitty = 0;
   try {
-    totals = scoreSession(rounds, players, settings);
+    const settled = settleSession(rounds, players, settings, rules);
+    totals = settled.net;
+    kitty = settled.kitty;
   } catch {
     totals = {};
     for (const p of players) totals[p.id] = 0;
@@ -148,8 +160,15 @@ export function RankBar({ rounds, players, settings }: Props) {
           item={item}
           arrow={arrows[item.player.id]}
           flash={flashId === item.player.id}
+          alert={loseAlertThreshold > 0 && item.amount <= -loseAlertThreshold}
         />
       ))}
+      {kitty > 0 && (
+        <div className="rank-kitty">
+          <span>公基金</span>
+          <span className="tabular">${kitty.toLocaleString('en-US')}</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -57,8 +57,9 @@ function makeRound(partial: Partial<Round> = {}): Round {
 }
 
 // 注意：刻意回傳 Record，方便在測試裡塞入「不合法型別」的欄位（繞過 TS 型別檢查）。
+// base 刻意省略 rules，模擬 v1 舊資料（無 rules 欄位），驗證 migration 補值不誤判毀損。
 function makeSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const base: Session = {
+  const base: Omit<Session, 'rules'> = {
     id: 's1',
     name: '週五場',
     players,
@@ -135,5 +136,59 @@ describe('LocalStorageRepository validator 向後相容', () => {
     const res = await new LocalStorageRepository().loadSessions();
     expect(res.corrupted).toBe(true);
     expect(res.sessions.map((s) => s.id)).toEqual(['good']);
+  });
+});
+
+describe('LocalStorageRepository — v2.1 rules migration', () => {
+  it('v1 舊場次（無 rules）：不判毀損，補入全 0 的 DEFAULT_SESSION_RULES', async () => {
+    const session = makeSession();
+    expect('rules' in session).toBe(false);
+    seed([session]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+    // 關鍵：補 0 而非 1，否則歷史自摸分數會被改變。
+    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 0, selfDrawDongAmount: 0 });
+  });
+
+  it('已存在合法 rules：原樣保留', async () => {
+    const session = makeSession({ rules: { selfDrawBonusTai: 1, selfDrawDongAmount: 100 } });
+    seed([session]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 1, selfDrawDongAmount: 100 });
+  });
+
+  it('rules 型別毀損：不丟整場，正規化回補 0（行為不變）', async () => {
+    const session = makeSession({ rules: { selfDrawBonusTai: 'x', selfDrawDongAmount: -5 } });
+    seed([session]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 0, selfDrawDongAmount: 0 });
+  });
+
+  it('Player 帶 rosterId：合法字串通過、非字串判毀損', async () => {
+    const ok = makeSession({
+      id: 'ok',
+      players: players.map((p, i) => (i === 0 ? { ...p, rosterId: 'uuid-1' } : p)),
+    });
+    seed([ok]);
+    let res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions[0].players[0].rosterId).toBe('uuid-1');
+
+    const bad = makeSession({
+      id: 'bad',
+      players: players.map((p, i) =>
+        i === 0 ? { ...p, rosterId: 123 as unknown as string } : p,
+      ),
+    });
+    seed([bad]);
+    res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(res.sessions).toHaveLength(0);
   });
 });

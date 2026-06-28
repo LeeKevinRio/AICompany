@@ -3,7 +3,7 @@
 // 避免拖慢首載（與 recharts 同樣考量）。
 import { useRef, useState } from 'react';
 import type { Player, Round, Session, Settings } from '../types';
-import { scoreSession } from '../scoring/scoring';
+import { settleSession } from '../scoring/scoring';
 import { buildCumulativeTimeline, formatSigned } from '../scoring/timeline';
 import { Sparkline } from './Sparkline';
 import { playerColor } from './ui';
@@ -22,9 +22,10 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // 分享圖卡顯示「淨額」（含自摸付出的東錢），與結算頁一致。
   let totals: Record<string, number>;
   try {
-    totals = scoreSession(rounds, players, settings);
+    totals = settleSession(rounds, players, settings, session.rules).net;
   } catch {
     totals = {};
     for (const p of players) totals[p.id] = 0;
@@ -35,7 +36,7 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
     .sort((a, b) => b.amount - a.amount);
 
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
-  const timeline = buildCumulativeTimeline(rounds, players, settings);
+  const timeline = buildCumulativeTimeline(rounds, players, settings, session.rules);
 
   async function handleExport() {
     if (!cardRef.current) return;

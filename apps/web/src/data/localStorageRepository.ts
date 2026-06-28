@@ -1,8 +1,22 @@
 // 第一版資料實作：存在瀏覽器 localStorage，重整不遺失。
 // 介面符合 StorageRepository，未來可替換成雲端 / IndexedDB 版本。
 
-import type { GlobalSettings, Player, Round, Session, Settings } from '../types';
-import { DEFAULT_GLOBAL_SETTINGS, MAX_KNOWN_PLAYERS, MAX_NOTE_LENGTH } from '../types';
+import type {
+  GlobalSettings,
+  Player,
+  RosterPlayer,
+  Round,
+  Session,
+  SessionRules,
+  Settings,
+} from '../types';
+import {
+  DEFAULT_GLOBAL_SETTINGS,
+  DEFAULT_NEW_SESSION_RULES,
+  DEFAULT_SESSION_RULES,
+  MAX_KNOWN_PLAYERS,
+  MAX_NOTE_LENGTH,
+} from '../types';
 import type { LoadResult, StorageRepository } from './repository';
 
 // 沿用 v1 的 sessions key（v2 向下相容讀同一份），新增獨立的全域設定 key。
@@ -35,7 +49,28 @@ function isFiniteNonNegInt(v: unknown): v is number {
 function isValidPlayer(v: unknown): v is Player {
   if (typeof v !== 'object' || v === null) return false;
   const p = v as Record<string, unknown>;
-  return isNonEmptyString(p.id) && typeof p.name === 'string';
+  if (!isNonEmptyString(p.id) || typeof p.name !== 'string') return false;
+  // v2.1：rosterId 為可選字串（舊資料無此欄位 → undefined，合法）。
+  // 型別錯（存在但非字串）視為毀損，避免污染跨場聚合。
+  if (p.rosterId !== undefined && typeof p.rosterId !== 'string') return false;
+  return true;
+}
+
+/**
+ * v2.1：把任意值正規化成合法的 SessionRules。
+ * 任一欄位缺失/型別錯，就回退到「migration 預設」（fallback，預設全 0），
+ * 確保舊場次（無 rules）計分行為不變。
+ */
+function normalizeSessionRules(v: unknown, fallback: SessionRules): SessionRules {
+  if (typeof v !== 'object' || v === null) return { ...fallback };
+  const r = v as Record<string, unknown>;
+  const selfDrawBonusTai = isFiniteNonNegInt(r.selfDrawBonusTai)
+    ? r.selfDrawBonusTai
+    : fallback.selfDrawBonusTai;
+  const selfDrawDongAmount = isFiniteNonNegInt(r.selfDrawDongAmount)
+    ? r.selfDrawDongAmount
+    : fallback.selfDrawDongAmount;
+  return { selfDrawBonusTai, selfDrawDongAmount };
 }
 
 function isValidSettings(v: unknown): v is Settings {
@@ -86,6 +121,9 @@ function isValidSession(v: unknown): v is Session {
     if (typeof s.endedAt !== 'number' || !Number.isFinite(s.endedAt)) return false;
   }
 
+  // v2.1：rules 不在此判毀損——舊場次本就沒有 rules，會在 migration 階段補入
+  //（DEFAULT_SESSION_RULES，全 0，行為不變）。型別錯也只是被正規化覆蓋，不丟整場資料。
+
   // MVP 規則：固定 4 人，且 player id 必須全部唯一。
   // 若殘留非 4 人或重複 id 的 session，自摸分支的 (players.length - 1)
   // 會算出錯誤金額、重複 id 也會讓 RoundDelta 互相覆蓋，因此一律判為毀損。
@@ -114,10 +152,42 @@ function parseGlobalSettings(v: unknown): GlobalSettings | null {
     knownPlayers.push(name);
     if (knownPlayers.length >= MAX_KNOWN_PLAYERS) break;
   }
+  // v2.1：玩家名冊。逐筆驗證，壞的項目濾掉而非整包丟棄；id 去重。
+  const roster: RosterPlayer[] = [];
+  const seenIds = new Set<string>();
+  if (Array.isArray(g.roster)) {
+    for (const item of g.roster) {
+      if (typeof item !== 'object' || item === null) continue;
+      const rp = item as Record<string, unknown>;
+      if (!isNonEmptyString(rp.id) || seenIds.has(rp.id)) continue;
+      if (typeof rp.name !== 'string') continue;
+      if (typeof rp.createdAt !== 'number' || !Number.isFinite(rp.createdAt)) continue;
+      if (rp.avatar !== undefined && typeof rp.avatar !== 'string') continue;
+      seenIds.add(rp.id);
+      roster.push({
+        id: rp.id,
+        name: rp.name,
+        avatar: typeof rp.avatar === 'string' ? rp.avatar : undefined,
+        createdAt: rp.createdAt,
+      });
+    }
+  }
+
+  // v2.1：開桌規則預設（缺值用「新開桌預設」補：自摸加台 1、東錢 100）。
+  const defaultRules = normalizeSessionRules(g.defaultRules, DEFAULT_NEW_SESSION_RULES);
+
+  // v2.1：單場輸贏警戒線（缺值/型別錯 → 0=關閉）。
+  const loseAlertThreshold = isFiniteNonNegInt(g.loseAlertThreshold)
+    ? g.loseAlertThreshold
+    : 0;
+
   return {
     defaultBase: g.defaultBase,
     defaultTai: g.defaultTai,
     knownPlayers,
+    roster,
+    defaultRules,
+    loseAlertThreshold,
   };
 }
 
@@ -159,7 +229,12 @@ export class LocalStorageRepository implements StorageRepository {
     let droppedAny = false;
     for (const item of data) {
       if (isValidSession(item)) {
-        valid.push(item);
+        // v2.1 migration：舊場次無 rules → 補 DEFAULT_SESSION_RULES（全 0，計分行為不變）。
+        const raw = item as unknown as Record<string, unknown>;
+        valid.push({
+          ...item,
+          rules: normalizeSessionRules(raw.rules, DEFAULT_SESSION_RULES),
+        });
       } else {
         droppedAny = true;
         // 明確記下被丟棄的 session id/name，方便除錯（取不到就標示無法辨識）。

@@ -3,10 +3,12 @@ import {
   buildCumulativeTimeline,
   calcSessionHighlights,
   aggregatePlayerStats,
+  aggregateByRosterId,
   collectPlayerNames,
   formatSigned,
 } from './timeline';
-import type { Player, Round, Session, Settings } from '../types';
+import type { Player, Round, Session, SessionRules, Settings } from '../types';
+import { DEFAULT_SESSION_RULES } from '../types';
 
 const players: Player[] = [
   { id: 'p1', name: 'A' },
@@ -17,6 +19,9 @@ const players: Player[] = [
 
 // 底 100、台 50
 const settings: Settings = { base: 100, tai: 50 };
+
+// 無特殊規則（自摸加台 0、東錢 0），維持與舊版相同的零和行為。
+const rules: SessionRules = { ...DEFAULT_SESSION_RULES };
 
 function makeRound(partial: Partial<Round>): Round {
   return {
@@ -122,6 +127,17 @@ describe('calcSessionHighlights', () => {
     expect(perPlayer.p1.selfDraws).toBe(1);
     expect(perPlayer.p1.wins).toBe(2);
   });
+
+  it('邊界：只有一局且金額為 0 時，最慘烈/最快結束局 guard 一致都不輸出', () => {
+    // base 0、tai 0 → 單局金額為 0，兩個標籤都不該出現（避免靜默輸出怪結果）。
+    const zeroSettings: Settings = { base: 0, tai: 0 };
+    const rounds: Round[] = [
+      makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 0, selfDraw: false }),
+    ];
+    const { highlights } = calcSessionHighlights(rounds, players, zeroSettings);
+    expect(highlights.find((h) => h.key === 'biggestRound')).toBeUndefined();
+    expect(highlights.find((h) => h.key === 'smallestRound')).toBeUndefined();
+  });
 });
 
 describe('aggregatePlayerStats', () => {
@@ -131,6 +147,7 @@ describe('aggregatePlayerStats', () => {
       name: '場',
       players: players.map((p) => ({ ...p })),
       settings: { ...settings },
+      rules: { ...rules },
       rounds: [],
       createdAt: 0,
       ...partial,
@@ -170,6 +187,84 @@ describe('aggregatePlayerStats', () => {
   });
 });
 
+describe('aggregateBy 同一場多個同名座位都加總（修正漏帳）', () => {
+  function makeSession(partial: Partial<Session>): Session {
+    return {
+      id: 's1',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+      ...partial,
+    };
+  }
+
+  it('同名（aggregatePlayerStats）：同場兩個同名座位的輸贏/次數都算到，不只取第一個', () => {
+    // p1 與 p3 都叫「阿明」（同名＝同一人）。
+    // r1：p1 放槍贏 p2 → p1 +100；r2：p3 放槍贏 p4 → p3 +100。
+    const session = makeSession({
+      players: [
+        { id: 'p1', name: '阿明' },
+        { id: 'p2', name: 'B' },
+        { id: 'p3', name: '阿明' },
+        { id: 'p4', name: 'D' },
+      ],
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 0, selfDraw: false }),
+        makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p4', tai: 0, selfDraw: false }),
+      ],
+    });
+
+    const stats = aggregatePlayerStats([session], '阿明');
+    // 兩個同名座位都算到：+100（p1）+100（p3）= +200。若只取第一個座位只會是 +100（漏帳）。
+    expect(stats.totalAmount).toBe(200);
+    expect(stats.sessionsPlayed).toBe(1);
+    // 胡牌次數也加總兩座位：p1 一胡 + p3 一胡 = 2。
+    expect(stats.totalWins).toBe(2);
+  });
+
+  it('rosterId（aggregateByRosterId）：同場兩個同 rosterId 座位都加總', () => {
+    const rosterId = 'roster-ming';
+    const session = makeSession({
+      players: [
+        { id: 'p1', name: '阿明', rosterId },
+        { id: 'p2', name: 'B' },
+        { id: 'p3', name: '阿明', rosterId },
+        { id: 'p4', name: 'D' },
+      ],
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 0, selfDraw: false }),
+        makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p4', tai: 0, selfDraw: false }),
+      ],
+    });
+
+    const stats = aggregateByRosterId([session], rosterId, '阿明');
+    expect(stats.totalAmount).toBe(200);
+    expect(stats.sessionsPlayed).toBe(1);
+    expect(stats.totalWins).toBe(2);
+  });
+
+  it('零回歸：每場最多一個同名座位時，加總結果與舊版（取第一個）一致', () => {
+    // 一般情形：只有 p1 叫「阿明」，其餘不同名。
+    const session = makeSession({
+      players: [
+        { id: 'p1', name: '阿明' },
+        { id: 'p2', name: 'B' },
+        { id: 'p3', name: 'C' },
+        { id: 'p4', name: 'D' },
+      ],
+      rounds: [makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 0, selfDraw: false })],
+    });
+
+    const stats = aggregatePlayerStats([session], '阿明');
+    expect(stats.totalAmount).toBe(100);
+    expect(stats.sessionsPlayed).toBe(1);
+    expect(stats.totalWins).toBe(1);
+  });
+});
+
 describe('collectPlayerNames', () => {
   it('去重並依出場次數排序', () => {
     const base: Session = {
@@ -177,6 +272,7 @@ describe('collectPlayerNames', () => {
       name: '場',
       players: players.map((p) => ({ ...p })),
       settings: { ...settings },
+      rules: { ...rules },
       rounds: [],
       createdAt: 0,
     };

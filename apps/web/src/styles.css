@@ -1269,3 +1269,271 @@ button.link.danger {
   left: -9999px;
   top: 0;
 }
+
+/* =========================================================================
+ * v2.1：開桌規則（Toggle + 數字輸入）、規則 chip、公基金、玩家名冊
+ * ========================================================================= */
+
+.rules-heading {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.rules-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.rule-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 160px;
+}
+
+.rule-name {
+  font-size: 15px;
+  color: var(--color-text);
+}
+
+.rule-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.rule-input input {
+  width: 64px;
+  text-align: center;
+}
+
+.rule-input input:disabled {
+  opacity: 0.4;
+}
+
+/* Toggle 開關：ON 用 primary，OFF 用 border（規範 6） */
+.toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  border: none;
+  flex-shrink: 0;
+  transition: background-color 150ms ease;
+}
+
+.toggle.on {
+  background: var(--color-primary);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: #ffffff;
+  transition: transform 150ms ease;
+}
+
+.toggle.on .toggle-knob {
+  transform: translateX(18px);
+}
+
+/* 進場規則提示 chip */
+.rule-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.rule-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary-muted);
+  color: var(--color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 公基金（排名條底部 / 結算頁） */
+.rank-kitty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px var(--space-4);
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-gold);
+}
+
+.rank-kitty .tabular {
+  font-weight: 700;
+}
+
+.kitty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  font-size: 14px;
+  color: var(--color-gold);
+}
+
+.kitty-row .tabular {
+  font-weight: 700;
+}
+
+/* 排名條輸贏警戒 */
+.rank-row.lose-alert {
+  background: rgba(240, 82, 82, 0.08);
+}
+
+.lose-alert-dot {
+  color: var(--color-lose);
+  margin-right: 4px;
+  font-size: 13px;
+}
+
+/* 放槍警示提示 */
+.gun-alert {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-warn);
+}
+
+/* 明細：自摸加台 / 東錢標記 */
+.round-bonus {
+  color: var(--color-win);
+  font-weight: 600;
+}
+
+.round-dong {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--color-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 本場統計：匯率換算 / 公基金小卡 */
+.rate-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.rate-box {
+  background: var(--color-surface-low);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+}
+
+.rate-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.rate-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* 玩家頁工具列（搜尋 + 排序） */
+.players-toolbar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.players-toolbar input {
+  flex: 1;
+}
+
+.players-toolbar select {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.players-subhead {
+  margin: var(--space-6) 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* 玩家頭像（清單 + 詳情） */
+.player-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+/* 歷史唯名字玩家：淡化、虛線框（與名冊成員區隔，規範第 6 節） */
+.player-card.historical {
+  border-left-style: dashed;
+  border-left-color: var(--color-text-disabled);
+  opacity: 0.85;
+}
+
+.player-card.historical .player-card-info {
+  flex: 1;
+}
+
+/* 新增玩家：emoji 頭像快選 */
+.avatar-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.avatar-choice {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+  font-size: 20px;
+}
+
+.avatar-choice.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}

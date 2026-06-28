@@ -10,8 +10,26 @@ import { RankBar } from '../components/RankBar';
 import { ScoreChart } from '../components/ScoreChart';
 import { Highlights } from '../components/Highlights';
 import { ShareCard } from '../components/ShareCard';
+import type { SessionRules } from '../types';
 
 type SubTab = 'record' | 'chart' | 'detail';
+
+/** v2.1：進場規則提示 chip（自摸加台 / 東錢開啟時顯示，讓玩家確認規則）。 */
+function RuleChips({ rules }: { rules: SessionRules }) {
+  const chips: string[] = [];
+  if (rules.selfDrawBonusTai > 0) chips.push(`自摸 +${rules.selfDrawBonusTai} 台`);
+  if (rules.selfDrawDongAmount > 0) chips.push(`東錢 $${rules.selfDrawDongAmount}`);
+  if (chips.length === 0) return null;
+  return (
+    <div className="rule-chips">
+      {chips.map((c) => (
+        <span className="rule-chip" key={c}>
+          {c}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +41,9 @@ export function SessionDetailPage() {
     addRound,
     removeRound,
     toggleEnded,
+    updateRules,
+    addSession,
+    globalSettings,
   } = useAppData();
 
   const [sub, setSub] = useState<SubTab>('record');
@@ -75,20 +96,27 @@ export function SessionDetailPage() {
 
       {sub === 'record' && (
         <>
+          <RuleChips rules={session.rules} />
           <RankBar
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
+            rules={session.rules}
+            loseAlertThreshold={globalSettings.loseAlertThreshold}
           />
           <RoundForm
             players={session.players}
+            rounds={session.rounds}
             onAdd={(r) => addRound(session.id, r)}
           />
           <SettingsPanel
             settings={session.settings}
             players={session.players}
+            rules={session.rules}
+            hasRounds={session.rounds.length > 0}
             onChangeSettings={(s) => updateSettings(session.id, s)}
             onChangePlayerName={(pid, name) => updatePlayerName(session.id, pid, name)}
+            onChangeRules={(r) => updateRules(session.id, r)}
           />
           <button
             className={session.endedAt ? 'secondary' : 'primary'}
@@ -106,11 +134,13 @@ export function SessionDetailPage() {
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
+            rules={session.rules}
           />
           <Highlights
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
+            rules={session.rules}
           />
           <ShareCard
             session={session}
@@ -127,13 +157,30 @@ export function SessionDetailPage() {
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
+            rules={session.rules}
           />
           <RoundList
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
+            rules={session.rules}
             onRemove={(rid) => removeRound(session.id, rid)}
           />
+          <button
+            className="secondary"
+            style={{ width: '100%', marginTop: 12 }}
+            onClick={() => {
+              // v2.1 建議做：快速重開同組牌局——帶入本場 4 人（含 rosterId）與規則。
+              const newId = addSession(
+                `${new Date().toLocaleDateString('zh-TW')} 場`,
+                session.players.map((p) => ({ name: p.name, rosterId: p.rosterId })),
+                session.rules,
+              );
+              navigate(`/sessions/${newId}`);
+            }}
+          >
+            再開一場（同組玩家）
+          </button>
         </>
       )}
     </div>

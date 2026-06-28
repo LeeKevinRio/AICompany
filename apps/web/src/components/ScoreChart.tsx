@@ -1,6 +1,6 @@
 // 走勢圖外層：以 React.lazy 動態載入 recharts（企劃技術風險：避免拖慢 PWA 首載）。
 import { lazy, Suspense } from 'react';
-import type { Player, Round, Settings } from '../types';
+import type { Player, Round, SessionRules, Settings } from '../types';
 import { buildCumulativeTimeline } from '../scoring/timeline';
 
 const ScoreChartInner = lazy(() => import('./ScoreChartInner'));
@@ -9,10 +9,11 @@ interface Props {
   rounds: Round[];
   players: Player[];
   settings: Settings;
+  rules: SessionRules;
 }
 
-export function ScoreChart({ rounds, players, settings }: Props) {
-  const timeline = buildCumulativeTimeline(rounds, players, settings);
+export function ScoreChart({ rounds, players, settings, rules }: Props) {
+  const timeline = buildCumulativeTimeline(rounds, players, settings, rules);
 
   if (rounds.length === 0) {
     return (

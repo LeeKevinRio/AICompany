@@ -43,6 +43,9 @@ export default function App() {
             <Route path="/" element={<SessionsPage />} />
             <Route path="/sessions/:id" element={<SessionDetailPage />} />
             <Route path="/players" element={<PlayersPage />} />
+            {/* 順序依賴：/players/r/:rosterId 必須排在 /players/:name 之前，
+                否則 "r" 會被當成 :name 比對到，名冊成員頁無法路由。勿調換這兩行。 */}
+            <Route path="/players/r/:rosterId" element={<PlayerDetailPage />} />
             <Route path="/players/:name" element={<PlayerDetailPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

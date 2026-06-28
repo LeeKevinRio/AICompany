@@ -2,7 +2,15 @@
 // 元件只用這個 hook 操作資料，不直接碰 repository / localStorage。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GlobalSettings, Player, Round, Session, Settings } from '../types';
+import type {
+  GlobalSettings,
+  Player,
+  RosterPlayer,
+  Round,
+  Session,
+  SessionRules,
+  Settings,
+} from '../types';
 import { DEFAULT_GLOBAL_SETTINGS, DEFAULT_PLAYERS } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
 import type { StorageRepository } from '../data/repository';
@@ -14,21 +22,73 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/** 新建一場：可帶入全域預設（底/台）與一組玩家名字。 */
+/** 產生全域唯一 UUID（名冊成員用）。crypto.randomUUID 不可用時退回 genId。 */
+function genUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return genId('roster');
+}
+
+/** 開桌時帶入的單一玩家（名字 + 可選名冊連結）。 */
+export interface NewSessionPlayer {
+  name: string;
+  rosterId?: string;
+}
+
+/**
+ * 把所有現有 session 中、名字等於 `name` 且「尚未連結 rosterId」的 Player
+ * 回填上 `rosterId`，讓該名玩家的歷史戰績歸到名冊成員（供 aggregateByRosterId 聚合）。
+ *
+ * 只回填「未連結」的同名 Player，不覆蓋已連結到其他 rosterId 的 Player，
+ * 避免把別人的歷史搶過來。純函式，方便單元測試。
+ *
+ * 名冊以「名字」為識別（CEO 定案：同名＝同一人，不支援同名不同人）：本函式會把
+ * **所有** 同名且未連結的 Player 一律歸入同一個 rosterId，涵蓋全部同名未連結場次。
+ */
+export function linkSessionsToRoster(
+  sessions: Session[],
+  name: string,
+  rosterId: string,
+): Session[] {
+  const trimmed = name.trim();
+  if (!trimmed) return sessions;
+  return sessions.map((s) => {
+    if (!s.players.some((p) => p.name === trimmed && p.rosterId == null)) return s;
+    return {
+      ...s,
+      players: s.players.map((p) =>
+        p.name === trimmed && p.rosterId == null ? { ...p, rosterId } : p,
+      ),
+    };
+  });
+}
+
+/**
+ * 新建一場：帶入全域預設（底/台 + 規則）與一組玩家（名字 + rosterId）。
+ * 規則可由開桌 sheet 覆寫 global.defaultRules。
+ */
 function createSession(
   name: string,
   global: GlobalSettings,
-  playerNames?: string[],
+  players?: NewSessionPlayer[],
+  rules?: SessionRules,
 ): Session {
-  const players: Player[] = DEFAULT_PLAYERS.map((p, i) => ({
-    ...p,
-    name: playerNames?.[i]?.trim() || p.name,
-  }));
+  const sessionPlayers: Player[] = DEFAULT_PLAYERS.map((p, i) => {
+    const incoming = players?.[i];
+    const trimmed = incoming?.name?.trim();
+    return {
+      ...p,
+      name: trimmed || p.name,
+      rosterId: incoming?.rosterId,
+    };
+  });
   return {
     id: genId('s'),
     name: name.trim() || `${new Date().toLocaleDateString('zh-TW')} 場`,
-    players,
+    players: sessionPlayers,
     settings: { base: global.defaultBase, tai: global.defaultTai },
+    rules: rules ?? { ...global.defaultRules },
     rounds: [],
     createdAt: Date.now(),
   };
@@ -109,8 +169,8 @@ export function useSessions() {
 
   // 新增一場，回傳新場 id（供路由 navigate 進詳情頁）
   const addSession = useCallback(
-    (name: string, playerNames?: string[]): string => {
-      const s = createSession(name, globalSettings, playerNames);
+    (name: string, players?: NewSessionPlayer[], rules?: SessionRules): string => {
+      const s = createSession(name, globalSettings, players, rules);
       setSessions((prev) => [s, ...prev]);
       return s.id;
     },
@@ -139,11 +199,25 @@ export function useSessions() {
     [updateSession],
   );
 
+  // v2.1：更新某場的開桌規則（自摸加台 / 東錢）。
+  const updateRules = useCallback(
+    (id: string, rules: SessionRules) => {
+      updateSession(id, (s) => ({ ...s, rules }));
+    },
+    [updateSession],
+  );
+
   const updatePlayerName = useCallback(
     (id: string, playerId: string, name: string) => {
+      // 場內改名＝把這個座位換成「另一個人」，必須一併解除名冊連結（rosterId: undefined），
+      // 與開桌 sheet「手動改名→解除連結」一致；否則新名字的局數會被算進原名冊成員。
+      // 註：這條路徑與「在名冊個人戰績頁改名（updateRosterPlayer）」不同——後者是改名冊
+      // 成員自己的顯示名、應保留 rosterId 連結，不走這裡。
       updateSession(id, (s) => ({
         ...s,
-        players: s.players.map((p) => (p.id === playerId ? { ...p, name } : p)),
+        players: s.players.map((p) =>
+          p.id === playerId ? { ...p, name, rosterId: undefined } : p,
+        ),
       }));
     },
     [updateSession],
@@ -183,6 +257,100 @@ export function useSessions() {
     setGlobalSettings(next);
   }, []);
 
+  // ---- v2.1：玩家名冊 CRUD ----
+
+  /**
+   * 新增名冊成員，回傳新成員（名字重複則回傳既有成員，不重複建立）。
+   *
+   * 【已知限制（CEO 定案）：名冊以「名字」為識別，不支援「同名不同人」】
+   * 名冊內名字唯一：對既有同名成員再次「加入名冊」不會建立第二個成員，而是回傳既有成員，
+   * 並透過 linkSessionsToRoster 把所有同名且未連結（rosterId == null）的歷史 Player
+   * 一律回填到該既有成員。因此兩個現實中不同、但同名的人會被視為同一人合併計分。
+   * 這是 CEO 定案接受的取捨——若日後要支援同名不同人，需改以穩定 id 而非名字作識別。
+   */
+  const addRosterPlayer = useCallback(
+    (name: string, avatar?: string): RosterPlayer | null => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      const existing = globalSettings.roster.find((r) => r.name === trimmed);
+      if (existing) {
+        // 名冊已有同名成員：不重複建立，但仍要回填。否則某場手動打了同名、卻沒從名冊選
+        // 的未連結 Player（rosterId == null）會永遠聚合不到既有成員，靜默漏帳。
+        // 把同名且未連結的歷史 Player 連到既有成員 existing.id。
+        setSessions((prev) => linkSessionsToRoster(prev, trimmed, existing.id));
+        return existing;
+      }
+      const rp: RosterPlayer = {
+        id: genUuid(),
+        name: trimmed,
+        avatar: avatar?.trim() || undefined,
+        createdAt: Date.now(),
+      };
+      setGlobalSettings((g) => ({ ...g, roster: [...g.roster, rp] }));
+      // 回填歷史：把現有 session 中同名、尚未連結的 Player 掛上此 rosterId，
+      // 讓「加入名冊」後既有戰績不歸零，能被 aggregateByRosterId 聚合到。
+      setSessions((prev) => linkSessionsToRoster(prev, trimmed, rp.id));
+      return rp;
+    },
+    [globalSettings.roster],
+  );
+
+  /**
+   * 改名冊成員名稱 / 頭像。改名時同步更新所有「已連結此 rosterId」場次內 Player 的顯示名稱，
+   * 讓歷史顯示與名冊一致（聚合仍以 rosterId 為主，不靠名字）。
+   */
+  const updateRosterPlayer = useCallback(
+    (rosterId: string, patch: { name?: string; avatar?: string }) => {
+      const nextName = patch.name?.trim();
+      setGlobalSettings((g) => ({
+        ...g,
+        roster: g.roster.map((r) =>
+          r.id === rosterId
+            ? {
+                ...r,
+                name: nextName || r.name,
+                avatar:
+                  patch.avatar !== undefined ? patch.avatar.trim() || undefined : r.avatar,
+              }
+            : r,
+        ),
+      }));
+      if (nextName) {
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (!s.players.some((p) => p.rosterId === rosterId)) return s;
+            return {
+              ...s,
+              players: s.players.map((p) =>
+                p.rosterId === rosterId ? { ...p, name: nextName } : p,
+              ),
+            };
+          }),
+        );
+      }
+    },
+    [],
+  );
+
+  /** 從名冊移除成員（不動歷史場次的 Player；該場玩家變回「無掛勾歷史玩家」）。 */
+  const removeRosterPlayer = useCallback((rosterId: string) => {
+    setGlobalSettings((g) => ({
+      ...g,
+      roster: g.roster.filter((r) => r.id !== rosterId),
+    }));
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (!s.players.some((p) => p.rosterId === rosterId)) return s;
+        return {
+          ...s,
+          players: s.players.map((p) =>
+            p.rosterId === rosterId ? { ...p, rosterId: undefined } : p,
+          ),
+        };
+      }),
+    );
+  }, []);
+
   // 清空所有資料（場次 + 全域設定）
   const clearAll = useCallback(() => {
     setSessions([]);
@@ -206,9 +374,13 @@ export function useSessions() {
     addRound,
     removeRound,
     toggleEnded,
+    updateRules,
     updateGlobalSettings,
+    addRosterPlayer,
+    updateRosterPlayer,
+    removeRosterPlayer,
     clearAll,
   } as const;
 }
 
-export type { GlobalSettings, Player, Round, Session, Settings };
+export type { GlobalSettings, Player, RosterPlayer, Round, Session, SessionRules, Settings };

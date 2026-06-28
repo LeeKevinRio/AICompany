@@ -1,11 +1,13 @@
-// Tab 1：牌局清單。卡片清單 + FAB 新增 + Bottom Sheet。
+// Tab 1：牌局清單。卡片清單 + FAB 新增 + Bottom Sheet（含開桌規則設定）。
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
-import { scoreSession } from '../scoring/scoring';
-import type { Session } from '../types';
+import type { NewSessionPlayer } from '../hooks/useSessions';
+import { settleSession } from '../scoring/scoring';
+import type { RosterPlayer, Session, SessionRules } from '../types';
 import { Amount } from '../components/ui';
 import { BottomSheet } from '../components/BottomSheet';
+import { RulesFields } from '../components/RulesFields';
 
 export function SessionsPage() {
   const { sessions, addSession, removeSession, renameSession, globalSettings } = useAppData();
@@ -51,10 +53,12 @@ export function SessionsPage() {
 
       <NewSessionSheet
         open={sheetOpen}
+        roster={globalSettings.roster}
         knownPlayers={globalSettings.knownPlayers}
+        defaultRules={globalSettings.defaultRules}
         onClose={() => setSheetOpen(false)}
-        onCreate={(name, playerNames) => {
-          const id = addSession(name, playerNames);
+        onCreate={(name, players, rules) => {
+          const id = addSession(name, players, rules);
           setSheetOpen(false);
           navigate(`/sessions/${id}`);
         }}
@@ -74,9 +78,10 @@ function SessionCard({
   onRename: () => void;
   onDelete: () => void;
 }) {
+  // 卡片預覽顯示淨額（含東錢），與牌局詳情結算一致。
   let totals: Record<string, number>;
   try {
-    totals = scoreSession(session.rounds, session.players, session.settings);
+    totals = settleSession(session.rounds, session.players, session.settings, session.rules).net;
   } catch {
     totals = {};
     for (const p of session.players) totals[p.id] = 0;
@@ -124,36 +129,61 @@ function SessionCard({
 
 function NewSessionSheet({
   open,
+  roster,
   knownPlayers,
+  defaultRules,
   onClose,
   onCreate,
 }: {
   open: boolean;
+  roster: RosterPlayer[];
   knownPlayers: string[];
+  defaultRules: SessionRules;
   onClose: () => void;
-  onCreate: (name: string, playerNames: string[]) => void;
+  onCreate: (name: string, players: NewSessionPlayer[], rules: SessionRules) => void;
 }) {
   const [name, setName] = useState('');
-  const [names, setNames] = useState<string[]>(['', '', '', '']);
+  // 4 個座位：名字 + 可選 rosterId（從名冊帶入時連結）。
+  const [seats, setSeats] = useState<NewSessionPlayer[]>([
+    { name: '' },
+    { name: '' },
+    { name: '' },
+    { name: '' },
+  ]);
+  const [rules, setRules] = useState<SessionRules>(defaultRules);
 
   // 開啟時帶入預設場名
   const defaultName = `${new Date().toLocaleDateString('zh-TW')} 場`;
 
-  function fillKnown(playerName: string) {
-    // 填入第一個空欄
-    setNames((prev) => {
-      const idx = prev.findIndex((n) => !n.trim());
+  // 已帶入的 rosterId 集合（同一名冊成員不重複選入兩個座位）。
+  const usedRosterIds = new Set(seats.map((s) => s.rosterId).filter(Boolean) as string[]);
+
+  function fillRoster(rp: RosterPlayer) {
+    setSeats((prev) => {
+      if (prev.some((s) => s.rosterId === rp.id)) return prev;
+      const idx = prev.findIndex((s) => !s.name.trim() && !s.rosterId);
       if (idx === -1) return prev;
       const next = [...prev];
-      next[idx] = playerName;
+      next[idx] = { name: rp.name, rosterId: rp.id };
+      return next;
+    });
+  }
+
+  function fillKnown(playerName: string) {
+    setSeats((prev) => {
+      const idx = prev.findIndex((s) => !s.name.trim() && !s.rosterId);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = { name: playerName };
       return next;
     });
   }
 
   function handleCreate() {
-    onCreate(name.trim() || defaultName, names);
+    onCreate(name.trim() || defaultName, seats, rules);
     setName('');
-    setNames(['', '', '', '']);
+    setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
+    setRules(defaultRules);
   }
 
   return (
@@ -169,25 +199,49 @@ function NewSessionSheet({
       </label>
 
       <div className="players-grid" style={{ marginBottom: 16 }}>
-        {names.map((n, i) => (
+        {seats.map((seat, i) => (
           <label className="field" key={i}>
             <span>玩家 {i + 1}</span>
             <input
               type="text"
               placeholder={`玩家 ${i + 1}`}
-              value={n}
+              value={seat.name}
               maxLength={12}
               onChange={(e) => {
-                const next = [...names];
-                next[i] = e.target.value;
-                setNames(next);
+                const next = [...seats];
+                // 手動改名 → 解除名冊連結（避免名字與名冊不符卻仍掛 rosterId）。
+                next[i] = { name: e.target.value };
+                setSeats(next);
               }}
             />
           </label>
         ))}
       </div>
 
-      {knownPlayers.length > 0 && (
+      {roster.length > 0 && (
+        <>
+          <span className="field" style={{ display: 'block' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+              名冊（點選帶入空欄）
+            </span>
+          </span>
+          <div className="known-player-chips">
+            {roster.map((rp) => (
+              <button
+                key={rp.id}
+                className="known-chip"
+                disabled={usedRosterIds.has(rp.id)}
+                onClick={() => fillRoster(rp)}
+              >
+                {rp.avatar ? `${rp.avatar} ` : ''}
+                {rp.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {roster.length === 0 && knownPlayers.length > 0 && (
         <>
           <span className="field" style={{ display: 'block' }}>
             <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
@@ -203,6 +257,9 @@ function NewSessionSheet({
           </div>
         </>
       )}
+
+      <h3 className="rules-heading">規則設定</h3>
+      <RulesFields rules={rules} onChange={setRules} />
 
       <button className="primary" style={{ marginTop: 16 }} onClick={handleCreate}>
         建立牌局

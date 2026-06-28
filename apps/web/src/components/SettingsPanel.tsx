@@ -1,11 +1,15 @@
-// 場內設定面板：本場底/台金額，以及 4 位玩家名字。
-import type { Player, Settings } from '../types';
+// 場內設定面板：本場底/台金額、4 位玩家名字，以及開桌規則（自摸加台 / 東錢）。
+import type { Player, SessionRules, Settings } from '../types';
+import { RulesFields } from './RulesFields';
 
 interface Props {
   settings: Settings;
   players: Player[];
+  rules: SessionRules;
+  hasRounds: boolean;
   onChangeSettings: (s: Settings) => void;
   onChangePlayerName: (playerId: string, name: string) => void;
+  onChangeRules: (r: SessionRules) => void;
 }
 
 // 把輸入轉成非負整數：非數字視為 0，負數歸 0，小數無條件捨去。
@@ -17,8 +21,11 @@ function toNonNegInt(value: string): number {
 export function SettingsPanel({
   settings,
   players,
+  rules,
+  hasRounds,
   onChangeSettings,
   onChangePlayerName,
+  onChangeRules,
 }: Props) {
   return (
     <section className="card">
@@ -60,6 +67,14 @@ export function SettingsPanel({
           </label>
         ))}
       </div>
+
+      <h3>規則</h3>
+      {hasRounds && (
+        <p className="setting-hint" style={{ color: 'var(--color-warn)' }}>
+          ⚠ 已有記錄，調整規則會重新計算所有局次的分數。
+        </p>
+      )}
+      <RulesFields rules={rules} onChange={onChangeRules} />
     </section>
   );
 }
