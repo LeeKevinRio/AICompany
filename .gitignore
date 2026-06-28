@@ -32,3 +32,4 @@ dist/
 build/
 __pycache__/
 *.log
+*.tsbuildinfo

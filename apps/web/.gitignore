@@ -1,0 +1,5 @@
+# apps/web 專屬忽略（根 .gitignore 已涵蓋 node_modules/ 與 dist/）
+*.local
+dev-dist/
+.vite/
+*.tsbuildinfo

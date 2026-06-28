@@ -1,0 +1,163 @@
+// 串接 repository 的 React hook。
+// 元件只用這個 hook 操作資料，不直接碰 repository / localStorage。
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Player, Round, Session, Settings } from '../types';
+import { DEFAULT_PLAYERS, DEFAULT_SETTINGS } from '../types';
+import { LocalStorageRepository } from '../data/localStorageRepository';
+import type { StorageRepository } from '../data/repository';
+
+// 第一版固定用 localStorage 實作；未來要換雲端只改這一行。
+const repo: StorageRepository = new LocalStorageRepository();
+
+function genId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createSession(name: string): Session {
+  return {
+    id: genId('s'),
+    name: name.trim() || `新牌局 ${new Date().toLocaleDateString('zh-TW')}`,
+    players: DEFAULT_PLAYERS.map((p) => ({ ...p })),
+    settings: { ...DEFAULT_SETTINGS },
+    rounds: [],
+    createdAt: Date.now(),
+  };
+}
+
+export function useSessions() {
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  // 儲存失敗時的錯誤訊息（quota 滿、無痕模式停用 storage 等），供 UI 顯示。
+  const [storageError, setStorageError] = useState<string | null>(null);
+  // 本機資料毀損、已被丟棄／重置時為 true，供 UI 提示。
+  const [dataCorrupted, setDataCorrupted] = useState(false);
+  // 避免初次載入時把空資料覆寫回 localStorage。
+  const skipNextSave = useRef(true);
+
+  // 初次載入
+  useEffect(() => {
+    repo
+      .loadSessions()
+      .then((result) => {
+        setSessions(result.sessions);
+        setCurrentId(result.sessions.length > 0 ? result.sessions[0].id : null);
+        setDataCorrupted(result.corrupted);
+        setLoaded(true);
+      })
+      .catch((err) => {
+        // 即使 repository 換實作或 init 出錯，也不要讓 app 卡在「載入中」。
+        console.error('載入資料失敗：', err);
+        setSessions([]);
+        setCurrentId(null);
+        setDataCorrupted(true);
+        setLoaded(true);
+      });
+  }, []);
+
+  // 任何變動都寫回本機
+  useEffect(() => {
+    if (!loaded) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    repo.saveSessions(sessions).then(
+      () => {
+        // 儲存成功，清掉先前的錯誤提示。
+        setStorageError(null);
+      },
+      (err) => {
+        console.error('儲存資料失敗：', err);
+        setStorageError(
+          err instanceof Error ? err.message : '資料未成功儲存，重整後可能遺失。',
+        );
+      },
+    );
+  }, [sessions, loaded]);
+
+  const current = sessions.find((s) => s.id === currentId) ?? null;
+
+  const addSession = useCallback((name: string) => {
+    const s = createSession(name);
+    setSessions((prev) => [s, ...prev]);
+    setCurrentId(s.id);
+  }, []);
+
+  const removeSession = useCallback(
+    (id: string) => {
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.id !== id);
+        if (id === currentId) {
+          setCurrentId(next.length > 0 ? next[0].id : null);
+        }
+        return next;
+      });
+    },
+    [currentId],
+  );
+
+  // 更新某一場（用 updater 確保拿到最新值）
+  const updateSession = useCallback((id: string, updater: (s: Session) => Session) => {
+    setSessions((prev) => prev.map((s) => (s.id === id ? updater(s) : s)));
+  }, []);
+
+  const updateSettings = useCallback(
+    (id: string, settings: Settings) => {
+      updateSession(id, (s) => ({ ...s, settings }));
+    },
+    [updateSession],
+  );
+
+  const updatePlayerName = useCallback(
+    (id: string, playerId: string, name: string) => {
+      updateSession(id, (s) => ({
+        ...s,
+        players: s.players.map((p) => (p.id === playerId ? { ...p, name } : p)),
+      }));
+    },
+    [updateSession],
+  );
+
+  const addRound = useCallback(
+    (id: string, round: Omit<Round, 'id' | 'createdAt'>) => {
+      updateSession(id, (s) => ({
+        ...s,
+        rounds: [...s.rounds, { ...round, id: genId('r'), createdAt: Date.now() }],
+      }));
+    },
+    [updateSession],
+  );
+
+  const removeRound = useCallback(
+    (id: string, roundId: string) => {
+      updateSession(id, (s) => ({
+        ...s,
+        rounds: s.rounds.filter((r) => r.id !== roundId),
+      }));
+    },
+    [updateSession],
+  );
+
+  const dismissCorruptNotice = useCallback(() => setDataCorrupted(false), []);
+
+  return {
+    loaded,
+    storageError,
+    dataCorrupted,
+    dismissCorruptNotice,
+    sessions,
+    current,
+    currentId,
+    setCurrentId,
+    addSession,
+    removeSession,
+    updateSettings,
+    updatePlayerName,
+    addRound,
+    removeRound,
+  } as const;
+}
+
+export type { Player, Round, Session, Settings };
