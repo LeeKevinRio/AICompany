@@ -622,8 +622,9 @@ button.link.danger {
 
 .fab {
   position: fixed;
-  bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + 20px);
-  right: 20px;
+  /* 底部偏移 = tab bar 高度 + iOS safe area + 一段 margin（用 spacing token，不寫死） */
+  bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-6));
+  right: var(--space-6);
   width: 56px;
   height: 56px;
   border-radius: var(--radius-full);
@@ -636,7 +637,10 @@ button.link.danger {
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 16px rgba(31, 111, 67, 0.5);
-  z-index: 90;
+  /* 必須高於 tab bar（z-index 100），否則 tab bar 會蓋住 FAB 攔截點擊 */
+  z-index: 110;
+  /* 確保 FAB 自身可點，不被任何透明層攔截 */
+  pointer-events: auto;
 }
 
 .fab:active {
@@ -645,7 +649,7 @@ button.link.danger {
 
 /* FAB 在牌局清單頁的定位需貼齊 560px 容器右側 */
 .app-shell .fab {
-  right: max(20px, calc((100vw - 560px) / 2 + 20px));
+  right: max(var(--space-6), calc((100vw - 560px) / 2 + var(--space-6)));
 }
 
 /* =========================================================================
