@@ -1,6 +1,7 @@
-// 本場每人累計輸贏。
+// 本場每人累計輸贏（結算頁用）。
 import type { Player, Round, Settings } from '../types';
 import { scoreSession } from '../scoring/scoring';
+import { Amount } from './ui';
 
 interface Props {
   rounds: Round[];
@@ -24,24 +25,24 @@ export function Standings({ rounds, players, settings }: Props) {
     );
   }
 
+  const ranked = players
+    .map((p) => ({ player: p, amount: total[p.id] ?? 0 }))
+    .sort((a, b) => b.amount - a.amount);
+
   return (
     <section className="card">
       <h2>本場累計</h2>
-      <div className="standings">
-        {players.map((p) => {
-          const v = total[p.id] ?? 0;
-          const cls = v > 0 ? 'win' : v < 0 ? 'lose' : '';
-          return (
-            <div className="standing-row" key={p.id}>
-              <span className="standing-name">{p.name}</span>
-              <span className={`standing-amt ${cls}`}>
-                {v > 0 ? '+' : ''}
-                {v}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      <ol className="round-list">
+        {ranked.map(({ player, amount }, i) => (
+          <li className="round-item" key={player.id}>
+            <span className="round-no">{i + 1}</span>
+            <span className="round-main">
+              <strong>{player.name}</strong>
+            </span>
+            <Amount value={amount} />
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

@@ -1,4 +1,4 @@
-// 設定面板：底/台金額，以及 4 位玩家名字。
+// 場內設定面板：本場底/台金額，以及 4 位玩家名字。
 import type { Player, Settings } from '../types';
 
 interface Props {
@@ -14,16 +14,22 @@ function toNonNegInt(value: string): number {
   return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
 }
 
-export function SettingsPanel({ settings, players, onChangeSettings, onChangePlayerName }: Props) {
+export function SettingsPanel({
+  settings,
+  players,
+  onChangeSettings,
+  onChangePlayerName,
+}: Props) {
   return (
     <section className="card">
-      <h2>設定</h2>
+      <h2>本場設定</h2>
       <div className="row">
         <label className="field">
           <span>底</span>
           <input
             type="number"
             min={0}
+            className="tabular"
             value={settings.base}
             onChange={(e) => onChangeSettings({ ...settings, base: toNonNegInt(e.target.value) })}
           />
@@ -33,6 +39,7 @@ export function SettingsPanel({ settings, players, onChangeSettings, onChangePla
           <input
             type="number"
             min={0}
+            className="tabular"
             value={settings.tai}
             onChange={(e) => onChangeSettings({ ...settings, tai: toNonNegInt(e.target.value) })}
           />
@@ -40,7 +47,7 @@ export function SettingsPanel({ settings, players, onChangeSettings, onChangePla
       </div>
 
       <h3>玩家</h3>
-      <div className="players">
+      <div className="players-grid">
         {players.map((p, i) => (
           <label className="field" key={p.id}>
             <span>玩家 {i + 1}</span>

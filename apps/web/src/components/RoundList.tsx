@@ -1,6 +1,7 @@
-// 每局明細：顯示贏家、台數、自摸/放槍、放槍者，以及該局贏家收多少。
+// 每局明細：贏家、台數、自摸/放槍、放槍者、備註，以及該局贏家收多少。
 import type { Player, Round, Settings } from '../types';
 import { calcUnitAmount } from '../scoring/scoring';
+import { formatSigned } from '../scoring/timeline';
 
 interface Props {
   rounds: Round[];
@@ -14,10 +15,11 @@ export function RoundList({ rounds, players, settings, onRemove }: Props) {
 
   if (rounds.length === 0) {
     return (
-      <section className="card">
-        <h2>每局明細</h2>
-        <p className="muted">尚無紀錄，從上方新增第一局。</p>
-      </section>
+      <div className="empty-state">
+        <div className="empty-icon">🀄</div>
+        <p className="empty-title">尚無紀錄</p>
+        <p>切到「記局」開始第一局吧。</p>
+      </div>
     );
   }
 
@@ -34,9 +36,14 @@ export function RoundList({ rounds, players, settings, onRemove }: Props) {
               <span className="round-main">
                 <strong>{nameOf(r.winnerId)}</strong> {r.tai} 台{' '}
                 {r.selfDraw ? '自摸' : `放槍（${nameOf(r.loserId)}）`}
+                {r.note && <span className="round-note">📝 {r.note}</span>}
               </span>
-              <span className="round-amt win">+{win}</span>
-              <button className="link danger" onClick={() => onRemove(r.id)} aria-label="刪除此局">
+              <span className="round-amt">{formatSigned(win)}</span>
+              <button
+                className="link danger"
+                onClick={() => onRemove(r.id)}
+                aria-label="刪除此局"
+              >
                 刪除
               </button>
             </li>

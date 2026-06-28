@@ -1,10 +1,13 @@
 // 第一版資料實作：存在瀏覽器 localStorage，重整不遺失。
 // 介面符合 StorageRepository，未來可替換成雲端 / IndexedDB 版本。
 
-import type { Player, Round, Session, Settings } from '../types';
+import type { GlobalSettings, Player, Round, Session, Settings } from '../types';
+import { DEFAULT_GLOBAL_SETTINGS, MAX_KNOWN_PLAYERS, MAX_NOTE_LENGTH } from '../types';
 import type { LoadResult, StorageRepository } from './repository';
 
+// 沿用 v1 的 sessions key（v2 向下相容讀同一份），新增獨立的全域設定 key。
 const STORAGE_KEY = 'mahjong-score:sessions:v1';
+const GLOBAL_SETTINGS_KEY = 'mahjong-score:global-settings:v1';
 // 偵測到半壞資料時，把原始內容備份到這個 key，方便事後檢視。
 const CORRUPT_BACKUP_KEY = 'mahjong-sessions-corrupt-backup';
 
@@ -50,6 +53,12 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   if (typeof r.selfDraw !== 'boolean') return false;
   if (!isNonEmptyString(r.winnerId) || !playerIds.has(r.winnerId)) return false;
 
+  // v2：note 為可選字串（舊資料無此欄位 → undefined，合法）。
+  // 若存在但型別錯（非字串）或超長，視為毀損，避免污染明細顯示。
+  if (r.note !== undefined) {
+    if (typeof r.note !== 'string' || r.note.length > MAX_NOTE_LENGTH) return false;
+  }
+
   if (r.selfDraw) {
     // 自摸：loserId 必須為 null
     return r.loserId === null;
@@ -72,6 +81,11 @@ function isValidSession(v: unknown): v is Session {
   if (!Array.isArray(s.players) || !s.players.every(isValidPlayer)) return false;
   if (!Array.isArray(s.rounds)) return false;
 
+  // v2：endedAt 為可選時間戳（舊資料無此欄位 → undefined，合法）。
+  if (s.endedAt !== undefined) {
+    if (typeof s.endedAt !== 'number' || !Number.isFinite(s.endedAt)) return false;
+  }
+
   // MVP 規則：固定 4 人，且 player id 必須全部唯一。
   // 若殘留非 4 人或重複 id 的 session，自摸分支的 (players.length - 1)
   // 會算出錯誤金額、重複 id 也會讓 RoundDelta 互相覆蓋，因此一律判為毀損。
@@ -82,18 +96,45 @@ function isValidSession(v: unknown): v is Session {
   return (s.rounds as unknown[]).every((r) => isValidRound(r, playerIds));
 }
 
+/** v2：驗證全域設定結構；任何欄位不合法即回傳 null（呼叫端退回預設值）。 */
+function parseGlobalSettings(v: unknown): GlobalSettings | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const g = v as Record<string, unknown>;
+  if (!isFiniteNonNegInt(g.defaultBase)) return null;
+  if (!isFiniteNonNegInt(g.defaultTai)) return null;
+  if (!Array.isArray(g.knownPlayers)) return null;
+  // 常用玩家：只留非空字串、去重、限制上限，毀損的項目直接濾掉而非整包丟棄。
+  const seen = new Set<string>();
+  const knownPlayers: string[] = [];
+  for (const item of g.knownPlayers) {
+    if (typeof item !== 'string') continue;
+    const name = item.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    knownPlayers.push(name);
+    if (knownPlayers.length >= MAX_KNOWN_PLAYERS) break;
+  }
+  return {
+    defaultBase: g.defaultBase,
+    defaultTai: g.defaultTai,
+    knownPlayers,
+  };
+}
+
 export class LocalStorageRepository implements StorageRepository {
   async loadSessions(): Promise<LoadResult> {
+    const globalSettings = this.loadGlobalSettings();
+
     let raw: string | null;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
     } catch (err) {
       // storage 被停用（例如某些無痕模式）時讀取也可能丟例外。
       console.error('讀取本機資料失敗，將以空資料開始：', err);
-      return { sessions: [], corrupted: false };
+      return { sessions: [], globalSettings, corrupted: false };
     }
 
-    if (!raw) return { sessions: [], corrupted: false };
+    if (!raw) return { sessions: [], globalSettings, corrupted: false };
 
     let data: unknown;
     try {
@@ -102,13 +143,13 @@ export class LocalStorageRepository implements StorageRepository {
       // JSON 整包壞掉：備份原始字串後重置。
       console.error('本機資料無法解析（JSON 毀損），已備份並重置：', err);
       this.backupCorrupt(raw);
-      return { sessions: [], corrupted: true };
+      return { sessions: [], globalSettings, corrupted: true };
     }
 
     if (!Array.isArray(data)) {
       console.error('本機資料格式非陣列，已備份並重置。');
       this.backupCorrupt(raw);
-      return { sessions: [], corrupted: true };
+      return { sessions: [], globalSettings, corrupted: true };
     }
 
     // 逐筆驗證：合法的留下，壞的丟棄。
@@ -134,7 +175,41 @@ export class LocalStorageRepository implements StorageRepository {
       this.backupCorrupt(raw);
     }
 
-    return { sessions: valid, corrupted: droppedAny };
+    return { sessions: valid, globalSettings, corrupted: droppedAny };
+  }
+
+  /**
+   * v2：讀取全域設定。讀不到、JSON 壞掉或結構不合法都回傳預設值，不影響主流程。
+   * 全域設定是輕量、可重建的偏好，毀損時不需通報使用者，靜默退回預設即可。
+   */
+  private loadGlobalSettings(): GlobalSettings {
+    let raw: string | null;
+    try {
+      raw = localStorage.getItem(GLOBAL_SETTINGS_KEY);
+    } catch {
+      return { ...DEFAULT_GLOBAL_SETTINGS };
+    }
+    if (!raw) return { ...DEFAULT_GLOBAL_SETTINGS };
+    try {
+      const parsed = parseGlobalSettings(JSON.parse(raw));
+      return parsed ?? { ...DEFAULT_GLOBAL_SETTINGS };
+    } catch {
+      return { ...DEFAULT_GLOBAL_SETTINGS };
+    }
+  }
+
+  async saveGlobalSettings(settings: GlobalSettings): Promise<void> {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(settings);
+    } catch (err) {
+      throw new StorageError('全域設定序列化失敗，無法儲存。', err);
+    }
+    try {
+      localStorage.setItem(GLOBAL_SETTINGS_KEY, serialized);
+    } catch (err) {
+      throw new StorageError('全域設定儲存失敗（可能空間已滿或瀏覽器停用儲存）。', err);
+    }
   }
 
   async saveSessions(sessions: Session[]): Promise<void> {

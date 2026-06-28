@@ -21,6 +21,8 @@ export interface Round {
   selfDraw: boolean; // true=自摸；false=胡牌(放槍)
   loserId: string | null; // 放槍者 id；自摸時為 null
   createdAt: number;
+  /** v2：局次備註（最多 20 字，可選；舊資料無此欄位視為空字串） */
+  note?: string;
 }
 
 /** 一場牌局 */
@@ -31,6 +33,18 @@ export interface Session {
   settings: Settings; // 該場的底/台
   rounds: Round[];
   createdAt: number;
+  /** v2：結算時間戳（按下「結算本場」才有；未結算為 undefined） */
+  endedAt?: number;
+}
+
+/**
+ * v2：全域設定（與單場 session 內設定分離）。
+ * 新建牌局時套用此預設，常用玩家可一鍵帶入。
+ */
+export interface GlobalSettings {
+  defaultBase: number; // 預設底
+  defaultTai: number; // 預設每台
+  knownPlayers: string[]; // 常用玩家名稱列表（最多 8 個）
 }
 
 /** 預設玩家（名字可後續編輯） */
@@ -43,3 +57,16 @@ export const DEFAULT_PLAYERS: Player[] = [
 
 /** 預設金額：底 100、台 50 */
 export const DEFAULT_SETTINGS: Settings = { base: 100, tai: 50 };
+
+/** v2：預設全域設定 */
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
+  defaultBase: 100,
+  defaultTai: 50,
+  knownPlayers: [],
+};
+
+/** 常用玩家數量上限 */
+export const MAX_KNOWN_PLAYERS = 8;
+
+/** 局次備註長度上限 */
+export const MAX_NOTE_LENGTH = 20;

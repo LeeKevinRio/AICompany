@@ -1,129 +1,56 @@
-// 主畫面：組裝設定、場次選擇、逐局輸入、明細與累計。
+// App 外殼：Splash → Router（Tab Bar + 路由頁）。
 import { useState } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { useSessions } from './hooks/useSessions';
-import { SettingsPanel } from './components/SettingsPanel';
-import { RoundForm } from './components/RoundForm';
-import { RoundList } from './components/RoundList';
-import { Standings } from './components/Standings';
+import { AppDataProvider } from './AppData';
+import { Splash } from './components/Splash';
+import { TabBar } from './components/TabBar';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { SessionsPage } from './pages/SessionsPage';
+import { SessionDetailPage } from './pages/SessionDetailPage';
+import { PlayersPage } from './pages/PlayersPage';
+import { PlayerDetailPage } from './pages/PlayerDetailPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 export default function App() {
-  const {
-    loaded,
-    storageError,
-    dataCorrupted,
-    dismissCorruptNotice,
-    sessions,
-    current,
-    currentId,
-    setCurrentId,
-    addSession,
-    removeSession,
-    updateSettings,
-    updatePlayerName,
-    addRound,
-    removeRound,
-  } = useSessions();
-
-  const [newName, setNewName] = useState('');
-
-  if (!loaded) {
-    return <main className="app">載入中…</main>;
-  }
-
-  function handleAddSession() {
-    addSession(newName);
-    setNewName('');
-  }
+  const data = useSessions();
+  // Splash 是否仍在畫面上（淡出動畫結束後才卸載）。
+  const [splashDone, setSplashDone] = useState(false);
 
   return (
-    <main className="app">
-      <header className="app-header">
-        <h1>麻將記分</h1>
-        <p className="subtitle">台灣麻將 16 張 · 個人記分工具</p>
-      </header>
-
-      {storageError && (
-        <p className="banner error" role="alert">
-          資料未成功儲存：{storageError}
-        </p>
+    <AppDataProvider value={data}>
+      {!splashDone && (
+        <Splash dataReady={data.loaded} onDone={() => setSplashDone(true)} />
       )}
 
-      {dataCorrupted && (
-        <p className="banner warn" role="alert">
-          偵測到本機資料毀損，已丟棄壞掉的部分（必要時已重置）。
-          <button className="link" onClick={dismissCorruptNotice}>
-            知道了
-          </button>
-        </p>
-      )}
-
-      {/* 場次管理 */}
-      <section className="card">
-        <h2>牌局（場）</h2>
-        <div className="row">
-          <input
-            type="text"
-            placeholder="場名（可留空）"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-          />
-          <button className="primary" onClick={handleAddSession}>
-            新增牌局
-          </button>
-        </div>
-
-        {sessions.length > 0 && (
-          <div className="row">
-            <select value={currentId ?? ''} onChange={(e) => setCurrentId(e.target.value)}>
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}（{s.rounds.length} 局）
-                </option>
-              ))}
-            </select>
-            {current && (
-              <button
-                className="link danger"
-                onClick={() => {
-                  if (confirm(`確定刪除「${current.name}」？此動作無法復原。`)) {
-                    removeSession(current.id);
-                  }
-                }}
-              >
-                刪除此牌局
-              </button>
-            )}
-          </div>
+      <div className="app-shell">
+        {data.storageError && (
+          <p className="banner error" role="alert" style={{ margin: 16 }}>
+            資料未成功儲存：{data.storageError}
+          </p>
         )}
-      </section>
+        {data.dataCorrupted && (
+          <p className="banner warn" role="alert" style={{ margin: 16 }}>
+            偵測到本機資料毀損，已丟棄壞掉的部分（必要時已重置）。
+            <button className="link" onClick={data.dismissCorruptNotice}>
+              知道了
+            </button>
+          </p>
+        )}
 
-      {!current ? (
-        <p className="muted">尚無牌局，請先新增一場。</p>
-      ) : (
-        <>
-          <SettingsPanel
-            settings={current.settings}
-            players={current.players}
-            onChangeSettings={(s) => updateSettings(current.id, s)}
-            onChangePlayerName={(pid, name) => updatePlayerName(current.id, pid, name)}
-          />
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<SessionsPage />} />
+            <Route path="/sessions/:id" element={<SessionDetailPage />} />
+            <Route path="/players" element={<PlayersPage />} />
+            <Route path="/players/:name" element={<PlayerDetailPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
 
-          <RoundForm players={current.players} onAdd={(r) => addRound(current.id, r)} />
-
-          <Standings
-            rounds={current.rounds}
-            players={current.players}
-            settings={current.settings}
-          />
-
-          <RoundList
-            rounds={current.rounds}
-            players={current.players}
-            settings={current.settings}
-            onRemove={(rid) => removeRound(current.id, rid)}
-          />
-        </>
-      )}
-    </main>
+        <TabBar />
+      </div>
+    </AppDataProvider>
   );
 }
