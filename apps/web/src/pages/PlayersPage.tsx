@@ -11,6 +11,7 @@ import {
 import { Amount } from '../components/ui';
 import { Sparkline } from '../components/Sparkline';
 import { BottomSheet } from '../components/BottomSheet';
+import { Fab } from '../components/Fab';
 
 type SortKey = 'sessions' | 'amount' | 'name';
 
@@ -152,9 +153,7 @@ export function PlayersPage() {
         </>
       )}
 
-      <button className="fab" aria-label="新增玩家" onClick={() => setSheetOpen(true)}>
-        ＋
-      </button>
+      <Fab label="新增玩家" onClick={() => setSheetOpen(true)} />
 
       <NewRosterSheet
         open={sheetOpen}

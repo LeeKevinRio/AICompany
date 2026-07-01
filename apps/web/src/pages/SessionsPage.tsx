@@ -1,13 +1,30 @@
 // Tab 1：牌局清單。卡片清單 + FAB 新增 + Bottom Sheet（含開桌規則設定）。
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import type { NewSessionPlayer } from '../hooks/useSessions';
 import { settleSession } from '../scoring/scoring';
-import type { RosterPlayer, Session, SessionRules } from '../types';
+import type { RosterPlayer, Session, SessionRules, Settings } from '../types';
 import { Amount } from '../components/ui';
 import { BottomSheet } from '../components/BottomSheet';
 import { RulesFields } from '../components/RulesFields';
+import { Fab } from '../components/Fab';
+import { toNonNegInt } from '../utils';
+
+/**
+ * #3：開新局沒取名稱時的預設場名「牌局 N」。
+ * 取既有「牌局 N」場名中的最大 N + 1（刪過場次也不撞名）；
+ * 若沒有任何「牌局 N」場名，則用「現有場數 + 1」起算。
+ */
+function nextSessionName(sessions: Session[]): string {
+  let maxNo = 0;
+  for (const s of sessions) {
+    const m = /^牌局 (\d+)$/.exec(s.name.trim());
+    if (m) maxNo = Math.max(maxNo, Number(m[1]));
+  }
+  const next = maxNo > 0 ? maxNo + 1 : sessions.length + 1;
+  return `牌局 ${next}`;
+}
 
 export function SessionsPage() {
   const { sessions, addSession, removeSession, renameSession, globalSettings } = useAppData();
@@ -47,18 +64,19 @@ export function SessionsPage() {
         </div>
       )}
 
-      <button className="fab" aria-label="新增牌局" onClick={() => setSheetOpen(true)}>
-        ＋
-      </button>
+      <Fab label="新增牌局" onClick={() => setSheetOpen(true)} />
 
       <NewSessionSheet
         open={sheetOpen}
         roster={globalSettings.roster}
         knownPlayers={globalSettings.knownPlayers}
         defaultRules={globalSettings.defaultRules}
+        defaultBase={globalSettings.defaultBase}
+        defaultTai={globalSettings.defaultTai}
+        defaultName={nextSessionName(sessions)}
         onClose={() => setSheetOpen(false)}
-        onCreate={(name, players, rules) => {
-          const id = addSession(name, players, rules);
+        onCreate={(name, players, rules, settings) => {
+          const id = addSession(name, players, rules, settings);
           setSheetOpen(false);
           navigate(`/sessions/${id}`);
         }}
@@ -132,6 +150,9 @@ function NewSessionSheet({
   roster,
   knownPlayers,
   defaultRules,
+  defaultBase,
+  defaultTai,
+  defaultName,
   onClose,
   onCreate,
 }: {
@@ -139,8 +160,16 @@ function NewSessionSheet({
   roster: RosterPlayer[];
   knownPlayers: string[];
   defaultRules: SessionRules;
+  defaultBase: number;
+  defaultTai: number;
+  defaultName: string;
   onClose: () => void;
-  onCreate: (name: string, players: NewSessionPlayer[], rules: SessionRules) => void;
+  onCreate: (
+    name: string,
+    players: NewSessionPlayer[],
+    rules: SessionRules,
+    settings: Settings,
+  ) => void;
 }) {
   const [name, setName] = useState('');
   // 4 個座位：名字 + 可選 rosterId（從名冊帶入時連結）。
@@ -151,9 +180,26 @@ function NewSessionSheet({
     { name: '' },
   ]);
   const [rules, setRules] = useState<SessionRules>(defaultRules);
+  // #1：底/台改為開局時設定（預設帶入全域 defaultBase/defaultTai）。
+  const [base, setBase] = useState(defaultBase);
+  const [tai, setTai] = useState(defaultTai);
 
-  // 開啟時帶入預設場名
-  const defaultName = `${new Date().toLocaleDateString('zh-TW')} 場`;
+  // 這個 sheet 關閉後仍保持 mounted，useState 初值只在首次 mount 生效；
+  // 若不重設，使用者先到設定頁改了全域預設、再回來開新局，會帶到過期舊值。
+  // 因此在 sheet 由關閉變開啟（open false→true）那一刻，把欄位重設為當前全域預設。
+  // 依賴陣列只放 open，避免打字途中因 defaultBase/defaultTai 等變動而把使用者輸入洗掉。
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      setName('');
+      setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
+      setRules(defaultRules);
+      setBase(defaultBase);
+      setTai(defaultTai);
+    }
+    wasOpen.current = open;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // 已帶入的 rosterId 集合（同一名冊成員不重複選入兩個座位）。
   const usedRosterIds = new Set(seats.map((s) => s.rosterId).filter(Boolean) as string[]);
@@ -180,10 +226,12 @@ function NewSessionSheet({
   }
 
   function handleCreate() {
-    onCreate(name.trim() || defaultName, seats, rules);
+    onCreate(name.trim() || defaultName, seats, rules, { base, tai });
     setName('');
     setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
     setRules(defaultRules);
+    setBase(defaultBase);
+    setTai(defaultTai);
   }
 
   return (
@@ -198,7 +246,31 @@ function NewSessionSheet({
         />
       </label>
 
-      <div className="players-grid" style={{ marginBottom: 16 }}>
+      {/* #1：底/台在開局時設定 */}
+      <div className="row" style={{ marginTop: 16 }}>
+        <label className="field">
+          <span>底</span>
+          <input
+            type="number"
+            min={0}
+            className="tabular"
+            value={base}
+            onChange={(e) => setBase(toNonNegInt(e.target.value))}
+          />
+        </label>
+        <label className="field">
+          <span>每台</span>
+          <input
+            type="number"
+            min={0}
+            className="tabular"
+            value={tai}
+            onChange={(e) => setTai(toNonNegInt(e.target.value))}
+          />
+        </label>
+      </div>
+
+      <div className="players-grid" style={{ margin: '16px 0' }}>
         {seats.map((seat, i) => (
           <label className="field" key={i}>
             <span>玩家 {i + 1}</span>

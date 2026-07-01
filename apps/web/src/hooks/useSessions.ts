@@ -66,13 +66,14 @@ export function linkSessionsToRoster(
 
 /**
  * 新建一場：帶入全域預設（底/台 + 規則）與一組玩家（名字 + rosterId）。
- * 規則可由開桌 sheet 覆寫 global.defaultRules。
+ * 底/台與規則皆可由開桌 sheet 覆寫 global 預設（#1：底/台改為開局時設定）。
  */
 function createSession(
   name: string,
   global: GlobalSettings,
   players?: NewSessionPlayer[],
   rules?: SessionRules,
+  settings?: Settings,
 ): Session {
   const sessionPlayers: Player[] = DEFAULT_PLAYERS.map((p, i) => {
     const incoming = players?.[i];
@@ -87,7 +88,7 @@ function createSession(
     id: genId('s'),
     name: name.trim() || `${new Date().toLocaleDateString('zh-TW')} 場`,
     players: sessionPlayers,
-    settings: { base: global.defaultBase, tai: global.defaultTai },
+    settings: settings ?? { base: global.defaultBase, tai: global.defaultTai },
     rules: rules ?? { ...global.defaultRules },
     rounds: [],
     createdAt: Date.now(),
@@ -169,8 +170,13 @@ export function useSessions() {
 
   // 新增一場，回傳新場 id（供路由 navigate 進詳情頁）
   const addSession = useCallback(
-    (name: string, players?: NewSessionPlayer[], rules?: SessionRules): string => {
-      const s = createSession(name, globalSettings, players, rules);
+    (
+      name: string,
+      players?: NewSessionPlayer[],
+      rules?: SessionRules,
+      settings?: Settings,
+    ): string => {
+      const s = createSession(name, globalSettings, players, rules, settings);
       setSessions((prev) => [s, ...prev]);
       return s.id;
     },

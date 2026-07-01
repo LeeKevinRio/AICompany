@@ -60,7 +60,11 @@
   /* === 版面 === */
   --tab-bar-height: 56px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --content-bottom-pad: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-4));
+  /* FAB 的整體高度（佔位）：底部偏移(tab-bar + safe-bottom + space-8) + 56px FAB 本身。
+     頁面底部留白要 >= 這個值再加一段 gap，否則清單最後一列右側會被 FAB 蓋住點不到
+     （#2 加固之三：避免 FAB 壓到清單裡的互動按鈕，例如玩家頁每列的「＋ 加入名冊」）。 */
+  --fab-stack: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-8) + 56px);
+  --content-bottom-pad: calc(var(--fab-stack) + var(--space-4));
 }
 
 * {
@@ -132,7 +136,8 @@ body {
   line-height: 1.3;
 }
 
-.back-btn {
+/* 通用圖示按鈕：返回箭頭、齒輪等 header 內的方形圖示按鈕共用。 */
+.icon-btn {
   background: transparent;
   border: 1px solid var(--color-border);
   color: var(--color-text);
@@ -455,6 +460,9 @@ button.link.danger {
   right: 0;
   max-width: 560px;
   margin: 0 auto;
+  /* 明確 box-sizing：把 height 鎖在 56px + safe area，避免 padding 撐高、
+     吃掉 FAB 與 tab-bar 之間的淨空（#2 加固之一）。 */
+  box-sizing: border-box;
   height: calc(var(--tab-bar-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   display: flex;
@@ -477,7 +485,10 @@ button.link.danger {
   color: var(--color-text-disabled);
   font-size: 11px;
   font-weight: 400;
-  min-height: var(--tab-bar-height);
+  /* tab-item 撐滿 tab-bar 高度即可，不要用 min-height 把列撐到超過 56px；
+     高度交給 tab-bar 控制，這裡只 stretch（#2 加固之一）。 */
+  min-height: 0;
+  height: 100%;
   padding: 6px 0;
   transition: color 120ms ease;
 }
@@ -622,9 +633,12 @@ button.link.danger {
 
 .fab {
   position: fixed;
-  /* 底部偏移 = tab bar 高度 + iOS safe area + 一段 margin（用 spacing token，不寫死） */
-  bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-6));
-  right: var(--space-6);
+  box-sizing: border-box;
+  /* 底部偏移 = tab bar 高度 + iOS safe area + 一整段間距，確保整顆 FAB 完全在 tab-bar
+     之上、彼此有足夠淨空（#2 加固：用 --space-8=32px，比原本 24px 更有餘裕）。 */
+  bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-8));
+  /* 貼齊 560px 容器右側（FAB 經 portal 掛在 body，故直接寫在 .fab，不靠 .app-shell 巢狀）。 */
+  right: max(var(--space-6), calc((100vw - 560px) / 2 + var(--space-6)));
   width: 56px;
   height: 56px;
   border-radius: var(--radius-full);
@@ -637,19 +651,15 @@ button.link.danger {
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 16px rgba(31, 111, 67, 0.5);
-  /* 必須高於 tab bar（z-index 100），否則 tab bar 會蓋住 FAB 攔截點擊 */
-  z-index: 110;
+  /* FAB 經 portal 掛在 document.body，脫離 .page 的 stacking context；
+     z-index 120 高於 tab-bar(100)，低於 sheet-backdrop(200)。 */
+  z-index: 120;
   /* 確保 FAB 自身可點，不被任何透明層攔截 */
   pointer-events: auto;
 }
 
 .fab:active {
   transform: scale(0.92);
-}
-
-/* FAB 在牌局清單頁的定位需貼齊 560px 容器右側 */
-.app-shell .fab {
-  right: max(var(--space-6), calc((100vw - 560px) / 2 + var(--space-6)));
 }
 
 /* =========================================================================

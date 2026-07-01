@@ -4,11 +4,7 @@ import { useState } from 'react';
 import { useAppData } from '../AppData';
 import { MAX_KNOWN_PLAYERS } from '../types';
 import { RulesFields } from '../components/RulesFields';
-
-function toNonNegInt(value: string): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
-}
+import { toNonNegInt } from '../utils';
 
 export function SettingsPage() {
   const { sessions, globalSettings, updateGlobalSettings, clearAll } = useAppData();

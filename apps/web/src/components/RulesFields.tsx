@@ -1,16 +1,11 @@
 // v2.1：開桌規則設定欄位（自摸加台 + 東錢）。
 // 共用於「開桌 Bottom Sheet」與「牌局內規則調整」，確保兩處 UI 一致。
 import type { SessionRules } from '../types';
+import { toNonNegInt } from '../utils';
 
 interface Props {
   rules: SessionRules;
   onChange: (next: SessionRules) => void;
-}
-
-// 把輸入轉成非負整數：非數字視為 0，負數歸 0，小數無條件捨去。
-function toNonNegInt(value: string): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
 }
 
 /** ON/OFF 開關（規範第 6 節提示：ON 用 primary，OFF 用 border）。 */

@@ -10,6 +10,8 @@ import { RankBar } from '../components/RankBar';
 import { ScoreChart } from '../components/ScoreChart';
 import { Highlights } from '../components/Highlights';
 import { ShareCard } from '../components/ShareCard';
+import { BottomSheet } from '../components/BottomSheet';
+import { IconSettings } from '../components/icons';
 import type { SessionRules } from '../types';
 
 type SubTab = 'record' | 'chart' | 'detail';
@@ -47,6 +49,8 @@ export function SessionDetailPage() {
   } = useAppData();
 
   const [sub, setSub] = useState<SubTab>('record');
+  // #1：本場設定改在開局時設定、場內不顯示；改由右上角齒輪開此 sheet 編輯。
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const session = sessions.find((s) => s.id === id) ?? null;
 
@@ -54,7 +58,7 @@ export function SessionDetailPage() {
     return (
       <div className="page">
         <header className="page-header">
-          <button className="back-btn" onClick={() => navigate('/')} aria-label="返回">
+          <button className="icon-btn" onClick={() => navigate('/')} aria-label="返回">
             ‹
           </button>
           <h1>找不到牌局</h1>
@@ -67,10 +71,18 @@ export function SessionDetailPage() {
   return (
     <div className="page">
       <header className="page-header">
-        <button className="back-btn" onClick={() => navigate('/')} aria-label="返回牌局清單">
+        <button className="icon-btn" onClick={() => navigate('/')} aria-label="返回牌局清單">
           ‹
         </button>
-        <h1>{session.name}</h1>
+        <h1 style={{ flex: 1 }}>{session.name}</h1>
+        {/* #1：右上角編輯本場設定（底/台/規則）入口 */}
+        <button
+          className="icon-btn"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="編輯本場設定"
+        >
+          <IconSettings className="" width={20} height={20} />
+        </button>
       </header>
 
       <div className="subtabs">
@@ -108,15 +120,6 @@ export function SessionDetailPage() {
             players={session.players}
             rounds={session.rounds}
             onAdd={(r) => addRound(session.id, r)}
-          />
-          <SettingsPanel
-            settings={session.settings}
-            players={session.players}
-            rules={session.rules}
-            hasRounds={session.rounds.length > 0}
-            onChangeSettings={(s) => updateSettings(session.id, s)}
-            onChangePlayerName={(pid, name) => updatePlayerName(session.id, pid, name)}
-            onChangeRules={(r) => updateRules(session.id, r)}
           />
           <button
             className={session.endedAt ? 'secondary' : 'primary'}
@@ -170,11 +173,13 @@ export function SessionDetailPage() {
             className="secondary"
             style={{ width: '100%', marginTop: 12 }}
             onClick={() => {
-              // v2.1 建議做：快速重開同組牌局——帶入本場 4 人（含 rosterId）與規則。
+              // v2.1 建議做：快速重開同組牌局——帶入本場 4 人（含 rosterId），
+              // 並沿用本場規則（rules）與底/台設定（settings），與原場一致，不退回全域預設。
               const newId = addSession(
                 `${new Date().toLocaleDateString('zh-TW')} 場`,
                 session.players.map((p) => ({ name: p.name, rosterId: p.rosterId })),
                 session.rules,
+                session.settings,
               );
               navigate(`/sessions/${newId}`);
             }}
@@ -183,6 +188,30 @@ export function SessionDetailPage() {
           </button>
         </>
       )}
+
+      {/* #1：右上角齒輪開啟——編輯本場底/台/規則。改設定後既有局數自動以新設定重算顯示。 */}
+      <BottomSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title="編輯本場設定"
+      >
+        <SettingsPanel
+          settings={session.settings}
+          players={session.players}
+          rules={session.rules}
+          hasRounds={session.rounds.length > 0}
+          onChangeSettings={(s) => updateSettings(session.id, s)}
+          onChangePlayerName={(pid, name) => updatePlayerName(session.id, pid, name)}
+          onChangeRules={(r) => updateRules(session.id, r)}
+        />
+        <button
+          className="primary"
+          style={{ marginTop: 8 }}
+          onClick={() => setSettingsOpen(false)}
+        >
+          完成
+        </button>
+      </BottomSheet>
     </div>
   );
 }

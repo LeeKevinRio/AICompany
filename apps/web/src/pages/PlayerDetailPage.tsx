@@ -58,7 +58,7 @@ export function PlayerDetailPage() {
   return (
     <div className="page">
       <header className="page-header">
-        <button className="back-btn" onClick={() => navigate('/players')} aria-label="返回玩家清單">
+        <button className="icon-btn" onClick={() => navigate('/players')} aria-label="返回玩家清單">
           ‹
         </button>
         {editing && rosterPlayer ? (
