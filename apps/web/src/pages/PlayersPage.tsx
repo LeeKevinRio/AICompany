@@ -8,7 +8,7 @@ import {
   aggregateUnlinkedByName,
   collectPlayerNames,
 } from '../scoring/timeline';
-import { Amount } from '../components/ui';
+import { Amount, PLAYER_COLOR_VARS } from '../components/ui';
 import { Sparkline } from '../components/Sparkline';
 import { BottomSheet } from '../components/BottomSheet';
 import { Fab } from '../components/Fab';
@@ -23,6 +23,16 @@ export function PlayersPage() {
   const [sort, setSort] = useState<SortKey>('sessions');
 
   const { roster } = globalSettings;
+
+  // 4-1-c：玩家代表色以「名冊順序」固定（而非顯示排序），讓同一玩家永遠同一色。
+  // 依 rosterId 對應 PLAYER_COLOR_VARS[index % 4]，供卡片左側 border-left-color 使用。
+  const rosterColor = useMemo(() => {
+    const map: Record<string, string> = {};
+    roster.forEach((rp, i) => {
+      map[rp.id] = PLAYER_COLOR_VARS[i % PLAYER_COLOR_VARS.length];
+    });
+    return map;
+  }, [roster]);
 
   // 名冊成員：以 rosterId 聚合（不受改名影響）。
   const rosterRows = useMemo(
@@ -98,6 +108,7 @@ export function PlayersPage() {
             <div
               className="player-card"
               key={row.rosterId}
+              style={{ borderLeftColor: rosterColor[row.rosterId] }}
               onClick={() => navigate(`/players/r/${row.rosterId}`)}
             >
               <span className="player-avatar" aria-hidden>

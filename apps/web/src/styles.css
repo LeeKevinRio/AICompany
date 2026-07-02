@@ -22,8 +22,9 @@
   --color-primary-muted: #1a3d29;
 
   /* === 語意 === */
-  --color-win: #34c47a;
-  --color-lose: #f05252;
+  /* 美化增強 v2.2（4-2-b）：win 稍降亮度、lose 降飽和降亮，避免深底上刺眼。 */
+  --color-win: #2ebd72;
+  --color-lose: #e84848;
   --color-warn: #d4a030;
   --color-info: #4a9eca;
 
@@ -37,6 +38,24 @@
   --color-player-b: #f6c55b; /* 鮮黃橙 */
   --color-player-c: #c47ef5; /* 紫 */
   --color-player-d: #5bcfc4; /* 青綠 */
+
+  /* === 新增 token（美化增強 v2.2，來源：4-0）=== */
+  /* 微光漸層用 */
+  --color-surface-glow: #1e2d23; /* surface 略亮版，用於卡片頂部漸層 */
+  --color-primary-glow: rgba(31, 111, 67, 0.18); /* primary 光暈，FAB / active 態 */
+  --color-gold-glow: rgba(201, 165, 53, 0.12); /* 金色光暈，冠軍列 / kitty */
+
+  /* 陰影 */
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.04) inset;
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--color-primary-muted) inset;
+  --shadow-fab: 0 4px 20px rgba(31, 111, 67, 0.55), 0 1px 4px rgba(0, 0, 0, 0.4);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.6);
+
+  /* 分隔線（比 border 更輕） */
+  --color-divider: rgba(255, 255, 255, 0.06);
+
+  /* Tab bar border-top 強化 */
+  --color-tab-border: rgba(255, 255, 255, 0.08);
 
   /* === 間距 === */
   --space-1: 4px;
@@ -130,10 +149,12 @@ body {
 }
 
 .page-header h1 {
+  /* 4-3-a：加大加重，頁面入場更有份量 */
   margin: 0;
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 26px;
+  font-weight: 800;
   line-height: 1.3;
+  letter-spacing: -0.02em;
 }
 
 /* 通用圖示按鈕：返回箭頭、齒輪等 header 內的方形圖示按鈕共用。 */
@@ -152,9 +173,12 @@ body {
 }
 
 .subtitle {
+  /* 4-3-c：副標行高與上距 */
   margin: 0;
   color: var(--color-text-secondary);
   font-size: 13px;
+  line-height: 1.5;
+  margin-top: 4px;
 }
 
 /* =========================================================================
@@ -162,17 +186,22 @@ body {
  * ========================================================================= */
 
 .card {
-  background: var(--color-surface);
+  /* 4-1-a：頂部微亮漸層 + 統一陰影 */
+  background: linear-gradient(160deg, var(--color-surface-glow) 0%, var(--color-surface) 60%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-4);
   margin-bottom: var(--space-3);
+  box-shadow: var(--shadow-card);
 }
 
 .card h2 {
+  /* 4-3-a：字級微降、改次要色，讓內容而非標題搶眼 */
   margin: 0 0 var(--space-3);
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text-secondary);
 }
 
 .card h3 {
@@ -351,22 +380,46 @@ button.link.danger {
   border: 1px solid #b59a2e;
 }
 
-/* 空狀態 */
+/* 空狀態（4-4-c） */
 .empty-state {
   text-align: center;
-  padding: var(--space-8) var(--space-4);
+  padding: 64px var(--space-4) var(--space-8);
   color: var(--color-text-secondary);
 }
 .empty-state .empty-icon {
-  font-size: 40px;
-  margin-bottom: var(--space-3);
-  opacity: 0.7;
+  font-size: 56px;
+  margin-bottom: var(--space-4);
+  opacity: 0.5;
+  display: block;
+  /* 輕微脈動動畫，讓空狀態不那麼死板 */
+  animation: empty-pulse 3s ease-in-out infinite;
 }
+
+@keyframes empty-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.65;
+  }
+}
+
 .empty-state .empty-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--color-text);
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
+  letter-spacing: -0.01em;
+}
+
+.empty-state p:last-child {
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 220px;
+  margin: 0 auto;
 }
 
 /* =========================================================================
@@ -392,18 +445,22 @@ button.link.danger {
 }
 
 .splash-tile {
-  width: 72px;
-  height: 72px;
-  border-radius: var(--radius-lg);
+  /* 4-4-a：加大到 80px、強化金色光暈與品牌色遠暈 */
+  width: 80px;
+  height: 80px;
+  border-radius: 18px;
   border: 2px solid var(--color-primary);
-  background: var(--color-surface);
+  background: linear-gradient(145deg, var(--color-surface-glow) 0%, var(--color-surface) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 36px;
+  font-size: 40px;
   font-weight: 700;
   color: var(--color-text);
-  box-shadow: 0 0 24px rgba(201, 165, 53, 0.08);
+  box-shadow:
+    0 0 0 1px rgba(201, 165, 53, 0.3),
+    0 0 32px rgba(201, 165, 53, 0.15),
+    0 0 64px rgba(31, 111, 67, 0.12);
   opacity: 0;
   transform: scale(0.85);
   animation: splash-tile-in 400ms var(--ease-spring) forwards;
@@ -417,8 +474,10 @@ button.link.danger {
 }
 
 .splash-title {
-  font-size: 32px;
-  font-weight: 700;
+  /* 4-4-a：微加大加重 */
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   color: var(--color-text);
   margin: 0;
   opacity: 0;
@@ -427,9 +486,10 @@ button.link.danger {
 }
 
 .splash-subtitle {
+  /* 4-4-a：字距加大，更優雅的副標節奏 */
   font-size: 13px;
   color: var(--color-text-secondary);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   margin: 0;
   opacity: 0;
   transform: translateY(6px);
@@ -466,10 +526,11 @@ button.link.danger {
   height: calc(var(--tab-bar-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   display: flex;
-  background-color: rgba(23, 33, 26, 0.92);
+  /* 4-4-b：略深毛玻璃底 + 更輕的頂邊界線 */
+  background-color: rgba(15, 26, 18, 0.94);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-tab-border);
   z-index: 100;
 }
 
@@ -483,23 +544,30 @@ button.link.danger {
   background: transparent;
   border: none;
   color: var(--color-text-disabled);
-  font-size: 11px;
-  font-weight: 400;
+  /* 4-4-b：字縮小讓圖示更主導、inactive 態不那麼消失 */
+  font-size: 10px;
+  font-weight: 500;
   /* tab-item 撐滿 tab-bar 高度即可，不要用 min-height 把列撐到超過 56px；
      高度交給 tab-bar 控制，這裡只 stretch（#2 加固之一）。 */
   min-height: 0;
   height: 100%;
-  padding: 6px 0;
-  transition: color 120ms ease;
+  padding: 8px 0 4px;
+  transition: color 120ms ease, transform 80ms ease;
 }
 
 .tab-item.active {
   color: var(--color-primary);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .tab-item:active {
-  transform: scale(0.92);
+  /* 4-4-b：加大 press 態壓感 */
+  transform: scale(0.88);
+}
+
+/* 4-4-b：選中態圖示加一層極輕光暈 */
+.tab-item.active svg {
+  filter: drop-shadow(0 0 6px var(--color-primary-glow));
 }
 
 .tab-icon {
@@ -507,16 +575,22 @@ button.link.danger {
   height: 24px;
 }
 
+/* 4-4-b：選中態指示器改為圖示上方的橫線（更清楚可見）。
+   TabBar.tsx 已將 .tab-pill 移到圖示之前（column 首項），故橫線落在圖示上方。 */
 .tab-pill {
   width: 24px;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
   background: transparent;
-  margin-top: 2px;
+  margin-top: 3px;
+  margin-bottom: 0;
+  transition: background-color 150ms ease, width 150ms var(--ease-spring);
 }
 
 .tab-item.active .tab-pill {
-  background: var(--color-primary-muted);
+  /* 改為 primary 本色更可見、選中時加寬有彈性延伸感 */
+  background: var(--color-primary);
+  width: 32px;
 }
 
 /* =========================================================================
@@ -530,49 +604,71 @@ button.link.danger {
 }
 
 .session-card {
-  background: var(--color-surface);
+  /* 4-1-b：頂部微亮漸層 + 統一陰影 + hover/active 回饋，內距略放寬 */
+  background: linear-gradient(160deg, var(--color-surface-glow) 0%, var(--color-surface) 60%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-4) 14px;
+  padding: 16px 16px 14px;
   cursor: pointer;
   position: relative;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 180ms ease, border-color 180ms ease, transform 100ms ease;
+}
+
+.session-card:hover {
+  border-color: var(--color-primary-muted);
+  box-shadow: var(--shadow-card-hover);
 }
 
 .session-card:active {
+  transform: scale(0.985);
   border-color: var(--color-primary-muted);
+  box-shadow: var(--shadow-card);
 }
 
 .session-card-top {
+  /* 4-1-b：日期與場名之間加 6px 呼吸 */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  margin-bottom: 6px;
 }
 
 .session-date {
-  font-size: 13px;
+  /* 4-1-b：縮小退場、微加字距 */
+  font-size: 12px;
   color: var(--color-text-secondary);
+  letter-spacing: 0.03em;
 }
 
 .session-name {
+  /* 4-1-b：加重字級、收緊下距與字距，主視覺層級更清楚 */
   font-size: 18px;
-  font-weight: 600;
-  margin: 4px 0 var(--space-3);
+  font-weight: 700;
+  margin: 2px 0 10px;
+  letter-spacing: -0.01em;
 }
 
 .chip {
-  font-size: 12px;
+  /* 4-2-c：縮小讓場名更搶眼 */
+  font-size: 11px;
+  font-weight: 600;
   border-radius: var(--radius-pill);
   padding: 2px 8px;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 .chip.ongoing {
+  /* 4-2-c：改用 win 綠，亮度更佳 */
   background: var(--color-primary-muted);
-  color: var(--color-primary);
+  color: var(--color-win);
+  border: 1px solid rgba(46, 189, 114, 0.25);
 }
 .chip.ended {
-  background: rgba(138, 158, 144, 0.15);
+  background: rgba(138, 158, 144, 0.12);
   color: var(--color-text-secondary);
+  border: 1px solid rgba(138, 158, 144, 0.2);
 }
 
 .session-scores {
@@ -588,15 +684,33 @@ button.link.danger {
   font-size: 15px;
 }
 .session-score .name {
-  color: var(--color-text);
+  /* 4-1-b：縮小名字，讓金額更突出 */
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+.session-score .amt {
+  /* 4-1-b / 4-3-b：牌局卡片金額 */
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .session-card-bottom {
+  /* 4-1-b：加分隔線、縮小退場、與「進入 ›」加強對比 */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 13px;
+  border-top: 1px solid var(--color-divider);
+  margin-top: 10px;
+  padding-top: 8px;
+  font-size: 12px;
   color: var(--color-text-secondary);
+}
+
+.session-card-bottom > span:last-child {
+  color: var(--color-primary);
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .session-menu-btn {
@@ -626,9 +740,17 @@ button.link.danger {
 .amt.lose {
   color: var(--color-lose);
 }
+/* 4-2-b：大數字收字距避免散 */
+.amt.win,
+.amt.lose {
+  letter-spacing: -0.01em;
+}
 .amt.zero {
+  /* 4-2-b：零值微縮、降不透明度，視覺退場 */
   color: var(--color-text-secondary);
   font-weight: 400;
+  font-size: 0.93em;
+  opacity: 0.7;
 }
 
 .fab {
@@ -642,7 +764,8 @@ button.link.danger {
   width: 56px;
   height: 56px;
   border-radius: var(--radius-full);
-  background: var(--color-primary);
+  /* 4-4-g：漸層底 + 強化陰影 */
+  background: linear-gradient(145deg, #27834e 0%, var(--color-primary) 100%);
   color: #ffffff;
   border: none;
   font-size: 28px;
@@ -650,7 +773,8 @@ button.link.danger {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(31, 111, 67, 0.5);
+  box-shadow: var(--shadow-fab);
+  transition: background 180ms ease, box-shadow 180ms ease, transform 80ms ease;
   /* FAB 經 portal 掛在 document.body，脫離 .page 的 stacking context；
      z-index 120 高於 tab-bar(100)，低於 sheet-backdrop(200)。 */
   z-index: 120;
@@ -658,8 +782,16 @@ button.link.danger {
   pointer-events: auto;
 }
 
+.fab:hover {
+  /* 4-4-g */
+  background: linear-gradient(145deg, #2e9459 0%, #1f6f43 100%);
+  box-shadow: 0 6px 28px rgba(31, 111, 67, 0.65), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
 .fab:active {
-  transform: scale(0.92);
+  /* 4-4-g：加大壓感 */
+  transform: scale(0.9);
+  box-shadow: 0 2px 10px rgba(31, 111, 67, 0.4);
 }
 
 /* =========================================================================
@@ -747,29 +879,35 @@ button.link.danger {
  * ========================================================================= */
 
 .subtabs {
+  /* 4-4-h：加框線、內距收緊 */
   display: flex;
   gap: 0;
   background: var(--color-surface-low);
   border-radius: var(--radius-md);
-  padding: 4px;
+  padding: 3px;
   margin-bottom: var(--space-4);
+  border: 1px solid var(--color-border);
 }
 
 .subtab {
+  /* 4-4-h：字縮小、圓角對應容器 */
   flex: 1;
   background: transparent;
   border: none;
   color: var(--color-text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   padding: 8px;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   min-height: 40px;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .subtab.active {
-  background: var(--color-primary-muted);
-  color: var(--color-primary);
-  font-weight: 600;
+  /* 4-4-h：改 primary 實色白字、加陰影，對比更高 */
+  background: var(--color-primary);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(31, 111, 67, 0.4);
 }
 
 /* =========================================================================
@@ -777,20 +915,34 @@ button.link.danger {
  * ========================================================================= */
 
 .rank-bar {
+  /* 4-4-d：補框線與陰影讓整體更定型 */
   background: var(--color-surface-low);
   border-radius: var(--radius-md);
-  padding: 10px 0;
+  padding: 8px 0;
   margin-bottom: var(--space-4);
   overflow: hidden;
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
 }
 
 .rank-row {
+  /* 4-4-d：行高微加更舒適 */
   display: flex;
   align-items: center;
-  height: 52px;
+  height: 54px;
   padding: 0 var(--space-4) 0 0;
   position: relative;
-  transition: transform 300ms var(--ease-spring);
+  transition: background-color 200ms ease, transform 300ms var(--ease-spring);
+}
+
+/* 4-4-d：行之間補輕分隔線 */
+.rank-row + .rank-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+/* 4-4-d：第一名金色微光背景 */
+.rank-row:first-child {
+  background: linear-gradient(90deg, var(--color-gold-glow) 0%, transparent 70%);
 }
 
 .rank-color-bar {
@@ -798,33 +950,39 @@ button.link.danger {
   align-self: stretch;
   margin-right: var(--space-3);
   flex-shrink: 0;
+  /* 4-4-d：色條略降不透明度更有生命感 */
+  opacity: 0.85;
 }
 
 .rank-name {
+  /* 4-4-d：加重字重，排名條情境名字要更清楚 */
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--color-text);
   flex: 1;
 }
 
 .rank-amt {
+  /* 4-3-b：排名條金額加大加字距 */
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
+  letter-spacing: -0.02em;
   margin-right: var(--space-3);
   text-align: right;
-  min-width: 88px;
+  min-width: 92px;
 }
 
 .rank-meta {
+  /* 4-4-d：縮小退場、min-width 收窄給金額更多空間 */
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--color-text-secondary);
-  min-width: 52px;
+  min-width: 48px;
   justify-content: flex-end;
 }
 
@@ -845,13 +1003,23 @@ button.link.danger {
   animation: winner-flash 800ms ease;
 }
 
+/* 4-4-d：贏家閃光強化 */
 @keyframes winner-flash {
-  0%,
+  0% {
+    box-shadow: inset 0 0 0 0 transparent;
+    background: transparent;
+  }
+  25% {
+    box-shadow: inset 0 0 0 2px var(--color-gold);
+    background: rgba(201, 165, 53, 0.1);
+  }
+  75% {
+    box-shadow: inset 0 0 0 1px var(--color-gold);
+    background: rgba(201, 165, 53, 0.04);
+  }
   100% {
     box-shadow: inset 0 0 0 0 transparent;
-  }
-  30% {
-    box-shadow: inset 0 0 0 2px var(--color-gold);
+    background: transparent;
   }
 }
 
@@ -860,11 +1028,13 @@ button.link.danger {
  * ========================================================================= */
 
 .chart-card {
-  background: var(--color-surface);
+  /* 4-4-e：頂部微亮漸層 + 統一陰影 */
+  background: linear-gradient(160deg, var(--color-surface-glow) 0%, var(--color-surface) 60%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-4);
   margin-bottom: var(--space-3);
+  box-shadow: var(--shadow-card);
 }
 
 .chart-legend {
@@ -875,19 +1045,27 @@ button.link.danger {
 }
 
 .legend-item {
+  /* 4-4-e：圖例 pill 加框線與底色 */
   display: flex;
   align-items: center;
   gap: 6px;
-  background: transparent;
-  border: none;
-  padding: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-divider);
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   color: var(--color-text);
   min-height: auto;
+  transition: opacity 150ms ease, background 150ms ease;
+}
+
+.legend-item:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .legend-item.off {
-  opacity: 0.35;
+  opacity: 0.3;
+  background: transparent;
 }
 
 .legend-dot {
@@ -895,6 +1073,8 @@ button.link.danger {
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
+  /* 4-4-e：小圓點加微光，在暗底更可見 */
+  box-shadow: 0 0 4px currentColor;
 }
 
 .chart-loading {
@@ -1108,17 +1288,31 @@ button.link.danger {
  * ========================================================================= */
 
 .player-card {
-  background: var(--color-surface);
+  /* 4-1-c：頂部微亮漸層 + 陰影 + hover/active 態；
+     border-left-color 由 PlayersPage.tsx inline style 帶入玩家代表色。 */
+  background: linear-gradient(160deg, var(--color-surface-glow) 0%, var(--color-surface) 60%);
   border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-primary);
+  border-left-width: 3px;
+  border-left-color: var(--color-primary);
   border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
+  padding: 12px 16px;
   margin-bottom: var(--space-2);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 180ms ease, border-color 180ms ease, transform 100ms ease;
+}
+
+.player-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.player-card:active {
+  transform: scale(0.985);
 }
 
 .player-card-info {
@@ -1126,13 +1320,24 @@ button.link.danger {
 }
 
 .player-card-name {
+  /* 4-1-c：微收字距 */
   font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .player-card-meta {
+  /* 4-1-c / 4-3-c：小字微加字距 */
   font-size: 12px;
   color: var(--color-text-secondary);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+
+/* 4-3-b：玩家卡片總額 */
+.player-card-meta .amt {
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .sparkline {
@@ -1153,15 +1358,19 @@ button.link.danger {
 }
 
 .stat-box .stat-value {
-  font-size: 20px;
+  /* 4-3-b：數字加大加字距 */
+  font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .stat-box .stat-label {
+  /* 4-3-c：小字微加字距 */
   font-size: 12px;
   color: var(--color-text-secondary);
   margin-top: 2px;
+  letter-spacing: 0.02em;
 }
 
 .history-row {
@@ -1208,27 +1417,35 @@ button.link.danger {
  * ========================================================================= */
 
 .share-card {
+  /* 4-4-f：漸層底、圓角加大、極輕邊框（白底聊天室可見輪廓）、強化陰影 */
   width: 390px;
-  background: var(--color-splash-bg);
-  border-radius: 16px;
-  padding: var(--space-6) var(--space-4);
+  background: linear-gradient(160deg, #111c14 0%, var(--color-splash-bg) 50%);
+  border-radius: 20px;
+  padding: var(--space-6) var(--space-4) var(--space-4);
   position: relative;
   color: var(--color-text);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
 }
 
 .share-watermark {
+  /* 4-4-f：改 primary 色更有品牌感 */
   position: absolute;
   top: var(--space-4);
   right: var(--space-4);
   font-size: 11px;
-  color: var(--color-text-disabled);
-  letter-spacing: 0.04em;
+  color: var(--color-primary);
+  opacity: 0.6;
+  letter-spacing: 0.1em;
+  font-weight: 600;
 }
 
 .share-date {
+  /* 4-3-c：小字微加字距 */
   font-size: 12px;
   color: var(--color-text-secondary);
   margin-bottom: var(--space-4);
+  letter-spacing: 0.02em;
 }
 
 .share-rank {
@@ -1238,12 +1455,36 @@ button.link.danger {
   margin-bottom: var(--space-2);
 }
 
+/* 4-4-f：第一名列左側加金色色條 + 金色微光背景 */
+.share-rank.first {
+  border-left: 3px solid var(--color-gold);
+  padding-left: 10px;
+  margin-left: -10px;
+  background: linear-gradient(90deg, var(--color-gold-glow) 0%, transparent 60%);
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 8px;
+}
+
+/* 4-4-f：其他名次加分隔線 */
+.share-rank + .share-rank {
+  border-top: 1px solid var(--color-divider);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
 .share-rank-badge {
-  font-size: 18px;
+  /* 4-4-f：字級強化 */
+  font-size: 14px;
   font-weight: 700;
   color: var(--color-gold);
-  width: 24px;
+  width: 28px;
   flex-shrink: 0;
+}
+
+.share-rank.first .share-rank-badge {
+  color: var(--color-gold);
+  font-size: 18px;
+  text-shadow: 0 0 8px rgba(201, 165, 53, 0.5);
 }
 
 .share-rank-name {
@@ -1257,7 +1498,10 @@ button.link.danger {
 }
 
 .share-rank.first .share-rank-amt {
-  font-size: 28px;
+  /* 4-3-b：結算第一名金額加大加字距 */
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 .share-rank .share-rank-amt {
   font-size: 20px;
@@ -1268,9 +1512,14 @@ button.link.danger {
 }
 
 .share-footer {
-  font-size: 12px;
+  /* 4-4-f：加分隔線、縮小退場、微加字距 */
+  border-top: 1px solid var(--color-divider);
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 11px;
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
 }
 
 /* 離畫面渲染容器（html2canvas 用，不顯示給使用者） */
@@ -1387,14 +1636,17 @@ button.link.danger {
 
 /* 公基金（排名條底部 / 結算頁） */
 .rank-kitty {
+  /* 4-4-d：內距加大、加金色微底色（保留 flex 兩欄佈局以容納金額） */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px var(--space-4);
+  padding: 10px var(--space-4);
   margin-top: 4px;
   border-top: 1px solid var(--color-border);
   font-size: 13px;
+  font-weight: 600;
   color: var(--color-gold);
+  background: var(--color-gold-glow);
 }
 
 .rank-kitty .tabular {

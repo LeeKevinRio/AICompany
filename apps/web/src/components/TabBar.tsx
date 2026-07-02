@@ -45,9 +45,10 @@ export function TabBar() {
             className={`tab-item${active ? ' active' : ''}`}
             onClick={() => navigate(tab.path)}
           >
+            {/* 4-4-b：pill 放在圖示之前，作為圖示上方的選中橫線 */}
+            <span className="tab-pill" />
             <tab.Icon />
             <span>{tab.label}</span>
-            <span className="tab-pill" />
           </button>
         );
       })}
