@@ -20,9 +20,12 @@
 ```
             CEO（人類，從 Claude Code 下指令）
                        │
-   ┌───────────┬───────┴───────┬───────────────┐
-dev-lead    qa-reviewer    creative-lead     art-lead
-（開發總監）  （測試/審查總監） （創意總監）       （美術總監）
+   ┌───────────┬───────┴───────┬───────────────┬───────────┐
+dev-lead    qa-reviewer    creative-lead     art-lead    devops
+（開發總監）  （測試/審查總監） （創意總監）       （美術總監）  （部署總監，待命）
+                  │
+               qa-e2e
+             （E2E 驗收員）
 ```
 
 | 角色 | subagent | 職責 | 工具權限 |
@@ -30,8 +33,10 @@ dev-lead    qa-reviewer    creative-lead     art-lead
 | **CEO** | 人類 | 下任務、做最終決策、驗收 | — |
 | **dev-lead** | `dev-lead` | 寫 code、實作功能 | Read, Write, Edit, Bash, Glob, Grep |
 | **qa-reviewer** | `qa-reviewer` | 測試、code review（唯讀，不可改 code），跨廠商呼叫 Codex 做第二意見 | Read, Grep, Glob |
+| **qa-e2e** | `qa-e2e` | 實機驗收：跑 app、點操作流程、截圖回報（唯讀 code，隸屬審查部門） | Read, Grep, Glob, preview_*（瀏覽器預覽工具） |
 | **creative-lead** | `creative-lead` | 發想、企劃、文案 | Read, Write, Edit, Glob, Grep |
 | **art-lead** | `art-lead` | 美術方向、視覺規範、art brief、風格一致性 | Read, Write, Edit, Glob, Grep |
+| **devops** | `devops` | 建置、部署、hosting、PWA 發佈、CI（**待命**：要上線時才啟用） | Read, Write, Edit, Bash, Glob, Grep |
 
 ---
 
@@ -51,10 +56,14 @@ qa-reviewer 審查
    ▼
 是否通過？
    ├─ 否（BLOCKING_ISSUES=true）► 退回 dev-lead 修正，重跑審查
-   └─ 是 ► 任務完成，回報 CEO
+   └─ 是 ► qa-e2e 實機驗收（跑 app、點流程、截圖）
+              │
+              ├─ 否 ► 退回 dev-lead 修正，重跑審查
+              └─ 是 ► 任務完成，回報 CEO（附畫面證據）
 ```
 
 - **「通過審查」才算完成**。未經 qa-reviewer 審查通過的工作，不得視為 done。
+- 涉及 UI / 畫面的功能，code review 通過後再由 **qa-e2e** 實機點測一輪（純邏輯/文件類改動可跳過 e2e）。
 - 企劃 / 美術類產出（creative-lead、art-lead）以文件形式交付到 `work/`，由 CEO 驗收。
 
 ---
