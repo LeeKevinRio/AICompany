@@ -114,6 +114,7 @@ export function SessionDetailPage() {
             players={session.players}
             settings={session.settings}
             rules={session.rules}
+            roster={globalSettings.roster}
             loseAlertThreshold={globalSettings.loseAlertThreshold}
           />
           <RoundForm
@@ -150,6 +151,7 @@ export function SessionDetailPage() {
             players={session.players}
             rounds={session.rounds}
             settings={session.settings}
+            roster={globalSettings.roster}
           />
         </>
       )}

@@ -9,6 +9,8 @@ import {
   collectPlayerNames,
 } from '../scoring/timeline';
 import { Amount, PLAYER_COLOR_VARS } from '../components/ui';
+import { PlayerAvatar } from '../components/PlayerAvatar';
+import { PNG_AVATARS } from '../constants/avatars';
 import { Sparkline } from '../components/Sparkline';
 import { BottomSheet } from '../components/BottomSheet';
 import { Fab } from '../components/Fab';
@@ -24,12 +26,13 @@ export function PlayersPage() {
 
   const { roster } = globalSettings;
 
-  // 4-1-c：玩家代表色以「名冊順序」固定（而非顯示排序），讓同一玩家永遠同一色。
-  // 依 rosterId 對應 PLAYER_COLOR_VARS[index % 4]，供卡片左側 border-left-color 使用。
-  const rosterColor = useMemo(() => {
-    const map: Record<string, string> = {};
+  // 4-1-c / 5-6：玩家代表色以「名冊順序」固定（而非顯示排序），讓同一玩家永遠同一色。
+  // 依 rosterId 對應 index（%4）——顏色與頭像 colorIndex 皆由此一處決定，
+  // 卡片左側 border-left-color 用 color var、頭像用 index，兩者同源不會各算各的。
+  const rosterColorIndex = useMemo(() => {
+    const map: Record<string, number> = {};
     roster.forEach((rp, i) => {
-      map[rp.id] = PLAYER_COLOR_VARS[i % PLAYER_COLOR_VARS.length];
+      map[rp.id] = i % PLAYER_COLOR_VARS.length;
     });
     return map;
   }, [roster]);
@@ -108,12 +111,15 @@ export function PlayersPage() {
             <div
               className="player-card"
               key={row.rosterId}
-              style={{ borderLeftColor: rosterColor[row.rosterId] }}
+              style={{ borderLeftColor: PLAYER_COLOR_VARS[rosterColorIndex[row.rosterId]] }}
               onClick={() => navigate(`/players/r/${row.rosterId}`)}
             >
-              <span className="player-avatar" aria-hidden>
-                {row.avatar || row.name.slice(0, 1)}
-              </span>
+              <PlayerAvatar
+                name={row.name}
+                avatar={row.avatar}
+                colorIndex={rosterColorIndex[row.rosterId]}
+                size={40}
+              />
               <div className="player-card-info">
                 <div className="player-card-name">{row.name}</div>
                 <div className="player-card-meta">
@@ -178,9 +184,6 @@ export function PlayersPage() {
   );
 }
 
-// 常用 emoji 頭像快選（建議做：玩家頭像）。
-const AVATAR_CHOICES = ['🀄', '😀', '😎', '🐯', '🐶', '🐰', '🐲', '🦊', '🐼', '🦁'];
-
 function NewRosterSheet({
   open,
   onClose,
@@ -191,6 +194,7 @@ function NewRosterSheet({
   onCreate: (name: string, avatar?: string) => void;
 }) {
   const [name, setName] = useState('');
+  // avatar 存 PNG 路徑字串；'' 代表「無頭像（字母 fallback）」（規範 5-3-b 第 4 點）。
   const [avatar, setAvatar] = useState('');
 
   function handleCreate() {
@@ -199,6 +203,10 @@ function NewRosterSheet({
     setName('');
     setAvatar('');
   }
+
+  // 頭像選擇器的字母 preview 顏色：以名字首字 hash 出 0-3，僅供 preview 視覺，
+  // 實際入名冊後的代表色仍由名冊順序決定（見 rosterColorIndex）。
+  const previewColorIndex = name ? (name.charCodeAt(0) % 4) : 0;
 
   return (
     <BottomSheet open={open} onClose={onClose} title="新增玩家">
@@ -222,15 +230,37 @@ function NewRosterSheet({
           頭像（可選）
         </span>
       </span>
-      <div className="avatar-choices">
-        {AVATAR_CHOICES.map((a) => (
+      <div className="avatar-picker-grid">
+        {/* 5-3-b 第 1 / 4 點：第一項固定為「無頭像（字母 fallback）」，永遠排在最前 */}
+        <button
+          type="button"
+          className={`avatar-picker-item avatar-picker-none${avatar === '' ? ' selected' : ''}`}
+          aria-label="無頭像（用名字首字）"
+          aria-pressed={avatar === ''}
+          onClick={() => setAvatar('')}
+        >
+          {name.trim() ? (
+            <PlayerAvatar
+              name={name.trim()}
+              avatar=""
+              colorIndex={previewColorIndex}
+              size={52}
+            />
+          ) : (
+            '—'
+          )}
+        </button>
+        {/* 後續依序列出 PNG 頭像 */}
+        {PNG_AVATARS.map((src) => (
           <button
-            key={a}
+            key={src}
             type="button"
-            className={`avatar-choice${avatar === a ? ' selected' : ''}`}
-            onClick={() => setAvatar(avatar === a ? '' : a)}
+            className={`avatar-picker-item${avatar === src ? ' selected' : ''}`}
+            aria-label={`頭像 ${src.replace(/\D/g, '')}`}
+            aria-pressed={avatar === src}
+            onClick={() => setAvatar(src)}
           >
-            {a}
+            <img src={src} alt="" />
           </button>
         ))}
       </div>

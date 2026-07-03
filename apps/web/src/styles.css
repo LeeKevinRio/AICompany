@@ -33,7 +33,10 @@
   --color-silver: #8f9fa3;
   --color-bronze: #a0654a;
 
-  /* === 玩家代表色 === */
+  /* === 玩家代表色 ===
+   * ⚠️ 必須與 components/ui.tsx 的 PLAYER_COLOR_HEX 同步！
+   * 該處以 hex 字面值供字母 fallback 頭像底色（html2canvas 不支援 color-mix()），
+   * 改色時兩處都要一起改，否則圖卡與畫面會撞不同色。 */
   --color-player-a: #5b9cf6; /* 天藍 */
   --color-player-b: #f6c55b; /* 鮮黃橙 */
   --color-player-c: #c47ef5; /* 紫 */
@@ -764,7 +767,8 @@ button.link.danger {
   width: 56px;
   height: 56px;
   border-radius: var(--radius-full);
-  /* 4-4-g：漸層底 + 強化陰影 */
+  /* 4-4-g：漸層底 + 強化陰影。#27834e 為 --color-primary(#1f6f43) 的提亮衍生停點，
+     終點用 token；漸層需明確色停，token 無此提亮變體故沿用 brief 裸值。 */
   background: linear-gradient(145deg, #27834e 0%, var(--color-primary) 100%);
   color: #ffffff;
   border: none;
@@ -783,7 +787,8 @@ button.link.danger {
 }
 
 .fab:hover {
-  /* 4-4-g */
+  /* 4-4-g：#2e9459 / #1f6f43 為 --color-primary(#1f6f43) 的提亮 / 本色衍生停點，
+     漸層需要兩個明確色停，token 無對應變體故沿用 brief 明列的裸值。 */
   background: linear-gradient(145deg, #2e9459 0%, #1f6f43 100%);
   box-shadow: 0 6px 28px rgba(31, 111, 67, 0.65), 0 1px 4px rgba(0, 0, 0, 0.4);
 }
@@ -865,6 +870,9 @@ button.link.danger {
 }
 
 .known-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   padding: 6px 12px;
   border-radius: var(--radius-pill);
@@ -872,6 +880,11 @@ button.link.danger {
   border: 1px solid var(--color-border);
   color: var(--color-text);
   min-height: auto;
+}
+
+/* chip 內頭像：固定尺寸不隨 flex 縮，垂直置中，不改變 chip 觸控高度 */
+.known-chip-avatar {
+  flex: 0 0 auto;
 }
 
 /* =========================================================================
@@ -945,15 +958,6 @@ button.link.danger {
   background: linear-gradient(90deg, var(--color-gold-glow) 0%, transparent 70%);
 }
 
-.rank-color-bar {
-  width: 4px;
-  align-self: stretch;
-  margin-right: var(--space-3);
-  flex-shrink: 0;
-  /* 4-4-d：色條略降不透明度更有生命感 */
-  opacity: 0.85;
-}
-
 .rank-name {
   /* 4-4-d：加重字重，排名條情境名字要更清楚 */
   font-size: 15px;
@@ -1003,11 +1007,14 @@ button.link.danger {
   animation: winner-flash 800ms ease;
 }
 
-/* 4-4-d：贏家閃光強化 */
+/* 4-4-d：贏家閃光強化。
+ * #4 QA 遺留修正：0% / 100% 的 background 原為 transparent，第一名列（本身有 --color-gold-glow
+ * 金底）閃光時金底會瞬間閃白。改為第一名列既有金底等效值 rgba(201,165,53,0.12)（＝--color-gold-glow），
+ * 讓動畫首尾與第一名列底色一致、不閃白；非第一名列底色本為 transparent，此值極淡亦不突兀。 */
 @keyframes winner-flash {
   0% {
     box-shadow: inset 0 0 0 0 transparent;
-    background: transparent;
+    background: rgba(201, 165, 53, 0.12);
   }
   25% {
     box-shadow: inset 0 0 0 2px var(--color-gold);
@@ -1019,7 +1026,7 @@ button.link.danger {
   }
   100% {
     box-shadow: inset 0 0 0 0 transparent;
-    background: transparent;
+    background: rgba(201, 165, 53, 0.12);
   }
 }
 
@@ -1450,7 +1457,8 @@ button.link.danger {
 
 .share-rank {
   display: flex;
-  align-items: baseline;
+  /* 5-3-d：加入 36px 頭像後改為置中對齊，讓徽章 / 頭像 / 名字 / 金額同一水平線 */
+  align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-2);
 }
@@ -1750,18 +1758,64 @@ button.link.danger {
   color: var(--color-text-secondary);
 }
 
-/* 玩家頭像（清單 + 詳情） */
+/* 玩家頭像共用底樣式（5-3 / 5-4）——所有場景走同一個 .player-avatar，
+ * 尺寸與 border-color 由 PlayerAvatar 元件以 inline style 帶入。 */
 .player-avatar {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   border-radius: var(--radius-full);
   background: var(--color-surface-low);
-  border: 1px solid var(--color-border);
+  /* border-color 由 TSX inline style 帶入玩家代表色（fallback / PNG 皆有色框） */
+  border: 2px solid transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  overflow: hidden;
+  font-size: 20px; /* emoji fallback 大小；字母 fallback 由 inline fontSize 覆蓋 */
+  line-height: 1;
+}
+
+.player-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-full);
+}
+
+/* 5-3-a 名冊清單：頭像在卡片最左、右側留距 */
+.player-card .player-avatar {
+  margin-right: 12px;
+}
+
+/* 玩家詳情頁大頭像（5-4 表：size 64）。page-header 已用 gap，不再另加 margin。 */
+.detail-avatar {
+  border-width: 2px;
+}
+
+/* 5-3-c 排名條頭像（選項 2：頭像帶色邊框取代色條） */
+.rank-avatar {
+  width: 28px;
+  height: 28px;
+  border-width: 1.5px;
+  background: var(--color-surface);
+  margin: 0 var(--space-2) 0 var(--space-4); /* 左 16px 右 8px */
+  font-size: 20px;
+}
+
+/* 5-3-d 分享圖卡頭像 */
+.share-player-avatar {
+  width: 36px;
+  height: 36px;
+  border-width: 1.5px;
+  background: var(--color-surface);
+}
+
+/* 第一名：金框 + 金暈（5-3-d） */
+.share-rank.first .share-player-avatar {
+  border-color: var(--color-gold) !important;
+  border-width: 2px;
+  box-shadow: 0 0 10px rgba(201, 165, 53, 0.35);
 }
 
 /* 歷史唯名字玩家：淡化、虛線框（與名冊成員區隔，規範第 6 節） */
@@ -1775,27 +1829,53 @@ button.link.danger {
   flex: 1;
 }
 
-/* 新增玩家：emoji 頭像快選 */
-.avatar-choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  margin-bottom: var(--space-2);
+/* 5-3-b 新增/編輯玩家：PNG 頭像選擇器（每行 5 格、兩行可滾動） */
+.avatar-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 56px);
+  gap: 8px;
+  margin: var(--space-2) 0 var(--space-3);
+  max-height: 132px; /* 兩行 + gap，超過可滾動 */
+  overflow-y: auto;
 }
 
-.avatar-choice {
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+.avatar-picker-item {
+  width: 56px;
+  height: 56px;
+  min-height: 56px;
   padding: 0;
   border-radius: var(--radius-full);
   background: var(--color-surface-low);
-  border: 1px solid var(--color-border);
-  font-size: 20px;
+  border: 2px solid var(--color-border);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.avatar-choice.selected {
+.avatar-picker-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-picker-item.selected {
   border-color: var(--color-primary);
-  background: var(--color-primary-muted);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+
+/* 「無頭像（字母 fallback）」選項：虛線框 + 破折 / 字母 preview */
+.avatar-picker-none {
+  font-size: 20px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-low);
+  border: 2px dashed var(--color-border);
+}
+
+.avatar-picker-none.selected {
+  border-color: var(--color-primary);
+  border-style: solid;
+  color: var(--color-primary);
 }

@@ -7,6 +7,7 @@ import { aggregateByRosterId, aggregateUnlinkedByName } from '../scoring/timelin
 import type { TimelinePoint } from '../scoring/timeline';
 import type { Player } from '../types';
 import { Amount } from '../components/ui';
+import { PlayerAvatar } from '../components/PlayerAvatar';
 
 const ScoreChartInner = lazy(() => import('../components/ScoreChartInner'));
 
@@ -24,6 +25,13 @@ export function PlayerDetailPage() {
   // 名冊成員以 rosterId 聚合（不受改名影響）；純名字路徑（/players/:name）只算
   // 同名且未連結名冊的場次，與主頁歷史卡片一致、不與名冊成員數字重疊。
   const displayName = rosterPlayer?.name ?? rawName ?? '';
+
+  // 5-6：頭像 colorIndex 沿用名冊順序 mod 4，與名冊 / 排名條 / 圖卡三處同色。
+  // 純名字歷史玩家（無名冊連結）用名字首字 hash 出穩定色。
+  const avatarColorIndex = rosterId
+    ? Math.max(0, globalSettings.roster.findIndex((r) => r.id === rosterId)) % 4
+    : (displayName.charCodeAt(0) || 0) % 4;
+
   const stats = rosterId
     ? aggregateByRosterId(sessions, rosterId, displayName)
     : aggregateUnlinkedByName(sessions, displayName);
@@ -79,10 +87,14 @@ export function PlayerDetailPage() {
           </div>
         ) : (
           <>
-            <h1>
-              {rosterPlayer?.avatar ? `${rosterPlayer.avatar} ` : ''}
-              {displayName}
-            </h1>
+            <PlayerAvatar
+              name={displayName}
+              avatar={rosterPlayer?.avatar}
+              colorIndex={avatarColorIndex}
+              size={64}
+              className="detail-avatar"
+            />
+            <h1>{displayName}</h1>
             {rosterPlayer && (
               <button
                 className="link"

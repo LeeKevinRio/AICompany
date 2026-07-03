@@ -1,16 +1,19 @@
 // 即時排名條（記局頁頂部）。依視覺規範 7-2。
 // 含企劃 5-3 排名動畫：金額 rolling number、排名變動箭頭、贏家亮起。
 import { useEffect, useRef, useState } from 'react';
-import type { Player, Round, SessionRules, Settings } from '../types';
+import type { Player, RosterPlayer, Round, SessionRules, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
 import { formatSigned } from '../scoring/timeline';
-import { playerColor } from './ui';
+import { resolvePlayerVisual } from './ui';
+import { PlayerAvatar } from './PlayerAvatar';
 
 interface Props {
   rounds: Round[];
   players: Player[];
   settings: Settings;
   rules: SessionRules;
+  /** 玩家名冊：用來決定每位玩家的 colorIndex（統一同色）與頭像（5-3-c / 5-6）。 */
+  roster: RosterPlayer[];
   /** v2.1 建議做：單場輸贏警戒線（0=關閉）。淨額輸超過此值時該行紅色警示。 */
   loseAlertThreshold?: number;
 }
@@ -18,6 +21,7 @@ interface Props {
 interface Ranked {
   player: Player;
   colorIndex: number;
+  avatar?: string;
   amount: number;
   rank: number;
 }
@@ -83,7 +87,14 @@ function RankRow({
   const ordinal = item.rank === 1 ? '1st' : item.rank === 2 ? '2nd' : item.rank === 3 ? '3rd' : `${item.rank}th`;
   return (
     <div className={`rank-row${flash ? ' winner-flash' : ''}${alert ? ' lose-alert' : ''}`}>
-      <span className="rank-color-bar" style={{ background: playerColor(item.colorIndex) }} />
+      {/* 5-3-c 選項 2：移除 4px 色條，改由 28px 頭像的邊框色代表玩家色 */}
+      <PlayerAvatar
+        name={item.player.name}
+        avatar={item.avatar}
+        colorIndex={item.colorIndex}
+        size={28}
+        className="rank-avatar"
+      />
       <span className="rank-name">
         {alert && <span className="lose-alert-dot" aria-label="超過輸贏警戒線">⚠</span>}
         {item.player.name}
@@ -97,7 +108,14 @@ function RankRow({
   );
 }
 
-export function RankBar({ rounds, players, settings, rules, loseAlertThreshold = 0 }: Props) {
+export function RankBar({
+  rounds,
+  players,
+  settings,
+  rules,
+  roster,
+  loseAlertThreshold = 0,
+}: Props) {
   // 排名以「淨額」呈現（含自摸付出的東錢），與結算一致。
   let totals: Record<string, number>;
   let kitty = 0;
@@ -110,14 +128,18 @@ export function RankBar({ rounds, players, settings, rules, loseAlertThreshold =
     for (const p of players) totals[p.id] = 0;
   }
 
-  // 依累計排序
+  // 依累計排序。colorIndex / avatar 統一由 resolvePlayerVisual 依名冊順序決定（5-6）。
   const ranked: Ranked[] = players
-    .map((player, i) => ({
-      player,
-      colorIndex: i,
-      amount: totals[player.id] ?? 0,
-      rank: 0,
-    }))
+    .map((player, i) => {
+      const { colorIndex, avatar } = resolvePlayerVisual(player, i, roster);
+      return {
+        player,
+        colorIndex,
+        avatar,
+        amount: totals[player.id] ?? 0,
+        rank: 0,
+      };
+    })
     .sort((a, b) => b.amount - a.amount)
     .map((r, i) => ({ ...r, rank: i + 1 }));
 

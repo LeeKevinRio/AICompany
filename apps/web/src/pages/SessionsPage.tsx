@@ -6,6 +6,7 @@ import type { NewSessionPlayer } from '../hooks/useSessions';
 import { settleSession } from '../scoring/scoring';
 import type { RosterPlayer, Session, SessionRules, Settings } from '../types';
 import { Amount } from '../components/ui';
+import { PlayerAvatar } from '../components/PlayerAvatar';
 import { BottomSheet } from '../components/BottomSheet';
 import { RulesFields } from '../components/RulesFields';
 import { Fab } from '../components/Fab';
@@ -298,17 +299,35 @@ function NewSessionSheet({
             </span>
           </span>
           <div className="known-player-chips">
-            {roster.map((rp) => (
-              <button
-                key={rp.id}
-                className="known-chip"
-                disabled={usedRosterIds.has(rp.id)}
-                onClick={() => fillRoster(rp)}
-              >
-                {rp.avatar ? `${rp.avatar} ` : ''}
-                {rp.name}
-              </button>
-            ))}
+            {roster.map((rp, i) => {
+              // PNG 路徑（/avatars/…）不可當文字輸出，否則 chip 會顯示原始路徑破版；
+              // 一律用 <PlayerAvatar> 渲染（含 emoji 舊資料與空值 fallback），與全站統一。
+              // colorIndex 用名冊順序 mod 4，與 resolvePlayerVisual 同源同色。
+              const showAvatar = !!rp.avatar && rp.avatar.startsWith('/avatars/');
+              return (
+                <button
+                  key={rp.id}
+                  className="known-chip"
+                  disabled={usedRosterIds.has(rp.id)}
+                  onClick={() => fillRoster(rp)}
+                >
+                  {showAvatar ? (
+                    <PlayerAvatar
+                      name={rp.name}
+                      avatar={rp.avatar}
+                      colorIndex={i % 4}
+                      size={18}
+                      className="known-chip-avatar"
+                    />
+                  ) : rp.avatar ? (
+                    `${rp.avatar} `
+                  ) : (
+                    ''
+                  )}
+                  {rp.name}
+                </button>
+              );
+            })}
           </div>
         </>
       )}

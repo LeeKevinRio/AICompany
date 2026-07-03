@@ -2,22 +2,25 @@
 // 用 html2canvas 把離畫面 DOM 轉 PNG 下載；html2canvas 以動態 import 載入，
 // 避免拖慢首載（與 recharts 同樣考量）。
 import { useRef, useState } from 'react';
-import type { Player, Round, Session, Settings } from '../types';
+import type { Player, RosterPlayer, Round, Session, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
 import { buildCumulativeTimeline, formatSigned } from '../scoring/timeline';
 import { Sparkline } from './Sparkline';
-import { playerColor } from './ui';
+import { playerColor, resolvePlayerVisual } from './ui';
+import { PlayerAvatar } from './PlayerAvatar';
 
 interface Props {
   session: Session;
   players: Player[];
   rounds: Round[];
   settings: Settings;
+  /** 玩家名冊：決定圖卡頭像與 colorIndex（與名冊 / 排名條同色，5-6）。 */
+  roster: RosterPlayer[];
 }
 
 const RANK_BADGE = ['冠', '亞', '季', '殿'];
 
-export function ShareCard({ session, players, rounds, settings }: Props) {
+export function ShareCard({ session, players, rounds, settings, roster }: Props) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -32,7 +35,10 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
   }
 
   const ranked = players
-    .map((p, i) => ({ player: p, colorIndex: i, amount: totals[p.id] ?? 0 }))
+    .map((p, i) => {
+      const { colorIndex, avatar } = resolvePlayerVisual(p, i, roster);
+      return { player: p, colorIndex, avatar, amount: totals[p.id] ?? 0 };
+    })
     .sort((a, b) => b.amount - a.amount);
 
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
@@ -48,6 +54,9 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
         backgroundColor: '#0a1209',
         scale: 2,
         logging: false,
+        // useCORS：未來若頭像改由 CDN 提供，跨網域圖片需帶 CORS 才能被光柵化，
+        // 否則畫布會污染（tainted）導致頭像變空白。本機 same-origin 下無副作用。
+        useCORS: true,
       });
       // 大圖（scale=2）用 dataURL 會把整張 base64 字串留在記憶體，
       // 改用 Blob + objectURL，下載後 revoke 釋放。
@@ -95,6 +104,14 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
           {ranked.map((r, i) => (
             <div className={`share-rank${i === 0 ? ' first' : ''}`} key={r.player.id}>
               <span className="share-rank-badge">{RANK_BADGE[i] ?? ''}</span>
+              {/* 5-3-d：名次徽章右側 36px 頭像；第一名金框金暈由 CSS .share-rank.first 帶 */}
+              <PlayerAvatar
+                name={r.player.name}
+                avatar={r.avatar}
+                colorIndex={r.colorIndex}
+                size={36}
+                className="share-player-avatar"
+              />
               <span className="share-rank-name">{r.player.name}</span>
               <span
                 className="share-rank-amt"
@@ -113,7 +130,7 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
           ))}
 
           <div className="share-chart">
-            <MiniTrend timeline={timeline} players={players} />
+            <MiniTrend timeline={timeline} players={players} roster={roster} />
           </div>
 
           <div className="share-footer">
@@ -129,28 +146,35 @@ export function ShareCard({ session, players, rounds, settings }: Props) {
 function MiniTrend({
   timeline,
   players,
+  roster,
 }: {
   timeline: ReturnType<typeof buildCumulativeTimeline>;
   players: Player[];
+  roster: RosterPlayer[];
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0, position: 'relative' }}>
-      {players.map((p, i) => (
-        <div key={p.id} style={{ position: i === 0 ? 'relative' : 'absolute', inset: 0 }}>
-          <Sparkline
-            // Sparkline 期望輸入是「逐局增量」（內部會自行累加成累計曲線），
-            // 因此這裡傳每局相對前一局的 delta；timeline[k] 對應第 k 局結束後的累計，
-            // 第 k 局增量 = cumulative[k] − cumulative[k−1]，最終畫出的即累計走勢。
-            values={timeline.slice(1).map((pt, idx) => {
-              const prev = timeline[idx].cumulative[p.id] ?? 0;
-              return (pt.cumulative[p.id] ?? 0) - prev;
-            })}
-            color={playerColor(i)}
-            width={358}
-            height={120}
-          />
-        </div>
-      ))}
+      {players.map((p, i) => {
+        // 折線顏色與頭像 / 排名條同源：走 resolvePlayerVisual 取 colorIndex，
+        // 不再直接用座位索引 i，避免與頭像代表色不同源而撞色。
+        const { colorIndex } = resolvePlayerVisual(p, i, roster);
+        return (
+          <div key={p.id} style={{ position: i === 0 ? 'relative' : 'absolute', inset: 0 }}>
+            <Sparkline
+              // Sparkline 期望輸入是「逐局增量」（內部會自行累加成累計曲線），
+              // 因此這裡傳每局相對前一局的 delta；timeline[k] 對應第 k 局結束後的累計，
+              // 第 k 局增量 = cumulative[k] − cumulative[k−1]，最終畫出的即累計走勢。
+              values={timeline.slice(1).map((pt, idx) => {
+                const prev = timeline[idx].cumulative[p.id] ?? 0;
+                return (pt.cumulative[p.id] ?? 0) - prev;
+              })}
+              color={playerColor(colorIndex)}
+              width={358}
+              height={120}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
