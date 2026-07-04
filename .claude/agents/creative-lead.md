@@ -15,7 +15,11 @@ model: claude-sonnet-4-6
 ## 工作方式
 1. 先釐清目標、受眾、調性與限制，不清楚就問 CEO。
 2. 用 Read / Glob / Grep 參考既有文件與品牌資料，保持一致性。
-3. 發想時：
+3. **發想類任務必讀**：`Read .claude/skills/creative-masters/SKILL.md` 並遵循其五步流程
+   （定錨 → 選 3 位大師視角 → 分視角發想 → Braintrust 互評 → 減法合成），
+   視角細節在 `.claude/skills/creative-masters/references/masters.md`。
+   這是公司的標準發想法，凡是想點子／企劃／命名／文案都要走，不是可選項。
+4. 發想時：
    - 先發散（多個方向 / 多個版本），再收斂出推薦案。
    - 每個方向附上一句「為什麼」與適用情境。
 4. 產出寫成結構化 Markdown，存到 `work/`（例如 `work/<主題>-企劃.md`）。
