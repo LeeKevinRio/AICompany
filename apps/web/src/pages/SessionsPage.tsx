@@ -27,10 +27,33 @@ function nextSessionName(sessions: Session[]): string {
   return `牌局 ${next}`;
 }
 
+/** 穩健牌 3「再開同組」：從既有場次帶入到新增牌局 sheet 的預填內容。 */
+interface SessionPrefill {
+  name: string;
+  seats: NewSessionPlayer[];
+  rules: SessionRules;
+  base: number;
+  tai: number;
+}
+
 export function SessionsPage() {
   const { sessions, addSession, removeSession, renameSession, globalSettings } = useAppData();
   const navigate = useNavigate();
   const [sheetOpen, setSheetOpen] = useState(false);
+  // 穩健牌 3：非 null 時，開 sheet 帶入此場設定（在 sheet 的「open 重設」之後套用）。
+  const [prefill, setPrefill] = useState<SessionPrefill | null>(null);
+
+  // 「再開同組」：以指定場次為模板，帶入 4 人（含 rosterId 連結）、底/台、規則，打開 sheet 供確認。
+  function handleDuplicate(s: Session) {
+    setPrefill({
+      name: nextSessionName(sessions),
+      seats: s.players.map((p) => ({ name: p.name, rosterId: p.rosterId })),
+      rules: { ...s.rules },
+      base: s.settings.base,
+      tai: s.settings.tai,
+    });
+    setSheetOpen(true);
+  }
 
   return (
     <div className="page">
@@ -60,6 +83,7 @@ export function SessionsPage() {
                   removeSession(s.id);
                 }
               }}
+              onDuplicate={() => handleDuplicate(s)}
             />
           ))}
         </div>
@@ -75,10 +99,15 @@ export function SessionsPage() {
         defaultBase={globalSettings.defaultBase}
         defaultTai={globalSettings.defaultTai}
         defaultName={nextSessionName(sessions)}
-        onClose={() => setSheetOpen(false)}
+        prefill={prefill}
+        onClose={() => {
+          setSheetOpen(false);
+          setPrefill(null);
+        }}
         onCreate={(name, players, rules, settings) => {
           const id = addSession(name, players, rules, settings);
           setSheetOpen(false);
+          setPrefill(null);
           navigate(`/sessions/${id}`);
         }}
       />
@@ -91,11 +120,13 @@ function SessionCard({
   onOpen,
   onRename,
   onDelete,
+  onDuplicate,
 }: {
   session: Session;
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onDuplicate: () => void;
 }) {
   // 卡片預覽顯示淨額（含東錢），與牌局詳情結算一致。
   let totals: Record<string, number>;
@@ -111,9 +142,11 @@ function SessionCard({
 
   function handleMenu(e: React.MouseEvent) {
     e.stopPropagation();
-    const action = prompt('輸入動作：1=重新命名、2=刪除', '1');
+    // 穩健牌 3：新增「3=再開同組」——帶入本場 4 人、底/台、規則到新增牌局 sheet。
+    const action = prompt('輸入動作：1=重新命名、2=刪除、3=再開同組', '1');
     if (action === '1') onRename();
     else if (action === '2') onDelete();
+    else if (action === '3') onDuplicate();
   }
 
   return (
@@ -154,6 +187,7 @@ function NewSessionSheet({
   defaultBase,
   defaultTai,
   defaultName,
+  prefill,
   onClose,
   onCreate,
 }: {
@@ -164,6 +198,8 @@ function NewSessionSheet({
   defaultBase: number;
   defaultTai: number;
   defaultName: string;
+  /** 穩健牌 3：「再開同組」帶入的模板（null＝一般新增，用全域預設）。 */
+  prefill: SessionPrefill | null;
   onClose: () => void;
   onCreate: (
     name: string,
@@ -192,11 +228,21 @@ function NewSessionSheet({
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
-      setName('');
-      setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
-      setRules(defaultRules);
-      setBase(defaultBase);
-      setTai(defaultTai);
+      // 先重設為全域預設；若本次是「再開同組」（prefill 非 null），重設後立即以模板覆蓋。
+      // 兩步在同一個 effect 內完成，確保帶入值不會被「open 重設」邏輯蓋掉（穩健牌 3 需求）。
+      if (prefill) {
+        setName(prefill.name);
+        setSeats(prefill.seats.map((s) => ({ ...s })));
+        setRules({ ...prefill.rules });
+        setBase(prefill.base);
+        setTai(prefill.tai);
+      } else {
+        setName('');
+        setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
+        setRules(defaultRules);
+        setBase(defaultBase);
+        setTai(defaultTai);
+      }
     }
     wasOpen.current = open;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,23 +318,46 @@ function NewSessionSheet({
       </div>
 
       <div className="players-grid" style={{ margin: '16px 0' }}>
-        {seats.map((seat, i) => (
-          <label className="field" key={i}>
-            <span>玩家 {i + 1}</span>
-            <input
-              type="text"
-              placeholder={`玩家 ${i + 1}`}
-              value={seat.name}
-              maxLength={12}
-              onChange={(e) => {
-                const next = [...seats];
-                // 手動改名 → 解除名冊連結（避免名字與名冊不符卻仍掛 rosterId）。
-                next[i] = { name: e.target.value };
-                setSeats(next);
-              }}
-            />
-          </label>
-        ))}
+        {seats.map((seat, i) => {
+          // 穩健牌 5：座位有名字時，於名字旁顯示頭像小圖。
+          // 有 rosterId → 用該名冊成員的頭像與其名冊順序色（與上方 chip 同源同色）；
+          // 手動輸入（無 rosterId）→ 用座位序當色、字母 fallback。
+          const linked = seat.rosterId
+            ? roster.find((r) => r.id === seat.rosterId)
+            : undefined;
+          const seatColorIndex = linked
+            ? roster.indexOf(linked) % 4
+            : i % 4;
+          const hasName = !!seat.name.trim();
+          return (
+            <label className="field" key={i}>
+              <span>玩家 {i + 1}</span>
+              <div className="seat-input">
+                {hasName && (
+                  <PlayerAvatar
+                    name={seat.name}
+                    avatar={linked?.avatar}
+                    colorIndex={seatColorIndex}
+                    size={24}
+                    className="seat-avatar"
+                  />
+                )}
+                <input
+                  type="text"
+                  placeholder={`玩家 ${i + 1}`}
+                  value={seat.name}
+                  maxLength={12}
+                  onChange={(e) => {
+                    const next = [...seats];
+                    // 手動改名 → 解除名冊連結（避免名字與名冊不符卻仍掛 rosterId）。
+                    next[i] = { name: e.target.value };
+                    setSeats(next);
+                  }}
+                />
+              </div>
+            </label>
+          );
+        })}
       </div>
 
       {roster.length > 0 && (
@@ -300,30 +369,26 @@ function NewSessionSheet({
           </span>
           <div className="known-player-chips">
             {roster.map((rp, i) => {
-              // PNG 路徑（/avatars/…）不可當文字輸出，否則 chip 會顯示原始路徑破版；
-              // 一律用 <PlayerAvatar> 渲染（含 emoji 舊資料與空值 fallback），與全站統一。
+              // 穩健牌 5：chip 一律帶頭像（size=32，較有「臉」的辨識度），統一走 <PlayerAvatar>
+              // ——涵蓋 PNG、emoji 舊資料與空值字母 fallback，不再把 PNG 路徑當文字輸出破版。
               // colorIndex 用名冊順序 mod 4，與 resolvePlayerVisual 同源同色。
-              const showAvatar = !!rp.avatar && rp.avatar.startsWith('/avatars/');
+              // 已選入者不再灰掉 disabled，而是反白高亮（selected）＝「這個人已在桌上」的正回饋。
+              const selected = usedRosterIds.has(rp.id);
               return (
                 <button
                   key={rp.id}
-                  className="known-chip"
-                  disabled={usedRosterIds.has(rp.id)}
+                  className={`known-chip has-avatar${selected ? ' selected' : ''}`}
+                  disabled={selected}
+                  aria-pressed={selected}
                   onClick={() => fillRoster(rp)}
                 >
-                  {showAvatar ? (
-                    <PlayerAvatar
-                      name={rp.name}
-                      avatar={rp.avatar}
-                      colorIndex={i % 4}
-                      size={18}
-                      className="known-chip-avatar"
-                    />
-                  ) : rp.avatar ? (
-                    `${rp.avatar} `
-                  ) : (
-                    ''
-                  )}
+                  <PlayerAvatar
+                    name={rp.name}
+                    avatar={rp.avatar}
+                    colorIndex={i % 4}
+                    size={32}
+                    className="known-chip-avatar"
+                  />
                   {rp.name}
                 </button>
               );

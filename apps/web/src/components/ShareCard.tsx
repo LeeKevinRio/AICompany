@@ -97,7 +97,7 @@ export function ShareCard({ session, players, rounds, settings, roster }: Props)
       {/* 離畫面渲染版面：實際輸出用，不在畫面上顯示 */}
       <div className="offscreen" aria-hidden>
         <div className="share-card" ref={cardRef}>
-          <div className="share-watermark">MahjongScore</div>
+          <div className="share-watermark">MaJong</div>
           <div className="share-date">
             {dateStr} · {session.name}
           </div>

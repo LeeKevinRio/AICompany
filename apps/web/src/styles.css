@@ -882,8 +882,48 @@ button.link.danger {
   min-height: auto;
 }
 
+/* 穩健牌 5：帶 32px 頭像的 chip——左內距收窄讓頭像貼齊，字級微升好辨識。 */
+.known-chip.has-avatar {
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+/* 穩健牌 5：已選入（selected）反白高亮＝「這個人已在桌上」的正回饋，取代原本灰掉 disabled 觀感。
+ * 仍保留 disabled 屬性避免重複選入，但視覺不使用 disabled 的暗淡樣式。 */
+.known-chip.selected {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+  opacity: 1;
+}
+
+/* selected（已選入）與 disabled（防重複選）共用 default 游標，合併一處避免重複宣告 */
+.known-chip.selected,
+.known-chip:disabled {
+  cursor: default;
+}
+
 /* chip 內頭像：固定尺寸不隨 flex 縮，垂直置中，不改變 chip 觸控高度 */
 .known-chip-avatar {
+  flex: 0 0 auto;
+}
+
+/* 穩健牌 5：座位輸入列——頭像小圖 + 輸入框並排，input 佔滿剩餘寬度。 */
+.seat-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.seat-input input {
+  flex: 1;
+  min-width: 0;
+}
+
+.seat-avatar {
   flex: 0 0 auto;
 }
 
@@ -938,6 +978,11 @@ button.link.danger {
   box-shadow: var(--shadow-card);
 }
 
+/* 排名列容器。 */
+.rank-rows {
+  display: block;
+}
+
 .rank-row {
   /* 4-4-d：行高微加更舒適 */
   display: flex;
@@ -945,7 +990,7 @@ button.link.danger {
   height: 54px;
   padding: 0 var(--space-4) 0 0;
   position: relative;
-  transition: background-color 200ms ease, transform 300ms var(--ease-spring);
+  transition: background-color 200ms ease;
 }
 
 /* 4-4-d：行之間補輕分隔線 */
@@ -953,8 +998,8 @@ button.link.danger {
   border-top: 1px solid var(--color-divider);
 }
 
-/* 4-4-d：第一名金色微光背景 */
-.rank-row:first-child {
+/* 4-4-d：第一名金色微光背景（明示 .rank-rows 直屬第一列，避免包層後選中非預期節點） */
+.rank-rows > .rank-row:first-child {
   background: linear-gradient(90deg, var(--color-gold-glow) 0%, transparent 70%);
 }
 

@@ -53,8 +53,8 @@ export function Splash({ dataReady, onDone }: Props) {
   return (
     <div className={`splash${hiding ? ' hiding' : ''}`} aria-hidden={hiding}>
       <div className="splash-tile">麻</div>
-      <h1 className="splash-title">麻將記分</h1>
-      <p className="splash-subtitle">台灣麻將 · 個人記分工具</p>
+      <h1 className="splash-title">MaJong</h1>
+      <p className="splash-subtitle">台灣麻將，局局記分。</p>
       {showLoading && !dataReady && <p className="splash-loading">讀取中…</p>}
     </div>
   );

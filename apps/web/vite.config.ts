@@ -12,8 +12,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // MVP 只用最小 manifest；正式圖示等之後再補。
       manifest: {
-        name: '麻將記分',
-        short_name: '麻將記分',
+        name: 'MaJong — 台灣麻將記分',
+        short_name: 'MaJong',
         description: '台灣麻將 16 張 記分工具',
         theme_color: '#1f6f43',
         background_color: '#0f1410',

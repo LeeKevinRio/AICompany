@@ -1,5 +1,9 @@
 // 即時排名條（記局頁頂部）。依視覺規範 7-2。
-// 含企劃 5-3 排名動畫：金額 rolling number、排名變動箭頭、贏家亮起。
+// 含企劃 5-3 排名動畫：金額 rolling number、排名變動箭頭、贏家亮邊。
+// 皆尊重 prefers-reduced-motion（設定時靜默關閉）。
+// 備註：原「名次變動時列以 FLIP 滑動交換位置」（穩健牌 4）因手刻 DOM FLIP 在連續快速記局
+// 下會卡死錯位（列重疊、移出視口），已移除；換位改直接跳（DOM 順序本就正確）。
+// rolling number 與 winner-flash 已提供足夠的「這局很重要」回饋。待辦另立獨立任務改用穩定作法。
 import { useEffect, useRef, useState } from 'react';
 import type { Player, RosterPlayer, Round, SessionRules, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
@@ -26,6 +30,14 @@ interface Ranked {
   rank: number;
 }
 
+/** 讀取當下 prefers-reduced-motion（SSR / 舊瀏覽器安全）。非響應式：僅在動畫觸發時查詢即可。 */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 /** 數字滾動：在 prefers-reduced-motion 下直接顯示終值。 */
 function useRolling(target: number): number {
   const [display, setDisplay] = useState(target);
@@ -33,10 +45,7 @@ function useRolling(target: number): number {
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const reduce =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) {
+    if (prefersReducedMotion()) {
       fromRef.current = target;
       setDisplay(target);
       return;
@@ -61,8 +70,15 @@ function useRolling(target: number): number {
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      // 中斷動畫時（effect 重跑 / StrictMode 雙跑 / unmount）必須讓 display 落在最終值：
+      // 只 cancel rAF 卻不 set display，StrictMode 下第一次 setup→cleanup 會把 fromRef
+      // 設成 target，第二次 setup 因 from === target 直接 return，display 就永久停在舊值。
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       fromRef.current = target;
+      setDisplay(target);
     };
   }, [target]);
 
@@ -86,7 +102,9 @@ function RankRow({
   // 正確的英文序數後綴（避免 2st/3st/4st）。
   const ordinal = item.rank === 1 ? '1st' : item.rank === 2 ? '2nd' : item.rank === 3 ? '3rd' : `${item.rank}th`;
   return (
-    <div className={`rank-row${flash ? ' winner-flash' : ''}${alert ? ' lose-alert' : ''}`}>
+    <div
+      className={`rank-row${flash ? ' winner-flash' : ''}${alert ? ' lose-alert' : ''}`}
+    >
       {/* 5-3-c 選項 2：移除 4px 色條，改由 28px 頭像的邊框色代表玩家色 */}
       <PlayerAvatar
         name={item.player.name}
@@ -176,15 +194,17 @@ export function RankBar({
 
   return (
     <div className="rank-bar">
-      {ranked.map((item) => (
-        <RankRow
-          key={item.player.id}
-          item={item}
-          arrow={arrows[item.player.id]}
-          flash={flashId === item.player.id}
-          alert={loseAlertThreshold > 0 && item.amount <= -loseAlertThreshold}
-        />
-      ))}
+      <div className="rank-rows">
+        {ranked.map((item) => (
+          <RankRow
+            key={item.player.id}
+            item={item}
+            arrow={arrows[item.player.id]}
+            flash={flashId === item.player.id}
+            alert={loseAlertThreshold > 0 && item.amount <= -loseAlertThreshold}
+          />
+        ))}
+      </div>
       {kitty > 0 && (
         <div className="rank-kitty">
           <span>公基金</span>

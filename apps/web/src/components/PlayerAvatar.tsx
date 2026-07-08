@@ -34,8 +34,9 @@ function isEmoji(avatar: string): boolean {
 }
 
 export function PlayerAvatar({ name, avatar, colorIndex, size, className }: Props) {
-  // PNG 載入失敗時切到字母 fallback（不是只隱藏 img 留白）。
-  const [imgFailed, setImgFailed] = useState(false);
+  // 記錄「哪一個 src 載入失敗」而非單純 boolean：當 avatar prop 切換到另一張 PNG 時，
+  // failedSrc !== avatar 天然成立，會重新嘗試載入新圖，不殘留舊的失敗狀態（免用 useEffect / key）。
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   const idx = ((colorIndex % 4) + 4) % 4; // 防負數
   const colorVar = PLAYER_COLOR_VARS[idx];
@@ -45,8 +46,8 @@ export function PlayerAvatar({ name, avatar, colorIndex, size, className }: Prop
   const baseClass = `player-avatar${className ? ` ${className}` : ''}`;
   const isPng = !!avatar && avatar.startsWith('/avatars/');
 
-  // PNG 頭像（未失敗）
-  if (isPng && !imgFailed) {
+  // PNG 頭像（當前這個 avatar 沒失敗過才顯示 img；否則落到下方字母 fallback）
+  if (isPng && failedSrc !== avatar) {
     return (
       <span
         className={baseClass}
@@ -55,7 +56,7 @@ export function PlayerAvatar({ name, avatar, colorIndex, size, className }: Prop
         aria-label={name}
       >
         {/* 語意交給外層 span（role=img + aria-label），內部 img 設為裝飾性避免重複朗讀 */}
-        <img src={avatar} alt="" onError={() => setImgFailed(true)} />
+        <img src={avatar} alt="" onError={() => setFailedSrc(avatar)} />
       </span>
     );
   }
