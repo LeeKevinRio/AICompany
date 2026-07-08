@@ -8,7 +8,6 @@ import { RoundList } from '../components/RoundList';
 import { Standings } from '../components/Standings';
 import { RankBar } from '../components/RankBar';
 import { ScoreChart } from '../components/ScoreChart';
-import { Highlights } from '../components/Highlights';
 import { ShareCard } from '../components/ShareCard';
 import { BottomSheet } from '../components/BottomSheet';
 import { IconSettings } from '../components/icons';
@@ -122,13 +121,38 @@ export function SessionDetailPage() {
             rounds={session.rounds}
             onAdd={(r) => addRound(session.id, r)}
           />
-          <button
-            className={session.endedAt ? 'secondary' : 'primary'}
-            style={{ width: '100%' }}
-            onClick={() => toggleEnded(session.id)}
-          >
-            {session.endedAt ? '取消結算（繼續記局）' : '結算本場'}
-          </button>
+          {session.endedAt ? (
+            <>
+              {/* 已結算：主按鈕回看結算儀式頁（P6），次按鈕取消結算繼續記局 */}
+              <button
+                className="primary"
+                style={{ width: '100%' }}
+                onClick={() => navigate(`/sessions/${session.id}/settle`)}
+              >
+                查看本場結算
+              </button>
+              <button
+                className="secondary"
+                style={{ width: '100%', marginTop: 8 }}
+                onClick={() => toggleEnded(session.id)}
+              >
+                取消結算（繼續記局）
+              </button>
+            </>
+          ) : (
+            // 尚未結算：結算本場＝打時間戳並進入 P6 結算儀式頁
+            <button
+              className="primary"
+              style={{ width: '100%' }}
+              disabled={session.rounds.length === 0}
+              onClick={() => {
+                toggleEnded(session.id);
+                navigate(`/sessions/${session.id}/settle`);
+              }}
+            >
+              結算本場
+            </button>
+          )}
         </>
       )}
 
@@ -140,12 +164,7 @@ export function SessionDetailPage() {
             settings={session.settings}
             rules={session.rules}
           />
-          <Highlights
-            rounds={session.rounds}
-            players={session.players}
-            settings={session.settings}
-            rules={session.rules}
-          />
+          {/* 減法（創意檢視第六節）：Highlights 移出走勢圖 tab，集中到 P6 結算頁登場，不重複出現 */}
           <ShareCard
             session={session}
             players={session.players}

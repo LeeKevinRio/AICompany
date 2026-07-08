@@ -1,6 +1,6 @@
 // Tab 1：牌局清單。卡片清單 + FAB 新增 + Bottom Sheet（含開桌規則設定）。
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import type { NewSessionPlayer } from '../hooks/useSessions';
 import { settleSession } from '../scoring/scoring';
@@ -37,8 +37,10 @@ interface SessionPrefill {
 }
 
 export function SessionsPage() {
-  const { sessions, addSession, removeSession, renameSession, globalSettings } = useAppData();
+  const { sessions, addSession, removeSession, renameSession, globalSettings, loaded } =
+    useAppData();
   const navigate = useNavigate();
+  const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
   // 穩健牌 3：非 null 時，開 sheet 帶入此場設定（在 sheet 的「open 重設」之後套用）。
   const [prefill, setPrefill] = useState<SessionPrefill | null>(null);
@@ -54,6 +56,21 @@ export function SessionsPage() {
     });
     setSheetOpen(true);
   }
+
+  // P6 結算頁「再開一場（同組）」CTA：導回此頁時帶 location.state.duplicateFrom，
+  // 直接複用上方 handleDuplicate（穩健牌 3 同一條再開同組流程）。觸發後清掉 state，避免
+  // 返回 / 重整重複觸發。資料尚未載入好（找不到場次）時先不清、等 sessions 更新再試。
+  useEffect(() => {
+    const st = location.state as { duplicateFrom?: string } | null;
+    if (!st?.duplicateFrom) return;
+    // 等資料載入完成再判斷，避免初次 render（sessions 尚為空）就把 state 誤清。
+    if (!loaded) return;
+    const target = sessions.find((s) => s.id === st.duplicateFrom);
+    if (target) handleDuplicate(target);
+    // 找不到 target（場次已刪除等）也要清掉 state，否則 sessions 每變一次就重跑此 effect。
+    navigate(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, location.pathname, sessions, loaded]);
 
   return (
     <div className="page">

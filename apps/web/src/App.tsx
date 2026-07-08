@@ -8,6 +8,7 @@ import { TabBar } from './components/TabBar';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SessionsPage } from './pages/SessionsPage';
 import { SessionDetailPage } from './pages/SessionDetailPage';
+import { SettlePage } from './pages/SettlePage';
 import { PlayersPage } from './pages/PlayersPage';
 import { PlayerDetailPage } from './pages/PlayerDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -42,6 +43,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<SessionsPage />} />
             <Route path="/sessions/:id" element={<SessionDetailPage />} />
+            {/* P6 結算頁：全螢幕儀式畫面（自身 fixed 覆蓋，蓋過 TabBar） */}
+            <Route path="/sessions/:id/settle" element={<SettlePage />} />
             <Route path="/players" element={<PlayersPage />} />
             {/* 順序依賴：/players/r/:rosterId 必須排在 /players/:name 之前，
                 否則 "r" 會被當成 :name 比對到，名冊成員頁無法路由。勿調換這兩行。 */}

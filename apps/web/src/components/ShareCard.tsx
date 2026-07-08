@@ -1,7 +1,13 @@
 // 結算分享圖卡（企劃 5-1 / 視覺規範 7-4）。
 // 用 html2canvas 把離畫面 DOM 轉 PNG 下載；html2canvas 以動態 import 載入，
 // 避免拖慢首載（與 recharts 同樣考量）。
-import { useRef, useState } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 import type { Player, RosterPlayer, Round, Session, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
 import { buildCumulativeTimeline, formatSigned } from '../scoring/timeline';
@@ -16,11 +22,32 @@ interface Props {
   settings: Settings;
   /** 玩家名冊：決定圖卡頭像與 colorIndex（與名冊 / 排名條同色，5-6）。 */
   roster: RosterPlayer[];
+  /**
+   * P6 結算頁：headless 模式只渲染離畫面 DOM，不顯示預設的「結算分享圖卡」按鈕卡片，
+   * 由外部（結算頁 CTA）透過 ref.exportCard() 觸發匯出（結算頁視覺規範 7-3：
+   * 不另維護一套 ShareCard DOM 版面，共用同一份匯出邏輯）。
+   */
+  headless?: boolean;
+  /** 匯出忙碌狀態變化回呼（結算頁用來把 CTA 文字切成「產生中…」）。 */
+  onBusyChange?: (busy: boolean) => void;
+  /**
+   * 匯出失敗回呼。headless 模式不渲染自身 UI，錯誤無處顯示，
+   * 交由外部（結算頁）在 CTA 附近提示；成功時回傳空字串清除舊訊息。
+   */
+  onError?: (msg: string) => void;
+}
+
+/** 供外部（結算頁 CTA）以 ref 觸發匯出的 imperative handle。 */
+export interface ShareCardHandle {
+  exportCard: () => Promise<void>;
 }
 
 const RANK_BADGE = ['冠', '亞', '季', '殿'];
 
-export function ShareCard({ session, players, rounds, settings, roster }: Props) {
+export const ShareCard = forwardRef<ShareCardHandle, Props>(function ShareCard(
+  { session, players, rounds, settings, roster, headless = false, onBusyChange, onError },
+  ref,
+) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -48,6 +75,7 @@ export function ShareCard({ session, players, rounds, settings, roster }: Props)
     if (!cardRef.current) return;
     setBusy(true);
     setError('');
+    onError?.('');
     try {
       const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(cardRef.current, {
@@ -76,11 +104,72 @@ export function ShareCard({ session, players, rounds, settings, roster }: Props)
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('產生分享圖卡失敗：', err);
-      setError('產生圖卡失敗，請稍後再試。');
+      const msg = '產生圖卡失敗，請稍後再試。';
+      setError(msg);
+      onError?.(msg);
     } finally {
       setBusy(false);
     }
   }
+
+  // 曝露匯出方法給結算頁 CTA。不帶 deps → 每次 render 重建 handle，
+  // 確保 exportCard 永遠關住當前的 dateStr / rounds（避免 stale closure）。
+  useImperativeHandle(ref, () => ({ exportCard: handleExport }));
+
+  // busy 變化回報給外部（結算頁 CTA 切「產生中…」）。
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+
+  // 離畫面渲染版面（實際輸出用，不在畫面上顯示）。headless / 一般模式共用同一份 DOM。
+  const offscreenCard = (
+    <div className="offscreen" aria-hidden>
+      <div className="share-card" ref={cardRef}>
+        <div className="share-watermark">MaJong</div>
+        <div className="share-date">
+          {dateStr} · {session.name}
+        </div>
+        {ranked.map((r, i) => (
+          <div className={`share-rank${i === 0 ? ' first' : ''}`} key={r.player.id}>
+            <span className="share-rank-badge">{RANK_BADGE[i] ?? ''}</span>
+            {/* 5-3-d：名次徽章右側 36px 頭像；第一名金框金暈由 CSS .share-rank.first 帶 */}
+            <PlayerAvatar
+              name={r.player.name}
+              avatar={r.avatar}
+              colorIndex={r.colorIndex}
+              size={36}
+              className="share-player-avatar"
+            />
+            <span className="share-rank-name">{r.player.name}</span>
+            <span
+              className="share-rank-amt"
+              style={{
+                color:
+                  r.amount > 0
+                    ? 'var(--color-win)'
+                    : r.amount < 0
+                      ? 'var(--color-lose)'
+                      : 'var(--color-text-secondary)',
+              }}
+            >
+              {formatSigned(r.amount)}
+            </span>
+          </div>
+        ))}
+
+        <div className="share-chart">
+          <MiniTrend timeline={timeline} players={players} roster={roster} />
+        </div>
+
+        <div className="share-footer">
+          {rounds.length} 局 · 底 {settings.base} · 台 {settings.tai}
+        </div>
+      </div>
+    </div>
+  );
+
+  // headless（結算頁）：只保留離畫面 DOM，不渲染預設按鈕卡片。
+  if (headless) return offscreenCard;
 
   return (
     <section className="card">
@@ -94,63 +183,25 @@ export function ShareCard({ session, players, rounds, settings, roster }: Props)
       {rounds.length === 0 && <p className="muted" style={{ fontSize: 12 }}>尚無局數，無法產生。</p>}
       {error && <p className="error">{error}</p>}
 
-      {/* 離畫面渲染版面：實際輸出用，不在畫面上顯示 */}
-      <div className="offscreen" aria-hidden>
-        <div className="share-card" ref={cardRef}>
-          <div className="share-watermark">MaJong</div>
-          <div className="share-date">
-            {dateStr} · {session.name}
-          </div>
-          {ranked.map((r, i) => (
-            <div className={`share-rank${i === 0 ? ' first' : ''}`} key={r.player.id}>
-              <span className="share-rank-badge">{RANK_BADGE[i] ?? ''}</span>
-              {/* 5-3-d：名次徽章右側 36px 頭像；第一名金框金暈由 CSS .share-rank.first 帶 */}
-              <PlayerAvatar
-                name={r.player.name}
-                avatar={r.avatar}
-                colorIndex={r.colorIndex}
-                size={36}
-                className="share-player-avatar"
-              />
-              <span className="share-rank-name">{r.player.name}</span>
-              <span
-                className="share-rank-amt"
-                style={{
-                  color:
-                    r.amount > 0
-                      ? 'var(--color-win)'
-                      : r.amount < 0
-                        ? 'var(--color-lose)'
-                        : 'var(--color-text-secondary)',
-                }}
-              >
-                {formatSigned(r.amount)}
-              </span>
-            </div>
-          ))}
-
-          <div className="share-chart">
-            <MiniTrend timeline={timeline} players={players} roster={roster} />
-          </div>
-
-          <div className="share-footer">
-            {rounds.length} 局 · 底 {settings.base} · 台 {settings.tai}
-          </div>
-        </div>
-      </div>
+      {offscreenCard}
     </section>
   );
-}
+});
 
 // 圖卡用迷你折線：4 色疊一起，無軸標籤，只看走勢。
-function MiniTrend({
+// 結算頁走勢區（規範 8-8）與圖卡共用同一份疊圖邏輯，僅 width/height 不同，故對外 export。
+export function MiniTrend({
   timeline,
   players,
   roster,
+  width = 358,
+  height = 120,
 }: {
   timeline: ReturnType<typeof buildCumulativeTimeline>;
   players: Player[];
   roster: RosterPlayer[];
+  width?: number;
+  height?: number;
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0, position: 'relative' }}>
@@ -169,8 +220,8 @@ function MiniTrend({
                 return (pt.cumulative[p.id] ?? 0) - prev;
               })}
               color={playerColor(colorIndex)}
-              width={358}
-              height={120}
+              width={width}
+              height={height}
             />
           </div>
         );

@@ -81,6 +81,18 @@ export interface Highlight {
   detail: string; // 補充說明（金額 / 次數）
 }
 
+/**
+ * 趣味標籤對應 emoji（單一出處）。原本 Highlights 元件與 SettlePage 各自複製一份，
+ * 收斂到資料函式旁，型別綁定 Highlight['key'] 避免遺漏或不同步。
+ */
+export const HIGHLIGHT_EMOJI: Record<Highlight['key'], string> = {
+  champion: '🏆',
+  gunKing: '💥',
+  selfDrawKing: '🀄',
+  biggestRound: '🔥',
+  smallestRound: '⚡',
+};
+
 export interface SessionHighlights {
   highlights: Highlight[];
   /** 每位玩家的胡牌 / 自摸 / 放槍次數，供統計摘要用 */
