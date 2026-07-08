@@ -88,11 +88,42 @@ export function SettlePage() {
     })
     .sort((a, b) => b.amount - a.amount);
 
-  const { highlights } = calcSessionHighlights(rounds, players, settings, rules);
+  const { highlights, perPlayer } = calcSessionHighlights(rounds, players, settings, rules);
   const timeline = buildCumulativeTimeline(rounds, players, settings, rules);
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
 
   const hasRounds = rounds.length > 0;
+
+  // ❸.5 本場三率快照：只標正向名次——最低放槍（防守最佳）與最高胡牌（進攻最佳），
+  // 各只標「唯一者」，並列（同率）時不標，避免無意義或批鬥感。本場資料量小，
+  // 依規範刻意不套 N<10 門檻（這是「本場快照」而非跨場統計）。
+  let bestDefenseId: string | null = null;
+  let bestWinId: string | null = null;
+  if (hasRounds) {
+    let minGun = Infinity;
+    let minGunTies = 0;
+    let maxWin = -Infinity;
+    let maxWinTies = 0;
+    for (const p of players) {
+      const pp = perPlayer[p.id] ?? { wins: 0, selfDraws: 0, gunned: 0 };
+      if (pp.gunned < minGun) {
+        minGun = pp.gunned;
+        bestDefenseId = p.id;
+        minGunTies = 1;
+      } else if (pp.gunned === minGun) {
+        minGunTies += 1;
+      }
+      if (pp.wins > maxWin) {
+        maxWin = pp.wins;
+        bestWinId = p.id;
+        maxWinTies = 1;
+      } else if (pp.wins === maxWin) {
+        maxWinTies += 1;
+      }
+    }
+    if (minGunTies > 1) bestDefenseId = null;
+    if (maxWinTies > 1) bestWinId = null;
+  }
 
   function toneClass(amount: number): string {
     if (amount > 0) return 'win';
@@ -180,6 +211,56 @@ export function SettlePage() {
           </div>
         ))}
       </div>
+
+      {/* ❸.5 本場三率快照（排名下方、走勢上方） */}
+      {hasRounds && (
+        <div className="settle-block settle-block-snapshot settle-snapshot">
+          <div className="settle-snapshot-title">本場三率</div>
+          <div className="settle-snapshot-rows">
+            {ranked.map((r) => {
+              const pp = perPlayer[r.player.id] ?? { wins: 0, selfDraws: 0, gunned: 0 };
+              const winPct = Math.round((pp.wins / rounds.length) * 100);
+              const gunPct = Math.round((pp.gunned / rounds.length) * 100);
+              // 自摸率分母為本場胡牌次數；0 胡無從計算 → 「—」。
+              const sdPct = pp.wins > 0 ? Math.round((pp.selfDraws / pp.wins) * 100) : null;
+              // 每列最多一個標籤；同時符合兩者時優先顯示最高胡牌（金、進攻最佳）。
+              const tag =
+                r.player.id === bestWinId
+                  ? { cls: 'best-win', text: '最高胡牌' }
+                  : r.player.id === bestDefenseId
+                    ? { cls: 'best-defense', text: '最低放槍' }
+                    : null;
+              return (
+                <div className="settle-snapshot-row" key={r.player.id}>
+                  <PlayerAvatar
+                    name={r.player.name}
+                    avatar={r.avatar}
+                    colorIndex={r.colorIndex}
+                    size={24}
+                  />
+                  <span className="snapshot-name">{r.player.name}</span>
+                  <div className="snapshot-stats">
+                    <span className="snapshot-stat">
+                      胡 <strong>{pp.wins}</strong>次(<strong>{winPct}%</strong>)
+                    </span>
+                    <span className="snapshot-sep">·</span>
+                    <span className="snapshot-stat">
+                      摸 <strong>{sdPct === null ? '—' : `${sdPct}%`}</strong>
+                    </span>
+                    <span className="snapshot-sep">·</span>
+                    <span className="snapshot-stat">
+                      放 <strong>{pp.gunned}</strong>次(<strong>{gunPct}%</strong>)
+                    </span>
+                  </div>
+                  {tag && (
+                    <span className={`snapshot-highlight-tag ${tag.cls}`}>{tag.text}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ❹ 迷你走勢（同 ShareCard MiniTrend 疊圖，height=100） */}
       {hasRounds && (

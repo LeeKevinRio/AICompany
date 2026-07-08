@@ -3,7 +3,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
-import { aggregateByRosterId, aggregateUnlinkedByName } from '../scoring/timeline';
+import {
+  aggregateByRosterId,
+  aggregateUnlinkedByName,
+  rateWithThreshold,
+} from '../scoring/timeline';
 import type { TimelinePoint } from '../scoring/timeline';
 import type { Player } from '../types';
 import { Amount } from '../components/ui';
@@ -115,6 +119,30 @@ export function PlayerDetailPage() {
         <p className="muted">查無此玩家的紀錄。</p>
       ) : (
         <>
+          {/* 數據系統 Phase 1：核心三率卡（主視線，永遠展開）。率值主數字一律中性色，
+              語意色只出現在基準比較指示器；樣本不足以「—」誠實標注，不假裝有數字。 */}
+          <section className="rate-card">
+            <div className="rate-card-grid">
+              <RoundRateCell
+                label="胡牌率"
+                count={stats.totalWins}
+                rounds={stats.totalRounds}
+                kind="win"
+              />
+              <SelfDrawRateCell
+                wins={stats.totalWins}
+                selfDraws={stats.totalSelfDraws}
+                rounds={stats.totalRounds}
+              />
+              <RoundRateCell
+                label="放槍率"
+                count={stats.totalGunned}
+                rounds={stats.totalRounds}
+                kind="gun"
+              />
+            </div>
+          </section>
+
           <section className="card">
             <h2>跨場統計</h2>
             <div className="stat-grid">
@@ -206,6 +234,80 @@ export function PlayerDetailPage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * 基準比較指示器（僅胡牌率 / 放槍率、且 N≥30 時顯示）。
+ * class（above/below/neutral）代表「相對均值的表現好壞」而非單純數字大小：
+ * 胡牌率高＝好、放槍率低＝好，兩者的「好」都對應 above（綠）。
+ * 4 人麻將理論基準 25%：>28% 視為高、<22% 視為低、±3% 內視為接近均值。
+ */
+function rateBaseline(pct: number, kind: 'win' | 'gun'): { cls: string; text: string } {
+  const high = pct > 28;
+  const low = pct < 22;
+  if (!high && !low) return { cls: 'neutral', text: '接近均值' };
+  const good = kind === 'win' ? high : low;
+  return { cls: good ? 'above' : 'below', text: `${high ? '↑' : '↓'} ${high ? '高' : '低'}於均值` };
+}
+
+/** 胡牌率 / 放槍率欄（分母＝總局數，N<10 顯示「—」）。 */
+function RoundRateCell({
+  label,
+  count,
+  rounds,
+  kind,
+}: {
+  label: string;
+  count: number;
+  rounds: number;
+  kind: 'win' | 'gun';
+}) {
+  const { insufficient, pct } = rateWithThreshold(count, rounds, 10);
+  const baseline = !insufficient && rounds >= 30 ? rateBaseline(pct, kind) : null;
+  return (
+    <div className="rate-cell">
+      <div className="rate-label">{label}</div>
+      <div className={`rate-value${insufficient ? ' insufficient' : ''}`}>
+        {insufficient ? '—' : `${pct}%`}
+      </div>
+      <div className="rate-cell-footer">
+        {/* 「—」態也顯示樣本數：讓使用者知道還差幾局才達門檻（誠實資訊，非填充） */}
+        {rounds < 30 && <span className="rate-sample">(N={rounds}局)</span>}
+        {baseline && <span className={`rate-baseline ${baseline.cls}`}>{baseline.text}</span>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 自摸率欄（主口徑＝自摸/胡牌，分母為胡牌次數，totalWins<5 顯示「—」）。
+ * 副口徑「占局 X%」＝自摸/總局數，僅在主口徑有值時一併顯示（次要色小字）。
+ */
+function SelfDrawRateCell({
+  wins,
+  selfDraws,
+  rounds,
+}: {
+  wins: number;
+  selfDraws: number;
+  rounds: number;
+}) {
+  const { insufficient, pct } = rateWithThreshold(selfDraws, wins, 5);
+  const perRoundPct = rounds > 0 ? Math.round((selfDraws / rounds) * 100) : 0;
+  return (
+    <div className="rate-cell">
+      <div className="rate-label">自摸率</div>
+      <div className={`rate-value${insufficient ? ' insufficient' : ''}`}>
+        {insufficient ? '—' : `${pct}%`}
+      </div>
+      <div className="rate-cell-footer">
+        {/* 「—」態同樣顯示樣本數（此欄門檻以胡牌次數計） */}
+        {wins < 30 && <span className="rate-sample">(N={wins}勝)</span>}
+      </div>
+      {/* 副口徑列在兩態都渲染以維持等高；「—」態用 nbsp 佔位保留行高、不顯示數字 */}
+      <div className="rate-self-draw-alt">{insufficient ? ' ' : `占局 ${perRoundPct}%`}</div>
     </div>
   );
 }

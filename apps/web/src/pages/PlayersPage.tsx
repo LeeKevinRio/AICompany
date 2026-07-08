@@ -1,6 +1,6 @@
 // Tab 2：玩家名冊。名冊成員（以 rosterId 聚合）+ 歷史唯名字玩家（fallback 名字聚合）。
 // 新增玩家入口在此頁（不在設定 / 開桌流程）。
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import {
@@ -18,9 +18,12 @@ import { Fab } from '../components/Fab';
 type SortKey = 'sessions' | 'amount' | 'name';
 
 export function PlayersPage() {
-  const { sessions, globalSettings, addRosterPlayer } = useAppData();
+  const { sessions, globalSettings, addRosterPlayer, updateRosterPlayer } = useAppData();
   const navigate = useNavigate();
   const [sheetOpen, setSheetOpen] = useState(false);
+  // 正在編輯的名冊成員 id（null = 未開編輯 sheet）。存 id 而非整列物件，避免
+  // rosterRows 每次 render 重算導致 sheet 內部 state 被反覆重置。
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('sessions');
 
@@ -132,6 +135,18 @@ export function PlayersPage() {
                   row.stats.totalAmount >= 0 ? 'var(--color-win)' : 'var(--color-lose)'
                 }
               />
+              {/* 編輯入口：明確按鈕（非整列點擊）——列點擊仍導向詳情頁，編輯走此鈕，
+                  stopPropagation 避免觸發列的 navigate。解決「舊玩家無法補頭像」痛點。 */}
+              <button
+                className="player-card-edit"
+                aria-label={`編輯 ${row.name}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingId(row.rosterId);
+                }}
+              >
+                ✏️
+              </button>
             </div>
           ))}
 
@@ -180,6 +195,21 @@ export function PlayersPage() {
           setSheetOpen(false);
         }}
       />
+
+      <EditRosterSheet
+        rosterId={editingId}
+        initialName={editingId ? roster.find((r) => r.id === editingId)?.name ?? '' : ''}
+        initialAvatar={
+          editingId ? roster.find((r) => r.id === editingId)?.avatar ?? '' : ''
+        }
+        colorIndex={editingId ? rosterColorIndex[editingId] ?? 0 : 0}
+        onClose={() => setEditingId(null)}
+        onSave={(rosterId, name, avatar) => {
+          // 頭像永遠傳字串：空字串 → updateRosterPlayer 內 trim 後轉 undefined（清除頭像）。
+          updateRosterPlayer(rosterId, { name, avatar });
+          setEditingId(null);
+        }}
+      />
     </div>
   );
 }
@@ -225,6 +255,102 @@ function NewRosterSheet({
         />
       </label>
 
+      <AvatarPickerField name={name} colorIndex={previewColorIndex} value={avatar} onChange={setAvatar} />
+
+      <button className="primary" style={{ marginTop: 16 }} onClick={handleCreate}>
+        確認新增
+      </button>
+    </BottomSheet>
+  );
+}
+
+/**
+ * 編輯名冊成員 sheet：帶入現值改名 + 換頭像，呼叫既有 updateRosterPlayer。
+ * rosterId 為 null 時視為關閉。state 以 rosterId 為 key 同步初值——切換不同成員時重置，
+ * 但同一成員編輯過程中（rosterId 不變）不因父層 re-render 而被覆寫。
+ */
+function EditRosterSheet({
+  rosterId,
+  initialName,
+  initialAvatar,
+  colorIndex,
+  onClose,
+  onSave,
+}: {
+  rosterId: string | null;
+  initialName: string;
+  initialAvatar: string;
+  colorIndex: number;
+  onClose: () => void;
+  onSave: (rosterId: string, name: string, avatar: string) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [avatar, setAvatar] = useState(initialAvatar);
+
+  // 只在「編輯對象切換（rosterId 改變）」時重新帶入現值，避免編輯途中被重置。
+  useEffect(() => {
+    if (rosterId) {
+      setName(initialName);
+      setAvatar(initialAvatar);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rosterId]);
+
+  function handleSave() {
+    if (!rosterId || !name.trim()) return;
+    onSave(rosterId, name.trim(), avatar);
+  }
+
+  const previewColorIndex = colorIndex;
+
+  return (
+    <BottomSheet open={rosterId !== null} onClose={onClose} title="編輯玩家">
+      <label className="field">
+        <span>姓名</span>
+        <input
+          type="text"
+          placeholder="玩家名字"
+          value={name}
+          maxLength={12}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSave();
+          }}
+        />
+      </label>
+
+      <AvatarPickerField
+        name={name}
+        colorIndex={previewColorIndex}
+        value={avatar}
+        onChange={setAvatar}
+      />
+
+      <button className="primary" style={{ marginTop: 16 }} onClick={handleSave}>
+        儲存變更
+      </button>
+    </BottomSheet>
+  );
+}
+
+/**
+ * 頭像選擇器（新增 / 編輯共用）：第一項固定為「無頭像（字母 fallback）」，其後列 PNG 頭像。
+ * value 存 PNG 路徑字串；'' 代表無頭像。
+ */
+function AvatarPickerField({
+  name,
+  colorIndex,
+  value,
+  onChange,
+}: {
+  name: string;
+  colorIndex: number;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <>
       <span className="field" style={{ display: 'block' }}>
         <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
           頭像（可選）
@@ -234,18 +360,13 @@ function NewRosterSheet({
         {/* 5-3-b 第 1 / 4 點：第一項固定為「無頭像（字母 fallback）」，永遠排在最前 */}
         <button
           type="button"
-          className={`avatar-picker-item avatar-picker-none${avatar === '' ? ' selected' : ''}`}
+          className={`avatar-picker-item avatar-picker-none${value === '' ? ' selected' : ''}`}
           aria-label="無頭像（用名字首字）"
-          aria-pressed={avatar === ''}
-          onClick={() => setAvatar('')}
+          aria-pressed={value === ''}
+          onClick={() => onChange('')}
         >
           {name.trim() ? (
-            <PlayerAvatar
-              name={name.trim()}
-              avatar=""
-              colorIndex={previewColorIndex}
-              size={52}
-            />
+            <PlayerAvatar name={name.trim()} avatar="" colorIndex={colorIndex} size={52} />
           ) : (
             '—'
           )}
@@ -255,19 +376,15 @@ function NewRosterSheet({
           <button
             key={src}
             type="button"
-            className={`avatar-picker-item${avatar === src ? ' selected' : ''}`}
+            className={`avatar-picker-item${value === src ? ' selected' : ''}`}
             aria-label={`頭像 ${src.replace(/\D/g, '')}`}
-            aria-pressed={avatar === src}
-            onClick={() => setAvatar(src)}
+            aria-pressed={value === src}
+            onClick={() => onChange(src)}
           >
             <img src={src} alt="" />
           </button>
         ))}
       </div>
-
-      <button className="primary" style={{ marginTop: 16 }} onClick={handleCreate}>
-        確認新增
-      </button>
-    </BottomSheet>
+    </>
   );
 }

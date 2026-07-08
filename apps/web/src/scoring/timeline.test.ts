@@ -6,6 +6,7 @@ import {
   aggregateByRosterId,
   collectPlayerNames,
   formatSigned,
+  rateWithThreshold,
 } from './timeline';
 import type { Player, Round, Session, SessionRules, Settings } from '../types';
 import { DEFAULT_SESSION_RULES } from '../types';
@@ -262,6 +263,134 @@ describe('aggregateBy 同一場多個同名座位都加總（修正漏帳）', (
     expect(stats.totalAmount).toBe(100);
     expect(stats.sessionsPlayed).toBe(1);
     expect(stats.totalWins).toBe(1);
+  });
+});
+
+describe('aggregateBy 數據系統 Phase 1 新欄位（totalRounds / totalWinTai / bestRoundAmount）', () => {
+  function makeSession(partial: Partial<Session>): Session {
+    return {
+      id: 's1',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+      ...partial,
+    };
+  }
+
+  it('totalRounds = 各場 rounds.length 之和（單一座位）', () => {
+    const sessions: Session[] = [
+      makeSession({
+        id: 's1',
+        createdAt: 1,
+        rounds: [
+          makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2' }),
+          makeRound({ id: 'r2', winnerId: 'p2', loserId: 'p1' }),
+        ],
+      }),
+      makeSession({
+        id: 's2',
+        createdAt: 2,
+        rounds: [makeRound({ id: 'r3', winnerId: 'p3', loserId: 'p1' })],
+      }),
+    ];
+    const stats = aggregatePlayerStats(sessions, 'A');
+    expect(stats.totalRounds).toBe(3); // 2 + 1
+  });
+
+  it('totalRounds 同場多個同名座位：rounds.length × 座位數', () => {
+    // p1 與 p3 都叫「阿明」，一場 2 局 → 分母 2 × 2 = 4，與 totalWins/totalGunned 的多座位加總一致。
+    const session = makeSession({
+      players: [
+        { id: 'p1', name: '阿明' },
+        { id: 'p2', name: 'B' },
+        { id: 'p3', name: '阿明' },
+        { id: 'p4', name: 'D' },
+      ],
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2' }),
+        makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p4' }),
+      ],
+    });
+    const stats = aggregatePlayerStats([session], '阿明');
+    expect(stats.totalRounds).toBe(4);
+    expect(stats.totalWins).toBe(2);
+  });
+
+  it('totalWinTai 累加胡牌局的 r.tai（不含自摸加台）', () => {
+    // 自摸加台開 2 台，驗證 totalWinTai 用 r.tai（3 + 2）而非 effectiveTai（含 bonus）。
+    const bonusRules: SessionRules = { selfDrawBonusTai: 2, selfDrawDongAmount: 0 };
+    const session = makeSession({
+      rules: bonusRules,
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 3, selfDraw: false }),
+        makeRound({ id: 'r2', winnerId: 'p1', loserId: null, tai: 2, selfDraw: true }),
+      ],
+    });
+    const stats = aggregatePlayerStats([session], 'A');
+    expect(stats.totalWinTai).toBe(5); // 3 + 2（非 3 + (2+2)=7）
+  });
+
+  it('bestRoundAmount：自摸收益（×(人數-1)）與放槍收益取最大', () => {
+    // base 100 / 台 50。r1 放槍 3 台 → 100+3×50=250；r2 自摸 0 台 → 100×3=300。
+    const session = makeSession({
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 3, selfDraw: false }),
+        makeRound({ id: 'r2', winnerId: 'p1', loserId: null, tai: 0, selfDraw: true }),
+      ],
+    });
+    const stats = aggregatePlayerStats([session], 'A');
+    expect(stats.bestRoundAmount).toBe(300);
+  });
+
+  it('邊界：0 局（有出場但無局）→ 三新欄位皆 0，sessionsPlayed 仍計 1', () => {
+    const session = makeSession({ rounds: [] });
+    const stats = aggregatePlayerStats([session], 'A');
+    expect(stats.sessionsPlayed).toBe(1);
+    expect(stats.totalRounds).toBe(0);
+    expect(stats.totalWinTai).toBe(0);
+    expect(stats.bestRoundAmount).toBe(0);
+  });
+
+  it('邊界：0 胡（有局但此人未胡）→ totalWinTai / bestRoundAmount 為 0，totalRounds 照算', () => {
+    const session = makeSession({
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p2', loserId: 'p1' }),
+        makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p1' }),
+      ],
+    });
+    const stats = aggregatePlayerStats([session], 'A');
+    expect(stats.totalWins).toBe(0);
+    expect(stats.totalWinTai).toBe(0);
+    expect(stats.bestRoundAmount).toBe(0);
+    expect(stats.totalRounds).toBe(2);
+    expect(stats.totalGunned).toBe(2);
+  });
+});
+
+describe('rateWithThreshold（率值 + 樣本門檻）', () => {
+  it('分母為 0：insufficient（顯示「—」）', () => {
+    expect(rateWithThreshold(3, 0, 10)).toEqual({ insufficient: true, pct: 0 });
+  });
+
+  it('分母 < 門檻：insufficient（胡牌率 N<10）', () => {
+    expect(rateWithThreshold(2, 9, 10)).toEqual({ insufficient: true, pct: 0 });
+  });
+
+  it('分母 = 門檻：顯示率值（四捨五入整數百分比）', () => {
+    expect(rateWithThreshold(3, 10, 10)).toEqual({ insufficient: false, pct: 30 });
+  });
+
+  it('自摸率門檻 5：totalWins<5 為 insufficient，>=5 顯示', () => {
+    expect(rateWithThreshold(1, 4, 5)).toEqual({ insufficient: true, pct: 0 });
+    expect(rateWithThreshold(2, 5, 5)).toEqual({ insufficient: false, pct: 40 });
+  });
+
+  it('百分比四捨五入', () => {
+    expect(rateWithThreshold(1, 3, 1).pct).toBe(33); // 33.33 → 33
+    expect(rateWithThreshold(2, 3, 1).pct).toBe(67); // 66.67 → 67
   });
 });
 

@@ -292,6 +292,15 @@ export interface PlayerStats {
   totalWins: number; // 總胡牌局數
   totalSelfDraws: number; // 總自摸局數
   totalGunned: number; // 總放槍局數
+  /** 數據系統 Phase 1：此玩家上桌的總局數（各符合場次 rounds.length × 符合座位數之和），
+   *  作為胡牌率 / 放槍率的分母。同場多個同名/同 rosterId 座位時乘上座位數，與
+   *  totalWins / totalGunned 的「多座位加總」語意一致，避免率值分母被低估。 */
+  totalRounds: number;
+  /** 數據系統 Phase 1：所有胡牌局的台數總和（分子），除以 totalWins → 平均台數。
+   *  刻意用 r.tai（玩家申報台數）而非 effectiveTai，反映「習慣胡幾台的牌」，不含自摸加台的規則加成。 */
+  totalWinTai: number;
+  /** 數據系統 Phase 1：跨場單局最高收益金額（自摸＝單注×(人數-1)，放槍＝單注）。無胡牌時為 0。 */
+  bestRoundAmount: number;
   history: PlayerSessionResult[]; // 各場結果（時間正序）
   /** 近期走勢（每場金額，正序），供 sparkline */
   recentTrend: number[];
@@ -321,6 +330,9 @@ function aggregateBy(
   let totalWins = 0;
   let totalSelfDraws = 0;
   let totalGunned = 0;
+  let totalRounds = 0;
+  let totalWinTai = 0;
+  let bestRoundAmount = 0;
 
   // 時間正序處理，方便算連勝/連敗
   const sorted = [...sessions].sort((a, b) => a.createdAt - b.createdAt);
@@ -330,6 +342,9 @@ function aggregateBy(
     if (matched.length === 0) continue;
 
     const rules = rulesOf(s);
+    // 分母：本場總局數 × 符合座位數。乘座位數與 totalWins/totalGunned 的多座位加總一致，
+    // 每場僅一個符合座位（常態）時等同 s.rounds.length。
+    totalRounds += s.rounds.length * matched.length;
     let amount = 0;
     for (const r of s.rounds) {
       // 同場所有符合座位都要加總；每場僅一個符合座位時等同舊版單一座位行為。
@@ -344,6 +359,16 @@ function aggregateBy(
         if (r.winnerId === player.id) {
           totalWins += 1;
           if (r.selfDraw) totalSelfDraws += 1;
+          // 平均台數分子用 r.tai（申報台數），不含自摸加台。
+          totalWinTai += r.tai;
+          // 跨場單局最高收益：自摸向其餘座位各收一注、放槍收單注。
+          try {
+            const unit = calcUnitAmount(s.settings, r.selfDraw ? effectiveTai(r, rules) : r.tai);
+            const won = r.selfDraw ? unit * (s.players.length - 1) : unit;
+            if (won > bestRoundAmount) bestRoundAmount = won;
+          } catch {
+            // 非法局略過，不影響最高收益追蹤
+          }
         }
         if (!r.selfDraw && r.loserId === player.id) {
           totalGunned += 1;
@@ -396,6 +421,9 @@ function aggregateBy(
     totalWins,
     totalSelfDraws,
     totalGunned,
+    totalRounds,
+    totalWinTai,
+    bestRoundAmount,
     history,
     recentTrend,
     longestWinStreak,
@@ -466,6 +494,27 @@ export function collectPlayerNames(sessions: Session[]): string[] {
   return [...count.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-TW'))
     .map(([name]) => name);
+}
+
+// ---- 數據系統 Phase 1：率值 + 樣本門檻 ----
+
+/**
+ * 把「分子 / 分母 + 樣本門檻」算成可直接顯示的率值狀態（誠實標注紅線）。
+ *
+ * - 分母 < minSample（或分母 <= 0）→ `insufficient: true`，UI 顯示「—」而非假數字。
+ * - 否則回四捨五入後的整數百分比。
+ *
+ * 門檻：胡牌率 / 放槍率 minSample = 10（分母為總局數）；自摸率 minSample = 5（分母為胡牌次數）。
+ */
+export function rateWithThreshold(
+  numerator: number,
+  denominator: number,
+  minSample: number,
+): { insufficient: boolean; pct: number } {
+  if (denominator <= 0 || denominator < minSample) {
+    return { insufficient: true, pct: 0 };
+  }
+  return { insufficient: false, pct: Math.round((numerator / denominator) * 100) };
 }
 
 // ---- 共用格式化 ----

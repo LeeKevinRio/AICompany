@@ -52,6 +52,10 @@
   /* 比 --color-gold-glow (0.12) 更重的金色背景暈，僅限結算頁冠軍排名列使用，不延伸到其他元件。 */
   --color-gold-glow-heavy: rgba(201, 165, 53, 0.22);
 
+  /* === 數據系統新增 token（來源：數據系統視覺規範 8-1）=== */
+  /* 三率卡背景，比 --color-surface (#17211a) 更深一階，讓三率卡「沉入」為資訊底盤。 */
+  --color-surface-deep: #121c16;
+
   /* 陰影 */
   --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.04) inset;
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--color-primary-muted) inset;
@@ -2029,14 +2033,19 @@ button.link.danger {
   --settle-delay: 380ms;
   animation-duration: 400ms;
 }
+/* ❸.5 本場三率快照（數據系統視覺規範 7-6：插在排名與走勢之間，後兩 block delay 順延） */
+.settle-block-snapshot {
+  --settle-delay: 520ms;
+  animation-duration: 300ms;
+}
 .settle-block-sparkline {
-  --settle-delay: 560ms;
+  --settle-delay: 680ms;
   animation-duration: 300ms;
   /* 走勢圖無 translateY，避免折線跳動感 */
   animation-name: settle-fade-only;
 }
 .settle-block-cta {
-  --settle-delay: 680ms;
+  --settle-delay: 840ms;
   animation-duration: 280ms;
 }
 
@@ -2340,4 +2349,229 @@ button.link.danger {
 .settle-cta-primary:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* =========================================================================
+ * 數據系統 Phase 1（來源：mahjong-app-數據系統-視覺規範.md 第 8 節）
+ * 三率卡（PlayerDetailPage）／本場三率快照（SettlePage）／名冊列編輯鈕
+ * ========================================================================= */
+
+/* --- 名冊列編輯入口（PlayersPage）：低調圖示鈕，不搶 sparkline / 金額視線 --- */
+.player-card-edit {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.player-card-edit:hover {
+  opacity: 1;
+  background: var(--color-surface-low);
+}
+
+/* --- 三率卡（核心統計區塊，主視線） --- */
+.rate-card {
+  background: var(--color-surface-deep);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-3);
+}
+
+.rate-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.rate-cell {
+  padding: 0;
+  position: relative;
+}
+
+/* 欄間分隔線（右側 border，最後一欄不加） */
+.rate-cell:not(:last-child) {
+  border-right: 1px solid var(--color-border);
+}
+
+.rate-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.03em;
+  text-align: center;
+  padding: 12px 8px 6px;
+}
+
+/* 主率值：永遠中性色（--color-text），不因數字高低變紅/綠。 */
+.rate-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  text-align: center;
+  line-height: 1.1;
+  padding: 0 4px;
+}
+
+/* 樣本不足時的「—」：字級不縮、僅弱化顏色，確保與有數字時等高不跳版。 */
+.rate-value.insufficient {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+.rate-cell-footer {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px 12px;
+}
+
+.rate-sample {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.rate-baseline {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-pill);
+  padding: 1px 6px;
+}
+
+.rate-baseline.above {
+  color: var(--color-win);
+  background: rgba(46, 189, 114, 0.1);
+}
+
+.rate-baseline.below {
+  color: var(--color-text-secondary);
+  background: rgba(138, 158, 144, 0.1);
+}
+
+.rate-baseline.neutral {
+  color: var(--color-text-disabled);
+  background: transparent;
+}
+
+/* 自摸率副口徑（占局百分比），次要色小字。 */
+.rate-self-draw-alt {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  padding-bottom: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 本場三率快照（結算頁 ❸.5） --- */
+.settle-snapshot {
+  padding: 0 16px 20px;
+}
+
+.settle-snapshot-title {
+  font-size: 11px;
+  color: var(--color-text-disabled);
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+.settle-snapshot-rows {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.settle-snapshot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--space-3);
+  min-height: 48px;
+}
+
+.settle-snapshot-row + .settle-snapshot-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+.snapshot-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  width: 36px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.snapshot-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.snapshot-stat {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.snapshot-stat strong {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.snapshot-sep {
+  font-size: 11px;
+  color: var(--color-text-disabled);
+  flex-shrink: 0;
+}
+
+/* 最亮名次標籤（只標正向：最低放槍＝綠、最高胡牌＝金） */
+.snapshot-highlight-tag {
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid;
+}
+
+.snapshot-highlight-tag.best-defense {
+  color: var(--color-win);
+  border-color: rgba(46, 189, 114, 0.35);
+  background: rgba(46, 189, 114, 0.1);
+}
+
+.snapshot-highlight-tag.best-win {
+  color: var(--color-gold);
+  border-color: rgba(201, 165, 53, 0.35);
+  background: rgba(201, 165, 53, 0.1);
 }
