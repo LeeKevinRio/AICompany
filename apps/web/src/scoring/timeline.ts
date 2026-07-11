@@ -285,6 +285,24 @@ export interface PlayerSessionResult {
   amount: number; // 該場該玩家累計輸贏
 }
 
+/**
+ * 數據系統 Phase 3：冤家榜單筆——某一位「對手」與本玩家的跨場放槍配對統計。
+ * 對手識別鍵優先用 rosterId、無 rosterId 時 fallback 用名字（與聚合邏輯一致）；
+ * name / rosterId 供 UI 顯示與頭像查詢，coPlayedRounds 作為門檻分母。
+ */
+export interface EnemyEntry {
+  /** 對手顯示名稱（取最近一場的名字） */
+  name: string;
+  /** 對手的 rosterId（名冊成員才有；純名字對手為 null）。供 UI 查頭像 / 代表色。 */
+  rosterId: string | null;
+  /** 我放槍給他的次數（r.loserId 為我、r.winnerId 為他，且非自摸） */
+  shotByMe: number;
+  /** 他放槍給我的次數（r.winnerId 為我、r.loserId 為他，且非自摸） */
+  shotByThem: number;
+  /** 同場局數（我與他同桌的總局數），作為冤家榜門檻分母 */
+  coPlayedRounds: number;
+}
+
 export interface PlayerStats {
   name: string;
   totalAmount: number; // 跨場總輸贏（淨額，含自摸付出的東錢）
@@ -309,6 +327,9 @@ export interface PlayerStats {
   winRate: number; // 勝率（正收益場次佔比，0~1）
   /** v2.1 建議做：近 5 場場均輸贏（不足 5 場以實際場數平均；無場次為 0）。 */
   recentAvg: number;
+  /** 數據系統 Phase 3：跨場對手放槍配對（冤家榜原始資料，未套門檻 / 未排序）。
+   *  以對手名字排序求穩定輸出；門檻篩選與名次排序交給 selectRivalBoard。 */
+  enemyBoard: EnemyEntry[];
 }
 
 /**
@@ -334,6 +355,22 @@ function aggregateBy(
   let totalWinTai = 0;
   let bestRoundAmount = 0;
 
+  // 冤家榜：以「對手識別鍵」累計跨場放槍配對。鍵優先 rosterId、fallback 名字（前綴避免撞鍵）。
+  const enemyMap = new Map<string, EnemyEntry>();
+  const enemyKey = (p: Player) => (p.rosterId != null ? `rid:${p.rosterId}` : `nm:${p.name}`);
+  const touchEnemy = (p: Player): EnemyEntry => {
+    const key = enemyKey(p);
+    let e = enemyMap.get(key);
+    if (!e) {
+      e = { name: p.name, rosterId: p.rosterId ?? null, shotByMe: 0, shotByThem: 0, coPlayedRounds: 0 };
+      enemyMap.set(key, e);
+    } else {
+      // 時間正序處理，較新場次覆蓋顯示名（對手改名時取最近一次名字）。
+      e.name = p.name;
+    }
+    return e;
+  };
+
   // 時間正序處理，方便算連勝/連敗
   const sorted = [...sessions].sort((a, b) => a.createdAt - b.createdAt);
 
@@ -342,6 +379,15 @@ function aggregateBy(
     if (matched.length === 0) continue;
 
     const rules = rulesOf(s);
+    // 冤家榜輔助：本場「自己座位」id 集合、座位 id → Player 查表。
+    const selfIds = new Set(matched.map((p) => p.id));
+    const seatById = new Map(s.players.map((p) => [p.id, p]));
+    // 同場局數：每個非自己座位都與自己同桌了本場所有局。多座位同名對手的極端情形
+    // 會各自累計（與 totalRounds 的多座位加總語意一致），常態每人一座位不受影響。
+    for (const p of s.players) {
+      if (selfIds.has(p.id)) continue;
+      touchEnemy(p).coPlayedRounds += s.rounds.length;
+    }
     // 分母：本場總局數 × 符合座位數。乘座位數與 totalWins/totalGunned 的多座位加總一致，
     // 每場僅一個符合座位（常態）時等同 s.rounds.length。
     totalRounds += s.rounds.length * matched.length;
@@ -372,6 +418,20 @@ function aggregateBy(
         }
         if (!r.selfDraw && r.loserId === player.id) {
           totalGunned += 1;
+        }
+      }
+
+      // 冤家榜配對（每局最多一筆，故置於 matched 迴圈外、避免多座位重複計）：
+      // 放槍是「有輸家」的局，自摸不列入。
+      if (!r.selfDraw && r.loserId != null && r.winnerId != null) {
+        const iShot = selfIds.has(r.loserId) && !selfIds.has(r.winnerId);
+        const iWon = selfIds.has(r.winnerId) && !selfIds.has(r.loserId);
+        if (iShot) {
+          const opp = seatById.get(r.winnerId); // 我放槍給贏家
+          if (opp) touchEnemy(opp).shotByMe += 1;
+        } else if (iWon) {
+          const opp = seatById.get(r.loserId); // 輸家放槍給我
+          if (opp) touchEnemy(opp).shotByThem += 1;
         }
       }
     }
@@ -414,6 +474,11 @@ function aggregateBy(
   const recentAvg =
     last5.length > 0 ? Math.round(last5.reduce((a, b) => a + b, 0) / last5.length) : 0;
 
+  // 冤家榜原始資料：依名字排序求穩定輸出（門檻與名次由 selectRivalBoard 決定）。
+  const enemyBoard = [...enemyMap.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, 'zh-TW'),
+  );
+
   return {
     name: displayName,
     totalAmount,
@@ -430,6 +495,7 @@ function aggregateBy(
     longestLoseStreak,
     winRate,
     recentAvg,
+    enemyBoard,
   };
 }
 
@@ -515,6 +581,132 @@ export function rateWithThreshold(
     return { insufficient: true, pct: 0 };
   }
   return { insufficient: false, pct: Math.round((numerator / denominator) * 100) };
+}
+
+// ---- 數據系統 Phase 2：趨勢符號 ----
+
+export type TrendDirection = 'up' | 'down' | 'flat';
+
+/**
+ * 清單頁近期趨勢符號方向（規範 4-2）：
+ * - recentAvg > 0 → 'up'（↑）；< 0 → 'down'（↓）；=== 0 → 'flat'（→）
+ * - 場次不足 2 場（無法判斷趨勢）→ null（UI 顯示空白佔位、不畫符號）
+ *
+ * recentAvg 即 PlayerStats.recentAvg（近 5 場均），已是四捨五入整數；此處只判正負零。
+ */
+export function trendDirection(
+  recentAvg: number,
+  sessionsPlayed: number,
+): TrendDirection | null {
+  if (sessionsPlayed < 2) return null;
+  if (recentAvg > 0) return 'up';
+  if (recentAvg < 0) return 'down';
+  return 'flat';
+}
+
+// ---- 數據系統 Phase 2：稱號徽章 ----
+
+export type TitleKey =
+  | 'selfDrawMachine' // 自摸機器
+  | 'ironWall' // 鐵壁守門
+  | 'gunKing' // 炮王
+  | 'winKing' // 胡王
+  | 'highTai'; // 等大台
+
+export interface PlayerTitle {
+  key: TitleKey;
+  label: string;
+  emoji: string;
+  /** CSS modifier class（.title-chip.type-xxx，見視覺規範 8-5） */
+  typeClass: string;
+  /** 代表性排序用：觸發門檻的樣本分母（越大越有代表性，用於超過 2 個時取捨） */
+  sample: number;
+}
+
+/** 各稱號的顯示中繼資料（emoji / 文字 / 語意 CSS class）。 */
+const TITLE_META: Record<TitleKey, { label: string; emoji: string; typeClass: string }> = {
+  selfDrawMachine: { label: '自摸機器', emoji: '🀄', typeClass: 'type-self-draw' },
+  ironWall: { label: '鐵壁守門', emoji: '🛡️', typeClass: 'type-iron-wall' },
+  gunKing: { label: '炮王', emoji: '💥', typeClass: 'type-gun-king' },
+  winKing: { label: '胡王', emoji: '🏆', typeClass: 'type-win-king' },
+  highTai: { label: '等大台', emoji: '💎', typeClass: 'type-high-tai' },
+};
+
+/** key 的固定優先序（sample 並列時的 tie-break，維持穩定輸出）。 */
+const TITLE_ORDER: TitleKey[] = ['ironWall', 'winKing', 'gunKing', 'selfDrawMachine', 'highTai'];
+
+/**
+ * 依企劃「稱號觸發條件」計算玩家達成的稱號（保守門檻，避免太容易得到）。
+ *
+ * | 稱號     | 觸發條件                         | 樣本分母 |
+ * | 自摸機器 | 自摸率 ≥ 60% 且 totalWins ≥ 10   | totalWins |
+ * | 鐵壁守門 | 放槍率 ≤ 10% 且 totalRounds ≥ 30 | totalRounds |
+ * | 炮王     | 放槍率 ≥ 35% 且 totalRounds ≥ 20 | totalRounds |
+ * | 胡王     | 胡牌率 ≥ 30% 且 totalRounds ≥ 30 | totalRounds |
+ * | 等大台   | 平均台數 ≥ 4.0 且 totalWins ≥ 10 | totalWins |
+ *
+ * 率值以原始比值（非四捨五入的百分比）比對門檻，避免顯示層 rounding 造成邊界誤判。
+ * 最多回傳 2 個：超過時依「樣本分母大→小」（最有代表性者優先）取捨、並列以固定序穩定。
+ */
+export function computePlayerTitles(
+  stats: Pick<
+    PlayerStats,
+    'totalWins' | 'totalSelfDraws' | 'totalGunned' | 'totalRounds' | 'totalWinTai'
+  >,
+): PlayerTitle[] {
+  const { totalWins, totalSelfDraws, totalGunned, totalRounds, totalWinTai } = stats;
+  const selfDrawRate = totalWins > 0 ? totalSelfDraws / totalWins : 0;
+  const gunRate = totalRounds > 0 ? totalGunned / totalRounds : 0;
+  const winRate = totalRounds > 0 ? totalWins / totalRounds : 0;
+  const avgTai = totalWins > 0 ? totalWinTai / totalWins : 0;
+
+  const hit: { key: TitleKey; sample: number }[] = [];
+  if (totalWins >= 10 && selfDrawRate >= 0.6) hit.push({ key: 'selfDrawMachine', sample: totalWins });
+  if (totalRounds >= 30 && gunRate <= 0.1) hit.push({ key: 'ironWall', sample: totalRounds });
+  if (totalRounds >= 20 && gunRate >= 0.35) hit.push({ key: 'gunKing', sample: totalRounds });
+  if (totalRounds >= 30 && winRate >= 0.3) hit.push({ key: 'winKing', sample: totalRounds });
+  if (totalWins >= 10 && avgTai >= 4.0) hit.push({ key: 'highTai', sample: totalWins });
+
+  return hit
+    .sort((a, b) => b.sample - a.sample || TITLE_ORDER.indexOf(a.key) - TITLE_ORDER.indexOf(b.key))
+    .slice(0, 2)
+    .map(({ key, sample }) => ({ key, sample, ...TITLE_META[key] }));
+}
+
+// ---- 數據系統 Phase 3：冤家榜名次選取 ----
+
+export interface RivalBoardView {
+  /** 'list'＝有達門檻對手；'empty'＝有跨場局但無人達門檻；'hidden'＝無跨場資料，整塊不 render */
+  status: 'list' | 'empty' | 'hidden';
+  rivals: EnemyEntry[];
+}
+
+/**
+ * 從冤家榜原始資料挑出可顯示名次（規範 6-1 顯示條件）：
+ * - 只保留 coPlayedRounds ≥ minCoPlayed（預設 10）的對手；依互動次數（放槍給我＋我放槍給他）
+ *   降序、同場局數降序、名字序 tie-break，取前 limit 名（預設 3）。
+ * - 有達門檻對手 → status 'list'。
+ * - 無人達門檻但玩家確有跨場局（totalRounds > 0 且存在對手）→ 'empty'（顯示成長路徑空狀態）。
+ * - 全無跨場資料 → 'hidden'（整塊不 render）。
+ */
+export function selectRivalBoard(
+  enemyBoard: EnemyEntry[],
+  totalRounds: number,
+  minCoPlayed = 10,
+  limit = 3,
+): RivalBoardView {
+  const qualified = enemyBoard
+    .filter((e) => e.coPlayedRounds >= minCoPlayed)
+    .sort(
+      (a, b) =>
+        b.shotByMe + b.shotByThem - (a.shotByMe + a.shotByThem) ||
+        b.coPlayedRounds - a.coPlayedRounds ||
+        a.name.localeCompare(b.name, 'zh-TW'),
+    )
+    .slice(0, limit);
+  if (qualified.length > 0) return { status: 'list', rivals: qualified };
+  if (totalRounds > 0 && enemyBoard.length > 0) return { status: 'empty', rivals: [] };
+  return { status: 'hidden', rivals: [] };
 }
 
 // ---- 共用格式化 ----

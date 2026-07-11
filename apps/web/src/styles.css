@@ -2575,3 +2575,256 @@ button.link.danger {
   border-color: rgba(201, 165, 53, 0.35);
   background: rgba(201, 165, 53, 0.1);
 }
+
+/* --- 延伸統計折疊入口（掛在三率卡底部，規範 8-2 尾） --- */
+.ext-stats-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 10px var(--space-4);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.ext-stats-toggle:hover {
+  color: var(--color-text);
+}
+
+.ext-stats-toggle .toggle-arrow {
+  transition: transform 200ms var(--ease-spring);
+  font-size: 11px;
+}
+
+.ext-stats-toggle.open .toggle-arrow {
+  transform: rotate(180deg);
+}
+
+/* --- 延伸統計格（次視線，字級較三率卡小一階，規範 8-3） --- */
+.ext-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: var(--space-4);
+}
+
+.ext-stat-cell {
+  background: var(--color-surface);
+  padding: 10px 6px 12px;
+  text-align: center;
+}
+
+.ext-stat-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+
+.ext-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* 金額欄允許正負語意色（率值 / 台數維持中性）。 */
+.ext-stat-value.win {
+  color: var(--color-win);
+}
+.ext-stat-value.lose {
+  color: var(--color-lose);
+}
+.ext-stat-value.zero {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.ext-stat-value.insufficient {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+/* --- 近期趨勢符號 ↑↓→（清單頁，規範 8-4） --- */
+.trend-symbol {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: var(--space-1);
+  width: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-symbol.up {
+  color: var(--color-win);
+}
+.trend-symbol.down {
+  color: var(--color-lose);
+}
+.trend-symbol.flat {
+  color: var(--color-text-secondary);
+}
+
+/* --- 稱號徽章 chip（詳情頁姓名下方，跨場人設標籤，規範 8-5） --- */
+.title-chips-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin: 0 0 var(--space-3);
+  min-height: 26px;
+}
+
+.title-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.title-chip.type-self-draw {
+  color: var(--color-win);
+  border-color: rgba(46, 189, 114, 0.35);
+  background: rgba(46, 189, 114, 0.12);
+}
+
+.title-chip.type-iron-wall {
+  color: var(--color-info);
+  border-color: rgba(74, 158, 202, 0.35);
+  background: rgba(74, 158, 202, 0.12);
+}
+
+.title-chip.type-gun-king {
+  color: var(--color-lose);
+  border-color: rgba(232, 72, 72, 0.35);
+  background: rgba(232, 72, 72, 0.12);
+}
+
+.title-chip.type-win-king {
+  color: var(--color-gold);
+  border-color: rgba(201, 165, 53, 0.35);
+  background: rgba(201, 165, 53, 0.12);
+}
+
+.title-chip.type-high-tai {
+  color: var(--color-player-c);
+  border-color: rgba(196, 126, 245, 0.35);
+  background: rgba(196, 126, 245, 0.12);
+}
+
+/* --- 冤家榜（詳情頁條件顯示區塊，規範 8-6） --- */
+.rival-board {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px var(--space-4);
+  margin-bottom: var(--space-4);
+  box-shadow: var(--shadow-card);
+}
+
+.rival-board-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.03em;
+  margin-bottom: 12px;
+}
+
+.rival-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--color-divider);
+}
+
+.rival-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.rival-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.rival-vs {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-disabled);
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.rival-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.rival-co-rounds {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-row-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 60px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-shot-by-me {
+  color: var(--color-lose);
+  font-weight: 600;
+}
+.rival-shot-by-them {
+  color: var(--color-win);
+  font-weight: 600;
+}
+.rival-stats-sep {
+  color: var(--color-text-disabled);
+  font-weight: 300;
+}
+
+.rival-empty {
+  text-align: center;
+  padding: 20px var(--space-4);
+  color: var(--color-text-disabled);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.rival-empty-icon {
+  font-size: 28px;
+  display: block;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}

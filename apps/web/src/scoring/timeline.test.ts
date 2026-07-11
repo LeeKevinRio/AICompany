@@ -5,9 +5,13 @@ import {
   aggregatePlayerStats,
   aggregateByRosterId,
   collectPlayerNames,
+  computePlayerTitles,
   formatSigned,
   rateWithThreshold,
+  selectRivalBoard,
+  trendDirection,
 } from './timeline';
+import type { EnemyEntry } from './timeline';
 import type { Player, Round, Session, SessionRules, Settings } from '../types';
 import { DEFAULT_SESSION_RULES } from '../types';
 
@@ -431,5 +435,192 @@ describe('formatSigned', () => {
     expect(formatSigned(-800)).toBe('-800');
     expect(formatSigned(0)).toBe('0');
     expect(formatSigned(12500)).toBe('+12,500');
+  });
+});
+
+// ---- 數據系統 Phase 2 / 3：批次 B 新增純函式 ----
+
+describe('trendDirection（清單頁趨勢符號）', () => {
+  it('場次不足 2 場：回 null（不顯示符號）', () => {
+    expect(trendDirection(500, 1)).toBeNull();
+    expect(trendDirection(0, 0)).toBeNull();
+  });
+
+  it('recentAvg 正/負/零 對應 up/down/flat（場次達 2）', () => {
+    expect(trendDirection(300, 2)).toBe('up');
+    expect(trendDirection(-300, 5)).toBe('down');
+    expect(trendDirection(0, 3)).toBe('flat');
+  });
+});
+
+describe('computePlayerTitles（稱號徽章觸發規則）', () => {
+  const base = {
+    totalWins: 0,
+    totalSelfDraws: 0,
+    totalGunned: 0,
+    totalRounds: 0,
+    totalWinTai: 0,
+  };
+
+  it('無任何達標：回空陣列', () => {
+    expect(computePlayerTitles(base)).toEqual([]);
+  });
+
+  it('自摸機器：自摸率 ≥60% 且 totalWins ≥10（邊界 6/10）', () => {
+    const titles = computePlayerTitles({ ...base, totalWins: 10, totalSelfDraws: 6, totalRounds: 40 });
+    expect(titles.map((t) => t.key)).toContain('selfDrawMachine');
+    // 樣本數不足一格：totalWins=9 不觸發
+    expect(computePlayerTitles({ ...base, totalWins: 9, totalSelfDraws: 6, totalRounds: 40 }).map((t) => t.key)).not.toContain('selfDrawMachine');
+  });
+
+  it('鐵壁守門：放槍率 ≤10% 且 totalRounds ≥30（邊界 3/30）', () => {
+    expect(computePlayerTitles({ ...base, totalRounds: 30, totalGunned: 3 }).map((t) => t.key)).toContain('ironWall');
+    // totalRounds=29 未達門檻
+    expect(computePlayerTitles({ ...base, totalRounds: 29, totalGunned: 2 }).map((t) => t.key)).not.toContain('ironWall');
+  });
+
+  it('炮王：放槍率 ≥35% 且 totalRounds ≥20（邊界 7/20）', () => {
+    expect(computePlayerTitles({ ...base, totalRounds: 20, totalGunned: 7 }).map((t) => t.key)).toContain('gunKing');
+  });
+
+  it('胡王：胡牌率 ≥30% 且 totalRounds ≥30（邊界 9/30）', () => {
+    expect(computePlayerTitles({ ...base, totalRounds: 30, totalWins: 9 }).map((t) => t.key)).toContain('winKing');
+  });
+
+  it('等大台：平均台數 ≥4.0 且 totalWins ≥10（邊界 40/10）', () => {
+    expect(computePlayerTitles({ ...base, totalWins: 10, totalWinTai: 40, totalRounds: 40 }).map((t) => t.key)).toContain('highTai');
+  });
+
+  it('最多 2 個：超過時取樣本分母大者（代表性優先）', () => {
+    // 同時觸發 ironWall(40) / winKing(40) / highTai(12) / selfDrawMachine(12)。
+    const titles = computePlayerTitles({
+      totalRounds: 40,
+      totalGunned: 4, // 放槍率 10% → ironWall
+      totalWins: 12, // 胡牌率 30% → winKing
+      totalSelfDraws: 8, // 自摸率 66.7% → selfDrawMachine
+      totalWinTai: 48, // 平均 4.0 台 → highTai
+    });
+    expect(titles).toHaveLength(2);
+    // 分母 40 的 ironWall / winKing 勝出；並列以固定序（ironWall 先）。
+    expect(titles.map((t) => t.key)).toEqual(['ironWall', 'winKing']);
+  });
+
+  it('回傳項帶顯示中繼資料（label / emoji / typeClass）', () => {
+    const [t] = computePlayerTitles({ ...base, totalRounds: 20, totalGunned: 7 });
+    expect(t).toMatchObject({ key: 'gunKing', label: '炮王', emoji: '💥', typeClass: 'type-gun-king' });
+  });
+});
+
+describe('selectRivalBoard（冤家榜門檻 / 空狀態 / 名次）', () => {
+  const mk = (partial: Partial<EnemyEntry>): EnemyEntry => ({
+    name: 'X',
+    rosterId: null,
+    shotByMe: 0,
+    shotByThem: 0,
+    coPlayedRounds: 0,
+    ...partial,
+  });
+
+  it('無跨場資料（空 board 且 totalRounds=0）→ hidden（整塊不 render）', () => {
+    expect(selectRivalBoard([], 0).status).toBe('hidden');
+  });
+
+  it('有跨場局但所有對手 < 10 局 → empty（成長路徑空狀態）', () => {
+    const board = [mk({ name: '小明', coPlayedRounds: 9, shotByMe: 3 })];
+    const view = selectRivalBoard(board, 9);
+    expect(view.status).toBe('empty');
+    expect(view.rivals).toEqual([]);
+  });
+
+  it('門檻邊界：coPlayedRounds = 10 即列入（10 顯示、9 不顯示）', () => {
+    expect(selectRivalBoard([mk({ coPlayedRounds: 10 })], 10).status).toBe('list');
+    expect(selectRivalBoard([mk({ coPlayedRounds: 9 })], 10).status).toBe('empty');
+  });
+
+  it('依互動次數（放槍給我＋我放槍給他）降序、限 3 名', () => {
+    const board = [
+      mk({ name: 'A', coPlayedRounds: 20, shotByMe: 1, shotByThem: 1 }), // 互動 2
+      mk({ name: 'B', coPlayedRounds: 20, shotByMe: 4, shotByThem: 2 }), // 互動 6
+      mk({ name: 'C', coPlayedRounds: 20, shotByMe: 0, shotByThem: 3 }), // 互動 3
+      mk({ name: 'D', coPlayedRounds: 20, shotByMe: 5, shotByThem: 5 }), // 互動 10
+      mk({ name: 'E', coPlayedRounds: 5, shotByMe: 9, shotByThem: 9 }), // 未達門檻
+    ];
+    const view = selectRivalBoard(board, 90);
+    expect(view.status).toBe('list');
+    expect(view.rivals.map((r) => r.name)).toEqual(['D', 'B', 'C']);
+  });
+});
+
+describe('aggregateBy 冤家榜（enemyBoard 放槍配對）', () => {
+  function makeSession(partial: Partial<Session>): Session {
+    return {
+      id: 's1',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+      ...partial,
+    };
+  }
+
+  it('shotByMe / shotByThem / coPlayedRounds 正確，且自己不在榜上', () => {
+    // 以 A(p1) 為視角：
+    //  r1：p1 放槍贏 p2 → B(p2) 放槍給我 → shotByThem[B]+1
+    //  r2：p1 放槍給 p3（p3 贏、p1 輸）→ 我放槍給 C(p3) → shotByMe[C]+1
+    //  r3：p2 自摸 → 自摸局不列入配對
+    const session = makeSession({
+      rounds: [
+        makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', selfDraw: false }),
+        makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p1', selfDraw: false }),
+        makeRound({ id: 'r3', winnerId: 'p2', loserId: null, selfDraw: true }),
+      ],
+    });
+    const stats = aggregatePlayerStats([session], 'A');
+    const byName = Object.fromEntries(stats.enemyBoard.map((e) => [e.name, e]));
+
+    expect(Object.keys(byName).sort()).toEqual(['B', 'C', 'D']); // 不含自己 A
+    expect(byName.B).toMatchObject({ shotByMe: 0, shotByThem: 1, coPlayedRounds: 3 });
+    expect(byName.C).toMatchObject({ shotByMe: 1, shotByThem: 0, coPlayedRounds: 3 });
+    expect(byName.D).toMatchObject({ shotByMe: 0, shotByThem: 0, coPlayedRounds: 3 });
+  });
+
+  it('rosterId 對手：entry 帶對手 rosterId 供 UI 查頭像', () => {
+    const session = makeSession({
+      players: [
+        { id: 'p1', name: 'A' },
+        { id: 'p2', name: 'B', rosterId: 'roster-b' },
+        { id: 'p3', name: 'C' },
+        { id: 'p4', name: 'D' },
+      ],
+      rounds: [makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', selfDraw: false })],
+    });
+    const stats = aggregatePlayerStats([session], 'A');
+    const b = stats.enemyBoard.find((e) => e.name === 'B');
+    expect(b?.rosterId).toBe('roster-b');
+    expect(b?.shotByThem).toBe(1);
+  });
+
+  it('跨場累計：同一對手多場的同場局數與放槍次數相加', () => {
+    const sessions: Session[] = [
+      makeSession({
+        id: 's1',
+        createdAt: 1,
+        rounds: [
+          makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', selfDraw: false }),
+          makeRound({ id: 'r2', winnerId: 'p2', loserId: 'p1', selfDraw: false }),
+        ],
+      }),
+      makeSession({
+        id: 's2',
+        createdAt: 2,
+        rounds: [makeRound({ id: 'r3', winnerId: 'p1', loserId: 'p2', selfDraw: false })],
+      }),
+    ];
+    const stats = aggregatePlayerStats(sessions, 'A');
+    const b = stats.enemyBoard.find((e) => e.name === 'B');
+    // 同場局數 = 2 + 1 = 3；我放槍給 B（r2）1 次；B 放槍給我（r1、r3）2 次。
+    expect(b).toMatchObject({ coPlayedRounds: 3, shotByMe: 1, shotByThem: 2 });
   });
 });

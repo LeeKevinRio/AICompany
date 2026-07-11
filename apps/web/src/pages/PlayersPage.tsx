@@ -7,7 +7,9 @@ import {
   aggregateByRosterId,
   aggregateUnlinkedByName,
   collectPlayerNames,
+  trendDirection,
 } from '../scoring/timeline';
+import type { TrendDirection } from '../scoring/timeline';
 import { Amount, PLAYER_COLOR_VARS } from '../components/ui';
 import { PlayerAvatar } from '../components/PlayerAvatar';
 import { PNG_AVATARS } from '../constants/avatars';
@@ -135,6 +137,11 @@ export function PlayersPage() {
                   row.stats.totalAmount >= 0 ? 'var(--color-win)' : 'var(--color-lose)'
                 }
               />
+              {/* 近期趨勢符號（規範 4）：緊靠 Sparkline 右側，固定 16px 寬；
+                  場次不足 2 場（trendDirection 回 null）留空白佔位、不畫符號，版面不跳。 */}
+              <TrendSymbol
+                dir={trendDirection(row.stats.recentAvg, row.stats.sessionsPlayed)}
+              />
               {/* 編輯入口：明確按鈕（非整列點擊）——列點擊仍導向詳情頁，編輯走此鈕，
                   stopPropagation 避免觸發列的 navigate。解決「舊玩家無法補頭像」痛點。 */}
               <button
@@ -211,6 +218,17 @@ export function PlayersPage() {
         }}
       />
     </div>
+  );
+}
+
+/** 近期趨勢符號 ↑↓→（規範 4-1）：dir 為 null 時渲染空白，固定寬 16px 以免旁邊金額飄移。 */
+const TREND_GLYPH: Record<TrendDirection, string> = { up: '↑', down: '↓', flat: '→' };
+
+function TrendSymbol({ dir }: { dir: TrendDirection | null }) {
+  return (
+    <span className={`trend-symbol${dir ? ` ${dir}` : ''}`} aria-hidden={dir === null}>
+      {dir ? TREND_GLYPH[dir] : ''}
+    </span>
   );
 }
 
