@@ -19,6 +19,13 @@ interface Props {
 /** 放槍警示門檻（企劃 5「放槍者標記警示」）：本場放槍達此次數即提示。 */
 const GUN_ALERT_THRESHOLD = 3;
 
+/**
+ * 滑桿粗調範圍上限（僅 range max），**非台數上限**。
+ * 專案未定義台數上限（scoring 只驗 >= 0），台麻偶有超高台，故台數本身不封頂；
+ * 這裡取 20 只是滑桿一拖到位的合理範圍，需要更高台數請用 + 按鈕。
+ */
+const MAX_TAI = 20;
+
 export function RoundForm({ players, rounds, roster, onAdd }: Props) {
   // 本場各玩家放槍次數（供放槍者按鈕警示）。
   const gunCount = useMemo(() => {
@@ -30,13 +37,11 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
     return c;
   }, [players, rounds]);
 
-  // 台數預設帶入上一局（企劃：預設台數從上一局帶入）。記完一局保留不重置，連續記局順手。
-  const lastTai = rounds.length > 0 ? rounds[rounds.length - 1].tai : 0;
-
   const [winnerId, setWinnerId] = useState('');
   const [selfDraw, setSelfDraw] = useState<boolean | null>(null);
   const [loserId, setLoserId] = useState('');
-  const [tai, setTai] = useState(lastTai);
+  // 台數每局從 0 起算（CEO 實測後定案：不帶入上一局，避免忘了歸零記錯台）。
+  const [tai, setTai] = useState(0);
   const [note, setNote] = useState('');
 
   const canSubmit = !!winnerId && selfDraw !== null && (selfDraw || !!loserId);
@@ -50,10 +55,11 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
       loserId: selfDraw ? null : loserId,
       note: note.trim() || undefined,
     });
-    // 記完一局重置為初始態；tai 保留（即本局台數＝下一局的「上一局」預設）。
+    // 記完一局全部重置為初始態，台數歸 0。
     setWinnerId('');
     setSelfDraw(null);
     setLoserId('');
+    setTai(0);
     setNote('');
   }
 
@@ -184,8 +190,10 @@ function PlayerPickButton({
 }
 
 /**
- * 台數加減：左右大按鈕（≥44px，實際 56px），支援長按加速（按住連續增減）。
- * 快速點＝單步；按住 ≥400ms 後每 80ms 連加，讓高台數也能快速輸入，不因去掉數字鍵盤而退化。
+ * 台數調整：滑桿粗調 + ± 按鈕微調並存。
+ * - 滑桿（原生 range）：0 ~ MAX_TAI，牌桌上一拖到位；鍵盤方向鍵原生支援。
+ * - ± 按鈕（縮小放滑桿兩端）：單步微調，支援長按加速（按住 ≥400ms 後每 80ms 連加）。
+ * 大字當前值顯示在最上方，牌桌上一眼可見。
  */
 function TaiStepper({ value, onChange }: { value: number; onChange: (n: number) => void }) {
   const valueRef = useRef(value);
@@ -195,6 +203,7 @@ function TaiStepper({ value, onChange }: { value: number; onChange: (n: number) 
   const pointerHandled = useRef(false);
 
   function step(delta: number) {
+    // 只夾下界 0，不封頂：台數無上限，± 按鈕可超過滑桿 MAX_TAI（超高台走這條）。
     onChange(Math.max(0, valueRef.current + delta));
   }
 
@@ -244,13 +253,25 @@ function TaiStepper({ value, onChange }: { value: number; onChange: (n: number) 
 
   return (
     <div className="quick-tai">
-      <button type="button" aria-label="減少台數" {...holdProps(-1)}>
-        −
-      </button>
       <span className="quick-tai-value tabular">{value} 台</span>
-      <button type="button" aria-label="增加台數" {...holdProps(1)}>
-        +
-      </button>
+      <div className="quick-tai-controls">
+        <button type="button" className="quick-tai-step" aria-label="減少台數" {...holdProps(-1)}>
+          −
+        </button>
+        <input
+          type="range"
+          className="quick-tai-slider"
+          min={0}
+          max={MAX_TAI}
+          step={1}
+          value={value}
+          aria-label="台數"
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+        <button type="button" className="quick-tai-step" aria-label="增加台數" {...holdProps(1)}>
+          +
+        </button>
+      </div>
     </div>
   );
 }

@@ -1331,28 +1331,98 @@ button.link.danger {
 
 .quick-tai {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-4);
+  gap: var(--space-2);
   margin: var(--space-3) 0;
 }
 
-.quick-tai button {
-  width: 56px;
-  height: 56px;
+/* 滑桿 + ± 微調並存：± 縮小放兩端（44px 觸控目標），中間讓給滑桿粗調。 */
+.quick-tai-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.quick-tai-step {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
   border-radius: var(--radius-full);
-  font-size: 24px;
+  font-size: 22px;
   background: var(--color-surface-low);
   border: 1px solid var(--color-border);
   color: var(--color-text);
 }
 
+/* 當前值：牌桌上一眼可見，字級加大。 */
 .quick-tai-value {
-  font-size: 28px;
+  font-size: 40px;
   font-weight: 700;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
   min-width: 80px;
   text-align: center;
+}
+
+/* 原生 range 自訂樣式：深色軌道、primary thumb，整條 44px 高度撐出觸控熱區。 */
+.quick-tai-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.quick-tai-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+}
+
+.quick-tai-slider::-moz-range-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+}
+
+.quick-tai-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  margin-top: -10px; /* 讓 28px thumb 對齊 8px 軌道中線：-(28/2 - 8/2) */
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  border: 2px solid var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+.quick-tai-slider::-moz-range-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  border: 2px solid var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+.quick-tai-slider:focus-visible {
+  outline: none;
+}
+
+.quick-tai-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+
+.quick-tai-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
 }
 
 .quick-step-label {
