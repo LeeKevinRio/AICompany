@@ -21,10 +21,10 @@ const GUN_ALERT_THRESHOLD = 3;
 
 /**
  * 滑桿粗調範圍上限（僅 range max），**非台數上限**。
- * 專案未定義台數上限（scoring 只驗 >= 0），台麻偶有超高台，故台數本身不封頂；
- * 這裡取 20 只是滑桿一拖到位的合理範圍，需要更高台數請用 + 按鈕。
+ * 專案未定義台數上限（scoring 只驗 >= 0），台麻偶有超高台，故台數本身不封頂。
+ * 取 100 讓天胡 24 台等高台可直接拖到；台數本身無上限，>100 用 + 按鈕。
  */
-const MAX_TAI = 20;
+const SLIDER_MAX_TAI = 100;
 
 export function RoundForm({ players, rounds, roster, onAdd }: Props) {
   // 本場各玩家放槍次數（供放槍者按鈕警示）。
@@ -191,7 +191,7 @@ function PlayerPickButton({
 
 /**
  * 台數調整：滑桿粗調 + ± 按鈕微調並存。
- * - 滑桿（原生 range）：0 ~ MAX_TAI，牌桌上一拖到位；鍵盤方向鍵原生支援。
+ * - 滑桿（原生 range）：0 ~ SLIDER_MAX_TAI，牌桌上一拖到位；鍵盤方向鍵原生支援。
  * - ± 按鈕（縮小放滑桿兩端）：單步微調，支援長按加速（按住 ≥400ms 後每 80ms 連加）。
  * 大字當前值顯示在最上方，牌桌上一眼可見。
  */
@@ -203,7 +203,7 @@ function TaiStepper({ value, onChange }: { value: number; onChange: (n: number) 
   const pointerHandled = useRef(false);
 
   function step(delta: number) {
-    // 只夾下界 0，不封頂：台數無上限，± 按鈕可超過滑桿 MAX_TAI（超高台走這條）。
+    // 只夾下界 0，不封頂：台數無上限，± 按鈕可超過滑桿 SLIDER_MAX_TAI（超高台走這條）。
     onChange(Math.max(0, valueRef.current + delta));
   }
 
@@ -262,7 +262,7 @@ function TaiStepper({ value, onChange }: { value: number; onChange: (n: number) 
           type="range"
           className="quick-tai-slider"
           min={0}
-          max={MAX_TAI}
+          max={SLIDER_MAX_TAI}
           step={1}
           value={value}
           aria-label="台數"
