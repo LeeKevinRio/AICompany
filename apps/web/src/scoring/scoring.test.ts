@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   calcDong,
+  calcEyeTileTai,
   calcUnitAmount,
   effectiveTai,
   scoreRound,
@@ -129,7 +130,7 @@ describe('scoreRound — edge cases 與驗證', () => {
 });
 
 describe('v2.1 規則 — 自摸加台（selfDrawBonusTai）', () => {
-  const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 0 };
+  const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0 };
 
   it('effectiveTai：自摸時加台，放槍不加', () => {
     expect(effectiveTai(makeRound({ tai: 2, selfDraw: true, loserId: null }), rules)).toBe(3);
@@ -163,15 +164,15 @@ describe('v2.1 規則 — 自摸加台（selfDrawBonusTai）', () => {
 
 describe('v2.1 規則 — 東錢 / 公基金（selfDrawDongAmount）', () => {
   it('calcDong：自摸收、放槍不收、關閉為 0', () => {
-    const on: SessionRules = { selfDrawBonusTai: 0, selfDrawDongAmount: 100 };
+    const on: SessionRules = { selfDrawBonusTai: 0, selfDrawDongAmount: 100, eyeTileEnabled: false, eyeTileTai: 0 };
     expect(calcDong(makeRound({ selfDraw: true, loserId: null }), on)).toBe(100);
     expect(calcDong(makeRound({ selfDraw: false }), on)).toBe(0);
-    const off: SessionRules = { selfDrawBonusTai: 0, selfDrawDongAmount: 0 };
+    const off: SessionRules = { selfDrawBonusTai: 0, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0 };
     expect(calcDong(makeRound({ selfDraw: true, loserId: null }), off)).toBe(0);
   });
 
   it('東錢是底台之外的獨立線：scoreRound 的四人 deltas 仍零和', () => {
-    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100 };
+    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100, eyeTileEnabled: false, eyeTileTai: 0 };
     const round = makeRound({ winnerId: 'p1', loserId: null, tai: 2, selfDraw: true });
     const { deltas, dong, dongPayerId } = scoreRoundOutcome(round, players, settings, rules);
     // 底/台/自摸加台四人加總恆為 0（東錢不破壞零和）
@@ -182,7 +183,7 @@ describe('v2.1 規則 — 東錢 / 公基金（selfDrawDongAmount）', () => {
 
   it('CEO 範例：底100 台50 自摸+1台 東錢100，輸入 2 台自摸', () => {
     // 自摸者底台收益 +750（250×3），三家各付 250；東錢 100 進公基金。
-    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100 };
+    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100, eyeTileEnabled: false, eyeTileTai: 0 };
     const round = makeRound({ winnerId: 'p1', loserId: null, tai: 2, selfDraw: true });
     const { net, kitty } = settleSession([round], players, settings, rules);
 
@@ -199,7 +200,7 @@ describe('v2.1 規則 — 東錢 / 公基金（selfDrawDongAmount）', () => {
   });
 
   it('多次自摸：公基金累加，淨額總和恆等於 −kitty', () => {
-    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100 };
+    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100, eyeTileEnabled: false, eyeTileTai: 0 };
     const rounds: Round[] = [
       makeRound({ id: 'r1', winnerId: 'p1', loserId: null, tai: 0, selfDraw: true }),
       makeRound({ id: 'r2', winnerId: 'p2', loserId: null, tai: 3, selfDraw: true }),
@@ -214,11 +215,119 @@ describe('v2.1 規則 — 東錢 / 公基金（selfDrawDongAmount）', () => {
   });
 
   it('放槍局不收東錢，公基金為 0', () => {
-    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100 };
+    const rules: SessionRules = { selfDrawBonusTai: 1, selfDrawDongAmount: 100, eyeTileEnabled: false, eyeTileTai: 0 };
     const round = makeRound({ winnerId: 'p1', loserId: 'p2', tai: 2, selfDraw: false });
     const { kitty, net } = settleSession([round], players, settings, rules);
     expect(kitty).toBe(0);
     expect(net.p1 + net.p2 + net.p3 + net.p4).toBe(0);
+  });
+});
+
+describe('v2.2 規則 — 眼牌（eyeTileEnabled / eyeTileTai）', () => {
+  // 眼牌開、加 1 台；自摸加台關（隔離眼牌效果）。
+  const rules: SessionRules = {
+    selfDrawBonusTai: 0,
+    selfDrawDongAmount: 0,
+    eyeTileEnabled: true,
+    eyeTileTai: 1,
+  };
+
+  it('calcEyeTileTai：啟用+標記才加台；未啟用/未標記/台數<=0 皆 0', () => {
+    expect(calcEyeTileTai(makeRound({ eyeTile: true }), rules)).toBe(1);
+    // 未標記眼牌（含舊資料 undefined）→ 0
+    expect(calcEyeTileTai(makeRound({ eyeTile: false }), rules)).toBe(0);
+    expect(calcEyeTileTai(makeRound({}), rules)).toBe(0);
+    // 該場未啟用眼牌 → 即使標記也 0
+    const off: SessionRules = { ...rules, eyeTileEnabled: false };
+    expect(calcEyeTileTai(makeRound({ eyeTile: true }), off)).toBe(0);
+  });
+
+  it('calcEyeTileTai 邊界：啟用眼牌但 eyeTileTai=0 → 不加台（含 effectiveTai）', () => {
+    const zeroTai: SessionRules = { ...rules, eyeTileEnabled: true, eyeTileTai: 0 };
+    expect(calcEyeTileTai(makeRound({ eyeTile: true }), zeroTai)).toBe(0);
+    // effectiveTai 疊加後也不受影響（放槍 2 台維持 2 台）
+    const round = makeRound({ winnerId: 'p1', loserId: 'p2', tai: 2, selfDraw: false, eyeTile: true });
+    expect(effectiveTai(round, zeroTai)).toBe(2);
+  });
+
+  it('情境一 眼牌自摸：2 台 +眼 1 台 = 3 台，贏家收 3 倍，四人零和', () => {
+    const round = makeRound({ winnerId: 'p1', loserId: null, tai: 2, selfDraw: true, eyeTile: true });
+    expect(effectiveTai(round, rules)).toBe(3);
+    const d = scoreRound(round, players, settings, rules);
+    expect(d.p1).toBe(750); // 250 × 3
+    expect(d.p2).toBe(-250);
+    expect(d.p3).toBe(-250);
+    expect(d.p4).toBe(-250);
+    expect(d.p1 + d.p2 + d.p3 + d.p4).toBe(0);
+  });
+
+  it('情境二 眼牌放槍：2 台 +眼 1 台 = 3 台（放槍也算），四人零和', () => {
+    const round = makeRound({ winnerId: 'p1', loserId: 'p2', tai: 2, selfDraw: false, eyeTile: true });
+    expect(effectiveTai(round, rules)).toBe(3);
+    const d = scoreRound(round, players, settings, rules);
+    expect(d.p1).toBe(250);
+    expect(d.p2).toBe(-250);
+    expect(d.p3).toBe(0);
+    expect(d.p4).toBe(0);
+    expect(d.p1 + d.p2 + d.p3 + d.p4).toBe(0);
+  });
+
+  it('情境三 未啟用眼牌：即使標記 eyeTile 也不加台（放槍 2 台仍 200）', () => {
+    const off: SessionRules = { ...rules, eyeTileEnabled: false };
+    const round = makeRound({ winnerId: 'p1', loserId: 'p2', tai: 2, selfDraw: false, eyeTile: true });
+    expect(effectiveTai(round, off)).toBe(2);
+    const d = scoreRound(round, players, settings, off);
+    expect(d.p1).toBe(200);
+    expect(d.p2).toBe(-200);
+    expect(d.p1 + d.p2 + d.p3 + d.p4).toBe(0);
+  });
+
+  it('情境四 舊資料（round 無 eyeTile）：啟用眼牌也不加台，行為與今天一致', () => {
+    const round = makeRound({ winnerId: 'p1', loserId: null, tai: 2, selfDraw: true });
+    expect(effectiveTai(round, rules)).toBe(2);
+    const d = scoreRound(round, players, settings, rules);
+    expect(d.p1).toBe(600); // 200 × 3，未加眼牌
+    expect(d.p1 + d.p2 + d.p3 + d.p4).toBe(0);
+  });
+
+  it('自摸加台與眼牌可疊加：自摸 +1 台 + 眼 +1 台，四人零和且 dong 不破壞零和', () => {
+    const both: SessionRules = {
+      selfDrawBonusTai: 1,
+      selfDrawDongAmount: 100,
+      eyeTileEnabled: true,
+      eyeTileTai: 1,
+    };
+    // 2 台 → +自摸 1 +眼 1 = 4 台，amount = 100 + 4×50 = 300
+    const round = makeRound({ winnerId: 'p1', loserId: null, tai: 2, selfDraw: true, eyeTile: true });
+    expect(effectiveTai(round, both)).toBe(4);
+    const { deltas, dong } = scoreRoundOutcome(round, players, settings, both);
+    expect(deltas.p1).toBe(900); // 300 × 3
+    expect(deltas.p1 + deltas.p2 + deltas.p3 + deltas.p4).toBe(0);
+    expect(dong).toBe(100);
+    // 含公基金的整場驗算：四人淨額總和 = −kitty
+    const { net, kitty } = settleSession([round], players, settings, both);
+    expect(net.p1 + net.p2 + net.p3 + net.p4).toBe(-kitty);
+  });
+
+  it('settleSession 全放槍眼牌局：無自摸故 kitty=0，整場嚴格零和', () => {
+    // 三局皆放槍且標記眼牌（+1 台）；放槍不觸發 dong，故公基金應為 0。
+    const rounds: Round[] = [
+      makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 2, selfDraw: false, eyeTile: true }), // 3 台
+      makeRound({ id: 'r2', winnerId: 'p3', loserId: 'p4', tai: 0, selfDraw: false, eyeTile: true }), // 1 台
+      makeRound({ id: 'r3', winnerId: 'p2', loserId: 'p1', tai: 5, selfDraw: false, eyeTile: true }), // 6 台
+    ];
+    const { net, zeroSum, kitty } = settleSession(rounds, players, settings, rules);
+    // 無自摸 → 無東錢 → kitty 恆為 0
+    expect(kitty).toBe(0);
+    // kitty=0 時 net 與 zeroSum 完全一致，且四人嚴格零和
+    expect(net.p1 + net.p2 + net.p3 + net.p4).toBe(0);
+    expect(zeroSum.p1 + zeroSum.p2 + zeroSum.p3 + zeroSum.p4).toBe(0);
+    expect(net).toEqual(zeroSum);
+    // 逐項驗算：r1 p1 收 250 / p2 付 250；r2 p3 收 150 / p4 付 150；r3 p2 收 400 / p1 付 400
+    expect(net.p1).toBe(250 - 400); // -150
+    expect(net.p2).toBe(-250 + 400); // 150
+    expect(net.p3).toBe(150); // 0 台 +眼 1 台 = 1 台 → 100+50
+    expect(net.p4).toBe(-150);
   });
 });
 

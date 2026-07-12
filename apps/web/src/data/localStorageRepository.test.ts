@@ -148,16 +148,61 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
     const res = await new LocalStorageRepository().loadSessions();
     expect(res.corrupted).toBe(false);
     expect(res.sessions).toHaveLength(1);
-    // 關鍵：補 0 而非 1，否則歷史自摸分數會被改變。
-    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 0, selfDrawDongAmount: 0 });
+    // 關鍵：補 0 而非 1，否則歷史自摸分數會被改變（眼牌亦補關 / 0）。
+    expect(res.sessions[0].rules).toEqual({
+      selfDrawBonusTai: 0,
+      selfDrawDongAmount: 0,
+      eyeTileEnabled: false,
+      eyeTileTai: 0,
+    });
   });
 
-  it('已存在合法 rules：原樣保留', async () => {
+  it('已存在合法 rules（v2.1 舊格式，無眼牌欄位）：既有欄位保留、眼牌補中性值', async () => {
     const session = makeSession({ rules: { selfDrawBonusTai: 1, selfDrawDongAmount: 100 } });
     seed([session]);
 
     const res = await new LocalStorageRepository().loadSessions();
-    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 1, selfDrawDongAmount: 100 });
+    // 舊 rules 缺眼牌欄位 → 補 fallback（關 / 0），既有自摸/東錢數值不動。
+    expect(res.sessions[0].rules).toEqual({
+      selfDrawBonusTai: 1,
+      selfDrawDongAmount: 100,
+      eyeTileEnabled: false,
+      eyeTileTai: 0,
+    });
+  });
+
+  it('v2.2 眼牌 rules 完整保留；eyeTile round flag 合法通過', async () => {
+    const session = makeSession({
+      rules: {
+        selfDrawBonusTai: 1,
+        selfDrawDongAmount: 0,
+        eyeTileEnabled: true,
+        eyeTileTai: 2,
+      },
+      rounds: [makeRound({ eyeTile: true })],
+    });
+    seed([session]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions[0].rules).toEqual({
+      selfDrawBonusTai: 1,
+      selfDrawDongAmount: 0,
+      eyeTileEnabled: true,
+      eyeTileTai: 2,
+    });
+    expect(res.sessions[0].rounds[0].eyeTile).toBe(true);
+  });
+
+  it('eyeTile 為非 boolean 型別 → 該 session 判毀損並丟棄', async () => {
+    const session = makeSession({
+      rounds: [makeRound({ eyeTile: 'yes' as unknown as boolean })],
+    });
+    seed([session]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(res.sessions).toHaveLength(0);
   });
 
   it('rules 型別毀損：不丟整場，正規化回補 0（行為不變）', async () => {
@@ -167,7 +212,12 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
     const res = await new LocalStorageRepository().loadSessions();
     expect(res.corrupted).toBe(false);
     expect(res.sessions).toHaveLength(1);
-    expect(res.sessions[0].rules).toEqual({ selfDrawBonusTai: 0, selfDrawDongAmount: 0 });
+    expect(res.sessions[0].rules).toEqual({
+      selfDrawBonusTai: 0,
+      selfDrawDongAmount: 0,
+      eyeTileEnabled: false,
+      eyeTileTai: 0,
+    });
   });
 
   it('Player 帶 rosterId：合法字串通過、非字串判毀損', async () => {

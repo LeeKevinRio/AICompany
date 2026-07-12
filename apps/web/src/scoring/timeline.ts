@@ -145,9 +145,9 @@ export function calcSessionHighlights(
       kitty += calcDong(r, rules);
     } else if (r.loserId && perPlayer[r.loserId]) {
       perPlayer[r.loserId].gunned += 1;
-      // 放槍損失用 r.tai（非 effectiveTai）是刻意的：自摸加台只在自摸時生效，
-      // 放槍不受自摸加台影響，故 tie-break 的損失金額以原始台數計。勿改成 effectiveTai。
-      gunLoss[r.loserId] += calcUnitAmount(settings, r.tai);
+      // effectiveTai 對放槍局＝r.tai＋眼牌台（selfDrawBonus 只在自摸時加，此處天然不含）；
+      // 眼牌台放槍也算，輸家實際損失含眼牌台，tie-break 才語義一致。
+      gunLoss[r.loserId] += calcUnitAmount(settings, effectiveTai(r, rules));
     }
 
     // 含自摸加台的有效台數 / 單注金額（供「最大/最快一局」與匯率換算）。
@@ -409,7 +409,8 @@ function aggregateBy(
           totalWinTai += r.tai;
           // 跨場單局最高收益：自摸向其餘座位各收一注、放槍收單注。
           try {
-            const unit = calcUnitAmount(s.settings, r.selfDraw ? effectiveTai(r, rules) : r.tai);
+            // 眼牌加台自摸/放槍都算，故單注一律用 effectiveTai（含眼牌與自摸加台）。
+            const unit = calcUnitAmount(s.settings, effectiveTai(r, rules));
             const won = r.selfDraw ? unit * (s.players.length - 1) : unit;
             if (won > bestRoundAmount) bestRoundAmount = won;
           } catch {

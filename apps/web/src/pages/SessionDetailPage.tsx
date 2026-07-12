@@ -20,6 +20,7 @@ function RuleChips({ rules }: { rules: SessionRules }) {
   const chips: string[] = [];
   if (rules.selfDrawBonusTai > 0) chips.push(`自摸 +${rules.selfDrawBonusTai} 台`);
   if (rules.selfDrawDongAmount > 0) chips.push(`東錢 $${rules.selfDrawDongAmount}`);
+  if (rules.eyeTileEnabled && rules.eyeTileTai > 0) chips.push(`眼牌 +${rules.eyeTileTai} 台`);
   if (chips.length === 0) return null;
   return (
     <div className="rule-chips">
@@ -120,6 +121,7 @@ export function SessionDetailPage() {
             players={session.players}
             rounds={session.rounds}
             roster={globalSettings.roster}
+            rules={session.rules}
             onAdd={(r) => addRound(session.id, r)}
           />
           {session.endedAt ? (

@@ -12,6 +12,12 @@
 //      獨立於四人零和——是自摸者的單向流出，不分給其他三家。
 //      此為 CEO 定案解讀，刻意寫成獨立、易抽換的函式（calcDong），
 //      未來若改成「平分給三家」或「付給莊家」只需改那一段。
+//   3. 眼牌 eyeTileEnabled / eyeTileTai（v2.2）：被標記為眼牌的局，
+//      台數額外 + eyeTileTai。CEO 拍板：自摸/放槍都算、照一般支付規則，
+//      所以是疊進 effectiveTai（維持四人零和），不是新的金流方向。
+//
+// 疊加順序（effectiveTai）：round.tai → +自摸加台（僅自摸）→ +眼牌加台（自摸/放槍都算）。
+// 東錢是獨立的公基金流向，不進 effectiveTai。
 //
 // 莊家 / 連莊加台：MVP 不自動處理，使用者可自行把加台數加進 round.tai。
 //
@@ -94,15 +100,33 @@ export function calcUnitAmount(settings: Settings, tai: number): number {
 }
 
 /**
- * 自摸時的有效台數：底/台/自摸加台 三者疊加用的台數。
- * 放槍時不加自摸加台（直接回 round.tai）。
+ * 眼牌加台（v2.2）：該場啟用眼牌、且該局標記為眼牌時，回傳額外台數，否則 0。
+ *
+ * 刻意獨立成小函式（比照 calcDong）：自摸/放槍都算、由輸家依現有規則承擔，
+ * 是疊進 effectiveTai 的加台，不破壞四人零和。未來若改玩法只動這一段。
+ * @returns 本局眼牌加台數（>=0）。
+ */
+export function calcEyeTileTai(round: Round, rules: SessionRules): number {
+  if (!rules.eyeTileEnabled || !round.eyeTile) return 0;
+  const tai = rules.eyeTileTai;
+  if (!Number.isFinite(tai) || !Number.isInteger(tai) || tai <= 0) return 0;
+  return tai;
+}
+
+/**
+ * 有效台數：底/台計分實際採用的台數。
+ * 疊加順序：round.tai → +自摸加台（僅自摸）→ +眼牌加台（自摸/放槍都算）。
  */
 export function effectiveTai(round: Round, rules: SessionRules): number {
-  if (!round.selfDraw) return round.tai;
-  const bonus = Number.isInteger(rules.selfDrawBonusTai) && rules.selfDrawBonusTai > 0
-    ? rules.selfDrawBonusTai
-    : 0;
-  return round.tai + bonus;
+  let tai = round.tai;
+  if (round.selfDraw) {
+    const bonus = Number.isInteger(rules.selfDrawBonusTai) && rules.selfDrawBonusTai > 0
+      ? rules.selfDrawBonusTai
+      : 0;
+    tai += bonus;
+  }
+  tai += calcEyeTileTai(round, rules);
+  return tai;
 }
 
 /**

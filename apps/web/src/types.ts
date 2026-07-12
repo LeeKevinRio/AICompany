@@ -39,6 +39,12 @@ export interface Round {
   createdAt: number;
   /** v2：局次備註（最多 20 字，可選；舊資料無此欄位視為空字串） */
   note?: string;
+  /**
+   * v2.2（牌桌規則補完 批次 1）：這局是否為「眼牌」。
+   * 記局時勾選；舊資料無此欄位 → undefined，視為「非眼牌」。
+   * 只有在該場 rules.eyeTileEnabled 時才會生效並顯示勾選。
+   */
+  eyeTile?: boolean;
 }
 
 /**
@@ -54,6 +60,16 @@ export interface SessionRules {
    * 獨立累計、不併入四人互相輸贏的零和。詳見 scoring.ts。
    */
   selfDrawDongAmount: number;
+  /**
+   * v2.2（牌桌規則補完 批次 1）：眼牌規則總開關（舊場 migration = false）。
+   * 開啟後，記局才會出現「眼牌」勾選，且被標記的局會套用眼牌加台。
+   */
+  eyeTileEnabled: boolean;
+  /**
+   * v2.2：眼牌加台數。CEO 拍板：加 1 台、自摸/放槍都算、照一般支付規則（維持四人零和）。
+   * 舊場 migration = 0（中性值，不動歷史分數）。
+   */
+  eyeTileTai: number;
 }
 
 /** 一場牌局 */
@@ -105,6 +121,9 @@ export const DEFAULT_SETTINGS: Settings = { base: 100, tai: 50 };
 export const DEFAULT_NEW_SESSION_RULES: SessionRules = {
   selfDrawBonusTai: 1,
   selfDrawDongAmount: 100,
+  // v2.2：眼牌 CEO 拍板預設開、加 1 台（自摸/放槍都算）。
+  eyeTileEnabled: true,
+  eyeTileTai: 1,
 };
 
 /**
@@ -114,6 +133,9 @@ export const DEFAULT_NEW_SESSION_RULES: SessionRules = {
 export const DEFAULT_SESSION_RULES: SessionRules = {
   selfDrawBonusTai: 0,
   selfDrawDongAmount: 0,
+  // v2.2：舊場眼牌一律關、加台 0 → 歷史分數一字不變。
+  eyeTileEnabled: false,
+  eyeTileTai: 0,
 };
 
 /** v2：預設全域設定 */

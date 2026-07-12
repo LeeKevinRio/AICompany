@@ -1,6 +1,6 @@
 // 每局明細：贏家、台數、自摸/放槍、放槍者、備註，以及該局贏家收多少。
 import type { Player, Round, SessionRules, Settings } from '../types';
-import { calcDong, calcUnitAmount, effectiveTai } from '../scoring/scoring';
+import { calcDong, calcEyeTileTai, calcUnitAmount, effectiveTai } from '../scoring/scoring';
 import { formatSigned } from '../scoring/timeline';
 
 interface Props {
@@ -32,7 +32,9 @@ export function RoundList({ rounds, players, settings, rules, onRemove }: Props)
           const eTai = effectiveTai(r, rules);
           const amount = calcUnitAmount(settings, eTai);
           const win = r.selfDraw ? amount * (players.length - 1) : amount;
-          const bonus = r.selfDraw ? eTai - r.tai : 0;
+          const eyeTai = calcEyeTileTai(r, rules);
+          // 「+N」只表示自摸加台（眼牌另用「眼」標示，維持金額來源可回推）。
+          const bonus = eTai - r.tai - eyeTai;
           const dong = calcDong(r, rules);
           return (
             <li key={r.id} className="round-item">
@@ -41,6 +43,7 @@ export function RoundList({ rounds, players, settings, rules, onRemove }: Props)
                 <strong>{nameOf(r.winnerId)}</strong> {r.tai}
                 {bonus > 0 && <span className="round-bonus">+{bonus}</span>} 台{' '}
                 {r.selfDraw ? '自摸' : `放槍（${nameOf(r.loserId)}）`}
+                {eyeTai > 0 && <span className="round-eye">眼 +{eyeTai} 台</span>}
                 {dong > 0 && <span className="round-dong">東錢 ${dong}</span>}
                 {r.note && <span className="round-note">📝 {r.note}</span>}
               </span>

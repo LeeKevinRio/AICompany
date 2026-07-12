@@ -35,6 +35,7 @@ function Toggle({
 export function RulesFields({ rules, onChange }: Props) {
   const selfDrawOn = rules.selfDrawBonusTai > 0;
   const dongOn = rules.selfDrawDongAmount > 0;
+  const eyeTileOn = rules.eyeTileEnabled;
 
   return (
     <div className="rules-fields">
@@ -96,8 +97,42 @@ export function RulesFields({ rules, onChange }: Props) {
         </label>
       </div>
 
+      {/* 眼牌（v2.2）：被標記為眼牌的局額外加台，自摸/放槍都算，照一般支付規則。 */}
+      <div className="rule-row">
+        <div className="rule-row-main">
+          <span className="rule-name">眼牌</span>
+          <Toggle
+            on={eyeTileOn}
+            label="眼牌開關"
+            // 關 → enabled=false；開 → enabled=true 並把台數補回 1（常見值）。
+            onToggle={() =>
+              onChange({
+                ...rules,
+                eyeTileEnabled: !eyeTileOn,
+                eyeTileTai: !eyeTileOn && rules.eyeTileTai <= 0 ? 1 : rules.eyeTileTai,
+              })
+            }
+          />
+        </div>
+        <label className="rule-input">
+          <span>加</span>
+          <input
+            type="number"
+            min={0}
+            className="tabular"
+            disabled={!eyeTileOn}
+            value={rules.eyeTileTai}
+            onChange={(e) =>
+              onChange({ ...rules, eyeTileTai: toNonNegInt(e.target.value) })
+            }
+          />
+          <span>台</span>
+        </label>
+      </div>
+
       <p className="setting-hint">
         自摸者額外付一筆東錢進「公基金」，獨立累計、不併入四人輸贏。
+        眼牌則是記局時勾選、額外加台，自摸/放槍都算。
       </p>
     </div>
   );

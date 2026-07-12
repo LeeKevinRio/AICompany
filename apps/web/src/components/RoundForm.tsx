@@ -3,7 +3,7 @@
 // 內建局次備註欄（P4，企劃穩健牌 6）：選填、20 字上限，收在送出鈕附近的次要位置。
 // 放槍警示（本場放槍達門檻）與舊表單一致，功能不退化。
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Player, Round, RosterPlayer } from '../types';
+import type { Player, Round, RosterPlayer, SessionRules } from '../types';
 import { MAX_NOTE_LENGTH } from '../types';
 import { resolvePlayerVisual } from './ui';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -13,6 +13,8 @@ interface Props {
   rounds: Round[];
   /** 玩家名冊：解析每位玩家的頭像與代表色（與排名條 / 圖卡統一）。 */
   roster: RosterPlayer[];
+  /** 本場規則：眼牌勾選僅在 rules.eyeTileEnabled 時顯示（v2.2）。 */
+  rules: SessionRules;
   onAdd: (round: Omit<Round, 'id' | 'createdAt'>) => void;
 }
 
@@ -26,7 +28,7 @@ const GUN_ALERT_THRESHOLD = 3;
  */
 const SLIDER_MAX_TAI = 100;
 
-export function RoundForm({ players, rounds, roster, onAdd }: Props) {
+export function RoundForm({ players, rounds, roster, rules, onAdd }: Props) {
   // 本場各玩家放槍次數（供放槍者按鈕警示）。
   const gunCount = useMemo(() => {
     const c: Record<string, number> = {};
@@ -43,6 +45,8 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
   // 台數每局從 0 起算（CEO 實測後定案：不帶入上一局，避免忘了歸零記錯台）。
   const [tai, setTai] = useState(0);
   const [note, setNote] = useState('');
+  // v2.2：眼牌勾選（僅本場啟用眼牌時可用），每局送出後歸零。
+  const [eyeTile, setEyeTile] = useState(false);
 
   const canSubmit = !!winnerId && selfDraw !== null && (selfDraw || !!loserId);
 
@@ -54,6 +58,8 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
       selfDraw: selfDraw === true,
       loserId: selfDraw ? null : loserId,
       note: note.trim() || undefined,
+      // 僅本場啟用眼牌且有勾選才寫入 flag，否則留 undefined（= 非眼牌）。
+      eyeTile: rules.eyeTileEnabled && eyeTile ? true : undefined,
     });
     // 記完一局全部重置為初始態，台數歸 0。
     setWinnerId('');
@@ -61,6 +67,7 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
     setLoserId('');
     setTai(0);
     setNote('');
+    setEyeTile(false);
   }
 
   return (
@@ -131,6 +138,22 @@ export function RoundForm({ players, rounds, roster, onAdd }: Props) {
 
       <p className="quick-step-label">台數</p>
       <TaiStepper value={tai} onChange={setTai} />
+
+      {/* v2.2：眼牌勾選——次要位階，不擋三步主動線；僅本場啟用眼牌時顯示。 */}
+      {rules.eyeTileEnabled && (
+        <button
+          type="button"
+          className={`quick-eye${eyeTile ? ' selected' : ''}`}
+          role="switch"
+          aria-checked={eyeTile}
+          onClick={() => setEyeTile((v) => !v)}
+        >
+          <span className="quick-eye-box" aria-hidden="true">
+            {eyeTile ? '✓' : ''}
+          </span>
+          眼牌（加 {rules.eyeTileTai} 台）
+        </button>
+      )}
 
       <label className="field quick-note">
         <span>

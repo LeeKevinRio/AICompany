@@ -70,7 +70,11 @@ function normalizeSessionRules(v: unknown, fallback: SessionRules): SessionRules
   const selfDrawDongAmount = isFiniteNonNegInt(r.selfDrawDongAmount)
     ? r.selfDrawDongAmount
     : fallback.selfDrawDongAmount;
-  return { selfDrawBonusTai, selfDrawDongAmount };
+  // v2.2：眼牌規則。缺值/型別錯 → 回退 fallback（migration 全關 / 中性值，歷史分數不變）。
+  const eyeTileEnabled =
+    typeof r.eyeTileEnabled === 'boolean' ? r.eyeTileEnabled : fallback.eyeTileEnabled;
+  const eyeTileTai = isFiniteNonNegInt(r.eyeTileTai) ? r.eyeTileTai : fallback.eyeTileTai;
+  return { selfDrawBonusTai, selfDrawDongAmount, eyeTileEnabled, eyeTileTai };
 }
 
 function isValidSettings(v: unknown): v is Settings {
@@ -93,6 +97,10 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   if (r.note !== undefined) {
     if (typeof r.note !== 'string' || r.note.length > MAX_NOTE_LENGTH) return false;
   }
+
+  // v2.2：eyeTile 為可選 boolean（舊資料無此欄位 → undefined，合法）。
+  // 型別錯（存在但非 boolean）視為毀損，避免污染計分。
+  if (r.eyeTile !== undefined && typeof r.eyeTile !== 'boolean') return false;
 
   if (r.selfDraw) {
     // 自摸：loserId 必須為 null

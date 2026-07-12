@@ -1436,6 +1436,43 @@ button.link.danger {
   margin-top: var(--space-4);
 }
 
+/* v2.2：眼牌勾選 chip——次要位階（比照備註位置），選中 primary 高亮。 */
+.quick-eye {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.quick-eye.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  color: var(--color-primary);
+}
+
+.quick-eye-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.quick-eye.selected .quick-eye-box {
+  border-color: var(--color-primary);
+}
+
 /* =========================================================================
  * 玩家頁
  * ========================================================================= */
@@ -1852,6 +1889,15 @@ button.link.danger {
   margin-left: 6px;
   font-size: 11px;
   color: var(--color-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* v2.2：眼牌加台標示（比照東錢 chip，色與東錢區隔，服務計分透明度） */
+.round-eye {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--color-info);
   font-variant-numeric: tabular-nums;
 }
 

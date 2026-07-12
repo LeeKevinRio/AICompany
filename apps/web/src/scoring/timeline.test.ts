@@ -325,7 +325,7 @@ describe('aggregateBy 數據系統 Phase 1 新欄位（totalRounds / totalWinTai
 
   it('totalWinTai 累加胡牌局的 r.tai（不含自摸加台）', () => {
     // 自摸加台開 2 台，驗證 totalWinTai 用 r.tai（3 + 2）而非 effectiveTai（含 bonus）。
-    const bonusRules: SessionRules = { selfDrawBonusTai: 2, selfDrawDongAmount: 0 };
+    const bonusRules: SessionRules = { selfDrawBonusTai: 2, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0 };
     const session = makeSession({
       rules: bonusRules,
       rounds: [
