@@ -119,6 +119,7 @@ export function SessionDetailPage() {
           <RoundForm
             players={session.players}
             rounds={session.rounds}
+            roster={globalSettings.roster}
             onAdd={(r) => addRound(session.id, r)}
           />
           {session.endedAt ? (

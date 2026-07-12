@@ -1264,16 +1264,6 @@ button.link.danger {
  * 快速輸入模式
  * ========================================================================= */
 
-.mode-toggle {
-  display: flex;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
-.mode-toggle button {
-  flex: 1;
-}
-
 .quick-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1297,18 +1287,46 @@ button.link.danger {
   color: var(--color-primary);
 }
 
-.quick-btn.color-bar {
-  position: relative;
-  padding-left: var(--space-6);
+/* 玩家選擇大按鈕（選贏家 / 放槍者）：頭像 + 名字，選中 primary 高亮。 */
+.quick-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--color-surface-low);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  min-height: 64px;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
 }
-.quick-btn .qb-color {
-  position: absolute;
-  left: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
+
+.quick-pick.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  color: var(--color-primary);
+}
+
+.quick-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-pick-gun {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-warn);
+}
+
+/* 選中態下 button 的 color 會繼承成 primary 綠，需明確還原放槍徽章色。 */
+.quick-pick.selected .quick-pick-gun {
+  color: var(--color-warn);
 }
 
 .quick-tai {
@@ -1341,6 +1359,11 @@ button.link.danger {
   font-size: 13px;
   color: var(--color-text-secondary);
   margin: var(--space-3) 0 var(--space-2);
+}
+
+/* 局次備註：次要位置，收在送出鈕上方，不擋三步主動線。 */
+.quick-note {
+  margin-top: var(--space-4);
 }
 
 /* =========================================================================
