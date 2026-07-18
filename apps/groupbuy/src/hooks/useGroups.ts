@@ -4,10 +4,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Group, OrderItem, Product } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
-import type { StorageRepository } from '../data/repository';
+import type { LoadResult, StorageRepository } from '../data/repository';
 
 // 第一版固定用 localStorage 實作；未來要換雲端只改這一行。
 const repo: StorageRepository = new LocalStorageRepository();
+
+/**
+ * 載入並「自我修復」毀損：loadGroups 偵測到毀損（corrupted=true）會丟棄壞資料，
+ * 但清理後的乾淨狀態必須「立即寫回」localStorage，否則下次開 app 又讀到同一份
+ * 毀損 raw、又丟棄、又警告——形成每次開 app 都跳毀損警告的迴圈。
+ *
+ * 抽成獨立純邏輯函式（只依賴 StorageRepository interface），方便用 fake repo 單元測試，
+ * 不必動用 React render。寫回失敗只記 log、不阻斷載入（讀到的乾淨資料仍可用）。
+ */
+export async function loadGroupsWithRecovery(
+  repository: StorageRepository,
+): Promise<LoadResult> {
+  const result = await repository.loadGroups();
+  if (result.corrupted) {
+    try {
+      await repository.saveGroups(result.groups);
+    } catch (err) {
+      console.error('毀損清理後寫回失敗（下次開啟可能仍會提示毀損）：', err);
+    }
+  }
+  return result;
+}
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -53,10 +75,9 @@ export function useGroups() {
   // 避免初次載入時把空資料覆寫回 localStorage。
   const skipNextSave = useRef(true);
 
-  // 初次載入
+  // 初次載入（含毀損自我修復：清理後立即寫回，避免下次開啟重複毀損警告）
   useEffect(() => {
-    repo
-      .loadGroups()
+    loadGroupsWithRecovery(repo)
       .then((result) => {
         setGroups(result.groups);
         setDataCorrupted(result.corrupted);
@@ -124,6 +145,9 @@ export function useGroups() {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g;
+          // 資料層再擋一次已截止（不只靠 UI）：已截止的團一律不接受新單 / 覆蓋，
+          // 避免 UI 繞過或競態下寫入。
+          if (g.closed) return g;
           const existing = g.orders.find((o) => o.buyerName === name);
           if (existing) {
             // 同名覆蓋：保留原 id 與 createdAt，只換品項內容。

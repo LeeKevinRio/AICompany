@@ -36,22 +36,24 @@ function isValidProduct(v: unknown): v is Product {
   return isNonEmptyString(p.id) && typeof p.name === 'string' && isFiniteNonNegInt(p.price);
 }
 
-function isValidOrderItem(v: unknown, productIds: Set<string>): v is OrderItem {
+function isValidOrderItem(v: unknown): v is OrderItem {
   if (typeof v !== 'object' || v === null) return false;
   const i = v as Record<string, unknown>;
-  // 品項必須指向存在商品、數量為非負整數。指向已刪商品視為毀損（後台計算也會略過，
-  // 但寫入層直接擋掉可避免殘留污染資料）。
-  return isNonEmptyString(i.productId) && productIds.has(i.productId) && isFiniteNonNegInt(i.qty);
+  // 只驗結構：productId 為非空字串、qty 為非負整數。
+  // 刻意「不」要求 productId 指向現存商品——與 calc.ts 的容錯設計對齊
+  //（找不到商品的品項在統計時一律略過）。未來若加入刪商品功能，殘留的舊品項
+  // 不該讓整團被判毀損而整筆丟棄。
+  return isNonEmptyString(i.productId) && isFiniteNonNegInt(i.qty);
 }
 
-function isValidOrder(v: unknown, productIds: Set<string>): v is Order {
+function isValidOrder(v: unknown): v is Order {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   if (!isNonEmptyString(o.id)) return false;
   if (typeof o.buyerName !== 'string') return false;
   if (typeof o.createdAt !== 'number' || !Number.isFinite(o.createdAt)) return false;
   if (!Array.isArray(o.items)) return false;
-  return o.items.every((item) => isValidOrderItem(item, productIds));
+  return o.items.every((item) => isValidOrderItem(item));
 }
 
 function isValidGroup(v: unknown): v is Group {
@@ -69,7 +71,7 @@ function isValidGroup(v: unknown): v is Group {
   if (productIds.size !== g.products.length) return false;
 
   if (!Array.isArray(g.orders)) return false;
-  return (g.orders as unknown[]).every((o) => isValidOrder(o, productIds));
+  return (g.orders as unknown[]).every((o) => isValidOrder(o));
 }
 
 export class LocalStorageRepository implements StorageRepository {

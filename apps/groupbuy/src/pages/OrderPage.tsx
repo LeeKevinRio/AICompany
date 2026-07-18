@@ -19,7 +19,10 @@ export function OrderPage() {
   const [done, setDone] = useState(false);
 
   function setQty(productId: string, next: number) {
-    const clamped = Math.max(0, Math.min(MAX_ITEM_QTY, Math.floor(next)));
+    // NaN 防呆：輸入 '-'、'e' 等會讓 Number() 產生 NaN，直接落 0，
+    // 避免 $NaN 與 React controlled input 警告。
+    const safe = Number.isFinite(next) ? next : 0;
+    const clamped = Math.max(0, Math.min(MAX_ITEM_QTY, Math.floor(safe)));
     setQtys((prev) => ({ ...prev, [productId]: clamped }));
   }
 

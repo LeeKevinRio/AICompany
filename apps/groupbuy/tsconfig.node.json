@@ -1,13 +1,16 @@
 {
   "compilerOptions": {
     "composite": true,
+    // 只做型別檢查、不產生輸出。搭配 tsBuildInfoFile 保留 incremental 資訊，
+    // 讓 `tsc -b` 與 `tsc -b --noEmit` 都能跑（避免舊寫法 emitDeclarationOnly + outDir
+    // 在 --noEmit 下觸發 TS6310「Referenced project may not disable emit」）。
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "strict": true,
-    "emitDeclarationOnly": true,
-    "outDir": "./node_modules/.tmp/tsnode"
+    "noEmit": true
   },
   "include": ["vite.config.ts"]
 }
