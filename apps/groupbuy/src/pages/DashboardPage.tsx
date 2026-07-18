@@ -1,12 +1,21 @@
 // 後台頁：某團累積統計——各品項總數量 / 總金額、逐人明細（名字 / 品項 / 小計 / 應付合計）。
+// 批次三：整合買家回單匯入（貼上回單碼）＋同裝置代填（現場代填），統計照常聚合。
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { calcBuyerBreakdowns, calcGroupTotal, calcProductTotals } from '../calc/calc';
+import { decodeReceipt } from '../share/receiptCodec';
 
 export function DashboardPage() {
   const { id } = useParams<{ id: string }>();
-  const { groups, loaded, toggleClosed, removeOrder } = useAppData();
+  const { groups, loaded, toggleClosed, removeOrder, submitOrder } = useAppData();
   const navigate = useNavigate();
+
+  // 回單碼匯入的暫存輸入與結果訊息。
+  const [receiptText, setReceiptText] = useState('');
+  const [importMsg, setImportMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(
+    null,
+  );
 
   const group = groups.find((g) => g.id === id);
 
@@ -29,6 +38,34 @@ export function DashboardPage() {
   const productTotals = calcProductTotals(group);
   const buyers = calcBuyerBreakdowns(group);
   const grandTotal = calcGroupTotal(group);
+
+  // 匯入買家貼回的回單碼：解碼 → 驗團別 → 寫入本團（同名覆蓋，沿用 submitOrder）。
+  function handleImport() {
+    if (!group) return; // 閉包內重新 narrow（TS 不會把外層 guard 帶進巢狀函式）
+    const parsed = decodeReceipt(receiptText);
+    if (!parsed) {
+      setImportMsg({ kind: 'err', text: '讀不到有效的回單碼，請確認整段完整貼上。' });
+      return;
+    }
+    if (parsed.groupId !== group.id) {
+      setImportMsg({ kind: 'err', text: '這張回單不屬於本團（團別不符）。' });
+      return;
+    }
+    if (parsed.items.length === 0) {
+      setImportMsg({ kind: 'err', text: '這張回單沒有任何品項。' });
+      return;
+    }
+    if (group.closed) {
+      setImportMsg({ kind: 'err', text: '本團已截止，請先「重新開團」再匯入。' });
+      return;
+    }
+    submitOrder(group.id, parsed.buyerName, parsed.items);
+    setReceiptText('');
+    setImportMsg({
+      kind: 'ok',
+      text: `已收單：${parsed.buyerName}（同名會覆蓋原本的單）。`,
+    });
+  }
 
   return (
     <div>
@@ -61,6 +98,37 @@ export function DashboardPage() {
         <button className="btn small grow" onClick={() => toggleClosed(group.id)}>
           {group.closed ? '重新開團' : '結單截止'}
         </button>
+      </div>
+
+      {/* 收單：貼上買家從 LINE 傳回的回單碼 → 匯入本團統計 */}
+      <div className="section-title">貼上回單碼收單</div>
+      <div className="card">
+        <textarea
+          rows={2}
+          value={receiptText}
+          placeholder="把買家傳回的回單碼（GBR1.… 開頭）整段貼在這裡"
+          onChange={(e) => {
+            setReceiptText(e.target.value);
+            if (importMsg) setImportMsg(null);
+          }}
+        />
+        <button
+          className="btn primary block"
+          onClick={handleImport}
+          disabled={receiptText.trim() === ''}
+          style={{ marginTop: 8 }}
+        >
+          匯入這張回單
+        </button>
+        {importMsg && (
+          <p
+            className={`banner ${importMsg.kind === 'ok' ? 'success' : 'error'}`}
+            role="status"
+            style={{ marginTop: 8, marginBottom: 0 }}
+          >
+            {importMsg.text}
+          </p>
+        )}
       </div>
 
       {/* 各品項累積 */}
