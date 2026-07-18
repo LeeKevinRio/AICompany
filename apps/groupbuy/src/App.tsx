@@ -7,6 +7,7 @@ import { CreateGroupPage } from './pages/CreateGroupPage';
 import { OrderPage } from './pages/OrderPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { SharePage } from './pages/SharePage';
+import { JoinPage } from './pages/JoinPage';
 
 export default function App() {
   const data = useGroups();
@@ -30,6 +31,8 @@ export default function App() {
 
         <Routes>
           <Route path="/" element={<GroupsPage />} />
+          {/* 買家填單頁：從主揪分享連結進入（獨立動線，無後台入口） */}
+          <Route path="/join" element={<JoinPage />} />
           <Route path="/new" element={<CreateGroupPage />} />
           {/* 填單頁：某團的下單畫面（同裝置直接寫入＝主揪代填 / 遞手機填） */}
           <Route path="/groups/:id/order" element={<OrderPage />} />
