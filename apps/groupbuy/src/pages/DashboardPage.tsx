@@ -72,14 +72,14 @@ export function DashboardPage() {
                 <td>{pt.name}</td>
                 <td className="num">${pt.price}</td>
                 <td className="num">{pt.qty}</td>
-                <td className="num">${pt.amount}</td>
+                <td className="num amount">${pt.amount}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
               <td colSpan={3}>總金額</td>
-              <td className="num">${grandTotal}</td>
+              <td className="num amount">${grandTotal}</td>
             </tr>
           </tfoot>
         </table>
@@ -94,7 +94,10 @@ export function DashboardPage() {
           <div key={b.buyerName} className="card">
             <div className="card-row">
               <h3 className="grow">{b.buyerName}</h3>
-              <span className="amount tabular" style={{ color: 'var(--color-gold)' }}>
+              <span
+                className="tabular"
+                style={{ color: 'var(--color-amount)', fontWeight: 600 }}
+              >
                 ${b.total}
               </span>
             </div>

@@ -125,18 +125,19 @@ export function OrderPage() {
       </div>
 
       <div className="section-title">選擇數量</div>
-      {group.products.map((p) => (
-        <div key={p.id} className="card card-row">
+      {group.products.map((p) => {
+        const qty = qtys[p.id] ?? 0;
+        return (
+        // 已選（qty > 0）：左側橙色狀態條 + 淡橙底 + 單價轉橙（.product-card.selected）。
+        <div key={p.id} className={`product-card card-row ${qty > 0 ? 'selected' : ''}`}>
           <div className="grow">
             <div>{p.name}</div>
-            <div className="muted tabular" style={{ fontSize: 13 }}>
-              ${p.price}
-            </div>
+            <div className="product-price tabular">${p.price}</div>
           </div>
           <div className="stepper">
             <button
-              onClick={() => setQty(p.id, (qtys[p.id] ?? 0) - 1)}
-              disabled={group.closed || (qtys[p.id] ?? 0) <= 0}
+              onClick={() => setQty(p.id, qty - 1)}
+              disabled={group.closed || qty <= 0}
               aria-label={`減少 ${p.name}`}
             >
               −
@@ -146,13 +147,14 @@ export function OrderPage() {
               inputMode="numeric"
               min={0}
               max={MAX_ITEM_QTY}
-              value={qtys[p.id] ?? 0}
+              value={qty}
               onChange={(e) => setQty(p.id, Number(e.target.value))}
               disabled={group.closed}
               aria-label={`${p.name} 數量`}
             />
             <button
-              onClick={() => setQty(p.id, (qtys[p.id] ?? 0) + 1)}
+              className="increment"
+              onClick={() => setQty(p.id, qty + 1)}
               disabled={group.closed}
               aria-label={`增加 ${p.name}`}
             >
@@ -160,7 +162,8 @@ export function OrderPage() {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       <p className="total-line">
         <span>應付合計</span>

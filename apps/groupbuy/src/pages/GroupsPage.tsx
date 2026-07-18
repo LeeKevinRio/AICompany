@@ -27,7 +27,8 @@ export function GroupsPage() {
       )}
 
       {groups.map((g) => (
-        <div key={g.id} className="card">
+        // 左側狀態條：進行中橙色 / 已截止暖灰（settled 已結清待收款功能下一輪接上）。
+        <div key={g.id} className={`card ${g.closed ? 'status-closed' : 'status-open'}`}>
           <div className="card-row">
             <div className="grow">
               <h2>{g.name}</h2>

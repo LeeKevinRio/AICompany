@@ -1,41 +1,78 @@
 /* =========================================================================
- * 團購工具 MVP scaffold 樣式
- * Token 色系暫借 MaJong v2 視覺規範起步，之後由 art-lead 出規範再換皮。
- * 手機優先、乾淨最小樣式，不追求精緻。
+ * 揪購 GroupBuy — 視覺規範 v1.0
+ * Art-lead 出品，2026-07-18（依 work/groupbuy-視覺規範.md 第 6 節套用）
+ * Light Mode 為主場景；Dark Mode token 以 [data-theme="dark"] 預留。
  * ========================================================================= */
 
 :root {
-  /* 背景 / 表面 */
-  --color-bg: #0d1510;
-  --color-surface: #17211a;
-  --color-border: #253328;
+  /* ── 背景 / 表面 ──────────────────────────────────────── */
+  --color-bg:           #F9F6F3;   /* 暖珍珠白頁面底色 */
+  --color-surface:      #FFFFFF;   /* 卡片 / 表單白底 */
+  --color-surface-tint: #FEF3EB;   /* 統計摘要區淡橙底 */
+  --color-border:       #EDE4DD;   /* 暖米棕邊框 */
+  --color-input-bg:     #F9F6F3;   /* 輸入框背景同頁面底色 */
 
-  /* 文字 */
-  --color-text: #e4ede7;
-  --color-text-secondary: #8a9e90;
+  /* ── 文字 ─────────────────────────────────────────────── */
+  --color-text:           #1C1210; /* 主文字，暖近黑 */
+  --color-text-secondary: #78605A; /* 次要文字，暖棕灰 */
+  --color-text-disabled:  #BBADA7; /* 停用 / placeholder */
+  --color-text-inverse:   #FFFFFF; /* 有色背景上的反白文字 */
 
-  /* 品牌 / 語意 */
-  --color-primary: #1f6f43;
-  --color-primary-dark: #185534;
-  --color-win: #2ebd72;
-  --color-lose: #e84848;
-  --color-warn: #d4a030;
-  --color-gold: #c9a535;
+  /* ── 品牌色 ───────────────────────────────────────────── */
+  --color-primary:       #E8621A;  /* 柑橘橙，主品牌色 / CTA */
+  --color-primary-dark:  #C04D10;  /* 深橙，hover / pressed */
+  --color-primary-muted: #FDE8D9;  /* 橙色淡底，選中狀態 */
+  --color-primary-light: #FF8040;  /* 亮橙，動畫閃光幀用 */
 
-  /* 間距 / 圓角 */
+  /* ── 語意色 ───────────────────────────────────────────── */
+  --color-success:       #16A05E;  /* 收款打勾 / 已完成 */
+  --color-success-muted: #D3F5E6;  /* 打勾動畫底色 flash */
+
+  --color-amount:        #E8621A;  /* 金額數字（同 primary，橙=錢）*/
+  --color-amount-strong: #C04D10;  /* 大額總計，深橙加重 */
+
+  --color-warn:          #D97706;  /* 截止警示，琥珀黃橙 */
+  --color-warn-muted:    #FEF3C7;  /* 警示橫幅底色 */
+
+  --color-danger:        #DC2626;  /* 錯誤 / 刪除 */
+  --color-danger-muted:  #FEE2E2;  /* 錯誤橫幅底色 */
+
+  --color-unpaid:        #DC2626;  /* 未收款數字，紅色促行動 */
+  --color-closed:        #9E8E86;  /* 已截止 / 靜態灰 */
+
+  /* ── 間距 ─────────────────────────────────────────────── */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-pill: 100px;
+  --space-8: 32px;
+
+  /* ── 圓角 ─────────────────────────────────────────────── */
+  --radius-sm:   8px;    /* 按鈕、輸入框 */
+  --radius-md:   14px;   /* 卡片（比 MaJong 12px 稍圓）*/
+  --radius-lg:   20px;   /* 統計摘要區塊 */
+  --radius-pill: 100px;  /* badge、pill 元件 */
 }
 
-* {
-  box-sizing: border-box;
+/* ── Dark Mode 預留（MVP 不啟用，token 已備妥）─────────── */
+[data-theme="dark"] {
+  --color-bg:             #1A1210;
+  --color-surface:        #251914;
+  --color-surface-tint:   #301E16;
+  --color-border:         #3D2D28;
+  --color-input-bg:       #1A1210;
+  --color-text:           #F5EDE8;
+  --color-text-secondary: #9E8070;
+  --color-text-disabled:  #5A4840;
+  /* --color-primary 等品牌色在 dark mode 下沿用，橙色在暗底效果良好 */
 }
+
+/* =========================================================================
+ * 元件級規範（更新數值，結構保留）
+ * ========================================================================= */
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
@@ -47,7 +84,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 金額 / 數量一律等寬數字。 */
+/* 金額 / 數量一律等寬數字 */
 .tabular {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
@@ -60,7 +97,7 @@ body {
   min-height: 100vh;
 }
 
-/* ---- 頁首 ---- */
+/* ── 頁首 ── */
 .page-header {
   display: flex;
   align-items: center;
@@ -69,96 +106,137 @@ body {
 }
 .page-header h1 {
   font-size: 20px;
+  font-weight: 700;
   margin: 0;
   flex: 1;
+  color: var(--color-text);
 }
 
-/* ---- 通用文字 ---- */
-.muted {
-  color: var(--color-text-secondary);
-}
-.empty {
+/* ── 通用文字 ── */
+.muted  { color: var(--color-text-secondary); }
+.empty  {
   color: var(--color-text-secondary);
   text-align: center;
   padding: var(--space-6) var(--space-4);
 }
 
-/* ---- 卡片 ---- */
+/* ── 卡片 ── */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md);  /* 14px，比 MaJong 稍圓 */
   padding: var(--space-4);
   margin-bottom: var(--space-3);
+  /* 左側狀態條：透過 border-left override 實現 */
 }
+.card.status-open   { border-left: 3px solid var(--color-primary); }
+.card.status-closed { border-left: 3px solid var(--color-closed); opacity: 0.85; }
+.card.status-settled{ border-left: 3px solid var(--color-success); }
+
 .card-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
 }
-.card-row > .grow {
-  flex: 1;
-  min-width: 0;
-}
+.card-row > .grow { flex: 1; min-width: 0; }
 .card h2,
 .card h3 {
   margin: 0 0 var(--space-2);
   font-size: 16px;
+  font-weight: 600;
 }
 
-/* ---- 狀態徽章 ---- */
+/* ── 統計摘要區（後台三個大數字）── */
+.summary-block {
+  background: var(--color-surface-tint);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-6);
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.summary-stat {
+  flex: 1;
+  text-align: center;
+}
+.summary-stat .stat-number {
+  display: block;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  line-height: 1.1;
+  color: var(--color-text);
+}
+.summary-stat .stat-number.is-amount { color: var(--color-amount-strong); }
+.summary-stat .stat-number.is-unpaid { color: var(--color-unpaid); }
+.summary-stat .stat-number.is-clear  { color: var(--color-success); }
+.summary-stat .stat-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* ── 狀態徽章 ── */
 .badge {
   display: inline-block;
   font-size: 12px;
+  font-weight: 500;
   padding: 2px var(--space-2);
   border-radius: var(--radius-pill);
   border: 1px solid var(--color-border);
-}
-.badge.open {
-  color: var(--color-win);
-  border-color: var(--color-win);
-}
-.badge.closed {
   color: var(--color-text-secondary);
 }
+.badge.open    { color: var(--color-primary);  border-color: var(--color-primary); }
+.badge.closed  { color: var(--color-closed);   border-color: var(--color-closed); }
+.badge.settled { color: var(--color-success);  border-color: var(--color-success); }
+.badge.warn    { color: var(--color-warn);     border-color: var(--color-warn); background: var(--color-warn-muted); }
 
-/* ---- 按鈕 ---- */
-button {
-  font-family: inherit;
-  font-size: 15px;
-  cursor: pointer;
-}
+/* ── 按鈕 ── */
+button { font-family: inherit; font-size: 15px; cursor: pointer; }
+
 .btn {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-text);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-4);
+  transition: background 0.15s, border-color 0.15s;
 }
 .btn.primary {
   background: var(--color-primary);
   border-color: var(--color-primary-dark);
-  color: #fff;
+  color: var(--color-text-inverse);
+}
+.btn.primary:hover { background: var(--color-primary-dark); }
+
+.btn.success {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: var(--color-text-inverse);
 }
 .btn.danger {
-  color: var(--color-lose);
-  border-color: var(--color-lose);
+  color: var(--color-danger);
+  border-color: var(--color-danger);
   background: transparent;
 }
+.btn.ghost-primary {
+  /* 「新增商品」用的虛線邀請按鈕 */
+  border: 1.5px dashed var(--color-primary);
+  color: var(--color-primary);
+  background: transparent;
+}
+.btn.ghost-primary:hover { background: var(--color-primary-muted); }
+
 .btn.block {
   display: block;
   width: 100%;
   padding: var(--space-3);
   text-align: center;
 }
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.small {
-  font-size: 13px;
-  padding: var(--space-1) var(--space-3);
-}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.small    { font-size: 13px; padding: var(--space-1) var(--space-3); }
+
 .link {
   background: none;
   border: none;
@@ -169,56 +247,62 @@ button {
 .back {
   background: none;
   border: none;
-  color: var(--color-text);
+  color: var(--color-text-secondary);
   font-size: 20px;
   line-height: 1;
   padding: var(--space-1);
 }
 
-/* ---- 表單 ---- */
-.field {
-  margin-bottom: var(--space-4);
-}
+/* ── 表單 ── */
+.field { margin-bottom: var(--space-4); }
 .field label {
   display: block;
   font-size: 13px;
   color: var(--color-text-secondary);
   margin-bottom: var(--space-1);
 }
+
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+textarea {
   width: 100%;
   font-family: inherit;
   font-size: 16px;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-bg);
+  background: var(--color-input-bg);
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
+  transition: border-color 0.15s;
 }
-input:focus {
+input:focus, textarea:focus {
   outline: none;
   border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-muted);
 }
 
-/* 商品 / 品項列：名稱 + 數字 + 移除 */
+/* section 小標（表單區塊標題）*/
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: var(--space-6) 0 var(--space-2);
+}
+
+/* 商品 / 品項列 */
 .line {
   display: flex;
   gap: var(--space-2);
   align-items: center;
   margin-bottom: var(--space-2);
 }
-.line .name {
-  flex: 1;
-  min-width: 0;
-}
+.line .name  { flex: 1; min-width: 0; }
 .line .price,
-.line .qty {
-  width: 88px;
-  flex: none;
-}
+.line .qty   { width: 88px; flex: none; }
 
-/* 數量步進器 */
+/* ── 數量步進器 ── */
 .stepper {
   display: flex;
   align-items: center;
@@ -227,18 +311,53 @@ input:focus {
 .stepper button {
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);  /* 圓形按鈕 */
+  border: 1.5px solid var(--color-primary);
   background: var(--color-surface);
-  color: var(--color-text);
+  color: var(--color-primary);
   font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background 0.1s, color 0.1s;
+}
+.stepper button.increment {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+.stepper button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 .stepper input {
   width: 56px;
   text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ---- 統計表 ---- */
+/* 商品選卡（填單頁，qty 改變時切換樣式）*/
+.product-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+.product-card.selected {
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-primary-muted);
+}
+.product-card .product-price {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+.product-card.selected .product-price {
+  color: var(--color-amount);
+  font-weight: 600;
+}
+
+/* ── 統計表 ── */
 .stat-table {
   width: 100%;
   border-collapse: collapse;
@@ -248,16 +367,65 @@ input:focus {
   text-align: left;
   padding: var(--space-2);
   border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+}
+.stat-table th {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
 }
 .stat-table td.num,
 .stat-table th.num {
   text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
+.stat-table td.amount { color: var(--color-amount); font-weight: 600; }
+
 .stat-table tfoot td {
   font-weight: 700;
+  font-size: 15px;
+  border-top: 2px solid var(--color-border);
   border-bottom: none;
 }
+.stat-table tfoot td.amount { color: var(--color-amount-strong); }
 
+/* 各人應付清單（收款狀態）*/
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.member-row .member-name { flex: 1; }
+.member-row .member-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-amount);
+}
+.member-row.is-paid .member-name   { color: var(--color-text-secondary); }
+.member-row.is-paid .member-amount { color: var(--color-text-disabled); text-decoration: line-through; }
+
+/* ── 打勾爽感動畫（收款打勾功能下一輪接上時直接用）── */
+.check-pop {
+  animation: checkPop 300ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.row-flash {
+  animation: rowFlash 500ms ease-out both;
+}
+
+@keyframes checkPop {
+  0%   { transform: scale(0); opacity: 0; }
+  60%  { transform: scale(1.2); }
+  100% { transform: scale(1.0); opacity: 1; }
+}
+@keyframes rowFlash {
+  0%   { background-color: var(--color-success-muted); }
+  100% { background-color: transparent; }
+}
+
+/* ── 總計列 ── */
 .total-line {
   display: flex;
   justify-content: space-between;
@@ -267,28 +435,46 @@ input:focus {
 }
 .total-line .amount {
   font-weight: 700;
-  color: var(--color-gold);
+  color: var(--color-amount-strong);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
-/* ---- 橫幅 ---- */
+/* ── 橫幅 ── */
 .banner {
   border-radius: var(--radius-sm);
   padding: var(--space-3);
   margin-bottom: var(--space-3);
   font-size: 14px;
+  border: 1px solid transparent;
 }
 .banner.error {
-  background: rgba(232, 72, 72, 0.12);
-  color: var(--color-lose);
+  background: var(--color-danger-muted);
+  color: var(--color-danger);
+  border-color: var(--color-danger);
 }
 .banner.warn {
-  background: rgba(212, 160, 48, 0.12);
+  background: var(--color-warn-muted);
   color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+.banner.success {
+  background: var(--color-success-muted);
+  color: var(--color-success);
+  border-color: var(--color-success);
 }
 
-/* 區塊小標 */
-.section-title {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: var(--space-6) 0 var(--space-2);
+/* =========================================================================
+ * 尊重 prefers-reduced-motion：使用者若在系統開啟「減少動態效果」，
+ * 一律關閉打勾 pop / 列閃光與各元件過渡，避免造成不適（規範第 2、3-6 節要求）。
+ * ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

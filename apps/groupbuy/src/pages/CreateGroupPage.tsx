@@ -113,7 +113,7 @@ export function CreateGroupPage() {
         </div>
       ))}
 
-      <button className="btn block" onClick={addRow} style={{ marginTop: 8 }}>
+      <button className="btn ghost-primary block" onClick={addRow} style={{ marginTop: 8 }}>
         ＋ 新增商品
       </button>
 
