@@ -5,7 +5,9 @@
 
 import type { Player, Round, Session, SessionRules, Settings } from '../types';
 import { DEFAULT_SESSION_RULES } from '../types';
+import type { DealerContext } from './scoring';
 import { calcDong, calcUnitAmount, effectiveTai, scoreRound } from './scoring';
+import { deriveDealerContexts } from './dealer';
 
 /** 讀取 session 的規則；舊資料無 rules 欄位時回 DEFAULT_SESSION_RULES（全 0，行為不變）。 */
 export function rulesOf(session: Pick<Session, 'rules'>): SessionRules {
@@ -35,6 +37,7 @@ export function buildCumulativeTimeline(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtxs?: readonly (DealerContext | undefined)[],
 ): TimelinePoint[] {
   const zero = (): Record<string, number> => {
     const r: Record<string, number> = {};
@@ -49,7 +52,7 @@ export function buildCumulativeTimeline(
     let delta: Record<string, number>;
     let dong = 0;
     try {
-      delta = scoreRound(round, players, settings, rules);
+      delta = scoreRound(round, players, settings, rules, dealerCtxs?.[i]);
       // 走勢圖以「淨額」呈現：自摸者付出的東錢算進他自己的曲線（單向流出，不分給他人）。
       dong = calcDong(round, rules);
     } catch (err) {
@@ -116,6 +119,7 @@ export function calcSessionHighlights(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtxs?: readonly (DealerContext | undefined)[],
 ): SessionHighlights {
   const nameOf = (id: string | null) => players.find((p) => p.id === id)?.name ?? '—';
 
@@ -136,9 +140,13 @@ export function calcSessionHighlights(
   let kitty = 0;
   let taiSum = 0;
   let unitAmountSum = 0;
+  // v2.3：流局不計入「平均每局」分母（無底台事件），與胡牌率分母定義一致。
+  let scoredCount = 0;
 
-  for (const r of rounds) {
-    if (!perPlayer[r.winnerId]) continue; // 防呆：winner 不在玩家清單
+  rounds.forEach((r, i) => {
+    // v2.3：流局（winnerId=''）不計胡/放槍/平均，直接跳過（自然不動 perPlayer / 分母）。
+    if (r.drawn || !perPlayer[r.winnerId]) return; // 防呆：流局 / winner 不在玩家清單
+    scoredCount += 1;
     perPlayer[r.winnerId].wins += 1;
     if (r.selfDraw) {
       perPlayer[r.winnerId].selfDraws += 1;
@@ -150,13 +158,19 @@ export function calcSessionHighlights(
       gunLoss[r.loserId] += calcUnitAmount(settings, effectiveTai(r, rules));
     }
 
-    // 含自摸加台的有效台數 / 單注金額（供「最大/最快一局」與匯率換算）。
+    // 含自摸加台的有效台數 / 單注金額（供匯率換算；平均台數刻意不含連莊加台）。
     const eTai = effectiveTai(r, rules);
     const amount = calcUnitAmount(settings, eTai);
     taiSum += eTai;
     unitAmountSum += amount;
 
-    const won = r.selfDraw ? amount * (players.length - 1) : amount;
+    // 「最慘烈 / 最快一局」以贏家實收（含連莊加台）判定，用 scoreRound 的贏家 delta 才精準。
+    let won = r.selfDraw ? amount * (players.length - 1) : amount;
+    try {
+      won = scoreRound(r, players, settings, rules, dealerCtxs?.[i])[r.winnerId] ?? won;
+    } catch {
+      // 非法局：退回不含連莊加台的估值
+    }
     if (won > biggestAmount) {
       biggestAmount = won;
       biggestWinnerId = r.winnerId;
@@ -165,7 +179,7 @@ export function calcSessionHighlights(
       smallestAmount = won;
       smallestWinnerId = r.winnerId;
     }
-  }
+  });
 
   const highlights: Highlight[] = [];
 
@@ -175,15 +189,15 @@ export function calcSessionHighlights(
     let champVal = -Infinity;
     for (const p of players) {
       let total = 0;
-      for (const r of rounds) {
+      rounds.forEach((r, i) => {
         try {
-          total += scoreRound(r, players, settings, rules)[p.id] ?? 0;
+          total += scoreRound(r, players, settings, rules, dealerCtxs?.[i])[p.id] ?? 0;
           // 公基金為自摸者單向流出，冠軍以「淨額」判定才公允。
           if (r.selfDraw && r.winnerId === p.id) total -= calcDong(r, rules);
         } catch {
           // 非法局略過
         }
-      }
+      });
       if (total > champVal) {
         champVal = total;
         champId = p.id;
@@ -269,8 +283,9 @@ export function calcSessionHighlights(
     }
   }
 
-  const avgRoundAmount = rounds.length > 0 ? Math.round(unitAmountSum / rounds.length) : 0;
-  const avgTai = rounds.length > 0 ? taiSum / rounds.length : 0;
+  // v2.3：平均分母改用 scoredCount（排除流局），避免流局稀釋每局平均底台 / 台數。
+  const avgRoundAmount = scoredCount > 0 ? Math.round(unitAmountSum / scoredCount) : 0;
+  const avgTai = scoredCount > 0 ? taiSum / scoredCount : 0;
 
   return { highlights, perPlayer, kitty, avgRoundAmount, avgTai };
 }
@@ -379,43 +394,48 @@ function aggregateBy(
     if (matched.length === 0) continue;
 
     const rules = rulesOf(s);
+    // v2.3：連莊加台需知每局莊家 / 連莊數——由 deriveTableState 推導（舊場 / 未啟用回空陣列，零回歸）。
+    const dealerCtxs = deriveDealerContexts(s);
+    // v2.3：流局（drawn）不是一場可胡 / 可放槍的局，一律排除在「率值分母」與「同場局數」之外。
+    const scoredCount = s.rounds.filter((r) => !r.drawn).length;
     // 冤家榜輔助：本場「自己座位」id 集合、座位 id → Player 查表。
     const selfIds = new Set(matched.map((p) => p.id));
     const seatById = new Map(s.players.map((p) => [p.id, p]));
-    // 同場局數：每個非自己座位都與自己同桌了本場所有局。多座位同名對手的極端情形
+    // 同場局數：每個非自己座位都與自己同桌了本場所有（非流局）局。多座位同名對手的極端情形
     // 會各自累計（與 totalRounds 的多座位加總語意一致），常態每人一座位不受影響。
     for (const p of s.players) {
       if (selfIds.has(p.id)) continue;
-      touchEnemy(p).coPlayedRounds += s.rounds.length;
+      touchEnemy(p).coPlayedRounds += scoredCount;
     }
-    // 分母：本場總局數 × 符合座位數。乘座位數與 totalWins/totalGunned 的多座位加總一致，
-    // 每場僅一個符合座位（常態）時等同 s.rounds.length。
-    totalRounds += s.rounds.length * matched.length;
+    // 分母：本場非流局局數 × 符合座位數。乘座位數與 totalWins/totalGunned 的多座位加總一致，
+    // 每場僅一個符合座位（常態）時等同 scoredCount。流局不計入胡牌率 / 放槍率分母。
+    totalRounds += scoredCount * matched.length;
     let amount = 0;
-    for (const r of s.rounds) {
+    s.rounds.forEach((r, ri) => {
+      const dctx = dealerCtxs[ri];
+      // 每局只算一次計分（含連莊加台），供淨額 / 最高收益共用。
+      let delta: Record<string, number> | null = null;
+      try {
+        delta = scoreRound(r, s.players, s.settings, rules, dctx);
+      } catch {
+        delta = null; // 非法局略過
+      }
       // 同場所有符合座位都要加總；每場僅一個符合座位時等同舊版單一座位行為。
       for (const player of matched) {
-        try {
-          amount += scoreRound(r, s.players, s.settings, rules)[player.id] ?? 0;
+        if (delta) {
+          amount += delta[player.id] ?? 0;
           // 自己自摸付的東錢是淨流出，從淨額扣除。
           if (r.selfDraw && r.winnerId === player.id) amount -= calcDong(r, rules);
-        } catch {
-          // 非法局略過
         }
+        // 流局 winnerId=''、loserId=null，天然不會命中任何座位（不計胡 / 放槍）。
         if (r.winnerId === player.id) {
           totalWins += 1;
           if (r.selfDraw) totalSelfDraws += 1;
-          // 平均台數分子用 r.tai（申報台數），不含自摸加台。
+          // 平均台數分子用 r.tai（申報台數），不含自摸 / 連莊加台。
           totalWinTai += r.tai;
-          // 跨場單局最高收益：自摸向其餘座位各收一注、放槍收單注。
-          try {
-            // 眼牌加台自摸/放槍都算，故單注一律用 effectiveTai（含眼牌與自摸加台）。
-            const unit = calcUnitAmount(s.settings, effectiveTai(r, rules));
-            const won = r.selfDraw ? unit * (s.players.length - 1) : unit;
-            if (won > bestRoundAmount) bestRoundAmount = won;
-          } catch {
-            // 非法局略過，不影響最高收益追蹤
-          }
+          // 跨場單局最高收益：直接取贏家的計分 delta（已含連莊 / 眼牌加台）。
+          const won = delta ? (delta[player.id] ?? 0) : 0;
+          if (won > bestRoundAmount) bestRoundAmount = won;
         }
         if (!r.selfDraw && r.loserId === player.id) {
           totalGunned += 1;
@@ -423,8 +443,8 @@ function aggregateBy(
       }
 
       // 冤家榜配對（每局最多一筆，故置於 matched 迴圈外、避免多座位重複計）：
-      // 放槍是「有輸家」的局，自摸不列入。
-      if (!r.selfDraw && r.loserId != null && r.winnerId != null) {
+      // 放槍是「有輸家」的局，自摸與流局（loserId=null）不列入。
+      if (!r.selfDraw && r.loserId != null && r.winnerId) {
         const iShot = selfIds.has(r.loserId) && !selfIds.has(r.winnerId);
         const iWon = selfIds.has(r.winnerId) && !selfIds.has(r.loserId);
         if (iShot) {
@@ -435,7 +455,7 @@ function aggregateBy(
           if (opp) touchEnemy(opp).shotByThem += 1;
         }
       }
-    }
+    });
 
     history.push({
       sessionId: s.id,

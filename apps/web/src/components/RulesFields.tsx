@@ -36,6 +36,7 @@ export function RulesFields({ rules, onChange }: Props) {
   const selfDrawOn = rules.selfDrawBonusTai > 0;
   const dongOn = rules.selfDrawDongAmount > 0;
   const eyeTileOn = rules.eyeTileEnabled;
+  const dealerOn = rules.dealerEnabled;
 
   return (
     <div className="rules-fields">
@@ -130,9 +131,34 @@ export function RulesFields({ rules, onChange }: Props) {
         </label>
       </div>
 
+      {/* 連莊 / 圈風（v2.3）：總開關；做莊 1 台、連 N 拉 N = 2N 台、只牽涉莊家的支付（CEO 拍板固定值）。 */}
+      <div className="rule-row">
+        <div className="rule-row-main">
+          <span className="rule-name">連莊 / 圈風</span>
+          <Toggle
+            on={dealerOn}
+            label="連莊系統開關"
+            onToggle={() =>
+              onChange({
+                ...rules,
+                dealerEnabled: !dealerOn,
+                // 開啟時把固定加台補回 CEO 拍板值（若先前為 0）。
+                dealerBaseTai: !dealerOn && rules.dealerBaseTai <= 0 ? 1 : rules.dealerBaseTai,
+                dealerStreakTaiPerStreak:
+                  !dealerOn && rules.dealerStreakTaiPerStreak <= 0
+                    ? 2
+                    : rules.dealerStreakTaiPerStreak,
+              })
+            }
+          />
+        </div>
+        <span className="rule-fixed-note">做莊 +1 台、連 N 拉 N +2N 台</span>
+      </div>
+
       <p className="setting-hint">
         自摸者額外付一筆東錢進「公基金」，獨立累計、不併入四人輸贏。
         眼牌則是記局時勾選、額外加台，自摸/放槍都算。
+        連莊開啟後，開桌需選首莊，莊家胡牌 / 流局則連莊，加台只影響與莊家的輸贏。
       </p>
     </div>
   );

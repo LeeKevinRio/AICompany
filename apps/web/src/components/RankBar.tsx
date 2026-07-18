@@ -7,6 +7,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Player, RosterPlayer, Round, SessionRules, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
+import type { DealerContext } from '../scoring/scoring';
+import type { TableState } from '../scoring/dealer';
 import { formatSigned } from '../scoring/timeline';
 import { resolvePlayerVisual } from './ui';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -20,6 +22,8 @@ interface Props {
   roster: RosterPlayer[];
   /** v2.1 建議做：單場輸贏警戒線（0=關閉）。淨額輸超過此值時該行紅色警示。 */
   loseAlertThreshold?: number;
+  /** v2.3：連莊推導結果。active 時頂部顯示圈風指示器、莊家列加 chip、計分套連莊加台。 */
+  tableState?: TableState;
 }
 
 interface Ranked {
@@ -90,11 +94,13 @@ function RankRow({
   arrow,
   flash,
   alert,
+  isDealer,
 }: {
   item: Ranked;
   arrow: 'up' | 'down' | 'same';
   flash: boolean;
   alert: boolean;
+  isDealer: boolean;
 }) {
   const shown = useRolling(item.amount);
   const tone = shown > 0 ? 'win' : shown < 0 ? 'lose' : 'zero';
@@ -116,6 +122,8 @@ function RankRow({
       <span className="rank-name">
         {alert && <span className="lose-alert-dot" aria-label="超過輸贏警戒線">⚠</span>}
         {item.player.name}
+        {/* v2.3：莊家綠描邊 chip（角色標記，非成就；名字後、金額前） */}
+        {isDealer && <span className="dealer-chip">莊</span>}
       </span>
       <span className={`rank-amt amt ${tone}`}>{formatSigned(shown)}</span>
       <span className="rank-meta">
@@ -133,12 +141,19 @@ export function RankBar({
   rules,
   roster,
   loseAlertThreshold = 0,
+  tableState,
 }: Props) {
+  // v2.3：連莊啟用時，取每局 dealerCtx 供計分套連莊加台；未啟用回 undefined（零回歸）。
+  const dealerCtxs: (DealerContext | undefined)[] | undefined = tableState?.active
+    ? tableState.perRound.map((pr) => ({ dealerId: pr.dealerId, streak: pr.streak }))
+    : undefined;
+  const dealer = tableState?.active ? tableState.current : null;
+
   // 排名以「淨額」呈現（含自摸付出的東錢），與結算一致。
   let totals: Record<string, number>;
   let kitty = 0;
   try {
-    const settled = settleSession(rounds, players, settings, rules);
+    const settled = settleSession(rounds, players, settings, rules, dealerCtxs);
     totals = settled.net;
     kitty = settled.kitty;
   } catch {
@@ -192,25 +207,42 @@ export function RankBar({
     prevRankRef.current = next;
   });
 
+  // v2.3：圈風指示器文字（東風南局），連莊時附「連N」。
+  const dealerName = dealer ? players.find((p) => p.id === dealer.dealerId)?.name ?? '—' : '';
+
   return (
-    <div className="rank-bar">
-      <div className="rank-rows">
-        {ranked.map((item) => (
-          <RankRow
-            key={item.player.id}
-            item={item}
-            arrow={arrows[item.player.id]}
-            flash={flashId === item.player.id}
-            alert={loseAlertThreshold > 0 && item.amount <= -loseAlertThreshold}
-          />
-        ))}
-      </div>
-      {kitty > 0 && (
-        <div className="rank-kitty">
-          <span>公基金</span>
-          <span className="tabular">${kitty.toLocaleString('en-US')}</span>
+    <div className="rank-bar-wrapper">
+      {dealer && (
+        <div className="wind-indicator">
+          <span className="wind-round-text">
+            {dealer.circleWind}風{dealer.roundWind}局
+          </span>
+          <span className="wind-sep">·</span>
+          <span className="dealer-chip">莊</span>
+          <span className="wind-dealer-name">{dealerName}</span>
+          {dealer.streak >= 1 && <span className="wind-streak">連{dealer.streak}</span>}
         </div>
       )}
+      <div className="rank-bar">
+        <div className="rank-rows">
+          {ranked.map((item) => (
+            <RankRow
+              key={item.player.id}
+              item={item}
+              arrow={arrows[item.player.id]}
+              flash={flashId === item.player.id}
+              alert={loseAlertThreshold > 0 && item.amount <= -loseAlertThreshold}
+              isDealer={!!dealer && dealer.dealerId === item.player.id}
+            />
+          ))}
+        </div>
+        {kitty > 0 && (
+          <div className="rank-kitty">
+            <span>公基金</span>
+            <span className="tabular">${kitty.toLocaleString('en-US')}</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -19,7 +19,13 @@
 // 疊加順序（effectiveTai）：round.tai → +自摸加台（僅自摸）→ +眼牌加台（自摸/放槍都算）。
 // 東錢是獨立的公基金流向，不進 effectiveTai。
 //
-// 莊家 / 連莊加台：MVP 不自動處理，使用者可自行把加台數加進 round.tai。
+// v2.3 連莊 / 圈風加台（批次 2，CEO 拍板：做莊 1 台、連 N 拉 N = 2N 台、只牽涉莊家的支付）：
+//   連莊加台 = dealerBaseTai + dealerStreakTaiPerStreak × streak（streak 由 deriveTableState 推導）。
+//   加台範圍 'dealer'：只在「牽涉莊家的支付（transfer）」加台，其餘 transfer 不加。
+//   故此處採「逐筆 transfer 計價」——每筆付款各自決定要不要加莊台，嚴格維持四人零和。
+//   scoreRound 未傳 dealerCtx（或 dealerEnabled 關）時連莊加台 = 0，行為與舊版 byte-for-byte 一致。
+//
+// 流局（drawn=true）：無人胡牌，四人金額全 0（零和天然成立）；莊家連莊由 deriveTableState 處理。
 //
 // 本檔不依賴 React / DOM，純資料進出，方便單元測試與未來原生 app 重用。
 
@@ -28,6 +34,16 @@ import { DEFAULT_SESSION_RULES } from '../types';
 
 /** 一局每位玩家的金額變化（player id -> +/- 金額） */
 export type RoundDelta = Record<string, number>;
+
+/**
+ * v2.3：單局的莊家上下文（由 deriveTableState 推導後傳入計分）。
+ * 只帶計分需要的最小資訊：這局莊家座位 id 與連莊數（streak，0=首坐莊）。
+ * 圈風 / 局風等顯示資訊不進計分，避免計分依賴顯示層。
+ */
+export interface DealerContext {
+  dealerId: string;
+  streak: number;
+}
 
 /**
  * 一局完整計分結果：
@@ -67,6 +83,17 @@ export function assertValidSettings(settings: Settings): void {
 export function assertValidRound(round: Round, players: Player[]): void {
   if (!Number.isFinite(round.tai) || !Number.isInteger(round.tai) || round.tai < 0) {
     throw new Error(`台數不合法（必須為非負整數）：${round.tai}`);
+  }
+
+  // v2.3：流局（drawn）——無贏家 / 放槍者，跳過贏家必填檢查（winnerId=''、loserId=null）。
+  if (round.drawn) {
+    if (round.winnerId !== '') {
+      throw new Error(`流局的 winnerId 必須為空字串，實際：${round.winnerId}`);
+    }
+    if (round.loserId !== null) {
+      throw new Error(`流局的 loserId 必須為 null，實際：${round.loserId}`);
+    }
+    return;
   }
 
   const playerIds = new Set(players.map((p) => p.id));
@@ -114,8 +141,34 @@ export function calcEyeTileTai(round: Round, rules: SessionRules): number {
 }
 
 /**
- * 有效台數：底/台計分實際採用的台數。
+ * v2.3：連莊加台（台數）——做莊台 + 連 N 拉 N。
+ *
+ * 回傳「牽涉莊家的支付」該額外加的台數：`dealerBaseTai + dealerStreakTaiPerStreak × streak`。
+ * dealerCtx 未傳、或 rules.dealerEnabled 關閉時回 0（零回歸）。任一係數非正整數以 0 計，防呆。
+ *
+ * 注意：此函式只回「該加幾台」，「哪些 transfer 該加」由 scoreRound 依 scope='dealer' 逐筆判定
+ *（自摸一定牽涉莊家、放槍看贏家/放槍者是否為莊），維持四人零和。
+ */
+export function calcDealerBonusTai(
+  rules: SessionRules,
+  dealerCtx?: DealerContext,
+): number {
+  if (!dealerCtx || !rules.dealerEnabled) return 0;
+  const base =
+    Number.isInteger(rules.dealerBaseTai) && rules.dealerBaseTai > 0 ? rules.dealerBaseTai : 0;
+  const per =
+    Number.isInteger(rules.dealerStreakTaiPerStreak) && rules.dealerStreakTaiPerStreak > 0
+      ? rules.dealerStreakTaiPerStreak
+      : 0;
+  const streak =
+    Number.isInteger(dealerCtx.streak) && dealerCtx.streak > 0 ? dealerCtx.streak : 0;
+  return base + per * streak;
+}
+
+/**
+ * 有效台數：底/台計分實際採用的台數（全桌適用，不含只牽涉莊家的連莊加台）。
  * 疊加順序：round.tai → +自摸加台（僅自摸）→ +眼牌加台（自摸/放槍都算）。
+ * 連莊加台（scope='dealer'）在 scoreRound 逐筆 transfer 疊加，不在此處。
  */
 export function effectiveTai(round: Round, rules: SessionRules): number {
   let tai = round.tai;
@@ -160,6 +213,7 @@ export function scoreRound(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtx?: DealerContext,
 ): RoundDelta {
   assertValidSettings(settings);
   assertValidRound(round, players);
@@ -167,21 +221,37 @@ export function scoreRound(
   const delta: RoundDelta = {};
   for (const p of players) delta[p.id] = 0;
 
-  const amount = calcUnitAmount(settings, effectiveTai(round, rules));
+  // v2.3：流局全 0（零和天然成立）。
+  if (round.drawn) return delta;
+
+  // 全桌適用台數（底/台/自摸加台/眼牌）。
+  const baseTai = effectiveTai(round, rules);
+  // 連莊加台（只牽涉莊家的支付才加）。scope='table' 時直接墊進全桌 baseTai。
+  const dealerBonus = calcDealerBonusTai(rules, dealerCtx);
+  const dealerId = dealerCtx?.dealerId;
+  const tableScope = rules.dealerTaiScope === 'table';
+
+  /** 單筆 transfer（付款者 → 贏家）的金額：依 scope 決定是否加莊台。 */
+  const transferAmount = (payerId: string): number => {
+    const involvesDealer =
+      dealerId !== undefined && (round.winnerId === dealerId || payerId === dealerId);
+    const bonus = dealerBonus > 0 && (tableScope || involvesDealer) ? dealerBonus : 0;
+    return calcUnitAmount(settings, baseTai + bonus);
+  };
 
   if (round.selfDraw) {
-    // 自摸：其他三家各付 amount，贏家收 (人數-1) × amount
+    // 自摸：其他三家各自付一筆給贏家（逐筆計價，維持零和）。
     for (const p of players) {
-      if (p.id === round.winnerId) {
-        delta[p.id] += amount * (players.length - 1);
-      } else {
-        delta[p.id] -= amount;
-      }
+      if (p.id === round.winnerId) continue;
+      const amt = transferAmount(p.id);
+      delta[round.winnerId] += amt;
+      delta[p.id] -= amt;
     }
   } else {
-    // 放槍：只有放槍者付，贏家收（loserId 已於 assertValidRound 保證合法）
-    delta[round.winnerId] += amount;
-    delta[round.loserId as string] -= amount;
+    // 放槍：只有放槍者付，贏家收（loserId 已於 assertValidRound 保證合法）。
+    const amt = transferAmount(round.loserId as string);
+    delta[round.winnerId] += amt;
+    delta[round.loserId as string] -= amt;
   }
 
   return delta;
@@ -196,8 +266,10 @@ export function scoreRoundOutcome(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtx?: DealerContext,
 ): RoundOutcome {
-  const deltas = scoreRound(round, players, settings, rules);
+  const deltas = scoreRound(round, players, settings, rules, dealerCtx);
+  // 流局非自摸 → calcDong 天然回 0，不需特別處理。
   const dong = calcDong(round, rules);
   return {
     deltas,
@@ -215,16 +287,17 @@ export function scoreSession(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtxs?: readonly (DealerContext | undefined)[],
 ): RoundDelta {
   const total: RoundDelta = {};
   for (const p of players) total[p.id] = 0;
 
-  for (const round of rounds) {
-    const delta = scoreRound(round, players, settings, rules);
+  rounds.forEach((round, i) => {
+    const delta = scoreRound(round, players, settings, rules, dealerCtxs?.[i]);
     for (const p of players) {
       total[p.id] += delta[p.id] ?? 0;
     }
-  }
+  });
 
   return total;
 }
@@ -250,6 +323,7 @@ export function settleSession(
   players: Player[],
   settings: Settings,
   rules: SessionRules = DEFAULT_SESSION_RULES,
+  dealerCtxs?: readonly (DealerContext | undefined)[],
 ): SessionSettlement {
   const zeroSum: RoundDelta = {};
   const net: RoundDelta = {};
@@ -259,8 +333,14 @@ export function settleSession(
   }
   let kitty = 0;
 
-  for (const round of rounds) {
-    const { deltas, dong, dongPayerId } = scoreRoundOutcome(round, players, settings, rules);
+  rounds.forEach((round, i) => {
+    const { deltas, dong, dongPayerId } = scoreRoundOutcome(
+      round,
+      players,
+      settings,
+      rules,
+      dealerCtxs?.[i],
+    );
     for (const p of players) {
       const d = deltas[p.id] ?? 0;
       zeroSum[p.id] += d;
@@ -270,7 +350,7 @@ export function settleSession(
       net[dongPayerId] -= dong;
       kitty += dong;
     }
-  }
+  });
 
   return { net, zeroSum, kitty };
 }

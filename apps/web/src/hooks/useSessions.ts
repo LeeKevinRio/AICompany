@@ -74,6 +74,7 @@ function createSession(
   players?: NewSessionPlayer[],
   rules?: SessionRules,
   settings?: Settings,
+  dealerStartSeat?: string,
 ): Session {
   const sessionPlayers: Player[] = DEFAULT_PLAYERS.map((p, i) => {
     const incoming = players?.[i];
@@ -84,14 +85,23 @@ function createSession(
       rosterId: incoming?.rosterId,
     };
   });
+  const effectiveRules = rules ?? { ...global.defaultRules };
+  // v2.3：只有連莊啟用（dealerEnabled）且有指定首莊座位時才寫入 dealerStartSeat；
+  // 否則留 undefined → 連莊功能靜默不啟用（與舊場一致）。
+  const seatIds = new Set(sessionPlayers.map((p) => p.id));
+  const startSeat =
+    effectiveRules.dealerEnabled && dealerStartSeat && seatIds.has(dealerStartSeat)
+      ? dealerStartSeat
+      : undefined;
   return {
     id: genId('s'),
     name: name.trim() || `${new Date().toLocaleDateString('zh-TW')} 場`,
     players: sessionPlayers,
     settings: settings ?? { base: global.defaultBase, tai: global.defaultTai },
-    rules: rules ?? { ...global.defaultRules },
+    rules: effectiveRules,
     rounds: [],
     createdAt: Date.now(),
+    ...(startSeat ? { dealerStartSeat: startSeat } : {}),
   };
 }
 
@@ -175,8 +185,9 @@ export function useSessions() {
       players?: NewSessionPlayer[],
       rules?: SessionRules,
       settings?: Settings,
+      dealerStartSeat?: string,
     ): string => {
-      const s = createSession(name, globalSettings, players, rules, settings);
+      const s = createSession(name, globalSettings, players, rules, settings, dealerStartSeat);
       setSessions((prev) => [s, ...prev]);
       return s.id;
     },

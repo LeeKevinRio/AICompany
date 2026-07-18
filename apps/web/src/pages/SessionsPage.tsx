@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import type { NewSessionPlayer } from '../hooks/useSessions';
 import { settleSession } from '../scoring/scoring';
+import { deriveDealerContexts } from '../scoring/dealer';
 import type { RosterPlayer, Session, SessionRules, Settings } from '../types';
 import { Amount } from '../components/ui';
 import { PlayerAvatar } from '../components/PlayerAvatar';
@@ -34,6 +35,8 @@ interface SessionPrefill {
   rules: SessionRules;
   base: number;
   tai: number;
+  /** v2.3：帶入原場首莊座位（連莊啟用時）；無則 undefined，開 sheet 後預設回 p1。 */
+  dealerStartSeat?: string;
 }
 
 export function SessionsPage() {
@@ -53,6 +56,7 @@ export function SessionsPage() {
       rules: { ...s.rules },
       base: s.settings.base,
       tai: s.settings.tai,
+      dealerStartSeat: s.dealerStartSeat,
     });
     setSheetOpen(true);
   }
@@ -121,8 +125,8 @@ export function SessionsPage() {
           setSheetOpen(false);
           setPrefill(null);
         }}
-        onCreate={(name, players, rules, settings) => {
-          const id = addSession(name, players, rules, settings);
+        onCreate={(name, players, rules, settings, dealerStartSeat) => {
+          const id = addSession(name, players, rules, settings, dealerStartSeat);
           setSheetOpen(false);
           setPrefill(null);
           navigate(`/sessions/${id}`);
@@ -148,7 +152,13 @@ function SessionCard({
   // 卡片預覽顯示淨額（含東錢），與牌局詳情結算一致。
   let totals: Record<string, number>;
   try {
-    totals = settleSession(session.rounds, session.players, session.settings, session.rules).net;
+    totals = settleSession(
+      session.rounds,
+      session.players,
+      session.settings,
+      session.rules,
+      deriveDealerContexts(session),
+    ).net;
   } catch {
     totals = {};
     for (const p of session.players) totals[p.id] = 0;
@@ -223,6 +233,7 @@ function NewSessionSheet({
     players: NewSessionPlayer[],
     rules: SessionRules,
     settings: Settings,
+    dealerStartSeat?: string,
   ) => void;
 }) {
   const [name, setName] = useState('');
@@ -237,6 +248,8 @@ function NewSessionSheet({
   // #1：底/台改為開局時設定（預設帶入全域 defaultBase/defaultTai）。
   const [base, setBase] = useState(defaultBase);
   const [tai, setTai] = useState(defaultTai);
+  // v2.3：首莊座位（連莊啟用時才用；預設東家 p1）。座位 id 固定 p1~p4。
+  const [dealerStartSeat, setDealerStartSeat] = useState('p1');
 
   // 這個 sheet 關閉後仍保持 mounted，useState 初值只在首次 mount 生效；
   // 若不重設，使用者先到設定頁改了全域預設、再回來開新局，會帶到過期舊值。
@@ -253,12 +266,14 @@ function NewSessionSheet({
         setRules({ ...prefill.rules });
         setBase(prefill.base);
         setTai(prefill.tai);
+        setDealerStartSeat(prefill.dealerStartSeat ?? 'p1');
       } else {
         setName('');
         setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
         setRules(defaultRules);
         setBase(defaultBase);
         setTai(defaultTai);
+        setDealerStartSeat('p1');
       }
     }
     wasOpen.current = open;
@@ -290,12 +305,20 @@ function NewSessionSheet({
   }
 
   function handleCreate() {
-    onCreate(name.trim() || defaultName, seats, rules, { base, tai });
+    onCreate(
+      name.trim() || defaultName,
+      seats,
+      rules,
+      { base, tai },
+      // 連莊啟用時才帶首莊座位；關閉時傳 undefined（不啟用連莊）。
+      rules.dealerEnabled ? dealerStartSeat : undefined,
+    );
     setName('');
     setSeats([{ name: '' }, { name: '' }, { name: '' }, { name: '' }]);
     setRules(defaultRules);
     setBase(defaultBase);
     setTai(defaultTai);
+    setDealerStartSeat('p1');
   }
 
   return (
@@ -433,6 +456,31 @@ function NewSessionSheet({
 
       <h3 className="rules-heading">規則設定</h3>
       <RulesFields rules={rules} onChange={setRules} />
+
+      {/* v2.3：連莊啟用時選首莊（2×2 座位格，與快速記局選贏家同心智模型）。Toggle 關閉不渲染。 */}
+      {rules.dealerEnabled && (
+        <div className="open-dealer-section">
+          <div className="open-dealer-label">首莊（誰先坐莊）</div>
+          <div className="open-dealer-grid">
+            {seats.map((seat, i) => {
+              const seatId = `p${i + 1}`;
+              const selected = dealerStartSeat === seatId;
+              return (
+                <button
+                  key={seatId}
+                  type="button"
+                  className={`open-dealer-btn${selected ? ' selected' : ''}`}
+                  aria-pressed={selected}
+                  onClick={() => setDealerStartSeat(seatId)}
+                >
+                  {seat.name.trim() || `玩家 ${i + 1}`}
+                  {selected && <span className="dealer-chip">莊</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <button className="primary" style={{ marginTop: 16 }} onClick={handleCreate}>
         建立牌局

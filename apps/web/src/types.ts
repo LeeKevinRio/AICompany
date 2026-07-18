@@ -32,7 +32,12 @@ export interface Settings {
 /** 一局紀錄 */
 export interface Round {
   id: string;
-  winnerId: string; // 贏家 player id
+  /**
+   * 贏家 player id。
+   * 批次 2 起：流局（drawn=true）時為空字串 ''（此局無贏家）——用 drawn 當判別式，
+   * 見下方 drawn 欄位。非流局局一律為合法 player id（p1~p4）。
+   */
+  winnerId: string;
   tai: number; // 台數（預留：莊家/連莊加台未來也疊在這欄）
   selfDraw: boolean; // true=自摸；false=胡牌(放槍)
   loserId: string | null; // 放槍者 id；自摸時為 null
@@ -45,6 +50,13 @@ export interface Round {
    * 只有在該場 rules.eyeTileEnabled 時才會生效並顯示勾選。
    */
   eyeTile?: boolean;
+  /**
+   * v2.3（牌桌規則補完 批次 2）：流局判別式。
+   * true = 這局流局（無人胡牌，莊家連莊、四人金額全 0）。採「方案 A」：
+   * 流局時 winnerId=''、loserId=null、tai 無意義；drawn 為 discriminant。
+   * 舊資料無此欄位 → undefined，視為「非流局」（正常胡牌局），歷史分數不變。
+   */
+  drawn?: boolean;
 }
 
 /**
@@ -70,6 +82,28 @@ export interface SessionRules {
    * 舊場 migration = 0（中性值，不動歷史分數）。
    */
   eyeTileTai: number;
+  /**
+   * v2.3（批次 2）：連莊 / 圈風系統總開關（舊場 migration = false）。
+   * 開啟且該場有 dealerStartSeat 時，才推導圈風 / 莊家 / 連莊並套用連莊加台。
+   * 舊場無 dealerStartSeat → 即使 enabled 也靜默不啟用（見 deriveTableState）。
+   */
+  dealerEnabled: boolean;
+  /**
+   * v2.3：做莊台——莊家當莊那局，牽涉莊家的支付額外加的固定台數。
+   * CEO 拍板 = 1 台（首坐莊 streak=0 時就加）。舊場 migration = 0。
+   */
+  dealerBaseTai: number;
+  /**
+   * v2.3：連 N 拉 N 的每連加台係數。CEO 拍板「連 N 拉 N = 2N 台」→ 係數 = 2。
+   * 連莊加台 = dealerBaseTai + dealerStreakTaiPerStreak × streak
+   *（streak=0 首坐莊只加做莊台；streak=1 連1 加 1+2×1=3 台…）。舊場 migration = 0。
+   */
+  dealerStreakTaiPerStreak: number;
+  /**
+   * v2.3：連莊加台範圍。CEO 拍板 = 'dealer'（只牽涉莊家的支付才加台）。
+   * 'table' 保留給「全桌都墊高」的玩法，本版 UI 不開放切換、預設 'dealer'。
+   */
+  dealerTaiScope: 'table' | 'dealer';
 }
 
 /** 一場牌局 */
@@ -84,6 +118,13 @@ export interface Session {
   createdAt: number;
   /** v2：結算時間戳（按下「結算本場」才有；未結算為 undefined） */
   endedAt?: number;
+  /**
+   * v2.3（批次 2）：第一個莊家的座位 id（開桌時手選，如 'p1'）。
+   * 舊場無此欄位 → undefined，連莊功能整體靜默不啟用（不推導圈風、不加台、不動歷史）。
+   * 唯一真相來源只存「首莊座位」，其餘（當前莊家 / 圈風 / 連莊數）一律由
+   * deriveTableState 對 rounds fold 推導，不 denormalize 進 Round，避免刪局後 desync。
+   */
+  dealerStartSeat?: string;
 }
 
 /**
@@ -124,6 +165,11 @@ export const DEFAULT_NEW_SESSION_RULES: SessionRules = {
   // v2.2：眼牌 CEO 拍板預設開、加 1 台（自摸/放槍都算）。
   eyeTileEnabled: true,
   eyeTileTai: 1,
+  // v2.3：連莊 CEO 拍板——新桌預設開、做莊 1 台、連 N 拉 N = 2N 台、只牽涉莊家的支付。
+  dealerEnabled: true,
+  dealerBaseTai: 1,
+  dealerStreakTaiPerStreak: 2,
+  dealerTaiScope: 'dealer',
 };
 
 /**
@@ -136,6 +182,11 @@ export const DEFAULT_SESSION_RULES: SessionRules = {
   // v2.2：舊場眼牌一律關、加台 0 → 歷史分數一字不變。
   eyeTileEnabled: false,
   eyeTileTai: 0,
+  // v2.3：舊場連莊一律關、加台 0 → 歷史分數一字不變（且舊場本就無 dealerStartSeat）。
+  dealerEnabled: false,
+  dealerBaseTai: 0,
+  dealerStreakTaiPerStreak: 0,
+  dealerTaiScope: 'dealer',
 };
 
 /** v2：預設全域設定 */

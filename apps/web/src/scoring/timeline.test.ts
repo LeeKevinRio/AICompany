@@ -14,6 +14,7 @@ import {
 import type { EnemyEntry } from './timeline';
 import type { Player, Round, Session, SessionRules, Settings } from '../types';
 import { DEFAULT_SESSION_RULES } from '../types';
+import { deriveDealerContexts } from './dealer';
 
 const players: Player[] = [
   { id: 'p1', name: 'A' },
@@ -325,7 +326,7 @@ describe('aggregateBy 數據系統 Phase 1 新欄位（totalRounds / totalWinTai
 
   it('totalWinTai 累加胡牌局的 r.tai（不含自摸加台）', () => {
     // 自摸加台開 2 台，驗證 totalWinTai 用 r.tai（3 + 2）而非 effectiveTai（含 bonus）。
-    const bonusRules: SessionRules = { selfDrawBonusTai: 2, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0 };
+    const bonusRules: SessionRules = { selfDrawBonusTai: 2, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0, dealerEnabled: false, dealerBaseTai: 0, dealerStreakTaiPerStreak: 0, dealerTaiScope: 'dealer' };
     const session = makeSession({
       rules: bonusRules,
       rounds: [
@@ -622,5 +623,96 @@ describe('aggregateBy 冤家榜（enemyBoard 放槍配對）', () => {
     const b = stats.enemyBoard.find((e) => e.name === 'B');
     // 同場局數 = 2 + 1 = 3；我放槍給 B（r2）1 次；B 放槍給我（r1、r3）2 次。
     expect(b).toMatchObject({ coPlayedRounds: 3, shotByMe: 1, shotByThem: 2 });
+  });
+});
+
+// v2.3 批次 2：流局排除率值分母 + 連莊金額歸戶
+describe('v2.3 — 流局 / 連莊對統計的影響', () => {
+  const dealerOnlyRules: SessionRules = {
+    selfDrawBonusTai: 0, selfDrawDongAmount: 0, eyeTileEnabled: false, eyeTileTai: 0,
+    dealerEnabled: true, dealerBaseTai: 1, dealerStreakTaiPerStreak: 2, dealerTaiScope: 'dealer',
+  };
+
+  function makeSession(partial: Partial<Session>): Session {
+    return {
+      id: 's1',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+      ...partial,
+    };
+  }
+
+  it('流局不計胡牌率 / 放槍率分母（totalRounds），也不計 wins / gunned', () => {
+    const sessions: Session[] = [
+      makeSession({
+        rounds: [
+          makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', selfDraw: false }),
+          { id: 'r2', winnerId: '', loserId: null, tai: 0, selfDraw: false, createdAt: 0, drawn: true },
+          makeRound({ id: 'r3', winnerId: 'p1', loserId: 'p2', selfDraw: false }),
+          makeRound({ id: 'r4', winnerId: 'p2', loserId: 'p1', selfDraw: false }),
+        ],
+      }),
+    ];
+    const stats = aggregatePlayerStats(sessions, 'A'); // A = p1
+    // 4 局但流局 1 局 → 分母 3
+    expect(stats.totalRounds).toBe(3);
+    expect(stats.totalWins).toBe(2); // r1、r3
+    expect(stats.totalGunned).toBe(1); // r4 放槍
+  });
+
+  it('全流局場：totalRounds=0、無 wins/gunned、金額 0', () => {
+    const sessions: Session[] = [
+      makeSession({
+        rounds: [
+          { id: 'r1', winnerId: '', loserId: null, tai: 0, selfDraw: false, createdAt: 0, drawn: true },
+          { id: 'r2', winnerId: '', loserId: null, tai: 0, selfDraw: false, createdAt: 0, drawn: true },
+        ],
+      }),
+    ];
+    const stats = aggregatePlayerStats(sessions, 'A');
+    expect(stats.totalRounds).toBe(0);
+    expect(stats.totalWins).toBe(0);
+    expect(stats.totalGunned).toBe(0);
+    expect(stats.totalAmount).toBe(0);
+  });
+
+  it('連莊場：歸戶金額含連莊加台（aggregateBy 內部推導 dealerCtx）', () => {
+    // dealerStartSeat p1、p1 自摸 2 台：莊台 1 → 3 台，單注 250，p1 收 750（無莊台則 600）。
+    const sessions: Session[] = [
+      makeSession({
+        rules: dealerOnlyRules,
+        dealerStartSeat: 'p1',
+        rounds: [makeRound({ id: 'r1', winnerId: 'p1', loserId: null, tai: 2, selfDraw: true })],
+      }),
+    ];
+    const stats = aggregatePlayerStats(sessions, 'A');
+    expect(stats.totalAmount).toBe(750);
+  });
+
+  it('走勢圖含流局：流局點與前一點持平（無金額變化）', () => {
+    const rounds: Round[] = [
+      makeRound({ id: 'r1', winnerId: 'p1', loserId: 'p2', tai: 0, selfDraw: false }), // p1 +100
+      { id: 'r2', winnerId: '', loserId: null, tai: 0, selfDraw: false, createdAt: 0, drawn: true },
+    ];
+    const tl = buildCumulativeTimeline(rounds, players, settings, rules);
+    expect(tl).toHaveLength(3);
+    // 第 1 點 p1 +100；第 2 點（流局）維持 +100
+    expect(tl[1].cumulative.p1).toBe(100);
+    expect(tl[2].cumulative.p1).toBe(100);
+  });
+
+  it('deriveDealerContexts 對齊 rounds：可直接餵給 buildCumulativeTimeline', () => {
+    const s = makeSession({
+      rules: dealerOnlyRules,
+      dealerStartSeat: 'p1',
+      rounds: [makeRound({ id: 'r1', winnerId: 'p1', loserId: null, tai: 2, selfDraw: true })],
+    });
+    const ctxs = deriveDealerContexts(s);
+    const tl = buildCumulativeTimeline(s.rounds, s.players, s.settings, s.rules, ctxs);
+    expect(tl[1].cumulative.p1).toBe(750);
   });
 });

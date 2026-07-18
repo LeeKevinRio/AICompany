@@ -2967,3 +2967,290 @@ button.link.danger {
   margin-bottom: 8px;
   opacity: 0.5;
 }
+
+/* =========================================================================
+ * 批次 2（v2.3）：圈風 / 連莊 / 流局 視覺元件
+ * 依 work/mahjong-app-圈風連莊-視覺規範.md 第 9 節；class 名對接本專案既有元件。
+ * ========================================================================= */
+
+/* ── 外層容器（圈風指示器 + 排名條共用）──
+ * 把原 .rank-bar 的卡片外觀（背景 / 圓角 / 框 / 陰影 / 外距）移到 wrapper，
+ * 內層 .rank-bar 改為透明無框，避免雙層盒子。舊場（無指示器）視覺不變。 */
+.rank-bar-wrapper {
+  background: var(--color-surface-low);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-4);
+}
+
+.rank-bar-wrapper .rank-bar {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  margin-bottom: 0;
+}
+
+/* ── 圈風指示器 ── */
+.wind-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.wind-round-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.wind-sep {
+  font-size: 11px;
+  color: var(--color-text-disabled);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.wind-dealer-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wind-streak {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 選用：dealerStreak >= 5（CEO 驗收後才啟用，預設不加此 class） */
+.wind-streak.streak-high {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* ── 莊家 Chip（綠描邊，角色標記，絕不用金色）── */
+.dealer-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  min-width: 28px;
+  padding: 0 6px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-primary-muted);
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* 排名條行內：名字後嵌入 chip（.rank-name 沿用原 flex:1，補 flex 排列容納 chip） */
+.rank-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 選中態下 .rank-row 若有色彩繼承，仍固定莊 chip 綠色（避免被覆蓋） */
+.rank-row .dealer-chip {
+  color: var(--color-primary);
+}
+
+/* 選手大按鈕（本專案為 .quick-pick）右下角莊 chip */
+.quick-pick {
+  position: relative;
+}
+
+.quick-pick .dealer-chip {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+}
+
+/* 選中態（primary 綠底）下仍固定莊 chip 綠字，避免繼承成白色 */
+.quick-pick.selected .dealer-chip {
+  color: var(--color-primary);
+}
+
+/* ── 流局按鈕（ghost 全寬，Tertiary 層）── */
+.drawn-divider {
+  height: 1px;
+  background: var(--color-divider);
+  margin: var(--space-3) 0;
+}
+
+.drawn-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: var(--space-2);
+  transition: border-color 150ms ease, background 150ms ease, transform 80ms ease;
+  letter-spacing: 0.02em;
+}
+
+.drawn-btn:hover {
+  border-color: var(--color-text-disabled);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.drawn-btn:active {
+  transform: scale(0.98);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ── 流局明細列（無色條、灰階、無金額）── */
+.round-drawn-row {
+  gap: 8px;
+}
+
+.round-drawn-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-disabled);
+  flex-shrink: 0;
+}
+
+.round-drawn-streak {
+  font-size: 11px;
+  color: var(--color-text-disabled);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  flex: 1;
+}
+
+.round-drawn-amount {
+  font-size: 13px;
+  color: var(--color-text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 加台來源標注（明細金額下方）── */
+.round-amt-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.tai-source {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  text-align: right;
+  margin-top: 1px;
+}
+
+/* ── 規則列固定說明（連莊做莊/連N台為 CEO 拍板固定值，右側靜態文字）── */
+.rule-fixed-note {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* ── 開桌首莊選擇器（連莊啟用時條件渲染）── */
+.open-dealer-section {
+  margin-top: var(--space-3);
+  animation: open-dealer-fade 200ms ease;
+}
+
+@keyframes open-dealer-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.open-dealer-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.open-dealer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+
+.open-dealer-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.open-dealer-btn:hover {
+  border-color: var(--color-primary-muted);
+  background: rgba(31, 111, 67, 0.04);
+}
+
+.open-dealer-btn.selected {
+  border-color: var(--color-primary);
+  border-width: 1.5px;
+  background: var(--color-primary-muted);
+}
+
+.open-dealer-btn.selected .dealer-chip {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+}
+
+/* ── Reduced-motion 覆蓋（批次 2 新增元件）── */
+@media (prefers-reduced-motion: reduce) {
+  .open-dealer-section {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .drawn-btn,
+  .open-dealer-btn {
+    transition-duration: 0.01ms !important;
+  }
+}

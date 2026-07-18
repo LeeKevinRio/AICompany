@@ -11,6 +11,7 @@ import {
 import type { Player, RosterPlayer, Round, Session, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
 import { buildCumulativeTimeline, formatSigned } from '../scoring/timeline';
+import { deriveDealerContexts } from '../scoring/dealer';
 import { Sparkline } from './Sparkline';
 import { playerColor, resolvePlayerVisual } from './ui';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -52,10 +53,12 @@ export const ShareCard = forwardRef<ShareCardHandle, Props>(function ShareCard(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // v2.3：連莊加台由 session 推導（舊場 / 未啟用回空陣列，零回歸）。
+  const dealerCtxs = deriveDealerContexts(session);
   // 分享圖卡顯示「淨額」（含自摸付出的東錢），與結算頁一致。
   let totals: Record<string, number>;
   try {
-    totals = settleSession(rounds, players, settings, session.rules).net;
+    totals = settleSession(rounds, players, settings, session.rules, dealerCtxs).net;
   } catch {
     totals = {};
     for (const p of players) totals[p.id] = 0;
@@ -69,7 +72,7 @@ export const ShareCard = forwardRef<ShareCardHandle, Props>(function ShareCard(
     .sort((a, b) => b.amount - a.amount);
 
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
-  const timeline = buildCumulativeTimeline(rounds, players, settings, session.rules);
+  const timeline = buildCumulativeTimeline(rounds, players, settings, session.rules, dealerCtxs);
 
   async function handleExport() {
     if (!cardRef.current) return;

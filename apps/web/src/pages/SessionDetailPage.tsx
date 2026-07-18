@@ -11,16 +11,19 @@ import { ScoreChart } from '../components/ScoreChart';
 import { ShareCard } from '../components/ShareCard';
 import { BottomSheet } from '../components/BottomSheet';
 import { IconSettings } from '../components/icons';
+import { deriveTableState } from '../scoring/dealer';
 import type { SessionRules } from '../types';
 
 type SubTab = 'record' | 'chart' | 'detail';
 
-/** v2.1：進場規則提示 chip（自摸加台 / 東錢開啟時顯示，讓玩家確認規則）。 */
-function RuleChips({ rules }: { rules: SessionRules }) {
+/** v2.1：進場規則提示 chip（自摸加台 / 東錢 / 眼牌 / 連莊開啟時顯示，讓玩家確認規則）。 */
+function RuleChips({ rules, dealerActive }: { rules: SessionRules; dealerActive: boolean }) {
   const chips: string[] = [];
   if (rules.selfDrawBonusTai > 0) chips.push(`自摸 +${rules.selfDrawBonusTai} 台`);
   if (rules.selfDrawDongAmount > 0) chips.push(`東錢 $${rules.selfDrawDongAmount}`);
   if (rules.eyeTileEnabled && rules.eyeTileTai > 0) chips.push(`眼牌 +${rules.eyeTileTai} 台`);
+  // v2.3：連莊實際啟用（有首莊）時才提示，避免舊場開了 rules 卻無首莊的誤導。
+  if (dealerActive) chips.push('連莊 · 做莊+1台');
   if (chips.length === 0) return null;
   return (
     <div className="rule-chips">
@@ -68,6 +71,10 @@ export function SessionDetailPage() {
     );
   }
 
+  // v2.3：圈風 / 莊家 / 連莊推導（唯一真相：session.dealerStartSeat + rules；純函式 fold）。
+  // 一次算好，下傳給排名條 / 記局 / 明細 / 走勢 / 累計，確保各處金額與圈風一致。
+  const tableState = deriveTableState(session);
+
   return (
     <div className="page">
       <header className="page-header">
@@ -108,7 +115,7 @@ export function SessionDetailPage() {
 
       {sub === 'record' && (
         <>
-          <RuleChips rules={session.rules} />
+          <RuleChips rules={session.rules} dealerActive={tableState.active} />
           <RankBar
             rounds={session.rounds}
             players={session.players}
@@ -116,12 +123,14 @@ export function SessionDetailPage() {
             rules={session.rules}
             roster={globalSettings.roster}
             loseAlertThreshold={globalSettings.loseAlertThreshold}
+            tableState={tableState}
           />
           <RoundForm
             players={session.players}
             rounds={session.rounds}
             roster={globalSettings.roster}
             rules={session.rules}
+            tableState={tableState}
             onAdd={(r) => addRound(session.id, r)}
           />
           {session.endedAt ? (
@@ -166,6 +175,7 @@ export function SessionDetailPage() {
             players={session.players}
             settings={session.settings}
             rules={session.rules}
+            tableState={tableState}
           />
           {/* 減法（創意檢視第六節）：Highlights 移出走勢圖 tab，集中到 P6 結算頁登場，不重複出現 */}
           <ShareCard
@@ -185,12 +195,14 @@ export function SessionDetailPage() {
             players={session.players}
             settings={session.settings}
             rules={session.rules}
+            tableState={tableState}
           />
           <RoundList
             rounds={session.rounds}
             players={session.players}
             settings={session.settings}
             rules={session.rules}
+            tableState={tableState}
             onRemove={(rid) => removeRound(session.id, rid)}
           />
           <button

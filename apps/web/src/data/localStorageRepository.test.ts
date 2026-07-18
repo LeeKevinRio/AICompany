@@ -154,6 +154,10 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
       selfDrawDongAmount: 0,
       eyeTileEnabled: false,
       eyeTileTai: 0,
+      dealerEnabled: false,
+      dealerBaseTai: 0,
+      dealerStreakTaiPerStreak: 0,
+      dealerTaiScope: 'dealer',
     });
   });
 
@@ -168,6 +172,10 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
       selfDrawDongAmount: 100,
       eyeTileEnabled: false,
       eyeTileTai: 0,
+      dealerEnabled: false,
+      dealerBaseTai: 0,
+      dealerStreakTaiPerStreak: 0,
+      dealerTaiScope: 'dealer',
     });
   });
 
@@ -190,6 +198,10 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
       selfDrawDongAmount: 0,
       eyeTileEnabled: true,
       eyeTileTai: 2,
+      dealerEnabled: false,
+      dealerBaseTai: 0,
+      dealerStreakTaiPerStreak: 0,
+      dealerTaiScope: 'dealer',
     });
     expect(res.sessions[0].rounds[0].eyeTile).toBe(true);
   });
@@ -217,6 +229,10 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
       selfDrawDongAmount: 0,
       eyeTileEnabled: false,
       eyeTileTai: 0,
+      dealerEnabled: false,
+      dealerBaseTai: 0,
+      dealerStreakTaiPerStreak: 0,
+      dealerTaiScope: 'dealer',
     });
   });
 

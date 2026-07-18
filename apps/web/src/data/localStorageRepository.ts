@@ -74,7 +74,29 @@ function normalizeSessionRules(v: unknown, fallback: SessionRules): SessionRules
   const eyeTileEnabled =
     typeof r.eyeTileEnabled === 'boolean' ? r.eyeTileEnabled : fallback.eyeTileEnabled;
   const eyeTileTai = isFiniteNonNegInt(r.eyeTileTai) ? r.eyeTileTai : fallback.eyeTileTai;
-  return { selfDrawBonusTai, selfDrawDongAmount, eyeTileEnabled, eyeTileTai };
+  // v2.3：連莊規則。缺值/型別錯 → 回退 fallback（migration 全關 / 中性值，歷史分數不變）。
+  const dealerEnabled =
+    typeof r.dealerEnabled === 'boolean' ? r.dealerEnabled : fallback.dealerEnabled;
+  const dealerBaseTai = isFiniteNonNegInt(r.dealerBaseTai)
+    ? r.dealerBaseTai
+    : fallback.dealerBaseTai;
+  const dealerStreakTaiPerStreak = isFiniteNonNegInt(r.dealerStreakTaiPerStreak)
+    ? r.dealerStreakTaiPerStreak
+    : fallback.dealerStreakTaiPerStreak;
+  const dealerTaiScope =
+    r.dealerTaiScope === 'table' || r.dealerTaiScope === 'dealer'
+      ? r.dealerTaiScope
+      : fallback.dealerTaiScope;
+  return {
+    selfDrawBonusTai,
+    selfDrawDongAmount,
+    eyeTileEnabled,
+    eyeTileTai,
+    dealerEnabled,
+    dealerBaseTai,
+    dealerStreakTaiPerStreak,
+    dealerTaiScope,
+  };
 }
 
 function isValidSettings(v: unknown): v is Settings {
@@ -90,7 +112,6 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   if (typeof r.createdAt !== 'number' || !Number.isFinite(r.createdAt)) return false;
   if (!isFiniteNonNegInt(r.tai)) return false;
   if (typeof r.selfDraw !== 'boolean') return false;
-  if (!isNonEmptyString(r.winnerId) || !playerIds.has(r.winnerId)) return false;
 
   // v2：note 為可選字串（舊資料無此欄位 → undefined，合法）。
   // 若存在但型別錯（非字串）或超長，視為毀損，避免污染明細顯示。
@@ -101,6 +122,18 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   // v2.2：eyeTile 為可選 boolean（舊資料無此欄位 → undefined，合法）。
   // 型別錯（存在但非 boolean）視為毀損，避免污染計分。
   if (r.eyeTile !== undefined && typeof r.eyeTile !== 'boolean') return false;
+
+  // v2.3：drawn 為可選 boolean（舊資料無此欄位 → undefined，合法）。
+  if (r.drawn !== undefined && typeof r.drawn !== 'boolean') return false;
+
+  // v2.3：流局（drawn=true）——winnerId 必須為空字串、loserId 必須為 null（採方案 A 判別式）。
+  // 提前 return，避免下方對 winnerId 的「非空且在玩家清單」檢查誤把流局判成毀損。
+  if (r.drawn === true) {
+    return r.winnerId === '' && r.loserId === null;
+  }
+
+  // 非流局：winnerId 必填、合法且在玩家清單內。
+  if (!isNonEmptyString(r.winnerId) || !playerIds.has(r.winnerId)) return false;
 
   if (r.selfDraw) {
     // 自摸：loserId 必須為 null
@@ -128,6 +161,10 @@ function isValidSession(v: unknown): v is Session {
   if (s.endedAt !== undefined) {
     if (typeof s.endedAt !== 'number' || !Number.isFinite(s.endedAt)) return false;
   }
+
+  // v2.3：dealerStartSeat 為可選字串（舊資料無此欄位 → undefined，合法）。
+  // 只驗型別；若指向不存在的座位，deriveTableState 會自行判為未啟用，不必因此丟棄整場。
+  if (s.dealerStartSeat !== undefined && typeof s.dealerStartSeat !== 'string') return false;
 
   // v2.1：rules 不在此判毀損——舊場次本就沒有 rules，會在 migration 階段補入
   //（DEFAULT_SESSION_RULES，全 0，行為不變）。型別錯也只是被正規化覆蓋，不丟整場資料。

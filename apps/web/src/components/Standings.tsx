@@ -1,6 +1,7 @@
 // 本場每人累計輸贏（結算頁用）。淨額含自摸付出的東錢；另顯示公基金累計。
 import type { Player, Round, SessionRules, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
+import type { TableState } from '../scoring/dealer';
 import { Amount } from './ui';
 
 interface Props {
@@ -8,15 +9,20 @@ interface Props {
   players: Player[];
   settings: Settings;
   rules: SessionRules;
+  /** v2.3：連莊推導，套連莊加台以與排名條 / 結算一致。 */
+  tableState?: TableState;
 }
 
-export function Standings({ rounds, players, settings, rules }: Props) {
+export function Standings({ rounds, players, settings, rules, tableState }: Props) {
+  const dealerCtxs = tableState?.active
+    ? tableState.perRound.map((pr) => ({ dealerId: pr.dealerId, streak: pr.streak }))
+    : undefined;
   // settleSession 在資料於執行期被改成非法值時會 throw；
   // 這裡輕量防護，避免讓整個 app 因單一元件 render 例外而白畫面。
   let net: Record<string, number>;
   let kitty = 0;
   try {
-    const settled = settleSession(rounds, players, settings, rules);
+    const settled = settleSession(rounds, players, settings, rules, dealerCtxs);
     net = settled.net;
     kitty = settled.kitty;
   } catch (err) {

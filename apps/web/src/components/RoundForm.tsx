@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Player, Round, RosterPlayer, SessionRules } from '../types';
 import { MAX_NOTE_LENGTH } from '../types';
+import type { TableState } from '../scoring/dealer';
 import { resolvePlayerVisual } from './ui';
 import { PlayerAvatar } from './PlayerAvatar';
 
@@ -15,6 +16,8 @@ interface Props {
   roster: RosterPlayer[];
   /** 本場規則：眼牌勾選僅在 rules.eyeTileEnabled 時顯示（v2.2）。 */
   rules: SessionRules;
+  /** v2.3：連莊推導。active 時選贏家步驟標莊家 chip、動線末端出現「流局」按鈕。 */
+  tableState?: TableState;
   onAdd: (round: Omit<Round, 'id' | 'createdAt'>) => void;
 }
 
@@ -28,7 +31,8 @@ const GUN_ALERT_THRESHOLD = 3;
  */
 const SLIDER_MAX_TAI = 100;
 
-export function RoundForm({ players, rounds, roster, rules, onAdd }: Props) {
+export function RoundForm({ players, rounds, roster, rules, tableState, onAdd }: Props) {
+  const dealer = tableState?.active ? tableState.current : null;
   // 本場各玩家放槍次數（供放槍者按鈕警示）。
   const gunCount = useMemo(() => {
     const c: Record<string, number> = {};
@@ -70,6 +74,12 @@ export function RoundForm({ players, rounds, roster, rules, onAdd }: Props) {
     setEyeTile(false);
   }
 
+  // v2.3：流局——一鍵記一筆 drawn 局（無贏家 / 放槍者、金額全 0），莊家連莊、圈風前進。
+  function handleDrawn() {
+    if (!window.confirm('本局流局（無人胡牌）？莊家將連莊、四人金額不變。')) return;
+    onAdd({ winnerId: '', tai: 0, selfDraw: false, loserId: null, drawn: true });
+  }
+
   return (
     <section className="card">
       <p className="quick-step-label">1. 選贏家</p>
@@ -81,6 +91,7 @@ export function RoundForm({ players, rounds, roster, rules, onAdd }: Props) {
             seatIndex={i}
             roster={roster}
             selected={winnerId === p.id}
+            isDealer={!!dealer && dealer.dealerId === p.id}
             onClick={() => {
               setWinnerId(p.id);
               if (loserId === p.id) setLoserId('');
@@ -171,6 +182,16 @@ export function RoundForm({ players, rounds, roster, rules, onAdd }: Props) {
       <button type="button" className="primary" disabled={!canSubmit} onClick={handleSubmit}>
         記錄這一局
       </button>
+
+      {/* v2.3：流局——低頻邊緣動作，ghost 全寬、與選贏家主動線用分隔線隔開；僅連莊啟用時出現。 */}
+      {dealer && (
+        <>
+          <div className="drawn-divider" />
+          <button type="button" className="drawn-btn" onClick={handleDrawn}>
+            流局（本局無人胡牌）
+          </button>
+        </>
+      )}
     </section>
   );
 }
@@ -182,6 +203,7 @@ function PlayerPickButton({
   roster,
   selected,
   gunCount,
+  isDealer = false,
   onClick,
 }: {
   player: Player;
@@ -189,6 +211,8 @@ function PlayerPickButton({
   roster: RosterPlayer[];
   selected: boolean;
   gunCount?: number;
+  /** v2.3：此座位是否為當前莊家（選贏家步驟右下角標「莊」chip）。 */
+  isDealer?: boolean;
   onClick: () => void;
 }) {
   const { colorIndex, avatar } = resolvePlayerVisual(player, seatIndex, roster);
@@ -208,6 +232,7 @@ function PlayerPickButton({
       />
       <span className="quick-pick-name">{player.name}</span>
       {alert && <span className="quick-pick-gun">放槍 {gunCount}</span>}
+      {isDealer && <span className="dealer-chip">莊</span>}
     </button>
   );
 }

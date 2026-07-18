@@ -7,6 +7,7 @@ import { useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { settleSession } from '../scoring/scoring';
+import { deriveDealerContexts } from '../scoring/dealer';
 import {
   buildCumulativeTimeline,
   calcSessionHighlights,
@@ -71,11 +72,15 @@ export function SettlePage() {
   }
 
   const { players, rounds, settings, rules } = session;
+  // v2.3：連莊加台由 session 推導（舊場 / 未啟用回空陣列，零回歸）。
+  const dealerCtxs = deriveDealerContexts(session);
+  // v2.3：流局不計入胡牌率 / 放槍率分母（本場三率快照用）。
+  const scoredCount = rounds.filter((r) => !r.drawn).length;
 
   // 淨額（含自摸付出的東錢），與 ShareCard / 卡片預覽一致。
   let totals: Record<string, number>;
   try {
-    totals = settleSession(rounds, players, settings, rules).net;
+    totals = settleSession(rounds, players, settings, rules, dealerCtxs).net;
   } catch {
     totals = {};
     for (const p of players) totals[p.id] = 0;
@@ -88,8 +93,14 @@ export function SettlePage() {
     })
     .sort((a, b) => b.amount - a.amount);
 
-  const { highlights, perPlayer } = calcSessionHighlights(rounds, players, settings, rules);
-  const timeline = buildCumulativeTimeline(rounds, players, settings, rules);
+  const { highlights, perPlayer } = calcSessionHighlights(
+    rounds,
+    players,
+    settings,
+    rules,
+    dealerCtxs,
+  );
+  const timeline = buildCumulativeTimeline(rounds, players, settings, rules, dealerCtxs);
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
 
   const hasRounds = rounds.length > 0;
@@ -219,8 +230,9 @@ export function SettlePage() {
           <div className="settle-snapshot-rows">
             {ranked.map((r) => {
               const pp = perPlayer[r.player.id] ?? { wins: 0, selfDraws: 0, gunned: 0 };
-              const winPct = Math.round((pp.wins / rounds.length) * 100);
-              const gunPct = Math.round((pp.gunned / rounds.length) * 100);
+              // v2.3：分母排除流局（scoredCount）；全流局的極端場以 0 呈現，不除以 0。
+              const winPct = scoredCount > 0 ? Math.round((pp.wins / scoredCount) * 100) : 0;
+              const gunPct = scoredCount > 0 ? Math.round((pp.gunned / scoredCount) * 100) : 0;
               // 自摸率分母為本場胡牌次數；0 胡無從計算 → 「—」。
               const sdPct = pp.wins > 0 ? Math.round((pp.selfDraws / pp.wins) * 100) : null;
               // 每列最多一個標籤；同時符合兩者時優先顯示最高胡牌（金、進攻最佳）。
