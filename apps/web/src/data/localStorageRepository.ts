@@ -25,6 +25,9 @@ const STORAGE_KEY = 'mahjong-score:sessions:v1';
 const GLOBAL_SETTINGS_KEY = 'mahjong-score:global-settings:v1';
 // 偵測到半壞資料時，把原始內容備份到這個 key，方便事後檢視。
 const CORRUPT_BACKUP_KEY = 'mahjong-sessions-corrupt-backup';
+// 全域設定（含名冊等跨場資料）結構不合法時的備份 key——退回預設前先隔離原始內容，
+// 避免靜默丟失 roster / knownPlayers（丟棄任何資料前必須先備份）。
+const CORRUPT_GLOBAL_BACKUP_KEY = 'mahjong-global-settings-corrupt-backup';
 
 /** 可辨識的儲存錯誤：quota 滿、無痕模式停用 storage 等都會丟這個。 */
 export class StorageError extends Error {
@@ -51,9 +54,10 @@ function isValidPlayer(v: unknown): v is Player {
   if (typeof v !== 'object' || v === null) return false;
   const p = v as Record<string, unknown>;
   if (!isNonEmptyString(p.id) || typeof p.name !== 'string') return false;
-  // v2.1：rosterId 為可選字串（舊資料無此欄位 → undefined，合法）。
-  // 型別錯（存在但非字串）視為毀損，避免污染跨場聚合。
-  if (p.rosterId !== undefined && typeof p.rosterId !== 'string') return false;
+  // v2.1：rosterId 為可選字串（舊資料無此欄位 → undefined／null，皆視為「無掛勾」，合法）。
+  // 用 `!= null` 同時放行 undefined 與 null——舊格式常把「無值」序列化成 null，
+  // 只有「存在且非字串」才算型別錯（污染跨場聚合）才判毀損。
+  if (p.rosterId != null && typeof p.rosterId !== 'string') return false;
   return true;
 }
 
@@ -114,7 +118,8 @@ function normalizeSubstitutions(v: unknown, playerIds: Set<string>): Substitutio
     if (!isNonEmptyString(s.seatId) || !playerIds.has(s.seatId)) continue;
     if (!isFiniteNonNegInt(s.fromRoundIndex)) continue;
     if (typeof s.name !== 'string' || s.name.trim() === '') continue;
-    if (s.rosterId !== undefined && typeof s.rosterId !== 'string') continue;
+    // rosterId：undefined／null 皆視為「無掛勾」（下方正規化成 undefined）；存在但非字串才濾掉。
+    if (s.rosterId != null && typeof s.rosterId !== 'string') continue;
     out.push({
       seatId: s.seatId,
       fromRoundIndex: s.fromRoundIndex,
@@ -139,18 +144,19 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   if (!isFiniteNonNegInt(r.tai)) return false;
   if (typeof r.selfDraw !== 'boolean') return false;
 
-  // v2：note 為可選字串（舊資料無此欄位 → undefined，合法）。
-  // 若存在但型別錯（非字串）或超長，視為毀損，避免污染明細顯示。
-  if (r.note !== undefined) {
+  // v2：note 為可選字串（舊資料無此欄位 → undefined／null，合法）。
+  // 用 `!= null` 放行 undefined 與 null（舊格式「無備註」可能序列化成 null）；
+  // 只有「存在且型別錯（非字串）或超長」才視為毀損，避免污染明細顯示。
+  if (r.note != null) {
     if (typeof r.note !== 'string' || r.note.length > MAX_NOTE_LENGTH) return false;
   }
 
-  // v2.2：eyeTile 為可選 boolean（舊資料無此欄位 → undefined，合法）。
-  // 型別錯（存在但非 boolean）視為毀損，避免污染計分。
-  if (r.eyeTile !== undefined && typeof r.eyeTile !== 'boolean') return false;
+  // v2.2：eyeTile 為可選 boolean（舊資料無此欄位 → undefined／null，皆視為「非眼牌」，合法）。
+  // 只有「存在且非 boolean」才視為毀損，避免污染計分。
+  if (r.eyeTile != null && typeof r.eyeTile !== 'boolean') return false;
 
-  // v2.3：drawn 為可選 boolean（舊資料無此欄位 → undefined，合法）。
-  if (r.drawn !== undefined && typeof r.drawn !== 'boolean') return false;
+  // v2.3：drawn 為可選 boolean（舊資料無此欄位 → undefined／null，皆視為「非流局」，合法）。
+  if (r.drawn != null && typeof r.drawn !== 'boolean') return false;
 
   // v2.3：流局（drawn=true）——winnerId 必須為空字串、loserId 必須為 null（採方案 A 判別式）。
   // 提前 return，避免下方對 winnerId 的「非空且在玩家清單」檢查誤把流局判成毀損。
@@ -185,14 +191,18 @@ function isValidSession(v: unknown): v is Session {
   if (!Array.isArray(s.players) || !s.players.every(isValidPlayer)) return false;
   if (!Array.isArray(s.rounds)) return false;
 
-  // v2：endedAt 為可選時間戳（舊資料無此欄位 → undefined，合法）。
-  if (s.endedAt !== undefined) {
+  // v2：endedAt 為可選時間戳（舊資料無此欄位 → undefined／null，皆視為「未結算」，合法）。
+  // 【hotfix】舊格式常把「未結算」序列化成 endedAt: null；先前用 `!== undefined` 會讓
+  // null 掉進型別檢查（typeof null === 'object'）被誤判毀損、整場丟棄。改用 `!= null`
+  // 同時放行 undefined 與 null；只有「存在且非有限數字」才判毀損。下游一律用 truthy
+  // 判斷結算與否（s.endedAt ?），null 為 falsy＝未結算，行為與 undefined 一致。
+  if (s.endedAt != null) {
     if (typeof s.endedAt !== 'number' || !Number.isFinite(s.endedAt)) return false;
   }
 
-  // v2.3：dealerStartSeat 為可選字串（舊資料無此欄位 → undefined，合法）。
+  // v2.3：dealerStartSeat 為可選字串（舊資料無此欄位 → undefined／null，皆視為未指定首莊，合法）。
   // 只驗型別；若指向不存在的座位，deriveTableState 會自行判為未啟用，不必因此丟棄整場。
-  if (s.dealerStartSeat !== undefined && typeof s.dealerStartSeat !== 'string') return false;
+  if (s.dealerStartSeat != null && typeof s.dealerStartSeat !== 'string') return false;
 
   // v2.1：rules 不在此判毀損——舊場次本就沒有 rules，會在 migration 階段補入
   //（DEFAULT_SESSION_RULES，全 0，行為不變）。型別錯也只是被正規化覆蓋，不丟整場資料。
@@ -235,7 +245,7 @@ function parseGlobalSettings(v: unknown): GlobalSettings | null {
       if (!isNonEmptyString(rp.id) || seenIds.has(rp.id)) continue;
       if (typeof rp.name !== 'string') continue;
       if (typeof rp.createdAt !== 'number' || !Number.isFinite(rp.createdAt)) continue;
-      if (rp.avatar !== undefined && typeof rp.avatar !== 'string') continue;
+      if (rp.avatar != null && typeof rp.avatar !== 'string') continue;
       seenIds.add(rp.id);
       roster.push({
         id: rp.id,
@@ -346,8 +356,15 @@ export class LocalStorageRepository implements StorageRepository {
     if (!raw) return { ...DEFAULT_GLOBAL_SETTINGS };
     try {
       const parsed = parseGlobalSettings(JSON.parse(raw));
-      return parsed ?? { ...DEFAULT_GLOBAL_SETTINGS };
-    } catch {
+      if (parsed) return parsed;
+      // 結構不合法：退回預設前先備份，避免靜默丟失名冊（roster）等跨場資料。
+      console.error('全域設定結構不合法，已備份原始內容並退回預設。');
+      this.backupCorrupt(raw, CORRUPT_GLOBAL_BACKUP_KEY);
+      return { ...DEFAULT_GLOBAL_SETTINGS };
+    } catch (err) {
+      // JSON 整包壞掉：同樣先備份再退回預設。
+      console.error('全域設定無法解析（JSON 毀損），已備份原始內容並退回預設：', err);
+      this.backupCorrupt(raw, CORRUPT_GLOBAL_BACKUP_KEY);
       return { ...DEFAULT_GLOBAL_SETTINGS };
     }
   }
@@ -383,9 +400,9 @@ export class LocalStorageRepository implements StorageRepository {
   }
 
   /** 備份原始毀損資料到 quarantine key；備份失敗不影響主流程。 */
-  private backupCorrupt(raw: string): void {
+  private backupCorrupt(raw: string, key: string = CORRUPT_BACKUP_KEY): void {
     try {
-      localStorage.setItem(CORRUPT_BACKUP_KEY, raw);
+      localStorage.setItem(key, raw);
     } catch {
       // 連備份都寫不進去（例如 quota 滿）就算了，不要再丟例外。
     }

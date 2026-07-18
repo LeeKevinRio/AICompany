@@ -9,8 +9,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorageRepository } from './localStorageRepository';
 import type { Player, Round, Session } from '../types';
+import { DEFAULT_GLOBAL_SETTINGS } from '../types';
 
 const STORAGE_KEY = 'mahjong-score:sessions:v1';
+const GLOBAL_SETTINGS_KEY = 'mahjong-score:global-settings:v1';
+const CORRUPT_BACKUP_KEY = 'mahjong-sessions-corrupt-backup';
+const CORRUPT_GLOBAL_BACKUP_KEY = 'mahjong-global-settings-corrupt-backup';
 
 // 簡易記憶體版 localStorage（測試環境為 node，無瀏覽器 storage）。
 class MemoryStorage {
@@ -29,8 +33,10 @@ class MemoryStorage {
   }
 }
 
+let store: MemoryStorage;
 beforeEach(() => {
-  (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+  store = new MemoryStorage();
+  (globalThis as { localStorage?: unknown }).localStorage = store;
 });
 
 afterEach(() => {
@@ -130,7 +136,9 @@ describe('LocalStorageRepository validator 向後相容', () => {
 
   it('壞資料與好資料混雜：只丟壞的、保留好的，並回報 corrupted', async () => {
     const good = makeSession({ id: 'good' });
-    const bad = makeSession({ id: 'bad', endedAt: NaN });
+    // 用字串 endedAt 當真型別錯——注意 NaN 經 JSON.stringify 會變 null（合法未結算），
+    // 不能拿來當毀損標記，否則測不到「丟壞的」這條路徑。
+    const bad = makeSession({ id: 'bad', endedAt: '壞掉' });
     seed([good, bad]);
 
     const res = await new LocalStorageRepository().loadSessions();
@@ -316,5 +324,240 @@ describe('LocalStorageRepository — substitutions migration（批次 3）', () 
     const res = await new LocalStorageRepository().loadSessions();
     expect(res.corrupted).toBe(false);
     expect(res.sessions[0].substitutions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hotfix：舊格式「無值＝null」誤殺回歸。
+//
+// 根因：多個可選欄位的驗證用 `x !== undefined` 當守門，只放行 undefined。舊格式常把
+// 「無值」序列化成 null（例如未結算的 endedAt: null），null 會掉進型別檢查
+// （typeof null === 'object'）被誤判毀損、整場丟棄。修法：改用 `x != null` 同時放行
+// undefined 與 null，只有「存在且型別錯」才判毀損。以下矩陣逐一守住每個可選欄位。
+// ---------------------------------------------------------------------------
+describe('LocalStorageRepository — null＝無值 向後相容（hotfix 回歸）', () => {
+  it('【重現】CEO 實測的舊格式 session（endedAt: null + 部分 rules）完整載入、不丟', async () => {
+    // 這份 JSON 與 hotfix 工單附的重現資料一字不差。
+    seed([
+      {
+        id: 's_legacy_1',
+        name: '老牌局',
+        createdAt: 1751000000000,
+        endedAt: null,
+        settings: { base: 100, tai: 50 },
+        rules: { selfDrawBonusTai: 1, selfDrawDongAmount: 100 },
+        players: [
+          { id: 'p1', name: '老甲' },
+          { id: 'p2', name: '老乙' },
+          { id: 'p3', name: '老丙' },
+          { id: 'p4', name: '老丁' },
+        ],
+        rounds: [
+          {
+            id: 'r1',
+            winnerId: 'p1',
+            loserId: 'p2',
+            tai: 3,
+            selfDraw: false,
+            createdAt: 1751000001000,
+          },
+          {
+            id: 'r2',
+            winnerId: 'p3',
+            loserId: null,
+            tai: 2,
+            selfDraw: true,
+            createdAt: 1751000002000,
+            note: '舊備註',
+          },
+        ],
+      },
+    ]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    // 關鍵：完全不判毀損、整場保留、兩局都在。
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+    expect(res.sessions[0].id).toBe('s_legacy_1');
+    expect(res.sessions[0].rounds).toHaveLength(2);
+    // 未結算：endedAt 為 falsy（null 與 undefined 下游行為一致）。
+    expect(res.sessions[0].endedAt ?? undefined).toBeUndefined();
+    // 缺欄位的舊 rules 由 normalize 補中性值，既有數值不動。
+    expect(res.sessions[0].rules).toEqual({
+      selfDrawBonusTai: 1,
+      selfDrawDongAmount: 100,
+      eyeTileEnabled: false,
+      eyeTileTai: 0,
+      dealerEnabled: false,
+      dealerBaseTai: 0,
+      dealerStreakTaiPerStreak: 0,
+      dealerTaiScope: 'dealer',
+    });
+    // 沒有壞資料 → 不應該寫備份。
+    expect(store.getItem(CORRUPT_BACKUP_KEY)).toBeNull();
+  });
+
+  it('endedAt: null → 視為未結算、不丟（先前 !== undefined 會誤殺）', async () => {
+    const session = makeSession({ endedAt: null });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+    expect(res.sessions[0].endedAt ?? undefined).toBeUndefined();
+  });
+
+  it('round note/eyeTile/drawn 為 null → 視為無值、不丟', async () => {
+    const session = makeSession({
+      rounds: [
+        makeRound({
+          note: null as unknown as string,
+          eyeTile: null as unknown as boolean,
+          drawn: null as unknown as boolean,
+        }),
+      ],
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+  });
+
+  it('Player rosterId: null → 視為無掛勾、不丟', async () => {
+    const session = makeSession({
+      players: players.map((p, i) =>
+        i === 0 ? { ...p, rosterId: null as unknown as string } : p,
+      ),
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+  });
+
+  it('dealerStartSeat: null → 視為未指定首莊、不丟', async () => {
+    const session = makeSession({ dealerStartSeat: null });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+  });
+
+  it('substitution rosterId: null → 保留該筆、正規化成 undefined（不濾掉）', async () => {
+    const session = makeSession({
+      substitutions: [
+        { seatId: 'p2', fromRoundIndex: 1, name: '阿明', rosterId: null },
+      ],
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions[0].substitutions).toEqual([
+      { seatId: 'p2', fromRoundIndex: 1, name: '阿明', rosterId: undefined },
+    ]);
+  });
+
+  it('真型別錯仍判毀損：null 寬容不會鬆綁對非 null 髒值的守門', async () => {
+    // endedAt 是字串、eyeTile 是字串——都不是 null，仍應被抓成毀損。
+    seed([makeSession({ id: 'a', endedAt: '2026-01-01' })]);
+    let res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(res.sessions).toHaveLength(0);
+
+    seed([makeSession({ id: 'b', rounds: [makeRound({ eyeTile: 'yes' as unknown as boolean })] })]);
+    res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(res.sessions).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 歷代格式矩陣：純 v1 / v2（結算）/ v2.2（眼牌後）/ v2.3（連莊後）/ v2.4（換人後）
+// 混雜一批一起載入，全部不誤殺、無備份。守住「遷移不回歸」這條資料安全線。
+// ---------------------------------------------------------------------------
+describe('LocalStorageRepository — 歷代格式矩陣一起載入', () => {
+  it('五種歷代格式混雜 → 全數保留、不判毀損、不寫備份', async () => {
+    const v1 = makeSession({ id: 'v1' }); // 純 v1：無 rules / endedAt / note
+    const v2Ended = makeSession({ id: 'v2', endedAt: null }); // v2 舊格式未結算＝null
+    const v22Eye = makeSession({
+      id: 'v22',
+      rules: { selfDrawBonusTai: 1, selfDrawDongAmount: 0, eyeTileEnabled: true, eyeTileTai: 1 },
+      rounds: [makeRound({ eyeTile: true })],
+    });
+    const v23Dealer = makeSession({
+      id: 'v23',
+      dealerStartSeat: 'p1',
+      rounds: [makeRound(), makeRound({ id: 'r2', winnerId: '', loserId: null, drawn: true })],
+    });
+    const v24Sub = makeSession({
+      id: 'v24',
+      substitutions: [{ seatId: 'p2', fromRoundIndex: 1, name: '換人' }],
+    });
+    seed([v1, v2Ended, v22Eye, v23Dealer, v24Sub]);
+
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions.map((s) => s.id)).toEqual(['v1', 'v2', 'v22', 'v23', 'v24']);
+    // 全部合法 → 不應寫任何備份。
+    expect(store.getItem(CORRUPT_BACKUP_KEY)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 備份保證：丟棄任何資料前必須先備份（session 與 global settings 兩條路徑）。
+// ---------------------------------------------------------------------------
+describe('LocalStorageRepository — 毀損必備份（資料安全）', () => {
+  it('真毀損 session 被丟棄時，原始內容寫入 session 備份 key', async () => {
+    const raw = [makeSession({ id: 'bad', endedAt: '壞掉' })];
+    seed(raw);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(store.getItem(CORRUPT_BACKUP_KEY)).toBe(JSON.stringify(raw));
+  });
+
+  it('sessions JSON 整包壞掉 → 備份原始字串並重置', async () => {
+    localStorage.setItem(STORAGE_KEY, '{壞掉的 json');
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(store.getItem(CORRUPT_BACKUP_KEY)).toBe('{壞掉的 json');
+  });
+
+  it('全域設定結構不合法 → 退回預設前先備份（不靜默丟失名冊）', async () => {
+    // defaultBase 型別錯 → parseGlobalSettings 回 null；roster 不該無聲蒸發。
+    const rawGlobal = JSON.stringify({
+      defaultBase: 'x',
+      defaultTai: 50,
+      knownPlayers: [],
+      roster: [{ id: 'ros-1', name: '阿明', createdAt: 1 }],
+    });
+    localStorage.setItem(GLOBAL_SETTINGS_KEY, rawGlobal);
+    const res = await new LocalStorageRepository().loadSessions();
+    // 全域設定退回預設，但原始內容已備份可救回。
+    expect(res.globalSettings.roster).toEqual([]);
+    expect(store.getItem(CORRUPT_GLOBAL_BACKUP_KEY)).toBe(rawGlobal);
+  });
+
+  it('RosterPlayer avatar: null → 保留該筆、正規化成 undefined（不靜默丟棄）', async () => {
+    const rawGlobal = JSON.stringify({
+      defaultBase: 100,
+      defaultTai: 50,
+      knownPlayers: [],
+      roster: [{ id: 'ros-1', name: '阿明', avatar: null, createdAt: 1 }],
+    });
+    localStorage.setItem(GLOBAL_SETTINGS_KEY, rawGlobal);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.globalSettings.roster).toHaveLength(1);
+    expect(res.globalSettings.roster[0]).toEqual({
+      id: 'ros-1',
+      name: '阿明',
+      avatar: undefined,
+      createdAt: 1,
+    });
+  });
+
+  it('全域設定 JSON 整包壞掉 → 備份並退回預設', async () => {
+    localStorage.setItem(GLOBAL_SETTINGS_KEY, '{壞掉');
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.globalSettings).toEqual(DEFAULT_GLOBAL_SETTINGS);
+    expect(store.getItem(CORRUPT_GLOBAL_BACKUP_KEY)).toBe('{壞掉');
   });
 });
