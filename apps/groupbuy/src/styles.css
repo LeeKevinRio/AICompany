@@ -1,44 +1,47 @@
 /* =========================================================================
- * 揪購 GroupBuy — 視覺規範 v1.0
- * Art-lead 出品，2026-07-18（依 work/groupbuy-視覺規範.md 第 6 節套用）
- * Light Mode 為主場景；Dark Mode token 以 [data-theme="dark"] 預留。
+ * 揪購 GroupBuy — 視覺規範 v2.0
+ * Art-lead 出品，2026-07-18（v2.0 黑底修訂，依 work/groupbuy-視覺規範.md 第 6 節）
+ * Dark Mode 為主場景；Light Mode token 以 [data-theme="light"] 預留（見附錄一）。
+ * 色相定位：暖橙炭黑（H≈20°），區別於 MaJong 綠金夜色（H≈140°）。
  * ========================================================================= */
 
 :root {
   /* ── 背景 / 表面 ──────────────────────────────────────── */
-  --color-bg:           #F9F6F3;   /* 暖珍珠白頁面底色 */
-  --color-surface:      #FFFFFF;   /* 卡片 / 表單白底 */
-  --color-surface-tint: #FEF3EB;   /* 統計摘要區淡橙底 */
-  --color-border:       #EDE4DD;   /* 暖米棕邊框 */
-  --color-input-bg:     #F9F6F3;   /* 輸入框背景同頁面底色 */
+  --color-bg:           #0C0A09;   /* 真黑帶極淡暖棕；區別 MaJong #0d1510 綠調 */
+  --color-surface:      #171210;   /* 卡片暖炭黑表面 */
+  --color-surface-tint: #1E1912;   /* 統計摘要區橙暖深底 */
+  --color-border:       #2C2218;   /* 暖棕邊框；區別 MaJong #253328 綠灰 */
+  --color-input-bg:     #100D0B;   /* 輸入框底，略深凹陷感 */
 
   /* ── 文字 ─────────────────────────────────────────────── */
-  --color-text:           #1C1210; /* 主文字，暖近黑 */
-  --color-text-secondary: #78605A; /* 次要文字，暖棕灰 */
-  --color-text-disabled:  #BBADA7; /* 停用 / placeholder */
+  --color-text:           #F0E8E0; /* 主文字，暖近白（帶橙米感）≈16:1 AAA */
+  --color-text-secondary: #8A7268; /* 次要文字，暖棕灰 ≈4.8:1 AA */
+  --color-text-disabled:  #4A3C34; /* 停用 / placeholder，純裝飾 */
   --color-text-inverse:   #FFFFFF; /* 有色背景上的反白文字 */
 
   /* ── 品牌色 ───────────────────────────────────────────── */
-  --color-primary:       #E8621A;  /* 柑橘橙，主品牌色 / CTA */
+  /* [填底/按鈕/邊框/連結用] primary ≈5.8:1 AA，黑底下醒目 */
+  --color-primary:       #E8621A;  /* 柑橘橙，CTA/按鈕填底/左側狀態條 */
   --color-primary-dark:  #C04D10;  /* 深橙，hover / pressed */
-  --color-primary-muted: #FDE8D9;  /* 橙色淡底，選中狀態 */
-  --color-primary-light: #FF8040;  /* 亮橙，動畫閃光幀用 */
+  --color-primary-muted: #251408;  /* 橙色深底 tint，選中狀態背景 */
+  --color-primary-light: #FF8A45;  /* 亮橙，動畫閃光幀（非常態色）*/
 
   /* ── 語意色 ───────────────────────────────────────────── */
-  --color-success:       #16A05E;  /* 收款打勾 / 已完成 */
-  --color-success-muted: #D3F5E6;  /* 打勾動畫底色 flash */
+  /* [文字/金額用橙] amount ≈7.0:1 AA+，比 primary 亮一階，小字可讀性更佳 */
+  --color-success:       #1DB974;  /* 收款打勾 / 已完成 ≈7.8:1 AAA */
+  --color-success-muted: #143D26;  /* 打勾動畫底色 flash（深綠底）*/
 
-  --color-amount:        #E8621A;  /* 金額數字（同 primary，橙=錢）*/
-  --color-amount-strong: #C04D10;  /* 大額總計，深橙加重 */
+  --color-amount:        #F07830;  /* 金額數字文字用橙 ≈7.0:1 AA+（比 primary 亮一階）*/
+  --color-amount-strong: #FF9050;  /* 大額總計強調 ≈8.8:1 AAA */
 
-  --color-warn:          #D97706;  /* 截止警示，琥珀黃橙 */
-  --color-warn-muted:    #FEF3C7;  /* 警示橫幅底色 */
+  --color-warn:          #F59E0B;  /* 截止警示，亮琥珀黃 ≈9.2:1 AAA */
+  --color-warn-muted:    #291E08;  /* 警示橫幅深琥珀底色 */
 
-  --color-danger:        #DC2626;  /* 錯誤 / 刪除 */
-  --color-danger-muted:  #FEE2E2;  /* 錯誤橫幅底色 */
+  --color-danger:        #F05252;  /* 錯誤 / 刪除 ≈5.7:1 AA */
+  --color-danger-muted:  #2A0D0D;  /* 錯誤橫幅深紅底色 */
 
-  --color-unpaid:        #DC2626;  /* 未收款數字，紅色促行動 */
-  --color-closed:        #9E8E86;  /* 已截止 / 靜態灰 */
+  --color-unpaid:        #F05252;  /* 未收款數字，紅色促行動 */
+  --color-closed:        #8A7A70;  /* 已截止 / 靜態暖灰 ≈4.8:1 AA */
 
   /* ── 間距 ─────────────────────────────────────────────── */
   --space-1: 4px;
@@ -55,17 +58,31 @@
   --radius-pill: 100px;  /* badge、pill 元件 */
 }
 
-/* ── Dark Mode 預留（MVP 不啟用，token 已備妥）─────────── */
-[data-theme="dark"] {
-  --color-bg:             #1A1210;
-  --color-surface:        #251914;
-  --color-surface-tint:   #301E16;
-  --color-border:         #3D2D28;
-  --color-input-bg:       #1A1210;
-  --color-text:           #F5EDE8;
-  --color-text-secondary: #9E8070;
-  --color-text-disabled:  #5A4840;
-  /* --color-primary 等品牌色在 dark mode 下沿用，橙色在暗底效果良好 */
+/* ── Light Mode 預留（MVP 不啟用，token 已備妥，見附錄一）── */
+[data-theme="light"] {
+  --color-bg:             #F9F6F3;
+  --color-surface:        #FFFFFF;
+  --color-surface-tint:   #FEF3EB;
+  --color-border:         #EDE4DD;
+  --color-input-bg:       #F9F6F3;
+  --color-text:           #1C1210;
+  --color-text-secondary: #78605A;
+  --color-text-disabled:  #BBADA7;
+  --color-text-inverse:   #FFFFFF;
+  --color-primary:        #E8621A;
+  --color-primary-dark:   #C04D10;
+  --color-primary-muted:  #FDE8D9;
+  --color-primary-light:  #FF8040;
+  --color-success:        #16A05E;
+  --color-success-muted:  #D3F5E6;
+  --color-amount:         #E8621A;  /* 亮底下 primary 原色即可（4.8:1 AA）*/
+  --color-amount-strong:  #C04D10;
+  --color-warn:           #D97706;
+  --color-warn-muted:     #FEF3C7;
+  --color-danger:         #DC2626;
+  --color-danger-muted:   #FEE2E2;
+  --color-unpaid:         #DC2626;
+  --color-closed:         #9E8E86;
 }
 
 /* =========================================================================
