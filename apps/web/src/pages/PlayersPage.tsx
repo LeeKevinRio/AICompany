@@ -62,6 +62,11 @@ export function PlayersPage() {
       for (const p of s.players) {
         if (p.rosterId == null) hasUnlinked.add(p.name);
       }
+      // v2.4：接手者也算「出現過的玩家」——未連結名冊的接手者要能在歷史玩家區段被看到、可點進詳情。
+      // 已連結名冊的接手者由上方名冊列（aggregateByRosterId）呈現，不進此處。
+      for (const sub of s.substitutions ?? []) {
+        if (sub.rosterId == null) hasUnlinked.add(sub.name);
+      }
     }
     // 只要還有同名且未連結的 Player，就保留顯示——即使名冊已有同名成員，這批未歸帳的
     // 場次也要讓使用者看得到、能點「加入名冊」觸發回填。回填走 addRosterPlayer 的 existing

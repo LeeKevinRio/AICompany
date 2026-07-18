@@ -9,6 +9,7 @@ import type {
   Session,
   SessionRules,
   Settings,
+  Substitution,
 } from '../types';
 import {
   DEFAULT_GLOBAL_SETTINGS,
@@ -99,6 +100,31 @@ function normalizeSessionRules(v: unknown, fallback: SessionRules): SessionRules
   };
 }
 
+/**
+ * v2.4（批次 3）：把任意值正規化成乾淨的 substitutions 陣列（中途換人時間軸）。
+ * 非陣列 → 空陣列；逐筆過濾——seatId 必須指向存在座位、fromRoundIndex 非負整數、name 非空。
+ * 壞的項目濾掉而非整場丟棄（換人是純顯示 / 歸戶層，毀損不該連累金流正確的歷史場次）。
+ */
+function normalizeSubstitutions(v: unknown, playerIds: Set<string>): Substitution[] {
+  if (!Array.isArray(v)) return [];
+  const out: Substitution[] = [];
+  for (const item of v) {
+    if (typeof item !== 'object' || item === null) continue;
+    const s = item as Record<string, unknown>;
+    if (!isNonEmptyString(s.seatId) || !playerIds.has(s.seatId)) continue;
+    if (!isFiniteNonNegInt(s.fromRoundIndex)) continue;
+    if (typeof s.name !== 'string' || s.name.trim() === '') continue;
+    if (s.rosterId !== undefined && typeof s.rosterId !== 'string') continue;
+    out.push({
+      seatId: s.seatId,
+      fromRoundIndex: s.fromRoundIndex,
+      name: s.name,
+      rosterId: typeof s.rosterId === 'string' ? s.rosterId : undefined,
+    });
+  }
+  return out;
+}
+
 function isValidSettings(v: unknown): v is Settings {
   if (typeof v !== 'object' || v === null) return false;
   const s = v as Record<string, unknown>;
@@ -128,8 +154,10 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
 
   // v2.3：流局（drawn=true）——winnerId 必須為空字串、loserId 必須為 null（採方案 A 判別式）。
   // 提前 return，避免下方對 winnerId 的「非空且在玩家清單」檢查誤把流局判成毀損。
+  // 批次 3 防呆補強：流局 selfDraw 必為 false（selfDraw 型別已於上方驗過為 boolean），
+  // 否則計分會誤把流局當自摸算出東錢，破壞「流局全 0」不變量。
   if (r.drawn === true) {
-    return r.winnerId === '' && r.loserId === null;
+    return r.winnerId === '' && r.loserId === null && r.selfDraw === false;
   }
 
   // 非流局：winnerId 必填、合法且在玩家清單內。
@@ -276,9 +304,15 @@ export class LocalStorageRepository implements StorageRepository {
       if (isValidSession(item)) {
         // v2.1 migration：舊場次無 rules → 補 DEFAULT_SESSION_RULES（全 0，計分行為不變）。
         const raw = item as unknown as Record<string, unknown>;
+        // v2.4 migration：substitutions 只在原本就有此欄位時才正規化寫回；舊場無此欄位
+        // 保持不帶 key（等同空時間軸），行為零變化。
+        const playerIds = new Set(item.players.map((p) => p.id));
         valid.push({
           ...item,
           rules: normalizeSessionRules(raw.rules, DEFAULT_SESSION_RULES),
+          ...(raw.substitutions !== undefined
+            ? { substitutions: normalizeSubstitutions(raw.substitutions, playerIds) }
+            : {}),
         });
       } else {
         droppedAny = true;

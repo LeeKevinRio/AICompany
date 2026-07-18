@@ -125,6 +125,37 @@ export interface Session {
    * deriveTableState 對 rounds fold 推導，不 denormalize 進 Round，避免刪局後 desync。
    */
   dealerStartSeat?: string;
+  /**
+   * v2.4（批次 3）：中途換人的座位時間軸。舊場無此欄位 → 視為空陣列，行為零變化。
+   * players 仍是「第 0 局起」的初始佔用者；substitutions 疊加在時間軸上，
+   * 由純函式 seatOccupantAt 解析「某局某座位實際是誰」。金流零和只看座位，不看這裡。
+   */
+  substitutions?: Substitution[];
+}
+
+/**
+ * v2.4（牌桌規則補完 批次 3）：中途換人——座位時間軸上的一筆異動。
+ *
+ * 核心防呆（對症競品「有人贏沒人輸」）：錢永遠掛在「座位」（p1~p4），四人零和結構完全不動。
+ * substitution 只描述「某座位從第 fromRoundIndex 局（含）起換成另一位玩家」，是純粹的
+ * 歸戶 / 顯示層資訊，與金流零和徹底解耦（scoreRound / settleSession 完全不看它）。
+ *
+ * CEO 拍板：只做換人（不做換位）、接手者自成一帳（從接手局起算輸贏與統計，不繼承前人累計）。
+ * 舊場無 substitutions 欄位 → 空時間軸，行為零變化。
+ */
+export interface Substitution {
+  /** 換人的座位 id（'p1'~'p4'）。 */
+  seatId: string;
+  /**
+   * 從第幾局（含，0-based index 對齊 rounds）起換成新玩家。
+   * UI 只允許 ≥ 目前已記局數（不改寫過去局的歸屬），但解析函式對任意值一律取
+   * 「fromRoundIndex ≤ roundIndex 中最大者」的那筆，邏輯與 deriveTableState 的 fold 同構。
+   */
+  fromRoundIndex: number;
+  /** 接手者名字。 */
+  name: string;
+  /** 接手者名冊連結（從名冊選才有值；純手打 → undefined，統計 fallback 用名字聚合）。 */
+  rosterId?: string;
 }
 
 /**

@@ -10,6 +10,7 @@ import type {
   Session,
   SessionRules,
   Settings,
+  Substitution,
 } from '../types';
 import { DEFAULT_GLOBAL_SETTINGS, DEFAULT_PLAYERS } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
@@ -62,6 +63,35 @@ export function linkSessionsToRoster(
       ),
     };
   });
+}
+
+/**
+ * 純函式：從一場中刪掉某一局，並同步左移換人時間軸的 fromRoundIndex。
+ *
+ * 為何要動 substitutions：fromRoundIndex 是「接手者從第幾局（含）起接手」的 0-based index，
+ * 對齊 rounds 陣列位置。刪掉 index=deletedIndex 的那局後，其後所有局會前移一格，
+ * 若 fromRoundIndex 不跟著左移，接手邊界就會靜默漂移——接手者的首局會被錯歸前任。
+ *
+ * 規則（邊界定義）：
+ *  - fromRoundIndex > deletedIndex：接手邊界在被刪局之後，整段右側左移一格 → -1。
+ *  - fromRoundIndex ≤ deletedIndex：被刪的是接手者名下（或前任名下）的局，接手邊界不動；
+ *    特別是「剛好刪掉接手者首局」（fromRoundIndex === deletedIndex）時，接手點仍落在同一
+ *    index（原本第 fromRoundIndex+1 局遞補上來），接手者只是少算一局，歸戶邊界不變。
+ *  - 找不到該局（deletedIndex < 0，理論上不會發生）：原樣返回，絕不亂動 substitutions。
+ *
+ * 抽成純函式方便單元測試（與 linkSessionsToRoster 同一種「可測純資料轉換」模式）。
+ */
+export function removeRoundFromSession(s: Session, roundId: string): Session {
+  const deletedIndex = s.rounds.findIndex((r) => r.id === roundId);
+  if (deletedIndex < 0) return s;
+  const rounds = s.rounds.filter((r) => r.id !== roundId);
+  if (!s.substitutions) return { ...s, rounds };
+  const substitutions = s.substitutions.map((sub) =>
+    sub.fromRoundIndex > deletedIndex
+      ? { ...sub, fromRoundIndex: sub.fromRoundIndex - 1 }
+      : sub,
+  );
+  return { ...s, rounds, substitutions };
 }
 
 /**
@@ -252,10 +282,41 @@ export function useSessions() {
 
   const removeRound = useCallback(
     (id: string, roundId: string) => {
-      updateSession(id, (s) => ({
-        ...s,
-        rounds: s.rounds.filter((r) => r.id !== roundId),
-      }));
+      // 刪局同時修正換人時間軸（fromRoundIndex 左移），避免歸戶邊界漂移。詳見 removeRoundFromSession。
+      updateSession(id, (s) => removeRoundFromSession(s, roundId));
+    },
+    [updateSession],
+  );
+
+  // v2.4（批次 3）：中途換人——某座位自「當前局起」（fromRoundIndex = 目前已記局數）換成新玩家。
+  // 防呆：接手者名字必填；fromRoundIndex 一律鎖成 s.rounds.length（不允許改寫過去局的歸屬）。
+  // 只影響歸戶 / 顯示層，金流零和不動（scoreRound / settleSession 完全不看 substitutions）。
+  const addSubstitution = useCallback(
+    (id: string, seatId: string, name: string, rosterId?: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      updateSession(id, (s) => {
+        if (!s.players.some((p) => p.id === seatId)) return s;
+        const fromRoundIndex = s.rounds.length;
+        const sub: Substitution = {
+          seatId,
+          fromRoundIndex,
+          name: trimmed,
+          ...(rosterId ? { rosterId } : {}),
+        };
+        const existing = s.substitutions ?? [];
+        // 防呆：同座位、同 fromRoundIndex 已有一筆（尚未記局就連換兩次）→ 覆蓋而非追加，
+        // 避免堆疊無效中間筆。這與 seatOccupantAt「同 fromRoundIndex 取後出現者（>=）」的
+        // 後進覆蓋語義一致——這裡直接讓資料層只留最後一筆，更乾淨。
+        const dupIdx = existing.findIndex(
+          (x) => x.seatId === seatId && x.fromRoundIndex === fromRoundIndex,
+        );
+        const substitutions =
+          dupIdx >= 0
+            ? existing.map((x, i) => (i === dupIdx ? sub : x))
+            : [...existing, sub];
+        return { ...s, substitutions };
+      });
     },
     [updateSession],
   );
@@ -390,6 +451,7 @@ export function useSessions() {
     updatePlayerName,
     addRound,
     removeRound,
+    addSubstitution,
     toggleEnded,
     updateRules,
     updateGlobalSettings,
@@ -400,4 +462,13 @@ export function useSessions() {
   } as const;
 }
 
-export type { GlobalSettings, Player, RosterPlayer, Round, Session, SessionRules, Settings };
+export type {
+  GlobalSettings,
+  Player,
+  RosterPlayer,
+  Round,
+  Session,
+  SessionRules,
+  Settings,
+  Substitution,
+};

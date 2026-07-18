@@ -428,6 +428,60 @@ describe('collectPlayerNames', () => {
     expect(names).toContain('阿志');
     expect(names).toContain('老王');
   });
+
+  it('納入換人場的接手者（僅以接手者身分出現者也要列得出）', () => {
+    const base: Session = {
+      id: 's',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+    };
+    const s: Session = {
+      ...base,
+      id: 's-sub',
+      players: [
+        { id: 'p1', name: '甲' },
+        { id: 'p2', name: '乙' },
+        { id: 'p3', name: '丙' },
+        { id: 'p4', name: '丁' },
+      ],
+      substitutions: [{ seatId: 'p4', fromRoundIndex: 2, name: '戊' }],
+    };
+    const names = collectPlayerNames([s]);
+    // 接手者「戊」雖只在 substitutions 出現，也要蒐集得到（否則玩家頁列不出他）。
+    expect(names).toContain('戊');
+    // 初始入座者一併列出。
+    expect(names).toEqual(expect.arrayContaining(['甲', '乙', '丙', '丁']));
+  });
+
+  it('同場內接手者與初始入座者同名只計一次', () => {
+    const base: Session = {
+      id: 's',
+      name: '場',
+      players: players.map((p) => ({ ...p })),
+      settings: { ...settings },
+      rules: { ...rules },
+      rounds: [],
+      createdAt: 0,
+    };
+    const s: Session = {
+      ...base,
+      id: 's-dup',
+      players: [
+        { id: 'p1', name: '甲' },
+        { id: 'p2', name: '乙' },
+        { id: 'p3', name: '丙' },
+        { id: 'p4', name: '丁' },
+      ],
+      // 接手者與 p1 同名「甲」——同場去重後只計一次，名單裡不出現重複。
+      substitutions: [{ seatId: 'p4', fromRoundIndex: 2, name: '甲' }],
+    };
+    const names = collectPlayerNames([s]);
+    expect(names.filter((n) => n === '甲')).toHaveLength(1);
+  });
 });
 
 describe('formatSigned', () => {
@@ -714,5 +768,95 @@ describe('v2.3 — 流局 / 連莊對統計的影響', () => {
     const ctxs = deriveDealerContexts(s);
     const tl = buildCumulativeTimeline(s.rounds, s.players, s.settings, s.rules, ctxs);
     expect(tl[1].cumulative.p1).toBe(750);
+  });
+});
+
+// v2.4（批次 3）：中途換人歸戶——某局座位輸贏 / 胡 / 放槍歸給該局實際在座者，
+// 接手者自成一帳（不繼承前人累計）；三率卡分母＝實際在桌局數。
+describe('aggregateBy 換人歸戶（批次 3）', () => {
+  const subPlayers: Player[] = [
+    { id: 'p1', name: 'A' },
+    { id: 'p2', name: 'B' },
+    { id: 'p3', name: 'C' },
+    { id: 'p4', name: 'D' },
+  ];
+  // tai=1、非自摸 → 每筆 transfer = 100 + 1×50 = 150。
+  function w(id: string, winnerId: string, loserId: string): Round {
+    return { id, winnerId, loserId, tai: 1, selfDraw: false, createdAt: 0 };
+  }
+  // p2 座位第 2 局起換成「阿明」。
+  function subSession(rosterId?: string): Session {
+    return {
+      id: 's-sub',
+      name: '換人場',
+      players: subPlayers,
+      settings,
+      rules,
+      rounds: [
+        w('r0', 'p1', 'p2'), // B(p2) 放槍給 A
+        w('r1', 'p2', 'p3'), // B(p2) 胡
+        w('r2', 'p2', 'p1'), // 阿明(p2) 胡
+        w('r3', 'p3', 'p2'), // 阿明(p2) 放槍給 C
+      ],
+      createdAt: 100,
+      substitutions: [{ seatId: 'p2', fromRoundIndex: 2, name: '阿明', ...(rosterId ? { rosterId } : {}) }],
+    };
+  }
+
+  it('前一位（B）只算接手前的局：totalRounds=2、amount 只含第 0~1 局', () => {
+    const b = aggregatePlayerStats([subSession()], 'B');
+    expect(b.sessionsPlayed).toBe(1);
+    expect(b.totalRounds).toBe(2); // 只在座第 0、1 局
+    expect(b.totalWins).toBe(1); // 第 1 局胡
+    expect(b.totalGunned).toBe(1); // 第 0 局放槍
+    // p2 第 0 局 −150、第 1 局 +150 → 0
+    expect(b.history[0].amount).toBe(0);
+  });
+
+  it('接手者（阿明）自成一帳：totalRounds=2、只算第 2~3 局，不繼承前人', () => {
+    const m = aggregatePlayerStats([subSession()], '阿明');
+    expect(m.sessionsPlayed).toBe(1);
+    expect(m.totalRounds).toBe(2); // 只在座第 2、3 局
+    expect(m.totalWins).toBe(1); // 第 2 局胡
+    expect(m.totalGunned).toBe(1); // 第 3 局放槍
+    // p2 第 2 局 +150、第 3 局 −150 → 0
+    expect(m.history[0].amount).toBe(0);
+  });
+
+  it('整場未換座位者（A）照算全部四局', () => {
+    const a = aggregatePlayerStats([subSession()], 'A');
+    expect(a.totalRounds).toBe(4);
+    expect(a.totalWins).toBe(1); // 第 0 局胡
+    expect(a.totalGunned).toBe(1); // 第 2 局放槍
+  });
+
+  it('金流零和不因換人破壞：四人（含前後任）amount 加總為 0', () => {
+    const s = subSession();
+    const sum =
+      aggregatePlayerStats([s], 'A').history[0].amount +
+      aggregatePlayerStats([s], 'B').history[0].amount +
+      aggregatePlayerStats([s], '阿明').history[0].amount +
+      aggregatePlayerStats([s], 'C').history[0].amount +
+      aggregatePlayerStats([s], 'D').history[0].amount;
+    expect(sum).toBe(0);
+  });
+
+  it('冤家榜對手身分隨換人切換：B 與阿明各自成一筆、同桌局數只算在座那段', () => {
+    const a = aggregatePlayerStats([subSession()], 'A');
+    const byName = Object.fromEntries(a.enemyBoard.map((e) => [e.name, e]));
+    // B 只與 A 同桌第 0~1 局；B 第 0 局放槍給 A（shotByThem）
+    expect(byName.B).toMatchObject({ coPlayedRounds: 2, shotByMe: 0, shotByThem: 1 });
+    // 阿明只與 A 同桌第 2~3 局；A 第 2 局放槍給阿明（shotByMe）
+    expect(byName['阿明']).toMatchObject({ coPlayedRounds: 2, shotByMe: 1, shotByThem: 0 });
+    // 未換位對手 C / D 全程 4 局
+    expect(byName.C.coPlayedRounds).toBe(4);
+    expect(byName.D.coPlayedRounds).toBe(4);
+  });
+
+  it('接手者帶 rosterId → aggregateByRosterId 聚合到其在座那段', () => {
+    const m = aggregateByRosterId([subSession('ros-9')], 'ros-9', '阿明');
+    expect(m.totalRounds).toBe(2);
+    expect(m.totalWins).toBe(1);
+    expect(m.history[0].amount).toBe(0);
   });
 });

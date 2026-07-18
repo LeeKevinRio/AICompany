@@ -8,6 +8,7 @@ import { DEFAULT_SESSION_RULES } from '../types';
 import type { DealerContext } from './scoring';
 import { calcDong, calcUnitAmount, effectiveTai, scoreRound } from './scoring';
 import { deriveDealerContexts } from './dealer';
+import { seatOccupantAt } from './substitution';
 
 /** 讀取 session 的規則；舊資料無 rules 欄位時回 DEFAULT_SESSION_RULES（全 0，行為不變）。 */
 export function rulesOf(session: Pick<Session, 'rules'>): SessionRules {
@@ -348,19 +349,23 @@ export interface PlayerStats {
 }
 
 /**
- * 跨場彙整核心：以 `matchPlayers` 在每場找出**所有**對應座位後加總統計。
+ * 跨場彙整核心：以 `matchOccupant` 判定「某座位在某局的實際佔用者是不是本人」後逐局加總。
  * - 金額採「淨額」：底/台/自摸加台（含 session 規則）再扣掉自己付出的東錢。
  * - 舊資料無 rules 欄位時用 DEFAULT_SESSION_RULES（全 0），行為與 v2 一致。
  *
- * 同一場可能有多個符合座位（例如同名、或回填後同 rosterId 的兩個座位）。
- * 依 CEO 定案「同名＝同一人」，同場所有符合座位的貢獻（淨額、胡/自摸/放槍次數）
- * 全部加總到該人，避免只取第一個座位而漏帳。每場最多一個符合座位時，
- * 加總結果與舊版「取第一個」完全一致（零回歸）。
+ * v2.4（批次 3）換人歸戶：座位的實際佔用者可能隨局數改變（seatOccupantAt 解析）。
+ * 因此**逐局**判定「這局哪些座位是本人」——某局的座位輸贏 / 胡 / 放槍歸給該局實際在座者，
+ * 接手者自成一帳（從接手局起算，不繼承前人累計）；`totalRounds`（三率卡分母）＝
+ * 本人實際在桌的（非流局）局數。舊場 / 無換人時每局佔用者恆等於初始 players，
+ * 逐局加總與舊版「整場固定座位」完全一致（零回歸）。
+ *
+ * 同一局可能有多個符合座位（例如同名的兩個座位）。依 CEO 定案「同名＝同一人」，
+ * 同局所有符合座位的貢獻全部加總，避免漏帳；每局最多一個符合座位（常態）時行為不變。
  */
 function aggregateBy(
   sessions: Session[],
   displayName: string,
-  matchPlayers: (s: Session) => Player[],
+  matchOccupant: (occ: Player) => boolean,
 ): PlayerStats {
   const history: PlayerSessionResult[] = [];
   let totalWins = 0;
@@ -390,28 +395,28 @@ function aggregateBy(
   const sorted = [...sessions].sort((a, b) => a.createdAt - b.createdAt);
 
   for (const s of sorted) {
-    const matched = matchPlayers(s);
-    if (matched.length === 0) continue;
+    // 是否參與本場：本人為某座位的初始佔用者，或為某筆換人的接手者。
+    // 涵蓋「0 局場（只初始入座）」與「僅以接手者身分出現」兩種情形；舊場無 substitutions
+    // 時等同「本人是否為初始 players 之一」，與舊版 matched.length>0 判定一致（零回歸）。
+    const participates =
+      s.players.some((p) => matchOccupant(p)) ||
+      (s.substitutions ?? []).some((sub) =>
+        matchOccupant({ id: sub.seatId, name: sub.name, rosterId: sub.rosterId }),
+      );
+    if (!participates) continue;
 
     const rules = rulesOf(s);
     // v2.3：連莊加台需知每局莊家 / 連莊數——由 deriveTableState 推導（舊場 / 未啟用回空陣列，零回歸）。
     const dealerCtxs = deriveDealerContexts(s);
-    // v2.3：流局（drawn）不是一場可胡 / 可放槍的局，一律排除在「率值分母」與「同場局數」之外。
-    const scoredCount = s.rounds.filter((r) => !r.drawn).length;
-    // 冤家榜輔助：本場「自己座位」id 集合、座位 id → Player 查表。
-    const selfIds = new Set(matched.map((p) => p.id));
-    const seatById = new Map(s.players.map((p) => [p.id, p]));
-    // 同場局數：每個非自己座位都與自己同桌了本場所有（非流局）局。多座位同名對手的極端情形
-    // 會各自累計（與 totalRounds 的多座位加總語意一致），常態每人一座位不受影響。
-    for (const p of s.players) {
-      if (selfIds.has(p.id)) continue;
-      touchEnemy(p).coPlayedRounds += scoredCount;
-    }
-    // 分母：本場非流局局數 × 符合座位數。乘座位數與 totalWins/totalGunned 的多座位加總一致，
-    // 每場僅一個符合座位（常態）時等同 scoredCount。流局不計入胡牌率 / 放槍率分母。
-    totalRounds += scoredCount * matched.length;
     let amount = 0;
+
     s.rounds.forEach((r, ri) => {
+      // v2.4：逐局解析四個座位當下佔用者，判定「這局哪些座位是本人 / 誰是對手」。
+      const occupants = s.players.map((p) => seatOccupantAt(s, p.id, ri));
+      const mySeats = occupants.filter((o) => matchOccupant(o));
+      const myIds = new Set(mySeats.map((o) => o.id));
+      const nonDrawn = !r.drawn;
+
       const dctx = dealerCtxs[ri];
       // 每局只算一次計分（含連莊加台），供淨額 / 最高收益共用。
       let delta: Record<string, number> | null = null;
@@ -420,39 +425,48 @@ function aggregateBy(
       } catch {
         delta = null; // 非法局略過
       }
-      // 同場所有符合座位都要加總；每場僅一個符合座位時等同舊版單一座位行為。
-      for (const player of matched) {
+
+      // 本人這局實際在座的座位：逐座加總金額 / 胡 / 放槍。
+      for (const mine of mySeats) {
         if (delta) {
-          amount += delta[player.id] ?? 0;
+          amount += delta[mine.id] ?? 0;
           // 自己自摸付的東錢是淨流出，從淨額扣除。
-          if (r.selfDraw && r.winnerId === player.id) amount -= calcDong(r, rules);
+          if (r.selfDraw && r.winnerId === mine.id) amount -= calcDong(r, rules);
         }
         // 流局 winnerId=''、loserId=null，天然不會命中任何座位（不計胡 / 放槍）。
-        if (r.winnerId === player.id) {
+        if (r.winnerId === mine.id) {
           totalWins += 1;
           if (r.selfDraw) totalSelfDraws += 1;
           // 平均台數分子用 r.tai（申報台數），不含自摸 / 連莊加台。
           totalWinTai += r.tai;
           // 跨場單局最高收益：直接取贏家的計分 delta（已含連莊 / 眼牌加台）。
-          const won = delta ? (delta[player.id] ?? 0) : 0;
+          const won = delta ? (delta[mine.id] ?? 0) : 0;
           if (won > bestRoundAmount) bestRoundAmount = won;
         }
-        if (!r.selfDraw && r.loserId === player.id) {
+        if (!r.selfDraw && r.loserId === mine.id) {
           totalGunned += 1;
         }
       }
 
-      // 冤家榜配對（每局最多一筆，故置於 matched 迴圈外、避免多座位重複計）：
-      // 放槍是「有輸家」的局，自摸與流局（loserId=null）不列入。
-      if (!r.selfDraw && r.loserId != null && r.winnerId) {
-        const iShot = selfIds.has(r.loserId) && !selfIds.has(r.winnerId);
-        const iWon = selfIds.has(r.winnerId) && !selfIds.has(r.loserId);
-        if (iShot) {
-          const opp = seatById.get(r.winnerId); // 我放槍給贏家
-          if (opp) touchEnemy(opp).shotByMe += 1;
-        } else if (iWon) {
-          const opp = seatById.get(r.loserId); // 輸家放槍給我
-          if (opp) touchEnemy(opp).shotByThem += 1;
+      // 分母 / 冤家榜只在「本人這局有在桌」時累計（接手前的局不算本人在桌）。
+      if (mySeats.length > 0) {
+        // 三率卡分母：本人這局實際在桌的座位數（流局不計）。每局一座位（常態）時等同 +1。
+        if (nonDrawn) totalRounds += mySeats.length;
+        // 同場局數：本人這局在桌，與每個非本人座位（該局實際佔用者）同桌一局（流局不計）。
+        if (nonDrawn) {
+          for (const opp of occupants) {
+            if (!myIds.has(opp.id)) touchEnemy(opp).coPlayedRounds += 1;
+          }
+        }
+        // 冤家榜配對（每局最多一筆）：放槍是「有輸家」的局，自摸 / 流局（loserId=null）不列入。
+        if (!r.selfDraw && r.loserId != null && r.winnerId) {
+          const iShot = myIds.has(r.loserId) && !myIds.has(r.winnerId);
+          const iWon = myIds.has(r.winnerId) && !myIds.has(r.loserId);
+          if (iShot) {
+            touchEnemy(seatOccupantAt(s, r.winnerId, ri)).shotByMe += 1; // 我放槍給贏家
+          } else if (iWon) {
+            touchEnemy(seatOccupantAt(s, r.loserId, ri)).shotByThem += 1; // 輸家放槍給我
+          }
         }
       }
     });
@@ -528,9 +542,7 @@ export function aggregatePlayerStats(
   sessions: Session[],
   playerName: string,
 ): PlayerStats {
-  return aggregateBy(sessions, playerName, (s) =>
-    s.players.filter((p) => p.name === playerName),
-  );
+  return aggregateBy(sessions, playerName, (occ) => occ.name === playerName);
 }
 
 /**
@@ -547,8 +559,10 @@ export function aggregateUnlinkedByName(
   sessions: Session[],
   playerName: string,
 ): PlayerStats {
-  return aggregateBy(sessions, playerName, (s) =>
-    s.players.filter((p) => p.name === playerName && p.rosterId == null),
+  return aggregateBy(
+    sessions,
+    playerName,
+    (occ) => occ.name === playerName && occ.rosterId == null,
   );
 }
 
@@ -561,22 +575,27 @@ export function aggregateByRosterId(
   rosterId: string,
   displayName: string,
 ): PlayerStats {
-  return aggregateBy(sessions, displayName, (s) =>
-    s.players.filter((p) => p.rosterId === rosterId),
-  );
+  return aggregateBy(sessions, displayName, (occ) => occ.rosterId === rosterId);
 }
 
-/** 從所有 session 蒐集出現過的玩家名字（去重，依出場次數排序） */
+/**
+ * 從所有 session 蒐集出現過的玩家名字（去重，依出場次數排序）。
+ * v2.4：除了初始入座的 players，也掃 substitutions 的接手者——否則「僅以接手者身分出現」
+ * 的玩家（如中途上桌的戊）雖然統計算得出（aggregateBy 有 participates 判定），玩家頁卻列不出他。
+ * 同場內同名只計一次（players 與 substitutions 共用一個 seen），去重與名冊連結邏輯與 players 一致。
+ */
 export function collectPlayerNames(sessions: Session[]): string[] {
   const count = new Map<string, number>();
   for (const s of sessions) {
     const seen = new Set<string>();
-    for (const p of s.players) {
-      const name = p.name.trim();
-      if (!name || seen.has(name)) continue;
+    const tally = (rawName: string) => {
+      const name = rawName.trim();
+      if (!name || seen.has(name)) return;
       seen.add(name);
       count.set(name, (count.get(name) ?? 0) + 1);
-    }
+    };
+    for (const p of s.players) tally(p.name);
+    for (const sub of s.substitutions ?? []) tally(sub.name);
   }
   return [...count.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-TW'))

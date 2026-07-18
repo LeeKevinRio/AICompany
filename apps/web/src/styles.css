@@ -836,6 +836,11 @@ button.link.danger {
 .sheet {
   width: 100%;
   max-width: 560px;
+  /* 內容超過視口高度時可捲動——避免編輯本場設定 / 開新局等長 sheet 在小螢幕（如 375×667）
+     被截斷。漸進增強：不支援 dvh 的瀏覽器 fallback 90vh，支援者用 dvh（扣掉動態工具列更準）。 */
+  max-height: calc(90vh - env(safe-area-inset-bottom));
+  max-height: calc(90dvh - env(safe-area-inset-bottom));
+  overflow-y: auto;
   background: var(--color-surface);
   border-radius: 16px 16px 0 0;
   padding: 20px 16px calc(20px + var(--safe-bottom));
@@ -3253,4 +3258,47 @@ button.link.danger {
   .open-dealer-btn {
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── 中途換人（批次 3）── */
+/* 記局頁「本場已換人」提示 */
+.subst-notice {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding: 6px 10px;
+  border-left: 2px solid var(--color-primary-muted);
+  background: rgba(31, 111, 67, 0.04);
+  border-radius: var(--radius-sm);
+}
+
+/* 編輯本場設定內的換人面板 */
+.subst-panel {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+.subst-confirm {
+  margin: var(--space-2) 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+/* 明細頁換人分隔列（「↓ 此局起 玩家X：前一位 → 接手者」） */
+.round-subst-divider {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px;
+  list-style: none;
+}
+
+.round-subst-tag {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: rgba(31, 111, 67, 0.06);
+  border: 1px dashed var(--color-primary-muted);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
 }

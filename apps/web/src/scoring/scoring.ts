@@ -93,6 +93,11 @@ export function assertValidRound(round: Round, players: Player[]): void {
     if (round.loserId !== null) {
       throw new Error(`流局的 loserId 必須為 null，實際：${round.loserId}`);
     }
+    // 批次 3 防呆補強：流局無人胡牌，selfDraw 必為 false。若為 true，calcDong 會誤把流局
+    // 當自摸算出東錢金流，破壞「流局全 0」不變量——明確擋下，不靜默略過。
+    if (round.selfDraw !== false) {
+      throw new Error(`流局的 selfDraw 必須為 false，實際：${round.selfDraw}`);
+    }
     return;
   }
 

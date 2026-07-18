@@ -10,11 +10,17 @@ import { RankBar } from '../components/RankBar';
 import { ScoreChart } from '../components/ScoreChart';
 import { ShareCard } from '../components/ShareCard';
 import { BottomSheet } from '../components/BottomSheet';
+import { SubstitutionPanel } from '../components/SubstitutionPanel';
 import { IconSettings } from '../components/icons';
 import { deriveTableState } from '../scoring/dealer';
+import { hasSubstitutions, occupantPlayersAt } from '../scoring/substitution';
 import type { SessionRules } from '../types';
 
 type SubTab = 'record' | 'chart' | 'detail';
+
+// v2.4（批次 3）：換人場的顯示語義提示——排名/累計/圖卡的金額都是「各座位整場加總」，
+// 分帳細節（哪一局歸誰）以每局明細為準，避免玩家誤把座位加總當成某個人的個人分帳。
+const SUBST_AGGREGATE_NOTE = '排名金額為各座位整場加總，分帳依每局明細。';
 
 /** v2.1：進場規則提示 chip（自摸加台 / 東錢 / 眼牌 / 連莊開啟時顯示，讓玩家確認規則）。 */
 function RuleChips({ rules, dealerActive }: { rules: SessionRules; dealerActive: boolean }) {
@@ -45,6 +51,7 @@ export function SessionDetailPage() {
     updatePlayerName,
     addRound,
     removeRound,
+    addSubstitution,
     toggleEnded,
     updateRules,
     addSession,
@@ -74,6 +81,12 @@ export function SessionDetailPage() {
   // v2.3：圈風 / 莊家 / 連莊推導（唯一真相：session.dealerStartSeat + rules；純函式 fold）。
   // 一次算好，下傳給排名條 / 記局 / 明細 / 走勢 / 累計，確保各處金額與圈風一致。
   const tableState = deriveTableState(session);
+
+  // v2.4（批次 3）：當前在座者（每座位在「下一局」的實際佔用者）。金額仍以座位計，
+  // 這裡只把顯示名字 / 頭像換成當下在座者——排名條 / 記局 / 走勢 / 累計 / 圖卡皆用它。
+  // 舊場 / 無換人時等同 session.players（零回歸）。明細頁另按「每局」解析歷史在座者。
+  const displayPlayers = occupantPlayersAt(session, session.rounds.length);
+  const substituted = hasSubstitutions(session);
 
   return (
     <div className="page">
@@ -116,9 +129,15 @@ export function SessionDetailPage() {
       {sub === 'record' && (
         <>
           <RuleChips rules={session.rules} dealerActive={tableState.active} />
+          {substituted && (
+            <>
+              <p className="subst-notice">本場已換人：座位顯示當前在座者，歷史局仍歸當時玩家。</p>
+              <p className="subst-notice">{SUBST_AGGREGATE_NOTE}</p>
+            </>
+          )}
           <RankBar
             rounds={session.rounds}
-            players={session.players}
+            players={displayPlayers}
             settings={session.settings}
             rules={session.rules}
             roster={globalSettings.roster}
@@ -126,7 +145,7 @@ export function SessionDetailPage() {
             tableState={tableState}
           />
           <RoundForm
-            players={session.players}
+            players={displayPlayers}
             rounds={session.rounds}
             roster={globalSettings.roster}
             rules={session.rules}
@@ -170,9 +189,10 @@ export function SessionDetailPage() {
 
       {sub === 'chart' && (
         <>
+          {substituted && <p className="subst-notice">{SUBST_AGGREGATE_NOTE}</p>}
           <ScoreChart
             rounds={session.rounds}
-            players={session.players}
+            players={displayPlayers}
             settings={session.settings}
             rules={session.rules}
             tableState={tableState}
@@ -180,7 +200,7 @@ export function SessionDetailPage() {
           {/* 減法（創意檢視第六節）：Highlights 移出走勢圖 tab，集中到 P6 結算頁登場，不重複出現 */}
           <ShareCard
             session={session}
-            players={session.players}
+            players={displayPlayers}
             rounds={session.rounds}
             settings={session.settings}
             roster={globalSettings.roster}
@@ -190,9 +210,10 @@ export function SessionDetailPage() {
 
       {sub === 'detail' && (
         <>
+          {substituted && <p className="subst-notice">{SUBST_AGGREGATE_NOTE}</p>}
           <Standings
             rounds={session.rounds}
-            players={session.players}
+            players={displayPlayers}
             settings={session.settings}
             rules={session.rules}
             tableState={tableState}
@@ -203,6 +224,7 @@ export function SessionDetailPage() {
             settings={session.settings}
             rules={session.rules}
             tableState={tableState}
+            substitutions={session.substitutions}
             onRemove={(rid) => removeRound(session.id, rid)}
           />
           <button
@@ -239,6 +261,15 @@ export function SessionDetailPage() {
           onChangeSettings={(s) => updateSettings(session.id, s)}
           onChangePlayerName={(pid, name) => updatePlayerName(session.id, pid, name)}
           onChangeRules={(r) => updateRules(session.id, r)}
+        />
+        {/* v2.4（批次 3）：換人入口——選當前在座座位、換成新玩家，自「下一局」起生效。 */}
+        <SubstitutionPanel
+          players={displayPlayers}
+          roster={globalSettings.roster}
+          roundCount={session.rounds.length}
+          onSubstitute={(seatId, name, rosterId) =>
+            addSubstitution(session.id, seatId, name, rosterId)
+          }
         />
         <button
           className="primary"

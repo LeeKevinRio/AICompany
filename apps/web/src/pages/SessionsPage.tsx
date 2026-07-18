@@ -5,6 +5,7 @@ import { useAppData } from '../AppData';
 import type { NewSessionPlayer } from '../hooks/useSessions';
 import { settleSession } from '../scoring/scoring';
 import { deriveDealerContexts } from '../scoring/dealer';
+import { occupantPlayersAt } from '../scoring/substitution';
 import type { RosterPlayer, Session, SessionRules, Settings } from '../types';
 import { Amount } from '../components/ui';
 import { PlayerAvatar } from '../components/PlayerAvatar';
@@ -167,6 +168,10 @@ function SessionCard({
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
   const ended = !!session.endedAt;
 
+  // v2.4：分數標籤顯示「當前在座者」名字（換人後與場內一致）。金額仍以座位計、本就正確，
+  // 這裡只把顯示名字換成下一局的實際佔用者；舊場 / 無換人時等同 session.players（零回歸）。
+  const displayPlayers = occupantPlayersAt(session, session.rounds.length);
+
   function handleMenu(e: React.MouseEvent) {
     e.stopPropagation();
     // 穩健牌 3：新增「3=再開同組」——帶入本場 4 人、底/台、規則到新增牌局 sheet。
@@ -190,7 +195,7 @@ function SessionCard({
       <div className="session-name">{session.name}</div>
 
       <div className="session-scores">
-        {session.players.map((p) => (
+        {displayPlayers.map((p) => (
           <span className="session-score" key={p.id}>
             <span className="name">{p.name}</span>
             <Amount value={totals[p.id] ?? 0} />

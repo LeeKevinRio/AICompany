@@ -258,3 +258,63 @@ describe('LocalStorageRepository — v2.1 rules migration', () => {
     expect(res.sessions).toHaveLength(0);
   });
 });
+
+describe('LocalStorageRepository — 流局 selfDraw 防呆（批次 3）', () => {
+  it('流局 selfDraw=true → 該 session 判毀損並丟棄', async () => {
+    const session = makeSession({
+      rounds: [makeRound({ winnerId: '', loserId: null, selfDraw: true, drawn: true })],
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(true);
+    expect(res.sessions).toHaveLength(0);
+  });
+
+  it('合法流局（selfDraw=false）通過', async () => {
+    const session = makeSession({
+      rounds: [makeRound({ winnerId: '', loserId: null, selfDraw: false, drawn: true })],
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+  });
+});
+
+describe('LocalStorageRepository — substitutions migration（批次 3）', () => {
+  it('舊場無 substitutions 欄位 → 通過，載回後不帶 substitutions key（行為零變化）', async () => {
+    const session = makeSession();
+    expect('substitutions' in session).toBe(false);
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect('substitutions' in res.sessions[0]).toBe(false);
+  });
+
+  it('合法 substitutions 保留；壞項目濾掉、不丟整場（換人是純顯示 / 歸戶層）', async () => {
+    const session = makeSession({
+      substitutions: [
+        { seatId: 'p2', fromRoundIndex: 1, name: '阿明', rosterId: 'ros-9' }, // 合法
+        { seatId: 'pX', fromRoundIndex: 1, name: '座位不存在' }, // 濾掉
+        { seatId: 'p3', fromRoundIndex: -1, name: 'index 負' }, // 濾掉
+        { seatId: 'p3', fromRoundIndex: 2, name: '  ' }, // 空名濾掉
+        { seatId: 'p4', fromRoundIndex: 2, name: 'ok', rosterId: 123 }, // rosterId 型別錯 → 濾掉
+      ],
+    });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions).toHaveLength(1);
+    expect(res.sessions[0].substitutions).toEqual([
+      { seatId: 'p2', fromRoundIndex: 1, name: '阿明', rosterId: 'ros-9' },
+    ]);
+  });
+
+  it('substitutions 非陣列 → 正規化為空陣列（不丟整場）', async () => {
+    const session = makeSession({ substitutions: 'oops' });
+    seed([session]);
+    const res = await new LocalStorageRepository().loadSessions();
+    expect(res.corrupted).toBe(false);
+    expect(res.sessions[0].substitutions).toEqual([]);
+  });
+});

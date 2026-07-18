@@ -8,6 +8,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { settleSession } from '../scoring/scoring';
 import { deriveDealerContexts } from '../scoring/dealer';
+import { hasSubstitutions } from '../scoring/substitution';
 import {
   buildCumulativeTimeline,
   calcSessionHighlights,
@@ -104,6 +105,8 @@ export function SettlePage() {
   const dateStr = new Date(session.createdAt).toLocaleDateString('zh-TW');
 
   const hasRounds = rounds.length > 0;
+  // v2.4（批次 3）：換人場——結算排名以「座位整場加總」呈現，補一行次要說明避免誤讀。
+  const substituted = hasSubstitutions(session);
 
   // ❸.5 本場三率快照：只標正向名次——最低放槍（防守最佳）與最高胡牌（進攻最佳），
   // 各只標「唯一者」，並列（同率）時不標，避免無意義或批鬥感。本場資料量小，
@@ -221,6 +224,11 @@ export function SettlePage() {
             </span>
           </div>
         ))}
+        {substituted && (
+          <p className="subst-notice" style={{ marginTop: 8 }}>
+            本場有換人，結算依座位加總顯示。
+          </p>
+        )}
       </div>
 
       {/* ❸.5 本場三率快照（排名下方、走勢上方） */}

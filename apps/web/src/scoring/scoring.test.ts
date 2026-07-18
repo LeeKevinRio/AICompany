@@ -386,6 +386,13 @@ describe('v2.3 — 流局（drawn）', () => {
       makeRound({ winnerId: '', loserId: null, selfDraw: false, drawn: true }), players,
     )).not.toThrow();
   });
+
+  it('assertValidRound 流局防呆（批次 3）：selfDraw 必須為 false', () => {
+    // 流局無人胡牌，selfDraw=true 會讓 calcDong 誤算東錢金流 → 明確擋下。
+    expect(() => assertValidRound(
+      makeRound({ winnerId: '', loserId: null, selfDraw: true, drawn: true }), players,
+    )).toThrow();
+  });
 });
 
 describe('v2.3 — 連莊加台（scope=dealer，只牽涉莊家的支付）', () => {
