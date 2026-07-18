@@ -6,6 +6,7 @@ import { GroupsPage } from './pages/GroupsPage';
 import { CreateGroupPage } from './pages/CreateGroupPage';
 import { OrderPage } from './pages/OrderPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { SharePage } from './pages/SharePage';
 
 export default function App() {
   const data = useGroups();
@@ -30,8 +31,10 @@ export default function App() {
         <Routes>
           <Route path="/" element={<GroupsPage />} />
           <Route path="/new" element={<CreateGroupPage />} />
-          {/* 填單頁：某團的下單畫面 */}
+          {/* 填單頁：某團的下單畫面（同裝置直接寫入＝主揪代填 / 遞手機填） */}
           <Route path="/groups/:id/order" element={<OrderPage />} />
+          {/* 分享頁：產生買家填單連結 + QR */}
+          <Route path="/groups/:id/share" element={<SharePage />} />
           {/* 後台頁：某團的累積統計 */}
           <Route path="/groups/:id" element={<DashboardPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

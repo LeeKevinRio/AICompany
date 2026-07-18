@@ -42,12 +42,21 @@ export function DashboardPage() {
         </span>
       </div>
 
+      {/* 分享入口：方案 C 的核心動線——開完團第一個下一步就是把連結分享出去。 */}
+      <button
+        className="btn primary block"
+        onClick={() => navigate(`/groups/${group.id}/share`)}
+        style={{ marginBottom: 12 }}
+      >
+        邀請填單（分享連結 / QR）
+      </button>
+
       <div className="card-row" style={{ marginBottom: 16 }}>
         <button
-          className="btn primary small grow"
+          className="btn small grow"
           onClick={() => navigate(`/groups/${group.id}/order`)}
         >
-          去填單
+          現場代填
         </button>
         <button className="btn small grow" onClick={() => toggleClosed(group.id)}>
           {group.closed ? '重新開團' : '結單截止'}
