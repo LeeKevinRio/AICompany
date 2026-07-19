@@ -18,7 +18,7 @@ import {
   MAX_KNOWN_PLAYERS,
   MAX_NOTE_LENGTH,
 } from '../types';
-import type { LoadResult, StorageRepository } from './repository';
+import type { ImportPayload, LoadResult, StorageRepository } from './repository';
 
 // 沿用 v1 的 sessions key（v2 向下相容讀同一份），新增獨立的全域設定 key。
 const STORAGE_KEY = 'mahjong-score:sessions:v1';
@@ -28,6 +28,10 @@ const CORRUPT_BACKUP_KEY = 'mahjong-sessions-corrupt-backup';
 // 全域設定（含名冊等跨場資料）結構不合法時的備份 key——退回預設前先隔離原始內容，
 // 避免靜默丟失 roster / knownPlayers（丟棄任何資料前必須先備份）。
 const CORRUPT_GLOBAL_BACKUP_KEY = 'mahjong-global-settings-corrupt-backup';
+// 匯入備份（整份覆蓋）前，把現有原始內容隔離到這兩個 key——誤匯入還救得回來。
+// 沿用「丟棄任何資料前必先備份」的既有原則（見 47c9edf）。
+export const PRE_IMPORT_SESSIONS_BACKUP_KEY = 'mahjong-sessions-pre-import-backup';
+export const PRE_IMPORT_GLOBAL_BACKUP_KEY = 'mahjong-global-settings-pre-import-backup';
 
 /** 可辨識的儲存錯誤：quota 滿、無痕模式停用 storage 等都會丟這個。 */
 export class StorageError extends Error {
@@ -181,7 +185,12 @@ function isValidRound(v: unknown, playerIds: Set<string>): v is Round {
   );
 }
 
-function isValidSession(v: unknown): v is Session {
+/**
+ * 驗證單一 session 結構。
+ * export 供匯入備份（backup.ts）共用——匯入與載入必須用同一套守門，
+ * 否則會出現「匯入放行、載入判毀損」的雙標，讓壞資料混進 storage。
+ */
+export function isValidSession(v: unknown): v is Session {
   if (typeof v !== 'object' || v === null) return false;
   const s = v as Record<string, unknown>;
   if (!isNonEmptyString(s.id)) return false;
@@ -217,8 +226,11 @@ function isValidSession(v: unknown): v is Session {
   return (s.rounds as unknown[]).every((r) => isValidRound(r, playerIds));
 }
 
-/** v2：驗證全域設定結構；任何欄位不合法即回傳 null（呼叫端退回預設值）。 */
-function parseGlobalSettings(v: unknown): GlobalSettings | null {
+/**
+ * v2：驗證全域設定結構；任何欄位不合法即回傳 null（呼叫端退回預設值）。
+ * export 供匯入備份（backup.ts）共用（理由同 isValidSession）。
+ */
+export function parseGlobalSettings(v: unknown): GlobalSettings | null {
   if (typeof v !== 'object' || v === null) return null;
   const g = v as Record<string, unknown>;
   if (!isFiniteNonNegInt(g.defaultBase)) return null;
@@ -274,6 +286,23 @@ function parseGlobalSettings(v: unknown): GlobalSettings | null {
   };
 }
 
+/**
+ * 已通過 isValidSession 的 session 之 migration 補值（讀取與匯入共用同一套，行為一致）：
+ *  - 舊場無 rules → 補 DEFAULT_SESSION_RULES（全 0，計分行為不變）。
+ *  - substitutions 只在原本就有此欄位時才正規化寫回；舊場保持不帶 key（等同空時間軸）。
+ */
+export function migrateSession(item: Session): Session {
+  const raw = item as unknown as Record<string, unknown>;
+  const playerIds = new Set(item.players.map((p) => p.id));
+  return {
+    ...item,
+    rules: normalizeSessionRules(raw.rules, DEFAULT_SESSION_RULES),
+    ...(raw.substitutions !== undefined
+      ? { substitutions: normalizeSubstitutions(raw.substitutions, playerIds) }
+      : {}),
+  };
+}
+
 export class LocalStorageRepository implements StorageRepository {
   async loadSessions(): Promise<LoadResult> {
     const globalSettings = this.loadGlobalSettings();
@@ -312,18 +341,8 @@ export class LocalStorageRepository implements StorageRepository {
     let droppedAny = false;
     for (const item of data) {
       if (isValidSession(item)) {
-        // v2.1 migration：舊場次無 rules → 補 DEFAULT_SESSION_RULES（全 0，計分行為不變）。
-        const raw = item as unknown as Record<string, unknown>;
-        // v2.4 migration：substitutions 只在原本就有此欄位時才正規化寫回；舊場無此欄位
-        // 保持不帶 key（等同空時間軸），行為零變化。
-        const playerIds = new Set(item.players.map((p) => p.id));
-        valid.push({
-          ...item,
-          rules: normalizeSessionRules(raw.rules, DEFAULT_SESSION_RULES),
-          ...(raw.substitutions !== undefined
-            ? { substitutions: normalizeSubstitutions(raw.substitutions, playerIds) }
-            : {}),
-        });
+        // migration 補值與匯入共用（見 migrateSession）。
+        valid.push(migrateSession(item));
       } else {
         droppedAny = true;
         // 明確記下被丟棄的 session id/name，方便除錯（取不到就標示無法辨識）。
@@ -399,7 +418,76 @@ export class LocalStorageRepository implements StorageRepository {
     }
   }
 
-  /** 備份原始毀損資料到 quarantine key；備份失敗不影響主流程。 */
+  /**
+   * 匯入備份（整份覆蓋）前的保命備份：把現有 sessions / 全域設定的原始字串隔離到 pre-import key。
+   *
+   * 回傳是否成功備份，供 UI 決定要不要警示「無法自動備份」：
+   *  - storage 讀取本身就失敗（無痕模式等）→ 回 false（連現有資料都讀不到，救不回來）。
+   *  - 某一份寫入失敗（quota 滿）→ 回 false。
+   *  - 現有資料為空（key 不存在）→ 清掉舊的 pre-import 備份鍵並視為成功：本來就沒東西要保留，
+   *    也避免 rollback 讀到上一次匯入殘留的過期備份（見 importBackup 的 rollback）。
+   */
+  backupBeforeImport(): boolean {
+    let sessions: string | null;
+    let global: string | null;
+    try {
+      sessions = localStorage.getItem(STORAGE_KEY);
+      global = localStorage.getItem(GLOBAL_SETTINGS_KEY);
+    } catch {
+      // storage 讀取本身就失敗（無痕模式等）：無法備份。
+      return false;
+    }
+    const okSessions = this.setPreImportBackup(PRE_IMPORT_SESSIONS_BACKUP_KEY, sessions);
+    const okGlobal = this.setPreImportBackup(PRE_IMPORT_GLOBAL_BACKUP_KEY, global);
+    return okSessions && okGlobal;
+  }
+
+  /**
+   * 匯入備份（整份覆蓋）：兩寫視為單一原子操作。
+   * global 寫成功後 sessions 失敗（quota 滿等），必須把 global 回貼匯入前的原始內容，
+   * 否則會留下「新設定＋舊牌局」的混合狀態。rollback 依據為 backupBeforeImport 寫下的
+   * PRE_IMPORT_GLOBAL_BACKUP_KEY 原始字串（呼叫端須先呼叫 backupBeforeImport）。
+   */
+  async importBackup(payload: ImportPayload): Promise<void> {
+    await this.saveGlobalSettings(payload.globalSettings);
+    try {
+      await this.saveSessions(payload.sessions);
+    } catch (err) {
+      this.rollbackGlobalSettings();
+      throw err;
+    }
+  }
+
+  /**
+   * 把 GLOBAL_SETTINGS_KEY 回貼到匯入前的原始內容（PRE_IMPORT_GLOBAL_BACKUP_KEY）。
+   * 匯入前沒有全域設定（備份鍵不存在）時 rollback＝移除，回到「本來就沒有」的原狀。
+   * rollback 本身若失敗（storage 全掛）就無能為力，讓原始的 saveSessions 錯誤上拋即可。
+   */
+  private rollbackGlobalSettings(): void {
+    try {
+      const original = localStorage.getItem(PRE_IMPORT_GLOBAL_BACKUP_KEY);
+      if (original === null) localStorage.removeItem(GLOBAL_SETTINGS_KEY);
+      else localStorage.setItem(GLOBAL_SETTINGS_KEY, original);
+    } catch {
+      // rollback 也失敗：無能為力，讓原始錯誤上拋。
+    }
+  }
+
+  /**
+   * 寫入匯入前保命備份鍵；raw 為 null（原本沒這份資料）時改為刪除舊備份，
+   * 避免 rollback 讀到上一次匯入殘留的過期資料。寫入失敗回 false（供 UI 警示）。
+   */
+  private setPreImportBackup(key: string, raw: string | null): boolean {
+    try {
+      if (raw === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, raw);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 備份原始資料到 quarantine key（毀損隔離用）；備份失敗不影響主流程。 */
   private backupCorrupt(raw: string, key: string = CORRUPT_BACKUP_KEY): void {
     try {
       localStorage.setItem(key, raw);

@@ -14,6 +14,7 @@ import type {
 } from '../types';
 import { DEFAULT_GLOBAL_SETTINGS, DEFAULT_PLAYERS } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
+import type { BackupPayload } from '../data/backup';
 import type { StorageRepository } from '../data/repository';
 
 // 第一版固定用 localStorage 實作；未來要換雲端只改這一行。
@@ -429,6 +430,32 @@ export function useSessions() {
     );
   }, []);
 
+  /**
+   * 覆蓋匯入前先隔離現有資料（誤匯入還救得回來），回傳是否備份成功。
+   * 由 UI 在開啟確認 sheet 時呼叫：若回 false 就在 sheet 上警示「無法自動備份」，
+   * 不要照樣承諾「覆蓋前會自動保留」。也是 importBackup rollback 的依據（須先呼叫）。
+   */
+  const backupBeforeImport = useCallback((): boolean => repo.backupBeforeImport(), []);
+
+  /**
+   * 匯入備份（整份覆蓋）。payload 必須是已通過 validateBackup 的資料，
+   * 且呼叫端須已先呼叫 backupBeforeImport（保命備份 + rollback 依據）。
+   *
+   * 步驟順序是刻意的：先原子寫 storage（repo.importBackup 內含 global rollback）→
+   * 成功後才更新畫面 state。若寫入失敗（quota 滿等）會 throw，此時 state 完全沒動、
+   * storage 也已 rollback，畫面仍是舊資料，不會出現「畫面顯示已匯入、實際存的是舊資料」的假成功。
+   */
+  const importBackup = useCallback(async (payload: BackupPayload): Promise<void> => {
+    await repo.importBackup(payload);
+    // storage 已由 repo.importBackup 直寫落地；接下來 setState 會觸發兩個 auto-save useEffect，
+    // 對同一份資料重複寫入。設 skip 旗標讓那一輪略過（真正的落地已完成），避免雙重寫入。
+    skipNextSave.current = true;
+    skipNextGlobalSave.current = true;
+    setGlobalSettings(payload.globalSettings);
+    setSessions(payload.sessions);
+    setStorageError(null);
+  }, []);
+
   // 清空所有資料（場次 + 全域設定）
   const clearAll = useCallback(() => {
     setSessions([]);
@@ -458,6 +485,8 @@ export function useSessions() {
     addRosterPlayer,
     updateRosterPlayer,
     removeRosterPlayer,
+    backupBeforeImport,
+    importBackup,
     clearAll,
   } as const;
 }

@@ -7,7 +7,11 @@
 // 的公開行為驗證——以 corrupted 旗標與留下/丟棄的 sessions 作為斷言依據。
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LocalStorageRepository } from './localStorageRepository';
+import {
+  LocalStorageRepository,
+  PRE_IMPORT_GLOBAL_BACKUP_KEY,
+  PRE_IMPORT_SESSIONS_BACKUP_KEY,
+} from './localStorageRepository';
 import type { Player, Round, Session } from '../types';
 import { DEFAULT_GLOBAL_SETTINGS } from '../types';
 
@@ -559,5 +563,128 @@ describe('LocalStorageRepository — 毀損必備份（資料安全）', () => {
     const res = await new LocalStorageRepository().loadSessions();
     expect(res.globalSettings).toEqual(DEFAULT_GLOBAL_SETTINGS);
     expect(store.getItem(CORRUPT_GLOBAL_BACKUP_KEY)).toBe('{壞掉');
+  });
+});
+
+describe('LocalStorageRepository — 匯入前保命備份', () => {
+  it('backupBeforeImport 把現有 sessions 與全域設定原樣隔離到 pre-import key', () => {
+    const rawSessions = JSON.stringify([makeSession()]);
+    const rawGlobal = JSON.stringify(DEFAULT_GLOBAL_SETTINGS);
+    localStorage.setItem(STORAGE_KEY, rawSessions);
+    localStorage.setItem(GLOBAL_SETTINGS_KEY, rawGlobal);
+
+    new LocalStorageRepository().backupBeforeImport();
+
+    // 原樣（未經序列化往返）備份，誤匯入後可整份貼回救援。
+    expect(store.getItem(PRE_IMPORT_SESSIONS_BACKUP_KEY)).toBe(rawSessions);
+    expect(store.getItem(PRE_IMPORT_GLOBAL_BACKUP_KEY)).toBe(rawGlobal);
+    // 原始資料不動（備份只是複製，不搬走）。
+    expect(store.getItem(STORAGE_KEY)).toBe(rawSessions);
+  });
+
+  it('現有資料為空（全新裝置）→ 不寫入空備份，也不丟例外', () => {
+    expect(() => new LocalStorageRepository().backupBeforeImport()).not.toThrow();
+    expect(store.getItem(PRE_IMPORT_SESSIONS_BACKUP_KEY)).toBeNull();
+    expect(store.getItem(PRE_IMPORT_GLOBAL_BACKUP_KEY)).toBeNull();
+  });
+
+  it('成功備份 → 回 true', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([makeSession()]));
+    localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(DEFAULT_GLOBAL_SETTINGS));
+    expect(new LocalStorageRepository().backupBeforeImport()).toBe(true);
+  });
+
+  it('現有資料為空 → 回 true（沒東西要保留），並清掉上一次殘留的 pre-import 備份鍵', () => {
+    // 塞入上一次匯入殘留的過期備份，驗證會被清掉——否則 rollback 會讀到錯的原始資料。
+    localStorage.setItem(PRE_IMPORT_SESSIONS_BACKUP_KEY, 'stale-sessions');
+    localStorage.setItem(PRE_IMPORT_GLOBAL_BACKUP_KEY, 'stale-global');
+    expect(new LocalStorageRepository().backupBeforeImport()).toBe(true);
+    expect(store.getItem(PRE_IMPORT_SESSIONS_BACKUP_KEY)).toBeNull();
+    expect(store.getItem(PRE_IMPORT_GLOBAL_BACKUP_KEY)).toBeNull();
+  });
+
+  it('備份寫入失敗（storage setItem 丟例外）→ 回 false，供 UI 警示', () => {
+    const failing = new ToggleFailStorage();
+    (globalThis as { localStorage?: unknown }).localStorage = failing;
+    // 先在不失敗的情況下塞入現有資料，再開啟「global 備份鍵寫入必失敗」。
+    failing.setItem(STORAGE_KEY, JSON.stringify([makeSession()]));
+    failing.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(DEFAULT_GLOBAL_SETTINGS));
+    failing.failKey = PRE_IMPORT_GLOBAL_BACKUP_KEY;
+    expect(new LocalStorageRepository().backupBeforeImport()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// importBackup 原子寫入 / rollback（批次修正）：
+// global 寫成功後 sessions 寫失敗（quota 滿），必須把 global 回貼匯入前原狀，
+// 不可留下「新設定＋舊牌局」的混合狀態。
+// ---------------------------------------------------------------------------
+
+// 可切換讓某個 key 的 setItem 失敗的記憶體 storage（模擬 quota 滿只在某次寫入炸開）。
+class ToggleFailStorage extends MemoryStorage {
+  failKey: string | null = null;
+  setItem(k: string, v: string): void {
+    if (k === this.failKey) throw new Error('QuotaExceededError（測試模擬）');
+    super.setItem(k, v);
+  }
+}
+
+describe('LocalStorageRepository — importBackup 原子寫入 / rollback', () => {
+  it('兩寫都成功 → global 與 sessions 都落地', async () => {
+    const repo = new LocalStorageRepository();
+    const payload = {
+      globalSettings: { ...DEFAULT_GLOBAL_SETTINGS, defaultBase: 300 },
+      sessions: [makeSession({ id: 'new' })] as unknown as Session[],
+    };
+    await repo.importBackup(payload);
+    expect(JSON.parse(store.getItem(GLOBAL_SETTINGS_KEY)!).defaultBase).toBe(300);
+    expect(JSON.parse(store.getItem(STORAGE_KEY)!)[0].id).toBe('new');
+  });
+
+  it('第二寫（saveSessions）失敗 → 回貼匯入前的 global，並上拋錯誤（不留混合狀態）', async () => {
+    const failing = new ToggleFailStorage();
+    (globalThis as { localStorage?: unknown }).localStorage = failing;
+
+    // 匯入前現有資料（defaultBase 999 是要被保住的原狀）。
+    const originalGlobal = JSON.stringify({ ...DEFAULT_GLOBAL_SETTINGS, defaultBase: 999 });
+    const originalSessions = JSON.stringify([makeSession({ id: 'old' })]);
+    failing.setItem(GLOBAL_SETTINGS_KEY, originalGlobal);
+    failing.setItem(STORAGE_KEY, originalSessions);
+
+    const repo = new LocalStorageRepository();
+    // 前置：先保命備份（rollback 依據）。
+    expect(repo.backupBeforeImport()).toBe(true);
+
+    // 讓 sessions（第二寫）失敗。
+    failing.failKey = STORAGE_KEY;
+    const payload = {
+      globalSettings: { ...DEFAULT_GLOBAL_SETTINGS, defaultBase: 111 },
+      sessions: [makeSession({ id: 'imported' })] as unknown as Session[],
+    };
+
+    await expect(repo.importBackup(payload)).rejects.toThrow();
+
+    // 關鍵：global 已回貼成匯入前原狀（999），不是匯入中途寫進去的 111。
+    expect(JSON.parse(failing.getItem(GLOBAL_SETTINGS_KEY)!).defaultBase).toBe(999);
+    // sessions 因寫入失敗維持原狀（old），未被覆蓋。
+    expect(JSON.parse(failing.getItem(STORAGE_KEY)!)[0].id).toBe('old');
+  });
+
+  it('匯入前沒有全域設定（全新裝置）→ 第二寫失敗時 rollback＝移除 global，回到本來就沒有的原狀', async () => {
+    const failing = new ToggleFailStorage();
+    (globalThis as { localStorage?: unknown }).localStorage = failing;
+    // 沒有任何現有資料。
+    const repo = new LocalStorageRepository();
+    expect(repo.backupBeforeImport()).toBe(true);
+
+    failing.failKey = STORAGE_KEY;
+    const payload = {
+      globalSettings: { ...DEFAULT_GLOBAL_SETTINGS, defaultBase: 111 },
+      sessions: [makeSession({ id: 'imported' })] as unknown as Session[],
+    };
+    await expect(repo.importBackup(payload)).rejects.toThrow();
+
+    // rollback 應移除 global（原本就沒有），而非留下匯入中途寫入的 111。
+    expect(failing.getItem(GLOBAL_SETTINGS_KEY)).toBeNull();
   });
 });
