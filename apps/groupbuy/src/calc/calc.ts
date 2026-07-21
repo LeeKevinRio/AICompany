@@ -71,6 +71,17 @@ export function calcGroupTotal(group: Group): number {
   return calcProductTotals(group).reduce((sum, pt) => sum + pt.amount, 0);
 }
 
+/**
+ * 未收款總金額：所有「尚未標記已收」訂單的應付合計加總。
+ * order.paid 為 undefined（舊資料）或 false 都算未收款。
+ */
+export function calcUnpaidTotal(group: Group): number {
+  return group.orders.reduce(
+    (sum, o) => (o.paid ? sum : sum + calcOrderSubtotal(o, group.products)),
+    0,
+  );
+}
+
 /** 逐人明細裡的一個品項行。 */
 export interface BuyerLine {
   productId: string;

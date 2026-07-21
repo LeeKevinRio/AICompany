@@ -171,6 +171,22 @@ export function useGroups() {
     [],
   );
 
+  /** 切換一張訂單的收款狀態（未收 <-> 已收）。 */
+  const togglePaid = useCallback((groupId: string, orderId: string) => {
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === groupId
+          ? {
+              ...g,
+              orders: g.orders.map((o) =>
+                o.id === orderId ? { ...o, paid: !o.paid } : o,
+              ),
+            }
+          : g,
+      ),
+    );
+  }, []);
+
   /** 刪除一張訂單。 */
   const removeOrder = useCallback((groupId: string, orderId: string) => {
     setGroups((prev) =>
@@ -193,6 +209,7 @@ export function useGroups() {
     removeGroup,
     toggleClosed,
     submitOrder,
+    togglePaid,
     removeOrder,
     dismissCorruptNotice,
   };

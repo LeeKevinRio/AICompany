@@ -52,6 +52,8 @@ function isValidOrder(v: unknown): v is Order {
   if (!isNonEmptyString(o.id)) return false;
   if (typeof o.buyerName !== 'string') return false;
   if (typeof o.createdAt !== 'number' || !Number.isFinite(o.createdAt)) return false;
+  // paid 為可選 boolean（舊資料無此欄位 → undefined，合法）；存在但型別錯視為毀損。
+  if (o.paid !== undefined && typeof o.paid !== 'boolean') return false;
   if (!Array.isArray(o.items)) return false;
   return o.items.every((item) => isValidOrderItem(item));
 }

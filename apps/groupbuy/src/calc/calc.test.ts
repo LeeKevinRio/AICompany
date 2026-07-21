@@ -4,6 +4,7 @@ import {
   calcGroupTotal,
   calcOrderSubtotal,
   calcProductTotals,
+  calcUnpaidTotal,
 } from './calc';
 import type { Group, Product } from '../types';
 
@@ -145,5 +146,36 @@ describe('calcBuyerBreakdowns', () => {
     expect(b.lines).toHaveLength(1);
     expect(b.lines[0]).toMatchObject({ name: '雞排', qty: 2, subtotal: 140 });
     expect(b.total).toBe(140);
+  });
+});
+
+describe('calcUnpaidTotal', () => {
+  it('未標記已收（含舊資料無 paid 欄位）全算未收款', () => {
+    const group = makeGroup({
+      orders: [
+        { id: 'o1', buyerName: '小明', createdAt: 0, items: [{ productId: 'a', qty: 1 }] }, // 70，無 paid
+        { id: 'o2', buyerName: '小華', createdAt: 0, items: [{ productId: 'b', qty: 2 }] }, // 100，無 paid
+      ],
+    });
+    expect(calcUnpaidTotal(group)).toBe(170);
+  });
+
+  it('已收款訂單不計入未收款', () => {
+    const group = makeGroup({
+      orders: [
+        { id: 'o1', buyerName: '小明', createdAt: 0, paid: true, items: [{ productId: 'a', qty: 1 }] }, // 70 已收
+        { id: 'o2', buyerName: '小華', createdAt: 0, paid: false, items: [{ productId: 'c', qty: 1 }] }, // 100 未收
+      ],
+    });
+    expect(calcUnpaidTotal(group)).toBe(100);
+  });
+
+  it('全部已收 → 0（結清）', () => {
+    const group = makeGroup({
+      orders: [
+        { id: 'o1', buyerName: '小明', createdAt: 0, paid: true, items: [{ productId: 'a', qty: 1 }] },
+      ],
+    });
+    expect(calcUnpaidTotal(group)).toBe(0);
   });
 });

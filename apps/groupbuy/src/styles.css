@@ -424,8 +424,9 @@ input:focus, textarea:focus {
 .member-row.is-paid .member-name   { color: var(--color-text-secondary); }
 .member-row.is-paid .member-amount { color: var(--color-text-disabled); text-decoration: line-through; }
 
-/* ── 打勾爽感動畫（收款打勾功能下一輪接上時直接用）── */
+/* ── 打勾爽感動畫（收款打勾）── */
 .check-pop {
+  display: inline-block; /* inline 元素不吃 transform:scale，需 inline-block 才會 pop */
   animation: checkPop 300ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .row-flash {

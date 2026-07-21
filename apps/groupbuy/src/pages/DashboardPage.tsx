@@ -3,12 +3,18 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
-import { calcBuyerBreakdowns, calcGroupTotal, calcProductTotals } from '../calc/calc';
+import {
+  calcBuyerBreakdowns,
+  calcGroupTotal,
+  calcProductTotals,
+  calcUnpaidTotal,
+} from '../calc/calc';
 import { decodeReceipt } from '../share/receiptCodec';
 
 export function DashboardPage() {
   const { id } = useParams<{ id: string }>();
-  const { groups, loaded, toggleClosed, removeOrder, submitOrder } = useAppData();
+  const { groups, loaded, toggleClosed, removeOrder, submitOrder, togglePaid } =
+    useAppData();
   const navigate = useNavigate();
 
   // 回單碼匯入的暫存輸入與結果訊息。
@@ -16,6 +22,8 @@ export function DashboardPage() {
   const [importMsg, setImportMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(
     null,
   );
+  // 剛按下「已收」的那一列名字：套 .row-flash 短暫閃光，動畫結束即清掉（reduced-motion 下 CSS 自動停用）。
+  const [flashName, setFlashName] = useState<string | null>(null);
 
   const group = groups.find((g) => g.id === id);
 
@@ -38,6 +46,19 @@ export function DashboardPage() {
   const productTotals = calcProductTotals(group);
   const buyers = calcBuyerBreakdowns(group);
   const grandTotal = calcGroupTotal(group);
+  const unpaidTotal = calcUnpaidTotal(group);
+  // 有訂單且未收款歸零 → 結清（完成感：summary 那格轉綠 + 已結清 badge）。
+  const settled = buyers.length > 0 && unpaidTotal === 0;
+
+  // 按「已收 / 取消已收」：切換狀態；由未收→已收時觸發該列閃光。
+  function handleTogglePaid(orderId: string, buyerName: string, willPay: boolean) {
+    if (!group) return; // 閉包內重新 narrow
+    togglePaid(group.id, orderId);
+    if (willPay) {
+      setFlashName(buyerName);
+      window.setTimeout(() => setFlashName(null), 600);
+    }
+  }
 
   // 匯入買家貼回的回單碼：解碼 → 驗團別 → 寫入本團（同名覆蓋，沿用 submitOrder）。
   function handleImport() {
@@ -77,6 +98,27 @@ export function DashboardPage() {
         <span className={`badge ${group.closed ? 'closed' : 'open'}`}>
           {group.closed ? '已截止' : '進行中'}
         </span>
+      </div>
+
+      {/* 頂部摘要：訂單數 / 總金額 / 未收款（未收 >0 紅、歸零轉綠並顯示已結清）。 */}
+      <div className="summary-block">
+        <div className="summary-stat">
+          <span className="stat-number">{buyers.length}</span>
+          <span className="stat-label">訂單數</span>
+        </div>
+        <div className="summary-stat">
+          <span className="stat-number is-amount">${grandTotal}</span>
+          <span className="stat-label">總金額</span>
+        </div>
+        <div className="summary-stat">
+          <span className={`stat-number ${settled ? 'is-clear' : 'is-unpaid'}`}>
+            ${unpaidTotal}
+          </span>
+          <span className="stat-label">
+            {settled ? '已收齊' : '未收款'}
+            {settled && <span className="badge settled" style={{ marginLeft: 6 }}>已結清</span>}
+          </span>
+        </div>
       </div>
 
       {/* 分享入口：方案 C 的核心動線——開完團第一個下一步就是把連結分享出去。 */}
@@ -167,16 +209,36 @@ export function DashboardPage() {
       {buyers.length === 0 && <p className="empty">還沒有人下單。</p>}
       {buyers.map((b) => {
         const order = group.orders.find((o) => o.buyerName === b.buyerName);
+        const paid = order?.paid ?? false;
         return (
           <div key={b.buyerName} className="card">
-            <div className="card-row">
-              <h3 className="grow">{b.buyerName}</h3>
-              <span
-                className="tabular"
-                style={{ color: 'var(--color-amount)', fontWeight: 600 }}
-              >
-                ${b.total}
-              </span>
+            {/* 收款主列：規範 .member-row / .is-paid（已收 → 名字轉灰、金額刪除線）。 */}
+            <div
+              className={`member-row ${paid ? 'is-paid' : ''} ${
+                flashName === b.buyerName ? 'row-flash' : ''
+              }`}
+              style={{ borderBottom: 'none' }}
+            >
+              <span className="member-name">{b.buyerName}</span>
+              <span className="member-amount tabular">${b.total}</span>
+              {order && (
+                <button
+                  className={`btn small ${paid ? '' : 'success'}`}
+                  onClick={() => handleTogglePaid(order.id, b.buyerName, !paid)}
+                  aria-pressed={paid}
+                >
+                  {paid ? (
+                    <>
+                      <span className="check-pop" aria-hidden="true">
+                        ✓
+                      </span>{' '}
+                      已收
+                    </>
+                  ) : (
+                    '標記已收'
+                  )}
+                </button>
+              )}
             </div>
             <ul className="muted" style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 14 }}>
               {b.lines.map((l) => (

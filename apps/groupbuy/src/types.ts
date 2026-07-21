@@ -24,6 +24,11 @@ export interface Order {
   buyerName: string;
   items: OrderItem[];
   createdAt: number;
+  /**
+   * 主揪是否已向此人收到款。
+   * optional：舊資料無此欄位 → undefined，視為「未收款」（中性、不影響歷史）。
+   */
+  paid?: boolean;
 }
 
 /** 一個團購活動（主揪開的一張表單） */
