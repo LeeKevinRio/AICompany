@@ -1,11 +1,17 @@
 // 核心資料型別：團（Group）/ 商品（Product）/ 訂單（Order）
 // 這層完全不依賴 React 或 DOM，未來可被原生 app 直接重用。
 
-/** 商品：一個團購活動裡的品項，名稱 + 單價 */
+/** 商品：一個團購活動裡的品項，名稱 + 單價（＋可選圖片） */
 export interface Product {
   id: string;
   name: string;
   price: number; // 單價（非負整數，單位：元）
+  /**
+   * 商品圖片（壓縮後的 JPEG base64 data URL，可選）。
+   * 刻意「不」進分享 URL（會爆長）——groupCodec 編碼時不帶此欄位，買家端不顯示商品圖片。
+   * 舊資料無此欄位 → undefined。
+   */
+  image?: string;
 }
 
 /** 一張訂單裡的一個品項：買哪個商品、買幾個 */

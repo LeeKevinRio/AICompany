@@ -71,6 +71,9 @@ export function SharePage() {
       <p className="muted">
         把下面的連結貼到 LINE 群組，或讓對方掃 QR，就能直接填單——對方不需要安裝任何 app。
       </p>
+      <p className="muted" style={{ fontSize: 13 }}>
+        註：為了讓連結夠短、QR 掃得動，買家端不顯示商品圖片（只看得到品名與價格）。
+      </p>
 
       {isGroupClosed(group, now) && (
         <p className="banner warn">此團已截止：對方開啟連結後將無法送出訂單。</p>

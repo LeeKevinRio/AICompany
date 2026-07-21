@@ -1,14 +1,22 @@
-// 開團頁：建立團購（團名、截止註記、商品清單：名稱 + 單價，可增刪）。
+// 開團頁：建立團購（團名、截止註記 / 時間、商品清單：名稱 + 單價 + 可選圖片，可增刪）。
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import type { NewProduct } from '../hooks/useGroups';
 import { MAX_GROUP_NAME_LENGTH, MAX_PRODUCT_NAME_LENGTH } from '../types';
+import {
+  compressImageToDataUrl,
+  estimateDataUrlBytes,
+  estimateGroupsBytes,
+  IMAGE_MAX_BYTES,
+  STORAGE_WARN_BYTES,
+} from '../image';
 
 /** 商品編輯列的暫存型別：price 用字串以保留輸入中的空白 / 半形狀態。 */
 interface DraftProduct {
   name: string;
   price: string;
+  image?: string; // 壓縮後的 JPEG data URL
 }
 
 function emptyProduct(): DraftProduct {
@@ -16,7 +24,7 @@ function emptyProduct(): DraftProduct {
 }
 
 export function CreateGroupPage() {
-  const { addGroup } = useAppData();
+  const { addGroup, groups } = useAppData();
   const navigate = useNavigate();
 
   const [name, setName] = useState('');
@@ -37,6 +45,21 @@ export function CreateGroupPage() {
     setProducts((prev) => prev.filter((_, i) => i !== index));
   }
 
+  // 選圖：壓縮 → 檢查單張上限 → 存進該列草稿。錯誤以 alert 提示，不 crash。
+  async function handlePickImage(index: number, file: File | undefined) {
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageToDataUrl(file);
+      if (estimateDataUrlBytes(dataUrl) > IMAGE_MAX_BYTES) {
+        alert('這張圖片壓縮後仍超過 200KB，請換一張較小 / 簡單的圖片。');
+        return;
+      }
+      updateProduct(index, { image: dataUrl });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '圖片處理失敗，請換一張。');
+    }
+  }
+
   // 至少要有一個有效商品（名稱非空）才能開團。
   const validProducts = products.filter((p) => p.name.trim() !== '');
   const canSubmit = validProducts.length > 0;
@@ -46,11 +69,25 @@ export function CreateGroupPage() {
     const payload: NewProduct[] = validProducts.map((p) => ({
       name: p.name,
       price: Number(p.price) || 0,
+      ...(p.image ? { image: p.image } : {}),
     }));
     // datetime-local → epoch 毫秒（new Date 以主揪當地時區解讀，存絕對時間點）；
     // 空字串或解析失敗（NaN）→ 不設截止時間。
     const ts = deadline ? new Date(deadline).getTime() : NaN;
     const deadlineAt = Number.isFinite(ts) ? ts : undefined;
+
+    // 寫入前概算 localStorage 總量：接近上限（>4MB）先警示，讓主揪決定是否繼續。
+    const projected = estimateGroupsBytes([
+      { name, note, deadlineAt, products: payload, orders: [] },
+      ...groups,
+    ]);
+    if (
+      projected > STORAGE_WARN_BYTES &&
+      !confirm('本機儲存空間快滿了（多為商品圖片），繼續開團可能導致儲存失敗。仍要繼續嗎？')
+    ) {
+      return;
+    }
+
     const id = addGroup(name, note, payload, deadlineAt);
     // 開完團直接進後台，方便主揪把填單連結分享出去 / 檢視。
     navigate(`/groups/${id}`, { replace: true });
@@ -100,32 +137,57 @@ export function CreateGroupPage() {
 
       <div className="section-title">商品清單</div>
       {products.map((p, i) => (
-        <div key={i} className="line">
-          <input
-            className="name"
-            type="text"
-            value={p.name}
-            maxLength={MAX_PRODUCT_NAME_LENGTH}
-            placeholder="商品名稱"
-            onChange={(e) => updateProduct(i, { name: e.target.value })}
-          />
-          <input
-            className="price"
-            type="number"
-            inputMode="numeric"
-            min={0}
-            value={p.price}
-            placeholder="單價"
-            onChange={(e) => updateProduct(i, { price: e.target.value })}
-          />
-          <button
-            className="btn danger small"
-            onClick={() => removeRow(i)}
-            disabled={products.length === 1}
-            aria-label="移除商品"
-          >
-            ✕
-          </button>
+        <div key={i} className="product-edit">
+          <div className="line">
+            <input
+              className="name"
+              type="text"
+              value={p.name}
+              maxLength={MAX_PRODUCT_NAME_LENGTH}
+              placeholder="商品名稱"
+              onChange={(e) => updateProduct(i, { name: e.target.value })}
+            />
+            <input
+              className="price"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              value={p.price}
+              placeholder="單價"
+              onChange={(e) => updateProduct(i, { price: e.target.value })}
+            />
+            <button
+              className="btn danger small"
+              onClick={() => removeRow(i)}
+              disabled={products.length === 1}
+              aria-label="移除商品"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="line" style={{ marginBottom: 12 }}>
+            {p.image && <img className="product-thumb" src={p.image} alt={`${p.name || '商品'} 圖片`} />}
+            <label className="btn ghost-primary small" style={{ cursor: 'pointer' }}>
+              {p.image ? '換圖片' : '＋ 圖片'}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  handlePickImage(i, e.target.files?.[0]);
+                  e.target.value = ''; // 允許重選同一檔
+                }}
+              />
+            </label>
+            {p.image && (
+              <button
+                className="btn danger small"
+                onClick={() => updateProduct(i, { image: undefined })}
+              >
+                移除圖片
+              </button>
+            )}
+          </div>
         </div>
       ))}
 

@@ -36,10 +36,11 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/** 開團時帶入的單一商品（名稱 + 單價）。 */
+/** 開團時帶入的單一商品（名稱 + 單價 + 可選圖片 data URL）。 */
 export interface NewProduct {
   name: string;
   price: number;
+  image?: string;
 }
 
 /**
@@ -58,6 +59,7 @@ function createGroup(
       id: genId('prod'),
       name: p.name.trim(),
       price: Number.isFinite(p.price) && p.price >= 0 ? Math.floor(p.price) : 0,
+      ...(p.image ? { image: p.image } : {}),
     }));
   const trimmedNote = note.trim();
   return {

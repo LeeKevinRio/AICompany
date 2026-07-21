@@ -33,7 +33,11 @@ function isFiniteNonNegInt(v: unknown): v is number {
 function isValidProduct(v: unknown): v is Product {
   if (typeof v !== 'object' || v === null) return false;
   const p = v as Record<string, unknown>;
-  return isNonEmptyString(p.id) && typeof p.name === 'string' && isFiniteNonNegInt(p.price);
+  if (!isNonEmptyString(p.id) || typeof p.name !== 'string' || !isFiniteNonNegInt(p.price))
+    return false;
+  // image 為可選字串（data URL）；存在但非字串視為毀損。
+  if (p.image !== undefined && typeof p.image !== 'string') return false;
+  return true;
 }
 
 function isValidOrderItem(v: unknown): v is OrderItem {

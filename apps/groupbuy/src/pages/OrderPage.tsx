@@ -135,6 +135,7 @@ export function OrderPage() {
         return (
         // 已選（qty > 0）：左側橙色狀態條 + 淡橙底 + 單價轉橙（.product-card.selected）。
         <div key={p.id} className={`product-card card-row ${qty > 0 ? 'selected' : ''}`}>
+          {p.image && <img className="product-thumb" src={p.image} alt="" />}
           <div className="grow">
             <div>{p.name}</div>
             <div className="product-price tabular">${p.price}</div>

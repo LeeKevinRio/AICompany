@@ -38,6 +38,11 @@ export function GroupsPage() {
         // 左側狀態條：進行中橙色 / 已截止暖灰。
         <div key={g.id} className={`card ${closed ? 'status-closed' : 'status-open'}`}>
           <div className="card-row">
+            {(() => {
+              // 團卡縮圖：取第一個有圖的商品當代表縮圖。
+              const cover = g.products.find((p) => p.image)?.image;
+              return cover ? <img className="product-thumb" src={cover} alt="" /> : null;
+            })()}
             <div className="grow">
               <h2>{g.name}</h2>
               <p className="muted" style={{ margin: 0, fontSize: 13 }}>

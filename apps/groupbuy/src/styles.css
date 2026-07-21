@@ -483,6 +483,27 @@ input:focus, textarea:focus {
   border-color: var(--color-success);
 }
 
+/* ── 商品圖片 ── */
+.product-edit {
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+/* 縮圖：卡片 / 列 / 步進器卡共用，等比裁切填滿。 */
+.product-thumb {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.product-thumb.sm {
+  width: 32px;
+  height: 32px;
+}
+
 /* ── 分享 / QR ── */
 .share-link {
   font-size: 13px;

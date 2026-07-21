@@ -48,6 +48,8 @@ export function encodeGroupPayload(group: ShareableGroup): string {
     ...(typeof group.deadlineAt === 'number' && Number.isFinite(group.deadlineAt)
       ? { dl: group.deadlineAt }
       : {}),
+    // 只帶 [id, name, price]——刻意「不」帶商品圖片（image），否則 base64 會讓 URL / QR 爆長。
+    // 買家端因此不顯示商品圖片（此取捨已獲核可，SharePage 上也有對應提示）。
     p: group.products.map((p) => [p.id, p.name, p.price]),
   };
   return encodeBase64Url(JSON.stringify(payload));

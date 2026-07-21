@@ -212,14 +212,22 @@ export function DashboardPage() {
             </tr>
           </thead>
           <tbody>
-            {productTotals.map((pt) => (
-              <tr key={pt.productId}>
-                <td>{pt.name}</td>
-                <td className="num">${pt.price}</td>
-                <td className="num">{pt.qty}</td>
-                <td className="num amount">${pt.amount}</td>
-              </tr>
-            ))}
+            {productTotals.map((pt) => {
+              const image = group.products.find((p) => p.id === pt.productId)?.image;
+              return (
+                <tr key={pt.productId}>
+                  <td>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      {image && <img className="product-thumb sm" src={image} alt="" />}
+                      {pt.name}
+                    </span>
+                  </td>
+                  <td className="num">${pt.price}</td>
+                  <td className="num">{pt.qty}</td>
+                  <td className="num amount">${pt.amount}</td>
+                </tr>
+              );
+            })}
           </tbody>
           <tfoot>
             <tr>
