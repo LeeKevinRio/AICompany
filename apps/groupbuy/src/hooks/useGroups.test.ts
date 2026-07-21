@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { loadGroupsWithRecovery } from './useGroups';
+import { applySubmitOrder, loadGroupsWithRecovery } from './useGroups';
+import { calcUnpaidTotal } from '../calc/calc';
 import type { LoadResult, StorageRepository } from '../data/repository';
-import type { Group } from '../types';
+import type { Group, Order } from '../types';
 
 function makeGroup(id: string): Group {
   return {
@@ -62,5 +63,64 @@ describe('loadGroupsWithRecovery', () => {
     expect(result.groups).toBe(clean);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe('applySubmitOrder', () => {
+  const makeId = () => 'o_new';
+
+  it('同名覆蓋：換品項、保留 id/createdAt', () => {
+    const orders: Order[] = [
+      { id: 'o1', buyerName: '小明', createdAt: 111, items: [{ productId: 'a', qty: 1 }] },
+    ];
+    const next = applySubmitOrder(orders, '小明', [{ productId: 'a', qty: 3 }], makeId, 999);
+    expect(next).toHaveLength(1);
+    expect(next[0].id).toBe('o1');
+    expect(next[0].createdAt).toBe(111);
+    expect(next[0].items).toEqual([{ productId: 'a', qty: 3 }]);
+  });
+
+  it('【Blocking 修正】同名覆蓋已付訂單 → paid 歸零，重新計入未收款', () => {
+    const products = [{ id: 'a', name: '便當', price: 100 }];
+    const before: Group = {
+      id: 'g1',
+      name: 't',
+      products,
+      orders: [
+        { id: 'o1', buyerName: '小明', createdAt: 0, paid: true, items: [{ productId: 'a', qty: 1 }] },
+      ],
+      createdAt: 0,
+      closed: false,
+    };
+    // 收款前：小明已付 → 未收款 0（結清）。
+    expect(calcUnpaidTotal(before)).toBe(0);
+
+    // 小明改單加量（1→2）覆蓋。
+    const nextOrders = applySubmitOrder(
+      before.orders,
+      '小明',
+      [{ productId: 'a', qty: 2 }],
+      makeId,
+      500,
+    );
+    expect(nextOrders[0].paid).toBeUndefined(); // paid 被重置
+
+    const after: Group = { ...before, orders: nextOrders };
+    // 改單後應重新計入未收款：100 × 2 = 200，而非誤顯已結清。
+    expect(calcUnpaidTotal(after)).toBe(200);
+  });
+
+  it('不同名 → 新增一張，makeId / now 生效', () => {
+    const orders: Order[] = [
+      { id: 'o1', buyerName: '小明', createdAt: 0, items: [] },
+    ];
+    const next = applySubmitOrder(orders, '小華', [{ productId: 'a', qty: 1 }], makeId, 777);
+    expect(next).toHaveLength(2);
+    expect(next[1]).toEqual({
+      id: 'o_new',
+      buyerName: '小華',
+      createdAt: 777,
+      items: [{ productId: 'a', qty: 1 }],
+    });
   });
 });

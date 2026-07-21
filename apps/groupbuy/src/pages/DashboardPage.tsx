@@ -1,6 +1,6 @@
 // 後台頁：某團累積統計——各品項總數量 / 總金額、逐人明細（名字 / 品項 / 小計 / 應付合計）。
 // 批次三：整合買家回單匯入（貼上回單碼）＋同裝置代填（現場代填），統計照常聚合。
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import {
@@ -25,8 +25,12 @@ export function DashboardPage() {
   const [importMsg, setImportMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(
     null,
   );
-  // 剛按下「已收」的那一列名字：套 .row-flash 短暫閃光，動畫結束即清掉（reduced-motion 下 CSS 自動停用）。
+  // 剛按下「已收」的那一列名字：套 .row-flash / .check-pop 短暫動畫，結束即清掉
+  //（reduced-motion 下 CSS 自動停用）。只有點擊當下那列才動，頁面載入時既有已收列不動。
   const [flashName, setFlashName] = useState<string | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
+  // unmount 時清掉未觸發的 timer，避免對已卸載元件 setState。
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
   const group = groups.find((g) => g.id === id);
 
@@ -62,7 +66,8 @@ export function DashboardPage() {
     togglePaid(group.id, orderId);
     if (willPay) {
       setFlashName(buyerName);
-      window.setTimeout(() => setFlashName(null), 600);
+      window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setFlashName(null), 600);
     }
   }
 
@@ -263,7 +268,11 @@ export function DashboardPage() {
                 >
                   {paid ? (
                     <>
-                      <span className="check-pop" aria-hidden="true">
+                      {/* 只有點擊當下那列才播打勾動畫；載入時既有已收列不動。 */}
+                      <span
+                        className={flashName === b.buyerName ? 'check-pop' : ''}
+                        aria-hidden="true"
+                      >
                         ✓
                       </span>{' '}
                       已收

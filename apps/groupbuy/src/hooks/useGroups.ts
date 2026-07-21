@@ -2,7 +2,7 @@
 // 元件只用這個 hook 操作資料，不直接碰 repository / localStorage。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Group, OrderItem, Product } from '../types';
+import type { Group, Order, OrderItem, Product } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
 import type { LoadResult, StorageRepository } from '../data/repository';
 import { isGroupClosed } from '../deadline';
@@ -72,6 +72,32 @@ function createGroup(
     createdAt: Date.now(),
     closed: false,
   };
+}
+
+/**
+ * 送單的核心 upsert 邏輯（同名覆蓋 / 新增），抽成純函式方便單元測試。
+ *
+ * 關鍵財務正確性：同名覆蓋時 paid 一律重置為 undefined（未收款）。
+ * 理由——改單（尤其加價）等於「重新確認收款」，若沿用舊 paid:true，主揪 dashboard 會把
+ * 改動後的訂單誤算成已結清，造成財務誤報。保留原 id / createdAt（仍是同一個人的單）。
+ */
+export function applySubmitOrder(
+  orders: Order[],
+  buyerName: string,
+  cleanItems: OrderItem[],
+  makeId: () => string,
+  now: number,
+): Order[] {
+  const existing = orders.find((o) => o.buyerName === buyerName);
+  if (existing) {
+    return orders.map((o) =>
+      o.id === existing.id ? { ...o, items: cleanItems, paid: undefined } : o,
+    );
+  }
+  return [
+    ...orders,
+    { id: makeId(), buyerName, items: cleanItems, createdAt: now },
+  ];
 }
 
 export function useGroups() {
@@ -157,22 +183,9 @@ export function useGroups() {
           // 資料層再擋一次已截止（不只靠 UI）：手動 closed 或已過期都一律不接受新單 / 覆蓋，
           // 避免 UI 繞過或競態下寫入。過期以當下時鐘判定。
           if (isGroupClosed(g, Date.now())) return g;
-          const existing = g.orders.find((o) => o.buyerName === name);
-          if (existing) {
-            // 同名覆蓋：保留原 id 與 createdAt，只換品項內容。
-            return {
-              ...g,
-              orders: g.orders.map((o) =>
-                o.id === existing.id ? { ...o, items: cleanItems } : o,
-              ),
-            };
-          }
           return {
             ...g,
-            orders: [
-              ...g.orders,
-              { id: genId('o'), buyerName: name, items: cleanItems, createdAt: Date.now() },
-            ],
+            orders: applySubmitOrder(g.orders, name, cleanItems, () => genId('o'), Date.now()),
           };
         }),
       );

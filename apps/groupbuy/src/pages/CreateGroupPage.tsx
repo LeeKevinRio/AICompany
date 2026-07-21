@@ -23,6 +23,14 @@ function emptyProduct(): DraftProduct {
   return { name: '', price: '' };
 }
 
+/** 把 Date 轉成 datetime-local input 需要的當地時間字串（YYYY-MM-DDTHH:mm）。 */
+function toLocalDatetimeInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
 export function CreateGroupPage() {
   const { addGroup, groups } = useAppData();
   const navigate = useNavigate();
@@ -75,6 +83,15 @@ export function CreateGroupPage() {
     // 空字串或解析失敗（NaN）→ 不設截止時間。
     const ts = deadline ? new Date(deadline).getTime() : NaN;
     const deadlineAt = Number.isFinite(ts) ? ts : undefined;
+
+    // 防「開團即截止」：截止時間若已是過去（min 之外的手動輸入 / 貼上），先警示再決定。
+    if (
+      deadlineAt !== undefined &&
+      deadlineAt <= Date.now() &&
+      !confirm('截止時間已經是過去，這樣開團會立刻截止、無法收單。仍要繼續嗎？')
+    ) {
+      return;
+    }
 
     // 寫入前概算 localStorage 總量：接近上限（>4MB）先警示，讓主揪決定是否繼續。
     const projected = estimateGroupsBytes([
@@ -131,6 +148,7 @@ export function CreateGroupPage() {
           id="group-deadline"
           type="datetime-local"
           value={deadline}
+          min={toLocalDatetimeInput(new Date())}
           onChange={(e) => setDeadline(e.target.value)}
         />
       </div>

@@ -35,8 +35,10 @@ function isValidProduct(v: unknown): v is Product {
   const p = v as Record<string, unknown>;
   if (!isNonEmptyString(p.id) || typeof p.name !== 'string' || !isFiniteNonNegInt(p.price))
     return false;
-  // image 為可選字串（data URL）；存在但非字串視為毀損。
-  if (p.image !== undefined && typeof p.image !== 'string') return false;
+  // image 為可選字串；存在時必須是 data:image/ 開頭的 data URL。
+  // 這是未來「備份匯入」的 XSS 前防線——擋掉 javascript: 等惡意 URL 混進 <img src>。
+  if (p.image !== undefined && (typeof p.image !== 'string' || !p.image.startsWith('data:image/')))
+    return false;
   return true;
 }
 
