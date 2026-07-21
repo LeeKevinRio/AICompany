@@ -66,6 +66,9 @@ function isValidGroup(v: unknown): v is Group {
   if (typeof g.createdAt !== 'number' || !Number.isFinite(g.createdAt)) return false;
   if (typeof g.closed !== 'boolean') return false;
   if (g.note !== undefined && typeof g.note !== 'string') return false;
+  // deadlineAt 為可選時間戳（舊資料無此欄位 → undefined，合法）；存在但非有限數視為毀損。
+  if (g.deadlineAt !== undefined && (typeof g.deadlineAt !== 'number' || !Number.isFinite(g.deadlineAt)))
+    return false;
   if (!Array.isArray(g.products) || !g.products.every(isValidProduct)) return false;
 
   // 商品 id 必須唯一（否則品項定價會撞單）。

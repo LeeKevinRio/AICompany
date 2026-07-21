@@ -4,12 +4,15 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { buildShareUrl } from '../share/groupCodec';
+import { isGroupClosed } from '../deadline';
+import { useNow } from '../hooks/useNow';
 import { QrCode } from '../components/QrCode';
 
 export function SharePage() {
   const { id } = useParams<{ id: string }>();
   const { groups, loaded } = useAppData();
   const navigate = useNavigate();
+  const now = useNow();
   const [copied, setCopied] = useState(false);
 
   const group = groups.find((g) => g.id === id);
@@ -69,7 +72,7 @@ export function SharePage() {
         把下面的連結貼到 LINE 群組，或讓對方掃 QR，就能直接填單——對方不需要安裝任何 app。
       </p>
 
-      {group.closed && (
+      {isGroupClosed(group, now) && (
         <p className="banner warn">此團已截止：對方開啟連結後將無法送出訂單。</p>
       )}
 

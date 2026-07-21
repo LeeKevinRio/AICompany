@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Group, OrderItem, Product } from '../types';
 import { LocalStorageRepository } from '../data/localStorageRepository';
 import type { LoadResult, StorageRepository } from '../data/repository';
+import { isGroupClosed } from '../deadline';
 
 // 第一版固定用 localStorage 實作；未來要換雲端只改這一行。
 const repo: StorageRepository = new LocalStorageRepository();
@@ -45,7 +46,12 @@ export interface NewProduct {
  * 建立一個團：把輸入的商品清單正規化成帶 id 的 Product。
  * 名稱空白的品項一律略過（避免建出無名商品）。
  */
-function createGroup(name: string, note: string, products: NewProduct[]): Group {
+function createGroup(
+  name: string,
+  note: string,
+  products: NewProduct[],
+  deadlineAt?: number,
+): Group {
   const cleanProducts: Product[] = products
     .filter((p) => p.name.trim() !== '')
     .map((p) => ({
@@ -58,6 +64,7 @@ function createGroup(name: string, note: string, products: NewProduct[]): Group 
     id: genId('g'),
     name: name.trim() || `${new Date().toLocaleDateString('zh-TW')} 團`,
     ...(trimmedNote ? { note: trimmedNote } : {}),
+    ...(typeof deadlineAt === 'number' && Number.isFinite(deadlineAt) ? { deadlineAt } : {}),
     products: cleanProducts,
     orders: [],
     createdAt: Date.now(),
@@ -112,8 +119,8 @@ export function useGroups() {
 
   /** 新增一個團，回傳新團 id（供路由 navigate 進後台）。 */
   const addGroup = useCallback(
-    (name: string, note: string, products: NewProduct[]): string => {
-      const g = createGroup(name, note, products);
+    (name: string, note: string, products: NewProduct[], deadlineAt?: number): string => {
+      const g = createGroup(name, note, products, deadlineAt);
       setGroups((prev) => [g, ...prev]);
       return g.id;
     },
@@ -145,9 +152,9 @@ export function useGroups() {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g;
-          // 資料層再擋一次已截止（不只靠 UI）：已截止的團一律不接受新單 / 覆蓋，
-          // 避免 UI 繞過或競態下寫入。
-          if (g.closed) return g;
+          // 資料層再擋一次已截止（不只靠 UI）：手動 closed 或已過期都一律不接受新單 / 覆蓋，
+          // 避免 UI 繞過或競態下寫入。過期以當下時鐘判定。
+          if (isGroupClosed(g, Date.now())) return g;
           const existing = g.orders.find((o) => o.buyerName === name);
           if (existing) {
             // 同名覆蓋：保留原 id 與 createdAt，只換品項內容。

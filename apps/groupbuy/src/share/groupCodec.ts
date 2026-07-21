@@ -17,6 +17,8 @@ export interface SharedGroupDef {
   groupId: string;
   name: string;
   note?: string;
+  /** 自動截止時間（epoch 毫秒，可選）；買家端據此擋過期填單（以買家裝置時鐘為準）。 */
+  deadlineAt?: number;
   products: Product[];
 }
 
@@ -27,6 +29,7 @@ export interface ShareableGroup {
   id: string;
   name: string;
   note?: string;
+  deadlineAt?: number;
   products: Product[];
 }
 
@@ -41,6 +44,10 @@ export function encodeGroupPayload(group: ShareableGroup): string {
     i: group.id,
     n: group.name,
     ...(group.note ? { o: group.note } : {}),
+    // 截止時間（dl）很小，直接放進 URL；舊連結無此欄位，decode 相容。
+    ...(typeof group.deadlineAt === 'number' && Number.isFinite(group.deadlineAt)
+      ? { dl: group.deadlineAt }
+      : {}),
     p: group.products.map((p) => [p.id, p.name, p.price]),
   };
   return encodeBase64Url(JSON.stringify(payload));
@@ -84,6 +91,8 @@ export function decodeGroupPayload(payload: string): SharedGroupDef | null {
     groupId: d.i,
     name: d.n,
     ...(typeof d.o === 'string' && d.o.length > 0 ? { note: d.o } : {}),
+    // dl 缺（舊連結）或非法 → 不帶 deadlineAt（＝買家端不擋過期）。
+    ...(typeof d.dl === 'number' && Number.isFinite(d.dl) ? { deadlineAt: d.dl } : {}),
     products,
   };
 }

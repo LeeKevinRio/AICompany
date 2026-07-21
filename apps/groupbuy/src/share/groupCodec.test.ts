@@ -38,6 +38,31 @@ describe('encode/decode group payload — roundtrip', () => {
     );
     expect(decoded!.note).toBeUndefined();
   });
+
+  it('截止時間 deadlineAt 可 roundtrip', () => {
+    const ts = 1_800_000_000_000;
+    const decoded = decodeGroupPayload(encodeGroupPayload({ ...group, deadlineAt: ts }));
+    expect(decoded!.deadlineAt).toBe(ts);
+  });
+
+  it('無截止時間時解出的物件不帶 deadlineAt', () => {
+    const decoded = decodeGroupPayload(encodeGroupPayload(group));
+    expect(decoded!.deadlineAt).toBeUndefined();
+  });
+
+  it('舊連結（payload 無 dl 欄位）照常解，deadlineAt 為 undefined', () => {
+    // 用 raw 造一個沒有 dl 欄位的舊格式 payload。
+    const oldLink = encodeGroupPayloadRaw({
+      v: 1,
+      i: 'g_old',
+      n: '舊團',
+      p: [['prod_1', '品項', 30]],
+    });
+    const decoded = decodeGroupPayload(oldLink);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.deadlineAt).toBeUndefined();
+    expect(decoded!.products).toHaveLength(1);
+  });
 });
 
 describe('decode 容錯（壞碼不 crash）', () => {

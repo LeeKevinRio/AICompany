@@ -41,6 +41,11 @@ export interface Group {
   createdAt: number;
   /** 是否已截止（主揪手動切換）。截止後填單頁不再接受新單。 */
   closed: boolean;
+  /**
+   * 自動截止時間（epoch 毫秒，可選）。到達後視同 closed（擋填單 / 匯入 / 代填）。
+   * 舊資料無此欄位 → undefined＝永不自動過期（僅看手動 closed）。
+   */
+  deadlineAt?: number;
 }
 
 /** 商品名稱長度上限 */

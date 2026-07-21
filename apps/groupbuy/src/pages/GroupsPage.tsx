@@ -1,11 +1,15 @@
-// 首頁：團清單。多團並存，顯示進行中 / 已截止狀態，可進填單或後台。
+// 首頁：團清單。多團並存，顯示進行中 / 已截止狀態與到期倒數，可進填單或後台。
 import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { calcGroupTotal } from '../calc/calc';
+import { formatCountdown, isGroupClosed } from '../deadline';
+import { useNow } from '../hooks/useNow';
 
 export function GroupsPage() {
   const { groups, loaded, removeGroup } = useAppData();
   const navigate = useNavigate();
+  // 每分鐘刷新，讓倒數 / 過期狀態隨時間更新。
+  const now = useNow();
 
   return (
     <div>
@@ -26,9 +30,13 @@ export function GroupsPage() {
         </p>
       )}
 
-      {groups.map((g) => (
-        // 左側狀態條：進行中橙色 / 已截止暖灰（settled 已結清待收款功能下一輪接上）。
-        <div key={g.id} className={`card ${g.closed ? 'status-closed' : 'status-open'}`}>
+      {groups.map((g) => {
+        // 實質狀態＝手動 closed 或已過期；倒數字串隨截止時間顯示。
+        const closed = isGroupClosed(g, now);
+        const countdown = formatCountdown(g.deadlineAt, now);
+        return (
+        // 左側狀態條：進行中橙色 / 已截止暖灰。
+        <div key={g.id} className={`card ${closed ? 'status-closed' : 'status-open'}`}>
           <div className="card-row">
             <div className="grow">
               <h2>{g.name}</h2>
@@ -41,9 +49,21 @@ export function GroupsPage() {
                   {g.note}
                 </p>
               )}
+              {countdown && (
+                <p
+                  className="muted"
+                  style={{
+                    margin: '4px 0 0',
+                    fontSize: 13,
+                    color: closed ? 'var(--color-closed)' : 'var(--color-warn)',
+                  }}
+                >
+                  {closed ? '已截止' : `⏰ ${countdown}`}
+                </p>
+              )}
             </div>
-            <span className={`badge ${g.closed ? 'closed' : 'open'}`}>
-              {g.closed ? '已截止' : '進行中'}
+            <span className={`badge ${closed ? 'closed' : 'open'}`}>
+              {closed ? '已截止' : '進行中'}
             </span>
           </div>
 
@@ -70,7 +90,8 @@ export function GroupsPage() {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

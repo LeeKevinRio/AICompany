@@ -281,6 +281,7 @@ button { font-family: inherit; font-size: 15px; cursor: pointer; }
 
 input[type="text"],
 input[type="number"],
+input[type="datetime-local"],
 textarea {
   width: 100%;
   font-family: inherit;

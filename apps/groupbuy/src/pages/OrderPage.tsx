@@ -4,12 +4,15 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { calcOrderSubtotal } from '../calc/calc';
+import { isGroupClosed } from '../deadline';
+import { useNow } from '../hooks/useNow';
 import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
 
 export function OrderPage() {
   const { id } = useParams<{ id: string }>();
   const { groups, loaded, submitOrder } = useAppData();
   const navigate = useNavigate();
+  const now = useNow();
 
   const group = groups.find((g) => g.id === id);
 
@@ -49,8 +52,10 @@ export function OrderPage() {
 
   if (!group) return <p className="muted">載入中…</p>;
 
+  // 實質截止＝手動 closed 或已過期；擋填單。
+  const closed = isGroupClosed(group, now);
   const hasQty = Object.values(qtys).some((q) => q > 0);
-  const canSubmit = buyerName.trim() !== '' && hasQty && !group.closed;
+  const canSubmit = buyerName.trim() !== '' && hasQty && !closed;
 
   function handleSubmit() {
     if (!group || !canSubmit) return;
@@ -106,7 +111,7 @@ export function OrderPage() {
         <h1>{group.name}</h1>
       </div>
 
-      {group.closed && (
+      {closed && (
         <p className="banner warn">此團已截止，無法再填單。</p>
       )}
       {group.note && <p className="muted">{group.note}</p>}
@@ -120,7 +125,7 @@ export function OrderPage() {
           maxLength={MAX_BUYER_NAME_LENGTH}
           placeholder="輸入名字（同名會覆蓋原本的單）"
           onChange={(e) => setBuyerName(e.target.value)}
-          disabled={group.closed}
+          disabled={closed}
         />
       </div>
 
@@ -137,7 +142,7 @@ export function OrderPage() {
           <div className="stepper">
             <button
               onClick={() => setQty(p.id, qty - 1)}
-              disabled={group.closed || qty <= 0}
+              disabled={closed || qty <= 0}
               aria-label={`減少 ${p.name}`}
             >
               −
@@ -149,13 +154,13 @@ export function OrderPage() {
               max={MAX_ITEM_QTY}
               value={qty}
               onChange={(e) => setQty(p.id, Number(e.target.value))}
-              disabled={group.closed}
+              disabled={closed}
               aria-label={`${p.name} 數量`}
             />
             <button
               className="increment"
               onClick={() => setQty(p.id, qty + 1)}
-              disabled={group.closed}
+              disabled={closed}
               aria-label={`增加 ${p.name}`}
             >
               ＋

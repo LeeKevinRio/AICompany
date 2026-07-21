@@ -8,11 +8,16 @@ import { useSearchParams } from 'react-router-dom';
 import { decodeGroupPayload } from '../share/groupCodec';
 import { encodeReceipt } from '../share/receiptCodec';
 import { calcOrderSubtotal } from '../calc/calc';
+import { formatCountdown, isExpired } from '../deadline';
+import { useNow } from '../hooks/useNow';
 import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, type OrderItem } from '../types';
 
 export function JoinPage() {
   const [searchParams] = useSearchParams();
   const payload = searchParams.get('d');
+  // 注意：買家端過期判定以「買家裝置時鐘」為準（無後端可校時）。裝置時間不準時可能誤判，
+  // 屬無後端架構的已知限制。主揪端資料層送單時另有一道 isGroupClosed 擋門為最終依據。
+  const now = useNow();
 
   // 解析團定義（壞連結 → null）。
   const def = useMemo(() => (payload ? decodeGroupPayload(payload) : null), [payload]);
@@ -58,7 +63,8 @@ export function JoinPage() {
     );
   }
 
-  const canSubmit = buyerName.trim() !== '' && items.length > 0;
+  const expired = isExpired(def.deadlineAt, now);
+  const canSubmit = buyerName.trim() !== '' && items.length > 0 && !expired;
 
   function handleSubmit() {
     if (!def || !canSubmit) return;
@@ -127,12 +133,22 @@ export function JoinPage() {
   }
 
   // 填單頁
+  const countdown = formatCountdown(def.deadlineAt, now);
   return (
     <div>
       <div className="page-header">
         <h1>{def.name}</h1>
       </div>
       {def.note && <p className="muted">{def.note}</p>}
+      {expired ? (
+        <p className="banner warn">這個團已截止，無法再填單。</p>
+      ) : (
+        countdown && (
+          <p className="muted" style={{ color: 'var(--color-warn)', fontSize: 13 }}>
+            ⏰ {countdown}
+          </p>
+        )
+      )}
 
       <div className="field">
         <label htmlFor="buyer-name">你的名字</label>

@@ -10,12 +10,15 @@ import {
   calcUnpaidTotal,
 } from '../calc/calc';
 import { decodeReceipt } from '../share/receiptCodec';
+import { formatCountdown, isGroupClosed } from '../deadline';
+import { useNow } from '../hooks/useNow';
 
 export function DashboardPage() {
   const { id } = useParams<{ id: string }>();
   const { groups, loaded, toggleClosed, removeOrder, submitOrder, togglePaid } =
     useAppData();
   const navigate = useNavigate();
+  const now = useNow();
 
   // 回單碼匯入的暫存輸入與結果訊息。
   const [receiptText, setReceiptText] = useState('');
@@ -49,6 +52,9 @@ export function DashboardPage() {
   const unpaidTotal = calcUnpaidTotal(group);
   // 有訂單且未收款歸零 → 結清（完成感：summary 那格轉綠 + 已結清 badge）。
   const settled = buyers.length > 0 && unpaidTotal === 0;
+  // 實質截止＝手動 closed 或已過期；倒數 / 截止顯示與收單擋門都看這個。
+  const closed = isGroupClosed(group, now);
+  const countdown = formatCountdown(group.deadlineAt, now);
 
   // 按「已收 / 取消已收」：切換狀態；由未收→已收時觸發該列閃光。
   function handleTogglePaid(orderId: string, buyerName: string, willPay: boolean) {
@@ -76,8 +82,13 @@ export function DashboardPage() {
       setImportMsg({ kind: 'err', text: '這張回單沒有任何品項。' });
       return;
     }
-    if (group.closed) {
-      setImportMsg({ kind: 'err', text: '本團已截止，請先「重新開團」再匯入。' });
+    if (isGroupClosed(group, Date.now())) {
+      setImportMsg({
+        kind: 'err',
+        text: group.closed
+          ? '本團已截止，請先「重新開團」再匯入。'
+          : '本團已過截止時間，請先「重新開團」再匯入。',
+      });
       return;
     }
     submitOrder(group.id, parsed.buyerName, parsed.items);
@@ -95,10 +106,25 @@ export function DashboardPage() {
           ‹
         </button>
         <h1>{group.name}</h1>
-        <span className={`badge ${group.closed ? 'closed' : 'open'}`}>
-          {group.closed ? '已截止' : '進行中'}
+        <span className={`badge ${closed ? 'closed' : 'open'}`}>
+          {closed ? '已截止' : '進行中'}
         </span>
       </div>
+
+      {group.deadlineAt !== undefined && (
+        <p
+          className="muted"
+          style={{
+            marginTop: -8,
+            fontSize: 13,
+            color: closed ? 'var(--color-closed)' : 'var(--color-warn)',
+          }}
+        >
+          {closed
+            ? `已於 ${new Date(group.deadlineAt).toLocaleString('zh-TW')} 截止`
+            : `⏰ ${countdown}（${new Date(group.deadlineAt).toLocaleString('zh-TW')} 截止）`}
+        </p>
+      )}
 
       {/* 頂部摘要：訂單數 / 總金額 / 未收款（未收 >0 紅、歸零轉綠並顯示已結清）。 */}
       <div className="summary-block">
