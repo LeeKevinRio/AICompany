@@ -7,14 +7,16 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.139.2",
     "uvicorn[standard]>=0.51.0",
+    "httpx>=0.28",
+    "pydantic>=2.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
-    "httpx>=0.28",
     "ruff>=0.9",
     "mypy>=1.15",
+    "respx>=0.22",
 ]
 
 [build-system]

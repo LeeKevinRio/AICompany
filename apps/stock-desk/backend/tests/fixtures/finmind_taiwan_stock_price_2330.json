@@ -1,0 +1,30 @@
+{
+  "msg": "success",
+  "status": 200,
+  "data": [
+    {
+      "date": "2024-01-02",
+      "stock_id": "2330",
+      "Trading_Volume": 41393088,
+      "Trading_money": 24585432000,
+      "open": 594.0,
+      "max": 598.0,
+      "min": 590.0,
+      "close": 594.0,
+      "spread": 2.0,
+      "Trading_turnover": 12345
+    },
+    {
+      "date": "2024-01-03",
+      "stock_id": "2330",
+      "Trading_Volume": 35120456,
+      "Trading_money": 20987654321,
+      "open": 593.0,
+      "max": 596.0,
+      "min": 589.0,
+      "close": 592.0,
+      "spread": -2.0,
+      "Trading_turnover": 10234
+    }
+  ]
+}

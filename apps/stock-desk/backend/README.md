@@ -39,3 +39,17 @@ uv run pytest
 uv run ruff check .
 uv run mypy app tests
 ```
+
+## 資料層（`app/data/`）
+
+市場資料存取一律經 `app.data.service.MarketDataService`（主來源 TWSE/TPEx
+→ 備援 FinMind → SQLite 快取 → `unavailable`），不要在應用程式碼直接呼叫
+provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（fixture
+來源與實錄/合成狀態說明）。
+
+環境變數：
+
+| 變數 | 用途 | 預設 |
+| --- | --- | --- |
+| `STOCK_DESK_DB_PATH` | SQLite 快取檔路徑 | `./data/stock-desk.db` |
+| `FINMIND_API_TOKEN` | FinMind 備援來源的 API token；未設定時該 adapter 明確回傳 `unavailable`，不丟例外 | 無 |
