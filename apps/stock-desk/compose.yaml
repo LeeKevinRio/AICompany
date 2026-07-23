@@ -1,0 +1,48 @@
+name: stock-desk
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      - TZ=Asia/Taipei
+    command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./backend
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      - TZ=Asia/Taipei
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.scheduler"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side calls resolve the backend by compose service name.
+      - BACKEND_INTERNAL_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
