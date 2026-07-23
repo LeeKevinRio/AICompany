@@ -1,12 +1,37 @@
-# AI 虛擬公司（AICompany）
+# AI 虛擬公司（AICompany）— product/stock-desk 產品線
 
 一個用 **Claude Code** 多 agent 編排出來的「AI 虛擬公司」模板。
 你（人類）是 **CEO**，從 Claude Code 下指令；底下十五個部門各是一個 Claude Code subagent，分工協作。
 程式碼開發用 Claude Code 本身，code review 改用 **OpenAI Codex CLI**（跨廠商抓盲點）。
 
-> **雙線模型**：`main` 是**員工線**，只放 agents / skills / 治理文件（零產品耦合）；
-> 每個產品開自己的 `product/<名稱>` 長命分支，從 main 長出並定期 merge main 吸收最新員工能力，
-> **永遠不 merge 回 main**。詳見 [CLAUDE.md](CLAUDE.md) 第 1 節。
+## 雙線模型（本分支是產品線）
+
+```mermaid
+gitGraph
+    commit id: "員工線基礎"
+    commit id: "擴編 15 部門"
+    branch product/stock-desk
+    commit id: "Phase 0 地基"
+    commit id: "產品開發..."
+    checkout main
+    commit id: "員工能力更新"
+    checkout product/stock-desk
+    merge main id: "sync-main 吸收"
+    commit id: "繼續產品開發"
+```
+
+- **`main` = 員工線**：只放 agents / skills / 治理文件，零產品耦合。
+- **`product/stock-desk` = 本分支**：股票訊號與部位決策台的所有產品碼只存在這裡，
+  定期執行 `/sync-main` 吸收 main 的最新員工能力，**永遠不 merge 回 main**。
+- 要改員工能力：從 origin/main 開 `chore/agent-*` 分支，併回 main 後再回來 `/sync-main`。
+  詳見 [CLAUDE.md](CLAUDE.md) 第 1 節與 [.claude/commands/sync-main.md](.claude/commands/sync-main.md)。
+
+## 本產品：stock-desk（股票訊號與部位決策輔助台）
+
+本機執行的**決策輔助儀表板**——把實際部位、市場訊號、風險上限放在同一畫面，
+輸出「可解釋、可反駁、附失效條件」的行動選項。**不是自動下單系統，也不是預言機**；
+所有建議畫面常駐「本工具為研究與教育用途，非投資建議」。
+技術棧與取捨見 [docs/adr/0002](docs/adr/0002-stock-desk-tech-stack.md)。
 
 > 全公司規則：說明文字一律**繁體中文（台灣用語）**，技術名詞與程式碼保留英文。詳見 [CLAUDE.md](CLAUDE.md)。
 
