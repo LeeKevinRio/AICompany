@@ -42,7 +42,7 @@ BLOCKING_ISSUES=true|false
 - 任何真實金鑰進 git（含歷史）一律 critical，立即升級 CEO。
 
 ## 品質檢查清單
-- [ ] 掃描指令與版本有紀錄，結果可重現。
+- [ ] 掃描指令與版本有記錄，結果可重現。
 - [ ] 每個發現都有具體修補建議與 severity。
 - [ ] `.env` 類檔案確認未被追蹤、`.env.example` 只有假值。
 - [ ] 修補建議不破壞既有功能（重大變更先過 tech-architect）。
