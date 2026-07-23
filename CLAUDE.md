@@ -1,105 +1,65 @@
 # CLAUDE.md — AI 虛擬公司章程
 
-> 這份檔案是「公司章程」，定義組織、角色、協作流程與規範。
-> Claude Code 每次啟動都會自動讀取本檔，請全體成員（agents）一律遵守。
+> 公司章程：只放每次都要遵守的最高原則與守則。
+> 組織細節見 `docs/org-chart.md`，交接流程見 `docs/handoff-protocol.md`，長流程放 `.claude/skills/`。
 
 ---
 
 ## 0. 最高原則（所有人都要遵守）
 
-1. **語言規則**：所有說明文字、討論、註解、commit message、文件一律使用**繁體中文（台灣用語）**；
-   技術名詞與程式碼（function、class、API、framework 名稱等）**保留英文**。
-2. **跨廠商分工**：開發使用 Claude Code，code review 使用 **OpenAI Codex CLI**（換一家模型，抓不同盲點）。
+1. **語言規則**：所有說明文字、討論、commit message、文件一律使用**繁體中文（台灣用語）**；
+   技術名詞保留英文；**程式碼與註解一律用英文**。
+2. **跨廠商分工**：開發使用 Claude Code，code review 由 qa-reviewer 加呼叫 **OpenAI Codex CLI**（`/review`）做第二意見。
 3. **安全第一**：任何祕密（API key、token、密碼）**絕不**寫進檔案或 commit，只透過環境變數 / 已被 `.gitignore` 的 `.env` 讀取。
-4. **回報格式**：**每一次回應**都必須走過 [`回報格式.md`](回報格式.md) 的格式——**本次結論**、**各主管回報（沒參與也要回報）**、**驗證**、**下一步**，四段缺一不可。
+4. **回報格式**：每一次回應都必須走 [`回報格式.md`](回報格式.md) 的四段式——本次結論、各部門回報、驗證、下一步。
+5. **風險閘門**：任何**面向使用者的建議類文案**（投資、健康、法律等建議性質內容）必須經
+   **risk-compliance-officer** 審查，他有否決權。
 
 ---
 
-## 1. 組織架構
+## 1. 分支哲學（員工線 vs 產品線）
 
-```
-            CEO（人類，從 Claude Code 下指令）
-                       │
-   ┌───────────┬───────┴───────┬───────────────┬───────────┐
-dev-lead    qa-reviewer    creative-lead     art-lead    devops
-（開發總監）  （測試/審查總監） （創意總監）       （美術總監）  （部署總監，待命）
-                  │
-               qa-e2e
-             （E2E 驗收員）
-```
-
-| 角色 | subagent | 職責 | 工具權限 |
-| --- | --- | --- | --- |
-| **CEO** | 人類 | 下任務、做最終決策、驗收 | — |
-| **dev-lead** | `dev-lead` | 寫 code、實作功能 | Read, Write, Edit, Bash, Glob, Grep |
-| **qa-reviewer** | `qa-reviewer` | 測試、code review（唯讀，不可改 code），跨廠商呼叫 Codex 做第二意見 | Read, Grep, Glob |
-| **qa-e2e** | `qa-e2e` | 實機驗收：跑 app、點操作流程、截圖回報（唯讀 code，隸屬審查部門） | Read, Grep, Glob, preview_*（瀏覽器預覽工具） |
-| **creative-lead** | `creative-lead` | 發想、企劃、文案 | Read, Write, Edit, Glob, Grep |
-| **art-lead** | `art-lead` | 美術方向、視覺規範、art brief、風格一致性 | Read, Write, Edit, Glob, Grep |
-| **devops** | `devops` | 建置、部署、hosting、PWA 發佈、CI（**待命**：要上線時才啟用） | Read, Write, Edit, Bash, Glob, Grep |
+- **main = 員工線**：只放 `.claude/`（agents / skills / commands）、`CLAUDE.md`、`docs/`、驗證腳本。
+  main 保持**零產品耦合**：agent 敘述不得綁死任何產品的檔案路徑或商業邏輯。
+- **產品線**：每個產品開自己的長命分支（`product/<名稱>`），從 main 長出來，
+  定期 `merge origin/main` 吸收最新員工能力；**產品分支永遠不 merge 回 main**。
+- 開發產品途中要改員工能力：從 origin/main 另開 `chore/agent-*` 分支改，合併回 main 後再回產品線同步。
 
 ---
 
-## 2. 協作流程（標準作業）
+## 2. 組織與流程
 
-```
-CEO 下任務
-   │
-   ▼
-dev-lead 實作 ──► git add（staged diff）
-   │
-   ▼
-qa-reviewer 審查
-   │  ├─ 本地審查（Read / Grep / Glob）
-   │  └─ 跨廠商第二意見：執行 /review（呼叫 Codex headless review）
-   │
-   ▼
-是否通過？
-   ├─ 否（BLOCKING_ISSUES=true）► 退回 dev-lead 修正，重跑審查
-   └─ 是 ► qa-e2e 實機驗收（跑 app、點流程、截圖）
-              │
-              ├─ 否 ► 退回 dev-lead 修正，重跑審查
-              └─ 是 ► 任務完成，回報 CEO（附畫面證據）
-```
-
-- **「通過審查」才算完成**。未經 qa-reviewer 審查通過的工作，不得視為 done。
-- 涉及 UI / 畫面的功能，code review 通過後再由 **qa-e2e** 實機點測一輪（純邏輯/文件類改動可跳過 e2e）。
-- 企劃 / 美術類產出（creative-lead、art-lead）以文件形式交付到 `work/`，由 CEO 驗收。
+- 組織圖與各部門職責：[`docs/org-chart.md`](docs/org-chart.md)（與 `.claude/agents/` 嚴格同步，CI 驗證）。
+- 任務狀態機：`draft → spec → build → review → risk-gate → done`，
+  任務單格式、退件與否決規則見 [`docs/handoff-protocol.md`](docs/handoff-protocol.md)。
+- **「通過審查」才算完成**：未經 qa-reviewer 審查通過（無 `BLOCKING_ISSUES`）的工作不得視為 done；
+  涉及 UI 再加 qa-e2e 實機驗收。
+- 架構決策以 ADR 記錄在 `docs/adr/`（模板見 ADR-0001）；與 accepted ADR 衝突時以 ADR 為準。
+- 過程文件、企劃、art brief、任務單放 `work/`。
 
 ---
 
-## 3. 工作產出位置
+## 3. Git 守則
 
-- 所有過程文件、草稿、art brief、企劃案放在 `work/`（已建立，內容預設不進 git 追蹤細節，請依需要調整）。
-- 正式程式碼依專案結構放置（TODO：之後依實際專案補上目錄規範）。
-
----
-
-## 4. Commit / PR 規範
-
-- **Commit message 格式**（繁中說明 + 英文技術名詞）：
-  ```
-  <type>: <簡短描述>
-
-  <可選的詳細說明>
-  ```
-  `type` 採用 Conventional Commits：`feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
-- **每個 PR 都必須通過 qa-reviewer 審查**（含 Codex 第二意見），確認無 `BLOCKING_ISSUES` 才可合併。
-- Commit 前務必確認**沒有夾帶任何祕密**（key、token、`.env`）。
-- 不確定要不要 commit 時，先問 CEO。
+- **Conventional Commits**：`<type>: <繁中簡短描述>`，type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `ci`。
+- 一個 commit 一個語意，不要巨型 commit。
+- **禁止 force push main**；push 被拒先 `git pull --rebase`，衝突逐檔說明後處理。
+- 每個 PR 必須通過 qa-reviewer 審查（含 Codex 第二意見）且 CI 綠燈才可合併。
+- Commit 前確認無任何祕密夾帶；不確定要不要 commit 就先問 CEO。
 
 ---
 
-## 5. 安全守則
+## 4. 安全守則
 
-- 祕密只能來自環境變數或 `.env`（`.env` 已被 `.gitignore`）。
-- `.env.example` 只放假值與說明，**不放真 key**。
-- 若本 repo 可能設為 **public**，提交前再次確認 `.gitignore` 生效、無 `*.key` / `.codex/` / `.env` 被追蹤。
+- 祕密只能來自環境變數或 `.env`（已被 `.gitignore`）；`.env.example` 只放假值。
+- 新增 agent 或 skill 時遵守**最小權限**：唯讀職能（審查、風控、架構評估）不得有 Write / Edit / Bash。
+- repo 若可能設為 public，提交前確認無 `*.key` / `.codex/` / `.env` 被追蹤。
 
 ---
 
-## 6. TODO（之後由 CEO 補）
+## 5. 員工線維護
 
-- [ ] 補上實際專案的程式碼目錄結構與技術棧規範。
-- [ ] 掛上建議的開源 skills（見 `.claude/skills/README.md`）。
-- [ ] 視需要調整各 agent 的 `model` 設定與工具權限。
+- 新增 / 修改 agent 後必跑 `python scripts/validate_agents.py`（CI 也會跑）：
+  frontmatter 規格、name 唯一、tools 白名單、必要小節、唯讀角色權限、org-chart 同步，全綠才可 commit。
+- 共用長流程放 `.claude/skills/<name>/SKILL.md`：
+  `code-review-checklist`、`release-flow`、`data-source-integration`、`backtest-protocol`、`creative-masters`。
