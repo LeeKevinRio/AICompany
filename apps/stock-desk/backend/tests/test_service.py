@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from app.data.cache import PriceBarCache
 from app.data.interface import (
@@ -154,3 +157,40 @@ def test_successful_live_fetch_is_written_through_to_cache(tmp_path: Path) -> No
     cached = cache.get("2330", "TW", START, END)
     assert cached is not None
     assert cached.bars[0].source == "twse"
+
+
+def test_unexpected_provider_exception_is_logged_at_exception_level(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    primary = _StubProvider(source_id="twse", raises=True)
+    backup = _StubProvider(source_id="finmind", bars=[_bar("finmind")])
+    service = _service(primary, [backup], tmp_path)
+
+    with caplog.at_level(logging.INFO, logger="app.data.service"):
+        service.get_daily_bars("2330", "TW", START, END)
+
+    # A raised provider bug is graded as an unexpected error (ERROR level via
+    # logger.exception) and carries the explicit tag so it is greppable.
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("unexpected provider error" in r.getMessage() for r in error_records)
+
+
+def test_expected_unavailable_is_logged_at_info_not_exception_level(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    backup = _StubProvider(source_id="finmind", bars=[_bar("finmind")])
+    service = _service(primary, [backup], tmp_path)
+
+    with caplog.at_level(logging.INFO, logger="app.data.service"):
+        service.get_daily_bars("2330", "TW", START, END)
+
+    # An in-contract "unavailable" is a quiet INFO line, distinguishable from
+    # the unexpected-exception path (no ERROR record, no exception tag).
+    assert any(
+        r.levelno == logging.INFO and "returned no usable data" in r.getMessage()
+        for r in caplog.records
+    )
+    assert not any(
+        "unexpected provider error" in r.getMessage() for r in caplog.records
+    )

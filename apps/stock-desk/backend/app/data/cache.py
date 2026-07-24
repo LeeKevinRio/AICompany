@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -94,12 +95,17 @@ class PriceBarCache:
         return self._ttl_seconds
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        # WAL is a persistent, on-disk property of the database file, so it is
+        # set once in ``_init_schema`` rather than re-issued on every connect.
+        # Callers must wrap the returned connection in ``contextlib.closing``
+        # (or an equivalent try/finally) so it is explicitly closed; the
+        # sqlite3 connection context manager only commits/rolls back the
+        # transaction, it does NOT close the connection.
+        return sqlite3.connect(self._db_path)
 
     def _init_schema(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
 
@@ -131,7 +137,7 @@ class PriceBarCache:
             )
             for bar in bars
         ]
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.executemany(
                 """
                 INSERT INTO price_bars_cache
@@ -170,7 +176,7 @@ class PriceBarCache:
         freshness window.
         """
         moment = now if now is not None else datetime.now(UTC)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             cursor = conn.execute(
                 """
                 SELECT symbol, market, trade_date, open, high, low, close,

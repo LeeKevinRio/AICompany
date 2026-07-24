@@ -27,3 +27,22 @@ def test_health_as_of_is_parseable_iso8601() -> None:
     parsed = datetime.fromisoformat(body["as_of"])
     # A timezone-aware UTC timestamp is expected per the data convention.
     assert parsed.tzinfo is not None
+
+
+def test_cors_allows_frontend_dev_origin() -> None:
+    # The frontend dev server (http://localhost:3000) must be allowed to call
+    # the API cross-origin.
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_cors_preflight_on_positions_endpoint() -> None:
+    response = client.options(
+        "/api/positions",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

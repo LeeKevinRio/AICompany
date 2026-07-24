@@ -57,7 +57,7 @@ class MarketDataService:
 
         for provider, status in providers:
             result = self._try_provider(provider, symbol, start, end)
-            if result is None or result.status is DataStatus.UNAVAILABLE or not result.bars:
+            if result is None:
                 continue
             self._cache.put(result.bars, source=result.source, fetched_at=self._clock())
             return ProviderResult(
@@ -73,15 +73,43 @@ class MarketDataService:
     def _try_provider(
         self, provider: MarketDataProvider, symbol: str, start: date, end: date
     ) -> ProviderResult | None:
+        """Call one provider, returning usable bars or ``None`` to degrade on.
+
+        Two distinct failure modes are graded differently in the logs so they
+        can be told apart:
+
+          * Expected, in-contract degradation -- the provider returned
+            ``status=UNAVAILABLE`` or an empty bar list (see the
+            ``MarketDataProvider`` contract: expected failures must NOT raise).
+            Logged at INFO level.
+          * Unexpected provider error -- the provider raised. Per the contract
+            this is a bug in the adapter, not a normal "no data" outcome, so it
+            is logged via ``logger.exception`` with an explicit
+            "unexpected provider error" tag (higher signal than the INFO line
+            above), while still degrading to the next layer rather than taking
+            the whole service down.
+        """
+        provider_label = getattr(provider, "source_id", provider.__class__.__name__)
         try:
-            return provider.get_daily_bars(symbol, start, end)
-        except Exception:  # a buggy adapter must not take the whole service down
+            result = provider.get_daily_bars(symbol, start, end)
+        except Exception:
             logger.exception(
-                "provider %s raised while fetching %s; degrading to next layer",
-                getattr(provider, "source_id", provider.__class__.__name__),
+                "unexpected provider error: %s raised while fetching %s; "
+                "degrading to next layer",
+                provider_label,
                 symbol,
             )
             return None
+        if result.status is DataStatus.UNAVAILABLE or not result.bars:
+            logger.info(
+                "provider %s returned no usable data (status=%s) for %s; "
+                "degrading to next layer",
+                provider_label,
+                result.status.value,
+                symbol,
+            )
+            return None
+        return result
 
     def _fall_back_to_cache(
         self, symbol: str, market: Market, start: date, end: date

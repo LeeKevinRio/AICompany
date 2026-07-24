@@ -39,6 +39,9 @@ services:
       context: ./frontend
     ports:
       - "3000:3000"
+    env_file:
+      - path: ./.env
+        required: false
     environment:
       # Server-side calls resolve the backend by compose service name.
       - BACKEND_INTERNAL_URL=http://backend:8000

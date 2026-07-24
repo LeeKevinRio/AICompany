@@ -1,15 +1,65 @@
-export default function HomePage() {
-  return (
-    <main className="mx-auto max-w-3xl px-4 py-12">
-      <h1 className="text-3xl font-bold">stock-desk</h1>
-      <p className="mt-2 text-neutral-400">
-        把部位、市場訊號與風險上限放在同一畫面，輸出可解釋、可反駁、附失效條件的行動選項。
-      </p>
+"use client";
 
-      <section className="mt-8 rounded-lg border border-neutral-800 p-4">
-        <h2 className="text-sm font-medium text-neutral-400">系統狀態</h2>
-        <p className="mt-1 text-lg">後端狀態：尚未連線</p>
-      </section>
+import { useHealth, usePortfolioSummary } from "./lib/queries";
+import { BackendOfflineState } from "./components/BackendOfflineState";
+import { SummaryCards } from "./components/SummaryCards";
+import { SummaryCardsSkeleton, TableSkeleton } from "./components/SkeletonBlock";
+import { PositionsTable } from "./components/PositionsTable";
+
+export default function HomePage() {
+  const health = useHealth();
+  const summary = usePortfolioSummary(health.isSuccess);
+
+  if (health.isPending) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-8">
+        <SummaryCardsSkeleton />
+        <div className="mt-8">
+          <TableSkeleton />
+        </div>
+      </main>
+    );
+  }
+
+  if (health.isError) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-8">
+        <BackendOfflineState
+          onRetry={() => {
+            void health.refetch();
+          }}
+        />
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-5xl px-4 py-8">
+      <h1 className="text-2xl font-bold text-neutral-100">投資組合總覽</h1>
+
+      <div className="mt-6">
+        {summary.isPending && <SummaryCardsSkeleton />}
+        {summary.isError && (
+          <p
+            role="alert"
+            className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300"
+          >
+            無法載入投資組合摘要：
+            {summary.error instanceof Error ? summary.error.message : "未知錯誤"}
+          </p>
+        )}
+        {summary.isSuccess && (
+          <SummaryCards totals={summary.data.totals} asOf={summary.data.as_of} />
+        )}
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-lg font-semibold text-neutral-100">持倉明細</h2>
+        <div className="mt-3">
+          {summary.isPending && <TableSkeleton />}
+          {summary.isSuccess && <PositionsTable positions={summary.data.positions} />}
+        </div>
+      </div>
     </main>
   );
 }
