@@ -12,6 +12,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pandas>=3.0.5",
     "numpy>=2.5.1",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -22,6 +23,7 @@ dev = [
     "mypy>=1.15",
     "respx>=0.22",
     "pandas-stubs>=3.0.3.260530",
+    "types-pyyaml>=6.0.12.20260724",
 ]
 
 [build-system]

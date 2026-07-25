@@ -1,0 +1,188 @@
+# Stock Desk 預設建議規則集（M3）
+#
+# 這份檔案是規則的唯一來源：每條規則寫明命中條件、依據、反方論點與失效條件，
+# 讓每一則建議都能被人工複核。條件欄位只能使用 app/advice/context.py 中
+# FIELD_LABELS 定義的名稱，載入時會逐條驗證。
+#
+# 動作語意：
+#   add          -- 條件偏向增加部位（實際是否允許仍受風險上限節制）
+#   hold         -- 條件偏向維持現狀或先觀望
+#   reduce       -- 條件偏向降低部位
+#   take_profit  -- 條件偏向分批獲利了結
+#   stop_loss    -- 條件偏向執行停損
+#
+# weight 為 0 到 1 之間的相對權重，僅用於同一張卡片內比較命中規則的份量，
+# 不代表機率、勝率或預期報酬。
+
+# 1.0.1 -- 依 risk-compliance-officer 審查意見改寫兩條回撤規則的 explanation：
+#          只陳述價格自身的統計，不表述為使用者本金或本部位的虧損。
+version: "1.0.1"
+updated_at: "2026-07-25"
+
+rules:
+  - id: uptrend_ma_stack
+    name: 均線多頭排列
+    action: add
+    weight: 0.5
+    condition:
+      all:
+        - field: ma5.last
+          op: gt
+          ref: ma20.last
+        - field: ma20.last
+          op: gt
+          ref: ma60.last
+        - field: close
+          op: gt
+          ref: ma60.last
+    explanation: 5 日、20 日、60 日均線由上而下排列，且收盤價位於 60 日均線之上，屬中期偏多的價格結構。
+    counterargument: 均線由過去價格計算，轉折時排列會落後於價格，在高位追價的成本風險較大。
+    invalidation: 收盤價跌破 60 日均線，或 5 日均線下彎並跌破 20 日均線。
+
+  - id: macd_histogram_positive
+    name: MACD 柱狀圖翻正
+    action: add
+    weight: 0.35
+    condition:
+      all:
+        - field: macd.histogram
+          op: gt
+          value: 0
+        - field: close
+          op: gt
+          ref: ma20.last
+    explanation: MACD 柱狀圖為正值且收盤價位於 20 日均線之上，短期動能偏向多方。
+    counterargument: MACD 由均線衍生，在盤整區間容易出現來回翻正翻負的雜訊。
+    invalidation: 柱狀圖翻為負值，或收盤價跌破 20 日均線。
+
+  - id: rsi_oversold_with_trend
+    name: 中期趨勢向上時的 RSI 低檔
+    action: add
+    weight: 0.4
+    condition:
+      all:
+        - field: rsi14.last
+          op: lt
+          value: 30
+        - field: close
+          op: gt
+          ref: ma60.last
+    explanation: 14 日 RSI 低於 30 但收盤價仍在 60 日均線之上，屬上升結構中的短期回檔。
+    counterargument: RSI 低檔可延續數週，若中期趨勢同時轉弱，低檔訊號會連續失效。
+    invalidation: 收盤價跌破 60 日均線，或 RSI 續創新低並伴隨成交量放大的下跌。
+
+  - id: downtrend_ma_stack
+    name: 均線空頭排列
+    action: reduce
+    weight: 0.6
+    condition:
+      all:
+        - field: ma5.last
+          op: lt
+          ref: ma20.last
+        - field: ma20.last
+          op: lt
+          ref: ma60.last
+    explanation: 5 日均線低於 20 日均線且 20 日均線低於 60 日均線，中期價格結構偏空。
+    counterargument: 空頭排列在打底階段常伴隨反彈，過早降低部位可能錯過趨勢反轉。
+    invalidation: 5 日均線向上穿越 20 日均線，且收盤價站回 60 日均線之上。
+
+  - id: price_below_ma60
+    name: 收盤價跌破季線
+    action: reduce
+    weight: 0.5
+    condition:
+      field: close
+      op: lt
+      ref: ma60.last
+    explanation: 收盤價低於 60 日均線，中期趨勢的參考支撐已失守。
+    counterargument: 單日跌破可能是假訊號，季線附近的來回穿越在震盪盤中相當常見。
+    invalidation: 收盤價重新站上 60 日均線並延續三個交易日以上。
+
+  - id: rsi_overbought
+    name: RSI 高檔超買
+    action: reduce
+    weight: 0.4
+    condition:
+      field: rsi14.last
+      op: gt
+      value: 70
+    explanation: 14 日 RSI 高於 70，短線漲幅相對過去的波動區間偏大。
+    counterargument: 強勢趨勢中 RSI 可長期停留在高檔，提前降低部位會削減趨勢的參與度。
+    invalidation: RSI 回落至 50 與 70 之間，且收盤價維持在 20 日均線之上。
+
+  - id: kd_high_level_weakening
+    name: KD 高檔轉弱
+    action: reduce
+    weight: 0.35
+    condition:
+      all:
+        - field: kd.k
+          op: gt
+          value: 80
+        - field: kd.k
+          op: lt
+          ref: kd.d
+    explanation: K 值位於 80 之上且已低於 D 值，短線動能自高檔轉弱。
+    counterargument: KD 在高檔鈍化時會反覆交叉，單次交叉的區辨力有限。
+    invalidation: K 值重新向上穿越 D 值，或 K 值回落至 50 以下後止跌。
+
+  - id: bollinger_upper_breach
+    name: 收盤價突破布林上軌
+    action: take_profit
+    weight: 0.4
+    condition:
+      field: bollinger.percent_b
+      op: gt
+      value: 1
+    explanation: 收盤價位於布林通道上軌之外，短線偏離 20 日均價的幅度較大。
+    counterargument: 帶量突破上軌也可能是趨勢起漲，分批了結會降低後續的參與度。
+    invalidation: 布林 %B 回落至 0.8 以下，或通道寬度明顯收斂。
+
+  - id: drawdown_protection
+    name: 區間回撤超過兩成
+    action: reduce
+    weight: 0.6
+    condition:
+      field: drawdown.max_drawdown
+      op: lt
+      value: -0.2
+    explanation: 此標的在觀察區間內的歷史價格回撤已深於 -20%，該數字描述價格自身的回落幅度，與此部位的未實現損益無關。
+    counterargument: 回撤是已發生的歷史統計，在低點降低部位會把帳面虧損轉為實現虧損。
+    invalidation: 價格回到前波高點附近，或回撤幅度收斂至 -10% 以內。
+
+  - id: deep_drawdown_stop
+    name: 區間回撤超過三成
+    action: stop_loss
+    weight: 0.8
+    condition:
+      field: drawdown.max_drawdown
+      op: lt
+      value: -0.3
+    explanation: 此標的價格在觀察區間內的最大回撤已達本規則設定的 -30% 門檻，該數字僅描述價格自身的回落幅度。
+    counterargument: 深度回撤後的反彈幅度往往也大，執行停損會放棄反彈區間的空間。
+    invalidation: 回撤幅度收斂至 -20% 以內，且收盤價站回 60 日均線之上。
+
+  - id: volume_spike_watch
+    name: 量能異常放大
+    action: hold
+    weight: 0.3
+    condition:
+      field: volume_z.last
+      op: abs_gt
+      value: 2
+    explanation: 近 20 日成交量 z 分數的絕對值大於 2，量能明顯偏離常態區間。
+    counterargument: 量能異常本身沒有方向性，除權息與指數成分調整等事件也會產生同樣的訊號。
+    invalidation: z 分數回到正負 2 以內，量能回到近月均量附近。
+
+  - id: concentration_watch
+    name: 單一標的佔比偏高
+    action: hold
+    weight: 0.3
+    condition:
+      field: position.weight
+      op: gt
+      value: 0.12
+    explanation: 此標的佔投資組合比重高於 12%，已接近單一標的佔比上限。
+    counterargument: 集中度偏高不代表個別標的體質轉差，過度分散也會稀釋既有的研究成果。
+    invalidation: 佔比因組合調整或市值變化回到 10% 以下。
