@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -25,6 +26,11 @@ from app.data.interface import Market, PriceBar
 
 DEFAULT_DB_PATH: Final[str] = "./data/stock-desk.db"
 DEFAULT_TTL_SECONDS: Final[int] = 24 * 60 * 60
+
+#: How many trade dates go into one ``IN (...)`` probe. Comfortably below
+#: SQLite's host-parameter limit (999 on the oldest builds still in the wild),
+#: so a multi-year batch is chunked instead of failing at the driver.
+_PROBE_CHUNK_SIZE: Final[int] = 400
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS price_bars_cache (
@@ -69,6 +75,16 @@ class CacheReadResult:
     source: str
     staleness_minutes: int
     is_within_ttl: bool
+
+
+@dataclass(frozen=True)
+class ForeignBarConflict:
+    """A cached row a writer would overwrite, and the source that owns it."""
+
+    symbol: str
+    market: str
+    trade_date: date
+    source: str
 
 
 class PriceBarCache:
@@ -116,7 +132,14 @@ class PriceBarCache:
         source: str,
         fetched_at: datetime | None = None,
     ) -> None:
-        """Upsert a batch of bars into the cache, tagged with a fetch timestamp."""
+        """Upsert a batch of bars into the cache, tagged with a fetch timestamp.
+
+        The upsert is keyed on ``(symbol, market, trade_date)`` and deliberately
+        ignores the existing row's ``source``: a live provider refreshing a bar
+        is the normal case, and the freshest fetch wins. A writer for which
+        overwriting another source's row would be *data loss* must therefore
+        gate itself on :meth:`find_foreign_bars` before calling this.
+        """
         if not bars:
             return
         moment = fetched_at if fetched_at is not None else datetime.now(UTC)
@@ -157,6 +180,56 @@ class PriceBarCache:
                 """,
                 rows,
             )
+
+    def find_foreign_bars(
+        self, bars: Sequence[PriceBar], *, source: str
+    ) -> list[ForeignBarConflict]:
+        """Rows already cached at ``bars``' keys that a **different** source owns.
+
+        :meth:`put` upserts on ``(symbol, market, trade_date)`` and does not
+        look at the existing row's ``source``, so a writer that must not clobber
+        another provider's data (the offline demo seeder) has to ask first --
+        and it has to ask *before* writing, because an overwritten row is gone:
+        :meth:`delete_by_source` can only retract rows still tagged with the
+        writer's own source.
+
+        Returns one entry per conflicting row, ordered by symbol/market/date.
+        An empty list means :meth:`put` would only insert new rows or refresh
+        rows this ``source`` already owns.
+        """
+        keys_by_series: dict[tuple[str, str], set[str]] = {}
+        for bar in bars:
+            keys_by_series.setdefault((bar.symbol, bar.market), set()).add(bar.date.isoformat())
+
+        conflicts: list[ForeignBarConflict] = []
+        with closing(self._connect()) as conn:
+            for (symbol, market), trade_dates in sorted(keys_by_series.items()):
+                ordered = sorted(trade_dates)
+                for start in range(0, len(ordered), _PROBE_CHUNK_SIZE):
+                    chunk = ordered[start : start + _PROBE_CHUNK_SIZE]
+                    # Only the placeholder count is interpolated; every value
+                    # below stays a bound parameter.
+                    placeholders = ", ".join("?" * len(chunk))
+                    cursor = conn.execute(
+                        f"""
+                        SELECT trade_date, source
+                        FROM price_bars_cache
+                        WHERE symbol = ? AND market = ? AND source != ?
+                              AND trade_date IN ({placeholders})
+                        ORDER BY trade_date ASC
+                        """,
+                        (symbol, market, source, *chunk),
+                    )
+                    conflicts.extend(
+                        ForeignBarConflict(
+                            symbol=symbol,
+                            market=market,
+                            trade_date=date.fromisoformat(trade_date),
+                            source=row_source,
+                        )
+                        for trade_date, row_source in cursor.fetchall()
+                    )
+        return conflicts
 
     def delete_by_source(self, source: str) -> int:
         """Delete every cached bar tagged with ``source``; return the row count.

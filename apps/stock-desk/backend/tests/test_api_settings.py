@@ -76,6 +76,22 @@ def test_hard_ceilings_survive_the_settings_page(api_harness: ApiHarness) -> Non
         assert "風控" in errors[0]["msg"] and "CEO" in errors[0]["msg"]
 
 
+def test_openapi_states_the_ceilings_the_validators_enforce(api_harness: ApiHarness) -> None:
+    # These two bounds live in validators, not in ``le=``, so the 422 can keep
+    # its own wording -- but a validator contributes no ``maximum`` keyword, so
+    # a reader of /openapi.json (or a generated client) would otherwise see an
+    # unbounded number. The description has to state the bound instead.
+    schemas = api_harness.client.get("/openapi.json").json()["components"]["schemas"]
+    properties = schemas["RiskBudget"]["properties"]
+    for field, ceiling in (("max_position_weight", 0.50), ("max_gross_exposure", 1.50)):
+        assert "maximum" not in properties[field]
+        description = properties[field]["description"]
+        assert f"{ceiling:.2f}" in description
+        assert "422" in description
+    # The fields bounded the ordinary way still publish a machine-readable one.
+    assert properties["kelly_fraction_cap"]["maximum"] == 0.25
+
+
 def test_a_cap_may_be_written_up_to_its_ceiling(api_harness: ApiHarness) -> None:
     response = api_harness.client.put(
         "/api/settings",

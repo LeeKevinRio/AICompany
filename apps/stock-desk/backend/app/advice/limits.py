@@ -71,11 +71,13 @@ MAX_SIZING_ADJUSTMENTS = 8
 #: a single name *is* the portfolio, so diversification has stopped meaning
 #: anything and the remaining caps would be measuring a book of one.
 MAX_POSITION_WEIGHT_CEILING = 0.50
+MAX_POSITION_WEIGHT_REASON = "單一標的超過總資產的一半時，分散化已無實質意義。"
 
 #: Hard ceiling on ``RiskBudget.max_gross_exposure``. Moderate leverage is a
 #: legitimate preference; 2x is a different risk profile than the quantities
 #: this engine sizes.
 MAX_GROSS_EXPOSURE_CEILING = 1.50
+MAX_GROSS_EXPOSURE_REASON = "此處容許適度槓桿，但不容許 2 倍的總曝險。"
 
 
 def _ceiling_message(label: str, ceiling: float, reason: str) -> str:
@@ -90,6 +92,24 @@ def _ceiling_message(label: str, ceiling: float, reason: str) -> str:
         "這是硬性上界，放寬必須修改 app/advice/limits.py 的程式碼，"
         "並經風控（risk-compliance-officer）審查與 CEO 同意，"
         "無法由設定頁或 API 繞過。"
+    )
+
+
+def _ceiling_description(what: str, ceiling: float, reason: str) -> str:
+    """The field ``description`` that carries a ceiling into the OpenAPI schema.
+
+    The ceilings are enforced by field validators rather than ``le=`` (a ``le``
+    failure would replace the message :func:`_ceiling_message` produces with
+    pydantic's generic English one), and a validator contributes no ``maximum``
+    keyword to the generated schema. Anyone reading ``/openapi.json`` or
+    generating a client from it would therefore see an unbounded ``number``, so
+    the bound is stated here in prose from the very same constants.
+    """
+    return (
+        f"{what}上界 {ceiling:.2f}（{ceiling * 100:.0f}%），"
+        f"超過即回 422：{reason}"
+        "此上界由 field_validator 強制（不是 schema 的 maximum），"
+        "放寬需修改 app/advice/limits.py 並經風控審查與 CEO 同意。"
     )
 
 
@@ -113,15 +133,36 @@ class RiskBudget(BaseModel):
     user would later believe they had set), not a dismissible warning, and not
     overridable through a flag a request could send -- raising them is a code
     change reviewed by risk-compliance and approved by the CEO.
+
+    Because a validator leaves no ``maximum`` in the generated JSON schema,
+    those two fields also state their ceiling in ``description`` (built from the
+    same constants by :func:`_ceiling_description`), so a reader of
+    ``/openapi.json`` sees the bound the API will actually enforce.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     #: Bounded by :data:`MAX_POSITION_WEIGHT_CEILING`, not by 1.0.
-    max_position_weight: float = Field(default=0.15, gt=0.0)
+    max_position_weight: float = Field(
+        default=0.15,
+        gt=0.0,
+        description=_ceiling_description(
+            "單一標的佔總資產的",
+            MAX_POSITION_WEIGHT_CEILING,
+            MAX_POSITION_WEIGHT_REASON,
+        ),
+    )
     max_sector_weight: float = Field(default=0.30, gt=0.0, le=1.0)
     #: Bounded by :data:`MAX_GROSS_EXPOSURE_CEILING`, not by 2.0.
-    max_gross_exposure: float = Field(default=1.00, gt=0.0)
+    max_gross_exposure: float = Field(
+        default=1.00,
+        gt=0.0,
+        description=_ceiling_description(
+            "組合總曝險佔總資產的",
+            MAX_GROSS_EXPOSURE_CEILING,
+            MAX_GROSS_EXPOSURE_REASON,
+        ),
+    )
     #: Largest acceptable loss on one position, as a fraction of total equity.
     max_loss_per_trade: float = Field(default=0.01, gt=0.0, le=0.1)
     #: Stop distance = this multiple of ATR(14).
@@ -139,7 +180,7 @@ class RiskBudget(BaseModel):
                 _ceiling_message(
                     LIMIT_NAMES["single_position_weight"],
                     MAX_POSITION_WEIGHT_CEILING,
-                    "單一標的超過總資產的一半時，分散化已無實質意義。",
+                    MAX_POSITION_WEIGHT_REASON,
                 )
             )
         return value
@@ -152,7 +193,7 @@ class RiskBudget(BaseModel):
                 _ceiling_message(
                     LIMIT_NAMES["gross_exposure"],
                     MAX_GROSS_EXPOSURE_CEILING,
-                    "此處容許適度槓桿，但不容許 2 倍的總曝險。",
+                    MAX_GROSS_EXPOSURE_REASON,
                 )
             )
         return value

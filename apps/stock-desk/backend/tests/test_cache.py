@@ -126,3 +126,54 @@ def test_delete_by_source_is_zero_when_nothing_matches(tmp_path: Path) -> None:
     cache.put([_bar()], source="twse")
 
     assert cache.delete_by_source("demo_synthetic") == 0
+
+
+def test_find_foreign_bars_reports_rows_another_source_owns(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar(trade_date=date(2024, 1, 2))], source="twse")
+
+    conflicts = cache.find_foreign_bars(
+        [_bar(trade_date=date(2024, 1, 2)), _bar(trade_date=date(2024, 1, 3))],
+        source="demo_synthetic",
+    )
+
+    assert len(conflicts) == 1
+    conflict = conflicts[0]
+    assert (conflict.symbol, conflict.market) == ("2330", "TW")
+    assert conflict.trade_date == date(2024, 1, 2)
+    assert conflict.source == "twse"
+
+
+def test_find_foreign_bars_ignores_rows_the_same_source_owns(tmp_path: Path) -> None:
+    """Re-seeding over its own rows is a refresh, not a conflict."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar()], source="demo_synthetic")
+
+    assert cache.find_foreign_bars([_bar()], source="demo_synthetic") == []
+
+
+def test_find_foreign_bars_ignores_other_symbols_and_dates(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar(symbol="2412", trade_date=date(2024, 1, 2))], source="twse")
+    cache.put([_bar(symbol="2330", trade_date=date(2024, 1, 5))], source="twse")
+
+    assert (
+        cache.find_foreign_bars(
+            [_bar(symbol="2330", trade_date=date(2024, 1, 2))], source="demo_synthetic"
+        )
+        == []
+    )
+
+
+def test_find_foreign_bars_chunks_beyond_the_sqlite_parameter_limit(tmp_path: Path) -> None:
+    """A multi-year batch is probed in chunks instead of failing at the driver."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    bars = [_bar(trade_date=date(2024, 1, 1) + timedelta(days=offset)) for offset in range(1200)]
+    cache.put(bars[::2], source="twse")
+
+    conflicts = cache.find_foreign_bars(bars, source="demo_synthetic")
+
+    assert len(conflicts) == 600
+    assert [conflict.trade_date for conflict in conflicts] == sorted(
+        conflict.trade_date for conflict in conflicts
+    )

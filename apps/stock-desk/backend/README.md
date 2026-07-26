@@ -113,8 +113,15 @@ uv run python -m app.demo.seed --reset
 
 **冪等**：日線走 `PriceBarCache.put` 的 upsert（主鍵 `symbol, market, trade_date`），
 持倉與規則以示範標記加上自身識別比對，已存在就原封不動保留，重跑不會長出第二份。
-`--reset` 只刪 `source = demo_synthetic` 的日線與帶示範標記的持倉／規則，
-對同一個資料庫裡的真實資料沒有影響；警示**事件**依既有 append-only 設計保留。
+`--reset` 只刪 `source = demo_synthetic` 的日線與帶示範標記的持倉／規則，不會刪到別人寫的列；
+警示**事件**依既有 append-only 設計保留。
+
+**不會覆蓋真實資料**：示範標的都是真實上市代號，若同一顆 DB 已經有這三檔的真實日線，
+upsert 會直接把它蓋掉，而 `--reset` 只刪 `demo_synthetic` 的列、救不回被蓋掉的資料。
+因此 seed **寫入前會先檢查**即將寫入的 `(symbol, market, trade_date)` 上有沒有非 `demo_synthetic`
+來源的列；只要有一筆，整次執行就**拒絕進行**（結束碼 1，日線／持倉／警示規則一律不寫），
+並印出衝突的標的、筆數、日期範圍與來源，建議改用獨立的 `--db-path` ／ `STOCK_DESK_DB_PATH`。
+要不要捨棄那些真實日線是使用者的決定：腳本不會替你刪除任何不是它寫的資料。
 
 其他注意事項：
 

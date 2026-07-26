@@ -35,6 +35,8 @@ from app.demo.seed import (
     DEMO_POSITIONS,
     INDEX_PROXY_SYMBOL,
     LEVERAGED_SYMBOL,
+    DemoSeedConflictError,
+    build_demo_bars,
     main,
     reset_demo,
     seed_demo,
@@ -48,6 +50,31 @@ from app.settings.store import SettingsStore
 from tests.api_helpers import UnavailableFxProvider
 
 _AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
+
+#: Pinned once per run so a test that generates the demo calendar and a seeding
+#: run that regenerates it can never straddle midnight.
+_TODAY = date.today()
+
+#: Close of the "real" bars the guard tests plant; distinctive enough that a bar
+#: overwritten by the synthetic path could not be mistaken for it.
+_REAL_CLOSE = Decimal("1234.5")
+
+
+def _real_bar(symbol: str, trade_date: date, *, source: str = "twse") -> PriceBar:
+    """A bar some *other* writer put in the same cache."""
+    return PriceBar(
+        symbol=symbol,
+        market="TW",
+        date=trade_date,
+        open=_REAL_CLOSE,
+        high=_REAL_CLOSE,
+        low=_REAL_CLOSE,
+        close=_REAL_CLOSE,
+        volume=1000,
+        currency="TWD",
+        as_of=_AS_OF,
+        source=source,
+    )
 
 
 class OfflineProvider(MarketDataProvider):
@@ -261,6 +288,94 @@ def test_reset_removes_demo_rows_and_leaves_real_ones(demo_harness: DemoHarness)
     assert after["status"] == "insufficient_data"
 
 
+def test_seed_refuses_when_real_bars_share_the_same_keys(demo_harness: DemoHarness) -> None:
+    """The scenario the guard exists for: real quotes for a demo symbol, same dates.
+
+    ``put`` would upsert straight over them and ``--reset`` only deletes
+    ``demo_synthetic`` rows, so an overwrite here is unrecoverable. The run must
+    therefore abort before writing anything at all.
+    """
+    demo_dates = [bar.date for bar in build_demo_bars(today=_TODAY)[BLUE_CHIP_SYMBOL]]
+    collided = (demo_dates[10], demo_dates[-1])
+    demo_harness.cache.put(
+        [_real_bar(BLUE_CHIP_SYMBOL, day) for day in collided], source="twse", fetched_at=_AS_OF
+    )
+
+    with pytest.raises(DemoSeedConflictError) as excinfo:
+        seed_demo(
+            cache=demo_harness.cache,
+            positions=demo_harness.positions,
+            alerts=demo_harness.alerts,
+            today=_TODAY,
+        )
+
+    error = excinfo.value
+    assert {(item.symbol, item.trade_date, item.source) for item in error.conflicts} == {
+        (BLUE_CHIP_SYMBOL, day, "twse") for day in collided
+    }
+
+    # The real bars are byte-for-byte what they were, and nothing else was written.
+    cached = demo_harness.cache.get(BLUE_CHIP_SYMBOL, "TW", collided[0], collided[1])
+    assert cached is not None
+    assert [bar.close for bar in cached.bars] == [_REAL_CLOSE, _REAL_CLOSE]
+    assert {bar.source for bar in cached.bars} == {"twse"}
+    assert demo_harness.positions.list_all() == []
+    assert demo_harness.alerts.list_rules() == []
+    assert demo_harness.cache.delete_by_source(DEMO_SOURCE) == 0
+
+
+def test_conflict_message_names_the_rows_and_the_way_out(demo_harness: DemoHarness) -> None:
+    """The refusal has to be actionable, not just a stack trace."""
+    demo_dates = [bar.date for bar in build_demo_bars(today=_TODAY)[LEVERAGED_SYMBOL]]
+    demo_harness.cache.put(
+        [_real_bar(LEVERAGED_SYMBOL, day, source="finmind") for day in demo_dates[:3]],
+        source="finmind",
+        fetched_at=_AS_OF,
+    )
+
+    with pytest.raises(DemoSeedConflictError) as excinfo:
+        seed_demo(
+            cache=demo_harness.cache,
+            positions=demo_harness.positions,
+            alerts=demo_harness.alerts,
+            today=_TODAY,
+        )
+
+    message = str(excinfo.value)
+    assert "拒絕寫入示範資料" in message
+    # Which rows: symbol, how many, over what dates, written by whom.
+    assert f"{LEVERAGED_SYMBOL}（TW）：3 筆" in message
+    assert f"{demo_dates[0]} ~ {demo_dates[2]}" in message
+    assert "來源：finmind" in message
+    # That nothing was written, and what the user can do about it.
+    assert "本次不寫入任何東西" in message
+    assert "--db-path" in message
+    assert "STOCK_DESK_DB_PATH" in message
+    assert "本腳本不會替你刪除任何不是它寫的資料" in message
+
+
+def test_seed_proceeds_when_real_rows_do_not_collide(demo_harness: DemoHarness) -> None:
+    """A real holding elsewhere in the same database is not a reason to refuse."""
+    real_date = date(2020, 1, 6)
+    demo_harness.cache.put([_real_bar("2412", real_date)], source="twse", fetched_at=_AS_OF)
+
+    summary = seed_demo(
+        cache=demo_harness.cache,
+        positions=demo_harness.positions,
+        alerts=demo_harness.alerts,
+        today=_TODAY,
+    )
+
+    assert summary.bar_count > 0
+    assert len(summary.positions_created) == len(DEMO_POSITIONS)
+    assert demo_harness.client.get(f"/api/bars/{BLUE_CHIP_SYMBOL}").json()["status"] == "ok"
+
+    untouched = demo_harness.cache.get("2412", "TW", real_date, real_date)
+    assert untouched is not None
+    assert untouched.bars[0].close == _REAL_CLOSE
+    assert untouched.source == "twse"
+
+
 def test_cli_prints_the_synthetic_warning_before_and_after(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -276,3 +391,23 @@ def test_cli_prints_the_synthetic_warning_before_and_after(
     reset_output = capsys.readouterr().out
     assert reset_output.count("警告：這是合成示範資料，不可用於任何真實決策。") == 2
     assert PositionStore(db_path).list_all() == []
+
+
+def test_cli_exits_nonzero_and_writes_nothing_on_a_conflict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "conflict.db"
+    cache = PriceBarCache(db_path)
+    latest = build_demo_bars(today=_TODAY)[LEVERAGED_SYMBOL][-1].date
+    cache.put([_real_bar(LEVERAGED_SYMBOL, latest)], source="twse", fetched_at=_AS_OF)
+
+    assert main(["--db-path", str(db_path)]) == 1
+
+    captured = capsys.readouterr()
+    assert "拒絕寫入示範資料" in captured.err
+    assert LEVERAGED_SYMBOL in captured.err
+    assert "STOCK_DESK_DB_PATH" in captured.err
+    # Opening banner only: the closing one would claim a demo dataset now exists.
+    assert captured.out.count("警告：這是合成示範資料，不可用於任何真實決策。") == 1
+    assert PositionStore(db_path).list_all() == []
+    assert cache.delete_by_source(DEMO_SOURCE) == 0

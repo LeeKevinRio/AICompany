@@ -12,8 +12,9 @@ interface FieldSpec<T> {
   defaultValue: number | boolean;
   /**
    * A ceiling the backend refuses to write past (`app/advice/limits.py`).
-   * Shown beside the field so the boundary is visible *before* typing; the
-   * enforcement itself stays server-side, so a value above it still reaches
+   * Display only: it is rendered beside the field so the boundary is visible
+   * *before* typing, and is deliberately not wired to any input constraint.
+   * Enforcement stays server-side, so a value above it still reaches
    * `PUT /api/settings` and comes back as a per-field 422 message.
    */
   hardCeiling?: { max: number; reason: string };
@@ -166,10 +167,16 @@ function NumberField({
       <label htmlFor={id} className="block text-sm text-neutral-300">
         {spec.label}
       </label>
+      {/*
+        A text input (not `type="number"`) on purpose: the browser must not be
+        the thing that judges the value. Every entry is sent as typed so the
+        backend's own bounds answer, and a rejection comes back as the per-field
+        422 message rendered below. A `max` attribute would be inert on a text
+        input, so the ceiling is stated in the note under the field instead.
+      */}
       <input
         id={id}
         inputMode="decimal"
-        max={spec.hardCeiling?.max}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"

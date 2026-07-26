@@ -31,7 +31,21 @@ Idempotence
   cost basis the demo already told a story about.
 * ``--reset`` deletes exactly the rows this seeder owns -- bars tagged
   ``demo_synthetic``, and positions/rules carrying the marker -- and nothing
-  else, so it is safe to run against a database that also holds real rows.
+  else.
+
+It never overwrites real data
+-----------------------------
+Because the symbols are real listed codes (see below), a database that already
+holds real quotes for them would have those bars replaced by the upsert -- and
+``--reset`` could not undo that, because it only deletes rows still tagged
+``demo_synthetic``. So the seeder asks first: :meth:`PriceBarCache.find_foreign_bars`
+looks for rows at the exact keys it is about to write that some *other* source
+owns, and if there are any the run **refuses outright**
+(:class:`DemoSeedConflictError`, exit code 1) before writing a single row --
+bars, positions and alert rules included. Deciding that those quotes are
+expendable is the user's call, not this script's: it prints what conflicts and
+suggests a separate ``STOCK_DESK_DB_PATH`` / ``--db-path``, and never deletes
+anything it did not write.
 
 Every symbol below is a real listed code, deliberately: the demo is more useful
 when the leveraged chapter can find ``00631L`` in the registry. The *prices*
@@ -41,6 +55,7 @@ attached to those codes are invented.
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -57,7 +72,7 @@ from app.alerts.models import (
     SignalConditionParams,
 )
 from app.alerts.store import AlertStore
-from app.data.cache import PriceBarCache, resolve_db_path
+from app.data.cache import ForeignBarConflict, PriceBarCache, resolve_db_path
 from app.data.interface import PriceBar
 from app.demo.series import (
     DEMO_SOURCE,
@@ -193,6 +208,57 @@ class DemoSeedSummary:
     @property
     def bar_count(self) -> int:
         return sum(self.bars_by_symbol.values())
+
+
+def _conflict_report(conflicts: Sequence[ForeignBarConflict], db_path: Path) -> str:
+    """The refusal message: what conflicts, why it is fatal, and the way out.
+
+    It names every affected symbol with a row count, a date range and the
+    source that wrote those rows, so the user can tell at a glance whether the
+    data in the way is something they care about. The remedies stop at
+    suggesting a separate database or clearing the rows *themselves*: this
+    script deletes nothing it did not write.
+    """
+    by_series: dict[tuple[str, str], list[ForeignBarConflict]] = {}
+    for conflict in conflicts:
+        by_series.setdefault((conflict.symbol, conflict.market), []).append(conflict)
+
+    lines = [
+        "拒絕寫入示範資料：目標資料庫在示範標的的相同日期上，已經有非示範來源的日線。",
+        f"資料庫：{db_path}",
+        "衝突明細：",
+    ]
+    for (symbol, market), rows in sorted(by_series.items()):
+        sources = "、".join(sorted({row.source for row in rows}))
+        first = min(row.trade_date for row in rows)
+        last = max(row.trade_date for row in rows)
+        lines.append(f"  - {symbol}（{market}）：{len(rows)} 筆，{first} ~ {last}，來源：{sources}")
+    lines += [
+        f"合計 {len(conflicts)} 筆。",
+        "示範日線是以 (symbol, market, trade_date) upsert 寫入，會直接覆蓋上面這些列；"
+        f"而 --reset 只會刪掉 source={DEMO_SOURCE} 的列，"
+        "被覆蓋掉的原始資料無法還原，那些日期會變成沒有資料。",
+        "因此本次不寫入任何東西（日線、示範持倉、示範警示規則都沒有建立）。",
+        "請擇一處理：",
+        "  1.（建議）把示範資料放進獨立的資料庫，例如加上 --db-path ./data/demo.db，"
+        "或設定環境變數 STOCK_DESK_DB_PATH=./data/demo.db 後重跑；",
+        "  2. 若你確認上面這些日線可以捨棄，請自行清除後再重跑；"
+        "本腳本不會替你刪除任何不是它寫的資料。",
+    ]
+    return "\n".join(lines)
+
+
+class DemoSeedConflictError(RuntimeError):
+    """Raised instead of overwriting bars another source wrote.
+
+    Carries the conflicting rows so a caller can report them its own way; the
+    string form is the ready-made CLI message from :func:`_conflict_report`.
+    """
+
+    def __init__(self, conflicts: Sequence[ForeignBarConflict], *, db_path: Path) -> None:
+        super().__init__(_conflict_report(conflicts, db_path))
+        self.conflicts: tuple[ForeignBarConflict, ...] = tuple(conflicts)
+        self.db_path = db_path
 
 
 @dataclass(frozen=True)
@@ -348,9 +414,23 @@ def seed_demo(
     today: date | None = None,
     as_of: datetime | None = None,
 ) -> DemoSeedSummary:
-    """Write the demo dataset through the existing cache and stores."""
+    """Write the demo dataset through the existing cache and stores.
+
+    Raises :class:`DemoSeedConflictError` -- before writing anything at all --
+    when the cache already holds bars from another source at the keys this run
+    would upsert. See the module docstring: overwriting them would be silent,
+    irreversible data loss, and choosing to give them up is the user's call.
+    """
     moment = as_of if as_of is not None else datetime.now(UTC)
     bars_by_symbol = build_demo_bars(today=today, as_of=moment)
+
+    conflicts = [
+        conflict
+        for bars in bars_by_symbol.values()
+        for conflict in cache.find_foreign_bars(bars, source=DEMO_SOURCE)
+    ]
+    if conflicts:
+        raise DemoSeedConflictError(conflicts, db_path=cache.db_path)
 
     for bars in bars_by_symbol.values():
         # ``fetched_at`` is the run time: the bars are as fresh as this run, and
@@ -393,7 +473,12 @@ def seed_demo(
 def reset_demo(
     *, cache: PriceBarCache, positions: PositionStore, alerts: AlertStore
 ) -> DemoResetSummary:
-    """Remove every row this seeder owns, leaving any real data untouched.
+    """Remove every row this seeder owns, and only those.
+
+    Bars are deleted by ``source = demo_synthetic`` and positions/rules by their
+    demo marker, so a database that also holds real rows keeps them. This stays
+    deliberately narrow: clearing real data is never this script's decision, it
+    is the thing the seeding guard tells the user to do themselves.
 
     Alert *events* raised by demo rules are deliberately not deleted: an event
     is a record of something that was observed at a point in time, which the
@@ -453,7 +538,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = argparse.ArgumentParser(
         prog="python -m app.demo.seed",
-        description="產生（或清除）離線示範用的合成資料；資料不可用於任何真實決策。",
+        description=(
+            "產生（或清除）離線示範用的合成資料；資料不可用於任何真實決策。"
+            "若目標資料庫在相同標的與日期上已有非示範來源的日線，會拒絕執行（結束碼 1）"
+            "而不覆蓋任何資料。"
+        ),
     )
     parser.add_argument(
         "--reset",
@@ -482,7 +571,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print("（警示事件為 append-only 紀錄，依既有設計保留。）")
     else:
-        _print_seed_summary(seed_demo(cache=cache, positions=positions, alerts=alerts), db_path)
+        try:
+            summary = seed_demo(cache=cache, positions=positions, alerts=alerts)
+        except DemoSeedConflictError as error:
+            # Nothing was written, so the closing banner would be a lie about
+            # what is now in that database. Report on stderr and fail the run.
+            print(str(error), file=sys.stderr)
+            return 1
+        _print_seed_summary(summary, db_path)
     _print_banner()
     return 0
 
