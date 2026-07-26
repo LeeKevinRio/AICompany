@@ -5,9 +5,10 @@ rejected field-by-field (422 with the offending ``loc``) rather than silently
 clamped:
 
 * ``risk_budget`` -- :class:`app.advice.limits.RiskBudget` verbatim. Its bounds
-  are policy, not preference (fractional Kelly stays at most a quarter, the
-  hard Kelly ceiling at most 10%), so they are reused **as they stand** rather
-  than re-declared here where they could drift.
+  are policy, not preference (a single name stays at most 50% of equity, gross
+  exposure at most 150%, fractional Kelly at most a quarter and the hard Kelly
+  ceiling at most 10%), so they are reused **as they stand** rather than
+  re-declared here where they could drift.
 * ``cost_model`` -- a validating mirror of :class:`app.backtest.CostModel`,
   which is a plain frozen dataclass. The mirror exists only to add bounds and
   JSON round-tripping; :meth:`CostModelSettings.to_cost_model` converts back.

@@ -104,14 +104,16 @@ def test_advice_without_price_data_is_200_insufficient(api_harness: ApiHarness) 
 def test_advice_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
     _seed_bars(api_harness)
     api_harness.client.post("/api/positions", json=position_payload())
+    # 0.45: clearly not the 0.15 default, and still inside the hard ceiling
+    # (`MAX_POSITION_WEIGHT_CEILING`) that a settings write cannot pass.
     api_harness.client.put(
-        "/api/settings", json={"risk_budget": {"max_position_weight": 0.99}}
+        "/api/settings", json={"risk_budget": {"max_position_weight": 0.45}}
     )
     body = api_harness.client.get("/api/advice/2330").json()
     weight_cap = next(
         c for c in body["advice"]["limits_check"] if c["id"] == "single_position_weight"
     )
-    assert weight_cap["threshold"] == 0.99
+    assert weight_cap["threshold"] == 0.45
 
 
 def test_advice_never_emits_a_target_price(api_harness: ApiHarness) -> None:

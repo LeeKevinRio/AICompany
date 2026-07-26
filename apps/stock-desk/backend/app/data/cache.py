@@ -158,6 +158,19 @@ class PriceBarCache:
                 rows,
             )
 
+    def delete_by_source(self, source: str) -> int:
+        """Delete every cached bar tagged with ``source``; return the row count.
+
+        Scoped by ``source`` on purpose: it lets a writer retract exactly what
+        it put in (the offline demo seeder retracting ``demo_synthetic``)
+        without touching rows any other provider wrote into the same cache.
+        """
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                "DELETE FROM price_bars_cache WHERE source = ?", (source,)
+            )
+            return cursor.rowcount
+
     def get(
         self,
         symbol: str,

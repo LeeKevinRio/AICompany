@@ -10,6 +10,8 @@ from app.advice import limits
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
+    MAX_GROSS_EXPOSURE_CEILING,
+    MAX_POSITION_WEIGHT_CEILING,
     LimitCheck,
     PortfolioContext,
     RiskBudget,
@@ -69,6 +71,39 @@ def test_kelly_fraction_cap_cannot_exceed_a_quarter() -> None:
         RiskBudget(kelly_fraction_cap=0.5)
     with pytest.raises(ValueError):
         RiskBudget(kelly_position_cap=0.2)
+
+
+def test_the_hard_ceilings_are_where_policy_put_them() -> None:
+    assert MAX_POSITION_WEIGHT_CEILING == 0.50
+    assert MAX_GROSS_EXPOSURE_CEILING == 1.50
+
+
+def test_a_cap_may_be_raised_up_to_its_ceiling() -> None:
+    # The ceiling itself is a legal setting; only a value past it is refused.
+    budget = RiskBudget(
+        max_position_weight=MAX_POSITION_WEIGHT_CEILING,
+        max_gross_exposure=MAX_GROSS_EXPOSURE_CEILING,
+    )
+    assert budget.max_position_weight == MAX_POSITION_WEIGHT_CEILING
+    assert budget.max_gross_exposure == MAX_GROSS_EXPOSURE_CEILING
+
+
+@pytest.mark.parametrize(
+    ("field_name", "ceiling"),
+    [
+        ("max_position_weight", MAX_POSITION_WEIGHT_CEILING),
+        ("max_gross_exposure", MAX_GROSS_EXPOSURE_CEILING),
+    ],
+)
+def test_a_cap_cannot_be_raised_past_its_ceiling(field_name: str, ceiling: float) -> None:
+    # The refusal has to name the number and what it would take to move it --
+    # these caps used to accept 1.0 and 2.0 with no gate at all.
+    with pytest.raises(ValueError) as exc:
+        RiskBudget(**{field_name: ceiling + 0.01})
+    message = str(exc.value)
+    assert f"{ceiling:.2f}" in message
+    assert "硬性上界" in message
+    assert "風控" in message and "CEO" in message
 
 
 def test_every_limit_is_reported_once_in_order() -> None:

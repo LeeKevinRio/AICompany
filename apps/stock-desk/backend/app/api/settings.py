@@ -7,9 +7,12 @@ instead of being clamped into range -- a silently clamped risk cap is exactly
 the kind of number a user would later believe they had set.
 
 The risk-budget bounds are the ones declared on
-:class:`app.advice.limits.RiskBudget` and are reused unchanged: fractional Kelly
-stays at most a quarter and the hard Kelly ceiling at most 10%, whatever the
-settings page asks for.
+:class:`app.advice.limits.RiskBudget` and are reused unchanged, whatever the
+settings page asks for: a single name stays at most 50% of equity, gross
+exposure at most 150%, fractional Kelly at most a quarter and the hard Kelly
+ceiling at most 10%. Those four are hard ceilings with no request-level
+override -- a write past one is a 422 quoting the ceiling and the reason, not a
+warning the caller can acknowledge and proceed through.
 """
 
 from __future__ import annotations

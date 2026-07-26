@@ -10,7 +10,17 @@ interface FieldSpec<T> {
   label: string;
   description: string;
   defaultValue: number | boolean;
+  /**
+   * A ceiling the backend refuses to write past (`app/advice/limits.py`).
+   * Shown beside the field so the boundary is visible *before* typing; the
+   * enforcement itself stays server-side, so a value above it still reaches
+   * `PUT /api/settings` and comes back as a per-field 422 message.
+   */
+  hardCeiling?: { max: number; reason: string };
 }
+
+/** Tail appended to every hard-ceiling note, so the wording lives in one place. */
+const HARD_CEILING_NOTE = "放寬需修改程式碼並經風控與 CEO 同意。";
 
 const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
@@ -18,6 +28,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
     label: "單一標的佔比上限",
     description: "此標的市值占總資產的上限（比例，例如 0.15 代表 15%）。",
     defaultValue: 0.15,
+    hardCeiling: { max: 0.5, reason: "單一標的超過總資產的一半時，分散化已無實質意義。" },
   },
   {
     key: "max_sector_weight",
@@ -30,6 +41,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
     label: "總曝險上限",
     description: "組合總市值占總資產的上限（比例，可大於 1 代表允許槓桿）。",
     defaultValue: 1.0,
+    hardCeiling: { max: 1.5, reason: "容許適度槓桿，但不容許 2 倍的總曝險。" },
   },
   {
     key: "max_loss_per_trade",
@@ -157,6 +169,7 @@ function NumberField({
       <input
         id={id}
         inputMode="decimal"
+        max={spec.hardCeiling?.max}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
@@ -164,6 +177,12 @@ function NumberField({
       <p className="mt-1 text-xs text-neutral-500">
         {spec.description}預設值：{String(spec.defaultValue)}
       </p>
+      {spec.hardCeiling && (
+        <p className="mt-1 text-xs text-amber-300">
+          硬性上界 {String(spec.hardCeiling.max)}：{spec.hardCeiling.reason}
+          {HARD_CEILING_NOTE}
+        </p>
+      )}
       <FieldError message={error} />
     </div>
   );

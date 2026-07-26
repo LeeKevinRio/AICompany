@@ -16,8 +16,13 @@
 
 # 1.0.1 -- 依 risk-compliance-officer 審查意見改寫兩條回撤規則的 explanation：
 #          只陳述價格自身的統計，不表述為使用者本金或本部位的虧損。
-version: "1.0.1"
-updated_at: "2026-07-25"
+# 1.0.2 -- 改寫 concentration_watch 的 explanation 與 invalidation：規則門檻（12%）
+#          是本規則自身的固定值，而風險預算的「單一標的佔比上限」可由設定頁調整；
+#          原文案宣稱「已接近單一標的佔比上限」，在使用者把上限調到 12% 以下時，
+#          會把「已違反上限」講成「接近上限」。現在只陳述規則自身算得出來的事實，
+#          並把上限的實際判定指回卡片的風險上限清單。
+version: "1.0.2"
+updated_at: "2026-07-26"
 
 rules:
   - id: uptrend_ma_stack
@@ -183,6 +188,6 @@ rules:
       field: position.weight
       op: gt
       value: 0.12
-    explanation: 此標的佔投資組合比重高於 12%，已接近單一標的佔比上限。
+    explanation: 此標的佔投資組合比重高於本規則設定的 12% 門檻。此門檻為本規則自身的固定觀察值，與風險預算中可調整的「單一標的佔比上限」是兩件事，該上限的實際判定結果請見卡片的風險上限清單。
     counterargument: 集中度偏高不代表個別標的體質轉差，過度分散也會稀釋既有的研究成果。
-    invalidation: 佔比因組合調整或市值變化回到 10% 以下。
+    invalidation: 佔比因組合調整或市值變化回落至 12% 以下。

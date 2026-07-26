@@ -19,7 +19,7 @@ from app.advice.engine import (
     build_advice,
 )
 from app.advice.limits import PortfolioContext, RiskBudget
-from app.advice.loader import DEFAULT_RULES_PATH, load_default_rules
+from app.advice.loader import DEFAULT_RULES_PATH, Comparison, load_default_rules
 from tests.advice_helpers import make_signals, uptrend_signals
 
 #: The wording the brief bans outright.
@@ -128,6 +128,24 @@ def test_drawdown_rules_describe_price_not_the_users_capital() -> None:
         for term in forbidden:
             assert term not in rule.explanation, f"{rule.id}：{term}"
         assert "此標的" in rule.explanation
+
+
+def test_concentration_rule_speaks_only_of_its_own_fixed_threshold() -> None:
+    # ``max_position_weight`` is editable from the settings page; this rule's
+    # threshold is fixed. Wording that ties the two together would report an
+    # *already violated* cap (user lowered it to 10%, holding sits at 11%) as
+    # merely "approaching" one -- a mis-statement in the dangerous direction.
+    # Both texts must therefore quote the rule's own number, and the same one.
+    rule = next(r for r in load_default_rules().rules if r.id == "concentration_watch")
+    condition = rule.condition
+    assert isinstance(condition, Comparison)
+    assert condition.field == "position.weight"
+    assert condition.value is not None
+    threshold = f"{condition.value * 100:.0f}%"
+    assert threshold in rule.explanation
+    assert threshold in rule.invalidation
+    for term in ("接近", "已達上限", "超過上限"):
+        assert term not in rule.explanation, f"concentration_watch：{term}"
 
 
 def test_no_card_recommends_adding_while_a_limit_is_violated() -> None:

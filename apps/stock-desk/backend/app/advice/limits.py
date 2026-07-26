@@ -28,7 +28,7 @@ import math
 from collections.abc import Callable
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 LimitStatus = Literal["passed", "violated", "not_evaluable"]
 
@@ -67,15 +67,61 @@ RANGE_LOWER_RATIO = 0.5
 #: from spinning, and giving up yields "no suggestion" rather than a bad one.
 MAX_SIZING_ADJUSTMENTS = 8
 
+#: Hard ceiling on ``RiskBudget.max_position_weight``. Past half of total equity
+#: a single name *is* the portfolio, so diversification has stopped meaning
+#: anything and the remaining caps would be measuring a book of one.
+MAX_POSITION_WEIGHT_CEILING = 0.50
+
+#: Hard ceiling on ``RiskBudget.max_gross_exposure``. Moderate leverage is a
+#: legitimate preference; 2x is a different risk profile than the quantities
+#: this engine sizes.
+MAX_GROSS_EXPOSURE_CEILING = 1.50
+
+
+def _ceiling_message(label: str, ceiling: float, reason: str) -> str:
+    """The 422 message for a cap a request tried to raise past its ceiling.
+
+    It states the ceiling, why it sits there, and what it would actually take to
+    move it -- a code change reviewed by risk-compliance and approved by the
+    CEO. There is deliberately no request-level escape hatch to mention.
+    """
+    return (
+        f"{label}最高只能設為 {ceiling:.2f}（{ceiling * 100:.0f}%）。{reason}"
+        "這是硬性上界，放寬必須修改 app/advice/limits.py 的程式碼，"
+        "並經風控（risk-compliance-officer）審查與 CEO 同意，"
+        "無法由設定頁或 API 繞過。"
+    )
+
 
 class RiskBudget(BaseModel):
-    """The risk caps applied to every suggestion. Defaults are conservative."""
+    """The risk caps applied to every suggestion. Defaults are conservative.
+
+    Every bound here is **policy, not preference**. The settings page writes
+    this model verbatim (see :mod:`app.settings.models`), so whatever a field
+    accepts is what a user can set with a single ``PUT``. Four fields therefore
+    carry a hard ceiling that no request can pass:
+
+    * ``max_position_weight`` -- at most :data:`MAX_POSITION_WEIGHT_CEILING`;
+    * ``max_gross_exposure`` -- at most :data:`MAX_GROSS_EXPOSURE_CEILING`;
+    * ``kelly_fraction_cap`` / ``kelly_position_cap`` -- a quarter of full Kelly
+      and 10% of equity, unchanged.
+
+    The first two used to accept 1.0 and 2.0, which let the settings page put a
+    whole portfolio into one name, or 2x gross, with no gate at all. They are
+    now enforced in validators that *say* what they are: a 422 quoting the
+    ceiling and the reason. Not clamped (a silently clamped cap is a number the
+    user would later believe they had set), not a dismissible warning, and not
+    overridable through a flag a request could send -- raising them is a code
+    change reviewed by risk-compliance and approved by the CEO.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_position_weight: float = Field(default=0.15, gt=0.0, le=1.0)
+    #: Bounded by :data:`MAX_POSITION_WEIGHT_CEILING`, not by 1.0.
+    max_position_weight: float = Field(default=0.15, gt=0.0)
     max_sector_weight: float = Field(default=0.30, gt=0.0, le=1.0)
-    max_gross_exposure: float = Field(default=1.00, gt=0.0, le=2.0)
+    #: Bounded by :data:`MAX_GROSS_EXPOSURE_CEILING`, not by 2.0.
+    max_gross_exposure: float = Field(default=1.00, gt=0.0)
     #: Largest acceptable loss on one position, as a fraction of total equity.
     max_loss_per_trade: float = Field(default=0.01, gt=0.0, le=0.1)
     #: Stop distance = this multiple of ATR(14).
@@ -84,6 +130,32 @@ class RiskBudget(BaseModel):
     kelly_fraction_cap: float = Field(default=0.25, gt=0.0, le=0.25)
     #: Hard ceiling on any Kelly-derived position, whatever the edge estimate.
     kelly_position_cap: float = Field(default=0.10, gt=0.0, le=0.10)
+
+    @field_validator("max_position_weight")
+    @classmethod
+    def _position_weight_within_ceiling(cls, value: float) -> float:
+        if value > MAX_POSITION_WEIGHT_CEILING:
+            raise ValueError(
+                _ceiling_message(
+                    LIMIT_NAMES["single_position_weight"],
+                    MAX_POSITION_WEIGHT_CEILING,
+                    "單一標的超過總資產的一半時，分散化已無實質意義。",
+                )
+            )
+        return value
+
+    @field_validator("max_gross_exposure")
+    @classmethod
+    def _gross_exposure_within_ceiling(cls, value: float) -> float:
+        if value > MAX_GROSS_EXPOSURE_CEILING:
+            raise ValueError(
+                _ceiling_message(
+                    LIMIT_NAMES["gross_exposure"],
+                    MAX_GROSS_EXPOSURE_CEILING,
+                    "此處容許適度槓桿，但不容許 2 倍的總曝險。",
+                )
+            )
+        return value
 
 
 class PortfolioContext(BaseModel):

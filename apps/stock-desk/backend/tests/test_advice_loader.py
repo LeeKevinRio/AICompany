@@ -25,8 +25,8 @@ VALID_ACTIONS = {"add", "hold", "reduce", "stop_loss", "take_profit"}
 
 def test_default_rules_load_and_are_well_formed() -> None:
     ruleset = load_default_rules()
-    assert ruleset.version == "1.0.1"
-    assert ruleset.updated_at.isoformat() == "2026-07-25"
+    assert ruleset.version == "1.0.2"
+    assert ruleset.updated_at.isoformat() == "2026-07-26"
     assert 8 <= len(ruleset.rules) <= 12
     assert len(set(ruleset.rule_ids())) == len(ruleset.rules)
     for rule in ruleset.rules:

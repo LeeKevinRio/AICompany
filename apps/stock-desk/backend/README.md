@@ -77,6 +77,57 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 | `GET/PUT /api/settings` | `app.settings.models.AppSettings` |
 | `GET/POST/DELETE /api/alerts`、`GET /api/alerts/events`、`POST /api/alerts/events/{id}/ack`、`POST /api/alerts/evaluate` | `app.alerts.*` |
 
+## 離線示範模式（`app/demo/`）
+
+> **警告：這是合成示範資料，不可用於任何真實決策。**
+> 所有日線都是本機用固定亂數種子產生的假資料，不是任何市場的實錄。
+
+沒有外網的環境（CI、驗收機、展示用筆電）會從每一個 provider 拿到 `unavailable`，
+四個頁面因此整片都是 `insufficient_data`。這支 seed 腳本把合成資料寫進**既有的**
+快取層與 store（沒有新 schema、沒有另一套資料表），讓整條鏈路可以離線跑出真實數字。
+
+```bash
+# 產生（或更新）示範資料；DB 路徑沿用 STOCK_DESK_DB_PATH
+uv run python -m app.demo.seed
+
+# 指定資料庫
+uv run python -m app.demo.seed --db-path ./data/demo.db
+
+# 清除示範資料（只刪自己寫的那些列）
+uv run python -m app.demo.seed --reset
+```
+
+會寫入什麼：
+
+| 項目 | 內容 |
+| --- | --- |
+| 日線 | 三檔各 520 根（約兩年交易日，結束於今天之前最近的平日）：`2330`（一般台股）、`0050`（作為 `00631L` 標的指數的追蹤標的）、`00631L`（日度重置槓桿 ETF，NAV 由 `0050` 的**單日**報酬套用註冊表中的倍數與費用率逐日複利推導） |
+| 走勢 | 依序為盤整暖身 → 上升趨勢 → 回檔 → 均值回歸盤整 → 第二段上升 → 急跌 → 反彈，因此均線黃金／死亡交叉、RSI 高低檔、最大回撤規則都有機會命中 |
+| 持倉 | 3 筆（2330 / 0050 / 00631L），建倉日與平均成本直接取自產生出來的某一根 bar，帳面損益因此與圖表一致；示範帳本刻意一賺兩賠 |
+| 警示規則 | 3 條，涵蓋 `price_below`、`signal_condition`、`risk_limit_breach` 三種類型 |
+
+**資料來源標示**：每一根 bar 的 `source` 都是 `demo_synthetic`，這個字串會原樣出現在
+`/api/bars`、`/api/signals`、`/api/advice` 回應的 `data.source`，以及個股頁「來源：」那一行，
+不可能被誤認為 TWSE／TPEx／FinMind 的真實行情。示範持倉與警示規則的 `note` 都帶有
+`[demo_synthetic]` 前綴。腳本啟動與結束都會印出上面那段警告。
+
+**冪等**：日線走 `PriceBarCache.put` 的 upsert（主鍵 `symbol, market, trade_date`），
+持倉與規則以示範標記加上自身識別比對，已存在就原封不動保留，重跑不會長出第二份。
+`--reset` 只刪 `source = demo_synthetic` 的日線與帶示範標記的持倉／規則，
+對同一個資料庫裡的真實資料沒有影響；警示**事件**依既有 append-only 設計保留。
+
+其他注意事項：
+
+- 警示事件要呼叫 `POST /api/alerts/evaluate`（或等排程跑）才會產生。
+- 離線時每個請求仍會先依序嘗試 TWSE → TPEx → FinMind 才降級到快取，
+  每個 provider 有 10 秒 timeout 與 3 次重試，因此**第一次載入會明顯變慢**；
+  這是既有降級階梯的行為，seed 腳本不會去繞過它。
+- 估值層只往回找 10 天的價格。示範資料是以「執行當天」為終點產生的，
+  所以一份放了超過十天的示範資料庫要重跑一次 seed 才會再有估值。
+- `GET /api/leverage/{symbol}`（個股頁的槓桿專章）依既有設計仍以 `index_bars=None` 呼叫，
+  因為系統還沒有指數資料 adapter。即使 seed 了 `0050`，該章的拆解與情境推估仍會誠實回報
+  `insufficient_data`；本模式不會偷偷拿別的標的替代。
+
 ## 排程（`app/scheduler.py`）
 
 `python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。兩個 interval job：

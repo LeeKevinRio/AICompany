@@ -108,3 +108,21 @@ def test_get_filters_by_symbol_and_market(tmp_path: Path) -> None:
     result = cache.get("5483", "TW", date(2024, 1, 1), date(2024, 1, 31))
     assert result is not None
     assert {bar.symbol for bar in result.bars} == {"5483"}
+
+
+def test_delete_by_source_removes_only_that_writers_rows(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar(symbol="2330")], source="twse")
+    cache.put([_bar(symbol="9999")], source="demo_synthetic")
+
+    assert cache.delete_by_source("demo_synthetic") == 1
+
+    assert cache.get("9999", "TW", date(2024, 1, 1), date(2024, 1, 31)) is None
+    assert cache.get("2330", "TW", date(2024, 1, 1), date(2024, 1, 31)) is not None
+
+
+def test_delete_by_source_is_zero_when_nothing_matches(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar()], source="twse")
+
+    assert cache.delete_by_source("demo_synthetic") == 0
