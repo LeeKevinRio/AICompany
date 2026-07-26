@@ -51,13 +51,25 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 
 | 變數 | 用途 | 預設 |
 | --- | --- | --- |
-| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔） | `./data/stock-desk.db` |
+| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔） | `./data/stock-desk.db`（本機直跑）；Docker Compose 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`，backend 與 scheduler 兩個 service 必須指向同一份檔案，見下方「資料持久化」 |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token；未設定時該 adapter 明確回傳 `unavailable`，不丟例外 | 無 |
 | `ALERT_DISCORD_WEBHOOK_URL` | 警示推播的 Discord webhook；**祕密，只走環境變數 / `.env`**。未設定就跳過該通道 | 無 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | 警示推播的 Telegram bot token；**祕密**。與 chat id 兩者都有才會送出 | 無 |
 | `ALERT_TELEGRAM_CHAT_ID` | 警示推播的 Telegram chat id | 無 |
 | `SCHEDULER_DATA_INTERVAL_MINUTES` | 排程的資料更新間隔（分鐘） | `1440` |
 | `SCHEDULER_ALERT_INTERVAL_MINUTES` | 排程的警示評估間隔（分鐘）；未設定時取 `/api/settings` 的 `alerts.evaluation_interval_minutes` | 設定值（預設 60） |
+
+## 資料持久化（Docker 部署）
+
+`app/data/cache.py` 的 `resolve_db_path()` 讀 `STOCK_DESK_DB_PATH` 決定唯一一顆
+SQLite 檔（快取、持倉、設定、警示規則/事件全部共用，WAL 模式）。在 `compose.yaml`
+裡，`backend` 與 `scheduler` 是**各自獨立的容器**，兩者都把 `STOCK_DESK_DB_PATH`
+顯式設成 `/app/data/stock-desk.db`，並掛同一個具名 volume `stock-desk-data`
+到 `/app/data`；缺一不可——路徑不一致或沒掛 volume，排程寫的資料 API 讀不到
+（或反過來），且容器重建後資料全部消失。
+
+備份／還原方式與「`docker compose down -v` 會刪資料」的警告見專案根目錄
+`../README.md` 的「資料存放與備份」一節。
 
 ## API 端點
 

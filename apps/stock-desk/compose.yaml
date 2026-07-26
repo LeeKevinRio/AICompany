@@ -11,6 +11,12 @@ services:
         required: false
     environment:
       - TZ=Asia/Taipei
+      # Fixed absolute path so both backend and scheduler point at the same
+      # file inside the shared volume below, regardless of each container's
+      # working directory.
+      - STOCK_DESK_DB_PATH=/app/data/stock-desk.db
+    volumes:
+      - stock-desk-data:/app/data
     command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
@@ -28,6 +34,13 @@ services:
         required: false
     environment:
       - TZ=Asia/Taipei
+      # Must match the backend service's STOCK_DESK_DB_PATH: both containers
+      # write to the same SQLite file (WAL mode) via the shared volume, or the
+      # scheduler's data refresh / alert evaluation writes go to a DB the API
+      # never reads from.
+      - STOCK_DESK_DB_PATH=/app/data/stock-desk.db
+    volumes:
+      - stock-desk-data:/app/data
     command: ["uv", "run", "--no-sync", "python", "-m", "app.scheduler"]
     depends_on:
       backend:
@@ -49,3 +62,11 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  # Holds the single SQLite file backing price-bar cache, positions,
+  # settings, and alert rules/events (see backend/app/data/cache.py). Shared
+  # between backend and scheduler so both see the same data. Survives
+  # `docker compose down`; only `docker compose down -v` (or manually
+  # removing the volume) deletes it -- see README for backup instructions.
+  stock-desk-data:

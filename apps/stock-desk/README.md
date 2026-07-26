@@ -19,6 +19,25 @@ docker compose up --build
 - 後端 API:http://localhost:8000(健康檢查 `GET /health`)
 - 排程:`scheduler` service(APScheduler:每日資料更新 + 警示評估)
 
+## 資料存放與備份
+
+`backend` 與 `scheduler` 兩個 service 共用同一個具名 volume `stock-desk-data`,
+掛載在兩邊容器的 `/app/data`,並各自把 `STOCK_DESK_DB_PATH` 顯式指到
+`/app/data/stock-desk.db`(見 `compose.yaml`)。這一顆 SQLite 檔案(WAL 模式)
+裝了持倉、風險設定、警示規則/事件與價格快取——**全部使用者資料都在這裡**。
+
+- 兩個 service 指向同一路徑是刻意的:排程寫入的每日資料更新、警示評估結果,
+  一定要跟 API 服務讀寫同一份 DB,否則排程形同空跑(見本次修復的部署缺陷)。
+- **備份**:直接備份整個 volume,不需要停機(SQLite WAL 支援線上備份):
+  ```bash
+  docker run --rm -v stock-desk-data:/data -v "$PWD":/backup alpine \
+    tar czf /backup/stock-desk-data-$(date +%Y%m%d).tar.gz -C /data .
+  ```
+  還原時反向操作(`tar xzf ... -C /data`)。
+- **危險操作警告**:`docker compose down -v` 或手動 `docker volume rm stock-desk-data`
+  會**永久刪除**這顆 volume,連同全部持倉、設定、警示規則與快取。一般重啟/重建
+  請只用 `docker compose down`(不帶 `-v`)或 `docker compose restart`。
+
 ## 本機開發(不用 Docker)
 
 後端(Python 3.12 + uv):
@@ -135,7 +154,7 @@ apps/stock-desk/
 
 | 變數 | 用途 | 預設 | 是否必須 |
 | --- | --- | --- | --- |
-| `STOCK_DESK_DB_PATH` | SQLite 資料庫檔路徑 | `./data/stock-desk.db` | 選用 |
+| `STOCK_DESK_DB_PATH` | SQLite 資料庫檔路徑 | `./data/stock-desk.db`(本機直跑);Docker 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`(掛在 `stock-desk-data` volume) | 選用,但 Docker 部署下 backend / scheduler 兩邊務必指向同一路徑,見上方「資料存放與備份」 |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token | 無 | 選用（未設定時 FinMind adapter 回 unavailable） |
 | `ALERT_DISCORD_WEBHOOK_URL` | Discord 推播 webhook | 無 | 選用 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | Telegram bot token | 無 | 選用（需搭配 CHAT_ID） |
