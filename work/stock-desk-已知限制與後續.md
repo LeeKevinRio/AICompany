@@ -208,7 +208,7 @@
 
 **現況**：以下為 risk-compliance-officer 於 Phase 6 審查通過（APPROVE）時明列、且同意不擋本次上線的建議事項。七項皆不構成保證性語氣、隱藏風險或不實陳述，但都屬於「可以更好」：
 
-1. **`quantity_range_reason` 欄位**：`quantity_range` 為 `null` 時，前端只顯示概略說明「無法從風險上限推導」，不區分實際成因。成因**至少有六種**（`app/advice/limits.py`）：
+1. **`quantity_range_reason` 欄位**：`quantity_range` 為 `null` 時，前端只顯示概略說明「無法從風險上限推導」，不區分實際成因。實際共**七條路徑**（`app/advice/limits.py`）——其中六種是「想推導但推導不出來」，一種是「這個動作本來就不產生區間」：
 
    | 成因 | 位置 |
    | --- | --- |
