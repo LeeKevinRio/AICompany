@@ -2,7 +2,7 @@
 
 - 狀態：proposed
 - 日期：2026-07-26
-- 決策者：tech-architect（草案）、CEO（2026-07-26 核可）
+- 決策者：tech-architect（草案撰寫中）；尚未經 CEO 核可，故狀態為 proposed
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：ADR-0002（技術棧 + 「建議引擎必須是 YAML 規則式」約束）、ADR-0003（資料源降級鏈、`as_of`/`source` 欄位約定）
 
