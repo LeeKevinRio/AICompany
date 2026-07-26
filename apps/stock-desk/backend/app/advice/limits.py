@@ -70,6 +70,11 @@ MAX_SIZING_ADJUSTMENTS = 8
 #: Hard ceiling on ``RiskBudget.max_position_weight``. Past half of total equity
 #: a single name *is* the portfolio, so diversification has stopped meaning
 #: anything and the remaining caps would be measuring a book of one.
+#:
+#: Both ceilings below were approved in writing by the CEO on 2026-07-26 after
+#: risk-compliance review. Raising either one is a governance decision, not a
+#: code change: get risk sign-off and a fresh CEO approval first, then edit the
+#: constant and record it here. Never widen one to make a test or a demo pass.
 MAX_POSITION_WEIGHT_CEILING = 0.50
 MAX_POSITION_WEIGHT_REASON = "單一標的超過總資產的一半時，分散化已無實質意義。"
 

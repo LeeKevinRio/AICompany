@@ -240,7 +240,7 @@
 
 - **`default.yaml` 的 `concentration_watch` 硬寫 12% 門檻**，卻引用可調的「單一標的佔比上限」；使用者若把上限調到 10%，畫面會在上限已被突破時仍顯示「接近上限」。**（已完成：規則文案改為只陳述規則自身的固定 12% 門檻，並把上限判定指回卡片風險上限清單；規則集升版 1.0.2，風控官已於複審定稿）**
 
-- **`RiskBudget` 的 `max_position_weight`（`le=0.50`）與 `max_gross_exposure`（`le=1.50`）硬性上界**；放寬須經風控官與 CEO 書面同意。**（已實裝在 `advice/limits.py` 第 73 和 78 行，回傳 422 with 明確原因）**
+- **`RiskBudget` 的 `max_position_weight`（上界 0.50）與 `max_gross_exposure`（上界 1.50）硬性上界**；放寬須經風控官與 CEO 書面同意。**（已實裝於 `advice/limits.py`，超界回 422 並附繁中理由；`MAX_POSITION_WEIGHT_CEILING` = 0.50、`MAX_GROSS_EXPOSURE_CEILING` = 1.50 兩個數值已於 2026-07-26 經風控審查後由 CEO 書面定案，出處記於該檔常數註解）**
 
 **影響**：皆為揭露品質與可讀性層面；不影響目前輸出的正確性與誠實性。
 
