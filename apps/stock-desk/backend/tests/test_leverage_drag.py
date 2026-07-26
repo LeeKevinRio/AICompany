@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import date
+from pathlib import Path
 
 from app.leverage import drag as G
 from tests.leverage_helpers import bars, ideal_leveraged_closes, zigzag_closes
@@ -277,6 +278,90 @@ def test_provenance_and_assumptions_survive() -> None:
     assert result.inputs_used.columns == ["close"]
     assert result.inputs_used.window["aligned_bars"] == 3
     assert len(result.assumptions) >= 5
+
+
+# --- Index provenance and the residual reminder ------------------------------
+
+
+def test_index_basis_and_return_basis_are_echoed_back() -> None:
+    result = G.decompose_drag(
+        etf_bars=bars(_ETF_GOLDEN, symbol="SSO"),
+        index_bars=bars(_INDEX_GOLDEN, symbol="^GSPC", source="fake-index"),
+        leverage_factor=_BETA,
+        expense_ratio_annual=_EXPENSE,
+        index_basis="official_index",
+        index_return_basis="price",
+    )
+    assert result.index_basis == "official_index"
+    assert result.index_return_basis == "price"
+    # A verified price index adds neither qualifier.
+    assert not any("basis=" in line for line in result.assumptions)
+    assert not any("含息口徑未查證" in line for line in result.assumptions)
+
+
+def test_an_unverified_dividend_basis_adds_its_assumption() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)  # default: unknown
+    assert result.index_return_basis == "unknown"
+    assert any("含息口徑未查證" in line for line in result.assumptions)
+    assert any("residual" in line for line in result.assumptions)
+
+
+def test_a_non_official_series_says_the_attribution_is_diluted() -> None:
+    result = G.decompose_drag(
+        etf_bars=bars(_ETF_GOLDEN, symbol="TQQQ"),
+        index_bars=bars(_INDEX_GOLDEN, symbol="QQQ", source="fake"),
+        leverage_factor=_BETA,
+        expense_ratio_annual=_EXPENSE,
+        index_basis="proxy_etf",
+        index_return_basis="price",
+    )
+    assert any("不是官方標的指數" in line for line in result.assumptions)
+    assert any("proxy_etf" in line for line in result.assumptions)
+
+
+def test_the_qualifiers_survive_an_insufficient_data_result() -> None:
+    result = G.decompose_drag(
+        etf_bars=bars(_ETF_GOLDEN, symbol="00631L"),
+        index_bars=[],
+        leverage_factor=_BETA,
+        expense_ratio_annual=_EXPENSE,
+        index_basis="unmapped",
+        index_return_basis="unknown",
+    )
+    assert result.status == "insufficient_data"
+    assert result.index_basis == "unmapped"
+    assert result.residual_alert is False
+    assert result.notes == []
+    assert any("不是官方標的指數" in line for line in result.assumptions)
+
+
+def test_an_oversized_residual_trips_the_reminder_note() -> None:
+    # ETF +50% against a -1% index: the residual swallows the whole move, which
+    # is what a mis-mapped index looks like from here.
+    result = _decompose(_INDEX_GOLDEN, [100.0, 120.0, 150.0])
+    assert result.status == "ok"
+    assert result.residual is not None and abs(result.residual) > G.RESIDUAL_ALERT_ABS
+    assert result.residual_alert is True
+    assert result.residual_alert_threshold == G.RESIDUAL_ALERT_ABS
+    assert len(result.notes) == 1
+    assert "殘差異常大" in result.notes[0]
+    assert "請勿將本次歸因視為定論" in result.notes[0]
+    _assert_identity(result)
+
+
+def test_a_residual_inside_the_threshold_stays_quiet() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)
+    assert result.residual is not None and abs(result.residual) < G.RESIDUAL_ALERT_ABS
+    assert result.residual_alert is False
+    assert result.notes == []
+
+
+def test_the_threshold_documents_itself_as_a_manual_reminder() -> None:
+    # I-6: the constant's own documentation must not let a reader mistake it
+    # for a test of statistical significance.
+    source = Path(G.__file__).read_text(encoding="utf-8")
+    assert "manually chosen reminder threshold, not a statistical test" in source
+    assert G.RESIDUAL_ALERT_ABS == 0.10
 
 
 def test_align_closes_intersects_dates() -> None:

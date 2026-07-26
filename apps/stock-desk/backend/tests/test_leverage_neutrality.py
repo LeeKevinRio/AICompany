@@ -111,14 +111,25 @@ def _chapters() -> list[dict[str, Any]]:
             index_bars if with_index else None,
         )
 
+    # A residual far outside the reminder threshold, so that note's text is
+    # scanned too.
+    tripped = S.build_leverage_chapter(
+        make_position(symbol="00675L", instrument_type="leveraged_etf"),
+        bars([100.0, 120.0, 150.0], symbol="00675L"),
+        bars([100.0, 110.0, 99.0], symbol="^TWII", source="twse-index"),
+    )
     return [
+        # Mapped (both quantitative blocks compute) and unmapped (both refuse):
+        # the two states emit different text, so both are scanned.
+        build("00675L", "leveraged_etf"),
         build("00631L", "leveraged_etf"),
         build("00632R", "leveraged_etf"),
         build("TQQQ", "etf"),
         build("00999X", "leveraged_etf"),
         build("2330", "stock"),
-        build("00631L", "leveraged_etf", with_index=False),
-        build("00631L", "leveraged_etf", opened_at=date(2024, 3, 1)),
+        build("00675L", "leveraged_etf", with_index=False),
+        build("00675L", "leveraged_etf", opened_at=date(2024, 3, 1)),
+        tripped,
     ]
 
 

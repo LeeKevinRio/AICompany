@@ -18,11 +18,13 @@ from fastapi.testclient import TestClient
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_fx_provider,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.data.providers.fx import FxRateProvider
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
@@ -39,6 +41,7 @@ class ApiHarness:
     positions: PositionStore
     alerts: AlertStore
     settings: SettingsStore
+    fx_provider: FxRateProvider
 
 
 @pytest.fixture
@@ -48,13 +51,21 @@ def price_service() -> FakePriceService:
 
 
 @pytest.fixture
-def api_harness(tmp_path: Path, price_service: FakePriceService) -> Iterator[ApiHarness]:
+def fx_provider() -> FxRateProvider:
+    """An FX provider that never has a rate; a test swaps in its own if it needs one."""
+    return UnavailableFxProvider()
+
+
+@pytest.fixture
+def api_harness(
+    tmp_path: Path, price_service: FakePriceService, fx_provider: FxRateProvider
+) -> Iterator[ApiHarness]:
     positions = PositionStore(db_path=tmp_path / "positions.db")
     alerts = AlertStore(db_path=tmp_path / "alerts.db")
     settings = SettingsStore(db_path=tmp_path / "settings.db")
     valuator = PositionValuator(
         market_services={"TW": price_service},
-        fx_provider=UnavailableFxProvider(),
+        fx_provider=fx_provider,
     )
 
     app.dependency_overrides[get_position_store] = lambda: positions
@@ -62,6 +73,7 @@ def api_harness(tmp_path: Path, price_service: FakePriceService) -> Iterator[Api
     app.dependency_overrides[get_settings_store] = lambda: settings
     app.dependency_overrides[get_valuator] = lambda: valuator
     app.dependency_overrides[get_market_resolver] = lambda: {"TW": price_service}
+    app.dependency_overrides[get_fx_provider] = lambda: fx_provider
 
     with TestClient(app) as test_client:
         yield ApiHarness(
@@ -70,6 +82,7 @@ def api_harness(tmp_path: Path, price_service: FakePriceService) -> Iterator[Api
             positions=positions,
             alerts=alerts,
             settings=settings,
+            fx_provider=fx_provider,
         )
     app.dependency_overrides.clear()
 

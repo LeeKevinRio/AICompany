@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+import pytest
+
 from app.leverage import service as S
+from app.leverage.index_mapping import INDEX_MAPPING
 from app.positions.models import InstrumentType
 from tests.leverage_helpers import (
     bars,
@@ -21,7 +24,7 @@ def _index_closes() -> list[float]:
 
 def _chapter(
     *,
-    symbol: str = "00631L",
+    symbol: str = "00675L",
     instrument_type: InstrumentType = "leveraged_etf",
     with_index: bool = True,
     opened_at: date = date(2024, 1, 1),
@@ -39,7 +42,7 @@ def _chapter(
     return S.build_leverage_chapter(
         position,
         bars(etf_closes, symbol=symbol),
-        bars(index_closes, symbol="TW50", source="twse-index") if with_index else None,
+        bars(index_closes, symbol="^TWII", source="twse-index") if with_index else None,
         config=config,
     )
 
@@ -47,7 +50,7 @@ def _chapter(
 def test_full_chapter_is_ok_and_carries_every_block() -> None:
     chapter = _chapter()
     assert chapter["chapter_status"] == "ok"
-    assert chapter["symbol"] == "00631L"
+    assert chapter["symbol"] == "00675L"
     assert chapter["position_id"] == 1
     assert chapter["generated_at"]
     assert chapter["disclosure"]
@@ -121,6 +124,81 @@ def test_missing_index_series_is_stated_not_substituted() -> None:
     assert chapter["drag"]["status"] == "insufficient_data"
     assert chapter["erosion"]["status"] == "insufficient_data"
     assert any("標的指數" in note for note in chapter["notes"])
+
+
+def test_chapter_carries_the_index_mapping_row_and_its_verification_flag() -> None:
+    chapter = _chapter()
+    assert chapter["index_mapping_verified"] is False
+    mapping = chapter["index_mapping"]
+    assert mapping["series_symbol"] == "^TWII"
+    assert mapping["basis"] == "official_index"
+    assert mapping["return_basis"] == "unknown"
+    assert mapping["verified"] is False
+    assert mapping["mapping_verified_on"] is None
+    assert any("index_mapping_verified=false" in note for note in chapter["notes"])
+    # The basis travels into the block that used it, and its unverified
+    # dividend treatment is stated as an assumption.
+    assert chapter["drag"]["index_basis"] == "official_index"
+    assert chapter["drag"]["index_return_basis"] == "unknown"
+    assert any("含息口徑未查證" in line for line in chapter["drag"]["assumptions"])
+
+
+def test_an_unmapped_fund_refuses_both_blocks_with_the_mapping_note() -> None:
+    # 00631L's benchmark has no established queryable code, so the chapter
+    # refuses even though index bars were handed in.
+    chapter = _chapter(symbol="00631L")
+    note = INDEX_MAPPING["00631L"].note
+    assert chapter["chapter_status"] == "insufficient_data"
+    assert chapter["drag"]["status"] == "insufficient_data"
+    assert chapter["drag"]["reason"] == note
+    assert chapter["erosion"]["status"] == "insufficient_data"
+    assert chapter["erosion"]["reason"] == note
+    assert note in chapter["notes"]
+    assert chapter["index_mapping"]["basis"] == "unmapped"
+    assert chapter["index_mapping_verified"] is False
+    # The block echoes what it was (not) given rather than implying an index.
+    assert chapter["drag"]["index_basis"] == "unmapped"
+    assert any("不是官方標的指數" in line for line in chapter["drag"]["assumptions"])
+
+
+def test_unmapped_reason_does_not_read_as_a_temporary_outage() -> None:
+    reason = _chapter(symbol="00632R")["drag"]["reason"]
+    for phrase in ("暫時", "稍後", "重試", "故障"):
+        assert phrase not in reason
+
+
+def test_a_registry_row_with_no_mapping_row_still_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # C-3 forbids this state and a test enforces it; if it ever happened the
+    # chapter must still refuse cleanly instead of assuming a series.
+    monkeypatch.delitem(INDEX_MAPPING, "00675L")
+    chapter = _chapter()
+    assert chapter["index_mapping"] is None
+    assert chapter["index_mapping_verified"] is False
+    assert chapter["drag"]["reason"] == S.NO_MAPPING_ROW_REASON
+    assert chapter["erosion"]["reason"] == S.NO_MAPPING_ROW_REASON
+
+
+def test_an_oversized_residual_trips_the_chapter_level_reminder() -> None:
+    # The ETF ran away from the index: whatever this gap is, it is not the
+    # mechanics the decomposition claims to be attributing.
+    position = make_position(symbol="00675L", opened_at=date(2024, 1, 1))
+    chapter = S.build_leverage_chapter(
+        position,
+        bars([100.0, 120.0, 150.0], symbol="00675L"),
+        bars([100.0, 110.0, 99.0], symbol="^TWII", source="twse-index"),
+    )
+    assert chapter["drag"]["status"] == "ok"
+    assert chapter["drag"]["residual_alert"] is True
+    assert any("殘差異常大" in note for note in chapter["notes"])
+    assert any("請勿將本次歸因視為定論" in note for note in chapter["notes"])
+
+
+def test_a_normal_residual_does_not_trip_the_reminder() -> None:
+    chapter = _chapter()
+    assert chapter["drag"]["residual_alert"] is False
+    assert not any("殘差異常大" in note for note in chapter["notes"])
 
 
 def test_partial_status_when_only_one_block_computes() -> None:

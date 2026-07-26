@@ -14,7 +14,7 @@ from functools import lru_cache
 from app.alerts.store import AlertStore
 from app.data.cache import PriceBarCache
 from app.data.providers.finmind import FinMindAdapter
-from app.data.providers.fx import BankOfTaiwanFxAdapter
+from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateProvider
 from app.data.providers.tpex import TpexAdapter
 from app.data.providers.twse import TwseAdapter
 from app.data.service import MarketDataService
@@ -47,10 +47,21 @@ def _default_resolver() -> MarketDataResolver:
 
 
 @lru_cache(maxsize=1)
+def _default_fx_provider() -> FxRateProvider:
+    """The one FX adapter, shared by the valuation and the risk-context path.
+
+    Both paths must read the same rates: a card whose caps were scaled by one
+    quote while the portfolio total used another would be internally
+    inconsistent for no visible reason.
+    """
+    return BankOfTaiwanFxAdapter()
+
+
+@lru_cache(maxsize=1)
 def _default_valuator() -> PositionValuator:
     return PositionValuator(
         market_services=dict(_default_resolver()),
-        fx_provider=BankOfTaiwanFxAdapter(),
+        fx_provider=_default_fx_provider(),
     )
 
 
@@ -72,6 +83,11 @@ def get_position_store() -> PositionStore:
 def get_valuator() -> PositionValuator:
     """Return the process-wide position valuator."""
     return _default_valuator()
+
+
+def get_fx_provider() -> FxRateProvider:
+    """Return the process-wide FX rate provider."""
+    return _default_fx_provider()
 
 
 def get_market_resolver() -> MarketDataResolver:

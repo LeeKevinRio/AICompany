@@ -2,10 +2,37 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+from decimal import Decimal
+
 from app.advice.book import EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE
 from app.advice.engine import DISCLAIMER
+from app.api.deps import get_fx_provider
+from app.data.interface import DataStatus
+from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
+from app.main import app
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
+
+
+class StubFxProvider(FxRateProvider):
+    """Quotes one flat rate for every day in the requested window."""
+
+    source_id = "bank_of_taiwan"
+
+    def __init__(self, rate: Decimal) -> None:
+        self._rate = rate
+
+    def get_daily_rates(self, pair: str, start: date, end: date) -> FxRateResult:
+        now = datetime.now(UTC)
+        return FxRateResult(
+            rates=[
+                FxRate(pair=pair, date=end, rate=self._rate, as_of=now, source=self.source_id)
+            ],
+            status=DataStatus.FRESH,
+            as_of=now,
+            source=self.source_id,
+        )
 
 
 def _seed_bars(harness: ApiHarness, symbol: str = "2330", count: int = 200) -> None:
@@ -128,3 +155,42 @@ def test_advice_for_a_market_without_an_adapter_says_so(api_harness: ApiHarness)
     body = api_harness.client.get("/api/advice/AAPL", params={"market": "US"}).json()
     assert body["status"] == "insufficient_data"
     assert "沒有 US 市場的行情來源" in body["reason"]
+
+
+def _seed_foreign_bars(harness: ApiHarness, symbol: str = "2330") -> None:
+    harness.price_service.seed(
+        symbol,
+        recent_bars(trending_closes(200), symbol=symbol, currency="USD"),
+    )
+
+
+def test_a_foreign_currency_holding_without_a_rate_says_which_input_is_missing(
+    api_harness: ApiHarness,
+) -> None:
+    # The harness FX provider never has a rate, which is the AC-3.2 case.
+    _seed_foreign_bars(api_harness)
+    body = api_harness.client.get("/api/advice/2330").json()
+    assert body["status"] == "ok"  # there *is* a price; only the conversion is missing
+    notes = body["context_notes"]
+    assert any("無法取得匯率換算" in note for note in notes)
+    assert any("不以 1.0 匯率代入" in note for note in notes)
+    assert body["portfolio_context"]["close"] is None
+    weight_cap = next(
+        c for c in body["advice"]["limits_check"] if c["id"] == "single_position_weight"
+    )
+    assert weight_cap["status"] == "not_evaluable"
+
+
+def test_a_resolvable_rate_reaches_the_card_with_its_freshness(
+    api_harness: ApiHarness,
+) -> None:
+    _seed_foreign_bars(api_harness)
+    app.dependency_overrides[get_fx_provider] = lambda: StubFxProvider(Decimal("31.5"))
+    body = api_harness.client.get("/api/advice/2330").json()
+    context = body["portfolio_context"]
+    assert context["close"] is not None
+    assert context["fx_to_twd"] == 31.5
+    notes = body["context_notes"]
+    assert any("USDTWD" in note and "31.5" in note for note in notes)
+    # AC-3.5: the source's standing disclosure travels with the number.
+    assert any("未經本環境線上查證" in note for note in notes)

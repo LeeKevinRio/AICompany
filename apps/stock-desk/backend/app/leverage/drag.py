@@ -32,6 +32,13 @@ shown as-is. The two are not reconciled or forced to agree: the approximation
 assumes i.i.d. small returns and continuous rebalancing, and where reality
 disagrees with the textbook that disagreement is the information.
 
+The attribution is only as meaningful as the index series it was computed
+against, so ``index_basis`` / ``index_return_basis`` travel in and back out
+with the result, and an oversized ``|residual|`` trips
+:data:`RESIDUAL_ALERT_ABS` into ``notes`` -- a wrong index mapping does not
+make this module fail, it quietly makes the three terms mean something else,
+which is exactly the failure mode that flag exists to surface.
+
 Nothing here is an instruction to do anything; it is an attribution of numbers
 that already happened.
 """
@@ -42,9 +49,10 @@ from datetime import date as date_type
 from typing import Final
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.data.interface import PriceBar
+from app.leverage.index_mapping import IndexBasis, ReturnBasis
 from app.signals.frame import CLOSE, bars_to_frame, provenance
 from app.signals.models import InputsUsed, Status
 from app.signals.risk import TRADING_DAYS_PER_YEAR, annualized_volatility
@@ -73,6 +81,44 @@ _ASSUMPTIONS: Final[list[str]] = [
     "observations 欄位一併提供以供判讀。",
     "所有數字以收盤價計算，未含使用者端的交易稅費，也未含匯率影響。",
 ]
+
+#: Appended when the series fed in is not the official index itself.
+NON_OFFICIAL_BASIS_ASSUMPTION: Final = (
+    "本次拆解所用的序列不是官方標的指數（basis={basis}），"
+    "序列本身的費用與追蹤誤差會混進 residual，三項歸因的意義因此被稀釋。"
+)
+
+#: Appended when the index's dividend treatment has not been verified.
+UNKNOWN_RETURN_BASIS_ASSUMPTION: Final = (
+    "指數的含息口徑未查證（return_basis=unknown），配息差異會落在 residual。"
+)
+
+RESIDUAL_ALERT_ABS: Final = 0.10
+"""Absolute ``|residual|`` above which the decomposition flags itself.
+
+This is a **manually chosen reminder threshold, not a statistical test**. It is
+not a confidence interval, not a hypothesis test, and it carries no notion of
+how likely a residual of this size is; it is one hand-picked number that says
+"a gap this large is more often a mapping or dividend-basis problem than a real
+tracking cost, so read the attribution with that in mind". Crossing it proves
+nothing on its own, and staying under it certifies nothing either.
+"""
+
+#: Emitted verbatim into ``notes`` when the threshold above is crossed.
+RESIDUAL_ALERT_NOTE: Final = (
+    "殘差 {residual:+.2%} 的絕對值超過提醒門檻 {threshold:.0%}："
+    "殘差異常大，標的指數對應可能有誤或含息口徑不一致，請勿將本次歸因視為定論。"
+)
+
+
+def _assumptions_for(index_basis: IndexBasis, index_return_basis: ReturnBasis) -> list[str]:
+    """The base assumptions plus whatever the index's provenance adds (I-4)."""
+    assumptions = list(_ASSUMPTIONS)
+    if index_basis != "official_index":
+        assumptions.append(NON_OFFICIAL_BASIS_ASSUMPTION.format(basis=index_basis))
+    if index_return_basis == "unknown":
+        assumptions.append(UNKNOWN_RETURN_BASIS_ASSUMPTION)
+    return assumptions
 
 
 class TheoreticalDrag(BaseModel):
@@ -133,6 +179,16 @@ class DragDecomposition(BaseModel):
     source: str | None = None
     index_as_of: str | None = None
     index_source: str | None = None
+    #: How the series used relates to the fund's stated benchmark, echoed back
+    #: so a reader never has to assume it was the official index (I-4).
+    index_basis: IndexBasis = "official_index"
+    #: Dividend treatment of that series; ``unknown`` until verified.
+    index_return_basis: ReturnBasis = "unknown"
+    #: ``True`` when ``|residual|`` crossed :data:`RESIDUAL_ALERT_ABS`.
+    residual_alert: bool = False
+    residual_alert_threshold: float = RESIDUAL_ALERT_ABS
+    #: Qualifiers about *this* result (the residual trip lands here).
+    notes: list[str] = Field(default_factory=list)
     reason: str | None = None
 
 
@@ -241,15 +297,25 @@ def decompose_drag(
     expense_ratio_annual: float,
     opened_at: date_type | None = None,
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+    index_basis: IndexBasis = "official_index",
+    index_return_basis: ReturnBasis = "unknown",
 ) -> DragDecomposition:
     """Attribute ``R_etf - beta * R_idx`` to fee, daily reset, and residual.
 
     Returns ``status="insufficient_data"`` (never a partial or fabricated
     number) when fewer than :data:`MIN_ALIGNED_BARS` common-dated bars survive
     the ``opened_at`` cut.
+
+    ``index_basis`` / ``index_return_basis`` describe where ``index_bars`` came
+    from (see ``app/leverage/index_mapping.py``). They are echoed in the output
+    and add an assumption sentence when the series is not the official index or
+    its dividend treatment is unverified: the three attribution terms are only
+    as meaningful as the series they were computed against, and this module
+    will not let that qualifier be lost in transmission.
     """
     as_of, source = provenance(etf_bars)
     index_as_of, index_source = provenance(index_bars)
+    assumptions = _assumptions_for(index_basis, index_return_basis)
     inputs_used = _inputs_used(
         etf_bars=len(etf_bars),
         index_bars=len(index_bars),
@@ -274,7 +340,7 @@ def decompose_drag(
             identity_abs_error=None,
             ideal_path_wiped_out=False,
             theoretical=_insufficient_theory(reason, max(aligned - 1, 0)),
-            assumptions=list(_ASSUMPTIONS),
+            assumptions=list(assumptions),
             inputs_used=_inputs_used(
                 etf_bars=len(etf_bars),
                 index_bars=len(index_bars),
@@ -285,6 +351,10 @@ def decompose_drag(
             source=source,
             index_as_of=index_as_of,
             index_source=index_source,
+            index_basis=index_basis,
+            index_return_basis=index_return_basis,
+            residual_alert=False,
+            notes=[],
             reason=reason,
         )
 
@@ -344,6 +414,13 @@ def decompose_drag(
     residual = gap - fee_effect - reset_effect
     identity_abs_error = abs(gap - (fee_effect + reset_effect + residual))
 
+    notes: list[str] = []
+    residual_alert = abs(residual) > RESIDUAL_ALERT_ABS
+    if residual_alert:
+        notes.append(
+            RESIDUAL_ALERT_NOTE.format(residual=residual, threshold=RESIDUAL_ALERT_ABS)
+        )
+
     volatility = annualized_volatility(index_returns, periods_per_year=trading_days_per_year)
     if volatility is None or len(index_returns) < MIN_RETURNS_FOR_THEORY:
         theory = _insufficient_theory(
@@ -389,7 +466,7 @@ def decompose_drag(
         identity_abs_error=identity_abs_error,
         ideal_path_wiped_out=wiped_out,
         theoretical=theory,
-        assumptions=list(_ASSUMPTIONS),
+        assumptions=list(assumptions),
         inputs_used=inputs_used.model_copy(
             update={
                 "window": {
@@ -404,5 +481,9 @@ def decompose_drag(
         source=source,
         index_as_of=index_as_of,
         index_source=index_source,
+        index_basis=index_basis,
+        index_return_basis=index_return_basis,
+        residual_alert=residual_alert,
+        notes=notes,
         reason=None,
     )

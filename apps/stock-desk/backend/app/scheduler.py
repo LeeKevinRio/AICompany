@@ -45,6 +45,7 @@ from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_fx_provider,
     get_market_resolver,
     get_position_store,
     get_settings_store,
@@ -129,6 +130,7 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
     resolver = get_market_resolver()
     position_store = get_position_store()
     valuator = get_valuator()
+    fx_provider = get_fx_provider()
     budget = settings.risk_budget
 
     def load(symbol: str, market: Market) -> SymbolSnapshot:
@@ -139,6 +141,7 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
             store=position_store,
             valuator=valuator,
             budget=budget,
+            fx_provider=fx_provider,
         )
 
     result = evaluate_alerts(

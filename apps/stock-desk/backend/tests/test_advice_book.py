@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 from decimal import Decimal
+from pathlib import Path
 
-from app.advice.book import EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE, build_book_context
+from app.advice import book as book_module
+from app.advice.book import (
+    EQUITY_BASIS_NOTE,
+    GROSS_EXPOSURE_NOTE,
+    FxQuote,
+    build_book_context,
+)
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
@@ -135,13 +143,123 @@ def test_a_symbols_own_unvalued_lot_is_excluded_and_disclosed() -> None:
     assert any("此標的有 1 筆持倉無法估值" in note for note in book.notes)
 
 
-def test_a_foreign_currency_holding_drops_the_price_rather_than_guess_an_fx_rate() -> None:
+def _fx(
+    rate: float | None = 31.5,
+    *,
+    pair: str = "USDTWD",
+    status: DataStatus = DataStatus.FRESH,
+    as_of: str | None = "2026-07-24",
+    source: str = "fake_fx",
+    source_note: str = "此匯率來源未經查證。",
+) -> FxQuote:
+    return FxQuote(
+        pair=pair,
+        rate=rate,
+        as_of=as_of,
+        source=source,
+        status=status,
+        source_note=source_note,
+    )
+
+
+def test_a_foreign_currency_holding_without_a_quote_drops_the_price() -> None:
     summary = _summary(_position(1, "AAPL", market="US", currency="USD", price="200"))
     book = build_book_context(summary, symbol="AAPL", market="US", close=200.0, currency="USD")
-    # Without an FX source the price is withheld, so price-based caps report
+    # Without an FX quote the price is withheld, so price-based caps report
     # not_evaluable instead of being scaled by an invented 1.0 rate.
     assert book.context.close is None
-    assert any("沒有可用的匯率換算來源" in note for note in book.notes)
+    assert book.fx_rate is None
+    assert any("不以 1.0 匯率代入" in note for note in book.notes)
+    # The reason must be about the conversion, not about the price.
+    assert any("無法取得匯率換算" in note for note in book.notes)
+
+
+def test_a_supplied_rate_makes_the_price_caps_evaluable() -> None:
+    summary = _summary(_position(1, "AAPL", market="US", currency="USD", price="200"))
+    book = build_book_context(
+        summary,
+        symbol="AAPL",
+        market="US",
+        close=200.0,
+        currency="USD",
+        atr=4.0,
+        fx=_fx(),
+    )
+    assert book.context.close == 200.0
+    assert book.context.fx_to_twd == 31.5
+    assert book.context.atr == 4.0
+    assert book.fx_rate == 31.5
+    assert book.context.price_twd() == 6300.0
+
+
+def test_the_applied_rate_carries_its_freshness_date_and_source_into_notes() -> None:
+    summary = _summary(_position(1, "AAPL", market="US", currency="USD", price="200"))
+    book = build_book_context(
+        summary,
+        symbol="AAPL",
+        market="US",
+        close=200.0,
+        currency="USD",
+        fx=_fx(status=DataStatus.CACHED_STALE, as_of="2026-07-20"),
+    )
+    note = book.fx_note or ""
+    assert "cached_stale" in note
+    assert "2026-07-20" in note
+    assert "fake_fx" in note
+    # The source's standing disclosure rides along with the number it qualifies.
+    assert "此匯率來源未經查證。" in book.notes
+
+
+def test_an_unavailable_quote_still_reports_its_status_and_source() -> None:
+    summary = _summary(_position(1, "AAPL", market="US", currency="USD", price="200"))
+    book = build_book_context(
+        summary,
+        symbol="AAPL",
+        market="US",
+        close=200.0,
+        currency="USD",
+        atr=4.0,
+        fx=_fx(None, status=DataStatus.UNAVAILABLE, as_of=None),
+    )
+    assert book.context.close is None
+    assert book.context.fx_to_twd == 1.0  # never applied: close is None
+    assert book.context.price_twd() is None
+    # ATR is in the foreign currency too, so it is dropped rather than compared
+    # against TWD amounts.
+    assert book.context.atr is None
+    note = book.fx_note or ""
+    assert "unavailable" in note
+    assert "無法取得匯率換算" in note
+    assert "無法取得價格" in note  # named only to say it is *not* the cause
+
+
+def test_a_quote_for_the_wrong_pair_is_refused() -> None:
+    # A candidate quoted in a currency the resolver did not price: a USDTWD
+    # rate is not "close enough" to convert a EUR amount.
+    summary = _summary(_position(1, "2330"))
+    book = build_book_context(
+        summary, symbol="SAP", market="US", close=200.0, currency="EUR", fx=_fx()
+    )
+    assert book.context.close is None
+    assert "EURTWD" in (book.fx_note or "")
+    assert "USDTWD" in (book.fx_note or "")
+
+
+def test_a_non_positive_rate_is_refused() -> None:
+    summary = _summary(_position(1, "AAPL", market="US", currency="USD", price="200"))
+    book = build_book_context(
+        summary, symbol="AAPL", market="US", close=200.0, currency="USD", fx=_fx(0.0)
+    )
+    assert book.context.close is None
+
+
+def test_a_twd_holding_needs_no_quote_and_gets_no_fx_note() -> None:
+    book = build_book_context(
+        _summary(_position(1, "2330")), symbol="2330", close=600.0, currency="TWD", fx=_fx()
+    )
+    assert book.context.fx_to_twd == 1.0
+    assert book.fx_rate == 1.0
+    assert book.fx_note is None
 
 
 def test_a_symbol_held_in_two_currencies_drops_the_price() -> None:
@@ -161,6 +279,27 @@ def test_sector_and_kelly_inputs_stay_absent() -> None:
     assert book.context.sector_market_value_twd is None
     assert book.context.win_rate is None
     assert book.context.payoff_ratio is None
+
+
+def test_book_imports_no_adapter() -> None:
+    # F-1: this layer stays a pure function. The caller resolves the rate; if an
+    # adapter import appeared here, every test of it would need a network mock.
+    tree = ast.parse(Path(book_module.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        module = ""
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+        elif isinstance(node, ast.Import):
+            module = node.names[0].name
+        assert not module.startswith("app.data.providers"), module
+
+
+def test_no_default_rate_literal_lurks_in_the_conversion_path() -> None:
+    # F-2: the only 1.0 in this module is the TWD identity and the field
+    # placeholder that is provably never applied (``close`` is None with it).
+    source = Path(book_module.__file__).read_text(encoding="utf-8")
+    assert "不以 1.0 匯率代入" in source
+    assert "fx_to_twd=rate if rate is not None else 1.0" in source
 
 
 def test_atr_is_passed_through_when_supplied() -> None:

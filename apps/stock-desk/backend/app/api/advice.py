@@ -28,16 +28,19 @@ from app.advice.book import build_book_context
 from app.advice.engine import build_advice
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
+    get_fx_provider,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
+from app.data.providers.fx import FxRateProvider
 from app.portfolio.summary import build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
 from app.positions.store import PositionStore
+from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
 from app.settings.store import SettingsStore
 from app.signals.service import compute_signals
@@ -48,6 +51,7 @@ ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 StoreDep = Annotated[PositionStore, Depends(get_position_store)]
 ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
+FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
 
 
 class AdviceResponse(EnvelopeBase):
@@ -74,6 +78,7 @@ def get_advice(
     store: StoreDep,
     valuator: ValuatorDep,
     settings_store: SettingsDep,
+    fx_provider: FxProviderDep,
     market: Annotated[Market, Query(description="市場別")] = "TW",
 ) -> AdviceResponse:
     end = date.today()
@@ -89,12 +94,20 @@ def get_advice(
 
     latest = max(loaded.bars, key=lambda bar: bar.date) if loaded.bars else None
     signals = compute_signals(symbol, loaded.bars) if loaded.bars else {}
+    # The rate is resolved as of the bar being converted, not "today": the caps
+    # compare a close from that date, so the conversion has to be from it too.
+    fx = (
+        resolve_fx_quote(fx_provider, currency=latest.currency, on=latest.date)
+        if latest is not None
+        else None
+    )
     book = build_book_context(
         summary,
         symbol=symbol,
         market=market,
         close=float(latest.close) if latest is not None else None,
         currency=latest.currency if latest is not None else None,
+        fx=fx,
     )
 
     if latest is None:

@@ -22,6 +22,16 @@ Three honesty rules govern what is filled in:
 
 ``sector`` and the Kelly inputs stay ``None`` for the same reason: no source
 produces them yet.
+
+FX (ADR-0005 decision 5): this module stays a pure function and **never imports
+an adapter**. The caller resolves the rate (``app/services/fx.py``) and passes a
+:class:`FxQuote` in; letting this layer fetch would put I/O into the one
+purely-computational risk assembly point and force every test to mock a
+network. The red line is unchanged: no quote, no rate, or a quote for the wrong
+pair all yield ``None`` -- the price is then withheld so the price-based caps
+report ``not_evaluable``, and **no default rate is ever substituted for a
+non-TWD currency**. The reason text distinguishes "no price" from "no FX
+conversion", because they call for different things from the reader.
 """
 
 from __future__ import annotations
@@ -30,6 +40,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from app.advice.limits import PortfolioContext
+from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
 
@@ -45,6 +56,56 @@ GROSS_EXPOSURE_NOTE = (
     "不以總資產代入而讓比率恆為 100%。"
 )
 
+#: No quote at all reached this layer for a non-TWD holding.
+NO_FX_QUOTE_NOTE = (
+    "計價幣別為 {currency}，本次沒有取得任何匯率報價，"
+    "價格與 ATR 相關的上限不計算；這是「無法取得匯率換算」，與「無法取得價格」不同，"
+    "且不以 1.0 匯率代入。"
+)
+
+#: A quote arrived but carries no usable rate.
+FX_UNAVAILABLE_NOTE = (
+    "計價幣別為 {currency}，{pair} 匯率報價沒有可用數值"
+    "（資料狀態 {status}、來源 {source}、匯率日期 {as_of}），"
+    "價格與 ATR 相關的上限不計算；這是「無法取得匯率換算」，與「無法取得價格」不同，"
+    "且不以 1.0 匯率代入。"
+)
+
+#: A quote arrived for a different pair than the holding needs.
+FX_PAIR_MISMATCH_NOTE = (
+    "計價幣別為 {currency}，需要的匯率是 {expected}，但取得的報價是 {pair}；"
+    "不以不相符的匯率換算，價格與 ATR 相關的上限不計算。"
+)
+
+#: The rate actually used, with the freshness the reader needs to judge it.
+FX_APPLIED_NOTE = (
+    "價格與 ATR 以 {pair} 匯率 {rate} 換算為台幣"
+    "（資料狀態 {status}、來源 {source}、匯率日期 {as_of}）。"
+)
+
+
+@dataclass(frozen=True)
+class FxQuote:
+    """One instrument-currency -> TWD rate with the provenance it must carry.
+
+    ``rate`` is ``None`` when the source had nothing usable: the failure is
+    still delivered as a quote so its ``status``/``as_of``/``source`` can reach
+    ``notes`` instead of collapsing into a silent absence (ADR-0005 F-3).
+
+    ``as_of`` is the **date of the rate that was used**, not the time the fetch
+    happened -- a rate from three days ago used today is exactly what a reader
+    needs to see. ``source_note`` carries the source's own standing disclosure
+    (unverified endpoint, mid-point model value, ...) so this module does not
+    have to know which adapter produced the number (F-4).
+    """
+
+    pair: str
+    rate: float | None
+    as_of: str | None
+    source: str
+    status: DataStatus
+    source_note: str = ""
+
 
 @dataclass(frozen=True)
 class BookContext:
@@ -56,6 +117,11 @@ class BookContext:
     #: Currency of the matched holding(s), or ``None`` for a candidate.
     currency: str | None = None
     notes: list[str] = field(default_factory=list)
+    #: The rate applied (``1.0`` for TWD), or ``None`` when none could be.
+    fx_rate: float | None = None
+    #: The single FX sentence from ``notes``, for callers whose output shape has
+    #: no notes list of its own (the alert snapshot).
+    fx_note: str | None = None
 
 
 def _matching(
@@ -120,6 +186,7 @@ def build_book_context(
     close: float | None = None,
     currency: str | None = None,
     atr: float | None = None,
+    fx: FxQuote | None = None,
 ) -> BookContext:
     """Assemble the risk-budget context for ``symbol`` against the whole book.
 
@@ -129,6 +196,11 @@ def build_book_context(
     A symbol with no holding yields a *candidate* context
     (``position_market_value_twd=0``, ``quantity=0``) so a card can still be
     produced for something the user does not own yet.
+
+    ``fx`` is the instrument-currency -> TWD quote the caller resolved. It is
+    ignored for a TWD instrument (which needs no conversion) and required for
+    every other currency; without a usable one the price is withheld rather
+    than scaled by an invented rate.
     """
     notes: list[str] = [EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE]
     equity, valued_count, total_count = _book_equity(summary)
@@ -151,10 +223,17 @@ def build_book_context(
     if mixed_currencies:
         notes.append("此標的的持倉橫跨多種計價幣別，無法決定單一匯率，價格類上限不計算。")
 
+    effective_currency = holding_currency if matched else currency
     if mixed_currencies:
-        fx = None
+        # Which of the two rates would be the right one is undecidable, so the
+        # question is refused rather than answered with one of them.
+        rate, fx_note = None, None
     else:
-        fx = _resolve_fx(holding_currency if matched else currency, notes)
+        rate, fx_note = _resolve_fx(effective_currency, fx)
+    if fx_note is not None:
+        notes.append(fx_note)
+    if rate is not None and fx is not None and fx.source_note:
+        notes.append(fx.source_note)
 
     context = PortfolioContext(
         symbol=symbol,
@@ -164,30 +243,55 @@ def build_book_context(
         # Deliberately absent -- see the module docstring, rule 3.
         gross_exposure_twd=None,
         quantity=quantity,
-        close=close if fx is not None else None,
-        fx_to_twd=fx if fx is not None else 1.0,
-        atr=atr,
+        close=close if rate is not None else None,
+        # ``close`` is ``None`` whenever ``rate`` is, so this 1.0 is never
+        # applied to a foreign-currency amount; it only satisfies the field's
+        # "must be a positive float" contract.
+        fx_to_twd=rate if rate is not None else 1.0,
+        atr=atr if rate is not None else None,
     )
     return BookContext(
         context=context,
         held=bool(matched),
         position_ids=[position.id for position in matched],
-        currency=holding_currency if matched else currency,
+        currency=effective_currency,
         notes=notes,
+        fx_rate=rate,
+        fx_note=fx_note,
     )
 
 
-def _resolve_fx(currency: str | None, notes: list[str]) -> float | None:
-    """Instrument currency -> TWD, or ``None`` when it cannot be established.
+def _resolve_fx(currency: str | None, fx: FxQuote | None) -> tuple[float | None, str | None]:
+    """Instrument currency -> ``(rate, note)``; ``rate`` is ``None`` if unusable.
 
-    Only TWD is resolvable today: there is no US price adapter, so a non-TWD
-    holding never reaches this module with a usable price anyway, and inventing
-    a rate of 1.0 would silently mis-scale every cap.
+    A TWD instrument (or a candidate with no currency at all) is already in the
+    reporting currency and needs no quote. For every other currency the quote
+    has to exist, be for the right pair, and carry a positive rate; anything
+    else returns ``None`` with a sentence naming *which* input was missing, so
+    "no price" and "no FX conversion" never look the same downstream.
     """
-    if currency is None or currency == "TWD":
-        return 1.0
-    notes.append(
-        f"計價幣別為 {currency}，目前沒有可用的匯率換算來源，"
-        "價格與 ATR 相關的上限不計算，不以 1.0 匯率代入。"
+    if currency is None or currency.strip().upper() == "TWD":
+        return 1.0, None
+    if fx is None:
+        return None, NO_FX_QUOTE_NOTE.format(currency=currency)
+
+    expected = f"{currency.strip().upper()}TWD"
+    if fx.pair.strip().upper() != expected:
+        return None, FX_PAIR_MISMATCH_NOTE.format(
+            currency=currency, expected=expected, pair=fx.pair
+        )
+    if fx.rate is None or fx.rate <= 0.0:
+        return None, FX_UNAVAILABLE_NOTE.format(
+            currency=currency,
+            pair=fx.pair,
+            status=fx.status.value,
+            source=fx.source,
+            as_of=fx.as_of or "未知",
+        )
+    return fx.rate, FX_APPLIED_NOTE.format(
+        pair=fx.pair,
+        rate=f"{fx.rate:g}",
+        status=fx.status.value,
+        source=fx.source,
+        as_of=fx.as_of or "未知",
     )
-    return None

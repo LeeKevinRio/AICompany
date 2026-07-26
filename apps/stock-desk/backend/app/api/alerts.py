@@ -31,11 +31,13 @@ from app.alerts.store import AlertStore
 from app.api.common import now_iso
 from app.api.deps import (
     get_alert_store,
+    get_fx_provider,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.data.providers.fx import FxRateProvider
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
 from app.positions.store import PositionStore
@@ -49,6 +51,7 @@ ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 PositionStoreDep = Annotated[PositionStore, Depends(get_position_store)]
 ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
+FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
 
 
 class AlertRuleListResponse(BaseModel):
@@ -136,11 +139,14 @@ def evaluate_now(
     position_store: PositionStoreDep,
     valuator: ValuatorDep,
     settings_store: SettingsDep,
+    fx_provider: FxProviderDep,
 ) -> EvaluationResponse:
     settings = settings_store.load()
     result = evaluate_alerts(
         store,
-        _loader(resolver, position_store, valuator, settings.risk_budget),
+        _loader(
+            resolver, position_store, valuator, settings.risk_budget, fx_provider
+        ),
         cooldown_minutes=settings.alerts.cooldown_minutes,
     )
     return _evaluation_response(result)
@@ -151,6 +157,7 @@ def _loader(
     position_store: PositionStore,
     valuator: PositionValuator,
     budget: RiskBudget,
+    fx_provider: FxRateProvider,
 ) -> SnapshotLoader:
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
@@ -160,6 +167,7 @@ def _loader(
             store=position_store,
             valuator=valuator,
             budget=budget,
+            fx_provider=fx_provider,
         )
 
     return load
