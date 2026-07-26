@@ -5,6 +5,8 @@ import { BackendOfflineState } from "./components/BackendOfflineState";
 import { SummaryCards } from "./components/SummaryCards";
 import { SummaryCardsSkeleton, TableSkeleton } from "./components/SkeletonBlock";
 import { PositionsTable } from "./components/PositionsTable";
+import { RiskGauge } from "./components/RiskGauge";
+import { PendingAlertsPanel } from "./components/PendingAlertsPanel";
 
 export default function HomePage() {
   const health = useHealth();
@@ -59,6 +61,11 @@ export default function HomePage() {
           {summary.isPending && <TableSkeleton />}
           {summary.isSuccess && <PositionsTable positions={summary.data.positions} />}
         </div>
+      </div>
+
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <RiskGauge />
+        <PendingAlertsPanel />
       </div>
     </main>
   );

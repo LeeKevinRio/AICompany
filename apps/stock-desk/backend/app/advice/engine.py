@@ -94,7 +94,10 @@ HIGH_AGREEMENT = 0.75
 MEDIUM_COMPLETENESS = 0.5
 MEDIUM_AGREEMENT = 0.5
 
-_OPS: dict[str, Callable[[float, float], bool]] = {
+#: The comparison operators a rule (advice or alert) may use. Public so the
+#: alert engine evaluates a :class:`app.advice.loader.Comparison` with exactly
+#: the same semantics instead of re-implementing them.
+COMPARISON_OPS: dict[str, Callable[[float, float], bool]] = {
     "gt": lambda left, right: left > right,
     "gte": lambda left, right: left >= right,
     "lt": lambda left, right: left < right,
@@ -139,7 +142,7 @@ def _evaluate_node(
             right = node.value
         if left is None or right is None:
             return False
-        return bool(_OPS[node.op](left, right))
+        return bool(COMPARISON_OPS[node.op](left, right))
 
     children = node.all if isinstance(node, AllOf) else node.any
     results = [_evaluate_node(child, context, missing) for child in children]
@@ -432,6 +435,7 @@ def _limit_entry(check: LimitCheck) -> dict[str, Any]:
 
 __all__ = [
     "ACTION_PRECEDENCE",
+    "COMPARISON_OPS",
     "DISCLAIMER",
     "CardAction",
     "Confidence",

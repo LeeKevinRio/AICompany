@@ -1,10 +1,25 @@
 import type {
+  AdviceResponse,
+  AlertEvaluationResponse,
+  AlertEvent,
+  AlertEventListResponse,
+  AlertRule,
+  AlertRuleInput,
+  AlertRuleListResponse,
+  AppSettingsPatch,
+  BacktestRequest,
+  BacktestResponse,
+  BarsResponse,
   CreatePositionInput,
   HealthResponse,
   ImportPositionsResponse,
+  LeverageResponse,
+  Market,
   PortfolioSummaryResponse,
   Position,
   PositionsResponse,
+  SettingsResponse,
+  SignalsResponse,
   UpdatePositionInput,
 } from "./types";
 
@@ -137,4 +152,84 @@ export function importPositionsCsv(file: File): Promise<ImportPositionsResponse>
     method: "POST",
     body: formData,
   });
+}
+
+/* --- M7: signals / advice / leverage / backtest / settings / alerts ----- */
+
+export function getSignals(
+  symbol: string,
+  market: Market,
+  lookbackDays?: number,
+): Promise<SignalsResponse> {
+  const query = new URLSearchParams({ market });
+  if (lookbackDays !== undefined) query.set("lookback_days", String(lookbackDays));
+  return request<SignalsResponse>(`/api/signals/${encodeURIComponent(symbol)}?${query}`);
+}
+
+/** Same default `lookback_days` (540) and loader as `/api/signals` (app/api/bars.py, verified). */
+export function getBars(symbol: string, market: Market, lookbackDays?: number): Promise<BarsResponse> {
+  const query = new URLSearchParams({ market });
+  if (lookbackDays !== undefined) query.set("lookback_days", String(lookbackDays));
+  return request<BarsResponse>(`/api/bars/${encodeURIComponent(symbol)}?${query}`);
+}
+
+export function getAdvice(symbol: string, market: Market): Promise<AdviceResponse> {
+  const query = new URLSearchParams({ market });
+  return request<AdviceResponse>(`/api/advice/${encodeURIComponent(symbol)}?${query}`);
+}
+
+export function getLeverageChapter(symbol: string, market: Market): Promise<LeverageResponse> {
+  const query = new URLSearchParams({ market });
+  return request<LeverageResponse>(`/api/leverage/${encodeURIComponent(symbol)}?${query}`);
+}
+
+export function runBacktest(input: BacktestRequest): Promise<BacktestResponse> {
+  return request<BacktestResponse>("/api/backtest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getSettings(): Promise<SettingsResponse> {
+  return request<SettingsResponse>("/api/settings");
+}
+
+export function updateSettings(input: AppSettingsPatch): Promise<SettingsResponse> {
+  return request<SettingsResponse>("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getAlerts(enabledOnly = false): Promise<AlertRuleListResponse> {
+  const query = enabledOnly ? "?enabled_only=true" : "";
+  return request<AlertRuleListResponse>(`/api/alerts${query}`);
+}
+
+export function createAlert(input: AlertRuleInput): Promise<AlertRule> {
+  return request<AlertRule>("/api/alerts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteAlert(id: number): Promise<void> {
+  return request<void>(`/api/alerts/${id}`, { method: "DELETE" });
+}
+
+/** `unacknowledged`: `true` only-pending, `false` only-acked, `undefined` all. */
+export function getAlertEvents(unacknowledged?: boolean): Promise<AlertEventListResponse> {
+  const query = unacknowledged === undefined ? "" : `?unacknowledged=${unacknowledged}`;
+  return request<AlertEventListResponse>(`/api/alerts/events${query}`);
+}
+
+export function ackAlertEvent(id: number): Promise<AlertEvent> {
+  return request<AlertEvent>(`/api/alerts/events/${id}/ack`, { method: "POST" });
+}
+
+export function evaluateAlertsNow(): Promise<AlertEvaluationResponse> {
+  return request<AlertEvaluationResponse>("/api/alerts/evaluate", { method: "POST" });
 }

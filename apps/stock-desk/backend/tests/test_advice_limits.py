@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.advice import limits
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
@@ -365,6 +366,148 @@ def test_selling_everything_is_the_floor_when_nothing_else_clears_the_cap() -> N
     assert quantity is not None
     assert quantity.min_shares == 500
     assert quantity.max_shares == 500
+
+
+# --- Sell-side wording must match what the sale actually achieves ------------
+
+
+def test_reduce_basis_claims_a_return_to_compliance_only_when_it_happens() -> None:
+    # The excess is this position's own, so the sized sale really does clear it.
+    ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.restores_compliance is True
+    assert "可回到該上限之內" in quantity.basis
+    assert "仍為違反" not in quantity.basis
+    # And the claim is true: after the sale the cap is no longer violated.
+    after = project_position(ctx, share_delta=-float(quantity.min_shares))
+    assert _status(after, "single_position_weight") == "passed"
+
+
+def test_reduce_basis_does_not_claim_compliance_when_selling_everything_fails() -> None:
+    # Gross exposure is driven by *other* holdings: selling this whole holding
+    # leaves the cap violated, so the card must not say it returns to compliance.
+    ctx = _ctx(position_market_value_twd=50_000.0, quantity=500.0, gross_exposure_twd=2_000_000.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.restores_compliance is False
+    assert "可回到該上限之內" not in quantity.basis
+    assert "建議量 500 股已為持股全數" in quantity.basis
+    assert "該上限由其他部位驅動，賣出後仍為違反" in quantity.basis
+    # And the disclaimer is true: after selling the lot the cap still breaches.
+    after = project_position(ctx, share_delta=-float(quantity.max_shares))
+    assert _status(after, "gross_exposure") == "violated"
+
+
+# --- The loop-bound fall-throughs (unreachable with a consistent budget) -----
+
+
+def test_buy_sizing_gives_up_rather_than_suggesting_an_unverified_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # White-box: shrinking the adjustment bound to zero forces the fall-through
+    # that a consistent budget never reaches. It must yield "no suggestion",
+    # never an unverified share count.
+    monkeypatch.setattr(limits, "MAX_SIZING_ADJUSTMENTS", 0)
+    assert suggest_quantity_range(BUDGET, _ctx(), action="add") is None
+
+
+def test_sell_sizing_gives_up_rather_than_suggesting_an_unverified_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same white-box premise on the sell side. It must behave like the buy side:
+    # no suggestion at all. Reusing the "已為持股全數／由其他部位驅動" wording here
+    # would state two facts this path never established.
+    monkeypatch.setattr(limits, "MAX_SIZING_ADJUSTMENTS", 0)
+    ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
+    assert suggest_quantity_range(BUDGET, ctx, action="reduce") is None
+
+
+# --- A holding smaller than one whole share ---------------------------------
+
+
+def _fractional_ctx() -> PortfolioContext:
+    """A half-share holding that is the entire book, so the weight cap breaches.
+
+    ``quantity`` is a Decimal in the position model, so half a share is a legal
+    holding; a one-position book makes ``position_weight`` 100%, which always
+    breaches the 15% cap. This combination is reachable in normal use, not a
+    contrived edge.
+    """
+    return PortfolioContext(
+        symbol="2330",
+        total_equity_twd=50.0,
+        position_market_value_twd=50.0,
+        quantity=0.5,
+        close=100.0,
+    )
+
+
+def test_a_sub_one_share_holding_really_does_breach_the_cap() -> None:
+    # Guards the premise of the next test: if this stopped breaching, that test
+    # would pass for the wrong reason.
+    assert _status(_fractional_ctx(), "single_position_weight") == "violated"
+
+
+def test_no_quantity_is_suggested_when_the_holding_is_under_one_share() -> None:
+    # Rounding 0.5 shares up to "sell 1 share" would suggest more than the user
+    # owns and call it 持股全數. No quantity, no claim.
+    for action in ("reduce", "stop_loss", "take_profit"):
+        assert suggest_quantity_range(BUDGET, _fractional_ctx(), action=action) is None
+
+
+def test_a_holding_of_exactly_one_share_still_gets_a_suggestion() -> None:
+    # The boundary the previous test guards must not swallow a legitimate case.
+    ctx = _fractional_ctx().model_copy(
+        update={
+            "quantity": 1.0,
+            "position_market_value_twd": 100.0,
+            "total_equity_twd": 100.0,
+        }
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.min_shares == 1
+    assert quantity.max_shares == 1
+
+
+def test_a_suggested_sale_never_exceeds_the_holding() -> None:
+    # The invariant behind both branches of the sell-side wording.
+    for quantity_held, market_value in ((0.5, 50.0), (1.0, 100.0), (3.0, 300.0), (7.0, 700.0)):
+        ctx = _fractional_ctx().model_copy(
+            update={
+                "quantity": quantity_held,
+                "position_market_value_twd": market_value,
+                "total_equity_twd": market_value,
+            }
+        )
+        suggestion = suggest_quantity_range(BUDGET, ctx, action="reduce")
+        if suggestion is None:
+            continue
+        assert suggestion.max_shares <= quantity_held
+        assert suggestion.min_shares <= suggestion.max_shares
+
+
+# --- A cap that cannot be evaluated is not a pass ----------------------------
+
+
+def test_sizing_requires_an_explicit_pass_not_merely_a_non_violation() -> None:
+    # ``not_evaluable`` means "we could not check", which must never be counted
+    # as "inside the budget" when sizing a suggested quantity.
+    ctx = _ctx()
+    assert limits._passes(BUDGET, ctx, binding_id="single_position_weight", share_delta=1.0)
+    # Remove the equity input: the same cap becomes not_evaluable, and the
+    # helper must report that as "not a pass".
+    blind = ctx.model_copy(update={"total_equity_twd": None})
+    assert (
+        limits.limit_status_after(
+            BUDGET, blind, limit_id="single_position_weight", share_delta=1.0
+        )
+        == "not_evaluable"
+    )
+    assert not limits._passes(
+        BUDGET, blind, binding_id="single_position_weight", share_delta=1.0
+    )
 
 
 def test_reduce_range_is_none_for_a_compliant_position() -> None:

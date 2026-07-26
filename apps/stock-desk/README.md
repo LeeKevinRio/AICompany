@@ -17,7 +17,7 @@ docker compose up --build
 
 - 前端:http://localhost:3000
 - 後端 API:http://localhost:8000(健康檢查 `GET /health`)
-- 排程:`scheduler` service(Phase 1 為 heartbeat 佔位,之後換 APScheduler)
+- 排程:`scheduler` service(APScheduler:每日資料更新 + 警示評估)
 
 ## 本機開發(不用 Docker)
 
@@ -61,7 +61,7 @@ npm run typecheck && npm run build
 | typescript | 7.0.2 | npm(鎖於 package-lock.json) |
 | tailwindcss | 4.3.3 | npm(鎖於 package-lock.json) |
 | @tanstack/react-query | 5.101.4 | npm(鎖於 package-lock.json) |
-| apscheduler | 3.11.3 | PyPI(後續 Phase 進場) |
+| apscheduler | 3.11.3 | PyPI(鎖於 uv.lock,Phase 6 進場) |
 | lightweight-charts | 5.2.0 | npm(M7 進場) |
 
 ## 目錄

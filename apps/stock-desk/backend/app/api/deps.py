@@ -1,4 +1,4 @@
-"""FastAPI dependency providers for the position/portfolio routers.
+"""FastAPI dependency providers for every router.
 
 Production wiring is built lazily and memoized (``functools.lru_cache``) so the
 underlying HTTP clients and SQLite handles are created once per process, and
@@ -11,15 +11,17 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from app.alerts.store import AlertStore
 from app.data.cache import PriceBarCache
 from app.data.providers.finmind import FinMindAdapter
 from app.data.providers.fx import BankOfTaiwanFxAdapter
 from app.data.providers.tpex import TpexAdapter
 from app.data.providers.twse import TwseAdapter
 from app.data.service import MarketDataService
-from app.portfolio.valuation import PositionValuator, PriceService
-from app.positions.models import Market
+from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
+from app.services.market import MarketDataResolver
+from app.settings.store import SettingsStore
 
 
 @lru_cache(maxsize=1)
@@ -28,21 +30,38 @@ def _default_store() -> PositionStore:
 
 
 @lru_cache(maxsize=1)
-def _default_valuator() -> PositionValuator:
+def _default_resolver() -> MarketDataResolver:
+    """market -> price service. US is intentionally absent: no adapter exists yet.
+
+    A market with no entry surfaces as ``insufficient_data`` with the reason
+    stated (see ``app/services/market.py``) rather than being served a
+    fabricated price.
+    """
     cache = PriceBarCache()
     tw_service = MarketDataService(
         primary=TwseAdapter(),
         backups=[TpexAdapter(), FinMindAdapter()],
         cache=cache,
     )
-    # US has no price adapter yet, so it is intentionally absent: those
-    # positions surface as ``insufficient_data`` (missing "price") rather than
-    # being valued with a fabricated number.
-    market_services: dict[Market, PriceService] = {"TW": tw_service}
+    return {"TW": tw_service}
+
+
+@lru_cache(maxsize=1)
+def _default_valuator() -> PositionValuator:
     return PositionValuator(
-        market_services=market_services,
+        market_services=dict(_default_resolver()),
         fx_provider=BankOfTaiwanFxAdapter(),
     )
+
+
+@lru_cache(maxsize=1)
+def _default_settings_store() -> SettingsStore:
+    return SettingsStore()
+
+
+@lru_cache(maxsize=1)
+def _default_alert_store() -> AlertStore:
+    return AlertStore()
 
 
 def get_position_store() -> PositionStore:
@@ -53,3 +72,18 @@ def get_position_store() -> PositionStore:
 def get_valuator() -> PositionValuator:
     """Return the process-wide position valuator."""
     return _default_valuator()
+
+
+def get_market_resolver() -> MarketDataResolver:
+    """Return the process-wide market -> price service map."""
+    return _default_resolver()
+
+
+def get_settings_store() -> SettingsStore:
+    """Return the process-wide settings store."""
+    return _default_settings_store()
+
+
+def get_alert_store() -> AlertStore:
+    """Return the process-wide alert store."""
+    return _default_alert_store()

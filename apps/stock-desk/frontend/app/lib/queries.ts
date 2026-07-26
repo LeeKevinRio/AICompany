@@ -2,13 +2,32 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ackAlertEvent,
+  createAlert,
   createPosition,
+  deleteAlert,
+  evaluateAlertsNow,
+  getAdvice,
+  getAlertEvents,
+  getAlerts,
+  getBars,
   getHealth,
+  getLeverageChapter,
   getPortfolioSummary,
   getPositions,
+  getSettings,
+  getSignals,
   importPositionsCsv,
+  runBacktest,
+  updateSettings,
 } from "./api";
-import type { CreatePositionInput } from "./types";
+import type {
+  AlertRuleInput,
+  AppSettingsPatch,
+  BacktestRequest,
+  CreatePositionInput,
+  Market,
+} from "./types";
 
 export function useHealth() {
   return useQuery({
@@ -55,6 +74,127 @@ export function useImportPositionsCsv() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+    },
+  });
+}
+
+/* --- M7: signals / advice / leverage / backtest / settings / alerts ----- */
+
+export function useSignals(symbol: string, market: Market, enabled: boolean) {
+  return useQuery({
+    queryKey: ["signals", symbol, market],
+    queryFn: () => getSignals(symbol, market),
+    enabled: enabled && symbol.length > 0,
+    retry: 1,
+  });
+}
+
+export function useBars(symbol: string, market: Market, enabled: boolean) {
+  return useQuery({
+    queryKey: ["bars", symbol, market],
+    queryFn: () => getBars(symbol, market),
+    enabled: enabled && symbol.length > 0,
+    retry: 1,
+  });
+}
+
+export function useAdvice(symbol: string, market: Market, enabled: boolean) {
+  return useQuery({
+    queryKey: ["advice", symbol, market],
+    queryFn: () => getAdvice(symbol, market),
+    enabled: enabled && symbol.length > 0,
+    retry: 1,
+  });
+}
+
+export function useLeverageChapter(symbol: string, market: Market, enabled: boolean) {
+  return useQuery({
+    queryKey: ["leverage", symbol, market],
+    queryFn: () => getLeverageChapter(symbol, market),
+    enabled: enabled && symbol.length > 0,
+    retry: false, // a symbol with no matching position is an expected 404, not a transient fault
+  });
+}
+
+export function useRunBacktest() {
+  return useMutation({
+    mutationFn: (input: BacktestRequest) => runBacktest(input),
+  });
+}
+
+export function useSettings(enabled: boolean) {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: getSettings,
+    enabled,
+    retry: 1,
+  });
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AppSettingsPatch) => updateSettings(input),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings"], data);
+    },
+  });
+}
+
+export function useAlerts(enabled: boolean) {
+  return useQuery({
+    queryKey: ["alerts"],
+    queryFn: () => getAlerts(),
+    enabled,
+    retry: 1,
+  });
+}
+
+export function useEvaluateAlertsNow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: evaluateAlertsNow,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["alert-events"] });
+    },
+  });
+}
+
+export function useCreateAlert() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AlertRuleInput) => createAlert(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["alerts"] });
+    },
+  });
+}
+
+export function useDeleteAlert() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deleteAlert(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["alerts"] });
+    },
+  });
+}
+
+export function useAlertEvents(unacknowledged: boolean | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["alert-events", unacknowledged ?? "all"],
+    queryFn: () => getAlertEvents(unacknowledged),
+    enabled,
+    retry: 1,
+  });
+}
+
+export function useAckAlertEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => ackAlertEvent(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["alert-events"] });
     },
   });
 }

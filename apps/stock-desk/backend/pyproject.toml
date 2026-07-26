@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=3.0.5",
     "numpy>=2.5.1",
     "pyyaml>=6.0.3",
+    "apscheduler>=3.11.3,<4",
 ]
 
 [dependency-groups]
@@ -43,3 +44,10 @@ select = ["E", "F", "I", "UP", "B", "W"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# APScheduler 3.x ships no py.typed marker and has no maintained stub package,
+# so its imports are untyped by necessity. The scheduler wraps every job in a
+# locally typed callable, so nothing untyped leaks past app/scheduler.py.
+[[tool.mypy.overrides]]
+module = ["apscheduler.*"]
+ignore_missing_imports = true

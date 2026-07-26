@@ -5,7 +5,17 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import portfolio, positions
+from app.api import (
+    advice,
+    alerts,
+    backtest,
+    bars,
+    leverage,
+    portfolio,
+    positions,
+    settings,
+    signals,
+)
 
 SERVICE_NAME = "backend"
 
@@ -23,6 +33,13 @@ app.add_middleware(
 
 app.include_router(positions.router)
 app.include_router(portfolio.router)
+app.include_router(bars.router)
+app.include_router(signals.router)
+app.include_router(advice.router)
+app.include_router(leverage.router)
+app.include_router(backtest.router)
+app.include_router(settings.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health")

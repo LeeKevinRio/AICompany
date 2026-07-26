@@ -1,0 +1,325 @@
+"use client";
+
+import { useState } from "react";
+import { ApiError } from "../lib/api";
+import { useUpdateSettings } from "../lib/queries";
+import type { AlertSettings, CostModelSettings, RiskBudgetSettings, SettingsResponse } from "../lib/types";
+
+interface FieldSpec<T> {
+  key: keyof T;
+  label: string;
+  description: string;
+  defaultValue: number | boolean;
+}
+
+const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
+  {
+    key: "max_position_weight",
+    label: "單一標的佔比上限",
+    description: "此標的市值占總資產的上限（比例，例如 0.15 代表 15%）。",
+    defaultValue: 0.15,
+  },
+  {
+    key: "max_sector_weight",
+    label: "單一產業佔比上限",
+    description: "同產業合計市值占總資產的上限；目前系統無產業欄位，此上限恆為無法評估。",
+    defaultValue: 0.3,
+  },
+  {
+    key: "max_gross_exposure",
+    label: "總曝險上限",
+    description: "組合總市值占總資產的上限（比例，可大於 1 代表允許槓桿）。",
+    defaultValue: 1.0,
+  },
+  {
+    key: "max_loss_per_trade",
+    label: "單筆最大可承受虧損",
+    description: "以 ATR 停損距離估算，觸及停損時損失占總資產的上限。",
+    defaultValue: 0.01,
+  },
+  {
+    key: "atr_stop_multiple",
+    label: "ATR 停損倍數",
+    description: "停損距離 = 此倍數 × ATR(14)。",
+    defaultValue: 2.0,
+  },
+  {
+    key: "kelly_fraction_cap",
+    label: "分數 Kelly 上限",
+    description: "相對於全額 Kelly 的可用比例，僅允許分數 Kelly（最高 0.25）。",
+    defaultValue: 0.25,
+  },
+  {
+    key: "kelly_position_cap",
+    label: "Kelly 部位硬上限",
+    description: "無論 Kelly 估計的邊際多大，此為部位占總資產的絕對上限。",
+    defaultValue: 0.1,
+  },
+];
+
+const COST_FIELDS: FieldSpec<Omit<CostModelSettings, "verified_on">>[] = [
+  {
+    key: "tw_broker_fee_rate",
+    label: "台股手續費率",
+    description: "買賣皆收，占成交金額的比例。",
+    defaultValue: 0.001425,
+  },
+  {
+    key: "tw_tax_rate_stock",
+    label: "台股股票交易稅率",
+    description: "僅賣出收取，占成交金額的比例。",
+    defaultValue: 0.003,
+  },
+  {
+    key: "tw_tax_rate_etf",
+    label: "台股 ETF 交易稅率",
+    description: "僅賣出收取，占成交金額的比例，較股票稅率低。",
+    defaultValue: 0.001,
+  },
+  {
+    key: "us_broker_fee_rate",
+    label: "美股手續費率",
+    description: "買賣皆收，占成交金額的比例。",
+    defaultValue: 0.0,
+  },
+  {
+    key: "us_sell_regulatory_fee_rate",
+    label: "美股賣出監管費率",
+    description: "SEC/TAF 概估費率，僅賣出收取。",
+    defaultValue: 0.0000278,
+  },
+  {
+    key: "slippage_bps",
+    label: "滑價（bps）",
+    description: "以成交金額基點計，買賣雙邊對稱套用。",
+    defaultValue: 0.0,
+  },
+];
+
+const ALERT_SETTINGS_FIELDS: FieldSpec<Omit<AlertSettings, "enabled" | "notify_webhooks">>[] = [
+  {
+    key: "evaluation_interval_minutes",
+    label: "警示評估間隔（分鐘）",
+    description: "排程多久檢查一次所有啟用中的警示規則。",
+    defaultValue: 60,
+  },
+  {
+    key: "cooldown_minutes",
+    label: "同一規則的冷卻時間（分鐘）",
+    description: "同一條規則再次觸發前的最短間隔；0 代表不設冷卻。",
+    defaultValue: 60,
+  },
+];
+
+type FormValues = Record<string, string>;
+
+function toFormValues(
+  riskBudget: RiskBudgetSettings,
+  costModel: CostModelSettings,
+  alerts: AlertSettings,
+): FormValues {
+  const values: FormValues = {};
+  for (const field of RISK_BUDGET_FIELDS) {
+    values[`risk_budget.${String(field.key)}`] = String(riskBudget[field.key]);
+  }
+  for (const field of COST_FIELDS) {
+    values[`cost_model.${String(field.key)}`] = String(costModel[field.key]);
+  }
+  for (const field of ALERT_SETTINGS_FIELDS) {
+    values[`alerts.${String(field.key)}`] = String(alerts[field.key]);
+  }
+  return values;
+}
+
+function FieldError({ message }: { message: string | undefined }) {
+  if (!message) return null;
+  return <p className="mt-1 text-xs text-red-400">{message}</p>;
+}
+
+function NumberField({
+  id,
+  spec,
+  value,
+  onChange,
+  error,
+}: {
+  id: string;
+  spec: FieldSpec<never>;
+  value: string;
+  onChange: (value: string) => void;
+  error: string | undefined;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm text-neutral-300">
+        {spec.label}
+      </label>
+      <input
+        id={id}
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+      />
+      <p className="mt-1 text-xs text-neutral-500">
+        {spec.description}預設值：{String(spec.defaultValue)}
+      </p>
+      <FieldError message={error} />
+    </div>
+  );
+}
+
+export function SettingsForm({ settings }: { settings: SettingsResponse }) {
+  const [values, setValues] = useState<FormValues>(() =>
+    toFormValues(settings.settings.risk_budget, settings.settings.cost_model, settings.settings.alerts),
+  );
+  const [alertsEnabled, setAlertsEnabled] = useState(settings.settings.alerts.enabled);
+  const [notifyWebhooks, setNotifyWebhooks] = useState(settings.settings.alerts.notify_webhooks);
+  const mutation = useUpdateSettings();
+  const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const riskBudget = {} as RiskBudgetSettings;
+    for (const field of RISK_BUDGET_FIELDS) {
+      riskBudget[field.key] = Number(values[`risk_budget.${String(field.key)}`]);
+    }
+    const costModelPartial = {} as Omit<CostModelSettings, "verified_on">;
+    for (const field of COST_FIELDS) {
+      costModelPartial[field.key] = Number(values[`cost_model.${String(field.key)}`]);
+    }
+    const costModel: CostModelSettings = {
+      ...costModelPartial,
+      verified_on: settings.settings.cost_model.verified_on,
+    };
+    const alertsPartial = {} as Omit<AlertSettings, "enabled" | "notify_webhooks">;
+    for (const field of ALERT_SETTINGS_FIELDS) {
+      alertsPartial[field.key] = Number(values[`alerts.${String(field.key)}`]);
+    }
+    const alerts: AlertSettings = {
+      ...alertsPartial,
+      enabled: alertsEnabled,
+      notify_webhooks: notifyWebhooks,
+    };
+    mutation.mutate({ risk_budget: riskBudget, cost_model: costModel, alerts });
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-8">
+      <section className="rounded-lg border border-neutral-800 p-5">
+        <h2 className="text-lg font-semibold text-neutral-100">風險預算（RiskBudget）</h2>
+        <p className="mt-1 text-xs text-neutral-500">
+          每一項數字都是分數（例如 0.15 = 15%），與後端 `app/advice/limits.py` 的 RiskBudget 欄位一一對應。
+        </p>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {RISK_BUDGET_FIELDS.map((field) => {
+            const key = `risk_budget.${String(field.key)}`;
+            return (
+              <NumberField
+                key={key}
+                id={key}
+                spec={field as FieldSpec<never>}
+                value={values[key] ?? ""}
+                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
+                error={fieldErrors[String(field.key)]}
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-neutral-800 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-neutral-100">費率（回測 CostModel）</h2>
+          <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300">
+            查證狀態：
+            {settings.settings.cost_model.verified_on
+              ? `已查證（${settings.settings.cost_model.verified_on}）`
+              : "尚未查證"}
+          </span>
+        </div>
+        {settings.settings.cost_model.verified_on === null && (
+          <p className="mt-2 text-xs text-amber-300">
+            這些費率來自模型訓練知識，尚未對照主要來源（TWSE/FSC、SEC/FINRA）查證，回測結果應視為待查證狀態。
+          </p>
+        )}
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {COST_FIELDS.map((field) => {
+            const key = `cost_model.${String(field.key)}`;
+            return (
+              <NumberField
+                key={key}
+                id={key}
+                spec={field as FieldSpec<never>}
+                value={values[key] ?? ""}
+                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
+                error={fieldErrors[String(field.key)]}
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-neutral-800 p-5">
+        <h2 className="text-lg font-semibold text-neutral-100">警示排程</h2>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {ALERT_SETTINGS_FIELDS.map((field) => {
+            const key = `alerts.${String(field.key)}`;
+            return (
+              <NumberField
+                key={key}
+                id={key}
+                spec={field as FieldSpec<never>}
+                value={values[key] ?? ""}
+                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
+                error={fieldErrors[String(field.key)]}
+              />
+            );
+          })}
+          <div>
+            <label className="flex items-center gap-2 text-sm text-neutral-300">
+              <input
+                type="checkbox"
+                checked={alertsEnabled}
+                onChange={(e) => setAlertsEnabled(e.target.checked)}
+                className="h-4 w-4"
+              />
+              啟用警示排程（總開關）
+            </label>
+          </div>
+          <div>
+            <label className="flex items-center gap-2 text-sm text-neutral-300">
+              <input
+                type="checkbox"
+                checked={notifyWebhooks}
+                onChange={(e) => setNotifyWebhooks(e.target.checked)}
+                className="h-4 w-4"
+              />
+              觸發時推送至已設定的 webhook
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <div>
+        <button
+          type="submit"
+          disabled={mutation.isPending}
+          className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {mutation.isPending ? "儲存中…" : "儲存設定"}
+        </button>
+        {mutation.isError && Object.keys(fieldErrors).length === 0 && (
+          <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+            儲存失敗：{mutation.error instanceof ApiError ? mutation.error.message : "未知錯誤"}
+          </p>
+        )}
+        {mutation.isSuccess && (
+          <p role="status" className="mt-3 rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
+            設定已儲存。
+          </p>
+        )}
+      </div>
+    </form>
+  );
+}

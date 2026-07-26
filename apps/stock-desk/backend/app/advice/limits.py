@@ -164,12 +164,21 @@ class LimitCheck(BaseModel):
 
 
 class QuantityRange(BaseModel):
-    """A share-count range implied by the binding cap, plus how it was derived."""
+    """A share-count range implied by the binding cap, plus how it was derived.
+
+    ``restores_compliance`` is the machine-readable half of what ``basis`` says
+    in prose: whether acting on the suggested quantity actually leaves the
+    binding cap non-violated. It is always ``True`` on the buy side (a buy that
+    breaches the cap is never suggested) and can be ``False`` on the sell side
+    when the cap is driven by *other* positions, so selling this whole holding
+    still does not clear it.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     min_shares: int
     max_shares: int
+    restores_compliance: bool
     basis: str
 
 
@@ -449,17 +458,29 @@ def suggest_quantity_range(
     * ``add`` -- how many more shares fit under the tightest cap. ``None`` when
       there is no headroom.
     * ``reduce`` / ``stop_loss`` / ``take_profit`` -- how many shares must go to
-      get back under the tightest cap, up to the whole holding. ``None`` when
-      nothing is above a cap, because trimming a compliant position is not
-      something the risk budget can size.
+      get back under the tightest cap, never more than the whole holding. When
+      even selling the lot leaves the cap breached (the cap is driven by other
+      positions), the range still stops at the holding but
+      ``restores_compliance`` is ``False`` and ``basis`` says so instead of
+      promising a return to compliance. ``None`` when nothing is above a cap
+      (trimming a compliant position is not something the risk budget can
+      size), when the holding is **less than one whole share** (any integer
+      suggestion would exceed it), or when no quantity could be verified within
+      the step bound.
     * anything else -- ``None``.
 
-    Both edges are **verified against the cap they came from**: a cap counts as
-    breached at equality (see :func:`_breaches`), so a quantity that lands
-    exactly on the threshold would be flagged ``violated`` the moment it was
-    acted on. The arithmetic edge is therefore re-checked through
+    Every returned edge is **verified against the cap it came from**, and a cap
+    counts as breached at equality (see :func:`_breaches`), so a quantity
+    landing exactly on the threshold would be flagged ``violated`` the moment it
+    was acted on. The arithmetic edge is therefore re-checked through
     :func:`limit_status_after` and walked one share at a time until the
-    resulting position sits strictly inside the cap.
+    resulting position sits strictly inside the cap. Verification demands an
+    explicit ``passed``: ``not_evaluable`` is never taken for a pass.
+
+    The rule behind every ``None`` above is the same one: **no suggestion beats
+    a suggestion that cannot be stated truthfully.** No returned quantity is
+    ever larger than the holding, and no ``basis`` claims an outcome the trade
+    does not produce.
     """
     price = ctx.price_twd()
     if price is None or price <= 0.0:
@@ -482,6 +503,7 @@ def suggest_quantity_range(
         return QuantityRange(
             min_shares=lower,
             max_shares=upper,
+            restores_compliance=True,
             basis=(
                 f"以「{LIMIT_NAMES[binding_id]}」為最小可用額度換算，"
                 f"最多可再買進 {upper} 股（買進後該上限仍為通過），"
@@ -494,56 +516,121 @@ def suggest_quantity_range(
             return None
         held = ctx.held_shares()
         sellable = math.floor(held) if held is not None else None
-        lower = _smallest_compliant_sell(
+        if sellable is None or sellable < 1:
+            # Fewer than one whole share (quantity is a Decimal, so 0.5 shares
+            # is a legal holding). Every integer suggestion would be larger than
+            # what the user owns, and rounding up to 1 while calling it "持股全數"
+            # is exactly the false claim this branch exists to prevent. No
+            # quantity, no claim.
+            return None
+        result = _smallest_compliant_sell(
             budget,
             ctx,
             binding_id=binding_id,
             start=max(1, math.ceil((current - binding_value) / price)),
             sellable=sellable,
         )
-        upper = max(lower, sellable) if sellable is not None else lower
+        if result is None:
+            # Could not verify any quantity within the step bound -- same
+            # outcome as the buy side: no suggestion rather than an unverified
+            # one. See :func:`_smallest_compliant_sell`.
+            return None
+        lower, compliant = result
+        upper = max(lower, sellable)
+        limit_name = LIMIT_NAMES[binding_id]
+        # The two branches are the whole point of returning ``compliant``:
+        # claiming "減去 N 股可回到該上限之內" when the cap is driven by other
+        # positions would be a false statement about what the trade achieves.
+        # Both branches are only reachable with a verified quantity that is at
+        # most the holding, so both sentences are true where they are used.
+        basis = (
+            f"目前部位超出「{limit_name}」，"
+            f"減去 {lower} 股可回到該上限之內，上緣為目前持股全數{skipped_note}。"
+            if compliant
+            else (
+                f"目前部位超出「{limit_name}」，"
+                f"建議量 {lower} 股已為持股全數；該上限由其他部位驅動，"
+                f"賣出後仍為違反{skipped_note}。"
+            )
+        )
         return QuantityRange(
             min_shares=lower,
             max_shares=upper,
-            basis=(
-                f"目前部位超出「{LIMIT_NAMES[binding_id]}」，"
-                f"減去 {lower} 股可回到該上限之內，上緣為目前持股全數{skipped_note}。"
-            ),
+            restores_compliance=compliant,
+            basis=basis,
         )
 
     return None
 
 
+def _passes(
+    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, share_delta: float
+) -> bool:
+    """Whether the binding cap explicitly **passes** after a hypothetical trade.
+
+    ``passed`` only -- ``not_evaluable`` is not treated as a pass. A cap whose
+    inputs went missing tells us nothing about whether the trade is inside the
+    budget, and sizing a suggestion off "we could not check" would put the
+    engine's name to a quantity it never verified.
+    """
+    return (
+        limit_status_after(budget, ctx, limit_id=binding_id, share_delta=share_delta) == "passed"
+    )
+
+
 def _largest_compliant_buy(
     budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, start: int
 ) -> int | None:
-    """Largest buy at or below ``start`` that leaves the binding cap passing."""
+    """Largest buy at or below ``start`` that leaves the binding cap passing.
+
+    Falls through to ``None`` ("no suggestion") only if the loop bound is
+    exhausted. That cannot happen with the shipped budget -- the arithmetic
+    edge from :func:`notional_caps` is already within one share of the answer,
+    so at most one step back is ever needed -- and the bound is a safety valve
+    against an inconsistent budget rather than a live code path. The fall-through
+    is pinned by a white-box test that shrinks
+    :data:`MAX_SIZING_ADJUSTMENTS` to zero.
+    """
     shares = start
     for _ in range(MAX_SIZING_ADJUSTMENTS):
         if shares < 1:
             return None
-        if limit_status_after(budget, ctx, limit_id=binding_id, share_delta=shares) != "violated":
+        if _passes(budget, ctx, binding_id=binding_id, share_delta=float(shares)):
             return shares
         shares -= 1
-    # The arithmetic edge is already within one share of the answer, so the
-    # bound is only a safety valve against an inconsistent budget.
-    return None  # pragma: no cover
+    return None
 
 
 def _smallest_compliant_sell(
-    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, start: int, sellable: int | None
-) -> int:
+    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, start: int, sellable: int
+) -> tuple[int, bool] | None:
     """Smallest sale from ``start`` up that leaves the binding cap passing.
 
-    Capped at the whole holding: when even selling everything leaves the cap
-    breached (something other than this position is driving it), the honest
-    answer is still "sell the lot", not a quantity the user does not own.
+    ``sellable`` is the whole holding rounded down to shares, and is at least 1
+    (the caller rejects a smaller holding outright). Returns
+    ``(shares, restores_compliance)`` where ``shares <= sellable`` always: a
+    quantity larger than the holding is never produced.
+
+    ``restores_compliance`` is ``False`` when even selling the lot leaves the
+    cap breached -- something other than this position is driving it. The
+    honest answer is then still "sell the lot", never a quantity the user does
+    not own, and the caller says the sale does *not* bring the cap back inside
+    its limit instead of implying it does.
+
+    Returns ``None`` when the step bound is exhausted without verifying any
+    quantity. That is unreachable with a consistent budget (the arithmetic edge
+    is within one share of the answer), and it deliberately mirrors
+    :func:`_largest_compliant_buy`: an unverified quantity is not offered, and
+    in particular the "已為持股全數／由其他部位驅動" wording is not reused here,
+    because neither of those facts is established on this path.
     """
     shares = start
     for _ in range(MAX_SIZING_ADJUSTMENTS):
-        if sellable is not None and shares >= sellable:
-            return max(1, sellable)
-        if limit_status_after(budget, ctx, limit_id=binding_id, share_delta=-shares) != "violated":
-            return shares
+        if shares >= sellable:
+            return sellable, _passes(
+                budget, ctx, binding_id=binding_id, share_delta=-float(sellable)
+            )
+        if _passes(budget, ctx, binding_id=binding_id, share_delta=-float(shares)):
+            return shares, True
         shares += 1
-    return shares  # pragma: no cover - same safety valve as on the buy side
+    return None
