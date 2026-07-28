@@ -84,7 +84,28 @@ class PriceBar(BaseModel):
 
 
 class ProviderResult(BaseModel):
-    """Envelope returned by every ``MarketDataProvider.get_daily_bars`` call."""
+    """Envelope returned by every ``MarketDataProvider.get_daily_bars`` call.
+
+    ``is_within_ttl`` (ADR-0005 決策四, "TTL 內快取先行"): whether the served
+    data is still inside the cache's freshness window. It is meaningful only
+    for ``status=CACHED_STALE`` responses and is ``None`` for any live source
+    (``FRESH``/``BACKUP``) and for ``UNAVAILABLE``, where "within TTL" is not
+    a question that applies. This does **not** add a fifth ``DataStatus`` --
+    ADR-0005 explicitly rejected that option to keep the blast radius small --
+    so a ``CACHED_STALE`` response with ``is_within_ttl=True`` still means
+    "served from the local cache", just one that happens to still be fresh
+    enough to trust without re-fetching; a front end must read both fields to
+    render an honest freshness message (決策四 point 4).
+
+    ``reason`` is an optional, user-facing Traditional Chinese sentence
+    explaining *why* a response degraded (quota exhausted, ticker not found,
+    ambiguous "no data" from an upstream that cannot distinguish "symbol does
+    not exist" from "temporarily no data", ...). It is ``None`` on ordinary
+    success. Wiring it into API responses / UI copy is outside this data
+    layer's file ownership (see ``app/services/market.py`` /
+    ``app/api/*``); it exists here so that information is not lost at the
+    point it is first known.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -93,6 +114,8 @@ class ProviderResult(BaseModel):
     as_of: datetime
     source: str
     staleness_minutes: int | None = None
+    is_within_ttl: bool | None = None
+    reason: str | None = None
 
     @field_validator("as_of")
     @classmethod

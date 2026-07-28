@@ -1,0 +1,28 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "TWD",
+          "symbol": "^TWII",
+          "instrumentType": "INDEX",
+          "exchangeTimezoneName": "Asia/Taipei"
+        },
+        "timestamp": [1704157200, 1704243600, 1704330000, 1704416400],
+        "indicators": {
+          "quote": [
+            {
+              "open": [17910.30, 17925.10, 17880.55, 17902.20],
+              "high": [17960.00, 17950.40, 17915.10, 17945.80],
+              "low": [17870.10, 17860.20, 17820.30, 17870.00],
+              "close": [17930.50, 17888.90, 17902.10, 17921.40],
+              "volume": [0, 0, 0, 0]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  },
+  "_fixture_notice": "本資料為依 Yahoo Finance 未公開 chart JSON 端點常見格式手工構造的合成範例，未實錄真實回應。"
+}

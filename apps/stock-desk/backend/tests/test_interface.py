@@ -104,3 +104,48 @@ def test_data_status_has_all_four_degradation_layers() -> None:
         "cached_stale",
         "unavailable",
     }
+
+
+def test_provider_result_is_within_ttl_defaults_to_none() -> None:
+    """ADR-0005 決策四: live sources (fresh/backup) carry no TTL opinion."""
+    result = ProviderResult(
+        bars=[_make_bar()],
+        status=DataStatus.FRESH,
+        as_of=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),
+        source="twse",
+        staleness_minutes=0,
+    )
+    assert result.is_within_ttl is None
+
+
+def test_provider_result_accepts_explicit_is_within_ttl() -> None:
+    result = ProviderResult(
+        bars=[_make_bar()],
+        status=DataStatus.CACHED_STALE,
+        as_of=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),
+        source="cache",
+        staleness_minutes=90,
+        is_within_ttl=False,
+    )
+    assert result.is_within_ttl is False
+
+
+def test_provider_result_reason_defaults_to_none() -> None:
+    result = ProviderResult(
+        bars=[_make_bar()],
+        status=DataStatus.FRESH,
+        as_of=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),
+        source="twse",
+    )
+    assert result.reason is None
+
+
+def test_provider_result_carries_a_reason_string() -> None:
+    result = ProviderResult(
+        bars=[],
+        status=DataStatus.UNAVAILABLE,
+        as_of=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),
+        source="alpha_vantage",
+        reason="Alpha Vantage 今日查詢額度已用罄。",
+    )
+    assert result.reason == "Alpha Vantage 今日查詢額度已用罄。"

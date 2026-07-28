@@ -21,6 +21,15 @@ egress policy 擋下（proxy 對 CONNECT 回 403）：
 邏輯、欄位對應、ROC 日期換算、千分位/佔位符處理）使用，**絕不可當成真實市場
 資料展示給使用者**。
 
+Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數來源，
+同一套 egress policy 阻擋同樣適用（本環境對外部網域一律無法連線），未另外
+重新嘗試 `www.alphavantage.co` 與 `query1.finance.yahoo.com`，因此
+`alpha_vantage_daily_aapl.json`、`yfinance_chart_*.json` 一律視為**同等未查證**，
+比照既有檔案處理。`yfinance` 走的還是一個**沒有官方文件**的端點（真正的
+`yfinance` PyPI 套件內部也是打這支未公開 API），比 TWSE／FinMind 等有官方文件
+但連線被擋的情況又更弱一層查證基礎——這點在 `app/data/providers/yfinance.py`
+的檔頭與下表中都有標註。
+
 ## 各檔案
 
 | 檔案 | 來源 schema | 狀態 |
@@ -29,6 +38,10 @@ egress policy 擋下（proxy 對 CONNECT 回 403）：
 | `tpex_daily_trading_5483_202401.json` | TPEx `web/stock/aftertrading/daily_trading_info/st43_result.php`（個股日成交資訊，`o=json`） | 合成，依文件手工構造 |
 | `finmind_taiwan_stock_price_2330.json` | FinMind API v4 `dataset=TaiwanStockPrice` | 合成，依文件手工構造 |
 | `bot_fx_usd_twd_20240102.csv` | 台灣銀行牌告匯率歷史 CSV 匯出（`xrt/flcsv/0/<date>`） | 合成，依常見公開格式手工構造；欄位順序（現金/即期/遠期各買入賣出成對出現）**未經即時回應驗證**，`app/data/providers/fx.py` 因此改用「找標籤字串」而非寫死欄位索引來降低風險，找不到時明確回 `unavailable` 而非讀錯欄 |
+| `alpha_vantage_daily_aapl.json` | Alpha Vantage `TIME_SERIES_DAILY`（`function=TIME_SERIES_DAILY&outputsize=full`） | 合成，依公開文件手工構造（ADR-0005/ADR-0003 範圍，`app/data/providers/alpha_vantage.py`）；含一列全為 `"N/A"` 的不可解析日期，用於測試 adapter 的跳過（不臆測）邏輯；**Phase 7 新增，額度/欄位格式皆未經即時回應驗證** |
+| `yfinance_chart_tqqq.json` | Yahoo Finance 未公開 `v8/finance/chart/<symbol>` 端點（`app/data/providers/yfinance.py` 個股/ETF 備援路徑） | 合成，依常見公開格式手工構造；含一列全欄位為 `null` 的日期，模擬非交易日/資料缺漏的跳過邏輯；**此端點本身無官方文件，格式僅為廣泛引用的慣例，完全未經即時回應驗證** |
+| `yfinance_chart_ndx.json` | 同上端點，指數路徑（`^NDX`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；指數 `volume` 以 `0` 表示（非缺漏）；**完全未經即時回應驗證** |
+| `yfinance_chart_twii.json` | 同上端點，指數路徑（`^TWII`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；**完全未經即時回應驗證** |
 
 ## 若之後要補實錄
 

@@ -32,6 +32,20 @@ class MarketDataService:
 
     Every successful live fetch is written through to the cache so it is
     available for a later degrade-to-cache fallback.
+
+    ``cache_first`` (ADR-0005 決策四, "TTL 內快取先行" -- a revision to
+    ADR-0003's four-layer ladder, adding a "layer 0" ahead of the primary
+    provider): when ``True``, a cache entry that is still within its TTL is
+    served immediately, without calling any provider at all. This exists
+    because Alpha Vantage's daily quota is cheap to burn through on repeat
+    requests for the same symbol within the same day (e.g. a page reload),
+    and the quota ledger (``app.data.quota.QuotaLedger``) alone cannot help
+    with that -- it only stops *new* symbols once the day's budget is spent,
+    it does nothing to avoid spending budget on a symbol already fetched an
+    hour ago. Per ADR-0005, ``cache_first`` must stay ``False`` for the TW
+    service (Taiwan has no comparable quota pressure) so this class's
+    existing behaviour for TW is unchanged byte-for-byte when the flag is
+    left at its default.
     """
 
     def __init__(
@@ -41,15 +55,22 @@ class MarketDataService:
         backups: Sequence[MarketDataProvider] = (),
         cache: PriceBarCache,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        cache_first: bool = False,
     ) -> None:
         self._primary = primary
         self._backups = tuple(backups)
         self._cache = cache
         self._clock = clock
+        self._cache_first = cache_first
 
     def get_daily_bars(
         self, symbol: str, market: Market, start: date, end: date
     ) -> ProviderResult:
+        if self._cache_first:
+            layer_zero = self._try_ttl_fresh_cache(symbol, market, start, end)
+            if layer_zero is not None:
+                return layer_zero
+
         providers: list[tuple[MarketDataProvider, DataStatus]] = [
             (self._primary, DataStatus.FRESH),
             *((backup, DataStatus.BACKUP) for backup in self._backups),
@@ -69,6 +90,35 @@ class MarketDataService:
             )
 
         return self._fall_back_to_cache(symbol, market, start, end)
+
+    def _try_ttl_fresh_cache(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult | None:
+        """``cache_first`` layer 0: serve a still-fresh cache hit, calling nobody.
+
+        Returns ``None`` (meaning "fall through to the normal ladder") when
+        there is no cached data for this range, or when what is cached has
+        already aged past the TTL -- an expired cache entry must not be
+        assumed good enough to skip a live fetch.
+        """
+        now = self._clock()
+        cached = self._cache.get(symbol, market, start, end, now=now)
+        if cached is None or not cached.is_within_ttl:
+            return None
+        logger.info(
+            "cache_first: serving %s from cache (%d min old, within TTL); "
+            "skipping all live providers for this request",
+            symbol,
+            cached.staleness_minutes,
+        )
+        return ProviderResult(
+            bars=cached.bars,
+            status=DataStatus.CACHED_STALE,
+            as_of=cached.fetched_at,
+            source=cached.source,
+            staleness_minutes=cached.staleness_minutes,
+            is_within_ttl=True,
+        )
 
     def _try_provider(
         self, provider: MarketDataProvider, symbol: str, start: date, end: date
@@ -128,6 +178,7 @@ class MarketDataService:
                 as_of=cached.fetched_at,
                 source=cached.source,
                 staleness_minutes=cached.staleness_minutes,
+                is_within_ttl=cached.is_within_ttl,
             )
 
         logger.error("no provider and no cache entry available for %s", symbol)

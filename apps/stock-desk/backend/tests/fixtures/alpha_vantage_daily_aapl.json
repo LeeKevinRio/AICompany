@@ -1,0 +1,47 @@
+{
+  "Meta Data": {
+    "1. Information": "Daily Prices (open, high, low, close) and volumes",
+    "2. Symbol": "AAPL",
+    "3. Last Refreshed": "2024-01-05",
+    "4. Output Size": "Compact",
+    "5. Time Zone": "US/Eastern"
+  },
+  "Time Series (Daily)": {
+    "2024-01-05": {
+      "1. open": "182.0000",
+      "2. high": "182.7600",
+      "3. low": "180.1700",
+      "4. close": "181.1800",
+      "5. volume": "62303300"
+    },
+    "2024-01-04": {
+      "1. open": "182.1500",
+      "2. high": "183.0900",
+      "3. low": "180.8800",
+      "4. close": "181.9100",
+      "5. volume": "71983600"
+    },
+    "2024-01-03": {
+      "1. open": "184.2200",
+      "2. high": "185.8800",
+      "3. low": "183.4300",
+      "4. close": "184.2500",
+      "5. volume": "58414500"
+    },
+    "2024-01-02": {
+      "1. open": "187.1500",
+      "2. high": "188.4400",
+      "3. low": "183.8850",
+      "4. close": "185.6400",
+      "5. volume": "82488700"
+    },
+    "2023-12-29": {
+      "1. open": "N/A",
+      "2. high": "N/A",
+      "3. low": "N/A",
+      "4. close": "N/A",
+      "5. volume": "N/A"
+    }
+  },
+  "_fixture_notice": "本資料為依 Alpha Vantage TIME_SERIES_DAILY 公開文件 schema 手工構造的合成範例，未實錄真實回應；末尾一列刻意置入不可解析的 'N/A' 佔位值，用於測試 adapter 的跳過（不臆測）邏輯。"
+}

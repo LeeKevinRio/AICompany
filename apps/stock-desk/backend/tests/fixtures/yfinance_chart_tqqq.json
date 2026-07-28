@@ -1,0 +1,28 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "TQQQ",
+          "instrumentType": "ETF",
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [1704205800, 1704292200, 1704378600, 1704465000],
+        "indicators": {
+          "quote": [
+            {
+              "open": [56.12, 55.80, null, 54.02],
+              "high": [56.90, 56.10, null, 54.88],
+              "low": [55.40, 54.75, null, 53.10],
+              "close": [55.75, 54.90, null, 54.55],
+              "volume": [102345600, 98765400, null, 87654300]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  },
+  "_fixture_notice": "本資料為依 Yahoo Finance 未公開 chart JSON 端點常見格式手工構造的合成範例，未實錄真實回應；2024-01-04 該列刻意置入 null 值，模擬非交易日/資料缺漏的跳過（不內插）邏輯。"
+}

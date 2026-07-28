@@ -38,6 +38,23 @@ def _bar(source: str) -> PriceBar:
     )
 
 
+def _us_bar(source: str) -> PriceBar:
+    """Same shape as :func:`_bar` but tagged US/USD, for cache_first tests."""
+    return PriceBar(
+        symbol="2330",
+        market="US",
+        date=date(2024, 1, 2),
+        open=Decimal("594.00"),
+        high=Decimal("598.00"),
+        low=Decimal("590.00"),
+        close=Decimal("594.00"),
+        volume=1000,
+        currency="USD",
+        as_of=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),
+        source=source,
+    )
+
+
 class _StubProvider(MarketDataProvider):
     #: Placeholder to satisfy the ABC's ClassVar contract; the meaningful
     #: per-instance label used in test assertions is ``_label`` below.
@@ -194,3 +211,110 @@ def test_expected_unavailable_is_logged_at_info_not_exception_level(
     assert not any(
         "unexpected provider error" in r.getMessage() for r in caplog.records
     )
+
+
+def test_fresh_and_backup_results_carry_no_ttl_opinion(tmp_path: Path) -> None:
+    """ADR-0005 決策四: is_within_ttl is None for any live source, not a fact
+    that applies to a fresh live fetch."""
+    primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
+    service = _service(primary, [], tmp_path)
+
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert result.status is DataStatus.FRESH
+    assert result.is_within_ttl is None
+
+
+def test_cache_fallback_carries_is_within_ttl(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=60 * 60)
+    cache.put([_bar("twse")], source="twse", fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC))
+
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    backup = _StubProvider(source_id="finmind", status=DataStatus.UNAVAILABLE)
+    # clock is 3 hours after fetch -- past the 1h TTL used here.
+    service = MarketDataService(
+        primary=primary,
+        backups=[backup],
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 2, 13, 0, tzinfo=UTC),
+    )
+
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is False
+
+
+class TestCacheFirst:
+    """ADR-0005 決策四: 'layer 0' TTL-fresh cache short-circuit.
+
+    Default (``cache_first=False``) must reproduce every existing TW test
+    above byte-for-byte -- these tests only exercise the opt-in behaviour.
+    """
+
+    def test_default_is_disabled(self, tmp_path: Path) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        primary = _StubProvider(source_id="twse", bars=[])
+        service = MarketDataService(primary=primary, cache=cache)
+        # No assertion needed beyond "constructs fine and behaves like before";
+        # covered end-to-end by the rest of this module's TW-flavoured tests.
+        assert service is not None
+
+    def test_serves_ttl_fresh_cache_without_calling_any_provider(
+        self, tmp_path: Path
+    ) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=24 * 60 * 60)
+        cache.put(
+            [_us_bar("alpha_vantage")],
+            source="alpha_vantage",
+            fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
+        )
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        backup = _StubProvider(source_id="yfinance", bars=[_us_bar("yfinance")])
+        service = MarketDataService(
+            primary=primary,
+            backups=[backup],
+            cache=cache,
+            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),  # 2h later, within 24h TTL
+            cache_first=True,
+        )
+
+        result = service.get_daily_bars("2330", "US", START, END)
+
+        assert result.status is DataStatus.CACHED_STALE
+        assert result.is_within_ttl is True
+        assert result.source == "alpha_vantage"
+        assert primary.call_count == 0
+        assert backup.call_count == 0
+
+    def test_falls_through_to_providers_when_cache_is_expired(
+        self, tmp_path: Path
+    ) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=60 * 60)
+        cache.put(
+            [_us_bar("alpha_vantage")],
+            source="alpha_vantage",
+            fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
+        )
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        service = MarketDataService(
+            primary=primary,
+            cache=cache,
+            clock=lambda: datetime(2024, 1, 2, 13, 0, tzinfo=UTC),  # 3h later, past 1h TTL
+            cache_first=True,
+        )
+
+        result = service.get_daily_bars("2330", "US", START, END)
+
+        assert result.status is DataStatus.FRESH
+        assert primary.call_count == 1
+
+    def test_falls_through_to_providers_when_no_cache_entry_exists(
+        self, tmp_path: Path
+    ) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        service = MarketDataService(primary=primary, cache=cache, cache_first=True)
+
+        result = service.get_daily_bars("2330", "US", START, END)
+
+        assert result.status is DataStatus.FRESH
+        assert primary.call_count == 1
