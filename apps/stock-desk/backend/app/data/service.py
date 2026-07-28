@@ -17,6 +17,27 @@ from app.data.interface import DataStatus, Market, MarketDataProvider, ProviderR
 
 logger = logging.getLogger(__name__)
 
+#: Joins several layers' reasons into the one ``reason`` slot a
+#: ``ProviderResult`` has, in ladder order.
+_REASON_SEPARATOR = "；"
+
+UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一層。"
+
+
+def _combine_reasons(reasons: Sequence[str]) -> str | None:
+    """Fold every layer's own wording into one sentence, losing none of them.
+
+    A degraded response usually has more than one cause worth stating ("no API
+    key" *and* "backup unreachable"); keeping only the first would misattribute
+    the failure. Each layer's text is preserved verbatim apart from a trailing
+    full stop, which is re-added once at the end so the joined sentence reads
+    as one.
+    """
+    kept = [reason.strip() for reason in reasons if reason and reason.strip()]
+    if not kept:
+        return None
+    return _REASON_SEPARATOR.join(text.rstrip("。") for text in kept) + "。"
+
 
 class MarketDataService:
     """Fetch daily bars for a symbol, degrading through providers then cache.
@@ -46,6 +67,13 @@ class MarketDataService:
     service (Taiwan has no comparable quota pressure) so this class's
     existing behaviour for TW is unchanged byte-for-byte when the flag is
     left at its default.
+
+    Degradation reasons are not swallowed: every rung that declined to answer
+    contributes its ``ProviderResult.reason`` to the ``reason`` of whatever
+    the ladder ends up returning (the cache rung or ``unavailable``), so the
+    API layer can tell a user "the daily quota is spent" instead of a generic
+    "no data". A successful fetch carries no reason -- there is nothing to
+    explain.
     """
 
     def __init__(
@@ -76,9 +104,14 @@ class MarketDataService:
             *((backup, DataStatus.BACKUP) for backup in self._backups),
         ]
 
+        # Every rung that declined to answer states why; those sentences are
+        # what the API layer shows when the whole ladder comes up empty.
+        reasons: list[str] = []
         for provider, status in providers:
-            result = self._try_provider(provider, symbol, start, end)
+            result, reason = self._try_provider(provider, symbol, start, end)
             if result is None:
+                if reason is not None:
+                    reasons.append(reason)
                 continue
             self._cache.put(result.bars, source=result.source, fetched_at=self._clock())
             return ProviderResult(
@@ -89,7 +122,7 @@ class MarketDataService:
                 staleness_minutes=0,
             )
 
-        return self._fall_back_to_cache(symbol, market, start, end)
+        return self._fall_back_to_cache(symbol, market, start, end, reasons)
 
     def _try_ttl_fresh_cache(
         self, symbol: str, market: Market, start: date, end: date
@@ -122,8 +155,14 @@ class MarketDataService:
 
     def _try_provider(
         self, provider: MarketDataProvider, symbol: str, start: date, end: date
-    ) -> ProviderResult | None:
-        """Call one provider, returning usable bars or ``None`` to degrade on.
+    ) -> tuple[ProviderResult | None, str | None]:
+        """Call one provider, returning ``(usable result, degradation reason)``.
+
+        Exactly one side is ever populated: a usable result comes back with no
+        reason, and a declined rung comes back as ``(None, reason)`` -- where
+        the reason may still be ``None`` if the provider degraded without
+        saying anything, which is the provider's own gap, not one this method
+        fills in with a guess.
 
         Two distinct failure modes are graded differently in the logs so they
         can be told apart:
@@ -149,7 +188,7 @@ class MarketDataService:
                 provider_label,
                 symbol,
             )
-            return None
+            return None, UNEXPECTED_ERROR_REASON.format(provider=provider_label)
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
             logger.info(
                 "provider %s returned no usable data (status=%s) for %s; "
@@ -158,12 +197,18 @@ class MarketDataService:
                 result.status.value,
                 symbol,
             )
-            return None
-        return result
+            return None, result.reason
+        return result, None
 
     def _fall_back_to_cache(
-        self, symbol: str, market: Market, start: date, end: date
+        self,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
+        reasons: Sequence[str] = (),
     ) -> ProviderResult:
+        combined = _combine_reasons(reasons)
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
         if cached is not None:
@@ -179,6 +224,10 @@ class MarketDataService:
                 source=cached.source,
                 staleness_minutes=cached.staleness_minutes,
                 is_within_ttl=cached.is_within_ttl,
+                # Why the live rungs were skipped travels with the cached
+                # answer too: "served from cache" alone does not tell the
+                # reader whether the quota ran out or the vendor was down.
+                reason=combined,
             )
 
         logger.error("no provider and no cache entry available for %s", symbol)
@@ -188,4 +237,5 @@ class MarketDataService:
             as_of=now,
             source="none",
             staleness_minutes=None,
+            reason=combined,
         )

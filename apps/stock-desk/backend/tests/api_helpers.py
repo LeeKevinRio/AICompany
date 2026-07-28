@@ -84,11 +84,18 @@ class FakePriceService:
         status: DataStatus = DataStatus.FRESH,
         source: str = "fake",
         staleness_minutes: int | None = 0,
+        reason: str | None = None,
+        is_within_ttl: bool | None = None,
     ) -> None:
         self.bars = dict(bars or {})
         self.status = status
         self.source = source
         self.staleness_minutes = staleness_minutes
+        #: What a real service says when it has nothing (quota spent, no API
+        #: key, source unreachable). ``None`` -- the default -- is a service
+        #: that degraded without a word.
+        self.reason = reason
+        self.is_within_ttl = is_within_ttl
         #: Every call made, so a test can assert the range that was requested.
         self.calls: list[tuple[str, Market, date, date]] = []
 
@@ -108,6 +115,7 @@ class FakePriceService:
                 as_of=_AS_OF,
                 source="none",
                 staleness_minutes=None,
+                reason=self.reason,
             )
         return ProviderResult(
             bars=window,
@@ -115,6 +123,7 @@ class FakePriceService:
             as_of=_AS_OF,
             source=self.source,
             staleness_minutes=self.staleness_minutes,
+            is_within_ttl=self.is_within_ttl,
         )
 
 

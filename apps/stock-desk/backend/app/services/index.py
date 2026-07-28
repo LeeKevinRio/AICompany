@@ -29,14 +29,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from typing import ClassVar, Protocol
 
-from app.data.interface import DataStatus, Market, PriceBar
+from app.data.interface import (
+    DataStatus,
+    Market,
+    MarketDataProvider,
+    PriceBar,
+    ProviderResult,
+)
 from app.leverage.index_mapping import (
     MAPPING_VERIFIED_ON,
     IndexRef,
     lookup_index_ref,
 )
 from app.portfolio.valuation import PriceService
+from app.services.market import with_provider_reason
 
 #: market of the index series -> the service that can quote it.
 IndexServiceResolver = Mapping[Market, PriceService]
@@ -117,6 +125,77 @@ def disclosed_status(status: DataStatus) -> DataStatus:
     return DataStatus.BACKUP if status is DataStatus.FRESH else status
 
 
+class IndexBarsProvider(Protocol):
+    """The slice of an index-capable adapter this module needs.
+
+    Structural (``Protocol``) on purpose: ``app/data/providers/yfinance.py``
+    deliberately keeps ``get_index_daily_bars`` *off* the
+    ``MarketDataProvider`` ABC -- an index is not a per-security fetch and has
+    its own caller -- so the shape is adapted here rather than the adapter
+    bending its own contract to fit.
+    """
+
+    def get_index_daily_bars(
+        self, index_symbol: str, start: date, end: date
+    ) -> ProviderResult: ...
+
+
+class IndexProviderBridge(MarketDataProvider):
+    """``get_index_daily_bars(symbol, start, end)`` -> the provider contract.
+
+    Pure signature translation and nothing else. The symbol is passed through
+    verbatim, so every guarantee the index adapter makes stays intact: an index
+    code never goes through ``canonical_us_symbol``, Alpha Vantage is not on
+    this path at all (so no quota is consumed), and the ``status`` the adapter
+    chose -- ``BACKUP`` even on success, ADR-0005 constraint I-3 -- is returned
+    unmodified. Deliberately no validation of its own: a second opinion on
+    which index codes are supported would be a second table to keep in sync
+    with the adapter's.
+
+    Wrapping this in a ``MarketDataService`` is what earns the index path a
+    cache and the TTL-first layer 0 (ADR-0005 決策四). That service labels a
+    successful *primary* fetch ``FRESH``, which is why callers must see the
+    result through :class:`IndexSeriesService` rather than the raw service.
+    """
+
+    #: Only ever used for the service's own degradation logging; the source
+    #: a user sees comes from the adapter's ``ProviderResult.source``.
+    source_id: ClassVar[str] = "index_bridge"
+
+    def __init__(self, provider: IndexBarsProvider) -> None:
+        self._provider = provider
+
+    def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+        return self._provider.get_index_daily_bars(symbol, start, end)
+
+
+class IndexSeriesService:
+    """A :class:`PriceService` over an index series that never claims ``fresh``.
+
+    ADR-0005 constraint I-3 applies to the index series wherever it is read,
+    not only where the adapter produced it: a ``MarketDataService`` re-labels
+    whatever its primary provider returns as ``FRESH``, which would undo the
+    adapter's own disclosure. This facade re-applies :func:`disclosed_status`
+    at the boundary, so anything holding an ``IndexServiceResolver`` sees at
+    best ``backup`` no matter how the layers underneath are composed.
+
+    Everything else on the result -- bars, ``source``, ``staleness_minutes``,
+    ``is_within_ttl``, ``reason`` -- is passed through untouched.
+    """
+
+    def __init__(self, inner: PriceService) -> None:
+        self._inner = inner
+
+    def get_daily_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        result = self._inner.get_daily_bars(symbol, market, start, end)
+        disclosed = disclosed_status(result.status)
+        if disclosed is result.status:
+            return result
+        return result.model_copy(update={"status": disclosed})
+
+
 def load_index_bars(
     resolver: IndexServiceResolver,
     *,
@@ -166,7 +245,12 @@ def load_index_series(
             status=result.status,
             source=result.source,
             staleness_minutes=result.staleness_minutes,
-            reason=NO_BARS_REASON.format(series_symbol=ref.series_symbol),
+            # The data layer's own wording (source unreachable, unsupported
+            # index code, ...) is appended rather than swallowed: this module's
+            # sentence says *that* nothing came back, the provider's says why.
+            reason=with_provider_reason(
+                NO_BARS_REASON.format(series_symbol=ref.series_symbol), result.reason
+            ),
             notes=notes,
         )
     return LoadedIndexBars(

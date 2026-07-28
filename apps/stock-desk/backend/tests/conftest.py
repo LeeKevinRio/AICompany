@@ -19,11 +19,13 @@ from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
     get_fx_provider,
+    get_index_resolver,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
 from app.main import app
 from app.portfolio.valuation import PositionValuator
@@ -38,6 +40,8 @@ class ApiHarness:
 
     client: TestClient
     price_service: FakePriceService
+    #: Index series only, keyed by index code (``^TWII``), never by ETF symbol.
+    index_service: FakePriceService
     positions: PositionStore
     alerts: AlertStore
     settings: SettingsStore
@@ -51,6 +55,17 @@ def price_service() -> FakePriceService:
 
 
 @pytest.fixture
+def index_service() -> FakePriceService:
+    """An empty fake index series service, separate from the security one.
+
+    Kept separate on purpose: an index series must never resolve out of the
+    same store as a security's bars, so a test that "works" only because the
+    two share a key space would be hiding a real defect.
+    """
+    return FakePriceService(status=DataStatus.BACKUP)
+
+
+@pytest.fixture
 def fx_provider() -> FxRateProvider:
     """An FX provider that never has a rate; a test swaps in its own if it needs one."""
     return UnavailableFxProvider()
@@ -58,7 +73,10 @@ def fx_provider() -> FxRateProvider:
 
 @pytest.fixture
 def api_harness(
-    tmp_path: Path, price_service: FakePriceService, fx_provider: FxRateProvider
+    tmp_path: Path,
+    price_service: FakePriceService,
+    index_service: FakePriceService,
+    fx_provider: FxRateProvider,
 ) -> Iterator[ApiHarness]:
     positions = PositionStore(db_path=tmp_path / "positions.db")
     alerts = AlertStore(db_path=tmp_path / "alerts.db")
@@ -73,12 +91,17 @@ def api_harness(
     app.dependency_overrides[get_settings_store] = lambda: settings
     app.dependency_overrides[get_valuator] = lambda: valuator
     app.dependency_overrides[get_market_resolver] = lambda: {"TW": price_service}
+    app.dependency_overrides[get_index_resolver] = lambda: {
+        "TW": index_service,
+        "US": index_service,
+    }
     app.dependency_overrides[get_fx_provider] = lambda: fx_provider
 
     with TestClient(app) as test_client:
         yield ApiHarness(
             client=test_client,
             price_service=price_service,
+            index_service=index_service,
             positions=positions,
             alerts=alerts,
             settings=settings,

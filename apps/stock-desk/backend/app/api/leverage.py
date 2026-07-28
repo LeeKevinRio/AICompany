@@ -8,10 +8,13 @@ The chapter is computed **for a holding**, because its drag decomposition is
 measured from ``opened_at``; a symbol with no position is therefore a 404 rather
 than a card about nobody's position.
 
-Index bars: there is still no data adapter for an underlying index, so
-``index_bars`` is passed as ``None`` and the drag/erosion blocks honestly report
-``insufficient_data``. The code path is exercised end to end -- when an index
-adapter arrives, only the loader below changes.
+Index bars come from ``app/services/index.py`` (the single junction between the
+pure ``app/leverage`` package and the data layer, ADR-0005 constraint I-1). A
+symbol whose mapping row is ``unmapped`` never reaches a data source at all --
+the row's own note is the reason -- and a mapped symbol whose series could not
+be fetched degrades to the same ``insufficient_data`` the blocks reported
+before, with the data layer's reason attached instead of a generic sentence.
+No proxy series is ever substituted in either case.
 """
 
 from __future__ import annotations
@@ -23,24 +26,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import ConfigDict
 
 from app.api.common import EnvelopeBase, PayloadStatus, data_meta, now_iso
-from app.api.deps import get_market_resolver, get_position_store
+from app.api.deps import get_index_resolver, get_market_resolver, get_position_store
 from app.leverage.service import build_leverage_chapter
 from app.positions.models import Market, Position
 from app.positions.store import PositionStore
+from app.services.index import IndexServiceResolver, load_index_bars
 from app.services.market import MarketDataResolver, load_bars
 
 router = APIRouter(prefix="/api/leverage", tags=["leverage"])
 
 ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
+IndexResolverDep = Annotated[IndexServiceResolver, Depends(get_index_resolver)]
 StoreDep = Annotated[PositionStore, Depends(get_position_store)]
 
 #: Long enough to cover a multi-year holding's drag decomposition.
 DEFAULT_LOOKBACK_DAYS = 1200
-
-#: Why the two quantitative blocks are not computed today.
-NO_INDEX_ADAPTER_NOTE = (
-    "目前沒有標的指數的日線資料來源，拆解與情境推估皆不計算；本模組不會以其他標的替代。"
-)
 
 
 class LeverageResponse(EnvelopeBase):
@@ -51,7 +51,10 @@ class LeverageResponse(EnvelopeBase):
     #: Exactly ``app.leverage.service.build_leverage_chapter`` output.
     chapter: dict[str, Any] | None
     position_id: int | None
-    #: ``False`` until an index data adapter exists (see the module docstring).
+    #: Whether an underlying-index series was actually obtained for this
+    #: symbol. ``False`` covers both "there is no queryable index for it" and
+    #: "there is one but it could not be fetched"; the two are told apart by
+    #: the note carried in ``chapter["notes"]``.
     index_bars_available: bool
 
 
@@ -76,6 +79,7 @@ def _pick_position(store: PositionStore, symbol: str, market: Market) -> Positio
 def get_leverage_chapter(
     symbol: str,
     resolver: ResolverDep,
+    index_resolver: IndexResolverDep,
     store: StoreDep,
     market: Annotated[Market, Query(description="市場別")] = "TW",
 ) -> LeverageResponse:
@@ -87,20 +91,11 @@ def get_leverage_chapter(
         )
 
     end = date.today()
-    loaded = load_bars(
-        resolver,
-        symbol=symbol,
-        market=market,
-        start=end - timedelta(days=DEFAULT_LOOKBACK_DAYS),
-        end=end,
-    )
-    # ``index_bars=None``: no adapter yet, so the chapter reports the two
-    # index-based blocks as insufficient_data instead of substituting a proxy.
-    chapter = build_leverage_chapter(position, loaded.bars, None)
-    notes = chapter.get("notes")
-    if isinstance(notes, list) and NO_INDEX_ADAPTER_NOTE not in notes:
-        notes.append(NO_INDEX_ADAPTER_NOTE)
+    start = end - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    loaded = load_bars(resolver, symbol=symbol, market=market, start=start, end=end)
+    index_loaded = load_index_bars(index_resolver, etf_symbol=symbol, start=start, end=end)
 
+    chapter = build_leverage_chapter(position, loaded.bars, index_loaded.bars)
     # ``not_applicable`` is a complete answer ("this chapter does not apply"),
     # so it is an ``ok`` payload; only an actually-uncomputable chapter is
     # reported as insufficient data.
@@ -108,14 +103,37 @@ def get_leverage_chapter(
     payload_status: PayloadStatus = (
         "insufficient_data" if chapter_status == "insufficient_data" else "ok"
     )
+
+    notes = chapter.get("notes")
+    index_reason = index_loaded.reason
+    # Two things are deliberately *not* said here. Nothing about an index on a
+    # chapter that does not apply -- an ordinary stock has no benchmark to
+    # decompose against and the absence is not a finding. And nothing twice:
+    # when the mapping row settles the matter (``unmapped``) the chapter has
+    # already stated that row's note, and the loader returns the same text.
+    # What is worth adding is the case the chapter cannot know about -- a
+    # queryable series the data layer could not fetch this time.
+    if (
+        chapter_status != "not_applicable"
+        and isinstance(notes, list)
+        and index_reason
+        and index_reason not in notes
+    ):
+        notes.append(index_reason)
+
+    reason = chapter.get("reason") or (loaded.reason if not loaded.bars else None)
+    if payload_status == "insufficient_data" and not reason:
+        # The ETF bars were fine; what is missing is the index series, so its
+        # reason is the one that answers the reader's question.
+        reason = index_reason
     return LeverageResponse(
         symbol=symbol,
         market=market,
         status=payload_status,
-        reason=chapter.get("reason") or (loaded.reason if not loaded.bars else None),
+        reason=reason,
         chapter=chapter,
         position_id=position.id,
-        index_bars_available=False,
+        index_bars_available=index_loaded.available,
         data=data_meta(loaded.meta()),
         as_of=now_iso(),
     )

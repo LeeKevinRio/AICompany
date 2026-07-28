@@ -32,6 +32,12 @@ class DataMeta(BaseModel):
     status: str
     source: str
     staleness_minutes: int | None
+    #: Only meaningful when ``status == "cached_stale"``: ``true`` means the
+    #: cached data is still inside its TTL and was served without calling any
+    #: provider, ``false`` means it really is out of date. A reader must look
+    #: at both fields to describe freshness honestly (ADR-0005 D-2); ``null``
+    #: on every live rung, where the question does not apply.
+    is_within_ttl: bool | None
     bar_count: int
     first_bar_date: str | None
     last_bar_date: str | None

@@ -13,13 +13,20 @@ from functools import lru_cache
 
 from app.alerts.store import AlertStore
 from app.data.cache import PriceBarCache
+from app.data.providers.alpha_vantage import AlphaVantageAdapter
 from app.data.providers.finmind import FinMindAdapter
 from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateProvider
 from app.data.providers.tpex import TpexAdapter
 from app.data.providers.twse import TwseAdapter
+from app.data.providers.yfinance import YFinanceAdapter
 from app.data.service import MarketDataService
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
+from app.services.index import (
+    IndexProviderBridge,
+    IndexSeriesService,
+    IndexServiceResolver,
+)
 from app.services.market import MarketDataResolver
 from app.settings.store import SettingsStore
 
@@ -30,20 +37,85 @@ def _default_store() -> PositionStore:
 
 
 @lru_cache(maxsize=1)
-def _default_resolver() -> MarketDataResolver:
-    """market -> price service. US is intentionally absent: no adapter exists yet.
+def _default_cache() -> PriceBarCache:
+    """One cache object for every ladder in this process.
 
-    A market with no entry surfaces as ``insufficient_data`` with the reason
-    stated (see ``app/services/market.py``) rather than being served a
-    fabricated price.
+    They all address the same SQLite file anyway, and index series live in the
+    ``^``-prefixed key space no equity ticker can occupy (ADR-0005 constraint
+    I-7), so sharing costs nothing and keeps a single TTL policy.
     """
-    cache = PriceBarCache()
+    return PriceBarCache()
+
+
+@lru_cache(maxsize=1)
+def _default_yfinance() -> YFinanceAdapter:
+    """The one yfinance adapter, in both of its roles.
+
+    It is the US backup *and* the only index source (ADR-0005 決策一). One
+    instance means one ``RateLimitedClient``, so the client-side throttle
+    applies across both roles instead of each keeping its own budget against
+    the same host.
+    """
+    return YFinanceAdapter()
+
+
+@lru_cache(maxsize=1)
+def _default_resolver() -> MarketDataResolver:
+    """market -> price service, one degradation ladder per market.
+
+    TW: TWSE 主 + TPEx/FinMind 備援, ``cache_first`` **off**. Taiwan has no
+    comparable quota pressure and ADR-0005 constraint D-1 pins its behaviour
+    exactly as it was.
+
+    US: Alpha Vantage 主 + yfinance 備援, ``cache_first`` **on** -- the full
+    five-layer chain of ADR-0005 決策四 (TTL 內快取 -> AV -> yfinance -> 任何
+    快取 -> unavailable). Layer 0 is what stops a page reload from burning the
+    day's Alpha Vantage budget on a symbol fetched an hour ago.
+
+    Fail-closed is deliberate: with no ``ALPHA_VANTAGE_API_KEY`` the primary
+    declines without issuing a request, and if the backup cannot be reached
+    either, the ladder ends at ``unavailable`` carrying both reasons -- never
+    at a fabricated price. A market absent from this map has no adapter at all
+    and surfaces as ``insufficient_data`` (see ``app/services/market.py``).
+    """
+    cache = _default_cache()
     tw_service = MarketDataService(
         primary=TwseAdapter(),
         backups=[TpexAdapter(), FinMindAdapter()],
         cache=cache,
     )
-    return {"TW": tw_service}
+    us_service = MarketDataService(
+        primary=AlphaVantageAdapter(),
+        backups=[_default_yfinance()],
+        cache=cache,
+        cache_first=True,
+    )
+    return {"TW": tw_service, "US": us_service}
+
+
+@lru_cache(maxsize=1)
+def _default_index_resolver() -> IndexServiceResolver:
+    """index series market -> the service that can quote it.
+
+    The index path is assembled here and nowhere else: the yfinance adapter's
+    index method is bridged onto the provider contract
+    (:class:`IndexProviderBridge`), given the same cache and layer 0 as the US
+    ladder, and then presented through :class:`IndexSeriesService` so the
+    series can never be labelled ``fresh`` (ADR-0005 constraint I-3).
+
+    Alpha Vantage is absent by design -- it never participates in the index
+    path, so no index lookup can eat into the quota reserved for the symbols a
+    user actually holds. Both markets share one service; the market is only a
+    cache-key dimension, and which one an index belongs to is the adapter's
+    fact to state.
+    """
+    service = MarketDataService(
+        primary=IndexProviderBridge(_default_yfinance()),
+        cache=_default_cache(),
+        cache_first=True,
+    )
+    disclosed = IndexSeriesService(service)
+    return {"TW": disclosed, "US": disclosed}
 
 
 @lru_cache(maxsize=1)
@@ -93,6 +165,11 @@ def get_fx_provider() -> FxRateProvider:
 def get_market_resolver() -> MarketDataResolver:
     """Return the process-wide market -> price service map."""
     return _default_resolver()
+
+
+def get_index_resolver() -> IndexServiceResolver:
+    """Return the process-wide market -> index series service map."""
+    return _default_index_resolver()
 
 
 def get_settings_store() -> SettingsStore:

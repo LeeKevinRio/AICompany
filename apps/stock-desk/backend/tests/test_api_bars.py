@@ -132,3 +132,29 @@ def test_a_degraded_rung_is_disclosed(api_harness: ApiHarness) -> None:
     assert body["status"] == "ok"
     assert body["data"]["status"] == "cached_stale"
     assert body["data"]["staleness_minutes"] == 720
+
+
+def test_the_data_layers_own_reason_reaches_the_response(
+    api_harness: ApiHarness,
+) -> None:
+    """A spent quota and a missing API key must not both arrive as "no data"."""
+    api_harness.price_service.reason = "Alpha Vantage 今日查詢額度已用罄，請由備援來源接手。"
+    body = api_harness.client.get("/api/bars/9999").json()
+    assert body["status"] == "insufficient_data"
+    assert "額度已用罄" in body["reason"]
+    assert "額度已用罄" in body["data"]["reason"]
+    # And the endpoint's own sentence is still there, not replaced.
+    assert "沒有可用的日線資料" in body["reason"]
+
+
+def test_ttl_freshness_is_disclosed_beside_the_cached_status(
+    api_harness: ApiHarness,
+) -> None:
+    """ADR-0005 D-2: ``cached_stale`` alone cannot say how stale it really is."""
+    _seed(api_harness, count=40)
+    api_harness.price_service.status = DataStatus.CACHED_STALE
+    api_harness.price_service.staleness_minutes = 30
+    api_harness.price_service.is_within_ttl = True
+    body = api_harness.client.get("/api/bars/2330").json()
+    assert body["data"]["status"] == "cached_stale"
+    assert body["data"]["is_within_ttl"] is True

@@ -1,8 +1,9 @@
 """One market-aware bar loader for every consumer of price data.
 
-``MarketDataService`` is per-market (TW has a provider chain, US has none yet),
-so callers need a map from market to service plus a single, consistent answer
-for "there is no adapter for this market". :func:`load_bars` is that answer: it
+``MarketDataService`` is per-market -- each market has its own provider chain,
+and a market nobody has wired up has none -- so callers need a map from market
+to service plus a single, consistent answer for "there is no adapter for this
+market". :func:`load_bars` is that answer: it
 returns a :class:`LoadedBars` whose ``reason`` is a Traditional Chinese sentence
 the API can show verbatim, and never raises for an expected failure.
 
@@ -24,11 +25,30 @@ from app.portfolio.valuation import PriceService
 from app.positions.models import Market
 
 #: market -> the service that can quote it. A market absent from the map has no
-#: adapter at all (US today).
+#: adapter at all, and says so rather than being served a substitute.
 MarketDataResolver = Mapping[Market, PriceService]
 
 NO_ADAPTER_REASON = "目前沒有 {market} 市場的行情來源，無法取得日線資料。"
 NO_BARS_REASON = "{market} {symbol} 在指定區間內沒有可用的日線資料（主來源、備援與快取皆無）。"
+#: Prefix for the data layer's own sentence when it is appended to one of the
+#: reasons above.
+PROVIDER_REASON_PREFIX = "來源回報："
+
+
+def with_provider_reason(base: str, provider_reason: str | None) -> str:
+    """Append the data layer's own ``reason`` to this layer's sentence.
+
+    The two answer different questions and neither replaces the other: the base
+    sentence says *what* is missing in terms the endpoint's reader understands,
+    while ``ProviderResult.reason`` says *why this time* -- quota spent, API key
+    not configured, source unreachable, upstream that cannot tell "no such
+    ticker" from "no data today" apart. Dropping the second one (which is what
+    happened before this was wired) turns every distinct failure into the same
+    opaque sentence.
+    """
+    if not provider_reason:
+        return base
+    return f"{base}{PROVIDER_REASON_PREFIX}{provider_reason}"
 
 
 @dataclass(frozen=True)
@@ -40,6 +60,10 @@ class LoadedBars:
     source: str = "none"
     staleness_minutes: int | None = None
     reason: str | None = None
+    #: Only meaningful for ``cached_stale``: whether the cached data is still
+    #: inside its TTL (ADR-0005 決策四 / constraint D-2). ``None`` for every
+    #: live rung, where "within TTL" is not a question that applies.
+    is_within_ttl: bool | None = None
 
     def meta(self) -> dict[str, object]:
         """The ``data`` block echoed on every endpoint that loads bars."""
@@ -49,6 +73,7 @@ class LoadedBars:
             "status": self.status.value,
             "source": self.source,
             "staleness_minutes": self.staleness_minutes,
+            "is_within_ttl": self.is_within_ttl,
             "bar_count": len(self.bars),
             "first_bar_date": first.isoformat() if first is not None else None,
             "last_bar_date": last.isoformat() if last is not None else None,
@@ -74,11 +99,15 @@ def load_bars(
             status=result.status,
             source=result.source,
             staleness_minutes=result.staleness_minutes,
-            reason=NO_BARS_REASON.format(market=market, symbol=symbol),
+            is_within_ttl=result.is_within_ttl,
+            reason=with_provider_reason(
+                NO_BARS_REASON.format(market=market, symbol=symbol), result.reason
+            ),
         )
     return LoadedBars(
         bars=list(result.bars),
         status=result.status,
         source=result.source,
         staleness_minutes=result.staleness_minutes,
+        is_within_ttl=result.is_within_ttl,
     )
