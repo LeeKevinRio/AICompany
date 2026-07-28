@@ -62,4 +62,4 @@
 - 新增 / 修改 agent 後必跑 `python scripts/validate_agents.py`（CI 也會跑）：
   frontmatter 規格、name 唯一、tools 白名單、必要小節、唯讀角色權限、org-chart 同步，全綠才可 commit。
 - 共用長流程放 `.claude/skills/<name>/SKILL.md`：
-  `code-review-checklist`、`release-flow`、`data-source-integration`、`backtest-protocol`、`creative-masters`。
+  `code-review-checklist`、`release-flow`、`data-source-integration`、`backtest-protocol`、`creative-masters`、`art-outsource`。
