@@ -45,6 +45,8 @@ Art brief 固定格式（存 `work/<主題>-art-brief.md`）：
 ## 交接對象
 - 規範 → 交 frontend-engineer 實作、qa-e2e 作為視覺抽查依據。
 - 定稿 → 交 CEO 驗收。
+- 出圖工單(`art-outsource` skill)→ 交 CEO 執行出圖;成品回到你手上驗收,
+  驗收通過後交 frontend-engineer / dev-lead 接進產品。各段交接寫入任務單紀錄。
 
 ## 紅線
 - 絕不用截圖肉眼猜色值定規範，數值要明確。
