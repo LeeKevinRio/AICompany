@@ -183,6 +183,14 @@ export interface DataMeta {
   status: string;
   source: string;
   staleness_minutes: number | null;
+  /**
+   * Backend `DataMeta.is_within_ttl` (app/api/common.py). Only meaningful when
+   * `status === "cached_stale"`: `true` means the cached data is still inside
+   * its TTL and was served without calling any provider, `false` means it
+   * really is out of date. `null` on every live rung, where the question does
+   * not apply (ADR-0005 D-2).
+   */
+  is_within_ttl: boolean | null;
   bar_count: number;
   first_bar_date: string | null;
   last_bar_date: string | null;

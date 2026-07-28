@@ -87,6 +87,7 @@ export default function PositionDetailPage() {
               <DataMetaStatusBadge
                 status={bars.data.data.status}
                 stalenessMinutes={bars.data.data.staleness_minutes}
+                isWithinTtl={bars.data.data.is_within_ttl}
               />
             </span>
           )}

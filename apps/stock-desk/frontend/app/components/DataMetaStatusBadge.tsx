@@ -7,13 +7,22 @@
  * already carries `staleness_minutes` precomputed server-side, so no client
  * date math is needed here (unlike `DataStatusBadge`, which derives it from
  * `as_of`).
+ *
+ * `cached_stale` copy branches on `isWithinTtl` (ADR-0005 決策四 / D-2,
+ * wording finalized there): `true` means the cache is honestly "today's
+ * data, served from cache" and gets its own sentence; `false` or `null`
+ * (the field only ever applies to this one status, so `null` here means
+ * "unknown", not "not applicable") keeps the existing "資料延遲" wording.
+ * Neither branch may read as live.
  */
 export function DataMetaStatusBadge({
   status,
   stalenessMinutes,
+  isWithinTtl,
 }: {
   status: string;
   stalenessMinutes: number | null;
+  isWithinTtl: boolean | null;
 }) {
   switch (status) {
     case "fresh":
@@ -27,7 +36,9 @@ export function DataMetaStatusBadge({
     case "cached_stale":
       return (
         <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-          資料延遲{stalenessMinutes !== null ? ` ${stalenessMinutes} 分鐘` : ""}
+          {isWithinTtl === true
+            ? `本機快取（今日已更新，${stalenessMinutes ?? "—"} 分鐘前）`
+            : `資料延遲${stalenessMinutes !== null ? ` ${stalenessMinutes} 分鐘` : ""}`}
         </span>
       );
     case "unavailable":
