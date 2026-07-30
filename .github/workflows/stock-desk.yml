@@ -6,11 +6,13 @@ on:
     paths:
       - "apps/stock-desk/**"
       - ".github/workflows/stock-desk.yml"
+      - ".github/workflows/scripts/verify_stock_desk_compose.py"
   pull_request:
     branches: [product/stock-desk]
     paths:
       - "apps/stock-desk/**"
       - ".github/workflows/stock-desk.yml"
+      - ".github/workflows/scripts/verify_stock_desk_compose.py"
 
 jobs:
   backend:
@@ -32,7 +34,24 @@ jobs:
       - name: Mypy (strict)
         run: uv run mypy app tests
       - name: Pytest
-        run: uv run pytest
+        run: uv run pytest --cov=app --cov-report=term-missing
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/stock-desk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose syntax and interpolation
+        run: docker compose config > /dev/null
+      - name: Shared database guard
+        # Asserts backend and scheduler share one named volume, one mount
+        # path, and an identical STOCK_DESK_DB_PATH inside that mount.
+        # Without this, the scheduler writes a database the API never reads.
+        run: >
+          docker compose config --format json
+          | python3 "$GITHUB_WORKSPACE/.github/workflows/scripts/verify_stock_desk_compose.py"
 
   frontend:
     runs-on: ubuntu-latest
