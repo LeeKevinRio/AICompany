@@ -12,6 +12,7 @@ import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { PriceChart } from "./PriceChart";
 import { AdviceCardView } from "./AdviceCardView";
 import { LeverageChapterView } from "./LeverageChapterView";
+import { TechnicalIndicatorsPanel } from "./TechnicalIndicatorsPanel";
 
 function isMarket(value: string | null): value is Market {
   return value === "TW" || value === "US";
@@ -77,38 +78,81 @@ export default function PositionDetailPage() {
         </Link>
       </div>
 
-      {/* --- K-line + MA overlay ----------------------------------------- */}
+      {/*
+        --- Technical analysis (FR-C1 information architecture + FR-C2 indicator
+        surfacing) -----------------------------------------------------------
+        Two independently-loaded subsections under one heading, each with its
+        own DataMeta badge (bars vs signals are separate API calls — AC-C1.2 /
+        AC-C8.1): a failure or `insufficient_data` in one never blocks the
+        other. FR-C3/C4/C5 (fundamentals/chip/news) are not part of this batch
+        — their spikes (S-1/S-2/S-3) have not landed — so this section only
+        covers what FR-C2 asks for.
+      */}
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-neutral-100">日K線與均線</h2>
-          {bars.isSuccess && (
-            <span className="flex items-center text-xs text-neutral-500">
-              資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
-              <DataMetaStatusBadge
-                status={bars.data.data.status}
-                stalenessMinutes={bars.data.data.staleness_minutes}
-                isWithinTtl={bars.data.data.is_within_ttl}
+        <h2 className="text-lg font-semibold text-neutral-100">技術分析</h2>
+
+        {/* --- K-line + MA overlay ---------------------------------------- */}
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-neutral-200">日K線與均線</h3>
+            {bars.isSuccess && (
+              <span className="flex items-center text-xs text-neutral-500">
+                資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
+                <DataMetaStatusBadge
+                  status={bars.data.data.status}
+                  stalenessMinutes={bars.data.data.staleness_minutes}
+                  isWithinTtl={bars.data.data.is_within_ttl}
+                />
+              </span>
+            )}
+          </div>
+          {(bars.isPending || signals.isPending) && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
+          {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
+          {bars.isSuccess && bars.data.status === "insufficient_data" && (
+            <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
+          )}
+          {bars.isSuccess && bars.data.status === "ok" && (
+            <div className="mt-3">
+              <PriceChart
+                bars={bars.data.bars}
+                movingAverages={signals.data?.signals?.technical?.moving_averages}
               />
-            </span>
+              <p className="mt-2 text-xs text-neutral-500">
+                共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
+                {bars.data.data.last_bar_date ?? "—"}）。
+              </p>
+            </div>
           )}
         </div>
-        {(bars.isPending || signals.isPending) && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
-        {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
-        {bars.isSuccess && bars.data.status === "insufficient_data" && (
-          <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
-        )}
-        {bars.isSuccess && bars.data.status === "ok" && (
-          <div className="mt-3">
-            <PriceChart
-              bars={bars.data.bars}
-              movingAverages={signals.data?.signals?.technical?.moving_averages}
-            />
-            <p className="mt-2 text-xs text-neutral-500">
-              共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
-              {bars.data.data.last_bar_date ?? "—"}）。
-            </p>
+
+        {/* --- Technical indicators (new, FR-C2) --------------------------- */}
+        <div className="mt-8 border-t border-neutral-800 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-neutral-200">技術指標</h3>
+            {signals.isSuccess && (
+              <span className="flex items-center text-xs text-neutral-500">
+                資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
+                <DataMetaStatusBadge
+                  status={signals.data.data.status}
+                  stalenessMinutes={signals.data.data.staleness_minutes}
+                  isWithinTtl={signals.data.data.is_within_ttl}
+                />
+              </span>
+            )}
           </div>
-        )}
+          {signals.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
+          {signals.isError && (
+            <div className="mt-3"><ErrorPanel label="無法載入技術指標" error={signals.error} /></div>
+          )}
+          {signals.isSuccess && signals.data.status === "insufficient_data" && (
+            <div className="mt-3"><InsufficientPanel reason={signals.data.reason} /></div>
+          )}
+          {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
+            <div className="mt-3">
+              <TechnicalIndicatorsPanel payload={signals.data.signals} />
+            </div>
+          )}
+        </div>
       </section>
 
       {/* --- Advice card ----------------------------------------------- */}
