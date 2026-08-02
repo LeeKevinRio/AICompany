@@ -138,6 +138,8 @@
 
 **建議負責角色**：CEO（業務決策）/ risk-compliance-officer（風控詢價）+ dev-lead（技術整合）。
 
+**進度更新（2026-08-02）**：Phase 8 FR-9 採解法方向 2（手動輸入帳戶總淨值）。六個前置問題已由 risk-compliance-officer 書面定案（分母選項 B、30 天失效／7 天提示、三檔防呆不靜默 clamp、僅存最新一筆、不新增絕對金額界、只收 TWD），全文見 `work/stock-desk-phase8-風控定調.md`，FR-9 前置閘門解除。
+
 ---
 
 ### 7. 外幣 FX 風控層未接線
