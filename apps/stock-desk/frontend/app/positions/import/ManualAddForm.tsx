@@ -66,7 +66,7 @@ export function ManualAddForm() {
       quantity: form.quantity.trim(),
       avg_cost: form.avg_cost.trim(),
       currency: form.currency,
-      opened_at: form.opened_at.trim(),
+      opened_at: form.opened_at.trim() === "" ? null : form.opened_at.trim(),
       note: form.note.trim() === "" ? null : form.note.trim(),
     };
     createMutation.mutate(payload, {
@@ -196,12 +196,11 @@ export function ManualAddForm() {
 
         <div>
           <label htmlFor="opened_at" className="block text-sm text-neutral-400">
-            {FIELD_LABELS.opened_at}
+            {FIELD_LABELS.opened_at}（選填）
           </label>
           <input
             id="opened_at"
             type="date"
-            required
             value={form.opened_at}
             onChange={(e) => updateField("opened_at", e.target.value)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"

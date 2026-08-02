@@ -78,6 +78,21 @@ class LeverageChapterConfig:
 def _holding_block(position: Position, etf_bars: list[PriceBar]) -> dict[str, Any]:
     """Holding duration measured from ``opened_at`` against available bars."""
     opened_at = position.opened_at
+    if opened_at is None:
+        # No open date was stated, so no duration can be measured. The window
+        # the other blocks use is reported as-is; the "since opened_at" counts
+        # stay null rather than being filled from an assumed date.
+        all_bars = sorted(bar.date for bar in etf_bars)
+        return {
+            "status": "insufficient_data",
+            "opened_at": None,
+            "first_bar_date": all_bars[0].isoformat() if all_bars else None,
+            "last_bar_date": all_bars[-1].isoformat() if all_bars else None,
+            "bars_since_opened_at": None,
+            "holding_trading_days": None,
+            "holding_days": None,
+            "reason": "未填寫建倉日期，無法計算持有天數；拆解改以全部可用日線為窗。",
+        }
     held = sorted(bar.date for bar in etf_bars if bar.date >= opened_at)
     if not held:
         return {

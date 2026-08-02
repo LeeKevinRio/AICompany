@@ -29,7 +29,8 @@ FX on the price move and asset at original FX -- would also sum to total; we
 fix this one so the attribution is deterministic and testable.)
 
 Any missing input (no price adapter for the market, no cached/live price, no
-FX rate on or before the open date within the lookback window) yields
+open date to price F0 at, no FX rate on or before the open date within the
+lookback window) yields
 ``status = insufficient_data`` with the affected outputs left null. Nothing is
 ever interpolated or fabricated.
 """
@@ -255,7 +256,13 @@ class PositionValuator:
         fx_now = self._latest_fx_on_or_before(pair, today)
         if fx_now is None:
             missing.append("fx_now")
-        fx_open = self._latest_fx_on_or_before(pair, position.opened_at)
+        # Without an open date there is no date to price F0 at, and no rate is
+        # substituted for it: the position reports insufficient_data instead.
+        fx_open = (
+            None
+            if position.opened_at is None
+            else self._latest_fx_on_or_before(pair, position.opened_at)
+        )
         if fx_open is None:
             missing.append("fx_open")
         return fx_open, fx_now

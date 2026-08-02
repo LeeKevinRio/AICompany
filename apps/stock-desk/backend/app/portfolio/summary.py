@@ -48,7 +48,8 @@ class SummaryPosition(BaseModel):
     avg_cost: Decimal
     currency: Currency
     instrument_type: InstrumentType
-    opened_at: str
+    #: ``None`` when the user did not state an open date.
+    opened_at: str | None
     note: str | None
     valuation: Valuation
 
@@ -118,7 +119,9 @@ def _to_summary_position(position: Position, valuation: Valuation) -> SummaryPos
         avg_cost=position.avg_cost,
         currency=position.currency,
         instrument_type=position.instrument_type,
-        opened_at=position.opened_at.isoformat(),
+        opened_at=(
+            position.opened_at.isoformat() if position.opened_at is not None else None
+        ),
         note=position.note,
         valuation=valuation,
     )

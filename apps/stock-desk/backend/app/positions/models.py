@@ -41,7 +41,10 @@ class PositionInput(BaseModel):
     quantity: Decimal
     avg_cost: Decimal
     currency: Currency
-    opened_at: date
+    #: Optional: the user may not remember when the holding was opened. ``None``
+    #: means "not stated" and is never replaced by a guessed date; downstream
+    #: figures that need an open date report ``None`` instead.
+    opened_at: date | None = None
     instrument_type: InstrumentType
     note: str | None = None
 
@@ -68,8 +71,8 @@ class PositionInput(BaseModel):
 
     @field_validator("opened_at")
     @classmethod
-    def _opened_at_must_not_be_in_future(cls, value: date) -> date:
-        if value > datetime.now(UTC).date():
+    def _opened_at_must_not_be_in_future(cls, value: date | None) -> date | None:
+        if value is not None and value > datetime.now(UTC).date():
             raise ValueError("建倉日期不可晚於今天")
         return value
 

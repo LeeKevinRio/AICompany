@@ -84,7 +84,14 @@ def store(tmp_path: Path) -> PositionStore:
     return PositionStore(db_path=tmp_path / "positions.db")
 
 
-def _seed(store: PositionStore, *, market: Market, currency: Currency, symbol: str) -> None:
+def _seed(
+    store: PositionStore,
+    *,
+    market: Market,
+    currency: Currency,
+    symbol: str,
+    opened_at: date | None = date(2024, 1, 15),
+) -> None:
     store.create(
         PositionInput(
             symbol=symbol,
@@ -92,7 +99,7 @@ def _seed(store: PositionStore, *, market: Market, currency: Currency, symbol: s
             quantity=Decimal("100") if market == "TW" else Decimal("10"),
             avg_cost=Decimal("500") if market == "TW" else Decimal("100"),
             currency=currency,
-            opened_at=date(2024, 1, 15),
+            opened_at=opened_at,
             instrument_type="stock",
             note=None,
         ),
@@ -165,6 +172,22 @@ def test_summary_no_data_when_nothing_valued(store: PositionStore) -> None:
         _teardown()
     assert body["totals"]["status"] == "no_data"
     assert body["positions"][0]["valuation"]["status"] == "insufficient_data"
+
+
+def test_summary_reports_null_opened_at_without_blocking_valuation(
+    store: PositionStore,
+) -> None:
+    # A TWD position needs no open date to be valued; the field is echoed back
+    # as null rather than as a stand-in date.
+    _seed(store, market="TW", currency="TWD", symbol="2330", opened_at=None)
+    valuator = _make_valuator({"2330": "550"}, {})
+    client = _wire(store, valuator)
+    try:
+        body = client.get("/api/portfolio/summary").json()
+    finally:
+        _teardown()
+    assert body["totals"]["status"] == "complete"
+    assert body["positions"][0]["opened_at"] is None
 
 
 def test_summary_amounts_serialize_as_strings(store: PositionStore) -> None:

@@ -87,6 +87,33 @@ def test_create_future_opened_at_returns_422(client: TestClient) -> None:
     assert ("body", "opened_at") in locs
 
 
+def test_create_without_opened_at_returns_201_with_null(client: TestClient) -> None:
+    payload = _valid_payload()
+    del payload["opened_at"]
+    response = client.post("/api/positions", json=payload)
+    assert response.status_code == 201
+    assert response.json()["opened_at"] is None
+    # It survives the round trip through SQLite as a null, not a placeholder.
+    assert client.get("/api/positions").json()["items"][0]["opened_at"] is None
+
+
+def test_create_with_explicit_null_opened_at_returns_201(client: TestClient) -> None:
+    payload = _valid_payload()
+    payload["opened_at"] = None
+    response = client.post("/api/positions", json=payload)
+    assert response.status_code == 201
+    assert response.json()["opened_at"] is None
+
+
+def test_update_can_clear_opened_at(client: TestClient) -> None:
+    created = client.post("/api/positions", json=_valid_payload()).json()
+    payload = _valid_payload()
+    payload["opened_at"] = None
+    response = client.put(f"/api/positions/{created['id']}", json=payload)
+    assert response.status_code == 200
+    assert response.json()["opened_at"] is None
+
+
 def test_update_existing_position(client: TestClient) -> None:
     created = client.post("/api/positions", json=_valid_payload()).json()
     payload = _valid_payload()
@@ -138,6 +165,40 @@ def test_import_valid_and_invalid_rows(client: TestClient) -> None:
     assert (5, "opened_at") in error_rows
     # The one good row was still stored despite the bad rows around it.
     assert len(client.get("/api/positions").json()["items"]) == 1
+
+
+def test_import_accepts_blank_opened_at(client: TestClient) -> None:
+    csv_text = (
+        "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,note\n"
+        "2330,TW,1000,600.5,TWD,,stock,沒填建倉日\n"  # row 2: blank open date
+        "0050,TW,500,50,TWD,   ,etf,只有空白\n"  # row 3: whitespace only
+    )
+    response = client.post(
+        "/api/positions/import",
+        files={"file": ("positions.csv", csv_text, "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 2
+    assert body["errors"] == []
+    items = client.get("/api/positions").json()["items"]
+    assert [item["opened_at"] for item in items] == [None, None]
+
+
+def test_import_still_rejects_malformed_and_future_opened_at(client: TestClient) -> None:
+    csv_text = (
+        "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,note\n"
+        "2330,TW,1000,600.5,TWD,2024/01/02,stock,bad format\n"  # row 2
+        "0050,TW,500,50,TWD,2999-01-01,etf,future\n"  # row 3
+    )
+    body = client.post(
+        "/api/positions/import",
+        files={"file": ("positions.csv", csv_text, "text/csv")},
+    ).json()
+    assert body["imported"] == 0
+    reasons = {err["row"]: err["reason"] for err in body["errors"]}
+    assert "YYYY-MM-DD" in reasons[2]
+    assert reasons[3] == "建倉日期不可晚於今天"
 
 
 def test_import_reports_chinese_reasons(client: TestClient) -> None:

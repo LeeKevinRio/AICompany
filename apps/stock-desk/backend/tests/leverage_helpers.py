@@ -21,7 +21,7 @@ def make_position(
     symbol: str = "00631L",
     instrument_type: InstrumentType = "leveraged_etf",
     market: Market = "TW",
-    opened_at: date = BASE_DATE,
+    opened_at: date | None = BASE_DATE,
     quantity: str = "1000",
     avg_cost: str = "50",
 ) -> Position:

@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import type { PnlOriginal, SummaryPositionItem } from "../lib/types";
 import {
   formatDateTime,
@@ -7,7 +10,10 @@ import {
   marketLabel,
   pnlColorClass,
 } from "../lib/format";
+import { ApiError } from "../lib/api";
+import { useDeletePosition } from "../lib/queries";
 import { DataStatusBadge } from "./DataStatusBadge";
+import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
 
 const COLUMN_HEADERS = [
@@ -16,11 +22,13 @@ const COLUMN_HEADERS = [
   "類型",
   "數量",
   "平均成本（原幣）",
+  "建倉日期",
   "現價",
   "原幣損益",
   "台幣損益",
   "標的貢獻",
   "匯率貢獻",
+  "操作",
 ];
 
 // NOTE: price/pnl_original/pnl_twd/asset_contribution_twd/fx_contribution_twd
@@ -78,68 +86,120 @@ function MoneyOrDash({
 }
 
 export function PositionsTable({ positions }: { positions: SummaryPositionItem[] }) {
+  const [editingPosition, setEditingPosition] = useState<SummaryPositionItem | null>(null);
+  const deleteMutation = useDeletePosition();
+
   if (positions.length === 0) {
     return <EmptyPositionsState />;
   }
 
+  function handleDelete(position: SummaryPositionItem) {
+    const confirmed = window.confirm(
+      `確定刪除 ${position.symbol} 的持倉？此動作無法復原。`,
+    );
+    if (!confirmed) return;
+    deleteMutation.mutate(position.id);
+  }
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-neutral-800">
-      <table className="w-full min-w-[880px] text-left text-sm">
-        <caption className="sr-only">持倉明細表</caption>
-        <thead className="bg-neutral-900 text-neutral-400">
-          <tr>
-            {COLUMN_HEADERS.map((header) => (
-              <th key={header} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position) => (
-            <tr key={position.id} className="border-t border-neutral-800">
-              <td className="whitespace-nowrap px-3 py-2 font-medium text-neutral-100">
-                {position.symbol}
-              </td>
-              <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                {marketLabel(position.market)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                {instrumentTypeLabel(position.instrument_type)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                {formatQuantity(position.quantity)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                {formatMoney(position.avg_cost, position.currency, 2)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-2">
-                <PriceCell position={position} />
-              </td>
-              <td className="whitespace-nowrap px-3 py-2">
-                <PnlOriginalCell pnlOriginal={position.valuation.pnl_original} />
-              </td>
-              <td className="whitespace-nowrap px-3 py-2">
-                <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
-              </td>
-              <td className="whitespace-nowrap px-3 py-2">
-                <MoneyOrDash
-                  value={position.valuation.asset_contribution_twd}
-                  currency="TWD"
-                  decimals={0}
-                />
-              </td>
-              <td className="whitespace-nowrap px-3 py-2">
-                <MoneyOrDash
-                  value={position.valuation.fx_contribution_twd}
-                  currency="TWD"
-                  decimals={0}
-                />
-              </td>
+    <div>
+      {deleteMutation.isError && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300"
+        >
+          刪除失敗：
+          {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "未知錯誤"}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-lg border border-neutral-800">
+        <table className="w-full min-w-[980px] text-left text-sm">
+          <caption className="sr-only">持倉明細表</caption>
+          <thead className="bg-neutral-900 text-neutral-400">
+            <tr>
+              {COLUMN_HEADERS.map((header) => (
+                <th key={header} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">
+                  {header}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {positions.map((position) => (
+              <tr key={position.id} className="border-t border-neutral-800">
+                <td className="whitespace-nowrap px-3 py-2 font-medium text-neutral-100">
+                  {position.symbol}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
+                  {marketLabel(position.market)}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
+                  {instrumentTypeLabel(position.instrument_type)}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
+                  {formatQuantity(position.quantity)}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
+                  {formatMoney(position.avg_cost, position.currency, 2)}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
+                  {position.opened_at ?? "—"}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <PriceCell position={position} />
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <PnlOriginalCell pnlOriginal={position.valuation.pnl_original} />
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <MoneyOrDash
+                    value={position.valuation.asset_contribution_twd}
+                    currency="TWD"
+                    decimals={0}
+                  />
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <MoneyOrDash
+                    value={position.valuation.fx_contribution_twd}
+                    currency="TWD"
+                    decimals={0}
+                  />
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingPosition(position)}
+                      aria-label={`編輯 ${position.symbol} 持倉`}
+                      className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    >
+                      編輯
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(position)}
+                      disabled={deleteMutation.isPending && deleteMutation.variables === position.id}
+                      aria-label={`刪除 ${position.symbol} 持倉`}
+                      className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deleteMutation.isPending && deleteMutation.variables === position.id
+                        ? "刪除中…"
+                        : "刪除"}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {editingPosition && (
+        <EditPositionModal position={editingPosition} onClose={() => setEditingPosition(null)} />
+      )}
     </div>
   );
 }

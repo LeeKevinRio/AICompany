@@ -26,7 +26,7 @@ def _position(
     currency: Currency = "USD",
     quantity: str = "10",
     avg_cost: str = "100",
-    opened_at: date = date(2024, 1, 15),
+    opened_at: date | None = date(2024, 1, 15),
     instrument_type: InstrumentType = "stock",
     symbol: str = "AAPL",
 ) -> Position:
@@ -190,6 +190,40 @@ def test_fx_open_backtracks_within_seven_days() -> None:
     result = valuator.value_position(_position())
     assert result.valuation.status == "ok"
     assert result.valuation.fx_contribution_twd == Decimal("-1500")
+
+
+def test_foreign_position_without_opened_at_is_missing_fx_open() -> None:
+    # No open date means no date to price F0 at; no rate is substituted, so the
+    # TWD conversion is refused while the original-currency P&L still stands.
+    services: dict[Market, PriceService] = {"US": _FakePriceService("110")}
+    valuator = _valuator(
+        services=services,
+        fx={"USDTWD": [(date(2024, 1, 15), "31.5"), (date(2024, 3, 20), "30.0")]},
+    )
+    result = valuator.value_position(_position(opened_at=None))
+    assert result.valuation.status == "insufficient_data"
+    assert result.valuation.missing == ["fx_open"]
+    assert result.valuation.pnl_twd is None
+    assert result.valuation.pnl_original is not None
+    assert result.cost_twd is None
+
+
+def test_twd_position_without_opened_at_is_still_ok() -> None:
+    # A TWD position needs no FX rate at all, so a missing open date changes
+    # nothing about its valuation.
+    services: dict[Market, PriceService] = {"TW": _FakePriceService("550")}
+    valuator = _valuator(services=services, fx={})
+    position = _position(
+        market="TW",
+        currency="TWD",
+        avg_cost="500",
+        quantity="100",
+        symbol="2330",
+        opened_at=None,
+    )
+    result = valuator.value_position(position)
+    assert result.valuation.status == "ok"
+    assert result.valuation.pnl_twd == Decimal("5000")
 
 
 def test_price_unavailable_status_is_missing_price() -> None:

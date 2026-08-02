@@ -62,7 +62,9 @@ def _pick_position(store: PositionStore, symbol: str, market: Market) -> Positio
     """The earliest-opened holding of ``symbol`` in ``market``, or ``None``.
 
     Earliest-opened is the conservative choice: it yields the longest holding
-    window, which is the one whose compounding drag the chapter is about.
+    window, which is the one whose compounding drag the chapter is about. A
+    holding with no stated open date is not truncated at all, so it spans the
+    longest window of any and sorts first under the same rule.
     """
     wanted = symbol.strip().upper()
     matches = [
@@ -72,7 +74,7 @@ def _pick_position(store: PositionStore, symbol: str, market: Market) -> Positio
     ]
     if not matches:
         return None
-    return min(matches, key=lambda position: (position.opened_at, position.id))
+    return min(matches, key=lambda position: (position.opened_at or date.min, position.id))
 
 
 @router.get("/{symbol}", response_model=LeverageResponse)

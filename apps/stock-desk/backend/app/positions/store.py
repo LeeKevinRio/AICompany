@@ -23,21 +23,28 @@ from typing import Any
 from app.data.cache import resolve_db_path
 from app.positions.models import Position, PositionInput
 
-_CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS positions (
+#: Parameterised by table name so the schema migration can build the
+#: replacement table from the exact same definition as the live one.
+_CREATE_TABLE_SQL_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS {table} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
     market TEXT NOT NULL,
     quantity TEXT NOT NULL,
     avg_cost TEXT NOT NULL,
     currency TEXT NOT NULL,
-    opened_at TEXT NOT NULL,
+    opened_at TEXT,
     instrument_type TEXT NOT NULL,
     note TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )
 """
+
+_CREATE_TABLE_SQL = _CREATE_TABLE_SQL_TEMPLATE.format(table="positions")
+
+#: Scratch table used only while rebuilding ``positions`` (see the migration).
+_MIGRATION_TABLE = "positions_opened_at_nullable"
 
 _COLUMNS = (
     "id",
@@ -54,6 +61,38 @@ _COLUMNS = (
 )
 
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
+
+
+def _opened_at_to_db(opened_at: date | None) -> str | None:
+    """Store an unstated open date as SQL NULL, never as a placeholder date."""
+    return None if opened_at is None else opened_at.isoformat()
+
+
+def _migrate_opened_at_to_nullable(conn: sqlite3.Connection) -> None:
+    """Drop the legacy ``opened_at TEXT NOT NULL`` constraint if still present.
+
+    Databases created before the open date became optional declare the column
+    ``NOT NULL``, and SQLite cannot drop a column constraint in place. The
+    documented workaround is to rebuild: create the table under its new
+    definition, copy every row over, drop the old one and rename. This table
+    has no indexes, triggers or foreign keys, so those steps are all it needs.
+
+    Runs inside the caller's transaction and is a no-op once migrated, so it is
+    safe to call on every startup.
+    """
+    columns = conn.execute("PRAGMA table_info(positions)").fetchall()
+    # PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk)
+    legacy = any(column[1] == "opened_at" and column[3] for column in columns)
+    if not legacy:
+        return
+    conn.execute(f"DROP TABLE IF EXISTS {_MIGRATION_TABLE}")  # leftover of a crash
+    conn.execute(_CREATE_TABLE_SQL_TEMPLATE.format(table=_MIGRATION_TABLE))
+    conn.execute(
+        f"INSERT INTO {_MIGRATION_TABLE} ({_SELECT_COLUMNS}) "
+        f"SELECT {_SELECT_COLUMNS} FROM positions"
+    )
+    conn.execute("DROP TABLE positions")
+    conn.execute(f"ALTER TABLE {_MIGRATION_TABLE} RENAME TO positions")
 
 
 class PositionStore:
@@ -77,6 +116,7 @@ class PositionStore:
         with closing(self._connect()) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
+            _migrate_opened_at_to_nullable(conn)
 
     def list_all(self) -> list[Position]:
         """Return every stored position, ordered by id ascending."""
@@ -114,7 +154,7 @@ class PositionStore:
                     str(data.quantity),
                     str(data.avg_cost),
                     data.currency,
-                    data.opened_at.isoformat(),
+                    _opened_at_to_db(data.opened_at),
                     data.instrument_type,
                     data.note,
                     moment,
@@ -150,7 +190,7 @@ class PositionStore:
                     str(data.quantity),
                     str(data.avg_cost),
                     data.currency,
-                    data.opened_at.isoformat(),
+                    _opened_at_to_db(data.opened_at),
                     data.instrument_type,
                     data.note,
                     moment,
@@ -193,7 +233,7 @@ class PositionStore:
             quantity=Decimal(str(quantity)),
             avg_cost=Decimal(str(avg_cost)),
             currency=currency,
-            opened_at=date.fromisoformat(str(opened_at)),
+            opened_at=None if opened_at is None else date.fromisoformat(str(opened_at)),
             instrument_type=instrument_type,
             note=None if note is None else str(note),
             created_at=datetime.fromisoformat(str(created_at)),

@@ -6,6 +6,7 @@ import {
   createAlert,
   createPosition,
   deleteAlert,
+  deletePosition,
   evaluateAlertsNow,
   getAdvice,
   getAlertEvents,
@@ -19,6 +20,7 @@ import {
   getSignals,
   importPositionsCsv,
   runBacktest,
+  updatePosition,
   updateSettings,
 } from "./api";
 import type {
@@ -27,6 +29,7 @@ import type {
   BacktestRequest,
   CreatePositionInput,
   Market,
+  UpdatePositionInput,
 } from "./types";
 
 export function useHealth() {
@@ -60,6 +63,29 @@ export function useCreatePosition() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreatePositionInput) => createPosition(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["positions"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+    },
+  });
+}
+
+export function useUpdatePosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number; input: UpdatePositionInput }) =>
+      updatePosition(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["positions"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+    },
+  });
+}
+
+export function useDeletePosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deletePosition(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });

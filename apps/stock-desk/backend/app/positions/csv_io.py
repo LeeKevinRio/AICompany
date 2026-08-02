@@ -176,7 +176,7 @@ def _parse_row(
             quantity=quantity,  # type: ignore[arg-type]
             avg_cost=avg_cost,  # type: ignore[arg-type]
             currency=_as_currency(currency),
-            opened_at=opened_at,  # type: ignore[arg-type]
+            opened_at=opened_at,
             instrument_type=_as_instrument_type(instrument_type),
             note=note,
         ),
@@ -207,8 +207,12 @@ def _parse_positive_decimal(
 def _parse_opened_at(
     raw: str, today: date, fail: Callable[[str, str], None]
 ) -> date | None:
+    """Parse the optional open date; a blank cell means "not stated".
+
+    Returns ``None`` both for a blank cell and for a rejected value, which the
+    caller tells apart by whether ``fail`` recorded an error for the row.
+    """
     if not raw:
-        fail("opened_at", "建倉日期不可空白")
         return None
     try:
         parsed = date.fromisoformat(raw)

@@ -40,7 +40,9 @@ export interface PositionInput {
   quantity: string;
   avg_cost: string;
   currency: Currency;
-  opened_at: string; // date, e.g. "2026-07-24"
+  // Optional (app/positions/models.py `opened_at: date | None`): a date
+  // string e.g. "2026-07-24", or `null` when left blank on the form.
+  opened_at: string | null;
   instrument_type: InstrumentType;
   note: string | null;
 }
@@ -108,7 +110,7 @@ export interface SummaryPositionItem {
   avg_cost: string;
   currency: Currency;
   instrument_type: InstrumentType;
-  opened_at: string;
+  opened_at: string | null;
   note: string | null;
   valuation: PositionValuation;
 }

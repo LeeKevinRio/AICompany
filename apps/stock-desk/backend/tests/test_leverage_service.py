@@ -27,7 +27,7 @@ def _chapter(
     symbol: str = "00675L",
     instrument_type: InstrumentType = "leveraged_etf",
     with_index: bool = True,
-    opened_at: date = date(2024, 1, 1),
+    opened_at: date | None = date(2024, 1, 1),
     config: S.LeverageChapterConfig | None = None,
 ) -> dict[str, Any]:
     index_closes = _index_closes()
@@ -208,6 +208,32 @@ def test_partial_status_when_only_one_block_computes() -> None:
     assert chapter["drag"]["status"] == "insufficient_data"
     assert chapter["erosion"]["status"] == "ok"
     assert chapter["chapter_status"] == "partial"
+
+
+def test_without_opened_at_the_window_is_untruncated_and_dates_are_null() -> None:
+    # No open date stated: the decomposition runs over every available bar
+    # (same numbers as opening on the first one), and every "since opened_at"
+    # figure is reported as null instead of being filled from a guessed date.
+    chapter = _chapter(opened_at=None)
+    baseline = _chapter(opened_at=date(2024, 1, 1))
+
+    holding = chapter["holding"]
+    assert holding["opened_at"] is None
+    assert holding["bars_since_opened_at"] is None
+    assert holding["holding_trading_days"] is None
+    assert holding["holding_days"] is None
+    assert holding["reason"] is not None
+    # The bars actually available are still stated honestly.
+    assert holding["first_bar_date"] == "2024-01-01"
+    assert holding["last_bar_date"] == baseline["holding"]["last_bar_date"]
+
+    drag = chapter["drag"]
+    assert drag["status"] == "ok"
+    assert drag["window"]["opened_at"] is None
+    assert drag["window"]["days_since_opened_at"] is None
+    assert drag["window"]["aligned_bars"] == baseline["drag"]["window"]["aligned_bars"]
+    assert drag["actual_return"] == baseline["drag"]["actual_return"]
+    assert chapter["chapter_status"] == "ok"
 
 
 def test_holding_block_insufficient_when_no_bars_after_open() -> None:
