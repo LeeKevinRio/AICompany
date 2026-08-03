@@ -34,7 +34,7 @@ jobs:
       - name: Mypy (strict)
         run: uv run mypy app tests
       - name: Pytest
-        run: uv run pytest --cov=app --cov-report=term-missing
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
 
   compose-validate:
     runs-on: ubuntu-latest

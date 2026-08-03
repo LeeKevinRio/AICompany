@@ -22,11 +22,13 @@ from app.api.deps import (
     get_index_resolver,
     get_market_resolver,
     get_position_store,
+    get_quota_ledger,
     get_settings_store,
     get_valuator,
 )
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
+from app.data.quota import QuotaLedger
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
@@ -46,6 +48,9 @@ class ApiHarness:
     alerts: AlertStore
     settings: SettingsStore
     fx_provider: FxRateProvider
+    #: Temp-directory ledger; a test reserves against it to drive the
+    #: data-source block of ``GET /api/settings``.
+    quota: QuotaLedger
 
 
 @pytest.fixture
@@ -81,6 +86,7 @@ def api_harness(
     positions = PositionStore(db_path=tmp_path / "positions.db")
     alerts = AlertStore(db_path=tmp_path / "alerts.db")
     settings = SettingsStore(db_path=tmp_path / "settings.db")
+    quota = QuotaLedger(db_path=tmp_path / "quota.db")
     valuator = PositionValuator(
         market_services={"TW": price_service},
         fx_provider=fx_provider,
@@ -96,6 +102,7 @@ def api_harness(
         "US": index_service,
     }
     app.dependency_overrides[get_fx_provider] = lambda: fx_provider
+    app.dependency_overrides[get_quota_ledger] = lambda: quota
 
     with TestClient(app) as test_client:
         yield ApiHarness(
@@ -106,6 +113,7 @@ def api_harness(
             alerts=alerts,
             settings=settings,
             fx_provider=fx_provider,
+            quota=quota,
         )
     app.dependency_overrides.clear()
 

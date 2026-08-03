@@ -19,6 +19,7 @@ from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateProvider
 from app.data.providers.tpex import TpexAdapter
 from app.data.providers.twse import TwseAdapter
 from app.data.providers.yfinance import YFinanceAdapter
+from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
@@ -147,6 +148,18 @@ def _default_alert_store() -> AlertStore:
     return AlertStore()
 
 
+@lru_cache(maxsize=1)
+def _default_quota_ledger() -> QuotaLedger:
+    """The ledger the API reads for observability only.
+
+    A separate object from the one inside :class:`AlphaVantageAdapter`, but the
+    same database file (both resolve ``STOCK_DESK_DB_PATH``): the ledger keeps
+    no in-process state, so two handles observe one counter -- which is the
+    whole point of ADR-0005 決策三 方案 C.
+    """
+    return QuotaLedger()
+
+
 def get_position_store() -> PositionStore:
     """Return the process-wide position store."""
     return _default_store()
@@ -180,3 +193,8 @@ def get_settings_store() -> SettingsStore:
 def get_alert_store() -> AlertStore:
     """Return the process-wide alert store."""
     return _default_alert_store()
+
+
+def get_quota_ledger() -> QuotaLedger:
+    """Return the process-wide provider quota ledger."""
+    return _default_quota_ledger()

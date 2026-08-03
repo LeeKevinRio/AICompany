@@ -22,6 +22,7 @@ from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import PositionInput
 from app.positions.store import PositionStore
+from app.services.fx import source_note
 from tests.api_helpers import (
     FakePriceService,
     UnavailableFxProvider,
@@ -126,3 +127,41 @@ def test_a_foreign_holding_with_a_rate_states_the_rate_it_used(
     assert "USDTWD" in reason
     assert "31.5" in reason
     assert "fresh" in reason
+    # ADR-0005 F-4: the source's standing disclosure must ride along with the
+    # rate wherever it is used. An alert has no notes list of its own, so a
+    # foreign-currency holding would otherwise be alerted on a TWD figure
+    # derived from a model mid-point without the reader ever being told.
+    assert source_note(StubFxProvider.source_id) in reason
+
+
+def test_the_fx_disclosure_reaches_a_fired_alert_on_a_foreign_holding(
+    store: PositionStore,
+) -> None:
+    # The snapshot is the only carrier of that sentence into the alert path, so
+    # this pins it at the boundary the engine actually reads.
+    _hold(store, "USD")
+    snapshot = _snapshot(store, currency="USD", fx_provider=StubFxProvider())
+    assert snapshot.close is not None
+    assert "即期買賣中點" in (snapshot.reason or "")
+
+
+def test_a_twd_holding_is_not_given_an_fx_disclosure_it_did_not_use(
+    store: PositionStore,
+) -> None:
+    # No conversion happened, so there is no rate methodology to disclose;
+    # padding every snapshot with the sentence would train the reader to skip it.
+    _hold(store, "TWD")
+    snapshot = _snapshot(store, currency="TWD", fx_provider=StubFxProvider())
+    assert snapshot.reason is None
+
+
+def test_an_unusable_rate_says_so_without_claiming_a_methodology(
+    store: PositionStore,
+) -> None:
+    # The disclosure describes a rate that was applied; when none was, the
+    # reason must stay on the missing conversion instead.
+    _hold(store, "USD")
+    snapshot = _snapshot(store, currency="USD", fx_provider=UnavailableFxProvider())
+    reason = snapshot.reason or ""
+    assert "無法取得匯率換算" in reason
+    assert source_note(UnavailableFxProvider.source_id) not in reason

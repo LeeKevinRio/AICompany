@@ -29,6 +29,7 @@ _CACHED = (
     deps._default_valuator,
     deps._default_settings_store,
     deps._default_alert_store,
+    deps._default_quota_ledger,
 )
 
 
@@ -48,6 +49,7 @@ def test_every_provider_is_memoized_per_process(isolated_deps: None) -> None:
     assert deps.get_alert_store() is deps.get_alert_store()
     assert deps.get_valuator() is deps.get_valuator()
     assert deps.get_market_resolver() is deps.get_market_resolver()
+    assert deps.get_quota_ledger() is deps.get_quota_ledger()
 
 
 def test_stores_land_on_the_configured_database_path(
@@ -57,6 +59,9 @@ def test_stores_land_on_the_configured_database_path(
     assert deps.get_position_store().db_path == expected
     assert deps.get_settings_store().db_path == expected
     assert deps.get_alert_store().db_path == expected
+    # The quota ledger must land on the *same* file: the counter is only
+    # cross-process if the API and the scheduler address one database.
+    assert deps.get_quota_ledger().db_path == expected
     # And the default is a relative project path, not an absolute system one.
     assert DEFAULT_DB_PATH.startswith("./")
 

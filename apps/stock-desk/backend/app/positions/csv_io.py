@@ -20,6 +20,8 @@ from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel
 
 from app.positions.models import (
+    INDEX_SYMBOL_PREFIX,
+    INDEX_SYMBOL_REJECTED_MESSAGE,
     Currency,
     InstrumentType,
     Market,
@@ -135,6 +137,13 @@ def _parse_row(
     symbol = _cell(raw_row, index_of, "symbol")
     if not symbol:
         fail("symbol", "股票代號不可空白")
+    elif symbol.startswith(INDEX_SYMBOL_PREFIX):
+        # Restated here rather than left to ``PositionInput``: this parser only
+        # constructs the model once every field has passed, so a check missing
+        # here would surface as an uncaught ValidationError (a 500 on
+        # ``POST /api/positions/import``) instead of a per-row error the user
+        # can act on.
+        fail("symbol", INDEX_SYMBOL_REJECTED_MESSAGE)
 
     market = _cell(raw_row, index_of, "market")
     if market not in _MARKETS:

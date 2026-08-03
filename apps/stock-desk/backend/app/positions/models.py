@@ -18,13 +18,27 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 Market = Literal["TW", "US"]
 Currency = Literal["TWD", "USD"]
 InstrumentType = Literal["stock", "etf", "leveraged_etf", "futures_etf"]
+
+#: ``^`` marks an index series (``^GSPC``, ``^TWII``), which ADR-0005 決策三
+#: point 5 routes through its own :class:`app.services.index.IndexSeriesService`
+#: and deliberately keeps out of ``canonical_us_symbol``. An index is a
+#: benchmark, not something a broker can fill: accepting one here would create a
+#: holding whose price ladder, cost basis and risk caps are all meaningless.
+INDEX_SYMBOL_PREFIX: Final = "^"
+
+#: Shared by the model validator and the CSV importer so both doors reject the
+#: same input with the same sentence.
+INDEX_SYMBOL_REJECTED_MESSAGE: Final = (
+    "指數代號（以 ^ 開頭，例如 ^GSPC）是市場基準，不可作為持倉標的；"
+    "請改填實際持有的股票或 ETF 代號。"
+)
 
 
 class PositionInput(BaseModel):
@@ -53,6 +67,19 @@ class PositionInput(BaseModel):
     def _symbol_must_not_be_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("股票代號不可空白")
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _symbol_must_not_be_an_index(cls, value: str) -> str:
+        """Reject index codes (ADR-0005 約束 Q-6).
+
+        Mirrors ``canonical_us_symbol``'s rejection so the two entry points to a
+        US ticker -- the position book and the price adapters -- agree on what a
+        holding symbol may be.
+        """
+        if value.strip().startswith(INDEX_SYMBOL_PREFIX):
+            raise ValueError(INDEX_SYMBOL_REJECTED_MESSAGE)
         return value
 
     @field_validator("quantity")

@@ -48,6 +48,12 @@ def build_snapshot(
     ``not_evaluable`` and the reason says the conversion was missing -- a
     snapshot has no notes list, so that sentence is appended to ``reason``
     rather than dropped.
+
+    The same applies to the FX source's standing disclosure (ADR-0005 約束
+    F-4): ``build_book_context`` puts it in ``notes``, which this shape does not
+    have, so it is joined into ``reason`` here. Without that, an alert on a
+    foreign-currency holding would quote a TWD figure derived from a model
+    mid-point rate without ever saying so.
     """
     end = today if today is not None else date.today()
     loaded = load_bars(
@@ -77,6 +83,11 @@ def build_snapshot(
         if loaded.status is DataStatus.FRESH
         else f"資料來自 {loaded.status.value} 層（{loaded.source}）。"
     )
+    # Disclosed on exactly the condition ``build_book_context`` uses: only a
+    # rate that was actually applied to a figure needs its methodology stated.
+    # A TWD holding resolves no quote at all, and a failed lookup already says
+    # so through ``book.fx_note``.
+    fx_source_note = fx.source_note if fx is not None and book.fx_rate is not None else None
     return SymbolSnapshot(
         symbol=symbol,
         market=market,
@@ -85,7 +96,7 @@ def build_snapshot(
         signals=signals,
         limits=evaluate_limits(budget, book.context),
         as_of=latest.date.isoformat(),
-        reason=_joined_reason(data_reason, book.fx_note),
+        reason=_joined_reason(data_reason, book.fx_note, fx_source_note),
     )
 
 

@@ -87,6 +87,68 @@ def test_create_future_opened_at_returns_422(client: TestClient) -> None:
     assert ("body", "opened_at") in locs
 
 
+def test_create_rejects_an_index_symbol_with_422(client: TestClient) -> None:
+    # ADR-0005 Q-6: ``^`` is the index namespace, which has its own series
+    # service and no cost basis, no fills and no risk caps that mean anything.
+    payload = _valid_payload()
+    payload["symbol"] = "^GSPC"
+    payload["market"] = "US"
+    payload["currency"] = "USD"
+    response = client.post("/api/positions", json=payload)
+    assert response.status_code == 422
+    errors = [err for err in response.json()["detail"] if tuple(err["loc"]) == ("body", "symbol")]
+    assert errors, response.json()
+    # The message has to say why, in a sentence that can be shown as-is.
+    assert "指數代號" in errors[0]["msg"]
+    assert "不可作為持倉標的" in errors[0]["msg"]
+    assert client.get("/api/positions").json()["items"] == []
+
+
+def test_update_rejects_an_index_symbol_with_422(client: TestClient) -> None:
+    created = client.post("/api/positions", json=_valid_payload()).json()
+    payload = _valid_payload()
+    payload["symbol"] = "^TWII"
+    response = client.put(f"/api/positions/{created['id']}", json=payload)
+    assert response.status_code == 422
+    # The stored position is untouched by the rejected write.
+    assert client.get("/api/positions").json()["items"][0]["symbol"] == "2330"
+
+
+def test_ordinary_symbols_are_unaffected_by_the_index_rule(client: TestClient) -> None:
+    # Only a leading ``^`` is refused: the punctuation US tickers legitimately
+    # carry, and TW numeric codes, must still go through untouched.
+    for symbol in ("2330", "BRK.B", "BF-B", "0050"):
+        payload = _valid_payload()
+        payload["symbol"] = symbol
+        assert client.post("/api/positions", json=payload).status_code == 201
+    stored = [item["symbol"] for item in client.get("/api/positions").json()["items"]]
+    assert stored == ["2330", "BRK.B", "BF-B", "0050"]
+
+
+def test_import_rejects_an_index_row_without_failing_the_whole_file(
+    client: TestClient,
+) -> None:
+    # The importer builds ``PositionInput`` only after its own field checks
+    # pass, so the ``^`` guard has to exist on that path too -- otherwise this
+    # request is a 500 rather than a row error.
+    csv_text = (
+        "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,note\n"
+        "^GSPC,US,10,4000,USD,2024-03-15,etf,index\n"  # row 2: index symbol
+        "AAPL,US,10,180,USD,2024-03-15,stock,ok\n"  # row 3: valid
+    )
+    response = client.post(
+        "/api/positions/import",
+        files={"file": ("positions.csv", csv_text, "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 1
+    errors = [err for err in body["errors"] if err["row"] == 2]
+    assert [err["field"] for err in errors] == ["symbol"]
+    assert "指數代號" in errors[0]["reason"]
+    assert [item["symbol"] for item in client.get("/api/positions").json()["items"]] == ["AAPL"]
+
+
 def test_create_without_opened_at_returns_201_with_null(client: TestClient) -> None:
     payload = _valid_payload()
     del payload["opened_at"]

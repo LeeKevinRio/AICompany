@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from app.api.settings import RATE_PROVENANCE_NOTE
+import pytest
+
+from app.api.settings import (
+    QUOTA_UNCONFIGURED_NOTE,
+    QUOTA_UNREADABLE_NOTE,
+    RATE_PROVENANCE_NOTE,
+)
+from app.data.quota import QuotaLedger, QuotaUsage
 from app.settings.models import AppSettings, AppSettingsPatch, CostModelSettings
 from app.settings.store import SettingsStore
 from tests.conftest import ApiHarness
@@ -132,6 +142,106 @@ def test_cost_model_verified_on_must_be_an_iso_date(api_harness: ApiHarness) -> 
     assert response.status_code == 200
     assert response.json()["rates_verified"] is True
     assert response.json()["notes"] == []
+
+
+# --- Data-source block (ADR-0005 決策三 point 6) ------------------------------
+
+
+def _quota_block(harness: ApiHarness) -> dict[str, Any]:
+    quotas = harness.client.get("/api/settings").json()["data_sources"]["quotas"]
+    block: dict[str, Any] = next(
+        block for block in quotas if block["provider"] == "alpha_vantage"
+    )
+    return block
+
+
+def test_quota_block_reports_todays_usage_after_a_reservation(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALPHA_VANTAGE_DAILY_LIMIT", "25")
+    monkeypatch.setenv("ALPHA_VANTAGE_SAFETY_MARGIN", "2")
+    monkeypatch.setenv("QUOTA_RESET_TZ", "UTC")
+    for _ in range(3):
+        api_harness.quota.reserve("alpha_vantage", limit_value=23)
+
+    block = _quota_block(api_harness)
+    assert block["used"] == 3
+    assert block["limit_value"] == 23  # 25 minus the safety margin
+    assert block["remaining"] == 20
+    assert block["quota_date"] == datetime.now(UTC).date().isoformat()
+    assert block["reset_tz"] == "UTC"
+
+
+def test_quota_block_reports_a_real_zero_before_the_first_call_of_the_day(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No ledger row exists yet today. That is "nothing spent", not "unknown",
+    # and the configured cap is still the day's denominator.
+    monkeypatch.setenv("ALPHA_VANTAGE_DAILY_LIMIT", "25")
+    monkeypatch.setenv("ALPHA_VANTAGE_SAFETY_MARGIN", "2")
+    block = _quota_block(api_harness)
+    assert block["used"] == 0
+    assert block["limit_value"] == 23
+    assert block["remaining"] == 23
+    assert QUOTA_UNCONFIGURED_NOTE not in block["notes"]
+
+
+def test_quota_block_withholds_the_limit_when_none_is_configured(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No configured cap means no denominator: the remaining count is withheld
+    # rather than guessed, and the note says the primary source is inert.
+    monkeypatch.delenv("ALPHA_VANTAGE_DAILY_LIMIT", raising=False)
+    block = _quota_block(api_harness)
+    assert block["used"] == 0
+    assert block["limit_value"] is None
+    assert block["remaining"] is None
+    assert QUOTA_UNCONFIGURED_NOTE in block["notes"]
+
+
+def test_quota_block_discloses_the_unverified_reset_boundary(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ADR-0005 決策三 point 4 records the reset timezone as unverified; the
+    # disclosure travels with the number it qualifies.
+    monkeypatch.setenv("ALPHA_VANTAGE_DAILY_LIMIT", "25")
+    notes = " ".join(_quota_block(api_harness)["notes"])
+    assert "未經查證" in notes
+    assert "ALPHA_VANTAGE_DAILY_LIMIT" in notes
+
+
+def test_quota_block_survives_an_unreadable_ledger(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ledger is in the database the scheduler process writes to as well. A
+    # locked file must degrade this one block, not the settings page.
+    monkeypatch.setenv("ALPHA_VANTAGE_DAILY_LIMIT", "25")
+
+    def _boom(*args: object, **kwargs: object) -> QuotaUsage | None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(QuotaLedger, "status", _boom)
+    response = api_harness.client.get("/api/settings")
+    assert response.status_code == 200
+    block = _quota_block(api_harness)
+    assert block["used"] is None
+    assert block["remaining"] is None
+    assert QUOTA_UNREADABLE_NOTE in block["notes"]
+    # The rest of the document is unaffected.
+    assert response.json()["settings"]["risk_budget"]["max_position_weight"] == 0.15
+
+
+def test_reading_settings_never_spends_a_quota_slot(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The block is an observation. If it reserved, opening the settings page
+    # would consume the budget it is there to report on.
+    monkeypatch.setenv("ALPHA_VANTAGE_DAILY_LIMIT", "25")
+    api_harness.quota.reserve("alpha_vantage", limit_value=23)
+    for _ in range(5):
+        api_harness.client.get("/api/settings")
+    api_harness.client.put("/api/settings", json={"alerts": {"enabled": False}})
+    assert _quota_block(api_harness)["used"] == 1
 
 
 # --- Store-level behaviour ---------------------------------------------------

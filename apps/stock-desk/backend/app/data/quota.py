@@ -229,6 +229,18 @@ def _quota_date(now: datetime, reset_tz: str) -> str:
     return now.astimezone(ZoneInfo(reset_tz)).date().isoformat()
 
 
+def current_quota_date(reset_tz: str = DEFAULT_RESET_TZ, *, now: datetime | None = None) -> str:
+    """Today's quota day, on the same boundary :meth:`QuotaLedger.reserve` uses.
+
+    Exposed for the read-only observability path (ADR-0005 決策三 point 6),
+    which has to name the day even when no row exists for it yet. Recomputing
+    the boundary at the call site would let the reported day drift away from
+    the one the ledger actually keys on.
+    """
+    moment = now if now is not None else datetime.now(UTC)
+    return _quota_date(moment, reset_tz)
+
+
 class QuotaLedger:
     """SQLite (WAL mode) ledger of per-provider, per-day request usage.
 
