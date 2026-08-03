@@ -13,7 +13,8 @@ from datetime import date
 import pytest
 
 from app.data.interface import DataStatus
-from app.leverage.index_mapping import INDEX_MAPPING, IndexRef
+from app.data.providers.yfinance import INDEX_SYMBOL_METADATA
+from app.leverage.index_mapping import INDEX_MAPPING, INDEX_SYMBOL_PREFIX, IndexRef
 from app.services import index as I
 from tests.api_helpers import FakePriceService, recent_bars, trending_closes
 
@@ -146,7 +147,74 @@ def test_no_refusal_text_implies_a_temporary_technical_fault() -> None:
         I.PROXY_BASIS_REASON,
         I.NO_SERVICE_REASON,
         I.NO_BARS_REASON,
+        I.NO_BENCHMARK_REASON,
     ]
     for reason in reasons:
         for phrase in ("暫時", "稍後", "重試", "故障", "維護中"):
             assert phrase not in reason
+
+
+# --- The market benchmark ----------------------------------------------------
+
+
+def test_every_market_benchmark_is_an_official_index_code() -> None:
+    # ADR-0005 決策一: index codes only, never a tracking ETF standing in.
+    for benchmark in I.MARKET_BENCHMARK.values():
+        assert benchmark.series_symbol.startswith(INDEX_SYMBOL_PREFIX)
+        assert benchmark.series_symbol in INDEX_SYMBOL_METADATA
+        # The label names the same series the code points at.
+        assert benchmark.series_symbol in benchmark.label
+
+
+def test_the_tw_benchmark_is_the_taiwan_weighted_index() -> None:
+    service = _service()
+    loaded = I.load_market_benchmark({"TW": service}, market="TW", start=START, end=END)
+    assert loaded.available is True
+    assert len(loaded.bars) == 30
+    assert loaded.reason is None
+    assert loaded.series_symbol == "^TWII"
+    assert loaded.label == I.MARKET_BENCHMARK["TW"].label
+    assert service.calls == [("^TWII", "TW", START, END)]
+
+
+def test_the_us_benchmark_is_the_sp500_index() -> None:
+    service = _service("^GSPC")
+    loaded = I.load_market_benchmark({"US": service}, market="US", start=START, end=END)
+    assert loaded.available is True
+    assert service.calls == [("^GSPC", "US", START, END)]
+
+
+def test_a_live_benchmark_series_is_disclosed_as_backup_never_fresh() -> None:
+    loaded = I.load_market_benchmark(
+        {"TW": _service(status=DataStatus.FRESH)}, market="TW", start=START, end=END
+    )
+    assert loaded.status is DataStatus.BACKUP
+    assert I.UNOFFICIAL_SOURCE_NOTE in loaded.notes
+    assert I.UNVERIFIED_BENCHMARK_NOTE in loaded.notes
+
+
+def test_a_benchmark_source_with_no_bars_is_reported_not_substituted() -> None:
+    loaded = I.load_market_benchmark(
+        {"TW": FakePriceService()}, market="TW", start=START, end=END
+    )
+    assert loaded.bars == []
+    assert loaded.available is False
+    # Which series was wanted is still stated: it is the useful half of the fact.
+    assert loaded.series_symbol == "^TWII"
+    assert loaded.reason == I.NO_BARS_REASON.format(series_symbol="^TWII")
+
+
+def test_a_market_without_an_index_service_has_no_benchmark_and_says_so() -> None:
+    loaded = I.load_market_benchmark({}, market="TW", start=START, end=END)
+    assert loaded.bars == []
+    assert "^TWII" in (loaded.reason or "")
+    assert I.UNVERIFIED_BENCHMARK_NOTE in loaded.notes
+
+
+def test_benchmark_meta_carries_the_series_and_the_reason() -> None:
+    meta = I.load_market_benchmark({}, market="TW", start=START, end=END).meta()
+    assert meta["series_symbol"] == "^TWII"
+    assert meta["available"] is False
+    assert meta["bar_count"] == 0
+    assert meta["status"] == DataStatus.UNAVAILABLE.value
+    assert meta["reason"]

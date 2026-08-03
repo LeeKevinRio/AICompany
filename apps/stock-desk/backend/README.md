@@ -82,12 +82,17 @@ SQLite 檔（快取、持倉、設定、警示規則/事件全部共用，WAL �
 | `GET/POST/PUT/DELETE /api/positions…` | `app.positions.store` |
 | `GET /api/portfolio/summary` | `app.portfolio.summary.build_summary` |
 | `GET /api/bars/{symbol}?market=` | `bars` = 原始日線（`app.data.service.MarketDataService`）；價格為 Decimal 字串 |
-| `GET /api/signals/{symbol}?market=` | `signals` = `app.signals.service.compute_signals` |
+| `GET /api/signals/{symbol}?market=` | `signals` = `app.signals.service.compute_signals`；另帶 `benchmark`＝Beta 所用的比較基準指數（`app.services.index.load_market_benchmark`） |
 | `GET /api/advice/{symbol}?market=` | `advice` = `app.advice.engine.build_advice` |
 | `GET /api/leverage/{symbol}?market=` | `chapter` = `app.leverage.service.build_leverage_chapter` |
 | `POST /api/backtest` | `report` = `app.backtest.report.walk_forward_report` |
 | `GET/PUT /api/settings` | `app.settings.models.AppSettings` |
 | `GET/POST/DELETE /api/alerts`、`GET /api/alerts/events`、`POST /api/alerts/events/{id}/ack`、`POST /api/alerts/evaluate` | `app.alerts.*` |
+
+`/api/signals` 的 Beta 以市場的比較基準指數計算：TW 用 `^TWII`（臺灣加權股價指數）、
+US 用 `^GSPC`（S&P 500），走與槓桿專章同一條指數資料鏈（`app/services/index.py`，
+官方指數代號、不以追蹤 ETF 代理，ADR-0005 決策一）。指數取不到時只有 Beta 回
+`insufficient_data`，其餘指標照常計算，缺的原因寫在回應的 `benchmark.reason`。
 
 ## 離線示範模式（`app/demo/`）
 
