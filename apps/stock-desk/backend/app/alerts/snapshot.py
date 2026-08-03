@@ -45,15 +45,15 @@ def build_snapshot(
 
     ``fx_provider`` is what makes the price-based caps evaluable for a non-TWD
     holding. Without it (or without a usable rate) those caps stay
-    ``not_evaluable`` and the reason says the conversion was missing -- a
-    snapshot has no notes list, so that sentence is appended to ``reason``
-    rather than dropped.
+    ``not_evaluable``; a snapshot has no notes list, so the sentence naming the
+    missing conversion is appended to ``reason``, which the engine shows on the
+    resulting **skip**.
 
-    The same applies to the FX source's standing disclosure (ADR-0005 約束
-    F-4): ``build_book_context`` puts it in ``notes``, which this shape does not
-    have, so it is joined into ``reason`` here. Without that, an alert on a
-    foreign-currency holding would quote a TWD figure derived from a model
-    mid-point rate without ever saying so.
+    The FX source's standing disclosure (ADR-0005 約束 F-4) travels on its own
+    field instead, because it has the opposite destination: it qualifies a rate
+    that *was* applied, so it belongs to the risk-cap message a **fired** alert
+    sends -- and ``reason`` is read by no fired path. Putting it in ``reason``
+    would look like a disclosure while reaching nobody.
     """
     end = today if today is not None else date.today()
     loaded = load_bars(
@@ -85,9 +85,9 @@ def build_snapshot(
     )
     # Disclosed on exactly the condition ``build_book_context`` uses: only a
     # rate that was actually applied to a figure needs its methodology stated.
-    # A TWD holding resolves no quote at all, and a failed lookup already says
-    # so through ``book.fx_note``.
-    fx_source_note = fx.source_note if fx is not None and book.fx_rate is not None else None
+    # A TWD holding resolves no quote at all, and a failed lookup has nothing to
+    # disclose because nothing was converted -- ``book.fx_note`` covers that.
+    fx_disclosure = fx.source_note if fx is not None and book.fx_rate is not None else None
     return SymbolSnapshot(
         symbol=symbol,
         market=market,
@@ -96,7 +96,8 @@ def build_snapshot(
         signals=signals,
         limits=evaluate_limits(budget, book.context),
         as_of=latest.date.isoformat(),
-        reason=_joined_reason(data_reason, book.fx_note, fx_source_note),
+        reason=_joined_reason(data_reason, book.fx_note),
+        fx_disclosure=fx_disclosure,
     )
 
 

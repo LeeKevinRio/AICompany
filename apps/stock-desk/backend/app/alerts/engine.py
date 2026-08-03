@@ -59,7 +59,14 @@ class SymbolSnapshot:
     limits: Sequence[LimitCheck] = ()
     as_of: str | None = None
     #: Why the snapshot is thin, when it is (data status, missing adapter, ...).
+    #: Only ever read on a rule that is **skipped**; a fired rule's message does
+    #: not include it, which is why the disclosure below has its own field.
     reason: str | None = None
+    #: The FX source's standing disclosure (ADR-0005 F-4), set only when a rate
+    #: was actually applied to build ``limits``. The risk-cap message quotes
+    #: TWD-converted figures, so this sentence has to travel with the *fired*
+    #: message -- all the way to Discord/Telegram -- not merely with a skip.
+    fx_disclosure: str | None = None
 
 
 #: Loads the snapshot for one symbol/market. Supplied by the caller.
@@ -172,11 +179,21 @@ def _limit_outcome(
         # is not_evaluable must not read as a passing cap.
         if all(check.status == "not_evaluable" for check in watched):
             names = "、".join(check.name for check in watched)
-            return f"監看的上限（{names}）缺少輸入，無法判定是否違反。"
+            # The snapshot knows *why* the inputs are missing (no FX rate, a
+            # degraded data layer); "缺少輸入" alone would leave the reader to
+            # guess which of them it was.
+            cause = f" {snapshot.reason}" if snapshot.reason else ""
+            return f"監看的上限（{names}）缺少輸入，無法判定是否違反。{cause}"
         return False, "", {}
     names = "、".join(f"第 {check.index} 條（{check.name}）" for check in violated)
     details = " ".join(check.detail for check in violated)
     message = f"{rule.symbol} 觸發風險上限：{names}。{details}"
+    # Every cap here is measured in TWD, so on a foreign-currency holding every
+    # figure in ``details`` passed through the FX rate. ADR-0005 F-4 requires
+    # the rate's provenance to be visible wherever it is used, and this message
+    # is what the user actually receives (feed, Discord, Telegram).
+    if snapshot.fx_disclosure:
+        message = f"{message} {snapshot.fx_disclosure}"
     observed: dict[str, float | str | None] = {
         "violated_limit_ids": "、".join(check.id for check in violated),
         "violated_count": float(len(violated)),

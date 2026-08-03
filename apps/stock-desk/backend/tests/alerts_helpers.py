@@ -69,10 +69,12 @@ def snapshot(
     symbol: str = "2330",
     market: Market = "TW",
     close: float | None = 120.0,
+    currency: str = "TWD",
     signals: dict[str, Any] | None = None,
     context: PortfolioContext | None = None,
     budget: RiskBudget | None = None,
     reason: str | None = None,
+    fx_disclosure: str | None = None,
 ) -> SymbolSnapshot:
     """A snapshot with only the parts a test needs; the rest stays empty."""
     limits = (
@@ -82,11 +84,12 @@ def snapshot(
         symbol=symbol,
         market=market,
         close=close,
-        currency="TWD",
+        currency=currency,
         signals=signals or {},
         limits=limits,
         as_of="2026-07-25",
         reason=reason,
+        fx_disclosure=fx_disclosure,
     )
 
 

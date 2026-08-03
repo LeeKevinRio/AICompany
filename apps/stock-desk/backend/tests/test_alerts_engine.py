@@ -10,6 +10,7 @@ import pytest
 
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.store import AlertStore
+from app.services.fx import source_note
 from tests.advice_helpers import make_signals, uptrend_signals
 from tests.alerts_helpers import (
     RecordingLoader,
@@ -180,6 +181,72 @@ def test_a_watched_cap_absent_from_the_results_is_a_skip(store: AlertStore) -> N
     result = evaluate_alerts(store, _loader(partial), now=_NOW)
     assert _statuses(result) == ["skipped"]
     assert "不在本次檢查結果中" in (result.outcomes[0].reason or "")
+
+
+def test_a_fired_risk_limit_message_carries_the_fx_disclosure(store: AlertStore) -> None:
+    # ADR-0005 F-4. Every cap in the message is denominated in TWD, so on a
+    # foreign-currency holding each figure quoted came through the FX rate. The
+    # message is what reaches the feed and the push channels, so the rate's
+    # provenance has to be in the message itself.
+    add_rule(store, limit_rule(limit_id="any"))
+    disclosure = "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；端點未經查證。"
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(context=breaching_context(), currency="USD", fx_disclosure=disclosure)
+        ),
+        now=_NOW,
+    )
+    assert len(result.events) == 1
+    message = result.events[0].message
+    assert "觸發風險上限" in message
+    assert disclosure in message
+
+
+def test_a_twd_holding_gets_no_fx_disclosure_it_did_not_use(store: AlertStore) -> None:
+    # Nothing was converted, so there is no rate to qualify; padding every
+    # message with the sentence would train the reader to skip past it.
+    add_rule(store, limit_rule(limit_id="any"))
+    result = evaluate_alerts(
+        store, _loader(snapshot(context=breaching_context())), now=_NOW
+    )
+    assert "匯率" not in result.events[0].message
+
+
+def test_the_fx_disclosure_does_not_introduce_action_wording(store: AlertStore) -> None:
+    # The disclosure is a statement of fact about a data source. It must not
+    # drag the message across the line the alert layer keeps: measurement only.
+    add_rule(store, limit_rule(limit_id="any"))
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(
+                context=breaching_context(),
+                currency="USD",
+                fx_disclosure=source_note("bank_of_taiwan"),
+            )
+        ),
+        now=_NOW,
+    )
+    banned = ("買進", "賣出", "加碼", "減碼", "建議", "保證", "必漲", "穩賺")
+    assert not any(word in result.events[0].message for word in banned)
+
+
+def test_an_unevaluable_cap_says_why_the_inputs_were_missing(store: AlertStore) -> None:
+    # "缺少輸入" on its own leaves the reader guessing between "no price" and
+    # "no FX conversion"; the snapshot already knows which, so the skip says it.
+    add_rule(store, limit_rule(limit_id="gross_exposure"))
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(context=breaching_context(), reason="無法取得匯率換算（USDTWD）。")
+        ),
+        now=_NOW,
+    )
+    assert _statuses(result) == ["skipped"]
+    reason = result.outcomes[0].reason or ""
+    assert "無法判定是否違反" in reason
+    assert "無法取得匯率換算" in reason
 
 
 def test_no_limits_at_all_is_a_skip(store: AlertStore) -> None:
