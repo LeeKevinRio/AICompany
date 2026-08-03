@@ -10,6 +10,7 @@
   - skill `data-source-integration`（adapter／契約測試／離線 fixture／紅線）
 - 與既有 ADR 的關係：**不取代任何 ADR**。本則補齊 ADR-0003 完全未涵蓋的「指數日線」，並具體化 ADR-0003「對實作的約束」第 3 條（額度計數器）與「尚缺的事實」第 4 條（ticker 正規化）。
   唯一一處**修訂**：ADR-0003 約束 1 的降級鏈由四層改為五層（新增 layer 0「TTL 內快取先行」，僅對有額度上限的來源啟用），理由見決策四。ADR-0003 其餘內容維持 accepted。
+  2026-08-03 修訂：I-3 與決策一第 3 點的措辭原寫為「恆為 `BACKUP`」，範圍過寬且與 `DataStatus.BACKUP` 的定義及本 ADR 決策四第 4 點／D-2 衝突，經 tech-architect 裁決收窄為「不得標為 `FRESH`、且不得將快取結果升級為 `BACKUP`」。本次僅修訂措辭，決策實質與實作均未改變。
 
 ---
 
@@ -53,7 +54,7 @@ Phase 7 要補三個資料層缺口（美股日線、標的指數日線、FX 風
 
 1. **採方案 A**：指數序列一律使用**官方指數代號**，由 **yfinance adapter** 供給。Alpha Vantage **不接入指數路徑**。
 2. **代理 ETF 路徑在架構上保留、在資料上封鎖**：`IndexRef.basis` 定義三值 `official_index | proxy_etf | unmapped`，但 Phase 7 的 `INDEX_MAPPING` 中**不得存在任何 `basis="proxy_etf"` 的列**，並以測試強制（約束 I-2）。日後要放行須 CEO 核可並另立 ADR。
-3. **指數序列的 `DataStatus` 恆為 `BACKUP`（非 `FRESH`）**，即使 yfinance 呼叫成功。它是非官方來源，用 `fresh` 會讓使用者以為這是官方紀錄來源。
+3. **指數序列不得標為 `FRESH`**：即使 yfinance 呼叫成功也一律揭露為 `BACKUP`。它是非官方來源，用 `fresh` 會讓使用者以為這是官方紀錄來源。反向亦然：結果來自本機快取時**維持 `CACHED_STALE`**，不得改標為 `BACKUP`——揭露只能往悲觀方向調整，不得為了統一標籤而抹去「這是快取／過期資料」的事實。
 4. **台股指數**：Phase 7 僅涵蓋臺灣加權股價指數（對應 00675L／00676R），走 `^TWII`。**臺灣50指數列為 `unmapped`**：沒有已查證的免費日線代號，且**明確禁止以 0050 代理**（0050 有經理費與折溢價）。FinMind 指數 dataset 列為未來備援，dataset 名稱必須由 devops-sre 在有網路環境查證後才可寫進程式碼。
 5. **不對指數序列做含息口徑臆測**：`IndexRef.return_basis ∈ {price, total_return, unknown}`，未查證者一律 `unknown`，並在專章 `assumptions` 追加「指數的含息口徑未查證，配息差異會落在 residual」。
 6. **殘差跳閘**：`|residual|` 超過 `RESIDUAL_ALERT_ABS`（預設 0.10，**明示為人工設定的提醒門檻、非統計檢定**）時，專章 `notes` 必須追加「殘差異常大，標的指數對應可能有誤或含息口徑不一致，請勿將本次歸因視為定論」。
@@ -63,6 +64,7 @@ Phase 7 要補三個資料層缺口（美股日線、標的指數日線、FX 風
 - 不得以 QQQ／SPY／0050／TLT 等 ETF 冒充指數序列傳入 `decompose_drag` 或 `estimate_erosion`。
 - 不得在 `IndexRef` 缺列時猜一個看起來對的代號（SOXL → `^SOX` 即為被明確擋下的案例）。
 - 不得把指數序列標為 `fresh`。
+- 不得把來自本機快取的指數結果標為 `backup`；`backup` 專指「即時取自備援來源」。
 - 不得為了讓 FR-2「有東西可看」而放寬第 2、3、6 點。
 
 ---
@@ -247,7 +249,7 @@ WHERE used < limit_value;
 
 - I-1　`app/leverage/*` **不得** import `app/data/providers/*`，也不得執行任何 I/O；接合點只有 `app/services/index.py` 一處。
 - I-2　`INDEX_MAPPING` 中不得存在 `basis="proxy_etf"` 的列（測試強制）。
-- I-3　指數 `ProviderResult.status` 恆為 `BACKUP`。
+- I-3　指數序列（含槓桿 ETF 的標的指數與市場比較基準）**不得**以 `DataStatus.FRESH` 呈現。任何下層回報 `FRESH` 的指數結果，在離開 `app/services/index.py` 之前必須降級為 `BACKUP`。降級**只能往悲觀方向**進行：`CACHED_STALE` 與 `UNAVAILABLE` 一律原樣保留，**不得**為了讓狀態字面統一為 `BACKUP` 而把快取結果「升級」掉。理由：`BACKUP` 的定義是「即時取自備援來源」，把一筆未呼叫任何來源、從本機快取取得的資料標為 `BACKUP` 是不實陳述，並會使 `is_within_ttl`（決策四第 4 點、D-2）在指數路徑上永久失去意義。「本序列取自非官方來源」這個事實由常駐的來源揭露 `notes`（每一條成功與失敗路徑皆須掛入）承擔，不由 `status` 單一欄位承擔。本約束適用於讀取指數序列的**每一層**：`MarketDataService` 會把主來源成功一律標為 `FRESH`，因此呼叫端必須經由 `IndexSeriesService` 取得結果，不得直接持有底層 service。
 - I-4　`decompose_drag` 新增 `index_basis` 與 `index_return_basis` 參數，於輸出回顯，並在 `basis != official_index` 或 `return_basis == "unknown"` 時追加對應的 `assumptions` 句子。
 - I-5　`basis="unmapped"` 時，drag 與 erosion 皆回 `insufficient_data`，`reason` 使用該列的 `note`；文案不得暗示暫時性技術故障。
 - I-6　殘差跳閘（`RESIDUAL_ALERT_ABS`，預設 0.10）觸發時必須追加 `notes`；常數 docstring 必須寫明「人工設定的提醒門檻，非統計檢定」。
