@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import type { NewProduct } from '../hooks/useGroups';
 import { MAX_GROUP_NAME_LENGTH, MAX_PRODUCT_NAME_LENGTH } from '../types';
+import { dateToDatetimeLocalValue, datetimeLocalValueToEpoch } from '../deadlineInput';
 import {
   compressImageToDataUrl,
   estimateDataUrlBytes,
@@ -21,14 +22,6 @@ interface DraftProduct {
 
 function emptyProduct(): DraftProduct {
   return { name: '', price: '' };
-}
-
-/** 把 Date 轉成 datetime-local input 需要的當地時間字串（YYYY-MM-DDTHH:mm）。 */
-function toLocalDatetimeInput(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
 }
 
 export function CreateGroupPage() {
@@ -79,10 +72,9 @@ export function CreateGroupPage() {
       price: Number(p.price) || 0,
       ...(p.image ? { image: p.image } : {}),
     }));
-    // datetime-local → epoch 毫秒（new Date 以主揪當地時區解讀，存絕對時間點）；
-    // 空字串或解析失敗（NaN）→ 不設截止時間。
-    const ts = deadline ? new Date(deadline).getTime() : NaN;
-    const deadlineAt = Number.isFinite(ts) ? ts : undefined;
+    // datetime-local → epoch 毫秒（以主揪當地時區解讀，存絕對時間點）；
+    // 空字串或解析失敗 → 不設截止時間。儲存格式（deadlineAt: epoch ms | undefined）不變。
+    const deadlineAt = datetimeLocalValueToEpoch(deadline);
 
     // 防「開團即截止」：截止時間若已是過去（min 之外的手動輸入 / 貼上），先警示再決定。
     if (
@@ -143,12 +135,16 @@ export function CreateGroupPage() {
       </div>
 
       <div className="field">
-        <label htmlFor="group-deadline">截止時間（可選，到時自動截止）</label>
+        <label htmlFor="group-deadline">截止時間（可選，24 小時制；到時自動截止）</label>
         <input
           id="group-deadline"
           type="datetime-local"
+          // lang="en-GB"：讓 Chromium 系瀏覽器的原生日期時間選擇器固定用 24 小時制顯示
+          // （不受裝置系統語系的 12/24 小時制設定影響）；不支援此行為的瀏覽器（如部分
+          // Safari / Firefox 版本）則沿用系統語系設定，屬瀏覽器原生元件的已知限制。
+          lang="en-GB"
           value={deadline}
-          min={toLocalDatetimeInput(new Date())}
+          min={dateToDatetimeLocalValue(new Date())}
           onChange={(e) => setDeadline(e.target.value)}
         />
       </div>

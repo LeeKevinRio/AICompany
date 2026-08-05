@@ -11,6 +11,7 @@ import {
 } from '../calc/calc';
 import { decodeReceipt } from '../share/receiptCodec';
 import { formatCountdown, isGroupClosed } from '../deadline';
+import { formatDeadlineDateTime } from '../deadlineInput';
 import { useNow } from '../hooks/useNow';
 
 export function DashboardPage() {
@@ -135,8 +136,8 @@ export function DashboardPage() {
           }}
         >
           {closed
-            ? `已於 ${new Date(group.deadlineAt).toLocaleString('zh-TW')} 截止`
-            : `⏰ ${countdown}（${new Date(group.deadlineAt).toLocaleString('zh-TW')} 截止）`}
+            ? `已於 ${formatDeadlineDateTime(group.deadlineAt)} 截止`
+            : `⏰ ${countdown}（${formatDeadlineDateTime(group.deadlineAt)} 截止）`}
         </p>
       )}
 

@@ -299,6 +299,13 @@ input:focus, textarea:focus {
   box-shadow: 0 0 0 3px var(--color-primary-muted);
 }
 
+/* 原生日曆/時間選單圖示在深色底（--color-input-bg）下預設為深色、幾乎看不見；
+   invert 讓瀏覽器內建圖示可視，非視覺規範色票變更（不涉及任何 --color-* token）。 */
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  cursor: pointer;
+}
+
 /* section 小標（表單區塊標題）*/
 .section-title {
   font-size: 13px;
