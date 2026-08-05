@@ -1,0 +1,46 @@
+/**
+ * qa-reviewer Major follow-up on the FR-C1 review: the wording guard
+ * (`adviceWording.test.ts`) only scanned `adviceWording.ts`'s exported
+ * strings, which does not fully satisfy §1.3's required obligation that
+ * "前端文案模板亦須被掃到" — any Traditional-Chinese literal written
+ * directly into a component's JSX (a hard-coded label, an inline error
+ * message, a `placeholder`, …) would ship unscanned. This suite reads the
+ * *raw source text* of every component in the operation-summary surface
+ * that can render user-facing copy and scans it against the same
+ * `FRONTEND_FORBIDDEN_TERMS` list.
+ *
+ * Source-text (not rendered-output) scanning is deliberate here, unlike
+ * `adviceWording.test.ts`: these three files are consumers, not the wording
+ * module itself, so they have no legitimate reason to *name* a banned term
+ * in a comment the way `adviceWording.ts`'s own doc comments do (explaining
+ * what NOT to write). If that ever changes, narrow the scan the same way
+ * `adviceWording.test.ts` does (scan rendered output / an explicit slice)
+ * rather than silently widening this list's exceptions.
+ */
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
+import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
+
+const SCANNED_FILES = [
+  "../../position/[symbol]/OperationSummaryPanel.tsx",
+  "../../position/[symbol]/page.tsx",
+  "../../components/NavBar.tsx",
+] as const;
+
+describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
+  for (const relativePath of SCANNED_FILES) {
+    const absolutePath = fileURLToPath(new URL(relativePath, import.meta.url));
+    const source = readFileSync(absolutePath, "utf-8");
+
+    it(`${relativePath}: contains none of the §1.3 banned terms`, () => {
+      assertNoForbiddenTerms(source, FRONTEND_FORBIDDEN_TERMS, relativePath);
+    });
+
+    it(`${relativePath}: every "即時" occurrence is a "非即時" denial, never a bare claim`, () => {
+      expect(findBareRealtimeClaims(source)).toEqual([]);
+    });
+  }
+});

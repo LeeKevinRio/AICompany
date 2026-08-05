@@ -157,6 +157,101 @@ describe("buildOperationSummary — held mode", () => {
     expect(model.topMatchedRule?.name).toBe("重權重規則");
   });
 
+  it("uses response.data.last_bar_date — not card.as_of's retrieval timestamp — for the YYYY-MM-DD basis date (qa-reviewer BLOCKING fix)", () => {
+    // Deliberately cross-day: `as_of` is the retrieval timestamp of an
+    // overnight cron run (`app/signals/frame.py::provenance`), one calendar
+    // day *after* the trading date the price actually closed on — the
+    // `cached_stale`/backup-source scenario the review flagged. The two
+    // previously happened to share a date in every other fixture in this
+    // file, which is exactly what let the bug through.
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({ as_of: "2026-08-05T02:15:00+08:00" }),
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 900,
+          is_within_ttl: true,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: "2026-08-04",
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.required.asOfStatement).toBe("本評估基於 2026-08-04 收盤資料。");
+    // Literal YYYY-MM-DD only — no time-of-day component leaking through.
+    expect(model.required.asOfStatement).toMatch(/本評估基於 \d{4}-\d{2}-\d{2} 收盤資料。/);
+    expect(model.required.asOfStatement).not.toContain("T");
+    expect(model.required.asOfStatement).not.toContain("2026-08-05");
+  });
+
+  it("falls back to observation_window.end when the envelope carries no last_bar_date at all", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({ observation_window: { start: "2025-05-01", end: "2026-08-03", bars: 299 } }),
+        data: {
+          status: "fresh",
+          source: "twse",
+          staleness_minutes: 5,
+          is_within_ttl: null,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: null,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.required.asOfStatement).toBe("本評估基於 2026-08-03 收盤資料。");
+  });
+
+  it(
+    "picks the heaviest matched rule as the main basis even when it points the opposite way from the " +
+      "final (defensive-downgraded) action — current behaviour pinned as-is, not a fix: AC-C6.1 only asks " +
+      "for \"the heaviest matched rule\", not \"the heaviest rule in the winning direction\", so whether a " +
+      "direction-aware pick is required is an open PM/risk-compliance question, not decided by this test",
+    () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          advice: makeCard({
+            action: "hold",
+            aggregated_action: "add",
+            matched_rules: [
+              {
+                id: "defensive_rule",
+                name: "防禦型規則",
+                action: "stop_loss",
+                weight: 0.4,
+                weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+                explanation: "防禦型規則命中，觸發加碼降級為觀望。",
+              },
+              {
+                id: "add_rule",
+                name: "均線多頭排列",
+                action: "add",
+                weight: 0.6,
+                weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+                explanation: "5 日、20 日、60 日均線由上而下排列。",
+              },
+            ],
+            downgrade_notices: ["另有 1 條防禦型規則同時命中（防禦型規則），加碼建議改為觀望。"],
+          }),
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.action).toBe("hold");
+      // Pinned: the weight-only pick surfaces the *constructive* rule as the
+      // "main basis" even though the card's final action is the defensive
+      // "hold" — a reader could misread this as contradicting the headline.
+      expect(model.topMatchedRule).toEqual({
+        name: "均線多頭排列",
+        explanation: "5 日、20 日、60 日均線由上而下排列。",
+      });
+    },
+  );
+
   it("falls back to the generic absence reason, not a rewritten cause, when quantity_range is null", () => {
     const model = buildOperationSummary(makeResponse({ advice: makeCard({ quantity_range: null }) }));
     if (model.kind !== "held") throw new Error("unreachable");

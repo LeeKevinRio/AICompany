@@ -115,7 +115,11 @@ function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: stri
   return { name: top.name, explanation: top.explanation };
 }
 
-function buildRequiredElements(card: AdviceCard, candidate: boolean): RequiredElements {
+function buildRequiredElements(
+  card: AdviceCard,
+  candidate: boolean,
+  lastBarDate: string | null,
+): RequiredElements {
   const quantityRangeText =
     card.quantity_range === null
       ? null
@@ -126,7 +130,16 @@ function buildRequiredElements(card: AdviceCard, candidate: boolean): RequiredEl
     disclaimer: card.disclaimer,
     confidence: card.confidence,
     confidenceMeaning: card.confidence_meaning,
-    asOfStatement: buildAsOfStatement(card.as_of ?? card.observation_window.end ?? "—"),
+    // §2 item 3 / AC-C8.2: the literal YYYY-MM-DD trading date behind the
+    // evaluation, NOT `card.as_of` (that is the latest bar's *retrieval*
+    // timestamp, a full ISO 8601 datetime — see `app/signals/frame.py
+    // ::provenance`). Under `cached_stale`/backup-source conditions the
+    // retrieval time and the bar's own trading date can genuinely differ, so
+    // this must come from `response.data.last_bar_date` (verified against
+    // the same `DataMeta` the bars endpoint publishes), falling back to the
+    // card's own `observation_window.end` only when the envelope carried no
+    // `last_bar_date` at all.
+    asOfStatement: buildAsOfStatement(lastBarDate ?? card.observation_window.end ?? "—"),
     nonRealtimeNotice: NON_REALTIME_NOTICE,
     counterarguments: card.counterarguments,
     invalidationConditions: card.invalidation_conditions,
@@ -137,13 +150,6 @@ function buildRequiredElements(card: AdviceCard, candidate: boolean): RequiredEl
   };
 }
 
-/**
- * `dateFromDataMeta` should be the underlying bars' `last_bar_date`
- * (`AdviceResponse.data.last_bar_date`) — the actual trading date behind the
- * evaluation — not `advice.as_of`, which is a retrieval timestamp (see
- * `app/signals/frame.py::provenance`). Falls back to the card's own
- * `observation_window.end` when the envelope did not carry one.
- */
 export function buildOperationSummary(
   response: Pick<AdviceResponse, "status" | "reason" | "advice" | "held" | "data">,
 ): OperationSummaryModel {
@@ -157,6 +163,7 @@ export function buildOperationSummary(
 
   const card = response.advice;
   const staleDataNotice = response.data.status === "cached_stale" ? STALE_DATA_PROMINENT_NOTICE : null;
+  const lastBarDate = response.data.last_bar_date;
 
   if (card.action === "insufficient_data") {
     return {
@@ -184,7 +191,7 @@ export function buildOperationSummary(
       ),
       notComparableNote: CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
       staleDataNotice,
-      required: buildRequiredElements(card, true),
+      required: buildRequiredElements(card, true, lastBarDate),
     };
   }
 
@@ -202,6 +209,6 @@ export function buildOperationSummary(
     topMatchedRule: pickTopMatchedRule(card),
     restoresComplianceWarning,
     staleDataNotice,
-    required: buildRequiredElements(card, false),
+    required: buildRequiredElements(card, false, lastBarDate),
   };
 }
