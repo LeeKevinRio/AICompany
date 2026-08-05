@@ -349,7 +349,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   transition: background 0.1s, color 0.1s;
 }
 .stepper button.increment {
-  background: var(--color-primary);
+  background: var(--color-primary-fill);
   color: var(--color-text-inverse);
 }
 .stepper button:disabled {
