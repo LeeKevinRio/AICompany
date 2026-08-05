@@ -82,6 +82,11 @@ export function DashboardPage() {
   }
 
   // 匯入買家貼回的回單碼：解碼 → 驗團別 → 寫入本團（同名覆蓋，沿用 submitOrder）。
+  //
+  // 【Blocking 修正】備註（parsed.note）以前沒有傳進 submitOrder，買家填的備註會被靜默丟棄；
+  // 現在一併帶入。另外不再自行判斷「已截止就擋」——那個判斷跟 submitOrder 內部的
+  // isGroupClosed 擋門是兩份邏輯、可能不同步（例如按下匯入前的瞬間被截止）；改成統一依
+  // submitOrder 回傳的結果決定要不要顯示成功訊息，資料層才是唯一真相來源。
   function handleImport() {
     if (!group) return; // 閉包內重新 narrow（TS 不會把外層 guard 帶進巢狀函式）
     const parsed = decodeReceipt(receiptText);
@@ -97,16 +102,19 @@ export function DashboardPage() {
       setImportMsg({ kind: 'err', text: '這張回單沒有任何品項。' });
       return;
     }
-    if (isGroupClosed(group, Date.now())) {
+    const result = submitOrder(group.id, parsed.buyerName, parsed.items, parsed.note);
+    if (!result.ok) {
       setImportMsg({
         kind: 'err',
-        text: group.closed
-          ? '本團已截止，請先「重新開團」再匯入。'
-          : '本團已過截止時間，請先「重新開團」再匯入。',
+        text:
+          result.reason === 'closed'
+            ? group.closed
+              ? '本團已截止，請先「重新開團」再匯入。'
+              : '本團已過截止時間，請先「重新開團」再匯入。'
+            : '匯入失敗，請重新整理頁面再試一次。',
       });
       return;
     }
-    submitOrder(group.id, parsed.buyerName, parsed.items);
     setReceiptText('');
     setImportMsg({
       kind: 'ok',
@@ -300,6 +308,13 @@ export function DashboardPage() {
                 </li>
               ))}
             </ul>
+            {/* 【Blocking 修正】買家備註以前只在買家自己的回單碼收據上看得到，主揪後台完全
+                看不到（回單碼匯入時被靜默丟棄）；現在有備註才顯示，沒有就不佔版面。 */}
+            {order?.note && (
+              <p className="muted" style={{ margin: '6px 0 0', fontSize: 14 }}>
+                備註：{order.note}
+              </p>
+            )}
             {order && (
               <button
                 className="btn danger small"

@@ -17,17 +17,23 @@ export function OrderPage() {
   const group = groups.find((g) => g.id === id);
 
   const [buyerName, setBuyerName] = useState('');
+  const [note, setNote] = useState('');
   // 商品 id -> 數量。
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [done, setDone] = useState(false);
+  // 【Blocking 修正】submitOrder 可能失敗（例如團在按下送出前的瞬間被截止），
+  // 不能無條件顯示「已送出」——失敗時顯示這則訊息，維持在填單畫面而不是假成功畫面。
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // 同型問題修正（同 JoinPage）：路由 :id 換成另一團時，React Router 不會 remount 這個
   // 元件（同一個 <Route> 元素、只是 params 不同），若不主動重置會卡在上一團的「已送出」
   // 畫面或殘留上一團填的數量。監聽 id 變化重置本頁表單 state。
   useEffect(() => {
     setBuyerName('');
+    setNote('');
     setQtys({});
     setDone(false);
+    setSubmitError(null);
   }, [id]);
 
   function setQty(productId: string, next: number) {
@@ -71,7 +77,18 @@ export function OrderPage() {
     const items = Object.entries(qtys)
       .map(([productId, qty]) => ({ productId, qty }))
       .filter((i) => i.qty > 0);
-    submitOrder(group.id, buyerName, items);
+    const result = submitOrder(group.id, buyerName, items, note);
+    if (!result.ok) {
+      // 資料層拒絕寫入（多半是按下送出前的瞬間被截止，或多分頁同步後團已被刪除）：
+      // 不能顯示假成功畫面，留在填單畫面並告知原因。
+      setSubmitError(
+        result.reason === 'closed'
+          ? '此團已截止，未送出。請重新整理頁面確認狀態。'
+          : '送出失敗，請重新整理頁面再試一次。',
+      );
+      return;
+    }
+    setSubmitError(null);
     setDone(true);
   }
 
@@ -94,6 +111,7 @@ export function OrderPage() {
           className="btn block"
           onClick={() => {
             setBuyerName('');
+            setNote('');
             setQtys({});
             setDone(false);
           }}
@@ -123,6 +141,7 @@ export function OrderPage() {
       {closed && (
         <p className="banner warn">此團已截止，無法再填單。</p>
       )}
+      {submitError && <p className="banner error" role="alert">{submitError}</p>}
       {group.note && <p className="muted">{group.note}</p>}
 
       <div className="field">
@@ -179,6 +198,18 @@ export function OrderPage() {
         </div>
         );
       })}
+
+      <div className="field" style={{ marginTop: 16 }}>
+        <label htmlFor="order-note">備註（可選）</label>
+        <input
+          id="order-note"
+          type="text"
+          value={note}
+          placeholder="例：不要辣、少冰"
+          onChange={(e) => setNote(e.target.value)}
+          disabled={closed}
+        />
+      </div>
 
       <p className="total-line">
         <span>應付合計</span>
