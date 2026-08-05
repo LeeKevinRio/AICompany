@@ -8,6 +8,13 @@
   版面 / 字體 / 圓角 / 間距 / 動畫 / Light Mode 附錄一律不動，見第 5 節「不變項」。
 - **作者**：art-lead　**執行**：frontend-engineer（本文件不含程式碼修改，只是規範）
 
+## 修訂記錄
+
+| 日期 | 內容 |
+|---|---|
+| 2026-08-05 | v2.1 初版發布（20 項 before→after，見 3.2 節） |
+| 2026-08-05 | **勘誤**：frontend-engineer 完成 20 項施工（commit `8651302`）後回報 `.stepper button.increment`（數量步進器「＋」圓形按鈕，`styles.css:351-354`）與 `.btn.primary` 同型的「白字疊 primary 填底」問題，未列在原施工表。art-lead 裁決比照 #14/#15 修正，追加為 3.2 節 #21，見下方裁決說明。 |
+
 ---
 
 ## 0. 為什麼 v2.0 會「看起來暗」——診斷結論
@@ -175,7 +182,7 @@ v2.1 維持不變**，只有 `--color-closed`（已截止的灰階，跟次要�
 | `--color-amount` / `-strong` | 金額數字（`.stat-table td.amount`、`.member-row .member-amount`、`.total-line .amount`） |
 | `--color-border` / `-strong` | 見下方 3.2 表 |
 
-### 3.2 Before → After（styles.css，逐行對照，frontend 照表施工）
+### 3.2 Before → After（styles.css，逐行對照，frontend 照表施工；共 21 項，#21 為 2026-08-05 勘誤追加）
 
 | # | 位置 | Before | After | 原因 |
 |---|---|---|---|---|
@@ -199,6 +206,40 @@ v2.1 維持不變**，只有 `--color-closed`（已截止的灰階，跟次要�
 | 18 | 其餘所有 `var(--color-border)` 用法（`.card` L143、`.badge` L204、`.btn` L216、`.stat-table` L387、`.member-row` L417、`.product-edit` L490、`.product-thumb` L499、`.share-link` L512） | — | **class 名稱不用改**，token 數值已在 #3 提亮，自動套用 | 一般結構分隔，不需升級到 strong 階 |
 | 19 | 所有 `var(--color-primary)` 用在文字/邊框角色的地方（`.badge.open` L207、`.link` L260、`.section-title` L306、`.stepper button` L333/L335、`.ghost-primary` L242-243、`.card.status-open` L149、`.product-card.selected` L366、`.receipt-code` L536） | — | **class 名稱不用改**，token 數值已提亮，自動套用 | 這些都是強調文字/邊框角色，不是按鈕填底，沿用 `--color-primary` 即可 |
 | 20 | tsx 內 inline `style={{ color: 'var(--color-warn)' }}` / `'var(--color-closed)'`（DashboardPage.tsx:125、GroupsPage.tsx:63、JoinPage.tsx:147） | — | **不用改程式碼**，token 數值變化自動生效 | 倒數計時文字色不用動 class/inline 寫法 |
+| 21（勘誤，2026-08-05 追加） | `styles.css:351-354` `.stepper button.increment` | `background: var(--color-primary); color: var(--color-text-inverse);` | `background: var(--color-primary-fill); color: var(--color-text-inverse);` | 與 #14 同一類問題：白字疊在填底 `--color-primary` 上。詳細裁決見 3.3 節 |
+
+#### 3.3 裁決說明：`.stepper button.increment`（2026-08-05 勘誤）
+
+**問題**：`.stepper button.increment`（數量步進器「＋」圓形按鈕，開團表單商品數量、買家填單頁選品數量皆會用到）
+是 `background: var(--color-primary); color: var(--color-text-inverse);`——白字疊在「強調色」`--color-primary`
+上，跟 v2.0 的 `.btn.primary` 是同一種誤用（強調色 token 被拿去當填底色）。原 3.2 施工表只列了 `.btn.primary`
+（#14/#15），漏列了這個同樣受影響的元件，這次補齊。
+
+**是否可以用「小字/圖示例外」豁免，不用改？** 評估後**不採用**這個豁免，理由：
+- `+` 字符雖然只有 18px，但 `font-weight: 700`（粗體）。WCAG 大字豁免（3:1 即可）門檻是「粗體 ≥14pt
+  （≈18.66px）」，18px 嚴格算**未達**這個門檻（差 0.66px），不能穩妥地主張大字例外。
+- 就算真的踩線用大字標準（3:1），也不划算：這顆按鈕是「增加數量」的主要操作熱點，比一般文字更需要
+  清楚可讀，沒有理由把它做得比 `.btn.primary` 更難讀。
+- 修法成本極低（只是換一個已經定義好的 token），沒有理由留下不一致。
+
+**裁決**：`.stepper button.increment` 背景改用 `--color-primary-fill`（`#C64A0D`），文字色維持
+`--color-text-inverse`（白），與 `.btn.primary` 用同一套填底邏輯。
+
+**對比數值**：
+- 修正前（若照原樣沿用 v2.1 提亮後的 `--color-primary` `#FF7A29`）：白字對比 **2.60:1**，比 v2.0 用
+  `#E8621A` 時的 3.39:1 還要**更差**（frontend 回報的機制成立，且已用第 0 節第 3 點論證過的同一公式重新算過一次確認）。
+- 修正後（`--color-primary-fill` `#C64A0D`）：白字對比 **4.79:1**，過 AA，與 `.btn.primary` 數值完全一致
+  （本來就是同一個 token，理應一致）。
+
+**同時檢查過的相鄰元件（確認不需要一併修）**：`.stepper button`（非 `.increment` 的預設「－」按鈕）是
+`border: 1.5px solid var(--color-primary); background: var(--color-surface); color: var(--color-primary);`——
+主色橘在此是**文字/邊框角色**，不是填底，套用的是本文件 1.3 節已驗證過的 `--color-primary` 文字對比數字
+（對 `--color-surface` 6.80:1，對 `--color-primary-muted` 選中底色 6.31:1），全部過 AA，**不需要修改**。
+
+**是否需要 hover/pressed 變體**：目前 `.stepper button.increment` 沒有定義 `:hover`／`:active`，只有
+`:disabled`（`opacity: 0.3`，沿用既有「停用降低不透明度」慣例，不受本次裁決影響）。本次裁決**不新增**
+hover 樣式，維持現狀範圍，避免施工表外再擴大改動；若之後要幫按鈕加 hover/pressed 回饋，比照
+`.btn.primary:hover` 用 `--color-primary-fill-hover`（`#A83D0A`，白字 6.29:1）即可。
 
 ---
 
@@ -229,6 +270,7 @@ v2.1 維持不變**，只有 `--color-closed`（已截止的灰階，跟次要�
         白字在上肉眼確認清楚可讀（對照 4.79:1 / 6.29:1）。
   - [ ] 表單輸入框邊界（開團表單、買家填單頁）目視比 v2.0 明顯。
   - [ ] 後台統計表總計列分隔線比一般分隔線粗/亮。
+  - [ ] `.stepper button.increment`（數量步進器「＋」圓形按鈕）底色改用 `--color-primary-fill`，白字在上肉眼確認清楚可讀（對照 4.79:1，見 3.3 節勘誤裁決）。
 - [ ] 卡片（`.card` / `.product-card`）與頁面底色目視有明確分層，不再是「一片黑」。
 - [ ] 次要文字（`.muted`、table header、`.stat-label`）在卡片與統計摘要區上都清楚可讀。
 - [ ] `.badge.closed` / 已截止倒數文字目視不再霧灰，跟其他 badge 一樣清楚。
