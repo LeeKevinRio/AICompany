@@ -1,8 +1,12 @@
 # AI 虛擬公司（AICompany）
 
 一個用 **Claude Code** 多 agent 編排出來的「AI 虛擬公司」模板。
-你（人類）是 **CEO**，從 Claude Code 下指令；底下四位總監各是一個 Claude Code subagent，分工協作。
+你（人類）是 **CEO**，從 Claude Code 下指令；底下十五個部門各是一個 Claude Code subagent，分工協作。
 程式碼開發用 Claude Code 本身，code review 改用 **OpenAI Codex CLI**（跨廠商抓盲點）。
+
+> **雙線模型**：`main` 是**員工線**，只放 agents / skills / 治理文件（零產品耦合）；
+> 每個產品開自己的 `product/<名稱>` 長命分支，從 main 長出並定期 merge main 吸收最新員工能力，
+> **永遠不 merge 回 main**。詳見 [CLAUDE.md](CLAUDE.md) 第 1 節。
 
 > 全公司規則：說明文字一律**繁體中文（台灣用語）**，技術名詞與程式碼保留英文。詳見 [CLAUDE.md](CLAUDE.md)。
 
@@ -10,27 +14,27 @@
 
 ## 這家公司怎麼運作
 
-```
-            CEO（你，人類）
-                 │ 下指令
-   ┌─────────┬───┴────┬──────────┐
-dev-lead  qa-reviewer creative-lead art-lead
-（開發）    （審查）     （企劃文案）   （美術）
-```
+完整組織圖與十五個部門的職責見 [`docs/org-chart.md`](docs/org-chart.md)，摘要：
 
-| 角色 | 是誰 | 做什麼 |
+| 部門群 | Agents | 做什麼 |
 | --- | --- | --- |
-| **CEO** | 你（人類） | 下任務、做決策、驗收 |
-| **dev-lead** | subagent | 寫 code、實作、修 bug、跑測試 |
-| **qa-reviewer** | subagent | 測試與 code review（唯讀），呼叫 Codex 做第二意見 |
-| **creative-lead** | subagent | 發想、企劃、文案 |
-| **art-lead** | subagent | 美術方向、視覺規範、art brief |
+| 產品規劃 | product-manager、tech-architect | PRD 與驗收條件；技術選型與 ADR（有否決權） |
+| 研發 | dev-lead、frontend-engineer、data-engineer、quant-researcher | 後端／前端／資料層／量化研究 |
+| 品管審查 | qa-reviewer、qa-automation、qa-e2e | code review（Codex 第二意見）／自動化測試／實機驗收 |
+| 風控與資安 | risk-compliance-officer、security-engineer | 建議類文案把關（有否決權）／secrets 與弱點掃描 |
+| 創意美術 | creative-lead、art-lead | 企劃文案／視覺規範 |
+| 維運文件 | devops-sre、tech-writer | CI/CD 與部署／README、ADR 落檔、changelog |
 
 ### 標準協作流程
-1. **CEO 下任務** → 描述要做什麼。
-2. **dev-lead 實作** → 寫 code，`git add` 成 staged diff。
-3. **qa-reviewer 審查** → 本地審查 + 跨廠商 `/review`（Codex）。
-4. **通過才算完成**：若 `BLOCKING_ISSUES=true` 退回 dev-lead 修正重審；通過則回報 CEO。
+
+任務狀態機 `draft → spec → build → review → risk-gate → done`，
+任務單格式、退件與否決規則見 [`docs/handoff-protocol.md`](docs/handoff-protocol.md)。摘要：
+
+1. **CEO 下任務** → product-manager 產出 PRD 與驗收條件，tech-architect 做技術評估。
+2. **實作部門動工** → 完成後 `git add` 成 staged diff。
+3. **qa-reviewer 審查** → 本地審查 + 跨廠商 `/review`（Codex）；涉及 UI 再由 qa-e2e 實機驗收。
+4. **風險閘門** → 面向使用者的建議類產出必經 risk-compliance-officer。
+5. **通過才算完成**：`BLOCKING_ISSUES=true` 退回修正重審；通過則回報 CEO。
 
 ---
 
@@ -85,22 +89,27 @@ dev-lead  qa-reviewer creative-lead art-lead
 
 ```
 .
-├── CLAUDE.md              # 公司章程（組織 / 流程 / 規範）
+├── CLAUDE.md              # 公司章程（最高原則 / 守則，精簡版）
 ├── README.md             # 本檔
+├── 回報格式.md            # 每次回應的四段式回報格式
 ├── .gitignore            # 擋祕密與雜訊
 ├── .env.example          # 環境變數範本（假值）
+├── docs/
+│   ├── org-chart.md      # 組織圖與部門總表（與 agents 嚴格同步，CI 驗證）
+│   ├── handoff-protocol.md  # 任務單格式 / 狀態機 / 退件與否決規則
+│   └── adr/              # 架構決策紀錄（ADR-0001 為模板）
+├── scripts/
+│   └── validate_agents.py   # agent 規格驗證（CI 也會跑）
+├── .github/workflows/
+│   └── validate.yml      # CI：驗證 agents 與 org-chart 同步
 ├── .claude/
 │   ├── settings.json     # 專案預設（權限 / env）
-│   ├── agents/           # 四位總監的 subagent 定義
-│   │   ├── dev-lead.md
-│   │   ├── qa-reviewer.md
-│   │   ├── creative-lead.md
-│   │   └── art-lead.md
-│   ├── skills/           # 技能包（建議掛 superpowers / anthropics / openai skills）
-│   │   └── README.md
+│   ├── agents/           # 十五個部門的 subagent 定義
+│   ├── skills/           # 共用流程技能包（code-review-checklist、release-flow、
+│   │                     #   data-source-integration、backtest-protocol、creative-masters）
 │   └── commands/
 │       └── review.md     # /review：呼叫 Codex 做跨廠商審查
-└── work/                 # 企劃、art brief、草稿等過程文件
+└── work/                 # 企劃、art brief、任務單等過程文件
 ```
 
 ---
