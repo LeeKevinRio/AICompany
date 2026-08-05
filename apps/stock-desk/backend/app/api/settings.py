@@ -18,10 +18,12 @@ the *book*, not only against its own field bounds: a figure below the valued
 positions is refused and one far above them is stored with a warning
 (:mod:`app.settings.net_worth`). That comparison needs the positions valued, so
 it is done **only on a write that carries the section** -- reading the settings
-page must not turn into a round of price fetches. The consequence is stated
-where it matters: the freshness block below is computed on every read from the
-clock alone, while the "this is 10x your book" warning belongs to the response
-of the write that produced it.
+page must not turn into a round of price fetches.
+
+Reads still carry the full picture, because the write stores what it measured
+against (``valued_book_twd_at_report``). The freshness block therefore restates
+both the age of the figure and the "this is many times your book" warning from
+stored values and the clock, with no provider call anywhere on the read path.
 
 The risk-budget bounds are the ones declared on
 :class:`app.advice.limits.RiskBudget` and are reused unchanged, whatever the
@@ -62,7 +64,12 @@ from app.portfolio.summary import build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.settings.models import AppSettings, AppSettingsPatch
-from app.settings.net_worth import NetWorthReview, review_net_worth
+from app.settings.net_worth import (
+    NetWorthReview,
+    is_far_above_book,
+    review_net_worth,
+    standing_far_above_note,
+)
 from app.settings.store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -173,8 +180,13 @@ class NetWorthView(BaseModel):
     #: Always present: the currency reminder plus whatever the freshness state
     #: obliges us to say.
     notes: list[str]
-    #: Only the write that produced them carries these -- the checks behind
-    #: them need the book valued, which a read deliberately does not do.
+    #: What has to be *seen*, not merely available -- currently the "this is
+    #: many times your valued book" disclosure (FR-9 (c) row 3). Present on
+    #: every read, not only on the write that first raised it: a warning the
+    #: user closed once would otherwise leave them believing cap 3 is guarding
+    #: them while an inflated denominator makes it agree with everything. It is
+    #: restated from the yardstick stored with the report, so a read still
+    #: prices nothing.
     warnings: list[str]
 
 
@@ -247,8 +259,17 @@ def _alpha_vantage_quota(ledger: QuotaLedger) -> QuotaUsageView:
     )
 
 
-def _net_worth_view(settings: AppSettings, *, warnings: list[str]) -> NetWorthView:
-    """The freshness block, from the clock only -- no prices are fetched here."""
+def _net_worth_view(settings: AppSettings) -> NetWorthView:
+    """The freshness block, from the clock and the stored figures only.
+
+    Nothing here prices a position: the freshness rule needs the clock, and the
+    "far above your book" disclosure is restated from the yardstick that was
+    saved with the report (:attr:`NetWorthSettings.valued_book_twd_at_report`).
+    A read that valued the book would spend provider budget every time the
+    settings page was opened, which is a cost the page cannot justify -- and it
+    is also why that disclosure is *stored* rather than recomputed: it has to
+    survive the tab being closed.
+    """
     stored = settings.net_worth
     reported = self_reported_net_worth(stored.total_net_worth_twd, stored.updated_at)
     if reported is None:
@@ -258,10 +279,17 @@ def _net_worth_view(settings: AppSettings, *, warnings: list[str]) -> NetWorthVi
             age_days=None,
             freshness="absent",
             notes=[NET_WORTH_ABSENT_NOTE, NET_WORTH_CURRENCY_NOTE],
-            warnings=warnings,
+            warnings=[],
         )
 
     notes = [NET_WORTH_CURRENCY_NOTE]
+    warnings: list[str] = []
+    if is_far_above_book(reported.amount_twd, stored.valued_book_twd_at_report):
+        # Narrowed by ``is_far_above_book``; restated for the type checker.
+        assert stored.valued_book_twd_at_report is not None
+        warnings.append(
+            standing_far_above_note(reported.amount_twd, stored.valued_book_twd_at_report)
+        )
     freshness: NetWorthFreshness = "fresh"
     if reported.age_days >= NET_WORTH_STALE_AFTER_DAYS:
         freshness = "expired"
@@ -293,11 +321,10 @@ def _response(
     settings: AppSettings,
     ledger: QuotaLedger,
     *,
-    net_worth_warnings: list[str] | None = None,
     net_worth_notes: list[str] | None = None,
 ) -> SettingsResponse:
     verified = settings.cost_model.rates_verified
-    view = _net_worth_view(settings, warnings=net_worth_warnings or [])
+    view = _net_worth_view(settings)
     if net_worth_notes:
         view = view.model_copy(update={"notes": [*view.notes, *net_worth_notes]})
     return SettingsResponse(
@@ -312,22 +339,29 @@ def _response(
 
 def _review_reported_net_worth(
     amount_twd: float, positions: PositionStore, valuator: PositionValuator
-) -> NetWorthReview:
+) -> tuple[NetWorthReview, float | None]:
     """Run the FR-9 (c) bands against the currently valued book.
 
-    The book is valued here and nowhere else in this router, so the cost is
-    paid only by a request that actually reports a net worth.
+    Returns the verdict and the yardstick it was measured against, so the
+    caller can store the latter with the figure. The book is valued here and
+    nowhere else in this router, so the cost is paid only by a request that
+    actually reports a net worth -- and paid once, not once per rule.
+
+    The yardstick is ``None`` when nothing could be valued: there was no
+    comparison, and storing a zero would later read as one that happened.
     """
     summary = build_summary(positions, valuator)
     valued = [
         position for position in summary.positions if position.valuation.status == "ok"
     ]
-    return review_net_worth(
+    market_value = float(summary.totals.market_value_twd)
+    review = review_net_worth(
         amount_twd,
-        valued_market_value_twd=float(summary.totals.market_value_twd),
+        valued_market_value_twd=market_value,
         valued_count=len(valued),
         total_count=len(summary.positions),
     )
+    return review, (market_value if valued else None)
 
 
 @router.get("", response_model=SettingsResponse)
@@ -348,7 +382,7 @@ def write_settings(
         return _response(store.save(body.apply_to(current)), ledger)
 
     amount = body.net_worth.total_net_worth_twd
-    review = _review_reported_net_worth(amount, positions, valuator)
+    review, valued_book = _review_reported_net_worth(amount, positions, valuator)
     if review.rejection is not None:
         # Refused outright, and nothing is written: the stored figure keeps
         # standing rather than being replaced by one that would make the cap
@@ -358,15 +392,17 @@ def write_settings(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=review.rejection
         )
 
-    saved = store.save(body.apply_to(current))
+    saved = store.save(body.apply_to(current, valued_book_twd=valued_book))
     # FR-9 (d): no history table, but the change does leave a trace.
     logger.info(
-        "net worth updated: previous=%s new=%.2f at=%s warnings=%d",
+        "net worth updated: previous=%s new=%.2f at=%s valued_book=%s warnings=%d",
         current.net_worth.total_net_worth_twd,
         amount,
         saved.net_worth.updated_at,
+        valued_book,
         len(review.warnings),
     )
-    return _response(
-        saved, ledger, net_worth_warnings=review.warnings, net_worth_notes=review.notes
-    )
+    # ``review.warnings`` is not passed on: the response's warning is rebuilt
+    # from what was just stored, so the sentence the user sees now is the same
+    # one they will keep seeing on every later read.
+    return _response(saved, ledger, net_worth_notes=review.notes)
