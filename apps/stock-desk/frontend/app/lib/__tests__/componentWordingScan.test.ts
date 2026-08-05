@@ -28,6 +28,11 @@ const SCANNED_FILES = [
   "../../position/[symbol]/OperationSummaryPanel.tsx",
   "../../position/[symbol]/page.tsx",
   "../../components/NavBar.tsx",
+  // FR-9's settings surface: the net-worth field's label, its hints and the
+  // risk-widening confirmation are all hard-coded Traditional Chinese in JSX,
+  // which is exactly the class of copy this scan exists to reach.
+  "../../settings/NetWorthSection.tsx",
+  "../../settings/SettingsForm.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
