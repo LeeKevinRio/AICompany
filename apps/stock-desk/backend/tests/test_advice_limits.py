@@ -20,6 +20,7 @@ from app.advice.limits import (
     SelfReportedNetWorth,
     atr_max_shares,
     evaluate_limits,
+    format_reported_at,
     kelly_allowed_weight,
     kelly_fraction,
     limit_status_after,
@@ -282,7 +283,61 @@ def test_gross_exposure_verdict_carries_the_three_required_sentences() -> None:
     detail = _check(_ctx(net_worth=net_worth), "gross_exposure").detail
     assert "兩者來源不同" in detail
     assert "未登錄的部位不計入分子，會讓曝險看起來偏低" in detail
-    assert net_worth.reported_at in detail
+    # The third sentence is a *readable* time, not the raw stored value: the
+    # fixture reports 2026-07-24T15:51:56.015754+00:00.
+    assert "2026-07-24 23:51（台北時間）" in detail
+    assert net_worth.reported_at not in detail
+
+
+def test_the_expiry_reason_also_carries_a_readable_time() -> None:
+    detail = _check(
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_STALE_AFTER_DAYS)),
+        "gross_exposure",
+    ).detail
+    assert "2026-06-24 23:51（台北時間）" in detail
+    assert "015754" not in detail
+
+
+# --- The timestamp format the disclosures use --------------------------------
+
+
+def test_reported_at_is_converted_to_taipei_and_labelled() -> None:
+    # A real conversion: 15:51 UTC is 23:51 the same day in Taipei. Labelled,
+    # because an unlabelled local time reads exactly like an unconverted UTC
+    # one and the two are eight hours apart.
+    assert (
+        format_reported_at("2026-08-05T15:51:56.015754+00:00")
+        == "2026-08-05 23:51（台北時間）"
+    )
+
+
+def test_reported_at_crossing_midnight_moves_the_date_too() -> None:
+    # 20:00 UTC is 04:00 the *next* day in Taipei; string surgery on the
+    # timestamp would have kept the wrong date.
+    assert format_reported_at("2026-08-05T20:00:00+00:00") == "2026-08-06 04:00（台北時間）"
+
+
+def test_a_non_utc_offset_is_honoured_rather_than_assumed_away() -> None:
+    # Already Taipei time: the instant is unchanged, so the rendering is too.
+    assert format_reported_at("2026-08-05T23:51:00+08:00") == "2026-08-05 23:51（台北時間）"
+
+
+def test_a_naive_timestamp_is_read_as_utc_like_everywhere_else() -> None:
+    # Same assumption ``self_reported_net_worth`` makes when measuring its age,
+    # so the age and the displayed time can never disagree about the instant.
+    assert format_reported_at("2026-08-05T15:51:56") == "2026-08-05 23:51（台北時間）"
+
+
+def test_seconds_and_microseconds_are_dropped() -> None:
+    rendered = format_reported_at("2026-08-05T15:51:56.015754+00:00")
+    assert "56" not in rendered.split("（")[0].split(" ")[1]
+    assert "015754" not in rendered
+
+
+def test_an_unparseable_timestamp_comes_back_untouched() -> None:
+    # Half-formatting a value nobody could read would present a time that was
+    # never verified; the raw string at least cannot be mistaken for one.
+    assert format_reported_at("上週三") == "上週三"
 
 
 def test_a_reported_net_worth_must_be_positive() -> None:

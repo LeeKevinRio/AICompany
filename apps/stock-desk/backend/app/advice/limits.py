@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -118,8 +120,8 @@ NO_NET_WORTH_DETAIL = (
 #: AC-9.4. Wording is fixed: the reader has to be told the input expired, not
 #: merely that something is missing.
 NET_WORTH_EXPIRED_DETAIL = (
-    "淨值輸入已超過 {days} 天未更新（最後輸入時間 {reported_at}，距今 {age_days} 天），"
-    "這條上限不以過期的淨值計算；請至設定頁更新帳戶總淨值後再評估。"
+    "淨值輸入已超過 {days} 天未更新，最後輸入時間為 {reported_at}，距今 {age_days} 天；"
+    "這條上限不以過期的淨值計算，請至設定頁更新帳戶總淨值後再評估。"
 )
 
 #: FR-9 (a-附加): the numerator only covers positions that could be valued, and
@@ -146,6 +148,42 @@ GROSS_EXPOSURE_REPORTED_AT_NOTE = "自報淨值的輸入時間為 {reported_at}�
 
 #: The soft half of the freshness rule: still evaluated, but said out loud.
 NET_WORTH_AGEING_NOTE = "此淨值已 {age_days} 天未更新，滿 {days} 天後這條上限將不再計算。"
+
+#: Every human-readable timestamp in these disclosures is rendered in this zone
+#: and labelled with it. Taipei because the reporting currency, the market and
+#: the reader are all Taiwanese, and because the frontend already renders every
+#: other timestamp the same way (``app/lib/format.ts``). Labelled because an
+#: unlabelled local time is indistinguishable from an unconverted UTC one, and
+#: those are eight hours apart -- on a freshness disclosure, that is exactly the
+#: kind of ambiguity the sentence exists to remove.
+DISCLOSURE_TZ = ZoneInfo("Asia/Taipei")
+DISCLOSURE_TZ_LABEL = "台北時間"
+
+
+def format_reported_at(reported_at: str) -> str:
+    """An ISO timestamp as a sentence can carry it: local, to the minute, labelled.
+
+    The stored value stays ISO-8601 UTC -- that is what machines read, and it is
+    what :func:`app.advice.book.self_reported_net_worth` measures the age from.
+    This is only for the prose the caps produce, where a bare
+    ``2026-08-05T15:51:56.015754+00:00`` costs the reader something to decode and
+    tells them nothing the minute does not: the rule it feeds is measured in
+    days, so seconds and microseconds are noise.
+
+    A real timezone conversion, never string surgery -- truncating the offset
+    away would silently relabel a UTC instant as a local one. An unparseable
+    value comes back untouched rather than half-formatted into something that
+    looks like a time somebody checked.
+    """
+    try:
+        moment = datetime.fromisoformat(reported_at)
+    except ValueError:
+        return reported_at
+    if moment.tzinfo is None:
+        # The same assumption ``app.advice.book`` makes about the same string,
+        # and what ``app.settings.store`` writes.
+        moment = moment.replace(tzinfo=UTC)
+    return f"{moment.astimezone(DISCLOSURE_TZ):%Y-%m-%d %H:%M}（{DISCLOSURE_TZ_LABEL}）"
 
 
 def _ceiling_message(label: str, ceiling: float, reason: str) -> str:
@@ -503,7 +541,9 @@ def _net_worth_disclosure(net_worth: SelfReportedNetWorth) -> str:
     parts = [
         GROSS_EXPOSURE_MIXED_SOURCE_NOTE,
         GROSS_EXPOSURE_COVERAGE_NOTE,
-        GROSS_EXPOSURE_REPORTED_AT_NOTE.format(reported_at=net_worth.reported_at),
+        GROSS_EXPOSURE_REPORTED_AT_NOTE.format(
+            reported_at=format_reported_at(net_worth.reported_at)
+        ),
     ]
     if net_worth.age_days >= NET_WORTH_SOFT_NOTICE_DAYS:
         parts.append(
@@ -533,7 +573,7 @@ def _check_gross_exposure(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
             "not_evaluable",
             NET_WORTH_EXPIRED_DETAIL.format(
                 days=NET_WORTH_STALE_AFTER_DAYS,
-                reported_at=net_worth.reported_at,
+                reported_at=format_reported_at(net_worth.reported_at),
                 age_days=net_worth.age_days,
             ),
             None,

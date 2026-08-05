@@ -54,6 +54,7 @@ from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
     PortfolioContext,
     SelfReportedNetWorth,
+    format_reported_at,
 )
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
@@ -75,15 +76,16 @@ GROSS_EXPOSURE_NOTE = (
 #: It names both halves of the ratio and where each came from, because the two
 #: numbers no longer share an origin.
 GROSS_EXPOSURE_SELF_REPORTED_NOTE = (
-    "總曝險以「已估值部位市值合計」為分子、使用者於 {reported_at} 自報的帳戶總淨值"
-    "（新台幣 {amount:,.0f} 元）為分母；此淨值由使用者自行輸入，系統未加以查核。"
+    "總曝險以「已估值部位市值合計」為分子、使用者自報的帳戶總淨值"
+    "新台幣 {amount:,.0f} 元為分母，輸入時間為 {reported_at}；"
+    "此淨值由使用者自行輸入，系統未加以查核。"
 )
 
 #: And stated when the report is past its freshness rule. The present-tense
 #: sentence above would otherwise sit next to a cap reporting ``not_evaluable``
 #: for that very reason, describing a division this context does not perform.
 GROSS_EXPOSURE_EXPIRED_NOTE = (
-    "使用者於 {reported_at} 自報的帳戶總淨值（新台幣 {amount:,.0f} 元）"
+    "使用者自報的帳戶總淨值新台幣 {amount:,.0f} 元，輸入時間為 {reported_at}，"
     "已超過 {days} 天未更新，本次不以它為分母計算總曝險；"
     "該上限回報 not_evaluable，待使用者更新淨值後才會恢復計算。"
 )
@@ -201,12 +203,12 @@ def _gross_exposure_note(net_worth: SelfReportedNetWorth | None) -> str:
         return GROSS_EXPOSURE_NOTE
     if net_worth.age_days >= NET_WORTH_STALE_AFTER_DAYS:
         return GROSS_EXPOSURE_EXPIRED_NOTE.format(
-            reported_at=net_worth.reported_at,
+            reported_at=format_reported_at(net_worth.reported_at),
             amount=net_worth.amount_twd,
             days=NET_WORTH_STALE_AFTER_DAYS,
         )
     return GROSS_EXPOSURE_SELF_REPORTED_NOTE.format(
-        reported_at=net_worth.reported_at, amount=net_worth.amount_twd
+        reported_at=format_reported_at(net_worth.reported_at), amount=net_worth.amount_twd
     )
 
 

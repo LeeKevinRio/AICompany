@@ -9,7 +9,7 @@ price series. ``test_advice_engine`` additionally pins the real
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,9 @@ from app.advice.limits import SelfReportedNetWorth
 _AS_OF = "2026-07-24T13:30:00+00:00"
 _BAR_COUNT = 120
 _LAST_BAR = date(2026, 7, 24)
+#: The shape the settings store actually writes: an aware UTC timestamp, not a
+#: bare date, so the disclosure formatting is exercised on a realistic value.
+_REPORTED_AT = datetime(2026, 7, 24, 15, 51, 56, 15754, tzinfo=UTC)
 
 #: The aligned date index the real indicators publish. An indicator that
 #: reported ``insufficient_data`` publishes an empty one, as it does in
@@ -168,7 +171,7 @@ def reported_net_worth(
     """
     return SelfReportedNetWorth(
         amount_twd=amount_twd,
-        reported_at=(_LAST_BAR - timedelta(days=age_days)).isoformat(),
+        reported_at=(_REPORTED_AT - timedelta(days=age_days)).isoformat(),
         age_days=age_days,
     )
 

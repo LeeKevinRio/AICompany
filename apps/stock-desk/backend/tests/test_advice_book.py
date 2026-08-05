@@ -154,7 +154,11 @@ def test_a_reported_net_worth_turns_the_valued_book_into_the_numerator() -> None
     # The standing note now describes the ratio that exists, not the one that
     # does not, and says which half the user supplied.
     assert GROSS_EXPOSURE_NOTE not in book.notes
-    assert any("自報的帳戶總淨值" in note for note in book.notes)
+    note = next(n for n in book.notes if "自報的帳戶總淨值" in n)
+    # The same readable form the cap's own disclosure uses -- these two
+    # sentences sit next to each other on the card.
+    assert "2026-07-24 23:51（台北時間）" in note
+    assert "015754" not in note
 
 
 def test_an_expired_net_worth_is_not_described_as_the_current_denominator() -> None:
