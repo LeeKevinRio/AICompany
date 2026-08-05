@@ -35,6 +35,12 @@ export interface Order {
    * optional：舊資料無此欄位 → undefined，視為「未收款」（中性、不影響歷史）。
    */
   paid?: boolean;
+  /**
+   * 買家備註（可選，例：不要辣、少冰）。
+   * 買家填單頁與現場代填皆可填寫；回單碼匯入時一併帶入，不再靜默丟棄。
+   * optional：舊資料無此欄位 → undefined。
+   */
+  note?: string;
 }
 
 /** 一個團購活動（主揪開的一張表單） */
