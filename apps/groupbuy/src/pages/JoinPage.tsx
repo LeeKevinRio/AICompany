@@ -185,7 +185,7 @@ export function JoinPage() {
             <div className="stepper">
               <button
                 onClick={() => setQty(p.id, qty - 1)}
-                disabled={qty <= 0}
+                disabled={expired || qty <= 0}
                 aria-label={`減少 ${p.name}`}
               >
                 −
@@ -197,11 +197,13 @@ export function JoinPage() {
                 max={MAX_ITEM_QTY}
                 value={qty}
                 onChange={(e) => setQty(p.id, Number(e.target.value))}
+                disabled={expired}
                 aria-label={`${p.name} 數量`}
               />
               <button
                 className="increment"
                 onClick={() => setQty(p.id, qty + 1)}
+                disabled={expired}
                 aria-label={`增加 ${p.name}`}
               >
                 ＋
