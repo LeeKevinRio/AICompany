@@ -1,3 +1,8 @@
+# 這裡是「預設忽略、逐檔放行」。注意兩件事：
+#   1. `git add work/` 對未放行的新檔案會**靜默跳過**，不報錯也不出現在
+#      `git status`——新增檔案卻沒進 commit 就是這樣發生的（FR-9 發布說明曾中招）。
+#      新增要進版控的文件時，務必在下方補一行，並用 `git show --stat` 確認真的進去了。
+#   2. 已被追蹤的檔案不受這裡影響，所以清單看起來會比 `git ls-files work/` 短。
 *
 !.gitkeep
 !.gitignore
@@ -5,3 +10,4 @@
 !mahjong-app-v2-企劃.md
 !mahjong-app-v2-視覺規範.md
 !mahjong-app-回饋輪企劃.md
+!stock-desk-發布說明.md
