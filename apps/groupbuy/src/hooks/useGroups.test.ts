@@ -73,14 +73,14 @@ describe('applySubmitOrder', () => {
     const orders: Order[] = [
       { id: 'o1', buyerName: '小明', createdAt: 111, items: [{ productId: 'a', qty: 1 }] },
     ];
-    const next = applySubmitOrder(orders, '小明', [{ productId: 'a', qty: 3 }], makeId, 999);
+    const next = applySubmitOrder(orders, '小明', [{ productId: 'a', qty: 3 }], undefined, makeId, 999);
     expect(next).toHaveLength(1);
     expect(next[0].id).toBe('o1');
     expect(next[0].createdAt).toBe(111);
     expect(next[0].items).toEqual([{ productId: 'a', qty: 3 }]);
   });
 
-  it('【Blocking 修正】同名覆蓋已付訂單 → paid 歸零，重新計入未收款', () => {
+  it('【Blocking 修正】同名覆蓋且內容有變 → paid 歸零，重新計入未收款', () => {
     const products = [{ id: 'a', name: '便當', price: 100 }];
     const before: Group = {
       id: 'g1',
@@ -95,11 +95,12 @@ describe('applySubmitOrder', () => {
     // 收款前：小明已付 → 未收款 0（結清）。
     expect(calcUnpaidTotal(before)).toBe(0);
 
-    // 小明改單加量（1→2）覆蓋。
+    // 小明改單加量（1→2）覆蓋，內容確實變了。
     const nextOrders = applySubmitOrder(
       before.orders,
       '小明',
       [{ productId: 'a', qty: 2 }],
+      undefined,
       makeId,
       500,
     );
@@ -110,11 +111,87 @@ describe('applySubmitOrder', () => {
     expect(calcUnpaidTotal(after)).toBe(200);
   });
 
+  it('【Major 修正】重複送出內容完全相同（品項＋數量＋備註）→ 冪等，保留原 paid', () => {
+    const orders: Order[] = [
+      {
+        id: 'o1',
+        buyerName: '小明',
+        createdAt: 0,
+        paid: true,
+        note: '不要辣',
+        items: [{ productId: 'a', qty: 2 }],
+      },
+    ];
+    // 重複匯入同一張回單碼：品項、數量、備註都跟既有訂單一模一樣。
+    const next = applySubmitOrder(
+      orders,
+      '小明',
+      [{ productId: 'a', qty: 2 }],
+      '不要辣',
+      makeId,
+      500,
+    );
+    expect(next).toBe(orders); // 完全沒改動（同一個參照即可證明冪等）
+    expect(next[0].paid).toBe(true); // paid 沒被打回未收款
+  });
+
+  it('【Major 修正】內容相同但品項陣列順序不同、或有重複 productId 合併後相同 → 仍判定冪等', () => {
+    const orders: Order[] = [
+      {
+        id: 'o1',
+        buyerName: '小明',
+        createdAt: 0,
+        paid: true,
+        items: [
+          { productId: 'a', qty: 1 },
+          { productId: 'b', qty: 2 },
+        ],
+      },
+    ];
+    // 順序顛倒 + 'a' 拆成兩筆合計仍是 1。
+    const next = applySubmitOrder(
+      orders,
+      '小明',
+      [
+        { productId: 'b', qty: 2 },
+        { productId: 'a', qty: 1 },
+      ],
+      undefined,
+      makeId,
+      500,
+    );
+    expect(next[0].paid).toBe(true);
+  });
+
+  it('【Major 修正】備註不同也算內容變動 → 觸發 paid 重置（非冪等）', () => {
+    const orders: Order[] = [
+      { id: 'o1', buyerName: '小明', createdAt: 0, paid: true, note: '不要辣', items: [{ productId: 'a', qty: 1 }] },
+    ];
+    const next = applySubmitOrder(
+      orders,
+      '小明',
+      [{ productId: 'a', qty: 1 }],
+      '不要辣，加蛋',
+      makeId,
+      500,
+    );
+    expect(next[0].paid).toBeUndefined();
+    expect(next[0].note).toBe('不要辣，加蛋');
+  });
+
+  it('新訂單帶備註會存進去；空白備註視為無備註（不存 note 欄位）', () => {
+    const next1 = applySubmitOrder([], '小華', [{ productId: 'a', qty: 1 }], '少冰', makeId, 777);
+    expect(next1[0].note).toBe('少冰');
+
+    const next2 = applySubmitOrder([], '小華', [{ productId: 'a', qty: 1 }], '   ', makeId, 777);
+    expect(next2[0].note).toBeUndefined();
+  });
+
   it('不同名 → 新增一張，makeId / now 生效', () => {
     const orders: Order[] = [
       { id: 'o1', buyerName: '小明', createdAt: 0, items: [] },
     ];
-    const next = applySubmitOrder(orders, '小華', [{ productId: 'a', qty: 1 }], makeId, 777);
+    const next = applySubmitOrder(orders, '小華', [{ productId: 'a', qty: 1 }], undefined, makeId, 777);
     expect(next).toHaveLength(2);
     expect(next[1]).toEqual({
       id: 'o_new',
