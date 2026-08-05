@@ -35,6 +35,7 @@ def test_get_returns_every_section_with_defaults(api_harness: ApiHarness) -> Non
     assert body["settings"]["net_worth"] == {
         "total_net_worth_twd": None,
         "updated_at": None,
+        "valued_book_twd_at_report": None,
     }
     assert "as_of" in body
 
@@ -275,6 +276,63 @@ def test_ten_times_the_book_is_inside_the_band(api_harness: ApiHarness) -> None:
     response = _put_net_worth(api_harness, valued * 10)
     assert response.status_code == 200
     assert response.json()["net_worth"]["warnings"] == []
+
+
+def test_the_far_above_disclosure_survives_every_later_read(
+    api_harness: ApiHarness,
+) -> None:
+    # A warning shown once and never again leaves the user believing the
+    # exposure cap is guarding them while an inflated denominator makes it
+    # agree with everything. It is restated on every read, from the yardstick
+    # stored with the report, and stays in ``warnings`` (what must be seen)
+    # rather than sinking into the small print.
+    valued = _seed_valued_position(api_harness)
+    _put_net_worth(api_harness, valued * 11)
+    for _ in range(3):
+        block = api_harness.client.get("/api/settings").json()["net_worth"]
+        assert block["warnings"]
+        assert "第 3 條上限將失去意義" in block["warnings"][0]
+        assert "輸入當下" in block["warnings"][0]
+
+
+def test_the_standing_disclosure_costs_no_price_lookup(api_harness: ApiHarness) -> None:
+    # It is restated from ``valued_book_twd_at_report``, not from a fresh
+    # valuation: opening the settings page must not spend provider budget.
+    valued = _seed_valued_position(api_harness)
+    _put_net_worth(api_harness, valued * 11)
+    before = len(api_harness.price_service.calls)
+    api_harness.client.get("/api/settings")
+    assert len(api_harness.price_service.calls) == before
+
+
+def test_the_yardstick_is_stored_with_the_report(api_harness: ApiHarness) -> None:
+    valued = _seed_valued_position(api_harness)
+    _put_net_worth(api_harness, valued * 2)
+    stored = api_harness.client.get("/api/settings").json()["settings"]["net_worth"]
+    assert stored["valued_book_twd_at_report"] == pytest.approx(valued)
+
+
+def test_no_yardstick_is_invented_when_nothing_could_be_valued(
+    api_harness: ApiHarness,
+) -> None:
+    # A stored zero would later read as a comparison that happened and would
+    # make every figure look infinitely above the book.
+    _put_net_worth(api_harness, 3_000_000.0)
+    body = api_harness.client.get("/api/settings").json()
+    assert body["settings"]["net_worth"]["valued_book_twd_at_report"] is None
+    assert body["net_worth"]["warnings"] == []
+
+
+def test_a_corrected_net_worth_drops_the_standing_disclosure(
+    api_harness: ApiHarness,
+) -> None:
+    # The disclosure follows the figure, not the user: entering a plausible
+    # one clears it, because the yardstick is re-measured on every write.
+    valued = _seed_valued_position(api_harness)
+    _put_net_worth(api_harness, valued * 11)
+    _put_net_worth(api_harness, valued * 2)
+    block = api_harness.client.get("/api/settings").json()["net_worth"]
+    assert block["warnings"] == []
 
 
 def test_without_a_valued_book_only_the_positive_rule_can_be_applied(

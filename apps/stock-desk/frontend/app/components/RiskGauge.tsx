@@ -49,7 +49,14 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       name: "總曝險上限",
       status: "not_evaluable",
       threshold: budget.max_gross_exposure,
-      reason: "系統未記錄部位以外的現金部位，無法確定「總資產」與「總曝險」的比例關係。",
+      // FR-9 gave this cap a denominator (the net worth the user reports on the
+      // settings page), so the old reason — "we cannot know your total" — became
+      // false the moment that field shipped. What is still missing *here* is the
+      // numerator: this page has no per-position TWD market value. Backing this
+      // gauge with the real verdicts is FR-8 and deliberately not done in this
+      // batch; until then the reason has to name the gap that actually remains.
+      reason:
+        "總覽頁未提供各部位台幣市值明細，無法在此頁計算總曝險的分子；第 3 條的實際判定（分母為你在設定頁自報的帳戶總淨值）請至個股頁面查看。",
     },
     {
       id: "per_trade_loss",

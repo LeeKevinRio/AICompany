@@ -137,9 +137,10 @@ class NetWorthInput(BaseModel):
 class NetWorthSettings(BaseModel):
     """The stored net worth: the current value and when the user reported it.
 
-    Only the latest one is kept (FR-9 (d)). Both fields are ``None`` until the
-    user fills the field in for the first time, which is the state that leaves
-    the gross-exposure cap ``not_evaluable`` exactly as it was before FR-9.
+    Only the latest one is kept (FR-9 (d)). The first two fields are ``None``
+    until the user fills the field in for the first time, which is the state
+    that leaves the gross-exposure cap ``not_evaluable`` exactly as it was
+    before FR-9.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -147,6 +148,16 @@ class NetWorthSettings(BaseModel):
     total_net_worth_twd: float | None = None
     #: ISO 8601 UTC, written by the server on every accepted change.
     updated_at: str | None = None
+    #: What the valued book was worth at the moment of the report, in TWD.
+    #:
+    #: Kept so the "this is many times your book" disclosure (FR-9 (c) row 3)
+    #: can be **restated on every read** without pricing a single position
+    #: again: a warning the user saw once and then never again would leave
+    #: them believing a cap is guarding them when an inflated denominator has
+    #: made it agree with everything. ``None`` when nothing could be valued at
+    #: report time (no yardstick existed) or when the report predates this
+    #: field.
+    valued_book_twd_at_report: float | None = Field(default=None, ge=0.0)
 
     @field_validator("total_net_worth_twd")
     @classmethod
@@ -177,7 +188,13 @@ class AppSettingsPatch(BaseModel):
     alerts: AlertSettings | None = None
     net_worth: NetWorthInput | None = None
 
-    def apply_to(self, current: AppSettings, *, now: datetime | None = None) -> AppSettings:
+    def apply_to(
+        self,
+        current: AppSettings,
+        *,
+        now: datetime | None = None,
+        valued_book_twd: float | None = None,
+    ) -> AppSettings:
         """Return ``current`` with the supplied sections replaced.
 
         Replacement is per *section*, not per field: a section is validated as a
@@ -191,12 +208,17 @@ class AppSettingsPatch(BaseModel):
         asks of them. The section is therefore only sent when the user acts on
         that field -- the rest of the settings form leaves it out, so saving a
         fee rate cannot refresh a net worth nobody looked at.
+
+        ``valued_book_twd`` is the yardstick the caller measured the figure
+        against, stored alongside it so later reads can restate the comparison
+        without repeating the valuation.
         """
         moment = now if now is not None else datetime.now(UTC)
         net_worth = (
             NetWorthSettings(
                 total_net_worth_twd=self.net_worth.total_net_worth_twd,
                 updated_at=moment.isoformat(),
+                valued_book_twd_at_report=valued_book_twd,
             )
             if self.net_worth is not None
             else current.net_worth

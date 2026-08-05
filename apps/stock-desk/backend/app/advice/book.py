@@ -50,7 +50,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.advice.limits import PortfolioContext, SelfReportedNetWorth
+from app.advice.limits import (
+    NET_WORTH_STALE_AFTER_DAYS,
+    PortfolioContext,
+    SelfReportedNetWorth,
+)
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
@@ -73,6 +77,15 @@ GROSS_EXPOSURE_NOTE = (
 GROSS_EXPOSURE_SELF_REPORTED_NOTE = (
     "總曝險以「已估值部位市值合計」為分子、使用者於 {reported_at} 自報的帳戶總淨值"
     "（新台幣 {amount:,.0f} 元）為分母；此淨值由使用者自行輸入，系統未加以查核。"
+)
+
+#: And stated when the report is past its freshness rule. The present-tense
+#: sentence above would otherwise sit next to a cap reporting ``not_evaluable``
+#: for that very reason, describing a division this context does not perform.
+GROSS_EXPOSURE_EXPIRED_NOTE = (
+    "使用者於 {reported_at} 自報的帳戶總淨值（新台幣 {amount:,.0f} 元）"
+    "已超過 {days} 天未更新，本次不以它為分母計算總曝險；"
+    "該上限回報 not_evaluable，待使用者更新淨值後才會恢復計算。"
 )
 
 #: No quote at all reached this layer for a non-TWD holding.
@@ -177,9 +190,21 @@ def _fully_valued(summary: PortfolioSummary) -> bool:
 
 
 def _gross_exposure_note(net_worth: SelfReportedNetWorth | None) -> str:
-    """The standing sentence about the exposure cap, in whichever state it is in."""
+    """The standing sentence about the exposure cap, in whichever state it is in.
+
+    Three states, three sentences: no figure at all, a usable one, and one the
+    freshness rule has retired. The third exists because the second is written
+    in the present tense -- claiming a division that an expired report does not
+    get to perform, right beside a cap saying it could not perform it.
+    """
     if net_worth is None:
         return GROSS_EXPOSURE_NOTE
+    if net_worth.age_days >= NET_WORTH_STALE_AFTER_DAYS:
+        return GROSS_EXPOSURE_EXPIRED_NOTE.format(
+            reported_at=net_worth.reported_at,
+            amount=net_worth.amount_twd,
+            days=NET_WORTH_STALE_AFTER_DAYS,
+        )
     return GROSS_EXPOSURE_SELF_REPORTED_NOTE.format(
         reported_at=net_worth.reported_at, amount=net_worth.amount_twd
     )

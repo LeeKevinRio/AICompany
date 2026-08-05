@@ -15,6 +15,7 @@ from app.advice.book import (
     build_book_context,
     self_reported_net_worth,
 )
+from app.advice.limits import NET_WORTH_STALE_AFTER_DAYS, RiskBudget, evaluate_limits
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
@@ -154,6 +155,27 @@ def test_a_reported_net_worth_turns_the_valued_book_into_the_numerator() -> None
     # does not, and says which half the user supplied.
     assert GROSS_EXPOSURE_NOTE not in book.notes
     assert any("自報的帳戶總淨值" in note for note in book.notes)
+
+
+def test_an_expired_net_worth_is_not_described_as_the_current_denominator() -> None:
+    # The present-tense note would otherwise sit beside a cap reporting
+    # not_evaluable *because* the figure expired, describing a division this
+    # context does not perform.
+    book = build_book_context(
+        _summary(_position(1, "2330")),
+        symbol="2330",
+        close=600.0,
+        net_worth=reported_net_worth(1_500_000.0, age_days=NET_WORTH_STALE_AFTER_DAYS),
+    )
+    note = next(n for n in book.notes if "帳戶總淨值" in n)
+    assert f"已超過 {NET_WORTH_STALE_AFTER_DAYS} 天未更新" in note
+    assert "not_evaluable" in note
+    assert "為分子" not in note
+    # And the cap agrees with the note.
+    check = next(
+        c for c in evaluate_limits(RiskBudget(), book.context) if c.id == "gross_exposure"
+    )
+    assert check.status == "not_evaluable"
 
 
 def test_the_equity_basis_is_untouched_by_a_reported_net_worth() -> None:

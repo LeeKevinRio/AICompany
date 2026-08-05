@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { useUpdateSettings } from "../lib/queries";
+import { capWidening, resolveWideningSubmit, type CapWidening } from "../lib/riskWidening";
 import type { AlertSettings, CostModelSettings, RiskBudgetSettings, SettingsResponse } from "../lib/types";
 
 interface FieldSpec<T> {
@@ -31,6 +32,10 @@ const HARD_CEILING_NOTE = "放寬需修改程式碼並經風控與 CEO 同意。
  * only the second one writes. It is deliberately per-raise rather than a
  * dismissible-forever preference, and it is not a `window.confirm`: the
  * sentence has to be readable in the page, next to the number it is about.
+ *
+ * The rule for *which* submits need confirming is in `app/lib/riskWidening.ts`
+ * (unit-tested there): editing the value after confirming it re-opens the
+ * confirmation, so the number in the sentence is always the number written.
  */
 const RISK_WIDENING_TITLE = "你正在放寬風控上限";
 const RISK_WIDENING_BODY =
@@ -214,27 +219,32 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
   );
   const [alertsEnabled, setAlertsEnabled] = useState(settings.settings.alerts.enabled);
   const [notifyWebhooks, setNotifyWebhooks] = useState(settings.settings.alerts.notify_webhooks);
-  /** Set when a submit was held back to confirm a widened gross-exposure cap. */
-  const [pendingWidening, setPendingWidening] = useState<{ before: number; after: number } | null>(
-    null,
-  );
+  /**
+   * The raise the confirmation panel is currently showing, or `null` when
+   * none is pending. Clicking the submit button while this is set *is* the
+   * confirmation — of this exact pair of numbers, which is why the submit
+   * handler re-derives the raise and compares it against this one.
+   */
+  const [pendingWidening, setPendingWidening] = useState<CapWidening | null>(null);
   const mutation = useUpdateSettings();
   const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
 
-  /** The raise being asked for, or `null` when the cap is unchanged or lowered. */
-  function grossExposureWidening(): { before: number; after: number } | null {
-    const before = settings.settings.risk_budget.max_gross_exposure;
-    const after = Number(values["risk_budget.max_gross_exposure"]);
-    if (!Number.isFinite(after) || after <= before) return null;
-    return { before, after };
+  /** The raise the form's current values would write, or `null` for none. */
+  function grossExposureWidening(): CapWidening | null {
+    return capWidening(
+      settings.settings.risk_budget.max_gross_exposure,
+      Number(values["risk_budget.max_gross_exposure"]),
+    );
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const widening = grossExposureWidening();
-    if (widening !== null && pendingWidening === null) {
-      // First click on a raise: show the sentence, write nothing yet.
-      setPendingWidening(widening);
+    // Re-derived here, at submit time, and compared with the raise on screen:
+    // editing the cap after confirming it must re-open the confirmation with
+    // the new number rather than write a number nobody agreed to.
+    const decision = resolveWideningSubmit(grossExposureWidening(), pendingWidening);
+    if (decision.action === "confirm") {
+      setPendingWidening(decision.widening);
       return;
     }
     setPendingWidening(null);

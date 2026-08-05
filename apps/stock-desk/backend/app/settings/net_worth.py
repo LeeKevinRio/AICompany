@@ -49,6 +49,17 @@ NET_WORTH_FAR_ABOVE_BOOK_WARNING = (
     "請確認金額單位為新台幣元。"
 )
 
+#: The same fact, restated on every later read from the figures stored at
+#: report time (:attr:`NetWorthSettings.valued_book_twd_at_report`). The
+#: warning above is shown once, by the response to the write that triggered
+#: it; this one stays. A user who closed that tab would otherwise go on
+#: believing the exposure cap is guarding them.
+NET_WORTH_STANDING_FAR_ABOVE_NOTE = (
+    "輸入當下，此淨值為系統已估值部位市值的 {multiple:,.1f} 倍"
+    "（淨值新台幣 {amount:,.0f} 元，當時已估值部位市值新台幣 {valued:,.0f} 元）。"
+    "若此數字有誤，第 3 條上限將失去意義——曝險比率會恆為遠低於上限。"
+)
+
 NET_WORTH_NO_VALUED_BOOK_NOTE = (
     "目前沒有任何部位可估值，無法用部位市值檢查這個數字是否合理；"
     "本次只檢查了數值必須大於 0。"
@@ -110,7 +121,7 @@ def review_net_worth(
         )
 
     warnings: list[str] = []
-    if amount_twd > valued_market_value_twd * NET_WORTH_WARN_RATIO:
+    if is_far_above_book(amount_twd, valued_market_value_twd):
         warnings.append(
             NET_WORTH_FAR_ABOVE_BOOK_WARNING.format(
                 multiple=amount_twd / valued_market_value_twd,
@@ -119,3 +130,25 @@ def review_net_worth(
             )
         )
     return NetWorthReview(warnings=warnings, notes=notes)
+
+
+def is_far_above_book(amount_twd: float, valued_market_value_twd: float | None) -> bool:
+    """Whether ``amount_twd`` sits above the warning band of the valued book.
+
+    Shared by the write (which warns) and every later read (which restates the
+    warning from the stored yardstick), so the two can never disagree about
+    what counts as far above. ``None`` or a non-positive book means there was
+    no yardstick, and no claim is made either way.
+    """
+    if valued_market_value_twd is None or valued_market_value_twd <= 0.0:
+        return False
+    return amount_twd > valued_market_value_twd * NET_WORTH_WARN_RATIO
+
+
+def standing_far_above_note(amount_twd: float, valued_market_value_twd: float) -> str:
+    """The permanent form of the warning, from the figures kept at report time."""
+    return NET_WORTH_STANDING_FAR_ABOVE_NOTE.format(
+        multiple=amount_twd / valued_market_value_twd,
+        amount=amount_twd,
+        valued=valued_market_value_twd,
+    )

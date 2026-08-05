@@ -778,6 +778,12 @@ export interface AlertSettings {
 export interface NetWorthSettings {
   total_net_worth_twd: number | null;
   updated_at: string | null;
+  /**
+   * The valued book at the moment of the report, kept so the "this is many
+   * times your book" disclosure can be restated on every read without pricing
+   * anything again. `null` when nothing could be valued then.
+   */
+  valued_book_twd_at_report: number | null;
 }
 
 /**
@@ -794,10 +800,13 @@ export type NetWorthFreshness = "absent" | "fresh" | "ageing" | "expired";
 
 /**
  * Backend `NetWorthView` (app/api/settings.py, verified) — the freshness block
- * the settings page renders. `warnings` is populated only by the write that
- * produced it: the 10x check needs the book valued, which a read deliberately
- * does not do (a read that priced positions would spend provider quota every
- * time the page opened).
+ * the settings page renders.
+ *
+ * `warnings` is the prominent, one-off form shown by the response to the write
+ * that raised it. Its standing counterpart lives in `notes` and is present on
+ * every read, restated from `valued_book_twd_at_report`; neither costs a price
+ * lookup, because a read that priced positions would spend provider quota every
+ * time the page opened.
  */
 export interface NetWorthView {
   total_net_worth_twd: number | null;

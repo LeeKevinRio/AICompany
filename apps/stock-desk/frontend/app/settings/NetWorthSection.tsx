@@ -66,9 +66,10 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
   // to read, so it is rendered at full width rather than as small print.
   const rejection =
     mutation.error instanceof ApiError && !fieldError ? mutation.error.message : undefined;
-  // Warnings belong to the response of the write that produced them; a later
-  // read cannot recompute them without pricing the whole book.
-  const warnings = mutation.isSuccess ? mutation.data.net_worth.warnings : [];
+  // Standing, not one-off: the backend restates the "many times your book"
+  // disclosure on every read from the yardstick it stored at report time, so a
+  // user who closed the tab after entering a wrong figure still sees it.
+  const warnings = block.warnings;
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -93,6 +94,22 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
         這個數字只用在「總曝險上限」（第 3 條）的分母：曝險比率 = 系統已估值的部位市值合計 ÷ 你自報的帳戶總淨值。
         分子由系統計算、分母由你自行輸入，兩者來源不同；系統不會查核這個數字。
       </p>
+
+      {/*
+        Above the form, not below the button: this is the standing disclosure
+        that the stored figure is far above the valued book, and it has to be
+        the first thing read on the section — not something found after
+        scrolling past the input.
+      */}
+      {warnings.map((warning) => (
+        <p
+          key={warning}
+          role="alert"
+          className="mt-3 rounded-md border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm font-medium text-amber-200"
+        >
+          {warning}
+        </p>
+      ))}
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-3">
         <div>
@@ -160,15 +177,6 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
             {rejection}
           </p>
         )}
-        {warnings.map((warning) => (
-          <p
-            key={warning}
-            role="alert"
-            className="rounded-md border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm font-medium text-amber-200"
-          >
-            {warning}
-          </p>
-        ))}
         {mutation.isSuccess && (
           <p
             role="status"

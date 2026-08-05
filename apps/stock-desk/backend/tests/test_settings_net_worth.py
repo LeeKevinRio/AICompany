@@ -12,7 +12,9 @@ from app.settings.net_worth import (
     NET_WORTH_MIN_RATIO,
     NET_WORTH_WARN_RATIO,
     NetWorthReview,
+    is_far_above_book,
     review_net_worth,
+    standing_far_above_note,
 )
 
 _BOOK = 1_000_000.0
@@ -58,6 +60,27 @@ def test_far_above_the_book_is_accepted_and_warned_about() -> None:
 
 def test_the_warning_edge_sits_exactly_on_the_multiple() -> None:
     assert _review(_BOOK * NET_WORTH_WARN_RATIO).warnings == []
+
+
+def test_the_write_and_every_later_read_agree_on_what_is_far_above() -> None:
+    # One predicate behind both the one-off warning and the standing note, so
+    # a figure cannot be warned about at write time and look fine afterwards.
+    above = _BOOK * NET_WORTH_WARN_RATIO + 1.0
+    assert is_far_above_book(above, _BOOK) is True
+    assert _review(above).warnings != []
+    assert is_far_above_book(_BOOK * NET_WORTH_WARN_RATIO, _BOOK) is False
+    assert _review(_BOOK * NET_WORTH_WARN_RATIO).warnings == []
+
+
+def test_no_yardstick_means_no_claim_in_either_direction() -> None:
+    assert is_far_above_book(9_999_999_999.0, None) is False
+    assert is_far_above_book(9_999_999_999.0, 0.0) is False
+
+
+def test_the_standing_note_restates_the_multiple_and_the_consequence() -> None:
+    note = standing_far_above_note(_BOOK * 12, _BOOK)
+    assert "12.0 倍" in note
+    assert "第 3 條上限將失去意義" in note
 
 
 def test_no_valued_book_means_the_relative_bands_are_skipped_and_said_to_be() -> None:
