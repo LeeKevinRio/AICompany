@@ -5,6 +5,7 @@ import { useAppData } from '../AppData';
 import type { NewProduct } from '../hooks/useGroups';
 import { MAX_GROUP_NAME_LENGTH, MAX_PRODUCT_NAME_LENGTH } from '../types';
 import { dateToDatetimeLocalValue, datetimeLocalValueToEpoch } from '../deadlineInput';
+import { isValidPriceInput, parseValidPriceInput, PRICE_INPUT_ERROR_MESSAGE } from '../priceInput';
 import {
   compressImageToDataUrl,
   estimateDataUrlBytes,
@@ -63,13 +64,16 @@ export function CreateGroupPage() {
 
   // 至少要有一個有效商品（名稱非空）才能開團。
   const validProducts = products.filter((p) => p.name.trim() !== '');
-  const canSubmit = validProducts.length > 0;
+  // 就地擋下非法單價（負數 / 小數 / 非數字）：不再讓 createGroup() 靜默 floor/clamp 掉，
+  // 那樣主揪填的價格會被悄悄改掉而不自知（QA 實機 T2 證實）。
+  const allPricesValid = validProducts.every((p) => isValidPriceInput(p.price));
+  const canSubmit = validProducts.length > 0 && allPricesValid;
 
   function handleSubmit() {
     if (!canSubmit) return;
     const payload: NewProduct[] = validProducts.map((p) => ({
       name: p.name,
-      price: Number(p.price) || 0,
+      price: parseValidPriceInput(p.price),
       ...(p.image ? { image: p.image } : {}),
     }));
     // datetime-local → epoch 毫秒（以主揪當地時區解讀，存絕對時間點）；
@@ -135,22 +139,28 @@ export function CreateGroupPage() {
       </div>
 
       <div className="field">
-        <label htmlFor="group-deadline">截止時間（可選，24 小時制；到時自動截止）</label>
+        <label htmlFor="group-deadline">截止時間（可選；到時自動截止）</label>
         <input
           id="group-deadline"
           type="datetime-local"
-          // lang="en-GB"：讓 Chromium 系瀏覽器的原生日期時間選擇器固定用 24 小時制顯示
-          // （不受裝置系統語系的 12/24 小時制設定影響）；不支援此行為的瀏覽器（如部分
-          // Safari / Firefox 版本）則沿用系統語系設定，屬瀏覽器原生元件的已知限制。
-          lang="en-GB"
           value={deadline}
           min={dateToDatetimeLocalValue(new Date())}
           onChange={(e) => setDeadline(e.target.value)}
         />
+        {/* QA 實機驗證：lang="en-GB" 技巧在 en-US / zh-TW 系統語系下都沒有讓瀏覽器原生選擇器
+            顯示 24 小時制（各瀏覽器仍照系統設定走），故移除該技巧、不再宣稱「24 小時制」。
+            app 自己畫的畫面（後台 / 填單頁的截止時間文字）維持 24 小時制不變（deadlineInput.ts
+            的 formatDeadlineDateTime），這裡改用中性提示說明兩者可能不同。 */}
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          此欄位顯示格式依你的瀏覽器 / 裝置設定；送出後，後台與填單頁一律以 24 小時制顯示。
+        </p>
       </div>
 
       <div className="section-title">商品清單</div>
-      {products.map((p, i) => (
+      {products.map((p, i) => {
+        // 只在有填名稱（即會被送出的品項）且單價不合法時擋下並顯示錯誤，避免對空白列誤報。
+        const priceInvalid = p.name.trim() !== '' && !isValidPriceInput(p.price);
+        return (
         <div key={i} className="product-edit">
           <div className="line">
             <input
@@ -166,8 +176,10 @@ export function CreateGroupPage() {
               type="number"
               inputMode="numeric"
               min={0}
+              step={1}
               value={p.price}
               placeholder="單價"
+              aria-invalid={priceInvalid}
               onChange={(e) => updateProduct(i, { price: e.target.value })}
             />
             <button
@@ -179,6 +191,14 @@ export function CreateGroupPage() {
               ✕
             </button>
           </div>
+          {priceInvalid && (
+            <p
+              role="alert"
+              style={{ color: 'var(--color-danger)', fontSize: 12, margin: '0 0 8px' }}
+            >
+              {PRICE_INPUT_ERROR_MESSAGE}
+            </p>
+          )}
           <div className="line" style={{ marginBottom: 12 }}>
             {p.image && <img className="product-thumb" src={p.image} alt={`${p.name || '商品'} 圖片`} />}
             <label className="btn ghost-primary small" style={{ cursor: 'pointer' }}>
@@ -203,7 +223,8 @@ export function CreateGroupPage() {
             )}
           </div>
         </div>
-      ))}
+        );
+      })}
 
       <button className="btn ghost-primary block" onClick={addRow} style={{ marginTop: 8 }}>
         ＋ 新增商品
@@ -217,7 +238,12 @@ export function CreateGroupPage() {
       >
         建立團購
       </button>
-      {!canSubmit && <p className="muted" style={{ textAlign: 'center' }}>至少新增一項有名稱的商品</p>}
+      {validProducts.length === 0 && (
+        <p className="muted" style={{ textAlign: 'center' }}>至少新增一項有名稱的商品</p>
+      )}
+      {validProducts.length > 0 && !allPricesValid && (
+        <p className="muted" style={{ textAlign: 'center' }}>請修正上方標示錯誤的單價後再建立</p>
+      )}
     </div>
   );
 }
