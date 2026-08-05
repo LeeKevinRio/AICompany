@@ -39,6 +39,7 @@ from types import FrameType
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from app.advice.book import self_reported_net_worth
 from app.alerts.engine import SymbolSnapshot, evaluate_alerts
 from app.alerts.notify import notify_all
 from app.alerts.snapshot import build_snapshot
@@ -132,6 +133,9 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
     valuator = get_valuator()
     fx_provider = get_fx_provider()
     budget = settings.risk_budget
+    net_worth = self_reported_net_worth(
+        settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
+    )
 
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
@@ -142,6 +146,7 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
             valuator=valuator,
             budget=budget,
             fx_provider=fx_provider,
+            net_worth=net_worth,
         )
 
     result = evaluate_alerts(

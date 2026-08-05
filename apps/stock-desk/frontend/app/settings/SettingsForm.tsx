@@ -23,6 +23,19 @@ interface FieldSpec<T> {
 /** Tail appended to every hard-ceiling note, so the wording lives in one place. */
 const HARD_CEILING_NOTE = "放寬需修改程式碼並經風控與 CEO 同意。";
 
+/**
+ * FR-9 (e): raising `max_gross_exposure` stays inside the 1.50 hard ceiling and
+ * is allowed without a code change — but it is still the user widening a risk
+ * gate, and a widening that happens on the same click as "save" is one nobody
+ * had to notice. So the first submit that raises it becomes a confirmation, and
+ * only the second one writes. It is deliberately per-raise rather than a
+ * dismissible-forever preference, and it is not a `window.confirm`: the
+ * sentence has to be readable in the page, next to the number it is about.
+ */
+const RISK_WIDENING_TITLE = "你正在放寬風控上限";
+const RISK_WIDENING_BODY =
+  "總曝險上限由 {before} 調高為 {after}。放寬後，原本會被第 3 條上限擋下的加碼建議可能不再被擋下。確認要繼續嗎？";
+
 const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
@@ -201,11 +214,30 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
   );
   const [alertsEnabled, setAlertsEnabled] = useState(settings.settings.alerts.enabled);
   const [notifyWebhooks, setNotifyWebhooks] = useState(settings.settings.alerts.notify_webhooks);
+  /** Set when a submit was held back to confirm a widened gross-exposure cap. */
+  const [pendingWidening, setPendingWidening] = useState<{ before: number; after: number } | null>(
+    null,
+  );
   const mutation = useUpdateSettings();
   const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
 
+  /** The raise being asked for, or `null` when the cap is unchanged or lowered. */
+  function grossExposureWidening(): { before: number; after: number } | null {
+    const before = settings.settings.risk_budget.max_gross_exposure;
+    const after = Number(values["risk_budget.max_gross_exposure"]);
+    if (!Number.isFinite(after) || after <= before) return null;
+    return { before, after };
+  }
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const widening = grossExposureWidening();
+    if (widening !== null && pendingWidening === null) {
+      // First click on a raise: show the sentence, write nothing yet.
+      setPendingWidening(widening);
+      return;
+    }
+    setPendingWidening(null);
     const riskBudget = {} as RiskBudgetSettings;
     for (const field of RISK_BUDGET_FIELDS) {
       riskBudget[field.key] = Number(values[`risk_budget.${String(field.key)}`]);
@@ -328,12 +360,37 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
       </section>
 
       <div>
+        {pendingWidening !== null && (
+          <div
+            role="alert"
+            className="mb-3 rounded-md border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm text-amber-200"
+          >
+            <p className="font-semibold">{RISK_WIDENING_TITLE}</p>
+            <p className="mt-1">
+              {RISK_WIDENING_BODY.replace("{before}", String(pendingWidening.before)).replace(
+                "{after}",
+                String(pendingWidening.after),
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => setPendingWidening(null)}
+              className="mt-2 rounded-md border border-amber-700 px-3 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
+            >
+              取消，維持原設定
+            </button>
+          </div>
+        )}
         <button
           type="submit"
           disabled={mutation.isPending}
           className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {mutation.isPending ? "儲存中…" : "儲存設定"}
+          {mutation.isPending
+            ? "儲存中…"
+            : pendingWidening !== null
+              ? "我了解，仍要放寬並儲存"
+              : "儲存設定"}
         </button>
         {mutation.isError && Object.keys(fieldErrors).length === 0 && (
           <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">

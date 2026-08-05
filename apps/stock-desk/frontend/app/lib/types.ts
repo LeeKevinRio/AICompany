@@ -351,6 +351,18 @@ export type Confidence = "low" | "medium" | "high";
 /** Backend `LimitStatus` (app/advice/limits.py). */
 export type LimitStatus = "passed" | "violated" | "not_evaluable";
 
+/**
+ * Backend `SelfReportedNetWorth` (app/advice/limits.py, verified). The three
+ * fields travel together: an amount whose report time is unknown cannot be
+ * judged for freshness, and FR-9 (b) forbids computing a verdict from one that
+ * has not been confirmed for 30 days.
+ */
+export interface SelfReportedNetWorth {
+  amount_twd: number;
+  reported_at: string;
+  age_days: number;
+}
+
 /** Backend `LimitCheck` (app/advice/limits.py). */
 export interface LimitCheck {
   index: number;
@@ -467,6 +479,16 @@ export interface PortfolioContextOut {
   position_market_value_twd: number | null;
   position_cost_twd: number | null;
   gross_exposure_twd: number | null;
+  /**
+   * Backend `SelfReportedNetWorth` (app/advice/limits.py) — the denominator of
+   * the gross-exposure cap and of nothing else (FR-9 option B). `null` until
+   * the user reports one on the settings page, which is the state that leaves
+   * that cap `not_evaluable`. `total_equity_twd` above keeps its own meaning
+   * (the valued book) whether this is present or not.
+   */
+  net_worth: SelfReportedNetWorth | null;
+  /** Whether every stored position could be valued; cap 3 needs a `true`. */
+  book_fully_valued: boolean | null;
   quantity: number | null;
   close: number | null;
   fx_to_twd: number;
@@ -748,11 +770,50 @@ export interface AlertSettings {
   notify_webhooks: boolean;
 }
 
+/**
+ * Backend `NetWorthSettings` (app/settings/models.py) — the stored half of the
+ * FR-9 field: the current figure and when the *server* stamped it. Both `null`
+ * until the user reports one for the first time.
+ */
+export interface NetWorthSettings {
+  total_net_worth_twd: number | null;
+  updated_at: string | null;
+}
+
+/**
+ * Backend `NetWorthInput` (app/settings/models.py) — the `PUT` half. Only the
+ * amount: `updated_at` is refused by the backend so a client cannot backdate a
+ * figure into looking fresher than it is.
+ */
+export interface NetWorthInput {
+  total_net_worth_twd: number;
+}
+
+/** Backend `NetWorthFreshness` (app/api/settings.py). */
+export type NetWorthFreshness = "absent" | "fresh" | "ageing" | "expired";
+
+/**
+ * Backend `NetWorthView` (app/api/settings.py, verified) — the freshness block
+ * the settings page renders. `warnings` is populated only by the write that
+ * produced it: the 10x check needs the book valued, which a read deliberately
+ * does not do (a read that priced positions would spend provider quota every
+ * time the page opened).
+ */
+export interface NetWorthView {
+  total_net_worth_twd: number | null;
+  updated_at: string | null;
+  age_days: number | null;
+  freshness: NetWorthFreshness;
+  notes: string[];
+  warnings: string[];
+}
+
 /** Backend `AppSettings` (app/settings/models.py) — the full settings document. */
 export interface AppSettings {
   risk_budget: RiskBudgetSettings;
   cost_model: CostModelSettings;
   alerts: AlertSettings;
+  net_worth: NetWorthSettings;
 }
 
 /** Backend `SettingsResponse` (app/api/settings.py, verified). */
@@ -760,6 +821,7 @@ export interface SettingsResponse {
   settings: AppSettings;
   rates_verified: boolean;
   notes: string[];
+  net_worth: NetWorthView;
   as_of: string;
 }
 
@@ -773,6 +835,13 @@ export interface AppSettingsPatch {
   risk_budget?: RiskBudgetSettings;
   cost_model?: CostModelSettings;
   alerts?: AlertSettings;
+  /**
+   * Sent *only* when the user acted on the net-worth field (`NetWorthSection`
+   * has its own submit for exactly this reason). Every `PUT` carrying this
+   * section re-stamps the report time, so including it in the main form's save
+   * would let "I changed a fee rate" refresh a figure nobody looked at.
+   */
+  net_worth?: NetWorthInput;
 }
 
 /* --- Alerts (backend/app/api/alerts.py + alerts/models.py) --------------- */

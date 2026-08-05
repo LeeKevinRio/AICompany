@@ -12,9 +12,12 @@ from app.advice.limits import (
     LIMIT_NAMES,
     MAX_GROSS_EXPOSURE_CEILING,
     MAX_POSITION_WEIGHT_CEILING,
+    NET_WORTH_SOFT_NOTICE_DAYS,
+    NET_WORTH_STALE_AFTER_DAYS,
     LimitCheck,
     PortfolioContext,
     RiskBudget,
+    SelfReportedNetWorth,
     atr_max_shares,
     evaluate_limits,
     kelly_allowed_weight,
@@ -24,18 +27,27 @@ from app.advice.limits import (
     project_position,
     suggest_quantity_range,
 )
+from tests.advice_helpers import reported_net_worth
 
 BUDGET = RiskBudget()
 
 
 def _ctx(**overrides: Any) -> PortfolioContext:
-    """A fully populated context; override one field per test."""
+    """A fully populated context; override one field per test.
+
+    The self-reported net worth is set to the same 1,000,000 as the valued book
+    so the gross-exposure numbers below read the same as they did before FR-9
+    gave that cap its own denominator -- the change of *meaning* is covered by
+    its own tests, not smuggled into every other one.
+    """
     base: dict[str, Any] = {
         "symbol": "2330",
         "total_equity_twd": 1_000_000.0,
         "position_market_value_twd": 50_000.0,
         "position_cost_twd": 40_000.0,
         "gross_exposure_twd": 500_000.0,
+        "net_worth": reported_net_worth(1_000_000.0),
+        "book_fully_valued": True,
         "quantity": 500.0,
         "close": 100.0,
         "atr": 2.0,
@@ -179,6 +191,150 @@ def test_gross_exposure_violated_at_full_investment() -> None:
 
 def test_gross_exposure_not_evaluable_without_book_value() -> None:
     assert _status(_ctx(gross_exposure_twd=None), "gross_exposure") == "not_evaluable"
+
+
+# --- 3b. FR-9: the self-reported net worth is cap 3's only denominator -------
+
+
+def test_gross_exposure_divides_by_the_reported_net_worth_not_the_book() -> None:
+    # AC-9.3. The book is 1,000,000 of valued positions against a 2,000,000
+    # account: 50% exposure. Dividing by the book itself would have said 100%.
+    check = _check(
+        _ctx(gross_exposure_twd=1_000_000.0, net_worth=reported_net_worth(2_000_000.0)),
+        "gross_exposure",
+    )
+    assert check.status == "passed"
+    assert check.observed == pytest.approx(0.5)
+    assert check.threshold == pytest.approx(1.0)
+
+
+def test_gross_exposure_violated_against_the_reported_net_worth() -> None:
+    check = _check(
+        _ctx(gross_exposure_twd=1_000_000.0, net_worth=reported_net_worth(900_000.0)),
+        "gross_exposure",
+    )
+    assert check.status == "violated"
+    assert check.observed == pytest.approx(1_000_000.0 / 900_000.0)
+
+
+def test_gross_exposure_keeps_its_pre_fr9_wording_when_none_was_reported() -> None:
+    # AC-9.2: a user who never entered a net worth must see exactly what this
+    # cap said before FR-9 existed, plus the one thing that would enable it.
+    check = _check(_ctx(net_worth=None), "gross_exposure")
+    assert check.status == "not_evaluable"
+    assert check.observed is None
+    assert check.detail.startswith("缺少組合總市值，無法計算總曝險。")
+    assert "帳戶總淨值（新台幣）" in check.detail
+
+
+def test_gross_exposure_expires_after_thirty_days() -> None:
+    # AC-9.4 / FR-9 (b): a stale figure is never quietly turned into a pass.
+    check = _check(
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_STALE_AFTER_DAYS)),
+        "gross_exposure",
+    )
+    assert check.status == "not_evaluable"
+    assert check.observed is None
+    assert f"淨值輸入已超過 {NET_WORTH_STALE_AFTER_DAYS} 天未更新" in check.detail
+    assert "更新" in check.detail
+
+
+def test_gross_exposure_still_evaluates_the_day_before_it_expires() -> None:
+    check = _check(
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_STALE_AFTER_DAYS - 1)),
+        "gross_exposure",
+    )
+    assert check.status == "passed"
+
+
+def test_gross_exposure_says_how_long_since_the_report_past_the_soft_notice() -> None:
+    aged = _check(
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_SOFT_NOTICE_DAYS)),
+        "gross_exposure",
+    )
+    assert aged.status == "passed"
+    assert f"已 {NET_WORTH_SOFT_NOTICE_DAYS} 天未更新" in aged.detail
+    fresh = _check(
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_SOFT_NOTICE_DAYS - 1)),
+        "gross_exposure",
+    )
+    assert "天未更新" not in fresh.detail
+
+
+def test_gross_exposure_is_withheld_when_a_position_could_not_be_valued() -> None:
+    # FR-9 (a-附加): the numerator would be short, and a short numerator makes
+    # exposure look *lower* than it is -- the one direction this cap must not
+    # err in. So it reports nothing rather than something reassuring.
+    check = _check(_ctx(book_fully_valued=False), "gross_exposure")
+    assert check.status == "not_evaluable"
+    assert "分子不完整" in check.detail
+
+
+def test_gross_exposure_requires_coverage_to_be_stated_not_assumed() -> None:
+    # An unknown coverage is not evidence of a complete book.
+    assert _status(_ctx(book_fully_valued=None), "gross_exposure") == "not_evaluable"
+
+
+def test_gross_exposure_verdict_carries_the_three_required_sentences() -> None:
+    # FR-9 (a-附加) required disclosure: mixed provenance, an assumption of a
+    # complete position list, and when the denominator was last reported.
+    net_worth = reported_net_worth(2_000_000.0)
+    detail = _check(_ctx(net_worth=net_worth), "gross_exposure").detail
+    assert "兩者來源不同" in detail
+    assert "未登錄的部位不計入分子，會讓曝險看起來偏低" in detail
+    assert net_worth.reported_at in detail
+
+
+def test_a_reported_net_worth_must_be_positive() -> None:
+    # The settings boundary rejects these first; this is the second line.
+    with pytest.raises(ValueError):
+        SelfReportedNetWorth(amount_twd=0.0, reported_at="2026-08-05", age_days=0)
+    with pytest.raises(ValueError):
+        SelfReportedNetWorth(amount_twd=-1.0, reported_at="2026-08-05", age_days=0)
+
+
+def test_the_net_worth_never_reaches_caps_1_and_4() -> None:
+    # AC-9.6 regression guard for option B. A net worth ten times the book is
+    # exactly the input that would loosen every ratio if the denominators were
+    # ever merged: caps 1 and 4 must not move by a single basis point.
+    book_only = _ctx(net_worth=None)
+    with_net_worth = _ctx(net_worth=reported_net_worth(10_000_000.0))
+    for limit_id in ("single_position_weight", "per_trade_loss"):
+        before = _check(book_only, limit_id)
+        after = _check(with_net_worth, limit_id)
+        assert (before.status, before.observed, before.threshold, before.detail) == (
+            after.status,
+            after.observed,
+            after.threshold,
+            after.detail,
+        )
+    # And the one cap that *is* meant to move, moved.
+    assert _status(book_only, "gross_exposure") == "not_evaluable"
+    assert _status(with_net_worth, "gross_exposure") == "passed"
+
+
+def test_gross_exposure_headroom_is_measured_against_the_net_worth() -> None:
+    caps = notional_caps(BUDGET, _ctx(net_worth=reported_net_worth(2_000_000.0)))
+    # 100% of the 2,000,000 net worth, less the 450,000 held by other names.
+    assert caps["gross_exposure"] == pytest.approx(1_550_000.0)
+
+
+def test_no_gross_exposure_headroom_while_the_cap_cannot_be_evaluated() -> None:
+    # Sizing must never be derived from a cap the card reports as unevaluable.
+    for ctx in (
+        _ctx(net_worth=None),
+        _ctx(net_worth=reported_net_worth(2_000_000.0, age_days=NET_WORTH_STALE_AFTER_DAYS)),
+        _ctx(book_fully_valued=False),
+    ):
+        assert "gross_exposure" not in notional_caps(BUDGET, ctx)
+
+
+def test_a_projected_trade_does_not_move_the_reported_net_worth() -> None:
+    ctx = _ctx(net_worth=reported_net_worth(2_000_000.0))
+    after = project_position(ctx, share_delta=1_000.0)
+    assert after.net_worth == ctx.net_worth
+    # The numerator does move: the trade really did add to the book.
+    assert after.gross_exposure_twd == pytest.approx(600_000.0)
 
 
 # --- 4. Per-trade loss, derived from ATR ------------------------------------

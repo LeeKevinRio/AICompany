@@ -5,6 +5,7 @@ import { ApiError } from "../lib/api";
 import { useSettings } from "../lib/queries";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import { SettingsForm } from "./SettingsForm";
+import { NetWorthSection } from "./NetWorthSection";
 import { DataSourcesSection } from "./DataSourcesSection";
 import { AlertRulesSection } from "./AlertRulesSection";
 
@@ -34,6 +35,7 @@ export default function SettingsPage() {
         )}
         {settings.isSuccess && (
           <>
+            <NetWorthSection settings={settings.data} />
             <SettingsForm settings={settings.data} />
             <DataSourcesSection />
           </>

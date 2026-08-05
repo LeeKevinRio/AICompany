@@ -15,6 +15,15 @@ Two conventions that make the output honest rather than merely reassuring:
   threshold (``>=``), not only when it strictly exceeds it: at exactly the cap
   the budget is already spent, so there is no room left to add.
 
+Denominators are not interchangeable (FR-9 option B, risk-compliance decision
+2026-08-05). ``total_equity_twd`` is the valued book and stays the denominator
+of caps 1 and 4 exactly as before. The gross-exposure cap (cap 3) is the only
+one that divides by :class:`SelfReportedNetWorth`, the figure the user typed in
+themselves. Swapping the two would silently *widen* caps 1 and 4 -- a net worth
+including cash is normally larger than the valued book, so ratios would shrink
+and holdings that are ``violated`` today would turn into ``passed`` with no
+visible cause. The two numbers therefore never meet.
+
 Currency: book-level amounts are TWD (the reporting currency, as in
 ``app/portfolio``); ``close`` and ``atr`` are in the instrument's own currency
 and are converted with ``fx_to_twd`` at the single point where share sizing
@@ -83,6 +92,60 @@ MAX_POSITION_WEIGHT_REASON = "單一標的超過總資產的一半時，分散�
 #: this engine sizes.
 MAX_GROSS_EXPOSURE_CEILING = 1.50
 MAX_GROSS_EXPOSURE_REASON = "此處容許適度槓桿，但不容許 2 倍的總曝險。"
+
+#: How long a self-reported net worth may serve as the gross-exposure
+#: denominator, and when its reader starts being told it is ageing (FR-9 (b)).
+#: A net worth moves with both market value and cash flows, so past about one
+#: reconciliation cycle it no longer describes the account it claims to; the
+#: cap then reports ``not_evaluable`` rather than a ``passed`` derived from a
+#: figure nobody has confirmed lately. The soft notice exists so the cap does
+#: not simply vanish one morning without warning.
+#:
+#: Governed like the two ceilings above: these are risk parameters, and
+#: **extending the 30 days needs written CEO approval** on top of risk
+#: sign-off. Never widen either one to make a test or a demo pass.
+NET_WORTH_STALE_AFTER_DAYS = 30
+NET_WORTH_SOFT_NOTICE_DAYS = 7
+
+#: AC-9.2: what cap 3 said before FR-9 existed, kept verbatim as the opening
+#: sentence so a user who never entered a net worth sees no change at all, with
+#: the one input that would make the cap evaluable named after it.
+NO_NET_WORTH_DETAIL = (
+    "缺少組合總市值，無法計算總曝險。"
+    "可在設定頁輸入「帳戶總淨值（新台幣）」後啟用這條上限。"
+)
+
+#: AC-9.4. Wording is fixed: the reader has to be told the input expired, not
+#: merely that something is missing.
+NET_WORTH_EXPIRED_DETAIL = (
+    "淨值輸入已超過 {days} 天未更新（最後輸入時間 {reported_at}，距今 {age_days} 天），"
+    "這條上限不以過期的淨值計算；請至設定頁更新帳戶總淨值後再評估。"
+)
+
+#: FR-9 (a-附加): the numerator only covers positions that could be valued, and
+#: a short numerator makes the exposure look *lower* than it is -- the one
+#: direction option B must never err in. So the cap is withheld rather than
+#: reported from an incomplete book.
+GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL = (
+    "有部位無法估值，總曝險的分子不完整。分子漏算只會讓曝險看起來偏低，"
+    "因此這條上限不計算，而不是以偏低的比率回報通過。"
+)
+
+#: FR-9 (a-附加) required disclosure, attached to every gross-exposure verdict
+#: computed from a self-reported net worth. The three sentences cover the three
+#: ways this particular ratio can mislead: its two halves come from different
+#: places, its numerator is only as complete as the position list, and its
+#: denominator is as old as the last time the user typed it in.
+GROSS_EXPOSURE_MIXED_SOURCE_NOTE = (
+    "分子（已估值部位市值合計）由系統計算，分母（帳戶總淨值）由使用者自報，兩者來源不同。"
+)
+GROSS_EXPOSURE_COVERAGE_NOTE = (
+    "本比率假設持倉清單完整；未登錄的部位不計入分子，會讓曝險看起來偏低。"
+)
+GROSS_EXPOSURE_REPORTED_AT_NOTE = "自報淨值的輸入時間為 {reported_at}。"
+
+#: The soft half of the freshness rule: still evaluated, but said out loud.
+NET_WORTH_AGEING_NOTE = "此淨值已 {age_days} 天未更新，滿 {days} 天後這條上限將不再計算。"
 
 
 def _ceiling_message(label: str, ceiling: float, reason: str) -> str:
@@ -204,6 +267,31 @@ class RiskBudget(BaseModel):
         return value
 
 
+class SelfReportedNetWorth(BaseModel):
+    """The account net worth the user typed in, as the gross-exposure cap sees it.
+
+    All three fields travel together on purpose. An amount with no report time
+    cannot be judged for freshness, and FR-9 (b) forbids computing a ``passed``
+    from an unconfirmed figure -- so "how old is this" is part of the input,
+    not an optional extra. ``age_days`` is handed in rather than derived
+    because this module owns no clock (the rest of the risk layer has none
+    either, which is what keeps it testable without freezing time).
+
+    ``amount_twd`` must be positive here as well as at the settings boundary:
+    a zero or negative denominator is not a preference to be clamped, it is a
+    number no ratio can be built from.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: TWD only. No FX conversion is ever applied to this field (FR-9 (f)).
+    amount_twd: float = Field(gt=0.0)
+    #: When the user reported it, as an ISO 8601 string, for the reader.
+    reported_at: str
+    #: Whole days between the report and the caller's "now", never negative.
+    age_days: int = Field(ge=0)
+
+
 class PortfolioContext(BaseModel):
     """Everything the caps need about one symbol and the book around it.
 
@@ -219,7 +307,19 @@ class PortfolioContext(BaseModel):
     total_equity_twd: float | None = Field(default=None, ge=0.0)
     position_market_value_twd: float | None = Field(default=None, ge=0.0)
     position_cost_twd: float | None = Field(default=None, ge=0.0)
+    #: Numerator of cap 3: the whole book's valued market value in TWD. It is
+    #: **not** divided by ``total_equity_twd`` (that would be 100% by
+    #: construction) but by ``net_worth`` below.
     gross_exposure_twd: float | None = Field(default=None, ge=0.0)
+    #: The user's own account net worth -- the only denominator cap 3 accepts,
+    #: and a denominator no other cap may borrow (FR-9 option B). ``None`` (the
+    #: normal state until the user fills the settings field in) leaves cap 3
+    #: ``not_evaluable`` exactly as it was before FR-9.
+    net_worth: SelfReportedNetWorth | None = None
+    #: Whether *every* stored position could be valued. Cap 3 requires an
+    #: explicit ``True``: unknown coverage is not evidence of a complete book,
+    #: and an incomplete numerator understates exposure (FR-9 (a-附加)).
+    book_fully_valued: bool | None = None
     quantity: float | None = Field(default=None, ge=0.0)
     #: Latest close in the instrument's own currency (what the rules compare).
     close: float | None = Field(default=None, gt=0.0)
@@ -393,23 +493,75 @@ def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResu
     )
 
 
+def _net_worth_disclosure(net_worth: SelfReportedNetWorth) -> str:
+    """The three sentences every computed gross-exposure verdict must carry.
+
+    Plus the ageing notice once the report passes
+    :data:`NET_WORTH_SOFT_NOTICE_DAYS`, which is the warning half of FR-9 (b):
+    the cap still answers, and says how close it is to no longer answering.
+    """
+    parts = [
+        GROSS_EXPOSURE_MIXED_SOURCE_NOTE,
+        GROSS_EXPOSURE_COVERAGE_NOTE,
+        GROSS_EXPOSURE_REPORTED_AT_NOTE.format(reported_at=net_worth.reported_at),
+    ]
+    if net_worth.age_days >= NET_WORTH_SOFT_NOTICE_DAYS:
+        parts.append(
+            NET_WORTH_AGEING_NOTE.format(
+                age_days=net_worth.age_days, days=NET_WORTH_STALE_AFTER_DAYS
+            )
+        )
+    return "".join(parts)
+
+
 def _check_gross_exposure(budget: RiskBudget, ctx: PortfolioContext) -> CheckResult:
+    """Cap 3: the valued book against the net worth the user reported.
+
+    The order of the guards is the order of the questions a reader would ask --
+    is there a net worth at all, is it recent enough to mean anything, is the
+    numerator complete -- and each one that fails says which input is missing
+    instead of falling through to a number. ``total_equity_twd`` is deliberately
+    absent from this function: FR-9 option B keeps the valued book out of cap
+    3's denominator, and cap 3 out of caps 1 and 4.
+    """
     threshold = budget.max_gross_exposure
-    if ctx.total_equity_twd is None or not ctx.total_equity_twd > 0.0:
-        return ("not_evaluable", "缺少總資產，無法計算總曝險。", None, threshold)
+    net_worth = ctx.net_worth
+    if net_worth is None:
+        return ("not_evaluable", NO_NET_WORTH_DETAIL, None, threshold)
+    if net_worth.age_days >= NET_WORTH_STALE_AFTER_DAYS:
+        return (
+            "not_evaluable",
+            NET_WORTH_EXPIRED_DETAIL.format(
+                days=NET_WORTH_STALE_AFTER_DAYS,
+                reported_at=net_worth.reported_at,
+                age_days=net_worth.age_days,
+            ),
+            None,
+            threshold,
+        )
     if ctx.gross_exposure_twd is None:
         return ("not_evaluable", "缺少組合總市值，無法計算總曝險。", None, threshold)
-    exposure = ctx.gross_exposure_twd / ctx.total_equity_twd
+    if ctx.book_fully_valued is not True:
+        return (
+            "not_evaluable",
+            GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL + _net_worth_disclosure(net_worth),
+            None,
+            threshold,
+        )
+    exposure = ctx.gross_exposure_twd / net_worth.amount_twd
+    disclosure = _net_worth_disclosure(net_worth)
     if _breaches(exposure, threshold):
         return (
             "violated",
-            f"組合總曝險 {_pct(exposure)}，已達或超過上限 {_pct(threshold)}。",
+            f"組合總曝險 {_pct(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
+            f"已達或超過上限 {_pct(threshold)}。{disclosure}",
             exposure,
             threshold,
         )
     return (
         "passed",
-        f"組合總曝險 {_pct(exposure)}，低於上限 {_pct(threshold)}。",
+        f"組合總曝險 {_pct(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
+        f"低於上限 {_pct(threshold)}。{disclosure}",
         exposure,
         threshold,
     )
@@ -518,9 +670,16 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
         others = max(ctx.sector_market_value_twd - current, 0.0)
         caps["sector_weight"] = max(budget.max_sector_weight * equity - others, 0.0)
 
-    if ctx.gross_exposure_twd is not None and current is not None:
-        others = max(ctx.gross_exposure_twd - current, 0.0)
-        caps["gross_exposure"] = max(budget.max_gross_exposure * equity - others, 0.0)
+    # Cap 3's headroom is measured against the *net worth*, never against
+    # ``equity``. The gate is :func:`_check_gross_exposure` itself rather than a
+    # copy of its conditions, so a sizing suggestion can never be derived from a
+    # cap the card reports as ``not_evaluable``.
+    if ctx.net_worth is not None and ctx.gross_exposure_twd is not None and current is not None:
+        if _check_gross_exposure(budget, ctx)[0] != "not_evaluable":
+            others = max(ctx.gross_exposure_twd - current, 0.0)
+            caps["gross_exposure"] = max(
+                budget.max_gross_exposure * ctx.net_worth.amount_twd - others, 0.0
+            )
 
     max_shares = atr_max_shares(budget, ctx)
     price = ctx.price_twd()
@@ -541,7 +700,8 @@ def project_position(ctx: PortfolioContext, *, share_delta: float) -> PortfolioC
     the arithmetic that produced it. Only the amounts a trade in this symbol
     actually moves are adjusted: the position, the gross exposure and the
     symbol's sector bucket. Equity is untouched -- a trade at market price
-    swaps cash for shares and does not change the book's value.
+    swaps cash for shares and does not change the book's value -- and so is the
+    self-reported net worth, for exactly the same reason.
     """
     price = ctx.price_twd()
     if price is None:  # pragma: no cover - callers check the price first

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from app.advice.book import build_book_context
-from app.advice.limits import RiskBudget, evaluate_limits
+from app.advice.limits import RiskBudget, SelfReportedNetWorth, evaluate_limits
 from app.alerts.engine import SymbolSnapshot
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
@@ -34,6 +34,7 @@ def build_snapshot(
     valuator: PositionValuator,
     budget: RiskBudget,
     fx_provider: FxRateProvider | None = None,
+    net_worth: SelfReportedNetWorth | None = None,
     lookback_days: int = 400,
     today: date | None = None,
 ) -> SymbolSnapshot:
@@ -48,6 +49,11 @@ def build_snapshot(
     ``not_evaluable``; a snapshot has no notes list, so the sentence naming the
     missing conversion is appended to ``reason``, which the engine shows on the
     resulting **skip**.
+
+    ``net_worth`` is what makes the gross-exposure cap evaluable at all, so a
+    ``risk_limit_breach`` rule watching it can only fire once the user has
+    reported one and while that report is still fresh. Without it the cap is
+    ``not_evaluable`` and the rule reports a skip -- never a silent non-firing.
 
     The FX source's standing disclosure (ADR-0005 約束 F-4) travels on its own
     field instead, because it has the opposite destination: it qualifies a rate
@@ -77,6 +83,7 @@ def build_snapshot(
         currency=latest.currency,
         atr=atr,
         fx=fx,
+        net_worth=net_worth,
     )
     data_reason = (
         None
