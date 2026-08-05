@@ -10,9 +10,10 @@ import { MARKET_OPTIONS } from "../lib/format";
 // path segment — no known closed vocabulary to validate against on the
 // front end (TW tickers are numeric, US tickers are alphabetic, both can
 // carry a "." for share-class suffixes). This only rejects what can never be
-// a valid symbol: empty input, whitespace, and characters that would need
-// URL-encoding games to survive the round trip.
-const SYMBOL_PATTERN = /^[A-Za-z0-9.]+$/;
+// a valid symbol: empty input, whitespace, characters that would need
+// URL-encoding games to survive the round trip, and input made up entirely
+// of "." with no actual ticker characters (qa-reviewer Minor follow-up).
+const SYMBOL_PATTERN = /^(?=.*[A-Za-z0-9])[A-Za-z0-9.]+$/;
 
 /**
  * Small symbol lookup used to reach `/position/[symbol]` from anywhere

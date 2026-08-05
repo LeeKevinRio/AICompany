@@ -13,15 +13,16 @@
  * Scanning what actually reaches a screen is both more precise and what
  * §1.3 asks for ("文案模板").
  *
- * Known scope limit (documented rather than silently narrowed): "即時" is
- * deliberately excluded from the scanned term list, because this file's
- * only legitimate rendered use of the characters is inside "非即時"
- * (denying real-time capability, which §5.1 requires, not claims it) — see
- * `NON_REALTIME_NOTICE`. A bare `it.todo` records that trade-off instead of
- * a substring rule that would false-positive on the required denial itself.
+ * "即時" is deliberately excluded from the plain substring list (a naive
+ * `.not.toContain("即時")` would false-positive on `NON_REALTIME_NOTICE`'s
+ * required "非即時" denial) — it is instead checked automatically via
+ * `findBareRealtimeClaims` (`wordingScanHelpers.ts`), which only fails when
+ * "即時" appears *without* an immediately preceding "非" (qa-reviewer
+ * BLOCKING/Major follow-up: this was a manual-review `it.todo` before).
  */
 
 import { describe, expect, it } from "vitest";
+import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
   buildAsOfStatement,
   buildAttributedHeadline,
@@ -73,9 +74,11 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
     expect(joined).not.toContain(term);
   });
 
-  it.todo(
-    "「即時」/real-time capability claims — covered by NON_REALTIME_NOTICE containing only " +
-      "negated usage ('非即時報價'); a substring scan for '即時' would false-positive on the " +
-      "required denial itself, so this is a documented manual-review item, not an automated one",
-  );
+  it("every '即時' occurrence is part of a '非即時' denial, never a bare capability claim", () => {
+    expect(findBareRealtimeClaims(joined)).toEqual([]);
+  });
+
+  it("assertNoForbiddenTerms helper agrees with the it.each scan above (belt and suspenders)", () => {
+    assertNoForbiddenTerms(joined, FRONTEND_FORBIDDEN_TERMS, "adviceWording.ts rendered surface");
+  });
 });
