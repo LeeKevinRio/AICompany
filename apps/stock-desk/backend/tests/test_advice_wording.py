@@ -20,7 +20,7 @@ from app.advice.engine import (
 )
 from app.advice.limits import PortfolioContext, RiskBudget
 from app.advice.loader import DEFAULT_RULES_PATH, Comparison, load_default_rules
-from tests.advice_helpers import make_signals, uptrend_signals
+from tests.advice_helpers import make_signals, reported_net_worth, uptrend_signals
 
 #: The wording the brief bans outright.
 FORBIDDEN_TERMS = ("保證", "必漲", "必賺", "穩賺")
@@ -37,6 +37,10 @@ def _cards() -> list[dict[str, Any]]:
         position_market_value_twd=50_000.0,
         position_cost_twd=45_000.0,
         gross_exposure_twd=500_000.0,
+        # Reported net worth included so the FR-9 disclosure sentences on cap 3
+        # are inside the scan below rather than outside it.
+        net_worth=reported_net_worth(1_000_000.0, age_days=8),
+        book_fully_valued=True,
         quantity=500.0,
         close=110.0,
     )

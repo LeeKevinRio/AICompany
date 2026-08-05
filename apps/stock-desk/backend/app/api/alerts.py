@@ -18,7 +18,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 
-from app.advice.limits import RiskBudget
+from app.advice.book import self_reported_net_worth
+from app.advice.limits import RiskBudget, SelfReportedNetWorth
 from app.alerts.engine import (
     EvaluationResult,
     SnapshotLoader,
@@ -145,7 +146,14 @@ def evaluate_now(
     result = evaluate_alerts(
         store,
         _loader(
-            resolver, position_store, valuator, settings.risk_budget, fx_provider
+            resolver,
+            position_store,
+            valuator,
+            settings.risk_budget,
+            fx_provider,
+            self_reported_net_worth(
+                settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
+            ),
         ),
         cooldown_minutes=settings.alerts.cooldown_minutes,
     )
@@ -158,6 +166,7 @@ def _loader(
     valuator: PositionValuator,
     budget: RiskBudget,
     fx_provider: FxRateProvider,
+    net_worth: SelfReportedNetWorth | None,
 ) -> SnapshotLoader:
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
@@ -168,6 +177,7 @@ def _loader(
             valuator=valuator,
             budget=budget,
             fx_provider=fx_provider,
+            net_worth=net_worth,
         )
 
     return load

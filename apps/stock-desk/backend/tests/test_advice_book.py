@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,10 +13,12 @@ from app.advice.book import (
     GROSS_EXPOSURE_NOTE,
     FxQuote,
     build_book_context,
+    self_reported_net_worth,
 )
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
+from tests.advice_helpers import reported_net_worth
 
 
 def _valuation(price: str | None) -> Valuation:
@@ -124,10 +127,100 @@ def test_candidate_context_is_zeroed_not_fabricated() -> None:
 
 
 def test_gross_exposure_is_left_unset_with_the_reason_stated() -> None:
+    # AC-9.2: no reported net worth, so the numerator is not offered either and
+    # the standing note is the one this product shipped with.
     book = build_book_context(_summary(_position(1, "2330")), symbol="2330", close=600.0)
     assert book.context.gross_exposure_twd is None
+    assert book.context.net_worth is None
     assert GROSS_EXPOSURE_NOTE in book.notes
     assert EQUITY_BASIS_NOTE in book.notes
+
+
+# --- FR-9: the reported net worth on its way into the context ----------------
+
+
+def test_a_reported_net_worth_turns_the_valued_book_into_the_numerator() -> None:
+    book = build_book_context(
+        _summary(_position(1, "2330")),
+        symbol="2330",
+        close=600.0,
+        net_worth=reported_net_worth(1_500_000.0),
+    )
+    assert book.context.gross_exposure_twd == 600_000.0
+    assert book.context.net_worth is not None
+    assert book.context.net_worth.amount_twd == 1_500_000.0
+    assert book.context.book_fully_valued is True
+    # The standing note now describes the ratio that exists, not the one that
+    # does not, and says which half the user supplied.
+    assert GROSS_EXPOSURE_NOTE not in book.notes
+    assert any("自報的帳戶總淨值" in note for note in book.notes)
+
+
+def test_the_equity_basis_is_untouched_by_a_reported_net_worth() -> None:
+    # AC-9.6 at the adapter: option B changes what cap 3 divides by and nothing
+    # else. ``total_equity_twd`` -- caps 1 and 4's denominator -- must be the
+    # same number with and without the new input.
+    summary = _summary(_position(1, "2330"))
+    without = build_book_context(summary, symbol="2330", close=600.0)
+    with_net_worth = build_book_context(
+        summary, symbol="2330", close=600.0, net_worth=reported_net_worth(9_000_000.0)
+    )
+    assert without.context.total_equity_twd == with_net_worth.context.total_equity_twd
+    assert (
+        without.context.position_market_value_twd
+        == with_net_worth.context.position_market_value_twd
+    )
+
+
+def test_an_unvalued_position_marks_the_book_as_incomplete() -> None:
+    summary = _summary(_position(1, "2330"), _position(2, "2454", price=None))
+    book = build_book_context(
+        summary, symbol="2330", close=600.0, net_worth=reported_net_worth(1_500_000.0)
+    )
+    assert book.context.book_fully_valued is False
+
+
+def test_an_empty_book_counts_as_fully_valued() -> None:
+    book = build_book_context(_summary(market_value="0"), symbol="2330", close=600.0)
+    assert book.context.book_fully_valued is True
+
+
+def test_self_reported_net_worth_measures_the_age_of_the_report() -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    reported = self_reported_net_worth(
+        2_000_000.0, (now - timedelta(days=9, hours=1)).isoformat(), now=now
+    )
+    assert reported is not None
+    assert reported.amount_twd == 2_000_000.0
+    assert reported.age_days == 9
+
+
+def test_self_reported_net_worth_reads_a_naive_timestamp_as_utc() -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    reported = self_reported_net_worth(2_000_000.0, "2026-08-01T12:00:00", now=now)
+    assert reported is not None
+    assert reported.age_days == 4
+
+
+def test_self_reported_net_worth_is_withheld_when_it_cannot_be_trusted() -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    # Nothing entered, a non-positive amount, no timestamp, or one that cannot
+    # be read: none of these can be shown to be a fresh positive denominator,
+    # so none of them is passed on as one.
+    assert self_reported_net_worth(None, now.isoformat(), now=now) is None
+    assert self_reported_net_worth(0.0, now.isoformat(), now=now) is None
+    assert self_reported_net_worth(-5.0, now.isoformat(), now=now) is None
+    assert self_reported_net_worth(2_000_000.0, None, now=now) is None
+    assert self_reported_net_worth(2_000_000.0, "上週", now=now) is None
+
+
+def test_a_future_timestamp_is_not_a_negative_age() -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    reported = self_reported_net_worth(
+        2_000_000.0, (now + timedelta(days=3)).isoformat(), now=now
+    )
+    assert reported is not None
+    assert reported.age_days == 0
 
 
 def test_unvalued_positions_are_excluded_and_disclosed() -> None:

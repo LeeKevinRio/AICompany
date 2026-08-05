@@ -24,7 +24,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import ConfigDict
 
-from app.advice.book import build_book_context
+from app.advice.book import build_book_context, self_reported_net_worth
 from app.advice.engine import build_advice
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
@@ -90,7 +90,13 @@ def get_advice(
         end=end,
     )
     summary = build_summary(store, valuator)
-    budget = settings_store.load().risk_budget
+    settings = settings_store.load()
+    budget = settings.risk_budget
+    # The gross-exposure cap's denominator, or ``None`` while the user has not
+    # reported one -- in which case that cap stays ``not_evaluable`` as before.
+    net_worth = self_reported_net_worth(
+        settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
+    )
 
     latest = max(loaded.bars, key=lambda bar: bar.date) if loaded.bars else None
     signals = compute_signals(symbol, loaded.bars) if loaded.bars else {}
@@ -108,6 +114,7 @@ def get_advice(
         close=float(latest.close) if latest is not None else None,
         currency=latest.currency if latest is not None else None,
         fx=fx,
+        net_worth=net_worth,
     )
 
     if latest is None:

@@ -1,7 +1,8 @@
 """SQLite-backed storage for :class:`app.settings.models.AppSettings`.
 
-One row per section (``risk_budget`` / ``cost_model`` / ``alerts``) holding the
-section's validated JSON, in the same database file as the price cache and the
+One row per section (``risk_budget`` / ``cost_model`` / ``alerts`` /
+``net_worth``) holding the section's validated JSON, in the same database file
+as the price cache and the
 positions table (``STOCK_DESK_DB_PATH``), following ``app/positions/store.py``:
 connections are opened per operation and closed via ``contextlib.closing``.
 
@@ -27,7 +28,12 @@ from pydantic import BaseModel, ValidationError
 
 from app.advice.limits import RiskBudget
 from app.data.cache import resolve_db_path
-from app.settings.models import AlertSettings, AppSettings, CostModelSettings
+from app.settings.models import (
+    AlertSettings,
+    AppSettings,
+    CostModelSettings,
+    NetWorthSettings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,10 @@ _SECTIONS: dict[str, type[BaseModel]] = {
     "risk_budget": RiskBudget,
     "cost_model": CostModelSettings,
     "alerts": AlertSettings,
+    # The row's own ``updated_at`` column is rewritten on every save of any
+    # section, so it cannot answer "when did the user last report this". The
+    # net worth carries its own timestamp inside the payload for that reason.
+    "net_worth": NetWorthSettings,
 }
 
 

@@ -15,10 +15,20 @@ Three honesty rules govern what is filled in:
    balance anywhere in this product, so ``total_equity_twd`` is the market
    value of the successfully valued positions. That is an assumption, and it is
    stated in ``notes`` rather than left for the reader to infer.
-3. **Gross exposure is left unset.** Without cash and margin balances the
-   book's gross exposure is not computable; supplying the equity figure again
-   would force the ratio to exactly 100% and turn an unknown into a permanent
-   "violated". The cap therefore reports ``not_evaluable``, which is what it is.
+3. **Gross exposure needs a denominator the user supplied.** Nothing in this
+   product knows the account's cash or margin balances, so the only figure that
+   can sit under the exposure ratio is the net worth the user reports on the
+   settings page (FR-9). Without one the cap stays ``not_evaluable`` exactly as
+   it always was -- the equity figure is *not* substituted, because dividing
+   the valued book by itself would force the ratio to 100% and turn an unknown
+   into a permanent "violated". With one, the numerator is the valued book and
+   the denominator is the reported net worth, and the two different origins are
+   disclosed on the verdict itself (:mod:`app.advice.limits`).
+
+   The valued book is used as the numerator **only when every position could be
+   valued**: a short numerator makes exposure look lower than it is, and that is
+   the single direction this cap must never err in, so an incomplete book yields
+   ``not_evaluable`` instead (FR-9 (a-附加)).
 
 ``sector`` and the Kelly inputs stay ``None`` for the same reason: no source
 produces them yet.
@@ -37,9 +47,10 @@ conversion", because they call for different things from the reader.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.advice.limits import PortfolioContext
+from app.advice.limits import PortfolioContext, SelfReportedNetWorth
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
@@ -54,6 +65,14 @@ EQUITY_BASIS_NOTE = (
 GROSS_EXPOSURE_NOTE = (
     "缺少現金與融資餘額資料，總曝險無法計算；該上限會回報 not_evaluable，"
     "不以總資產代入而讓比率恆為 100%。"
+)
+
+#: Stated instead, once the user has supplied a net worth for the cap to use.
+#: It names both halves of the ratio and where each came from, because the two
+#: numbers no longer share an origin.
+GROSS_EXPOSURE_SELF_REPORTED_NOTE = (
+    "總曝險以「已估值部位市值合計」為分子、使用者於 {reported_at} 自報的帳戶總淨值"
+    "（新台幣 {amount:,.0f} 元）為分母；此淨值由使用者自行輸入，系統未加以查核。"
 )
 
 #: No quote at all reached this layer for a non-TWD holding.
@@ -148,6 +167,24 @@ def _book_equity(summary: PortfolioSummary) -> tuple[float, int, int]:
     return float(summary.totals.market_value_twd), valued, total
 
 
+def _fully_valued(summary: PortfolioSummary) -> bool:
+    """Whether every stored position could be valued.
+
+    An empty book is ``True``: nothing failed to value, and an exposure of zero
+    against a reported net worth is a fact, not a gap.
+    """
+    return all(position.valuation.status == "ok" for position in summary.positions)
+
+
+def _gross_exposure_note(net_worth: SelfReportedNetWorth | None) -> str:
+    """The standing sentence about the exposure cap, in whichever state it is in."""
+    if net_worth is None:
+        return GROSS_EXPOSURE_NOTE
+    return GROSS_EXPOSURE_SELF_REPORTED_NOTE.format(
+        reported_at=net_worth.reported_at, amount=net_worth.amount_twd
+    )
+
+
 def _position_rollup(
     positions: list[SummaryPosition],
 ) -> tuple[float, float | None, float, int]:
@@ -178,6 +215,44 @@ def _position_rollup(
     )
 
 
+def self_reported_net_worth(
+    amount_twd: float | None,
+    updated_at: str | None,
+    *,
+    now: datetime | None = None,
+) -> SelfReportedNetWorth | None:
+    """Turn the stored settings pair into the risk layer's view of it.
+
+    This is the single place the clock is read for FR-9, so the freshness the
+    settings page displays and the freshness the cap enforces can never drift
+    apart. ``None`` comes back when there is nothing usable to report:
+
+    * no amount, or a non-positive one (the settings boundary already rejects
+      those with a 422; this is the second line, not the first);
+    * no timestamp, or one that cannot be parsed -- an amount whose age is
+      unknown cannot be shown to be fresh, and FR-9 (b) forbids using it
+      anyway, so it is withheld rather than passed on as if it were current.
+
+    A naive stored timestamp is read as UTC, matching what
+    :meth:`app.settings.store.SettingsStore.save` writes.
+    """
+    if amount_twd is None or amount_twd <= 0.0 or updated_at is None:
+        return None
+    try:
+        reported = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return None
+    if reported.tzinfo is None:
+        reported = reported.replace(tzinfo=UTC)
+    moment = now if now is not None else datetime.now(UTC)
+    # A timestamp in the future (clock skew, or an edited database) is treated
+    # as "reported now" rather than as a negative age.
+    age_days = max((moment - reported).days, 0)
+    return SelfReportedNetWorth(
+        amount_twd=amount_twd, reported_at=updated_at, age_days=age_days
+    )
+
+
 def build_book_context(
     summary: PortfolioSummary,
     *,
@@ -187,6 +262,7 @@ def build_book_context(
     currency: str | None = None,
     atr: float | None = None,
     fx: FxQuote | None = None,
+    net_worth: SelfReportedNetWorth | None = None,
 ) -> BookContext:
     """Assemble the risk-budget context for ``symbol`` against the whole book.
 
@@ -201,8 +277,14 @@ def build_book_context(
     ignored for a TWD instrument (which needs no conversion) and required for
     every other currency; without a usable one the price is withheld rather
     than scaled by an invented rate.
+
+    ``net_worth`` is the figure the user reported on the settings page, built
+    by :func:`self_reported_net_worth`. It reaches one cap and one cap only
+    (gross exposure); ``total_equity_twd`` keeps its old definition whether it
+    is supplied or not, so caps 1 and 4 are unaffected by it.
     """
-    notes: list[str] = [EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE]
+    fully_valued = _fully_valued(summary)
+    notes: list[str] = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
     equity, valued_count, total_count = _book_equity(summary)
     if total_count and valued_count < total_count:
         notes.append(
@@ -240,8 +322,13 @@ def build_book_context(
         total_equity_twd=equity,
         position_market_value_twd=market_value,
         position_cost_twd=cost,
-        # Deliberately absent -- see the module docstring, rule 3.
-        gross_exposure_twd=None,
+        # The numerator is the valued book; it is only offered when there is a
+        # denominator to divide it by. Without a reported net worth the field
+        # stays absent and the cap behaves exactly as it did before FR-9
+        # (AC-9.2) -- see the module docstring, rule 3.
+        gross_exposure_twd=equity if net_worth is not None else None,
+        net_worth=net_worth,
+        book_fully_valued=fully_valued,
         quantity=quantity,
         close=close if rate is not None else None,
         # ``close`` is ``None`` whenever ``rate`` is, so this 1.0 is never

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from app.advice.limits import RiskBudget
+from app.advice.limits import RiskBudget, SelfReportedNetWorth
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
@@ -30,6 +30,7 @@ from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market, PositionInput
 from app.positions.store import PositionStore
 from app.services.fx import source_note
+from tests.advice_helpers import reported_net_worth
 from tests.alerts_helpers import add_rule, limit_rule
 from tests.api_helpers import (
     FakePriceService,
@@ -88,7 +89,11 @@ def _hold(store: PositionStore, currency: str) -> None:
 
 
 def _snapshot(
-    store: PositionStore, *, currency: str, fx_provider: FxRateProvider | None
+    store: PositionStore,
+    *,
+    currency: str,
+    fx_provider: FxRateProvider | None,
+    net_worth: SelfReportedNetWorth | None = None,
 ) -> SymbolSnapshot:
     service = _price_service(currency)
     return build_snapshot(
@@ -101,7 +106,27 @@ def _snapshot(
         ),
         budget=RiskBudget(),
         fx_provider=fx_provider,
+        net_worth=net_worth,
     )
+
+
+def test_the_exposure_cap_is_off_until_a_net_worth_reaches_the_snapshot(
+    store: PositionStore,
+) -> None:
+    # A ``risk_limit_breach`` rule on gross exposure can only fire once the
+    # denominator exists; without one the cap reports why, and the engine turns
+    # that into a visible skip rather than a silent non-firing.
+    _hold(store, "TWD")
+    without = _snapshot(store, currency="TWD", fx_provider=None)
+    assert next(c for c in without.limits if c.id == "gross_exposure").status == "not_evaluable"
+
+    with_report = _snapshot(
+        store,
+        currency="TWD",
+        fx_provider=None,
+        net_worth=reported_net_worth(1_000_000_000.0),
+    )
+    assert next(c for c in with_report.limits if c.id == "gross_exposure").status == "passed"
 
 
 def test_a_twd_holding_needs_no_rate_and_gains_no_extra_reason(

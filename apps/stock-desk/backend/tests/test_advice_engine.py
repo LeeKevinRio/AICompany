@@ -23,6 +23,7 @@ from tests.advice_helpers import (
     make_signals,
     minimal_rule,
     minimal_ruleset,
+    reported_net_worth,
     uptrend_signals,
     write_rule_file,
 )
@@ -54,6 +55,11 @@ def _portfolio(**overrides: Any) -> PortfolioContext:
         "position_market_value_twd": 50_000.0,
         "position_cost_twd": 45_000.0,
         "gross_exposure_twd": 500_000.0,
+        # Cap 3 divides by the reported net worth, not by the valued book
+        # (FR-9 option B); the same 1,000,000 keeps these cards' numbers
+        # comparable to the pre-FR-9 ones.
+        "net_worth": reported_net_worth(1_000_000.0),
+        "book_fully_valued": True,
         "quantity": 500.0,
         "close": 110.0,
     }

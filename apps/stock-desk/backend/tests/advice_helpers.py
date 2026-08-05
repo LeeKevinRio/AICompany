@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from app.advice.limits import SelfReportedNetWorth
+
 _AS_OF = "2026-07-24T13:30:00+00:00"
 _BAR_COUNT = 120
 _LAST_BAR = date(2026, 7, 24)
@@ -154,6 +156,21 @@ def minimal_rule(**overrides: Any) -> dict[str, Any]:
     }
     rule.update(overrides)
     return rule
+
+
+def reported_net_worth(
+    amount_twd: float = 1_000_000.0, *, age_days: int = 0
+) -> SelfReportedNetWorth:
+    """A self-reported net worth for the gross-exposure cap (FR-9).
+
+    Fresh by default; ``age_days`` drives the freshness rule directly, which is
+    what lets a test cross the 7- and 30-day boundaries without a fake clock.
+    """
+    return SelfReportedNetWorth(
+        amount_twd=amount_twd,
+        reported_at=(_LAST_BAR - timedelta(days=age_days)).isoformat(),
+        age_days=age_days,
+    )
 
 
 def minimal_ruleset(*rules: dict[str, Any]) -> dict[str, Any]:
