@@ -166,3 +166,75 @@ describe('useGroups — 多分頁 storage 事件同步（【Blocking 修正】�
     await waitFor(() => expect(result.current.groups).toHaveLength(0));
   });
 });
+
+describe('useGroups — submitOrder 送單前同步 freshness 複驗（【QA 複審 non-blocking #1】）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('多分頁窄競態：別的分頁剛把團截止，但 storage 事件還沒處理完（React state 仍是舊快照）→ 同步複驗攔下，不再回傳失真的 ok:true', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([seedGroup({ closed: false })]));
+    const { result } = renderHook(() => useGroups());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    // 這裡故意「只改 localStorage、不 dispatch storage 事件」——精準重現 non-blocking #1
+    // 描述的窗口：另一分頁已經把資料寫進 localStorage，但這個分頁的 React `groups` state
+    // 還沒被 'storage' 事件監聽器同步到（在真實瀏覽器裡，這個非同步 reload 尚未完成）。
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([seedGroup({ closed: true })]));
+    expect(result.current.groups[0].closed).toBe(false); // 確認 React state 真的還是舊快照
+
+    let submitResult;
+    act(() => {
+      submitResult = result.current.submitOrder('g1', '小明', [{ productId: 'p1', qty: 1 }]);
+    });
+
+    // 若沒有同步複驗，這裡會因為舊快照顯示「未截止」而錯誤回傳 { ok: true }。
+    expect(submitResult).toEqual({ ok: false, reason: 'closed' });
+  });
+
+  it('多分頁窄競態：別的分頁剛把團刪除 → 同步複驗攔下，回傳 group-not-found 而非失真的 ok:true', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([seedGroup()]));
+    const { result } = renderHook(() => useGroups());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([])); // 別分頁把這個團刪掉了
+    expect(result.current.groups).toHaveLength(1); // React state 仍是舊快照
+
+    let submitResult;
+    act(() => {
+      submitResult = result.current.submitOrder('g1', '小明', [{ productId: 'p1', qty: 1 }]);
+    });
+
+    expect(submitResult).toEqual({ ok: false, reason: 'group-not-found' });
+  });
+
+  it('localStorage 內容跟 React state 一致（沒有競態）→ 複驗不影響正常成功送單', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([seedGroup()]));
+    const { result } = renderHook(() => useGroups());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    let submitResult;
+    act(() => {
+      submitResult = result.current.submitOrder('g1', '小明', [{ productId: 'p1', qty: 1 }]);
+    });
+
+    expect(submitResult).toEqual({ ok: true });
+  });
+
+  it('直讀 localStorage 失敗（內容毀損成非 JSON）→ 複驗不擋，退回用 groups 快照判斷（仍成功）', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([seedGroup()]));
+    const { result } = renderHook(() => useGroups());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    // 送單前，localStorage 被寫壞成非 JSON（極端情境，跟毀損偵測是兩回事——這裡只驗證
+    // 複驗本身的例外不會意外擋下一筆原本合法的送單）。
+    localStorage.setItem(STORAGE_KEY, '{not valid json');
+
+    let submitResult;
+    act(() => {
+      submitResult = result.current.submitOrder('g1', '小明', [{ productId: 'p1', qty: 1 }]);
+    });
+
+    expect(submitResult).toEqual({ ok: true });
+  });
+});

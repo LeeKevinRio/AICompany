@@ -11,7 +11,7 @@
 //
 // 容錯要「特別厚」：任何解不開 / crc 不符 / 缺欄位一律回 null，絕不丟例外。
 
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, type OrderItem } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH, type OrderItem } from '../types';
 import { decodeBase64Url, encodeBase64Url } from './base64url';
 
 const PREFIX = 'GBR1';
@@ -104,6 +104,10 @@ export function decodeReceipt(text: string): ParsedReceipt | null {
     if (qty > MAX_ITEM_QTY) return null;
     items.push({ productId, qty });
   }
+
+  // 【QA 複審 non-blocking #2】備註超過長度上限：比照 buyerName／qty 慣例，判整筆回單碼
+  // 無效，不靜默截斷（截斷過的備註可能改變原意，例如「不要辣」被切成「不要」）。
+  if (typeof d.o === 'string' && d.o.length > MAX_NOTE_LENGTH) return null;
 
   return {
     groupId: d.g,

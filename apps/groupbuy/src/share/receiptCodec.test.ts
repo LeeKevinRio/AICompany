@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { decodeReceipt, encodeReceipt, type ReceiptSource } from './receiptCodec';
 import { encodeBase64Url } from './base64url';
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH } from '../types';
 
 /** 手造一段合法簽章的 GBR1 回單碼，供邊界測試組出「合法簽章但欄位超限」的壞碼。 */
 function makeRawCode(obj: unknown): string {
@@ -157,6 +157,19 @@ describe('【Major 修正】decodeReceipt — 欄位上限：超限判整筆無�
         ['overflow', MAX_ITEM_QTY + 1],
       ],
     });
+    expect(decodeReceipt(code)).toBeNull();
+  });
+
+  it(`【QA 複審 non-blocking #2】備註剛好等於上限（${MAX_NOTE_LENGTH} 字）→ 正常解出`, () => {
+    const note = '不'.repeat(MAX_NOTE_LENGTH);
+    const code = makeRawCode({ v: 1, g: 'g1', b: '小明', o: note, it: [['p1', 1]] });
+    const parsed = decodeReceipt(code);
+    expect(parsed!.note).toBe(note);
+  });
+
+  it(`【QA 複審 non-blocking #2】備註超過上限（${MAX_NOTE_LENGTH + 1} 字）→ 整筆判無效（null），不是靜默截斷`, () => {
+    const note = '不'.repeat(MAX_NOTE_LENGTH + 1);
+    const code = makeRawCode({ v: 1, g: 'g1', b: '小明', o: note, it: [['p1', 1]] });
     expect(decodeReceipt(code)).toBeNull();
   });
 });

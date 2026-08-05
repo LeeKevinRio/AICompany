@@ -8,18 +8,31 @@
 // createGroup() 裡原本的 floor/clamp 防線保留，但降級為第二道防線，不再是唯一防線。
 
 /**
+ * 單價輸入位數上限（【QA 複審 non-blocking #3】）。
+ *
+ * 問題：原本 isValidPriceInput 只用 /^\d+$/ 驗證「純數字」，沒有位數上限——貼幾百位數字
+ * 一樣通過這個 regex（畢竟每個字元都是數字），到了 parseValidPriceInput 用 Number() 轉換
+ * 時會溢位成 Infinity，接著在 createGroup()（useGroups.ts）的第二道防線
+ * `Number.isFinite(p.price) ? ... : 0` 判定為非有限數，又被靜默轉成 $0——繞了一圈，還是
+ * 掉回「非法輸入被靜默改成 0」的原始問題，只是觸發路徑更隱蔽。
+ * 7 位數上限（最大 9,999,999）在「千萬元級以下」，遠超合理團購單價，同時排除這整條溢位路徑。
+ */
+export const MAX_PRICE_DIGITS = 7;
+
+/**
  * 驗證開團表單單價輸入字串是否合法。
- * 合法值：空字串（視為 0，例如免費贈品）或純數字的非負整數字串（可有前導零）。
- * 小數點、負號、非數字字元一律不合法。
+ * 合法值：空字串（視為 0，例如免費贈品）或不超過 MAX_PRICE_DIGITS 位數的非負整數字串
+ * （可有前導零）。小數點、負號、非數字字元、超過位數上限一律不合法。
  */
 export function isValidPriceInput(raw: string): boolean {
   const trimmed = raw.trim();
   if (trimmed === '') return true;
-  return /^\d+$/.test(trimmed);
+  if (!/^\d+$/.test(trimmed)) return false;
+  return trimmed.length <= MAX_PRICE_DIGITS;
 }
 
 /** 單價輸入不合法時顯示給主揪看的錯誤文字。 */
-export const PRICE_INPUT_ERROR_MESSAGE = '單價需為 0 或正整數（元）';
+export const PRICE_INPUT_ERROR_MESSAGE = `單價需為 0 或正整數（元，最多 ${MAX_PRICE_DIGITS} 位數）`;
 
 /**
  * 把已驗證合法的單價輸入字串轉成實際數字。呼叫前務必先過 isValidPriceInput 檢查，

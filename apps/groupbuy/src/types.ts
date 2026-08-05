@@ -71,3 +71,11 @@ export const MAX_BUYER_NAME_LENGTH = 20;
 
 /** 單一品項數量上限（防呆，避免誤植天量） */
 export const MAX_ITEM_QTY = 999;
+
+/**
+ * 買家備註長度上限。
+ * 【QA 複審 non-blocking #2】note 欄位原本全鏈路沒有長度上限，比照 buyerName 慣例補上：
+ * UI 輸入層（JoinPage / OrderPage 的備註欄）用 maxLength 擋輸入、receiptCodec 解碼層與
+ * localStorageRepository 驗證層超限一律判整筆無效 / 毀損，不靜默截斷。
+ */
+export const MAX_NOTE_LENGTH = 200;

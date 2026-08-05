@@ -36,6 +36,53 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/**
+ * 【QA 複審 non-blocking #1】送單前的同步「新鮮度」複驗。
+ *
+ * 殘留競態說明：submitOrder 用來判斷「找不找得到團 / 是否已截止」的 `groups`，是這個 hook
+ * 上一次 render 拿到的 React state 快照。如果在極短暫的窗口內，另一個分頁剛好也動了同一團
+ * （例如把它截止），本分頁要等 'storage' 事件監聽器非同步 loadGroups() 完成後，`groups` 才會
+ * 更新到最新——這段非同步窗口內，submitOrder 讀到的 `groups` 快照就可能是過期的，導致同步
+ * 回傳值（{ok:true}）失真：實際上團剛剛已經被別的分頁截止或刪除了。
+ *
+ * localStorage.getItem 本身是同步 API，這裡在真正 return {ok:true} 之前，直接同步讀一次
+ * localStorage 目前內容，重新驗證「這個 groupId 是否還存在、是否已截止」，把上述窗口從
+ * 「上次 render 到這次呼叫」大幅縮小到「這次直讀到 setGroups 實際 commit」之間。
+ *
+ * 已知殘留邊界（刻意不追求完美，記錄清楚即可）：這不是完整的解法——這次直讀之後、
+ * setGroups 真正 commit 之前，仍有極窄的窗口理論上可能被別的分頁搶先動作；要真正杜絕這
+ * 一整類問題，需要後端化之後的樂觀鎖 / 序列化寫入，不是這個純前端 MVP 的範圍。另外，
+ * 直讀失敗（parse 壞掉、storage 被停用等）一律「不擋」、回傳 null 讓呼叫端退回用原本的
+ * groups 快照判斷——不能讓一次複驗本身的例外，意外擋下一筆原本合法的送單。
+ */
+function peekFreshGroupState(groupId: string): { found: boolean; closed: boolean } | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return { found: false, closed: false };
+
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(data)) return null;
+
+  const match = (data as unknown[]).find(
+    (g): g is Record<string, unknown> =>
+      typeof g === 'object' && g !== null && (g as Record<string, unknown>).id === groupId,
+  );
+  if (!match) return { found: false, closed: false };
+
+  const closedFlag = typeof match.closed === 'boolean' ? match.closed : false;
+  const deadlineAt = typeof match.deadlineAt === 'number' ? match.deadlineAt : undefined;
+  return { found: true, closed: isGroupClosed({ closed: closedFlag, deadlineAt }, Date.now()) };
+}
+
 /** 開團時帶入的單一商品（名稱 + 單價 + 可選圖片 data URL）。 */
 export interface NewProduct {
   name: string;
@@ -269,6 +316,11 @@ export function useGroups() {
    * 讓呼叫端同步讀到——那個變數在 submitOrder return 的當下很可能還沒被賦值。
    * setGroups 內部仍保留同一道 isGroupClosed 檢查作為寫入當下的最終防線（避免理論上的競態：
    * 例如兩個分頁幾乎同時送單），只是不再靠它來決定同步回傳值。
+   *
+   * 【QA 複審 non-blocking #1】上面這段用 `groups` 快照判斷的邏輯，仍殘留一個多分頁窄競態：
+   * `groups` 可能是上一次 render 的舊快照（見 peekFreshGroupState 的說明）。在真的要
+   * return {ok:true} 之前，另外同步直讀一次 localStorage 複驗，把這個窗口縮到最小；
+   * 殘留邊界同樣記錄在 peekFreshGroupState 的 docstring。
    */
   const submitOrder = useCallback(
     (groupId: string, buyerName: string, items: OrderItem[], note?: string): SubmitOrderResult => {
@@ -279,6 +331,14 @@ export function useGroups() {
       if (!group) return { ok: false, reason: 'group-not-found' };
       // 資料層擋已截止（不只靠 UI）：手動 closed 或已過期都一律不接受新單 / 覆蓋。
       if (isGroupClosed(group, Date.now())) return { ok: false, reason: 'closed' };
+
+      // 送單前同步複驗一次 localStorage 最新內容（縮小上述窄競態窗口）。直讀失敗（null）
+      // 一律不擋，退回用上面已經算好的 group 快照判斷。
+      const fresh = peekFreshGroupState(groupId);
+      if (fresh) {
+        if (!fresh.found) return { ok: false, reason: 'group-not-found' };
+        if (fresh.closed) return { ok: false, reason: 'closed' };
+      }
 
       const cleanItems = items.filter((i) => i.qty > 0);
       setGroups((prev) =>

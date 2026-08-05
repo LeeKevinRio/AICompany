@@ -10,7 +10,7 @@ import { encodeReceipt } from '../share/receiptCodec';
 import { calcOrderSubtotal } from '../calc/calc';
 import { formatCountdown, isExpired } from '../deadline';
 import { useNow } from '../hooks/useNow';
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, type OrderItem } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH, type OrderItem } from '../types';
 
 export function JoinPage() {
   const [searchParams] = useSearchParams();
@@ -219,6 +219,7 @@ export function JoinPage() {
           id="buyer-note"
           type="text"
           value={note}
+          maxLength={MAX_NOTE_LENGTH}
           placeholder="例：不要辣、少冰"
           onChange={(e) => setNote(e.target.value)}
         />

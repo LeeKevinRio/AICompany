@@ -14,7 +14,7 @@ import {
   STORAGE_KEY,
   StorageError,
 } from './localStorageRepository';
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH } from '../types';
 import type { Group } from '../types';
 
 function makeValidGroup(overrides: Partial<Group> = {}): Group {
@@ -177,6 +177,10 @@ describe('LocalStorageRepository.loadGroups', () => {
       ['createdAt 型別錯', (o) => ({ ...(o as object), createdAt: 'now' })],
       ['paid 型別錯（存在但非 boolean）', (o) => ({ ...(o as object), paid: 'yes' })],
       ['note 型別錯（存在但非字串）', (o) => ({ ...(o as object), note: 123 })],
+      [
+        `note 超過上限（${MAX_NOTE_LENGTH + 1} 字）`,
+        (o) => ({ ...(o as object), note: '備'.repeat(MAX_NOTE_LENGTH + 1) }),
+      ],
       ['items 不是陣列', (o) => ({ ...(o as object), items: 'nope' })],
       ['items 內有品項 qty 非整數', (o) => ({ ...(o as object), items: [{ productId: 'p1', qty: 1.5 }] })],
       ['items 內有品項 qty 為負數', (o) => ({ ...(o as object), items: [{ productId: 'p1', qty: -1 }] })],
@@ -217,6 +221,24 @@ describe('LocalStorageRepository.loadGroups', () => {
     it(`items 品項 qty 剛好等於上限（${MAX_ITEM_QTY}）→ 合法`, async () => {
       const group = makeValidGroup({
         orders: [{ id: 'o1', buyerName: '小明', createdAt: 0, items: [{ productId: 'p1', qty: MAX_ITEM_QTY }] }],
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([group]));
+      const repo = new LocalStorageRepository();
+      const result = await repo.loadGroups();
+      expect(result.corrupted).toBe(false);
+    });
+
+    it(`【QA 複審 non-blocking #2】note 剛好等於上限（${MAX_NOTE_LENGTH} 字）→ 合法`, async () => {
+      const group = makeValidGroup({
+        orders: [
+          {
+            id: 'o1',
+            buyerName: '小明',
+            createdAt: 0,
+            note: '備'.repeat(MAX_NOTE_LENGTH),
+            items: [{ productId: 'p1', qty: 1 }],
+          },
+        ],
       });
       localStorage.setItem(STORAGE_KEY, JSON.stringify([group]));
       const repo = new LocalStorageRepository();

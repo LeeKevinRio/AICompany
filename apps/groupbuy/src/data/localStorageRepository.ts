@@ -2,7 +2,7 @@
 // 介面符合 StorageRepository，未來可替換成雲端 / IndexedDB 版本。
 // 逐層 runtime 驗證讀回來的結構，壞的團整筆丟棄並備份原始內容。
 
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH } from '../types';
 import type { Group, Order, OrderItem, Product } from '../types';
 import type { LoadResult, StorageRepository } from './repository';
 
@@ -66,8 +66,11 @@ function isValidOrder(v: unknown): v is Order {
   if (typeof o.createdAt !== 'number' || !Number.isFinite(o.createdAt)) return false;
   // paid 為可選 boolean（舊資料無此欄位 → undefined，合法）；存在但型別錯視為毀損。
   if (o.paid !== undefined && typeof o.paid !== 'boolean') return false;
-  // note 為可選字串（舊資料無此欄位 → undefined，合法）；存在但型別錯視為毀損。
-  if (o.note !== undefined && typeof o.note !== 'string') return false;
+  // note 為可選字串（舊資料無此欄位 → undefined，合法）；存在但型別錯或超過
+  // MAX_NOTE_LENGTH 上限視為毀損——與 UI 輸入層 maxLength、receiptCodec.decodeReceipt
+  // 同一組常數、同一政策（超限判整筆無效，不靜默截斷）。
+  if (o.note !== undefined && (typeof o.note !== 'string' || o.note.length > MAX_NOTE_LENGTH))
+    return false;
   if (!Array.isArray(o.items)) return false;
   return o.items.every((item) => isValidOrderItem(item));
 }

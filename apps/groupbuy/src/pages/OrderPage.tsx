@@ -6,7 +6,7 @@ import { useAppData } from '../AppData';
 import { calcOrderSubtotal } from '../calc/calc';
 import { isGroupClosed } from '../deadline';
 import { useNow } from '../hooks/useNow';
-import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, MAX_NOTE_LENGTH } from '../types';
 
 export function OrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -205,6 +205,7 @@ export function OrderPage() {
           id="order-note"
           type="text"
           value={note}
+          maxLength={MAX_NOTE_LENGTH}
           placeholder="例：不要辣、少冰"
           onChange={(e) => setNote(e.target.value)}
           disabled={closed}

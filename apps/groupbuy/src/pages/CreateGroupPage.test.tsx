@@ -88,4 +88,20 @@ describe('【Major 修正】CreateGroupPage — 單價就地驗證，不再靜�
     fireEvent.click(screen.getByText('建立團購'));
     expect(addGroup).toHaveBeenCalledTimes(1);
   });
+
+  it('【QA 複審 non-blocking #3】超過位數上限的單價（8 位數）→ 顯示錯誤、擋下送出', () => {
+    // 用 8 位數（剛好超過 MAX_PRICE_DIGITS=7 一位）驗證這條防線；純粹的「幾百位數字經
+    // Number() 溢位成 Infinity」邏輯已在 priceInput.test.ts 用純函式測試直接覆蓋——
+    // <input type="number"> 對超長數字字串本身有瀏覽器 / jsdom 層級的取值行為差異，不適合
+    // 在這裡用幾百位數字重現，容易變成測 jsdom 的 number input 而不是測我們的驗證邏輯。
+    const addGroup = vi.fn<GroupsApi['addGroup']>(() => 'g1');
+    renderPage(addGroup);
+
+    fireEvent.change(screen.getByPlaceholderText('商品名稱'), { target: { value: '雞排' } });
+    fireEvent.change(screen.getByPlaceholderText('單價'), { target: { value: '99999999' } });
+
+    expect(screen.getByText(PRICE_INPUT_ERROR_MESSAGE)).toBeTruthy();
+    fireEvent.click(screen.getByText('建立團購'));
+    expect(addGroup).not.toHaveBeenCalled();
+  });
 });
