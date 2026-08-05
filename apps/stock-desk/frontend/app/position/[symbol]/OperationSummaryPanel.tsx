@@ -4,9 +4,11 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse } from "../../lib/types";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import { summaryConfidenceLabel } from "../../lib/adviceWording";
+import { formatDateTime } from "../../lib/format";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
+import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 
 /**
  * The place-topping operation summary (FR-C1 AC-C1.1, FR-C6, FR-C7, FR-C8).
@@ -23,7 +25,37 @@ import { InsufficientPanel } from "../../components/InsufficientPanel";
 export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<AdviceResponse, Error> }) {
   return (
     <section className="rounded-lg border border-neutral-800 bg-neutral-950/40 p-4">
-      <h2 className="text-lg font-semibold text-neutral-100">操作摘要</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold text-neutral-100">操作摘要</h2>
+        {/*
+          FR-C8(a) / qa-e2e A2-8: every section badges its own data
+          provenance independently (same mechanism as the technical-analysis
+          `<h3>` rows in `page.tsx`) — never one shared, page-level stamp
+          that lets stale data ride along under a fresher section's badge.
+          `advice.data` (the envelope's own `DataMeta`) is used rather than
+          falling back to the sibling `useBars` query's meta: `advice.py`
+          builds this envelope from its own `load_bars` call (same loader,
+          same lookback window as `/api/bars`, but a genuinely separate HTTP
+          round trip), so it can legitimately land on a different rung of
+          the fresh/backup/cached_stale ladder than the bars section at the
+          same instant — this section must report *its own* provenance, not
+          borrow the bars section's, or a real divergence would be hidden.
+          `advice.data.data` is always populated regardless of whether a
+          card exists (see `app/api/advice.py`'s `insufficient_data` branch,
+          which still returns `data=data_meta(loaded.meta())`), so this is
+          gated on `advice.isSuccess` alone, not on a card being present.
+        */}
+        {advice.isSuccess && (
+          <span className="flex items-center text-xs text-neutral-500">
+            資料時間：{formatDateTime(advice.data.as_of)}｜來源：{advice.data.data.source}
+            <DataMetaStatusBadge
+              status={advice.data.data.status}
+              stalenessMinutes={advice.data.data.staleness_minutes}
+              isWithinTtl={advice.data.data.is_within_ttl}
+            />
+          </span>
+        )}
+      </div>
 
       {advice.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
       {advice.isError && (
