@@ -2,12 +2,15 @@
 // 介面符合 StorageRepository，未來可替換成雲端 / IndexedDB 版本。
 // 逐層 runtime 驗證讀回來的結構，壞的團整筆丟棄並備份原始內容。
 
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
 import type { Group, Order, OrderItem, Product } from '../types';
 import type { LoadResult, StorageRepository } from './repository';
 
-const STORAGE_KEY = 'groupbuy:groups:v1';
-// 偵測到半壞資料時，把原始內容備份到這個 key，方便事後檢視。
-const CORRUPT_BACKUP_KEY = 'groupbuy:groups:corrupt-backup';
+// 匯出供 useGroups.ts 的多分頁 'storage' 事件監聽比對 event.key；
+// 這是刻意的耦合（MVP 權衡）——見 useGroups.ts 內的說明註解。
+export const STORAGE_KEY = 'groupbuy:groups:v1';
+// 偵測到半壞資料時，把原始內容備份到這個 key，方便事後檢視（匯出供測試檢查備份內容）。
+export const CORRUPT_BACKUP_KEY = 'groupbuy:groups:corrupt-backup';
 
 /** 可辨識的儲存錯誤：quota 滿、無痕模式停用 storage 等都會丟這個。 */
 export class StorageError extends Error {
@@ -45,21 +48,26 @@ function isValidProduct(v: unknown): v is Product {
 function isValidOrderItem(v: unknown): v is OrderItem {
   if (typeof v !== 'object' || v === null) return false;
   const i = v as Record<string, unknown>;
-  // 只驗結構：productId 為非空字串、qty 為非負整數。
+  // 只驗結構：productId 為非空字串、qty 為非負整數且不超過 MAX_ITEM_QTY 上限。
   // 刻意「不」要求 productId 指向現存商品——與 calc.ts 的容錯設計對齊
   //（找不到商品的品項在統計時一律略過）。未來若加入刪商品功能，殘留的舊品項
   // 不該讓整團被判毀損而整筆丟棄。
-  return isNonEmptyString(i.productId) && isFiniteNonNegInt(i.qty);
+  // 超過上限視為毀損（整筆判無效），不靜默 clamp——與 receiptCodec.decodeReceipt 同一組常數、同一政策。
+  return isNonEmptyString(i.productId) && isFiniteNonNegInt(i.qty) && i.qty <= MAX_ITEM_QTY;
 }
 
 function isValidOrder(v: unknown): v is Order {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   if (!isNonEmptyString(o.id)) return false;
-  if (typeof o.buyerName !== 'string') return false;
+  // buyerName 超過 MAX_BUYER_NAME_LENGTH 視為毀損，不靜默截斷——與 UI 輸入層 maxLength、
+  // receiptCodec.decodeReceipt 同一組常數、同一政策。
+  if (typeof o.buyerName !== 'string' || o.buyerName.length > MAX_BUYER_NAME_LENGTH) return false;
   if (typeof o.createdAt !== 'number' || !Number.isFinite(o.createdAt)) return false;
   // paid 為可選 boolean（舊資料無此欄位 → undefined，合法）；存在但型別錯視為毀損。
   if (o.paid !== undefined && typeof o.paid !== 'boolean') return false;
+  // note 為可選字串（舊資料無此欄位 → undefined，合法）；存在但型別錯視為毀損。
+  if (o.note !== undefined && typeof o.note !== 'string') return false;
   if (!Array.isArray(o.items)) return false;
   return o.items.every((item) => isValidOrderItem(item));
 }
