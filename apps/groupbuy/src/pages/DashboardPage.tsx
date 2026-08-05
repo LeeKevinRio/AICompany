@@ -32,6 +32,15 @@ export function DashboardPage() {
   // unmount 時清掉未觸發的 timer，避免對已卸載元件 setState。
   useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
+  // 同型問題修正（同 JoinPage / OrderPage）：路由 :id 換成另一團時不會 remount，若不主動
+  // 重置，上一團殘留的回單碼草稿 / 匯入訊息 / 打勾閃光動畫會誤植到新開的這一團畫面上。
+  useEffect(() => {
+    setReceiptText('');
+    setImportMsg(null);
+    setFlashName(null);
+    window.clearTimeout(flashTimer.current);
+  }, [id]);
+
   const group = groups.find((g) => g.id === id);
 
   if (loaded && !group) {

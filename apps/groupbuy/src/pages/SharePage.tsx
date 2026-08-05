@@ -1,6 +1,6 @@
 // 賣家分享頁：把團定義壓進連結，顯示可複製連結 + QR，供主揪貼到 LINE / 掃碼填單。
 // 動線（方案 C）：主揪開完團 → 後台「邀請填單」→ 這頁 → 分享連結 → 買家從連結進填單頁。
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { buildShareUrl } from '../share/groupCodec';
@@ -14,6 +14,12 @@ export function SharePage() {
   const navigate = useNavigate();
   const now = useNow();
   const [copied, setCopied] = useState(false);
+
+  // 同型問題修正：路由 :id 換另一團時不會 remount，避免殘留上一團「已複製連結 ✓」的
+  // 短暫提示誤植到新開的這一團。
+  useEffect(() => {
+    setCopied(false);
+  }, [id]);
 
   const group = groups.find((g) => g.id === id);
 

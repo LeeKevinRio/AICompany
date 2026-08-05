@@ -3,7 +3,7 @@
 // 隔離原則：本頁完全獨立於主揪後台——不讀 / 不寫主揪的 localStorage、沒有任何連回 app 首頁或
 // 後台的入口、看不到其他買家明細。買家送出後不寫任何資料，只拿到一段回單碼貼回 LINE 給主揪。
 // D3 定案：不做買家返回修改（填錯找主揪）。
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { decodeGroupPayload } from '../share/groupCodec';
 import { encodeReceipt } from '../share/receiptCodec';
@@ -27,6 +27,17 @@ export function JoinPage() {
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [receipt, setReceipt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Router 同一路由（/join）換不同的 `d` 查詢參數不會 remount 這個元件，若不主動重置，
+  // 換到另一張團購單的填單連結時會卡在前一張單「已送出」的畫面。監聽 payload 變化重置
+  // 所有本頁本地 state，回到全新的填單表單。
+  useEffect(() => {
+    setBuyerName('');
+    setNote('');
+    setQtys({});
+    setReceipt(null);
+    setCopied(false);
+  }, [payload]);
 
   function setQty(productId: string, next: number) {
     const safe = Number.isFinite(next) ? next : 0;

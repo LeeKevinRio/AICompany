@@ -1,6 +1,6 @@
 // 填單頁：選團（由路由 :id 決定）→ 填名字 + 各商品數量 → 送出訂單。
 // MVP 定案：同名覆蓋——用相同名字再次送出會覆蓋原本那張單（等同「修改我的單」）。
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppData } from '../AppData';
 import { calcOrderSubtotal } from '../calc/calc';
@@ -20,6 +20,15 @@ export function OrderPage() {
   // 商品 id -> 數量。
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [done, setDone] = useState(false);
+
+  // 同型問題修正（同 JoinPage）：路由 :id 換成另一團時，React Router 不會 remount 這個
+  // 元件（同一個 <Route> 元素、只是 params 不同），若不主動重置會卡在上一團的「已送出」
+  // 畫面或殘留上一團填的數量。監聽 id 變化重置本頁表單 state。
+  useEffect(() => {
+    setBuyerName('');
+    setQtys({});
+    setDone(false);
+  }, [id]);
 
   function setQty(productId: string, next: number) {
     // NaN 防呆：輸入 '-'、'e' 等會讓 Number() 產生 NaN，直接落 0，
