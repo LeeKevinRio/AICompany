@@ -9,29 +9,16 @@ import type { Market } from "../../lib/types";
 import { MARKET_OPTIONS } from "../../lib/format";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
+import { ErrorPanel } from "../../components/ErrorPanel";
+import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
 import { AdviceCardView } from "./AdviceCardView";
 import { LeverageChapterView } from "./LeverageChapterView";
 import { TechnicalIndicatorsPanel } from "./TechnicalIndicatorsPanel";
+import { OperationSummaryPanel } from "./OperationSummaryPanel";
 
 function isMarket(value: string | null): value is Market {
   return value === "TW" || value === "US";
-}
-
-function ErrorPanel({ label, error }: { label: string; error: unknown }) {
-  return (
-    <p role="alert" className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-      {label}：{error instanceof ApiError ? error.message : "未知錯誤"}
-    </p>
-  );
-}
-
-function InsufficientPanel({ reason }: { reason: string | null }) {
-  return (
-    <p className="rounded-md border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-300">
-      {reason ?? "資料不足，無法計算。"}
-    </p>
-  );
 }
 
 export default function PositionDetailPage() {
@@ -76,6 +63,18 @@ export default function PositionDetailPage() {
         <Link href="/" className="text-sm text-sky-400 underline hover:text-sky-300">
           回總覽
         </Link>
+      </div>
+
+      {/*
+        --- Operation summary (FR-C1 AC-C1.1 / FR-C6 / FR-C7 / FR-C8) --------
+        Deliberately placed above the fold, ahead of the four-facet sections,
+        and driven by its own `useAdvice` query instance so a failure or
+        `insufficient_data` here never blocks the technical-analysis section
+        below (AC-C1.2 / AC-C1.3) — this is the same query the advice-card
+        section further down uses; React Query dedupes it into one request.
+      */}
+      <div className="mt-6">
+        <OperationSummaryPanel advice={advice} />
       </div>
 
       {/*
