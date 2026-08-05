@@ -1,33 +1,36 @@
 /* =========================================================================
- * 揪購 GroupBuy — 視覺規範 v2.0
- * Art-lead 出品，2026-07-18（v2.0 黑底修訂，依 work/groupbuy-視覺規範.md 第 6 節）
- * Dark Mode 為主場景；Light Mode token 以 [data-theme="light"] 預留（見附錄一）。
+ * 揪購 GroupBuy — 視覺規範 v2.1（配色修訂）
+ * Art-lead 出品，2026-08-05（v2.1 修正偏暗與對比不足，依 work/groupbuy-視覺規範-v2.1.md）
+ * Dark Mode 為主場景；Light Mode token 以 [data-theme="light"] 預留（見附錄一，v2.1 不動）。
  * 色相定位：暖橙炭黑（H≈20°），區別於 MaJong 綠金夜色（H≈140°）。
  * ========================================================================= */
 
 :root {
   /* ── 背景 / 表面 ──────────────────────────────────────── */
-  --color-bg:           #0C0A09;   /* 真黑帶極淡暖棕；區別 MaJong #0d1510 綠調 */
-  --color-surface:      #171210;   /* 卡片暖炭黑表面 */
-  --color-surface-tint: #1E1912;   /* 統計摘要區橙暖深底 */
-  --color-border:       #2C2218;   /* 暖棕邊框；區別 MaJong #253328 綠灰 */
-  --color-input-bg:     #100D0B;   /* 輸入框底，略深凹陷感 */
+  --color-bg:           #0C0A09;   /* 真黑帶極淡暖棕；區別 MaJong #0d1510 綠調（CEO 要求維持偏黑，不動） */
+  --color-surface:      #1E1712;   /* 卡片暖炭黑表面，ΔL* 對 bg 拉大到 5.6 */
+  --color-surface-tint: #2A2016;   /* 統計摘要區橙暖深底，ΔL* 對 surface 拉大到 4.7 */
+  --color-raised:       #362819;   /* 浮起層（新增）：未來 modal / dropdown / toast 用，目前無元件套用 */
+  --color-border:       #4A3524;   /* 暖棕邊框；區別 MaJong #253328 綠灰，從幾乎隱形提亮到可辨識 */
+  --color-border-strong:#6B4E32;   /* 強調邊框（新增）：輸入框邊界、表格總計列分隔線 */
+  --color-input-bg:     #14100D;   /* 輸入框底，介於 bg 與 surface 之間，凹陷感更明確 */
 
   /* ── 文字 ─────────────────────────────────────────────── */
   --color-text:           #F0E8E0; /* 主文字，暖近白（帶橙米感）≈16:1 AAA */
-  --color-text-secondary: #8A7268; /* 次要文字，暖棕灰 ≈4.8:1 AA */
-  --color-text-disabled:  #4A3C34; /* 停用 / placeholder，純裝飾 */
+  --color-text-secondary: #A89083; /* 次要文字，暖棕灰，全層對比 ≥4.5:1 AA（v2.0 在 surface 上未過） */
+  --color-text-disabled:  #6B5B4E; /* 停用 / placeholder，裝飾性，提亮到可辨識 */
   --color-text-inverse:   #FFFFFF; /* 有色背景上的反白文字 */
 
   /* ── 品牌色 ───────────────────────────────────────────── */
-  /* [填底/按鈕/邊框/連結用] primary ≈5.8:1 AA，黑底下醒目 */
-  --color-primary:       #E8621A;  /* 柑橘橙，CTA/按鈕填底/左側狀態條 */
-  --color-primary-dark:  #C04D10;  /* 深橙，hover / pressed */
-  --color-primary-muted: #251408;  /* 橙色深底 tint，選中狀態背景 */
-  --color-primary-light: #FF8A45;  /* 亮橙，動畫閃光幀（非常態色）*/
+  /* primary 為「強調色」角色（文字/邊框/icon），按鈕填底改用下方 -fill 系列，兩者亮度方向相反不共用 */
+  --color-primary:            #FF7A29; /* 柑橘橙強調色：連結/section-title/badge.open/左側狀態條，vs bg 7.59:1 */
+  --color-primary-fill:       #C64A0D; /* 按鈕填底專用（新增）：.btn.primary 預設底，白字在上 4.79:1 過 AA */
+  --color-primary-fill-hover: #A83D0A; /* 按鈕填底 hover/pressed（新增，取代舊 --color-primary-dark），白字 6.29:1 */
+  --color-primary-muted:      #2E1B0C; /* 橙色深底 tint，選中狀態背景，配合新背景階層微調 */
+  --color-primary-light:      #FF8A45; /* 亮橙，動畫閃光幀（非常態色，目前程式碼未使用，預留）*/
 
   /* ── 語意色 ───────────────────────────────────────────── */
-  /* [文字/金額用橙] amount ≈7.0:1 AA+，比 primary 亮一階，小字可讀性更佳 */
+  /* [文字/金額用橙] amount ≈7.0:1 AA+，比 primary 亮一階，小字可讀性更佳（v2.1 語意色本體不動） */
   --color-success:       #1DB974;  /* 收款打勾 / 已完成 ≈7.8:1 AAA */
   --color-success-muted: #143D26;  /* 打勾動畫底色 flash（深綠底）*/
 
@@ -41,7 +44,7 @@
   --color-danger-muted:  #2A0D0D;  /* 錯誤橫幅深紅底色 */
 
   --color-unpaid:        #F05252;  /* 未收款數字，紅色促行動 */
-  --color-closed:        #8A7A70;  /* 已截止 / 靜態暖灰 ≈4.8:1 AA */
+  --color-closed:        #AC9689;  /* 已截止 / 靜態暖灰，提亮到全層過 AA（v2.0 在 surface 上未過） */
 
   /* ── 間距 ─────────────────────────────────────────────── */
   --space-1: 4px;
@@ -221,11 +224,11 @@ button { font-family: inherit; font-size: 15px; cursor: pointer; }
   transition: background 0.15s, border-color 0.15s;
 }
 .btn.primary {
-  background: var(--color-primary);
-  border-color: var(--color-primary-dark);
+  background: var(--color-primary-fill);
+  border-color: var(--color-primary-fill-hover);
   color: var(--color-text-inverse);
 }
-.btn.primary:hover { background: var(--color-primary-dark); }
+.btn.primary:hover { background: var(--color-primary-fill-hover); }
 
 .btn.success {
   background: var(--color-success);
@@ -289,7 +292,7 @@ textarea {
   padding: var(--space-2) var(--space-3);
   background: var(--color-input-bg);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   transition: border-color 0.15s;
 }
@@ -410,7 +413,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
 .stat-table tfoot td {
   font-weight: 700;
   font-size: 15px;
-  border-top: 2px solid var(--color-border);
+  border-top: 2px solid var(--color-border-strong);
   border-bottom: none;
 }
 .stat-table tfoot td.amount { color: var(--color-amount-strong); }
