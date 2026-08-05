@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { decodeReceipt, encodeReceipt, type ReceiptSource } from './receiptCodec';
 import { encodeBase64Url } from './base64url';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY } from '../types';
+
+/** 手造一段合法簽章的 GBR1 回單碼，供邊界測試組出「合法簽章但欄位超限」的壞碼。 */
+function makeRawCode(obj: unknown): string {
+  const payload = encodeBase64Url(JSON.stringify(obj));
+  let h = 5381;
+  for (let i = 0; i < payload.length; i += 1) h = ((h << 5) + h + payload.charCodeAt(i)) >>> 0;
+  return `GBR1.${payload}.${h.toString(36)}`;
+}
 
 const source: ReceiptSource = {
   groupId: 'g_abc',
@@ -110,5 +119,44 @@ describe('decodeReceipt — 壞碼容錯（特別厚，一律不 crash）', () =
     for (let i = 0; i < payload.length; i += 1) h = ((h << 5) + h + payload.charCodeAt(i)) >>> 0;
     const parsed = decodeReceipt(`GBR1.${payload}.${h.toString(36)}`);
     expect(parsed!.items).toEqual([{ productId: 'ok', qty: 3 }]);
+  });
+});
+
+describe('【Major 修正】decodeReceipt — 欄位上限：超限判整筆無效，不靜默 clamp', () => {
+  it(`買家名字剛好等於上限（${MAX_BUYER_NAME_LENGTH} 字）→ 正常解出`, () => {
+    const name = '名'.repeat(MAX_BUYER_NAME_LENGTH);
+    const code = makeRawCode({ v: 1, g: 'g1', b: name, it: [['p1', 1]] });
+    const parsed = decodeReceipt(code);
+    expect(parsed!.buyerName).toBe(name);
+  });
+
+  it(`買家名字超過上限（${MAX_BUYER_NAME_LENGTH + 1} 字）→ 整筆判無效（null），不是靜默截斷`, () => {
+    const name = '名'.repeat(MAX_BUYER_NAME_LENGTH + 1);
+    const code = makeRawCode({ v: 1, g: 'g1', b: name, it: [['p1', 1]] });
+    expect(decodeReceipt(code)).toBeNull();
+  });
+
+  it(`品項數量剛好等於上限（${MAX_ITEM_QTY}）→ 正常解出`, () => {
+    const code = makeRawCode({ v: 1, g: 'g1', b: '小明', it: [['p1', MAX_ITEM_QTY]] });
+    const parsed = decodeReceipt(code);
+    expect(parsed!.items).toEqual([{ productId: 'p1', qty: MAX_ITEM_QTY }]);
+  });
+
+  it(`品項數量超過上限（${MAX_ITEM_QTY + 1}）→ 整筆判無效（null），不是靜默 clamp 回上限`, () => {
+    const code = makeRawCode({ v: 1, g: 'g1', b: '小明', it: [['p1', MAX_ITEM_QTY + 1]] });
+    expect(decodeReceipt(code)).toBeNull();
+  });
+
+  it('多個品項中只要有一項超限，整張回單碼都判無效（不是只丟掉那一項）', () => {
+    const code = makeRawCode({
+      v: 1,
+      g: 'g1',
+      b: '小明',
+      it: [
+        ['ok', 1],
+        ['overflow', MAX_ITEM_QTY + 1],
+      ],
+    });
+    expect(decodeReceipt(code)).toBeNull();
   });
 });

@@ -11,7 +11,7 @@
 //
 // 容錯要「特別厚」：任何解不開 / crc 不符 / 缺欄位一律回 null，絕不丟例外。
 
-import type { OrderItem } from '../types';
+import { MAX_BUYER_NAME_LENGTH, MAX_ITEM_QTY, type OrderItem } from '../types';
 import { decodeBase64Url, encodeBase64Url } from './base64url';
 
 const PREFIX = 'GBR1';
@@ -89,6 +89,9 @@ export function decodeReceipt(text: string): ParsedReceipt | null {
   if (d.v !== SCHEMA_VERSION) return null;
   if (typeof d.g !== 'string' || d.g.length === 0) return null;
   if (typeof d.b !== 'string' || d.b.trim().length === 0) return null;
+  const buyerName = d.b.trim();
+  // 超過買家名字長度上限：判整筆回單碼無效，不靜默截斷（截斷過的名字可能撞名、覆蓋錯人）。
+  if (buyerName.length > MAX_BUYER_NAME_LENGTH) return null;
   if (!Array.isArray(d.it)) return null;
 
   const items: OrderItem[] = [];
@@ -97,12 +100,14 @@ export function decodeReceipt(text: string): ParsedReceipt | null {
     const [productId, qty] = entry;
     if (typeof productId !== 'string' || productId.length === 0) continue;
     if (!isNonNegInt(qty) || qty <= 0) continue;
+    // 超過單一品項數量上限：判整筆回單碼無效，不靜默 clamp（clamp 過的數量會讓主揪誤收錯金額）。
+    if (qty > MAX_ITEM_QTY) return null;
     items.push({ productId, qty });
   }
 
   return {
     groupId: d.g,
-    buyerName: d.b.trim(),
+    buyerName,
     ...(typeof d.o === 'string' && d.o.length > 0 ? { note: d.o } : {}),
     items,
   };
