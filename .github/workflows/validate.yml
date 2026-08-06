@@ -15,3 +15,18 @@ jobs:
           python-version: "3.12"
       - name: Validate agent definitions
         run: python scripts/validate_agents.py
+
+  review-record:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.base_ref }}"
+      - name: Require a PASS review record in this PR
+        run: python scripts/check_review_record.py --base "origin/${{ github.base_ref }}"
