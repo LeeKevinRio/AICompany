@@ -65,6 +65,38 @@ stateDiagram-v2
 | `risk-compliance-officer` | 面向使用者的建議類文案、風險上限設定、免責聲明 | 被否決的產出不得進入 `done` |
 | CEO | 一切 | 最終裁決；否決權衝突時由 CEO 拍板並留書面紀錄 |
 
+## 派工佇列(dispatch queue)
+
+> 目的:任務狀態不能只活在對話裡。環境回滾或 agent 無聲死亡後,
+> 協調者必須能從 repo 檔案恢復現場,而不是靠記憶。
+
+1. **先落地再派工**:協調者每派出一個背景 agent,必先在 `work/dispatch/<日期>-<代號>.md`
+   建立派工單並 commit,然後才呼叫 agent。
+2. **派工單必填欄位**:狀態(`pending | running | done | failed`)、承辦 agent、分支、
+   預算上限、範圍清單、**恢復指引**(回滾後如何判斷做到哪、怎麼補派)。
+3. **完成即回填**:agent 交件後,協調者更新狀態為 `done`(或 `failed` 附原因)並記錄產出 commit。
+4. **回滾恢復程序**:環境回滾後,協調者第一件事是掃 `work/dispatch/` 中所有非 `done` 的派工單,
+   依恢復指引逐一盤點、補派。
+
+## 派工預算與存檔點
+
+1. **每次派工的 prompt 必載明**:範圍清單(做哪幾件、不做什麼)與輸出 token 上限(數量級即可)。
+2. **存檔點紀律**:背景 agent 每完成一個檔案/語意單位立即 commit;
+   協調者在長任務中定期 push 存檔點到遠端,防容器回滾遺失狀態。
+3. 預算內做不完屬正常情況:agent 應在預算用盡前 commit 現有進度並回報「做到哪、剩什麼」,
+   由協調者決定補派,不得為趕完而略過驗證。
+
+## 審查紀錄與機械閘門
+
+1. **審查必留紀錄檔**:qa-reviewer 審查通過後,協調者將審查結果落檔
+   `work/reviews/<任務代號>-review.md`,內容必含一行 `結論:PASS`(退件則為 `結論:NEEDS_CHANGES`)。
+2. **CI 強制**:每個 PR 必須新增或更新至少一份含 `結論:PASS` 的審查紀錄檔,
+   由 `scripts/check_review_record.py` 在 CI 驗證(`review-record` job),不過不能合併——
+   「通過審查才算 done」由機器把關,不再只靠紀律。
+3. **遠端 branch protection(CEO 一次性設定)**:GitHub → Settings → Branches 對 `main` 與 `product/*`
+   啟用:Require a pull request before merging、Require status checks(`validate-agents`、`review-record`)、
+   禁止 force push。
+
 ## 升級規則（何時直接找 CEO）
 
 - 需求彼此衝突或優先序不明。

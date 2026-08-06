@@ -34,6 +34,11 @@
   任務單格式、退件與否決規則見 [`docs/handoff-protocol.md`](docs/handoff-protocol.md)。
 - **「通過審查」才算完成**：未經 qa-reviewer 審查通過（無 `BLOCKING_ISSUES`）的工作不得視為 done；
   涉及 UI 再加 qa-e2e 實機驗收。
+- **派工必落地**:背景派工先寫派工單進 `work/dispatch/` 並 commit 才派;
+  prompt 載明範圍與 token 預算上限;agent 邊做邊 commit 存檔點,協調者定期 push——
+  環境回滾後從派工佇列恢復,不靠記憶。細節見 `docs/handoff-protocol.md`。
+- **審查留痕**:審查通過必落檔 `work/reviews/`(含 `結論:PASS`),CI 的 `review-record` job
+  會擋下沒有審查紀錄的 PR。
 - 架構決策以 ADR 記錄在 `docs/adr/`（模板見 ADR-0001）；與 accepted ADR 衝突時以 ADR 為準。
 - 過程文件、企劃、art brief、任務單放 `work/`。
 
