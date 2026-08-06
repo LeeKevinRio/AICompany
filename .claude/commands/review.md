@@ -12,6 +12,11 @@ description: 跨廠商 code review — 呼叫 OpenAI Codex CLI 對目前 staged 
 - 已設定認證：`OPENAI_API_KEY`（在 `.env` 或環境變數），或已用 ChatGPT 帳號登入 Codex。
 - 已把要審查的變更 `git add` 成 staged diff。
 
+若上述任一前置條件不成立（CLI 未安裝、認證缺失、或執行時逾時 / 額度不足），
+**不要**卡住審查流程：依 [`docs/codex-setup.md`](../../docs/codex-setup.md#降級策略cli-或金鑰不可用時)
+的降級策略，在 qa-reviewer 報告的「第二意見（Codex）」段落註明不可用原因，
+改採強化人工複查後繼續給出 Verdict。
+
 ## 執行步驟
 
 1. 先確認有 staged 變更（若為空就提示先 `git add`）：

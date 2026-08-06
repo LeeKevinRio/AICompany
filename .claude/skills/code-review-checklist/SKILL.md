@@ -9,7 +9,9 @@ description: 公司標準 code review 流程與檢查清單。qa-reviewer 審查
 
 1. `git --no-pager diff --staged --stat` 確認審查範圍；為空就退回請實作者先 `git add`。
 2. 逐檔審查（不是抽樣），對照下方清單。
-3. 執行 `/review` 取得 OpenAI Codex 跨廠商第二意見；無法執行時在報告註明原因。
+3. 執行 `/review` 取得 OpenAI Codex 跨廠商第二意見；無法執行時依
+   [`docs/codex-setup.md`](../../../docs/codex-setup.md#降級策略cli-或金鑰不可用時)
+   的降級策略在報告註明原因，改採強化人工複查，不得因此卡住或跳過整個審查。
 4. 綜合兩邊結果，依 qa-reviewer 的輸出契約產出報告，最後一行必為 `BLOCKING_ISSUES=true|false`。
 
 ## 檢查清單
