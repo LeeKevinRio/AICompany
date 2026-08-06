@@ -1,6 +1,11 @@
 *
 !.gitkeep
 !.gitignore
+# Dispatch queue and review records must be tracked (rollback recovery + CI gate).
+!dispatch/
+!dispatch/**
+!reviews/
+!reviews/**
 !mahjong-app-架構.md
 !mahjong-app-v2-企劃.md
 !mahjong-app-v2-視覺規範.md
