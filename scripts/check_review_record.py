@@ -16,8 +16,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-PASS_PATTERN = re.compile(r"結論[::]\s*PASS")
+# A verdict line is "結論:<verdict>" alone on its line (either colon width).
+# The LAST verdict line in a file is authoritative, so multi-round records
+# ("結論:NEEDS_CHANGES" then "結論:PASS") and quoted format reminders
+# cannot produce false positives.
+VERDICT_PATTERN = re.compile(r"^\s*結論[:：]\s*(\S+)\s*$", re.MULTILINE)
 REVIEW_DIR = "work/reviews/"
+
+
+def final_verdict(text: str) -> str | None:
+    verdicts = VERDICT_PATTERN.findall(text)
+    return verdicts[-1] if verdicts else None
 
 
 def changed_files(base: str) -> list[str]:
@@ -50,12 +59,15 @@ def main() -> int:
         print("   依交接協定,qa-reviewer 審查通過後必須落檔,含一行「結論:PASS」。")
         return 1
 
-    passed = [f for f in review_files if PASS_PATTERN.search(Path(f).read_text(encoding="utf-8"))]
+    passed = [
+        f for f in review_files if final_verdict(Path(f).read_text(encoding="utf-8")) == "PASS"
+    ]
 
     if not passed:
-        print("❌ 找到審查紀錄檔,但沒有任何一份含「結論:PASS」:")
+        print("❌ 找到審查紀錄檔,但沒有任何一份的最終結論行是「結論:PASS」:")
         for f in review_files:
-            print(f"   - {f}")
+            verdict = final_verdict(Path(f).read_text(encoding="utf-8"))
+            print(f"   - {f}(最終結論:{verdict or '無結論行'})")
         return 1
 
     print("✅ 審查紀錄閘門通過:")

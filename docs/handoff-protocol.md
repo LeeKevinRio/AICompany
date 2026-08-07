@@ -89,10 +89,28 @@ stateDiagram-v2
 ## 審查紀錄與機械閘門
 
 1. **審查必留紀錄檔**:qa-reviewer 審查通過後,協調者將審查結果落檔
-   `work/reviews/<任務代號>-review.md`,內容必含一行 `結論:PASS`(退件則為 `結論:NEEDS_CHANGES`)。
-2. **CI 強制**:每個 PR 必須新增或更新至少一份含 `結論:PASS` 的審查紀錄檔,
-   由 `scripts/check_review_record.py` 在 CI 驗證(`review-record` job),不過不能合併——
-   「通過審查才算 done」由機器把關,不再只靠紀律。
+   `work/reviews/<任務代號>-review.md`。結論行必須**獨立成行**,格式 `結論:PASS`
+   (退件則為 `結論:NEEDS_CHANGES`);同一檔案多輪覆核時,**以最後一個結論行為準**。
+   紀錄檔範本:
+
+   ```markdown
+   # 審查紀錄:<任務代號> <標題>
+
+   - 審查者:qa-reviewer
+   - 日期:<日期>
+   - 審查範圍:<diff 範圍與對應 commit SHA / PR 編號>
+   - Codex 第二意見:<可用/不可用(降級為強化人工複查)>
+
+   ## 發現事項
+   (BLOCKING_ISSUES 與非阻擋建議,逐條)
+
+   結論:PASS
+   ```
+
+2. **CI 強制**:每個 PR 必須新增或更新至少一份最終結論為 `結論:PASS` 的審查紀錄檔;
+   `scripts/check_review_record.py`(CI 的 `review-record` job)找不到就把該 PR 擋下、無法合併。
+   注意:這是**輕量文字檢查、非防偽驗證**——它擋得住「忘記審查」,擋不住「偽造紀錄」,
+   後者仍靠流程紀律與 CEO 抽查;紀錄檔中的 commit SHA 欄位供事後追溯。
 3. **遠端 branch protection(CEO 一次性設定)**:GitHub → Settings → Branches 對 `main` 與 `product/*`
    啟用:Require a pull request before merging、Require status checks(`validate-agents`、`review-record`)、
    禁止 force push。

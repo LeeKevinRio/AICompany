@@ -27,6 +27,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Fetch base branch
-        run: git fetch origin "${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch origin "$BASE_REF"
       - name: Require a PASS review record in this PR
-        run: python scripts/check_review_record.py --base "origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python scripts/check_review_record.py --base "origin/$BASE_REF"
