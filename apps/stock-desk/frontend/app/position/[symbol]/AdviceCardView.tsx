@@ -43,6 +43,16 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
         （{advice.observation_window.bars ?? "—"} 根日線）
       </p>
 
+      {/*
+        R3 fix (risk-final-review.md): the disclaimer must sit in the same
+        visual region as the headline, at the same size/weight as
+        `OperationSummaryPanel`'s `DisclaimerBanner` — never demoted to the
+        smallest text size and pushed to the bottom of the card.
+      */}
+      <p className="mt-3 rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
+        {advice.disclaimer}
+      </p>
+
       {hasBlockedNotices && (
         <div
           role="alert"
@@ -159,10 +169,6 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
           </details>
         )}
       </Section>
-
-      <p className="mt-6 border-t border-neutral-800 pt-4 text-xs text-neutral-500">
-        {advice.disclaimer}
-      </p>
     </div>
   );
 }
