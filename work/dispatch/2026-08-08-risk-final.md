@@ -1,6 +1,6 @@
 # 派工單:RISK-FINAL 股票措辭定稿風控複審
 
-- 狀態:running
+- 狀態:done
 - 日期:2026-08-08
 - 派工者:coordinator(主 session)
 - 承辦:risk-compliance-officer(背景 agent,唯讀)
@@ -27,4 +27,7 @@
 
 ## 結果
 
-(完成後回填:APPROVE/VETO、發現事項摘要)
+- 結論:**VETO**(2026-08-08),審查紀錄見 `work/reviews/risk-final-review.md`
+- required 六條(R1–R6);suggested 七條(S1–S7)列管
+- 用量:約 90k token(超出 30k 預算,實際逐句對照 10 檔;同類全量複審後續應編 80–100k)
+- 後續:退回 build,派工單 RISK-FIX(frontend-engineer 主修)
