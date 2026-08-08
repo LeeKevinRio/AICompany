@@ -11,3 +11,8 @@
 !mahjong-app-v2-視覺規範.md
 !mahjong-app-回饋輪企劃.md
 !stock-desk-發布說明.md
+# Dispatch queue and review records must be tracked (rollback recovery + CI gate).
+!dispatch/
+!dispatch/**
+!reviews/
+!reviews/**
