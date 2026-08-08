@@ -1,6 +1,6 @@
 # 派工單:RISK-FIX-REVIEW 六條必修的審查與風控複審
 
-- 狀態:running
+- 狀態:running(qa 關完成,退修 B1 後複審)
 - 日期:2026-08-08
 - 派工者:coordinator(主 session)
 - 承辦:qa-reviewer(先)→ risk-compliance-officer(後,僅複審 R1–R6 涉及檔案)
@@ -22,4 +22,7 @@
 
 ## 結果
 
-(完成後回填)
+- qa-reviewer:**NEEDS_CHANGES**(2026-08-08),紀錄見 `work/reviews/risk-fix-review.md`
+- B1:tradingCalendar 未建模休市日反向膨脹計數,長假後誤報「資料過舊」;R1/R2/R3/R5/R6 全過
+- 退修派工:2026-08-08-risk-fix2.md(frontend-engineer);修畢 qa 只複審 R4 範圍,再過風控關
+- 用量:qa 67k(預算 40k,超因逐檔通讀+交叉核對元件現檔)
