@@ -28,7 +28,7 @@ import {
   QUANTITY_RANGE_ABSENCE_TEXT,
   STALE_DATA_PROMINENT_NOTICE,
 } from "./adviceWording";
-import { tradingDaysSince } from "./tradingCalendar";
+import { isDataStaleByCalendar } from "./tradingCalendar";
 
 /**
  * The eight elements §2 of the wording brief requires on every rendered
@@ -165,13 +165,22 @@ export function buildOperationSummary(
   const card = response.advice;
   const lastBarDate = response.data.last_bar_date;
   // R4 fix (risk-final-review.md): this notice is about data *age*, not
-  // source degradation — it must fire off how many trading days have
-  // elapsed since `last_bar_date`, not off `data.status === "cached_stale"`
-  // (a same-day `cached_stale` read is not stale; a `fresh` read spanning an
-  // unmodelled long weekend/holiday should not go unreported either).
-  // `cached_stale` itself continues to be surfaced by `DataMetaStatusBadge`.
+  // source degradation — it must fire off how old `last_bar_date` is, not
+  // off `data.status === "cached_stale"` (a same-day `cached_stale` read is
+  // not stale). `cached_stale` itself continues to be surfaced separately
+  // by `DataMetaStatusBadge`.
+  //
+  // B1 fix (risk-fix-review.md): "how old" is deliberately measured in
+  // plain calendar days against a buffer wide enough to absorb TWSE's
+  // longest realistic closure (Lunar New Year), NOT a modelled trading-day
+  // gap — see `tradingCalendar.ts`'s header for why the trading-day model
+  // over-counted the gap across unmodelled movable holidays and produced a
+  // false alarm on the first trading day back from a long closure. This
+  // trade-off means a short (a few trading days, ~10 calendar days or less)
+  // genuine staleness during a normal week is not flagged — an accepted
+  // false negative, documented alongside the threshold constant.
   const staleDataNotice =
-    lastBarDate !== null && tradingDaysSince(lastBarDate) > 1 ? STALE_DATA_PROMINENT_NOTICE : null;
+    lastBarDate !== null && isDataStaleByCalendar(lastBarDate) ? STALE_DATA_PROMINENT_NOTICE : null;
 
   if (card.action === "insufficient_data") {
     return {
