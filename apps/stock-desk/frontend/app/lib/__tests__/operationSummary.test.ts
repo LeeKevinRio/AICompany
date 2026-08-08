@@ -294,6 +294,70 @@ describe("buildOperationSummary — held mode", () => {
     if (model.kind !== "no_price") throw new Error("unreachable");
     expect(model.reason).toBe("三層資料源皆無日線");
   });
+
+  // R4 fix (risk-final-review.md): the "data older than one trading day"
+  // notice must key off the trading-day gap since `last_bar_date`, not off
+  // `data.status === "cached_stale"` (a source-degradation signal, not a
+  // data-age one).
+  it("does NOT show the stale-data notice for a same-day cached_stale read (source downgrade alone is not staleness)", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const model = buildOperationSummary(
+      makeResponse({
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 5,
+          is_within_ttl: true,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: today,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBeNull();
+  });
+
+  it("DOES show the stale-data notice once last_bar_date is more than one trading day old, even on a fresh read", () => {
+    // 10 calendar days back is always > 1 trading day regardless of weekends.
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const model = buildOperationSummary(
+      makeResponse({
+        data: {
+          status: "fresh",
+          source: "twse",
+          staleness_minutes: 5,
+          is_within_ttl: null,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: tenDaysAgo,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.staleDataNotice).not.toBeNull();
+  });
+
+  it("does NOT show the stale-data notice when last_bar_date is missing (no false trigger from an absent field)", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 5,
+          is_within_ttl: true,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: null,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBeNull();
+  });
 });
 
 describe("buildOperationSummary — candidate mode (FR-C7)", () => {

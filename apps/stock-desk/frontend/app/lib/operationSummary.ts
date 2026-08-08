@@ -28,6 +28,7 @@ import {
   QUANTITY_RANGE_ABSENCE_TEXT,
   STALE_DATA_PROMINENT_NOTICE,
 } from "./adviceWording";
+import { tradingDaysSince } from "./tradingCalendar";
 
 /**
  * The eight elements §2 of the wording brief requires on every rendered
@@ -162,8 +163,15 @@ export function buildOperationSummary(
   }
 
   const card = response.advice;
-  const staleDataNotice = response.data.status === "cached_stale" ? STALE_DATA_PROMINENT_NOTICE : null;
   const lastBarDate = response.data.last_bar_date;
+  // R4 fix (risk-final-review.md): this notice is about data *age*, not
+  // source degradation — it must fire off how many trading days have
+  // elapsed since `last_bar_date`, not off `data.status === "cached_stale"`
+  // (a same-day `cached_stale` read is not stale; a `fresh` read spanning an
+  // unmodelled long weekend/holiday should not go unreported either).
+  // `cached_stale` itself continues to be surfaced by `DataMetaStatusBadge`.
+  const staleDataNotice =
+    lastBarDate !== null && tradingDaysSince(lastBarDate) > 1 ? STALE_DATA_PROMINENT_NOTICE : null;
 
   if (card.action === "insufficient_data") {
     return {
