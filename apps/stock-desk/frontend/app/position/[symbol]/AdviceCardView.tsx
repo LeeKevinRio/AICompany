@@ -1,12 +1,12 @@
 import type { AdviceCard } from "../../lib/types";
 import {
   cardActionColorClass,
-  cardActionLabel,
   confidenceLabel,
   formatDateTime,
   formatNumber,
   formatPercent,
 } from "../../lib/format";
+import { buildAttributedHeadline } from "../../lib/adviceWording";
 import { LimitsCheckList } from "./LimitsCheckList";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -29,7 +29,7 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
             advice.action,
           )}`}
         >
-          {cardActionLabel(advice.action)}
+          {buildAttributedHeadline(advice.action)}
         </span>
         <span className="text-sm text-neutral-400">
           信心等級：{confidenceLabel(advice.confidence)}

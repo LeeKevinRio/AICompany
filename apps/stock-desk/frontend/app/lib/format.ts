@@ -184,18 +184,14 @@ export function numberColorClass(value: number | null): string {
   return value > 0 ? "text-rose-400" : "text-emerald-400";
 }
 
-const CARD_ACTION_LABELS: Record<CardAction, string> = {
-  add: "加碼",
-  hold: "觀望",
-  reduce: "減碼",
-  stop_loss: "停損",
-  take_profit: "停利",
-  insufficient_data: "資料不足，本次不提供操作評估",
-};
-
-export function cardActionLabel(action: CardAction): string {
-  return CARD_ACTION_LABELS[action];
-}
+/**
+ * R2 fix (risk-final-review.md): the action *label* used to live here as a
+ * second, unattributed vocabulary ("加碼"/"減碼"/…) that duplicated and
+ * contradicted `adviceWording.ts`'s single source of truth
+ * (`HELD_ACTION_LABELS` + `buildAttributedHeadline`, §1.1/§1.2). Callers must
+ * import the label from there now; this module only keeps the colour
+ * mapping, which is presentation, not wording.
+ */
 
 /** Background/text colour class per action, dark-mode first. */
 export function cardActionColorClass(action: CardAction): string {
