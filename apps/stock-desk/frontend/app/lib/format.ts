@@ -190,7 +190,7 @@ const CARD_ACTION_LABELS: Record<CardAction, string> = {
   reduce: "減碼",
   stop_loss: "停損",
   take_profit: "停利",
-  insufficient_data: "資訊不足，不建議",
+  insufficient_data: "資料不足，本次不提供操作評估",
 };
 
 export function cardActionLabel(action: CardAction): string {
