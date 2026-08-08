@@ -45,7 +45,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
     label: "單一標的佔比上限",
-    description: "此標的市值占總資產的上限（比例，例如 0.15 代表 15%）。",
+    description: "此標的市值占總資產(已估值部位市值)的上限（比例，例如 0.15 代表 15%）。",
     defaultValue: 0.15,
     hardCeiling: { max: 0.5, reason: "單一標的超過總資產的一半時，分散化已無實質意義。" },
   },
@@ -58,7 +58,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_gross_exposure",
     label: "總曝險上限",
-    description: "組合總市值占總資產的上限（比例，可大於 1 代表允許槓桿）。",
+    description: "組合總市值占總資產(已估值部位市值)的上限（比例，可大於 1 代表允許槓桿）。",
     defaultValue: 1.0,
     hardCeiling: { max: 1.5, reason: "容許適度槓桿，但不容許 2 倍的總曝險。" },
   },
@@ -83,7 +83,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "kelly_position_cap",
     label: "Kelly 部位硬上限",
-    description: "無論 Kelly 估計的邊際多大，此為部位占總資產的絕對上限。",
+    description: "無論 Kelly 估計的邊際多大，此為部位占總資產(已估值部位市值)的絕對上限。",
     defaultValue: 0.1,
   },
 ];

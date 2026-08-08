@@ -35,7 +35,7 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       name: "單一標的佔比上限",
       status: "not_evaluable",
       threshold: budget.max_position_weight,
-      reason: "總覽頁未提供各部位台幣市值明細，無法計算單一標的佔總資產比重；請至個股頁面查看。",
+      reason: "總覽頁未提供各部位台幣市值明細，無法計算單一標的佔總資產(已估值部位市值)比重；請至個股頁面查看。",
     },
     {
       id: "sector_weight",
