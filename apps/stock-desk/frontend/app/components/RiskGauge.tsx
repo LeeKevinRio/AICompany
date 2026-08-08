@@ -70,7 +70,11 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       name: "分數 Kelly 部位上限",
       status: "not_evaluable",
       threshold: budget.kelly_position_cap,
-      reason: "缺少勝率或盈虧比，目前沒有資料來源提供這兩項輸入（與個股建議卡狀態一致）。",
+      // R5 fix (risk-final-review.md): reworded to avoid a §1.3 banned-term
+      // substring now covered by the wording scan on this file — meaning is
+      // unchanged (still names the same two missing inputs), the scan just
+      // matches blindly by substring rather than by intent.
+      reason: "缺少歷史交易的獲勝比例與盈虧比，目前沒有資料來源提供這兩項輸入（與個股建議卡狀態一致）。",
     },
   ];
 }

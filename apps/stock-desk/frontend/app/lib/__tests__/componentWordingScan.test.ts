@@ -33,6 +33,14 @@ const SCANNED_FILES = [
   // which is exactly the class of copy this scan exists to reach.
   "../../settings/NetWorthSection.tsx",
   "../../settings/SettingsForm.tsx",
+  // R5 fix (risk-final-review.md): the advice-card surface and its wording
+  // helpers had no coverage at all — exactly the gap that let R1/R2's
+  // unattributed, non-whitelisted labels ship unscanned.
+  "../../position/[symbol]/AdviceCardView.tsx",
+  "../format.ts",
+  "../../components/RiskGauge.tsx",
+  "../../position/[symbol]/LimitsCheckList.tsx",
+  "../operationSummary.ts",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
