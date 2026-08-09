@@ -190,6 +190,43 @@ def test_summary_reports_null_opened_at_without_blocking_valuation(
     assert body["positions"][0]["opened_at"] is None
 
 
+def test_each_position_carries_its_own_twd_contribution(store: PositionStore) -> None:
+    # The per-position figures exist so book-level slices (the advice layer's
+    # sector and single-position numerators) are summed from the same TWD
+    # numbers as the totals. For a USD holding they must therefore be the
+    # converted amounts -- 10 x $110 x 31.5 and 10 x $100 x 30 -- and never the
+    # own-currency 1,100 / 1,000 a reader could mistake for TWD.
+    _seed(store, market="US", currency="USD", symbol="AAPL")
+    valuator = _make_valuator(
+        {"AAPL": "110"},
+        {"USDTWD": [(date(2024, 1, 15), "30"), (date(2024, 3, 20), "31.5")]},
+    )
+    client = _wire(store, valuator)
+    try:
+        body = client.get("/api/portfolio/summary").json()
+    finally:
+        _teardown()
+    pos = body["positions"][0]
+    assert Decimal(pos["market_value_twd"]) == Decimal("34650")
+    assert Decimal(pos["cost_twd"]) == Decimal("30000")
+    assert Decimal(pos["market_value_twd"]) == Decimal(body["totals"]["market_value_twd"])
+    assert Decimal(pos["cost_twd"]) == Decimal(body["totals"]["cost_twd"])
+
+
+def test_an_unvalued_position_carries_no_twd_contribution(store: PositionStore) -> None:
+    # Nothing is fabricated for a position that could not be valued: both
+    # contributions are null, which is what keeps them out of every roll-up.
+    _seed(store, market="US", currency="USD", symbol="AAPL")
+    client = _wire(store, _make_valuator({"AAPL": "110"}, {}))  # no FX at all
+    try:
+        body = client.get("/api/portfolio/summary").json()
+    finally:
+        _teardown()
+    pos = body["positions"][0]
+    assert pos["market_value_twd"] is None
+    assert pos["cost_twd"] is None
+
+
 def test_summary_amounts_serialize_as_strings(store: PositionStore) -> None:
     _seed(store, market="TW", currency="TWD", symbol="2330")
     valuator = _make_valuator({"2330": "550"}, {})

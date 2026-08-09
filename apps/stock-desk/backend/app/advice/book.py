@@ -8,9 +8,9 @@ the same context from the same rules instead of each inventing its own.
 
 Three honesty rules govern what is filled in:
 
-1. **Only ``ok`` valuations are aggregated.** A position whose price could not
-   be fetched contributes nothing to the book total and is listed in
-   ``notes``, so a partial book is never presented as a whole one.
+1. **Only ``ok`` valuations are aggregated.** A position that could not be
+   valued (no price, or no FX rate) contributes nothing to the book total and
+   is listed in ``notes``, so a partial book is never presented as a whole one.
 2. **Equity is the valued book, and says so.** There is no cash or account
    balance anywhere in this product, so ``total_equity_twd`` is the market
    value of the successfully valued positions. That is an assumption, and it is
@@ -241,6 +241,18 @@ def _position_rollup(
 ) -> tuple[float, float | None, float, int]:
     """Roll up the ``ok``-valued rows: ``(market value, cost, quantity, skipped)``.
 
+    Both money figures are the position's **own TWD contribution** as the
+    summary layer computed it, for the same reason ``_sector_rollup`` uses them:
+    these two feed ``position_market_value_twd`` / ``position_cost_twd``, which
+    sit over TWD denominators (``total_equity_twd``, and the TWD price used for
+    share sizing). Multiplying quantity by a close in the instrument's own
+    currency would put a USD numerator over a TWD denominator and make a foreign
+    holding's share of the book read low by the exchange rate -- "risk looks
+    smaller than it is", the one direction these caps must never err in -- and
+    the same mixed unit would then travel into every suggested share count via
+    :func:`app.advice.limits.notional_caps`. Only the share count stays as it
+    is: a quantity has no currency.
+
     ``cost`` is ``None`` when no row carried one, so the unrealized-P&L ratio
     reports "no cost" instead of a zero that would read as a -100% loss.
     """
@@ -250,13 +262,13 @@ def _position_rollup(
     has_cost = False
     skipped = 0
     for position in positions:
-        valuation = position.valuation
-        if valuation.status != "ok" or valuation.price is None:
+        if position.valuation.status != "ok" or position.market_value_twd is None:
             skipped += 1
             continue
-        market_value += position.quantity * valuation.price.value
-        cost += position.quantity * position.avg_cost
-        has_cost = True
+        market_value += position.market_value_twd
+        if position.cost_twd is not None:
+            cost += position.cost_twd
+            has_cost = True
         quantity += position.quantity
     return (
         float(market_value),

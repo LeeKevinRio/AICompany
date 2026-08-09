@@ -61,6 +61,13 @@ class SummaryPosition(BaseModel):
     #: today -- are summed from the same TWD figures the totals use instead of
     #: re-deriving them from a price in the instrument's own currency.
     market_value_twd: Decimal | None
+    #: The matching contribution to ``totals.cost_twd`` (converted at the FX rate
+    #: of the open date, as the valuator defines it), or ``None`` on the same
+    #: terms. It travels beside ``market_value_twd`` because the two are only
+    #: comparable to each other in the same currency: a slice that rolls up one
+    #: in TWD and the other in the instrument's own currency would report a
+    #: return that is really an exchange rate.
+    cost_twd: Decimal | None
 
 
 class PortfolioSummary(BaseModel):
@@ -88,7 +95,9 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
     for position in positions:
         valued = valuator.value_position(position)
         summary_positions.append(
-            _to_summary_position(position, valued.valuation, valued.market_value_twd)
+            _to_summary_position(
+                position, valued.valuation, valued.market_value_twd, valued.cost_twd
+            )
         )
         if valued.valuation.status == "ok":
             ok_count += 1
@@ -122,7 +131,10 @@ def _totals_status(*, total: int, ok: int) -> Literal["complete", "partial", "no
 
 
 def _to_summary_position(
-    position: Position, valuation: Valuation, market_value_twd: Decimal | None
+    position: Position,
+    valuation: Valuation,
+    market_value_twd: Decimal | None,
+    cost_twd: Decimal | None,
 ) -> SummaryPosition:
     return SummaryPosition(
         id=position.id,
@@ -139,4 +151,5 @@ def _to_summary_position(
         note=position.note,
         valuation=valuation,
         market_value_twd=market_value_twd,
+        cost_twd=cost_twd,
     )

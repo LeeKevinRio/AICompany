@@ -9,8 +9,8 @@ around it that a cap needs.
 Two conventions that make the output honest rather than merely reassuring:
 
 * A cap whose inputs are missing reports ``not_evaluable`` with the reason. It
-  is never silently reported as ``passed``. The sector cap is ``not_evaluable``
-  in practice today because positions carry no sector field yet.
+  is never silently reported as ``passed``. Since FR-12 the sector cap has a
+  field to read, so what may be missing is a value the user has not filed in.
 * A cap is ``violated`` when the observed value **reaches or exceeds** the
   threshold (``>=``), not only when it strictly exceeds it: at exactly the cap
   the budget is already spent, so there is no room left to add.

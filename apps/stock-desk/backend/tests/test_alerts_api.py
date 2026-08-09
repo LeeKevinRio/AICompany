@@ -129,6 +129,25 @@ def test_patch_can_clear_a_note_only_when_asked_to(api_harness: ApiHarness) -> N
     assert cleared["note"] is None
 
 
+def test_clear_note_wins_over_a_note_sent_in_the_same_patch(
+    api_harness: ApiHarness,
+) -> None:
+    # The contradictory pair has to resolve the same way every time, so it is
+    # pinned here rather than left to whichever branch of ``apply_to`` runs
+    # first: ``clear_note`` is the field that exists solely to answer "keep or
+    # remove", so it decides, and a note sent beside it is ignored.
+    created = api_harness.client.post(
+        "/api/alerts", json=price_rule(note="原註記")
+    ).json()
+    response = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"note": "新註記", "clear_note": True}
+    )
+    assert response.status_code == 200
+    assert response.json()["note"] is None
+    # And it is what was stored, not only what was echoed back.
+    assert api_harness.client.get("/api/alerts").json()["items"][0]["note"] is None
+
+
 def test_an_invalid_edit_is_422_and_changes_nothing(api_harness: ApiHarness) -> None:
     # AC-1.3: no partial write; the stored rule keeps its old value.
     created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()

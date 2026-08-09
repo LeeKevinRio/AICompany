@@ -17,7 +17,12 @@ from app.advice.book import (
     build_book_context,
     self_reported_net_worth,
 )
-from app.advice.limits import NET_WORTH_STALE_AFTER_DAYS, RiskBudget, evaluate_limits
+from app.advice.limits import (
+    NET_WORTH_STALE_AFTER_DAYS,
+    RiskBudget,
+    evaluate_limits,
+    suggest_quantity_range,
+)
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
@@ -61,17 +66,19 @@ def _position(
     currency: str = "TWD",
     market: str = "TW",
     sector: str | None = None,
-    market_value_twd: str | None = None,
+    fx_to_twd: str = "1",
 ) -> SummaryPosition:
     valuation = _valuation(price)
     # Mirrors what the valuator contributes to ``totals``: present only when the
-    # position could be valued, and defaulting to quantity x price for the TWD
-    # fixtures used here.
+    # position could be valued, and already converted to TWD. ``fx_to_twd``
+    # stands in for the valuator's F0/F1 (equal here), so a foreign fixture
+    # carries a TWD contribution that differs from its own-currency price.
     value = None
+    cost = None
     if valuation.status == "ok":
-        value = Decimal(market_value_twd) if market_value_twd is not None else (
-            Decimal(quantity) * Decimal(str(price))
-        )
+        rate = Decimal(fx_to_twd)
+        value = Decimal(quantity) * Decimal(str(price)) * rate
+        cost = Decimal(quantity) * Decimal(avg_cost) * rate
     return SummaryPosition(
         id=position_id,
         symbol=symbol,
@@ -85,6 +92,7 @@ def _position(
         note=None,
         valuation=valuation,
         market_value_twd=value,
+        cost_twd=cost,
     )
 
 
@@ -324,6 +332,70 @@ def test_a_supplied_rate_makes_the_price_caps_evaluable() -> None:
     assert book.context.atr == 4.0
     assert book.fx_rate == 31.5
     assert book.context.price_twd() == 6300.0
+
+
+# --- FX1: the roll-up and the caps must share one currency -------------------
+
+
+def _us_book() -> PortfolioSummary:
+    """A book of one USD holding (1000 x $200 @ 31.5) and one TWD holding.
+
+    The USD holding is worth NT$6,300,000 -- 91% of the NT$6,900,000 book -- and
+    only NT$200,000 if its own-currency price is mistaken for a TWD one.
+    """
+    return _summary(
+        _position(
+            1,
+            "AAPL",
+            market="US",
+            currency="USD",
+            price="200",
+            avg_cost="150",
+            fx_to_twd="31.5",
+        ),
+        _position(2, "2330"),
+        market_value="6900000",
+    )
+
+
+def test_a_foreign_holding_is_rolled_up_in_twd_not_in_its_own_currency() -> None:
+    # The numerator of cap 1 sits over ``total_equity_twd``: rolling this
+    # position up at its USD price would divide dollars by dollars-times-31.5
+    # and report 3% of the book where the truth is 91% -- an understatement of
+    # risk, the one direction these caps must never err in.
+    book = build_book_context(
+        _us_book(), symbol="AAPL", market="US", close=200.0, currency="USD", fx=_fx()
+    )
+    context = book.context
+    assert context.position_market_value_twd == pytest.approx(6_300_000.0)
+    assert context.position_cost_twd == pytest.approx(4_725_000.0)
+    assert context.total_equity_twd == pytest.approx(6_900_000.0)
+    assert context.position_weight() == pytest.approx(6_300_000.0 / 6_900_000.0)
+    # Both halves of this ratio are TWD, so it is a return, not an exchange rate.
+    assert context.unrealized_pnl_pct() == pytest.approx(200 / 150 - 1)
+    # And the cap says what the numbers say.
+    check = next(
+        c for c in evaluate_limits(RiskBudget(), context) if c.id == "single_position_weight"
+    )
+    assert check.status == "violated"
+
+
+def test_the_share_suggestion_for_a_foreign_holding_stays_in_one_currency() -> None:
+    # Same context, one step further down: ``notional_caps`` compares the TWD
+    # cap against the position's market value and divides the gap by the TWD
+    # price. A dollar-denominated market value there would invent headroom under
+    # a cap that is already breached and suggest *buying more* of it.
+    book = build_book_context(
+        _us_book(), symbol="AAPL", market="US", close=200.0, currency="USD", fx=_fx()
+    )
+    budget = RiskBudget()
+    assert suggest_quantity_range(budget, book.context, action="add") is None
+    trim = suggest_quantity_range(budget, book.context, action="reduce")
+    assert trim is not None
+    # 0.15 x 6.9M = NT$1,035,000 of headroom, NT$6,300 a share.
+    assert trim.min_shares == 836
+    assert trim.max_shares == 1000  # never more than the holding
+    assert trim.restores_compliance is True
 
 
 def test_the_applied_rate_carries_its_freshness_date_and_source_into_notes() -> None:

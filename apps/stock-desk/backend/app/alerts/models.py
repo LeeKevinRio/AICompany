@@ -139,6 +139,11 @@ class AlertRulePatch(BaseModel):
     #: ``note`` is nullable *and* optional, so "leave it alone" and "clear it"
     #: are the same JSON without this flag. Sending ``{"note": null}`` alone
     #: keeps the stored note; ``{"clear_note": true}`` removes it.
+    #:
+    #: The contradictory pair ``{"note": "x", "clear_note": true}`` is accepted
+    #: and **the flag wins**: it is the field that exists solely to decide this
+    #: question, so the specific instruction beats the general one rather than
+    #: the merge depending on which branch happens to run first. Pinned by test.
     clear_note: bool = False
 
     def apply_to(self, current: AlertRule) -> AlertRuleInput:
