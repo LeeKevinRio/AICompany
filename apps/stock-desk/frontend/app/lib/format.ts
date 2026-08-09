@@ -74,6 +74,17 @@ export function marketCurrency(market: Market): Currency {
   return market === "TW" ? "TWD" : "USD";
 }
 
+/**
+ * Sector dropdown's disabled hint for a non-TW position (FR-12, AC-12.6).
+ * Verbatim copy of the backend's `SECTOR_US_REJECTED_MESSAGE`
+ * (`app/positions/sectors.py`, verified) — reused rather than reworded so the
+ * disabled state states exactly the reason the backend would give if the
+ * field were submitted anyway, with no new sentence introduced.
+ */
+export const SECTOR_US_DISABLED_HINT =
+  "美股持倉目前不可填產業別：台灣證交所產業別分類不適用於美股，" +
+  "美股的分類標準尚未定案；請留空，該部位的單一產業佔比上限會如實顯示無法評估。";
+
 function currencyPrefix(currency: string): string {
   switch (currency) {
     case "TWD":
