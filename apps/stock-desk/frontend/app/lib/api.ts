@@ -18,6 +18,7 @@ import type {
   ImportPositionsResponse,
   LeverageResponse,
   Market,
+  PortfolioLimitsResponse,
   PortfolioSummaryResponse,
   Position,
   PositionsResponse,
@@ -147,6 +148,11 @@ export function deletePosition(id: number): Promise<void> {
 
 export function getPortfolioSummary(): Promise<PortfolioSummaryResponse> {
   return request<PortfolioSummaryResponse>("/api/portfolio/summary");
+}
+
+/** FR-8: the five risk caps judged over the whole book (app/api/portfolio.py). */
+export function getPortfolioLimits(): Promise<PortfolioLimitsResponse> {
+  return request<PortfolioLimitsResponse>("/api/portfolio/limits");
 }
 
 /** The TWSE industry categories a TW position may declare (FR-12). */

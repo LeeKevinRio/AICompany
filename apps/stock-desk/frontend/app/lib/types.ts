@@ -536,6 +536,62 @@ export interface AdviceResponse extends EnvelopeBase {
   context_notes: string[];
 }
 
+/* ============================================================================
+ * FR-8: GET /api/portfolio/limits — the same five caps `LimitCheck` answers
+ * per symbol, aggregated over the whole book. Verified against
+ * backend/app/advice/book_limits.py (BookLimits / BookLimitCheck /
+ * ExcludedSymbol) and backend/app/api/portfolio.py (PortfolioLimitsResponse /
+ * SymbolDataMeta).
+ * ==========================================================================*/
+
+/**
+ * Backend `ExcludedSymbol` (app/advice/book_limits.py) — one holding left out
+ * of a cap's book-level comparison, with the cap's own verbatim reason
+ * (never paraphrased client-side, per that module's rule 2).
+ */
+export interface ExcludedSymbol {
+  symbol: string;
+  market: Market;
+  reason: string;
+}
+
+/**
+ * Backend `BookLimitCheck` (app/advice/book_limits.py) — one cap's book-level
+ * verdict. `threshold` is `null` only for cap 5 (`kelly_fraction`) when the
+ * win-rate/payoff-ratio inputs are entirely absent (see
+ * `_check_kelly_fraction` in app/advice/limits.py) — every other `threshold`
+ * absence would be a bug, but the type stays nullable to match the wire
+ * shape exactly rather than assert a narrower one client-side.
+ */
+export interface BookLimitCheck {
+  index: number;
+  limit_id: string;
+  name: string;
+  status: LimitStatus;
+  observed: number | null;
+  threshold: number | null;
+  detail: string;
+  /** The holding `observed` came from; `null` for cap 2 and the two book-level caps. */
+  worst_symbol: string | null;
+  evaluated_count: number;
+  excluded: ExcludedSymbol[];
+}
+
+/** Backend `SymbolDataMeta` (app/api/portfolio.py) — one holding's bar provenance. */
+export interface SymbolDataMeta {
+  symbol: string;
+  market: Market;
+  data: DataMeta;
+}
+
+/** Backend `PortfolioLimitsResponse` (app/api/portfolio.py) — `GET /api/portfolio/limits`. */
+export interface PortfolioLimitsResponse {
+  limits: BookLimitCheck[];
+  notes: string[];
+  sources: SymbolDataMeta[];
+  as_of: string;
+}
+
 /* --- Leverage chapter (backend/app/api/leverage.py + leverage/service.py) - */
 
 /** Backend `ChapterStatus` (app/leverage/service.py). */

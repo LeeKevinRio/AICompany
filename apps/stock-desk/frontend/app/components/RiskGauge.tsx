@@ -1,134 +1,164 @@
 "use client";
 
-import { ApiError } from "../lib/api";
-import { formatPercent, limitStatusColorClass, limitStatusLabel } from "../lib/format";
-import { useSettings } from "../lib/queries";
-import type { LimitStatus, RiskBudgetSettings } from "../lib/types";
+import {
+  formatDateTime,
+  formatPercent,
+  limitStatusColorClass,
+  limitStatusLabel,
+  marketLabel,
+} from "../lib/format";
+import { usePortfolioLimits } from "../lib/queries";
+import { buildLimitGaugeViewModel } from "../lib/riskGauge";
+import type { BookLimitCheck } from "../lib/types";
+import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
+import { ErrorPanel } from "./ErrorPanel";
 import { SkeletonBlock } from "./SkeletonBlock";
 
-interface PortfolioLimitGauge {
-  id: string;
-  name: string;
-  status: LimitStatus;
-  threshold: number;
-  reason: string;
+/**
+ * FR-8: the book-level view of the same five caps `app.advice.limits`
+ * checks per symbol (verified source), now backed by `GET
+ * /api/portfolio/limits` (`app/api/portfolio.py` + `app/advice/book_limits.py`,
+ * verified). That endpoint runs the per-symbol check on every holding in the
+ * book, exactly as the individual advice card does, and reports the worst
+ * verdict per cap with what it had to leave out — this component renders
+ * that response as-is (`status`/`observed`/`threshold`/`detail` verbatim);
+ * it does not re-derive any of it client-side.
+ *
+ * Risk-compliance ruling carried forward unchanged from the previous
+ * (all-`not_evaluable`) version of this file: a cap whose `status` is
+ * `not_evaluable` must never draw a progress bar, not even an empty one —
+ * see `shouldShowLimitBar` in `../lib/riskGauge.ts`, the single place that
+ * decision is enforced now that real `observed`/`threshold` pairs exist to
+ * draw a bar from for the other two statuses.
+ */
+function LimitBar({ check }: { check: BookLimitCheck }) {
+  const view = buildLimitGaugeViewModel(check);
+  if (!view.showBar) return null;
+  const fillColorClass = check.status === "violated" ? "bg-rose-500" : "bg-emerald-500";
+  return (
+    <div
+      className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800"
+      role="progressbar"
+      aria-label={check.name}
+      aria-valuenow={Math.round(view.barWidthPercent)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className={`h-full rounded-full ${fillColorClass}`} style={{ width: `${view.barWidthPercent}%` }} />
+    </div>
+  );
 }
 
-/**
- * Book-level view of the same five caps `app.advice.limits.evaluate_limits`
- * checks per symbol (verified source). This page does not perform the
- * per-symbol computation each cap needs (rollup per position into a sector /
- * exposure / ATR / win-rate verdict) — that computation is done, deliberately,
- * only at `/position/[symbol]`. `GET /api/portfolio/summary` does carry
- * `sector` and `market_value_twd` per position (`app/portfolio/summary.py`),
- * and no per-symbol ATR or win-rate/payoff-ratio source exists anywhere
- * (confirmed by reading `app/portfolio/valuation.py` / `app/positions/models.py`);
- * either way, aggregating those into a book-level verdict on this page is
- * FR-8, not done in this batch. Rather than approximate a number that would
- * misrepresent real risk, every cap here is reported `not_evaluable` with its
- * threshold (from settings) and the specific reason — the risk-compliance
- * requirement is to never let a gap in computability read as "passed". The
- * fully computed, per-symbol version of each cap (real `observed` numbers) is
- * on `/position/[symbol]` via the advice card's own `limits_check`.
- */
-function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
-  return [
-    {
-      id: "single_position_weight",
-      name: "單一標的佔比上限",
-      status: "not_evaluable",
-      threshold: budget.max_position_weight,
-      reason: "本頁不計算單一標的佔總資產（已估值部位市值）的比重；逐檔判定請至個股頁面查看。",
-    },
-    {
-      id: "sector_weight",
-      name: "單一產業佔比上限",
-      status: "not_evaluable",
-      threshold: budget.max_sector_weight,
-      reason:
-        "總覽頁不逐檔評估這條上限：本頁未彙總各部位的產業別與台幣市值。實際判定請至個股頁面的建議卡查看；若該標的未填產業別、為非台股、或同一標的填了不只一種產業別，建議卡會說明不計算的原因。",
-    },
-    {
-      id: "gross_exposure",
-      name: "總曝險上限",
-      status: "not_evaluable",
-      threshold: budget.max_gross_exposure,
-      // FR-9 gave this cap a denominator (the net worth the user reports on the
-      // settings page), so the old reason — "we cannot know your total" — became
-      // false the moment that field shipped. The numerator is knowable too:
-      // `GET /api/portfolio/summary` carries `market_value_twd` per position
-      // (`app/portfolio/summary.py`). What this page does not do is aggregate
-      // it into a book-level verdict — that aggregation is FR-8 and
-      // deliberately not done in this batch; until then the reason names what
-      // this page does not do, not a gap in the underlying data.
-      reason:
-        "本頁不計算總曝險的分子；第 3 條的實際判定請至個股頁面的建議卡查看，其分母為你在設定頁自報的帳戶總淨值；若淨值未填、過久未更新，或有部位無法估值，建議卡同樣不計算，並會說明原因。",
-    },
-    {
-      id: "per_trade_loss",
-      name: "單筆最大可承受虧損",
-      status: "not_evaluable",
-      threshold: budget.max_loss_per_trade,
-      reason: "此上限需要逐檔的 ATR(14) 訊號；總覽頁未逐檔查詢訊號，請至個股頁面查看。",
-    },
-    {
-      id: "kelly_fraction",
-      name: "分數 Kelly 部位上限",
-      status: "not_evaluable",
-      threshold: budget.kelly_position_cap,
-      // R5 fix (risk-final-review.md): reworded to avoid a §1.3 banned-term
-      // substring now covered by the wording scan on this file — meaning is
-      // unchanged (still names the same two missing inputs), the scan just
-      // matches blindly by substring rather than by intent.
-      reason: "缺少歷史交易的獲勝比例與盈虧比，目前沒有資料來源提供這兩項輸入（與個股建議卡狀態一致）。",
-    },
-  ];
+/** Rule 2 of `app/advice/book_limits.py`: what was left out travels with the verdict, reason verbatim. */
+function ExcludedList({ excluded }: { excluded: BookLimitCheck["excluded"] }) {
+  if (excluded.length === 0) return null;
+  return (
+    <details className="mt-2 text-xs text-neutral-500">
+      <summary className="cursor-pointer text-neutral-400">未納入的標的（{excluded.length}）</summary>
+      <ul className="mt-2 list-disc space-y-1 pl-5">
+        {excluded.map((item) => (
+          <li key={`${item.symbol}-${item.market}`}>
+            {item.symbol}（{marketLabel(item.market)}）：{item.reason}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function LimitGaugeItem({ check }: { check: BookLimitCheck }) {
+  return (
+    <li className="rounded-md border border-neutral-800 p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium text-neutral-100">
+          第 {check.index} 條・{check.name}
+        </span>
+        <span className={`text-xs font-semibold ${limitStatusColorClass(check.status)}`}>
+          {limitStatusLabel(check.status)}
+        </span>
+      </div>
+      <LimitBar check={check} />
+      {/* §2.1 對比度裁量（沿用既有升級）：這句是每條上限唯一的敘述文字，不得低於
+          text-neutral-400。 */}
+      <p className="mt-2 text-neutral-400">{check.detail}</p>
+      <p className="mt-1 text-xs text-neutral-400">
+        觀察值：{formatPercent(check.observed)}　上限：{formatPercent(check.threshold)}
+        {check.worst_symbol !== null && <>　最高：{check.worst_symbol}</>}
+      </p>
+      <ExcludedList excluded={check.excluded} />
+    </li>
+  );
 }
 
 export function RiskGauge() {
-  const settings = useSettings(true);
+  const limits = usePortfolioLimits(true);
 
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
       <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
       <p className="mt-1 text-xs text-neutral-400">
-        總覽頁僅能顯示各上限「是否可被評估」；完整的逐檔觀察值請至個股頁面查看建議卡。
+        帳本內持倉逐檔判定後，回報每條上限最差的結果；未納入比較的標的與資料來源見下方。
       </p>
 
-      {settings.isPending && (
+      {limits.isPending && (
         <div className="mt-3 space-y-2">
-          <SkeletonBlock className="h-10 w-full" />
-          <SkeletonBlock className="h-10 w-full" />
-          <SkeletonBlock className="h-10 w-full" />
+          <SkeletonBlock className="h-16 w-full" />
+          <SkeletonBlock className="h-16 w-full" />
+          <SkeletonBlock className="h-16 w-full" />
+          <SkeletonBlock className="h-16 w-full" />
+          <SkeletonBlock className="h-16 w-full" />
         </div>
       )}
-      {settings.isError && (
-        <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          無法載入風險預算設定：
-          {settings.error instanceof ApiError ? settings.error.message : "未知錯誤"}
-        </p>
+
+      {limits.isError && (
+        <div className="mt-3">
+          <ErrorPanel label="無法載入風險儀表" error={limits.error} />
+        </div>
       )}
-      {settings.isSuccess && (
-        <ul className="mt-3 space-y-2">
-          {buildGauges(settings.data.settings.risk_budget).map((gauge) => (
-            <li key={gauge.id} className="rounded-md border border-neutral-800 p-3 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-medium text-neutral-100">{gauge.name}</span>
-                <span className={`text-xs font-semibold ${limitStatusColorClass(gauge.status)}`}>
-                  {limitStatusLabel(gauge.status)}
-                </span>
-              </div>
-              {gauge.status !== "not_evaluable" && (
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800" aria-hidden="true">
-                  <div className="h-full w-0 rounded-full bg-neutral-600" />
-                </div>
-              )}
-              <p className="mt-1 text-xs text-neutral-400">
-                上限：{formatPercent(gauge.threshold)}｜{gauge.reason}
-              </p>
-            </li>
-          ))}
-        </ul>
+
+      {limits.isSuccess && (
+        <>
+          <p className="mt-2 text-xs text-neutral-500">資料時間：{formatDateTime(limits.data.as_of)}</p>
+
+          <ul className="mt-3 space-y-2">
+            {limits.data.limits.map((check) => (
+              <LimitGaugeItem key={check.limit_id} check={check} />
+            ))}
+          </ul>
+
+          {limits.data.notes.length > 0 && (
+            <details className="mt-3 text-xs text-neutral-500">
+              <summary className="cursor-pointer text-neutral-400">
+                風險預算輸入的假設與限制（{limits.data.notes.length}）
+              </summary>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {limits.data.notes.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {limits.data.sources.length > 0 && (
+            <details className="mt-3 text-xs text-neutral-500">
+              <summary className="cursor-pointer text-neutral-400">
+                各標的資料來源（{limits.data.sources.length}）
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {limits.data.sources.map((source) => (
+                  <li key={`${source.symbol}-${source.market}`} className="flex flex-wrap items-center">
+                    {source.symbol}（{marketLabel(source.market)}）
+                    <DataMetaStatusBadge
+                      status={source.data.status}
+                      stalenessMinutes={source.data.staleness_minutes}
+                      isWithinTtl={source.data.is_within_ttl}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
       )}
     </div>
   );

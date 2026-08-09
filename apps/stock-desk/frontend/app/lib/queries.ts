@@ -14,6 +14,7 @@ import {
   getBars,
   getHealth,
   getLeverageChapter,
+  getPortfolioLimits,
   getPortfolioSummary,
   getPositions,
   getSectors,
@@ -55,6 +56,16 @@ export function usePortfolioSummary(enabled: boolean) {
   });
 }
 
+/** FR-8: `GET /api/portfolio/limits` — the five risk caps judged over the whole book. */
+export function usePortfolioLimits(enabled: boolean) {
+  return useQuery({
+    queryKey: ["portfolio-limits"],
+    queryFn: getPortfolioLimits,
+    enabled,
+    retry: 1,
+  });
+}
+
 export function usePositions(enabled: boolean) {
   return useQuery({
     queryKey: ["positions"],
@@ -71,6 +82,7 @@ export function useCreatePosition() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
     },
   });
 }
@@ -83,6 +95,7 @@ export function useUpdatePosition() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
     },
   });
 }
@@ -94,6 +107,7 @@ export function useDeletePosition() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
     },
   });
 }
@@ -116,6 +130,7 @@ export function useImportPositionsCsv() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
     },
   });
 }
