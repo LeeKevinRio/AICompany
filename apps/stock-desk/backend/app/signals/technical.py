@@ -133,6 +133,29 @@ def moving_averages(
     )
 
 
+def rsi_series(close: pd.Series, *, period: int = RSI_PERIOD) -> pd.Series:
+    """Wilder's RSI of a close series, aligned to its index (``NaN`` while seeding).
+
+    Split out of :func:`rsi` so that every consumer of "RSI(14)" in this product
+    -- the signal layer *and* the backtest strategy layer (FR-10) -- computes it
+    from one definition instead of two that can drift apart. The maths is
+    unchanged; only the input shape differs (a series here, bars there).
+    """
+    delta = close.diff().to_numpy()
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    gain[0] = np.nan
+    loss[0] = np.nan
+    avg_gain = _wilder_rma(gain, period)
+    avg_loss = _wilder_rma(loss, period)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = np.where(avg_loss == 0.0, np.inf, avg_gain / avg_loss)
+        rsi_values = 100.0 - 100.0 / (1.0 + rs)
+    # All-gain windows (avg_loss == 0) saturate to 100; keep seed positions NaN.
+    rsi_values = np.where(np.isnan(avg_gain), np.nan, rsi_values)
+    return pd.Series(rsi_values, index=close.index)
+
+
 def rsi(bars: list[PriceBar], *, period: int = RSI_PERIOD) -> IndicatorResult:
     """Wilder's RSI of close over ``period`` (needs ``period + 1`` bars)."""
     params = {"period": float(period)}
@@ -148,27 +171,15 @@ def rsi(bars: list[PriceBar], *, period: int = RSI_PERIOD) -> IndicatorResult:
         return _insufficient("rsi", params=params, inputs_used=inputs_used, bars=bars)
 
     frame = bars_to_frame(bars)
-    delta = frame[CLOSE].diff().to_numpy()
-    gain = np.where(delta > 0, delta, 0.0)
-    loss = np.where(delta < 0, -delta, 0.0)
-    gain[0] = np.nan
-    loss[0] = np.nan
-    avg_gain = _wilder_rma(gain, period)
-    avg_loss = _wilder_rma(loss, period)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rs = np.where(avg_loss == 0.0, np.inf, avg_gain / avg_loss)
-        rsi_values = 100.0 - 100.0 / (1.0 + rs)
-    # All-gain windows (avg_loss == 0) saturate to 100; keep seed positions NaN.
-    rsi_values = np.where(np.isnan(avg_gain), np.nan, rsi_values)
-    rsi_series = pd.Series(rsi_values, index=frame.index)
+    values = rsi_series(frame[CLOSE], period=period)
     as_of, source = provenance(bars)
     return IndicatorResult(
         name="rsi",
         status="ok",
         params=params,
         dates=date_index(frame),
-        series={"rsi": clean_series(rsi_series)},
-        last={"rsi": last_defined(rsi_series)},
+        series={"rsi": clean_series(values)},
+        last={"rsi": last_defined(values)},
         inputs_used=inputs_used,
         as_of=as_of,
         source=source,

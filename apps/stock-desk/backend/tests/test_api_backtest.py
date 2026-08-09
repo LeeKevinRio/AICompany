@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.api.backtest import BUY_AND_HOLD_NOTE, UNVERIFIED_RATES_NOTE
+from app.backtest.strategies import STRATEGY_IDS
 from tests.api_helpers import oscillating_closes, recent_bars
 from tests.conftest import ApiHarness
 
@@ -149,6 +150,59 @@ def test_unknown_strategy_is_422(api_harness: ApiHarness) -> None:
     response = api_harness.client.post("/api/backtest", json=_request(strategy="secret_sauce"))
     assert response.status_code == 422
     assert "未知的 strategy" in response.text
+
+
+def test_every_shipped_strategy_produces_the_same_report_shape(
+    api_harness: ApiHarness,
+) -> None:
+    # AC-10.4 / AC-11.4: only the strategy logic differs; the envelope, the
+    # in/out-of-sample split, the cost model and the disclosures do not.
+    _seed(api_harness)
+    baseline = api_harness.client.post("/api/backtest", json=_request()).json()
+    for strategy_id in STRATEGY_IDS:
+        body = api_harness.client.post(
+            "/api/backtest", json=_request(strategy=strategy_id)
+        ).json()
+        assert body["status"] == "ok", strategy_id
+        assert body["strategy"] == strategy_id
+        assert set(body) == set(baseline)
+        assert body["report"].keys() == baseline["report"].keys()
+        for segment, segment_report in body["report"].items():
+            assert segment_report.keys() == baseline["report"][segment].keys()
+            assert (
+                segment_report["strategy"].keys()
+                == baseline["report"][segment]["strategy"].keys()
+            )
+        assert body["cost_model"] == baseline["cost_model"]
+        assert body["notes"] == baseline["notes"]
+        assert body["folds"] == baseline["folds"]
+
+
+def test_new_strategies_actually_trade_on_an_oscillating_path(
+    api_harness: ApiHarness,
+) -> None:
+    # A strategy that never takes a position would pass the shape test above
+    # while measuring nothing, so pin that each new one does trade.
+    _seed(api_harness)
+    for strategy_id in ("rsi_reversal", "breakout"):
+        report = api_harness.client.post(
+            "/api/backtest", json=_request(strategy=strategy_id)
+        ).json()["report"]
+        assert report["out_of_sample"]["strategy"]["num_trades"] > 0, strategy_id
+
+
+def test_new_strategies_report_insufficient_data_without_enough_history(
+    api_harness: ApiHarness,
+) -> None:
+    # AC-10.5 / AC-11.5: too short for one fold is still a 200 + insufficient.
+    _seed(api_harness, count=100)
+    for strategy_id in ("rsi_reversal", "breakout"):
+        body = api_harness.client.post(
+            "/api/backtest", json=_request(strategy=strategy_id)
+        ).json()
+        assert body["status"] == "insufficient_data"
+        assert body["report"] is None
+        assert "不以單一切分代替" in body["reason"]
 
 
 def test_end_before_start_is_422(api_harness: ApiHarness) -> None:
