@@ -12,6 +12,7 @@
 !mahjong-app-回饋輪企劃.md
 !stock-desk-發布說明.md
 !stock-desk-數據核實操作說明.md
+!stock-desk-代號目錄-PRD.md
 !stock-desk-視覺規範-捲軸與表格.md
 !機會清單.md
 # Dispatch queue and review records must be tracked (rollback recovery + CI gate).
