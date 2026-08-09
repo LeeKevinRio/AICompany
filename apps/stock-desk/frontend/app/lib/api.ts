@@ -12,6 +12,8 @@ import type {
   BacktestResponse,
   BarsResponse,
   CreatePositionInput,
+  DirectoryItem,
+  DirectorySearchResponse,
   HealthResponse,
   ImportPositionsResponse,
   LeverageResponse,
@@ -252,4 +254,35 @@ export function ackAlertEvent(id: number): Promise<AlertEvent> {
 
 export function evaluateAlertsNow(): Promise<AlertEvaluationResponse> {
   return request<AlertEvaluationResponse>("/api/alerts/evaluate", { method: "POST" });
+}
+
+/* --- Security directory (app/api/directory.py, FR-3/4/6/7) -------------- */
+
+/**
+ * `GET /api/directory/search` (backend, verified) — 代號前綴 + 名稱子字串
+ * candidates for the NavBar combobox (FR-4). `limit` is left to the
+ * backend's own default (12, per the dispatch order) unless a caller
+ * overrides it; this app never does today.
+ */
+export function searchDirectory(q: string, limit?: number): Promise<DirectorySearchResponse> {
+  const query = new URLSearchParams({ q });
+  if (limit !== undefined) query.set("limit", String(limit));
+  return request<DirectorySearchResponse>(`/api/directory/search?${query}`);
+}
+
+/**
+ * `GET /api/directory/resolve/{symbol}` (backend, verified). Unlike every
+ * other request helper in this module, a 404 here is not an exceptional
+ * failure — it is the honest "not in the directory" signal FR-2/FR-6's Q1(b)
+ * fallback is built on (miss -> ask the user to pick a market; miss on the
+ * company-name lookup -> show the symbol alone). Callers branch on `null`
+ * rather than catching `ApiError`.
+ */
+export async function resolveDirectorySymbol(symbol: string): Promise<DirectoryItem | null> {
+  try {
+    return await request<DirectoryItem>(`/api/directory/resolve/${encodeURIComponent(symbol)}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }

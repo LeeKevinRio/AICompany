@@ -887,6 +887,38 @@ export interface AppSettingsPatch {
   net_worth?: NetWorthInput;
 }
 
+/* --- Security directory (backend/app/api/directory.py, FR-4/5/6/7) ------- */
+
+/**
+ * Backend `DirectoryItem` (app/api/directory.py, verified) — one search
+ * candidate or a `resolve` hit: 代號 → 公司名稱 → 市場, single source of
+ * truth per the PRD (`work/stock-desk-代號目錄-PRD.md`).
+ */
+export interface DirectoryItem {
+  symbol: string;
+  name: string;
+  market: Market;
+  source: string;
+  as_of: string;
+}
+
+/**
+ * Backend `SearchResponse` (app/api/directory.py, verified) —
+ * `GET /api/directory/search`. `directory_synced: false` means the local
+ * directory has never been synced (FR-7): the caller must degrade to plain
+ * symbol-direct entry rather than treat an empty `items` as "no matches".
+ * `truncated: true` means more candidates matched than `limit` allows
+ * (AC-7) — never claim the returned list is exhaustive.
+ */
+export interface DirectorySearchResponse {
+  query: string;
+  items: DirectoryItem[];
+  truncated: boolean;
+  directory_synced: boolean;
+  limit: number;
+  as_of: string;
+}
+
 /* --- Alerts (backend/app/api/alerts.py + alerts/models.py) --------------- */
 
 /** Backend `AlertType` (app/alerts/models.py). */
