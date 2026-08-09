@@ -42,6 +42,8 @@ Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數�
 | `yfinance_chart_tqqq.json` | Yahoo Finance 未公開 `v8/finance/chart/<symbol>` 端點（`app/data/providers/yfinance.py` 個股/ETF 備援路徑） | 合成，依常見公開格式手工構造；含一列全欄位為 `null` 的日期，模擬非交易日/資料缺漏的跳過邏輯；**此端點本身無官方文件，格式僅為廣泛引用的慣例，完全未經即時回應驗證** |
 | `yfinance_chart_ndx.json` | 同上端點，指數路徑（`^NDX`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；指數 `volume` 以 `0` 表示（非缺漏）；**完全未經即時回應驗證** |
 | `yfinance_chart_twii.json` | 同上端點，指數路徑（`^TWII`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；**完全未經即時回應驗證** |
+| `twse_openapi_stock_day_all.json` | TWSE OpenAPI `v1/exchangeReport/STOCK_DAY_ALL`（`app/directory/providers.py` 證券目錄同步用，只取 `Code`/`Name` 欄位） | 合成，依端點命名推斷手工構造；含一列 `Code` 為空字串，用於測試跳過邏輯；**stock-desk-代號目錄 phase，欄位名稱完全未經即時回應驗證，見 `app/directory/providers.py` 檔頭** |
+| `tpex_openapi_mainboard_daily_close_quotes.json` | TPEx OpenAPI `openapi/v1/tpex_mainboard_daily_close_quotes`（`app/directory/providers.py` 證券目錄同步用，只取 `代號`/`名稱` 欄位） | 合成，依端點命名推斷手工構造；含一列 `名稱` 為空字串，用於測試跳過邏輯；**stock-desk-代號目錄 phase，中文欄位鍵完全未經即時回應驗證，見 `app/directory/providers.py` 檔頭** |
 
 ## 若之後要補實錄
 

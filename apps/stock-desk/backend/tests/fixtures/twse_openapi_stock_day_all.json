@@ -1,0 +1,50 @@
+[
+  {
+    "Code": "2330",
+    "Name": "台積電",
+    "TradeVolume": "41393088",
+    "TradeValue": "24585432000",
+    "OpeningPrice": "594.00",
+    "HighestPrice": "598.00",
+    "LowestPrice": "590.00",
+    "ClosingPrice": "594.00",
+    "Change": "2.00",
+    "Transaction": "12345"
+  },
+  {
+    "Code": "0050",
+    "Name": "元大台灣50",
+    "TradeVolume": "14000000",
+    "TradeValue": "2100000000",
+    "OpeningPrice": "150.00",
+    "HighestPrice": "151.00",
+    "LowestPrice": "149.50",
+    "ClosingPrice": "150.50",
+    "Change": "0.50",
+    "Transaction": "5000"
+  },
+  {
+    "Code": "3037",
+    "Name": "欣興",
+    "TradeVolume": "9000000",
+    "TradeValue": "900000000",
+    "OpeningPrice": "100.00",
+    "HighestPrice": "101.00",
+    "LowestPrice": "99.00",
+    "ClosingPrice": "100.50",
+    "Change": "0.50",
+    "Transaction": "3000"
+  },
+  {
+    "Code": "",
+    "Name": "缺代號測試列",
+    "TradeVolume": "0",
+    "TradeValue": "0",
+    "OpeningPrice": "--",
+    "HighestPrice": "--",
+    "LowestPrice": "--",
+    "ClosingPrice": "--",
+    "Change": "0.00",
+    "Transaction": "0"
+  }
+]
