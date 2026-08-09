@@ -99,7 +99,7 @@ UNVALUED_EXCLUSION_SUFFIX = "本條上限的逐檔比較未納入此標的。"
 #: exposure: their observed value belongs to the withheld holding alone. The
 #: direction is stated here, next to the holding that causes it, because the
 #: book-level notes say the opposite ("偏高") about a different quantity.
-#: 風控退修後改稿,待風控重審(2026-08-09)
+#: 風控核可文案,修改須重新送審(2026-08-09)
 SECTOR_UNVALUED_EXCLUSION_SUFFIX = (
     "本條上限的比較未納入此標的；此標的可能屬於已納入比較的產業，使該產業的佔比被低估。"
 )
@@ -107,14 +107,14 @@ SECTOR_UNVALUED_EXCLUSION_SUFFIX = (
 #: Nothing is held at all: there is no holding to compare, which is a different
 #: statement from "the holdings could not be judged" below. Also used by cap 3,
 #: whose exposure ratio has no numerator on an empty book.
-#: 風控核可文案,修改須重新送審(2026-08-09);用於第 3 條的路線待風控重審
+#: 風控核可文案,修改須重新送審(2026-08-09);空帳本第 3 條採路線(a)已核可
 EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部位，本次不計算，回報 not_evaluable。"
 
 #: Holdings exist but not one of them could be judged against this cap. The
 #: sentence states only that the cap has nothing to compare: naming a cause here
 #: would describe every gap with one gap's reason (AC-12.3), and the causes are
 #: already carried verbatim, one per holding, in ``excluded``.
-#: 風控退修後改稿,待風控重審(2026-08-09)
+#: 風控核可文案,修改須重新送審(2026-08-09);第 2 條採路線(a)揭露低估,已核可
 NO_CANDIDATE_DETAIL = (
     "{name}沒有可納入比較的{unit}，本次不計算，回報 not_evaluable；各標的的成因逐檔列出。"
 )
