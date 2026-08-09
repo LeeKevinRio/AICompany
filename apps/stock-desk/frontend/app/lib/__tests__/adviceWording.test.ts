@@ -29,6 +29,7 @@ import {
   buildCandidateCoverageStatement,
   buildCandidateSupportiveComposition,
   buildRulesStatement,
+  buildStaleDataProminentNotice,
   CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
   CANDIDATE_EVIDENCE_NOTICE,
   CANDIDATE_HEADING_LABEL,
@@ -39,7 +40,6 @@ import {
   HELD_ACTION_LABELS,
   NON_REALTIME_NOTICE,
   QUANTITY_RANGE_ABSENCE_TEXT,
-  STALE_DATA_PROMINENT_NOTICE,
   summaryConfidenceLabel,
 } from "../adviceWording";
 import type { CardAction, Confidence } from "../types";
@@ -62,7 +62,7 @@ const RENDERED_SURFACE: string[] = [
   QUANTITY_RANGE_ABSENCE_TEXT,
   buildRulesStatement("1.0.2"),
   buildAsOfStatement("2026-08-04"),
-  STALE_DATA_PROMINENT_NOTICE,
+  buildStaleDataProminentNotice("2026-08-04", 15),
   NON_REALTIME_NOTICE,
   ...CONFIDENCES.map(summaryConfidenceLabel),
 ];

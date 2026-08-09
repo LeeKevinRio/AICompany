@@ -13,11 +13,13 @@ import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse } from "../types";
 import { buildOperationSummary } from "../operationSummary";
 import {
+  buildStaleDataProminentNotice,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
   HELD_ACTION_LABELS,
   QUANTITY_RANGE_ABSENCE_TEXT,
 } from "../adviceWording";
+import { calendarDaysSince } from "../tradingCalendar";
 
 function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
   return {
@@ -341,7 +343,12 @@ describe("buildOperationSummary — held mode", () => {
       }),
     );
     if (model.kind !== "held") throw new Error("unreachable");
-    expect(model.staleDataNotice).not.toBeNull();
+    // 風控複審 2026-08-09 裁決 b: the notice must name the actual basis date
+    // and calendar-day gap, not a vague "超過一個交易日" magnitude-hiding phrase.
+    expect(model.staleDataNotice).toBe(
+      buildStaleDataProminentNotice(wellPastBuffer, calendarDaysSince(wellPastBuffer)),
+    );
+    expect(model.staleDataNotice).toContain(wellPastBuffer);
   });
 
   it("[B1] does NOT show the stale-data notice across an unmodelled long holiday gap within the calendar-day buffer", () => {

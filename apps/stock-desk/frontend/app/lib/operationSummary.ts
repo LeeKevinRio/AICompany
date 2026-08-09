@@ -17,6 +17,7 @@ import {
   buildCandidateCoverageStatement,
   buildCandidateSupportiveComposition,
   buildRulesStatement,
+  buildStaleDataProminentNotice,
   CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
   CANDIDATE_EVIDENCE_NOTICE,
   CANDIDATE_HEADING_LABEL,
@@ -26,9 +27,8 @@ import {
   HELD_ACTION_LABELS,
   NON_REALTIME_NOTICE,
   QUANTITY_RANGE_ABSENCE_TEXT,
-  STALE_DATA_PROMINENT_NOTICE,
 } from "./adviceWording";
-import { isDataStaleByCalendar } from "./tradingCalendar";
+import { calendarDaysSince, isDataStaleByCalendar } from "./tradingCalendar";
 
 /**
  * The eight elements §2 of the wording brief requires on every rendered
@@ -180,7 +180,9 @@ export function buildOperationSummary(
   // genuine staleness during a normal week is not flagged — an accepted
   // false negative, documented alongside the threshold constant.
   const staleDataNotice =
-    lastBarDate !== null && isDataStaleByCalendar(lastBarDate) ? STALE_DATA_PROMINENT_NOTICE : null;
+    lastBarDate !== null && isDataStaleByCalendar(lastBarDate)
+      ? buildStaleDataProminentNotice(lastBarDate, calendarDaysSince(lastBarDate))
+      : null;
 
   if (card.action === "insufficient_data") {
     return {

@@ -52,20 +52,21 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_sector_weight",
     label: "單一產業佔比上限",
-    description: "同產業合計市值占總資產的上限；目前系統無產業欄位，此上限恆為無法評估。",
+    description: "同產業合計市值占總資產(已估值部位市值)的上限；目前系統無產業欄位，此上限恆為無法評估。",
     defaultValue: 0.3,
   },
   {
     key: "max_gross_exposure",
     label: "總曝險上限",
-    description: "組合總市值占總資產(已估值部位市值)的上限（比例，可大於 1 代表允許槓桿）。",
+    description:
+      "組合已估值部位市值合計占你在設定頁自報之帳戶總淨值的上限（比例，可大於 1 代表允許槓桿）。",
     defaultValue: 1.0,
     hardCeiling: { max: 1.5, reason: "容許適度槓桿，但不容許 2 倍的總曝險。" },
   },
   {
     key: "max_loss_per_trade",
     label: "單筆最大可承受虧損",
-    description: "以 ATR 停損距離估算，觸及停損時損失占總資產的上限。",
+    description: "以 ATR 停損距離估算，觸及停損時損失占總資產(已估值部位市值)的上限。",
     defaultValue: 0.01,
   },
   {

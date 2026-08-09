@@ -113,9 +113,16 @@ export function buildAsOfStatement(dateIso: string): string {
   return `本評估基於 ${dateIso} 收盤資料。`;
 }
 
-/** AC-C8.2: the extra prominent notice for data older than one trading day (cached_stale). */
-export const STALE_DATA_PROMINENT_NOTICE =
-  "本評估所依據的收盤資料已超過一個交易日未更新，僅供參考，不代表最新市況。";
+/**
+ * AC-C8.2 / 風控複審 2026-08-09 裁決 b: the extra prominent notice for data
+ * whose calendar-day age has crossed `STALE_CALENDAR_DAY_THRESHOLD`
+ * (`tradingCalendar.ts`). States the actual basis date and the calendar-day
+ * gap instead of a vague "超過一個交易日" so the reader is not left to guess
+ * the magnitude the fixed sentence used to hide.
+ */
+export function buildStaleDataProminentNotice(lastBarDate: string, days: number): string {
+  return `本評估所依據的收盤資料為 ${lastBarDate},距今已 ${days} 個日曆日未更新,僅供參考,不代表最新市況。`;
+}
 
 /**
  * §2 item 4 / §5: the system-level non-realtime disclosure. Every "即時" is
