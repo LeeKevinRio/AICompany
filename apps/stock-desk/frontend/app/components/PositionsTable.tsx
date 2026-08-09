@@ -12,7 +12,7 @@ import {
   pnlColorClass,
 } from "../lib/format";
 import { ApiError } from "../lib/api";
-import { useDeletePosition } from "../lib/queries";
+import { useDeletePosition, useDirectoryNames } from "../lib/queries";
 import { DataStatusBadge } from "./DataStatusBadge";
 import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
@@ -89,6 +89,11 @@ function MoneyOrDash({
 export function PositionsTable({ positions }: { positions: SummaryPositionItem[] }) {
   const [editingPosition, setEditingPosition] = useState<SummaryPositionItem | null>(null);
   const deleteMutation = useDeletePosition();
+  // FR-6/AC-14: company name next to the symbol link. A directory miss
+  // simply leaves that symbol out of the map, so the row falls back to
+  // showing the symbol alone — no placeholder text (same rule as the
+  // individual position page's title).
+  const namesBySymbol = useDirectoryNames(positions.map((p) => p.symbol));
 
   if (positions.length === 0) {
     return <EmptyPositionsState />;
@@ -135,6 +140,11 @@ export function PositionsTable({ positions }: { positions: SummaryPositionItem[]
                   >
                     {position.symbol}
                   </Link>
+                  {namesBySymbol[position.symbol] && (
+                    <span className="ml-1 text-xs font-normal text-neutral-500">
+                      {namesBySymbol[position.symbol]}
+                    </span>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
                   {marketLabel(position.market)}

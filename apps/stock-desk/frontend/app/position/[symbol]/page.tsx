@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
-import { formatDateTime } from "../../lib/format";
-import { useAdvice, useBars, useLeverageChapter, useSignals } from "../../lib/queries";
+import { formatDateTime, marketLabel } from "../../lib/format";
+import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, useSignals } from "../../lib/queries";
 import type { Market } from "../../lib/types";
-import { MARKET_OPTIONS } from "../../lib/format";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { ErrorPanel } from "../../components/ErrorPanel";
@@ -24,8 +23,14 @@ function isMarket(value: string | null): value is Market {
 export default function PositionDetailPage() {
   const params = useParams<{ symbol: string }>();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const symbol = decodeURIComponent(params.symbol);
+  // FR-5/Q3 (CEO 裁示 2026-08-09): the manual market `<select>` is gone —
+  // market is now system-determined, never user-picked, on this page. The
+  // `?market=` query param itself is kept for backward compatibility with
+  // existing links/bookmarks and as the NavBar combobox's own navigation
+  // target (Q3's "保守解": still a displayed, not user-editable, value);
+  // whether to drop it entirely was explicitly left open by the PRD for a
+  // later pass, not decided here.
   const marketParam = searchParams.get("market");
   const market: Market = isMarket(marketParam) ? marketParam : "TW";
 
@@ -38,27 +43,27 @@ export default function PositionDetailPage() {
   const leverage = useLeverageChapter(symbol, market, true);
   const leverageNotFound = leverage.isError && leverage.error instanceof ApiError && leverage.error.status === 404;
 
-  function changeMarket(next: Market) {
-    router.push(`/position/${encodeURIComponent(symbol)}?market=${next}`);
-  }
+  // FR-6: company name from the security directory. `data` is `null` (not
+  // an error) on a directory miss, so the title deliberately shows the
+  // symbol alone in that case rather than any placeholder text (AC-13).
+  const directory = useDirectoryResolve(symbol, true);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-neutral-100">{symbol}</h1>
-          <select
-            value={market}
-            onChange={(e) => changeMarket(e.target.value as Market)}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-100"
+          <h1 className="text-2xl font-bold text-neutral-100">
+            {symbol}
+            {directory.data && (
+              <span className="ml-2 text-lg font-normal text-neutral-400">{directory.data.name}</span>
+            )}
+          </h1>
+          <span
             aria-label="市場"
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-300"
           >
-            {MARKET_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            {marketLabel(market)}
+          </span>
         </div>
         <Link href="/" className="text-sm text-sky-400 underline hover:text-sky-300">
           回總覽
