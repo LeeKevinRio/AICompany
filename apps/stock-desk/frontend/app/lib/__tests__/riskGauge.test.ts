@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLimitGaugeViewModel,
+  buildSourcesSummaryViewModel,
   limitBarWidthPercent,
   shouldShowLimitBar,
 } from "../riskGauge";
-import type { BookLimitCheck } from "../types";
+import type { BookLimitCheck, SymbolDataMeta } from "../types";
+
+function makeSource(symbol: string, status: string): SymbolDataMeta {
+  return {
+    symbol,
+    market: "TW",
+    data: {
+      status,
+      source: "twse",
+      staleness_minutes: null,
+      is_within_ttl: null,
+      bar_count: 100,
+      first_bar_date: "2026-01-01",
+      last_bar_date: "2026-08-08",
+      reason: null,
+    },
+  };
+}
 
 function makeCheck(overrides: Partial<BookLimitCheck>): BookLimitCheck {
   return {
@@ -113,5 +131,46 @@ describe("buildLimitGaugeViewModel", () => {
     const view = buildLimitGaugeViewModel(check);
     expect(view.showBar).toBe(false);
     expect(view.barWidthPercent).toBe(0);
+  });
+});
+
+describe("buildSourcesSummaryViewModel", () => {
+  it("stays collapsed with no warning when every source is fresh", () => {
+    const view = buildSourcesSummaryViewModel([
+      makeSource("2330", "fresh"),
+      makeSource("2454", "fresh"),
+    ]);
+    expect(view.allFresh).toBe(true);
+    expect(view.staleCount).toBe(0);
+    expect(view.defaultOpen).toBe(false);
+  });
+
+  it("defaults open and reports the stale count when one source is not fresh", () => {
+    const view = buildSourcesSummaryViewModel([
+      makeSource("2330", "fresh"),
+      makeSource("2454", "cached_stale"),
+    ]);
+    expect(view.allFresh).toBe(false);
+    expect(view.staleCount).toBe(1);
+    expect(view.defaultOpen).toBe(true);
+  });
+
+  it("counts every non-fresh status (backup/cached_stale/unavailable), not just one kind", () => {
+    const view = buildSourcesSummaryViewModel([
+      makeSource("2330", "backup"),
+      makeSource("2454", "cached_stale"),
+      makeSource("AAPL", "unavailable"),
+      makeSource("2603", "fresh"),
+    ]);
+    expect(view.allFresh).toBe(false);
+    expect(view.staleCount).toBe(3);
+    expect(view.defaultOpen).toBe(true);
+  });
+
+  it("an empty source list counts as all-fresh (no warning, collapsed)", () => {
+    const view = buildSourcesSummaryViewModel([]);
+    expect(view.allFresh).toBe(true);
+    expect(view.staleCount).toBe(0);
+    expect(view.defaultOpen).toBe(false);
   });
 });

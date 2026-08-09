@@ -8,8 +8,8 @@ import {
   marketLabel,
 } from "../lib/format";
 import { usePortfolioLimits } from "../lib/queries";
-import { buildLimitGaugeViewModel } from "../lib/riskGauge";
-import type { BookLimitCheck } from "../lib/types";
+import { buildLimitGaugeViewModel, buildSourcesSummaryViewModel } from "../lib/riskGauge";
+import type { BookLimitCheck, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
 import { ErrorPanel } from "./ErrorPanel";
 import { SkeletonBlock } from "./SkeletonBlock";
@@ -73,6 +73,36 @@ function ExcludedList({ excluded }: { excluded: BookLimitCheck["excluded"] }) {
   );
 }
 
+/**
+ * 風控快審附帶條件（work/reviews/股數區間文案裁決.md，2026-08-09）：任一 source
+ * 非 fresh 時，summary 行必須帶警示且該情況下改為預設展開；全部 fresh 才維持
+ * 收合。判斷邏輯見 `buildSourcesSummaryViewModel`（純函式，riskGauge.ts）。
+ */
+function SourcesSection({ sources }: { sources: SymbolDataMeta[] }) {
+  if (sources.length === 0) return null;
+  const summary = buildSourcesSummaryViewModel(sources);
+  return (
+    <details className="mt-3 text-xs text-neutral-400" open={summary.defaultOpen}>
+      <summary className="cursor-pointer text-neutral-400">
+        各標的資料來源（{sources.length}）
+        {!summary.allFresh && `——其中 ${summary.staleCount} 檔非即時`}
+      </summary>
+      <ul className="mt-2 space-y-1">
+        {sources.map((source) => (
+          <li key={`${source.symbol}-${source.market}`} className="flex flex-wrap items-center">
+            {source.symbol}（{marketLabel(source.market)}）
+            <DataMetaStatusBadge
+              status={source.data.status}
+              stalenessMinutes={source.data.staleness_minutes}
+              isWithinTtl={source.data.is_within_ttl}
+            />
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function LimitGaugeItem({ check }: { check: BookLimitCheck }) {
   const hasExcluded = check.excluded.length > 0;
   return (
@@ -100,7 +130,10 @@ function LimitGaugeItem({ check }: { check: BookLimitCheck }) {
       <p className="mt-2 text-neutral-400">{check.detail}</p>
       <p className="mt-1 text-xs text-neutral-400">
         觀察值：{formatPercent(check.observed)}　上限：{formatPercent(check.threshold)}
-        {check.worst_symbol !== null && <>　最高：{check.worst_symbol}</>}
+        {/* 風控退修:沿用後端 WORST_SYMBOL_PREFIX(book_limits.py)「觀測值最高」
+            這個限定語,不能只寫「最高」——這是逐檔比較裡「觀測值」最高的那一檔,
+            不是隨便一種「最高」。 */}
+        {check.worst_symbol !== null && <>　觀測值最高：{check.worst_symbol}</>}
       </p>
       <ExcludedList excluded={check.excluded} />
     </li>
@@ -113,8 +146,10 @@ export function RiskGauge() {
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
       <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
+      {/* 風控裁決(work/reviews/股數區間文案裁決.md,2026-08-09)核可全文,修改須重新送審。 */}
       <p className="mt-1 text-xs text-neutral-400">
-        帳本內持倉逐檔判定後，回報每條上限最差的結果；未納入比較的標的與資料來源見下方。
+        單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly
+        部位上限為帳本層單一判定。未納入比較的標的列於各條之下。
       </p>
 
       {limits.isPending && (
@@ -135,7 +170,9 @@ export function RiskGauge() {
 
       {limits.isSuccess && (
         <>
-          <p className="mt-2 text-xs text-neutral-500">資料時間：{formatDateTime(limits.data.as_of)}</p>
+          {/* 風控退修附帶:as_of 是伺服器回應時間,不是行情時間——行情新鮮度由下方
+              sources 徽章承載,這裡不得暗示「資料的時間」。 */}
+          <p className="mt-2 text-xs text-neutral-500">判定產生時間：{formatDateTime(limits.data.as_of)}</p>
 
           <ul className="mt-3 space-y-2">
             {limits.data.limits.map((check) => (
@@ -156,25 +193,7 @@ export function RiskGauge() {
             </details>
           )}
 
-          {limits.data.sources.length > 0 && (
-            <details className="mt-3 text-xs text-neutral-500">
-              <summary className="cursor-pointer text-neutral-400">
-                各標的資料來源（{limits.data.sources.length}）
-              </summary>
-              <ul className="mt-2 space-y-1">
-                {limits.data.sources.map((source) => (
-                  <li key={`${source.symbol}-${source.market}`} className="flex flex-wrap items-center">
-                    {source.symbol}（{marketLabel(source.market)}）
-                    <DataMetaStatusBadge
-                      status={source.data.status}
-                      stalenessMinutes={source.data.staleness_minutes}
-                      isWithinTtl={source.data.is_within_ttl}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <SourcesSection sources={limits.data.sources} />
         </>
       )}
     </div>

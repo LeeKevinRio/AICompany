@@ -13,7 +13,7 @@
  * than re-deriving the condition.
  */
 
-import type { BookLimitCheck, LimitStatus } from "./types";
+import type { BookLimitCheck, LimitStatus, SymbolDataMeta } from "./types";
 
 /**
  * Whether one cap's row should draw a progress bar. `status` alone decides
@@ -54,4 +54,24 @@ export function buildLimitGaugeViewModel(check: BookLimitCheck): LimitGaugeViewM
     hasExcluded: check.excluded.length > 0,
     excludedCount: check.excluded.length,
   };
+}
+
+/**
+ * FR-8 風控快審附帶條件（work/reviews/股數區間文案裁決.md，2026-08-09）：the
+ * sources block's summary line must carry a warning whenever any source is
+ * not `fresh`, and the `<details>` must default to *open* in that case — a
+ * collapsed-by-default disclosure is not an acceptable place to hide "some
+ * of this data is stale" from the reader. Only when every source is `fresh`
+ * does the block stay collapsed by default.
+ */
+export interface SourcesSummaryViewModel {
+  allFresh: boolean;
+  staleCount: number;
+  defaultOpen: boolean;
+}
+
+export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): SourcesSummaryViewModel {
+  const staleCount = sources.filter((source) => source.data.status !== "fresh").length;
+  const allFresh = staleCount === 0;
+  return { allFresh, staleCount, defaultOpen: !allFresh };
 }
