@@ -5,16 +5,23 @@
       "Read",
       "Glob",
       "Grep",
+      "Write",
+      "Edit",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "Agent",
+      "Skill",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git add:*)",
-      "Bash(git log:*)"
-    ],
-    "ask": [
+      "Bash(git log:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(codex:*)"
     ],
+    "ask": [],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
