@@ -70,3 +70,16 @@ FR-10/11:_replay 無 look-ahead、無跨折污染;RSI 抽取純搬移有 golden 
   fallback 有測試釘住;13 則新測試皆斷言具體行為;end-to-end 到 limits_check[].detail。
 - 三處核准註解已到位。955 tests/97.9% cov/mypy strict 本機重跑屬實。Codex 照舊降級。
 - 追蹤:§2.1 視覺弱化留 qa-e2e;_resolve_sector 不變量 docstring(low)。
+
+---
+
+## 風控回審 RiskGauge 出稿(2026-08-09 三輪)
+
+- :41 單一標的句 APPROVE(「已估值部位市值」括號為誠實揭露不得刪);檔頭註解 APPROVE;
+  順手英文 comment 追認(與 R5 註解同為審查憑證不得移除)。
+- **:65 gross_exposure 句 VETO(唯一必修)**:「請至個股頁面查看」為無條件承諾,但淨值未填
+  (新使用者預設)/過期/部位無法估值時個股卡同樣 not_evaluable——隱藏失效條件。
+  修改要素:保留歸因與「自報」揭露;必須補失效條件(比照 :49 句型「…;若…,建議卡會說明
+  不計算的原因」);「請至個股頁面查看」不得單獨作結尾。
+- suggested:半形括號統一全形、「第 3 條」指涉寫明、分子分母改白話。
+- 列管:format.ts「無法評估」語意衝突併 FR-8 不得再延;w-0 空進度條與 §2.1 對比度留 qa-e2e。
