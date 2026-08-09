@@ -1,6 +1,6 @@
 # 派工單:RISK-FIX-REVIEW 六條必修的審查與風控複審
 
-- 狀態:running(qa 關 PASS 含 B1 複審;風控關進行中)
+- 狀態:done(qa PASS;風控 VETO 出 V1–V3,轉派 risk-fix3)
 - 日期:2026-08-08
 - 派工者:coordinator(主 session)
 - 承辦:qa-reviewer(先)→ risk-compliance-officer(後,僅複審 R1–R6 涉及檔案)
