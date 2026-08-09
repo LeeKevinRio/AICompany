@@ -46,3 +46,32 @@
 - 建議:SCANNED_FILES 再補 EditAlertRuleModal、AlertParamFields(前批已補另兩檔)。
 - 流程澄清:qa 審查中察覺檔案內容變動並警戒「注入」——經查為協調層 86373a6 真實 commit
   (風控快審結論落檔),非注入;qa 拒絕採信未驗證訊息的行為正確,特此記錄。
+
+## BLOCKING 退修完成(2026-08-09,frontend-engineer,commit 32188bd)
+
+- 根修(要求1):`alertRuleForm.ts` 新增 `parseRequiredNumber`(杜絕
+  `Number("")===0` 陷阱,所有數值欄位共用)與 `paramsEqual`(以原始 params
+  物件為基準、順序無關的深比對,取代 `JSON.stringify` 直接比對);
+  `buildAlertParams` 對 signal_condition 同時帶出 value/ref 兩鍵(其一
+  為 null),形狀對齊後端 `Comparison` 序列化,確保差異比對正確 ——
+  僅切 enabled 時 PATCH body 不含 params。
+- ref 型條件編輯(要求2):選**方案 b**(唯讀顯示現值 + 提示語,理由:
+  成本低、無資料毀損風險,與 dispatch 建議一致)。新句(供風控快審):
+  「此規則的比較條件為欄位對欄位，目前不支援在此表單修改。」
+  ——功能性/UI 限制說明,非投資/健康/法律建議性質文案,但依 dispatch
+  指示列出供快審。enabled/note/symbol/market 等其餘欄位仍可編輯。
+- Number("") 陷阱(要求3):`parseRequiredNumber` 統一套用於 threshold 與
+  signal_condition value 欄位,空字串一律回傳 null(表單視為未完成),不再
+  被 `Number()` 轉成 0。
+- 測試(要求4):新增 `app/lib/__tests__/alertRuleForm.test.ts`、
+  `app/settings/__tests__/EditAlertRuleModal.test.ts` 共 28 項,含
+  「編輯 ref 規則僅切 enabled → PATCH body 無 params」與「ref 規則現值
+  正確預填顯示」兩項指定案例。本專案無 RTL/jsdom,依既有慣例
+  (`operationSummary.test.ts`)測純函式,`buildPatch` 已抽成模組層級純函式
+  `buildAlertRulePatch` 供測試呼叫。
+- 順手(要求5):`componentWordingScan.test.ts` `SCANNED_FILES` 補上
+  `EditAlertRuleModal.tsx`、`AlertParamFields.tsx`;新覆蓋掃描全綠,
+  **未掃出既有違規**。
+- 驗證:`npm run typecheck`(tsc --noEmit,無輸出)與 `npm run test`
+  (vitest,7 個測試檔、166 項全綠,含新增 28 項)皆綠燈。
+- commit 32188bd,已 push origin/product/stock-desk。
