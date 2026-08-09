@@ -64,6 +64,22 @@ LIMIT_NAMES: dict[str, str] = {
     "kelly_fraction": "分數 Kelly 部位上限",
 }
 
+#: The action label quoted at the head of every quantity-range ``basis``, one
+#: entry per action that can produce a range (``hold`` and ``insufficient_data``
+#: never do). The values are contract-bound to ``HELD_ACTION_LABELS`` in
+#: ``frontend/app/lib/adviceWording.ts``: the card headline and this sentence
+#: name the same action, so two spellings of it would read as two verdicts.
+#: ``test_advice_limits.py`` reads that file and compares the four keys, so the
+#: tables cannot drift apart silently.
+#:
+#: 風控核可文案,修改須重新送審(2026-08-09)
+RANGE_ACTION_LABELS: dict[str, str] = {
+    "add": "加碼參考",
+    "reduce": "減碼參考",
+    "take_profit": "分批獲利了結參考",
+    "stop_loss": "停損評估",
+}
+
 #: Tolerance used when comparing an observed ratio against a cap, so that a
 #: value that is mathematically equal to the cap is not missed by float noise.
 EPSILON = 1e-9
@@ -906,7 +922,20 @@ def suggest_quantity_range(
         return None
     binding_id, binding_value = min(caps.items(), key=lambda item: item[1])
     skipped = [LIMIT_NAMES[i] for i in LIMIT_IDS if i not in caps]
-    skipped_note = f"；未納入計算的上限：{'、'.join(skipped)}" if skipped else ""
+    # A whole sentence appended after the basis's final full stop, never a
+    # trailing clause: a cap left out of the arithmetic is not a cap that
+    # passed, and the reader has to be told that in its own sentence rather
+    # than in a footnote glued to the end of another one. "缺少可用資料" and not
+    # "資料不足" because a cap can also drop out on inputs that exist but have
+    # gone stale (cap 3's net-worth path).
+    #
+    # 風控核可文案,修改須重新送審(2026-08-09)
+    skipped_note = (
+        f"以下上限本次缺少可用資料,未參與這個區間的計算:{'、'.join(skipped)}。"
+        f"未參與計算不等於已通過,這個區間沒有檢查過這幾條。"
+        if skipped
+        else ""
+    )
     current = ctx.position_market_value_twd or 0.0
 
     if action == "add":
@@ -920,10 +949,17 @@ def suggest_quantity_range(
             min_shares=lower,
             max_shares=upper,
             restores_compliance=True,
+            # The lower edge is explained as a range-making device, not as a
+            # floor: "最少要買" is the reading this sentence exists to close.
+            #
+            # 風控核可文案,修改須重新送審(2026-08-09)
             basis=(
-                f"以「{LIMIT_NAMES[binding_id]}」為最小可用額度換算，"
-                f"最多可再買進 {upper} 股（買進後該上限仍為通過），"
-                f"區間下緣取上緣的一半{skipped_note}。"
+                f"規則評估:{RANGE_ACTION_LABELS['add']},"
+                f"區間為再買進 {lower:,} ~ {upper:,} 股。"
+                f"目前有納入計算的上限中,額度最緊的是「{LIMIT_NAMES[binding_id]}」;"
+                f"以它換算,買進後這條上限仍為通過的最大股數是 {upper:,} 股,也就是區間上緣。"
+                f"下緣 {lower:,} 股取上緣的一半,用意是給出一個範圍而不是單一數字,"
+                f"不是「最少要買」的數量。{skipped_note}"
             ),
         )
 
@@ -955,18 +991,30 @@ def suggest_quantity_range(
         upper = max(lower, sellable)
         limit_name = LIMIT_NAMES[binding_id]
         # The two branches are the whole point of returning ``compliant``:
-        # claiming "減去 N 股可回到該上限之內" when the cap is driven by other
+        # claiming a return to compliance when the cap is driven by other
         # positions would be a false statement about what the trade achieves.
         # Both branches are only reachable with a verified quantity that is at
         # most the holding, so both sentences are true where they are used.
+        # They are two separate sentences by design -- the compliant one has to
+        # say what the upper edge is *not* (a quantity the cap demands), the
+        # other one has to say the sale does not clear the cap at all.
+        #
+        # 風控核可文案,修改須重新送審(2026-08-09)
         basis = (
-            f"目前部位超出「{limit_name}」，"
-            f"減去 {lower} 股可回到該上限之內，上緣為目前持股全數{skipped_note}。"
+            (
+                f"規則評估:{RANGE_ACTION_LABELS[action]},"
+                f"區間為賣出 {lower:,} ~ {upper:,} 股。"
+                f"目前部位已超出「{limit_name}」這條上限,"
+                f"賣出 {lower:,} 股後可回到這條上限的範圍內;"
+                f"區間上緣 {upper:,} 股是目前持股全數,是這個區間的上界,"
+                f"不是這條上限要求賣到的數量。{skipped_note}"
+            )
             if compliant
             else (
-                f"目前部位超出「{limit_name}」，"
-                f"建議量 {lower} 股已為持股全數；該上限由其他部位驅動，"
-                f"賣出後仍為違反{skipped_note}。"
+                f"規則評估:{RANGE_ACTION_LABELS[action]},"
+                f"這個區間只有一個數字:{lower:,} 股,也就是目前持股全數。"
+                f"目前部位已超出「{limit_name}」這條上限,"
+                f"但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。{skipped_note}"
             )
         )
         return QuantityRange(

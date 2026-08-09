@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from app.advice.limits import (
     NO_SECTOR_DETAILS,
     NO_SECTOR_UNFILED_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
+    RANGE_ACTION_LABELS,
     SECTOR_MIXED_DETAIL,
     LimitCheck,
     PortfolioContext,
@@ -590,7 +593,7 @@ def test_add_range_is_derived_from_the_tightest_cap() -> None:
     assert quantity.max_shares == 999
     assert quantity.min_shares == 499
     assert "單一標的佔比上限" in quantity.basis
-    assert "未納入計算的上限" in quantity.basis
+    assert "未參與這個區間的計算" in quantity.basis
 
 
 def test_add_range_is_none_when_the_budget_is_spent() -> None:
@@ -692,8 +695,8 @@ def test_reduce_basis_claims_a_return_to_compliance_only_when_it_happens() -> No
     quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
     assert quantity is not None
     assert quantity.restores_compliance is True
-    assert "可回到該上限之內" in quantity.basis
-    assert "仍為違反" not in quantity.basis
+    assert "可回到這條上限的範圍內" in quantity.basis
+    assert "仍然超標" not in quantity.basis
     # And the claim is true: after the sale the cap is no longer violated.
     after = project_position(ctx, share_delta=-float(quantity.min_shares))
     assert _status(after, "single_position_weight") == "passed"
@@ -706,12 +709,163 @@ def test_reduce_basis_does_not_claim_compliance_when_selling_everything_fails() 
     quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
     assert quantity is not None
     assert quantity.restores_compliance is False
-    assert "可回到該上限之內" not in quantity.basis
-    assert "建議量 500 股已為持股全數" in quantity.basis
-    assert "該上限由其他部位驅動，賣出後仍為違反" in quantity.basis
+    assert "可回到這條上限的範圍內" not in quantity.basis
+    assert "這個區間只有一個數字:500 股,也就是目前持股全數" in quantity.basis
+    assert "但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標" in quantity.basis
     # And the disclaimer is true: after selling the lot the cap still breaches.
     after = project_position(ctx, share_delta=-float(quantity.max_shares))
     assert _status(after, "gross_exposure") == "violated"
+
+
+# --- The risk-approved range copy (risk-compliance ruling, 2026-08-09) -------
+#
+# The ruling that approved these sentences is verbatim: "任何一字與核可全文不同
+# 即視為未過審". The expected strings below are therefore transcribed from the
+# ruling by hand rather than built from the module's own f-strings -- a test
+# that imports the template it is checking would pass on any rewrite.
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_WORDING = BACKEND_ROOT.parent / "frontend" / "app" / "lib" / "adviceWording.ts"
+
+#: The approved note appended after the basis's final full stop, with the two
+#: caps this file's ``_ctx`` leaves unevaluable already interpolated.
+SKIPPED_NOTE = (
+    "以下上限本次缺少可用資料,未參與這個區間的計算:單一產業佔比上限、分數 Kelly 部位上限。"
+    "未參與計算不等於已通過,這個區間沒有檢查過這幾條。"
+)
+
+
+def _front_end_action_labels() -> dict[str, str]:
+    """``HELD_ACTION_LABELS`` as declared in the front-end wording module.
+
+    Read out of the TypeScript source instead of mirrored into a Python
+    literal: a copied table drifts the moment one side is edited, and the
+    contract the ruling asks for is precisely that the two cannot drift.
+    """
+    source = FRONTEND_WORDING.read_text(encoding="utf-8")
+    block = re.search(
+        r"HELD_ACTION_LABELS:\s*Record<CardAction,\s*string>\s*=\s*\{(.*?)\}", source, re.S
+    )
+    assert block is not None, f"HELD_ACTION_LABELS not found in {FRONTEND_WORDING}"
+    return dict(re.findall(r'(\w+):\s*"([^"]*)"', block.group(1)))
+
+
+def test_range_action_labels_match_the_front_end_whitelist() -> None:
+    labels = _front_end_action_labels()
+    assert set(RANGE_ACTION_LABELS) == {"add", "reduce", "take_profit", "stop_loss"}
+    for action, label in RANGE_ACTION_LABELS.items():
+        assert labels[action] == label, f"「{action}」的後端標籤與前端白名單不一致"
+
+
+def test_add_basis_is_the_approved_copy_verbatim() -> None:
+    quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
+    assert quantity is not None
+    assert quantity.basis == (
+        "規則評估:加碼參考,區間為再買進 499 ~ 999 股。"
+        "目前有納入計算的上限中,額度最緊的是「單一標的佔比上限」;"
+        "以它換算,買進後這條上限仍為通過的最大股數是 999 股,也就是區間上緣。"
+        "下緣 499 股取上緣的一半,用意是給出一個範圍而不是單一數字,"
+        "不是「最少要買」的數量。" + SKIPPED_NOTE
+    )
+
+
+def test_sell_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_cap() -> None:
+    ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.basis == (
+        "規則評估:減碼參考,區間為賣出 501 ~ 2,000 股。"
+        "目前部位已超出「單一標的佔比上限」這條上限,"
+        "賣出 501 股後可回到這條上限的範圍內;"
+        "區間上緣 2,000 股是目前持股全數,是這個區間的上界,"
+        "不是這條上限要求賣到的數量。" + SKIPPED_NOTE
+    )
+
+
+def test_sell_basis_is_the_approved_copy_verbatim_when_selling_everything_falls_short() -> None:
+    ctx = _ctx(gross_exposure_twd=2_000_000.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
+    assert quantity is not None
+    assert quantity.basis == (
+        "規則評估:停損評估,這個區間只有一個數字:500 股,也就是目前持股全數。"
+        "目前部位已超出「總曝險上限」這條上限,"
+        "但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。" + SKIPPED_NOTE
+    )
+
+
+def test_every_sell_action_reuses_the_same_approved_template() -> None:
+    # One template, one label slot: the three defensive actions differ only in
+    # the name the sentence opens with.
+    ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
+    for action in ("reduce", "stop_loss", "take_profit"):
+        quantity = suggest_quantity_range(BUDGET, ctx, action=action)
+        assert quantity is not None
+        assert quantity.basis.startswith(f"規則評估:{RANGE_ACTION_LABELS[action]},")
+        assert "區間為賣出 501 ~ 2,000 股。" in quantity.basis
+
+
+def test_the_skipped_note_is_absent_when_every_cap_was_evaluated() -> None:
+    # Nothing was left out, so there is no sentence saying anything was.
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, win_rate=0.6, payoff_ratio=2.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="add")
+    assert quantity is not None
+    assert "缺少可用資料" not in quantity.basis
+    assert "未參與這個區間的計算" not in quantity.basis
+    assert quantity.basis.endswith("不是「最少要買」的數量。")
+
+
+def test_range_figures_carry_thousand_separators() -> None:
+    # The card prints the same numbers through ``toLocaleString``; a bare
+    # "20000" beside a "20,000" reads as a different quantity.
+    ctx = _ctx(
+        total_equity_twd=10_000_000.0,
+        position_market_value_twd=2_000_000.0,
+        quantity=20_000.0,
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.max_shares == 20_000
+    assert "20,000 股" in quantity.basis
+    assert "20000" not in quantity.basis
+
+
+def test_the_superseded_copy_is_gone_from_the_backend() -> None:
+    # The four phrases the ruling replaced. Left anywhere in the package or its
+    # tests they would be a second, unapproved wording of the same fact. Each
+    # one is spelled in two halves so the guard does not trip over its own
+    # search list and can therefore scan this file as well as every other.
+    superseded = (
+        "上緣為" + "目前持股全數",
+        "未納入" + "計算的上限",
+        "區間下緣" + "取上緣的一半",
+        "賣出後" + "仍為違反",
+    )
+    scanned = sorted(BACKEND_ROOT.glob("app/**/*.py")) + sorted(BACKEND_ROOT.glob("tests/**/*.py"))
+    assert scanned
+    for path in scanned:
+        text = path.read_text(encoding="utf-8")
+        for phrase in superseded:
+            assert phrase not in text, f"{path} 仍留有已被取代的舊文案「{phrase}」"
+
+
+def test_the_approved_range_copy_never_reaches_the_alert_push_path() -> None:
+    # The alert layer is measurement-only: its own guards ban 買進/賣出/加碼/
+    # 減碼/建議 in every message (see ``test_alerts_engine``). This copy is full
+    # of exactly those words by design, so the two surfaces must stay apart --
+    # no alert module may reach for the sizing API or quote its sentences.
+    banned_in_alerts = ("買進", "賣出", "加碼", "減碼", "建議")
+    quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
+    assert quantity is not None
+    assert any(word in quantity.basis for word in banned_in_alerts)
+
+    fragments = ("規則評估:", "這個區間", "未參與這個區間的計算", "區間上緣")
+    for path in sorted(BACKEND_ROOT.glob("app/alerts/*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert "suggest_quantity_range" not in text, f"{path} 觸及建議股數區間"
+        assert "RANGE_ACTION_LABELS" not in text, f"{path} 觸及動作標籤表"
+        for fragment in fragments:
+            assert fragment not in text, f"{path} 出現建議股數區間文案片段「{fragment}」"
 
 
 # --- The loop-bound fall-throughs (unreachable with a consistent budget) -----
