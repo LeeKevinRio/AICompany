@@ -16,6 +16,7 @@ import {
   getLeverageChapter,
   getPortfolioSummary,
   getPositions,
+  getSectors,
   getSettings,
   getSignals,
   importPositionsCsv,
@@ -90,6 +91,17 @@ export function useDeletePosition() {
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
     },
+  });
+}
+
+/** `GET /api/positions/sectors` (FR-12) — a closed enumeration, so a longer `staleTime` is safe. */
+export function useSectors(enabled: boolean) {
+  return useQuery({
+    queryKey: ["sectors"],
+    queryFn: getSectors,
+    enabled,
+    retry: 1,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

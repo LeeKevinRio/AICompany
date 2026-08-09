@@ -18,6 +18,7 @@ import type {
   PortfolioSummaryResponse,
   Position,
   PositionsResponse,
+  SectorListResponse,
   SettingsResponse,
   SignalsResponse,
   UpdatePositionInput,
@@ -143,6 +144,11 @@ export function deletePosition(id: number): Promise<void> {
 
 export function getPortfolioSummary(): Promise<PortfolioSummaryResponse> {
   return request<PortfolioSummaryResponse>("/api/portfolio/summary");
+}
+
+/** The TWSE industry categories a TW position may declare (FR-12). */
+export function getSectors(): Promise<SectorListResponse> {
+  return request<SectorListResponse>("/api/positions/sectors");
 }
 
 export function importPositionsCsv(file: File): Promise<ImportPositionsResponse> {

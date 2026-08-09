@@ -44,6 +44,13 @@ export interface PositionInput {
   // string e.g. "2026-07-24", or `null` when left blank on the form.
   opened_at: string | null;
   instrument_type: InstrumentType;
+  // Optional TWSE industry category (FR-12, `app/positions/models.py`
+  // `sector: str | None = None`). `null`/omitted means "not stated". Only a
+  // TW position may carry one — the backend rejects a non-null value on a US
+  // position (see `SECTOR_US_REJECTED_MESSAGE`). Optional here (not just
+  // nullable) so callers that never touch this field, like `ManualAddForm`,
+  // keep compiling: the backend default already covers the omitted case.
+  sector?: string | null;
   note: string | null;
 }
 
@@ -57,6 +64,18 @@ export interface Position extends PositionInput {
 export interface PositionsResponse {
   items: Position[];
   as_of: string;
+}
+
+/**
+ * Backend `SectorListResponse` (app/api/positions.py, verified) —
+ * `GET /api/positions/sectors`. The dropdown's option source: values are
+ * fetched rather than duplicated in the client so the form and the backend
+ * validator cannot drift apart (FR-12).
+ */
+export interface SectorListResponse {
+  items: string[];
+  taxonomy: string;
+  markets: string[];
 }
 
 export type CreatePositionInput = PositionInput;

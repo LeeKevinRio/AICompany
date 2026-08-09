@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
-import { CURRENCY_OPTIONS, INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS } from "../lib/format";
-import { useUpdatePosition } from "../lib/queries";
+import {
+  CURRENCY_OPTIONS,
+  INSTRUMENT_TYPE_OPTIONS,
+  MARKET_OPTIONS,
+  SECTOR_US_DISABLED_HINT,
+} from "../lib/format";
+import { useSectors, useUpdatePosition } from "../lib/queries";
 import type {
   Currency,
   InstrumentType,
@@ -20,6 +25,7 @@ interface FormState {
   avg_cost: string;
   currency: Currency | "";
   opened_at: string;
+  sector: string;
   note: string;
 }
 
@@ -35,6 +41,7 @@ function toFormState(position: SummaryPositionItem): FormState {
     avg_cost: position.avg_cost,
     currency: position.currency,
     opened_at: position.opened_at ?? "",
+    sector: position.sector ?? "",
     note: position.note ?? "",
   };
 }
@@ -47,6 +54,7 @@ const FIELD_LABELS: Record<keyof FormState, string> = {
   avg_cost: "平均成本（原幣）",
   currency: "幣別",
   opened_at: "建倉日期",
+  sector: "產業別",
   note: "備註",
 };
 
@@ -70,6 +78,7 @@ export function EditPositionModal({
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(position));
   const updateMutation = useUpdatePosition();
+  const sectors = useSectors(true);
 
   const fieldErrors =
     updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
@@ -86,12 +95,20 @@ export function EditPositionModal({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  // `sector` only applies to a TW position (AC-12.6); switching away from TW
+  // clears whatever was selected so the submit never carries a value the
+  // backend would reject.
+  function handleMarketChange(value: Market) {
+    setForm((prev) => ({ ...prev, market: value, sector: value === "TW" ? prev.sector : "" }));
+  }
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // `required` on the three <select>s below prevents submission while any
     // of them is still at its empty placeholder value.
     if (form.market === "" || form.instrument_type === "" || form.currency === "") return;
     const trimmedOpenedAt = form.opened_at.trim();
+    const trimmedSector = form.sector.trim();
     const payload: UpdatePositionInput = {
       symbol: form.symbol.trim(),
       market: form.market,
@@ -100,6 +117,7 @@ export function EditPositionModal({
       avg_cost: form.avg_cost.trim(),
       currency: form.currency,
       opened_at: trimmedOpenedAt === "" ? null : trimmedOpenedAt,
+      sector: form.market === "TW" && trimmedSector !== "" ? trimmedSector : null,
       note: form.note.trim() === "" ? null : form.note.trim(),
     };
     updateMutation.mutate(
@@ -158,7 +176,7 @@ export function EditPositionModal({
               id="edit-market"
               required
               value={form.market}
-              onChange={(e) => updateField("market", e.target.value as Market)}
+              onChange={(e) => handleMarketChange(e.target.value as Market)}
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             >
               <option value="" disabled>
@@ -261,6 +279,39 @@ export function EditPositionModal({
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             />
             <FieldError message={fieldErrors.opened_at} />
+          </div>
+
+          <div>
+            <label htmlFor="edit-sector" className="block text-sm text-neutral-400">
+              {FIELD_LABELS.sector}（選填）
+            </label>
+            <select
+              id="edit-sector"
+              value={form.sector}
+              disabled={form.market !== "TW" || sectors.isPending}
+              onChange={(e) => updateField("sector", e.target.value)}
+              className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 disabled:opacity-50"
+            >
+              <option value="">未填</option>
+              {(sectors.data?.items ?? []).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            {form.market !== "TW" && (
+              <p className="mt-1 text-xs text-neutral-500">{SECTOR_US_DISABLED_HINT}</p>
+            )}
+            {form.market === "TW" && sectors.isPending && (
+              <p className="mt-1 text-xs text-neutral-500">載入產業別中…</p>
+            )}
+            {form.market === "TW" && sectors.isError && (
+              <p className="mt-1 text-xs text-red-400">
+                無法載入產業別清單：
+                {sectors.error instanceof ApiError ? sectors.error.message : "未知錯誤"}
+              </p>
+            )}
+            <FieldError message={fieldErrors.sector} />
           </div>
 
           <div className="sm:col-span-2">
