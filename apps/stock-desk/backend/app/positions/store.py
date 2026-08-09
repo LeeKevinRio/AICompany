@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     currency TEXT NOT NULL,
     opened_at TEXT,
     instrument_type TEXT NOT NULL,
+    sector TEXT,
     note TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -55,6 +56,7 @@ _COLUMNS = (
     "currency",
     "opened_at",
     "instrument_type",
+    "sector",
     "note",
     "created_at",
     "updated_at",
@@ -66,6 +68,24 @@ _SELECT_COLUMNS = ", ".join(_COLUMNS)
 def _opened_at_to_db(opened_at: date | None) -> str | None:
     """Store an unstated open date as SQL NULL, never as a placeholder date."""
     return None if opened_at is None else opened_at.isoformat()
+
+
+def _migrate_add_sector(conn: sqlite3.Connection) -> None:
+    """Add the nullable ``sector`` column to a database created before FR-12.
+
+    Adding a nullable column is the one schema change SQLite supports in place,
+    so no table rebuild is needed here. Existing rows keep a NULL sector, which
+    is exactly the "not stated" state (AC-12.3): the migration classifies
+    nothing on the user's behalf.
+
+    Runs **before** the ``opened_at`` rebuild below, which copies a fixed column
+    list between two tables and would not find ``sector`` on a legacy one.
+    Idempotent, so it is safe to call on every startup.
+    """
+    columns = {column[1] for column in conn.execute("PRAGMA table_info(positions)")}
+    if "sector" in columns:
+        return
+    conn.execute("ALTER TABLE positions ADD COLUMN sector TEXT")
 
 
 def _migrate_opened_at_to_nullable(conn: sqlite3.Connection) -> None:
@@ -116,6 +136,7 @@ class PositionStore:
         with closing(self._connect()) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
+            _migrate_add_sector(conn)
             _migrate_opened_at_to_nullable(conn)
 
     def list_all(self) -> list[Position]:
@@ -145,8 +166,8 @@ class PositionStore:
                 """
                 INSERT INTO positions
                     (symbol, market, quantity, avg_cost, currency, opened_at,
-                     instrument_type, note, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     instrument_type, sector, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.symbol,
@@ -156,6 +177,7 @@ class PositionStore:
                     data.currency,
                     _opened_at_to_db(data.opened_at),
                     data.instrument_type,
+                    data.sector,
                     data.note,
                     moment,
                     moment,
@@ -180,8 +202,8 @@ class PositionStore:
                 """
                 UPDATE positions SET
                     symbol = ?, market = ?, quantity = ?, avg_cost = ?,
-                    currency = ?, opened_at = ?, instrument_type = ?, note = ?,
-                    updated_at = ?
+                    currency = ?, opened_at = ?, instrument_type = ?,
+                    sector = ?, note = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -192,6 +214,7 @@ class PositionStore:
                     data.currency,
                     _opened_at_to_db(data.opened_at),
                     data.instrument_type,
+                    data.sector,
                     data.note,
                     moment,
                     position_id,
@@ -222,6 +245,7 @@ class PositionStore:
             currency,
             opened_at,
             instrument_type,
+            sector,
             note,
             created_at,
             updated_at,
@@ -235,6 +259,7 @@ class PositionStore:
             currency=currency,
             opened_at=None if opened_at is None else date.fromisoformat(str(opened_at)),
             instrument_type=instrument_type,
+            sector=None if sector is None else str(sector),
             note=None if note is None else str(note),
             created_at=datetime.fromisoformat(str(created_at)),
             updated_at=datetime.fromisoformat(str(updated_at)),

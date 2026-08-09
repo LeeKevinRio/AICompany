@@ -150,7 +150,7 @@ def test_single_position_weight_not_evaluable_without_equity() -> None:
     assert _status(_ctx(total_equity_twd=None), "single_position_weight") == "not_evaluable"
 
 
-# --- 2. Sector weight (no sector field on positions yet) --------------------
+# --- 2. Sector weight (FR-12: the field exists, the value may not) ----------
 
 
 def test_sector_weight_not_evaluable_without_sector_data() -> None:
@@ -160,20 +160,29 @@ def test_sector_weight_not_evaluable_without_sector_data() -> None:
     assert check.observed is None
 
 
+def test_missing_sector_reads_as_an_unfilled_value_not_a_missing_field() -> None:
+    # AC-12.3: the two states are different problems. Since FR-12 the column
+    # exists, so the reason must point at the value the user can supply and no
+    # longer claim the product has no such field.
+    detail = _check(_ctx(), "sector_weight").detail
+    assert "沒有產業別欄位" not in detail
+    assert "填" in detail  # names the action that would make the cap evaluable
+
+
 def test_sector_weight_passed_when_the_caller_supplies_sector_data() -> None:
-    ctx = _ctx(sector="半導體", sector_market_value_twd=200_000.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0)
     assert _status(ctx, "sector_weight") == "passed"
 
 
 def test_sector_weight_violated_when_the_sector_is_over_the_cap() -> None:
-    ctx = _ctx(sector="半導體", sector_market_value_twd=350_000.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=350_000.0)
     check = _check(ctx, "sector_weight")
     assert check.status == "violated"
     assert check.observed == pytest.approx(0.35)
 
 
 def test_sector_weight_not_evaluable_without_equity() -> None:
-    ctx = _ctx(sector="半導體", sector_market_value_twd=200_000.0, total_equity_twd=None)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, total_equity_twd=None)
     assert _status(ctx, "sector_weight") == "not_evaluable"
 
 
@@ -505,7 +514,7 @@ def test_notional_caps_are_empty_without_equity() -> None:
 
 
 def test_notional_caps_include_sector_and_kelly_when_available() -> None:
-    ctx = _ctx(sector="半導體", sector_market_value_twd=200_000.0, win_rate=0.6, payoff_ratio=2.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, win_rate=0.6, payoff_ratio=2.0)
     caps = notional_caps(BUDGET, ctx)
     # Sector: 300,000 cap less the 150,000 held by other names in the sector.
     assert caps["sector_weight"] == pytest.approx(150_000.0)
@@ -591,7 +600,7 @@ def test_add_sizing_respects_a_binding_per_trade_loss_cap() -> None:
 
 
 def test_limit_status_after_projects_the_whole_book() -> None:
-    ctx = _ctx(sector="半導體", sector_market_value_twd=200_000.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0)
     after = project_position(ctx, share_delta=1_000.0)
     assert after.position_market_value_twd == pytest.approx(150_000.0)
     assert after.quantity == pytest.approx(1_500.0)

@@ -285,3 +285,112 @@ def test_import_missing_header_column_is_rejected(client: TestClient) -> None:
     ).json()
     assert body["imported"] == 0
     assert body["errors"][0]["field"] == "header"
+
+
+# --- FR-12 sector -------------------------------------------------------------
+
+
+def test_sectors_endpoint_lists_the_closed_twse_taxonomy(client: TestClient) -> None:
+    body = client.get("/api/positions/sectors").json()
+    assert body["taxonomy"] == "TWSE"
+    assert body["markets"] == ["TW"]
+    assert "半導體業" in body["items"]
+    assert len(body["items"]) == len(set(body["items"]))  # no duplicate buckets
+
+
+def test_create_with_a_listed_sector_returns_201_and_echoes_it(client: TestClient) -> None:
+    payload = _valid_payload() | {"sector": "半導體業"}
+    response = client.post("/api/positions", json=payload)
+    assert response.status_code == 201
+    assert response.json()["sector"] == "半導體業"
+    assert client.get("/api/positions").json()["items"][0]["sector"] == "半導體業"
+
+
+def test_create_without_a_sector_returns_201_with_null(client: TestClient) -> None:
+    # AC-12.3: the field is optional and an unstated value stays unstated.
+    response = client.post("/api/positions", json=_valid_payload())
+    assert response.status_code == 201
+    assert response.json()["sector"] is None
+
+
+def test_create_with_free_text_sector_returns_422(client: TestClient) -> None:
+    # AC-12.1: anything outside the list is refused rather than becoming a
+    # bucket of its own.
+    response = client.post("/api/positions", json=_valid_payload() | {"sector": "我的產業"})
+    assert response.status_code == 422
+    assert "產業別" in response.text
+    assert client.get("/api/positions").json()["items"] == []
+
+
+def test_us_position_cannot_carry_a_twse_sector(client: TestClient) -> None:
+    # AC-12.6: the TW taxonomy is not applied to a US holding.
+    us = _valid_payload() | {
+        "symbol": "AAPL",
+        "market": "US",
+        "currency": "USD",
+        "sector": "半導體業",
+    }
+    response = client.post("/api/positions", json=us)
+    assert response.status_code == 422
+    assert "美股" in response.text
+    del us["sector"]
+    assert client.post("/api/positions", json=us).status_code == 201
+
+
+def test_update_can_set_and_clear_the_sector(client: TestClient) -> None:
+    created = client.post("/api/positions", json=_valid_payload()).json()
+    filled = client.put(
+        f"/api/positions/{created['id']}", json=_valid_payload() | {"sector": "食品工業"}
+    ).json()
+    assert filled["sector"] == "食品工業"
+    cleared = client.put(f"/api/positions/{created['id']}", json=_valid_payload()).json()
+    assert cleared["sector"] is None
+
+
+def test_template_csv_carries_the_sector_column_and_leaves_it_blank_for_us(
+    client: TestClient,
+) -> None:
+    lines = client.get("/api/positions/template.csv").text.strip().splitlines()
+    assert "sector" in lines[0].split(",")
+    sector_index = lines[0].split(",").index("sector")
+    assert lines[1].split(",")[sector_index] == "半導體業"
+    assert lines[2].split(",")[sector_index] == ""  # the US example row
+
+
+def test_import_accepts_a_listed_sector_and_rejects_only_the_bad_rows(
+    client: TestClient,
+) -> None:
+    # AC-12.2: per-row validation, with the good rows still imported.
+    csv_text = (
+        "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,sector,note\n"
+        "2330,TW,1000,600.5,TWD,2024-01-02,stock,半導體業,台積電\n"  # row 2: valid
+        "2317,TW,500,100,TWD,2024-01-02,stock,,沒填產業\n"  # row 3: blank is fine
+        "1101,TW,500,40,TWD,2024-01-02,stock,我的產業,自創\n"  # row 4: not on the list
+        "AAPL,US,10,180,USD,2024-03-15,stock,半導體業,美股不適用\n"  # row 5: US
+    )
+    body = client.post(
+        "/api/positions/import",
+        files={"file": ("positions.csv", csv_text, "text/csv")},
+    ).json()
+    assert body["imported"] == 2
+    errors = {err["row"]: err for err in body["errors"]}
+    assert errors[4]["field"] == "sector" and "清單" in errors[4]["reason"]
+    assert errors[5]["field"] == "sector" and "美股" in errors[5]["reason"]
+    stored = client.get("/api/positions").json()["items"]
+    assert [item["sector"] for item in stored] == ["半導體業", None]
+
+
+def test_import_without_the_sector_column_still_works(client: TestClient) -> None:
+    # Files built against the pre-FR-12 template stay importable; every row
+    # simply has no sector stated.
+    csv_text = (
+        "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,note\n"
+        "2330,TW,1000,600.5,TWD,2024-01-02,stock,舊版範本\n"
+    )
+    body = client.post(
+        "/api/positions/import",
+        files={"file": ("positions.csv", csv_text, "text/csv")},
+    ).json()
+    assert body["imported"] == 1
+    assert body["errors"] == []
+    assert client.get("/api/positions").json()["items"][0]["sector"] is None

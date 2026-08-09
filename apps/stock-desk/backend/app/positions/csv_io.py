@@ -27,6 +27,11 @@ from app.positions.models import (
     Market,
     PositionInput,
 )
+from app.positions.sectors import (
+    SECTOR_REJECTED_MESSAGE,
+    SECTOR_US_REJECTED_MESSAGE,
+    is_valid_sector,
+)
 
 #: Column order shared by the downloadable template and the import parser.
 COLUMNS: tuple[str, ...] = (
@@ -37,8 +42,15 @@ COLUMNS: tuple[str, ...] = (
     "currency",
     "opened_at",
     "instrument_type",
+    "sector",
     "note",
 )
+
+#: Columns the header may omit. ``sector`` arrived with FR-12, after users had
+#: already built files against the older template; demanding it would turn a
+#: previously valid file into a header error over a field that is optional even
+#: when present. A file without the column imports with every sector unstated.
+_OPTIONAL_COLUMNS: frozenset[str] = frozenset({"sector"})
 
 _MARKETS: frozenset[str] = frozenset({"TW", "US"})
 _CURRENCIES: frozenset[str] = frozenset({"TWD", "USD"})
@@ -47,9 +59,12 @@ _INSTRUMENT_TYPES: frozenset[str] = frozenset(
 )
 
 #: Two illustrative rows shipped with the template (one TW, one US).
+#: The US row leaves ``sector`` empty on purpose: the TWSE categories do not
+#: apply to US holdings (AC-12.6), so the template must not demonstrate filling
+#: one in.
 _TEMPLATE_EXAMPLES: tuple[tuple[str, ...], ...] = (
-    ("2330", "TW", "1000", "600.5", "TWD", "2024-01-02", "stock", "台積電"),
-    ("AAPL", "US", "10", "180.25", "USD", "2024-03-15", "stock", "Apple"),
+    ("2330", "TW", "1000", "600.5", "TWD", "2024-01-02", "stock", "半導體業", "台積電"),
+    ("AAPL", "US", "10", "180.25", "USD", "2024-03-15", "stock", "", "Apple"),
 )
 
 
@@ -94,7 +109,11 @@ def parse_import_csv(
         return [], [RowError(row=1, field="header", reason="CSV 檔案是空的")]
 
     header = [cell.strip() for cell in rows[0]]
-    missing = [column for column in COLUMNS if column not in header]
+    missing = [
+        column
+        for column in COLUMNS
+        if column not in header and column not in _OPTIONAL_COLUMNS
+    ]
     if missing:
         return [], [
             RowError(
@@ -103,7 +122,7 @@ def parse_import_csv(
                 reason=f"CSV 標題列缺少必要欄位：{'、'.join(missing)}",
             )
         ]
-    index_of = {column: header.index(column) for column in COLUMNS}
+    index_of = {column: header.index(column) for column in COLUMNS if column in header}
 
     inputs: list[PositionInput] = []
     errors: list[RowError] = []
@@ -119,7 +138,10 @@ def parse_import_csv(
 
 
 def _cell(raw_row: list[str], index_of: dict[str, int], column: str) -> str:
-    idx = index_of[column]
+    """One cell, or ``""`` when the row is short or the column is absent."""
+    idx = index_of.get(column)
+    if idx is None:
+        return ""
     return raw_row[idx].strip() if idx < len(raw_row) else ""
 
 
@@ -171,6 +193,8 @@ def _parse_row(
             f"收到「{instrument_type}」",
         )
 
+    sector = _parse_sector(_cell(raw_row, index_of, "sector"), market, fail)
+
     note_raw = _cell(raw_row, index_of, "note")
     note = note_raw or None
 
@@ -187,6 +211,7 @@ def _parse_row(
             currency=_as_currency(currency),
             opened_at=opened_at,
             instrument_type=_as_instrument_type(instrument_type),
+            sector=sector,
             note=note,
         ),
         [],
@@ -211,6 +236,28 @@ def _parse_positive_decimal(
         fail(field, f"{label}必須大於 0")
         return None
     return value
+
+
+def _parse_sector(
+    raw: str, market: str, fail: Callable[[str, str], None]
+) -> str | None:
+    """Parse the optional industry category (FR-12).
+
+    A blank cell means "not stated" and imports fine; anything outside the TWSE
+    enumeration fails the row with the same sentence the API uses, and a US row
+    carrying any category fails too (the taxonomy does not apply there).
+    Returns ``None`` both for a blank cell and for a rejected value, which the
+    caller tells apart by whether ``fail`` recorded an error for the row.
+    """
+    if not raw:
+        return None
+    if market == "US":
+        fail("sector", SECTOR_US_REJECTED_MESSAGE)
+        return None
+    if not is_valid_sector(raw):
+        fail("sector", f"{SECTOR_REJECTED_MESSAGE}收到「{raw}」。")
+        return None
+    return raw
 
 
 def _parse_opened_at(

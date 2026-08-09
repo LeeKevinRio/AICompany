@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.api.deps import get_position_store
 from app.positions.csv_io import ImportResult, build_template_csv, parse_import_csv
 from app.positions.models import Position, PositionInput
+from app.positions.sectors import TWSE_SECTORS
 from app.positions.store import PositionStore
 
 router = APIRouter(prefix="/api/positions", tags=["positions"])
@@ -25,6 +26,17 @@ class PositionListResponse(BaseModel):
 
     items: list[Position]
     as_of: str
+
+
+class SectorListResponse(BaseModel):
+    """The industry categories a position may be filed under, and where they apply."""
+
+    items: list[str]
+    #: Which taxonomy the values come from, so a client never has to guess.
+    taxonomy: str
+    #: Markets the taxonomy applies to; a market absent here must leave the
+    #: field empty rather than borrow another market's categories.
+    markets: list[str]
 
 
 @router.get("", response_model=PositionListResponse)
@@ -43,6 +55,18 @@ def create_position(
     store: StoreDep,
 ) -> Position:
     return store.create(body)
+
+
+@router.get("/sectors", response_model=SectorListResponse)
+def list_sectors() -> SectorListResponse:
+    """The closed list of industry categories a TW position may declare.
+
+    Served rather than duplicated in the client so the dropdown and the
+    validator cannot drift apart (FR-12). ``markets`` states where the taxonomy
+    applies: US holdings have no agreed classification yet and must leave the
+    field empty (AC-12.6).
+    """
+    return SectorListResponse(items=list(TWSE_SECTORS), taxonomy="TWSE", markets=["TW"])
 
 
 @router.get("/template.csv")

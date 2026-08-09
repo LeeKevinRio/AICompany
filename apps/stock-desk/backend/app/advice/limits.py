@@ -109,6 +109,18 @@ MAX_GROSS_EXPOSURE_REASON = "此處容許適度槓桿，但不容許 2 倍的總
 NET_WORTH_STALE_AFTER_DAYS = 30
 NET_WORTH_SOFT_NOTICE_DAYS = 7
 
+#: AC-12.3: the two states this cap can be missing in are different problems and
+#: must not share a sentence. Before FR-12 the field itself did not exist ("持倉
+#: 資料目前沒有產業別欄位"); now it does, and what is missing is a *value the user
+#: can supply*, so the reason names the action instead of describing a product
+#: limitation that is no longer true.
+#: TODO(risk-gate): FR-12 draft wording; risk-compliance review of the sector-cap
+#: copy is scheduled after the FR-9 batch (AC-12.7). Not final copy.
+NO_SECTOR_DETAIL = (
+    "此標的尚未填寫產業別（未持有或持倉未填），這條上限未實際檢查。"
+    "可在持倉編輯或 CSV 匯入填入台灣證交所產業別後啟用這條上限。"
+)
+
 #: AC-9.2: what cap 3 said before FR-9 existed, kept verbatim as the opening
 #: sentence so a user who never entered a net worth sees no change at all, with
 #: the one input that would make the cap evaluable named after it.
@@ -365,8 +377,10 @@ class PortfolioContext(BaseModel):
     fx_to_twd: float = Field(default=1.0, gt=0.0)
     #: ATR(14) in the instrument's own currency; drives the stop distance.
     atr: float | None = Field(default=None, ge=0.0)
-    #: Sector label. Positions have no sector field yet, so this is normally
-    #: ``None`` and the sector cap honestly reports ``not_evaluable``.
+    #: TWSE industry category of this symbol's holdings (FR-12). ``None`` when
+    #: the user has not filed this symbol under one -- the field exists, the
+    #: value does not -- and the sector cap then reports ``not_evaluable``
+    #: naming that specific gap.
     sector: str | None = None
     sector_market_value_twd: float | None = Field(default=None, ge=0.0)
     #: Kelly inputs. No source produces them yet; absent -> ``not_evaluable``.
@@ -509,7 +523,7 @@ def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResu
     if ctx.sector is None or ctx.sector_market_value_twd is None:
         return (
             "not_evaluable",
-            "持倉資料目前沒有產業別欄位，這條上限未實際檢查。",
+            NO_SECTOR_DETAIL,
             None,
             threshold,
         )

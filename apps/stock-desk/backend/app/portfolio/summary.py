@@ -50,8 +50,17 @@ class SummaryPosition(BaseModel):
     instrument_type: InstrumentType
     #: ``None`` when the user did not state an open date.
     opened_at: str | None
+    #: TWSE industry category, or ``None`` when the user did not state one
+    #: (FR-12). Never inferred from the symbol.
+    sector: str | None
     note: str | None
     valuation: Valuation
+    #: This position's own contribution to ``totals.market_value_twd``, or
+    #: ``None`` when it could not be valued. Carried per position (rather than
+    #: only in the totals) so book-level slices -- the sector cap's numerator,
+    #: today -- are summed from the same TWD figures the totals use instead of
+    #: re-deriving them from a price in the instrument's own currency.
+    market_value_twd: Decimal | None
 
 
 class PortfolioSummary(BaseModel):
@@ -78,7 +87,9 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
 
     for position in positions:
         valued = valuator.value_position(position)
-        summary_positions.append(_to_summary_position(position, valued.valuation))
+        summary_positions.append(
+            _to_summary_position(position, valued.valuation, valued.market_value_twd)
+        )
         if valued.valuation.status == "ok":
             ok_count += 1
             # Present when status is ok; guarded for the type checker.
@@ -110,7 +121,9 @@ def _totals_status(*, total: int, ok: int) -> Literal["complete", "partial", "no
     return "partial"
 
 
-def _to_summary_position(position: Position, valuation: Valuation) -> SummaryPosition:
+def _to_summary_position(
+    position: Position, valuation: Valuation, market_value_twd: Decimal | None
+) -> SummaryPosition:
     return SummaryPosition(
         id=position.id,
         symbol=position.symbol,
@@ -122,6 +135,8 @@ def _to_summary_position(position: Position, valuation: Valuation) -> SummaryPos
         opened_at=(
             position.opened_at.isoformat() if position.opened_at is not None else None
         ),
+        sector=position.sector,
         note=position.note,
         valuation=valuation,
+        market_value_twd=market_value_twd,
     )

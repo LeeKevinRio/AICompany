@@ -30,8 +30,14 @@ Three honesty rules govern what is filled in:
    the single direction this cap must never err in, so an incomplete book yields
    ``not_evaluable`` instead (FR-9 (a-附加)).
 
-``sector`` and the Kelly inputs stay ``None`` for the same reason: no source
-produces them yet.
+4. **A sector total only counts what was actually classified.** ``sector`` is
+   the category the user typed on the holding itself (FR-12); positions with no
+   category are counted into no industry at all, and the fact that some were
+   left out travels with the context in ``notes`` (AC-12.5). Nothing is
+   inferred from a symbol, and an unclassified book is never presented as a
+   diversified one.
+
+The Kelly inputs stay ``None`` for the old reason: no source produces them yet.
 
 FX (ADR-0005 decision 5): this module stays a pure function and **never imports
 an adapter**. The caller resolves the rate (``app/services/fx.py``) and passes a
@@ -88,6 +94,24 @@ GROSS_EXPOSURE_EXPIRED_NOTE = (
     "使用者自報的帳戶總淨值新台幣 {amount:,.0f} 元，輸入時間為 {reported_at}，"
     "已超過 {days} 天未更新，本次不以它為分母計算總曝險；"
     "該上限回報 not_evaluable，待使用者更新淨值後才會恢復計算。"
+)
+
+#: AC-12.5: the sector ratio was computed while some holdings sat outside every
+#: industry bucket, so it is a floor rather than the whole picture -- and says so
+#: instead of quietly reporting ``passed``.
+#: TODO(risk-gate): FR-12 draft wording; risk-compliance review of the sector-cap
+#: copy is scheduled after the FR-9 batch (AC-12.7). Not final copy.
+SECTOR_UNCLASSIFIED_NOTE = (
+    "組合中有 {count} 筆已估值持倉未填產業別，未計入任何產業的市值合計，"
+    "單一產業佔比可能被低估。"
+)
+
+#: The same symbol held twice under two different categories: which one the
+#: industry bucket belongs to is undecidable, so the question is refused rather
+#: than answered with one of them (the mixed-currency precedent below).
+#: TODO(risk-gate): FR-12 draft wording; see AC-12.7.
+SECTOR_MIXED_NOTE = (
+    "此標的的持倉填了不只一種產業別，無法決定單一產業，單一產業佔比上限不計算。"
 )
 
 #: No quote at all reached this layer for a non-TWD holding.
@@ -242,6 +266,43 @@ def _position_rollup(
     )
 
 
+def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, str | None]:
+    """The symbol's industry category -> ``(sector, note)``.
+
+    ``None`` when the holdings carry no category (the normal state until the
+    user fills one in) *and* when they disagree about it; the second case gets a
+    sentence, because "you filed the same symbol under two industries" is
+    something the reader can fix, unlike simply not having stated one.
+    """
+    categories = sorted({position.sector for position in matched if position.sector})
+    if not categories:
+        return None, None
+    if len(categories) > 1:
+        return None, SECTOR_MIXED_NOTE
+    return categories[0], None
+
+
+def _sector_rollup(summary: PortfolioSummary, sector: str) -> tuple[float, int]:
+    """``(TWD market value filed under ``sector``, count of unclassified rows)``.
+
+    Only ``ok`` valuations are summed (rule 1) and only their own TWD
+    contribution is used, so the numerator and ``total_equity_twd`` come from
+    the same figures. The second number is what AC-12.5 requires disclosing:
+    valued holdings that belong to *some* industry the user has not named, and
+    therefore make every industry's share look smaller than it is.
+    """
+    total = Decimal(0)
+    unclassified = 0
+    for position in summary.positions:
+        if position.valuation.status != "ok" or position.market_value_twd is None:
+            continue
+        if position.sector is None:
+            unclassified += 1
+        elif position.sector == sector:
+            total += position.market_value_twd
+    return float(total), unclassified
+
+
 def self_reported_net_worth(
     amount_twd: float | None,
     updated_at: str | None,
@@ -326,6 +387,15 @@ def build_book_context(
             f"此標的有 {skipped} 筆持倉無法估值，未計入本標的的部位市值與成本。"
         )
 
+    sector, sector_note = _resolve_sector(matched)
+    if sector_note is not None:
+        notes.append(sector_note)
+    sector_market_value: float | None = None
+    if sector is not None:
+        sector_market_value, unclassified = _sector_rollup(summary, sector)
+        if unclassified:
+            notes.append(SECTOR_UNCLASSIFIED_NOTE.format(count=unclassified))
+
     currencies = sorted({position.currency for position in matched})
     holding_currency = currencies[0] if len(currencies) == 1 else None
     mixed_currencies = len(currencies) > 1
@@ -363,6 +433,8 @@ def build_book_context(
         # "must be a positive float" contract.
         fx_to_twd=rate if rate is not None else 1.0,
         atr=atr if rate is not None else None,
+        sector=sector,
+        sector_market_value_twd=sector_market_value,
     )
     return BookContext(
         context=context,

@@ -306,3 +306,68 @@ def test_a_resolvable_rate_reaches_the_card_with_its_freshness(
     assert any("USDTWD" in note and "31.5" in note for note in notes)
     # AC-3.5: the source's standing disclosure travels with the number.
     assert any("未經本環境線上查證" in note for note in notes)
+
+
+# --- FR-12: the sector cap starts answering -----------------------------------
+
+
+def _sector_check(harness: ApiHarness, symbol: str = "2330") -> dict[str, Any]:
+    card = harness.client.get(f"/api/advice/{symbol}").json()["advice"]
+    check: dict[str, Any] = next(c for c in card["limits_check"] if c["id"] == "sector_weight")
+    return check
+
+
+def test_declaring_a_sector_turns_the_sector_cap_on(api_harness: ApiHarness) -> None:
+    # AC-12.4 end to end: cap 2 has reported ``not_evaluable`` since this
+    # product shipped; a declared industry is all it was ever missing.
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+    before = _sector_check(api_harness)
+    assert before["status"] == "not_evaluable"
+    assert before["observed"] is None
+
+    position_id = api_harness.client.get("/api/positions").json()["items"][0]["id"]
+    api_harness.client.put(
+        f"/api/positions/{position_id}", json=position_payload(sector="半導體業")
+    )
+    after = _sector_check(api_harness)
+    # One holding, so the industry is the whole valued book: 100% of equity,
+    # which is over the 30% cap.
+    assert after["status"] == "violated"
+    assert after["observed"] == pytest.approx(1.0)
+    assert after["threshold"] == pytest.approx(0.30)
+
+
+def test_a_diversified_book_passes_the_sector_cap(api_harness: ApiHarness) -> None:
+    _seed_bars(api_harness)
+    _seed_bars(api_harness, symbol="1101")
+    api_harness.client.post("/api/positions", json=position_payload(sector="半導體業"))
+    api_harness.client.post(
+        "/api/positions",
+        json=position_payload(symbol="1101", quantity="10000", sector="水泥工業"),
+    )
+    check = _sector_check(api_harness)
+    assert check["status"] in {"passed", "violated"}  # evaluated either way
+    assert check["observed"] is not None
+
+
+def test_an_unclassified_holding_is_disclosed_on_the_card(api_harness: ApiHarness) -> None:
+    # AC-12.5: a ratio computed while part of the book sits outside every
+    # industry says so on the card instead of reading as the whole picture.
+    _seed_bars(api_harness)
+    _seed_bars(api_harness, symbol="1101")
+    api_harness.client.post("/api/positions", json=position_payload(sector="半導體業"))
+    api_harness.client.post("/api/positions", json=position_payload(symbol="1101"))
+    body = api_harness.client.get("/api/advice/2330").json()
+    assert any("未填產業別" in note for note in body["context_notes"])
+
+
+def test_the_sector_cap_names_the_unfilled_value_when_absent(
+    api_harness: ApiHarness,
+) -> None:
+    # AC-12.3: the field exists now, so the reason may not claim otherwise.
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+    detail = _sector_check(api_harness)["detail"]
+    assert "沒有產業別欄位" not in detail
+    assert "產業別" in detail

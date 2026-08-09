@@ -20,7 +20,13 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from app.positions.sectors import (
+    SECTOR_REJECTED_MESSAGE,
+    SECTOR_US_REJECTED_MESSAGE,
+    is_valid_sector,
+)
 
 Market = Literal["TW", "US"]
 Currency = Literal["TWD", "USD"]
@@ -60,7 +66,32 @@ class PositionInput(BaseModel):
     #: figures that need an open date report ``None`` instead.
     opened_at: date | None = None
     instrument_type: InstrumentType
+    #: Optional TWSE industry category (FR-12). ``None`` means "not stated" and
+    #: is never guessed from the symbol: the sector cap then reports
+    #: ``not_evaluable`` for this holding rather than filing it somewhere. Only
+    #: TW holdings may carry one (see :mod:`app.positions.sectors`).
+    sector: str | None = None
     note: str | None = None
+
+    @field_validator("sector")
+    @classmethod
+    def _sector_must_be_a_known_category(cls, value: str | None) -> str | None:
+        """Reject free text: an unrecognised category is a rejected write, not a
+        new bucket (AC-12.1). A blank cell is read as "not stated"."""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not is_valid_sector(cleaned):
+            raise ValueError(SECTOR_REJECTED_MESSAGE)
+        return cleaned
+
+    @model_validator(mode="after")
+    def _sector_is_tw_only(self) -> PositionInput:
+        if self.market != "TW" and self.sector is not None:
+            raise ValueError(SECTOR_US_REJECTED_MESSAGE)
+        return self
 
     @field_validator("symbol")
     @classmethod

@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.advice import book as book_module
 from app.advice.book import (
     EQUITY_BASIS_NOTE,
@@ -58,7 +60,18 @@ def _position(
     price: str | None = "600",
     currency: str = "TWD",
     market: str = "TW",
+    sector: str | None = None,
+    market_value_twd: str | None = None,
 ) -> SummaryPosition:
+    valuation = _valuation(price)
+    # Mirrors what the valuator contributes to ``totals``: present only when the
+    # position could be valued, and defaulting to quantity x price for the TWD
+    # fixtures used here.
+    value = None
+    if valuation.status == "ok":
+        value = Decimal(market_value_twd) if market_value_twd is not None else (
+            Decimal(quantity) * Decimal(str(price))
+        )
     return SummaryPosition(
         id=position_id,
         symbol=symbol,
@@ -68,8 +81,10 @@ def _position(
         currency=currency,  # type: ignore[arg-type]
         instrument_type="stock",
         opened_at="2024-01-02",
+        sector=sector,
         note=None,
-        valuation=_valuation(price),
+        valuation=valuation,
+        market_value_twd=value,
     )
 
 
@@ -392,12 +407,67 @@ def test_a_symbol_held_in_two_currencies_drops_the_price() -> None:
     assert any("橫跨多種計價幣別" in note for note in book.notes)
 
 
-def test_sector_and_kelly_inputs_stay_absent() -> None:
+def test_sector_stays_absent_until_the_holding_declares_one() -> None:
+    # FR-12 added the field, not a guess: an unclassified holding still yields
+    # no sector and no sector total. The Kelly inputs remain unsourced.
     book = build_book_context(_summary(_position(1, "2330")), symbol="2330", close=600.0)
     assert book.context.sector is None
     assert book.context.sector_market_value_twd is None
     assert book.context.win_rate is None
     assert book.context.payoff_ratio is None
+
+
+def test_sector_total_sums_every_valued_holding_in_the_same_industry() -> None:
+    # AC-12.4: the cap's numerator is the whole industry, not just this symbol.
+    summary = _summary(
+        _position(1, "2330", sector="半導體業"),  # 1000 x 600
+        _position(2, "2303", sector="半導體業", quantity="500", price="100"),
+        _position(3, "1101", sector="水泥工業", quantity="500", price="40"),
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert book.context.sector == "半導體業"
+    assert book.context.sector_market_value_twd == pytest.approx(650_000.0)
+    assert not any("未填產業別" in note for note in book.notes)
+
+
+def test_unclassified_holdings_are_disclosed_as_a_possible_understatement() -> None:
+    # AC-12.5: holdings outside every bucket make each industry look smaller,
+    # so the ratio is reported with that caveat rather than silently.
+    summary = _summary(
+        _position(1, "2330", sector="半導體業"),
+        _position(2, "2317", quantity="500", price="100"),  # no sector stated
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert book.context.sector_market_value_twd == pytest.approx(600_000.0)
+    assert any("1 筆" in note and "未填產業別" in note for note in book.notes)
+
+
+def test_an_unvalued_holding_is_left_out_of_the_sector_total() -> None:
+    summary = _summary(
+        _position(1, "2330", sector="半導體業"),
+        _position(2, "2303", sector="半導體業", price=None),
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert book.context.sector_market_value_twd == pytest.approx(600_000.0)
+
+
+def test_one_symbol_filed_under_two_industries_yields_no_sector() -> None:
+    summary = _summary(
+        _position(1, "2330", sector="半導體業"),
+        _position(2, "2330", sector="電子零組件業"),
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert book.context.sector is None
+    assert book.context.sector_market_value_twd is None
+    assert any("不只一種產業別" in note for note in book.notes)
+
+
+def test_a_candidate_has_no_sector_to_measure() -> None:
+    # AC-12.6 / candidate mode: nothing is inferred from the symbol itself.
+    summary = _summary(_position(1, "2330", sector="半導體業"))
+    book = build_book_context(summary, symbol="2454", close=900.0, currency="TWD")
+    assert book.held is False
+    assert book.context.sector is None
 
 
 def test_book_imports_no_adapter() -> None:
