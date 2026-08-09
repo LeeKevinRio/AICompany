@@ -92,3 +92,17 @@
   Playwright 實跑(工具限制下的等效實機驗收);qa-e2e 本尊環境問題另列基礎設施待辦。
 - 附帶發現:README「離線示範模式規劃中」已落後實作(app/demo/seed.py CLI 存在),
   文件更新列管交 tech-writer。
+
+## 等效實機驗收(2026-08-09,Playwright)
+
+- 4 PASS:回測三策略(數字互異、envelope 齊)、持倉產業別(37 選項與 API 一致、切美股停用、
+  第 2 條文案隨狀態變:35.79% 已違反 ↔ 未填 not_evaluable)、ref 規則唯讀+enabled-only PATCH
+  (攔截 body 證實)、375px 三表單無溢出。
+- NEEDS_CHANGES(單點,不 BLOCKING):警示編輯填壞值(-5/abc)按儲存→前端守門靜默 no-op,
+  無請求無錯誤字;fieldErrors 顯示機制存在但不可達。後端 422 以 curl 證實存在。
+- §2.1 實測:reason 文字對比 4.18:1(<AA 4.5:1,建議 neutral-500→400 約 7.5:1);
+  not_evaluable 進度條實測 0px 寬,誤讀風險中偏高(建議不畫條或斜紋佔位)→交風控裁量。
+- 附帶觀察列管:ref 規則列表描述漏顯示 ref 目標(「close 大於 —」);後端 PATCH symbol 無格式
+  驗證("!!!"回 200);summary 在 provider 全掛時 49 秒才降級(重試預算交 data-engineer);
+  favicon 404。
+- 截圖與腳本:scratchpad/e2e/(沙盒暫存,重要證據已述於本紀錄)。
