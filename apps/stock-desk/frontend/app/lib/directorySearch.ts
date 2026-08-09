@@ -8,6 +8,15 @@
 
 import type { DirectoryItem, DirectorySearchResponse, Market } from "./types";
 
+// FR-C7(a): a symbol is whatever the backend's `Market` literal accepts as a
+// path segment — no known closed vocabulary to validate against on the
+// front end (TW tickers are numeric, US tickers are alphabetic, both can
+// carry a "." for share-class suffixes). This only rejects what can never be
+// a valid symbol: empty input, whitespace, characters that would need
+// URL-encoding games to survive the round trip, and input made up entirely
+// of "." with no actual ticker characters (qa-reviewer Minor follow-up).
+export const SYMBOL_PATTERN = /^(?=.*[A-Za-z0-9])[A-Za-z0-9.]+$/;
+
 /**
  * FR-3/FR-4 leave the debounce interval to frontend-engineer ("防抖由前端
  * 控制，不寫死秒數在本 PRD"). 300ms is the dispatch order's stated target —
@@ -58,9 +67,13 @@ export function nextHighlightedIndex(
  * FR-7 honest degrade notices for the dropdown area. Exported as constants
  * (not just returned by `directorySearchNotice`) so the wording scan and the
  * unit tests both check the exact same string, with one place to update it.
+ *
+ * `DIRECTORY_NOT_SYNCED_NOTICE` 風控核可句（2026-08-09，證券目錄批快審）：原句
+ * 「…；同步指令請見設定頁。」指向不存在的內容，遭否決；核可截短句逐字如下，
+ * 日後修改不得續接任何承諾未來動作的字句（設定頁若補上同步說明區塊，需另案送
+ * 風控核可才可擴回）。
  */
-export const DIRECTORY_NOT_SYNCED_NOTICE =
-  "證券目錄尚未同步，僅支援代號直達；同步指令請見設定頁。";
+export const DIRECTORY_NOT_SYNCED_NOTICE = "證券目錄尚未同步，僅支援代號直達。";
 export const DIRECTORY_TRUNCATED_NOTICE = "候選過多，請輸入更精確關鍵字。";
 
 /**
@@ -108,3 +121,54 @@ export function decideAfterResolve(symbol: string, resolved: DirectoryItem | nul
 
 /** Prompt shown above the two-button TW/US picker (Q1(b)'s "縮小版市場選擇"). */
 export const MARKET_PICKER_PROMPT = "查無此代號對應的市場，請手動選擇。";
+
+/** What NavBar's `handleSubmit` should do with a given submit attempt, as data rather than side effects. */
+export type SubmitDecision =
+  | { kind: "selectCandidate"; item: DirectoryItem }
+  | { kind: "invalidInput"; message: string }
+  | { kind: "resolved"; outcome: ResolveOutcome }
+  | { kind: "resolveFailed" };
+
+export interface DecideSubmitParams {
+  /** Only `cancel()` is needed here — kept minimal so a test double doesn't need the rest of `createDebouncer`'s shape. */
+  debouncer: Pick<ReturnType<typeof createDebouncer>, "cancel">;
+  open: boolean;
+  highlighted: DirectoryItem | undefined;
+  inputValue: string;
+  resolveSymbol: (symbol: string) => Promise<DirectoryItem | null>;
+}
+
+/**
+ * Pure(-ish — the only side effects are the two injected callbacks, both of
+ * which are unavoidably impure at the real call site: `debouncer.cancel()`
+ * and `resolveSymbol`) orchestration behind NavBar's `handleSubmit`,
+ * extracted for the BLOCKING fix (qa 2026-08-09, 證券目錄批): NavBar is part
+ * of the shared layout and never unmounts on a client-side route change, so
+ * a debounce timer left over from earlier typing can outlive a submit and
+ * later reopen the dropdown with a stale query. `debouncer.cancel()` is
+ * called unconditionally as the very first statement — before any branch —
+ * so every exit path below (including the `resolveFailed` catch) is
+ * guaranteed to have cancelled the pending schedule, and a test can assert
+ * that without rendering the component (this repo has no RTL/jsdom; see
+ * `alertRuleForm.ts`'s `decideAlertRuleSubmit` for the same extraction
+ * pattern applied to a different BLOCKING fix).
+ */
+export async function decideSubmit(params: DecideSubmitParams): Promise<SubmitDecision> {
+  params.debouncer.cancel();
+  if (params.open && params.highlighted) {
+    return { kind: "selectCandidate", item: params.highlighted };
+  }
+  const trimmed = params.inputValue.trim();
+  if (trimmed.length === 0) {
+    return { kind: "invalidInput", message: "請輸入股票代號" };
+  }
+  if (!SYMBOL_PATTERN.test(trimmed)) {
+    return { kind: "invalidInput", message: "代號格式不正確，僅接受英數字與小數點" };
+  }
+  try {
+    const resolved = await params.resolveSymbol(trimmed);
+    return { kind: "resolved", outcome: decideAfterResolve(trimmed, resolved) };
+  } catch {
+    return { kind: "resolveFailed" };
+  }
+}

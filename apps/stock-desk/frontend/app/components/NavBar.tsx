@@ -11,20 +11,11 @@ import {
   DIRECTORY_SEARCH_DEBOUNCE_MS,
   MARKET_PICKER_PROMPT,
   createDebouncer,
-  decideAfterResolve,
+  decideSubmit,
   directorySearchNotice,
   nextHighlightedIndex,
   shouldShowCandidates,
 } from "../lib/directorySearch";
-
-// FR-C7(a): a symbol is whatever the backend's `Market` literal accepts as a
-// path segment — no known closed vocabulary to validate against on the
-// front end (TW tickers are numeric, US tickers are alphabetic, both can
-// carry a "." for share-class suffixes). This only rejects what can never be
-// a valid symbol: empty input, whitespace, characters that would need
-// URL-encoding games to survive the round trip, and input made up entirely
-// of "." with no actual ticker characters (qa-reviewer Minor follow-up).
-const SYMBOL_PATTERN = /^(?=.*[A-Za-z0-9])[A-Za-z0-9.]+$/;
 
 /**
  * NavBar symbol/company-name combobox (FR-4/FR-5/FR-7,
@@ -86,6 +77,14 @@ function SymbolSearch() {
   }
 
   function navigateTo(symbol: string, market: Market) {
+    // BLOCKING fix (qa 2026-08-09, 證券目錄批): NavBar is part of the shared
+    // layout, so it never unmounts across a client-side route change — any
+    // debounce timer still pending from earlier typing survives the
+    // navigation and can fire afterwards, silently reopening the dropdown
+    // with a now-stale query. Cancelling here, at the single choke point
+    // every navigation path goes through (candidate pick, resolved-symbol
+    // Enter, and the market-picker buttons), closes that race for good.
+    debouncerRef.current.cancel();
     closeDropdown();
     setInputValue("");
     setDebouncedQuery("");
@@ -99,37 +98,46 @@ function SymbolSearch() {
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (open) {
-      const highlighted = highlightedIndex >= 0 ? candidates[highlightedIndex] : undefined;
-      if (highlighted) {
-        selectCandidate(highlighted);
-        return;
-      }
-    }
-    const trimmed = inputValue.trim();
-    if (trimmed.length === 0) {
-      setError("請輸入股票代號");
-      return;
-    }
-    if (!SYMBOL_PATTERN.test(trimmed)) {
-      setError("代號格式不正確，僅接受英數字與小數點");
-      return;
-    }
-    setError(null);
-    closeDropdown();
-    setResolving(true);
-    try {
-      const resolved = await resolveDirectorySymbol(trimmed);
-      const outcome = decideAfterResolve(trimmed, resolved);
-      if (outcome.type === "navigate") {
-        navigateTo(outcome.symbol, outcome.market);
-      } else {
-        setPendingMarketSymbol(outcome.symbol);
-      }
-    } catch {
-      setError("查詢失敗，請稍後再試");
-    } finally {
-      setResolving(false);
+    // BLOCKING fix (qa 2026-08-09, 證券目錄批): the actual branching —
+    // including the unconditional `debouncer.cancel()` that must precede
+    // every branch, the empty-/bad-pattern-input errors, and the async
+    // resolve — lives in `decideSubmit` (`lib/directorySearch.ts`) so it is
+    // unit-tested directly; this handler only applies the resulting side
+    // effects.
+    const highlighted = open && highlightedIndex >= 0 ? candidates[highlightedIndex] : undefined;
+    const decision = await decideSubmit({
+      debouncer: debouncerRef.current,
+      open,
+      highlighted,
+      inputValue,
+      resolveSymbol: async (symbol) => {
+        setError(null);
+        closeDropdown();
+        setResolving(true);
+        try {
+          return await resolveDirectorySymbol(symbol);
+        } finally {
+          setResolving(false);
+        }
+      },
+    });
+    switch (decision.kind) {
+      case "selectCandidate":
+        selectCandidate(decision.item);
+        break;
+      case "invalidInput":
+        setError(decision.message);
+        break;
+      case "resolved":
+        if (decision.outcome.type === "navigate") {
+          navigateTo(decision.outcome.symbol, decision.outcome.market);
+        } else {
+          setPendingMarketSymbol(decision.outcome.symbol);
+        }
+        break;
+      case "resolveFailed":
+        setError("查詢失敗，請稍後再試");
+        break;
     }
   }
 
@@ -155,6 +163,7 @@ function SymbolSearch() {
         <input
           id="nav-symbol-search"
           role="combobox"
+          aria-haspopup="listbox"
           aria-expanded={showDropdown}
           aria-controls="nav-symbol-search-listbox"
           aria-autocomplete="list"
@@ -216,7 +225,10 @@ function SymbolSearch() {
               </li>
             ))}
             {notice !== null && (
-              <li className="border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-500">{notice}</li>
+              // §2.1 對比度列管（2026-08-09 風控裁量）：這行是使用者得知「名稱
+              // 搜尋暫不可用、僅支援代號直達」的唯一訊號，neutral-500 對深色底
+              // 僅 3.9:1（<AA 4.5:1），改用 neutral-400（約 7.5:1）。
+              <li className="border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-400">{notice}</li>
             )}
           </ul>
         )}

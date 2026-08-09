@@ -4,6 +4,7 @@ import {
   DIRECTORY_TRUNCATED_NOTICE,
   createDebouncer,
   decideAfterResolve,
+  decideSubmit,
   directorySearchNotice,
   nextHighlightedIndex,
   shouldShowCandidates,
@@ -109,6 +110,16 @@ describe("nextHighlightedIndex", () => {
   });
 });
 
+describe("DIRECTORY_NOT_SYNCED_NOTICE wording (風控核可句 2026-08-09)", () => {
+  it("matches the risk-compliance-approved sentence verbatim, no trailing promise clause", () => {
+    // Pinned literal (not just comparing the constant to itself) so a silent
+    // drift back toward the vetoed "…；同步指令請見設定頁。" tail — or any new
+    // "請稍候"/"即將支援" style promise — fails this test even if the constant
+    // definition itself is edited.
+    expect(DIRECTORY_NOT_SYNCED_NOTICE).toBe("證券目錄尚未同步，僅支援代號直達。");
+  });
+});
+
 describe("shouldShowCandidates / directorySearchNotice (FR-7 honest degrade)", () => {
   it("shows candidates when the directory is synced and items is non-empty", () => {
     expect(shouldShowCandidates(response())).toBe(true);
@@ -157,5 +168,122 @@ describe("decideAfterResolve (FR-2 / Q1(b) 404 fallback)", () => {
       type: "needMarketPicker",
       symbol: "9999X",
     });
+  });
+});
+
+describe("decideSubmit (BLOCKING fix, qa 2026-08-09: debounce cancelled on every submit path)", () => {
+  function stubDebouncer() {
+    return { cancel: vi.fn() };
+  }
+
+  it("cancels the debouncer when a highlighted candidate is submitted", async () => {
+    const debouncer = stubDebouncer();
+    const resolveSymbol = vi.fn();
+    const decision = await decideSubmit({
+      debouncer,
+      open: true,
+      highlighted: ITEM,
+      inputValue: "irrelevant while a candidate is highlighted",
+      resolveSymbol,
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ kind: "selectCandidate", item: ITEM });
+    expect(resolveSymbol).not.toHaveBeenCalled();
+  });
+
+  it("cancels the debouncer on an empty-input submit (error branch)", async () => {
+    const debouncer = stubDebouncer();
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: undefined,
+      inputValue: "   ",
+      resolveSymbol: vi.fn(),
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ kind: "invalidInput", message: "請輸入股票代號" });
+  });
+
+  it("cancels the debouncer on a bad-symbol-pattern submit (error branch)", async () => {
+    const debouncer = stubDebouncer();
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: undefined,
+      inputValue: "!!!",
+      resolveSymbol: vi.fn(),
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({
+      kind: "invalidInput",
+      message: "代號格式不正確，僅接受英數字與小數點",
+    });
+  });
+
+  it("cancels the debouncer before a successful resolve-to-navigate submit", async () => {
+    const debouncer = stubDebouncer();
+    const resolveSymbol = vi.fn().mockResolvedValue(ITEM);
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: undefined,
+      inputValue: "2330",
+      resolveSymbol,
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(resolveSymbol).toHaveBeenCalledWith("2330");
+    expect(decision).toEqual({
+      kind: "resolved",
+      outcome: { type: "navigate", symbol: "2330", market: "TW" },
+    });
+  });
+
+  it("cancels the debouncer on a resolve-miss submit (needs the market picker)", async () => {
+    const debouncer = stubDebouncer();
+    const resolveSymbol = vi.fn().mockResolvedValue(null);
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: undefined,
+      inputValue: "9999X",
+      resolveSymbol,
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({
+      kind: "resolved",
+      outcome: { type: "needMarketPicker", symbol: "9999X" },
+    });
+  });
+
+  it("cancels the debouncer even when resolveSymbol rejects (network-failure error branch)", async () => {
+    const debouncer = stubDebouncer();
+    const resolveSymbol = vi.fn().mockRejectedValue(new Error("network down"));
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: undefined,
+      inputValue: "2330",
+      resolveSymbol,
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ kind: "resolveFailed" });
+  });
+
+  it("cancels the debouncer even when a candidate is highlighted but the dropdown is closed (falls through to validation)", async () => {
+    // `open: false` means the highlighted candidate must not be used (mirrors
+    // NavBar only reading `candidates[highlightedIndex]` while `open`), so
+    // this exercises the *first* real branch (empty input) with a
+    // non-undefined `highlighted` still present, guarding against a future
+    // refactor accidentally checking `highlighted` alone.
+    const debouncer = stubDebouncer();
+    const decision = await decideSubmit({
+      debouncer,
+      open: false,
+      highlighted: ITEM,
+      inputValue: "",
+      resolveSymbol: vi.fn(),
+    });
+    expect(debouncer.cancel).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ kind: "invalidInput", message: "請輸入股票代號" });
   });
 });
