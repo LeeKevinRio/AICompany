@@ -21,6 +21,7 @@ from app.data.providers.twse import TwseAdapter
 from app.data.providers.yfinance import YFinanceAdapter
 from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
+from app.directory.store import SecurityDirectoryStore
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.services.index import (
@@ -149,6 +150,18 @@ def _default_alert_store() -> AlertStore:
 
 
 @lru_cache(maxsize=1)
+def _default_directory_store() -> SecurityDirectoryStore:
+    """The process-wide security directory store.
+
+    Shares the same ``STOCK_DESK_DB_PATH`` SQLite file as every other store
+    (see ``app/directory/store.py``); it is empty until the CEO runs
+    ``python -m app.directory.sync`` at least once, which the API surfaces
+    honestly via ``directory_synced`` rather than erroring.
+    """
+    return SecurityDirectoryStore()
+
+
+@lru_cache(maxsize=1)
 def _default_quota_ledger() -> QuotaLedger:
     """The ledger the API reads for observability only.
 
@@ -198,3 +211,8 @@ def get_alert_store() -> AlertStore:
 def get_quota_ledger() -> QuotaLedger:
     """Return the process-wide provider quota ledger."""
     return _default_quota_ledger()
+
+
+def get_directory_store() -> SecurityDirectoryStore:
+    """Return the process-wide security directory store."""
+    return _default_directory_store()

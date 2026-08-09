@@ -10,6 +10,7 @@ from app.api import (
     alerts,
     backtest,
     bars,
+    directory,
     leverage,
     portfolio,
     positions,
@@ -40,6 +41,7 @@ app.include_router(leverage.router)
 app.include_router(backtest.router)
 app.include_router(settings.router)
 app.include_router(alerts.router)
+app.include_router(directory.router)
 
 
 @app.get("/health")
