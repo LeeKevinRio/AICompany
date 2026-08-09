@@ -28,6 +28,8 @@ REQUIRED_FIELDS = ("name", "description", "tools", "model")
 
 BASE_TOOLS = {"Read", "Write", "Edit", "Bash", "Glob", "Grep"}
 SCOPED_BASH = {"Bash(codex:*)", "Bash(git diff:*)"}
+# Read-only web research tools (market/competitive research roles).
+RESEARCH_TOOLS = {"WebSearch", "WebFetch"}
 PREVIEW_TOOLS = {
     "mcp__Claude_Preview__preview_start",
     "mcp__Claude_Preview__preview_stop",
@@ -43,7 +45,7 @@ PREVIEW_TOOLS = {
     "mcp__Claude_Preview__preview_network",
     "mcp__Claude_Preview__preview_resize",
 }
-TOOL_WHITELIST = BASE_TOOLS | SCOPED_BASH | PREVIEW_TOOLS
+TOOL_WHITELIST = BASE_TOOLS | SCOPED_BASH | PREVIEW_TOOLS | RESEARCH_TOOLS
 
 MODEL_WHITELIST = {"opus", "sonnet", "haiku", "inherit"}
 

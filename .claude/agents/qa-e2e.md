@@ -17,6 +17,8 @@ qa-reviewer 看 code，你看畫面與行為：把 app 真的跑起來、像真�
 - 用 `preview_console_logs` / `preview_network` 檢查 runtime error 與失敗請求。
 - 用 `preview_inspect` 驗證關鍵 CSS 值（比截圖精準），並用 `preview_screenshot` 附畫面證據。
 - 測邊界操作：空狀態、怪輸入、快速連點、手機視口（375px）與桌面、dark mode。
+- **回歸巡檢（反覆驗收）**：重大變更合併後，除了驗收新功能，重走既有核心流程一遍
+  （以 `work/` 中最新驗收紀錄的流程清單為準），確認舊功能沒被新變更弄壞。
 
 明確不做什麼：
 - 不改 code、不做 git 操作、不寫自動化測試（qa-automation 的事）。

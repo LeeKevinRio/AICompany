@@ -43,6 +43,10 @@ flowchart TD
         TW[tech-writer]
     end
 
+    subgraph 行銷市調
+        MR[market-researcher]
+    end
+
     CEO --> PM
     PM --> TA
     TA --> DEV & FE & DE
@@ -54,6 +58,8 @@ flowchart TD
     TA -.否決權.-> DEV & FE & DE
     CEO --> CL --> AL
     CEO --> OPS
+    CEO --> MR
+    MR -.市場檢核.-> PM
     TW -.落檔.-> TA
 ```
 
@@ -76,6 +82,7 @@ flowchart TD
 | `creative-lead` | 創意 | 發想、企劃、命名、文案、內容策略 | 可寫文件 |
 | `art-lead` | 美術 | 美術方向、視覺規範、art brief、風格一致性 | 可寫文件 |
 | `tech-writer` | 文件 | README、API 文件、ADR 落檔、changelog、交接文件 | 可寫文件 |
+| `market-researcher` | 行銷市調 | 市場調查、競品分析、產品合理性評估、產品數據的市場面核實 | 可寫文件 + Web 唯讀 |
 
 ## 上下游關係（標準流向）
 
@@ -98,6 +105,16 @@ CEO → product-manager（PRD）→ tech-architect（技術評估 / ADR）
   - `data-analyst`（產品指標分析）：目前無上線產品與流量數據，設了無事可做。
   - `finops`（用量與成本控管）：目前成本結構單純；若外部 API／模型用量成長，優先併入 devops-sre 或獨立設崗，屆時再評估。
   - `chief-of-staff`（跨部門協調）：小規模下由 CEO + handoff-protocol 狀態機覆蓋；若單一任務常態跨 4 個以上部門再設。
+
+## 擴編決策紀錄（2026-08）
+
+- 新設 **行銷市調部門**，首位成員 `market-researcher`（CEO 指示）：市場調查、競品分析、
+  產品合理性評估、產品數據的市場面核實。工具白名單為此新增 `WebSearch` / `WebFetch`
+  （唯讀網路檢索，限研究職能）。行銷「執行」（投放、社群經營）需求出現時再增設 `marketing-lead`。
+- 制度化 **主動機會盤點**（CEO 願景）：`product-manager` 與 `creative-lead` 對每個產品
+  維護 `work/機會清單.md`（還可開發什麼），任務結案時必須更新，CEO 隨時可問「還能做什麼」。
+- 制度化 **QA 反覆驗收**：`qa-e2e` 除驗收新功能外，重大變更合併後須回歸巡檢既有核心流程
+  （不是只看新東西）。
 
 ## TODO（待 CEO 決定）
 
