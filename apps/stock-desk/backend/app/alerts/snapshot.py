@@ -22,7 +22,7 @@ from app.positions.models import Market
 from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
-from app.signals.service import compute_signals
+from app.signals.service import atr_from_signals, compute_signals
 
 
 def build_snapshot(
@@ -71,7 +71,7 @@ def build_snapshot(
     latest = max(loaded.bars, key=lambda bar: bar.date)
     close = float(latest.close)
     signals = compute_signals(symbol, loaded.bars)
-    atr = _atr_from_signals(signals)
+    atr = atr_from_signals(signals)
 
     summary = build_summary(store, valuator)
     fx = resolve_fx_quote(fx_provider, currency=latest.currency, on=latest.date)
@@ -112,18 +112,3 @@ def _joined_reason(*parts: str | None) -> str | None:
     """Join the non-empty qualifiers into one sentence, or ``None`` if there are none."""
     present = [part for part in parts if part]
     return " ".join(present) if present else None
-
-
-def _atr_from_signals(signals: dict[str, object]) -> float | None:
-    """ATR(14) out of a ``compute_signals`` output, or ``None`` if absent."""
-    technical = signals.get("technical")
-    if not isinstance(technical, dict):  # pragma: no cover - the layer is always on
-        return None
-    atr_block = technical.get("atr")
-    if not isinstance(atr_block, dict):  # pragma: no cover - same
-        return None
-    last = atr_block.get("last")
-    if not isinstance(last, dict):  # pragma: no cover - same
-        return None
-    value = last.get("atr")
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None

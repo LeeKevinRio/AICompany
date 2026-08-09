@@ -110,6 +110,27 @@ def compute_signals(
     return output
 
 
+def atr_from_signals(signals: dict[str, Any]) -> float | None:
+    """ATR(14) out of a :func:`compute_signals` output, or ``None`` if absent.
+
+    Lives beside the function that produces the dict so every consumer of the
+    ATR-driven risk cap (the alert snapshot, the book-level caps) reads the same
+    field by the same rules -- a second reader with its own idea of where the
+    number sits could quietly feed a different stop distance into the cap.
+    """
+    technical = signals.get("technical")
+    if not isinstance(technical, dict):
+        return None
+    atr_block = technical.get("atr")
+    if not isinstance(atr_block, dict):
+        return None
+    last = atr_block.get("last")
+    if not isinstance(last, dict):
+        return None
+    value = last.get("atr")
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
 def compute_correlation(
     symbol_bars: dict[str, list[PriceBar]], *, min_overlap: int = 3
 ) -> dict[str, Any]:

@@ -128,6 +128,19 @@ SECTOR_UNCLASSIFIED_NOTE = (
     "這條上限的通過判定也可能建立在偏低的比率上。"
 )
 
+#: Rule 1 stated on the book as a whole: positions that could not be valued are
+#: outside every total, so every ratio built on the valued book reads high.
+#: A constant rather than an inline f-string because the book-level assembly
+#: (:func:`build_book_level_context`) states the same fact about the same books.
+UNVALUED_POSITIONS_NOTE = (
+    "組合中有 {count} 筆部位無法估值（缺價格或匯率），未計入總資產；比率會因此偏高。"
+)
+
+#: The same fact about *one* symbol's own lots. Extracted for the same reason:
+#: the book-level caps name this as the ground for leaving a symbol out of a
+#: per-symbol comparison, and the two statements must not drift apart.
+SYMBOL_UNVALUED_NOTE = "此標的有 {count} 筆持倉無法估值，未計入本標的的部位市值與成本。"
+
 #: No quote at all reached this layer for a non-TWD holding.
 NO_FX_QUOTE_NOTE = (
     "計價幣別為 {currency}，本次沒有取得任何匯率報價，"
@@ -177,6 +190,16 @@ class FxQuote:
     source: str
     status: DataStatus
     source_note: str = ""
+
+
+#: The ``symbol`` a book-level context carries (:func:`build_book_level_context`).
+#: Nothing reads it: the only caps evaluated against such a context are the ones
+#: whose verdict is about the whole book rather than about a holding -- gross
+#: exposure, and the Kelly cap that has no data source at all -- and neither
+#: sentence names a symbol. It is spelled as a visible label rather than left
+#: blank so that a value leaking into prose would be recognisable as this
+#: placeholder instead of reading like a ticker.
+BOOK_LEVEL_SYMBOL = "（整體帳本）"
 
 
 @dataclass(frozen=True)
@@ -317,30 +340,56 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
     return None, "unsupported_market"
 
 
-def _sector_rollup(summary: PortfolioSummary, sector: str) -> tuple[float, int, float]:
-    """``sector``'s TWD market value, plus what sits outside every industry.
+def _sector_rollup(summary: PortfolioSummary, sector: str) -> float:
+    """``sector``'s TWD market value across the whole book.
 
-    Returns ``(sector market value, unclassified count, unclassified market
-    value)``. Only ``ok`` valuations are summed (rule 1) and only their own TWD
+    Only ``ok`` valuations are summed (rule 1) and only their own TWD
     contribution is used, so the numerator and ``total_equity_twd`` come from
-    the same figures. The last two are what AC-12.5 requires disclosing: valued
-    holdings that belong to *some* industry the user has not named, and
-    therefore make every industry's share look smaller than it is. The value is
-    carried beside the count because the count alone does not say how much of
-    the book is missing from the ratio.
+    the same figures.
     """
     total = Decimal(0)
-    unclassified = 0
-    unclassified_value = Decimal(0)
+    for position in summary.positions:
+        if position.valuation.status != "ok" or position.market_value_twd is None:
+            continue
+        if position.sector == sector:
+            total += position.market_value_twd
+    return float(total)
+
+
+def _unclassified_rollup(summary: PortfolioSummary) -> tuple[int, float]:
+    """Valued holdings that sit outside every industry: ``(count, market value)``.
+
+    This is what AC-12.5 requires disclosing: valued holdings that belong to
+    *some* industry the user has not named, and therefore make every industry's
+    share look smaller than it is. The value is carried beside the count because
+    the count alone does not say how much of the book is missing from the ratio.
+    """
+    count = 0
+    value = Decimal(0)
     for position in summary.positions:
         if position.valuation.status != "ok" or position.market_value_twd is None:
             continue
         if position.sector is None:
-            unclassified += 1
-            unclassified_value += position.market_value_twd
-        elif position.sector == sector:
-            total += position.market_value_twd
-    return float(total), unclassified, float(unclassified_value)
+            count += 1
+            value += position.market_value_twd
+    return count, float(value)
+
+
+def _sector_unclassified_note(summary: PortfolioSummary, equity: float) -> str | None:
+    """AC-12.5's disclosure, or ``None`` when there is nothing to disclose.
+
+    The share is only stated when there is a denominator to state it against. An
+    unclassified *valued* row is itself part of ``equity``, so a non-zero count
+    with a zero book is not reachable in practice; when it is, every
+    equity-based cap already reports ``not_evaluable`` and this disclosure would
+    have nothing to qualify.
+    """
+    count, value = _unclassified_rollup(summary)
+    if not count or equity <= 0.0:
+        return None
+    return SECTOR_UNCLASSIFIED_NOTE.format(
+        count=count, amount=value, share=format_percent(value / equity)
+    )
 
 
 def self_reported_net_worth(
@@ -381,6 +430,71 @@ def self_reported_net_worth(
     )
 
 
+def _book_level_notes(
+    summary: PortfolioSummary, net_worth: SelfReportedNetWorth | None
+) -> list[str]:
+    """The notes that describe the book itself, whatever symbol is being asked about.
+
+    Assembled in one place so the per-symbol context and the book-level context
+    state the same three things about the same book: what stands in for total
+    equity, which state the exposure cap's denominator is in, and how much of
+    the book could not be valued at all.
+    """
+    notes = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
+    _, valued_count, total_count = _book_equity(summary)
+    if total_count and valued_count < total_count:
+        notes.append(UNVALUED_POSITIONS_NOTE.format(count=total_count - valued_count))
+    return notes
+
+
+def build_book_level_context(
+    summary: PortfolioSummary, *, net_worth: SelfReportedNetWorth | None = None
+) -> BookContext:
+    """The whole book as one context, for the caps that are not about a holding.
+
+    Two of the five caps ask a question with a single book-level answer: gross
+    exposure (the valued book over the reported net worth) and the Kelly cap
+    (which has no data source at all). Neither reads a per-symbol field, so
+    neither needs a symbol -- the context therefore carries
+    :data:`BOOK_LEVEL_SYMBOL` and leaves every per-symbol field unset, which is
+    exactly what makes caps 1, 2 and 4 report ``not_evaluable`` if anyone
+    evaluates them here. **They must not be read from this context**: their
+    book-level verdicts are aggregated per symbol by
+    :mod:`app.advice.book_limits`, and a ``not_evaluable`` produced by an unset
+    field would look like a fact about the user's book.
+
+    ``held`` is ``False`` and ``position_ids`` empty for the same reason: this
+    context stands for no holding.
+    """
+    equity, _, _ = _book_equity(summary)
+    notes = _book_level_notes(summary, net_worth)
+    # Attached on the same condition as in :func:`build_book_context`: the
+    # sentence qualifies an industry ratio, so it is stated when there is at
+    # least one classified valued holding for that ratio to be computed from.
+    if _has_classified_holding(summary):
+        unclassified_note = _sector_unclassified_note(summary, equity)
+        if unclassified_note is not None:
+            notes.append(unclassified_note)
+    context = PortfolioContext(
+        symbol=BOOK_LEVEL_SYMBOL,
+        total_equity_twd=equity,
+        # Same rule as the per-symbol context: the numerator is only offered
+        # when a denominator exists to divide it by (module docstring, rule 3).
+        gross_exposure_twd=equity if net_worth is not None else None,
+        net_worth=net_worth,
+        book_fully_valued=_fully_valued(summary),
+    )
+    return BookContext(context=context, held=False, notes=notes)
+
+
+def _has_classified_holding(summary: PortfolioSummary) -> bool:
+    """Whether any valued holding carries an industry category at all."""
+    return any(
+        position.valuation.status == "ok" and position.sector is not None
+        for position in summary.positions
+    )
+
+
 def build_book_context(
     summary: PortfolioSummary,
     *,
@@ -412,40 +526,23 @@ def build_book_context(
     is supplied or not, so caps 1 and 4 are unaffected by it.
     """
     fully_valued = _fully_valued(summary)
-    notes: list[str] = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
-    equity, valued_count, total_count = _book_equity(summary)
-    if total_count and valued_count < total_count:
-        notes.append(
-            f"組合中有 {total_count - valued_count} 筆部位無法估值（缺價格或匯率），"
-            "未計入總資產；比率會因此偏高。"
-        )
+    notes: list[str] = _book_level_notes(summary, net_worth)
+    equity, _, _ = _book_equity(summary)
 
     matched = _matching(summary, symbol, market)
     market_value, cost, quantity, skipped = _position_rollup(matched)
     if skipped:
-        notes.append(
-            f"此標的有 {skipped} 筆持倉無法估值，未計入本標的的部位市值與成本。"
-        )
+        notes.append(SYMBOL_UNVALUED_NOTE.format(count=skipped))
 
     sector, sector_gap = _resolve_sector(matched)
     if sector_gap == "mixed":
         notes.append(SECTOR_MIXED_DETAIL)
     sector_market_value: float | None = None
     if sector is not None:
-        sector_market_value, unclassified, unclassified_value = _sector_rollup(summary, sector)
-        # The share is only stated when there is a denominator to state it
-        # against. An unclassified *valued* row is itself part of ``equity``, so
-        # a non-zero count with a zero book is not reachable in practice; when it
-        # is, every equity-based cap already reports ``not_evaluable`` and this
-        # disclosure would have nothing to qualify.
-        if unclassified and equity > 0.0:
-            notes.append(
-                SECTOR_UNCLASSIFIED_NOTE.format(
-                    count=unclassified,
-                    amount=unclassified_value,
-                    share=format_percent(unclassified_value / equity),
-                )
-            )
+        sector_market_value = _sector_rollup(summary, sector)
+        unclassified_note = _sector_unclassified_note(summary, equity)
+        if unclassified_note is not None:
+            notes.append(unclassified_note)
 
     currencies = sorted({position.currency for position in matched})
     holding_currency = currencies[0] if len(currencies) == 1 else None

@@ -10,12 +10,16 @@ price series. ``test_advice_engine`` additionally pins the real
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from app.advice.limits import SelfReportedNetWorth
+from app.data.interface import DataStatus
+from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
+from app.portfolio.valuation import PriceInfo, Valuation
 
 _AS_OF = "2026-07-24T13:30:00+00:00"
 _BAR_COUNT = 120
@@ -173,6 +177,101 @@ def reported_net_worth(
         amount_twd=amount_twd,
         reported_at=(_REPORTED_AT - timedelta(days=age_days)).isoformat(),
         age_days=age_days,
+    )
+
+
+def book_position(
+    position_id: int,
+    symbol: str,
+    *,
+    quantity: str = "1000",
+    avg_cost: str = "500",
+    price: str | None = "600",
+    currency: str = "TWD",
+    market: str = "TW",
+    sector: str | None = None,
+    fx_to_twd: str = "1",
+) -> SummaryPosition:
+    """One valued (or deliberately unvalued) row of a book.
+
+    ``price=None`` produces the ``insufficient_data`` valuation the book layer
+    has to leave out of every total -- the state the book-level caps must not
+    read as a zero-weight holding.
+    """
+    valuation = (
+        Valuation(
+            status="insufficient_data",
+            missing=["price"],
+            price=None,
+            pnl_original=None,
+            pnl_twd=None,
+            asset_contribution_twd=None,
+            fx_contribution_twd=None,
+        )
+        if price is None
+        else Valuation(
+            status="ok",
+            missing=[],
+            price=PriceInfo(
+                value=Decimal(price),
+                as_of="2026-07-24",
+                source="fake",
+                data_status=DataStatus.FRESH,
+            ),
+            pnl_original=None,
+            pnl_twd=Decimal(0),
+            asset_contribution_twd=Decimal(0),
+            fx_contribution_twd=Decimal(0),
+        )
+    )
+    rate = Decimal(fx_to_twd)
+    value = None if price is None else Decimal(quantity) * Decimal(price) * rate
+    cost = None if price is None else Decimal(quantity) * Decimal(avg_cost) * rate
+    return SummaryPosition(
+        id=position_id,
+        symbol=symbol,
+        market=market,  # type: ignore[arg-type]
+        quantity=Decimal(quantity),
+        avg_cost=Decimal(avg_cost),
+        currency=currency,  # type: ignore[arg-type]
+        instrument_type="stock",
+        opened_at="2024-01-02",
+        sector=sector,
+        note=None,
+        valuation=valuation,
+        market_value_twd=value,
+        cost_twd=cost,
+    )
+
+
+def book_summary(*positions: SummaryPosition) -> PortfolioSummary:
+    """A summary whose ``totals`` are summed from its own ``ok`` rows.
+
+    The book-level caps read ``totals.market_value_twd`` as total equity, so a
+    fixture with hand-written totals would test the caps against a book that
+    does not exist. Here the totals are always the sum of the rows above them,
+    exactly as :func:`app.portfolio.summary.build_summary` produces them.
+    """
+    valued = [p for p in positions if p.valuation.status == "ok"]
+    market_value = sum((p.market_value_twd or Decimal(0) for p in valued), Decimal(0))
+    cost = sum((p.cost_twd or Decimal(0) for p in valued), Decimal(0))
+    return PortfolioSummary(
+        as_of="2026-07-25T00:00:00+00:00",
+        totals=Totals(
+            cost_twd=cost,
+            market_value_twd=market_value,
+            unrealized_pnl_twd=market_value - cost,
+            asset_contribution_twd=Decimal(0),
+            fx_contribution_twd=Decimal(0),
+            status=(
+                "no_data"
+                if not valued
+                else "complete"
+                if len(valued) == len(positions)
+                else "partial"
+            ),
+        ),
+        positions=list(positions),
     )
 
 

@@ -81,6 +81,7 @@ SQLite 檔（快取、持倉、設定、警示規則/事件全部共用，WAL �
 | `GET /health` | — |
 | `GET/POST/PUT/DELETE /api/positions…` | `app.positions.store` |
 | `GET /api/portfolio/summary` | `app.portfolio.summary.build_summary` |
+| `GET /api/portfolio/limits` | `limits` = `app.advice.book_limits.evaluate_book_limits`（五條上限的帳本層判定：逐檔評估後取最糟的一檔／一個產業，未納入者列在 `excluded`） |
 | `GET /api/bars/{symbol}?market=` | `bars` = 原始日線（`app.data.service.MarketDataService`）；價格為 Decimal 字串 |
 | `GET /api/signals/{symbol}?market=` | `signals` = `app.signals.service.compute_signals`；另帶 `benchmark`＝Beta 所用的比較基準指數（`app.services.index.load_market_benchmark`） |
 | `GET /api/advice/{symbol}?market=` | `advice` = `app.advice.engine.build_advice` |
