@@ -9,6 +9,7 @@ import {
   comparisonOpLabel,
   formatDateTime,
   limitSelectorLabel,
+  signalFieldLabel,
 } from "../lib/format";
 import { EMPTY_ALERT_PARAM_FORM, buildAlertParams } from "../lib/alertRuleForm";
 import { useAlerts, useCreateAlert, useDeleteAlert, useEvaluateAlertsNow } from "../lib/queries";
@@ -41,17 +42,30 @@ const EMPTY_FORM: FormState = {
   note: "",
 };
 
-/** Renders the rule's `params` as a compact, type-appropriate description. */
-function ruleDescription(rule: AlertRule): string {
+/**
+ * Renders the rule's `params` as a compact, type-appropriate description.
+ * Exported for unit testing (順手 fix, 2026-08-09 e2e finding).
+ */
+export function ruleDescription(rule: AlertRule): string {
   switch (rule.type) {
     case "price_above":
       return `價格 > ${(rule.params as { threshold: number }).threshold}`;
     case "price_below":
       return `價格 < ${(rule.params as { threshold: number }).threshold}`;
     case "signal_condition": {
-      const condition = (rule.params as { condition: { field: string; op: ComparisonOp; value?: number | null } })
-        .condition;
-      return `${condition.field} ${comparisonOpLabel(condition.op)} ${condition.value ?? "—"}`;
+      const condition = (
+        rule.params as {
+          condition: { field: string; op: ComparisonOp; value?: number | null; ref?: string | null };
+        }
+      ).condition;
+      // A `ref` condition (field-vs-field, e.g. "MA5 > MA20") has no numeric
+      // `value` — reading only `condition.value` used to render "close 大於
+      // —" for it, silently dropping which field it was compared against.
+      // Reuses `signalFieldLabel`, the same field-name lookup
+      // `EditAlertRuleModal`'s read-only block uses, rather than a second
+      // ad-hoc table.
+      const rhs = condition.ref != null ? signalFieldLabel(condition.ref) : (condition.value ?? "—");
+      return `${condition.field} ${comparisonOpLabel(condition.op)} ${rhs}`;
     }
     case "risk_limit_breach":
       return `${limitSelectorLabel((rule.params as { limit_id: LimitSelector }).limit_id)} 被觸發`;

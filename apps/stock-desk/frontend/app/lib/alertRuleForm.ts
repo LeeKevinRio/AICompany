@@ -80,6 +80,44 @@ function stableStringify(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 }
 
+/**
+ * Field-level error messages for the type-specific inputs `buildAlertParams`
+ * reads, keyed the same way `ApiError.fieldErrors` is (`"threshold"` /
+ * `"value"`) so both sources render through the same `fieldErrors` display
+ * slots. Returns `{}` whenever `buildAlertParams(form)` would succeed —
+ * deliberately re-checking the identical conditions rather than trying to
+ * derive them from `buildAlertParams`'s `null` return, so a locally-invalid
+ * value can never be reported without a message (or vice versa).
+ *
+ * Exists because a locally-invalid value used to be a silent no-op:
+ * `buildAlertParams` returning `null` made `handleSubmit` `return` before
+ * any of the existing `fieldErrors` UI could be reached — no request, no
+ * error text, the modal just sat there (FE-WIRING NEEDS_CHANGES follow-up,
+ * 2026-08-09, e2e-reported with `-5` / `abc`).
+ */
+export function validateAlertParamForm(form: AlertParamFormValues): Record<string, string> {
+  switch (form.type) {
+    case "price_above":
+    case "price_below": {
+      const threshold = parseRequiredNumber(form.threshold);
+      // Mirrors the backend's own constraint (`PriceThresholdParams.threshold:
+      // float = Field(gt=0.0)`, app/alerts/models.py) — the sentence is new
+      // client-side copy, not a quote of the backend's (untranslated,
+      // English) pydantic message, but states the same fact.
+      return threshold !== null && threshold > 0 ? {} : { threshold: "門檻價格必須是大於 0 的數字。" };
+    }
+    case "signal_condition": {
+      if (form.conditionRef !== null && form.conditionRef !== "") return {};
+      // Unlike `threshold`, the backend's `Comparison.value` (app/advice/loader.py)
+      // has no positivity constraint — only "is it a number" applies here.
+      return parseRequiredNumber(form.value) !== null ? {} : { value: "比較值必須是數字。" };
+    }
+    case "risk_limit_breach":
+    default:
+      return {};
+  }
+}
+
 /** Builds the `params` document matching `form.type`, or `null` while the type-specific input is incomplete. */
 export function buildAlertParams(form: AlertParamFormValues): AlertRuleInput["params"] | null {
   switch (form.type) {

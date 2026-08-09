@@ -14,6 +14,7 @@ export function AlertParamFields({
   values,
   onChange,
   thresholdError,
+  valueError,
 }: {
   idPrefix: string;
   values: AlertParamFormValues;
@@ -24,6 +25,7 @@ export function AlertParamFields({
   // having to line up exactly.
   onChange: (patch: Partial<AlertParamFormValues>) => void;
   thresholdError?: string;
+  valueError?: string;
 }) {
   if (values.type === "price_above" || values.type === "price_below") {
     return (
@@ -93,6 +95,7 @@ export function AlertParamFields({
             onChange={(e) => onChange({ value: e.target.value })}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
+          {valueError && <p className="mt-1 text-xs text-red-400">{valueError}</p>}
         </div>
       </div>
     );

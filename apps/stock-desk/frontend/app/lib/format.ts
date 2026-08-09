@@ -379,3 +379,18 @@ export const SIGNAL_FIELD_OPTIONS: { value: string; label: string }[] = [
   { value: "drawdown.max_drawdown", label: "區間最大回撤" },
   { value: "beta.value", label: "相對指標的 beta" },
 ];
+
+/**
+ * Looks up a signal field's display label from `SIGNAL_FIELD_OPTIONS`,
+ * falling back to the raw field key for anything not in that closed
+ * vocabulary (defensive only — every field a rule can store is validated
+ * against it server-side). Single source of truth for this lookup: reused
+ * by `EditAlertRuleModal`'s ref-condition read-only block and
+ * `AlertRulesSection`'s rule-list description (順手 fix, 2026-08-09 —
+ * the list used to read only `condition.value` for a `signal_condition`
+ * row and show "close 大於 —" for a `ref` (field-vs-field) rule instead of
+ * naming the compared-against field).
+ */
+export function signalFieldLabel(value: string): string {
+  return SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
+}

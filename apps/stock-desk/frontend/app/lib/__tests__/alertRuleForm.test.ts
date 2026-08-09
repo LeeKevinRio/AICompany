@@ -16,6 +16,7 @@ import {
   buildAlertParams,
   paramsEqual,
   parseRequiredNumber,
+  validateAlertParamForm,
   type AlertParamFormValues,
 } from "../alertRuleForm";
 
@@ -121,5 +122,72 @@ describe("paramsEqual", () => {
     const a = { condition: { field: "ma5.last", op: "gt", value: null, ref: "ma20.last" } };
     const b = { condition: { ref: "ma20.last", value: null, op: "gt", field: "ma5.last" } };
     expect(paramsEqual(a, b)).toBe(true);
+  });
+});
+
+/**
+ * FE-WIRING NEEDS_CHANGES follow-up (2026-08-09, e2e-reported): submitting
+ * with `-5` or `abc` used to fail `buildAlertParams`' guard silently — no
+ * request, no error text, `fieldErrors` never populated because nothing
+ * produced a field error to display. `validateAlertParamForm` is the fix's
+ * source of truth for those messages; it must stay in lockstep with
+ * `buildAlertParams`' own conditions (never flag a field `buildAlertParams`
+ * would actually accept, and vice versa) — every case below cross-checks
+ * both functions on the same input.
+ */
+describe("validateAlertParamForm — price_above / price_below", () => {
+  it("flags a negative threshold (the e2e-reported -5 case)", () => {
+    const f = form({ type: "price_above", threshold: "-5" });
+    expect(validateAlertParamForm(f)).toEqual({ threshold: "門檻價格必須是大於 0 的數字。" });
+    expect(buildAlertParams(f)).toBeNull();
+  });
+
+  it("flags a non-numeric threshold (the e2e-reported abc case)", () => {
+    const f = form({ type: "price_below", threshold: "abc" });
+    expect(validateAlertParamForm(f)).toEqual({ threshold: "門檻價格必須是大於 0 的數字。" });
+    expect(buildAlertParams(f)).toBeNull();
+  });
+
+  it("flags a zero threshold", () => {
+    expect(validateAlertParamForm(form({ type: "price_above", threshold: "0" }))).toEqual({
+      threshold: "門檻價格必須是大於 0 的數字。",
+    });
+  });
+
+  it("is clean (no errors) for a valid positive threshold, matching buildAlertParams succeeding", () => {
+    const f = form({ type: "price_above", threshold: "150" });
+    expect(validateAlertParamForm(f)).toEqual({});
+    expect(buildAlertParams(f)).not.toBeNull();
+  });
+});
+
+describe("validateAlertParamForm — signal_condition (value side)", () => {
+  it("flags a non-numeric value (the e2e-reported abc case)", () => {
+    const f = form({ type: "signal_condition", value: "abc", conditionRef: null });
+    expect(validateAlertParamForm(f)).toEqual({ value: "比較值必須是數字。" });
+    expect(buildAlertParams(f)).toBeNull();
+  });
+
+  it("flags a blank value", () => {
+    const f = form({ type: "signal_condition", value: "", conditionRef: null });
+    expect(validateAlertParamForm(f)).toEqual({ value: "比較值必須是數字。" });
+  });
+
+  it("does NOT flag a negative value — signal_condition.value has no positivity constraint, unlike threshold", () => {
+    const f = form({ type: "signal_condition", value: "-5", conditionRef: null });
+    expect(validateAlertParamForm(f)).toEqual({});
+    expect(buildAlertParams(f)).not.toBeNull();
+  });
+});
+
+describe("validateAlertParamForm — signal_condition (ref side) and risk_limit_breach", () => {
+  it("never flags a ref condition, regardless of the (unused) value field", () => {
+    const f = form({ type: "signal_condition", value: "abc", conditionRef: "ma20.last" });
+    expect(validateAlertParamForm(f)).toEqual({});
+    expect(buildAlertParams(f)).not.toBeNull();
+  });
+
+  it("never flags risk_limit_breach — it has no numeric field to validate", () => {
+    expect(validateAlertParamForm(form({ type: "risk_limit_breach", limitId: "gross_exposure" }))).toEqual({});
   });
 });

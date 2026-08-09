@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
-import { ALERT_TYPE_OPTIONS, MARKET_OPTIONS, SIGNAL_FIELD_OPTIONS, comparisonOpLabel } from "../lib/format";
-import { buildAlertParams, paramsEqual, type AlertParamFormValues } from "../lib/alertRuleForm";
+import { ALERT_TYPE_OPTIONS, MARKET_OPTIONS, comparisonOpLabel, signalFieldLabel } from "../lib/format";
+import {
+  buildAlertParams,
+  paramsEqual,
+  validateAlertParamForm,
+  type AlertParamFormValues,
+} from "../lib/alertRuleForm";
 import { useUpdateAlert } from "../lib/queries";
 import type { AlertRule, AlertRulePatch, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
 import { AlertParamFields } from "./AlertParamFields";
@@ -82,10 +87,6 @@ export function isRefCondition(form: Pick<AlertParamFormValues, "type" | "condit
   return form.type === "signal_condition" && form.conditionRef !== null && form.conditionRef !== "";
 }
 
-function signalFieldLabel(value: string): string {
-  return SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
-}
-
 /**
  * `此規則的比較條件為欄位對欄位，目前不支援在此表單修改。` — new user-facing
  * copy (2026-08-09 FE-WIRING follow-up), flagged for risk-compliance-officer
@@ -134,6 +135,43 @@ export function buildAlertRulePatch(form: FormState, rule: AlertRule): AlertRule
   return patch;
 }
 
+/** What `handleSubmit` should do with a given submit attempt, as data rather than side effects — see `decideAlertRuleSubmit`. */
+export type AlertRuleSubmitDecision =
+  | { kind: "local_errors"; fieldErrors: Record<string, string> }
+  | { kind: "noop" }
+  | { kind: "patch"; patch: AlertRulePatch };
+
+/**
+ * Pure decision function behind `handleSubmit`, factored out (like
+ * `buildAlertRulePatch` above it) so the FE-WIRING NEEDS_CHANGES scenario —
+ * submitting with an invalid type-specific field (`-5`, `abc`) — is
+ * unit-testable without rendering the modal.
+ *
+ * Runs `validateAlertParamForm` *before* `buildAlertRulePatch`: a locally
+ * invalid value must surface as `fieldErrors` (the same slot
+ * `ApiError.fieldErrors` renders through), never as the silent
+ * `buildAlertRulePatch` → `null` → early `return` that used to leave the
+ * modal sitting there with no request and no error text.
+ */
+export function decideAlertRuleSubmit(form: FormState, rule: AlertRule): AlertRuleSubmitDecision {
+  const fieldErrors = validateAlertParamForm(form);
+  if (Object.keys(fieldErrors).length > 0) {
+    return { kind: "local_errors", fieldErrors };
+  }
+  const patch = buildAlertRulePatch(form, rule);
+  // `validateAlertParamForm` passing means `buildAlertParams` (which it
+  // mirrors) also succeeds, so `patch` is never `null` here — the check
+  // stays as a defensive fallback rather than a `!` assertion.
+  if (patch === null) {
+    return { kind: "local_errors", fieldErrors: {} };
+  }
+  if (Object.keys(patch).length === 0) {
+    // Nothing changed — closing without a request avoids a no-op PATCH.
+    return { kind: "noop" };
+  }
+  return { kind: "patch", patch };
+}
+
 /**
  * `PATCH /api/alerts/{rule_id}` is used here rather than `PUT` (FR-1, both
  * exist on the backend — see `app/api/alerts.py`): the edit form pre-fills
@@ -148,7 +186,15 @@ export function buildAlertRulePatch(form: FormState, rule: AlertRule): AlertRule
 export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose: () => void }) {
   const [form, setForm] = useState<FormState>(() => toFormState(rule));
   const updateMutation = useUpdateAlert();
-  const fieldErrors = updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
+  // Local (client-side) validation errors from `decideAlertRuleSubmit`, kept
+  // separate from the backend-sourced ones below and merged into the same
+  // `fieldErrors` object the existing JSX already renders under each field —
+  // this is the fix for the silent-no-op bug: previously nothing set *any*
+  // error state for an invalid local value, so the (correct) `fieldErrors`
+  // rendering below was unreachable.
+  const [localFieldErrors, setLocalFieldErrors] = useState<Record<string, string>>({});
+  const apiFieldErrors = updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
+  const fieldErrors = { ...apiFieldErrors, ...localFieldErrors };
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -164,14 +210,18 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const patch = buildAlertRulePatch(form, rule);
-    if (patch === null) return;
-    if (Object.keys(patch).length === 0) {
+    const decision = decideAlertRuleSubmit(form, rule);
+    if (decision.kind === "local_errors") {
+      setLocalFieldErrors(decision.fieldErrors);
+      return;
+    }
+    setLocalFieldErrors({});
+    if (decision.kind === "noop") {
       // Nothing changed — closing without a request avoids a no-op PATCH.
       onClose();
       return;
     }
-    updateMutation.mutate({ id: rule.id, input: patch }, { onSuccess: () => onClose() });
+    updateMutation.mutate({ id: rule.id, input: decision.patch }, { onSuccess: () => onClose() });
   }
 
   return (
@@ -283,6 +333,7 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
               values={form}
               onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
               thresholdError={fieldErrors.threshold}
+              valueError={fieldErrors.value}
             />
           )}
 
