@@ -49,6 +49,12 @@ const SCANNED_FILES = [
   // 唯讀提示句是這批新加的硬編碼 JSX 文案，兩個相關檔案原本都未被掃到。
   "../../settings/EditAlertRuleModal.tsx",
   "../../settings/AlertParamFields.tsx",
+  // 代號目錄 (FR-4/5/6/7, work/stock-desk-代號目錄-PRD.md): the combobox's
+  // FR-7 degrade notices and the Q1(b) market-picker prompt are new
+  // hard-coded strings, and `PositionsTable.tsx` now renders directory
+  // company names inline — neither surface was scanned before this batch.
+  "../directorySearch.ts",
+  "../../components/PositionsTable.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
