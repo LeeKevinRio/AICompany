@@ -16,3 +16,6 @@
 !dispatch/**
 !reviews/
 !reviews/**
+# Market research reports must be tracked (market-researcher output contract).
+!research/
+!research/**
