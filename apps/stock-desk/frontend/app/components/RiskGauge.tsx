@@ -38,7 +38,7 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       name: "單一標的佔比上限",
       status: "not_evaluable",
       threshold: budget.max_position_weight,
-      reason: "總覽頁不在本頁計算單一標的佔總資產(已估值部位市值)的比重；逐檔判定請至個股頁面查看。",
+      reason: "本頁不計算單一標的佔總資產（已估值部位市值）的比重；逐檔判定請至個股頁面查看。",
     },
     {
       id: "sector_weight",
@@ -62,7 +62,7 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       // deliberately not done in this batch; until then the reason names what
       // this page does not do, not a gap in the underlying data.
       reason:
-        "總覽頁不在本頁計算總曝險的分子；第 3 條的實際判定（分母為你在設定頁自報的帳戶總淨值）請至個股頁面查看。",
+        "本頁不計算總曝險的分子；第 3 條的實際判定請至個股頁面的建議卡查看，其分母為你在設定頁自報的帳戶總淨值；若淨值未填、過久未更新，或有部位無法估值，建議卡同樣不計算，並會說明原因。",
     },
     {
       id: "per_trade_loss",
