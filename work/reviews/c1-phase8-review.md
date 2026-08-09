@@ -59,3 +59,14 @@ FR-10/11:_replay 無 look-ahead、無跨折污染;RSI 抽取純搬移有 golden 
 - 列管:§2.1 對比度留 qa-e2e;format.ts「無法評估/本頁不評估」語意偏差 FR-8 一併。
 
 結論:後端文案批 APPROVE 定稿;前端 RiskGauge 兩條必修另案。
+
+---
+
+## qa 終審 FX1+文案批(2026-08-09):PASS
+
+- FX1:TWD 同源正確,迴歸測試手算吻合(91% 部位 violated、加碼歸 None、減碼 836/1000),
+  能證明修復方向;SummaryPosition.cost_twd 純新增無破壞。
+- FR-12:四狀態判定無漏洞(混填含非 TW 在 models.py:91/csv_io.py:255 寫入層雙門擋掉);
+  fallback 有測試釘住;13 則新測試皆斷言具體行為;end-to-end 到 limits_check[].detail。
+- 三處核准註解已到位。955 tests/97.9% cov/mypy strict 本機重跑屬實。Codex 照舊降級。
+- 追蹤:§2.1 視覺弱化留 qa-e2e;_resolve_sector 不變量 docstring(low)。
