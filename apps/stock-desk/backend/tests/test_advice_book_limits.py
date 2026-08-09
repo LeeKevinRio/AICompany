@@ -14,6 +14,7 @@ from app.advice.book_limits import (
     EMPTY_BOOK_DETAIL,
     EXCLUDED_SUFFIX,
     NO_CANDIDATE_DETAILS,
+    SECTOR_UNVALUED_EXCLUSION_SUFFIX,
     UNVALUED_EXCLUSION_SUFFIX,
     WORST_SECTOR_PREFIX,
     WORST_SYMBOL_PREFIX,
@@ -24,6 +25,7 @@ from app.advice.book_limits import (
 )
 from app.advice.limits import (
     LIMIT_IDS,
+    LIMIT_NAMES,
     NET_WORTH_STALE_AFTER_DAYS,
     NO_NET_WORTH_DETAIL,
     NO_SECTOR_UNFILED_DETAIL,
@@ -341,12 +343,40 @@ def test_a_holding_with_an_unvalued_lot_is_withheld_from_every_per_symbol_cap() 
     for limit_id in ("single_position_weight", "sector_weight", "per_trade_loss"):
         cap = checks[limit_id]
         assert [entry.symbol for entry in cap.excluded] == ["2454"], limit_id
-        assert cap.excluded[0].reason == (
+    for limit_id in ("single_position_weight", "per_trade_loss"):
+        assert checks[limit_id].excluded[0].reason == (
             SYMBOL_UNVALUED_NOTE.format(count=1) + UNVALUED_EXCLUSION_SUFFIX
         ), limit_id
+    # Cap 2 says one thing more: the withheld holding is a semiconductor one, so
+    # the industry that *is* being reported may be short its value.
+    assert checks["sector_weight"].excluded[0].reason == (
+        SYMBOL_UNVALUED_NOTE.format(count=1) + SECTOR_UNVALUED_EXCLUSION_SUFFIX
+    )
     # And the holding that *was* comparable is still the one being reported.
     assert checks["single_position_weight"].worst_symbol == "2330"
     assert checks["single_position_weight"].evaluated_count == 1
+
+
+def test_the_sector_cap_discloses_that_an_exclusion_can_understate_it() -> None:
+    # The withheld holding may belong to an industry still in the comparison, so
+    # the reported industry share can be lower than the truth. That direction is
+    # the one this product may never leave implied -- and the book notes say the
+    # opposite ("偏高") about a different quantity, so it cannot lean on those.
+    checks = _report(
+        book_summary(
+            book_position(1, "2330", quantity="500", sector="半導體業"),
+            book_position(2, "2454", quantity="500", price=None, sector="半導體業"),
+        )
+    )
+    cap = checks["sector_weight"]
+    # Route (a): the verdict is still reported, with the caveat stated -- not
+    # withdrawn into not_evaluable.
+    assert cap.status != "not_evaluable"
+    assert "使該產業的佔比被低估" in cap.excluded[0].reason
+    # Cap 1 and cap 4 must not carry the sentence: their observed value belongs
+    # to the withheld holding alone, so nothing they report is understated.
+    for limit_id in ("single_position_weight", "per_trade_loss"):
+        assert "低估" not in checks[limit_id].excluded[0].reason, limit_id
 
 
 def test_a_book_nothing_could_be_valued_in_reports_no_zero_weight_pass() -> None:
@@ -375,3 +405,45 @@ def test_an_empty_book_says_there_is_nothing_to_judge_not_that_data_is_missing()
             name=checks[limit_id].name
         ), limit_id
         assert checks[limit_id].excluded == []
+
+
+def test_an_empty_book_with_a_valid_net_worth_is_no_zero_exposure_pass() -> None:
+    # A net worth on file makes cap 3 computable in principle, and with no
+    # holding the ratio comes out 0% -- which would render as a green pass on a
+    # book that was never judged. There is nothing in the numerator to judge.
+    checks = _report(book_summary(), net_worth=reported_net_worth(1_000_000.0))
+    cap = checks["gross_exposure"]
+    assert cap.status == "not_evaluable"
+    assert cap.observed is None
+    assert cap.detail == EMPTY_BOOK_DETAIL.format(name=cap.name)
+
+
+def test_an_empty_book_without_a_net_worth_keeps_the_net_worth_reason() -> None:
+    # Both gaps are real; the cap states the one it established itself rather
+    # than describing a missing net worth as a missing holding.
+    cap = _report(book_summary())["gross_exposure"]
+    assert cap.status == "not_evaluable"
+    assert cap.detail == NO_NET_WORTH_DETAIL
+
+
+# --- the aggregate sentence names no cause -----------------------------------
+
+
+def test_the_no_candidate_sentence_states_only_that_nothing_could_be_compared() -> None:
+    # AC-12.3: one gap may not be described with another gap's cause. The
+    # aggregate sentence therefore names the cap and what it had nothing of;
+    # every cause stays verbatim on the holding it belongs to, in `excluded`.
+    causes = ("估值", "產業別", "沒填", "尚未填寫", "ATR", "停損距離", "淨值", "資料")
+    for limit_id, detail in NO_CANDIDATE_DETAILS.items():
+        assert LIMIT_NAMES[limit_id] in detail
+        assert "本次不計算，回報 not_evaluable；各標的的成因逐檔列出。" in detail
+        for cause in causes:
+            assert cause not in detail, (limit_id, cause)
+
+
+def test_the_no_candidate_sentence_counts_industries_for_the_sector_cap() -> None:
+    # Cap 2 compares industries, so "no candidate" is about industries; the
+    # other two caps compare holdings.
+    assert "沒有可納入比較的產業" in NO_CANDIDATE_DETAILS["sector_weight"]
+    for limit_id in ("single_position_weight", "per_trade_loss"):
+        assert "沒有可納入比較的標的" in NO_CANDIDATE_DETAILS[limit_id], limit_id

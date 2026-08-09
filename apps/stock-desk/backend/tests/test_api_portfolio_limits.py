@@ -60,6 +60,28 @@ def test_an_empty_book_reports_every_cap_as_not_evaluable(api_harness: ApiHarnes
     assert all(check["observed"] is None for check in checks.values())
 
 
+def test_an_empty_book_with_a_net_worth_on_file_still_reports_no_exposure_pass(
+    api_harness: ApiHarness,
+) -> None:
+    # A net worth makes cap 3 computable in principle; with no holding the ratio
+    # is 0%, which must not reach the dashboard as a green pass.
+    current = api_harness.settings.load()
+    api_harness.settings.save(
+        current.model_copy(
+            update={
+                "net_worth": NetWorthSettings(
+                    total_net_worth_twd=99_000_000.0,
+                    updated_at=datetime.now(UTC).isoformat(),
+                )
+            }
+        )
+    )
+    cap = _limits(api_harness)["gross_exposure"]
+    assert cap["status"] == "not_evaluable"
+    assert cap["observed"] is None
+    assert "帳本內沒有任何持倉" in cap["detail"]
+
+
 def test_the_worst_holding_is_named_with_its_real_observed_weight(
     api_harness: ApiHarness,
 ) -> None:

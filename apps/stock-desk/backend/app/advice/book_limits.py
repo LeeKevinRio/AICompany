@@ -26,6 +26,14 @@ from:
    That is the one direction these caps must never err in (the same reasoning
    as :data:`app.advice.limits.GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL`), so the
    holding is withheld from the comparison rather than compared understated.
+   Cap 2 is the one cap where withholding a holding can understate a verdict
+   that *is* reported -- the holding may belong to an industry still in the
+   comparison -- so its exclusion sentence discloses that
+   (:data:`SECTOR_UNVALUED_EXCLUSION_SUFFIX`).
+4. **An empty book is not a book that passed.** With no holding at all there is
+   no weight, no industry and no stop-out loss to compare, and no exposure to
+   put in cap 3's numerator either: every cap that measures holdings reports
+   ``not_evaluable`` with :data:`EMPTY_BOOK_DETAIL` rather than a 0% pass.
 
 Like :mod:`app.advice.book`, this stays a pure function: the caller resolves
 prices, ATR and FX rates and hands them in, so the whole aggregation is testable
@@ -47,6 +55,7 @@ from app.advice.book import (
 )
 from app.advice.limits import (
     LIMIT_IDS,
+    LIMIT_NAMES,
     LimitCheck,
     LimitStatus,
     PortfolioContext,
@@ -83,27 +92,53 @@ EXCLUDED_SUFFIX = "另有 {count} 檔標的未納入本條上限的比較，各�
 #: Rule 3's ground, appended to the cap's own sentence about the same symbol.
 UNVALUED_EXCLUSION_SUFFIX = "本條上限的逐檔比較未納入此標的。"
 
+#: The same for cap 2, which needs one more sentence the other caps do not.
+#: Withholding a holding removes it from the numerator of *its own* industry,
+#: and that industry may well be one still being compared -- so the industry the
+#: verdict is read from can be understated. Cap 1 and cap 4 have no such
+#: exposure: their observed value belongs to the withheld holding alone. The
+#: direction is stated here, next to the holding that causes it, because the
+#: book-level notes say the opposite ("偏高") about a different quantity.
+#: 風控退修後改稿,待風控重審(2026-08-09)
+SECTOR_UNVALUED_EXCLUSION_SUFFIX = (
+    "本條上限的比較未納入此標的；此標的可能屬於已納入比較的產業，使該產業的佔比被低估。"
+)
+
 #: Nothing is held at all: there is no holding to compare, which is a different
-#: statement from "the holdings could not be judged" below.
+#: statement from "the holdings could not be judged" below. Also used by cap 3,
+#: whose exposure ratio has no numerator on an empty book.
+#: 風控核可文案,修改須重新送審(2026-08-09);用於第 3 條的路線待風控重審
 EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部位，本次不計算，回報 not_evaluable。"
 
-#: Holdings exist but not one of them could be judged against this cap. One
-#: sentence per cap, so a gap in one is never described with another's cause;
-#: the individual causes stay verbatim in ``excluded``.
-NO_CANDIDATE_DETAILS: dict[str, str] = {
-    "single_position_weight": (
-        "帳本內沒有可估值的部位，單一標的佔比上限沒有可比較的標的，"
-        "本次不計算，回報 not_evaluable；各標的的成因逐檔列出。"
-    ),
-    "sector_weight": (
-        "帳本內沒有已估值且已填產業別的持倉，單一產業佔比上限本次不計算，"
-        "回報 not_evaluable；各標的的成因逐檔列出。"
-    ),
-    "per_trade_loss": (
-        "帳本內沒有可計算停損距離的標的，單筆最大可承受虧損上限本次不計算，"
-        "回報 not_evaluable；各標的的成因逐檔列出。"
-    ),
+#: Holdings exist but not one of them could be judged against this cap. The
+#: sentence states only that the cap has nothing to compare: naming a cause here
+#: would describe every gap with one gap's reason (AC-12.3), and the causes are
+#: already carried verbatim, one per holding, in ``excluded``.
+#: 風控退修後改稿,待風控重審(2026-08-09)
+NO_CANDIDATE_DETAIL = (
+    "{name}沒有可納入比較的{unit}，本次不計算，回報 not_evaluable；各標的的成因逐檔列出。"
+)
+
+#: What each per-symbol cap compares -- cap 2 ranks industries, the other two
+#: rank holdings.
+_COMPARED_UNITS: dict[str, str] = {
+    "single_position_weight": "標的",
+    "sector_weight": "產業",
+    "per_trade_loss": "標的",
 }
+
+#: :data:`NO_CANDIDATE_DETAIL` per cap, with the cap's own name from
+#: :data:`app.advice.limits.LIMIT_NAMES` so the two tables cannot drift apart.
+NO_CANDIDATE_DETAILS: dict[str, str] = {
+    limit_id: NO_CANDIDATE_DETAIL.format(name=LIMIT_NAMES[limit_id], unit=unit)
+    for limit_id, unit in _COMPARED_UNITS.items()
+}
+
+#: The book-level caps that still have nothing to compute on an empty book: an
+#: exposure ratio with no position in the numerator is not a 0% exposure that
+#: passed, it is a ratio with nothing to measure. ``kelly_fraction`` is not one
+#: of them -- its verdict is about the budget's inputs, not about holdings.
+EMPTY_BOOK_UNCOMPUTABLE_IDS: frozenset[str] = frozenset({"gross_exposure"})
 
 #: Worst-first ordering over statuses. ``not_evaluable`` never appears in a
 #: comparison (rule 1), so it is not ranked here.
@@ -190,6 +225,19 @@ class _Candidate:
 
 
 @dataclass(frozen=True)
+class _UnvaluedSymbol:
+    """A holding rule 3 withholds, with the note that establishes why.
+
+    The per-cap suffix is attached where the exclusion is reported rather than
+    here, because cap 2 has to disclose something the other two caps do not.
+    """
+
+    symbol: str
+    market: Market
+    note: str
+
+
+@dataclass(frozen=True)
 class _Group:
     """The lots of one symbol in one market."""
 
@@ -230,23 +278,36 @@ def evaluate_book_limits(
                 book_is_empty=not groups,
             )
             if limit_id in PER_SYMBOL_LIMIT_IDS
-            else _book_level_check(index, baseline[limit_id])
+            else _book_level_check(index, baseline[limit_id], book_is_empty=not groups)
         )
         for index, limit_id in enumerate(LIMIT_IDS, start=1)
     ]
     return BookLimits(limits=limits, notes=book.notes)
 
 
-def _book_level_check(index: int, check: LimitCheck) -> BookLimitCheck:
-    """A cap whose question is about the book: its verdict travels unchanged."""
+def _book_level_check(index: int, check: LimitCheck, *, book_is_empty: bool) -> BookLimitCheck:
+    """A cap whose question is about the book: its verdict travels unchanged.
+
+    The one exception is rule 4: on an empty book a cap in
+    :data:`EMPTY_BOOK_UNCOMPUTABLE_IDS` has nothing to measure, and the context
+    would otherwise hand back a 0% that reads as a pass. A cap that is already
+    ``not_evaluable`` keeps its own reason -- it established a cause of its own
+    (an absent or stale net worth), and restating it as "no holdings" would
+    describe one gap with another's cause.
+    """
+    nothing_to_measure = (
+        book_is_empty
+        and check.id in EMPTY_BOOK_UNCOMPUTABLE_IDS
+        and check.status != "not_evaluable"
+    )
     return BookLimitCheck(
         index=index,
         limit_id=check.id,
         name=check.name,
-        status=check.status,
-        observed=check.observed,
+        status="not_evaluable" if nothing_to_measure else check.status,
+        observed=None if nothing_to_measure else check.observed,
         threshold=check.threshold,
-        detail=check.detail,
+        detail=EMPTY_BOOK_DETAIL.format(name=check.name) if nothing_to_measure else check.detail,
         worst_symbol=None,
         evaluated_count=0,
         excluded=[],
@@ -277,19 +338,18 @@ def _split_by_valuation(
     groups: list[_Group],
     prices: Mapping[tuple[str, Market], SymbolMarketInput],
     net_worth: SelfReportedNetWorth | None,
-) -> tuple[list[_Candidate], list[ExcludedSymbol]]:
+) -> tuple[list[_Candidate], list[_UnvaluedSymbol]]:
     """Split the book into comparable holdings and the ones rule 3 withholds."""
     candidates: list[_Candidate] = []
-    unvalued: list[ExcludedSymbol] = []
+    unvalued: list[_UnvaluedSymbol] = []
     for group in groups:
         skipped = sum(1 for p in group.positions if p.valuation.status != "ok")
         if skipped:
             unvalued.append(
-                ExcludedSymbol(
+                _UnvaluedSymbol(
                     symbol=group.symbol,
                     market=group.market,
-                    reason=SYMBOL_UNVALUED_NOTE.format(count=skipped)
-                    + UNVALUED_EXCLUSION_SUFFIX,
+                    note=SYMBOL_UNVALUED_NOTE.format(count=skipped),
                 )
             )
             continue
@@ -331,7 +391,7 @@ def _aggregate(
     baseline: LimitCheck,
     *,
     candidates: list[_Candidate],
-    unvalued: list[ExcludedSymbol],
+    unvalued: list[_UnvaluedSymbol],
     book_is_empty: bool,
 ) -> BookLimitCheck:
     """The worst holding's verdict for one cap, with everything left out named.
@@ -342,7 +402,14 @@ def _aggregate(
     claim about the user's book if it were reported (see
     :func:`app.advice.book.build_book_level_context`).
     """
-    excluded = list(unvalued)
+    by_sector = limit_id == "sector_weight"
+    unvalued_suffix = SECTOR_UNVALUED_EXCLUSION_SUFFIX if by_sector else UNVALUED_EXCLUSION_SUFFIX
+    excluded = [
+        ExcludedSymbol(
+            symbol=entry.symbol, market=entry.market, reason=entry.note + unvalued_suffix
+        )
+        for entry in unvalued
+    ]
     comparable: list[_Candidate] = []
     for candidate in candidates:
         check = candidate.checks[limit_id]
@@ -355,7 +422,6 @@ def _aggregate(
         else:
             comparable.append(candidate)
 
-    by_sector = limit_id == "sector_weight"
     if by_sector:
         comparable = _one_per_sector(comparable)
 
