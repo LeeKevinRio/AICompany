@@ -35,7 +35,10 @@ Three honesty rules govern what is filled in:
    category are counted into no industry at all, and the fact that some were
    left out travels with the context in ``notes`` (AC-12.5). Nothing is
    inferred from a symbol, and an unclassified book is never presented as a
-   diversified one.
+   diversified one. *Why* this symbol has no category -- nothing held, nothing
+   filed, a market with no taxonomy, or two categories on one symbol -- travels
+   with it in ``sector_gap``, because the four are different problems and only
+   this layer can tell them apart (AC-12.3).
 
 The Kelly inputs stay ``None`` for the old reason: no source produces them yet.
 
@@ -58,13 +61,23 @@ from decimal import Decimal
 
 from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
+    SECTOR_MIXED_DETAIL,
     PortfolioContext,
+    SectorGap,
     SelfReportedNetWorth,
+    format_percent,
     format_reported_at,
 )
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
+
+#: The markets whose holdings may carry an industry category at all. TWSE's
+#: taxonomy is TW-only by decision (AC-12.6, :mod:`app.positions.sectors`), and
+#: a holding outside this set is not "missing a value" -- there is nothing it
+#: could be filed under yet, which is why cap 2 says something different about
+#: it (:data:`app.advice.limits.NO_SECTOR_UNSUPPORTED_MARKET_DETAIL`).
+SECTOR_CLASSIFIED_MARKETS: frozenset[Market] = frozenset({"TW"})
 
 #: Stated on every context so the equity assumption travels with the numbers.
 EQUITY_BASIS_NOTE = (
@@ -98,20 +111,21 @@ GROSS_EXPOSURE_EXPIRED_NOTE = (
 
 #: AC-12.5: the sector ratio was computed while some holdings sat outside every
 #: industry bucket, so it is a floor rather than the whole picture -- and says so
-#: instead of quietly reporting ``passed``.
-#: TODO(risk-gate): FR-12 draft wording; risk-compliance review of the sector-cap
-#: copy is scheduled after the FR-9 batch (AC-12.7). Not final copy.
+#: instead of quietly reporting ``passed``. The count travels with the market
+#: value and the share of equity it stands for, because a number of rows hides
+#: the size of the hole: "3 筆" reads the same whether those rows are 1% or 40%
+#: of the book. The last clause is the one
+#: :data:`app.advice.limits.GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL` already makes
+#: about its own numerator -- a ``passed`` derived from an understated ratio is
+#: still an understated ratio.
+#:
+#: Wording reviewed and approved by risk-compliance on 2026-08-09 (FR-12 句 2
+#: 修正句), recorded in ``work/reviews/c1-phase8-review.md``; changing it needs a
+#: fresh review.
 SECTOR_UNCLASSIFIED_NOTE = (
-    "組合中有 {count} 筆已估值持倉未填產業別，未計入任何產業的市值合計，"
-    "單一產業佔比可能被低估。"
-)
-
-#: The same symbol held twice under two different categories: which one the
-#: industry bucket belongs to is undecidable, so the question is refused rather
-#: than answered with one of them (the mixed-currency precedent below).
-#: TODO(risk-gate): FR-12 draft wording; see AC-12.7.
-SECTOR_MIXED_NOTE = (
-    "此標的的持倉填了不只一種產業別，無法決定單一產業，單一產業佔比上限不計算。"
+    "組合中有 {count} 筆已估值持倉未填產業別，合計市值新台幣 {amount:,.0f} 元、"
+    "佔總資產 {share}，未計入任何產業的市值合計；單一產業佔比可能被低估，"
+    "這條上限的通過判定也可能建立在偏低的比率上。"
 )
 
 #: No quote at all reached this layer for a non-TWD holding.
@@ -278,41 +292,55 @@ def _position_rollup(
     )
 
 
-def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, str | None]:
-    """The symbol's industry category -> ``(sector, note)``.
+def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorGap | None]:
+    """The symbol's industry category -> ``(sector, gap)``.
 
-    ``None`` when the holdings carry no category (the normal state until the
-    user fills one in) *and* when they disagree about it; the second case gets a
-    sentence, because "you filed the same symbol under two industries" is
-    something the reader can fix, unlike simply not having stated one.
+    ``gap`` is ``None`` exactly when a category was resolved; otherwise it names
+    *which* of the four states left this symbol unclassified, so cap 2 can say
+    the one true thing about each instead of one sentence covering all four
+    (see :data:`app.advice.limits.SectorGap`). Only this layer can tell them
+    apart: it is the one that sees whether anything is held, in which market,
+    and whether the holdings agree with each other.
     """
+    if not matched:
+        return None, "no_position"
     categories = sorted({position.sector for position in matched if position.sector})
-    if not categories:
-        return None, None
     if len(categories) > 1:
-        return None, SECTOR_MIXED_NOTE
-    return categories[0], None
+        return None, "mixed"
+    if categories:
+        return categories[0], None
+    if any(position.market in SECTOR_CLASSIFIED_MARKETS for position in matched):
+        # At least one holding *could* carry a category, so naming the action is
+        # a true statement. A symbol held in both markets lands here too: the TW
+        # leg is the one that would turn the cap on.
+        return None, "unfiled"
+    return None, "unsupported_market"
 
 
-def _sector_rollup(summary: PortfolioSummary, sector: str) -> tuple[float, int]:
-    """``(TWD market value filed under ``sector``, count of unclassified rows)``.
+def _sector_rollup(summary: PortfolioSummary, sector: str) -> tuple[float, int, float]:
+    """``sector``'s TWD market value, plus what sits outside every industry.
 
-    Only ``ok`` valuations are summed (rule 1) and only their own TWD
+    Returns ``(sector market value, unclassified count, unclassified market
+    value)``. Only ``ok`` valuations are summed (rule 1) and only their own TWD
     contribution is used, so the numerator and ``total_equity_twd`` come from
-    the same figures. The second number is what AC-12.5 requires disclosing:
-    valued holdings that belong to *some* industry the user has not named, and
-    therefore make every industry's share look smaller than it is.
+    the same figures. The last two are what AC-12.5 requires disclosing: valued
+    holdings that belong to *some* industry the user has not named, and
+    therefore make every industry's share look smaller than it is. The value is
+    carried beside the count because the count alone does not say how much of
+    the book is missing from the ratio.
     """
     total = Decimal(0)
     unclassified = 0
+    unclassified_value = Decimal(0)
     for position in summary.positions:
         if position.valuation.status != "ok" or position.market_value_twd is None:
             continue
         if position.sector is None:
             unclassified += 1
+            unclassified_value += position.market_value_twd
         elif position.sector == sector:
             total += position.market_value_twd
-    return float(total), unclassified
+    return float(total), unclassified, float(unclassified_value)
 
 
 def self_reported_net_worth(
@@ -399,14 +427,25 @@ def build_book_context(
             f"此標的有 {skipped} 筆持倉無法估值，未計入本標的的部位市值與成本。"
         )
 
-    sector, sector_note = _resolve_sector(matched)
-    if sector_note is not None:
-        notes.append(sector_note)
+    sector, sector_gap = _resolve_sector(matched)
+    if sector_gap == "mixed":
+        notes.append(SECTOR_MIXED_DETAIL)
     sector_market_value: float | None = None
     if sector is not None:
-        sector_market_value, unclassified = _sector_rollup(summary, sector)
-        if unclassified:
-            notes.append(SECTOR_UNCLASSIFIED_NOTE.format(count=unclassified))
+        sector_market_value, unclassified, unclassified_value = _sector_rollup(summary, sector)
+        # The share is only stated when there is a denominator to state it
+        # against. An unclassified *valued* row is itself part of ``equity``, so
+        # a non-zero count with a zero book is not reachable in practice; when it
+        # is, every equity-based cap already reports ``not_evaluable`` and this
+        # disclosure would have nothing to qualify.
+        if unclassified and equity > 0.0:
+            notes.append(
+                SECTOR_UNCLASSIFIED_NOTE.format(
+                    count=unclassified,
+                    amount=unclassified_value,
+                    share=format_percent(unclassified_value / equity),
+                )
+            )
 
     currencies = sorted({position.currency for position in matched})
     holding_currency = currencies[0] if len(currencies) == 1 else None
@@ -447,6 +486,7 @@ def build_book_context(
         atr=atr if rate is not None else None,
         sector=sector,
         sector_market_value_twd=sector_market_value,
+        sector_gap=sector_gap,
     )
     return BookContext(
         context=context,

@@ -14,6 +14,11 @@ from app.advice.limits import (
     MAX_POSITION_WEIGHT_CEILING,
     NET_WORTH_SOFT_NOTICE_DAYS,
     NET_WORTH_STALE_AFTER_DAYS,
+    NO_SECTOR_CANDIDATE_DETAIL,
+    NO_SECTOR_DETAILS,
+    NO_SECTOR_UNFILED_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
+    SECTOR_MIXED_DETAIL,
     LimitCheck,
     PortfolioContext,
     RiskBudget,
@@ -164,9 +169,64 @@ def test_missing_sector_reads_as_an_unfilled_value_not_a_missing_field() -> None
     # AC-12.3: the two states are different problems. Since FR-12 the column
     # exists, so the reason must point at the value the user can supply and no
     # longer claim the product has no such field.
-    detail = _check(_ctx(), "sector_weight").detail
+    detail = _check(_ctx(sector_gap="unfiled"), "sector_weight").detail
     assert "沒有產業別欄位" not in detail
     assert "填" in detail  # names the action that would make the cap evaluable
+
+
+@pytest.mark.parametrize(
+    ("gap", "expected"),
+    [
+        ("no_position", NO_SECTOR_CANDIDATE_DETAIL),
+        ("unfiled", NO_SECTOR_UNFILED_DETAIL),
+        ("unsupported_market", NO_SECTOR_UNSUPPORTED_MARKET_DETAIL),
+        ("mixed", SECTOR_MIXED_DETAIL),
+    ],
+)
+def test_each_way_the_sector_is_missing_gets_its_own_sentence(gap: str, expected: str) -> None:
+    # AC-12.3 as risk-compliance settled it on 2026-08-09: four states, four
+    # sentences, none of them shared. The texts are risk-approved copy, so they
+    # are asserted verbatim rather than by keyword.
+    check = _check(_ctx(sector_gap=gap), "sector_weight")
+    assert check.status == "not_evaluable"
+    assert check.detail == expected
+    assert len({*NO_SECTOR_DETAILS.values()}) == len(NO_SECTOR_DETAILS)
+
+
+def test_a_candidate_is_not_told_to_fill_in_a_holding_it_does_not_have() -> None:
+    # Nothing is held, so there is no position to file a category on: the
+    # sentence states what was not computed and stops there.
+    detail = _check(_ctx(sector_gap="no_position"), "sector_weight").detail
+    assert "填入" not in detail
+    assert "not_evaluable" in detail
+
+
+def test_a_non_tw_holding_is_not_promised_a_cap_it_cannot_turn_on() -> None:
+    # The API answers a category on a non-TW holding with a 422 (AC-12.6), so
+    # "fill it in and this cap starts working" would be an instruction the
+    # product refuses to carry out.
+    detail = _check(_ctx(sector_gap="unsupported_market"), "sector_weight").detail
+    assert "填入" not in detail
+    assert "啟用這條上限" not in detail
+
+
+def test_mixed_categories_are_not_reported_as_an_unfilled_field() -> None:
+    # Two categories on one symbol is the opposite of "not stated"; saying the
+    # field is empty would be factually wrong, so this state reuses the mixed
+    # sentence and names the fix.
+    detail = _check(_ctx(sector_gap="mixed"), "sector_weight").detail
+    assert "尚未填寫" not in detail
+    assert "不只一種產業別" in detail
+    assert "統一為同一種產業別" in detail
+
+
+def test_an_unstated_gap_falls_back_to_what_the_context_can_show() -> None:
+    # A context assembled without the signal (the alert vocabulary's, and older
+    # callers') still gets a true sentence: the model can tell "nothing held"
+    # from "held but unclassified", and never guesses the other two.
+    candidate = _ctx(sector_gap=None, position_market_value_twd=0.0, quantity=0.0)
+    assert _check(candidate, "sector_weight").detail == NO_SECTOR_CANDIDATE_DETAIL
+    assert _check(_ctx(sector_gap=None), "sector_weight").detail == NO_SECTOR_UNFILED_DETAIL
 
 
 def test_sector_weight_passed_when_the_caller_supplies_sector_data() -> None:

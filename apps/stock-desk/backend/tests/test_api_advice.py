@@ -10,7 +10,12 @@ import pytest
 
 from app.advice.book import EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE
 from app.advice.engine import DISCLAIMER
-from app.advice.limits import NET_WORTH_STALE_AFTER_DAYS
+from app.advice.limits import (
+    NET_WORTH_STALE_AFTER_DAYS,
+    NO_SECTOR_CANDIDATE_DETAIL,
+    NO_SECTOR_UNFILED_DETAIL,
+    SECTOR_MIXED_DETAIL,
+)
 from app.api.deps import get_fx_provider
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
@@ -371,3 +376,29 @@ def test_the_sector_cap_names_the_unfilled_value_when_absent(
     detail = _sector_check(api_harness)["detail"]
     assert "沒有產業別欄位" not in detail
     assert "產業別" in detail
+    assert detail == NO_SECTOR_UNFILED_DETAIL
+
+
+def test_the_sector_cap_tells_a_candidate_and_a_holding_apart(
+    api_harness: ApiHarness,
+) -> None:
+    # AC-12.3 end to end: the state the reader is in decides the sentence that
+    # reaches ``limits_check[].detail``. Nothing is held here, so the card must
+    # not ask for a category on a position that does not exist.
+    _seed_bars(api_harness)
+    detail = _sector_check(api_harness)["detail"]
+    assert detail == NO_SECTOR_CANDIDATE_DETAIL
+    assert "填入" not in detail
+
+
+def test_the_sector_cap_says_what_two_categories_on_one_symbol_mean(
+    api_harness: ApiHarness,
+) -> None:
+    # The same symbol filed under two industries is not an empty field, and the
+    # cap's detail says so instead of asking for a value that is already there.
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload(sector="半導體業"))
+    api_harness.client.post("/api/positions", json=position_payload(sector="光電業"))
+    detail = _sector_check(api_harness)["detail"]
+    assert detail == SECTOR_MIXED_DETAIL
+    assert "尚未填寫" not in detail

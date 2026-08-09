@@ -485,6 +485,7 @@ def test_sector_stays_absent_until_the_holding_declares_one() -> None:
     book = build_book_context(_summary(_position(1, "2330")), symbol="2330", close=600.0)
     assert book.context.sector is None
     assert book.context.sector_market_value_twd is None
+    assert book.context.sector_gap == "unfiled"
     assert book.context.win_rate is None
     assert book.context.payoff_ratio is None
 
@@ -511,7 +512,28 @@ def test_unclassified_holdings_are_disclosed_as_a_possible_understatement() -> N
     )
     book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
     assert book.context.sector_market_value_twd == pytest.approx(600_000.0)
-    assert any("1 筆" in note and "未填產業別" in note for note in book.notes)
+    note = next(note for note in book.notes if "未填產業別" in note)
+    # The count alone hides the size of the hole, so the risk-approved sentence
+    # carries the market value and its share of equity as well (50,000 of the
+    # 600,000 book -- ``_summary`` fixes the total at 600,000).
+    assert "1 筆" in note
+    assert "50,000 元" in note
+    assert "8.33%" in note
+    # And it says what an understated ratio does to a ``passed`` verdict.
+    assert "通過判定" in note
+
+
+def test_the_understatement_disclosure_is_dropped_without_a_denominator() -> None:
+    # A share of nothing is not a number. Unreachable in practice (an
+    # unclassified valued row is itself part of equity), and the equity-based
+    # caps report ``not_evaluable`` here anyway.
+    summary = _summary(
+        _position(1, "2330", sector="半導體業"),
+        _position(2, "2317", quantity="500", price="100"),
+        market_value="0",
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert not any("未填產業別" in note for note in book.notes)
 
 
 def test_an_unvalued_holding_is_left_out_of_the_sector_total() -> None:
@@ -531,7 +553,10 @@ def test_one_symbol_filed_under_two_industries_yields_no_sector() -> None:
     book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
     assert book.context.sector is None
     assert book.context.sector_market_value_twd is None
+    assert book.context.sector_gap == "mixed"
     assert any("不只一種產業別" in note for note in book.notes)
+    # The note carries the fix risk-compliance asked for alongside the refusal.
+    assert any("統一為同一種產業別" in note for note in book.notes)
 
 
 def test_a_candidate_has_no_sector_to_measure() -> None:
@@ -540,6 +565,30 @@ def test_a_candidate_has_no_sector_to_measure() -> None:
     book = build_book_context(summary, symbol="2454", close=900.0, currency="TWD")
     assert book.held is False
     assert book.context.sector is None
+    assert book.context.sector_gap == "no_position"
+
+
+def test_a_holding_in_a_market_without_a_taxonomy_is_its_own_state() -> None:
+    # AC-12.6: TWSE categories are TW-only, so a US holding is not "missing a
+    # value" -- there is nothing it could be filed under yet, and cap 2 must not
+    # tell its owner to fill one in (the API would answer that with a 422).
+    # Covered here rather than in ``test_api_advice`` because that harness has
+    # no US price source, so a US card never gets built there.
+    summary = _summary(_position(1, "AAPL", market="US", currency="USD", fx_to_twd="31"))
+    book = build_book_context(summary, symbol="AAPL", market="US", close=200.0)
+    assert book.context.sector is None
+    assert book.context.sector_gap == "unsupported_market"
+
+
+def test_a_symbol_held_in_both_markets_keeps_the_actionable_state() -> None:
+    # The TW leg is the one that would turn the cap on, so the sentence that
+    # names the action is the true one here.
+    summary = _summary(
+        _position(1, "2330", market="TW"),
+        _position(2, "2330", market="US", currency="USD", fx_to_twd="31"),
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0)
+    assert book.context.sector_gap == "unfiled"
 
 
 def test_book_imports_no_adapter() -> None:

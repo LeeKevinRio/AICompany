@@ -109,17 +109,61 @@ MAX_GROSS_EXPOSURE_REASON = "此處容許適度槓桿，但不容許 2 倍的總
 NET_WORTH_STALE_AFTER_DAYS = 30
 NET_WORTH_SOFT_NOTICE_DAYS = 7
 
-#: AC-12.3: the two states this cap can be missing in are different problems and
-#: must not share a sentence. Before FR-12 the field itself did not exist ("持倉
-#: 資料目前沒有產業別欄位"); now it does, and what is missing is a *value the user
-#: can supply*, so the reason names the action instead of describing a product
-#: limitation that is no longer true.
-#: TODO(risk-gate): FR-12 draft wording; risk-compliance review of the sector-cap
-#: copy is scheduled after the FR-9 batch (AC-12.7). Not final copy.
-NO_SECTOR_DETAIL = (
-    "此標的尚未填寫產業別（未持有或持倉未填），這條上限未實際檢查。"
+#: AC-12.3: the states this cap can be missing an industry in are different
+#: problems and must not share a sentence. ``sector is None`` covers four of
+#: them, and only one is fixed by filing a value:
+#:
+#: * ``no_position`` -- nothing is held, so there is no position to classify;
+#: * ``unfiled`` -- a TW holding carries no category yet (the actionable one);
+#: * ``unsupported_market`` -- the holding is in a market this product has no
+#:   taxonomy for. Telling its owner to "fill the industry in" would point at a
+#:   write the API answers with a 422 (:mod:`app.positions.sectors`), so that
+#:   promise is absent from this sentence on purpose;
+#: * ``mixed`` -- the same symbol was filed under two categories, which is not
+#:   "not stated" at all, so it reuses :data:`SECTOR_MIXED_NOTE` rather than
+#:   telling the user they left a field empty.
+#:
+#: The four are told apart by :attr:`PortfolioContext.sector_gap`, which the
+#: book adapter sets: this module never infers a market or a holding.
+#:
+#: Wording reviewed and approved by risk-compliance on 2026-08-09 (FR-12 句 1
+#: 修正句), recorded in ``work/reviews/c1-phase8-review.md``. These four
+#: sentences are risk-approved copy: changing any of them needs a fresh review.
+SectorGap = Literal["no_position", "unfiled", "unsupported_market", "mixed"]
+
+NO_SECTOR_CANDIDATE_DETAIL = (
+    "此標的目前沒有持倉，單一產業佔比上限沒有可分類的部位，本次不計算，回報 not_evaluable。"
+)
+NO_SECTOR_UNFILED_DETAIL = (
+    "此標的的持倉尚未填寫產業別，單一產業佔比上限本次不計算，回報 not_evaluable。"
     "可在持倉編輯或 CSV 匯入填入台灣證交所產業別後啟用這條上限。"
 )
+NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
+    "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
+    "尚未決定其他市場的分類方式，單一產業佔比上限本次不計算，回報 not_evaluable。"
+)
+
+#: The same symbol held twice under two different categories: which one the
+#: industry bucket belongs to is undecidable, so the question is refused rather
+#: than answered with one of them (the mixed-currency precedent in
+#: :mod:`app.advice.book`). Approved verbatim by risk-compliance on 2026-08-09
+#: (FR-12 句 3), with the guidance sentence below added at their own suggestion;
+#: it lives here rather than in ``book.py`` because cap 2's ``detail`` says the
+#: same thing as the context note and the two must not drift apart.
+SECTOR_MIXED_NOTE = (
+    "此標的的持倉填了不只一種產業別，無法決定單一產業，單一產業佔比上限不計算。"
+)
+SECTOR_MIXED_GUIDANCE = "請將同一標的的持倉統一為同一種產業別後恢復計算。"
+SECTOR_MIXED_DETAIL = SECTOR_MIXED_NOTE + SECTOR_MIXED_GUIDANCE
+
+#: One sentence per state, so a new state cannot silently fall back to another
+#: state's claim.
+NO_SECTOR_DETAILS: dict[SectorGap, str] = {
+    "no_position": NO_SECTOR_CANDIDATE_DETAIL,
+    "unfiled": NO_SECTOR_UNFILED_DETAIL,
+    "unsupported_market": NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
+    "mixed": SECTOR_MIXED_DETAIL,
+}
 
 #: AC-9.2: what cap 3 said before FR-9 existed, kept verbatim as the opening
 #: sentence so a user who never entered a net worth sees no change at all, with
@@ -383,6 +427,12 @@ class PortfolioContext(BaseModel):
     #: naming that specific gap.
     sector: str | None = None
     sector_market_value_twd: float | None = Field(default=None, ge=0.0)
+    #: Which of the four ways a category can be missing applies here, set by
+    #: :func:`app.advice.book.build_book_context` -- the only layer that can see
+    #: the holdings behind the symbol and the market they sit in. ``None`` means
+    #: the caller did not say, and cap 2 then falls back to the single thing
+    #: this model can establish on its own (see :func:`_inferred_sector_gap`).
+    sector_gap: SectorGap | None = None
     #: Kelly inputs. No source produces them yet; absent -> ``not_evaluable``.
     win_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     payoff_ratio: float | None = Field(default=None, gt=0.0)
@@ -489,7 +539,13 @@ def atr_max_shares(budget: RiskBudget, ctx: PortfolioContext) -> float | None:
     return budget.max_loss_per_trade * ctx.total_equity_twd / stop_distance_twd
 
 
-def _pct(value: float) -> str:
+def format_percent(value: float) -> str:
+    """A ratio as a percentage, in the one shape every disclosure prints it in.
+
+    Public because :mod:`app.advice.book` states a share of total equity in its
+    own notes: two definitions of "how a percentage looks" would drift, and the
+    reader sees both strings on the same card.
+    """
     return f"{value * 100:.2f}%"
 
 
@@ -506,24 +562,44 @@ def _check_single_position_weight(budget: RiskBudget, ctx: PortfolioContext) -> 
     if _breaches(weight, threshold):
         return (
             "violated",
-            f"{ctx.symbol} 佔總資產 {_pct(weight)}，已達或超過上限 {_pct(threshold)}。",
+            f"{ctx.symbol} 佔總資產 {format_percent(weight)}，"
+            f"已達或超過上限 {format_percent(threshold)}。",
             weight,
             threshold,
         )
     return (
         "passed",
-        f"{ctx.symbol} 佔總資產 {_pct(weight)}，低於上限 {_pct(threshold)}。",
+        f"{ctx.symbol} 佔總資產 {format_percent(weight)}，低於上限 {format_percent(threshold)}。",
         weight,
         threshold,
     )
 
 
+def _inferred_sector_gap(ctx: PortfolioContext) -> SectorGap:
+    """The state to report when the caller supplied no ``sector_gap``.
+
+    Every context the product builds carries the signal (``app.advice.book``
+    sets it on all four states), so this is the fallback for a context assembled
+    by hand -- the alert vocabulary's bare context, and tests. Only the two
+    states this model can establish from its own fields are reachable: a book
+    with nothing in this symbol, and a holding with no category. It never
+    guesses ``unsupported_market`` (the market is not a field here) nor
+    ``mixed`` (that is a fact about several holdings), because either guess
+    would put a claim about the user's book into a sentence.
+    """
+    held = ctx.position_market_value_twd
+    if (held is None or held <= 0.0) and not ctx.quantity:
+        return "no_position"
+    return "unfiled"
+
+
 def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResult:
     threshold = budget.max_sector_weight
     if ctx.sector is None or ctx.sector_market_value_twd is None:
+        gap = ctx.sector_gap if ctx.sector_gap is not None else _inferred_sector_gap(ctx)
         return (
             "not_evaluable",
-            NO_SECTOR_DETAIL,
+            NO_SECTOR_DETAILS[gap],
             None,
             threshold,
         )
@@ -533,13 +609,15 @@ def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResu
     if _breaches(weight, threshold):
         return (
             "violated",
-            f"{ctx.sector} 產業佔總資產 {_pct(weight)}，已達或超過上限 {_pct(threshold)}。",
+            f"{ctx.sector} 產業佔總資產 {format_percent(weight)}，"
+            f"已達或超過上限 {format_percent(threshold)}。",
             weight,
             threshold,
         )
     return (
         "passed",
-        f"{ctx.sector} 產業佔總資產 {_pct(weight)}，低於上限 {_pct(threshold)}。",
+        f"{ctx.sector} 產業佔總資產 {format_percent(weight)}，"
+        f"低於上限 {format_percent(threshold)}。",
         weight,
         threshold,
     )
@@ -607,15 +685,15 @@ def _check_gross_exposure(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     if _breaches(exposure, threshold):
         return (
             "violated",
-            f"組合總曝險 {_pct(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
-            f"已達或超過上限 {_pct(threshold)}。{disclosure}",
+            f"組合總曝險 {format_percent(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
+            f"已達或超過上限 {format_percent(threshold)}。{disclosure}",
             exposure,
             threshold,
         )
     return (
         "passed",
-        f"組合總曝險 {_pct(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
-        f"低於上限 {_pct(threshold)}。{disclosure}",
+        f"組合總曝險 {format_percent(exposure)}（已估值部位市值合計 ÷ 自報帳戶總淨值），"
+        f"低於上限 {format_percent(threshold)}。{disclosure}",
         exposure,
         threshold,
     )
@@ -638,14 +716,15 @@ def _check_per_trade_loss(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     if _breaches(loss_ratio, threshold):
         return (
             "violated",
-            f"{basis}，觸及停損時的損失約佔總資產 {_pct(loss_ratio)}，"
-            f"已達或超過上限 {_pct(threshold)}。",
+            f"{basis}，觸及停損時的損失約佔總資產 {format_percent(loss_ratio)}，"
+            f"已達或超過上限 {format_percent(threshold)}。",
             loss_ratio,
             threshold,
         )
     return (
         "passed",
-        f"{basis}，觸及停損時的損失約佔總資產 {_pct(loss_ratio)}，低於上限 {_pct(threshold)}。",
+        f"{basis}，觸及停損時的損失約佔總資產 {format_percent(loss_ratio)}，"
+        f"低於上限 {format_percent(threshold)}。",
         loss_ratio,
         threshold,
     )
@@ -664,18 +743,23 @@ def _check_kelly_fraction(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     if weight is None:
         return ("not_evaluable", "缺少總資產或部位市值，無法比較 Kelly 部位上限。", None, allowed)
     detail_head = (
-        f"以勝率 {_pct(ctx.win_rate)}、盈虧比 {ctx.payoff_ratio:g} 計算，"
-        f"{budget.kelly_fraction_cap:g} 分數 Kelly 與 {_pct(budget.kelly_position_cap)} "
-        f"硬上限取小後為 {_pct(allowed)}"
+        f"以勝率 {format_percent(ctx.win_rate)}、盈虧比 {ctx.payoff_ratio:g} 計算，"
+        f"{budget.kelly_fraction_cap:g} 分數 Kelly 與 {format_percent(budget.kelly_position_cap)} "
+        f"硬上限取小後為 {format_percent(allowed)}"
     )
     if _breaches(weight, allowed):
         return (
             "violated",
-            f"{detail_head}，目前佔比 {_pct(weight)} 已達或超過該上限。",
+            f"{detail_head}，目前佔比 {format_percent(weight)} 已達或超過該上限。",
             weight,
             allowed,
         )
-    return ("passed", f"{detail_head}，目前佔比 {_pct(weight)} 低於該上限。", weight, allowed)
+    return (
+        "passed",
+        f"{detail_head}，目前佔比 {format_percent(weight)} 低於該上限。",
+        weight,
+        allowed,
+    )
 
 
 _CHECKS: dict[str, Callable[[RiskBudget, PortfolioContext], CheckResult]] = {
