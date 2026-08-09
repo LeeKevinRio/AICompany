@@ -171,3 +171,11 @@
   「證券目錄尚未同步,僅支援代號直達。」;降級提示行 neutral-500(3.9:1)須升 400。
 - 列管:設定頁同步說明區塊(補後句①可擴回,另審)、Q3 無 market 參數時用 resolve 結果、
   _escape_like 專屬測試、aria-haspopup、批次 resolve 端點、NavBar 元件層級整合測試。
+
+## 證券目錄批收官(2026-08-09)
+
+- 三項必修修復 `cebb26b`:qa 微複審 PASS(三條導頁路徑皆經 cancel、7 項 decideSubmit 測試
+  含 error 分支、SYMBOL_PATTERN 搬家無邏輯變動);風控兩項 required 經協調層逐字驗證
+  (核可句 directorySearch.ts:76、提示行 neutral-400)。
+- **證券目錄功能全批結案**。待 CEO 本機:跑 `python -m app.directory.sync` 首次同步
+  (順驗 TWSE/TPEx OpenAPI 推斷 schema),之後實測搜尋體驗。
