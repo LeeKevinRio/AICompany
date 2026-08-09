@@ -49,33 +49,50 @@ function LimitBar({ check }: { check: BookLimitCheck }) {
   );
 }
 
-/** Rule 2 of `app/advice/book_limits.py`: what was left out travels with the verdict, reason verbatim. */
+/**
+ * Rule 2 of `app/advice/book_limits.py`: what was left out travels with the
+ * verdict, reason verbatim.
+ *
+ * 風控快審 FR-8 八句（2026-08-09，work/reviews/股數區間文案裁決.md）UI 附帶條件：
+ * excluded 與判定句同層級可見，不得摺疊——不可用 `<details>` 收合；有 excluded
+ * 時不得只渲染綠色通過，未納入檔數與狀態同視覺層級（見 `LimitGaugeItem` 標頭徽章）。
+ */
 function ExcludedList({ excluded }: { excluded: BookLimitCheck["excluded"] }) {
   if (excluded.length === 0) return null;
   return (
-    <details className="mt-2 text-xs text-neutral-500">
-      <summary className="cursor-pointer text-neutral-400">未納入的標的（{excluded.length}）</summary>
-      <ul className="mt-2 list-disc space-y-1 pl-5">
+    <div className="mt-2 rounded-md border border-amber-900/40 bg-amber-950/10 p-2">
+      <p className="text-xs font-semibold text-amber-300">未納入的標的（{excluded.length}）</p>
+      <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-neutral-400">
         {excluded.map((item) => (
           <li key={`${item.symbol}-${item.market}`}>
             {item.symbol}（{marketLabel(item.market)}）：{item.reason}
           </li>
         ))}
       </ul>
-    </details>
+    </div>
   );
 }
 
 function LimitGaugeItem({ check }: { check: BookLimitCheck }) {
+  const hasExcluded = check.excluded.length > 0;
   return (
     <li className="rounded-md border border-neutral-800 p-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium text-neutral-100">
           第 {check.index} 條・{check.name}
         </span>
-        <span className={`text-xs font-semibold ${limitStatusColorClass(check.status)}`}>
-          {limitStatusLabel(check.status)}
-        </span>
+        <div className="flex items-center gap-2">
+          {/* 風控 UI 附帶條件：未納入檔數與狀態同視覺層級，故與狀態文字同排、
+              同字級呈現，而非只留在下方的清單裡。 */}
+          {hasExcluded && (
+            <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs font-semibold text-amber-300">
+              未納入 {check.excluded.length} 檔
+            </span>
+          )}
+          <span className={`text-xs font-semibold ${limitStatusColorClass(check.status)}`}>
+            {limitStatusLabel(check.status)}
+          </span>
+        </div>
       </div>
       <LimitBar check={check} />
       {/* §2.1 對比度裁量（沿用既有升級）：這句是每條上限唯一的敘述文字，不得低於
