@@ -111,8 +111,17 @@ export interface SummaryPositionItem {
   currency: Currency;
   instrument_type: InstrumentType;
   opened_at: string | null;
+  //: TWSE industry category, or `null` when the user did not state one
+  //: (FR-12). Never inferred from the symbol (backend `SummaryPosition.sector`).
+  sector: string | null;
   note: string | null;
   valuation: PositionValuation;
+  //: This position's own contribution to `totals.market_value_twd`, or `null`
+  //: when it could not be valued (backend `SummaryPosition.market_value_twd`).
+  market_value_twd: string | null;
+  //: The matching contribution to `totals.cost_twd`, or `null` on the same
+  //: terms (backend `SummaryPosition.cost_twd`).
+  cost_twd: string | null;
 }
 
 export type SummaryStatus = "complete" | "partial" | "no_data";

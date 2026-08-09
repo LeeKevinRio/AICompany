@@ -16,12 +16,15 @@ interface PortfolioLimitGauge {
 
 /**
  * Book-level view of the same five caps `app.advice.limits.evaluate_limits`
- * checks per symbol (verified source). None of them can be honestly computed
- * from `GET /api/portfolio/summary` alone — that endpoint has no per-position
- * market value in TWD, no sector field, no per-symbol ATR, and no win-rate/
- * payoff-ratio source (all confirmed absent by reading
- * `app/portfolio/summary.py` / `app/portfolio/valuation.py` /
- * `app/positions/models.py`). Rather than approximate a number that would
+ * checks per symbol (verified source). This page does not perform the
+ * per-symbol computation each cap needs (rollup per position into a sector /
+ * exposure / ATR / win-rate verdict) — that computation is done, deliberately,
+ * only at `/position/[symbol]`. `GET /api/portfolio/summary` does carry
+ * `sector` and `market_value_twd` per position (`app/portfolio/summary.py`),
+ * and no per-symbol ATR or win-rate/payoff-ratio source exists anywhere
+ * (confirmed by reading `app/portfolio/valuation.py` / `app/positions/models.py`);
+ * either way, aggregating those into a book-level verdict on this page is
+ * FR-8, not done in this batch. Rather than approximate a number that would
  * misrepresent real risk, every cap here is reported `not_evaluable` with its
  * threshold (from settings) and the specific reason — the risk-compliance
  * requirement is to never let a gap in computability read as "passed". The
@@ -35,14 +38,15 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       name: "單一標的佔比上限",
       status: "not_evaluable",
       threshold: budget.max_position_weight,
-      reason: "總覽頁未提供各部位台幣市值明細，無法計算單一標的佔總資產(已估值部位市值)比重；請至個股頁面查看。",
+      reason: "總覽頁不在本頁計算單一標的佔總資產(已估值部位市值)的比重；逐檔判定請至個股頁面查看。",
     },
     {
       id: "sector_weight",
       name: "單一產業佔比上限",
       status: "not_evaluable",
       threshold: budget.max_sector_weight,
-      reason: "持倉資料目前沒有產業別欄位，這條上限尚未能被檢查（與個股建議卡狀態一致）。",
+      reason:
+        "總覽頁不逐檔評估這條上限：本頁未彙總各部位的產業別與台幣市值。實際判定請至個股頁面的建議卡查看；若該標的未填產業別、為非台股、或同一標的填了不只一種產業別，建議卡會說明不計算的原因。",
     },
     {
       id: "gross_exposure",
@@ -51,12 +55,14 @@ function buildGauges(budget: RiskBudgetSettings): PortfolioLimitGauge[] {
       threshold: budget.max_gross_exposure,
       // FR-9 gave this cap a denominator (the net worth the user reports on the
       // settings page), so the old reason — "we cannot know your total" — became
-      // false the moment that field shipped. What is still missing *here* is the
-      // numerator: this page has no per-position TWD market value. Backing this
-      // gauge with the real verdicts is FR-8 and deliberately not done in this
-      // batch; until then the reason has to name the gap that actually remains.
+      // false the moment that field shipped. The numerator is knowable too:
+      // `GET /api/portfolio/summary` carries `market_value_twd` per position
+      // (`app/portfolio/summary.py`). What this page does not do is aggregate
+      // it into a book-level verdict — that aggregation is FR-8 and
+      // deliberately not done in this batch; until then the reason names what
+      // this page does not do, not a gap in the underlying data.
       reason:
-        "總覽頁未提供各部位台幣市值明細，無法在此頁計算總曝險的分子；第 3 條的實際判定（分母為你在設定頁自報的帳戶總淨值）請至個股頁面查看。",
+        "總覽頁不在本頁計算總曝險的分子；第 3 條的實際判定（分母為你在設定頁自報的帳戶總淨值）請至個股頁面查看。",
     },
     {
       id: "per_trade_loss",
