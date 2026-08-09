@@ -41,6 +41,10 @@ const SCANNED_FILES = [
   "../../components/RiskGauge.tsx",
   "../../position/[symbol]/LimitsCheckList.tsx",
   "../operationSummary.ts",
+  // 風控快審 2026-08-09：掃描覆蓋是文案核可前提，補上兩個原本未被掃到的
+  // 持倉/警示規則表面。
+  "../../components/EditPositionModal.tsx",
+  "../../settings/AlertRulesSection.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

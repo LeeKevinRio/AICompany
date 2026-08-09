@@ -93,7 +93,7 @@ export function AlertRulesSection() {
           disabled={evaluateMutation.isPending}
           className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
         >
-          {evaluateMutation.isPending ? "檢查中…" : "立即檢查一次"}
+          {evaluateMutation.isPending ? "檢查中…" : "手動檢查一次"}
         </button>
       </div>
       {evaluateMutation.isSuccess && (
