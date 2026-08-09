@@ -83,3 +83,12 @@
 - 風控單句快審:APPROVE(誠實邊界過、視覺未弱化、有 role=note;suggested:補「其他欄位仍可
   修改」句,列管)。
 - 下一關:qa-e2e 實機驗收(三新功能+ref 唯讀顯示+兩項列管視覺條款)。
+
+## qa-e2e 環境缺口(2026-08-09)
+
+- 本雲端環境未配 preview 工具與 Bash 給 qa-e2e agent,無法實機驗收;其拒絕以 code 推測
+  冒充實測,行為正確。
+- Deviation(協調層決定):改派通用執行代理按 qa-e2e 人設+驗收清單,以預裝 Chromium+
+  Playwright 實跑(工具限制下的等效實機驗收);qa-e2e 本尊環境問題另列基礎設施待辦。
+- 附帶發現:README「離線示範模式規劃中」已落後實作(app/demo/seed.py CLI 存在),
+  文件更新列管交 tech-writer。
