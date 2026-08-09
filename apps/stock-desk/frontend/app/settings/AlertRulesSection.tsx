@@ -4,18 +4,18 @@ import { useState } from "react";
 import { ApiError } from "../lib/api";
 import {
   ALERT_TYPE_OPTIONS,
-  COMPARISON_OP_OPTIONS,
-  LIMIT_SELECTOR_OPTIONS,
   MARKET_OPTIONS,
-  SIGNAL_FIELD_OPTIONS,
   alertTypeLabel,
   comparisonOpLabel,
   formatDateTime,
   limitSelectorLabel,
 } from "../lib/format";
+import { EMPTY_ALERT_PARAM_FORM, buildAlertParams } from "../lib/alertRuleForm";
 import { useAlerts, useCreateAlert, useDeleteAlert, useEvaluateAlertsNow } from "../lib/queries";
 import type { AlertRule, AlertRuleInput, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
 import { SkeletonBlock } from "../components/SkeletonBlock";
+import { AlertParamFields } from "./AlertParamFields";
+import { EditAlertRuleModal } from "./EditAlertRuleModal";
 
 interface FormState {
   type: AlertType;
@@ -30,14 +30,9 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
-  type: "price_above",
+  ...EMPTY_ALERT_PARAM_FORM,
   symbol: "",
   market: "TW",
-  threshold: "",
-  field: SIGNAL_FIELD_OPTIONS[0]?.value ?? "close",
-  op: "gt",
-  value: "",
-  limitId: "any",
   note: "",
 };
 
@@ -60,31 +55,13 @@ function ruleDescription(rule: AlertRule): string {
   }
 }
 
-function buildParams(form: FormState): AlertRuleInput["params"] | null {
-  switch (form.type) {
-    case "price_above":
-    case "price_below": {
-      const threshold = Number(form.threshold);
-      return Number.isFinite(threshold) && threshold > 0 ? { threshold } : null;
-    }
-    case "signal_condition": {
-      const value = Number(form.value);
-      if (!Number.isFinite(value)) return null;
-      return { condition: { field: form.field, op: form.op, value } };
-    }
-    case "risk_limit_breach":
-      return { limit_id: form.limitId };
-    default:
-      return null;
-  }
-}
-
 export function AlertRulesSection() {
   const alerts = useAlerts(true);
   const createMutation = useCreateAlert();
   const deleteMutation = useDeleteAlert();
   const evaluateMutation = useEvaluateAlertsNow();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const fieldErrors = createMutation.error instanceof ApiError ? createMutation.error.fieldErrors : {};
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -93,7 +70,7 @@ export function AlertRulesSection() {
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const params = buildParams(form);
+    const params = buildAlertParams(form);
     if (params === null) return;
     const payload: AlertRuleInput = {
       type: form.type,
@@ -191,94 +168,12 @@ export function AlertRulesSection() {
           </div>
         </div>
 
-        {(form.type === "price_above" || form.type === "price_below") && (
-          <div className="max-w-xs">
-            <label htmlFor="alert-threshold" className="block text-sm text-neutral-400">
-              門檻價格（原幣）
-            </label>
-            <input
-              id="alert-threshold"
-              required
-              inputMode="decimal"
-              value={form.threshold}
-              onChange={(e) => updateField("threshold", e.target.value)}
-              className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-            />
-            {fieldErrors.threshold && <p className="mt-1 text-xs text-red-400">{fieldErrors.threshold}</p>}
-          </div>
-        )}
-
-        {form.type === "signal_condition" && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div>
-              <label htmlFor="alert-field" className="block text-sm text-neutral-400">
-                訊號欄位
-              </label>
-              <select
-                id="alert-field"
-                value={form.field}
-                onChange={(e) => updateField("field", e.target.value)}
-                className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-              >
-                {SIGNAL_FIELD_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="alert-op" className="block text-sm text-neutral-400">
-                條件
-              </label>
-              <select
-                id="alert-op"
-                value={form.op}
-                onChange={(e) => updateField("op", e.target.value as ComparisonOp)}
-                className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-              >
-                {COMPARISON_OP_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="alert-value" className="block text-sm text-neutral-400">
-                比較值
-              </label>
-              <input
-                id="alert-value"
-                required
-                inputMode="decimal"
-                value={form.value}
-                onChange={(e) => updateField("value", e.target.value)}
-                className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-              />
-            </div>
-          </div>
-        )}
-
-        {form.type === "risk_limit_breach" && (
-          <div className="max-w-xs">
-            <label htmlFor="alert-limit" className="block text-sm text-neutral-400">
-              風險上限
-            </label>
-            <select
-              id="alert-limit"
-              value={form.limitId}
-              onChange={(e) => updateField("limitId", e.target.value as LimitSelector)}
-              className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-            >
-              {LIMIT_SELECTOR_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        <AlertParamFields
+          idPrefix="alert"
+          values={form}
+          onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+          thresholdError={fieldErrors.threshold}
+        />
 
         <button
           type="submit"
@@ -321,6 +216,9 @@ export function AlertRulesSection() {
                     條件
                   </th>
                   <th scope="col" className="px-3 py-2 font-medium">
+                    狀態
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-medium">
                     建立時間
                   </th>
                   <th scope="col" className="px-3 py-2 font-medium">
@@ -336,18 +234,30 @@ export function AlertRulesSection() {
                     </td>
                     <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
                     <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
+                    <td className="px-3 py-2 text-neutral-300">
+                      {rule.enabled ? "啟用中" : "已停用"}
+                    </td>
                     <td className="px-3 py-2 text-xs text-neutral-500">
                       {formatDateTime(rule.created_at)}
                     </td>
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => deleteMutation.mutate(rule.id)}
-                        disabled={deleteMutation.isPending}
-                        className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
-                      >
-                        刪除
-                      </button>
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setEditingRule(rule)}
+                          className="text-xs text-sky-400 underline hover:text-sky-300"
+                        >
+                          編輯
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteMutation.mutate(rule.id)}
+                          disabled={deleteMutation.isPending}
+                          className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
+                        >
+                          刪除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -356,6 +266,8 @@ export function AlertRulesSection() {
           </div>
         )}
       </div>
+
+      {editingRule && <EditAlertRuleModal rule={editingRule} onClose={() => setEditingRule(null)} />}
     </section>
   );
 }

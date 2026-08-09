@@ -946,6 +946,24 @@ export interface AlertRule extends AlertRuleInput {
   updated_at: string;
 }
 
+/**
+ * Backend `AlertRulePatch` (app/alerts/models.py, verified) — the
+ * `PATCH /api/alerts/{rule_id}` body: any subset of the user fields, per
+ * *field* not per document (FR-1 AC-1.2). `note` and `clear_note` together
+ * decide the note's fate: omit both to leave it alone, set `note` to replace
+ * it, or set `clear_note: true` to remove it — sending both lets
+ * `clear_note` win (mirrors the backend's `apply_to`, AC-1.6 wording).
+ */
+export interface AlertRulePatch {
+  type?: AlertType;
+  symbol?: string;
+  market?: Market;
+  params?: AlertParams;
+  enabled?: boolean;
+  note?: string | null;
+  clear_note?: boolean;
+}
+
 /** Backend `AlertRuleListResponse` (app/api/alerts.py). */
 export interface AlertRuleListResponse {
   items: AlertRule[];

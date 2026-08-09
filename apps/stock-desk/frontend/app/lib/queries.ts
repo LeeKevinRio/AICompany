@@ -20,12 +20,14 @@ import {
   getSettings,
   getSignals,
   importPositionsCsv,
+  patchAlert,
   runBacktest,
   updatePosition,
   updateSettings,
 } from "./api";
 import type {
   AlertRuleInput,
+  AlertRulePatch,
   AppSettingsPatch,
   BacktestRequest,
   CreatePositionInput,
@@ -202,6 +204,16 @@ export function useCreateAlert() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: AlertRuleInput) => createAlert(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["alerts"] });
+    },
+  });
+}
+
+export function useUpdateAlert() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number; input: AlertRulePatch }) => patchAlert(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["alerts"] });
     },

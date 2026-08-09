@@ -6,6 +6,7 @@ import type {
   AlertRule,
   AlertRuleInput,
   AlertRuleListResponse,
+  AlertRulePatch,
   AppSettingsPatch,
   BacktestRequest,
   BacktestResponse,
@@ -217,6 +218,19 @@ export function getAlerts(enabledOnly = false): Promise<AlertRuleListResponse> {
 export function createAlert(input: AlertRuleInput): Promise<AlertRule> {
   return request<AlertRule>("/api/alerts", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * `PATCH /api/alerts/{rule_id}` (app/api/alerts.py, verified) — partial edit,
+ * chosen over `PUT` for the edit form (see `EditAlertRuleModal` doc comment
+ * for the reasoning).
+ */
+export function patchAlert(id: number, input: AlertRulePatch): Promise<AlertRule> {
+  return request<AlertRule>(`/api/alerts/${id}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
