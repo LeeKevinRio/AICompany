@@ -91,7 +91,7 @@ export function RiskGauge() {
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
       <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
-      <p className="mt-1 text-xs text-neutral-500">
+      <p className="mt-1 text-xs text-neutral-400">
         總覽頁僅能顯示各上限「是否可被評估」；完整的逐檔觀察值請至個股頁面查看建議卡。
       </p>
 
@@ -118,10 +118,12 @@ export function RiskGauge() {
                   {limitStatusLabel(gauge.status)}
                 </span>
               </div>
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800" aria-hidden="true">
-                <div className="h-full w-0 rounded-full bg-neutral-600" />
-              </div>
-              <p className="mt-1 text-xs text-neutral-500">
+              {gauge.status !== "not_evaluable" && (
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800" aria-hidden="true">
+                  <div className="h-full w-0 rounded-full bg-neutral-600" />
+                </div>
+              )}
+              <p className="mt-1 text-xs text-neutral-400">
                 上限：{formatPercent(gauge.threshold)}｜{gauge.reason}
               </p>
             </li>
