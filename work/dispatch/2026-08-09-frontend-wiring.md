@@ -115,3 +115,32 @@
 - V-B 空進度條:首選 not_evaluable 整條不渲染;替代案=100% 斜紋/灰化佔位(三條件:鋪滿
   不得部分填充/不得狀態語意色/維持 aria-hidden)。擇案不需覆核。
 - 放行路徑:修完由等效實機代理補量對比+截圖回填本單,風控看數據即結案不再開審。
+
+## NEEDS_CHANGES 單點退修完成(2026-08-09,frontend-engineer,commit 155bdfd)
+
+- 根修:`alertRuleForm.ts` 新增 `validateAlertParamForm`(與 `buildAlertParams`
+  同條件、鏡射不共用邏輯,避免任一方漏判),`EditAlertRuleModal.tsx` 的
+  `handleSubmit` 改呼叫新抽出的純函式 `decideAlertRuleSubmit`——本地驗證失敗
+  時填入既有 `fieldErrors` 顯示插槽(threshold 沿用原插槽;value 在
+  `AlertParamFields.tsx` 新增插槽,原本只有 threshold 有),不再在
+  `buildAlertParams` 回 null 時直接 `return`(無請求、無錯誤提示、視窗停留)。
+- 新句(供風控快審,皆為事實陳述,非投資/健康/法律建議性質):
+  - 「門檻價格必須是大於 0 的數字。」(price_above/price_below,語意對應後端
+    `PriceThresholdParams.threshold: float = Field(gt=0.0)`,非後端 422 逐字
+    翻譯——該欄位後端 422 是未翻譯的英文 pydantic 訊息)
+  - 「比較值必須是數字。」(signal_condition 的 value 側;後端
+    `Comparison.value` 無正數限制,僅需為合法數字,故訊息語意與 threshold
+    不同,未套用「必須大於 0」句式)
+- 順手:`AlertRulesSection.tsx` 的 `ruleDescription` 補 ref 條件顯示比較欄位
+  名稱(不再顯示「close 大於 —」),沿用 `EditAlertRuleModal` 唯讀區塊的欄位名
+  對照表,新增匯出 `format.ts::signalFieldLabel` 供兩處共用,不新建第二張表。
+- 測試:新增 17 項(`alertRuleForm.test.ts` +9、`EditAlertRuleModal.test.ts`
+  +6、新檔 `AlertRulesSection.test.ts` +2),含「壞值(-5/abc)提交→有錯誤訊息
+  、無 PATCH 發出」「修正後提交成功」「ref 條件不受本地驗證影響」三項指定案例。
+- 驗證:`npm run typecheck`(tsc --noEmit,無輸出)與 `npm run test`(vitest,
+  8 個測試檔、183 項全綠,含新增 17 項與既有 `componentWordingScan` 28 項)
+  皆綠燈。
+- commit 155bdfd,已 push origin/product/stock-desk。
+- 已知限制:`AlertRulesSection.tsx`(新增規則的建立表單)有相同的
+  `buildAlertParams` 回 null 即靜默 return 寫法,本次派工單僅點名
+  「警示編輯表單」,故未動;列管供下次派工評估是否比照修復。
