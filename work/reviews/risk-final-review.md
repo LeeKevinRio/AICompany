@@ -56,3 +56,13 @@ adviceWording.ts 措辭本體、八項必附元素契約測試、候選模式五
 - suggested:SettingsForm.tsx:55 第 2 條裸「總資產」建議補齊(恆 not_evaluable,不擋)。
 
 結論:**VETO**(V1/V2/V3 三條必修;複審僅看 SettingsForm.tsx 與 adviceWording.ts 兩檔)
+
+---
+
+## 最終複審(2026-08-09):APPROVE
+
+- V1/V2/V3 逐條符合核可措辭並與後端計算逐項對應,順手項無害。否決理由:無。
+- 風控官聲明:全部面向使用者的建議類措辭已符合定調,產品風控關放行。
+- 新列管(下批文案清理):adviceWording.ts:124 半形逗號統一、:95 CANDIDATE_QUANTITY_BASIS_NOTE
+  裸「總資產」補限定語、SettingsForm.tsx:42「加碼建議/加碼參考」用詞對齊。
+- 沿用列管:門檻 10 日俟後端行事曆改真實交易日差重審;limits.py:645,653「勝率」接資料源前送審。
