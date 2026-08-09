@@ -162,3 +162,12 @@
 - 遺留列管(下批):新增規則表單同型靜默 no-op、neutral-500 全站清單、「其他欄位仍可修改」
   補句、Infinity 錯誤措辭(suggested)、summary 49 秒降級預算(data-engineer)、
   後端 symbol 無格式驗證、README demo 模式文件過期(tech-writer)。
+
+## 證券目錄批審查(2026-08-09)
+
+- qa:NEEDS_CHANGES——BLOCKING 1 條:NavBar handleSubmit/navigateTo 未 cancel 殘留 debounce
+  計時器,導頁後舊查詢下拉會無故重開,可能誤導向。後端(冪等/LIKE 逃逸/降級)扎實無阻擋。
+- 風控:9 句中 8 句過;VETO 句①(「同步指令請見設定頁」指向不存在內容)核可截短句
+  「證券目錄尚未同步,僅支援代號直達。」;降級提示行 neutral-500(3.9:1)須升 400。
+- 列管:設定頁同步說明區塊(補後句①可擴回,另審)、Q3 無 market 參數時用 resolve 結果、
+  _escape_like 專屬測試、aria-haspopup、批次 resolve 端點、NavBar 元件層級整合測試。
