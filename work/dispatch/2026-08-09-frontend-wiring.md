@@ -19,3 +19,12 @@
 ## 結果
 
 (完成後回填)
+
+## 風控快審(2026-08-09)
+
+- 新句清單全數 APPROVE(SECTOR_US_DISABLED_HINT 不得改寫,改寫=漂移需重審)。
+- VETO 兩處既有文案+一項控制缺口,核可句已給、三項齊備即自動 APPROVE 無須再送審:
+  1. SettingsForm:55 換逐字核可句(產業上限完整四狀態描述,列風控核可文案改動需送審)
+  2. AlertRulesSection:96「立即檢查一次」→「手動檢查一次」(禁用清單無例外原則)
+  3. componentWordingScan SCANNED_FILES 補 EditPositionModal、AlertRulesSection(掃描覆蓋
+     是文案核可前提,與本批同批上線)
