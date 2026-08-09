@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
+import { SymbolCombobox } from "./SymbolCombobox";
+import { applyDirectorySelection } from "../lib/directorySearch";
 import {
   CURRENCY_OPTIONS,
   INSTRUMENT_TYPE_OPTIONS,
@@ -11,6 +13,7 @@ import {
 import { useSectors, useUpdatePosition } from "../lib/queries";
 import type {
   Currency,
+  DirectoryItem,
   InstrumentType,
   Market,
   SummaryPositionItem,
@@ -63,6 +66,14 @@ function FieldError({ message }: { message: string | undefined }) {
   return <p className="mt-1 text-xs text-red-400">{message}</p>;
 }
 
+// AC-12.6: a sector only ever applies to a TW position — shared by
+// `handleMarketChange` (manual `<select>`) and the symbol combobox's
+// `onSelect` (a directory candidate carries its own market) so the same
+// clearing rule is not duplicated between the two entry points.
+function sectorForMarket(market: Market, currentSector: string): string {
+  return market === "TW" ? currentSector : "";
+}
+
 /**
  * Modal form to edit an existing position (`PUT /api/positions/{id}`).
  * Mirrors `ManualAddForm`'s field set and styling; kept as a separate
@@ -99,7 +110,14 @@ export function EditPositionModal({
   // clears whatever was selected so the submit never carries a value the
   // backend would reject.
   function handleMarketChange(value: Market) {
-    setForm((prev) => ({ ...prev, market: value, sector: value === "TW" ? prev.sector : "" }));
+    setForm((prev) => ({ ...prev, market: value, sector: sectorForMarket(value, prev.sector) }));
+  }
+
+  function handleSelectSymbolCandidate(item: DirectoryItem) {
+    setForm((prev) => ({
+      ...applyDirectorySelection(prev, item),
+      sector: sectorForMarket(item.market, prev.sector),
+    }));
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -158,12 +176,12 @@ export function EditPositionModal({
             <label htmlFor="edit-symbol" className="block text-sm text-neutral-400">
               {FIELD_LABELS.symbol}
             </label>
-            <input
+            <SymbolCombobox
               id="edit-symbol"
               required
               value={form.symbol}
-              onChange={(e) => updateField("symbol", e.target.value)}
-              className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+              onChange={(value) => updateField("symbol", value)}
+              onSelect={handleSelectSymbolCandidate}
             />
             <FieldError message={fieldErrors.symbol} />
           </div>

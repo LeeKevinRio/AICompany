@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DIRECTORY_NOT_SYNCED_NOTICE,
   DIRECTORY_TRUNCATED_NOTICE,
+  applyDirectorySelection,
   createDebouncer,
   decideAfterResolve,
+  decideComboboxKeyDown,
   decideSubmit,
   directorySearchNotice,
   nextHighlightedIndex,
@@ -16,6 +18,14 @@ const ITEM: DirectoryItem = {
   name: "台灣積體電路製造股份有限公司",
   market: "TW",
   source: "twse",
+  as_of: "2026-08-09T00:00:00Z",
+};
+
+const ITEM_US: DirectoryItem = {
+  symbol: "AAPL",
+  name: "Apple Inc.",
+  market: "US",
+  source: "nasdaq",
   as_of: "2026-08-09T00:00:00Z",
 };
 
@@ -285,5 +295,90 @@ describe("decideSubmit (BLOCKING fix, qa 2026-08-09: debounce cancelled on every
     });
     expect(debouncer.cancel).toHaveBeenCalledTimes(1);
     expect(decision).toEqual({ kind: "invalidInput", message: "請輸入股票代號" });
+  });
+});
+
+describe("applyDirectorySelection (ManualAddForm/EditPositionModal SymbolCombobox wiring, CEO 指示 2026-08-09)", () => {
+  interface FormState {
+    symbol: string;
+    market: "TW" | "US" | "";
+    quantity: string;
+  }
+  const BASE_FORM: FormState = { symbol: "", market: "", quantity: "1000" };
+
+  it("selecting a candidate syncs symbol and market from it (market 同步)", () => {
+    const next = applyDirectorySelection(BASE_FORM, ITEM);
+    expect(next).toEqual({ symbol: "2330", market: "TW", quantity: "1000" });
+  });
+
+  it("leaves every other field untouched and does not mutate the previous state", () => {
+    const next = applyDirectorySelection(BASE_FORM, ITEM);
+    expect(next.quantity).toBe(BASE_FORM.quantity);
+    expect(next).not.toBe(BASE_FORM);
+    expect(BASE_FORM).toEqual({ symbol: "", market: "", quantity: "1000" });
+  });
+
+  it("a manual market change made after a selection is not reverted (Q4 CEO 裁示: 市場欄手動 select 保留)", () => {
+    const afterSelect = applyDirectorySelection(BASE_FORM, ITEM);
+    // Simulates the market <select>'s own onChange, which never calls this
+    // function — it is a plain field write, exactly like every other
+    // `updateField` call in the form.
+    const afterManualMarketEdit = { ...afterSelect, market: "US" as const };
+    expect(afterManualMarketEdit).toEqual({ symbol: "2330", market: "US", quantity: "1000" });
+  });
+
+  it("selecting a second candidate overrides both symbol and market again", () => {
+    const afterFirst = applyDirectorySelection(BASE_FORM, ITEM);
+    const afterSecond = applyDirectorySelection(afterFirst, ITEM_US);
+    expect(afterSecond).toEqual({ symbol: "AAPL", market: "US", quantity: "1000" });
+  });
+});
+
+describe("decideComboboxKeyDown (SymbolCombobox keyboard dispatch)", () => {
+  it("ArrowDown/ArrowUp delegate to nextHighlightedIndex when candidates exist", () => {
+    expect(decideComboboxKeyDown("ArrowDown", { open: true, highlightedIndex: -1, candidatesLength: 3 })).toEqual({
+      kind: "highlightMove",
+      index: 0,
+    });
+    expect(decideComboboxKeyDown("ArrowUp", { open: true, highlightedIndex: 0, candidatesLength: 3 })).toEqual({
+      kind: "highlightMove",
+      index: 2,
+    });
+  });
+
+  it("ArrowDown/ArrowUp do nothing when there are no candidates", () => {
+    expect(decideComboboxKeyDown("ArrowDown", { open: false, highlightedIndex: -1, candidatesLength: 0 })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("Escape always closes, regardless of highlight state", () => {
+    expect(decideComboboxKeyDown("Escape", { open: true, highlightedIndex: 1, candidatesLength: 3 })).toEqual({
+      kind: "close",
+    });
+  });
+
+  it("Enter selects the highlighted candidate only while the dropdown is open", () => {
+    expect(decideComboboxKeyDown("Enter", { open: true, highlightedIndex: 1, candidatesLength: 3 })).toEqual({
+      kind: "selectHighlighted",
+    });
+  });
+
+  it("Enter with no highlight falls through (lets the surrounding form's own Enter behaviour run)", () => {
+    expect(decideComboboxKeyDown("Enter", { open: true, highlightedIndex: -1, candidatesLength: 3 })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("Enter with a stale highlighted index from a closed dropdown does not select (mirrors NavBar's `open` gate)", () => {
+    expect(decideComboboxKeyDown("Enter", { open: false, highlightedIndex: 1, candidatesLength: 3 })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("any other key is a no-op", () => {
+    expect(decideComboboxKeyDown("a", { open: true, highlightedIndex: 1, candidatesLength: 3 })).toEqual({
+      kind: "none",
+    });
   });
 });

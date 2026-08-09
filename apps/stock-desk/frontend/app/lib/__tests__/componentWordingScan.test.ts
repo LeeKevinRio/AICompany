@@ -55,6 +55,12 @@ const SCANNED_FILES = [
   // company names inline — neither surface was scanned before this batch.
   "../directorySearch.ts",
   "../../components/PositionsTable.tsx",
+  // CEO 指示 2026-08-09: 代號目錄自動完成接到「新增部位」表單的代號欄。
+  // `SymbolCombobox.tsx` is the shared combobox both `ManualAddForm.tsx` and
+  // `EditPositionModal.tsx` now render; its own hard-coded strings (aria
+  // labels) are copied verbatim from the already-scanned `NavBar.tsx`, but
+  // this file was never itself in the scan list.
+  "../../components/SymbolCombobox.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

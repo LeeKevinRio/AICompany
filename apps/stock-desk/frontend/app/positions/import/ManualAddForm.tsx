@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
+import { SymbolCombobox } from "../../components/SymbolCombobox";
+import { applyDirectorySelection } from "../../lib/directorySearch";
 import { CURRENCY_OPTIONS, INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS } from "../../lib/format";
 import { useCreatePosition } from "../../lib/queries";
 import type { CreatePositionInput, Currency, InstrumentType, Market } from "../../lib/types";
@@ -82,13 +84,13 @@ export function ManualAddForm() {
           <label htmlFor="symbol" className="block text-sm text-neutral-400">
             {FIELD_LABELS.symbol}
           </label>
-          <input
+          <SymbolCombobox
             id="symbol"
             required
             value={form.symbol}
-            onChange={(e) => updateField("symbol", e.target.value)}
+            onChange={(value) => updateField("symbol", value)}
+            onSelect={(item) => setForm((prev) => applyDirectorySelection(prev, item))}
             placeholder="例如 2330"
-            className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
           <FieldError message={fieldErrors.symbol} />
         </div>

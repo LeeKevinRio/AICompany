@@ -64,6 +64,61 @@ export function nextHighlightedIndex(
 }
 
 /**
+ * Keyboard dispatch shared by every combobox built on `nextHighlightedIndex`
+ * (`NavBar.tsx`'s `SymbolSearch` and `SymbolCombobox.tsx`, the form-embedded
+ * variant added for the CEO's 代號欄自動完成 dispatch order, 2026-08-09).
+ * `SymbolCombobox` is the first caller that also needs an Enter decision:
+ * NavBar leaves Enter to its own `<form onSubmit>` (a single-field search
+ * bar, so "submit" and "resolve the typed symbol" are the same action), but
+ * a multi-field position form must not let Enter-while-a-candidate-is-
+ * highlighted fall through to the *form's* submit — it has to select the
+ * candidate instead, the same way a mouse click would.
+ */
+export type ComboboxKeyDownDecision =
+  | { kind: "highlightMove"; index: number }
+  | { kind: "selectHighlighted" }
+  | { kind: "close" }
+  | { kind: "none" };
+
+export interface ComboboxKeyDownParams {
+  open: boolean;
+  highlightedIndex: number;
+  candidatesLength: number;
+}
+
+/**
+ * `params.open` gates the Enter branch the same way NavBar's `handleSubmit`
+ * only reads `candidates[highlightedIndex]` while `open` — a highlighted
+ * index left over from a since-closed dropdown must never win, so `"none"`
+ * (i.e. let the keypress fall through to whatever the input would otherwise
+ * do) is returned instead of `"selectHighlighted"` once `open` is false.
+ */
+export function decideComboboxKeyDown(
+  key: string,
+  params: ComboboxKeyDownParams,
+): ComboboxKeyDownDecision {
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    if (params.candidatesLength === 0) return { kind: "none" };
+    return {
+      kind: "highlightMove",
+      index: nextHighlightedIndex(key, params.highlightedIndex, params.candidatesLength),
+    };
+  }
+  if (key === "Escape") {
+    return { kind: "close" };
+  }
+  if (
+    key === "Enter" &&
+    params.open &&
+    params.highlightedIndex >= 0 &&
+    params.highlightedIndex < params.candidatesLength
+  ) {
+    return { kind: "selectHighlighted" };
+  }
+  return { kind: "none" };
+}
+
+/**
  * FR-7 honest degrade notices for the dropdown area. Exported as constants
  * (not just returned by `directorySearchNotice`) so the wording scan and the
  * unit tests both check the exact same string, with one place to update it.
@@ -171,4 +226,25 @@ export async function decideSubmit(params: DecideSubmitParams): Promise<SubmitDe
   } catch {
     return { kind: "resolveFailed" };
   }
+}
+
+/**
+ * Applies a selected directory candidate to a symbol+market form field pair
+ * — the actual "接線" behind `ManualAddForm`/`EditPositionModal`'s
+ * `SymbolCombobox onSelect` (CEO 指示 2026-08-09: 把證券目錄自動完成接到
+ * 「新增部位」表單的代號欄). Only `symbol`/`market` are ever written; every
+ * other field on `prev` (quantity, note, sector, …) is spread through
+ * untouched, and this is the *only* place in the form's data flow that
+ * writes to `market` from a directory lookup — nothing re-derives it on a
+ * later render, a debounced search response, or a re-selection, so Q4's CEO
+ * 裁示 ("市場欄手動 select 保留，選定候選後仍可再手動改") holds structurally:
+ * a manual `<select>` change after this call is a separate, ordinary
+ * `setForm` write that this function is never in the call path of again
+ * unless the user explicitly picks another candidate.
+ */
+export function applyDirectorySelection<S extends { symbol: string; market: Market | "" }>(
+  prev: S,
+  item: DirectoryItem,
+): S {
+  return { ...prev, symbol: item.symbol, market: item.market };
 }
