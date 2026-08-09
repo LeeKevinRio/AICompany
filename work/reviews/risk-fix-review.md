@@ -46,3 +46,14 @@ R5 五檔掃描無違禁詞;R6 限定語齊。11 項新測試皆斷言公開行�
 - Codex:仍不可用,降級為人工複查+實跑驗證。
 
 結論:**PASS**(BLOCKING_ISSUES=false)
+
+---
+
+## 快查(V1–V3 修復,2026-08-09)
+
+- 範圍:`git show c862a27`(風控二次 VETO 三條必修+一條 suggested)
+- V1/V2:分母敘述與 limits.py 逐行核對一致(gross_exposure 用自報淨值;per_trade_loss 用
+  total_equity_twd);V3 措辭與核可句 A 逐字一致,帶參正確,:116 註解已修,契約測試未破壞。
+- 順手項 max_sector_weight 限定語補齊,無 scope 外變更。Codex 仍不可用,降級人工。
+
+結論:**PASS**(送風控複審兩檔定案)
