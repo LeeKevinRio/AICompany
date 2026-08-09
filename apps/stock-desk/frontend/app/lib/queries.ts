@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ackAlertEvent,
   createAlert,
@@ -21,7 +21,9 @@ import {
   getSignals,
   importPositionsCsv,
   patchAlert,
+  resolveDirectorySymbol,
   runBacktest,
+  searchDirectory,
   updatePosition,
   updateSettings,
 } from "./api";
@@ -247,4 +249,70 @@ export function useAckAlertEvent() {
       void queryClient.invalidateQueries({ queryKey: ["alert-events"] });
     },
   });
+}
+
+/* --- Security directory (FR-3/4/6/7) ------------------------------------ */
+
+/**
+ * NavBar combobox candidates (FR-4). `q` is the already-debounced query —
+ * the debounce itself lives in `directorySearch.ts`'s `createDebouncer`, not
+ * here, so this hook stays a thin, ordinary query. `retry: false` because a
+ * failed search should fall back to the plain symbol-direct path (FR-7)
+ * immediately, not spin retrying while the user keeps typing.
+ */
+export function useDirectorySearch(q: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["directory-search", q],
+    queryFn: () => searchDirectory(q),
+    enabled: enabled && q.length > 0,
+    retry: false,
+  });
+}
+
+/**
+ * One symbol's directory entry (FR-2/FR-6), used by both the individual
+ * position page's title and — fanned out via `useDirectoryNames` below —
+ * the positions table. Shares the `["directory-resolve", symbol]` cache key
+ * with that hook so the two surfaces never issue duplicate requests for the
+ * same symbol. `data` is `null` (not an error) on a directory miss —
+ * `resolveDirectorySymbol` already turns the backend's 404 into that.
+ */
+export function useDirectoryResolve(symbol: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["directory-resolve", symbol],
+    queryFn: () => resolveDirectorySymbol(symbol),
+    enabled: enabled && symbol.length > 0,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * Batches per-row company-name lookups for `PositionsTable` (FR-6/AC-14).
+ * The backend contract (`app/api/directory.py`) only exposes a single-symbol
+ * `resolve` endpoint, no batch form — rather than add an unverified batch
+ * endpoint, this fans out one `resolve` per *unique* symbol via
+ * `useQueries`, relying on react-query's cache (shared key with
+ * `useDirectoryResolve`) to dedupe against the individual position page and
+ * across re-renders. Returns only confirmed hits; a miss or a still-loading
+ * row is simply absent from the map, so callers render "symbol only" for
+ * both without needing to distinguish them (FR-7 fallback is the same
+ * either way).
+ */
+export function useDirectoryNames(symbols: string[]): Record<string, string> {
+  const uniqueSymbols = Array.from(new Set(symbols));
+  const results = useQueries({
+    queries: uniqueSymbols.map((symbol) => ({
+      queryKey: ["directory-resolve", symbol],
+      queryFn: () => resolveDirectorySymbol(symbol),
+      retry: false,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+  const names: Record<string, string> = {};
+  uniqueSymbols.forEach((symbol, index) => {
+    const entry = results[index]?.data;
+    if (entry) names[symbol] = entry.name;
+  });
+  return names;
 }
