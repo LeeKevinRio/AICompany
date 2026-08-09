@@ -75,3 +75,11 @@
 - 驗證:`npm run typecheck`(tsc --noEmit,無輸出)與 `npm run test`
   (vitest,7 個測試檔、166 項全綠,含新增 28 項)皆綠燈。
 - commit 32188bd,已 push origin/product/stock-desk。
+
+## 複審收官(2026-08-09)
+
+- qa 複審 32188bd:PASS(parseRequiredNumber 雙重防呆含 Infinity 邊界;buildAlertParams 形狀
+  與後端 Comparison 一致;enabled-only PATCH 斷言驗到 body 內容;28 項測試無空殼)。
+- 風控單句快審:APPROVE(誠實邊界過、視覺未弱化、有 role=note;suggested:補「其他欄位仍可
+  修改」句,列管)。
+- 下一關:qa-e2e 實機驗收(三新功能+ref 唯讀顯示+兩項列管視覺條款)。
