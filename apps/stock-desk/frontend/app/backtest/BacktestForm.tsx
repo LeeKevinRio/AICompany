@@ -2,14 +2,22 @@
 
 import { useState } from "react";
 import { ApiError } from "../lib/api";
-import { INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS } from "../lib/format";
+import { INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS, STRATEGY_OPTIONS } from "../lib/format";
 import { useRunBacktest, useSettings } from "../lib/queries";
-import type { BacktestRequest, BacktestResponse, CostModelSettings, InstrumentType, Market } from "../lib/types";
+import type {
+  BacktestRequest,
+  BacktestResponse,
+  BacktestStrategy,
+  CostModelSettings,
+  InstrumentType,
+  Market,
+} from "../lib/types";
 
 interface FormState {
   symbol: string;
   market: Market;
   instrument_type: InstrumentType;
+  strategy: BacktestStrategy;
   start: string;
   end: string;
   initial_cash: string;
@@ -23,6 +31,7 @@ const EMPTY_FORM: FormState = {
   symbol: "",
   market: "TW",
   instrument_type: "stock",
+  strategy: "ma_cross",
   start: "",
   end: "",
   initial_cash: "1000000",
@@ -57,7 +66,7 @@ export function BacktestForm({ onResult }: { onResult: (report: BacktestResponse
     const payload: BacktestRequest = {
       symbol: form.symbol.trim(),
       market: form.market,
-      strategy: "ma_cross",
+      strategy: form.strategy,
       start: form.start,
       end: form.end,
       instrument_type: form.instrument_type,
@@ -132,11 +141,15 @@ export function BacktestForm({ onResult }: { onResult: (report: BacktestResponse
           </label>
           <select
             id="bt-strategy"
-            value="ma_cross"
-            disabled
-            className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-400"
+            value={form.strategy}
+            onChange={(e) => updateField("strategy", e.target.value as BacktestStrategy)}
+            className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           >
-            <option value="ma_cross">均線交叉（MA Cross，唯一支援的策略）</option>
+            {STRATEGY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
 

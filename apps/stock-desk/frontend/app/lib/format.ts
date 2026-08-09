@@ -10,6 +10,7 @@
 
 import type {
   AlertType,
+  BacktestStrategy,
   CardAction,
   ChapterStatus,
   ComparisonOp,
@@ -262,6 +263,27 @@ const DETECTION_STATUS_LABELS: Record<DetectionStatus, string> = {
 
 export function detectionStatusLabel(value: DetectionStatus): string {
   return DETECTION_STATUS_LABELS[value];
+}
+
+/**
+ * Mirrors `app.backtest.strategies.STRATEGY_IDS` (backend/app/backtest/strategies.py,
+ * verified). Labels are descriptive nouns naming the mechanism only — no
+ * performance implication, no recommendation wording (§1.3): each strategy is
+ * a textbook example the walk-forward engine can measure, not advice to trade
+ * it (see the backend module's own doc comment).
+ */
+const BACKTEST_STRATEGY_LABELS: Record<BacktestStrategy, string> = {
+  ma_cross: "均線交叉",
+  rsi_reversal: "RSI 反轉",
+  breakout: "N 日突破",
+};
+
+export const STRATEGY_OPTIONS: { value: BacktestStrategy; label: string }[] = (
+  Object.keys(BACKTEST_STRATEGY_LABELS) as BacktestStrategy[]
+).map((value) => ({ value, label: BACKTEST_STRATEGY_LABELS[value] }));
+
+export function strategyLabel(value: BacktestStrategy): string {
+  return BACKTEST_STRATEGY_LABELS[value];
 }
 
 /** Mirrors `app.advice.loader.ComparisonOp` (verified source), reused by `signal_condition` alert rules. */

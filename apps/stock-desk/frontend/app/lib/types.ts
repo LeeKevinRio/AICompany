@@ -715,8 +715,14 @@ export interface CostModelSettings {
   verified_on: string | null;
 }
 
-/** Backend `STRATEGY_IDS` (app/backtest/strategies.py) — only one strategy ships. */
-export type BacktestStrategy = "ma_cross";
+/**
+ * Backend `STRATEGY_IDS` (app/backtest/strategies.py, verified) — the three
+ * shipped strategies (FR-10/FR-11 added `rsi_reversal` and `breakout`). Each
+ * is a textbook example the walk-forward engine can measure, not a
+ * recommendation; the form's option labels stay descriptive nouns for the
+ * same reason (see `STRATEGY_OPTIONS` in `lib/format.ts`).
+ */
+export type BacktestStrategy = "ma_cross" | "rsi_reversal" | "breakout";
 
 /** Backend `BacktestRequest` (app/api/backtest.py, verified). */
 export interface BacktestRequest {
