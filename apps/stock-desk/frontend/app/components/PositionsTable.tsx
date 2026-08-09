@@ -112,7 +112,7 @@ export function PositionsTable({ positions }: { positions: SummaryPositionItem[]
           {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "未知錯誤"}
         </p>
       )}
-      <div className="overflow-x-auto rounded-lg border border-neutral-800">
+      <div className="overflow-x-auto rounded-md border border-neutral-800">
         <table className="w-full min-w-[980px] text-left text-sm">
           <caption className="sr-only">持倉明細表</caption>
           <thead className="bg-neutral-900 text-neutral-400">

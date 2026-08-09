@@ -71,7 +71,7 @@ export function ImportCsvSection() {
           </p>
 
           {importMutation.data.errors.length > 0 && (
-            <div className="overflow-x-auto rounded-lg border border-neutral-800">
+            <div className="overflow-x-auto rounded-md border border-neutral-800">
               <table className="w-full min-w-[420px] text-left text-sm">
                 <caption className="sr-only">匯入錯誤明細</caption>
                 <thead className="bg-neutral-900 text-neutral-400">
