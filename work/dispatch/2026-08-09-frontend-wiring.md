@@ -179,3 +179,12 @@
   (核可句 directorySearch.ts:76、提示行 neutral-400)。
 - **證券目錄功能全批結案**。待 CEO 本機:跑 `python -m app.directory.sync` 首次同步
   (順驗 TWSE/TPEx OpenAPI 推斷 schema),之後實測搜尋體驗。
+
+## FR-8+文案+combobox 四批總審收官(2026-08-09)
+
+- 風控終覆核 APPROVE 全批定稿(無 VETO;⑧不補「上限」二字—LIMIT_NAMES 唯一名稱來源)。
+- qa 總審 PASS 零阻擋(1036 後端+242 前端測試親自重跑相符;半形標點確認為裁決逐字;
+  標籤契約正則穩健;無隱性 fork,重構後更收斂)。
+- qa 唯一 low 項(useUpdateSettings 隱性依賴 remount)已由協調層補顯式 invalidate,
+  依 qa 明示不需重審。
+- 待 qa-e2e/CEO 實機:儀表真實判定呈現、combobox、非 fresh 警示展開。

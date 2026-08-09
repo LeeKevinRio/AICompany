@@ -194,6 +194,10 @@ export function useUpdateSettings() {
     mutationFn: (input: AppSettingsPatch) => updateSettings(input),
     onSuccess: (data) => {
       queryClient.setQueryData(["settings"], data);
+      // Risk budget and net worth feed evaluate_book_limits directly; without this
+      // the overview gauge only stays correct because a route change remounts it.
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
     },
   });
 }
