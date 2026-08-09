@@ -14,7 +14,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 
@@ -22,6 +23,7 @@ import httpx
 import pytest
 
 from app.data.cache import PriceBarCache
+from app.data.interface import PriceBar
 from app.data.quota import DAILY_LIMIT_ENV_VAR, SAFETY_MARGIN_ENV_VAR
 from app.leverage.detect import KNOWN_LEVERAGED_ETF
 from app.positions.models import PositionInput
@@ -150,11 +152,8 @@ def test_classify_result_fail_when_reachable_but_no_data() -> None:
 # --------------------------------------------------------------------------
 
 
-def _bar(trade_date: date, close: str, volume: int, *, source: str) -> "vmd.PriceBar":
-    from datetime import UTC, datetime
-    from decimal import Decimal
-
-    return vmd.PriceBar(
+def _bar(trade_date: date, close: str, volume: int, *, source: str) -> PriceBar:
+    return PriceBar(
         symbol="2330",
         market="TW",
         date=trade_date,
@@ -230,8 +229,8 @@ def test_scan_demo_synthetic_computes_ratio(tmp_path: Path) -> None:
         PositionInput(
             symbol="2330",
             market="TW",
-            quantity="100",
-            avg_cost="590",
+            quantity=Decimal("100"),
+            avg_cost=Decimal("590"),
             currency="TWD",
             instrument_type="stock",
             note="[demo_synthetic] 示範持倉",
@@ -241,8 +240,8 @@ def test_scan_demo_synthetic_computes_ratio(tmp_path: Path) -> None:
         PositionInput(
             symbol="0050",
             market="TW",
-            quantity="10",
-            avg_cost="150",
+            quantity=Decimal("10"),
+            avg_cost=Decimal("150"),
             currency="TWD",
             instrument_type="etf",
             note=None,
@@ -400,7 +399,11 @@ def test_main_returns_nonzero_when_a_source_is_unreachable(tmp_path: Path) -> No
     twse_payload = _fixture_json("twse_stock_day_2330_202401.json")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "www.twse.com.tw" and request.url.path == "/exchangeReport/STOCK_DAY":
+        is_twse_stock_day = (
+            request.url.host == "www.twse.com.tw"
+            and request.url.path == "/exchangeReport/STOCK_DAY"
+        )
+        if is_twse_stock_day:
             return httpx.Response(200, json=twse_payload)
         raise httpx.ConnectError("blocked", request=request)
 
