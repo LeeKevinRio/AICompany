@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
-import { ALERT_TYPE_OPTIONS, MARKET_OPTIONS } from "../lib/format";
-import { buildAlertParams, type AlertParamFormValues } from "../lib/alertRuleForm";
+import { ALERT_TYPE_OPTIONS, MARKET_OPTIONS, SIGNAL_FIELD_OPTIONS, comparisonOpLabel } from "../lib/format";
+import { buildAlertParams, paramsEqual, type AlertParamFormValues } from "../lib/alertRuleForm";
 import { useUpdateAlert } from "../lib/queries";
 import type { AlertRule, AlertRulePatch, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
 import { AlertParamFields } from "./AlertParamFields";
 
-interface FormState extends AlertParamFormValues {
+export interface FormState extends AlertParamFormValues {
   symbol: string;
   market: Market;
   enabled: boolean;
@@ -16,33 +16,48 @@ interface FormState extends AlertParamFormValues {
 }
 
 /** Reads a rule's stored `params` back into the flat, type-specific form fields (AC-1.6 pre-fill). */
-function paramsToForm(rule: AlertRule): Pick<AlertParamFormValues, "threshold" | "field" | "op" | "value" | "limitId"> {
+export function paramsToForm(
+  rule: AlertRule,
+): Pick<AlertParamFormValues, "threshold" | "field" | "op" | "value" | "conditionRef" | "limitId"> {
   switch (rule.type) {
     case "price_above":
     case "price_below": {
       const { threshold } = rule.params as { threshold: number };
-      return { threshold: String(threshold), field: "close", op: "gt", value: "", limitId: "any" };
+      return { threshold: String(threshold), field: "close", op: "gt", value: "", conditionRef: null, limitId: "any" };
     }
     case "signal_condition": {
-      const { condition } = rule.params as { condition: { field: string; op: ComparisonOp; value?: number | null } };
+      const { condition } = rule.params as {
+        condition: { field: string; op: ComparisonOp; value?: number | null; ref?: string | null };
+      };
+      // A `Comparison` is `value` XOR `ref` (backend `app/advice/loader.py`).
+      // A non-null `ref` (a field-vs-field condition, e.g. "MA5 > MA20") has
+      // no numeric `value` to pre-fill — reading `condition.value` for it
+      // used to read `undefined`/`null` and, downstream, get coerced by
+      // `Number("")` into `0`, silently rewriting the rule (FE-WIRING
+      // BLOCKING bug). Route it into `conditionRef` instead so it is
+      // preserved verbatim rather than reconstructed from a blank input.
+      if (condition.ref !== undefined && condition.ref !== null) {
+        return { threshold: "", field: condition.field, op: condition.op, value: "", conditionRef: condition.ref, limitId: "any" };
+      }
       return {
         threshold: "",
         field: condition.field,
         op: condition.op,
         value: condition.value !== undefined && condition.value !== null ? String(condition.value) : "",
+        conditionRef: null,
         limitId: "any",
       };
     }
     case "risk_limit_breach": {
       const { limit_id } = rule.params as { limit_id: LimitSelector };
-      return { threshold: "", field: "close", op: "gt", value: "", limitId: limit_id };
+      return { threshold: "", field: "close", op: "gt", value: "", conditionRef: null, limitId: limit_id };
     }
     default:
-      return { threshold: "", field: "close", op: "gt", value: "", limitId: "any" };
+      return { threshold: "", field: "close", op: "gt", value: "", conditionRef: null, limitId: "any" };
   }
 }
 
-function toFormState(rule: AlertRule): FormState {
+export function toFormState(rule: AlertRule): FormState {
   return {
     type: rule.type,
     symbol: rule.symbol,
@@ -51,6 +66,72 @@ function toFormState(rule: AlertRule): FormState {
     note: rule.note ?? "",
     ...paramsToForm(rule),
   };
+}
+
+/**
+ * True when the rule's `signal_condition` compares two context fields
+ * (backend `Comparison.ref`) rather than a field against a literal number.
+ * This form has no UI to author or retarget that kind of comparison (see
+ * the read-only block below) — `condition.field`/`op` stay pinned to the
+ * loaded rule's values whenever this is true, which is what keeps
+ * `buildAlertRulePatch` from ever including `params` in the PATCH body
+ * unless the user actually changes `type`/`symbol`/`market`/`enabled`/`note`
+ * (AC-1.2: "僅切啟用時 params 不得進 body").
+ */
+export function isRefCondition(form: Pick<AlertParamFormValues, "type" | "conditionRef">): boolean {
+  return form.type === "signal_condition" && form.conditionRef !== null && form.conditionRef !== "";
+}
+
+function signalFieldLabel(value: string): string {
+  return SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
+}
+
+/**
+ * `此規則的比較條件為欄位對欄位，目前不支援在此表單修改。` — new user-facing
+ * copy (2026-08-09 FE-WIRING follow-up), flagged for risk-compliance-officer
+ * quick review per the retrofit note: it is a functional/UI-limitation
+ * notice (not investment/health/legal advice content), but is listed here
+ * per the dispatch's own instruction to surface every new sentence.
+ */
+export const REF_CONDITION_READONLY_HINT = "此規則的比較條件為欄位對欄位，目前不支援在此表單修改。";
+
+/**
+ * Builds the `PATCH` body for saving `form`'s edits to `rule`, or `null`
+ * while a required type-specific field is incomplete. A pure function of
+ * its two arguments (module scope, not a closure over component state) so
+ * it can be unit-tested without rendering the modal.
+ *
+ * Per-field, not whole-document: each key is compared against `rule`'s own
+ * stored value and included only if it actually differs (AC-1.2) — `params`
+ * in particular is compared with `paramsEqual` (order-independent) against
+ * `rule.params` verbatim, not a re-serialized guess, so an untouched `ref`
+ * condition (or any condition) never round-trips through the PATCH body.
+ */
+export function buildAlertRulePatch(form: FormState, rule: AlertRule): AlertRulePatch | null {
+  const params = buildAlertParams(form);
+  if (params === null) return null;
+  const patch: AlertRulePatch = {};
+  if (form.type !== rule.type) patch.type = form.type;
+  const trimmedSymbol = form.symbol.trim();
+  if (trimmedSymbol !== rule.symbol) patch.symbol = trimmedSymbol;
+  if (form.market !== rule.market) patch.market = form.market;
+  // `params` is one validated document per rule (never merged field-by-field
+  // server-side — see `AlertRulePatch` doc comment), so any difference in
+  // its shape or a type switch resends the whole thing.
+  if (form.type !== rule.type || !paramsEqual(params, rule.params)) {
+    patch.params = params;
+  }
+  if (form.enabled !== rule.enabled) patch.enabled = form.enabled;
+  const trimmedNote = form.note.trim();
+  const storedNote = rule.note ?? "";
+  if (trimmedNote !== storedNote) {
+    if (trimmedNote === "") {
+      patch.clear_note = true;
+    } else {
+      patch.note = trimmedNote;
+    }
+  }
+  return patch;
 }
 
 /**
@@ -81,36 +162,9 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function buildPatch(): AlertRulePatch | null {
-    const params = buildAlertParams(form);
-    if (params === null) return null;
-    const patch: AlertRulePatch = {};
-    if (form.type !== rule.type) patch.type = form.type;
-    const trimmedSymbol = form.symbol.trim();
-    if (trimmedSymbol !== rule.symbol) patch.symbol = trimmedSymbol;
-    if (form.market !== rule.market) patch.market = form.market;
-    // `params` is one validated document per rule (never merged field-by-field
-    // server-side — see `AlertRulePatch` doc comment), so any difference in
-    // its shape or a type switch resends the whole thing.
-    if (form.type !== rule.type || JSON.stringify(params) !== JSON.stringify(rule.params)) {
-      patch.params = params;
-    }
-    if (form.enabled !== rule.enabled) patch.enabled = form.enabled;
-    const trimmedNote = form.note.trim();
-    const storedNote = rule.note ?? "";
-    if (trimmedNote !== storedNote) {
-      if (trimmedNote === "") {
-        patch.clear_note = true;
-      } else {
-        patch.note = trimmedNote;
-      }
-    }
-    return patch;
-  }
-
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const patch = buildPatch();
+    const patch = buildAlertRulePatch(form, rule);
     if (patch === null) return;
     if (Object.keys(patch).length === 0) {
       // Nothing changed — closing without a request avoids a no-op PATCH.
@@ -213,12 +267,24 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
             </div>
           </div>
 
-          <AlertParamFields
-            idPrefix="edit-alert"
-            values={form}
-            onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
-            thresholdError={fieldErrors.threshold}
-          />
+          {isRefCondition(form) ? (
+            <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+              <p className="text-sm text-neutral-300">
+                訊號欄位：{signalFieldLabel(form.field)}　條件：{comparisonOpLabel(form.op)}　比較欄位：
+                {signalFieldLabel(form.conditionRef ?? "")}
+              </p>
+              <p role="note" className="mt-2 text-xs text-amber-400">
+                {REF_CONDITION_READONLY_HINT}
+              </p>
+            </div>
+          ) : (
+            <AlertParamFields
+              idPrefix="edit-alert"
+              values={form}
+              onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+              thresholdError={fieldErrors.threshold}
+            />
+          )}
 
           <label className="flex items-center gap-2 text-sm text-neutral-300">
             <input

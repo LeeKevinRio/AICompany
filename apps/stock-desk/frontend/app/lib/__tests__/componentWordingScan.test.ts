@@ -45,6 +45,10 @@ const SCANNED_FILES = [
   // 持倉/警示規則表面。
   "../../components/EditPositionModal.tsx",
   "../../settings/AlertRulesSection.tsx",
+  // FE-WIRING BLOCKING 退修 2026-08-09（qa-reviewer 建議）：ref 型條件的
+  // 唯讀提示句是這批新加的硬編碼 JSX 文案，兩個相關檔案原本都未被掃到。
+  "../../settings/EditAlertRuleModal.tsx",
+  "../../settings/AlertParamFields.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

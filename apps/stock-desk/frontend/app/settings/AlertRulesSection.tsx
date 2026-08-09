@@ -25,6 +25,11 @@ interface FormState {
   field: string; // signal_condition
   op: ComparisonOp; // signal_condition
   value: string; // signal_condition
+  // Always `null` here — the create form has no UI for authoring a `ref`
+  // (field-vs-field) condition; kept only so `FormState` structurally
+  // matches `AlertParamFormValues` for `buildAlertParams` (see
+  // `EditAlertRuleModal`'s read-only branch for where `ref` *is* handled).
+  conditionRef: string | null;
   limitId: LimitSelector; // risk_limit_breach
   note: string;
 }
