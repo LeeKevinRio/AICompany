@@ -34,3 +34,15 @@
   2. AlertRulesSection:96「立即檢查一次」→「手動檢查一次」(禁用清單無例外原則)
   3. componentWordingScan SCANNED_FILES 補 EditPositionModal、AlertRulesSection(掃描覆蓋
      是文案核可前提,與本批同批上線)
+
+## qa 審查接線四 commit(2026-08-09):NEEDS_CHANGES
+
+- 策略下拉/產業下拉/bcddaea 補漏:PASS(市場切換原子性、雙重防呆、逐字比對皆確認)。
+- **BLOCKING**:alertRuleForm.ts buildAlertParams 與 EditAlertRuleModal paramsToForm 不認識
+  signal_condition 的 ref 型條件——編輯 ref 規則(後端合法、有測試)時 value 預填 ""、
+  Number("")===0,靜默把「MA5>MA20」改寫成「MA5>0」且後端 200 過。違反 AC-1.2/1.6。
+  退修:補 ref 讀取/保留與正確差異比對(僅切啟用時 params 不得進 body),附 ref 規則編輯
+  單元測試(該兩檔目前零測試)。
+- 建議:SCANNED_FILES 再補 EditAlertRuleModal、AlertParamFields(前批已補另兩檔)。
+- 流程澄清:qa 審查中察覺檔案內容變動並警戒「注入」——經查為協調層 86373a6 真實 commit
+  (風控快審結論落檔),非注入;qa 拒絕採信未驗證訊息的行為正確,特此記錄。
