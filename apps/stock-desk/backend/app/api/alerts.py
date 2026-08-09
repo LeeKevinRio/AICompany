@@ -5,6 +5,11 @@ event is a record that the line was crossed at a moment in time. Deleting a rule
 therefore does **not** delete its events -- they still happened -- and an event
 is acknowledged rather than removed.
 
+Rules are editable in place (FR-1): ``PUT`` replaces every user field and
+``PATCH`` changes a subset, both keeping the ``rule_id``. That is what keeps a
+rule's history attached to it -- deleting and recreating a rule to change a
+threshold would leave its past events pointing at an id that no longer exists.
+
 ``POST /api/alerts/evaluate`` runs the same :func:`app.alerts.engine.evaluate_alerts`
 tick the scheduler runs, so the UI can force a check without waiting for the
 next interval. Webhook delivery is not attempted here: a user-triggered check
@@ -16,7 +21,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.advice.book import self_reported_net_worth
 from app.advice.limits import RiskBudget, SelfReportedNetWorth
@@ -26,7 +31,7 @@ from app.alerts.engine import (
     SymbolSnapshot,
     evaluate_alerts,
 )
-from app.alerts.models import AlertEvent, AlertRule, AlertRuleInput
+from app.alerts.models import AlertEvent, AlertRule, AlertRuleInput, AlertRulePatch
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
 from app.api.common import now_iso
@@ -98,6 +103,62 @@ def list_rules(
 @router.post("", response_model=AlertRule, status_code=status.HTTP_201_CREATED)
 def create_rule(body: AlertRuleInput, store: AlertStoreDep) -> AlertRule:
     return store.create_rule(body)
+
+
+@router.put("/{rule_id}", response_model=AlertRule)
+def replace_rule(rule_id: int, body: AlertRuleInput, store: AlertStoreDep) -> AlertRule:
+    """Replace every user field of one rule, keeping its id (FR-1).
+
+    A full replacement, validated exactly like a ``POST``: switching a rule's
+    ``type`` therefore has to bring the matching ``params`` document with it,
+    and the old type's parameters cannot survive the switch because ``params``
+    is stored as one document rather than a column per type (AC-1.5).
+    """
+    updated = store.update_rule(rule_id, body)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
+        )
+    return updated
+
+
+@router.patch("/{rule_id}", response_model=AlertRule)
+def patch_rule(rule_id: int, body: AlertRulePatch, store: AlertStoreDep) -> AlertRule:
+    """Change some fields of one rule, leaving the rest as they are (AC-1.2).
+
+    The merged rule is validated as a whole before anything is written, so a
+    patch that would produce an impossible rule (a threshold on a rule that is
+    no longer a price rule, a negative threshold, ...) is a 422 and the stored
+    rule is left untouched -- never partially applied (AC-1.3).
+    """
+    current = store.get_rule(rule_id)
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
+        )
+    try:
+        merged = body.apply_to(current)
+    except ValidationError as exc:
+        # Raised while merging, i.e. outside FastAPI's own body validation, so
+        # it has to be turned into the same 422 the ``POST`` path would give.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_detail(exc),
+        ) from exc
+    updated = store.update_rule(rule_id, merged)
+    if updated is None:  # pragma: no cover - the rule was read a moment ago
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
+        )
+    return updated
+
+
+def _validation_detail(exc: ValidationError) -> list[dict[str, object]]:
+    """The failing fields and their Traditional Chinese reasons, as FastAPI shapes them."""
+    return [
+        {"loc": ["body", *(str(part) for part in error["loc"])], "msg": error["msg"]}
+        for error in exc.errors()
+    ]
 
 
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)

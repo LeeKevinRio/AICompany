@@ -154,6 +154,41 @@ class AlertStore:
         assert created is not None  # just inserted within the same store
         return created
 
+    def update_rule(
+        self, rule_id: int, data: AlertRuleInput, *, now: datetime | None = None
+    ) -> AlertRule | None:
+        """Overwrite the user fields of ``rule_id``; return the updated rule.
+
+        Returns ``None`` if no rule with that id exists. The id is preserved --
+        that is the entire point of editing rather than delete-and-recreate: the
+        rule's past ``alert_events`` reference it, and a new id would orphan
+        them (FR-1, AC-1.1). ``created_at`` is preserved too; only ``updated_at``
+        advances.
+        """
+        moment = (now if now is not None else datetime.now(UTC)).isoformat()
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                """
+                UPDATE alert_rules SET
+                    type = ?, symbol = ?, market = ?, params = ?, enabled = ?,
+                    note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    data.type,
+                    data.symbol,
+                    data.market,
+                    json.dumps(data.params.model_dump(), ensure_ascii=False),
+                    int(data.enabled),
+                    data.note,
+                    moment,
+                    rule_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_rule(rule_id)
+
     def delete_rule(self, rule_id: int) -> bool:
         """Delete a rule. Its past events are kept: they still happened."""
         with closing(self._connect()) as conn, conn:

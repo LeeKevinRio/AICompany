@@ -122,3 +122,46 @@ def test_rule_model_rejects_a_non_positive_threshold() -> None:
         AlertRuleInput.model_validate(
             {"type": "price_above", "symbol": "2330", "params": {"threshold": 0}}
         )
+
+
+# --- Rule editing (FR-1) ------------------------------------------------------
+
+
+def test_update_rule_keeps_the_id_and_created_at(store: AlertStore) -> None:
+    created = add_rule(store, price_rule(threshold=1000.0))
+    updated = store.update_rule(
+        created.id,
+        AlertRuleInput.model_validate(price_rule(threshold=1050.0)),
+        now=_NOW,
+    )
+    assert updated is not None
+    assert updated.id == created.id
+    assert updated.created_at == created.created_at
+    assert updated.updated_at == _NOW
+    assert updated.params.threshold == 1050.0  # type: ignore[union-attr]
+
+
+def test_update_rule_replaces_the_params_document_on_a_type_switch(
+    store: AlertStore,
+) -> None:
+    created = add_rule(store, price_rule(threshold=1000.0))
+    updated = store.update_rule(
+        created.id, AlertRuleInput.model_validate(limit_rule(limit_id="sector_weight"))
+    )
+    assert updated is not None
+    assert updated.type == "risk_limit_breach"
+    # Stored as one JSON document per rule, so nothing of the price rule is left.
+    assert updated.params.model_dump() == {"limit_id": "sector_weight"}
+
+
+def test_updating_a_missing_rule_returns_none(store: AlertStore) -> None:
+    assert store.update_rule(999, AlertRuleInput.model_validate(price_rule())) is None
+
+
+def test_editing_a_rule_keeps_its_events(store: AlertStore) -> None:
+    rule = add_rule(store, price_rule(threshold=1000.0))
+    store.append_event(rule=rule, message="觸發", observed={"close": 1100.0})
+    store.update_rule(rule.id, AlertRuleInput.model_validate(price_rule(threshold=1200.0)))
+    events = store.list_events()
+    assert [event.rule_id for event in events] == [rule.id]
+    assert store.last_triggered_at(rule.id) is not None

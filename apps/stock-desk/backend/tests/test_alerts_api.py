@@ -65,6 +65,146 @@ def test_delete_rule_then_missing_is_404(api_harness: ApiHarness) -> None:
     assert "找不到指定的警示規則" in response.json()["detail"]
 
 
+# --- Rule editing (FR-1) ------------------------------------------------------
+
+
+def test_put_edits_a_threshold_in_place_keeping_the_rule_id(api_harness: ApiHarness) -> None:
+    # AC-1.1: the id survives the edit, which is the whole reason this endpoint
+    # exists instead of delete-and-recreate.
+    created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()
+    response = api_harness.client.put(
+        f"/api/alerts/{created['id']}", json=price_rule(threshold=1050.0)
+    )
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["id"] == created["id"]
+    assert updated["params"]["threshold"] == 1050.0
+    assert updated["created_at"] == created["created_at"]
+    assert updated["updated_at"] >= created["updated_at"]
+    listed = api_harness.client.get("/api/alerts").json()["items"]
+    assert [item["params"]["threshold"] for item in listed] == [1050.0]
+
+
+def test_an_edited_rule_keeps_the_events_it_already_raised(api_harness: ApiHarness) -> None:
+    # AC-1.1 second half: history stays attached because the id never moved.
+    _seed_market(api_harness)
+    rule = api_harness.client.post("/api/alerts", json=price_rule(threshold=100.0)).json()
+    api_harness.client.post("/api/alerts/evaluate")
+    api_harness.client.put(f"/api/alerts/{rule['id']}", json=price_rule(threshold=101.0))
+    events = api_harness.client.get("/api/alerts/events").json()["items"]
+    assert [event["rule_id"] for event in events] == [rule["id"]]
+
+
+def test_patch_toggles_enabled_and_leaves_every_other_field_alone(
+    api_harness: ApiHarness,
+) -> None:
+    # AC-1.2.
+    created = api_harness.client.post(
+        "/api/alerts", json=price_rule(threshold=700.0, note="原註記")
+    ).json()
+    updated = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"enabled": False}
+    ).json()
+    assert updated["enabled"] is False
+    assert updated["params"]["threshold"] == 700.0
+    assert updated["note"] == "原註記"
+    assert updated["type"] == created["type"]
+    # A disabled rule is skipped by the next tick.
+    assert api_harness.client.get(
+        "/api/alerts", params={"enabled_only": True}
+    ).json()["items"] == []
+
+
+def test_patch_can_clear_a_note_only_when_asked_to(api_harness: ApiHarness) -> None:
+    created = api_harness.client.post(
+        "/api/alerts", json=price_rule(note="原註記")
+    ).json()
+    kept = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"note": None}
+    ).json()
+    assert kept["note"] == "原註記"
+    cleared = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"clear_note": True}
+    ).json()
+    assert cleared["note"] is None
+
+
+def test_an_invalid_edit_is_422_and_changes_nothing(api_harness: ApiHarness) -> None:
+    # AC-1.3: no partial write; the stored rule keeps its old value.
+    created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()
+    responses = (
+        api_harness.client.put(
+            f"/api/alerts/{created['id']}", json=price_rule(threshold=-100.0)
+        ),
+        api_harness.client.patch(
+            f"/api/alerts/{created['id']}", json={"params": {"threshold": -100.0}}
+        ),
+    )
+    for response in responses:
+        assert response.status_code == 422
+        stored = api_harness.client.get("/api/alerts").json()["items"][0]
+        assert stored["params"]["threshold"] == 1000.0
+
+
+def test_editing_a_missing_rule_is_404(api_harness: ApiHarness) -> None:
+    # AC-1.4.
+    for response in (
+        api_harness.client.put("/api/alerts/999", json=price_rule()),
+        api_harness.client.patch("/api/alerts/999", json={"enabled": False}),
+    ):
+        assert response.status_code == 404
+        assert response.json()["detail"] == "找不到指定的警示規則"
+
+
+def test_put_can_switch_the_rule_type_with_matching_params(api_harness: ApiHarness) -> None:
+    # AC-1.5: a full replacement may change the type, and the old type's
+    # parameters do not survive it.
+    created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()
+    updated = api_harness.client.put(f"/api/alerts/{created['id']}", json=signal_rule()).json()
+    assert updated["id"] == created["id"]
+    assert updated["type"] == "signal_condition"
+    assert "threshold" not in updated["params"]
+    assert updated["params"]["condition"]["field"] == "rsi14.last"
+
+
+def test_a_type_switch_without_matching_params_is_422(api_harness: ApiHarness) -> None:
+    created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()
+    # PUT: the body itself is inconsistent.
+    payload = price_rule(threshold=1000.0)
+    payload["type"] = "signal_condition"
+    assert (
+        api_harness.client.put(f"/api/alerts/{created['id']}", json=payload).status_code == 422
+    )
+    # PATCH: the *merged* rule is inconsistent, which is only visible after the
+    # merge -- the stored params still belong to the old type.
+    response = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"type": "signal_condition"}
+    )
+    assert response.status_code == 422
+    assert "params" in response.text
+    assert api_harness.client.get("/api/alerts").json()["items"][0]["type"] == "price_above"
+
+
+def test_patch_rejects_an_unknown_field(api_harness: ApiHarness) -> None:
+    created = api_harness.client.post("/api/alerts", json=price_rule()).json()
+    response = api_harness.client.patch(
+        f"/api/alerts/{created['id']}", json={"threshold": 900.0}
+    )
+    assert response.status_code == 422
+
+
+def test_patch_validates_the_signal_vocabulary_after_merging(
+    api_harness: ApiHarness,
+) -> None:
+    created = api_harness.client.post("/api/alerts", json=signal_rule()).json()
+    response = api_harness.client.patch(
+        f"/api/alerts/{created['id']}",
+        json={"params": {"condition": {"field": "moon_phase.last", "op": "gt", "value": 1.0}}},
+    )
+    assert response.status_code == 422
+    assert "未知的欄位" in response.text
+
+
 # --- Evaluation and events ---------------------------------------------------
 
 

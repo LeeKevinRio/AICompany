@@ -113,6 +113,55 @@ class AlertRule(AlertRuleInput):
     updated_at: datetime
 
 
+class AlertRulePatch(BaseModel):
+    """The ``PATCH /api/alerts/{rule_id}`` body: any subset of the user fields.
+
+    Per *field*, not per document: an omitted field keeps its stored value, so
+    turning a rule off is ``{"enabled": false}`` and nothing else (FR-1,
+    AC-1.2). ``params`` is still replaced whole -- it is one validated document
+    per rule type, and merging into it key by key is what would leave a
+    threshold behind on a rule that is no longer a price rule.
+
+    :meth:`apply_to` re-validates the merged result through
+    :class:`AlertRuleInput`, so a patch cannot reach a state the ``POST`` body
+    could not: the type/params pairing is checked on the way out of here, not
+    only on the way in (AC-1.5).
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: AlertType | None = None
+    symbol: str | None = Field(default=None, min_length=1)
+    market: Market | None = None
+    params: AlertParams | None = None
+    enabled: bool | None = None
+    note: str | None = None
+    #: ``note`` is nullable *and* optional, so "leave it alone" and "clear it"
+    #: are the same JSON without this flag. Sending ``{"note": null}`` alone
+    #: keeps the stored note; ``{"clear_note": true}`` removes it.
+    clear_note: bool = False
+
+    def apply_to(self, current: AlertRule) -> AlertRuleInput:
+        """Return the stored rule's user fields with the supplied ones replaced.
+
+        Raises ``pydantic.ValidationError`` when the merged rule is invalid --
+        the caller turns that into a 422, and nothing is written (AC-1.3).
+        """
+        note = current.note
+        if self.clear_note:
+            note = None
+        elif self.note is not None:
+            note = self.note
+        return AlertRuleInput(
+            type=self.type if self.type is not None else current.type,
+            symbol=self.symbol if self.symbol is not None else current.symbol,
+            market=self.market if self.market is not None else current.market,
+            params=self.params if self.params is not None else current.params,
+            enabled=self.enabled if self.enabled is not None else current.enabled,
+            note=note,
+        )
+
+
 class AlertEvent(BaseModel):
     """One firing of one rule, as stored and as returned by the API."""
 
