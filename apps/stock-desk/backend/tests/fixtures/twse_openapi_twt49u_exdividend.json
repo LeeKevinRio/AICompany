@@ -1,0 +1,55 @@
+[
+  {
+    "Date": "1130617",
+    "Code": "2330",
+    "Name": "台積電",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "102.00",
+    "ExRightsAndDividendsReferencePrice": "99.00",
+    "CashDividend": "3.00",
+    "RightsValue": "0.00"
+  },
+  {
+    "Date": "1130715",
+    "Code": "2330",
+    "Name": "台積電",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "110.00",
+    "ExRightsAndDividendsReferencePrice": "107.80",
+    "CashDividend": "2.20",
+    "RightsValue": "0.00"
+  },
+  {
+    "Date": "1130801",
+    "Code": "2884",
+    "Name": "玉山金",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "26.50",
+    "ExRightsAndDividendsReferencePrice": "25.45",
+    "CashDividend": "0.61",
+    "RightsValue": "0.44"
+  },
+  {
+    "Date": "1130806",
+    "Code": "8888",
+    "Name": "參考價異常樣本",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "100.00",
+    "ExRightsAndDividendsReferencePrice": "0.50",
+    "CashDividend": "0.00",
+    "RightsValue": "0.00"
+  },
+  {
+    "Date": "1130805",
+    "Name": "缺代號樣本",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "50.00",
+    "ExRightsAndDividendsReferencePrice": "49.00",
+    "CashDividend": "1.00",
+    "RightsValue": "0.00"
+  },
+  {
+    "Date": "1130807",
+    "Code": "9999",
+    "Name": "無成交佔位符樣本",
+    "PreviousClosingPriceBeforeExRightsAndDividends": "--",
+    "ExRightsAndDividendsReferencePrice": "--",
+    "CashDividend": "--",
+    "RightsValue": "--"
+  }
+]

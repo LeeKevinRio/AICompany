@@ -44,6 +44,7 @@ Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數�
 | `yfinance_chart_twii.json` | 同上端點，指數路徑（`^TWII`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；**完全未經即時回應驗證** |
 | `twse_openapi_stock_day_all.json` | TWSE OpenAPI `v1/exchangeReport/STOCK_DAY_ALL`（`app/directory/providers.py` 證券目錄同步用，只取 `Code`/`Name` 欄位） | 合成，依端點命名推斷手工構造；含一列 `Code` 為空字串，用於測試跳過邏輯；**stock-desk-代號目錄 phase，欄位名稱完全未經即時回應驗證，見 `app/directory/providers.py` 檔頭** |
 | `tpex_openapi_mainboard_daily_close_quotes.json` | TPEx OpenAPI `openapi/v1/tpex_mainboard_daily_close_quotes`（`app/directory/providers.py` 證券目錄同步用，只取 `代號`/`名稱` 欄位） | 合成，依端點命名推斷手工構造；含一列 `名稱` 為空字串，用於測試跳過邏輯；**stock-desk-代號目錄 phase，中文欄位鍵完全未經即時回應驗證，見 `app/directory/providers.py` 檔頭** |
+| `twse_openapi_twt49u_exdividend.json` | TWSE OpenAPI `v1/exchangeReport/TWT49U`（除權除息計算結果表，`app/dividends/providers.py` 除權息還原用） | 合成，依報表代號與欄位語意推斷手工構造；含缺代號、`--` 佔位符各一列測跳過邏輯，另含一列參考價異常（factor 0.005）測「解析得出但不可用」；**A2 除權息還原 phase，端點路徑與欄位名稱完全未經即時回應驗證，見 `app/dividends/providers.py` 檔頭** |
 
 ## 若之後要補實錄
 
