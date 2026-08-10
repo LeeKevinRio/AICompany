@@ -108,8 +108,13 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         描述，不代表未來會重演。"), rather than drafting a new claim — listed
         in this batch's report for risk-compliance-officer to confirm the
         reuse is appropriate at report level, not just per-metric.
+
+        D3 fix (波次1文案裁決.md「D 批」，2026-08-10 required×2): promoted from
+        `text-xs` to `text-sm` in a bordered box so it is not visually lower
+        priority than the `rates_verified` fee alert below — the wording
+        itself was already approved, only the presentation level was vetoed.
       */}
-      <p className="mt-2 text-xs text-neutral-500">
+      <p className="mt-2 rounded-md border border-neutral-700 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-300">
         本回測報告呈現的所有數字皆屬歷史統計描述，不代表未來會重演。
       </p>
 
@@ -123,12 +128,29 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         </p>
       )}
 
+      {/*
+        D3 fix (波次1文案裁決.md「D 批」，2026-08-10 required×2): `notes`
+        carries the 除權息還原揭露句 (`DIVIDEND_ADJUSTED_NOTE` /
+        `DIVIDEND_NOT_SYNCED_NOTE` / etc., app/api/backtest.py) alongside the
+        buy-and-hold/rates notes; promoted the whole list from a bare `text-xs`
+        bullet list to the same bordered `text-sm` treatment as the disclaimer
+        above, so the dividend disclosure is not visually demoted relative to
+        the `rates_verified` fee alert. `last_synced_at` (backend already
+        returns it on `dividend_adjustment`, previously never rendered) is
+        shown right beside this box rather than folded into the bullet text,
+        because it is metadata about the dividend note, not a note itself.
+      */}
       {report.notes.length > 0 && (
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-neutral-500">
-          {report.notes.map((note, i) => (
-            <li key={i}>{note}</li>
-          ))}
-        </ul>
+        <div className="mt-2 rounded-md border border-neutral-700 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-300">
+          <ul className="list-disc space-y-1 pl-5">
+            {report.notes.map((note, i) => (
+              <li key={i}>{note}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-neutral-500">
+            除權息資料最近同步時間：{formatDateTime(report.dividend_adjustment.last_synced_at)}
+          </p>
+        </div>
       )}
 
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-neutral-500 sm:grid-cols-3">

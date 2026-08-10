@@ -823,6 +823,27 @@ export interface WalkForwardFoldInfo {
   test_stop: number;
 }
 
+/**
+ * Backend `_dividend_block` (app/api/backtest.py, verified) — whether the
+ * price series was 除權息-adjusted for this run, and if not, why not.
+ * `note` mirrors one entry of `DIVIDEND_NOTE_BY_CODE` server-side and is the
+ * single "已還原/未還原" disclosure sentence for this run; `last_synced_at`
+ * is the dividend event store's last sync time (`DividendEventStore.last_synced_at`),
+ * independent of `as_of` (the backtest's own as-of time).
+ */
+export interface DividendAdjustment {
+  requested: boolean;
+  applied: boolean;
+  reason_code: string;
+  note: string | null;
+  events_applied: number;
+  events_skipped: number;
+  first_ex_date: string | null;
+  last_ex_date: string | null;
+  raw_return_understatement: number | null;
+  last_synced_at: string | null;
+}
+
 /** Backend `BacktestResponse` (app/api/backtest.py, verified). */
 export interface BacktestResponse {
   symbol: string;
@@ -834,6 +855,7 @@ export interface BacktestResponse {
   folds: WalkForwardFoldInfo[];
   cost_model: CostModelSettings;
   rates_verified: boolean;
+  dividend_adjustment: DividendAdjustment;
   notes: string[];
   data: DataMeta;
   as_of: string;

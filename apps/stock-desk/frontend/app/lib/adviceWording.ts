@@ -97,8 +97,12 @@ export function buildCandidateCoverageStatement(
  * `SettingsForm.tsx` 已用的限定語(已估值部位市值,不含現金),否則與設定頁的
  * 「帳戶總淨值」分母混淆 —— 同時清償限制清單 #10 D2 項 2(建議卡「總資產」未
  * 加限定語)。半形括號比照 SettingsForm.tsx 既有寫法,維持全檔一致。
+ *
+ * 波次1文案裁決.md「追認」項(2026-08-10):限定語補全為「已估值部位市值,不含
+ * 現金」——原句只寫了「已估值部位市值」,漏了「不含現金」半句,一併補上並與
+ * `SettingsForm.tsx` 四處(RISK_BUDGET_FIELDS 內)同步改寫。
  */
-export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產(已估值部位市值)與上限推導。";
+export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產(已估值部位市值,不含現金)與上限推導。";
 
 /**
  * FR-2 / Phase 6 放行條件 (b): the existing generic "no quantity range"

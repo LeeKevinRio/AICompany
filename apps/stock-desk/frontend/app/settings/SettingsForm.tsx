@@ -70,11 +70,17 @@ function buildWideningBody(label: string, limitIndex: number, before: number, af
   return `${label}由 ${before} 調高為 ${after}。放寬後，原本會被第 ${limitIndex} 條上限擋下的加碼參考可能不再被擋下。確認要繼續嗎？`;
 }
 
+/**
+ * 波次1文案裁決.md「追認」項(2026-08-10):四處「總資產(已估值部位市值)」的
+ * 限定語補全為「已估值部位市值,不含現金」,與 `adviceWording.ts` 的
+ * `CANDIDATE_QUANTITY_BASIS_NOTE` 同步改寫,避免與 `max_gross_exposure` 描述
+ * 句用的「帳戶總淨值」分母混淆。
+ */
 const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
     label: "單一標的佔比上限",
-    description: "此標的市值占總資產(已估值部位市值)的上限（比例，例如 0.15 代表 15%）。",
+    description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.15 代表 15%）。",
     defaultValue: 0.15,
     hardCeiling: { max: 0.5, reason: "單一標的超過總資產的一半時，分散化已無實質意義。" },
   },
@@ -83,7 +89,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
     label: "單一產業佔比上限",
     // 風控核可文案 2026-08-09，修改需重新送審（比照 limits.py 慣例）。
     description:
-      "同產業合計市值占總資產(已估值部位市值)的上限。產業別是持倉上的欄位,僅台股持倉可填(台灣證交所產業別,可在持倉編輯或 CSV 匯入填寫),非台股持倉不可填。若該標的沒有持倉、未填產業別、為非台股、或同一標的填了不只一種產業別,這條上限不計算並顯示無法評估;未填產業別的持倉不計入任何產業的市值合計,已計算的產業佔比可能因此被低估。",
+      "同產業合計市值占總資產(已估值部位市值,不含現金)的上限。產業別是持倉上的欄位,僅台股持倉可填(台灣證交所產業別,可在持倉編輯或 CSV 匯入填寫),非台股持倉不可填。若該標的沒有持倉、未填產業別、為非台股、或同一標的填了不只一種產業別,這條上限不計算並顯示無法評估;未填產業別的持倉不計入任何產業的市值合計,已計算的產業佔比可能因此被低估。",
     defaultValue: 0.3,
   },
   {
@@ -97,7 +103,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_loss_per_trade",
     label: "單筆最大可承受虧損",
-    description: "以 ATR 停損距離估算，觸及停損時損失占總資產(已估值部位市值)的上限。",
+    description: "以 ATR 停損距離估算，觸及停損時損失占總資產(已估值部位市值,不含現金)的上限。",
     defaultValue: 0.01,
   },
   {
@@ -115,7 +121,7 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "kelly_position_cap",
     label: "Kelly 部位硬上限",
-    description: "無論 Kelly 估計的邊際多大，此為部位占總資產(已估值部位市值)的絕對上限。",
+    description: "無論 Kelly 估計的邊際多大，此為部位占總資產(已估值部位市值,不含現金)的絕對上限。",
     defaultValue: 0.1,
   },
 ];

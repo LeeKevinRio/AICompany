@@ -147,6 +147,21 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
           {advice.has_conflict && (
             <p className="mt-2 text-xs text-amber-300">本次命中規則涵蓋一種以上動作，方向分布如上列所示。</p>
           )}
+          {/*
+            D2 suggested (波次1文案裁決.md「D 批」，2026-08-10，裁決建議句):
+            `has_conflict` only means "more than one matched action type", not
+            necessarily an opposing *direction* (see the backend comment this
+            file already quotes above). `direction_weights.length > 1` is the
+            actual opposing-direction case — the headline action above is
+            derived from the highest-weight direction only, so a reader needs
+            this sentence specifically when a real opposite exists, not merely
+            when actions differ within the same direction.
+          */}
+          {advice.direction_weights.length > 1 && (
+            <p className="mt-2 text-xs text-amber-300">
+              本次同時命中方向相反的規則,卡片上方動作只代表權重較高的一方。
+            </p>
+          )}
         </Section>
       )}
 

@@ -12,7 +12,12 @@
  * 狀態旗標沒有專用端點,借用 `GET /api/directory/search` 的 `directory_synced`
  * (`useDirectoryStatus`,`queries.ts`)——後端唯一會誠實回報這面旗標的呼叫。
  * 未同步時沿用 `directorySearch.ts` 既有風控核可句 `DIRECTORY_NOT_SYNCED_NOTICE`
- * 逐字,不重寫;已同步的敘述與時間戳說明句是本批新文案,已列入回報請風控確認。
+ * 逐字,不重寫。
+ *
+ * 已同步文案 VETO 退修(風控快審波次 1,2026-08-10,`work/reviews/波次1文案裁決.md`
+ * D4):原「證券目錄已同步，代號自動完成可用。」暗示「已同步」等於「完整且最新」,
+ * 與本檔第一段揭露的事實(只知道目錄非空,無法判斷內容完整度)矛盾。改用風控逐字
+ * 核可句(下方 `DIRECTORY_SYNCED_APPROVED_TEXT`)。
  */
 
 import { formatDateTime } from "../lib/format";
@@ -22,6 +27,13 @@ import { SkeletonBlock } from "../components/SkeletonBlock";
 import { ErrorPanel } from "../components/ErrorPanel";
 
 const SYNC_COMMAND = "uv run python -m app.directory.sync";
+
+/**
+ * 風控核可句(`work/reviews/波次1文案裁決.md` D4,逐字),取代原先暗示「已同步=
+ * 完整且最新」的「證券目錄已同步，代號自動完成可用。」。
+ */
+const DIRECTORY_SYNCED_APPROVED_TEXT =
+  "證券目錄有資料,代號自動完成可用。目錄僅涵蓋台股上市與上櫃,不含美股;且本系統只知道目錄非空,無法判斷內容是否完整或最新。";
 
 export function DirectorySection() {
   const status = useDirectoryStatus();
@@ -55,17 +67,18 @@ export function DirectorySection() {
               {status.data.directory_synced ? "已同步" : "尚未同步"}
             </span>
             <p className="mt-2 text-xs text-neutral-500">
-              {status.data.directory_synced
-                ? "證券目錄已同步，代號自動完成可用。"
-                : DIRECTORY_NOT_SYNCED_NOTICE}
+              {status.data.directory_synced ? DIRECTORY_SYNCED_APPROVED_TEXT : DIRECTORY_NOT_SYNCED_NOTICE}
             </p>
             {/*
               `SearchResponse.as_of`（backend/app/api/directory.py，驗證）是這次
               查詢的產生時間，不是目錄實際同步的時間——後端沒有暴露同步時間的
               欄位，此處據實只稱「查詢時間」，不得誤植為「同步時間」。
+
+              D4 required(波次1文案裁決.md,2026-08-10):補「(非目錄同步時間)」,
+              避免讀者把這個時間戳誤認成目錄的同步時間。
             */}
             <p className="mt-1 text-xs text-neutral-600">
-              本次查詢時間：{formatDateTime(status.data.as_of)}
+              本次查詢時間：{formatDateTime(status.data.as_of)}(非目錄同步時間)
             </p>
           </>
         )}
