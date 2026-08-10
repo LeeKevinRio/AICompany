@@ -68,45 +68,76 @@ UNVERIFIED_RATES_NOTE = (
 
 # --- 除權息還原揭露：一組固定句子，每次回測必出現其中之一 -------------------
 # 這些字串是面向使用者的說明文案，任何修改都要重新過 risk-compliance-officer。
+# Wording state, per work/reviews/波次1文案裁決.md (2026-08-10):
+#   * DIVIDEND_METHOD_NOTE and both DIVIDEND_NO_EVENT_NOTE_* strings are the
+#     risk-compliance approved sentences, used verbatim.
+#   * DIVIDEND_BIAS_SCOPE_NOTE is drafted from that review's cross-sentence
+#     suggestion and is pending re-review.
 
 DIVIDEND_ADJUSTED_NOTE = (
-    "本回測已還原除權息：價格序列以官方除權息參考價／前一日收盤價為調整因子做"
-    "還原（back-adjustment），報酬已含現金股利與配股，Buy & Hold 對照同步還原。"
+    "本回測已還原除權息：價格序列以官方除權息參考價／前一日收盤價為調整因子"
+    "（交易所未公布參考價時，改以息值／權值回推同一數量）做還原（back-adjustment），"
+    "報酬已含現金股利與配股，Buy & Hold 對照同步還原。"
 )
+#: 風控核可文案（2026-08-10）：逐字使用，未經 risk-compliance-officer 重新核可不得修改。
 DIVIDEND_METHOD_NOTE = (
-    "還原採比例法（等同假設股利在除權息參考價再投入），與「在除息日收盤價再投入」"
-    "的加法算法有二階差異；還原價只用於回測報酬衡量，持倉市值與風險上限一律仍用"
-    "原始收盤價。"
+    "還原採比例法：等同假設股利在除權息參考價當天再投入。若改成假設在除息日收盤價"
+    "再投入，數字會略有不同，這是模型選擇而非事實，本系統未計算兩者差距。還原價只"
+    "用於回測報酬衡量；持倉市值與風險上限一律仍用原始收盤價。"
+)
+#: 待風控複審（2026-08-10 波次 1 跨句 suggested）：把「低估」的適用範圍限縮在
+#: Buy & Hold 與持有期間，避免讀者把策略欄的偏誤幅度當成同一個數。附加在每一句
+#: 「未還原」句尾，讓四種降級情境的限定語一致。
+DIVIDEND_BIAS_SCOPE_NOTE = (
+    "此低估確定發生在 Buy & Hold 與持有期間的報酬；策略欄因進出場時點不同，"
+    "偏誤幅度不一定相同。"
 )
 DIVIDEND_NOT_SYNCED_NOTE = (
     "本回測未還原除權息：本機尚未同步過任何除權息資料"
-    "（未執行 python -m app.dividends.sync）。台股高配息情況下，未還原的報酬率會"
-    "系統性低估。"
+    "（未執行 uv run python -m app.dividends.sync）。台股高配息情況下，未還原的"
+    "報酬率會低估。" + DIVIDEND_BIAS_SCOPE_NOTE
 )
-DIVIDEND_NO_EVENT_NOTE = (
+#: 風控核可文案（2026-08-10）：逐字使用。「查無紀錄」與「沒有資料可查」是兩件不同
+#: 的事，因此依 market 分兩支，非台股不得沿用「查無配息」的說法。
+DIVIDEND_NO_EVENT_NOTE_TW = (
     "本回測未還原除權息：本機雖有除權息資料，但查無本商品在此區間的除權息紀錄。"
-    "可能是該期間真的沒有配息，也可能是資料覆蓋不足（目前只涵蓋上市股票），"
-    "本系統無法分辨兩者；若實際有配息，此報酬率會系統性低估。"
+    "可能是該期間真的沒有配息，也可能是資料覆蓋不足（目前只涵蓋台股上市，不含上櫃），"
+    "本系統無法分辨兩者；若實際有配息，此報酬率會低估。"
+)
+#: 風控核可文案（2026-08-10）：逐字使用。
+DIVIDEND_NO_EVENT_NOTE_NON_TW = (
+    "本回測未還原除權息：本系統的除權息資料目前只涵蓋台股上市，不涵蓋本市場，"
+    "因此不是『查無配息』而是『沒有資料可查』。若本商品有配息，此報酬率會低估。"
 )
 DIVIDEND_UNUSABLE_NOTE = (
     "本回測未還原除權息：查到本商品在此區間的除權息紀錄，但欄位不足以推算調整因子，"
-    "已整筆略過而非用推估值代替。此報酬率會系統性低估，請重跑同步或請 data-engineer "
-    "覆核來源欄位。"
+    "已整筆略過而非用推估值代替。此報酬率會低估。" + DIVIDEND_BIAS_SCOPE_NOTE + "請重跑同步，"
+    "或回報此代號與區間供人工覆核來源欄位。"
 )
 DIVIDEND_DISABLED_NOTE = (
     "本次依請求關閉除權息還原（adjust_dividends=false），報酬率不含股利；"
-    "台股高配息情況下會系統性低估。"
+    "台股高配息情況下會低估。" + DIVIDEND_BIAS_SCOPE_NOTE
 )
 
-#: reason_code -> the sentence shown for it. The API returns both so a client
-#: can branch on the code without pattern-matching Chinese prose.
-DIVIDEND_NOTE_BY_CODE = {
-    "adjusted": DIVIDEND_ADJUSTED_NOTE,
-    "disabled": DIVIDEND_DISABLED_NOTE,
-    "never_synced": DIVIDEND_NOT_SYNCED_NOTE,
-    "no_events": DIVIDEND_NO_EVENT_NOTE,
-    "unusable_events": DIVIDEND_UNUSABLE_NOTE,
-}
+def dividend_notes_by_code(market: Market) -> dict[str, str]:
+    """reason_code -> the sentence shown for it in ``market``.
+
+    The API returns both code and sentence so a client can branch on the code
+    without pattern-matching Chinese prose. ``no_events`` is the one code whose
+    *fact* differs by market: in TW the store does cover the market and found
+    nothing, while in any other market there is no coverage to search at all.
+    Collapsing the two would let a US run read as "this symbol paid no
+    dividend", which is a claim this system cannot make.
+    """
+    return {
+        "adjusted": DIVIDEND_ADJUSTED_NOTE,
+        "disabled": DIVIDEND_DISABLED_NOTE,
+        "never_synced": DIVIDEND_NOT_SYNCED_NOTE,
+        "no_events": (
+            DIVIDEND_NO_EVENT_NOTE_TW if market == "TW" else DIVIDEND_NO_EVENT_NOTE_NON_TW
+        ),
+        "unusable_events": DIVIDEND_UNUSABLE_NOTE,
+    }
 
 
 @dataclass(frozen=True)
@@ -123,6 +154,7 @@ def _dividend_block(
     requested: bool,
     applied: bool,
     reason_code: str,
+    market: Market,
     events_applied: int = 0,
     events_skipped: int = 0,
     first_ex_date: str | None = None,
@@ -134,7 +166,7 @@ def _dividend_block(
         "requested": requested,
         "applied": applied,
         "reason_code": reason_code,
-        "note": DIVIDEND_NOTE_BY_CODE.get(reason_code),
+        "note": dividend_notes_by_code(market).get(reason_code),
         "events_applied": events_applied,
         "events_skipped": events_skipped,
         "first_ex_date": first_ex_date,
@@ -169,6 +201,7 @@ def resolve_dividend_adjustment(
                 requested=False,
                 applied=False,
                 reason_code="disabled",
+                market=market,
                 last_synced_at=last_synced_iso,
             ),
             notes=[DIVIDEND_DISABLED_NOTE],
@@ -177,7 +210,7 @@ def resolve_dividend_adjustment(
         return _DividendOutcome(
             bars=bars,
             block=_dividend_block(
-                requested=True, applied=False, reason_code="never_synced"
+                requested=True, applied=False, reason_code="never_synced", market=market
             ),
             notes=[DIVIDEND_NOT_SYNCED_NOTE],
         )
@@ -197,10 +230,11 @@ def resolve_dividend_adjustment(
                 requested=True,
                 applied=False,
                 reason_code=code,
+                market=market,
                 events_skipped=adjustment.events_skipped,
                 last_synced_at=last_synced_iso,
             ),
-            notes=[DIVIDEND_NOTE_BY_CODE[code]],
+            notes=[dividend_notes_by_code(market)[code]],
         )
     return _DividendOutcome(
         bars=list(adjustment.bars),
@@ -208,6 +242,7 @@ def resolve_dividend_adjustment(
             requested=True,
             applied=True,
             reason_code="adjusted",
+            market=market,
             events_applied=adjustment.events_applied,
             events_skipped=adjustment.events_skipped,
             first_ex_date=(
@@ -308,7 +343,10 @@ def run_walk_forward_backtest(
             # No report was produced, so there is nothing to claim adjusted or
             # not; the block records only what was asked for.
             dividend_adjustment=_dividend_block(
-                requested=body.adjust_dividends, applied=False, reason_code="not_run"
+                requested=body.adjust_dividends,
+                applied=False,
+                reason_code="not_run",
+                market=body.market,
             ),
             notes=base_notes,
             data=data_meta(loaded.meta()),

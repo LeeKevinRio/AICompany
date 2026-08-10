@@ -14,11 +14,14 @@ from typing import Any
 
 from app.api.backtest import (
     DIVIDEND_ADJUSTED_NOTE,
+    DIVIDEND_BIAS_SCOPE_NOTE,
     DIVIDEND_DISABLED_NOTE,
     DIVIDEND_METHOD_NOTE,
-    DIVIDEND_NO_EVENT_NOTE,
+    DIVIDEND_NO_EVENT_NOTE_NON_TW,
+    DIVIDEND_NO_EVENT_NOTE_TW,
     DIVIDEND_NOT_SYNCED_NOTE,
     DIVIDEND_UNUSABLE_NOTE,
+    resolve_dividend_adjustment,
 )
 from app.dividends.models import DividendEvent
 from tests.api_helpers import oscillating_closes, recent_bars
@@ -155,8 +158,43 @@ def test_synced_store_without_an_event_for_this_symbol_gets_its_own_sentence(
     block = body["dividend_adjustment"]
     assert block["reason_code"] == "no_events"
     assert block["applied"] is False
-    assert DIVIDEND_NO_EVENT_NOTE in body["notes"]
+    assert DIVIDEND_NO_EVENT_NOTE_TW in body["notes"]
+    assert block["note"] == DIVIDEND_NO_EVENT_NOTE_TW
     assert block["last_synced_at"] is not None
+
+
+def test_no_events_outside_taiwan_says_there_is_no_data_to_search(
+    api_harness: ApiHarness,
+) -> None:
+    """A US symbol is "沒有資料可查", never "查無配息".
+
+    The store only covers TW listings, so an empty result for another market is
+    a coverage gap, not evidence about the symbol. Driven through
+    ``resolve_dividend_adjustment`` directly because the harness resolver only
+    serves TW bars; the sentence choice is what is under test.
+    """
+    _seed_event(api_harness)  # store is synced, with TW data only
+    bars = recent_bars(oscillating_closes(60), symbol="AAPL", market="US", end=_END)
+    outcome = resolve_dividend_adjustment(
+        bars,
+        requested=True,
+        symbol="AAPL",
+        market="US",
+        store=api_harness.dividends,
+    )
+    assert outcome.block["reason_code"] == "no_events"
+    assert outcome.block["applied"] is False
+    assert outcome.block["note"] == DIVIDEND_NO_EVENT_NOTE_NON_TW
+    assert outcome.notes == [DIVIDEND_NO_EVENT_NOTE_NON_TW]
+    assert DIVIDEND_NO_EVENT_NOTE_TW not in outcome.notes
+
+
+def test_the_taiwan_no_event_sentence_is_not_reused_for_other_markets() -> None:
+    """The two branches must stay distinct sentences, not one hedged sentence."""
+    assert DIVIDEND_NO_EVENT_NOTE_TW != DIVIDEND_NO_EVENT_NOTE_NON_TW
+    assert "查無本商品在此區間的除權息紀錄" in DIVIDEND_NO_EVENT_NOTE_TW
+    assert "沒有資料可查" in DIVIDEND_NO_EVENT_NOTE_NON_TW
+    assert "查無配息" not in DIVIDEND_NO_EVENT_NOTE_TW
 
 
 def test_events_that_cannot_yield_a_factor_are_disclosed_as_unusable(
@@ -191,12 +229,65 @@ def test_every_note_sentence_states_the_direction_of_the_bias(
     """Each "未還原" sentence must warn that the return is understated."""
     for note in (
         DIVIDEND_NOT_SYNCED_NOTE,
-        DIVIDEND_NO_EVENT_NOTE,
+        DIVIDEND_NO_EVENT_NOTE_TW,
+        DIVIDEND_NO_EVENT_NOTE_NON_TW,
         DIVIDEND_UNUSABLE_NOTE,
         DIVIDEND_DISABLED_NOTE,
     ):
         assert "未還原" in note or "關閉除權息還原" in note
         assert "低估" in note
+
+
+def test_no_sentence_claims_an_unqualified_systematic_understatement(
+    api_harness: ApiHarness,
+) -> None:
+    """"系統性低估" over-claimed: it is B&H / holding-period that is understated.
+
+    The strategy column trades in and out, so its bias size is not the same
+    number; the scope sentence says so on every degraded branch that carries a
+    machine-derived claim.
+    """
+    for note in (
+        DIVIDEND_NOT_SYNCED_NOTE,
+        DIVIDEND_NO_EVENT_NOTE_TW,
+        DIVIDEND_NO_EVENT_NOTE_NON_TW,
+        DIVIDEND_UNUSABLE_NOTE,
+        DIVIDEND_DISABLED_NOTE,
+    ):
+        assert "系統性低估" not in note
+    for note in (
+        DIVIDEND_NOT_SYNCED_NOTE,
+        DIVIDEND_UNUSABLE_NOTE,
+        DIVIDEND_DISABLED_NOTE,
+    ):
+        assert DIVIDEND_BIAS_SCOPE_NOTE in note
+
+    _seed_bars(api_harness)  # never synced -> the degraded sentence is served
+    assert any(DIVIDEND_BIAS_SCOPE_NOTE in note for note in _post(api_harness)["notes"])
+
+
+def test_the_sync_command_is_quoted_the_way_it_is_actually_run() -> None:
+    """The suggested fix is only useful if the pasted command works verbatim."""
+    assert "uv run python -m app.dividends.sync" in DIVIDEND_NOT_SYNCED_NOTE
+
+
+def test_the_unusable_sentence_asks_for_a_report_not_an_internal_role() -> None:
+    """User-facing copy must not name an internal role the reader cannot reach."""
+    assert "data-engineer" not in DIVIDEND_UNUSABLE_NOTE
+    assert "回報此代號與區間供人工覆核來源欄位" in DIVIDEND_UNUSABLE_NOTE
+
+
+def test_the_adjusted_sentence_discloses_the_fallback_factor_route() -> None:
+    """``DividendEvent.adjustment_factor`` has two routes; the copy names both."""
+    assert "官方除權息參考價／前一日收盤價" in DIVIDEND_ADJUSTED_NOTE
+    assert "交易所未公布參考價時，改以息值／權值回推同一數量" in DIVIDEND_ADJUSTED_NOTE
+
+
+def test_the_method_sentence_keeps_valuation_on_raw_closes() -> None:
+    """The approved wording pins the boundary ``app.dividends.adjust`` documents."""
+    assert "還原採比例法" in DIVIDEND_METHOD_NOTE
+    assert "持倉市值與風險上限一律仍用原始收盤價" in DIVIDEND_METHOD_NOTE
+    assert "本系統未計算兩者差距" in DIVIDEND_METHOD_NOTE
 
 
 def test_a_run_with_no_report_claims_nothing_about_adjustment(
