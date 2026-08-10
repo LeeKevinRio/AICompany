@@ -19,9 +19,10 @@ from app.directory.providers import (
     TWSE_OPENAPI_BASE_URL,
     TpexDirectoryAdapter,
     TwseDirectoryAdapter,
+    TwseSectorProfileAdapter,
 )
 from app.directory.store import SecurityDirectoryStore
-from app.directory.sync import _all_unreachable, main, sync_directory
+from app.directory.sync import _all_unreachable, main, run_sector_verification, sync_directory
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 AS_OF = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -202,3 +203,89 @@ def test_main_succeeds_and_writes_db_when_reachable(
 
     store = SecurityDirectoryStore(db_path=db_path)
     assert store.count() == 6
+
+
+# --------------------------------------------------------------------------
+# --verify-sectors -- never touches the SQLite store, never writes sectors.py
+# --------------------------------------------------------------------------
+
+
+def test_run_sector_verification_writes_report_and_returns_zero(tmp_path: Path) -> None:
+    payload = _fixture_json("twse_openapi_t187ap03_l.json")
+    adapter = TwseSectorProfileAdapter(client=_ok_client(TWSE_OPENAPI_BASE_URL, payload))
+    output_path = tmp_path / "產業清單覆核.md"
+
+    exit_code, result = run_sector_verification(adapter=adapter, output_path=output_path)
+
+    assert exit_code == 0
+    assert result.ok is True
+    assert output_path.exists()
+    markdown = output_path.read_text(encoding="utf-8")
+    assert "不會被本工具自動修改" in markdown
+    assert "電子工業" in markdown  # official_only: umbrella category sectors.py excludes on purpose
+
+
+def test_run_sector_verification_returns_one_and_no_file_when_unreachable(tmp_path: Path) -> None:
+    adapter = TwseSectorProfileAdapter(client=_unreachable_client(TWSE_OPENAPI_BASE_URL))
+    output_path = tmp_path / "產業清單覆核.md"
+
+    exit_code, result = run_sector_verification(adapter=adapter, output_path=output_path)
+
+    assert exit_code == 1
+    assert result.ok is False
+    assert not output_path.exists()
+
+
+def test_main_verify_sectors_prints_guidance_and_exits_one_when_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _raising_transport(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    def fake_rate_limited_client(*args: object, **kwargs: object) -> RateLimitedClient:
+        return RateLimitedClient(
+            base_url=str(kwargs.get("base_url", "")),
+            min_interval_seconds=0.0,
+            max_retries=0,
+            transport=httpx.MockTransport(_raising_transport),
+            sleep_fn=lambda _s: None,
+        )
+
+    monkeypatch.setattr("app.directory.sync.RateLimitedClient", fake_rate_limited_client)
+
+    exit_code = main(["--verify-sectors", "--sectors-output", str(tmp_path / "report.md")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "有網路的機器" in captured.err
+    assert "--verify-sectors" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (tmp_path / "report.md").exists()
+
+
+def test_main_verify_sectors_writes_report_when_reachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    payload = _fixture_json("twse_openapi_t187ap03_l.json")
+
+    def fake_rate_limited_client(*args: object, **kwargs: object) -> RateLimitedClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=payload)
+
+        return RateLimitedClient(
+            base_url=str(kwargs.get("base_url", "")),
+            min_interval_seconds=0.0,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+        )
+
+    monkeypatch.setattr("app.directory.sync.RateLimitedClient", fake_rate_limited_client)
+
+    output_path = tmp_path / "產業清單覆核.md"
+    exit_code = main(["--verify-sectors", "--sectors-output", str(output_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "twse_openapi_t187ap03_L" in captured.out
+    assert output_path.exists()
+    assert "產業清單覆核" in output_path.read_text(encoding="utf-8")

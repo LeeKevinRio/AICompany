@@ -36,6 +36,21 @@ for the same caveat applied to other OpenAPI datasets in this project. A
 schema mismatch must surface as ``ok=False`` with a clear reason (never a
 partially-parsed, silently-wrong directory), which is exactly what the
 per-row ``UnparseableRowError`` skip below produces.
+
+## Sector-profile endpoint (``TwseSectorProfileAdapter``) -- same unverified status
+
+Used only by the ``--verify-sectors`` audit (``app.directory.sector_audit``),
+never by the symbol/name sync above. ``GET
+https://openapi.twse.com.tw/v1/opendata/t187ap03_L`` is TWSE's "上市公司基本
+資料" (listed-company basic profile) dataset -- the docstring above already
+flagged this as "the more literal directory match" for company data; it is
+picked up here specifically because it is the dataset publicly documented to
+carry a per-company ``產業別`` (industry category) column, which
+``STOCK_DAY_ALL`` does not. Same caveat as above: the path and the
+``公司代號``/``公司名稱``/``產業別`` field names are **inferred** from public
+OpenAPI documentation, not confirmed against a live payload from this
+sandbox (egress blocked). A schema mismatch must surface as ``ok=False``,
+never a silently-empty or partially-parsed sector list.
 """
 
 from __future__ import annotations
@@ -59,6 +74,10 @@ TWSE_STOCK_LIST_PATH = "/v1/exchangeReport/STOCK_DAY_ALL"
 TPEX_OPENAPI_BASE_URL = "https://www.tpex.org.tw"
 TPEX_STOCK_LIST_PATH = "/openapi/v1/tpex_mainboard_daily_close_quotes"
 
+#: See "Sector-profile endpoint" section in the module docstring for the
+#: provenance caveat -- inferred, not verified against a live payload.
+TWSE_COMPANY_PROFILE_PATH = "/v1/opendata/t187ap03_L"
+
 
 @dataclass(frozen=True)
 class DirectoryFetchResult:
@@ -72,6 +91,41 @@ class DirectoryFetchResult:
     """
 
     entries: tuple[DirectoryEntry, ...]
+    ok: bool
+    reason: str | None
+    source: str
+    as_of: datetime
+
+
+@dataclass(frozen=True)
+class SectorProfileEntry:
+    """One listed company's ``代號 -> 名稱 -> 產業別`` row from ``t187ap03_L``.
+
+    Deliberately a plain dataclass, not a ``pydantic`` model like
+    ``DirectoryEntry``: this data is never persisted to the store, only fed
+    into ``app.directory.sector_audit.compare_sectors`` for a one-off
+    comparison against ``app.positions.sectors.TWSE_SECTORS``, so it does not
+    need the validated-input-boundary discipline the persisted directory
+    rows do. Still carries ``source``/``as_of`` per the provenance rule.
+    """
+
+    symbol: str
+    name: str
+    sector: str
+    source: str
+    as_of: datetime
+
+
+@dataclass(frozen=True)
+class SectorProfileFetchResult:
+    """Outcome of fetching the TWSE company-profile dataset for the sector audit.
+
+    Mirrors ``DirectoryFetchResult``'s discipline: never raise for an
+    expected failure mode, report ``ok=False`` with a Traditional Chinese
+    ``reason`` instead.
+    """
+
+    entries: tuple[SectorProfileEntry, ...]
     ok: bool
     reason: str | None
     source: str
@@ -144,8 +198,7 @@ class TwseDirectoryAdapter:
                 entries=(),
                 ok=False,
                 reason=(
-                    f"TWSE OpenAPI 回應非陣列（收到 {type(payload).__name__}），"
-                    "schema 與預期不符"
+                    f"TWSE OpenAPI 回應非陣列（收到 {type(payload).__name__}），schema 與預期不符"
                 ),
                 source=self.source_id,
                 as_of=now,
@@ -233,8 +286,7 @@ class TpexDirectoryAdapter:
                 entries=(),
                 ok=False,
                 reason=(
-                    f"TPEx OpenAPI 回應非陣列（收到 {type(payload).__name__}），"
-                    "schema 與預期不符"
+                    f"TPEx OpenAPI 回應非陣列（收到 {type(payload).__name__}），schema 與預期不符"
                 ),
                 source=self.source_id,
                 as_of=now,
@@ -264,5 +316,113 @@ class TpexDirectoryAdapter:
                 as_of=now,
             )
         return DirectoryFetchResult(
+            entries=tuple(entries), ok=True, reason=None, source=self.source_id, as_of=now
+        )
+
+
+def _parse_sector_row(row: Any) -> tuple[str, str, str]:
+    if not isinstance(row, dict):
+        raise UnparseableRowError(f"row is not an object: {row!r}")
+    symbol = row.get("公司代號")
+    name = row.get("公司名稱")
+    sector = row.get("產業別")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise UnparseableRowError(f"missing/blank 公司代號 in row: {row!r}")
+    if not isinstance(name, str) or not name.strip():
+        raise UnparseableRowError(f"missing/blank 公司名稱 in row: {row!r}")
+    if not isinstance(sector, str) or not sector.strip():
+        raise UnparseableRowError(f"missing/blank 產業別 in row: {row!r}")
+    return symbol.strip(), name.strip(), sector.strip()
+
+
+class TwseSectorProfileAdapter:
+    """Fetches TWSE's per-company ``產業別`` from the ``t187ap03_L`` dataset.
+
+    Only used by the ``--verify-sectors`` audit -- see the module docstring's
+    "Sector-profile endpoint" section for the same unverified-schema caveat
+    the symbol/name adapters above carry.
+    """
+
+    source_id: ClassVar[str] = "twse_openapi_t187ap03_L"
+
+    def __init__(self, client: RateLimitedClient | None = None) -> None:
+        self._client = client or RateLimitedClient(
+            base_url=TWSE_OPENAPI_BASE_URL, min_interval_seconds=0.5
+        )
+        self._owns_client = client is None
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def fetch(self) -> SectorProfileFetchResult:
+        now = datetime.now(UTC)
+        try:
+            response = self._client.get(TWSE_COMPANY_PROFILE_PATH)
+        except httpx.TransportError as exc:
+            return SectorProfileFetchResult(
+                entries=(),
+                ok=False,
+                reason=(
+                    f"連線失敗（{exc.__class__.__name__}）：{exc}。"
+                    "本雲端開發環境對財經網域的 egress 已知被封鎖，"
+                    "請在有網路的機器（如 CEO 本機）重跑本工具。"
+                ),
+                source=self.source_id,
+                as_of=now,
+            )
+        if response.status_code != httpx.codes.OK:
+            return SectorProfileFetchResult(
+                entries=(),
+                ok=False,
+                reason=f"TWSE OpenAPI 回傳 HTTP {response.status_code}，非預期狀態碼",
+                source=self.source_id,
+                as_of=now,
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            return SectorProfileFetchResult(
+                entries=(),
+                ok=False,
+                reason="TWSE OpenAPI 回應非 JSON，可能是端點路徑或格式已變更",
+                source=self.source_id,
+                as_of=now,
+            )
+        if not isinstance(payload, list):
+            return SectorProfileFetchResult(
+                entries=(),
+                ok=False,
+                reason=(
+                    f"TWSE OpenAPI 回應非陣列（收到 {type(payload).__name__}），schema 與預期不符"
+                ),
+                source=self.source_id,
+                as_of=now,
+            )
+
+        entries: list[SectorProfileEntry] = []
+        skipped = 0
+        for row in payload:
+            try:
+                symbol, name, sector = _parse_sector_row(row)
+            except UnparseableRowError as exc:
+                logger.debug("skipping unparseable TWSE sector-profile row: %s", exc)
+                skipped += 1
+                continue
+            entries.append(
+                SectorProfileEntry(
+                    symbol=symbol, name=name, sector=sector, source=self.source_id, as_of=now
+                )
+            )
+
+        if not entries:
+            return SectorProfileFetchResult(
+                entries=(),
+                ok=False,
+                reason=f"TWSE OpenAPI 回應中沒有任何可解析的列（略過 {skipped} 列）",
+                source=self.source_id,
+                as_of=now,
+            )
+        return SectorProfileFetchResult(
             entries=tuple(entries), ok=True, reason=None, source=self.source_id, as_of=now
         )

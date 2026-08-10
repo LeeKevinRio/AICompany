@@ -26,6 +26,18 @@ CONNECT 被擋等）時，兩個來源各自的 adapter（`app.directory.provide
 CLI；`main()` 額外在兩個來源都不可達時印出一段「請在有網路的機器重跑」的
 明確指引，而不是印出一段裸 traceback 讓人看不懂發生了什麼事。
 
+## 產業清單覆核（``--verify-sectors``）
+
+    uv run python -m app.directory.sync --verify-sectors
+
+`app/positions/sectors.py` 的 TWSE 產業別清單標註「依公開常識整理、未經 TWSE
+線上來源查證」。這個旗標抓 TWSE OpenAPI 的 ``t187ap03_L``（上市公司基本資料，
+含 ``產業別`` 欄）與該清單比對，輸出「官方有我們沒有／我們有官方沒有／名稱
+用字差異」到終端，並把完整報告寫成 ``work/research/產業清單覆核-<日期>.md``
+草稿。**不會寫 SQLite、不會自動改 ``sectors.py``**——那是核可清單，任何差異
+都回報 CEO 轉裁決，見 ``app.directory.sector_audit`` 的模組說明。與一般同步
+一樣，本雲端環境打不到 TWSE 網域時會印出指引而不是裸 traceback。
+
 ## 測試
 
 `apps/stock-desk/backend/tests/test_directory_providers.py` 與
@@ -33,7 +45,8 @@ CLI；`main()` 額外在兩個來源都不可達時印出一段「請在有網�
 parsing 與部分失敗行為，一律不打外網：
 
     cd apps/stock-desk/backend
-    uv run pytest tests/test_directory_providers.py tests/test_directory_sync.py -v
+    uv run pytest tests/test_directory_providers.py tests/test_directory_sync.py \\
+        tests/test_sector_audit.py -v
 """
 
 from __future__ import annotations
@@ -41,7 +54,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from app.data.http import RateLimitedClient
@@ -49,12 +62,18 @@ from app.directory.providers import (
     TPEX_OPENAPI_BASE_URL,
     TWSE_OPENAPI_BASE_URL,
     DirectoryFetchResult,
+    SectorProfileFetchResult,
     TpexDirectoryAdapter,
     TwseDirectoryAdapter,
+    TwseSectorProfileAdapter,
 )
+from app.directory.sector_audit import compare_sectors, render_markdown, render_terminal_lines
 from app.directory.store import SecurityDirectoryStore
 
 _BANNER_RULE = "=" * 72
+
+#: apps/stock-desk/backend/app/directory/sync.py -> repo root (5 parents up).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 
 _NETWORK_GUIDANCE = (
     "兩個來源皆無法連線。本雲端開發環境對財經網域的 egress 已知被封鎖，"
@@ -64,6 +83,16 @@ _NETWORK_GUIDANCE = (
     "  uv run python -m app.directory.sync\n"
     "執行結果會寫入 STOCK_DESK_DB_PATH 指到的 SQLite 檔（預設 ./data/stock-desk.db），"
     "之後這台雲端環境也能離線讀到剛才同步的目錄資料（把資料庫檔案帶過來即可）。"
+)
+
+_SECTOR_NETWORK_GUIDANCE = (
+    "TWSE 產業別來源（t187ap03_L）無法連線。本雲端開發環境對財經網域的 egress "
+    "已知被封鎖，這是預期中的限制，不代表程式有 bug。\n"
+    "請改在有網路的機器（例如 CEO 本機）執行：\n"
+    "  cd apps/stock-desk/backend\n"
+    "  uv run python -m app.directory.sync --verify-sectors\n"
+    "執行結果會印在終端並寫成 work/research/產業清單覆核-<日期>.md 草稿，"
+    "不會自動修改 app/positions/sectors.py。"
 )
 
 
@@ -112,6 +141,54 @@ def _all_unreachable(results: Sequence[DirectoryFetchResult]) -> bool:
     )
 
 
+def _print_sector_banner() -> None:
+    print(_BANNER_RULE)
+    print("產業清單覆核 -- TWSE 上市公司產業別 vs. app/positions/sectors.py")
+    print(_BANNER_RULE)
+
+
+def _default_sector_report_path(*, today: date | None = None) -> Path:
+    moment = today if today is not None else date.today()
+    return _REPO_ROOT / "work" / "research" / f"產業清單覆核-{moment.isoformat()}.md"
+
+
+def run_sector_verification(
+    *,
+    adapter: TwseSectorProfileAdapter,
+    output_path: Path | None = None,
+) -> tuple[int, SectorProfileFetchResult]:
+    """Fetch TWSE's per-company sector column and diff it against ``TWSE_SECTORS``.
+
+    Never writes to the SQLite store and never touches ``sectors.py`` -- see
+    ``app.directory.sector_audit``'s module docstring for why. Returns the
+    process exit code and the raw fetch result so the CLI and tests can both
+    inspect what happened without re-fetching.
+    """
+    result = adapter.fetch()
+    if not result.ok:
+        print(f"[{result.source}] FAIL/UNREACHABLE")
+        print(f"  原因：{result.reason}")
+        if result.reason is not None and "連線失敗" in result.reason:
+            print()
+            print(_SECTOR_NETWORK_GUIDANCE, file=sys.stderr)
+        return 1, result
+
+    print(
+        f"[{result.source}] PASS -- 抓到 {len(result.entries)} 筆公司列，"
+        f"as_of={result.as_of.isoformat()}"
+    )
+    report = compare_sectors(result.entries, as_of=result.as_of, source=result.source)
+    for line in render_terminal_lines(report):
+        print(line)
+
+    resolved_output = output_path or _default_sector_report_path()
+    resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output.write_text(render_markdown(report), encoding="utf-8")
+    print(f"完整報告已寫入：{resolved_output}")
+
+    return 0, result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.directory.sync",
@@ -126,7 +203,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="覆寫資料庫路徑；未指定時沿用 STOCK_DESK_DB_PATH（預設 ./data/stock-desk.db）",
     )
+    parser.add_argument(
+        "--verify-sectors",
+        action="store_true",
+        help=(
+            "改跑產業清單覆核：抓 TWSE 上市公司產業別（t187ap03_L），"
+            "與 app/positions/sectors.py 比對差異並輸出報告；"
+            "不寫 SQLite、不自動修改 sectors.py（見本檔案模組說明）"
+        ),
+    )
+    parser.add_argument(
+        "--sectors-output",
+        type=Path,
+        default=None,
+        help=(
+            "覆寫 --verify-sectors 報告輸出路徑；未指定時預設 "
+            "work/research/產業清單覆核-<今天日期>.md"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.verify_sectors:
+        sector_client = RateLimitedClient(base_url=TWSE_OPENAPI_BASE_URL, min_interval_seconds=0.5)
+        sector_adapter = TwseSectorProfileAdapter(client=sector_client)
+        _print_sector_banner()
+        try:
+            exit_code, _ = run_sector_verification(
+                adapter=sector_adapter, output_path=args.sectors_output
+            )
+        finally:
+            sector_adapter.close()
+        return exit_code
 
     db_path = Path(args.db_path) if args.db_path is not None else None
     store = SecurityDirectoryStore(db_path)
@@ -138,9 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _print_banner()
     try:
-        results = sync_directory(
-            store=store, twse_adapter=twse_adapter, tpex_adapter=tpex_adapter
-        )
+        results = sync_directory(store=store, twse_adapter=twse_adapter, tpex_adapter=tpex_adapter)
     finally:
         twse_adapter.close()
         tpex_adapter.close()

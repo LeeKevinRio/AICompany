@@ -13,6 +13,7 @@ from app.directory.providers import (
     TWSE_OPENAPI_BASE_URL,
     TpexDirectoryAdapter,
     TwseDirectoryAdapter,
+    TwseSectorProfileAdapter,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -144,3 +145,67 @@ def test_tpex_fetch_reports_transport_error_without_raising() -> None:
     assert result.ok is False
     assert result.entries == ()
     assert "連線失敗" in (result.reason or "")
+
+
+# --------------------------------------------------------------------------
+# TWSE sector profile (t187ap03_L) -- feeds app.directory.sector_audit only
+# --------------------------------------------------------------------------
+
+
+def test_twse_sector_profile_fetch_parses_fixture_and_skips_blank_rows() -> None:
+    payload = _fixture_json("twse_openapi_t187ap03_l.json")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = _mock_client(TWSE_OPENAPI_BASE_URL, httpx.MockTransport(handler))
+    adapter = TwseSectorProfileAdapter(client=client)
+    result = adapter.fetch()
+
+    assert result.ok
+    assert result.source == "twse_openapi_t187ap03_L"
+    assert result.as_of.tzinfo is not None
+    symbols = {entry.symbol for entry in result.entries}
+    # Blank-代號 row and blank-產業別 row must both be skipped.
+    assert symbols == {"2330", "2317", "1101", "9921", "8888"}
+    by_symbol = {entry.symbol: entry for entry in result.entries}
+    assert by_symbol["2330"].sector == "半導體業"
+    assert by_symbol["2330"].name == "台積電"
+    assert by_symbol["2330"].source == "twse_openapi_t187ap03_L"
+    # Internal full-width-space variant kept verbatim -- normalization is the
+    # comparison layer's job (app.directory.sector_audit), not the adapter's.
+    assert by_symbol["9921"].sector == "電機　機械"
+
+
+def test_twse_sector_profile_fetch_reports_transport_error_without_raising() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    adapter = TwseSectorProfileAdapter(
+        client=RateLimitedClient(
+            base_url=TWSE_OPENAPI_BASE_URL,
+            min_interval_seconds=0.0,
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+        )
+    )
+    result = adapter.fetch()
+
+    assert result.ok is False
+    assert result.entries == ()
+    assert result.reason is not None
+    assert "連線失敗" in result.reason
+    assert "CEO 本機" in result.reason
+
+
+def test_twse_sector_profile_fetch_reports_non_array_payload() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"stat": "unexpected"})
+
+    client = _mock_client(TWSE_OPENAPI_BASE_URL, httpx.MockTransport(handler))
+    adapter = TwseSectorProfileAdapter(client=client)
+    result = adapter.fetch()
+
+    assert result.ok is False
+    assert "schema" in (result.reason or "")
