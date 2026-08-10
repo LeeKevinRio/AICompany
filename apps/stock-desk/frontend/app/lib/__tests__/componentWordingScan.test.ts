@@ -61,6 +61,16 @@ const SCANNED_FILES = [
   // labels) are copied verbatim from the already-scanned `NavBar.tsx`, but
   // this file was never itself in the scan list.
   "../../components/SymbolCombobox.tsx",
+  // 風控列管清償批(work/機會清單.md D1, 2026-08-10):新增的「證券目錄」設定頁
+  // 區塊帶新的事實陳述文案，先前不在掃描範圍內。
+  //
+  // 註: `BacktestReportView.tsx` 本批也加了一句常駐警語(D2 item 4)，但該檔既有
+  // 的 `METRIC_ROWS` 「勝率」欄位標籤(回測歷史績效統計量,非新增)會被本掃描的
+  // 逐字比對誤殺——與 risk-final-review.md 已接受的「勝率→歷史交易的獲勝比例」
+  // 屬同一類語境(承認/描述已發生的歷史結果,非機率洗白),但改寫該標籤或调整
+  // 掃描例外清單都超出本批派工範圍,故不將該檔納入掃描,留待下次動到回測頁措辭
+  // 時一併處理。
+  "../../settings/DirectorySection.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

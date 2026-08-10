@@ -7,6 +7,7 @@ import { SkeletonBlock } from "../components/SkeletonBlock";
 import { SettingsForm } from "./SettingsForm";
 import { NetWorthSection } from "./NetWorthSection";
 import { DataSourcesSection } from "./DataSourcesSection";
+import { DirectorySection } from "./DirectorySection";
 import { AlertRulesSection } from "./AlertRulesSection";
 
 export default function SettingsPage() {
@@ -38,6 +39,7 @@ export default function SettingsPage() {
             <NetWorthSection settings={settings.data} />
             <SettingsForm settings={settings.data} />
             <DataSourcesSection />
+            <DirectorySection />
           </>
         )}
 

@@ -28,6 +28,7 @@ import {
   updatePosition,
   updateSettings,
 } from "./api";
+import { DIRECTORY_STATUS_PROBE_LIMIT, DIRECTORY_STATUS_PROBE_QUERY } from "./directorySearch";
 import type {
   AlertRuleInput,
   AlertRulePatch,
@@ -284,6 +285,21 @@ export function useDirectorySearch(q: string, enabled: boolean) {
     queryKey: ["directory-search", q],
     queryFn: () => searchDirectory(q),
     enabled: enabled && q.length > 0,
+    retry: false,
+  });
+}
+
+/**
+ * 設定頁「證券目錄」說明區塊(work/機會清單.md D1,2026-08-10 派工單)用的同步
+ * 狀態——沒有專用端點,借用 `searchDirectory` 帶一個探測用 query/limit(見
+ * `directorySearch.ts` 的常數註解),只讀回應的 `directory_synced`/`as_of`。
+ * 獨立的 query key,不與 NavBar 的 `["directory-search", q]` 共用,因為這裡的
+ * `q` 是探測值而非使用者輸入。
+ */
+export function useDirectoryStatus() {
+  return useQuery({
+    queryKey: ["directory-status"],
+    queryFn: () => searchDirectory(DIRECTORY_STATUS_PROBE_QUERY, DIRECTORY_STATUS_PROBE_LIMIT),
     retry: false,
   });
 }

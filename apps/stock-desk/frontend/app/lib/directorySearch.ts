@@ -26,6 +26,17 @@ export const SYMBOL_PATTERN = /^(?=.*[A-Za-z0-9])[A-Za-z0-9.]+$/;
 export const DIRECTORY_SEARCH_DEBOUNCE_MS = 300;
 
 /**
+ * 設定頁「證券目錄」說明區塊(work/機會清單.md D1,2026-08-10 派工單)所讀的同步
+ * 狀態,借道 `GET /api/directory/search` 取得其 `directory_synced` 旗標——後端
+ * 沒有獨立的「目錄狀態」端點(見 `backend/app/api/directory.py`),`search` 是
+ * 唯一會誠實回報這面旗標的呼叫,且 `q` 為必填(`min_length=1`)。查詢字串與
+ * `limit` 都只是探測用,回應的 `items`/`truncated` 不會被這個 hook 使用,只讀
+ * `directory_synced`/`as_of`,所以取值本身無關緊要,只要合法即可。
+ */
+export const DIRECTORY_STATUS_PROBE_QUERY = "0";
+export const DIRECTORY_STATUS_PROBE_LIMIT = 1;
+
+/**
  * Minimal trailing-edge debouncer: each `schedule()` call cancels any
  * pending previous call and re-arms the timer, so only the *last* call
  * within a `delayMs` window actually fires. `cancel()` lets a caller (e.g.
