@@ -22,6 +22,7 @@ from app.data.providers.yfinance import YFinanceAdapter
 from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
+from app.dividends.store import DividendEventStore
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.services.index import (
@@ -162,6 +163,18 @@ def _default_directory_store() -> SecurityDirectoryStore:
 
 
 @lru_cache(maxsize=1)
+def _default_dividend_store() -> DividendEventStore:
+    """The process-wide 除權息 event store.
+
+    Shares the same ``STOCK_DESK_DB_PATH`` SQLite file as every other store; it
+    is empty until the CEO runs ``python -m app.dividends.sync`` at least once,
+    which the backtest endpoint surfaces honestly as "未還原除權息" rather than
+    pretending the symbol never paid a dividend.
+    """
+    return DividendEventStore()
+
+
+@lru_cache(maxsize=1)
 def _default_quota_ledger() -> QuotaLedger:
     """The ledger the API reads for observability only.
 
@@ -216,3 +229,8 @@ def get_quota_ledger() -> QuotaLedger:
 def get_directory_store() -> SecurityDirectoryStore:
     """Return the process-wide security directory store."""
     return _default_directory_store()
+
+
+def get_dividend_store() -> DividendEventStore:
+    """Return the process-wide 除權息 event store."""
+    return _default_dividend_store()

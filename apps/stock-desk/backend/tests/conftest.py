@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_dividend_store,
     get_fx_provider,
     get_index_resolver,
     get_market_resolver,
@@ -29,6 +30,7 @@ from app.api.deps import (
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
 from app.data.quota import QuotaLedger
+from app.dividends.store import DividendEventStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
@@ -51,6 +53,10 @@ class ApiHarness:
     #: Temp-directory ledger; a test reserves against it to drive the
     #: data-source block of ``GET /api/settings``.
     quota: QuotaLedger
+    #: Temp-directory 除權息 store, **empty by default** -- the same state a
+    #: machine that has never run ``python -m app.dividends.sync`` is in, so the
+    #: "未還原" disclosure is what tests see unless they seed events.
+    dividends: DividendEventStore
 
 
 @pytest.fixture
@@ -87,6 +93,7 @@ def api_harness(
     alerts = AlertStore(db_path=tmp_path / "alerts.db")
     settings = SettingsStore(db_path=tmp_path / "settings.db")
     quota = QuotaLedger(db_path=tmp_path / "quota.db")
+    dividends = DividendEventStore(db_path=tmp_path / "dividends.db")
     valuator = PositionValuator(
         market_services={"TW": price_service},
         fx_provider=fx_provider,
@@ -103,6 +110,7 @@ def api_harness(
     }
     app.dependency_overrides[get_fx_provider] = lambda: fx_provider
     app.dependency_overrides[get_quota_ledger] = lambda: quota
+    app.dependency_overrides[get_dividend_store] = lambda: dividends
 
     with TestClient(app) as test_client:
         yield ApiHarness(
@@ -114,6 +122,7 @@ def api_harness(
             settings=settings,
             fx_provider=fx_provider,
             quota=quota,
+            dividends=dividends,
         )
     app.dependency_overrides.clear()
 
