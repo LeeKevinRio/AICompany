@@ -4,49 +4,71 @@
 **撰寫者**：tech-writer（基於代碼實地確認）  
 **對象**：開發團隊、tech-architect、risk-compliance-officer、CEO
 
+> 檔案路徑慣例：本檔內裸寫 `app/...` 的路徑（原 2026-07-26 版本沿用）皆相對於
+> `apps/stock-desk/backend/`；2026-08-10 新增內容改用完整前綴 `backend/app/...`／
+> `frontend/app/...`（相對於 `apps/stock-desk/`），兩者指向同一組檔案，僅前綴寫法不同。
+
 ---
 
 ## 限制清單
 
-### 1. US 市場無 data provider adapter
+### 1. US 市場 adapter 已實作，但未經真實環境驗證（原「無 adapter」已過時）
 
-**現況**：
-- 後端定義上支援 `Market="US"` 與 `Currency="USD"`（見 `app/positions/models.py` 與 `app/data/interface.py`）。
-- 但僅實作了台股適配：`TWSEProvider`、`TPExProvider`、`FinMindProvider`（見 `app/data/providers/`）。
-- 美股無任何 adapter；嘗試查詢 US 標的會降級至快取，最終回 `unavailable`。
+**已解決（Phase 7，dev-lead；ADR-0005）**：
+- `app/data/providers/alpha_vantage.py`（主）與 `app/data/providers/yfinance.py`（備援）已實作並接線：
+  `MarketDataService(primary=AlphaVantageAdapter(), backups=[YFinanceAdapter()], cache_first=True)`
+  （`backend/app/api/deps.py:89-94`，ADR-0005 決策四：TTL 快取先行 → AV → yfinance → 任何快取 → unavailable）。
+- 需要環境變數 `ALPHA_VANTAGE_API_KEY`；未設定時主來源在發送請求前就直接放棄
+  （`backend/app/data/providers/alpha_vantage.py:98,161`），自動降級至 yfinance 備援或快取。
 
-**影響**：
-- 任何 US 標的（美股、美國 ETF）均無法取得日線數據。
-- 相應的訊號、建議卡、槓桿拆解均無法計算。
-- 使用者可以手動輸入 US 部位，但該部位在儀表板與決策中形同「無效」。
+**仍存在的限制**：
+- 兩個 adapter 的端點與回應格式都是「依公開文件與訓練知識撰寫（2026-07-23），未對照真實回應
+  查證」——本沙盒環境對外網 HTTPS 被擋，無法連線驗證（`backend/app/data/providers/alpha_vantage.py:16-20`）。
+- 在本沙盒環境裡，即使 adapter 已接線，實際查詢仍只會拿到 `unavailable`（egress 被擋）。
 
-**解法方向**：
-- 實作 Alpha Vantage adapter（ADR-0003 提案之主來源；25 req/day 免費額度）。
-- 實作 yfinance adapter（備援來源；額度無限但非官方，隨時可能失效）。
-- 額度管理：單日持倉標的數 ≤ 25 時 AV 足夠；超過需跨日或動用備援。
-- 涉及 ADR-0003 的降級鏈、來源標示、快取 TTL、ticker 正規化等架構決策。
+**影響**：US 標的的日線、訊號、建議卡、槓桿拆解**架構上可以計算**（adapter 存在且接線），
+但尚不能視為「production ready」——回應格式尚未經過一次真實請求驗證。
 
-**建議負責角色**：dev-lead / tech-architect（需重評 ADR-0003 的實施狀態與優先序）。
+**查證方式**：`apps/stock-desk/scripts/verify_market_data.py`（CEO 本機一鍵核實工具，見
+`work/stock-desk-數據核實操作說明.md`）。
+
+**建議負責角色**：devops-sre / data-engineer（在有網路的機器執行核實工具，核實後更新
+`alpha_vantage.py` / `yfinance.py` 檔頭的查證日期與 `verified` 狀態）。
 
 ---
 
-### 2. 指數日線無來源（影響槓桿 ETF 情境推估）
+### 2. 指數日線已有 adapter，但僅 12/17 檔槓桿 ETF 有對映指數（原「無任何指數 adapter」已過時）
 
-**現況**：
-- 槓桿 ETF 的情境推估（`app/leverage/erosion.py`）需要「標的指數」的日線（e.g., QQQ 對應 Nasdaq-100）。
-- 後端無任何指數 adapter。
-- **Drag 拆解同樣需要指數日線**；無指數時 drag 與 erosion **兩區都回 insufficient_data**。
+**已解決大部分（Phase 7，dev-lead；ADR-0005 決策一、二）**：
+- 指數序列現由 yfinance 提供，經 `IndexProviderBridge` 接進與 US 市場同一套
+  `MarketDataService`（`cache_first=True`），TW/US 兩個市場共用同一個服務
+  （`backend/app/api/deps.py:98-120`）。
+- `app/leverage/index_mapping.py` 是「槓桿 ETF 代號 → 可查詢指數代號」對映表：17 檔登記標的中
+  **12 檔為 `official_index`**（有可查詢代號，如 `^NDX`／`^GSPC`／`^TWII`），**5 檔為明確聲明的
+  `unmapped`**（`00631L`、`00632R`、`00680L`、`SOXL`、`SOXS`；`index_mapping.py:168-295`）。
+  `unmapped` 不是「還沒做」，是「已查過、查不到可用序列，且刻意不拿追蹤 ETF 代理」
+  （`index_mapping.py:25-27,139-155`）——代理標的自身的費用率與折溢價會污染拆解的費用效應與殘差。
+- `GET /api/leverage/{symbol}` 已實際呼叫 `load_index_bars` 並把結果傳入 `build_leverage_chapter`
+  （`backend/app/api/leverage.py:84-100`），**不是**寫死 `index_bars=None` 的呼叫。
 
-**影響**：
-- 所有 `instrument_type == "leveraged_etf"` 持倉的 leverage chapter，drag 與 erosion 區塊都恆回 `status="insufficient_data"`。
-- 使用者既看不到已發生的拖曳拆解，也看不到情境推估。
+**現在的限制範圍縮小為**：
+- 上述 5 檔 unmapped 標的（含最常見的 `00631L`）的 drag 與 erosion 仍恆回 `insufficient_data`，
+  原因是「臺灣50指數沒有已查證的免費日線代號」，而非「系統沒有指數 adapter」
+  （`index_mapping.py:139-143`）。
+- 對映表本身（12 檔 mapped 的序列代號是否真的可查詢）**尚未查證**：`MAPPING_VERIFIED_ON = None`，
+  17 筆全部 `verified=False`（`index_mapping.py:60,112`）。
+- 本沙盒環境對外網被擋，即使是 mapped 的標的，此環境內實測仍只會拿到 `unavailable`。
+
+**影響**：`instrument_type == "leveraged_etf"` 的持倉**不再全部恆回 `insufficient_data`**；
+mapped 的 12 檔在有網路且對映查證通過後可計算，unmapped 的 5 檔則設計上就是不計算，並附明確原因。
 
 **解法方向**：
-- 評估是否需要指數日線。若 US 市場 adapter 實作（見上），可同時接入 Alpha Vantage 的指數行情（^GSPC、^IXIC 等）。
-- 若台股槓桿 ETF 也需指數，評估 TWSE 是否公開指數日線，或使用 FinMind 備援。
-- 架構上需新增指數 adapter，可能沿用既有 provider 介面擴充。
+1. devops-sre／data-engineer 在有網路環境查證 12 檔 mapped 序列代號是否確實可查詢，
+   設定 `MAPPING_VERIFIED_ON` 與各列 `verified=true`。
+2. 5 檔 unmapped 標的若要支援，需先找到臺灣50指數／ICE 半導體指數／ICE 美國公債指數的
+   已查證免費日線來源，這是資料來源問題，不是接線問題。
 
-**建議負責角色**：tech-architect / dev-lead（先明確需求優先序；是否要支援槓桿 ETF 情境推估）。
+**建議負責角色**：devops-sre（查證）/ tech-architect（若要支援 unmapped 標的，需評估新資料源）。
 
 ---
 
@@ -73,24 +95,27 @@
 
 ---
 
-### 4. 產業欄位缺失
+### 4. 產業欄位已補上（FR-12，原「Position 無 sector 欄位」已過時）
 
-**現況**：
-- `Position` 模型（`app/positions/models.py`）無 `sector` 欄位。
-- 風險上限中的「單一產業佔比上限」（第 2 條）恆無法評估，回 `status="not_evaluable"`。
-- ADR-0002 提到建議引擎輸入應涵蓋產業，但無數據來源。
+**已解決（Phase 8 C1 批，dev-lead，commit `9f283ec`；審查：qa PASS + risk-compliance-officer
+APPROVE，2026-08-09，`work/reviews/c1-phase8-review.md`）**：
+- `Position.sector: str | None`（`backend/app/positions/models.py:73`），**僅限台股**
+  （`market != "TW"` 時 `sector` 必須為 `None`，`models.py:91-92`）。
+- 合法值為 TWSE 37 個產業別的封閉清單，不接受自訂文字
+  （`backend/app/positions/sectors.py:36-73,80-83`）；清單經
+  `GET /api/positions/sectors` 提供給前端下拉選單（`backend/app/api/positions.py:60-61`）。
+- 前端持倉表單已接線（台股顯示 37 選項下拉；非台股停用並沿用後端 422 訊息），經等效實機驗收
+  PASS（`work/dispatch/2026-08-09-frontend-wiring.md`「4 PASS」段）。
+- 風控第 2 條上限（單一產業佔比）已可實際計算聚合，不再恆 `not_evaluable`
+  （`backend/app/advice/book_limits.py` 的 `sector_weight` 聚合邏輯）。
 
-**影響**：
-- 產業集中度風險無法量化，第 2 條上限形同虛設。
-- 多產業組合的風險評估不完整。
+**仍存在的限制**：
+- 美股（US）持倉不可填產業別（`sectors.py:85-89`）——GICS 與 TWSE 是不同體系，沒有已裁決的
+  美股分類標準，US 持倉的第 2 條上限對該檔標的仍是 `not_evaluable`。
+- 台股 37 類清單本身**未對照官方 TWSE 資料查證**，屬「模型訓練知識」彙整，等待 data-engineer
+  在有網路環境覆核（`backend/app/positions/sectors.py:17-27`）。
 
-**解法方向**：
-1. 新增 `Position.sector` 欄位（Literal 列舉或自由文本）。
-2. 資料源：人工輸入 + TWSE/FinMind 代碼對應表（代碼 → 產業分類）。
-3. CSV 匯入時新增 sector 欄。
-4. 產業代碼標準化（e.g., 台灣產業分類、GICS）。
-
-**建議負責角色**：product-manager（產業分類標準）+ dev-lead（欄位 migration、UI 更新）。
+**建議負責角色**：data-engineer（查證台股清單）/ product-manager（若要支援美股，需先定分類標準）。
 
 ---
 
@@ -148,67 +173,64 @@
 
 ---
 
-### 7. 外幣 FX 風控層未接線
+### 7. 外幣 FX 風控層已接線（原「尚未接 FX」已過時）
 
-**現況**：
-- `app/data/providers/fx.py` 是**完整的台灣銀行 USD/TWD 日線匯率 adapter**，實作了速率限制、7 天回溯、缺值不捏造等機制。
-- **但該 adapter 本身帶未查證狀態**（`fx.py:6-10, 19-25` 自述）：端點與 CSV 欄位格式未對照線上實際回應查證（開發環境無外網）；且「當日匯率」取的是即期買入價與賣出價的**中點模型值**，非官方收盤匯率。與回測費率未查證屬同一類問題，美股 adapter 上線前須補上常駐揭露。
-- `app/portfolio/valuation.py` 已接線進估值層，會自動轉換幣別、拆解標的/匯率貢獻。
-- **但** `app/advice/book.py` 的風控輸入路徑（計算風險上限的上下文）尚未接 FX。
-- 結果：US 部位的價格類上限會回 `not_evaluable`。
+**已解決（獨立必修任務 FX1，dev-lead，commit `51a5eac`；qa PASS 2026-08-09，
+`work/reviews/c1-phase8-review.md`「qa 終審 FX1+文案批」段）**：
+- `app/api/advice.py` 的 `/api/advice/{symbol}` 端點已注入 `fx_provider`，經
+  `resolve_fx_quote` 算出報價後傳入建議引擎的風控上下文（`backend/app/api/advice.py:31,43,54,81,106`）。
+- `app/api/portfolio.py` 的 `/api/portfolio/limits`（FR-8，帳本層五條上限彙總）同樣逐檔注入 FX
+  報價（`backend/app/api/portfolio.py:105,149`）。
+- `app/advice/book.py::build_book_context` 據此算出 `fx_to_twd`（`backend/app/advice/book.py:582`），
+  風控上限層與估值層現在讀同一份幣別轉換。
+- 本次修復同時修正一個既有 bug（FX1）：`_position_rollup` 先前用原幣價直接填
+  `position_market_value_twd`、未乘匯率，使美股持倉第 1 條上限（單一標的佔比）的比率系統性低估
+  約 30 倍（`work/reviews/c1-phase8-review.md`「升級必修」段）；已修復並補回歸測試。
 
-**影響**：
-- 混幣投資組合的風險度量不完整（無法統一單位比較風險上限）。
-- 雖然估值層已做幣別轉換，風控層卻用不上，形同半功能狀態。
+**仍存在的限制**：
+- FX adapter 本身（`app/data/providers/fx.py`）仍未對照真實回應查證（見前一節「資料適配狀態」）。
+- 「當日匯率」取的是即期買賣價的中點模型值，非官方收盤匯率（`fx.py:19-25`）。
+- 僅支援 USD/TWD 一種幣別對；美股 adapter 若日後支援其他幣別，FX 層需要同步擴充。
 
-**解法方向**：
-1. 在 `advice/book.py` 的 PortfolioContext 構建時補入 FX 轉換。
-2. 確保風控上限層能讀到統一幣別的風險度量。
-
-**建議負責角色**：dev-lead / risk-compliance-officer（確認幣別轉換的精度與時點）。
-
----
-
-### 8. 回測策略僅 ma_cross
-
-**現況**：
-- `app/backtest/strategies.py` 僅定義 `ma_cross`（20/60 日均線交叉），無其他策略。
-- API 端點對未知策略回 422（`KeyError` 攔截）。
-
-**影響**：
-- 使用者只能用一個教科書例子回測；無法驗證自己的策略想法。
-- 產品的回測功能侷限於演示，實用性低。
-
-**解法方向**：
-1. 新增內置策略：
-   - RSI 超賣反彈（RSI < 30）。
-   - 高低點突破（N 日新高）。
-   - 動量策略（動量 > 0）。
-   - 等等。
-2. 允許使用者上傳 Python 程式碼定義策略（高風險，需沙箱與審核）。
-3. 短期可固化 2-3 常見策略；長期評估使用者自定義的必要性與安全性。
-
-**建議負責角色**：product-manager（策略優先序）+ dev-lead（實作）。
+**建議負責角色**：devops-sre（查證 FX adapter 端點）。
 
 ---
 
-### 9. 警示規則無「修改」端點（HTTP PUT / PATCH 缺席）
+### 8. 回測策略已擴充為三種（FR-10/FR-11，原「僅 ma_cross」已過時）
 
-**現況**：
-- `app/api/alerts.py` 只實作 `GET`（列出）、`POST`（新增）、`DELETE`（刪除）三個動詞，沒有 `PUT` / `PATCH`。
-- 要調整一條既有規則的門檻或啟用狀態，目前只能刪掉重建；重建後規則會拿到新的 id。
-- 已產生的警示事件（`alert_events`）不會被連帶刪除，歷史記錄本身不受影響。
+**已解決（Phase 8 C1 批，dev-lead，commit `a8c3aba`；qa PASS，2026-08-09）**：
+- `app/backtest/strategies.py` 現有三個內建策略：`ma_cross`（趨勢跟隨，原有）、`rsi_reversal`
+  （均值回歸，FR-10，進場 RSI<30／出場 RSI 50 中線）、`breakout`（突破，FR-11，20 日新高進場／
+  10 日新低出場，Turtle System 1 參數）（`backend/app/backtest/strategies.py:1-60`）。
+- 前端 `BacktestForm` 策略下拉已接線三種策略（`work/dispatch/2026-08-09-frontend-wiring.md`
+  「4 PASS」段：三策略數字互異、envelope 齊）。
+- qa 審查確認 `_replay` 無 look-ahead、無跨折污染，RSI 抽取有 golden test
+  （`work/reviews/c1-phase8-review.md`「通過」段）。
 
-**影響**：
-- 微調門檻（例如把 price_above 從 1000 改成 1050）的操作成本偏高。
-- 規則 id 變動後，若日後要做「同一條規則的觸發歷史」統計，事件與規則的對應會斷開。
+**仍存在的限制**：策略參數固定於模組常數，不開放使用者調參
+（`strategies.py:17-18`，FR-10/FR-11 明訂範圍外）；不支援使用者自定義策略（原「解法方向 2」未做）。
 
-**解法方向**：
-1. 補 `PUT /api/alerts/{rule_id}`（整條替換）或 `PATCH`（部分欄位），沿用既有 pydantic discriminated union 驗證。
-2. 前端 `AlertRulesSection.tsx` 補編輯表單，重用新增表單的欄位元件。
-3. 若要保留觸發歷史的關聯性，更新時維持同一 `rule_id`。
+**建議負責角色**：product-manager（是否需要開放調參或自定義策略，屬未來優先序評估）。
 
-**建議負責角色**：dev-lead（後端端點）+ frontend-engineer（編輯 UI）。
+---
+
+### 9. 警示規則已可修改（FR-1，原「無 PUT/PATCH 端點」已過時）
+
+**已解決（Phase 8 C1 批，dev-lead，commit `91dbb37`；qa 兩輪退修後 PASS，
+`work/reviews/c1-phase8-review.md`；風控 APPROVE，`work/dispatch/2026-08-09-frontend-wiring.md`）**：
+- `PUT /api/alerts/{rule_id}`（整條替換）與 `PATCH /api/alerts/{rule_id}`（部分欄位）皆已實作，
+  兩者都保留原 `rule_id`（`backend/app/api/alerts.py:108-153`）。
+- 前端 `AlertRulesSection` / `EditAlertRuleModal` 已接線編輯表單，經等效實機驗收 PASS；過程中
+  修復了一個 `Number("")===0` 陷阱（空字串門檻被誤存為 0）與 ref 型條件（欄位對欄位比較）的
+  唯讀顯示（`work/dispatch/2026-08-09-frontend-wiring.md` commit `32188bd`、`155bdfd`）。
+- 已產生的 `alert_events` 不受編輯影響，`rule_id` 不變，觸發歷史的對應關係維持
+  （原「解法方向 3」已落實）。
+
+**仍存在的限制**：新增規則表單（非編輯）有相同的「`buildAlertParams` 回 null 即靜默不送出」
+寫法，尚未比照編輯表單修復，列為後續待辦（`work/dispatch/2026-08-09-frontend-wiring.md`
+「BLOCKING 退修完成」段末「已知限制」）。
+
+**建議負責角色**：frontend-engineer（新增規則表單同型修復，下批處理）。
 
 ---
 
@@ -242,7 +264,12 @@
 
 6. **`signal_condition` 未納入警示 banned-word 測試**：其字彙為封閉集合，實務上無法混入動作動詞，但測試建議補一條。
 
-7. **`RiskGauge` 五條 not_evaluable 為硬編碼**：後端補上逐部位台幣市值等輸入後不會自動翻轉，會停留在偏保守的「無法評估」。方向安全但長期名實不符，建議改由後端回報。
+7. ~~`RiskGauge` 五條 not_evaluable 為硬編碼~~ **已解決（FR-8，2026-08-09）**：`RiskGauge.tsx`
+   已改接 `GET /api/portfolio/limits`（`backend/app/api/portfolio.py:99-157` +
+   `backend/app/advice/book_limits.py`），逐條上限的 `status`/`observed`/`threshold`/`detail`
+   皆原樣渲染自後端回應，不再是前端寫死的五個 `not_evaluable`
+   （`frontend/app/components/RiskGauge.tsx:17-32,143-145`）。文案已完成四輪風控審查並 APPROVE
+   定稿（`work/reviews/c1-phase8-review.md`「風控四輪確認」段）。
 
 另有兩項風控官已宣告**在設定頁允許調整上限值之前必須轉為 required**（目前預設值下不成立問題）：
 
@@ -278,64 +305,64 @@
 
 ## 後續工作優先序建議
 
-基於影響度與依賴關係：
+**2026-08-10 更新**：原表格中的 US adapter、產業欄位、FX 風控層接線、指數 adapter、
+PUT/PATCH 警示端點、內建回測策略（RSI／突破）六項功能已於 Phase 7／Phase 8 交付，
+移出功能待辦；下表為交付後仍剩餘的工作（多為「查證」而非「開發」）。
 
-### P0（Must Have，影響產品核心功能）
-1. **實作 US 市場 adapter**（Alpha Vantage + yfinance）
-   - 解決「美股無數據」問題。
-   - 後序：FX、指數 bars 都依賴此基礎。
-   - 時間估計：2 週（tech-lead）。
+### P0（Must Have，已實作功能的正確性前提）
+1. **查證美股／指數資料鏈**（`ALPHA_VANTAGE_API_KEY`、yfinance、`index_mapping.py` 12 檔
+   mapped 序列代號）
+   - Adapter 與對映表都已存在，但都標記 `verified=False`，且本沙盒環境無法連外驗證。
+   - 查證方式：`apps/stock-desk/scripts/verify_market_data.py`（見
+     `work/stock-desk-數據核實操作說明.md`）。
+   - 負責角色：devops-sre / data-engineer（需在有網路的機器執行）。
 
-2. **產業欄位補全**（Position.sector）
-   - 第 2 條風控上限得以真正運作。
-   - 相對簡單的欄位 migration。
-   - 時間估計：1 週（dev-lead）。
+2. **查證 FX adapter**（`app/data/providers/fx.py`）
+   - 已接線至估值層與風控上限層，但端點與 CSV 欄位格式未對照真實回應查證。
+   - 負責角色：devops-sre。
 
-3. **風控層接線 FX**（`advice/book.py`）
-   - 美股 adapter 實作後即可同步。
-   - 讓混幣投資組合的風險評估完整。
-   - 時間估計：1-2 天（dev-lead）。
+3. **查證台股產業別清單**（`app/positions/sectors.py`）
+   - 37 類清單未對照官方 TWSE 資料查證。
+   - 負責角色：data-engineer。
 
 ### P1（Should Have，顯著提升完整性）
-4. **指數日線 adapter**（槓桿 ETF 情境推估）
-   - 待 US adapter 實作後，同時接入指數。
-   - drag 拆解與 erosion 推估都會恢復功能。
-   - 時間估計：1 週（tech-lead）。
-
-5. **Kelly 準則實現**
+4. **Kelly 準則實現**（見第 5 項限制）
    - 若 backtest 頻繁使用，可直接抽取 Kelly 輸入。
    - 否則可推遲至有交易日誌模組之後。
 
-6. **補 PUT/PATCH 警示規則端點**
-   - 提升編輯使用體驗。
-   - 時間估計：2-3 天（frontend-engineer + dev-lead）。
+5. **槓桿 ETF 中 5 檔 unmapped 標的補齊指數來源**（`00631L`／`00632R`／`00680L`／`SOXL`／`SOXS`，
+   見第 2 項限制）
+   - 需先找到已查證的免費指數日線來源，屬資料來源問題。
+   - 負責角色：tech-architect（評估新資料源）。
+
+6. **新增警示規則表單同型修復**（`buildAlertParams` 回 null 即靜默不送出，見第 9 項限制）
+   - 編輯表單已修復，新增表單尚未比照處理。
+   - 負責角色：frontend-engineer。
 
 ### P2（Nice to Have，功能增強）
-7. **新增內置回測策略**（RSI、突破等）
-   - 提升回測工具的實用性。
-   - 可漸進式新增（無 breaking change）。
-
-8. **Codex 環境修復**
-   - 加強 code review 質量；不是功能性的。
-
-9. **使用者自定義策略**（長期願景）
+7. **使用者自定義回測策略**（長期願景）
    - 需沙箱、審核、版本控制等基建；優先度低。
 
-10. **帳戶 API 整合**（現金、融資、總曝險）
-    - 長期理想狀態；短期可用文案提醒使用者手工監測。
+8. **帳戶 API 整合**（券商現金、融資餘額；見第 6 項限制）
+   - 折衷方案（使用者自報淨值）已於 Phase 8 FR-9 上線；券商 API 本身仍未做。
+   - 長期理想狀態；短期已有文案提醒使用者自報範圍的限制。
+
+9. **Codex 環境修復**（見第 11 項限制）
+   - 加強 code review 質量；不是功能性的。
 
 ---
 
 ## 跨團隊協作點
 
+**2026-08-10 更新**：US adapter、產業欄位、FX 風控層接線、指數 bars、警示規則編輯五項已交付
+（見上方各限制項），下表移除已結案的決策點，僅保留仍待決或待查證的項目。
+
 | 工作項目 | 涉及團隊 | 決策點 |
 | --- | --- | --- |
-| US adapter | dev-lead、tech-architect | ADR-0003 實施排期、額度管理策略確認 |
-| 產業欄位 | product-manager、dev-lead | 產業分類標準確認（GICS vs. 台灣標準等） |
-| FX 風控層接線 | dev-lead、risk-compliance-officer | 幣別轉換精度、時點確認 |
-| 指數 bars | dev-lead、tech-architect | US adapter 後同步規劃 |
+| 美股／指數／FX／產業清單查證 | devops-sre、data-engineer | 需有網路環境執行 `verify_market_data.py` 等查證工具 |
+| 5 檔 unmapped 槓桿 ETF 補指數來源 | tech-architect | 是否值得投入尋找新資料源；若需，優先序 |
 | Kelly 計算 | tech-architect | 是否需要；若需，優先序 |
-| 警示規則編輯 | frontend-engineer、dev-lead | 是否支援軟 PUT、還是只保留 delete-and-recreate |
+| 新增警示規則表單同型修復 | frontend-engineer | 比照編輯表單的修法即可，屬已知修法 |
 | 風控文案審查 | risk-compliance-officer、tech-writer | 編製審查清單、落檔標準 |
 | Codex 修復 | devops-sre | 環境配置 |
 
@@ -343,25 +370,26 @@
 
 ## 文件與代碼對照表
 
-實地確認的代碼位置供後續追蹤：
+實地確認的代碼位置供後續追蹤（2026-08-10 對照 commit `273b27a` 更新；行號會隨時間漂移，
+抽驗請以檔案內文定位而非只信任行號）：
 
-| 限制項 | 相關代碼檔 | 行數範圍 |
-| --- | --- | --- |
-| 1. US adapter 缺失 | `app/data/providers/__init__.py` | (僅 twse/tpex/finmind) |
-| | `app/positions/models.py` | (Market 定義) |
-| 2. 指數 bars + drag 缺失 | `app/leverage/drag.py:291-296` | (无指数 → insufficient_data) |
-| | `app/leverage/service.py:163-166` | (同上，drag+erosion) |
-| 3. Metadata 未驗證 | `app/leverage/detect.py:44,87-88` | (verified_on=None, ALL false) |
-| 4. 產業欄位缺失 | `app/positions/models.py` | (無 sector) |
-| | `app/advice/limits.py:40-46` | (LIMIT_IDS, LIMIT_NAMES) |
-| 5. Kelly 無來源 | `app/advice/limits.py:82-86` | (Kelly 預設值) |
-| 6. 總曝險無現金 | `app/advice/book.py:180-193` | (fx_to_twd 邏輯、gross_exposure 無) |
-| 7. FX 風控層未接 | `app/data/providers/fx.py:1-216` | (完整 adapter) |
-| | `app/advice/book.py` | (未接線) |
-| 8. 策略僅 ma_cross | `app/backtest/strategies.py:28-69` | (STRATEGY_IDS) |
-| 9. 警示規則無編輯 | `app/api/alerts.py:84-120` | (僅 GET/POST/DELETE) |
-| 10. 風控 7 項 suggested + 2 required | 見 #10 段落 | Phase 6 審查紀錄 |
-| 11. Codex 缺席 | 環境級 | (sandbox 無外網憑證) |
+| 限制項 | 現況 | 相關代碼檔 | 行數範圍 |
+| --- | --- | --- | --- |
+| 1. US adapter | 已接線，未查證 | `app/api/deps.py` | 89-94 |
+| | | `app/data/providers/alpha_vantage.py` | 16-20（未查證聲明）、98,161（API key） |
+| 2. 指數 bars + drag | 已接線，12/17 mapped，5 unmapped | `app/leverage/index_mapping.py` | 60,112（verified=False）、168-295（對映表） |
+| | | `app/api/leverage.py` | 84-100（實際呼叫 load_index_bars） |
+| 3. Metadata 未驗證 | 仍未解決 | `app/leverage/detect.py` | 44,87-88（verified_on=None, ALL false） |
+| 4. 產業欄位 | 已實作（FR-12，TW-only） | `app/positions/models.py` | 73,91-92（sector 欄位、TW-only 驗證） |
+| | | `app/positions/sectors.py` | 36-73,85-89（37 類清單、US 拒絕） |
+| 5. Kelly 無來源 | 仍未解決 | `app/advice/limits.py` | 349-351（Kelly 上限預設值）、452（無來源說明） |
+| 6. 總曝險無現金 | Phase 8 FR-9 折衷方案已上線（見第 6 項限制內文） | `app/advice/book.py` | 483,574（gross_exposure_twd 邏輯） |
+| 7. FX 風控層 | 已接線（FX1） | `app/api/advice.py` | 31,43,54,81,106 |
+| | | `app/api/portfolio.py` | 99-157（`/api/portfolio/limits`，FR-8） |
+| 8. 回測策略 | 已擴充為三種（FR-10/FR-11） | `app/backtest/strategies.py` | 1-60 |
+| 9. 警示規則編輯 | 已實作（FR-1） | `app/api/alerts.py` | 108-153（PUT/PATCH） |
+| 10. 風控 7 項 suggested + 2 required | 第 7 項（RiskGauge 硬編碼）已解決，其餘未變 | `frontend/app/components/RiskGauge.tsx` | 17-32,143-145 |
+| 11. Codex 缺席 | 仍未解決 | 環境級 | (sandbox 無外網憑證) |
 
 ---
 
@@ -374,3 +402,9 @@
   容器內伺服器經 Claude Code 網頁預覽呈現的畫面——該環境的資料為離線示範資料（`source=demo_synthetic`），並非真實台股行情。
   結論：**台股資料源至今仍未經任何真實環境驗證**，維持「待有網環境查證」狀態。
   教訓：查證紀錄必須附可觀測證據（來源徽章、後端 log）；「畫面上有數字」不構成驗證。
+- **2026-08-10**（tech-writer，文件過期清償，對照 commit `273b27a` 逐項核實）：第 1、2、4、7、8、
+  9 項與第 10 項第 7 小點原本敘述「尚未實作／尚未接線」，經逐檔讀 code 確認已於 Phase 7／
+  Phase 8 交付並通過 qa/風控審查，已改寫為「已解決」並附目前限制範圍與代碼行號；第 3、5、11
+  項與第 10 項其餘小點經覆核仍為現況，未變更。同步更新「後續工作優先序建議」「跨團隊協作點」
+  「文件與代碼對照表」。另同批更新 `apps/stock-desk/README.md`（離線示範模式、資料適配狀態表、
+  目錄同步啟動步驟）。
