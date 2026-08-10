@@ -82,7 +82,12 @@ const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
     label: "單一標的佔比上限",
     description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.15 代表 15%）。",
     defaultValue: 0.15,
-    hardCeiling: { max: 0.5, reason: "單一標的超過總資產的一半時，分散化已無實質意義。" },
+    // 波次1文案裁決.md 複審 suggested:此 reason 原本只寫「總資產」,與同一欄位
+    // description 已補全的分母不一致,讀者可能誤以為含現金;補上同一組限定語。
+    hardCeiling: {
+      max: 0.5,
+      reason: "單一標的超過總資產(已估值部位市值,不含現金)的一半時，分散化已無實質意義。",
+    },
   },
   {
     key: "max_sector_weight",

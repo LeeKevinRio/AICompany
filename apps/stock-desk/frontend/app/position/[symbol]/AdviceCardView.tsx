@@ -20,6 +20,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/**
+ * True only when the matched rules really point opposite ways.
+ *
+ * The backend's directions are `constructive` / `defensive` / `neutral`
+ * (`ACTION_DIRECTION` in `app/advice/engine.py`); only the first two are
+ * opposed. `neutral` (the `hold` actions) is a third category, not a side, so
+ * a defensive + neutral mix is *not* an opposition and must not claim one —
+ * counting `direction_weights.length > 1` would have made that claim.
+ */
+export function hasOpposingDirections(advice: AdviceCard): boolean {
+  const directions = new Set(advice.direction_weights.map((dw) => dw.direction));
+  return directions.has("defensive") && directions.has("constructive");
+}
+
 export function AdviceCardView({ advice }: { advice: AdviceCard }) {
   const hasBlockedNotices = advice.blocked_notices.length > 0;
 
@@ -151,13 +165,14 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
             D2 suggested (波次1文案裁決.md「D 批」，2026-08-10，裁決建議句):
             `has_conflict` only means "more than one matched action type", not
             necessarily an opposing *direction* (see the backend comment this
-            file already quotes above). `direction_weights.length > 1` is the
-            actual opposing-direction case — the headline action above is
-            derived from the highest-weight direction only, so a reader needs
-            this sentence specifically when a real opposite exists, not merely
-            when actions differ within the same direction.
+            file already quotes above). A *real* opposite is constructive and
+            defensive both present (`hasOpposingDirections`) — the headline
+            action above is derived from the highest-weight direction only, so
+            a reader needs this sentence specifically then, not merely when
+            actions differ within the same direction, and not when the second
+            direction is the neutral `hold` bucket.
           */}
-          {advice.direction_weights.length > 1 && (
+          {hasOpposingDirections(advice) && (
             <p className="mt-2 text-xs text-amber-300">
               本次同時命中方向相反的規則,卡片上方動作只代表權重較高的一方。
             </p>

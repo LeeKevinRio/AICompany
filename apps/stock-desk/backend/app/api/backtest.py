@@ -69,10 +69,11 @@ UNVERIFIED_RATES_NOTE = (
 # --- 除權息還原揭露：一組固定句子，每次回測必出現其中之一 -------------------
 # 這些字串是面向使用者的說明文案，任何修改都要重新過 risk-compliance-officer。
 # Wording state, per work/reviews/波次1文案裁決.md (2026-08-10):
-#   * DIVIDEND_METHOD_NOTE and both DIVIDEND_NO_EVENT_NOTE_* strings are the
-#     risk-compliance approved sentences, used verbatim.
-#   * DIVIDEND_BIAS_SCOPE_NOTE is drafted from that review's cross-sentence
-#     suggestion and is pending re-review.
+#   * DIVIDEND_METHOD_NOTE, both DIVIDEND_NO_EVENT_NOTE_* strings and
+#     DIVIDEND_BIAS_SCOPE_NOTE are the risk-compliance approved sentences,
+#     used verbatim.
+#   * DIVIDEND_BIAS_SCOPE_NOTE is appended to every degraded ("未還原") branch,
+#     including both no_events variants, so the scope qualifier is uniform.
 
 DIVIDEND_ADJUSTED_NOTE = (
     "本回測已還原除權息：價格序列以官方除權息參考價／前一日收盤價為調整因子"
@@ -85,11 +86,12 @@ DIVIDEND_METHOD_NOTE = (
     "再投入，數字會略有不同，這是模型選擇而非事實，本系統未計算兩者差距。還原價只"
     "用於回測報酬衡量；持倉市值與風險上限一律仍用原始收盤價。"
 )
-#: 待風控複審（2026-08-10 波次 1 跨句 suggested）：把「低估」的適用範圍限縮在
-#: Buy & Hold 與持有期間，避免讀者把策略欄的偏誤幅度當成同一個數。附加在每一句
-#: 「未還原」句尾，讓四種降級情境的限定語一致。
+#: 風控核可文案（2026-08-10）：逐字使用。把「低估」的適用範圍限縮在 Buy & Hold
+#: 與持有期間，且「若發生」保留低估未必成立的可能（例如該區間真的沒有配息），
+#: 避免讀者把策略欄的偏誤幅度當成同一個數。附加在每一句「未還原」句尾，讓所有
+#: 降級情境的限定語一致。
 DIVIDEND_BIAS_SCOPE_NOTE = (
-    "此低估確定發生在 Buy & Hold 與持有期間的報酬；策略欄因進出場時點不同，"
+    "此低估（若發生）落在 Buy & Hold 與持有期間的報酬；策略欄因進出場時點不同，"
     "偏誤幅度不一定相同。"
 )
 DIVIDEND_NOT_SYNCED_NOTE = (
@@ -102,12 +104,13 @@ DIVIDEND_NOT_SYNCED_NOTE = (
 DIVIDEND_NO_EVENT_NOTE_TW = (
     "本回測未還原除權息：本機雖有除權息資料，但查無本商品在此區間的除權息紀錄。"
     "可能是該期間真的沒有配息，也可能是資料覆蓋不足（目前只涵蓋台股上市，不含上櫃），"
-    "本系統無法分辨兩者；若實際有配息，此報酬率會低估。"
+    "本系統無法分辨兩者；若實際有配息，此報酬率會低估。" + DIVIDEND_BIAS_SCOPE_NOTE
 )
 #: 風控核可文案（2026-08-10）：逐字使用。
 DIVIDEND_NO_EVENT_NOTE_NON_TW = (
     "本回測未還原除權息：本系統的除權息資料目前只涵蓋台股上市，不涵蓋本市場，"
     "因此不是『查無配息』而是『沒有資料可查』。若本商品有配息，此報酬率會低估。"
+    + DIVIDEND_BIAS_SCOPE_NOTE
 )
 DIVIDEND_UNUSABLE_NOTE = (
     "本回測未還原除權息：查到本商品在此區間的除權息紀錄，但欄位不足以推算調整因子，"

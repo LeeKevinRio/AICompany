@@ -255,12 +255,12 @@ def test_no_sentence_claims_an_unqualified_systematic_understatement(
         DIVIDEND_DISABLED_NOTE,
     ):
         assert "系統性低估" not in note
-    for note in (
-        DIVIDEND_NOT_SYNCED_NOTE,
-        DIVIDEND_UNUSABLE_NOTE,
-        DIVIDEND_DISABLED_NOTE,
-    ):
+        # The scope qualifier itself must not assert the understatement is
+        # certain: a degraded run cannot tell "not adjusted" from "nothing to
+        # adjust", so every branch carries the same "（若發生）" hedge.
+        assert "確定" not in note
         assert DIVIDEND_BIAS_SCOPE_NOTE in note
+    assert "此低估（若發生）" in DIVIDEND_BIAS_SCOPE_NOTE
 
     _seed_bars(api_harness)  # never synced -> the degraded sentence is served
     assert any(DIVIDEND_BIAS_SCOPE_NOTE in note for note in _post(api_harness)["notes"])
