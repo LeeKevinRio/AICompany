@@ -175,17 +175,24 @@ export default function PositionDetailPage() {
                   ? `以目前持倉評估（部位 ID：${advice.data.position_ids.join("、")}）。`
                   : "目前未持有此標的，以候選部位（0 股）評估。"}
               </p>
+              {/*
+                S3 fix (risk-final-review.md 列管項):曾以 <details> 預設收合,
+                把「風險預算輸入的假設與限制」藏在需要額外點擊才看得到的地方
+                ——與反面論點/失效條件(OperationSummaryPanel 的
+                RequiredElementsFooter)「never behind a <details>」的既有原則
+                矛盾,故改為與該處一致的常駐可見清單。文字內容不變。
+              */}
               {advice.data.context_notes.length > 0 && (
-                <details className="mb-3 text-xs text-neutral-500">
-                  <summary className="cursor-pointer text-neutral-400">
+                <div className="mb-3 text-xs text-neutral-500">
+                  <p className="font-semibold text-neutral-400">
                     風險預算輸入的假設與限制（{advice.data.context_notes.length}）
-                  </summary>
+                  </p>
                   <ul className="mt-2 list-disc space-y-1 pl-5">
                     {advice.data.context_notes.map((note, i) => (
                       <li key={i}>{note}</li>
                     ))}
                   </ul>
-                </details>
+                </div>
               )}
               <AdviceCardView advice={advice.data.advice} />
             </>

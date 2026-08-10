@@ -1,10 +1,12 @@
 import type { AdviceCard } from "../../lib/types";
 import {
+  actionRawLabel,
   cardActionColorClass,
   confidenceLabel,
   formatDateTime,
   formatNumber,
   formatPercent,
+  ruleDirectionLabel,
 } from "../../lib/format";
 import { buildAttributedHeadline } from "../../lib/adviceWording";
 import { LimitsCheckList } from "./LimitsCheckList";
@@ -119,6 +121,34 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
           </ul>
         )}
       </Section>
+
+      {/*
+        D2 item 3 (限制清單 #10 / 機會清單 D2): the backend has always computed
+        `direction_weights` and `has_conflict` (`app/advice/engine.py`,
+        verified) but neither ever reached this screen — a reader could not
+        tell whether opposing evidence matched alongside the winning
+        direction. Rendered as-is (no re-derivation): `direction_weights` is
+        the per-direction breakdown, `has_conflict` (`len(matched action
+        types) > 1`, not necessarily a different *direction* — see the
+        backend's own `_direction_weights`) is surfaced separately as its own
+        factual note rather than folded into a "conflict" claim the flag does
+        not always support.
+      */}
+      {advice.direction_weights.length > 0 && (
+        <Section title="命中規則方向">
+          <ul className="space-y-1 text-sm text-neutral-300">
+            {advice.direction_weights.map((dw) => (
+              <li key={dw.direction}>
+                {ruleDirectionLabel(dw.direction)}：權重 {formatNumber(dw.weight, 2)}（命中動作：
+                {dw.actions.map(actionRawLabel).join("、")}）
+              </li>
+            ))}
+          </ul>
+          {advice.has_conflict && (
+            <p className="mt-2 text-xs text-amber-300">本次命中規則涵蓋一種以上動作，方向分布如上列所示。</p>
+          )}
+        </Section>
+      )}
 
       <Section title="反面論點">
         {advice.counterarguments.length === 0 ? (

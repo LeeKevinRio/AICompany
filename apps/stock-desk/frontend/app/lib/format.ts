@@ -22,6 +22,7 @@ import type {
   LimitStatus,
   Market,
 } from "./types";
+import { HELD_ACTION_LABELS } from "./adviceWording";
 
 const INSTRUMENT_TYPE_LABELS: Record<InstrumentType, string> = {
   stock: "股票",
@@ -133,11 +134,19 @@ export function formatQuantity(value: string): string {
   return n.toLocaleString("zh-Hant-TW", { maximumFractionDigits: 4 });
 }
 
+/**
+ * S1 fix (risk-final-review.md 列管項): the value below has always been
+ * computed in `Asia/Taipei`, but the rendered string never said so — a
+ * reader in another timezone (or simply unsure) had no way to tell which
+ * clock the number was on. The suffix is appended here, once, so every one
+ * of this function's ~15 call sites across the app picks it up without a
+ * per-call-site wording decision.
+ */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "資料時間不明";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "資料時間不明";
-  return new Intl.DateTimeFormat("zh-Hant-TW", {
+  const formatted = new Intl.DateTimeFormat("zh-Hant-TW", {
     timeZone: "Asia/Taipei",
     year: "numeric",
     month: "2-digit",
@@ -146,6 +155,7 @@ export function formatDateTime(iso: string | null | undefined): string {
     minute: "2-digit",
     hour12: false,
   }).format(d);
+  return `${formatted}（台北時間）`;
 }
 
 /** Minutes elapsed between the given ISO timestamp and now, floored at 0. */
@@ -393,4 +403,38 @@ export const SIGNAL_FIELD_OPTIONS: { value: string; label: string }[] = [
  */
 export function signalFieldLabel(value: string): string {
   return SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
+}
+
+/**
+ * D2 item 3 (限制清單 #10 / 機會清單 D2): labels for `AdviceCard.direction_weights`
+ * (backend `ACTION_DIRECTION`, `app/advice/engine.py`, verified source) — the
+ * per-direction aggregation the card computes but did not render. "建設性"
+ * and "防禦型" are not new vocabulary: they are the exact words already
+ * shipped and risk-approved in `adviceWording.ts`'s
+ * `buildCandidateSupportiveComposition` ("...建設性規則命中...") and the
+ * backend's own `downgrade_notices` ("...防禦型規則同時命中..."). "中性" (for
+ * the backend's `hold` direction) has no such precedent and is a plain
+ * factual category label, not a judgement — flagged for
+ * risk-compliance-officer to confirm alongside this batch's other new
+ * strings.
+ */
+const RULE_DIRECTION_LABELS: Record<string, string> = {
+  constructive: "建設性",
+  defensive: "防禦型",
+  neutral: "中性",
+};
+
+export function ruleDirectionLabel(direction: string): string {
+  return RULE_DIRECTION_LABELS[direction] ?? direction;
+}
+
+/**
+ * Best-effort label for one of `direction_weights[].actions` — always a
+ * `CardAction` value at the engine's current implementation, but read here
+ * from a wider `Record<string, string>` (not a `CardAction`-keyed lookup)
+ * so an unrecognised future value degrades to its raw string instead of the
+ * lookup throwing or needing a type assertion.
+ */
+export function actionRawLabel(action: string): string {
+  return (HELD_ACTION_LABELS as Record<string, string>)[action] ?? action;
 }

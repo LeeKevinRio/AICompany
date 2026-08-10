@@ -100,6 +100,19 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         <span className="text-xs text-neutral-500">產出時間：{formatDateTime(report.as_of)}</span>
       </div>
 
+      {/*
+        D2 item 4 (限制清單 #10 / 機會清單 D2): a standing disclosure, not
+        behind any toggle. Wording reuses (subject swapped in, clause kept
+        verbatim) the already-shipped, same-purpose sentence in
+        `TechnicalIndicatorsPanel.tsx`'s max-drawdown card ("...屬歷史統計
+        描述，不代表未來會重演。"), rather than drafting a new claim — listed
+        in this batch's report for risk-compliance-officer to confirm the
+        reuse is appropriate at report level, not just per-metric.
+      */}
+      <p className="mt-2 text-xs text-neutral-500">
+        本回測報告呈現的所有數字皆屬歷史統計描述，不代表未來會重演。
+      </p>
+
       {!report.rates_verified && (
         <p
           role="alert"

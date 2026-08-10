@@ -180,17 +180,23 @@ export function RiskGauge() {
             ))}
           </ul>
 
+          {/*
+            S3 一致性延伸(risk-final-review.md 列管項僅點名 context_notes,
+            此處為 RiskGauge 的等義欄位 `notes`,同一份假設揭露、同一個預設
+            收合問題,故同批一併處理,理由與 page.tsx 的 context_notes 相同):
+            改為常駐可見清單,不再需要點擊 <summary> 才看得到。文字內容不變。
+          */}
           {limits.data.notes.length > 0 && (
-            <details className="mt-3 text-xs text-neutral-500">
-              <summary className="cursor-pointer text-neutral-400">
+            <div className="mt-3 text-xs text-neutral-500">
+              <p className="font-semibold text-neutral-400">
                 風險預算輸入的假設與限制（{limits.data.notes.length}）
-              </summary>
+              </p>
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {limits.data.notes.map((note, i) => (
                   <li key={i}>{note}</li>
                 ))}
               </ul>
-            </details>
+            </div>
           )}
 
           <SourcesSection sources={limits.data.sources} />

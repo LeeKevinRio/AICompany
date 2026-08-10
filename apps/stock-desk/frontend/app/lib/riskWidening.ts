@@ -65,3 +65,38 @@ export function resolveWideningSubmit(
   if (isSameWidening(widening, shown)) return { action: "submit", widening: null };
   return { action: "confirm", widening };
 }
+
+/**
+ * S4 fix (risk-final-review.md 列管項): generalises {@link resolveWideningSubmit}
+ * from the single `max_gross_exposure` field to any set of independently
+ * widenable fields (`SettingsForm.tsx`'s `WIDENING_FIELDS`), keyed by field
+ * name — `max_position_weight` carries the same kind of hard ceiling and the
+ * previous single-field version silently let it through unconfirmed.
+ *
+ * Same all-or-nothing rule as the single-field version, extended across
+ * fields: *any* field needing confirmation holds the entire submit (never a
+ * partial write of "the fields nobody objected to"). While the submit is
+ * held, `pending` carries forward *every* field currently being widened —
+ * including one already agreed to in an earlier round — not just the newly
+ * confirm-needing one: dropping an already-agreed field from `pending`
+ * would make the next call's `shown` lookup miss it and re-open a
+ * confirmation the caller already clicked through, just because a sibling
+ * field also needed one. Once every active field matches what was shown
+ * (nothing left to agree to), `pending` collapses to `{}` and the caller
+ * writes — the same terminal state the single-field version reached.
+ */
+export function resolveWideningSubmitForFields(
+  current: Record<string, CapWidening | null>,
+  shown: Partial<Record<string, CapWidening>>,
+): { action: "submit" | "confirm"; pending: Partial<Record<string, CapWidening>> } {
+  const active: Partial<Record<string, CapWidening>> = {};
+  let needsConfirm = false;
+  for (const [key, widening] of Object.entries(current)) {
+    if (widening === null) continue;
+    active[key] = widening;
+    if (resolveWideningSubmit(widening, shown[key] ?? null).action === "confirm") {
+      needsConfirm = true;
+    }
+  }
+  return { action: needsConfirm ? "confirm" : "submit", pending: needsConfirm ? active : {} };
+}

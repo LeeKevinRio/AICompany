@@ -11,7 +11,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { capWidening, isSameWidening, resolveWideningSubmit } from "../riskWidening";
+import {
+  capWidening,
+  isSameWidening,
+  resolveWideningSubmit,
+  resolveWideningSubmitForFields,
+} from "../riskWidening";
 
 describe("capWidening — only a genuine raise counts", () => {
   it("reports the pair when the cap goes up", () => {
@@ -90,5 +95,98 @@ describe("isSameWidening", () => {
   it("only matches null with null", () => {
     expect(isSameWidening(null, null)).toBe(true);
     expect(isSameWidening({ before: 1, after: 1.2 }, null)).toBe(false);
+  });
+});
+
+/**
+ * S4 fix (risk-final-review.md 列管項): the widening confirmation used to
+ * gate `max_gross_exposure` only; these tests pin the generalisation to
+ * multiple independently-widenable fields (`max_position_weight` added
+ * alongside it).
+ */
+describe("resolveWideningSubmitForFields — S4: confirmation covers every widenable field", () => {
+  it("submits straight away when nothing is being widened", () => {
+    expect(
+      resolveWideningSubmitForFields({ max_position_weight: null, max_gross_exposure: null }, {}),
+    ).toEqual({ action: "submit", pending: {} });
+  });
+
+  it("holds the whole submit when only one of several fields is being raised", () => {
+    const widening = { before: 1.0, after: 1.2 };
+    expect(
+      resolveWideningSubmitForFields(
+        { max_position_weight: null, max_gross_exposure: widening },
+        {},
+      ),
+    ).toEqual({ action: "confirm", pending: { max_gross_exposure: widening } });
+  });
+
+  it("holds the whole submit when a field is raised for the first time, even if another field was already confirmed — the already-agreed field is carried forward, not dropped", () => {
+    const grossExposure = { before: 1.0, after: 1.2 };
+    const positionWeight = { before: 0.15, after: 0.2 };
+    expect(
+      resolveWideningSubmitForFields(
+        { max_position_weight: positionWeight, max_gross_exposure: grossExposure },
+        { max_gross_exposure: grossExposure },
+      ),
+    ).toEqual({
+      action: "confirm",
+      // `max_gross_exposure` already matches what was shown for it, but it
+      // must still appear in `pending`: this call's `pending` becomes next
+      // call's `shown`, and dropping an agreed field here would make the
+      // next call see no `shown` entry for it and re-open a confirmation
+      // the caller already clicked through (the exact regression the next
+      // test below pins end-to-end).
+      pending: { max_position_weight: positionWeight, max_gross_exposure: grossExposure },
+    });
+  });
+
+  it("does not re-open an already-agreed field's confirmation once every field is agreed to, across a two-round sequence", () => {
+    const grossExposure = { before: 1.0, after: 1.2 };
+    const positionWeight = { before: 0.15, after: 0.2 };
+    const current = { max_position_weight: positionWeight, max_gross_exposure: grossExposure };
+
+    // Round 1: gross exposure was raised and agreed to in an earlier click;
+    // position weight is newly raised this round.
+    const round1 = resolveWideningSubmitForFields(current, { max_gross_exposure: grossExposure });
+    expect(round1.action).toBe("confirm");
+
+    // Round 2: the caller clicks submit again with the same values, i.e.
+    // agreeing to whatever `round1.pending` is now showing. Neither field
+    // should need to be asked about again.
+    const round2 = resolveWideningSubmitForFields(current, round1.pending);
+    expect(round2).toEqual({ action: "submit", pending: {} });
+  });
+
+  it("submits once every currently-widened field matches what was shown", () => {
+    const grossExposure = { before: 1.0, after: 1.2 };
+    const positionWeight = { before: 0.15, after: 0.2 };
+    expect(
+      resolveWideningSubmitForFields(
+        { max_position_weight: positionWeight, max_gross_exposure: grossExposure },
+        { max_position_weight: positionWeight, max_gross_exposure: grossExposure },
+      ),
+    ).toEqual({ action: "submit", pending: {} });
+  });
+
+  it("drops a field from pending once the caller backs it down out of raise territory", () => {
+    const grossExposure = { before: 1.0, after: 1.2 };
+    expect(
+      resolveWideningSubmitForFields(
+        { max_position_weight: null, max_gross_exposure: grossExposure },
+        { max_position_weight: { before: 0.15, after: 0.2 }, max_gross_exposure: grossExposure },
+      ),
+    ).toEqual({ action: "submit", pending: {} });
+  });
+
+  it("re-confirms a field edited after being shown, same as the single-field rule", () => {
+    const shown = { before: 1.0, after: 1.2 };
+    const edited = { before: 1.0, after: 1.5 };
+    expect(
+      resolveWideningSubmitForFields(
+        { max_position_weight: null, max_gross_exposure: edited },
+        { max_gross_exposure: shown },
+      ),
+    ).toEqual({ action: "confirm", pending: { max_gross_exposure: edited } });
   });
 });

@@ -91,8 +91,14 @@ export function buildCandidateCoverageStatement(
   return `本次規則覆蓋度 ${pct}%，因依賴持倉資料而被跳過的規則共 ${skippedRuleCount} 條。`;
 }
 
-/** AC-C7.2: the basis note attached to a candidate-mode buildable quantity range. */
-export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產與上限推導。";
+/**
+ * AC-C7.2: the basis note attached to a candidate-mode buildable quantity
+ * range. risk-final-review.md 最終複審(2026-08-09)新列管:「總資產」裸詞須補
+ * `SettingsForm.tsx` 已用的限定語(已估值部位市值,不含現金),否則與設定頁的
+ * 「帳戶總淨值」分母混淆 —— 同時清償限制清單 #10 D2 項 2(建議卡「總資產」未
+ * 加限定語)。半形括號比照 SettingsForm.tsx 既有寫法,維持全檔一致。
+ */
+export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產(已估值部位市值)與上限推導。";
 
 /**
  * FR-2 / Phase 6 放行條件 (b): the existing generic "no quantity range"
@@ -121,7 +127,9 @@ export function buildAsOfStatement(dateIso: string): string {
  * the magnitude the fixed sentence used to hide.
  */
 export function buildStaleDataProminentNotice(lastBarDate: string, days: number): string {
-  return `本評估所依據的收盤資料為 ${lastBarDate},距今已 ${days} 個日曆日未更新,僅供參考,不代表最新市況。`;
+  // risk-final-review.md 最終複審(2026-08-09)新列管:半形逗號統一為全形,與本檔
+  // 其餘句子(§3.1/§3.3 等)的標點慣例一致;文字內容不變,僅標點字元置換。
+  return `本評估所依據的收盤資料為 ${lastBarDate}，距今已 ${days} 個日曆日未更新，僅供參考，不代表最新市況。`;
 }
 
 /**

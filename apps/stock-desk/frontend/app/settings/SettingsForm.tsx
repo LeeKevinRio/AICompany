@@ -3,8 +3,25 @@
 import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { useUpdateSettings } from "../lib/queries";
-import { capWidening, resolveWideningSubmit, type CapWidening } from "../lib/riskWidening";
+import { capWidening, resolveWideningSubmitForFields, type CapWidening } from "../lib/riskWidening";
 import type { AlertSettings, CostModelSettings, RiskBudgetSettings, SettingsResponse } from "../lib/types";
+
+/**
+ * S4 fix (risk-final-review.md 列管項): the one-time widening confirmation
+ * (FR-9 (e)) used to gate `max_gross_exposure` only, even though
+ * `max_position_weight` carries the same kind of hard ceiling
+ * (`hardCeiling` below, both sourced from `app/advice/limits.py`'s
+ * `MAX_POSITION_WEIGHT_CEILING`/`MAX_GROSS_EXPOSURE_CEILING`) and a breach of
+ * either one blocks an `add` advice the same way (`blocked_notices` in
+ * `app/advice/engine.py`, keyed by `LimitCheck.index`). `limitIndex` mirrors
+ * `LIMIT_IDS`'s 1-based order in `app/advice/limits.py` (verified: 1 =
+ * single_position_weight, 3 = gross_exposure) so the confirmation sentence
+ * names the correct "第 N 條上限" for whichever field is being raised.
+ */
+const WIDENING_FIELDS: { key: keyof RiskBudgetSettings; label: string; limitIndex: number }[] = [
+  { key: "max_position_weight", label: "單一標的佔比上限", limitIndex: 1 },
+  { key: "max_gross_exposure", label: "總曝險上限", limitIndex: 3 },
+];
 
 interface FieldSpec<T> {
   key: keyof T;
@@ -38,8 +55,20 @@ const HARD_CEILING_NOTE = "放寬需修改程式碼並經風控與 CEO 同意。
  * confirmation, so the number in the sentence is always the number written.
  */
 const RISK_WIDENING_TITLE = "你正在放寬風控上限";
-const RISK_WIDENING_BODY =
-  "總曝險上限由 {before} 調高為 {after}。放寬後，原本會被第 3 條上限擋下的加碼建議可能不再被擋下。確認要繼續嗎？";
+
+/**
+ * S4/SettingsForm:42 fix (risk-final-review.md 列管項): the sentence template
+ * generalised from its original `max_gross_exposure`-only wording to any
+ * field in `WIDENING_FIELDS`. Content and structure are unchanged from the
+ * previously risk-approved sentence — only two facts became parameters
+ * (which cap's name, and its `limitIndex`) — and「加碼建議」改為「加碼參考」
+ * 對齊 `adviceWording.ts` 的 `HELD_ACTION_LABELS.add` 白名單用詞
+ * (`SettingsForm.tsx:42` 列管項)。因為改寫涉及使用者可見文案,一併列入本批
+ * 回報請風控追認。
+ */
+function buildWideningBody(label: string, limitIndex: number, before: number, after: number): string {
+  return `${label}由 ${before} 調高為 ${after}。放寬後，原本會被第 ${limitIndex} 條上限擋下的加碼參考可能不再被擋下。確認要繼續嗎？`;
+}
 
 const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
@@ -223,34 +252,41 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
   const [alertsEnabled, setAlertsEnabled] = useState(settings.settings.alerts.enabled);
   const [notifyWebhooks, setNotifyWebhooks] = useState(settings.settings.alerts.notify_webhooks);
   /**
-   * The raise the confirmation panel is currently showing, or `null` when
-   * none is pending. Clicking the submit button while this is set *is* the
-   * confirmation — of this exact pair of numbers, which is why the submit
-   * handler re-derives the raise and compares it against this one.
+   * S4 fix: one raise per `WIDENING_FIELDS` entry, keyed by field name
+   * (`string(field.key)`), rather than the single `max_gross_exposure`-only
+   * slot this used to be. A field absent from the map has nothing pending.
+   * Each entry's semantics are unchanged from the original single-field
+   * design: it is the raise the confirmation panel is currently showing for
+   * *that* field, and clicking submit while any entry is set is the
+   * confirmation of that exact pair of numbers.
    */
-  const [pendingWidening, setPendingWidening] = useState<CapWidening | null>(null);
+  const [pendingWidenings, setPendingWidenings] = useState<Partial<Record<string, CapWidening>>>({});
   const mutation = useUpdateSettings();
   const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
 
-  /** The raise the form's current values would write, or `null` for none. */
-  function grossExposureWidening(): CapWidening | null {
-    return capWidening(
-      settings.settings.risk_budget.max_gross_exposure,
-      Number(values["risk_budget.max_gross_exposure"]),
-    );
+  /** The raise `field`'s current form value would write, or `null` for none. */
+  function fieldWidening(field: keyof RiskBudgetSettings): CapWidening | null {
+    return capWidening(settings.settings.risk_budget[field], Number(values[`risk_budget.${String(field)}`]));
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    // Re-derived here, at submit time, and compared with the raise on screen:
-    // editing the cap after confirming it must re-open the confirmation with
-    // the new number rather than write a number nobody agreed to.
-    const decision = resolveWideningSubmit(grossExposureWidening(), pendingWidening);
+    // Re-derived here, at submit time, per field, and compared with whatever
+    // that field's confirmation panel is showing: editing a cap after
+    // confirming it must re-open that field's confirmation with the new
+    // number rather than write a number nobody agreed to. Decision logic
+    // lives in `resolveWideningSubmitForFields` (pure, unit-tested) so it is
+    // provably right the same way the single-field version was.
+    const current: Record<string, CapWidening | null> = {};
+    for (const widened of WIDENING_FIELDS) {
+      current[String(widened.key)] = fieldWidening(widened.key);
+    }
+    const decision = resolveWideningSubmitForFields(current, pendingWidenings);
     if (decision.action === "confirm") {
-      setPendingWidening(decision.widening);
+      setPendingWidenings(decision.pending);
       return;
     }
-    setPendingWidening(null);
+    setPendingWidenings({});
     const riskBudget = {} as RiskBudgetSettings;
     for (const field of RISK_BUDGET_FIELDS) {
       riskBudget[field.key] = Number(values[`risk_budget.${String(field.key)}`]);
@@ -373,21 +409,24 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
       </section>
 
       <div>
-        {pendingWidening !== null && (
+        {Object.keys(pendingWidenings).length > 0 && (
           <div
             role="alert"
             className="mb-3 rounded-md border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm text-amber-200"
           >
             <p className="font-semibold">{RISK_WIDENING_TITLE}</p>
-            <p className="mt-1">
-              {RISK_WIDENING_BODY.replace("{before}", String(pendingWidening.before)).replace(
-                "{after}",
-                String(pendingWidening.after),
-              )}
-            </p>
+            {WIDENING_FIELDS.map((widened) => {
+              const widening = pendingWidenings[String(widened.key)];
+              if (!widening) return null;
+              return (
+                <p key={String(widened.key)} className="mt-1">
+                  {buildWideningBody(widened.label, widened.limitIndex, widening.before, widening.after)}
+                </p>
+              );
+            })}
             <button
               type="button"
-              onClick={() => setPendingWidening(null)}
+              onClick={() => setPendingWidenings({})}
               className="mt-2 rounded-md border border-amber-700 px-3 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
             >
               取消，維持原設定
@@ -401,7 +440,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
         >
           {mutation.isPending
             ? "儲存中…"
-            : pendingWidening !== null
+            : Object.keys(pendingWidenings).length > 0
               ? "我了解，仍要放寬並儲存"
               : "儲存設定"}
         </button>
