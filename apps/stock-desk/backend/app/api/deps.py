@@ -23,6 +23,8 @@ from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
 from app.dividends.store import DividendEventStore
+from app.playbook.service import PlaybookService
+from app.playbook.store import PlaybookStore
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.services.index import (
@@ -186,9 +188,40 @@ def _default_quota_ledger() -> QuotaLedger:
     return QuotaLedger()
 
 
+@lru_cache(maxsize=1)
+def _default_playbook_store() -> PlaybookStore:
+    """The process-wide playbook store (batches, schedule, rule versions).
+
+    Same ``STOCK_DESK_DB_PATH`` file as every other store; empty until batches
+    are seeded, which the endpoint reports as "no directives" rather than
+    inventing a portfolio.
+    """
+    return PlaybookStore()
+
+
+@lru_cache(maxsize=1)
+def _default_playbook_service() -> PlaybookService:
+    """The playbook service, reading through the existing TW ladder and ^TWII."""
+    return PlaybookService(
+        store=_default_playbook_store(),
+        market_resolver=_default_resolver(),
+        index_resolver=_default_index_resolver(),
+    )
+
+
 def get_position_store() -> PositionStore:
     """Return the process-wide position store."""
     return _default_store()
+
+
+def get_playbook_store() -> PlaybookStore:
+    """Return the process-wide playbook store."""
+    return _default_playbook_store()
+
+
+def get_playbook_service() -> PlaybookService:
+    """Return the process-wide playbook service."""
+    return _default_playbook_service()
 
 
 def get_valuator() -> PositionValuator:
