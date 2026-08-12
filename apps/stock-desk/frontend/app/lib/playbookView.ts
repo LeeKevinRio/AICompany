@@ -20,7 +20,9 @@ import type {
   PlaybookDirectiveLine,
   PlaybookDirectiveStatus,
   PlaybookExitConfirm,
+  PlaybookFastMarketState,
   PlaybookMode,
+  PlaybookTodayResponse,
 } from "./types";
 
 /* --- 模式徽章 (視覺規範 §2) ------------------------------------------------ */
@@ -216,6 +218,94 @@ export function shouldRenderAttribution(attribution: string | null): attribution
   return attribution !== null && attribution.length > 0;
 }
 
+/**
+ * 排程台頁面審查 required ④ (fail-closed): with no 歸屬語 the directive ledger
+ * is not rendered at all.
+ *
+ * 風控 R2 makes the 常駐歸屬語 a condition of showing instruction-shaped copy,
+ * not a decoration on it — an instruction the user reads without being told
+ * whose judgement it is is exactly the misattribution the whole exemption rests
+ * on avoiding. The backend fills `attribution` on every service path (including
+ * 待確認規則集, where it is the blocking sentence), so a `null` here means the
+ * response was degraded, and the safe reading of a degraded response is to show
+ * fewer instructions rather than unattributed ones.
+ *
+ * Nothing is invented in its place: this module may not compose the sentence
+ * that would explain the gap, and there is no approved backend one for it. The
+ * 部位快照 / 結算 blocks are unaffected — they are not 指令.
+ */
+export function shouldRenderDirectiveLedger(attribution: string | null): boolean {
+  return shouldRenderAttribution(attribution);
+}
+
+/* --- 空帳冊：未命中 vs 未評估 (四輪收斂裁決 題 12) -------------------------- */
+
+/**
+ * The sentence an empty ledger gets, or `null` to keep the bare 「無。」.
+ *
+ * Fail-closed on three counts, all of them required by the ruling:
+ *
+ * 1. The backend completeness flag has to be **exactly** `true`. An older
+ *    backend sends neither field, and `undefined` is not `true`.
+ * 2. The sentence itself has to have arrived. This module does not hold a copy
+ *    of it: 「今日規則已全數評估」 is a claim about an evaluation this code did
+ *    not run, so only the evaluator may make it.
+ * 3. 凍結／緊急出清後凍結／待確認規則集 never get it, even if a future backend
+ *    were to set the flag on such a day (裁決: 凍結／未確認模式不疊加). Those
+ *    modes already carry their own sentence saying what is suspended, and
+ *    stacking 「已全數評估」 on top of 「R 系列不執行」 would read as a denial of
+ *    the very suspension above it.
+ */
+const MODES_WITHOUT_NO_HIT_NOTE: readonly PlaybookMode[] = [
+  "frozen",
+  "emergency_frozen",
+  "unconfirmed",
+];
+
+export function noDirectiveNote(today: PlaybookTodayResponse): string | null {
+  if (today.rules_fully_evaluated !== true) return null;
+  if (MODES_WITHOUT_NO_HIT_NOTE.includes(today.mode)) return null;
+  const note = today.no_directive_note;
+  return note !== null && note !== undefined && note.length > 0 ? note : null;
+}
+
+/* --- 快市徽章的沿用說明 ----------------------------------------------------- */
+
+/**
+ * The sentence to render next to an `active` 快市 badge that has no `reason`
+ * (排程台頁面審查 required): a carried-forward verdict was not measured today,
+ * so it has no measurement sentence, and a badge that says 「快市」 with nothing
+ * next to it leaves the reader to guess what it was based on.
+ *
+ * Returns `null` whenever the badge is off or the measurement sentence is
+ * present (that one is already rendered), and whenever the backend sent no
+ * carried explanation — this module has none of its own to fall back on.
+ */
+export function fastMarketAdjacentNote(fastMarket: PlaybookFastMarketState): string | null {
+  if (!fastMarket.active) return null;
+  if (fastMarket.reason !== null && fastMarket.reason.length > 0) return null;
+  const note = fastMarket.carried_note;
+  return note !== null && note !== undefined && note.length > 0 ? note : null;
+}
+
+/**
+ * `warnings` minus the one sentence that is being rendered next to the badge.
+ *
+ * The backend puts the carried-forward explanation in both places on purpose
+ * (`FastMarketState.carried_note` and `warnings`). It is *moved*, never
+ * dropped: the filter only removes an exact string equality with the note this
+ * page is already showing, and only when it is showing it — pass `null` and
+ * every warning comes back untouched. No truncation, no substring matching, no
+ * list of sentences this module decides are uninteresting.
+ */
+export function visibleWarnings(
+  warnings: readonly string[],
+  adjacentNote: string | null,
+): string[] {
+  if (adjacentNote === null) return [...warnings];
+  return warnings.filter((warning) => warning !== adjacentNote);
+}
+
 /* --- 數值格式化 ------------------------------------------------------------- */
 
 /**
@@ -250,9 +340,10 @@ export function allExitChecksConfirmed(state: readonly boolean[]): boolean {
 /* --- EMERGENCY_EXIT Step 2 事實核取句 --------------------------------------- */
 
 /**
- * The three approved checks that carry no number, copied verbatim from
- * `wording.EXIT_CONFIRM_CHECKS` (app/playbook/wording.py), used **only** when
- * `GET /today` came back without its `exit_confirm` block.
+ * The four approved checks for a degraded response, copied verbatim from
+ * `app/playbook/wording.py` — three from `EXIT_CONFIRM_CHECKS` (the ones that
+ * carry no number) plus `EXIT_CONFIRM_FREEZE_DEGRADED` in place of check 2.
+ * Used **only** when `GET /today` came back without its `exit_confirm` block.
  *
  * The normal path renders `exit_confirm.checks` — the backend fills that block
  * on every service path (including 待確認規則集), with `freeze_days` read from
@@ -262,19 +353,23 @@ export function allExitChecksConfirmed(state: readonly boolean[]): boolean {
  * trading-calendar module that could count the recovery date (see
  * `tradingCalendar.ts`'s own documented gap).
  *
- * So the degraded branch drops the freeze sentence (index 1) instead of
- * rendering it with an invented number or a `—` where a date belongs, and
- * keeps the exit submittable on the remaining three checks — EX-2 出口零摩擦:
- * a missing field may not become a locked door. The freeze is still stated in
- * full, with its real numbers, in the post-submit response this same component
- * renders (`wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY` and
- * `mode_reason`), so the fact is disclosed even on this path — one step later
- * than intended, which is the deliberate trade-off recorded here.
+ * So the degraded branch keeps the *fact* of the freeze and drops only its two
+ * numbers, saying they could not be obtained and where they do appear — the
+ * risk-compliance replacement (四輪收斂裁決) for the earlier behaviour of
+ * dropping the sentence outright, which disclosed the freeze one step too late.
+ * Neither an invented number nor a `—` where a date belongs is ever rendered,
+ * and the exit stays submittable on all four checks: a missing field may not
+ * become a locked door (EX-2 出口零摩擦). The numbers themselves are in the
+ * post-submit response this same component renders
+ * (`wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY` and `mode_reason`,
+ * all three pinned backend-side as carrying the day count).
  */
 export const EXIT_CONFIRM_FALLBACK_CHECKS: readonly string[] = [
   "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
     "不可只出清部分標的或部分批次，亦不可指定單一標的" +
     "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+  "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，" +
+    "兩者於送出後的執行結果中顯示。",
   "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
   "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 ];

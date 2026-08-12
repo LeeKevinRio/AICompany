@@ -1235,6 +1235,11 @@ export interface PlaybookFastMarketState {
   reason: string | null;
   carried_forward: boolean;
   measured_on: string | null;
+  //: The backend-rendered 沿用／尚無前次判定 sentence
+  //: (`wording.FAST_MARKET_CARRIED_NOTE` / `FAST_MARKET_NO_HISTORY_NOTE`) on a
+  //: carried-forward verdict, `null` on a measured one. It is the explanation
+  //: an `active` badge with no `reason` has to render next to it.
+  carried_note: string | null;
 }
 
 /**
@@ -1265,9 +1270,23 @@ export interface PlaybookTodayResponse {
   is_schedule_day: boolean;
   fast_market: PlaybookFastMarketState;
   rules_version: number;
+  //: 生效日 of the rule version in force (`RuleParams.effective_date` of the
+  //: stored row, never a derived date); `null` when no stored row answers.
+  rules_effective_date: string | null;
+  //: §6 頁面免責句 — three server-rendered sentences in a fixed order
+  //: (`wording.page_summary`, 四輪收斂裁決 題 11), shown above the ledger,
+  //: never collapsed and never re-composed client-side.
+  page_summary: string[];
   directives: PlaybookDirectiveLine[];
   snapshot: PlaybookBatchSnapshot[];
   warnings: string[];
+  //: 題 12 完整性旗標: every R/S/P input was available and every series was
+  //: evaluated. Only then does an empty `directives` mean 「無任何規則命中」.
+  rules_fully_evaluated: boolean;
+  //: `wording.NO_RULE_HIT_NOTE`, sent **only** on a day the flag above is true
+  //: and the ledger is empty; `null` otherwise (and absent on an older backend,
+  //: which the UI treats the same way — see `noDirectiveNote`).
+  no_directive_note: string | null;
   //: 風控 R2 常駐歸屬語, or the 情境 1 blocking sentence; `null` only on the
   //: pure-engine path no response actually reads (backend doc comment) — the
   //: UI still treats `null` as "render nothing" per the EMPTY contract.

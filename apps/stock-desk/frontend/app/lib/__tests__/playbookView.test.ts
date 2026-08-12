@@ -1,20 +1,29 @@
 import { describe, expect, it } from "vitest";
-import type { PlaybookDirectiveLine, PlaybookExitConfirm, PlaybookMode } from "../types";
+import type {
+  PlaybookDirectiveLine,
+  PlaybookExitConfirm,
+  PlaybookMode,
+  PlaybookTodayResponse,
+} from "../types";
 import {
   EXIT_CONFIRM_FALLBACK_CHECKS,
   allExitChecksConfirmed,
   directivePriorityIndex,
   exitConfirmChecks,
   directiveStatusLabel,
+  fastMarketAdjacentNote,
   formatScaledPercent,
   initialExitChecks,
   modeBadgeVisual,
+  noDirectiveNote,
   ruleFamily,
   ruleFamilyVisual,
   shouldRenderAttribution,
+  shouldRenderDirectiveLedger,
   sortDirectiveLines,
   splitDirectiveLine,
   toggleExitCheck,
+  visibleWarnings,
 } from "../playbookView";
 
 function directiveLine(ruleId: string, symbol: string, line = ""): PlaybookDirectiveLine {
@@ -258,11 +267,25 @@ describe("exitConfirmChecks", () => {
     }
   });
 
-  it("falls back to the three number-free approved sentences when the block is missing", () => {
+  it("falls back to the four approved sentences when the block is missing", () => {
     const checks = exitConfirmChecks(null);
     expect(checks).toEqual([...EXIT_CONFIRM_FALLBACK_CHECKS]);
-    // 天數句被整句略過，而不是渲染成假數字或破折號。
-    expect(checks.some((check) => check.includes("交易日"))).toBe(false);
+    // 降級句保留「暫停」這個事實，但兩個數字一個都不編：沒有假數字，也沒有
+    // 把日期渲染成破折號。
+    expect(checks[1]).toContain("R 系列（新倉進場）暫停；");
+    expect(checks.some((check) => /\d/.test(check.replace("T+1", "")))).toBe(false);
+    expect(checks.some((check) => check.includes("預計恢復日：—"))).toBe(false);
+  });
+
+  it("renders the degraded freeze sentence only on the degraded branch", () => {
+    // qa 釘（四輪收斂裁決）：僅 null／空時渲染。
+    const degraded = EXIT_CONFIRM_FALLBACK_CHECKS[1];
+    expect(exitConfirmChecks(null)).toContain(degraded);
+    expect(exitConfirmChecks({ ...exitConfirm(20, "2026-09-09"), checks: [] })).toContain(
+      degraded,
+    );
+    expect(exitConfirmChecks(exitConfirm(20, "2026-09-09"))).not.toContain(degraded);
+    expect(exitConfirmChecks(exitConfirm(10, "2026-08-26"))).not.toContain(degraded);
   });
 
   it("keeps the exit submittable on the fallback (EX-2: 缺欄位不得變成鎖門)", () => {
@@ -283,8 +306,152 @@ describe("exitConfirmChecks", () => {
       "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
         "不可只出清部分標的或部分批次，亦不可指定單一標的" +
         "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+      // wording.EXIT_CONFIRM_FREEZE_DEGRADED（四輪收斂裁決核可句）。
+      "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，" +
+        "兩者於送出後的執行結果中顯示。",
       "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
       "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
     ]);
+  });
+});
+
+/* --- 空帳冊：未命中 vs 未評估 / 快市沿用說明 -------------------------------- */
+
+const NO_HIT_NOTE = "今日規則已全數評估，無任何規則命中，未產生指令。";
+
+function todayResponse(overrides: Partial<PlaybookTodayResponse> = {}): PlaybookTodayResponse {
+  return {
+    data_date: "2026-08-11",
+    execution_date: "2026-08-12",
+    mode: "normal",
+    mode_label: "正常",
+    mode_reason: "正常模式：M1 未觸發，組合未凍結。",
+    is_schedule_day: true,
+    fast_market: {
+      active: false,
+      annualized_vol_20d: null,
+      large_move_days: 0,
+      reason: null,
+      carried_forward: false,
+      measured_on: "2026-08-11",
+      carried_note: null,
+    },
+    rules_version: 1,
+    rules_effective_date: "2026-01-01",
+    page_summary: [
+      "本頁面指令依 2026-08-11 收盤資料計算。",
+      "採用規則版本 1（生效日 2026-01-01）。",
+      "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，" +
+        "非本系統的判斷或建議；實際成交結果以你的券商回報為準。",
+    ],
+    directives: [],
+    snapshot: [],
+    warnings: [],
+    rules_fully_evaluated: false,
+    no_directive_note: null,
+    attribution: "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。",
+    settlement: null,
+    exit_confirm: null,
+    as_of: "2026-08-12T01:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("noDirectiveNote (題 12: 未命中 vs 未評估)", () => {
+  it("renders the backend sentence when the completeness flag is set", () => {
+    const note = noDirectiveNote(
+      todayResponse({ rules_fully_evaluated: true, no_directive_note: NO_HIT_NOTE }),
+    );
+    expect(note).toBe(NO_HIT_NOTE);
+  });
+
+  it("keeps 「無。」 when the flag is false, even if a sentence arrived", () => {
+    // 旗標才是渲染條件；句子單獨出現不足以宣稱「已全數評估」。
+    expect(
+      noDirectiveNote(
+        todayResponse({ rules_fully_evaluated: false, no_directive_note: NO_HIT_NOTE }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps 「無。」 when the flag is absent altogether (舊版後端 fail-closed)", () => {
+    const legacy = todayResponse({ no_directive_note: NO_HIT_NOTE });
+    // 模擬未帶新欄位的回應：`undefined` 不是 `true`。
+    delete (legacy as Partial<PlaybookTodayResponse>).rules_fully_evaluated;
+    expect(noDirectiveNote(legacy)).toBeNull();
+  });
+
+  it("keeps 「無。」 when the flag is set but no sentence came with it", () => {
+    // 前端不持有這句話：宣稱「已全數評估」的只能是做了評估的那一端。
+    expect(
+      noDirectiveNote(todayResponse({ rules_fully_evaluated: true, no_directive_note: null })),
+    ).toBeNull();
+  });
+
+  it("never stacks on 凍結／緊急出清後凍結／待確認規則集", () => {
+    for (const mode of ["frozen", "emergency_frozen", "unconfirmed"] as PlaybookMode[]) {
+      expect(
+        noDirectiveNote(
+          todayResponse({ mode, rules_fully_evaluated: true, no_directive_note: NO_HIT_NOTE }),
+        ),
+        `${mode} must not stack the no-hit sentence`,
+      ).toBeNull();
+    }
+  });
+});
+
+describe("shouldRenderDirectiveLedger (required ④ fail-closed)", () => {
+  it("renders the ledger only when the attribution sentence is present", () => {
+    expect(shouldRenderDirectiveLedger(todayResponse().attribution)).toBe(true);
+    expect(shouldRenderDirectiveLedger(null)).toBe(false);
+    expect(shouldRenderDirectiveLedger("")).toBe(false);
+  });
+});
+
+describe("fastMarketAdjacentNote / visibleWarnings", () => {
+  const carried = "加權指數資料狀態為 unavailable，快市判定沿用前一次評估結果（快市，依據資料日 2026-08-10）；資料缺漏不會使系統首次進入快市。";
+
+  function fastMarket(overrides: Partial<PlaybookTodayResponse["fast_market"]> = {}) {
+    return { ...todayResponse().fast_market, ...overrides };
+  }
+
+  it("returns the carried explanation for an active badge with no measurement", () => {
+    expect(
+      fastMarketAdjacentNote(
+        fastMarket({ active: true, reason: null, carried_forward: true, carried_note: carried }),
+      ),
+    ).toBe(carried);
+  });
+
+  it("returns null when the badge is off", () => {
+    expect(
+      fastMarketAdjacentNote(fastMarket({ active: false, carried_note: carried })),
+    ).toBeNull();
+  });
+
+  it("returns null when the verdict was measured today (reason already shown)", () => {
+    expect(
+      fastMarketAdjacentNote(
+        fastMarket({ active: true, reason: "20 日年化波動率 41.2%；…", carried_note: null }),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when the backend sent no explanation to render", () => {
+    expect(
+      fastMarketAdjacentNote(fastMarket({ active: true, reason: null, carried_note: null })),
+    ).toBeNull();
+  });
+
+  it("moves the sentence out of the warnings list only when it is shown elsewhere", () => {
+    const warnings = [carried, "其他警示句"];
+    expect(visibleWarnings(warnings, carried)).toEqual(["其他警示句"]);
+    // 沒有在別處渲染時，一句都不過濾。
+    expect(visibleWarnings(warnings, null)).toEqual(warnings);
+  });
+
+  it("filters on exact equality only — never on a substring", () => {
+    const warnings = [`${carried}（附註）`];
+    expect(visibleWarnings(warnings, carried)).toEqual(warnings);
   });
 });
