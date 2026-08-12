@@ -22,9 +22,15 @@ column is TEXT so ``Decimal`` round-trips exactly.
 The split between "decided" and "filled" is deliberate. Rule *state* (pause,
 blacklist, freeze, deferral, skip) is applied the moment the rule fires, because
 those are decisions about the schedule. Anything that depends on an order
-actually filling -- shares, cost, the P1/P2/P3 marks -- is applied only by
+actually filling -- shares, cost, cash, the P1/P2/P3 marks -- is applied only by
 :meth:`PlaybookStore.settle`, so a MISSED line (CEO 裁決七) leaves the book
 untouched and is re-evaluated the next day.
+
+Settlement is replay-safe. ``playbook_directives`` carries a ``settled`` flag and
+:meth:`PlaybookStore.claim_directive` flips it with a conditional ``UPDATE``
+before anything reaches the book, so re-running a settlement (the ``/today``
+endpoint does it on every call) cannot deduct the same shares or the same cash
+twice.
 """
 
 from __future__ import annotations
@@ -36,13 +42,14 @@ from contextlib import closing
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.data.cache import resolve_db_path
 from app.playbook.calendar import TradingCalendar
 from app.playbook.models import (
     BatchState,
     Directive,
+    FastMarketState,
     PlaybookEvaluation,
     PortfolioState,
     RuleParams,
@@ -66,6 +73,7 @@ _SCHEMA = (
         p3_last_date TEXT,
         trailing_active INTEGER NOT NULL DEFAULT 0,
         defer_count INTEGER NOT NULL DEFAULT 0,
+        missed_count INTEGER NOT NULL DEFAULT 0,
         scheduled_date TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (symbol, batch_no)
@@ -130,11 +138,27 @@ _SCHEMA = (
         reference_price TEXT,
         limit_low TEXT,
         limit_high TEXT,
+        limit_note TEXT NOT NULL DEFAULT '',
         data_status TEXT NOT NULL,
         source TEXT NOT NULL,
-        status TEXT NOT NULL
+        status TEXT NOT NULL,
+        settled INTEGER NOT NULL DEFAULT 0,
+        settled_at TEXT,
+        settled_open_price TEXT
     )
     """,
+)
+
+#: Columns added after the first release. Every playbook table is created by
+#: ``CREATE TABLE IF NOT EXISTS``, so an existing database file keeps its old
+#: shape until these run; ``PRAGMA table_info`` decides, following
+#: ``app/positions/store.py``.
+_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("playbook_batches", "missed_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("playbook_directives", "limit_note", "TEXT NOT NULL DEFAULT ''"),
+    ("playbook_directives", "settled", "INTEGER NOT NULL DEFAULT 0"),
+    ("playbook_directives", "settled_at", "TEXT"),
+    ("playbook_directives", "settled_open_price", "TEXT"),
 )
 
 _BATCH_COLUMNS = (
@@ -151,6 +175,7 @@ _BATCH_COLUMNS = (
     "p3_last_date",
     "trailing_active",
     "defer_count",
+    "missed_count",
     "scheduled_date",
 )
 
@@ -165,12 +190,38 @@ STATE_FREEZE_REASON = "freeze_reason"
 STATE_EMERGENCY_UNTIL = "emergency_until"
 STATE_DEFENSE_ACTIVE = "defense_active"
 STATE_DEFENSE_SINCE = "defense_since"
+#: D-2: when the locked TOTAL_DEPLOY was written and what wrote it.
+STATE_TOTAL_DEPLOY_SET_AT = "total_deploy_set_at"
+STATE_TOTAL_DEPLOY_SOURCE = "total_deploy_source"
+#: FM-1: the fast-market verdict, persisted so a day with unusable index data
+#: can carry it forward instead of re-deciding from nothing.
+STATE_FAST_MARKET_ACTIVE = "fast_market_active"
+STATE_FAST_MARKET_VOL = "fast_market_vol"
+STATE_FAST_MARKET_MOVES = "fast_market_moves"
+STATE_FAST_MARKET_REASON = "fast_market_reason"
+STATE_FAST_MARKET_MEASURED_ON = "fast_market_measured_on"
+
+#: The two actions that actually place an order, and so are the only ones with a
+#: T+1 outcome to settle. 順延／跳過／無動作 lines are decisions, not orders.
+ORDER_ACTIONS: tuple[str, ...] = ("buy", "sell")
+_ORDER_ACTION_PLACEHOLDERS = ", ".join("?" for _ in ORDER_ACTIONS)
 
 #: Effects that only make sense once an order filled; :meth:`settle` applies
 #: them, never :meth:`apply_effects`.
 FILL_DEPENDENT_EFFECTS = frozenset(
     {"batch_entered", "batch_reduced", "batch_closed", "p1_done", "p2_done", "p3_marked"}
 )
+
+
+class PendingDirective(NamedTuple):
+    """One logged line still awaiting its T+1 outcome, with its log row id.
+
+    The id is what :meth:`PlaybookStore.claim_directive` locks on, so a caller
+    can never settle "the same line" by value and hit a different row.
+    """
+
+    directive_id: int
+    directive: Directive
 
 
 def _text(value: Decimal | None) -> str | None:
@@ -211,6 +262,10 @@ class PlaybookStore:
             conn.execute("PRAGMA journal_mode=WAL")
             for statement in _SCHEMA:
                 conn.execute(statement)
+            for table, column, definition in _MIGRATIONS:
+                existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # --- batches ---------------------------------------------------------
 
@@ -249,6 +304,7 @@ class PlaybookStore:
             p3_last,
             trailing,
             defer_count,
+            missed_count,
             scheduled,
         ) = row
         return BatchState(
@@ -265,6 +321,7 @@ class PlaybookStore:
             p3_last_date=_day(p3_last),
             trailing_active=bool(trailing),
             defer_count=int(defer_count),
+            missed_count=int(missed_count),
             scheduled_date=_day(scheduled),
         )
 
@@ -276,8 +333,8 @@ class PlaybookStore:
                 INSERT OR REPLACE INTO playbook_batches
                     (symbol, batch_no, status, entry_date, cost, shares, remaining_shares,
                      peak_close, p1_done, p2_done, p3_last_date, trailing_active,
-                     defer_count, scheduled_date, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     defer_count, missed_count, scheduled_date, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     batch.symbol,
@@ -293,6 +350,7 @@ class PlaybookStore:
                     _iso(batch.p3_last_date),
                     int(batch.trailing_active),
                     batch.defer_count,
+                    batch.missed_count,
                     _iso(batch.scheduled_date),
                     datetime.now(UTC).isoformat(),
                 ),
@@ -378,9 +436,12 @@ class PlaybookStore:
     def portfolio_state(self) -> PortfolioState:
         """The stored portfolio flags; zero cash / zero deploy until set."""
         state = self._state_map()
+        set_at = state.get(STATE_TOTAL_DEPLOY_SET_AT)
         return PortfolioState(
             cash=Decimal(state.get(STATE_CASH, "0")),
             total_deploy=Decimal(state.get(STATE_TOTAL_DEPLOY, "0")),
+            total_deploy_set_at=None if set_at is None else datetime.fromisoformat(set_at),
+            total_deploy_source=state.get(STATE_TOTAL_DEPLOY_SOURCE),
             freeze_until=_day(state.get(STATE_FREEZE_UNTIL)),
             freeze_reason=state.get(STATE_FREEZE_REASON),
             emergency_until=_day(state.get(STATE_EMERGENCY_UNTIL)),
@@ -388,9 +449,70 @@ class PlaybookStore:
             defense_since=_day(state.get(STATE_DEFENSE_SINCE)),
         )
 
-    def set_capital(self, *, cash: Decimal, total_deploy: Decimal) -> None:
-        """Record the cash pool and the TOTAL_DEPLOY locked for this quarter."""
-        self._set_state({STATE_CASH: str(cash), STATE_TOTAL_DEPLOY: str(total_deploy)})
+    def set_capital(
+        self,
+        *,
+        cash: Decimal,
+        total_deploy: Decimal,
+        source: str,
+        at: datetime | None = None,
+    ) -> None:
+        """Record the cash pool and the TOTAL_DEPLOY locked for this quarter.
+
+        ``source`` and the timestamp are not optional (CEO 裁決 D-2): a locked
+        capital number nobody can date, or trace to the run that wrote it, is not
+        auditable. ``at`` defaults to now in UTC, the convention of every other
+        timestamp in this file.
+        """
+        self._set_state(
+            {
+                STATE_CASH: str(cash),
+                STATE_TOTAL_DEPLOY: str(total_deploy),
+                STATE_TOTAL_DEPLOY_SET_AT: (at or datetime.now(UTC)).isoformat(),
+                STATE_TOTAL_DEPLOY_SOURCE: source,
+            }
+        )
+
+    def fast_market_state(self) -> FastMarketState | None:
+        """The last persisted 快市 verdict, or ``None`` before the first one.
+
+        風控 FM-1: read back so a day whose index data is unusable can carry the
+        previous verdict forward instead of deciding 快市 from missing data.
+        """
+        state = self._state_map()
+        if STATE_FAST_MARKET_ACTIVE not in state:
+            return None
+        vol = state.get(STATE_FAST_MARKET_VOL)
+        return FastMarketState(
+            active=state[STATE_FAST_MARKET_ACTIVE] == "1",
+            annualized_vol_20d=None if vol is None else float(vol),
+            large_move_days=int(state.get(STATE_FAST_MARKET_MOVES, "0")),
+            reason=state.get(STATE_FAST_MARKET_REASON),
+            measured_on=_day(state.get(STATE_FAST_MARKET_MEASURED_ON)),
+        )
+
+    def save_fast_market(self, state: FastMarketState, *, measured_on: date) -> None:
+        """Persist a verdict that was actually measured; carried ones are skipped.
+
+        A carried-forward verdict is not a new measurement, so writing it back
+        would keep moving ``measured_on`` forward and hide how old the last real
+        reading is.
+        """
+        if state.carried_forward:
+            return
+        self._set_state(
+            {
+                STATE_FAST_MARKET_ACTIVE: "1" if state.active else "0",
+                STATE_FAST_MARKET_VOL: (
+                    None
+                    if state.annualized_vol_20d is None
+                    else str(state.annualized_vol_20d)
+                ),
+                STATE_FAST_MARKET_MOVES: str(state.large_move_days),
+                STATE_FAST_MARKET_REASON: state.reason,
+                STATE_FAST_MARKET_MEASURED_ON: measured_on.isoformat(),
+            }
+        )
 
     def set_cash(self, cash: Decimal) -> None:
         self._set_state({STATE_CASH: str(cash)})
@@ -538,7 +660,12 @@ class PlaybookStore:
                 )
 
     def record_directives(self, evaluation: PlaybookEvaluation) -> None:
-        """Append every line to the audit log (風控 required R16)."""
+        """Append every line to the audit log (風控 required R16).
+
+        A line that places no order (順延／跳過／無動作) is written already
+        ``settled``: there is no T+1 outcome coming for it, so leaving it in the
+        settlement queue would make the queue lie about what is outstanding.
+        """
         moment = datetime.now(UTC).isoformat()
         with closing(self._connect()) as conn, conn:
             for directive in evaluation.directives:
@@ -547,8 +674,8 @@ class PlaybookStore:
                     INSERT INTO playbook_directives
                         (created_at, rules_version, symbol, batch_no, action, shares, rule_id,
                          rule_summary, data_date, execution_date, reference_price, limit_low,
-                         limit_high, data_status, source, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         limit_high, limit_note, data_status, source, status, settled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         moment,
@@ -564,9 +691,11 @@ class PlaybookStore:
                         _text(directive.reference_price),
                         _text(directive.limit_low),
                         _text(directive.limit_high),
+                        directive.limit_note,
                         directive.data_status,
                         directive.source,
                         directive.status,
+                        int(directive.action not in ORDER_ACTIONS),
                     ),
                 )
 
@@ -578,12 +707,95 @@ class PlaybookStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def settle(self, directive: Directive) -> None:
+    def pending_directives(self, *, on_or_before: date | None = None) -> list[PendingDirective]:
+        """Every logged line still waiting for its T+1 outcome, oldest first.
+
+        ``on_or_before`` limits the result to lines whose 預定執行日 has arrived,
+        which is what a settlement run on a given day should look at: a line
+        scheduled for tomorrow has no opening price yet and is not "pending
+        settlement", it is simply not due.
+
+        Only 買進／賣出 lines are returned. 順延, 跳過 and 無動作 lines place no
+        order, so they have no T+1 outcome to stamp; treating them as settleable
+        would let a 順延 line count as a MISSED retry (CEO 裁決 E-2) it never
+        made. :meth:`record_directives` marks them settled on the way in.
+        """
+        query = (
+            "SELECT id, symbol, batch_no, action, shares, rule_id, rule_summary, data_date, "
+            "execution_date, reference_price, limit_low, limit_high, limit_note, data_status, "
+            "source, status FROM playbook_directives WHERE settled = 0 AND status = 'pending' "
+            f"AND action IN ({_ORDER_ACTION_PLACEHOLDERS})"
+        )
+        params: tuple[str, ...] = ORDER_ACTIONS
+        if on_or_before is not None:
+            query += " AND execution_date <= ?"
+            params = (*ORDER_ACTIONS, on_or_before.isoformat())
+        with closing(self._connect()) as conn:
+            rows = conn.execute(query + " ORDER BY id ASC", params).fetchall()
+        return [
+            PendingDirective(
+                directive_id=int(row[0]),
+                directive=Directive(
+                    symbol=str(row[1]),
+                    batch_no=None if row[2] is None else int(row[2]),
+                    action=row[3],
+                    shares=int(row[4]),
+                    rule_id=row[5],
+                    rule_summary=str(row[6]),
+                    data_date=date.fromisoformat(str(row[7])),
+                    execution_date=date.fromisoformat(str(row[8])),
+                    reference_price=_decimal(row[9]),
+                    limit_low=_decimal(row[10]),
+                    limit_high=_decimal(row[11]),
+                    limit_note=str(row[12] or ""),
+                    data_status=str(row[13]),
+                    source=str(row[14]),
+                    status=row[15],
+                ),
+            )
+            for row in rows
+        ]
+
+    def claim_directive(self, directive_id: int, *, status: str, open_price: Decimal) -> bool:
+        """Claim one log row for settlement; ``False`` when it was already taken.
+
+        This is the replay guard. The claim is a single conditional ``UPDATE``
+        (``settled = 0`` in the ``WHERE``), so two settlement runs over the same
+        day cannot both reach the book: the second one changes no rows, gets
+        ``False`` back and leaves the shares alone. The book is only touched
+        after a successful claim, never before it.
+        """
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                "UPDATE playbook_directives SET settled = 1, settled_at = ?, "
+                "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0",
+                (datetime.now(UTC).isoformat(), str(open_price), status, directive_id),
+            )
+            return cursor.rowcount == 1
+
+    def settle(self, directive: Directive, *, fill_price: Decimal | None = None) -> None:
         """Apply a settled line to the book: fills move shares, MISSED moves nothing.
 
         Called with the directive **after** :func:`app.playbook.engine.settle_directive`
         has stamped its status, so this method never re-decides the outcome.
+
+        ``fill_price`` is the 開盤價 the line actually filled at; the batch cost
+        and the cash movement are both taken from it, because that is the number
+        the money moved at. Without one (a caller replaying a line by hand) the
+        參考價 stands in, which is the only other price the line carries.
+
+        Cash moves here and nowhere else: a buy takes ``price × shares`` out of
+        the pool and a sell puts it back, so 鐵律① reads a cash balance that has
+        actually advanced rather than the opening figure forever.
         """
+        if directive.status == "missed" and directive.batch_no is not None:
+            # CEO 裁決 E-2: a MISSED line moves no shares, but it is not free --
+            # the retry counter is what the R3-aligned ceiling reads.
+            batch = self.get_batch(directive.symbol, directive.batch_no)
+            if batch is not None:
+                self.save_batch(
+                    batch.model_copy(update={"missed_count": batch.missed_count + 1})
+                )
         if directive.status != "executed" or directive.batch_no is None:
             self._mark_schedule(directive)
             return
@@ -591,8 +803,9 @@ class PlaybookStore:
         if batch is None:
             self._mark_schedule(directive)
             return
+        price = fill_price if fill_price is not None else directive.reference_price
+        price = price or Decimal("0")
         if directive.action == "buy":
-            price = directive.reference_price or Decimal("0")
             batch = batch.model_copy(
                 update={
                     "status": "open",
@@ -603,7 +816,10 @@ class PlaybookStore:
                     "peak_close": price,
                 }
             )
+            self.set_cash(self.portfolio_state().cash - price * Decimal(directive.shares))
         elif directive.action == "sell":
+            moved = min(batch.remaining_shares, directive.shares)
+            self.set_cash(self.portfolio_state().cash + price * Decimal(moved))
             remaining = max(0, batch.remaining_shares - directive.shares)
             changes: dict[str, Any] = {
                 "remaining_shares": remaining,

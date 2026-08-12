@@ -22,7 +22,7 @@ rule set; none of them is a default the engine invented.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -43,9 +43,12 @@ BatchStatus = Literal["planned", "open", "closed", "skipped"]
 #: T+1 execution outcome of one directive (CEO 裁決七).
 DirectiveStatus = Literal["pending", "executed", "missed"]
 
-#: Rule ids exactly as the user wrote them.
+#: Rule ids exactly as the user wrote them, plus ``REBALANCE`` -- the quarterly
+#: recomputation of TOTAL_DEPLOY (CEO 裁決一), which is a dated capital decision
+#: rather than a market rule, and so has no R/S/P number of its own.
 RuleId = Literal[
-    "R1", "R2", "R3", "R4", "S1", "S2", "S3", "P1", "P2", "P3", "M1", "IRON1", "EMERGENCY"
+    "R1", "R2", "R3", "R4", "S1", "S2", "S3", "P1", "P2", "P3", "M1", "IRON1",
+    "EMERGENCY", "REBALANCE",
 ]
 
 
@@ -174,6 +177,9 @@ class BatchState(BaseModel):
     trailing_active: bool = False
     #: R2 deferrals accumulated for this batch; R3 skips it at 3.
     defer_count: int = 0
+    #: T+1 lines of this batch that came back MISSED. CEO 裁決 E-2 aligns the
+    #: retry ceiling with R3, so this counter is read against ``r3_max_defers``.
+    missed_count: int = 0
     #: The schedule day this batch is queued for, if any.
     scheduled_date: date | None = None
 
@@ -200,6 +206,11 @@ class PortfolioState(BaseModel):
     cash: Decimal
     #: 期初鎖定的 TOTAL_DEPLOY (CEO 裁決一). Realised gains do not raise it.
     total_deploy: Decimal
+    #: When the locked value was written, and by which path (CEO 裁決 D-2:
+    #: 鎖定值落檔含時間戳與輸入來源). ``None`` until capital is set once.
+    total_deploy_set_at: datetime | None = None
+    #: ``initial`` / ``rebalance`` / whatever the caller named as its input.
+    total_deploy_source: str | None = None
     #: S3 全凍結 end date, inclusive. ``None`` when not frozen.
     freeze_until: date | None = None
     freeze_reason: str | None = None
@@ -299,6 +310,12 @@ class FastMarketState(BaseModel):
     CEO 裁決六: a fast market *raises* the refusal strength, never lowers it, so
     this state is reported alongside every refusal rather than being used to
     relax a rule.
+
+    The state is persisted between days (風控 FM-1). When the index snapshot is
+    missing or stale the previous verdict is carried forward untouched --
+    ``carried_forward`` says so on the response -- and the test can never fire
+    for the *first* time on data that is not usable: entering 快市 is a judgement
+    about the market, and unusable data is not a measurement of the market.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -307,6 +324,86 @@ class FastMarketState(BaseModel):
     annualized_vol_20d: float | None
     large_move_days: int
     reason: str | None
+    #: ``True`` when this verdict was carried over from an earlier day because
+    #: today's index data was not usable.
+    carried_forward: bool = False
+    #: 依據資料日 the verdict was actually measured on.
+    measured_on: date | None = None
+
+
+class SettledLine(BaseModel):
+    """One directive whose T+1 outcome has been stamped onto the book."""
+
+    model_config = ConfigDict(frozen=True)
+
+    directive_id: int
+    directive: Directive
+    #: The 開盤價 the outcome was decided against.
+    open_price: Decimal
+
+
+class UnsettledLine(BaseModel):
+    """One directive that could **not** be settled, and why (風控 R5).
+
+    A line with no opening price is reported as unsettled rather than being
+    guessed at, closed at the reference price, or silently dropped.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    directive_id: int
+    directive: Directive
+    reason: str
+
+
+class SettlementResult(BaseModel):
+    """What one settlement run did (CEO 裁決七 T+1 結算).
+
+    Replay-safe: a line is claimed in the log before the book is touched, so
+    running this twice over the same day settles nothing the second time and
+    ``settled`` comes back empty rather than deducting the same shares again.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    settled_on: date
+    settled: list[SettledLine]
+    unsettled: list[UnsettledLine]
+    warnings: list[str]
+
+    @property
+    def executed(self) -> int:
+        return sum(1 for line in self.settled if line.directive.status == "executed")
+
+    @property
+    def missed(self) -> int:
+        return sum(1 for line in self.settled if line.directive.status == "missed")
+
+
+class RebalanceResult(BaseModel):
+    """季末 REBALANCE: TOTAL_DEPLOY recomputed from the assets of the day.
+
+    Two-way by construction (CEO 裁決 D-1): the new value is 總資產 × 70%
+    whether that is above or below the locked one. When the book already holds
+    more than the new TOTAL_DEPLOY the overshoot is stated in ``warnings`` *and*
+    written to the directive log as a ``REBALANCE`` line -- 超額不得靜默. The
+    rule set has no rule that trims an overshoot, so the line carries 無動作 and
+    says what was measured rather than inventing a sell instruction.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    executed_at: date
+    status: Literal["ok", "insufficient_data"]
+    total_assets: Decimal | None
+    previous_total_deploy: Decimal
+    new_total_deploy: Decimal | None
+    deployed_value: Decimal | None
+    #: ``deployed_value - new_total_deploy`` when positive, else ``None``.
+    overshoot: Decimal | None
+    directives: list[Directive]
+    message: str
+    warnings: list[str]
 
 
 class PlaybookEvaluation(BaseModel):
@@ -326,6 +423,8 @@ class PlaybookEvaluation(BaseModel):
     #: 資料缺漏 and 凍結 notices, already written as user-facing sentences.
     warnings: list[str]
     snapshot: list[BatchSnapshot]
+    #: The T+1 settlement run that preceded this evaluation, when one ran.
+    settlement: SettlementResult | None = None
 
 
 class EmergencyExitResult(BaseModel):
