@@ -18,6 +18,7 @@ from app.playbook.engine import evaluate, settle_directive
 from app.playbook.models import (
     BatchState,
     Directive,
+    FastMarketState,
     IndexSnapshot,
     MarketSnapshot,
     PlaybookEvaluation,
@@ -531,15 +532,139 @@ def test_demo_data_never_produces_an_executable_directive() -> None:
     assert any(DEMO_SOURCE in warning for warning in evaluation.warnings)
 
 
-def test_missing_index_keeps_the_previous_mode_and_blocks_new_entries() -> None:
-    """企劃 §9.4：大盤資料缺漏時 M1 沿用前一狀態，不新開倉."""
+def test_missing_index_keeps_the_previous_mode_and_defers_the_entry() -> None:
+    """企劃 §9.4 + M1-1：大盤資料缺漏時沿用前態，且 R 系列為「順延」不是靜默跳過."""
     evaluation = run(
         index=helper.index(status="unavailable", source="none"),
         markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
         batches=[helper.planned()],
     )
-    assert evaluation.directives == []
+    (directive,) = evaluation.directives
+    assert directive.rule_id == "M1"
+    assert directive.action == "defer"
+    assert "M1 今日未評估" in directive.rule_summary
+    increments = [effect for effect in evaluation.effects if effect.kind == "defer_increment"]
+    assert increments and increments[0].value == 1
+    assert "buy" not in [item.action for item in evaluation.directives]
     assert any("加權指數" in warning for warning in evaluation.warnings)
+
+
+def test_three_index_gap_deferrals_escalate_to_an_r3_skip() -> None:
+    """M1-1：指數缺漏的順延吃的是同一個 R3 計數，第 3 次照樣跳過，不會無限順延."""
+    evaluation = run(
+        index=helper.index(status="cached_stale", source="cache"),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned(defer_count=2)],
+    )
+    (directive,) = evaluation.directives
+    assert directive.rule_id == "R3"
+    assert directive.action == "skip"
+    assert "batch_skipped" in effect_kinds(evaluation)
+
+
+def test_a_stale_index_never_enters_the_fast_market_for_the_first_time() -> None:
+    """FM-1：快市判定沿用前態，資料缺漏不得成為首次進入快市的理由."""
+    evaluation = run(
+        # Numbers that *would* fire the test if they were usable at all.
+        index=helper.index(status="cached_stale", source="cache", vol=45.0, large_moves=4),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+    )
+    assert evaluation.fast_market.active is False
+    assert evaluation.fast_market.carried_forward is True
+    assert any("快市判定沿用" in warning for warning in evaluation.warnings)
+
+
+def test_a_stale_index_carries_an_active_fast_market_forward() -> None:
+    """沿用是雙向的：前一日判定為快市時，資料缺漏不會讓它自動解除."""
+    previous = FastMarketState(
+        active=True,
+        annualized_vol_20d=41.2,
+        large_move_days=3,
+        reason="前一日判定",
+        measured_on=date(2026, 8, 10),
+    )
+    evaluation = evaluate(
+        data_date=TUESDAY,
+        calendar=helper.calendar(),
+        params=helper.params(),
+        index=helper.index(status="unavailable", source="none"),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+        symbols={},
+        portfolio=helper.portfolio(),
+        previous_fast_market=previous,
+    )
+    assert evaluation.fast_market.active is True
+    assert evaluation.fast_market.carried_forward is True
+    assert evaluation.fast_market.measured_on == date(2026, 8, 10)
+    assert any("2026-08-10" in warning for warning in evaluation.warnings)
+
+
+def test_a_usable_index_measures_the_fast_market_and_dates_it() -> None:
+    evaluation = run(
+        index=helper.index(vol=45.0, large_moves=4),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+    )
+    assert evaluation.fast_market.active is True
+    assert evaluation.fast_market.carried_forward is False
+    assert evaluation.fast_market.measured_on == TUESDAY
+
+
+def test_the_persisted_fast_market_verdict_survives_a_gap(tmp_path: Path) -> None:
+    """FM-1 的「持久化」半邊：狀態存在 playbook_state，跨日讀得回來."""
+    store = PlaybookStore(db_path=tmp_path / "playbook.db")
+    assert store.fast_market_state() is None
+    measured = FastMarketState(
+        active=True, annualized_vol_20d=41.2, large_move_days=3, reason="快市"
+    )
+    store.save_fast_market(measured, measured_on=TUESDAY)
+
+    restored = store.fast_market_state()
+    assert restored is not None
+    assert restored.active is True
+    assert restored.annualized_vol_20d == 41.2
+    assert restored.measured_on == TUESDAY
+
+    # A carried verdict is not a measurement, so it does not move the date.
+    store.save_fast_market(
+        restored.model_copy(update={"carried_forward": True}), measured_on=FRIDAY
+    )
+    assert store.fast_market_state().measured_on == TUESDAY  # type: ignore[union-attr]
+
+
+# --- 文案：停損失效條件與參考價揭露 (風控 E-1 / R17) ------------------------
+
+
+def test_the_stop_loss_note_states_when_a_market_order_does_not_fill() -> None:
+    """E-1：停損文案禁成交保證，必須附市價單失效條件."""
+    from app.playbook import wording
+
+    evaluation = run(
+        markets={"2330": helper.market(close="89", ma25="100")},
+        batches=[helper.batch(cost="100", shares=300)],
+    )
+    (directive,) = evaluation.directives
+    assert "跌停或無量時可能無法成交" in directive.limit_note
+    assert "無條件" not in directive.limit_note
+    assert wording.STOP_LOSS_NO_BAND_NOTE == directive.limit_note
+
+
+def test_every_rendered_line_says_the_reference_price_is_not_intraday() -> None:
+    """R17：指令說明附「不反映今日盤中變動」."""
+    from app.playbook.wording import directive_line
+
+    evaluation = run(
+        markets={
+            "2330": helper.market(close="89", ma25="100"),
+            "2454": helper.market("2454", close="100", change_pct="0", bias25="0"),
+        },
+        batches=[helper.batch(cost="100", shares=300), helper.planned("2454", 1)],
+    )
+    assert evaluation.directives
+    for directive in evaluation.directives:
+        assert "不反映今日盤中變動" in directive_line(directive)
 
 
 def test_a_non_schedule_day_produces_no_entry_but_still_evaluates_stops() -> None:

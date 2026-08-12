@@ -251,12 +251,39 @@ def _defense_transition(
     return portfolio.defense_active, effects, warnings
 
 
-def _fast_market(index: IndexSnapshot | None, params: RuleParams) -> FastMarketState:
-    """CEO 裁決六's two-condition test, evaluated on the index snapshot."""
-    if index is None:
-        return FastMarketState(
+def _fast_market(
+    index: IndexSnapshot | None,
+    params: RuleParams,
+    previous: FastMarketState | None,
+) -> tuple[FastMarketState, list[str]]:
+    """CEO 裁決六's two-condition test, evaluated on the index snapshot.
+
+    風控 FM-1: when the index snapshot is missing, stale or demo the verdict is
+    **carried forward** and said to be carried. The test may not fire for the
+    first time on data that is not usable -- 快市 is a statement about the
+    market, and a failed feed is not a measurement of the market. Nothing here
+    relaxes on a carried verdict either: a carried ``active`` stays active until
+    a usable reading says otherwise.
+    """
+    if index is None or not is_usable(index.data_status, index.source):
+        status = "unavailable" if index is None else index.data_status
+        carried = (previous or FastMarketState(
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
+        )).model_copy(update={"carried_forward": True})
+        note = wording.FAST_MARKET_CARRIED_NOTE.format(
+            status=status,
+            state=(
+                wording.FAST_MARKET_STATE_ACTIVE
+                if carried.active
+                else wording.FAST_MARKET_STATE_INACTIVE
+            ),
+            measured_on=(
+                wording.FAST_MARKET_NO_HISTORY
+                if carried.measured_on is None
+                else carried.measured_on.isoformat()
+            ),
         )
+        return carried, [note]
     vol = index.annualized_vol_20d
     by_vol = vol is not None and vol > params.fast_market_vol_threshold
     by_moves = index.large_move_days >= params.fast_market_move_count
@@ -270,11 +297,15 @@ def _fast_market(index: IndexSnapshot | None, params: RuleParams) -> FastMarketS
         if active
         else None
     )
-    return FastMarketState(
-        active=active,
-        annualized_vol_20d=vol,
-        large_move_days=index.large_move_days,
-        reason=reason,
+    return (
+        FastMarketState(
+            active=active,
+            annualized_vol_20d=vol,
+            large_move_days=index.large_move_days,
+            reason=reason,
+            measured_on=index.data_date,
+        ),
+        [],
     )
 
 
@@ -617,6 +648,89 @@ def _evaluate_symbol_stop(
     return True
 
 
+def _next_planned_batch(
+    symbol_batches: Sequence[BatchState], *, symbol: str, touched: set[tuple[str, int]]
+) -> BatchState | None:
+    """The one batch the R series may act on today, or ``None``.
+
+    Only one batch per symbol is queued per schedule day (the rule set buys
+    「下一批」, not all remaining batches at once), and a batch that already
+    produced a sell today is left alone.
+    """
+    for batch in sorted(symbol_batches, key=lambda item: item.batch_no):
+        if batch.status == "planned" and (symbol, batch.batch_no) not in touched:
+            return batch
+    return None
+
+
+def _defer_for_index_gap(
+    *,
+    symbol: str,
+    symbol_batches: Sequence[BatchState],
+    snapshot: MarketSnapshot,
+    execution_date: date,
+    index_status: str,
+    params: RuleParams,
+    touched: set[tuple[str, int]],
+) -> tuple[list[Directive], list[StateEffect]]:
+    """M1-1: 指數缺漏當日的 R 系列一律順延 -- as a real deferral, not a silent gap.
+
+    CEO 裁決 M1-1 says an unevaluated M1 means 「不得進出」 and that the day's R
+    series 「一律順延」. A day that simply produced no line looked identical to a
+    day on which nothing was due, so the deferral is now stated: the batch gets a
+    順延 line naming the missing input, and the same counter R2 uses goes up --
+    which means the R3 ceiling applies to it exactly as it applies to a
+    不追價 deferral. Consuming the ceiling is a real consequence and is written
+    on the line, rather than deferring forever behind the user's back.
+    """
+    directives: list[Directive] = []
+    effects: list[StateEffect] = []
+    batch = _next_planned_batch(symbol_batches, symbol=symbol, touched=touched)
+    if batch is None:
+        return directives, effects
+    new_count = batch.defer_count + 1
+    detail = wording.INDEX_GAP_DEFER_NOTE.format(status=index_status, count=new_count)
+    skipping = new_count >= params.r3_max_defers
+    directives.append(
+        _make_directive(
+            symbol=symbol,
+            batch_no=batch.batch_no,
+            action="skip" if skipping else "defer",
+            shares=0,
+            rule_id="R3" if skipping else "M1",
+            rule_summary=_measured(
+                "R3" if skipping else "M1",
+                f"{detail}，累計達 {params.r3_max_defers} 次，跳過本批"
+                if skipping
+                else detail,
+            ),
+            snapshot=snapshot,
+            execution_date=execution_date,
+            params=params,
+        )
+    )
+    effects.append(
+        StateEffect(
+            kind="defer_increment",
+            symbol=symbol,
+            batch_no=batch.batch_no,
+            value=new_count,
+            note="M1：指數資料缺漏，今日未評估，本批順延",
+        )
+    )
+    if skipping:
+        effects.append(
+            StateEffect(
+                kind="batch_skipped",
+                symbol=symbol,
+                batch_no=batch.batch_no,
+                value=new_count,
+                note="R3：順延 3 次後跳過本批",
+            )
+        )
+    return directives, effects
+
+
 def _evaluate_entries(
     *,
     symbol: str,
@@ -634,14 +748,41 @@ def _evaluate_entries(
     """
     directives: list[Directive] = []
     effects: list[StateEffect] = []
-    pending = [
-        batch
-        for batch in sorted(symbol_batches, key=lambda item: item.batch_no)
-        if batch.status == "planned" and (symbol, batch.batch_no) not in touched
-    ]
-    if not pending:
+    batch = _next_planned_batch(symbol_batches, symbol=symbol, touched=touched)
+    if batch is None:
         return directives, effects
-    batch = pending[0]
+
+    # E-2: MISSED 重試上限對齊 R3 -- a batch whose T+1 line came back unfilled
+    # three times is skipped instead of being re-queued for a fourth attempt.
+    if batch.missed_count >= params.r3_max_defers:
+        directives.append(
+            _make_directive(
+                symbol=symbol,
+                batch_no=batch.batch_no,
+                action="skip",
+                shares=0,
+                rule_id="R3",
+                rule_summary=_measured(
+                    "R3",
+                    wording.MISSED_LIMIT_NOTE.format(
+                        count=batch.missed_count, limit=params.r3_max_defers
+                    ),
+                ),
+                snapshot=snapshot,
+                execution_date=execution_date,
+                params=params,
+            )
+        )
+        effects.append(
+            StateEffect(
+                kind="batch_skipped",
+                symbol=symbol,
+                batch_no=batch.batch_no,
+                value=batch.missed_count,
+                note=f"R3（對齊）：T+1 未成交累計 {batch.missed_count} 次後跳過本批",
+            )
+        )
+        return directives, effects
 
     # R3 first: a batch that already used up its three deferrals is skipped
     # rather than deferred a fourth time.
@@ -892,14 +1033,21 @@ def evaluate(
     batches: Sequence[BatchState],
     symbols: Mapping[str, SymbolState],
     portfolio: PortfolioState,
+    previous_fast_market: FastMarketState | None = None,
 ) -> PlaybookEvaluation:
-    """Evaluate one 依據資料日 and return the directives it produced."""
+    """Evaluate one 依據資料日 and return the directives it produced.
+
+    ``previous_fast_market`` is the last persisted 快市 verdict (風控 FM-1); it is
+    only read when today's index data cannot be used.
+    """
     execution_date = calendar.next_trading_day(data_date)
     is_schedule_day = calendar.is_schedule_day(data_date)
 
     defense_active, effects, warnings = _defense_transition(index, portfolio, params)
-    fast_market = _fast_market(index, params)
+    fast_market, fast_market_warnings = _fast_market(index, params, previous_fast_market)
+    warnings.extend(fast_market_warnings)
     index_usable = index is not None and is_usable(index.data_status, index.source)
+    index_status = "unavailable" if index is None else index.data_status
 
     # --- S3 組合熔斷 --------------------------------------------------------
     s3_until: date | None = None
@@ -933,6 +1081,10 @@ def evaluate(
 
     #: 凍結 suppresses only the R series (CEO 裁決五).
     entries_allowed = mode == "normal" and is_schedule_day and index_usable
+    #: M1-1: on a schedule day the R series is *deferred* rather than skipped
+    #: when the index could not be evaluated. A freeze is a different reason and
+    #: keeps its own note, so the two never stack on one batch.
+    index_gap_defer = mode == "normal" and is_schedule_day and not index_usable
     if mode != "normal":
         warnings.append(wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS[mode]))
     elif not is_schedule_day:
@@ -998,7 +1150,22 @@ def evaluate(
                     out=out,
                 )
 
-        if not entries_allowed or state.paused or state.blacklisted:
+        if state.paused or state.blacklisted:
+            continue
+        if index_gap_defer:
+            gap_directives, gap_effects = _defer_for_index_gap(
+                symbol=symbol,
+                symbol_batches=symbol_batches,
+                snapshot=snapshot,
+                execution_date=execution_date,
+                index_status=index_status,
+                params=params,
+                touched=out.touched,
+            )
+            entry_directives.extend(gap_directives)
+            entry_effects.extend(gap_effects)
+            continue
+        if not entries_allowed:
             continue
         symbol_entries, symbol_effects = _evaluate_entries(
             symbol=symbol,
