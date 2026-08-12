@@ -99,8 +99,11 @@ REFERENCE_PRICE_NOTE = "（依據交易日收盤價，不反映今日盤中變�
 #: 資料缺漏 (鐵律⑤ / 風控 R6): the symbol produces no line at all that day.
 DATA_GAP_NOTE = "{symbol} 資料狀態為 {status}（來源 {source}），依鐵律⑤當日不產生指令。"
 
+#: 文案閘門條件式：此句以行為為準——引擎當日確實會出「順延」指令（M1-1），
+#: 所以不能再寫成「不產生指令」。
 INDEX_DATA_GAP_NOTE = (
-    "加權指數資料狀態為 {status}（來源 {source}），M1 沿用前一狀態，當日不產生進場指令。"
+    "加權指數資料狀態為 {status}（來源 {source}），M1 今日未評估、沿用前一狀態；"
+    "當日不新開倉，R 系列進場改為順延並計入順延次數。"
 )
 
 #: M1-1: 指數缺漏當日 R 系列一律順延（真正的順延，不是靜默跳過）。
