@@ -73,6 +73,10 @@ RULE_TEXT: dict[str, str] = {
     "EMERGENCY": (
         "EMERGENCY_EXIT：使用者提交全部出清，執行後所有排程凍結 20 交易日。"
     ),
+    "REBALANCE": (
+        "季末 REBALANCE：以當時總資產重算 TOTAL_DEPLOY＝總資產 ×70%，次季生效；"
+        "期中已實現獲利不滾入批量。"
+    ),
 }
 
 #: The band every non-stop-loss line carries (CEO 裁決七).
@@ -80,8 +84,17 @@ LIMIT_BAND_NOTE = (
     "限價帶 {low}–{high}（T 收盤 {reference} ±{pct}%）；開盤價超出即標記 MISSED，不追價。"
 )
 
-#: Stop-loss lines have no band at all -- stated, not left blank.
-STOP_LOSS_NO_BAND_NOTE = "停損指令不設滑價帶，T+1 開盤市價執行。"
+#: Stop-loss lines have no band at all -- stated, not left blank. 風控 E-1: the
+#: sentence may not promise a fill, so the condition under which a market order
+#: does not fill is part of the same sentence rather than a footnote.
+STOP_LOSS_NO_BAND_NOTE = (
+    "停損指令不設滑價帶，T+1 開盤以市價單送出；"
+    "市價單在跌停或無量時可能無法成交。"
+)
+
+#: 風控 R17: every reference price says which trading day it came from and what
+#: it does not include. Appended to the rendered directive line.
+REFERENCE_PRICE_NOTE = "（依據交易日收盤價，不反映今日盤中變動）"
 
 #: 資料缺漏 (鐵律⑤ / 風控 R6): the symbol produces no line at all that day.
 DATA_GAP_NOTE = "{symbol} 資料狀態為 {status}（來源 {source}），依鐵律⑤當日不產生指令。"
@@ -89,6 +102,21 @@ DATA_GAP_NOTE = "{symbol} 資料狀態為 {status}（來源 {source}），依鐵
 INDEX_DATA_GAP_NOTE = (
     "加權指數資料狀態為 {status}（來源 {source}），M1 沿用前一狀態，當日不產生進場指令。"
 )
+
+#: M1-1: 指數缺漏當日 R 系列一律順延（真正的順延，不是靜默跳過）。
+INDEX_GAP_DEFER_NOTE = "M1 今日未評估（加權指數資料 {status}），本批順延第 {count} 次。"
+
+#: FM-1: 快市判定在指數資料不可用時沿用前態，不得因資料缺漏首次進入。
+FAST_MARKET_CARRIED_NOTE = (
+    "加權指數資料狀態為 {status}，快市判定沿用前一次評估結果（{state}，依據資料日 {measured_on}）；"
+    "資料缺漏不會使系統首次進入快市。"
+)
+FAST_MARKET_STATE_ACTIVE = "快市"
+FAST_MARKET_STATE_INACTIVE = "非快市"
+FAST_MARKET_NO_HISTORY = "尚無前次判定"
+
+#: E-2: MISSED 重試上限對齊 R3。
+MISSED_LIMIT_NOTE = "T+1 未成交（MISSED）累計 {count} 次，達 {limit} 次上限，跳過本批。"
 
 #: Modes that suppress the R series; S/P lines are unaffected (CEO 裁決五).
 FROZEN_NOTE = "目前為{mode}模式：R 系列進場不執行；S／P 系列停損停利仍照常評估。"
@@ -121,6 +149,33 @@ EMERGENCY_EXIT_RESULT = (
 
 EMERGENCY_EXIT_EMPTY = "EMERGENCY_EXIT 已執行：目前無持有批次；所有排程凍結至 {until}。"
 
+#: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
+#: price; without that price the line stays pending and is named, never guessed.
+SETTLEMENT_NO_OPEN_PRICE = (
+    "{symbol} 預定執行日 {execution_date} 尚無日線開盤價（資料狀態 {status}／來源 {source}），"
+    "本筆未結算，維持待結算狀態。"
+)
+SETTLEMENT_SUMMARY = (
+    "T+1 結算：成交 {executed} 筆、未成交（MISSED）{missed} 筆、未結算 {pending} 筆。"
+)
+SETTLEMENT_NOTHING_PENDING = "T+1 結算：目前沒有待結算指令。"
+
+#: 季末 REBALANCE (CEO 裁決一 / 風控 D-1).
+REBALANCE_RESULT = (
+    "季末 REBALANCE 已執行：總資產 {assets}，TOTAL_DEPLOY 由 {previous} 重算為 {new}"
+    "（總資產 ×{ratio}%）。"
+)
+REBALANCE_OVERSHOOT_WARNING = (
+    "【超額】目前部位市值 {deployed} 已超過新的 TOTAL_DEPLOY {new}，超額 {overshoot}；"
+    "本規則集沒有自動減碼條款，超額部位不會被系統處分，處理方式須由使用者以書面規則修改提交。"
+)
+#: The REBALANCE line is a statement, not an order -- said on the line itself.
+REBALANCE_NO_ORDER_NOTE = "本列為季末資金重算紀錄，不是下單指令，無執行日與參考價。"
+REBALANCE_BLOCKED = (
+    "季末 REBALANCE 未執行：{symbols} 沒有可用收盤價，總資產無法核算；"
+    "依鐵律⑤不以缺漏資料重算 TOTAL_DEPLOY。"
+)
+
 MODE_REASON_NORMAL = "正常模式：M1 未觸發，組合未凍結。"
 MODE_REASON_DEFENSE = "防守模式：指數收盤低於月線連續 {days} 日（M1）。"
 MODE_REASON_FROZEN = "全凍結：{reason}，凍結至 {until}。"
@@ -139,7 +194,9 @@ def directive_line(directive: Directive) -> str:
     """The one-line rendering of a directive: 動作／股數／規則／依據資料日.
 
     Provenance is part of the line, not an expandable detail: 依據資料日,
-    預定執行日 and 參考價 always appear (CEO 裁決七 / 風控 R1, R17).
+    預定執行日 and 參考價 always appear (CEO 裁決七 / 風控 R1, R17), and the
+    reference price carries what it is *not* (:data:`REFERENCE_PRICE_NOTE`) so no
+    reader can take it for a live intraday quote.
     """
     action = ACTION_LABELS[directive.action]
     shares = f"{_format_shares(directive.shares)} 股" if directive.shares else "—"
@@ -149,7 +206,7 @@ def directive_line(directive: Directive) -> str:
         f"{head}｜{action}｜{shares}｜規則 {directive.rule_id}"
         f"｜依據資料日 {directive.data_date.isoformat()}"
         f"｜預定執行日 {directive.execution_date.isoformat()}"
-        f"｜參考價 {_format_price(directive.reference_price)}"
+        f"｜參考價 {_format_price(directive.reference_price)}{REFERENCE_PRICE_NOTE}"
     )
 
 

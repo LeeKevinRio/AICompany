@@ -39,6 +39,7 @@ GUARDED_MODULES = (
     "app.playbook.indicators",
     "app.playbook.calendar",
     "app.playbook.wording",
+    "app.playbook.price_fields",
 )
 
 #: The router is checked on its **direct** imports only. It reaches the advice

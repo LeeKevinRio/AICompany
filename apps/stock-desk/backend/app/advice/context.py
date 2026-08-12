@@ -49,6 +49,17 @@ FIELD_LABELS: dict[str, str] = {
 
 KNOWN_FIELDS = frozenset(FIELD_LABELS)
 
+#: The one raw price level the advice side may read (風控 required R19).
+#:
+#: Every other field above is an indicator value, a ratio or a portfolio
+#: statistic; ``close`` is the only outright price in the vocabulary, and R19
+#: freezes that: **this allowlist stays at length 1 and is not to be extended**.
+#: The playbook keeps a separate table of its own
+#: (``app.playbook.price_fields.PLAYBOOK_PRICE_FIELDS``) that this module neither
+#: imports nor shares a name with -- the two tracks are checked against each
+#: other in ``tests/test_playbook_price_fields.py``.
+PRICE_FIELD_ALLOWLIST: frozenset[str] = frozenset({"close"})
+
 
 def describe_field(path: str) -> str:
     """Render a field path with its Traditional Chinese label for messages."""
