@@ -14,17 +14,19 @@ in this list -- GICS and TWSE are different systems, and pasting a TWSE category
 onto a US ticker would be a fabricated classification -- so a US position must
 leave ``sector`` empty until the US taxonomy is decided (AC-12.6).
 
-PROVENANCE NOTICE (kept in the code, per the Phase 7 convention for
-unverifiable-in-sandbox data): this list was compiled from public knowledge of
-the TWSE listed-company industry classification and is **NOT verified against a
-live TWSE source** -- this environment has no access to one. It is expected to
-be re-checked by data-engineer against the official TWSE industry dataset;
-until then, treat completeness and exact naming as unconfirmed. The two
-umbrella categories (電子工業, 化學生技醫療) are deliberately excluded: they
-contain the leaf categories listed here, and allowing both levels would let one
-holding be filed above another and make the sector totals incomparable.
-Industry *codes* are deliberately not encoded either -- the name-to-code mapping
-is exactly the part that cannot be verified here.
+PROVENANCE NOTICE: this list was compiled from public knowledge of the TWSE
+listed-company industry classification, and on 2026-08-12 was audited against
+the official ``t187ap03_L`` dataset run locally by the CEO (see
+``app.directory.sector_audit``): 32 of the names below matched the official
+codes in use that day; 文化創意業/綜合企業/農業科技業/電子商務業 exist in the
+official code table but currently have no listed company, and are kept by CEO
+ruling; 存託憑證 (code 91) was added by the same ruling. The audit resolves
+codes to names via ``app.directory.twse_sector_codes`` -- that mapping table,
+not this file, owns the name-to-code relation. The two umbrella categories
+(電子工業, 化學生技醫療) remain deliberately excluded: they contain the leaf
+categories listed here, and allowing both levels would let one holding be
+filed above another and make the sector totals incomparable (the official
+data confirmed only leaf codes are ever emitted).
 """
 
 from __future__ import annotations
@@ -70,6 +72,11 @@ TWSE_SECTORS: Final[tuple[str, ...]] = (
     "運動休閒業",
     "居家生活業",
     "其他業",
+    # CEO ruling 2026-08-12 (work/dispatch/2026-08-12-產業清單覆核-CEO裁決.md):
+    # code 91 is not a traditional industry, but TDR holdings do carry it as
+    # their 產業別, so excluding it would leave such a position unclassifiable
+    # in the sector-cap check. Kept last, mirroring TWSE's own ordering.
+    "存託憑證",
 )
 
 _SECTOR_SET: Final[frozenset[str]] = frozenset(TWSE_SECTORS)

@@ -222,7 +222,13 @@ def test_run_sector_verification_writes_report_and_returns_zero(tmp_path: Path) 
     assert output_path.exists()
     markdown = output_path.read_text(encoding="utf-8")
     assert "不會被本工具自動修改" in markdown
-    assert "存託憑證" in markdown  # official_only: code 91 has no TWSE_SECTORS match
+    # Code 91 resolves to 存託憑證, which TWSE_SECTORS now contains (CEO ruling
+    # 2026-08-12), so it must surface in the matched section -- not as an
+    # official_only gap.
+    matched_section = markdown.split("## 雙方一致")[1].split("## 官方有、本地清單沒有")[0]
+    official_only_section = markdown.split("## 官方有、本地清單沒有")[1].split("## ")[0]
+    assert "- 存託憑證" in matched_section
+    assert "存託憑證" not in official_only_section
     assert "99" in markdown  # UNKNOWN_CODE: code not in twse_sector_codes.py
 
 
