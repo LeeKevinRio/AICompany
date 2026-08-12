@@ -220,6 +220,48 @@ def test_the_exit_confirmation_has_four_checks_and_no_fast_market_note() -> None
         assert "阻止" not in check and "鎖住" not in check
 
 
+def test_the_degraded_freeze_check_states_the_freeze_without_inventing_numbers() -> None:
+    """四輪收斂裁決: 降級句只說「暫停」與「兩個數字這次取不到」，不得補假數字."""
+    sentence = wording.EXIT_CONFIRM_FREEZE_DEGRADED
+
+    assert sentence == (
+        "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
+        "兩者於送出後的執行結果中顯示。"
+    )
+    assert not re.findall(r"\d", sentence)
+    assert "{" not in sentence
+    assert "—" not in sentence
+    # 降級句只服務降級分支：正常路徑的四句裡不得出現它。
+    assert sentence not in wording.exit_confirm_checks(
+        freeze_days=20, freeze_until=date(2026, 9, 9)
+    )
+
+
+def test_the_three_post_submit_sentences_all_carry_the_freeze_day_count() -> None:
+    """降級句把兩個數字指到送出後才顯示——那三句就必須真的帶得出天數."""
+    calendar = helper.calendar()
+    until = calendar.shift(helper.TUESDAY, 20)
+    rendered = [
+        wording.EMERGENCY_EXIT_RESULT.format(
+            batches=2,
+            shares=500,
+            execution_date="2026-08-12",
+            executed_at="2026-08-11",
+            freeze_days=20,
+            until=until.isoformat(),
+        ),
+        wording.EMERGENCY_EXIT_EMPTY.format(
+            executed_at="2026-08-11", freeze_days=20, until=until.isoformat()
+        ),
+        wording.mode_reason_emergency(frozen_day=1, freeze_days=20, until=until),
+    ]
+
+    for sentence in rendered:
+        assert "20 交易日" in sentence
+        assert until.isoformat() in sentence
+        assert "{" not in sentence
+
+
 # --- 歸屬語三情境 -------------------------------------------------------------
 
 

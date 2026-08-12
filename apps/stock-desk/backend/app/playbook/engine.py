@@ -291,9 +291,9 @@ def _fast_market(
     """
     if index is None or not is_usable(index.data_status, index.source):
         status = "unavailable" if index is None else index.data_status
-        carried = (previous or FastMarketState(
+        carried = previous or FastMarketState(
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
-        )).model_copy(update={"carried_forward": True})
+        )
         if carried.measured_on is None:
             # Nothing to carry: say that, rather than dressing "no history" up as
             # a previous verdict measured on nothing.
@@ -308,7 +308,12 @@ def _fast_market(
                 ),
                 measured_on=carried.measured_on.isoformat(),
             )
-        return carried, [note]
+        # The note is put on the state as well as into ``warnings`` so a badge
+        # rendered from this state can show why it is on without the caller
+        # having to recognise the sentence in a list of unrelated ones.
+        return carried.model_copy(
+            update={"carried_forward": True, "carried_note": note}
+        ), [note]
     vol = index.annualized_vol_20d
     by_vol = vol is not None and vol > params.fast_market_vol_threshold
     by_moves = index.large_move_days >= params.fast_market_move_count
@@ -1158,6 +1163,12 @@ def evaluate(
     out = _SellPass()
     entry_directives: list[Directive] = []
     entry_effects: list[StateEffect] = []
+    #: 題 12 完整性旗標, accumulated as an **allowlist**: it starts true only for
+    #: the conditions listed here and every symbol that was not fully run through
+    #: the R/S/P passes turns it off. Nothing sets it back on, and nothing reads
+    #: a warning string to decide it -- a sentence the engine happens not to emit
+    #: may not be mistaken for a day on which everything was evaluated.
+    every_symbol_evaluated = True
 
     for symbol in sorted(by_symbol):
         symbol_batches = sorted(by_symbol[symbol], key=lambda item: item.batch_no)
@@ -1174,6 +1185,8 @@ def evaluate(
             )
             note = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
             warnings.append(note.format(symbol=symbol, status=status, source=source))
+            # Neither the S/P pass nor the R pass ran for this symbol.
+            every_symbol_evaluated = False
             continue
 
         state = symbols.get(symbol, SymbolState(symbol=symbol))
@@ -1219,6 +1232,10 @@ def evaluate(
                 )
 
         if state.paused or state.blacklisted:
+            # S/P did run, R did not: 暫停／黑名單 is a rule outcome, but the R
+            # series was still not evaluated for this symbol today, so the day
+            # cannot be described as 「規則已全數評估」.
+            every_symbol_evaluated = False
             continue
         if index_gap_defer:
             gap_directives, gap_effects = _defer_for_index_gap(
@@ -1257,6 +1274,26 @@ def evaluate(
     )
     warnings.extend(shrink_warnings)
 
+    # 題 12: the four conditions that together mean every R/S/P input was
+    # available and every series was evaluated. An allowlist, so a state this
+    # list does not name can only make the flag false, never true:
+    #
+    # * ``batches`` -- with no book at all there was nothing to evaluate, and a
+    #   vacuous 「全數評估」 would be the emptiest kind of reassurance.
+    # * ``entries_allowed`` -- the R gate (正常模式 + 排程日 + 指數可用). 凍結,
+    #   非排程日 and 指數缺漏 each leave the R series unevaluated, and each has
+    #   its own sentence in ``warnings`` saying so.
+    # * ``every_symbol_evaluated`` -- no symbol was skipped by a data gap or by
+    #   排程暫停／黑名單.
+    # * no 鐵律① shrink -- a line the cash floor cut or cancelled is a rule that
+    #   did fire, which 「無任何規則命中」 would contradict.
+    rules_fully_evaluated = (
+        bool(batches)
+        and entries_allowed
+        and every_symbol_evaluated
+        and not shrink_warnings
+    )
+
     return PlaybookEvaluation(
         data_date=data_date,
         execution_date=execution_date,
@@ -1265,6 +1302,7 @@ def evaluate(
         is_schedule_day=is_schedule_day,
         fast_market=fast_market,
         rules_version=params.version,
+        rules_fully_evaluated=rules_fully_evaluated,
         directives=[*out.directives, *entry_directives],
         effects=[*effects, *out.effects, *entry_effects],
         warnings=warnings,

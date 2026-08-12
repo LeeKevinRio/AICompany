@@ -120,9 +120,22 @@ class TodayResponse(BaseModel):
     is_schedule_day: bool
     fast_market: FastMarketState
     rules_version: int
+    #: 生效日 of the rule version in force; ``None`` when no stored row answers,
+    #: which is what makes ``page_summary`` take its 讀取失敗 branch.
+    rules_effective_date: str | None
+    #: §6 頁面免責句, three sentences in a fixed order (四輪收斂裁決 題 11),
+    #: rendered server-side so the page cannot compose or shorten them.
+    page_summary: list[str]
     directives: list[DirectiveLine]
     snapshot: list[BatchSnapshot]
     warnings: list[str]
+    #: 題 12 完整性旗標 -- see :attr:`PlaybookEvaluation.rules_fully_evaluated`.
+    rules_fully_evaluated: bool
+    #: The sentence an empty ledger gets **only** when the flag above is true:
+    #: 「今日規則已全數評估，無任何規則命中，未產生指令。」 ``None`` on every
+    #: other day, so a client that renders it whenever it is present cannot
+    #: claim a completeness the evaluation did not have.
+    no_directive_note: str | None
     #: 風控 R2 常駐歸屬語, or the 情境 1 sentence saying no rule set is confirmed.
     attribution: str | None
     #: The T+1 settlement that ran before this evaluation (CEO 裁決七).
@@ -199,9 +212,21 @@ def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
         is_schedule_day=evaluation.is_schedule_day,
         fast_market=evaluation.fast_market,
         rules_version=evaluation.rules_version,
+        rules_effective_date=(
+            None
+            if evaluation.rules_effective_date is None
+            else evaluation.rules_effective_date.isoformat()
+        ),
+        page_summary=evaluation.page_summary,
         directives=_lines(evaluation.directives),
         snapshot=evaluation.snapshot,
         warnings=evaluation.warnings,
+        rules_fully_evaluated=evaluation.rules_fully_evaluated,
+        no_directive_note=(
+            wording.NO_RULE_HIT_NOTE
+            if evaluation.rules_fully_evaluated and not evaluation.directives
+            else None
+        ),
         attribution=evaluation.attribution,
         settlement=(
             None

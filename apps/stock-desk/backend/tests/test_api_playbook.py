@@ -17,13 +17,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_playbook_service
+from app.api.playbook import _to_response
 from app.main import app
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from tests.api_helpers import FakePriceService, recent_bars
+from tests.playbook_helpers import RULE_SET_DATE, confirm_rule_set
 from tests.playbook_helpers import batch as make_batch
-from tests.playbook_helpers import confirm_rule_set
 
 #: Enough history for MA25, the 20-day monthly line and the 20-day volatility.
 HISTORY = 40
@@ -60,6 +61,52 @@ def _seed_symbol(harness: PlaybookHarness, symbol: str, closes: list[float]) -> 
     harness.prices.seed(symbol, recent_bars(closes, symbol=symbol))
 
 
+def _directive(rule_id: str = "R1") -> Directive:
+    return Directive(
+        symbol="2330",
+        batch_no=1,
+        action="buy",
+        shares=100,
+        rule_id=rule_id,  # type: ignore[arg-type]
+        rule_summary="規則全文",
+        data_date=date(2026, 8, 11),
+        execution_date=date(2026, 8, 12),
+        reference_price=Decimal("100"),
+        limit_low=Decimal("98"),
+        limit_high=Decimal("102"),
+        limit_note="限價帶",
+        data_status="fresh",
+        source="fake",
+    )
+
+
+def _evaluation(**overrides: object) -> PlaybookEvaluation:
+    """One evaluation shaped for the response mapper.
+
+    The endpoint runs on the real clock, so whether *today* is a 排程日 -- and
+    therefore whether the completeness flag can be true at all -- depends on the
+    day the suite happens to run. The mapper is exercised directly instead, so
+    both branches of the 題 12 sentence are asserted on every day of the week.
+    """
+    base: dict[str, object] = {
+        "data_date": date(2026, 8, 11),
+        "execution_date": date(2026, 8, 12),
+        "mode": "normal",
+        "mode_reason": "正常模式",
+        "is_schedule_day": True,
+        "fast_market": FastMarketState(
+            active=False, annualized_vol_20d=None, large_move_days=0, reason=None
+        ),
+        "rules_version": 1,
+        "directives": [],
+        "effects": [],
+        "warnings": [],
+        "snapshot": [],
+    }
+    base.update(overrides)
+    return PlaybookEvaluation(**base)  # type: ignore[arg-type]
+
+
 def test_today_returns_an_empty_table_when_nothing_is_held(
     harness: PlaybookHarness,
 ) -> None:
@@ -70,6 +117,46 @@ def test_today_returns_an_empty_table_when_nothing_is_held(
     assert body["snapshot"] == []
     assert body["mode"] in {"normal", "defense"}
     assert body["as_of"]
+
+
+def test_today_carries_the_page_summary_and_the_effective_date(
+    harness: PlaybookHarness,
+) -> None:
+    """§6 (四輪收斂裁決 題 11): 三句與生效日欄位隨每次回應下發."""
+    body = harness.client.get("/api/playbook/today").json()
+
+    assert body["rules_effective_date"] == RULE_SET_DATE.isoformat()
+    assert len(body["page_summary"]) == 3
+    assert body["page_summary"][0].startswith(f"本頁面指令依 {body['data_date']}")
+    assert body["page_summary"][1] == (
+        f"採用規則版本 {body['rules_version']}（生效日 {RULE_SET_DATE.isoformat()}）。"
+    )
+    assert body["page_summary"][2] == (
+        "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，"
+        "非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+    )
+    assert not [sentence for sentence in body["page_summary"] if "{" in sentence]
+
+
+def test_the_no_hit_sentence_is_only_sent_on_a_fully_evaluated_empty_day() -> None:
+    """題 12: 未命中句綁完整性旗標，不是綁「帳冊剛好是空的」."""
+    evaluated = _evaluation(directives=[], rules_fully_evaluated=True)
+    not_evaluated = _evaluation(directives=[], rules_fully_evaluated=False)
+
+    assert _to_response(evaluated).no_directive_note == (
+        "今日規則已全數評估，無任何規則命中，未產生指令。"
+    )
+    assert _to_response(evaluated).rules_fully_evaluated is True
+    assert _to_response(not_evaluated).no_directive_note is None
+
+
+def test_the_no_hit_sentence_is_not_sent_when_the_ledger_has_lines() -> None:
+    """有指令的一天沒有「未產生指令」這回事."""
+    with_lines = _evaluation(
+        directives=[_directive()], rules_fully_evaluated=True
+    )
+
+    assert _to_response(with_lines).no_directive_note is None
 
 
 def test_today_reports_the_stop_loss_line_with_its_provenance(

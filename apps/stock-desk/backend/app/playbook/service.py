@@ -460,6 +460,16 @@ class PlaybookService:
             warnings=warnings,
             snapshot=[],
             attribution=wording.ATTRIBUTION_NO_USER_RULES,
+            # No rule set was evaluated at all today, so the ledger's 「無。」 may
+            # not be explained away as 「無任何規則命中」 (題 12 fail-closed).
+            rules_effective_date=None,
+            rules_fully_evaluated=False,
+            page_summary=wording.page_summary(
+                data_date=as_of,
+                rules_version=0,
+                rules_effective_date=None,
+                user_authored=False,
+            ),
             exit_confirm=build_exit_confirm(
                 params=self._store.active_params(as_of),
                 calendar=TradingCalendar(()),
@@ -540,10 +550,22 @@ class PlaybookService:
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
         self._store.record_schedule(evaluation)
         self._store.record_directives(evaluation)
+        # §6 ②: the effective date of the row actually in force on the 依據資料日,
+        # read from the store rather than from ``params`` -- a parameter set that
+        # fell back to the system default carries a derived date, and the page
+        # states this one as the rule set's own (裁決: 禁推斷頂替).
+        rules_effective_date = self._store.in_force_effective_date(data_date)
         return evaluation.model_copy(
             update={
                 "settlement": settlement,
                 "attribution": wording.attribution_note(authorship),
+                "rules_effective_date": rules_effective_date,
+                "page_summary": wording.page_summary(
+                    data_date=evaluation.data_date,
+                    rules_version=evaluation.rules_version,
+                    rules_effective_date=rules_effective_date,
+                    user_authored=authorship.user_authored,
+                ),
                 # Counted for today, not for 依據資料日: the confirmation screen
                 # predicts what submitting *now* costs, which is what
                 # :meth:`emergency_exit` reads (``active_params(as_of)``).

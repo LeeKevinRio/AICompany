@@ -353,6 +353,13 @@ class FastMarketState(BaseModel):
     carried_forward: bool = False
     #: 依據資料日 the verdict was actually measured on.
     measured_on: date | None = None
+    #: The rendered 沿用／無前次判定 sentence for a carried verdict
+    #: (:data:`~app.playbook.wording.FAST_MARKET_CARRIED_NOTE` or
+    #: ``FAST_MARKET_NO_HISTORY_NOTE``), ``None`` on a measured one. The same
+    #: sentence is also in ``warnings``; it is repeated on the state itself so a
+    #: 快市 badge with no ``reason`` can render its explanation next to the badge
+    #: (排程台頁面審查 required) without pattern-matching the warnings list.
+    carried_note: str | None = None
 
 
 class SettledLine(BaseModel):
@@ -467,6 +474,22 @@ class PlaybookEvaluation(BaseModel):
     is_schedule_day: bool
     fast_market: FastMarketState
     rules_version: int
+    #: ``effective_date`` of the :class:`RuleParams` row actually in force, or
+    #: ``None`` when no stored row answers (§6 ② branch (b)). Filled by the
+    #: service from the store; the engine is handed parameters, not their
+    #: provenance, and a default parameter set's ``effective_date`` is a derived
+    #: value that may never stand in for this one (裁決: 禁推斷頂替).
+    rules_effective_date: date | None = None
+    #: 題 12 完整性旗標: every R/S/P input was available **and** every one of the
+    #: three series was actually evaluated today. Only then does an empty
+    #: ``directives`` list mean 「無任何規則命中」 rather than 「今天有東西沒評估」.
+    #: Decided by the engine from an allowlist of conditions (see
+    #: :func:`app.playbook.engine.evaluate`), never by scanning warnings text.
+    rules_fully_evaluated: bool = False
+    #: §6 頁面免責句, rendered by :func:`app.playbook.wording.page_summary`.
+    #: Empty on the pure-engine path, which knows neither authorship nor the
+    #: in-force effective date -- the same reason ``attribution`` is ``None``.
+    page_summary: list[str] = Field(default_factory=list)
     directives: list[Directive]
     effects: list[StateEffect]
     #: 資料缺漏 and 凍結 notices, already written as user-facing sentences.

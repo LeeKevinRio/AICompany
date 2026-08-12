@@ -603,6 +603,60 @@ def test_a_stale_index_carries_an_active_fast_market_forward() -> None:
     assert any("2026-08-10" in warning for warning in evaluation.warnings)
 
 
+def test_a_carried_verdict_carries_its_explanation_on_the_state_itself() -> None:
+    """排程台 required: 徽章 reason 為 null 時要能在徽章旁邊說明沿用的理由.
+
+    The same sentence stays in ``warnings``; it is also put on the state so the
+    badge does not have to recognise it inside a list of unrelated notices.
+    """
+    previous = FastMarketState(
+        active=True,
+        annualized_vol_20d=41.2,
+        large_move_days=3,
+        reason="前一日判定",
+        measured_on=date(2026, 8, 10),
+    )
+    carried = evaluate(
+        data_date=TUESDAY,
+        calendar=helper.calendar(),
+        params=helper.params(),
+        index=helper.index(status="unavailable", source="none"),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+        symbols={},
+        portfolio=helper.portfolio(),
+        previous_fast_market=previous,
+    ).fast_market
+
+    assert carried.active is True
+    assert carried.carried_note is not None
+    assert "快市判定沿用前一次評估結果" in carried.carried_note
+    # 不是搬走，是同一句同時在兩處：warnings 仍然帶著它。
+    assert carried.carried_note in evaluate(
+        data_date=TUESDAY,
+        calendar=helper.calendar(),
+        params=helper.params(),
+        index=helper.index(status="unavailable", source="none"),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+        symbols={},
+        portfolio=helper.portfolio(),
+        previous_fast_market=previous,
+    ).warnings
+
+
+def test_a_measured_verdict_has_no_carried_explanation() -> None:
+    """量到的一天有 reason，就不該再掛沿用說明."""
+    evaluation = run(
+        index=helper.index(vol=45.0, large_moves=4),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+    )
+
+    assert evaluation.fast_market.reason is not None
+    assert evaluation.fast_market.carried_note is None
+
+
 def test_a_usable_index_measures_the_fast_market_and_dates_it() -> None:
     evaluation = run(
         index=helper.index(vol=45.0, large_moves=4),

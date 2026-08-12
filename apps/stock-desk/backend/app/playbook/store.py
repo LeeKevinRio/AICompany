@@ -583,6 +583,24 @@ class PlaybookStore:
             return system_default_params(on_date)
         return RuleParams.model_validate(json.loads(str(row[0])))
 
+    def in_force_effective_date(self, on_date: date) -> date | None:
+        """``effective_date`` of the stored parameter row in force on ``on_date``.
+
+        Reads the same row :meth:`active_params` reads and returns **only** what
+        that row holds. ``None`` when no row answers or its date cannot be
+        parsed: :func:`system_default_params` stamps ``on_date`` onto the
+        fallback it builds, and handing that date out here would present a value
+        the page then attributes to the user's rule set (四輪收斂裁決: 只取
+        in-force effective_date，禁推斷頂替).
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT effective_date FROM playbook_rule_params WHERE effective_date <= ? "
+                "ORDER BY effective_date DESC, version DESC LIMIT 1",
+                (on_date.isoformat(),),
+            ).fetchone()
+        return None if row is None else _day_or_none(row[0])
+
     def rule_set_authorship(self, on_date: date) -> RuleSetAuthorship:
         """Who authored the rules in force on ``on_date`` (風控 R2 歸屬語).
 

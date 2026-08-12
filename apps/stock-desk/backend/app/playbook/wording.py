@@ -46,6 +46,13 @@ ATTRIBUTION_NOTE_DATE_MISSING = (
 #: The only value ``{RULE_SET_DATE_STATUS}`` may take (覆審: 值域僅此一句).
 ATTRIBUTION_DATE_STATUS_UNREADABLE = "規則版本 {version} 的生效日期讀取失敗"
 
+#: 四輪收斂裁決 §6 三句's second sentence, branch (c): the first sentence of
+#: :data:`ATTRIBUTION_NO_USER_RULES`, reused rather than retyped so the two can
+#: never drift apart. ``ATTRIBUTION_NO_USER_RULES`` is composed from it below.
+ATTRIBUTION_NO_USER_RULES_FIRST = (
+    "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
+)
+
 #: 歸屬語情境 1: there is no user submission record at all. The 歸屬語 itself is
 #: not shown -- claiming authorship of a system default would be the exact
 #: misattribution R2 exists to prevent -- and the module produces no rule-driven
@@ -57,8 +64,8 @@ ATTRIBUTION_DATE_STATUS_UNREADABLE = "規則版本 {version} 的生效日期讀�
 #: third sentence may not be shortened into a pointer, and de-duplicating this
 #: string in a view may not truncate it.
 ATTRIBUTION_NO_USER_RULES = (
-    "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
-    "本模組僅依你設定的規則集產生進場、停損、停利指令，"
+    ATTRIBUTION_NO_USER_RULES_FIRST
+    + "本模組僅依你設定的規則集產生進場、停損、停利指令，"
     "在你確認規則集之前不會產生這類指令。"
     "你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。"
 )
@@ -84,6 +91,39 @@ UNAUTHORED_HOLDING_NOTE = (
     "本模組今日不產生規則驅動指令；你目前持有 {symbols} 尚未出清，"
     "其停損/停利（S/P 系列）今日未依規則評估。"
 )
+
+#: §6 頁面免責句 (四輪收斂裁決 題 11), three sentences in this fixed order. They
+#: are page-level, not per-line: the ledger's own lines carry their provenance
+#: already, and this block states what the *page* was computed from before the
+#: reader reaches the first line. Rendered above the ledger, never collapsed.
+#:
+#: ① binds the whole page to the 依據資料日 it was computed on.
+PAGE_SUMMARY_DATA_DATE = "本頁面指令依 {data_date} 收盤資料計算。"
+
+#: ② branch (a): the rule version in force and the effective date it carries.
+#: ``{rules_effective_date}`` may only be bound to the ``effective_date`` of the
+#: :class:`RuleParams` row actually in force -- never to today, never to a date
+#: derived from anything else (裁決: 只取 in-force effective_date 禁推斷頂替).
+PAGE_SUMMARY_RULES = "採用規則版本 {rules_version}（生效日 {rules_effective_date}）。"
+
+#: ② branch (b): the version is known but its 生效日 is not readable, and the
+#: same branch is taken whenever authorship itself cannot be determined
+#: (fail-closed). Reuses the one approved 值域 sentence rather than restating it.
+PAGE_SUMMARY_RULES_UNREADABLE = ATTRIBUTION_DATE_STATUS_UNREADABLE + "。"
+
+#: ③ 主詞限縮 to the lines actually in today's ledger, so an empty ledger makes
+#: the sentence vacuous rather than false, and 「自行設定」 matches the wording
+#: used by :data:`ATTRIBUTION_NOTE`.
+PAGE_SUMMARY_ATTRIBUTION = (
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，"
+    "非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+)
+
+#: 四輪收斂裁決 題 12: what an empty ledger means when every rule really was
+#: evaluated. It is only ever sent when the completeness flag
+#: (:attr:`PlaybookEvaluation.rules_fully_evaluated`) is true, so 「未命中」 and
+#: 「未評估」 can be told apart instead of both reading as 「無。」.
+NO_RULE_HIT_NOTE = "今日規則已全數評估，無任何規則命中，未產生指令。"
 
 #: action -> the word the user's own rule set uses.
 ACTION_LABELS: dict[Action, str] = {
@@ -304,6 +344,22 @@ EXIT_CONFIRM_CHECKS: tuple[str, ...] = (
     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 )
 
+#: 四輪收斂裁決: what stands in for check 2 **only** when the response carried no
+#: ``exit_confirm`` block at all, so neither the freeze length nor the 預計恢復日
+#: can be stated. The fact of the freeze is still disclosed before submit; the
+#: two numbers are named as missing and pointed at the place they do appear
+#: (EMERGENCY_EXIT_RESULT / EMERGENCY_EXIT_EMPTY / MODE_REASON_EMERGENCY all
+#: carry them). It is never rendered on the normal path, and it does not block
+#: the submit -- a missing field may not become a locked door (EX-2 出口零摩擦).
+#:
+#: The playbook itself never emits this string: the degraded branch is a client
+#: state (no block arrived), so the sentence is mirrored by the client and lives
+#: here as its single approved source.
+EXIT_CONFIRM_FREEZE_DEGRADED = (
+    "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
+    "兩者於送出後的執行結果中顯示。"
+)
+
 #: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
 #: price; without that price the line stays pending and is named, never guessed.
 SETTLEMENT_NO_OPEN_PRICE = (
@@ -440,6 +496,40 @@ def attribution_note(authorship: RuleSetAuthorship) -> str:
         status = ATTRIBUTION_DATE_STATUS_UNREADABLE.format(version=authorship.version)
         return ATTRIBUTION_NOTE_DATE_MISSING.format(RULE_SET_DATE_STATUS=status)
     return ATTRIBUTION_NOTE.format(RULE_SET_DATE=authorship.rule_set_date.isoformat())
+
+
+def page_summary(
+    *,
+    data_date: date,
+    rules_version: int,
+    rules_effective_date: date | None,
+    user_authored: bool | None,
+) -> list[str]:
+    """§6 頁面免責句, the three sentences in their fixed order (題 11).
+
+    Sentence ② has the three branches the ruling defined and is decided by
+    ``user_authored`` -- the explicit authorship record, never a date:
+
+    * ``False`` -> (c), the first sentence of :data:`ATTRIBUTION_NO_USER_RULES`.
+    * ``True`` with a readable in-force 生效日 -> (a).
+    * anything else, **including an undeterminable authorship** -> (b),
+      fail-closed. (b) says the date could not be read, which is the weaker of
+      the two claims; (a) would assert a 生效日 that is not in evidence.
+    """
+    if user_authored is False:
+        rules_sentence = ATTRIBUTION_NO_USER_RULES_FIRST
+    elif user_authored is True and rules_effective_date is not None:
+        rules_sentence = PAGE_SUMMARY_RULES.format(
+            rules_version=rules_version,
+            rules_effective_date=rules_effective_date.isoformat(),
+        )
+    else:
+        rules_sentence = PAGE_SUMMARY_RULES_UNREADABLE.format(version=rules_version)
+    return [
+        PAGE_SUMMARY_DATA_DATE.format(data_date=data_date.isoformat()),
+        rules_sentence,
+        PAGE_SUMMARY_ATTRIBUTION,
+    ]
 
 
 def exit_confirm_checks(*, freeze_days: int, freeze_until: date) -> tuple[str, ...]:
