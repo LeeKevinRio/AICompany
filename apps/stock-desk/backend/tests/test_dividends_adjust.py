@@ -44,6 +44,7 @@ def _event(
     reference_price: str | None = None,
     cash: str = "0",
     rights: str = "0",
+    stock_dividend_ratio: str | None = None,
     symbol: str = "2330",
 ) -> DividendEvent:
     return DividendEvent(
@@ -54,6 +55,9 @@ def _event(
         reference_price=None if reference_price is None else Decimal(reference_price),
         cash_dividend=Decimal(cash),
         rights_value=Decimal(rights),
+        stock_dividend_ratio=(
+            None if stock_dividend_ratio is None else Decimal(stock_dividend_ratio)
+        ),
         source="test",
         as_of=AS_OF,
     )
@@ -216,6 +220,51 @@ def test_relevant_events_window_is_exclusive_at_the_start_inclusive_at_the_end()
     )
     assert [event.ex_date for event in kept] == [date(2024, 6, 15), date(2024, 6, 18)]
     assert skipped == 0
+
+
+# --- Forecast-table (TWT48U_ALL) events without a published previous_close --
+
+
+def test_missing_previous_close_is_filled_from_the_bar_before_the_ex_date() -> None:
+    """TWT48U_ALL never publishes 前一日收盤價; back_adjust_bars must resolve
+    it from the bar series itself, reproducing the golden case's numbers."""
+    no_previous_close = _event(date(2024, 6, 17), cash="3.00")
+    assert no_previous_close.previous_close is None
+    assert no_previous_close.adjustment_factor is None  # unusable before resolution
+
+    adjustment = back_adjust_bars(GOLDEN_BARS, [no_previous_close])
+    assert adjustment.applied is True
+    assert adjustment.events_applied == 1
+    closes = [bar.close for bar in adjustment.bars]
+    # Same arithmetic as the golden case: 06-15 close (102.00) minus cash 3.00.
+    assert closes[0] == Decimal("97.058824")
+    assert closes[1] == Decimal("99.000000")
+
+
+def test_a_previous_close_already_on_the_event_is_never_overwritten() -> None:
+    """A future non-forecast source that does publish previous_close must not
+    have it silently replaced by the bar-derived value."""
+    published = _event(date(2024, 6, 17), previous_close="102.00", cash="3.00")
+    adjustment = back_adjust_bars(GOLDEN_BARS, [published])
+    assert adjustment.bars[0].close == Decimal("97.058824")
+
+
+def test_an_event_with_no_earlier_bar_stays_unfilled_and_inapplicable() -> None:
+    bars = [_bar(date(2024, 6, 17), "99.00"), _bar(date(2024, 6, 18), "101.00")]
+    no_previous_close = _event(date(2024, 6, 17), cash="3.00")  # == first bar's date
+    adjustment = back_adjust_bars(bars, [no_previous_close])
+    assert adjustment.applied is False
+    assert adjustment.events_skipped == 0  # not applicable, not unusable
+
+
+def test_stock_dividend_ratio_stays_unusable_even_after_previous_close_is_filled() -> None:
+    """The bar-derived previous_close would make the cash portion computable,
+    but a stock component present and uncomputed must still refuse the whole
+    event rather than silently apply a cash-only, incomplete factor."""
+    mixed = _event(date(2024, 6, 17), cash="3.00", stock_dividend_ratio="12.5")
+    adjustment = back_adjust_bars(GOLDEN_BARS, [mixed])
+    assert adjustment.applied is False
+    assert adjustment.events_skipped == 1
 
 
 def test_events_are_applied_in_date_order_regardless_of_input_order() -> None:

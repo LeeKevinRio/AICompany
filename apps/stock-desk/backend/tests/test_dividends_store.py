@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import closing
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -17,19 +19,23 @@ def _event(
     symbol: str,
     day: date,
     *,
-    previous_close: str = "102.00",
+    previous_close: str | None = "102.00",
     reference_price: str | None = "99.00",
     cash: str = "3.00",
     rights: str = "0",
+    stock_dividend_ratio: str | None = None,
 ) -> DividendEvent:
     return DividendEvent(
         symbol=symbol,
         market="TW",
         ex_date=day,
-        previous_close=Decimal(previous_close),
+        previous_close=None if previous_close is None else Decimal(previous_close),
         reference_price=None if reference_price is None else Decimal(reference_price),
         cash_dividend=Decimal(cash),
         rights_value=Decimal(rights),
+        stock_dividend_ratio=(
+            None if stock_dividend_ratio is None else Decimal(stock_dividend_ratio)
+        ),
         source="twse_openapi_dividend",
         as_of=AS_OF,
     )
@@ -118,3 +124,79 @@ def test_upserting_nothing_writes_nothing(tmp_path: Path) -> None:
     store = DividendEventStore(db_path=tmp_path / "d.db")
     assert store.upsert([]) == 0
     assert store.count() == 0
+
+
+def test_previous_close_round_trips_as_none_for_the_forecast_table_source(
+    tmp_path: Path,
+) -> None:
+    """TWT48U_ALL rows never carry a previous_close at sync time -- confirm
+    the column tolerates and round-trips that, not just reference_price."""
+    store = DividendEventStore(db_path=tmp_path / "d.db")
+    store.upsert(
+        [_event("2330", date(2026, 8, 14), previous_close=None, reference_price=None)],
+        synced_at=SYNCED_AT,
+    )
+    stored = store.events_for("2330", "TW")[0]
+    assert stored.previous_close is None
+    assert stored.adjustment_factor is None
+
+
+def test_stock_dividend_ratio_round_trips_and_keeps_the_event_unusable(
+    tmp_path: Path,
+) -> None:
+    store = DividendEventStore(db_path=tmp_path / "d.db")
+    store.upsert(
+        [
+            _event(
+                "2884",
+                date(2026, 8, 20),
+                cash="0.61",
+                stock_dividend_ratio="12.500000",
+            )
+        ],
+        synced_at=SYNCED_AT,
+    )
+    stored = store.events_for("2884", "TW")[0]
+    assert stored.stock_dividend_ratio == Decimal("12.500000")
+    assert stored.adjustment_factor is None  # recorded, not computed -- see app.dividends.models
+
+
+def test_a_preexisting_database_without_the_new_column_migrates_in_place(
+    tmp_path: Path,
+) -> None:
+    """A local SQLite file synced before ``stock_dividend_ratio`` existed
+    must gain the column on open, not error or silently drop the table."""
+    db_path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            """
+            CREATE TABLE dividend_events (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                ex_date TEXT NOT NULL,
+                previous_close TEXT,
+                reference_price TEXT,
+                cash_dividend TEXT NOT NULL,
+                rights_value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                as_of TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, market, ex_date)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO dividend_events VALUES "
+            "('2330', 'TW', '2026-08-14', '102.00', '99.00', '3.00', '0', "
+            "'twse_openapi_dividend', ?, ?)",
+            (AS_OF.isoformat(), SYNCED_AT.isoformat()),
+        )
+
+    store = DividendEventStore(db_path=db_path)
+    stored = store.events_for("2330", "TW")[0]
+    assert stored.stock_dividend_ratio is None
+    assert stored.cash_dividend == Decimal("3.00")
+    store.upsert(
+        [_event("2884", date(2026, 8, 20), stock_dividend_ratio="12.50")], synced_at=SYNCED_AT
+    )
+    assert store.events_for("2884", "TW")[0].stock_dividend_ratio == Decimal("12.50")

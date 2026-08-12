@@ -8,9 +8,10 @@ database, not a new database file or a new architecture layer, exactly as
 
 Writes are an idempotent upsert keyed on ``(symbol, market, ex_date)``:
 re-running ``python -m app.dividends.sync`` refreshes existing rows in place
-rather than duplicating them. Because the upstream dataset is a rolling window
-rather than full history, repeated runs **accumulate** coverage over time --
-which is why the key is the event, not the sync.
+rather than duplicating them. The upstream dataset (TWT48U_ALL, a forecast
+table of *upcoming* ex-dates -- see ``app.dividends.providers``) has no
+history endpoint at all, so repeated runs are the only way coverage
+**accumulates** over time -- which is why the key is the event, not the sync.
 
 Money columns are stored as TEXT and read back as ``Decimal``. Storing prices
 as SQLite REAL would silently round the exchange's own published figures, and
@@ -40,12 +41,20 @@ CREATE TABLE IF NOT EXISTS dividend_events (
     reference_price TEXT,
     cash_dividend TEXT NOT NULL,
     rights_value TEXT NOT NULL,
+    stock_dividend_ratio TEXT,
     source TEXT NOT NULL,
     as_of TEXT NOT NULL,
     synced_at TEXT NOT NULL,
     PRIMARY KEY (symbol, market, ex_date)
 )
 """
+
+#: ``stock_dividend_ratio`` was added to the schema after this table had
+#: already shipped (see ``_migrate_add_stock_dividend_ratio_column`` below):
+#: a pre-existing local SQLite file synced before this change needs the
+#: column added in place, since ``CREATE TABLE IF NOT EXISTS`` alone would
+#: silently leave it missing.
+_STOCK_DIVIDEND_RATIO_COLUMN = "stock_dividend_ratio"
 
 #: The read path is always "one symbol, one date range", which the primary key's
 #: leading columns already serve; this index only helps the coverage queries.
@@ -56,7 +65,7 @@ ON dividend_events (ex_date)
 
 _SELECT_COLUMNS = (
     "symbol, market, ex_date, previous_close, reference_price, "
-    "cash_dividend, rights_value, source, as_of"
+    "cash_dividend, rights_value, stock_dividend_ratio, source, as_of"
 )
 
 
@@ -81,6 +90,20 @@ class DividendEventStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_DATE_INDEX_SQL)
+            self._migrate_add_stock_dividend_ratio_column(conn)
+
+    def _migrate_add_stock_dividend_ratio_column(self, conn: sqlite3.Connection) -> None:
+        """Add ``stock_dividend_ratio`` in place for a table created before it existed.
+
+        ``PRAGMA table_info`` first, since ``ALTER TABLE ... ADD COLUMN``
+        errors on a column that is already there (which it always is for a
+        table this ``__init__`` just created via ``_CREATE_TABLE_SQL``).
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}
+        if _STOCK_DIVIDEND_RATIO_COLUMN not in columns:
+            conn.execute(
+                f"ALTER TABLE dividend_events ADD COLUMN {_STOCK_DIVIDEND_RATIO_COLUMN} TEXT"
+            )
 
     def upsert(
         self,
@@ -101,6 +124,7 @@ class DividendEventStore:
                 _to_text(event.reference_price),
                 str(event.cash_dividend),
                 str(event.rights_value),
+                _to_text(event.stock_dividend_ratio),
                 event.source,
                 event.as_of.isoformat(),
                 moment.isoformat(),
@@ -112,14 +136,16 @@ class DividendEventStore:
                 """
                 INSERT INTO dividend_events (
                     symbol, market, ex_date, previous_close, reference_price,
-                    cash_dividend, rights_value, source, as_of, synced_at
+                    cash_dividend, rights_value, stock_dividend_ratio,
+                    source, as_of, synced_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, market, ex_date) DO UPDATE SET
                     previous_close=excluded.previous_close,
                     reference_price=excluded.reference_price,
                     cash_dividend=excluded.cash_dividend,
                     rights_value=excluded.rights_value,
+                    stock_dividend_ratio=excluded.stock_dividend_ratio,
                     source=excluded.source,
                     as_of=excluded.as_of,
                     synced_at=excluded.synced_at
@@ -194,6 +220,7 @@ def _row_to_event(row: tuple[object, ...]) -> DividendEvent:
         reference_price=_to_decimal(row[4]),
         cash_dividend=Decimal(str(row[5])),
         rights_value=Decimal(str(row[6])),
-        source=str(row[7]),
-        as_of=datetime.fromisoformat(str(row[8])),
+        stock_dividend_ratio=_to_decimal(row[7]),
+        source=str(row[8]),
+        as_of=datetime.fromisoformat(str(row[9])),
     )

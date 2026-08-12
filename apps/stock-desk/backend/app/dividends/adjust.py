@@ -74,6 +74,29 @@ one overall scale factor. The consequences, stated plainly:
   relative to the whole backtest window, and including them would only rescale
   everything anyway.
 
+## Filling in ``previous_close`` for the 預告表 source
+
+``app.dividends.providers.TwseDividendAdapter`` (TWT48U_ALL, a forecast table)
+never publishes 前一日收盤價: at the moment TWSE lists an upcoming ex-date, the
+close from the day before it does not exist yet. Its events therefore arrive
+here with ``previous_close=None``, and would be permanently unusable if
+nothing filled that in. ``back_adjust_bars`` does: for every event missing
+``previous_close``, it looks up the raw close of the last bar strictly before
+the event's ``ex_date`` in the very same ``bars`` series being adjusted, and
+uses that. This is not a guess -- it is the same public closing price a person
+could read off the exchange by hand once the ex-date has actually arrived, and
+it changes nothing about the point-in-time argument above: an event still
+only touches bars *before* its ex-date, and the number used to size that touch
+(``bars[ex_date - 1].close``) is itself dated strictly before the ex-date, so
+no bar's derived factor depends on anything dated on or after that bar.
+Events whose ex-date already carries a published ``previous_close`` (any
+future non-forecast source) pass through this step unchanged.
+
+Events still carrying a ``stock_dividend_ratio`` are unaffected by this fill
+-- ``DividendEvent.adjustment_factor`` refuses them regardless of
+``previous_close`` (see ``app.dividends.models``), so there is nothing to
+gain by resolving a close for them.
+
 ## Known second-order assumption
 
 The proportional (ratio) method is used, which is the industry convention: it
@@ -91,6 +114,7 @@ one.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date as date_type
@@ -136,6 +160,37 @@ class DividendAdjustment:
         if not self.applied or self.oldest_bar_factor <= 0:
             return None
         return float(Decimal(1) / self.oldest_bar_factor - Decimal(1))
+
+
+def _fill_previous_close_from_bars(
+    events: Iterable[DividendEvent], ordered_bars: Sequence[PriceBar]
+) -> list[DividendEvent]:
+    """Fill ``previous_close`` from ``ordered_bars`` for events missing it.
+
+    See the module docstring's "Filling in ``previous_close`` for the 預告表
+    source" section for the full rationale. ``ordered_bars`` must already be
+    sorted ascending by date (``back_adjust_bars`` guarantees this).  An event
+    whose ex-date sits on or before every bar has no earlier close to borrow
+    and is left unchanged -- it will simply be "not applicable" or "unusable"
+    downstream, exactly as before this fill existed.
+    """
+    if not ordered_bars:
+        return list(events)
+    bar_dates = [bar.date for bar in ordered_bars]
+    resolved: list[DividendEvent] = []
+    for event in events:
+        if event.previous_close is not None:
+            resolved.append(event)
+            continue
+        # Index of the last bar strictly before ex_date.
+        index = bisect_left(bar_dates, event.ex_date) - 1
+        if index < 0:
+            resolved.append(event)
+            continue
+        resolved.append(
+            event.model_copy(update={"previous_close": ordered_bars[index].close})
+        )
+    return resolved
 
 
 def relevant_events(
@@ -188,8 +243,9 @@ def back_adjust_bars(
             oldest_bar_factor=Decimal(1),
         )
 
+    filled_events = _fill_previous_close_from_bars(events, ordered)
     applicable, skipped = relevant_events(
-        events, first_bar_date=ordered[0].date, last_bar_date=ordered[-1].date
+        filled_events, first_bar_date=ordered[0].date, last_bar_date=ordered[-1].date
     )
     if not applicable:
         return DividendAdjustment(

@@ -1,4 +1,4 @@
-"""CEO 本機一鍵同步工具 -- 除權息事件（TWSE 除權除息計算結果表）。
+"""CEO 本機一鍵同步工具 -- 除權息事件（TWSE 除權除息預告表 TWT48U_ALL）。
 
     uv run python -m app.dividends.sync
 
@@ -9,24 +9,25 @@
 網路的機器）手動觸發，結果寫進本機 SQLite（``STOCK_DESK_DB_PATH``，預設
 ``./data/stock-desk.db`` 的 ``dividend_events`` 表），之後可離線查詢。
 
-## 為什麼要重複跑
+## 這是預告表，不是歷史結果表：沒有回補這回事
 
-上游資料集是一段滾動視窗（近期的除權息結果），不是完整歷史。寫入是以
-``(symbol, market, ex_date)`` 為鍵的冪等 upsert，所以**定期重跑會逐步累積**
-歷史覆蓋；重跑同一天的資料不會產生重複列。反過來說，第一次同步之後的回測只
-還原得了資料庫裡有的那段區間——這件事由回測 API 誠實揭露，不在這裡假裝。
+``TWT48U_ALL``（見 ``app.dividends.providers`` 檔頭，端點與欄位結構已於
+2026-08-12 由 CEO 實測驗證）是 TWSE 對**即將發生**的除權息日期的預告，上游本身
+就不提供過去發生過的除權息紀錄可查——沒有「回補歷史」這個選項，因為根本沒有
+歷史端點存在。
+
+寫入是以 ``(symbol, market, ex_date)`` 為鍵的冪等 upsert，所以覆蓋範圍只能靠
+**逐次累積**：每次執行把當下預告表看得到的未來事件寫進資料庫，重跑同一天的
+資料不會重複列，但也不會生出這支工具啟用之前、或兩次執行之間錯過的日期。換句
+話說，資料庫裡的除權息紀錄永遠只是「自開始定期執行本工具起，累積收集到的」子
+集，回測能還原的區間也就只到這裡——這件事由回測 API 誠實揭露為「未還原」，
+不在這裡假裝，也不會用內插或平均值把缺口補起來。
 
 ## 網路不可達時的行為
 
 adapter 已把 ``httpx.TransportError``（DNS 失敗、連線被拒、proxy CONNECT 被擋）
 轉成 ``ok=False`` 加一句可讀的中文原因，不會讓例外往外傳；``main()`` 另外印出
 「請在有網路的機器重跑」的明確指引，而不是印一段裸 traceback。
-
-## 端點尚未驗證
-
-端點路徑與欄位名稱是**推斷**的（見 ``app.dividends.providers`` 檔頭）。第一次
-真的有網路時若回 404 或解析不出任何列，那是預期中的待驗狀態，終端會直接說出
-來，需由 data-engineer 對照官方 Swagger 覆核，不是這支工具的 bug。
 
 ## 測試
 
@@ -62,11 +63,13 @@ _NETWORK_GUIDANCE = (
 )
 
 _SCHEMA_GUIDANCE = (
-    "端點路徑與欄位名稱目前是依慣例推斷、尚未經實際回應驗證（見 "
-    "app/dividends/providers.py 檔頭）。若上面的原因是 HTTP 404 或「沒有任何可解析的列」，"
-    "請交由 data-engineer 對照 openapi.twse.com.tw 的官方文件覆核資料集代號與欄位名稱，"
+    "端點路徑與欄位結構已於 2026-08-12 由 CEO 實測驗證（見 app/dividends/providers.py "
+    "檔頭），若上面的原因是 HTTP 非 200 或「沒有任何可解析的列」，代表上游可能改版，"
+    "需由 data-engineer 對照 openapi.twse.com.tw 的官方文件覆核。"
     "覆核前不要用猜的欄位硬上——寧可沒有股利資料（回測會誠實標示「未還原」），"
-    "也不要有一份錯的股利資料。"
+    "也不要有一份錯的股利資料。\n"
+    "另外提醒：本工具讀的是「除權除息預告表」，只列出即將發生的日期，沒有歷史可回補；"
+    "資料庫的覆蓋範圍取決於這支工具被定期執行了多久，不是一次同步就能補齊過去。"
 )
 
 
@@ -86,7 +89,7 @@ def sync_dividends(
 
 def _print_banner() -> None:
     print(_BANNER_RULE)
-    print("除權息事件同步 -- TWSE 除權除息計算結果表（上市；上櫃本期未涵蓋）")
+    print("除權息事件同步 -- TWSE 除權除息預告表 TWT48U_ALL（上市；上櫃本期未涵蓋）")
     print(_BANNER_RULE)
 
 
@@ -112,9 +115,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.dividends.sync",
         description=(
-            "CEO 本機一鍵同步除權息事件：抓 TWSE OpenAPI 除權除息計算結果表，寫入本機 "
-            "SQLite 供回測還原使用。雲端開發環境財經網域被封鎖，本工具設計為在有網路的"
-            "機器上執行；跑不到網路時會印出明確指引，不會拋出裸 traceback。"
+            "CEO 本機一鍵同步除權息事件：抓 TWSE OpenAPI 除權除息預告表（TWT48U_ALL），"
+            "寫入本機 SQLite 供回測還原使用。此表只列出即將發生的除權息日期，沒有歷史可"
+            "回補，覆蓋範圍靠定期重跑逐次累積。雲端開發環境財經網域被封鎖，本工具設計為"
+            "在有網路的機器上執行；跑不到網路時會印出明確指引，不會拋出裸 traceback。"
         ),
     )
     parser.add_argument(

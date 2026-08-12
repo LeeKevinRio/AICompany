@@ -1,43 +1,107 @@
-"""TWSE OpenAPI adapter for 除權除息計算結果表 (ex-dividend / ex-rights results).
+"""TWSE OpenAPI adapter for 除權除息預告表 (upcoming ex-dividend / ex-rights dates).
 
-## Schema confidence -- read before touching the endpoint path or field names
+## Schema confidence -- endpoint and field structure VERIFIED 2026-08-12
 
-This endpoint has **not** been called against a live response from this
-sandbox: outbound HTTPS to ``openapi.twse.com.tw`` is blocked by this
-environment's egress policy (the same finding recorded in
-``tests/fixtures/README.md`` and ``app/directory/providers.py`` -- the proxy
-answers 403 to CONNECT for every financial domain probed). Per the dispatch
-order ("端點依官方文件，查不到就依既有慣例推斷+標註待驗"), the path and field
-names below are **inferred** from TWSE's published OpenAPI dataset naming
-convention plus the host convention already used by
-``app.directory.providers``, and are **pending verification**::
+The endpoint this module used to guess at (``TWT49U``, "除權除息計算結果表")
+does not exist: it is absent from TWSE OpenAPI's published Swagger catalogue,
+and a live probe of ``GET https://openapi.twse.com.tw/v1/exchangeReport/TWT49U``
+returns an HTML document (body starts with ``<!``), not JSON -- a dead end,
+confirmed by the CEO's own machine on 2026-08-12. That earlier guess is
+retired; nothing in this module calls that path anymore.
 
-    GET https://openapi.twse.com.tw/v1/exchangeReport/TWT49U
+The Swagger catalogue lists exactly two dividend-related datasets. This
+adapter uses::
 
-``TWT49U`` is TWSE's report code for 除權除息計算結果表. The columns this
-adapter needs are the ones the report is built around: the symbol, the ex-date,
-the 除權息前收盤價 and the 除權息參考價, plus 息值 / 權值.
+    GET https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL
 
-Because the exact JSON key spelling is the least certain part, every field is
-resolved against a **list of candidate keys** (English and Chinese spellings
-both) rather than one hard-coded string. This is not sloppiness: a rename in
-one column then degrades to "this row is unparseable, skip and count it"
-instead of "this column silently reads as zero", and a wholesale schema change
-makes *every* row unparseable, which surfaces as ``ok=False`` with a reason.
-There is no code path here that fabricates or interpolates a missing value.
+-- 上市股票除權除息預告表 ("upcoming ex-dividend/ex-rights announcement
+table"). The other candidate, ``/v1/opendata/t187ap45_L`` (上市公司股利分派
+情形), was evaluated and **excluded**: it reports a company's board-level
+distribution resolution, not a per-security ex-date -- there is no trading
+date in that dataset to key a :class:`~app.dividends.models.DividendEvent` on,
+so it cannot serve this module's purpose no matter how its columns are read.
 
-**Before the CEO's first real sync run**, a 404 or a shape mismatch is the
-expected outcome until data-engineer confirms the dataset against the live
-Swagger docs at ``openapi.twse.com.tw``. That is a data-source verification
-task, not a bug in this module.
+The CEO's real fetch of ``TWT48U_ALL`` (2026-08-12) confirmed the row shape
+below end to end. A representative pair of real rows::
+
+    [
+      {
+        "Date": "1150814", "Code": "00401A", "Name": "...",
+        "Exdividend": "息", "StockDividendRatio": "",
+        "SubscriptionRatio": "", "SubscriptionPricePerShare": "",
+        "CashDividend": "", "SharesOffered": "", "SharesEmpOwner": "",
+        "SharesholderOwner": "", "StockHoldingRatio": ""
+      },
+      {
+        "Date": "1150818", "Code": "00690", "Name": "...",
+        "Exdividend": "息", "StockDividendRatio": "",
+        "SubscriptionRatio": "", "SubscriptionPricePerShare": "",
+        "CashDividend": "2.190000", "SharesOffered": "", "SharesEmpOwner": "",
+        "SharesholderOwner": "", "StockHoldingRatio": ""
+      }
+    ]
+
+The **field structure** (key names, both the sparse-string convention and
+which columns exist) is verified against that live payload. ``Name`` values
+in this docstring and in ``tests/fixtures/`` are treated as synthetic
+placeholders -- the CEO's own capture noted the first sample's ``Name`` might
+not exactly match ``Code`` 00401A, so nothing here or in the tests depends on
+``Name`` being accurate; it is not parsed at all (see "Columns not consumed"
+below).
+
+## Only five of the eleven columns are read
+
+``Date`` / ``Code`` / ``Exdividend`` / ``CashDividend`` / ``StockDividendRatio``
+are what this adapter needs. ``Name`` and the five remaining columns
+(``SubscriptionRatio``, ``SubscriptionPricePerShare``, ``SharesOffered``,
+``SharesEmpOwner``, ``SharesholderOwner``, ``StockHoldingRatio``) describe
+現金增資認股 (cash capital-increase subscription rights) -- a related but
+distinct corporate action this module does not model. They are captured in
+the fixture for provenance but never read by :func:`parse_dividend_row`.
+
+## ``Exdividend`` value domain -- one value confirmed, others handled defensively
+
+Both real sample rows above show ``Exdividend="息"``. The column's likely
+domain is ``"息"`` (cash only), ``"權"`` (stock only) and ``"息權"`` (both) --
+inferred from TWSE's naming convention, not yet observed for the latter two.
+An unrecognized value is **not** silently dropped: the row is refused via
+:class:`~app.data.providers._util.UnparseableRowError`, which the adapter's
+fetch loop counts in ``skipped_rows`` and logs, so an unknown value is visible
+in the sync output rather than disappearing.
+
+## Blank cells mean "no such component", not zero and not an error
+
+Most numeric columns above are empty strings on most rows -- a pure ex-date
+listing with an amount not yet announced (see the first sample row: flagged
+``"息"`` with a blank ``CashDividend``). ``""`` parses to "this component is
+absent" (``None`` before being defaulted to ``Decimal(0)`` where the model
+requires a value), never to ``0`` treated as "confirmed zero distribution"
+and never refused as unparseable on that basis alone.
+
+The one place blank is **not** tolerated: if ``Exdividend`` is ``"權"`` or
+``"息權"`` (implying a stock/rights component exists) but
+``StockDividendRatio`` is blank, that is an internal inconsistency in the row,
+not "no component" -- the row is refused and counted rather than silently
+treated as a 0-ratio stock event.
 
 ## Coverage limitation (must stay disclosed)
 
 Only TWSE-listed (上市) symbols are covered this phase. TPEx (上櫃) has its own
-OpenAPI portal with a different, separately unverified shape; guessing a second
-endpoint would double the unverified surface for no extra confidence. Until it
-is added, an OTC symbol simply has no events stored, and the backtest layer
-must say "未還原" for it rather than implying it had no dividends.
+OpenAPI portal with a different, separately unverified shape; guessing a
+second endpoint would double the unverified surface for no extra confidence.
+Until it is added, an OTC symbol simply has no events stored, and the
+backtest layer must say "未還原" for it rather than implying it had no
+dividends.
+
+## This is a forecast table -- no history to back-fill
+
+``TWT48U_ALL`` only ever lists *upcoming* ex-dates; there is no endpoint to
+fetch past occurrences from. ``app.dividends.sync`` and
+``app.dividends.store`` therefore treat every run as **additive**: each sync
+upserts whatever the table currently shows (keyed on symbol + ex-date, so a
+rerun refreshes in place rather than duplicating), and coverage only grows
+the longer this tool is run regularly. See ``app.dividends.sync``'s module
+docstring for the full rationale and the CLI's user-facing wording.
 """
 
 from __future__ import annotations
@@ -58,31 +122,30 @@ from app.dividends.models import DividendEvent
 logger = logging.getLogger(__name__)
 
 TWSE_OPENAPI_BASE_URL = "https://openapi.twse.com.tw"
-#: 除權除息計算結果表 (report code TWT49U). Inferred path -- see module docstring.
-TWSE_EX_DIVIDEND_PATH = "/v1/exchangeReport/TWT49U"
+#: 上市股票除權除息預告表 -- verified against a live payload 2026-08-12 (see
+#: module docstring). ``TWT49U`` (the previous guess) does not exist.
+TWSE_EX_DIVIDEND_PATH = "/v1/exchangeReport/TWT48U_ALL"
 
-#: Candidate JSON keys per logical field, tried in order. See module docstring
-#: for why this is a list rather than one hard-coded key.
-_DATE_KEYS = ("Date", "date", "日期", "除權息日期")
-_CODE_KEYS = ("Code", "code", "StockCode", "股票代號", "證券代號", "代號")
-_PREVIOUS_CLOSE_KEYS = (
-    "PreviousClosingPriceBeforeExRightsAndDividends",
-    "DividendBeforeClosingPrice",
-    "BeforePrice",
-    "除權息前收盤價",
-    "前一日收盤價",
-)
-_REFERENCE_PRICE_KEYS = (
-    "ExRightsAndDividendsReferencePrice",
-    "DividendReferencePrice",
-    "ReferencePrice",
-    "除權息參考價",
-    "參考價",
-)
-_CASH_DIVIDEND_KEYS = ("CashDividend", "DividendValue", "息值", "息值(元)", "現金股利")
-_RIGHTS_VALUE_KEYS = ("RightsValue", "權值", "權值(元)")
+#: The five columns this adapter reads, out of the row's eleven. See "Only
+#: five of the eleven columns are read" in the module docstring for the rest.
+_DATE_KEY = "Date"
+_CODE_KEY = "Code"
+_EXDIVIDEND_KEY = "Exdividend"
+_CASH_DIVIDEND_KEY = "CashDividend"
+_STOCK_DIVIDEND_RATIO_KEY = "StockDividendRatio"
+
+#: Confirmed / inferred ``Exdividend`` domain -- see module docstring.
+_KNOWN_EXDIVIDEND_VALUES = frozenset({"息", "權", "息權"})
+#: Values implying a stock/rights component must accompany a StockDividendRatio.
+_STOCK_COMPONENT_EXDIVIDEND_VALUES = frozenset({"權", "息權"})
 
 _BLANK_CELLS = {"", "-", "--", "---", "N/A", "n/a", "null", "None"}
+
+#: A parsed date outside this window is treated as a parsing bug, not a real
+#: event -- the "年界防呆" the no-separator ROC format needs since a single
+#: mis-sliced digit shifts the year by a century.
+_MIN_PLAUSIBLE_YEAR = 2000
+_MAX_PLAUSIBLE_YEAR = 2100
 
 
 @dataclass(frozen=True)
@@ -104,24 +167,24 @@ class DividendFetchResult:
     skipped_rows: int = 0
 
 
-def _pick(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-    """Return the first non-blank value among ``keys``, or ``None``."""
-    for key in keys:
-        value = row.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text and text not in _BLANK_CELLS:
-            return text
-    return None
+def _cell(row: dict[str, Any], key: str) -> str | None:
+    """Return ``row[key]`` stripped, or ``None`` if absent/blank."""
+    value = row.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text and text not in _BLANK_CELLS else None
 
 
 def parse_twse_date(value: str) -> date_type:
     """Parse the date spellings TWSE OpenAPI datasets are known to use.
 
-    Handles ``1130701`` / ``113/07/01`` (ROC calendar, year + 1911),
-    ``20240701`` and ``2024-07-01``. Anything else is refused rather than
-    guessed -- misreading a calendar would silently shift every event.
+    Handles ``1130701`` (no-separator ROC, the shape ``TWT48U_ALL`` actually
+    uses -- e.g. ``"1150814"`` = 民國115年08月14日 = 2026-08-14, confirmed by
+    the CEO's 2026-08-12 real sample), ``113/07/01`` (slash-separated ROC),
+    ``20240701`` and ``2024-07-01``. Anything else -- or a year outside
+    ``[2000, 2100]`` once parsed, a defensive bound against a mis-sliced
+    digit silently landing a century off -- is refused rather than guessed.
     """
     text = value.strip().replace("-", "/")
     if "/" in text:
@@ -141,9 +204,12 @@ def parse_twse_date(value: str) -> date_type:
     else:
         raise UnparseableRowError(f"unrecognized date format: {value!r}")
     try:
-        return date_type(year, month, day)
+        result = date_type(year, month, day)
     except ValueError as exc:
         raise UnparseableRowError(f"impossible date: {value!r}") from exc
+    if not (_MIN_PLAUSIBLE_YEAR <= result.year <= _MAX_PLAUSIBLE_YEAR):
+        raise UnparseableRowError(f"implausible year in date: {value!r}")
+    return result
 
 
 def _parse_amount(value: str | None, *, field: str) -> Decimal | None:
@@ -156,48 +222,58 @@ def _parse_amount(value: str | None, *, field: str) -> Decimal | None:
 
 
 def parse_dividend_row(row: Any, *, source: str, as_of: datetime) -> DividendEvent:
-    """Parse one TWT49U row into a :class:`DividendEvent`, or refuse it.
+    """Parse one TWT48U_ALL row into a :class:`DividendEvent`, or refuse it.
 
-    A row must yield at least a symbol, an ex-date and a 前一日收盤價; without
-    the last one no factor can be derived by either route, so keeping the row
-    would only create the illusion of coverage.
+    A row must yield at least a symbol, an ex-date and a recognized
+    ``Exdividend`` flag; the money/ratio columns are frequently blank on this
+    forecast table (an amount not yet announced) and that is not by itself a
+    reason to refuse the row -- see the module docstring's "Blank cells" and
+    "Exdividend value domain" sections for what *is*.
     """
     if not isinstance(row, dict):
         raise UnparseableRowError(f"row is not an object: {row!r}")
-    symbol = _pick(row, _CODE_KEYS)
+
+    symbol = _cell(row, _CODE_KEY)
     if symbol is None:
         raise UnparseableRowError(f"missing symbol in row: {row!r}")
-    raw_date = _pick(row, _DATE_KEYS)
+
+    raw_date = _cell(row, _DATE_KEY)
     if raw_date is None:
         raise UnparseableRowError(f"missing ex-date in row: {row!r}")
     ex_date = parse_twse_date(raw_date)
 
-    previous_close = _parse_amount(_pick(row, _PREVIOUS_CLOSE_KEYS), field="previous_close")
-    if previous_close is None or previous_close <= 0:
-        raise UnparseableRowError(f"missing/invalid 除權息前收盤價 in row: {row!r}")
-    reference_price = _parse_amount(_pick(row, _REFERENCE_PRICE_KEYS), field="reference_price")
-    if reference_price is not None and reference_price <= 0:
-        raise UnparseableRowError(f"invalid 除權息參考價 in row: {row!r}")
-    cash = _parse_amount(_pick(row, _CASH_DIVIDEND_KEYS), field="cash_dividend") or Decimal(0)
-    rights = _parse_amount(_pick(row, _RIGHTS_VALUE_KEYS), field="rights_value") or Decimal(0)
-    if cash < 0 or rights < 0:
-        raise UnparseableRowError(f"negative distribution component in row: {row!r}")
+    exdividend = _cell(row, _EXDIVIDEND_KEY)
+    if exdividend is None or exdividend not in _KNOWN_EXDIVIDEND_VALUES:
+        raise UnparseableRowError(f"unrecognized Exdividend flag {exdividend!r} in row: {row!r}")
+
+    cash = _parse_amount(_cell(row, _CASH_DIVIDEND_KEY), field="cash_dividend")
+    if cash is not None and cash < 0:
+        raise UnparseableRowError(f"negative CashDividend in row: {row!r}")
+
+    stock_ratio = _parse_amount(
+        _cell(row, _STOCK_DIVIDEND_RATIO_KEY), field="stock_dividend_ratio"
+    )
+    if stock_ratio is not None and stock_ratio < 0:
+        raise UnparseableRowError(f"negative StockDividendRatio in row: {row!r}")
+    if exdividend in _STOCK_COMPONENT_EXDIVIDEND_VALUES and stock_ratio is None:
+        raise UnparseableRowError(
+            f"Exdividend={exdividend!r} implies a stock component but "
+            f"StockDividendRatio is blank in row: {row!r}"
+        )
 
     return DividendEvent(
         symbol=symbol,
         market="TW",
         ex_date=ex_date,
-        previous_close=previous_close,
-        reference_price=reference_price,
-        cash_dividend=cash,
-        rights_value=rights,
+        cash_dividend=cash if cash is not None else Decimal(0),
+        stock_dividend_ratio=stock_ratio,
         source=source,
         as_of=as_of,
     )
 
 
 class TwseDividendAdapter:
-    """Fetches TWSE-listed 除權除息計算結果 rows from the OpenAPI portal."""
+    """Fetches TWSE-listed 除權除息預告表 rows from the OpenAPI portal."""
 
     source_id: ClassVar[str] = "twse_openapi_dividend"
 
@@ -225,19 +301,20 @@ class TwseDividendAdapter:
         if response.status_code != httpx.codes.OK:
             return self._failure(
                 now,
-                f"TWSE OpenAPI 除權息端點回傳 HTTP {response.status_code}，非預期狀態碼"
-                "（端點路徑尚未經實際回應驗證，404 代表資料集代號需由 data-engineer 覆核）",
+                f"TWSE OpenAPI 除權息預告表端點回傳 HTTP {response.status_code}，非預期狀態碼"
+                "（端點路徑已於 2026-08-12 驗證過，非預期狀態碼代表上游可能改版，"
+                "需由 data-engineer 覆核）",
             )
         try:
             payload = response.json()
         except ValueError:
             return self._failure(
-                now, "TWSE OpenAPI 除權息端點回應非 JSON，可能是端點路徑或格式已變更"
+                now, "TWSE OpenAPI 除權息預告表端點回應非 JSON，可能是端點路徑或格式已變更"
             )
         if not isinstance(payload, list):
             return self._failure(
                 now,
-                f"TWSE OpenAPI 除權息端點回應非陣列（收到 {type(payload).__name__}），"
+                f"TWSE OpenAPI 除權息預告表端點回應非陣列（收到 {type(payload).__name__}），"
                 "schema 與預期不符",
             )
 
@@ -252,8 +329,8 @@ class TwseDividendAdapter:
         if not events:
             return self._failure(
                 now,
-                f"TWSE OpenAPI 除權息回應中沒有任何可解析的列（略過 {skipped} 列）；"
-                "欄位名稱可能與推斷不符，需覆核官方文件",
+                f"TWSE OpenAPI 除權息預告表回應中沒有任何可解析的列（略過 {skipped} 列）；"
+                "欄位名稱可能與已驗證版本不符，需覆核官方文件",
                 skipped=skipped,
             )
         return DividendFetchResult(

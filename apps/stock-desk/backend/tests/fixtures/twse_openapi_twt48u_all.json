@@ -1,0 +1,93 @@
+[
+  {
+    "Date": "1150814",
+    "Code": "2330",
+    "Name": "台積電",
+    "Exdividend": "息",
+    "StockDividendRatio": "",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "3.000000",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  },
+  {
+    "Date": "1150814",
+    "Code": "00401A",
+    "Name": "主動統一台股增長",
+    "Exdividend": "息",
+    "StockDividendRatio": "",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  },
+  {
+    "Date": "1150820",
+    "Code": "2884",
+    "Name": "玉山金",
+    "Exdividend": "息權",
+    "StockDividendRatio": "12.500000",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "0.610000",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  },
+  {
+    "Date": "1150825",
+    "Code": "9999",
+    "Name": "未知旗標樣本",
+    "Exdividend": "?",
+    "StockDividendRatio": "",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "1.000000",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  },
+  {
+    "Date": "1150807",
+    "Name": "缺代號樣本",
+    "Exdividend": "息",
+    "StockDividendRatio": "",
+    "CashDividend": "1.000000"
+  },
+  {
+    "Date": "1150807",
+    "Code": "8888",
+    "Name": "旗標與欄位不一致樣本",
+    "Exdividend": "權",
+    "StockDividendRatio": "",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  },
+  {
+    "Date": "1150829",
+    "Code": "2454",
+    "Name": "聯發科",
+    "Exdividend": "息",
+    "StockDividendRatio": "",
+    "SubscriptionRatio": "",
+    "SubscriptionPricePerShare": "",
+    "CashDividend": "1,000.000000",
+    "SharesOffered": "",
+    "SharesEmpOwner": "",
+    "SharesholderOwner": "",
+    "StockHoldingRatio": ""
+  }
+]

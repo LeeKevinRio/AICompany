@@ -19,7 +19,7 @@ from app.dividends.store import DividendEventStore
 from app.dividends.sync import main, sync_dividends
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-FIXTURE_NAME = "twse_openapi_twt49u_exdividend.json"
+FIXTURE_NAME = "twse_openapi_twt48u_all.json"
 AS_OF = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
 
@@ -68,11 +68,12 @@ def test_sync_writes_the_parseable_events(tmp_path: Path) -> None:
     )
     assert result.ok is True
     assert store.count() == 4
-    assert len(store.events_for("2330", "TW")) == 2
+    assert len(store.events_for("2330", "TW")) == 1
 
 
 def test_sync_is_idempotent(tmp_path: Path) -> None:
-    """The upstream dataset is a rolling window; reruns accumulate, not duplicate."""
+    """The upstream dataset is an announcement calendar, not a rolling window
+    of results, but the same rule applies: reruns accumulate, not duplicate."""
     store = DividendEventStore(db_path=tmp_path / "d.db")
     for _ in range(3):
         sync_dividends(
@@ -81,6 +82,26 @@ def test_sync_is_idempotent(tmp_path: Path) -> None:
             synced_at=AS_OF,
         )
     assert store.count() == 4
+
+
+def test_sync_never_deletes_rows_a_later_response_no_longer_lists(tmp_path: Path) -> None:
+    """The predict table is additive: a symbol dropping off a later response
+    (its ex-date passed, or it was pulled) must not erase what was stored."""
+    store = DividendEventStore(db_path=tmp_path / "d.db")
+    sync_dividends(
+        store=store,
+        adapter=TwseDividendAdapter(client=_ok_client(_fixture())),
+        synced_at=AS_OF,
+    )
+    assert store.count() == 4
+
+    only_one_row = [row for row in _fixture() if row.get("Code") == "2330"]  # type: ignore[union-attr]
+    sync_dividends(
+        store=store,
+        adapter=TwseDividendAdapter(client=_ok_client(only_one_row)),
+        synced_at=AS_OF,
+    )
+    assert store.count() == 4  # nothing was deleted, only the "2330" row refreshed
 
 
 def test_main_prints_network_guidance_instead_of_traceback_when_unreachable(
@@ -100,7 +121,7 @@ def test_main_prints_network_guidance_instead_of_traceback_when_unreachable(
 def test_main_prints_schema_guidance_when_the_endpoint_is_wrong(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A 404 is the expected first outcome of an inferred endpoint -- say so."""
+    """A non-200 despite a verified endpoint means the upstream likely changed."""
     monkeypatch.setattr("app.dividends.sync.RateLimitedClient", _client_factory([], status=404))
     exit_code = main(["--db-path", str(tmp_path / "d.db")])
     captured = capsys.readouterr()
@@ -120,5 +141,5 @@ def test_main_succeeds_and_writes_db_when_reachable(
     assert exit_code == 0
     assert "twse_openapi_dividend" in captured.out
     # Partial coverage is printed, not swallowed.
-    assert "略過 2 列" in captured.out
+    assert "略過 3 列" in captured.out
     assert DividendEventStore(db_path=db_path).count() == 4

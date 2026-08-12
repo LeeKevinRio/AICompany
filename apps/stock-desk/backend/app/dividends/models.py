@@ -29,6 +29,37 @@ quantity reconstructed from the components. When neither route is available,
 or the result is not a plausible factor, :attr:`DividendEvent.adjustment_factor`
 returns ``None`` -- the event is refused rather than guessed, and the caller
 reports it as skipped instead of silently corrupting a price series.
+
+## Where ``previous_close`` comes from for the 預告表 source (2026-08-12)
+
+``app.dividends.providers.TwseDividendAdapter`` now reads TWSE's 除權除息預告表
+(``TWT48U_ALL``, verified by the CEO 2026-08-12 -- see that module's docstring),
+which is a **forecast** of upcoming ex-dates. It never publishes 前一日收盤價 or
+除權息參考價 at all: at publish time the ex-date has not happened yet, so
+neither number exists. Rows from that source therefore always construct this
+model with ``previous_close=None`` and ``reference_price=None``; the field
+stays a plain optional here, so ``adjustment_factor`` is ``None`` (unusable)
+until something fills ``previous_close`` in.
+
+``app.dividends.adjust.back_adjust_bars`` is the one place that fills it in:
+once the actual trading history reaches the day before the ex-date, that bar's
+own raw close **is** 前一日收盤價 -- the same public number a person could look
+up by hand, not a guess. See that module's docstring for why looking it up
+from the bar series does not leak the future.
+
+## ``stock_dividend_ratio`` -- recorded, not computed, this phase
+
+``TWT48U_ALL`` also publishes ``StockDividendRatio`` for 除權 (stock dividend)
+events, but as a **share ratio** (e.g. "每千股配股 N 股"), not a dollar amount.
+``rights_value`` above expects a dollar figure (息值/權值, as TWSE's old
+除權除息計算結果表 published it) -- converting a ratio into that figure needs a
+per-unit share value this source does not publish, so forcing the ratio into
+``rights_value`` would be guessing, not computing. Instead the raw ratio is
+kept on ``stock_dividend_ratio`` purely as an observable record that a stock
+component exists; :attr:`DividendEvent.adjustment_factor` refuses (returns
+``None``) for any event carrying one, cash amount or not, because the cash
+alone is only part of the story and a partial factor is not a fact. Widening
+this is a tracked follow-up, not a silent gap.
 """
 
 from __future__ import annotations
@@ -56,7 +87,9 @@ class DividendEvent(BaseModel):
     ``previous_close`` / ``reference_price`` are the exchange's own published
     pair; ``cash_dividend`` (息值) and ``rights_value`` (權值) are kept as the
     fallback route and because they are what a reader wants to see when asking
-    "why did this factor come out at 0.97?".
+    "why did this factor come out at 0.97?". ``stock_dividend_ratio`` is a
+    third, separate signal -- see the module docstring's "recorded, not
+    computed" section for why it never feeds the factor.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -69,6 +102,10 @@ class DividendEvent(BaseModel):
     reference_price: Decimal | None = None
     cash_dividend: Decimal = Decimal("0")
     rights_value: Decimal = Decimal("0")
+    #: Raw 除權 share ratio from TWT48U_ALL's ``StockDividendRatio`` column,
+    #: kept only as an observable record -- see the module docstring for why
+    #: it is deliberately never folded into ``rights_value`` or the factor.
+    stock_dividend_ratio: Decimal | None = None
     source: str
     as_of: datetime
 
@@ -100,6 +137,13 @@ class DividendEvent(BaseModel):
             raise ValueError("prices must be positive when present")
         return value
 
+    @field_validator("stock_dividend_ratio")
+    @classmethod
+    def _stock_dividend_ratio_must_be_non_negative(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("stock_dividend_ratio must be non-negative when present")
+        return value
+
     @property
     def adjustment_factor(self) -> Decimal | None:
         """The proportional price drop this event caused, or ``None`` if unusable.
@@ -124,6 +168,12 @@ class DividendEvent(BaseModel):
         return min(raw, Decimal(1))
 
     def _raw_factor(self) -> Decimal | None:
+        if self.stock_dividend_ratio is not None:
+            # A stock/rights component exists but this phase has no dollar
+            # value for it (see the module docstring) -- a cash-only factor
+            # here would be incomplete, not conservative, so refuse the whole
+            # event rather than understate the true drop.
+            return None
         prev = self.previous_close
         if prev is None or prev <= 0:
             return None
