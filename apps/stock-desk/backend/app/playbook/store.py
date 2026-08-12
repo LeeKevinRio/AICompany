@@ -15,7 +15,8 @@ column is TEXT so ``Decimal`` round-trips exactly.
 * ``playbook_blacklist`` -- S2 黑名單 with its 60-trading-day expiry.
 * ``playbook_symbols`` -- S1 排程暫停 and 高波動清單 membership.
 * ``playbook_state`` -- the single-row portfolio flags: cash, the locked
-  TOTAL_DEPLOY, S3 freeze, EMERGENCY_EXIT freeze and the M1 defense flag.
+  TOTAL_DEPLOY, S3 freeze, EMERGENCY_EXIT freeze, the M1 defense flag and the
+  rule-set confirmation flag the 歸屬語 reads (風控 R2).
 * ``playbook_directives`` -- every line ever produced, with its rules version,
   input provenance and T+1 outcome (風控 required R16).
 
@@ -53,6 +54,7 @@ from app.playbook.models import (
     PlaybookEvaluation,
     PortfolioState,
     RuleParams,
+    RuleSetAuthorship,
     StateEffect,
     SymbolState,
 )
@@ -193,6 +195,11 @@ STATE_DEFENSE_SINCE = "defense_since"
 #: D-2: when the locked TOTAL_DEPLOY was written and what wrote it.
 STATE_TOTAL_DEPLOY_SET_AT = "total_deploy_set_at"
 STATE_TOTAL_DEPLOY_SOURCE = "total_deploy_source"
+#: 風控 R2/R3 歸屬語: the explicit record that the user adopted a rule set as
+#: their own. Only :meth:`PlaybookStore.confirm_rule_set` writes it, and nothing
+#: in the engine may. Authorship is never inferred from a date.
+STATE_RULE_SET_CONFIRMED_AT = "rule_set_confirmed_at"
+STATE_RULE_SET_VERSION = "rule_set_confirmed_version"
 #: FM-1: the fast-market verdict, persisted so a day with unusable index data
 #: can carry it forward instead of re-deciding from nothing.
 STATE_FAST_MARKET_ACTIVE = "fast_market_active"
@@ -238,6 +245,30 @@ def _iso(value: date | None) -> str | None:
 
 def _day(value: Any) -> date | None:
     return None if value is None else date.fromisoformat(str(value))
+
+
+def _day_or_none(value: Any) -> date | None:
+    """``_day`` for a column that may be unreadable rather than absent.
+
+    A stored date that cannot be parsed is a gap, not a date: it comes back as
+    ``None`` so the caller states the gap (歸屬語情境 2) instead of crashing or
+    substituting today.
+    """
+    try:
+        return _day(value)
+    except ValueError:
+        return None
+
+
+def system_default_params(on_date: date) -> RuleParams:
+    """The parameter set used before the user has submitted one of their own.
+
+    Isolated behind a name so no caller can mistake it for the user's rules:
+    it is an input to the arithmetic, never evidence of authorship (風控 R2,
+    覆審 store 預設 fallback 須隔離). :meth:`PlaybookStore.rule_set_authorship`
+    is the only answer to "did the user write these".
+    """
+    return RuleParams(effective_date=on_date)
 
 
 class PlaybookStore:
@@ -534,7 +565,14 @@ class PlaybookStore:
     # --- rule parameters (鐵律④) ----------------------------------------
 
     def active_params(self, on_date: date) -> RuleParams:
-        """The newest version whose effective date has arrived (defaults if none)."""
+        """The newest version whose effective date has arrived.
+
+        Falls back to :func:`system_default_params` when the user has never
+        submitted one. The fallback is a *calculation* input only: it says
+        nothing about who wrote the rules, and callers that speak to the user
+        must ask :meth:`rule_set_authorship` instead of reading ownership out of
+        this value (覆審: 預設 fallback 須隔離).
+        """
         with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT payload FROM playbook_rule_params WHERE effective_date <= ? "
@@ -542,8 +580,71 @@ class PlaybookStore:
                 (on_date.isoformat(),),
             ).fetchone()
         if row is None:
-            return RuleParams(effective_date=on_date)
+            return system_default_params(on_date)
         return RuleParams.model_validate(json.loads(str(row[0])))
+
+    def rule_set_authorship(self, on_date: date) -> RuleSetAuthorship:
+        """Who authored the rules in force on ``on_date`` (風控 R2 歸屬語).
+
+        Two explicit records count, and only these two: the confirmation flag
+        written by :meth:`confirm_rule_set`, and a parameter version the user
+        submitted (a 修改紀錄 is an authorship record too). Neither is a date
+        inference -- :meth:`active_params` returning a default is not evidence of
+        anything, which is exactly why that fallback is isolated.
+
+        An authored rule set whose 生效日 cannot be read comes back with
+        ``rule_set_date=None`` (歸屬語情境 2) rather than with a guessed date.
+        """
+        state = self._state_map()
+        confirmed_version = state.get(STATE_RULE_SET_VERSION)
+        confirmed = STATE_RULE_SET_CONFIRMED_AT in state
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT version, effective_date FROM playbook_rule_params "
+                "WHERE effective_date <= ? ORDER BY effective_date DESC, version DESC LIMIT 1",
+                (on_date.isoformat(),),
+            ).fetchone()
+            total = conn.execute("SELECT COUNT(*) FROM playbook_rule_params").fetchone()
+        submitted = total is not None and int(total[0]) > 0
+        if not confirmed and not submitted:
+            return RuleSetAuthorship(user_authored=False)
+        version = int(row[0]) if row is not None else None
+        if version is None and confirmed_version is not None:
+            version = int(confirmed_version)
+        return RuleSetAuthorship(
+            user_authored=True,
+            version=version,
+            rule_set_date=None if row is None else _day_or_none(row[1]),
+        )
+
+    def confirm_rule_set(
+        self, params: RuleParams, *, confirmed_at: datetime | None = None
+    ) -> None:
+        """Record that the user adopted ``params`` as their own rule set.
+
+        This is the one write that makes the playbook produce directives at all
+        (歸屬語情境 1): before it, the module holds a system default and says so.
+        It is a user action by definition, so no engine path calls it.
+        """
+        moment = (confirmed_at or datetime.now(UTC)).isoformat()
+        with closing(self._connect()) as conn, conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO playbook_rule_params "
+                "(version, payload, submitted_at, effective_date, status) VALUES (?, ?, ?, ?, ?)",
+                (
+                    params.version,
+                    params.model_dump_json(),
+                    moment,
+                    params.effective_date.isoformat(),
+                    "confirmed",
+                ),
+            )
+        self._set_state(
+            {
+                STATE_RULE_SET_CONFIRMED_AT: moment,
+                STATE_RULE_SET_VERSION: str(params.version),
+            }
+        )
 
     def next_version(self) -> int:
         with closing(self._connect()) as conn:

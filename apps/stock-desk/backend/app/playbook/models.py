@@ -113,6 +113,27 @@ class RuleParams(BaseModel):
     slippage_band_pct: Decimal = Decimal("2")
 
 
+class RuleSetAuthorship(BaseModel):
+    """Whether the rules in force are the user's own, and since which version.
+
+    風控 R2/R3 and the 覆審 歸屬語 branches read this and nothing else. It is
+    decided by an **explicit record** -- a confirmation flag or a submitted
+    parameter version -- never by inferring authorship from a date: a system
+    default carries an effective date too, and reading ownership out of one
+    would put the user's name on rules they never wrote.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: ``False`` means 歸屬語情境 1: no user record, so no directive is produced.
+    user_authored: bool
+    #: The version the authorship record names; ``None`` only when unauthored.
+    version: int | None = None
+    #: 規則版本生效日 -- the only thing ``{RULE_SET_DATE}`` may be bound to.
+    #: ``None`` on an authored rule set means 歸屬語情境 2 (date unreadable).
+    rule_set_date: date | None = None
+
+
 class MarketSnapshot(BaseModel):
     """One symbol's 依據資料日 close and the indicators the rules read."""
 
@@ -425,6 +446,10 @@ class PlaybookEvaluation(BaseModel):
     snapshot: list[BatchSnapshot]
     #: The T+1 settlement run that preceded this evaluation, when one ran.
     settlement: SettlementResult | None = None
+    #: 風控 R2 常駐歸屬語, filled by the service from the persisted authorship
+    #: record. ``None`` only on the pure-engine path, which no response reads:
+    #: the engine has no store and may not guess who wrote the rules.
+    attribution: str | None = None
 
 
 class EmergencyExitResult(BaseModel):
@@ -444,6 +469,11 @@ class EmergencyExitResult(BaseModel):
     freeze_until: date
     message: str
     warnings: list[str]
+    #: 風控 R2 常駐歸屬語 for this response.
+    attribution: str
+    #: The mode line for the day the exit was submitted on, rendered now rather
+    #: than stored: the 「第 N/20 交易日」 counter is only true for one day.
+    mode_reason: str
 
 
 class RuleChangeReceipt(BaseModel):

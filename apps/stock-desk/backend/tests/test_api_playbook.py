@@ -23,6 +23,7 @@ from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from tests.api_helpers import FakePriceService, recent_bars
 from tests.playbook_helpers import batch as make_batch
+from tests.playbook_helpers import confirm_rule_set
 
 #: Enough history for MA25, the 20-day monthly line and the 20-day volatility.
 HISTORY = 40
@@ -39,6 +40,8 @@ class PlaybookHarness:
 @pytest.fixture
 def harness(tmp_path: Path) -> Iterator[PlaybookHarness]:
     store = PlaybookStore(db_path=tmp_path / "playbook.db")
+    # 風控 R2: the rules have to be the user's own before a line may be produced.
+    confirm_rule_set(store)
     prices = FakePriceService()
     index = FakePriceService()
     index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII"))
@@ -113,7 +116,14 @@ def test_emergency_exit_liquidates_everything_and_freezes_the_schedule(
     assert len(body["directives"]) == 2
     assert all(item["directive"]["action"] == "sell" for item in body["directives"])
     assert all(item["directive"]["limit_low"] is None for item in body["directives"])
-    assert "凍結至" in body["message"]
+    # 覆審定稿: 已受理（不是「已執行」），且暫停範圍限 R 系列、S/P 照常評估。
+    assert body["message"].startswith("EMERGENCY_EXIT 已受理：")
+    assert "R 系列（新倉進場）自 " in body["message"]
+    assert "S/P 系列停損停利仍照常評估。" in body["message"]
+    assert "已執行" not in body["message"]
+    # 歸屬語與凍結第 N 日的模式句都在回應上，且模式句不是被存起來的快照。
+    assert body["attribution"]
+    assert "第 1/20 交易日" in body["mode_reason"]
 
     # The freeze is now the portfolio's state, and the mode says so.
     assert harness.store.portfolio_state().emergency_until is not None

@@ -26,6 +26,7 @@ import pytest
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from tests.api_helpers import FakePriceService, recent_bars
+from tests.playbook_helpers import confirm_rule_set
 
 #: The seeded series ends on this Friday, so a settlement run "on Wednesday"
 #: still finds Wednesday's bar without depending on the real date.
@@ -47,6 +48,8 @@ class Harness:
 @pytest.fixture
 def harness(tmp_path: Path) -> Iterator[Harness]:
     store = PlaybookStore(db_path=tmp_path / "playbook.db")
+    # 風控 R2: the rules have to be the user's own before a line may be produced.
+    confirm_rule_set(store)
     prices = FakePriceService()
     index = FakePriceService()
     index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=SERIES_END))

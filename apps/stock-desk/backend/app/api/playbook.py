@@ -122,6 +122,8 @@ class TodayResponse(BaseModel):
     directives: list[DirectiveLine]
     snapshot: list[BatchSnapshot]
     warnings: list[str]
+    #: 風控 R2 常駐歸屬語, or the 情境 1 sentence saying no rule set is confirmed.
+    attribution: str | None
     #: The T+1 settlement that ran before this evaluation (CEO 裁決七).
     settlement: SettlementResponse | None
     as_of: str
@@ -135,6 +137,10 @@ class EmergencyExitResponse(BaseModel):
     total_shares: int
     freeze_until: str
     message: str
+    #: The mode line for today, recomputed on every response.
+    mode_reason: str
+    #: 風控 R2 常駐歸屬語.
+    attribution: str
     directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str
@@ -189,6 +195,7 @@ def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
         directives=_lines(evaluation.directives),
         snapshot=evaluation.snapshot,
         warnings=evaluation.warnings,
+        attribution=evaluation.attribution,
         settlement=(
             None
             if evaluation.settlement is None
@@ -255,6 +262,8 @@ def emergency_exit(service: ServiceDep) -> EmergencyExitResponse:
         total_shares=result.total_shares,
         freeze_until=result.freeze_until.isoformat(),
         message=result.message,
+        mode_reason=result.mode_reason,
+        attribution=result.attribution,
         directives=_lines(result.directives),
         warnings=result.warnings,
         as_of=now_iso(),

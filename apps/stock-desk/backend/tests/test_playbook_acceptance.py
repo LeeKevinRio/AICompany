@@ -572,7 +572,9 @@ def test_a_stale_index_never_enters_the_fast_market_for_the_first_time() -> None
     )
     assert evaluation.fast_market.active is False
     assert evaluation.fast_market.carried_forward is True
-    assert any("快市判定沿用" in warning for warning in evaluation.warnings)
+    # 覆審: 沒有前次判定可沿用時說的是「尚無前一次快市判定可沿用」，不是假裝沿用了什麼。
+    assert any("尚無前一次快市判定可沿用" in warning for warning in evaluation.warnings)
+    assert any("不會使系統首次進入快市" in warning for warning in evaluation.warnings)
 
 
 def test_a_stale_index_carries_an_active_fast_market_forward() -> None:

@@ -110,9 +110,31 @@ def _make_directive(
     )
 
 
-def _measured(rule_id: str, detail: str) -> str:
-    """``rule text｜measurement`` -- the 最小事實陳述 shown on the line."""
-    return f"{wording.RULE_TEXT[rule_id]}｜{detail}"
+def _measured(rule_id: str, detail: str, params: RuleParams) -> str:
+    """``rule text｜measurement`` -- the 最小事實陳述 shown on the line.
+
+    The rule text is rendered from ``params``, so a line always restates the
+    thresholds of the version it was decided under rather than a literal that
+    was true when the sentence was written.
+    """
+    return f"{wording.rule_text(rule_id, params)}｜{detail}"
+
+
+def emergency_frozen_day(
+    *, calendar: TradingCalendar, data_date: date, until: date, freeze_days: int
+) -> int:
+    """Which trading day of the EMERGENCY_EXIT pause ``data_date`` is, 1-based.
+
+    Counted backwards from ``until`` so no extra state is needed: the pause runs
+    to the ``freeze_days``-th trading day after the submission, so a day with
+    ``n`` trading days left is day ``freeze_days - n``. The submission day itself
+    lands on 0 and is reported as day 1, because the pause starts 自提交日起.
+
+    Recomputed on every render (覆審): a stored 「第 3/20 交易日」 is wrong on the
+    fourth day, so the counter may never be part of a saved message.
+    """
+    remaining = calendar.trading_days_between(data_date, until)
+    return max(1, min(freeze_days, freeze_days - remaining))
 
 
 def _pct(value: Decimal) -> str:
@@ -233,6 +255,7 @@ def _defense_transition(
                     "M1",
                     f"指數收盤 {_price(index.close)} 低於月線 {_price(index.monthly_line)} "
                     f"連續 {index.days_below_monthly_line} 日",
+                    params,
                 ),
             )
         )
@@ -244,6 +267,7 @@ def _defense_transition(
                 note=_measured(
                     "M1",
                     f"指數收盤 {_price(index.close)} 站回月線 {_price(index.monthly_line)}",
+                    params,
                 ),
             )
         )
@@ -270,29 +294,31 @@ def _fast_market(
         carried = (previous or FastMarketState(
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
         )).model_copy(update={"carried_forward": True})
-        note = wording.FAST_MARKET_CARRIED_NOTE.format(
-            status=status,
-            state=(
-                wording.FAST_MARKET_STATE_ACTIVE
-                if carried.active
-                else wording.FAST_MARKET_STATE_INACTIVE
-            ),
-            measured_on=(
-                wording.FAST_MARKET_NO_HISTORY
-                if carried.measured_on is None
-                else carried.measured_on.isoformat()
-            ),
-        )
+        if carried.measured_on is None:
+            # Nothing to carry: say that, rather than dressing "no history" up as
+            # a previous verdict measured on nothing.
+            note = wording.FAST_MARKET_NO_HISTORY_NOTE.format(status=status)
+        else:
+            note = wording.FAST_MARKET_CARRIED_NOTE.format(
+                status=status,
+                state=(
+                    wording.FAST_MARKET_STATE_ACTIVE
+                    if carried.active
+                    else wording.FAST_MARKET_STATE_INACTIVE
+                ),
+                measured_on=carried.measured_on.isoformat(),
+            )
         return carried, [note]
     vol = index.annualized_vol_20d
     by_vol = vol is not None and vol > params.fast_market_vol_threshold
     by_moves = index.large_move_days >= params.fast_market_move_count
     active = by_vol or by_moves
     reason = (
-        wording.FAST_MARKET_REASON.format(
-            vol="—" if vol is None else f"{vol:.1f}",
+        wording.fast_market_reason(
+            vol=vol,
             lookback=params.fast_market_lookback_days,
             moves=index.large_move_days,
+            move_pct=params.fast_market_move_pct,
         )
         if active
         else None
@@ -312,19 +338,30 @@ def _fast_market(
 def _resolve_mode(
     *,
     data_date: date,
+    calendar: TradingCalendar,
+    params: RuleParams,
     portfolio: PortfolioState,
     defense_active: bool,
     s3_freeze_until: date | None,
     s3_reason: str | None,
 ) -> tuple[Mode, str]:
     if portfolio.emergency_until is not None and data_date <= portfolio.emergency_until:
-        return "emergency_frozen", wording.MODE_REASON_EMERGENCY.format(
-            until=portfolio.emergency_until.isoformat()
+        return "emergency_frozen", wording.mode_reason_emergency(
+            frozen_day=emergency_frozen_day(
+                calendar=calendar,
+                data_date=data_date,
+                until=portfolio.emergency_until,
+                freeze_days=params.emergency_freeze_trading_days,
+            ),
+            freeze_days=params.emergency_freeze_trading_days,
+            until=portfolio.emergency_until,
         )
     freeze_until = s3_freeze_until or portfolio.freeze_until
     reason = s3_reason or portfolio.freeze_reason
     if freeze_until is not None and data_date <= freeze_until:
-        return "frozen", wording.mode_reason_frozen(reason or wording.RULE_TEXT["S3"], freeze_until)
+        return "frozen", wording.mode_reason_frozen(
+            reason or wording.rule_text("S3", params), freeze_until
+        )
     if defense_active:
         return "defense", wording.MODE_REASON_DEFENSE.format(days=1)
     return "normal", wording.MODE_REASON_NORMAL
@@ -374,6 +411,7 @@ def _evaluate_batch_exits(
                     "S1",
                     f"收盤 {_price(close)} < 成本 {_price(cost)} ×{s1_ratio:g} "
                     f"= {_price(cost * s1_ratio)}",
+                    params,
                 ),
                 snapshot=snapshot,
                 execution_date=execution_date,
@@ -421,6 +459,7 @@ def _evaluate_batch_exits(
                         f"BIAS25 {_pct(snapshot.bias25)} > {bias_limit:g}%"
                         f"{'（高波動清單）' if snapshot.high_volatility else ''}，"
                         f"減 1/3 = {shares} 股",
+                        params,
                     ),
                     snapshot=snapshot,
                     execution_date=execution_date,
@@ -465,6 +504,7 @@ def _evaluate_batch_exits(
                     "P1",
                     f"收盤 {_price(close)} ≥ 成本 {_price(cost)} ×{params.p1_ratio:g} "
                     f"= {_price(cost * params.p1_ratio)}，賣 1/3 = {shares} 股",
+                    params,
                 ),
                 snapshot=snapshot,
                 execution_date=execution_date,
@@ -501,6 +541,7 @@ def _evaluate_batch_exits(
                     "P2",
                     f"收盤 {_price(close)} ≥ 成本 {_price(cost)} ×{params.p2_ratio:g} "
                     f"= {_price(cost * params.p2_ratio)}，再賣 1/3 = {shares} 股，餘轉移動停利",
+                    params,
                 ),
                 snapshot=snapshot,
                 execution_date=execution_date,
@@ -563,7 +604,7 @@ def _evaluate_batch_exits(
             action="sell",
             shares=batch.remaining_shares,
             rule_id="P2",
-            rule_summary=_measured("P2", f"移動停利觸發：{trigger}，出清該批餘額"),
+            rule_summary=_measured("P2", f"移動停利觸發：{trigger}，出清該批餘額", params),
             snapshot=snapshot,
             execution_date=execution_date,
             params=params,
@@ -615,6 +656,7 @@ def _evaluate_symbol_stop(
                 f"收盤 {_price(snapshot.close)} < 均成本 {_price(average_cost)} "
                 f"×{params.s2_ratio:g} = {_price(average_cost * params.s2_ratio)}，"
                 f"出清 {shares} 股",
+                params,
             ),
             snapshot=snapshot,
             execution_date=execution_date,
@@ -700,9 +742,12 @@ def _defer_for_index_gap(
             rule_id="R3" if skipping else "M1",
             rule_summary=_measured(
                 "R3" if skipping else "M1",
-                f"{detail}，累計達 {params.r3_max_defers} 次，跳過本批"
+                wording.R3_SKIP_AFTER_LIMIT_NOTE.format(
+                    detail=detail, limit=params.r3_max_defers
+                )
                 if skipping
                 else detail,
+                params,
             ),
             snapshot=snapshot,
             execution_date=execution_date,
@@ -767,6 +812,7 @@ def _evaluate_entries(
                     wording.MISSED_LIMIT_NOTE.format(
                         count=batch.missed_count, limit=params.r3_max_defers
                     ),
+                    params,
                 ),
                 snapshot=snapshot,
                 execution_date=execution_date,
@@ -779,7 +825,7 @@ def _evaluate_entries(
                 symbol=symbol,
                 batch_no=batch.batch_no,
                 value=batch.missed_count,
-                note=f"R3（對齊）：T+1 未成交累計 {batch.missed_count} 次後跳過本批",
+                note=wording.R3_MISSED_SKIP_EFFECT_NOTE.format(count=batch.missed_count),
             )
         )
         return directives, effects
@@ -795,7 +841,9 @@ def _evaluate_entries(
                 shares=0,
                 rule_id="R3",
                 rule_summary=_measured(
-                    "R3", f"順延已達 {batch.defer_count} 次，跳過本批"
+                    "R3",
+                    wording.R3_SKIP_DEFERRED_NOTE.format(count=batch.defer_count),
+                    params,
                 ),
                 snapshot=snapshot,
                 execution_date=execution_date,
@@ -834,7 +882,11 @@ def _evaluate_entries(
                     shares=0,
                     rule_id="R3",
                     rule_summary=_measured(
-                        "R3", f"{detail}，累計達 {params.r3_max_defers} 次，跳過本批"
+                        "R3",
+                        wording.R3_SKIP_AFTER_LIMIT_NOTE.format(
+                            detail=detail, limit=params.r3_max_defers
+                        ),
+                        params,
                     ),
                     snapshot=snapshot,
                     execution_date=execution_date,
@@ -867,7 +919,7 @@ def _evaluate_entries(
                 action="defer",
                 shares=0,
                 rule_id="R2",
-                rule_summary=_measured("R2", detail),
+                rule_summary=_measured("R2", detail, params),
                 snapshot=snapshot,
                 execution_date=execution_date,
                 params=params,
@@ -904,6 +956,7 @@ def _evaluate_entries(
                 "R1",
                 f"排程日進場第 {batch.batch_no} 批，參考價 {_price(snapshot.close)}，"
                 f"股數 {shares}",
+                params,
             ),
             snapshot=snapshot,
             execution_date=execution_date,
@@ -1060,6 +1113,7 @@ def evaluate(
             "S3",
             f"組合新倉未實現 {_pct(unrealized)} < {params.s3_unrealized_pct:g}%，"
             f"凍結 {params.s3_freeze_trading_days} 交易日",
+            params,
         )
         effects.append(
             StateEffect(
@@ -1071,6 +1125,8 @@ def evaluate(
 
     mode, mode_reason = _resolve_mode(
         data_date=data_date,
+        calendar=calendar,
+        params=params,
         portfolio=portfolio,
         defense_active=defense_active,
         s3_freeze_until=s3_until,
@@ -1085,6 +1141,11 @@ def evaluate(
     #: when the index could not be evaluated. A freeze is a different reason and
     #: keeps its own note, so the two never stack on one batch.
     index_gap_defer = mode == "normal" and is_schedule_day and not index_usable
+    if index_gap_defer:
+        # The deferral clause is a separate sentence (覆審): it is only true on a
+        # day that actually had an entry due, so it never rides along with the
+        # index gap itself.
+        warnings.append(wording.INDEX_DATA_GAP_DEFER_NOTE)
     if mode != "normal":
         warnings.append(wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS[mode]))
     elif not is_schedule_day:
@@ -1104,9 +1165,15 @@ def evaluate(
         if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
             status = "unavailable" if snapshot is None else snapshot.data_status
             source = "none" if snapshot is None else snapshot.source
-            warnings.append(
-                wording.DATA_GAP_NOTE.format(symbol=symbol, status=status, source=source)
+            # S-2: on a symbol that still holds shares the gap also means the
+            # stop loss could not be evaluated today, which has to be said out
+            # loud rather than left to be inferred from a missing line.
+            holds = any(
+                item.status == "open" and item.remaining_shares > 0
+                for item in symbol_batches
             )
+            note = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
+            warnings.append(note.format(symbol=symbol, status=status, source=source))
             continue
 
         state = symbols.get(symbol, SymbolState(symbol=symbol))
@@ -1122,6 +1189,7 @@ def evaluate(
                         "S1",
                         f"收盤 {_price(snapshot.close)} 站回 25MA {_price(snapshot.ma25)}，"
                         "排程恢復、順延計數歸零",
+                        params,
                     ),
                 )
             )

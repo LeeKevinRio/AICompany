@@ -18,6 +18,7 @@ from app.playbook.models import (
     PortfolioState,
     RuleParams,
 )
+from app.playbook.store import PlaybookStore
 
 #: A Tuesday (排程日) used as the 依據資料日 in most cases.
 TUESDAY = date(2026, 8, 11)
@@ -25,6 +26,8 @@ TUESDAY = date(2026, 8, 11)
 WEDNESDAY = date(2026, 8, 12)
 #: A Friday: a trading day that is not a 排程日.
 FRIDAY = date(2026, 8, 14)
+#: 規則版本生效日 of the rule set the service-level tests adopt as the user's own.
+RULE_SET_DATE = date(2026, 1, 1)
 
 
 def calendar(start: date = date(2026, 6, 1), days: int = 200) -> TradingCalendar:
@@ -37,7 +40,19 @@ def calendar(start: date = date(2026, 6, 1), days: int = 200) -> TradingCalendar
 
 
 def params(**overrides: object) -> RuleParams:
-    return RuleParams(effective_date=date(2026, 1, 1)).model_copy(update=dict(overrides))
+    return RuleParams(effective_date=RULE_SET_DATE).model_copy(update=dict(overrides))
+
+
+def confirm_rule_set(store: PlaybookStore, **overrides: object) -> RuleParams:
+    """Record the user's own rule set, which every rule-driven line needs.
+
+    風控 R2 / 覆審 歸屬語情境 1: without this record the service produces no
+    directive at all, so a service-level test that wants lines has to state that
+    the user confirmed the rules -- the same thing the product asks of them.
+    """
+    confirmed = params(**overrides)
+    store.confirm_rule_set(confirmed)
+    return confirmed
 
 
 def market(

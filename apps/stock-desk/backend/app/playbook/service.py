@@ -28,7 +28,12 @@ from decimal import Decimal
 from app.data.interface import PriceBar
 from app.playbook import indicators, wording
 from app.playbook.calendar import TradingCalendar
-from app.playbook.engine import evaluate, is_usable, settle_directive
+from app.playbook.engine import (
+    emergency_frozen_day,
+    evaluate,
+    is_usable,
+    settle_directive,
+)
 from app.playbook.models import (
     Directive,
     EmergencyExitResult,
@@ -235,7 +240,10 @@ class PlaybookService:
         warnings = [line.reason for line in unsettled]
         warnings.append(
             wording.SETTLEMENT_SUMMARY.format(
-                executed=result.executed, missed=result.missed, pending=len(unsettled)
+                settled_on=as_of.isoformat(),
+                executed=result.executed,
+                missed=result.missed,
+                pending=len(unsettled),
             )
         )
         return result.model_copy(update={"warnings": warnings})
@@ -318,7 +326,7 @@ class PlaybookService:
                     action="none",
                     shares=0,
                     rule_id="REBALANCE",
-                    rule_summary=f"{wording.RULE_TEXT['REBALANCE']}｜{warning}",
+                    rule_summary=f"{wording.rule_text('REBALANCE', params)}｜{warning}",
                     data_date=as_of,
                     execution_date=as_of,
                     reference_price=None,
@@ -370,6 +378,31 @@ class PlaybookService:
             )
         return result
 
+    def _unauthored_evaluation(self, as_of: date) -> PlaybookEvaluation:
+        """The answer when no user rule set exists (歸屬語情境 1).
+
+        風控 覆審: with no submission record the module may not produce an
+        executable directive, and the 歸屬語 is replaced by the blocking sentence
+        rather than shortened. Nothing is loaded, evaluated or written -- an
+        evaluation the user never authorised leaves no trace either.
+        """
+        return PlaybookEvaluation(
+            data_date=as_of,
+            execution_date=as_of,
+            mode="normal",
+            mode_reason=wording.ATTRIBUTION_NO_USER_RULES,
+            is_schedule_day=False,
+            fast_market=FastMarketState(
+                active=False, annualized_vol_20d=None, large_move_days=0, reason=None
+            ),
+            rules_version=0,
+            directives=[],
+            effects=[],
+            warnings=[],
+            snapshot=[],
+            attribution=wording.ATTRIBUTION_NO_USER_RULES,
+        )
+
     def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
         """Run one evaluation off the latest closing data and persist the result.
 
@@ -377,8 +410,16 @@ class PlaybookService:
         today's lines are decided, or the same batch would be re-issued every day
         (the T+1 half of CEO 裁決七). It is idempotent, so calling this endpoint
         repeatedly is safe.
+
+        Gated on authorship (風控 R2 / 覆審 歸屬語情境 1): a rule-driven directive
+        may only be produced from rules the user submitted, so a book with no
+        submission record gets the blocking sentence and no lines. The gate reads
+        the explicit record, never a date.
         """
         as_of = today or datetime.now(UTC).date()
+        authorship = self._store.rule_set_authorship(as_of)
+        if not authorship.user_authored:
+            return self._unauthored_evaluation(as_of)
         settlement = self.settle_pending(today=as_of)
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
@@ -435,7 +476,12 @@ class PlaybookService:
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
         self._store.record_schedule(evaluation)
         self._store.record_directives(evaluation)
-        return evaluation.model_copy(update={"settlement": settlement})
+        return evaluation.model_copy(
+            update={
+                "settlement": settlement,
+                "attribution": wording.attribution_note(authorship),
+            }
+        )
 
     def emergency_exit(self, *, today: date | None = None) -> EmergencyExitResult:
         """Liquidate every batch and freeze the schedule for 20 trading days.
@@ -445,6 +491,13 @@ class PlaybookService:
         freeze. A symbol whose price could not be loaded is still liquidated --
         the line simply carries no reference price, because there is none to
         state (風控 R5: say what is missing, do not invent it).
+
+        The 歸屬語情境 1 gate on :meth:`evaluate_today` deliberately does **not**
+        apply here (CEO EX-2/EX-4, 出口零摩擦): these lines come from an action
+        the user just submitted, not from rules the system holds on their behalf,
+        and adding a precondition to the exit is the one thing the exit may not
+        have. The response still carries the attribution sentence for the state
+        the rule set is actually in.
         """
         as_of = today or datetime.now(UTC).date()
         batches = self._store.list_batches()
@@ -479,24 +532,48 @@ class PlaybookService:
                     shares=batch.remaining_shares,
                     rule_id="EMERGENCY",
                     rule_summary=(
-                        f"{wording.RULE_TEXT['EMERGENCY']}｜出清 {batch.remaining_shares} 股"
+                        f"{wording.rule_text('EMERGENCY', params)}"
+                        f"｜出清 {batch.remaining_shares} 股"
                     ),
                     data_date=snapshot.data_date if snapshot else as_of,
                     execution_date=execution_date,
                     reference_price=snapshot.close if snapshot else None,
                     limit_low=None,
                     limit_high=None,
-                    limit_note=wording.STOP_LOSS_NO_BAND_NOTE,
+                    limit_note=wording.EMERGENCY_EXIT_NO_BAND_NOTE,
                     data_status=status,
                     source=source,
                 )
             )
+        freeze_days = params.emergency_freeze_trading_days
         message = (
             wording.EMERGENCY_EXIT_RESULT.format(
-                batches=len(directives), shares=total, until=freeze_until.isoformat()
+                batches=len(directives),
+                shares=total,
+                execution_date=execution_date.isoformat(),
+                executed_at=as_of.isoformat(),
+                freeze_days=freeze_days,
+                until=freeze_until.isoformat(),
             )
             if directives
-            else wording.EMERGENCY_EXIT_EMPTY.format(until=freeze_until.isoformat())
+            else wording.EMERGENCY_EXIT_EMPTY.format(
+                executed_at=as_of.isoformat(),
+                freeze_days=freeze_days,
+                until=freeze_until.isoformat(),
+            )
+        )
+        # The mode line is rendered for today, not lifted from ``message``: the
+        # 「第 N/20 交易日」 counter is only true on the day it was computed, so
+        # nothing may store it (覆審: mode_reason 禁存快照字串).
+        mode_reason = wording.mode_reason_emergency(
+            frozen_day=emergency_frozen_day(
+                calendar=calendar,
+                data_date=as_of,
+                until=freeze_until,
+                freeze_days=freeze_days,
+            ),
+            freeze_days=freeze_days,
+            until=freeze_until,
         )
         result = EmergencyExitResult(
             executed_at=as_of,
@@ -506,6 +583,8 @@ class PlaybookService:
             freeze_until=freeze_until,
             message=message,
             warnings=warnings,
+            attribution=wording.attribution_note(self._store.rule_set_authorship(as_of)),
+            mode_reason=mode_reason,
         )
         self._store.apply_effects(
             [
@@ -523,7 +602,7 @@ class PlaybookService:
                 data_date=as_of,
                 execution_date=execution_date,
                 mode="emergency_frozen",
-                mode_reason=message,
+                mode_reason=mode_reason,
                 is_schedule_day=calendar.is_schedule_day(as_of),
                 fast_market=FastMarketState(
                     active=False,
@@ -572,10 +651,12 @@ def request_rule_change(
         fast_market_vol is not None and fast_market_vol > current.fast_market_vol_threshold
     ) or fast_market_moves >= current.fast_market_move_count
     if fast:
-        message += wording.FAST_MARKET_REFUSAL_SUFFIX.format(
-            vol="—" if fast_market_vol is None else f"{fast_market_vol:.1f}",
+        # 覆審: an absent volatility is stated as absent, never rendered as 「—%」.
+        message += wording.fast_market_note(
+            vol=fast_market_vol,
             lookback=current.fast_market_lookback_days,
             moves=fast_market_moves,
+            move_pct=current.fast_market_move_pct,
         )
     return RuleChangeReceipt(
         version=version,
