@@ -9,6 +9,14 @@ lines are stamped against the 預定執行日 opening price and the book moves. 
 idempotent, and ``GET /today`` runs it first so the table is never computed from
 a book that is a day behind.
 
+``GET /api/playbook/rule-set`` and ``POST /api/playbook/confirm-rules`` are the
+two halves of the one action that lifts the 歸屬語情境 1 block (風控 R2): the GET
+states the thresholds of the parameter version in force and whether the user has
+adopted them, and the POST records the adoption together with the opening
+capital. The POST body carries a capital figure and nothing else -- the rule set
+it confirms is the one already in force, so confirmation can never smuggle a
+threshold change past 鐵律④.
+
 ``POST /api/playbook/rebalance`` is the quarterly TOTAL_DEPLOY recomputation
 (CEO 裁決一), triggered by hand because the user decides which day ends the
 quarter. It writes the new locked value and reports an overshoot rather than
@@ -26,10 +34,11 @@ broker (風控 R10, R15).
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.common import now_iso
 from app.api.deps import get_playbook_service
@@ -40,6 +49,8 @@ from app.playbook.models import (
     ExitConfirm,
     FastMarketState,
     PlaybookEvaluation,
+    RuleParams,
+    RuleSetStatus,
     SettlementResult,
 )
 from app.playbook.service import PlaybookService
@@ -107,6 +118,79 @@ class RebalanceResponse(BaseModel):
     directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str
+
+
+class RuleTextItem(BaseModel):
+    """One rule's restatement, rendered with the thresholds in force.
+
+    The text is :func:`app.playbook.wording.rule_text` output, so the client
+    shows the risk-compliance-approved sentence with this version's numbers
+    already in it and never composes a summary of its own.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    text: str
+
+
+class RuleParamItem(BaseModel):
+    """One threshold of the parameter version in force.
+
+    ``field`` is the :class:`RuleParams` field name verbatim -- an identifier,
+    not a label. Naming each threshold in prose would invent user-facing wording
+    nobody approved, and an identifier keeps every row traceable to the field the
+    engine actually reads.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    field: str
+    value: str
+
+
+class RuleSetResponse(BaseModel):
+    """``GET /rule-set`` and ``POST /confirm-rules``: the same picture either way.
+
+    Both endpoints answer with the state *after* they ran, so a client never has
+    to guess what a confirmation changed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: 風控 R2 authorship record. ``False`` is the 歸屬語情境 1 block.
+    user_authored: bool
+    #: The version the authorship record names; ``None`` while unauthored -- a
+    #: system default's version number is not the user's rule set version.
+    rules_version: int | None
+    #: 生效日 of the stored row in force; ``None`` when no row answers.
+    rules_effective_date: str | None
+    #: 風控 R2 常駐歸屬語, or the 情境 1 blocking sentence, rendered server-side.
+    attribution: str
+    rules: list[RuleTextItem]
+    params: list[RuleParamItem]
+    #: The recorded capital and its provenance (CEO 裁決 D-2).
+    cash: str
+    total_deploy: str
+    total_deploy_set_at: str | None
+    total_deploy_source: str | None
+    as_of: str
+
+
+class ConfirmRulesRequest(BaseModel):
+    """The one figure a confirmation carries.
+
+    No threshold may be sent: the set being confirmed is the one already in
+    force (see the endpoint). ``source`` is not accepted either -- the provenance
+    of this write is 「使用者確認」 by construction, and a client-supplied source
+    could claim to be anything.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: 資本額 in TWD, the cash pool the rule set starts from. Must be positive:
+    #: a zero or negative capital is not a book this rule set can act on.
+    capital: Decimal = Field(gt=0)
 
 
 class TodayResponse(BaseModel):
@@ -202,6 +286,51 @@ def _settlement_response(result: SettlementResult) -> SettlementResponse:
     )
 
 
+#: ``RuleParams`` fields that are provenance rather than thresholds. Both have
+#: their own response field, where an unreadable or unauthored value is stated as
+#: missing; repeating them in the threshold list would put a system default's
+#: derived date back on screen as if it were the rule set's own.
+_RULE_PARAM_PROVENANCE_FIELDS = frozenset({"version", "effective_date"})
+
+
+def _rule_param_items(params: RuleParams) -> list[RuleParamItem]:
+    """Every threshold of ``params``, in the order the model declares them."""
+    return [
+        RuleParamItem(field=name, value=str(getattr(params, name)))
+        for name in RuleParams.model_fields
+        if name not in _RULE_PARAM_PROVENANCE_FIELDS
+    ]
+
+
+def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
+    authorship = status.authorship
+    portfolio = status.portfolio
+    return RuleSetResponse(
+        user_authored=authorship.user_authored,
+        rules_version=authorship.version if authorship.user_authored else None,
+        rules_effective_date=(
+            None
+            if status.rules_effective_date is None
+            else status.rules_effective_date.isoformat()
+        ),
+        attribution=wording.attribution_note(authorship),
+        rules=[
+            RuleTextItem(rule_id=rule_id, text=wording.rule_text(rule_id, status.params))
+            for rule_id in wording.RULE_TEXT
+        ],
+        params=_rule_param_items(status.params),
+        cash=str(portfolio.cash),
+        total_deploy=str(portfolio.total_deploy),
+        total_deploy_set_at=(
+            None
+            if portfolio.total_deploy_set_at is None
+            else portfolio.total_deploy_set_at.isoformat()
+        ),
+        total_deploy_source=portfolio.total_deploy_source,
+        as_of=now_iso(),
+    )
+
+
 def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
     return TodayResponse(
         data_date=evaluation.data_date.isoformat(),
@@ -264,6 +393,38 @@ def settle(service: ServiceDep) -> SettlementResponse:
     that was already settled is not settled again.
     """
     return _settlement_response(service.settle_pending())
+
+
+@router.get("/rule-set", response_model=RuleSetResponse)
+def rule_set(service: ServiceDep) -> RuleSetResponse:
+    """The rule set in force, its thresholds and whether the user adopted it.
+
+    Read-only: reading the rules is not adopting them (風控 R2). This is what a
+    confirmation screen renders *before* it asks, so the thresholds on screen are
+    the ones ``GET /today`` would evaluate rather than a client-side copy.
+    """
+    return _rule_set_response(service.rule_set_status())
+
+
+@router.post("/confirm-rules", response_model=RuleSetResponse)
+def confirm_rules(payload: ConfirmRulesRequest, service: ServiceDep) -> RuleSetResponse:
+    """Adopt the rule set in force as the user's own and record the capital.
+
+    The one action that lifts the 歸屬語情境 1 block: until it runs, ``GET
+    /today`` produces no rule-driven directive and says so on the response.
+
+    Idempotent, in the two senses that matter. Confirming twice does not add a
+    rule version -- the authorship record is written once -- so re-submitting
+    cannot walk the rule set forward one version per click. The capital is
+    written on every call, because this is also the capital entry point, and each
+    write carries its timestamp and ``user_confirmation`` source (CEO 裁決 D-2)
+    rather than replacing the previous figure silently.
+
+    Confirms thresholds, never changes them: the body carries a capital figure
+    only, so 鐵律④ (a rule change takes effect on the next trading day) cannot be
+    routed around by re-confirming with different numbers.
+    """
+    return _rule_set_response(service.confirm_rules(capital=payload.capital))
 
 
 @router.post("/rebalance", response_model=RebalanceResponse)

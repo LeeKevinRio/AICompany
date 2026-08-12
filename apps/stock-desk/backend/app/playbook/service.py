@@ -45,6 +45,7 @@ from app.playbook.models import (
     RebalanceResult,
     RuleChangeReceipt,
     RuleParams,
+    RuleSetStatus,
     SettledLine,
     SettlementResult,
     StateEffect,
@@ -67,6 +68,11 @@ MA25_WINDOW = 25
 
 #: ``total_deploy_source`` written by :meth:`PlaybookService.rebalance` (D-2).
 REBALANCE_SOURCE = "quarterly_rebalance"
+
+#: ``total_deploy_source`` written by :meth:`PlaybookService.confirm_rules` (D-2).
+#: A capital figure that came from the user confirming a rule set is traceable to
+#: that action and to nothing else, so it does not share ``REBALANCE_SOURCE``.
+CONFIRMATION_SOURCE = "user_confirmation"
 
 
 def build_calendar(*bar_groups: Sequence[PriceBar]) -> TradingCalendar:
@@ -406,6 +412,68 @@ class PlaybookService:
                 )
             )
         return result
+
+    def _rule_set_status(self, as_of: date) -> RuleSetStatus:
+        return RuleSetStatus(
+            params=self._store.active_params(as_of),
+            authorship=self._store.rule_set_authorship(as_of),
+            portfolio=self._store.portfolio_state(),
+            rules_effective_date=self._store.in_force_effective_date(as_of),
+        )
+
+    def rule_set_status(self, *, today: date | None = None) -> RuleSetStatus:
+        """The rule set in force and its authorship record. Writes nothing.
+
+        The read half of the confirmation flow: the screen that asks the user to
+        adopt a rule set has to show the thresholds it is asking about, and they
+        are the ones :meth:`evaluate_today` would run -- not a copy the client
+        keeps. Reading this never counts as adopting anything (風控 R2: only
+        :meth:`confirm_rules` writes the record).
+        """
+        return self._rule_set_status(today or datetime.now(UTC).date())
+
+    def confirm_rules(
+        self, *, capital: Decimal, today: date | None = None
+    ) -> RuleSetStatus:
+        """Adopt the rule set in force as the user's own and record the capital.
+
+        This is the one action that lifts the 歸屬語情境 1 block: before it the
+        module holds a system default and says so, and produces no rule-driven
+        directive at all (:meth:`_unauthored_evaluation`).
+
+        It takes **no thresholds**. The set adopted is the one already in force,
+        so a confirmation can never smuggle a parameter change past 鐵律④ -- a
+        later change goes through :func:`request_rule_change` and takes effect on
+        the next trading day. The adopted version is dated ``as_of`` because it
+        is a first adoption rather than a change to a set already running: 鐵律④
+        delays *changes*, and there is nothing here to delay away from.
+
+        Idempotent. A second call finds an authorship record already there and
+        writes no new version, so re-submitting cannot walk the rule set forward
+        one version per click. The capital *is* written again -- this is also the
+        capital entry point, and every write carries its timestamp and source
+        (CEO 裁決 D-2), so the later figure is auditable rather than silent.
+
+        TOTAL_DEPLOY is ``capital × deploy_ratio`` of the version in force
+        (CEO 裁決一), computed from the submitted figure alone: this is the
+        opening capital, and recomputing it from what the book holds is the
+        季末 REBALANCE's job (:meth:`rebalance`), on the day the user names.
+        """
+        as_of = today or datetime.now(UTC).date()
+        if not self._store.rule_set_authorship(as_of).user_authored:
+            current = self._store.active_params(as_of)
+            self._store.confirm_rule_set(
+                current.model_copy(
+                    update={"version": self._store.next_version(), "effective_date": as_of}
+                )
+            )
+        params = self._store.active_params(as_of)
+        self._store.set_capital(
+            cash=capital,
+            total_deploy=capital * params.deploy_ratio,
+            source=CONFIRMATION_SOURCE,
+        )
+        return self._rule_set_status(as_of)
 
     def _unauthored_evaluation(self, as_of: date) -> PlaybookEvaluation:
         """The answer when no user rule set exists (歸屬語情境 1).

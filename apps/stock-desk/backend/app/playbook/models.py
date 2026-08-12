@@ -244,6 +244,29 @@ class PortfolioState(BaseModel):
     defense_since: date | None = None
 
 
+class RuleSetStatus(BaseModel):
+    """The rule set in force, who authored it, and the capital recorded for it.
+
+    The answer to both 「這份規則集現在長什麼樣」 and 「使用者確認過了沒」, so a
+    confirmation screen states the thresholds it is about to adopt from the same
+    parameter version :meth:`~app.playbook.service.PlaybookService.evaluate_today`
+    would run, instead of from a copy the client holds.
+
+    ``rules_effective_date`` is read from the stored row through
+    :meth:`~app.playbook.store.PlaybookStore.in_force_effective_date`, so it is
+    ``None`` while no row answers -- a system default carries an
+    ``effective_date`` of its own and that derived date may never stand in for
+    this one (裁決: 只取 in-force effective_date，禁推斷頂替).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    params: RuleParams
+    authorship: RuleSetAuthorship
+    portfolio: PortfolioState
+    rules_effective_date: date | None = None
+
+
 class StateEffect(BaseModel):
     """A state change the engine decided on and the store must persist.
 
