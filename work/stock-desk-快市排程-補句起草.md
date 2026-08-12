@@ -414,3 +414,120 @@ backend-engineer 定案)**
 - 題 7、8、9 之間有交叉引用(見各題「與題 X 的接口」段落),建議風控一次覆審,不要分開裁決导致三句
   合在畫面上時互相打架。
 - 題 10 標籤定案後,若採候選 2 或任何超出現有標籤長度的字串,需另交 `art-lead` 確認徽章元件排版。
+
+---
+
+# 三輪補句(2026-08-12,待風控覆審)
+
+- 觸發:`work/reviews/快市排程-風控前置意見.md` 末節「排程台頁面審查」§6——頁面層免責/資料基準日
+  總覽句 required,及該節 required②「空帳冊『無。』須分辨未命中 vs 未評估(後端供句)」。
+- 已核對現行程式碼:`api/playbook.py` 的 `TodayResponse`(`data_date`/`rules_version` 已有欄位,
+  規則版本生效日目前**沒有**對應欄位,需新增)、`DirectiveLedger.tsx:87-91`(帳冊為空時前端固定寫死
+  「無。」,不分原因)、`wording.py` 既有 `DATA_GAP_NOTE`/`ATTRIBUTION_DATE_STATUS_UNREADABLE` 等
+  已核可語彙。
+- 兩題創意自由度低,延續一輪定錨的收斂判斷方式:Ogilvy(精確不誇大)+ Young(優先重組既有核可語彙,
+  不另造新詞彙)+ Rubin(能併掉的句子不分開講),不做發散式腦力激盪(對應 skill 邊界條款)。
+
+## 11. §6 頁面層免責/資料基準日總覽句
+
+**規格五條(逐一對照)**:①綁 `data_date` ②規則版本+生效日(缺欄位以缺漏句明講) ③非建議定性
++券商回報為準,優先重用核可語彙 ④禁保證性/「僅供參考」弱化 ⑤與 `AdviceCardView` 同配方,不縮摺
+成一句帶過。
+
+**語彙重用盤點**(對應規格③⑤,不另造新詞彙):
+- 非建議定性 → `ATTRIBUTION_NOTE`「非本系統的判斷或建議」(`wording.py:37`)逐字沿用。
+- 券商回報為準 → `EMERGENCY_EXIT_RESULT`/`SETTLEMENT_SUMMARY` 已用「實際成交結果以你的券商回報
+  為準」(`wording.py:282`/`316`)逐字沿用。
+- 規則版本生效日缺漏 → `ATTRIBUTION_DATE_STATUS_UNREADABLE`「規則版本 {version} 的生效日期讀取
+  失敗」(`wording.py:47`)逐字沿用,不另寫一句新的缺漏句。
+- 配方骨架 → `apps/stock-desk/frontend/app/lib/adviceWording.ts` 的 `buildAsOfStatement`(資料基準
+  日獨立一句)+ `buildRulesStatement`(規則版本獨立一句,「非預測模型」定性)+ 非建議句,三句分開陳述、
+  不合併成一句長句,這是「同配方」在規格⑤的具體所指——playbook 頁面沿用同一種「一句一事實」骨架,
+  不是抄襲文字本身(playbook 與 advice 定性不同:「非預測模型」是 advice 的用語,playbook 對應的是
+  「非本系統的判斷或建議」)。
+
+**新增欄位需求(供 backend-engineer)**:`TodayResponse` 目前只有 `rules_version: int`
+(`api/playbook.py:122`),沒有規則版本生效日欄位。§6 required②「無欄位則以缺漏句明講」的前提是
+「有欄位但值缺漏」,目前是**欄位本身不存在**,屬更前置的缺口——建議新增
+`rules_effective_date: str | None`,值取自 in-force `RuleParams.effective_date`
+(`models.py:69`);讀取失敗或無法判定時傳 `None`,由下列句子的缺漏分支處理,不得由前端假造日期。
+
+**候選 A(推薦——三句分立,對齊 AdviceCardView 配方骨架)**
+```
+本頁面指令依 {data_date} 收盤資料計算。
+採用規則版本 {rules_version}（生效日 {rules_effective_date}）。
+每筆指令是你自訂規則的機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。
+```
+生效日缺漏時,第二句整句換成(逐字沿用 `ATTRIBUTION_DATE_STATUS_UNREADABLE`,不得把「讀取失敗」
+塞進括號裡變成半句):
+```
+規則版本 {rules_version} 的生效日期讀取失敗。
+```
+
+**候選 B(合併成一句,供風控認為三句在頁首偏長、應收斂時使用)**
+```
+本頁面指令依 {data_date} 收盤資料、規則版本 {rules_version}（生效日 {rules_effective_date}）計算，
+是你自訂規則的機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。
+```
+生效日缺漏時:
+```
+本頁面指令依 {data_date} 收盤資料計算；規則版本 {rules_version} 的生效日期讀取失敗。
+是你自訂規則的機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。
+```
+
+推薦 A。理由:規格⑤明講「AdviceCardView 同配方不縮摺」,而 `adviceWording.ts` 的配方本身就是
+`buildAsOfStatement`/`buildRulesStatement`/非建議句三個各自獨立的敘事單位(供獨立驗證、獨立
+增刪),不是一句長複合句;A 版是把這個「一句一事實」骨架原樣搬到 playbook 頁面,B 版把三件事併成
+一句反而是「縮摺」的一種形式(字數變少、可驗證性變低),與規格⑤字面方向相反。生效日缺漏分支兩版
+都直接整句替換而非硬填,理由同 VETO-2/題 5 已定的原則——缺值要講成可查證事實,不能悄悄消音。
+
+**呈現位置提醒(非文案裁量,交 art-lead/dev)**:規格⑤「不縮摺」指這段文字不得放進可摺疊/預設收合
+的元件(呼應 §0 framing 的「區塊在帳冊上方不摺疊」同一要求),與 §0 歸屬語區塊分屬不同段落——
+若兩段文字視覺上太像,讀者可能以為重覆而跳讀,版位排列請 art-lead 覆核。
+— 待風控覆審
+
+## 12. 空帳冊「未命中」句(與資料缺漏句可分辨)
+
+**問題現狀**:`DirectiveLedger.tsx:89` 帳冊為空時一律顯示「無。」,不分「今日規則全數評估、單純
+沒有命中」與「某些標的因資料缺漏未被評估」兩種完全不同的狀態——後者目前是靠 `warnings` 陣列裡的
+`DATA_GAP_NOTE`/`DATA_GAP_HOLDING_NOTE` 另外顯示,但帳冊本體那句「無。」不會因此改變措辭,讀者若沒
+留意 `warnings` 區塊,會把「有資料缺漏、其實沒評估完」誤讀成「都評估過了、就是没有指令」。
+
+**候選 A(推薦)**
+```
+今日規則已全數評估，無任何規則命中，未產生指令。
+```
+**候選 B(明列系列範圍,供風控認為 A 版「已全數評估」仍可能被誤讀為包含被暫停系列時使用)**
+```
+今日 R／S／P 系列規則已全數評估，無任何規則命中，未產生指令。
+```
+推薦 A。理由:本句的渲染條件(見下)本來就限定在「R／S／P 皆實際被評估」的正常路徑,B 版把系列
+名稱寫出來對這個路徑沒有新增資訊,是 Rubin 減法要拿掉的贅字;B 版的價值只在「凍結類模式」下才
+成立,但凍結類模式本來就有 `FROZEN_NOTE`/`MODE_REASON_FROZEN`/`MODE_REASON_EMERGENCY` 自己的
+「R 系列暫停、S/P 照常評估」語彙負責講清楚,不需要這句再講一次,分工比塞進同一句更乾淨。
+
+**與資料缺漏句的分辨(規格「可分辨」的具體落實,非文案裁量,供 backend-engineer/qa 定渲染條件)**:
+- 本句只在「`directives` 為空**且** `warnings` 不含任何 `DATA_GAP_NOTE`/`DATA_GAP_HOLDING_NOTE`/
+  `INDEX_DATA_GAP_NOTE` 家族字串」時渲染——只要有一檔因資料狀態被跳過評估,就不是「已全數評估」,
+  此時應維持顯示既有的資料缺漏句(在 `warnings` 區塊),本句不得同時出現,避免「已全數評估」與「某
+  檔未評估」在同一畫面互相矛盾(同一份文件已定的「兩類 required 不該互相矛盾」原則,見一輪第 5 題)。
+- 本句只在 `mode` 為「正常」或「防守」時渲染(這兩種模式下 R／S／P 全系列都實際被引擎評估過);
+  `mode` 為「全凍結」/「緊急出清後凍結」/「待確認規則集」時,帳冊為空的原因分別已有專屬句子
+  (`FROZEN_NOTE`/`MODE_REASON_EMERGENCY`/`ATTRIBUTION_NO_USER_RULES` 或其限縮版)講清楚「為什麼
+  沒有指令」,此時不得再疊加本句,否則會出現「已全數評估」與「R 系列暫停未評估」同框矛盾。
+- 上述渲染條件為事實查核+邏輯題,不是文案裁量題,新句本身的字面(候選 A)風控可直接裁決,渲染時機
+  請風控會同 backend-engineer 確認後落地,避免文案正確但渲染時機錯誤導致同一顆矛盾風險換位置重現。
+
+— 待風控覆審
+
+## 三輪交接
+
+- 兩題(11、12)之候選句 → 交 `risk-compliance-officer` 逐句覆審,11 題另需確認是否接受候選 A 的
+  三句式與 `rules_effective_date` 新欄位需求。
+- 覆審通過 → 交 `backend-engineer`:①`TodayResponse` 新增 `rules_effective_date` 欄位並接上
+  `RuleParams.effective_date` ②`DirectiveLedger.tsx` 空帳冊分支依上述渲染條件改為呼叫後端新句
+  (後端供句,前端不得自組字串,沿用本文件開頭既定原則)③§6 總覽句掛在 `TodayResponse` 新欄位或既有
+  組裝點,由 backend-engineer 決定介面形狀。
+- 11 題呈現位置(是否與 §0 歸屬語區塊視覺上過近)→ 交 `art-lead` 覆核版面,對照
+  `work/stock-desk-快市排程-視覺規範.md` §0/§6 既有段落。
+- 定稿前任何一版文字不得先出現在程式碼、測試 fixture 或截圖中(沿用前兩輪既定原則)。
