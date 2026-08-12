@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_playbook_service
 from app.main import app
+from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from tests.api_helpers import FakePriceService, recent_bars
@@ -128,6 +130,144 @@ def test_emergency_exit_takes_no_body_and_works_with_nothing_held(
     assert body["total_shares"] == 0
     assert body["directives"] == []
     assert "無持有批次" in body["message"]
+
+
+def _log_a_pending_entry(
+    harness: PlaybookHarness, *, execution_date: date, shares: int = 100
+) -> None:
+    """Put one due, unsettled buy line in the log.
+
+    The endpoints run on the real clock, so a line whose 預定執行日 has already
+    arrived is written directly rather than waiting a day for one.
+    """
+    harness.store.record_directives(
+        PlaybookEvaluation(
+            data_date=execution_date - timedelta(days=1),
+            execution_date=execution_date,
+            mode="normal",
+            mode_reason="正常模式",
+            is_schedule_day=True,
+            fast_market=FastMarketState(
+                active=False, annualized_vol_20d=None, large_move_days=0, reason=None
+            ),
+            rules_version=1,
+            directives=[
+                Directive(
+                    symbol="2330",
+                    batch_no=1,
+                    action="buy",
+                    shares=shares,
+                    rule_id="R1",
+                    rule_summary="R1 排程日進場",
+                    data_date=execution_date - timedelta(days=1),
+                    execution_date=execution_date,
+                    reference_price=Decimal("100"),
+                    limit_low=Decimal("98"),
+                    limit_high=Decimal("102"),
+                    limit_note="限價帶",
+                    data_status="fresh",
+                    source="fake",
+                )
+            ],
+            effects=[],
+            warnings=[],
+            snapshot=[],
+        )
+    )
+
+
+def test_settle_moves_the_book_and_refuses_to_do_it_twice(
+    harness: PlaybookHarness,
+) -> None:
+    """BLOCKING 修復：結算有生產呼叫點，且重放不重複扣減."""
+    harness.store.ensure_batches(["2330"], batches_per_target=3)
+    harness.store.set_capital(
+        cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test"
+    )
+    _seed_symbol(harness, "2330", [100.0] * HISTORY)
+    _log_a_pending_entry(harness, execution_date=date.today() - timedelta(days=1))
+
+    body = harness.client.post("/api/playbook/settle").json()
+    assert body["executed"] == 1
+    assert body["missed"] == 0
+    assert body["settled"][0]["open_price"] == "100.0"
+    batch = harness.store.get_batch("2330", 1)
+    assert batch is not None and batch.status == "open" and batch.remaining_shares == 100
+    cash_after = harness.store.portfolio_state().cash
+
+    again = harness.client.post("/api/playbook/settle").json()
+    assert again["settled"] == []
+    assert harness.store.get_batch("2330", 1).remaining_shares == 100  # type: ignore[union-attr]
+    assert harness.store.portfolio_state().cash == cash_after
+
+
+def test_settle_lists_a_line_it_could_not_price_instead_of_dropping_it(
+    harness: PlaybookHarness,
+) -> None:
+    """風控 R5：沒有開盤價就誠實列為未結算，維持待結算."""
+    harness.store.ensure_batches(["2330"], batches_per_target=3)
+    _log_a_pending_entry(harness, execution_date=date.today() - timedelta(days=1))
+
+    body = harness.client.post("/api/playbook/settle").json()
+
+    assert body["settled"] == []
+    assert len(body["unsettled"]) == 1
+    assert "尚無日線開盤價" in body["unsettled"][0]["reason"]
+    assert len(harness.store.pending_directives()) == 1
+
+
+def test_today_settles_the_previous_day_before_building_the_table(
+    harness: PlaybookHarness,
+) -> None:
+    """GET /today 開頭自動結算昨日待結指令（冪等）."""
+    harness.store.ensure_batches(["2330"], batches_per_target=3)
+    harness.store.set_capital(
+        cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test"
+    )
+    _seed_symbol(harness, "2330", [100.0] * HISTORY)
+    _log_a_pending_entry(harness, execution_date=date.today() - timedelta(days=1))
+
+    body = harness.client.get("/api/playbook/today").json()
+    assert body["settlement"]["executed"] == 1
+    assert harness.store.get_batch("2330", 1).status == "open"  # type: ignore[union-attr]
+
+    again = harness.client.get("/api/playbook/today").json()
+    assert again["settlement"]["settled"] == []
+    assert harness.store.get_batch("2330", 1).remaining_shares == 100  # type: ignore[union-attr]
+
+
+def test_rebalance_recomputes_the_locked_capital_and_states_an_overshoot(
+    harness: PlaybookHarness,
+) -> None:
+    """D-1/D-2：季末重算雙向，超額落 directives，鎖定值帶來源與時間戳."""
+    harness.store.ensure_batches(["2330"], batches_per_target=3)
+    _seed_symbol(harness, "2330", [100.0] * HISTORY)
+    batch = harness.store.get_batch("2330", 1)
+    assert batch is not None
+    harness.store.save_batch(
+        batch.model_copy(
+            update={
+                "status": "open",
+                "cost": Decimal("60"),
+                "shares": 1000,
+                "remaining_shares": 1000,
+            }
+        )
+    )
+    harness.store.set_capital(
+        cash=Decimal("10000"), total_deploy=Decimal("500000"), source="initial"
+    )
+
+    body = harness.client.post("/api/playbook/rebalance").json()
+
+    assert body["status"] == "ok"
+    assert Decimal(body["new_total_deploy"]) == Decimal("77000")
+    assert Decimal(body["overshoot"]) == Decimal("23000")
+    assert any("【超額】" in warning for warning in body["warnings"])
+    assert body["directives"][0]["directive"]["rule_id"] == "REBALANCE"
+    state = harness.store.portfolio_state()
+    assert state.total_deploy_source == "quarterly_rebalance"
+    assert state.total_deploy_set_at is not None
 
 
 def test_the_directive_log_records_every_line_the_endpoint_returned(

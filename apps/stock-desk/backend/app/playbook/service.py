@@ -28,7 +28,7 @@ from decimal import Decimal
 from app.data.interface import PriceBar
 from app.playbook import indicators, wording
 from app.playbook.calendar import TradingCalendar
-from app.playbook.engine import evaluate, settle_directive
+from app.playbook.engine import evaluate, is_usable, settle_directive
 from app.playbook.models import (
     Directive,
     EmergencyExitResult,
@@ -36,9 +36,13 @@ from app.playbook.models import (
     IndexSnapshot,
     MarketSnapshot,
     PlaybookEvaluation,
+    RebalanceResult,
     RuleChangeReceipt,
     RuleParams,
+    SettledLine,
+    SettlementResult,
     StateEffect,
+    UnsettledLine,
 )
 from app.playbook.store import PlaybookStore
 from app.positions.models import Market
@@ -54,6 +58,9 @@ PLAYBOOK_MARKET: Market = "TW"
 
 #: MA window for BIAS25 / S1 recovery -- the rule set's 25MA.
 MA25_WINDOW = 25
+
+#: ``total_deploy_source`` written by :meth:`PlaybookService.rebalance` (D-2).
+REBALANCE_SOURCE = "quarterly_rebalance"
 
 
 def build_calendar(*bar_groups: Sequence[PriceBar]) -> TradingCalendar:
@@ -155,9 +162,224 @@ class PlaybookService:
         )
         return list(benchmark.bars), benchmark.status.value, benchmark.source
 
-    def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
-        """Run one evaluation off the latest closing data and persist the result."""
+    def settle_pending(self, *, today: date | None = None) -> SettlementResult:
+        """Stamp every due T+1 line against its 預定執行日 opening price.
+
+        This is the other half of CEO 裁決七 and the reason the book moves at
+        all. A line is due once its 預定執行日 has arrived; the outcome is decided
+        by :func:`app.playbook.engine.settle_directive` against the *open* of
+        that day's daily bar, which is the price the rule set names.
+
+        Three properties this method has to keep:
+
+        * **Idempotent.** The log row is claimed
+          (:meth:`PlaybookStore.claim_directive`) before the book is touched, so
+          calling this twice -- which ``GET /today`` does by design -- settles
+          nothing the second time and deducts nothing twice.
+        * **Honest about gaps.** A symbol with no bar on its 預定執行日 is listed
+          in ``unsettled`` with the status and source that were seen. It is never
+          settled at the reference price, and never quietly dropped (風控 R5).
+        * **Silent about opinions.** Nothing here re-decides an outcome; the
+          engine function does that from the band the line already carries.
+        """
         as_of = today or datetime.now(UTC).date()
+        pending = self._store.pending_directives(on_or_before=as_of)
+        if not pending:
+            return SettlementResult(
+                settled_on=as_of,
+                settled=[],
+                unsettled=[],
+                warnings=[wording.SETTLEMENT_NOTHING_PENDING],
+            )
+
+        symbols = sorted({item.directive.symbol for item in pending})
+        loaded = self._load_symbol_bars(symbols, today=as_of)
+        settled: list[SettledLine] = []
+        unsettled: list[UnsettledLine] = []
+        for item in pending:
+            directive = item.directive
+            bars, status, source = loaded.get(directive.symbol, ([], "unavailable", "none"))
+            opening = next(
+                (bar.open for bar in bars if bar.date == directive.execution_date), None
+            )
+            if opening is None:
+                unsettled.append(
+                    UnsettledLine(
+                        directive_id=item.directive_id,
+                        directive=directive,
+                        reason=wording.SETTLEMENT_NO_OPEN_PRICE.format(
+                            symbol=directive.symbol,
+                            execution_date=directive.execution_date.isoformat(),
+                            status=status,
+                            source=source,
+                        ),
+                    )
+                )
+                continue
+            outcome = settle_directive(directive, open_price=opening)
+            if not self._store.claim_directive(
+                item.directive_id, status=outcome.status, open_price=opening
+            ):
+                # Someone else settled this row between the read and the claim.
+                continue
+            self._store.settle(outcome, fill_price=opening)
+            settled.append(
+                SettledLine(
+                    directive_id=item.directive_id, directive=outcome, open_price=opening
+                )
+            )
+
+        result = SettlementResult(
+            settled_on=as_of, settled=settled, unsettled=unsettled, warnings=[]
+        )
+        warnings = [line.reason for line in unsettled]
+        warnings.append(
+            wording.SETTLEMENT_SUMMARY.format(
+                executed=result.executed, missed=result.missed, pending=len(unsettled)
+            )
+        )
+        return result.model_copy(update={"warnings": warnings})
+
+    def rebalance(self, *, today: date | None = None) -> RebalanceResult:
+        """季末 REBALANCE: recompute TOTAL_DEPLOY from the assets of the day.
+
+        CEO 裁決一 locks TOTAL_DEPLOY for the quarter and recomputes it at the
+        quarter end; 風控 D-1 adds that the recomputation is **two-way** -- a
+        smaller book lowers it, not only a larger one raises it -- and that an
+        overshoot may not be silent.
+
+        Manual by design: the caller decides that today is the quarter end. The
+        engine has no calendar of quarters and inventing one would make the
+        locked value move on a day the user did not choose.
+
+        Refuses rather than guesses (鐵律⑤): if any held symbol has no usable
+        price, 總資產 cannot be stated, so nothing is written and the symbols are
+        named. The overshoot case does not sell anything -- the rule set has no
+        rule that trims one -- it states the number and logs a ``REBALANCE``
+        line, which is what 「不得靜默」 asks for.
+        """
+        as_of = today or datetime.now(UTC).date()
+        batches = self._store.list_batches()
+        symbols = sorted({batch.symbol for batch in batches})
+        loaded = self._load_symbol_bars(symbols, today=as_of)
+        portfolio = self._store.portfolio_state()
+        params = self._store.active_params(as_of)
+
+        deployed = Decimal("0")
+        missing: list[str] = []
+        for batch in batches:
+            if batch.status != "open" or batch.remaining_shares <= 0:
+                continue
+            bars, status, source = loaded.get(batch.symbol, ([], "unavailable", "none"))
+            snapshot = build_market_snapshot(batch.symbol, bars, status=status, source=source)
+            if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+                missing.append(batch.symbol)
+                continue
+            deployed += snapshot.close * Decimal(batch.remaining_shares)
+
+        if missing:
+            message = wording.REBALANCE_BLOCKED.format(symbols="、".join(sorted(set(missing))))
+            return RebalanceResult(
+                executed_at=as_of,
+                status="insufficient_data",
+                total_assets=None,
+                previous_total_deploy=portfolio.total_deploy,
+                new_total_deploy=None,
+                deployed_value=None,
+                overshoot=None,
+                directives=[],
+                message=message,
+                warnings=[message],
+            )
+
+        total_assets = portfolio.cash + deployed
+        new_total_deploy = total_assets * params.deploy_ratio
+        message = wording.REBALANCE_RESULT.format(
+            assets=f"{total_assets:.2f}",
+            previous=f"{portfolio.total_deploy:.2f}",
+            new=f"{new_total_deploy:.2f}",
+            ratio=f"{params.deploy_ratio * 100:g}",
+        )
+        warnings: list[str] = []
+        directives: list[Directive] = []
+        overshoot: Decimal | None = None
+        if deployed > new_total_deploy:
+            overshoot = deployed - new_total_deploy
+            warning = wording.REBALANCE_OVERSHOOT_WARNING.format(
+                deployed=f"{deployed:.2f}",
+                new=f"{new_total_deploy:.2f}",
+                overshoot=f"{overshoot:.2f}",
+            )
+            warnings.append(warning)
+            directives.append(
+                Directive(
+                    symbol="—",
+                    batch_no=None,
+                    action="none",
+                    shares=0,
+                    rule_id="REBALANCE",
+                    rule_summary=f"{wording.RULE_TEXT['REBALANCE']}｜{warning}",
+                    data_date=as_of,
+                    execution_date=as_of,
+                    reference_price=None,
+                    limit_low=None,
+                    limit_high=None,
+                    limit_note=wording.REBALANCE_NO_ORDER_NOTE,
+                    data_status="fresh",
+                    source="playbook_rebalance",
+                )
+            )
+
+        self._store.set_capital(
+            cash=portfolio.cash,
+            total_deploy=new_total_deploy,
+            source=REBALANCE_SOURCE,
+        )
+        result = RebalanceResult(
+            executed_at=as_of,
+            status="ok",
+            total_assets=total_assets,
+            previous_total_deploy=portfolio.total_deploy,
+            new_total_deploy=new_total_deploy,
+            deployed_value=deployed,
+            overshoot=overshoot,
+            directives=directives,
+            message=message,
+            warnings=warnings,
+        )
+        if directives:
+            self._store.record_directives(
+                PlaybookEvaluation(
+                    data_date=as_of,
+                    execution_date=as_of,
+                    mode="normal",
+                    mode_reason=message,
+                    is_schedule_day=False,
+                    fast_market=FastMarketState(
+                        active=False,
+                        annualized_vol_20d=None,
+                        large_move_days=0,
+                        reason=None,
+                    ),
+                    rules_version=params.version,
+                    directives=directives,
+                    effects=[],
+                    warnings=warnings,
+                    snapshot=[],
+                )
+            )
+        return result
+
+    def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
+        """Run one evaluation off the latest closing data and persist the result.
+
+        Settlement runs first: yesterday's lines have to reach the book before
+        today's lines are decided, or the same batch would be re-issued every day
+        (the T+1 half of CEO 裁決七). It is idempotent, so calling this endpoint
+        repeatedly is safe.
+        """
+        as_of = today or datetime.now(UTC).date()
+        settlement = self.settle_pending(today=as_of)
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
         loaded = self._load_symbol_bars(symbols, today=as_of)
@@ -205,13 +427,15 @@ class PlaybookService:
             batches=self._store.list_batches(),
             symbols=self._store.symbol_states(data_date),
             portfolio=self._store.portfolio_state(),
+            previous_fast_market=self._store.fast_market_state(),
         )
         self._store.apply_effects(
             evaluation.effects, data_date=data_date, calendar=calendar
         )
+        self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
         self._store.record_schedule(evaluation)
         self._store.record_directives(evaluation)
-        return evaluation
+        return evaluation.model_copy(update={"settlement": settlement})
 
     def emergency_exit(self, *, today: date | None = None) -> EmergencyExitResult:
         """Liquidate every batch and freeze the schedule for 20 trading days.
