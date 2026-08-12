@@ -222,7 +222,8 @@ def test_run_sector_verification_writes_report_and_returns_zero(tmp_path: Path) 
     assert output_path.exists()
     markdown = output_path.read_text(encoding="utf-8")
     assert "不會被本工具自動修改" in markdown
-    assert "電子工業" in markdown  # official_only: umbrella category sectors.py excludes on purpose
+    assert "存託憑證" in markdown  # official_only: code 91 has no TWSE_SECTORS match
+    assert "99" in markdown  # UNKNOWN_CODE: code not in twse_sector_codes.py
 
 
 def test_run_sector_verification_returns_one_and_no_file_when_unreachable(tmp_path: Path) -> None:

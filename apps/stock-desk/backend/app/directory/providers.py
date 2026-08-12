@@ -37,7 +37,8 @@ schema mismatch must surface as ``ok=False`` with a clear reason (never a
 partially-parsed, silently-wrong directory), which is exactly what the
 per-row ``UnparseableRowError`` skip below produces.
 
-## Sector-profile endpoint (``TwseSectorProfileAdapter``) -- same unverified status
+## Sector-profile endpoint (``TwseSectorProfileAdapter``) -- CONFIRMED reachable
+## and field names confirmed; one field's *value shape* corrected 2026-08-12
 
 Used only by the ``--verify-sectors`` audit (``app.directory.sector_audit``),
 never by the symbol/name sync above. ``GET
@@ -46,11 +47,22 @@ https://openapi.twse.com.tw/v1/opendata/t187ap03_L`` is TWSE's "上市公司基�
 flagged this as "the more literal directory match" for company data; it is
 picked up here specifically because it is the dataset publicly documented to
 carry a per-company ``產業別`` (industry category) column, which
-``STOCK_DAY_ALL`` does not. Same caveat as above: the path and the
-``公司代號``/``公司名稱``/``產業別`` field names are **inferred** from public
-OpenAPI documentation, not confirmed against a live payload from this
-sandbox (egress blocked). A schema mismatch must surface as ``ok=False``,
-never a silently-empty or partially-parsed sector list.
+``STOCK_DAY_ALL`` does not.
+
+CEO's first real run of ``--verify-sectors`` against production TWSE data
+(2026-08-12) confirmed the endpoint path and the ``公司代號``/``公司名稱``/
+``產業別`` field names are correct as written below (1095 rows fetched
+successfully). That same run also corrected an assumption this docstring
+used to make: ``產業別`` returns a **two-digit TWSE industry-category code**
+(e.g. ``"24"``), not the Chinese industry name. ``app.directory.sector_audit``
+resolves the code through ``app.directory.twse_sector_codes`` before
+comparing it against ``app.positions.sectors.TWSE_SECTORS`` -- see that
+module's docstring for the code-to-name mapping's own provenance (compiled
+from public knowledge of TWSE's code table, not yet verified against a live
+code-table document). A schema mismatch (missing field, non-string value,
+etc.) must still surface as ``ok=False`` here, never a silently-empty or
+partially-parsed sector list; an *unrecognized code* is a separate concern
+handled one layer up, in ``compare_sectors``' ``UNKNOWN_CODE`` bucket.
 """
 
 from __future__ import annotations
@@ -100,6 +112,13 @@ class DirectoryFetchResult:
 @dataclass(frozen=True)
 class SectorProfileEntry:
     """One listed company's ``代號 -> 名稱 -> 產業別`` row from ``t187ap03_L``.
+
+    ``sector`` holds the raw two-digit TWSE industry-category **code** TWSE
+    actually returns (confirmed by CEO's 2026-08-12 real run -- see this
+    module's "Sector-profile endpoint" docstring section), not a Chinese
+    name. Resolving the code to a name is ``app.directory.sector_audit``'s
+    job (via ``app.directory.twse_sector_codes``), not this adapter's --
+    this dataclass stays a faithful, unmodified record of what TWSE sent.
 
     Deliberately a plain dataclass, not a ``pydantic`` model like
     ``DirectoryEntry``: this data is never persisted to the store, only fed

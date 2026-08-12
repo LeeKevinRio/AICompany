@@ -167,14 +167,17 @@ def test_twse_sector_profile_fetch_parses_fixture_and_skips_blank_rows() -> None
     assert result.as_of.tzinfo is not None
     symbols = {entry.symbol for entry in result.entries}
     # Blank-代號 row and blank-產業別 row must both be skipped.
-    assert symbols == {"2330", "2317", "1101", "9921", "8888"}
+    assert symbols == {"2330", "2317", "1101", "9188", "9921"}
     by_symbol = {entry.symbol: entry for entry in result.entries}
-    assert by_symbol["2330"].sector == "半導體業"
+    # 產業別 is TWSE's raw two-digit code (confirmed by CEO's 2026-08-12 real
+    # run), not a Chinese name -- resolving it to a name is the comparison
+    # layer's job (app.directory.sector_audit), not this adapter's.
+    assert by_symbol["2330"].sector == "24"
     assert by_symbol["2330"].name == "台積電"
     assert by_symbol["2330"].source == "twse_openapi_t187ap03_L"
-    # Internal full-width-space variant kept verbatim -- normalization is the
-    # comparison layer's job (app.directory.sector_audit), not the adapter's.
-    assert by_symbol["9921"].sector == "電機　機械"
+    # Codes this adapter has never seen before (e.g. "99") are kept verbatim
+    # too -- flagging an unrecognized code is the comparison layer's job.
+    assert by_symbol["9921"].sector == "99"
 
 
 def test_twse_sector_profile_fetch_reports_transport_error_without_raising() -> None:
