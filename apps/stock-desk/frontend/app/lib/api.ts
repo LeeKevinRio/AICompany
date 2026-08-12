@@ -18,6 +18,8 @@ import type {
   ImportPositionsResponse,
   LeverageResponse,
   Market,
+  PlaybookEmergencyExitResponse,
+  PlaybookTodayResponse,
   PortfolioLimitsResponse,
   PortfolioSummaryResponse,
   Position,
@@ -291,4 +293,26 @@ export async function resolveDirectorySymbol(symbol: string): Promise<DirectoryI
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   }
+}
+
+/* --- 排程台 / Playbook (app/api/playbook.py, verified) ------------------- */
+
+/**
+ * `GET /api/playbook/today` (verified). Settles yesterday's due T+1 lines
+ * first (idempotently) before evaluating, so `settlement` on the response is
+ * the run that preceded this evaluation, not a stale one.
+ */
+export function getPlaybookToday(): Promise<PlaybookTodayResponse> {
+  return request<PlaybookTodayResponse>("/api/playbook/today");
+}
+
+/**
+ * `POST /api/playbook/emergency-exit` (verified). Takes no body by design —
+ * CEO 裁決六: naming a symbol would turn the escape hatch into a discretionary
+ * trade. All-or-nothing, works in every mode.
+ */
+export function postPlaybookEmergencyExit(): Promise<PlaybookEmergencyExitResponse> {
+  return request<PlaybookEmergencyExitResponse>("/api/playbook/emergency-exit", {
+    method: "POST",
+  });
 }

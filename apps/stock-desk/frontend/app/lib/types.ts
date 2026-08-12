@@ -1115,3 +1115,184 @@ export interface AlertEvaluationResponse {
   outcomes: AlertEvaluationOutcome[];
   as_of: string;
 }
+
+/* ============================================================================
+ * 排程台 / Playbook (backend/app/api/playbook.py + playbook/models.py +
+ * playbook/wording.py, verified field-for-field against source). Every
+ * Decimal field below arrives as a JSON string, never a float (same
+ * project-wide convention `bars.py`'s doc comment states and `types.ts`'s own
+ * header restates) — `reference_price`/`limit_low`/`limit_high`/`cost`/
+ * `close`/`peak_close`/`unrealized_pct`/`open_price` are all `Decimal | None`
+ * server-side with no explicit `str()` cast in most cases (pydantic v2
+ * serializes `Decimal` as a JSON string by default), so they are typed
+ * `string | null` here exactly like `PositionInput.quantity`/`avg_cost`.
+ * ==========================================================================*/
+
+/** Backend `Action` (app/playbook/models.py). */
+export type PlaybookAction = "buy" | "sell" | "defer" | "skip" | "none";
+
+/** Backend `Mode` (app/playbook/models.py) — 正常／防守／全凍結／緊急出清後凍結／待確認規則集. */
+export type PlaybookMode = "normal" | "defense" | "frozen" | "emergency_frozen" | "unconfirmed";
+
+/** Backend `BatchStatus` (app/playbook/models.py). */
+export type PlaybookBatchStatus = "planned" | "open" | "closed" | "skipped";
+
+/** Backend `DirectiveStatus` (app/playbook/models.py) — CEO 裁決七 T+1 outcome. */
+export type PlaybookDirectiveStatus = "pending" | "executed" | "missed";
+
+/** Backend `RuleId` (app/playbook/models.py), verbatim. */
+export type PlaybookRuleId =
+  | "R1"
+  | "R2"
+  | "R3"
+  | "R4"
+  | "S1"
+  | "S2"
+  | "S3"
+  | "P1"
+  | "P2"
+  | "P3"
+  | "M1"
+  | "IRON1"
+  | "EMERGENCY"
+  | "REBALANCE";
+
+/** Backend `Directive` (app/playbook/models.py). */
+export interface PlaybookDirective {
+  symbol: string;
+  batch_no: number | null;
+  action: PlaybookAction;
+  shares: number;
+  rule_id: PlaybookRuleId;
+  //: 最小事實陳述 rendered server-side (公式與輸入來源逐字可見, R1) — never
+  //: re-derived or paraphrased client-side.
+  rule_summary: string;
+  data_date: string;
+  execution_date: string;
+  reference_price: string | null;
+  limit_low: string | null;
+  limit_high: string | null;
+  //: Why the band is what it is, or 「停損不設滑價帶」 — always backend text.
+  limit_note: string;
+  data_status: string;
+  source: string;
+  status: PlaybookDirectiveStatus;
+}
+
+/**
+ * Backend `DirectiveLine` (app/api/playbook.py) — a directive plus its
+ * server-rendered one-line form (`wording.directive_line`), "so the UI cannot
+ * re-word it" (backend's own doc comment). `line` is the single source for
+ * 動作／股數／規則／依據資料日／預定執行日／參考價 — the frontend never
+ * reconstructs this sentence from the raw `directive` fields.
+ */
+export interface PlaybookDirectiveLine {
+  line: string;
+  directive: PlaybookDirective;
+}
+
+/** Backend `SettledLineResponse` (app/api/playbook.py). */
+export interface PlaybookSettledLine {
+  directive_id: number;
+  line: string;
+  status: string;
+  open_price: string;
+  directive: PlaybookDirective;
+}
+
+/** Backend `UnsettledLineResponse` (app/api/playbook.py). */
+export interface PlaybookUnsettledLine {
+  directive_id: number;
+  line: string;
+  reason: string;
+  directive: PlaybookDirective;
+}
+
+/** Backend `SettlementResponse` (app/api/playbook.py) — `POST /settle` and `TodayResponse.settlement`. */
+export interface PlaybookSettlementResponse {
+  settled_on: string;
+  executed: number;
+  missed: number;
+  settled: PlaybookSettledLine[];
+  unsettled: PlaybookUnsettledLine[];
+  //: Every unsettled line's reason, plus the rendered SETTLEMENT_SUMMARY /
+  //: SETTLEMENT_NOTHING_PENDING sentence as the last entry (app/playbook/service.py
+  //: `settle_pending`, verified) — rendered here as-is, never recomposed.
+  warnings: string[];
+  as_of: string;
+}
+
+/**
+ * Backend `FastMarketState` (app/playbook/models.py) — CEO 裁決六. `reason`
+ * is the backend-rendered measurement sentence (`wording.fast_market_reason`)
+ * when the state was actually measured today; `null` is possible even while
+ * `active` is `true` on a carried-forward verdict, per the backend model doc.
+ */
+export interface PlaybookFastMarketState {
+  active: boolean;
+  annualized_vol_20d: number | null;
+  large_move_days: number;
+  reason: string | null;
+  carried_forward: boolean;
+  measured_on: string | null;
+}
+
+/** Backend `TodayResponse` (app/api/playbook.py) — `GET /api/playbook/today`. */
+export interface PlaybookTodayResponse {
+  data_date: string;
+  execution_date: string;
+  mode: PlaybookMode;
+  //: Server-rendered Chinese label (`wording.MODE_LABELS`) — never mapped
+  //: client-side from the raw `mode` enum.
+  mode_label: string;
+  //: Server-rendered mode explanation sentence (`wording.MODE_REASON_*`).
+  mode_reason: string;
+  is_schedule_day: boolean;
+  fast_market: PlaybookFastMarketState;
+  rules_version: number;
+  directives: PlaybookDirectiveLine[];
+  snapshot: PlaybookBatchSnapshot[];
+  warnings: string[];
+  //: 風控 R2 常駐歸屬語, or the 情境 1 blocking sentence; `null` only on the
+  //: pure-engine path no response actually reads (backend doc comment) — the
+  //: UI still treats `null` as "render nothing" per the EMPTY contract.
+  attribution: string | null;
+  //: The T+1 settlement that ran before this evaluation (CEO 裁決七); `null`
+  //: only when no settlement run has ever happened for this book.
+  settlement: PlaybookSettlementResponse | null;
+  as_of: string;
+}
+
+/** Backend `BatchSnapshot` (app/playbook/models.py) — one row of 部位快照. */
+export interface PlaybookBatchSnapshot {
+  symbol: string;
+  batch_no: number;
+  status: PlaybookBatchStatus;
+  entry_date: string | null;
+  cost: string | null;
+  close: string | null;
+  remaining_shares: number;
+  peak_close: string | null;
+  //: (close - cost) / cost **already expressed in percent** (e.g. `"12.34"`
+  //: means +12.34%) — unlike `AdviceCard`'s plain-number percent fields, this
+  //: is a stringified `Decimal` already scaled, so `formatPercent` (which
+  //: multiplies by 100) must not be used here; see `formatScaledPercent`.
+  unrealized_pct: string | null;
+}
+
+/** Backend `EmergencyExitResponse` (app/api/playbook.py) — `POST /api/playbook/emergency-exit`. */
+export interface PlaybookEmergencyExitResponse {
+  executed_at: string;
+  execution_date: string;
+  total_shares: number;
+  freeze_until: string;
+  //: `wording.EMERGENCY_EXIT_RESULT` or `EMERGENCY_EXIT_EMPTY`, fully rendered.
+  message: string;
+  mode_reason: string;
+  //: EMERGENCY_EXIT 專用歸屬語 (`wording.EXIT_ATTRIBUTION`); `null` only when
+  //: the exit produced no line (no batch held) — the EMPTY contract again.
+  attribution: string | null;
+  directives: PlaybookDirectiveLine[];
+  warnings: string[];
+  as_of: string;
+}

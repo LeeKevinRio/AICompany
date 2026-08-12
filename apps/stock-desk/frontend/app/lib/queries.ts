@@ -14,6 +14,7 @@ import {
   getBars,
   getHealth,
   getLeverageChapter,
+  getPlaybookToday,
   getPortfolioLimits,
   getPortfolioSummary,
   getPositions,
@@ -22,6 +23,7 @@ import {
   getSignals,
   importPositionsCsv,
   patchAlert,
+  postPlaybookEmergencyExit,
   resolveDirectorySymbol,
   runBacktest,
   searchDirectory,
@@ -334,6 +336,37 @@ export function useDirectoryResolve(symbol: string, enabled: boolean) {
  * both without needing to distinguish them (FR-7 fallback is the same
  * either way).
  */
+/* --- 排程台 / Playbook (app/api/playbook.py) ----------------------------- */
+
+/**
+ * `GET /api/playbook/today` — the single query the whole `/playbook` page is
+ * built on (mode badge, ledger, snapshot, settlement all come from this one
+ * response). `retry: 1` matches this app's other single-resource queries.
+ */
+export function usePlaybookToday(enabled: boolean) {
+  return useQuery({
+    queryKey: ["playbook-today"],
+    queryFn: getPlaybookToday,
+    enabled,
+    retry: 1,
+  });
+}
+
+/**
+ * `POST /api/playbook/emergency-exit`. Invalidates `playbook-today` on
+ * success so the mode badge / ledger reflect the freeze immediately, without
+ * a manual page reload.
+ */
+export function useEmergencyExit() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => postPlaybookEmergencyExit(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
+    },
+  });
+}
+
 export function useDirectoryNames(symbols: string[]): Record<string, string> {
   const uniqueSymbols = Array.from(new Set(symbols));
   const results = useQueries({
