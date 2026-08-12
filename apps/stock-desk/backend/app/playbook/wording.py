@@ -335,8 +335,15 @@ def _ratio(value: Decimal) -> str:
 
 
 def _ratio_pct(value: Decimal) -> str:
-    """A ratio field written as the percentage the sentence shows (``0.30`` -> ``30``)."""
-    return f"{value * 100:g}"
+    """A ratio field written as the percentage the sentence shows (``0.30`` -> ``30``).
+
+    ``Decimal`` keeps the scale of the multiplication (``0.30 × 100`` is
+    ``30.00``), which would put trailing zeros the rule set does not write into
+    the sentence, so the scale is dropped here.
+    """
+    scaled = value * 100
+    integral = scaled.to_integral_value()
+    return _threshold(integral if scaled == integral else scaled.normalize())
 
 
 def _rule_text_values(params: RuleParams) -> dict[str, str]:
