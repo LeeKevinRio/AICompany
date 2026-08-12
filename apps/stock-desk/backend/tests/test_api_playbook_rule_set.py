@@ -141,6 +141,25 @@ def test_confirming_lifts_the_block_and_records_the_capital(harness: Harness) ->
     assert after["rules_effective_date"] == date.today().isoformat()
 
 
+def test_deploy_ratio_pct_is_rendered_from_the_active_deploy_ratio(
+    harness: Harness,
+) -> None:
+    """④ 資金用途句的比例由後端渲染: 渲染數字 == active_params, 且自帶 %."""
+    body = harness.client.get("/api/playbook/rule-set").json()
+
+    active = harness.store.active_params(date.today())
+    assert body["deploy_ratio_pct"] == wording.ratio_pct(active.deploy_ratio) + "%"
+    assert body["deploy_ratio_pct"] == "70%"
+    # The client substitutes this string as it stands: no scaling on the client
+    # (the ratio itself is never sent for this sentence) and no unit of its own.
+    assert not body["deploy_ratio_pct"].startswith("0.")
+    # 確認之後仍是同一支換算, 不會因為寫入而漂掉。
+    after = harness.client.post(
+        "/api/playbook/confirm-rules", json={"capital": "1000000"}
+    ).json()
+    assert after["deploy_ratio_pct"] == body["deploy_ratio_pct"]
+
+
 def test_confirming_twice_adds_no_rule_version(harness: Harness) -> None:
     """冪等: 重複送出不會一次一版把規則集往前推, 資本仍逐次落檔."""
     first = harness.client.post(

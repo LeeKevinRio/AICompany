@@ -169,6 +169,11 @@ class RuleSetResponse(BaseModel):
     attribution: str
     rules: list[RuleTextItem]
     params: list[RuleParamItem]
+    #: ``deploy_ratio`` of the version in force, written the way the approved
+    #: 資金用途句 shows it: the percentage **with its ``%`` sign** (``"70%"``),
+    #: rendered here so the confirmation screen substitutes one backend string
+    #: and never scales a ratio or appends a unit of its own (五輪定稿 ④).
+    deploy_ratio_pct: str
     #: The recorded capital and its provenance (CEO 裁決 D-2).
     cash: str
     total_deploy: str
@@ -319,6 +324,7 @@ def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
             for rule_id in wording.RULE_TEXT
         ],
         params=_rule_param_items(status.params),
+        deploy_ratio_pct=wording.ratio_pct(status.params.deploy_ratio) + "%",
         cash=str(portfolio.cash),
         total_deploy=str(portfolio.total_deploy),
         total_deploy_set_at=(
