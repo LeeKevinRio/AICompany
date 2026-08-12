@@ -1358,6 +1358,11 @@ export interface PlaybookRuleSetResponse {
   attribution: string;
   rules: PlaybookRuleTextItem[];
   params: PlaybookRuleParamItem[];
+  //: `deploy_ratio` of the version in force, already written the way the
+  //: approved 資金用途句 shows it: the percentage **with its `%` sign**
+  //: (`"70%"`). Substituted as it stands — the client never multiplies by 100
+  //: and never appends a `%` of its own (五輪定稿 ④).
+  deploy_ratio_pct: string;
   //: The recorded capital and its provenance (CEO 裁決 D-2) — stringified
   //: `Decimal`s, same convention as every other money field here.
   cash: string;

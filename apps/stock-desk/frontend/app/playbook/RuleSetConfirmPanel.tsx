@@ -21,16 +21,44 @@ import { useConfirmPlaybookRules, usePlaybookRuleSet } from "../lib/queries";
  * substituted) and every threshold row is a backend `RuleParams` field name and
  * value — this component composes no description of what any rule does. The
  * only hard-coded copy is the block's own functional labels (heading, two
- * sub-headings, the field label, the button, the two failure labels) and the
- * one sentence stating what confirming means, all of which go to
- * risk-compliance with this batch and are listed verbatim in the hand-off
- * report. None of them urges, reassures or promises anything.
+ * sub-headings, the field label, the button, the two failure labels), the two
+ * sentences stating what confirming means and the one stating what the capital
+ * figure is used for. All of them are risk-compliance-approved literals
+ * (五輪定稿 2026-08-12, `work/reviews/快市排程-風控前置意見.md`) and none of
+ * them urges, reassures or promises anything.
+ *
+ * The two confirmation sentences (⑥) sit **above** the capital field and the
+ * button, not under them: they state what the user is about to take
+ * responsibility for, so they may not arrive after the control that does it.
+ * They are never collapsed, never a tooltip, and their core clause
+ * 「你自行設定的規則之機械執行結果，非本系統的判斷或建議」 is a verbatim
+ * protected region — `__tests__/RuleSetConfirmPanel.test.ts` asserts it against the
+ * rendered output, which is the anti-drift guard the ruling required in place
+ * of backend-rendering these two.
+ *
+ * 「帳冊裡的每一筆指令」 is true only because the ledger holds rule-driven lines
+ * and nothing else: EMERGENCY_EXIT lines are attributed to the submitted action
+ * (`wording.EXIT_ATTRIBUTION`), are returned by `POST /emergency-exit` and are
+ * logged for settlement (風控 R16) — they are never merged into
+ * `TodayResponse.directives`, which is what `DirectiveLedger` renders. **If that
+ * ever changes, this sentence goes back to risk-compliance before the merge**,
+ * because it would then claim rule authorship over a line the rules did not
+ * produce.
  *
  * The 歸屬語 vocabulary is deliberately reused rather than reinvented: the
- * confirmation sentence says 「你本人設定」, matching `ATTRIBUTION_NOTE`'s
- * 「你自行設定的規則」 — the same claim the page will make on every directive
+ * confirmation sentences say 「你本人設定」 and 「你自行設定的規則」, matching
+ * `ATTRIBUTION_NOTE` — the same claim the page will make on every directive
  * once this is confirmed, which is precisely what the user is being asked to
  * take responsibility for.
+ *
+ * The 資金用途句 (④) is rendered next to the capital field itself, always, never
+ * as a `placeholder`, a tooltip or an error-only hint: it states what the figure
+ * being typed will be used for while it is being typed. Its ratio is
+ * `ruleSet.data.deploy_ratio_pct`, which the backend already renders **with its
+ * `%` sign** (`"70%"`): the client substitutes that string as it stands — it
+ * must not multiply by 100, must not append a `%` of its own and must not
+ * hard-code the number, which would go stale the day the parameter version
+ * changes.
  */
 export function RuleSetConfirmPanel() {
   const ruleSet = usePlaybookRuleSet(true);
@@ -87,8 +115,19 @@ export function RuleSetConfirmPanel() {
             ))}
           </dl>
 
+          {/*
+            ⑥ 同意句（五輪定稿逐字）：在資本欄與按鈕之前，常駐、不摺疊、不 tooltip。
+            核心子句為逐字保護區，見本檔 JSDoc 與 __tests__/RuleSetConfirmPanel.test.ts。
+          */}
+          <div className="mt-5 space-y-1">
+            <p className="text-sm text-neutral-300">確認即表示這份規則集為你本人設定。</p>
+            <p className="text-sm text-neutral-300">
+              確認之後，帳冊裡的每一筆指令，都是你自行設定的規則之機械執行結果，非本系統的判斷或建議。
+            </p>
+          </div>
+
           <div className="mt-5 flex flex-wrap items-end gap-3">
-            <div>
+            <div className="max-w-xl">
               <label htmlFor="playbook-capital" className="block text-sm text-neutral-200">
                 資本額（TWD）
               </label>
@@ -100,6 +139,13 @@ export function RuleSetConfirmPanel() {
                 onChange={(event) => setCapital(event.target.value)}
                 className="mt-1 w-56 rounded-md border border-neutral-700 bg-neutral-950 px-3 py-1.5 text-sm text-neutral-100"
               />
+              {/*
+                ④ 資金用途句（五輪定稿逐字）：欄位旁常駐，不是 placeholder、不是
+                tooltip、不是只在錯誤時顯示。比例由後端下發（已含 %），此處不換算。
+              */}
+              <p className="mt-2 text-sm text-neutral-300">
+                {`這個金額同時設定為你目前可動用的現金；系統會以「此金額 ×${ruleSet.data.deploy_ratio_pct}」計算出部署資金（TOTAL_DEPLOY），之後每一批進場的股數都以這筆部署資金為基礎換算。`}
+              </p>
             </div>
             <button
               type="button"
@@ -110,10 +156,6 @@ export function RuleSetConfirmPanel() {
               {mutation.isPending ? "送出中…" : "確認規則集並設定資本額"}
             </button>
           </div>
-
-          <p className="mt-3 text-sm text-neutral-300">
-            確認即表示這份規則集為你本人設定，之後的指令將以此為據。
-          </p>
 
           {mutation.isError && (
             <div className="mt-3">
