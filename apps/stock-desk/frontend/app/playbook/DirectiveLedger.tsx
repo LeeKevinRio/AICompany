@@ -50,7 +50,11 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
         <span>{parts[6]}</span>
       </div>
 
-      <p className="mt-2 text-xs text-neutral-500">{directive.limit_note}</p>
+      {/*
+        排程台頁面審查 (suggested)：限價帶說明句（含「停損不設滑價帶」與市價單
+        可能不成交）是揭露句，不是註腳，對比度提到 neutral-400。
+      */}
+      <p className="mt-2 text-xs text-neutral-400">{directive.limit_note}</p>
 
       {/*
         R5: 資料新鮮度不採沉默慣例，恆常顯示一行純文字；`DataMetaStatusBadge`

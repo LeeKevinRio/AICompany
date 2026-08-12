@@ -36,7 +36,8 @@ export function PositionSnapshotTable({
       <p className="mt-1 text-xs text-neutral-400">
         資料基準日 {dataDate}・回應時間 {formatDateTime(asOf)}
       </p>
-      <p className="mt-0.5 text-xs text-neutral-500">
+      {/* 排程台頁面審查 (suggested)：說明行是揭露句，對比度提到 neutral-400。 */}
+      <p className="mt-0.5 text-xs text-neutral-400">
         本表每列不附各自的資料基準日與時間；上列為全表共用，各列現價為該基準日收盤價。
       </p>
       {snapshot.length === 0 ? (
