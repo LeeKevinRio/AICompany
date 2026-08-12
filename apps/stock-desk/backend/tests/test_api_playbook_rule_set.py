@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -41,6 +41,10 @@ HISTORY = 40
 class Harness:
     client: TestClient
     store: PlaybookStore
+    #: The 加權指數 ladder, so a test can re-seed it with a series that ends
+    #: before today -- which is what a confirmation on a non-trading day (or on
+    #: any day before the close has landed) actually sees.
+    index: FakePriceService
 
 
 @pytest.fixture
@@ -57,7 +61,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     )
     app.dependency_overrides[get_playbook_service] = lambda: service
     with TestClient(app) as client:
-        yield Harness(client=client, store=store)
+        yield Harness(client=client, store=store, index=index)
     app.dependency_overrides.clear()
 
 
@@ -158,6 +162,45 @@ def test_deploy_ratio_pct_is_rendered_from_the_active_deploy_ratio(
         "/api/playbook/confirm-rules", json={"capital": "1000000"}
     ).json()
     assert after["deploy_ratio_pct"] == body["deploy_ratio_pct"]
+
+
+def test_confirming_dates_the_rule_set_at_the_data_date_it_was_evaluated_on(
+    harness: Harness,
+) -> None:
+    """五輪定稿 生效日對齊: 確認當日 /today 讀得到自己那列, 不落入讀取失敗句.
+
+    A rule set dated at 確認當日 is not in force on an evaluation that runs off
+    an older 依據資料日, which left §6 ② saying 「生效日期讀取失敗」 about the very
+    set the user had just confirmed.
+    """
+    data_date = date.today() - timedelta(days=3)
+    harness.index.seed(
+        "^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=data_date)
+    )
+
+    confirmed = harness.client.post(
+        "/api/playbook/confirm-rules", json={"capital": "1000000"}
+    ).json()
+    assert confirmed["rules_effective_date"] == data_date.isoformat()
+
+    body = harness.client.get("/api/playbook/today").json()
+    assert body["data_date"] == data_date.isoformat()
+    assert body["rules_effective_date"] == data_date.isoformat()
+    # §6 ② branch (a), not the (b) 讀取失敗 branch.
+    assert (
+        wording.PAGE_SUMMARY_RULES.format(
+            rules_version=body["rules_version"],
+            rules_effective_date=data_date.isoformat(),
+        )
+        in body["page_summary"]
+    )
+    assert wording.PAGE_SUMMARY_RULES_UNREADABLE.format(
+        version=body["rules_version"]
+    ) not in body["page_summary"]
+    # The 歸屬語 names the same date: one rule set, one 生效日 (禁推斷頂替).
+    assert body["attribution"] == wording.ATTRIBUTION_NOTE.format(
+        RULE_SET_DATE=data_date.isoformat()
+    )
 
 
 def test_confirming_twice_adds_no_rule_version(harness: Harness) -> None:

@@ -83,6 +83,15 @@ def build_calendar(*bar_groups: Sequence[PriceBar]) -> TradingCalendar:
     return TradingCalendar(days)
 
 
+def latest_bar_date(*bar_groups: Sequence[PriceBar]) -> date | None:
+    """依據資料日 ``T``: the latest date any loaded series produced a bar on.
+
+    ``None`` when nothing came back at all -- the caller decides what a day with
+    no data is, rather than getting a date this function made up (鐵律⑤).
+    """
+    return max((bar.date for bars in bar_groups for bar in bars), default=None)
+
+
 def build_market_snapshot(
     symbol: str,
     bars: Sequence[PriceBar],
@@ -413,6 +422,25 @@ class PlaybookService:
             )
         return result
 
+    def _evaluation_data_date(self, as_of: date) -> date:
+        """The 依據資料日 an evaluation started now would run on.
+
+        Read the same way :meth:`evaluate_today` reads it -- the latest bar date
+        across the held symbols and the index -- and ``as_of`` when nothing came
+        back at all, which is the fallback that method takes too. Never later
+        than ``as_of``: a bar dated ahead of the day may not date a rule set into
+        the future.
+
+        This is the one place the confirmation flow touches market data, and it
+        only reads: the date is needed because the row this dates has to be in
+        force on the day the user confirmed it (see :meth:`confirm_rules`).
+        """
+        symbols = sorted({batch.symbol for batch in self._store.list_batches()})
+        loaded = self._load_symbol_bars(symbols, today=as_of)
+        index_bars, _, _ = self._load_index_bars(today=as_of)
+        latest = latest_bar_date(*(bars for bars, _, _ in loaded.values()), index_bars)
+        return as_of if latest is None else min(latest, as_of)
+
     def _rule_set_status(self, as_of: date) -> RuleSetStatus:
         return RuleSetStatus(
             params=self._store.active_params(as_of),
@@ -444,9 +472,15 @@ class PlaybookService:
         It takes **no thresholds**. The set adopted is the one already in force,
         so a confirmation can never smuggle a parameter change past 鐵律④ -- a
         later change goes through :func:`request_rule_change` and takes effect on
-        the next trading day. The adopted version is dated ``as_of`` because it
-        is a first adoption rather than a change to a set already running: 鐵律④
-        delays *changes*, and there is nothing here to delay away from.
+        the next trading day. A first adoption is dated at the 依據資料日 the
+        evaluation runs on (:meth:`_evaluation_data_date`), not at ``as_of``:
+        鐵律④ delays *changes* and there is nothing here to delay away from,
+        while a row dated a day ahead of the data is a row
+        :meth:`PlaybookStore.in_force_effective_date` cannot see on the very day
+        it was written -- which left the confirmation day stating 「生效日期讀取
+        失敗」 about the set the user had just confirmed (五輪定稿 生效日對齊
+        路線 (a)). The thresholds are identical to the ones already in force, so
+        dating the row at the data date changes no threshold retroactively.
 
         Idempotent. A second call finds an authorship record already there and
         writes no new version, so re-submitting cannot walk the rule set forward
@@ -464,7 +498,10 @@ class PlaybookService:
             current = self._store.active_params(as_of)
             self._store.confirm_rule_set(
                 current.model_copy(
-                    update={"version": self._store.next_version(), "effective_date": as_of}
+                    update={
+                        "version": self._store.next_version(),
+                        "effective_date": self._evaluation_data_date(as_of),
+                    }
                 )
             )
         params = self._store.active_params(as_of)
@@ -572,17 +609,7 @@ class PlaybookService:
             *(bars for bars, _, _ in loaded.values()),
             index_bars,
         )
-        data_date = max(
-            (
-                bar.date
-                for bars, _, _ in loaded.values()
-                for bar in bars
-            ),
-            default=None,
-        )
-        if index_bars:
-            index_latest = max(bar.date for bar in index_bars)
-            data_date = index_latest if data_date is None else max(data_date, index_latest)
+        data_date = latest_bar_date(*(bars for bars, _, _ in loaded.values()), index_bars)
         if data_date is None:
             # Nothing came back at all: still a 200-shaped answer, with the
             # gap stated, never a fabricated evaluation (鐵律⑤).
