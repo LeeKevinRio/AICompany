@@ -278,6 +278,9 @@ export function NavBar() {
             <Link href="/" className="hover:text-neutral-100">
               總覽
             </Link>
+            <Link href="/playbook" className="hover:text-neutral-100">
+              排程台
+            </Link>
             <Link href="/positions/import" className="hover:text-neutral-100">
               匯入 / 新增部位
             </Link>

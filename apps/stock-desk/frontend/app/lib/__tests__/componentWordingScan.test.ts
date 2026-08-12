@@ -71,6 +71,18 @@ const SCANNED_FILES = [
   // 掃描例外清單都超出本批派工範圍,故不將該檔納入掃描,留待下次動到回測頁措辭
   // 時一併處理。
   "../../settings/DirectorySection.tsx",
+  // 排程台 (`/playbook`, work/stock-desk-快市排程-視覺規範.md 派工單
+  // 2026-08-12): new surface, new hard-coded JSX text (headings, the
+  // EMERGENCY_EXIT flow's risk-compliance-approved button labels, the mirrored
+  // `EXIT_CONFIRM_CHECKS` constants). None of these files existed before this
+  // batch, so none were previously in this scan.
+  "../playbookView.ts",
+  "../../playbook/page.tsx",
+  "../../playbook/ModeStatusBar.tsx",
+  "../../playbook/DirectiveLedger.tsx",
+  "../../playbook/PositionSnapshotTable.tsx",
+  "../../playbook/SettlementPanel.tsx",
+  "../../playbook/EmergencyExitControl.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
