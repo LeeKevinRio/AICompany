@@ -367,8 +367,12 @@ def _ratio(value: Decimal) -> str:
     return f"{value:.2f}"
 
 
-def _ratio_pct(value: Decimal) -> str:
+def ratio_pct(value: Decimal) -> str:
     """A ratio field written as the percentage the sentence shows (``0.30`` -> ``30``).
+
+    Public because :mod:`app.playbook.service` renders the same percentage into
+    ``REBALANCE_RESULT``; a caller outside this module reaching for a private
+    name is a review finding, not a convention (qa low, 2026-08-12).
 
     ``Decimal`` keeps the scale of the multiplication (``0.30 × 100`` is
     ``30.00``), which would put trailing zeros the rule set does not write into
@@ -405,11 +409,11 @@ def _rule_text_values(params: RuleParams) -> dict[str, str]:
         "p3_bias_limit_high_vol": _threshold(params.p3_bias_limit_high_vol),
         "p3_cooldown_trading_days": _threshold(params.p3_cooldown_trading_days),
         "m1_consecutive_days": _threshold(params.m1_consecutive_days),
-        "cash_floor_ratio": _ratio_pct(params.cash_floor_ratio),
+        "cash_floor_ratio": ratio_pct(params.cash_floor_ratio),
         # 覆審 named this placeholder {freeze_days}; it is
         # emergency_freeze_trading_days.
         "freeze_days": _threshold(params.emergency_freeze_trading_days),
-        "deploy_ratio": _ratio_pct(params.deploy_ratio),
+        "deploy_ratio": ratio_pct(params.deploy_ratio),
     }
 
 

@@ -306,7 +306,7 @@ class PlaybookService:
             assets=f"{total_assets:.2f}",
             previous=f"{portfolio.total_deploy:.2f}",
             new=f"{new_total_deploy:.2f}",
-            ratio=wording._ratio_pct(params.deploy_ratio),
+            ratio=wording.ratio_pct(params.deploy_ratio),
         )
         warnings: list[str] = []
         directives: list[Directive] = []
