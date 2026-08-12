@@ -37,6 +37,7 @@ from app.playbook import wording
 from app.playbook.models import (
     BatchSnapshot,
     Directive,
+    ExitConfirm,
     FastMarketState,
     PlaybookEvaluation,
     SettlementResult,
@@ -126,6 +127,12 @@ class TodayResponse(BaseModel):
     attribution: str | None
     #: The T+1 settlement that ran before this evaluation (CEO 裁決七).
     settlement: SettlementResponse | None
+    #: The four EMERGENCY_EXIT confirmation sentences with this day's freeze
+    #: length and 預計恢復日 already rendered, so the confirmation screen shows
+    #: the freeze the user would actually get instead of a mirrored default.
+    #: Filled on every service path, including 待確認規則集 (EX-2 出口零摩擦);
+    #: ``None`` only on the pure-engine path, which no response reads.
+    exit_confirm: ExitConfirm | None
     as_of: str
 
 
@@ -201,6 +208,7 @@ def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
             if evaluation.settlement is None
             else _settlement_response(evaluation.settlement)
         ),
+        exit_confirm=evaluation.exit_confirm,
         as_of=now_iso(),
     )
 
@@ -211,6 +219,13 @@ def today(service: ServiceDep) -> TodayResponse:
 
     Settles yesterday's due lines first (idempotently), so the book the table is
     computed from is the book after T+1 execution rather than the one before it.
+
+    Also carries ``exit_confirm``: the EMERGENCY_EXIT confirmation sentences a
+    client needs *before* it can submit the exit. They are here rather than on
+    ``POST /emergency-exit`` because that endpoint renders them by executing the
+    exit, which is one step too late for a confirmation screen, and because a
+    client that mirrors the freeze length states a number that a dated rule
+    change has already moved.
     """
     return _to_response(service.evaluate_today())
 

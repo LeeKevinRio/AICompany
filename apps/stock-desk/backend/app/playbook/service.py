@@ -37,6 +37,7 @@ from app.playbook.engine import (
 from app.playbook.models import (
     Directive,
     EmergencyExitResult,
+    ExitConfirm,
     FastMarketState,
     IndexSnapshot,
     MarketSnapshot,
@@ -127,6 +128,34 @@ def build_index_snapshot(
         ),
         data_status=status,
         source=source,
+    )
+
+
+def build_exit_confirm(
+    *, params: RuleParams, calendar: TradingCalendar, as_of: date
+) -> ExitConfirm:
+    """The EMERGENCY_EXIT confirmation facts, counted for ``as_of``.
+
+    Computed the same way :meth:`PlaybookService.emergency_exit` computes the
+    freeze it will actually apply -- ``params.emergency_freeze_trading_days``
+    shifted from the *submission* day on the trading calendar -- so a screen
+    that renders this block states the freeze the user is about to get, not a
+    mirrored default (覆審: 天數與日期皆為參數與日曆的函數，不得寫死).
+
+    The prediction walks days after ``as_of``, which are past the last observed
+    bar, so it resolves through the calendar's documented weekday fallback in
+    both cases; that is the same answer the exit itself reaches on that day.
+    """
+    freeze_days = params.emergency_freeze_trading_days
+    freeze_until = calendar.shift(as_of, freeze_days)
+    return ExitConfirm(
+        freeze_days=freeze_days,
+        freeze_until=freeze_until,
+        checks=list(
+            wording.exit_confirm_checks(
+                freeze_days=freeze_days, freeze_until=freeze_until
+            )
+        ),
     )
 
 
@@ -394,6 +423,14 @@ class PlaybookService:
         an **existence check on the batch book only** -- no bar is loaded, no
         indicator computed and nothing written -- because the day still has to
         leave no trace, and every held symbol is listed in full.
+
+        The exit confirmation block is filled here too (EX-2 出口零摩擦): the
+        exit is reachable on this path, so its confirmation screen may not be
+        left without the freeze it is about to impose. It is counted on an empty
+        calendar because this path loads no bars by design; that costs nothing,
+        since every day the count walks is after the last bar either way and
+        resolves through the calendar's weekday fallback (see
+        :func:`build_exit_confirm`).
         """
         held = sorted(
             {
@@ -423,6 +460,11 @@ class PlaybookService:
             warnings=warnings,
             snapshot=[],
             attribution=wording.ATTRIBUTION_NO_USER_RULES,
+            exit_confirm=build_exit_confirm(
+                params=self._store.active_params(as_of),
+                calendar=TradingCalendar(()),
+                as_of=as_of,
+            ),
         )
 
     def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
@@ -502,6 +544,14 @@ class PlaybookService:
             update={
                 "settlement": settlement,
                 "attribution": wording.attribution_note(authorship),
+                # Counted for today, not for 依據資料日: the confirmation screen
+                # predicts what submitting *now* costs, which is what
+                # :meth:`emergency_exit` reads (``active_params(as_of)``).
+                "exit_confirm": build_exit_confirm(
+                    params=self._store.active_params(as_of),
+                    calendar=calendar,
+                    as_of=as_of,
+                ),
             }
         )
 

@@ -142,6 +142,70 @@ def test_emergency_exit_takes_no_body_and_works_with_nothing_held(
     assert "無持有批次" in body["message"]
 
 
+def _weekdays_after(day: date, count: int) -> date:
+    """``count`` weekdays after ``day`` -- the calendar's own forward fallback.
+
+    Every day a freeze prediction walks is later than the last loaded bar, so
+    the calendar answers from the weekday rule it documents for future dates.
+    Restated here rather than imported so the expectation is an independent
+    count, not the production helper checking itself.
+    """
+    cursor = day
+    remaining = count
+    while remaining:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            remaining -= 1
+    return cursor
+
+
+def test_today_carries_the_exit_confirmation_facts_before_any_exit_is_submitted(
+    harness: PlaybookHarness,
+) -> None:
+    """契約缺口修補：核取句、凍結天數與預計恢復日在送出前就要拿得到."""
+    body = harness.client.get("/api/playbook/today").json()
+
+    block = body["exit_confirm"]
+    assert block["freeze_days"] == 20
+    assert block["freeze_until"] == _weekdays_after(date.today(), 20).isoformat()
+    assert len(block["checks"]) == 4
+    # 每一句都已渲染完成：留著 {placeholder} 就等於把渲染責任推回前端。
+    assert not [check for check in block["checks"] if "{" in check]
+    assert block["checks"][1] == (
+        "送出後，R 系列（新倉進場）暫停 20 個交易日"
+        f"（預計恢復日：{block['freeze_until']}，依交易日曆計算）。"
+    )
+    # 出口零摩擦：確認畫面上不得出現快市加註（EX-2）。
+    assert not [check for check in block["checks"] if "快市" in check]
+
+
+def test_the_exit_confirmation_days_follow_the_rule_parameter(
+    harness: PlaybookHarness,
+) -> None:
+    """參數改 10 天，句中數字與預計恢復日跟著變——前端鏡射 20 天的缺口正是這個。"""
+    confirm_rule_set(harness.store, emergency_freeze_trading_days=10)
+
+    block = harness.client.get("/api/playbook/today").json()["exit_confirm"]
+
+    assert block["freeze_days"] == 10
+    assert block["freeze_until"] == _weekdays_after(date.today(), 10).isoformat()
+    assert "暫停 10 個交易日" in block["checks"][1]
+    assert "20 個交易日" not in block["checks"][1]
+
+
+def test_the_exit_confirmation_predicts_the_freeze_the_exit_then_applies(
+    harness: PlaybookHarness,
+) -> None:
+    """預告與實際必須是同一個計算：說 20 天就凍 20 天，說哪天恢復就哪天."""
+    confirm_rule_set(harness.store, emergency_freeze_trading_days=10)
+    predicted = harness.client.get("/api/playbook/today").json()["exit_confirm"]
+
+    applied = harness.client.post("/api/playbook/emergency-exit").json()
+
+    assert applied["freeze_until"] == predicted["freeze_until"]
+    assert f"暫停 {predicted['freeze_days']} 交易日" in applied["message"]
+
+
 def _log_a_pending_entry(
     harness: PlaybookHarness, *, execution_date: date, shares: int = 100
 ) -> None:

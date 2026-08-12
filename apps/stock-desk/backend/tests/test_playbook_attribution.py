@@ -269,6 +269,25 @@ def test_an_exit_with_nothing_held_renders_no_attribution_at_all(
     assert "機械執行結果" not in result.message
 
 
+def test_the_exit_confirmation_is_rendered_while_the_rule_set_is_unconfirmed(
+    harness: Harness,
+) -> None:
+    """EX-2: 出口在情境 1 也開著，確認畫面的四句與凍結天數不得因此消失."""
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+
+    assert evaluation.directives == []
+    assert evaluation.exit_confirm is not None
+    assert evaluation.exit_confirm.freeze_days == 20
+    assert evaluation.exit_confirm.checks == list(
+        wording.exit_confirm_checks(
+            freeze_days=20, freeze_until=evaluation.exit_confirm.freeze_until
+        )
+    )
+    # 存在性檢查那一天仍然不載行情，凍結日只靠參數與日曆的假日外推。
+    assert harness.prices.calls == []
+    assert harness.index.calls == []
+
+
 def test_the_exit_line_carries_its_own_no_band_sentence(harness: Harness) -> None:
     """定稿: service 的 EXIT 指令不得再掛停損句."""
     confirm_rule_set(harness.store)

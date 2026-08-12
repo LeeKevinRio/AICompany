@@ -430,6 +430,31 @@ class RebalanceResult(BaseModel):
     warnings: list[str]
 
 
+class ExitConfirm(BaseModel):
+    """What the EMERGENCY_EXIT confirmation screen has to state *before* submit.
+
+    The freeze length is a rule parameter and the recovery date is counted on
+    the trading calendar, so neither may be written down anywhere but here: a
+    client that mirrors 「20 交易日」 is wrong the day the parameter moves, and a
+    stored date is wrong the day after it was computed. Both are recomputed on
+    every response, exactly like the 「第 N/20 交易日」 counter in
+    :data:`app.playbook.wording.MODE_REASON_EMERGENCY`.
+
+    ``checks`` is the rendered output of
+    :func:`app.playbook.wording.exit_confirm_checks` -- the four approved
+    sentences with this run's numbers already in them, so the confirmation
+    screen renders them verbatim and cannot compose its own.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: ``RuleParams.emergency_freeze_trading_days`` of the version in force.
+    freeze_days: int
+    #: 預計恢復日: ``freeze_days`` trading days after the day this was computed.
+    freeze_until: date
+    checks: list[str]
+
+
 class PlaybookEvaluation(BaseModel):
     """Everything one schedule-day evaluation produced."""
 
@@ -453,6 +478,12 @@ class PlaybookEvaluation(BaseModel):
     #: record. ``None`` only on the pure-engine path, which no response reads:
     #: the engine has no store and may not guess who wrote the rules.
     attribution: str | None = None
+    #: The EMERGENCY_EXIT confirmation facts for the day this ran, filled by the
+    #: service. ``None`` only on the pure-engine path (same reason as
+    #: ``attribution``): the engine has no parameter store to read the freeze
+    #: length from. Present on both service paths, including 歸屬語情境 1 --
+    #: the exit is never gated (EX-2 出口零摩擦).
+    exit_confirm: ExitConfirm | None = None
 
 
 class EmergencyExitResult(BaseModel):
