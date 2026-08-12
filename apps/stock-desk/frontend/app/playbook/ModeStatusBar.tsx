@@ -1,5 +1,10 @@
 import type { PlaybookTodayResponse } from "../lib/types";
-import { FAST_MARKET_BADGE_CLASS, FAST_MARKET_DOT_CLASS, modeBadgeVisual } from "../lib/playbookView";
+import {
+  FAST_MARKET_BADGE_CLASS,
+  FAST_MARKET_DOT_CLASS,
+  fastMarketAdjacentNote,
+  modeBadgeVisual,
+} from "../lib/playbookView";
 import { EmergencyExitControl } from "./EmergencyExitControl";
 
 /**
@@ -13,6 +18,11 @@ import { EmergencyExitControl } from "./EmergencyExitControl";
  */
 export function ModeStatusBar({ today }: { today: PlaybookTodayResponse }) {
   const modeVisual = modeBadgeVisual(today.mode);
+  // 排程台頁面審查 required: an `active` badge whose verdict was carried forward
+  // has no measurement sentence (`reason` is null), so the backend's carried
+  // explanation is rendered next to the badge instead of only in the warnings
+  // list further down the page.
+  const carriedNote = fastMarketAdjacentNote(today.fast_market);
 
   return (
     <div className="sticky top-0 z-10 border-b border-neutral-800 bg-black/95 backdrop-blur">
@@ -43,6 +53,7 @@ export function ModeStatusBar({ today }: { today: PlaybookTodayResponse }) {
         {today.fast_market.active && today.fast_market.reason !== null && (
           <p className="mt-1 text-sm text-indigo-200">{today.fast_market.reason}</p>
         )}
+        {carriedNote !== null && <p className="mt-1 text-sm text-indigo-200">{carriedNote}</p>}
       </div>
     </div>
   );

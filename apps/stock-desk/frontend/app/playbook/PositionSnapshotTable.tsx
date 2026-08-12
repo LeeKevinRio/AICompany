@@ -1,4 +1,4 @@
-import { formatMoney, pnlColorClass } from "../lib/format";
+import { formatDateTime, formatMoney, pnlColorClass } from "../lib/format";
 import { formatScaledPercent } from "../lib/playbookView";
 import type { PlaybookBatchSnapshot } from "../lib/types";
 
@@ -13,10 +13,32 @@ const COLUMN_HEADERS = ["標的", "批次序號", "批次成本", "現價", "盈
  * `border-t border-neutral-800` 列分隔。盈虧% 仍用既有 `pnlColorClass`
  * （紅漲綠跌，全站價格語彙，不受帳冊列的規則家族色彙軸約束，§7 明文）。
  */
-export function PositionSnapshotTable({ snapshot }: { snapshot: PlaybookBatchSnapshot[] }) {
+export function PositionSnapshotTable({
+  snapshot,
+  dataDate,
+  asOf,
+}: {
+  snapshot: PlaybookBatchSnapshot[];
+  dataDate: string;
+  asOf: string;
+}) {
   return (
     <section className="mt-6">
       <h2 className="text-lg font-semibold text-neutral-100">部位快照</h2>
+      {/*
+        排程台頁面審查 required ①: 快照表補頁面層 data_date/as_of，per-row 缺欄位
+        就明說。`BatchSnapshot` carries no per-row 資料日 or timestamp of its own
+        (verified against `app/playbook/models.py`), and 現價 is the close of the
+        page's 依據資料日 for every row — so the stamp belongs to the table, and
+        the second line says so rather than letting a reader assume each row was
+        priced at its own moment.
+      */}
+      <p className="mt-1 text-xs text-neutral-400">
+        資料基準日 {dataDate}・回應時間 {formatDateTime(asOf)}
+      </p>
+      <p className="mt-0.5 text-xs text-neutral-500">
+        本表每列不附各自的資料基準日與時間；上列為全表共用，各列現價為該基準日收盤價。
+      </p>
       {snapshot.length === 0 ? (
         <p className="mt-3 text-sm text-neutral-400">無。</p>
       ) : (

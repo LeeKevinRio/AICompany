@@ -2,7 +2,13 @@
 
 import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
-import { shouldRenderAttribution } from "../lib/playbookView";
+import {
+  fastMarketAdjacentNote,
+  noDirectiveNote,
+  shouldRenderAttribution,
+  shouldRenderDirectiveLedger,
+  visibleWarnings,
+} from "../lib/playbookView";
 import { usePlaybookToday } from "../lib/queries";
 import { DirectiveLedger } from "./DirectiveLedger";
 import { ModeStatusBar } from "./ModeStatusBar";
@@ -15,15 +21,23 @@ import { SettlementPanel } from "./SettlementPanel";
  * everything else, per §1's information-hierarchy table — it must never wait
  * behind the ledger/snapshot below it.
  *
- * Known limitation (see hand-off report): §0's page-level framing line and
- * §6's fixed disclaimer/資料基準日總覽 sentence are both still
- * `{PAGE_FRAMING_LINE}`-style placeholders in the visual spec itself (not yet
- * risk-compliance finalized, and no backend field carries them either), so
- * neither is rendered here — rendering a self-authored placeholder sentence
- * would violate this task's zero-invented-copy rule more than omitting it.
+ * §6's 總覽區塊 is now rendered (四輪收斂裁決 題 11 settled its three sentences
+ * and the backend sends them as `page_summary`): above the ledger, never
+ * collapsed, `text-sm` on `neutral-300` — the ruling's floor is ≥text-sm and
+ * ≥neutral-400, and it sits above the ledger rather than beside it because the
+ * first sentence scopes the whole page. §0's page-level framing line remains a
+ * `{PAGE_FRAMING_LINE}` placeholder in the visual spec and has no backend field
+ * (risk-compliance ruled it 「MVP 可缺」 because the 歸屬語 already carries it),
+ * so it is still not rendered.
  */
 export default function PlaybookPage() {
   const today = usePlaybookToday(true);
+  const data = today.data;
+  // 快市沿用說明 is rendered next to the badge in `ModeStatusBar`; the same
+  // sentence is filtered out of the warnings list below so the page states it
+  // once, in the more prominent of the two places (never dropped from both).
+  const carriedNote = data === undefined ? null : fastMarketAdjacentNote(data.fast_market);
+  const warnings = data === undefined ? [] : visibleWarnings(data.warnings, carriedNote);
 
   return (
     <div>
@@ -46,18 +60,33 @@ export default function PlaybookPage() {
           </div>
         )}
 
-        {today.isSuccess && (
+        {today.isSuccess && data !== undefined && (
           <>
             {/* 風控 R2 常駐歸屬語；EMPTY 契約：null 時不渲染整行。 */}
-            {shouldRenderAttribution(today.data.attribution) && (
+            {shouldRenderAttribution(data.attribution) && (
               <p className="mt-4 rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
-                {today.data.attribution}
+                {data.attribution}
               </p>
             )}
 
-            {today.data.warnings.length > 0 && (
+            {/*
+              §6 總覽區塊（四輪收斂裁決 題 11）：後端逐字下發的三句，位置在帳冊
+              上方、不摺疊、不縮寫、不進 tooltip。空陣列（舊版後端）就整塊不渲染
+              ——這裡沒有可替代的自撰句。
+            */}
+            {data.page_summary.length > 0 && (
+              <div className="mt-4 space-y-1 rounded-md border border-neutral-800 bg-neutral-900/60 px-3 py-2">
+                {data.page_summary.map((sentence, i) => (
+                  <p key={i} className="text-sm text-neutral-300">
+                    {sentence}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {warnings.length > 0 && (
               <div className="mt-4 space-y-2">
-                {today.data.warnings.map((warning, i) => (
+                {warnings.map((warning, i) => (
                   <p
                     key={i}
                     className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-300"
@@ -68,9 +97,24 @@ export default function PlaybookPage() {
               </div>
             )}
 
-            <DirectiveLedger directives={today.data.directives} dataDate={today.data.data_date} />
-            <PositionSnapshotTable snapshot={today.data.snapshot} />
-            <SettlementPanel settlement={today.data.settlement} />
+            {/*
+              required ④ fail-closed：沒有歸屬語就不渲染指令帳冊（風控 R2 把常駐
+              歸屬語當成顯示指令的條件，不是裝飾）。`shouldRenderDirectiveLedger`
+              的註解寫明為什麼此處不補一句自撰的說明句。
+            */}
+            {shouldRenderDirectiveLedger(data.attribution) && (
+              <DirectiveLedger
+                directives={data.directives}
+                dataDate={data.data_date}
+                noDirectiveNote={noDirectiveNote(data)}
+              />
+            )}
+            <PositionSnapshotTable
+              snapshot={data.snapshot}
+              dataDate={data.data_date}
+              asOf={data.as_of}
+            />
+            <SettlementPanel settlement={data.settlement} />
           </>
         )}
       </main>

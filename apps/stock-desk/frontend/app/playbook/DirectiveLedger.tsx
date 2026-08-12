@@ -72,12 +72,21 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
   );
 }
 
+/**
+ * `noDirectiveNote` is the backend's own sentence for an empty ledger on a day
+ * every rule really was evaluated (四輪收斂裁決 題 12), or `null` on every other
+ * day. `null` keeps the bare 「無。」: without the completeness flag the page
+ * cannot tell 未命中 from 未評估, and 「無。」 is the honest answer to that
+ * uncertainty. The 資料基準日 line stays either way (裁決: 資料基準日行保留).
+ */
 export function DirectiveLedger({
   directives,
   dataDate,
+  noDirectiveNote,
 }: {
   directives: PlaybookDirectiveLine[];
   dataDate: string;
+  noDirectiveNote: string | null;
 }) {
   const sorted = sortDirectiveLines(directives);
 
@@ -86,7 +95,7 @@ export function DirectiveLedger({
       <h2 className="text-lg font-semibold text-neutral-100">今日指令帳冊</h2>
       {sorted.length === 0 ? (
         <div className="mt-3 rounded-none border-y border-neutral-800 border-l-4 border-l-neutral-600 px-4 py-3">
-          <p className="text-sm text-neutral-300">無。</p>
+          <p className="text-sm text-neutral-300">{noDirectiveNote ?? "無。"}</p>
           <p className="mt-1 text-xs text-neutral-500">資料基準日 {dataDate}</p>
         </div>
       ) : (

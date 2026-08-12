@@ -132,7 +132,9 @@ export function EmergencyExitControl({
             {step === "final" && (
               <>
                 <h2 className="text-lg font-semibold text-neutral-100">全部出清 — 二次確認</h2>
-                <ul className="mt-4 space-y-2 text-sm text-neutral-400">
+                {/* 排程台頁面審查 (suggested): Step 3 的覆述是二次確認前最後
+                    一次讀到這些事實，對比度不低於 neutral-300。 */}
+                <ul className="mt-4 space-y-2 text-sm text-neutral-300">
                   {checkTexts.map((text, index) => (
                     <li key={index}>{text}</li>
                   ))}
