@@ -107,6 +107,9 @@ def test_twse_fetch_reports_non_array_payload() -> None:
 
 
 def test_tpex_fetch_parses_fixture_and_skips_blank_name() -> None:
+    # Fixture field names (SecuritiesCompanyCode/CompanyName/...) are CEO's
+    # 2026-08-12 real captured response shape (verified) -- see providers.py
+    # module docstring's "Schema confidence" section.
     payload = _fixture_json("tpex_openapi_mainboard_daily_close_quotes.json")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -121,10 +124,16 @@ def test_tpex_fetch_parses_fixture_and_skips_blank_name() -> None:
     symbols = [entry.symbol for entry in result.entries]
     # Duplicate 5483 row with blank name must be skipped -- only one 5483 kept.
     assert symbols.count("5483") == 1
-    assert set(symbols) == {"5483", "6488", "3105"}
+    assert set(symbols) == {"5483", "6488", "3105", "006201", "00679B"}
     by_symbol = {entry.symbol: entry for entry in result.entries}
     assert by_symbol["5483"].name == "中美晶"
     assert by_symbol["5483"].market == "TW"
+    # 00679B is a bond ETF -- alphanumeric 代號 (letter suffix) must not be
+    # dropped, mirroring TwseDirectoryAdapter keeping ETF symbols like 0050
+    # (no instrument-type filtering on either side, see module docstring's
+    # "Coverage scope" section).
+    assert by_symbol["00679B"].name == "元大美债20年"
+    assert by_symbol["00679B"].market == "TW"
 
 
 def test_tpex_fetch_reports_transport_error_without_raising() -> None:

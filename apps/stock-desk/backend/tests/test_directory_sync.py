@@ -71,7 +71,7 @@ def test_sync_directory_writes_both_sources(tmp_path: Path) -> None:
     results = sync_directory(store=store, twse_adapter=twse, tpex_adapter=tpex, synced_at=AS_OF)
 
     assert all(result.ok for result in results)
-    assert store.count() == 3 + 3  # 3 TWSE rows + 3 TPEx rows, blank rows skipped
+    assert store.count() == 3 + 5  # 3 TWSE rows + 5 TPEx rows, blank row skipped
     assert store.resolve("2330") is not None
     assert store.resolve("5483") is not None
 
@@ -97,7 +97,7 @@ def test_sync_directory_is_idempotent(tmp_path: Path) -> None:
     run_once()
     run_once()
 
-    assert store.count() == 6
+    assert store.count() == 8
 
 
 def test_sync_directory_partial_failure_still_writes_the_working_source(tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ def test_main_succeeds_and_writes_db_when_reachable(
     assert "tpex_openapi" in captured.out
 
     store = SecurityDirectoryStore(db_path=db_path)
-    assert store.count() == 6
+    assert store.count() == 8
 
 
 # --------------------------------------------------------------------------

@@ -2,40 +2,61 @@
 
 ## Schema confidence -- read before touching endpoint paths or field names
 
-Neither endpoint below has been called against a live response from this
-sandbox: outbound HTTPS to both ``openapi.twse.com.tw`` and
-``www.tpex.org.tw`` is blocked by this environment's egress policy (same
-finding as ``apps/stock-desk/scripts/verify_market_data.py`` and
-``tests/fixtures/README.md`` -- proxy CONNECT returns 403 for every financial
-domain probed so far). Per the dispatch order ("查不到就以既有 adapter 內已知
-端點推斷並在註解標註待驗"), the paths and field names below are **inferred**
-from the existing ``TwseAdapter``/``TpexAdapter`` daily-bar adapters' host
-conventions plus publicly documented OpenAPI dataset shapes, not confirmed
-against a live payload:
-
 - TWSE: ``GET https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL``
   is TWSE's "每日收盤行情(全部)" dataset -- a same-day snapshot of every
   listed (上市) symbol, English-keyed (``Code``, ``Name``, ...). It is used
   here purely for its ``Code``/``Name`` columns, not the price columns, as a
-  practical stand-in for a dedicated "company directory" endpoint (TWSE's
-  ``t187ap03_L`` "上市公司基本資料" dataset is the more literal directory
-  match but its exact field names are even less certain, so the simpler,
-  more commonly referenced ``STOCK_DAY_ALL`` shape was chosen to minimize the
-  number of unverified field-name guesses).
+  practical stand-in for a dedicated "company directory" endpoint. CEO's
+  real sync run (2026-08-12) confirmed this endpoint/field pair works
+  end-to-end (1379 上市 rows parsed, ``PASS``).
 - TPEx: ``GET https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes``
-  is the OTC (上櫃) counterpart -- TPEx's OpenAPI is Chinese-keyed
-  (``代號``, ``名稱``, ...), unlike TWSE's English keys; this asymmetry is a
-  known real quirk of the two exchanges' OpenAPI portals, not a mistake here.
+  is the OTC (上櫃) counterpart. **CONFIRMED reachable and the row shape
+  below is verified against a live payload** -- CEO's first real sync run
+  (2026-08-12) hit this endpoint and captured actual response rows (10,400
+  上櫃 rows returned; the endpoint path was already correct, only the field
+  names guessed before this run were wrong). The confirmed field names are
+  **English-keyed**, not Chinese as previously assumed -- e.g. a sample row:
 
-**Before the CEO's first real sync run**, if either endpoint 404s or the
-response shape does not match what ``_parse_twse_row``/``_parse_tpex_row``
-expect, that is expected until data-engineer confirms the exact dataset
-against the live Swagger docs at ``openapi.twse.com.tw`` /
-``www.tpex.org.tw/openapi`` -- see ``work/stock-desk-phase8-spike-盤點.md``
-for the same caveat applied to other OpenAPI datasets in this project. A
-schema mismatch must surface as ``ok=False`` with a clear reason (never a
-partially-parsed, silently-wrong directory), which is exactly what the
-per-row ``UnparseableRowError`` skip below produces.
+  .. code-block:: json
+
+      {
+        "Date": "1150812",
+        "SecuritiesCompanyCode": "006201",
+        "CompanyName": "元大富櫃50",
+        "Close": "45.21",
+        "LatesAskPrice": "45.23"
+      }
+
+  Only ``SecuritiesCompanyCode``/``CompanyName`` are consumed below (the
+  directory only needs 代號/名稱); price/volume columns such as ``Close``
+  or ``TradingShares`` are captured in the fixture for provenance but never
+  parsed here. Note ``LatesAskPrice`` is TPEx's own spelling (missing a
+  "t") -- copied verbatim (sic), not "corrected", since inventing a
+  different key would silently stop matching the real payload. ``Date`` is
+  an ROC-calendar string with **no separators** (``"1150812"`` = 民國115年
+  08月12日 = 2026-08-12), a different shape from the ``"113/01/02"``
+  slash-separated ROC dates ``app.data.providers._util.parse_roc_date``
+  already handles elsewhere in this codebase -- it is deliberately left
+  unparsed here because the directory sync only needs symbol/name, not a
+  trade date; a future consumer that does need it must write a dedicated
+  parser for this no-separator shape rather than misusing
+  ``parse_roc_date``.
+
+A schema mismatch (missing field, non-array payload, etc.) must still
+surface as ``ok=False`` with a clear reason (never a partially-parsed,
+silently-wrong directory), which is exactly what the per-row
+``UnparseableRowError`` skip below produces.
+
+## Coverage scope: ETF / bond ETF rows are not filtered out
+
+Both the TWSE ``STOCK_DAY_ALL`` fixture and TPEx's mainboard quotes include
+ETFs (e.g. TWSE's ``0050``) and, on the TPEx side, bond ETFs whose codes
+contain a trailing letter (e.g. ``00679B``). Neither adapter applies any
+symbol-shape or instrument-type filter -- ``_parse_row`` only requires a
+non-blank string for both the symbol and name columns. This mirrors the
+existing ``TwseDirectoryAdapter`` behaviour (which already keeps ``0050``)
+rather than inventing a new filtering rule for TPEx alone: the directory's
+job is "does this 代號 resolve to a 名稱", not "is this a common stock".
 
 ## Sector-profile endpoint (``TwseSectorProfileAdapter``) -- CONFIRMED reachable
 ## and field names confirmed; one field's *value shape* corrected 2026-08-12
@@ -43,11 +64,11 @@ per-row ``UnparseableRowError`` skip below produces.
 Used only by the ``--verify-sectors`` audit (``app.directory.sector_audit``),
 never by the symbol/name sync above. ``GET
 https://openapi.twse.com.tw/v1/opendata/t187ap03_L`` is TWSE's "上市公司基本
-資料" (listed-company basic profile) dataset -- the docstring above already
-flagged this as "the more literal directory match" for company data; it is
-picked up here specifically because it is the dataset publicly documented to
-carry a per-company ``產業別`` (industry category) column, which
-``STOCK_DAY_ALL`` does not.
+資料" (listed-company basic profile) dataset -- a more literal directory
+match than ``STOCK_DAY_ALL`` for company data; it is picked up here
+specifically because it is the dataset publicly documented to carry a
+per-company ``產業別`` (industry category) column, which ``STOCK_DAY_ALL``
+does not.
 
 CEO's first real run of ``--verify-sectors`` against production TWSE data
 (2026-08-12) confirmed the endpoint path and the ``公司代號``/``公司名稱``/
@@ -86,8 +107,8 @@ TWSE_STOCK_LIST_PATH = "/v1/exchangeReport/STOCK_DAY_ALL"
 TPEX_OPENAPI_BASE_URL = "https://www.tpex.org.tw"
 TPEX_STOCK_LIST_PATH = "/openapi/v1/tpex_mainboard_daily_close_quotes"
 
-#: See "Sector-profile endpoint" section in the module docstring for the
-#: provenance caveat -- inferred, not verified against a live payload.
+#: See "Sector-profile endpoint" section in the module docstring -- CEO's
+#: 2026-08-12 real run confirmed this path and its field names.
 TWSE_COMPANY_PROFILE_PATH = "/v1/opendata/t187ap03_L"
 
 
@@ -315,7 +336,9 @@ class TpexDirectoryAdapter:
         skipped = 0
         for row in payload:
             try:
-                symbol, name = _parse_row(row, symbol_key="代號", name_key="名稱")
+                symbol, name = _parse_row(
+                    row, symbol_key="SecuritiesCompanyCode", name_key="CompanyName"
+                )
             except UnparseableRowError as exc:
                 logger.debug("skipping unparseable TPEx directory row: %s", exc)
                 skipped += 1
