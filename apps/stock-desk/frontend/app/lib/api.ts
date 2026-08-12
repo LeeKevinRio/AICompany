@@ -18,7 +18,9 @@ import type {
   ImportPositionsResponse,
   LeverageResponse,
   Market,
+  PlaybookConfirmRulesInput,
   PlaybookEmergencyExitResponse,
+  PlaybookRuleSetResponse,
   PlaybookTodayResponse,
   PortfolioLimitsResponse,
   PortfolioSummaryResponse,
@@ -304,6 +306,30 @@ export async function resolveDirectorySymbol(symbol: string): Promise<DirectoryI
  */
 export function getPlaybookToday(): Promise<PlaybookTodayResponse> {
   return request<PlaybookTodayResponse>("/api/playbook/today");
+}
+
+/**
+ * `GET /api/playbook/rule-set` (verified). The thresholds of the rule version
+ * in force plus the authorship record — read-only: reading the rules is not
+ * adopting them (風控 R2, backend doc comment).
+ */
+export function getPlaybookRuleSet(): Promise<PlaybookRuleSetResponse> {
+  return request<PlaybookRuleSetResponse>("/api/playbook/rule-set");
+}
+
+/**
+ * `POST /api/playbook/confirm-rules` (verified). Adopts the rule set already in
+ * force as the user's own and records the opening capital; idempotent, and the
+ * body carries no threshold (鐵律④ cannot be routed around by re-confirming).
+ */
+export function postPlaybookConfirmRules(
+  input: PlaybookConfirmRulesInput,
+): Promise<PlaybookRuleSetResponse> {
+  return request<PlaybookRuleSetResponse>("/api/playbook/confirm-rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 /**

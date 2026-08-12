@@ -14,6 +14,7 @@ import {
   getBars,
   getHealth,
   getLeverageChapter,
+  getPlaybookRuleSet,
   getPlaybookToday,
   getPortfolioLimits,
   getPortfolioSummary,
@@ -23,6 +24,7 @@ import {
   getSignals,
   importPositionsCsv,
   patchAlert,
+  postPlaybookConfirmRules,
   postPlaybookEmergencyExit,
   resolveDirectorySymbol,
   runBacktest,
@@ -38,6 +40,7 @@ import type {
   BacktestRequest,
   CreatePositionInput,
   Market,
+  PlaybookConfirmRulesInput,
   UpdatePositionInput,
 } from "./types";
 
@@ -349,6 +352,37 @@ export function usePlaybookToday(enabled: boolean) {
     queryFn: getPlaybookToday,
     enabled,
     retry: 1,
+  });
+}
+
+/**
+ * `GET /api/playbook/rule-set` — the thresholds the 確認規則集 block renders and
+ * the authorship record it acts on. A separate query from `playbook-today`
+ * because it is read-only and only the blocked state needs it (`enabled`).
+ */
+export function usePlaybookRuleSet(enabled: boolean) {
+  return useQuery({
+    queryKey: ["playbook-rule-set"],
+    queryFn: getPlaybookRuleSet,
+    enabled,
+    retry: 1,
+  });
+}
+
+/**
+ * `POST /api/playbook/confirm-rules`. Invalidates `playbook-today` on success —
+ * the confirmation is what lifts the 歸屬語情境 1 block, so the mode badge,
+ * 歸屬語 and ledger all change with it — and `playbook-rule-set`, whose
+ * authorship fields the response just moved.
+ */
+export function useConfirmPlaybookRules() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PlaybookConfirmRulesInput) => postPlaybookConfirmRules(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
+      void queryClient.invalidateQueries({ queryKey: ["playbook-rule-set"] });
+    },
   });
 }
 

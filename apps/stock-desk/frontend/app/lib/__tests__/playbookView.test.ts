@@ -16,10 +16,12 @@ import {
   initialExitChecks,
   modeBadgeVisual,
   noDirectiveNote,
+  normalizeCapitalInput,
   ruleFamily,
   ruleFamilyVisual,
   shouldRenderAttribution,
   shouldRenderDirectiveLedger,
+  shouldRenderRuleSetConfirm,
   sortDirectiveLines,
   splitDirectiveLine,
   toggleExitCheck,
@@ -405,6 +407,41 @@ describe("shouldRenderDirectiveLedger (required ④ fail-closed)", () => {
     expect(shouldRenderDirectiveLedger(todayResponse().attribution)).toBe(true);
     expect(shouldRenderDirectiveLedger(null)).toBe(false);
     expect(shouldRenderDirectiveLedger("")).toBe(false);
+  });
+});
+
+describe("shouldRenderRuleSetConfirm (確認規則集入口)", () => {
+  it("offers the confirmation block only in the state it resolves", () => {
+    expect(shouldRenderRuleSetConfirm("unconfirmed")).toBe(true);
+  });
+
+  it("never offers it once the rule set is the user's own", () => {
+    const others: PlaybookMode[] = ["normal", "defense", "frozen", "emergency_frozen"];
+    for (const mode of others) {
+      expect(shouldRenderRuleSetConfirm(mode), `${mode} must not offer it`).toBe(false);
+    }
+  });
+});
+
+describe("normalizeCapitalInput (資本額欄位)", () => {
+  it("keeps the typed digits as a string — never through a JS number", () => {
+    // 12 significant digits: a float round-trip would not return this exactly.
+    expect(normalizeCapitalInput("123456789012.34")).toBe("123456789012.34");
+    expect(normalizeCapitalInput("1000000")).toBe("1000000");
+  });
+
+  it("removes only the separators a user types", () => {
+    expect(normalizeCapitalInput(" 1,000,000 ")).toBe("1000000");
+  });
+
+  it("rejects anything that is not a positive decimal, instead of coercing it", () => {
+    for (const raw of ["", "  ", "0", "0.00", "-1", "1e6", "1.2.3", "abc", "１０", "1０0"]) {
+      expect(normalizeCapitalInput(raw), `${raw} must be rejected`).toBeNull();
+    }
+  });
+
+  it("accepts a small positive amount (the floor is >0, not a magnitude)", () => {
+    expect(normalizeCapitalInput("0.01")).toBe("0.01");
   });
 });
 

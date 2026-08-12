@@ -1318,6 +1318,65 @@ export interface PlaybookBatchSnapshot {
   unrealized_pct: string | null;
 }
 
+/**
+ * Backend `RuleTextItem` (app/api/playbook.py) — one rule's restatement with
+ * the thresholds of the version in force already substituted
+ * (`wording.rule_text`). Rendered verbatim; the client never composes a rule
+ * summary of its own.
+ */
+export interface PlaybookRuleTextItem {
+  rule_id: string;
+  text: string;
+}
+
+/**
+ * Backend `RuleParamItem` (app/api/playbook.py) — one threshold of the version
+ * in force. `field` is the backend `RuleParams` field name verbatim (an
+ * identifier, not a label): the backend's own doc comment states that naming
+ * each threshold in prose would invent user-facing wording nobody approved.
+ */
+export interface PlaybookRuleParamItem {
+  field: string;
+  value: string;
+}
+
+/**
+ * Backend `RuleSetResponse` (app/api/playbook.py) — the answer of both
+ * `GET /api/playbook/rule-set` and `POST /api/playbook/confirm-rules`, always
+ * describing the state *after* the call ran.
+ */
+export interface PlaybookRuleSetResponse {
+  //: 風控 R2 authorship record; `false` is the 歸屬語情境 1 block that stops
+  //: `GET /today` from producing any rule-driven directive.
+  user_authored: boolean;
+  //: `null` while unauthored — a system default's version number is not the
+  //: user's rule set version, and is never shown as one.
+  rules_version: number | null;
+  //: 生效日 of the stored row in force; `null` when no stored row answers.
+  rules_effective_date: string | null;
+  //: 風控 R2 常駐歸屬語 or the 情境 1 blocking sentence, rendered server-side.
+  attribution: string;
+  rules: PlaybookRuleTextItem[];
+  params: PlaybookRuleParamItem[];
+  //: The recorded capital and its provenance (CEO 裁決 D-2) — stringified
+  //: `Decimal`s, same convention as every other money field here.
+  cash: string;
+  total_deploy: string;
+  total_deploy_set_at: string | null;
+  total_deploy_source: string | null;
+  as_of: string;
+}
+
+/**
+ * Body of `POST /api/playbook/confirm-rules`. `capital` is sent as a **string**
+ * so the `Decimal` round-trips exactly (project-wide money convention); the
+ * backend refuses anything ≤ 0 with a 422. No threshold may be sent: the rule
+ * set being confirmed is the one already in force (鐵律④).
+ */
+export interface PlaybookConfirmRulesInput {
+  capital: string;
+}
+
 /** Backend `EmergencyExitResponse` (app/api/playbook.py) — `POST /api/playbook/emergency-exit`. */
 export interface PlaybookEmergencyExitResponse {
   executed_at: string;

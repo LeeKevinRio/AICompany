@@ -306,6 +306,45 @@ export function visibleWarnings(
   return warnings.filter((warning) => warning !== adjacentNote);
 }
 
+/* --- 確認規則集／資本設定入口 ---------------------------------------------- */
+
+/**
+ * Whether to offer the 確認規則集 block: only in the one state it resolves.
+ *
+ * `unconfirmed` is the backend's own mode for 歸屬語情境 1 (風控 R2) — no
+ * authorship record, so `GET /today` produces no rule-driven directive and says
+ * so in `attribution`/`mode_reason`. The block is the action that lifts exactly
+ * that block, so it is not shown on any other day: on a 正常／防守／凍結 day the
+ * rule set is already the user's, and a confirmation control there would invite
+ * a re-submission that changes nothing.
+ */
+export function shouldRenderRuleSetConfirm(mode: PlaybookMode): boolean {
+  return mode === "unconfirmed";
+}
+
+/** Digits with at most one decimal point — no sign, no exponent, no separator. */
+const CAPITAL_PATTERN = /^\d+(\.\d+)?$/;
+
+/**
+ * The capital string to submit, or `null` when the field does not hold one.
+ *
+ * Kept as a **string** end to end: the backend field is a `Decimal` and a
+ * round-trip through a JS number is exactly the precision loss the project's
+ * money convention exists to avoid. Thousands separators and spaces a user
+ * typed are removed; everything else (a sign, an exponent, a second decimal
+ * point, full-width digits, an empty field) is rejected rather than coerced,
+ * so an unreadable field never becomes a number nobody typed.
+ *
+ * `null` disables the submit button. The backend refuses a non-positive capital
+ * with a 422 regardless — this check is the same rule stated early, not the
+ * only place it is enforced.
+ */
+export function normalizeCapitalInput(raw: string): string | null {
+  const cleaned = raw.replace(/[\s,]/g, "");
+  if (!CAPITAL_PATTERN.test(cleaned)) return null;
+  return Number(cleaned) > 0 ? cleaned : null;
+}
+
 /* --- 數值格式化 ------------------------------------------------------------- */
 
 /**

@@ -83,6 +83,11 @@ const SCANNED_FILES = [
   "../../playbook/PositionSnapshotTable.tsx",
   "../../playbook/SettlementPanel.tsx",
   "../../playbook/EmergencyExitControl.tsx",
+  // 規則集確認 + 資本設定入口 (派工單 2026-08-12): the block's own functional
+  // labels (區塊標題／小標／資本欄標籤／按鈕／失敗標籤) and the one sentence
+  // stating what confirming means are hard-coded JSX text, which is exactly the
+  // class of copy this scan exists to reach.
+  "../../playbook/RuleSetConfirmPanel.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

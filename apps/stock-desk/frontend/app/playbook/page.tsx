@@ -7,12 +7,14 @@ import {
   noDirectiveNote,
   shouldRenderAttribution,
   shouldRenderDirectiveLedger,
+  shouldRenderRuleSetConfirm,
   visibleWarnings,
 } from "../lib/playbookView";
 import { usePlaybookToday } from "../lib/queries";
 import { DirectiveLedger } from "./DirectiveLedger";
 import { ModeStatusBar } from "./ModeStatusBar";
 import { PositionSnapshotTable } from "./PositionSnapshotTable";
+import { RuleSetConfirmPanel } from "./RuleSetConfirmPanel";
 import { SettlementPanel } from "./SettlementPanel";
 
 /**
@@ -96,6 +98,13 @@ export default function PlaybookPage() {
                 ))}
               </div>
             )}
+
+            {/*
+              待確認規則集（歸屬語情境 1）唯一的出口：確認規則集 + 資本設定入口，
+              就接在阻斷態的說明（歸屬語／§6 三句／警示）下方，讓「為什麼沒有指令」
+              與「怎麼解除」讀在一起。其他模式不渲染——見 `shouldRenderRuleSetConfirm`。
+            */}
+            {shouldRenderRuleSetConfirm(data.mode) && <RuleSetConfirmPanel />}
 
             {/*
               required ④ fail-closed：沒有歸屬語就不渲染指令帳冊（風控 R2 把常駐
