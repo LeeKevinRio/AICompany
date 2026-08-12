@@ -710,3 +710,68 @@ def test_standing_back_above_ma25_resumes_the_symbol_and_zeroes_the_counter() ->
     assert "defer_reset" in effect_kinds(evaluation)
     # Resumed on the same day, so the entry rule may run again immediately.
     assert "R1" in rule_ids(evaluation)
+
+
+# --- 文案閘門覆審 (2026-08-12 二輪定稿) 的引擎行為 --------------------------
+
+
+def test_the_index_gap_deferral_clause_only_appears_on_a_deferring_day() -> None:
+    """覆審 INDEX_DATA_GAP 拆句：順延子句以行為為準，不是主句的一部分."""
+    deferring = run(
+        index=helper.index(status="unavailable", source="none"),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+        batches=[helper.planned()],
+    )
+    assert any("當日不新開倉。" in warning for warning in deferring.warnings)
+    assert any(
+        "R 系列進場改為順延並計入順延次數" in warning for warning in deferring.warnings
+    )
+
+    quiet_day = run(
+        data_date=FRIDAY,  # 非排程日：今天本來就沒有進場要順延
+        index=helper.index(status="unavailable", source="none", data_date=FRIDAY),
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0",
+                                       data_date=FRIDAY)},
+        batches=[helper.planned()],
+    )
+    assert any("當日不新開倉。" in warning for warning in quiet_day.warnings)
+    assert not any(
+        "R 系列進場改為順延並計入順延次數" in warning for warning in quiet_day.warnings
+    )
+
+
+def test_a_held_symbol_with_no_data_says_the_stop_loss_was_not_evaluated() -> None:
+    """S-2：資料缺漏致停損無法評估須主動顯著揭露，不得靜默."""
+    holding = run(
+        markets={"2330": helper.market(close="100", status="cached_stale", source="cache")},
+        batches=[helper.batch(cost="100", shares=300)],
+    )
+    assert holding.directives == []
+    assert any("【停損今日無法評估】" in warning for warning in holding.warnings)
+
+    empty = run(
+        markets={"2330": helper.market(close="100", status="cached_stale", source="cache")},
+        batches=[helper.planned()],
+    )
+    assert not any("【停損今日無法評估】" in warning for warning in empty.warnings)
+    assert any("依鐵律⑤當日不產生指令。" in warning for warning in empty.warnings)
+
+
+def test_the_emergency_mode_line_counts_the_day_it_is_evaluated_on() -> None:
+    """覆審：mode_reason 每日渲染，第 N 個交易日隨日期前進."""
+    calendar = helper.calendar()
+    until = calendar.shift(TUESDAY, 20)
+    first = run(
+        data_date=WEDNESDAY,
+        index=helper.index(data_date=WEDNESDAY),
+        portfolio=helper.portfolio(emergency_until=until),
+    )
+    later = run(
+        data_date=calendar.shift(TUESDAY, 6),
+        index=helper.index(data_date=calendar.shift(TUESDAY, 6)),
+        portfolio=helper.portfolio(emergency_until=until),
+    )
+    assert first.mode == "emergency_frozen"
+    assert "第 1/20 交易日" in first.mode_reason
+    assert "第 6/20 交易日" in later.mode_reason
+    assert "所有排程" not in first.mode_reason
