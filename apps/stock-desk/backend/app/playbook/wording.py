@@ -48,11 +48,41 @@ ATTRIBUTION_DATE_STATUS_UNREADABLE = "規則版本 {version} 的生效日期讀�
 
 #: 歸屬語情境 1: there is no user submission record at all. The 歸屬語 itself is
 #: not shown -- claiming authorship of a system default would be the exact
-#: misattribution R2 exists to prevent -- and the module produces no executable
+#: misattribution R2 exists to prevent -- and the module produces no rule-driven
 #: directive until the user confirms a rule set.
+#:
+#: 三輪定稿 (題 8) narrowed sentence two and added sentence three: the block only
+#: covers the rule-driven series (進場／停損／停利), and the escape hatch is named
+#: in the same breath so no reader can take the block for a disabled exit. The
+#: third sentence may not be shortened into a pointer, and de-duplicating this
+#: string in a view may not truncate it.
 ATTRIBUTION_NO_USER_RULES = (
     "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
-    "本模組僅執行使用者自行設定的規則，在你確認規則集之前不產生任何指令。"
+    "本模組僅依你設定的規則集產生進場、停損、停利指令，"
+    "在你確認規則集之前不會產生這類指令。"
+    "你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。"
+)
+
+#: EMERGENCY_EXIT 專用歸屬語 (三輪定稿 題 7). The exit is attributed to the action
+#: the user just submitted, not to a rule set, so it is rendered regardless of
+#: authorship and :func:`attribution_note` is never consulted for it. Rendered
+#: only when the exit actually produced lines: with no batch to sell there is no
+#: 指令 for the sentence to be about.
+EXIT_ATTRIBUTION = (
+    "此指令是你在本次操作中提交的「全部出清」要求之機械執行結果，"
+    "非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
+    "無論規則集是否已確認皆可送出。"
+)
+
+#: 三輪定稿 (題 9): 情境 1 with shares still held. The block stops the S/P series
+#: from being evaluated, and a held position whose stop loss went unevaluated may
+#: not be left to be inferred from the absence of a line (same duty as S-2).
+#: ``{symbols}`` lists every un-liquidated symbol in full -- truncating it would
+#: hide exactly the holding this sentence exists to disclose.
+UNAUTHORED_HOLDING_NOTE = (
+    "【S/P 系列停損停利今日未依規則評估】規則集尚無你本人的設定或修改紀錄，"
+    "本模組今日不產生規則驅動指令；你目前持有 {symbols} 尚未出清，"
+    "其停損/停利（S/P 系列）今日未依規則評估。"
 )
 
 #: action -> the word the user's own rule set uses.
@@ -64,11 +94,14 @@ ACTION_LABELS: dict[Action, str] = {
     "none": "無動作",
 }
 
+#: 三輪定稿 (題 10) picked 「待確認規則集」 over 「未啟用」: the worst misreading of
+#: 「未啟用」 is that the escape hatch is off too, and the exit is always open.
 MODE_LABELS: dict[Mode, str] = {
     "normal": "正常",
     "defense": "防守",
     "frozen": "全凍結",
     "emergency_frozen": "緊急出清後凍結",
+    "unconfirmed": "待確認規則集",
 }
 
 #: rule id -> the one-line restatement shown next to every directive (R1: the
@@ -393,6 +426,9 @@ def attribution_note(authorship: RuleSetAuthorship) -> str:
     one permitted status string; and -- when there is no user record at all --
     the blocking sentence *instead of* the 歸屬語, never a shortened version of
     it.
+
+    EMERGENCY_EXIT does not come through here at all (三輪定稿 題 7): it carries
+    :data:`EXIT_ATTRIBUTION` whatever the authorship record says.
     """
     if not authorship.user_authored:
         return ATTRIBUTION_NO_USER_RULES

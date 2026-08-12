@@ -33,8 +33,11 @@ from pydantic import BaseModel, ConfigDict, Field
 #: schedule produces no R-series line at all rather than a "凍結" line.
 Action = Literal["buy", "sell", "defer", "skip", "none"]
 
-#: 正常／防守（M1）／全凍結（S3）／緊急出清後凍結（EMERGENCY_EXIT）.
-Mode = Literal["normal", "defense", "frozen", "emergency_frozen"]
+#: 正常／防守（M1）／全凍結（S3）／緊急出清後凍結（EMERGENCY_EXIT）／待確認規則集.
+#: ``unconfirmed`` is its own value rather than a reuse of ``normal`` (三輪定稿
+#: 題 10): a book that produces no rule-driven line is not running normally, and
+#: labelling it 正常 would make the one state the user has to act on invisible.
+Mode = Literal["normal", "defense", "frozen", "emergency_frozen", "unconfirmed"]
 
 #: Lifecycle of one batch. ``planned`` has never been filled, ``open`` holds
 #: shares, ``closed`` was sold out, ``skipped`` was abandoned by R3.
@@ -469,8 +472,10 @@ class EmergencyExitResult(BaseModel):
     freeze_until: date
     message: str
     warnings: list[str]
-    #: 風控 R2 常駐歸屬語 for this response.
-    attribution: str
+    #: EMERGENCY_EXIT 專用歸屬語 (三輪定稿 題 7), independent of authorship.
+    #: ``None`` when the exit produced no line at all -- the sentence is about a
+    #: 指令 that, in that branch, does not exist.
+    attribution: str | None
     #: The mode line for the day the exit was submitted on, rendered now rather
     #: than stored: the 「第 N/20 交易日」 counter is only true for one day.
     mode_reason: str

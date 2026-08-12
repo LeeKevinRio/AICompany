@@ -69,22 +69,23 @@ def _numbers(text: str) -> list[str]:
 
 
 def _thresholds_of(params: RuleParams) -> set[str]:
-    """Every rendering a threshold of ``params`` may legitimately appear as."""
+    """Every rendering a threshold of ``params`` may legitimately appear as.
+
+    Each threshold is normalised before it is formatted. ``Decimal`` keeps the
+    scale of an arithmetic result (``0.30 × 100`` is ``30.00``, and ``:g`` on a
+    ``Decimal`` preserves the trailing zeros rather than dropping them), so
+    formatting the raw values put strings like ``30.00`` into the allowed set --
+    renderings no sentence produces, which is exactly the room a hard-coded
+    literal could hide in. ``normalize`` may hand back an exponent form
+    (``Decimal("6E+1")``), so ``:f`` is what writes the digits out.
+    """
     allowed: set[str] = set()
     for value in params.model_dump().values():
         if isinstance(value, bool) or not isinstance(value, Decimal | int | float):
             continue
-        number = Decimal(str(value))
-        scaled = number * 100
-        allowed.update(
-            {
-                f"{number:g}",
-                f"{number:.2f}",
-                f"{number.normalize():f}",
-                f"{scaled:g}",
-                f"{scaled.normalize():f}",
-            }
-        )
+        number = Decimal(str(value)).normalize()
+        scaled = (number * 100).normalize()
+        allowed.update({f"{number:f}", f"{number:.2f}", f"{scaled:f}"})
     return allowed
 
 
@@ -124,6 +125,18 @@ def test_the_s2_rule_text_says_the_blacklist_only_blocks_buying() -> None:
     text = wording.rule_text("S2", helper.params())
     assert "黑名單期間僅停止新增買進（R 系列）" in text
     assert "S/P 系列停損停利仍照常評估。" in text
+
+
+def test_the_iron1_rule_text_states_the_cash_floor_as_a_parameter() -> None:
+    """鐵律①的兩處百分比都來自 cash_floor_ratio，且句子逐字不變（qa 順修補 pin）."""
+    assert wording.rule_text("IRON1", helper.params()) == (
+        "鐵律①現金 30% 不可破：進場金額使現金低於 30% 時縮減該批股數。"
+    )
+    # 換版後兩處一起走，且不留上一版的數字；30.00 這種尾零渲染同樣不得出現。
+    altered = wording.rule_text("IRON1", ALTERED)
+    assert altered == "鐵律①現金 25% 不可破：進場金額使現金低於 25% 時縮減該批股數。"
+    assert "30" not in altered
+    assert "25.00" not in altered
 
 
 def test_the_rebalance_rule_text_says_it_takes_effect_immediately() -> None:
@@ -233,7 +246,56 @@ def test_with_no_user_record_the_attribution_is_replaced_not_shortened() -> None
     note = wording.attribution_note(RuleSetAuthorship(user_authored=False))
     assert note == wording.ATTRIBUTION_NO_USER_RULES
     assert "自行設定的規則之機械執行結果" not in note
-    assert "在你確認規則集之前不產生任何指令" in note
+
+
+def test_the_block_sentence_limits_itself_and_names_the_exit() -> None:
+    """三輪定稿 題 8: 限縮三句式——阻斷只及於規則驅動指令，出口在同一段被指名."""
+    assert wording.ATTRIBUTION_NO_USER_RULES == (
+        "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
+        "本模組僅依你設定的規則集產生進場、停損、停利指令，"
+        "在你確認規則集之前不會產生這類指令。"
+        "你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。"
+    )
+    # 第三句不得縮為指路句：出口本身要被寫成不受限制，而不是「詳見某處」。
+    assert "你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。" in (
+        wording.ATTRIBUTION_NO_USER_RULES
+    )
+    # 舊的無限定寫法（不產生任何指令）會把逃生口一起講死，不得回歸。
+    assert "不產生任何指令" not in wording.ATTRIBUTION_NO_USER_RULES
+    assert "阻止" not in wording.ATTRIBUTION_NO_USER_RULES
+    assert "鎖住" not in wording.ATTRIBUTION_NO_USER_RULES
+
+
+def test_the_exit_attribution_points_at_the_submitted_action_not_a_rule_set() -> None:
+    """三輪定稿 題 7: EXIT 專用歸屬語，逐字."""
+    assert wording.EXIT_ATTRIBUTION == (
+        "此指令是你在本次操作中提交的「全部出清」要求之機械執行結果，"
+        "非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
+        "無論規則集是否已確認皆可送出。"
+    )
+    # 出口的歸屬對象是剛提交的動作，不是任何日期或版本的規則集。
+    assert "{" not in wording.EXIT_ATTRIBUTION
+    assert "規則集" in wording.EXIT_ATTRIBUTION
+    assert "自行設定的規則" not in wording.EXIT_ATTRIBUTION
+
+
+def test_the_unauthored_holding_note_discloses_every_held_symbol() -> None:
+    """三輪定稿 題 9: 未確認規則集但仍有持倉，S/P 未評估須主動揭露、不得截斷."""
+    note = wording.UNAUTHORED_HOLDING_NOTE.format(symbols="2330、2454、2603")
+    assert note == (
+        "【S/P 系列停損停利今日未依規則評估】規則集尚無你本人的設定或修改紀錄，"
+        "本模組今日不產生規則驅動指令；你目前持有 2330、2454、2603 尚未出清，"
+        "其停損/停利（S/P 系列）今日未依規則評估。"
+    )
+    assert note.startswith("【S/P 系列停損停利今日未依規則評估】")
+    assert "…" not in note and "..." not in note
+
+
+def test_the_unconfirmed_mode_label_does_not_read_as_a_disabled_module() -> None:
+    """三輪定稿 題 10: 採「待確認規則集」，否決「未啟用」."""
+    assert wording.MODE_LABELS["unconfirmed"] == "待確認規則集"
+    assert wording.MODE_LABELS["unconfirmed"] != wording.MODE_LABELS["normal"]
+    assert "未啟用" not in wording.MODE_LABELS.values()
 
 
 # --- 快市 / 資料缺漏 / 參考價 -------------------------------------------------

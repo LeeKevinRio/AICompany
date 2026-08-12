@@ -381,15 +381,37 @@ class PlaybookService:
     def _unauthored_evaluation(self, as_of: date) -> PlaybookEvaluation:
         """The answer when no user rule set exists (歸屬語情境 1).
 
-        風控 覆審: with no submission record the module may not produce an
-        executable directive, and the 歸屬語 is replaced by the blocking sentence
-        rather than shortened. Nothing is loaded, evaluated or written -- an
-        evaluation the user never authorised leaves no trace either.
+        風控 覆審: with no submission record the module may not produce a
+        rule-driven directive (進場／停損／停利), and the 歸屬語 is replaced by the
+        blocking sentence rather than shortened. Nothing is loaded, evaluated or
+        written -- an evaluation the user never authorised leaves no trace
+        either. EMERGENCY_EXIT is outside this gate entirely and the blocking
+        sentence says so itself (題 8, third clause).
+
+        Held shares are the one thing that has to be said out loud (三輪定稿
+        題 9): the block also stops the S/P series, so a position that is still
+        open goes a day without its stop loss being evaluated. The disclosure is
+        an **existence check on the batch book only** -- no bar is loaded, no
+        indicator computed and nothing written -- because the day still has to
+        leave no trace, and every held symbol is listed in full.
         """
+        held = sorted(
+            {
+                batch.symbol
+                for batch in self._store.list_batches()
+                if batch.status == "open" and batch.remaining_shares > 0
+            }
+        )
+        warnings = (
+            [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="、".join(held))]
+            if held
+            else []
+        )
         return PlaybookEvaluation(
             data_date=as_of,
             execution_date=as_of,
-            mode="normal",
+            # 題 10: its own mode value, never 「正常」.
+            mode="unconfirmed",
             mode_reason=wording.ATTRIBUTION_NO_USER_RULES,
             is_schedule_day=False,
             fast_market=FastMarketState(
@@ -398,7 +420,7 @@ class PlaybookService:
             rules_version=0,
             directives=[],
             effects=[],
-            warnings=[],
+            warnings=warnings,
             snapshot=[],
             attribution=wording.ATTRIBUTION_NO_USER_RULES,
         )
@@ -496,8 +518,11 @@ class PlaybookService:
         apply here (CEO EX-2/EX-4, 出口零摩擦): these lines come from an action
         the user just submitted, not from rules the system holds on their behalf,
         and adding a precondition to the exit is the one thing the exit may not
-        have. The response still carries the attribution sentence for the state
-        the rule set is actually in.
+        have. The authorship record is therefore not read at all here (三輪定稿
+        題 7): the response carries :data:`wording.EXIT_ATTRIBUTION`, which
+        attributes the lines to the submitted action, and never the blocking
+        sentence -- printing 「在你確認規則集之前不會產生指令」 next to lines the
+        exit just produced would contradict the lines themselves.
         """
         as_of = today or datetime.now(UTC).date()
         batches = self._store.list_batches()
@@ -583,7 +608,9 @@ class PlaybookService:
             freeze_until=freeze_until,
             message=message,
             warnings=warnings,
-            attribution=wording.attribution_note(self._store.rule_set_authorship(as_of)),
+            # 題 7: the EMPTY branch produced no 指令, so there is nothing for the
+            # sentence to attribute and it is not rendered at all.
+            attribution=wording.EXIT_ATTRIBUTION if directives else None,
             mode_reason=mode_reason,
         )
         self._store.apply_effects(

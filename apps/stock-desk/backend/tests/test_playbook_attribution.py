@@ -3,16 +3,19 @@
 覆審裁決 (2026-08-12) settled three states and this file pins all of them:
 
 * **情境 1 -- no user record.** The 歸屬語 is not shown at all and the module
-  produces no executable directive. The verdict comes from an explicit record,
+  produces no rule-driven directive. The verdict comes from an explicit record,
   never from a date: a system default carries an effective date too, and reading
-  authorship out of one would put the user's name on rules they never wrote.
+  authorship out of one would put the user's name on rules they never wrote. The
+  day gets its own mode (``unconfirmed``) and, when shares are still held, says
+  that their S/P evaluation did not happen (三輪定稿 題 9/題 10).
 * **情境 2 -- record present, date unreadable.** The sentence is the full one
   with the single permitted status string in place of the date.
 * **The normal case.** The date is the 規則版本生效日 and nothing else.
 
 The escape hatch is deliberately outside the gate (CEO EX-2/EX-4): its lines
 come from an action the user just submitted, and a precondition on the exit is
-the one thing the exit may not have.
+the one thing the exit may not have. 三輪定稿 題 7 goes one step further -- the
+exit does not consult authorship at all and carries its own attribution sentence.
 """
 
 from __future__ import annotations
@@ -40,6 +43,9 @@ HISTORY = 40
 class Harness:
     service: PlaybookService
     store: PlaybookStore
+    #: The fakes themselves, so a test can assert what was *not* fetched.
+    prices: FakePriceService
+    index: FakePriceService
 
 
 @pytest.fixture
@@ -47,6 +53,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     store = PlaybookStore(db_path=tmp_path / "playbook.db")
     prices = FakePriceService()
     prices.seed("2330", recent_bars([100.0] * HISTORY, symbol="2330", end=SERIES_END))
+    prices.seed("2454", recent_bars([50.0] * HISTORY, symbol="2454", end=SERIES_END))
     index = FakePriceService()
     index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=SERIES_END))
     store.ensure_batches(["2330"], batches_per_target=3)
@@ -60,11 +67,13 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
             index_resolver={"TW": index, "US": index},
         ),
         store=store,
+        prices=prices,
+        index=index,
     )
 
 
-def _hold_a_batch(store: PlaybookStore) -> None:
-    batch = store.get_batch("2330", 1)
+def _hold_a_batch(store: PlaybookStore, symbol: str = "2330", batch_no: int = 1) -> None:
+    batch = store.get_batch(symbol, batch_no)
     assert batch is not None
     store.save_batch(
         batch.model_copy(
@@ -94,6 +103,56 @@ def test_without_a_confirmed_rule_set_no_directive_is_produced(
     assert evaluation.mode_reason == wording.ATTRIBUTION_NO_USER_RULES
     # 阻斷是「不產生」，不是「產生了但不顯示」：指令留存也必須是空的 (R16).
     assert harness.store.directive_log() == []
+
+
+def test_the_unconfirmed_state_is_its_own_mode_and_not_normal(
+    harness: Harness,
+) -> None:
+    """題 10: 不得沿用 normal——不產生規則驅動指令的一天不是「正常」."""
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+
+    assert evaluation.mode != "normal"
+    assert evaluation.mode == "unconfirmed"
+    assert wording.MODE_LABELS[evaluation.mode] == "待確認規則集"
+
+
+def test_a_held_position_is_disclosed_while_the_rule_set_is_unconfirmed(
+    harness: Harness,
+) -> None:
+    """題 9: 阻斷同時停掉 S/P，未出清批次的未評估狀態必須主動說出來."""
+    harness.store.ensure_batches(["2454"], batches_per_target=3)
+    _hold_a_batch(harness.store, "2330")
+    _hold_a_batch(harness.store, "2454")
+
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+
+    assert evaluation.directives == []
+    assert evaluation.warnings == [
+        wording.UNAUTHORED_HOLDING_NOTE.format(symbols="2330、2454")
+    ]
+    # {symbols} 全列不截斷：每一檔持倉都要看得到。
+    assert "2330" in evaluation.warnings[0] and "2454" in evaluation.warnings[0]
+    # 僅存在性檢查：不載行情、不留痕。
+    assert harness.prices.calls == []
+    assert harness.index.calls == []
+    assert harness.store.directive_log() == []
+
+
+def test_a_book_with_nothing_left_to_sell_carries_no_holding_disclosure(
+    harness: Harness,
+) -> None:
+    """存在性檢查看的是未出清的批次，不是曾經有過部位：出清完就不再揭露."""
+    _hold_a_batch(harness.store)
+    batch = harness.store.get_batch("2330", 1)
+    assert batch is not None
+    harness.store.save_batch(
+        batch.model_copy(update={"status": "closed", "remaining_shares": 0})
+    )
+
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+
+    assert evaluation.warnings == []
+    assert evaluation.attribution == wording.ATTRIBUTION_NO_USER_RULES
 
 
 def test_the_block_lifts_the_moment_the_user_confirms_the_rule_set(
@@ -171,7 +230,43 @@ def test_the_emergency_exit_is_not_gated_on_the_rule_set_confirmation(
 
     assert result.total_shares == 300
     assert [item.action for item in result.directives] == ["sell"]
-    assert result.attribution == wording.ATTRIBUTION_NO_USER_RULES
+    # 題 7: 未確認規則集也照樣產出指令，且回應裡零阻斷句——阻斷句與剛產出的指令
+    # 互相矛盾，出現一次就是誤導。
+    assert result.attribution == wording.EXIT_ATTRIBUTION
+    rendered = " ".join([result.message, result.mode_reason, *result.warnings])
+    assert wording.ATTRIBUTION_NO_USER_RULES not in rendered
+    assert "在你確認規則集之前" not in rendered
+    assert "在你確認規則集之前" not in (result.attribution or "")
+
+
+def test_the_exit_attribution_is_the_same_sentence_once_the_rules_are_confirmed(
+    harness: Harness,
+) -> None:
+    """題 7: EXIT 一律用專用句，不看 authorship——兩種狀態下字面必須相同."""
+    _hold_a_batch(harness.store)
+    unconfirmed = harness.service.emergency_exit(today=TUESDAY)
+    confirm_rule_set(harness.store)
+
+    confirmed = harness.service.emergency_exit(today=TUESDAY)
+
+    assert confirmed.attribution == unconfirmed.attribution == wording.EXIT_ATTRIBUTION
+    # 規則集的生效日與 EXIT 無關，不得被寫進出口的歸屬語。
+    assert RULE_SET_DATE.isoformat() not in (confirmed.attribution or "")
+
+
+def test_an_exit_with_nothing_held_renders_no_attribution_at_all(
+    harness: Harness,
+) -> None:
+    """題 7 EMPTY 分支: 沒有指令就沒有可歸屬的對象，整句不渲染."""
+    confirm_rule_set(harness.store)
+
+    result = harness.service.emergency_exit(today=TUESDAY)
+
+    assert result.directives == []
+    assert result.attribution is None
+    assert "目前無持有批次，未產生賣出指令" in result.message
+    # 凍結仍然成立，只是沒有任何歸屬語可講。
+    assert "機械執行結果" not in result.message
 
 
 def test_the_exit_line_carries_its_own_no_band_sentence(harness: Harness) -> None:

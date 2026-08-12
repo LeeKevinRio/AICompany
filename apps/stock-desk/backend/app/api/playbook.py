@@ -139,8 +139,8 @@ class EmergencyExitResponse(BaseModel):
     message: str
     #: The mode line for today, recomputed on every response.
     mode_reason: str
-    #: 風控 R2 常駐歸屬語.
-    attribution: str
+    #: EMERGENCY_EXIT 專用歸屬語; ``None`` when the exit produced no line.
+    attribution: str | None
     directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str
