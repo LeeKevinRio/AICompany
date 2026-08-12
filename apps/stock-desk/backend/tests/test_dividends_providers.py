@@ -122,7 +122,7 @@ def test_all_numeric_fields_blank_is_a_valid_calendar_only_row() -> None:
 
 
 def test_a_stock_component_row_is_stored_but_never_yields_a_factor() -> None:
-    """CashDividend + StockDividendRatio both present ("息權"): the stock
+    """CashDividend + StockDividendRatio both present ("權息"): the stock
     ratio is recorded, but the factor is refused rather than computed
     cash-only, since that would silently understate the real drop."""
     event = parse_dividend_row(_row("2884"), source="s", as_of=AS_OF)

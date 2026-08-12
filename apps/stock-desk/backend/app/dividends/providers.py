@@ -59,11 +59,14 @@ are what this adapter needs. ``Name`` and the five remaining columns
 distinct corporate action this module does not model. They are captured in
 the fixture for provenance but never read by :func:`parse_dividend_row`.
 
-## ``Exdividend`` value domain -- one value confirmed, others handled defensively
+## ``Exdividend`` value domain -- all three values observed in the real feed
 
-Both real sample rows above show ``Exdividend="息"``. The column's likely
-domain is ``"息"`` (cash only), ``"權"`` (stock only) and ``"息權"`` (both) --
-inferred from TWSE's naming convention, not yet observed for the latter two.
+The CEO's 2026-08-12 distribution check over the full live table (124 rows)
+observed exactly three values: ``"息"`` (cash only, 102 rows), ``"權"``
+(stock only, 12 rows) and ``"權息"`` (both, 10 rows). Note the order is
+權息, not 息權 -- the first implementation guessed the latter from TWSE's
+naming convention and those 10 rows were correctly refused as unrecognized
+until this was fixed against the observed value.
 An unrecognized value is **not** silently dropped: the row is refused via
 :class:`~app.data.providers._util.UnparseableRowError`, which the adapter's
 fetch loop counts in ``skipped_rows`` and logs, so an unknown value is visible
@@ -79,7 +82,7 @@ requires a value), never to ``0`` treated as "confirmed zero distribution"
 and never refused as unparseable on that basis alone.
 
 The one place blank is **not** tolerated: if ``Exdividend`` is ``"權"`` or
-``"息權"`` (implying a stock/rights component exists) but
+``"權息"`` (implying a stock/rights component exists) but
 ``StockDividendRatio`` is blank, that is an internal inconsistency in the row,
 not "no component" -- the row is refused and counted rather than silently
 treated as a 0-ratio stock event.
@@ -135,9 +138,9 @@ _CASH_DIVIDEND_KEY = "CashDividend"
 _STOCK_DIVIDEND_RATIO_KEY = "StockDividendRatio"
 
 #: Confirmed / inferred ``Exdividend`` domain -- see module docstring.
-_KNOWN_EXDIVIDEND_VALUES = frozenset({"息", "權", "息權"})
+_KNOWN_EXDIVIDEND_VALUES = frozenset({"息", "權", "權息"})
 #: Values implying a stock/rights component must accompany a StockDividendRatio.
-_STOCK_COMPONENT_EXDIVIDEND_VALUES = frozenset({"權", "息權"})
+_STOCK_COMPONENT_EXDIVIDEND_VALUES = frozenset({"權", "權息"})
 
 _BLANK_CELLS = {"", "-", "--", "---", "N/A", "n/a", "null", "None"}
 
