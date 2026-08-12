@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { PlaybookDirectiveLine, PlaybookMode } from "../types";
+import type { PlaybookDirectiveLine, PlaybookExitConfirm, PlaybookMode } from "../types";
 import {
-  EXIT_FREEZE_DAYS_DEFAULT,
+  EXIT_CONFIRM_FALLBACK_CHECKS,
   allExitChecksConfirmed,
-  buildExitConfirmChecks,
   directivePriorityIndex,
+  exitConfirmChecks,
   directiveStatusLabel,
   formatScaledPercent,
   initialExitChecks,
@@ -217,42 +217,74 @@ describe("EMERGENCY_EXIT checkbox state machine", () => {
   });
 });
 
-describe("buildExitConfirmChecks", () => {
-  it("returns four checks, none with an unresolved {placeholder}", () => {
-    const checks = buildExitConfirmChecks();
-    expect(checks).toHaveLength(4);
-    for (const check of checks) {
-      expect(check).not.toMatch(/\{[a-zA-Z_]+\}/);
-    }
-  });
-
-  it("fills freeze_days with the given value", () => {
-    const checks = buildExitConfirmChecks(30);
-    expect(checks[1]).toContain("30 個交易日");
-  });
-
-  it("defaults freeze_days to EXIT_FREEZE_DAYS_DEFAULT", () => {
-    const checks = buildExitConfirmChecks();
-    expect(checks[1]).toContain(`${EXIT_FREEZE_DAYS_DEFAULT} 個交易日`);
-  });
-
-  it("renders the unavailable FREEZE_UNTIL as the site's existing dash sentinel", () => {
-    const checks = buildExitConfirmChecks();
-    expect(checks[1]).toContain("預計恢復日：—");
-  });
-
-  it("checks 0, 2, 3 need no substitution and match the backend constants verbatim", () => {
-    const checks = buildExitConfirmChecks();
-    expect(checks[0]).toBe(
+function exitConfirm(freezeDays: number, freezeUntil: string): PlaybookExitConfirm {
+  // Shaped exactly as `wording.exit_confirm_checks` renders it server-side, so
+  // the assertions below read the numbers off the sentence, never off a
+  // client-side template.
+  return {
+    freeze_days: freezeDays,
+    freeze_until: freezeUntil,
+    checks: [
       "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
         "不可只出清部分標的或部分批次，亦不可指定單一標的" +
         "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
-    );
-    expect(checks[2]).toBe(
+      `送出後，R 系列（新倉進場）暫停 ${freezeDays} 個交易日` +
+        `（預計恢復日：${freezeUntil}，依交易日曆計算）。`,
       "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
-    );
-    expect(checks[3]).toBe(
       "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
-    );
+    ],
+  };
+}
+
+describe("exitConfirmChecks", () => {
+  it("renders the backend sentences verbatim, numbers included", () => {
+    const checks = exitConfirmChecks(exitConfirm(20, "2026-09-09"));
+    expect(checks).toEqual(exitConfirm(20, "2026-09-09").checks);
+    expect(checks[1]).toContain("暫停 20 個交易日");
+    expect(checks[1]).toContain("預計恢復日：2026-09-09");
+  });
+
+  it("follows a changed freeze parameter instead of a mirrored default", () => {
+    const checks = exitConfirmChecks(exitConfirm(10, "2026-08-26"));
+    expect(checks[1]).toContain("暫停 10 個交易日");
+    expect(checks[1]).not.toContain("20 個交易日");
+    expect(checks[1]).toContain("預計恢復日：2026-08-26");
+  });
+
+  it("never leaves an unresolved {placeholder} or a dash where a date belongs", () => {
+    for (const check of exitConfirmChecks(exitConfirm(20, "2026-09-09"))) {
+      expect(check).not.toMatch(/\{[a-zA-Z_]+\}/);
+      expect(check).not.toContain("預計恢復日：—");
+    }
+  });
+
+  it("falls back to the three number-free approved sentences when the block is missing", () => {
+    const checks = exitConfirmChecks(null);
+    expect(checks).toEqual([...EXIT_CONFIRM_FALLBACK_CHECKS]);
+    // 天數句被整句略過，而不是渲染成假數字或破折號。
+    expect(checks.some((check) => check.includes("交易日"))).toBe(false);
+  });
+
+  it("keeps the exit submittable on the fallback (EX-2: 缺欄位不得變成鎖門)", () => {
+    const checks = exitConfirmChecks(null);
+    expect(checks.length).toBeGreaterThan(0);
+    expect(allExitChecksConfirmed(checks.map(() => true))).toBe(true);
+  });
+
+  it("treats an empty checks array as a degraded response, not an empty checklist", () => {
+    // 空陣列會讓 `allExitChecksConfirmed` 永遠是 false——那等於把出口鎖死。
+    expect(exitConfirmChecks({ ...exitConfirm(20, "2026-09-09"), checks: [] })).toEqual([
+      ...EXIT_CONFIRM_FALLBACK_CHECKS,
+    ]);
+  });
+
+  it("copies the fallback sentences from the backend constants verbatim", () => {
+    expect(EXIT_CONFIRM_FALLBACK_CHECKS).toEqual([
+      "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
+        "不可只出清部分標的或部分批次，亦不可指定單一標的" +
+        "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+      "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+      "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
+    ]);
   });
 });

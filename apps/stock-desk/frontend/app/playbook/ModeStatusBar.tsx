@@ -35,7 +35,9 @@ export function ModeStatusBar({ today }: { today: PlaybookTodayResponse }) {
             )}
             <span className="text-xs text-neutral-500">規則版本 v{today.rules_version}</span>
           </div>
-          <EmergencyExitControl />
+          {/* Step 2 的核取句由後端渲染後隨 `/today` 一起送來（凍結天數與預計
+              恢復日是當日參數與交易日曆的函式），這裡只負責傳遞。 */}
+          <EmergencyExitControl exitConfirm={today.exit_confirm} />
         </div>
         <p className="mt-2 text-sm text-neutral-300">{today.mode_reason}</p>
         {today.fast_market.active && today.fast_market.reason !== null && (

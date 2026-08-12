@@ -5,15 +5,14 @@ import { ErrorPanel } from "../components/ErrorPanel";
 import { useEmergencyExit } from "../lib/queries";
 import {
   allExitChecksConfirmed,
-  buildExitConfirmChecks,
+  exitConfirmChecks,
   initialExitChecks,
   shouldRenderAttribution,
   toggleExitCheck,
 } from "../lib/playbookView";
+import type { PlaybookExitConfirm } from "../lib/types";
 
 type ExitStep = "idle" | "confirm" | "final";
-
-const EXIT_CHECKS = buildExitConfirmChecks();
 
 /**
  * EMERGENCY_EXIT control (視覺規範 §4). Button styling is deliberately
@@ -27,25 +26,41 @@ const EXIT_CHECKS = buildExitConfirmChecks();
  * `EXIT_CONFIRM_CHECKS`).
  *
  * Every sentence in the modal is backend-sourced or a risk-compliance
- * pre-approved literal (see `buildExitConfirmChecks` for the one documented
- * exception/gap, and this component's own doc comments for the four button
- * labels, which the hand-off task named verbatim: 全部出清／我已閱讀，繼續／
- * 確認送出全部出清／取消).
+ * pre-approved literal: the Step 2 checks are `today.exit_confirm.checks`,
+ * rendered exactly as `wording.exit_confirm_checks` produced them — including
+ * the freeze length and 預計恢復日, which are the day's rule parameter and a
+ * trading-calendar count, never mirrored here (see `exitConfirmChecks` for the
+ * degraded branch when the block is absent). The four button labels are the
+ * pre-approved literals the hand-off task named verbatim: 全部出清／我已閱讀，
+ * 繼續／確認送出全部出清／取消.
  */
-export function EmergencyExitControl() {
+export function EmergencyExitControl({
+  exitConfirm,
+}: {
+  exitConfirm: PlaybookExitConfirm | null;
+}) {
+  const checkTexts = exitConfirmChecks(exitConfirm);
   const [step, setStep] = useState<ExitStep>("idle");
-  const [checks, setChecks] = useState<boolean[]>(() => initialExitChecks(EXIT_CHECKS.length));
+  const [checks, setChecks] = useState<boolean[]>(() => initialExitChecks(checkTexts.length));
   const mutation = useEmergencyExit();
+
+  // The checklist length only changes when a refetch swaps the degraded
+  // fallback for the real block (3 checks <-> 4). Re-seeding keeps a tick
+  // bound to the sentence it was given for: a box ticked against a sentence
+  // that is no longer on screen may not carry over into the submission.
+  if (checks.length !== checkTexts.length) {
+    setChecks(initialExitChecks(checkTexts.length));
+  }
 
   function openConfirm() {
     mutation.reset();
-    setChecks(initialExitChecks(EXIT_CHECKS.length));
+    setChecks(initialExitChecks(checkTexts.length));
     setStep("confirm");
   }
 
   function cancel() {
     setStep("idle");
-    setChecks(initialExitChecks(EXIT_CHECKS.length));
+    setChecks(initialExitChecks(checkTexts.length));
   }
 
   function submit() {
@@ -79,12 +94,12 @@ export function EmergencyExitControl() {
                   全部出清 — 確認前請閱讀以下事實
                 </h2>
                 <ul className="mt-4 space-y-3">
-                  {EXIT_CHECKS.map((text, index) => (
+                  {checkTexts.map((text, index) => (
                     <li key={index} className="flex items-start gap-2">
                       <input
                         id={`exit-check-${index}`}
                         type="checkbox"
-                        checked={checks[index]}
+                        checked={checks[index] === true}
                         onChange={() => setChecks((prev) => toggleExitCheck(prev, index))}
                         className="mt-1"
                       />
@@ -118,7 +133,7 @@ export function EmergencyExitControl() {
               <>
                 <h2 className="text-lg font-semibold text-neutral-100">全部出清 — 二次確認</h2>
                 <ul className="mt-4 space-y-2 text-sm text-neutral-400">
-                  {EXIT_CHECKS.map((text, index) => (
+                  {checkTexts.map((text, index) => (
                     <li key={index}>{text}</li>
                   ))}
                 </ul>

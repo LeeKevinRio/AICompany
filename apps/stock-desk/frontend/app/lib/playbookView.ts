@@ -12,10 +12,16 @@
  * file composes new prose — it only maps enum/id values to Tailwind class
  * strings, sorts/splits/formats values the backend already sent, and runs
  * the exit-confirmation checkbox state machine. The one deliberate exception
- * (`EXIT_CONFIRM_CHECK_TEMPLATES`) is documented at its own definition.
+ * (`EXIT_CONFIRM_FALLBACK_CHECKS`, three backend constants copied verbatim for
+ * a degraded response) is documented at its own definition.
  */
 
-import type { PlaybookDirectiveLine, PlaybookDirectiveStatus, PlaybookMode } from "./types";
+import type {
+  PlaybookDirectiveLine,
+  PlaybookDirectiveStatus,
+  PlaybookExitConfirm,
+  PlaybookMode,
+} from "./types";
 
 /* --- 模式徽章 (視覺規範 §2) ------------------------------------------------ */
 
@@ -244,46 +250,39 @@ export function allExitChecksConfirmed(state: readonly boolean[]): boolean {
 /* --- EMERGENCY_EXIT Step 2 事實核取句 --------------------------------------- */
 
 /**
- * Mirrors `wording.EXIT_CONFIRM_CHECKS` (app/playbook/wording.py, verified
- * 2026-08-12 覆審定稿) verbatim, character-for-character. Copied here because
- * no endpoint returns these strings *before* the exit is actually submitted —
- * `wording.exit_confirm_checks()` exists server-side but is never called by
- * any router in `app/api/playbook.py` (confirmed by reading every call site);
- * `POST /emergency-exit` only renders the equivalent facts as part of
- * *executing* the exit (`EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY`, in
- * `message`), which is too late for a pre-confirmation screen. Same mirroring
- * pattern `adviceWording.ts` already uses for `FRONTEND_FORBIDDEN_TERMS` (a
- * local copy of a backend list with no endpoint of its own) — must be kept in
- * sync by hand if `wording.py`'s tuple changes.
+ * The three approved checks that carry no number, copied verbatim from
+ * `wording.EXIT_CONFIRM_CHECKS` (app/playbook/wording.py), used **only** when
+ * `GET /today` came back without its `exit_confirm` block.
  *
- * KNOWN GAP (flagged for dev-lead, not solved here): index 1 needs
- * `{freeze_days}` and `{FREEZE_UNTIL}`, and no endpoint exposes either before
- * submission (no route reads `RuleParams`, no dry-run flag on
- * `POST /emergency-exit`, and this app's frontend has no trading-calendar
- * module of its own — see `tradingCalendar.ts`'s own documented gap for why
- * that math cannot be replicated client-side). `EXIT_FREEZE_DAYS_DEFAULT`
- * mirrors `RuleParams.emergency_freeze_trading_days`'s *default*
- * (app/playbook/models.py) — the only value ever in force today, since no
- * endpoint lets a user change it — and `FREEZE_UNTIL` renders as this app's
- * existing "value unavailable" sentinel (`—`, used throughout `format.ts`)
- * rather than a fabricated date. A preview/dry-run endpoint would let this
- * render the exact backend sentence; until then this is the least-invented
- * approximation available.
+ * The normal path renders `exit_confirm.checks` — the backend fills that block
+ * on every service path (including 待確認規則集), with `freeze_days` read from
+ * the rule parameters in force and 預計恢復日 counted on the trading calendar.
+ * Mirroring those numbers here is exactly the defect this fallback replaces: a
+ * client-side `20` is wrong the day the parameter moves, and this app has no
+ * trading-calendar module that could count the recovery date (see
+ * `tradingCalendar.ts`'s own documented gap).
+ *
+ * So the degraded branch drops the freeze sentence (index 1) instead of
+ * rendering it with an invented number or a `—` where a date belongs, and
+ * keeps the exit submittable on the remaining three checks — EX-2 出口零摩擦:
+ * a missing field may not become a locked door. The freeze is still stated in
+ * full, with its real numbers, in the post-submit response this same component
+ * renders (`wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY` and
+ * `mode_reason`), so the fact is disclosed even on this path — one step later
+ * than intended, which is the deliberate trade-off recorded here.
  */
-export const EXIT_FREEZE_DAYS_DEFAULT = 20;
-
-const EXIT_CONFIRM_CHECK_TEMPLATES: readonly string[] = [
+export const EXIT_CONFIRM_FALLBACK_CHECKS: readonly string[] = [
   "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
     "不可只出清部分標的或部分批次，亦不可指定單一標的" +
     "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
-  "送出後，R 系列（新倉進場）暫停 {freeze_days} 個交易日" +
-    "（預計恢復日：{FREEZE_UNTIL}，依交易日曆計算）。",
   "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
   "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 ];
 
-export function buildExitConfirmChecks(freezeDays: number = EXIT_FREEZE_DAYS_DEFAULT): string[] {
-  return EXIT_CONFIRM_CHECK_TEMPLATES.map((template) =>
-    template.replace("{freeze_days}", String(freezeDays)).replace("{FREEZE_UNTIL}", "—"),
-  );
+/** Backend-rendered checks when the block is present, the fallback when not. */
+export function exitConfirmChecks(exitConfirm: PlaybookExitConfirm | null): string[] {
+  if (exitConfirm === null || exitConfirm.checks.length === 0) {
+    return [...EXIT_CONFIRM_FALLBACK_CHECKS];
+  }
+  return [...exitConfirm.checks];
 }

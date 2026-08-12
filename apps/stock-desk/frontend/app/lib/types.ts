@@ -1237,6 +1237,21 @@ export interface PlaybookFastMarketState {
   measured_on: string | null;
 }
 
+/**
+ * Backend `ExitConfirm` (app/playbook/models.py) — the EMERGENCY_EXIT
+ * confirmation facts, recomputed on every `/today` response from the rule
+ * parameters in force and the trading calendar. `checks` is the rendered
+ * output of `wording.exit_confirm_checks` (the four risk-compliance-approved
+ * sentences with this day's numbers already substituted), so the confirmation
+ * modal renders them verbatim and never mirrors `freeze_days` itself.
+ */
+export interface PlaybookExitConfirm {
+  freeze_days: number;
+  //: 預計恢復日 (ISO date), counted `freeze_days` trading days ahead.
+  freeze_until: string;
+  checks: string[];
+}
+
 /** Backend `TodayResponse` (app/api/playbook.py) — `GET /api/playbook/today`. */
 export interface PlaybookTodayResponse {
   data_date: string;
@@ -1260,6 +1275,10 @@ export interface PlaybookTodayResponse {
   //: The T+1 settlement that ran before this evaluation (CEO 裁決七); `null`
   //: only when no settlement run has ever happened for this book.
   settlement: PlaybookSettlementResponse | null;
+  //: EMERGENCY_EXIT Step 2 的核取句與凍結事實; the backend fills this on every
+  //: service path (including 待確認規則集), so `null` means the response itself
+  //: was degraded — see `EXIT_CONFIRM_FALLBACK_CHECKS` for what renders then.
+  exit_confirm: PlaybookExitConfirm | null;
   as_of: string;
 }
 
