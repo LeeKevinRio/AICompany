@@ -12,8 +12,10 @@
  * wording finalized there): `true` means the cache is honestly "today's
  * data, served from cache" and gets its own sentence; `false` or `null`
  * (the field only ever applies to this one status, so `null` here means
- * "unknown", not "not applicable") keeps the existing "資料延遲" wording.
- * Neither branch may read as live.
+ * "unknown", not "not applicable") uses the ADR's 「快取資料，已延遲 N 分鐘」
+ * (D3b: the ADR wording supersedes the earlier 「資料延遲」 draft; with no
+ * minute count available either sentence truncates rather than fabricating
+ * a number). Neither branch may read as live.
  */
 export function DataMetaStatusBadge({
   status,
@@ -37,8 +39,8 @@ export function DataMetaStatusBadge({
       return (
         <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
           {isWithinTtl === true
-            ? `本機快取（今日已更新，${stalenessMinutes ?? "—"} 分鐘前）`
-            : `資料延遲${stalenessMinutes !== null ? ` ${stalenessMinutes} 分鐘` : ""}`}
+            ? `本機快取（今日已更新${stalenessMinutes !== null ? `，${stalenessMinutes} 分鐘前` : ""}）`
+            : `快取資料${stalenessMinutes !== null ? `，已延遲 ${stalenessMinutes} 分鐘` : ""}`}
         </span>
       );
     case "unavailable":
