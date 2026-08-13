@@ -12,7 +12,7 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 - **規則式建議卡**（可解釋、可反駁、附失效條件的行動選項）
 - **風險上限檢查**（單一標的佔比、單筆虧損上限等五項上限的三態評估）
 - **槓桿 ETF 拆解**（已發生的報酬衰減與情境推估）
-- **回測工具**（MA Cross 策略、樣本內外分列、Buy & Hold 對照）
+- **回測工具**（MA Cross／RSI Reversal／Breakout 三策略、樣本內外分列、Buy & Hold 對照）
 - **警示系統**（價格、訊號、風險上限的自動監測與推播）
 - **離線示範模式**（合成資料集，不適用於決策）
 
@@ -30,7 +30,7 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 | --- | --- |
 | 投資組合摘要卡 | 總資產（已估值部位市值）、未實現損益、標的貢獻、匯率貢獻 |
 | 持倉明細表 | 每筆持倉的標的、市場、成本、現價、市值、P&L、P&L% |
-| 風險儀表 | 投資組合級的五項風險上限狀態（總覽頁缺逐檔輸入，五項在此頁皆恆為 not_evaluable，原因各異；逐檔的實際判定在個股頁建議卡） |
+| 風險儀表 | 投資組合級的五項風險上限狀態，取自 `GET /api/portfolio/limits`（FR-8，`backend/app/api/portfolio.py:99-157` + `book_limits.py` 逐檔聚合全書持倉），回傳每條上限實際的 `status`/`observed`/`threshold`；缺必要輸入的個別上限（例如尚未自報總淨值、美股持倉缺產業別）仍為 `not_evaluable`，但不再五項恆一律如此 |
 | 待處理警示面板 | 未確認警示事件（`unacknowledged=true`），可逐筆確認或標記已處理 |
 
 **資料新鮮度**：
@@ -82,12 +82,12 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 
 #### 區塊三：五項風險上限檢查（Limits Check）
 
-建議卡內的表格，每項上限一列。五項上限中**第 2、5 條目前恆為 not_evaluable**；第 1、4 條一律實際生效；**第 3 條在使用者於設定頁輸入「帳戶總淨值（新台幣）」後才實際生效**，未輸入時維持 not_evaluable。全部 passed 不等於部位安全。
+建議卡內的表格，每項上限一列。第 1、4 條一律實際生效；**第 2 條（單一產業佔比）台股持倉已生效**（`Position.sector`，FR-12），**美股持倉仍恆 not_evaluable**（美股不可填產業別）；**第 3 條在使用者於設定頁輸入「帳戶總淨值（新台幣）」後才實際生效**，未輸入時維持 not_evaluable；**第 5 條（Kelly）目前通常為 not_evaluable**（無盈虧比輸入來源）。全部 passed 不等於部位安全。
 
 | 上限編號 | 上限名稱 | 狀態 | 觀測值 / 閾值 | 備註 |
 | --- | --- | --- | --- | --- |
 | 第 1 條 | 單一標的佔比上限 | `passed` / `violated` / `not_evaluable` | 現有佔比 / 上限佔比 | 單一標的市值 ÷ 總資產 ≥ 上限時 violated |
-| 第 2 條 | 單一產業佔比上限 | — | — | 目前恆 `not_evaluable`（positions 無 sector 欄位） |
+| 第 2 條 | 單一產業佔比上限 | `passed` / `violated` / `not_evaluable`（美股恆此態） | 該產業佔比合計 / 上限佔比 | 台股：`Position.sector` 已可填（37 類 TWSE 封閉清單，FR-12），`backend/app/advice/book_limits.py` 已實作 `sector_weight` 聚合，已生效；美股：不可填產業別（GICS 與 TWSE 非同一體系，尚無已裁決的美股分類標準），本條恆 `not_evaluable` |
 | 第 3 條 | 總曝險上限 | `passed` / `violated` / `not_evaluable` | 已估值部位市值合計 ÷ 自報帳戶總淨值 / 上限比例 | 需使用者在設定頁輸入帳戶總淨值；未輸入、輸入滿 30 天未更新、或任一部位無法估值時為 `not_evaluable` |
 | 第 4 條 | 單筆最大可承受虧損 | `passed` / `violated` / `not_evaluable` | 該標的最大虧損額（ATR×停損倍數） / 上限額 | 若 `add` 同時有 violated，建議降為 `hold` |
 | 第 5 條 | 分數 Kelly 部位上限 | `passed` / `violated` / `not_evaluable` | Kelly 估計部位 / 上限 | Kelly 輸入無來源，通常 `not_evaluable` |
@@ -155,7 +155,7 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 
 ## 回測頁 `/backtest`
 
-單一標的的 MA Cross（均線交叉）策略回測：
+單一標的的策略回測，現有三個內建策略：MA Cross（均線交叉，趨勢跟隨）、RSI Reversal（RSI 均值回歸）、Breakout（突破）：
 
 ### 表單輸入
 
@@ -166,7 +166,7 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 | Start Date | 回測開始日期 | 必填；需在後端資料可得範圍內 |
 | End Date | 回測結束日期 | 必填；≥ Start Date |
 | 類型（instrument_type） | 股票 / 一般 ETF / 槓桿型 ETF / 期貨型 ETF | 影響證交稅率（股票 0.3%、ETF 0.1%） |
-| 策略 | 固定為均線交叉（MA Cross） | 目前唯一支援的策略，下拉選單不可更改；20/60 日窗口寫死在程式碼，表單無法調整 |
+| 策略 | 下拉選單三選一：MA Cross（趨勢跟隨）、RSI Reversal（均值回歸）、Breakout（突破） | 三種皆為內建策略；各策略參數固定於程式碼常數（MA Cross 20/60 日窗口、RSI Reversal 進場 RSI<30／出場回到 50 中線、Breakout 20 日新高進場／10 日新低出場），表單不開放調參 |
 | 起始資金 | 回測起始權益 | 預設 1,000,000 |
 | 樣本內天數（train_size） | **交易日根數**，非日期 | 預設 252（約一年）。這是每一折訓練窗的長度，不是分割日期 |
 | 樣本外天數（test_size） | **交易日根數**，非日期 | 預設 63（約一季）。這是每一折測試窗的長度 |
@@ -204,7 +204,7 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 - 所有數字皆自過去，無法預測未來。
 - 策略側已計交易成本；Buy & Hold 為未計成本的被動基準，兩者不可直接比較獲利差異。
 - 費率（手續費、稅費、規費）尚未經主要來源查證（verified_on 為 null），本報告的成本相關數字應視為待查證狀態。
-- 只有一個內置策略（MA Cross）；其他策略暫無。
+- 現有三個內建策略（MA Cross、RSI Reversal、Breakout）；策略參數固定於程式碼常數，不開放使用者自訂策略。
 - 樣本內績效優異不代表樣本外會重複。
 - 回測為歷史模擬結果，內含成交假設與費率假設，不代表未來績效。
 
@@ -272,19 +272,42 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 - unavailable：無任何來源時，回傳 200 且標記 status=unavailable（不是 5xx 錯誤）。
 
 **US 市場**：
-- 定義上支援 `Market="US"` 與 `Currency="USD"`，但無美股 data provider adapter 實作。
-- 嘗試查詢 US 標的會降級至快取，最終回 `unavailable`。
-- 預期後續實作。
+- `Market="US"` 與 `Currency="USD"` 已有 data provider adapter 實作並接線：主來源 Alpha Vantage
+  （`app/data/providers/alpha_vantage.py`，需環境變數 `ALPHA_VANTAGE_API_KEY`），備援 yfinance
+  （`app/data/providers/yfinance.py`），降級鏈為 TTL 快取先行 → Alpha Vantage → yfinance →
+  任何快取 → unavailable（`backend/app/api/deps.py:89-94`）。
+- **未經真實環境驗證**：兩個 adapter 的端點與回應格式是依公開文件與訓練知識撰寫
+  （`alpha_vantage.py:16-20` 聲明查證日 2026-07-23，尚未對照真實回應查證）；本沙盒環境對外網
+  HTTPS 被擋，無法連線驗證，查證前不應視為 production ready。
+- 在本沙盒環境中，即使 adapter 已接線，實際查詢 US 標的仍只會拿到 `unavailable`（egress 被擋）；
+  是否能在有網路環境取得真實報價，待 devops-sre／data-engineer 以
+  `apps/stock-desk/scripts/verify_market_data.py` 查證。
 
 **FX 匯率**：
 - 已實作台灣銀行 USD/TWD 日線匯率 adapter，取得 1 週回溯資料。
 - 估值層會自動做幣別換算，將未實現損益拆成「標的貢獻／匯率貢獻」。
-- 建議卡層的風控輸入尚未接 FX（位置：`advice/book.py`），故外幣持倉的價格類上限會報 not_evaluable。
-- **未查證揭露（與回測費率同一類問題）**：`fx.py` 自身聲明兩點——(a) 端點與 CSV 欄位格式未對照台灣銀行線上實際回應查證（開發環境無外網）；(b) 所謂「當日匯率」是即期買入價與賣出價的**中點模型值**，並非官方收盤匯率。目前無美股價格來源，USD 部位取不到價格，這條路徑尚未產生任何面向使用者的數字；一旦美股 adapter 上線即轉為活躍，屆時須比照回測頁做常駐揭露。
+- 建議卡層與投資組合層的風控輸入**已接線 FX**（FX1，`app/advice/book.py::build_book_context`
+  算出 `fx_to_twd`；`/api/advice/{symbol}` 與 `/api/portfolio/limits` 皆逐檔注入 FX 報價，見
+  `backend/app/api/advice.py:31,43,54,81,106`、`backend/app/api/portfolio.py:105,149`），外幣持倉
+  不再因缺匯率轉換而使風控上限恆報 not_evaluable；仍取不到價格的美股持倉，則因無法估值而被排除
+  在計算之外（見上方「US 市場」）。
+- 僅支援 USD/TWD 一種幣別對；美股 adapter 若日後支援其他幣別，FX 層需同步擴充。
+- **未查證揭露（與回測費率同一類問題）**：`fx.py` 自身聲明兩點——(a) 端點與 CSV 欄位格式未對照台灣銀行線上實際回應查證（開發環境無外網）；(b) 所謂「當日匯率」是即期買入價與賣出價的**中點模型值**，並非官方收盤匯率。目前美股 adapter 尚未經真實環境驗證，本沙盒環境內 USD 部位仍取不到即時價格，這條 FX 路徑尚未產生任何面向使用者的數字；一旦美股 adapter 查證通過、能實際取得美股報價，FX 這條路徑即轉為活躍，屆時須比照回測頁做常駐揭露。
 
 **指數日線**：
 - 槓桿 ETF 的情境推估需要「標的指數」的日線（e.g., QQQ 對應 Nasdaq-100）。
-- 後端目前無指數 adapter，所以 leverage chapter 的情境推估恆回 insufficient_data。
+- 指數序列已由 yfinance 透過 `IndexProviderBridge` 接進與 US 市場同一套 `MarketDataService`
+  （`backend/app/api/deps.py:98-120`）；`GET /api/leverage/{symbol}` 已實際呼叫
+  `load_index_bars` 並把結果傳入拆解計算（`backend/app/api/leverage.py:84-100`），不再是寫死
+  `index_bars=None` 的呼叫。
+- 17 檔已登記槓桿 ETF 的對映表（`app/leverage/index_mapping.py`）中，12 檔為 `official_index`
+  （有可查詢的指數代號，如 `^NDX`／`^GSPC`／`^TWII`），5 檔（`00631L`、`00632R`、`00680L`、
+  `SOXL`、`SOXS`）為明確聲明的 `unmapped`——已查過、查不到已查證的免費指數序列，刻意不用代理 ETF
+  頂替（代理標的自身費用率與折溢價會污染拆解結果）。這 5 檔的情境推估恆回 `insufficient_data`，
+  原因隨回應附上。
+- 12 檔 mapped 的對映表本身尚未查證：`MAPPING_VERIFIED_ON` 為 `None`，17 筆全部
+  `verified=False`（`index_mapping.py:60,112`）；本沙盒環境對外網被擋，即使是 mapped 標的，此
+  環境內實測仍只會拿到 `unavailable`。
 
 ### 訊號層
 
@@ -315,7 +338,9 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 
 五項上限，每項獨立評估：
 1. **單一標的佔比**：預設 15% 之總資產。
-2. **單一產業佔比**：預設 30%；目前恆 not_evaluable（無 sector 欄位）。
+2. **單一產業佔比**：預設 30%；台股持倉已生效（`Position.sector`，FR-12，37 類 TWSE 封閉清單，
+   `backend/app/advice/book_limits.py` 的 `sector_weight` 聚合），美股持倉仍恆 not_evaluable
+   （美股不可填產業別，GICS 與 TWSE 非同一體系，尚無已裁決的美股分類標準）。
 3. **總曝險**：預設 100%（硬上界 150%）；分子為已估值部位市值合計、分母為使用者在設定頁自報的帳戶總淨值。分子由系統計算、分母由使用者自報，兩者來源不同；比率假設持倉清單完整，未登錄的部位不計入分子，會讓曝險看起來偏低。未輸入淨值、淨值滿 30 天未更新、或任一部位無法估值時為 not_evaluable。
 4. **單筆虧損**：預設 1% 之投資組合淨值；基於 ATR 與停損距離計算。
 5. **Kelly 分數**：預設 0.25（即 25% Kelly）；Kelly 輸入無來源，通常 not_evaluable。
@@ -336,11 +361,14 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 
 ### 回測
 
-- **MA Cross 策略**：long-only（全倉 or 空倉），20/60 日窗口（不可調）。
+- **三個內建策略**（`app/backtest/strategies.py`）：MA Cross（20/60 日均線交叉，long-only 全倉或
+  空倉，趨勢跟隨）、RSI Reversal（RSI<30 進場／回到 50 中線出場，均值回歸，FR-10）、Breakout
+  （20 日新高進場／10 日新低出場，Turtle System 1 參數，突破，FR-11）；三者參數皆固定於程式碼
+  常數，不開放表單調整。
 - **walk-forward**：樣本內與樣本外嚴格分離；無參數越擬合的後向測試。
 - **計交易成本**：策略側扣除手續費、稅費、滑點；Buy & Hold 為未計成本的純價格基準。
 - **無配息調整**（台股特別注意）：收盤價未經除權息調整。
-- **只有一個策略**：暫無新增或自定義策略功能。
+- **不支援自定義策略**：三個策略皆為內建，使用者無法新增或調整策略邏輯。
 
 ### 排程與推播
 
@@ -349,6 +377,18 @@ Stock Desk 是一套本機執行、單人使用的投資分析輔助系統，幫
 - 警示評估：每 60 分鐘（自排程啟動時刻起算）。
 
 排程不是必須；API 調用時也會即時評估。排程的目的是「即使前端未打開，也能監測並推播」。
+
+### 排程台（快市排程，已實作並通過驗收）
+
+CEO 於 2026-08-12 提出的「快市排程」規則集（R1-R4 進場／S1-S3 停損／P1-P3 停利／M1 大盤
+總開關、T+1 開盤執行、EMERGENCY_EXIT 全部出清）已完整實作於獨立模組 `backend/app/playbook/`
+（models／engine／store／service／wording／calendar／indicators），與既有 `app/advice/` 建議
+引擎並存不合併，與上方 `scheduler.py` 排程（資料更新／警示評估）也是不同的東西。前端頁面為
+`/playbook` 排程台（`frontend/app/playbook/`）：今日指令帳冊、持倉快照、模式狀態列、規則集
+確認面板與 EXIT 中性確認流程。所有面向使用者的字句經風控逐字定稿（六輪，
+`work/reviews/快市排程-風控前置意見.md`），2026-08-12 經 qa 審查、e2e 等效驗收與 CEO 本機
+驗收全數通過。設計原則：系統不下單，指令為使用者自設規則的機械執行結果；規則企劃全文見
+`work/stock-desk-快市排程-企劃.md`。
 
 ---
 
@@ -451,7 +491,10 @@ A: 可能有三種原因：
 3. 防禦型建議即使資料不足 50% 仍會計算，但 `add` 會停止評估，卡片降為 `insufficient_data`。卡片上會明示理由。
 
 **Q: US 標的為什麼沒有價格？**
-A: 美股 data provider adapter 尚未實作。後端定義上支援 Market=US，但無法取得美股日線。預期後續發佈。
+A: 美股 data provider adapter（Alpha Vantage 主、yfinance 備援）已實作並接線，但兩者的端點與回應
+格式尚未對照真實環境查證；本沙盒環境對外網被擋，實測仍只會拿到 `unavailable`。待 devops-sre／
+data-engineer 在有網路環境以 `apps/stock-desk/scripts/verify_market_data.py` 查證後，才能視為
+可正常取得美股日線。
 
 **Q: 我可以修改規則嗎？**
 A: 規則檔案存在後端的 `app/advice/rules/default.yaml`。修改需要：
@@ -483,3 +526,9 @@ A: 回測是模擬，無法完全複製現實，主要原因：
 本工具為研究與教育用途。所有計算都公開透明、可追蹤來源；如有疑問或發現異常，請檢查資料層狀態、訊號欄位、規則檔案，必要時向開發團隊回報。
 
 **絕不保證任何報酬、風險或績效；所有決策最終由使用者自行承擔。**
+
+---
+
+## 更新紀錄
+
+- **2026-08-13**（tech-writer，風控預審退件 `work/reviews/E1-定位深化-文案預審.md` 前置裁定二，逐檔讀 code 核實，對照 commit `2414a74`，並以 `work/stock-desk-已知限制與後續.md` 2026-08-10 核實版＋2026-08-12/13 更新日誌為對齊基準）：修正第 2 條風控上限（台股已生效、美股仍 not_evaluable）、投資組合總覽頁風險儀表（已改接 `/api/portfolio/limits` 實際判定，非恆五項 not_evaluable）、US 市場與指數 adapter（Alpha Vantage／yfinance 已接線，但未經真實環境驗證）、FX 風控層（已接線，`fx.py` 本身仍未查證）、回測策略（由僅 MA Cross 更新為 MA Cross／RSI Reversal／Breakout 三策略）等多處過期敘述；新增「排程台」一節（初稿誤標「規劃中，尚未實作」，經協調人對照 `backend/app/playbook/` 與 2026-08-12 驗收紀錄更正為「已實作並通過驗收」）。
