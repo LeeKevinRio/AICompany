@@ -1870,6 +1870,11 @@ button.link.danger {
   font-weight: 700;
 }
 
+/* v2.1 建議做（匯率換算）：本場換算列，語意為資訊性統計而非金額增減，改用次要文字色 */
+.kitty-row.avg-row {
+  color: var(--color-text-secondary);
+}
+
 /* 排名條輸贏警戒 */
 .rank-row.lose-alert {
   background: rgba(240, 82, 82, 0.08);

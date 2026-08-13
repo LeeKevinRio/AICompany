@@ -1,6 +1,7 @@
 // 本場每人累計輸贏（結算頁用）。淨額含自摸付出的東錢；另顯示公基金累計。
 import type { Player, Round, SessionRules, Settings } from '../types';
 import { settleSession } from '../scoring/scoring';
+import { calcSessionHighlights } from '../scoring/timeline';
 import type { TableState } from '../scoring/dealer';
 import { Amount } from './ui';
 
@@ -39,6 +40,17 @@ export function Standings({ rounds, players, settings, rules, tableState }: Prop
     .map((p) => ({ player: p, amount: net[p.id] ?? 0 }))
     .sort((a, b) => b.amount - a.amount);
 
+  // v2.1 建議做（匯率換算）：折合每局平均底台金額、平均台數，讓玩家一眼看出今天牌風大小台。
+  // 流局不計入分母（與 calcSessionHighlights 內部一致），無有效局數時不顯示此列。
+  const scoredCount = rounds.filter((r) => !r.drawn).length;
+  const { avgRoundAmount, avgTai } = calcSessionHighlights(
+    rounds,
+    players,
+    settings,
+    rules,
+    dealerCtxs,
+  );
+
   return (
     <section className="card">
       <h2>本場累計</h2>
@@ -57,6 +69,14 @@ export function Standings({ rounds, players, settings, rules, tableState }: Prop
         <div className="kitty-row">
           <span>公基金（東錢累計）</span>
           <span className="tabular">${kitty.toLocaleString('en-US')}</span>
+        </div>
+      )}
+      {scoredCount > 0 && (
+        <div className="kitty-row avg-row">
+          <span>本場換算</span>
+          <span className="tabular">
+            平均底台 ${avgRoundAmount.toLocaleString('en-US')} · 平均 {avgTai.toFixed(1)} 台
+          </span>
         </div>
       )}
     </section>
