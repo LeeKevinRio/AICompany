@@ -95,7 +95,7 @@ def test_sync_never_deletes_rows_a_later_response_no_longer_lists(tmp_path: Path
     )
     assert store.count() == 4
 
-    only_one_row = [row for row in _fixture() if row.get("Code") == "2330"]  # type: ignore[union-attr]
+    only_one_row = [row for row in _fixture() if row.get("Code") == "2330"]  # type: ignore[attr-defined]
     sync_dividends(
         store=store,
         adapter=TwseDividendAdapter(client=_ok_client(only_one_row)),
