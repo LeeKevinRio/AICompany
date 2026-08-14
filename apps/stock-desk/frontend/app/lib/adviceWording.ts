@@ -124,6 +124,19 @@ export function buildAsOfStatement(dateIso: string): string {
 }
 
 /**
+ * S5 fix (risk-final-review.md 列管項:「as-of 語句可能退化為破折號空句」;
+ * 裁決僅有方向、無既定字面,本句為自擬保守句,待風控覆核): §2 item 3 requires
+ * the as-of statement to be present on *every* card, but the previous call
+ * site (`operationSummary.ts`'s `buildRequiredElements`) fell back to the
+ * placeholder string `"—"` when the envelope carried neither
+ * `last_bar_date` nor `observation_window.end`, producing an unreadable
+ * "本評估基於 —收盤資料。" — a sentence that *looks* like it discloses a
+ * basis date while actually disclosing nothing. This sentence states the
+ * gap honestly instead of hiding it behind a dash.
+ */
+export const AS_OF_DATE_UNKNOWN_STATEMENT = "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。";
+
+/**
  * AC-C8.2 / 風控複審 2026-08-09 裁決 b: the extra prominent notice for data
  * whose calendar-day age has crossed `STALE_CALENDAR_DAY_THRESHOLD`
  * (`tradingCalendar.ts`). States the actual basis date and the calendar-day
@@ -165,6 +178,14 @@ export function summaryConfidenceLabel(value: Confidence): string {
  * facing categories that file does not scan (this module is the file that
  * scan was missing). Exported so the guard test can import the same list
  * instead of re-typing it and drifting.
+ *
+ * S6 fix (work/reviews/risk-final-review.md 列管項:「禁用詞清單前後端鏡像漂
+ * 移」): the 保證性/價格目標 sections below are now guarded against drifting
+ * from the backend by `sharedForbiddenTerms.test.ts`, which reads the same
+ * `shared/forbidden-terms.json` the backend's `test_advice_wording.py`
+ * reads and asserts every term there is present in this list — that scan
+ * caught `穩賠` (present in the backend's `loader.BANNED_PHRASES`, missing
+ * here) and is added below to close the gap it found.
  */
 export const FRONTEND_FORBIDDEN_TERMS: readonly string[] = [
   // 保證性
@@ -173,6 +194,7 @@ export const FRONTEND_FORBIDDEN_TERMS: readonly string[] = [
   "必跌",
   "必賺",
   "穩賺",
+  "穩賠",
   "包賺",
   "零風險",
   "無風險",

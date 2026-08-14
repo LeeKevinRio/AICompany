@@ -12,6 +12,7 @@
 
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
+  AS_OF_DATE_UNKNOWN_STATEMENT,
   buildAsOfStatement,
   buildAttributedHeadline,
   buildCandidateCoverageStatement,
@@ -116,6 +117,20 @@ function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: stri
   return { name: top.name, explanation: top.explanation };
 }
 
+/**
+ * S5 fix (risk-final-review.md 列管項): picks the same date `buildAsOfStatement`
+ * used to receive via `lastBarDate ?? card.observation_window.end ?? "—"`,
+ * except that when both sources are `null` this returns the honest
+ * `AS_OF_DATE_UNKNOWN_STATEMENT` instead of formatting the `"—"` placeholder
+ * as if it were a date. Pure and unit-tested in isolation from the rest of
+ * `buildRequiredElements` so the three branches (last-bar date, observation-
+ * window fallback, both absent) each have a direct assertion.
+ */
+export function resolveAsOfStatement(lastBarDate: string | null, observationEnd: string | null): string {
+  const dateIso = lastBarDate ?? observationEnd;
+  return dateIso === null ? AS_OF_DATE_UNKNOWN_STATEMENT : buildAsOfStatement(dateIso);
+}
+
 function buildRequiredElements(
   card: AdviceCard,
   candidate: boolean,
@@ -140,7 +155,13 @@ function buildRequiredElements(
     // the same `DataMeta` the bars endpoint publishes), falling back to the
     // card's own `observation_window.end` only when the envelope carried no
     // `last_bar_date` at all.
-    asOfStatement: buildAsOfStatement(lastBarDate ?? card.observation_window.end ?? "—"),
+    //
+    // S5 fix (risk-final-review.md 列管項): when *neither* field is present,
+    // this used to fall back to the placeholder `"—"` and hand it straight
+    // to `buildAsOfStatement`, degrading the §2-mandatory as-of sentence
+    // into an unreadable "本評估基於 —收盤資料。" instead of disclosing the
+    // gap. `resolveAsOfStatement` below states that gap honestly instead.
+    asOfStatement: resolveAsOfStatement(lastBarDate, card.observation_window.end),
     nonRealtimeNotice: NON_REALTIME_NOTICE,
     counterarguments: card.counterarguments,
     invalidationConditions: card.invalidation_conditions,

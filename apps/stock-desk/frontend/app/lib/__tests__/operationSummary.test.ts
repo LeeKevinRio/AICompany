@@ -210,6 +210,34 @@ describe("buildOperationSummary — held mode", () => {
   });
 
   it(
+    "S5 fix (risk-final-review.md 列管項): states the gap honestly instead of degrading to a dash " +
+      "when neither last_bar_date nor observation_window.end is present",
+    () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          advice: makeCard({ observation_window: { start: null, end: null, bars: null } }),
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: null,
+            last_bar_date: null,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.required.asOfStatement).toBe(
+        "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。",
+      );
+      expect(model.required.asOfStatement).not.toContain("—");
+      expect(model.required.asOfStatement).not.toContain("本評估基於");
+    },
+  );
+
+  it(
     "picks the heaviest matched rule as the main basis even when it points the opposite way from the " +
       "final (defensive-downgraded) action — current behaviour pinned as-is, not a fix: AC-C6.1 only asks " +
       "for \"the heaviest matched rule\", not \"the heaviest rule in the winning direction\", so whether a " +
