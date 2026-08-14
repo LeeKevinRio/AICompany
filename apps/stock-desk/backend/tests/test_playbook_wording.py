@@ -20,8 +20,8 @@ from decimal import Decimal
 
 import pytest
 
+from app.data.calendar import TradingCalendar
 from app.playbook import wording
-from app.playbook.calendar import TradingCalendar
 from app.playbook.engine import emergency_frozen_day
 from app.playbook.models import Directive, RuleParams, RuleSetAuthorship
 from tests import playbook_helpers as helper

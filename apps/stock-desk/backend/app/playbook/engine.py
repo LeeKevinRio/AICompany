@@ -32,9 +32,9 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 
+from app.data.calendar import TradingCalendar
 from app.demo.series import DEMO_SOURCE
 from app.playbook import wording
-from app.playbook.calendar import TradingCalendar
 from app.playbook.models import (
     Action,
     BatchSnapshot,

@@ -138,15 +138,23 @@ export const AS_OF_DATE_UNKNOWN_STATEMENT = "本評估未取得收盤資料的�
 
 /**
  * AC-C8.2 / 風控複審 2026-08-09 裁決 b: the extra prominent notice for data
- * whose calendar-day age has crossed `STALE_CALENDAR_DAY_THRESHOLD`
- * (`tradingCalendar.ts`). States the actual basis date and the calendar-day
+ * the market has moved past. States the actual basis date and the size of the
  * gap instead of a vague "超過一個交易日" so the reader is not left to guess
  * the magnitude the fixed sentence used to hide.
+ *
+ * C4 (2026-08-13) — **待風控覆核**: `days` changed meaning from calendar days
+ * to *trading* days now that the backend publishes a real trading calendar
+ * (`data.trading_days_behind`, see `tradingCalendar.ts`). The sentence keeps
+ * its shape and every other word; only the unit is corrected, deliberately, so
+ * the change to review is one term rather than a rewrite. The unit had to
+ * change with the number: leaving 「日曆日」 over a trading-day count would be
+ * a false statement, and it was the calendar-day stand-in — not this句式 —
+ * that the 2026-08-09 裁決 was working around.
  */
 export function buildStaleDataProminentNotice(lastBarDate: string, days: number): string {
   // risk-final-review.md 最終複審(2026-08-09)新列管:半形逗號統一為全形,與本檔
   // 其餘句子(§3.1/§3.3 等)的標點慣例一致;文字內容不變,僅標點字元置換。
-  return `本評估所依據的收盤資料為 ${lastBarDate}，距今已 ${days} 個日曆日未更新，僅供參考，不代表最新市況。`;
+  return `本評估所依據的收盤資料為 ${lastBarDate}，距今已 ${days} 個交易日未更新，僅供參考，不代表最新市況。`;
 }
 
 /**

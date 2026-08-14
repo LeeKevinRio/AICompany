@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from app.data.cache import resolve_db_path
-from app.playbook.calendar import TradingCalendar
+from app.data.calendar import TradingCalendar
 from app.playbook.models import (
     BatchState,
     Directive,

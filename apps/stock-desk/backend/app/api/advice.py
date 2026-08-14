@@ -31,10 +31,12 @@ from app.api.deps import (
     get_fx_provider,
     get_market_resolver,
     get_position_store,
+    get_price_bar_cache,
     get_settings_store,
     get_valuator,
 )
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
+from app.data.cache import PriceBarCache
 from app.data.providers.fx import FxRateProvider
 from app.portfolio.summary import build_summary
 from app.portfolio.valuation import PositionValuator
@@ -52,6 +54,7 @@ StoreDep = Annotated[PositionStore, Depends(get_position_store)]
 ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
+CalendarDep = Annotated[PriceBarCache, Depends(get_price_bar_cache)]
 
 
 class AdviceResponse(EnvelopeBase):
@@ -79,6 +82,7 @@ def get_advice(
     valuator: ValuatorDep,
     settings_store: SettingsDep,
     fx_provider: FxProviderDep,
+    calendar_source: CalendarDep,
     market: Annotated[Market, Query(description="市場別")] = "TW",
 ) -> AdviceResponse:
     end = date.today()
@@ -88,6 +92,9 @@ def get_advice(
         market=market,
         start=end - timedelta(days=DEFAULT_LOOKBACK_DAYS),
         end=end,
+        # This endpoint is the one that publishes the 資料過舊 notice, so it is
+        # the one that pays for the calendar lookup (C4).
+        calendar_source=calendar_source,
     )
     summary = build_summary(store, valuator)
     settings = settings_store.load()

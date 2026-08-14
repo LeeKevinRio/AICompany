@@ -82,3 +82,23 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
     assertNoForbiddenTerms(joined, FRONTEND_FORBIDDEN_TERMS, "adviceWording.ts rendered surface");
   });
 });
+
+describe("buildStaleDataProminentNotice — the C4 wording change (待風控覆核)", () => {
+  it("states the gap in trading days, keeping the 2026-08-09-approved sentence shape", () => {
+    // The literal sentence is pinned here so the review of the C4 change has
+    // one place to read it: only the unit moved (日曆日 -> 交易日), because the
+    // number it qualifies is now an observed trading-session count
+    // (`data.trading_days_behind`) and leaving 「日曆日」 over it would be a
+    // false statement. Every other word is unchanged from the 2026-08-09
+    // 裁決 b sentence, including the 全形 punctuation of the final review.
+    expect(buildStaleDataProminentNotice("2026-08-04", 3)).toBe(
+      "本評估所依據的收盤資料為 2026-08-04，距今已 3 個交易日未更新，僅供參考，不代表最新市況。",
+    );
+  });
+
+  it("names the basis date and the magnitude rather than hiding either", () => {
+    const notice = buildStaleDataProminentNotice("2026-02-13", 12);
+    expect(notice).toContain("2026-02-13");
+    expect(notice).toContain("12");
+  });
+});

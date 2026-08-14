@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from app.playbook.calendar import TradingCalendar
+from app.data.calendar import TradingCalendar
 from app.playbook.models import (
     BatchState,
     IndexSnapshot,

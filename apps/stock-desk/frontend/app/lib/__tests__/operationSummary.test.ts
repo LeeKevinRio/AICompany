@@ -19,7 +19,6 @@ import {
   HELD_ACTION_LABELS,
   QUANTITY_RANGE_ABSENCE_TEXT,
 } from "../adviceWording";
-import { calendarDaysSince } from "../tradingCalendar";
 
 function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
   return {
@@ -86,6 +85,7 @@ function makeResponse(
       bar_count: 300,
       first_bar_date: "2025-05-01",
       last_bar_date: "2026-08-04",
+      trading_days_behind: null,
       reason: null,
     },
     ...overrides,
@@ -177,6 +177,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: "2026-08-04",
+          trading_days_behind: null,
           reason: null,
         },
       }),
@@ -201,6 +202,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: null,
+          trading_days_behind: null,
           reason: null,
         },
       }),
@@ -224,6 +226,7 @@ describe("buildOperationSummary — held mode", () => {
             bar_count: 300,
             first_bar_date: null,
             last_bar_date: null,
+            trading_days_behind: null,
             reason: null,
           },
         }),
@@ -328,8 +331,9 @@ describe("buildOperationSummary — held mode", () => {
   // R4 fix (risk-final-review.md): the "data older than one trading day"
   // notice must key off the age of `last_bar_date`, not off
   // `data.status === "cached_stale"` (a source-degradation signal, not a
-  // data-age one). B1 fix (risk-fix-review.md): "age" is measured in plain
-  // calendar days against a long buffer — see tradingCalendar.ts's header.
+  // data-age one). C4 (2026-08-13): "age" is the backend's observed
+  // `trading_days_behind`, replacing the B1 calendar-day stand-in — see
+  // tradingCalendar.ts's header.
   it("does NOT show the stale-data notice for a same-day cached_stale read (source downgrade alone is not staleness)", () => {
     const today = new Date().toISOString().slice(0, 10);
     const model = buildOperationSummary(
@@ -342,6 +346,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: today,
+          trading_days_behind: 0,
           reason: null,
         },
       }),
@@ -350,12 +355,10 @@ describe("buildOperationSummary — held mode", () => {
     expect(model.staleDataNotice).toBeNull();
   });
 
-  it("DOES show the stale-data notice once last_bar_date is well beyond the calendar-day buffer, even on a fresh read", () => {
-    // B1 fix (risk-fix-review.md): the threshold is calendar days, wide
-    // enough to absorb TWSE's longest closure (see tradingCalendar.ts), so
-    // this must clearly exceed STALE_CALENDAR_DAY_THRESHOLD (10) rather than
-    // just "more than one trading day".
-    const wellPastBuffer = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  it("DOES show the stale-data notice from one missed trading session, even on a fresh read", () => {
+    // C4: the threshold is back to the one 風控複審 2026-08-09 asked for —
+    // a single session the market had and this series does not.
+    const lastSession = "2026-08-04";
     const model = buildOperationSummary(
       makeResponse({
         data: {
@@ -365,24 +368,43 @@ describe("buildOperationSummary — held mode", () => {
           is_within_ttl: null,
           bar_count: 300,
           first_bar_date: "2025-05-01",
-          last_bar_date: wellPastBuffer,
+          last_bar_date: lastSession,
+          trading_days_behind: 1,
           reason: null,
         },
       }),
     );
     if (model.kind !== "held") throw new Error("unreachable");
     // 風控複審 2026-08-09 裁決 b: the notice must name the actual basis date
-    // and calendar-day gap, not a vague "超過一個交易日" magnitude-hiding phrase.
-    expect(model.staleDataNotice).toBe(
-      buildStaleDataProminentNotice(wellPastBuffer, calendarDaysSince(wellPastBuffer)),
-    );
-    expect(model.staleDataNotice).toContain(wellPastBuffer);
+    // and the size of the gap, not a vague magnitude-hiding phrase.
+    expect(model.staleDataNotice).toBe(buildStaleDataProminentNotice(lastSession, 1));
+    expect(model.staleDataNotice).toContain(lastSession);
   });
 
-  it("[B1] does NOT show the stale-data notice across an unmodelled long holiday gap within the calendar-day buffer", () => {
-    // Simulates the exact regression risk-fix-review.md flagged: a long
-    // (e.g. Lunar New Year) closure that this module does not model as
-    // holidays, staying under STALE_CALENDAR_DAY_THRESHOLD calendar days.
+  it("reports the backend's session count verbatim, not a recomputed one", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 4000,
+          is_within_ttl: false,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: "2026-08-04",
+          trading_days_behind: 5,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBe(buildStaleDataProminentNotice("2026-08-04", 5));
+  });
+
+  it("[B1] does NOT show the stale-data notice across an unmodelled long closure (0 observed sessions)", () => {
+    // The exact regression risk-fix-review.md flagged, now settled on the
+    // backend: a 農曆年-length closure produces no bars, so no session is
+    // counted and the gap arrives as 0 however many calendar days elapsed.
     const nineDaysAgo = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const model = buildOperationSummary(
       makeResponse({
@@ -394,6 +416,30 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: nineDaysAgo,
+          trading_days_behind: 0,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBeNull();
+  });
+
+  it("[C4 fail-safe] does NOT show the stale-data notice when the backend could not consult a calendar", () => {
+    // `trading_days_behind === null` is "unknown", and an unknown gap is never
+    // presented as an old one — the direction of failure B1 established.
+    const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const model = buildOperationSummary(
+      makeResponse({
+        data: {
+          status: "fresh",
+          source: "twse",
+          staleness_minutes: 5,
+          is_within_ttl: null,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: longAgo,
+          trading_days_behind: null,
           reason: null,
         },
       }),
@@ -413,6 +459,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: null,
+          trading_days_behind: null,
           reason: null,
         },
       }),

@@ -23,10 +23,12 @@ from app.api.deps import (
     get_index_resolver,
     get_market_resolver,
     get_position_store,
+    get_price_bar_cache,
     get_quota_ledger,
     get_settings_store,
     get_valuator,
 )
+from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
 from app.data.quota import QuotaLedger
@@ -57,6 +59,12 @@ class ApiHarness:
     #: machine that has never run ``python -m app.dividends.sync`` is in, so the
     #: "未還原" disclosure is what tests see unless they seed events.
     dividends: DividendEventStore
+    #: Temp-directory bar cache, read as the trading calendar behind
+    #: ``data.trading_days_behind`` (C4). **Empty by default**: the fake price
+    #: services never write to it, so unless a test seeds sessions the calendar
+    #: has observed nothing and the field is ``null`` -- "cannot judge", which
+    #: is the honest answer for a harness with no market history.
+    bar_cache: PriceBarCache
 
 
 @pytest.fixture
@@ -94,6 +102,7 @@ def api_harness(
     settings = SettingsStore(db_path=tmp_path / "settings.db")
     quota = QuotaLedger(db_path=tmp_path / "quota.db")
     dividends = DividendEventStore(db_path=tmp_path / "dividends.db")
+    bar_cache = PriceBarCache(db_path=tmp_path / "bars.db")
     valuator = PositionValuator(
         market_services={"TW": price_service},
         fx_provider=fx_provider,
@@ -111,6 +120,7 @@ def api_harness(
     app.dependency_overrides[get_fx_provider] = lambda: fx_provider
     app.dependency_overrides[get_quota_ledger] = lambda: quota
     app.dependency_overrides[get_dividend_store] = lambda: dividends
+    app.dependency_overrides[get_price_bar_cache] = lambda: bar_cache
 
     with TestClient(app) as test_client:
         yield ApiHarness(
@@ -123,6 +133,7 @@ def api_harness(
             fx_provider=fx_provider,
             quota=quota,
             dividends=dividends,
+            bar_cache=bar_cache,
         )
     app.dependency_overrides.clear()
 

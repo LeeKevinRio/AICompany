@@ -55,6 +55,15 @@ CREATE INDEX IF NOT EXISTS idx_price_bars_cache_lookup
 ON price_bars_cache (symbol, market, trade_date)
 """
 
+#: The lookup above is keyed on ``symbol`` first, so the market-wide trade-date
+#: scan :meth:`PriceBarCache.market_trading_days` runs cannot use it. This one
+#: exists for that query alone (C4): it is issued on every advice request, and a
+#: full table scan there would grow with every symbol the user ever opened.
+_CREATE_MARKET_DATE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_price_bars_cache_market_date
+ON price_bars_cache (market, trade_date)
+"""
+
 
 def resolve_db_path() -> Path:
     """Resolve the cache database path from ``STOCK_DESK_DB_PATH`` (or the default)."""
@@ -124,6 +133,7 @@ class PriceBarCache:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
+            conn.execute(_CREATE_MARKET_DATE_INDEX_SQL)
 
     def put(
         self,
@@ -230,6 +240,52 @@ class PriceBarCache:
                         for trade_date, row_source in cursor.fetchall()
                     )
         return conflicts
+
+    def market_trading_days(self, market: Market, start: date, end: date) -> frozenset[date]:
+        """Dates in ``[start, end]`` **any** ``market`` series produced a bar on.
+
+        The product's trading calendar, observed rather than tabulated (C4): a
+        date is a session because some series traded on it, so 農曆年、颱風假 and
+        every other closure -- including the ad-hoc ones no fixed holiday table
+        can predict -- are simply absent, with no yearly upkeep.
+
+        Scoped to one market because the two markets keep different calendars,
+        and read across every symbol because that is what makes it a *market*
+        calendar: a single series can be missing a session because its own
+        provider failed, while the market as a whole clearly traded.
+
+        An empty result means "this cache has observed nothing here", never
+        "the market never traded" -- see :func:`app.services.market.load_bars`
+        for the fail-safe the caller applies to that case.
+
+        One stated limit: the offline demo seeder writes a *weekday* grid with
+        no holidays modelled (``app/demo/series.py::trading_days``), so a
+        database holding demo bars reports demo weekdays as sessions. It is
+        self-limiting -- every demo series shares that one grid, so a
+        demo-only database still measures a gap of 0 -- but a database mixing
+        seeded and live bars can over-count. Retracting the demo rows
+        (``delete_by_source``) is what the seeder documents for leaving demo
+        mode, and it clears this too.
+        """
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                """
+                SELECT DISTINCT trade_date
+                FROM price_bars_cache
+                WHERE market = ? AND trade_date BETWEEN ? AND ?
+                """,
+                (market, start.isoformat(), end.isoformat()),
+            )
+            rows = cursor.fetchall()
+        days: set[date] = set()
+        for (trade_date,) in rows:
+            try:
+                days.add(date.fromisoformat(trade_date))
+            except ValueError:
+                # Corrupt row: skip it, exactly as ``get`` does, rather than
+                # letting one bad key take down a freshness check.
+                continue
+        return frozenset(days)
 
     def delete_by_source(self, source: str) -> int:
         """Delete every cached bar tagged with ``source``; return the row count.

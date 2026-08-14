@@ -25,9 +25,9 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
 from app.playbook import indicators, wording
-from app.playbook.calendar import TradingCalendar
 from app.playbook.engine import (
     emergency_frozen_day,
     evaluate,

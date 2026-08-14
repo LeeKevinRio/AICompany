@@ -239,6 +239,16 @@ def get_market_resolver() -> MarketDataResolver:
     return _default_resolver()
 
 
+def get_price_bar_cache() -> PriceBarCache:
+    """Return the process-wide bar cache, read as a trading calendar (C4).
+
+    The same object every ladder writes through, so the calendar it answers
+    with is every session the process has actually observed -- across symbols,
+    including the index series -- rather than a second store to keep in sync.
+    """
+    return _default_cache()
+
+
 def get_index_resolver() -> IndexServiceResolver:
     """Return the process-wide market -> index series service map."""
     return _default_index_resolver()

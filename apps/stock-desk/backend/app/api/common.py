@@ -41,6 +41,13 @@ class DataMeta(BaseModel):
     bar_count: int
     first_bar_date: str | None
     last_bar_date: str | None
+    #: Observed market sessions since ``last_bar_date`` -- the data-*age*
+    #: measure, as opposed to the source-*degradation* one ``status`` carries
+    #: (C4). ``null`` means no trading calendar could be consulted, which a
+    #: reader must not round to "fresh"; ``0`` means the market has had no
+    #: session since, including during a closure. See
+    #: :func:`app.services.market.trading_days_behind_market`.
+    trading_days_behind: int | None = None
     reason: str | None
 
 

@@ -19,6 +19,7 @@ function makeSource(symbol: string, status: string): SymbolDataMeta {
       bar_count: 100,
       first_bar_date: "2026-01-01",
       last_bar_date: "2026-08-08",
+      trading_days_behind: null,
       reason: null,
     },
   };

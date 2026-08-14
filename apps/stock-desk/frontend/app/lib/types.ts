@@ -224,6 +224,16 @@ export interface DataMeta {
   bar_count: number;
   first_bar_date: string | null;
   last_bar_date: string | null;
+  /**
+   * Backend `DataMeta.trading_days_behind` (app/api/common.py, C4): how many
+   * sessions the market was *observed* to have had since `last_bar_date` —
+   * the data-*age* measure, as opposed to the source-*degradation* one
+   * `status` carries. `null` means no trading calendar could be consulted and
+   * must not be rounded to "fresh"; `0` means the market has had no session
+   * since, which is also what a closure looks like. Only the advice endpoint
+   * populates it today; every other envelope reports `null`.
+   */
+  trading_days_behind: number | null;
   reason: string | null;
 }
 

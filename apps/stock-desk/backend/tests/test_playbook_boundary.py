@@ -37,7 +37,9 @@ GUARDED_MODULES = (
     "app.playbook.store",
     "app.playbook.models",
     "app.playbook.indicators",
-    "app.playbook.calendar",
+    # ``app.playbook.calendar`` moved to ``app.data.calendar`` (C4, 2026-08-13);
+    # it is still scanned, just transitively, because ``service``/``engine``/
+    # ``store`` import it -- ``reachable_app_modules`` follows the edge.
     "app.playbook.wording",
     "app.playbook.price_fields",
 )

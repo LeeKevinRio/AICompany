@@ -29,7 +29,7 @@ import {
   NON_REALTIME_NOTICE,
   QUANTITY_RANGE_ABSENCE_TEXT,
 } from "./adviceWording";
-import { calendarDaysSince, isDataStaleByCalendar } from "./tradingCalendar";
+import { isDataStaleByTradingDays } from "./tradingCalendar";
 
 /**
  * The eight elements §2 of the wording brief requires on every rendered
@@ -191,18 +191,18 @@ export function buildOperationSummary(
   // not stale). `cached_stale` itself continues to be surfaced separately
   // by `DataMetaStatusBadge`.
   //
-  // B1 fix (risk-fix-review.md): "how old" is deliberately measured in
-  // plain calendar days against a buffer wide enough to absorb TWSE's
-  // longest realistic closure (Lunar New Year), NOT a modelled trading-day
-  // gap — see `tradingCalendar.ts`'s header for why the trading-day model
-  // over-counted the gap across unmodelled movable holidays and produced a
-  // false alarm on the first trading day back from a long closure. This
-  // trade-off means a short (a few trading days, ~10 calendar days or less)
-  // genuine staleness during a normal week is not flagged — an accepted
-  // false negative, documented alongside the threshold constant.
+  // C4 (2026-08-13): "how old" is now the backend's `trading_days_behind` —
+  // sessions the market was observed to have had since `last_bar_date` —
+  // replacing the B1 stop-gap that counted plain calendar days against a >10
+  // buffer because no trading calendar reached the browser. The threshold is
+  // back to one missed session, and the fail-safe is unchanged: an unmodelled
+  // closure produces no sessions to count (no false alarm), and a `null` gap
+  // means the calendar could not be consulted and nothing is claimed. See
+  // `tradingCalendar.ts`'s header.
+  const tradingDaysBehind = response.data.trading_days_behind;
   const staleDataNotice =
-    lastBarDate !== null && isDataStaleByCalendar(lastBarDate)
-      ? buildStaleDataProminentNotice(lastBarDate, calendarDaysSince(lastBarDate))
+    lastBarDate !== null && tradingDaysBehind !== null && isDataStaleByTradingDays(tradingDaysBehind)
+      ? buildStaleDataProminentNotice(lastBarDate, tradingDaysBehind)
       : null;
 
   if (card.action === "insufficient_data") {

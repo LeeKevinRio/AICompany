@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
 from app.playbook import indicators
-from app.playbook.calendar import TradingCalendar
 from tests.api_helpers import recent_bars
 from tests.playbook_helpers import calendar
 
