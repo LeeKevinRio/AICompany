@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
+import { US_DATA_SOURCE_DISCLOSURE_STATEMENT } from "../../settings/DataSourcesSection";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 const SCANNED_FILES = [
@@ -90,6 +91,10 @@ const SCANNED_FILES = [
   // exists to reach. Their approved *wording* is pinned separately, against the
   // rendered output, by `app/playbook/__tests__/RuleSetConfirmPanel.test.ts`.
   "../../playbook/RuleSetConfirmPanel.tsx",
+  // D4 定稿(work/stock-desk-D4-資料來源措辭.md,含 R-D4-1,risk-compliance
+  // -officer APPROVE):美股揭露句是這批新加的硬編碼 JSX 文案，該檔先前完全
+  // 不在掃描清單內。
+  "../../settings/DataSourcesSection.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
@@ -105,4 +110,33 @@ describe("component source scan — §1.3 banned-term coverage on hard-coded JSX
       expect(findBareRealtimeClaims(source)).toEqual([]);
     });
   }
+});
+
+/**
+ * D4 揭露句 (`work/stock-desk-D4-資料來源措辭.md`「一之 2」，含 R-D4-1)：
+ * 比照 `adviceWording.test.ts` 對 `AS_OF_DATE_UNKNOWN_STATEMENT` 的作法，把
+ * exported 常數本身（而不只是原始檔案文字）納入掃描面，防止日後改寫時只改了
+ * JSX 卻漏改常數（或反之）而逃過上面的原始檔掃描。
+ */
+describe("DataSourcesSection.tsx — US_DATA_SOURCE_DISCLOSURE_STATEMENT (D4 定稿逐字)", () => {
+  it("contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      US_DATA_SOURCE_DISCLOSURE_STATEMENT,
+      FRONTEND_FORBIDDEN_TERMS,
+      "US_DATA_SOURCE_DISCLOSURE_STATEMENT",
+    );
+  });
+
+  it("every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(US_DATA_SOURCE_DISCLOSURE_STATEMENT)).toEqual([]);
+  });
+
+  it("matches the D4 定稿 verbatim wording, including the R-D4-1 ALPHA_VANTAGE_DAILY_LIMIT sentence", () => {
+    expect(US_DATA_SOURCE_DISCLOSURE_STATEMENT).toBe(
+      "美股（US）已完成接線，並以測試替身通過自動化測試；尚未以真實 API key 對外部服務實際發送過請求。" +
+        "需設定環境變數 ALPHA_VANTAGE_API_KEY；未設定時此層直接跳過，不嘗試發送請求。" +
+        "另需設定環境變數 ALPHA_VANTAGE_DAILY_LIMIT（每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。" +
+        "實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態。",
+    );
+  });
 });
