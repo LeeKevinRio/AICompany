@@ -3,7 +3,7 @@
 - 出處任務：D4 草案退件改寫，僅重審 D4 段
 - 依據：`work/reviews/2026-08-13-衝刺措辭覆核.md`「項目 4：D4 草案」VETO 裁決
 - 對應檔案（現況版面結構）：`apps/stock-desk/frontend/app/settings/DataSourcesSection.tsx`
-- 狀態：**待風控重審（僅 D4 段）**
+- 狀態：**定稿已落地**（2026-08-13：風控重審 APPROVE → R-D4-1 補寫 CONFIRMED → 前端落地 commit `de7f97f`，佐證見該 commit 與審查檔協調人紀錄）
 
 ---
 
@@ -106,7 +106,7 @@ const CONFIGURED_SOURCES = [
 
 ## 狀態
 
-**待風控重審（僅 D4 段）**——本文件為 creative-lead 依 VETO 逐條改寫之交付版本，尚未經 risk-compliance-officer 核可，不得視為定稿或直接合併進 `DataSourcesSection.tsx`。
+**已定稿**——2026-08-13 風控重審 APPROVE（附 R-D4-1/2/3），R-D4-1 補寫經單句 CONFIRMED，前端已依字面與呈現規格落地（`de7f97f`）。
 
 ---
 
@@ -119,4 +119,4 @@ const CONFIGURED_SOURCES = [
   - `apps/stock-desk/backend/app/data/providers/alpha_vantage.py:178-182`——呼叫端捕捉 `QuotaConfigError` 後，直接回傳 `_unavailable(...)`，**在發出任何 HTTP 請求之前**短路，等同於此層跳過、不嘗試發送請求。
   - `apps/stock-desk/backend/app/api/settings.py:105-108`——既有陳述已明言「Alpha Vantage 主來源在此設定完成前不會發出請求」，本次補寫與此既有陳述一致，非新創事實。
 - **處置方式**：以**加寫**方式在揭露句（一之 2）與呈現規格建議 JSX（一之 3）中，於「需設定環境變數 `ALPHA_VANTAGE_API_KEY`……」與「實際覆蓋率、速率限制與資料品質目前未知……」兩句核可句之間，插入新句：「另需設定環境變數 `ALPHA_VANTAGE_DAILY_LIMIT`（每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。」兩句核可句字面**未改動、未縮寫**。
-- **狀態**：本補寫仍屬 D4 段整體「待風控重審」範圍之一部分，需與其餘內容一併送 risk-compliance-officer 複核，非獨立定稿。
+- **狀態**：已經 risk-compliance-officer 單句確認（CONFIRMED，2026-08-13），隨整段定稿落地。
