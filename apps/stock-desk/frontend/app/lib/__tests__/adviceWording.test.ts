@@ -24,6 +24,7 @@
 import { describe, expect, it } from "vitest";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
+  AS_OF_DATE_UNKNOWN_STATEMENT,
   buildAsOfStatement,
   buildAttributedHeadline,
   buildCandidateCoverageStatement,
@@ -63,6 +64,7 @@ const RENDERED_SURFACE: string[] = [
   buildRulesStatement("1.0.2"),
   buildAsOfStatement("2026-08-04"),
   buildStaleDataProminentNotice("2026-08-04", 15),
+  AS_OF_DATE_UNKNOWN_STATEMENT,
   NON_REALTIME_NOTICE,
   ...CONFIDENCES.map(summaryConfidenceLabel),
 ];
