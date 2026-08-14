@@ -34,9 +34,9 @@ const CONFIGURED_SOURCES = [
 
 ### 2. 揭露句字面（美股列專屬，與 US 列同區塊常駐）
 
-> 美股（US）已完成接線，並以測試替身通過自動化測試；尚未以真實 API key 對外部服務實際發送過請求。需設定環境變數 `ALPHA_VANTAGE_API_KEY`；未設定時此層直接跳過，不嘗試發送請求。實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態。
+> 美股（US）已完成接線，並以測試替身通過自動化測試；尚未以真實 API key 對外部服務實際發送過請求。需設定環境變數 `ALPHA_VANTAGE_API_KEY`；未設定時此層直接跳過，不嘗試發送請求。另需設定環境變數 `ALPHA_VANTAGE_DAILY_LIMIT`（每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態。
 
-（額度／速率限制句依 suggested 意見不寫，保留「未知，應視為待查證狀態」已涵蓋此不確定性；不得改寫為「額度用完就沒資料」等具體斷言。）
+（額度／速率限制句依 suggested 意見不寫具體斷言，「未知，應視為待查證狀態」仍涵蓋此不確定性；不得改寫為「額度用完就沒資料」等具體斷言。新增的 `ALPHA_VANTAGE_DAILY_LIMIT` 句屬「必要設定缺漏會導致靜默跳過」的事實陳述，與「額度用完後的運行時行為未知」是不同層次，不構成前述具體斷言，故不牴觸 suggested 意見。）
 
 ### 3. 呈現規格（回應 V4，取代原 `text-xs text-neutral-500`）
 
@@ -51,8 +51,10 @@ const CONFIGURED_SOURCES = [
   美股（US）已完成接線，並以測試替身通過自動化測試；尚未以真實 API key
   對外部服務實際發送過請求。需設定環境變數{" "}
   <code>ALPHA_VANTAGE_API_KEY</code>
-  ；未設定時此層直接跳過，不嘗試發送請求。實際覆蓋率、速率限制與資料品質目前未知，
-  應視為待查證狀態。
+  ；未設定時此層直接跳過，不嘗試發送請求。另需設定環境變數{" "}
+  <code>ALPHA_VANTAGE_DAILY_LIMIT</code>
+  （每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。
+  實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態。
 </p>
 ```
 
@@ -87,8 +89,8 @@ const CONFIGURED_SOURCES = [
 
 ### 保留句（原樣保留，未改寫）
 
-- 「需設定環境變數 `ALPHA_VANTAGE_API_KEY`；未設定時此層直接跳過，不嘗試發送請求」——已逐字保留於揭露句中。
-- 「實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態」——已逐字保留於揭露句中。
+- 「需設定環境變數 `ALPHA_VANTAGE_API_KEY`；未設定時此層直接跳過，不嘗試發送請求」——已逐字保留於揭露句中，字面未經 R-D4-1 補寫改動。
+- 「實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態」——已逐字保留於揭露句中，字面未經 R-D4-1 補寫改動。
 
 ### 額度句（suggested）
 
@@ -105,3 +107,16 @@ const CONFIGURED_SOURCES = [
 ## 狀態
 
 **待風控重審（僅 D4 段）**——本文件為 creative-lead 依 VETO 逐條改寫之交付版本，尚未經 risk-compliance-officer 核可，不得視為定稿或直接合併進 `DataSourcesSection.tsx`。
+
+---
+
+## 四、R-D4-1 補寫記錄（2026-08-13）
+
+- **任務來源**：風控重審意見指出，揭露句原僅列 `ALPHA_VANTAGE_API_KEY` 一項必要設定，遺漏第二個同樣導致主要來源靜默跳過、不發任何請求的條件——`ALPHA_VANTAGE_DAILY_LIMIT`（每日額度上限）未設定時的行為。
+- **程式依據**：
+  - `apps/stock-desk/backend/app/data/quota.py:33-35`——`ALPHA_VANTAGE_DAILY_LIMIT` 未設定時，`resolve_quota_config()` 拋出 `QuotaConfigError`，不會靜默假設一個未設定的數字。
+  - `apps/stock-desk/backend/app/data/quota.py:127-134`——額度設定解析邏輯所在區塊。
+  - `apps/stock-desk/backend/app/data/providers/alpha_vantage.py:178-182`——呼叫端捕捉 `QuotaConfigError` 後，直接回傳 `_unavailable(...)`，**在發出任何 HTTP 請求之前**短路，等同於此層跳過、不嘗試發送請求。
+  - `apps/stock-desk/backend/app/api/settings.py:105-108`——既有陳述已明言「Alpha Vantage 主來源在此設定完成前不會發出請求」，本次補寫與此既有陳述一致，非新創事實。
+- **處置方式**：以**加寫**方式在揭露句（一之 2）與呈現規格建議 JSX（一之 3）中，於「需設定環境變數 `ALPHA_VANTAGE_API_KEY`……」與「實際覆蓋率、速率限制與資料品質目前未知……」兩句核可句之間，插入新句：「另需設定環境變數 `ALPHA_VANTAGE_DAILY_LIMIT`（每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。」兩句核可句字面**未改動、未縮寫**。
+- **狀態**：本補寫仍屬 D4 段整體「待風控重審」範圍之一部分，需與其餘內容一併送 risk-compliance-officer 複核，非獨立定稿。
