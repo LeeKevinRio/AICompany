@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { actionRawLabel, formatDateTime, ruleDirectionLabel } from "../format";
+import { actionRawLabel, formatDateTime, MARKET_OPTIONS, marketLabel, ruleDirectionLabel } from "../format";
 
 describe("formatDateTime — S1: every timestamp names its own timezone", () => {
   it("labels a valid ISO timestamp with the Taipei-timezone suffix", () => {
@@ -21,6 +21,20 @@ describe("formatDateTime — S1: every timestamp names its own timezone", () => 
     expect(formatDateTime(null)).toBe("資料時間不明");
     expect(formatDateTime(undefined)).toBe("資料時間不明");
     expect(formatDateTime("not-a-date")).toBe("資料時間不明");
+  });
+});
+
+describe("MARKET_OPTIONS — S7: the US option names its unverified data chain", () => {
+  it("annotates only the US picker option, not TW", () => {
+    const us = MARKET_OPTIONS.find((opt) => opt.value === "US");
+    const tw = MARKET_OPTIONS.find((opt) => opt.value === "TW");
+    expect(us?.label).toContain("未經真實環境驗證");
+    expect(tw?.label).not.toContain("未經真實環境驗證");
+  });
+
+  it("does not leak the picker-only caveat into the generic marketLabel() used on held positions", () => {
+    expect(marketLabel("US")).toBe("美股（US）");
+    expect(marketLabel("US")).not.toContain("未經真實環境驗證");
   });
 });
 

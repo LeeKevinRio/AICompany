@@ -51,9 +51,25 @@ const MARKET_LABELS: Record<Market, string> = {
   US: "美股（US）",
 };
 
+/**
+ * S7 fix (risk-final-review.md 列管項:「美股選項無 adapter 卻可選」;裁決僅有
+ * 方向、無既定字面,本句為自擬保守句,待風控覆核): the market *picker* (every
+ * `<select>` built from `MARKET_OPTIONS`) used to offer "US" with the exact
+ * same bare label as "TW", even though the US chain (`Alpha Vantage` 主 +
+ * `yfinance` 備援, `app/api/deps.py::_default_resolver`, verified) has never
+ * been exercised against a real Alpha Vantage account — see this batch's
+ * report for the D4 draft covering the same three-way state (接線／需金鑰／
+ * 未經真實驗證) for the settings-page data-source table. Only the *option*
+ * text carries the caveat, not `marketLabel()` (used to label already-held
+ * US positions everywhere else): repeating a selection-time caveat next to
+ * every row of an existing position would be noise, not disclosure, at that
+ * point the data already flowed through the chain regardless of caveat.
+ */
+const US_MARKET_OPTION_CAVEAT = "（資料來源未經真實環境驗證）";
+
 export const MARKET_OPTIONS: { value: Market; label: string }[] = [
   { value: "TW", label: MARKET_LABELS.TW },
-  { value: "US", label: MARKET_LABELS.US },
+  { value: "US", label: `${MARKET_LABELS.US}${US_MARKET_OPTION_CAVEAT}` },
 ];
 
 export function marketLabel(value: Market): string {
