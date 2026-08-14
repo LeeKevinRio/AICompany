@@ -1,0 +1,23 @@
+{
+  "_meta": "S6 fix (work/reviews/risk-final-review.md 列管項:「禁用詞清單前後端鏡像漂移」). Single source of truth for the two §1.3 categories (work/stock-desk-phase8-風控定調.md §1.3) that both the backend and the frontend independently enforced with hand-typed lists that had drifted apart: backend's apps/stock-desk/backend/tests/test_advice_wording.py was missing five of the nine 保證性 terms and one 價格目標 term that apps/stock-desk/backend/app/advice/loader.py's BANNED_PHRASES already rejects at rule-load time; frontend's apps/stock-desk/frontend/app/lib/adviceWording.ts's FRONTEND_FORBIDDEN_TERMS was missing loader.py's '穩賠'. This file is read by both test_advice_wording.py (test-time only — production loader.py stays self-contained so the Docker image build does not need to reach outside apps/stock-desk/backend) and by a frontend vitest sync test that asserts every term here is present in FRONTEND_FORBIDDEN_TERMS. Categories match §1.3's table verbatim, minus the regex-shaped '看到 N 元' entry (not a literal string).",
+  "guarantee": [
+    "保證",
+    "必漲",
+    "必賺",
+    "必跌",
+    "穩賺",
+    "穩賠",
+    "一定會",
+    "包賺",
+    "零風險",
+    "無風險"
+  ],
+  "price_target": [
+    "目標價",
+    "target_price",
+    "price_target",
+    "fair_value",
+    "合理價",
+    "上看"
+  ]
+}

@@ -8,6 +8,8 @@ cards across the states the engine can reach.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,14 +21,50 @@ from app.advice.engine import (
     build_advice,
 )
 from app.advice.limits import PortfolioContext, RiskBudget
-from app.advice.loader import DEFAULT_RULES_PATH, Comparison, load_default_rules
+from app.advice.loader import BANNED_PHRASES, DEFAULT_RULES_PATH, Comparison, load_default_rules
 from tests.advice_helpers import make_signals, reported_net_worth, uptrend_signals
 
-#: The wording the brief bans outright.
-FORBIDDEN_TERMS = ("保證", "必漲", "必賺", "穩賺")
+#: S6 fix (work/reviews/risk-final-review.md 列管項:「禁用詞清單前後端鏡像漂
+#: 移」): this file's own ``FORBIDDEN_TERMS``/``FORBIDDEN_ADVICE_TERMS`` used
+#: to be a hand-typed subset of §1.3 (work/stock-desk-phase8-風控定調.md §1.3)
+#: that had quietly fallen behind both `loader.BANNED_PHRASES` (missing 必跌/
+#: 穩賠/一定會/包賺/零風險/無風險) and the frontend's
+#: `adviceWording.ts::FRONTEND_FORBIDDEN_TERMS` (missing 上看). Both scan
+#: lists now read the same `shared/forbidden-terms.json` — the frontend's
+#: `sharedForbiddenTerms.test.ts` reads the identical file and asserts every
+#: term is present in its own list, so the two can no longer drift apart
+#: silently. Production `loader.py` deliberately stays self-contained (its
+#: `BANNED_PHRASES` is not re-pointed at this file) so the backend Docker
+#: image build does not need to reach outside `apps/stock-desk/backend`; a
+#: same-content guard test below keeps it in sync instead.
+_SHARED_FORBIDDEN_TERMS_PATH = (
+    Path(__file__).resolve().parents[2] / "shared" / "forbidden-terms.json"
+)
 
-#: Advice must not carry a price objective in any form.
-FORBIDDEN_ADVICE_TERMS = ("目標價", "target_price", "price_target", "fair_value", "合理價")
+
+def _load_shared_forbidden_terms() -> dict[str, tuple[str, ...]]:
+    payload = json.loads(_SHARED_FORBIDDEN_TERMS_PATH.read_text(encoding="utf-8"))
+    return {
+        "guarantee": tuple(payload["guarantee"]),
+        "price_target": tuple(payload["price_target"]),
+    }
+
+
+_SHARED_FORBIDDEN_TERMS = _load_shared_forbidden_terms()
+
+#: The wording the brief bans outright (§1.3 保證性).
+FORBIDDEN_TERMS = _SHARED_FORBIDDEN_TERMS["guarantee"]
+
+#: Advice must not carry a price objective in any form (§1.3 價格目標).
+FORBIDDEN_ADVICE_TERMS = _SHARED_FORBIDDEN_TERMS["price_target"]
+
+
+def test_shared_forbidden_terms_guarantee_category_matches_loader_banned_phrases() -> None:
+    """S6 fix: guards production `loader.BANNED_PHRASES` — deliberately kept
+    self-contained rather than reading `shared/forbidden-terms.json` at
+    runtime — against silently drifting from the single source of truth this
+    file's own scan list is now read from."""
+    assert set(BANNED_PHRASES) == set(FORBIDDEN_TERMS)
 
 
 def _cards() -> list[dict[str, Any]]:
