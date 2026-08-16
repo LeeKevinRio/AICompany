@@ -7,13 +7,23 @@ the company's credential rule; it is never hardcoded or written to a
 fixture.
 
 Endpoint (documented per FinMind's public API reference; queried against
-project knowledge on 2026-07-23, NOT re-verified against a live response in
-this sandbox because outbound HTTPS to ``api.finmindtrade.com`` is blocked
-by the environment's egress policy -- see ``tests/fixtures/README.md``)::
+project knowledge on 2026-07-23)::
 
     GET https://api.finmindtrade.com/api/v4/data
         ?dataset=TaiwanStockPrice&data_id=<symbol>
         &start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>&token=<token>
+
+VERIFICATION STATUS: **2026-08-16 經 CEO 本機真實驗證**（二輪，設定
+``FINMIND_API_TOKEN`` 後重跑，``work/stock-desk-已知限制與後續.md`` 二輪記錄，
+``work/research/驗證結果-2026-08-16.md``）-- ``scripts/verify_market_data.py``
+against the live endpoint returned 7 fresh bars, confirming both the endpoint
+shape and this adapter's parsing against a real response. This source and
+``app/data/providers/twse.py`` were additionally cross-checked against each
+other for three symbols across seven trading days: 21/21 close price + volume
+pairs matched exactly (zero tolerance), giving TW price data two independent,
+mutually-verifying sources. This adapter's own header note about the token
+being read exclusively from ``FINMIND_API_TOKEN`` (never hardcoded) still
+applies unchanged.
 
 Response shape (JSON)::
 

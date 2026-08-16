@@ -67,7 +67,12 @@ def test_parses_fixture_and_skips_unparseable_row(
         httpx.MockTransport(handler), ledger=ledger, monkeypatch=monkeypatch
     )
 
-    result = adapter.get_daily_bars("AAPL", date(2023, 12, 1), date(2024, 1, 31))
+    # ``start`` is chosen at the fixture's earliest raw date (2023-12-29, the
+    # unparseable "N/A" row) rather than further back: this test is about
+    # row-level parsing, not the coverage-depth guard exercised separately
+    # below, so the requested window must stay fully inside what this
+    # (deliberately tiny) compact fixture claims to cover.
+    result = adapter.get_daily_bars("AAPL", date(2023, 12, 29), date(2024, 1, 31))
 
     assert result.status is DataStatus.FRESH
     assert result.source == "alpha_vantage"
@@ -374,7 +379,10 @@ def test_row_that_is_not_an_object_is_skipped(
         httpx.MockTransport(handler), ledger=ledger, monkeypatch=monkeypatch
     )
 
-    result = adapter.get_daily_bars("AAPL", date(2024, 1, 1), date(2024, 1, 31))
+    # ``start`` matches the raw series' earliest key (2024-01-02) so this row-
+    # skip test stays inside the coverage-depth guard's tolerance; see the
+    # dedicated coverage-guard tests below for the boundary itself.
+    result = adapter.get_daily_bars("AAPL", date(2024, 1, 2), date(2024, 1, 31))
     assert result.status is DataStatus.FRESH
     assert [bar.date for bar in result.bars] == [date(2024, 1, 3)]
 
@@ -402,3 +410,64 @@ def test_filters_bars_to_requested_range(
 
     result = adapter.get_daily_bars("AAPL", date(2024, 1, 3), date(2024, 1, 3))
     assert [bar.date for bar in result.bars] == [date(2024, 1, 3)]
+
+
+# --- Coverage-depth guard (2026-08-16): outputsize=compact cannot satisfy ---
+# --- a deep-history request, and must decline rather than truncate ---------
+
+
+def test_request_deeper_than_compact_coverage_is_declined_not_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A start earlier than the response's earliest date must not be silently
+    served as a partial ``FRESH`` result -- that would let a deep-history
+    caller (e.g. the walk-forward backtest) believe it got what it asked for.
+    """
+    payload = _fixture_json("alpha_vantage_daily_aapl.json")
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json=payload)
+
+    ledger = QuotaLedger(db_path=tmp_path / "quota.db")
+    adapter = _adapter_with_handler(
+        httpx.MockTransport(handler), ledger=ledger, monkeypatch=monkeypatch
+    )
+
+    # Fixture's earliest raw date is 2023-12-29; a two-year-back start models
+    # a walk-forward backtest's typical deep-history request.
+    result = adapter.get_daily_bars("AAPL", date(2022, 1, 3), date(2024, 1, 31))
+
+    assert result.status is DataStatus.UNAVAILABLE
+    assert result.bars == []
+    assert result.reason is not None
+    assert "outputsize=compact" in result.reason
+    assert "備援來源" in result.reason
+    # The request still happened -- this is a coverage decision made *after*
+    # a successful fetch, not a quota short-circuit before one.
+    assert call_count == 1
+
+
+def test_request_within_compact_coverage_is_not_declined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A start at or after the response's earliest date is ordinary FRESH data."""
+    payload = _fixture_json("alpha_vantage_daily_aapl.json")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    ledger = QuotaLedger(db_path=tmp_path / "quota.db")
+    adapter = _adapter_with_handler(
+        httpx.MockTransport(handler), ledger=ledger, monkeypatch=monkeypatch
+    )
+
+    # Fixture's earliest raw date is 2023-12-29; requesting from exactly that
+    # date must not trip the guard (equal, not earlier, than what is covered).
+    result = adapter.get_daily_bars("AAPL", date(2023, 12, 29), date(2024, 1, 31))
+
+    assert result.status is DataStatus.FRESH
+    assert result.reason is None
+    assert len(result.bars) == 4

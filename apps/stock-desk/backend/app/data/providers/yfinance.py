@@ -25,12 +25,24 @@ validation) differs.
 Data source: Yahoo Finance's undocumented "chart" JSON endpoint -- the same
 one the real ``yfinance`` PyPI package calls internally. There is no official
 API contract for this; it is documented here per the widely-referenced public
-pattern, queried against project knowledge on 2026-07-26, **NOT re-verified
-against a live response in this sandbox** because outbound HTTPS to
-``query1.finance.yahoo.com`` is blocked by the environment's egress policy --
-see ``tests/fixtures/README.md``. This is the *backup* / *only* index source
-by design (ADR-0003, ADR-0005): its unofficial, undocumented nature is exactly
-why it never gets to be the primary path for individual securities.
+pattern, queried against project knowledge on 2026-07-26. This is the
+*backup* / *only* index source by design (ADR-0003, ADR-0005): its
+unofficial, undocumented nature is exactly why it never gets to be the
+primary path for individual securities.
+
+VERIFICATION STATUS (2026-08-16, CEO 本機真實驗證，
+``work/stock-desk-已知限制與後續.md`` 首輪記錄): role 2 above (the **index**
+path, :meth:`YFinanceAdapter.get_index_daily_bars`) was confirmed against a
+live response -- ``scripts/verify_market_data.py --index-symbol ^TWII``
+returned 7 fresh bars, and this is the actual chain the current portfolio's
+holdings depend on (backup for ``^TWII`` in the TW index/leverage path), so
+that dependency is cleared. **Role 1 (the US-market individual-security
+backup path, :meth:`YFinanceAdapter.get_daily_bars`) was NOT separately
+exercised in that run** -- the verification tool only probes the index
+symbol for this adapter; no live call was made against, e.g., ``AAPL``
+through the ``get_daily_bars`` method. That role remains unverified against
+a live response until it is (there are currently no US-market holdings to
+have forced the question, per the same work-log entry).
 
 Endpoint::
 

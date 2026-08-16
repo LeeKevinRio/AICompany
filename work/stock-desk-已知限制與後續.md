@@ -456,3 +456,31 @@ PUT/PATCH 警示端點、內建回測策略（RSI／突破）六項功能已於 
   項與第 10 項其餘小點經覆核仍為現況，未變更。同步更新「後續工作優先序建議」「跨團隊協作點」
   「文件與代碼對照表」。另同批更新 `apps/stock-desk/README.md`（離線示範模式、資料適配狀態表、
   目錄同步啟動步驟）。
+- **2026-08-16（續，Alpha Vantage outputsize 修正 + 已驗證來源狀態翻綠，data-engineer）**：
+  依二輪實測發現（見上方 2026-08-16 二輪記錄）修正 `app/data/providers/alpha_vantage.py`：
+  `outputsize` 由 `full`（免費方案已付費限制）改回免費方案可用的 `compact`（約最近 100
+  根日線）。同時補上「涵蓋深度守門」：每次成功回應後比對 AV 實際涵蓋的最早日期與請求
+  `start`，涵蓋不足時**不回傳截斷資料冒充成功**，改以 `UNAVAILABLE` 明確原因交棒給既有
+  降級鏈（ADR-0005 決策四：AV → yfinance → 快取 → unavailable），令回測等深歷史需求
+  （walk-forward 預設 `train_size 252 + test_size 63 = 315` 根，超過 compact 涵蓋範圍）
+  自動改走 yfinance 備援；`app/api/backtest.py` 既有的 `insufficient_data` 誠實降級不受
+  影響、無需改動。變更侵入範圍僅限 `alpha_vantage.py`（含 docstring 全面改寫）與其契約測試。
+
+  **檔頭查證註記翻綠**（僅限已真實驗證的範圍，未驗證部分維持標注）：
+  - `app/data/providers/twse.py`：**2026-08-16 經 CEO 本機真實驗證**（7 筆 fresh、
+    與 FinMind 三檔×7 日零容差交叉比對 21/21 全一致）。
+  - `app/data/providers/finmind.py`：**2026-08-16 經 CEO 本機真實驗證**（二輪，設定
+    `FINMIND_API_TOKEN` 後重跑，7 筆 fresh，與 TWSE 交叉比對同上）。
+  - `app/data/providers/yfinance.py`：僅**指數路徑**（`get_index_daily_bars`，
+    `^TWII`，現行持倉實際依賴的鏈）於 2026-08-16 經 CEO 本機真實驗證（7 筆 fresh）；
+    **美股個股備援路徑（`get_daily_bars`）未在該次驗證中被實際呼叫，維持未驗證**，
+    檔頭已如實標註兩者的不同驗證狀態，不得混為一談。
+  - `app/data/providers/alpha_vantage.py`：檔頭改標「key 驗證有效，`full` 參數付費限制
+    為 2026-08-16 實測發現，`compact` 修正待 CEO 重跑 `scripts/verify_market_data.py`
+    確認」——本次的程式修正本身尚未經真實回應驗證，不得視為已翻綠。
+
+  測試：新增/調整 `tests/test_providers_alpha_vantage.py`（fixture 對齊 compact 語意，
+  新增涵蓋深度守門的正/反例），`uv run pytest -q` / mypy / ruff 全綠（見 commit）。
+  **待辦**：CEO 於有網路環境重跑 `scripts/verify_market_data.py`，預期 Alpha Vantage
+  改回 `FRESH` 成功（compact 在其涵蓋範圍內的請求區間應可正常回應），據此才可將
+  `alpha_vantage.py` 的檔頭再次翻綠為「已驗證」。

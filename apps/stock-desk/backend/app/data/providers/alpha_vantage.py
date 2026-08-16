@@ -14,13 +14,56 @@ this build -- so this adapter deliberately uses the unadjusted
 free one.
 
 Endpoint (documented per Alpha Vantage's public API reference; queried
-against project knowledge on 2026-07-23, NOT re-verified against a live
-response in this sandbox because outbound HTTPS to ``www.alphavantage.co`` is
-blocked by the environment's egress policy -- see
-``tests/fixtures/README.md``)::
+against project knowledge on 2026-07-23)::
 
     GET https://www.alphavantage.co/query
-        ?function=TIME_SERIES_DAILY&symbol=<symbol>&outputsize=full&apikey=<key>
+        ?function=TIME_SERIES_DAILY&symbol=<symbol>&outputsize=compact&apikey=<key>
+
+VERIFICATION STATUS (2026-08-16, CEO 本機真實驗證，見
+``work/stock-desk-已知限制與後續.md`` 2026-08-16 二輪記錄):
+``ALPHA_VANTAGE_API_KEY`` is confirmed valid -- a real request against this
+endpoint succeeded. That same run also found the assumption baked into this
+file until now (``outputsize=full``, i.e. "full request history") to be
+**stale/wrong**: Alpha Vantage's live response for ``outputsize=full`` was::
+
+    {"Information": "The outputsize=full parameter value is a premium
+     feature for the TIME_SERIES_DAILY endpoint..."}
+
+i.e. ``full`` now requires a paid plan; only ``outputsize=compact`` (the
+vendor's documented "latest ~100 data points") remains free. This module was
+switched to ``compact`` in response (2026-08-16, data-engineer) -- see
+"Compact coverage and the deep-history problem" below for what that changes
+for callers. **This specific code fix is itself unverified against a live
+response** (the finding above only confirms the *old* ``full`` value fails;
+it does not yet confirm ``compact`` succeeds against a real response in this
+build) -- pending CEO re-running ``scripts/verify_market_data.py`` to confirm
+the corrected adapter against live Alpha Vantage traffic.
+
+Compact coverage and the deep-history problem: Alpha Vantage's ``compact``
+mode returns roughly the most recent 100 trading days, regardless of what
+``start``/``end`` a caller asks for. That is enough for the daily indicator /
+advice-card paths (they look back on the order of tens of bars), but it is
+**not** enough for the walk-forward backtest, whose default geometry alone
+(``DEFAULT_TRAIN_SIZE=252`` + ``DEFAULT_TEST_SIZE=63`` in
+``app/api/backtest.py``) already needs 315 bars. Silently handing back
+whatever partial window ``compact`` happens to contain, labelled ``FRESH``,
+would let a caller believe it received the requested range when it did not --
+exactly the kind of silent truncation this company's data-engineering red
+line forbids. Instead, after every successful fetch this adapter compares the
+*earliest* date Alpha Vantage's response actually carries against the
+caller's requested ``start``: if the response does not reach back that far,
+the adapter declines outright (``DataStatus.UNAVAILABLE``, honest reason
+text) rather than returning a truncated series under a status that claims
+success. Because ``app.data.service.MarketDataService`` already tries each
+provider in order and only advances past a rung that declined
+(``ADR-0005`` 決策四: AV -> yfinance -> cache -> unavailable), this single
+change is enough to route any deep-history request (backtest chief among
+them) to the yfinance backup automatically, with no change needed to
+``app/api/backtest.py`` or ``app/services/market.py``. If yfinance also
+cannot help, the ladder's existing, already-honest fallbacks apply
+unchanged: cached data if any, else the backtest endpoint's own
+``status="insufficient_data"`` response with the true bar count spelled out
+(never a fabricated or interpolated fill).
 
 Response shape (JSON)::
 
@@ -93,7 +136,11 @@ logger = logging.getLogger(__name__)
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co"
 QUERY_PATH = "/query"
 FUNCTION = "TIME_SERIES_DAILY"
-OUTPUT_SIZE = "full"
+#: Fixed 2026-08-16: CEO's live verification found ``full`` now requires a
+#: paid plan (see the module docstring's "VERIFICATION STATUS" section);
+#: ``compact`` (~100 most recent daily bars) is what the free tier still
+#: allows.
+OUTPUT_SIZE = "compact"
 CURRENCY = "USD"
 API_KEY_ENV_VAR = "ALPHA_VANTAGE_API_KEY"
 
@@ -126,6 +173,25 @@ def _check_response_errors(payload: Any) -> str | None:
     if "Information" in payload:
         return f"Alpha Vantage 回報此功能目前對本 API key 不可用：{payload['Information']}"
     return None
+
+
+def _earliest_series_date(series: dict[str, Any]) -> date | None:
+    """The earliest trading date ``series`` (the raw, unfiltered payload) claims.
+
+    Used purely to measure how far back a ``compact`` response actually
+    reaches -- deliberately independent of whether each row's own fields
+    parse cleanly, because even an unparseable placeholder row (e.g. an
+    "N/A" row for a still-listed symbol) still tells us which date Alpha
+    Vantage attempted to include, which is what coverage-depth is about.
+    Returns ``None`` when ``series`` has no ISO-formatted date keys at all.
+    """
+    dates: list[date] = []
+    for key in series:
+        try:
+            dates.append(date.fromisoformat(key))
+        except ValueError:
+            continue
+    return min(dates) if dates else None
 
 
 class AlphaVantageAdapter(MarketDataProvider):
@@ -239,6 +305,36 @@ class AlphaVantageAdapter(MarketDataProvider):
         if error_reason is not None:
             logger.warning("Alpha Vantage response error for %s: %s", canonical, error_reason)
             return _unavailable(now, reason=error_reason)
+
+        # Coverage guard (2026-08-16, see module docstring "Compact coverage
+        # and the deep-history problem"): ``outputsize=compact`` only reaches
+        # back ~100 trading days no matter what ``start`` was requested. If
+        # this response does not cover the requested start at all, declining
+        # here -- rather than silently handing back a truncated window under
+        # a "fresh"/success status -- lets MarketDataService's existing
+        # degradation ladder try the yfinance backup, which does carry deeper
+        # history.
+        series = payload.get(_SERIES_KEY) if isinstance(payload, dict) else None
+        if isinstance(series, dict):
+            earliest = _earliest_series_date(series)
+            if earliest is not None and earliest > start:
+                logger.info(
+                    "Alpha Vantage compact response for %s starts at %s, later than "
+                    "the requested start %s; declining so the degradation ladder can "
+                    "try a source with deeper history",
+                    canonical,
+                    earliest,
+                    start,
+                )
+                return _unavailable(
+                    now,
+                    reason=(
+                        "Alpha Vantage 免費方案的 outputsize=compact 僅提供最近約 100 根"
+                        f"日線，本次回應最早涵蓋 {earliest.isoformat()}，"
+                        f"早於請求起始日 {start.isoformat()}；為避免以不完整資料冒充完整回應，"
+                        "本次不回傳，改由備援來源（如 yfinance）承接較長歷史需求。"
+                    ),
+                )
 
         bars = self._parse_payload(payload, canonical, start, end, now)
         if not bars:

@@ -5,12 +5,23 @@ one calendar month of daily bars for a single stock, so a multi-month date
 range is fetched with one request per month.
 
 Endpoint (documented per TWSE's public exchangeReport API; queried against
-project knowledge on 2026-07-23, NOT re-verified against a live response in
-this sandbox because outbound HTTPS to ``www.twse.com.tw`` is blocked by the
-environment's egress policy -- see ``tests/fixtures/README.md``)::
+project knowledge on 2026-07-23)::
 
     GET https://www.twse.com.tw/exchangeReport/STOCK_DAY
         ?response=json&date=YYYYMMDD&stockNo=<symbol>
+
+VERIFICATION STATUS: **2026-08-16 經 CEO 本機真實驗證**
+(``work/stock-desk-已知限制與後續.md`` 首輪/二輪記錄，
+``work/research/驗證結果-2026-08-16.md``) -- ``scripts/verify_market_data.py``
+against the live endpoint returned 7 fresh bars with 0% demo/synthetic data,
+confirming both the endpoint shape and this adapter's parsing against a real
+response. The two-round re-verification additionally cross-checked this
+source against FinMind's independent ``TaiwanStockPrice`` feed for three
+symbols across seven trading days (21/21 close price + volume pairs matched
+exactly, zero tolerance) -- see ``app/data/providers/finmind.py`` for that
+source's own header. This adapter is currently used for TW-listed (上市)
+symbols only; TPEx (上櫃) is served elsewhere (``app/data/providers/tpex.py``)
+and remains unverified per that file's own header.
 
 Response shape (JSON)::
 
