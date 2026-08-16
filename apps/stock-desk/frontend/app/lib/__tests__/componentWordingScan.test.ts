@@ -67,14 +67,17 @@ const SCANNED_FILES = [
   "../../components/SymbolCombobox.tsx",
   // 風控列管清償批(work/機會清單.md D1, 2026-08-10):新增的「證券目錄」設定頁
   // 區塊帶新的事實陳述文案，先前不在掃描範圍內。
-  //
-  // 註: `BacktestReportView.tsx` 本批也加了一句常駐警語(D2 item 4)，但該檔既有
-  // 的 `METRIC_ROWS` 「勝率」欄位標籤(回測歷史績效統計量,非新增)會被本掃描的
-  // 逐字比對誤殺——與 risk-final-review.md 已接受的「勝率→歷史交易的獲勝比例」
-  // 屬同一類語境(承認/描述已發生的歷史結果,非機率洗白),但改寫該標籤或调整
-  // 掃描例外清單都超出本批派工範圍,故不將該檔納入掃描,留待下次動到回測頁措辭
-  // 時一併處理。
   "../../settings/DirectorySection.tsx",
+  // D3② (risk-fix-review.md N2 列管清償, 2026-08-16): this file used to be
+  // *excluded* from the scan entirely because its pre-existing `METRIC_ROWS`
+  // 「勝率」row label (a realized backtest statistic — the acknowledged-
+  // historical-result 語境 risk-final-review.md already accepted for
+  // RiskGauge, not probability laundering) would have been killed by the
+  // verbatim match. The context whitelist in `wordingScanHelpers.ts` now
+  // masks exactly that one source line (see `ALLOWED_SOURCE_CONTEXTS`), so
+  // the rest of the file — including its D2-item-4 常駐警語 — finally gets
+  // scanned instead of the whole file staying a blind spot.
+  "../../backtest/BacktestReportView.tsx",
   // 排程台 (`/playbook`, work/stock-desk-快市排程-視覺規範.md 派工單
   // 2026-08-12): new surface, new hard-coded JSX text (headings, the
   // EMERGENCY_EXIT flow's risk-compliance-approved button labels, the mirrored
@@ -105,13 +108,37 @@ const SCANNED_FILES = [
   "../../positions/import/ManualAddForm.tsx",
 ] as const;
 
+/**
+ * D3② 語境白名單 (risk-fix-review.md N2): per-file *exact source lines* in
+ * which a banned term is an acknowledged historical statistic or an admitted
+ * limitation rather than a claim. `assertNoForbiddenTerms` masks only these
+ * exact strings and rejects entries that are dead (no banned term) or stale
+ * (no longer in the file), so the whitelist cannot rot into a loophole; the
+ * term stays banned everywhere else in the same file. Adding an entry here is
+ * a wording-governance decision — cite the review that accepted the 語境.
+ */
+const ALLOWED_SOURCE_CONTEXTS: Partial<Record<(typeof SCANNED_FILES)[number], readonly string[]>> =
+  {
+    // 「勝率」 as the backtest report's realized win-rate row: the
+    // acknowledged-historical-result 語境 risk-final-review.md accepted
+    // (「勝率→歷史交易的獲勝比例」), scoped to this one METRIC_ROWS line.
+    "../../backtest/BacktestReportView.tsx": [
+      '{ label: "勝率", render: (m) => formatPercent(m.win_rate) }',
+    ],
+  };
+
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {
   for (const relativePath of SCANNED_FILES) {
     const absolutePath = fileURLToPath(new URL(relativePath, import.meta.url));
     const source = readFileSync(absolutePath, "utf-8");
 
     it(`${relativePath}: contains none of the §1.3 banned terms`, () => {
-      assertNoForbiddenTerms(source, FRONTEND_FORBIDDEN_TERMS, relativePath);
+      assertNoForbiddenTerms(
+        source,
+        FRONTEND_FORBIDDEN_TERMS,
+        relativePath,
+        ALLOWED_SOURCE_CONTEXTS[relativePath] ?? [],
+      );
     });
 
     it(`${relativePath}: every "即時" occurrence is a "非即時" denial, never a bare claim`, () => {
