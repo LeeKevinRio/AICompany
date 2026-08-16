@@ -199,3 +199,27 @@ const CONFIGURED_SOURCES = [
 - ~~待 risk-compliance-officer 三輪確認~~ **已於 2026-08-16 三輪 APPROVE 逐字定稿**（審查紀錄:work/reviews/2026-08-16-產業別來源說明句-風控三輪.md），並已落地 format.ts（commit acf3de7，守門測試逐字釘住）。字面（含標點）任何變更視為漂移，須重送風控。
 - 覆核通過後，交回 dev-lead／前端工程師落地 `apps/stock-desk/frontend/app/lib/format.ts` 的 `SECTOR_SOURCE_DISCLOSURE`，並同步更新該檔第 105–121 行的說明註解（含把「同步狀態可在設定頁查看」那段已不成立的舊註解一併移除或改寫）。
 - 若有 `directorySearch.test.ts` 之類的逐字守門測試比對此字串，需同步更新測試斷言的字面。
+
+---
+
+## 六、清償批補句（2026-08-16）
+
+- 出處任務：`work/reviews/2026-08-16-品質債清償批-覆核.md`「風控批次覆核」R-D6-1、「CEO 裁決」R-D5②-1——單點措辭任務，非發想類，未走 creative-masters 流程。
+- 協調人處置：兩句併同一輪（creative-lead 擬字面 → risk-compliance-officer 逐字確認 → dev 落地並補 invariant 測試）。
+- 兩句皆為**既有核可句的追加句**、同槽接續渲染，非獨立主句；均不含任何行動指引（連「請自行判斷」都沒有），只陳述事實與系統能力邊界。
+
+### R-D6-1：ETF 產業佔比成因句追加揭露
+
+接在 `apps/stock-desk/backend/app/advice/limits.py` 之 `NO_SECTOR_ETF_DETAIL`（「此標的的持倉為 ETF；台灣證交所產業別分類僅適用於個股，不適用於 ETF，單一產業佔比上限本次不計算，回報 not_evaluable。」）之後：
+
+> 本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。
+
+- 設計說明：只重申風控指定的事實邊界（「不計算」不等於「沒風險」；系統目前的評估能力邊界），不使用「請」「建議」「自行」等任何行動指引字眼；句型與同檔既有成因句群（`NO_SECTOR_UNSUPPORTED_MARKET_DETAIL` 等）一致的純陳述句式，也呼應風控注記「槓桿指數 ETF 常高度集中單一產業」的關切，但不點名個別標的類型或具體風險數字，避免另生新的事實斷言。**待風控逐字確認。**
+
+### R-D5②-1：as-of 與過舊提示雙缺追加揭露
+
+接在 `apps/stock-desk/frontend/app/lib/adviceWording.ts` 之 `AS_OF_DATE_UNKNOWN_STATEMENT`（「本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。」）之後，同槽渲染：
+
+> 因此本次也無法判斷這份資料距今多久。
+
+- 設計說明：以「因此」承接前句已揭露的缺口（無法標示資料日期），直接點出「過舊提示同樣缺席」的原因——是同一項資料不足所致，而不是資料本身不舊——避免讀者把「沒看到過舊警示」誤讀成「資料是新的」；不重複描述過舊提示本身的存在或觸發機制，維持追加句應有的精短。**待風控逐字確認。**
