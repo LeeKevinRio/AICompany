@@ -22,6 +22,7 @@ from typing import Any
 
 from app.data.cache import resolve_db_path
 from app.positions.models import Position, PositionInput
+from app.positions.sectors import SECTOR_REJECTED_MESSAGE, is_valid_sector
 
 #: Parameterised by table name so the schema migration can build the
 #: replacement table from the exact same definition as the live one.
@@ -219,6 +220,36 @@ class PositionStore:
                     moment,
                     position_id,
                 ),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get(position_id)
+
+    def set_sector(
+        self, position_id: int, sector: str, *, now: datetime | None = None
+    ) -> Position | None:
+        """Set only the industry category of ``position_id``; return the updated row.
+
+        A narrow write, not :meth:`update` with a rebuilt ``PositionInput``:
+        the sector backfill (``app.directory.sector_backfill``) must touch one
+        column and nothing else, so a quantity or cost cannot be rewritten --
+        even identically -- as a side effect of classifying a holding.
+
+        Refuses to clear a category (``sector`` must be non-blank) and refuses
+        a value outside the closed list, so this door validates exactly what
+        the API door does. Returns ``None`` when no such position exists;
+        ``updated_at`` advances, because the stored row really did change.
+        """
+        cleaned = sector.strip()
+        if not cleaned:
+            raise ValueError("sector must not be blank")
+        if not is_valid_sector(cleaned):
+            raise ValueError(SECTOR_REJECTED_MESSAGE)
+        moment = (now if now is not None else datetime.now(UTC)).isoformat()
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                "UPDATE positions SET sector = ?, updated_at = ? WHERE id = ?",
+                (cleaned, moment, position_id),
             )
             if cursor.rowcount == 0:
                 return None
