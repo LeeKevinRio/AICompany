@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from app.positions.models import PositionInput
-from app.positions.store import PositionStore
+from app.positions.store import (
+    _MIGRATION_TABLE,
+    PositionStore,
+    _migrate_add_sector,
+    _migrate_opened_at_to_nullable,
+)
 
 #: The pre-migration schema, with ``opened_at`` still declared NOT NULL.
 _LEGACY_CREATE_TABLE_SQL = """
@@ -160,3 +169,193 @@ def test_sector_migration_is_idempotent(tmp_path: Path) -> None:
     reopened = PositionStore(db_path=db_path)
     assert _has_sector_column(db_path)
     assert len(reopened.list_all()) == 1
+
+
+# --- D7: concurrent migrators (品質債清償批 dispatch, 2026-08-16) -------------
+
+
+class _FakeCursor:
+    """Just enough cursor for the two ways the migrations consume a PRAGMA."""
+
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return list(self._rows)
+
+    def __iter__(self) -> object:
+        return iter(self._rows)
+
+
+class _StalePragmaConnection:
+    """A connection whose ``PRAGMA table_info`` answers from before a migration.
+
+    ``stale_answers`` bounds how many PRAGMA calls get the stale answer
+    (``None`` = all of them); everything else is delegated to the real
+    connection, so the statements the stale answer provokes hit the
+    already-migrated table for real -- exactly what the loser of a
+    two-process race sees. Every executed statement is recorded so a test
+    can assert which path ran.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        rows: list[tuple[object, ...]],
+        stale_answers: int | None = None,
+    ) -> None:
+        self._conn = conn
+        self._rows = rows
+        self._remaining = stale_answers
+        self.executed: list[str] = []
+
+    def execute(self, sql: str) -> object:
+        self.executed.append(sql)
+        if sql.strip().upper().startswith("PRAGMA TABLE_INFO"):
+            if self._remaining is None:
+                return _FakeCursor(self._rows)
+            if self._remaining > 0:
+                self._remaining -= 1
+                return _FakeCursor(self._rows)
+        return self._conn.execute(sql)
+
+
+#: ``PRAGMA table_info`` rows for the pre-sector, pre-rebuild schema:
+#: (cid, name, type, notnull, dflt_value, pk) -- ``opened_at`` still NOT NULL.
+_LEGACY_PRAGMA_ROWS: list[tuple[object, ...]] = [
+    (0, "id", "INTEGER", 0, None, 1),
+    (1, "symbol", "TEXT", 1, None, 0),
+    (2, "market", "TEXT", 1, None, 0),
+    (3, "quantity", "TEXT", 1, None, 0),
+    (4, "avg_cost", "TEXT", 1, None, 0),
+    (5, "currency", "TEXT", 1, None, 0),
+    (6, "opened_at", "TEXT", 1, None, 0),
+    (7, "instrument_type", "TEXT", 1, None, 0),
+    (8, "note", "TEXT", 0, None, 0),
+    (9, "created_at", "TEXT", 1, None, 0),
+    (10, "updated_at", "TEXT", 1, None, 0),
+]
+
+
+def test_sector_migration_tolerates_a_column_added_between_the_check_and_the_alter(
+    tmp_path: Path,
+) -> None:
+    """The TOCTOU window: the PRAGMA said "missing", the ALTER says "duplicate".
+
+    Reproduced deterministically with a connection that answers ``PRAGMA
+    table_info`` from the pre-migration schema while the table on disk is
+    already migrated -- the loser of a two-process race swallows the
+    ``duplicate column name`` error instead of crashing at startup.
+    """
+    db_path = tmp_path / "positions.db"
+    _seed_legacy_db(db_path)
+    PositionStore(db_path=db_path)  # the other process migrates first
+
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        stale = _StalePragmaConnection(conn, _LEGACY_PRAGMA_ROWS)
+        _migrate_add_sector(cast(sqlite3.Connection, stale))
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        columns = [column[1] for column in conn.execute("PRAGMA table_info(positions)")]
+    assert columns.count("sector") == 1
+    assert len(PositionStore(db_path=db_path).list_all()) == 1
+
+
+def test_sector_migration_still_raises_an_unrelated_operational_error(
+    tmp_path: Path,
+) -> None:
+    """Only "duplicate column name" is swallowed; a real failure stays loud."""
+    db_path = tmp_path / "missing-table.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            _migrate_add_sector(conn)
+
+
+def test_rebuild_migration_loser_rechecks_under_the_lock_and_leaves_data_alone(
+    tmp_path: Path,
+) -> None:
+    """The loser of the rebuild race must no-op, not rebuild a second time.
+
+    Deterministic version of the race: the first legacy check answers "still
+    NOT NULL" although the table on disk is already rebuilt -- what a process
+    sees when the winner finishes between its check and its ``BEGIN
+    IMMEDIATE``. The re-check under the write lock (a real PRAGMA) must then
+    stop it before any destructive statement runs.
+    """
+    db_path = tmp_path / "positions.db"
+    _seed_legacy_db(db_path)
+    PositionStore(db_path=db_path)  # the winner rebuilds first
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        stale = _StalePragmaConnection(conn, _LEGACY_PRAGMA_ROWS, stale_answers=1)
+        _migrate_opened_at_to_nullable(cast(sqlite3.Connection, stale))
+        executed = stale.executed
+
+    assert not any("DROP TABLE positions" in sql for sql in executed)
+    assert not any("INSERT INTO" in sql for sql in executed)
+    assert "COMMIT" in executed  # the lock was taken and released, nothing more
+    store = PositionStore(db_path=db_path)
+    rows = store.list_all()
+    assert len(rows) == 1
+    assert rows[0].note == "台積電"
+
+
+def test_rebuild_migration_replaces_a_crash_leftover_scratch_table(tmp_path: Path) -> None:
+    """A scratch table an interrupted older build left behind must not block the rebuild."""
+    db_path = tmp_path / "positions.db"
+    _seed_legacy_db(db_path)
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(f"CREATE TABLE {_MIGRATION_TABLE} (junk TEXT)")
+
+    store = PositionStore(db_path=db_path)
+
+    assert _opened_at_is_nullable(db_path)
+    assert len(store.list_all()) == 1
+    with closing(sqlite3.connect(db_path)) as conn:
+        leftover = conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = ?", (_MIGRATION_TABLE,)
+        ).fetchall()
+    assert leftover == []
+
+
+def test_two_stores_opening_the_same_legacy_database_at_once_both_survive(
+    tmp_path: Path,
+) -> None:
+    """The backend and a CLI starting together must not corrupt the book.
+
+    Both migrations race here: the ``ALTER`` one may hit "duplicate column"
+    (swallowed) and the rebuild one is serialised by ``BEGIN IMMEDIATE`` --
+    whichever process loses must find the work already done and leave the
+    single copied row exactly as the winner wrote it.
+    """
+    db_path = tmp_path / "positions.db"
+    _seed_legacy_db(db_path)
+    barrier = threading.Barrier(2)
+    failures: list[Exception] = []
+
+    def open_store() -> None:
+        try:
+            barrier.wait(timeout=10)
+            PositionStore(db_path=db_path)
+        except Exception as error:  # noqa: BLE001 - collected for the assertion
+            failures.append(error)
+
+    threads = [threading.Thread(target=open_store) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert failures == []
+    assert _opened_at_is_nullable(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        columns = [column[1] for column in conn.execute("PRAGMA table_info(positions)")]
+        leftover = conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = ?", (_MIGRATION_TABLE,)
+        ).fetchall()
+    assert columns.count("sector") == 1
+    assert leftover == []
+    rows = PositionStore(db_path=db_path).list_all()
+    assert len(rows) == 1
+    assert rows[0].opened_at == date(2024, 1, 2)
+    assert rows[0].note == "台積電"

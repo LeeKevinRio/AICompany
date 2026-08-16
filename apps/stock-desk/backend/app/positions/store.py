@@ -82,11 +82,32 @@ def _migrate_add_sector(conn: sqlite3.Connection) -> None:
     Runs **before** the ``opened_at`` rebuild below, which copies a fixed column
     list between two tables and would not find ``sector`` on a legacy one.
     Idempotent, so it is safe to call on every startup.
+
+    Concurrency-safe too, same shape as ``app.directory.store``'s
+    ``_migrate_add_sector_columns``: SQLite runs DDL outside the implicit
+    transaction Python's sqlite3 opens for DML, so two processes opening the
+    same legacy database (e.g. the backend and a CLI) can both read "column
+    missing" before either writes. The loser's ``ALTER`` then fails with
+    ``duplicate column name``, which reports the very state this function
+    wants, so it is swallowed. Every other ``OperationalError`` (locked
+    database, missing table) still propagates -- a migration that silently did
+    nothing would be worse than a loud failure.
     """
     columns = {column[1] for column in conn.execute("PRAGMA table_info(positions)")}
     if "sector" in columns:
         return
-    conn.execute("ALTER TABLE positions ADD COLUMN sector TEXT")
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN sector TEXT")
+    except sqlite3.OperationalError as error:
+        if "duplicate column name" not in str(error).lower():
+            raise
+
+
+def _opened_at_is_legacy(conn: sqlite3.Connection) -> bool:
+    """Whether ``positions.opened_at`` still carries the legacy NOT NULL."""
+    columns = conn.execute("PRAGMA table_info(positions)").fetchall()
+    # PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk)
+    return any(column[1] == "opened_at" and column[3] for column in columns)
 
 
 def _migrate_opened_at_to_nullable(conn: sqlite3.Connection) -> None:
@@ -98,22 +119,46 @@ def _migrate_opened_at_to_nullable(conn: sqlite3.Connection) -> None:
     definition, copy every row over, drop the old one and rename. This table
     has no indexes, triggers or foreign keys, so those steps are all it needs.
 
-    Runs inside the caller's transaction and is a no-op once migrated, so it is
-    safe to call on every startup.
+    A rebuild cannot use the swallow-the-duplicate-error trick the ``ALTER``
+    migrations use: two processes interleaving DROP/CREATE/INSERT/RENAME on
+    the same table would corrupt or lose rows, not fail cleanly. So the whole
+    rebuild runs inside one ``BEGIN IMMEDIATE`` transaction, which takes the
+    database's single write lock up front and therefore serialises competing
+    migrators: the loser blocks at BEGIN (SQLite busy handler) until the
+    winner commits, then re-checks the schema *inside* the lock and finds
+    nothing left to do. The transaction also makes the rebuild atomic against
+    a crash -- the database holds either the old table or the finished new
+    one, never a half-copied state (the scratch-table DROP below cleans up
+    after a crash mid-rebuild on an older build of this code).
+
+    Must be called outside any open transaction (true for ``_init_schema``:
+    everything before this point is a PRAGMA or DDL, and Python's sqlite3
+    only implicitly opens transactions for DML). No-op once migrated, so it
+    is safe to call on every startup.
     """
-    columns = conn.execute("PRAGMA table_info(positions)").fetchall()
-    # PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk)
-    legacy = any(column[1] == "opened_at" and column[3] for column in columns)
-    if not legacy:
+    if not _opened_at_is_legacy(conn):
         return
-    conn.execute(f"DROP TABLE IF EXISTS {_MIGRATION_TABLE}")  # leftover of a crash
-    conn.execute(_CREATE_TABLE_SQL_TEMPLATE.format(table=_MIGRATION_TABLE))
-    conn.execute(
-        f"INSERT INTO {_MIGRATION_TABLE} ({_SELECT_COLUMNS}) "
-        f"SELECT {_SELECT_COLUMNS} FROM positions"
-    )
-    conn.execute("DROP TABLE positions")
-    conn.execute(f"ALTER TABLE {_MIGRATION_TABLE} RENAME TO positions")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Re-check under the write lock: another process may have finished
+        # the rebuild while this one was blocked at BEGIN. COMMIT (of an
+        # empty transaction) rather than plain return, so the write lock is
+        # released here, not at whatever later point the caller ends its work.
+        if not _opened_at_is_legacy(conn):
+            conn.execute("COMMIT")
+            return
+        conn.execute(f"DROP TABLE IF EXISTS {_MIGRATION_TABLE}")  # leftover of a crash
+        conn.execute(_CREATE_TABLE_SQL_TEMPLATE.format(table=_MIGRATION_TABLE))
+        conn.execute(
+            f"INSERT INTO {_MIGRATION_TABLE} ({_SELECT_COLUMNS}) "
+            f"SELECT {_SELECT_COLUMNS} FROM positions"
+        )
+        conn.execute("DROP TABLE positions")
+        conn.execute(f"ALTER TABLE {_MIGRATION_TABLE} RENAME TO positions")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 class PositionStore:
