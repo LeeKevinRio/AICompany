@@ -33,11 +33,12 @@ i.e. ``full`` now requires a paid plan; only ``outputsize=compact`` (the
 vendor's documented "latest ~100 data points") remains free. This module was
 switched to ``compact`` in response (2026-08-16, data-engineer) -- see
 "Compact coverage and the deep-history problem" below for what that changes
-for callers. **This specific code fix is itself unverified against a live
-response** (the finding above only confirms the *old* ``full`` value fails;
-it does not yet confirm ``compact`` succeeds against a real response in this
-build) -- pending CEO re-running ``scripts/verify_market_data.py`` to confirm
-the corrected adapter against live Alpha Vantage traffic.
+for callers. **VERIFIED 2026-08-16**: the CEO re-ran
+``scripts/verify_market_data.py`` on a networked machine after the compact
+fix and the adapter returned 7 fresh daily bars for AAPL against live Alpha
+Vantage traffic (see ``work/stock-desk-已知限制與後續.md``, 2026-08-16
+entries) -- endpoint, auth, ``compact`` parameter and response schema are all
+confirmed against a real response.
 
 Compact coverage and the deep-history problem: Alpha Vantage's ``compact``
 mode returns roughly the most recent 100 trading days, regardless of what

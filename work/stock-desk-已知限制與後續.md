@@ -450,6 +450,15 @@ PUT/PATCH 警示端點、內建回測策略（RSI／突破）六項功能已於 
   互證證據。**Alpha Vantage 實測發現**:key 有效但 adapter 的 outputsize=full 參數
   已成免費方案付費功能(訓練知識過時),需改 compact(最近 100 根)——待修。
   TPEx legacy/台銀 FX 維持前輪結論(評估報告 e585531)。
+- **2026-08-16（三輪終局,Alpha Vantage compact 驗證通過——行情驗證收官）**：
+  CEO 於 compact 修正(3ad03ed)後重跑:**Alpha Vantage PASS**(AAPL 7 筆 fresh)。
+  最終戰績:**六源中四源 PASS**(TWSE/FinMind/Alpha Vantage/yfinance)+零容差交叉比對
+  21/21+真實/示範 DB 隔離 0% 污染。alpha_vantage.py 檔頭已翻綠(端點/憑證/compact
+  參數/回應 schema 皆經真實回應確認)。殘餘兩項為已知待辦:TPEx 上櫃(legacy 已死,
+  OpenAPI 遷移評估 e585531 備妥,待 CEO 跑探測指令)、台銀 FX(反爬蟲攔截,替代源
+  評估同檔備妥)。市調 2026-08-09 判定的「產品沒有任何經過驗證的真實市場數據」
+  上線前致命項,至此**正式解除**;殘餘未驗證面:AV 個股深歷史路徑之外的
+  yfinance 個股備援路徑、槓桿 ETF 註冊表 17 筆人工查證(checklist 第 8 項人工部分)。
 - **2026-08-10**（tech-writer，文件過期清償，對照 commit `273b27a` 逐項核實）：第 1、2、4、7、8、
   9 項與第 10 項第 7 小點原本敘述「尚未實作／尚未接線」，經逐檔讀 code 確認已於 Phase 7／
   Phase 8 交付並通過 qa/風控審查，已改寫為「已解決」並附目前限制範圍與代碼行號；第 3、5、11
