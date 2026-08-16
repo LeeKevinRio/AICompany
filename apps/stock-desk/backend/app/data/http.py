@@ -86,6 +86,28 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 2.0
 #: More generous than the connect timeout on purpose -- a reachable-but-slow
 #: host must keep succeeding like it did before this change; only the
 #: "cannot connect at all" path was shortened.
+#:
+#: Why 8.0 (品質債清償批 dispatch, 2026-08-16, D5①): the pre-split default
+#: was a uniform 10s covering connect *and* read, and slow-but-successful
+#: sources (TWSE/TPEx under load) spend that budget in the read phase, after
+#: the handshake. 8s keeps most of that former allowance for exactly that
+#: phase, while the per-attempt ceiling (2s connect + 8s read) stays at the
+#: old 10s -- so relative to the pre-split behaviour this change can only
+#: shorten a request, never lengthen it, and a source that used to answer
+#: in time still does.
+#:
+#: The reachable-but-slow boundary itself ("a response arriving just under
+#: 8s still succeeds") is deliberately NOT unit-tested: httpx enforces read
+#: timeouts inside the transport layer (httpcore) against the real socket
+#: clock, and ``httpx.MockTransport`` -- this suite's only transport --
+#: bypasses that layer entirely and never applies the ``timeout`` config, so
+#: a mock-based boundary test would pass no matter what value this constant
+#: held and would therefore assert nothing. The injectable ``sleep_fn`` fake
+#: clock (see ``tests/test_fast_fail.py``) reaches only this wrapper's own
+#: waits (throttle and backoff), not httpx's internal deadline. Exercising
+#: the boundary for real would require a live socket server stalling ~8s of
+#: wall clock per case -- a slow test of httpx itself rather than of this
+#: module -- so the trade-off is recorded here instead of as a test.
 DEFAULT_READ_TIMEOUT_SECONDS = 8.0
 #: ``httpx.Client(timeout=...)`` accepts either a single float (applied to
 #: every phase) or an ``httpx.Timeout`` with per-phase values; write/pool are
