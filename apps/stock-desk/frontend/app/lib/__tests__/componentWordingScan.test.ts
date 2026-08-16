@@ -193,12 +193,12 @@ describe("DataSourcesSection.tsx — US_DATA_SOURCE_DISCLOSURE_STATEMENT (D4 定
  * 漂移),肯定語半句仍逐字保留於下方 D4 揭露句。
  */
 /**
- * TradingView 嵌入 (CEO 派工單 2026-08-16 第 4 點：新句自擬，**待風控覆核，
- * 先落地**)：比照 `adviceWording.ts` 的 `AS_OF_DATE_UNKNOWN_STATEMENT`／D4
- * 揭露句的作法，把 exported 常數本身（而不只是原始檔案文字）納入掃描面，並
- * 逐字釘住目前送審的字面，防止之後改寫時漏改 JSX 或漏改常數而彼此漂移。
+ * TradingView 嵌入：兩句均為 **risk-compliance-officer 逐字定稿（2026-08-16，
+ * 揭露句二輪 CONFIRMED、失敗句三輪刪尾版 CONFIRMED，歷程見
+ * work/stock-desk-D4-資料來源措辭.md 第七節/七之二）**。逐字釘住定稿字面，
+ * 任何變更視為漂移須重送風控後才能同步更新此處與常數本身。
  */
-describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (待風控覆核)", () => {
+describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (風控逐字定稿)", () => {
   it("disclosure statement: contains none of the §1.3 banned terms", () => {
     assertNoForbiddenTerms(
       TRADINGVIEW_CHART_DISCLOSURE_STATEMENT,
@@ -211,9 +211,11 @@ describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (待風控�
     expect(findBareRealtimeClaims(TRADINGVIEW_CHART_DISCLOSURE_STATEMENT)).toEqual([]);
   });
 
-  it("disclosure statement matches the submitted-for-review wording verbatim", () => {
+  it("disclosure statement matches the risk-approved wording verbatim", () => {
     expect(TRADINGVIEW_CHART_DISCLOSURE_STATEMENT).toBe(
-      "此互動圖表由 TradingView 提供；其資料來源與本系統已驗證的行情資料鏈是各自獨立的兩條路徑，" +
+      "此互動圖表由 TradingView 提供；其資料來源與本系統自有的行情資料鏈是各自獨立的兩條路徑，" +
+        "本系統未查證此圖表資料的正確性、完整性或時效性，亦不為其負責；" +
+        "本系統無法標示其資料時間與延遲狀態；" +
         "圖表內容僅供檢視、不參與本系統任何計算或建議產出，載入需要網路連線。",
     );
   });
@@ -230,10 +232,10 @@ describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (待風控�
     expect(findBareRealtimeClaims(TRADINGVIEW_CHART_FALLBACK_MESSAGE)).toEqual([]);
   });
 
-  it("fallback message matches the submitted-for-review wording verbatim", () => {
+  it("fallback message matches the risk-approved wording verbatim", () => {
     expect(TRADINGVIEW_CHART_FALLBACK_MESSAGE).toBe(
       "互動圖表目前未能載入，可能原因是網路連線不穩、瀏覽器擴充套件（例如廣告攔截）攔截了外部資源，" +
-        "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或切換至「本地圖表」頁籤查看本系統已驗證的資料。",
+        "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或可改用「本地圖表」頁籤。",
     );
   });
 });

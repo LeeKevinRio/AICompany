@@ -25,27 +25,30 @@ const EMBED_SCRIPT_SRC = "https://s3.tradingview.com/external-embedding/embed-wi
 const WIDGET_MOUNT_TIMEOUT_MS = 12_000;
 
 /**
- * 揭露句（CEO 派工單 2026-08-16 第 4 點：「新句自擬，標待風控覆核，先落
- * 地」）。四件事各一句、不含任何操作建議或語氣詞：圖表提供方、與本系統已驗證
- * 資料鏈的關係、不參與運算、需要網路連線。狀態：**待風控覆核**，字面尚未經
- * risk-compliance-officer 核可，先落地供審查；比照 `adviceWording.ts` 的
- * `AS_OF_DATE_UNKNOWN_STATEMENT` 同類草稿狀態標記方式。
+ * 揭露句 — **risk-compliance-officer 逐字定稿（2026-08-16，二輪 CONFIRMED）**。
+ * 歷程：初稿（frontend-engineer 自擬）遭 VETO（R1-R4）→ creative-lead 改寫 →
+ * 逐字核可（work/stock-desk-D4-資料來源措辭.md 第七節）。字面（含標點）不得再
+ * 改動，任何變更視為漂移須重送風控；`componentWordingScan.test.ts` 逐字釘住。
+ * 落地條件（風控 required）：字級 ≥ text-sm、對比 ≥ text-neutral-400、常駐不
+ * 摺疊——以 text-xs/text-neutral-500 承載視同未通過。
  */
 export const TRADINGVIEW_CHART_DISCLOSURE_STATEMENT =
-  "此互動圖表由 TradingView 提供；其資料來源與本系統已驗證的行情資料鏈是各自獨立的兩條路徑，" +
+  "此互動圖表由 TradingView 提供；其資料來源與本系統自有的行情資料鏈是各自獨立的兩條路徑，" +
+  "本系統未查證此圖表資料的正確性、完整性或時效性，亦不為其負責；" +
+  "本系統無法標示其資料時間與延遲狀態；" +
   "圖表內容僅供檢視、不參與本系統任何計算或建議產出，載入需要網路連線。";
 
 /**
  * Fallback shown when the embed script fails to load or its iframe does not
  * appear within `WIDGET_MOUNT_TIMEOUT_MS` — states the honest, plausible
  * causes (network / browser extension / third-party service) instead of
- * leaving a blank pane, and points at the same-page 本地圖表 tab as a working
- * alternative. Also **待風控覆核**, same status as the disclosure sentence
- * above.
+ * leaving a blank pane. **risk-compliance-officer 逐字定稿（2026-08-16，
+ * 三輪：尾句「該頁籤會標示…」依風控預核之刪除案移除後單句 CONFIRMED，
+ * work/stock-desk-D4-資料來源措辭.md 七之二）**。字面不得再動，漂移須重送。
  */
 export const TRADINGVIEW_CHART_FALLBACK_MESSAGE =
   "互動圖表目前未能載入，可能原因是網路連線不穩、瀏覽器擴充套件（例如廣告攔截）攔截了外部資源，" +
-  "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或切換至「本地圖表」頁籤查看本系統已驗證的資料。";
+  "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或可改用「本地圖表」頁籤。";
 
 /**
  * Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5): shown in place of the
@@ -135,7 +138,7 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
   if (tvSymbol === null) {
     return (
       <div>
-        <p className="mb-2 text-xs text-neutral-500">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
+        <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
         <p
           role="alert"
           className="rounded-md border border-dashed border-amber-700 bg-amber-950/20 p-3 text-sm text-amber-300"
@@ -161,7 +164,7 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
 
   return (
     <div>
-      <p className="mb-2 text-xs text-neutral-500">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
+      <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
       {status === "error" && (
         <p
           role="alert"
