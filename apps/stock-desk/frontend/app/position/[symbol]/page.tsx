@@ -179,7 +179,16 @@ export default function PositionDetailPage() {
           */}
           {chartTab === "tradingview" && (
             <div role="tabpanel" className="mt-3">
-              <TradingViewChartPanel symbol={symbol} market={market} />
+              {/*
+                Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, Medium
+                finding): `key` moved here, one level up from the inner
+                `<script>` tag it used to sit on — this forces a full
+                unmount/remount of the *whole* panel (host container +
+                copyright link + script, not just the script) whenever the
+                symbol or market changes, closing the stale-iframe overlap gap
+                an inner-only key left open on a same-page symbol change.
+              */}
+              <TradingViewChartPanel key={`${market}:${symbol}`} symbol={symbol} market={market} />
             </div>
           )}
 

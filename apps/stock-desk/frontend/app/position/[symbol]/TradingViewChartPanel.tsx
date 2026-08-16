@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
+import { toScriptSafeJson } from "../../lib/scriptSafeJson";
 import { toTradingViewSymbol } from "../../lib/tradingViewSymbol";
 import type { Market } from "../../lib/types";
 
@@ -46,6 +47,17 @@ export const TRADINGVIEW_CHART_FALLBACK_MESSAGE =
   "互動圖表目前未能載入，可能原因是網路連線不穩、瀏覽器擴充套件（例如廣告攔截）攔截了外部資源，" +
   "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或切換至「本地圖表」頁籤查看本系統已驗證的資料。";
 
+/**
+ * Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5): shown in place of the
+ * embed whenever `toTradingViewSymbol` rejects the resolved symbol (see its
+ * doc comment) — a neutral state, never the rejected value itself, and never
+ * a silent fallback to some other renderable symbol. Independent of, and
+ * worded distinctly from, the two 待風控覆核 sentences above (not part of
+ * this fix).
+ */
+export const TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE =
+  "此標的代號格式無法辨識，互動圖表未載入；請確認網址中的代號是否正確。";
+
 type WidgetStatus = "loading" | "ready" | "error";
 
 /**
@@ -63,21 +75,29 @@ type WidgetStatus = "loading" | "ready" | "error";
 export function TradingViewChartPanel({ symbol, market }: { symbol: string; market: Market }) {
   const widgetHostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<WidgetStatus>("loading");
+  // Shared between the mount-detection effect below and `handleScriptLoadError`
+  // (a plain event handler, not itself inside the effect) so an early script
+  // load failure and the effect's own timeout/observer never both fire.
+  const settledRef = useRef(false);
   const tvSymbol = toTradingViewSymbol(symbol, market);
 
   useEffect(() => {
     const host = widgetHostRef.current;
-    if (!host) return;
+    // Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5): `tvSymbol` is
+    // `null` whenever `toTradingViewSymbol` rejected the resolved symbol —
+    // nothing is mounted into `host` in that case (see the early return in
+    // the render below), so there is nothing here to observe either.
+    if (!host || tvSymbol === null) return;
     setStatus("loading");
+    settledRef.current = false;
 
-    let settled = false;
     // The embed script mounts its iframe asynchronously into this host with
     // no completion callback of its own — observing for that iframe's
     // arrival (or its absence past the timeout below) is the only honest
     // signal available without touching any TradingView-internal API.
     const observer = new MutationObserver(() => {
-      if (!settled && host.querySelector("iframe")) {
-        settled = true;
+      if (!settledRef.current && host.querySelector("iframe")) {
+        settledRef.current = true;
         setStatus("ready");
         observer.disconnect();
       }
@@ -85,8 +105,8 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
     observer.observe(host, { childList: true, subtree: true });
 
     const timeoutId = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
+      if (!settledRef.current) {
+        settledRef.current = true;
         observer.disconnect();
         setStatus("error");
       }
@@ -97,6 +117,34 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
       observer.disconnect();
     };
   }, [tvSymbol]);
+
+  // Low finding (qa-reviewer on 4938eb5): fires immediately if the embed
+  // `<script>` tag itself fails to load (network error, ad blocker returning
+  // a blocked response, …) instead of waiting out the full
+  // `WIDGET_MOUNT_TIMEOUT_MS` for a load that already failed.
+  const handleScriptLoadError = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    setStatus("error");
+  };
+
+  // Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5): a rejected symbol
+  // never reaches the widget config / dangerous sink below — this is the
+  // caller-side half of the whitelist defense in `toTradingViewSymbol`, a
+  // neutral state rendered instead of the invalid value itself.
+  if (tvSymbol === null) {
+    return (
+      <div>
+        <p className="mb-2 text-xs text-neutral-500">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
+        <p
+          role="alert"
+          className="rounded-md border border-dashed border-amber-700 bg-amber-950/20 p-3 text-sm text-amber-300"
+        >
+          {TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE}
+        </p>
+      </div>
+    );
+  }
 
   const config = {
     autosize: true,
@@ -148,17 +196,26 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
             </a>
           </div>
           {/*
-            `key={tvSymbol}` forces a full unmount/remount (fresh script
-            execution) whenever the resolved TradingView symbol changes —
-            e.g. navigating between two position detail pages without a full
-            page reload.
+            Remount on symbol change now happens one level up, in `page.tsx`,
+            via `key={`${market}:${symbol}`}` on this whole component — the
+            entire host (this container + the copyright link, not just this
+            `<script>`) is torn down and rebuilt, closing the stale-iframe
+            overlap gap an inner-only `key={tvSymbol}` on just the script tag
+            left open (qa-reviewer on 4938eb5, Medium finding).
+
+            Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, critical
+            reflected XSS, second of two independent layers — the first is
+            the whitelist in `toTradingViewSymbol`): `toScriptSafeJson`
+            escapes `<`/`>`/`&` to their `\uXXXX` form so nothing here can
+            close this `<script>` tag early, even if the whitelist upstream
+            were ever bypassed. See `scriptSafeJson.ts`.
           */}
           <script
-            key={tvSymbol}
             type="text/javascript"
             src={EMBED_SCRIPT_SRC}
             async
-            dangerouslySetInnerHTML={{ __html: JSON.stringify(config) }}
+            onError={handleScriptLoadError}
+            dangerouslySetInnerHTML={{ __html: toScriptSafeJson(config) }}
           />
         </div>
       </div>

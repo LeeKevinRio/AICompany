@@ -27,4 +27,52 @@ describe("toTradingViewSymbol", () => {
   it("ignores an exchange hint entirely for US (no TW-only concept leaks across markets)", () => {
     expect(toTradingViewSymbol("aapl", "US", "TPEX")).toBe("AAPL");
   });
+
+  it("accepts a US ticker containing `.` and `-` (e.g. BRK.B, BF-B)", () => {
+    expect(toTradingViewSymbol("brk.b", "US")).toBe("BRK.B");
+    expect(toTradingViewSymbol("bf-b", "US")).toBe("BF-B");
+  });
+});
+
+/**
+ * Regression tests for qa-reviewer's NEEDS_CHANGES on 4938eb5 (critical
+ * reflected XSS): `position/[symbol]/page.tsx`'s
+ * `decodeURIComponent(params.symbol)` is attacker-controlled and previously
+ * flowed unvalidated into `TradingViewChartPanel`'s `dangerouslySetInnerHTML`
+ * sink through this function. These lock in the whitelist (layer 1 of the
+ * two-layer fix — layer 2 is `scriptSafeJson.test.ts`'s coverage of the
+ * script-context-safe serialization `TradingViewChartPanel.tsx` applies to
+ * whatever this function returns).
+ */
+describe("toTradingViewSymbol — XSS whitelist regression (qa-reviewer NEEDS_CHANGES on 4938eb5)", () => {
+  it("rejects a symbol containing a literal `</script>` fragment (TW and US)", () => {
+    expect(toTradingViewSymbol("2330</script><script>alert(1)</script>", "TW")).toBeNull();
+    expect(toTradingViewSymbol("AAPL</script><script>alert(1)</script>", "US")).toBeNull();
+  });
+
+  it('rejects a symbol containing a double quote (`"`)', () => {
+    expect(toTradingViewSymbol('2330","evil":"1', "TW")).toBeNull();
+    expect(toTradingViewSymbol('AAPL"};alert(1);//', "US")).toBeNull();
+  });
+
+  it("rejects a symbol that is `</script>` after URL-decoding (%3C%2Fscript%3E)", () => {
+    // The real attack surface: `page.tsx` calls `decodeURIComponent(params.symbol)`
+    // before this function ever sees the value, so the *decoded* form (what
+    // this function actually receives) is what must be rejected.
+    const decoded = decodeURIComponent("%3C%2Fscript%3E");
+    expect(decoded).toBe("</script>");
+    expect(toTradingViewSymbol(decoded, "TW")).toBeNull();
+    expect(toTradingViewSymbol(decoded, "US")).toBeNull();
+  });
+
+  it("rejects other non-whitelisted characters (spaces, angle brackets, ampersand, semicolon)", () => {
+    expect(toTradingViewSymbol("2330 OR 1=1", "TW")).toBeNull();
+    expect(toTradingViewSymbol("<img src=x onerror=alert(1)>", "TW")).toBeNull();
+    expect(toTradingViewSymbol("AAPL&x=1", "US")).toBeNull();
+    expect(toTradingViewSymbol("2330;drop", "TW")).toBeNull();
+  });
+
+  it("rejects an empty symbol (whitespace-only input trims to nothing)", () => {
+    expect(toTradingViewSymbol("   ", "TW")).toBeNull();
+  });
 });

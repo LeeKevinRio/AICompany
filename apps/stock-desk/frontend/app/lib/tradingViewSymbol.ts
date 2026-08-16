@@ -21,15 +21,36 @@ import type { Market } from "./types";
  * chart. If a future directory sync starts distinguishing 上市/上櫃, pass
  * `"TPEX"` explicitly from that new field rather than adding guessing logic
  * here.
+ *
+ * Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, critical reflected
+ * XSS): the caller's `symbol` for this page is `decodeURIComponent(params.symbol)`
+ * from the URL (`position/[symbol]/page.tsx`) — an attacker-controlled string
+ * that was previously interpolated into `TradingViewChartPanel`'s widget
+ * config with no validation at all, and that config is rendered via
+ * `dangerouslySetInnerHTML`. This is the first of two independent defensive
+ * layers (the second is the script-context-safe JSON serialization in
+ * `TradingViewChartPanel.tsx` itself): a real TW/US ticker only ever contains
+ * letters, digits, `.`, and `-` (US tickers use both, e.g. `BRK.B`,
+ * `BF-B`; TW tickers are plain alphanumerics), so anything outside that
+ * whitelist is rejected outright rather than passed through. On rejection
+ * this returns `null` — never a silently-substituted or partially-sanitized
+ * value — so the caller must render a neutral "invalid symbol" state instead
+ * of ever reaching the dangerous sink.
  */
 export type TradingViewExchangeHint = "TWSE" | "TPEX";
+
+/** TW/US ticker whitelist: letters, digits, `.`, `-` only — see doc comment above. */
+const ALLOWED_SYMBOL_PATTERN = /^[A-Za-z0-9.-]+$/;
 
 export function toTradingViewSymbol(
   symbol: string,
   market: Market,
   exchangeHint?: TradingViewExchangeHint,
-): string {
+): string | null {
   const trimmed = symbol.trim();
+  if (!ALLOWED_SYMBOL_PATTERN.test(trimmed)) {
+    return null;
+  }
   if (market === "US") {
     return trimmed.toUpperCase();
   }
