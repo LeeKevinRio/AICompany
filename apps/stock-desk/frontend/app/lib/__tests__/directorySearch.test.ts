@@ -476,10 +476,24 @@ describe("sectorAfterDirectorySelection (產業別自動帶入, CEO 指示 2026-
 /**
  * 產業別來源說明句（`SECTOR_SOURCE_DISCLOSURE`，`format.ts`）。
  *
- * **待 risk-compliance-officer 覆核**：下面的逐字比對是防止句子被無聲改寫的守門，
- * 不代表這句已經核可。風控覆核後若指定改寫，這裡與 `format.ts` 的註解要一起更新。
+ * risk-compliance-officer 三輪定稿（2026-08-16）：下面的逐字比對是防止定稿被
+ * 無聲改寫的守門——字面（含標點）任何變更視為漂移，須重送風控後才能同步更新
+ * 這裡與 `format.ts` 的註解。
  */
-describe("SECTOR_SOURCE_DISCLOSURE (產業別來源說明，待風控覆核)", () => {
+describe("SECTOR_SOURCE_DISCLOSURE (產業別來源說明，風控三輪定稿)", () => {
+  it("matches the risk-approved wording verbatim", () => {
+    // Third-round verbatim approval, 2026-08-16 (work/stock-desk-D4-資料來源措辭.md §5).
+    // Deliberately re-typed here rather than importing the constant, so a drift in
+    // format.ts fails this test instead of silently propagating.
+    expect(SECTOR_SOURCE_DISCLOSURE).toBe(
+      "產業別的預設值取自證交所公開資料中的上市公司產業別；" +
+        "已填入的值不會被目錄同步覆蓋，台股持倉留空時，單一產業佔比上限會如實顯示無法評估；" +
+        "下次目錄同步會自動補上。" +
+        "上櫃股票、ETF 不在該來源的涵蓋範圍；上市個股若查無資料同樣會留空。" +
+        "本欄位可自行修改，表單送出時儲存的是該欄位當下顯示的值。",
+    );
+  });
+
   it("contains none of the §1.3 banned terms", () => {
     assertNoForbiddenTerms(
       SECTOR_SOURCE_DISCLOSURE,
@@ -492,10 +506,10 @@ describe("SECTOR_SOURCE_DISCLOSURE (產業別來源說明，待風控覆核)", (
     expect(findBareRealtimeClaims(SECTOR_SOURCE_DISCLOSURE)).toEqual([]);
   });
 
-  it("states the source, the staleness basis, the uncovered instruments and that the field is editable", () => {
+  it("states the source, the no-overwrite rule, the current cap consequence and that the field is editable", () => {
     expect(SECTOR_SOURCE_DISCLOSURE).toContain("證交所公開資料");
-    expect(SECTOR_SOURCE_DISCLOSURE).toContain("最後一次同步的時間");
-    expect(SECTOR_SOURCE_DISCLOSURE).toContain("上櫃股票與 ETF");
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("不會被目錄同步覆蓋");
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("如實顯示無法評估");
     expect(SECTOR_SOURCE_DISCLOSURE).toContain("可自行修改");
   });
 
