@@ -18,7 +18,9 @@ from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
     NO_SECTOR_CANDIDATE_DETAIL,
     NO_SECTOR_DETAILS,
+    NO_SECTOR_ETF_CAUSE_DETAIL,
     NO_SECTOR_ETF_DETAIL,
+    NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL,
     NO_SECTOR_UNFILED_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
     RANGE_ACTION_LABELS,
@@ -190,13 +192,53 @@ def test_missing_sector_reads_as_an_unfilled_value_not_a_missing_field() -> None
 )
 def test_each_way_the_sector_is_missing_gets_its_own_sentence(gap: str, expected: str) -> None:
     # AC-12.3 as risk-compliance settled it on 2026-08-09: distinct states,
-    # distinct sentences, none of them shared. The 2026-08-09 texts are
-    # risk-approved copy; the ETF one (D6, 2026-08-16) is pending review. All
-    # are asserted verbatim rather than by keyword.
+    # distinct sentences, none of them shared. The 2026-08-09 texts and the ETF
+    # one (D6 + R-D6-1, 2026-08-16) are all risk-approved copy, asserted
+    # verbatim rather than by keyword.
     check = _check(_ctx(sector_gap=gap), "sector_weight")
     assert check.status == "not_evaluable"
     assert check.detail == expected
     assert len({*NO_SECTOR_DETAILS.values()}) == len(NO_SECTOR_DETAILS)
+
+
+def test_the_etf_sentence_is_the_risk_approved_wording_character_for_character() -> None:
+    # R-D6-1 (2026-08-16): both sentences are risk-approved copy pinned here in
+    # full. Any edit -- including punctuation -- is a wording drift that has to
+    # go back to risk-compliance before it ships.
+    assert NO_SECTOR_ETF_DETAIL == (
+        "此標的的持倉為 ETF；台灣證交所產業別分類僅適用於個股，不適用於 ETF，"
+        "單一產業佔比上限本次不計算，回報 not_evaluable。"
+        "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。"
+    )
+    assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL == (
+        "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。"
+    )
+
+
+def test_the_etf_cause_never_ships_without_the_residual_risk_disclosure() -> None:
+    # R-D6-1's whole point: "the cap did not run" must not be readable as
+    # "there is nothing to worry about". The two sentences are one constant, so
+    # there must be no reachable string that carries the cause alone -- neither
+    # in the mapping every caller reads, nor out of the check itself.
+    assert NO_SECTOR_ETF_DETAIL.startswith(NO_SECTOR_ETF_CAUSE_DETAIL)
+    assert NO_SECTOR_ETF_DETAIL.endswith(NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL)
+    for detail in NO_SECTOR_DETAILS.values():
+        assert (NO_SECTOR_ETF_CAUSE_DETAIL in detail) == (
+            NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL in detail
+        )
+    detail = _check(_ctx(sector_gap="etf_instrument"), "sector_weight").detail
+    assert NO_SECTOR_ETF_CAUSE_DETAIL in detail
+    assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL in detail
+
+
+def test_the_residual_risk_sentence_is_not_reused_on_the_unreviewed_states() -> None:
+    # The same gap was noted for ``unsupported_market``, but its wording is
+    # 列管後批 (not approved yet): copying this sentence onto it would publish
+    # unreviewed copy, and its "此 ETF" subject would be false there anyway.
+    for gap, detail in NO_SECTOR_DETAILS.items():
+        if gap == "etf_instrument":
+            continue
+        assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL not in detail
 
 
 def test_a_candidate_is_not_told_to_fill_in_a_holding_it_does_not_have() -> None:

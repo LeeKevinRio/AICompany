@@ -11,7 +11,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.advice.limits import LIMIT_IDS, NO_NET_WORTH_DETAIL
+from app.advice.limits import (
+    LIMIT_IDS,
+    NO_NET_WORTH_DETAIL,
+    NO_SECTOR_ETF_DETAIL,
+    NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL,
+)
 from app.settings.models import NetWorthSettings
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
@@ -204,6 +209,14 @@ def test_an_etf_holding_is_excluded_with_the_etf_cause_not_the_fill_in_one(
     assert "尚未填寫產業別" not in reason
     assert "ETF" in reason
     assert "不適用" in reason
+    # R-D6-1 (2026-08-16): this ``excluded[].reason`` is the string the front
+    # end renders under 「未納入的標的」 (``RiskGauge.tsx``'s ``ExcludedList``),
+    # so the residual-risk disclosure has to survive the whole serialisation
+    # path, not just exist in ``limits.py``. Pinned verbatim against the
+    # constant *and* as a literal, so neither end can drift alone.
+    assert reason == NO_SECTOR_ETF_DETAIL
+    assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL in reason
+    assert "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。" in reason
 
 
 def test_every_priced_holding_carries_its_data_provenance(api_harness: ApiHarness) -> None:

@@ -153,10 +153,9 @@ NET_WORTH_SOFT_NOTICE_DAYS = 7
 #: Wording reviewed and approved by risk-compliance on 2026-08-09 (FR-12 句 1
 #: 修正句), recorded in ``work/reviews/c1-phase8-review.md``. Those four
 #: sentences are risk-approved copy: changing any of them needs a fresh review.
-#: :data:`NO_SECTOR_ETF_DETAIL` (added 2026-08-16 for D6) is a self-drafted
-#: sentence **pending risk-compliance review** -- it may be reworded by that
-#: review, but must keep stating that the taxonomy does not apply to ETFs
-#: rather than asking the owner to file a value.
+#: :data:`NO_SECTOR_ETF_DETAIL` (added 2026-08-16 for D6) was approved by
+#: risk-compliance on the same terms, and R-D6-1 of that same review required a
+#: second sentence after it (see :data:`NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL`).
 SectorGap = Literal[
     "no_position", "unfiled", "etf_instrument", "unsupported_market", "mixed"
 ]
@@ -168,10 +167,35 @@ NO_SECTOR_UNFILED_DETAIL = (
     "此標的的持倉尚未填寫產業別，單一產業佔比上限本次不計算，回報 not_evaluable。"
     "可在持倉編輯或 CSV 匯入填入台灣證交所產業別後啟用這條上限。"
 )
-NO_SECTOR_ETF_DETAIL = (
+#: D6 句 1, approved verbatim by risk-compliance on 2026-08-16: the cap is not
+#: computed because the taxonomy classifies companies rather than funds.
+NO_SECTOR_ETF_CAUSE_DETAIL = (
     "此標的的持倉為 ETF；台灣證交所產業別分類僅適用於個股，不適用於 ETF，"
     "單一產業佔比上限本次不計算，回報 not_evaluable。"
 )
+
+#: R-D6-1 (``work/reviews/2026-08-16-品質債清償批-覆核.md``), wording drafted in
+#: ``work/stock-desk-D4-資料來源措辭.md`` 六 and confirmed verbatim by
+#: risk-compliance on 2026-08-16. The cause sentence alone lets "the cap did
+#: not run" be read as "there is nothing to worry about" -- an index ETF (a
+#: leveraged one in particular) is frequently concentrated in a single
+#: industry, and this product cannot see through the fund to say so. This
+#: sentence states that limit of the system instead of leaving the silence to
+#: be read as reassurance. It carries **no** action guidance on purpose.
+#:
+#: Concatenated into :data:`NO_SECTOR_ETF_DETAIL` rather than emitted by a
+#: separate branch so the two sentences cannot come apart: every caller reads
+#: the single mapping entry below, so there is no code path that publishes the
+#: cause without this disclosure. Not applied to
+#: :data:`NO_SECTOR_UNSUPPORTED_MARKET_DETAIL` -- the same gap was noted there
+#: by the review but its wording is **not approved yet** (列管後批), and
+#: reusing this sentence would be publishing unreviewed copy.
+NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL = (
+    "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。"
+)
+
+NO_SECTOR_ETF_DETAIL = NO_SECTOR_ETF_CAUSE_DETAIL + NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL
+
 NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
     "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
     "尚未決定其他市場的分類方式，單一產業佔比上限本次不計算，回報 not_evaluable。"
