@@ -245,6 +245,56 @@ def test_advice_without_price_data_is_200_insufficient(api_harness: ApiHarness) 
     assert "沒有可用的日線資料" in body["reason"]
 
 
+@pytest.mark.parametrize(
+    ("bar_count", "held"),
+    [(200, True), (200, False), (20, True)],
+)
+def test_a_card_is_never_published_without_the_date_it_was_computed_from(
+    api_harness: ApiHarness, bar_count: int, held: bool
+) -> None:
+    """R-D5②-2: ``advice is not None`` implies ``data.last_bar_date is not None``.
+
+    This invariant is the basis of the D5② 不降級 ruling (CEO 裁決 2026-08-16,
+    方案 A+, recorded in ``work/reviews/2026-08-16-品質債清償批-覆核.md``): the
+    front end's as-of slot may keep disclosing "無法標示評估所依據的資料時間"
+    as an *unreachable* honest fallback precisely because a published card
+    always carries a bar date. **If this test goes red, the ruling's premise is
+    broken: stop and take it back to risk-compliance for a fresh decision
+    rather than adjusting the assertion.**
+
+    Driven through the real endpoint (not the pure layer) because the coupling
+    being pinned is between two fields of the same HTTP envelope: ``advice`` is
+    emitted only when a latest bar exists (``app/api/advice.py``), and
+    ``data.last_bar_date`` is derived from the same bar list
+    (``LoadedBars.meta``). Both directions are covered: bars present -> card
+    plus date, no bars -> neither.
+    """
+    _seed_bars(api_harness, count=bar_count)
+    if held:
+        api_harness.client.post("/api/positions", json=position_payload())
+    body = api_harness.client.get("/api/advice/2330").json()
+
+    assert body["advice"] is not None
+    assert body["data"]["last_bar_date"] is not None
+    assert body["held"] is held
+
+
+def test_without_bars_neither_the_card_nor_the_basis_date_is_published(
+    api_harness: ApiHarness,
+) -> None:
+    # The other direction of the R-D5②-2 invariant: the only state in which
+    # ``last_bar_date`` is null is also the state in which no card exists, so
+    # the pair (card, unknown date) the as-of fallback would have to describe
+    # is not reachable through this endpoint.
+    body = api_harness.client.get("/api/advice/9999").json()
+    assert body["advice"] is None
+    assert body["data"]["last_bar_date"] is None
+
+    foreign = api_harness.client.get("/api/advice/AAPL", params={"market": "US"}).json()
+    assert foreign["advice"] is None
+    assert foreign["data"]["last_bar_date"] is None
+
+
 def test_advice_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
     _seed_bars(api_harness)
     api_harness.client.post("/api/positions", json=position_payload())
