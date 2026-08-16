@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
+import { ErrorPanel } from "../../components/ErrorPanel";
 import { SymbolCombobox } from "../../components/SymbolCombobox";
 import { applyDirectorySelection } from "../../lib/directorySearch";
 import { CURRENCY_OPTIONS, INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS } from "../../lib/format";
+import { shouldBlockPositionSubmit, submitButtonState } from "../../lib/positionFormSubmit";
 import { useCreatePosition } from "../../lib/queries";
 import type { CreatePositionInput, Currency, InstrumentType, Market } from "../../lib/types";
 
@@ -51,6 +53,7 @@ export function ManualAddForm() {
   const createMutation = useCreatePosition();
 
   const fieldErrors = createMutation.error instanceof ApiError ? createMutation.error.fieldErrors : {};
+  const submitButton = submitButtonState(createMutation.isPending, "新增部位", "新增中…");
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -58,6 +61,10 @@ export function ManualAddForm() {
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // CEO 實測 2026-08-16 (EditPositionModal 同批體檢): an Enter-key implicit
+    // form submission can bypass the 新增 button's own `disabled` — guard the
+    // handler itself so a second mutate() can never fire mid-request.
+    if (shouldBlockPositionSubmit(createMutation.isPending)) return;
     // `required` on the three <select>s below prevents submission while any
     // of them is still at its empty placeholder value.
     if (form.market === "" || form.instrument_type === "" || form.currency === "") return;
@@ -226,19 +233,18 @@ export function ManualAddForm() {
         <div className="sm:col-span-2">
           <button
             type="submit"
-            disabled={createMutation.isPending}
+            disabled={submitButton.disabled}
             className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {createMutation.isPending ? "新增中…" : "新增部位"}
+            {submitButton.label}
           </button>
         </div>
       </form>
 
       {createMutation.isError && Object.keys(fieldErrors).length === 0 && (
-        <p role="alert" className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          新增失敗：
-          {createMutation.error instanceof ApiError ? createMutation.error.message : "未知錯誤"}
-        </p>
+        <div className="mt-4">
+          <ErrorPanel label="新增失敗" error={createMutation.error} />
+        </div>
       )}
 
       {createMutation.isSuccess && (

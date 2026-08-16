@@ -81,6 +81,16 @@ export function usePositions(enabled: boolean) {
   });
 }
 
+/**
+ * 送出體驗體檢 (CEO 實測 2026-08-16): a position edit changes market value,
+ * so an edit's invalidation must reach every screen a market-value change
+ * could stale, not just the positions list — `["portfolio-summary"]` (總覽
+ * table + summary cards) *and* `["portfolio-limits"]` (FR-8's five risk
+ * caps, judged over the whole book). All three of `useCreatePosition` /
+ * `useUpdatePosition` / `useDeletePosition` / `useImportPositionsCsv` below
+ * already invalidated all three keys before this audit — confirmed complete,
+ * no query key was missing.
+ */
 export function useCreatePosition() {
   const queryClient = useQueryClient();
   return useMutation({

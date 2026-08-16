@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
+import { ErrorPanel } from "./ErrorPanel";
 import { SymbolCombobox } from "./SymbolCombobox";
 import { applyDirectorySelection } from "../lib/directorySearch";
 import {
@@ -10,6 +11,7 @@ import {
   MARKET_OPTIONS,
   SECTOR_US_DISABLED_HINT,
 } from "../lib/format";
+import { shouldBlockPositionSubmit, submitButtonState } from "../lib/positionFormSubmit";
 import { useSectors, useUpdatePosition } from "../lib/queries";
 import type {
   Currency,
@@ -93,14 +95,18 @@ export function EditPositionModal({
 
   const fieldErrors =
     updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
+  const saveButton = submitButtonState(updateMutation.isPending, "儲存變更", "儲存中…");
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      // Locked while a save is in flight, same reasoning as the 取消 button
+      // and the backdrop click below: closing mid-request would leave the
+      // user unsure whether their 儲存 actually went through.
+      if (event.key === "Escape" && !updateMutation.isPending) onClose();
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, updateMutation.isPending]);
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -122,6 +128,11 @@ export function EditPositionModal({
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // CEO 實測 2026-08-16: a text field's Enter key can reach this handler
+    // via the form's native implicit submission even while the 儲存 button
+    // itself is `disabled` — this guard is what actually stops a second
+    // `mutate()` from firing mid-request, not just the button's own state.
+    if (shouldBlockPositionSubmit(updateMutation.isPending)) return;
     // `required` on the three <select>s below prevents submission while any
     // of them is still at its empty placeholder value.
     if (form.market === "" || form.instrument_type === "" || form.currency === "") return;
@@ -148,7 +159,7 @@ export function EditPositionModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-8"
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !updateMutation.isPending) onClose();
       }}
     >
       <div
@@ -164,8 +175,9 @@ export function EditPositionModal({
           <button
             type="button"
             onClick={onClose}
+            disabled={updateMutation.isPending}
             aria-label="關閉編輯視窗"
-            className="rounded px-1 text-neutral-400 hover:text-neutral-100"
+            className="rounded px-1 text-neutral-400 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             ✕
           </button>
@@ -348,15 +360,16 @@ export function EditPositionModal({
           <div className="flex gap-3 sm:col-span-2">
             <button
               type="submit"
-              disabled={updateMutation.isPending}
+              disabled={saveButton.disabled}
               className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {updateMutation.isPending ? "儲存中…" : "儲存變更"}
+              {saveButton.label}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-900"
+              disabled={updateMutation.isPending}
+              className="rounded-md border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
             >
               取消
             </button>
@@ -364,13 +377,9 @@ export function EditPositionModal({
         </form>
 
         {updateMutation.isError && Object.keys(fieldErrors).length === 0 && (
-          <p
-            role="alert"
-            className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300"
-          >
-            儲存失敗：
-            {updateMutation.error instanceof ApiError ? updateMutation.error.message : "未知錯誤"}
-          </p>
+          <div className="mt-4">
+            <ErrorPanel label="儲存失敗" error={updateMutation.error} />
+          </div>
         )}
       </div>
     </div>

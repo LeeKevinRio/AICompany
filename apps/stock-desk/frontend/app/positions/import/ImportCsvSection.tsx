@@ -2,16 +2,24 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { ApiError, positionsTemplateCsvUrl } from "../../lib/api";
+import { positionsTemplateCsvUrl } from "../../lib/api";
+import { ErrorPanel } from "../../components/ErrorPanel";
+import { shouldBlockPositionSubmit, submitButtonState } from "../../lib/positionFormSubmit";
 import { useImportPositionsCsv } from "../../lib/queries";
 
 export function ImportCsvSection() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const importMutation = useImportPositionsCsv();
+  const submitButton = submitButtonState(importMutation.isPending, "上傳並匯入", "匯入中…");
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Same re-entry guard as the other three submit surfaces (see
+    // `positionFormSubmit.ts`'s doc comment) — the file input itself does
+    // not implicitly submit on Enter, but the guard is kept here too so the
+    // handler's own behaviour does not depend on that browser detail.
+    if (shouldBlockPositionSubmit(importMutation.isPending)) return;
     if (!selectedFile) return;
     importMutation.mutate(selectedFile, {
       onSuccess: () => {
@@ -45,20 +53,17 @@ export function ImportCsvSection() {
         />
         <button
           type="submit"
-          disabled={!selectedFile || importMutation.isPending}
+          disabled={!selectedFile || submitButton.disabled}
           className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {importMutation.isPending ? "匯入中…" : "上傳並匯入"}
+          {submitButton.label}
         </button>
       </form>
 
       {importMutation.isError && (
-        <p role="alert" className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          匯入失敗：
-          {importMutation.error instanceof ApiError
-            ? importMutation.error.message
-            : "未知錯誤"}
-        </p>
+        <div className="mt-4">
+          <ErrorPanel label="匯入失敗" error={importMutation.error} />
+        </div>
       )}
 
       {importMutation.isSuccess && (
