@@ -443,6 +443,13 @@ PUT/PATCH 警示端點、內建回測策略（RSI／突破）六項功能已於 
   交叉比對表因此全 FAIL 屬依賴性失敗);(d) Alpha Vantage 無 key 未發請求(同上)。
   槓桿 ETF 註冊表 17 筆結構檢查 OK 但 verified 全 False(需人工對發行人公開說明書,
   checklist 第 8 項人工部分)。完整報告:work/research/驗證結果-2026-08-16.md(CEO 本機)。
+- **2026-08-16（二輪,FinMind+交叉比對驗證通過,CEO 本機執行,附終端輸出證據）**：
+  CEO 設定 FINMIND_API_TOKEN 後重跑:**FinMind PASS**(7 筆 fresh);
+  **三張零容差交叉比對表 21/21 全 PASS**——TWSE vs FinMind 同日同檔收盤價與成交量
+  逐筆完全一致,無單位不一致,checklist 第 3/4/6 項通過。台股資料鏈自此具雙獨立來源
+  互證證據。**Alpha Vantage 實測發現**:key 有效但 adapter 的 outputsize=full 參數
+  已成免費方案付費功能(訓練知識過時),需改 compact(最近 100 根)——待修。
+  TPEx legacy/台銀 FX 維持前輪結論(評估報告 e585531)。
 - **2026-08-10**（tech-writer，文件過期清償，對照 commit `273b27a` 逐項核實）：第 1、2、4、7、8、
   9 項與第 10 項第 7 小點原本敘述「尚未實作／尚未接線」，經逐檔讀 code 確認已於 Phase 7／
   Phase 8 交付並通過 qa/風控審查，已改寫為「已解決」並附目前限制範圍與代碼行號；第 3、5、11
