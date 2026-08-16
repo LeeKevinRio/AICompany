@@ -10,6 +10,13 @@ database file or a new architecture layer.
 Writes are an idempotent upsert keyed on ``(symbol, market)`` -- re-running the
 sync CLI (``python -m app.directory.sync``) refreshes existing rows in place
 rather than duplicating them, mirroring ``PriceBarCache.put``.
+
+The industry category lives in the same row but is written by a *separate*
+call (:meth:`SecurityDirectoryStore.apply_sectors`), because it comes from a
+different TWSE dataset than the symbol/name columns. ``upsert`` therefore
+never touches the three ``sector*`` columns: a name refresh must not blank out
+a category that a still-valid earlier sector fetch established, and the two
+sources fail independently (AC-2's rule, applied one level down).
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.data.cache import resolve_db_path
-from app.directory.models import DirectoryEntry
+from app.directory.models import DirectoryEntry, DirectorySectorAssignment
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS security_directory (
@@ -31,6 +38,9 @@ CREATE TABLE IF NOT EXISTS security_directory (
     source TEXT NOT NULL,
     as_of TEXT NOT NULL,
     synced_at TEXT NOT NULL,
+    sector TEXT,
+    sector_source TEXT,
+    sector_as_of TEXT,
     PRIMARY KEY (symbol, market)
 )
 """
@@ -41,6 +51,31 @@ _CREATE_NAME_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_security_directory_name
 ON security_directory (name)
 """
+
+#: Added after the directory table shipped; see ``_migrate_add_sector_columns``.
+_SECTOR_COLUMNS = ("sector", "sector_source", "sector_as_of")
+
+_SELECT_COLUMNS = "symbol, market, name, source, as_of, sector, sector_source, sector_as_of"
+
+
+def _migrate_add_sector_columns(conn: sqlite3.Connection) -> None:
+    """Add the three nullable ``sector*`` columns to a pre-existing database.
+
+    ``ALTER TABLE ... ADD COLUMN`` with no NOT NULL/DEFAULT is the one schema
+    change SQLite performs in place, so an already-populated directory (the
+    CEO's local database holds 11,779 rows) keeps every row and needs no
+    rebuild, re-sync or export/import. Existing rows get NULL in all three
+    columns, which is exactly the "this source has no category for this
+    security" state -- the migration classifies nothing on its own.
+
+    Idempotent: safe to call on every store construction, on both a fresh
+    database (where ``_CREATE_TABLE_SQL`` already declared the columns) and a
+    legacy one.
+    """
+    existing = {column[1] for column in conn.execute("PRAGMA table_info(security_directory)")}
+    for column in _SECTOR_COLUMNS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE security_directory ADD COLUMN {column} TEXT")
 
 
 class SecurityDirectoryStore:
@@ -63,6 +98,7 @@ class SecurityDirectoryStore:
         with closing(self._connect()) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE_SQL)
+            _migrate_add_sector_columns(conn)
             conn.execute(_CREATE_NAME_INDEX_SQL)
 
     def upsert(
@@ -71,7 +107,12 @@ class SecurityDirectoryStore:
         *,
         synced_at: datetime | None = None,
     ) -> int:
-        """Upsert ``entries``, keyed on ``(symbol, market)``. Returns the row count written."""
+        """Upsert ``entries``, keyed on ``(symbol, market)``. Returns the row count written.
+
+        Only the symbol/name source's own columns are written; see the module
+        docstring for why the ``sector*`` columns are deliberately absent from
+        both the INSERT list and the DO UPDATE SET clause.
+        """
         if not entries:
             return 0
         moment = synced_at if synced_at is not None else datetime.now(UTC)
@@ -116,8 +157,8 @@ class SecurityDirectoryStore:
         """Exact-match lookup by symbol. Returns ``None`` when not in the directory."""
         with closing(self._connect()) as conn:
             cursor = conn.execute(
-                """
-                SELECT symbol, market, name, source, as_of
+                f"""
+                SELECT {_SELECT_COLUMNS}
                 FROM security_directory
                 WHERE symbol = ?
                 """,
@@ -144,8 +185,8 @@ class SecurityDirectoryStore:
 
         with closing(self._connect()) as conn:
             prefix_cursor = conn.execute(
-                """
-                SELECT symbol, market, name, source, as_of
+                f"""
+                SELECT {_SELECT_COLUMNS}
                 FROM security_directory
                 WHERE symbol LIKE ? ESCAPE '\\'
                 ORDER BY symbol ASC
@@ -155,8 +196,8 @@ class SecurityDirectoryStore:
             prefix_rows = prefix_cursor.fetchall()
 
             name_cursor = conn.execute(
-                """
-                SELECT symbol, market, name, source, as_of
+                f"""
+                SELECT {_SELECT_COLUMNS}
                 FROM security_directory
                 WHERE name LIKE ? ESCAPE '\\'
                 ORDER BY symbol ASC
@@ -177,18 +218,73 @@ class SecurityDirectoryStore:
         truncated = len(merged) > limit
         return merged[:limit], truncated
 
+    def apply_sectors(self, assignments: Sequence[DirectorySectorAssignment]) -> int:
+        """Write ``assignments`` onto the rows they name; return the rows matched.
+
+        UPDATE-only on purpose: the sector dataset (``t187ap03_L``) lists only
+        上市 companies and publishes no quote row, so a symbol it names that
+        the directory has never seen is not evidence the security exists in
+        the directory's own sense -- inserting it would mint a directory entry
+        from a dataset that is not the directory's name source. The caller
+        reports the shortfall (``len(assignments) - returned``) instead, so an
+        unexplained gap surfaces rather than being silently papered over.
+
+        The return value counts rows the UPDATE *matched*, which includes rows
+        whose category was already identical -- re-running the sync is
+        idempotent and reports the same number, not zero.
+        """
+        if not assignments:
+            return 0
+        rows = [
+            (
+                assignment.sector,
+                assignment.source,
+                assignment.as_of.isoformat(),
+                assignment.symbol,
+                assignment.market,
+            )
+            for assignment in assignments
+        ]
+        matched = 0
+        with closing(self._connect()) as conn, conn:
+            for row in rows:
+                cursor = conn.execute(
+                    """
+                    UPDATE security_directory
+                    SET sector = ?, sector_source = ?, sector_as_of = ?
+                    WHERE symbol = ? AND market = ?
+                    """,
+                    row,
+                )
+                matched += cursor.rowcount
+        return matched
+
+    def sector_count(self) -> int:
+        """How many directory rows currently carry an industry category."""
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM security_directory WHERE sector IS NOT NULL"
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+
 
 def _escape_like(value: str) -> str:
     """Escape SQLite ``LIKE`` wildcards so a literal ``%``/``_`` in a query is not a wildcard."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _row_to_entry(row: tuple[str, str, str, str, str]) -> DirectoryEntry:
-    symbol, market, name, source, as_of_str = row
+def _row_to_entry(
+    row: tuple[str, str, str, str, str, str | None, str | None, str | None],
+) -> DirectoryEntry:
+    symbol, market, name, source, as_of_str, sector, sector_source, sector_as_of_str = row
     return DirectoryEntry(
         symbol=symbol,
         name=name,
         market=market,  # type: ignore[arg-type]  # DB only ever holds validated Market values
         source=source,
         as_of=datetime.fromisoformat(as_of_str),
+        sector=sector,
+        sector_source=sector_source,
+        sector_as_of=None if sector_as_of_str is None else datetime.fromisoformat(sector_as_of_str),
     )
