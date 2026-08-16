@@ -71,11 +71,25 @@ def _migrate_add_sector_columns(conn: sqlite3.Connection) -> None:
     Idempotent: safe to call on every store construction, on both a fresh
     database (where ``_CREATE_TABLE_SQL`` already declared the columns) and a
     legacy one.
+
+    Concurrency-safe too, which the ``PRAGMA``-then-``ALTER`` shape alone is
+    not: SQLite runs DDL outside the implicit transaction Python's sqlite3
+    opens for DML, so the backend and the sync CLI starting against the same
+    legacy database can both read "column missing" before either writes. The
+    loser's ``ALTER`` then fails with ``duplicate column name``, which reports
+    the very state this function wants, so it is swallowed. Every other
+    ``OperationalError`` (locked database, missing table) still propagates --
+    a migration that silently did nothing would be worse than a loud failure.
     """
     existing = {column[1] for column in conn.execute("PRAGMA table_info(security_directory)")}
     for column in _SECTOR_COLUMNS:
-        if column not in existing:
+        if column in existing:
+            continue
+        try:
             conn.execute(f"ALTER TABLE security_directory ADD COLUMN {column} TEXT")
+        except sqlite3.OperationalError as error:
+            if "duplicate column name" not in str(error).lower():
+                raise
 
 
 class SecurityDirectoryStore:

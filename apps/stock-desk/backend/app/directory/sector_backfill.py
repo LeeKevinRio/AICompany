@@ -10,7 +10,10 @@ reads the directory that a previous sync already wrote).
   never rewritten, even when the directory disagrees: the user picked that
   value by hand, and a sync job silently reclassifying a holding would change
   a risk-cap bucket behind their back. Every skip is counted with its reason,
-  so "nothing happened" is always explainable.
+  so "nothing happened" is always explainable. The rule is enforced in the
+  write itself (``PositionStore.fill_sector_if_empty`` is a compare-and-set),
+  not only by the read below, so a category the user saves while a backfill is
+  running still wins.
 - **Only TW holdings.** A US position may not carry a TWSE category at all
   (``SECTOR_US_REJECTED_MESSAGE``, AC-12.6), so those are skipped by market.
 - **Only directory hits with a category.** A symbol the directory has never
@@ -70,7 +73,10 @@ def backfill_position_sectors(
     """Fill empty TW holding categories from the directory; never overwrite.
 
     Idempotent: a second run finds every previously filled holding in the
-    "already set" bucket and writes nothing.
+    "already set" bucket and writes nothing. A holding classified between this
+    run's read and its write lands in that bucket too -- the write is a
+    compare-and-set, so the count reflects what the database did, not what the
+    scan intended.
     """
     filled: list[tuple[str, str]] = []
     skipped_already_set = 0
@@ -100,7 +106,13 @@ def backfill_position_sectors(
             # written by an older build must not become an unsaveable default.
             skipped_invalid_directory_sector += 1
             continue
-        position_store.set_sector(position.id, sector, now=now)
+        if position_store.fill_sector_if_empty(position.id, sector, now=now) is None:
+            # The compare-and-set found a category (or no row) by the time it
+            # ran: the holding was classified -- or deleted -- after the scan
+            # above read it. Nothing was written, so it belongs in the same
+            # bucket as a holding that was already set when we looked.
+            skipped_already_set += 1
+            continue
         filled.append((position.symbol, sector))
 
     return SectorBackfillReport(

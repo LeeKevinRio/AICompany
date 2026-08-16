@@ -11,6 +11,14 @@ than riding on the row's, because it comes from a different TWSE dataset
 (``t187ap03_L``) fetched in a separate request from the symbol/name source
 (``STOCK_DAY_ALL``) -- one ``as_of`` covering both would silently claim the
 sector was retrieved at the moment the name was.
+
+Note that the all-or-nothing rule on that triple is guaranteed on disk by the
+shape of ``SecurityDirectoryStore.apply_sectors`` -- one UPDATE setting the
+three columns together from one :class:`DirectorySectorAssignment` -- not by
+:class:`DirectoryEntry`'s validator, which the write path never passes
+through. The validator states the invariant and catches a half-filled entry
+built in code or read back from a row an older build wrote; it does not police
+the writes.
 """
 
 from __future__ import annotations

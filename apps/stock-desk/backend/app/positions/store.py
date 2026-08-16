@@ -225,20 +225,32 @@ class PositionStore:
                 return None
         return self.get(position_id)
 
-    def set_sector(
+    def fill_sector_if_empty(
         self, position_id: int, sector: str, *, now: datetime | None = None
     ) -> Position | None:
-        """Set only the industry category of ``position_id``; return the updated row.
+        """Classify ``position_id`` only while it carries no category yet.
 
         A narrow write, not :meth:`update` with a rebuilt ``PositionInput``:
         the sector backfill (``app.directory.sector_backfill``) must touch one
         column and nothing else, so a quantity or cost cannot be rewritten --
         even identically -- as a side effect of classifying a holding.
 
+        Compare-and-set on purpose. The backfill's "never overwrite a
+        hand-picked category" rule lives in the ``WHERE`` clause rather than in
+        a preceding read, so a user who classifies the holding through the API
+        between the backfill's read and this write keeps their value; a plain
+        UPDATE would leave that window open. The blank test matches the column
+        the API writes (``PositionInput`` normalises a blank category to NULL,
+        but a row written by an older build may hold ``''``), so "empty" means
+        the same thing here as everywhere else.
+
         Refuses to clear a category (``sector`` must be non-blank) and refuses
         a value outside the closed list, so this door validates exactly what
-        the API door does. Returns ``None`` when no such position exists;
-        ``updated_at`` advances, because the stored row really did change.
+        the API door does. Returns the updated row when the write happened and
+        ``None`` when it did not -- either no such position exists, or it
+        already carries a category; both mean "the stored value stands", which
+        is all the caller acts on. ``updated_at`` advances only on a real
+        write.
         """
         cleaned = sector.strip()
         if not cleaned:
@@ -248,7 +260,10 @@ class PositionStore:
         moment = (now if now is not None else datetime.now(UTC)).isoformat()
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
-                "UPDATE positions SET sector = ?, updated_at = ? WHERE id = ?",
+                """
+                UPDATE positions SET sector = ?, updated_at = ?
+                WHERE id = ? AND (sector IS NULL OR TRIM(sector) = '')
+                """,
                 (cleaned, moment, position_id),
             )
             if cursor.rowcount == 0:

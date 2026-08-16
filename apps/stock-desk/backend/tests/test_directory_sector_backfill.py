@@ -8,13 +8,15 @@ behind their back.
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.directory.models import DirectoryEntry, DirectorySectorAssignment
 from app.directory.sector_backfill import backfill_position_sectors
 from app.directory.store import SecurityDirectoryStore
-from app.positions.models import PositionInput
+from app.positions.models import Position, PositionInput
 from app.positions.store import PositionStore
 
 AS_OF = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -60,6 +62,21 @@ def _positions(tmp_path: Path) -> PositionStore:
     return PositionStore(db_path=tmp_path / "p.db")
 
 
+class _StaleScanPositionStore(PositionStore):
+    """A store whose scan answers from before a concurrent edit landed.
+
+    Writes still go to the real database, so the compare-and-set meets the row
+    as it actually is -- the window the backfill has to survive.
+    """
+
+    def __init__(self, db_path: Path, snapshot: list[Position]) -> None:
+        super().__init__(db_path=db_path)
+        self._snapshot = snapshot
+
+    def list_all(self) -> list[Position]:
+        return self._snapshot
+
+
 def _add(store: PositionStore, **overrides: object) -> int:
     payload: dict[str, object] = {
         "symbol": "2330",
@@ -95,6 +112,32 @@ def test_never_overwrites_a_manually_chosen_category(tmp_path: Path) -> None:
 
     report = backfill_position_sectors(
         position_store=positions, directory_store=_directory(tmp_path)
+    )
+
+    assert report.filled == ()
+    assert report.skipped_already_set == 1
+    stored = positions.get(position_id)
+    assert stored is not None
+    assert stored.sector == "其他業"
+
+
+def test_a_category_saved_mid_run_is_not_overwritten(tmp_path: Path) -> None:
+    """The race the compare-and-set closes.
+
+    The scan reads the holding as unclassified; the user saves 其他業 through
+    the API before the write lands. The write must find the row taken and
+    report a skip, not clobber the value the user is looking at.
+    """
+    positions = _positions(tmp_path)
+    position_id = _add(positions, symbol="2330")
+    stale_snapshot = positions.list_all()
+    # The user's edit, landing after the scan above and before the write below.
+    with closing(sqlite3.connect(positions.db_path)) as conn, conn:
+        conn.execute("UPDATE positions SET sector = ? WHERE id = ?", ("其他業", position_id))
+
+    report = backfill_position_sectors(
+        position_store=_StaleScanPositionStore(tmp_path / "p.db", stale_snapshot),
+        directory_store=_directory(tmp_path),
     )
 
     assert report.filled == ()
