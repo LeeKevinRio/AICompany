@@ -433,6 +433,16 @@ PUT/PATCH 警示端點、內建回測策略（RSI／突破）六項功能已於 
   隨 2026-08-12 產業覆核+本次落地全面解除。功能全鏈:dev(cf814a8)→qa PASS→
   併發加固(e8e291a)→風控三輪定稿(work/reviews/2026-08-16-產業別來源說明句-風控三輪.md)
   →落地(acf3de7)→留痕(b11241f)。
+- **2026-08-16（行情資料源首次真實驗證,CEO 本機執行 verify_market_data.py,附終端輸出證據）**：
+  **TWSE STOCK_DAY PASS**(7 筆 fresh,真實 DB 4152 筆快取 0% demo,隔離確認 OK)、
+  **yfinance PASS**(^TWII 7 筆,backup)——現行持倉實際使用的資料鏈全數驗證通過,
+  限制清單 #1 的 yfinance 側與台股主鏈解除待查。FAIL 四項:
+  (a) TPEx legacy st43 回 302 已死,OpenAPI 根 200 可達→依 checklist 預案改接 OpenAPI
+  (現行持倉全上市,無立即影響);(b) 台銀匯率 CSV 被反爬蟲挑戰頁攔截→需評估替代 FX 源
+  (現無美股持倉,無立即影響);(c) FinMind 無 token 未發請求(CEO 可免費申請後補驗,
+  交叉比對表因此全 FAIL 屬依賴性失敗);(d) Alpha Vantage 無 key 未發請求(同上)。
+  槓桿 ETF 註冊表 17 筆結構檢查 OK 但 verified 全 False(需人工對發行人公開說明書,
+  checklist 第 8 項人工部分)。完整報告:work/research/驗證結果-2026-08-16.md(CEO 本機)。
 - **2026-08-10**（tech-writer，文件過期清償，對照 commit `273b27a` 逐項核實）：第 1、2、4、7、8、
   9 項與第 10 項第 7 小點原本敘述「尚未實作／尚未接線」，經逐檔讀 code 確認已於 Phase 7／
   Phase 8 交付並通過 qa/風控審查，已改寫為「已解決」並附目前限制範圍與代碼行號；第 3、5、11
