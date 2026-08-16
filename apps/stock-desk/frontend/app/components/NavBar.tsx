@@ -241,14 +241,24 @@ function SymbolSearch() {
       )}
 
       {pendingMarketSymbol !== null && (
-        <div className="flex items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-300">
+        // D5③ (2026-08-13 衝刺覆核 suggested「NavBar 窄按鈕不出現半截揭露」):
+        // the US option label carries the S7 caveat and this row used to be a
+        // non-wrapping flex line; measured at text-xs the prompt + both
+        // buttons + 取消 total ≈ 594px, so on any viewport below ~630px the
+        // row overflowed the header and the caveat rendered half-cut — worse
+        // than absent. `flex-wrap` + `max-w-full` lets items (and the CJK
+        // label inside a squeezed button) wrap onto new lines instead, so the
+        // caveat always renders in full and the S7 disclosure keeps covering
+        // this selection point (its approval spans all 6 MARKET_OPTIONS call
+        // sites; dropping to the bare marketLabel here would shrink it).
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-300">
           <span>{MARKET_PICKER_PROMPT}</span>
           {MARKET_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
               onClick={() => navigateTo(pendingMarketSymbol, opt.value)}
-              className="rounded-md border border-neutral-600 px-2 py-0.5 hover:bg-neutral-800"
+              className="rounded-md border border-neutral-600 px-2 py-0.5 text-left hover:bg-neutral-800"
             >
               {opt.label}
             </button>
