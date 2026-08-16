@@ -326,6 +326,68 @@ describe("buildOperationSummary — held mode", () => {
     expect(model.kind).toBe("no_price");
     if (model.kind !== "no_price") throw new Error("unreachable");
     expect(model.reason).toBe("三層資料源皆無日線");
+    // D3③: the common no-data case has no bar date to disclose the age of —
+    // the notice stays absent, exactly as this screen always rendered.
+    expect(model.staleDataNotice).toBeNull();
+  });
+
+  // D3③ (risk-fix-review.md N3 列管): the insufficient_data branches used to
+  // drop the stale-data notice entirely, so an "insufficient data" screen
+  // built over bars the calendar had moved past said nothing about their age.
+  // Both branches now carry the same risk-approved sentence, under the same
+  // trigger, as the held/candidate cards.
+  it("[D3③] the no_action branch carries the stale-data notice when sessions were missed", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({ action: "insufficient_data", quantity_range: null }),
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 4000,
+          is_within_ttl: false,
+          bar_count: 300,
+          first_bar_date: "2025-05-01",
+          last_bar_date: "2026-08-04",
+          trading_days_behind: 5,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "no_action") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBe(buildStaleDataProminentNotice("2026-08-04", 5));
+  });
+
+  it("[D3③] the no_price branch carries the stale-data notice when the envelope still names an outdated bar date", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        status: "insufficient_data",
+        advice: null,
+        reason: "資料筆數不足以計算指標",
+        data: {
+          status: "cached_stale",
+          source: "twse",
+          staleness_minutes: 4000,
+          is_within_ttl: false,
+          bar_count: 20,
+          first_bar_date: "2026-07-01",
+          last_bar_date: "2026-08-04",
+          trading_days_behind: 3,
+          reason: null,
+        },
+      }),
+    );
+    if (model.kind !== "no_price") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBe(buildStaleDataProminentNotice("2026-08-04", 3));
+  });
+
+  it("[D3③] the no_action branch stays silent when no session was missed", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({ action: "insufficient_data", quantity_range: null }),
+      }),
+    );
+    if (model.kind !== "no_action") throw new Error("unreachable");
+    expect(model.staleDataNotice).toBeNull();
   });
 
   // R4 fix (risk-final-review.md): the "data older than one trading day"

@@ -89,6 +89,8 @@ export interface NoPriceSummary {
   kind: "no_price";
   reason: string;
   nonRealtimeNotice: string;
+  /** D3③ (risk-fix-review.md N3 列管): see `buildOperationSummary`. */
+  staleDataNotice: string | null;
 }
 
 export interface NoActionSummary {
@@ -96,6 +98,8 @@ export interface NoActionSummary {
   reason: string;
   disclaimer: string;
   nonRealtimeNotice: string;
+  /** D3③ (risk-fix-review.md N3 列管): see `buildOperationSummary`. */
+  staleDataNotice: string | null;
 }
 
 export type OperationSummaryModel = HeldSummary | CandidateSummary | NoPriceSummary | NoActionSummary;
@@ -175,15 +179,6 @@ function buildRequiredElements(
 export function buildOperationSummary(
   response: Pick<AdviceResponse, "status" | "reason" | "advice" | "held" | "data">,
 ): OperationSummaryModel {
-  if (response.status === "insufficient_data" || response.advice === null) {
-    return {
-      kind: "no_price",
-      reason: response.reason ?? "資料不足，無法計算。",
-      nonRealtimeNotice: NON_REALTIME_NOTICE,
-    };
-  }
-
-  const card = response.advice;
   const lastBarDate = response.data.last_bar_date;
   // R4 fix (risk-final-review.md): this notice is about data *age*, not
   // source degradation — it must fire off how old `last_bar_date` is, not
@@ -199,11 +194,32 @@ export function buildOperationSummary(
   // closure produces no sessions to count (no false alarm), and a `null` gap
   // means the calendar could not be consulted and nothing is claimed. See
   // `tradingCalendar.ts`'s header.
+  //
+  // D3③ (risk-fix-review.md N3 列管): computed ahead of *every* branch, so
+  // the two insufficient_data outcomes carry it too. The old shape computed
+  // it only after the no_price return and attached it only to held/candidate
+  // cards, so an "insufficient data" screen built over week-old bars said
+  // nothing about their age — the reader most in need of the age disclosure
+  // was the one not shown it. The sentence itself is the risk-approved
+  // `buildStaleDataProminentNotice`, reused verbatim; when the envelope has
+  // no `last_bar_date`/`trading_days_behind` (the common no-data case) this
+  // stays `null` and those screens render exactly as before.
   const tradingDaysBehind = response.data.trading_days_behind;
   const staleDataNotice =
     lastBarDate !== null && tradingDaysBehind !== null && isDataStaleByTradingDays(tradingDaysBehind)
       ? buildStaleDataProminentNotice(lastBarDate, tradingDaysBehind)
       : null;
+
+  if (response.status === "insufficient_data" || response.advice === null) {
+    return {
+      kind: "no_price",
+      reason: response.reason ?? "資料不足，無法計算。",
+      nonRealtimeNotice: NON_REALTIME_NOTICE,
+      staleDataNotice,
+    };
+  }
+
+  const card = response.advice;
 
   if (card.action === "insufficient_data") {
     return {
@@ -211,6 +227,7 @@ export function buildOperationSummary(
       reason: HELD_ACTION_LABELS.insufficient_data,
       disclaimer: card.disclaimer,
       nonRealtimeNotice: NON_REALTIME_NOTICE,
+      staleDataNotice,
     };
   }
 

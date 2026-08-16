@@ -72,22 +72,26 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
   const model = buildOperationSummary(response);
 
   // AC-C1.3 / AC-C7.4: no price at all anywhere in the three-tier ladder —
-  // no card, no fabricated evaluation, reason shown as-is.
+  // no card, no fabricated evaluation, reason shown as-is. D3③: when the
+  // envelope still carries a bar date the calendar has moved past, its age is
+  // disclosed here too (see `buildOperationSummary`), not only on cards.
   if (model.kind === "no_price") {
     return (
       <div className="mt-3 space-y-3">
         <InsufficientPanel reason={model.reason} />
+        <StaleDataAlert notice={model.staleDataNotice} />
         <p className="text-xs text-neutral-500">{model.nonRealtimeNotice}</p>
       </div>
     );
   }
 
   // AC-C6.5: the engine itself said `insufficient_data` — no action word, no
-  // range, no reference figure of any kind.
+  // range, no reference figure of any kind. D3③ applies here as well.
   if (model.kind === "no_action") {
     return (
       <div className="mt-3 space-y-3">
         <InsufficientPanel reason={model.reason} />
+        <StaleDataAlert notice={model.staleDataNotice} />
         <DisclaimerBanner text={model.disclaimer} />
         <p className="text-xs text-neutral-500">{model.nonRealtimeNotice}</p>
       </div>
@@ -206,6 +210,21 @@ function DisclaimerBanner({ text }: { text: string }) {
   );
 }
 
+/**
+ * AC-C8.2's prominent data-age alert, in the one style every branch shares —
+ * extracted (D3③) so the two insufficient_data branches and
+ * `RequiredElementsFooter` cannot drift apart on prominence. Renders nothing
+ * when there is no stale gap to disclose.
+ */
+function StaleDataAlert({ notice }: { notice: string | null }) {
+  if (notice === null) return null;
+  return (
+    <p role="alert" className="rounded-md border border-amber-700 bg-amber-950/40 px-3 py-2 text-amber-300">
+      {notice}
+    </p>
+  );
+}
+
 function QuantitySection({
   text,
   absenceReason,
@@ -247,11 +266,7 @@ function RequiredElementsFooter({
 }) {
   return (
     <div className="space-y-3 border-t border-neutral-800 pt-4 text-sm">
-      {staleDataNotice && (
-        <p role="alert" className="rounded-md border border-amber-700 bg-amber-950/40 px-3 py-2 text-amber-300">
-          {staleDataNotice}
-        </p>
-      )}
+      <StaleDataAlert notice={staleDataNotice} />
 
       <p className="text-neutral-300">{required.asOfStatement}</p>
 
