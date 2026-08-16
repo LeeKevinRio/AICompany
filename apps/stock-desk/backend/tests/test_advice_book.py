@@ -67,6 +67,7 @@ def _position(
     market: str = "TW",
     sector: str | None = None,
     fx_to_twd: str = "1",
+    instrument_type: str = "stock",
 ) -> SummaryPosition:
     valuation = _valuation(price)
     # Mirrors what the valuator contributes to ``totals``: present only when the
@@ -86,7 +87,7 @@ def _position(
         quantity=Decimal(quantity),
         avg_cost=Decimal(avg_cost),
         currency=currency,  # type: ignore[arg-type]
-        instrument_type="stock",
+        instrument_type=instrument_type,  # type: ignore[arg-type]
         opened_at="2024-01-02",
         sector=sector,
         note=None,
@@ -589,6 +590,51 @@ def test_a_symbol_held_in_both_markets_keeps_the_actionable_state() -> None:
     )
     book = build_book_context(summary, symbol="2330", close=600.0)
     assert book.context.sector_gap == "unfiled"
+
+
+@pytest.mark.parametrize("instrument_type", ["etf", "leveraged_etf", "futures_etf"])
+def test_a_tw_etf_without_a_category_is_its_own_state(instrument_type: str) -> None:
+    # D6 (CEO 實測回報 2026-08-13): a TW ETF cannot truthfully be filed under a
+    # TWSE company-industry category, so the gap must not be the actionable
+    # "unfiled" one -- that sentence directs the owner to do something that
+    # does not apply to a fund. The holding stays out of cap 2 exactly as
+    # before; only the stated cause differs.
+    summary = _summary(_position(1, "0050", instrument_type=instrument_type))
+    book = build_book_context(summary, symbol="0050", close=600.0, currency="TWD")
+    assert book.context.sector is None
+    assert book.context.sector_gap == "etf_instrument"
+
+
+def test_a_us_etf_keeps_the_unsupported_market_state() -> None:
+    # The market rule comes first: a US ETF's true blocker is that no US
+    # taxonomy exists at all, which the unsupported-market sentence already
+    # states honestly (and it never directed anyone to fill the field).
+    summary = _summary(
+        _position(1, "QQQ", market="US", currency="USD", fx_to_twd="31", instrument_type="etf")
+    )
+    book = build_book_context(summary, symbol="QQQ", market="US", close=200.0)
+    assert book.context.sector_gap == "unsupported_market"
+
+
+def test_a_stock_lot_beside_an_etf_lot_keeps_the_actionable_state() -> None:
+    # If any TW lot is a stock, the "fill it in" guidance is true for that lot,
+    # so the actionable state wins over the ETF one.
+    summary = _summary(
+        _position(1, "2330", instrument_type="stock"),
+        _position(2, "2330", instrument_type="etf"),
+    )
+    book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")
+    assert book.context.sector_gap == "unfiled"
+
+
+def test_an_etf_with_a_filed_category_still_resolves_it() -> None:
+    # Behaviour guard: the ETF state only describes the *missing-category* gap.
+    # A category the user did file keeps working exactly as before -- this
+    # change alters wording for a gap, never the cap's arithmetic.
+    summary = _summary(_position(1, "0050", sector="其他業", instrument_type="etf"))
+    book = build_book_context(summary, symbol="0050", close=600.0, currency="TWD")
+    assert book.context.sector == "其他業"
+    assert book.context.sector_gap is None
 
 
 def test_book_imports_no_adapter() -> None:

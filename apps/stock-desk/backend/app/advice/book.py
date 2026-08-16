@@ -36,9 +36,10 @@ Three honesty rules govern what is filled in:
    left out travels with the context in ``notes`` (AC-12.5). Nothing is
    inferred from a symbol, and an unclassified book is never presented as a
    diversified one. *Why* this symbol has no category -- nothing held, nothing
-   filed, a market with no taxonomy, or two categories on one symbol -- travels
-   with it in ``sector_gap``, because the four are different problems and only
-   this layer can tell them apart (AC-12.3).
+   filed, an ETF the taxonomy does not apply to, a market with no taxonomy, or
+   two categories on one symbol -- travels with it in ``sector_gap``, because
+   the five are different problems and only this layer can tell them apart
+   (AC-12.3).
 
 The Kelly inputs stay ``None`` for the old reason: no source produces them yet.
 
@@ -70,7 +71,7 @@ from app.advice.limits import (
 )
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
-from app.positions.models import Market
+from app.positions.models import InstrumentType, Market
 
 #: The markets whose holdings may carry an industry category at all. TWSE's
 #: taxonomy is TW-only by decision (AC-12.6, :mod:`app.positions.sectors`), and
@@ -78,6 +79,15 @@ from app.positions.models import Market
 #: could be filed under yet, which is why cap 2 says something different about
 #: it (:data:`app.advice.limits.NO_SECTOR_UNSUPPORTED_MARKET_DETAIL`).
 SECTOR_CLASSIFIED_MARKETS: frozenset[Market] = frozenset({"TW"})
+
+#: The instrument types that are funds rather than individual companies. A TW
+#: holding of one of these with no category is not "not filled in yet": TWSE's
+#: industry taxonomy classifies listed companies, so an ETF has nothing true it
+#: could be filed under, and cap 2 must say that instead of directing its owner
+#: to fill the field (D6, :data:`app.advice.limits.NO_SECTOR_ETF_DETAIL`).
+ETF_INSTRUMENT_TYPES: frozenset[InstrumentType] = frozenset(
+    {"etf", "leveraged_etf", "futures_etf"}
+)
 
 #: Stated on every context so the equity assumption travels with the numbers.
 EQUITY_BASIS_NOTE = (
@@ -319,11 +329,11 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
     """The symbol's industry category -> ``(sector, gap)``.
 
     ``gap`` is ``None`` exactly when a category was resolved; otherwise it names
-    *which* of the four states left this symbol unclassified, so cap 2 can say
-    the one true thing about each instead of one sentence covering all four
+    *which* of the five states left this symbol unclassified, so cap 2 can say
+    the one true thing about each instead of one sentence covering all five
     (see :data:`app.advice.limits.SectorGap`). Only this layer can tell them
     apart: it is the one that sees whether anything is held, in which market,
-    and whether the holdings agree with each other.
+    with which instrument type, and whether the holdings agree with each other.
     """
     if not matched:
         return None, "no_position"
@@ -332,12 +342,25 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
         return None, "mixed"
     if categories:
         return categories[0], None
-    if any(position.market in SECTOR_CLASSIFIED_MARKETS for position in matched):
-        # At least one holding *could* carry a category, so naming the action is
-        # a true statement. A symbol held in both markets lands here too: the TW
-        # leg is the one that would turn the cap on.
-        return None, "unfiled"
-    return None, "unsupported_market"
+    classifiable = [
+        position for position in matched if position.market in SECTOR_CLASSIFIED_MARKETS
+    ]
+    if not classifiable:
+        return None, "unsupported_market"
+    if all(
+        position.instrument_type in ETF_INSTRUMENT_TYPES for position in classifiable
+    ):
+        # Every TW lot behind this symbol is a fund: there is no company-level
+        # industry it could truthfully be filed under, so the "fill it in"
+        # guidance would be an instruction the owner cannot follow (D6). The
+        # symbol stays excluded from cap 2 exactly as before.
+        return None, "etf_instrument"
+    # At least one holding *could* carry a category, so naming the action is
+    # a true statement. A symbol held in both markets lands here too: the TW
+    # leg is the one that would turn the cap on. A stock lot alongside an ETF
+    # lot keeps this state as well -- the stock lot is the one the guidance
+    # sentence is true for.
+    return None, "unfiled"
 
 
 def _sector_rollup(summary: PortfolioSummary, sector: str) -> float:

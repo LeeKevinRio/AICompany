@@ -18,6 +18,7 @@ from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
     NO_SECTOR_CANDIDATE_DETAIL,
     NO_SECTOR_DETAILS,
+    NO_SECTOR_ETF_DETAIL,
     NO_SECTOR_UNFILED_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
     RANGE_ACTION_LABELS,
@@ -182,13 +183,15 @@ def test_missing_sector_reads_as_an_unfilled_value_not_a_missing_field() -> None
     [
         ("no_position", NO_SECTOR_CANDIDATE_DETAIL),
         ("unfiled", NO_SECTOR_UNFILED_DETAIL),
+        ("etf_instrument", NO_SECTOR_ETF_DETAIL),
         ("unsupported_market", NO_SECTOR_UNSUPPORTED_MARKET_DETAIL),
         ("mixed", SECTOR_MIXED_DETAIL),
     ],
 )
 def test_each_way_the_sector_is_missing_gets_its_own_sentence(gap: str, expected: str) -> None:
-    # AC-12.3 as risk-compliance settled it on 2026-08-09: four states, four
-    # sentences, none of them shared. The texts are risk-approved copy, so they
+    # AC-12.3 as risk-compliance settled it on 2026-08-09: distinct states,
+    # distinct sentences, none of them shared. The 2026-08-09 texts are
+    # risk-approved copy; the ETF one (D6, 2026-08-16) is pending review. All
     # are asserted verbatim rather than by keyword.
     check = _check(_ctx(sector_gap=gap), "sector_weight")
     assert check.status == "not_evaluable"
@@ -202,6 +205,19 @@ def test_a_candidate_is_not_told_to_fill_in_a_holding_it_does_not_have() -> None
     detail = _check(_ctx(sector_gap="no_position"), "sector_weight").detail
     assert "填入" not in detail
     assert "not_evaluable" in detail
+
+
+def test_an_etf_is_not_told_to_fill_in_a_category_that_does_not_apply() -> None:
+    # D6: TWSE's taxonomy classifies companies, not funds, so the ETF sentence
+    # must state that inapplicability and never carry the fill-in guidance --
+    # that was exactly the misleading instruction the CEO's 2026-08-13 實測
+    # reported for 00631L/00685L/00981A.
+    detail = _check(_ctx(sector_gap="etf_instrument"), "sector_weight").detail
+    assert "填入" not in detail
+    assert "尚未填寫" not in detail
+    assert "啟用這條上限" not in detail
+    assert "ETF" in detail
+    assert "不適用" in detail
 
 
 def test_a_non_tw_holding_is_not_promised_a_cap_it_cannot_turn_on() -> None:

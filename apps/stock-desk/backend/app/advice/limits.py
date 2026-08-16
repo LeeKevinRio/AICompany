@@ -126,11 +126,19 @@ NET_WORTH_STALE_AFTER_DAYS = 30
 NET_WORTH_SOFT_NOTICE_DAYS = 7
 
 #: AC-12.3: the states this cap can be missing an industry in are different
-#: problems and must not share a sentence. ``sector is None`` covers four of
+#: problems and must not share a sentence. ``sector is None`` covers five of
 #: them, and only one is fixed by filing a value:
 #:
 #: * ``no_position`` -- nothing is held, so there is no position to classify;
-#: * ``unfiled`` -- a TW holding carries no category yet (the actionable one);
+#: * ``unfiled`` -- a TW *stock* holding carries no category yet (the
+#:   actionable one);
+#: * ``etf_instrument`` -- every TW holding behind the symbol is an ETF
+#:   (``etf`` / ``leveraged_etf`` / ``futures_etf``). TWSE's industry taxonomy
+#:   classifies individual companies, not funds, so "fill the industry in" is
+#:   an instruction the owner cannot meaningfully follow (D6, CEO 實測回報
+#:   2026-08-13: 00631L/00685L/00981A were shown the ``unfiled`` guidance).
+#:   The ETF stays excluded from the cap exactly as before -- only the stated
+#:   cause changes;
 #: * ``unsupported_market`` -- the holding is in a market this product has no
 #:   taxonomy for. Telling its owner to "fill the industry in" would point at a
 #:   write the API answers with a 422 (:mod:`app.positions.sectors`), so that
@@ -139,13 +147,19 @@ NET_WORTH_SOFT_NOTICE_DAYS = 7
 #:   "not stated" at all, so it reuses :data:`SECTOR_MIXED_NOTE` rather than
 #:   telling the user they left a field empty.
 #:
-#: The four are told apart by :attr:`PortfolioContext.sector_gap`, which the
+#: The five are told apart by :attr:`PortfolioContext.sector_gap`, which the
 #: book adapter sets: this module never infers a market or a holding.
 #:
 #: Wording reviewed and approved by risk-compliance on 2026-08-09 (FR-12 句 1
-#: 修正句), recorded in ``work/reviews/c1-phase8-review.md``. These four
+#: 修正句), recorded in ``work/reviews/c1-phase8-review.md``. Those four
 #: sentences are risk-approved copy: changing any of them needs a fresh review.
-SectorGap = Literal["no_position", "unfiled", "unsupported_market", "mixed"]
+#: :data:`NO_SECTOR_ETF_DETAIL` (added 2026-08-16 for D6) is a self-drafted
+#: sentence **pending risk-compliance review** -- it may be reworded by that
+#: review, but must keep stating that the taxonomy does not apply to ETFs
+#: rather than asking the owner to file a value.
+SectorGap = Literal[
+    "no_position", "unfiled", "etf_instrument", "unsupported_market", "mixed"
+]
 
 NO_SECTOR_CANDIDATE_DETAIL = (
     "此標的目前沒有持倉，單一產業佔比上限沒有可分類的部位，本次不計算，回報 not_evaluable。"
@@ -153,6 +167,10 @@ NO_SECTOR_CANDIDATE_DETAIL = (
 NO_SECTOR_UNFILED_DETAIL = (
     "此標的的持倉尚未填寫產業別，單一產業佔比上限本次不計算，回報 not_evaluable。"
     "可在持倉編輯或 CSV 匯入填入台灣證交所產業別後啟用這條上限。"
+)
+NO_SECTOR_ETF_DETAIL = (
+    "此標的的持倉為 ETF；台灣證交所產業別分類僅適用於個股，不適用於 ETF，"
+    "單一產業佔比上限本次不計算，回報 not_evaluable。"
 )
 NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
     "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
@@ -177,6 +195,7 @@ SECTOR_MIXED_DETAIL = SECTOR_MIXED_NOTE + SECTOR_MIXED_GUIDANCE
 NO_SECTOR_DETAILS: dict[SectorGap, str] = {
     "no_position": NO_SECTOR_CANDIDATE_DETAIL,
     "unfiled": NO_SECTOR_UNFILED_DETAIL,
+    "etf_instrument": NO_SECTOR_ETF_DETAIL,
     "unsupported_market": NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
     "mixed": SECTOR_MIXED_DETAIL,
 }
@@ -443,7 +462,7 @@ class PortfolioContext(BaseModel):
     #: naming that specific gap.
     sector: str | None = None
     sector_market_value_twd: float | None = Field(default=None, ge=0.0)
-    #: Which of the four ways a category can be missing applies here, set by
+    #: Which of the five ways a category can be missing applies here, set by
     #: :func:`app.advice.book.build_book_context` -- the only layer that can see
     #: the holdings behind the symbol and the market they sit in. ``None`` means
     #: the caller did not say, and cap 2 then falls back to the single thing
@@ -595,12 +614,13 @@ def _inferred_sector_gap(ctx: PortfolioContext) -> SectorGap:
     """The state to report when the caller supplied no ``sector_gap``.
 
     Every context the product builds carries the signal (``app.advice.book``
-    sets it on all four states), so this is the fallback for a context assembled
+    sets it on all five states), so this is the fallback for a context assembled
     by hand -- the alert vocabulary's bare context, and tests. Only the two
     states this model can establish from its own fields are reachable: a book
     with nothing in this symbol, and a holding with no category. It never
-    guesses ``unsupported_market`` (the market is not a field here) nor
-    ``mixed`` (that is a fact about several holdings), because either guess
+    guesses ``unsupported_market`` (the market is not a field here), nor
+    ``etf_instrument`` (the instrument type is not a field here either), nor
+    ``mixed`` (that is a fact about several holdings), because any such guess
     would put a claim about the user's book into a sentence.
     """
     held = ctx.position_market_value_twd

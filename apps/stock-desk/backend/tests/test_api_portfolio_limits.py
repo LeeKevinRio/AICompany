@@ -189,6 +189,23 @@ def test_an_unfiled_industry_is_reported_as_such_not_as_a_pass(
     assert "尚未填寫產業別" in cap["excluded"][0]["reason"]
 
 
+def test_an_etf_holding_is_excluded_with_the_etf_cause_not_the_fill_in_one(
+    api_harness: ApiHarness,
+) -> None:
+    # D6 (CEO 實測回報 2026-08-13): an ETF used to be shown the stock holding's
+    # "尚未填寫產業別…填入後啟用" guidance, an instruction that does not apply
+    # to a fund. It must stay excluded (behaviour unchanged) but with the
+    # honest cause; the stock sentence itself is untouched.
+    _hold(api_harness, "00631L", "1000", instrument_type="leveraged_etf")
+    cap = _limits(api_harness)["sector_weight"]
+    assert cap["status"] == "not_evaluable"
+    assert [entry["symbol"] for entry in cap["excluded"]] == ["00631L"]
+    reason = cap["excluded"][0]["reason"]
+    assert "尚未填寫產業別" not in reason
+    assert "ETF" in reason
+    assert "不適用" in reason
+
+
 def test_every_priced_holding_carries_its_data_provenance(api_harness: ApiHarness) -> None:
     _hold(api_harness, "2330", "800")
     body = api_harness.client.get("/api/portfolio/limits").json()
