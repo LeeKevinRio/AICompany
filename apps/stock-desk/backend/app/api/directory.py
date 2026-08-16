@@ -9,6 +9,12 @@ directory" signal FR-2's Q1 fallback (CEO 裁示 (b)：僅在查無時跳出縮�
 ``GET /api/directory/search`` backs FR-3's combobox candidates: symbol-prefix
 + name-substring, merged and capped, with an honest ``directory_synced`` flag
 so an empty directory (FR-7) never gets mistaken for "no candidates found".
+
+Both responses also carry the security's TWSE industry category when the
+directory has one (CEO 指示 2026-08-16: 持倉的台股產業別應自動判斷,不該手填).
+It is a *default* for the position form's existing dropdown, not a decision:
+the field stays editable, and a security with no category in the directory
+leaves it empty rather than being filed somewhere plausible.
 """
 
 from __future__ import annotations
@@ -36,7 +42,17 @@ _MAX_SEARCH_LIMIT = 50
 
 
 class DirectoryItem(BaseModel):
-    """One search candidate or resolve hit."""
+    """One search candidate or resolve hit.
+
+    ``sector`` rides along on the candidate rather than getting its own
+    endpoint: the position form already holds the picked candidate when it
+    needs the category, so a second round trip would only add a way for the
+    two answers to disagree. ``None`` means the directory has no category for
+    this security (上櫃 / ETF, an un-synced directory, or a TWSE code this
+    build refuses to resolve) -- the form leaves the field empty in that case
+    instead of guessing, so a ``null`` here must never be rendered as a
+    category of its own.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -45,6 +61,13 @@ class DirectoryItem(BaseModel):
     market: Market
     source: str
     as_of: str
+    #: Always one of ``app.positions.sectors.TWSE_SECTORS`` when present, so a
+    #: caller can submit it back unchanged as a ``Position.sector``.
+    sector: str | None
+    #: The sector's own provenance -- a different TWSE dataset, fetched at a
+    #: different moment from ``source``/``as_of`` above.
+    sector_source: str | None
+    sector_as_of: str | None
 
 
 class SearchResponse(BaseModel):
@@ -73,6 +96,9 @@ def _to_item(entry: DirectoryEntry) -> DirectoryItem:
         market=entry.market,
         source=entry.source,
         as_of=entry.as_of.isoformat(),
+        sector=entry.sector,
+        sector_source=entry.sector_source,
+        sector_as_of=None if entry.sector_as_of is None else entry.sector_as_of.isoformat(),
     )
 
 

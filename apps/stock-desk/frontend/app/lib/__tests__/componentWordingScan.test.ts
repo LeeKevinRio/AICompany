@@ -95,6 +95,11 @@ const SCANNED_FILES = [
   // -officer APPROVE):美股揭露句是這批新加的硬編碼 JSX 文案，該檔先前完全
   // 不在掃描清單內。
   "../../settings/DataSourcesSection.tsx",
+  // 產業別自動帶入 (CEO 指示 2026-08-16): `ManualAddForm.tsx` gains the 產業別
+  // dropdown and both position forms now render `SECTOR_SOURCE_DISCLOSURE`.
+  // The add form was never in this scan at all despite carrying hard-coded
+  // field labels and hints since it shipped.
+  "../../positions/import/ManualAddForm.tsx",
 ] as const;
 
 describe("component source scan — §1.3 banned-term coverage on hard-coded JSX text", () => {

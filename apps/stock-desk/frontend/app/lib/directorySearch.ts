@@ -259,3 +259,36 @@ export function applyDirectorySelection<S extends { symbol: string; market: Mark
 ): S {
   return { ...prev, symbol: item.symbol, market: item.market };
 }
+
+/**
+ * What the 產業別 field should hold after a directory candidate is picked
+ * (CEO 指示 2026-08-16: 持倉的台股產業別應自動判斷，不該手填).
+ *
+ * The result is a *default*, not a decision: it lands in the same
+ * `form.sector` slot a manual dropdown pick writes to, is rendered by the
+ * same `<select>`, and is submitted as the same closed-list value — nothing
+ * downstream can tell the two apart, and nothing here locks the field.
+ *
+ * The four rules, in the order they are applied:
+ *   1. A non-TW security may not carry a TWSE category at all (AC-12.6), so
+ *      the field is cleared regardless of what else is true.
+ *   2. Re-picking the *same* symbol never overwrites a category the field
+ *      already holds — the same "已有值不覆蓋" rule the backend backfill
+ *      follows, so a user who deliberately filed 2330 elsewhere does not lose
+ *      that by touching the symbol box again.
+ *   3. Otherwise the directory's category wins, because the symbol just
+ *      changed and any previous value described the *previous* company.
+ *   4. With no category in the directory (ETF, 上櫃, or an un-synced
+ *      directory) the field is left empty rather than filled with a guess or
+ *      with the outgoing company's category.
+ */
+export function sectorAfterDirectorySelection(params: {
+  item: DirectoryItem;
+  previousSymbol: string;
+  previousSector: string;
+}): string {
+  const { item, previousSymbol, previousSector } = params;
+  if (item.market !== "TW") return "";
+  if (previousSymbol === item.symbol && previousSector !== "") return previousSector;
+  return item.sector ?? "";
+}

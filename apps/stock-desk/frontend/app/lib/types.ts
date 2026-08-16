@@ -988,6 +988,23 @@ export interface DirectoryItem {
   market: Market;
   source: string;
   as_of: string;
+  /**
+   * The security's TWSE industry category, when the directory has one
+   * (CEO 指示 2026-08-16). Always one of `SectorListResponse.items`, so it can
+   * be submitted back as a `PositionInput.sector` unchanged. `null` means the
+   * directory has no category for this security — 上櫃 and ETFs are absent
+   * from the TWSE sector dataset entirely, and a directory synced by an older
+   * build has none at all. A `null` must leave the form field empty; it is
+   * never a category in its own right.
+   */
+  sector: string | null;
+  /**
+   * The sector's own provenance: it comes from a different TWSE dataset,
+   * fetched in a separate request from the `source`/`as_of` above, so those
+   * two fields do not describe it. `null` whenever `sector` is.
+   */
+  sector_source: string | null;
+  sector_as_of: string | null;
 }
 
 /**

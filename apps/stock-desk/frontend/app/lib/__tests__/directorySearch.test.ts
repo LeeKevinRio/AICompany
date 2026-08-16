@@ -9,8 +9,12 @@ import {
   decideSubmit,
   directorySearchNotice,
   nextHighlightedIndex,
+  sectorAfterDirectorySelection,
   shouldShowCandidates,
 } from "../directorySearch";
+import { SECTOR_SOURCE_DISCLOSURE } from "../format";
+import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
+import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import type { DirectoryItem, DirectorySearchResponse } from "../types";
 
 const ITEM: DirectoryItem = {
@@ -19,6 +23,9 @@ const ITEM: DirectoryItem = {
   market: "TW",
   source: "twse",
   as_of: "2026-08-09T00:00:00Z",
+  sector: "半導體業",
+  sector_source: "twse_openapi_t187ap03_L",
+  sector_as_of: "2026-08-16T03:00:00Z",
 };
 
 const ITEM_US: DirectoryItem = {
@@ -27,6 +34,21 @@ const ITEM_US: DirectoryItem = {
   market: "US",
   source: "nasdaq",
   as_of: "2026-08-09T00:00:00Z",
+  sector: null,
+  sector_source: null,
+  sector_as_of: null,
+};
+
+/** An ETF / 上櫃 row: in the directory, but with no category to offer. */
+const ITEM_NO_SECTOR: DirectoryItem = {
+  symbol: "0050",
+  name: "元大台灣50",
+  market: "TW",
+  source: "twse",
+  as_of: "2026-08-09T00:00:00Z",
+  sector: null,
+  sector_source: null,
+  sector_as_of: null,
 };
 
 function response(overrides: Partial<DirectorySearchResponse> = {}): DirectorySearchResponse {
@@ -380,5 +402,107 @@ describe("decideComboboxKeyDown (SymbolCombobox keyboard dispatch)", () => {
     expect(decideComboboxKeyDown("a", { open: true, highlightedIndex: 1, candidatesLength: 3 })).toEqual({
       kind: "none",
     });
+  });
+});
+
+describe("sectorAfterDirectorySelection (產業別自動帶入, CEO 指示 2026-08-16)", () => {
+  it("fills the directory's category when a TW candidate is picked", () => {
+    expect(
+      sectorAfterDirectorySelection({ item: ITEM, previousSymbol: "", previousSector: "" }),
+    ).toBe("半導體業");
+  });
+
+  it("leaves the field empty when the directory has no category (ETF / 上櫃 / 未同步)", () => {
+    expect(
+      sectorAfterDirectorySelection({
+        item: ITEM_NO_SECTOR,
+        previousSymbol: "",
+        previousSector: "",
+      }),
+    ).toBe("");
+  });
+
+  it("never keeps the outgoing company's category when the symbol changes", () => {
+    // 2330 was filed under 半導體業; switching to an ETF with no category must
+    // not leave 半導體業 sitting on a different holding.
+    expect(
+      sectorAfterDirectorySelection({
+        item: ITEM_NO_SECTOR,
+        previousSymbol: "2330",
+        previousSector: "半導體業",
+      }),
+    ).toBe("");
+  });
+
+  it("does not overwrite an existing value when the same symbol is re-picked (已有值不覆蓋)", () => {
+    expect(
+      sectorAfterDirectorySelection({
+        item: ITEM,
+        previousSymbol: "2330",
+        previousSector: "其他業",
+      }),
+    ).toBe("其他業");
+  });
+
+  it("still fills the same symbol when the field is currently empty", () => {
+    expect(
+      sectorAfterDirectorySelection({ item: ITEM, previousSymbol: "2330", previousSector: "" }),
+    ).toBe("半導體業");
+  });
+
+  it("clears the field for a non-TW candidate regardless of anything else (AC-12.6)", () => {
+    expect(
+      sectorAfterDirectorySelection({
+        item: ITEM_US,
+        previousSymbol: "AAPL",
+        previousSector: "半導體業",
+      }),
+    ).toBe("");
+  });
+
+  it("returns a plain closed-list string, indistinguishable from a hand-picked value", () => {
+    // The auto-filled value carries no marker, wrapper or flag: it is exactly
+    // the kind of string the <select> would hold after a manual pick.
+    const filled = sectorAfterDirectorySelection({
+      item: ITEM,
+      previousSymbol: "",
+      previousSector: "",
+    });
+    expect(typeof filled).toBe("string");
+    expect(filled).toBe(ITEM.sector);
+  });
+});
+
+/**
+ * 產業別來源說明句（`SECTOR_SOURCE_DISCLOSURE`，`format.ts`）。
+ *
+ * **待 risk-compliance-officer 覆核**：下面的逐字比對是防止句子被無聲改寫的守門，
+ * 不代表這句已經核可。風控覆核後若指定改寫，這裡與 `format.ts` 的註解要一起更新。
+ */
+describe("SECTOR_SOURCE_DISCLOSURE (產業別來源說明，待風控覆核)", () => {
+  it("contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      SECTOR_SOURCE_DISCLOSURE,
+      FRONTEND_FORBIDDEN_TERMS,
+      "SECTOR_SOURCE_DISCLOSURE",
+    );
+  });
+
+  it("every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(SECTOR_SOURCE_DISCLOSURE)).toEqual([]);
+  });
+
+  it("states the source, the staleness basis, the uncovered instruments and that the field is editable", () => {
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("證交所公開資料");
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("最後一次同步的時間");
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("上櫃股票與 ETF");
+    expect(SECTOR_SOURCE_DISCLOSURE).toContain("可自行修改");
+  });
+
+  it("does not tell the user the classification is handled for them", () => {
+    // CEO 指示 2026-08-16 第 4 點: 不得含「自動幫你分類好了不用管」類語氣。
+    for (const phrase of ["不用管", "不必管", "免填", "無需確認", "不需確認", "已幫您", "已幫你"]) {
+      expect(SECTOR_SOURCE_DISCLOSURE).not.toContain(phrase);
+    }
   });
 });

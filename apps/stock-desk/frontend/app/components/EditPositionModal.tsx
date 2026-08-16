@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { ErrorPanel } from "./ErrorPanel";
 import { SymbolCombobox } from "./SymbolCombobox";
-import { applyDirectorySelection } from "../lib/directorySearch";
+import { applyDirectorySelection, sectorAfterDirectorySelection } from "../lib/directorySearch";
 import {
   CURRENCY_OPTIONS,
   INSTRUMENT_TYPE_OPTIONS,
   MARKET_OPTIONS,
+  SECTOR_SOURCE_DISCLOSURE,
   SECTOR_US_DISABLED_HINT,
 } from "../lib/format";
 import { shouldBlockPositionSubmit, submitButtonState } from "../lib/positionFormSubmit";
@@ -68,10 +69,11 @@ function FieldError({ message }: { message: string | undefined }) {
   return <p className="mt-1 text-xs text-red-400">{message}</p>;
 }
 
-// AC-12.6: a sector only ever applies to a TW position — shared by
-// `handleMarketChange` (manual `<select>`) and the symbol combobox's
-// `onSelect` (a directory candidate carries its own market) so the same
-// clearing rule is not duplicated between the two entry points.
+// AC-12.6: a sector only ever applies to a TW position. Used by
+// `handleMarketChange` (the manual `<select>`); the combobox's `onSelect`
+// path applies the same rule as the first branch of
+// `sectorAfterDirectorySelection`, which also has a directory category to
+// weigh and therefore cannot just reuse this one-liner.
 function sectorForMarket(market: Market, currentSector: string): string {
   return market === "TW" ? currentSector : "";
 }
@@ -119,10 +121,18 @@ export function EditPositionModal({
     setForm((prev) => ({ ...prev, market: value, sector: sectorForMarket(value, prev.sector) }));
   }
 
+  // Picking a candidate fills 代號/市場 (`applyDirectorySelection`) and offers
+  // the directory's 產業別 as the field's default — see
+  // `sectorAfterDirectorySelection` for the never-overwrite and never-guess
+  // rules, both of which it owns so this handler stays a plain state write.
   function handleSelectSymbolCandidate(item: DirectoryItem) {
     setForm((prev) => ({
       ...applyDirectorySelection(prev, item),
-      sector: sectorForMarket(item.market, prev.sector),
+      sector: sectorAfterDirectorySelection({
+        item,
+        previousSymbol: prev.symbol,
+        previousSector: prev.sector,
+      }),
     }));
   }
 
@@ -329,6 +339,12 @@ export function EditPositionModal({
                 </option>
               ))}
             </select>
+            {form.market === "TW" && (
+              // Sits next to the field, not next to a value: the copy describes
+              // where the default comes from, and deliberately does not mark
+              // which values were pre-filled (see SECTOR_SOURCE_DISCLOSURE).
+              <p className="mt-1 text-xs text-neutral-400">{SECTOR_SOURCE_DISCLOSURE}</p>
+            )}
             {form.market !== "TW" && (
               <p className="mt-1 text-xs text-neutral-500">{SECTOR_US_DISABLED_HINT}</p>
             )}
