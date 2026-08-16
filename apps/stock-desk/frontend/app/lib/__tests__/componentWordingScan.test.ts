@@ -26,6 +26,10 @@ import {
   CONFIGURED_SOURCES,
   US_DATA_SOURCE_DISCLOSURE_STATEMENT,
 } from "../../settings/DataSourcesSection";
+import {
+  TRADINGVIEW_CHART_DISCLOSURE_STATEMENT,
+  TRADINGVIEW_CHART_FALLBACK_MESSAGE,
+} from "../../position/[symbol]/TradingViewChartPanel";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 const SCANNED_FILES = [
@@ -106,6 +110,10 @@ const SCANNED_FILES = [
   // The add form was never in this scan at all despite carrying hard-coded
   // field labels and hints since it shipped.
   "../../positions/import/ManualAddForm.tsx",
+  // TradingView 嵌入 (CEO 派工單 2026-08-16): the chart panel's disclosure
+  // sentence and the widget-load fallback message are new hard-coded JSX
+  // literals; this file was never in the scan before this batch existed.
+  "../../position/[symbol]/TradingViewChartPanel.tsx",
 ] as const;
 
 /**
@@ -184,6 +192,52 @@ describe("DataSourcesSection.tsx — US_DATA_SOURCE_DISCLOSURE_STATEMENT (D4 定
  * 來源欄括號改為與 S7 註記同字面(由 `US_MARKET_OPTION_CAVEAT` 組成,不可能
  * 漂移),肯定語半句仍逐字保留於下方 D4 揭露句。
  */
+/**
+ * TradingView 嵌入 (CEO 派工單 2026-08-16 第 4 點：新句自擬，**待風控覆核，
+ * 先落地**)：比照 `adviceWording.ts` 的 `AS_OF_DATE_UNKNOWN_STATEMENT`／D4
+ * 揭露句的作法，把 exported 常數本身（而不只是原始檔案文字）納入掃描面，並
+ * 逐字釘住目前送審的字面，防止之後改寫時漏改 JSX 或漏改常數而彼此漂移。
+ */
+describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (待風控覆核)", () => {
+  it("disclosure statement: contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      TRADINGVIEW_CHART_DISCLOSURE_STATEMENT,
+      FRONTEND_FORBIDDEN_TERMS,
+      "TRADINGVIEW_CHART_DISCLOSURE_STATEMENT",
+    );
+  });
+
+  it("disclosure statement: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(TRADINGVIEW_CHART_DISCLOSURE_STATEMENT)).toEqual([]);
+  });
+
+  it("disclosure statement matches the submitted-for-review wording verbatim", () => {
+    expect(TRADINGVIEW_CHART_DISCLOSURE_STATEMENT).toBe(
+      "此互動圖表由 TradingView 提供；其資料來源與本系統已驗證的行情資料鏈是各自獨立的兩條路徑，" +
+        "圖表內容僅供檢視、不參與本系統任何計算或建議產出，載入需要網路連線。",
+    );
+  });
+
+  it("fallback message: contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      TRADINGVIEW_CHART_FALLBACK_MESSAGE,
+      FRONTEND_FORBIDDEN_TERMS,
+      "TRADINGVIEW_CHART_FALLBACK_MESSAGE",
+    );
+  });
+
+  it("fallback message: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(TRADINGVIEW_CHART_FALLBACK_MESSAGE)).toEqual([]);
+  });
+
+  it("fallback message matches the submitted-for-review wording verbatim", () => {
+    expect(TRADINGVIEW_CHART_FALLBACK_MESSAGE).toBe(
+      "互動圖表目前未能載入，可能原因是網路連線不穩、瀏覽器擴充套件（例如廣告攔截）攔截了外部資源，" +
+        "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或切換至「本地圖表」頁籤查看本系統已驗證的資料。",
+    );
+  });
+});
+
 describe("DataSourcesSection.tsx — CONFIGURED_SOURCES rows (D5④/D5⑤ 字面,待風控覆核)", () => {
   it("TW row names the ladder's real terminal layers in the US row's approved format", () => {
     expect(CONFIGURED_SOURCES[0]).toEqual({

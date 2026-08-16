@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
 import { formatDateTime, marketLabel } from "../../lib/format";
@@ -16,9 +18,33 @@ import { LeverageChapterView } from "./LeverageChapterView";
 import { TechnicalIndicatorsPanel } from "./TechnicalIndicatorsPanel";
 import { OperationSummaryPanel } from "./OperationSummaryPanel";
 
+/**
+ * CEO 派工單 2026-08-16 (TradingView 嵌入) 第 2 點: loaded via `next/dynamic`
+ * with `ssr: false` — the panel injects a third-party `<script src=...>` into
+ * the DOM directly (bypassing React's own tree), which has no useful
+ * server-rendered form and must only ever run client-side.
+ */
+const TradingViewChartPanel = dynamic(
+  () => import("./TradingViewChartPanel").then((mod) => mod.TradingViewChartPanel),
+  { ssr: false, loading: () => <SkeletonBlock className="h-[480px] w-full" /> },
+);
+
 function isMarket(value: string | null): value is Market {
   return value === "TW" || value === "US";
 }
+
+type ChartTab = "tradingview" | "local";
+
+/**
+ * CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView is the default tab —
+ * the self-built K-line (bound to this system's verified data chain, used
+ * for indicator overlay comparison) stays available one click away, never
+ * removed.
+ */
+const CHART_TABS: { key: ChartTab; label: string }[] = [
+  { key: "tradingview", label: "互動圖表（TradingView）" },
+  { key: "local", label: "本地圖表" },
+];
 
 export default function PositionDetailPage() {
   const params = useParams<{ symbol: string }>();
@@ -47,6 +73,13 @@ export default function PositionDetailPage() {
   // an error) on a directory miss, so the title deliberately shows the
   // symbol alone in that case rather than any placeholder text (AC-13).
   const directory = useDirectoryResolve(symbol, true);
+
+  // CEO 派工單 2026-08-16 (TradingView 嵌入): only the active tab's panel is
+  // mounted (see the render logic below) — switching tabs re-creates the
+  // other one from already-cached query data, rather than keeping a hidden,
+  // zero-width chart container around. Known trade-off: no zoom/scroll state
+  // survives a tab switch (see 已知限制 in the handoff report).
+  const [chartTab, setChartTab] = useState<ChartTab>("tradingview");
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
@@ -99,7 +132,7 @@ export default function PositionDetailPage() {
         <div className="mt-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-neutral-200">日K線與均線</h3>
-            {bars.isSuccess && (
+            {chartTab === "local" && bars.isSuccess && (
               <span className="flex items-center text-xs text-neutral-500">
                 資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
                 <DataMetaStatusBadge
@@ -110,21 +143,65 @@ export default function PositionDetailPage() {
               </span>
             )}
           </div>
-          {(bars.isPending || signals.isPending) && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
-          {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
-          {bars.isSuccess && bars.data.status === "insufficient_data" && (
-            <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
+
+          {/*
+            CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView 為預設頁籤，
+            本地圖表（既有、綁已驗證資料，供指標對照）保留於第二頁籤，非移除。
+          */}
+          <div role="tablist" aria-label="圖表來源" className="mt-3 flex gap-1 border-b border-neutral-800">
+            {CHART_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={chartTab === tab.key}
+                onClick={() => setChartTab(tab.key)}
+                className={`-mb-px rounded-t-md border border-b-0 px-3 py-1.5 text-sm ${
+                  chartTab === tab.key
+                    ? "border-neutral-700 bg-neutral-900 text-neutral-100"
+                    : "border-transparent text-neutral-500 hover:text-neutral-300"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/*
+            Each panel only renders while its tab is active (not just CSS
+            `hidden`): `PriceChart`'s `lightweight-charts` canvas sizes itself
+            from its container's actual width via `autosize`, which a
+            `display:none` container reports as zero — mounting fresh on
+            activation, rather than toggling visibility on an already-mounted
+            zero-width canvas, is what keeps it correctly sized every time.
+            The `bars`/`signals` React Query results this reads are already
+            cached, so re-mounting costs no extra network round-trip.
+          */}
+          {chartTab === "tradingview" && (
+            <div role="tabpanel" className="mt-3">
+              <TradingViewChartPanel symbol={symbol} market={market} />
+            </div>
           )}
-          {bars.isSuccess && bars.data.status === "ok" && (
-            <div className="mt-3">
-              <PriceChart
-                bars={bars.data.bars}
-                movingAverages={signals.data?.signals?.technical?.moving_averages}
-              />
-              <p className="mt-2 text-xs text-neutral-500">
-                共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
-                {bars.data.data.last_bar_date ?? "—"}）。
-              </p>
+
+          {chartTab === "local" && (
+            <div role="tabpanel">
+              {(bars.isPending || signals.isPending) && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
+              {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
+              {bars.isSuccess && bars.data.status === "insufficient_data" && (
+                <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
+              )}
+              {bars.isSuccess && bars.data.status === "ok" && (
+                <div className="mt-3">
+                  <PriceChart
+                    bars={bars.data.bars}
+                    movingAverages={signals.data?.signals?.technical?.moving_averages}
+                  />
+                  <p className="mt-2 text-xs text-neutral-500">
+                    共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
+                    {bars.data.data.last_bar_date ?? "—"}）。
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>
