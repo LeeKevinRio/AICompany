@@ -1,3 +1,5 @@
+import { US_MARKET_OPTION_CAVEAT } from "../lib/format";
+
 /**
  * Data-source configuration, not a live status feed: no endpoint in this
  * backend reports per-provider health, so a "live" indicator here would be
@@ -7,16 +9,39 @@
  * four-layer degradation ladder (`app/data/interface.py` `DataStatus`,
  * verified). Per-symbol freshness is visible on the `/` overview's position
  * table via `DataStatusBadge`, which does reflect the real, live status.
+ *
+ * D5④ (2026-08-13 衝刺覆核列管,**字面待風控覆核**): the TW backups cell used
+ * to stop at 「本地快取」, hiding the ladder's real terminal state — the TW
+ * chain too ends at "any usable cached rows regardless of TTL, else
+ * unavailable" (`app/data/service.py` steps 3–4, identical to US). The cell
+ * now names both final layers with the exact wording the risk-approved US
+ * row already uses (「任何可用快取 → 資料不足」), so the two rows describe
+ * the shared ladder in one format. TW keeps no layer-0 entry because
+ * `cache_first` is off for TW by ADR-0005 (deps.py, verified).
+ *
+ * D5⑤ (2026-08-13 衝刺覆核列管,**字面待風控覆核**): the US primary cell's
+ * parenthetical used to carry only the affirmative half of the D4 disclosure
+ * (「已完成接線，並以測試替身通過自動化測試」) while the S7 market-option
+ * caveat next to the very same word 「美股（US）」 elsewhere carries the
+ * cautionary half — an asymmetric tone for the same fact. The cell now
+ * reuses the S7-approved caveat verbatim (`format.ts`
+ * `US_MARKET_OPTION_CAVEAT`,「資料來源未經真實環境驗證」); the affirmative
+ * facts are not lost — they remain, verbatim and risk-approved, in the D4
+ * disclosure paragraph rendered directly below this table
+ * (`US_DATA_SOURCE_DISCLOSURE_STATEMENT`, untouched).
+ *
+ * Exported so `__tests__/componentWordingScan.test.ts` can pin both rows
+ * verbatim for the risk re-review, the same way it pins the D4 statement.
  */
-const CONFIGURED_SOURCES = [
+export const CONFIGURED_SOURCES = [
   {
     market: "TW",
     primary: "TWSE（證交所）",
-    backups: "TPEx（櫃買中心）→ FinMind → 本地快取",
+    backups: "TPEx（櫃買中心）→ FinMind → 任何可用快取 → 資料不足",
   },
   {
     market: "US",
-    primary: "Alpha Vantage（已完成接線，並以測試替身通過自動化測試）",
+    primary: `Alpha Vantage${US_MARKET_OPTION_CAVEAT}`,
     backups:
       "TTL 內本地快取（優先於主要來源）→ Alpha Vantage → yfinance → 任何可用快取 → 資料不足",
   },

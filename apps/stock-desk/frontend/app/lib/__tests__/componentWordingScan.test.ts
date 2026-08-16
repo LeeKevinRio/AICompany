@@ -22,7 +22,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
-import { US_DATA_SOURCE_DISCLOSURE_STATEMENT } from "../../settings/DataSourcesSection";
+import {
+  CONFIGURED_SOURCES,
+  US_DATA_SOURCE_DISCLOSURE_STATEMENT,
+} from "../../settings/DataSourcesSection";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 const SCANNED_FILES = [
@@ -143,5 +146,32 @@ describe("DataSourcesSection.tsx — US_DATA_SOURCE_DISCLOSURE_STATEMENT (D4 定
         "另需設定環境變數 ALPHA_VANTAGE_DAILY_LIMIT（每日額度上限）；此設定未完成時，主要來源同樣直接跳過，不會發出任何請求。" +
         "實際覆蓋率、速率限制與資料品質目前未知，應視為待查證狀態。",
     );
+  });
+});
+
+/**
+ * D5④/D5⑤ (2026-08-13 衝刺覆核列管;字面 2026-08-16 改稿,**待風控覆核**):
+ * pins both table rows verbatim so the exact strings sent to review are the
+ * ones that ship, and any later edit is a visible test change rather than a
+ * silent drift. TW 備援鏈補終局「→ 資料不足」並比照 US 列已核可格式;US 主要
+ * 來源欄括號改為與 S7 註記同字面(由 `US_MARKET_OPTION_CAVEAT` 組成,不可能
+ * 漂移),肯定語半句仍逐字保留於下方 D4 揭露句。
+ */
+describe("DataSourcesSection.tsx — CONFIGURED_SOURCES rows (D5④/D5⑤ 字面,待風控覆核)", () => {
+  it("TW row names the ladder's real terminal layers in the US row's approved format", () => {
+    expect(CONFIGURED_SOURCES[0]).toEqual({
+      market: "TW",
+      primary: "TWSE（證交所）",
+      backups: "TPEx（櫃買中心）→ FinMind → 任何可用快取 → 資料不足",
+    });
+  });
+
+  it("US primary cell carries the S7 caveat verbatim, not the affirmative-only parenthetical", () => {
+    expect(CONFIGURED_SOURCES[1]).toEqual({
+      market: "US",
+      primary: "Alpha Vantage（資料來源未經真實環境驗證）",
+      backups:
+        "TTL 內本地快取（優先於主要來源）→ Alpha Vantage → yfinance → 任何可用快取 → 資料不足",
+    });
   });
 });

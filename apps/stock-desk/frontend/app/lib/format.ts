@@ -64,8 +64,12 @@ const MARKET_LABELS: Record<Market, string> = {
  * US positions everywhere else): repeating a selection-time caveat next to
  * every row of an existing position would be noise, not disclosure, at that
  * point the data already flowed through the chain regardless of caveat.
+ *
+ * Exported since D5⑤ (2026-08-16): the settings data-source table's US
+ * primary cell (`settings/DataSourcesSection.tsx`) now carries this same
+ * caveat, composed from this constant so the two surfaces cannot drift.
  */
-const US_MARKET_OPTION_CAVEAT = "（資料來源未經真實環境驗證）";
+export const US_MARKET_OPTION_CAVEAT = "（資料來源未經真實環境驗證）";
 
 export const MARKET_OPTIONS: { value: Market; label: string }[] = [
   { value: "TW", label: MARKET_LABELS.TW },
