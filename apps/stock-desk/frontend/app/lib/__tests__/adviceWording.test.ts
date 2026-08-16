@@ -24,6 +24,8 @@
 import { describe, expect, it } from "vitest";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
+  AS_OF_AGE_UNKNOWN_STATEMENT,
+  AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   AS_OF_DATE_UNKNOWN_STATEMENT,
   buildAsOfStatement,
   buildAttributedHeadline,
@@ -65,6 +67,11 @@ const RENDERED_SURFACE: string[] = [
   buildAsOfStatement("2026-08-04"),
   buildStaleDataProminentNotice("2026-08-04", 15),
   AS_OF_DATE_UNKNOWN_STATEMENT,
+  // R-D5②-1: the unknown-date slot ships both sentences, so the banned-term
+  // scan has to see the追加句 and the full concatenation, not just the first
+  // sentence it used to cover.
+  AS_OF_AGE_UNKNOWN_STATEMENT,
+  AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   NON_REALTIME_NOTICE,
   ...CONFIDENCES.map(summaryConfidenceLabel),
 ];
@@ -82,6 +89,36 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
 
   it("assertNoForbiddenTerms helper agrees with the it.each scan above (belt and suspenders)", () => {
     assertNoForbiddenTerms(joined, FRONTEND_FORBIDDEN_TERMS, "adviceWording.ts rendered surface");
+  });
+});
+
+describe("the unknown-as-of-date slot (R-D5②-1, 風控逐字確認 2026-08-16)", () => {
+  it("pins both approved sentences character for character", () => {
+    expect(AS_OF_DATE_UNKNOWN_STATEMENT).toBe(
+      "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。",
+    );
+    expect(AS_OF_AGE_UNKNOWN_STATEMENT).toBe("因此本次也無法判斷這份資料距今多久。");
+  });
+
+  it("ships the two sentences as one string, in order, with nothing between them", () => {
+    // The disclosure only works as a pair: the first names the missing date,
+    // the second names what that costs (no age judgement, hence no 資料過舊
+    // notice). Concatenation is what makes "always together" structural rather
+    // than a convention a future edit could break.
+    expect(AS_OF_DATE_UNKNOWN_FULL_STATEMENT).toBe(
+      "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。因此本次也無法判斷這份資料距今多久。",
+    );
+    expect(AS_OF_DATE_UNKNOWN_FULL_STATEMENT).toBe(
+      AS_OF_DATE_UNKNOWN_STATEMENT + AS_OF_AGE_UNKNOWN_STATEMENT,
+    );
+    expect(AS_OF_DATE_UNKNOWN_FULL_STATEMENT.startsWith(AS_OF_DATE_UNKNOWN_STATEMENT)).toBe(true);
+    expect(AS_OF_DATE_UNKNOWN_FULL_STATEMENT.endsWith(AS_OF_AGE_UNKNOWN_STATEMENT)).toBe(true);
+  });
+
+  it("carries no action guidance — it states two facts and stops", () => {
+    for (const term of ["請", "建議", "自行", "應", "可以"]) {
+      expect(AS_OF_AGE_UNKNOWN_STATEMENT).not.toContain(term);
+    }
   });
 });
 

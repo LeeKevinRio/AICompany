@@ -12,7 +12,7 @@
 
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
-  AS_OF_DATE_UNKNOWN_STATEMENT,
+  AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   buildAsOfStatement,
   buildAttributedHeadline,
   buildCandidateCoverageStatement,
@@ -125,14 +125,21 @@ function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: stri
  * S5 fix (risk-final-review.md 列管項): picks the same date `buildAsOfStatement`
  * used to receive via `lastBarDate ?? card.observation_window.end ?? "—"`,
  * except that when both sources are `null` this returns the honest
- * `AS_OF_DATE_UNKNOWN_STATEMENT` instead of formatting the `"—"` placeholder
- * as if it were a date. Pure and unit-tested in isolation from the rest of
- * `buildRequiredElements` so the three branches (last-bar date, observation-
- * window fallback, both absent) each have a direct assertion.
+ * `AS_OF_DATE_UNKNOWN_FULL_STATEMENT` instead of formatting the `"—"`
+ * placeholder as if it were a date. Pure and unit-tested in isolation from the
+ * rest of `buildRequiredElements` so the three branches (last-bar date,
+ * observation-window fallback, both absent) each have a direct assertion.
+ *
+ * R-D5②-1 (2026-08-16): the unknown-date branch returns *both* approved
+ * sentences as one string — the missing date also takes the 資料過舊 notice
+ * down with it, and silence there reads as "the data is recent". Composed in
+ * `adviceWording.ts` so this slot renders them together, in the same
+ * `<p>` (`OperationSummaryPanel.tsx`'s `RequiredElementsFooter`), at the same
+ * size and contrast, with nothing able to fold one of them away.
  */
 export function resolveAsOfStatement(lastBarDate: string | null, observationEnd: string | null): string {
   const dateIso = lastBarDate ?? observationEnd;
-  return dateIso === null ? AS_OF_DATE_UNKNOWN_STATEMENT : buildAsOfStatement(dateIso);
+  return dateIso === null ? AS_OF_DATE_UNKNOWN_FULL_STATEMENT : buildAsOfStatement(dateIso);
 }
 
 function buildRequiredElements(

@@ -13,6 +13,9 @@ import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse } from "../types";
 import { buildOperationSummary } from "../operationSummary";
 import {
+  AS_OF_AGE_UNKNOWN_STATEMENT,
+  AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
+  AS_OF_DATE_UNKNOWN_STATEMENT,
   buildStaleDataProminentNotice,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
@@ -232,13 +235,31 @@ describe("buildOperationSummary — held mode", () => {
         }),
       );
       if (model.kind !== "held") throw new Error("unreachable");
+      // R-D5②-1 (風控逐字確認 2026-08-16): the slot carries both approved
+      // sentences, in this order, as one paragraph. `staleDataNotice` is null
+      // in this state (there is no date to measure age from), which is exactly
+      // the silence the second sentence explains — asserted together here so a
+      // change that drops the sentence while leaving the notice absent fails.
       expect(model.required.asOfStatement).toBe(
-        "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。",
+        "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。因此本次也無法判斷這份資料距今多久。",
       );
+      expect(model.required.asOfStatement).toBe(AS_OF_DATE_UNKNOWN_FULL_STATEMENT);
+      expect(model.required.asOfStatement).toContain(AS_OF_DATE_UNKNOWN_STATEMENT);
+      expect(model.required.asOfStatement).toContain(AS_OF_AGE_UNKNOWN_STATEMENT);
+      expect(model.staleDataNotice).toBeNull();
       expect(model.required.asOfStatement).not.toContain("—");
       expect(model.required.asOfStatement).not.toContain("本評估基於");
     },
   );
+
+  it("never emits the age sentence when a basis date is known (it would be false there)", () => {
+    // The追加句 explains a *missing* date. On a card that has one, the 資料過舊
+    // notice is computable, so publishing "無法判斷距今多久" would contradict
+    // what the panel shows right above it.
+    const model = buildOperationSummary(makeResponse());
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.required.asOfStatement).not.toContain(AS_OF_AGE_UNKNOWN_STATEMENT);
+  });
 
   it(
     "picks the heaviest matched rule as the main basis even when it points the opposite way from the " +

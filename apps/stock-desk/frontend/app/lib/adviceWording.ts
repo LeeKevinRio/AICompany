@@ -137,6 +137,30 @@ export function buildAsOfStatement(dateIso: string): string {
 export const AS_OF_DATE_UNKNOWN_STATEMENT = "本評估未取得收盤資料的日期，無法標示評估所依據的資料時間。";
 
 /**
+ * R-D5②-1 (`work/reviews/2026-08-16-品質債清償批-覆核.md`, CEO 裁決 2026-08-16
+ * 方案 A+): wording drafted in `work/stock-desk-D4-資料來源措辭.md` 六 and
+ * confirmed verbatim by risk-compliance on 2026-08-16.
+ *
+ * When the basis date is unknown, the 資料過舊 notice
+ * (`buildStaleDataProminentNotice`) is missing too — it is computed *from* that
+ * same date. Two gaps, one visible: a reader who sees no staleness warning is
+ * left to conclude the data is recent, when the truth is that its age could not
+ * be judged at all. This sentence names that second gap as a consequence of the
+ * first ("因此"), and carries no action guidance.
+ */
+export const AS_OF_AGE_UNKNOWN_STATEMENT = "因此本次也無法判斷這份資料距今多久。";
+
+/**
+ * The two sentences above as one string, because they must reach the screen as
+ * one uninterrupted paragraph: same slot, same font size, same contrast, never
+ * folded away (R-D5②-1 呈現要求). Concatenating them here rather than rendering
+ * a second element means no call site can publish the first without the second,
+ * and no styling change can demote one below the other.
+ */
+export const AS_OF_DATE_UNKNOWN_FULL_STATEMENT =
+  AS_OF_DATE_UNKNOWN_STATEMENT + AS_OF_AGE_UNKNOWN_STATEMENT;
+
+/**
  * AC-C8.2 / 風控複審 2026-08-09 裁決 b: the extra prominent notice for data
  * the market has moved past. States the actual basis date and the size of the
  * gap instead of a vague "超過一個交易日" so the reader is not left to guess
