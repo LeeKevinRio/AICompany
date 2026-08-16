@@ -206,6 +206,7 @@ const CONFIGURED_SOURCES = [
 
 - 出處任務：`work/reviews/2026-08-16-品質債清償批-覆核.md`「風控批次覆核」R-D6-1、「CEO 裁決」R-D5②-1——單點措辭任務，非發想類，未走 creative-masters 流程。
 - 協調人處置：兩句併同一輪（creative-lead 擬字面 → risk-compliance-officer 逐字確認 → dev 落地並補 invariant 測試）。
+- **狀態：兩句皆經 risk-compliance-officer 逐字 CONFIRMED（2026-08-16，由協調人轉達派工），已落地**——落地位置見各句下方「落地位置」，字面（含標點）任何變更視為漂移，須重送風控。
 - 兩句皆為**既有核可句的追加句**、同槽接續渲染，非獨立主句；均不含任何行動指引（連「請自行判斷」都沒有），只陳述事實與系統能力邊界。
 
 ### R-D6-1：ETF 產業佔比成因句追加揭露
@@ -214,7 +215,9 @@ const CONFIGURED_SOURCES = [
 
 > 本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。
 
-- 設計說明：只重申風控指定的事實邊界（「不計算」不等於「沒風險」；系統目前的評估能力邊界），不使用「請」「建議」「自行」等任何行動指引字眼；句型與同檔既有成因句群（`NO_SECTOR_UNSUPPORTED_MARKET_DETAIL` 等）一致的純陳述句式，也呼應風控注記「槓桿指數 ETF 常高度集中單一產業」的關切，但不點名個別標的類型或具體風險數字，避免另生新的事實斷言。**待風控逐字確認。**
+- 設計說明：只重申風控指定的事實邊界（「不計算」不等於「沒風險」；系統目前的評估能力邊界），不使用「請」「建議」「自行」等任何行動指引字眼；句型與同檔既有成因句群（`NO_SECTOR_UNSUPPORTED_MARKET_DETAIL` 等）一致的純陳述句式，也呼應風控注記「槓桿指數 ETF 常高度集中單一產業」的關切，但不點名個別標的類型或具體風險數字，避免另生新的事實斷言。**風控逐字 CONFIRMED（2026-08-16）。**
+- **落地位置**：`apps/stock-desk/backend/app/advice/limits.py` 之 `NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL`，與成因句常數 `NO_SECTOR_ETF_CAUSE_DETAIL` 串接成 `NO_SECTOR_ETF_DETAIL`（`NO_SECTOR_DETAILS["etf_instrument"]` 的唯一來源），因此沒有任何分支能只輸出成因句而漏掉本句。**未**套用到 `NO_SECTOR_UNSUPPORTED_MARKET_DETAIL`（同型缺口列管後批，字面未核可）。
+- **守門測試**：`tests/test_advice_limits.py`（逐字釘住＋「兩句永遠同出」＋「未核可狀態不得沿用本句」）、`tests/test_api_portfolio_limits.py`（`GET /api/portfolio/limits` 的 `excluded[].reason` 逐字帶到前端 `RiskGauge.tsx`「未納入的標的」清單的路徑）。
 
 ### R-D5②-1：as-of 與過舊提示雙缺追加揭露
 
@@ -222,4 +225,7 @@ const CONFIGURED_SOURCES = [
 
 > 因此本次也無法判斷這份資料距今多久。
 
-- 設計說明：以「因此」承接前句已揭露的缺口（無法標示資料日期），直接點出「過舊提示同樣缺席」的原因——是同一項資料不足所致，而不是資料本身不舊——避免讀者把「沒看到過舊警示」誤讀成「資料是新的」；不重複描述過舊提示本身的存在或觸發機制，維持追加句應有的精短。**待風控逐字確認。**
+- 設計說明：以「因此」承接前句已揭露的缺口（無法標示資料日期），直接點出「過舊提示同樣缺席」的原因——是同一項資料不足所致，而不是資料本身不舊——避免讀者把「沒看到過舊警示」誤讀成「資料是新的」；不重複描述過舊提示本身的存在或觸發機制，維持追加句應有的精短。**風控逐字 CONFIRMED（2026-08-16）。**
+- **落地位置**：`apps/stock-desk/frontend/app/lib/adviceWording.ts` 之 `AS_OF_AGE_UNKNOWN_STATEMENT`，與 `AS_OF_DATE_UNKNOWN_STATEMENT` 串接為 `AS_OF_DATE_UNKNOWN_FULL_STATEMENT`；`operationSummary.ts` 的 `resolveAsOfStatement` 在雙缺分支回傳串接後的字串，經 `required.asOfStatement` 進 `OperationSummaryPanel.tsx` 的 `RequiredElementsFooter` 同一個 `<p className="text-neutral-300">`——同槽、同字級、同對比、不摺疊。
+- **守門測試**：`app/lib/__tests__/adviceWording.test.ts`（逐字釘住、串接順序、無行動指引字眼，並把新句與串接句納入 `RENDERED_SURFACE` 禁語掃描面）、`app/lib/__tests__/operationSummary.test.ts`（雙缺分支逐字＋`staleDataNotice` 同時為 null；有日期時不得出現本句）。
+- **前提測試（R-D5②-2）**：`apps/stock-desk/backend/tests/test_api_advice.py` 以 `/api/advice` 真實路徑釘住「advice 非 null ⇒ data.last_bar_date 非 null」（有 bars 出卡／無 bars 不出卡兩向）；測試 docstring 已註明此前提是 D5② 不降級裁決的基礎，破了先紅回風控重裁。
