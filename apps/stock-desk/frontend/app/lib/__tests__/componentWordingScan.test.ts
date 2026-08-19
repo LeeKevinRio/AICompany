@@ -27,6 +27,8 @@ import {
   US_DATA_SOURCE_DISCLOSURE_STATEMENT,
 } from "../../settings/DataSourcesSection";
 import {
+  TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT,
+  TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT,
   TRADINGVIEW_CHART_DISCLOSURE_STATEMENT,
   TRADINGVIEW_CHART_FALLBACK_MESSAGE,
   TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE,
@@ -133,6 +135,16 @@ const ALLOWED_SOURCE_CONTEXTS: Partial<Record<(typeof SCANNED_FILES)[number], re
     // (「勝率→歷史交易的獲勝比例」), scoped to this one METRIC_ROWS line.
     "../../backtest/BacktestReportView.tsx": [
       '{ label: "勝率", render: (m) => formatPercent(m.win_rate) }',
+    ],
+    // D8 句 3 第二輪 (`work/reviews/2026-08-19-句1句3重寫-風控批審.md` 落地條件
+    // 6/10): the mandated 列管註記 doc comment on
+    // `TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT` quotes the review's own
+    // required wording verbatim ("須立即重送風控"), an internal escalation
+    // instruction to future maintainers, not user-facing copy — the same
+    // acknowledged-limitation/instruction 語境 already accepted for the
+    // 「勝率」 line above, scoped to this one comment line.
+    "../../position/[symbol]/TradingViewChartPanel.tsx": [
+      " * 列管：一旦系統新增任何跨資料源比對/校正邏輯，「本系統不會將兩者互相校正」即失真，須立即重送風控。",
     ],
   };
 
@@ -255,6 +267,82 @@ describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (風控逐�
 
   it("invalid-symbol message: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
     expect(findBareRealtimeClaims(TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE)).toEqual([]);
+  });
+});
+
+/**
+ * D8 句 3 (`work/reviews/2026-08-19-句1句3重寫-風控批審.md`「句 3 第二輪 —
+ * CONFIRMED(修訂版)」，落地條件 1-10)：獨立新常數
+ * `TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT` 與現有揭露句串接成
+ * `TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT`，兩個渲染點一律改渲染 FULL
+ * 常數。落地條件 5：補句常數與 FULL 常數各加逐字釘住 + 禁用詞掃描 + 裸「即時」
+ * 掃描，與常數同一 commit。落地條件 9：另加兩條反向斷言，防止「各自獨立的兩
+ * 條路徑」與「兩者」被善意補回而重新變成不唯一/冗贅。
+ */
+describe("TradingViewChartPanel.tsx — 價量不一致補句 (D8 句 3 第二輪 CONFIRMED 修訂版)", () => {
+  it("mismatch statement: contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT,
+      FRONTEND_FORBIDDEN_TERMS,
+      "TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT",
+    );
+  });
+
+  it("mismatch statement: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT)).toEqual([]);
+  });
+
+  it("mismatch statement matches the risk-approved wording verbatim (retyped, not imported)", () => {
+    // 落地條件 5: must be a fresh retype of the reviewed literal, not a
+    // self-comparison against the constant this test is guarding.
+    expect(TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT).toBe(
+      "此圖表顯示的價格與成交量，可能與本系統自有的行情資料鏈不一致；本系統不會將兩者互相校正。",
+    );
+  });
+
+  it("full statement: contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT,
+      FRONTEND_FORBIDDEN_TERMS,
+      "TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT",
+    );
+  });
+
+  it("full statement: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT)).toEqual([]);
+  });
+
+  it("full statement matches the risk-approved wording verbatim (retyped, not imported)", () => {
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT).toBe(
+      "此互動圖表由 TradingView 提供；其資料來源與本系統自有的行情資料鏈是各自獨立的兩條路徑，" +
+        "本系統未查證此圖表資料的正確性、完整性或時效性，亦不為其負責；" +
+        "本系統無法標示其資料時間與延遲狀態；" +
+        "圖表內容僅供檢視、不參與本系統任何計算或建議產出，載入需要網路連線。" +
+        "此圖表顯示的價格與成交量，可能與本系統自有的行情資料鏈不一致；本系統不會將兩者互相校正。",
+    );
+  });
+
+  it("full statement is the existing sentence and the mismatch sentence, in order, concatenated directly", () => {
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT).toBe(
+      TRADINGVIEW_CHART_DISCLOSURE_STATEMENT + TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT,
+    );
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT.startsWith(TRADINGVIEW_CHART_DISCLOSURE_STATEMENT)).toBe(
+      true,
+    );
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT.endsWith(TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT)).toBe(
+      true,
+    );
+  });
+
+  // 落地條件 9(反向斷言，防「補回」漂移):第二輪裁決刪去了第三稿「兩者是各自
+  // 獨立的兩條路徑，」這個冗贅分句，並把「兩者」收斂為單一指涉。這兩條斷言釘
+  // 死該裁定，防止日後有人善意把被刪的分句加回來，或讓「兩者」重新變得不唯一。
+  it("'各自獨立的兩條路徑' appears exactly once in the FULL statement (no reintroduced redundant clause)", () => {
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT.match(/各自獨立的兩條路徑/g)?.length ?? 0).toBe(1);
+  });
+
+  it("'兩者' appears exactly once in the FULL statement (single, unambiguous referent)", () => {
+    expect(TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT.match(/兩者/g)?.length ?? 0).toBe(1);
   });
 });
 

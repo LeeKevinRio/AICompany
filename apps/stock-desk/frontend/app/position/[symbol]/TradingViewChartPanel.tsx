@@ -39,6 +39,42 @@ export const TRADINGVIEW_CHART_DISCLOSURE_STATEMENT =
   "圖表內容僅供檢視、不參與本系統任何計算或建議產出，載入需要網路連線。";
 
 /**
+ * 補句 — **risk-compliance-officer 逐字定稿（2026-08-19，第二輪 CONFIRMED，
+ * 修訂版）**，就 `work/stock-desk-D8-句1句3-重寫提案.md` 第三稿由風控直接刪冗
+ * 定稿：`work/reviews/2026-08-19-句1句3重寫-風控批審.md`「句 3 第二輪 —
+ * CONFIRMED(修訂版)」。
+ *
+ * 風控 2026-08-19 第二輪 CONFIRMED（修訂版，由 risk-compliance-officer 就第三
+ * 稿刪冗定稿），字面含標點不得改動，任何變更（含增刪標點、增補回指分句）視為
+ * 漂移須重送風控。
+ *
+ * 列管：一旦系統新增任何跨資料源比對/校正邏輯，「本系統不會將兩者互相校正」即失真，須立即重送風控。
+ *
+ * Must only ever be rendered concatenated after
+ * `TRADINGVIEW_CHART_DISCLOSURE_STATEMENT` as a single string (see
+ * `TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT` below) — never standalone,
+ * never before it, never as a second `<p>`. Per the 第二輪裁決 落地條件 8,
+ * any call site that renders this sentence without the existing one (or
+ * vice versa), or that splits them across two render nodes, is not a
+ * defect but a risk-review failure.
+ */
+export const TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT =
+  "此圖表顯示的價格與成交量，可能與本系統自有的行情資料鏈不一致；本系統不會將兩者互相校正。";
+
+/**
+ * The disclosure sentence and the mismatch-clarification sentence as one
+ * uninterrupted string — the existing sentence first, the new one appended
+ * directly after its closing 句號 with no separator and no leading
+ * whitespace, per 落地條件 2/3/8: both call sites below must render this
+ * single constant, never either half alone, and the order must never be
+ * reversed. Concatenating here (rather than composing at each render site)
+ * makes "always together, always in order" structural instead of a
+ * convention a future edit could break.
+ */
+export const TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT =
+  TRADINGVIEW_CHART_DISCLOSURE_STATEMENT + TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT;
+
+/**
  * Fallback shown when the embed script fails to load or its iframe does not
  * appear within `WIDGET_MOUNT_TIMEOUT_MS` — states the honest, plausible
  * causes (network / browser extension / third-party service) instead of
@@ -138,7 +174,7 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
   if (tvSymbol === null) {
     return (
       <div>
-        <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
+        <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT}</p>
         <p
           role="alert"
           className="rounded-md border border-dashed border-amber-700 bg-amber-950/20 p-3 text-sm text-amber-300"
@@ -164,7 +200,7 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
 
   return (
     <div>
-      <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_STATEMENT}</p>
+      <p className="mb-2 text-sm text-neutral-300">{TRADINGVIEW_CHART_DISCLOSURE_FULL_STATEMENT}</p>
       {status === "error" && (
         <p
           role="alert"
