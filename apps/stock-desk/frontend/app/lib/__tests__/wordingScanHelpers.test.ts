@@ -72,6 +72,42 @@ describe("assertNoForbiddenTerms — allowedContexts (D3② 語境白名單)", (
   });
 });
 
+/**
+ * D8⑤ (qa-reviewer low, work/reviews/2026-08-16-品質債清償批-覆核.md): when one
+ * whitelist entry is a substring of another, masking is order-sensitive.
+ * Masking the substring first also nulls it out *inside* the superstring's
+ * occurrence, so the superstring's own must-still-occur guard then fires —
+ * a false "the source changed" failure on an unchanged source. The failure
+ * mode is loud (a test failure to investigate, never a silent pre-approved
+ * hole), which is why this stays pinned behaviour rather than being "fixed":
+ * the resolution is to order the superstring before its substring. No real
+ * scan target trips this today (each file has at most one whitelist entry);
+ * these synthetic cases pin the boundary before a second entry ever lands.
+ */
+describe("assertNoForbiddenTerms — overlapping allowedContexts (D8⑤ 順序陷阱)", () => {
+  // "歷史勝率" is a substring of "回測的歷史勝率統計"; the text carries one
+  // occurrence of each, plus no other banned term.
+  const TEXT = '表格標題為「回測的歷史勝率統計」；欄位 label 為「歷史勝率」。';
+  const SUPERSTRING = "回測的歷史勝率統計";
+  const SUBSTRING = "歷史勝率";
+
+  it("passes when the superstring entry is listed before its substring entry", () => {
+    expect(() =>
+      assertNoForbiddenTerms(TEXT, TERMS, "t", [SUPERSTRING, SUBSTRING]),
+    ).not.toThrow();
+  });
+
+  it("substring-first fails loudly as a stale entry, never as a silent hole", () => {
+    // Masking "歷史勝率" first destroys the superstring's only occurrence, so
+    // its own occurrence guard reports it stale even though the source text is
+    // unchanged — the documented trap. Loud and investigable by design: the
+    // guard must never respond to overlap by quietly widening what it masks.
+    expect(() =>
+      assertNoForbiddenTerms(TEXT, TERMS, "t", [SUBSTRING, SUPERSTRING]),
+    ).toThrow(/not found in the scanned text/);
+  });
+});
+
 describe("findBareRealtimeClaims — unchanged by the whitelist mechanism", () => {
   it("accepts the denial form and flags the bare claim", () => {
     expect(findBareRealtimeClaims("本產品非即時報價系統。")).toEqual([]);
