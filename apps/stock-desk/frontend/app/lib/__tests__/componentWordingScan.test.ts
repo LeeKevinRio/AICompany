@@ -29,6 +29,7 @@ import {
 import {
   TRADINGVIEW_CHART_DISCLOSURE_STATEMENT,
   TRADINGVIEW_CHART_FALLBACK_MESSAGE,
+  TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE,
 } from "../../position/[symbol]/TradingViewChartPanel";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
@@ -237,6 +238,23 @@ describe("TradingViewChartPanel.tsx — 揭露句與 fallback 文案 (風控逐�
       "互動圖表目前未能載入，可能原因是網路連線不穩、瀏覽器擴充套件（例如廣告攔截）攔截了外部資源，" +
         "或 TradingView 服務本身暫時無法連線；可重新整理頁面再試一次，或可改用「本地圖表」頁籤。",
     );
+  });
+
+  // TradingView 列管小項 (2026-08-16 審查全紀錄): the invalid-symbol message is
+  // a technical error notice, not risk-gated advice copy (qa 複審 low 觀察 —
+  // 「不落風險閘門」), so unlike the two sentences above it gets the banned-term
+  // and bare-"即時" scans only, **not** a verbatim pin: rewording it does not
+  // require a risk resubmission, but it must never grow a banned term.
+  it("invalid-symbol message: contains none of the §1.3 banned terms", () => {
+    assertNoForbiddenTerms(
+      TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE,
+      FRONTEND_FORBIDDEN_TERMS,
+      "TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE",
+    );
+  });
+
+  it("invalid-symbol message: every '即時' occurrence is a '非即時' denial, never a bare claim", () => {
+    expect(findBareRealtimeClaims(TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE)).toEqual([]);
   });
 });
 
