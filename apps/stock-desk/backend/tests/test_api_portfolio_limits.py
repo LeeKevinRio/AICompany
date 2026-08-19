@@ -8,7 +8,8 @@ themselves are pinned in ``test_advice_book_limits.py``.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from app.advice.limits import (
@@ -16,10 +17,40 @@ from app.advice.limits import (
     NO_NET_WORTH_DETAIL,
     NO_SECTOR_ETF_DETAIL,
     NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL,
 )
+from app.api.deps import get_fx_provider, get_market_resolver, get_valuator
+from app.data.interface import DataStatus
+from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
+from app.main import app
+from app.portfolio.valuation import PositionValuator
 from app.settings.models import NetWorthSettings
-from tests.api_helpers import position_payload, recent_bars, trending_closes
+from tests.api_helpers import (
+    FakePriceService,
+    position_payload,
+    recent_bars,
+    trending_closes,
+)
 from tests.conftest import ApiHarness
+
+
+class _FlatFxProvider(FxRateProvider):
+    """One flat USD/TWD rate, dated on the requested window's end."""
+
+    source_id = "bank_of_taiwan"
+
+    def get_daily_rates(self, pair: str, start: date, end: date) -> FxRateResult:
+        now = datetime.now(UTC)
+        return FxRateResult(
+            rates=[
+                FxRate(pair=pair, date=end, rate=Decimal("31.5"), as_of=now, source=self.source_id)
+            ],
+            status=DataStatus.FRESH,
+            as_of=now,
+            source=self.source_id,
+        )
 
 
 def _limits(harness: ApiHarness) -> dict[str, dict[str, Any]]:
@@ -217,6 +248,58 @@ def test_an_etf_holding_is_excluded_with_the_etf_cause_not_the_fill_in_one(
     assert reason == NO_SECTOR_ETF_DETAIL
     assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL in reason
     assert "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。" in reason
+
+
+def test_a_real_foreign_holding_carries_both_unsupported_market_sentences(
+    api_harness: ApiHarness,
+) -> None:
+    # D8 句 2 (2026-08-19, work/reviews/2026-08-19-三句補充揭露-風控批審.md):
+    # a real non-TW holding walking the ``unsupported_market`` path must
+    # surface *both* approved sentences together, cause first, through the
+    # whole serialisation path -- ``excluded[].reason`` is the string the front
+    # end renders under 「未納入的標的」.
+    #
+    # The default harness has no US price chain and no FX rate, under which the
+    # holding would be excluded as *unvalued* and never reach cap 2's own
+    # sentence. Wire a US fake and a flat USD rate the same way production
+    # wires the real ones; the fixture teardown clears these overrides.
+    us_service = FakePriceService()
+    us_service.seed(
+        "AAPL",
+        recent_bars(trending_closes(200), symbol="AAPL", market="US", currency="USD"),
+    )
+    fx = _FlatFxProvider()
+    valuator = PositionValuator(
+        market_services={"TW": api_harness.price_service, "US": us_service},
+        fx_provider=fx,
+    )
+    app.dependency_overrides[get_valuator] = lambda: valuator
+    app.dependency_overrides[get_market_resolver] = lambda: {
+        "TW": api_harness.price_service,
+        "US": us_service,
+    }
+    app.dependency_overrides[get_fx_provider] = lambda: fx
+
+    api_harness.client.post(
+        "/api/positions",
+        json=position_payload(
+            symbol="AAPL", market="US", currency="USD", quantity="10", avg_cost="150"
+        ),
+    )
+    cap = _limits(api_harness)["sector_weight"]
+    assert cap["status"] == "not_evaluable"
+    assert [entry["symbol"] for entry in cap["excluded"]] == ["AAPL"]
+    reason = cap["excluded"][0]["reason"]
+    # Pinned verbatim against the constants *and* as literals, so neither end
+    # can drift alone; the order is fixed by the concatenation itself.
+    assert reason == NO_SECTOR_UNSUPPORTED_MARKET_DETAIL
+    assert reason == (
+        NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL
+        + NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
+    )
+    assert reason.endswith("本上限不計算，不代表此持倉沒有產業集中風險；系統目前無法就此評估。")
+    # The ETF residual sentence ("此 ETF") must not leak onto this state.
+    assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL not in reason
 
 
 def test_every_priced_holding_carries_its_data_provenance(api_harness: ApiHarness) -> None:

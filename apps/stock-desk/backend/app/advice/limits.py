@@ -156,6 +156,9 @@ NET_WORTH_SOFT_NOTICE_DAYS = 7
 #: :data:`NO_SECTOR_ETF_DETAIL` (added 2026-08-16 for D6) was approved by
 #: risk-compliance on the same terms, and R-D6-1 of that same review required a
 #: second sentence after it (see :data:`NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL`).
+#: The ``unsupported_market`` residual disclosure (D8 句 2, approved 2026-08-19)
+#: is governed the same way -- see
+#: :data:`NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL`.
 SectorGap = Literal[
     "no_position", "unfiled", "etf_instrument", "unsupported_market", "mixed"
 ]
@@ -186,19 +189,47 @@ NO_SECTOR_ETF_CAUSE_DETAIL = (
 #: Concatenated into :data:`NO_SECTOR_ETF_DETAIL` rather than emitted by a
 #: separate branch so the two sentences cannot come apart: every caller reads
 #: the single mapping entry below, so there is no code path that publishes the
-#: cause without this disclosure. Not applied to
-#: :data:`NO_SECTOR_UNSUPPORTED_MARKET_DETAIL` -- the same gap was noted there
-#: by the review but its wording is **not approved yet** (列管後批), and
-#: reusing this sentence would be publishing unreviewed copy.
+#: cause without this disclosure. The same gap on ``unsupported_market``,
+#: 列管 here on 2026-08-16, now carries its own disclosure approved verbatim by
+#: risk-compliance on 2026-08-19 (D8 句 2 CONFIRMED,
+#: ``work/reviews/2026-08-19-三句補充揭露-風控批審.md``) -- see
+#: :data:`NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL`. The two residual
+#: constants are deliberately separate even though they differ only in subject
+#: ("此 ETF" vs "此持倉"): each state's approved copy is pinned verbatim by its
+#: own tests, so neither sentence can be edited through the other.
 NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL = (
     "本上限不計算，不代表此 ETF 沒有產業集中風險；系統目前無法就此評估。"
 )
 
 NO_SECTOR_ETF_DETAIL = NO_SECTOR_ETF_CAUSE_DETAIL + NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL
 
-NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
+#: The cause half of the ``unsupported_market`` sentence, unchanged from the
+#: FR-12 wording approved on 2026-08-09: the taxonomy only covers TWSE, so the
+#: cap is not computed, and no fill-in guidance is offered because that write
+#: is answered with a 422 (:mod:`app.positions.sectors`).
+NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL = (
     "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
     "尚未決定其他市場的分類方式，單一產業佔比上限本次不計算，回報 not_evaluable。"
+)
+
+#: D8 句 2, approved verbatim by risk-compliance on 2026-08-19
+#: (``work/reviews/2026-08-19-三句補充揭露-風控批審.md``): "the cap did not
+#: run" must not be readable as "there is no concentration risk" on this state
+#: either, and "無法評估" is true here for its own reason -- no classification
+#: scheme for other markets has been decided. Same rules as the ETF residual
+#: sentence: it carries **no** action guidance on purpose, it is concatenated
+#: below rather than emitted by a separate branch so the cause can never ship
+#: without it, and it applies to ``unsupported_market`` only -- never to
+#: ``unfiled`` / ``mixed`` / ``no_position``, whose wording was not reviewed
+#: for it. This is its own constant, not a reuse of
+#: :data:`NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL` (subject "此持倉", not "此 ETF").
+NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL = (
+    "本上限不計算，不代表此持倉沒有產業集中風險；系統目前無法就此評估。"
+)
+
+NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
+    NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL
+    + NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
 )
 
 #: The same symbol held twice under two different categories: which one the

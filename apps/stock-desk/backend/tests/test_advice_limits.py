@@ -22,7 +22,9 @@ from app.advice.limits import (
     NO_SECTOR_ETF_DETAIL,
     NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL,
     NO_SECTOR_UNFILED_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
+    NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL,
     RANGE_ACTION_LABELS,
     SECTOR_MIXED_DETAIL,
     LimitCheck,
@@ -231,14 +233,78 @@ def test_the_etf_cause_never_ships_without_the_residual_risk_disclosure() -> Non
     assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL in detail
 
 
-def test_the_residual_risk_sentence_is_not_reused_on_the_unreviewed_states() -> None:
-    # The same gap was noted for ``unsupported_market``, but its wording is
-    # 列管後批 (not approved yet): copying this sentence onto it would publish
-    # unreviewed copy, and its "此 ETF" subject would be false there anyway.
+def test_the_residual_risk_sentence_is_not_reused_on_any_other_state() -> None:
+    # The "此 ETF" subject is only true on the ETF state. ``unsupported_market``
+    # now carries its own approved disclosure (D8 句 2, 2026-08-19) as a
+    # separate constant with its own subject; copying the ETF sentence there
+    # would be publishing copy that was never reviewed for that state.
     for gap, detail in NO_SECTOR_DETAILS.items():
         if gap == "etf_instrument":
             continue
         assert NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL not in detail
+
+
+def test_the_unsupported_market_sentences_are_the_risk_approved_wording_verbatim() -> None:
+    # D8 句 2 (2026-08-19, work/reviews/2026-08-19-三句補充揭露-風控批審.md):
+    # both halves and their concatenation are risk-approved copy pinned here in
+    # full. Any edit -- including punctuation -- is a wording drift that has to
+    # go back to risk-compliance before it ships.
+    assert NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL == (
+        "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
+        "尚未決定其他市場的分類方式，單一產業佔比上限本次不計算，回報 not_evaluable。"
+    )
+    assert NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL == (
+        "本上限不計算，不代表此持倉沒有產業集中風險；系統目前無法就此評估。"
+    )
+    assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL == (
+        "此標的為非台股持倉；系統目前只提供台灣證交所產業別分類，"
+        "尚未決定其他市場的分類方式，單一產業佔比上限本次不計算，回報 not_evaluable。"
+        "本上限不計算，不代表此持倉沒有產業集中風險；系統目前無法就此評估。"
+    )
+
+
+def test_the_unsupported_market_cause_never_ships_without_its_residual_disclosure() -> None:
+    # Same construction as R-D6-1: the two sentences are one constant, in a
+    # fixed order, and the mapping every caller reads holds only the
+    # concatenated form -- so no reachable string carries the cause alone.
+    assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL.startswith(
+        NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL
+    )
+    assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL.endswith(
+        NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
+    )
+    assert NO_SECTOR_DETAILS["unsupported_market"] == NO_SECTOR_UNSUPPORTED_MARKET_DETAIL
+    for detail in NO_SECTOR_DETAILS.values():
+        assert (NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL in detail) == (
+            NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL in detail
+        )
+    detail = _check(_ctx(sector_gap="unsupported_market"), "sector_weight").detail
+    assert NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL in detail
+    assert NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL in detail
+
+
+def test_the_unsupported_market_residual_is_its_own_constant_not_the_etf_one() -> None:
+    # 風控落地條件 (2026-08-19): the two residual sentences must not share a
+    # constant -- each is pinned verbatim by its own test, so neither can be
+    # edited through the other. Their subjects differ ("此持倉" vs "此 ETF").
+    assert (
+        NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL != NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL
+    )
+    assert "此持倉" in NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
+    assert "此 ETF" not in NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
+
+
+def test_the_unsupported_market_residual_is_not_applied_to_the_other_states() -> None:
+    # The 2026-08-19 approval covers ``unsupported_market`` only: ``unfiled``,
+    # ``mixed`` and ``no_position`` were not reviewed for this sentence, so it
+    # must not appear on them.
+    for gap, detail in NO_SECTOR_DETAILS.items():
+        if gap == "unsupported_market":
+            continue
+        assert NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL not in detail
+    for gap in ("unfiled", "mixed", "no_position"):
+        detail = _check(_ctx(sector_gap=gap), "sector_weight").detail
+        assert NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL not in detail
 
 
 def test_a_candidate_is_not_told_to_fill_in_a_holding_it_does_not_have() -> None:
