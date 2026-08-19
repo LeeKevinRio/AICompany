@@ -221,3 +221,19 @@ ON kelly_import_attempts (symbol, market, attempted_at DESC);
 - `engine.py`:`Trade` :43-53(須加 `bar_index`);微額 fill 成因 :140-173
 - `api/backtest.py`:run 編排待抽出 :319-424
 - `app/alerts/store.py`(append-only 型態)、`app/settings/net_worth.py`(`sample_gate.py` 仿照對象)
+
+---
+
+# 附註|quant-researcher 退化抽樣規則確認(2026-08-19 回訪)
+
+**(1) `n_loss == 0`(全勝):確認採 f\* = p̂ 極限規則,並定案零成本實作。**
+`b → ∞` 時 f\* = p − (1−p)/b → p 為正確單邊極限,p̂ 是該次重抽在 b 未定下 f\* 的上確界——保留上尾而不誇大。發生率受樣本閘門控制:n ≥ 20 且 n_loss ≥ 5 時單次重抽全勝機率 ≤ (15/20)^20 ≈ 0.32%,2000 次重抽期望約 6 次,永遠碰不到 97.5 百分位,實際只影響計數欄位、不影響落地 ci_high。**實作細節:`episodes.py` 不寫任何特殊分支算式**——對退化重抽直接以 `fraction_fn(p_hat, float("inf"))` 呼叫注入的 callable:`kelly_fraction` 的 domain 檢查 `payoff_ratio <= 0.0` 對 `inf` 放行,IEEE 算術下 `(1-p)/inf == 0.0`,回傳值精確等於 p̂。f\*=p̂ 規則由既有唯一算式自身算術產生,注入純度與 D-5 唯一算式邊界毫髮無傷;`episodes.py` 只負責偵測 `n_loss == 0`、代入 `inf`、遞增計數。
+
+**(2) `n_win == 0`(全敗):需特殊處理,不可交 fraction_fn 自然處理。**
+理由:①全敗時 b̂ = mean(空集合)/mean(|losses|),b̂ 根本不存在,`fraction_fn` 無從呼叫;②若以 b̂ = 0 代入,`kelly_fraction` domain 檢查回 `None`,該次重抽若被靜默跳過即是對**下尾**的對稱截斷——ci_low 被系統性抬高,可能把 `ci_includes_no_edge` 從 True 翻成 False,在「區間是否涵蓋沒有優勢」的揭露上是**反保守方向**,比上尾截斷更不可接受。**規則:對稱採極限——`n_win == 0` 時 b → 0⁺,f\* → −∞,該次重抽記 `float("-inf")`**(真實極限值,唯一作用是在百分位排序中墊底;n_win ≥ 5 閘門下發生率同 ≤0.32%,落地 ci_low 實務上恆為有限值)。
+
+**兩個配套(納入實作約束,補充第 27 條):**
+- **計數欄位拆向**:`bootstrap_degenerate_no_loss_draws` / `bootstrap_degenerate_no_win_draws` 兩欄(取代單一 `bootstrap_degenerate_draws`)——兩個退化方向對區間的影響端不同,合併計數會讓稽核者無從判讀。
+- **防禦性斷言**:落地前檢查 `f_star_ci_low` / `f_star_ci_high` 皆為有限值,非有限即 500 不寫入(inf 進 SQLite/JSON 會出事,且在閘門下屬 should-not-happen,發生即代表閘門被繞過,應該炸而不是存)。
+
+quant 對 f\* CI 位置改置 `episodes.py` + 注入方案**無異議**(p/b 估計量與回合定義同源同檔正是 §2.1 污染問題最想要的保證)。退化抽樣議題就此**結案**,不再阻擋任何項目。
