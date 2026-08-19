@@ -5,6 +5,10 @@
 **狀態**：draft（待 tech-architect 技術評估、risk-compliance-officer 文案審查、CEO 優先序裁決）
 **對應機會清單條目**：C5「Kelly 準則輸入計算」
 
+## 變更紀錄
+
+- 2026-08-19：依 ADR-0006 修正 profit_factor≠b 與 FR-3 時效錨點（product-manager 執行，來源為 tech-architect 升級事項，見 `work/stock-desk-C5-Kelly-架構評估.md`「升級 CEO/PM 事項」與 `docs/adr/0006-stock-desk-kelly-輸入來源與模組邊界.md` D-4／D-5）。
+
 > **輸入契約缺口聲明**：本 PRD 依指示應以 `work/機會清單.md` C5 條目為第一手來源，但該檔案於目前分支（HEAD 710e500）與 `work/` 目錄下皆不存在（僅找到 `work/stock-desk-已知限制與後續.md`）。本 PRD 改以下列已驗證來源重建需求：
 > - `work/stock-desk-已知限制與後續.md` 第 5 項（Kelly 準則輸入無來源）與其優先序建議（P1 第 5 順位）。
 > - 程式碼實地確認：`apps/stock-desk/backend/app/advice/limits.py`（第 5 條上限邏輯、`kelly_fraction_cap`/`kelly_position_cap` 現況）、`apps/stock-desk/backend/app/backtest/`（回測指標、走前測試分段）、`apps/stock-desk/backend/app/settings/net_worth.py` 與 `apps/stock-desk/frontend/app/settings/NetWorthSection.tsx`（帳戶淨值的時效性先例，FR-9）。
@@ -18,7 +22,7 @@
 
 - `app/advice/limits.py` 定義第 5 條上限「分數 Kelly 部位上限」（`kelly_fraction`），需要 `PortfolioContext.win_rate`（勝率 p）與 `PortfolioContext.payoff_ratio`（盈虧比 b）兩個輸入。兩欄位型別已存在（第 235-236 行），但**全系統沒有任何路徑會賦值**：`app/advice/book.py` 建構 `PortfolioContext` 時從未設定這兩欄，因此 `_check_kelly_fraction` 恆回 `not_evaluable`，訊息固定為「缺少勝率或盈虧比，無法計算 Kelly 部位上限（目前沒有資料來源提供這兩項輸入）」（limits.py:453）。
 - `kelly_fraction_cap`（預設 0.25，上界 0.25）與 `kelly_position_cap`（預設 0.10，上界 0.10）兩個政策參數已存在且已由風控與 CEO 於 2026-07-26 書面核准為硬上限（limits.py:70-85 註解），**本次不涉及調整這兩個上界**，只涉及「有沒有 p、b 可以套用它們」。
-- 回測模組（`app/backtest/report.py`）已產出 `win_rate`、`profit_factor`（即盈虧比 b 的口徑：毛利 / 毛損）等標準指標，且**強制樣本內／樣本外分列**（`WalkForwardReport.in_sample` / `out_of_sample`），`out_of_sample` 明確標註為「the honest performance measure」。
+- 回測模組（`app/backtest/report.py`）已產出 `win_rate`、`profit_factor`（總獲利／總虧損）等標準指標，且**強制樣本內／樣本外分列**（`WalkForwardReport.in_sample` / `out_of_sample`），`out_of_sample` 明確標註為「the honest performance measure」。**注意：`profit_factor` 不是 Kelly 的 b（盈虧比／payoff ratio）**——`b = payoff_ratio = mean(獲利) / mean(|虧損|)`，而 `profit_factor = (p/(1-p))×b`，兩者僅在勝率 p=0.5 時相等；當 p>0.5 時 PF>b，若誤用 PF 當 b 會高估 f\*、放寬第 5 條上限，與風控保守原則相反（見 ADR-0006 D-5）。依 ADR-0006，`report.py` 將新增 `payoff_ratio` 欄位（由開發實作），本 PRD 以下所有指涉 Kelly 的 b 之處一律引用 `payoff_ratio`，不得使用 `profit_factor`。
 - **與背景資料不符之處須先澄清**：任務背景提及回測「三策略」，但 `app/backtest/strategies.py` 目前僅實作 `ma_cross` 一種策略（`STRATEGY_IDS = ("ma_cross",)`），該檔案 docstring 明寫「it is a textbook example, not a recommendation」。這與已知限制文件第 8 項（回測策略僅 ma_cross，列為 P2 待辦）一致。本 PRD 以**現況（僅 1 策略）**為準撰寫，若機會清單設想的是策略擴充後的狀態，請 CEO 於開放問題 Q6 裁決排期關係。
 - 帳戶淨值（FR-9，`app/settings/net_worth.py` + `NetWorthSection.tsx`）已建立「使用者自報數字＋時效性狀態」的先例可供比照：三段式新鮮度 `fresh` / `ageing`（7 天）/ `expired`（30 天），以及「系統絕不靜默修正使用者輸入，只回拒絕或警示」的立場。
 - 風控列管（已知限制第 10 項）：「勝率」二字在 `limits.py:453, 461` 目前只出現在 `not_evaluable` 的固定文案與尚未被任何真實數字觸發的 f-string 模板中。一旦 `win_rate` 從恆 `None` 變成有真實數值，這兩處文案會第一次真正對使用者顯示具體百分比，**列管條件即被觸發**，需 risk-compliance-officer 在功能上線前重新審查。
@@ -32,7 +36,7 @@
 ## 使用者與情境
 
 - **持有/追蹤特定標的的使用者**，希望第 5 條上限不再永遠顯示「無法評估」，想知道系統是否認可他目前（或想加碼）的部位大小落在 Kelly 的保守額度內。
-- **曾對某標的執行過回測的使用者**，回測報告已經算出樣本外的 `win_rate`／`profit_factor`，不想再手算一次盈虧比、手動換算成 Kelly 分數。
+- **曾對某標的執行過回測的使用者**，回測報告已經算出樣本外的 `win_rate`／`payoff_ratio`，不想再手算一次盈虧比、手動換算成 Kelly 分數。
 - **從未回測、憑自己交易經驗估計勝率的使用者**，想直接填入自己估計的 p、b。
 - **風控／稽核視角**：需要確認任何顯示出來的「勝率」數字，其來源、樣本區間、時效性都清楚可追溯，不會被誤讀成系統對未來的預測或背書。
 
@@ -66,7 +70,7 @@
 ### FR-1　Kelly 輸入的資料模型與來源類型
 
 系統須能為每一標的儲存一組 Kelly 輸入：`win_rate`（0~1）、`payoff_ratio`（>0），並標記來源類型：
-- `backtest`：來自某次回測報告的樣本外（out-of-sample）段 `win_rate` / `profit_factor`，須保留可追溯的來源資訊（哪次回測、哪個策略、哪個時間區段、產出時間）。
+- `backtest`：來自某次回測報告的樣本外（out-of-sample）段 `win_rate` / `payoff_ratio`（即 Kelly 的 b；`payoff_ratio ≠ profit_factor`，見背景說明，不得誤用），須保留可追溯的來源資訊（哪次回測、哪個策略、哪個時間區段、產出時間）。
 - `manual`：使用者直接輸入的估計值。
 - `backtest_overridden`：以 `backtest` 帶入後被使用者手動修改過的數值，須同時保留「原始回測值」與「使用者調整後值」以便追溯，且顯示上須清楚標示「回測預填，使用者已調整」而非單純標成 `backtest`。
 
@@ -75,18 +79,20 @@
 ### FR-2　輸入方式：混合模式（回測帶入＋可覆寫）
 
 系統提供三種輸入路徑，且彼此不互斥：
-1. **從回測帶入**：僅當使用者曾對該標的執行過回測，且該回測報告的樣本外段有效（`out_of_sample.strategy.win_rate` 與 `profit_factor` 皆非 `None`）、且該回測**尚未過期**（見 FR-3）時，設定頁提供「帶入此標的最近一次回測結果」的操作，帶入後數值可再編輯。
+1. **從回測帶入**：僅當使用者曾對該標的執行過回測，且該回測報告的樣本外段有效（`out_of_sample.strategy.win_rate` 與 `payoff_ratio` 皆非 `None`）、且該回測**尚未過期**（見 FR-3）時，設定頁提供「帶入此標的最近一次回測結果」的操作，帶入後數值可再編輯。
 2. **手動輸入**：無回測或使用者選擇不使用回測時，直接於設定頁輸入 p、b。
 3. **編輯已帶入的值**：帶入後的數值可被覆寫，覆寫後來源轉為 `backtest_overridden`（見 FR-1）。
 
 ### FR-3　時效性規則（比照淨值 7 天／30 天先例）
 
-Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新鮮度狀態，以「輸入或最近一次帶入回測結果的時間」為基準：
-- `fresh`：0～7 天內。
-- `ageing`：7～30 天，顯示「建議更新」提示，但不影響第 5 條上限的評估（仍視為有效輸入）。
-- `expired`：超過 30 天，**視同未輸入**——`_check_kelly_fraction` 須回退為 `not_evaluable`，且理由文案明確區分「從未輸入」與「輸入已過期」兩種情況（例如：「Kelly 輸入已過期（上次更新於 35 天前），需重新確認後才能評估本條上限」），不得與「從未輸入」共用同一句話。
+Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新鮮度狀態，惟計齡起點依來源而異（依 ADR-0006 D-4，取代原「以輸入或最近一次帶入回測結果的時間為基準」的說法）：
+- `manual`：以使用者填寫（儲存）當下的日期計齡，即 `updated_at`（server 戳記，等同使用者輸入當下的 as_of 日期）。
+- `backtest` / `backtest_overridden`：以該筆回測樣本外（out-of-sample）區段的**結束日 `oos_end_date`** 計齡，**不**以回測執行（產出）時間或使用者點擊「帶入」的時間計齡——避免同一份舊樣本區間被反覆重跑或重複帶入時，誤判為「新鮮」。
 
-`backtest` 來源的時效性以「該筆回測報告的產出時間」計算，並非以「使用者最近一次查看/帶入的時間」計算——避免使用者反覆點擊「帶入」卻沒有重新跑一次回測，卻讓系統誤判為「新鮮」。
+三段狀態定義（天數門檻不變）：
+- `fresh`：計齡起點至今 0～7 天內。
+- `ageing`：7～30 天，顯示「建議更新」提示，但不影響第 5 條上限的評估（仍視為有效輸入）。
+- `expired`：超過 30 天，**視同未輸入**——`_check_kelly_fraction` 須回退為 `not_evaluable`，且理由文案明確區分「從未輸入」與「輸入已過期」兩種情況（例如：manual 來源「Kelly 輸入已過期（上次更新於 35 天前），需重新確認後才能評估本條上限」；backtest 來源「Kelly 輸入已過期（樣本外區段結束於 35 天前），需重新確認後才能評估本條上限」），不得與「從未輸入」共用同一句話。
 
 ### FR-4　個股頁揭露
 
@@ -129,7 +135,7 @@ Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新
   Then 第 5 條「分數 Kelly 部位上限」回傳 `passed` 或 `violated`（不得為 `not_evaluable`），且 `observed` / `threshold` 皆為非 `None` 的數值。
 
 **FR-2：從回測帶入**
-- Given 使用者對某標的執行過一次含樣本外段的回測，`out_of_sample.strategy.win_rate=0.48`、`profit_factor=1.6`，且該回測產出時間為 3 天前
+- Given 使用者對某標的執行過一次含樣本外段的回測，`out_of_sample.strategy.win_rate=0.48`、`payoff_ratio=1.6`（Kelly 的 b，非 `profit_factor`），且該回測產出時間為 3 天前
   When 使用者在設定頁對該標的點擊「帶入此標的最近一次回測結果」
   Then Kelly 輸入被填入 p=0.48、b=1.6，來源標記為 `backtest`，且畫面顯示可再編輯的欄位。
 
@@ -139,19 +145,25 @@ Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新
   Then 來源標記轉為 `backtest_overridden`，且系統仍保留原始回測值（p=0.48）供追溯查詢。
 
 **FR-3：時效性 — ageing**
-- Given 某標的 Kelly 輸入的最近更新時間為 10 天前
+- Given 某標的 Kelly 輸入來源為 `manual`，其 `updated_at`（使用者填寫當下的 as_of 日期）為 10 天前
+  When 使用者查看該標的設定頁區塊或個股頁第 5 條上限
+  Then 顯示「建議更新」（ageing）狀態徽章，且第 5 條上限仍以現有數值正常評估（非 `not_evaluable`）。
+- Given 某標的 Kelly 輸入來源為 `backtest`，其 `oos_end_date` 為 10 天前（不論該筆回測實際執行或帶入的時間為何）
   When 使用者查看該標的設定頁區塊或個股頁第 5 條上限
   Then 顯示「建議更新」（ageing）狀態徽章，且第 5 條上限仍以現有數值正常評估（非 `not_evaluable`）。
 
 **FR-3：時效性 — expired**
-- Given 某標的 Kelly 輸入的最近更新時間為 35 天前
+- Given 某標的 Kelly 輸入來源為 `manual`，其 `updated_at` 為 35 天前
   When 系統評估該標的第 5 條上限
-  Then 回傳 `not_evaluable`，理由文案明確寫出「已過期」與距今天數，且與「從未輸入」的文案不同。
+  Then 回傳 `not_evaluable`，理由文案明確寫出「已過期」與（以 `updated_at` 起算的）距今天數，且與「從未輸入」的文案不同。
+- Given 某標的 Kelly 輸入來源為 `backtest`，其 `oos_end_date` 為 35 天前
+  When 系統評估該標的第 5 條上限
+  Then 回傳 `not_evaluable`，理由文案明確寫出「已過期」與（以 `oos_end_date` 起算的）距今天數，且與「從未輸入」的文案不同。
 
-**FR-3（回測時效以報告產出時間為準）**
-- Given 使用者於今天查看一份 40 天前產出的回測報告，並點擊「帶入」
+**FR-3（回測時效以 `oos_end_date` 為準，非執行或帶入時間）**
+- Given 使用者對某標的點擊「帶入」，server 依 ADR-0006 D-3 當場重新執行回測並取得其樣本外（out-of-sample）結果，該次樣本外區段的結束日 `oos_end_date` 為 40 天前（即使這次回測是今天才重新算出）
   When 系統計算該筆 Kelly 輸入的新鮮度
-  Then 新鮮度以回測報告的產出時間（40 天前）計算為 `expired`，而非以「今天點擊帶入」的時間重新起算為 `fresh`。
+  Then 新鮮度以 `oos_end_date`（40 天前）計算為 `expired`，而非以「今天執行／帶入」的時間重新起算為 `fresh`。
 
 **FR-4：個股頁揭露**
 - Given 某標的存在來源為 `backtest`、狀態為 `fresh` 的 Kelly 輸入
