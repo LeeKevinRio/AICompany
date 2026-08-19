@@ -14,8 +14,10 @@ import type { AdviceCard, AdviceResponse } from "../types";
 import { buildOperationSummary } from "../operationSummary";
 import {
   AS_OF_AGE_UNKNOWN_STATEMENT,
+  AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
   AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   AS_OF_DATE_UNKNOWN_STATEMENT,
+  buildAsOfStatement,
   buildStaleDataProminentNotice,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
@@ -169,6 +171,11 @@ describe("buildOperationSummary — held mode", () => {
     // `cached_stale`/backup-source scenario the review flagged. The two
     // previously happened to share a date in every other fixture in this
     // file, which is exactly what let the bug through.
+    //
+    // trading_days_behind is a known 0 here (not null) so this fixture stays
+    // scoped to the date-selection question it exists to test — the null-gap
+    // "calendar unconfirmed" addition (句 1 CONFIRMED) has its own dedicated
+    // four-branch tests below.
     const model = buildOperationSummary(
       makeResponse({
         advice: makeCard({ as_of: "2026-08-05T02:15:00+08:00" }),
@@ -180,7 +187,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: "2026-08-04",
-          trading_days_behind: null,
+          trading_days_behind: 0,
           reason: null,
         },
       }),
@@ -194,6 +201,8 @@ describe("buildOperationSummary — held mode", () => {
   });
 
   it("falls back to observation_window.end when the envelope carries no last_bar_date at all", () => {
+    // trading_days_behind is a known 0 here (not null) for the same reason as
+    // the fixture above — the gap-null case has its own dedicated coverage.
     const model = buildOperationSummary(
       makeResponse({
         advice: makeCard({ observation_window: { start: "2025-05-01", end: "2026-08-03", bars: 299 } }),
@@ -205,7 +214,7 @@ describe("buildOperationSummary — held mode", () => {
           bar_count: 300,
           first_bar_date: "2025-05-01",
           last_bar_date: null,
-          trading_days_behind: null,
+          trading_days_behind: 0,
           reason: null,
         },
       }),
@@ -551,6 +560,131 @@ describe("buildOperationSummary — held mode", () => {
     expect(model.staleDataNotice).toBeNull();
   });
 });
+
+describe(
+  "句 1 CONFIRMED — as-of 語句的『交易日曆無法確認』揭露 " +
+    "(2026-08-19, `work/reviews/2026-08-19-句1句3重寫-風控批審.md` 落地條件 1-6)",
+  () => {
+    it("① date unknown: renders AS_OF_DATE_UNKNOWN_FULL_STATEMENT only, mutually exclusive with the calendar-unconfirmed sentence, regardless of trading_days_behind", () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          advice: makeCard({ observation_window: { start: null, end: null, bars: null } }),
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: null,
+            last_bar_date: null,
+            trading_days_behind: null,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.required.asOfStatement).toBe(AS_OF_DATE_UNKNOWN_FULL_STATEMENT);
+      expect(model.required.asOfStatement).not.toContain(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT);
+    });
+
+    it("② date known + gap known + below threshold: plain as-of sentence only, no calendar-unconfirmed addition", () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: "2025-05-01",
+            last_bar_date: "2026-08-04",
+            trading_days_behind: 0,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.required.asOfStatement).toBe(buildAsOfStatement("2026-08-04"));
+      expect(model.required.asOfStatement).not.toContain(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT);
+      expect(model.staleDataNotice).toBeNull();
+    });
+
+    it("③ date known + gap known + at/above threshold: staleDataNotice fires but the calendar-unconfirmed sentence must NOT appear anywhere (no doubled-up wording with staleDataNotice)", () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: "2025-05-01",
+            last_bar_date: "2026-08-04",
+            trading_days_behind: 5,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      // Reverse assertion (落地條件 5): the sentence must NOT appear once the
+      // calendar has an answer, even a stale one.
+      expect(model.required.asOfStatement).toBe(buildAsOfStatement("2026-08-04"));
+      expect(model.required.asOfStatement).not.toContain(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT);
+      expect(model.staleDataNotice).toBe(buildStaleDataProminentNotice("2026-08-04", 5));
+      expect(model.staleDataNotice).not.toContain(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT);
+    });
+
+    it("④ date known + gap null (calendar could not be consulted): as-of sentence and the calendar-unconfirmed sentence ship together, as one string, verbatim", () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: "2025-05-01",
+            last_bar_date: "2026-08-04",
+            trading_days_behind: null,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.required.asOfStatement).toBe(
+        buildAsOfStatement("2026-08-04") + AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
+      );
+      expect(model.required.asOfStatement).not.toBe(AS_OF_DATE_UNKNOWN_FULL_STATEMENT);
+      // C4 fail-safe: an unconsulted calendar keeps staleDataNotice silent too
+      // — asserted together so this cell's "two silences, one sentence" shape
+      // is pinned as a unit.
+      expect(model.staleDataNotice).toBeNull();
+    });
+
+    it("落地條件 1 rationale: fires off tradingDaysBehind===null, not lastBarDate===null — the observation_window.end fallback cell must trigger it too", () => {
+      const model = buildOperationSummary(
+        makeResponse({
+          advice: makeCard({ observation_window: { start: "2025-05-01", end: "2026-08-03", bars: 299 } }),
+          data: {
+            status: "fresh",
+            source: "twse",
+            staleness_minutes: 5,
+            is_within_ttl: null,
+            bar_count: 300,
+            first_bar_date: "2025-05-01",
+            last_bar_date: null,
+            trading_days_behind: null,
+            reason: null,
+          },
+        }),
+      );
+      if (model.kind !== "held") throw new Error("unreachable");
+      expect(model.required.asOfStatement).toBe(
+        buildAsOfStatement("2026-08-03") + AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
+      );
+    });
+  },
+);
 
 describe("buildOperationSummary — candidate mode (FR-C7)", () => {
   it("carries all eight §2 required elements, plus the three candidate-only §3 disclosures, on a supportive card", () => {

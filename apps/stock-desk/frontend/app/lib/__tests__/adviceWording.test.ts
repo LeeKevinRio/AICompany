@@ -25,6 +25,7 @@ import { describe, expect, it } from "vitest";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
   AS_OF_AGE_UNKNOWN_STATEMENT,
+  AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
   AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   AS_OF_DATE_UNKNOWN_STATEMENT,
   buildAsOfStatement,
@@ -72,6 +73,11 @@ const RENDERED_SURFACE: string[] = [
   // sentence it used to cover.
   AS_OF_AGE_UNKNOWN_STATEMENT,
   AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
+  // 句 1 CONFIRMED (2026-08-19): the date-known/gap-unknown slot's addition —
+  // scanned both standalone and concatenated, so a future edit that only
+  // updates one of the two forms cannot slip past the banned-term scan.
+  AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
+  buildAsOfStatement("2026-08-04") + AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
   NON_REALTIME_NOTICE,
   ...CONFIDENCES.map(summaryConfidenceLabel),
 ];
@@ -118,6 +124,29 @@ describe("the unknown-as-of-date slot (R-D5②-1, 風控逐字確認 2026-08-16)
   it("carries no action guidance — it states two facts and stops", () => {
     for (const term of ["請", "建議", "自行", "應", "可以"]) {
       expect(AS_OF_AGE_UNKNOWN_STATEMENT).not.toContain(term);
+    }
+  });
+});
+
+describe("the calendar-unconfirmed as-of slot (句 1 CONFIRMED 2026-08-19, `work/reviews/2026-08-19-句1句3重寫-風控批審.md`)", () => {
+  it("pins the CONFIRMED sentence character for character (retyped, not imported)", () => {
+    // 落地條件 6: must be a fresh retype of the reviewed literal, not a
+    // self-comparison against the constant this test is guarding.
+    expect(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT).toBe(
+      "本次無法向交易日曆確認資料是否過舊，這並不代表資料已確認為最新。",
+    );
+  });
+
+  it("carries no action guidance and no reversal into an affirmative claim", () => {
+    for (const term of ["請", "建議", "自行", "應", "可以", "已確認為最新"]) {
+      if (term === "已確認為最新") {
+        // The sentence names this as the *un*confirmed state ("並不代表資料
+        // 已確認為最新"), so the phrase legitimately appears once, inside a
+        // negation — this asserts it never appears as a bare affirmation.
+        expect(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT.match(/已確認為最新/g)?.length ?? 0).toBe(1);
+        continue;
+      }
+      expect(AS_OF_CALENDAR_UNCONFIRMED_STATEMENT).not.toContain(term);
     }
   });
 });

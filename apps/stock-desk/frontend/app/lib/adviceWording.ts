@@ -161,6 +161,24 @@ export const AS_OF_DATE_UNKNOWN_FULL_STATEMENT =
   AS_OF_DATE_UNKNOWN_STATEMENT + AS_OF_AGE_UNKNOWN_STATEMENT;
 
 /**
+ * risk-compliance-officer CONFIRMED 2026-08-19
+ * (`work/reviews/2026-08-19-句1句3重寫-風控批審.md` 句 1，裁定採備案標點):
+ * appended after `buildAsOfStatement`'s date sentence when the basis date is
+ * known but `data.trading_days_behind` is `null` — the trading calendar
+ * could not be consulted, so the 資料過舊 notice
+ * (`buildStaleDataProminentNotice`) silently stays `null` too (see
+ * `tradingCalendar.ts`'s header: "`null` ... must never be read as
+ * 'fresh'"). Without this sentence a reader sees a basis date and no
+ * staleness warning and has no way to tell "confirmed current" apart from
+ * "never checked". This sentence names the second condition honestly,
+ * without naming why the calendar check failed.
+ *
+ * 風控 2026-08-19 逐字定稿，字面（含標點）不得改動，任何變更視為漂移須重送風控。
+ */
+export const AS_OF_CALENDAR_UNCONFIRMED_STATEMENT =
+  "本次無法向交易日曆確認資料是否過舊，這並不代表資料已確認為最新。";
+
+/**
  * AC-C8.2 / 風控複審 2026-08-09 裁決 b: the extra prominent notice for data
  * the market has moved past. States the actual basis date and the size of the
  * gap instead of a vague "超過一個交易日" so the reader is not left to guess

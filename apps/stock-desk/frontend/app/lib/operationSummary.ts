@@ -12,6 +12,7 @@
 
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
+  AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
   AS_OF_DATE_UNKNOWN_FULL_STATEMENT,
   buildAsOfStatement,
   buildAttributedHeadline,
@@ -136,16 +137,38 @@ function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: stri
  * `adviceWording.ts` so this slot renders them together, in the same
  * `<p>` (`OperationSummaryPanel.tsx`'s `RequiredElementsFooter`), at the same
  * size and contrast, with nothing able to fold one of them away.
+ *
+ * 句 1 CONFIRMED (2026-08-19, `work/reviews/2026-08-19-句1句3重寫-風控批審.md`
+ * 落地條件 1): a third, narrower gap. The date can be known while
+ * `tradingDaysBehind` is `null` — the trading calendar itself could not be
+ * consulted (see `tradingCalendar.ts`'s header) — in which case
+ * `staleDataNotice` (computed separately in `buildOperationSummary`) stays
+ * silent for a reason that has nothing to do with the data being current.
+ * The trigger is deliberately `tradingDaysBehind === null`, not
+ * `lastBarDate === null`: `dateIso` can still resolve from
+ * `observationEnd` when `lastBarDate` itself is `null`
+ * (`staleDataNotice`'s own `lastBarDate !== null` guard would otherwise miss
+ * this exact cell — see the review's required-1 rationale). This branch
+ * appends `AS_OF_CALENDAR_UNCONFIRMED_STATEMENT` to the same date sentence,
+ * as one string, mutually exclusive with `AS_OF_DATE_UNKNOWN_FULL_STATEMENT`
+ * (the date-known and date-unknown branches can never both apply).
  */
-export function resolveAsOfStatement(lastBarDate: string | null, observationEnd: string | null): string {
+export function resolveAsOfStatement(
+  lastBarDate: string | null,
+  observationEnd: string | null,
+  tradingDaysBehind: number | null,
+): string {
   const dateIso = lastBarDate ?? observationEnd;
-  return dateIso === null ? AS_OF_DATE_UNKNOWN_FULL_STATEMENT : buildAsOfStatement(dateIso);
+  if (dateIso === null) return AS_OF_DATE_UNKNOWN_FULL_STATEMENT;
+  if (tradingDaysBehind === null) return buildAsOfStatement(dateIso) + AS_OF_CALENDAR_UNCONFIRMED_STATEMENT;
+  return buildAsOfStatement(dateIso);
 }
 
 function buildRequiredElements(
   card: AdviceCard,
   candidate: boolean,
   lastBarDate: string | null,
+  tradingDaysBehind: number | null,
 ): RequiredElements {
   const quantityRangeText =
     card.quantity_range === null
@@ -172,7 +195,7 @@ function buildRequiredElements(
     // to `buildAsOfStatement`, degrading the §2-mandatory as-of sentence
     // into an unreadable "本評估基於 —收盤資料。" instead of disclosing the
     // gap. `resolveAsOfStatement` below states that gap honestly instead.
-    asOfStatement: resolveAsOfStatement(lastBarDate, card.observation_window.end),
+    asOfStatement: resolveAsOfStatement(lastBarDate, card.observation_window.end, tradingDaysBehind),
     nonRealtimeNotice: NON_REALTIME_NOTICE,
     counterarguments: card.counterarguments,
     invalidationConditions: card.invalidation_conditions,
@@ -255,7 +278,7 @@ export function buildOperationSummary(
       ),
       notComparableNote: CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
       staleDataNotice,
-      required: buildRequiredElements(card, true, lastBarDate),
+      required: buildRequiredElements(card, true, lastBarDate, tradingDaysBehind),
     };
   }
 
@@ -273,6 +296,6 @@ export function buildOperationSummary(
     topMatchedRule: pickTopMatchedRule(card),
     restoresComplianceWarning,
     staleDataNotice,
-    required: buildRequiredElements(card, false, lastBarDate),
+    required: buildRequiredElements(card, false, lastBarDate, tradingDaysBehind),
   };
 }
