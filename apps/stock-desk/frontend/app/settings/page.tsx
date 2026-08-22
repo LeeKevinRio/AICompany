@@ -9,6 +9,7 @@ import { NetWorthSection } from "./NetWorthSection";
 import { DataSourcesSection } from "./DataSourcesSection";
 import { DirectorySection } from "./DirectorySection";
 import { AlertRulesSection } from "./AlertRulesSection";
+import { KellyInputsSection } from "./KellyInputsSection";
 
 export default function SettingsPage() {
   const settings = useSettings(true);
@@ -38,6 +39,7 @@ export default function SettingsPage() {
           <>
             <NetWorthSection settings={settings.data} />
             <SettingsForm settings={settings.data} />
+            <KellyInputsSection />
             <DataSourcesSection />
             <DirectorySection />
           </>

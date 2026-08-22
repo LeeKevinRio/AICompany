@@ -1425,3 +1425,207 @@ export interface PlaybookEmergencyExitResponse {
   warnings: string[];
   as_of: string;
 }
+
+/* --- Kelly input (ADR-0006 D-8, C5, backend/app/api/kelly.py + app/kelly/models.py) --- */
+
+/**
+ * Backend `KellySource` (app/kelly/models.py). `manual` — typed by the user;
+ * `backtest` — imported and untouched since; `backtest_overridden` — imported,
+ * then hand-edited (the import's own numbers stay on the row, see
+ * `KellyInputRow.backtest_win_rate` / `backtest_payoff_ratio`).
+ */
+export type KellySource = "manual" | "backtest" | "backtest_overridden";
+
+/** Backend `KellyFreshness` (app/kelly/models.py). "Never entered" is the absence of a row, not a freshness. */
+export type KellyFreshness = "fresh" | "ageing" | "expired";
+
+/** Backend `KellyGateReasonCode` (app/kelly/models.py) — one reason per import gate (D-3). */
+export type KellyGateReasonCode =
+  | "low_round_trips"
+  | "low_win_trips"
+  | "low_loss_trips"
+  | "pb_none"
+  | "symbol_mismatch"
+  | "insufficient_data";
+
+/**
+ * Backend `KellyInputRow` (`app/kelly/models.py`) — one stored Kelly input row,
+ * verbatim field-for-field. Every provenance/interval field is `null` for a
+ * manual row; only `source == "backtest"` populates the FR-5 sample columns.
+ * These raw numeric fields (`win_rate`, `p_ci_low`, …) are **never** formatted
+ * client-side (約束 21/落地條件 3) — every value a screen shows is read from
+ * `KellyDisclosuresView` instead, which carries the same numbers already
+ * rendered as approved strings. This type exists so a caller can read
+ * identity/provenance facts (`source`, `strategy_id`, `updated_at`) that have
+ * no formatted counterpart of their own.
+ */
+export interface KellyInputRow {
+  symbol: string;
+  market: Market;
+  win_rate: number;
+  payoff_ratio: number;
+  source: KellySource;
+  backtest_win_rate: number | null;
+  backtest_payoff_ratio: number | null;
+  strategy_id: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  oos_start_date: string | null;
+  oos_end_date: string | null;
+  produced_at: string | null;
+  rates_verified: boolean | null;
+  dividend_reason_code: string | null;
+  adjust_dividends: boolean | null;
+  oos_round_trips: number | null;
+  oos_win_trips: number | null;
+  oos_loss_trips: number | null;
+  oos_excluded_boundary_trips: number | null;
+  oos_open_trip_at_end: number | null;
+  oos_observations: number | null;
+  p_ci_low: number | null;
+  p_ci_high: number | null;
+  f_star: number | null;
+  f_star_ci_low: number | null;
+  f_star_ci_high: number | null;
+  bootstrap_seed: number | null;
+  bootstrap_draws: number | null;
+  bootstrap_degenerate_no_loss_draws: number | null;
+  bootstrap_degenerate_no_win_draws: number | null;
+  spec_hash: string | null;
+  low_sample_warning: boolean | null;
+  k_observed_at_write: number | null;
+  updated_at: string;
+}
+
+/** Backend `KellyInputView` (`app/api/kelly.py`) — one row plus its ageing verdict. */
+export interface KellyInputView {
+  item: KellyInputRow;
+  //: Plain `YYYY-MM-DD` (6-A) or `null` when the row has no anchor at all.
+  anchored_at: string | null;
+  age_days: number | null;
+  freshness: KellyFreshness;
+  as_of: string;
+}
+
+export interface KellyInputListView {
+  items: KellyInputView[];
+  as_of: string;
+}
+
+/** Backend `KellyManualInput` (`app/kelly/models.py`) — the `PUT` body. */
+export interface KellyManualInput {
+  win_rate: number;
+  payoff_ratio: number;
+}
+
+/** Backend `KellyDetailRow` (`app/api/kelly.py`) — one FR-5 row: an approved label, a finished value. */
+export interface KellyDetailRow {
+  label: string;
+  value: string | null;
+  note: string | null;
+}
+
+/** Backend `KellyBacktestSampleDetail` (`app/api/kelly.py`) — 任務 3 (FR-5), `source == "backtest"` only (條件 42). */
+export interface KellyBacktestSampleDetail {
+  intro: string;
+  rows: KellyDetailRow[];
+}
+
+/** Backend `KellyEffectiveCapView` (`app/api/kelly.py`) — 落地條件 6's partner to `f_star_interval`. */
+export interface KellyEffectiveCapView {
+  label: string;
+  value: string;
+}
+
+/**
+ * Backend `KellyOriginalValuesView` (`app/api/kelly.py`) — 任務 7/任務 8: the
+ * imported pair kept beside an overridden effective one. `oos_period` is a
+ * later addition over the `oos_period_label`/`oos_period` pair; tech-architect's
+ * 條件 92 二擇一 (附註二, 2026-08-22) withdrew the period from this view for an
+ * overridden row, so a client must treat both as optional rather than assume
+ * either is populated once `original_values` itself is non-null.
+ */
+export interface KellyOriginalValuesView {
+  statement: string;
+  win_rate_label: string;
+  win_rate: string;
+  payoff_ratio_label: string;
+  payoff_ratio: string;
+  oos_period_label?: string | null;
+  oos_period?: string | null;
+}
+
+/**
+ * Backend `KellyOverwriteNoticeView` (`app/api/kelly.py`) — 條件 53/68/71-83:
+ * the before-overwrite dialog. `body` is three paragraphs **as separate list
+ * items** in the approved order (條件 82/93) — never joined into one string,
+ * so a caller cannot flatten 段二's visual weight by concatenating it with its
+ * neighbours.
+ */
+export interface KellyOverwriteNoticeView {
+  title: string;
+  body: string[];
+  confirm_label: string;
+  cancel_label: string;
+}
+
+/**
+ * Backend `KellyDisclosuresView` (`app/api/kelly.py`) — every slot of one
+ * Kelly screen, already decided server-side (落地條件 3). `null` means "this
+ * slot is not shown", never "the client picks something" — 約束 21 forbids a
+ * caller from judging freshness, rewriting, truncating or composing any of
+ * this text.
+ *
+ * `import_trigger_label` (條件 102/103, 第十二輪): the always-present visible
+ * text/`aria-label` for the button that opens the before-overwrite dialog —
+ * analogous to `freshness_badge_label` in always being populated. **Backend
+ * landing in progress at the time this type was written** (K4c-2 rebased onto
+ * `1ceaffc`, which records the approved literal but does not yet add this
+ * field to the response model) — treated as optional here so this type does
+ * not silently drop a real field once it lands, and so a client reading an
+ * older response degrades to "no trigger rendered" (條件 105-safe: no
+ * unapproved label is ever synthesised) rather than a runtime crash. See the
+ * frontend-engineer K4c-2 handoff report for the exact gap.
+ */
+export interface KellyDisclosuresView {
+  freshness_badge_label: string;
+  source_statement: string | null;
+  source_label: string | null;
+  win_rate_disclosure: string | null;
+  manual_input_disclosure: string | null;
+  manual_input_tooltip: string | null;
+  selection_bias: string | null;
+  walk_forward: string | null;
+  f_star_interval: string | null;
+  effective_cap: KellyEffectiveCapView | null;
+  boundary_exclusion: string | null;
+  sample_detail: KellyBacktestSampleDetail | null;
+  original_values: KellyOriginalValuesView | null;
+  overwrite_notice: KellyOverwriteNoticeView | null;
+  k_observed: number;
+  k_distinct_specs: number;
+  import_trigger_label?: string;
+}
+
+/** Backend `KellyInputDisclosuresView` (`app/api/kelly.py`) — `GET /api/kelly-inputs/{symbol}/disclosures`. */
+export interface KellyInputDisclosuresView {
+  kelly_input: KellyInputView | null;
+  disclosures: KellyDisclosuresView;
+  as_of: string;
+}
+
+/**
+ * Backend `KellyImportRefusal` (`app/api/kelly.py`) — the body of a refused
+ * `POST .../import-backtest` (422). `frame` (d-1 元件 A) only for the three
+ * sample-size reason codes (落地條件 13); `attempt_logged` (元件 B) and
+ * `selection_bias` (3-A, same-screen requirement) travel with every refusal.
+ */
+export interface KellyImportRefusal {
+  reason_code: KellyGateReasonCode;
+  message: string;
+  frame: string | null;
+  attempt_logged: string;
+  selection_bias: string | null;
+  k_observed: number;
+  k_distinct_specs: number;
+}

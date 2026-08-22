@@ -8,11 +8,13 @@ import {
   deleteAlert,
   deletePosition,
   evaluateAlertsNow,
+  deleteKellyInput,
   getAdvice,
   getAlertEvents,
   getAlerts,
   getBars,
   getHealth,
+  getKellyDisclosures,
   getLeverageChapter,
   getPlaybookRuleSet,
   getPlaybookToday,
@@ -22,10 +24,12 @@ import {
   getSectors,
   getSettings,
   getSignals,
+  importKellyBacktest,
   importPositionsCsv,
   patchAlert,
   postPlaybookConfirmRules,
   postPlaybookEmergencyExit,
+  putKellyInput,
   resolveDirectorySymbol,
   runBacktest,
   searchDirectory,
@@ -39,6 +43,7 @@ import type {
   AppSettingsPatch,
   BacktestRequest,
   CreatePositionInput,
+  KellyManualInput,
   Market,
   PlaybookConfirmRulesInput,
   UpdatePositionInput,
@@ -407,6 +412,91 @@ export function useEmergencyExit() {
     mutationFn: () => postPlaybookEmergencyExit(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
+    },
+  });
+}
+
+/* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */
+
+/**
+ * `GET /api/kelly-inputs/{symbol}/disclosures` — one instrument's Kelly
+ * screen. Keyed on `(symbol, market)` like every other per-instrument query
+ * here (`useAdvice`, `useLeverageChapter`, …), so switching the symbol picker
+ * in `KellyInputsSection` cannot render a stale symbol's disclosures under a
+ * new one's heading.
+ */
+export function useKellyDisclosures(symbol: string, market: Market, enabled: boolean) {
+  return useQuery({
+    queryKey: ["kelly-disclosures", symbol, market],
+    queryFn: () => getKellyDisclosures(symbol, market),
+    enabled: enabled && symbol.length > 0,
+    retry: 1,
+  });
+}
+
+/**
+ * `PUT /api/kelly-inputs/{symbol}` — writes a hand-entered pair. Invalidates
+ * only this row's own disclosures query: a Kelly input never feeds the
+ * portfolio-wide summary/limits queries the way `RiskBudget` settings do (cap
+ * 5 reads the stored row directly on each advice/portfolio-limits call, not
+ * through react-query's cache), so there is nothing else to invalidate.
+ */
+export function useUpdateKellyInput() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      symbol,
+      market,
+      input,
+    }: {
+      symbol: string;
+      market: Market;
+      input: KellyManualInput;
+    }) => putKellyInput(symbol, market, input),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["kelly-disclosures", variables.symbol, variables.market],
+      });
+    },
+  });
+}
+
+/** `DELETE /api/kelly-inputs/{symbol}` — removes the input row (the attempt log is untouched, 約束 35). */
+export function useDeleteKellyInput() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ symbol, market }: { symbol: string; market: Market }) =>
+      deleteKellyInput(symbol, market),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["kelly-disclosures", variables.symbol, variables.market],
+      });
+    },
+  });
+}
+
+/**
+ * `POST /api/kelly-inputs/{symbol}/import-backtest` — 條件 74: this hook's
+ * `mutate` may only ever be called from `KellyImportDialog`'s confirm
+ * handler. See that component's doc comment and `callSiteGuard.test.ts` for
+ * the enforcement.
+ */
+export function useImportKellyBacktest() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      symbol,
+      market,
+      body,
+    }: {
+      symbol: string;
+      market: Market;
+      body: BacktestRequest;
+    }) => importKellyBacktest(symbol, market, body),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["kelly-disclosures", variables.symbol, variables.market],
+      });
     },
   });
 }

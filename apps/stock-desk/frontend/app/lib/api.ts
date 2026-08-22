@@ -16,6 +16,12 @@ import type {
   DirectorySearchResponse,
   HealthResponse,
   ImportPositionsResponse,
+  KellyGateReasonCode,
+  KellyImportRefusal,
+  KellyInputDisclosuresView,
+  KellyInputListView,
+  KellyInputView,
+  KellyManualInput,
   LeverageResponse,
   Market,
   PlaybookConfirmRulesInput,
@@ -41,21 +47,83 @@ export const positionsTemplateCsvUrl = `${API_BASE}/api/positions/template.csv`;
  * `fieldErrors` is populated when the backend returns a FastAPI-style
  * 422 validation error body (`{ detail: [{ loc, msg }] }`); callers can
  * use it to render field-level messages instead of a generic toast.
+ *
+ * `body` is the parsed JSON response, whatever shape it took (`null` when the
+ * response carried no body at all, e.g. a network failure). It exists for
+ * endpoints whose non-2xx `detail` is a **structured object rather than a
+ * string or a validation-error array** — `KellyImportRefusal`
+ * (`app/api/kelly.py`, 422 from `POST .../import-backtest`) is the first
+ * caller: its `reason_code` / `frame` / `attempt_logged` / `selection_bias`
+ * fields have no other way to reach a component through this class, since
+ * neither `message` nor `fieldErrors` covers a `detail` that is a plain
+ * object. Every existing call site keeps working unchanged — this field is
+ * purely additive.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly fieldErrors: Record<string, string>;
+  readonly body: unknown;
 
-  constructor(message: string, status: number, fieldErrors: Record<string, string> = {}) {
+  constructor(
+    message: string,
+    status: number,
+    fieldErrors: Record<string, string> = {},
+    body: unknown = null,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.body = body;
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+//: The closed set `KellyGateReasonCode` names (app/kelly/models.py, verified) —
+//: used only to narrow `ApiError.body.detail.reason_code` before trusting it,
+//: never rendered.
+const KELLY_GATE_REASON_CODES: readonly KellyGateReasonCode[] = [
+  "low_round_trips",
+  "low_win_trips",
+  "low_loss_trips",
+  "pb_none",
+  "symbol_mismatch",
+  "insufficient_data",
+];
+
+/**
+ * Reads a refused `POST .../import-backtest`'s `KellyImportRefusal` body back
+ * out of an `ApiError` (`app/api/kelly.py`; 422 `detail` is the model's own
+ * `model_dump()`, a plain object rather than FastAPI's usual validation-error
+ * array — `ApiError.fieldErrors`/`message` do not reach it). Returns `null`
+ * for any other shape, including a 4xx from a different endpoint, so a caller
+ * can branch on the result rather than trust a status code alone.
+ */
+export function parseKellyImportRefusal(body: unknown): KellyImportRefusal | null {
+  if (!isRecord(body) || !isRecord(body.detail)) return null;
+  const detail = body.detail;
+  const reasonCode = detail.reason_code;
+  const message = detail.message;
+  if (
+    typeof reasonCode !== "string" ||
+    !KELLY_GATE_REASON_CODES.includes(reasonCode as KellyGateReasonCode) ||
+    typeof message !== "string" ||
+    typeof detail.attempt_logged !== "string"
+  ) {
+    return null;
+  }
+  return {
+    reason_code: reasonCode as KellyGateReasonCode,
+    message,
+    frame: typeof detail.frame === "string" ? detail.frame : null,
+    attempt_logged: detail.attempt_logged,
+    selection_bias: typeof detail.selection_bias === "string" ? detail.selection_bias : null,
+    k_observed: typeof detail.k_observed === "number" ? detail.k_observed : 0,
+    k_distinct_specs: typeof detail.k_distinct_specs === "number" ? detail.k_distinct_specs : 0,
+  };
 }
 
 /**
@@ -108,7 +176,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       isRecord(body) && typeof body.detail === "string"
         ? body.detail
         : `請求失敗（HTTP ${res.status}）`;
-    throw new ApiError(message, res.status, fieldErrors);
+    throw new ApiError(message, res.status, fieldErrors, body);
   }
 
   // 204 No Content / empty body responses (e.g. DELETE) have nothing to
@@ -341,4 +409,75 @@ export function postPlaybookEmergencyExit(): Promise<PlaybookEmergencyExitRespon
   return request<PlaybookEmergencyExitResponse>("/api/playbook/emergency-exit", {
     method: "POST",
   });
+}
+
+/* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */
+
+/** `GET /api/kelly-inputs` — every stored input, in key order (D-8). Not used by `KellyInputsSection` today; kept for parity with the backend's own list route. */
+export function getKellyInputs(): Promise<KellyInputListView> {
+  return request<KellyInputListView>("/api/kelly-inputs");
+}
+
+/**
+ * `GET /api/kelly-inputs/{symbol}/disclosures` — one instrument's Kelly
+ * screen, every sentence already chosen server-side (K4c-1, 落地條件 3).
+ * Answers 200 with `kelly_input: null` where `GET /{symbol}` answers 404:
+ * "nothing entered" is a state this screen has its own copy for.
+ */
+export function getKellyDisclosures(
+  symbol: string,
+  market: Market,
+): Promise<KellyInputDisclosuresView> {
+  const query = new URLSearchParams({ market });
+  return request<KellyInputDisclosuresView>(
+    `/api/kelly-inputs/${encodeURIComponent(symbol)}/disclosures?${query}`,
+  );
+}
+
+/** `PUT /api/kelly-inputs/{symbol}` — store a hand-entered pair (creates `manual`, or moves the effective pair of an existing row to `backtest_overridden`). */
+export function putKellyInput(
+  symbol: string,
+  market: Market,
+  input: KellyManualInput,
+): Promise<KellyInputView> {
+  const query = new URLSearchParams({ market });
+  return request<KellyInputView>(`/api/kelly-inputs/${encodeURIComponent(symbol)}?${query}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/** `DELETE /api/kelly-inputs/{symbol}` — removes the input row only; the import-attempt log (K_observed) is untouched (約束 35). */
+export function deleteKellyInput(symbol: string, market: Market): Promise<void> {
+  const query = new URLSearchParams({ market });
+  return request<void>(`/api/kelly-inputs/${encodeURIComponent(symbol)}?${query}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * `POST /api/kelly-inputs/{symbol}/import-backtest` — re-runs a backtest
+ * server-side and stores the p/b **this server** computed (D-3). The body is
+ * a request, never a result: there is no `backtest_id` to quote, so every
+ * call re-executes the run. **條件 74 (最重要的落地條件)**: this is the
+ * *only* place in the whole frontend allowed to call this endpoint — every
+ * caller must go through `KellyImportDialog`'s confirm handler, never a
+ * direct button press. `tests/callSiteGuard.test.ts` (this app) asserts the
+ * call-site count.
+ */
+export function importKellyBacktest(
+  symbol: string,
+  market: Market,
+  body: BacktestRequest,
+): Promise<KellyInputView> {
+  const query = new URLSearchParams({ market });
+  return request<KellyInputView>(
+    `/api/kelly-inputs/${encodeURIComponent(symbol)}/import-backtest?${query}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }

@@ -24,7 +24,23 @@ const METRIC_ROWS: MetricRow[] = [
         m.max_drawdown_peak_date ? `（${m.max_drawdown_peak_date} → ${m.max_drawdown_trough_date}）` : ""
       }`,
   },
-  { label: "勝率", render: (m) => formatPercent(m.win_rate) },
+  {
+    // 風控第六輪批審(2026-08-22, 任務 6, `work/reviews/2026-08-19-C5-Kelly-文案批審.md`
+    // 落地條件 49): this row is the fill-level win rate
+    // (`app/backtest/report.py`), a different denominator from the Kelly-side
+    // round-trip win rate C5's (e)/(e-manual) describe — 分歧① 微批二 accepted
+    // the qualified label immediately below as the one pre-existing exception
+    // to the frontend ban on the bare two-character term this qualifies, on
+    // condition it ships in the same commit as Kelly's own equivalently
+    // qualified label (`app/api/kelly_wording.py`, 「依完整回合計」). Do not
+    // shorten this label, do not drop its qualifier, and do not add a second,
+    // unqualified row naming the same concept anywhere in this file —
+    // `componentWordingScan.test.ts` pins the exact source line and asserts
+    // the banned bare term appears exactly once across this file (inside this
+    // qualified label, nowhere else).
+    label: "勝率（依結算筆數計）",
+    render: (m) => formatPercent(m.win_rate),
+  },
   { label: "獲利因子", render: (m) => formatNumber(m.profit_factor) },
   { label: "交易次數", render: (m) => `${m.num_trades}（結算 ${m.num_closing_trades}）` },
   { label: "週轉率", render: (m) => formatPercent(m.turnover) },

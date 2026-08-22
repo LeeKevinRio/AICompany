@@ -133,8 +133,12 @@ const ALLOWED_SOURCE_CONTEXTS: Partial<Record<(typeof SCANNED_FILES)[number], re
     // 「勝率」 as the backtest report's realized win-rate row: the
     // acknowledged-historical-result 語境 risk-final-review.md accepted
     // (「勝率→歷史交易的獲勝比例」), scoped to this one METRIC_ROWS line.
+    // C5 Kelly 第六輪批審 任務 6 / 落地條件 49 (2026-08-22): the label grew a
+    // qualifier ("依結算筆數計") that distinguishes this fill-level win rate
+    // from Kelly's round-trip one; the allowlisted line is the new label's
+    // exact source text, not the pre-任務6 bare "勝率" row.
     "../../backtest/BacktestReportView.tsx": [
-      '{ label: "勝率", render: (m) => formatPercent(m.win_rate) }',
+      'label: "勝率（依結算筆數計）",',
     ],
     // D8 句 3 第二輪 (`work/reviews/2026-08-19-句1句3重寫-風控批審.md` 落地條件
     // 6/10): the mandated 列管註記 doc comment on
