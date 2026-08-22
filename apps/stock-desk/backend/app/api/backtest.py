@@ -24,6 +24,17 @@ should be read:
 Too little history for even one walk-forward fold is a **200 with
 ``status="insufficient_data"``** and the arithmetic spelled out in ``reason``,
 never a fabricated single-split "backtest".
+
+The orchestration itself lives in :func:`execute_backtest`, a module-level
+function the route is a one-line wrapper around (約束 32). The Kelly import path
+(``POST /api/kelly-inputs/{symbol}/import-backtest``) re-runs a backtest
+server-side and has to read the *objects* behind the response -- the
+:class:`~app.backtest.engine.BacktestResult` and the fold geometry -- to extract
+round trips from them. Giving it its own copy of this pipeline would let the two
+drift, and the number stored as "what the backtest said" would stop being what
+this endpoint says. So there is one pipeline, and it hands back
+:class:`BacktestRun`: the response as served, plus the two objects the response
+was built from. The import direction is one-way, ``api/kelly -> api/backtest``.
 """
 
 from __future__ import annotations
@@ -37,9 +48,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.common import DataMeta, PayloadStatus, data_meta, now_iso
 from app.api.deps import get_dividend_store, get_market_resolver, get_settings_store
-from app.backtest.engine import run_backtest
+from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.report import TRADING_DAYS_PER_YEAR, walk_forward_report
-from app.backtest.splits import walk_forward_splits
+from app.backtest.splits import WalkForwardFold, walk_forward_splits
 from app.backtest.strategies import STRATEGY_IDS, STRATEGY_WARMUP_BARS, build_strategy
 from app.data.interface import PriceBar
 from app.dividends.adjust import back_adjust_bars
@@ -316,13 +327,49 @@ class BacktestResponse(BaseModel):
     as_of: str
 
 
-@router.post("", response_model=BacktestResponse)
-def run_walk_forward_backtest(
+@dataclass(frozen=True)
+class BacktestRun:
+    """One executed run: the served response and the objects it was built from.
+
+    ``result`` and ``folds`` are the run itself; they are ``None`` / empty
+    exactly when ``response.status`` is ``insufficient_data``, because in that
+    branch no backtest was executed at all. A caller that needs the objects must
+    therefore check the status first rather than assume they are there -- the
+    same check a reader of the response has to make.
+
+    They are exposed for one caller (the Kelly import path) and one reason: the
+    round-trip extraction behind an imported p/b pair reads fills and equity by
+    **bar index**, which only the result carries, and it takes its out-of-sample
+    bounds from the fold geometry rather than from the report's date strings
+    (約束 23). Re-deriving either from the response would rebuild the geometry
+    from its own description of itself.
+    """
+
+    response: BacktestResponse
+    result: BacktestResult | None
+    folds: tuple[WalkForwardFold, ...]
+
+
+def execute_backtest(
     body: BacktestRequest,
-    resolver: ResolverDep,
-    settings_store: SettingsDep,
-    dividend_store: DividendStoreDep,
-) -> BacktestResponse:
+    *,
+    resolver: MarketDataResolver,
+    settings_store: SettingsStore,
+    dividend_store: DividendEventStore,
+) -> BacktestRun:
+    """Run one walk-forward backtest and assemble everything said about it.
+
+    The single run pipeline of this backend (約束 32): load bars, decide and
+    disclose the 除權息 adjustment, run the engine, split walk-forward folds and
+    report on them. Both the route below and the Kelly import path go through
+    here, so an imported Kelly pair is estimated from exactly the run a user
+    would have seen on screen.
+
+    Every "cannot answer" branch returns a ``200``-shaped response with
+    ``status="insufficient_data"`` and no result object, never an exception:
+    "there is not enough history" is an answer about the data, not a fault of
+    the request.
+    """
     costs = body.cost if body.cost is not None else settings_store.load().cost_model
     base_notes = [BUY_AND_HOLD_NOTE]
     if not costs.rates_verified:
@@ -332,28 +379,33 @@ def run_walk_forward_backtest(
         resolver, symbol=body.symbol, market=body.market, start=body.start, end=body.end
     )
 
-    def unavailable(reason: str | None) -> BacktestResponse:
-        return BacktestResponse(
-            symbol=body.symbol,
-            market=body.market,
-            strategy=body.strategy,
-            status="insufficient_data",
-            reason=reason,
-            report=None,
-            folds=[],
-            cost_model=costs.model_dump(),
-            rates_verified=costs.rates_verified,
-            # No report was produced, so there is nothing to claim adjusted or
-            # not; the block records only what was asked for.
-            dividend_adjustment=_dividend_block(
-                requested=body.adjust_dividends,
-                applied=False,
-                reason_code="not_run",
+    def unavailable(reason: str | None) -> BacktestRun:
+        return BacktestRun(
+            response=BacktestResponse(
+                symbol=body.symbol,
                 market=body.market,
+                strategy=body.strategy,
+                status="insufficient_data",
+                reason=reason,
+                report=None,
+                folds=[],
+                cost_model=costs.model_dump(),
+                rates_verified=costs.rates_verified,
+                # No report was produced, so there is nothing to claim adjusted
+                # or not; the block records only what was asked for.
+                dividend_adjustment=_dividend_block(
+                    requested=body.adjust_dividends,
+                    applied=False,
+                    reason_code="not_run",
+                    market=body.market,
+                ),
+                notes=base_notes,
+                data=data_meta(loaded.meta()),
+                as_of=now_iso(),
             ),
-            notes=base_notes,
-            data=data_meta(loaded.meta()),
-            as_of=now_iso(),
+            # Nothing ran, so there is no result and no geometry to hand on.
+            result=None,
+            folds=(),
         )
 
     if not loaded.bars:
@@ -398,27 +450,51 @@ def run_walk_forward_backtest(
         return unavailable("資料長度不足以切出任何 walk-forward fold。")
 
     report = walk_forward_report(result, folds, periods_per_year=TRADING_DAYS_PER_YEAR)
-    return BacktestResponse(
-        symbol=body.symbol,
-        market=body.market,
-        strategy=body.strategy,
-        status="ok",
-        reason=None,
-        report=report.model_dump(),
-        folds=[
-            {
-                "fold": fold.fold,
-                "train_start": fold.train_start,
-                "train_stop": fold.train_stop,
-                "test_start": fold.test_start,
-                "test_stop": fold.test_stop,
-            }
-            for fold in folds
-        ],
-        cost_model=costs.model_dump(),
-        rates_verified=costs.rates_verified,
-        dividend_adjustment=dividends.block,
-        notes=notes,
-        data=data_meta(loaded.meta()),
-        as_of=now_iso(),
+    return BacktestRun(
+        response=BacktestResponse(
+            symbol=body.symbol,
+            market=body.market,
+            strategy=body.strategy,
+            status="ok",
+            reason=None,
+            report=report.model_dump(),
+            folds=[
+                {
+                    "fold": fold.fold,
+                    "train_start": fold.train_start,
+                    "train_stop": fold.train_stop,
+                    "test_start": fold.test_start,
+                    "test_stop": fold.test_stop,
+                }
+                for fold in folds
+            ],
+            cost_model=costs.model_dump(),
+            rates_verified=costs.rates_verified,
+            dividend_adjustment=dividends.block,
+            notes=notes,
+            data=data_meta(loaded.meta()),
+            as_of=now_iso(),
+        ),
+        result=result,
+        folds=tuple(folds),
     )
+
+
+@router.post("", response_model=BacktestResponse)
+def run_walk_forward_backtest(
+    body: BacktestRequest,
+    resolver: ResolverDep,
+    settings_store: SettingsDep,
+    dividend_store: DividendStoreDep,
+) -> BacktestResponse:
+    """Run a walk-forward backtest and report both segments separately.
+
+    Wiring only: the pipeline is :func:`execute_backtest`, and this route serves
+    the response half of what it produced.
+    """
+    return execute_backtest(
+        body,
+        resolver=resolver,
+        settings_store=settings_store,
+        dividend_store=dividend_store,
+    ).response

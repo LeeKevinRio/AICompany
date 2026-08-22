@@ -23,6 +23,7 @@ from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
 from app.dividends.store import DividendEventStore
+from app.kelly.attempts import KellyAttemptStore
 from app.kelly.store import KellyInputStore
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
@@ -189,6 +190,18 @@ def _default_kelly_input_store() -> KellyInputStore:
 
 
 @lru_cache(maxsize=1)
+def _default_kelly_attempt_store() -> KellyAttemptStore:
+    """The process-wide append-only log of import attempts (ADR-0006 D-2).
+
+    Same ``STOCK_DESK_DB_PATH`` file as :func:`_default_kelly_input_store`, and
+    deliberately a **second object of a different class** on it: the store that
+    answers "which pair is in force" and the log that answers "how many imports
+    were tried" must not be reachable through one handle (約束 35).
+    """
+    return KellyAttemptStore()
+
+
+@lru_cache(maxsize=1)
 def _default_quota_ledger() -> QuotaLedger:
     """The ledger the API reads for observability only.
 
@@ -279,6 +292,11 @@ def get_alert_store() -> AlertStore:
 def get_kelly_input_store() -> KellyInputStore:
     """Return the process-wide Kelly input store."""
     return _default_kelly_input_store()
+
+
+def get_kelly_attempt_store() -> KellyAttemptStore:
+    """Return the process-wide Kelly import-attempt log."""
+    return _default_kelly_attempt_store()
 
 
 def get_quota_ledger() -> QuotaLedger:

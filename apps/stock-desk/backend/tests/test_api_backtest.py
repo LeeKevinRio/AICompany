@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from app.api.backtest import BUY_AND_HOLD_NOTE, UNVERIFIED_RATES_NOTE
+from app.api.backtest import (
+    BUY_AND_HOLD_NOTE,
+    UNVERIFIED_RATES_NOTE,
+    BacktestRequest,
+    execute_backtest,
+)
 from app.backtest.strategies import STRATEGY_IDS
 from tests.api_helpers import oscillating_closes, recent_bars
 from tests.conftest import ApiHarness
@@ -221,3 +226,73 @@ def test_out_of_range_cost_override_is_422(api_harness: ApiHarness) -> None:
     assert response.status_code == 422
     locs = [tuple(err["loc"]) for err in response.json()["detail"]]
     assert ("body", "cost", "tw_broker_fee_rate") in locs
+
+
+# --------------------------------------------------------------------------
+# 約束 32: one run pipeline, shared with the Kelly import path
+# --------------------------------------------------------------------------
+
+
+def test_the_route_serves_exactly_what_the_run_pipeline_produced(
+    api_harness: ApiHarness,
+) -> None:
+    """The endpoint is wiring; :func:`execute_backtest` is the behaviour.
+
+    Compared field by field except ``as_of``, a fresh timestamp on every call by
+    design. A second pipeline for the Kelly import path would let "what the
+    backtest said" drift away from what this endpoint says, so there is one --
+    and this pins that the route did not keep a private copy of it.
+    """
+    _seed(api_harness)
+
+    served = api_harness.client.post("/api/backtest", json=_request()).json()
+    run = execute_backtest(
+        BacktestRequest.model_validate(_request()),
+        resolver={"TW": api_harness.price_service},
+        settings_store=api_harness.settings,
+        dividend_store=api_harness.dividends,
+    )
+
+    direct = run.response.model_dump(mode="json")
+    assert direct.pop("as_of") and served.pop("as_of")
+    assert direct == served
+
+
+def test_a_completed_run_hands_back_the_result_and_the_fold_geometry(
+    api_harness: ApiHarness,
+) -> None:
+    """What the Kelly import path reads: bar-indexed fills, index-bounded folds."""
+    _seed(api_harness)
+
+    run = execute_backtest(
+        BacktestRequest.model_validate(_request()),
+        resolver={"TW": api_harness.price_service},
+        settings_store=api_harness.settings,
+        dividend_store=api_harness.dividends,
+    )
+
+    assert run.response.status == "ok"
+    assert run.result is not None
+    assert len(run.result.equity_curve) == len(run.result.dates)
+    # The geometry handed on is the geometry reported, fold for fold.
+    assert [fold.test_start for fold in run.folds] == [
+        entry["test_start"] for entry in run.response.folds
+    ]
+
+
+def test_a_run_that_never_happened_carries_no_result_object(
+    api_harness: ApiHarness,
+) -> None:
+    """``insufficient_data`` is the branch in which no backtest was executed."""
+    _seed(api_harness, count=100)
+
+    run = execute_backtest(
+        BacktestRequest.model_validate(_request()),
+        resolver={"TW": api_harness.price_service},
+        settings_store=api_harness.settings,
+        dividend_store=api_harness.dividends,
+    )
+
+    assert run.response.status == "insufficient_data"
+    assert run.result is None
+    assert run.folds == ()

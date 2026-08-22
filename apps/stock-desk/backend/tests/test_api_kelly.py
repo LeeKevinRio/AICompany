@@ -300,14 +300,20 @@ def test_delete_leaves_the_import_attempt_log_alone(api_harness: ApiHarness) -> 
     assert api_harness.kelly_attempts.k_distinct_specs("2330", "TW") == 2
 
 
-def test_the_import_endpoint_is_not_served_yet(api_harness: ApiHarness) -> None:
-    """The backtest import path is a separate change; no stub stands in for it.
+def test_the_import_endpoint_takes_a_backtest_request_not_a_pair(
+    api_harness: ApiHarness,
+) -> None:
+    """約束 31: a body of numbers is refused; only a run specification is taken.
 
-    A route that accepted p/b in a request body would let the backtest badge be
-    attached to numbers the server never computed (約束 31).
+    The import path itself is covered in ``tests/test_api_kelly_import.py``;
+    what is asserted here is that this door cannot be walked through with a
+    hand-written pair, which would attach the backtest badge to numbers the
+    server never computed.
     """
     response = api_harness.client.post(
         "/api/kelly-inputs/2330/import-backtest", json={"win_rate": 0.9}
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 422
+    assert api_harness.kelly_inputs.get("2330", "TW") is None
+    assert api_harness.kelly_attempts.k_observed("2330", "TW") == 0

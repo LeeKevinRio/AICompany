@@ -21,6 +21,7 @@ from app.api.deps import (
     get_dividend_store,
     get_fx_provider,
     get_index_resolver,
+    get_kelly_attempt_store,
     get_kelly_input_store,
     get_market_resolver,
     get_position_store,
@@ -135,6 +136,7 @@ def api_harness(
     app.dependency_overrides[get_dividend_store] = lambda: dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: bar_cache
     app.dependency_overrides[get_kelly_input_store] = lambda: kelly_inputs
+    app.dependency_overrides[get_kelly_attempt_store] = lambda: kelly_attempts
 
     with TestClient(app) as test_client:
         yield ApiHarness(
