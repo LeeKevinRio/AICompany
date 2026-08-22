@@ -811,12 +811,13 @@ def test_an_expired_imported_pair_gets_g3_verbatim() -> None:
     )
 
 
-def test_an_overridden_pair_expires_on_the_imported_anchor_and_gets_g3() -> None:
-    """``backtest_overridden`` ages from the import's anchor, so it takes (g-3).
+def test_an_expired_overridden_pair_gets_g_overridden_verbatim() -> None:
+    """(g-overridden), 第七輪任務 9: imported, hand-adjusted, and now stale.
 
-    Mirrors :func:`app.kelly.models.anchor_moment`, where ``manual`` is the only
-    source that ages from the write stamp. If the two rules disagreed, the
-    sentence would name an anchor the age was not counted from.
+    It ages from the import's anchor -- mirroring
+    :func:`app.kelly.models.anchor_moment`, where ``manual`` is the only source
+    counting from the write stamp -- but neither neighbouring sentence states
+    its source truthfully, which is why it has one of its own (條件 51/52).
     """
     check = _check(
         _ctx(
@@ -828,7 +829,30 @@ def test_an_overridden_pair_expires_on_the_imported_anchor_and_gets_g3() -> None
     )
 
     assert check.status == "not_evaluable"
-    assert check.detail.startswith("此標的的 Kelly 輸入（來源：回測帶入）已過期——樣本外區段結束於")
+    assert check.detail == (
+        "此標的的 Kelly 輸入（來源：回測帶入，已手動調整）已過期——"
+        "樣本外區段結束於 2026-07-01，距今 31 天，超過 30 天的新鮮期，"
+        "本條上限暫不評估；請重新執行回測並確認後更新。"
+    )
+
+
+def test_the_overridden_cell_no_longer_borrows_the_plain_backtest_sentence() -> None:
+    """條件 52: the K4b stand-in is retired -- 掛錯非暫行.
+
+    Until the seventh round there was no approved sentence for this cell and it
+    showed (g-3), whose source parenthesis omits that the effective numbers are
+    the user's own. That is a false statement about where a number came from,
+    not a cosmetic gap, so the reverse assertion is kept permanently.
+    """
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source="backtest_overridden", age_days=31)), "kelly_fraction"
+    ).detail
+
+    assert wording.KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED.format(
+        anchored_on="2026-07-24", age_days=31, days=KELLY_STALE_AFTER_DAYS
+    ) != detail
+    assert "（來源：回測帶入）" not in detail
+    assert "已手動調整" in detail
 
 
 def test_a_pair_with_no_anchor_gets_g4_verbatim_and_no_invented_date() -> None:
@@ -845,6 +869,83 @@ def test_a_pair_with_no_anchor_gets_g4_verbatim_and_no_invented_date() -> None:
     )
     # 6-B: no anchor exists, so no stand-in date is invented for one.
     assert not re.search(r"\d{4}-\d{2}-\d{2}", check.detail)
+
+
+def test_the_g_table_is_mutually_exclusive_and_exhaustive_over_six_cells() -> None:
+    """條件 51: (source, 錨點狀態) is the key, and every cell resolves to one句.
+
+    Exhaustive because a missing cell would raise rather than answer, and
+    mutually exclusive because a cell that resolved to two sentences could not
+    be checked against the review's table at all. The sixth cell is asserted
+    here as *reachable and non-empty*; that it currently shows a sentence
+    written for the fifth is the open gap, pinned separately below.
+    """
+    sources = get_args(KellyInputSource)
+    anchor_states = ((0, "2026-07-24"), (None, None))  # anchored, unanchorable
+
+    details: dict[tuple[str, bool], str] = {}
+    for source in sources:
+        for age_days, anchored_at in anchor_states:
+            kelly = kelly_inputs(
+                source=source,
+                # Anchored rows are aged past the window so every cell is a
+                # not-evaluable one; the anchorless rows are expired by rule.
+                age_days=None if age_days is None else KELLY_STALE_AFTER_DAYS + 1,
+                anchored_at=anchored_at,
+            )
+            detail = _check(_ctx(kelly=kelly), "kelly_fraction").detail
+            assert detail, (source, anchored_at)
+            details[(source, anchored_at is None)] = detail
+
+    # Six cells with a row, plus the no-row cell (g-1), is the whole table.
+    assert len(details) == 6
+    assert _check(_ctx(), "kelly_fraction").detail == wording.KELLY_NOT_EVALUABLE_NO_INPUT
+
+    # The three anchored cells are three different sentences -- one per source.
+    anchored = {details[(source, False)] for source in sources}
+    assert len(anchored) == 3
+
+
+@pytest.mark.xfail(
+    reason=(
+        "(g-4-overridden) 尚未定稿：第七輪併裁認定 (g) 第六格"
+        "（backtest_overridden + 缺 oos_end_date）與 (g-4) 同等可達，"
+        "但掛 (g-4) 的來源標示「回測帶入」省略了使用者已覆寫的事實。"
+        "creative-lead 重擬中，定稿前本格暫掛最接近的已核可句；"
+        "C5 不得在本缺口未結案前上線。"
+    ),
+    strict=True,
+)
+def test_an_unanchored_overridden_pair_names_its_own_source() -> None:
+    """The sixth cell of the (g) table, held open on purpose (條件 51).
+
+    Written as the assertion that will pass the day (g-4-overridden) is
+    approved, and marked ``strict`` so it fails loudly the moment the sentence
+    lands and this marker is not removed. The gap is visible in the test report
+    rather than silent, which is what the ruling asks for.
+    """
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source="backtest_overridden", age_days=None, anchored_at=None)),
+        "kelly_fraction",
+    ).detail
+
+    assert "已手動調整" in detail
+
+
+def test_the_open_sixth_cell_still_shows_an_approved_sentence() -> None:
+    """Whatever it shows today must at least be a sentence risk-compliance saw.
+
+    The stand-in is (g-4). It understates the source, which is the open gap --
+    but an unreviewed sentence invented to fill the hole would be a worse
+    failure than a reviewed one that is too general.
+    """
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source="backtest_overridden", age_days=None, anchored_at=None)),
+        "kelly_fraction",
+    ).detail
+
+    assert detail == wording.KELLY_NOT_EVALUABLE_NO_OOS_END_DATE
+    assert detail in set(wording.RISK_CONFIRMED_WORDING.values())
 
 
 def test_the_freshness_window_is_interpolated_and_never_written_out() -> None:

@@ -1,7 +1,7 @@
 """The Kelly disclosure sentences risk-compliance signed off, pinned as tests.
 
 Every assertion traces to `work/reviews/2026-08-19-C5-Kelly-文案批審.md` (第一輪
-through 第六輪) and to its 落地條件 1-50. Five kinds of guard live here:
+through 第七輪) and to its 落地條件 1-58. Five kinds of guard live here:
 
 * **逐字** -- every approved sentence the repo ships is retyped below and
   compared character
@@ -27,8 +27,8 @@ Scope of the source scans is the two **shipped** trees, `backend/app` and
 drafts on purpose, and this file retypes the approved ones.
 
 This file guards the **text**. Where each sentence is attached, and on what
-condition, is asserted beside the code that attaches it: cap 5's seven
-(the four (g), (a-2), and the sixth round's two) in
+condition, is asserted beside the code that attaches it: cap 5's eight
+(the five (g), (a-2), and the sixth round's two) in
 ``tests/test_advice_limits.py``, and the front-end rendering in K4c.
 """
 
@@ -154,6 +154,12 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "此標的的 Kelly 輸入（來源：回測帶入）缺少樣本外區段結束日，本系統無法判定其新鮮度，"
         "一律視為已過期，本條上限暫不評估；請重新執行回測並確認後更新。"
     ),
+    # 第七輪（2026-08-22）任務 9，主案原文。
+    "g-overridden": (
+        "此標的的 Kelly 輸入（來源：回測帶入，已手動調整）已過期——"
+        "樣本外區段結束於 {anchored_on}，距今 {age_days} 天，超過 {days} 天的新鮮期，"
+        "本條上限暫不評估；請重新執行回測並確認後更新。"
+    ),
     "5-1": "這次回測沒有產出可用的結果，本次不寫入 Kelly 輸入（狀態代碼：{status}）。",
     "5-2": (
         "你操作的標的（{path_symbol}，{path_market}）"
@@ -219,13 +225,14 @@ SHIPPED_SAMPLE_SIZE: dict[str, str] = {
 def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     """21 through the fourth round, plus the two of the fifth batch this lane ships.
 
-    The sixth round closed on eleven items; the two here are the ones that land
-    in the risk layer ((任務 1) f*<=0 and (任務 2) zero allowance). The other nine
-    are display-surface copy and arrive with K4c, which is why this count is 23
-    and not 32 -- a sentence is added here when it ships, so the assertion says
-    what the repo actually carries rather than what the review has approved.
+    The sixth round closed on eleven items and the seventh on two; the three
+    that land in the risk layer are here ((任務 1) f*<=0, (任務 2) zero allowance
+    and (g-overridden)). The rest is display-surface copy arriving with K4c,
+    which is why this count is 24 and not 34 -- a sentence is added here when it
+    ships, so the assertion says what the repo actually carries rather than what
+    the review has approved.
     """
-    assert len(CONFIRMED_VERBATIM) == 23
+    assert len(CONFIRMED_VERBATIM) == 24
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -296,6 +303,7 @@ def test_the_sentences_that_land_elsewhere_are_named_as_such() -> None:
         "g-2",
         "g-3",
         "g-4",
+        "g-overridden",
         "task-1",
         "task-2",
     }
@@ -640,6 +648,7 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "g-2": {"anchored_on", "age_days", "days"},
     "g-3": {"anchored_on", "age_days", "days"},
     "g-4": set(),
+    "g-overridden": {"anchored_on", "age_days", "days"},
     "5-1": {"status"},
     "5-2": {"path_symbol", "path_market", "body_symbol", "body_market"},
     "5-3": set(),
@@ -651,7 +660,11 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "task-2": set(),
 }
 
-FRESHNESS_SENTENCES = ("g-2", "g-3")
+#: The (g) sentences that name an anchor date and an elapsed count. All three
+#: carry 6-A's plain-date rule and 落地條件 9's interpolated window; the two
+#: unanchorable ones ((g-4) and its overridden cell) are absent because they
+#: state outright that no anchor exists.
+FRESHNESS_SENTENCES = ("g-2", "g-3", "g-overridden")
 
 
 @pytest.mark.parametrize("item", sorted(CONFIRMED_VERBATIM))

@@ -30,9 +30,9 @@ House rules, all of them non-negotiable:
 * **No measured value is embedded in a refusal.** A missing number is described,
   never rendered (5-3): ``None`` and ``null`` are engineer words, and printing
   either beside a Chinese sentence reads as a value that was measured.
-* **Not every constant here ships from here.** Seven of them are cap 5's and are
+* **Not every constant here ships from here.** Eight of them are cap 5's and are
   attached by ``app/advice/limits.py``: (a-2), whose condition that layer sees
-  as a single boolean (約束 36); the four (g) sentences, which it chooses between
+  as a single boolean (約束 36); the five (g) sentences, which it chooses between
   by cause; and the sixth round's (任務 1)/(任務 2), which belong to the f*<=0
   verdict and to the sizing exclusion that verdict triggers. They are recorded
   here so the approved inventory stays complete in one place, and imported from
@@ -323,6 +323,32 @@ KELLY_NOT_EVALUABLE_NO_OOS_END_DATE = (
     "一律視為已過期，本條上限暫不評估；請重新執行回測並確認後更新。"
 )
 
+#: (g-overridden) 風控 2026-08-22 逐字定稿（第七輪，主案原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: The fifth cell of the (g) table (條件 51). ``backtest_overridden`` ages from
+#: ``oos_end_date`` exactly as ``backtest`` does -- only ``manual`` anchors on the
+#: write stamp -- but neither (g-2) nor (g-3) states its source truthfully:
+#: (g-2)'s "手動輸入" names the wrong anchor mechanism, and (g-3)'s "回測帶入"
+#: omits that the effective numbers are the user's own. Hence its own sentence,
+#: identical to (g-3) but for the source parenthesis, whose wording is taken
+#: verbatim from the already-approved (fr6-overridden) short label.
+#:
+#: The closing instruction is (g-3)'s and not (g-2)'s, and that is a finding
+#: rather than a preference: what expired is the imported anchor, so re-keying
+#: the pair by hand cannot refresh it (a hand edit goes through
+#: :meth:`KellyInputRecord.overriding`, which carries the old anchor over
+#: untouched). Only a fresh backtest moves it.
+#:
+#: 條件 53 (risk, open, does not block this constant): following that instruction
+#: overwrites the user's manual adjustment -- a re-import writes ``source =
+#: "backtest"`` -- so any surface offering an import entry point needs a
+#: before-overwrite notice, and that notice is separate copy awaiting review.
+KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED = (
+    "此標的的 Kelly 輸入（來源：回測帶入，已手動調整）已過期——"
+    "樣本外區段結束於 {anchored_on}，距今 {age_days} 天，超過 {days} 天的新鮮期，"
+    "本條上限暫不評估；請重新執行回測並確認後更新。"
+)
+
 
 # ---------------------------------------------------------------------------
 # (任務 1 / 任務 2) a non-positive f*: the cap that allows nothing
@@ -394,6 +420,7 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "g-2": KELLY_NOT_EVALUABLE_MANUAL_EXPIRED,
     "g-3": KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED,
     "g-4": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    "g-overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
     "task-1": KELLY_NON_POSITIVE_FRACTION_DETAIL,
     "task-2": KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
 }
@@ -408,5 +435,5 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
 #: They are imported from here, never retyped, so the approved inventory stays
 #: the single copy (落地條件 2).
 LANDS_ELSEWHERE: Final[frozenset[str]] = frozenset(
-    {"a-2", "g-1", "g-2", "g-3", "g-4", "task-1", "task-2"}
+    {"a-2", "g-1", "g-2", "g-3", "g-4", "g-overridden", "task-1", "task-2"}
 )

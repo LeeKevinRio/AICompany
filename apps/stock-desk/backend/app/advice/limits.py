@@ -59,6 +59,7 @@ from app.api.kelly_wording import (
     KELLY_NOT_EVALUABLE_MANUAL_EXPIRED,
     KELLY_NOT_EVALUABLE_NO_INPUT,
     KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
     KELLY_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
 )
@@ -995,35 +996,63 @@ def _check_per_trade_loss(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     )
 
 
+#: The (g) branch table (條件 51), keyed on ``(source, anchor state)`` -- the two
+#: facts that decide which sentence is true, and the only two. Mutually
+#: exclusive and exhaustive over the six cells; a wrong cell is a false statement
+#: about where the user's number came from, which the review classes as BLOCKING
+#: rather than cosmetic.
+#:
+#: ``None`` for the source is the "no row at all" cell, where there is nothing to
+#: describe the origin of. The expired cells all interpolate their anchor; the
+#: unanchorable ones cannot and do not (6-B).
+_KELLY_EXPIRED_DETAILS: dict[KellyInputSource, str] = {
+    "manual": KELLY_NOT_EVALUABLE_MANUAL_EXPIRED,
+    "backtest": KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED,
+    "backtest_overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
+}
+
+#: The unanchorable half of the table. ``manual`` is absent because it cannot
+#: occur: a hand-typed pair always carries the server's write stamp, so
+#: :func:`app.kelly.models.anchor_moment` never returns ``None`` for one.
+#:
+#: TODO(risk): 待 (g-4-overridden) 定稿替換,第七輪併裁紀錄。The sixth cell
+#: (``backtest_overridden`` with no OOS end date) is as reachable as the fourth --
+#: ``KellyInputRecord.overriding`` copies the provenance column by column, so a
+#: row that had no anchor still has none after a hand edit -- and (g-4)'s source
+#: parenthesis ("回測帶入") understates it in exactly the way the seventh round
+#: struck: it omits that the effective numbers are the user's own. creative-lead
+#: is redrafting (g-4-overridden) (structure per (g-4), source parenthesis
+#: "回測帶入，已手動調整", no anchor placeholder). Until it is CONFIRMED this cell
+#: shows the closest approved sentence rather than an unreviewed one; the gap is
+#: pinned by an xfail test rather than left silent, and C5 may not ship with it
+#: open (第七輪 併裁 §(g) 分支表為六格).
+_KELLY_UNANCHORED_DETAILS: dict[KellyInputSource, str] = {
+    "backtest": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    "backtest_overridden": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+}
+
+
 def _kelly_not_evaluable_detail(kelly: KellyInputs | None) -> str:
-    """Which of the four (g) sentences this unusable pair calls for.
+    """Which cell of the (g) table this unusable pair falls in (條件 51).
 
-    The four are one per *cause*, and the causes are genuinely different things
-    to tell someone: nothing was ever entered, a typed pair went stale, an
-    imported pair went stale, or an imported pair cannot be aged at all. Each is
-    risk-approved verbatim and imported whole; nothing here composes or edits
-    one, and the only values interpolated are the ones the approval names.
+    The sentences are one per *cause*, and the causes are genuinely different
+    things to tell someone: nothing was ever entered, a typed pair went stale,
+    an imported pair went stale, an imported pair the user then edited went
+    stale, or an imported pair cannot be aged at all. Each is risk-approved
+    verbatim and imported whole; nothing here composes or edits one, and the
+    only values interpolated are the ones the approval names.
 
-    The manual/backtest split mirrors :func:`app.kelly.models.anchor_moment`
+    The anchor half of the key mirrors :func:`app.kelly.models.anchor_moment`
     exactly -- ``manual`` ages from the write stamp, every other source from the
-    end of the out-of-sample segment -- because the two sentences describe the
+    end of the out-of-sample segment -- because these sentences *describe* the
     anchor ("上次更新於" vs "樣本外區段結束於") and would misstate it if the two
-    rules diverged. ``backtest_overridden`` therefore takes (g-3): its effective
-    numbers are hand-keyed, but the row it ages from is still the import's.
+    rules diverged.
     """
     if kelly is None:
         return KELLY_NOT_EVALUABLE_NO_INPUT
     if kelly.age_days is None or kelly.anchored_at is None:
-        # No anchor: only reachable for an imported pair, since a manual one
-        # always carries the server's write stamp. (g-4) names that source and
-        # inserts no placeholder -- there is no date to put in one (6-B).
-        return KELLY_NOT_EVALUABLE_NO_OOS_END_DATE
-    template = (
-        KELLY_NOT_EVALUABLE_MANUAL_EXPIRED
-        if kelly.source == "manual"
-        else KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED
-    )
-    return template.format(
+        return _KELLY_UNANCHORED_DETAILS.get(kelly.source, KELLY_NOT_EVALUABLE_NO_OOS_END_DATE)
+    return _KELLY_EXPIRED_DETAILS[kelly.source].format(
         anchored_on=kelly.anchored_at,
         age_days=kelly.age_days,
         # 落地條件 9: the window is interpolated from the constant in force,

@@ -11,6 +11,7 @@ import signal
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -18,7 +19,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from app import scheduler as scheduler_module
+from app.alerts.engine import SymbolSnapshot
+from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
+from app.kelly.models import KellyInputRecord
+from app.kelly.store import KellyInputStore
 from app.positions.models import PositionInput
 from app.positions.store import PositionStore
 from app.settings.models import AlertSettings, AppSettings
@@ -40,11 +45,17 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     monkeypatch.setattr(scheduler_module, "get_settings_store", lambda: settings)
     monkeypatch.setattr(scheduler_module, "get_market_resolver", lambda: {"TW": prices})
     monkeypatch.setattr(scheduler_module, "get_valuator", lambda: _valuator(prices))
+    # Cap 5's store is pointed at the temp file like every other one: without
+    # this the tick would reach the process-wide default and read whatever is on
+    # the developer's disk.
+    kelly = KellyInputStore(db_path=tmp_path / "kelly.db")
+    monkeypatch.setattr(scheduler_module, "get_kelly_input_store", lambda: kelly)
     return {
         "positions": positions,
         "alerts": alerts,
         "settings": settings,
         "prices": prices,
+        "kelly": kelly,
     }
 
 
@@ -157,6 +168,45 @@ def test_alert_tick_fires_and_persists(wired: dict[str, object]) -> None:
     add_rule(alerts, price_rule(threshold=100.0))
     assert scheduler_module.evaluate_alerts_tick() == 1
     assert len(alerts.list_events(unacknowledged=True)) == 1
+
+
+def test_the_alert_tick_hands_cap_5_the_stored_pair(
+    wired: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scheduled loop evaluates cap 5 against the same pair the API does.
+
+    ``build_snapshot``'s ``kelly`` defaults to ``None``, and ``None`` is the
+    sentence "尚未輸入" -- so a refactor that drops the keyword here does not
+    fail, it quietly stops a ``risk_limit_breach`` rule from watching an input
+    the user did enter. The spy watches the bound name and drives the real tick.
+    """
+    alerts = wired["alerts"]
+    positions = wired["positions"]
+    kelly = wired["kelly"]
+    assert isinstance(alerts, AlertStore)
+    assert isinstance(positions, PositionStore)
+    assert isinstance(kelly, KellyInputStore)
+    _held(positions)
+    add_rule(alerts, price_rule(threshold=100.0))
+    kelly.upsert(
+        KellyInputRecord.manual(symbol="2330", market="TW", win_rate=0.6, payoff_ratio=2.0)
+    )
+
+    pairs: list[object] = []
+
+    def spy(*args: Any, **kwargs: Any) -> SymbolSnapshot:
+        pairs.append(kwargs.get("kelly", "<omitted>"))
+        return build_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler_module, "build_snapshot", spy)
+
+    assert scheduler_module.evaluate_alerts_tick() == 1
+
+    assert pairs, "the tick never reached build_snapshot"
+    for pair in pairs:
+        assert pair != "<omitted>"
+        assert pair is not None
+        assert getattr(pair, "win_rate", None) == 0.6
 
 
 def test_alert_tick_is_skipped_when_alerts_are_disabled(wired: dict[str, object]) -> None:

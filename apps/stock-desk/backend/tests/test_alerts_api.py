@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
+from app.alerts.engine import SymbolSnapshot
+from app.alerts.snapshot import build_snapshot
+from app.api import alerts as alerts_module
 from tests.alerts_helpers import limit_rule, price_rule, signal_rule
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
@@ -244,6 +251,40 @@ def test_evaluate_fires_and_the_event_appears_in_the_feed(api_harness: ApiHarnes
     assert len(events) == 1
     assert events[0]["acknowledged"] is False
     assert events[0]["symbol"] == "2330"
+
+
+def test_the_manual_tick_hands_cap_5_the_stored_pair(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_loader`` must pass the pair, not leave ``build_snapshot``'s default.
+
+    ``kelly`` defaults to ``None``, and ``None`` is the sentence "尚未輸入" -- so a
+    refactor that drops the keyword does not fail loudly, it quietly stops a
+    ``risk_limit_breach`` rule from watching an input the user did enter. The
+    same asymmetry ``tests/test_book_context_call_sites.py`` closes for the
+    advice card and the portfolio overview (qa 補審 K4b, medium).
+    """
+    _seed_market(api_harness)
+    api_harness.client.post("/api/alerts", json=price_rule(threshold=100.0))
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
+    )
+
+    pairs: list[object] = []
+
+    def spy(*args: Any, **kwargs: Any) -> SymbolSnapshot:
+        pairs.append(kwargs.get("kelly", "<omitted>"))
+        return build_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(alerts_module, "build_snapshot", spy)
+
+    assert api_harness.client.post("/api/alerts/evaluate").json()["evaluated"] == 1
+
+    assert pairs, "the tick never reached build_snapshot"
+    for pair in pairs:
+        assert pair != "<omitted>"
+        assert pair is not None
+        assert getattr(pair, "win_rate", None) == 0.6
 
 
 def test_evaluate_reports_a_skip_when_the_symbol_has_no_data(
