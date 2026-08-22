@@ -29,12 +29,28 @@
  * is never rendered here, and the generic top-level rejection banner (already
  * pre-existing, already-shipped copy — `ApiError.message`'s own
  * `請求失敗（HTTP …）` fallback) stands in for it instead.
+ *
+ * **條件 109 (第十四輪, 出貨閘門): the delete control does not ship yet.**
+ * `window.confirm`'s pre-existing "此動作無法復原。" phrasing (逐字同構
+ * `PositionsTable.tsx`) does **not** transfer here: a Kelly row's delete does
+ * not cascade to the import-attempt log (`store.py:270`, `K_observed`/`K_
+ * distinct_specs` survive), and the user has no read surface for that log at
+ * all (列管 L7) — "無法復原" is therefore a one-sided claim that everything
+ * about this row is gone, which is false in the direction that matters. 條件
+ * 110 sends the real disclosure sentence to creative (subject named, "無法
+ * 復原" scoped to what actually cannot be recovered, the kept counts stated
+ * rather than silently dropped, no induced framing, a button label that does
+ * not embed a value judgement). Until that sentence lands: **no delete
+ * button, no `window.confirm`, no call site** — `DELETE
+ * /api/kelly-inputs/{symbol}` (`deleteKellyInput`/`useDeleteKellyInput`,
+ * `app/lib/api.ts`/`queries.ts`) stays wired and untouched for when it does.
+ * `app/lib/__tests__/kellyManualInputForm.test.ts` carries the placeholder.
  */
 
 import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { isApprovedKellyFieldMessage } from "../lib/kellyFieldError";
-import { useDeleteKellyInput, useUpdateKellyInput } from "../lib/queries";
+import { useUpdateKellyInput } from "../lib/queries";
 import type { KellyInputRow, Market } from "../lib/types";
 
 function FieldError({ message }: { message: string | undefined }) {
@@ -59,7 +75,6 @@ export function KellyManualInputForm({
     current !== null ? String(current.payoff_ratio) : "",
   );
   const updateMutation = useUpdateKellyInput();
-  const deleteMutation = useDeleteKellyInput();
 
   const rawFieldErrors = updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
   // 條件 57: a field error that is not an approved Chinese sentence is
@@ -90,22 +105,6 @@ export function KellyManualInputForm({
       market,
       input: { win_rate: Number(winRate), payoff_ratio: Number(payoffRatio) },
     });
-  }
-
-  function handleDelete() {
-    const confirmed = window.confirm(
-      `確定刪除 ${symbol}（${market}）的 Kelly 輸入？此動作無法復原。`,
-    );
-    if (!confirmed) return;
-    deleteMutation.mutate(
-      { symbol, market },
-      {
-        onSuccess: () => {
-          setWinRate("");
-          setPayoffRatio("");
-        },
-      },
-    );
   }
 
   return (
@@ -149,27 +148,19 @@ export function KellyManualInputForm({
           >
             {updateMutation.isPending ? "儲存中…" : "儲存"}
           </button>
-          {current !== null && (
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={deleteMutation.isPending}
-              className="rounded-md border border-red-900 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {deleteMutation.isPending ? "刪除中…" : "刪除"}
-            </button>
-          )}
+          {/*
+            條件 109 (第十四輪): the delete control is withheld until 條件 110's
+            disclosure sentence is drafted and approved — see the file's own
+            doc comment. `current` (whether a row exists to delete) is
+            deliberately left unused for that decision here; it stays a prop
+            other future logic in this file can read.
+          */}
         </div>
       </form>
 
       {genericRejection && (
         <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
           {genericRejection}
-        </p>
-      )}
-      {deleteMutation.isError && (
-        <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "未知錯誤"}
         </p>
       )}
     </div>
