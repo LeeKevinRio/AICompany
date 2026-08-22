@@ -61,11 +61,12 @@ export function KellyInputsSection() {
   return (
     <section className="rounded-lg border border-neutral-800 p-5">
       {/*
-        分歧① required 2 (`work/reviews/2026-08-19-C5-Kelly-文案批審.md`): 「勝率」
-        is banned from every frontend source file, not just this section's own
-        rendered output — so this standing lead-in names the API's own field
-        names (`win_rate`/`payoff_ratio`, English) rather than the Chinese noun,
-        the same choice `KellyManualInputForm.tsx`'s field labels make.
+        分歧① required 2 (`work/reviews/2026-08-19-C5-Kelly-文案批審.md`): the
+        two-character Chinese noun for a sampled win frequency is banned from
+        every frontend source file, not just this section's own rendered
+        output — so this standing lead-in names the API's own field names
+        (`win_rate`/`payoff_ratio`, English) rather than that noun, the same
+        choice `KellyManualInputForm.tsx`'s field labels make.
       */}
       <h2 className="text-lg font-semibold text-neutral-100">Kelly 輸入</h2>
       <p className="mt-1 text-xs text-neutral-500">
@@ -116,7 +117,13 @@ export function KellyInputsSection() {
           {query.isPending && <SkeletonBlock className="h-40 w-full" />}
           {query.isError && <ErrorPanel label="無法載入 Kelly 輸入" error={query.error} />}
           {query.isSuccess && (
-            <>
+            // `key` forces a clean remount on every symbol/market switch —
+            // `KellyManualInputForm`'s `useState(current !== null ? …)` and
+            // `KellyDisclosuresPanel`'s `showOriginal` toggle are both
+            // initialised once at mount, so without this a switch from one
+            // row to another would carry the previous row's typed field
+            // values / original-values toggle state into the new one.
+            <div key={`${active.symbol}-${active.market}`}>
               <KellyDisclosuresPanel data={query.data} />
               <KellyManualInputForm
                 symbol={active.symbol}
@@ -129,7 +136,7 @@ export function KellyInputsSection() {
                 disclosures={query.data.disclosures}
                 refetchDisclosures={query.refetch}
               />
-            </>
+            </div>
           )}
         </div>
       )}

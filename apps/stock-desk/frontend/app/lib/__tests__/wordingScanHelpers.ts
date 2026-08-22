@@ -58,6 +58,38 @@ export function assertNoForbiddenTerms(
   }
 }
 
+//: Any Han character — the block a zero-literal scan (`kellyDisclosuresPanel
+//: .test.ts`, `kellyImportDialog.test.ts`) tests for *complete absence* of,
+//: rather than membership in a banned-term list.
+const HAN_CHARACTER = /[一-鿿]/;
+
+/**
+ * Strips `//` line comments and `/* … *‍/` block comments from `source` before
+ * a zero-Chinese-literal scan, so a doc comment citing a review condition
+ * number (which is legitimate — this whole codebase's comments are English
+ * prose that names Chinese review terms in backticks/quotes) does not fail a
+ * scan whose actual target is *rendered* text. Deliberately simple (no string-
+ * literal-aware tokenizer): `//` and `/* … *‍/` inside a JS/TS string literal
+ * are vanishingly rare in this codebase's style (no `"http://"` URLs appear in
+ * the two files this is written for) and 條件 105/97-class rules would rather
+ * a caller re-check a false negative by hand than silently widen what counts
+ * as "a comment".
+ */
+export function stripComments(source: string): string {
+  return source.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+/**
+ * Every Han character found in `source` once comments are stripped —
+ * `stripComments` first, so a caller gets the *rendered-text* violations,
+ * not the doc comments that legitimately quote a Chinese review term.
+ */
+export function chineseLiteralsOutsideComments(source: string): string[] {
+  const stripped = stripComments(source);
+  const matches = stripped.match(new RegExp(HAN_CHARACTER, "g"));
+  return matches ?? [];
+}
+
 /**
  * §5.1: "即時"/real-time may only ever appear as part of a denial ("非即時"
  * — asserting the product is *not* real-time). Any occurrence not

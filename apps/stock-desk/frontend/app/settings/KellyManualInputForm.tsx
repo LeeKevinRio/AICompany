@@ -54,7 +54,7 @@ export function KellyManualInputForm({
   //: with both fields blank.
   current: KellyInputRow | null;
 }) {
-  const [winRate, setWinRate] = useState(current?.win_rate !== undefined && current !== null ? String(current.win_rate) : "");
+  const [winRate, setWinRate] = useState(current !== null ? String(current.win_rate) : "");
   const [payoffRatio, setPayoffRatio] = useState(
     current !== null ? String(current.payoff_ratio) : "",
   );

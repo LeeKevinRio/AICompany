@@ -42,7 +42,41 @@
  */
 
 import { useState } from "react";
-import type { KellyDetailRow, KellyInputDisclosuresView } from "../lib/types";
+import type {
+  KellyDetailRow,
+  KellyFreshness,
+  KellyInputDisclosuresView,
+  KellyOriginalValuesView,
+} from "../lib/types";
+
+/**
+ * 條件 97, pulled out as a pure function so the "no (g), so no `expired`
+ * badge" rule has a unit test independent of rendering — this repo has no
+ * `@testing-library/react`/jsdom yet (`vitest.config.ts`), so
+ * `app/lib/__tests__/kellyDisclosuresPanel.test.ts` covers all four
+ * `KellyFreshness | null` inputs (including the "no row at all" `null` case)
+ * against this function directly.
+ */
+export function showsFreshnessBadge(freshness: KellyFreshness | null): boolean {
+  return freshness !== "expired";
+}
+
+/**
+ * 條件 46 約束 3: whether the original-values subtree renders, as a pure
+ * predicate independent of the component's own `useState`. The interesting
+ * property this makes checkable without a DOM: toggling `showOriginal` true
+ * can never reveal the original-values view when the row does not have one
+ * (`original === null`) — the JSX below renders exactly one of two mutually
+ * exclusive branches keyed on this same expression, so this function and the
+ * render branch cannot drift apart the way two independently-written
+ * conditions could.
+ */
+export function shouldShowOriginalValues(
+  showOriginal: boolean,
+  original: KellyOriginalValuesView | null,
+): boolean {
+  return showOriginal && original !== null;
+}
 
 function DetailRow({ row }: { row: KellyDetailRow }) {
   return (
@@ -58,9 +92,7 @@ export function KellyDisclosuresPanel({ data }: { data: KellyInputDisclosuresVie
   const [showOriginal, setShowOriginal] = useState(false);
   const disclosures = data.disclosures;
   const freshness = data.kelly_input?.freshness ?? null;
-  // 條件 97: no (g) sentence exists on this screen, so the `expired` badge is
-  // withheld entirely rather than shown without it.
-  const showBadge = freshness !== "expired";
+  const showBadge = showsFreshnessBadge(freshness);
   const original = disclosures.original_values;
 
   return (
@@ -76,7 +108,7 @@ export function KellyDisclosuresPanel({ data }: { data: KellyInputDisclosuresVie
         )}
       </div>
 
-      {showOriginal && original !== null ? (
+      {shouldShowOriginalValues(showOriginal, original) && original !== null ? (
         <div className="mt-3 space-y-2 text-sm text-neutral-300">
           <p>{original.statement}</p>
           <dl className="grid grid-cols-1 gap-1 text-xs text-neutral-400 sm:grid-cols-2">

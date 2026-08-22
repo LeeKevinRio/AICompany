@@ -117,6 +117,16 @@ const SCANNED_FILES = [
   // sentence and the widget-load fallback message are new hard-coded JSX
   // literals; this file was never in the scan before this batch existed.
   "../../position/[symbol]/TradingViewChartPanel.tsx",
+  // C5 Kelly Lane K4c-2 (2026-08-22, `work/reviews/2026-08-19-C5-Kelly-文案批審.md`):
+  // the settings-page Kelly surface. `KellyDisclosuresPanel.tsx` also has its
+  // own stricter zero-Chinese-literal scan
+  // (`app/lib/__tests__/kellyDisclosuresPanel.test.ts`, which asserts no Han
+  // character survives at all outside a comment) — added here too so it never
+  // becomes a blind spot if that dedicated test is ever removed.
+  "../../settings/KellyInputsSection.tsx",
+  "../../settings/KellyManualInputForm.tsx",
+  "../../settings/KellyImportDialog.tsx",
+  "../../settings/KellyDisclosuresPanel.tsx",
 ] as const;
 
 /**

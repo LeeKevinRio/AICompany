@@ -66,7 +66,7 @@ import type {
   Market,
 } from "../lib/types";
 
-interface SpecFormState {
+export interface SpecFormState {
   strategy: BacktestStrategy;
   instrument_type: InstrumentType;
   start: string;
@@ -83,6 +83,54 @@ const EMPTY_SPEC: SpecFormState = {
   train_size: "252",
   test_size: "63",
 };
+
+/**
+ * Pulled out as a pure function so 條件 73's four-cell branching (no dialog
+ * for `absent`/`backtest`, a dialog carrying the row's own variant for
+ * `manual`/`backtest_overridden`) is unit-testable without a DOM — this repo
+ * has no `@testing-library/react`/jsdom yet (`vitest.config.ts`'s own doc
+ * comment; same trade-off `EditAlertRuleModal.tsx`'s `decideAlertRuleSubmit`
+ * makes). `app/lib/__tests__/kellyImportDialog.test.ts` covers all four
+ * cells directly against this function.
+ */
+export type ImportTriggerDecision =
+  | { kind: "run" }
+  | { kind: "open-dialog"; notice: NonNullable<KellyDisclosuresView["overwrite_notice"]> };
+
+export function decideImportTrigger(
+  overwriteNotice: KellyDisclosuresView["overwrite_notice"],
+): ImportTriggerDecision {
+  if (overwriteNotice === null) {
+    // 條件 73 cells "absent"/"backtest": explicit no-dialog, run directly.
+    return { kind: "run" };
+  }
+  // 條件 73 cells "manual"/"backtest_overridden": the row's own variant.
+  return { kind: "open-dialog", notice: overwriteNotice };
+}
+
+/**
+ * The `BacktestRequest` this dialog's confirm/direct-run path submits — pulled
+ * out so the field mapping (and the 列管 L11 fact that every one of these
+ * fields is a value the mini spec-form actually shows, never an invented
+ * default hidden from the screen) has a unit test independent of rendering.
+ */
+export function buildKellyImportRequest(
+  symbol: string,
+  market: Market,
+  spec: SpecFormState,
+): BacktestRequest {
+  return {
+    symbol,
+    market,
+    strategy: spec.strategy,
+    instrument_type: spec.instrument_type,
+    start: spec.start,
+    end: spec.end,
+    initial_cash: 1_000_000,
+    train_size: Number(spec.train_size),
+    test_size: Number(spec.test_size),
+  };
+}
 
 export function KellyImportDialog({
   symbol,
@@ -109,26 +157,12 @@ export function KellyImportDialog({
     setSpec((prev) => ({ ...prev, [key]: value }));
   }
 
-  function buildRequest(): BacktestRequest {
-    return {
-      symbol,
-      market,
-      strategy: spec.strategy,
-      instrument_type: spec.instrument_type,
-      start: spec.start,
-      end: spec.end,
-      initial_cash: 1_000_000,
-      train_size: Number(spec.train_size),
-      test_size: Number(spec.test_size),
-    };
-  }
-
   // 條件 74: the sole call site. Both the dialog's confirm button and the
-  // no-dialog trigger path call this same function; the mutation itself is
-  // written exactly once, here.
+  // no-dialog trigger path (`decideImportTrigger`'s `"run"` branch) call this
+  // same function; the mutation itself is written exactly once, here.
   function runImport() {
     mutation.mutate(
-      { symbol, market, body: buildRequest() },
+      { symbol, market, body: buildKellyImportRequest(symbol, market, spec) },
       {
         onSuccess: () => setDialogNotice(null),
       },
@@ -139,12 +173,12 @@ export function KellyImportDialog({
     // 條件 94: never decide the variant from a possibly-stale prop.
     const fresh = await refetchDisclosures();
     const freshNotice = fresh.data?.disclosures.overwrite_notice ?? disclosures.overwrite_notice;
-    if (freshNotice === null) {
-      // 條件 73 cell "backtest"/"absent": no dialog, run directly.
+    const decision = decideImportTrigger(freshNotice);
+    if (decision.kind === "run") {
       runImport();
       return;
     }
-    setDialogNotice(freshNotice);
+    setDialogNotice(decision.notice);
   }
 
   function handleCancel() {
