@@ -131,8 +131,41 @@ KELLY_ATTEMPT_LOG_FAILED_MESSAGE = (
     "無法寫入 Kelly 匯入嘗試紀錄，本次匯入未完成，也未寫入 Kelly 輸入。"
 )
 
+#: 風控 2026-08-19 逐字定稿（第四輪，備案+修訂），字面含標點不得改動，漂移須重送風控。
+#: The 500 body for 約束 27's should-not-happen. It stays in this module rather
+#: than in :mod:`app.api.kelly_wording` because 落地條件 25 names this constant and
+#: this line; :mod:`tests.test_kelly_wording` carries it in the same verbatim
+#: inventory as the other twenty.
+#:
+#: Three things about the wording are rulings, not choices:
+#:
+#: * "至少有一端不是有限的數字", never "都不是". The guard below fires on *either*
+#:   bound, and the reachable case is one-sided: a no-loss resample still returns
+#:   a finite fraction, so the only non-finite value the bootstrap produces is the
+#:   ``-inf`` of a no-win draw (``app/backtest/episodes.py``). A sentence saying
+#:   both ends are non-finite would be false in the case that actually happens.
+#: * "這次沒有寫入 Kelly 輸入", never "沒有數值被寫入". The attempt row *is*
+#:   written, with its measured columns; what did not get written is the
+#:   ``KellyInputRow``, and the sentence names that.
+#: * No retry advice in either direction. "Try again" is an instruction, and
+#:   "trying again will not help" is a claim about a future run this code cannot
+#:   support -- reproducibility holds only for the same spec over the same bars,
+#:   and bars are refetched.
+#:
+#: It also interpolates nothing. On this branch the bounds are non-finite by
+#: construction, so the old ``.format()`` rendered ``inf`` / ``-inf`` / ``nan``
+#: into a Chinese sentence -- the same fault 5-3 struck at the root in PB_NONE by
+#: deleting the call rather than guarding it. The values go to ``logger.error``
+#: below, which 落地條件 28 makes the one place they may not be dropped from.
+#:
+#: Display order is fixed (條件 27): this sentence first, then
+#: :data:`app.api.kelly_wording.KELLY_NON_FINITE_ATTEMPT_LOGGED` (3-B) with (b)
+#: beside it. If the surface cannot hold (b), 3-B is omitted and this sentence
+#: stands alone -- which is why the fact that nothing was written lives here and
+#: not only there.
 KELLY_NON_FINITE_INTERVAL_MESSAGE = (
-    "f* 信賴區間出現非有限值（下界 {low}、上界 {high}），本次不寫入 Kelly 輸入。"
+    "本次計算出的 f* 區間，其上界與下界之中至少有一端不是有限的數字，"
+    "超出本系統可寫入的範圍，這次沒有寫入 Kelly 輸入。"
 )
 
 
@@ -563,9 +596,7 @@ def import_kelly_input_from_backtest(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=KELLY_NON_FINITE_INTERVAL_MESSAGE.format(
-                low=fraction.low, high=fraction.high
-            ),
+            detail=KELLY_NON_FINITE_INTERVAL_MESSAGE,
         )
 
     _append_attempt(

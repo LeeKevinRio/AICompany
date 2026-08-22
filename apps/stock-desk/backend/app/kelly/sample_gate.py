@@ -27,9 +27,14 @@ A refusal is a **normal path**, not a fault: most windows on most symbols will
 not produce twenty completed round trips, and the UI is designed around that.
 
 The Traditional Chinese strings below are factual statements of what was
-measured and which gate closed -- no recommendation, no action verb. Their
-final user-facing wording is still subject to risk-compliance review (送審範圍
-20(d)), which is a review of the sentence, not of the thresholds.
+measured and which gate closed -- no recommendation, no action verb. All six
+are **逐字定稿** as of 2026-08-19 (`work/reviews/2026-08-19-C5-Kelly-文案批審.md`):
+the three sample-size ones came through both rounds untouched, and the other
+three were rewritten in the second round. 5-4 raises their shape to a required
+property -- one sentence each, any code in brackets at the very end, no measured
+value interpolated -- so a structural change voids the approval just as a
+re-wording does, and the sentence has to go back to risk-compliance.
+``tests/test_kelly_wording.py`` pins all six by retyping them.
 """
 
 from __future__ import annotations
@@ -67,18 +72,35 @@ LOW_LOSS_TRIPS_MESSAGE = (
     "樣本外虧損回合數為 {count} 筆，未達門檻 {threshold} 筆，本次不寫入 Kelly 輸入。"
 )
 
+#: (5-3) 風控 2026-08-19 逐字定稿（第二輪，主案），字面含標點不得改動，漂移須重送風控。
+#: Carries **no placeholder at all**, and that is the point (5-3A): the previous
+#: wording rendered the missing halves with ``.format()``, which turns a Python
+#: ``None`` into the literal "None" beside the word "null" -- two engineer words
+#: presented where a user reads a measurement. A value that does not exist is
+#: described, never printed. The ``.format()`` call in :func:`review_estimates`
+#: was removed with the string, so no argument can quietly reappear.
 PB_NONE_MESSAGE = (
-    "本次回測的樣本外勝率或賠率為 null（勝率 {win_rate}、賠率 {payoff_ratio}），"
-    "沒有可寫入的數值。"
+    "本次回測的樣本外勝率與盈虧比，其中至少一項沒有算出數值，"
+    "沒有可寫入的完整配對，本次不寫入 Kelly 輸入。"
 )
 
+#: (5-2) 風控 2026-08-19 逐字定稿（第二輪，採備案），字面含標點不得改動，漂移須重送風控。
+#: "你操作的標的" / "這次回測請求中的標的" rather than 路徑/body: the earlier pair
+#: named the URL and the request body, which are the transport and not anything
+#: the reader can see. The four placeholders are identifiers the user recognises,
+#: not measured quantities, which is why they stay (contrast 5-3).
 SYMBOL_MISMATCH_MESSAGE = (
-    "路徑指定的標的為 {path_symbol}（{path_market}），"
-    "回測請求的標的為 {body_symbol}（{body_market}），兩者不一致，本次不寫入。"
+    "你操作的標的（{path_symbol}，{path_market}）"
+    "與這次回測請求中的標的（{body_symbol}，{body_market}）不一致，本次不寫入。"
 )
 
+#: (5-1) 風控 2026-08-19 逐字定稿（第二輪，修訂版），字面含標點不得改動，漂移須重送風控。
+#: The draft narrowed the failure to the out-of-sample segment; ``insufficient_data``
+#: means the run never got far enough to have segments at all, so those three
+#: characters were struck. ``{status}`` stays as a trailing bracketed code -- a
+#: support handle, not a claim.
 INSUFFICIENT_DATA_MESSAGE = (
-    "回測結果狀態為 {status}，不是 ok，本次不寫入 Kelly 輸入。"
+    "這次回測沒有產出可用的結果，本次不寫入 Kelly 輸入（狀態代碼：{status}）。"
 )
 
 
@@ -158,10 +180,9 @@ def review_estimates(
     """
     if win_rate is not None and payoff_ratio is not None:
         return KellySampleGateReview()
-    return KellySampleGateReview(
-        reason_code="pb_none",
-        rejection=PB_NONE_MESSAGE.format(win_rate=win_rate, payoff_ratio=payoff_ratio),
-    )
+    # No ``.format()``: the message names neither half, so there is no argument
+    # to pass and no way for a ``None`` to be rendered into it later (5-3A).
+    return KellySampleGateReview(reason_code="pb_none", rejection=PB_NONE_MESSAGE)
 
 
 def review_sample(

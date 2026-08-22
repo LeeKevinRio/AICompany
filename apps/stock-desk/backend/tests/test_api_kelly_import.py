@@ -37,13 +37,17 @@ import pytest
 
 from app.advice.limits import kelly_fraction
 from app.api import kelly as kelly_api
+from app.api import kelly_wording
 from app.backtest.engine import run_backtest
 from app.backtest.episodes import FractionInterval, attribute_round_trips
 from app.kelly.sample_gate import (
+    INSUFFICIENT_DATA_MESSAGE,
     MIN_OOS_LOSS_TRIPS,
     MIN_OOS_ROUND_TRIPS,
     MIN_OOS_WIN_TRIPS,
+    PB_NONE_MESSAGE,
     SOFT_WARNING_ROUND_TRIPS,
+    SYMBOL_MISMATCH_MESSAGE,
 )
 from tests.api_helpers import recent_bars
 from tests.conftest import ApiHarness
@@ -507,6 +511,11 @@ def test_a_symbol_mismatch_is_refused_before_any_backtest_runs(
     detail = _refusal(_import(api_harness, symbol="2317"))
 
     assert detail["reason_code"] == "symbol_mismatch"
+    # 風控 (5-2) 逐字定稿，第二輪. The message names the instrument the user was
+    # working on and the one the request carried, not the URL and the body.
+    assert detail["message"] == SYMBOL_MISMATCH_MESSAGE.format(
+        path_symbol="2330", path_market="TW", body_symbol="2317", body_market="TW"
+    )
     assert "2317" in detail["message"] and "2330" in detail["message"]
     assert api_harness.price_service.calls == []
     (attempt,) = _attempts(api_harness)
@@ -536,7 +545,10 @@ def test_a_run_that_could_not_report_is_refused_with_its_own_status(
     detail = _refusal(_import(api_harness))
 
     assert detail["reason_code"] == "insufficient_data"
-    assert "insufficient_data" in detail["message"]
+    # 風控 (5-1) 逐字定稿，第二輪: the status travels as a bracketed code at the
+    # end of the sentence, not as a clause inside it.
+    assert detail["message"] == INSUFFICIENT_DATA_MESSAGE.format(status="insufficient_data")
+    assert detail["message"].endswith("（狀態代碼：insufficient_data）。")
     (attempt,) = _attempts(api_harness)
     assert (attempt["outcome"], attempt["reason_code"]) == (
         "rejected",
@@ -578,6 +590,10 @@ def test_missing_estimates_are_refused_even_though_the_counts_passed(
     detail = _refusal(_import(api_harness))
 
     assert detail["reason_code"] == "pb_none"
+    # 風控 (5-3) 逐字定稿，第二輪, and 5-3A: the half that is missing is described,
+    # never rendered. A "None" reaching this body is the fault the ruling named.
+    assert detail["message"] == PB_NONE_MESSAGE
+    assert "None" not in detail["message"] and "null" not in detail["message"]
     assert api_harness.kelly_inputs.get("2330", "TW") is None
     (attempt,) = _attempts(api_harness)
     assert attempt["reason_code"] == "pb_none"
@@ -642,10 +658,25 @@ def test_a_non_finite_interval_fails_the_import_without_storing_it(
     response = _import(api_harness)
 
     assert response.status_code == 500
-    assert "非有限值" in response.json()["detail"]
+    detail = response.json()["detail"]
+    # The offending bounds stay in the log. This branch reaches here *because*
+    # they are non-finite, so interpolating them put "-inf" in front of a user
+    # (the front end renders ``detail`` verbatim for any non-422); the prose
+    # itself is still awaiting a redraft from risk-compliance (風控第三輪 §3).
+    assert detail == kelly_api.KELLY_NON_FINITE_INTERVAL_MESSAGE
+    for bound in ("inf", "-inf", "nan"):
+        assert bound not in detail
+    # 落地條件 23 反向斷言: 元件 B is the *refusal* sentence and may not appear on a
+    # path that refused nothing. 3-B is this path's approved sentence; wiring it
+    # into the response waits on the redraft of the message above (風控第三輪 §3).
+    assert kelly_wording.KELLY_REFUSAL_ATTEMPT_LOGGED not in detail
+    assert "拒絕" not in detail
     assert api_harness.kelly_inputs.get("2330", "TW") is None
     (attempt,) = _attempts(api_harness)
+    # 落地條件 23 口徑: every gate passed and the storage step is what failed, so
+    # this row is not a refusal and must not be described as one.
     assert attempt["outcome"] == "ok"  # the gate verdict, not the storage result
+    assert attempt["reason_code"] is None
     assert attempt["f_star_ci_low"] is None
     assert attempt["f_star_ci_high"] is None
 
@@ -686,6 +717,13 @@ def test_only_the_kelly_surface_mentions_the_stored_fraction() -> None:
         app_root / "kelly" / "store.py",
         app_root / "kelly" / "attempts.py",
         app_root / "api" / "kelly.py",
+        # Text and nothing else: (a-1) names the two interval bounds as
+        # ``{f_star_ci_*_pct}`` placeholders, and those names are inside a
+        # sentence risk-compliance approved character for character, so they
+        # cannot be spelled differently. The module imports nothing at all
+        # (``tests/test_kelly_wording.py``), so naming the column here cannot
+        # turn into reading it.
+        app_root / "api" / "kelly_wording.py",
     }
 
     offenders = sorted(
