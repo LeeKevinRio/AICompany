@@ -23,6 +23,7 @@ from app.data.quota import QuotaLedger
 from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
 from app.dividends.store import DividendEventStore
+from app.kelly.store import KellyInputStore
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from app.portfolio.valuation import PositionValuator
@@ -177,6 +178,17 @@ def _default_dividend_store() -> DividendEventStore:
 
 
 @lru_cache(maxsize=1)
+def _default_kelly_input_store() -> KellyInputStore:
+    """The process-wide store of Kelly inputs (ADR-0006 D-2).
+
+    Same ``STOCK_DESK_DB_PATH`` file as every other store. Empty until a user
+    enters or imports a pair, which leaves risk cap 5 ``not_evaluable`` exactly
+    as it was before C5 -- the absence of a row is a state, not a fault.
+    """
+    return KellyInputStore()
+
+
+@lru_cache(maxsize=1)
 def _default_quota_ledger() -> QuotaLedger:
     """The ledger the API reads for observability only.
 
@@ -262,6 +274,11 @@ def get_settings_store() -> SettingsStore:
 def get_alert_store() -> AlertStore:
     """Return the process-wide alert store."""
     return _default_alert_store()
+
+
+def get_kelly_input_store() -> KellyInputStore:
+    """Return the process-wide Kelly input store."""
+    return _default_kelly_input_store()
 
 
 def get_quota_ledger() -> QuotaLedger:

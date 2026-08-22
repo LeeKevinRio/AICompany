@@ -21,6 +21,7 @@ from app.api.deps import (
     get_dividend_store,
     get_fx_provider,
     get_index_resolver,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_price_bar_cache,
@@ -33,6 +34,8 @@ from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
 from app.data.quota import QuotaLedger
 from app.dividends.store import DividendEventStore
+from app.kelly.attempts import KellyAttemptStore
+from app.kelly.store import KellyInputStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
@@ -65,6 +68,13 @@ class ApiHarness:
     #: has observed nothing and the field is ``null`` -- "cannot judge", which
     #: is the honest answer for a harness with no market history.
     bar_cache: PriceBarCache
+    #: Temp-directory Kelly input store, **empty by default**: the state a
+    #: machine is in before anyone enters or imports a p/b pair.
+    kelly_inputs: KellyInputStore
+    #: The import-attempt log, on the same database file as ``kelly_inputs``
+    #: exactly as in production. A test seeds it to prove that clearing an
+    #: input leaves ``K_observed`` alone.
+    kelly_attempts: KellyAttemptStore
 
 
 @pytest.fixture
@@ -103,6 +113,9 @@ def api_harness(
     quota = QuotaLedger(db_path=tmp_path / "quota.db")
     dividends = DividendEventStore(db_path=tmp_path / "dividends.db")
     bar_cache = PriceBarCache(db_path=tmp_path / "bars.db")
+    kelly_db = tmp_path / "kelly.db"
+    kelly_inputs = KellyInputStore(db_path=kelly_db)
+    kelly_attempts = KellyAttemptStore(db_path=kelly_db)
     valuator = PositionValuator(
         market_services={"TW": price_service},
         fx_provider=fx_provider,
@@ -121,6 +134,7 @@ def api_harness(
     app.dependency_overrides[get_quota_ledger] = lambda: quota
     app.dependency_overrides[get_dividend_store] = lambda: dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: bar_cache
+    app.dependency_overrides[get_kelly_input_store] = lambda: kelly_inputs
 
     with TestClient(app) as test_client:
         yield ApiHarness(
@@ -134,6 +148,8 @@ def api_harness(
             quota=quota,
             dividends=dividends,
             bar_cache=bar_cache,
+            kelly_inputs=kelly_inputs,
+            kelly_attempts=kelly_attempts,
         )
     app.dependency_overrides.clear()
 
