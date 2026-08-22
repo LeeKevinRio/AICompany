@@ -53,3 +53,11 @@
 1. 約束 37 補例外明文並更正箭頭圖(已由協調人落檔於架構評估)。
 2. **守門測試兩個洞(退 dev 補強)**:test_advice_book.py:814-829 只 walk `ast.ImportFrom`(`import app.kelly.store` 寫法掃不到)且掃描面僅 book.py 一檔——limits/context/engine/book_limits 日後 import store 不會紅燈;約束 12「limits.py 對 app/kelly 零 import」目前無測試釘。改用既有 tests/import_graph.py 的傳遞閉包(同 test_kelly_boundary 機制)對整個 app/advice 套件斷言 `app.kelly.store`/`app.kelly.attempts` 不可達,並加 limits.py 零 import 白盒斷言。
 3. `ageing_of` 的 now 維持 keyword-only 注入、`app.kelly.models` 維持不讀時鐘不碰 DB(現況合規);讀時鐘唯一位置=book.py builder。
+
+---
+
+# 附註二|條件 92 二擇一選定(2026-08-22,tech-architect)
+
+**改選項二(overridden 不顯示 oos_period);先前約束 6「帶 OOS 起訖日期」就此撤回。**理由:條件 42 已裁覆寫列不得看回測明細,選項一把 (c) 拉進原始值檢視=在覆寫列重建回測揭露面的第一塊,且 (c) 句尾「（詳見選擇偏誤揭露）」依 3-A 口徑會連鎖要求 (b) 同屏→k_observed,撞上約束 7 禁列——該禁列正是「不並列=最小文案面」的支柱,代價不對稱。
+
+**配套**:原始值檢視固定為「兩個數字+一句標示句」;標示句須承擔期間指涉替代工作(「本標的最近一次成功帶入的回測所算出的原始值」語意——真命題:後續成功帶入整列改寫 backtest_*,models.py:254-270;不引入新概念、不新增「樣本外」字面);API 端 original_values 對 overridden 不供 oos_period、不供 (c),加反向斷言(不含 oos_* 欄位、回應無「樣本外」字面)。標示句是否需修訂(現行定稿「回測帶入當時」是否已承擔此指涉)交風控裁定。
