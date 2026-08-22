@@ -1538,12 +1538,12 @@ export interface KellyEffectiveCapView {
 }
 
 /**
- * Backend `KellyOriginalValuesView` (`app/api/kelly.py`) — 任務 7/任務 8: the
- * imported pair kept beside an overridden effective one. `oos_period` is a
- * later addition over the `oos_period_label`/`oos_period` pair; tech-architect's
- * 條件 92 二擇一 (附註二, 2026-08-22) withdrew the period from this view for an
- * overridden row, so a client must treat both as optional rather than assume
- * either is populated once `original_values` itself is non-null.
+ * Backend `KellyOriginalValuesView` (`app/api/kelly.py`) — 任務 7: the imported
+ * pair kept beside an overridden effective one. **Closed at five fields**
+ * (第十三輪 required, tech-architect 附註二/條件 92 二擇一, landed `38c6207`):
+ * two numbers, two labels, one sentence — no period, timestamp or ordering.
+ * 任務 8's OOS-period label was drafted and then withdrawn in the same round
+ * that closed this shape, so this type never carried it.
  */
 export interface KellyOriginalValuesView {
   statement: string;
@@ -1551,8 +1551,6 @@ export interface KellyOriginalValuesView {
   win_rate: string;
   payoff_ratio_label: string;
   payoff_ratio: string;
-  oos_period_label?: string | null;
-  oos_period?: string | null;
 }
 
 /**
@@ -1576,18 +1574,13 @@ export interface KellyOverwriteNoticeView {
  * caller from judging freshness, rewriting, truncating or composing any of
  * this text.
  *
- * `import_trigger_label` (條件 102/103, 第十二輪): the always-present visible
- * text/`aria-label` for the button that opens the before-overwrite dialog —
- * analogous to `freshness_badge_label` in always being populated. **Backend
- * landing in progress at the time this type was written** (K4c-2 rebased onto
- * `1ceaffc`, which records the approved literal but does not yet add this
- * field to the response model) — treated as optional here so this type does
- * not silently drop a real field once it lands, and so a client reading an
- * older response degrades to "no trigger rendered" (條件 105-safe: no
- * unapproved label is ever synthesised) rather than a runtime crash. See the
- * frontend-engineer K4c-2 handoff report for the exact gap.
+ * `import_trigger_label` (條件 102/103, landed `38c6207`): the always-present
+ * visible text/`aria-label` for the control that starts an import — present
+ * in all four source cells (absent/manual/backtest/overridden) and not part
+ * of `overwrite_notice`, which two of the four do not have.
  */
 export interface KellyDisclosuresView {
+  import_trigger_label: string;
   freshness_badge_label: string;
   source_statement: string | null;
   source_label: string | null;
@@ -1604,7 +1597,6 @@ export interface KellyDisclosuresView {
   overwrite_notice: KellyOverwriteNoticeView | null;
   k_observed: number;
   k_distinct_specs: number;
-  import_trigger_label?: string;
 }
 
 /** Backend `KellyInputDisclosuresView` (`app/api/kelly.py`) — `GET /api/kelly-inputs/{symbol}/disclosures`. */

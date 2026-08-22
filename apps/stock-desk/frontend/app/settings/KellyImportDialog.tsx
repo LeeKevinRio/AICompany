@@ -27,15 +27,17 @@
  * labels, and the trigger's own label) comes from
  * `KellyOverwriteNoticeView`/`KellyDisclosuresView.import_trigger_label`.
  *
- * **條件 78/102/103 (第十二輪, `1ceaffc`)**: the trigger's visible text and
- * `aria-label` are `disclosures.import_trigger_label` — a field the review
- * approved (`「執行回測並帶入」`) but which had not yet landed on
- * `KellyDisclosuresView` in the backend commit this lane rebased onto. This
- * component treats the field as optional and renders **nothing** (no
- * trigger, no dialog) when it is absent, rather than fabricate a label —
- * the same "degrade to absent, never invent" rule 條件 105 and 落地條件 3
- * apply everywhere else on this surface. See the K4c-2 handoff report for
- * the exact gap and what re-enables this control.
+ * **條件 78/102/103 (landed `38c6207`)**: the trigger's visible text and
+ * `aria-label` are `disclosures.import_trigger_label` verbatim, always
+ * present (like `freshness_badge_label`) across all four source cells.
+ *
+ * **條件 105**: no "already imported" text (a source label reading
+ * "來源：回測帶入" etc.) may appear before the import actually succeeds. This
+ * component never renders one itself — every such sentence lives in
+ * `KellyDisclosuresPanel`, driven by the `disclosures` query the parent
+ * (`KellyInputsSection`) holds — and `useImportKellyBacktest`'s `onSuccess`
+ * invalidates that query, so the source label only updates once the server
+ * confirms the write, never optimistically.
  *
  * **條件 75**: no measured number (win rate, payoff ratio) is ever rendered
  * on the dialog — only `overwrite_notice`'s own text, which the backend
@@ -100,12 +102,8 @@ export function KellyImportDialog({
   const [dialogNotice, setDialogNotice] = useState<KellyDisclosuresView["overwrite_notice"]>(null);
   const mutation = useImportKellyBacktest();
 
+  // 條件 102/103: always populated, all four source cells.
   const triggerLabel = disclosures.import_trigger_label;
-  if (!triggerLabel) {
-    // 條件 78/102/103 gap: not yet landed on the backend response this lane
-    // rebased onto. Render nothing rather than an unapproved label.
-    return null;
-  }
 
   function updateSpec<K extends keyof SpecFormState>(key: K, value: SpecFormState[K]) {
     setSpec((prev) => ({ ...prev, [key]: value }));

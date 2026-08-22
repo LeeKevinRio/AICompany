@@ -35,10 +35,10 @@
  * never a `<details>/<summary>` reveal and never a `role="dialog"` overlay —
  * a plain toggle that swaps one subtree for the other, with the card header
  * (badge, source label) standing across both states and a standing "back"
- * control (never ESC/click-outside only). `original_values.oos_period` is
- * optional per 附註二 (2026-08-22, 條件 92 二擇一): the overridden view no
- * longer carries an out-of-sample period at all, so this component treats it
- * as absent rather than assuming a shape an updated backend may not send.
+ * control (never ESC/click-outside only). `KellyOriginalValuesView` is closed
+ * at five fields since `38c6207` (第十三輪 required, 附註二/條件 92 二擇一): two
+ * numbers, two labels, one sentence, no out-of-sample period — this component
+ * renders exactly those five and nothing more.
  */
 
 import { useState } from "react";
@@ -88,14 +88,6 @@ export function KellyDisclosuresPanel({ data }: { data: KellyInputDisclosuresVie
               <dt>{original.payoff_ratio_label}</dt>
               <dd className="text-neutral-200">{original.payoff_ratio}</dd>
             </div>
-            {/* 條件 92 二擇一 (附註二): the overridden view no longer supplies
-                an OOS period at all; render it only if a future response does. */}
-            {original.oos_period_label && original.oos_period && (
-              <div className="flex gap-2">
-                <dt>{original.oos_period_label}</dt>
-                <dd className="text-neutral-200">{original.oos_period}</dd>
-              </div>
-            )}
           </dl>
           {/* 條件 46 約束 5: a standing return control, never ESC/click-outside only. */}
           <button
