@@ -11,6 +11,14 @@
  *     (e-manual) and the field-level 422 sentences on *that* panel, and an
  *     English field name with nothing else on screen would mean nothing to a
  *     reader who has not seen those sentences (L13).
+ *
+ * B1 (qa 補審 2026-08-22) folded the form into `KellyDisclosuresPanel.tsx`'s
+ * own "effective" branch (co-located as a literal parent/child, not merely a
+ * same-file sibling) — the strongest possible reading of (b), since the two
+ * can no longer be rendered apart even by a future edit that forgets to keep
+ * them side by side in a third file. The check below accepts both shapes: the
+ * form's own defining file *is* the panel (today's case), or some other file
+ * renders both tags together.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -72,8 +80,14 @@ describe("條件 108(b): KellyManualInputForm never renders outside KellyDisclos
     expect(filesRenderingForm.length).toBeGreaterThan(0);
   });
 
-  it("every file that renders <KellyManualInputForm also renders <KellyDisclosuresPanel — never split across two screens", () => {
-    const offenders = filesRenderingForm.filter((file) => !filesRenderingPanel.includes(file));
+  it("every file that renders <KellyManualInputForm is either KellyDisclosuresPanel.tsx itself, or also renders <KellyDisclosuresPanel — never split across two screens", () => {
+    const offenders = filesRenderingForm.filter(
+      (file) => !file.endsWith("KellyDisclosuresPanel.tsx") && !filesRenderingPanel.includes(file),
+    );
     expect(offenders).toEqual([]);
+  });
+
+  it("KellyDisclosuresPanel.tsx is in fact the file that renders the form today (the accepted shape is not a dead branch)", () => {
+    expect(filesRenderingForm.some((file) => file.endsWith("KellyDisclosuresPanel.tsx"))).toBe(true);
   });
 });

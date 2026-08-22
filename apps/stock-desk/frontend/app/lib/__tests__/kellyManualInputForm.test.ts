@@ -1,22 +1,41 @@
+import { describe, expect, it } from "vitest";
+import { isSubmittableManualInput } from "../../settings/KellyManualInputForm";
+
 /**
- * 條件 109 (第十四輪, `work/reviews/2026-08-19-C5-Kelly-文案批審.md`): the
- * delete control (button + confirmation) is withheld from
- * `KellyManualInputForm.tsx` until 條件 110's disclosure sentence is drafted
- * by creative and approved by risk-compliance. This placeholder documents
- * what re-enabling it must satisfy and stays `.skip` until that sentence
- * exists — there is nothing to assert yet, and a passing-vacuously test
- * (e.g. "no delete button renders") would silently stop meaning anything the
- * moment someone adds one back without reading this file.
+ * qa 補審 (順手 suggestion): `isSubmittableManualInput` is the light
+ * client-side pre-check `KellyManualInputForm.tsx`'s `handleSubmit` uses to
+ * skip a request that cannot possibly succeed (`Number("abc")` is `NaN`) —
+ * not a clamp, not a correction, just declining a pointless round trip. See
+ * the function's own doc comment for why `type="number"` was not used
+ * instead (this app's existing "the browser must not judge a value"
+ * convention).
  */
+describe("isSubmittableManualInput", () => {
+  it("accepts two ordinary decimal strings", () => {
+    expect(isSubmittableManualInput("0.55", "1.5")).toBe(true);
+  });
 
-import { describe, it } from "vitest";
+  it("accepts a negative payoff-ratio-shaped string too — this predicate does not judge range, only shape", () => {
+    // Out-of-range values are still submitted and refused server-side with
+    // the approved Chinese message (約束 6: refused, not clamped); this
+    // predicate exists only to skip garbage the backend cannot parse at all.
+    expect(isSubmittableManualInput("0.5", "-3")).toBe(true);
+  });
 
-describe.skip("KellyManualInputForm — delete control (blocked on 條件 110)", () => {
-  it("renders a delete control gated on `current !== null`, confirms via the 條件 110-approved sentence (subject named, 'cannot be recovered' scoped to what is actually lost, the kept attempt-log counts stated rather than silently dropped), and its confirm handler is the sole call site of `deleteKellyInput`/`useDeleteKellyInput`'s `mutate`", () => {
-    // Intentionally empty: re-enable this component only once 條件 110's
-    // sentence is CONFIRMED, wire it through `KellyOverwriteNoticeView`-style
-    // backend-supplied copy (never a frontend-authored string, per this
-    // whole surface's zero-literal rule), and replace this body with real
-    // assertions before removing `.skip`.
+  it("rejects non-numeric text in either field", () => {
+    expect(isSubmittableManualInput("abc", "1.5")).toBe(false);
+    expect(isSubmittableManualInput("0.5", "abc")).toBe(false);
+  });
+
+  it("rejects nan/Infinity-shaped strings (Number() parses the JS literal words)", () => {
+    expect(isSubmittableManualInput("NaN", "1.5")).toBe(false);
+    expect(isSubmittableManualInput("0.5", "Infinity")).toBe(false);
   });
 });
+
+// 條件 109 (第十四輪) withheld the delete control from this file entirely
+// until 條件 110's disclosure sentence existed; 第十五輪 CONFIRMED it and
+// required a `role="dialog"` component. The control now lives in
+// `KellyDeleteDialog.tsx` (a sibling `KellyDisclosuresPanel.tsx` renders
+// beside this form, not inside it — see this form's own doc comment) —
+// `app/lib/__tests__/kellyDeleteDialog.test.ts` carries its coverage.

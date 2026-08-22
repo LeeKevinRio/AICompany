@@ -29,10 +29,32 @@
  * `請求失敗（HTTP {status}）` fallback for a `detail` that is not a plain
  * string) — pre-existing, already-shipped copy, not a new sentence invented
  * for this branch.
+ *
+ * **B2 (qa 補審 2026-08-22, `work/reviews/2026-08-22-C5-K4c2-qa補審.md`)**:
+ * qa reproduced a *mixed* 422 body this shape test did not catch —
+ * pydantic v2 prefixes a `field_validator`'s own `ValueError` message with
+ * its own English `"Value error, "` before it reaches this app, so the range
+ * check's own approved Chinese sentence can arrive with that English prefix
+ * still attached: Han characters present, no banned literal present, and yet
+ * unreviewed English copy is now sitting in front of an otherwise-approved
+ * sentence. `LATIN_LETTER_RUN` closes that gap: neither approved sentence
+ * contains any run of two or more Latin letters at all (both are pure
+ * Chinese text plus digits/punctuation), so rejecting any message that does
+ * costs nothing on the approved path and catches this prefix (and any other
+ * Latin-letter contamination) without needing to know pydantic's exact
+ * wording. **This is the frontend half
+ * only** — the backend fix (strip the prefix at the source, e.g. a
+ * `PydanticCustomError`/422-handler change) is dev-lead's; this hardening
+ * stands regardless of whether or when that lands.
  */
 
 //: 條件 57's own list, verbatim: a rendered field message may never contain
-//: any of these regardless of what else it says.
+//: any of these regardless of what else it says. Every entry here is also a
+//: run of 2+ Latin letters, so `LATIN_LETTER_RUN` below already rejects all
+//: of them — this list is kept anyway (not dead-code-removed) because 條件
+//: 57 names these specific literals explicitly, and a future narrowing of
+//: `LATIN_LETTER_RUN` (e.g. to allow some Latin content) must not silently
+//: let one of these back in without a second, independent check noticing.
 const BANNED_LITERALS: readonly string[] = [
   "nan",
   "NaN",
@@ -47,14 +69,21 @@ const BANNED_LITERALS: readonly string[] = [
 //: use to detect Chinese-language content.
 const HAN_CHARACTER = /[一-鿿]/;
 
+//: B2: two or more consecutive Latin letters — present in pydantic's own
+//: `"Value error, "` prefix and absent from both approved range sentences.
+const LATIN_LETTER_RUN = /[A-Za-z]{2,}/;
+
 /**
  * Whether `message` is safe to render as a Kelly field-level error: contains
- * genuine Chinese content and none of 條件 57's banned literals. `undefined`
- * (no field error at all) is never "safe to render" — there is nothing to
- * render either way, and callers already branch on that case separately.
+ * genuine Chinese content, none of 條件 57's banned literals, and no run of
+ * Latin letters (B2 — catches an unreviewed English prefix pydantic can
+ * prepend to an otherwise-approved Chinese sentence). `undefined` (no field
+ * error at all) is never "safe to render" — there is nothing to render
+ * either way, and callers already branch on that case separately.
  */
 export function isApprovedKellyFieldMessage(message: string | undefined): message is string {
   if (message === undefined) return false;
   if (!HAN_CHARACTER.test(message)) return false;
+  if (LATIN_LETTER_RUN.test(message)) return false;
   return !BANNED_LITERALS.some((literal) => message.includes(literal));
 }

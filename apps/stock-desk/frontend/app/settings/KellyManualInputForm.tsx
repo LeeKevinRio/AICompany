@@ -9,6 +9,15 @@
  * review governs (`work/reviews/2026-08-19-C5-Kelly-文案批審.md`) and is
  * rendered by `KellyDisclosuresPanel`, never by this form.
  *
+ * **B1 (qa 補審 2026-08-22, `work/reviews/2026-08-22-C5-K4c2-qa補審.md`)**:
+ * this component is rendered by `KellyDisclosuresPanel`, inside that file's
+ * own "effective" branch — never by `KellyInputsSection` as a sibling. That
+ * placement is load-bearing, not cosmetic: this form pre-fills and edits the
+ * *effective* pair, which is exactly the "生效值欄位" 條件 46 約束 3 requires
+ * to disappear from the DOM whenever the original-values view is open, and
+ * only being inside the same ternary that view toggles can guarantee that
+ * (`shouldRenderManualInputForm`, `KellyDisclosuresPanel.tsx`).
+ *
  * This form itself renders only two kinds of text: the field labels (the raw
  * API field names `win_rate` / `payoff_ratio`, not the two-character Chinese
  * noun 分歧① required 2 bans from frontend source entirely — 「白名單=僅後端
@@ -30,21 +39,20 @@
  * pre-existing, already-shipped copy — `ApiError.message`'s own
  * `請求失敗（HTTP …）` fallback) stands in for it instead.
  *
- * **條件 109 (第十四輪, 出貨閘門): the delete control does not ship yet.**
- * `window.confirm`'s pre-existing "此動作無法復原。" phrasing (逐字同構
- * `PositionsTable.tsx`) does **not** transfer here: a Kelly row's delete does
- * not cascade to the import-attempt log (`store.py:270`, `K_observed`/`K_
- * distinct_specs` survive), and the user has no read surface for that log at
- * all (列管 L7) — "無法復原" is therefore a one-sided claim that everything
- * about this row is gone, which is false in the direction that matters. 條件
- * 110 sends the real disclosure sentence to creative (subject named, "無法
- * 復原" scoped to what actually cannot be recovered, the kept counts stated
- * rather than silently dropped, no induced framing, a button label that does
- * not embed a value judgement). Until that sentence lands: **no delete
- * button, no `window.confirm`, no call site** — `DELETE
- * /api/kelly-inputs/{symbol}` (`deleteKellyInput`/`useDeleteKellyInput`,
- * `app/lib/api.ts`/`queries.ts`) stays wired and untouched for when it does.
- * `app/lib/__tests__/kellyManualInputForm.test.ts` carries the placeholder.
+ * **條件 109/112 (第十四/十五輪): the delete control lives in
+ * `KellyDeleteDialog.tsx`, a sibling this form does not import.** 條件 109
+ * (第十四輪) withheld a delete control entirely until 條件 110's disclosure
+ * sentence existed — `window.confirm`'s old "this cannot be undone" style
+ * phrasing was a one-sided claim (the import-attempt log outlives a Kelly
+ * row's delete, `store.py:270`, and the user had no read surface for it,
+ * 列管 L7). 第十五輪
+ * CONFIRMED the real sentence and **required `role="dialog"`, banning
+ * `window.confirm` outright** (a confirm dialog's buttons are the browser's,
+ * not this app's, so the approved button copy could never render through
+ * it) — which is why the delete control is not folded back into *this* file:
+ * `KellyDisclosuresPanel.tsx` renders `KellyDeleteDialog` beside this form,
+ * in the same "effective" branch (both are 「生效值欄位」-adjacent, subject
+ * to the same 條件 46 約束 3 mutual exclusion), not inside it.
  */
 
 import { useState } from "react";
@@ -56,6 +64,20 @@ import type { KellyInputRow, Market } from "../lib/types";
 function FieldError({ message }: { message: string | undefined }) {
   if (!message) return null;
   return <p className="mt-1 text-xs text-red-400">{message}</p>;
+}
+
+/**
+ * qa 補審 (順手, non-blocking suggestion): a light client-side pre-check —
+ * `type="number"` is deliberately *not* used on either input, matching this
+ * app's existing convention (`NetWorthSection.tsx`, `BacktestForm.tsx`: the
+ * browser must not be the thing that judges a value, so it cannot silently
+ * clamp/round it) — but sending `Number("abc")` (`NaN`) is not "the browser
+ * judging a value", it is a request this backend will refuse outright, and
+ * doing so still counts as a submission. This predicate exists only to skip
+ * that pointless round trip; it changes no value and clamps nothing.
+ */
+export function isSubmittableManualInput(winRate: string, payoffRatio: string): boolean {
+  return Number.isFinite(Number(winRate)) && Number.isFinite(Number(payoffRatio));
 }
 
 export function KellyManualInputForm({
@@ -98,8 +120,12 @@ export function KellyManualInputForm({
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    // Sent exactly as typed, like `NetWorthSection` — a silently corrected
-    // number is one the user would later believe they had entered.
+    // qa 補審 順手: skip a request that cannot possibly succeed — not a
+    // clamp, not a correction, just declining to spend a round trip on
+    // `Number("abc")`. Whatever *is* sent still goes exactly as typed, like
+    // `NetWorthSection` — a silently corrected number is one the user would
+    // later believe they had entered.
+    if (!isSubmittableManualInput(winRate, payoffRatio)) return;
     updateMutation.mutate({
       symbol,
       market,
@@ -148,13 +174,6 @@ export function KellyManualInputForm({
           >
             {updateMutation.isPending ? "儲存中…" : "儲存"}
           </button>
-          {/*
-            條件 109 (第十四輪): the delete control is withheld until 條件 110's
-            disclosure sentence is drafted and approved — see the file's own
-            doc comment. `current` (whether a row exists to delete) is
-            deliberately left unused for that decision here; it stays a prop
-            other future logic in this file can read.
-          */}
         </div>
       </form>
 

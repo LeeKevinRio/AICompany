@@ -43,18 +43,40 @@
  * on the dialog — only `overwrite_notice`'s own text, which the backend
  * guarantees interpolates nothing.
  *
- * **條件 94**: the dialog variant must reflect the row's source *at
- * confirmation time*, not a value cached before an edit. The trigger's click
- * handler awaits a fresh `refetchDisclosures()` before deciding whether to
- * open the dialog and which `overwrite_notice` to show, rather than trusting
- * the `disclosures` prop, which may be stale by the time the user clicks.
+ * **條件 94/74 (B3, qa 補審 2026-08-22, `work/reviews/2026-08-22-C5-K4c2-qa
+ * 補審.md`)**: the dialog variant must reflect the row's source *at
+ * confirmation time*, not a value cached before an edit — and, the first
+ * draft's actual bug, **never a value cached from a failed refresh either**.
+ * `resolveImportTriggerDecision` calls `getKellyDisclosures` directly (not
+ * the caller's `useQuery` `refetch`, whose `QueryObserverResult` can still
+ * carry the *previous* successful `data` after a failed refetch) inside a
+ * `try`/`catch`; a network failure returns `{ kind: "abort" }` rather than
+ * falling back to the `disclosures` prop. Falling back to that prop was
+ * exactly the bug: a stale `overwrite_notice: null` (e.g. the row was
+ * `backtest` a moment ago and has since been overridden) would have run the
+ * import with **no dialog at all**, defeating 條件 74 in the one case it
+ * exists to prevent. `app/lib/__tests__/kellyImportDialog.test.ts` pins the
+ * failure path with a fake fetcher that rejects.
  *
- * **條件 76**: cancelling closes the dialog and calls nothing — no mutation,
- * no state change beyond `open`.
+ * **條件 76**: cancelling sets `dialogNotice` back to `null` and does nothing
+ * else — no mutation, no store call. `handleCancel` itself is not a separate
+ * pure function (there is nothing to compute; it is a one-line state setter),
+ * so unlike `decideImportTrigger`/`resolveImportTriggerDecision` this
+ * particular behaviour has no unit test of its own — the DOM-level guarantee
+ * ("cancelling never calls the import endpoint") is qa-e2e's to verify on a
+ * real page, consistent with this whole surface's no-jsdom limitation (see
+ * `kellyImportDialog.test.ts`'s own doc comment).
+ *
+ * **B6 (qa 補審)**: `runImport`'s `onError` closes the dialog
+ * (`setDialogNotice(null)`). Leaving the dialog open on a refusal — the first
+ * draft's bug — kept `ImportRefusalPanel` mounted but visually behind the
+ * dialog's own `bg-black/60` full-screen overlay: 元件 A/message/元件 B/(b)
+ * were technically in the DOM and practically invisible, which is not what
+ * 條件 22/3-A's "同屏" requirement means.
  */
 
 import { useState } from "react";
-import { ApiError, parseKellyImportRefusal } from "../lib/api";
+import { ApiError, getKellyDisclosures, parseKellyImportRefusal } from "../lib/api";
 import { INSTRUMENT_TYPE_OPTIONS, STRATEGY_OPTIONS } from "../lib/format";
 import { useImportKellyBacktest } from "../lib/queries";
 import type {
@@ -71,6 +93,10 @@ export interface SpecFormState {
   instrument_type: InstrumentType;
   start: string;
   end: string;
+  //: B4 (qa 補審): editable, 逐字同構 `BacktestForm.tsx`'s own 起始資金 field
+  //: and default — a `initial_cash` this dialog silently hard-coded is a
+  //: parameter 列管 L11 requires be on screen and user-selected, not implicit.
+  initial_cash: string;
   train_size: string;
   test_size: string;
 }
@@ -80,6 +106,7 @@ const EMPTY_SPEC: SpecFormState = {
   instrument_type: "stock",
   start: "",
   end: "",
+  initial_cash: "1000000",
   train_size: "252",
   test_size: "63",
 };
@@ -109,6 +136,26 @@ export function decideImportTrigger(
 }
 
 /**
+ * B3: fetches a fresh `disclosures` read and decides the trigger from it, or
+ * aborts — never a stale fallback. `fetchDisclosures` is injected (rather
+ * than this function calling `getKellyDisclosures` itself) purely so this
+ * suite can pass a fake that rejects without a network layer to mock.
+ */
+export async function resolveImportTriggerDecision(
+  fetchDisclosures: () => Promise<KellyInputDisclosuresView>,
+): Promise<ImportTriggerDecision | { kind: "abort" }> {
+  let fresh: KellyInputDisclosuresView;
+  try {
+    fresh = await fetchDisclosures();
+  } catch {
+    // 條件 94/74: a failed refresh must never fall back to a possibly-stale
+    // variant — abort instead of guessing which dialog (or no dialog) to show.
+    return { kind: "abort" };
+  }
+  return decideImportTrigger(fresh.disclosures.overwrite_notice);
+}
+
+/**
  * The `BacktestRequest` this dialog's confirm/direct-run path submits — pulled
  * out so the field mapping (and the 列管 L11 fact that every one of these
  * fields is a value the mini spec-form actually shows, never an invented
@@ -126,7 +173,7 @@ export function buildKellyImportRequest(
     instrument_type: spec.instrument_type,
     start: spec.start,
     end: spec.end,
-    initial_cash: 1_000_000,
+    initial_cash: Number(spec.initial_cash),
     train_size: Number(spec.train_size),
     test_size: Number(spec.test_size),
   };
@@ -136,15 +183,10 @@ export function KellyImportDialog({
   symbol,
   market,
   disclosures,
-  refetchDisclosures,
 }: {
   symbol: string;
   market: Market;
   disclosures: KellyDisclosuresView;
-  //: Re-reads `GET .../disclosures` (條件 94) — the caller's `useQuery`
-  //: `refetch`, typed loosely so this component does not have to import
-  //: react-query's own result type.
-  refetchDisclosures: () => Promise<{ data?: KellyInputDisclosuresView }>;
 }) {
   const [spec, setSpec] = useState<SpecFormState>(EMPTY_SPEC);
   const [dialogNotice, setDialogNotice] = useState<KellyDisclosuresView["overwrite_notice"]>(null);
@@ -165,15 +207,17 @@ export function KellyImportDialog({
       { symbol, market, body: buildKellyImportRequest(symbol, market, spec) },
       {
         onSuccess: () => setDialogNotice(null),
+        // B6: close the dialog on a refusal too, so `ImportRefusalPanel`
+        // (rendered below, outside the dialog's own overlay) is not left
+        // visually hidden behind `bg-black/60` while `dialogNotice` stands.
+        onError: () => setDialogNotice(null),
       },
     );
   }
 
   async function handleTriggerClick() {
-    // 條件 94: never decide the variant from a possibly-stale prop.
-    const fresh = await refetchDisclosures();
-    const freshNotice = fresh.data?.disclosures.overwrite_notice ?? disclosures.overwrite_notice;
-    const decision = decideImportTrigger(freshNotice);
+    const decision = await resolveImportTriggerDecision(() => getKellyDisclosures(symbol, market));
+    if (decision.kind === "abort") return;
     if (decision.kind === "run") {
       runImport();
       return;
@@ -249,6 +293,19 @@ export function KellyImportDialog({
             required
             value={spec.end}
             onChange={(e) => updateSpec("end", e.target.value)}
+            className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="kelly-import-cash" className="block text-sm text-neutral-400">
+            initial_cash
+          </label>
+          <input
+            id="kelly-import-cash"
+            inputMode="decimal"
+            value={spec.initial_cash}
+            onChange={(e) => updateSpec("initial_cash", e.target.value)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
         </div>

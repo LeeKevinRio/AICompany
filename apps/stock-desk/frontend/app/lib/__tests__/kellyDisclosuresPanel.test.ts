@@ -13,7 +13,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { shouldShowOriginalValues, showsFreshnessBadge } from "../../settings/KellyDisclosuresPanel";
+import {
+  shouldRenderManualInputForm,
+  shouldShowOriginalValues,
+  showsFreshnessBadge,
+} from "../../settings/KellyDisclosuresPanel";
 import type { KellyOriginalValuesView } from "../types";
 import { chineseLiteralsOutsideComments } from "./wordingScanHelpers";
 
@@ -58,12 +62,62 @@ describe("shouldShowOriginalValues — 條件 46 約束 3 (互斥檢視)", () =>
   });
 });
 
+/**
+ * B1 (qa 補審 2026-08-22, `work/reviews/2026-08-22-C5-K4c2-qa補審.md`): the
+ * bidirectional guarantee — `shouldRenderManualInputForm` is the exact
+ * complement of `shouldShowOriginalValues`, so the two conditions cannot
+ * independently drift into a state where both are true (double-rendered) or
+ * both are false (rendered nowhere) at once.
+ */
+describe("shouldRenderManualInputForm — B1 (互斥檢視雙向)", () => {
+  it("renders the form when the original-values view would not show (either direction of shouldShowOriginalValues)", () => {
+    for (const [showOriginal, original] of [
+      [false, null],
+      [false, ORIGINAL],
+      [true, null],
+    ] as const) {
+      expect(shouldRenderManualInputForm(showOriginal, original)).toBe(true);
+      expect(shouldShowOriginalValues(showOriginal, original)).toBe(false);
+    }
+  });
+
+  it("never renders the form in the one state where the original-values view does show", () => {
+    expect(shouldRenderManualInputForm(true, ORIGINAL)).toBe(false);
+    expect(shouldShowOriginalValues(true, ORIGINAL)).toBe(true);
+  });
+
+  it("is the exact complement of shouldShowOriginalValues over every input combination — never equal", () => {
+    for (const showOriginal of [true, false]) {
+      for (const original of [ORIGINAL, null]) {
+        expect(shouldRenderManualInputForm(showOriginal, original)).toBe(
+          !shouldShowOriginalValues(showOriginal, original),
+        );
+      }
+    }
+  });
+});
+
 describe("KellyDisclosuresPanel.tsx — zero Chinese literal outside comments (落地條件 3/約束 21)", () => {
+  const absolutePath = fileURLToPath(new URL("../../settings/KellyDisclosuresPanel.tsx", import.meta.url));
+  const source = readFileSync(absolutePath, "utf-8");
+
   it("carries no Han character in its rendered-text source", () => {
-    const absolutePath = fileURLToPath(
-      new URL("../../settings/KellyDisclosuresPanel.tsx", import.meta.url),
-    );
-    const source = readFileSync(absolutePath, "utf-8");
     expect(chineseLiteralsOutsideComments(source)).toEqual([]);
+  });
+
+  it("B1 structural guard: <KellyManualInputForm renders only inside the effective (else) branch of the mutual-exclusion ternary, never inside the original-values (if) branch", () => {
+    // The ternary's own else-branch marker (`) : (`) is the boundary between
+    // the two mutually exclusive subtrees this file renders — asserting the
+    // form's own JSX tag sits strictly after it (and the file contains
+    // exactly one such marker, so "after it" is unambiguous) pins B1's fix
+    // at the source-position level, not just via the pure-function pair
+    // above (which a future edit could satisfy while still literally
+    // rendering the form in the wrong branch).
+    const elseBranchMarkers = source.match(/\) : \(/g) ?? [];
+    expect(elseBranchMarkers).toHaveLength(1);
+    const elseBranchStart = source.indexOf(") : (");
+    const formTagIndex = source.indexOf("<KellyManualInputForm");
+    expect(formTagIndex).toBeGreaterThan(-1);
+    expect(formTagIndex).toBeGreaterThan(elseBranchStart);
   });
 });

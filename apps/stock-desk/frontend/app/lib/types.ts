@@ -1568,6 +1568,32 @@ export interface KellyOverwriteNoticeView {
 }
 
 /**
+ * Backend `KellyDeleteNoticeView` (**field/type name assumed** — not yet
+ * landed on `app/api/kelly.py` as of this lane's last rebase; dev-lead is
+ * pushing 第十五輪's definition separately, see this type's own doc note
+ * below) — 條件 109-115 (第十五輪): the before-delete dialog, shaped
+ * identically to `KellyOverwriteNoticeView` (same four fields, same reason:
+ * every part is approved copy, none of it assembled by a client). Three
+ * variants by source (manual/backtest share a base; `backtest_overridden`
+ * names the kept original pair explicitly, 條件 111) — `null` only when
+ * there is no row to delete (`kelly_input === null`).
+ *
+ * **Alignment note**: this app's own `useState`/render code was written
+ * against this assumed shape and field name before the backend constant
+ * landed (coordinator instruction: "先以型別對接+測試 mock,dev push 後
+ * rebase 對齊"). If the landed field is named differently, the mismatch will
+ * surface as a `tsc` error the moment this file is regenerated from the real
+ * OpenAPI shape or the next rebase pulls a differently-named field — see the
+ * K4c-2 handoff report for this exact gap.
+ */
+export interface KellyDeleteNoticeView {
+  title: string;
+  body: string[];
+  confirm_label: string;
+  cancel_label: string;
+}
+
+/**
  * Backend `KellyDisclosuresView` (`app/api/kelly.py`) — every slot of one
  * Kelly screen, already decided server-side (落地條件 3). `null` means "this
  * slot is not shown", never "the client picks something" — 約束 21 forbids a
@@ -1578,6 +1604,22 @@ export interface KellyOverwriteNoticeView {
  * visible text/`aria-label` for the control that starts an import — present
  * in all four source cells (absent/manual/backtest/overridden) and not part
  * of `overwrite_notice`, which two of the four do not have.
+ *
+ * `delete_notice` (條件 109-115, 第十五輪, **field name assumed** — see
+ * `KellyDeleteNoticeView`'s own doc note): the delete-confirmation dialog,
+ * `null` exactly when there is no row (mirrors the old `current !== null`
+ * gate this app used to render a delete button on directly).
+ *
+ * `original_values_entry_label` / `original_values_return_label` (條件
+ * 116/117, 第十五輪, **field names assumed**): the Traditional-Chinese labels
+ * for the original-values view's own entry ("查看原始回測值") and return
+ * ("返回") controls — kept as siblings of `original_values` rather than
+ * fields on `KellyOriginalValuesView` itself, because that view's own
+ * contents are closed at five fields (第十三輪 required) and these two labels
+ * are chrome about *navigating to* the view, not part of the view's own
+ * disclosure content. 條件 117 requires both null exactly when
+ * `original_values` is null ("同真值") — asserted in
+ * `kellyDisclosuresPanel.test.ts`.
  */
 export interface KellyDisclosuresView {
   import_trigger_label: string;
@@ -1594,7 +1636,10 @@ export interface KellyDisclosuresView {
   boundary_exclusion: string | null;
   sample_detail: KellyBacktestSampleDetail | null;
   original_values: KellyOriginalValuesView | null;
+  original_values_entry_label: string | null;
+  original_values_return_label: string | null;
   overwrite_notice: KellyOverwriteNoticeView | null;
+  delete_notice: KellyDeleteNoticeView | null;
   k_observed: number;
   k_distinct_specs: number;
 }

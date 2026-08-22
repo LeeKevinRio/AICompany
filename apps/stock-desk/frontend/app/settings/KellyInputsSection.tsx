@@ -6,9 +6,10 @@
  * per-symbol page, like `NetWorthSection.tsx`/`AlertRulesSection.tsx`, but
  * unlike those two, `GET /api/kelly-inputs/{symbol}/disclosures`
  * (`app/api/kelly.py`) is keyed on `(symbol, market)`, not global — so this
- * component's own job is the symbol picker that chooses *which* row the
- * three pieces below (`KellyDisclosuresPanel`, `KellyManualInputForm`,
- * `KellyImportDialog`) all read.
+ * component's own job is the symbol picker that chooses *which* row the two
+ * pieces below (`KellyDisclosuresPanel` — which also owns
+ * `KellyManualInputForm` since qa 補審 B1, see that file's own doc comment —
+ * and `KellyImportDialog`) both read.
  *
  * Reuses `SymbolCombobox` exactly as `ManualAddForm.tsx` does (代號目錄
  * autocomplete, FR-4/6/7's degrade path). Picking a candidate fills `market`
@@ -18,7 +19,6 @@
  */
 
 import { useState } from "react";
-import { ApiError } from "../lib/api";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import { SymbolCombobox } from "../components/SymbolCombobox";
@@ -28,7 +28,6 @@ import { useKellyDisclosures } from "../lib/queries";
 import type { DirectoryItem, Market } from "../lib/types";
 import { KellyDisclosuresPanel } from "./KellyDisclosuresPanel";
 import { KellyImportDialog } from "./KellyImportDialog";
-import { KellyManualInputForm } from "./KellyManualInputForm";
 
 interface PickerState {
   symbol: string;
@@ -124,17 +123,11 @@ export function KellyInputsSection() {
             // row to another would carry the previous row's typed field
             // values / original-values toggle state into the new one.
             <div key={`${active.symbol}-${active.market}`}>
-              <KellyDisclosuresPanel data={query.data} />
-              <KellyManualInputForm
-                symbol={active.symbol}
-                market={active.market}
-                current={query.data.kelly_input?.item ?? null}
-              />
+              <KellyDisclosuresPanel data={query.data} symbol={active.symbol} market={active.market} />
               <KellyImportDialog
                 symbol={active.symbol}
                 market={active.market}
                 disclosures={query.data.disclosures}
-                refetchDisclosures={query.refetch}
               />
             </div>
           )}

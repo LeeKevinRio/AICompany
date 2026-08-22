@@ -51,4 +51,25 @@ describe("isApprovedKellyFieldMessage", () => {
     // gates are independent (not "banned-literal free" alone).
     expect(isApprovedKellyFieldMessage("information")).toBe(false);
   });
+
+  // B2 (qa 補審 2026-08-22): pydantic v2 prefixes a `field_validator`'s own
+  // `ValueError` with its own English `"Value error, "` before the body
+  // reaches this app — a mixed sentence with Han characters, no banned
+  // literal, and unreviewed English attached to the front of it. Fixture is
+  // synthetic Chinese (see this file's own doc comment on why), with the
+  // real pydantic prefix prepended verbatim — that prefix is not
+  // Kelly-approved copy and has no CONFIRMED_VERBATIM entry to collide with.
+  it("B2: rejects a message carrying pydantic's 'Value error, ' prefix even though Han characters and no banned literal are both present", () => {
+    expect(
+      isApprovedKellyFieldMessage("Value error, 測試訊息：欄位數值不合法（收到 1.5）。"),
+    ).toBe(false);
+  });
+
+  it("B2: rejects any run of two or more Latin letters embedded in an otherwise-clean Chinese sentence", () => {
+    expect(isApprovedKellyFieldMessage("測試訊息 ab：欄位數值不合法。")).toBe(false);
+  });
+
+  it("B2 control: a single Latin letter (e.g. scientific-notation 'e') does not trip the run-of-2+ gate", () => {
+    expect(isApprovedKellyFieldMessage("測試訊息：欄位數值不合法（收到 1e+20）。")).toBe(true);
+  });
 });

@@ -34,10 +34,12 @@ const METRIC_ROWS: MetricRow[] = [
     // condition it ships in the same commit as Kelly's own equivalently
     // qualified label (`app/api/kelly_wording.py`, 「依完整回合計」). Do not
     // shorten this label, do not drop its qualifier, and do not add a second,
-    // unqualified row naming the same concept anywhere in this file —
-    // `componentWordingScan.test.ts` pins the exact source line and asserts
-    // the banned bare term appears exactly once across this file (inside this
-    // qualified label, nowhere else).
+    // unqualified row naming the same concept anywhere in this file.
+    // `componentWordingScan.test.ts` pins this exact source line via its own
+    // allowlist (masked before the banned-term scan runs); the *count*
+    // guarantee — the banned bare term appears exactly once across this
+    // file, inside this qualified label and nowhere else — is
+    // `kellyWinRateQualifierPairing.test.ts`'s job, not this file's own scan.
     label: "勝率（依結算筆數計）",
     render: (m) => formatPercent(m.win_rate),
   },
