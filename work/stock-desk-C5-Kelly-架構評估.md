@@ -151,10 +151,16 @@
     bootstrap 參數與其餘樣本結構欄位不得進入 PortfolioContext;
     ci_includes_no_edge 由 app/api/kelly.py 算好傳入,limits.py 只得分支、
     不得計算任何統計量(延續第 12 條)。
-37. (模組邊界擴充,延續第 13 條)app/backtest 禁止 import app/advice 與
-    app/kelly;app/advice 禁止 import app/backtest;app/kelly 禁止 import
-    app/advice 與 app/backtest(sample_gate 只吃純量,不得吃回測型別)。三者的
-    組裝點只有 app/api/kelly.py。依賴方向:advice ← api → {kelly, backtest}。
+37. (模組邊界擴充,延續第 13 條;2026-08-22 tech-architect 追認修訂)app/backtest
+    禁止 import app/advice 與 app/kelly;app/advice 禁止 import app/backtest;
+    app/kelly 禁止 import app/advice 與 app/backtest(sample_gate 只吃純量,
+    不得吃回測型別)。**例外明文**:`app/advice` 僅得 import `app.kelly.models`
+    (型別與計齡純函式),禁 `app.kelly.store` / `app.kelly.attempts`;
+    `app.kelly.models` 不得新增 `app.positions.models`、標準庫、pydantic 以外
+    的 import。三者的組裝點只有 app/api/kelly.py。依賴方向:advice →
+    kelly.models(唯讀型別與純函式);其餘一律 advice ← api → {kelly, backtest}。
+    守門:以 import_graph 傳遞閉包對整個 app/advice 套件斷言 store/attempts
+    不可達,另加 limits.py 對 app.kelly.* 零 import 白盒斷言(見追認紀錄)。
 
 ## 升級 CEO/PM 事項
 - **PRD 事實錯誤更正**:profit_factor≠b(PF=(p/(1-p))·b),PRD 相關文字須改;

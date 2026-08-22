@@ -42,3 +42,14 @@
 ## 附帶發現(轉風控)
 
 **(g) 句覆寫列來源標籤缺口**:backtest_overridden 的新鮮度錨仍是 oos_end_date(models.py:360-364),但 (g-2) 寫「來源：手動輸入」、(g-3) 寫「來源：回測帶入」,兩句皆未涵蓋「回測帶入、已手動調整」態。今日不可達(條件 19 未結),條件 19 一落地即可達。建議 K4 落地前釐清,避免重演掛錯即 BLOCKING。
+
+---
+
+# 附註|約束 37 讀法追認(2026-08-22,tech-architect)
+
+**追認** K4b-backend 的邊界讀法(book.py 只 import `app.kelly.models`;limits.py 對 app/kelly 零 import)。理由:約束 37 真正要防的是演算法唯一性被複製、閘門吃到回測型別、循環依賴;`advice → kelly.models` 是對純資料模型+純函式的單向依賴(無 I/O、無循環、不觸及 kelly_fraction),三受詞不受影響。替代方案均不採:抽共用層=為一個函式開第四模組且規則與型別分家;api 算好傳入=把「無錨即過期」執行點分散到每個呼叫端,更差。
+
+**收緊三項**:
+1. 約束 37 補例外明文並更正箭頭圖(已由協調人落檔於架構評估)。
+2. **守門測試兩個洞(退 dev 補強)**:test_advice_book.py:814-829 只 walk `ast.ImportFrom`(`import app.kelly.store` 寫法掃不到)且掃描面僅 book.py 一檔——limits/context/engine/book_limits 日後 import store 不會紅燈;約束 12「limits.py 對 app/kelly 零 import」目前無測試釘。改用既有 tests/import_graph.py 的傳遞閉包(同 test_kelly_boundary 機制)對整個 app/advice 套件斷言 `app.kelly.store`/`app.kelly.attempts` 不可達,並加 limits.py 零 import 白盒斷言。
+3. `ageing_of` 的 now 維持 keyword-only 注入、`app.kelly.models` 維持不讀時鐘不碰 DB(現況合規);讀時鐘唯一位置=book.py builder。
