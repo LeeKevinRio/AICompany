@@ -87,7 +87,9 @@ window_start、window_end、oos_start_date、oos_end_date、produced_at、
 rates_verified、dividend_reason_code、adjust_dividends，以及回合層五計數
 **oos_round_trips / oos_win_trips / oos_loss_trips / oos_excluded_boundary_trips
 / oos_open_trip_at_end**（取代原 `oos_closing_trades`；理由：該欄位受
-Context 事實 5 所述微額 fill 污染，若落地會誤導稽核者）。
+Context 事實 5 所述微額 fill 污染，若落地會誤導稽核者），另含 `oos_observations`
+（樣本觀測數；errata 2026-08-19：本欄實作約束第 27 條原已要求，D-2 本文先前
+漏列，qa-reviewer 補審 K1 時裁定以約束為準，此處補記）。
 
 另新增區間與可重現性欄位：p_ci_low、p_ci_high、f_star、f_star_ci_low、
 f_star_ci_high、bootstrap_seed、bootstrap_draws、
