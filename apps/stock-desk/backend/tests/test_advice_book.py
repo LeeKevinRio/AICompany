@@ -811,19 +811,10 @@ def test_the_book_level_context_never_carries_a_kelly_pair() -> None:
     assert "kelly" not in inspect.signature(build_book_level_context).parameters
 
 
-def test_the_risk_layer_reaches_the_kelly_models_but_never_its_store() -> None:
-    """約束 12: the age is computed here; no database is opened to do it.
-
-    ``ageing_of`` is imported so the "no anchor means expired" rule has one
-    home (:mod:`app.kelly.models`), but a store import here would put I/O into
-    the one purely-computational assembly point (ADR-0005 decision 5).
-    """
-    imported = {
-        node.module or ""
-        for node in ast.walk(ast.parse(Path(book_module.__file__).read_text(encoding="utf-8")))
-        if isinstance(node, ast.ImportFrom)
-    }
-
-    assert "app.kelly.models" in imported
-    assert not any(module.startswith("app.kelly.store") for module in imported)
-    assert not any(module.startswith("app.kelly.attempts") for module in imported)
+#: 約束 12/37 -- "the age is computed here, but no database is opened to do it" --
+#: is asserted in ``tests/test_kelly_boundary.py``, next to the outbound half of
+#: the same boundary. It lived here first and scanned this one file for
+#: ``ast.ImportFrom`` nodes only, which left ``import app.kelly.store`` invisible
+#: and the other four risk-layer modules unguarded (tech-architect 2026-08-22,
+#: `work/stock-desk-C5-Kelly-條件46裁決.md` 附註 收緊 2). The replacement walks the
+#: transitive import graph over the whole package.
