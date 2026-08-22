@@ -17,13 +17,16 @@ from app.advice.book_limits import (
 from app.api.common import DataMeta, data_meta, now_iso
 from app.api.deps import (
     get_fx_provider,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.api.kelly import kelly_inputs_by_symbol
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
 from app.data.providers.fx import FxRateProvider
+from app.kelly.store import KellyInputStore
 from app.portfolio.summary import PortfolioSummary, build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
@@ -45,6 +48,7 @@ ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
+KellyStoreDep = Annotated[KellyInputStore, Depends(get_kelly_input_store)]
 
 #: Only cap 4 reads a signal here, and it reads exactly one: ATR(14). Computing
 #: the other nine indicators once per holding would cost the whole book's worth
@@ -103,6 +107,7 @@ def portfolio_limits(
     resolver: ResolverDep,
     settings_store: SettingsDep,
     fx_provider: FxProviderDep,
+    kelly_store: KellyStoreDep,
 ) -> PortfolioLimitsResponse:
     """Judge the whole book against the five risk caps (FR-8).
 
@@ -150,7 +155,14 @@ def portfolio_limits(
         )
 
     report = evaluate_book_limits(
-        summary, settings.risk_budget, net_worth=net_worth, market_data=market_data
+        summary,
+        settings.risk_budget,
+        net_worth=net_worth,
+        market_data=market_data,
+        # Read once for the whole book, and independently of the bar loop above:
+        # a holding whose bars failed to load still has whatever Kelly pair the
+        # user entered, and cap 5 must not report it as never entered (D-7).
+        kelly_inputs=kelly_inputs_by_symbol(kelly_store),
     )
     return PortfolioLimitsResponse(
         limits=report.limits, notes=report.notes, sources=sources, as_of=now_iso()

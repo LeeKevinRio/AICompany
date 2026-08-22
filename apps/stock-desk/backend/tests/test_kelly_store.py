@@ -136,7 +136,7 @@ def test_a_win_rate_outside_the_open_unit_interval_is_refused(win_rate: float) -
 
 @pytest.mark.parametrize("payoff_ratio", [0.0, -1.0])
 def test_a_non_positive_payoff_ratio_is_refused(payoff_ratio: float) -> None:
-    with pytest.raises(ValidationError, match="賠率"):
+    with pytest.raises(ValidationError, match="盈虧比"):
         _manual(payoff_ratio=payoff_ratio)
 
 

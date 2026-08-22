@@ -69,8 +69,13 @@ KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE = (
     "系統不會自行調整這個數字，請確認後重新輸入。"
 )
 
+#: 風控 2026-08-19 第五輪微批: 「賠率」→「盈虧比」純詞彙置換授權, 授權範圍逐字界定為
+#: 本則訊息的該二字, 其餘一字一標點不動。``tests/test_kelly_wording.py`` asserts the
+#: word is gone from both messages in this module, and keeps it in the refusal
+#: guard's banned list -- that entry is the anti-regression fixture, not a
+#: literal awaiting the same substitution.
 KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE = (
-    "賠率（平均獲利 ÷ 平均虧損）必須大於 0（收到 {value}）。"
+    "盈虧比（平均獲利 ÷ 平均虧損）必須大於 0（收到 {value}）。"
     "系統不會自行調整這個數字，請確認後重新輸入。"
 )
 
@@ -108,9 +113,20 @@ class KellyManualInput(BaseModel):
     produces a manual input, and the two facts a client could otherwise dress
     up (where the number came from, when it was entered) are the server's to
     state.
+
+    ``allow_inf_nan=False`` (落地條件 31): JSON's ``NaN`` / ``Infinity`` literals
+    are accepted by the parser underneath, pydantic admits them as floats by
+    default, and a range check comparing ``nan`` returns ``False`` on every
+    operator -- so ``nan`` reached
+    :data:`KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE` and was rendered into a Chinese
+    sentence as the English word ``nan``, the same fault (5-3) removed at the
+    root in ``PB_NONE`` and (4) removed in the non-finite 500 body. Refusing
+    non-finite values one layer earlier sends them down pydantic's ordinary
+    type-error path instead, which introduces no new user-facing sentence -- the
+    reason this is a parameter change rather than a copy change.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     #: Probability of a winning outcome, strictly inside (0, 1).
     win_rate: float
@@ -141,9 +157,16 @@ class KellyInputRecord(BaseModel):
     ``backtest_win_rate`` / ``backtest_payoff_ratio`` hold what the import
     computed and are **never** overwritten by a later hand edit -- that is what
     makes ``backtest_overridden`` auditable rather than merely labelled.
+
+    ``allow_inf_nan=False`` for the reason :class:`KellyManualInput` gives, and
+    for one more of its own: 約束 27 already forbids storing a row whose interval
+    is non-finite (the import raises 500 before it gets here), so a non-finite
+    value arriving at this model means that guard was bypassed. Refusing it here
+    keeps the ``{value}`` echo in the two range messages to numbers a user could
+    actually have meant, and stops a bypass from being written down silently.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     # --- Key and effective values -------------------------------------------
     symbol: str = Field(min_length=1)

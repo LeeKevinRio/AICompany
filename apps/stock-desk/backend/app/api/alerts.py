@@ -38,12 +38,15 @@ from app.api.common import now_iso
 from app.api.deps import (
     get_alert_store,
     get_fx_provider,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.api.kelly import kelly_inputs_for
 from app.data.providers.fx import FxRateProvider
+from app.kelly.store import KellyInputStore
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
 from app.positions.store import PositionStore
@@ -58,6 +61,7 @@ PositionStoreDep = Annotated[PositionStore, Depends(get_position_store)]
 ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
+KellyStoreDep = Annotated[KellyInputStore, Depends(get_kelly_input_store)]
 
 
 class AlertRuleListResponse(BaseModel):
@@ -202,6 +206,7 @@ def evaluate_now(
     valuator: ValuatorDep,
     settings_store: SettingsDep,
     fx_provider: FxProviderDep,
+    kelly_store: KellyStoreDep,
 ) -> EvaluationResponse:
     settings = settings_store.load()
     result = evaluate_alerts(
@@ -215,6 +220,7 @@ def evaluate_now(
             self_reported_net_worth(
                 settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
             ),
+            kelly_store,
         ),
         cooldown_minutes=settings.alerts.cooldown_minutes,
     )
@@ -228,6 +234,7 @@ def _loader(
     budget: RiskBudget,
     fx_provider: FxRateProvider,
     net_worth: SelfReportedNetWorth | None,
+    kelly_store: KellyInputStore,
 ) -> SnapshotLoader:
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
@@ -239,6 +246,9 @@ def _loader(
             budget=budget,
             fx_provider=fx_provider,
             net_worth=net_worth,
+            # Per rule, not per book: an alert watches one symbol, so cap 5 is
+            # evaluated against that symbol's own pair (D-1/D-7).
+            kelly=kelly_inputs_for(kelly_store, symbol, market),
         )
 
     return load

@@ -140,3 +140,66 @@ def test_the_alert_snapshot_passes_the_market_it_was_asked_about(
     )
     _assert_every_call_named_a_market(recorder)
     assert recorder.markets == ["TW"]
+
+
+# --- The same premise for cap 5's pair (C5) ----------------------------------
+
+
+class _KellySpy:
+    """Records the ``kelly`` each call was given, then delegates for real."""
+
+    def __init__(self) -> None:
+        self.pairs: list[Any] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> BookContext:
+        self.pairs.append(kwargs.get("kelly", "<omitted>"))
+        return build_book_context(*args, **kwargs)
+
+
+def test_the_advice_endpoint_hands_cap_5_the_pair_it_has_stored(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored pair that never reaches the context is a card stating a falsehood.
+
+    ``build_book_context`` defaults ``kelly`` to ``None``, and ``None`` is the
+    sentence "此標的尚未輸入…". So a caller that forgets the keyword does not fail
+    loudly -- it tells the user they never entered an input they did enter. The
+    spy watches the bound name and drives the real endpoint, so a dropped keyword
+    and a keyword evaluating to ``None`` both fail here.
+    """
+    recorder = _KellySpy()
+    monkeypatch.setattr(advice_module, "build_book_context", recorder)
+    api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
+    )
+
+    assert api_harness.client.get("/api/advice/2330").json()["status"] == "ok"
+
+    assert recorder.pairs, "the endpoint never reached build_book_context"
+    for pair in recorder.pairs:
+        assert pair != "<omitted>"
+        assert pair is not None
+        assert pair.win_rate == 0.6
+
+
+def test_the_portfolio_limits_endpoint_hands_each_holding_its_own_pair(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same premise on the overview, where the mapping is built in bulk."""
+    recorder = _KellySpy()
+    monkeypatch.setattr(book_limits_module, "build_book_context", recorder)
+    api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
+    )
+
+    assert api_harness.client.get("/api/portfolio/limits").status_code == 200
+
+    assert recorder.pairs
+    for pair in recorder.pairs:
+        assert pair != "<omitted>"
+        assert pair is not None
+        assert pair.win_rate == 0.6

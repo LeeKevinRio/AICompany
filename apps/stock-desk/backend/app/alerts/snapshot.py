@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from app.advice.book import build_book_context
-from app.advice.limits import RiskBudget, SelfReportedNetWorth, evaluate_limits
+from app.advice.limits import KellyInputs, RiskBudget, SelfReportedNetWorth, evaluate_limits
 from app.alerts.engine import SymbolSnapshot
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
@@ -35,6 +35,7 @@ def build_snapshot(
     budget: RiskBudget,
     fx_provider: FxRateProvider | None = None,
     net_worth: SelfReportedNetWorth | None = None,
+    kelly: KellyInputs | None = None,
     lookback_days: int = 400,
     today: date | None = None,
 ) -> SymbolSnapshot:
@@ -54,6 +55,12 @@ def build_snapshot(
     ``risk_limit_breach`` rule watching it can only fire once the user has
     reported one and while that report is still fresh. Without it the cap is
     ``not_evaluable`` and the rule reports a skip -- never a silent non-firing.
+
+    ``kelly`` does the same for cap 5, and the caller resolves it for the same
+    reason it resolves the net worth: this module reaches the stores it was
+    handed and no others. Without it cap 5 reports "nothing entered yet", so a
+    loader that has a pair and omits it would make a ``risk_limit_breach`` rule
+    silently stop watching an input the user did enter.
 
     The FX source's standing disclosure (ADR-0005 約束 F-4) travels on its own
     field instead, because it has the opposite destination: it qualifies a rate
@@ -84,6 +91,7 @@ def build_snapshot(
         atr=atr,
         fx=fx,
         net_worth=net_worth,
+        kelly=kelly,
     )
     data_reason = (
         None

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
+from pydantic import ValidationError
 
 from app.advice import limits
 from app.advice.limits import (
+    KELLY_STALE_AFTER_DAYS,
     LIMIT_IDS,
     LIMIT_NAMES,
     MAX_GROSS_EXPOSURE_CEILING,
@@ -27,6 +30,8 @@ from app.advice.limits import (
     NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL,
     RANGE_ACTION_LABELS,
     SECTOR_MIXED_DETAIL,
+    KellyInputs,
+    KellyInputSource,
     LimitCheck,
     PortfolioContext,
     RiskBudget,
@@ -41,7 +46,9 @@ from app.advice.limits import (
     project_position,
     suggest_quantity_range,
 )
-from tests.advice_helpers import reported_net_worth
+from app.api import kelly_wording as wording
+from app.kelly import models as kelly_models
+from tests.advice_helpers import kelly_inputs, reported_net_worth
 
 BUDGET = RiskBudget()
 
@@ -646,32 +653,48 @@ def test_kelly_fraction_matches_the_textbook_formula() -> None:
 
 def test_kelly_allowed_weight_applies_the_quarter_and_the_hard_cap() -> None:
     # Quarter of 0.4 = 0.10, exactly at the hard cap.
-    assert kelly_allowed_weight(BUDGET, _ctx(win_rate=0.6, payoff_ratio=2.0)) == pytest.approx(0.1)
+    assert kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(0.6, 2.0))) == pytest.approx(0.1)
     # A huge edge is still capped at 10%.
-    assert kelly_allowed_weight(BUDGET, _ctx(win_rate=0.9, payoff_ratio=5.0)) == pytest.approx(0.1)
+    assert kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(0.9, 5.0))) == pytest.approx(0.1)
     # Quarter of 0.2 = 0.05, below the hard cap.
-    assert kelly_allowed_weight(BUDGET, _ctx(win_rate=0.6, payoff_ratio=1.0)) == pytest.approx(0.05)
+    assert kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(0.6, 1.0))) == pytest.approx(0.05)
     # A negative edge allows nothing.
-    assert kelly_allowed_weight(BUDGET, _ctx(win_rate=0.3, payoff_ratio=1.0)) == 0.0
+    assert kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(0.3, 1.0))) == 0.0
 
 
-def test_kelly_not_evaluable_without_win_rate_or_payoff() -> None:
-    check = _check(_ctx(), "kelly_fraction")
-    assert check.status == "not_evaluable"
-    assert "勝率" in check.detail
-    assert _status(_ctx(win_rate=0.6), "kelly_fraction") == "not_evaluable"
-    assert _status(_ctx(payoff_ratio=2.0), "kelly_fraction") == "not_evaluable"
+def test_kelly_allowed_weight_is_none_for_a_pair_the_cap_will_not_use() -> None:
+    """D-4/D-6: an absent, unanchorable or expired pair sizes nothing.
+
+    Stated on ``kelly_allowed_weight`` and not only on the check, because this
+    is the function ``notional_caps`` calls: a pair that stopped being usable
+    must stop producing a TWD ceiling in the same breath, or the card would say
+    ``not_evaluable`` while the quantity range kept sizing from it.
+    """
+    assert kelly_allowed_weight(BUDGET, _ctx()) is None
+    assert (
+        kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(age_days=None, anchored_at=None)))
+        is None
+    )
+    assert (
+        kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS)))
+        is None
+    )
+    # The last day inside the window still computes.
+    assert (
+        kelly_allowed_weight(BUDGET, _ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS - 1)))
+        is not None
+    )
 
 
 def test_kelly_passed_when_the_position_fits_the_edge() -> None:
-    ctx = _ctx(win_rate=0.6, payoff_ratio=2.0, position_market_value_twd=50_000.0)
+    ctx = _ctx(kelly=kelly_inputs(0.6, 2.0), position_market_value_twd=50_000.0)
     check = _check(ctx, "kelly_fraction")
     assert check.status == "passed"
     assert check.threshold == pytest.approx(0.1)
 
 
 def test_kelly_violated_when_the_position_exceeds_the_edge() -> None:
-    ctx = _ctx(win_rate=0.6, payoff_ratio=1.0, position_market_value_twd=80_000.0)
+    ctx = _ctx(kelly=kelly_inputs(0.6, 1.0), position_market_value_twd=80_000.0)
     check = _check(ctx, "kelly_fraction")
     assert check.status == "violated"
     assert check.observed == pytest.approx(0.08)
@@ -679,8 +702,442 @@ def test_kelly_violated_when_the_position_exceeds_the_edge() -> None:
 
 
 def test_kelly_not_evaluable_without_position_weight() -> None:
-    ctx = _ctx(win_rate=0.6, payoff_ratio=2.0, position_market_value_twd=None)
+    ctx = _ctx(kelly=kelly_inputs(0.6, 2.0), position_market_value_twd=None)
     assert _status(ctx, "kelly_fraction") == "not_evaluable"
+
+
+# --- Cap 5's boundary with the storage layer (約束 12/13/36/37) --------------
+
+
+def test_the_freshness_window_matches_the_one_the_storage_layer_publishes() -> None:
+    """Two declarations of one window, pinned equal.
+
+    ``limits.py`` may not import ``app/kelly`` (約束 12) and ``app/kelly`` may not
+    import ``app/advice`` (約束 13), so the constant is spelled out on both
+    sides. They answer the same question -- may cap 5 still use this pair -- so
+    a drift would have the settings page calling a pair usable while the cap
+    refuses it, or the reverse.
+    """
+    assert KELLY_STALE_AFTER_DAYS == kelly_models.KELLY_STALE_AFTER_DAYS
+
+
+def test_the_source_literal_matches_the_stored_one() -> None:
+    """The same copy-not-import situation, for the值 (e)/(e-manual) branch on.
+
+    A source this layer did not recognise would fall to the ``else`` arm and
+    attach (e-manual) to an imported pair -- 落地條件 18's "掛錯" case.
+    """
+    assert set(get_args(KellyInputSource)) == set(get_args(kelly_models.KellySource))
+
+
+@pytest.mark.parametrize(
+    ("age_days", "anchored_at"), [(30, None), (None, "2026-06-30")]
+)
+def test_an_age_without_an_anchor_is_not_a_constructible_state(
+    age_days: int | None, anchored_at: str | None
+) -> None:
+    """The two are ``None`` together or not at all.
+
+    ``KellyAgeing`` only ever produces them as a pair, and the (g-2)/(g-3)
+    sentences print both. Half a pair would render one of them from nothing --
+    a date with no elapsed count, or a count anchored on nothing.
+    """
+    with pytest.raises(ValidationError):
+        KellyInputs(
+            win_rate=0.6,
+            payoff_ratio=2.0,
+            source="manual",
+            age_days=age_days,
+            anchored_at=anchored_at,
+        )
+
+
+def test_the_risk_layer_never_imports_the_kelly_package() -> None:
+    """約束 12: no clock, no database, no storage types in this module."""
+    imported = {
+        (node.module or "")
+        for node in ast.walk(ast.parse(Path(limits.__file__).read_text(encoding="utf-8")))
+        if isinstance(node, ast.ImportFrom)
+    }
+
+    assert not any(module.startswith("app.kelly") for module in imported), sorted(imported)
+    # The wording module is the one import this cap does need, and it is text
+    # with no imports of its own (``tests/test_kelly_wording.py``).
+    assert "app.api.kelly_wording" in imported
+
+
+# --- Cap 5's four not-evaluable causes, verbatim (落地條件 1 / (g-1)..(g-4)) ---
+
+
+def test_a_symbol_with_no_kelly_input_at_all_gets_g1_verbatim() -> None:
+    """(g-1): nothing entered. The one state ``kelly=None`` stands for."""
+    check = _check(_ctx(), "kelly_fraction")
+
+    assert check.status == "not_evaluable"
+    assert check.detail == (
+        "此標的尚未輸入 Kelly 所需的勝率與盈虧比（可透過手動輸入或回測帶入取得），"
+        "本條上限目前無法評估。"
+    )
+    # A refusal names no measured value (5-3): the pair is described, not shown.
+    assert "%" not in check.detail
+
+
+def test_an_expired_manual_pair_gets_g2_verbatim() -> None:
+    """(g-2): typed by hand, past the window, anchored on the write stamp."""
+    check = _check(
+        _ctx(kelly=kelly_inputs(source="manual", age_days=41, anchored_at="2026-06-13")),
+        "kelly_fraction",
+    )
+
+    assert check.status == "not_evaluable"
+    assert check.detail == (
+        "此標的的 Kelly 輸入（來源：手動輸入）已過期——上次更新於 2026-06-13，距今 41 天，"
+        "超過 30 天的新鮮期，本條上限暫不評估；請重新確認數字後更新。"
+    )
+
+
+def test_an_expired_imported_pair_gets_g3_verbatim() -> None:
+    """(g-3): imported, past the window, anchored on the OOS segment's end."""
+    check = _check(
+        _ctx(kelly=kelly_inputs(source="backtest", age_days=90, anchored_at="2026-05-25")),
+        "kelly_fraction",
+    )
+
+    assert check.status == "not_evaluable"
+    assert check.detail == (
+        "此標的的 Kelly 輸入（來源：回測帶入）已過期——樣本外區段結束於 2026-05-25，"
+        "距今 90 天，超過 30 天的新鮮期，本條上限暫不評估；"
+        "請重新執行回測並確認後更新。"
+    )
+
+
+def test_an_overridden_pair_expires_on_the_imported_anchor_and_gets_g3() -> None:
+    """``backtest_overridden`` ages from the import's anchor, so it takes (g-3).
+
+    Mirrors :func:`app.kelly.models.anchor_moment`, where ``manual`` is the only
+    source that ages from the write stamp. If the two rules disagreed, the
+    sentence would name an anchor the age was not counted from.
+    """
+    check = _check(
+        _ctx(
+            kelly=kelly_inputs(
+                source="backtest_overridden", age_days=31, anchored_at="2026-07-01"
+            )
+        ),
+        "kelly_fraction",
+    )
+
+    assert check.status == "not_evaluable"
+    assert check.detail.startswith("此標的的 Kelly 輸入（來源：回測帶入）已過期——樣本外區段結束於")
+
+
+def test_a_pair_with_no_anchor_gets_g4_verbatim_and_no_invented_date() -> None:
+    """(g-4): an imported pair with no OOS end date cannot be aged at all."""
+    check = _check(
+        _ctx(kelly=kelly_inputs(source="backtest", age_days=None, anchored_at=None)),
+        "kelly_fraction",
+    )
+
+    assert check.status == "not_evaluable"
+    assert check.detail == (
+        "此標的的 Kelly 輸入（來源：回測帶入）缺少樣本外區段結束日，本系統無法判定其新鮮度，"
+        "一律視為已過期，本條上限暫不評估；請重新執行回測並確認後更新。"
+    )
+    # 6-B: no anchor exists, so no stand-in date is invented for one.
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", check.detail)
+
+
+def test_the_freshness_window_is_interpolated_and_never_written_out() -> None:
+    """落地條件 9: the two expiry sentences carry the constant in force.
+
+    A literal 30 would leave the sentence behind the day the window moves, so
+    the assertion is that the rendered number tracks the constant rather than
+    that it reads "30".
+    """
+    for source in ("manual", "backtest"):
+        detail = _check(
+            _ctx(kelly=kelly_inputs(source=source, age_days=999)),
+            "kelly_fraction",
+        ).detail
+        assert f"超過 {KELLY_STALE_AFTER_DAYS} 天的新鮮期" in detail
+
+
+def test_the_anchor_is_a_plain_date_and_never_an_iso_datetime() -> None:
+    """6-A: a padded time of day would be precision the measurement lacks."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source="manual", age_days=60, anchored_at="2026-06-01")),
+        "kelly_fraction",
+    ).detail
+
+    assert "2026-06-01" in detail
+    assert "T" not in detail
+    assert "+00:00" not in detail and "Z" not in detail
+
+
+def test_the_boundary_day_expires_and_the_day_before_it_does_not() -> None:
+    """``>=`` at the window, the same direction every other cap breaches in."""
+    inside = _check(
+        _ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS - 1)), "kelly_fraction"
+    )
+    outside = _check(_ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS)), "kelly_fraction")
+
+    assert inside.status != "not_evaluable"
+    assert outside.status == "not_evaluable"
+    assert "已過期" in outside.detail
+
+
+# --- (e) / (e-manual) / (a-2): what travels with a shown win rate ------------
+
+
+@pytest.mark.parametrize("status_source", ["backtest"])
+def test_a_shown_backtest_win_rate_carries_e_verbatim(status_source: str) -> None:
+    """落地條件 11/18: a sampled frequency gets (e), and only (e)."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source=status_source), position_market_value_twd=50_000.0),  # type: ignore[arg-type]
+        "kelly_fraction",
+    ).detail
+
+    assert wording.KELLY_WIN_RATE_IS_NOT_PROBABILITY in detail
+    assert wording.KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY not in detail
+
+
+@pytest.mark.parametrize("source", ["manual", "backtest_overridden"])
+def test_a_shown_hand_keyed_win_rate_carries_e_manual_verbatim(source: str) -> None:
+    """落地條件 18: a hand-keyed pair is no sample frequency, so (e) would lie."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(source=source), position_market_value_twd=50_000.0),  # type: ignore[arg-type]
+        "kelly_fraction",
+    ).detail
+
+    assert wording.KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY in detail
+    assert wording.KELLY_WIN_RATE_IS_NOT_PROBABILITY not in detail
+
+
+def test_the_two_source_sentences_are_mutually_exclusive_and_exhaustive() -> None:
+    """落地條件 18, as a property over every source there is.
+
+    "掛空或掛錯即 BLOCKING": exactly one of the two must be attached, for each of
+    the three sources and in both verdict states.
+    """
+    sources = get_args(KellyInputSource)
+    assert set(sources) == {"manual", "backtest", "backtest_overridden"}
+
+    for source in sources:
+        for held in (50_000.0, 200_000.0):  # passed, then violated
+            detail = _check(
+                _ctx(kelly=kelly_inputs(source=source), position_market_value_twd=held),
+                "kelly_fraction",
+            ).detail
+            attached = [
+                sentence
+                for sentence in (
+                    wording.KELLY_WIN_RATE_IS_NOT_PROBABILITY,
+                    wording.KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
+                )
+                if sentence in detail
+            ]
+            assert len(attached) == 1, (source, held, attached)
+
+
+def test_neither_source_sentence_is_attached_to_a_refusal() -> None:
+    """A cap that used no number has no shown win rate to qualify (5-3)."""
+    for kelly in (None, kelly_inputs(age_days=99), kelly_inputs(age_days=None, anchored_at=None)):
+        detail = _check(_ctx(kelly=kelly), "kelly_fraction").detail
+        assert wording.KELLY_WIN_RATE_IS_NOT_PROBABILITY not in detail
+        assert wording.KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY not in detail
+        assert wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE not in detail
+
+
+def test_the_no_edge_flag_attaches_a2_verbatim_after_the_source_sentence() -> None:
+    """(a-2) 落地: 約束 36's boolean branch, in the order the module documents."""
+    detail = _check(
+        _ctx(
+            kelly=kelly_inputs(ci_includes_no_edge=True),
+            position_market_value_twd=50_000.0,
+        ),
+        "kelly_fraction",
+    ).detail
+
+    assert wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE in detail
+    assert detail.index(wording.KELLY_WIN_RATE_IS_NOT_PROBABILITY) < detail.index(
+        wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE
+    )
+    # 落地條件 7: (a-2) is the flag version precisely because no interval number
+    # is shown beside it, and the banned framings may not appear either.
+    for banned in ("信賴區間", "信心水準", "有 95% 的機率落在", "建議比例", "最佳倉位"):
+        assert banned not in detail
+
+
+def test_a_clear_interval_attaches_nothing() -> None:
+    """The flag asserts a finding; a false one is not a finding of the reverse."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(ci_includes_no_edge=False), position_market_value_twd=50_000.0),
+        "kelly_fraction",
+    ).detail
+
+    assert wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE not in detail
+
+
+def test_the_detail_is_one_assembled_string() -> None:
+    """The verdict, the numbers and the disclosures reach the card as one field."""
+    check = _check(
+        _ctx(kelly=kelly_inputs(ci_includes_no_edge=True), position_market_value_twd=50_000.0),
+        "kelly_fraction",
+    )
+
+    assert isinstance(check.detail, str)
+    assert check.detail.startswith("以勝率 ")
+    assert check.detail.endswith(wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE)
+
+
+# --- Precision of the two shown numbers (分歧① required 5) -------------------
+
+
+def test_the_shown_pair_is_printed_at_a_precision_the_sample_supports() -> None:
+    """分歧① required 5: ``:g``'s six significant digits were false precision."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(0.625, 1.8327429), position_market_value_twd=50_000.0),
+        "kelly_fraction",
+    ).detail
+
+    assert "以勝率 62.5%、盈虧比 1.83 計算" in detail
+    # The rejected rendering, pinned so a revert is visible.
+    assert "1.83274" not in detail
+    assert "62.50%" not in detail
+
+
+def test_the_two_shown_numbers_keep_a_fixed_width() -> None:
+    """A whole-number ratio keeps its decimals; ``:g`` would drop them."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(0.6, 2.0), position_market_value_twd=50_000.0), "kelly_fraction"
+    ).detail
+
+    assert "以勝率 60.0%、盈虧比 2.00 計算" in detail
+
+
+# --- f*<=0: the cap that allows nothing (D-5, 第六輪 任務 1/2) ---------------
+
+#: w=0.3, b=1.0 -> f* = 0.3 - 0.7/1.0 = -0.4, so the allowance is exactly 0.
+NO_EDGE = (0.3, 1.0)
+
+
+def test_a_non_positive_edge_is_violated_with_its_own_sentence() -> None:
+    """D-5 / 條件 40: the dedicated sentence, and none of the general phrasing.
+
+    The ordinary wording ("目前佔比 X 已達或超過該上限") would be read as a demand
+    to sell down to a cap of zero, which is the reading D-5 forbids the cap from
+    producing.
+    """
+    check = _check(_ctx(kelly=kelly_inputs(*NO_EDGE)), "kelly_fraction")
+
+    assert check.status == "violated"
+    assert check.detail == wording.KELLY_NON_POSITIVE_FRACTION_DETAIL
+    assert "已達或超過該上限" not in check.detail
+    assert check.threshold == 0.0
+    # 約束 11: no operating verb of any kind in this branch.
+    for banned in ("建議", "應該", "賣出", "清倉", "減碼至", "最佳倉位"):
+        assert banned not in check.detail
+
+
+def test_the_non_positive_sentence_appears_on_no_other_branch() -> None:
+    """條件 40 反向斷言: f*>0, and every not-evaluable cause, must not carry it."""
+    others = [
+        _ctx(kelly=kelly_inputs(0.6, 2.0)),
+        _ctx(kelly=kelly_inputs(0.6, 2.0), position_market_value_twd=200_000.0),
+        _ctx(),
+        _ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS)),
+        _ctx(kelly=kelly_inputs(age_days=None, anchored_at=None)),
+    ]
+    for ctx in others:
+        detail = _check(ctx, "kelly_fraction").detail
+        assert wording.KELLY_NON_POSITIVE_FRACTION_DETAIL not in detail
+
+
+def test_the_non_positive_sentence_precedes_the_interval_flag() -> None:
+    """條件 41: 任務 1 句在前、(a-2) 在後，順序屬定稿一部分."""
+    detail = _check(
+        _ctx(kelly=kelly_inputs(*NO_EDGE, ci_includes_no_edge=True)), "kelly_fraction"
+    ).detail
+
+    assert detail.startswith(wording.KELLY_NON_POSITIVE_FRACTION_DETAIL)
+    assert detail.endswith(wording.KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE)
+
+
+def test_a_non_positive_edge_is_not_listed_as_missing_data() -> None:
+    """條件 35: the skipped sentence says the cap lacked data; here it had data.
+
+    Cap 5 computed from a real pair and arrived at a definite zero, so putting
+    it in that list would be a false statement -- and one that sits next to the
+    (任務 2) sentence saying the opposite.
+    """
+    # Every other cap is evaluable here, so cap 5 is the only candidate for the
+    # skipped list -- and the list must come out empty, leaving no "missing
+    # data" sentence on the card at all.
+    ctx = _ctx(
+        sector="半導體業",
+        sector_market_value_twd=200_000.0,
+        kelly=kelly_inputs(*NO_EDGE),
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action="add")
+
+    assert quantity is not None
+    assert "缺少可用資料" not in quantity.basis
+    assert "未參與這個區間的計算" not in quantity.basis
+    # It is disclosed, just by the sentence that describes what actually happened.
+    assert wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE in quantity.basis
+
+
+def test_an_unusable_pair_is_still_listed_as_missing_data() -> None:
+    """The other side of 條件 35: absent or expired really is missing data."""
+    for kelly in (None, kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS)):
+        quantity = suggest_quantity_range(BUDGET, _ctx(kelly=kelly), action="add")
+        assert quantity is not None
+        assert "缺少可用資料" in quantity.basis
+        assert LIMIT_NAMES["kelly_fraction"] in quantity.basis
+        assert wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE not in quantity.basis
+
+
+@pytest.mark.parametrize("action", ["reduce", "stop_loss", "take_profit"])
+def test_the_zero_allowance_sentence_travels_with_the_sell_side_range(action: str) -> None:
+    """條件 36/37: the reachable case, verbatim, as a whole sentence at the end."""
+    ctx = _ctx(
+        kelly=kelly_inputs(*NO_EDGE),
+        position_market_value_twd=200_000.0,
+        quantity=2_000.0,
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action=action)
+
+    assert quantity is not None
+    assert wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE in quantity.basis
+    assert quantity.basis.endswith(wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE)
+    # A whole sentence appended after a full stop, never spliced into another.
+    head = quantity.basis[: -len(wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE)]
+    assert head.endswith("。")
+
+
+@pytest.mark.parametrize("action", ["reduce", "stop_loss", "take_profit"])
+def test_cap_5_is_never_the_binding_cap_on_a_sell_side_range(action: str) -> None:
+    """條件 34 反向斷言: no sell quantity may be derived from a zero allowance."""
+    ctx = _ctx(
+        kelly=kelly_inputs(*NO_EDGE),
+        position_market_value_twd=200_000.0,
+        quantity=2_000.0,
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action=action)
+
+    assert quantity is not None
+    assert f"「{LIMIT_NAMES['kelly_fraction']}」這條上限" not in quantity.basis
+    assert "kelly_fraction" not in notional_caps(BUDGET, ctx)
+
+
+def test_a_positive_edge_carries_no_zero_allowance_sentence() -> None:
+    """The sentence states a finding; a cap that did size something has none."""
+    quantity = suggest_quantity_range(
+        BUDGET, _ctx(kelly=kelly_inputs(0.6, 2.0)), action="add"
+    )
+
+    assert quantity is not None
+    assert wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE not in quantity.basis
 
 
 # --- Notional caps and quantity ranges --------------------------------------
@@ -700,8 +1157,42 @@ def test_notional_caps_are_empty_without_equity() -> None:
     assert notional_caps(BUDGET, _ctx(total_equity_twd=None)) == {}
 
 
+def test_a_non_positive_edge_is_excluded_from_the_notional_caps() -> None:
+    """ADR-0006 D-5: f*<=0 leaves cap 5 out of the sizing inputs entirely.
+
+    Not "included as 0". A zero binding cap is turned into a share count by
+    :func:`suggest_quantity_range`, i.e. into a "sell the whole holding"
+    quantity derived from an estimate whose only content is "no edge was
+    measured". The cap still reports ``violated``; it just sizes nothing, and
+    the fifth batch's f*<=0 sentence rests on this being true of the code.
+    """
+    # w=0.3, b=1.0 -> f* = 0.3 - 0.7/1.0 = -0.4.
+    ctx = _ctx(kelly=kelly_inputs(*NO_EDGE))
+    full = kelly_fraction(*NO_EDGE)
+    assert full is not None and full <= 0.0
+
+    caps = notional_caps(BUDGET, ctx)
+
+    assert "kelly_fraction" not in caps
+    assert caps.get("kelly_fraction") != 0.0
+    # The verdict itself is unaffected: the cap is still reported, still binding.
+    assert _status(ctx, "kelly_fraction") == "violated"
+
+
+def test_an_unusable_pair_is_excluded_from_the_notional_caps() -> None:
+    """No sizing may be derived from a cap the card reports ``not_evaluable``."""
+    for kelly in (
+        None,
+        kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS),
+        kelly_inputs(age_days=None, anchored_at=None),
+    ):
+        ctx = _ctx(kelly=kelly)
+        assert _status(ctx, "kelly_fraction") == "not_evaluable"
+        assert "kelly_fraction" not in notional_caps(BUDGET, ctx)
+
+
 def test_notional_caps_include_sector_and_kelly_when_available() -> None:
-    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, win_rate=0.6, payoff_ratio=2.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, kelly=kelly_inputs(0.6, 2.0))
     caps = notional_caps(BUDGET, ctx)
     # Sector: 300,000 cap less the 150,000 held by other names in the sector.
     assert caps["sector_weight"] == pytest.approx(150_000.0)
@@ -931,7 +1422,7 @@ def test_every_sell_action_reuses_the_same_approved_template() -> None:
 
 def test_the_skipped_note_is_absent_when_every_cap_was_evaluated() -> None:
     # Nothing was left out, so there is no sentence saying anything was.
-    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, win_rate=0.6, payoff_ratio=2.0)
+    ctx = _ctx(sector="半導體業", sector_market_value_twd=200_000.0, kelly=kelly_inputs(0.6, 2.0))
     quantity = suggest_quantity_range(BUDGET, ctx, action="add")
     assert quantity is not None
     assert "缺少可用資料" not in quantity.basis

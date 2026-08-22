@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-from app.advice.limits import SelfReportedNetWorth
+from app.advice.limits import KellyInputs, KellyInputSource, SelfReportedNetWorth
 from app.data.interface import DataStatus
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
@@ -27,6 +27,9 @@ _LAST_BAR = date(2026, 7, 24)
 #: The shape the settings store actually writes: an aware UTC timestamp, not a
 #: bare date, so the disclosure formatting is exercised on a realistic value.
 _REPORTED_AT = datetime(2026, 7, 24, 15, 51, 56, 15754, tzinfo=UTC)
+#: The Kelly ageing anchor as cap 5 receives it: a plain calendar day (6-A),
+#: never an ISO datetime.
+_KELLY_ANCHOR = "2026-07-24"
 
 #: The aligned date index the real indicators publish. An indicator that
 #: reported ``insufficient_data`` publishes an empty one, as it does in
@@ -177,6 +180,34 @@ def reported_net_worth(
         amount_twd=amount_twd,
         reported_at=(_REPORTED_AT - timedelta(days=age_days)).isoformat(),
         age_days=age_days,
+    )
+
+
+def kelly_inputs(
+    win_rate: float = 0.6,
+    payoff_ratio: float = 2.0,
+    *,
+    source: KellyInputSource = "backtest",
+    age_days: int | None = 0,
+    anchored_at: str | None = _KELLY_ANCHOR,
+    ci_includes_no_edge: bool = False,
+    **overrides: Any,
+) -> KellyInputs:
+    """Cap 5's input, fresh and imported by default (the evaluable case).
+
+    ``age_days`` drives the freshness rule directly, exactly as
+    :func:`reported_net_worth` does for cap 3, so a test crosses the 30-day
+    boundary without a fake clock. Passing ``age_days=None`` **and**
+    ``anchored_at=None`` produces the unanchorable row (g-4) describes.
+    """
+    return KellyInputs(
+        win_rate=win_rate,
+        payoff_ratio=payoff_ratio,
+        source=source,
+        age_days=age_days,
+        anchored_at=anchored_at,
+        ci_includes_no_edge=ci_includes_no_edge,
+        **overrides,
     )
 
 

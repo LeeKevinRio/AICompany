@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.kelly import (
+    ci_includes_no_edge,
+    kelly_inputs_by_symbol,
+    kelly_inputs_for,
+)
 from app.kelly.models import (
     KELLY_SOFT_NOTICE_DAYS,
     KELLY_STALE_AFTER_DAYS,
@@ -89,7 +94,9 @@ def test_a_non_positive_payoff_ratio_is_a_422(
     )
 
     assert response.status_code == 422
-    assert "賠率" in response.text
+    # 第五輪微批: 「賠率」→「盈虧比」, the term the rest of the Kelly surface uses.
+    assert "盈虧比" in response.text
+    assert "賠率" not in response.text
     assert api_harness.kelly_inputs.get("2330", "TW") is None
 
 
@@ -317,3 +324,91 @@ def test_the_import_endpoint_takes_a_backtest_request_not_a_pair(
     assert response.status_code == 422
     assert api_harness.kelly_inputs.get("2330", "TW") is None
     assert api_harness.kelly_attempts.k_observed("2330", "TW") == 0
+
+
+# ---------------------------------------------------------------------------
+# The assembly point that feeds cap 5 (約束 36 / D-8)
+# ---------------------------------------------------------------------------
+
+
+def _row(**overrides: Any) -> KellyInputRecord:
+    values: dict[str, Any] = {
+        "symbol": "2330",
+        "market": "TW",
+        "win_rate": 0.6,
+        "payoff_ratio": 2.0,
+        "source": "backtest",
+        "oos_end_date": "2026-06-30",
+    }
+    values.update(overrides)
+    return KellyInputRecord(**values)
+
+
+def test_the_no_edge_flag_is_true_only_when_the_interval_reaches_zero(
+    api_harness: ApiHarness,
+) -> None:
+    """約束 36: one boolean, computed here, from ``f_star_ci_low <= 0``."""
+    api_harness.kelly_inputs.upsert(_row(f_star_ci_low=-0.02, f_star_ci_high=0.31))
+    assert ci_includes_no_edge(_stored(api_harness, "2330")) is True
+
+    api_harness.kelly_inputs.upsert(_row(f_star_ci_low=0.0, f_star_ci_high=0.31))
+    assert ci_includes_no_edge(_stored(api_harness, "2330")) is True
+
+    api_harness.kelly_inputs.upsert(_row(f_star_ci_low=0.04, f_star_ci_high=0.31))
+    assert ci_includes_no_edge(_stored(api_harness, "2330")) is False
+
+
+def test_a_row_with_no_interval_at_all_is_not_flagged(api_harness: ApiHarness) -> None:
+    """Every manual pair. The flag reports a finding, not the absence of one."""
+    api_harness.kelly_inputs.upsert(
+        _row(source="manual", oos_end_date=None, strategy_id=None)
+    )
+
+    assert ci_includes_no_edge(_stored(api_harness, "2330")) is False
+
+
+def test_the_feed_returns_none_for_a_symbol_with_no_row(api_harness: ApiHarness) -> None:
+    """(g-1)'s input state: absence, distinct from an expired row."""
+    assert kelly_inputs_for(api_harness.kelly_inputs, "2330", "TW") is None
+
+
+def test_the_feed_carries_the_flag_and_the_ageing_into_the_risk_layer(
+    api_harness: ApiHarness,
+) -> None:
+    api_harness.kelly_inputs.upsert(_row(f_star_ci_low=-0.02, f_star_ci_high=0.31))
+
+    kelly = kelly_inputs_for(api_harness.kelly_inputs, "2330", "TW")
+
+    assert kelly is not None
+    assert kelly.ci_includes_no_edge is True
+    assert kelly.source == "backtest"
+    assert kelly.anchored_at == "2026-06-30"
+
+
+def test_the_feed_normalises_the_symbol_the_way_the_book_groups_holdings(
+    api_harness: ApiHarness,
+) -> None:
+    """D-1: one ticker, one spelling, on both sides of the join."""
+    api_harness.kelly_inputs.upsert(_row(symbol="aapl", market="US"))
+
+    assert kelly_inputs_for(api_harness.kelly_inputs, "aapl", "US") is not None
+    assert ("AAPL", "US") in kelly_inputs_by_symbol(api_harness.kelly_inputs)
+
+
+def test_the_bulk_feed_keys_every_stored_pair_by_symbol_and_market(
+    api_harness: ApiHarness,
+) -> None:
+    api_harness.kelly_inputs.upsert(_row())
+    api_harness.kelly_inputs.upsert(_row(symbol="2454", f_star_ci_low=-0.1))
+
+    built = kelly_inputs_by_symbol(api_harness.kelly_inputs)
+
+    assert set(built) == {("2330", "TW"), ("2454", "TW")}
+    assert built[("2454", "TW")].ci_includes_no_edge is True
+    assert built[("2330", "TW")].ci_includes_no_edge is False
+
+
+def _stored(api_harness: ApiHarness, symbol: str) -> Any:
+    row = api_harness.kelly_inputs.get(symbol, "TW")
+    assert row is not None
+    return row

@@ -29,6 +29,16 @@ Currency: book-level amounts are TWD (the reporting currency, as in
 and are converted with ``fx_to_twd`` at the single point where share sizing
 happens. Values here are ``float`` (like the signal layer), not ``Decimal``:
 these are indicative ranges derived from statistics, not accounting figures.
+
+Cap 5 imports its Chinese sentences from :mod:`app.api.kelly_wording` rather
+than spelling them out here. That module imports nothing at all -- it is text
+and nothing else -- so the direction costs no coupling, and it is what 落地條件
+2 requires: every risk-approved Kelly sentence has exactly one copy in the repo,
+and a second one retyped into this file would drift away from the approved
+inventory without failing a build. What this module may **not** import is
+``app/kelly`` (約束 12): the pair reaches cap 5 already aged, through
+:class:`KellyInputs`, because a risk cap that could read the clock or the
+database would be a risk cap whose verdict depends on when it was asked.
 """
 
 from __future__ import annotations
@@ -39,7 +49,19 @@ from datetime import UTC, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.api.kelly_wording import (
+    KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE,
+    KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
+    KELLY_NON_POSITIVE_FRACTION_DETAIL,
+    KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED,
+    KELLY_NOT_EVALUABLE_MANUAL_EXPIRED,
+    KELLY_NOT_EVALUABLE_NO_INPUT,
+    KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    KELLY_WIN_RATE_IS_NOT_PROBABILITY,
+    KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
+)
 
 LimitStatus = Literal["passed", "violated", "not_evaluable"]
 
@@ -124,6 +146,23 @@ MAX_GROSS_EXPOSURE_REASON = "此處容許適度槓桿，但不容許 2 倍的總
 #: sign-off. Never widen either one to make a test or a demo pass.
 NET_WORTH_STALE_AFTER_DAYS = 30
 NET_WORTH_SOFT_NOTICE_DAYS = 7
+
+#: How long a Kelly input may drive cap 5 (D-4). A **separate** constant from
+#: the net-worth pair above even though the two share a value today: they
+#: answer different questions and either may move without the other (the same
+#: reason :mod:`app.kelly.models` gives for its own pair).
+#:
+#: It is declared here, and not imported, because 約束 12 keeps ``app/kelly``
+#: out of the risk layer -- and it is *used* here, not in the builder, because
+#: D-6 puts the expiry decision inside :func:`_check_kelly_fraction`, exactly
+#: where :data:`NET_WORTH_EXPIRED_DETAIL` puts the net worth's. The age itself
+#: is handed in: this module owns no clock.
+#:
+#: ``app.kelly.models.KELLY_STALE_AFTER_DAYS`` is the same window seen from the
+#: storage side, so the two are pinned equal by ``tests/test_advice_limits.py``.
+#: They may not drift: cap 5 would then refuse a pair the settings page still
+#: shows as usable, or keep computing from one it calls expired.
+KELLY_STALE_AFTER_DAYS = 30
 
 #: AC-12.3: the states this cap can be missing an industry in are different
 #: problems and must not share a sentence. ``sector is None`` covers five of
@@ -476,6 +515,89 @@ class SelfReportedNetWorth(BaseModel):
     age_days: int = Field(ge=0)
 
 
+#: The three ways a stored Kelly pair can have come about, spelled out again
+#: rather than imported from :data:`app.kelly.models.KellySource`: 約束 12 keeps
+#: ``app/kelly`` out of this module. ``tests/test_advice_limits.py`` asserts the
+#: two literals hold the same values, so the copy cannot drift into a source
+#: this layer would not recognise -- and mis-recognising one is not cosmetic,
+#: because it decides whether (e) or (e-manual) is attached to a shown win rate
+#: (落地條件 18: 互斥且窮盡).
+KellyInputSource = Literal["manual", "backtest", "backtest_overridden"]
+
+
+class KellyInputs(BaseModel):
+    """The stored Kelly pair as cap 5 sees it: aged, sourced, and nothing more.
+
+    One field on :class:`PortfolioContext` replaces the two bare ``win_rate`` /
+    ``payoff_ratio`` columns cap 5 used to read (D-6). The reason is the pair
+    was never the whole input: whether it may be used at all depends on where it
+    came from and how old it is, and two loose floats let a caller supply the
+    numbers while silently dropping the facts that qualify them.
+
+    What is **not** here is as deliberate as what is. The stored interval
+    bounds (for p and for ``f*``), the bootstrap parameters and the rest of the
+    sample structure stay in storage (約束 34/36): they are disclosure material,
+    and a risk layer holding them would be one edit away from clamping a cap
+    with them. The single fact cap 5 gets from that family is
+    :attr:`ci_includes_no_edge`, already reduced to a boolean by
+    ``app/api/kelly.py``, because this module may branch but may not compute a
+    statistic of any kind (約束 12/36).
+
+    ``age_days`` is handed in for the reason :class:`SelfReportedNetWorth` gives:
+    no clock lives here. **Whether that age is too old is decided here though**
+    (D-6), against :data:`KELLY_STALE_AFTER_DAYS`, so the same rule that names
+    the freshness window also enforces it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The effective pair -- what the user's cap is actually computed from. For
+    #: ``backtest_overridden`` these are the hand-keyed values, not the imported
+    #: ones (約束 4), which is why the source has to travel with them.
+    win_rate: float = Field(ge=0.0, le=1.0)
+    payoff_ratio: float = Field(gt=0.0)
+    source: KellyInputSource
+    #: Whole days since :attr:`anchored_at`, or ``None`` when the row has no
+    #: anchor to count from (an imported pair carrying no OOS end date). The
+    #: two are ``None`` together, and ``None`` is treated as expired rather than
+    #: as young: an age nobody could establish is not evidence of freshness.
+    age_days: int | None = Field(default=None, ge=0)
+    #: The day the age counts from, as a plain ``YYYY-MM-DD`` calendar date and
+    #: never an ISO datetime (6-A). A backtest anchor's time of day is padded,
+    #: so showing it would be precision the measurement does not have; the
+    #: builder in :mod:`app.advice.book` renders it, and the (g-2)/(g-3)
+    #: sentences interpolate it verbatim.
+    anchored_at: str | None = None
+    #: Which strategy produced the pair; ``None`` for a hand-typed one (約束 2).
+    strategy_id: str | None = None
+    #: The out-of-sample segment the imported pair was measured over. 1-A wants
+    #: both dates on the same screen as (e), so they travel with the pair.
+    oos_start_date: str | None = None
+    oos_end_date: str | None = None
+    #: Complete round trips behind the estimate -- never a fill-level count
+    #: (約束 25: fill counts are inflated by the daily rebalance).
+    oos_round_trips: int | None = Field(default=None, ge=0)
+    #: Whether the stored ``f*`` interval reaches zero or below, computed by
+    #: ``app/api/kelly.py`` (約束 36). True means the interval covers "no edge",
+    #: and cap 5 attaches (a-2) to say so.
+    #: ``False`` also covers "no interval was ever stored" (every manual pair):
+    #: the flag asserts that the interval was seen to exclude zero only when it
+    #: is ``True``, and the sentence it gates is worded as a positive finding.
+    ci_includes_no_edge: bool = False
+
+    @model_validator(mode="after")
+    def _age_and_anchor_travel_together(self) -> KellyInputs:
+        """An age with no anchor (or an anchor with no age) is not a state.
+
+        ``app.kelly.models.KellyAgeing`` produces the two together or neither,
+        and the (g-2)/(g-3) sentences print both. Half a pair would leave one
+        of them rendered from nothing.
+        """
+        if (self.age_days is None) != (self.anchored_at is None):
+            raise ValueError("Kelly 輸入的錨點日期與計齡天數必須同時存在或同時不存在")
+        return self
+
+
 class PortfolioContext(BaseModel):
     """Everything the caps need about one symbol and the book around it.
 
@@ -523,9 +645,14 @@ class PortfolioContext(BaseModel):
     #: the caller did not say, and cap 2 then falls back to the single thing
     #: this model can establish on its own (see :func:`_inferred_sector_gap`).
     sector_gap: SectorGap | None = None
-    #: Kelly inputs. No source produces them yet; absent -> ``not_evaluable``.
-    win_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    payoff_ratio: float | None = Field(default=None, gt=0.0)
+    #: Cap 5's input, as one field rather than two loose floats (D-6). ``None``
+    #: means **no pair has ever been entered for this symbol**, which is a
+    #: different statement from "the pair is too old to use" -- the row is still
+    #: there in that case and arrives here with its age, so cap 5 can say which
+    #: of the two it is. Built by :func:`app.advice.book.kelly_inputs_of` from
+    #: the stored row; ``None`` for every hand-assembled context, which is why
+    #: the field defaults to it.
+    kelly: KellyInputs | None = None
 
     def position_weight(self) -> float | None:
         """This symbol's share of total equity, or ``None`` if not computable."""
@@ -604,11 +731,28 @@ def kelly_fraction(win_rate: float, payoff_ratio: float) -> float | None:
     return win_rate - (1.0 - win_rate) / payoff_ratio
 
 
+def kelly_usable(kelly: KellyInputs | None) -> bool:
+    """Whether cap 5 may compute from this pair at all (D-4/D-6).
+
+    Three states say no, and they are three different sentences on the card
+    ((g-1) to (g-4)): no pair was ever entered, the pair has no anchor to be
+    aged from, or it is past :data:`KELLY_STALE_AFTER_DAYS`. The predicate is
+    public and shared so :func:`kelly_allowed_weight`,
+    :func:`_check_kelly_fraction` and :func:`notional_caps` cannot disagree
+    about which pairs are live -- a sizing suggestion derived from a pair the
+    card reports as ``not_evaluable`` is the failure this prevents.
+    """
+    if kelly is None or kelly.age_days is None:
+        return False
+    return kelly.age_days < KELLY_STALE_AFTER_DAYS
+
+
 def kelly_allowed_weight(budget: RiskBudget, ctx: PortfolioContext) -> float | None:
     """Position weight allowed by fractional Kelly, or ``None`` without inputs."""
-    if ctx.win_rate is None or ctx.payoff_ratio is None:
+    kelly = ctx.kelly
+    if not kelly_usable(kelly) or kelly is None:  # narrow for the type checker
         return None
-    full = kelly_fraction(ctx.win_rate, ctx.payoff_ratio)
+    full = kelly_fraction(kelly.win_rate, kelly.payoff_ratio)
     if full is None:  # pragma: no cover - the field validators already pin the domain
         return None
     fractional = max(full, 0.0) * budget.kelly_fraction_cap
@@ -637,6 +781,36 @@ def format_percent(value: float) -> str:
     reader sees both strings on the same card.
     """
     return f"{value * 100:.2f}%"
+
+
+def format_win_rate(value: float) -> str:
+    """Cap 5's win rate, at a precision the sample behind it can support.
+
+    Not :func:`format_percent`, and the difference is the point. The other caps
+    print ratios of money, which are continuous; this one prints a **count
+    ratio**. ``MIN_OOS_ROUND_TRIPS`` is 20, so the finest step an imported
+    estimate can move in is 1/20 = 5 percentage points, and a hand-typed pair is
+    an estimate the user rounded themselves. Two decimals of a percentage
+    (``62.50%``) claims resolution to a hundredth of a point, roughly five
+    hundred times finer than the measurement -- the false precision 分歧①
+    required 5 struck at in the payoff ratio's ``:g``. One decimal is still
+    generous and is kept only so the digit does not read as a rounded integer.
+    """
+    return f"{value * 100:.1f}%"
+
+
+def format_payoff_ratio(value: float) -> str:
+    """Cap 5's payoff ratio, fixed at two decimals.
+
+    ``:g`` printed six significant digits of a quotient of two sample means
+    (``1.83274``), which 分歧① required 5 named as false precision: at n=20 the
+    third decimal is noise. Two decimals is the shape the ratio is read in and
+    is the same fixed-width promise :func:`format_win_rate` makes -- fixed,
+    because ``:g`` also switches to scientific notation on extreme inputs and
+    silently drops trailing zeros, so the same quantity would appear in three
+    different shapes on three different cards.
+    """
+    return f"{value:.2f}"
 
 
 def _breaches(observed: float, threshold: float) -> bool:
@@ -821,33 +995,116 @@ def _check_per_trade_loss(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     )
 
 
+def _kelly_not_evaluable_detail(kelly: KellyInputs | None) -> str:
+    """Which of the four (g) sentences this unusable pair calls for.
+
+    The four are one per *cause*, and the causes are genuinely different things
+    to tell someone: nothing was ever entered, a typed pair went stale, an
+    imported pair went stale, or an imported pair cannot be aged at all. Each is
+    risk-approved verbatim and imported whole; nothing here composes or edits
+    one, and the only values interpolated are the ones the approval names.
+
+    The manual/backtest split mirrors :func:`app.kelly.models.anchor_moment`
+    exactly -- ``manual`` ages from the write stamp, every other source from the
+    end of the out-of-sample segment -- because the two sentences describe the
+    anchor ("上次更新於" vs "樣本外區段結束於") and would misstate it if the two
+    rules diverged. ``backtest_overridden`` therefore takes (g-3): its effective
+    numbers are hand-keyed, but the row it ages from is still the import's.
+    """
+    if kelly is None:
+        return KELLY_NOT_EVALUABLE_NO_INPUT
+    if kelly.age_days is None or kelly.anchored_at is None:
+        # No anchor: only reachable for an imported pair, since a manual one
+        # always carries the server's write stamp. (g-4) names that source and
+        # inserts no placeholder -- there is no date to put in one (6-B).
+        return KELLY_NOT_EVALUABLE_NO_OOS_END_DATE
+    template = (
+        KELLY_NOT_EVALUABLE_MANUAL_EXPIRED
+        if kelly.source == "manual"
+        else KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED
+    )
+    return template.format(
+        anchored_on=kelly.anchored_at,
+        age_days=kelly.age_days,
+        # 落地條件 9: the window is interpolated from the constant in force,
+        # never written out, so moving it cannot leave the sentence behind.
+        days=KELLY_STALE_AFTER_DAYS,
+    )
+
+
+def _kelly_disclosures(kelly: KellyInputs) -> str:
+    """The sentences that must travel with a *shown* win rate, in order.
+
+    Two attachments, both mandatory when their condition holds:
+
+    * (e) or (e-manual), by source. 落地條件 18 makes them mutually exclusive and
+      exhaustive: a sampled frequency and a number the user typed are different
+      claims, and (e)'s opening clause is simply false of the second. The branch
+      reads :attr:`KellyInputs.source` and nothing else -- the source is fed in
+      with the pair, and deriving it from anything else here would be a second
+      channel that could disagree with the stored row.
+    * (a-2), when the f* interval covers "no edge". 約束 36 allows this module a
+      boolean branch and no more, which is exactly what this is.
+
+    Order is (e)/(e-manual) first: it qualifies the win rate printed immediately
+    before it, and (a-2) then qualifies the estimate as a whole.
+    """
+    parts = [
+        KELLY_WIN_RATE_IS_NOT_PROBABILITY
+        if kelly.source == "backtest"
+        else KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY
+    ]
+    if kelly.ci_includes_no_edge:
+        parts.append(KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE)
+    return "".join(parts)
+
+
 def _check_kelly_fraction(budget: RiskBudget, ctx: PortfolioContext) -> CheckResult:
+    kelly = ctx.kelly
+    if not kelly_usable(kelly) or kelly is None:  # narrow for the type checker
+        # Expiry is decided here rather than upstream (D-6), beside the sentence
+        # that reports it, exactly as NET_WORTH_EXPIRED_DETAIL is.
+        return ("not_evaluable", _kelly_not_evaluable_detail(kelly), None, None)
     allowed = kelly_allowed_weight(budget, ctx)
-    if allowed is None or ctx.win_rate is None or ctx.payoff_ratio is None:
-        return (
-            "not_evaluable",
-            "缺少勝率或盈虧比，無法計算 Kelly 部位上限（目前沒有資料來源提供這兩項輸入）。",
-            None,
-            None,
-        )
+    if allowed is None:  # pragma: no cover - kelly_usable already established it
+        return ("not_evaluable", _kelly_not_evaluable_detail(kelly), None, None)
     weight = ctx.position_weight()
+    if allowed <= 0.0:
+        # D-5: a non-positive edge is ``violated`` with a sentence of its own.
+        # It is decided before the weight is needed, because the finding does
+        # not depend on one -- the allowance is 0 whatever the holding is -- and
+        # because the general phrasing ("目前佔比 X 已達或超過該上限") reads as a
+        # demand to sell down to 0 when the cap is 0. The reported observed value
+        # is still the weight, so the card has the same two numbers as elsewhere.
+        #
+        # 條件 41: this sentence first, then (a-2) if the interval is flagged.
+        # (e)/(e-manual) are *not* attached: they qualify a win rate that was
+        # printed, and this branch prints none (落地條件 11's condition).
+        detail = KELLY_NON_POSITIVE_FRACTION_DETAIL
+        if kelly.ci_includes_no_edge:
+            detail += KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE
+        return ("violated", detail, weight, allowed)
     if weight is None:
         return ("not_evaluable", "缺少總資產或部位市值，無法比較 Kelly 部位上限。", None, allowed)
     detail_head = (
-        f"以勝率 {format_percent(ctx.win_rate)}、盈虧比 {ctx.payoff_ratio:g} 計算，"
+        f"以勝率 {format_win_rate(kelly.win_rate)}、"
+        f"盈虧比 {format_payoff_ratio(kelly.payoff_ratio)} 計算，"
         f"{budget.kelly_fraction_cap:g} 分數 Kelly 與 {format_percent(budget.kelly_position_cap)} "
         f"硬上限取小後為 {format_percent(allowed)}"
     )
+    # A single string, assembled once: the verdict clause belongs to the numbers
+    # in front of it, and the disclosures belong to the win rate just printed.
+    disclosures = _kelly_disclosures(kelly)
     if _breaches(weight, allowed):
         return (
             "violated",
-            f"{detail_head}，目前佔比 {format_percent(weight)} 已達或超過該上限。",
+            f"{detail_head}，目前佔比 {format_percent(weight)} 已達或超過該上限。{disclosures}",
             weight,
             allowed,
         )
     return (
         "passed",
-        f"{detail_head}，目前佔比 {format_percent(weight)} 低於該上限。",
+        f"{detail_head}，目前佔比 {format_percent(weight)} 低於該上限。{disclosures}",
         weight,
         allowed,
     )
@@ -879,6 +1136,19 @@ def evaluate_limits(budget: RiskBudget, ctx: PortfolioContext) -> list[LimitChec
             )
         )
     return checks
+
+
+def _kelly_allowance_is_zero(budget: RiskBudget, ctx: PortfolioContext) -> bool:
+    """Whether cap 5 has a usable pair whose allowance works out to zero.
+
+    The single expression of D-5's condition, so :func:`notional_caps` (which
+    drops the cap) and :func:`suggest_quantity_range` (which has to say that it
+    did, and must not describe it as missing data) cannot disagree about which
+    state they are in. ``False`` for a pair the cap will not use at all: that is
+    the "no usable data" case the standing skipped sentence already covers.
+    """
+    allowed = kelly_allowed_weight(budget, ctx)
+    return allowed is not None and allowed <= 0.0
 
 
 def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]:
@@ -915,8 +1185,18 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
     if max_shares is not None and price is not None:
         caps["per_trade_loss"] = max_shares * price
 
+    # D-5's exclusion rule. ``allowed`` is already ``None`` for a pair cap 5
+    # will not use (absent, unanchorable or expired), which keeps a sizing
+    # suggestion from being derived from a cap the card reports as
+    # ``not_evaluable`` -- the same guarantee the gross-exposure entry above
+    # gets from calling its own check. The extra condition is the non-positive
+    # edge: ``allowed`` is then exactly ``0``, and a zero binding cap would be
+    # turned into a share count by :func:`suggest_quantity_range` -- i.e. into a
+    # "sell the entire holding" quantity, which is trading advice derived from
+    # an estimate that says nothing more than "no edge was measured". Cap 5
+    # still reports ``violated`` in that state; it just does not size anything.
     allowed = kelly_allowed_weight(budget, ctx)
-    if allowed is not None:
+    if allowed is not None and allowed > 0.0:
         caps["kelly_fraction"] = allowed * equity
 
     return caps
@@ -996,7 +1276,19 @@ def suggest_quantity_range(
     if not caps:
         return None
     binding_id, binding_value = min(caps.items(), key=lambda item: item[1])
-    skipped = [LIMIT_NAMES[i] for i in LIMIT_IDS if i not in caps]
+    # 條件 35: cap 5 dropped out for a non-positive edge is **not** a cap that
+    # lacked usable data, and the standing sentence below says exactly that. It
+    # had its pair, computed with it, and arrived at a definite zero. So it is
+    # excluded from ``skipped`` on that branch only -- an absent, unanchorable or
+    # expired pair still belongs there -- and the (任務 2) sentence carries it
+    # instead. Neither the standing sentence nor the two ``basis`` texts change
+    # by a character.
+    zero_allowance = _kelly_allowance_is_zero(budget, ctx)
+    skipped = [
+        LIMIT_NAMES[i]
+        for i in LIMIT_IDS
+        if i not in caps and not (i == "kelly_fraction" and zero_allowance)
+    ]
     # A whole sentence appended after the basis's final full stop, never a
     # trailing clause: a cap left out of the arithmetic is not a cap that
     # passed, and the reader has to be told that in its own sentence rather
@@ -1011,6 +1303,14 @@ def suggest_quantity_range(
         if skipped
         else ""
     )
+    # 條件 37: a whole sentence at the very end of the basis, after the skipped
+    # note, never a clause spliced into either. 條件 36 makes it mandatory
+    # wherever it is reachable -- in practice the sell-direction range, since the
+    # advice engine refuses an ``add`` while any cap is violated and cap 5 is
+    # violated on this branch -- so it is attached in every direction rather than
+    # conditioned on one, which would leave it silently absent if that changed.
+    zero_allowance_note = KELLY_ZERO_ALLOWANCE_RANGE_NOTE if zero_allowance else ""
+    trailing_note = f"{skipped_note}{zero_allowance_note}"
     current = ctx.position_market_value_twd or 0.0
 
     if action == "add":
@@ -1034,7 +1334,7 @@ def suggest_quantity_range(
                 f"目前有納入計算的上限中,額度最緊的是「{LIMIT_NAMES[binding_id]}」;"
                 f"以它換算,買進後這條上限仍為通過的最大股數是 {upper:,} 股,也就是區間上緣。"
                 f"下緣 {lower:,} 股取上緣的一半,用意是給出一個範圍而不是單一數字,"
-                f"不是「最少要買」的數量。{skipped_note}"
+                f"不是「最少要買」的數量。{trailing_note}"
             ),
         )
 
@@ -1082,14 +1382,14 @@ def suggest_quantity_range(
                 f"目前部位已超出「{limit_name}」這條上限,"
                 f"賣出 {lower:,} 股後可回到這條上限的範圍內;"
                 f"區間上緣 {upper:,} 股是目前持股全數,是這個區間的上界,"
-                f"不是這條上限要求賣到的數量。{skipped_note}"
+                f"不是這條上限要求賣到的數量。{trailing_note}"
             )
             if compliant
             else (
                 f"規則評估:{RANGE_ACTION_LABELS[action]},"
                 f"這個區間只有一個數字:{lower:,} 股,也就是目前持股全數。"
                 f"目前部位已超出「{limit_name}」這條上限,"
-                f"但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。{skipped_note}"
+                f"但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。{trailing_note}"
             )
         )
         return QuantityRange(

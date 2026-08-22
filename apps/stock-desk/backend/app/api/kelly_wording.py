@@ -30,10 +30,13 @@ House rules, all of them non-negotiable:
 * **No measured value is embedded in a refusal.** A missing number is described,
   never rendered (5-3): ``None`` and ``null`` are engineer words, and printing
   either beside a Chinese sentence reads as a value that was measured.
-* **Not every constant here ships from here.** (a-2) is a ``limits.py``
-  disclosure by 約束 36 (that layer only ever branches on a boolean); it is
-  recorded here so the approved inventory is complete in one place, and lands
-  in cap 5 in K4b. See its own comment.
+* **Not every constant here ships from here.** Seven of them are cap 5's and are
+  attached by ``app/advice/limits.py``: (a-2), whose condition that layer sees
+  as a single boolean (約束 36); the four (g) sentences, which it chooses between
+  by cause; and the sixth round's (任務 1)/(任務 2), which belong to the f*<=0
+  verdict and to the sizing exclusion that verdict triggers. They are recorded
+  here so the approved inventory stays complete in one place, and imported from
+  there rather than retyped -- :data:`LANDS_ELSEWHERE` lists them.
 * **Two approved sentences live outside this module**, by rulings that name
   their location: the three refusal messages are in ``app/kelly/sample_gate.py``
   beside the gate that emits them, and the non-finite-interval 500 body is
@@ -46,10 +49,14 @@ The item ids in :data:`RISK_CONFIRMED_WORDING` are the review's own ((a-1),
 each other line by line.
 
 Approved is not the same as released. The review's own standing list of what is
-still missing (第三輪 §C5 文案面整體狀態) governs: the 500 path's own message is
-being redrafted, ``PortfolioContext`` has no source field yet, and several
-sentences beyond this batch have never been submitted. Nothing here should be
-read as clearing C5 for release.
+still missing (第六輪 §C5 文案面最終狀態) governs. The items this module's own
+history named are closed -- the 500 path has its own approved message (第四輪),
+``PortfolioContext`` carries the source cap 5 branches on (K4b, 落地條件 19), and
+the f*≤0 pair was approved in the sixth round and is wired here -- but the
+sixth round's own residue is not: the 除權息 disclosure went back for redrafting,
+and the FR-5/FR-6/badge copy it approved is display-surface text that arrives
+with K4c, so it is deliberately absent below. Nothing here should be read as
+clearing C5 for release.
 """
 
 from __future__ import annotations
@@ -78,10 +85,12 @@ KELLY_F_STAR_INTERVAL_DISCLOSURE = (
 )
 
 #: (a-2) 風控 2026-08-19 逐字定稿（第一輪，修訂版），字面含標點不得改動，漂移須重送風控。
-#: **落地於 K4b**: 約束 36 puts this one in ``app/advice/limits.py``, whose Kelly
-#: check may branch on ``ci_includes_no_edge`` and nothing finer. It is carried
-#: here for inventory only -- this lane does not wire it, and does not touch
-#: ``limits.py``.
+#: **落地於 K4b（已接通）**: 約束 36 puts this one in ``app/advice/limits.py``, whose
+#: Kelly check may branch on ``ci_includes_no_edge`` and nothing finer. It is
+#: attached to cap 5's ``passed``/``violated`` detail by
+#: ``app.advice.limits._kelly_disclosures``, after (e)/(e-manual) and never in a
+#: refusal: the sentence qualifies an estimate that was used, and a cap
+#: reporting ``not_evaluable`` used none.
 KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE = (
     "本次估計值的區間涵蓋『沒有優勢』的可能：以目前樣本量，本系統無法確定這個策略是否真的有優勢。"
     "完整區間數字可至設定頁查看。"
@@ -315,6 +324,54 @@ KELLY_NOT_EVALUABLE_NO_OOS_END_DATE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# (任務 1 / 任務 2) a non-positive f*: the cap that allows nothing
+# ---------------------------------------------------------------------------
+
+#: (任務 1) 風控 2026-08-22 逐字定稿（第六輪，修訂版），字面含標點不得改動，漂移須重送風控。
+#: **落地於 limits.py**, cap 5's ``violated`` detail on the f*<=0 branch and on
+#: no other (條件 40). It replaces the general sentence rather than joining it:
+#: D-5 forbids reusing the ordinary phrasing here, because "your position is
+#: above the allowance" reads as a demand to sell when the allowance is 0.
+#:
+#: Three things about it are rulings, not choices:
+#:
+#: * "這次" in the last clause is required. Without it the sentence makes a
+#:   universal claim that is false on the f*>0 branch.
+#: * The repeated 範圍限定 ("這次可用的加碼額度"、"只限制新增加碼的額度") is kept
+#:   deliberately -- the review declined to trim it, because every repetition
+#:   lands on the conservative side.
+#: * No operating verb anywhere (約束 11): the sentence states what the cap does
+#:   not do, and says outright that it offers no view on an existing holding.
+#:
+#: 條件 41 fixes the order when the interval flag is also set: this sentence
+#: first, then (a-2).
+KELLY_NON_POSITIVE_FRACTION_DETAIL = (
+    "以目前輸入的勝率與盈虧比計算，Kelly 公式算出的比例（f*）不是正值："
+    "以目前輸入計算，Kelly 公式不支持任何加碼部位，"
+    "分數 Kelly 與硬上限取小後，這條上限這次可用的加碼額度為 0%。"
+    "本條上限這次只限制新增加碼的額度，不對你目前已持有的部位提出任何處置意見。"
+)
+
+#: (任務 2) 風控 2026-08-22 逐字定稿（第六輪，修訂版），字面含標點不得改動，漂移須重送風控。
+#: **落地於 limits.py**, appended to ``suggest_quantity_range``'s ``basis`` as a
+#: whole sentence of its own (條件 37), whenever D-5's exclusion dropped cap 5
+#: from the sizing inputs for a non-positive edge.
+#:
+#: It exists because that exclusion would otherwise be invisible or, worse,
+#: described wrongly: 條件 35 keeps cap 5 out of the ``skipped`` list on this
+#: branch, since the standing sentence there says the cap lacked usable data,
+#: and here it had data and computed a definite 0. "上方" was struck from the
+#: draft -- cap 5 sits below this range on the card, so the direction was simply
+#: untrue -- and the closing clause is the same red line the (任務 1) sentence
+#: carries: a zero allowance is not a statement about an existing position.
+KELLY_ZERO_ALLOWANCE_RANGE_NOTE = (
+    "「分數 Kelly 部位上限」這次計算出的加碼額度是 0"
+    "（原因見第 5 條的說明，不是因為本次缺少資料），因此不列入這個區間的計算基礎；"
+    "這個 0，只代表這條上限這次不提供加碼空間，不涉及你目前部位的任何處置。"
+)
+
+
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
 #: not in here is a sentence risk-compliance never saw:
 #: ``tests/test_kelly_wording.py`` asserts this mapping and the module's public
@@ -337,9 +394,19 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "g-2": KELLY_NOT_EVALUABLE_MANUAL_EXPIRED,
     "g-3": KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED,
     "g-4": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    "task-1": KELLY_NON_POSITIVE_FRACTION_DETAIL,
+    "task-2": KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,
-#: so a reader does not go looking for a call site that is not there. (a-2) is
-#: ``limits.py``'s by 約束 36 and is wired in K4b.
-LANDS_ELSEWHERE: Final[frozenset[str]] = frozenset({"a-2"})
+#: so a reader does not go looking for a call site that is not there. All seven
+#: are cap 5's and are attached in ``app/advice/limits.py``: (a-2) by 約束 36;
+#: the four (g) sentences because D-6 puts the "is this input still usable"
+#: decision inside ``_check_kelly_fraction``, which is therefore the only place
+#: that can tell the four causes apart; and (任務 1)/(任務 2) because the f*<=0
+#: verdict and D-5's exclusion from the sizing inputs are both decided there.
+#: They are imported from here, never retyped, so the approved inventory stays
+#: the single copy (落地條件 2).
+LANDS_ELSEWHERE: Final[frozenset[str]] = frozenset(
+    {"a-2", "g-1", "g-2", "g-3", "g-4", "task-1", "task-2"}
+)

@@ -29,15 +29,18 @@ from app.advice.engine import build_advice
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
     get_fx_provider,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_price_bar_cache,
     get_settings_store,
     get_valuator,
 )
+from app.api.kelly import kelly_inputs_for
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
 from app.data.cache import PriceBarCache
 from app.data.providers.fx import FxRateProvider
+from app.kelly.store import KellyInputStore
 from app.portfolio.summary import build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
@@ -55,6 +58,7 @@ ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
 CalendarDep = Annotated[PriceBarCache, Depends(get_price_bar_cache)]
+KellyStoreDep = Annotated[KellyInputStore, Depends(get_kelly_input_store)]
 
 
 class AdviceResponse(EnvelopeBase):
@@ -83,6 +87,7 @@ def get_advice(
     settings_store: SettingsDep,
     fx_provider: FxProviderDep,
     calendar_source: CalendarDep,
+    kelly_store: KellyStoreDep,
     market: Annotated[Market, Query(description="市場別")] = "TW",
 ) -> AdviceResponse:
     end = date.today()
@@ -122,6 +127,10 @@ def get_advice(
         currency=latest.currency if latest is not None else None,
         fx=fx,
         net_worth=net_worth,
+        # Cap 5's stored pair for this holding. Absent means "never entered",
+        # which is what the cap then says; an expired one still travels, with
+        # its age, so the cap can say *that* instead (D-6).
+        kelly=kelly_inputs_for(kelly_store, symbol, market),
     )
 
     if latest is None:

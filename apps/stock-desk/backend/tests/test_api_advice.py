@@ -17,6 +17,12 @@ from app.advice.limits import (
     SECTOR_MIXED_DETAIL,
 )
 from app.api.deps import get_fx_provider
+from app.api.kelly_wording import (
+    KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
+    KELLY_NON_POSITIVE_FRACTION_DETAIL,
+    KELLY_NOT_EVALUABLE_NO_INPUT,
+    KELLY_WIN_RATE_IS_NOT_PROBABILITY,
+)
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
 from app.main import app
@@ -452,3 +458,94 @@ def test_the_sector_cap_says_what_two_categories_on_one_symbol_mean(
     detail = _sector_check(api_harness)["detail"]
     assert detail == SECTOR_MIXED_DETAIL
     assert "尚未填寫" not in detail
+
+
+# --- Cap 5, end to end: the stored pair reaches the card (C5) ----------------
+
+
+def _kelly_check(harness: ApiHarness, symbol: str = "2330") -> dict[str, Any]:
+    body = harness.client.get(f"/api/advice/{symbol}").json()
+    check: dict[str, Any] = next(
+        c for c in body["advice"]["limits_check"] if c["id"] == "kelly_fraction"
+    )
+    return check
+
+
+def test_cap_5_is_not_evaluable_until_a_pair_is_entered(api_harness: ApiHarness) -> None:
+    """The state the product shipped in, now stated as "nothing entered yet"."""
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+
+    check = _kelly_check(api_harness)
+
+    assert check["status"] == "not_evaluable"
+    assert check["detail"] == KELLY_NOT_EVALUABLE_NO_INPUT
+
+
+def test_a_stored_pair_makes_cap_5_evaluable_through_the_endpoint(
+    api_harness: ApiHarness,
+) -> None:
+    """C5's whole point: the cap computes from the user's own input.
+
+    The wiring is what this proves -- store, ageing, source and flag all have to
+    survive the trip from ``kelly_inputs`` to the card, and any one of them
+    dropped on the way leaves the cap saying something untrue about an input the
+    user did enter.
+    """
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
+    )
+
+    check = _kelly_check(api_harness)
+
+    assert check["status"] in {"passed", "violated"}
+    assert check["threshold"] == pytest.approx(0.1)
+    assert "以勝率 60.0%、盈虧比 2.00 計算" in check["detail"]
+    # A hand-typed pair is not a sample frequency, so (e-manual) travels with it.
+    assert KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY in check["detail"]
+    assert KELLY_WIN_RATE_IS_NOT_PROBABILITY not in check["detail"]
+
+
+def test_an_expired_pair_reaches_the_card_as_expired_not_as_absent(
+    api_harness: ApiHarness,
+) -> None:
+    """(g-2) end to end, with the anchor and the age the endpoint computed."""
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
+    )
+    stored = api_harness.kelly_inputs.get("2330", "TW")
+    assert stored is not None
+    # Re-stamped 40 days back through the store's own writer, so the age the
+    # card reports is one the ageing rule derived rather than one a test set.
+    api_harness.kelly_inputs.upsert(stored, now=datetime.now(UTC) - timedelta(days=40))
+
+    check = _kelly_check(api_harness)
+
+    assert check["status"] == "not_evaluable"
+    assert check["detail"].startswith("此標的的 Kelly 輸入（來源：手動輸入）已過期")
+    assert "距今 40 天" in check["detail"]
+    assert check["detail"] != KELLY_NOT_EVALUABLE_NO_INPUT
+
+
+def test_a_non_positive_edge_reaches_the_card_as_its_own_sentence(
+    api_harness: ApiHarness,
+) -> None:
+    """D-5 end to end: violated, dedicated sentence, and no sizing from a zero."""
+    _seed_bars(api_harness)
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/kelly-inputs/2330", json={"win_rate": 0.3, "payoff_ratio": 1.0}
+    )
+
+    body = api_harness.client.get("/api/advice/2330").json()
+    check = next(c for c in body["advice"]["limits_check"] if c["id"] == "kelly_fraction")
+
+    assert check["status"] == "violated"
+    assert check["detail"] == KELLY_NON_POSITIVE_FRACTION_DETAIL
+    quantity = body["advice"]["quantity_range"]
+    if quantity is not None:
+        assert "「分數 Kelly 部位上限」這條上限" not in quantity["basis"]

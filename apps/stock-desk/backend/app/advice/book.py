@@ -41,7 +41,14 @@ Three honesty rules govern what is filled in:
    the five are different problems and only this layer can tell them apart
    (AC-12.3).
 
-The Kelly inputs stay ``None`` for the old reason: no source produces them yet.
+5. **The Kelly pair is passed in, never fetched.** Since C5 there *is* a source
+   for it (``kelly_inputs``, ADR-0006 D-2), but reading it here would put a
+   database call inside the one purely-computational assembly point. The caller
+   resolves the row and hands it to :func:`kelly_inputs_of`, which is where the
+   clock is read and where an expired pair keeps its age instead of being
+   flattened into an absence -- cap 5 has four different sentences for the ways
+   an input can be unusable, and it can only choose between them if the
+   difference survives this layer.
 
 FX (ADR-0005 decision 5): this module stays a pure function and **never imports
 an adapter**. The caller resolves the rate (``app/services/fx.py``) and passes a
@@ -63,6 +70,7 @@ from decimal import Decimal
 from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
     SECTOR_MIXED_DETAIL,
+    KellyInputs,
     PortfolioContext,
     SectorGap,
     SelfReportedNetWorth,
@@ -70,6 +78,7 @@ from app.advice.limits import (
     format_reported_at,
 )
 from app.data.interface import DataStatus
+from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import InstrumentType, Market
 
@@ -203,10 +212,11 @@ class FxQuote:
 
 
 #: The ``symbol`` a book-level context carries (:func:`build_book_level_context`).
-#: Nothing reads it: the only caps evaluated against such a context are the ones
+#: Nothing reads it: the only cap evaluated against such a context is the one
 #: whose verdict is about the whole book rather than about a holding -- gross
-#: exposure, and the Kelly cap that has no data source at all -- and neither
-#: sentence names a symbol. It is spelled as a visible label rather than left
+#: exposure -- and its sentence names no symbol. (Cap 5 was the second such cap
+#: until C5 gave it a per-symbol input; it is aggregated per holding now, D-7.)
+#: It is spelled as a visible label rather than left
 #: blank so that a value leaking into prose would be recognisable as this
 #: placeholder instead of reading like a ticker.
 BOOK_LEVEL_SYMBOL = "（整體帳本）"
@@ -453,6 +463,58 @@ def self_reported_net_worth(
     )
 
 
+def kelly_inputs_of(
+    row: KellyInputRow | None,
+    *,
+    ci_includes_no_edge: bool = False,
+    now: datetime | None = None,
+) -> KellyInputs | None:
+    """Turn one stored Kelly row into the risk layer's view of it (D-6).
+
+    The Kelly half of what :func:`self_reported_net_worth` does for FR-9, and
+    for the same reason: this is the single place the clock is read for cap 5,
+    so the age the settings page shows and the age the cap enforces cannot
+    drift apart. Ageing itself is delegated to
+    :func:`app.kelly.models.ageing_of` -- the one place the "no anchor means
+    expired" rule lives -- rather than re-derived here, where a second
+    derivation could land on a friendlier answer.
+
+    ``None`` in gives ``None`` out, and that ``None`` carries a specific
+    meaning downstream: **no pair has ever been entered**. An expired row is
+    *not* collapsed into it. Cap 5 has four different things to say about an
+    unusable input ((g-1) to (g-4)) and could not tell them apart from an
+    absence, so the row travels on with its age and source and the cap decides
+    (D-6 puts the expiry判定 in ``_check_kelly_fraction``).
+
+    ``ci_includes_no_edge`` is passed in, never computed here: 約束 36 makes
+    ``app/api/kelly.py`` the one place that reduces the stored interval to that
+    boolean.
+
+    This function reads no database. The caller resolves the row, exactly as it
+    resolves prices and FX rates, so this module stays the pure function
+    ADR-0005 decision 5 requires.
+    """
+    if row is None:
+        return None
+    ageing = ageing_of(row, now=now)
+    return KellyInputs(
+        win_rate=row.win_rate,
+        payoff_ratio=row.payoff_ratio,
+        source=row.source,
+        age_days=ageing.age_days,
+        # 6-A: a plain calendar day, never an ISO datetime. The backtest
+        # anchor's time of day is padded, so rendering it would show precision
+        # the measurement does not have; the manual anchor is truncated to the
+        # same shape so the two sentences cannot be told apart by their format.
+        anchored_at=None if ageing.anchored_at is None else ageing.anchored_at.date().isoformat(),
+        strategy_id=row.strategy_id,
+        oos_start_date=row.oos_start_date,
+        oos_end_date=row.oos_end_date,
+        oos_round_trips=row.oos_round_trips,
+        ci_includes_no_edge=ci_includes_no_edge,
+    )
+
+
 def _book_level_notes(
     summary: PortfolioSummary, net_worth: SelfReportedNetWorth | None
 ) -> list[str]:
@@ -473,18 +535,23 @@ def _book_level_notes(
 def build_book_level_context(
     summary: PortfolioSummary, *, net_worth: SelfReportedNetWorth | None = None
 ) -> BookContext:
-    """The whole book as one context, for the caps that are not about a holding.
+    """The whole book as one context, for the cap that is not about a holding.
 
-    Two of the five caps ask a question with a single book-level answer: gross
-    exposure (the valued book over the reported net worth) and the Kelly cap
-    (which has no data source at all). Neither reads a per-symbol field, so
-    neither needs a symbol -- the context therefore carries
+    One of the five caps asks a question with a single book-level answer: gross
+    exposure, the valued book over the reported net worth. It reads no
+    per-symbol field, so it needs no symbol -- the context therefore carries
     :data:`BOOK_LEVEL_SYMBOL` and leaves every per-symbol field unset, which is
-    exactly what makes caps 1, 2 and 4 report ``not_evaluable`` if anyone
+    exactly what makes caps 1, 2, 4 and 5 report ``not_evaluable`` if anyone
     evaluates them here. **They must not be read from this context**: their
     book-level verdicts are aggregated per symbol by
     :mod:`app.advice.book_limits`, and a ``not_evaluable`` produced by an unset
     field would look like a fact about the user's book.
+
+    ``kelly`` is unset here and there is no parameter to set it with. Cap 5
+    became a per-symbol cap in C5 (D-7): its input is keyed on
+    ``(symbol, market)``, so the book as a whole has no pair to be judged
+    against, and one borrowed from any single holding would be applied to all
+    of them. ``tests/test_advice_book.py`` pins the field at ``None`` here.
 
     ``held`` is ``False`` and ``position_ids`` empty for the same reason: this
     context stands for no holding.
@@ -528,6 +595,7 @@ def build_book_context(
     atr: float | None = None,
     fx: FxQuote | None = None,
     net_worth: SelfReportedNetWorth | None = None,
+    kelly: KellyInputs | None = None,
 ) -> BookContext:
     """Assemble the risk-budget context for ``symbol`` against the whole book.
 
@@ -547,6 +615,15 @@ def build_book_context(
     by :func:`self_reported_net_worth`. It reaches one cap and one cap only
     (gross exposure); ``total_equity_twd`` keeps its old definition whether it
     is supplied or not, so caps 1 and 4 are unaffected by it.
+
+    ``kelly`` is this symbol's stored Kelly pair, built by
+    :func:`kelly_inputs_of`. It likewise reaches one cap and one cap only
+    (cap 5). Omitting it is a supported state and means exactly what an empty
+    ``kelly_inputs`` table means -- the cap reports (g-1), "nothing entered
+    yet". A caller that *has* a row and forgets to pass it therefore produces a
+    card stating something untrue about the user's own input, which is why the
+    production call sites are pinned by
+    ``tests/test_book_context_call_sites.py``.
     """
     fully_valued = _fully_valued(summary)
     notes: list[str] = _book_level_notes(summary, net_worth)
@@ -607,6 +684,7 @@ def build_book_context(
         sector=sector,
         sector_market_value_twd=sector_market_value,
         sector_gap=sector_gap,
+        kelly=kelly,
     )
     return BookContext(
         context=context,

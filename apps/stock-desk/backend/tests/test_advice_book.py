@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import inspect
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -15,15 +17,19 @@ from app.advice.book import (
     GROSS_EXPOSURE_NOTE,
     FxQuote,
     build_book_context,
+    build_book_level_context,
+    kelly_inputs_of,
     self_reported_net_worth,
 )
 from app.advice.limits import (
     NET_WORTH_STALE_AFTER_DAYS,
+    KellyInputs,
     RiskBudget,
     evaluate_limits,
     suggest_quantity_range,
 )
 from app.data.interface import DataStatus
+from app.kelly.models import KellyInputRow
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
 from app.portfolio.valuation import PriceInfo, Valuation
 from tests.advice_helpers import reported_net_worth
@@ -482,13 +488,13 @@ def test_a_symbol_held_in_two_currencies_drops_the_price() -> None:
 
 def test_sector_stays_absent_until_the_holding_declares_one() -> None:
     # FR-12 added the field, not a guess: an unclassified holding still yields
-    # no sector and no sector total. The Kelly inputs remain unsourced.
+    # no sector and no sector total. Cap 5's pair is absent unless the caller
+    # passes one, which is the "nothing entered yet" state (g-1) describes.
     book = build_book_context(_summary(_position(1, "2330")), symbol="2330", close=600.0)
     assert book.context.sector is None
     assert book.context.sector_market_value_twd is None
     assert book.context.sector_gap == "unfiled"
-    assert book.context.win_rate is None
-    assert book.context.payoff_ratio is None
+    assert book.context.kelly is None
 
 
 def test_sector_total_sums_every_valued_holding_in_the_same_industry() -> None:
@@ -663,3 +669,161 @@ def test_atr_is_passed_through_when_supplied() -> None:
         _summary(_position(1, "2330")), symbol="2330", close=600.0, atr=12.5
     )
     assert book.context.atr == 12.5
+
+
+# --- Cap 5's builder (D-6: the age is computed here, judged in limits.py) ----
+
+
+def _kelly_row(**overrides: object) -> KellyInputRow:
+    """One stored row, imported and anchored on its OOS end date by default."""
+    values: dict[str, object] = {
+        "symbol": "2330",
+        "market": "TW",
+        "win_rate": 0.6,
+        "payoff_ratio": 2.0,
+        "source": "backtest",
+        "oos_start_date": "2026-01-02",
+        "oos_end_date": "2026-06-30",
+        "oos_round_trips": 24,
+        "strategy_id": "ma_cross",
+        "updated_at": datetime(2026, 7, 1, 3, 4, 5, tzinfo=UTC),
+    }
+    values.update(overrides)
+    return KellyInputRow(**values)  # type: ignore[arg-type]
+
+
+def test_no_row_means_no_pair_rather_than_an_empty_one() -> None:
+    """``None`` in, ``None`` out: the "never entered" state cap 5 reports (g-1)."""
+    assert kelly_inputs_of(None) is None
+
+
+def test_the_builder_ages_an_imported_pair_from_the_oos_end_date() -> None:
+    """D-4: an import ages from the segment it measured, not from its run time.
+
+    ``updated_at`` here is later than the segment's end, so anchoring on it
+    would make the row read younger -- exactly the "re-run an old window to
+    look fresh" move D-4 exists to stop.
+    """
+    kelly = kelly_inputs_of(_kelly_row(), now=datetime(2026, 7, 30, tzinfo=UTC))
+
+    assert kelly is not None
+    assert kelly.anchored_at == "2026-06-30"
+    assert kelly.age_days == 30
+
+
+def test_the_builder_ages_a_manual_pair_from_the_write_stamp() -> None:
+    kelly = kelly_inputs_of(
+        _kelly_row(
+            source="manual",
+            strategy_id=None,
+            oos_start_date=None,
+            oos_end_date=None,
+            updated_at=datetime(2026, 7, 20, 8, 0, tzinfo=UTC),
+        ),
+        now=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+    assert kelly is not None
+    assert kelly.anchored_at == "2026-07-20"
+    # Whole elapsed days from the stamp itself (08:00), not calendar days
+    # between the two dates: 9, not 10. The stamp is the anchor, and rounding it
+    # up to a calendar day would age the input faster than the user's action.
+    assert kelly.age_days == 9
+
+
+def test_the_anchor_is_rendered_as_a_plain_calendar_day() -> None:
+    """6-A: never an ISO datetime, for either source.
+
+    The manual anchor really is a timestamp, and this is where its time of day
+    is dropped -- so the two (g) sentences cannot be told apart by their date
+    format, and neither shows precision the backtest anchor does not have.
+    """
+    for row in (_kelly_row(), _kelly_row(source="manual", strategy_id=None, oos_end_date=None)):
+        kelly = kelly_inputs_of(row, now=datetime(2026, 8, 1, tzinfo=UTC))
+        assert kelly is not None
+        assert kelly.anchored_at is not None
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", kelly.anchored_at), kelly.anchored_at
+
+
+def test_an_expired_row_still_travels_with_its_age() -> None:
+    """It is **not** collapsed into ``None``: (g-2)/(g-3) need both facts.
+
+    Cap 5 has four different things to say about an unusable input and could
+    not tell an expired row from an absent one if this layer flattened them.
+    """
+    kelly = kelly_inputs_of(_kelly_row(), now=datetime(2027, 1, 1, tzinfo=UTC))
+
+    assert kelly is not None
+    assert kelly.age_days is not None and kelly.age_days > NET_WORTH_STALE_AFTER_DAYS
+    assert kelly.source == "backtest"
+
+
+def test_a_row_with_no_oos_end_date_yields_no_anchor_and_no_age() -> None:
+    """The unanchorable case, withheld rather than filled with a stand-in."""
+    kelly = kelly_inputs_of(_kelly_row(oos_end_date=None))
+
+    assert kelly is not None
+    assert kelly.anchored_at is None
+    assert kelly.age_days is None
+
+
+def test_the_builder_carries_the_no_edge_flag_it_was_given_and_computes_none() -> None:
+    """約束 36: the flag arrives already reduced, from ``app/api/kelly.py``."""
+    flagged = kelly_inputs_of(_kelly_row(), ci_includes_no_edge=True)
+    assert flagged is not None and flagged.ci_includes_no_edge is True
+    # Default is False, and nothing in this layer inspects an interval to decide.
+    plain = kelly_inputs_of(_kelly_row())
+    assert plain is not None and plain.ci_includes_no_edge is False
+
+
+def test_the_builder_forwards_the_provenance_cap_5_is_allowed_to_see() -> None:
+    """約束 36's field list, and no interval numbers alongside it."""
+    kelly = kelly_inputs_of(_kelly_row())
+
+    assert kelly is not None
+    assert kelly.strategy_id == "ma_cross"
+    assert kelly.oos_start_date == "2026-01-02"
+    assert kelly.oos_end_date == "2026-06-30"
+    assert kelly.oos_round_trips == 24
+    assert set(KellyInputs.model_fields) == {
+        "win_rate",
+        "payoff_ratio",
+        "source",
+        "age_days",
+        "anchored_at",
+        "strategy_id",
+        "oos_start_date",
+        "oos_end_date",
+        "oos_round_trips",
+        "ci_includes_no_edge",
+    }
+
+
+def test_the_book_level_context_never_carries_a_kelly_pair() -> None:
+    """約束 15 / D-7: cap 5 is per-symbol, so the book as a whole has no pair.
+
+    There is no parameter to set it with either -- one borrowed from a single
+    holding would be applied to every holding in the book.
+    """
+    book = build_book_level_context(_summary(_position(1, "2330")))
+
+    assert book.context.kelly is None
+    assert "kelly" not in inspect.signature(build_book_level_context).parameters
+
+
+def test_the_risk_layer_reaches_the_kelly_models_but_never_its_store() -> None:
+    """約束 12: the age is computed here; no database is opened to do it.
+
+    ``ageing_of`` is imported so the "no anchor means expired" rule has one
+    home (:mod:`app.kelly.models`), but a store import here would put I/O into
+    the one purely-computational assembly point (ADR-0005 decision 5).
+    """
+    imported = {
+        node.module or ""
+        for node in ast.walk(ast.parse(Path(book_module.__file__).read_text(encoding="utf-8")))
+        if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "app.kelly.models" in imported
+    assert not any(module.startswith("app.kelly.store") for module in imported)
+    assert not any(module.startswith("app.kelly.attempts") for module in imported)

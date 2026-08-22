@@ -47,11 +47,13 @@ from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
     get_fx_provider,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_settings_store,
     get_valuator,
 )
+from app.api.kelly import kelly_inputs_for
 from app.positions.models import Market
 from app.services.market import load_bars
 
@@ -132,6 +134,7 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
     position_store = get_position_store()
     valuator = get_valuator()
     fx_provider = get_fx_provider()
+    kelly_store = get_kelly_input_store()
     budget = settings.risk_budget
     net_worth = self_reported_net_worth(
         settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
@@ -147,6 +150,9 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
             budget=budget,
             fx_provider=fx_provider,
             net_worth=net_worth,
+            # The scheduled loop evaluates the same caps the API does, so cap 5
+            # reads the same stored pair here as it does there.
+            kelly=kelly_inputs_for(kelly_store, symbol, market),
         )
 
     result = evaluate_alerts(

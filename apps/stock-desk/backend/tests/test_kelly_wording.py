@@ -1,9 +1,10 @@
 """The Kelly disclosure sentences risk-compliance signed off, pinned as tests.
 
-Every assertion traces to `work/reviews/2026-08-19-C5-Kelly-文案批審.md` (第一輪,
-第二輪, 第三輪, 第四輪) and to its 落地條件 1-29. Five kinds of guard live here:
+Every assertion traces to `work/reviews/2026-08-19-C5-Kelly-文案批審.md` (第一輪
+through 第六輪) and to its 落地條件 1-50. Five kinds of guard live here:
 
-* **逐字** -- all 21 approved sentences are retyped below and compared character
+* **逐字** -- every approved sentence the repo ships is retyped below and
+  compared character
   for character against the constants the application ships. Retyping is the
   point: importing the constant and asserting it equals itself would pass
   through any drift, so the expected text is entered from the review document by
@@ -25,10 +26,10 @@ Scope of the source scans is the two **shipped** trees, `backend/app` and
 `frontend/app`: `work/` holds the review documents, which quote the rejected
 drafts on purpose, and this file retypes the approved ones.
 
-Out of scope here, by the lane's own boundary: wiring these constants into
-``limits.py`` / ``PortfolioContext`` and the front-end rendering are K4b, so the
-display conditions (落地條件 18/20/21/22, and the six-scenario branch tests for
-(d-1)) are asserted there, not here. This file guards the text itself.
+This file guards the **text**. Where each sentence is attached, and on what
+condition, is asserted beside the code that attaches it: cap 5's seven
+(the four (g), (a-2), and the sixth round's two) in
+``tests/test_advice_limits.py``, and the front-end rendering in K4c.
 """
 
 from __future__ import annotations
@@ -39,10 +40,11 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.api import kelly_wording as wording
 from app.api.kelly import KELLY_NON_FINITE_INTERVAL_MESSAGE
-from app.kelly import sample_gate
+from app.kelly import models, sample_gate
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _APP_ROOT = _BACKEND_ROOT / "app"
@@ -165,6 +167,19 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "本次計算出的 f* 區間，其上界與下界之中至少有一端不是有限的數字，"
         "超出本系統可寫入的範圍，這次沒有寫入 Kelly 輸入。"
     ),
+    # 第六輪（2026-08-22，第五批）。Retyped from the ruling, not copied from the
+    # module, per required 2-D.
+    "task-1": (
+        "以目前輸入的勝率與盈虧比計算，Kelly 公式算出的比例（f*）不是正值："
+        "以目前輸入計算，Kelly 公式不支持任何加碼部位，"
+        "分數 Kelly 與硬上限取小後，這條上限這次可用的加碼額度為 0%。"
+        "本條上限這次只限制新增加碼的額度，不對你目前已持有的部位提出任何處置意見。"
+    ),
+    "task-2": (
+        "「分數 Kelly 部位上限」這次計算出的加碼額度是 0"
+        "（原因見第 5 條的說明，不是因為本次缺少資料），因此不列入這個區間的計算基礎；"
+        "這個 0，只代表這條上限這次不提供加碼空間，不涉及你目前部位的任何處置。"
+    ),
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -201,9 +216,16 @@ SHIPPED_SAMPLE_SIZE: dict[str, str] = {
 }
 
 
-def test_the_batch_is_the_twenty_one_sentences_the_review_closed_on() -> None:
-    """閘門狀態（第四輪後）:「已齊 21 項定稿」. A missing id is a missing sentence."""
-    assert len(CONFIRMED_VERBATIM) == 21
+def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
+    """21 through the fourth round, plus the two of the fifth batch this lane ships.
+
+    The sixth round closed on eleven items; the two here are the ones that land
+    in the risk layer ((任務 1) f*<=0 and (任務 2) zero allowance). The other nine
+    are display-surface copy and arrive with K4c, which is why this count is 23
+    and not 32 -- a sentence is added here when it ships, so the assertion says
+    what the repo actually carries rather than what the review has approved.
+    """
+    assert len(CONFIRMED_VERBATIM) == 23
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -259,10 +281,48 @@ def test_the_wording_module_imports_no_application_code() -> None:
     assert not any(name.startswith("app") for name in imported), sorted(imported)
 
 
-def test_the_one_sentence_that_lands_elsewhere_is_named_as_such() -> None:
-    """(a-2) is limits.py's by 約束 36 and is wired in K4b, not here."""
-    assert wording.LANDS_ELSEWHERE == {"a-2"}
+def test_the_sentences_that_land_elsewhere_are_named_as_such() -> None:
+    """Cap 5's five: (a-2) by 約束 36, the four (g) sentences by D-6.
+
+    All five are attached in ``app/advice/limits.py`` -- the module that owns
+    the "may this pair still be used" decision and is therefore the only one
+    able to tell the four causes apart. They are *imported* from the wording
+    module, never retyped, which is what keeps the approved inventory the one
+    copy (落地條件 2); the next test proves the import is what happens.
+    """
+    assert wording.LANDS_ELSEWHERE == {
+        "a-2",
+        "g-1",
+        "g-2",
+        "g-3",
+        "g-4",
+        "task-1",
+        "task-2",
+    }
     assert wording.LANDS_ELSEWHERE <= set(wording.RISK_CONFIRMED_WORDING)
+
+
+def test_cap_5_imports_its_sentences_instead_of_retyping_them() -> None:
+    """落地條件 2 守門:「全 repo 無第二份同語意字串」.
+
+    A retyped copy in ``limits.py`` would pass every verbatim assertion in this
+    file on the day it was written and drift silently afterwards, which is the
+    failure mode the single-copy rule exists for. So the check is structural:
+    the risk layer must *import* each of the five, and must contain none of
+    them as a literal of its own.
+    """
+    source = (_BACKEND_ROOT / "app" / "advice" / "limits.py").read_text(encoding="utf-8")
+    literals = set(_string_constants(_BACKEND_ROOT / "app" / "advice" / "limits.py"))
+
+    for item in wording.LANDS_ELSEWHERE:
+        approved = wording.RISK_CONFIRMED_WORDING[item]
+        assert approved not in literals, f"({item}) 被重打在 limits.py，而非 import"
+        # Its opening clause must not appear in any literal there either -- a
+        # partial copy is still a second copy.
+        opening = approved[:16]
+        assert not any(opening in text for text in literals), item
+
+    assert "from app.api.kelly_wording import" in source
 
 
 # ---------------------------------------------------------------------------
@@ -449,22 +509,34 @@ WIN_RATE_TERM = "勝率"
 #: text: a doc comment explaining why a term is restricted is not an occurrence
 #: of the term in copy.
 WIN_RATE_BACKEND_WHITELIST: dict[str, int] = {
-    # 分歧① 明列: cap 5's own not-evaluable line and its detail head. (g-1)
-    # replaces the first of these in K4b; the `:g` false precision in the second
-    # is dev's, still open.
-    "app/advice/limits.py": 2,
+    # 分歧① 明列: cap 5's detail head, the one place the measured win rate is
+    # printed. The not-evaluable line that used to be the second occurrence here
+    # is now (g-1), imported from the wording module rather than written out
+    # (K4b), and the `:g` false precision beside the win rate is closed too
+    # (分歧① required 5).
+    "app/advice/limits.py": 1,
     # 分歧① 明列: the gate's (5-3) refusal.
     "app/kelly/sample_gate.py": 1,
     # 分歧① 明列「Kelly 揭露常數模組」: (e), (f 完整), (g-1), plus (e-manual) from
-    # the third round, which names the field on the hand-keyed branch.
-    "app/api/kelly_wording.py": 4,
+    # the third round, which names the field on the hand-keyed branch, plus the
+    # 第六輪 (任務 1) f*<=0 sentence, which opens by naming the two inputs it
+    # computed from.
+    #
+    # 落地條件 48（第六輪 2026-08-22，擴充權在風控）allocated that fifth occurrence
+    # to ``limits.py``, on the assumption it would be written there. It is
+    # imported from here instead, which is the same rule 落地條件 2 applies to
+    # every other approved sentence and the reason (g-1) left ``limits.py`` in
+    # this lane: one copy, in the inventory, or the verbatim guard is guarding a
+    # duplicate. The count moved module, not total -- reported to
+    # risk-compliance for confirmation with the lane.
+    "app/api/kelly_wording.py": 5,
     # 分歧① 列管（不擋本批，另批復審）: CONFIDENCE_MEANING / WEIGHT_MEANING, both
     # of which use the word inside a denial ("非勝率或機率").
     "app/advice/engine.py": 2,
-    # NOT in the review's list: the manual-input range validator, which names the
-    # field it is rejecting. Pre-existing (K1), user-facing, and therefore
-    # reported to risk-compliance rather than quietly whitelisted -- see the K4a
-    # hand-off 已知限制. Listed so this assertion states the true inventory.
+    # 第五輪微批 required 1-D（落地條件 32）: 白名單第五項 = models.py 的 win_rate
+    # 訊息。Approved on the same ground as (g-1) -- the word names the input
+    # field being rejected, not a measured quantity. **清單擴充權保留於風控**:
+    # a sixth entry is a risk-compliance decision, never a dev one.
     "app/kelly/models.py": 1,
 }
 
@@ -572,6 +644,11 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "5-2": {"path_symbol", "path_market", "body_symbol", "body_market"},
     "5-3": set(),
     "500-non-finite": set(),
+    # Both of the sixth round's two interpolate nothing. The only numbers in
+    # them ("0%", "0", "第 5 條") are fixed facts of the branch they appear on,
+    # not measurements: the allowance really is zero there, by construction.
+    "task-1": set(),
+    "task-2": set(),
 }
 
 FRESHNESS_SENTENCES = ("g-2", "g-3")
@@ -655,6 +732,52 @@ def test_a_refusal_message_embeds_no_measured_value(item: str) -> None:
         "body_symbol",
         "body_market",
     }
+
+
+def test_the_range_messages_in_models_use_the_replacement_term() -> None:
+    """第五輪微批 required 1-B（落地條件 30）: models.py 兩則訊息「賠率」零出現.
+
+    The batch's scan covers the wording module and the gate; these two live in
+    ``app/kelly/models.py`` and were outside it, which the ruling called a 留門.
+    Both are user-facing (the PUT body's range refusals), so the replaced term
+    has to be gone from them too -- and the assertion is on the constants
+    themselves, not on the file, so a copy elsewhere in the module cannot
+    satisfy it.
+    """
+    for message in (
+        models.KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE,
+        models.KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
+    ):
+        assert "賠率" not in message
+    assert "盈虧比" in models.KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE
+    # required 1-A: the guard's banned list keeps the word. It is the
+    # anti-regression fixture, not a literal awaiting the same substitution.
+    assert "賠率" in FORBIDDEN_IN_A_REFUSAL
+
+
+def test_the_range_messages_echo_only_a_number_the_user_could_have_sent() -> None:
+    """落地條件 31: ``{value}`` may not render ``nan`` / ``inf`` into the sentence.
+
+    風控 kept the echo itself (a user's own number is what they need to correct
+    the entry) and asked for the non-finite cases to be closed without inventing
+    copy. ``allow_inf_nan=False`` does that: the value never reaches the range
+    check, so it never reaches the sentence, and the refusal is pydantic's
+    ordinary type error instead.
+    """
+    for value in (float("nan"), float("inf"), float("-inf")):
+        for field in ("win_rate", "payoff_ratio"):
+            payload: dict[str, float] = {"win_rate": 0.55, "payoff_ratio": 1.8}
+            payload[field] = value
+            with pytest.raises(ValidationError) as caught:
+                models.KellyManualInput(**payload)
+            rendered = str(caught.value)
+            assert models.KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE[:8] not in rendered
+            assert models.KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE[:8] not in rendered
+
+    # A finite out-of-range value still gets the approved sentence, echo included.
+    with pytest.raises(ValidationError) as caught:
+        models.KellyManualInput(win_rate=1.2, payoff_ratio=1.8)
+    assert "勝率必須大於 0 且小於 1" in str(caught.value)
 
 
 def test_the_status_code_sits_in_brackets_at_the_very_end() -> None:

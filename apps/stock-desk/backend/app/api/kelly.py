@@ -65,7 +65,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 
-from app.advice.limits import kelly_fraction
+from app.advice.book import kelly_inputs_of
+from app.advice.limits import KellyInputs, kelly_fraction
 from app.api.backtest import BacktestRequest, execute_backtest
 from app.api.common import now_iso
 from app.api.deps import (
@@ -231,6 +232,58 @@ def _view(row: KellyInputRow) -> KellyInputView:
         freshness=ageing.freshness,
         as_of=now_iso(),
     )
+
+
+def ci_includes_no_edge(row: KellyInputRow) -> bool:
+    """Whether the stored f* interval covers "no edge" (約束 36).
+
+    The whole of what the risk layer learns about the interval: one boolean,
+    reduced here because ``app/advice/limits.py`` may branch but may not compute
+    a statistic, and because handing it the bounds would put a clamp within
+    reach of a module forbidden to have one (約束 34).
+
+    ``f_star_ci_low <= 0`` is the test. A row with no interval at all -- every
+    manual pair, and any import predating the interval columns -- is ``False``:
+    the flag reports that the interval *was seen to* include zero, and (a-2)
+    states it as a finding about this estimate. Reporting it for a row that has
+    no interval would be a finding about a measurement nobody made.
+    """
+    return row.f_star_ci_low is not None and row.f_star_ci_low <= 0.0
+
+
+def kelly_inputs_for(
+    store: KellyInputStore, symbol: str, market: Market
+) -> KellyInputs | None:
+    """Cap 5's input for one holding, or ``None`` when none was ever entered.
+
+    The one place the "read the row -> reduce the interval -> age it" chain is
+    assembled, so the advice card, the portfolio overview and the alert loop
+    all put the same pair in front of cap 5. It sits in this module because D-8
+    makes it the single point allowed to touch the storage package and the risk
+    package at once.
+    """
+    row = store.get(symbol, market)
+    if row is None:
+        return None
+    return kelly_inputs_of(row, ci_includes_no_edge=ci_includes_no_edge(row))
+
+
+def kelly_inputs_by_symbol(store: KellyInputStore) -> dict[tuple[str, Market], KellyInputs]:
+    """Every stored pair, keyed the way the book-level caps group holdings.
+
+    One read for the whole overview rather than one per holding. The key is the
+    normalised symbol and the market, which is what
+    ``app.advice.book_limits._group_positions`` groups on and what
+    ``kelly_inputs`` is keyed on (D-1) -- the two normalisations are the same
+    function (:func:`app.kelly.models.normalize_symbol`), so a pair and the
+    holding it constrains cannot end up under two spellings of one ticker.
+    """
+    built: dict[tuple[str, Market], KellyInputs] = {}
+    for row in store.list_all():
+        inputs = kelly_inputs_of(row, ci_includes_no_edge=ci_includes_no_edge(row))
+        if inputs is not None:  # pragma: no branch - a real row always builds
+            built[(normalize_symbol(row.symbol), row.market)] = inputs
+    return built
 
 
 def _not_found(symbol: str, market: Market) -> HTTPException:

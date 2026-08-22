@@ -1,14 +1,20 @@
 """The same five caps as :mod:`app.advice.limits`, judged over the whole book.
 
 The per-symbol card answers "is *this* holding inside the budget". The overview
-asks a different question -- "is the book inside the budget" -- and three of the
+asks a different question -- "is the book inside the budget" -- and four of the
 five caps have no single book-level number to answer it with: a share of total
-equity, an industry's share, and a stop-out loss are all per-holding
-quantities. So this module does not invent a book-level formula for them. It
-runs :func:`app.advice.limits.evaluate_limits` on every symbol in the book,
-exactly as the card does, and reports **the worst verdict** with the symbol (or
-industry) it came from. The other two caps -- gross exposure and Kelly -- are
-already book-level questions and are read straight off a book-level context.
+equity, an industry's share, a stop-out loss and a Kelly allowance are all
+per-holding quantities. So this module does not invent a book-level formula for
+them. It runs :func:`app.advice.limits.evaluate_limits` on every symbol in the
+book, exactly as the card does, and reports **the worst verdict** with the
+symbol (or industry) it came from. The remaining cap -- gross exposure -- is
+already a book-level question and is read straight off a book-level context.
+
+Cap 5 joined the per-symbol four in C5 (ADR-0006 D-7). Its input is stored per
+``(symbol, market)``, so there is no book-wide pair to judge the book against;
+the aggregate compares each holding against *its own* pair and reports the
+worst, and a holding whose pair is missing or expired is excluded with that
+cap's own sentence rather than compared against a borrowed one.
 
 Three rules keep the aggregate as honest as the per-symbol verdict it is built
 from:
@@ -56,6 +62,7 @@ from app.advice.book import (
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
+    KellyInputs,
     LimitCheck,
     LimitStatus,
     PortfolioContext,
@@ -67,19 +74,27 @@ from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
 
 #: The caps whose observed value belongs to one holding, and which are therefore
-#: aggregated by comparing every symbol in the book. The two absent ids
-#: (``gross_exposure``, ``kelly_fraction``) already answer a book-level question
-#: and are taken verbatim from the book-level context.
+#: aggregated by comparing every symbol in the book. The one absent id
+#: (``gross_exposure``) already answers a book-level question and is taken
+#: verbatim from the book-level context.
+#:
+#: ``kelly_fraction`` is here since C5 (D-7): the pair behind it is keyed on
+#: ``(symbol, market)``, so its verdict is about one holding no less than cap 1's
+#: is. Reading it off the book-level context instead would report the verdict of
+#: a context that carries no pair at all -- "nothing entered yet" -- over a book
+#: where the user may well have entered several.
 PER_SYMBOL_LIMIT_IDS: tuple[str, ...] = (
     "single_position_weight",
     "sector_weight",
     "per_trade_loss",
+    "kelly_fraction",
 )
 
 #: Prefix on the worst holding's own verdict, so the reader knows the sentence
 #: that follows describes one symbol out of several rather than the book.
 #: "觀測值最高" is the neutral way to say "closest to (or furthest past) the cap":
-#: for all three per-symbol caps a higher observed value is nearer the ceiling.
+#: for all four per-symbol caps a higher observed value is nearer the ceiling
+#: (cap 5's observed value is the holding's weight, like cap 1's).
 WORST_SYMBOL_PREFIX = "逐檔評估帳本內 {count} 檔標的，觀測值最高者為 {symbol}："
 
 #: The same for cap 2, which compares industries rather than holdings -- the
@@ -119,12 +134,13 @@ NO_CANDIDATE_DETAIL = (
     "{name}沒有可納入比較的{unit}，本次不計算，回報 not_evaluable；各標的的成因逐檔列出。"
 )
 
-#: What each per-symbol cap compares -- cap 2 ranks industries, the other two
+#: What each per-symbol cap compares -- cap 2 ranks industries, the other three
 #: rank holdings.
 _COMPARED_UNITS: dict[str, str] = {
     "single_position_weight": "標的",
     "sector_weight": "產業",
     "per_trade_loss": "標的",
+    "kelly_fraction": "標的",
 }
 
 #: :data:`NO_CANDIDATE_DETAIL` per cap, with the cap's own name from
@@ -136,8 +152,9 @@ NO_CANDIDATE_DETAILS: dict[str, str] = {
 
 #: The book-level caps that still have nothing to compute on an empty book: an
 #: exposure ratio with no position in the numerator is not a 0% exposure that
-#: passed, it is a ratio with nothing to measure. ``kelly_fraction`` is not one
-#: of them -- its verdict is about the budget's inputs, not about holdings.
+#: passed, it is a ratio with nothing to measure. Only cap 3 is judged at book
+#: level at all now (C5 moved cap 5 to the per-symbol path, D-7), and the
+#: per-symbol caps get rule 4's treatment from :func:`_aggregate` instead.
 EMPTY_BOOK_UNCOMPUTABLE_IDS: frozenset[str] = frozenset({"gross_exposure"})
 
 #: Worst-first ordering over statuses. ``not_evaluable`` never appears in a
@@ -252,6 +269,7 @@ def evaluate_book_limits(
     *,
     net_worth: SelfReportedNetWorth | None = None,
     market_data: Mapping[tuple[str, Market], SymbolMarketInput] | None = None,
+    kelly_inputs: Mapping[tuple[str, Market], KellyInputs] | None = None,
 ) -> BookLimits:
     """Judge the whole book against the five caps.
 
@@ -259,13 +277,22 @@ def evaluate_book_limits(
     the caller could resolve for that holding. A key with no entry is not an
     error: the price-based caps then report their own ``not_evaluable`` reason
     for that symbol and it is listed as excluded.
+
+    ``kelly_inputs`` is keyed the same way and carries cap 5's stored pair per
+    holding (D-7). It is deliberately *not* folded into ``market_data``: that
+    mapping holds what a price chain resolved, and the caller only fills it for
+    symbols whose bars loaded. A Kelly pair exists independently of today's
+    prices, and a holding that lost its pair because its bars failed to load
+    would be told "nothing entered yet" about an input the user did enter.
+    A key with no entry means exactly that nothing was entered for it.
     """
     prices = market_data or {}
+    kelly = kelly_inputs or {}
     book = build_book_level_context(summary, net_worth=net_worth)
     baseline = {check.id: check for check in evaluate_limits(budget, book.context)}
 
     groups = _group_positions(summary)
-    candidates, unvalued = _split_by_valuation(summary, budget, groups, prices, net_worth)
+    candidates, unvalued = _split_by_valuation(summary, budget, groups, prices, kelly, net_worth)
 
     limits = [
         (
@@ -337,6 +364,7 @@ def _split_by_valuation(
     budget: RiskBudget,
     groups: list[_Group],
     prices: Mapping[tuple[str, Market], SymbolMarketInput],
+    kelly: Mapping[tuple[str, Market], KellyInputs],
     net_worth: SelfReportedNetWorth | None,
 ) -> tuple[list[_Candidate], list[_UnvaluedSymbol]]:
     """Split the book into comparable holdings and the ones rule 3 withholds."""
@@ -353,7 +381,7 @@ def _split_by_valuation(
                 )
             )
             continue
-        context = _symbol_context(summary, group, prices, net_worth)
+        context = _symbol_context(summary, group, prices, kelly, net_worth)
         candidates.append(
             _Candidate(
                 symbol=group.symbol,
@@ -369,10 +397,12 @@ def _symbol_context(
     summary: PortfolioSummary,
     group: _Group,
     prices: Mapping[tuple[str, Market], SymbolMarketInput],
+    kelly: Mapping[tuple[str, Market], KellyInputs],
     net_worth: SelfReportedNetWorth | None,
 ) -> PortfolioContext:
     """One holding's context, built by the same adapter the advice card uses."""
-    data = prices.get((group.symbol.strip().upper(), group.market), SymbolMarketInput())
+    key = (group.symbol.strip().upper(), group.market)
+    data = prices.get(key, SymbolMarketInput())
     return build_book_context(
         summary,
         symbol=group.symbol,
@@ -382,6 +412,7 @@ def _symbol_context(
         atr=data.atr,
         fx=data.fx,
         net_worth=net_worth,
+        kelly=kelly.get(key),
     ).context
 
 

@@ -31,13 +31,19 @@ from app.advice.limits import (
     NO_SECTOR_UNFILED_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
     SECTOR_MIXED_DETAIL,
+    KellyInputs,
     RiskBudget,
     SelfReportedNetWorth,
     format_percent,
 )
 from app.portfolio.summary import PortfolioSummary
 from app.positions.models import Market
-from tests.advice_helpers import book_position, book_summary, reported_net_worth
+from tests.advice_helpers import (
+    book_position,
+    book_summary,
+    kelly_inputs,
+    reported_net_worth,
+)
 
 BUDGET = RiskBudget()
 
@@ -52,10 +58,22 @@ def _report(
     budget: RiskBudget = BUDGET,
     net_worth: SelfReportedNetWorth | None = None,
     market_data: Mapping[tuple[str, Market], SymbolMarketInput] | None = None,
+    kelly: Mapping[tuple[str, Market], KellyInputs] | None = None,
 ) -> dict[str, BookLimitCheck]:
     return _by_id(
-        evaluate_book_limits(summary, budget, net_worth=net_worth, market_data=market_data)
+        evaluate_book_limits(
+            summary,
+            budget,
+            net_worth=net_worth,
+            market_data=market_data,
+            kelly_inputs=kelly,
+        )
     )
+
+
+def _reason(cap: BookLimitCheck, symbol: str) -> str:
+    """The verbatim reason one excluded holding was left out with."""
+    return next(entry.reason for entry in cap.excluded if entry.symbol == symbol)
 
 
 # --- shape -------------------------------------------------------------------
@@ -314,12 +332,88 @@ def test_a_foreign_holding_without_a_rate_is_excluded_rather_than_converted() ->
 # --- cap 5 -------------------------------------------------------------------
 
 
-def test_kelly_has_no_data_source_and_says_so() -> None:
-    checks = _report(book_summary(book_position(1, "2330")))
-    cap = checks["kelly_fraction"]
+def test_kelly_is_not_evaluable_while_no_pair_has_been_entered() -> None:
+    """(g-1), now per holding: the overview says it about each symbol.
+
+    Before C5 this cap had no data source at all and the aggregate said so once
+    for the whole book. It is a per-symbol cap now (D-7), so the holding is
+    excluded carrying the cap's own verbatim reason (rule 1) rather than being
+    compared against a pair that does not exist.
+    """
+    cap = _report(book_summary(book_position(1, "2330")))["kelly_fraction"]
+
     assert cap.status == "not_evaluable"
-    assert "目前沒有資料來源提供這兩項輸入" in cap.detail
     assert cap.threshold is None
+    assert [entry.symbol for entry in cap.excluded] == ["2330"]
+    assert _reason(cap, "2330").startswith("此標的尚未輸入 Kelly 所需的勝率與盈虧比")
+
+
+def test_kelly_compares_each_holding_against_its_own_pair() -> None:
+    """D-7: the pair is keyed on ``(symbol, market)``, so the comparison is too."""
+    summary = book_summary(
+        book_position(1, "2330", quantity="500"),
+        book_position(2, "2454", quantity="500"),
+    )
+    cap = _report(
+        summary,
+        market_data={
+            ("2330", "TW"): SymbolMarketInput(close=600.0, currency="TWD", atr=1.0),
+            ("2454", "TW"): SymbolMarketInput(close=600.0, currency="TWD", atr=1.0),
+        },
+        kelly={
+            # 2330's edge allows the tighter weight, so it is the worst holding.
+            ("2330", "TW"): kelly_inputs(0.6, 1.0),
+            ("2454", "TW"): kelly_inputs(0.9, 5.0),
+        },
+    )["kelly_fraction"]
+
+    assert cap.evaluated_count == 2
+    assert cap.worst_symbol == "2330"
+    assert cap.detail.startswith(WORST_SYMBOL_PREFIX.format(count=2, symbol="2330"))
+    assert cap.excluded == []
+
+
+def test_a_holding_with_no_pair_is_excluded_rather_than_lent_another_one() -> None:
+    """One symbol's pair may not stand in for another's (rule 1)."""
+    summary = book_summary(
+        book_position(1, "2330", quantity="500"),
+        book_position(2, "2454", quantity="500"),
+    )
+    cap = _report(
+        summary,
+        market_data={
+            ("2330", "TW"): SymbolMarketInput(close=600.0, currency="TWD", atr=1.0),
+            ("2454", "TW"): SymbolMarketInput(close=600.0, currency="TWD", atr=1.0),
+        },
+        kelly={("2330", "TW"): kelly_inputs(0.6, 2.0)},
+    )["kelly_fraction"]
+
+    assert cap.evaluated_count == 1
+    assert cap.worst_symbol == "2330"
+    assert [entry.symbol for entry in cap.excluded] == ["2454"]
+    assert EXCLUDED_SUFFIX.format(count=1) in cap.detail
+
+
+def test_an_expired_pair_excludes_its_holding_with_the_expiry_sentence() -> None:
+    """The exclusion reason is the cap's own (g-2), verbatim and with its date."""
+    cap = _report(
+        book_summary(book_position(1, "2330", quantity="500")),
+        market_data={("2330", "TW"): SymbolMarketInput(close=600.0, currency="TWD", atr=1.0)},
+        kelly={
+            ("2330", "TW"): kelly_inputs(source="manual", age_days=45, anchored_at="2026-06-01")
+        },
+    )["kelly_fraction"]
+
+    assert cap.status == "not_evaluable"
+    assert "上次更新於 2026-06-01，距今 45 天" in _reason(cap, "2330")
+
+
+def test_an_empty_book_reports_kelly_as_having_nothing_to_compare() -> None:
+    """Rule 4: no holding is not a holding that passed."""
+    cap = _report(book_summary())["kelly_fraction"]
+
+    assert cap.status == "not_evaluable"
+    assert cap.detail == EMPTY_BOOK_DETAIL.format(name=LIMIT_NAMES["kelly_fraction"])
 
 
 # --- unvalued holdings -------------------------------------------------------
