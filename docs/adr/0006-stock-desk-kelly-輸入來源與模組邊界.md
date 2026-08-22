@@ -1,8 +1,13 @@
 # ADR-0006：Stock Desk Kelly 輸入的來源、鍵值與模組邊界
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-08-19 核可）
 - 日期：2026-08-19
-- 決策者：tech-architect（草案）、CEO（待核可）；風控文案另案審查
+- 決策者：tech-architect（草案）、CEO（已核可）；風控文案另案審查
+
+> **2026-08-19 核可註記**：CEO 核可本修訂版全文（含 `kelly_import_attempts` 新表），
+> 並同時裁決 `MIN_OOS_ROUND_TRIPS = 20`（quant 建議 20 並列 50，CEO 採 20＋強制揭露）、
+> `report.py` 既有 win_rate/profit_factor 微額 fill 污染另立任務修復。
+> 自此任何原地改寫皆屬 ADR-0001 禁止範圍，後續變更須以新 ADR supersede。
 
 > **2026-08-19 修訂註記**：依 quant D-9 意見與 tech-architect 收斂裁決修訂
 > （來源：`work/stock-desk-C5-Kelly-架構收斂裁決.md`）。本次為 ADR-0001 允許的

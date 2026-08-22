@@ -160,13 +160,13 @@
 - **PRD 事實錯誤更正**:profit_factor≠b(PF=(p/(1-p))·b),PRD 相關文字須改;
 - **FR-3 一條 AC 不可達**(回測無落地,無「舊報告」可看)——新鮮度錨點改採 OOS 區段
   結束日(D-4),PM 更新 AC、CEO 知會(7/30 天數不變)。
-- **(2026-08-19 追加)** MIN_OOS_ROUND_TRIPS 取 20 或 50(風險胃納;quant 建議
-  20+強制揭露)——**未定值前回測帶入路徑不得開工**,手動路徑與儲存層不受阻擋。
-- **(2026-08-19 追加)** kelly_import_attempts 新表需 CEO 核可(已納入 ADR-0006
-  修訂版)。
-- **(2026-08-19 追加)** report.py 既有 win_rate/profit_factor 微額 fill 污染:
-  另立任務、PM 排期、知會 risk-compliance-officer;report 層修=bug fix 不需
-  ADR,engine 層修(no-trade band)=需新 ADR。
+- **(2026-08-19 追加,同日 CEO 裁決)** MIN_OOS_ROUND_TRIPS:**CEO 裁定 = 20**
+  (quant 建議 20 並列 50,採 20+強制揭露)。回測帶入路徑阻擋解除。
+- **(2026-08-19 追加,同日 CEO 核可)** kelly_import_attempts 新表:隨 ADR-0006
+  修訂版一併核可。
+- **(2026-08-19 追加,同日 CEO 裁決:立案)** report.py 既有 win_rate/profit_factor
+  微額 fill 污染:CEO 同意另立任務、PM 排期、知會 risk-compliance-officer;
+  report 層修=bug fix 不需 ADR,engine 層修(no-trade band)=需新 ADR。
 - **(2026-08-19 追加)** P3 保守帶入(90% 信賴下界+獨立 source 值)是否納入
   路線圖;若採納需 ADR-0006 新增 source 值。
 
@@ -181,6 +181,7 @@
 - 可立即並行:手動輸入路徑+儲存層+設定頁 UI。
 - **(2026-08-19 更新)** 回測帶入路徑:quant-researcher 已回答三題(門檻/b
   定義與跨樣本歸屬/選擇偏誤揭露,詳見 ADR-0006 修訂版 D-9「已解除」),結論
-  已納入第 7、22–37 條。**唯一剩餘阻擋**:MIN_OOS_ROUND_TRIPS 數值待 CEO
-  裁決(quant 建議 20、並列 50),定值前回測帶入路徑不得開工;手動路徑與
-  儲存層不受阻擋。
+  已納入第 7、22–37 條。
+- **(2026-08-19 再更新)** CEO 已核可 ADR-0006 並裁定 MIN_OOS_ROUND_TRIPS = 20,
+  **全部路徑阻擋解除**;僅面向使用者文案(送審範圍 19-21 與追加送審句)仍須
+  風控逐字 CONFIRMED 後方可出貨,程式骨架可先行。
