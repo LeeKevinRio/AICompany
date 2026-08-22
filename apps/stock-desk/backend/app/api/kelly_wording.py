@@ -135,6 +135,34 @@ KELLY_SELECTION_BIAS_SINGLE = (
     "本系統無法得知你在畫面上比較過幾種設定、又只送出了其中一組。"
 )
 
+#: (條件 96 句) 風控 2026-08-22 逐字定稿（第十一輪，修訂版，採主案），字面含標點不得
+#: 改動，漂移須重送風控。
+#: The third cell of (b), for a row that owes the selection-bias disclosure and
+#: has no attempt history to build it from. It states the **absence of the
+#: record** and refuses to read that absence as a measurement -- which is the
+#: same distinction (g-4) draws about a freshness that was never established,
+#: and the reason it may not be replaced by a rendered "0".
+#:
+#: Reachable in practice: rows written before the attempt log existed upgrade
+#: into exactly this state. 條件 98 puts the branch at the assembly point rather
+#: than inside the (b) selector, because the 422 and "nothing entered" paths
+#: share that selector and this sentence is false on both of them.
+#:
+#: The 修訂 struck a five-character phrase claiming the counts are missing *on
+#: this page* (條件 100 keeps the struck literal out of the source): they are
+#: missing everywhere, and saying "here" implies they can be found somewhere
+#: else. Naming ``K_observed`` in the parenthesis is kept on purpose -- it names
+#: the count, not a value, exactly as (b) does, and it is the same identifier
+#: 元件 B and 3-B put in front of the user.
+#:
+#: 條件 101: it may never share a screen with 元件 B or 3-B's "已計入 K_observed",
+#: which asserts K >= 1 and would contradict it outright.
+KELLY_SELECTION_BIAS_UNLOGGED = (
+    "此標的目前查無回測帶入嘗試紀錄（K_observed）——"
+    "這是紀錄本身的缺席，不是查到了一個計數的結果；"
+    "因此無法呈現選擇偏誤揭露所依據的計數。"
+)
+
 # ---------------------------------------------------------------------------
 # (c) what walk-forward does and does not protect against
 # ---------------------------------------------------------------------------
@@ -706,6 +734,21 @@ KELLY_SOURCE_OVERRIDDEN_STATEMENT = (
 )
 KELLY_SOURCE_OVERRIDDEN_LABEL = "來源：回測帶入，已手動調整；原始回測值仍保留可查。"
 
+#: (fr6-backtest) 風控 2026-08-22 逐字定稿（第十輪，風控直接定稿），字面含標點不得改動，
+#: 漂移須重送風控。
+#: The third cell, which the sixth round left empty and K4c-1 reported as a gap.
+#: It is a parallel composition of the two above rather than new copy, and it
+#: closes 條件 84: the source table now has a value in every cell, with no
+#: ``None`` fallback that a reader could mistake for "a sentence nobody wrote".
+#:
+#: 條件 85 bounds how it may be displayed: it states provenance and nothing about
+#: quality, so it may not share a slot with anything that reads as verification
+#: (the 費率查證 row is its own row, in the FR-5 detail), and its prominence may
+#: not exceed (e)'s -- "imported from a backtest" must not out-shout the sentence
+#: saying what that measurement is and is not.
+KELLY_SOURCE_BACKTEST_STATEMENT = "此標的目前生效的 Kelly 輸入，來源為回測帶入。"
+KELLY_SOURCE_BACKTEST_LABEL = "來源：回測帶入。"
+
 
 # ---------------------------------------------------------------------------
 # (任務 5) FR-4 badge: the four states one input can be in
@@ -837,8 +880,14 @@ KELLY_OVERWRITE_CANCEL_LABEL = "取消"
 KELLY_OVERWRITE_CONFIRM_LABEL = "確認帶入，覆蓋目前資料"
 
 
-def kelly_overwrite_notice(source: str) -> str | None:
-    """The before-overwrite dialog body for one source, or ``None``.
+def kelly_overwrite_notice(source: str) -> tuple[str, ...] | None:
+    """The before-overwrite dialog paragraphs for one source, or ``None``.
+
+    **Three paragraphs, in order, never one joined string** (條件 93). Running
+    them together is not a formatting preference: 段二 is the paragraph stating
+    what the user loses, and burying it mid-block visually demotes the one thing
+    this dialog exists to say. The literals are untouched -- only the seam
+    between them is.
 
     條件 73 makes the four cells mutually exclusive and exhaustive, and this
     function owns two of them; the caller owns "no row at all". Every branch is
@@ -859,16 +908,20 @@ def kelly_overwrite_notice(source: str) -> str | None:
     tested with a positive assertion.
     """
     if source == "manual":
-        variant = KELLY_OVERWRITE_NOTICE_MANUAL_EFFECT + KELLY_OVERWRITE_NOTICE_MANUAL_LOSS
+        variant = (
+            KELLY_OVERWRITE_NOTICE_MANUAL_EFFECT,
+            KELLY_OVERWRITE_NOTICE_MANUAL_LOSS,
+        )
     elif source == "backtest_overridden":
         variant = (
-            KELLY_OVERWRITE_NOTICE_OVERRIDDEN_EFFECT + KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS
+            KELLY_OVERWRITE_NOTICE_OVERRIDDEN_EFFECT,
+            KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS,
         )
     elif source == "backtest":
         return None
     else:
         return None
-    return variant + KELLY_OVERWRITE_NOTICE_CHOICES
+    return (*variant, KELLY_OVERWRITE_NOTICE_CHOICES)
 
 
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
@@ -880,6 +933,8 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "a-2": KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE,
     "b-full": KELLY_SELECTION_BIAS_FULL,
     "b-single": KELLY_SELECTION_BIAS_SINGLE,
+    # 第十一輪 條件 96: (b)'s third cell.
+    "b-unlogged": KELLY_SELECTION_BIAS_UNLOGGED,
     "c": KELLY_WALK_FORWARD_SCOPE,
     "e": KELLY_WIN_RATE_IS_NOT_PROBABILITY,
     "e-manual": KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
@@ -933,6 +988,9 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "fr6-manual-label": KELLY_SOURCE_MANUAL_LABEL,
     "fr6-overridden": KELLY_SOURCE_OVERRIDDEN_STATEMENT,
     "fr6-overridden-label": KELLY_SOURCE_OVERRIDDEN_LABEL,
+    # 第十輪 條件 84/85: the third source cell, filled by the review itself.
+    "fr6-backtest": KELLY_SOURCE_BACKTEST_STATEMENT,
+    "fr6-backtest-label": KELLY_SOURCE_BACKTEST_LABEL,
     "badge-absent": KELLY_FRESHNESS_BADGE_ABSENT,
     "badge-fresh": KELLY_FRESHNESS_BADGE_FRESH,
     "badge-ageing": KELLY_FRESHNESS_BADGE_AGEING,

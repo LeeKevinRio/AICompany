@@ -33,11 +33,15 @@ from app.advice.limits import LIMIT_NAMES
 from app.api import kelly_wording as wording
 from app.api.backtest import DIVIDEND_ADJUSTED_NOTE
 from app.kelly.models import (
+    KELLY_PAYOFF_RATIO_LABEL,
+    KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
     KELLY_SOFT_NOTICE_DAYS,
     KELLY_STALE_AFTER_DAYS,
     KellyAttemptRecord,
     KellyInputRecord,
 )
+from app.positions.models import Market
+from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
 
 _PATH = "/api/kelly-inputs/2330/disclosures"
@@ -106,11 +110,11 @@ def _overridden(**overrides: Any) -> KellyInputRecord:
     return _imported(source="backtest_overridden", win_rate=0.5, payoff_ratio=1.2, **overrides)
 
 
-def _attempt(harness: ApiHarness, *, spec: str = "spec-1") -> None:
+def _attempt(harness: ApiHarness, *, spec: str = "spec-1", market: Market = "TW") -> None:
     harness.kelly_attempts.append(
         KellyAttemptRecord(
             symbol="2330",
-            market="TW",
+            market=market,
             strategy_id="breakout",
             request_spec=spec,
             spec_hash=spec,
@@ -128,8 +132,21 @@ def _get(harness: ApiHarness, path: str = _PATH) -> dict[str, Any]:
 
 
 def _disclosures(harness: ApiHarness, row: KellyInputRecord | None = None) -> dict[str, Any]:
+    """The disclosure block for one row, with the attempt an import would leave.
+
+    A row with backtest provenance and no logged attempt is 條件 98's third cell
+    and has a sentence of its own; it is not the state most of these tests are
+    about, and in production the import appends its attempt before it writes the
+    row. So one attempt is seeded here when the fixture has none, which is what
+    the real path guarantees. Tests that seed their own attempts, or that are
+    about the third cell itself, go through :func:`_get` directly.
+    """
     if row is not None:
         harness.kelly_inputs.upsert(row)
+        if row.source != "manual" and harness.kelly_attempts.k_observed(
+            row.symbol, row.market
+        ) == 0:
+            _attempt(harness, market=row.market)
     block: dict[str, Any] = _get(harness)["disclosures"]
     return block
 
@@ -199,13 +216,20 @@ def test_the_two_win_rate_disclosures_are_mutually_exclusive_and_exhaustive(
             wording.KELLY_SOURCE_OVERRIDDEN_STATEMENT,
             wording.KELLY_SOURCE_OVERRIDDEN_LABEL,
         ),
+        (
+            "backtest",
+            wording.KELLY_SOURCE_BACKTEST_STATEMENT,
+            wording.KELLY_SOURCE_BACKTEST_LABEL,
+        ),
     ],
 )
 def test_the_source_sentence_and_label_travel_together(
     source: str, statement: str, label: str, api_harness: ApiHarness
 ) -> None:
-    """任務 4 (FR-6): each source has both a sentence and a short label."""
-    row = _manual() if source == "manual" else _overridden()
+    """任務 4 (FR-6) + 條件 84: each source has both a sentence and a label."""
+    row = {"manual": _manual, "backtest_overridden": _overridden, "backtest": _imported}[
+        source
+    ]()
 
     block = _disclosures(api_harness, row)
 
@@ -213,18 +237,39 @@ def test_the_source_sentence_and_label_travel_together(
     assert block["source_label"] == label
 
 
-def test_an_imported_row_has_no_approved_source_sentence_yet(
-    api_harness: ApiHarness,
-) -> None:
-    """缺口, reported rather than filled: 任務 4 approved FR-6 for the two
-    hand-keyed sources and for no third one. Inventing a sentence for a plain
-    import is what 落地條件 2 forbids, so both slots stay empty and the API says
-    so out loud.
-    """
+def test_an_imported_row_states_its_own_source(api_harness: ApiHarness) -> None:
+    """條件 84: the third cell, filled by the tenth round. No ``None`` fallback."""
     block = _disclosures(api_harness, _imported())
 
-    assert block["source_statement"] is None
-    assert block["source_label"] is None
+    assert block["source_statement"] == wording.KELLY_SOURCE_BACKTEST_STATEMENT
+    assert block["source_label"] == wording.KELLY_SOURCE_BACKTEST_LABEL
+
+
+def test_the_source_table_has_a_value_in_every_cell(api_harness: ApiHarness) -> None:
+    """條件 84 as a positive assertion over all three sources.
+
+    An empty cell and a sentence nobody has written yet look the same on a
+    screen, which is why this is asserted rather than left to the field being
+    optional -- it is optional only for the state where there is no row at all.
+    """
+    for row in (_imported(), _manual(), _overridden()):
+        block = _disclosures(api_harness, row)
+        assert block["source_statement"] is not None
+        assert block["source_label"] is not None
+
+
+def test_the_source_label_shares_no_slot_with_a_verification_claim(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 85: provenance only -- it says where the pair came from, not that it
+    is sound. The rates row is a row of its own in the FR-5 detail, and never
+    part of this label.
+    """
+    block = _disclosures(api_harness, _imported(rates_verified=False))
+
+    assert block["source_label"] == wording.KELLY_SOURCE_BACKTEST_LABEL
+    assert "查證" not in block["source_label"]
+    assert "查證" not in block["source_statement"]
 
 
 # ---------------------------------------------------------------------------
@@ -282,22 +327,95 @@ def test_the_counts_are_live_and_not_the_snapshot_on_the_row(
     assert _get(api_harness)["kelly_input"]["item"]["k_observed_at_write"] == 1
 
 
-def test_an_imported_row_with_no_logged_attempt_is_reported_not_papered_over(
-    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("source", ["backtest", "backtest_overridden"])
+def test_a_row_that_owes_b_with_no_attempt_logged_says_the_record_is_missing(
+    source: str, api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """落地條件 5:「K==0 於 backtest 來源不可達;可達即閘門被繞過屬 BLOCKING」.
+    """條件 96/98, cell 3: the absence of the record, stated as an absence.
 
-    The import path appends the attempt before it writes the row, so this state
-    means the log lost a row (b) depends on. No sentence is invented for it --
-    printing "0 attempts" beside an imported pair would be a claim about a
-    search history the system knows it is missing -- and the defect is logged.
+    The import appends its attempt before it writes the row, so a row with
+    backtest provenance and ``K == 0`` means the log is missing what (b) rests
+    on -- reachable through rows written before that log existed, which is why
+    it is neither a hard failure nor a silent one. The sentence refuses to read
+    the missing record as a measured count, and the row is logged for an
+    operator at the same time (條件 98).
     """
+    row = _imported() if source == "backtest" else _overridden()
+    api_harness.kelly_inputs.upsert(row)
+
     with caplog.at_level("ERROR"):
-        block = _disclosures(api_harness, _imported())
+        block = _get(api_harness)["disclosures"]
 
     assert block["k_observed"] == 0
+    assert block["selection_bias"] == wording.KELLY_SELECTION_BIAS_UNLOGGED
+    assert "no attempt logged" in caplog.text
+
+
+def test_the_missing_record_sentence_renders_no_count_at_all(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 100: 渲染無「0/零/1」字面，常數無佔位符.
+
+    A rendered zero would be the very thing the sentence denies: a count that
+    was looked up and found to be none.
+    """
+    api_harness.kelly_inputs.upsert(_imported())
+
+    sentence = _get(api_harness)["disclosures"]["selection_bias"]
+
+    assert sentence == wording.KELLY_SELECTION_BIAS_UNLOGGED
+    for literal in ("0", "零", "1"):
+        assert literal not in sentence
+    assert "{" not in sentence and "}" not in sentence
+
+
+@pytest.mark.parametrize("source", ["manual", "absent"])
+def test_the_fourth_cell_of_the_k_branch_stays_empty(
+    source: str, api_harness: ApiHarness
+) -> None:
+    """條件 98/100, cell 4 and the row-less screen: no (b) of any kind.
+
+    A typed pair with no import history is the normal state, and a screen with
+    no row is not owed (b) at all -- attaching the missing-record sentence to
+    either would report a defect where there is none.
+    """
+    if source == "manual":
+        api_harness.kelly_inputs.upsert(_manual())
+
+    block = _get(api_harness)["disclosures"]
+
     assert block["selection_bias"] is None
-    assert "selection-bias disclosure has no attempts" in caplog.text
+    assert wording.KELLY_SELECTION_BIAS_UNLOGGED not in str(block)
+
+
+def test_the_missing_record_sentence_never_meets_the_attempt_logged_one(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 101 (E-13): the two contradict each other and may not share a screen.
+
+    元件 B/3-B assert that an attempt *was* counted, which is K >= 1; this
+    sentence says the record is absent. Both counts are read on the same call
+    that reads the row, so the branch cannot be taken from a stale count -- and
+    this response carries neither refusal sentence.
+    """
+    api_harness.kelly_inputs.upsert(_imported())
+
+    body = _get(api_harness)
+
+    assert body["disclosures"]["selection_bias"] == wording.KELLY_SELECTION_BIAS_UNLOGGED
+    assert wording.KELLY_REFUSAL_ATTEMPT_LOGGED not in str(body)
+    assert wording.KELLY_NON_FINITE_ATTEMPT_LOGGED not in str(body)
+
+
+def test_one_logged_attempt_switches_to_the_short_sentence(
+    api_harness: ApiHarness,
+) -> None:
+    """The boundary between cells 3 and 2: one attempt is a history to describe."""
+    _attempt(api_harness)
+
+    block = _disclosures(api_harness, _imported())
+
+    assert block["selection_bias"] == wording.KELLY_SELECTION_BIAS_SINGLE
 
 
 def test_a_manual_row_without_attempts_is_not_a_defect(
@@ -364,6 +482,7 @@ def test_an_unanchorable_row_reports_expired_with_no_age_to_render(
     api_harness: ApiHarness,
 ) -> None:
     """條件 47 ②: ``age_days`` is null, so nothing may render a day count."""
+    _attempt(api_harness)
     api_harness.kelly_inputs.upsert(_imported(oos_end_date=None))
     body = _get(api_harness)
 
@@ -405,6 +524,47 @@ def test_the_effective_cap_is_on_the_same_screen_as_the_interval(
         "label": LIMIT_NAMES["kelly_fraction"],
         "value": "6.25%",
     }
+
+
+def test_the_effective_cap_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
+    """條件 87 (BLOCKING): the user's budget, never :class:`RiskBudget`'s defaults.
+
+    The caps can only be tightened, so a default-budget figure is always greater
+    than or equal to the enforced one -- the failure mode is a screen promising
+    more room than cap 5 will give. 0.10/0.05 is a budget nobody would reach by
+    accident: f* = 0.25 gives 2.50% here against 6.25% on the defaults.
+    """
+    api_harness.client.put(
+        "/api/settings",
+        json={"risk_budget": {"kelly_fraction_cap": 0.10, "kelly_position_cap": 0.05}},
+    )
+
+    block = _disclosures(api_harness, _imported())
+
+    assert block["effective_cap"]["value"] == "2.50%"
+
+
+def test_the_effective_cap_equals_the_one_cap_5_enforces(api_harness: ApiHarness) -> None:
+    """條件 87: same quantity, same number, on both screens that show it.
+
+    Read from the two endpoints a user actually sees: this one, and cap 5's own
+    row in the advice card's limits check.
+    """
+    api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
+    api_harness.client.post("/api/positions", json=position_payload())
+    api_harness.client.put(
+        "/api/settings",
+        json={"risk_budget": {"kelly_fraction_cap": 0.10, "kelly_position_cap": 0.05}},
+    )
+    _attempt(api_harness)
+    api_harness.kelly_inputs.upsert(_imported())
+
+    block = _get(api_harness)["disclosures"]
+    limits = api_harness.client.get("/api/advice/2330").json()["advice"]["limits_check"]
+    cap_5 = next(check for check in limits if check["id"] == "kelly_fraction")
+
+    assert block["effective_cap"]["value"] == f"{cap_5['threshold'] * 100:.2f}%"
+    assert cap_5["threshold"] == pytest.approx(0.025)
 
 
 def test_the_hard_cap_wins_when_the_fraction_is_large(api_harness: ApiHarness) -> None:
@@ -508,23 +668,34 @@ def test_the_boundary_exclusion_sentence_sits_with_the_two_counts_it_explains(
     assert wording.KELLY_DETAIL_OPEN_TRIP_AT_END_LABEL in rows
 
 
-@pytest.mark.parametrize(
-    ("rates_verified", "expected"),
-    [(False, wording.KELLY_RATES_UNVERIFIED_NOTE), (True, None), (None, None)],
-)
-def test_the_rates_row_appears_only_for_an_explicit_false(
-    rates_verified: bool | None, expected: str | None, api_harness: ApiHarness
+def test_the_rates_row_carries_its_sentence_when_verification_did_not_happen(
+    api_harness: ApiHarness,
 ) -> None:
-    """條件 45:「綁 rates_verified is False;None 不顯示;禁 not 寫法」.
+    """條件 45/91, branch 1 of 3: ``rates_verified is False`` shows the sentence."""
+    rows = _rows(_disclosures(api_harness, _imported(rates_verified=False)))
 
-    ``None`` is "the run said nothing about its rates", which is a different
-    finding with no approved sentence -- and the one a ``not rates_verified``
-    test would silently merge into the other.
+    assert rows[wording.KELLY_DETAIL_RATES_VERIFIED_LABEL]["note"] == (
+        wording.KELLY_RATES_UNVERIFIED_NOTE
+    )
+    assert rows[wording.KELLY_DETAIL_RATES_VERIFIED_LABEL]["value"] is None
+
+
+@pytest.mark.parametrize("rates_verified", [True, None], ids=["verified", "unreported"])
+def test_the_rates_row_is_absent_entirely_when_there_is_nothing_approved_to_say(
+    rates_verified: bool | None, api_harness: ApiHarness
+) -> None:
+    """條件 45/91, branches 2 and 3, asserted positively.
+
+    「已查證」 would be the system vouching for itself, which the tenth round
+    refused to let anyone draft, and ``None`` ("the run said nothing about its
+    rates") is a third state with no sentence of its own. Both are shown by
+    **omitting the row**, never by a placeholder or an empty value.
     """
-    rows = _rows(_disclosures(api_harness, _imported(rates_verified=rates_verified)))
-    row = rows.get(wording.KELLY_DETAIL_RATES_VERIFIED_LABEL)
+    block = _disclosures(api_harness, _imported(rates_verified=rates_verified))
+    rows = _rows(block)
 
-    assert (None if row is None else row["note"]) == expected
+    assert wording.KELLY_DETAIL_RATES_VERIFIED_LABEL not in rows
+    assert wording.KELLY_DETAIL_RATES_VERIFIED_LABEL not in str(block)
 
 
 @pytest.mark.parametrize(
@@ -538,15 +709,18 @@ def test_the_rates_row_appears_only_for_an_explicit_false(
     ],
 )
 def test_the_dividend_row_carries_kellys_own_block(
-    reason_code: str, market: str, api_harness: ApiHarness
+    reason_code: str, market: Market, api_harness: ApiHarness
 ) -> None:
     """條件 62: the four degraded codes take Kelly's block, not the backtester's."""
     symbol_path = "/api/kelly-inputs/2330/disclosures" + ("?market=US" if market == "US" else "")
+    _attempt(api_harness, market=market)
     api_harness.kelly_inputs.upsert(
         _imported(market=market, dividend_reason_code=reason_code)
     )
 
-    rows = _rows(_get(api_harness, symbol_path)["disclosures"])
+    block = _get(api_harness, symbol_path)["disclosures"]
+    assert block is not None
+    rows = _rows(block)
 
     assert rows[wording.KELLY_DETAIL_DIVIDEND_LABEL]["note"] == wording.kelly_dividend_note(
         reason_code, market=market
@@ -582,7 +756,32 @@ def test_the_sample_detail_is_shown_for_imports_only(
 
     assert block["sample_detail"] is None
     assert block["boundary_exclusion"] is None
+
+
+def test_a_manual_row_carries_no_walk_forward_sentence(api_harness: ApiHarness) -> None:
+    """(c) qualifies an out-of-sample segment, and a typed pair has none."""
+    block = _disclosures(api_harness, _manual())
+
     assert block["walk_forward"] is None
+    assert "樣本外" not in str(
+        {key: value for key, value in block.items() if key != "manual_input_disclosure"}
+    )
+
+
+def test_the_original_values_view_never_names_a_segment_without_explaining_it(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 92: 「樣本外」 on a screen obliges (c) on the same screen.
+
+    The overridden view prints (任務 8)'s 「原始回測的樣本外期間」, so this lane takes
+    the ruling's first option and attaches (c) there; the second option -- drop
+    the period from the view -- would remove a fact the user can check. The
+    written choice between the two is tech-architect's (E-12).
+    """
+    block = _disclosures(api_harness, _overridden())
+
+    assert "樣本外" in block["original_values"]["oos_period_label"]
+    assert block["walk_forward"] == wording.KELLY_WALK_FORWARD_SCOPE
 
 
 # ---------------------------------------------------------------------------
@@ -601,14 +800,17 @@ def test_an_overridden_row_shows_its_original_pair(api_harness: ApiHarness) -> N
     assert original["payoff_ratio"] == "1.50"
     assert original["oos_period_label"] == wording.KELLY_ORIGINAL_OOS_PERIOD_LABEL
     assert original["oos_period"] == "2025-01-02 ~ 2026-06-30"
-    # 缺口: no label over the payoff ratio was ever drafted, and none is invented.
-    assert original["payoff_ratio_label"] is None
+    # 條件 86: the label the range refusal names this field by, from its single
+    # definition in ``app/kelly/models.py``.
+    assert original["payoff_ratio_label"] == KELLY_PAYOFF_RATIO_LABEL
+    assert original["payoff_ratio_label"] in KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE
 
 
 def test_the_original_pair_is_the_imported_one_not_the_effective_one(
     api_harness: ApiHarness,
 ) -> None:
     """(任務 7) says these two numbers were never overwritten. They are not."""
+    _attempt(api_harness)
     api_harness.kelly_inputs.upsert(_overridden())
     body = _get(api_harness)
 
@@ -695,7 +897,8 @@ def test_a_hand_keyed_row_carries_its_own_overwrite_dialog(
     notice = _disclosures(api_harness, row)["overwrite_notice"]
 
     assert notice["title"] == wording.KELLY_OVERWRITE_NOTICE_TITLE
-    assert notice["body"] == "".join(items) + wording.KELLY_OVERWRITE_NOTICE_CHOICES
+    # 條件 93: three paragraphs, in order, delivered separately.
+    assert notice["body"] == [*items, wording.KELLY_OVERWRITE_NOTICE_CHOICES]
     assert notice["confirm_label"] == wording.KELLY_OVERWRITE_CONFIRM_LABEL
     assert notice["cancel_label"] == wording.KELLY_OVERWRITE_CANCEL_LABEL
 
@@ -719,9 +922,37 @@ def test_no_row_means_no_overwrite_dialog(api_harness: ApiHarness) -> None:
 def test_the_overwrite_dialog_renders_no_measured_number(api_harness: ApiHarness) -> None:
     """條件 75: no win rate and no payoff ratio anywhere on this dialog."""
     notice = _disclosures(api_harness, _manual())["overwrite_notice"]
+    rendered = [*notice["body"], notice["title"], notice["confirm_label"], notice["cancel_label"]]
 
-    for text in notice.values():
+    for text in rendered:
         assert not any(character.isdigit() for character in text), text
+
+
+def test_only_two_connector_shapes_are_used_and_neither_crosses_over(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 90:「限「 至 」「 ~ 」二形狀二用途，第三形狀或跨用途即紅燈」.
+
+    出處: 「 至 」 is (a-1)'s own connector between two percentages; 「 ~ 」 is the
+    one ``suggest_quantity_range`` already prints a numeric range with. Dates
+    take the second, percentages the first, and neither takes the other's job.
+    """
+    block = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))
+    period = block["original_values"]["oos_period"]
+    detail = _rows(_disclosures(api_harness, _imported(oos_end_date="2026-06-30")))
+    dates = detail[wording.KELLY_DETAIL_OOS_PERIOD_LABEL]["value"]
+    percentages = detail[wording.KELLY_DETAIL_WIN_RATE_CI_LABEL]["value"]
+
+    assert period == "2025-01-02 ~ 2026-06-30"
+    assert dates == "2025-01-02 ~ 2026-06-30"
+    assert percentages == "35.0% 至 73.0%"
+    for joined in (period, dates):
+        assert " 至 " not in joined
+    assert " ~ " not in percentages
+    # No third shape anywhere in the block: an en dash, a full-width tilde or a
+    # 「到」 would each be a new connector nobody approved.
+    for character in ("—", "〜", "～", "到", "–"):
+        assert character not in str(detail), character
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +988,9 @@ def _approved_texts() -> set[str]:
     for source in ("manual", "backtest_overridden"):
         body = wording.kelly_overwrite_notice(source)
         assert body is not None
-        approved.add(body)
+        approved.update(body)
+    approved.add(KELLY_PAYOFF_RATIO_LABEL)
+    approved.add(wording.KELLY_SELECTION_BIAS_UNLOGGED)
     # The two that interpolate a measured value, rendered as this endpoint
     # renders them (落地條件 12: fixed digits).
     approved.add(
@@ -766,12 +999,12 @@ def _approved_texts() -> set[str]:
         )
     )
     approved.add(wording.KELLY_SELECTION_BIAS_FULL.format(k_observed=2, k_distinct_specs=2))
-    # 欄位 9's value is a range between two percentages, and the connector is the
-    # one (a-1) was approved with for the same job ("{low} 至 {high}"). It is the
-    # only Chinese character this endpoint puts on screen that is not itself a
-    # constant, and it is listed here rather than hidden so a reviewer sees it:
-    # if risk-compliance wants the range shaped differently, this is the line to
-    # change. 落地條件 12 is met either way -- both ends are fixed-width.
+    # 條件 90: 欄位 9's value is a range between two percentages, joined with the
+    # connector (a-1) was approved with for that exact job (出處: (a-1) 定稿,
+    # "{f_star_ci_low_pct} 至 {f_star_ci_high_pct}"). It is the only Chinese
+    # character this endpoint puts on screen that is not itself a constant, and
+    # it is listed here rather than hidden. 落地條件 12 holds either way: both
+    # ends are fixed-width.
     approved.add("35.0% 至 73.0%")
     return approved
 
@@ -784,7 +1017,12 @@ def _approved_texts() -> set[str]:
 def test_every_chinese_string_in_the_response_is_approved_copy(
     row: KellyInputRecord, api_harness: ApiHarness
 ) -> None:
-    """落地條件 3 as a property of the payload, not of the front end.
+    """落地條件 3 as a property of the **GET disclosures** payload.
+
+    Scope is this endpoint's response. The 422 import body is covered
+    field by field in ``tests/test_api_kelly_import.py``, where each of its
+    three sentences is compared against the constant it must equal -- an
+    equivalent guard reached from the other direction.
 
     If the server can only ever emit approved strings, a front end that renders
     what it is given cannot show unapproved copy -- which is the whole point of

@@ -859,6 +859,68 @@ def test_the_non_finite_path_carries_no_refusal_sentence(
     assert "拒絕" not in response.json()["detail"]
 
 
+@pytest.mark.parametrize("code", (*_SAMPLE_SIZE_CODES, *_OTHER_REFUSAL_CODES))
+def test_no_refusal_claims_the_attempt_record_is_missing(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """條件 101 (E-13): 條件 96's sentence may not share a screen with 元件 B.
+
+    元件 B says this attempt was counted, which asserts K >= 1; the other says
+    the record is absent. They cannot both be true, and on this path only the
+    first one is: the attempt is appended before the counts are read.
+    """
+    detail = _refuse_with(code, api_harness, monkeypatch)
+
+    assert kelly_wording.KELLY_SELECTION_BIAS_UNLOGGED not in json.dumps(
+        detail, ensure_ascii=False
+    )
+    assert detail["k_observed"] >= 1
+    assert detail["attempt_logged"] == kelly_wording.KELLY_REFUSAL_ATTEMPT_LOGGED
+
+
+def test_the_counts_are_read_after_the_append_and_that_order_is_frozen() -> None:
+    """條件 101: 「凍結 append 後才查計數」, asserted on the source order.
+
+    A count cached before the append would be one lower than the row the log
+    holds, and a K of zero rendered that way would put 條件 96's sentence on a
+    screen that also says the attempt was counted -- the contradiction E-13 is
+    about. Reading the counts *after* ``_append_attempt`` is what makes 元件 B's
+    claim true of the numbers printed beside it.
+    """
+    source = (Path(__file__).resolve().parent.parent / "app" / "api" / "kelly.py").read_text(
+        encoding="utf-8"
+    )
+    refuse = source.split("def refuse(", 1)[1].split("\n    matched =", 1)[0]
+
+    assert refuse.index("_append_attempt(") < refuse.index("attempts.k_observed(")
+    assert refuse.index("attempts.k_observed(") < refuse.index("KellyImportRefusal(")
+
+
+def test_the_non_finite_path_makes_no_claim_about_the_attempt_record(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """條件 101 on the 500 path: it appends too, so K >= 1 there as well."""
+    _seed(api_harness, _CLEARS_GATE)
+    monkeypatch.setattr(
+        "app.api.kelly.bootstrap_fraction_ci",
+        lambda *args, **kwargs: FractionInterval(
+            point=0.1,
+            low=-math.inf,
+            high=0.2,
+            seed=1,
+            draws=1,
+            degenerate_no_loss_draws=0,
+            degenerate_no_win_draws=1,
+        ),
+    )
+
+    response = _import(api_harness)
+
+    assert response.status_code == 500
+    assert kelly_wording.KELLY_SELECTION_BIAS_UNLOGGED not in response.text
+    assert len(_attempts(api_harness)) == 1
+
+
 def test_only_the_kelly_surface_mentions_the_stored_fraction() -> None:
     """約束 34: nothing outside the Kelly path can read ``f_star`` back.
 

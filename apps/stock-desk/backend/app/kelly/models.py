@@ -69,13 +69,27 @@ KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE = (
     "系統不會自行調整這個數字，請確認後重新輸入。"
 )
 
+#: 風控 2026-08-22 第十輪 條件 86: the noun phrase below is **the** approved label
+#: for the payoff ratio, and this is its single definition -- the range message
+#: is built from it rather than repeating it, so the label a screen shows and the
+#: label a refusal names cannot drift apart. It was taken over a drafted
+#: alternative the round refused and which is therefore not retyped here (the
+#: literal is in ``tests/test_kelly_wording.py``): a 「依…計」 qualifier hung on a
+#: *ratio* reads as a ratio of round-trip counts, and misreading it that way
+#: overstates the edge.
+#:
+#: 列管 L10: 「平均獲利」/「平均虧損」 are averages of round-trip **returns**, not
+#: of amounts. A screen that puts a currency figure beside this label leaves the
+#: approved reading and the label goes back to risk-compliance.
+KELLY_PAYOFF_RATIO_LABEL = "盈虧比（平均獲利 ÷ 平均虧損）"
+
 #: 風控 2026-08-19 第五輪微批: 「賠率」→「盈虧比」純詞彙置換授權, 授權範圍逐字界定為
 #: 本則訊息的該二字, 其餘一字一標點不動。``tests/test_kelly_wording.py`` asserts the
 #: word is gone from both messages in this module, and keeps it in the refusal
 #: guard's banned list -- that entry is the anti-regression fixture, not a
 #: literal awaiting the same substitution.
 KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE = (
-    "盈虧比（平均獲利 ÷ 平均虧損）必須大於 0（收到 {value}）。"
+    KELLY_PAYOFF_RATIO_LABEL + "必須大於 0（收到 {value}）。"
     "系統不會自行調整這個數字，請確認後重新輸入。"
 )
 
