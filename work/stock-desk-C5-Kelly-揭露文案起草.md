@@ -556,3 +556,83 @@ PB_NONE_MESSAGE = (
 - (h) 句 CONFIRMED 前，C5 不得上線（審查「三、整批缺漏」第 1 點）。
 - (d-1) 元件 A／B 的顯示條件（reason_code 分支）與 5-1/5-2/5-3 的落地方式 → dev-lead／tech-architect 依本節「措辭＝行為依據」與「致 dev-lead 的落地備註」實作，若程式邏輯與本節文案假設的訊息結構不同，回送 creative-lead 重審對應句子。
 - qa-reviewer：本輪四項＋加碼三則的逐字守門測試比照第一輪已 CONFIRMED 八句的先例辦理，並新增「元件 A 顯示條件」「元件 B 六碼皆出現」的分支測試。
+
+---
+
+# 第三輪（2026-08-19）
+
+依 `work/reviews/2026-08-19-C5-Kelly-文案批審.md` 第二輪批審逐條 1-B、3-B 重擬，小批共兩句，非全新揭露事實的自由發想，而是裁決已指名三要件／內容邊界的精確結構補件，屬機械執行裁決，不另跑 creative-masters 五步流程，但兩句皆附逐條自檢（含否定口徑、措辭＝行為依據）。
+
+查證依據（本輪新讀）：`apps/stock-desk/backend/app/advice/limits.py:526-527`（`PortfolioContext.win_rate` 單一欄位、無論來源為 manual／backtest／backtest_overridden 皆走同一個欄位，`kelly_allowed_weight` 讀這個欄位時不再分辨來源）、`limits.py:607-615`（`kelly_allowed_weight` 把 `ctx.win_rate` 直接代入 `kelly_fraction` 的 `w`，即 Kelly 公式的 p）、`apps/stock-desk/backend/app/kelly/models.py`（`KellySource = Literal["manual", "backtest", "backtest_overridden"]` 定義；`KellyInputRecord.overriding()` classmethod docstring：`backtest_overridden` = 「``previous`` with a hand-typed pair on top of it」，即覆寫後的**有效值是使用者手鍵輸入**，`backtest_win_rate`/`backtest_payoff_ratio` 才是原始回測數字、且不受覆寫影響）、`apps/stock-desk/backend/app/api/kelly.py:536-569`（`fraction` 非有限區間時，先以 `reason_code=None` 呼叫 `_append_attempt` 記錄一筆 `outcome="ok"` 的嘗試，才拋出 500；`KellyInputRow` 從未被寫入 store）、`models.py` `KellyAttemptRecord._reason_code_matches_outcome`（`outcome` 為 `"ok"` 時不得帶 `reason_code`，故此路徑的 attempts 列 `outcome="ok"`，不是 `"rejected"`）。
+
+## 1.（e-manual）manual／backtest_overridden 來源的勝率／盈虧比揭露句
+
+### 主案
+
+> 此處的『勝率』與『盈虧比』，是你自行輸入（或以回測帶入後自行覆寫）的估計值，不是本系統量測所得的數字。Kelly 公式所要求的 p，在數學上是『重複同一分布下注時獲勝的機率』；本系統在計算這條上限時，放進這個位置的正是你剛才自己輸入（或覆寫）的這個數字——這是本功能目前的已知限制，不是已經被系統處理掉的問題。
+
+**逐條自檢**
+- **三要件全部成立**：
+  ①自報事實——「是你自行輸入（或以回測帶入後自行覆寫）的估計值，不是本系統量測所得的數字」：涵蓋 manual（從頭手鍵）與 backtest_overridden（先帶入後覆寫）兩種來源，措辭對稱「自行輸入」／「自行覆寫」，未把 backtest_overridden 誤寫成單純的 backtest。
+  ②p 位置放的正是自報數字——「Kelly 公式所要求的 p，在數學上是『重複同一分布下注時獲勝的機率』；本系統在計算這條上限時，放進這個位置的正是你剛才自己輸入（或覆寫）的這個數字」：**以肯定句陳述系統實際行為**（「放進…正是…」），全句無「無法」「不會」等能力語氣字面，符合裁決「不得寫成無法/不會能力語氣」的要求。
+  ③已知限制非已處理——「這是本功能目前的已知限制，不是已經被系統處理掉的問題」：與 (e) 定稿收尾逐字相同（此收尾句本身是通用陳述、非「歷史樣本／歷史頻率」等只對 backtest 為真的措辭，故沿用不算逐字複製受限部分）。
+- **否定口徑**：「不是本系統量測所得的數字」1（子句 A：自報事實的定義）、「不是已經被系統處理掉的問題」1（子句 C：限制的狀態）。共 2 個獨立否定，分屬 2 個不同子句，各自受詞具名（量測來源／處理狀態），符合「跨子句獨立否定 ≤4」；核心第②句刻意**完全不用否定詞**，避免把「系統做了這件事」誤讀成「系統沒做什麼」，是本句否定口徑的關鍵設計（否定只用在定義與狀態上，行為描述本身全程肯定句）。
+- **與 (e) 語族對齊、不逐字複製 backtest 專屬措辭**：句式結構（自報/量測定義 → p 的數學定義 → 系統實際放入的內容 → 已知限制非已處理）與 (e) 定稿平行；但第一句刻意不寫「歷史樣本」「歷史頻率」「回合」等只對 `source == "backtest"` 為真的詞（manual 輸入沒有回合、沒有樣本），改用「你自行輸入（或以回測帶入後自行覆寫）的估計值」精確描述 manual／backtest_overridden 的共同性質。
+- **與 (f) 分工、不重複**：(f) 講的是「系統未查核這組數字的正確性、不會自行調整」（資料驗證面）；本句完全不提查核／調整，只講「Kelly 的 p 這個位置放的是什麼」（公式代入面）——兩句分別回答「這數字系統有沒有把關」與「這數字在計算裡被當成什麼用」，無內容重疊，可同畫面並存而不冗餘。
+- **措辭＝行為依據**：`limits.py:526-527` `PortfolioContext.win_rate` 是單一欄位，`kelly_allowed_weight`（`limits.py:607-615`）讀取時不分辨 `source`，故無論 manual 或 backtest_overridden，`ctx.win_rate` 進入 `kelly_fraction` 的 `w`（即 Kelly 的 p）時都是使用者自己敲進去的數字，非系統量測；`models.py` `KellyInputRecord.overriding()` 的 docstring 明載 `backtest_overridden` 的有效 `win_rate`/`payoff_ratio` 是「hand-typed pair on top of」原始回測列，原始回測數字保留在 `backtest_win_rate`/`backtest_payoff_ratio`、不進入計算，如實支持「即使來源曾是回測，覆寫後放進 p 位置的仍是自報數字」這一陳述。
+
+### 備案
+
+> 這裡用來計算上限的『勝率』與『盈虧比』，是你自己輸入的估計值——如果這組數字原本來自回測帶入、後來又被你手動覆寫過，也是同一種情況；它不是本系統實測得到的數字。Kelly 公式的 p，在數學上指的是『重複同一分布下注時獲勝的機率』；本系統計算這條上限時，實際放進這個位置的，就是你剛剛自己輸入（或覆寫）的那個數字——這是本功能目前尚未解決的已知限制，並非系統已經處理過的狀況。
+
+**逐條自檢**
+- 三要件同主案：①「是你自己輸入的估計值……它不是本系統實測得到的數字」，並用破折號子句把 backtest_overridden 的情境單獨點名（「如果這組數字原本來自回測帶入、後來又被你手動覆寫過，也是同一種情況」），比主案的括號注記更明白地把兩個來源的等同關係講出來；②「本系統計算這條上限時，實際放進這個位置的，就是你剛剛自己輸入（或覆寫）的那個數字」——同樣全句肯定句，無「無法/不會」；③「這是本功能目前尚未解決的已知限制，並非系統已經處理過的狀況」，用「尚未解決」替換主案「不是已經被系統處理掉的問題」，語意相同、字面不同。
+- 否定口徑：「它不是本系統實測得到的數字」1、「並非系統已經處理過的狀況」1，共 2，分屬子句 A／C，判斷同主案。
+- 與 (e) 語族對齊、不複製 backtest 專屬詞：同主案判斷，備案額外把 backtest_overridden 的情境從括號拉出成獨立子句，語意更顯白但字數略增。
+- 與 (f) 分工：同主案，全句不涉查核／調整。
+- 措辭＝行為依據：同主案。
+
+**建議**：主案較精簡、括號注記已足夠涵蓋 backtest_overridden，優先推薦；備案供風控在「backtest_overridden 情境是否需要獨立子句點名」上比較選用。
+
+---
+
+## 2. 3-B 非有限 f\* 區間 500 路徑告知句
+
+### 主案
+
+> 這次嘗試已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）；這筆輸入本身，這次沒有被寫入。
+
+**逐條自檢**
+- 內容對應裁決要求的兩件事：①「這次嘗試已被系統記錄並計入 K_observed」——「這次嘗試已經被系統記錄下來，並計入 K_observed」；②「雖然這筆輸入沒有被寫入」——「這筆輸入本身，這次沒有被寫入」。
+- **否定口徑**：「沒有被寫入」僅 1 個否定，受詞具名（「這筆輸入本身」），遠低於上限；不寫「被拒絕」「失敗」等字眼——本句全程不使用「拒絕」二字。
+- **outcome 口徑查證**：`kelly.py:545-554` 對此路徑呼叫 `_append_attempt` 時傳入 `reason_code=None`；`models.py` `KellyAttemptRecord._reason_code_matches_outcome` 規定 `reason_code is None` 時 `outcome` 必為 `"ok"`（若寫 `"rejected"` 會被 model validator 擋下），故這一列 attempts 的 `outcome` 是 `"ok"`——**表示樣本量／估計配對閘門本身都已通過**，只是算出來的 f\* 區間非有限值，觸發的是寫入前的防禦性斷言（`math.isfinite` 檢查），不是任何一個 `KellyGateReasonCode` 閘門的拒絕；因此本句刻意不用「被拒絕」，只用中性的「沒有被寫入」描述結果，如實對應 `outcome="ok"` 但未落地成 `KellyInputRow` 的實際狀態。
+- **與元件 B 措辭區分**：元件 B（422 路徑）定稿「這次被拒絕寫入的嘗試，已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）」，主詞直接是「這次被拒絕寫入的嘗試」，把「被拒絕」放進主詞里；本句主詞是「這次嘗試」（不帶「被拒絕」修飾），並拆成兩個獨立子句分別陳述「已記錄且計入 K」與「這筆輸入沒有被寫入」，字面上與元件 B 無重疊子句，避免讀者把兩種路徑混為一談（一個是閘門擋下、一個是閘門通過後的防禦性中止）。
+- 因果詞：無「因此/導致」等裸接續；分號並列兩件獨立事實。
+- 措辭＝行為依據：`kelly.py:536-569`——`fraction.low`/`fraction.high` 非有限時，先呼叫 `_append_attempt`（`reason_code=None`）把這次嘗試寫進 attempts 表（`attempts.k_observed()` 之後的計數會含這一列），再拋出 `500 KELLY_NON_FINITE_INTERVAL_MESSAGE`；程式在此之後直接 `raise`，從未呼叫任何寫入 `KellyInputRow`／`store.put` 的路徑，故「這筆輸入本身，這次沒有被寫入」如實描述結果，且未使用「被拒絕」（該詞在本模組語意上專指 422 的六個具名閘門，與此路徑的 `outcome="ok"` 不符）。
+
+### 備案
+
+> 這次嘗試同樣已經被系統記錄，並計入 K_observed（詳見選擇偏誤揭露）；只是這一次，你想寫入的這筆勝率與盈虧比，並未被寫入。
+
+**逐條自檢**
+- 內容同主案：①②兩件事皆涵蓋；「並未被寫入」取代主案「沒有被寫入」，語意相同、字面不同。
+- 否定口徑：「並未被寫入」1，判斷同主案；同樣全句不寫「拒絕」。
+- 與元件 B 措辭區分：主詞「這次嘗試」＋「你想寫入的這筆勝率與盈虧比」，比主案更具體點出「被寫入的對象是勝率與盈虧比這組數字」，與元件 B「這次被拒絕寫入的嘗試」的主詞結構仍不同，判斷同主案。
+- 措辭＝行為依據：同主案；「你想寫入的這筆勝率與盈虧比」對應 `_measured_columns` 算出的 `win_rate`/`payoff_ratio` 從未被組裝進 `KellyInputRow` 並呼叫 store 寫入這一事實。
+
+**建議**：主案句式更精簡、與元件 B 的主詞結構差異更清楚，優先推薦；備案供風控在「是否需要具名『勝率與盈虧比』」上比較選用。
+
+---
+
+## 第三輪待風控裁定事項彙總
+
+1. **(e-manual)**：主案（括號注記 backtest_overridden）與備案（獨立子句點名 backtest_overridden）二選一，三要件、否定口徑、與 (f) 分工判斷皆相同，差異僅在 backtest_overridden 情境的顯白程度。
+2. **3-B 告知句**：主案（「這筆輸入本身，這次沒有被寫入」）與備案（「你想寫入的這筆勝率與盈虧比，並未被寫入」）二選一，內容與 outcome 口徑判斷相同，差異僅在受詞具體程度；顯示位置需 dev-lead／tech-architect 確認是否緊接在 `KELLY_NON_FINITE_INTERVAL_MESSAGE`（技術性 500 訊息本身，非本節文案範圍）之後同屏顯示。
+
+## 交接（第三輪）
+
+- 逐字定稿後 → risk-compliance-officer 第三輪 CONFIRMED／退修。
+- (e-manual) CONFIRMED 前，`limits.py:837` 於 manual／backtest_overridden 來源不得出貨（第二輪 1-B 閘門延續）。
+- 3-B CONFIRMED 後，C5 上線閘門「3-B 結案」視為解除（第二輪「C5 文案面整體狀態」項目②）。
+- dev-lead：確認 (e-manual) 顯示條件綁定 `source in {"manual", "backtest_overridden"}`、與 (e) 的 `source == "backtest"` 互斥覆蓋全部三來源；3-B 句與 `KELLY_NON_FINITE_INTERVAL_MESSAGE` 的同屏排版。
+- qa-reviewer：新增 (e) / (e-manual) 三來源分支測試（backtest／manual／backtest_overridden 各一）；3-B 句的 `outcome="ok"` 斷言測試（不得誤植為 `"rejected"` 分支）。
