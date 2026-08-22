@@ -93,6 +93,50 @@ def test_win_rate_and_profit_factor_from_round_trips() -> None:
     assert report.strategy.profit_factor is None
 
 
+def _one_holding_period_result(bars: int = 30) -> BacktestResult:
+    """Fully invested until the last bar, with real costs.
+
+    The cost drag leaves cash slightly negative, so the engine trims a sliver
+    every bar: many closing *fills*, one holding *round trip*.
+    """
+    closes = [100.0 * (1.01**i) for i in range(bars)]
+    frame = bars_to_frame(bars_from_closes(closes))
+
+    def long_then_flat(window: pd.DataFrame) -> float:
+        return 1.0 if len(window) < bars else 0.0
+
+    return run_backtest(frame, long_then_flat, initial_cash=100_000.0, cost_model=CostModel())
+
+
+def test_round_trip_layer_is_reported_beside_the_fill_layer() -> None:
+    report = build_segment_report(_one_holding_period_result())
+    strat = report.strategy
+    # The fill layer counts every sliver; the round-trip layer counts the one
+    # holding period they all belong to. Both are reported, neither replaces the
+    # other, and the fill-layer numbers keep the meaning they always had.
+    assert strat.num_closing_trades > 1
+    assert strat.win_rate == 1.0
+    assert strat.round_trip_win_rate == 1.0
+    assert strat.round_trip_payoff_ratio is None  # no losing round trip: undefined
+    # Buy & Hold trades nothing, so it has no round trip to rate.
+    assert report.buy_and_hold.round_trip_win_rate is None
+    assert report.buy_and_hold.round_trip_payoff_ratio is None
+
+
+def test_a_round_trip_straddling_the_segment_is_not_credited_to_it() -> None:
+    result = _one_holding_period_result()
+    folds = walk_forward_splits(30, train_size=10, test_size=5)
+    oos = walk_forward_report(result, folds).out_of_sample.strategy
+    # The single round trip opened before the out-of-sample window, so the
+    # window has no completed round trip of its own -- while the fill layer
+    # still rates the fragments that happen to fall inside it. That gap is the
+    # reason the Kelly inputs read the round-trip layer.
+    assert oos.round_trip_win_rate is None
+    assert oos.round_trip_payoff_ratio is None
+    assert oos.win_rate == 1.0
+    assert oos.num_closing_trades > 0
+
+
 def test_empty_result_reports_zero_observations() -> None:
     empty = bars_to_frame([])
     result = run_backtest(empty, lambda _w: 1.0)

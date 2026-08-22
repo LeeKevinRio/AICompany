@@ -42,9 +42,18 @@ Strategy = Callable[[pd.DataFrame], float]
 
 @dataclass(frozen=True)
 class Trade:
-    """One executed rebalance fill."""
+    """One executed rebalance fill.
+
+    ``bar_index`` is the position of the fill in the run's own bar sequence, so
+    ``dates[bar_index] == date`` always holds. It is required (no default)
+    because every consumer that has to place a fill inside a window -- the
+    walk-forward geometry above all -- must do so by index: comparing date
+    *strings* against a segment's endpoints re-derives the geometry from the
+    report and drifts the moment a calendar gap or a rebuilt bar set appears.
+    """
 
     date: str
+    bar_index: int
     side: str  # "buy" or "sell"
     shares: float
     price: float
@@ -163,6 +172,7 @@ def run_backtest(
             trades.append(
                 Trade(
                     date=dates[t],
+                    bar_index=t,
                     side=side,
                     shares=trade_shares,
                     price=price,

@@ -18,6 +18,12 @@ Conventions:
   benchmark (documented so it is never mistaken for a costed strategy).
 * Win rate / profit factor are computed over **closing** (position-reducing)
   fills, which carry realized P&L.
+* ``round_trip_win_rate`` / ``round_trip_payoff_ratio`` are the same segment
+  measured over complete **holding round trips** instead of fills, and come
+  from :mod:`app.backtest.episodes` (the only place that defines them). They sit
+  beside the fill-layer pair rather than replacing it: the two answer different
+  questions and their values legitimately differ, since a daily rebalance splits
+  one holding period into many fills.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from app.backtest.engine import BacktestResult, Trade
+from app.backtest.episodes import RoundTripStats, attribute_round_trips
 from app.backtest.splits import WalkForwardFold
 from app.signals.risk import max_drawdown
 
@@ -58,6 +65,12 @@ class PerformanceMetrics(BaseModel):
     num_trades: int
     num_closing_trades: int
     turnover: float | None
+    # Round-trip (holding-period) layer. Separate from the fill-layer pair
+    # above, never a replacement for it, and ``None`` where no round trip is
+    # defined -- the Buy & Hold peer trades nothing, and a segment with no
+    # completed round trip has no rate to report.
+    round_trip_win_rate: float | None
+    round_trip_payoff_ratio: float | None
 
 
 class SegmentReport(BaseModel):
@@ -145,6 +158,7 @@ def _metrics(
     trades: list[Trade],
     periods_per_year: int,
     risk_free_rate: float,
+    round_trip: RoundTripStats | None,
 ) -> PerformanceMetrics:
     n = int(equity.size)
     if n == 0:
@@ -168,6 +182,8 @@ def _metrics(
             num_trades=len(trades),
             num_closing_trades=0,
             turnover=None,
+            round_trip_win_rate=None,
+            round_trip_payoff_ratio=None,
         )
 
     start_equity = float(equity[0])
@@ -213,6 +229,8 @@ def _metrics(
         num_trades=len(trades),
         num_closing_trades=num_closing,
         turnover=turnover,
+        round_trip_win_rate=round_trip.round_trip_win_rate if round_trip else None,
+        round_trip_payoff_ratio=round_trip.round_trip_payoff_ratio if round_trip else None,
     )
 
 
@@ -245,6 +263,11 @@ def build_segment_report(
         if seg_start is not None and seg_start <= t.date <= (seg_end or "")
     ]
 
+    # Round trips are attributed by bar index over the very same ``[start, end)``
+    # bounds this segment was cut with -- the date filter above stays where it
+    # is (it is the fill-layer's existing behaviour) but nothing new reads it.
+    round_trips = attribute_round_trips(result, start=start, stop=end)
+
     strategy_metrics = _metrics(
         label=f"{label}:strategy",
         dates=dates,
@@ -252,6 +275,7 @@ def build_segment_report(
         trades=trades,
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
+        round_trip=round_trips.stats,
     )
     bh_equity = _buy_and_hold_equity(close, result.initial_cash)
     bh_metrics = _metrics(
@@ -261,6 +285,7 @@ def build_segment_report(
         trades=[],
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
+        round_trip=None,
     )
     return SegmentReport(strategy=strategy_metrics, buy_and_hold=bh_metrics)
 
