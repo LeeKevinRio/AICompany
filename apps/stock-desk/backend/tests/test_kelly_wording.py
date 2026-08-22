@@ -186,6 +186,60 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "（原因見第 5 條的說明，不是因為本次缺少資料），因此不列入這個區間的計算基礎；"
         "這個 0，只代表這條上限這次不提供加碼空間，不涉及你目前部位的任何處置。"
     ),
+    # 第八輪（2026-08-22，第七批）。組三主案：(g-4) 的來源括號插入「，已手動調整」。
+    "g-4-overridden": (
+        "此標的的 Kelly 輸入（來源：回測帶入，已手動調整）缺少樣本外區段結束日，"
+        "本系統無法判定其新鮮度，一律視為已過期，本條上限暫不評估；"
+        "請重新執行回測並確認後更新。"
+    ),
+    # 第八輪組一：四共用元素。
+    "e1": "這次回測的報酬計算不含持有期間股利。",
+    "e2": "本系統未計算除權息還原後，這裡顯示的勝率與盈虧比會是什麼；方向不明。",
+    "e3": "此為回測帶入當下記錄的狀態，顯示時本系統依當時記錄呈現。",
+    "e3-never-synced": (
+        "此為回測帶入當下記錄的狀態，顯示時本系統依當時記錄呈現（含是否已完成同步）。"
+    ),
+    "e4": (
+        "以上『方向不明』的判斷，僅限於這筆 Kelly 輸入所依據的這次回測算出的完整回合統計"
+        "——也就是這裡的勝率與盈虧比。"
+    ),
+    # 第八輪組一：五則機制事實句。
+    "div-disabled": (
+        "這筆 Kelly 輸入所依據的回測，回測帶入當時依請求關閉了除權息還原"
+        "（adjust_dividends=false）。"
+    ),
+    "div-never-synced": (
+        "這筆 Kelly 輸入所依據的回測，回測帶入當時本機尚未同步過任何除權息資料"
+        "（尚未執行 uv run python -m app.dividends.sync）。"
+    ),
+    "div-no-events-tw": (
+        "這筆 Kelly 輸入所依據的回測未進行除權息還原：本機雖有除權息資料，"
+        "但這段期間內查無本商品的除權息紀錄。"
+        "可能是這段期間確實沒有配息，也可能是資料涵蓋範圍有限"
+        "（目前只涵蓋台股上市，不含上櫃），本系統無法判斷是哪一種情況。"
+    ),
+    "div-no-events-non-tw": (
+        "這筆 Kelly 輸入所依據的回測未進行除權息還原：本系統的除權息資料目前只涵蓋台股上市，"
+        "不涵蓋這個市場，因此不是『查無配息』，而是『沒有資料可查』。"
+    ),
+    "div-unusable-events": (
+        "這筆 Kelly 輸入所依據的回測未進行除權息還原：查到本商品在此區間的除權息紀錄，"
+        "但欄位不足以推算調整因子，已整筆略過而非用推估值代替。"
+    ),
+    "div-unusable-events-tail": (
+        "若日後同步除權息資料後這筆紀錄的欄位轉為可用，仍須重新執行回測並重新帶入，"
+        "這裡顯示的這筆 Kelly 輸入才會更新；"
+        "如需協助排查，也可回報此代號與區間供人工覆核來源欄位。"
+    ),
+    # 第八輪組二：任務 7 採備案原文、任務 8 標籤。
+    "task-7": (
+        "這裡顯示的勝率與盈虧比，是這筆 Kelly 輸入回測帶入當時、由系統算出的原始值。"
+        "這筆輸入後來被你手動調整；但調整的是這筆輸入的生效內容，"
+        "這兩個數字本身不曾被覆蓋，仍是原樣保留下來的原始值。"
+        "本條上限的計算，用的是目前生效值，不是這裡顯示的原始值；"
+        "目前生效的 Kelly 輸入，用的也不是這裡這兩個數字。"
+    ),
+    "task-8": "原始回測的樣本外期間",
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -225,14 +279,18 @@ SHIPPED_SAMPLE_SIZE: dict[str, str] = {
 def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     """21 through the fourth round, plus the two of the fifth batch this lane ships.
 
-    The sixth round closed on eleven items and the seventh on two; the three
-    that land in the risk layer are here ((任務 1) f*<=0, (任務 2) zero allowance
-    and (g-overridden)). The rest is display-surface copy arriving with K4c,
-    which is why this count is 24 and not 34 -- a sentence is added here when it
-    ships, so the assertion says what the repo actually carries rather than what
-    the review has approved.
+    A sentence is listed here when the backend carries it, so the number tracks
+    the repo rather than the review's running total (41 + 1 沿用 after the eighth
+    round). The gap is the display copy K4c has not built yet -- FR-5's eleven
+    column labels, the FR-4 badge, the 口徑限定語 pair -- plus the three that ship
+    from ``app/kelly/sample_gate.py`` and the 500 body, which are counted here
+    but defined elsewhere.
+
+    The eighth round's own additions are all present: (g-4-overridden), the four
+    shared elements, the five 機制事實 sentences with the unusable tail, and 任務
+    7/8.
     """
-    assert len(CONFIRMED_VERBATIM) == 24
+    assert len(CONFIRMED_VERBATIM) == 38
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -304,6 +362,7 @@ def test_the_sentences_that_land_elsewhere_are_named_as_such() -> None:
         "g-3",
         "g-4",
         "g-overridden",
+        "g-4-overridden",
         "task-1",
         "task-2",
     }
@@ -395,6 +454,41 @@ REJECTED_LITERALS: tuple[tuple[str, str, str], ...] = (
     ("(500) 重試句不予採用", "重試", "kelly"),
 )
 
+#: 第八輪 條件 61, six literals banned from the 欄位 11 block.
+#:
+#: Scoped to that block rather than to whole files, because each of the six is
+#: legitimate elsewhere and the ruling is about these sentences:
+#:
+#: * 低估／高估 -- the seventh round's VETO. Restoring dividends re-runs the bars,
+#:   so the round set changes and the direction of the move in the pair is not
+#:   established; "低估" also happens to point at revising one's own numbers
+#:   upward, on a screen carrying an override field. The already-approved (b)
+#:   sentence uses both words about ``K_observed``, where the direction *is*
+#:   established, and the backtester's own notes use 「會低估」 about a return
+#:   series, whose direction is determinate (條件 62).
+#: * 本頁／未提供比較／不做比較 -- required 2. Layout claims of the kind 「上方」 and
+#:   「策略欄」 were struck for, and denials of disclosures the product does make
+#:   (a Buy & Hold comparison and ``DIVIDEND_BIAS_SCOPE_NOTE`` both exist).
+#: * 尚未涵蓋上櫃 -- required 4: "尚未" promises coverage on the vendor's behalf.
+FIELD_11_FORBIDDEN: tuple[tuple[str, str], ...] = (
+    ("required 方向單向陳述", "低估"),
+    ("required 方向單向陳述", "高估"),
+    ("required 版面指涉", "本頁"),
+    ("required 否認既有揭露", "未提供比較"),
+    ("required 否認既有揭露", "不做比較"),
+    ("required 前瞻宣稱", "尚未涵蓋上櫃"),
+)
+
+#: Every 欄位 11 message the module can produce, by ``(reason_code, market)``.
+#: ``no_events`` is the one code whose text depends on the market.
+FIELD_11_CASES: tuple[tuple[str, str], ...] = (
+    ("disabled", "TW"),
+    ("never_synced", "TW"),
+    ("no_events", "TW"),
+    ("no_events", "US"),
+    ("unusable_events", "TW"),
+)
+
 #: Everything that can carry a Kelly sentence today. ``LimitsCheckList.tsx`` is
 #: on it because cap 5's details land there; the Kelly input section itself does
 #: not exist yet (K4b) and is picked up by the glob when it does.
@@ -453,6 +547,140 @@ def test_a_rejected_draft_survives_nowhere_in_the_shipped_source(
     assert offenders == [], f"{ruling}：「{literal}」不得存在於出貨原始碼，出現於 {offenders}"
 
 
+# ---------------------------------------------------------------------------
+# 欄位 11 組裝（第八輪 條件 59/60/63/69）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("reason_code", "market"), FIELD_11_CASES)
+def test_each_field_11_message_follows_the_approved_paragraph_order(
+    reason_code: str, market: str
+) -> None:
+    """條件 59: 機制事實 → E1 → E2 → E3 → E4，段序屬定稿一部分."""
+    block = wording.kelly_dividend_note(reason_code, market=market)
+    assert block is not None
+
+    facts = {
+        ("disabled", "TW"): wording.KELLY_DIVIDEND_DISABLED_FACT,
+        ("never_synced", "TW"): wording.KELLY_DIVIDEND_NEVER_SYNCED_FACT,
+        ("no_events", "TW"): wording.KELLY_DIVIDEND_NO_EVENTS_TW_FACT,
+        ("no_events", "US"): wording.KELLY_DIVIDEND_NO_EVENTS_NON_TW_FACT,
+        ("unusable_events", "TW"): wording.KELLY_DIVIDEND_UNUSABLE_EVENTS_FACT,
+    }
+    state = (
+        wording.KELLY_DIVIDEND_STATE_AS_RECORDED_NEVER_SYNCED
+        if reason_code == "never_synced"
+        else wording.KELLY_DIVIDEND_STATE_AS_RECORDED
+    )
+    ordered = [
+        facts[(reason_code, market)],
+        wording.KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS,
+        wording.KELLY_DIVIDEND_DIRECTION_UNKNOWN,
+        state,
+        wording.KELLY_DIVIDEND_DIRECTION_SCOPE,
+    ]
+
+    assert block.startswith(ordered[0])
+    positions = [block.index(part) for part in ordered]
+    assert positions == sorted(positions), "段序與定稿不符"
+
+
+@pytest.mark.parametrize(("reason_code", "market"), FIELD_11_CASES)
+def test_every_field_11_message_carries_e1_and_e4(reason_code: str, market: str) -> None:
+    """條件 63: E1 五則皆須含，缺一 BLOCKING；條件 60: E4 逐字附加於五則."""
+    block = wording.kelly_dividend_note(reason_code, market=market)
+    assert block is not None
+
+    assert wording.KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS in block
+    assert wording.KELLY_DIVIDEND_DIRECTION_UNKNOWN in block
+    assert wording.KELLY_DIVIDEND_DIRECTION_SCOPE in block
+
+
+def test_the_shared_elements_are_one_constant_each_not_five_copies() -> None:
+    """條件 60: 單一共用常數，五則逐字附加.
+
+    Asserted structurally: each shared element appears exactly once as a string
+    literal in the module. Five hand-copied versions would satisfy every text
+    assertion above on the day they were written and drift apart afterwards --
+    which is the whole reason the ruling asks for one constant.
+    """
+    literals = _string_constants(_APP_ROOT / "api" / "kelly_wording.py")
+    for element in (
+        wording.KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS,
+        wording.KELLY_DIVIDEND_DIRECTION_UNKNOWN,
+        wording.KELLY_DIVIDEND_STATE_AS_RECORDED,
+        wording.KELLY_DIVIDEND_DIRECTION_SCOPE,
+    ):
+        assert sum(element in value for value in literals) == 1, element
+
+
+def test_the_never_synced_state_sentence_keeps_its_parenthesis() -> None:
+    """條件 69: 「（含是否已完成同步）」不得刪.
+
+    The code is written once at import and only read afterwards, so a user who
+    has since run the sync would otherwise read this line as current.
+    """
+    block = wording.kelly_dividend_note("never_synced", market="TW")
+    assert block is not None
+    assert "（含是否已完成同步）" in block
+    assert wording.KELLY_DIVIDEND_STATE_AS_RECORDED_NEVER_SYNCED in block
+
+    # And no other branch borrows it.
+    for reason_code, market in FIELD_11_CASES:
+        if reason_code == "never_synced":
+            continue
+        other = wording.kelly_dividend_note(reason_code, market=market)
+        assert other is not None and "（含是否已完成同步）" not in other
+
+
+def test_only_the_unusable_branch_carries_the_tail() -> None:
+    """The tail is that branch's own: it describes a record that may become usable."""
+    for reason_code, market in FIELD_11_CASES:
+        block = wording.kelly_dividend_note(reason_code, market=market)
+        assert block is not None
+        carries = wording.KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL in block
+        assert carries is (reason_code == "unusable_events"), reason_code
+        if carries:
+            assert block.endswith(wording.KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL)
+
+
+def test_no_block_is_produced_for_a_restored_or_unknown_run() -> None:
+    """``adjusted`` keeps its own approved note; an unknown code invents nothing."""
+    assert wording.kelly_dividend_note("adjusted", market="TW") is None
+    assert wording.kelly_dividend_note("something_new", market="TW") is None
+
+
+@pytest.mark.parametrize(("ruling", "literal"), FIELD_11_FORBIDDEN)
+@pytest.mark.parametrize(("reason_code", "market"), FIELD_11_CASES)
+def test_no_field_11_message_carries_a_struck_literal(
+    reason_code: str, market: str, ruling: str, literal: str
+) -> None:
+    """條件 61: the six reverse literals, over every assembled message."""
+    block = wording.kelly_dividend_note(reason_code, market=market)
+    assert block is not None
+    assert literal not in block, f"({reason_code}/{market}) {ruling}：「{literal}」"
+
+
+def test_the_kelly_dividend_notes_are_this_module_s_own(
+) -> None:
+    """條件 62: backtest.py's constants are neither imported nor spliced in.
+
+    The two families describe the same mechanism to different readers, and the
+    backtester's carry a scope qualifier naming a screen column that does not
+    exist here plus a determinate direction the seventh round vetoed for
+    round-trip statistics. This module importing anything at all is already
+    banned; this states the specific consequence.
+    """
+    backtest_source = (_APP_ROOT / "api" / "backtest.py").read_text(encoding="utf-8")
+    assert "DIVIDEND_BIAS_SCOPE_NOTE" in backtest_source  # unchanged and still theirs
+
+    for reason_code, market in FIELD_11_CASES:
+        block = wording.kelly_dividend_note(reason_code, market=market)
+        assert block is not None
+        # Not a substring of the backtester's own notes, and not built from them.
+        assert block not in backtest_source
+
+
 def test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to() -> None:
     """A scan over an empty file list would pass every assertion above."""
     assert len(_python_sources()) > 50
@@ -475,15 +703,24 @@ def test_an_approved_opening_is_never_followed_by_an_unapproved_remainder(
     backend ships that *starts* one of these sentences must contain the whole
     approved sentence. A variant that shares an opening and diverges later fails
     here even though nobody wrote its text down.
+
+    Some approved sentences legitimately share an opening -- (g-overridden) and
+    (g-4-overridden) differ only after their common source parenthesis, by the
+    eighth round's own design -- so a value satisfies this if it carries **any**
+    approved sentence starting that way. That is the property the guard is
+    after: what may not exist is a string that opens like an approved sentence
+    and then matches none of them.
     """
     approved = CONFIRMED_VERBATIM[item]
     opening = approved[:24]
+    siblings = [text for text in CONFIRMED_VERBATIM.values() if text.startswith(opening)]
+    assert approved in siblings
     for path in _python_sources():
         for value in _string_constants(path):
             if opening in value:
-                assert approved in value, (
+                assert any(sibling in value for sibling in siblings), (
                     f"{path.relative_to(_STOCK_DESK_ROOT)} 以 ({item}) 的開頭起句，"
-                    "但後續字面與逐字定稿不符（未採用版本或漂移）。"
+                    "但後續字面與任一逐字定稿皆不符（未採用版本或漂移）。"
                 )
 
 
@@ -528,16 +765,22 @@ WIN_RATE_BACKEND_WHITELIST: dict[str, int] = {
     # 分歧① 明列「Kelly 揭露常數模組」: (e), (f 完整), (g-1), plus (e-manual) from
     # the third round, which names the field on the hand-keyed branch, plus the
     # 第六輪 (任務 1) f*<=0 sentence, which opens by naming the two inputs it
-    # computed from.
+    # computed from, plus the 第八輪 three: (E2), (E4) and (任務 7).
     #
-    # 落地條件 48（第六輪 2026-08-22，擴充權在風控）allocated that fifth occurrence
-    # to ``limits.py``, on the assumption it would be written there. It is
-    # imported from here instead, which is the same rule 落地條件 2 applies to
-    # every other approved sentence and the reason (g-1) left ``limits.py`` in
-    # this lane: one copy, in the inventory, or the verbatim guard is guarding a
-    # duplicate. The count moved module, not total -- reported to
-    # risk-compliance for confirmation with the lane.
-    "app/api/kelly_wording.py": 5,
+    # 落地條件 48（第六輪，擴充權在風控）allocated (任務 1)'s occurrence to
+    # ``limits.py``, on the assumption it would be written there. It is imported
+    # from here instead, which is the same rule 落地條件 2 applies to every other
+    # approved sentence and the reason (g-1) left ``limits.py`` in this lane: one
+    # copy, in the inventory, or the verbatim guard is guarding a duplicate.
+    #
+    # 落地條件 64（第八輪）projected +6 for「欄位 11 五則+任務 7」. The realised
+    # increase is +3, and the difference is 條件 60 rather than a missing
+    # sentence: E2 and E4 are the only 欄位 11 elements containing the word, and
+    # 條件 60 requires them to be **single shared constants appended to the five**
+    # rather than retyped into each message. Counting at the definition site is
+    # 條件 56's own rule, so five copies would themselves be the violation. Both
+    # reallocations are reported to risk-compliance for confirmation; 擴充權在風控.
+    "app/api/kelly_wording.py": 8,
     # 分歧① 列管（不擋本批，另批復審）: CONFIDENCE_MEANING / WEIGHT_MEANING, both
     # of which use the word inside a denial ("非勝率或機率").
     "app/advice/engine.py": 2,
@@ -658,6 +901,23 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     # not measurements: the allowance really is zero there, by construction.
     "task-1": set(),
     "task-2": set(),
+    # 第八輪. (g-4-overridden) has no anchor to interpolate (6-B), and組一/組二
+    # interpolate nothing at all: every number in them is a fixed fact of the
+    # branch, not a measurement.
+    "g-4-overridden": set(),
+    "e1": set(),
+    "e2": set(),
+    "e3": set(),
+    "e3-never-synced": set(),
+    "e4": set(),
+    "div-disabled": set(),
+    "div-never-synced": set(),
+    "div-no-events-tw": set(),
+    "div-no-events-non-tw": set(),
+    "div-unusable-events": set(),
+    "div-unusable-events-tail": set(),
+    "task-7": set(),
+    "task-8": set(),
 }
 
 #: The (g) sentences that name an anchor date and an elapsed count. All three

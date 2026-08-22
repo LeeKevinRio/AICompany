@@ -60,6 +60,7 @@ from app.api.kelly_wording import (
     KELLY_NOT_EVALUABLE_NO_INPUT,
     KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
     KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
+    KELLY_NOT_EVALUABLE_OVERRIDDEN_NO_OOS_END_DATE,
     KELLY_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
 )
@@ -1011,24 +1012,23 @@ _KELLY_EXPIRED_DETAILS: dict[KellyInputSource, str] = {
     "backtest_overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
 }
 
-#: The unanchorable half of the table. ``manual`` is absent because it cannot
-#: occur: a hand-typed pair always carries the server's write stamp, so
-#: :func:`app.kelly.models.anchor_moment` never returns ``None`` for one.
+#: The unanchorable half of the table, closed by the eighth round (條件 66).
+#: ``backtest_overridden`` has its own sentence now: the cell is as reachable as
+#: ``backtest``'s -- :meth:`KellyInputRecord.overriding` copies the provenance
+#: column by column, so a row that had no anchor still has none after a hand
+#: edit -- and (g-4)'s source parenthesis understated it by omitting that the
+#: effective numbers are the user's own.
 #:
-#: TODO(risk): 待 (g-4-overridden) 定稿替換,第七輪併裁紀錄。The sixth cell
-#: (``backtest_overridden`` with no OOS end date) is as reachable as the fourth --
-#: ``KellyInputRecord.overriding`` copies the provenance column by column, so a
-#: row that had no anchor still has none after a hand edit -- and (g-4)'s source
-#: parenthesis ("回測帶入") understates it in exactly the way the seventh round
-#: struck: it omits that the effective numbers are the user's own. creative-lead
-#: is redrafting (g-4-overridden) (structure per (g-4), source parenthesis
-#: "回測帶入，已手動調整", no anchor placeholder). Until it is CONFIRMED this cell
-#: shows the closest approved sentence rather than an unreviewed one; the gap is
-#: pinned by an xfail test rather than left silent, and C5 may not ship with it
-#: open (第七輪 併裁 §(g) 分支表為六格).
+#: ``manual`` is deliberately absent rather than mapped to a fallback: a
+#: hand-typed pair always carries the server's write stamp, so
+#: :func:`app.kelly.models.anchor_moment` never returns ``None`` for one and
+#: this cell is unreachable. If it ever becomes reachable, the lookup below
+#: raises instead of borrowing a sentence that would name the wrong source --
+#: 第八輪 E2: a silent fallback here is a false statement about where a number
+#: came from, and there is no approved sentence for the state.
 _KELLY_UNANCHORED_DETAILS: dict[KellyInputSource, str] = {
     "backtest": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
-    "backtest_overridden": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
+    "backtest_overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_NO_OOS_END_DATE,
 }
 
 
@@ -1051,7 +1051,19 @@ def _kelly_not_evaluable_detail(kelly: KellyInputs | None) -> str:
     if kelly is None:
         return KELLY_NOT_EVALUABLE_NO_INPUT
     if kelly.age_days is None or kelly.anchored_at is None:
-        return _KELLY_UNANCHORED_DETAILS.get(kelly.source, KELLY_NOT_EVALUABLE_NO_OOS_END_DATE)
+        detail = _KELLY_UNANCHORED_DETAILS.get(kelly.source)
+        if detail is None:
+            # 第八輪 E2. Only ``manual`` can land here, and only if the anchor
+            # rule changed underneath this table. Failing is the conservative
+            # branch: every sentence that exists names a source this row does
+            # not have, and reporting one of them would misstate the origin of
+            # the user's own number -- the failure the (g) table exists to make
+            # impossible (條件 51).
+            raise ValueError(
+                f"Kelly 輸入來源 {kelly.source!r} 缺少錨點時無對應的定稿說明句，"
+                "本狀態未經風控核可，不得以其他來源的句子替代"
+            )
+        return detail
     return _KELLY_EXPIRED_DETAILS[kelly.source].format(
         anchored_on=kelly.anchored_at,
         age_days=kelly.age_days,

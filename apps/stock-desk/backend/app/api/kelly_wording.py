@@ -30,13 +30,15 @@ House rules, all of them non-negotiable:
 * **No measured value is embedded in a refusal.** A missing number is described,
   never rendered (5-3): ``None`` and ``null`` are engineer words, and printing
   either beside a Chinese sentence reads as a value that was measured.
-* **Not every constant here ships from here.** Eight of them are cap 5's and are
+* **Not every constant here ships from here.** Nine of them are cap 5's and are
   attached by ``app/advice/limits.py``: (a-2), whose condition that layer sees
-  as a single boolean (約束 36); the five (g) sentences, which it chooses between
+  as a single boolean (約束 36); the six (g) sentences, which it chooses between
   by cause; and the sixth round's (任務 1)/(任務 2), which belong to the f*<=0
   verdict and to the sizing exclusion that verdict triggers. They are recorded
   here so the approved inventory stays complete in one place, and imported from
-  there rather than retyped -- :data:`LANDS_ELSEWHERE` lists them.
+  there rather than retyped -- :data:`LANDS_ELSEWHERE` lists them. The rest are
+  display copy: they ship from the surfaces K4c builds, and the only assembly
+  this module performs is :func:`kelly_dividend_note`'s fixed paragraph order.
 * **Two approved sentences live outside this module**, by rulings that name
   their location: the three refusal messages are in ``app/kelly/sample_gate.py``
   beside the gate that emits them, and the non-finite-interval 500 body is
@@ -398,6 +400,232 @@ KELLY_ZERO_ALLOWANCE_RANGE_NOTE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# (g-4-overridden) an imported-then-edited pair that cannot be aged
+# ---------------------------------------------------------------------------
+
+#: (g-4-overridden) 風控 2026-08-22 逐字定稿（第八輪，組三主案），字面含標點不得改動，
+#: 漂移須重送風控。
+#: The sixth cell of the (g) table, and the one that closes it (條件 66). It is
+#: (g-4) with "，已手動調整" inserted in the source parenthesis, and nothing else:
+#: the three overridden sentences now state their source in one uniform phrase.
+#: 條件 68 extends 條件 53 here -- following the instruction re-imports and
+#: overwrites the hand adjustment, so a surface with an import entry point owes
+#: the user a before-overwrite notice, which is separate copy still in review.
+KELLY_NOT_EVALUABLE_OVERRIDDEN_NO_OOS_END_DATE = (
+    "此標的的 Kelly 輸入（來源：回測帶入，已手動調整）缺少樣本外區段結束日，"
+    "本系統無法判定其新鮮度，一律視為已過期，本條上限暫不評估；"
+    "請重新執行回測並確認後更新。"
+)
+
+
+# ---------------------------------------------------------------------------
+# (欄位 11) why this import restored no dividends, per reason code
+# ---------------------------------------------------------------------------
+#
+# Five messages over four codes, each built as 機制事實 -> E1 -> E2 -> E3 -> E4
+# (條件 59; the order is part of the approval). The four shared elements are
+# single constants appended verbatim rather than retyped into each message
+# (條件 60), so a change to one cannot land in four of five places.
+#
+# These are **Kelly's own** constants (條件 62). The backtester's equivalents in
+# ``app/api/backtest.py`` stay exactly as they are and are neither imported nor
+# spliced: their scope qualifier names the strategy column of a screen that does
+# not exist here, and their bias clause states a *direction* ("會低估") that the
+# seventh round vetoed for round-trip statistics -- restoring dividends changes
+# the bar series, so the round set itself changes and the direction of the move
+# in win rate and payoff ratio is not established. What is stated instead is
+# that the system did not compute it (E2), which is what is true.
+#
+# ``adjusted`` has no entry here: that path keeps ``DIVIDEND_ADJUSTED_NOTE``
+# (第六輪, 沿用核可), and reusing it is the assembly point's job -- this module
+# imports nothing.
+
+#: (E1) 風控 2026-08-22 逐字定稿（第八輪，組一），字面含標點不得改動，漂移須重送風控。
+#: The one determinate fact of the whole block, and required in all five
+#: messages (條件 63): with no restoration, the return series excludes dividends
+#: paid during the holding period. Its certainty is why it is stated flatly
+#: while everything after it is hedged.
+KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS = "這次回測的報酬計算不含持有期間股利。"
+
+#: (E2) 風控 2026-08-22 逐字定稿（第八輪，組一，修訂版採完整版），字面含標點不得改動，
+#: 漂移須重送風控。
+#: The direction sentence, and the seventh round's VETO turned around: the
+#: earlier drafts said the pair "可能因此被低估", which is a one-way claim the
+#: evidence does not support (restoring dividends re-runs the bars, so the round
+#: set changes; even frozen, a dividend can turn a losing round into a winning
+#: one *and* pull the average win down). It is also the direction that would
+#: nudge a user towards revising their own numbers upward, on a screen that
+#: offers an override field.
+#:
+#: "本系統未計算" and not "無法得知" (required 1): a user who re-runs with
+#: restoration on can see the answer, so the direction is knowable -- this
+#: system simply did not compute it.
+KELLY_DIVIDEND_DIRECTION_UNKNOWN = (
+    "本系統未計算除權息還原後，這裡顯示的勝率與盈虧比會是什麼；方向不明。"
+)
+
+#: (E3) 風控 2026-08-22 逐字定稿（第八輪，組一），字面含標點不得改動，漂移須重送風控。
+#: The tense anchor. ``dividend_reason_code`` is written once at import and only
+#: ever read afterwards, so this block describes the state as it was then, not
+#: as it is now -- without this the four messages read as present-tense claims
+#: about the current database.
+KELLY_DIVIDEND_STATE_AS_RECORDED = "此為回測帶入當下記錄的狀態，顯示時本系統依當時記錄呈現。"
+
+#: (E3, never_synced 版) 風控 2026-08-22 逐字定稿（第八輪，組一），字面含標點不得改動，
+#: 漂移須重送風控。
+#: 條件 69: the trailing parenthesis may **not** be dropped. On this branch the
+#: recorded state is "nothing had been synced", and a user who has since run the
+#: sync would otherwise read the line as current -- it is not, and will not
+#: change until the backtest is re-run and re-imported.
+KELLY_DIVIDEND_STATE_AS_RECORDED_NEVER_SYNCED = (
+    "此為回測帶入當下記錄的狀態，顯示時本系統依當時記錄呈現（含是否已完成同步）。"
+)
+
+#: (E4) 風控 2026-08-22 逐字定稿（第八輪，組一，修訂版），字面含標點不得改動，
+#: 漂移須重送風控。
+#: Bounds E2's "方向不明" to the two numbers on this screen. required 2 struck the
+#: draft's second clause ("其他計算基礎…本系統未提供比較"): the system *does*
+#: publish a Buy & Hold comparison and does carry ``DIVIDEND_BIAS_SCOPE_NOTE``
+#: on the backtest screen, so denying that would have been a false statement
+#: about the product's own disclosures.
+KELLY_DIVIDEND_DIRECTION_SCOPE = (
+    "以上『方向不明』的判斷，僅限於這筆 Kelly 輸入所依據的這次回測算出的完整回合統計"
+    "——也就是這裡的勝率與盈虧比。"
+)
+
+#: 機制事實句 1/5, ``disabled``. 風控 2026-08-22 逐字定稿（第八輪，組一）。
+KELLY_DIVIDEND_DISABLED_FACT = (
+    "這筆 Kelly 輸入所依據的回測，回測帶入當時依請求關閉了除權息還原"
+    "（adjust_dividends=false）。"
+)
+
+#: 機制事實句 2/5, ``never_synced``. 風控 2026-08-22 逐字定稿（第八輪，組一）。
+#: The command stays (required 4 allowed it): the actor is the user, so naming
+#: the step they have not taken is a fact about this machine, not a forward
+#: claim about anyone else's roadmap.
+KELLY_DIVIDEND_NEVER_SYNCED_FACT = (
+    "這筆 Kelly 輸入所依據的回測，回測帶入當時本機尚未同步過任何除權息資料"
+    "（尚未執行 uv run python -m app.dividends.sync）。"
+)
+
+#: 機制事實句 3/5, ``no_events`` in TW. 風控 2026-08-22 逐字定稿（第八輪，組一，修訂版）。
+#: "不含上櫃" and never "尚未涵蓋上櫃" (required 4): "尚未" would promise, on the
+#: vendor's behalf, coverage nobody has committed to.
+KELLY_DIVIDEND_NO_EVENTS_TW_FACT = (
+    "這筆 Kelly 輸入所依據的回測未進行除權息還原：本機雖有除權息資料，"
+    "但這段期間內查無本商品的除權息紀錄。"
+    "可能是這段期間確實沒有配息，也可能是資料涵蓋範圍有限"
+    "（目前只涵蓋台股上市，不含上櫃），本系統無法判斷是哪一種情況。"
+)
+
+#: 機制事實句 4/5, ``no_events`` outside TW. 風控 2026-08-22 逐字定稿（第八輪，組一）。
+#: The distinction the backtester's own note makes and for the same reason: "no
+#: dividend was found" and "there was nothing to search" are different claims,
+#: and only the second one is true here.
+KELLY_DIVIDEND_NO_EVENTS_NON_TW_FACT = (
+    "這筆 Kelly 輸入所依據的回測未進行除權息還原：本系統的除權息資料目前只涵蓋台股上市，"
+    "不涵蓋這個市場，因此不是『查無配息』，而是『沒有資料可查』。"
+)
+
+#: 機制事實句 5/5, ``unusable_events``. 風控 2026-08-22 逐字定稿（第八輪，組一）。
+KELLY_DIVIDEND_UNUSABLE_EVENTS_FACT = (
+    "這筆 Kelly 輸入所依據的回測未進行除權息還原：查到本商品在此區間的除權息紀錄，"
+    "但欄位不足以推算調整因子，已整筆略過而非用推估值代替。"
+)
+
+#: The ``unusable_events`` tail, appended after E4 on that branch only.
+#: 風控 2026-08-22 逐字定稿（第八輪，組一，修訂版）。
+#: The seventh round struck "請重跑同步" here: re-syncing does not touch an input
+#: that is already stored, so the instruction was inert on this screen. What
+#: actually updates the pair is a fresh backtest and a fresh import, and that is
+#: what it now says. The closing offer to report the code is approved **as data-
+#: quality reporting** and may not be cited as precedent for action wording
+#: generally.
+KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL = (
+    "若日後同步除權息資料後這筆紀錄的欄位轉為可用，仍須重新執行回測並重新帶入，"
+    "這裡顯示的這筆 Kelly 輸入才會更新；"
+    "如需協助排查，也可回報此代號與區間供人工覆核來源欄位。"
+)
+
+
+def kelly_dividend_note(reason_code: str, *, market: str) -> str | None:
+    """The 欄位 11 block for one ``dividend_reason_code``, or ``None``.
+
+    Assembled here so the paragraph order 條件 59 fixes lives in one place and a
+    display surface renders one finished string (約束 21: the front end renders
+    verbatim and composes nothing). ``no_events`` is the single code whose fact
+    depends on the market, exactly as it is for the backtester's own notes.
+
+    ``None`` comes back for ``adjusted`` -- there was no degradation to explain,
+    and that path keeps ``DIVIDEND_ADJUSTED_NOTE`` -- and for any code this
+    module has never seen, because inventing a sentence for an unknown state is
+    the one thing none of these may do. 條件 42/70 additionally limit the whole
+    block to ``source == "backtest"``; that is the caller's gate, not this one's.
+    """
+    if reason_code == "disabled":
+        fact, state = KELLY_DIVIDEND_DISABLED_FACT, KELLY_DIVIDEND_STATE_AS_RECORDED
+    elif reason_code == "never_synced":
+        fact = KELLY_DIVIDEND_NEVER_SYNCED_FACT
+        # 條件 69: this branch's own state sentence, parenthesis included.
+        state = KELLY_DIVIDEND_STATE_AS_RECORDED_NEVER_SYNCED
+    elif reason_code == "no_events":
+        fact = (
+            KELLY_DIVIDEND_NO_EVENTS_TW_FACT
+            if market == "TW"
+            else KELLY_DIVIDEND_NO_EVENTS_NON_TW_FACT
+        )
+        state = KELLY_DIVIDEND_STATE_AS_RECORDED
+    elif reason_code == "unusable_events":
+        fact, state = KELLY_DIVIDEND_UNUSABLE_EVENTS_FACT, KELLY_DIVIDEND_STATE_AS_RECORDED
+    else:
+        return None
+
+    block = (
+        fact
+        + KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS
+        + KELLY_DIVIDEND_DIRECTION_UNKNOWN
+        + state
+        + KELLY_DIVIDEND_DIRECTION_SCOPE
+    )
+    if reason_code == "unusable_events":
+        block += KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL
+    return block
+
+
+# ---------------------------------------------------------------------------
+# (任務 7 / 任務 8) the imported pair kept beside an overridden one
+# ---------------------------------------------------------------------------
+
+#: (任務 7) 風控 2026-08-22 逐字定稿（第八輪，組二備案原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: Shown where a ``backtest_overridden`` row's *original* imported pair is
+#: displayed -- the screen 落地條件 21 said could not exist until a distinguishing
+#: sentence was approved. This is that sentence.
+#:
+#: The備案 was taken over the主案 on two grounds the seventh round named: the
+#: object of "被你手動調整" is spelled out as "這筆輸入的生效內容" (the主案 left it
+#: readable as the two numbers themselves -- precisely the misreading this
+#: sentence exists to prevent), and the denial is bounded to named things (the
+#: cap's calculation, the effective values) instead of the主案's sweeping "不是
+#: 現在用來計算的數字".
+KELLY_ORIGINAL_PAIR_DISCLOSURE = (
+    "這裡顯示的勝率與盈虧比，是這筆 Kelly 輸入回測帶入當時、由系統算出的原始值。"
+    "這筆輸入後來被你手動調整；但調整的是這筆輸入的生效內容，"
+    "這兩個數字本身不曾被覆蓋，仍是原樣保留下來的原始值。"
+    "本條上限的計算，用的是目前生效值，不是這裡顯示的原始值；"
+    "目前生效的 Kelly 輸入，用的也不是這裡這兩個數字。"
+)
+
+#: (任務 8) 風控 2026-08-22 逐字定稿（第八輪，組二），字面含標點不得改動，漂移須重送風控。
+#: The label over the OOS dates shown beside :data:`KELLY_ORIGINAL_PAIR_DISCLOSURE`.
+#: Deliberately unlike FR-5 欄位 2's own label so the two cannot be read as the
+#: same row: this one belongs to the original-values view, and 條件 54 keeps it
+#: off ``/backtest`` and out of the FR-5 detail table. Its dates render as plain
+#: ``YYYY-MM-DD``, like every other date in these sentences.
+KELLY_ORIGINAL_OOS_PERIOD_LABEL = "原始回測的樣本外期間"
+
+
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
 #: not in here is a sentence risk-compliance never saw:
 #: ``tests/test_kelly_wording.py`` asserts this mapping and the module's public
@@ -421,8 +649,26 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "g-3": KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED,
     "g-4": KELLY_NOT_EVALUABLE_NO_OOS_END_DATE,
     "g-overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_EXPIRED,
+    "g-4-overridden": KELLY_NOT_EVALUABLE_OVERRIDDEN_NO_OOS_END_DATE,
     "task-1": KELLY_NON_POSITIVE_FRACTION_DETAIL,
     "task-2": KELLY_ZERO_ALLOWANCE_RANGE_NOTE,
+    # 第八輪組一: the four shared elements and the five mechanism facts are
+    # tracked as their own items, because each was approved on its own terms and
+    # :func:`kelly_dividend_note` only ever concatenates them in a fixed order.
+    "e1": KELLY_DIVIDEND_NO_DIVIDEND_IN_RETURNS,
+    "e2": KELLY_DIVIDEND_DIRECTION_UNKNOWN,
+    "e3": KELLY_DIVIDEND_STATE_AS_RECORDED,
+    "e3-never-synced": KELLY_DIVIDEND_STATE_AS_RECORDED_NEVER_SYNCED,
+    "e4": KELLY_DIVIDEND_DIRECTION_SCOPE,
+    "div-disabled": KELLY_DIVIDEND_DISABLED_FACT,
+    "div-never-synced": KELLY_DIVIDEND_NEVER_SYNCED_FACT,
+    "div-no-events-tw": KELLY_DIVIDEND_NO_EVENTS_TW_FACT,
+    "div-no-events-non-tw": KELLY_DIVIDEND_NO_EVENTS_NON_TW_FACT,
+    "div-unusable-events": KELLY_DIVIDEND_UNUSABLE_EVENTS_FACT,
+    "div-unusable-events-tail": KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL,
+    # 第八輪組二.
+    "task-7": KELLY_ORIGINAL_PAIR_DISCLOSURE,
+    "task-8": KELLY_ORIGINAL_OOS_PERIOD_LABEL,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,
@@ -435,5 +681,15 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
 #: They are imported from here, never retyped, so the approved inventory stays
 #: the single copy (落地條件 2).
 LANDS_ELSEWHERE: Final[frozenset[str]] = frozenset(
-    {"a-2", "g-1", "g-2", "g-3", "g-4", "g-overridden", "task-1", "task-2"}
+    {
+        "a-2",
+        "g-1",
+        "g-2",
+        "g-3",
+        "g-4",
+        "g-overridden",
+        "g-4-overridden",
+        "task-1",
+        "task-2",
+    }
 )
