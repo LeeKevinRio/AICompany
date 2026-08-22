@@ -14,12 +14,26 @@ from app.api.kelly import (
     kelly_inputs_for,
 )
 from app.kelly.models import (
+    KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
     KELLY_SOFT_NOTICE_DAYS,
     KELLY_STALE_AFTER_DAYS,
+    KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE,
     KellyAttemptRecord,
     KellyInputRecord,
 )
 from tests.conftest import ApiHarness
+
+
+def _range_message(response: Any) -> str:
+    """The single ``msg`` a range refusal carries, as the front end reads it.
+
+    ``ApiError`` on the client side takes ``detail[].msg`` and renders it, so
+    that string -- not the response text around it -- is the copy surface these
+    assertions are about (qa 2026-08-22 B2).
+    """
+    (error,) = response.json()["detail"]
+    message: str = error["msg"]
+    return message
 
 
 def _put(client: TestClient, symbol: str = "2330", **body: float) -> dict[str, Any]:
@@ -81,7 +95,14 @@ def test_a_win_rate_outside_the_open_unit_interval_is_a_422(
     )
 
     assert response.status_code == 422
-    assert "勝率" in response.text
+    # qa 2026-08-22 B2 (條件 57): the approved sentence reaches the client whole.
+    # ``detail[].msg`` is what the front end renders, and pydantic's default
+    # wrapping put an English 「Value error, 」 in front of a sentence that was
+    # signed off character for character.
+    assert _range_message(response) == KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE.format(
+        value=win_rate
+    )
+    assert not _range_message(response).startswith("Value error")
     assert api_harness.kelly_inputs.get("2330", "TW") is None
 
 
@@ -95,8 +116,11 @@ def test_a_non_positive_payoff_ratio_is_a_422(
 
     assert response.status_code == 422
     # 第五輪微批: 「賠率」→「盈虧比」, the term the rest of the Kelly surface uses.
-    assert "盈虧比" in response.text
     assert "賠率" not in response.text
+    # B2: verbatim, with no wrapper of pydantic's in front of it.
+    assert _range_message(response) == KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE.format(
+        value=payoff_ratio
+    )
     assert api_harness.kelly_inputs.get("2330", "TW") is None
 
 

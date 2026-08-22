@@ -100,6 +100,8 @@ from app.api.deps import (
 from app.api.kelly_wording import (
     KELLY_BACKTEST_SAMPLE_DETAIL_INTRO,
     KELLY_BOUNDARY_TRIP_EXCLUSION,
+    KELLY_DELETE_CONFIRM_LABEL,
+    KELLY_DELETE_NOTICE_TITLE,
     KELLY_DETAIL_DIVIDEND_LABEL,
     KELLY_DETAIL_EXCLUDED_BOUNDARY_TRIPS_LABEL,
     KELLY_DETAIL_LOSS_TRIPS_LABEL,
@@ -121,6 +123,8 @@ from app.api.kelly_wording import (
     KELLY_MANUAL_INPUT_TOOLTIP,
     KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_ORIGINAL_PAIR_DISCLOSURE,
+    KELLY_ORIGINAL_VALUES_BACK_LABEL,
+    KELLY_ORIGINAL_VALUES_ENTRY_LABEL,
     KELLY_OVERWRITE_CANCEL_LABEL,
     KELLY_OVERWRITE_CONFIRM_LABEL,
     KELLY_OVERWRITE_NOTICE_TITLE,
@@ -139,6 +143,7 @@ from app.api.kelly_wording import (
     KELLY_WALK_FORWARD_SCOPE,
     KELLY_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+    kelly_delete_notice,
     kelly_dividend_note,
     kelly_overwrite_notice,
 )
@@ -531,6 +536,30 @@ class KellyOverwriteNoticeView(BaseModel):
     cancel_label: str
 
 
+class KellyDeleteNoticeView(BaseModel):
+    """(條件 110/111/112) What a surface must show before it deletes this row.
+
+    The same shape as :class:`KellyOverwriteNoticeView` and for the same
+    reasons: every string is approved copy, the paragraphs arrive in the frozen
+    order as separate items (條件 82/93), and the title doubles as the dialog's
+    ``aria-label`` verbatim.
+
+    Its two placeholders are filled here (條件 113), so the client renders and
+    composes nothing -- ``{symbol}（{market}）`` in the shape this surface
+    already uses.
+
+    條件 112 rules out ``window.confirm``: that supplies its own button labels,
+    so the approved ones could not reach the screen at all.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    body: list[str]
+    confirm_label: str
+    cancel_label: str
+
+
 class KellyDisclosuresView(BaseModel):
     """Every slot of one Kelly screen, already decided (落地條件 3).
 
@@ -576,6 +605,21 @@ class KellyDisclosuresView(BaseModel):
     boundary_exclusion: str | None
     sample_detail: KellyBacktestSampleDetail | None
     original_values: KellyOriginalValuesView | None
+    #: (條件 116/117) The two controls the original-values view is reached and
+    #: left by. They are non-``None`` exactly when ``original_values`` is, which
+    #: 條件 117 requires: a control offering a view that is not there would be a
+    #: promise with nothing behind it. They sit here rather than inside that
+    #: view so its contents stay the closed set the thirteenth round fixed --
+    #: navigating *to* a disclosure is chrome, not part of it.
+    #:
+    #: The names are the ones ``frontend/app/lib/types.ts`` was written against
+    #: while this half was in flight; keeping them is what spares both lanes a
+    #: rename round trip.
+    original_values_entry_label: str | None
+    original_values_return_label: str | None
+    #: 條件 110/111: the dialog that must be shown before this row is deleted, or
+    #: ``None`` where there is no row to delete.
+    delete_notice: KellyDeleteNoticeView | None
     #: 條件 53/68/73: the dialog that must be shown before this input is
     #: re-imported, or ``None`` where the ninth round ruled there is none. The
     #: four cells are decided in :func:`_overwrite_notice` and are exhaustive.
@@ -860,6 +904,33 @@ def _selection_bias_for_row(
     return None
 
 
+def _delete_notice(row: KellyInputRow | None) -> KellyDeleteNoticeView | None:
+    """The before-delete dialog for this row, over 條件 111's three cells.
+
+    No row means nothing to delete and no dialog. The three sources split two
+    ways -- ``backtest_overridden`` names the kept pair it is about to remove,
+    the other two take the base paragraph -- and
+    :func:`app.api.kelly_wording.kelly_delete_notice` writes each branch out
+    rather than reaching one by default.
+
+    The symbol and market are the stored ones, not the ones in the request path:
+    what the sentence names must be the row that will actually be deleted.
+    """
+    if row is None:
+        return None
+    paragraphs = kelly_delete_notice(row.source, symbol=row.symbol, market=row.market)
+    if paragraphs is None:  # pragma: no cover - all three sources build
+        return None
+    return KellyDeleteNoticeView(
+        title=KELLY_DELETE_NOTICE_TITLE,
+        # 條件 93's shape, for the same reason: the paragraph naming what is lost
+        # may not be buried in a joined block.
+        body=list(paragraphs),
+        confirm_label=KELLY_DELETE_CONFIRM_LABEL,
+        cancel_label=KELLY_OVERWRITE_CANCEL_LABEL,
+    )
+
+
 def _disclosures(
     row: KellyInputRow | None,
     *,
@@ -902,6 +973,9 @@ def _disclosures(
             boundary_exclusion=None,
             sample_detail=None,
             original_values=None,
+            original_values_entry_label=None,
+            original_values_return_label=None,
+            delete_notice=_delete_notice(None),
             overwrite_notice=_overwrite_notice(None),
             k_observed=k_observed,
             k_distinct_specs=k_distinct_specs,
@@ -949,6 +1023,14 @@ def _disclosures(
         boundary_exclusion=KELLY_BOUNDARY_TRIP_EXCLUSION if detail is not None else None,
         sample_detail=detail,
         original_values=original,
+        # 條件 117: the controls exist exactly when the view they lead to does.
+        original_values_entry_label=(
+            None if original is None else KELLY_ORIGINAL_VALUES_ENTRY_LABEL
+        ),
+        original_values_return_label=(
+            None if original is None else KELLY_ORIGINAL_VALUES_BACK_LABEL
+        ),
+        delete_notice=_delete_notice(row),
         overwrite_notice=_overwrite_notice(row),
         k_observed=k_observed,
         k_distinct_specs=k_distinct_specs,

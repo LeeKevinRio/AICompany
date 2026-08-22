@@ -957,6 +957,152 @@ def kelly_overwrite_notice(source: str) -> tuple[str, ...] | None:
     return (*variant, KELLY_OVERWRITE_NOTICE_CHOICES)
 
 
+# ---------------------------------------------------------------------------
+# (條件 110/111) the before-delete notice, and the one variant it needs
+# ---------------------------------------------------------------------------
+#
+# 風控 2026-08-22 逐字定稿（第十五輪，主案四段零修訂 + overridden 段一變體），
+# 字面含標點不得改動，漂移須重送風控。Shown before ``DELETE
+# /api/kelly-inputs/{symbol}`` removes a stored pair.
+#
+# What the four paragraphs have to establish, and why each exists:
+#
+# * **what disappears** -- the whole row, every column of it, named by symbol and
+#   market. 「這一列」 is the ninth round's own unit of loss, reused.
+# * **what does not come back** -- two claims, each bounded to a true object:
+#   there is no history table (D-2, a design choice, hence 「沒有」 and not
+#   「無法」), and no screen can show the deleted row again. The struck 「此動作
+#   無法復原」 is a universal that is false of the attempt log, and 條件 111 keeps
+#   it out of the source for good.
+# * **what is out of scope** (L7) -- the attempt log and ``K_observed`` are
+#   untouched, stated as a property of the *delete's reach* rather than of the
+#   log's contents, so it is equally true for a symbol that never had an attempt.
+#   A source-based branch was rejected on evidence: ``manual`` rows can have
+#   K > 0 (refused attempts are logged and do not rewrite the row) and
+#   ``backtest`` rows can have K == 0 (條件 96's upgrade path), so branching on
+#   source would state something false in two reachable corners.
+# * **what the screen becomes** -- (g-1)'s own words for the state the symbol
+#   returns to, with the way back stated in the same sentence and at the same
+#   length, closed by 「不是找回這次刪除的內容」 so that "you can enter it again"
+#   cannot be read as "so it is recoverable".
+#
+# 條件 82's paragraph order and 條件 93's separate delivery both apply here, and
+# 條件 112 requires a ``role="dialog"`` surface: ``window.confirm`` supplies its
+# own button labels, so the approved ones could not be rendered at all.
+
+#: (刪除標題, aria-label 逐字同用, 條件 112) 風控 2026-08-22 逐字定稿（第十五輪）。
+KELLY_DELETE_NOTICE_TITLE = "刪除 Kelly 輸入 — 執行前請確認"
+
+#: (刪除段一, 基底) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
+#: The two placeholders are the only interpolation in the whole block (條件 113)
+#: and render in the shape this surface already uses, ``2330（TW）``.
+KELLY_DELETE_NOTICE_SCOPE = (
+    "這個動作會把 {symbol}（{market}）的 Kelly 輸入這一列整列刪除："
+    "這一列目前存著的每一個欄位值——包含生效中的勝率與盈虧比在內——都會一併移除。"
+)
+
+#: (刪除段一, backtest_overridden 變體) 風控 2026-08-22 逐字定稿（第十五輪，風控直接
+#: 定稿；點名片語逐字取自 :data:`KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS`）。
+#: The base paragraph's 「每一個欄位值」 already covers the kept pair, but implicit
+#: coverage does not withdraw a belief this product built explicitly: (任務 7) and
+#: (fr6-overridden) both tell the user the original values are kept, and the
+#: thirteenth round let those stand *because* the dialog at the moment of the
+#: action takes the belief back. The import dialog names them; a silent delete
+#: dialog would honour that premise by half.
+KELLY_DELETE_NOTICE_SCOPE_OVERRIDDEN = (
+    "這個動作會把 {symbol}（{market}）的 Kelly 輸入這一列整列刪除："
+    "這一列目前存著的每一個欄位值——"
+    "包含你調整過的這組生效值、以及原本保留的那組原始回測值在內——都會一併移除。"
+)
+
+#: (刪除段二) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
+KELLY_DELETE_NOTICE_NO_RECOVERY = (
+    "本系統沒有版本紀錄，事後也沒有畫面可以找回被刪除的這一列。"
+)
+
+#: (刪除段三) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
+#: Both halves of the L7 disclosure and the state transition live in this one
+#: paragraph, and 條件 114 makes its second clause a **behaviour anchor**: the
+#: attempt log and its count really are untouched by ``DELETE`` (約束 35), and a
+#: test asserts that rather than trusting the sentence.
+KELLY_DELETE_NOTICE_SCOPE_AND_AFTERMATH = (
+    "刪除的範圍也只有這一列：不論此標的先前是否曾嘗試回測帶入，"
+    "嘗試紀錄與其累計計數（K_observed）都不在刪除範圍內，"
+    "不會因這次刪除而有任何改變。"
+    "刪除後，這個標的回到尚未輸入的狀態，"
+    "第 5 條「分數 Kelly 部位上限」隨之回到無法評估；"
+    "之後仍可透過手動輸入或回測帶入取得新的一組數字，"
+    "但那會是新的輸入，不是找回這次刪除的內容。"
+)
+
+#: (刪除段四) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
+#: The ninth round's closing structure with the action swapped, so both outcomes
+#: are described in one sentence of equal length.
+KELLY_DELETE_NOTICE_CHOICES = (
+    "點『取消』，這個標的的 Kelly 輸入維持現在的樣子，不會有任何改變；"
+    "點『確認刪除，移除目前資料』，才會執行前面所說的動作。"
+)
+
+#: (刪除確認鍵) 風控 2026-08-22 逐字定稿（第十五輪）。Neutral action plus its
+#: consequence, the shape :data:`KELLY_OVERWRITE_CONFIRM_LABEL` set. The refused
+#: alternatives are on 條件 111's zero-occurrence list, and the bare word for the
+#: action is not reused here because it is already the trigger's label.
+KELLY_DELETE_CONFIRM_LABEL = "確認刪除，移除目前資料"
+
+#: The cancel key is :data:`KELLY_OVERWRITE_CANCEL_LABEL`, approved for this
+#: dialog too (第十五輪) and **not** copied: one literal, one definition
+#: (落地條件 2). The inventory below carries it under a second id so the reader
+#: holding the review finds both approvals.
+
+
+def kelly_delete_notice(source: str, *, symbol: str, market: str) -> tuple[str, ...] | None:
+    """The delete dialog's four paragraphs for one row, or ``None``.
+
+    條件 111 makes the three cells mutually exclusive and exhaustive, with the
+    variant chosen from the source **as it is at the moment of confirmation**
+    (條件 94's rule, applied here): ``backtest_overridden`` takes the paragraph
+    that names the kept pair, ``manual`` and ``backtest`` take the base one, and
+    an unknown source gets nothing rather than a guess. Nothing falls through a
+    default -- an empty cell and an unwritten sentence must not look alike.
+
+    The symbol and the market are interpolated here so the surface renders and
+    composes nothing (約束 21); they are the only two values this block carries
+    (條件 113).
+    """
+    if source == "backtest_overridden":
+        scope = KELLY_DELETE_NOTICE_SCOPE_OVERRIDDEN
+    elif source == "manual":
+        scope = KELLY_DELETE_NOTICE_SCOPE
+    elif source == "backtest":
+        scope = KELLY_DELETE_NOTICE_SCOPE
+    else:
+        return None
+    return (
+        scope.format(symbol=symbol, market=market),
+        KELLY_DELETE_NOTICE_NO_RECOVERY,
+        KELLY_DELETE_NOTICE_SCOPE_AND_AFTERMATH,
+        KELLY_DELETE_NOTICE_CHOICES,
+    )
+
+
+# ---------------------------------------------------------------------------
+# (條件 116) the two controls the original-values view is reached and left by
+# ---------------------------------------------------------------------------
+
+#: 風控 2026-08-22 逐字定稿（第十五輪，平行合成），字面不得改動。
+#: The entry control's verb is (fr6-overridden)'s own 「可以查看」 and its noun is
+#: that sentence's label, so the promise and the control that keeps it are one
+#: chain a reader can follow -- which is what E-5 verifies. The way back is a
+#: bare navigation verb making no claim at all.
+#:
+#: 條件 116 requires both to be backend constants with the front end rendering
+#: them verbatim, ``aria-label`` included: the English placeholders they replace
+#: were the only controls carrying a Chinese promise, and 條件 108's ruling for
+#: form-field names does not reach them.
+KELLY_ORIGINAL_VALUES_ENTRY_LABEL = "查看原始回測值"
+KELLY_ORIGINAL_VALUES_BACK_LABEL = "返回"
+
+
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
 #: not in here is a sentence risk-compliance never saw:
 #: ``tests/test_kelly_wording.py`` asserts this mapping and the module's public
@@ -1040,6 +1186,20 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "notice-confirm": KELLY_OVERWRITE_CONFIRM_LABEL,
     # 第十二輪 條件 102: the trigger that opens the dialog, not part of it.
     "trigger-label": KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
+    # 第十五輪: the delete dialog, its overridden variant, and its two keys. The
+    # cancel key is the ninth round's constant, approved again for this dialog
+    # and kept as one definition.
+    "delete-title": KELLY_DELETE_NOTICE_TITLE,
+    "delete-1": KELLY_DELETE_NOTICE_SCOPE,
+    "delete-1-overridden": KELLY_DELETE_NOTICE_SCOPE_OVERRIDDEN,
+    "delete-2": KELLY_DELETE_NOTICE_NO_RECOVERY,
+    "delete-3": KELLY_DELETE_NOTICE_SCOPE_AND_AFTERMATH,
+    "delete-4": KELLY_DELETE_NOTICE_CHOICES,
+    "delete-confirm": KELLY_DELETE_CONFIRM_LABEL,
+    "delete-cancel": KELLY_OVERWRITE_CANCEL_LABEL,
+    # 第十五輪 條件 116: the original-values view's entry and exit controls.
+    "original-entry": KELLY_ORIGINAL_VALUES_ENTRY_LABEL,
+    "original-back": KELLY_ORIGINAL_VALUES_BACK_LABEL,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,

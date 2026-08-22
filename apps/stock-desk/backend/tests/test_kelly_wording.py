@@ -40,11 +40,13 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api import kelly_wording as wording
 from app.api.kelly import KELLY_NON_FINITE_INTERVAL_MESSAGE
 from app.kelly import models, sample_gate
+from app.main import app
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _APP_ROOT = _BACKEND_ROOT / "app"
@@ -316,6 +318,37 @@ CONFIRMED_VERBATIM: dict[str, str] = {
     "notice-confirm": "確認帶入，覆蓋目前資料",
     # 第十二輪（2026-08-22）條件 102：開啟對話框的觸發按鈕標籤，風控直接定稿。
     "trigger-label": "執行回測並帶入",
+    # 第十五輪（2026-08-22）：刪除確認組（第十批主案四段零修訂＋overridden 段一
+    # 變體＋兩鍵），以及原始值檢視的兩個控制項。
+    "delete-title": "刪除 Kelly 輸入 — 執行前請確認",
+    "delete-1": (
+        "這個動作會把 {symbol}（{market}）的 Kelly 輸入這一列整列刪除："
+        "這一列目前存著的每一個欄位值——包含生效中的勝率與盈虧比在內——都會一併移除。"
+    ),
+    "delete-1-overridden": (
+        "這個動作會把 {symbol}（{market}）的 Kelly 輸入這一列整列刪除："
+        "這一列目前存著的每一個欄位值——"
+        "包含你調整過的這組生效值、以及原本保留的那組原始回測值在內——都會一併移除。"
+    ),
+    "delete-2": "本系統沒有版本紀錄，事後也沒有畫面可以找回被刪除的這一列。",
+    "delete-3": (
+        "刪除的範圍也只有這一列：不論此標的先前是否曾嘗試回測帶入，"
+        "嘗試紀錄與其累計計數（K_observed）都不在刪除範圍內，"
+        "不會因這次刪除而有任何改變。"
+        "刪除後，這個標的回到尚未輸入的狀態，"
+        "第 5 條「分數 Kelly 部位上限」隨之回到無法評估；"
+        "之後仍可透過手動輸入或回測帶入取得新的一組數字，"
+        "但那會是新的輸入，不是找回這次刪除的內容。"
+    ),
+    "delete-4": (
+        "點『取消』，這個標的的 Kelly 輸入維持現在的樣子，不會有任何改變；"
+        "點『確認刪除，移除目前資料』，才會執行前面所說的動作。"
+    ),
+    "delete-confirm": "確認刪除，移除目前資料",
+    # 第九輪的取消鍵，第十五輪一併核可用於本對話框；同一字面單一定義。
+    "delete-cancel": "取消",
+    "original-entry": "查看原始回測值",
+    "original-back": "返回",
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -371,7 +404,10 @@ def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
 
     The eleventh round's own addition is (b)'s third cell (條件 96), which the
     tenth round had left with no sentence at all; the twelfth added the import
-    trigger's label (條件 102).
+    trigger's label (條件 102); the fifteenth added the delete dialog (title,
+    four paragraphs, its overridden 段一 variant, and its confirm key, with the
+    ninth round's cancel key carried under a second id) and the two controls the
+    original-values view is reached and left by (條件 116).
 
     One item left in the other direction: (任務 8)'s period label was **revoked**
     in the thirteenth round once 條件 92 took the period off the view it labelled,
@@ -390,7 +426,7 @@ def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     Three of the ids ship from ``app/kelly/sample_gate.py`` and one is the 500
     body, counted here and defined elsewhere.
     """
-    assert len(CONFIRMED_VERBATIM) == 72
+    assert len(CONFIRMED_VERBATIM) == 82
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -623,14 +659,29 @@ FIELD_11_CASES: tuple[tuple[str, str], ...] = (
     ("unusable_events", "TW"),
 )
 
-#: Everything that can carry a Kelly sentence today. ``LimitsCheckList.tsx`` is
-#: on it because cap 5's details land there; the Kelly input section itself does
-#: not exist yet (K4b) and is picked up by the glob when it does.
+#: Everything that can carry a Kelly sentence today, as path prefixes. This is a
+#: **static tuple and picks nothing up on its own** -- an earlier note here said
+#: a glob would cover the Kelly input surface "when it exists", which was simply
+#: wrong: :func:`_kelly_surface_sources` filters by these prefixes, so a file not
+#: named below is a file the ``kelly``-scoped rejected-literal scan never opens.
+#: K4c-2 added four components and one helper, and they are listed (qa
+#: 2026-08-22, non-blocking 1). ``LimitsCheckList.tsx`` is here because cap 5's
+#: details land there.
+#:
+#: The rule for adding one: any file that renders, forwards or holds Kelly copy.
+#: ``test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to``
+#: asserts the front-end members resolve, so a rename cannot silently empty this
+#: list.
 KELLY_SURFACE = (
     "backend/app/kelly",
     "backend/app/api/kelly.py",
     "backend/app/api/kelly_wording.py",
     "frontend/app/position/[symbol]/LimitsCheckList.tsx",
+    "frontend/app/settings/KellyInputsSection.tsx",
+    "frontend/app/settings/KellyDisclosuresPanel.tsx",
+    "frontend/app/settings/KellyImportDialog.tsx",
+    "frontend/app/settings/KellyManualInputForm.tsx",
+    "frontend/app/lib/kellyFieldError.ts",
 )
 
 
@@ -822,7 +873,14 @@ def test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to() -> No
     surface = {str(path.relative_to(_STOCK_DESK_ROOT)) for path in _kelly_surface_sources()}
     assert "backend/app/api/kelly_wording.py" in surface
     assert "backend/app/kelly/sample_gate.py" in surface
-    assert "frontend/app/position/[symbol]/LimitsCheckList.tsx" in surface
+    # Every front-end member must resolve to a file that exists: the prefixes are
+    # static, so a renamed component would otherwise drop out of the scan in
+    # silence and take its scope's guards with it.
+    front_end = tuple(entry for entry in KELLY_SURFACE if entry.startswith("frontend/"))
+    assert len(front_end) == 6
+    for entry in front_end:
+        assert (_STOCK_DESK_ROOT / entry).is_file(), entry
+        assert entry in surface, entry
 
 
 @pytest.mark.parametrize("item", sorted(CONFIRMED_VERBATIM))
@@ -844,14 +902,22 @@ def test_an_approved_opening_is_never_followed_by_an_unapproved_remainder(
     approved sentence starting that way. That is the property the guard is
     after: what may not exist is a string that opens like an approved sentence
     and then matches none of them.
+
+    A value that **is** an approved sentence passes on that ground alone, and
+    that exemption is load-bearing rather than a convenience: the fifteenth
+    round built the delete dialog's overridden paragraph by quoting the import
+    dialog's naming phrase verbatim, on purpose, so one approved sentence now
+    opens inside another. It is not an unapproved remainder -- it went through
+    the review whole.
     """
     approved = CONFIRMED_VERBATIM[item]
     opening = approved[:24]
     siblings = [text for text in CONFIRMED_VERBATIM.values() if text.startswith(opening)]
     assert approved in siblings
+    every_approved = set(CONFIRMED_VERBATIM.values())
     for path in _python_sources():
         for value in _string_constants(path):
-            if opening in value:
+            if opening in value and value not in every_approved:
                 assert any(sibling in value for sibling in siblings), (
                     f"{path.relative_to(_STOCK_DESK_ROOT)} 以 ({item}) 的開頭起句，"
                     "但後續字面與任一逐字定稿皆不符（未採用版本或漂移）。"
@@ -884,23 +950,77 @@ def test_no_constant_name_leaks_into_the_copy_it_names() -> None:
     was settled rather than that a record is missing.
     """
     names = [
-        name for name in vars(wording) if name.isupper() and not name.startswith("_")
+        name
+        for module in (wording, models, sample_gate)
+        for name in vars(module)
+        if name.isupper() and not name.startswith("_")
     ]
-    for approved in wording.RISK_CONFIRMED_WORDING.values():
+    # Every string this surface can put in front of a user: the approved
+    # inventory, the two modules that ship copy of their own (qa 2026-08-22
+    # non-blocking 3 widened the scan to these), and the two assembly points'
+    # finished output.
+    shipped = [
+        *wording.RISK_CONFIRMED_WORDING.values(),
+        models.KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE,
+        models.KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
+        models.KELLY_PAYOFF_RATIO_LABEL,
+        sample_gate.INSUFFICIENT_DATA_MESSAGE,
+        sample_gate.SYMBOL_MISMATCH_MESSAGE,
+        sample_gate.PB_NONE_MESSAGE,
+        sample_gate.LOW_ROUND_TRIPS_MESSAGE,
+        sample_gate.LOW_WIN_TRIPS_MESSAGE,
+        sample_gate.LOW_LOSS_TRIPS_MESSAGE,
+        KELLY_NON_FINITE_INTERVAL_MESSAGE,
+        *(
+            block
+            for reason_code, market in FIELD_11_CASES
+            if (block := wording.kelly_dividend_note(reason_code, market=market))
+        ),
+        *(
+            paragraph
+            for source in ("manual", "backtest_overridden")
+            if (body := wording.kelly_overwrite_notice(source)) is not None
+            for paragraph in body
+        ),
+    ]
+    for approved in shipped:
         for name in names:
             assert name not in approved, name
 
-    for name in names:
+    # The naming bound is 條件 99's own and is about **this family**: the (b)
+    # cells. ``PB_NONE_MESSAGE`` keeps its name -- it is called after the
+    # ``pb_none`` reason code, and that code is not a claim that a disclosure
+    # came out clean.
+    family = {
+        name
+        for name, value in vars(wording).items()
+        if name.isupper()
+        and isinstance(value, str)
+        and value in set(SELECTION_BIAS_FAMILY.values())
+    }
+    assert family == {
+        "KELLY_SELECTION_BIAS_FULL",
+        "KELLY_SELECTION_BIAS_SINGLE",
+        "KELLY_SELECTION_BIAS_UNLOGGED",
+    }
+    for name in family:
         assert not any(
             banned in name for banned in ("_NO_BIAS", "_CORRECTED", "_NONE")
         ), name
 
 
+#: (b)'s three cells, by the review's own ids. 條件 98's fourth cell has no
+#: sentence by ruling, so it has no entry here.
+SELECTION_BIAS_FAMILY: dict[str, str] = {
+    item: text
+    for item, text in wording.RISK_CONFIRMED_WORDING.items()
+    if item.startswith("b-")
+}
+
+
 def test_the_selection_bias_family_is_three_cells_and_this_is_the_third() -> None:
     """條件 96/99: 字面清冊補第三筆——(b) 完整／短／查無紀錄."""
-    assert {
-        item for item in wording.RISK_CONFIRMED_WORDING if item.startswith("b-")
-    } == {"b-full", "b-single", "b-unlogged"}
+    assert set(SELECTION_BIAS_FAMILY) == {"b-full", "b-single", "b-unlogged"}
 
 
 #: 條件 104. 「帶入回測結果」 was refused as a *button* label -- it reads as
@@ -945,6 +1065,141 @@ def test_the_trigger_label_is_the_approved_one_and_neither_candidate() -> None:
         wording.KELLY_OVERWRITE_CANCEL_LABEL,
         wording.KELLY_OVERWRITE_NOTICE_CHOICES,
     )
+
+
+#: 條件 111 零出現守門的 allowlist，粒度同本檔其他 allowlist（檔案＋字面＋出處）。
+#: 只剩一類：``PositionsTable`` 的持倉刪除 confirm 早於本批、不在 Kelly 面，
+#: 第十五輪明示**不追溯**。
+#:
+#: 曾經還有一類「待清除」——``KellyManualInputForm`` 的 ``window.confirm`` 整句
+#: （條件 112）與 ``KellyDisclosuresPanel`` 的兩個英文按鈕（條件 116）。前端已於
+#: e3dbe83 落地兩者，所以那三筆連同 :data:`ENGLISH_VIEW_CONTROL_ALLOWLIST`
+#: 一併刪除，英文按鈕改為真正的零出現斷言。留痕於此，因為「暫記 allowlist、
+#: 對方落地即刪」是這批的作法，不是被遺忘的例外。
+FORBIDDEN_DELETE_WORDING_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
+    (
+        "frontend/app/components/PositionsTable.tsx",
+        "此動作無法復原",
+        "第十五輪 條件 111：持倉刪除 confirm 早於本批、非 Kelly 面，明示不追溯",
+    ),
+    (
+        "frontend/app/components/PositionsTable.tsx",
+        "確定刪除",
+        "第十五輪 條件 111：同上一筆同一行",
+    ),
+    (
+        "frontend/app/position/[symbol]/LeverageChapterView.tsx",
+        "歸零",
+        "既有無關用法（:158「理想路徑…已跌破 -100%（歸零）」）：受詞是部位淨值，"
+        "本輪裁決的受詞是已經為零的計數，兩者不同命題",
+    ),
+    (
+        "backend/app/playbook/engine.py",
+        "歸零",
+        "既有無關用法（順延計數歸零）：受詞是排程順延計數，非 K_observed",
+    ),
+)
+
+
+#: 條件 111 的五則禁字。全出貨面掃描，誤傷以上面那張 allowlist 逐筆記名——
+#: 這是 條件 89 立下的作法：字面若在別處有正當用途，就記出處而不是縮小掃描面，
+#: 因為縮小掃描面等於把「別處」永久豁免掉。
+#:
+#: 各自被刪的理由不同：全稱不實宣稱（對嘗試紀錄為假）、問句式把疑懼內建進按鈕
+#: 語境、不顧勸阻框架、定指主詞預設紀錄存在（對零嘗試標的憑空宣稱）、以及對
+#: 本來就是零的計數講「歸零」語意空轉。
+STRUCK_DELETE_WORDING: tuple[str, ...] = (
+    "此動作無法復原",
+    "確定刪除",
+    "仍要刪除",
+    "嘗試紀錄仍會保留",
+    "歸零",
+)
+
+
+@pytest.mark.parametrize("literal", STRUCK_DELETE_WORDING)
+def test_a_struck_delete_wording_survives_only_where_the_review_allowed(
+    literal: str,
+) -> None:
+    """條件 111 零出現，allowlist 逐筆出處以外一律紅燈.
+
+    「取消，保留目前資料」 is not in this list because it is already banned
+    outright by the ninth round's own entry in :data:`REJECTED_LITERALS`.
+    """
+    observed = {
+        str(path.relative_to(_STOCK_DESK_ROOT))
+        for path in _shipped_sources()
+        if literal in path.read_text(encoding="utf-8")
+    }
+    allowed = {
+        entry[0] for entry in FORBIDDEN_DELETE_WORDING_ALLOWLIST if entry[1] == literal
+    }
+
+    assert observed == allowed, (
+        f"「{literal}」出現於核可出處以外（條件 111）。實測：{observed}"
+    )
+
+
+@pytest.mark.parametrize("literal", ["Original values", "Back"])
+def test_no_english_control_carries_the_original_values_view(literal: str) -> None:
+    """條件 116 零出現: the two placeholders are gone, and may not come back.
+
+    E-5's language floor is the reason this is a guard rather than a preference:
+    the only control that keeps (fr6-overridden)'s Traditional-Chinese promise
+    ("原始回測帶入的數字仍保留、可以查看") may not itself be English. Both labels
+    are backend constants now, and the front end renders them verbatim.
+
+    Matched as a **rendered label**, not a substring: "Back" lives inside
+    ``Backend``, ``BacktestForm`` and half the module names in this app, and
+    none of those is a control anybody reads. A JSX text node sits alone on its
+    line.
+    """
+    observed = {
+        str(path.relative_to(_STOCK_DESK_ROOT))
+        for path in _frontend_sources(include_tests=False)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() == literal
+    }
+
+    assert observed == set(), f"「{literal}」仍作為控制項字面存在（條件 116）。實測：{observed}"
+
+
+def test_every_allowlisted_line_still_exists() -> None:
+    """A stale exemption is an exemption granted to nobody.
+
+    The list is checked against the files, so a line that was removed -- by a
+    rewrite of that component, say -- cannot leave a permission behind for a
+    literal nobody writes any more.
+    """
+    for name, literal, _ in FORBIDDEN_DELETE_WORDING_ALLOWLIST:
+        path = _STOCK_DESK_ROOT / name
+        assert path.is_file(), name
+        assert literal in path.read_text(encoding="utf-8"), (name, literal)
+
+    # Every entry is 不追溯 and outside the Kelly surface. A Kelly file appearing
+    # here would mean the ruling was reinterpreted, not that a guard was tuned.
+    for name, _, _ in FORBIDDEN_DELETE_WORDING_ALLOWLIST:
+        assert not name.startswith(KELLY_SURFACE), name
+
+
+def test_the_delete_dialog_ships_no_alternative_third_paragraph() -> None:
+    """條件 111: 備案段三（只留範圍句、不講第 5 條後果）不得落地.
+
+    The shorter variant was offered so risk-compliance could choose between an
+    even-handed statement and a minimal one; it chose the first, and the second
+    may not exist in the source. What identifies it is the absence of the
+    aftermath clause from a paragraph that otherwise opens the same way.
+    """
+    approved = wording.KELLY_DELETE_NOTICE_SCOPE_AND_AFTERMATH
+    opening = approved[:20]
+
+    for path in _python_sources():
+        for value in _string_constants(path):
+            if opening in value:
+                assert approved in value, path.relative_to(_STOCK_DESK_ROOT)
+
+    assert "第 5 條「分數 Kelly 部位上限」隨之回到無法評估" in approved
+    assert "不是找回這次刪除的內容" in approved
 
 
 def test_the_assembly_point_imports_its_sentences_instead_of_retyping_them() -> None:
@@ -1215,13 +1470,17 @@ WIN_RATE_BACKEND_WHITELIST: dict[str, int] = {
     # 第九輪 §dev 兩回送項 ① confirmed both reallocations (5 -> 8) and 條件 81
     # requires this note on the three shared-constant entries.
     #
-    # K4c-1 takes it to 13, all of it already allocated by the reviews:
+    # K4c-1 takes it to 14, all of it already allocated by the reviews:
     # * 落地條件 48（第六輪，擴充權在風控）+3 -- 欄位 9's label, 欄位 10's sentence
     #   and the Kelly-side 口徑限定語, exactly the three that ruling names.
     # * 落地條件 79（第九輪）+2 -- 「限兩變體定義行」: the dialog's two 段一
     #   constants, one per source variant. Its 段二/段三 and both button labels
     #   contain the word nowhere, which is why the increase is two and not five.
-    "app/api/kelly_wording.py": 13,
+    # * 第十五輪 +1 -- the delete dialog's base 段一, which names the two fields it
+    #   is about to remove (「生效中的勝率與盈虧比」). Its overridden variant names
+    #   the two value *sets* instead and contains the word nowhere, and the other
+    #   three paragraphs and both keys do not either.
+    "app/api/kelly_wording.py": 14,
     # 分歧① 列管（不擋本批，另批復審）: CONFIDENCE_MEANING / WEIGHT_MEANING, both
     # of which use the word inside a denial ("非勝率或機率").
     "app/advice/engine.py": 2,
@@ -1297,6 +1556,22 @@ def test_no_approved_kelly_sentence_has_been_copied_into_the_front_end() -> None
         assert offenders == [], f"({item}) 的字面出現在前端 {offenders}"
 
 
+#: The one collateral hit of the short-label scan below, listed the way every
+#: other narrowing in this file is (檔案+來源行+出處). 「策略」 is FR-5 欄位 1's
+#: label *and* the ordinary word for the field a user picks a strategy in; the
+#: occurrence below is the second, on the import spec form, whose chrome the
+#: fourteenth round cleared as 同構 with the existing register and carrying no
+#: methodological claim. A second occurrence, or one in any other file, is a red
+#: light -- that would be the detail table's label being rebuilt in the client.
+KELLY_LABEL_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
+    (
+        "frontend/app/settings/KellyImportDialog.tsx",
+        "策略",
+        "第十四輪 chrome 放行：帶入設定表單的欄位標籤，非 FR-5 欄位 1 明細標籤",
+    ),
+)
+
+
 def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> None:
     """The short items, over the surface that renders Kelly copy (落地條件 2/3).
 
@@ -1312,11 +1587,24 @@ def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> Non
         for path in _kelly_surface_sources()
         if path.suffix in {".ts", ".tsx"}
     }
+    allowed = {(entry[0], entry[1]) for entry in KELLY_LABEL_ALLOWLIST}
     for item, approved in CONFIRMED_VERBATIM.items():
         if len(approved) >= _LABEL_LENGTH:
             continue
-        offenders = [name for name, text in sources.items() if approved in text]
+        offenders = [
+            name
+            for name, text in sources.items()
+            if approved in text and (name, approved) not in allowed
+        ]
         assert offenders == [], f"({item}) 的標籤字面出現在 Kelly 前端面 {offenders}"
+
+    # The allowlist is checked in both directions: an entry that stopped being
+    # true (the field renamed, the file gone) must not sit here granting an
+    # exemption nobody needs.
+    for name, literal, _ in KELLY_LABEL_ALLOWLIST:
+        text = (_STOCK_DESK_ROOT / name).read_text(encoding="utf-8")
+        assert text.count(literal) == 1, (name, literal)
+        assert 'htmlFor="kelly-import-strategy"' in text
 
 
 def test_the_shared_forbidden_term_list_was_not_touched() -> None:
@@ -1423,6 +1711,17 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "notice-cancel": set(),
     "notice-confirm": set(),
     "trigger-label": set(),
+    # 條件 113: the delete block's only interpolation, and it is in 段一 alone.
+    "delete-title": set(),
+    "delete-1": {"symbol", "market"},
+    "delete-1-overridden": {"symbol", "market"},
+    "delete-2": set(),
+    "delete-3": set(),
+    "delete-4": set(),
+    "delete-confirm": set(),
+    "delete-cancel": set(),
+    "original-entry": set(),
+    "original-back": set(),
 }
 
 #: The (g) sentences that name an anchor date and an elapsed count. All three
@@ -1510,6 +1809,42 @@ def test_a_refusal_message_embeds_no_measured_value(item: str) -> None:
         "body_symbol",
         "body_market",
     }
+
+
+def test_a_range_refusal_reaches_the_client_as_the_approved_sentence_alone() -> None:
+    """qa 2026-08-22 B2（條件 57）: 422 的 detail[].msg 逐字等於核可常數.
+
+    pydantic v2 renders a ``ValueError`` raised inside a validator as
+    ``"Value error, "`` + its text, and the front end renders ``detail[].msg``
+    as it arrives -- so the shipped sentence was a hybrid: an English wrapper in
+    front of copy approved character for character. Both validators now raise
+    :class:`~pydantic_core.PydanticCustomError`, whose message is the constant
+    and nothing else.
+
+    Asserted through a real request rather than on the constants, because the
+    fault was never in the constants: it was in what the framework did to them
+    on the way out.
+    """
+    client = TestClient(app)
+    cases = (
+        ({"win_rate": 1.4, "payoff_ratio": 1.8}, models.KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE, 1.4),
+        (
+            {"win_rate": 0.55, "payoff_ratio": -1.0},
+            models.KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
+            -1.0,
+        ),
+    )
+
+    for body, approved, value in cases:
+        response = client.put("/api/kelly-inputs/2330", json=body)
+        assert response.status_code == 422
+        (error,) = response.json()["detail"]
+        assert error["msg"] == approved.format(value=value)
+        # No wrapper of any kind, in either language.
+        assert "Value error" not in response.text
+        # The branchable half moved to ``type``, which is where a client should
+        # have been reading it all along.
+        assert error["type"].startswith("kelly_")
 
 
 def test_the_range_messages_in_models_use_the_replacement_term() -> None:

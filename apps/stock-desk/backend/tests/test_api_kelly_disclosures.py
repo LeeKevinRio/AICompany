@@ -1083,6 +1083,180 @@ def test_a_screen_with_no_import_yet_claims_no_imported_source(
 
 
 # ---------------------------------------------------------------------------
+# 刪除確認（第十五輪 條件 110-114）與檢視兩控制項（條件 116/117）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "scope"),
+    [
+        ("manual", wording.KELLY_DELETE_NOTICE_SCOPE),
+        ("backtest", wording.KELLY_DELETE_NOTICE_SCOPE),
+        ("backtest_overridden", wording.KELLY_DELETE_NOTICE_SCOPE_OVERRIDDEN),
+    ],
+)
+def test_every_stored_row_carries_its_own_delete_dialog(
+    source: str, scope: str, api_harness: ApiHarness
+) -> None:
+    """條件 111: 三格互斥窮盡、正向斷言、禁 default，段序凍結、分段交付.
+
+    Only the first paragraph differs. The overridden one names the two value
+    sets it is about to remove, because (任務 7) and (fr6-overridden) told the
+    user the imported pair is kept -- and the thirteenth round let those stand
+    on the premise that the dialog at the moment of the action takes the belief
+    back.
+    """
+    rows = {"manual": _manual, "backtest": _imported, "backtest_overridden": _overridden}
+
+    notice = _disclosures(api_harness, rows[source]())["delete_notice"]
+
+    assert notice["title"] == wording.KELLY_DELETE_NOTICE_TITLE
+    assert notice["body"] == [
+        scope.format(symbol="2330", market="TW"),
+        wording.KELLY_DELETE_NOTICE_NO_RECOVERY,
+        wording.KELLY_DELETE_NOTICE_SCOPE_AND_AFTERMATH,
+        wording.KELLY_DELETE_NOTICE_CHOICES,
+    ]
+    assert notice["confirm_label"] == wording.KELLY_DELETE_CONFIRM_LABEL
+    assert notice["cancel_label"] == wording.KELLY_OVERWRITE_CANCEL_LABEL
+
+
+def test_only_the_overridden_row_names_the_kept_pair(api_harness: ApiHarness) -> None:
+    """條件 111, the other direction: the variant belongs to one cell only."""
+    for row in (_manual(), _imported()):
+        notice = _disclosures(api_harness, row)["delete_notice"]
+        assert "原本保留的那組原始回測值" not in str(notice)
+
+
+def test_no_row_means_no_delete_dialog(api_harness: ApiHarness) -> None:
+    """Nothing stored, nothing to delete, and so nothing to confirm."""
+    assert _get(api_harness)["disclosures"]["delete_notice"] is None
+
+
+def test_the_delete_dialog_names_the_row_it_will_remove(api_harness: ApiHarness) -> None:
+    """條件 113: 僅兩佔位符，server 端插值，渲染沿現行「2330（TW）」形.
+
+    The digits in the rendered paragraph are the symbol's own and nothing else:
+    the guard excludes the interpolation itself, which is what the draft's own
+    交接 note asked for, and then leaves no other number standing.
+    """
+    api_harness.kelly_inputs.upsert(_manual(symbol="2330", market="TW"))
+    _attempt(api_harness)
+
+    first, *rest = _get(api_harness)["disclosures"]["delete_notice"]["body"]
+
+    assert "2330（TW）" in first
+    assert "{" not in first and "}" not in first
+    assert [character for character in first if character.isdigit()] == list("2330")
+    # 條件 113 again, from the template side: two placeholders, no more.
+    assert set(re.findall(r"\{([a-z_]+)\}", wording.KELLY_DELETE_NOTICE_SCOPE)) == {
+        "symbol",
+        "market",
+    }
+    # And the interpolation is confined to 段一.
+    for paragraph in rest:
+        assert "2330" not in paragraph
+
+
+def test_the_delete_dialog_carries_none_of_the_struck_wordings(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 111 零出現, over what this endpoint actually ships.
+
+    Each was struck for its own reason: the universal that is false of the
+    attempt log, the question form that builds dread into the button's context,
+    the proceed-anyway framing, the cancel label that prices the two outcomes
+    unevenly, the definite claim that presupposes records exist, and the word
+    that is meaningless for a symbol whose count is already zero.
+    """
+    struck = (
+        "此動作無法復原",
+        "確定刪除",
+        "仍要刪除",
+        "取消，保留目前資料",
+        "嘗試紀錄仍會保留",
+        "歸零",
+    )
+
+    for row in (_manual(), _imported(), _overridden()):
+        notice = str(_disclosures(api_harness, row)["delete_notice"])
+        for literal in struck:
+            assert literal not in notice, literal
+
+
+def test_the_delete_dialog_states_the_scope_the_store_actually_has(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 114 (後端半邊): 段三 is a behaviour claim, so it is checked as one.
+
+    The sentence says the attempt log and its count are outside the delete's
+    reach. That is 約束 35's design and it is asserted here against the real
+    stores rather than trusted: rows and ``k_observed()`` both stand after the
+    row is gone.
+    """
+    _attempt(api_harness, spec="spec-1")
+    _attempt(api_harness, spec="spec-2")
+    api_harness.kelly_inputs.upsert(_imported())
+    before = api_harness.kelly_attempts.k_observed("2330", "TW")
+
+    assert api_harness.client.delete("/api/kelly-inputs/2330").status_code == 204
+
+    assert api_harness.kelly_inputs.get("2330", "TW") is None
+    assert api_harness.kelly_attempts.k_observed("2330", "TW") == before == 2
+    assert api_harness.kelly_attempts.k_distinct_specs("2330", "TW") == 2
+    # And the screen the user lands on is the one 段三 describes: nothing
+    # entered, and (b) still standing on the attempts that survived.
+    after = _get(api_harness)
+    assert after["kelly_input"] is None
+    assert after["disclosures"]["freshness_badge_label"] == (
+        wording.KELLY_FRESHNESS_BADGE_ABSENT
+    )
+    assert after["disclosures"]["selection_bias"] == (
+        wording.KELLY_SELECTION_BIAS_FULL.format(k_observed=2, k_distinct_specs=2)
+    )
+
+
+def test_the_original_values_controls_track_the_view_they_lead_to(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 116/117: 兩按鈕後端常數，且與 original_values 同真值.
+
+    The entry control's wording is (fr6-overridden)'s own promise ("可以查看")
+    made into a control, which is the chain E-5 follows; a control offered where
+    the view does not exist would be a promise with nothing behind it.
+    """
+    overridden = _disclosures(api_harness, _overridden())
+
+    assert overridden["original_values"] is not None
+    assert overridden["original_values_entry_label"] == "查看原始回測值"
+    assert overridden["original_values_return_label"] == "返回"
+
+    without_a_kept_pair = _overridden(backtest_win_rate=None, backtest_payoff_ratio=None)
+    for row in (_manual(), _imported(), without_a_kept_pair):
+        block = _disclosures(api_harness, row)
+        assert block["original_values"] is None
+        assert block["original_values_entry_label"] is None
+        assert block["original_values_return_label"] is None
+
+
+def test_the_view_controls_are_not_folded_into_the_closed_view_contents(
+    api_harness: ApiHarness,
+) -> None:
+    """第十三輪 required: the view's contents stay two numbers, two labels, one
+    sentence. The controls are chrome and live beside it, not in it.
+    """
+    block = _disclosures(api_harness, _overridden())
+
+    assert set(block["original_values"]) == {
+        "statement",
+        "win_rate_label",
+        "win_rate",
+        "payoff_ratio_label",
+        "payoff_ratio",
+    }
+
+
+# ---------------------------------------------------------------------------
 # 反向斷言：回應中的中文全部是核可字面（落地條件 3）
 # ---------------------------------------------------------------------------
 
@@ -1119,6 +1293,12 @@ def _approved_texts() -> set[str]:
     approved.add(KELLY_PAYOFF_RATIO_LABEL)
     approved.add(wording.KELLY_SELECTION_BIAS_UNLOGGED)
     approved.add(wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL)
+    approved.add(wording.KELLY_ORIGINAL_VALUES_ENTRY_LABEL)
+    approved.add(wording.KELLY_ORIGINAL_VALUES_BACK_LABEL)
+    for source in ("manual", "backtest", "backtest_overridden"):
+        paragraphs = wording.kelly_delete_notice(source, symbol="2330", market="TW")
+        assert paragraphs is not None
+        approved.update(paragraphs)
     # The two that interpolate a measured value, rendered as this endpoint
     # renders them (落地條件 12: fixed digits).
     approved.add(

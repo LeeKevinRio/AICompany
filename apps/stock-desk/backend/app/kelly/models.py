@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.positions.models import Market
 
@@ -108,15 +109,45 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
 
 
+#: Error codes for the two range refusals. They exist so the *message* can be
+#: the approved sentence and nothing else (see :func:`_check_win_rate`); a client
+#: that wants to branch reads ``type``, which is what these are for.
+_WIN_RATE_ERROR_TYPE = "kelly_win_rate_out_of_range"
+_PAYOFF_RATIO_ERROR_TYPE = "kelly_payoff_ratio_out_of_range"
+
+
 def _check_win_rate(value: float) -> float:
+    """Refuse a probability outside (0, 1) with the approved sentence, verbatim.
+
+    :class:`~pydantic_core.PydanticCustomError` rather than ``ValueError``, and
+    that is a compliance fix rather than a style one (qa 2026-08-22 B2, 條件 57):
+    pydantic v2 wraps a plain ``ValueError`` as ``"Value error, "`` + its text,
+    so the 422 body carried a **hybrid** sentence -- an English prefix in front
+    of a character-for-character approved Chinese one -- and the front end
+    renders ``detail[].msg`` as it arrives. A custom error carries the message
+    untouched, so what reaches the user is the sentence risk-compliance signed
+    off and nothing else.
+
+    ``{value}`` is interpolated by the error's own context and renders exactly as
+    ``str.format`` did (``1.4``, ``1e+20``), so 條件 58's bound on echoing a
+    refused input is unchanged: it is the user's own number, quoted back inside
+    a refusal, and never a measured value.
+    """
     if not 0.0 < value < 1.0:
-        raise ValueError(KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE.format(value=value))
+        raise PydanticCustomError(
+            _WIN_RATE_ERROR_TYPE, KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE, {"value": value}
+        )
     return value
 
 
 def _check_payoff_ratio(value: float) -> float:
+    """The payoff ratio's half of the same rule, and the same reason (B2)."""
     if not value > 0.0:
-        raise ValueError(KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE.format(value=value))
+        raise PydanticCustomError(
+            _PAYOFF_RATIO_ERROR_TYPE,
+            KELLY_PAYOFF_RATIO_OUT_OF_RANGE_MESSAGE,
+            {"value": value},
+        )
     return value
 
 
