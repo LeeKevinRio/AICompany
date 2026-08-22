@@ -51,14 +51,18 @@ The item ids in :data:`RISK_CONFIRMED_WORDING` are the review's own ((a-1),
 each other line by line.
 
 Approved is not the same as released. The review's own standing list of what is
-still missing (第六輪 §C5 文案面最終狀態) governs. The items this module's own
+still missing (第八輪 §C5 文案面最終狀態) governs. The items this module's own
 history named are closed -- the 500 path has its own approved message (第四輪),
-``PortfolioContext`` carries the source cap 5 branches on (K4b, 落地條件 19), and
-the f*≤0 pair was approved in the sixth round and is wired here -- but the
-sixth round's own residue is not: the 除權息 disclosure went back for redrafting,
-and the FR-5/FR-6/badge copy it approved is display-surface text that arrives
-with K4c, so it is deliberately absent below. Nothing here should be read as
-clearing C5 for release.
+``PortfolioContext`` carries the source cap 5 branches on (K4b, 落地條件 19), the
+f*≤0 pair was approved in the sixth round and is wired here, and the sixth
+round's display copy (FR-5's frame and eleven column labels, 欄位 10, FR-6's four,
+the FR-4 badge, the Kelly-side 口徑限定語) lands below with K4c-1, which is the
+lane that builds the surface reading them, and 條件 53/68's before-overwrite
+notice came back approved in the ninth round and lands with them. What remains
+is engineering, not copy: 條件 74's entry gate (every front-end import call site
+must go through that dialog first) and 條件 78 (the label on the button that
+opens it is **unreviewed** and may not be invented by anyone). Nothing here
+should be read as clearing C5 for release.
 """
 
 from __future__ import annotations
@@ -626,6 +630,247 @@ KELLY_ORIGINAL_PAIR_DISCLOSURE = (
 KELLY_ORIGINAL_OOS_PERIOD_LABEL = "原始回測的樣本外期間"
 
 
+# ---------------------------------------------------------------------------
+# (任務 3) FR-5: the backtest sample the stored pair was measured on
+# ---------------------------------------------------------------------------
+
+#: (任務 3 框架句) 風控 2026-08-22 逐字定稿（第六輪，修訂版），字面含標點不得改動，
+#: 漂移須重送風控。
+#: The frame over the eleven-column detail. Two clauses were struck on the same
+#: ground the (任務 2) "上方" was: "這次量測" pointed at a phrase none of the 21
+#: approved sentences contain, and "前面" named a position on a screen this
+#: module cannot see. 條件 42 limits the whole block -- this sentence and all
+#: eleven rows -- to ``source == "backtest"``: showing it for an overridden row
+#: puts the imported sample beside hand-keyed effective values, which is exactly
+#: what 落地條件 21 says needs its own distinguishing sentence.
+KELLY_BACKTEST_SAMPLE_DETAIL_INTRO = (
+    "以下是這筆 Kelly 輸入所依據的回測樣本明細，"
+    "供你核對各句所指的『這段歷史樣本』實際是哪一次回測、哪一段期間。"
+)
+
+#: (欄位 1-11) 風控 2026-08-22 逐字定稿（第六輪，原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: Eleven labels, approved one by one, in the order the review lists them. They
+#: are separate constants rather than one dict literal so a drift in any single
+#: label fails its own verbatim assertion, and so the inventory below can key
+#: each on its own item id.
+#:
+#: 條件 43 travels with rows 3-5: ``n == n_win + n_loss`` is a guard, not an
+#: assumption, and the three may not be displayed side by side unless it holds.
+#: 條件 44 travels with rows 6-7: they carry the same prominence as (h), which
+#: explains what the two counts are.
+KELLY_DETAIL_STRATEGY_LABEL = "策略"
+KELLY_DETAIL_OOS_PERIOD_LABEL = "樣本外（OOS）區段（起訖日期）"
+KELLY_DETAIL_ROUND_TRIPS_LABEL = "完整回合數"
+KELLY_DETAIL_WIN_TRIPS_LABEL = "獲利回合數"
+KELLY_DETAIL_LOSS_TRIPS_LABEL = "虧損回合數"
+KELLY_DETAIL_EXCLUDED_BOUNDARY_TRIPS_LABEL = "跨界排除回合數"
+KELLY_DETAIL_OPEN_TRIP_AT_END_LABEL = "期末未平倉回合數"
+KELLY_DETAIL_OBSERVATIONS_LABEL = "樣本觀測數（資料點數，非回合數）"
+KELLY_DETAIL_WIN_RATE_CI_LABEL = "勝率的 95% 區間（Wilson，依完整回合計）"
+KELLY_DETAIL_RATES_VERIFIED_LABEL = "費率查證狀態"
+KELLY_DETAIL_DIVIDEND_LABEL = "除權息還原狀態"
+
+#: (欄位 10 句) 風控 2026-08-22 逐字定稿（第六輪，主案原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: 條件 45 binds it to ``rates_verified is False`` and to nothing else: ``None``
+#: means the run never reported on its rates, which is not the same finding, and
+#: ``not rates_verified`` would collapse the two. The banned spelling is named in
+#: the ruling because it is the one a later reader would reach for.
+KELLY_RATES_UNVERIFIED_NOTE = (
+    "此標的 Kelly 輸入所依據的回測，其手續費／交易稅／滑價率尚未對照主要來源查證，"
+    "這筆勝率與盈虧比應視為待查證狀態。"
+)
+
+
+# ---------------------------------------------------------------------------
+# (任務 4) FR-6: which of the three sources the effective pair came from
+# ---------------------------------------------------------------------------
+
+#: (fr6-manual) 風控 2026-08-22 逐字定稿（第六輪，原文），字面含標點不得改動，
+#: 漂移須重送風控。 The long form and the short label are separate approvals and
+#: are not interchangeable: the label is a chip beside the pair, the sentence is
+#: the disclosure.
+KELLY_SOURCE_MANUAL_STATEMENT = "此標的目前生效的 Kelly 輸入，來源為手動輸入。"
+KELLY_SOURCE_MANUAL_LABEL = "來源：手動輸入。"
+
+#: (fr6-overridden) 風控 2026-08-22 逐字定稿（第六輪，原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: "可以查看" is a promise about this product, and 條件 46 makes it one that has
+#: to be kept: a surface stating it owes the user a reachable path to the
+#: original pair. That path is the original-values view ((任務 7)/(任務 8)), which
+#: ``app/api/kelly.py`` serves for exactly the rows this sentence describes.
+KELLY_SOURCE_OVERRIDDEN_STATEMENT = (
+    "此標的目前生效的 Kelly 輸入，原本由回測帶入，之後經你手動調整；"
+    "調整後的數字才是目前生效值，原始回測帶入的數字仍保留、可以查看。"
+)
+KELLY_SOURCE_OVERRIDDEN_LABEL = "來源：回測帶入，已手動調整；原始回測值仍保留可查。"
+
+
+# ---------------------------------------------------------------------------
+# (任務 5) FR-4 badge: the four states one input can be in
+# ---------------------------------------------------------------------------
+
+#: (badge) 風控 2026-08-22 追認（第六輪，沿用 ``NetWorthSection`` 既有核可字面），
+#: 字面不得改動，漂移須重送風控。
+#: The fourth state is the one the sixth round added: "never entered" is the
+#: absence of a row, and reporting it as a freshness would say an input exists.
+#: 條件 47 carries three more rules the surface owes: an ``age_days`` of ``None``
+#: may not be rendered with a day suffix (no age was established), an ``expired``
+#: badge appears only on a screen that also carries the matching (g) sentence,
+#: and "建議更新" may not sit in the same visual group as a trading action.
+KELLY_FRESHNESS_BADGE_ABSENT = "尚未輸入"
+KELLY_FRESHNESS_BADGE_FRESH = "已更新"
+KELLY_FRESHNESS_BADGE_AGEING = "建議更新"
+KELLY_FRESHNESS_BADGE_EXPIRED = "已過期"
+
+
+# ---------------------------------------------------------------------------
+# (任務 6) the 口徑限定語 on Kelly's own side
+# ---------------------------------------------------------------------------
+
+#: (任務 6 Kelly 面) 風控 2026-08-22 逐字定稿（第六輪，主案原文），字面含標點不得改動，
+#: 漂移須重送風控。
+#: C5 puts two same-named win rates one click apart -- this one counted over
+#: complete round trips (``app/backtest/episodes.py``) and the backtest report's
+#: own, counted over settled fills -- and the import button sits on the second
+#: screen. 條件 65 makes this the label over the win rate in the original-values
+#: view, and forbids minting a second wording for it there.
+#:
+#: 條件 49 pairs it with「勝率（依結算筆數計）」 on ``BacktestReportView``: the two
+#: qualifiers must reach a **display surface** together, so that no screen ever
+#: shows one qualified number beside one bare one. This lane ships the backend
+#: constant and the API that serves it and renders nothing, so the paired state
+#: is unchanged on screen; the front-end lane owes both labels in its own commit.
+KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER = "勝率（依完整回合計）"
+
+
+# ---------------------------------------------------------------------------
+# (條件 53/68) the before-overwrite notice, by source
+# ---------------------------------------------------------------------------
+#
+# 風控 2026-08-22 逐字定稿（第九輪，採備案：依來源拆兩變體），字面含標點不得改動，
+# 漂移須重送風控。The dialog a surface must show **before** it calls
+# ``POST .../import-backtest`` on a row whose effective pair was hand-keyed
+# (條件 74). Re-importing writes ``source = "backtest"`` over the whole row, so
+# the instruction (g-overridden) and (g-4-overridden) give -- "請重新執行回測並確認
+# 後更新" -- destroys the very numbers (任務 7) and (fr6-overridden) told the user
+# were kept.
+#
+# The single-sentence draft was **not** adopted, on a truth condition rather than
+# a preference: "不留在任何欄位" is true of a manual pair and false of an
+# overridden row's original values, which that row's own import left in
+# ``kelly_import_attempts`` for good. One sentence covering both would be false
+# on one branch, so there are two variants and a shared close.
+#
+# 條件 82 freezes the paragraph order (段一 -> 段二 -> 段三) and makes the close a
+# single shared constant appended to each variant, never retyped into both.
+# 條件 75: nothing here interpolates, and no win rate or payoff ratio may be
+# rendered into this dialog -- showing a number here would pull (f)/(e-manual)
+# and the whole style floor of 落地條件 4 onto a modal, which is a separate
+# submission.
+
+#: (標題, 兩變體共用；aria-label 逐字同用, 條件 72) 風控 2026-08-22 逐字定稿（第九輪，
+#: 修訂版）。The draft's opening qualifier -- the one 條件 71/77/78 ban outright and
+#: which is therefore not retyped here -- was struck because there is no earlier
+#: result to fetch: the import re-runs the backtest here and now
+#: (:func:`app.api.kelly.import_kelly_input_from_backtest` takes a request, not a
+#: ``backtest_id``), so the struck title described an action this system does not
+#: perform. ``tests/test_kelly_wording.py`` carries the banned literal.
+KELLY_OVERWRITE_NOTICE_TITLE = "帶入回測結果 — 執行前請確認"
+
+#: (manual 段一) 風控 2026-08-22 逐字定稿（第九輪，原文）。
+KELLY_OVERWRITE_NOTICE_MANUAL_EFFECT = (
+    "這裡目前生效的勝率與盈虧比，是你自行輸入的估計值；"
+    "執行後，本系統會重新執行一次回測，把這個標的目前生效的勝率與盈虧比，"
+    "換成這次算出的新結果。"
+)
+
+#: (manual 段二) 風控 2026-08-22 逐字定稿（第九輪，原文）。
+#: "不會留在任何欄位" is checked and true on this branch and only on this branch:
+#: a hand-keyed pair never reaches ``kelly_import_attempts``, so once
+#: :meth:`app.kelly.store.KellyInputStore.upsert` overwrites the row the numbers
+#: are gone from the database entirely.
+KELLY_OVERWRITE_NOTICE_MANUAL_LOSS = (
+    "你自行輸入的這組數字，執行後就不再是生效值。"
+    "本系統沒有版本紀錄，這組數字不會留在任何欄位，事後也沒有畫面可以找回。"
+)
+
+#: (backtest_overridden 段一) 風控 2026-08-22 逐字定稿（第九輪，原文）。
+KELLY_OVERWRITE_NOTICE_OVERRIDDEN_EFFECT = (
+    "這裡目前生效的勝率與盈虧比，是你在原本回測帶入的基礎上手動調整過的數字，"
+    "另外還保留著一組原始回測值供你查看；"
+    "執行後，本系統會重新執行一次回測，把這個標的目前生效的勝率與盈虧比，"
+    "換成這次算出的新結果。"
+)
+
+#: (backtest_overridden 段二) 風控 2026-08-22 逐字定稿（第九輪，修訂版）。
+#: 「這一列的」 is the修訂 and is load-bearing: the original imported pair *is*
+#: kept somewhere after the overwrite -- the attempt that imported it recorded
+#: its own measured columns, and ``DELETE`` does not touch that table (約束 35) --
+#: so the unqualified "不留在任何欄位" would have overstated the loss. Qualified to
+#: this row, it is verbatim equivalent to what ``upsert`` does.
+KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS = (
+    "你調整過的這組生效值、以及原本保留的那組原始回測值，執行後都會被這次的新結果取代。"
+    "本系統沒有版本紀錄，這兩組舊數字都不會留在這一列的任何欄位，事後也沒有畫面可以找回。"
+)
+
+#: (共用段三) 風控 2026-08-22 逐字定稿（第九輪，修訂版）。One constant appended to
+#: both variants (條件 82), so the two outcomes are always described in the same
+#: sentence, at the same length, in the same place. 「下方」 was struck as a layout
+#: claim, and the inner quotes are 『』 -- both are part of the approval.
+#: "前面所說的動作" points inside this same block, whose order 條件 82 freezes, so
+#: the reference is checkable rather than a claim about a screen.
+KELLY_OVERWRITE_NOTICE_CHOICES = (
+    "點『取消』，這個標的的 Kelly 輸入維持現在的樣子，不會有任何改變；"
+    "點『確認帶入，覆蓋目前資料』，才會執行前面所說的動作。"
+)
+
+#: (按鈕) 風控 2026-08-22 逐字定稿（第九輪）。Two drafts were turned down and are
+#: not retyped here (條件 71 bans them from the source; the literals live in
+#: ``tests/test_kelly_wording.py``): a proceed-anyway confirm label, because a
+#: built-in "despite the warning" framing is the system taking a side, and a
+#: cancel label carrying its own reassurance, because it prices the two outcomes
+#: unevenly and nudges towards cancelling. The symmetry is carried by 段三
+#: instead, which describes both outcomes in one sentence of equal length.
+KELLY_OVERWRITE_CANCEL_LABEL = "取消"
+KELLY_OVERWRITE_CONFIRM_LABEL = "確認帶入，覆蓋目前資料"
+
+
+def kelly_overwrite_notice(source: str) -> str | None:
+    """The before-overwrite dialog body for one source, or ``None``.
+
+    條件 73 makes the four cells mutually exclusive and exhaustive, and this
+    function owns two of them; the caller owns "no row at all". Every branch is
+    written out, including the one that returns ``None`` on purpose:
+
+    * ``manual`` / ``backtest_overridden`` -- their own variant, plus 段三.
+    * ``backtest`` -- **explicitly** no dialog. A re-import replaces a
+      measurement with a measurement, there is nothing hand-keyed to lose, and
+      it is the very action (g-3)/(g-4) instruct the user to take: a warning
+      there would be a miscalibrated signal pointing the opposite way to the
+      product's own advice. The lightweight one-line variant proposed for this
+      cell was **not adopted and may not ship** (條件 71).
+    * anything else -- ``None``, because inventing copy for a source this module
+      has never seen is the one thing none of these may do.
+
+    A ``dict.get`` default would collapse the third and fourth cells into an
+    accident; 條件 73 forbids exactly that, so the branch is spelled out and
+    tested with a positive assertion.
+    """
+    if source == "manual":
+        variant = KELLY_OVERWRITE_NOTICE_MANUAL_EFFECT + KELLY_OVERWRITE_NOTICE_MANUAL_LOSS
+    elif source == "backtest_overridden":
+        variant = (
+            KELLY_OVERWRITE_NOTICE_OVERRIDDEN_EFFECT + KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS
+        )
+    elif source == "backtest":
+        return None
+    else:
+        return None
+    return variant + KELLY_OVERWRITE_NOTICE_CHOICES
+
+
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
 #: not in here is a sentence risk-compliance never saw:
 #: ``tests/test_kelly_wording.py`` asserts this mapping and the module's public
@@ -669,6 +914,39 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     # 第八輪組二.
     "task-7": KELLY_ORIGINAL_PAIR_DISCLOSURE,
     "task-8": KELLY_ORIGINAL_OOS_PERIOD_LABEL,
+    # 第六輪 display copy, landed with K4c-1: the surface that reads it exists
+    # now. The eleven column labels keep the review's own numbering.
+    "task-3": KELLY_BACKTEST_SAMPLE_DETAIL_INTRO,
+    "fr5-1": KELLY_DETAIL_STRATEGY_LABEL,
+    "fr5-2": KELLY_DETAIL_OOS_PERIOD_LABEL,
+    "fr5-3": KELLY_DETAIL_ROUND_TRIPS_LABEL,
+    "fr5-4": KELLY_DETAIL_WIN_TRIPS_LABEL,
+    "fr5-5": KELLY_DETAIL_LOSS_TRIPS_LABEL,
+    "fr5-6": KELLY_DETAIL_EXCLUDED_BOUNDARY_TRIPS_LABEL,
+    "fr5-7": KELLY_DETAIL_OPEN_TRIP_AT_END_LABEL,
+    "fr5-8": KELLY_DETAIL_OBSERVATIONS_LABEL,
+    "fr5-9": KELLY_DETAIL_WIN_RATE_CI_LABEL,
+    "fr5-10": KELLY_DETAIL_RATES_VERIFIED_LABEL,
+    "fr5-11": KELLY_DETAIL_DIVIDEND_LABEL,
+    "fr5-10-note": KELLY_RATES_UNVERIFIED_NOTE,
+    "fr6-manual": KELLY_SOURCE_MANUAL_STATEMENT,
+    "fr6-manual-label": KELLY_SOURCE_MANUAL_LABEL,
+    "fr6-overridden": KELLY_SOURCE_OVERRIDDEN_STATEMENT,
+    "fr6-overridden-label": KELLY_SOURCE_OVERRIDDEN_LABEL,
+    "badge-absent": KELLY_FRESHNESS_BADGE_ABSENT,
+    "badge-fresh": KELLY_FRESHNESS_BADGE_FRESH,
+    "badge-ageing": KELLY_FRESHNESS_BADGE_AGEING,
+    "badge-expired": KELLY_FRESHNESS_BADGE_EXPIRED,
+    "task-6-kelly": KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+    # 第九輪: the before-overwrite dialog, which closes 條件 53/68.
+    "notice-title": KELLY_OVERWRITE_NOTICE_TITLE,
+    "notice-manual-1": KELLY_OVERWRITE_NOTICE_MANUAL_EFFECT,
+    "notice-manual-2": KELLY_OVERWRITE_NOTICE_MANUAL_LOSS,
+    "notice-overridden-1": KELLY_OVERWRITE_NOTICE_OVERRIDDEN_EFFECT,
+    "notice-overridden-2": KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS,
+    "notice-choices": KELLY_OVERWRITE_NOTICE_CHOICES,
+    "notice-cancel": KELLY_OVERWRITE_CANCEL_LABEL,
+    "notice-confirm": KELLY_OVERWRITE_CONFIRM_LABEL,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,

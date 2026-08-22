@@ -240,6 +240,67 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "目前生效的 Kelly 輸入，用的也不是這裡這兩個數字。"
     ),
     "task-8": "原始回測的樣本外期間",
+    # 第六輪（2026-08-22，第五批）display copy, landed by K4c-1. 任務 3's frame,
+    # its eleven column labels, 欄位 10's sentence, FR-6's four, the FR-4 badge
+    # and the Kelly-side 口徑限定語 -- all retyped from the ruling.
+    "task-3": (
+        "以下是這筆 Kelly 輸入所依據的回測樣本明細，"
+        "供你核對各句所指的『這段歷史樣本』實際是哪一次回測、哪一段期間。"
+    ),
+    "fr5-1": "策略",
+    "fr5-2": "樣本外（OOS）區段（起訖日期）",
+    "fr5-3": "完整回合數",
+    "fr5-4": "獲利回合數",
+    "fr5-5": "虧損回合數",
+    "fr5-6": "跨界排除回合數",
+    "fr5-7": "期末未平倉回合數",
+    "fr5-8": "樣本觀測數（資料點數，非回合數）",
+    "fr5-9": "勝率的 95% 區間（Wilson，依完整回合計）",
+    "fr5-10": "費率查證狀態",
+    "fr5-11": "除權息還原狀態",
+    "fr5-10-note": (
+        "此標的 Kelly 輸入所依據的回測，其手續費／交易稅／滑價率尚未對照主要來源查證，"
+        "這筆勝率與盈虧比應視為待查證狀態。"
+    ),
+    "fr6-manual": "此標的目前生效的 Kelly 輸入，來源為手動輸入。",
+    "fr6-manual-label": "來源：手動輸入。",
+    "fr6-overridden": (
+        "此標的目前生效的 Kelly 輸入，原本由回測帶入，之後經你手動調整；"
+        "調整後的數字才是目前生效值，原始回測帶入的數字仍保留、可以查看。"
+    ),
+    "fr6-overridden-label": "來源：回測帶入，已手動調整；原始回測值仍保留可查。",
+    "badge-absent": "尚未輸入",
+    "badge-fresh": "已更新",
+    "badge-ageing": "建議更新",
+    "badge-expired": "已過期",
+    "task-6-kelly": "勝率（依完整回合計）",
+    # 第九輪（2026-08-22，第八批）：覆蓋前告知，採備案（依來源拆兩變體）。
+    "notice-title": "帶入回測結果 — 執行前請確認",
+    "notice-manual-1": (
+        "這裡目前生效的勝率與盈虧比，是你自行輸入的估計值；"
+        "執行後，本系統會重新執行一次回測，把這個標的目前生效的勝率與盈虧比，"
+        "換成這次算出的新結果。"
+    ),
+    "notice-manual-2": (
+        "你自行輸入的這組數字，執行後就不再是生效值。"
+        "本系統沒有版本紀錄，這組數字不會留在任何欄位，事後也沒有畫面可以找回。"
+    ),
+    "notice-overridden-1": (
+        "這裡目前生效的勝率與盈虧比，是你在原本回測帶入的基礎上手動調整過的數字，"
+        "另外還保留著一組原始回測值供你查看；"
+        "執行後，本系統會重新執行一次回測，把這個標的目前生效的勝率與盈虧比，"
+        "換成這次算出的新結果。"
+    ),
+    "notice-overridden-2": (
+        "你調整過的這組生效值、以及原本保留的那組原始回測值，執行後都會被這次的新結果取代。"
+        "本系統沒有版本紀錄，這兩組舊數字都不會留在這一列的任何欄位，事後也沒有畫面可以找回。"
+    ),
+    "notice-choices": (
+        "點『取消』，這個標的的 Kelly 輸入維持現在的樣子，不會有任何改變；"
+        "點『確認帶入，覆蓋目前資料』，才會執行前面所說的動作。"
+    ),
+    "notice-cancel": "取消",
+    "notice-confirm": "確認帶入，覆蓋目前資料",
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -277,20 +338,29 @@ SHIPPED_SAMPLE_SIZE: dict[str, str] = {
 
 
 def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
-    """21 through the fourth round, plus the two of the fifth batch this lane ships.
+    """Everything the backend carries, through the ninth round.
 
     A sentence is listed here when the backend carries it, so the number tracks
-    the repo rather than the review's running total (41 + 1 沿用 after the eighth
-    round). The gap is the display copy K4c has not built yet -- FR-5's eleven
-    column labels, the FR-4 badge, the 口徑限定語 pair -- plus the three that ship
-    from ``app/kelly/sample_gate.py`` and the 500 body, which are counted here
-    but defined elsewhere.
+    the repo rather than the review's running total (46 + 1 沿用 after the ninth
+    round). The two counts differ on purpose and in one direction only: this one
+    is finer. FR-5's eleven column labels are one line of the ruling and eleven
+    entries here, FR-6's two pairs are two rulings and four entries, and the
+    badge is one追認 and four entries -- each is separately retyped, so a drift
+    in one label cannot hide behind its neighbours.
 
-    The eighth round's own additions are all present: (g-4-overridden), the four
-    shared elements, the five 機制事實 sentences with the unusable tail, and 任務
-    7/8.
+    Landed by K4c-1 and previously the named gap: 任務 3's frame and its eleven
+    labels, 欄位 10, FR-6's four, the FR-4 badge, the Kelly-side 口徑限定語, and
+    the ninth round's before-overwrite dialog (八 entries: title, two paragraphs
+    per source variant, the shared close, and the two button labels).
+
+    The 口徑限定語's front-end twin (「勝率（依結算筆數計）」 on
+    ``BacktestReportView``) is **not** here and is not a backend constant: 條件
+    49 pairs the two on a display surface, and the front end owns that half.
+
+    Three of the ids ship from ``app/kelly/sample_gate.py`` and one is the 500
+    body, counted here and defined elsewhere.
     """
-    assert len(CONFIRMED_VERBATIM) == 38
+    assert len(CONFIRMED_VERBATIM) == 68
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -452,6 +522,17 @@ REJECTED_LITERALS: tuple[tuple[str, str, str], ...] = (
     ("(500) 重試句不予採用", "重試不會有幫助", "shipped"),
     ("(500) 重試句不予採用", "如持續發生可回報", "shipped"),
     ("(500) 重試句不予採用", "重試", "kelly"),
+    # 第九輪 條件 71. The dialog's rejected drafts: the single-sentence主案 (whose
+    # identifying fragment is its parenthesised hedge), the two button labels
+    # that were not adopted, and the title qualifier struck as a description of
+    # an action this system does not perform (條件 78 bans it from the trigger
+    # label too). The 方向 (ii) one-liner for the ``backtest`` cell has no quoted
+    # text to scan for; it is pinned instead by the four-cell test below, which
+    # asserts that cell produces nothing at all.
+    ("(告知句) 主案不採用「（若有）」", "（若有）", "kelly"),
+    ("(告知句) 按鈕備案否決", "仍要帶入並覆蓋", "shipped"),
+    ("(告知句) 按鈕不採用", "取消，保留目前資料", "shipped"),
+    ("(告知句) required 刪標題限定語", "最近一次", "kelly"),
 )
 
 #: 第八輪 條件 61, six literals banned from the 欄位 11 block.
@@ -739,6 +820,206 @@ def _string_constants(path: Path) -> list[str]:
     ]
 
 
+def test_the_assembly_point_imports_its_sentences_instead_of_retyping_them() -> None:
+    """條件 56:「import 端不得出現第二份中文字面（反向斷言）」.
+
+    ``app/api/kelly.py`` is the display supply as well as the assembly point
+    (D-8), so it is the module most able to end up with a convenience copy of a
+    sentence. Every approved item it serves must arrive by import; a literal of
+    its own would pass the verbatim guard on the day it was written and drift
+    quietly afterwards.
+    """
+    path = _APP_ROOT / "api" / "kelly.py"
+    literals = set(_string_constants(path))
+
+    for item, approved in wording.RISK_CONFIRMED_WORDING.items():
+        assert approved not in literals, f"({item}) 被重打在 kelly.py，而非 import"
+
+    assert "from app.api.kelly_wording import" in path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 覆蓋前告知組裝（第九輪 條件 71-83）
+# ---------------------------------------------------------------------------
+
+#: 條件 73's four cells as this module can see them. The fourth ("no row at
+#: all") belongs to the API and is asserted in ``tests/test_api_kelly_
+#: disclosures.py``; here the ``backtest`` cell stands for the ruling that a
+#: measurement replacing a measurement gets **no** dialog -- explicitly, not by
+#: falling off the end of a lookup.
+OVERWRITE_NOTICE_VARIANTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("manual", ("notice-manual-1", "notice-manual-2", "notice-choices")),
+    (
+        "backtest_overridden",
+        ("notice-overridden-1", "notice-overridden-2", "notice-choices"),
+    ),
+)
+
+#: 條件 77. Seven literals the ninth round struck, checked over the **assembled
+#: dialog** rather than over whole files, and that scope is itself a finding:
+#: 「原始回測值仍保留」 is a substring of the sixth round's own (fr6-overridden)
+#: label, which is approved and shipping, so a repo-wide reading of this ruling
+#: would fail against approved copy. What the round actually decided is what
+#: this dialog may say -- the struck drafts claimed the original values survive
+#: a re-import (they do not, for this row) or pointed at a position on a screen.
+OVERWRITE_NOTICE_FORBIDDEN: tuple[tuple[str, str], ...] = (
+    ("條件 71/78 標題限定語", "最近一次回測結果"),
+    ("條件 71/78 標題限定語", "最近一次"),
+    ("條件 77 版面指涉", "下方"),
+    ("條件 77 版面指涉", "上方"),
+    ("條件 77 保留範圍不實", "原始回測值不受影響"),
+    ("條件 77 保留範圍不實", "原始值不會被覆蓋"),
+    ("條件 77 保留範圍不實", "原始回測值仍保留"),
+)
+
+
+@pytest.mark.parametrize(("source", "items"), OVERWRITE_NOTICE_VARIANTS)
+def test_the_overwrite_dialog_follows_the_approved_paragraph_order(
+    source: str, items: tuple[str, ...]
+) -> None:
+    """條件 82: 段序屬定稿，段三為單一共用常數逐字附加."""
+    body = wording.kelly_overwrite_notice(source)
+    assert body == "".join(CONFIRMED_VERBATIM[item] for item in items)
+
+
+def test_the_shared_close_is_one_constant_appended_to_both_variants() -> None:
+    """條件 82: one constant, not a sentence retyped into each variant."""
+    close = wording.KELLY_OVERWRITE_NOTICE_CHOICES
+    for source, _ in OVERWRITE_NOTICE_VARIANTS:
+        body = wording.kelly_overwrite_notice(source)
+        assert body is not None
+        assert body.endswith(close)
+        assert body.count(close) == 1
+    literals = _string_constants(_APP_ROOT / "api" / "kelly_wording.py")
+    assert literals.count(close) == 1
+
+
+def test_the_backtest_cell_of_the_dialog_is_an_explicit_no() -> None:
+    """條件 73:「backtest 格須顯式分支+正向斷言不顯示，禁 default 落空」.
+
+    Re-importing over an imported row replaces a measurement with a measurement:
+    nothing hand-keyed is lost, and it is the very action (g-3)/(g-4) tell the
+    user to take, so a warning there would point the opposite way to the
+    product's own instruction. The lightweight one-line variant drafted for this
+    cell was not adopted and is not in the module (條件 71) -- the positive
+    assertion is that this cell produces nothing at all.
+    """
+    assert wording.kelly_overwrite_notice("backtest") is None
+    source = (_APP_ROOT / "api" / "kelly_wording.py").read_text(encoding="utf-8")
+    assert 'elif source == "backtest":' in source, "backtest 格不得由 default 落空"
+
+
+def test_an_unknown_source_invents_no_dialog() -> None:
+    assert wording.kelly_overwrite_notice("something_new") is None
+
+
+def test_the_overwrite_dialog_shows_no_measured_value() -> None:
+    """條件 75: 常數無 ``{}``、渲染無數字.
+
+    A win rate or payoff ratio on this dialog would drag (e-manual), (f) and the
+    whole style floor of 落地條件 4 onto a modal, which is a separate submission.
+    Digits are checked on the rendered body rather than only the placeholders,
+    because a literal number would evade the placeholder scan entirely.
+    """
+    rendered = [
+        wording.KELLY_OVERWRITE_NOTICE_TITLE,
+        wording.KELLY_OVERWRITE_CONFIRM_LABEL,
+        wording.KELLY_OVERWRITE_CANCEL_LABEL,
+    ]
+    for source, _ in OVERWRITE_NOTICE_VARIANTS:
+        body = wording.kelly_overwrite_notice(source)
+        assert body is not None
+        rendered.append(body)
+    for text in rendered:
+        assert "{" not in text and "}" not in text, text
+        assert not any(character.isdigit() for character in text), text
+
+
+@pytest.mark.parametrize(("ruling", "literal"), OVERWRITE_NOTICE_FORBIDDEN)
+def test_no_overwrite_dialog_text_carries_a_struck_literal(
+    ruling: str, literal: str
+) -> None:
+    """條件 71/77, over every string this dialog can put on a screen."""
+    rendered = [
+        wording.KELLY_OVERWRITE_NOTICE_TITLE,
+        wording.KELLY_OVERWRITE_CONFIRM_LABEL,
+        wording.KELLY_OVERWRITE_CANCEL_LABEL,
+        *(
+            body
+            for source, _ in OVERWRITE_NOTICE_VARIANTS
+            if (body := wording.kelly_overwrite_notice(source)) is not None
+        ),
+    ]
+    for text in rendered:
+        assert literal not in text, f"{ruling}：「{literal}」"
+
+
+def test_the_manual_variant_claims_no_more_than_the_manual_branch_can_keep() -> None:
+    """措辭=行為 for the ninth round's own修訂 reason.
+
+    The manual variant says the pair will be left in **no** field; the overridden
+    one says the two sets will not be left in any field **of this row**. The
+    difference is not stylistic: a hand-keyed pair never reaches
+    ``kelly_import_attempts``, while an overridden row's original values were
+    written there by the import that produced them and survive both the
+    overwrite and a later ``DELETE`` (約束 35).
+    """
+    manual = wording.KELLY_OVERWRITE_NOTICE_MANUAL_LOSS
+    overridden = wording.KELLY_OVERWRITE_NOTICE_OVERRIDDEN_LOSS
+    assert "不會留在任何欄位" in manual
+    assert "不會留在這一列的任何欄位" in overridden
+    assert "不會留在任何欄位" not in overridden
+
+
+#: 條件 83. 條件 61's six literals split in two: 低估／高估／本頁 stay scoped to the
+#: assembled 欄位 11 messages (three false positives in this module's own
+#: commentary are real), and these three keep the whole-file scan the ruling
+#: preserved -- with the collateral damage listed explicitly, per
+#: 「誤傷顯式 allowlist（檔案+來源行+出處）」. A fourth occurrence turns this red.
+CONDITION_83_FULL_FILE_LITERALS: tuple[str, ...] = (
+    "未提供比較",
+    "不做比較",
+    "尚未涵蓋上櫃",
+)
+
+CONDITION_83_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
+    (
+        "app/api/kelly_wording.py",
+        '#: draft\'s second clause ("其他計算基礎…本系統未提供比較"): the system *does*',
+        "第八輪 required 2：E4 註記引用被刪的第二分句，說明為何現行字面不含它",
+    ),
+    (
+        "app/api/kelly_wording.py",
+        '#: "不含上櫃" and never "尚未涵蓋上櫃" (required 4): "尚未" would promise, on the',
+        "第八輪 required 4：no_events(TW) 註記引用被改掉的字面，說明改字理由",
+    ),
+)
+
+
+def test_the_full_file_literals_appear_only_where_the_review_allowed() -> None:
+    """條件 83:「維持全檔掃描」+ 誤傷顯式 allowlist，第四處即紅燈."""
+    path = _APP_ROOT / "api" / "kelly_wording.py"
+    observed = tuple(
+        (str(path.relative_to(_APP_ROOT.parent)), line.strip())
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if any(literal in line for literal in CONDITION_83_FULL_FILE_LITERALS)
+    )
+    allowed = tuple((entry[0], entry[1]) for entry in CONDITION_83_ALLOWLIST)
+    assert observed == allowed, (
+        "kelly_wording 全檔掃描出現新的條件 61 字面（第四處即紅燈）。"
+        f"實測：{observed}"
+    )
+
+
+def test_the_condition_83_allowlist_is_commentary_and_not_copy() -> None:
+    """Each allowed occurrence is a doc comment, never a shipped string."""
+    literals = _string_constants(_APP_ROOT / "api" / "kelly_wording.py")
+    for _, line, _ in CONDITION_83_ALLOWLIST:
+        assert line.startswith("#")
+    for literal in CONDITION_83_FULL_FILE_LITERALS:
+        assert not any(literal in value for value in literals), literal
+
+
 # ---------------------------------------------------------------------------
 # ③ 勝率白名單（分歧① required 1-4 / 落地條件 10）
 # ---------------------------------------------------------------------------
@@ -778,9 +1059,17 @@ WIN_RATE_BACKEND_WHITELIST: dict[str, int] = {
     # sentence: E2 and E4 are the only 欄位 11 elements containing the word, and
     # 條件 60 requires them to be **single shared constants appended to the five**
     # rather than retyped into each message. Counting at the definition site is
-    # 條件 56's own rule, so five copies would themselves be the violation. Both
-    # reallocations are reported to risk-compliance for confirmation; 擴充權在風控.
-    "app/api/kelly_wording.py": 8,
+    # 條件 56's own rule, so five copies would themselves be the violation.
+    # 第九輪 §dev 兩回送項 ① confirmed both reallocations (5 -> 8) and 條件 81
+    # requires this note on the three shared-constant entries.
+    #
+    # K4c-1 takes it to 13, all of it already allocated by the reviews:
+    # * 落地條件 48（第六輪，擴充權在風控）+3 -- 欄位 9's label, 欄位 10's sentence
+    #   and the Kelly-side 口徑限定語, exactly the three that ruling names.
+    # * 落地條件 79（第九輪）+2 -- 「限兩變體定義行」: the dialog's two 段一
+    #   constants, one per source variant. Its 段二/段三 and both button labels
+    #   contain the word nowhere, which is why the increase is two and not five.
+    "app/api/kelly_wording.py": 13,
     # 分歧① 列管（不擋本批，另批復審）: CONFIDENCE_MEANING / WEIGHT_MEANING, both
     # of which use the word inside a denial ("非勝率或機率").
     "app/advice/engine.py": 2,
@@ -830,6 +1119,15 @@ def test_the_front_end_writes_no_kelly_copy_of_its_own() -> None:
     )
 
 
+#: Below this length an approved item is a **label**, not a sentence, and the
+#: opening-clause scan below stops being evidence of anything: 「策略」 and 「取消」
+#: are ordinary words that every screen in the product already contains, and
+#: 條件 47 ① positively *requires* the four badge labels to be the ones
+#: ``NetWorthSection`` already ships. The short ones are scanned over the Kelly
+#: surface only, where a duplicate really would be a second copy of Kelly copy.
+_LABEL_LENGTH = 16
+
+
 def test_no_approved_kelly_sentence_has_been_copied_into_the_front_end() -> None:
     """落地條件 2 守門:「全 repo 無第二份同語意字串、前端無對應中文字面」."""
     sources = {
@@ -837,12 +1135,36 @@ def test_no_approved_kelly_sentence_has_been_copied_into_the_front_end() -> None
         for path in _frontend_sources()
     }
     for item, approved in CONFIRMED_VERBATIM.items():
+        if len(approved) < _LABEL_LENGTH:
+            continue
         # The opening clause is enough: a front end that hard-coded the sentence
         # would carry it whole, and a truncated copy is itself a violation of
         # 約束 21 (逐字渲染，禁改寫/截斷).
-        opening = approved[:16]
+        opening = approved[:_LABEL_LENGTH]
         offenders = [name for name, text in sources.items() if opening in text]
         assert offenders == [], f"({item}) 的字面出現在前端 {offenders}"
+
+
+def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> None:
+    """The short items, over the surface that renders Kelly copy (落地條件 2/3).
+
+    A label the backend supplies and the front end also spells out is exactly
+    the drift 落地條件 3 exists to stop -- the copy would then have two homes and
+    only one of them is under a verbatim guard. Scoping this to
+    :data:`KELLY_SURFACE` is what lets 條件 47 ① stand at the same time: the four
+    badge labels are *deliberately* the ones ``settings/NetWorthSection.tsx``
+    already ships, and that file is not a Kelly surface.
+    """
+    sources = {
+        str(path.relative_to(_STOCK_DESK_ROOT)): path.read_text(encoding="utf-8")
+        for path in _kelly_surface_sources()
+        if path.suffix in {".ts", ".tsx"}
+    }
+    for item, approved in CONFIRMED_VERBATIM.items():
+        if len(approved) >= _LABEL_LENGTH:
+            continue
+        offenders = [name for name, text in sources.items() if approved in text]
+        assert offenders == [], f"({item}) 的標籤字面出現在 Kelly 前端面 {offenders}"
 
 
 def test_the_shared_forbidden_term_list_was_not_touched() -> None:
@@ -918,6 +1240,33 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "div-unusable-events-tail": set(),
     "task-7": set(),
     "task-8": set(),
+    # 第六輪 display copy. Every value on the FR-5 detail is bound to its label
+    # by the assembly point rather than interpolated into it, so none of the
+    # eleven carries a placeholder -- a label with a hole in it would be a
+    # sentence, and these were approved as labels.
+    "task-3": set(),
+    **{f"fr5-{index}": set() for index in range(1, 12)},
+    "fr5-10-note": set(),
+    "fr6-manual": set(),
+    "fr6-manual-label": set(),
+    "fr6-overridden": set(),
+    "fr6-overridden-label": set(),
+    "badge-absent": set(),
+    "badge-fresh": set(),
+    "badge-ageing": set(),
+    "badge-expired": set(),
+    "task-6-kelly": set(),
+    # 第九輪 條件 75: the dialog interpolates nothing at all, because no measured
+    # value may appear on it. An empty set here is the mechanical half of that
+    # ruling; ``test_the_overwrite_dialog_shows_no_measured_value`` is the other.
+    "notice-title": set(),
+    "notice-manual-1": set(),
+    "notice-manual-2": set(),
+    "notice-overridden-1": set(),
+    "notice-overridden-2": set(),
+    "notice-choices": set(),
+    "notice-cancel": set(),
+    "notice-confirm": set(),
 }
 
 #: The (g) sentences that name an anchor date and an elapsed count. All three

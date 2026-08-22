@@ -704,6 +704,161 @@ def test_one_request_runs_exactly_one_backtest(
     assert sum(runs) == 1
 
 
+# --------------------------------------------------------------------------
+# (d-1) 元件 A/元件 B on the refusal body (落地條件 8/13, 3-A)
+# --------------------------------------------------------------------------
+
+#: The three sample-size codes 元件 A is bound to, and the three it is banned
+#: from. Six scenarios, which is what 落地條件 8 asks for by name -- three that
+#: trigger the frame and three that must not.
+_SAMPLE_SIZE_CODES = ("low_round_trips", "low_win_trips", "low_loss_trips")
+_OTHER_REFUSAL_CODES = ("symbol_mismatch", "insufficient_data", "pb_none")
+
+
+def _refuse_with(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
+    """Drive one of the six gates and hand back the 422 body it produced."""
+    if code == "low_round_trips":
+        _seed(api_harness, _CLEARS_GATE, bars=400)
+        return _refusal(_import(api_harness))
+    if code == "low_win_trips":
+        _seed(api_harness, _ALMOST_ALL_LOSSES)
+        return _refusal(_import(api_harness))
+    if code == "low_loss_trips":
+        _seed(api_harness, _ALMOST_ALL_WINS)
+        return _refusal(_import(api_harness))
+    if code == "symbol_mismatch":
+        _seed(api_harness, _CLEARS_GATE)
+        return _refusal(_import(api_harness, symbol="2317"))
+    if code == "insufficient_data":
+        _seed(api_harness, _CLEARS_GATE, bars=150)
+        return _refusal(_import(api_harness))
+    assert code == "pb_none"
+    _seed(api_harness, _CLEARS_GATE)
+
+    def half_a_pair(*args: Any, **kwargs: Any) -> Any:
+        attribution = attribute_round_trips(*args, **kwargs)
+        stats = attribution.stats
+        return type(attribution)(
+            window_start=attribution.window_start,
+            window_stop=attribution.window_stop,
+            episodes=attribution.episodes,
+            excluded_boundary_trips=attribution.excluded_boundary_trips,
+            open_trip_at_end=attribution.open_trip_at_end,
+            stats=type(stats)(
+                n=stats.n,
+                n_win=stats.n_win,
+                n_loss=stats.n_loss,
+                round_trip_win_rate=stats.round_trip_win_rate,
+                round_trip_payoff_ratio=None,
+            ),
+        )
+
+    monkeypatch.setattr("app.api.kelly.attribute_round_trips", half_a_pair)
+    return _refusal(_import(api_harness))
+
+
+@pytest.mark.parametrize("code", _SAMPLE_SIZE_CODES)
+def test_a_sample_size_refusal_carries_the_frame_verbatim(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d-1 元件 A) on the three codes it was approved for (落地條件 13)."""
+    detail = _refuse_with(code, api_harness, monkeypatch)
+
+    assert detail["reason_code"] == code
+    assert detail["frame"] == kelly_wording.KELLY_REFUSAL_FRAME
+    # The frame introduces the gate's own message: 「…如下：」 then the numbers.
+    assert detail["frame"].endswith("：")
+
+
+@pytest.mark.parametrize("code", _OTHER_REFUSAL_CODES)
+def test_the_other_three_codes_get_no_reassurance_they_do_not_deserve(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """落地條件 13:「其餘三碼不得顯示」.
+
+    「這是常見情況」 is true of a window that produced too few round trips and
+    false of a symbol mismatch, which is a front-end defect. Attaching comfort
+    to a fault is the failure the NO_SECTOR_DETAILS ruling named.
+    """
+    detail = _refuse_with(code, api_harness, monkeypatch)
+
+    assert detail["reason_code"] == code
+    assert detail["frame"] is None
+    assert kelly_wording.KELLY_REFUSAL_FRAME not in json.dumps(detail, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("code", (*_SAMPLE_SIZE_CODES, *_OTHER_REFUSAL_CODES))
+def test_every_refusal_says_the_attempt_was_counted(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d-1 元件 B) on all six, with 3-A's (b) beside it and the counts to check.
+
+    The two counts are the ones that already include this attempt: 元件 B says
+    the attempt was counted, and a body quoting a K taken before the append
+    would contradict itself.
+    """
+    detail = _refuse_with(code, api_harness, monkeypatch)
+
+    assert detail["attempt_logged"] == kelly_wording.KELLY_REFUSAL_ATTEMPT_LOGGED
+    # 3-A: (b) 同屏, not a link -- k_distinct_specs was pushed up by this attempt
+    # too, and a link alone would suggest only K_observed moved.
+    assert detail["selection_bias"] == kelly_wording.KELLY_SELECTION_BIAS_SINGLE
+    assert (detail["k_observed"], detail["k_distinct_specs"]) == (1, 1)
+    assert len(_attempts(api_harness)) == detail["k_observed"]
+
+
+def test_a_second_refusal_switches_the_selection_bias_to_the_full_sentence(
+    api_harness: ApiHarness,
+) -> None:
+    """落地條件 5 on the refusal body: K>=2 takes (b 完整), with both counts."""
+    _seed(api_harness, _CLEARS_GATE, bars=400)
+    _import(api_harness)
+
+    detail = _refusal(_import(api_harness, train_size=121))
+
+    assert detail["k_observed"] == 2
+    # Two different specs, so the distinct count moved with it.
+    assert detail["k_distinct_specs"] == 2
+    assert detail["selection_bias"] == kelly_wording.KELLY_SELECTION_BIAS_FULL.format(
+        k_observed=2, k_distinct_specs=2
+    )
+
+
+def test_the_non_finite_path_carries_no_refusal_sentence(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """落地條件 23: 元件 B's literal may not appear on the 500 path.
+
+    That row's ``outcome`` is ``"ok"`` with no reason code -- the gates passed
+    and the storage step failed -- so calling it a refusal would misstate the
+    log. It has its own sentence (3-B), which this endpoint does not attach
+    here; the 500 body is 落地條件 25's constant and nothing else.
+    """
+    _seed(api_harness, _CLEARS_GATE)
+    monkeypatch.setattr(
+        "app.api.kelly.bootstrap_fraction_ci",
+        lambda *args, **kwargs: FractionInterval(
+            point=0.1,
+            low=-math.inf,
+            high=0.2,
+            seed=1,
+            draws=1,
+            degenerate_no_loss_draws=0,
+            degenerate_no_win_draws=1,
+        ),
+    )
+
+    response = _import(api_harness)
+
+    assert response.status_code == 500
+    body = response.text
+    assert kelly_wording.KELLY_REFUSAL_ATTEMPT_LOGGED not in body
+    assert kelly_wording.KELLY_REFUSAL_FRAME not in body
+    assert "拒絕" not in response.json()["detail"]
+
+
 def test_only_the_kelly_surface_mentions_the_stored_fraction() -> None:
     """約束 34: nothing outside the Kelly path can read ``f_star`` back.
 

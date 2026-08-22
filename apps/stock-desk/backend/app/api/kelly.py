@@ -46,6 +46,16 @@ The interval fields that get stored (``p_ci_*``, ``f_star``, ``f_star_ci_*``,
 rewrite the effective pair, and cap 5 recomputes the fraction from that pair
 rather than reading the stored ``f_star``.
 
+It is also where the **display copy is chosen** (K4c-1). ``GET
+.../{symbol}/disclosures`` returns one finished string per slot -- or ``None``
+for "not shown" -- and the 422 body carries the three sentences a refused import
+owes the user. That is a compliance requirement rather than a convenience:
+落地條件 3 and 約束 21 forbid the front end from judging freshness, rewriting,
+truncating or composing any of this text, and 分歧① required 2 makes the rule
+mechanical by keeping the restricted term for a sampled frequency off its Kelly
+surface altogether. A client choosing between (e) and (e-manual) would have to
+hold both.
+
 Freshness is stated, not acted on: this router reports ``age_days`` and which
 band the input falls in (fresh / ageing / expired, D-4), and an input whose age
 cannot be established at all is reported as expired with no age
@@ -60,14 +70,25 @@ import hashlib
 import json
 import logging
 import math
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.advice.book import kelly_inputs_of
-from app.advice.limits import KellyInputs, kelly_fraction
-from app.api.backtest import BacktestRequest, execute_backtest
+from app.advice.limits import (
+    LIMIT_NAMES,
+    KellyInputs,
+    PortfolioContext,
+    RiskBudget,
+    format_payoff_ratio,
+    format_percent,
+    format_win_rate,
+    kelly_allowed_weight,
+    kelly_fraction,
+    kelly_usable,
+)
+from app.api.backtest import DIVIDEND_ADJUSTED_NOTE, BacktestRequest, execute_backtest
 from app.api.common import now_iso
 from app.api.deps import (
     get_dividend_store,
@@ -75,6 +96,48 @@ from app.api.deps import (
     get_kelly_input_store,
     get_market_resolver,
     get_settings_store,
+)
+from app.api.kelly_wording import (
+    KELLY_BACKTEST_SAMPLE_DETAIL_INTRO,
+    KELLY_BOUNDARY_TRIP_EXCLUSION,
+    KELLY_DETAIL_DIVIDEND_LABEL,
+    KELLY_DETAIL_EXCLUDED_BOUNDARY_TRIPS_LABEL,
+    KELLY_DETAIL_LOSS_TRIPS_LABEL,
+    KELLY_DETAIL_OBSERVATIONS_LABEL,
+    KELLY_DETAIL_OOS_PERIOD_LABEL,
+    KELLY_DETAIL_OPEN_TRIP_AT_END_LABEL,
+    KELLY_DETAIL_RATES_VERIFIED_LABEL,
+    KELLY_DETAIL_ROUND_TRIPS_LABEL,
+    KELLY_DETAIL_STRATEGY_LABEL,
+    KELLY_DETAIL_WIN_RATE_CI_LABEL,
+    KELLY_DETAIL_WIN_TRIPS_LABEL,
+    KELLY_F_STAR_INTERVAL_DISCLOSURE,
+    KELLY_FRESHNESS_BADGE_ABSENT,
+    KELLY_FRESHNESS_BADGE_AGEING,
+    KELLY_FRESHNESS_BADGE_EXPIRED,
+    KELLY_FRESHNESS_BADGE_FRESH,
+    KELLY_MANUAL_INPUT_DISCLOSURE,
+    KELLY_MANUAL_INPUT_TOOLTIP,
+    KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
+    KELLY_ORIGINAL_OOS_PERIOD_LABEL,
+    KELLY_ORIGINAL_PAIR_DISCLOSURE,
+    KELLY_OVERWRITE_CANCEL_LABEL,
+    KELLY_OVERWRITE_CONFIRM_LABEL,
+    KELLY_OVERWRITE_NOTICE_TITLE,
+    KELLY_RATES_UNVERIFIED_NOTE,
+    KELLY_REFUSAL_ATTEMPT_LOGGED,
+    KELLY_REFUSAL_FRAME,
+    KELLY_SELECTION_BIAS_FULL,
+    KELLY_SELECTION_BIAS_SINGLE,
+    KELLY_SOURCE_MANUAL_LABEL,
+    KELLY_SOURCE_MANUAL_STATEMENT,
+    KELLY_SOURCE_OVERRIDDEN_LABEL,
+    KELLY_SOURCE_OVERRIDDEN_STATEMENT,
+    KELLY_WALK_FORWARD_SCOPE,
+    KELLY_WIN_RATE_IS_NOT_PROBABILITY,
+    KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+    kelly_dividend_note,
+    kelly_overwrite_notice,
 )
 from app.backtest.episodes import (
     RoundTripAttribution,
@@ -93,6 +156,7 @@ from app.kelly.models import (
     KellyInputRecord,
     KellyInputRow,
     KellyManualInput,
+    KellySource,
     ageing_of,
     normalize_symbol,
 )
@@ -215,12 +279,36 @@ class KellyImportRefusal(BaseModel):
     ``message`` states the numbers actually observed against the threshold.
     The message is a statement of measurement, never advice about what to do
     next.
+
+    The three sentences around ``message`` are picked here rather than by the
+    caller, because each one's condition is a fact about this refusal and not
+    about the screen it lands on (約束 21: the front end renders and composes
+    nothing):
+
+    * ``frame`` -- (d-1 元件 A), and **only** for the three sample-size codes
+      (落地條件 13). "這是常見情況" is true of a window that did not produce
+      twenty round trips and false of ``symbol_mismatch``, which is a front-end
+      bug, so attaching it to the other three would dress a fault up as normal.
+    * ``attempt_logged`` -- (d-1 元件 B), for all six: every one of them appends
+      to the log before raising, so the count really did move.
+    * ``selection_bias`` -- 3-A requires (b) **on the same screen** as 元件 B,
+      not merely a link, because ``k_distinct_specs`` was pushed up by this
+      attempt too. It travels in the body because a refused import may leave no
+      stored row at all, and a client that had to fetch one to obtain (b) would
+      have nothing to fetch.
     """
 
     model_config = ConfigDict(frozen=True)
 
     reason_code: KellyGateReasonCode
     message: str
+    frame: str | None = None
+    attempt_logged: str = KELLY_REFUSAL_ATTEMPT_LOGGED
+    selection_bias: str | None = None
+    #: Both counts as they stand **after** this attempt was appended, which is
+    #: what makes 元件 B's "已計入 K_observed" checkable on the same screen.
+    k_observed: int = 0
+    k_distinct_specs: int = 0
 
 
 def _view(row: KellyInputRow) -> KellyInputView:
@@ -231,6 +319,525 @@ def _view(row: KellyInputRow) -> KellyInputView:
         age_days=ageing.age_days,
         freshness=ageing.freshness,
         as_of=now_iso(),
+    )
+
+
+# --------------------------------------------------------------------------
+# Display supply: which approved sentence this row shows, decided here (K4c-1)
+# --------------------------------------------------------------------------
+#
+# 落地條件 3 and 約束 21 together fix where the branching lives: the front end
+# renders backend sentences **verbatim** and may not judge freshness, rewrite,
+# truncate, or assemble Chinese of its own -- and 分歧① required 2 makes that
+# mechanical by keeping the word 「勝率」 out of its Kelly surface entirely. A
+# client that had to decide between (e) and (e-manual), or between (b 完整) and
+# (b 短), would be holding the sentences to choose from.
+#
+# So every branch below is a *display rule from the review*, cited where it is
+# applied, and what leaves this module is one finished string per slot or
+# ``None`` for "this slot is not shown". Nothing here computes a statistic: the
+# numbers are read from the stored row, and the effective cap comes from
+# ``kelly_allowed_weight`` rather than a second copy of the min/max formula.
+
+#: (d-1 元件 A) is limited to these three (落地條件 13). The other three codes are
+#: faults or upstream conditions, and the frame's reassurance would misdescribe
+#: them.
+_SAMPLE_SIZE_REASON_CODES: Final[frozenset[str]] = frozenset(
+    {"low_round_trips", "low_win_trips", "low_loss_trips"}
+)
+
+#: (任務 5) The badge over one input, per freshness band. "尚未輸入" is not in this
+#: table because it is not a freshness: it is the absence of a row (條件 47 ①).
+_FRESHNESS_BADGES: Final[dict[KellyFreshness, str]] = {
+    "fresh": KELLY_FRESHNESS_BADGE_FRESH,
+    "ageing": KELLY_FRESHNESS_BADGE_AGEING,
+    "expired": KELLY_FRESHNESS_BADGE_EXPIRED,
+}
+
+#: The separator between two plain dates, the shape ``suggest_quantity_range``
+#: already prints a range in. Both ends stay ``YYYY-MM-DD`` (6-A).
+_DATE_RANGE = "{start} ~ {end}"
+
+#: (fr6) The source disclosure, all three sources spelled out. ``backtest`` maps
+#: to ``None`` **explicitly**: 任務 4 approved a sentence and a short label for
+#: the two hand-keyed sources and none for a plain import, and an entry missing
+#: from this table would be indistinguishable from a sentence nobody wrote yet.
+#: 缺口 reported to risk-compliance; nothing here may fill it locally.
+_SOURCE_STATEMENTS: Final[dict[KellySource, tuple[str, str] | None]] = {
+    "manual": (KELLY_SOURCE_MANUAL_STATEMENT, KELLY_SOURCE_MANUAL_LABEL),
+    "backtest_overridden": (
+        KELLY_SOURCE_OVERRIDDEN_STATEMENT,
+        KELLY_SOURCE_OVERRIDDEN_LABEL,
+    ),
+    "backtest": None,
+}
+
+
+class KellyDetailRow(BaseModel):
+    """One row of the FR-5 sample detail: an approved label, a finished value.
+
+    ``value`` is a string because every one of them is already formatted -- a
+    percentage at the precision the sample supports, a plain ``YYYY-MM-DD``
+    date, a count -- and handing a client a raw float would be handing it the
+    formatting decision that 分歧① required 5 struck ``:g`` for.
+
+    ``note`` carries the row's own approved sentence where one exists (欄位 10
+    and 欄位 11 are sentences rather than values, and have no ``value`` at all).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    value: str | None = None
+    note: str | None = None
+
+
+class KellyBacktestSampleDetail(BaseModel):
+    """(任務 3) FR-5: the frame sentence and the rows under it.
+
+    Only ever built for ``source == "backtest"`` (條件 42). A row whose value is
+    not on the record is left out rather than rendered as a blank or a dash:
+    the eleven labels were approved as labels over facts, and a label over
+    nothing states that a measurement exists.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    intro: str
+    rows: list[KellyDetailRow]
+
+
+class KellyEffectiveCapView(BaseModel):
+    """The cap actually in force, for the screen that shows the un-capped f*.
+
+    落地條件 6: wherever f* or its interval is displayed, the same screen shows
+    ``min(max(f*, 0) x 0.25, 0.10)`` at no lesser prominence -- otherwise the
+    larger number reads as the position the system is putting forward, which is
+    約束 11's red line.
+
+    ``label`` is cap 5's own name from :data:`app.advice.limits.LIMIT_NAMES`,
+    imported rather than retyped. No label of its own was ever drafted for this
+    number, and inventing one is the one thing this lane may not do.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    value: str
+
+
+class KellyOriginalValuesView(BaseModel):
+    """(任務 7/任務 8) The imported pair kept beside an overridden one.
+
+    The screen 落地條件 21 said could not exist until a distinguishing sentence
+    was approved; 條件 65 puts that sentence (``statement``) and the OOS label on
+    it together, and rules that the win-rate label **quotes** the already
+    approved 口徑限定語 rather than minting a second wording.
+
+    條件 54 is a reverse obligation and is asserted in the tests: FR-5 欄位 2's
+    label may not appear here, so the original OOS period and the effective
+    row's OOS period cannot be read as the same row.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    statement: str
+    win_rate_label: str
+    win_rate: str
+    #: 缺口: no label over the payoff ratio has ever been drafted -- 條件 65 named
+    #: the win-rate one only. It stays ``None`` until risk-compliance approves
+    #: one; the number is still supplied, because (任務 7) speaks of both and a
+    #: screen showing one of them would make that sentence false.
+    payoff_ratio_label: str | None
+    payoff_ratio: str
+    oos_period_label: str
+    oos_period: str | None
+
+
+class KellyOverwriteNoticeView(BaseModel):
+    """(條件 53/68/71-83) What a surface must show before it re-imports.
+
+    Supplied whole -- title, body, both button labels -- because every part of
+    it is approved copy and none of it may be assembled by a client (條件 72,
+    which also fixes the dialog's ``aria-label`` as the title **verbatim**).
+
+    ``body`` is the source's own variant with the shared close already appended
+    in the approved order (條件 82). It interpolates nothing and carries no win
+    rate and no payoff ratio: 條件 75 keeps every measured number off this
+    dialog, and putting one back on it is a new submission, not a formatting
+    choice.
+
+    **條件 78**: the label on the *trigger* that opens this dialog is not
+    approved and is deliberately absent from this model. It is a separate
+    submission to risk-compliance -- neither this API nor the front end may
+    invent one, and it is subject to the same banned literals as the title
+    (條件 71/77, pinned in ``tests/test_kelly_wording.py``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    body: str
+    confirm_label: str
+    cancel_label: str
+
+
+class KellyDisclosuresView(BaseModel):
+    """Every slot of one Kelly screen, already decided (落地條件 3).
+
+    ``None`` means "this slot is not shown", never "the client picks something".
+    The conditions are the review's, one per field.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: (任務 5) Always present: an absent input is its own badge state.
+    freshness_badge_label: str
+    #: (fr6) The source of the effective pair. ``None`` for ``backtest`` -- 缺口:
+    #: 任務 4 approved a sentence and a label for ``manual`` and for
+    #: ``backtest_overridden`` and none for a plain import.
+    source_statement: str | None
+    source_label: str | None
+    #: (e) or (e-manual), by source: mutually exclusive and exhaustive (條件 18).
+    win_rate_disclosure: str | None
+    #: (f 完整) and (f tooltip), for the two hand-keyed sources (條件 20).
+    manual_input_disclosure: str | None
+    manual_input_tooltip: str | None
+    #: (b 完整) or (b 短), by K (條件 5).
+    selection_bias: str | None
+    #: (c) walk-forward, beside the out-of-sample sample it describes.
+    walk_forward: str | None
+    #: (a-1), with both bounds already rendered as percentages (條件 12).
+    f_star_interval: str | None
+    #: 落地條件 6's partner to ``f_star_interval``; the two are shown or withheld
+    #: together.
+    effective_cap: KellyEffectiveCapView | None
+    #: (h), beside FR-5 欄位 6/7, which are the counts it explains (條件 44).
+    boundary_exclusion: str | None
+    sample_detail: KellyBacktestSampleDetail | None
+    original_values: KellyOriginalValuesView | None
+    #: 條件 53/68/73: the dialog that must be shown before this input is
+    #: re-imported, or ``None`` where the ninth round ruled there is none. The
+    #: four cells are decided in :func:`_overwrite_notice` and are exhaustive.
+    overwrite_notice: KellyOverwriteNoticeView | None
+    #: The two counts (b) rests on, live rather than the ``k_observed_at_write``
+    #: snapshot on the row: an attempt made after this input was stored still
+    #: widened the search this disclosure describes.
+    k_observed: int
+    k_distinct_specs: int
+
+
+class KellyInputDisclosuresView(BaseModel):
+    """One instrument's Kelly screen: the row, its ageing, and every sentence.
+
+    ``kelly_input`` is ``None`` when nothing was ever entered, and the response
+    is still a 200 rather than the 404 ``GET /{symbol}`` returns: "never
+    entered" is a state this screen has copy for (the ``尚未輸入`` badge, (g-1)
+    from cap 5) and a count for -- refused imports leave attempts behind with no
+    row to show, and (b) is exactly the disclosure that must survive them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kelly_input: KellyInputView | None
+    disclosures: KellyDisclosuresView
+    as_of: str
+
+
+def _selection_bias(k_observed: int, k_distinct_specs: int) -> str | None:
+    """(b), per the K branch (約束 30 / 落地條件 5).
+
+    ``K >= 2`` takes the full sentence, ``K == 1`` the short one, and neither may
+    be empty. ``K == 0`` is the fourth branch: there is no import history to
+    disclose, so no sentence is shown -- and on a ``backtest`` row it is a state
+    that cannot legitimately arise, which :func:`_disclosures` reports rather
+    than papers over.
+    """
+    if k_observed >= 2:
+        return KELLY_SELECTION_BIAS_FULL.format(
+            k_observed=k_observed, k_distinct_specs=k_distinct_specs
+        )
+    if k_observed == 1:
+        return KELLY_SELECTION_BIAS_SINGLE
+    return None
+
+
+def _dividend_note(row: KellyInputRow) -> str | None:
+    """(欄位 11) for one row, or ``None`` when the code says nothing to explain.
+
+    ``adjusted`` keeps ``DIVIDEND_ADJUSTED_NOTE`` (第六輪, 沿用核可) and the four
+    degraded codes take Kelly's own block. Reusing the backtester's note for the
+    degraded branches is what 條件 62 forbids, and the two are kept apart by this
+    one branch: the wording module imports nothing, so the choice lands here,
+    the assembly point (D-8).
+    """
+    code = row.dividend_reason_code
+    if code is None:
+        return None
+    if code == "adjusted":
+        return DIVIDEND_ADJUSTED_NOTE
+    return kelly_dividend_note(code, market=row.market)
+
+
+def _sample_detail(row: KellyInputRow) -> KellyBacktestSampleDetail:
+    """(任務 3) The eleven-column detail for an imported row (條件 42).
+
+    Two guards shape what comes out:
+
+    * 條件 43 -- rows 3/4/5 are displayed **only** if ``n == n_win + n_loss``.
+      The three counts side by side assert a partition of the sample, and the
+      review would not let a gap between them be shown as one.
+    * 條件 45 -- row 10's sentence is bound to ``rates_verified is False``.
+      ``None`` is "the run said nothing about its rates", which is a different
+      finding with no approved sentence, and ``not rates_verified`` would merge
+      the two.
+    """
+    rows: list[KellyDetailRow] = []
+    if row.strategy_id is not None:
+        rows.append(
+            KellyDetailRow(label=KELLY_DETAIL_STRATEGY_LABEL, value=row.strategy_id)
+        )
+    if row.oos_start_date is not None and row.oos_end_date is not None:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_OOS_PERIOD_LABEL,
+                value=_DATE_RANGE.format(start=row.oos_start_date, end=row.oos_end_date),
+            )
+        )
+    trips = (row.oos_round_trips, row.oos_win_trips, row.oos_loss_trips)
+    if all(count is not None for count in trips):
+        n, n_win, n_loss = (int(count) for count in trips if count is not None)
+        if n == n_win + n_loss:
+            rows.append(KellyDetailRow(label=KELLY_DETAIL_ROUND_TRIPS_LABEL, value=str(n)))
+            rows.append(KellyDetailRow(label=KELLY_DETAIL_WIN_TRIPS_LABEL, value=str(n_win)))
+            rows.append(
+                KellyDetailRow(label=KELLY_DETAIL_LOSS_TRIPS_LABEL, value=str(n_loss))
+            )
+        else:
+            # 條件 43: 「不成立禁三欄並列」. Not a crash and not a silent partial
+            # display of two of the three -- all three are withheld, and the
+            # discrepancy is reported where an operator will see it.
+            logger.error(
+                "kelly sample detail withheld: n != n_win + n_loss for symbol=%s "
+                "market=%s n=%d n_win=%d n_loss=%d",
+                row.symbol,
+                row.market,
+                n,
+                n_win,
+                n_loss,
+            )
+    if row.oos_excluded_boundary_trips is not None:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_EXCLUDED_BOUNDARY_TRIPS_LABEL,
+                value=str(row.oos_excluded_boundary_trips),
+            )
+        )
+    if row.oos_open_trip_at_end is not None:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_OPEN_TRIP_AT_END_LABEL,
+                value=str(row.oos_open_trip_at_end),
+            )
+        )
+    if row.oos_observations is not None:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_OBSERVATIONS_LABEL, value=str(row.oos_observations)
+            )
+        )
+    if row.p_ci_low is not None and row.p_ci_high is not None:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_WIN_RATE_CI_LABEL,
+                # The same fixed one-decimal shape cap 5 prints a win rate in:
+                # this interval is over a count ratio, and 分歧① required 5
+                # struck false precision on exactly that ground.
+                value=f"{format_win_rate(row.p_ci_low)} 至 {format_win_rate(row.p_ci_high)}",
+            )
+        )
+    if row.rates_verified is False:
+        rows.append(
+            KellyDetailRow(
+                label=KELLY_DETAIL_RATES_VERIFIED_LABEL, note=KELLY_RATES_UNVERIFIED_NOTE
+            )
+        )
+    dividend_note = _dividend_note(row)
+    if dividend_note is not None:
+        rows.append(KellyDetailRow(label=KELLY_DETAIL_DIVIDEND_LABEL, note=dividend_note))
+    return KellyBacktestSampleDetail(intro=KELLY_BACKTEST_SAMPLE_DETAIL_INTRO, rows=rows)
+
+
+def _original_values(row: KellyInputRow) -> KellyOriginalValuesView | None:
+    """(任務 7/任務 8) The imported pair beside an overridden effective one.
+
+    Built for ``backtest_overridden`` rows whose ``backtest_*`` columns survived,
+    and for nothing else: (任務 7) says in so many words that these two numbers
+    were kept while the effective content moved, and a row that has no kept pair
+    would make the sentence describe values it is not showing.
+    """
+    if row.source != "backtest_overridden":
+        return None
+    if row.backtest_win_rate is None or row.backtest_payoff_ratio is None:
+        return None
+    period = None
+    if row.oos_start_date is not None and row.oos_end_date is not None:
+        period = _DATE_RANGE.format(start=row.oos_start_date, end=row.oos_end_date)
+    return KellyOriginalValuesView(
+        statement=KELLY_ORIGINAL_PAIR_DISCLOSURE,
+        win_rate_label=KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+        win_rate=format_win_rate(row.backtest_win_rate),
+        payoff_ratio_label=None,
+        payoff_ratio=format_payoff_ratio(row.backtest_payoff_ratio),
+        oos_period_label=KELLY_ORIGINAL_OOS_PERIOD_LABEL,
+        oos_period=period,
+    )
+
+
+def _f_star_interval(
+    row: KellyInputRow, inputs: KellyInputs
+) -> tuple[str | None, KellyEffectiveCapView | None]:
+    """(a-1) and the effective cap that 落地條件 6 requires beside it.
+
+    Three conditions have to hold together, and failing any of them withholds
+    **both** halves rather than one:
+
+    * ``source == "backtest"``. The stored interval was measured on the imported
+      pair; on an overridden row the effective numbers are the user's own, so
+      the interval would qualify an estimate the screen is not using.
+    * the interval columns are on the record. A manual pair has none, and there
+      is nothing to state about a measurement nobody made.
+    * the input is still usable (:func:`app.advice.limits.kelly_usable`). An
+      expired pair has no cap in force, so there is no "生效上限" to put beside
+      f* -- and 落地條件 6 does not allow the interval to be shown without one.
+    """
+    if row.source != "backtest":
+        return (None, None)
+    if row.f_star_ci_low is None or row.f_star_ci_high is None:
+        return (None, None)
+    if not kelly_usable(inputs):
+        return (None, None)
+    allowed = kelly_allowed_weight(
+        RiskBudget(), PortfolioContext(symbol=row.symbol, kelly=inputs)
+    )
+    if allowed is None:  # pragma: no cover - kelly_usable already established it
+        return (None, None)
+    sentence = KELLY_F_STAR_INTERVAL_DISCLOSURE.format(
+        f_star_ci_low_pct=format_percent(row.f_star_ci_low),
+        f_star_ci_high_pct=format_percent(row.f_star_ci_high),
+    )
+    cap = KellyEffectiveCapView(
+        label=LIMIT_NAMES["kelly_fraction"], value=format_percent(allowed)
+    )
+    return (sentence, cap)
+
+
+def _overwrite_notice(row: KellyInputRow | None) -> KellyOverwriteNoticeView | None:
+    """The before-overwrite dialog for this row, over 條件 73's four cells.
+
+    ``absent`` -- no row, so nothing can be overwritten and no dialog is shown.
+    ``manual`` and ``backtest_overridden`` -- their own variant, from
+    :func:`app.api.kelly_wording.kelly_overwrite_notice`. ``backtest`` -- an
+    **explicit** no: 條件 73 forbids reaching that answer by falling off the end
+    of a table, because a cell that is empty by accident and a cell that is
+    empty by ruling look identical afterwards.
+    """
+    if row is None:
+        return None
+    if row.source == "backtest":
+        return None
+    body = kelly_overwrite_notice(row.source)
+    if body is None:  # pragma: no cover - the two hand-keyed sources both build
+        return None
+    return KellyOverwriteNoticeView(
+        title=KELLY_OVERWRITE_NOTICE_TITLE,
+        body=body,
+        confirm_label=KELLY_OVERWRITE_CONFIRM_LABEL,
+        cancel_label=KELLY_OVERWRITE_CANCEL_LABEL,
+    )
+
+
+def _disclosures(
+    row: KellyInputRow | None, *, k_observed: int, k_distinct_specs: int
+) -> KellyDisclosuresView:
+    """Choose every sentence one Kelly screen shows, from the row and the counts.
+
+    The source branches are the review's and are exhaustive by construction:
+    (e) for ``backtest`` and (e-manual) for the two hand-keyed sources (條件 18),
+    (f) for those same two and not for ``backtest`` (條件 20), FR-5 for
+    ``backtest`` alone (條件 42), and the original-values view for
+    ``backtest_overridden`` alone.
+
+    (c) travels with (e): it explains what "樣本外" means for the sample (e)
+    speaks of, and no such sample stands behind a hand-keyed pair. (h) travels
+    with FR-5 欄位 6/7, which are the two counts it explains (條件 44).
+    """
+    if row is None:
+        # Nothing entered: the badge says so, cap 5 says the rest with (g-1),
+        # and (b) still stands -- refused imports leave a K behind and no row.
+        return KellyDisclosuresView(
+            freshness_badge_label=KELLY_FRESHNESS_BADGE_ABSENT,
+            source_statement=None,
+            source_label=None,
+            win_rate_disclosure=None,
+            manual_input_disclosure=None,
+            manual_input_tooltip=None,
+            selection_bias=_selection_bias(k_observed, k_distinct_specs),
+            walk_forward=None,
+            f_star_interval=None,
+            effective_cap=None,
+            boundary_exclusion=None,
+            sample_detail=None,
+            original_values=None,
+            overwrite_notice=_overwrite_notice(None),
+            k_observed=k_observed,
+            k_distinct_specs=k_distinct_specs,
+        )
+
+    imported = row.source == "backtest"
+    hand_keyed = row.source in {"manual", "backtest_overridden"}
+    inputs = kelly_inputs_of(row, ci_includes_no_edge=ci_includes_no_edge(row))
+    assert inputs is not None  # a real row always builds one
+    interval, cap = _f_star_interval(row, inputs)
+    detail = _sample_detail(row) if imported else None
+
+    if row.source != "manual" and k_observed == 0:
+        # 落地條件 5: unreachable for a row with backtest provenance. The import
+        # path appends the attempt *before* it writes the row, and a hand edit
+        # over an imported row carries that provenance forward, so a count of
+        # zero here means the log lost a row the disclosure depends on. It is
+        # reported rather than papered over -- and no (b) sentence is emitted,
+        # because there is no attempt history to describe.
+        logger.error(
+            "kelly selection-bias disclosure has no attempts to report: "
+            "symbol=%s market=%s source=%s",
+            row.symbol,
+            row.market,
+            row.source,
+        )
+
+    fr6 = _SOURCE_STATEMENTS[row.source]
+    return KellyDisclosuresView(
+        freshness_badge_label=_FRESHNESS_BADGES[ageing_of(row).freshness],
+        source_statement=None if fr6 is None else fr6[0],
+        source_label=None if fr6 is None else fr6[1],
+        win_rate_disclosure=(
+            KELLY_WIN_RATE_IS_NOT_PROBABILITY
+            if imported
+            else KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY
+        ),
+        manual_input_disclosure=KELLY_MANUAL_INPUT_DISCLOSURE if hand_keyed else None,
+        manual_input_tooltip=KELLY_MANUAL_INPUT_TOOLTIP if hand_keyed else None,
+        selection_bias=_selection_bias(k_observed, k_distinct_specs),
+        walk_forward=KELLY_WALK_FORWARD_SCOPE if imported else None,
+        f_star_interval=interval,
+        effective_cap=cap,
+        boundary_exclusion=KELLY_BOUNDARY_TRIP_EXCLUSION if detail is not None else None,
+        sample_detail=detail,
+        original_values=_original_values(row),
+        overwrite_notice=_overwrite_notice(row),
+        k_observed=k_observed,
+        k_distinct_specs=k_distinct_specs,
     )
 
 
@@ -323,6 +930,45 @@ def read_kelly_input(
     if row is None:
         raise _not_found(normalize_symbol(symbol), market)
     return _view(row)
+
+
+@router.get("/{symbol}/disclosures", response_model=KellyInputDisclosuresView)
+def read_kelly_disclosures(
+    symbol: str,
+    store: KellyStoreDep,
+    attempts: KellyAttemptsDep,
+    market: MarketQuery = "TW",
+) -> KellyInputDisclosuresView:
+    """One instrument's Kelly screen, with every sentence already chosen.
+
+    A second read beside ``GET /{symbol}`` rather than more fields on it: this
+    one costs two counting queries against the attempt log, and the list
+    endpoint would pay them per row for a summary that shows no disclosure at
+    all. The row itself is returned here too, so a surface needs one call and
+    cannot end up rendering a pair from one response and sentences from another.
+
+    **200 with ``kelly_input: null`` where ``GET /{symbol}`` returns 404.** The
+    two answer different questions: that one reports whether a pair exists, this
+    one describes a screen, and "nothing has been entered" is a state the screen
+    has copy for -- the ``尚未輸入`` badge, and (b), which outlives every refused
+    import that left an attempt behind and no row.
+
+    Both counts are read **after** the row (約束 30 order does not apply here --
+    nothing is being written), and they are live rather than the
+    ``k_observed_at_write`` snapshot: an attempt made since the input was stored
+    still widened the search (b) discloses.
+    """
+    row = store.get(symbol, market)
+    stored_symbol = normalize_symbol(symbol)
+    return KellyInputDisclosuresView(
+        kelly_input=None if row is None else _view(row),
+        disclosures=_disclosures(
+            row,
+            k_observed=attempts.k_observed(stored_symbol, market),
+            k_distinct_specs=attempts.k_distinct_specs(stored_symbol, market),
+        ),
+        as_of=now_iso(),
+    )
 
 
 @router.put("/{symbol}", response_model=KellyInputView)
@@ -541,7 +1187,12 @@ def import_kelly_input_from_backtest(
     request_spec, spec_hash = _canonical_spec(body)
 
     def refuse(review: KellySampleGateReview, measured: dict[str, Any]) -> HTTPException:
-        """Log the refusal, then hand back the 422 for the caller to raise."""
+        """Log the refusal, then hand back the 422 for the caller to raise.
+
+        The three disclosure fields are filled **after** the append, in that
+        order for a reason: 元件 B states that this attempt was counted, so the
+        counts quoted beside it have to be the ones that already include it.
+        """
         assert review.reason_code is not None and review.rejection is not None
         _append_attempt(
             attempts,
@@ -560,10 +1211,25 @@ def import_kelly_input_from_backtest(
             body.strategy,
             review.reason_code,
         )
+        k_observed = attempts.k_observed(stored_symbol, market)
+        k_distinct_specs = attempts.k_distinct_specs(stored_symbol, market)
         return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=KellyImportRefusal(
-                reason_code=review.reason_code, message=review.rejection
+                reason_code=review.reason_code,
+                message=review.rejection,
+                # 落地條件 13: the frame belongs to the three sample-size codes
+                # and to no other. The membership test is the condition itself,
+                # written out rather than inferred from the message.
+                frame=(
+                    KELLY_REFUSAL_FRAME
+                    if review.reason_code in _SAMPLE_SIZE_REASON_CODES
+                    else None
+                ),
+                attempt_logged=KELLY_REFUSAL_ATTEMPT_LOGGED,
+                selection_bias=_selection_bias(k_observed, k_distinct_specs),
+                k_observed=k_observed,
+                k_distinct_specs=k_distinct_specs,
             ).model_dump(),
         )
 
