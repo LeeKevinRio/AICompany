@@ -626,7 +626,7 @@ def kelly_dividend_note(reason_code: str, *, market: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# (任務 7 / 任務 8) the imported pair kept beside an overridden one
+# (任務 7) the imported pair kept beside an overridden one
 # ---------------------------------------------------------------------------
 
 #: (任務 7) 風控 2026-08-22 逐字定稿（第八輪，組二備案原文），字面含標點不得改動，
@@ -649,13 +649,23 @@ KELLY_ORIGINAL_PAIR_DISCLOSURE = (
     "目前生效的 Kelly 輸入，用的也不是這裡這兩個數字。"
 )
 
-#: (任務 8) 風控 2026-08-22 逐字定稿（第八輪，組二），字面含標點不得改動，漂移須重送風控。
-#: The label over the OOS dates shown beside :data:`KELLY_ORIGINAL_PAIR_DISCLOSURE`.
-#: Deliberately unlike FR-5 欄位 2's own label so the two cannot be read as the
-#: same row: this one belongs to the original-values view, and 條件 54 keeps it
-#: off ``/backtest`` and out of the FR-5 detail table. Its dates render as plain
-#: ``YYYY-MM-DD``, like every other date in these sentences.
-KELLY_ORIGINAL_OOS_PERIOD_LABEL = "原始回測的樣本外期間"
+# (任務 8) 風控 2026-08-22 **定稿撤銷**（第十三輪）。The label that stood over the
+# original view's out-of-sample dates is gone from this module, and its literal
+# is on the zero-occurrence guard in ``tests/test_kelly_wording.py``: 條件 92
+# 選項二 narrowed that view to two numbers and one sentence, so the label has no
+# surface to sit on, and a constant kept "for later" is a wording waiting to be
+# rendered by the next reader. 條件 65's same-screen requirement lapses with it --
+# (任務 7) now lands alone.
+#
+# Why the period went rather than the sentence: the label carries 「樣本外」, which
+# obliges (c) on the same screen, and (c) closes by pointing at the
+# selection-bias disclosure, which reaches ``k_observed`` -- rebuilding, on an
+# overridden row, the backtest disclosure surface 條件 42 keeps off it and the
+# count 約束 7 bans from this view. The thirteenth round also recorded that the
+# period was never load-bearing here: it would have carried checkability, and
+# what this view needs is uniqueness of reference, which the rendering condition
+# already closes (the entry point exists only while the row is overridden with a
+# kept pair, and a fresh import rewrites the row and removes it).
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +736,7 @@ KELLY_SOURCE_MANUAL_LABEL = "來源：手動輸入。"
 #: 漂移須重送風控。
 #: "可以查看" is a promise about this product, and 條件 46 makes it one that has
 #: to be kept: a surface stating it owes the user a reachable path to the
-#: original pair. That path is the original-values view ((任務 7)/(任務 8)), which
+#: original pair. That path is the original-values view ((任務 7)), which
 #: ``app/api/kelly.py`` serves for exactly the rows this sentence describes.
 KELLY_SOURCE_OVERRIDDEN_STATEMENT = (
     "此標的目前生效的 Kelly 輸入，原本由回測帶入，之後經你手動調整；"
@@ -879,6 +889,29 @@ KELLY_OVERWRITE_NOTICE_CHOICES = (
 KELLY_OVERWRITE_CANCEL_LABEL = "取消"
 KELLY_OVERWRITE_CONFIRM_LABEL = "確認帶入，覆蓋目前資料"
 
+#: (條件 78 觸發按鈕) 風控 2026-08-22 逐字定稿（第十二輪，風控直接定稿），字面不得改動，
+#: 漂移須重送風控。 It lives beside the dialog because it is what opens it, and
+#: 條件 102 puts it here; it is **not** part of the dialog (條件 103), which two
+#: of the four cells do not have at all.
+#:
+#: Both drafted candidates were refused, and the reasons bound what this label
+#: may say. One named a *result* to bring in, which would read as fetching a run
+#: that already exists -- ``import_kelly_input_from_backtest`` stores no runs and
+#: spends a data-source call producing new numbers every time, the same untrue
+#: direction the ninth round struck from the dialog title. The other opened with
+#: a word presupposing an earlier run, which is false for a symbol that has
+#: never been imported and for a hand-typed pair.
+#:
+#: 「執行回測」 denies the fetch reading outright and 「並帶入」 keeps the action
+#: name the rest of this surface已建立; both halves are true in all four cells.
+#: No word for overwriting is added: it is false where nothing is stored, and
+#: where something is, the consequence is carried in full by the dialog (條件 74).
+#:
+#: 條件 103: the front end renders this verbatim and its ``aria-label`` is this
+#: string exactly. 條件 105: pressing it does not make the import true -- no
+#: 「來源：回測帶入」 may appear until one has succeeded.
+KELLY_IMPORT_BACKTEST_TRIGGER_LABEL = "執行回測並帶入"
+
 
 def kelly_overwrite_notice(source: str) -> tuple[str, ...] | None:
     """The before-overwrite dialog paragraphs for one source, or ``None``.
@@ -967,8 +1000,8 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "div-unusable-events": KELLY_DIVIDEND_UNUSABLE_EVENTS_FACT,
     "div-unusable-events-tail": KELLY_DIVIDEND_UNUSABLE_EVENTS_TAIL,
     # 第八輪組二.
+    # (任務 8) 第十三輪撤銷，不再列於清冊；字面改由零出現守門看管。
     "task-7": KELLY_ORIGINAL_PAIR_DISCLOSURE,
-    "task-8": KELLY_ORIGINAL_OOS_PERIOD_LABEL,
     # 第六輪 display copy, landed with K4c-1: the surface that reads it exists
     # now. The eleven column labels keep the review's own numbering.
     "task-3": KELLY_BACKTEST_SAMPLE_DETAIL_INTRO,
@@ -1005,6 +1038,8 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     "notice-choices": KELLY_OVERWRITE_NOTICE_CHOICES,
     "notice-cancel": KELLY_OVERWRITE_CANCEL_LABEL,
     "notice-confirm": KELLY_OVERWRITE_CONFIRM_LABEL,
+    # 第十二輪 條件 102: the trigger that opens the dialog, not part of it.
+    "trigger-label": KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,

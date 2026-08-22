@@ -921,6 +921,66 @@ def test_the_non_finite_path_makes_no_claim_about_the_attempt_record(
     assert len(_attempts(api_harness)) == 1
 
 
+@pytest.mark.parametrize("code", (*_SAMPLE_SIZE_CODES, *_OTHER_REFUSAL_CODES))
+def test_a_refused_import_claims_no_imported_source(
+    code: str, api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """條件 105 (禁樂觀狀態): nothing was imported, so nothing may say it was.
+
+    「來源：回測帶入」 is (fr6-backtest)'s label and the opening of the overridden
+    one; either on a refusal would report a state the store does not hold -- the
+    endpoint wrote no row at all.
+    """
+    detail = _refuse_with(code, api_harness, monkeypatch)
+
+    assert "來源：回測帶入" not in json.dumps(detail, ensure_ascii=False)
+    assert api_harness.kelly_inputs.get("2330", "TW") is None
+
+
+def test_the_non_finite_path_claims_no_imported_source(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """條件 105 on the 500 path, where the row is likewise not written."""
+    _seed(api_harness, _CLEARS_GATE)
+    monkeypatch.setattr(
+        "app.api.kelly.bootstrap_fraction_ci",
+        lambda *args, **kwargs: FractionInterval(
+            point=0.1,
+            low=-math.inf,
+            high=0.2,
+            seed=1,
+            draws=1,
+            degenerate_no_loss_draws=0,
+            degenerate_no_win_draws=1,
+        ),
+    )
+
+    response = _import(api_harness)
+
+    assert response.status_code == 500
+    assert "來源：回測帶入" not in response.text
+    assert api_harness.kelly_inputs.get("2330", "TW") is None
+
+
+def test_a_cleared_import_is_what_makes_the_imported_source_true(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 105, positive side: after a successful import the claim is true.
+
+    The disclosure endpoint is what a screen reads, so the transition is
+    asserted where the user would see it: nothing before, the source stated
+    after.
+    """
+    _seed(api_harness, _CLEARS_GATE)
+    before = api_harness.client.get("/api/kelly-inputs/2330/disclosures").json()
+    assert "來源：回測帶入" not in json.dumps(before, ensure_ascii=False)
+
+    assert _import(api_harness).status_code == 200
+
+    after = api_harness.client.get("/api/kelly-inputs/2330/disclosures").json()
+    assert after["disclosures"]["source_label"] == kelly_wording.KELLY_SOURCE_BACKTEST_LABEL
+
+
 def test_only_the_kelly_surface_mentions_the_stored_fraction() -> None:
     """約束 34: nothing outside the Kelly path can read ``f_star`` back.
 

@@ -116,10 +116,10 @@ from app.api.kelly_wording import (
     KELLY_FRESHNESS_BADGE_AGEING,
     KELLY_FRESHNESS_BADGE_EXPIRED,
     KELLY_FRESHNESS_BADGE_FRESH,
+    KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
     KELLY_MANUAL_INPUT_DISCLOSURE,
     KELLY_MANUAL_INPUT_TOOLTIP,
     KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
-    KELLY_ORIGINAL_OOS_PERIOD_LABEL,
     KELLY_ORIGINAL_PAIR_DISCLOSURE,
     KELLY_OVERWRITE_CANCEL_LABEL,
     KELLY_OVERWRITE_CONFIRM_LABEL,
@@ -362,8 +362,9 @@ _FRESHNESS_BADGES: Final[dict[KellyFreshness, str]] = {
 #: already prints a range in. Both ends stay ``YYYY-MM-DD`` (6-A).
 #:
 #: 條件 90 (第十輪) approved exactly **two connector shapes for two uses** and
-#: nothing else: this one between dates, and 「 至 」 between two percentages,
-#: whose 出處 is (a-1)'s own approved text ("{f_star_ci_low_pct} 至
+#: nothing else: this one between dates -- now FR-5 欄位 2 alone, since 條件 92
+#: took the period off the original-values view -- and 「 至 」 between two
+#: percentages, whose 出處 is (a-1)'s own approved text ("{f_star_ci_low_pct} 至
 #: {f_star_ci_high_pct}"). A third shape, or either of these used for the other
 #: purpose, is a red light -- ``tests/test_api_kelly_disclosures.py`` holds the
 #: assertion.
@@ -450,16 +451,33 @@ class KellyEffectiveCapView(BaseModel):
 
 
 class KellyOriginalValuesView(BaseModel):
-    """(任務 7/任務 8) The imported pair kept beside an overridden one.
+    """(任務 7) The imported pair kept beside an overridden one.
 
     The screen 落地條件 21 said could not exist until a distinguishing sentence
-    was approved; 條件 65 puts that sentence (``statement``) and the OOS label on
-    it together, and rules that the win-rate label **quotes** the already
-    approved 口徑限定語 rather than minting a second wording.
+    was approved; ``statement`` is that sentence, and 條件 65 rules that the
+    win-rate label **quotes** the already approved 口徑限定語 rather than minting
+    a second wording. Its other half -- the OOS label on the same screen --
+    lapsed with the thirteenth round, which revoked that label outright.
 
-    條件 54 is a reverse obligation and is asserted in the tests: FR-5 欄位 2's
-    label may not appear here, so the original OOS period and the effective
-    row's OOS period cannot be read as the same row.
+    條件 54 is a reverse obligation and is asserted in the tests: FR-5's labels
+    may not appear here, so nothing on this view can be read as a row of the
+    sample detail 條件 42 keeps off an overridden row.
+
+    **Two numbers and one sentence, and no period** (條件 92, tech-architect
+    附註二). The out-of-sample dates and the label over them were dropped rather
+    than kept with (c) beside them: the label carried 「樣本外」, which obliges (c)
+    on the same screen, and (c) closes by pointing at (b), which would put
+    ``k_observed`` on a view 約束 7 bans it from -- rebuilding, on an overridden
+    row, the backtest disclosure surface 條件 42 exists to keep off it. The
+    thirteenth round then closed the matter: (任務 7) stands unchanged and alone,
+    the period was never load-bearing here (it would have carried checkability,
+    and what this view needs is uniqueness of reference, which the rendering
+    condition already closes), and the label's approval was withdrawn.
+
+    **The contents are closed** (第十三輪 required): two numbers, two labels, one
+    sentence. Any period, timestamp, date, temporal wording beyond the
+    sentence's own 「當時」, or any comparison or ordering, is unreviewed copy --
+    adding one sends this view back to risk-compliance (列管 L12).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -473,8 +491,6 @@ class KellyOriginalValuesView(BaseModel):
     #: something the other does not.
     payoff_ratio_label: str
     payoff_ratio: str
-    oos_period_label: str
-    oos_period: str | None
 
 
 class KellyOverwriteNoticeView(BaseModel):
@@ -524,6 +540,11 @@ class KellyDisclosuresView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    #: (條件 78/102/103) The label on the control that starts an import, in all
+    #: four cells and always the same string -- it is not part of
+    #: ``overwrite_notice``, which two of the four do not have. 條件 103 makes the
+    #: front end render it verbatim and use it as the control's ``aria-label``.
+    import_trigger_label: str
     #: (任務 5) Always present: an absent input is its own badge state. 條件 97:
     #: this response does **not** carry (g) -- cap 5 owns those five sentences
     #: and ships them in its own detail -- so a surface may only render the
@@ -712,20 +733,21 @@ def _sample_detail(row: KellyInputRow) -> KellyBacktestSampleDetail:
 
 
 def _original_values(row: KellyInputRow) -> KellyOriginalValuesView | None:
-    """(任務 7/任務 8) The imported pair beside an overridden effective one.
+    """(任務 7) The imported pair beside an overridden effective one.
 
     Built for ``backtest_overridden`` rows whose ``backtest_*`` columns survived,
     and for nothing else: (任務 7) says in so many words that these two numbers
     were kept while the effective content moved, and a row that has no kept pair
     would make the sentence describe values it is not showing.
+
+    條件 92 (選項二): the pair and the sentence, and nothing else. No
+    out-of-sample period travels with them, so no slot here names 「樣本外」 and
+    the chain of same-screen obligations that word starts never begins.
     """
     if row.source != "backtest_overridden":
         return None
     if row.backtest_win_rate is None or row.backtest_payoff_ratio is None:
         return None
-    period = None
-    if row.oos_start_date is not None and row.oos_end_date is not None:
-        period = _DATE_RANGE.format(start=row.oos_start_date, end=row.oos_end_date)
     return KellyOriginalValuesView(
         statement=KELLY_ORIGINAL_PAIR_DISCLOSURE,
         win_rate_label=KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
@@ -734,8 +756,6 @@ def _original_values(row: KellyInputRow) -> KellyOriginalValuesView | None:
         # imported from its single definition rather than written again here.
         payoff_ratio_label=KELLY_PAYOFF_RATIO_LABEL,
         payoff_ratio=format_payoff_ratio(row.backtest_payoff_ratio),
-        oos_period_label=KELLY_ORIGINAL_OOS_PERIOD_LABEL,
-        oos_period=period,
     )
 
 
@@ -855,12 +875,12 @@ def _disclosures(
     ``backtest`` alone (條件 42), and the original-values view for
     ``backtest_overridden`` alone.
 
-    (c) travels with (e) and, under 條件 92, with anything else that prints the
-    words the tenth round bound it to: the original-values view carries (任務 8)'s
-    "原始回測的樣本外期間", so (c) is attached there too. The ruling's other
-    option -- dropping that period from the view -- would remove information the
-    user can check, so the disclosure is added rather than the fact removed.
-    tech-architect owns the written choice between the two; this is option one.
+    (c) travels with (e): it explains what 「樣本外」 means for the sample (e)
+    speaks of, and no such sample stands behind a hand-keyed pair. 條件 92 asks
+    that no screen use that word without (c) beside it, and tech-architect chose
+    the other way round for the overridden row (附註二): the period was removed
+    from the original-values view, so the word does not appear there and (c) is
+    not owed. The reverse assertion lives in the tests.
 
     (h) travels with FR-5 欄位 6/7, which are the two counts it explains (條件 44).
     """
@@ -868,6 +888,7 @@ def _disclosures(
         # Nothing entered: the badge says so, cap 5 says the rest with (g-1),
         # and (b) still stands -- refused imports leave a K behind and no row.
         return KellyDisclosuresView(
+            import_trigger_label=KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
             freshness_badge_label=KELLY_FRESHNESS_BADGE_ABSENT,
             source_statement=None,
             source_label=None,
@@ -910,6 +931,7 @@ def _disclosures(
 
     source_statement, source_label = _SOURCE_STATEMENTS[row.source]
     return KellyDisclosuresView(
+        import_trigger_label=KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
         freshness_badge_label=_FRESHNESS_BADGES[ageing_of(row).freshness],
         source_statement=source_statement,
         source_label=source_label,
@@ -921,9 +943,7 @@ def _disclosures(
         manual_input_disclosure=KELLY_MANUAL_INPUT_DISCLOSURE if hand_keyed else None,
         manual_input_tooltip=KELLY_MANUAL_INPUT_TOOLTIP if hand_keyed else None,
         selection_bias=selection_bias,
-        walk_forward=(
-            KELLY_WALK_FORWARD_SCOPE if imported or original is not None else None
-        ),
+        walk_forward=KELLY_WALK_FORWARD_SCOPE if imported else None,
         f_star_interval=interval,
         effective_cap=cap,
         boundary_exclusion=KELLY_BOUNDARY_TRIP_EXCLUSION if detail is not None else None,

@@ -768,20 +768,73 @@ def test_a_manual_row_carries_no_walk_forward_sentence(api_harness: ApiHarness) 
     )
 
 
-def test_the_original_values_view_never_names_a_segment_without_explaining_it(
+def test_an_overridden_row_names_no_segment_and_so_owes_no_walk_forward(
     api_harness: ApiHarness,
 ) -> None:
-    """條件 92: 「樣本外」 on a screen obliges (c) on the same screen.
+    """條件 92, 選項二 (tech-architect 附註二): the word is gone, so (c) is not owed.
 
-    The overridden view prints (任務 8)'s 「原始回測的樣本外期間」, so this lane takes
-    the ruling's first option and attaches (c) there; the second option -- drop
-    the period from the view -- would remove a fact the user can check. The
-    written choice between the two is tech-architect's (E-12).
+    The obligation runs the other way from what option one assumed: 「樣本外」 on a
+    screen requires (c) beside it, (c) closes by pointing at the selection-bias
+    disclosure, and that would reach ``k_observed`` on a view 約束 7 keeps it off
+    -- rebuilding on an overridden row the backtest surface 條件 42 bans there.
+    So the period was removed instead, and nothing on this response says the
+    word at all.
     """
     block = _disclosures(api_harness, _overridden())
 
-    assert "樣本外" in block["original_values"]["oos_period_label"]
-    assert block["walk_forward"] == wording.KELLY_WALK_FORWARD_SCOPE
+    assert block["walk_forward"] is None
+    assert "樣本外" not in str(block)
+
+
+def test_the_original_values_view_carries_no_out_of_sample_field(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 92 反向斷言: no ``oos_*`` field survives on this view.
+
+    Not only the rendered label: the period must not travel in the payload
+    either, or a front end could put it back on the screen without any backend
+    change and without any of the sentences it obliges.
+    """
+    original = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))[
+        "original_values"
+    ]
+
+    assert [key for key in original if key.startswith("oos")] == []
+    assert set(original) == {
+        "statement",
+        "win_rate_label",
+        "win_rate",
+        "payoff_ratio_label",
+        "payoff_ratio",
+    }
+    # 第十三輪 E-12: the three literals this view may not carry. The label was a
+    # 定稿 until that round revoked it, so it is retyped here rather than
+    # imported -- there is no constant left to import.
+    for literal in ("樣本外", "最近一次", "原始回測的樣本外期間"):
+        assert literal not in str(original), literal
+    assert "2026-06-30" not in str(original)
+
+
+@pytest.mark.parametrize("source", ["backtest", "manual", "backtest_overridden"])
+def test_no_response_carries_the_revoked_period_label(
+    source: str, api_harness: ApiHarness
+) -> None:
+    """第十三輪: the (任務 8) label was **revoked**, not shelved (E-12).
+
+    With the view narrowed there is no surface for it, so the approval was
+    withdrawn and the constant deleted; keeping one "for later" is a wording
+    waiting for the next reader to render it. The literal is retyped here
+    because nothing in the application defines it any more.
+
+    「最近一次」 is checked with it and for a reason of its own: an ordinal implies
+    an orderable set of earlier runs, and this system stores none.
+    """
+    rows = {"backtest": _imported, "manual": _manual, "backtest_overridden": _overridden}
+
+    block = _disclosures(api_harness, rows[source]())
+
+    for literal in ("原始回測的樣本外期間", "最近一次"):
+        assert literal not in str(block), literal
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +843,7 @@ def test_the_original_values_view_never_names_a_segment_without_explaining_it(
 
 
 def test_an_overridden_row_shows_its_original_pair(api_harness: ApiHarness) -> None:
-    """任務 7/8 + 條件 65: the distinguishing sentence, the label, the numbers."""
+    """任務 7 + 條件 65/92: the distinguishing sentence, the labels, the numbers."""
     block = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))
     original = block["original_values"]
 
@@ -798,8 +851,6 @@ def test_an_overridden_row_shows_its_original_pair(api_harness: ApiHarness) -> N
     assert original["win_rate_label"] == wording.KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER
     assert original["win_rate"] == "55.0%"
     assert original["payoff_ratio"] == "1.50"
-    assert original["oos_period_label"] == wording.KELLY_ORIGINAL_OOS_PERIOD_LABEL
-    assert original["oos_period"] == "2025-01-02 ~ 2026-06-30"
     # 條件 86: the label the range refusal names this field by, from its single
     # definition in ``app/kelly/models.py``.
     assert original["payoff_ratio_label"] == KELLY_PAYOFF_RATIO_LABEL
@@ -861,7 +912,7 @@ def test_the_original_values_view_borrows_no_label_from_the_sample_detail(
         assert label not in str(original)
 
     imported = _disclosures(api_harness, _imported())
-    assert wording.KELLY_ORIGINAL_OOS_PERIOD_LABEL not in str(imported["sample_detail"])
+    assert "原始回測的樣本外期間" not in str(imported["sample_detail"])
 
 
 # ---------------------------------------------------------------------------
@@ -936,23 +987,99 @@ def test_only_two_connector_shapes_are_used_and_neither_crosses_over(
     出處: 「 至 」 is (a-1)'s own connector between two percentages; 「 ~ 」 is the
     one ``suggest_quantity_range`` already prints a numeric range with. Dates
     take the second, percentages the first, and neither takes the other's job.
+    Since 條件 92 the date form has one remaining use, FR-5 欄位 2.
     """
-    block = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))
-    period = block["original_values"]["oos_period"]
     detail = _rows(_disclosures(api_harness, _imported(oos_end_date="2026-06-30")))
     dates = detail[wording.KELLY_DETAIL_OOS_PERIOD_LABEL]["value"]
     percentages = detail[wording.KELLY_DETAIL_WIN_RATE_CI_LABEL]["value"]
 
-    assert period == "2025-01-02 ~ 2026-06-30"
     assert dates == "2025-01-02 ~ 2026-06-30"
     assert percentages == "35.0% 至 73.0%"
-    for joined in (period, dates):
-        assert " 至 " not in joined
+    assert " 至 " not in dates
     assert " ~ " not in percentages
     # No third shape anywhere in the block: an en dash, a full-width tilde or a
     # 「到」 would each be a new connector nobody approved.
     for character in ("—", "〜", "～", "到", "–"):
         assert character not in str(detail), character
+
+
+# ---------------------------------------------------------------------------
+# 觸發按鈕標籤（第十二輪 條件 102-105）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source", ["absent", "manual", "backtest", "backtest_overridden"]
+)
+def test_the_import_trigger_label_is_present_in_all_four_cells(
+    source: str, api_harness: ApiHarness
+) -> None:
+    """條件 103: 恆有值欄位，四格皆回同一常數，正向斷言.
+
+    It may not hang off ``overwrite_notice``: two of the four cells have no
+    dialog at all, and the control that opens one still needs a name on every
+    screen that offers an import.
+    """
+    rows = {"manual": _manual, "backtest": _imported, "backtest_overridden": _overridden}
+    if source == "absent":
+        block = _get(api_harness)["disclosures"]
+    else:
+        block = _disclosures(api_harness, rows[source]())
+
+    assert block["import_trigger_label"] == wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL
+    assert block["import_trigger_label"] == "執行回測並帶入"
+
+
+def test_the_trigger_label_stands_apart_from_the_dialog(api_harness: ApiHarness) -> None:
+    """條件 102/103: the trigger names the action; the dialog states its cost.
+
+    Both are present for a hand-keyed row and neither is the other -- the label
+    is not one of the dialog's four strings, and it survives the two cells where
+    the dialog is ``None``.
+    """
+    block = _disclosures(api_harness, _manual())
+    notice = block["overwrite_notice"]
+
+    assert block["import_trigger_label"] not in notice["body"]
+    assert block["import_trigger_label"] != notice["confirm_label"]
+    assert block["import_trigger_label"] != notice["title"]
+
+    imported = _disclosures(api_harness, _imported())
+    assert imported["overwrite_notice"] is None
+    assert imported["import_trigger_label"] == wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL
+
+
+def test_the_trigger_label_promises_no_stored_result_and_no_earlier_run(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 104: neither refused candidate may come back.
+
+    One read as fetching a result this system does not keep (runs are not
+    stored; every import spends a data-source call), the other presupposed an
+    earlier run, which is false for a symbol nobody has imported.
+    """
+    label = _get(api_harness)["disclosures"]["import_trigger_label"]
+
+    assert "帶入回測結果" not in label
+    assert "重新" not in label
+    assert "最近一次" not in label
+
+
+def test_a_screen_with_no_import_yet_claims_no_imported_source(
+    api_harness: ApiHarness,
+) -> None:
+    """條件 105 (禁樂觀狀態): 「來源：回測帶入」 only after one has succeeded.
+
+    The trigger being on screen is not the import having happened. A row that
+    was typed by hand, and a screen with no row at all, carry the label that
+    offers the action and no claim that it was taken.
+    """
+    absent = _get(api_harness)["disclosures"]
+    manual = _disclosures(api_harness, _manual())
+
+    for block in (absent, manual):
+        assert block["import_trigger_label"] == wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL
+        assert "來源：回測帶入" not in str(block)
 
 
 # ---------------------------------------------------------------------------
@@ -991,6 +1118,7 @@ def _approved_texts() -> set[str]:
         approved.update(body)
     approved.add(KELLY_PAYOFF_RATIO_LABEL)
     approved.add(wording.KELLY_SELECTION_BIAS_UNLOGGED)
+    approved.add(wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL)
     # The two that interpolate a measured value, rendered as this endpoint
     # renders them (落地條件 12: fixed digits).
     approved.add(

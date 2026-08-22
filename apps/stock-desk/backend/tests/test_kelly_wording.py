@@ -238,6 +238,7 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "如需協助排查，也可回報此代號與區間供人工覆核來源欄位。"
     ),
     # 第八輪組二：任務 7 採備案原文、任務 8 標籤。
+    # (任務 8) 第十三輪撤銷：不再是定稿，改列於 REJECTED_LITERALS 零出現守門。
     "task-7": (
         "這裡顯示的勝率與盈虧比，是這筆 Kelly 輸入回測帶入當時、由系統算出的原始值。"
         "這筆輸入後來被你手動調整；但調整的是這筆輸入的生效內容，"
@@ -245,7 +246,6 @@ CONFIRMED_VERBATIM: dict[str, str] = {
         "本條上限的計算，用的是目前生效值，不是這裡顯示的原始值；"
         "目前生效的 Kelly 輸入，用的也不是這裡這兩個數字。"
     ),
-    "task-8": "原始回測的樣本外期間",
     # 第六輪（2026-08-22，第五批）display copy, landed by K4c-1. 任務 3's frame,
     # its eleven column labels, 欄位 10's sentence, FR-6's four, the FR-4 badge
     # and the Kelly-side 口徑限定語 -- all retyped from the ruling.
@@ -314,6 +314,8 @@ CONFIRMED_VERBATIM: dict[str, str] = {
     ),
     "notice-cancel": "取消",
     "notice-confirm": "確認帶入，覆蓋目前資料",
+    # 第十二輪（2026-08-22）條件 102：開啟對話框的觸發按鈕標籤，風控直接定稿。
+    "trigger-label": "執行回測並帶入",
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -368,7 +370,13 @@ def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     per source variant, the shared close, and the two button labels).
 
     The eleventh round's own addition is (b)'s third cell (條件 96), which the
-    tenth round had left with no sentence at all.
+    tenth round had left with no sentence at all; the twelfth added the import
+    trigger's label (條件 102).
+
+    One item left in the other direction: (任務 8)'s period label was **revoked**
+    in the thirteenth round once 條件 92 took the period off the view it labelled,
+    so it is not counted here and its literal is on the zero-occurrence guard
+    instead. That is why this total moves by one less than the review's.
 
     The tenth round closed two gaps this lane reported and both are here:
     (fr6-backtest) with its label (條件 84), and the payoff ratio's label
@@ -561,9 +569,16 @@ REJECTED_LITERALS: tuple[tuple[str, str, str], ...] = (
     ("(告知句) 條件 89 全檔", "最近一次回測結果", "kelly"),
     ("(告知句) 條件 89 全檔", "原始回測值不受影響", "kelly"),
     ("(告知句) 條件 89 全檔", "原始值不會被覆蓋", "kelly"),
+    # 第十二輪 條件 104: the second refused trigger candidate. The first
+    # (「帶入回測結果」) is a substring of the approved dialog title, so it takes an
+    # allowlist rather than a zero scan -- see TRIGGER_LABEL_ALLOWLIST.
+    ("(觸發標籤) 候選 (b) 不採用", "重新執行回測並帶入", "shipped"),
     # 第十一輪 條件 100: the 條件 96 沿 drafts that were not adopted -- the備案
     # exposing the storage table, and the五字 phrase the修訂 struck, which said
     # the counts are missing *on this page* and so implied they exist elsewhere.
+    # 第十三輪: (任務 8) 的定稿被撤銷（選項二後無承載面），字面就此併入零出現守門。
+    # 撤銷不同於未採用：它曾是定稿，所以理由與出處記在這裡，字面則一視同仁。
+    ("(任務 8) 第十三輪撤銷", "原始回測的樣本外期間", "shipped"),
     ("(條件 96) 備案不採用", "這張表本身是空的", "shipped"),
     ("(條件 96) required 刪除", "本頁在這裡，", "shipped"),
     ("(條件 96) 備案不採用", "本頁因此無法在這裡", "shipped"),
@@ -886,6 +901,50 @@ def test_the_selection_bias_family_is_three_cells_and_this_is_the_third() -> Non
     assert {
         item for item in wording.RISK_CONFIRMED_WORDING if item.startswith("b-")
     } == {"b-full", "b-single", "b-unlogged"}
+
+
+#: 條件 104. 「帶入回測結果」 was refused as a *button* label -- it reads as
+#: fetching a run this system does not keep -- but it is also the opening of the
+#: dialog title the ninth round approved, where the co-text ("— 執行前請確認")
+#: rules the fetch reading out. So the guard is an allowlist of exactly one
+#: occurrence, at its 出處, and a second one anywhere is a red light.
+TRIGGER_LABEL_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
+    (
+        "app/api/kelly_wording.py",
+        'KELLY_OVERWRITE_NOTICE_TITLE = "帶入回測結果 — 執行前請確認"',
+        "第九輪 對話框標題定稿（條件 72：aria-label 逐字同用）",
+    ),
+)
+
+
+def test_the_refused_trigger_label_survives_only_at_its_one_approved_source() -> None:
+    """條件 104: 未採用版本零出現，標題出處顯式 allowlist 一筆，第二處紅燈."""
+    observed = tuple(
+        (str(path.relative_to(_APP_ROOT.parent)), line.strip())
+        for path in _kelly_surface_sources()
+        if path.suffix == ".py"
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "帶入回測結果" in line
+    )
+
+    assert observed == tuple((entry[0], entry[1]) for entry in TRIGGER_LABEL_ALLOWLIST), (
+        f"「帶入回測結果」出現於核可出處以外（條件 104）。實測：{observed}"
+    )
+
+
+def test_the_trigger_label_is_the_approved_one_and_neither_candidate() -> None:
+    """條件 104, from the other side: what the constant is, not only what it is not."""
+    assert wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL == "執行回測並帶入"
+    assert "帶入回測結果" not in wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL
+    assert "重新" not in wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL
+    # 條件 102: the trigger is defined next to the dialog it opens, and is not
+    # one of the dialog's own strings.
+    assert wording.KELLY_IMPORT_BACKTEST_TRIGGER_LABEL not in (
+        wording.KELLY_OVERWRITE_NOTICE_TITLE,
+        wording.KELLY_OVERWRITE_CONFIRM_LABEL,
+        wording.KELLY_OVERWRITE_CANCEL_LABEL,
+        wording.KELLY_OVERWRITE_NOTICE_CHOICES,
+    )
 
 
 def test_the_assembly_point_imports_its_sentences_instead_of_retyping_them() -> None:
@@ -1333,7 +1392,6 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "div-unusable-events": set(),
     "div-unusable-events-tail": set(),
     "task-7": set(),
-    "task-8": set(),
     # 第六輪 display copy. Every value on the FR-5 detail is bound to its label
     # by the assembly point rather than interpolated into it, so none of the
     # eleven carries a placeholder -- a label with a hole in it would be a
@@ -1364,6 +1422,7 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "notice-choices": set(),
     "notice-cancel": set(),
     "notice-confirm": set(),
+    "trigger-label": set(),
 }
 
 #: The (g) sentences that name an anchor date and an elapsed count. All three
