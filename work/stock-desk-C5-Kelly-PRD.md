@@ -8,6 +8,7 @@
 ## 變更紀錄
 
 - 2026-08-19：依 ADR-0006 修正 profit_factor≠b 與 FR-3 時效錨點（product-manager 執行，來源為 tech-architect 升級事項，見 `work/stock-desk-C5-Kelly-架構評估.md`「升級 CEO/PM 事項」與 `docs/adr/0006-stock-desk-kelly-輸入來源與模組邊界.md` D-4／D-5）。
+- 2026-08-19：依風控批審＋D9 §3.3 補齊 FR-5 欄位（product-manager 執行，來源為 `work/reviews/2026-08-19-C5-Kelly-文案批審.md`「三、整批缺漏」第 2 點與 `work/stock-desk-C5-Kelly-D9-量化意見.md` §3.3 第 3、4、7 點；欄位真相來源見 `docs/adr/0006-stock-desk-kelly-輸入來源與模組邊界.md` D-2／D-6）。FR-5 顯示欄位列舉由「策略名／OOS 起訖／完整回合數／費率未查證／除權息狀態」擴充補入：獲利回合數 `n_win`、虧損回合數 `n_loss`、跨界排除回合數 `oos_excluded_boundary_trips`、期末未平倉回合數 `oos_open_trip_at_end`、樣本觀測數 `oos_observations`、p 的 Wilson 95% 區間；相應驗收條件同步補一組。顯示措辭仍待 risk-compliance-officer 定稿，本次僅補欄位與 AC，不涉及文案。
 
 > **輸入契約缺口聲明**：本 PRD 依指示應以 `work/機會清單.md` C5 條目為第一手來源，但該檔案於目前分支（HEAD 710e500）與 `work/` 目錄下皆不存在（僅找到 `work/stock-desk-已知限制與後續.md`）。本 PRD 改以下列已驗證來源重建需求：
 > - `work/stock-desk-已知限制與後續.md` 第 5 項（Kelly 準則輸入無來源）與其優先序建議（P1 第 5 順位）。
@@ -109,6 +110,24 @@ Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新
 
 此揭露義務對應已知限制文件第 10 項 suggested 事項之一（「回測報告缺一行常駐警語」，原列為 suggested、非 required）。**本功能上線後，該揭露義務對 Kelly 輸入這條路徑必須從 suggested 升級為 required**，因為此時回測數字不再只是參考資訊，而是直接驅動一條會攔下交易的風控上限。
 
+**FR-5 顯示欄位列舉（2026-08-19 依風控批審＋quant D-9 §3.3 第 3、4、7 點補齊）**
+
+當 Kelly 輸入來源為 `backtest` 或 `backtest_overridden` 時，除上述揭露句外，設定頁與個股頁該筆輸入的明細區塊須同時顯示以下欄位（確切顯示措辭、單位與排版由 risk-compliance-officer 定稿，本 PRD 僅列欄位與其資料真相來源，真相來源依 ADR-0006 D-2／D-6）：
+
+1. 策略名稱（`strategy_id`）。
+2. OOS 起訖日期（`oos_start_date` / `oos_end_date`）。
+3. 完整回合數（`oos_round_trips`，即 D-9 所稱 `n`）。
+4. **獲利回合數（`n_win` / `oos_win_trips`）**。
+5. **虧損回合數（`n_loss` / `oos_loss_trips`）**。
+6. **跨界排除回合數（`oos_excluded_boundary_trips`）**，即進出場橫跨 IS/OOS 邊界而被排除於 p、b 計算之外的回合計數；顯示措辭不得暗示「排除是保守做法」（D-9 §2.4／§5.1：實測樣本量極低，證據不支持任何方向性結論，是否措辭符合此限制由風控審定）。
+7. **期末未平倉回合數（`oos_open_trip_at_end`）**，即 OOS 區段結束時仍未平倉、未產生回合報酬率的回合計數。
+8. **樣本觀測數（`oos_observations`）**。
+9. **p 的 Wilson 95% 區間（`p_ci_low` ～ `p_ci_high`）**；當該區間所推導之 `ci_includes_no_edge` 為真（即對應的 f\* bootstrap 區間下界 ≤0）時，須連動顯示「此區間涵蓋『沒有優勢』的可能」語意的句子（確切措辭同樣待風控定稿）。
+10. 費率未查證揭露（當 `rates_verified=false` 時顯示）。
+11. 除權息還原狀態（`dividend_reason_code` / `adjust_dividends`）。
+
+第 4～9 項（`n_win`、`n_loss`、跨界排除回合數、期末未平倉回合數、`oos_observations`、p 的 Wilson 95% 區間）為本次新補入，對應風控批審「三、整批缺漏」第 2 點所指「D9 §3.3 第 3/4/7 點顯示欄位未被 FR-5 列舉涵蓋」；第 1～3、10、11 項為原列舉範圍，本次未變動。上述欄位缺一即視為 FR-5 未完成，不得以「揭露句本身已含摘要語意」替代逐項顯示。
+
 ### FR-6　手動輸入來源的揭露文案（風控前置審查項）
 
 當來源為 `manual` 時，須顯示等價於以下語意的句子（措辭同樣待風控審定）：
@@ -177,6 +196,14 @@ Kelly 輸入比照 `app/settings/net_worth.py` 已建立的先例分為三段新
 - Given 某標的 Kelly 輸入來源為 `manual`
   When 使用者查看該輸入
   Then 顯示「系統不會查核其真實性」揭露句，且同樣取得風控核准記錄。
+
+**FR-5：回測來源顯示欄位完整性（2026-08-19 依風控批審＋D9 §3.3 補齊）**
+- Given 某標的 Kelly 輸入來源為 `backtest` 或 `backtest_overridden`，且該筆輸入依 ADR-0006 D-2 已落地完整樣本結構（`oos_round_trips`＝12、`oos_win_trips`＝7、`oos_loss_trips`＝5、`oos_excluded_boundary_trips`＝1、`oos_open_trip_at_end`＝1、`oos_observations`＝20、`p_ci_low`＝0.31、`p_ci_high`＝0.68 皆非 `None`）
+  When 使用者於設定頁或個股頁查看該筆 Kelly 輸入的回測來源明細
+  Then 畫面須同時顯示策略名稱、OOS 起訖日期、完整回合數、獲利回合數（`n_win`＝7）、虧損回合數（`n_loss`＝5）、跨界排除回合數（＝1）、期末未平倉回合數（＝1）、樣本觀測數（`oos_observations`＝20）、p 的 Wilson 95% 區間（0.31～0.68）、費率未查證揭露（若 `rates_verified=false`）與除權息還原狀態，缺任一欄位即視為 FR-5 未完成、不得上線。
+- Given 上述同一筆輸入的 `ci_includes_no_edge` 為真（即對應 f\* bootstrap 區間下界 ≤0）
+  When 使用者查看 p 的 Wilson 95% 區間
+  Then 同畫面須連動顯示「此區間涵蓋『沒有優勢』的可能」語意的句子（確切措辭待 risk-compliance-officer 定稿），不得只顯示區間數字而省略此語意句。
 
 **FR-8：定性邊界（負向驗收）**
 - Given 任何與 Kelly 輸入相關的新增文案（設定頁、個股頁、API 回應）
