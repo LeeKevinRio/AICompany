@@ -11,12 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.kelly.models import (
-    KellyInputRecord,
-    anchor_moment,
-    freshness_of,
-    normalize_symbol,
-)
+from app.kelly.models import KellyInputRecord, ageing_of, normalize_symbol
 from app.kelly.store import (
     _COLUMNS,
     _OPTIONAL_COLUMN_TYPES,
@@ -223,7 +218,7 @@ def test_an_expired_row_is_kept_and_returned(store: KellyInputStore) -> None:
 
     assert stored is not None
     assert stored.updated_at == long_ago
-    assert freshness_of((_NOW - anchor_moment(stored)).days) == "expired"
+    assert ageing_of(stored, now=_NOW).freshness == "expired"
 
 
 def test_delete_removes_the_row_and_reports_whether_it_did(store: KellyInputStore) -> None:
@@ -255,8 +250,17 @@ def test_every_declared_column_exists_in_the_created_table(store: KellyInputStor
 
 
 def _seed_legacy_db(db_path: Path) -> None:
-    """A ``kelly_inputs`` written before the traceability columns existed."""
+    """A ``kelly_inputs`` written before the traceability columns existed.
+
+    In WAL mode because that is the state such a database is really in: every
+    build of this store has set ``journal_mode=WAL`` on construction, so a
+    legacy file was written by one that did. It also keeps the concurrency test
+    below measuring the migration rather than the journal-mode conversion,
+    which is a one-off that would race in every store in this backend and is
+    not what the ``BEGIN IMMEDIATE`` in this module is there to serialise.
+    """
     with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
             CREATE TABLE kelly_inputs (

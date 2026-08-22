@@ -26,9 +26,11 @@ Clearing an input the user no longer trusts must not also erase how many
 imports they tried before keeping one.
 
 Freshness is stated, not acted on: this router reports ``age_days`` and which
-band the input falls in (fresh / ageing / expired, D-4). Whether cap 5 still
-computes from an expired input is the risk layer's decision, taken from the
-same constants, so the two cannot drift into disagreeing about the same row.
+band the input falls in (fresh / ageing / expired, D-4), and an input whose age
+cannot be established at all is reported as expired with no age
+(:func:`app.kelly.models.ageing_of`). Whether cap 5 still computes from an
+expired input is the risk layer's decision, taken from the same helper, so the
+two cannot drift into disagreeing about the same row.
 """
 
 from __future__ import annotations
@@ -46,9 +48,7 @@ from app.kelly.models import (
     KellyInputRecord,
     KellyInputRow,
     KellyManualInput,
-    age_in_days,
-    anchor_moment,
-    freshness_of,
+    ageing_of,
     normalize_symbol,
 )
 from app.kelly.store import KellyInputStore
@@ -71,25 +71,29 @@ class KellyInputView(BaseModel):
     by source: a manual input ages from when it was typed, an imported one from
     the end of the segment it was measured over (D-4). A reader who could not
     see which of the two ``age_days`` counts from would be unable to check it.
+
+    Both are ``null`` together when the row has no anchor at all (an imported
+    pair with no OOS end date). ``freshness`` is then ``expired``: no stand-in
+    number is reported, because any number there would be read as evidence the
+    input is current, and there is none.
     """
 
     model_config = ConfigDict(frozen=True)
 
     item: KellyInputRow
-    anchored_at: str
-    age_days: int
+    anchored_at: str | None
+    age_days: int | None
     freshness: KellyFreshness
     as_of: str
 
 
 def _view(row: KellyInputRow) -> KellyInputView:
-    anchor = anchor_moment(row)
-    age = age_in_days(anchor)
+    ageing = ageing_of(row)
     return KellyInputView(
         item=row,
-        anchored_at=anchor.isoformat(),
-        age_days=age,
-        freshness=freshness_of(age),
+        anchored_at=None if ageing.anchored_at is None else ageing.anchored_at.isoformat(),
+        age_days=ageing.age_days,
+        freshness=ageing.freshness,
         as_of=now_iso(),
     )
 

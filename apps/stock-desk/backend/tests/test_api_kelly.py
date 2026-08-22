@@ -193,6 +193,36 @@ def test_an_imported_row_ages_from_the_end_of_its_out_of_sample_segment(
     assert body["freshness"] == "expired"
 
 
+def test_an_imported_row_with_no_segment_end_is_reported_expired_with_no_age(
+    api_harness: ApiHarness,
+) -> None:
+    """qa-reviewer 退修 2026-08-19: no anchor must not read as freshly written.
+
+    The row is stamped a moment ago, so a fallback to ``updated_at`` would have
+    answered "0 days, fresh" about an input whose age is unknown.
+    """
+    api_harness.kelly_inputs.upsert(
+        KellyInputRecord(
+            symbol="2330",
+            market="TW",
+            win_rate=0.6,
+            payoff_ratio=2.0,
+            source="backtest",
+            backtest_win_rate=0.6,
+            backtest_payoff_ratio=2.0,
+            strategy_id="ma_cross",
+            oos_end_date=None,
+        )
+    )
+
+    body = api_harness.client.get("/api/kelly-inputs/2330").json()
+
+    assert body["freshness"] == "expired"
+    assert body["age_days"] is None
+    assert body["anchored_at"] is None
+    assert body["item"]["win_rate"] == 0.6
+
+
 @pytest.mark.parametrize(
     ("age_days", "expected"),
     [

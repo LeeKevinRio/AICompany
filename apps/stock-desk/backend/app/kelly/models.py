@@ -26,6 +26,7 @@ re-run of a stale window present itself as fresh.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -339,20 +340,28 @@ class KellyAttemptRecord(BaseModel):
         return self
 
 
-def anchor_moment(row: KellyInputRow) -> datetime:
-    """The moment ``row`` ages from (D-4).
+def anchor_moment(row: KellyInputRow) -> datetime | None:
+    """The moment ``row`` ages from (D-4), or ``None`` when it has none.
 
     Manual inputs age from the write stamp -- the user's own action. Imported
     ones age from the end of the out-of-sample segment, because a re-run of an
     old window would otherwise reset the clock and present stale evidence as
-    current. An imported row with no OOS end date (an older write, or a source
-    that never recorded one) falls back to the write stamp, which is the
-    conservative choice: it can only make such a row look *older*, never
-    fresher.
+    current.
+
+    An imported row carrying no OOS end date therefore has **no anchor at
+    all**, and this returns ``None`` rather than substituting the write stamp
+    (qa-reviewer 退修 2026-08-19). The substitution looked conservative and was
+    the opposite: ``updated_at`` is always at or after the end of the segment
+    that was measured, so falling back to it moves the anchor *towards now* and
+    makes the row read younger -- precisely the "re-running an old window makes
+    it look fresh" failure D-4 exists to prevent. With no anchor there is no
+    age, and :func:`ageing_of` treats that as expired.
     """
-    if row.source != "manual" and row.oos_end_date is not None:
-        return datetime.fromisoformat(row.oos_end_date).replace(tzinfo=UTC)
-    return row.updated_at
+    if row.source == "manual":
+        return row.updated_at
+    if row.oos_end_date is None:
+        return None
+    return datetime.fromisoformat(row.oos_end_date).replace(tzinfo=UTC)
 
 
 def age_in_days(anchor: datetime, *, now: datetime | None = None) -> int:
@@ -367,9 +376,41 @@ def age_in_days(anchor: datetime, *, now: datetime | None = None) -> int:
 
 
 def freshness_of(age_days: int) -> KellyFreshness:
-    """Which freshness band ``age_days`` falls in."""
+    """Which freshness band a **known** age falls in."""
     if age_days >= KELLY_STALE_AFTER_DAYS:
         return "expired"
     if age_days >= KELLY_SOFT_NOTICE_DAYS:
         return "ageing"
     return "fresh"
+
+
+@dataclass(frozen=True)
+class KellyAgeing:
+    """How old one input is, and whether it is still usable.
+
+    ``anchored_at`` and ``age_days`` are ``None`` together, and only in the
+    unanchorable case (see :func:`anchor_moment`). They are withheld rather
+    than filled with a stand-in because every number that could be put there
+    would be read as evidence of freshness, and there is none.
+    """
+
+    anchored_at: datetime | None
+    age_days: int | None
+    freshness: KellyFreshness
+
+
+def ageing_of(row: KellyInputRow, *, now: datetime | None = None) -> KellyAgeing:
+    """The freshness verdict on one input, anchor rule included (D-4).
+
+    The single place the "no anchor means expired" rule is applied, so a second
+    caller cannot re-derive it and land on a friendlier answer. An input whose
+    age cannot be established is treated exactly like one that is provably too
+    old: cap 5 stops using it and the reader is told why. Fail-safe is the only
+    defensible direction here -- the alternative is a risk cap that keeps
+    computing from evidence of unknown age.
+    """
+    anchor = anchor_moment(row)
+    if anchor is None:
+        return KellyAgeing(anchored_at=None, age_days=None, freshness="expired")
+    age = age_in_days(anchor, now=now)
+    return KellyAgeing(anchored_at=anchor, age_days=age, freshness=freshness_of(age))
