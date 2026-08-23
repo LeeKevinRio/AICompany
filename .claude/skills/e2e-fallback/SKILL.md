@@ -69,6 +69,10 @@ NODE_PATH=$(npm root -g) node -e "console.log(require('playwright/package.json')
 case "$(NODE_PATH=$(npm root -g) node -p "require.resolve('playwright')")" in /opt/*) echo OK;; *) echo REJECT;; esac
 ```
 
+> 這個探測是**給人看的早期訊號**，不是控制本身——它跟 runner 實際載入模組是兩次獨立的解析事件。
+> 真正的控制是第 5 節 runner 開頭的 fail-closed 斷言（同一條前綴，不符就 `exit 1`），
+> 第 6 節的 `provenance` 查核則是事後稽核。三者是同一條防線的三個時間點，不可互相取代。
+
 ## 第 3 節・鐵則：僅允許執行既有套件，任何安裝一律禁止
 
 **採白名單（僅允許項），不採列舉禁止**——列舉法一定漏。
@@ -122,20 +126,40 @@ export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1          # defense-in-depth，非充�
 ```js
 // e2e-fallback runner: drive a preinstalled Chromium without touching the project.
 // Bare specifier on purpose: require() ignores NODE_PATH for absolute paths, so a
-// hardcoded default would silently pin one machine's layout. Resolution must come
-// from NODE_PATH (see the run command below) and pass the section 2 prefix check.
+// hardcoded default would silently pin one machine's layout.
 const PW = process.env.PW_MODULE || 'playwright';
-const { chromium } = require(PW);
-
 const EXEC = process.env.PW_CHROME; // absolute path found in section 2
 const OUT = process.env.OUT_DIR;    // scratchpad dir, never inside the repo
 const BASE = process.env.BASE_URL;
 
-// Instrument provenance: this resolution is a separate event from the section 2
-// probe, so the probe alone proves nothing about this run. Emit the paths actually
-// used and let qa-e2e verify the prefix (section 6). The thing under test must never
-// be able to supply the instrument that measures it.
-const provenance = { playwrightModule: require.resolve(PW), chromiumExecutable: EXEC };
+// --- Fail-closed instrument check. Runs before anything else, on purpose. ---
+// Node resolves node_modules by walking up from THE SCRIPT FILE'S OWN PATH, and that
+// lookup wins over NODE_PATH. So a scratchpad nested anywhere under the product repo
+// lets the code under test supply the instrument that measures it -- `cd` does not
+// help, because cwd is not what drives resolution. The measurement is only as
+// trustworthy as its instrument, so refuse to run rather than emit pretty evidence.
+const TRUSTED_PREFIX = process.env.TRUSTED_PREFIX || '/opt/'; // env fact, owned by devops-sre
+const assertTrusted = (label, p) => {
+  if (typeof p !== 'string' || !p.startsWith(TRUSTED_PREFIX)) {
+    console.error(`e2e-fallback: ABORT -- untrusted ${label}`);
+    console.error(`  resolved to: ${p}`);
+    console.error(`  expected under: ${TRUSTED_PREFIX}`);
+    console.error('  this run produces no valid evidence; escalate per section 7.');
+    process.exit(1);
+  }
+};
+// Resolve before require(): requiring a hostile module executes its top-level code,
+// so asserting afterwards would already be too late.
+const PW_RESOLVED = require.resolve(PW);
+assertTrusted('playwright module', PW_RESOLVED);
+assertTrusted('chromium executable', EXEC);
+
+const { chromium } = require(PW);
+
+// Instrument provenance, echoed into the evidence packet so the check is auditable
+// after the fact too (the section 2 probe is a separate resolution event and proves
+// nothing about this run). qa-e2e re-verifies these in section 6.
+const provenance = { playwrightModule: PW_RESOLVED, chromiumExecutable: EXEC, trustedPrefix: TRUSTED_PREFIX };
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXEC });
@@ -174,13 +198,21 @@ const provenance = { playwrightModule: require.resolve(PW), chromiumExecutable: 
 執行（環境變數由第 2 節的探測結果填入）：
 
 ```bash
-cd <scratchpad>   # 不要在受測專案目錄下跑：cwd 的 node_modules 會蓋過 NODE_PATH
 PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_URL=<應用網址> \
   NODE_PATH=$(npm root -g) node <scratchpad>/runner.js
 ```
 
+- **`cd` 不是防線，別靠它**（本 skill 曾一度這樣寫，是錯的）：
+  Node 找 `node_modules` 是從**腳本檔案自身的路徑**逐層往上找，這個查找**優先於 `NODE_PATH`**，
+  而**與 cwd 無關**。因此只要 runner 腳本檔**放在受測產品目錄樹底下的 scratchpad**
+  （例如 `<product-repo>/scratchpad/runner.js`），先 `cd` 進 scratchpad 再用絕對路徑執行，
+  載入到的**仍然是產品樹裡的那份影子套件**——實測重現過。
+  真正擋下它的是 **runner 開頭的 fail-closed 前綴斷言**（不符合就 `exit 1`，跑都跑不起來）；
+  第 2 節的探測與第 6 節的查核是它的前後兩道稽核，不是替代品。
+- 可行的話仍建議把 scratchpad 放在**受測專案樹之外**，但那是衛生習慣，**不是控制**。
 - `NODE_PATH` 只對 **bare specifier**（`require('playwright')`）生效；
-  一旦把 `PW_MODULE` 設成絕對路徑，`require()` 就直接吃該路徑、完全不查 `NODE_PATH`。
+  一旦把 `PW_MODULE` 設成絕對路徑，`require()` 就直接吃該路徑、完全不查 `NODE_PATH`
+  （斷言仍會擋下前綴不符的路徑）。
   要覆寫請確認該絕對路徑通得過第 2 節的前綴檢查。
 - 解析失敗（`MODULE_NOT_FOUND`）是**預期行為**，代表這台機器沒有可信的既有 playwright ——
   走第 7 節升級，**不要**用安裝來「修好它」。
@@ -205,16 +237,21 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
 
 - 產出物（腳本、截圖、原始輸出）一律放 scratchpad，**不進 repo、不進 commit**。
 - 代跑者交件必附：跑的指令、腳本原文、**未經改寫的 stdout**（含 `provenance` 欄位）、截圖路徑。
+  「未經改寫」的**唯一例外**是敏感欄位——依下方〈敏感資料處置〉遮罩後才算數，
+  遮罩過的 stdout 仍屬「未經改寫」。兩條規則請一起讀完再動手，別只照第一句做。
 - **儀器來源查核（qa-e2e 收到證據後的第一件事）**：確認 stdout 的
   `provenance.playwrightModule` 與 `provenance.chromiumExecutable` **兩個路徑都落在既定前綴內**
   （第 2 節）。任一落在前綴之外（尤其是指進受測專案的 `node_modules`）→
   **該批證據作廢**，不得據以判斷，走第 7 節。
-  理由：第 2 節的探測與 runner 的 `require()` 是**兩次獨立的解析事件**，探測綠燈不代表這次跑用的是同一份；
-  `cd <scratchpad>` 只是緩解——scratchpad 自己也可能長出 `node_modules`。
+  同時確認 stdout **不是**以 `e2e-fallback: ABORT` 開頭——那代表 runner 的斷言已擋下該次執行，
+  這種情況沒有證據可判，直接走第 7 節。
+  理由：第 2 節的探測與 runner 的 `require()` 是**兩次獨立的解析事件**，探測綠燈不代表這次跑用的是同一份。
   **量測儀器不得由受量測者提供**，這條由裁判查、不由代跑者自證。
-  本 skill 開發時實測重現過這個攻擊：cwd 放一份假 playwright（代理真模組但把量測值悄悄取整），
+  本 skill 開發時實測重現過這個攻擊：受測樹裡一份假 playwright（代理真模組但把量測值悄悄取整），
   第 2 節探測仍綠燈、`NODE_PATH` 也設對了，畫面文字與 console 全部正常，
   真實的 `15.9998px` 被改寫成好看的 `16px`——**唯一露出破綻的欄位就是 `provenance`**。
+  現在 runner 開頭的 fail-closed 斷言會讓這種跑法**直接 `exit 1`**；本查核是它的第二道稽核
+  （防止有人改了骨架、拿掉斷言、或用舊版腳本），不是唯一防線。
 - qa-e2e 依原輸出契約出 Verdict，其中：
   - 「流程逐步結果」每一步要寫**畫面實際字面**（逐字，不要改寫、不要意譯）。
   - 「視覺抽查」寫量測到的實際值 vs 規範值。
@@ -227,6 +264,9 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
 
 - **遮罩對象只有敏感數值**：真實金額、持倉數量、帳號 / 卡號、Email、電話、身分識別碼、
   API key 或 token 片段——一律寫成 `***` 或量級描述（例：「六位數新台幣金額」），不得原文抄錄。
+- **別漏掉 URL**：`failedRequests` 收的是完整網址，query string 常夾帶 `token` / `session_id` /
+  `api_key` / 簽章等參數。貼進報告前逐條掃過，把參數值遮掉（保留參數名與路徑，
+  它們才是判斷失敗原因需要的資訊）；`consoleErrors` 內含的網址與 stack trace 同樣要掃。
 - **文案字面仍必須逐字**：介面標籤、按鈕文字、狀態提示、錯誤訊息、免責聲明與風險揭露句，
   **一個字都不能改寫或省略**——這是 e2e 驗收的核心價值，遮罩規則對這些內容**不適用**。
   界線一句話記：**「這串字是設計出來給所有使用者看的」→ 逐字；「這串數字屬於某個特定人 / 帳戶」→ 遮罩。**
