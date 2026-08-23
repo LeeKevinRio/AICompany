@@ -233,11 +233,13 @@ export function KellyDisclosuresPanel({
 
           {/*
             條件 117: this entry control is gated on the label being present,
-            not just `original !== null` — the two are supposed to share
-            truthiness (`kellyDisclosuresPanel.test.ts` asserts that), but
-            gating render on the label itself means a backend that has not
-            yet landed `original_values_entry_label` degrades to "no entry
-            control" rather than an unlabelled/blank button.
+            not just `original !== null` — the two share truthiness by
+            construction on the backend (asserted there in
+            `test_the_original_values_controls_track_the_view_they_lead_to`,
+            and here over rendered output in `kellyDisclosuresPanel.test.ts`).
+            Gating on the label anyway is deliberate: any response that ever
+            broke that coupling degrades to "no entry control" rather than to
+            an unlabelled button.
           */}
           {original !== null && disclosures.original_values_entry_label !== null && (
             <button

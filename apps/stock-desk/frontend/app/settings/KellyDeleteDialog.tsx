@@ -28,10 +28,11 @@
  * button's own label, "刪除", is chrome (第十四輪 chrome 判準 "准"), the same
  * treatment "查詢"/"儲存" get elsewhere on this surface.
  *
- * **Field-name alignment note**: `disclosures.delete_notice`
- * (`KellyDeleteNoticeView`) is typed and consumed here ahead of the backend
- * constant landing — see that type's own doc comment in `app/lib/types.ts`
- * for what re-aligns once dev-lead pushes the real shape.
+ * **Field-name alignment**: `disclosures.delete_notice`
+ * (`KellyDeleteNoticeView`) was typed here before the backend half existed and
+ * is now aligned with it — the landed model (`dada382`, `app/api/kelly.py`)
+ * carries the same field name and the same four fields, checked field by
+ * field against `app/lib/types.ts`.
  */
 
 import { useState } from "react";

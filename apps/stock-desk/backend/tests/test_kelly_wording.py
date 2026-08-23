@@ -664,9 +664,12 @@ FIELD_11_CASES: tuple[tuple[str, str], ...] = (
 #: a glob would cover the Kelly input surface "when it exists", which was simply
 #: wrong: :func:`_kelly_surface_sources` filters by these prefixes, so a file not
 #: named below is a file the ``kelly``-scoped rejected-literal scan never opens.
-#: K4c-2 added four components and one helper, and they are listed (qa
-#: 2026-08-22, non-blocking 1). ``LimitsCheckList.tsx`` is here because cap 5's
-#: details land there.
+#: K4c-2 added five components and one helper, and they are listed (qa
+#: 2026-08-22 補審 non-blocking 1, and 收官合審 non-blocking 1, which caught
+#: ``KellyDeleteDialog.tsx`` missing from the first pass -- the chrome allowlist
+#: and the banned-literal scans already covered that file, but the
+#: ``kelly``-scoped rejected-literal scan did not open it at all).
+#: ``LimitsCheckList.tsx`` is here because cap 5's details land there.
 #:
 #: The rule for adding one: any file that renders, forwards or holds Kelly copy.
 #: ``test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to``
@@ -680,6 +683,7 @@ KELLY_SURFACE = (
     "frontend/app/settings/KellyInputsSection.tsx",
     "frontend/app/settings/KellyDisclosuresPanel.tsx",
     "frontend/app/settings/KellyImportDialog.tsx",
+    "frontend/app/settings/KellyDeleteDialog.tsx",
     "frontend/app/settings/KellyManualInputForm.tsx",
     "frontend/app/lib/kellyFieldError.ts",
 )
@@ -877,7 +881,7 @@ def test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to() -> No
     # static, so a renamed component would otherwise drop out of the scan in
     # silence and take its scope's guards with it.
     front_end = tuple(entry for entry in KELLY_SURFACE if entry.startswith("frontend/"))
-    assert len(front_end) == 6
+    assert len(front_end) == 7
     for entry in front_end:
         assert (_STOCK_DESK_ROOT / entry).is_file(), entry
         assert entry in surface, entry
@@ -1563,11 +1567,19 @@ def test_no_approved_kelly_sentence_has_been_copied_into_the_front_end() -> None
 #: fourteenth round cleared as 同構 with the existing register and carrying no
 #: methodological claim. A second occurrence, or one in any other file, is a red
 #: light -- that would be the detail table's label being rebuilt in the client.
-KELLY_LABEL_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
+KELLY_LABEL_ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     (
         "frontend/app/settings/KellyImportDialog.tsx",
         "策略",
+        "chrome",
         "第十四輪 chrome 放行：帶入設定表單的欄位標籤，非 FR-5 欄位 1 明細標籤",
+    ),
+    (
+        "frontend/app/settings/KellyDeleteDialog.tsx",
+        "確認刪除，移除目前資料",
+        "commentary",
+        "收官合審 non-blocking 1：doc comment 引用該鍵字面，說明 window.confirm "
+        "為何無法渲染核可按鈕（條件 112）；非渲染字面",
     ),
 )
 
@@ -1600,11 +1612,17 @@ def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> Non
 
     # The allowlist is checked in both directions: an entry that stopped being
     # true (the field renamed, the file gone) must not sit here granting an
-    # exemption nobody needs.
-    for name, literal, _ in KELLY_LABEL_ALLOWLIST:
+    # exemption nobody needs. Each entry also has to still be the *kind* of
+    # occurrence it was granted for -- a doc comment that turned into rendered
+    # copy would otherwise keep its exemption.
+    for name, literal, kind, _ in KELLY_LABEL_ALLOWLIST:
         text = (_STOCK_DESK_ROOT / name).read_text(encoding="utf-8")
         assert text.count(literal) == 1, (name, literal)
-        assert 'htmlFor="kelly-import-strategy"' in text
+        (line,) = [row.strip() for row in text.splitlines() if literal in row]
+        if kind == "commentary":
+            assert line.startswith(("*", "//", "/*")), (name, line)
+        else:
+            assert 'htmlFor="kelly-import-strategy"' in text
 
 
 def test_the_shared_forbidden_term_list_was_not_touched() -> None:

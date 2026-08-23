@@ -5,9 +5,16 @@
  * assertions) only globs `*.py`, so a frontend `.tsx` hard-coding a second
  * copy of that substring outside the approved dialog title would ship
  * unscanned by that suite. This file is the frontend-side half for that one
- * gap, plus 「最近一次」 (which the same suite's `REJECTED_LITERALS` table only
- * scopes to `KELLY_SURFACE`, a fixed path list this lane's new files are not
- * yet on).
+ * gap, plus 「最近一次」.
+ *
+ * **Standing correction (收官合審 non-blocking 4).** That second literal is
+ * scoped to `KELLY_SURFACE` on the backend side, and when this file was
+ * written that fixed path list did not yet name this lane's components — it
+ * does now: all five Kelly components and `lib/kellyFieldError.ts` are on it
+ * (`KellyDeleteDialog.tsx` joined last, 收官合審 non-blocking 1). So the
+ * 「最近一次」 half here is defence in depth rather than the only cover, and it
+ * stays for that reason: two scans with different failure modes (a path list
+ * someone forgets to extend, versus a directory walk) beat one.
  *
  * **The other two literals qa named are deliberately not repeated here.**
  * `tests/test_kelly_wording.py`'s own `REJECTED_LITERALS` table already scans
@@ -56,8 +63,8 @@ function listProductionSourceFiles(dir: string): string[] {
 }
 
 //: 「帶入回測結果」(條件 104 的核可出處之外即紅燈) 與 「最近一次」(條件 77/89 全檔
-//: 禁字) — the two literals `REJECTED_LITERALS`'s `scope: "kelly"`/allowlist
-//: forms do not reach for this lane's new files. Neither may ever appear as a
+//: 禁字) — the first is outside the backend scan's reach (it globs `*.py`), the
+//: second is inside it and re-checked here on purpose. Neither may ever appear as a
 //: hard-coded string in this app's production source: every sentence
 //: touching either concept is backend-sourced (`KellyOverwriteNoticeView` /
 //: `KellyDisclosuresView`), never composed here.
