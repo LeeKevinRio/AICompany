@@ -20,6 +20,9 @@ description: preview MCP 不可用時的 E2E 實機驗收降級路徑——改�
 2. **有** → 走原本的 preview 流程，本 skill 用不到。
 3. **沒有** → 一句話宣告降級（例：「本會話未掛載 Claude_Preview MCP，改走 `e2e-fallback`」），
    接第 1 節，**不要**直接回 `BLOCKING_ISSUES=true` 收工。
+   **半殘也算不可用**：`preview_start` 在清單中、但實際呼叫持續失敗或 timeout
+   （非操作本身寫錯，而是工具起不來）→ 視同不可用，同樣走降級，並在報告註明實際現象與錯誤訊息。
+   不要卡在「工具好像有、又不能用」的中間地帶反覆重試。
 4. 只有在第 1 節的代跑也不可行時（見第 7 節），才升級 CEO 由他決定擋件或改期。
 
 ## 第 1 節・角色分工：誰跑、誰判
@@ -118,7 +121,10 @@ export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1          # defense-in-depth，非充�
 
 ```js
 // e2e-fallback runner: drive a preinstalled Chromium without touching the project.
-const PW = process.env.PW_MODULE || '/opt/node22/lib/node_modules/playwright';
+// Bare specifier on purpose: require() ignores NODE_PATH for absolute paths, so a
+// hardcoded default would silently pin one machine's layout. Resolution must come
+// from NODE_PATH (see the run command below) and pass the section 2 prefix check.
+const PW = process.env.PW_MODULE || 'playwright';
 const { chromium } = require(PW);
 
 const EXEC = process.env.PW_CHROME; // absolute path found in section 2
@@ -162,19 +168,30 @@ const BASE = process.env.BASE_URL;
 執行（環境變數由第 2 節的探測結果填入）：
 
 ```bash
+cd <scratchpad>   # 不要在受測專案目錄下跑：cwd 的 node_modules 會蓋過 NODE_PATH
 PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_URL=<應用網址> \
   NODE_PATH=$(npm root -g) node <scratchpad>/runner.js
 ```
+
+- `NODE_PATH` 只對 **bare specifier**（`require('playwright')`）生效；
+  一旦把 `PW_MODULE` 設成絕對路徑，`require()` 就直接吃該路徑、完全不查 `NODE_PATH`。
+  要覆寫請確認該絕對路徑通得過第 2 節的前綴檢查。
+- 解析失敗（`MODULE_NOT_FOUND`）是**預期行為**，代表這台機器沒有可信的既有 playwright ——
+  走第 7 節升級，**不要**用安裝來「修好它」。
 
 對應關係（原 preview 工具 → 降級做法）：
 
 | preview 工具 | 降級做法 |
 | --- | --- |
-| `preview_start` / `preview_stop` | 第 4 節的專案既有啟動流程 + `browser.launch()` |
+| `preview_start` / `preview_stop` | 第 4 節的專案既有啟動流程 + `browser.launch()` / `browser.close()` |
+| `preview_list` | N/A——降級是單一瀏覽器 session，沒有多實例可列 |
 | `preview_click` / `preview_fill` | `page.click()` / `page.fill()` |
 | `preview_screenshot` | `page.screenshot()`（桌面 + 375px 各一張） |
-| `preview_inspect` | `getComputedStyle()` 取實際值 |
+| `preview_snapshot` | `page.locator(...).ariaSnapshot()` |
+| `preview_eval` | `page.evaluate()`——查非 CSS 的頁面狀態（DOM 屬性、`localStorage`、全域變數）時最好用，別忘了它 |
+| `preview_inspect` | `page.locator(...).evaluate()` 內 `getComputedStyle()` 取實際值 |
 | `preview_console_logs` | `page.on('console' / 'pageerror')` |
+| `preview_logs` | 若指的是瀏覽器外部的 log（dev server / 後端輸出）則**無對應**，需視專案啟動方式自行取得，取不到就在報告如實標示 |
 | `preview_network` | `page.on('requestfailed' / 'response')` 收 4xx / 5xx |
 | `preview_resize` | `page.setViewportSize()` |
 
@@ -198,6 +215,9 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
   **一個字都不能改寫或省略**——這是 e2e 驗收的核心價值，遮罩規則對這些內容**不適用**。
   界線一句話記：**「這串字是設計出來給所有使用者看的」→ 逐字；「這串數字屬於某個特定人 / 帳戶」→ 遮罩。**
 - **合成示範資料不必遮罩**，但要在報告標示它是合成資料（見第 4 節第 4 點）。
+- **逐字取回亂碼時照實回報，不得自行「還原」**：亂碼通常代表回應沒宣告 `charset=utf-8`，
+  那就是真實使用者也會看到的缺陷（本 skill 開發時實測重現過），屬 finding；
+  猜測原文寫進報告等於用推測代替觀察，反而蓋掉 bug。
 - 遮罩若讓某個驗收點無法判斷（例如就是要驗數字格式），在報告寫明
   「因含敏感數值改以遮罩呈現，該項僅驗格式不驗數值」，不得為了方便就把原值貼上去。
 - **截圖只能待在 scratchpad**：不得複製、貼上或附加到任何其他位置——
@@ -218,7 +238,12 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
 
 ## 附錄・已驗證環境（2026-08-23，遠端容器）
 
-當時實測可用的具體值，供快速比對；**新環境仍以第 2 節探測結果為準**：
+> **歸屬**：以下版本號與路徑是**環境事實，維護責任在 devops-sre**——
+> 於 2026-08-23 在本環境實測取得，架構面不背書任何特定版本；
+> 環境變更（node / playwright / 瀏覽器版本異動）時由 devops-sre 更新本附錄。
+> 本 skill 的流程本身不依賴這些值，**新環境一律以第 2 節探測結果為準**。
+
+當時實測可用的具體值，供快速比對：
 
 - `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`，內含 `chromium-1194`、`chromium_headless_shell-1194`。
 - 瀏覽器執行檔：`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`。

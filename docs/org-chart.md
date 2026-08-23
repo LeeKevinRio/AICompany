@@ -68,7 +68,7 @@ flowchart TD
 | `data-engineer` | 資料 | 資料源接入、schema、ETL／排程、資料品質與新鮮度 | 實作 |
 | `quant-researcher` | 量化研究 | 特徵工程、統計／ML 模型、回測方法論、防 look-ahead bias | 實作 |
 | `qa-reviewer` | 品管審查 | code review（含 Codex 跨廠商第二意見），下 PASS／NEEDS_CHANGES | 唯讀 |
-| `qa-automation` | 品管審查 | 單元／整合／E2E 自動化測試、覆蓋率門檻、golden test | 實作（限測試） |
+| `qa-automation` | 品管審查 | 單元／整合／E2E 自動化測試、覆蓋率門檻、golden test；preview 不可用時依 `e2e-fallback` 代跑實機操作（只交證據，不下 Verdict） | 實作（限測試） |
 | `qa-e2e` | 品管審查 | 實機驗收：跑 app、點流程、截圖回報；preview 不可用時走 `e2e-fallback` 由 qa-automation 代跑 | 唯讀 + preview |
 | `risk-compliance-officer` | 風控法遵 | 風險上限、免責聲明、建議類文案最終把關；有否決權 | 唯讀 |
 | `security-engineer` | 資安 | secrets 管理、依賴弱點掃描、輸入驗證、OWASP 檢查 | 實作 |

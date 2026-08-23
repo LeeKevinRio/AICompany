@@ -7,7 +7,8 @@ Checks (see CLAUDE.md / docs/org-chart.md):
 - tools are all in the whitelist
 - description starts with a trigger phrase and has a reasonable length
 - body contains all required sections
-- read-only roles do not have Write/Edit/unscoped Bash
+- read-only roles do not have Write/Edit/unscoped Bash, and their scoped Bash
+  patterns are limited to the explicit READONLY_ALLOWED_BASH list
 - docs/org-chart.md department table matches agent files exactly
 
 Stdlib only (no PyYAML) so it runs anywhere. Exits non-zero on any error,
@@ -50,6 +51,18 @@ MODEL_WHITELIST = {"opus", "sonnet", "haiku", "inherit"}
 # Roles whose judgement must stay independent: no write access, no unscoped Bash.
 READONLY_AGENTS = {"qa-reviewer", "qa-e2e", "tech-architect", "risk-compliance-officer"}
 READONLY_FORBIDDEN = {"Write", "Edit", "Bash"}
+
+# The only scoped Bash patterns a read-only judge may hold. Adding an entry here is an
+# explicit privilege decision, not a convenience: it must stay non-mutating and
+# enumerable (a fixed, inspectable command surface).
+#
+# Interpreters and shells never qualify, however narrow the pattern looks:
+# `Bash(node:*)` allows `node -e "require('fs').writeFileSync(...)"`, and
+# `Bash(npx playwright:*)` executes the project's own config / globalSetup — both are
+# arbitrary code execution, i.e. technically identical to unscoped Bash. The invariant
+# being protected is "a judge must not be able to modify what it judges", not "a judge
+# must not run anything".
+READONLY_ALLOWED_BASH = {"Bash(codex:*)", "Bash(git diff:*)"}
 
 TRIGGER_PHRASES = ("MUST BE USED", "Use PROACTIVELY")
 DESCRIPTION_MIN, DESCRIPTION_MAX = 20, 400
@@ -145,6 +158,16 @@ def check_agent(path: Path, seen_names: dict[str, Path]) -> None:
             forbidden = READONLY_FORBIDDEN & set(tools)
             if forbidden:
                 err(path, line, f"唯讀角色不得擁有 {'、'.join(sorted(forbidden))}")
+            for tool in tools:
+                if tool in READONLY_FORBIDDEN or not tool.startswith("Bash"):
+                    continue
+                if tool not in READONLY_ALLOWED_BASH:
+                    err(
+                        path,
+                        line,
+                        f"唯讀角色的 scoped Bash 必須列在 READONLY_ALLOWED_BASH："
+                        f"{tool}（判準：非變更性且可窮舉；直譯器／shell 一律不合格）",
+                    )
 
     model = fields.get("model", "")
     if model and model not in MODEL_WHITELIST:
