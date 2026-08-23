@@ -245,6 +245,11 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
   **該批證據作廢**，不得據以判斷，走第 7 節。
   同時確認 stdout **不是**以 `e2e-fallback: ABORT` 開頭——那代表 runner 的斷言已擋下該次執行，
   這種情況沒有證據可判，直接走第 7 節。
+  **比對基準一律取自第 2 節的既定前綴（devops-sre 的環境定義），
+  不得以 stdout 裡的 `provenance.trustedPrefix` 為準**——拿封包自己宣告的基準去量封包自己的路徑，
+  必然自洽通過（極端情況 `TRUSTED_PREFIX=/` 會一路綠燈），查核形同虛設。
+  若 `provenance.trustedPrefix` 與既定前綴不一致，代表該次執行**放寬了信任邊界**，
+  **證據作廢**，走第 7 節。
   理由：第 2 節的探測與 runner 的 `require()` 是**兩次獨立的解析事件**，探測綠燈不代表這次跑用的是同一份。
   **量測儀器不得由受量測者提供**，這條由裁判查、不由代跑者自證。
   本 skill 開發時實測重現過這個攻擊：受測樹裡一份假 playwright（代理真模組但把量測值悄悄取整），
