@@ -56,20 +56,44 @@ NODE_PATH=$(npm root -g) node -e "console.log(require('playwright/package.json')
 
 - 探測全部落空（找不到瀏覽器或找不到 playwright）→ 直接跳第 7 節，不要嘗試安裝。
 - 專案自己已經有 `@playwright/test` 依賴時，優先用專案的，仍**沿用預裝瀏覽器**（見第 3 節）。
+- **供應鏈信任邊界（硬性）**：探測到的瀏覽器執行檔與 playwright 模組路徑，
+  都必須落在環境既定的預裝前綴下（本環境為 `/opt/`，實際前綴以 devops-sre 的環境定義為準）。
+  解析結果落在該前綴之外（例如指到某個使用者目錄、專案內 `node_modules`、暫存目錄）
+  **一律視同探測失敗**，走第 7 節升級，不得臨場判斷「應該也可以」。
 
-## 第 3 節・鐵則：不得下載、不得動專案依賴
+```bash
+# 邊界檢查：兩個路徑都要以既定前綴開頭，否則視同探測失敗
+case "$(NODE_PATH=$(npm root -g) node -p "require.resolve('playwright')")" in /opt/*) echo OK;; *) echo REJECT;; esac
+```
 
-- **絕不執行 `playwright install` / `playwright install-deps`**：
-  離線或受限網路環境會卡住或失敗，而且環境已預裝瀏覽器，裝了只是重複下載。
-- **絕不為了驗收在受測專案安裝新依賴**（不改 `package.json` / lockfile / `pyproject.toml`）。
-  驗收不得改變被驗收的那份工作區。
-- 以下兩個環境變數要在跑腳本時帶上，避免 playwright 自己去抓瀏覽器：
+## 第 3 節・鐵則：僅允許執行既有套件，任何安裝一律禁止
+
+**採白名單（僅允許項），不採列舉禁止**——列舉法一定漏。
+
+**僅允許**：
+- 用 `node <scratchpad 腳本>` 執行**環境既有**的全域 playwright（路徑須通過第 2 節的邊界檢查）。
+- 唯讀的探測指令（`ls`、`npm root -g`、`node -p require.resolve(...)`、`curl` 對本機受測服務）。
+
+**其餘一律禁止**，包含但不限於任何形式的套件安裝／更新／下載：
+`playwright install`、`playwright install-deps`、`npx <未安裝的套件>`、
+`npm install` / `npm i -g` / `pnpm add` / `yarn add`、`pip install` / `uv add`、`apt-get install`、
+以及任何直接抓檔的 `curl -O` / `wget`。
+**不得為了驗收改動受測專案的依賴宣告**（`package.json` / lockfile / `pyproject.toml` 等）——
+驗收不得改變被驗收的那份工作區。
+
+> 出現「必須裝東西才跑得起來」的需求時，這不是可以自己解的障礙：
+> 一律視同第 7 節的「降級不可行」，回報並升級 CEO 決定，由具權責者處理環境。
+
+環境變數與啟動方式：
 
 ```bash
 export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers   # 換成第 2 節探測到的實際路徑
-export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1          # defense-in-depth，非充分條件（見下方註）
 ```
 
+- 註：本流程是直接 `require()` 全域套件並指定 `executablePath`，
+  **本來就不會走到自動下載路徑**；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 只是多一層保險，
+  不要誤以為有設它就等於「安全、可以隨便下指令」——真正的控制是本節的白名單。
 - 瀏覽器一律用 `executablePath` 指到探測結果的絕對路徑，不靠 playwright 自動解析版本。
 
 ## 第 4 節・啟動受測應用
@@ -77,10 +101,14 @@ export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 1. **啟動方式依專案既有流程**：優先用產品線既有的啟動 skill（例如產品線的 `local-run`）、
    `.claude/launch.json`、或 repo 內既有的 dev 腳本；本文件不定義任何產品的指令。
 2. 起完後先用 `curl -sS -o /dev/null -w '%{http_code}' <url>` 確認前後端都活著，再開瀏覽器。
-3. **資料**：若環境離線或外部資料源不可用，且專案**已有**離線示範資料的種子流程，就用它，
+3. **環境限制（硬性）**：本流程**只能對接沙盒 / demo / 本機非正式環境**。
+   不得使用真實金鑰或正式環境憑證，不得把受測應用指向正式的帳務、持倉、金流或任何含真人資料的資料源。
+   受測應用預設會連正式資料源且**無法切換**時，先回報這個事實，
+   由 CEO 決定是否照第 6 節的遮罩規則有限度進行，或直接走第 7 節。
+4. **資料**：若環境離線或外部資料源不可用，且專案**已有**離線示範資料的種子流程，就用它，
    並在報告中明確標示「本次畫面資料為合成示範資料」；
    若專案沒有這種流程，**不得為了驗收自行捏造資料塞進系統**，改在報告標示「無資料，該項無法驗收」。
-4. 啟動失敗（port 佔用、依賴缺失）先如實記錄原始錯誤訊息，再判斷是環境問題還是產品問題——
+5. 啟動失敗（port 佔用、依賴缺失）先如實記錄原始錯誤訊息，再判斷是環境問題還是產品問題——
    產品問題屬 finding，環境問題屬降級障礙。
 
 ## 第 5 節・代跑腳本骨架
@@ -111,7 +139,8 @@ const BASE = process.env.BASE_URL;
 
   await page.goto(BASE, { waitUntil: 'networkidle' });
 
-  // 1. Verbatim on-screen text: quote this literally in the report.
+  // 1. Verbatim on-screen text: quote UI copy literally in the report, but mask
+  //    account-specific values (amounts, holdings, identifiers) per section 6.
   const heading = await page.locator('h1').first().textContent();
 
   // 2. Measured CSS values, the replacement for preview_inspect.
@@ -158,12 +187,33 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
   - 「視覺抽查」寫量測到的實際值 vs 規範值。
   - 任何**沒能實機看到**的項目寫「無法驗收」＋原因，不得用 code 推測補位。
 
+### 敏感資料處置（與逐字要求的界線）
+
+證據會沿著「螢幕 → 逐字證據 → Verdict 報告」往下傳，而 Verdict 依章程會落到 `work/` 或任務單
+（**會被 commit、會被長期保留**）。因此「檔案不進 commit」不夠，**內容轉述**也要管：
+
+- **遮罩對象只有敏感數值**：真實金額、持倉數量、帳號 / 卡號、Email、電話、身分識別碼、
+  API key 或 token 片段——一律寫成 `***` 或量級描述（例：「六位數新台幣金額」），不得原文抄錄。
+- **文案字面仍必須逐字**：介面標籤、按鈕文字、狀態提示、錯誤訊息、免責聲明與風險揭露句，
+  **一個字都不能改寫或省略**——這是 e2e 驗收的核心價值，遮罩規則對這些內容**不適用**。
+  界線一句話記：**「這串字是設計出來給所有使用者看的」→ 逐字；「這串數字屬於某個特定人 / 帳戶」→ 遮罩。**
+- **合成示範資料不必遮罩**，但要在報告標示它是合成資料（見第 4 節第 4 點）。
+- 遮罩若讓某個驗收點無法判斷（例如就是要驗數字格式），在報告寫明
+  「因含敏感數值改以遮罩呈現，該項僅驗格式不驗數值」，不得為了方便就把原值貼上去。
+- **截圖只能待在 scratchpad**：不得複製、貼上或附加到任何其他位置——
+  包含 repo 工作區、`work/` 任務單附件、PR / issue comment、外部聊天或雲端空間。
+  需要讓人看畫面時，給 scratchpad 路徑，不要搬檔案。
+- **截圖視同一次性資料**：只是本次驗收的臨時證據，不得長期保留；
+  驗收結束（Verdict 交付、爭議釐清完畢）即可刪除，不做歸檔。
+
 ## 第 7 節・降級也不可行時
 
 以下情況才回 `BLOCKING_ISSUES=true` 並升級 CEO，且必須寫清楚卡在哪一步：
 
-- 第 2 節探測不到瀏覽器或 playwright（且不得安裝）。
+- 第 2 節探測不到瀏覽器或 playwright，或解析到的路徑落在既定前綴之外（且不得安裝）。
+- 要跑起來就得安裝／更新／下載任何套件（第 3 節白名單以外的指令）——這一律不是自己解的障礙。
 - 應用在本環境起不來，且原因為環境限制而非產品缺陷。
+- 受測應用只能連正式／含真人資料的資料源且無法切換到沙盒（第 4 節第 3 點），而 CEO 未裁示可有限度進行。
 - 驗收目標本身需要真人感官判斷（動效手感、外部帳號登入）而工具無法覆蓋。
 
 ## 附錄・已驗證環境（2026-08-23，遠端容器）
