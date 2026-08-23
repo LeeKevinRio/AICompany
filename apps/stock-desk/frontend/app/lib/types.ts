@@ -769,6 +769,15 @@ export interface PerformanceMetrics {
   num_trades: number;
   num_closing_trades: number;
   turnover: number | null;
+  /**
+   * C8-6: the denominator `win_rate` was measured over, read off the same
+   * backend `RoundTripStats`. `null` = no round-trip attribution exists for
+   * this column at all (the Buy & Hold peer trades nothing); `0` = attribution
+   * ran and found no complete round trip, which is what explains a `win_rate`
+   * of `null` sitting beside a non-zero settlement count. Rendered as its own
+   * row and never recomputed or inferred from the other counts on this side.
+   */
+  num_round_trips: number | null;
 }
 
 /** Backend `SegmentReport` (app/backtest/report.py). */
@@ -854,6 +863,20 @@ export interface DividendAdjustment {
   last_synced_at: string | null;
 }
 
+/**
+ * Backend `BacktestMetricLabels` (app/api/backtest.py).
+ *
+ * C8-3 路徑 (a): the two risk-approved metric labels on the report table are
+ * backend copy with a single definition site (`app/api/kelly_wording.py`). This
+ * app renders whatever these fields carry and holds no literal of its own for
+ * them — the reason `BacktestReportView.tsx` has no Traditional-Chinese
+ * win-rate label in its source at all.
+ */
+export interface BacktestMetricLabels {
+  win_rate: string;
+  round_trips: string;
+}
+
 /** Backend `BacktestResponse` (app/api/backtest.py, verified). */
 export interface BacktestResponse {
   symbol: string;
@@ -869,6 +892,7 @@ export interface BacktestResponse {
   notes: string[];
   data: DataMeta;
   as_of: string;
+  metric_labels: BacktestMetricLabels;
 }
 
 /* --- Settings (backend/app/api/settings.py + settings/models.py) --------- */

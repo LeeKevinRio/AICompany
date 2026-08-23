@@ -1,4 +1,9 @@
-import type { BacktestResponse, PerformanceMetrics, SegmentReport } from "../lib/types";
+import type {
+  BacktestMetricLabels,
+  BacktestResponse,
+  PerformanceMetrics,
+  SegmentReport,
+} from "../lib/types";
 import { formatDateTime, formatMoneyNumber, formatNumber, formatPercent, marketCurrency } from "../lib/format";
 import type { Market } from "../lib/types";
 
@@ -7,56 +12,101 @@ interface MetricRow {
   render: (m: PerformanceMetrics, currency: string) => string;
 }
 
-const METRIC_ROWS: MetricRow[] = [
-  { label: "期間", render: (m) => `${m.start_date ?? "—"} ~ ${m.end_date ?? "—"}` },
-  { label: "觀測筆數", render: (m) => m.observations.toLocaleString("zh-Hant-TW") },
-  { label: "起始權益", render: (m, c) => formatMoneyNumber(m.start_equity, c, 0) },
-  { label: "結束權益", render: (m, c) => formatMoneyNumber(m.end_equity, c, 0) },
-  { label: "總報酬率", render: (m) => formatPercent(m.total_return) },
-  { label: "CAGR", render: (m) => formatPercent(m.cagr) },
-  { label: "年化波動度", render: (m) => formatPercent(m.annualized_volatility) },
-  { label: "Sharpe", render: (m) => formatNumber(m.sharpe) },
-  { label: "Sortino", render: (m) => formatNumber(m.sortino) },
-  {
-    label: "最大回撤",
-    render: (m) =>
-      `${formatPercent(m.max_drawdown)}${
-        m.max_drawdown_peak_date ? `（${m.max_drawdown_peak_date} → ${m.max_drawdown_trough_date}）` : ""
-      }`,
-  },
-  {
-    // 風控第六輪批審(2026-08-22, 任務 6, `work/reviews/2026-08-19-C5-Kelly-文案批審.md`
-    // 落地條件 49): this row is the fill-level win rate
-    // (`app/backtest/report.py`), a different denominator from the Kelly-side
-    // round-trip win rate C5's (e)/(e-manual) describe — 分歧① 微批二 accepted
-    // the qualified label immediately below as the one pre-existing exception
-    // to the frontend ban on the bare two-character term this qualifies, on
-    // condition it ships in the same commit as Kelly's own equivalently
-    // qualified label (`app/api/kelly_wording.py`, 「依完整回合計」). Do not
-    // shorten this label, do not drop its qualifier, and do not add a second,
-    // unqualified row naming the same concept anywhere in this file.
-    // `componentWordingScan.test.ts` pins this exact source line via its own
-    // allowlist (masked before the banned-term scan runs); the *count*
-    // guarantee — the banned bare term appears exactly once across this
-    // file, inside this qualified label and nowhere else — is
-    // `kellyWinRateQualifierPairing.test.ts`'s job, not this file's own scan.
-    label: "勝率（依結算筆數計）",
-    render: (m) => formatPercent(m.win_rate),
-  },
-  { label: "獲利因子", render: (m) => formatNumber(m.profit_factor) },
-  { label: "交易次數", render: (m) => `${m.num_trades}（結算 ${m.num_closing_trades}）` },
-  { label: "週轉率", render: (m) => formatPercent(m.turnover) },
-];
+/** A count column: the same rendering the 觀測筆數 row has always used. */
+function formatCount(value: number | null): string {
+  return value === null ? "—" : value.toLocaleString("zh-Hant-TW");
+}
+
+/**
+ * The table's rows, built per render because two of the labels are **backend
+ * copy** (`report.metric_labels`), not literals of this file.
+ *
+ * 風控 2026-08-23 C8 批審 (`work/reviews/2026-08-23-C8-顯示語意-風控批審.md`),
+ * 落地條件 C8-1/C8-3(a)/C8-6:
+ *
+ * - The win-rate row's label is `labels.win_rate`. Since the C8 fix
+ *   (`app/backtest/report.py`) this row is the **round-trip** win rate, read
+ *   from the same `RoundTripStats` Kelly's own round-trip win rate is read
+ *   from — one statistic, so one label, and its single definition site is
+ *   `app/api/kelly_wording.py`'s `KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER`. The
+ *   previous label described a fill-level denominator that the C8 fix removed;
+ *   keeping it would have made this row a false statement, and re-typing the
+ *   new one here would have put a second copy of risk-approved copy in a file
+ *   that can drift from the constant without any test going red (the hole
+ *   C8-3 closes). This file therefore holds **no** Traditional-Chinese label
+ *   for it at all — `componentWordingScan.test.ts` no longer needs (and no
+ *   longer has) a context allowlist entry for this file, and
+ *   `kellyWinRateQualifierPairing.test.ts` asserts no hard-coded win-rate row
+ *   label can come back.
+ *
+ *   狀態: the 2026-08-23 ruling is 條件 49
+ *   (`work/reviews/2026-08-19-C5-Kelly-文案批審.md` 第六輪 任務 6) 的**重送**.
+ *   條件 49 required two qualified labels — one per denominator — so that no
+ *   screen showed a qualified number beside a bare one. The C8 backend fix left
+ *   only one denominator, so the obligation is now discharged by there being a
+ *   single label with a single definition site, and the old comment on these
+ *   lines (which described this row as a fill-level rate with a different
+ *   denominator) was retired with it. 條件 95's pairing test is rewritten to
+ *   match, not deleted.
+ * - The 完整回合數 row (label `labels.round_trips`) is C8-6: it states the
+ *   denominator the win rate was measured over. Required because the two
+ *   counts already on this table (交易次數 / 結算) run 7-15x larger than it, so
+ *   a reader judging sample size from what is visible would overrate the win
+ *   rate's reliability, and because it is what distinguishes "no completed
+ *   round trip in this window" (`0`) from "this column has no round trips at
+ *   all" (`—`, the Buy & Hold peer) when the win rate itself renders 「—」.
+ * - C8-8 (顯著度地板): it is an ordinary entry of this same list, immediately
+ *   below the win-rate row — same table, same `text-sm`, same `<tr>` treatment.
+ *   Do not move it into a tooltip, a collapsible or the `text-xs` footnote
+ *   layer, and do not drop it (L-C8-3 turns required if it is removed or
+ *   demoted). Both rows are inside `SegmentTable`, which renders *below* the
+ *   standing disclaimer and the 產出時間 stamp, so adding one row cannot push
+ *   either of those down or demote them.
+ *
+ * L-C8-1 (2026-08-23 列管): `excluded_boundary_trips` / `open_trip_at_end`
+ * (`app/backtest/episodes.py`) are deliberately **not** rows here — the ruling
+ * left the boundary-exclusion disclosure unrequired for today, and putting it
+ * on this screen without a fresh submission is exactly what turns L-C8-1
+ * required. `round_trip_payoff_ratio` is likewise not rendered here (L-C8-1(c)).
+ */
+export function metricRows(labels: BacktestMetricLabels): MetricRow[] {
+  return [
+    { label: "期間", render: (m) => `${m.start_date ?? "—"} ~ ${m.end_date ?? "—"}` },
+    { label: "觀測筆數", render: (m) => m.observations.toLocaleString("zh-Hant-TW") },
+    { label: "起始權益", render: (m, c) => formatMoneyNumber(m.start_equity, c, 0) },
+    { label: "結束權益", render: (m, c) => formatMoneyNumber(m.end_equity, c, 0) },
+    { label: "總報酬率", render: (m) => formatPercent(m.total_return) },
+    { label: "CAGR", render: (m) => formatPercent(m.cagr) },
+    { label: "年化波動度", render: (m) => formatPercent(m.annualized_volatility) },
+    { label: "Sharpe", render: (m) => formatNumber(m.sharpe) },
+    { label: "Sortino", render: (m) => formatNumber(m.sortino) },
+    {
+      label: "最大回撤",
+      render: (m) =>
+        `${formatPercent(m.max_drawdown)}${
+          m.max_drawdown_peak_date ? `（${m.max_drawdown_peak_date} → ${m.max_drawdown_trough_date}）` : ""
+        }`,
+    },
+    { label: labels.win_rate, render: (m) => formatPercent(m.win_rate) },
+    { label: labels.round_trips, render: (m) => formatCount(m.num_round_trips) },
+    { label: "獲利因子", render: (m) => formatNumber(m.profit_factor) },
+    { label: "交易次數", render: (m) => `${m.num_trades}（結算 ${m.num_closing_trades}）` },
+    { label: "週轉率", render: (m) => formatPercent(m.turnover) },
+  ];
+}
 
 function SegmentTable({
   title,
   segment,
   currency,
+  labels,
 }: {
   title: string;
   segment: SegmentReport;
   currency: string;
+  labels: BacktestMetricLabels;
 }) {
+  const rows = metricRows(labels);
   return (
     <div className="mt-4">
       <h3 className="text-sm font-semibold text-neutral-200">{title}</h3>
@@ -76,7 +126,7 @@ function SegmentTable({
             </tr>
           </thead>
           <tbody>
-            {METRIC_ROWS.map((row) => (
+            {rows.map((row) => (
               <tr key={row.label} className="border-t border-neutral-800">
                 <td className="px-3 py-2 text-neutral-500">{row.label}</td>
                 <td className="px-3 py-2 text-neutral-100">{row.render(segment.strategy, currency)}</td>
@@ -194,11 +244,22 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         Walk-forward 折數：{report.folds.length}（樣本內取第一折的訓練窗，樣本外為所有折測試窗銜接）
       </p>
 
-      <SegmentTable title="樣本內（in-sample）" segment={report.report.in_sample} currency={currency} />
+      {/*
+        C8-3(a)/C8-6: both tables take their two risk-approved row labels from
+        the same response, so the two segments can never disagree with each
+        other or with the backend constant they came from.
+      */}
+      <SegmentTable
+        title="樣本內（in-sample）"
+        segment={report.report.in_sample}
+        currency={currency}
+        labels={report.metric_labels}
+      />
       <SegmentTable
         title="樣本外（out-of-sample，未參與任何參數選擇）"
         segment={report.report.out_of_sample}
         currency={currency}
+        labels={report.metric_labels}
       />
     </section>
   );

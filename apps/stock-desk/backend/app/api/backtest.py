@@ -48,6 +48,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.common import DataMeta, PayloadStatus, data_meta, now_iso
 from app.api.deps import get_dividend_store, get_market_resolver, get_settings_store
+from app.api.kelly_wording import (
+    KELLY_DETAIL_ROUND_TRIPS_LABEL,
+    KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+)
 from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.report import TRADING_DAYS_PER_YEAR, walk_forward_report
 from app.backtest.splits import WalkForwardFold, walk_forward_splits
@@ -303,6 +307,34 @@ class BacktestRequest(BaseModel):
         return self
 
 
+class BacktestMetricLabels(BaseModel):
+    """The two metric labels the report surface renders verbatim, server-owned.
+
+    C8-3 路徑 (a) (`work/reviews/2026-08-23-C8-顯示語意-風控批審.md`): both are
+    risk-approved Traditional-Chinese copy, and copy of that kind has exactly one
+    definition site in this repo -- :mod:`app.api.kelly_wording`. A front end
+    holding its own equal-looking literal would keep every test green on the day
+    it was written and drift silently afterwards, which is the hole 落地條件
+    C8-3 exists to close; so the labels travel on the response and the front end
+    echoes them without deciding anything.
+
+    Only these two rows are served. The rest of the table's labels are plain
+    functional headings (期間, 觀測筆數, …) that no ruling has ever pinned, and
+    moving them here would claim risk approval they do not have.
+
+    ``win_rate`` re-exports :data:`~app.api.kelly_wording.
+    KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER` -- the *same* constant Kelly's own
+    round-trip win rate is labelled with, not a second wording for it. Since the
+    C8 fix both surfaces report the identical statistic from the identical
+    ``RoundTripStats``, so one label is the truthful outcome, not a collision.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    win_rate: str = KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER
+    round_trips: str = KELLY_DETAIL_ROUND_TRIPS_LABEL
+
+
 class BacktestResponse(BaseModel):
     """A walk-forward report plus everything needed to read it correctly."""
 
@@ -325,6 +357,11 @@ class BacktestResponse(BaseModel):
     notes: list[str]
     data: DataMeta
     as_of: str
+    #: Server-owned labels for the two risk-approved metric rows (C8-3 路徑 a).
+    #: A ``default_factory`` rather than a value spelled out at each call site:
+    #: the labels are not a per-run decision, and a construction site able to
+    #: pass its own string would be a second definition site by another name.
+    metric_labels: BacktestMetricLabels = Field(default_factory=BacktestMetricLabels)
 
 
 @dataclass(frozen=True)

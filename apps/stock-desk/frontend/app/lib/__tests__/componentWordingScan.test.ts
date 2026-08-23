@@ -77,13 +77,14 @@ const SCANNED_FILES = [
   "../../settings/DirectorySection.tsx",
   // D3② (risk-fix-review.md N2 列管清償, 2026-08-16): this file used to be
   // *excluded* from the scan entirely because its pre-existing `METRIC_ROWS`
-  // 「勝率」row label (a realized backtest statistic — the acknowledged-
+  // win-rate row label (a realized backtest statistic — the acknowledged-
   // historical-result 語境 risk-final-review.md already accepted for
   // RiskGauge, not probability laundering) would have been killed by the
-  // verbatim match. The context whitelist in `wordingScanHelpers.ts` now
-  // masks exactly that one source line (see `ALLOWED_SOURCE_CONTEXTS`), so
-  // the rest of the file — including its D2-item-4 常駐警語 — finally gets
-  // scanned instead of the whole file staying a blind spot.
+  // verbatim match; a context whitelist entry masking that one source line
+  // brought the rest of the file — including its D2-item-4 常駐警語 — into the
+  // scan. C8-3(a) (2026-08-23) removed the need for the exception entirely:
+  // the label is served by the backend now, so this file is scanned with no
+  // allowlist entry of its own at all.
   "../../backtest/BacktestReportView.tsx",
   // 排程台 (`/playbook`, work/stock-desk-快市排程-視覺規範.md 派工單
   // 2026-08-12): new surface, new hard-coded JSX text (headings, the
@@ -140,16 +141,14 @@ const SCANNED_FILES = [
  */
 const ALLOWED_SOURCE_CONTEXTS: Partial<Record<(typeof SCANNED_FILES)[number], readonly string[]>> =
   {
-    // 「勝率」 as the backtest report's realized win-rate row: the
-    // acknowledged-historical-result 語境 risk-final-review.md accepted
-    // (「勝率→歷史交易的獲勝比例」), scoped to this one METRIC_ROWS line.
-    // C5 Kelly 第六輪批審 任務 6 / 落地條件 49 (2026-08-22): the label grew a
-    // qualifier ("依結算筆數計") that distinguishes this fill-level win rate
-    // from Kelly's round-trip one; the allowlisted line is the new label's
-    // exact source text, not the pre-任務6 bare "勝率" row.
-    "../../backtest/BacktestReportView.tsx": [
-      'label: "勝率（依結算筆數計）",',
-    ],
+    // C8-2 (風控 2026-08-23 批審, `work/reviews/2026-08-23-C8-顯示語意-風控批審.md`):
+    // `BacktestReportView.tsx`'s entry is **deleted**, not updated. Its win-rate
+    // row label is backend copy now (C8-3 路徑 a: served on
+    // `BacktestResponse.metric_labels`, single definition site
+    // `app/api/kelly_wording.py`), so the file carries no banned term at all and
+    // needs no exception — and `assertNoForbiddenTerms` rejects stale entries,
+    // so keeping one would have turned this scan red. The whitelist's headcount
+    // therefore goes down by one; it is not widened and gains no second entry.
     // D8 句 3 第二輪 (`work/reviews/2026-08-19-句1句3重寫-風控批審.md` 落地條件
     // 6/10): the mandated 列管註記 doc comment on
     // `TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT` quotes the review's own

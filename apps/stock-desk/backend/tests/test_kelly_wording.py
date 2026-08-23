@@ -419,9 +419,14 @@ def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     (條件 86), which ships from ``app/kelly/models.py`` because that is where its
     single definition is -- the range refusal is composed from it.
 
-    The 口徑限定語's front-end twin (「勝率（依結算筆數計）」 on
-    ``BacktestReportView``) is **not** here and is not a backend constant: 條件
-    49 pairs the two on a display surface, and the front end owns that half.
+    The 口徑限定語's former front-end twin -- the fill-level label 條件 49 paired
+    it with on ``BacktestReportView`` -- is **not** here and is no longer
+    anywhere in the shipped tree. The C8 fix moved that report to the round-trip
+    layer, which made the twin a false statement, and 風控 2026-08-23 (條件 49 的
+    重送, ``work/reviews/2026-08-23-C8-顯示語意-風控批審.md``) retired it: the
+    report surface now renders ``KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER`` itself,
+    served from ``app/api/backtest.py``, and the retired literal is on the
+    zero-occurrence guard (:data:`REJECTED_LITERALS`) instead.
 
     Three of the ids ship from ``app/kelly/sample_gate.py`` and one is the 500
     body, counted here and defined elsewhere.
@@ -622,6 +627,15 @@ REJECTED_LITERALS: tuple[tuple[str, str, str], ...] = (
     # hung on a ratio reads as a ratio of round-trip counts, which overstates
     # the edge.
     ("(盈虧比標籤) 不採用", "盈虧比（依完整回合計）", "shipped"),
+    # C8 (風控 2026-08-23 批審, 條件 49 的重送): 條件 49's fill-level twin on
+    # ``BacktestReportView``. Like (任務 8)'s revoked period label, this was a
+    # 定稿 rather than a rejected draft -- the C8 fix moved the backtest report
+    # to the round-trip layer, so a label claiming a settled-fill denominator
+    # became a false statement about the number beside it, and the ruling's
+    # 零出現要求 puts it here: zero occurrences under ``apps/`` in source,
+    # comments and test assertion strings alike. Only ``work/reviews/`` may keep
+    # the historical quotation, and it is outside every scan in this file.
+    ("(任務 6 前端半邊) C8 撤銷", "勝率（依結算筆數計）", "shipped"),
 )
 
 #: 第八輪 條件 61, six literals banned from the 欄位 11 block.
@@ -1510,14 +1524,19 @@ def test_only_the_whitelisted_backend_modules_write_the_word() -> None:
 
 
 #: 分歧① required 2: the front end renders backend sentences verbatim and writes
-#: none of its own, so the Kelly surface must contain the word zero times. The
-#: two entries here are the only non-Kelly occurrences that exist today and both
-#: are outside this batch: the banned-term list itself (which required 1 orders
-#: kept) and the backtest report's own metric row label. Any third occurrence is
-#: a Kelly sentence leaking into the front end.
+#: none of its own, so the Kelly surface must contain the word zero times. One
+#: entry is left, and it is not copy at all: the banned-term list itself, which
+#: required 1 orders kept.
+#:
+#: C8-2/C8-3(a) (風控 2026-08-23 批審) removed the second entry. The backtest
+#: report's own metric row label used to be a front-end literal under a context
+#: allowlist; it is now served from ``app/api/backtest.py`` and rendered
+#: verbatim, so the report surface writes the word zero times like every other
+#: surface. The count going **down** is the point -- this inventory is an
+#: equality assertion, so the deletion had to be made here in the same commit,
+#: and a re-typed label anywhere in the front end fails this test again.
 WIN_RATE_FRONTEND_INVENTORY: dict[str, int] = {
     "lib/adviceWording.ts": 1,
-    "backtest/BacktestReportView.tsx": 1,
 }
 
 

@@ -33,6 +33,15 @@ Conventions:
   closing fills carrying realized P&L. It states a settlement count, which was
   never the polluted claim, and it is the honest witness of how many fills the
   round trips above were folded from.
+* ``num_round_trips`` is the denominator ``win_rate`` was measured over -- the
+  same ``RoundTripStats.n``, never recounted. It ships because the two counts
+  already on the display surface (``num_trades`` / ``num_closing_trades``) are
+  7-15x larger than it, so a reader judging sample size from the visible counts
+  would overrate the win rate's reliability (C8-6). ``None`` means no round-trip
+  attribution exists for this column at all (the Buy & Hold peer trades
+  nothing); ``0`` means attribution ran and found no complete round trip, which
+  is the case that explains a ``win_rate`` of ``None`` beside a non-zero
+  settlement count.
 """
 
 from __future__ import annotations
@@ -88,6 +97,11 @@ class PerformanceMetrics(BaseModel):
     # segment with no completed round trip has no rate to report.
     round_trip_win_rate: float | None
     round_trip_payoff_ratio: float | None
+    # C8-6: the denominator behind ``win_rate``/``round_trip_win_rate``, read
+    # off the same ``RoundTripStats`` (``n``) rather than recounted. ``None``
+    # where that object does not exist (Buy & Hold, empty segment); ``0`` where
+    # it exists and holds no complete round trip.
+    num_round_trips: int | None
 
 
 class SegmentReport(BaseModel):
@@ -212,6 +226,7 @@ def _metrics(
             turnover=None,
             round_trip_win_rate=None,
             round_trip_payoff_ratio=None,
+            num_round_trips=None,
         )
 
     start_equity = float(equity[0])
@@ -260,6 +275,10 @@ def _metrics(
         turnover=turnover,
         round_trip_win_rate=stats.round_trip_win_rate if stats else None,
         round_trip_payoff_ratio=stats.round_trip_payoff_ratio if stats else None,
+        # Same ``stats`` object the two rates above came from, so the displayed
+        # sample size cannot describe a different set of round trips than the
+        # win rate it sits beside (C8-7).
+        num_round_trips=stats.n if stats is not None else None,
     )
 
 

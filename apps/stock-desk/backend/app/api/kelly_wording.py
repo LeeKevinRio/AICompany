@@ -697,6 +697,11 @@ KELLY_BACKTEST_SAMPLE_DETAIL_INTRO = (
 #: assumption, and the three may not be displayed side by side unless it holds.
 #: 條件 44 travels with rows 6-7: they carry the same prominence as (h), which
 #: explains what the two counts are.
+#:
+#: C8-6 (風控 2026-08-23 批審) 續引 :data:`KELLY_DETAIL_ROUND_TRIPS_LABEL` for the
+#: backtest report's own round-trip count row, on the 沿用不審 three-part test
+#: (逐字同構、純計數名詞無方法論/機率/後果陳述、語境同類). It is a re-use of this
+#: constant, not a new literal -- see :class:`app.api.backtest.BacktestMetricLabels`.
 KELLY_DETAIL_STRATEGY_LABEL = "策略"
 KELLY_DETAIL_OOS_PERIOD_LABEL = "樣本外（OOS）區段（起訖日期）"
 KELLY_DETAIL_ROUND_TRIPS_LABEL = "完整回合數"
@@ -784,17 +789,28 @@ KELLY_FRESHNESS_BADGE_EXPIRED = "已過期"
 
 #: (任務 6 Kelly 面) 風控 2026-08-22 逐字定稿（第六輪，主案原文），字面含標點不得改動，
 #: 漂移須重送風控。
-#: C5 puts two same-named win rates one click apart -- this one counted over
-#: complete round trips (``app/backtest/episodes.py``) and the backtest report's
-#: own, counted over settled fills -- and the import button sits on the second
-#: screen. 條件 65 makes this the label over the win rate in the original-values
-#: view, and forbids minting a second wording for it there.
+#: C5 wrote this qualifier when the two win rates one click apart were counted
+#: over different units -- this one over complete round trips
+#: (``app/backtest/episodes.py``), the backtest report's own over settled fills.
+#: 條件 65 makes it the label over the win rate in the original-values view, and
+#: forbids minting a second wording for it there.
 #:
-#: 條件 49 pairs it with「勝率（依結算筆數計）」 on ``BacktestReportView``: the two
-#: qualifiers must reach a **display surface** together, so that no screen ever
-#: shows one qualified number beside one bare one. This lane ships the backend
-#: constant and the API that serves it and renders nothing, so the paired state
-#: is unchanged on screen; the front-end lane owes both labels in its own commit.
+#: **狀態更新 (C8, 風控 2026-08-23 批審**
+#: ``work/reviews/2026-08-23-C8-顯示語意-風控批審.md``**)**: the C8 fix moved
+#: ``app/backtest/report.py`` to the round-trip layer, so the report's win rate
+#: is now ``RoundTripStats.round_trip_win_rate`` -- the very same statistic this
+#: label names. The premise behind 條件 49 (two denominators needing two
+#: qualifiers) therefore no longer holds, and that round's 「依結算筆數計」 twin
+#: became a false statement. The 2026-08-23 ruling is 條件 49 的**重送**: it
+#: retires that twin, keeps this literal untouched (逐字定稿,一字不動), and makes
+#: it the single definition site for **both** surfaces -- ``BacktestReportView``
+#: now renders it from the API (:class:`app.api.backtest.BacktestMetricLabels`)
+#: instead of holding a literal of its own. 條件 49's pairing obligation is thus
+#: discharged by there being one label, not two.
+#:
+#: Serving it to the report surface is deliberate and not a widening: the same
+#: statistic under two spellings would imply two different things, which is the
+#: mix-up the qualifier exists to stop.
 KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER = "勝率（依完整回合計）"
 
 

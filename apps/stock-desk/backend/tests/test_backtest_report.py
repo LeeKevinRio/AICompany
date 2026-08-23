@@ -200,3 +200,77 @@ def test_empty_result_reports_zero_observations() -> None:
     report = build_segment_report(result)
     assert report.strategy.observations == 0
     assert report.strategy.cagr is None
+
+
+# ---------------------------------------------------------------------------
+# C8-6 / C8-7 完整回合數 (風控 2026-08-23 批審)
+# ---------------------------------------------------------------------------
+
+
+def test_num_round_trips_is_the_denominator_of_the_win_rate_beside_it() -> None:
+    """C8-7 單一來源:顯示的完整回合數 == 產生同欄勝率的那個 ``RoundTripStats.n``.
+
+    Modelled on ``test_win_rate_equals_round_trip_win_rate_single_source``: the
+    displayed count is compared against the attribution object the segment was
+    built from, over the very same bar bounds, so a recount in ``report.py``
+    (or a count taken from a different window) fails here rather than shipping a
+    sample size that describes some other set of round trips.
+    """
+    result = _one_holding_period_result()
+    full = build_segment_report(result)
+    attribution = attribute_round_trips(result, start=0, stop=len(result.equity_curve))
+    assert full.strategy.num_round_trips == attribution.stats.n
+    assert full.strategy.win_rate == attribution.stats.round_trip_win_rate
+
+    folds = walk_forward_splits(30, train_size=10, test_size=5)
+    wf = walk_forward_report(result, folds)
+    is_bounds = (folds[0].train_start, folds[0].train_stop)
+    oos_bounds = (folds[0].test_start, folds[-1].test_stop)
+    for segment, (start, stop) in ((wf.in_sample, is_bounds), (wf.out_of_sample, oos_bounds)):
+        own = attribute_round_trips(result, start=start, stop=stop)
+        assert segment.strategy.num_round_trips == own.stats.n
+        assert segment.strategy.win_rate == own.stats.round_trip_win_rate
+
+
+def test_a_win_rate_of_none_is_never_paired_with_a_positive_round_trip_count() -> None:
+    """C8-7 反向斷言:「勝率為『—』而完整回合數 > 0」不得出現.
+
+    That combination would say the rate was measured over a non-empty sample and
+    still could not be reported, which is not a state this pipeline can be in:
+    ``stats_from_returns`` returns ``None`` for the rate exactly when ``n == 0``.
+    Checked over every metric block of a run that actually produces the ``None``
+    case -- the straddling-round-trip segment of ``_one_holding_period_result``
+    -- plus the Buy & Hold peer, which has no attribution at all.
+    """
+    result = _one_holding_period_result()
+    folds = walk_forward_splits(30, train_size=10, test_size=5)
+    wf = walk_forward_report(result, folds)
+    blocks = [
+        segment_metrics
+        for segment in (build_segment_report(result), wf.in_sample, wf.out_of_sample)
+        for segment_metrics in (segment.strategy, segment.buy_and_hold)
+    ]
+    # The case the ruling names must actually occur here, or the guard is vacuous.
+    assert any(block.win_rate is None for block in blocks)
+    for block in blocks:
+        if block.win_rate is None:
+            assert block.num_round_trips in (0, None), block.label
+        else:
+            assert block.num_round_trips is not None and block.num_round_trips > 0
+
+
+def test_a_segment_with_no_completed_round_trip_reports_zero_not_absent() -> None:
+    """C8-6 的具體用途:區分「無完整回合」與「此欄根本沒有回合歸屬」.
+
+    風控 理由 5 的情境:唯一回合跨界被排除時勝率渲染「—」,而結算筆數仍非 0。The
+    count is what tells the reader those fills belonged to a round trip this
+    window may not claim, rather than the report being broken.
+    """
+    result = _one_holding_period_result()
+    folds = walk_forward_splits(30, train_size=10, test_size=5)
+    oos = walk_forward_report(result, folds).out_of_sample
+    assert oos.strategy.win_rate is None
+    assert oos.strategy.num_closing_trades > 0
+    assert oos.strategy.num_round_trips == 0
+    # The peer has no round-trip attribution at all, which is a different state.
+    assert oos.buy_and_hold.num_round_trips is None

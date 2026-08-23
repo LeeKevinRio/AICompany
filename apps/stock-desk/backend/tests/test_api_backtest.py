@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
+from app.api import kelly_wording as wording
 from app.api.backtest import (
     BUY_AND_HOLD_NOTE,
     UNVERIFIED_RATES_NOTE,
+    BacktestMetricLabels,
     BacktestRequest,
     execute_backtest,
 )
@@ -296,3 +299,68 @@ def test_a_run_that_never_happened_carries_no_result_object(
     assert run.response.status == "insufficient_data"
     assert run.result is None
     assert run.folds == ()
+
+
+# ---------------------------------------------------------------------------
+# C8 顯示語意 (風控 2026-08-23 批審, `work/reviews/2026-08-23-C8-顯示語意-風控批審.md`)
+# ---------------------------------------------------------------------------
+
+
+def test_the_report_surface_gets_its_two_approved_labels_from_the_backend(
+    api_harness: ApiHarness,
+) -> None:
+    """C8-1/C8-3(a): 標籤由後端供給，且只有一個中文字面定義處.
+
+    Asserted against the constants rather than retyped strings: this endpoint is
+    a *supply* path, not a definition site, and the verbatim pins on the two
+    literals live in ``tests/test_kelly_wording.py`` where the review's own
+    wording inventory is. A retyped copy here would be exactly the second
+    definition site C8-3 exists to prevent.
+    """
+    _seed(api_harness)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    assert body["metric_labels"]["win_rate"] == wording.KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER
+    assert body["metric_labels"]["round_trips"] == wording.KELLY_DETAIL_ROUND_TRIPS_LABEL
+
+
+def test_the_labels_ship_even_when_no_backtest_could_run(api_harness: ApiHarness) -> None:
+    """The labels are not a per-run decision, so the refusal branch carries them too."""
+    _seed(api_harness, count=100)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    assert body["status"] == "insufficient_data"
+    assert body["metric_labels"]["win_rate"] == wording.KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER
+    assert body["metric_labels"]["round_trips"] == wording.KELLY_DETAIL_ROUND_TRIPS_LABEL
+
+
+def test_no_construction_site_can_mint_its_own_metric_labels() -> None:
+    """C8-3: the served labels are the constants, with no per-call override path.
+
+    Structural rather than textual: a default is only a single definition site
+    while nothing overwrites it, and both ``BacktestResponse`` construction sites
+    in ``app/api/backtest.py`` are expected to stay silent about these labels.
+    """
+    source = Path(__file__).resolve().parents[1] / "app" / "api" / "backtest.py"
+    text = source.read_text(encoding="utf-8")
+    assert "metric_labels=" not in text, "metric_labels 不得在任何 construction site 被指定"
+    assert BacktestMetricLabels().win_rate == wording.KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER
+    assert BacktestMetricLabels().round_trips == wording.KELLY_DETAIL_ROUND_TRIPS_LABEL
+
+
+def test_the_round_trip_count_ships_on_every_metric_block(api_harness: ApiHarness) -> None:
+    """C8-6: 完整回合數 has its own field; the front end never reconstructs it."""
+    _seed(api_harness)
+    report = api_harness.client.post("/api/backtest", json=_request()).json()["report"]
+
+    for segment in report.values():
+        strategy = segment["strategy"]
+        assert "num_round_trips" in strategy
+        # Same-source guard, carried onto the wire (C8-7).
+        assert (strategy["win_rate"] is None) == (strategy["round_trip_win_rate"] is None)
+        if strategy["win_rate"] is None:
+            assert strategy["num_round_trips"] in (0, None)
+        else:
+            assert strategy["num_round_trips"] > 0
+        # The peer trades nothing, so it has no round-trip attribution at all.
+        assert segment["buy_and_hold"]["num_round_trips"] is None
