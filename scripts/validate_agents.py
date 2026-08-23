@@ -151,15 +151,22 @@ def check_agent(path: Path, seen_names: dict[str, Path]) -> None:
     tools = [t.strip() for t in tools_raw.split(",") if t.strip()] if tools_raw else []
     if tools_raw:
         line = field_lines.get("tools", 1)
+        # Tools already rejected below are tracked so a single offending entry does not
+        # produce two findings that look like two different root causes. Each check
+        # still stands on its own: a tool that passes the whitelist but is illegal for a
+        # read-only role is caught by the read-only check alone.
+        reported: set[str] = set()
         for tool in tools:
             if tool not in TOOL_WHITELIST:
                 err(path, line, f"tools 含白名單外的工具：{tool}")
+                reported.add(tool)
         if path.stem in READONLY_AGENTS:
             forbidden = READONLY_FORBIDDEN & set(tools)
             if forbidden:
                 err(path, line, f"唯讀角色不得擁有 {'、'.join(sorted(forbidden))}")
+                reported |= forbidden
             for tool in tools:
-                if tool in READONLY_FORBIDDEN or not tool.startswith("Bash"):
+                if tool in reported or not tool.startswith("Bash"):
                     continue
                 if tool not in READONLY_ALLOWED_BASH:
                     err(
