@@ -7,6 +7,15 @@
 - 把 skill 放進 `.claude/skills/<skill-name>/`，Claude Code 會自動偵測。
 - 同一份 skill 可在 **Claude Code 與 Codex 共用**（兩邊都讀同樣的 skill 定義），維持跨廠商一致的工作流程。
 
+## 已引入的外部 skills(2026-08-23)
+
+| Skill | 來源 | 形式 |
+| --- | --- | --- |
+| **animate** / **review-animations** / **animation-vocabulary** | [`emilkowalski/skills`](https://github.com/emilkowalski/skills)(pin `d23d7f8`,MIT) | 繁中改作,LICENSE 隨附,文首掛風控地板優先註記 |
+| **ui-delivery-checklist** | 概念參考 [`Nutlope/hallmark`](https://github.com/Nutlope/hallmark)(pin `13ac0ec`,MIT) | 自寫(取可機械判定閘門子集,非改作) |
+
+引入評估與雙審紀錄見產品線 `work/研究-外部設計skill庫評估.md` 與 `work/reviews/2026-08-23-員工線-動效skill批次-*.md`。
+
 ## 建議之後掛上的開源 skills
 
 | Skill | 來源 | 用途 |
