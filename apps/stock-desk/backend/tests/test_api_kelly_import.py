@@ -243,12 +243,16 @@ def test_the_window_columns_come_from_the_fold_geometry(api_harness: ApiHarness)
 def test_the_pair_is_the_round_trip_estimate_not_the_fill_layer_one(
     api_harness: ApiHarness,
 ) -> None:
-    """約束 25: the report's own ``win_rate`` is a different statistic entirely.
+    """約束 25: the stored pair is the round-trip estimate, never a fill count.
 
     The engine rebalances daily, so a single holding period emits a tail of tiny
-    closing fills. Reading those as trades inflates the count past the gate and
-    moves the rate; the two numbers must not agree, and the stored one is the
-    round-trip one.
+    closing fills; the fill count still dwarfs the round-trip count. C8 note:
+    the report's ``win_rate`` used to be the fill-layer rate and this test
+    asserted the two numbers disagreed. Since the C8 fix the report's
+    ``win_rate`` IS the round-trip rate over the same out-of-sample window, so
+    the stored pair now agrees with it exactly -- one source, one number. What
+    must never come back is a rate built from ``num_closing_trades``-style fill
+    counting.
     """
     _seed(api_harness, _CLEARS_GATE)
 
@@ -258,7 +262,10 @@ def test_the_pair_is_the_round_trip_estimate_not_the_fill_layer_one(
     ]["strategy"]
 
     assert metrics["num_closing_trades"] > item["oos_round_trips"]
-    assert metrics["win_rate"] != item["win_rate"]
+    assert metrics["win_rate"] == metrics["round_trip_win_rate"] == item["win_rate"]
+    # The rate cannot be the fill-layer one: rating a sample this much larger
+    # than the round-trip sample would not reproduce the round-trip fraction.
+    assert item["win_rate"] == item["oos_win_trips"] / item["oos_round_trips"]
 
 
 def test_an_imported_row_ages_from_its_out_of_sample_end(api_harness: ApiHarness) -> None:

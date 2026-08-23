@@ -16,14 +16,23 @@ Conventions:
 * Turnover = total absolute traded notional / mean equity over the segment.
 * Buy & Hold is shown gross of transaction cost, as a pure passive price
   benchmark (documented so it is never mistaken for a costed strategy).
-* Win rate / profit factor are computed over **closing** (position-reducing)
-  fills, which carry realized P&L.
-* ``round_trip_win_rate`` / ``round_trip_payoff_ratio`` are the same segment
-  measured over complete **holding round trips** instead of fills, and come
-  from :mod:`app.backtest.episodes` (the only place that defines them). They sit
-  beside the fill-layer pair rather than replacing it: the two answer different
-  questions and their values legitimately differ, since a daily rebalance splits
-  one holding period into many fills.
+* Win rate / profit factor are computed over complete **holding round trips**
+  (C8 fix). The engine rebalances to a target weight every bar, so a single
+  holding period emits a long tail of tiny position-reducing fills; rating those
+  as trades polluted both statistics (measured: up to 21pp of win rate and 50%
+  of the derived risk cap). Round trips are supplied by
+  :mod:`app.backtest.episodes` -- the only module that defines extraction and
+  attribution -- and this module never re-derives them.
+* ``win_rate`` is therefore the round-trip win rate: by construction it equals
+  ``round_trip_win_rate`` (both read the very same
+  :class:`~app.backtest.episodes.RoundTripStats`).
+* ``profit_factor`` is round-trip gross profit / gross loss: the numerator sums
+  ``realized_pnl`` over winning round trips (``realized_pnl > 0``), the
+  denominator sums ``-realized_pnl`` over losing ones (``realized_pnl < 0``).
+* ``num_closing_trades`` keeps its original fill-layer meaning -- the count of
+  closing fills carrying realized P&L. It states a settlement count, which was
+  never the polluted claim, and it is the honest witness of how many fills the
+  round trips above were folded from.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from app.backtest.engine import BacktestResult, Trade
-from app.backtest.episodes import RoundTripStats, attribute_round_trips
+from app.backtest.episodes import RoundTripAttribution, attribute_round_trips
 from app.backtest.splits import WalkForwardFold
 from app.signals.risk import max_drawdown
 
@@ -60,15 +69,23 @@ class PerformanceMetrics(BaseModel):
     max_drawdown: float | None
     max_drawdown_peak_date: str | None
     max_drawdown_trough_date: str | None
+    # Round-trip layer (C8 fix): ``win_rate`` is the round-trip win rate and
+    # always equals ``round_trip_win_rate`` below -- both read the same
+    # ``RoundTripStats``. ``profit_factor`` is round-trip gross profit / gross
+    # loss. Both are ``None`` where no completed round trip exists.
     win_rate: float | None
     profit_factor: float | None
     num_trades: int
+    # Fill-layer count, original meaning kept: closing fills carrying realized
+    # P&L. A settlement count, not a trade-quality statistic.
     num_closing_trades: int
     turnover: float | None
-    # Round-trip (holding-period) layer. Separate from the fill-layer pair
-    # above, never a replacement for it, and ``None`` where no round trip is
-    # defined -- the Buy & Hold peer trades nothing, and a segment with no
-    # completed round trip has no rate to report.
+    # The C5 round-trip pair, kept for the display contract that reads it.
+    # ``round_trip_win_rate`` duplicates ``win_rate`` since the C8 fix;
+    # ``round_trip_payoff_ratio`` is b (mean winning return / mean absolute
+    # losing return), a different ratio from ``profit_factor``. ``None`` where
+    # no round trip is defined -- the Buy & Hold peer trades nothing, and a
+    # segment with no completed round trip has no rate to report.
     round_trip_win_rate: float | None
     round_trip_payoff_ratio: float | None
 
@@ -131,23 +148,34 @@ def _sortino(returns: np.ndarray, rf: float, periods_per_year: int) -> float | N
     return float(np.mean(excess)) / downside_dev * math.sqrt(periods_per_year)
 
 
-def _trade_stats(trades: list[Trade]) -> tuple[float | None, float | None, int]:
-    """Return ``(win_rate, profit_factor, num_closing_trades)``.
+def _trade_stats(round_trips: RoundTripAttribution | None) -> tuple[float | None, float | None]:
+    """Return ``(win_rate, profit_factor)`` over complete holding round trips.
 
-    Computed over closing fills (those carrying realized P&L). ``profit_factor``
-    is gross profit / gross loss; ``None`` when there are no losses (undefined
-    ratio) or no closing trades.
+    C8 fix: the statistical unit is the round trip, never the fill. Round trips
+    are supplied by :mod:`app.backtest.episodes`; nothing here extracts or
+    attributes them a second time.
+
+    * ``win_rate`` is ``stats.round_trip_win_rate`` itself -- the same value the
+      ``round_trip_win_rate`` field reports, taken from the same object so the
+      two cannot drift apart.
+    * ``profit_factor`` = round-trip gross profit / gross loss. Numerator: sum
+      of ``realized_pnl`` over round trips with ``realized_pnl > 0``.
+      Denominator: sum of ``-realized_pnl`` over round trips with
+      ``realized_pnl < 0``. ``None`` when there is no losing round trip
+      (undefined ratio) or no round trips at all.
     """
-    realized = [t.realized_pnl for t in trades if t.realized_pnl is not None]
-    if not realized:
-        return None, None, 0
-    wins = [p for p in realized if p > 0]
-    losses = [p for p in realized if p < 0]
-    win_rate = len(wins) / len(realized)
-    gross_profit = sum(wins)
-    gross_loss = -sum(losses)
+    if round_trips is None or not round_trips.episodes:
+        return None, None
+    win_rate = round_trips.stats.round_trip_win_rate
+    gross_profit = sum(e.realized_pnl for e in round_trips.episodes if e.realized_pnl > 0)
+    gross_loss = -sum(e.realized_pnl for e in round_trips.episodes if e.realized_pnl < 0)
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
-    return win_rate, profit_factor, len(realized)
+    return win_rate, profit_factor
+
+
+def _num_closing_fills(trades: list[Trade]) -> int:
+    """Count closing fills (those carrying realized P&L) -- original meaning."""
+    return sum(1 for t in trades if t.realized_pnl is not None)
 
 
 def _metrics(
@@ -158,7 +186,7 @@ def _metrics(
     trades: list[Trade],
     periods_per_year: int,
     risk_free_rate: float,
-    round_trip: RoundTripStats | None,
+    round_trips: RoundTripAttribution | None,
 ) -> PerformanceMetrics:
     n = int(equity.size)
     if n == 0:
@@ -204,7 +232,8 @@ def _metrics(
             worst, peak_i, trough_i = dd
             dd_value, dd_peak, dd_trough = worst, dates[peak_i], dates[trough_i]
 
-    win_rate, profit_factor, num_closing = _trade_stats(trades)
+    win_rate, profit_factor = _trade_stats(round_trips)
+    stats = round_trips.stats if round_trips is not None else None
     mean_equity = float(np.mean(equity))
     traded_notional = sum(abs(t.notional) for t in trades)
     turnover = traded_notional / mean_equity if mean_equity > 0 else None
@@ -227,10 +256,10 @@ def _metrics(
         win_rate=win_rate,
         profit_factor=profit_factor,
         num_trades=len(trades),
-        num_closing_trades=num_closing,
+        num_closing_trades=_num_closing_fills(trades),
         turnover=turnover,
-        round_trip_win_rate=round_trip.round_trip_win_rate if round_trip else None,
-        round_trip_payoff_ratio=round_trip.round_trip_payoff_ratio if round_trip else None,
+        round_trip_win_rate=stats.round_trip_win_rate if stats else None,
+        round_trip_payoff_ratio=stats.round_trip_payoff_ratio if stats else None,
     )
 
 
@@ -264,8 +293,9 @@ def build_segment_report(
     ]
 
     # Round trips are attributed by bar index over the very same ``[start, end)``
-    # bounds this segment was cut with -- the date filter above stays where it
-    # is (it is the fill-layer's existing behaviour) but nothing new reads it.
+    # bounds this segment was cut with. The date filter above keeps feeding the
+    # fill-count and turnover fields only; since the C8 fix no rate statistic
+    # reads it.
     round_trips = attribute_round_trips(result, start=start, stop=end)
 
     strategy_metrics = _metrics(
@@ -275,7 +305,7 @@ def build_segment_report(
         trades=trades,
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
-        round_trip=round_trips.stats,
+        round_trips=round_trips,
     )
     bh_equity = _buy_and_hold_equity(close, result.initial_cash)
     bh_metrics = _metrics(
@@ -285,7 +315,7 @@ def build_segment_report(
         trades=[],
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
-        round_trip=None,
+        round_trips=None,
     )
     return SegmentReport(strategy=strategy_metrics, buy_and_hold=bh_metrics)
 

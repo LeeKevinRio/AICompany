@@ -5,9 +5,10 @@ the book leaves flat, through every fill in between, to the bar it returns flat.
 It is deliberately **not** a fill. The engine rebalances to a target weight every
 bar, so a single real entry-to-exit holding period emits a long tail of tiny
 position-reducing fills; counting those as trades inflates the sample and
-distorts any win rate computed from them. ``report.py``'s existing
-``win_rate``/``profit_factor`` are fill-layer statistics and keep that meaning --
-nothing here reads them, and nothing here may be substituted for them.
+distorts any win rate computed from them. Since the C8 fix, ``report.py``'s
+``win_rate``/``profit_factor`` are also round-trip statistics, computed from the
+attribution this module supplies -- this module stays the only place round trips
+are extracted and attributed, and ``report.py`` never re-derives them.
 
 What this module owns, and only this module:
 
@@ -100,10 +101,10 @@ class RoundTripStats:
 
     ``round_trip_win_rate`` is p; ``round_trip_payoff_ratio`` is b (mean winning
     return / mean absolute losing return). The names are paired on purpose: a
-    bare ``payoff_ratio`` next to the fill-layer ``win_rate`` invites reading one
-    of each as a set, which is exactly the mix-up this module exists to prevent.
-    A round trip that returns exactly zero counts in ``n`` but is neither a win
-    nor a loss -- the same convention ``report.py`` applies to fills.
+    bare ``payoff_ratio`` next to a ``win_rate`` of another statistical unit
+    invites reading one of each as a set, which is exactly the mix-up this
+    module exists to prevent. A round trip that returns exactly zero counts in
+    ``n`` but is neither a win nor a loss.
     """
 
     n: int
