@@ -63,4 +63,4 @@
   frontmatter 規格、name 唯一、tools 白名單、必要小節、唯讀角色權限、org-chart 同步，全綠才可 commit。
 - 共用長流程放 `.claude/skills/<name>/SKILL.md`：
   `code-review-checklist`、`release-flow`、`data-source-integration`、`backtest-protocol`、`creative-masters`、`art-outsource`、
-  `animate`、`review-animations`、`animation-vocabulary`。
+  `animate`、`review-animations`、`animation-vocabulary`、`ui-delivery-checklist`。
