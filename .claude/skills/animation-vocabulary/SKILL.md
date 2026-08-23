@@ -6,7 +6,7 @@ description: 動效詞彙反查表——把對網頁動畫的模糊描述（「p
 > **本 skill 改作自 emilkowalski/skills（MIT），適用於本公司各產品線前端動效工作。**
 > **風控地板優先**：凡涉及面向使用者的建議類／揭露類內容，其字級、對比、常駐不摺疊等風控樣式地板與逐字定稿制度優先於本 skill 任何建議；本 skill 不得用於改寫任何風控定稿文案。
 >
-> 來源：[emilkowalski/skills](https://github.com/emilkowalski/skills) `animation-vocabulary`，commit `d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7`；授權見本目錄 [LICENSE](LICENSE)。改作內容：敘述層繁中化、剝除行銷內容；術語與定義忠實保留。
+> 來源：[emilkowalski/skills](https://github.com/emilkowalski/skills) `animation-vocabulary`，commit `d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7`；授權見本目錄 [LICENSE](LICENSE)。改作內容：敘述層繁中化、剝除行銷內容；術語與定義忠實保留，惟分類有微調（Page transition／View transition 由 Scroll 節移至 Transitions Between States 節，定義未動）。
 
 # Animation Vocabulary — 動效詞彙表
 

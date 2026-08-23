@@ -6,7 +6,7 @@ description: 以高工藝標準審查動畫與動效 code——十條不可協�
 > **本 skill 改作自 emilkowalski/skills（MIT），適用於本公司各產品線前端動效工作。**
 > **風控地板優先**：凡涉及面向使用者的建議類／揭露類內容，其字級、對比、常駐不摺疊等風控樣式地板與逐字定稿制度優先於本 skill 任何建議；本 skill 不得用於改寫任何風控定稿文案。
 >
-> 來源：[emilkowalski/skills](https://github.com/emilkowalski/skills) `review-animations`，commit `d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7`；授權見本目錄 [LICENSE](LICENSE)。改作內容：敘述層繁中化、剝除行銷內容與外部 skill 生態指涉；規則與數值忠實保留原文。
+> 來源：[emilkowalski/skills](https://github.com/emilkowalski/skills) `review-animations`，commit `d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7`；授權見本目錄 [LICENSE](LICENSE)。改作內容：敘述層繁中化、剝除行銷內容與外部 skill 生態指涉；規則與數值忠實保留原文。另移除原文 frontmatter 的 `disable-model-invocation: true`，使本 skill 可被模型自動觸發——刻意的整合選擇，配合 qa-reviewer 審 UI diff 必用的場景。
 
 # Reviewing Animations — 審查動畫
 
