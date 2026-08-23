@@ -131,6 +131,12 @@ const EXEC = process.env.PW_CHROME; // absolute path found in section 2
 const OUT = process.env.OUT_DIR;    // scratchpad dir, never inside the repo
 const BASE = process.env.BASE_URL;
 
+// Instrument provenance: this resolution is a separate event from the section 2
+// probe, so the probe alone proves nothing about this run. Emit the paths actually
+// used and let qa-e2e verify the prefix (section 6). The thing under test must never
+// be able to supply the instrument that measures it.
+const provenance = { playwrightModule: require.resolve(PW), chromiumExecutable: EXEC };
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXEC });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -160,7 +166,7 @@ const BASE = process.env.BASE_URL;
   await page.setViewportSize({ width: 375, height: 812 });
   await page.screenshot({ path: `${OUT}/mobile-375.png`, fullPage: true });
 
-  console.log(JSON.stringify({ heading, style, consoleErrors, failedRequests }, null, 2));
+  console.log(JSON.stringify({ provenance, heading, style, consoleErrors, failedRequests }, null, 2));
   await browser.close();
 })();
 ```
@@ -198,7 +204,17 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
 ## 第 6 節・產出與交件
 
 - 產出物（腳本、截圖、原始輸出）一律放 scratchpad，**不進 repo、不進 commit**。
-- 代跑者交件必附：跑的指令、腳本原文、**未經改寫的 stdout**、截圖路徑。
+- 代跑者交件必附：跑的指令、腳本原文、**未經改寫的 stdout**（含 `provenance` 欄位）、截圖路徑。
+- **儀器來源查核（qa-e2e 收到證據後的第一件事）**：確認 stdout 的
+  `provenance.playwrightModule` 與 `provenance.chromiumExecutable` **兩個路徑都落在既定前綴內**
+  （第 2 節）。任一落在前綴之外（尤其是指進受測專案的 `node_modules`）→
+  **該批證據作廢**，不得據以判斷，走第 7 節。
+  理由：第 2 節的探測與 runner 的 `require()` 是**兩次獨立的解析事件**，探測綠燈不代表這次跑用的是同一份；
+  `cd <scratchpad>` 只是緩解——scratchpad 自己也可能長出 `node_modules`。
+  **量測儀器不得由受量測者提供**，這條由裁判查、不由代跑者自證。
+  本 skill 開發時實測重現過這個攻擊：cwd 放一份假 playwright（代理真模組但把量測值悄悄取整），
+  第 2 節探測仍綠燈、`NODE_PATH` 也設對了，畫面文字與 console 全部正常，
+  真實的 `15.9998px` 被改寫成好看的 `16px`——**唯一露出破綻的欄位就是 `provenance`**。
 - qa-e2e 依原輸出契約出 Verdict，其中：
   - 「流程逐步結果」每一步要寫**畫面實際字面**（逐字，不要改寫、不要意譯）。
   - 「視覺抽查」寫量測到的實際值 vs 規範值。
@@ -215,9 +231,6 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
   **一個字都不能改寫或省略**——這是 e2e 驗收的核心價值，遮罩規則對這些內容**不適用**。
   界線一句話記：**「這串字是設計出來給所有使用者看的」→ 逐字；「這串數字屬於某個特定人 / 帳戶」→ 遮罩。**
 - **合成示範資料不必遮罩**，但要在報告標示它是合成資料（見第 4 節第 4 點）。
-- **逐字取回亂碼時照實回報，不得自行「還原」**：亂碼通常代表回應沒宣告 `charset=utf-8`，
-  那就是真實使用者也會看到的缺陷（本 skill 開發時實測重現過），屬 finding；
-  猜測原文寫進報告等於用推測代替觀察，反而蓋掉 bug。
 - 遮罩若讓某個驗收點無法判斷（例如就是要驗數字格式），在報告寫明
   「因含敏感數值改以遮罩呈現，該項僅驗格式不驗數值」，不得為了方便就把原值貼上去。
 - **截圖只能待在 scratchpad**：不得複製、貼上或附加到任何其他位置——
@@ -225,6 +238,22 @@ PW_CHROME=<探測到的 chrome 絕對路徑> OUT_DIR=<scratchpad 目錄> BASE_UR
   需要讓人看畫面時，給 scratchpad 路徑，不要搬檔案。
 - **截圖視同一次性資料**：只是本次驗收的臨時證據，不得長期保留；
   驗收結束（Verdict 交付、爭議釐清完畢）即可刪除，不做歸檔。
+
+### 轉述失真（通則）
+
+> **代跑者的職責是傳輸，不是清理；任何看起來像「壞掉」的輸出，壞掉本身就是資料。**
+
+遮罩是**唯一**獲准的內容變更（且僅限敏感數值）。除此之外，證據一律原樣搬運——
+好心的修正會蓋掉事實，而且失真通常剛好發生在最該被看見的地方。同族陷阱：
+
+- **亂碼自行「還原」**：亂碼通常代表回應沒宣告 `charset=utf-8`，
+  那就是真實使用者也會看到的缺陷（本 skill 開發時實測重現過），屬 finding。
+- **數值四捨五入**：把 `getComputedStyle` 的 `15.9998px` 寫成 `16px`——
+  抹掉的正是真實的 sub-pixel bug。量測值有幾位數就寫幾位數。
+- **美化或重排 JSON / stack trace**：順序、縮排、被截斷的片段都可能是線索，原樣貼。
+- **順手修「顯然是 typo」**：介面上的錯字就是要被回報的缺陷，不是你的筆誤。
+- **把英文錯誤訊息翻成中文**：報告正文用繁中，但**錯誤訊息與畫面字面保留原文**，
+  需要時另外加註說明，不得以譯文取代原文。
 
 ## 第 7 節・降級也不可行時
 
