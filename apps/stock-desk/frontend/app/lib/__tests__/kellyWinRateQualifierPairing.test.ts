@@ -45,6 +45,25 @@
  *    `componentWordingScan.test.ts`, whose allowlist entry for this file C8-2
  *    deleted).
  *
+ * **C8-11 (風控追加裁示 2026-08-23, 追加裁示 1 — required)**: ② and ③ above are a
+ * **pair**. Deleting either one alone is a governance change that must go back
+ * to risk review, because they do not guard the same thing:
+ *
+ * - ② alone is insufficient. A variable hop
+ *   (`const l = "勝率（…）"; { label: l }`) walks straight past a scan of
+ *   `label:` slots; ③ is what turns red on it.
+ * - ③ alone, while enough to block that regression, drops the *structural*
+ *   claim ② makes — that every row label in this component comes from a plain
+ *   functional heading or a `labels.*` field, never from a hard-coded slot.
+ *
+ * The 條文 itself is also 追加裁示 1's **revision of C8-4②**: the obligation is
+ * "no hard-coded win-rate row label may come back, guarded **without writing
+ * the banned literal**"; the retired literal's own zero-occurrence duty sits in
+ * `backend/tests/test_kelly_wording.py`'s `REJECTED_LITERALS` (`shipped` scope),
+ * not here. A meta guard at the bottom of this suite counts the pair's marker
+ * comments and guard declarations, so deleting one member fails this file
+ * rather than quietly halving the cover.
+ *
  * The backend half of the pairing is asserted where the string is produced:
  * `backend/tests/test_api_backtest.py` (the served label is the constant
  * itself) and `backend/tests/test_kelly_wording.py` (the constant is still the
@@ -66,6 +85,9 @@ import { metricRows } from "../../backtest/BacktestReportView";
 const absolutePath = fileURLToPath(new URL("../../backtest/BacktestReportView.tsx", import.meta.url));
 const source = readFileSync(absolutePath, "utf-8");
 
+/** This suite's own text, read for the C8-11 pairing meta guard below. */
+const selfSource = readFileSync(fileURLToPath(import.meta.url), "utf-8");
+
 /** A stand-in for whatever the backend serves, so the test asserts wiring, not copy. */
 const LABELS = { win_rate: "<win-rate-label>", round_trips: "<round-trips-label>" } as const;
 
@@ -79,6 +101,8 @@ describe("BacktestReportView.tsx — C8-4 限定語守門(路徑 a:後端供給�
     expect(source.match(/label:\s*labels\.win_rate\b/g) ?? []).toHaveLength(1);
   });
 
+  // [C8-11 pair member: label-slot scan] — do not delete without ③ and a fresh
+  // risk review; on its own ③ carries no structural claim about label slots.
   it("② no win-rate row label is hard-coded here, in any form (bare or qualified)", () => {
     // Covers the pre-任務6 bare literal, the C8-retired qualified one, and any
     // future re-typing of the approved qualifier: every `label:` slot must be
@@ -88,6 +112,8 @@ describe("BacktestReportView.tsx — C8-4 限定語守門(路徑 a:後端供給�
     expect(hardCodedLabels.filter((slot) => slot.includes("勝率"))).toEqual([]);
   });
 
+  // [C8-11 pair member: whole-file zero occurrence] — do not delete without ②
+  // and a fresh risk review; ② alone is bypassable by a variable hop.
   it("③ the banned bare term does not appear anywhere in the file", () => {
     expect(source.match(/勝率/g) ?? []).toEqual([]);
   });
@@ -101,5 +127,18 @@ describe("BacktestReportView.tsx — C8-4 限定語守門(路徑 a:後端供給�
   it("C8-8 顯著度: the round-trip count row sits in the same table, directly below the win rate", () => {
     const labels = metricRows(LABELS).map((row) => row.label);
     expect(labels.indexOf(LABELS.round_trips)).toBe(labels.indexOf(LABELS.win_rate) + 1);
+  });
+
+  it("C8-11: ② 與 ③ 必須成對存在 — 刪任一即須回審", () => {
+    // Counted, never spelled out: writing either marker as a literal here would
+    // make this guard match itself and survive the very deletion it exists to
+    // catch. Both regexes are likewise written so they cannot match their own
+    // source text.
+    const markers = selfSource.match(/\[C8-11 pair member: [a-z][a-z -]*\]/g) ?? [];
+    expect(markers).toHaveLength(2);
+    expect(new Set(markers).size).toBe(2);
+    // Each marker must still sit on a live guard, not on a commented-out or
+    // `it.skip`ped one.
+    expect(selfSource.match(/\bit\("[②③]/g) ?? []).toHaveLength(2);
   });
 });

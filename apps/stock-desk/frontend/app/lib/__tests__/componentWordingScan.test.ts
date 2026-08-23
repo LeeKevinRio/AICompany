@@ -153,9 +153,18 @@ const ALLOWED_SOURCE_CONTEXTS: Partial<Record<(typeof SCANNED_FILES)[number], re
     // 6/10): the mandated 列管註記 doc comment on
     // `TRADINGVIEW_CHART_DATA_MISMATCH_STATEMENT` quotes the review's own
     // required wording verbatim ("須立即重送風控"), an internal escalation
-    // instruction to future maintainers, not user-facing copy — the same
-    // acknowledged-limitation/instruction 語境 already accepted for the
-    // 「勝率」 line above, scoped to this one comment line.
+    // instruction to future maintainers, not user-facing copy — the
+    // acknowledged-limitation/instruction 語境 this whitelist exists for (D3② /
+    // risk-fix-review.md N2), scoped to this one comment line.
+    //
+    // 註解更正 (風控追加裁示 2026-08-23「附帶查獲」,
+    // `work/reviews/2026-08-23-C8-顯示語意-風控批審.md`): this note used to cite
+    // "the 「勝率」 line above" as its precedent. That entry — the
+    // `BacktestReportView.tsx` win-rate row label — was deleted by C8-2 in the
+    // same batch (the label became backend copy), so the referent no longer
+    // exists and the citation had become the same kind of false governance
+    // statement C8-5 was raised for. The 語境 rule stands on its own; this is
+    // now the whitelist's only entry.
     "../../position/[symbol]/TradingViewChartPanel.tsx": [
       " * 列管：一旦系統新增任何跨資料源比對/校正邏輯，「本系統不會將兩者互相校正」即失真，須立即重送風控。",
     ],

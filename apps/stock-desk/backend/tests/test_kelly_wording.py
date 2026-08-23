@@ -720,6 +720,18 @@ def _frontend_sources(include_tests: bool = True) -> list[Path]:
 
 
 def _shipped_sources() -> list[Path]:
+    """The shipped surface: ``backend/app/**`` plus ``frontend/app/**``.
+
+    C8-12 (風控追加裁示 2026-08-23, 追加裁示 2 -- required, 條件化). A
+    zero-occurrence guard has to spell its banned literal out somewhere, so
+    ``REJECTED_LITERALS`` carries one copy of each; those tuples live in this
+    file, i.e. under ``backend/tests/``, which this scope deliberately does not
+    reach. **If the scope is ever widened to include ``backend/tests/``, the
+    banned literals here must not be edited or shortened to get past it** -- a
+    literal trimmed until it no longer matches is a guard that no longer
+    guards. Handle it with an explicit exemption (per file or per tuple)
+    instead, and name the ruling the exemption implements.
+    """
     return [*_python_sources(), *_frontend_sources()]
 
 
