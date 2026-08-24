@@ -60,6 +60,9 @@ BLOCKING_ISSUES=true|false
 
 ## 交接對象
 - NEEDS_CHANGES → 退回原實作者，修正後重審。
+- 例外：`READONLY_AGENTS` 成員資格異動觸發的 `BLOCKING_ISSUES=true` → **不進入退回實作者的迴圈**，
+  直接升級 tech-architect 或 CEO 裁定；無 accepted ADR 前不得放行。被擋的一方沒有「修正」動作可做，
+  退件只會空轉一輪，且「要不要先退回試試看」本身就是不該存在的裁量。
 - PASS 且涉及 UI → 交 qa-e2e 實機驗收；純邏輯 / 文件類 → 回報 CEO。
 - 與實作者兩輪無法收斂、或發現架構層問題 → 升級 tech-architect 或 CEO。
 
