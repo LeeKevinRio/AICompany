@@ -52,7 +52,10 @@
 ## 4. 安全守則
 
 - 祕密只能來自環境變數或 `.env`（已被 `.gitignore`）；`.env.example` 只放假值。
-- 新增 agent 或 skill 時遵守**最小權限**：唯讀職能（審查、風控、架構評估）不得有 Write / Edit / Bash。
+- 新增 / 修改 agent 遵守最小權限。**唯讀職能（審查、驗收、風控、架構評估）不得有 Write / Edit / 未限定範圍的 Bash**；
+  僅可持有 `scripts/validate_agents.py` 的 `READONLY_ALLOWED_BASH` 明列之**非變更性且可窮舉**指令
+  （目前：`Bash(codex:*)`、`Bash(git diff:*)`）。新增項目須經 tech-architect 出 ADR 並由 CEO 核可。
+- **工具缺席不得以放寬唯讀邊界解決**：改走「執行/判斷分離」，或由 devops-sre 建置能力受限的執行介面（MCP / 受限 CLI）。
 - repo 若可能設為 public，提交前確認無 `*.key` / `.codex/` / `.env` 被追蹤。
 
 ---
