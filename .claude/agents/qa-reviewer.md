@@ -35,11 +35,22 @@ model: sonnet
 - [Bug|Edge case|安全|效能|可維護性][critical|high|medium|low] 問題描述與建議
 ## 第二意見（Codex）
 （/review 的重點摘錄；無法執行時明確註記原因）
+## 唯讀權限判準常數
+（每次審查必填，不得省略；兩道機械檢查皆未命中就寫「未觸及」）
 ## Verdict
 PASS / NEEDS_CHANGES
 BLOCKING_ISSUES=true|false
 ```
 - 有任何 critical 或 high 問題 → `BLOCKING_ISSUES=true`，退回實作者。
+- `## 唯讀權限判準常數` 一節**每次都要跑**下列兩道檢查再填（皆在 `Bash(git diff:*)` 授權內；
+  審查 staged diff 時以 `--staged` 代 `<base>...<head>`）。這是輸出契約的固定欄位，
+  不是「想到才做」的提醒——空著就是報告不完整：
+  - `git diff <base>...<head> --name-only | grep -x scripts/validate_agents.py`
+  - `git diff <base>...<head> -- . | grep -E 'READONLY_AGENTS|READONLY_ALLOWED_BASH'`
+- 任一命中 → 該節**強制**以 `⚠️ 觸及唯讀權限判準常數` 起始一行，接著列出異動的 agent 名單、
+  改了什麼、為何改、對應 ADR 編號與狀態（判準見 `code-review-checklist` skill 同名小節）。
+- `READONLY_AGENTS` 的成員資格異動（把 agent 加入或移出唯讀清單）一律以 high 計
+  → `BLOCKING_ISSUES=true`；那是唯讀邊界上唯一沒有機械防護的環節（ADR-0007）。
 
 ## 品質檢查清單
 - [ ] 逐檔看過 staged diff，不是抽樣。
