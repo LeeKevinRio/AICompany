@@ -16,17 +16,22 @@ description: 公司標準 code review 流程與檢查清單。qa-reviewer 審查
 ## 唯讀權限判準常數：Verdict 前的強制檢查
 
 `scripts/validate_agents.py` 的 `READONLY_AGENTS`（誰算唯讀職能）與 `READONLY_ALLOWED_BASH`
-（唯讀職能可持有哪些 Bash）兩個常數，是章程 §4 唯讀邊界的**機械判準本身**，不是一般 code
+（唯讀職能**宣告上**可持有哪些 Bash）兩個常數，是章程 §4 唯讀邊界在**宣告層**的判準，不是一般 code
 （依據見 `docs/adr/0007-唯讀驗收職能的權限邊界與-e2e-降級路徑.md`）。改動它們等於改動
-「判斷者不得具備變更受判斷物的能力」這條不變式的適用範圍，而 **linter 無法防禦自己的維護者**——
-這一環沒有機械防護，只能靠審查擋。
+「判斷者不得具備變更受判斷物的能力」這條不變式的適用範圍。
 
-**先跑指令再判斷，不憑印象**（兩者皆在 qa-reviewer 的 `Bash(git diff:*)` 授權內；
+**先認清這道檢查在防什麼**：唯讀邊界目前**在執行層沒有任何強制**——`tools:` 的 `Bash(pattern)`
+不被解析，validator 只靜態檢查定義檔上的宣告，管不到任何一次實際呼叫（PreToolUse hook 建置中，
+見章程 §4）。所以這裡守的是**宣告與制度的完整性**：常數被悄悄改動而無人指出，等於連紙上的邊界
+都失守。**不要想著「反正 CI 會擋」**——CI 擋的只是定義檔裡的字串，不是行為，而 linter 也無法防禦
+自己的維護者。
+
+**先跑指令再判斷，不憑印象**（兩者皆在 qa-reviewer 宣告的唯讀 Bash 用途內；
 審查 staged diff 時以 `--staged` 代 `<base>...<head>`）：
 
 ```bash
 git diff <base>...<head> --name-only | grep -x scripts/validate_agents.py
-git diff <base>...<head> -- . | grep -E 'READONLY_AGENTS|READONLY_ALLOWED_BASH'
+git diff <base>...<head> -- . | grep -E '^[+-].*(READONLY_AGENTS|READONLY_ALLOWED_BASH)'
 ```
 
 任一命中，**Verdict 之前**必須先逐條列出，缺一不得下 Verdict：
@@ -75,7 +80,8 @@ git diff <base>...<head> -- . | grep -E 'READONLY_AGENTS|READONLY_ALLOWED_BASH'
 | low | 風格、命名、小重構建議 | 建議 |
 
 - **`READONLY_AGENTS` 的成員資格異動**（把 agent 加入或移出唯讀清單）一律以 **high** 計，
-  不得列為 non-blocking：清單的進出直接決定一個角色能否持有完整 `Bash`，而 validator 只檢查清單
-  **之內**的角色，清單本身的增刪沒有任何機械防護（ADR-0007 M1 的已知殘餘洞，且無純程式碼解）。
+  不得列為 non-blocking：清單的進出直接決定一個角色在制度上能否持有完整 `Bash`，而 validator 只依
+  此清單去檢查定義檔上的 `tools` 宣告——**清單本身的增刪連這層靜態檢查都碰不到**，
+  執行層則自始就沒有強制（見 ADR-0007 Context 的 2026-08-25 查證）。
   這是唯一以「改了哪個常數」而非以後果嚴重度定 severity 的例外——理由正是後果在審查當下讀不出來。
   依 qa-reviewer 的交接對象升級 tech-architect 或 CEO 裁定。
