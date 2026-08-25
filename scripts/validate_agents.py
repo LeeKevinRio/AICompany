@@ -25,18 +25,24 @@ ROOT = Path(__file__).resolve().parent.parent
 AGENTS_DIR = ROOT / ".claude" / "agents"
 ORG_CHART = ROOT / "docs" / "org-chart.md"
 
-# scripts/agent_policy.py is the single source of truth for READONLY_AGENTS and
+# .claude/lib/agent_policy.py is the single source of truth for READONLY_AGENTS and
 # READONLY_ALLOWED_BASH: this validator (design-time check) and
 # .claude/hooks/readonly_guard.py (runtime enforcement) must never define their own
 # copy, or the two will drift and the validator will pass agents the hook doesn't
-# actually protect (or vice versa).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# actually protect (or vice versa). It lives under .claude/, not scripts/, on
+# tech-architect's ruling — see .claude/lib/agent_policy.py's module docstring for
+# the reasoning.
+sys.path.insert(0, str(ROOT / ".claude" / "lib"))
 from agent_policy import READONLY_AGENTS, READONLY_ALLOWED_BASH  # noqa: E402
 
 REQUIRED_FIELDS = ("name", "description", "tools", "model")
 
 BASE_TOOLS = {"Read", "Write", "Edit", "Bash", "Glob", "Grep"}
-SCOPED_BASH = {"Bash(codex:*)", "Bash(git diff:*)"}
+# SCOPED_BASH used to be a second, hand-maintained copy of the same two tokens as
+# READONLY_ALLOWED_BASH — defined five lines apart, in the same file, and it still
+# drifted from being a single source of truth in spirit only. tech-architect's
+# ruling: derive it, don't duplicate it.
+SCOPED_BASH = set(READONLY_ALLOWED_BASH)
 PREVIEW_TOOLS = {
     "mcp__Claude_Preview__preview_start",
     "mcp__Claude_Preview__preview_stop",
@@ -56,7 +62,7 @@ TOOL_WHITELIST = BASE_TOOLS | SCOPED_BASH | PREVIEW_TOOLS
 
 MODEL_WHITELIST = {"opus", "sonnet", "haiku", "inherit"}
 
-# READONLY_AGENTS and READONLY_ALLOWED_BASH now come from scripts/agent_policy.py
+# READONLY_AGENTS and READONLY_ALLOWED_BASH now come from .claude/lib/agent_policy.py
 # (imported above). READONLY_FORBIDDEN stays local: it's a validator-only concept
 # (which bare tool names a read-only agent's `tools:` line must never contain), not
 # something the runtime hook needs.

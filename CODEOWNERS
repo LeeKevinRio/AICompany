@@ -1,0 +1,17 @@
+# CODEOWNERS — 唯讀角色權限邊界的守門檔案
+#
+# security-engineer 在 ADR-0007 相關審查中指出：readonly_guard.py 與它依賴的政策模組
+# 本身沒有任何竄改偵測——任何具 Write 權限的角色（例如 dev-lead）都能直接改這支腳本，
+# 而它一旦被改弱，唯讀角色的權限邊界就整個失效卻不會有任何告警。這是預期中的信任邊界
+# （不是本次 PR 新引入的弱點），但值得用 CODEOWNERS 補一道「這些路徑的變更必須經過
+# 額外審查」的門檻。
+#
+# 注意：這個檔案本身不會自動生效——GitHub 需要在 repo 的 branch protection 規則裡開啟
+# 「Require review from Code Owners」，這件事需要 repo 管理員（CEO）在 GitHub 設定裡
+# 手動打開。@LeeKevinRio 是目前 remote 的擁有者帳號；若 security-engineer 有獨立的
+# GitHub 帳號應改指到那個帳號，我目前查不到（本 repo 目前所有 commit 作者都是
+# Claude <noreply@anthropic.com>，沒有可用的人類帳號對應資訊），需要 CEO 確認。
+
+/.claude/hooks/                 @LeeKevinRio
+/.claude/lib/agent_policy.py    @LeeKevinRio
+/scripts/validate_agents.py     @LeeKevinRio

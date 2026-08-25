@@ -78,28 +78,63 @@ Known residual risk (documented honestly, not claimed away):
   rather than "allows something dangerous", but a sufficiently creative shell
   construct this script's author didn't think of could still slip through the
   subcommand-splitting logic (see `_split_subcommands`) even though the blanket
-  `$`/backtick/`<`/`>` deny should catch most realistic bypass attempts.
-- The currently declared whitelist (`codex`, `git diff`) is narrower than
-  qa-reviewer's actual historical workflow (grep, sed -n, pytest, mypy, ruff, uv run,
-  ls, cat, wc, find, git status/log/show, ...). Enforcing it as-is will likely block
-  read-only agents' normal work until CEO/tech-architect decide whether to broaden
-  READONLY_ALLOWED_BASH_PATTERNS in scripts/agent_policy.py. That is a policy
+  dangerous-character deny should catch most realistic shell-level bypass attempts.
+- An earlier version of this hook matched each subcommand with a loose regex
+  (`git\s+diff(?:\s.*)?`, `codex(?:\s.*)?`). security-engineer found and reproduced
+  two CRITICAL bypasses against it: `git diff --output=<path>` overwrites an
+  arbitrary file (git's own `-o`/`--output` flag — nothing to do with shell
+  redirection, so the dangerous-character check never saw it), and any flag
+  appended after "codex" — most importantly
+  `--dangerously-bypass-approvals-and-sandbox` (alias `--yolo`), confirmed against
+  Codex CLI's own source to unconditionally override `--sandbox read-only` — would
+  also pass. Both are now closed by moving to the structural, per-tool matchers in
+  `.claude/lib/agent_policy.py` (`BASH_RULES`): an explicit flag-allowlist for
+  `git diff`, and exact-shape matching for `codex`. Residual risk from *this*
+  design: the git-diff flag allowlist is only as complete as the code review that
+  approved it (a `git diff` flag this reviewer didn't think of, that turns out to
+  also be able to write, would need to be caught the same way `--output` was —
+  by someone specifically looking for it); the codex exact-shape matcher is safer
+  by construction (nothing except the two named forms can match at all) but is
+  only correct insofar as this hook's author read Codex CLI's actual source
+  correctly and Codex CLI doesn't change that behaviour in a future release.
+- The currently declared whitelist (`codex`, `git diff`, and only the specific
+  forms enumerated in `.claude/lib/agent_policy.py`) is much narrower than
+  qa-reviewer's actual historical workflow (grep, sed -n, pytest, mypy, ruff, uv
+  run, ls, cat, wc, find, git status/log/show, plain `codex --version`, ...).
+  Enforcing it as-is will likely block read-only agents' normal work until
+  CEO/tech-architect decide whether to broaden `BASH_RULES`. That is a policy
   decision this hook does not make on its own.
 """
 
 from __future__ import annotations
 
 import json
-import re
+import shlex
 import sys
 from pathlib import Path
 
 # Characters that, anywhere in a raw Bash command string (quoted or not), cause an
-# immediate deny for read-only agents. See module docstring for why these four cover
+# immediate deny for read-only agents. See module docstring for why these cover
 # command substitution ($(...), `...`), process substitution (<(...), >(...)),
 # output/error redirection (>, >>, &>, 2>), heredocs (<<EOF), and input redirection
 # (<) in one pass, without needing to correctly parse shell quoting for them.
-_DANGEROUS_CHARS = ("$", "`", "<", ">")
+# {}!() added on security-engineer's non-blocking suggestion: no proven bypass found
+# through any of them (security-engineer tried brace/paren mid-command syntax-error
+# cases and `!` under non-interactive `bash -c`, which has histexpand off), and
+# real qa-reviewer usage never needs them, so this gate's "block more than strictly
+# necessary" default applies cleanly.
+#
+# `~` was in that suggested set too but is NOT included here: it is not "cost free"
+# — real historical qa-reviewer usage relies on it constantly for parent-commit
+# refs (`ea2923c~1`, `694b374~1`, ...), confirmed against the incident transcripts,
+# and blanket-denying it would break the git-diff allowlist's actual purpose rather
+# than just being conservative. `~` alone (not part of `~(`, `~/`, or similar) has
+# no known shell-expansion risk in a non-interactive, non-login `bash -c` context
+# used the way Claude Code invokes commands (tilde expansion only applies at the
+# start of a word, which `_match_git_diff`'s per-token allowlist already
+# constrains), so leaving it out is a deliberate, evidence-based exception, not an
+# oversight.
+_DANGEROUS_CHARS = ("$", "`", "<", ">", "{", "}", "!", "(", ")")
 
 # Two-character shell operators, checked before the one-character ones so "&&" isn't
 # mis-split as two "&" separators (which would also be wrong, since a lone "&"
@@ -192,13 +227,36 @@ def _contains_dangerous_construct(command: str) -> bool:
     return any(tok in command for tok in _DANGEROUS_CHARS)
 
 
-def _bash_command_allowed(command: object, patterns: tuple[str, ...]) -> tuple[bool, str]:
-    """Return (allowed, reason). reason is only meaningful when allowed is False."""
+def _tokenize(subcommand: str) -> list[str]:
+    """Split one subcommand into shell words (argv-style), quotes removed.
+
+    Delegates to shlex in POSIX mode rather than hand-rolling a second parser: we
+    already used a hand-written quote-aware scanner for _split_subcommands (which
+    has to recognise shell *operators*, something shlex doesn't do), but plain
+    word-splitting with quote removal is exactly what shlex is for, and using the
+    standard library here instead of more bespoke logic means one less parser
+    security-engineer (or anyone else) has to independently verify against real
+    bash semantics. Raises ValueError on unbalanced quotes, same as
+    _split_subcommands' _Unparseable — the caller treats both as "deny".
+    """
+    return shlex.split(subcommand, posix=True)
+
+
+def _bash_command_allowed(command: object, rules: "tuple") -> tuple[bool, str]:
+    """Return (allowed, reason). reason is only meaningful when allowed is False.
+
+    `rules` is agent_policy.BASH_RULES (or the subset applicable to the calling
+    agent — today all of READONLY_BASH_SCOPED_AGENTS share the same rule set, but
+    the parameter stays generic rather than hardcoding that).
+    """
     if not isinstance(command, str) or not command.strip():
         return False, "指令為空或非字串"
 
     if _contains_dangerous_construct(command):
-        return False, "指令含 $ ` < > 其中之一（命令替換/程序替換/重導向/heredoc 一律阻擋）"
+        return False, (
+            "指令含 $ ` < > { } ~ ! ( ) 其中之一"
+            "（命令替換/程序替換/重導向/heredoc/其他 shell 特殊語法一律阻擋）"
+        )
 
     try:
         subcommands = _split_subcommands(command)
@@ -208,12 +266,17 @@ def _bash_command_allowed(command: object, patterns: tuple[str, ...]) -> tuple[b
     if not subcommands:
         return False, "拆解後沒有子命令"
 
-    compiled = [re.compile(p) for p in patterns]
     for sub in subcommands:
         if not sub:
             return False, "存在空的子命令（例如多餘的分隔符）"
-        if not any(p.fullmatch(sub) for p in compiled):
-            return False, f"子命令不在白名單內：{sub!r}"
+        try:
+            tokens = _tokenize(sub)
+        except ValueError as exc:
+            return False, f"子命令無法安全拆解為 shell words（{exc}）：{sub!r}"
+        if not tokens:
+            return False, f"子命令拆解後沒有任何 token：{sub!r}"
+        if not any(rule.match(tokens) for rule in rules):
+            return False, f"子命令不在任何白名單規則內：{sub!r}"
 
     return True, ""
 
@@ -224,11 +287,12 @@ def _decide(data: dict) -> int:
     # error, whatever — is caught by the single try/except in main() and denies,
     # instead of crashing the interpreter before main() even starts (which would
     # exit 1, not the guaranteed-blocking exit 2).
-    repo_root = Path(__file__).resolve().parents[2]
-    sys.path.insert(0, str(repo_root / "scripts"))
+    # .claude/lib, not scripts/ — see agent_policy.py's module docstring for why
+    # (tech-architect ruling, ADR-0007 review).
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
     from agent_policy import (
+        BASH_RULES,
         READONLY_AGENTS,
-        READONLY_ALLOWED_BASH_PATTERNS,
         READONLY_BASH_SCOPED_AGENTS,
     )
 
@@ -254,14 +318,14 @@ def _decide(data: dict) -> int:
         if agent_type not in READONLY_BASH_SCOPED_AGENTS:
             print(
                 f"readonly_guard: 阻擋 — {agent_type} 是唯讀角色且未被授予任何 Bash "
-                "白名單（見 scripts/agent_policy.py READONLY_BASH_SCOPED_AGENTS），"
+                "白名單（見 .claude/lib/agent_policy.py READONLY_BASH_SCOPED_AGENTS），"
                 "一律阻擋 Bash。",
                 file=sys.stderr,
             )
             return 2
 
         command = tool_input.get("command")
-        allowed, reason = _bash_command_allowed(command, READONLY_ALLOWED_BASH_PATTERNS)
+        allowed, reason = _bash_command_allowed(command, BASH_RULES)
         if not allowed:
             print(
                 f"readonly_guard: 阻擋 — {agent_type} 的 Bash 指令不在白名單內。"
