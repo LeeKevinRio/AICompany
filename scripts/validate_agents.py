@@ -25,6 +25,14 @@ ROOT = Path(__file__).resolve().parent.parent
 AGENTS_DIR = ROOT / ".claude" / "agents"
 ORG_CHART = ROOT / "docs" / "org-chart.md"
 
+# scripts/agent_policy.py is the single source of truth for READONLY_AGENTS and
+# READONLY_ALLOWED_BASH: this validator (design-time check) and
+# .claude/hooks/readonly_guard.py (runtime enforcement) must never define their own
+# copy, or the two will drift and the validator will pass agents the hook doesn't
+# actually protect (or vice versa).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agent_policy import READONLY_AGENTS, READONLY_ALLOWED_BASH  # noqa: E402
+
 REQUIRED_FIELDS = ("name", "description", "tools", "model")
 
 BASE_TOOLS = {"Read", "Write", "Edit", "Bash", "Glob", "Grep"}
@@ -48,21 +56,11 @@ TOOL_WHITELIST = BASE_TOOLS | SCOPED_BASH | PREVIEW_TOOLS
 
 MODEL_WHITELIST = {"opus", "sonnet", "haiku", "inherit"}
 
-# Roles whose judgement must stay independent: no write access, no unscoped Bash.
-READONLY_AGENTS = {"qa-reviewer", "qa-e2e", "tech-architect", "risk-compliance-officer"}
+# READONLY_AGENTS and READONLY_ALLOWED_BASH now come from scripts/agent_policy.py
+# (imported above). READONLY_FORBIDDEN stays local: it's a validator-only concept
+# (which bare tool names a read-only agent's `tools:` line must never contain), not
+# something the runtime hook needs.
 READONLY_FORBIDDEN = {"Write", "Edit", "Bash"}
-
-# The only scoped Bash patterns a read-only judge may hold. Adding an entry here is an
-# explicit privilege decision, not a convenience: it must stay non-mutating and
-# enumerable (a fixed, inspectable command surface).
-#
-# Interpreters and shells never qualify, however narrow the pattern looks:
-# `Bash(node:*)` allows `node -e "require('fs').writeFileSync(...)"`, and
-# `Bash(npx playwright:*)` executes the project's own config / globalSetup — both are
-# arbitrary code execution, i.e. technically identical to unscoped Bash. The invariant
-# being protected is "a judge must not be able to modify what it judges", not "a judge
-# must not run anything".
-READONLY_ALLOWED_BASH = {"Bash(codex:*)", "Bash(git diff:*)"}
 
 TRIGGER_PHRASES = ("MUST BE USED", "Use PROACTIVELY")
 DESCRIPTION_MIN, DESCRIPTION_MAX = 20, 400

@@ -15,3 +15,5 @@ jobs:
           python-version: "3.12"
       - name: Validate agent definitions
         run: python scripts/validate_agents.py
+      - name: Test read-only PreToolUse hook (readonly_guard.py)
+        run: python .claude/hooks/test_readonly_guard.py -v
