@@ -130,6 +130,16 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
     setStatus("loading");
     settledRef.current = false;
 
+    // Fires immediately if the embed `<script>` itself fails to load
+    // (network error, ad blocker returning a blocked response, …) instead
+    // of waiting out the full `WIDGET_MOUNT_TIMEOUT_MS` (qa-reviewer on
+    // 4938eb5, Low finding).
+    const handleScriptLoadError = () => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      setStatus("error");
+    };
+
     // The embed script mounts its iframe asynchronously into this host with
     // no completion callback of its own — observing for that iframe's
     // arrival (or its absence past the timeout below) is the only honest
@@ -151,21 +161,42 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
       }
     }, WIDGET_MOUNT_TIMEOUT_MS);
 
+    // The embed `<script>` must be created and appended imperatively:
+    // a `<script>` rendered from JSX is never executed by React on
+    // client-side renders (React warns exactly this), so with the previous
+    // JSX version the widget could only ever load on a full-page SSR visit
+    // — every in-app navigation to a position page timed out into the
+    // fallback message. Structure requirement (script as a direct sibling
+    // inside the widget container) is unchanged; the config JSON goes
+    // through `toScriptSafeJson` exactly as before (second XSS layer on
+    // top of the `toTradingViewSymbol` whitelist — qa-reviewer NEEDS_CHANGES
+    // on 4938eb5).
+    const config = {
+      autosize: true,
+      symbol: tvSymbol,
+      interval: "D",
+      timezone: "Asia/Taipei",
+      theme: "dark",
+      style: "1",
+      locale: "zh_TW",
+      allow_symbol_change: false,
+      calendar: false,
+      support_host: "https://www.tradingview.com",
+    };
+    const script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src = EMBED_SCRIPT_SRC;
+    script.async = true;
+    script.onerror = handleScriptLoadError;
+    script.text = toScriptSafeJson(config);
+    host.appendChild(script);
+
     return () => {
       window.clearTimeout(timeoutId);
       observer.disconnect();
+      script.remove();
     };
   }, [tvSymbol]);
-
-  // Low finding (qa-reviewer on 4938eb5): fires immediately if the embed
-  // `<script>` tag itself fails to load (network error, ad blocker returning
-  // a blocked response, …) instead of waiting out the full
-  // `WIDGET_MOUNT_TIMEOUT_MS` for a load that already failed.
-  const handleScriptLoadError = () => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    setStatus("error");
-  };
 
   // Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5): a rejected symbol
   // never reaches the widget config / dangerous sink below — this is the
@@ -184,19 +215,6 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
       </div>
     );
   }
-
-  const config = {
-    autosize: true,
-    symbol: tvSymbol,
-    interval: "D",
-    timezone: "Asia/Taipei",
-    theme: "dark",
-    style: "1",
-    locale: "zh_TW",
-    allow_symbol_change: false,
-    calendar: false,
-    support_host: "https://www.tradingview.com",
-  };
 
   return (
     <div>
@@ -235,27 +253,13 @@ export function TradingViewChartPanel({ symbol, market }: { symbol: string; mark
             </a>
           </div>
           {/*
-            Remount on symbol change now happens one level up, in `page.tsx`,
-            via `key={`${market}:${symbol}`}` on this whole component — the
-            entire host (this container + the copyright link, not just this
-            `<script>`) is torn down and rebuilt, closing the stale-iframe
-            overlap gap an inner-only `key={tvSymbol}` on just the script tag
-            left open (qa-reviewer on 4938eb5, Medium finding).
-
-            Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, critical
-            reflected XSS, second of two independent layers — the first is
-            the whitelist in `toTradingViewSymbol`): `toScriptSafeJson`
-            escapes `<`/`>`/`&` to their `\uXXXX` form so nothing here can
-            close this `<script>` tag early, even if the whitelist upstream
-            were ever bypassed. See `scriptSafeJson.ts`.
+            The embed `<script>` itself is appended imperatively in the
+            effect above (a JSX `<script>` is never executed by React on
+            client renders). Remount on symbol change still happens one
+            level up, in `page.tsx`, via `key={`${market}:${symbol}`}` on
+            this whole component (qa-reviewer on 4938eb5, Medium finding);
+            the effect's cleanup also removes the script it appended.
           */}
-          <script
-            type="text/javascript"
-            src={EMBED_SCRIPT_SRC}
-            async
-            onError={handleScriptLoadError}
-            dangerouslySetInnerHTML={{ __html: toScriptSafeJson(config) }}
-          />
         </div>
       </div>
     </div>
