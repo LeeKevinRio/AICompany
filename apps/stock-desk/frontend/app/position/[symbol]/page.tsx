@@ -6,10 +6,11 @@ import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
 import { formatDateTime, marketLabel } from "../../lib/format";
-import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, useSignals } from "../../lib/queries";
+import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, usePositions, useSignals } from "../../lib/queries";
 import type { Market } from "../../lib/types";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
+import { KeyLevelsPanel } from "./KeyLevelsPanel";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
@@ -63,6 +64,8 @@ export default function PositionDetailPage() {
   const signals = useSignals(symbol, market, true);
   const bars = useBars(symbol, market, true);
   const advice = useAdvice(symbol, market, true);
+  // 關鍵價位面板的基準成本來源（風控 R13/R14）：直接取持倉原幣別 avg_cost。
+  const positions = usePositions(true);
   // The leverage chapter needs a stored position (opened_at) to build against;
   // a symbol with no matching holding is a real 404 (app/api/leverage.py,
   // verified), rendered as its own quiet note rather than an alarming error.
@@ -114,6 +117,54 @@ export default function PositionDetailPage() {
       <div className="mt-6">
         <OperationSummaryPanel advice={advice} />
       </div>
+
+      {/*
+        --- 關鍵價位參考 (CEO 需求 2026-09-01 MVP; 風控 R10–R12 修訂) --------
+        Number-first digest of range position / pullback / stop / target
+        reference levels, fed by the same bars query as the 本地圖表 below
+        (React Query dedupes). Rendered only on an `ok` bars envelope (risk
+        R12: this panel's gate must be no looser than the chart's). The
+        anchor is a tri-state (risk R10/R11): a confirmed average cost taken
+        from the stored positions' native-currency `avg_cost` (risk R13/R14),
+        a CONFIRMED not-held state, or "unknown" while the positions query is
+        pending or a lot's cost is unusable — the panel words each state
+        differently and never claims 未持有 on "unknown".
+      */}
+      {bars.data && bars.data.status === "ok" && (
+        <KeyLevelsPanel
+          bars={bars.data.bars}
+          {...(() => {
+            // 風控 R13/R14: the anchor cost comes straight from the stored
+            // positions' native-currency `avg_cost` — never reconstructed by
+            // dividing TWD book totals through `fx_to_twd` (that recovers
+            // P0×F0/F1, not the average cost, and the backend's fx placeholder
+            // 1.0 is a contract value that must never touch foreign amounts).
+            // Multiple lots of the same symbol are combined as a
+            // quantity-weighted average in the lots' own (shared) currency.
+            if (positions.data) {
+              const lots = positions.data.items.filter((p) => p.symbol === symbol && p.market === market);
+              if (lots.length === 0) {
+                return { anchorSource: "close-not-held" as const, avgCost: null };
+              }
+              let qtySum = 0;
+              let costSum = 0;
+              for (const lot of lots) {
+                const qty = Number.parseFloat(lot.quantity);
+                const cost = Number.parseFloat(lot.avg_cost);
+                if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
+                  // Held, but a lot's cost is unusable — never claim 未持有.
+                  return { anchorSource: "close-unknown" as const, avgCost: null };
+                }
+                qtySum += qty;
+                costSum += cost * qty;
+              }
+              return { anchorSource: "cost" as const, avgCost: costSum / qtySum };
+            }
+            // Positions query pending or failed: holding status undetermined.
+            return { anchorSource: "close-unknown" as const, avgCost: null };
+          })()}
+        />
+      )}
 
       {/*
         --- Technical analysis (FR-C1 information architecture + FR-C2 indicator

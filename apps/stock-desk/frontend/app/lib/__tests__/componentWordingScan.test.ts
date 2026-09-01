@@ -34,6 +34,58 @@ import {
   TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE,
 } from "../../position/[symbol]/TradingViewChartPanel";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
+import {
+  KEY_LEVELS_BASIS_ANCHOR,
+  KEY_LEVELS_BASIS_ATR,
+  KEY_LEVELS_BASIS_MA,
+  KEY_LEVELS_BASIS_PULLBACK,
+  KEY_LEVELS_BASIS_RECENT_LOW60,
+  KEY_LEVELS_BASIS_SECTION_TITLE,
+  KEY_LEVELS_BASIS_STOP,
+  KEY_LEVELS_BASIS_TARGET,
+  KEY_LEVELS_BASIS_UNADJUSTED_XREF,
+  KEY_LEVELS_BASIS_ZONE,
+  KEY_LEVELS_HEADER_DASH_NOTICE,
+  KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+  KEY_LEVELS_HEADER_UNADJUSTED_NOTICE,
+  KEY_LEVELS_MA60_DEVIATION_LABEL,
+  KEY_LEVELS_NO_DATA_STATEMENT,
+  KEY_LEVELS_PANEL_DISCLAIMER,
+  KEY_LEVELS_PANEL_TITLE,
+  KEY_LEVELS_PULLBACK_CARD_TITLE,
+  KEY_LEVELS_PULLBACK_EXPLAIN_NOTE,
+  KEY_LEVELS_PULLBACK_ROW_MA20,
+  KEY_LEVELS_PULLBACK_ROW_MA60,
+  KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60,
+  KEY_LEVELS_STOP_CARD_TITLE,
+  KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE,
+  KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
+  KEY_LEVELS_STOP_ROW_ATR,
+  KEY_LEVELS_STOP_ROW_FIXED_PCT,
+  KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+  KEY_LEVELS_TARGET_ANCHOR_CROSS_REF,
+  KEY_LEVELS_TARGET_CARD_TITLE,
+  KEY_LEVELS_TARGET_ROW_2R,
+  KEY_LEVELS_TARGET_ROW_FIXED_PCT,
+  KEY_LEVELS_TARGET_ROW_TRAILING_LABEL,
+  KEY_LEVELS_TARGET_ROW_TRAILING_NOTE,
+  KEY_LEVELS_TARGET_STANDING_NOTICE,
+  KEY_LEVELS_ZONE_LABEL_HIGH,
+  KEY_LEVELS_ZONE_LABEL_LOW,
+  KEY_LEVELS_ZONE_LABEL_MID,
+  buildBasisClose,
+  buildBasisRange,
+  buildFooterSample,
+  buildKeyLevelsCloseLine,
+  buildRangeCardTitle,
+  buildRangeFlatReason,
+  buildRangeInsufficientReason,
+  buildRangeLabel,
+  buildRangeNotValuationNote,
+  buildStopBasisConfirmedNotHeld,
+  buildStopBasisHeldWithCost,
+  buildStopBasisUnknown,
+} from "../../position/[symbol]/KeyLevelsPanel";
 
 const SCANNED_FILES = [
   "../../position/[symbol]/OperationSummaryPanel.tsx",
@@ -56,6 +108,9 @@ const SCANNED_FILES = [
   // 持倉/警示規則表面。
   "../../components/EditPositionModal.tsx",
   "../../settings/AlertRulesSection.tsx",
+  // 風控 2026-09-01 VETO 落地條件 3：關鍵價位面板全部字面納入掃描與逐字釘住。
+  "../../position/[symbol]/KeyLevelsPanel.tsx",
+  "../keyLevels.ts",
   // FE-WIRING BLOCKING 退修 2026-08-09（qa-reviewer 建議）：ref 型條件的
   // 唯讀提示句是這批新加的硬編碼 JSX 文案，兩個相關檔案原本都未被掃到。
   "../../settings/EditAlertRuleModal.tsx",
@@ -384,5 +439,212 @@ describe("DataSourcesSection.tsx — CONFIGURED_SOURCES rows (D5④/D5⑤ 字面
       backups:
         "TTL 內本地快取（優先於主要來源）→ Alpha Vantage → yfinance → 任何可用快取 → 資料不足",
     });
+  });
+});
+
+/**
+ * 風控 2026-09-01 VETO 落地條件 3：關鍵價位面板全部面向使用者字面
+ * (`work/stock-desk-關鍵價位-文案成稿.md`，creative-lead 第二版定稿) 逐字
+ * 釘住＋禁用詞掃描＋裸「即時」掃描。字面（含標點）不得再改動，任何變更視為
+ * 漂移須重送風控。
+ */
+describe("KeyLevelsPanel 定稿字面", () => {
+  const STATIC_CONSTANTS: Record<string, string> = {
+    KEY_LEVELS_PANEL_TITLE,
+    KEY_LEVELS_PANEL_DISCLAIMER,
+    KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+    KEY_LEVELS_HEADER_UNADJUSTED_NOTICE,
+    KEY_LEVELS_HEADER_DASH_NOTICE,
+    KEY_LEVELS_ZONE_LABEL_LOW,
+    KEY_LEVELS_ZONE_LABEL_MID,
+    KEY_LEVELS_ZONE_LABEL_HIGH,
+    KEY_LEVELS_MA60_DEVIATION_LABEL,
+    KEY_LEVELS_PULLBACK_CARD_TITLE,
+    KEY_LEVELS_PULLBACK_EXPLAIN_NOTE,
+    KEY_LEVELS_PULLBACK_ROW_MA20,
+    KEY_LEVELS_PULLBACK_ROW_MA60,
+    KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60,
+    KEY_LEVELS_STOP_CARD_TITLE,
+    KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE,
+    KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
+    KEY_LEVELS_STOP_ROW_ATR,
+    KEY_LEVELS_STOP_ROW_FIXED_PCT,
+    KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+    KEY_LEVELS_TARGET_CARD_TITLE,
+    KEY_LEVELS_TARGET_ANCHOR_CROSS_REF,
+    KEY_LEVELS_TARGET_STANDING_NOTICE,
+    KEY_LEVELS_TARGET_ROW_2R,
+    KEY_LEVELS_TARGET_ROW_FIXED_PCT,
+    KEY_LEVELS_TARGET_ROW_TRAILING_LABEL,
+    KEY_LEVELS_TARGET_ROW_TRAILING_NOTE,
+    KEY_LEVELS_BASIS_ZONE,
+    KEY_LEVELS_BASIS_MA,
+    KEY_LEVELS_BASIS_RECENT_LOW60,
+    KEY_LEVELS_BASIS_ATR,
+    KEY_LEVELS_BASIS_STOP,
+    KEY_LEVELS_BASIS_TARGET,
+    KEY_LEVELS_BASIS_ANCHOR,
+    KEY_LEVELS_BASIS_PULLBACK,
+    KEY_LEVELS_BASIS_UNADJUSTED_XREF,
+    KEY_LEVELS_BASIS_SECTION_TITLE,
+    KEY_LEVELS_NO_DATA_STATEMENT,
+  };
+
+  const BUILT_SAMPLES: Record<string, string> = {
+    buildKeyLevelsCloseLine: buildKeyLevelsCloseLine("918.66", "2026-09-01"),
+    buildRangeCardTitle: buildRangeCardTitle(252),
+    buildRangeLabel: buildRangeLabel(252),
+    buildRangeNotValuationNote: buildRangeNotValuationNote(252),
+    buildRangeInsufficientReason: buildRangeInsufficientReason(42),
+    buildRangeFlatReason: buildRangeFlatReason(300),
+    buildStopBasisHeldWithCost: buildStopBasisHeldWithCost("895.44"),
+    buildStopBasisConfirmedNotHeld: buildStopBasisConfirmedNotHeld("918.66"),
+    buildStopBasisUnknown: buildStopBasisUnknown("918.66"),
+    buildBasisClose: buildBasisClose("918.66", "2026-09-01"),
+    buildBasisRange: buildBasisRange(252),
+    buildFooterSample: buildFooterSample(387, "2026-09-01"),
+  };
+
+  it("每一句定稿：不含 §1.3 禁用詞", () => {
+    for (const [name, text] of [...Object.entries(STATIC_CONSTANTS), ...Object.entries(BUILT_SAMPLES)]) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, name);
+    }
+  });
+
+  it("每一句定稿：每個「即時」都是否定語境，無裸即時宣稱", () => {
+    for (const text of [...Object.values(STATIC_CONSTANTS), ...Object.values(BUILT_SAMPLES)]) {
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("頭部揭露段逐字比對成稿", () => {
+    expect(KEY_LEVELS_PANEL_DISCLAIMER).toBe(
+      "以下數字皆為本面板依固定算式計算之參考水位，僅供研究與教育用途，非投資建議，亦非任何買賣指示；" +
+        "每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。",
+    );
+    expect(KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE).toBe(
+      "本面板不判斷、也不另行標示所使用的日線資料是否已經過舊。",
+    );
+    expect(KEY_LEVELS_HEADER_UNADJUSTED_NOTICE).toBe(
+      "以下所有計算皆以未還原權值之原始收盤價進行；跨除權息日之區間、均線與 ATR(14) 可能因此失真。",
+    );
+    expect(KEY_LEVELS_HEADER_DASH_NOTICE).toBe(
+      "面板中以「—」呈現的欄位，代表可用日線根數尚未達最低計算門檻，並非數值為零或計算結果為零。",
+    );
+  });
+
+  it("三態基準句逐字比對成稿（{X} 代入）", () => {
+    expect(buildStopBasisHeldWithCost("895.44")).toBe("本卡以你的持倉平均成本 895.44 為基準計算。");
+    expect(buildStopBasisConfirmedNotHeld("918.66")).toBe(
+      "未持有此標的，以最新收盤 918.66 試算；此數字不是任何進場暗示。",
+    );
+    expect(buildStopBasisUnknown("918.66")).toBe("持倉成本尚未取得，暫以最新收盤 918.66 試算。");
+  });
+
+  it("R5 停利常駐句與 R9 條件句逐字比對成稿", () => {
+    expect(KEY_LEVELS_TARGET_STANDING_NOTICE).toBe(
+      "以下數字皆由固定算式自基準價推得，僅為算式計算結果，不代表價格未來會到達此水位；" +
+        "「2R」所稱賺賠比 2:1，僅描述算式中兩個差值之間的比例關係，不代表任何達成機率。",
+    );
+    expect(KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE).toBe("大字為 2×ATR(14) 與 −8% 兩者中較緊（虧損較小）者。");
+    expect(KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE).toBe("ATR(14) 資料不足，大字僅為 −8% 固定停損。");
+  });
+
+  it("無資料狀態句與頁尾樣本句逐字比對成稿（R4 無未來式承諾）", () => {
+    expect(KEY_LEVELS_NO_DATA_STATEMENT).toBe("目前沒有可用的日線資料，本面板無法計算任何關鍵價位。");
+    expect(buildFooterSample(387, "2026-09-01")).toBe(
+      "計算樣本：387 根日線，最後一根 2026-09-01。本面板僅供研究與教育用途，不構成投資建議。",
+    );
+  });
+
+  // 風控第二輪 R16：其餘全部常數逐字釘住（retyped, not imported）。
+  it("標題、收盤列與位階卡字面逐字比對成稿", () => {
+    expect(KEY_LEVELS_PANEL_TITLE).toBe("關鍵價位參考");
+    expect(buildKeyLevelsCloseLine("918.66", "2026-09-01")).toBe("收盤 918.66（2026-09-01）");
+    expect(buildRangeCardTitle(252)).toBe("近 252 根日線位階");
+    expect(KEY_LEVELS_ZONE_LABEL_LOW).toBe("區間下緣");
+    expect(KEY_LEVELS_ZONE_LABEL_MID).toBe("區間中段");
+    expect(KEY_LEVELS_ZONE_LABEL_HIGH).toBe("區間上緣");
+    expect(buildRangeLabel(252)).toBe("近 252 根區間");
+    expect(KEY_LEVELS_MA60_DEVIATION_LABEL).toBe("對 MA60 乖離");
+    expect(buildRangeNotValuationNote(252)).toBe(
+      "位階描述價格相對自身近 252 根區間的位置，不等於便宜或昂貴的估值判斷。",
+    );
+    expect(buildRangeInsufficientReason(42)).toBe(
+      "日線根數不足，本次無法計算區間位階（僅有 42 根，至少需要 60 根）。",
+    );
+    expect(buildRangeFlatReason(300)).toBe(
+      "本次採樣的 300 根日線中，最高價與最低價相同，位階公式的分母為零，無法定義位階。",
+    );
+  });
+
+  it("拉回卡與停損/停利卡其餘字面逐字比對成稿", () => {
+    expect(KEY_LEVELS_PULLBACK_CARD_TITLE).toBe("拉回觀察參考");
+    expect(KEY_LEVELS_PULLBACK_EXPLAIN_NOTE).toBe(
+      "本面板固定以 MA20、MA60、近 60 日低點作為拉回觀察區；是否跌破為觀察條件，不是進出指令；" +
+        "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。",
+    );
+    expect(KEY_LEVELS_PULLBACK_ROW_MA20).toBe("MA20");
+    expect(KEY_LEVELS_PULLBACK_ROW_MA60).toBe("MA60");
+    expect(KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60).toBe("近 60 日低點");
+    expect(KEY_LEVELS_STOP_CARD_TITLE).toBe("停損參考");
+    expect(KEY_LEVELS_STOP_ROW_ATR).toBe("2×ATR(14)");
+    expect(KEY_LEVELS_STOP_ROW_FIXED_PCT).toBe("−8% 固定停損");
+    expect(KEY_LEVELS_STOP_S5_NEUTRAL_NOTE).toBe(
+      "停損參考水位與最新收盤的相對高低，因基準價與波動不同而不同，可能高於也可能低於最新收盤。",
+    );
+    expect(KEY_LEVELS_TARGET_CARD_TITLE).toBe("停利參考");
+    expect(KEY_LEVELS_TARGET_ANCHOR_CROSS_REF).toBe("本卡數字所用之基準價，與「停損參考」卡片相同。");
+    expect(KEY_LEVELS_TARGET_ROW_2R).toBe("2R（賺賠比 2:1）");
+    expect(KEY_LEVELS_TARGET_ROW_FIXED_PCT).toBe("+20% 固定停利");
+    expect(KEY_LEVELS_TARGET_ROW_TRAILING_LABEL).toBe("移動停利觀察");
+    expect(KEY_LEVELS_TARGET_ROW_TRAILING_NOTE).toBe(
+      "（與「拉回觀察」卡片的 MA20 為同一數字；系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件）",
+    );
+  });
+
+  it("計算依據全部條目逐字比對成稿", () => {
+    expect(KEY_LEVELS_BASIS_SECTION_TITLE).toBe("計算依據（逐項揭露）");
+    expect(buildBasisClose("918.66", "2026-09-01")).toBe(
+      "收盤：本面板所有計算所稱之「收盤」，皆為系統行情資料鏈中該標的最近一根日線的收盤價，" +
+        "與面板頂部「收盤 918.66（2026-09-01）」為同一數字。",
+    );
+    expect(buildBasisRange(252)).toBe(
+      "位階（近 252 根區間）＝（收盤 − 近 252 根 K 最低價）÷（近 252 根 K 最高價 − 近 252 根 K 最低價）×100%；" +
+        "252 最多取 252 根，不足 252 根時以實際根數計算，未滿 60 根時不計算位階。",
+    );
+    expect(KEY_LEVELS_BASIS_ZONE).toBe(
+      "分類：≤30% 標示為「區間下緣」、≥70% 標示為「區間上緣」，其餘標示為「區間中段」；" +
+        "30%／70% 這兩個門檻為本面板自訂之分類標準，並無實證依據，亦非任何機構或研究之結論。",
+    );
+    expect(KEY_LEVELS_BASIS_MA).toBe(
+      "MA20／MA60＝最近 20／60 根收盤價之簡單平均；對 MA60 乖離＝收盤 ÷ MA60 − 1，以百分比表示。",
+    );
+    expect(KEY_LEVELS_BASIS_RECENT_LOW60).toBe("近 60 日低點＝最近 60 根日線最低價中的最小值。");
+    expect(KEY_LEVELS_BASIS_ATR).toBe(
+      "ATR(14)＝最近 14 根日線真實波幅（TR）的簡單平均；未滿 15 根日線時無法計算，本面板不以其他方式估算或填補。",
+    );
+    expect(KEY_LEVELS_BASIS_STOP).toBe(
+      "停損參考：若 ATR(14) 可得，大字為「基準價 − 2×ATR(14)」與「基準價 × 0.92（固定 −8% 停損）」兩者中較緊（虧損較小）者；" +
+        "若 ATR(14) 不可得，大字僅為「基準價 × 0.92」。本面板固定採 −8% 作為固定停損比例，僅為本面板自訂之算式參數，" +
+        "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。",
+    );
+    expect(KEY_LEVELS_BASIS_TARGET).toBe(
+      "停利參考：2R＝基準價 +2 ×（基準價 − 上方停損參考大字），此為算式定義下賺賠比 2:1 的計算結果，不代表任何達成機率；" +
+        "固定停利＝基準價 × 1.2（本面板固定採 +20%），同樣僅為本面板自訂之算式參數，並非本系統對任何族群實際行為的統計，" +
+        "本系統未持有此類統計資料；「移動停利觀察」顯示的是 MA20 的同一數字，系統並未另行計算移動停利水位，" +
+        "僅以跌破 MA20 作為觀察條件。",
+    );
+    expect(KEY_LEVELS_BASIS_ANCHOR).toBe(
+      "基準價：若持有此標的且成本可得，為持倉平均成本；若持有此標的但持倉成本尚未取得，暫以最新收盤試算；" +
+        "若確認未持有此標的，以最新收盤試算，此數字不是任何進場暗示。",
+    );
+    expect(KEY_LEVELS_BASIS_PULLBACK).toBe(
+      "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位；是否跌破為觀察條件，不是進出指令；" +
+        "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。",
+    );
+    expect(KEY_LEVELS_BASIS_UNADJUSTED_XREF).toBe(
+      "以上計算皆以未還原權值之原始收盤價進行，跨除權息日可能失真；完整說明見面板頂部揭露。",
+    );
   });
 });
