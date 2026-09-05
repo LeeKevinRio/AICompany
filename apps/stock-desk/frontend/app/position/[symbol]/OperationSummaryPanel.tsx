@@ -80,7 +80,7 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
       <div className="mt-3 space-y-3">
         <InsufficientPanel reason={model.reason} />
         <StaleDataAlert notice={model.staleDataNotice} />
-        <p className="text-xs text-neutral-500">{model.nonRealtimeNotice}</p>
+        <p className="text-sm text-neutral-400">{model.nonRealtimeNotice}</p>
       </div>
     );
   }
@@ -93,7 +93,7 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         <InsufficientPanel reason={model.reason} />
         <StaleDataAlert notice={model.staleDataNotice} />
         <DisclaimerBanner text={model.disclaimer} />
-        <p className="text-xs text-neutral-500">{model.nonRealtimeNotice}</p>
+        <p className="text-sm text-neutral-400">{model.nonRealtimeNotice}</p>
       </div>
     );
   }
@@ -293,7 +293,7 @@ function RequiredElementsFooter({
       )}
 
       <p className="text-xs text-neutral-500">{required.rulesStatement}</p>
-      <p className="text-xs text-neutral-500">{required.nonRealtimeNotice}</p>
+      <p className="text-sm text-neutral-400">{required.nonRealtimeNotice}</p>
     </div>
   );
 }
