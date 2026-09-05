@@ -1,14 +1,6 @@
 import type { AdviceCard } from "../../lib/types";
-import {
-  actionRawLabel,
-  cardActionColorClass,
-  confidenceLabel,
-  formatDateTime,
-  formatNumber,
-  formatPercent,
-  ruleDirectionLabel,
-} from "../../lib/format";
-import { buildAttributedHeadline } from "../../lib/adviceWording";
+import { actionRawLabel, formatDateTime, formatNumber, formatPercent, ruleDirectionLabel } from "../../lib/format";
+import { ADVICE_CARD_XREF_TO_SUMMARY } from "../../lib/sectionTaglines";
 import { LimitsCheckList } from "./LimitsCheckList";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -39,34 +31,23 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
 
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <span
-          className={`inline-block rounded-md border px-3 py-1 text-lg font-bold ${cardActionColorClass(
-            advice.action,
-          )}`}
-        >
-          {buildAttributedHeadline(advice.action)}
-        </span>
-        <span className="text-sm text-neutral-400">
-          信心等級：{confidenceLabel(advice.confidence)}
-        </span>
-        <span className="text-xs text-neutral-500">規則版本 {advice.rules_version}</span>
-      </div>
-      <p className="mt-2 text-xs text-neutral-500">{advice.confidence_meaning}</p>
-      <p className="mt-1 text-xs text-neutral-500">
-        資料時間：{formatDateTime(advice.as_of)}｜觀察區間：
+      {/*
+        個股頁減負 FR-4 方向 A（風控預審 C5–C7；逐字審第一輪）：headline／信心等級／
+        confidenceMeaning／disclaimer／建議數量區間／反面論點／失效條件 同進同退，
+        全部移出本卡——它們在上方「操作摘要」完整且唯一呈現（C5/C6）。本卡收斂為
+        純規則明細，最上方以交叉引用句銜接。
+
+        R3 fix (risk-final-review.md) 的承載體改為這句銜接句：繼承 R3 呈現規格——
+        卡片最上方、≥ text-sm、≥ text-neutral-200、不可摺疊（風控逐字審第一輪
+        required）。不得再於本卡單獨放回 headline 而不帶 disclaimer（C5 紅線）。
+      */}
+      <p className="rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
+        {ADVICE_CARD_XREF_TO_SUMMARY}
+      </p>
+      <p className="mt-2 text-xs text-neutral-500">
+        規則版本 {advice.rules_version}｜資料時間：{formatDateTime(advice.as_of)}｜觀察區間：
         {advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}
         （{advice.observation_window.bars ?? "—"} 根日線）
-      </p>
-
-      {/*
-        R3 fix (risk-final-review.md): the disclaimer must sit in the same
-        visual region as the headline, at the same size/weight as
-        `OperationSummaryPanel`'s `DisclaimerBanner` — never demoted to the
-        smallest text size and pushed to the bottom of the card.
-      */}
-      <p className="mt-3 rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
-        {advice.disclaimer}
       </p>
 
       {hasBlockedNotices && (
@@ -92,28 +73,6 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
           </ul>
         </div>
       )}
-
-      <Section title="建議數量區間">
-        {advice.quantity_range === null ? (
-          <p className="text-sm text-neutral-500">此建議未附帶數量區間（無法從風險上限推導）。</p>
-        ) : (
-          <div className="text-sm text-neutral-300">
-            <p>
-              {advice.quantity_range.min_shares.toLocaleString("zh-Hant-TW")} ~{" "}
-              {advice.quantity_range.max_shares.toLocaleString("zh-Hant-TW")} 股
-            </p>
-            <p className="mt-1 text-xs text-neutral-500">{advice.quantity_range.basis}</p>
-            {!advice.quantity_range.restores_compliance && (
-              <div
-                role="alert"
-                className="mt-2 rounded-md border border-rose-800 bg-rose-950/50 px-4 py-3 text-sm font-semibold text-rose-300"
-              >
-                此賣出量無法讓上限恢復合規
-              </div>
-            )}
-          </div>
-        )}
-      </Section>
 
       <Section title={`命中規則（${advice.matched_rules.length} 條）`}>
         {advice.matched_rules.length === 0 ? (
@@ -171,38 +130,16 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
             a reader needs this sentence specifically then, not merely when
             actions differ within the same direction, and not when the second
             direction is the neutral `hold` bucket.
+            個股頁減負 FR-4 方向 A（風控第二輪 R-1）：headline 已移至操作摘要，
+            本句指涉改為「上方操作摘要的結論」，並統一為全形逗號。
           */}
           {hasOpposingDirections(advice) && (
             <p className="mt-2 text-xs text-amber-300">
-              本次同時命中方向相反的規則,卡片上方動作只代表權重較高的一方。
+              本次同時命中方向相反的規則，上方操作摘要的結論只代表權重較高的一方。
             </p>
           )}
         </Section>
       )}
-
-      <Section title="反面論點">
-        {advice.counterarguments.length === 0 ? (
-          <p className="text-sm text-neutral-500">無。</p>
-        ) : (
-          <ul className="list-disc space-y-1 pl-5 text-sm text-neutral-400">
-            {advice.counterarguments.map((text, i) => (
-              <li key={i}>{text}</li>
-            ))}
-          </ul>
-        )}
-      </Section>
-
-      <Section title="失效條件">
-        {advice.invalidation_conditions.length === 0 ? (
-          <p className="text-sm text-neutral-500">無。</p>
-        ) : (
-          <ul className="list-disc space-y-1 pl-5 text-sm text-neutral-400">
-            {advice.invalidation_conditions.map((text, i) => (
-              <li key={i}>{text}</li>
-            ))}
-          </ul>
-        )}
-      </Section>
 
       <Section title="風險上限檢查">
         <LimitsCheckList limits={advice.limits_check} />

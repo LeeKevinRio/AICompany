@@ -10,6 +10,13 @@
  * FR-C6/C7 wording review — see that file's header.
  */
 
+/*
+ * 個股頁減負 FR-3（風控預審 C3）：§2 八要素中的「非即時揭露」自 2026-09-02 起
+ * 由頁級揭露區 `app/components/PageDisclosureSection.tsx` 在整頁單一呈現，
+ * `OperationSummaryPanel` 不再自行渲染 `nonRealtimeNotice`。本模型仍回傳該欄位
+ * （供守門測試與其他消費者），但頁面對此要素的滿足依賴 page.tsx 必定渲染
+ * `<PageDisclosureSection />`——`componentWordingScan.test.ts` 有守門測試。
+ */
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
   AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,

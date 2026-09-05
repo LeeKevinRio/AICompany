@@ -35,6 +35,17 @@ import {
 } from "../../position/[symbol]/TradingViewChartPanel";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
+  ADVICE_CARD_XREF_TO_SUMMARY,
+  KEY_LEVELS_TAGLINE,
+  LEVERAGE_CHAPTER_TAGLINE,
+  OPERATION_SUMMARY_TAGLINE,
+  PAGE_LEVEL_DISCLOSURE_SECTION_INTRO,
+  PAGE_LEVEL_DISCLOSURE_SECTION_TITLE,
+  TECHNICAL_CHART_TAGLINE,
+  TECHNICAL_INDICATORS_TAGLINE,
+} from "../sectionTaglines";
+import { NON_REALTIME_NOTICE } from "../adviceWording";
+import {
   KEY_LEVELS_BASIS_ANCHOR,
   KEY_LEVELS_BASIS_ATR,
   KEY_LEVELS_BASIS_MA,
@@ -111,6 +122,10 @@ const SCANNED_FILES = [
   // 風控 2026-09-01 VETO 落地條件 3：關鍵價位面板全部字面納入掃描與逐字釘住。
   "../../position/[symbol]/KeyLevelsPanel.tsx",
   "../keyLevels.ts",
+  // 個股頁減負（work/stock-desk-個股頁減負-PRD.md，風控 2026-09-02）：導讀／頁級
+  // 揭露區／建議卡銜接句的新字面與其渲染元件。
+  "../sectionTaglines.ts",
+  "../../components/PageDisclosureSection.tsx",
   // FE-WIRING BLOCKING 退修 2026-08-09（qa-reviewer 建議）：ref 型條件的
   // 唯讀提示句是這批新加的硬編碼 JSX 文案，兩個相關檔案原本都未被掃到。
   "../../settings/EditAlertRuleModal.tsx",
@@ -639,12 +654,124 @@ describe("KeyLevelsPanel 定稿字面", () => {
       "基準價：若持有此標的且成本可得，為持倉平均成本；若持有此標的但持倉成本尚未取得，暫以最新收盤試算；" +
         "若確認未持有此標的，以最新收盤試算，此數字不是任何進場暗示。",
     );
+    // 個股頁減負 FR-5（風控逐字審第一輪建議句）：改為交叉引用，但「不是進出指令」
+    // 否定式限定依 C8 必須保留——下方另有正向斷言防止再被去重。
     expect(KEY_LEVELS_BASIS_PULLBACK).toBe(
-      "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位；是否跌破為觀察條件，不是進出指令；" +
-        "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。",
+      "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位，是否跌破為觀察條件，不是進出指令；" +
+        "其餘限制說明見上方『拉回觀察參考』卡片，本處不重複列出。",
     );
+    expect(KEY_LEVELS_BASIS_PULLBACK).toContain("不是進出指令");
+    // C9：否定式統計聲明仍須存在於頁面（卡片層承載）。
+    expect(KEY_LEVELS_PULLBACK_EXPLAIN_NOTE).toContain("並非本系統對任何族群實際行為的統計");
     expect(KEY_LEVELS_BASIS_UNADJUSTED_XREF).toBe(
       "以上計算皆以未還原權值之原始收盤價進行，跨除權息日可能失真；完整說明見面板頂部揭露。",
     );
+  });
+});
+
+
+/**
+ * 個股頁減負（PRD FR-2／FR-3／FR-4 方向 A；風控 2026-09-02 預審 C1–C7 與逐字審）：
+ * 新字面逐字釘住＋禁用詞掃描＋裸「即時」掃描，以及頁級揭露區的守門測試（C3：
+ * page.tsx 缺席該區塊 ⇒ 紅燈；該區塊必須渲染 NON_REALTIME_NOTICE）。
+ */
+describe("個股頁減負 新字面與頁級揭露區守門", () => {
+  const CONSTANTS: Record<string, string> = {
+    OPERATION_SUMMARY_TAGLINE,
+    KEY_LEVELS_TAGLINE,
+    TECHNICAL_CHART_TAGLINE,
+    TECHNICAL_INDICATORS_TAGLINE,
+    LEVERAGE_CHAPTER_TAGLINE,
+    PAGE_LEVEL_DISCLOSURE_SECTION_TITLE,
+    PAGE_LEVEL_DISCLOSURE_SECTION_INTRO,
+    ADVICE_CARD_XREF_TO_SUMMARY,
+  };
+
+  it("每一句：不含 §1.3 禁用詞、無裸即時宣稱", () => {
+    for (const [name, text] of Object.entries(CONSTANTS)) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, name);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("五則導讀逐字比對定稿，且每則 ≤ 30 字", () => {
+    expect(OPERATION_SUMMARY_TAGLINE).toBe("這裡先給一句規則評估結論，細節在下方逐項展開。");
+    expect(KEY_LEVELS_TAGLINE).toBe("這裡是系統依公式算出的參考價位，算法列在下方。");
+    expect(TECHNICAL_CHART_TAGLINE).toBe("這裡呈現價格與均線圖表，方便比對數字與圖形。");
+    expect(TECHNICAL_INDICATORS_TAGLINE).toBe("這裡列出技術指標數值，用途與計算方式見下方說明。");
+    expect(LEVERAGE_CHAPTER_TAGLINE).toBe("這裡說明槓桿 ETF 的損耗特性，含拆解與假設情境試算。");
+    for (const text of [
+      OPERATION_SUMMARY_TAGLINE,
+      KEY_LEVELS_TAGLINE,
+      TECHNICAL_CHART_TAGLINE,
+      TECHNICAL_INDICATORS_TAGLINE,
+      LEVERAGE_CHAPTER_TAGLINE,
+    ]) {
+      expect([...text].length).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it("頁級揭露區標題與導語逐字比對定稿", () => {
+    expect(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE).toBe("本頁資料與計算揭露");
+    expect(PAGE_LEVEL_DISCLOSURE_SECTION_INTRO).toBe(
+      "以下為本頁共用的資料來源與更新頻率說明；各項計算方式與限制，另列於對應區塊。",
+    );
+  });
+
+  it("建議卡銜接句逐字比對定稿（含 C7 的「非結論」否定式限定）", () => {
+    expect(ADVICE_CARD_XREF_TO_SUMMARY).toBe(
+      "結論、信心等級、免責事項、反面論點、失效條件與建議數量區間，已完整列於上方操作摘要；" +
+        "本卡以下僅列命中規則、風險上限檢查與資料完整度等規則明細；規則明細本身不是結論。",
+    );
+    expect(ADVICE_CARD_XREF_TO_SUMMARY).toContain("規則明細本身不是結論");
+  });
+
+  it("C2/C3 守門：page.tsx 必須渲染 PageDisclosureSection，且該元件必須渲染 NON_REALTIME_NOTICE", () => {
+    const pageSource = readFileSync(
+      fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(pageSource).toContain("<PageDisclosureSection />");
+    const sectionSource = readFileSync(
+      fileURLToPath(new URL("../../components/PageDisclosureSection.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(sectionSource).toContain("{NON_REALTIME_NOTICE}");
+    // C2：區塊為靜態常數，不得依賴任何 query 狀態
+    expect(sectionSource).not.toMatch(/useQuery|useAdvice|useBars|isPending|isError/);
+    expect(NON_REALTIME_NOTICE.length).toBeGreaterThan(0);
+  });
+
+  it("FR-2 wiring 守門：五則導讀各自的宿主元件確實渲染該常數（qa-reviewer 建議）", () => {
+    const wiring: [string, string][] = [
+      ["../../position/[symbol]/OperationSummaryPanel.tsx", "{OPERATION_SUMMARY_TAGLINE}"],
+      ["../../position/[symbol]/KeyLevelsPanel.tsx", "{KEY_LEVELS_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{TECHNICAL_CHART_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{TECHNICAL_INDICATORS_TAGLINE}"],
+      ["../../position/[symbol]/LeverageChapterView.tsx", "{LEVERAGE_CHAPTER_TAGLINE}"],
+    ];
+    for (const [rel, needle] of wiring) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src, `${rel} 應渲染 ${needle}`).toContain(needle);
+    }
+  });
+
+  it("FR-4 C5 守門：AdviceCardView 必須渲染銜接句，且不得單獨放回 headline／disclaimer／信心等級", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(src).toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
+    // C5：headline／信心等級／confidenceMeaning／disclaimer 同進同退——任何一項回流即紅燈。
+    expect(src).not.toMatch(/buildAttributedHeadline|CANDIDATE_HEADING_LABEL|advice\.disclaimer|confidenceLabel\(|confidence_meaning/);
+    // R-1：衝突揭露句指涉改為操作摘要的結論（逐字）。
+    expect(src).toContain("本次同時命中方向相反的規則，上方操作摘要的結論只代表權重較高的一方。");
+  });
+
+  it("FR-3 C4：NON_REALTIME_NOTICE 在頁面元件中只由頁級揭露區渲染（操作摘要與關鍵價位面板不再重複）", () => {
+    for (const rel of ["../../position/[symbol]/OperationSummaryPanel.tsx", "../../position/[symbol]/KeyLevelsPanel.tsx"]) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src).not.toMatch(/\{(model|required)\.nonRealtimeNotice\}|\{NON_REALTIME_NOTICE\}/);
+    }
   });
 });

@@ -1,4 +1,5 @@
 import type { LeverageChapter } from "../../lib/types";
+import { LEVERAGE_CHAPTER_TAGLINE } from "../../lib/sectionTaglines";
 import {
   chapterStatusLabel,
   detectionStatusLabel,
@@ -38,7 +39,9 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
           {chapterStatusLabel(chapter.chapter_status)}
         </span>
       </div>
-      <p className="mt-2 text-xs text-neutral-400">{chapter.disclosure}</p>
+      <p className="mt-1 text-sm text-neutral-300">{LEVERAGE_CHAPTER_TAGLINE}</p>
+      {/* 風控第二輪 R-2：揭露句不得低於導讀的視覺權重，提升至 text-sm/neutral-300。 */}
+      <p className="mt-2 text-sm text-neutral-300">{chapter.disclosure}</p>
       {chapter.reason && (
         <p className="mt-2 text-sm text-amber-300">{chapter.reason}</p>
       )}

@@ -6,6 +6,7 @@ import { buildOperationSummary } from "../../lib/operationSummary";
 import { summaryConfidenceLabel } from "../../lib/adviceWording";
 import { formatDateTime } from "../../lib/format";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
+import { OPERATION_SUMMARY_TAGLINE } from "../../lib/sectionTaglines";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
@@ -56,6 +57,7 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
           </span>
         )}
       </div>
+      <p className="mt-1 text-sm text-neutral-300">{OPERATION_SUMMARY_TAGLINE}</p>
 
       {advice.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
       {advice.isError && (
@@ -80,7 +82,6 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
       <div className="mt-3 space-y-3">
         <InsufficientPanel reason={model.reason} />
         <StaleDataAlert notice={model.staleDataNotice} />
-        <p className="text-sm text-neutral-400">{model.nonRealtimeNotice}</p>
       </div>
     );
   }
@@ -93,7 +94,6 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         <InsufficientPanel reason={model.reason} />
         <StaleDataAlert notice={model.staleDataNotice} />
         <DisclaimerBanner text={model.disclaimer} />
-        <p className="text-sm text-neutral-400">{model.nonRealtimeNotice}</p>
       </div>
     );
   }
@@ -293,7 +293,6 @@ function RequiredElementsFooter({
       )}
 
       <p className="text-xs text-neutral-500">{required.rulesStatement}</p>
-      <p className="text-sm text-neutral-400">{required.nonRealtimeNotice}</p>
     </div>
   );
 }

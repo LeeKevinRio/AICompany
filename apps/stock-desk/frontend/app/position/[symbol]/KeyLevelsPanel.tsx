@@ -1,6 +1,6 @@
 "use client";
 
-import { NON_REALTIME_NOTICE } from "../../lib/adviceWording";
+import { KEY_LEVELS_TAGLINE } from "../../lib/sectionTaglines";
 import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import type { Bar } from "../../lib/types";
@@ -179,8 +179,8 @@ export const KEY_LEVELS_BASIS_ANCHOR =
   "若確認未持有此標的，以最新收盤試算，此數字不是任何進場暗示。";
 
 export const KEY_LEVELS_BASIS_PULLBACK =
-  "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位；是否跌破為觀察條件，不是進出指令；" +
-  "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。";
+  "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位，是否跌破為觀察條件，不是進出指令；" +
+  "其餘限制說明見上方『拉回觀察參考』卡片，本處不重複列出。";
 
 export const KEY_LEVELS_BASIS_UNADJUSTED_XREF =
   "以上計算皆以未還原權值之原始收盤價進行，跨除權息日可能失真；完整說明見面板頂部揭露。";
@@ -252,10 +252,14 @@ export function KeyLevelsPanel({
         <h2 className="text-lg font-semibold text-neutral-100">{KEY_LEVELS_PANEL_TITLE}</h2>
         <span className="text-sm text-neutral-400">{buildKeyLevelsCloseLine(fmt(levels.close), levels.closeDate)}</span>
       </div>
-      {/* 頭部四句常駐（順序依成稿 §9），加 dash 說明；均 ≥ text-sm、≥ neutral-400 */}
+      <p className="mt-1 text-sm text-neutral-300">{KEY_LEVELS_TAGLINE}</p>
+      {/*
+        頭部揭露常駐（順序依成稿 §9）；NON_REALTIME_NOTICE 依減負 FR-3（風控 C1–C4）
+        改由頁級揭露區 <PageDisclosureSection> 單一呈現，本面板不再重複。
+        均 ≥ text-sm、≥ neutral-400。
+      */}
       <div className="mt-2 space-y-1 text-sm text-neutral-400">
         <p className="text-neutral-300">{KEY_LEVELS_PANEL_DISCLAIMER}</p>
-        <p>{NON_REALTIME_NOTICE}</p>
         <p>{KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE}</p>
         <p>{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
         <p>{KEY_LEVELS_HEADER_DASH_NOTICE}</p>

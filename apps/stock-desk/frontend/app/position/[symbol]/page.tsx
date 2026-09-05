@@ -12,6 +12,8 @@ import type { Market } from "../../lib/types";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { KeyLevelsPanel } from "./KeyLevelsPanel";
+import { PageDisclosureSection } from "../../components/PageDisclosureSection";
+import { TECHNICAL_CHART_TAGLINE, TECHNICAL_INDICATORS_TAGLINE } from "../../lib/sectionTaglines";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
@@ -115,6 +117,16 @@ export default function PositionDetailPage() {
       </div>
 
       {/*
+        --- 頁級揭露區 (個股頁減負 FR-3；風控 C1–C4) ---------------------------
+        The single page-level home of NON_REALTIME_NOTICE: static, above the
+        fold, independent of every query below. The per-section renders of the
+        same sentence (操作摘要 ×3、關鍵價位面板 ×1) were removed in the same
+        change — this block is what now satisfies §2 八要素's non-realtime
+        element for the whole page (see operationSummary.ts header).
+      */}
+      <PageDisclosureSection />
+
+      {/*
         --- Operation summary (FR-C1 AC-C1.1 / FR-C6 / FR-C7 / FR-C8) --------
         Deliberately placed above the fold, ahead of the four-facet sections,
         and driven by its own `useAdvice` query instance so a failure or
@@ -186,6 +198,7 @@ export default function PositionDetailPage() {
       */}
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
         <h2 className="text-lg font-semibold text-neutral-100">技術分析</h2>
+        <p className="mt-1 text-sm text-neutral-300">{TECHNICAL_CHART_TAGLINE}</p>
 
         {/* --- K-line + MA overlay ---------------------------------------- */}
         <div className="mt-4">
@@ -294,6 +307,7 @@ export default function PositionDetailPage() {
               </span>
             )}
           </div>
+          <p className="mt-1 text-sm text-neutral-300">{TECHNICAL_INDICATORS_TAGLINE}</p>
           {signals.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
           {signals.isError && (
             <div className="mt-3"><ErrorPanel label="無法載入技術指標" error={signals.error} /></div>
