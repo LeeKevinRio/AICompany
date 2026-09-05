@@ -175,7 +175,7 @@ function KdCard({ result, barCount }: { result: IndicatorResult; barCount: numbe
   return (
     <IndicatorCard
       title="KD 隨機指標（9,3,3）"
-      description="衡量收盤價落在近期高低區間的相對位置，K、D 皆介於 0–100，僅為數值觀察。"
+      description="收盤價於近期高低區間之相對位置，K、D 介於 0–100；僅為數值觀察。"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote
@@ -272,7 +272,7 @@ function AtrCard({ result, barCount }: { result: IndicatorResult; barCount: numb
   return (
     <IndicatorCard
       title="ATR（14 日真實波幅均值）"
-      description="衡量近期價格波動幅度的統計量，數值愈大代表波動愈大，不代表方向。"
+      description="衡量近期價格波動幅度之統計量；不代表方向。"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote
@@ -297,7 +297,7 @@ function VolumeZscoreCard({ result, barCount }: { result: IndicatorResult; barCo
   return (
     <IndicatorCard
       title="成交量 Z 分數（20 日）"
-      description="衡量當日成交量偏離近 20 日平均的程度，正值代表偏高、負值代表偏低，屬統計描述，不代表方向判斷。"
+      description="衡量當日成交量偏離近 20 日平均之程度（正值偏高、負值偏低）；屬統計描述，不代表方向判斷。"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote
@@ -324,7 +324,7 @@ function VolatilityCard({ result }: { result: VolatilityResult }) {
   return (
     <IndicatorCard
       title="年化波動度"
-      description="以近期日報酬的標準差換算為年化數值，衡量價格波動程度的統計量，不代表方向或預測。"
+      description="以近期日報酬標準差換算之年化數值，衡量價格波動程度之統計量；不代表方向或預測。"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote message="資料不足，可用的日報酬筆數不足以計算。" />
@@ -342,7 +342,7 @@ function DrawdownCard({ result }: { result: DrawdownResult }) {
   return (
     <IndicatorCard
       title="最大回撤"
-      description="觀察區間內從高點到低點的最大跌幅，屬歷史統計描述，不代表未來會重演。"
+      description="觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote message="資料不足，可用天數不足以計算。" />

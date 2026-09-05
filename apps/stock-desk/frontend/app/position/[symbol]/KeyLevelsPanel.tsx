@@ -133,54 +133,90 @@ export const KEY_LEVELS_TARGET_ROW_TRAILING_LABEL = "移動停利觀察";
 export const KEY_LEVELS_TARGET_ROW_TRAILING_NOTE =
   "（與「拉回觀察」卡片的 MA20 為同一數字；系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件）";
 
-/* ---------- §6 計算依據（常駐清單，不摺疊——風控 R7） ---------- */
+/* ---------- §6 計算依據（常駐清單，不摺疊——風控 R7；P2 算式行改寫） ---------- */
+
+/**
+ * 個股頁減負批次 3（風控替代路徑 P2；`work/stock-desk-個股頁減負-P2算式行起草.md`）：
+ * 每條計算依據拆為「算式行」（半形符號、等寬字型）＋「限定語句」（原限定／否定式
+ * 子句一字不動）。落地條件（風控）：算式行與限定語必須在同一個 <li>、同字級同顏色
+ * （text-sm text-neutral-400），font-mono 只套在算式行且不得伴隨任何字級／顏色／
+ * 字重／opacity 差異；不得摺疊或 line-clamp。
+ */
+export interface BasisItem {
+  /** 算式行（可多行），等寬呈現。 */
+  readonly formula: readonly string[];
+  /** 限定語句（一字不動保留）；無限定語時為 null。 */
+  readonly qualifier: string | null;
+}
 
 export const KEY_LEVELS_BASIS_SECTION_TITLE = "計算依據（逐項揭露）";
 
-export function buildBasisClose(x: string, d: string): string {
-  return (
-    "收盤：本面板所有計算所稱之「收盤」，皆為系統行情資料鏈中該標的最近一根日線的收盤價，" +
-    `與面板頂部「收盤 ${x}（${d}）」為同一數字。`
-  );
+export function buildBasisClose(x: string, d: string): BasisItem {
+  return {
+    formula: [`收盤（本面板所有計算所稱之）=系統行情資料鏈中該標的最近一根日線收盤價，與頂部「收盤 ${x}（${d}）」同一數字。`],
+    qualifier: null,
+  };
 }
 
-export function buildBasisRange(n: number): string {
-  return (
-    `位階（近 ${n} 根區間）＝（收盤 − 近 ${n} 根 K 最低價）÷（近 ${n} 根 K 最高價 − 近 ${n} 根 K 最低價）×100%；` +
-    `${n} 最多取 252 根，不足 252 根時以實際根數計算，未滿 60 根時不計算位階。`
-  );
+export function buildBasisRange(n: number): BasisItem {
+  return {
+    formula: [`位階(近${n}根)=(收盤-近${n}根K線最低價)/(近${n}根K線最高價-近${n}根K線最低價)×100%`],
+    qualifier: `${n} 最多取 252 根，不足 252 根時以實際根數計算，未滿 60 根時不計算位階。`,
+  };
 }
 
-export const KEY_LEVELS_BASIS_ZONE =
-  "分類：≤30% 標示為「區間下緣」、≥70% 標示為「區間上緣」，其餘標示為「區間中段」；" +
-  "30%／70% 這兩個門檻為本面板自訂之分類標準，並無實證依據，亦非任何機構或研究之結論。";
+export const KEY_LEVELS_BASIS_ZONE: BasisItem = {
+  formula: ["分類：位階≤30%→標示「區間下緣」；≥70%→標示「區間上緣」；其餘→標示「區間中段」；"],
+  qualifier: "30%／70% 這兩個門檻為本面板自訂之分類標準，並無實證依據，亦非任何機構或研究之結論。",
+};
 
-export const KEY_LEVELS_BASIS_MA =
-  "MA20／MA60＝最近 20／60 根收盤價之簡單平均；對 MA60 乖離＝收盤 ÷ MA60 − 1，以百分比表示。";
+export const KEY_LEVELS_BASIS_MA: BasisItem = {
+  formula: ["MA20＝近20根收盤價簡單平均；MA60＝近60根收盤價簡單平均；MA60乖離%=(收盤/MA60-1)×100%"],
+  qualifier: null,
+};
 
-export const KEY_LEVELS_BASIS_RECENT_LOW60 = "近 60 日低點＝最近 60 根日線最低價中的最小值。";
+export const KEY_LEVELS_BASIS_RECENT_LOW60: BasisItem = {
+  formula: ["近60日低點=近60根日線最低價最小值"],
+  qualifier: null,
+};
 
-export const KEY_LEVELS_BASIS_ATR =
-  "ATR(14)＝最近 14 根日線真實波幅（TR）的簡單平均；未滿 15 根日線時無法計算，本面板不以其他方式估算或填補。";
+export const KEY_LEVELS_BASIS_ATR: BasisItem = {
+  formula: ["ATR(14)=近14根日線真實波幅(TR)簡單平均"],
+  qualifier: "未滿 15 根日線時無法計算，本面板不以其他方式估算或填補。",
+};
 
-export const KEY_LEVELS_BASIS_STOP =
-  "停損參考：若 ATR(14) 可得，大字為「基準價 − 2×ATR(14)」與「基準價 × 0.92（固定 −8% 停損）」兩者中較緊（虧損較小）者；" +
-  "若 ATR(14) 不可得，大字僅為「基準價 × 0.92」。本面板固定採 −8% 作為固定停損比例，僅為本面板自訂之算式參數，" +
-  "並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。";
+export const KEY_LEVELS_BASIS_STOP: BasisItem = {
+  formula: [
+    "停損參考：",
+    "ATR(14)可得→大字=「基準價-2×ATR(14)」與「基準價×0.92」中較緊(虧損較小)者",
+    "ATR(14)不可得→大字=基準價×0.92",
+  ],
+  qualifier:
+    "本面板固定採 −8% 作為固定停損比例，僅為本面板自訂之算式參數，並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料。",
+};
 
-export const KEY_LEVELS_BASIS_TARGET =
-  "停利參考：2R＝基準價 +2 ×（基準價 − 上方停損參考大字），此為算式定義下賺賠比 2:1 的計算結果，不代表任何達成機率；" +
-  "固定停利＝基準價 × 1.2（本面板固定採 +20%），同樣僅為本面板自訂之算式參數，並非本系統對任何族群實際行為的統計，" +
-  "本系統未持有此類統計資料；「移動停利觀察」顯示的是 MA20 的同一數字，系統並未另行計算移動停利水位，" +
-  "僅以跌破 MA20 作為觀察條件。";
+export const KEY_LEVELS_BASIS_TARGET: BasisItem = {
+  formula: ["停利參考：", "2R=基準價+2×(基準價-上方停損參考大字)", "固定停利=基準價×1.2（本面板固定採 +20%）"],
+  qualifier:
+    "此為算式定義下賺賠比 2:1 的計算結果，不代表任何達成機率；" +
+    "同樣僅為本面板自訂之算式參數，並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料；" +
+    "「移動停利觀察」顯示的是 MA20 的同一數字，系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件。",
+};
 
-export const KEY_LEVELS_BASIS_ANCHOR =
-  "基準價：若持有此標的且成本可得，為持倉平均成本；若持有此標的但持倉成本尚未取得，暫以最新收盤試算；" +
-  "若確認未持有此標的，以最新收盤試算，此數字不是任何進場暗示。";
+export const KEY_LEVELS_BASIS_ANCHOR: BasisItem = {
+  formula: [
+    "基準價：",
+    "持有且成本可得→基準價=持倉平均成本",
+    "持有但成本未取得→基準價=最新收盤(試算)",
+    "未持有→基準價=最新收盤(試算)；此數字不是任何進場暗示。",
+  ],
+  qualifier: null,
+};
 
-export const KEY_LEVELS_BASIS_PULLBACK =
-  "拉回觀察區（MA20、MA60、近 60 日低點）為本面板固定採用之觀察價位，是否跌破為觀察條件，不是進出指令；" +
-  "其餘限制說明見上方『拉回觀察參考』卡片，本處不重複列出。";
+export const KEY_LEVELS_BASIS_PULLBACK: BasisItem = {
+  formula: ["拉回觀察區=固定觀察價位{MA20,MA60,近60日低點}；是否跌破為觀察條件，不是進出指令；"],
+  qualifier: "其餘限制說明見上方『拉回觀察參考』卡片，本處不重複列出。",
+};
 
 export const KEY_LEVELS_BASIS_UNADJUSTED_XREF =
   "以上計算皆以未還原權值之原始收盤價進行，跨除權息日可能失真；完整說明見面板頂部揭露。";
@@ -343,17 +379,29 @@ export function KeyLevelsPanel({
       <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
         <h3 className="text-sm font-semibold text-neutral-300">{KEY_LEVELS_BASIS_SECTION_TITLE}</h3>
         <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_BASIS_UNADJUSTED_XREF}</p>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-neutral-400">
-          <li>{buildBasisClose(fmt(levels.close), levels.closeDate)}</li>
-          <li>{buildBasisRange(levels.rangeBarCount)}</li>
-          <li>{KEY_LEVELS_BASIS_ZONE}</li>
-          <li>{KEY_LEVELS_BASIS_MA}</li>
-          <li>{KEY_LEVELS_BASIS_RECENT_LOW60}</li>
-          <li>{KEY_LEVELS_BASIS_ATR}</li>
-          <li>{KEY_LEVELS_BASIS_STOP}</li>
-          <li>{KEY_LEVELS_BASIS_TARGET}</li>
-          <li>{KEY_LEVELS_BASIS_ANCHOR}</li>
-          <li>{KEY_LEVELS_BASIS_PULLBACK}</li>
+        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-neutral-400">
+          {[
+            buildBasisClose(fmt(levels.close), levels.closeDate),
+            buildBasisRange(levels.rangeBarCount),
+            KEY_LEVELS_BASIS_ZONE,
+            KEY_LEVELS_BASIS_MA,
+            KEY_LEVELS_BASIS_RECENT_LOW60,
+            KEY_LEVELS_BASIS_ATR,
+            KEY_LEVELS_BASIS_STOP,
+            KEY_LEVELS_BASIS_TARGET,
+            KEY_LEVELS_BASIS_ANCHOR,
+            KEY_LEVELS_BASIS_PULLBACK,
+          ].map((item, i) => (
+            // 算式行與限定語同一 <li>、同字級同顏色；font-mono 只在算式行（風控 P2 落地條件）。
+            <li key={i} className="text-sm text-neutral-400">
+              {item.formula.map((line, j) => (
+                <span key={j} className="block whitespace-pre-wrap font-mono text-sm text-neutral-400">
+                  {line}
+                </span>
+              ))}
+              {item.qualifier !== null && <span className="block text-sm text-neutral-400">{item.qualifier}</span>}
+            </li>
+          ))}
         </ul>
       </div>
       <p className="mt-2 text-sm text-neutral-400">{buildFooterSample(levels.barCount, levels.closeDate)}</p>
