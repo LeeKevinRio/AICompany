@@ -57,3 +57,25 @@ export function toTradingViewSymbol(
   const exchange: TradingViewExchangeHint = exchangeHint ?? "TWSE";
   return `${exchange}:${trimmed}`;
 }
+
+/**
+ * Derive the TW exchange hint from whichever data-chain identifiers the page
+ * already holds — the bars envelope's `DataMeta.source` (`"twse"` / `"tpex"`
+ * provider ids) and the directory entry's `source` (TWSE / TPEx listing
+ * feeds). The first identifier that names an exchange wins; anything else
+ * (FinMind, Alpha Vantage, demo, unknown) yields `undefined` so the caller
+ * keeps `toTradingViewSymbol`'s TWSE default. Fixes the bug where every TW
+ * symbol was sent as `TWSE:` and 上櫃 stocks rendered as an invalid symbol
+ * inside the widget.
+ */
+export function inferTradingViewExchange(
+  ...sources: (string | null | undefined)[]
+): TradingViewExchangeHint | undefined {
+  for (const source of sources) {
+    if (!source) continue;
+    const lower = source.toLowerCase();
+    if (lower.includes("tpex")) return "TPEX";
+    if (lower.includes("twse")) return "TWSE";
+  }
+  return undefined;
+}

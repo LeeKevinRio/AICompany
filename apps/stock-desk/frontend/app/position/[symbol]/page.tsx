@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
 import { formatDateTime, marketLabel } from "../../lib/format";
+import { inferTradingViewExchange } from "../../lib/tradingViewSymbol";
 import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, usePositions, useSignals } from "../../lib/queries";
 import type { Market } from "../../lib/types";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
@@ -83,6 +84,13 @@ export default function PositionDetailPage() {
   // zero-width chart container around. Known trade-off: no zoom/scroll state
   // survives a tab switch (see 已知限制 in the handoff report).
   const [chartTab, setChartTab] = useState<ChartTab>("tradingview");
+
+  // TradingView exchange prefix for TW symbols (fix: 上櫃 stocks were always
+  // sent as `TWSE:` and rendered as an invalid symbol). Inferred from the bars
+  // provider id first, then the directory listing source; `undefined` keeps
+  // the TWSE default. Part of the panel's `key` below so the widget remounts
+  // with the right prefix once the data chain answers.
+  const tvExchangeHint = inferTradingViewExchange(bars.data?.data.source, directory.data?.source);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
@@ -239,7 +247,12 @@ export default function PositionDetailPage() {
                 symbol or market changes, closing the stale-iframe overlap gap
                 an inner-only key left open on a same-page symbol change.
               */}
-              <TradingViewChartPanel key={`${market}:${symbol}`} symbol={symbol} market={market} />
+              <TradingViewChartPanel
+                key={`${market}:${symbol}:${tvExchangeHint ?? ""}`}
+                symbol={symbol}
+                market={market}
+                exchangeHint={tvExchangeHint}
+              />
             </div>
           )}
 

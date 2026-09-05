@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toTradingViewSymbol } from "../tradingViewSymbol";
+import { inferTradingViewExchange, toTradingViewSymbol } from "../tradingViewSymbol";
 
 describe("toTradingViewSymbol", () => {
   it("maps a TW symbol to the TWSE-prefixed form by default (上市, no exchange hint)", () => {
@@ -74,5 +74,28 @@ describe("toTradingViewSymbol — XSS whitelist regression (qa-reviewer NEEDS_CH
 
   it("rejects an empty symbol (whitespace-only input trims to nothing)", () => {
     expect(toTradingViewSymbol("   ", "TW")).toBeNull();
+  });
+});
+
+describe("inferTradingViewExchange", () => {
+  it("picks TPEX when any identifier names the TPEx chain", () => {
+    expect(inferTradingViewExchange("tpex", null)).toBe("TPEX");
+    expect(inferTradingViewExchange(undefined, "tpex_openapi_mainboard")).toBe("TPEX");
+  });
+
+  it("picks TWSE when an identifier names the TWSE chain", () => {
+    expect(inferTradingViewExchange("twse", undefined)).toBe("TWSE");
+    expect(inferTradingViewExchange("demo_synthetic", "twse_openapi_t187ap03_l")).toBe("TWSE");
+  });
+
+  it("first identifier that names an exchange wins (bars provider before directory), in both directions", () => {
+    expect(inferTradingViewExchange("tpex", "twse_openapi")).toBe("TPEX");
+    expect(inferTradingViewExchange("twse", "tpex_openapi")).toBe("TWSE");
+  });
+
+  it("returns undefined for chains that do not identify the exchange, keeping the TWSE default downstream", () => {
+    expect(inferTradingViewExchange("finmind", "demo_synthetic")).toBeUndefined();
+    expect(inferTradingViewExchange(null, undefined)).toBeUndefined();
+    expect(toTradingViewSymbol("2330", "TW", inferTradingViewExchange("finmind"))).toBe("TWSE:2330");
   });
 });

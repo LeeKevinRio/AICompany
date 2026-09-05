@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { toScriptSafeJson } from "../../lib/scriptSafeJson";
 import { toTradingViewSymbol } from "../../lib/tradingViewSymbol";
+import type { TradingViewExchangeHint } from "../../lib/tradingViewSymbol";
 import type { Market } from "../../lib/types";
 
 /**
@@ -111,14 +112,23 @@ type WidgetStatus = "loading" | "ready" | "error";
  * Nothing rendered here is read by this component's caller or fed into any
  * calculation.
  */
-export function TradingViewChartPanel({ symbol, market }: { symbol: string; market: Market }) {
+export function TradingViewChartPanel({
+  symbol,
+  market,
+  exchangeHint,
+}: {
+  symbol: string;
+  market: Market;
+  /** TW-only: TWSE vs TPEX, inferred by the page from the data chain (see `inferTradingViewExchange`). */
+  exchangeHint?: TradingViewExchangeHint;
+}) {
   const widgetHostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<WidgetStatus>("loading");
   // Shared between the mount-detection effect below and `handleScriptLoadError`
   // (a plain event handler, not itself inside the effect) so an early script
   // load failure and the effect's own timeout/observer never both fire.
   const settledRef = useRef(false);
-  const tvSymbol = toTradingViewSymbol(symbol, market);
+  const tvSymbol = toTradingViewSymbol(symbol, market, exchangeHint);
 
   useEffect(() => {
     const host = widgetHostRef.current;
