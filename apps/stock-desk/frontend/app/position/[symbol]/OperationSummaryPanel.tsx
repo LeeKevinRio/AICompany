@@ -101,8 +101,9 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
   if (model.kind === "candidate") {
     return (
       <div className="mt-3 space-y-4">
+        {/* P1 結論位（風控替代路徑，CEO 2026-09-05）：結論標籤放大為 2xl，與免責同區、同進同退（R3）。 */}
         <div className="flex flex-wrap items-center gap-3">
-          <span className="inline-block rounded-md border border-sky-800 bg-sky-950/40 px-3 py-1 text-lg font-bold text-sky-300">
+          <span className="inline-block rounded-md border border-sky-800 bg-sky-950/40 px-4 py-2 text-2xl font-bold text-sky-300">
             {model.headingLabel}
           </span>
           <span className="text-sm text-neutral-400">
@@ -157,7 +158,7 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
   return (
     <div className="mt-3 space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="inline-block rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1 text-lg font-bold text-neutral-100">
+        <span className="inline-block rounded-md border border-neutral-700 bg-neutral-900 px-4 py-2 text-2xl font-bold text-neutral-100">
           {model.attributedHeadline}
         </span>
         <span className="text-sm text-neutral-400">

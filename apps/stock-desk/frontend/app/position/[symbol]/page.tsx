@@ -117,16 +117,6 @@ export default function PositionDetailPage() {
       </div>
 
       {/*
-        --- 頁級揭露區 (個股頁減負 FR-3；風控 C1–C4) ---------------------------
-        The single page-level home of NON_REALTIME_NOTICE: static, above the
-        fold, independent of every query below. The per-section renders of the
-        same sentence (操作摘要 ×3、關鍵價位面板 ×1) were removed in the same
-        change — this block is what now satisfies §2 八要素's non-realtime
-        element for the whole page (see operationSummary.ts header).
-      */}
-      <PageDisclosureSection />
-
-      {/*
         --- Operation summary (FR-C1 AC-C1.1 / FR-C6 / FR-C7 / FR-C8) --------
         Deliberately placed above the fold, ahead of the four-facet sections,
         and driven by its own `useAdvice` query instance so a failure or
@@ -137,6 +127,18 @@ export default function PositionDetailPage() {
       <div className="mt-6">
         <OperationSummaryPanel advice={advice} />
       </div>
+
+      {/*
+        --- 頁級揭露區 (個股頁減負 FR-3；風控 C1–C4；P1 結論位後移) -------------
+        The single page-level home of NON_REALTIME_NOTICE: static, still above
+        the fold at common desktop sizes, independent of every query. P1 結論位
+        (風控替代路徑, CEO 2026-09-05): the first thing under the H1 is now the
+        操作摘要 conclusion (headline + disclaimer, R3 trio); this block follows. The per-section renders of the
+        same sentence (操作摘要 ×3、關鍵價位面板 ×1) were removed in the same
+        change — this block is what now satisfies §2 八要素's non-realtime
+        element for the whole page (see operationSummary.ts header).
+      */}
+      <PageDisclosureSection />
 
       {/*
         --- 關鍵價位參考 (CEO 需求 2026-09-01 MVP; 風控 R10–R12 修訂) --------

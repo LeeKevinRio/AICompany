@@ -818,6 +818,19 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
     expect(src).toContain("本次同時命中方向相反的規則，上方操作摘要的結論只代表權重較高的一方。");
   });
 
+  it("P1 結論位順序守門：操作摘要先於頁級揭露區，頁級揭露區先於其餘區塊（qa-reviewer 建議）", () => {
+    const pageSource = readFileSync(
+      fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)),
+      "utf8",
+    );
+    const summary = pageSource.indexOf("<OperationSummaryPanel advice={advice} />");
+    const disclosure = pageSource.indexOf("<PageDisclosureSection />");
+    const keyLevels = pageSource.indexOf("<KeyLevelsPanel");
+    expect(summary).toBeGreaterThan(-1);
+    expect(disclosure).toBeGreaterThan(summary);
+    expect(keyLevels).toBeGreaterThan(disclosure);
+  });
+
   it("FR-3 C4：NON_REALTIME_NOTICE 在頁面元件中只由頁級揭露區渲染（操作摘要與關鍵價位面板不再重複）", () => {
     for (const rel of ["../../position/[symbol]/OperationSummaryPanel.tsx", "../../position/[symbol]/KeyLevelsPanel.tsx"]) {
       const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");

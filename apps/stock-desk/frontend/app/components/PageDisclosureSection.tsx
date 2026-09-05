@@ -5,8 +5,10 @@ import { PAGE_LEVEL_DISCLOSURE_SECTION_INTRO, PAGE_LEVEL_DISCLOSURE_SECTION_TITL
  * 頁級揭露區（個股頁減負 FR-3；風控預審 C1–C4）：`NON_REALTIME_NOTICE` 在整頁只
  * 完整出現一次的唯一主位置。
  *
- * - C1: rendered directly under the page H1, above the fold, never collapsed,
- *   ≥ text-sm / ≥ neutral-400.
+ * - C1 (as re-ruled for P1 結論位, CEO 2026-09-05 / 風控 CONFIRMED): rendered
+ *   as the first block AFTER 操作摘要 (whose conclusion badge + disclaimer now
+ *   lead the page under the H1), before every other section; never collapsed,
+ *   ≥ text-sm / ≥ neutral-400, and it must not move any further down.
  * - C2: everything here is a static constant — this component takes no props
  *   and reads no query state, so it can never disappear on a failed or
  *   pending fetch (the exact moment the notice matters most).
