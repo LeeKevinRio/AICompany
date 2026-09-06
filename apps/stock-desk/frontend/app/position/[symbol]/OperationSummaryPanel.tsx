@@ -123,13 +123,7 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         */}
         <DisclaimerBanner text={model.required.disclaimer} />
 
-        {/* §2.8 candidate-mode evidence-limit notice: always on, never behind a toggle. */}
-        <p
-          role="note"
-          className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-300"
-        >
-          {model.required.candidateEvidenceNotice}
-        </p>
+        {/* §2.8 candidateEvidenceNotice：CEO 第二次裁定 2026-09-06 下沉頁尾（`buildSummaryFooterItems`）。 */}
 
         {model.supportive ? (
           <p className="text-sm text-neutral-200">
@@ -141,10 +135,9 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         )}
 
         {/*
-          §3.3 coverageStatement: 依 CEO 裁定 2026-09-06 下沉頁尾（`buildSummaryFooterItems`），
-          完整數字不變。§3.4 notComparableNote 留原位（風控 A+3：修飾同列的信心等級徽章）。
+          §3.3 coverageStatement 與 §3.4 notComparableNote：依 CEO 裁定 2026-09-06（含第二次
+          裁定推翻風控 A+3）下沉頁尾（`buildSummaryFooterItems`），完整數字不變。
         */}
-        <p className="text-xs text-neutral-500">{model.notComparableNote}</p>
 
         <QuantitySection
           text={model.required.quantityRangeText}
@@ -272,7 +265,7 @@ function RequiredElementsFooter({
     <div className="space-y-3 border-t border-neutral-800 pt-4 text-sm">
       <StaleDataAlert notice={staleDataNotice} />
 
-      <p className="text-neutral-300">{required.asOfStatement}</p>
+      {/* §2.3 asOfStatement：CEO 第二次裁定 2026-09-06 推翻風控 A+1，下沉頁尾；StaleDataAlert 為功能性狀態，留原位。 */}
 
       {required.counterarguments.length > 0 && (
         <div>

@@ -1,7 +1,9 @@
 import type { AdviceCard } from "../../lib/types";
 import { actionRawLabel, formatDateTime, formatNumber, formatPercent, ruleDirectionLabel } from "../../lib/format";
 import { ADVICE_CARD_XREF_TO_SUMMARY } from "../../lib/sectionTaglines";
-import { directionShares, ruleDirection } from "../../lib/ruleDirection";
+import { directionShares, hasDirectionShareBar, ruleDirection } from "../../lib/ruleDirection";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { ADVICE_CARD_TITLE } from "../../lib/sectionTitles";
 import { LimitsCheckList } from "./LimitsCheckList";
 
 /**
@@ -19,8 +21,10 @@ import { LimitsCheckList } from "./LimitsCheckList";
  *   NEUTRAL greys told apart by the legend + labels, never a hue that the
  *   page already uses for a conclusion (sky = 進場評估 badge) or a warning.
  * - R5: the bar is a new derived number, so it carries its own standing
- *   qualifier (`DIRECTION_SHARE_QUALIFIER`, ≥ text-sm / ≥ neutral-400, never
- *   in <details>) saying what the share is and that it is not a probability.
+ *   qualifier (`DIRECTION_SHARE_QUALIFIER`) saying what the share is and that
+ *   it is not a probability. Since CEO 第二次裁定 2026-09-06 the qualifier lives
+ *   in the 頁尾揭露區 (`buildAdviceFooterItems`, same gate as the bar) and the
+ *   bar carries a pointer sentence instead.
  */
 const DIRECTION_CHIP_CLASS = "border-neutral-700 bg-neutral-900 text-neutral-300";
 
@@ -47,7 +51,7 @@ function DirectionChip({ direction }: { direction: string }) {
 /** 100% stacked bar of the direction weights; 2px surface gaps, ≤24px thick, legend + qualifier beneath. */
 function DirectionWeightBar({ advice }: { advice: AdviceCard }) {
   const shares = directionShares(advice.direction_weights);
-  if (shares.every((s) => s.sharePct === 0)) return null;
+  if (!hasDirectionShareBar(advice)) return null;
   return (
     <div className="mb-3">
       <div role="img" aria-label={DIRECTION_BAR_ARIA_LABEL} className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full">
@@ -72,8 +76,11 @@ function DirectionWeightBar({ advice }: { advice: AdviceCard }) {
           </li>
         ))}
       </ul>
-      {/* R5: standing qualifier, same block as the bar, ≥ text-sm / ≥ neutral-400, never collapsible. */}
-      <p className="mt-2 text-sm text-neutral-400">{DIRECTION_SHARE_QUALIFIER}</p>
+      {/*
+        R5 qualifier (`DIRECTION_SHARE_QUALIFIER`)：CEO 第二次裁定 2026-09-06 推翻風控 A+4，
+        下沉頁尾（`buildAdviceFooterItems`）；原位留指引句（L5）。
+      */}
+      <p className="mt-2 text-sm text-neutral-300">{buildFooterGuidance(ADVICE_CARD_TITLE)}</p>
     </div>
   );
 }
@@ -250,4 +257,14 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
       </Section>
     </div>
   );
+}
+
+/**
+ * The 建議卡 group of `PageFooterDisclosures` (CEO 第二次裁定 2026-09-06): the
+ * R5 qualifier, exactly when the direction-share bar it qualifies is drawn —
+ * same gate (`hasDirectionShareBar`) as `DirectionWeightBar`, so the pointer
+ * sentence in the card never points at an empty group and vice versa.
+ */
+export function buildAdviceFooterItems(advice: AdviceCard): string[] {
+  return hasDirectionShareBar(advice) ? [DIRECTION_SHARE_QUALIFIER] : [];
 }

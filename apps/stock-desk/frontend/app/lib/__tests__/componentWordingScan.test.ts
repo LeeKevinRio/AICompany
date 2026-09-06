@@ -139,8 +139,10 @@ import {
   TECHNICAL_ANALYSIS_TITLE,
 } from "../sectionTitles";
 import { buildKeyLevelsFooterItems } from "../../position/[symbol]/KeyLevelsPanel";
+import { buildAdviceFooterItems } from "../../position/[symbol]/AdviceCardView";
+import { buildTechnicalFooterItems } from "../../position/[symbol]/TechnicalIndicatorsPanel";
 import { buildSummaryFooterItems } from "../operationSummary";
-import type { AdviceResponse, Bar } from "../types";
+import type { AdviceCard, AdviceResponse, Bar, SignalsPayload } from "../types";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -1006,7 +1008,9 @@ describe("圖形化 1–3 新字面與守門", () => {
   it("R5：方向堆疊條的限定語與條同區、≥ text-sm / ≥ neutral-400、不在 <details> 內", () => {
     const advice = readFileSync(fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)), "utf8");
     const bar = advice.slice(advice.indexOf("function DirectionWeightBar"), advice.indexOf("export function hasOpposingDirections"));
-    expect(bar).toMatch(/className="mt-2 text-sm text-neutral-400">\{DIRECTION_SHARE_QUALIFIER\}/);
+    // CEO 第二次裁定 2026-09-06：限定語下沉頁尾（buildAdviceFooterItems，與條同閘門）；條的同區改為指引句。
+    expect(bar).toMatch(/className="mt-2 text-sm text-neutral-300">\{buildFooterGuidance\(ADVICE_CARD_TITLE\)\}/);
+    expect(bar).toContain("hasDirectionShareBar(advice)");
     expect(bar).not.toContain("<details");
   });
 
@@ -1030,13 +1034,13 @@ describe("圖形化 1–3 新字面與守門", () => {
       fileURLToPath(new URL("../../position/[symbol]/TechnicalIndicatorsPanel.tsx", import.meta.url)),
       "utf8",
     );
-    // 量表旁的「位階≠估值」句仍由面板渲染（未因圖形而移除）。
-    expect(panel).toContain("{buildRangeNotValuationNote(levels.rangeBarCount)}");
+    // 位階≠估值句、階梯註記、速覽圖例：CEO 第二次裁定 2026-09-06 下沉頁尾，由 builder 產出
+    // （見「揭露下沉頁尾 守門」L6-1'），原位不再渲染，改留指引句。
     expect(panel).toContain("<RangeGauge");
     expect(panel).toContain("<PriceLadder");
-    // 階梯註記與速覽圖例：常駐、≥ text-sm、≥ neutral-400。
-    expect(ladder).toMatch(/className="mt-2 text-sm text-neutral-400">\{KEY_LEVELS_LADDER_NOTE\}/);
-    expect(tech).toMatch(/className="mt-2 text-sm text-neutral-400">\{INDICATOR_OVERVIEW_LEGEND\}/);
+    expect(ladder).not.toContain("{KEY_LEVELS_LADDER_NOTE}");
+    expect(tech).not.toContain("{INDICATOR_OVERVIEW_LEGEND}");
+    expect(tech).toContain("{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}");
     // 每一個數字都有文字形式（量表兩端與標記皆印出數值）。
     expect(gauge).toContain("{lowText}");
     expect(gauge).toContain("{highText}");
@@ -1138,13 +1142,33 @@ describe("揭露下沉頁尾 守門", () => {
   });
 
   it("L3／L4：分組順序寫死為頁面順序，組名以既有標題常數 import 取得", () => {
-    const order = ["PAGE_LEVEL_DISCLOSURE_SECTION_TITLE", "OPERATION_SUMMARY_TITLE", "KEY_LEVELS_PANEL_TITLE", "LEVERAGE_CHAPTER_TITLE"];
+    const order = [
+      "PAGE_LEVEL_DISCLOSURE_SECTION_TITLE",
+      "OPERATION_SUMMARY_TITLE",
+      "KEY_LEVELS_PANEL_TITLE",
+      "TECHNICAL_ANALYSIS_TITLE",
+      "ADVICE_CARD_TITLE",
+      "LEVERAGE_CHAPTER_TITLE",
+    ];
     const positions = order.map((name) => pageSrc.indexOf(`title: ${name}`));
     expect(positions.every((p) => p > -1)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     // 組名不得在 page.tsx 內以字串複製。
-    for (const title of ["操作摘要", "關鍵價位參考", "槓桿型 ETF 專章", "本頁資料與計算揭露"]) {
+    for (const title of ["操作摘要", "關鍵價位參考", "技術分析", "建議卡", "槓桿型 ETF 專章", "本頁資料與計算揭露"]) {
       expect(pageSrc.match(new RegExp(`title: "${title}"`))).toBeNull();
+    }
+    // 六組 `items:` 各自接到對應 builder（風控第二次裁定後 required：下沉不得等同刪除）。
+    for (const [title, needle] of [
+      ["PAGE_LEVEL_DISCLOSURE_SECTION_TITLE", "items: [NON_REALTIME_NOTICE]"],
+      ["OPERATION_SUMMARY_TITLE", "buildSummaryFooterItems(advice.data)"],
+      ["KEY_LEVELS_PANEL_TITLE", "buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)"],
+      ["TECHNICAL_ANALYSIS_TITLE", "buildTechnicalFooterItems(signals.data.signals)"],
+      ["ADVICE_CARD_TITLE", "buildAdviceFooterItems(advice.data.advice)"],
+      ["LEVERAGE_CHAPTER_TITLE", "[leverage.data.chapter.disclosure]"],
+    ] as const) {
+      const from = pageSrc.indexOf(`title: ${title}`);
+      const block = pageSrc.slice(from, pageSrc.indexOf("},", from));
+      expect(block, `${title} 組應接到 ${needle}`).toContain(needle);
     }
     // 各區塊標題同樣改用常數，避免 h2 與頁尾組名漂移。
     expect(read("../../position/[symbol]/OperationSummaryPanel.tsx")).toContain("{OPERATION_SUMMARY_TITLE}</h2>");
@@ -1159,6 +1183,8 @@ describe("揭露下沉頁尾 守門", () => {
       ["../../position/[symbol]/OperationSummaryPanel.tsx", "{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}"],
       ["../../position/[symbol]/KeyLevelsPanel.tsx", "{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}"],
       ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
+      ["../../position/[symbol]/TechnicalIndicatorsPanel.tsx", "{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}"],
+      ["../../position/[symbol]/AdviceCardView.tsx", "{buildFooterGuidance(ADVICE_CARD_TITLE)}"],
     ];
     for (const [rel, needle] of wiring) {
       const src = read(rel);
@@ -1168,31 +1194,43 @@ describe("揭露下沉頁尾 守門", () => {
     }
   });
 
-  it("L6-1：改列 A 的 10 句仍由原區塊渲染（不得以「已納入頁尾」為由移出）", () => {
+  it("L6-1'（CEO 第二次裁定 2026-09-06 推翻風控 A+1～A+10）：十句一律下沉，原區塊不再渲染，由 builder 逐句產出", () => {
     const summary = read("../../position/[symbol]/OperationSummaryPanel.tsx");
     for (const needle of ["{required.asOfStatement}", "{model.required.candidateEvidenceNotice}", "{model.notComparableNote}"]) {
-      expect(summary).toContain(needle);
+      expect(summary, `${needle} 應已下沉`).not.toContain(needle);
     }
-    expect(read("../../position/[symbol]/AdviceCardView.tsx")).toContain("{DIRECTION_SHARE_QUALIFIER}");
+    expect(read("../../position/[symbol]/AdviceCardView.tsx")).not.toContain("{DIRECTION_SHARE_QUALIFIER}");
     const panel = read("../../position/[symbol]/KeyLevelsPanel.tsx");
     for (const needle of [
       "{KEY_LEVELS_PANEL_DISCLAIMER}",
       "{KEY_LEVELS_TARGET_STANDING_NOTICE}",
       "{buildRangeNotValuationNote(levels.rangeBarCount)}",
       "{KEY_LEVELS_HEADER_DASH_NOTICE}",
-      // 附條件保留（XREF／qualifier 指涉）：
+    ]) {
+      expect(panel, `${needle} 應已下沉`).not.toContain(needle);
+    }
+    // 附條件保留（XREF／qualifier 指涉，不在第二次裁定範圍）：
+    for (const needle of [
       "{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}",
       "{KEY_LEVELS_PULLBACK_EXPLAIN_NOTE}",
       "{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}",
     ]) {
       expect(panel).toContain(needle);
     }
-    expect(read("../../position/[symbol]/TechnicalIndicatorsPanel.tsx")).toContain("{INDICATOR_OVERVIEW_LEGEND}");
-    expect(read("../../position/[symbol]/PriceLadder.tsx")).toContain("{KEY_LEVELS_LADDER_NOTE}");
+    expect(read("../../position/[symbol]/TechnicalIndicatorsPanel.tsx")).not.toContain("{INDICATOR_OVERVIEW_LEGEND}");
+    expect(read("../../position/[symbol]/PriceLadder.tsx")).not.toContain("{KEY_LEVELS_LADDER_NOTE}");
     // 槓桿專章：nature 與 notes 不在下沉範圍。
     const leverage = read("../../position/[symbol]/LeverageChapterView.tsx");
     expect(leverage).toContain("chapter.erosion?.nature");
     expect(leverage).toContain("chapter.notes.map");
+
+    // builder 逐句：建議卡與技術分析組。
+    const adviceWithBar = { direction_weights: [{ direction: "defensive", weight: 0.6, actions: ["reduce"] }] } as unknown as AdviceCard;
+    const adviceNoBar = { direction_weights: [] } as unknown as AdviceCard;
+    expect(buildAdviceFooterItems(adviceWithBar)).toEqual([DIRECTION_SHARE_QUALIFIER]);
+    expect(buildAdviceFooterItems(adviceNoBar)).toEqual([]);
+    expect(buildTechnicalFooterItems({ technical: {} } as unknown as SignalsPayload)).toEqual([INDICATOR_OVERVIEW_LEGEND]);
+    expect(buildTechnicalFooterItems({} as unknown as SignalsPayload)).toEqual([]);
   });
 
   it("L6-2／L6-7：下沉句由 builder 產出且原區塊不再渲染（全頁恰好一次）", () => {
@@ -1221,16 +1259,31 @@ describe("揭露下沉頁尾 守門", () => {
     });
     const bars = Array.from({ length: 80 }, (_, i) => bar(i));
     const items = buildKeyLevelsFooterItems(bars, null, "close-not-held");
-    expect(items[0]).toBe(KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE);
-    expect(items[1]).toBe(KEY_LEVELS_STOP_S5_NEUTRAL_NOTE);
-    expect(items[2]).toEqual({ heading: KEY_LEVELS_BASIS_SECTION_TITLE });
-    expect(items[3]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
-    const basis = items.slice(4, 14);
+    expect(items.slice(0, 8)).toEqual([
+      KEY_LEVELS_PANEL_DISCLAIMER,
+      KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+      KEY_LEVELS_HEADER_DASH_NOTICE,
+      buildRangeNotValuationNote(80),
+      KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+      KEY_LEVELS_TARGET_STANDING_NOTICE,
+      KEY_LEVELS_LADDER_NOTE,
+      { heading: KEY_LEVELS_BASIS_SECTION_TITLE },
+    ]);
+    expect(items[8]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
+    const basis = items.slice(9, 19);
     expect(basis).toHaveLength(10);
     expect(basis.map((b) => (typeof b === "string" || !("formula" in b) ? "?" : b.formula[0]?.slice(0, 4)))).toEqual([
       "收盤（本", "位階(近", "分類：位", "MA20", "近60日", "ATR(", "停損參考", "停利參考", "基準價：", "拉回觀察",
     ]);
-    expect(items[14]).toBe(buildFooterSample(80, bars[79]!.date));
+    expect(items[19]).toBe(buildFooterSample(80, bars[79]!.date));
+    // 位階不可計算時（< 60 根）不含位階≠估值句，其餘順序不變。
+    const short = buildKeyLevelsFooterItems(bars.slice(0, 40), null, "close-not-held");
+    expect(short.slice(0, 4)).toEqual([
+      KEY_LEVELS_PANEL_DISCLAIMER,
+      KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+      KEY_LEVELS_HEADER_DASH_NOTICE,
+      KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+    ]);
     expect(buildKeyLevelsFooterItems([], null, "close-not-held")).toEqual([]);
 
     // 操作摘要 builder：候選＝覆蓋度句（完整數字）＋規則版本句；no_price／no_action＝[]。

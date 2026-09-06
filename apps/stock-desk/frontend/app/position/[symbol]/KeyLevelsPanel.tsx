@@ -8,7 +8,7 @@ import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
 import type { LadderGroup, LadderRung } from "../../lib/keyLevelsVisuals";
 import type { Bar } from "../../lib/types";
-import { PriceLadder } from "./PriceLadder";
+import { KEY_LEVELS_LADDER_NOTE, PriceLadder } from "./PriceLadder";
 import { RangeGauge } from "./RangeGauge";
 
 /**
@@ -18,8 +18,9 @@ import { RangeGauge } from "./RangeGauge";
  * 待 risk-compliance-officer 逐字覆核；字面（含標點）不得再改動，任何變更
  * 視為漂移須重送風控。`componentWordingScan.test.ts` 逐字釘住＋禁用詞掃描。
  *
- * 落地條件 (風控 R7 / D4 V4)：所有揭露文字 ≥ text-sm、≥ text-neutral-400、
- * 常駐不摺疊——計算依據不得放進 <details>；S1 採納：大字不帶紅綠語意色。
+ * 呈現規範：揭露句與計算依據依 CEO 裁定 2026-09-06（兩次）下沉至頁尾揭露區
+ * （`PageFooterDisclosures`，L1／L2：text-xs／neutral-400、常駐不摺疊），本面板只留
+ * 大字標籤與一句指引句；S1 採納：大字不帶紅綠語意色。
  * 數值來源 `app/lib/keyLevels.ts`（display-layer derived；backend/quant
  * 正式化為追蹤中的 follow-up）。
  */
@@ -265,6 +266,11 @@ function LevelRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Single place deciding whether a range zone (and its 位階≠估值 sentence) exists — shared by render and footer builder. */
+function rangeZoneOf(levels: KeyLevels): RangeZone | null {
+  return levels.rangePositionPct !== null ? classifyRangeZone(levels.rangePositionPct) : null;
+}
+
 function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
   const x = fmt(levels.anchorPrice);
   if (source === "cost") return buildStopBasisHeldWithCost(x);
@@ -335,7 +341,7 @@ export function KeyLevelsPanel({
     );
   }
 
-  const zone = levels.rangePositionPct !== null ? classifyRangeZone(levels.rangePositionPct) : null;
+  const zone = rangeZoneOf(levels);
   const ladder = buildLadderViewModel(levels, anchorSource);
 
   return (
@@ -350,14 +356,13 @@ export function KeyLevelsPanel({
         只在頁尾揭露區的資料來源組出現一次，本面板不重複。均 ≥ text-sm、≥ neutral-400。
       */}
       {/*
-        揭露下沉頁尾（CEO 裁定 2026-09-06；風控 A+5／A+9）：DISCLAIMER（大字的「非買賣指示」
-        限定）與 DASH_NOTICE（「—」的解碼表）留原位；UNADJUSTED_NOTICE 留原位以維持
-        計算依據 XREF「見面板頂部揭露」的指涉；STALENESS_SELF_NOTICE 下沉頁尾。
+        揭露下沉頁尾（CEO 裁定 2026-09-06；第二次裁定推翻風控 A+5／A+7／A+9／A+10）：
+        DISCLAIMER、DASH_NOTICE、STALENESS_SELF_NOTICE、位階≠估值句、停利 standing notice、
+        階梯註記皆下沉（`buildKeyLevelsFooterItems`）。UNADJUSTED_NOTICE 留原位以維持
+        計算依據 XREF「見面板頂部揭露」的指涉。
       */}
       <div className="mt-2 space-y-1 text-sm text-neutral-400">
-        <p className="text-neutral-300">{KEY_LEVELS_PANEL_DISCLAIMER}</p>
         <p>{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
-        <p>{KEY_LEVELS_HEADER_DASH_NOTICE}</p>
       </div>
 
       {/*
@@ -389,7 +394,6 @@ export function KeyLevelsPanel({
             <div className="mt-2 space-y-1">
               <LevelRow label={KEY_LEVELS_MA60_DEVIATION_LABEL} value={fmtPct(levels.ma60DeviationPct)} />
             </div>
-            <p className="mt-2 text-sm text-neutral-400">{buildRangeNotValuationNote(levels.rangeBarCount)}</p>
           </>
         ) : (
           <>
@@ -440,7 +444,6 @@ export function KeyLevelsPanel({
           <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
           <p className="mt-1 text-sm text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>
           <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.target2R)}</p>
-          <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_TARGET_STANDING_NOTICE}</p>
           <div className="mt-2 space-y-1">
             <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={fmt(levels.target2R)} />
             <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={fmt(levels.targetFixedPct)} />
@@ -480,9 +483,17 @@ export function KeyLevelsPanel({
 export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, anchorSource: AnchorSource): FooterItem[] {
   const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
   if (levels === null) return [];
+  // Order mirrors the panel's original top-to-bottom reading order (CEO 第二次裁定
+  // 2026-09-06 added DISCLAIMER／DASH／位階≠估值／停利 standing notice／階梯註記).
+  const zone = rangeZoneOf(levels);
   return [
+    KEY_LEVELS_PANEL_DISCLAIMER,
     KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+    KEY_LEVELS_HEADER_DASH_NOTICE,
+    ...(zone !== null ? [buildRangeNotValuationNote(levels.rangeBarCount)] : []),
     KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+    KEY_LEVELS_TARGET_STANDING_NOTICE,
+    KEY_LEVELS_LADDER_NOTE,
     { heading: KEY_LEVELS_BASIS_SECTION_TITLE },
     KEY_LEVELS_BASIS_UNADJUSTED_XREF,
     buildBasisClose(fmt(levels.close), levels.closeDate),

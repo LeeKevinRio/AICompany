@@ -28,9 +28,9 @@ import type { PositionsResponse } from "../../lib/types";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
-import { AdviceCardView } from "./AdviceCardView";
+import { AdviceCardView, buildAdviceFooterItems } from "./AdviceCardView";
 import { LeverageChapterView } from "./LeverageChapterView";
-import { TechnicalIndicatorsPanel } from "./TechnicalIndicatorsPanel";
+import { TechnicalIndicatorsPanel, buildTechnicalFooterItems } from "./TechnicalIndicatorsPanel";
 import { OperationSummaryPanel } from "./OperationSummaryPanel";
 
 /**
@@ -158,6 +158,17 @@ export default function PositionDetailPage() {
         bars.data && bars.data.status === "ok"
           ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
           : [],
+    },
+    {
+      title: TECHNICAL_ANALYSIS_TITLE,
+      items:
+        signals.data && signals.data.status === "ok" && signals.data.signals
+          ? buildTechnicalFooterItems(signals.data.signals)
+          : [],
+    },
+    {
+      title: ADVICE_CARD_TITLE,
+      items: advice.data?.status === "ok" && advice.data.advice ? buildAdviceFooterItems(advice.data.advice) : [],
     },
     {
       title: LEVERAGE_CHAPTER_TITLE,

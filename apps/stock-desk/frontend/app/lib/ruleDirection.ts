@@ -45,3 +45,12 @@ export function directionShares(directionWeights: readonly DirectionWeight[]): D
     sharePct: total > 0 && Number.isFinite(dw.weight) ? (dw.weight / total) * 100 : 0,
   }));
 }
+
+/**
+ * Whether the 100% stacked direction bar is drawn at all: at least one
+ * direction carries weight. Shared by `DirectionWeightBar` and the 頁尾
+ * builder so the R5 qualifier and the bar always appear together.
+ */
+export function hasDirectionShareBar(advice: Pick<AdviceCard, "direction_weights">): boolean {
+  return directionShares(advice.direction_weights).some((s) => s.sharePct > 0);
+}

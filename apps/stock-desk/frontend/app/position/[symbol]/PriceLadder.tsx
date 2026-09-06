@@ -127,7 +127,7 @@ export function PriceLadder({
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-sm text-neutral-400">{KEY_LEVELS_LADDER_NOTE}</p>
+      {/* `KEY_LEVELS_LADDER_NOTE`：CEO 第二次裁定 2026-09-06 推翻風控 A+10，下沉頁尾（`buildKeyLevelsFooterItems`）；面板底部已有指引句。 */}
     </div>
   );
 }

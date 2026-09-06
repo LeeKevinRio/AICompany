@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse } from "../types";
-import { buildOperationSummary } from "../operationSummary";
+import { buildSummaryFooterItems, buildOperationSummary } from "../operationSummary";
 import {
   AS_OF_AGE_UNKNOWN_STATEMENT,
   AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
@@ -735,5 +735,46 @@ describe("buildOperationSummary — candidate mode (FR-C7)", () => {
     expect(model.supportive).toBe(false);
     expect(model.notSupportiveText).toBe(CANDIDATE_NOT_SUPPORTIVE_TEXT);
     expect(model.notSupportiveText).not.toMatch(/可再觀察|時機未到|可留意/);
+  });
+});
+
+/**
+ * 揭露下沉頁尾（風控第二次裁定後 required）：下沉不得在機制上等同刪除——候選／持有兩分支
+ * 的頁尾句逐字、逐序釘住。
+ */
+describe("buildSummaryFooterItems — 頁尾操作摘要組", () => {
+  it("held: asOfStatement、rulesStatement 依序", () => {
+    const response = makeResponse({ held: true }) as AdviceResponse;
+    const model = buildOperationSummary(response);
+    expect(model.kind).toBe("held");
+    if (model.kind !== "held") return;
+    expect(buildSummaryFooterItems(response)).toEqual([model.required.asOfStatement, model.required.rulesStatement]);
+  });
+
+  it("candidate: candidateEvidenceNotice、notComparableNote、coverageStatement、asOfStatement、rulesStatement 依序，且五句皆非空", () => {
+    const response = makeResponse({ held: false }) as AdviceResponse;
+    const model = buildOperationSummary(response);
+    expect(model.kind).toBe("candidate");
+    if (model.kind !== "candidate") return;
+    const items = buildSummaryFooterItems(response);
+    expect(items).toEqual([
+      model.required.candidateEvidenceNotice,
+      model.notComparableNote,
+      model.coverageStatement,
+      model.required.asOfStatement,
+      model.required.rulesStatement,
+    ]);
+    expect(items.every((s) => s.length > 0)).toBe(true);
+    // 完整數字不簡化：覆蓋度句保留百分比與條數。
+    expect(model.coverageStatement).toMatch(/\d/);
+  });
+
+  it("no_price／no_action: []", () => {
+    expect(
+      buildSummaryFooterItems(makeResponse({ status: "insufficient_data", reason: "x", advice: null }) as AdviceResponse),
+    ).toEqual([]);
+    const noAction = makeResponse({ advice: makeCard({ action: "insufficient_data" }) }) as AdviceResponse;
+    expect(buildOperationSummary(noAction).kind).toBe("no_action");
+    expect(buildSummaryFooterItems(noAction)).toEqual([]);
   });
 });

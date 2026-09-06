@@ -44,8 +44,9 @@ import { isDataStaleByTradingDays } from "./tradingCalendar";
  * The eight elements §2 of the wording brief requires on every rendered
  * card: `null` on a field means "not applicable to this card" (e.g. no
  * matched rule yet to quote a counterargument from), never "omitted by
- * mistake" — the panel renders every field it receives, so a missing one is
- * a builder bug, not a display choice.
+ * mistake" — every field is rendered either by the panel or by the 頁尾揭露區
+ * (`buildSummaryFooterItems`, CEO 裁定 2026-09-06), so a missing one is a
+ * builder bug, not a display choice.
  */
 export interface RequiredElements {
   /** §2.1 */
@@ -309,17 +310,34 @@ export function buildOperationSummary(
 }
 
 /**
- * 揭露下沉頁尾（CEO 裁定 2026-09-06；風控 ACCEPT_WITH_CONDITIONS）：the two summary
- * sentences the footer takes over — `coverageStatement` (candidate mode; must
- * keep its full numbers, never summarised) and `rulesStatement`. Everything
- * else the summary renders stays in place (A+1/A+2/A+3: asOfStatement,
- * candidateEvidenceNotice, notComparableNote are 大字 labels, not footer copy).
- * Returns [] for the no_price / no_action branches, exactly as the panel
- * never rendered those sentences there either.
+ * 揭露下沉頁尾（CEO 裁定 2026-09-06，含第二次裁定推翻風控 A+1～A+3）：the summary
+ * sentences the footer takes over, verbatim, in the panel's original reading
+ * order — candidate: candidateEvidenceNotice、notComparableNote、
+ * coverageStatement (full numbers, never summarised)、asOfStatement、
+ * rulesStatement; held: asOfStatement、rulesStatement. Returns [] for the
+ * no_price / no_action branches, exactly as the panel never rendered those
+ * sentences there either. `componentWordingScan.test.ts` +
+ * `operationSummary.test.ts` pin both branches so a sunk sentence can never
+ * silently become a deleted one.
  */
 export function buildSummaryFooterItems(response: AdviceResponse): string[] {
   const model = buildOperationSummary(response);
-  if (model.kind === "candidate") return [model.coverageStatement, model.required.rulesStatement];
-  if (model.kind === "held") return [model.required.rulesStatement];
+  // CEO 第二次裁定 2026-09-06（推翻風控 A+1～A+3）：candidateEvidenceNotice、
+  // notComparableNote、asOfStatement 亦下沉；順序沿用面板原本的呈現順序。
+  if (model.kind === "candidate") {
+    // `candidateEvidenceNotice` is non-null by construction in candidate mode
+    // (`buildRequiredElements(card, candidate=true)`); assert rather than mask.
+    if (model.required.candidateEvidenceNotice === null) {
+      throw new Error("candidate summary without candidateEvidenceNotice");
+    }
+    return [
+      model.required.candidateEvidenceNotice,
+      model.notComparableNote,
+      model.coverageStatement,
+      model.required.asOfStatement,
+      model.required.rulesStatement,
+    ];
+  }
+  if (model.kind === "held") return [model.required.asOfStatement, model.required.rulesStatement];
   return [];
 }

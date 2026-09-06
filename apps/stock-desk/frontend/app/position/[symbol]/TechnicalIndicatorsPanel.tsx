@@ -8,6 +8,8 @@ import type {
 import { formatNumber, formatPercent } from "../../lib/format";
 import { kdBand, percentBBand, rsiBand, volumeZBand } from "../../lib/indicatorBands";
 import type { IndicatorBand } from "../../lib/indicatorBands";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { TECHNICAL_ANALYSIS_TITLE } from "../../lib/sectionTitles";
 
 /**
  * FR-C2 (Phase 8): renders every technical/risk indicator `compute_signals()`
@@ -143,8 +145,11 @@ function IndicatorOverview({ chips }: { chips: OverviewChip[] }) {
           ))}
         </ul>
       )}
-      {/* Legend: what the colour does and does not mean — rendered with the chips, ≥ text-sm / ≥ neutral-400. */}
-      <p className="mt-2 text-sm text-neutral-400">{INDICATOR_OVERVIEW_LEGEND}</p>
+      {/*
+        Legend (`INDICATOR_OVERVIEW_LEGEND`)：CEO 第二次裁定 2026-09-06 推翻風控 A+8，下沉頁尾
+        （`buildTechnicalFooterItems`）；原位留指引句（L5）。
+      */}
+      <p className="mt-2 text-sm text-neutral-300">{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}</p>
     </div>
   );
 }
@@ -553,4 +558,13 @@ export function TechnicalIndicatorsPanel({ payload }: { payload: SignalsPayload 
       )}
     </div>
   );
+}
+
+/**
+ * The 技術分析 group of `PageFooterDisclosures` (CEO 第二次裁定 2026-09-06): the
+ * overview legend, exactly when the overview strip (and its pointer) renders —
+ * i.e. the payload carries a technical block.
+ */
+export function buildTechnicalFooterItems(payload: SignalsPayload): string[] {
+  return payload.technical ? [INDICATOR_OVERVIEW_LEGEND] : [];
 }
