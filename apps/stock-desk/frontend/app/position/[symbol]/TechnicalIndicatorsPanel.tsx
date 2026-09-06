@@ -6,6 +6,8 @@ import type {
   VolatilityResult,
 } from "../../lib/types";
 import { formatNumber, formatPercent } from "../../lib/format";
+import { kdBand, percentBBand, rsiBand, volumeZBand } from "../../lib/indicatorBands";
+import type { IndicatorBand } from "../../lib/indicatorBands";
 
 /**
  * FR-C2 (Phase 8): renders every technical/risk indicator `compute_signals()`
@@ -19,6 +21,133 @@ import { formatNumber, formatPercent } from "../../lib/format";
  */
 
 const RECENT_ROWS = 5;
+
+/* ---------- 圖形化 item 3 (CEO 2026-09-06)：指標速覽與區帶標籤 ---------- */
+
+/**
+ * Band chips: every indicator that has a textbook 0–100 / 0–1 / z scale gets a
+ * small glyph+colour+label chip saying which band its latest value sits in.
+ * Bands come from `app/lib/indicatorBands.ts` (pure, tested); this file only
+ * maps band → chip.
+ *
+ * 風控 2026-09-06 圖形化審查 R1/R2/R3/R8 落地：
+ * - R1: glyphs are FILL levels (○ ◐ ●), never direction arrows/triangles —
+ *   `componentWordingScan.test.ts` rejects arrow/triangle glyphs in this file.
+ * - R2: colour is ONE hue in three steps (sky-950 → sky-800), the same
+ *   sequential device `RangeGauge` uses; amber stays reserved for the page's
+ *   warning vocabulary (insufficient / stale / downgraded), so a 高區帶 chip
+ *   can never look like an alert.
+ * - R3/R4: no 收盤 vs MA chip — a binary relation is not a band, and its
+ *   inputs would have crossed two API payloads with different timestamps.
+ * - R8: chips render ONLY inside 指標速覽, next to the legend sentence that
+ *   says what the colour does and does not mean; per-card chips were removed.
+ * Every chip's wording is an exported constant pinned by
+ * `componentWordingScan.test.ts`; the threshold in brackets is the exact number
+ * the classifier uses.
+ */
+
+export const INDICATOR_OVERVIEW_TITLE = "指標速覽";
+
+export const INDICATOR_OVERVIEW_LEGEND =
+  "色帶只標示各指標最新值落在自身量尺的哪個區帶（低／中／高），不代表多空方向，也不是任何買賣判斷。";
+
+export const INDICATOR_OVERVIEW_EMPTY = "目前沒有可分區帶的指標數值。";
+
+export const RSI_BAND_LABELS: Record<IndicatorBand, string> = {
+  low: "RSI 低區帶（≤30）",
+  mid: "RSI 中區帶（30–70）",
+  high: "RSI 高區帶（≥70）",
+};
+
+export const KD_BAND_LABELS: Record<IndicatorBand, string> = {
+  low: "K 值低區帶（≤20）",
+  mid: "K 值中區帶（20–80）",
+  high: "K 值高區帶（≥80）",
+};
+
+export const PERCENT_B_BAND_LABELS: Record<IndicatorBand, string> = {
+  low: "%B 低於下軌（<0）",
+  mid: "%B 通道內（0–1）",
+  high: "%B 高於上軌（>1）",
+};
+
+export const VOLUME_Z_BAND_LABELS: Record<IndicatorBand, string> = {
+  low: "成交量明顯偏低（z≤−2）",
+  mid: "成交量接近近期平均（|z|<2）",
+  high: "成交量明顯偏高（z≥2）",
+};
+
+const BAND_CHIP_CLASS: Record<IndicatorBand, string> = {
+  low: "border-sky-900 bg-sky-950/40 text-sky-200",
+  mid: "border-sky-800 bg-sky-900/50 text-sky-100",
+  high: "border-sky-600 bg-sky-800/60 text-sky-50",
+};
+
+/** Fill-level glyphs (R1): empty / half / full — position on a scale, not a direction. */
+const BAND_ICON: Record<IndicatorBand, string> = { low: "○", mid: "◐", high: "●" };
+
+function BandChip({ band, label }: { band: IndicatorBand; label: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${BAND_CHIP_CLASS[band]}`}
+    >
+      <span aria-hidden="true">{BAND_ICON[band]}</span>
+      {label}
+    </span>
+  );
+}
+
+interface OverviewChip {
+  key: string;
+  band: IndicatorBand;
+  label: string;
+}
+
+/**
+ * Collects every chip the payload supports. A `null` band (indicator
+ * insufficient) contributes nothing — the card's own insufficient-data note
+ * stays the single explanation.
+ */
+function collectOverviewChips(payload: SignalsPayload): OverviewChip[] {
+  const tech = payload.technical;
+  if (!tech) return [];
+  const chips: OverviewChip[] = [];
+
+  const rsi = tech.rsi.status === "ok" ? rsiBand(tech.rsi.last.rsi ?? null) : null;
+  if (rsi !== null) chips.push({ key: "rsi", band: rsi, label: RSI_BAND_LABELS[rsi] });
+
+  const kd = tech.kd.status === "ok" ? kdBand(tech.kd.last.k ?? null) : null;
+  if (kd !== null) chips.push({ key: "kd", band: kd, label: KD_BAND_LABELS[kd] });
+
+  const pb = tech.bollinger.status === "ok" ? percentBBand(tech.bollinger.last.percent_b ?? null) : null;
+  if (pb !== null) chips.push({ key: "bollinger", band: pb, label: PERCENT_B_BAND_LABELS[pb] });
+
+  const vz = tech.volume_zscore.status === "ok" ? volumeZBand(tech.volume_zscore.last.zscore ?? null) : null;
+  if (vz !== null) chips.push({ key: "volume_zscore", band: vz, label: VOLUME_Z_BAND_LABELS[vz] });
+
+  return chips;
+}
+
+function IndicatorOverview({ chips }: { chips: OverviewChip[] }) {
+  return (
+    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+      <h4 className="text-sm font-semibold text-neutral-100">{INDICATOR_OVERVIEW_TITLE}</h4>
+      {chips.length === 0 ? (
+        <p className="mt-2 text-sm text-neutral-400">{INDICATOR_OVERVIEW_EMPTY}</p>
+      ) : (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {chips.map((chip) => (
+            <li key={chip.key}>
+              <BandChip band={chip.band} label={chip.label} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {/* Legend: what the colour does and does not mean — rendered with the chips, ≥ text-sm / ≥ neutral-400. */}
+      <p className="mt-2 text-sm text-neutral-400">{INDICATOR_OVERVIEW_LEGEND}</p>
+    </div>
+  );
+}
 
 function requiredBarsLabel(name: string, window: Record<string, number>): string {
   switch (name) {
@@ -392,6 +521,7 @@ export function TechnicalIndicatorsPanel({ payload }: { payload: SignalsPayload 
 
   return (
     <div className="space-y-6">
+      {tech && <IndicatorOverview chips={collectOverviewChips(payload)} />}
       {tech && (
         <div>
           <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">

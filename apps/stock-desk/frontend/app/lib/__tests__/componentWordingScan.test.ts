@@ -98,6 +98,34 @@ import {
   buildStopBasisUnknown,
 } from "../../position/[symbol]/KeyLevelsPanel";
 import type { BasisItem } from "../../position/[symbol]/KeyLevelsPanel";
+import {
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+  KEY_LEVELS_LADDER_RUNG_CLOSE,
+} from "../../position/[symbol]/KeyLevelsPanel";
+import {
+  KEY_LEVELS_GAUGE_HIGH_END_LABEL,
+  KEY_LEVELS_GAUGE_LOW_END_LABEL,
+  KEY_LEVELS_GAUGE_MARKER_LABEL,
+  buildGaugeAriaLabel,
+} from "../../position/[symbol]/RangeGauge";
+import {
+  KEY_LEVELS_LADDER_DISTANCE_HEADER,
+  KEY_LEVELS_LADDER_HEADLINE_TAG,
+  KEY_LEVELS_LADDER_INTRO,
+  KEY_LEVELS_LADDER_NOTE,
+  KEY_LEVELS_LADDER_TITLE,
+} from "../../position/[symbol]/PriceLadder";
+import {
+  INDICATOR_OVERVIEW_EMPTY,
+  INDICATOR_OVERVIEW_LEGEND,
+  INDICATOR_OVERVIEW_TITLE,
+  KD_BAND_LABELS,
+  PERCENT_B_BAND_LABELS,
+  RSI_BAND_LABELS,
+  VOLUME_Z_BAND_LABELS,
+} from "../../position/[symbol]/TechnicalIndicatorsPanel";
+import { DIRECTION_BAR_ARIA_LABEL, DIRECTION_SHARE_QUALIFIER } from "../../position/[symbol]/AdviceCardView";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -207,6 +235,14 @@ const SCANNED_FILES = [
   "../../settings/KellyManualInputForm.tsx",
   "../../settings/KellyImportDialog.tsx",
   "../../settings/KellyDisclosuresPanel.tsx",
+  // 圖形化 1–3（CEO 2026-09-06）：位階量表、價位階梯、指標速覽區帶標籤與規則方向
+  // 標籤是新面向使用者字面；三個純函式模組只帶 doc comment，但一併納入以免日後
+  // 有人把字面搬進去而逃出掃描。
+  "../../position/[symbol]/RangeGauge.tsx",
+  "../../position/[symbol]/PriceLadder.tsx",
+  "../keyLevelsVisuals.ts",
+  "../indicatorBands.ts",
+  "../ruleDirection.ts",
 ] as const;
 
 /**
@@ -836,5 +872,175 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
       const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
       expect(src).not.toMatch(/\{(model|required)\.nonRealtimeNotice\}|\{NON_REALTIME_NOTICE\}/);
     }
+  });
+});
+
+/**
+ * 圖形化 1–3（CEO 2026-09-06）：位階量表／價位階梯／指標速覽／規則方向的新字面
+ * 逐字釘住＋禁用詞掃描＋裸「即時」掃描；並守門「圖不取代字」——每個圖形都伴隨
+ * 一句說明其不代表方向或買賣判斷的限定語，且色彩不得用紅綠語意（風控 S1 沿用）。
+ */
+describe("圖形化 1–3 新字面與守門", () => {
+  const CONSTANTS: Record<string, string> = {
+    KEY_LEVELS_GAUGE_LOW_END_LABEL,
+    KEY_LEVELS_GAUGE_HIGH_END_LABEL,
+    KEY_LEVELS_GAUGE_MARKER_LABEL,
+    buildGaugeAriaLabel: buildGaugeAriaLabel(252, 41.4, "區間中段"),
+    KEY_LEVELS_LADDER_TITLE,
+    KEY_LEVELS_LADDER_INTRO,
+    KEY_LEVELS_LADDER_HEADLINE_TAG,
+    KEY_LEVELS_LADDER_DISTANCE_HEADER,
+    KEY_LEVELS_LADDER_NOTE,
+    KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+    KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
+    KEY_LEVELS_LADDER_RUNG_CLOSE,
+    INDICATOR_OVERVIEW_TITLE,
+    INDICATOR_OVERVIEW_LEGEND,
+    INDICATOR_OVERVIEW_EMPTY,
+    ...Object.fromEntries(Object.entries(RSI_BAND_LABELS).map(([k, v]) => [`RSI_${k}`, v])),
+    ...Object.fromEntries(Object.entries(KD_BAND_LABELS).map(([k, v]) => [`KD_${k}`, v])),
+    ...Object.fromEntries(Object.entries(PERCENT_B_BAND_LABELS).map(([k, v]) => [`PB_${k}`, v])),
+    ...Object.fromEntries(Object.entries(VOLUME_Z_BAND_LABELS).map(([k, v]) => [`VZ_${k}`, v])),
+    DIRECTION_BAR_ARIA_LABEL,
+    DIRECTION_SHARE_QUALIFIER,
+  };
+
+  it("每一句：不含 §1.3 禁用詞、無裸即時宣稱", () => {
+    for (const [name, text] of Object.entries(CONSTANTS)) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, name);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("位階量表字面逐字比對", () => {
+    expect(KEY_LEVELS_GAUGE_LOW_END_LABEL).toBe("區間最低");
+    expect(KEY_LEVELS_GAUGE_HIGH_END_LABEL).toBe("區間最高");
+    // 風控 S-b：「收盤位於 41%」，不得是「收盤 41%」（會被讀成漲跌幅）。
+    expect(KEY_LEVELS_GAUGE_MARKER_LABEL).toBe("收盤位於");
+    expect(buildGaugeAriaLabel(252, 41.4, "區間中段")).toBe("近 252 根日線位階量表：收盤位於區間的 41%，區間中段");
+  });
+
+  it("價位階梯字面逐字比對（含「不代表價格會…到達」限定語）", () => {
+    expect(KEY_LEVELS_LADDER_TITLE).toBe("價位階梯");
+    expect(KEY_LEVELS_LADDER_INTRO).toBe(
+      "本面板各參考價位由高至低排列；橫條為各價位相對基準價的百分比距離，右為高於基準價，左為低於基準價。",
+    );
+    expect(KEY_LEVELS_LADDER_HEADLINE_TAG).toBe("大字所示");
+    expect(KEY_LEVELS_LADDER_DISTANCE_HEADER).toBe("相對基準價");
+    expect(KEY_LEVELS_LADDER_NOTE).toBe("排序與距離皆為算式結果，不代表價格會依此順序或幅度到達任一價位。");
+    expect(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST).toBe("基準價（持倉平均成本）");
+    expect(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE).toBe("基準價（最新收盤，試算）");
+    expect(KEY_LEVELS_LADDER_RUNG_CLOSE).toBe("最新收盤");
+  });
+
+  it("指標速覽字面逐字比對（區帶標籤帶門檻；圖例句含「不代表多空方向」與「不是任何買賣判斷」）", () => {
+    expect(INDICATOR_OVERVIEW_TITLE).toBe("指標速覽");
+    expect(INDICATOR_OVERVIEW_LEGEND).toBe(
+      "色帶只標示各指標最新值落在自身量尺的哪個區帶（低／中／高），不代表多空方向，也不是任何買賣判斷。",
+    );
+    expect(INDICATOR_OVERVIEW_EMPTY).toBe("目前沒有可分區帶的指標數值。");
+    expect(RSI_BAND_LABELS).toEqual({ low: "RSI 低區帶（≤30）", mid: "RSI 中區帶（30–70）", high: "RSI 高區帶（≥70）" });
+    expect(KD_BAND_LABELS).toEqual({ low: "K 值低區帶（≤20）", mid: "K 值中區帶（20–80）", high: "K 值高區帶（≥80）" });
+    expect(PERCENT_B_BAND_LABELS).toEqual({ low: "%B 低於下軌（<0）", mid: "%B 通道內（0–1）", high: "%B 高於上軌（>1）" });
+    expect(VOLUME_Z_BAND_LABELS).toEqual({
+      low: "成交量明顯偏低（z≤−2）",
+      mid: "成交量接近近期平均（|z|<2）",
+      high: "成交量明顯偏高（z≥2）",
+    });
+    expect(DIRECTION_BAR_ARIA_LABEL).toBe("命中規則方向權重占比");
+    // R5：堆疊條限定語（creative-lead 候選 A，風控逐字審）——含「比例」與三個否定對象。
+    expect(DIRECTION_SHARE_QUALIFIER).toBe(
+      "占比為各方向命中規則權重佔全部命中規則權重總和的比例，不代表機率、達成率或建議強度。",
+    );
+    expect(DIRECTION_SHARE_QUALIFIER).toContain("不代表機率、達成率或建議強度");
+    expect([...DIRECTION_SHARE_QUALIFIER].length).toBeLessThanOrEqual(45);
+  });
+
+  it("R3/R4：不得存在「收盤 vs MA」chip（二元關係非區帶；且會跨兩支 API 的時間戳）", () => {
+    for (const rel of [
+      "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
+      "../../position/[symbol]/page.tsx",
+      "../indicatorBands.ts",
+    ]) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src, `${rel} 不得復活收盤 vs MA 比較`).not.toMatch(/closeVsMa|MaRelation|latestClose|buildMaRelationLabel/);
+    }
+  });
+
+  it("R8(a)：區帶 chip 只在「指標速覽」渲染，不散落到各指標卡", () => {
+    const tech = readFileSync(
+      fileURLToPath(new URL("../../position/[symbol]/TechnicalIndicatorsPanel.tsx", import.meta.url)),
+      "utf8",
+    );
+    // 唯一的 <BandChip 呼叫點在 IndicatorOverview 內；IndicatorCard 不再接受 chip prop。
+    expect(tech.match(/<BandChip /g)?.length).toBe(1);
+    expect(tech.indexOf("<BandChip ")).toBeGreaterThan(tech.indexOf("function IndicatorOverview"));
+    expect(tech).not.toMatch(/chip\?:|chip=\{/);
+  });
+
+  it("R5：方向堆疊條的限定語與條同區、≥ text-sm / ≥ neutral-400、不在 <details> 內", () => {
+    const advice = readFileSync(fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)), "utf8");
+    const bar = advice.slice(advice.indexOf("function DirectionWeightBar"), advice.indexOf("export function hasOpposingDirections"));
+    expect(bar).toMatch(/className="mt-2 text-sm text-neutral-400">\{DIRECTION_SHARE_QUALIFIER\}/);
+    expect(bar).not.toContain("<details");
+  });
+
+  it("R1：圖形化元件與方向標籤不得使用方向性符號（▲▼△▽↑↓）", () => {
+    for (const rel of [
+      "../../position/[symbol]/RangeGauge.tsx",
+      "../../position/[symbol]/PriceLadder.tsx",
+      "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
+      "../../position/[symbol]/AdviceCardView.tsx",
+    ]) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src, `${rel} 不得含方向性符號`).not.toMatch(/[▲▼△▽↑↓↗↘⇧⇩🔺🔻]/);
+    }
+  });
+
+  it("圖不取代字：三個圖形元件各自渲染其限定語；圖例句與階梯註記 ≥ text-sm / ≥ neutral-400", () => {
+    const gauge = readFileSync(fileURLToPath(new URL("../../position/[symbol]/RangeGauge.tsx", import.meta.url)), "utf8");
+    const ladder = readFileSync(fileURLToPath(new URL("../../position/[symbol]/PriceLadder.tsx", import.meta.url)), "utf8");
+    const panel = readFileSync(fileURLToPath(new URL("../../position/[symbol]/KeyLevelsPanel.tsx", import.meta.url)), "utf8");
+    const tech = readFileSync(
+      fileURLToPath(new URL("../../position/[symbol]/TechnicalIndicatorsPanel.tsx", import.meta.url)),
+      "utf8",
+    );
+    // 量表旁的「位階≠估值」句仍由面板渲染（未因圖形而移除）。
+    expect(panel).toContain("{buildRangeNotValuationNote(levels.rangeBarCount)}");
+    expect(panel).toContain("<RangeGauge");
+    expect(panel).toContain("<PriceLadder");
+    // 階梯註記與速覽圖例：常駐、≥ text-sm、≥ neutral-400。
+    expect(ladder).toMatch(/className="mt-2 text-sm text-neutral-400">\{KEY_LEVELS_LADDER_NOTE\}/);
+    expect(tech).toMatch(/className="mt-2 text-sm text-neutral-400">\{INDICATOR_OVERVIEW_LEGEND\}/);
+    // 每一個數字都有文字形式（量表兩端與標記皆印出數值）。
+    expect(gauge).toContain("{lowText}");
+    expect(gauge).toContain("{highText}");
+    expect(gauge).toContain("{rangePositionPct.toFixed(0)}%");
+  });
+
+  it("風控 S1 沿用：圖形化元件與速覽／方向標籤不得使用紅綠語意色", () => {
+    for (const rel of [
+      "../../position/[symbol]/RangeGauge.tsx",
+      "../../position/[symbol]/PriceLadder.tsx",
+      "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
+    ]) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src, `${rel} 不得帶 red/green/rose/emerald 色票`).not.toMatch(/\b(bg|text|border)-(red|green|rose|emerald)-\d/);
+    }
+    // AdviceCardView 既有的 rose 警示區（風險上限擋下）不在此限；守門新加的方向 chip 與堆疊條色票
+    //（風控落地條件 3：DIRECTION_BAR_CLASS 一併納入），且 S-d：方向色票全中性。
+    const advice = readFileSync(fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)), "utf8");
+    const colourBlock = advice.slice(advice.indexOf("const DIRECTION_CHIP_CLASS"), advice.indexOf("function DirectionChip"));
+    expect(colourBlock).toContain("DIRECTION_BAR_CLASS");
+    expect(colourBlock).not.toMatch(/(red|green|rose|emerald|sky|amber)-\d/);
+    // R2：指標區帶 chip 不得借用 amber 警示色；量表／階梯不得用 sky 以外或紅綠色相（S-c：階梯距離條為中性灰）。
+    const tech = readFileSync(fileURLToPath(new URL("../../position/[symbol]/TechnicalIndicatorsPanel.tsx", import.meta.url)), "utf8");
+    const chipBlock = tech.slice(tech.indexOf("const BAND_CHIP_CLASS"), tech.indexOf("function BandChip"));
+    expect(chipBlock).not.toMatch(/amber-\d/);
+    const ladder = readFileSync(fileURLToPath(new URL("../../position/[symbol]/PriceLadder.tsx", import.meta.url)), "utf8");
+    expect(ladder).not.toMatch(/\b(bg|text|border)-(sky|amber)-\d/);
+    // 量表：單一色相（sky），不得借用 amber 警示色。
+    const gauge = readFileSync(fileURLToPath(new URL("../../position/[symbol]/RangeGauge.tsx", import.meta.url)), "utf8");
+    expect(gauge).not.toMatch(/amber-\d/);
   });
 });

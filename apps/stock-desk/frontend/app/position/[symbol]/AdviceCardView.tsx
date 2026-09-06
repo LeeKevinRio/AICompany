@@ -1,7 +1,82 @@
 import type { AdviceCard } from "../../lib/types";
 import { actionRawLabel, formatDateTime, formatNumber, formatPercent, ruleDirectionLabel } from "../../lib/format";
 import { ADVICE_CARD_XREF_TO_SUMMARY } from "../../lib/sectionTaglines";
+import { directionShares, ruleDirection } from "../../lib/ruleDirection";
 import { LimitsCheckList } from "./LimitsCheckList";
+
+/**
+ * 圖形化 item 3 (CEO 2026-09-06): each matched rule carries a direction chip
+ * (the existing `ruleDirectionLabel` word) and the 命中規則方向 section leads
+ * with a 100% stacked bar of the direction weights. The direction per rule is
+ * read back from `direction_weights[].actions` (`app/lib/ruleDirection.ts`),
+ * never re-derived client-side.
+ *
+ * 風控 2026-09-06 圖形化審查 R1 / R5 / S-d 落地：
+ * - R1: no glyph on the chip at all — a triangle beside 建設性 (= `add`) is an
+ *   up-arrow next to an add rule; `componentWordingScan.test.ts` rejects
+ *   arrow/triangle glyphs in this file.
+ * - S-d: the chip is fully neutral (word only); the bar segments are three
+ *   NEUTRAL greys told apart by the legend + labels, never a hue that the
+ *   page already uses for a conclusion (sky = 進場評估 badge) or a warning.
+ * - R5: the bar is a new derived number, so it carries its own standing
+ *   qualifier (`DIRECTION_SHARE_QUALIFIER`, ≥ text-sm / ≥ neutral-400, never
+ *   in <details>) saying what the share is and that it is not a probability.
+ */
+const DIRECTION_CHIP_CLASS = "border-neutral-700 bg-neutral-900 text-neutral-300";
+
+const DIRECTION_BAR_CLASS: Record<string, string> = {
+  constructive: "bg-neutral-300",
+  defensive: "bg-neutral-500",
+  neutral: "bg-neutral-700",
+};
+
+export const DIRECTION_BAR_ARIA_LABEL = "命中規則方向權重占比";
+
+/** creative-lead 起草（候選 A）→ risk-compliance-officer 逐字審；字面（含標點）不得再改動。 */
+export const DIRECTION_SHARE_QUALIFIER =
+  "占比為各方向命中規則權重佔全部命中規則權重總和的比例，不代表機率、達成率或建議強度。";
+
+function DirectionChip({ direction }: { direction: string }) {
+  return (
+    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${DIRECTION_CHIP_CLASS}`}>
+      {ruleDirectionLabel(direction)}
+    </span>
+  );
+}
+
+/** 100% stacked bar of the direction weights; 2px surface gaps, ≤24px thick, legend + qualifier beneath. */
+function DirectionWeightBar({ advice }: { advice: AdviceCard }) {
+  const shares = directionShares(advice.direction_weights);
+  if (shares.every((s) => s.sharePct === 0)) return null;
+  return (
+    <div className="mb-3">
+      <div role="img" aria-label={DIRECTION_BAR_ARIA_LABEL} className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full">
+        {shares
+          .filter((s) => s.sharePct > 0)
+          .map((s) => (
+            <div
+              key={s.direction}
+              className={`h-full ${DIRECTION_BAR_CLASS[s.direction] ?? DIRECTION_BAR_CLASS.neutral}`}
+              style={{ width: `${s.sharePct}%` }}
+            />
+          ))}
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-400">
+        {shares.map((s) => (
+          <li key={s.direction} className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className={`inline-block h-2.5 w-2.5 rounded-full ${DIRECTION_BAR_CLASS[s.direction] ?? DIRECTION_BAR_CLASS.neutral}`}
+            />
+            {ruleDirectionLabel(s.direction)} {s.sharePct.toFixed(0)}%
+          </li>
+        ))}
+      </ul>
+      {/* R5: standing qualifier, same block as the bar, ≥ text-sm / ≥ neutral-400, never collapsible. */}
+      <p className="mt-2 text-sm text-neutral-400">{DIRECTION_SHARE_QUALIFIER}</p>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -79,10 +154,15 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
           <p className="text-sm text-neutral-500">目前沒有規則命中。</p>
         ) : (
           <ul className="space-y-2">
-            {advice.matched_rules.map((rule) => (
+            {advice.matched_rules.map((rule) => {
+              const direction = ruleDirection(advice, rule.action);
+              return (
               <li key={rule.id} className="rounded-md border border-neutral-800 p-3 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium text-neutral-100">{rule.name}</span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    {direction !== null && <DirectionChip direction={direction} />}
+                    <span className="font-medium text-neutral-100">{rule.name}</span>
+                  </span>
                   <span className="text-xs text-neutral-400">
                     權重 {formatNumber(rule.weight, 2)}
                   </span>
@@ -90,7 +170,8 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
                 <p className="mt-1 text-neutral-400">{rule.explanation}</p>
                 <p className="mt-1 text-xs text-neutral-600">{rule.weight_meaning}</p>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </Section>
@@ -109,6 +190,7 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
       */}
       {advice.direction_weights.length > 0 && (
         <Section title="命中規則方向">
+          <DirectionWeightBar advice={advice} />
           <ul className="space-y-1 text-sm text-neutral-300">
             {advice.direction_weights.map((dw) => (
               <li key={dw.direction}>

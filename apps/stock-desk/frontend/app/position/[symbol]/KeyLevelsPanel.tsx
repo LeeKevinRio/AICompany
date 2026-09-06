@@ -3,7 +3,11 @@
 import { KEY_LEVELS_TAGLINE } from "../../lib/sectionTaglines";
 import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
+import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
+import type { LadderGroup, LadderRung } from "../../lib/keyLevelsVisuals";
 import type { Bar } from "../../lib/types";
+import { PriceLadder } from "./PriceLadder";
+import { RangeGauge } from "./RangeGauge";
 
 /**
  * 關鍵價位參考 (CEO 需求 2026-09-01；風控 2026-09-01 VETO R1–R12/S2–S5 後
@@ -133,6 +137,12 @@ export const KEY_LEVELS_TARGET_ROW_TRAILING_LABEL = "移動停利觀察";
 export const KEY_LEVELS_TARGET_ROW_TRAILING_NOTE =
   "（與「拉回觀察」卡片的 MA20 為同一數字；系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件）";
 
+/* ---------- §5b 價位階梯的基準價／收盤列標籤（圖形化 item 2） ---------- */
+
+export const KEY_LEVELS_LADDER_RUNG_ANCHOR_COST = "基準價（持倉平均成本）";
+export const KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE = "基準價（最新收盤，試算）";
+export const KEY_LEVELS_LADDER_RUNG_CLOSE = "最新收盤";
+
 /* ---------- §6 計算依據（常駐清單，不摺疊——風控 R7；P2 算式行改寫） ---------- */
 
 /**
@@ -260,6 +270,49 @@ function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
   return buildStopBasisUnknown(x);
 }
 
+/** Ladder rung → the panel's existing pinned row label (no new wording per rung). */
+function ladderRungLabel(rung: LadderRung, anchorSource: AnchorSource): string {
+  switch (rung.id) {
+    case "target-fixed":
+      return KEY_LEVELS_TARGET_ROW_FIXED_PCT;
+    case "target-2r":
+      return KEY_LEVELS_TARGET_ROW_2R;
+    case "anchor":
+      return anchorSource === "cost" ? KEY_LEVELS_LADDER_RUNG_ANCHOR_COST : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE;
+    case "close":
+      return KEY_LEVELS_LADDER_RUNG_CLOSE;
+    case "ma20":
+      return KEY_LEVELS_PULLBACK_ROW_MA20;
+    case "ma60":
+      return KEY_LEVELS_PULLBACK_ROW_MA60;
+    case "recent-low60":
+      return KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60;
+    case "stop-atr":
+      return KEY_LEVELS_STOP_ROW_ATR;
+    case "stop-fixed":
+      return KEY_LEVELS_STOP_ROW_FIXED_PCT;
+    default: {
+      // Exhaustiveness guard (qa-reviewer): a new rung id must get a label here.
+      const unreachable: never = rung.id;
+      return unreachable;
+    }
+  }
+}
+
+/** Ladder group → the card title it belongs to (null for the anchor/close rows). */
+function ladderGroupLabel(group: LadderGroup): string | null {
+  switch (group) {
+    case "target":
+      return KEY_LEVELS_TARGET_CARD_TITLE;
+    case "pullback":
+      return KEY_LEVELS_PULLBACK_CARD_TITLE;
+    case "stop":
+      return KEY_LEVELS_STOP_CARD_TITLE;
+    default:
+      return null;
+  }
+}
+
 export function KeyLevelsPanel({
   bars,
   avgCost,
@@ -281,6 +334,7 @@ export function KeyLevelsPanel({
   }
 
   const zone = levels.rangePositionPct !== null ? classifyRangeZone(levels.rangePositionPct) : null;
+  const ladder = buildLadderViewModel(levels, anchorSource);
 
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4">
@@ -301,39 +355,60 @@ export function KeyLevelsPanel({
         <p>{KEY_LEVELS_HEADER_DASH_NOTICE}</p>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {/* 位階卡 */}
-        <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
-          {zone !== null && levels.rangePositionPct !== null ? (
-            <>
+      {/*
+        圖形化 item 1 (CEO 2026-09-06): 位階卡 now leads with the gauge (`RangeGauge`),
+        full width. The zone 大字 keeps risk S1 (no red/green); the gauge bands are
+        one hue. The range's two ends moved from a text row onto the gauge's ends.
+      */}
+      <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+        {zone !== null && levels.rangePositionPct !== null ? (
+          <>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
               <p className="text-sm text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
-              <p className="mt-1 text-xl font-bold text-neutral-100">
+              <p className="text-xl font-bold text-neutral-100">
                 {ZONE_LABEL[zone]}
                 <span className="ml-2 align-middle font-mono text-sm font-normal text-neutral-400">
                   {levels.rangePositionPct.toFixed(0)}%
                 </span>
               </p>
-              <div className="mt-2 space-y-1">
-                <LevelRow
-                  label={buildRangeLabel(levels.rangeBarCount)}
-                  value={`${fmt(levels.rangeLow)} – ${fmt(levels.rangeHigh)}`}
-                />
-                <LevelRow label={KEY_LEVELS_MA60_DEVIATION_LABEL} value={fmtPct(levels.ma60DeviationPct)} />
-              </div>
-              <p className="mt-2 text-sm text-neutral-400">{buildRangeNotValuationNote(levels.rangeBarCount)}</p>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
-              <p className="mt-2 text-sm text-neutral-300">
-                {levels.rangeUnavailableCause === "flat-range"
-                  ? buildRangeFlatReason(levels.rangeBarCount)
-                  : buildRangeInsufficientReason(levels.barCount)}
-              </p>
-            </>
-          )}
-        </div>
+            </div>
+            <RangeGauge
+              rangeBarCount={levels.rangeBarCount}
+              rangePositionPct={levels.rangePositionPct}
+              zone={zone}
+              zoneLabels={ZONE_LABEL}
+              rangeLabel={buildRangeLabel(levels.rangeBarCount)}
+              lowText={fmt(levels.rangeLow)}
+              highText={fmt(levels.rangeHigh)}
+            />
+            <div className="mt-2 space-y-1">
+              <LevelRow label={KEY_LEVELS_MA60_DEVIATION_LABEL} value={fmtPct(levels.ma60DeviationPct)} />
+            </div>
+            <p className="mt-2 text-sm text-neutral-400">{buildRangeNotValuationNote(levels.rangeBarCount)}</p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
+            <p className="mt-2 text-sm text-neutral-300">
+              {levels.rangeUnavailableCause === "flat-range"
+                ? buildRangeFlatReason(levels.rangeBarCount)
+                : buildRangeInsufficientReason(levels.barCount)}
+            </p>
+          </>
+        )}
+      </div>
 
+      {/*
+        圖形化 item 2: the `PriceLadder` below is the overview of every level.
+        風控 2026-09-06 R6(a)/R7(a): the 拉回 card keeps its three value rows
+        (the pinned 移動停利觀察 note points at "「拉回觀察」卡片的 MA20") and
+        the 停利 card keeps its 2R/+20% rows (KEY_LEVELS_TARGET_STANDING_NOTICE's
+        「以下數字皆由固定算式自基準價推得」 must have those numbers under it) —
+        the duplication with the ladder is accepted by 風控 (階梯是總覽). Only the
+        停損 card's two rows moved into the ladder (its sentences reference the
+        大字, not the rows).
+      */}
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* 拉回觀察卡 */}
         <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
           <p className="text-sm text-neutral-400">{KEY_LEVELS_PULLBACK_CARD_TITLE}</p>
@@ -353,10 +428,6 @@ export function KeyLevelsPanel({
           <p className="mt-1 text-sm text-neutral-400">
             {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
           </p>
-          <div className="mt-2 space-y-1">
-            <LevelRow label={KEY_LEVELS_STOP_ROW_ATR} value={fmt(levels.stopAtr)} />
-            <LevelRow label={KEY_LEVELS_STOP_ROW_FIXED_PCT} value={fmt(levels.stopFixedPct)} />
-          </div>
           <p className="mt-2 text-sm text-neutral-400">{KEY_LEVELS_STOP_S5_NEUTRAL_NOTE}</p>
         </div>
 
@@ -374,6 +445,13 @@ export function KeyLevelsPanel({
           <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}</p>
         </div>
       </div>
+
+      <PriceLadder
+        model={ladder}
+        rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
+        groupLabel={ladderGroupLabel}
+        fmt={fmt}
+      />
 
       {/* 計算依據：常駐清單，不摺疊（風控 R7）；開頭以 R12 交叉引用句帶入 */}
       <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
