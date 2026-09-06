@@ -11,11 +11,12 @@
  */
 
 /*
- * 個股頁減負 FR-3（風控預審 C3）：§2 八要素中的「非即時揭露」自 2026-09-02 起
- * 由頁級揭露區 `app/components/PageDisclosureSection.tsx` 在整頁單一呈現，
- * `OperationSummaryPanel` 不再自行渲染 `nonRealtimeNotice`。本模型仍回傳該欄位
- * （供守門測試與其他消費者），但頁面對此要素的滿足依賴 page.tsx 必定渲染
- * `<PageDisclosureSection />`——`componentWordingScan.test.ts` 有守門測試。
+ * 個股頁減負 FR-3（風控預審 C3）→ 揭露下沉頁尾（CEO 裁定 2026-09-06）：§2 八要素中的
+ * 「非即時揭露」在整頁只由頁尾揭露區 `app/components/PageFooterDisclosures.tsx` 的
+ * 資料來源組（靜態常數、不依賴任何 query）呈現一次，`OperationSummaryPanel` 不自行
+ * 渲染 `nonRealtimeNotice`。本模型仍回傳該欄位（供守門測試與其他消費者），但頁面對此
+ * 要素的滿足依賴 page.tsx 必定渲染 `<PageFooterDisclosures>`——
+ * `componentWordingScan.test.ts` 有守門測試。
  */
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
@@ -305,4 +306,20 @@ export function buildOperationSummary(
     staleDataNotice,
     required: buildRequiredElements(card, false, lastBarDate, tradingDaysBehind),
   };
+}
+
+/**
+ * 揭露下沉頁尾（CEO 裁定 2026-09-06；風控 ACCEPT_WITH_CONDITIONS）：the two summary
+ * sentences the footer takes over — `coverageStatement` (candidate mode; must
+ * keep its full numbers, never summarised) and `rulesStatement`. Everything
+ * else the summary renders stays in place (A+1/A+2/A+3: asOfStatement,
+ * candidateEvidenceNotice, notComparableNote are 大字 labels, not footer copy).
+ * Returns [] for the no_price / no_action branches, exactly as the panel
+ * never rendered those sentences there either.
+ */
+export function buildSummaryFooterItems(response: AdviceResponse): string[] {
+  const model = buildOperationSummary(response);
+  if (model.kind === "candidate") return [model.coverageStatement, model.required.rulesStatement];
+  if (model.kind === "held") return [model.required.rulesStatement];
+  return [];
 }

@@ -11,9 +11,20 @@ import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, usePositio
 import type { Market } from "../../lib/types";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
-import { KeyLevelsPanel } from "./KeyLevelsPanel";
-import { PageDisclosureSection } from "../../components/PageDisclosureSection";
-import { TECHNICAL_CHART_TAGLINE, TECHNICAL_INDICATORS_TAGLINE } from "../../lib/sectionTaglines";
+import { KEY_LEVELS_PANEL_TITLE, KeyLevelsPanel, buildKeyLevelsFooterItems } from "./KeyLevelsPanel";
+import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
+import type { FooterGroup } from "../../components/PageFooterDisclosures";
+import { NON_REALTIME_NOTICE } from "../../lib/adviceWording";
+import { buildFooterGuidanceForDataSource } from "../../lib/footerDisclosureWording";
+import { buildSummaryFooterItems } from "../../lib/operationSummary";
+import {
+  PAGE_LEVEL_DISCLOSURE_SECTION_TITLE,
+  TECHNICAL_CHART_TAGLINE,
+  TECHNICAL_INDICATORS_TAGLINE,
+} from "../../lib/sectionTaglines";
+import { ADVICE_CARD_TITLE, LEVERAGE_CHAPTER_TITLE, OPERATION_SUMMARY_TITLE, TECHNICAL_ANALYSIS_TITLE } from "../../lib/sectionTitles";
+import type { AnchorSource } from "../../lib/keyLevels";
+import type { PositionsResponse } from "../../lib/types";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
@@ -32,6 +43,41 @@ const TradingViewChartPanel = dynamic(
   () => import("./TradingViewChartPanel").then((mod) => mod.TradingViewChartPanel),
   { ssr: false, loading: () => <SkeletonBlock className="h-[480px] w-full" /> },
 );
+
+/**
+ * 風控 R13/R14: the 關鍵價位 anchor cost comes straight from the stored
+ * positions' native-currency `avg_cost` — never reconstructed by dividing
+ * TWD book totals through `fx_to_twd` (that recovers P0×F0/F1, not the
+ * average cost, and the backend's fx placeholder 1.0 is a contract value that
+ * must never touch foreign amounts). Multiple lots of the same symbol are
+ * combined as a quantity-weighted average in the lots' own (shared)
+ * currency. Tri-state (風控 R10/R11): a confirmed cost, a CONFIRMED not-held
+ * state, or "unknown" while the positions query is pending / a lot's cost is
+ * unusable — the panel never claims 未持有 on "unknown". Shared by the panel
+ * and the 頁尾揭露 builder so both see the same anchor.
+ */
+function resolveKeyLevelsAnchor(
+  positions: PositionsResponse | undefined,
+  symbol: string,
+  market: Market,
+): { anchorSource: AnchorSource; avgCost: number | null } {
+  if (!positions) return { anchorSource: "close-unknown", avgCost: null };
+  const lots = positions.items.filter((p) => p.symbol === symbol && p.market === market);
+  if (lots.length === 0) return { anchorSource: "close-not-held", avgCost: null };
+  let qtySum = 0;
+  let costSum = 0;
+  for (const lot of lots) {
+    const qty = Number.parseFloat(lot.quantity);
+    const cost = Number.parseFloat(lot.avg_cost);
+    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
+      // Held, but a lot's cost is unusable — never claim 未持有.
+      return { anchorSource: "close-unknown", avgCost: null };
+    }
+    qtySum += qty;
+    costSum += cost * qty;
+  }
+  return { anchorSource: "cost", avgCost: costSum / qtySum };
+}
 
 function isMarket(value: string | null): value is Market {
   return value === "TW" || value === "US";
@@ -94,6 +140,35 @@ export default function PositionDetailPage() {
   // with the right prefix once the data chain answers.
   const tvExchangeHint = inferTradingViewExchange(bars.data?.data.source, directory.data?.source);
 
+  const keyLevelsAnchor = resolveKeyLevelsAnchor(positions.data, symbol, market);
+
+  /*
+    --- 頁尾揭露區（CEO 裁定 2026-09-06 揭露句下沉頁尾；風控 ACCEPT_WITH_CONDITIONS）---
+    Fixed group order = page order (L3); each title is the SAME constant its
+    section renders (L4). Two layers (L6-4): the 資料來源 group is a static
+    constant that exists whatever the queries do; the other groups appear
+    exactly when their section's data exists.
+  */
+  const footerGroups: FooterGroup[] = [
+    { title: PAGE_LEVEL_DISCLOSURE_SECTION_TITLE, items: [NON_REALTIME_NOTICE] },
+    { title: OPERATION_SUMMARY_TITLE, items: advice.data ? buildSummaryFooterItems(advice.data) : [] },
+    {
+      title: KEY_LEVELS_PANEL_TITLE,
+      items:
+        bars.data && bars.data.status === "ok"
+          ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
+          : [],
+    },
+    {
+      title: LEVERAGE_CHAPTER_TITLE,
+      // Mirrors LeverageChapterView's own gate (it renders nothing for not_applicable).
+      items:
+        leverage.data?.chapter && leverage.data.chapter.chapter_status !== "not_applicable"
+          ? [leverage.data.chapter.disclosure]
+          : [],
+    },
+  ];
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -129,16 +204,13 @@ export default function PositionDetailPage() {
       </div>
 
       {/*
-        --- 頁級揭露區 (個股頁減負 FR-3；風控 C1–C4；P1 結論位後移) -------------
-        The single page-level home of NON_REALTIME_NOTICE: static, still above
-        the fold at common desktop sizes, independent of every query. P1 結論位
-        (風控替代路徑, CEO 2026-09-05): the first thing under the H1 is now the
-        操作摘要 conclusion (headline + disclaimer, R3 trio); this block follows. The per-section renders of the
-        same sentence (操作摘要 ×3、關鍵價位面板 ×1) were removed in the same
-        change — this block is what now satisfies §2 八要素's non-realtime
-        element for the whole page (see operationSummary.ts header).
+        --- 資料來源揭露的指引句（揭露下沉頁尾，CEO 裁定 2026-09-06）------------
+        `NON_REALTIME_NOTICE` now lives in the footer's first group (titled
+        `PAGE_LEVEL_DISCLOSURE_SECTION_TITLE`); 風控 required-4 keeps a pointer at
+        the spot the page-level disclosure block used to occupy, right under the
+        操作摘要. Static — no query state involved.
       */}
-      <PageDisclosureSection />
+      <p className="mt-3 text-sm text-neutral-300">{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}</p>
 
       {/*
         --- 關鍵價位參考 (CEO 需求 2026-09-01 MVP; 風控 R10–R12 修訂) --------
@@ -155,36 +227,8 @@ export default function PositionDetailPage() {
       {bars.data && bars.data.status === "ok" && (
         <KeyLevelsPanel
           bars={bars.data.bars}
-          {...(() => {
-            // 風控 R13/R14: the anchor cost comes straight from the stored
-            // positions' native-currency `avg_cost` — never reconstructed by
-            // dividing TWD book totals through `fx_to_twd` (that recovers
-            // P0×F0/F1, not the average cost, and the backend's fx placeholder
-            // 1.0 is a contract value that must never touch foreign amounts).
-            // Multiple lots of the same symbol are combined as a
-            // quantity-weighted average in the lots' own (shared) currency.
-            if (positions.data) {
-              const lots = positions.data.items.filter((p) => p.symbol === symbol && p.market === market);
-              if (lots.length === 0) {
-                return { anchorSource: "close-not-held" as const, avgCost: null };
-              }
-              let qtySum = 0;
-              let costSum = 0;
-              for (const lot of lots) {
-                const qty = Number.parseFloat(lot.quantity);
-                const cost = Number.parseFloat(lot.avg_cost);
-                if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
-                  // Held, but a lot's cost is unusable — never claim 未持有.
-                  return { anchorSource: "close-unknown" as const, avgCost: null };
-                }
-                qtySum += qty;
-                costSum += cost * qty;
-              }
-              return { anchorSource: "cost" as const, avgCost: costSum / qtySum };
-            }
-            // Positions query pending or failed: holding status undetermined.
-            return { anchorSource: "close-unknown" as const, avgCost: null };
-          })()}
+          anchorSource={keyLevelsAnchor.anchorSource}
+          avgCost={keyLevelsAnchor.avgCost}
         />
       )}
 
@@ -199,7 +243,7 @@ export default function PositionDetailPage() {
         covers what FR-C2 asks for.
       */}
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
-        <h2 className="text-lg font-semibold text-neutral-100">技術分析</h2>
+        <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
         <p className="mt-1 text-sm text-neutral-300">{TECHNICAL_CHART_TAGLINE}</p>
 
         {/* --- K-line + MA overlay ---------------------------------------- */}
@@ -327,7 +371,7 @@ export default function PositionDetailPage() {
 
       {/* --- Advice card ----------------------------------------------- */}
       <section className="mt-8">
-        <h2 className="text-lg font-semibold text-neutral-100">建議卡</h2>
+        <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
         <div className="mt-3">
           {advice.isPending && <SkeletonBlock className="h-64 w-full" />}
           {advice.isError && <ErrorPanel label="無法載入建議" error={advice.error} />}
@@ -375,6 +419,9 @@ export default function PositionDetailPage() {
           <ErrorPanel label="無法載入槓桿專章" error={leverage.error} />
         </div>
       )}
+
+      {/* 頁尾揭露區：頁面最後一個節點（風控 L6-5），常駐不摺疊。 */}
+      <PageFooterDisclosures groups={footerGroups} />
     </main>
   );
 }

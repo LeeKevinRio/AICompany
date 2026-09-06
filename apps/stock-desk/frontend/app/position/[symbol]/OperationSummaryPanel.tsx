@@ -10,6 +10,8 @@ import { OPERATION_SUMMARY_TAGLINE } from "../../lib/sectionTaglines";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { OPERATION_SUMMARY_TITLE } from "../../lib/sectionTitles";
 
 /**
  * The place-topping operation summary (FR-C1 AC-C1.1, FR-C6, FR-C7, FR-C8).
@@ -27,7 +29,7 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
   return (
     <section className="rounded-lg border border-neutral-800 bg-neutral-950/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold text-neutral-100">操作摘要</h2>
+        <h2 className="text-lg font-semibold text-neutral-100">{OPERATION_SUMMARY_TITLE}</h2>
         {/*
           FR-C8(a) / qa-e2e A2-8: every section badges its own data
           provenance independently (same mechanism as the technical-analysis
@@ -138,9 +140,10 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
           <p className="text-sm text-neutral-200">{model.notSupportiveText}</p>
         )}
 
-        {/* §3.3 required: coverage ratio + skipped-rule count, not just prose. */}
-        <p className="text-xs text-neutral-500">{model.coverageStatement}</p>
-        {/* §3.4: confidence not comparable across held/candidate modes. */}
+        {/*
+          §3.3 coverageStatement: 依 CEO 裁定 2026-09-06 下沉頁尾（`buildSummaryFooterItems`），
+          完整數字不變。§3.4 notComparableNote 留原位（風控 A+3：修飾同列的信心等級徽章）。
+        */}
         <p className="text-xs text-neutral-500">{model.notComparableNote}</p>
 
         <QuantitySection
@@ -293,7 +296,8 @@ function RequiredElementsFooter({
         </div>
       )}
 
-      <p className="text-xs text-neutral-500">{required.rulesStatement}</p>
+      {/* §2.6 rulesStatement 下沉頁尾（CEO 裁定 2026-09-06）；原位留指引句（風控 L5，≥ 導讀字級）。 */}
+      <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
     </div>
   );
 }

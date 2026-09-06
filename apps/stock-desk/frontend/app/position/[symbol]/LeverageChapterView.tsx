@@ -8,6 +8,8 @@ import {
   formatPercent,
 } from "../../lib/format";
 import { MeasureStatusBadge } from "../../components/MeasureStatusBadge";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { LEVERAGE_CHAPTER_TITLE } from "../../lib/sectionTitles";
 
 function AssumptionsList({ items }: { items: string[] }) {
   if (items.length === 0) return null;
@@ -34,14 +36,17 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
   return (
     <div className="mt-8 rounded-lg border border-amber-900/60 bg-amber-950/10 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold text-neutral-100">槓桿型 ETF 專章</h2>
+        <h2 className="text-lg font-semibold text-neutral-100">{LEVERAGE_CHAPTER_TITLE}</h2>
         <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300">
           {chapterStatusLabel(chapter.chapter_status)}
         </span>
       </div>
       <p className="mt-1 text-sm text-neutral-300">{LEVERAGE_CHAPTER_TAGLINE}</p>
-      {/* 風控第二輪 R-2：揭露句不得低於導讀的視覺權重，提升至 text-sm/neutral-300。 */}
-      <p className="mt-2 text-sm text-neutral-300">{chapter.disclosure}</p>
+      {/*
+        `chapter.disclosure` 依 CEO 裁定 2026-09-06 下沉頁尾（page.tsx 組裝）；原位留指引句。
+        `chapter.notes` 與 erosion `nature`（「情境推估，非預測。」）不在下沉範圍（風控條件）。
+      */}
+      <p className="mt-2 text-sm text-neutral-300">{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}</p>
       {chapter.reason && (
         <p className="mt-2 text-sm text-amber-300">{chapter.reason}</p>
       )}

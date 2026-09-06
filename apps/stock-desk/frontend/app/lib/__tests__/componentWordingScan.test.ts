@@ -126,6 +126,21 @@ import {
   VOLUME_Z_BAND_LABELS,
 } from "../../position/[symbol]/TechnicalIndicatorsPanel";
 import { DIRECTION_BAR_ARIA_LABEL, DIRECTION_SHARE_QUALIFIER } from "../../position/[symbol]/AdviceCardView";
+import {
+  PAGE_FOOTER_DISCLOSURES_INTRO,
+  PAGE_FOOTER_DISCLOSURES_TITLE,
+  buildFooterGuidance,
+  buildFooterGuidanceForDataSource,
+} from "../footerDisclosureWording";
+import {
+  ADVICE_CARD_TITLE,
+  LEVERAGE_CHAPTER_TITLE,
+  OPERATION_SUMMARY_TITLE,
+  TECHNICAL_ANALYSIS_TITLE,
+} from "../sectionTitles";
+import { buildKeyLevelsFooterItems } from "../../position/[symbol]/KeyLevelsPanel";
+import { buildSummaryFooterItems } from "../operationSummary";
+import type { AdviceResponse, Bar } from "../types";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -160,7 +175,10 @@ const SCANNED_FILES = [
   // 個股頁減負（work/stock-desk-個股頁減負-PRD.md，風控 2026-09-02）：導讀／頁級
   // 揭露區／建議卡銜接句的新字面與其渲染元件。
   "../sectionTaglines.ts",
-  "../../components/PageDisclosureSection.tsx",
+  // 揭露下沉頁尾（CEO 裁定 2026-09-06）：頁級揭露區元件退場，改為頁尾揭露區＋字面模組＋標題常數。
+  "../../components/PageFooterDisclosures.tsx",
+  "../footerDisclosureWording.ts",
+  "../sectionTitles.ts",
   // 減負批次 3（FR-6）：指標卡 description 為 inline props，納入掃描並逐字守門限定語。
   "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
   // FE-WIRING BLOCKING 退修 2026-08-09（qa-reviewer 建議）：ref 型條件的
@@ -787,19 +805,20 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
     expect(ADVICE_CARD_XREF_TO_SUMMARY).toContain("規則明細本身不是結論");
   });
 
-  it("C2/C3 守門：page.tsx 必須渲染 PageDisclosureSection，且該元件必須渲染 NON_REALTIME_NOTICE", () => {
+  it("C2/C3 守門（揭露下沉後）：page.tsx 必須渲染 PageFooterDisclosures，資料來源組以靜態常數渲染 NON_REALTIME_NOTICE", () => {
     const pageSource = readFileSync(
       fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)),
       "utf8",
     );
-    expect(pageSource).toContain("<PageDisclosureSection />");
-    const sectionSource = readFileSync(
-      fileURLToPath(new URL("../../components/PageDisclosureSection.tsx", import.meta.url)),
+    expect(pageSource).toContain("<PageFooterDisclosures groups={footerGroups} />");
+    // 無條件層（風控 L6-4）：資料來源組是字面常數，不掛在任何 query 狀態之下。
+    expect(pageSource).toContain("{ title: PAGE_LEVEL_DISCLOSURE_SECTION_TITLE, items: [NON_REALTIME_NOTICE] }");
+    const footerSource = readFileSync(
+      fileURLToPath(new URL("../../components/PageFooterDisclosures.tsx", import.meta.url)),
       "utf8",
     );
-    expect(sectionSource).toContain("{NON_REALTIME_NOTICE}");
-    // C2：區塊為靜態常數，不得依賴任何 query 狀態
-    expect(sectionSource).not.toMatch(/useQuery|useAdvice|useBars|isPending|isError/);
+    // C2：頁尾元件為純呈現，不得依賴任何 query 狀態。
+    expect(footerSource).not.toMatch(/useQuery|useAdvice|useBars|isPending|isError/);
     expect(NON_REALTIME_NOTICE.length).toBeGreaterThan(0);
   });
 
@@ -854,17 +873,23 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
     expect(src).toContain("本次同時命中方向相反的規則，上方操作摘要的結論只代表權重較高的一方。");
   });
 
-  it("P1 結論位順序守門：操作摘要先於頁級揭露區，頁級揭露區先於其餘區塊（qa-reviewer 建議）", () => {
+  it("P1／L6-5 順序守門：操作摘要最前、資料來源指引句緊接其後、頁尾揭露區為 </main> 前最後一個節點", () => {
     const pageSource = readFileSync(
       fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)),
       "utf8",
     );
     const summary = pageSource.indexOf("<OperationSummaryPanel advice={advice} />");
-    const disclosure = pageSource.indexOf("<PageDisclosureSection />");
+    const dataPointer = pageSource.indexOf("{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}");
     const keyLevels = pageSource.indexOf("<KeyLevelsPanel");
+    const footer = pageSource.indexOf("<PageFooterDisclosures groups={footerGroups} />");
+    const mainClose = pageSource.lastIndexOf("</main>");
     expect(summary).toBeGreaterThan(-1);
-    expect(disclosure).toBeGreaterThan(summary);
-    expect(keyLevels).toBeGreaterThan(disclosure);
+    expect(dataPointer).toBeGreaterThan(summary);
+    expect(keyLevels).toBeGreaterThan(dataPointer);
+    expect(footer).toBeGreaterThan(keyLevels);
+    expect(mainClose).toBeGreaterThan(footer);
+    // 頁尾之後不得再有任何區塊：只剩空白與 </main>。
+    expect(pageSource.slice(footer + "<PageFooterDisclosures groups={footerGroups} />".length, mainClose).trim()).toBe("");
   });
 
   it("FR-3 C4：NON_REALTIME_NOTICE 在頁面元件中只由頁級揭露區渲染（操作摘要與關鍵價位面板不再重複）", () => {
@@ -1042,5 +1067,180 @@ describe("圖形化 1–3 新字面與守門", () => {
     // 量表：單一色相（sky），不得借用 amber 警示色。
     const gauge = readFileSync(fileURLToPath(new URL("../../position/[symbol]/RangeGauge.tsx", import.meta.url)), "utf8");
     expect(gauge).not.toMatch(/amber-\d/);
+  });
+});
+
+/**
+ * 揭露下沉頁尾（CEO 裁定 2026-09-06；風控 ACCEPT_WITH_CONDITIONS，L1–L6）。
+ * `work/stock-desk-揭露下沉頁尾-CEO裁定與方案.md`。
+ */
+describe("揭露下沉頁尾 守門", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const footerSrc = read("../../components/PageFooterDisclosures.tsx");
+  const pageSrc = read("../../position/[symbol]/page.tsx");
+
+  it("新字面：不含禁用詞、無裸即時；逐字釘住（creative-lead 起草、風控逐字審）", () => {
+    const constants: Record<string, string> = {
+      PAGE_FOOTER_DISCLOSURES_TITLE,
+      PAGE_FOOTER_DISCLOSURES_INTRO,
+      guidance: buildFooterGuidance("關鍵價位參考"),
+      guidanceDataSource: buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE),
+      OPERATION_SUMMARY_TITLE,
+      TECHNICAL_ANALYSIS_TITLE,
+      ADVICE_CARD_TITLE,
+      LEVERAGE_CHAPTER_TITLE,
+    };
+    for (const [name, text] of Object.entries(constants)) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, name);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+    expect(PAGE_FOOTER_DISCLOSURES_TITLE).toBe("本頁揭露與計算依據");
+    expect(PAGE_FOOTER_DISCLOSURES_INTRO).toBe("以下為本頁各區塊的資料來源、揭露事項與計算方式說明，依區塊分組列示。");
+    // 風控第二輪 R1：模板須涵蓋「揭露事項」一類（與導語三類用詞對齊）。
+    expect(buildFooterGuidance("關鍵價位參考")).toBe("頁尾「關鍵價位參考」涵蓋本區資料來源、揭露事項與計算方式說明。");
+    // 風控第二輪 R2：頁級變體不自稱「本區」、不承諾計算方式。
+    expect(buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)).toBe(
+      "頁尾「本頁資料與計算揭露」說明資料來源與更新頻率。",
+    );
+    expect(buildFooterGuidanceForDataSource("X")).not.toMatch(/本區|計算方式/);
+    // L5：指引句不得用弱化為選讀的措辭。
+    for (const text of [buildFooterGuidance("X"), buildFooterGuidanceForDataSource("X")]) {
+      expect(text).not.toMatch(/詳見|更多說明|僅供參考/);
+    }
+    expect(OPERATION_SUMMARY_TITLE).toBe("操作摘要");
+    expect(TECHNICAL_ANALYSIS_TITLE).toBe("技術分析");
+    expect(ADVICE_CARD_TITLE).toBe("建議卡");
+    expect(LEVERAGE_CHAPTER_TITLE).toBe("槓桿型 ETF 專章");
+  });
+
+  it("INTRO 退場（風控第二輪 APPROVE）：PAGE_LEVEL_DISCLOSURE_SECTION_INTRO 不得再被任何元件渲染", () => {
+    const glob = [
+      "../../position/[symbol]/page.tsx",
+      "../../position/[symbol]/OperationSummaryPanel.tsx",
+      "../../position/[symbol]/KeyLevelsPanel.tsx",
+      "../../position/[symbol]/LeverageChapterView.tsx",
+      "../../position/[symbol]/AdviceCardView.tsx",
+      "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
+      "../../components/PageFooterDisclosures.tsx",
+    ];
+    for (const rel of glob) {
+      expect(read(rel), `${rel} 不得渲染 INTRO（尾句在新架構為假陳述）`).not.toContain("PAGE_LEVEL_DISCLOSURE_SECTION_INTRO");
+    }
+  });
+
+  it("L1：頁尾字級 text-xs、字色不得低於 neutral-400（neutral-500 未達 WCAG AA）", () => {
+    expect(footerSrc).not.toMatch(/text-neutral-(5|6|7)00/);
+    expect(footerSrc).toMatch(/text-xs text-neutral-400/);
+  });
+
+  it("L2：頁尾區不得摺疊、截斷、延後掛載", () => {
+    expect(footerSrc).not.toMatch(/<details|<summary|line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|\bhidden\b|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
+  });
+
+  it("L3／L4：分組順序寫死為頁面順序，組名以既有標題常數 import 取得", () => {
+    const order = ["PAGE_LEVEL_DISCLOSURE_SECTION_TITLE", "OPERATION_SUMMARY_TITLE", "KEY_LEVELS_PANEL_TITLE", "LEVERAGE_CHAPTER_TITLE"];
+    const positions = order.map((name) => pageSrc.indexOf(`title: ${name}`));
+    expect(positions.every((p) => p > -1)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    // 組名不得在 page.tsx 內以字串複製。
+    for (const title of ["操作摘要", "關鍵價位參考", "槓桿型 ETF 專章", "本頁資料與計算揭露"]) {
+      expect(pageSrc.match(new RegExp(`title: "${title}"`))).toBeNull();
+    }
+    // 各區塊標題同樣改用常數，避免 h2 與頁尾組名漂移。
+    expect(read("../../position/[symbol]/OperationSummaryPanel.tsx")).toContain("{OPERATION_SUMMARY_TITLE}</h2>");
+    expect(read("../../position/[symbol]/LeverageChapterView.tsx")).toContain("{LEVERAGE_CHAPTER_TITLE}</h2>");
+    expect(pageSrc).toContain("{TECHNICAL_ANALYSIS_TITLE}</h2>");
+    expect(pageSrc).toContain("{ADVICE_CARD_TITLE}</h2>");
+  });
+
+  it("L5：每個有句子下沉的區塊都渲染帶組名的指引句，字級不低於導讀（text-sm / neutral-300）", () => {
+    const wiring: [string, string][] = [
+      ["../../position/[symbol]/page.tsx", "{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}"],
+      ["../../position/[symbol]/OperationSummaryPanel.tsx", "{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}"],
+      ["../../position/[symbol]/KeyLevelsPanel.tsx", "{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}"],
+      ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
+    ];
+    for (const [rel, needle] of wiring) {
+      const src = read(rel);
+      const idx = src.indexOf(needle);
+      expect(idx, `${rel} 應渲染 ${needle}`).toBeGreaterThan(-1);
+      expect(src.slice(Math.max(0, idx - 80), idx)).toMatch(/text-sm text-neutral-300/);
+    }
+  });
+
+  it("L6-1：改列 A 的 10 句仍由原區塊渲染（不得以「已納入頁尾」為由移出）", () => {
+    const summary = read("../../position/[symbol]/OperationSummaryPanel.tsx");
+    for (const needle of ["{required.asOfStatement}", "{model.required.candidateEvidenceNotice}", "{model.notComparableNote}"]) {
+      expect(summary).toContain(needle);
+    }
+    expect(read("../../position/[symbol]/AdviceCardView.tsx")).toContain("{DIRECTION_SHARE_QUALIFIER}");
+    const panel = read("../../position/[symbol]/KeyLevelsPanel.tsx");
+    for (const needle of [
+      "{KEY_LEVELS_PANEL_DISCLAIMER}",
+      "{KEY_LEVELS_TARGET_STANDING_NOTICE}",
+      "{buildRangeNotValuationNote(levels.rangeBarCount)}",
+      "{KEY_LEVELS_HEADER_DASH_NOTICE}",
+      // 附條件保留（XREF／qualifier 指涉）：
+      "{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}",
+      "{KEY_LEVELS_PULLBACK_EXPLAIN_NOTE}",
+      "{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}",
+    ]) {
+      expect(panel).toContain(needle);
+    }
+    expect(read("../../position/[symbol]/TechnicalIndicatorsPanel.tsx")).toContain("{INDICATOR_OVERVIEW_LEGEND}");
+    expect(read("../../position/[symbol]/PriceLadder.tsx")).toContain("{KEY_LEVELS_LADDER_NOTE}");
+    // 槓桿專章：nature 與 notes 不在下沉範圍。
+    const leverage = read("../../position/[symbol]/LeverageChapterView.tsx");
+    expect(leverage).toContain("chapter.erosion?.nature");
+    expect(leverage).toContain("chapter.notes.map");
+  });
+
+  it("L6-2／L6-7：下沉句由 builder 產出且原區塊不再渲染（全頁恰好一次）", () => {
+    const panel = read("../../position/[symbol]/KeyLevelsPanel.tsx");
+    const summary = read("../../position/[symbol]/OperationSummaryPanel.tsx");
+    const leverage = read("../../position/[symbol]/LeverageChapterView.tsx");
+    // 原區塊 JSX 不再渲染這些句子（builder 內以常數名出現屬允許，故只查 JSX 插值形式）。
+    for (const needle of [
+      "{KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE}",
+      "{KEY_LEVELS_STOP_S5_NEUTRAL_NOTE}",
+      "{KEY_LEVELS_BASIS_SECTION_TITLE}",
+      "{KEY_LEVELS_BASIS_UNADJUSTED_XREF}",
+      "{buildFooterSample(",
+    ]) {
+      expect(panel, `${needle} 應已下沉`).not.toContain(needle);
+    }
+    expect(summary).not.toContain("{model.coverageStatement}");
+    expect(summary).not.toContain("{required.rulesStatement}");
+    expect(leverage).not.toContain("{chapter.disclosure}");
+    expect(pageSrc).toContain("[leverage.data.chapter.disclosure]");
+
+    // builder 產出：十條計算依據一條不減、順序不變、標題為組內小標、樣本句殿後。
+    const bar = (i: number): Bar => ({
+      date: `2026-0${1 + Math.floor(i / 28)}-${String(1 + (i % 28)).padStart(2, "0")}`,
+      open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
+    });
+    const bars = Array.from({ length: 80 }, (_, i) => bar(i));
+    const items = buildKeyLevelsFooterItems(bars, null, "close-not-held");
+    expect(items[0]).toBe(KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE);
+    expect(items[1]).toBe(KEY_LEVELS_STOP_S5_NEUTRAL_NOTE);
+    expect(items[2]).toEqual({ heading: KEY_LEVELS_BASIS_SECTION_TITLE });
+    expect(items[3]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
+    const basis = items.slice(4, 14);
+    expect(basis).toHaveLength(10);
+    expect(basis.map((b) => (typeof b === "string" || !("formula" in b) ? "?" : b.formula[0]?.slice(0, 4)))).toEqual([
+      "收盤（本", "位階(近", "分類：位", "MA20", "近60日", "ATR(", "停損參考", "停利參考", "基準價：", "拉回觀察",
+    ]);
+    expect(items[14]).toBe(buildFooterSample(80, bars[79]!.date));
+    expect(buildKeyLevelsFooterItems([], null, "close-not-held")).toEqual([]);
+
+    // 操作摘要 builder：候選＝覆蓋度句（完整數字）＋規則版本句；no_price／no_action＝[]。
+    const noPrice = { status: "insufficient_data", reason: "x", advice: null, held: false, position_ids: [], context_notes: [], data: { status: "fresh" }, as_of: null } as unknown as AdviceResponse;
+    expect(buildSummaryFooterItems(noPrice)).toEqual([]);
+  });
+
+  it("P2 落地條件隨句移動：頁尾算式行與限定語同 <li>、同字級同顏色，font-mono 只在算式行", () => {
+    expect(footerSrc).toMatch(/className="block whitespace-pre-wrap font-mono text-xs text-neutral-400"/);
+    expect(footerSrc).toMatch(/item\.qualifier !== null && <span className="block text-xs text-neutral-400">/);
+    expect((footerSrc.match(/className="[^"]*font-mono/g) ?? []).length).toBe(1);
   });
 });

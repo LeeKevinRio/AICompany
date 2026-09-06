@@ -1,6 +1,8 @@
 "use client";
 
 import { KEY_LEVELS_TAGLINE } from "../../lib/sectionTaglines";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import type { FooterItem } from "../../components/PageFooterDisclosures";
 import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
@@ -344,13 +346,16 @@ export function KeyLevelsPanel({
       </div>
       <p className="mt-1 text-sm text-neutral-300">{KEY_LEVELS_TAGLINE}</p>
       {/*
-        頭部揭露常駐（順序依成稿 §9）；NON_REALTIME_NOTICE 依減負 FR-3（風控 C1–C4）
-        改由頁級揭露區 <PageDisclosureSection> 單一呈現，本面板不再重複。
-        均 ≥ text-sm、≥ neutral-400。
+        頭部揭露（順序依成稿 §9）；NON_REALTIME_NOTICE 依減負 FR-3（風控 C1–C4）
+        只在頁尾揭露區的資料來源組出現一次，本面板不重複。均 ≥ text-sm、≥ neutral-400。
+      */}
+      {/*
+        揭露下沉頁尾（CEO 裁定 2026-09-06；風控 A+5／A+9）：DISCLAIMER（大字的「非買賣指示」
+        限定）與 DASH_NOTICE（「—」的解碼表）留原位；UNADJUSTED_NOTICE 留原位以維持
+        計算依據 XREF「見面板頂部揭露」的指涉；STALENESS_SELF_NOTICE 下沉頁尾。
       */}
       <div className="mt-2 space-y-1 text-sm text-neutral-400">
         <p className="text-neutral-300">{KEY_LEVELS_PANEL_DISCLAIMER}</p>
-        <p>{KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE}</p>
         <p>{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
         <p>{KEY_LEVELS_HEADER_DASH_NOTICE}</p>
       </div>
@@ -428,7 +433,6 @@ export function KeyLevelsPanel({
           <p className="mt-1 text-sm text-neutral-400">
             {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
           </p>
-          <p className="mt-2 text-sm text-neutral-400">{KEY_LEVELS_STOP_S5_NEUTRAL_NOTE}</p>
         </div>
 
         {/* 停利參考卡 */}
@@ -453,36 +457,44 @@ export function KeyLevelsPanel({
         fmt={fmt}
       />
 
-      {/* 計算依據：常駐清單，不摺疊（風控 R7）；開頭以 R12 交叉引用句帶入 */}
-      <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
-        <h3 className="text-sm font-semibold text-neutral-300">{KEY_LEVELS_BASIS_SECTION_TITLE}</h3>
-        <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_BASIS_UNADJUSTED_XREF}</p>
-        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-neutral-400">
-          {[
-            buildBasisClose(fmt(levels.close), levels.closeDate),
-            buildBasisRange(levels.rangeBarCount),
-            KEY_LEVELS_BASIS_ZONE,
-            KEY_LEVELS_BASIS_MA,
-            KEY_LEVELS_BASIS_RECENT_LOW60,
-            KEY_LEVELS_BASIS_ATR,
-            KEY_LEVELS_BASIS_STOP,
-            KEY_LEVELS_BASIS_TARGET,
-            KEY_LEVELS_BASIS_ANCHOR,
-            KEY_LEVELS_BASIS_PULLBACK,
-          ].map((item, i) => (
-            // 算式行與限定語同一 <li>、同字級同顏色；font-mono 只在算式行（風控 P2 落地條件）。
-            <li key={i} className="text-sm text-neutral-400">
-              {item.formula.map((line, j) => (
-                <span key={j} className="block whitespace-pre-wrap font-mono text-sm text-neutral-400">
-                  {line}
-                </span>
-              ))}
-              {item.qualifier !== null && <span className="block text-sm text-neutral-400">{item.qualifier}</span>}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <p className="mt-2 text-sm text-neutral-400">{buildFooterSample(levels.barCount, levels.closeDate)}</p>
+      {/*
+        計算依據十條、樣本句、S5 句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
+        （`buildKeyLevelsFooterItems` → `PageFooterDisclosures`），原位留指引句（風控 L5）。
+      */}
+      <p className="mt-3 text-sm text-neutral-300">{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}</p>
     </section>
   );
+}
+
+/* ---------- 頁尾揭露組（CEO 裁定 2026-09-06 揭露下沉；風控 ACCEPT_WITH_CONDITIONS） ---------- */
+
+/**
+ * The 關鍵價位參考 group of `PageFooterDisclosures`: every sentence the panel
+ * no longer renders in place, verbatim and in the panel's original order —
+ * 資料過舊自述句、S5 句、「計算依據（逐項揭露）」十條（with its XREF and the
+ * title as a sub-heading, P2 formula/qualifier pairing intact) and the 樣本句.
+ * Computes its own `KeyLevels` from the same inputs the panel uses, so the
+ * numbers inside the formula lines (收盤 X、近 N 根) can never diverge from
+ * the panel. Returns [] when the panel itself would show the no-data state.
+ */
+export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, anchorSource: AnchorSource): FooterItem[] {
+  const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
+  if (levels === null) return [];
+  return [
+    KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
+    KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
+    { heading: KEY_LEVELS_BASIS_SECTION_TITLE },
+    KEY_LEVELS_BASIS_UNADJUSTED_XREF,
+    buildBasisClose(fmt(levels.close), levels.closeDate),
+    buildBasisRange(levels.rangeBarCount),
+    KEY_LEVELS_BASIS_ZONE,
+    KEY_LEVELS_BASIS_MA,
+    KEY_LEVELS_BASIS_RECENT_LOW60,
+    KEY_LEVELS_BASIS_ATR,
+    KEY_LEVELS_BASIS_STOP,
+    KEY_LEVELS_BASIS_TARGET,
+    KEY_LEVELS_BASIS_ANCHOR,
+    KEY_LEVELS_BASIS_PULLBACK,
+    buildFooterSample(levels.barCount, levels.closeDate),
+  ];
 }
