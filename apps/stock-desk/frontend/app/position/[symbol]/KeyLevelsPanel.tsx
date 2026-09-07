@@ -7,6 +7,7 @@ import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
 import type { LadderGroup, LadderRung } from "../../lib/keyLevelsVisuals";
+import type { EntryObservation } from "../../lib/entryObservation";
 import type { Bar } from "../../lib/types";
 import { KEY_LEVELS_LADDER_NOTE, PriceLadder } from "./PriceLadder";
 import { RangeGauge } from "./RangeGauge";
@@ -325,10 +326,13 @@ export function KeyLevelsPanel({
   bars,
   avgCost,
   anchorSource,
+  observationBand = null,
 }: {
   bars: Bar[];
   avgCost: number | null;
   anchorSource: AnchorSource;
+  /** 六項觀察條件 R-18: MA20 ±3% band handed to the ladder; null marks nothing. */
+  observationBand?: EntryObservation["observationBand"];
 }) {
   const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
 
@@ -458,6 +462,7 @@ export function KeyLevelsPanel({
         rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
         groupLabel={ladderGroupLabel}
         fmt={fmt}
+        observationBand={observationBand}
       />
 
       {/*

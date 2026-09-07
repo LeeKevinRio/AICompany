@@ -12,6 +12,10 @@ import type { Market } from "../../lib/types";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { KEY_LEVELS_PANEL_TITLE, KeyLevelsPanel, buildKeyLevelsFooterItems } from "./KeyLevelsPanel";
+import { EntryObservationPanel } from "./EntryObservationPanel";
+import { evaluateEntryObservation } from "../../lib/entryObservation";
+import { computeKeyLevels } from "../../lib/keyLevels";
+import { ENTRY_PANEL_TITLE, buildEntryFooterItems } from "../../lib/entryObservationWording";
 import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
 import type { FooterGroup } from "../../components/PageFooterDisclosures";
 import { NON_REALTIME_NOTICE } from "../../lib/adviceWording";
@@ -143,6 +147,24 @@ export default function PositionDetailPage() {
   const keyLevelsAnchor = resolveKeyLevelsAnchor(positions.data, symbol, market);
 
   /*
+    --- 六項觀察條件 (CEO 2026-09-06; PRD §4b) ---------------------------------
+    Evaluated from the same three payloads the sections below render; each
+    condition degrades to 無法判定 on its own when its payload is missing. The
+    rules condition additionally needs a CONFIRMED held position (風控 RED-1
+    路徑 a) — `advice.data.held` is only trusted on an ok envelope.
+  */
+  const entryLevels =
+    bars.data && bars.data.status === "ok"
+      ? computeKeyLevels(bars.data.bars, keyLevelsAnchor.anchorSource === "cost" ? keyLevelsAnchor.avgCost : null)
+      : null;
+  const entryObservation = evaluateEntryObservation(
+    entryLevels,
+    signals.data?.status === "ok" ? (signals.data.signals ?? null) : null,
+    advice.data?.status === "ok" ? advice.data.advice : null,
+    advice.data?.status === "ok" ? advice.data.held : null,
+  );
+
+  /*
     --- 頁尾揭露區（CEO 裁定 2026-09-06 揭露句下沉頁尾；風控 ACCEPT_WITH_CONDITIONS）---
     Fixed group order = page order (L3); each title is the SAME constant its
     section renders (L4). Two layers (L6-4): the 資料來源 group is a static
@@ -152,6 +174,8 @@ export default function PositionDetailPage() {
   const footerGroups: FooterGroup[] = [
     { title: PAGE_LEVEL_DISCLOSURE_SECTION_TITLE, items: [NON_REALTIME_NOTICE] },
     { title: OPERATION_SUMMARY_TITLE, items: advice.data ? buildSummaryFooterItems(advice.data) : [] },
+    // 風控 REQ-1: the six thresholds are static facts — this group exists whatever the queries do.
+    { title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) },
     {
       title: KEY_LEVELS_PANEL_TITLE,
       items:
@@ -235,11 +259,23 @@ export default function PositionDetailPage() {
         pending or a lot's cost is unusable — the panel words each state
         differently and never claims 未持有 on "unknown".
       */}
+      {/* R-19: 操作摘要 → 資料來源指引句 → 六項觀察條件 → 關鍵價位參考. */}
+      <EntryObservationPanel
+        observation={entryObservation}
+        rangeBarCount={entryLevels?.rangeBarCount ?? null}
+        dataTimes={{
+          bars: bars.data?.as_of ?? null,
+          signals: signals.data?.as_of ?? null,
+          advice: advice.data?.as_of ?? null,
+        }}
+      />
+
       {bars.data && bars.data.status === "ok" && (
         <KeyLevelsPanel
           bars={bars.data.bars}
           anchorSource={keyLevelsAnchor.anchorSource}
           avgCost={keyLevelsAnchor.avgCost}
+          observationBand={entryObservation.observationBand}
         />
       )}
 

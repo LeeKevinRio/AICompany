@@ -1,4 +1,7 @@
 import { ladderBarGeometry } from "../../lib/keyLevelsVisuals";
+import { isInObservationBand } from "../../lib/entryObservation";
+import type { EntryObservation } from "../../lib/entryObservation";
+import { LADDER_BAND_NOTE, LADDER_BAND_TAG } from "../../lib/entryObservationWording";
 import type { LadderGroup, LadderRung, LadderViewModel } from "../../lib/keyLevelsVisuals";
 
 /**
@@ -51,12 +54,17 @@ export function PriceLadder({
   rungLabel,
   groupLabel,
   fmt,
+  observationBand,
 }: {
   model: LadderViewModel;
   rungLabel: (rung: LadderRung) => string;
   groupLabel: (group: LadderGroup) => string | null;
   fmt: (n: number) => string;
+  /** MA20 ±3% band (六項觀察條件 R-18): rows inside it get a neutral background + the threshold as tag; null marks nothing. */
+  observationBand?: EntryObservation["observationBand"];
 }) {
+  const band = observationBand ?? null;
+  const anyInBand = band !== null && model.rungs.some((r) => isInObservationBand(r.price, band));
   return (
     <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
       <h3 className="text-sm font-semibold text-neutral-200">{KEY_LEVELS_LADDER_TITLE}</h3>
@@ -83,10 +91,11 @@ export function PriceLadder({
               const geo = ladderBarGeometry(rung.distancePct, model.maxAbsDistancePct);
               const isAnchor = rung.group === "anchor";
               const group = groupLabel(rung.group);
+              const inBand = isInObservationBand(rung.price, band);
               return (
                 <tr
                   key={rung.id}
-                  className={`border-b border-neutral-800/60 ${isAnchor ? "bg-neutral-800/40" : ""}`}
+                  className={`border-b border-neutral-800/60 ${isAnchor ? "bg-neutral-800/40" : inBand ? "bg-neutral-800/20" : ""}`}
                 >
                   <td className="py-1.5 pr-3">
                     <span className="flex items-center gap-2 whitespace-nowrap">
@@ -99,6 +108,11 @@ export function PriceLadder({
                       {rung.isHeadline && (
                         <span className="rounded bg-neutral-800 px-1 text-xs text-neutral-300">
                           {KEY_LEVELS_LADDER_HEADLINE_TAG}
+                        </span>
+                      )}
+                      {inBand && (
+                        <span className="rounded border border-neutral-600 px-1 font-mono text-xs text-neutral-300">
+                          {LADDER_BAND_TAG}
                         </span>
                       )}
                     </span>
@@ -127,6 +141,7 @@ export function PriceLadder({
           </tbody>
         </table>
       </div>
+      {anyInBand && <p className="mt-2 text-sm text-neutral-400">{LADDER_BAND_NOTE}</p>}
       {/* `KEY_LEVELS_LADDER_NOTE`：CEO 第二次裁定 2026-09-06 推翻風控 A+10，下沉頁尾（`buildKeyLevelsFooterItems`）；面板底部已有指引句。 */}
     </div>
   );

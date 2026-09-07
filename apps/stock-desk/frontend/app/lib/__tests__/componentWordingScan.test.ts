@@ -143,6 +143,32 @@ import { buildAdviceFooterItems } from "../../position/[symbol]/AdviceCardView";
 import { buildTechnicalFooterItems } from "../../position/[symbol]/TechnicalIndicatorsPanel";
 import { buildSummaryFooterItems } from "../operationSummary";
 import type { AdviceCard, AdviceResponse, Bar, SignalsPayload } from "../types";
+import {
+  ENTRY_BASIS_MOMENTUM,
+  ENTRY_BASIS_PULLBACK,
+  ENTRY_BASIS_RULES,
+  ENTRY_BASIS_TREND,
+  ENTRY_BASIS_VOLUME,
+  ENTRY_CONDITION_LABELS,
+  ENTRY_CONDITION_THRESHOLDS,
+  ENTRY_E1_QUALIFIER,
+  ENTRY_E2_XREF,
+  ENTRY_E3_DASH_NOTE,
+  ENTRY_NO_DATA_STATEMENT,
+  ENTRY_PANEL_TAGLINE,
+  ENTRY_PANEL_TITLE,
+  ENTRY_STATUS_LABELS,
+  LADDER_BAND_NOTE,
+  LADDER_BAND_TAG,
+  buildConditionCount,
+  buildDataTimesLine,
+  buildDefensiveHitsText,
+  buildEntryBasisRange,
+  buildEntryFooterItems,
+  buildEntryRangeNotValuationNote,
+  buildRangeConditionLabel,
+} from "../entryObservationWording";
+import { ENTRY_PULLBACK_MAX_ABS_PCT, ENTRY_RANGE_MAX_PCT } from "../entryObservation";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -181,6 +207,10 @@ const SCANNED_FILES = [
   "../../components/PageFooterDisclosures.tsx",
   "../footerDisclosureWording.ts",
   "../sectionTitles.ts",
+  // 六項觀察條件（CEO 2026-09-06；PRD §4b 風控 R-01～R-22）：面板、字面模組、純函式。
+  "../../position/[symbol]/EntryObservationPanel.tsx",
+  "../entryObservationWording.ts",
+  "../entryObservation.ts",
   // 減負批次 3（FR-6）：指標卡 description 為 inline props，納入掃描並逐字守門限定語。
   "../../position/[symbol]/TechnicalIndicatorsPanel.tsx",
   // FE-WIRING BLOCKING 退修 2026-08-09（qa-reviewer 建議）：ref 型條件的
@@ -1295,5 +1325,199 @@ describe("揭露下沉頁尾 守門", () => {
     expect(footerSrc).toMatch(/className="block whitespace-pre-wrap font-mono text-xs text-neutral-400"/);
     expect(footerSrc).toMatch(/item\.qualifier !== null && <span className="block text-xs text-neutral-400">/);
     expect((footerSrc.match(/className="[^"]*font-mono/g) ?? []).length).toBe(1);
+  });
+});
+/**
+ * 六項觀察條件（CEO 2026-09-06；PRD `work/stock-desk-進場觀察條件-PRD.md` §4b；
+ * 風控預審 R-01～R-22 → 守門 T1～T14）。
+ */
+describe("六項觀察條件 守門（T1～T14）", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const panelSrc = read("../../position/[symbol]/EntryObservationPanel.tsx");
+  const pageSrc = read("../../position/[symbol]/page.tsx");
+  const wordingSrc = read("../entryObservationWording.ts");
+
+  const CONSTANTS: Record<string, string> = {
+    ENTRY_PANEL_TITLE,
+    ENTRY_PANEL_TAGLINE,
+    ENTRY_E1_QUALIFIER,
+    ENTRY_E2_XREF,
+    ENTRY_E3_DASH_NOTE,
+    ENTRY_NO_DATA_STATEMENT,
+    LADDER_BAND_TAG,
+    LADDER_BAND_NOTE,
+    count0: buildConditionCount(0, 0),
+    count4: buildConditionCount(4, 0),
+    count31: buildConditionCount(3, 1),
+    count6: buildConditionCount(6, 0),
+    rangeLabel: buildRangeConditionLabel(252),
+    rangeLabelNull: buildRangeConditionLabel(null),
+    hits: buildDefensiveHitsText(1),
+    times: buildDataTimesLine("A", "B", "C", false),
+    timesSame: buildDataTimesLine("A", "A", "A", true),
+    timesMissing: buildDataTimesLine(null, null, null, false),
+    basisRangeNull: flatBasis(buildEntryBasisRange(null)),
+    rangeNoteNull: buildEntryRangeNotValuationNote(null),
+    rangeNote: buildEntryRangeNotValuationNote(252),
+    ...Object.fromEntries(Object.entries(ENTRY_CONDITION_LABELS).map(([k, v]) => [`label_${k}`, v])),
+    ...Object.fromEntries(Object.entries(ENTRY_CONDITION_THRESHOLDS).map(([k, v]) => [`threshold_${k}`, v])),
+    ...Object.fromEntries(Object.entries(ENTRY_STATUS_LABELS).map(([k, v]) => [`status_${k}`, v])),
+    basisRange: flatBasis(buildEntryBasisRange(252)),
+    basisTrend: flatBasis(ENTRY_BASIS_TREND),
+    basisPullback: flatBasis(ENTRY_BASIS_PULLBACK),
+    basisMomentum: flatBasis(ENTRY_BASIS_MOMENTUM),
+    basisVolume: flatBasis(ENTRY_BASIS_VOLUME),
+    basisRules: flatBasis(ENTRY_BASIS_RULES),
+  };
+
+  it("T1／T2：全部字面逐字釘住、無禁用詞、無裸即時、無本案組合禁語", () => {
+    const combos = [
+      /條件成立/,
+      /進場[^。；]{0,8}成立/,
+      /(成立|符合|達成|通過)率|分數|評分|得分|滿分|等級|星級/,
+      /還差|僅差|只差|接近成立/,
+      /全部成立|六條全數|全數成立|滿足全部/,
+      /進場點|買點|時機|時點|訊號|達標|過關/,
+    ];
+    for (const [name, text] of Object.entries(CONSTANTS)) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, name);
+      expect(findBareRealtimeClaims(text), name).toEqual([]);
+      // 組合禁語只針對肯定句；E-1 依風控要求以否定式列舉「不代表…達成率」，該否定子句先剝除再掃。
+      // 「信心等級」為既有固定名詞（E-2 依風控要求指向操作摘要的信心等級），非對計數的分級。
+      // REQ-4: the negation clause ends at the next comma too, so an affirmative clause after 「，」 is still scanned.
+      // REQ-5: the fixed-term exemption is limited to E-2's exact phrase, not to every 「信心等級」.
+      const affirmative = text.replace(/不代表[^。；，,]*/g, "").replace(/信心等級與免責事項見上方操作摘要/g, "");
+      for (const re of combos) expect(affirmative, `${name} 命中組合禁語 ${re}`).not.toMatch(re);
+    }
+    expect(ENTRY_PANEL_TITLE).toBe("六項觀察條件");
+    expect(ENTRY_PANEL_TITLE).not.toContain("進場");
+    expect(ENTRY_PANEL_TAGLINE).toBe("這裡逐條列出六項條件的現況，明細列於下方。");
+    expect(ENTRY_STATUS_LABELS).toEqual({ met: "成立", unmet: "未成立", unavailable: "無法判定" });
+    expect(ENTRY_CONDITION_LABELS).toEqual({
+      trend: "收盤與 MA60",
+      pullback: "距 MA20",
+      momentum: "RSI(14)",
+      volume: "成交量 z",
+      rules: "防禦型規則",
+    });
+    expect(buildRangeConditionLabel(252)).toBe("近 252 根位階");
+    expect(ENTRY_CONDITION_THRESHOLDS).toEqual({
+      range: "≤ 70%",
+      trend: "收盤 > MA60",
+      pullback: "±3% 內",
+      momentum: "30–70（不含端點）",
+      volume: "−2～2（不含端點）",
+      rules: "= 0（未持有時無法判定）",
+    });
+    // 門檻字面與純函式常數同源。
+    expect(ENTRY_CONDITION_THRESHOLDS.range).toContain(String(ENTRY_RANGE_MAX_PCT));
+    expect(ENTRY_CONDITION_THRESHOLDS.pullback).toContain(String(ENTRY_PULLBACK_MAX_ABS_PCT));
+    expect(ENTRY_E1_QUALIFIER).toBe(
+      "以上六條門檻皆為本面板自訂之固定值；成立數僅為符合門檻的條數，不代表機率、達成率或任何買賣判斷。",
+    );
+    for (const q of ["自訂之固定值", "僅為符合門檻的條數", "不代表機率、達成率或任何買賣判斷"]) expect(ENTRY_E1_QUALIFIER).toContain(q);
+    expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論、信心等級與免責事項見上方操作摘要。");
+    expect(ENTRY_E3_DASH_NOTE).toBe("「—」代表無法判定，不代表數值為零，也不代表未成立。");
+    expect(ENTRY_NO_DATA_STATEMENT).toBe("目前資料不足，六條條件均無法判定。");
+    expect(LADDER_BAND_TAG).toBe("MA20 ±3%");
+    expect(LADDER_BAND_NOTE).toBe("有「MA20 ±3%」標籤的列，價位皆在該範圍內。");
+    expect(buildDefensiveHitsText(1)).toBe("命中 1 條");
+    expect(buildDataTimesLine("A", "B", "C", false)).toBe("資料時間：日線 A｜指標 B｜規則評估 C");
+    expect(buildDataTimesLine("A", "A", "A", true)).toBe("資料時間：A（日線／指標／規則評估同步）");
+    // REQ-3: identical display strings are NOT enough — the caller decides from raw stamps.
+    expect(buildDataTimesLine("A", "A", "A", false)).toBe("資料時間：日線 A｜指標 A｜規則評估 A");
+    expect(buildDataTimesLine(null, null, null, false)).toBe("資料時間：日線 —｜指標 —｜規則評估 —");
+    expect(buildEntryBasisRange(null).formula[0]).toContain("位階(近N根)");
+    expect(buildEntryRangeNotValuationNote(null)).toBe("位階數字僅反映價格在近 N 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
+    expect(buildEntryRangeNotValuationNote(252)).toBe("位階數字僅反映價格在近 252 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
+    expect(buildEntryRangeNotValuationNote(252)).not.toBe(buildRangeNotValuationNote(252));
+    expect(ENTRY_BASIS_RULES.qualifier).toContain("不因未命中而視為成立");
+    expect(buildEntryFooterItems(252)).toHaveLength(7);
+  });
+
+  it("T3／T11：計數句為陳述句，無 %、無 N/6、無「分」；unavailable > 0 一律印出無法判定條數", () => {
+    for (const [met, un] of [[0, 0], [4, 0], [3, 1], [0, 6], [6, 0]] as const) {
+      const text = buildConditionCount(met, un);
+      expect(text).not.toMatch(/%|\/6|分/);
+      expect(text).toMatch(/^6 條中成立 \d 條/);
+      if (un > 0) expect(text).toContain(`其中 ${un} 條無法判定`);
+      else expect(text).not.toContain("無法判定");
+    }
+    expect(buildConditionCount(4, 0)).toBe("6 條中成立 4 條。");
+    expect(buildConditionCount(3, 1)).toBe("6 條中成立 3 條，其中 1 條無法判定。");
+  });
+
+  it("T4／T7／T8／T13：三重編碼、E-1～E-4 常駐不摺疊、不 import 結論元素、計數字級 ≤ text-lg", () => {
+    expect(panelSrc).toContain("aria-label={`${conditionLabel(c.id, rangeBarCount)}：${observedText(c)}，${ENTRY_STATUS_LABELS[c.status]}`}");
+    expect(panelSrc).toContain("{STATUS_GLYPH[c.status]}");
+    expect(panelSrc).toContain("{ENTRY_STATUS_LABELS[c.status]}");
+    // REQ-1: rows always listed; the footer group is unconditional; 「同步」 decided on raw stamps (REQ-3).
+    expect(panelSrc).not.toContain("observation.allUnavailable ? (");
+    expect(pageSrc).toContain("{ title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) }");
+    expect(panelSrc).toContain("dataTimes.bars === dataTimes.signals && dataTimes.signals === dataTimes.advice");
+    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataTimesLine("]) {
+      expect(panelSrc).toContain(needle);
+    }
+    expect(panelSrc).not.toMatch(/<details|<summary|line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|className="[^"]*\bhidden\b|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
+    expect(panelSrc).not.toMatch(/text-neutral-(5|6|7)00/);
+    // R-15：只看 import 行與 JSX 取值，doc comment 提到這些詞不算。
+    const importLines = panelSrc.split("\n").filter((l) => l.startsWith("import"));
+    for (const l of importLines) {
+      expect(l).not.toMatch(/buildAttributedHeadline|CANDIDATE_HEADING_LABEL|confidenceLabel|summaryConfidenceLabel|HELD_ACTION_LABELS|actionRawLabel|adviceWording|operationSummary/);
+    }
+    expect(panelSrc).not.toMatch(/\.disclaimer|\.confidence\b|\.headline|\.action\b/);
+    expect(panelSrc).not.toMatch(/text-(xl|2xl|3xl)/);
+  });
+
+  it("T5：狀態常數區塊與階梯標籤不得帶任何色相（R-21）", () => {
+    const block = panelSrc.slice(panelSrc.indexOf("const STATUS_GLYPH"), panelSrc.indexOf("function fmtNum"));
+    expect(block).not.toMatch(/(red|green|rose|emerald|amber|lime|yellow|sky|blue|indigo|violet|orange)-\d/);
+    expect(panelSrc).not.toMatch(/(red|green|rose|emerald|amber|lime|yellow|sky)-\d/);
+    const ladder = read("../../position/[symbol]/PriceLadder.tsx");
+    const bandBits = ladder.split("\n").filter((l) => l.includes("inBand") || l.includes("LADDER_BAND"));
+    for (const l of bandBits) expect(l).not.toMatch(/(red|green|rose|emerald|amber|lime|yellow|sky)-\d/);
+  });
+
+  it("T6：全部成立無特殊態——原始碼無 metCount 分支、無 === 6", () => {
+    expect(panelSrc).not.toMatch(/metCount\s*===|=== 6\b|=== conditions\.length|allMet|metCount >=/);
+    expect(wordingSrc).not.toMatch(/=== 6\b|met === /);
+  });
+
+  it("T9：位置——操作摘要 → 資料來源指引句 → 六項觀察條件 → 關鍵價位參考；頁尾組同序", () => {
+    const summary = pageSrc.indexOf("<OperationSummaryPanel advice={advice} />");
+    const dataPointer = pageSrc.indexOf("{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}");
+    const entry = pageSrc.indexOf("<EntryObservationPanel");
+    const keyLevels = pageSrc.indexOf("<KeyLevelsPanel");
+    expect(summary).toBeGreaterThan(-1);
+    expect(dataPointer).toBeGreaterThan(summary);
+    expect(entry).toBeGreaterThan(dataPointer);
+    expect(keyLevels).toBeGreaterThan(entry);
+    const gEntry = pageSrc.indexOf("title: ENTRY_PANEL_TITLE");
+    const gSummary = pageSrc.indexOf("title: OPERATION_SUMMARY_TITLE");
+    const gKey = pageSrc.indexOf("title: KEY_LEVELS_PANEL_TITLE");
+    expect(gEntry).toBeGreaterThan(gSummary);
+    expect(gKey).toBeGreaterThan(gEntry);
+    expect(panelSrc).toContain("{buildFooterGuidance(ENTRY_PANEL_TITLE)}");
+  });
+
+  it("T10／T12：R3／R4 防復活——indicatorBands 無 closeVsMa；收盤與 MA60 同取自 KeyLevels；規則條需 held 確認", () => {
+    expect(read("../indicatorBands.ts")).not.toContain("closeVsMa");
+    const evalSrc = read("../entryObservation.ts");
+    expect(evalSrc).toMatch(/const close = fin\(levels\?\.close\);\s*const ma60 = fin\(levels\?\.ma60\);/);
+    expect(evalSrc).toContain("held !== true");
+    expect(pageSrc).toContain('advice.data?.status === "ok" ? advice.data.held : null');
+  });
+
+  it("T14：EntryObservation／metCount 不離開個股頁", () => {
+    for (const rel of [
+      "../../components/PositionsTable.tsx",
+      "../../components/SummaryCards.tsx",
+      "../../components/PendingAlertsPanel.tsx",
+      "../../settings/AlertRulesSection.tsx",
+      "../../playbook/page.tsx",
+      "../../backtest/BacktestReportView.tsx",
+    ]) {
+      expect(read(rel), `${rel} 不得引用六項觀察條件`).not.toMatch(/EntryObservation|metCount|entryObservation/);
+    }
   });
 });
