@@ -243,6 +243,10 @@ const SCANNED_FILES = [
   // the label is served by the backend now, so this file is scanned with no
   // allowlist entry of its own at all.
   "../../backtest/BacktestReportView.tsx",
+  // CEO 2026-09-09 equity-curve chart: the wording module and the component
+  // that renders it (legend, split labels, tooltip field names, empty state).
+  "../../backtest/EquityCurveChart.tsx",
+  "../backtestCurveWording.ts",
   // 排程台 (`/playbook`, work/stock-desk-快市排程-視覺規範.md 派工單
   // 2026-08-12): new surface, new hard-coded JSX text (headings, the
   // EMERGENCY_EXIT flow's risk-compliance-approved button labels, the mirrored

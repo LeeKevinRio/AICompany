@@ -6,6 +6,7 @@ import type {
 } from "../lib/types";
 import { formatDateTime, formatMoneyNumber, formatNumber, formatPercent, marketCurrency } from "../lib/format";
 import type { Market } from "../lib/types";
+import { EquityCurveChart } from "./EquityCurveChart";
 
 interface MetricRow {
   label: string;
@@ -230,6 +231,18 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
           </p>
         </div>
       )}
+
+      {/*
+        CEO 2026-09-09「像曲線圖那樣的」(creative-lead 方案 A.6, amended by 風控
+        REQ-1): the equity curve comes after every standing disclosure — the
+        report-level disclaimer, the unverified-rates alert and the dividend /
+        Buy & Hold notes — and before the cost grid and the tables. The chart is
+        the report's strongest comparison claim, so the sentences that bound
+        that claim (an unadjusted series understates Buy & Hold, i.e. the
+        control group) must be read first. `report.curves` is null exactly when
+        `report.report` is; the component renders the empty statement itself.
+      */}
+      <EquityCurveChart curves={report.curves} />
 
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-neutral-500 sm:grid-cols-3">
         <p>台股手續費率：{formatPercent(report.cost_model.tw_broker_fee_rate)}</p>

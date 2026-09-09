@@ -880,6 +880,37 @@ export interface BacktestMetricLabels {
 }
 
 /** Backend `BacktestResponse` (app/api/backtest.py, verified). */
+/**
+ * One walk-forward segment's per-bar series (backend `SegmentCurves`,
+ * app/backtest/report.py). The four arrays are index-aligned and, apart from
+ * the documented degenerate case (first close <= 0 -> empty `buy_and_hold`),
+ * the same length as that segment's `PerformanceMetrics.observations`.
+ * `strategy` / `buy_and_hold` are equity amounts on the report's own scale;
+ * `drawdown` is the strategy's `equity / running_peak - 1` (<= 0) so that
+ * `min(drawdown)` equals the segment's `max_drawdown`.
+ */
+export interface SegmentCurves {
+  dates: string[];
+  strategy: number[];
+  buy_and_hold: number[];
+  drawdown: number[];
+}
+
+export interface CurveTrade {
+  date: string;
+  side: "buy" | "sell";
+  price: number;
+}
+
+/** Backend `WalkForwardCurves`: null whenever `report` is null. */
+export interface WalkForwardCurves {
+  in_sample: SegmentCurves;
+  out_of_sample: SegmentCurves;
+  /** First out-of-sample bar (= `out_of_sample.dates[0]`), null when that segment is empty. */
+  split_date: string | null;
+  trades: CurveTrade[];
+}
+
 export interface BacktestResponse {
   symbol: string;
   market: string;
@@ -887,6 +918,7 @@ export interface BacktestResponse {
   status: PayloadStatus;
   reason: string | null;
   report: WalkForwardReport | null;
+  curves: WalkForwardCurves | null;
   folds: WalkForwardFoldInfo[];
   cost_model: CostModelSettings;
   rates_verified: boolean;
