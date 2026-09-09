@@ -47,6 +47,7 @@ Conventions:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
@@ -54,7 +55,7 @@ from pydantic import BaseModel, ConfigDict
 from app.backtest.engine import BacktestResult, Trade
 from app.backtest.episodes import RoundTripAttribution, attribute_round_trips
 from app.backtest.splits import WalkForwardFold
-from app.signals.risk import max_drawdown
+from app.signals.risk import drawdown_series, max_drawdown
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -124,6 +125,64 @@ class WalkForwardReport(BaseModel):
 
     in_sample: SegmentReport
     out_of_sample: SegmentReport
+
+
+class SegmentCurves(BaseModel):
+    """The per-bar series the metric block of the same segment was measured on.
+
+    Not a second measurement: these are the exact arrays
+    :func:`build_segment_report` reduces to :class:`PerformanceMetrics`, cut with
+    the same slicer and benchmarked with the same Buy & Hold path, so a chart
+    drawn from them cannot disagree with the table beside it. Consequently
+    ``strategy[0]`` / ``strategy[-1]`` are the segment's ``start_equity`` /
+    ``end_equity``, and ``min(drawdown)`` is its ``max_drawdown``.
+
+    All four arrays are equal length -- the segment's ``observations`` -- except
+    in the one degenerate case where the Buy & Hold path is undefined (a
+    non-positive first close), which is also the case where the report's Buy &
+    Hold column reports nothing; ``buy_and_hold`` is then empty rather than
+    padded with a value that was never computed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dates: list[str]
+    #: Strategy equity per bar, in currency -- same scale as ``start_equity``.
+    strategy: list[float]
+    #: Passive equity per bar, gross of cost, from the segment's first close.
+    buy_and_hold: list[float]
+    #: Strategy equity against its running peak within the segment (``<= 0``).
+    drawdown: list[float]
+
+
+class CurveTrade(BaseModel):
+    """One fill, reduced to what a chart marker needs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    date: str
+    side: str  # "buy" or "sell"
+    price: float
+
+
+class WalkForwardCurves(BaseModel):
+    """The two reported segments as drawable series, plus their fill markers.
+
+    The chart peer of :class:`WalkForwardReport`: same run, same segment bounds,
+    same Buy & Hold definition. ``split_date`` is the first out-of-sample bar --
+    where a reader must stop trusting the curve as evidence of anything but
+    fitting -- and equals ``out_of_sample.dates[0]`` whenever that segment has a
+    bar at all.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    in_sample: SegmentCurves
+    out_of_sample: SegmentCurves
+    split_date: str | None
+    #: Fills landing inside either segment, selected by ``bar_index`` (the
+    #: geometry's own unit) rather than by date string, in chronological order.
+    trades: list[CurveTrade]
 
 
 def _returns(equity: np.ndarray) -> np.ndarray:
@@ -289,6 +348,33 @@ def _buy_and_hold_equity(close: np.ndarray, initial_cash: float) -> np.ndarray:
     return np.asarray(initial_cash * close / close[0], dtype="float64")
 
 
+@dataclass(frozen=True)
+class _SegmentSeries:
+    """One segment's raw arrays: what both the metrics and the curves read.
+
+    Sliced and benchmarked in exactly one place so the chart and the table can
+    never be drawn from two different definitions of "this segment".
+    """
+
+    stop: int
+    dates: list[str]
+    equity: np.ndarray
+    close: np.ndarray
+    buy_and_hold: np.ndarray
+
+
+def _segment_series(result: BacktestResult, *, start: int, stop: int | None) -> _SegmentSeries:
+    end = len(result.equity_curve) if stop is None else stop
+    close = np.asarray(result.close[start:end], dtype="float64")
+    return _SegmentSeries(
+        stop=end,
+        dates=result.dates[start:end],
+        equity=np.asarray(result.equity_curve[start:end], dtype="float64"),
+        close=close,
+        buy_and_hold=_buy_and_hold_equity(close, result.initial_cash),
+    )
+
+
 def build_segment_report(
     result: BacktestResult,
     *,
@@ -299,10 +385,10 @@ def build_segment_report(
     risk_free_rate: float = 0.0,
 ) -> SegmentReport:
     """Report metrics for ``result`` over ``[start, stop)`` with a Buy & Hold peer."""
-    end = len(result.equity_curve) if stop is None else stop
-    dates = result.dates[start:end]
-    equity = np.asarray(result.equity_curve[start:end], dtype="float64")
-    close = np.asarray(result.close[start:end], dtype="float64")
+    series = _segment_series(result, start=start, stop=stop)
+    end = series.stop
+    dates = series.dates
+    equity = series.equity
     seg_start = result.dates[start] if dates else None
     seg_end = result.dates[end - 1] if dates else None
     trades = [
@@ -326,17 +412,76 @@ def build_segment_report(
         risk_free_rate=risk_free_rate,
         round_trips=round_trips,
     )
-    bh_equity = _buy_and_hold_equity(close, result.initial_cash)
     bh_metrics = _metrics(
         label=f"{label}:buy_and_hold",
         dates=dates,
-        equity=bh_equity,
+        equity=series.buy_and_hold,
         trades=[],
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
         round_trips=None,
     )
     return SegmentReport(strategy=strategy_metrics, buy_and_hold=bh_metrics)
+
+
+def build_segment_curves(
+    result: BacktestResult, *, start: int = 0, stop: int | None = None
+) -> SegmentCurves:
+    """The drawable series for ``result`` over ``[start, stop)``.
+
+    Shares :func:`_segment_series` with :func:`build_segment_report`, so the
+    curve is literally the path the metrics were reduced from; the drawdown
+    comes from :func:`~app.signals.risk.drawdown_series`, the same definition
+    ``max_drawdown`` minimises.
+    """
+    series = _segment_series(result, start=start, stop=stop)
+    return SegmentCurves(
+        dates=series.dates,
+        strategy=[float(x) for x in series.equity],
+        buy_and_hold=[float(x) for x in series.buy_and_hold],
+        drawdown=drawdown_series(series.equity.tolist()),
+    )
+
+
+def _walk_forward_bounds(
+    folds: list[WalkForwardFold],
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """``(in_sample, out_of_sample)`` bar bounds ``[start, stop)`` for ``folds``.
+
+    The single definition of the two reported segments: the initial training
+    block, and the contiguous stitch of every fold's test window. Both the
+    report and the curves read it, so they cannot describe different spans.
+    """
+    if not folds:
+        raise ValueError("walk-forward segmentation needs at least one fold")
+    return (
+        (folds[0].train_start, folds[0].train_stop),
+        (folds[0].test_start, folds[-1].test_stop),
+    )
+
+
+def walk_forward_curves(
+    result: BacktestResult, folds: list[WalkForwardFold]
+) -> WalkForwardCurves:
+    """The chart peer of :func:`walk_forward_report` over the same segments.
+
+    Fills are selected by ``bar_index`` against the same bounds the segments
+    were cut with -- comparing date strings would re-derive the geometry from
+    its own description (see :class:`~app.backtest.engine.Trade`).
+    """
+    (is_start, is_stop), (oos_start, oos_stop) = _walk_forward_bounds(folds)
+    out_of_sample = build_segment_curves(result, start=oos_start, stop=oos_stop)
+    trades = [
+        CurveTrade(date=t.date, side=t.side, price=t.price)
+        for t in result.trades
+        if is_start <= t.bar_index < is_stop or oos_start <= t.bar_index < oos_stop
+    ]
+    return WalkForwardCurves(
+        in_sample=build_segment_curves(result, start=is_start, stop=is_stop),
+        out_of_sample=out_of_sample,
+        split_date=out_of_sample.dates[0] if out_of_sample.dates else None,
+        trades=trades,
+    )
 
 
 def walk_forward_report(
@@ -356,19 +501,20 @@ def walk_forward_report(
     """
     if not folds:
         raise ValueError("walk_forward_report needs at least one fold")
+    (is_start, is_stop), (oos_start, oos_stop) = _walk_forward_bounds(folds)
     in_sample = build_segment_report(
         result,
         label="in_sample",
-        start=folds[0].train_start,
-        stop=folds[0].train_stop,
+        start=is_start,
+        stop=is_stop,
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
     )
     out_of_sample = build_segment_report(
         result,
         label="out_of_sample",
-        start=folds[0].test_start,
-        stop=folds[-1].test_stop,
+        start=oos_start,
+        stop=oos_stop,
         periods_per_year=periods_per_year,
         risk_free_rate=risk_free_rate,
     )

@@ -118,6 +118,26 @@ def annualized_volatility(
     return daily, daily * math.sqrt(periods_per_year)
 
 
+def _drawdown_path(values: np.ndarray) -> np.ndarray:
+    """``value / running_peak - 1`` per point -- the one definition of drawdown."""
+    return np.asarray(values / np.maximum.accumulate(values) - 1.0, dtype="float64")
+
+
+def drawdown_series(prices: Sequence[float]) -> list[float]:
+    """Return the underwater path ``price/running_peak - 1`` (every point ``<= 0``).
+
+    The very series :func:`max_drawdown` takes its minimum over, exposed so a
+    display layer can draw the whole underwater curve without restating what a
+    drawdown is. ``min(drawdown_series(p))`` therefore equals
+    ``max_drawdown(p)[0]`` by construction whenever the latter is defined
+    (``len(p) >= 2``).
+    """
+    values = np.asarray(prices, dtype="float64")
+    if values.size == 0:
+        return []
+    return [float(x) for x in _drawdown_path(values)]
+
+
 def max_drawdown(prices: Sequence[float]) -> tuple[float, int, int] | None:
     """Return ``(max_drawdown, peak_index, trough_index)`` or ``None``.
 
@@ -128,8 +148,7 @@ def max_drawdown(prices: Sequence[float]) -> tuple[float, int, int] | None:
     values = np.asarray(prices, dtype="float64")
     if values.size < 2:
         return None
-    running_peak = np.maximum.accumulate(values)
-    drawdown = values / running_peak - 1.0
+    drawdown = _drawdown_path(values)
     trough_index = int(np.argmin(drawdown))
     worst = float(drawdown[trough_index])
     peak_index = int(np.argmax(values[: trough_index + 1]))

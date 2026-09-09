@@ -9,7 +9,12 @@ import pandas as pd
 from app.backtest.costs import CostModel
 from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.episodes import attribute_round_trips
-from app.backtest.report import build_segment_report, walk_forward_report
+from app.backtest.report import (
+    build_segment_curves,
+    build_segment_report,
+    walk_forward_curves,
+    walk_forward_report,
+)
 from app.backtest.splits import walk_forward_splits
 from app.signals.frame import bars_to_frame
 from tests.signals_helpers import bars_from_closes
@@ -274,3 +279,61 @@ def test_a_segment_with_no_completed_round_trip_reports_zero_not_absent() -> Non
     assert oos.strategy.num_round_trips == 0
     # The peer has no round-trip attribution at all, which is a different state.
     assert oos.buy_and_hold.num_round_trips is None
+
+
+# ---------------------------------------------------------------------------
+# Curves: the chart peer of the report, cut from the same slices
+# ---------------------------------------------------------------------------
+
+
+def test_segment_curves_are_the_path_the_segment_metrics_were_reduced_from() -> None:
+    """A chart drawn from these arrays states the same numbers as the table."""
+    result = _trending_result()
+    report = build_segment_report(result, start=5, stop=30)
+    curves = build_segment_curves(result, start=5, stop=30)
+
+    assert len(curves.dates) == report.strategy.observations
+    assert len(curves.strategy) == len(curves.dates)
+    assert len(curves.buy_and_hold) == len(curves.dates)
+    assert len(curves.drawdown) == len(curves.dates)
+    assert curves.strategy[0] == report.strategy.start_equity
+    assert curves.strategy[-1] == report.strategy.end_equity
+    assert curves.buy_and_hold[0] == report.buy_and_hold.start_equity
+    assert curves.buy_and_hold[-1] == report.buy_and_hold.end_equity
+    assert min(curves.drawdown) == report.strategy.max_drawdown
+
+
+def test_walk_forward_curves_chart_the_same_two_segments_as_the_report() -> None:
+    result = _trending_result(60)
+    folds = walk_forward_splits(60, train_size=30, test_size=10)
+    report = walk_forward_report(result, folds)
+    curves = walk_forward_curves(result, folds)
+
+    for segment_report, segment_curves in (
+        (report.in_sample, curves.in_sample),
+        (report.out_of_sample, curves.out_of_sample),
+    ):
+        assert segment_curves.dates[0] == segment_report.strategy.start_date
+        assert segment_curves.dates[-1] == segment_report.strategy.end_date
+    assert curves.split_date == curves.out_of_sample.dates[0]
+    # In-sample ends before out-of-sample begins: the two never overlap.
+    assert curves.in_sample.dates[-1] < curves.split_date
+
+
+def test_curve_trade_markers_are_selected_by_bar_index_not_by_date_string() -> None:
+    """Fills outside both charted windows are left out, geometry's own unit."""
+    result = _trending_result(60)
+    folds = walk_forward_splits(60, train_size=30, test_size=10)
+    curves = walk_forward_curves(result, folds)
+    charted = set(curves.in_sample.dates) | set(curves.out_of_sample.dates)
+
+    in_window = [
+        t
+        for t in result.trades
+        if folds[0].train_start <= t.bar_index < folds[0].train_stop
+        or folds[0].test_start <= t.bar_index < folds[-1].test_stop
+    ]
+    assert [t.date for t in curves.trades] == [t.date for t in in_window]
+    for marker in curves.trades:
+        assert marker.date in charted
+        assert marker.side in {"buy", "sell"}

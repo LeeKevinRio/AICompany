@@ -369,3 +369,133 @@ def test_the_round_trip_count_ships_on_every_metric_block(api_harness: ApiHarnes
             assert strategy["num_round_trips"] > 0
         # The peer trades nothing, so it has no round-trip attribution at all.
         assert segment["buy_and_hold"]["num_round_trips"] is None
+
+
+# ---------------------------------------------------------------------------
+# curves: the equity / drawdown chart series (same run, same segments)
+# ---------------------------------------------------------------------------
+
+_CURVE_SERIES = ("dates", "strategy", "buy_and_hold", "drawdown")
+
+
+def test_the_response_carries_curves_for_both_reported_segments(
+    api_harness: ApiHarness,
+) -> None:
+    _seed(api_harness)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    curves = body["curves"]
+    assert set(curves) == {"in_sample", "out_of_sample", "split_date", "trades"}
+    for segment in ("in_sample", "out_of_sample"):
+        assert set(curves[segment]) == set(_CURVE_SERIES)
+
+
+def test_each_curve_is_as_long_as_the_segment_it_charts(api_harness: ApiHarness) -> None:
+    """Four equal-length arrays per segment, one point per reported observation."""
+    _seed(api_harness)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    for segment in ("in_sample", "out_of_sample"):
+        observations = body["report"][segment]["strategy"]["observations"]
+        assert observations > 0
+        for series in _CURVE_SERIES:
+            assert len(body["curves"][segment][series]) == observations, (segment, series)
+
+
+def test_the_curve_endpoints_are_the_equities_the_report_states(
+    api_harness: ApiHarness,
+) -> None:
+    """Same scale, same slice: the chart cannot start or end somewhere else."""
+    _seed(api_harness)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    for segment in ("in_sample", "out_of_sample"):
+        for column in ("strategy", "buy_and_hold"):
+            metrics = body["report"][segment][column]
+            series = body["curves"][segment][column]
+            assert series[0] == metrics["start_equity"], (segment, column)
+            assert series[-1] == metrics["end_equity"], (segment, column)
+        dates = body["curves"][segment]["dates"]
+        assert dates[0] == body["report"][segment]["strategy"]["start_date"]
+        assert dates[-1] == body["report"][segment]["strategy"]["end_date"]
+
+
+def test_the_drawdown_curve_bottoms_out_at_the_reported_max_drawdown(
+    api_harness: ApiHarness,
+) -> None:
+    """One definition of drawdown, so the trough drawn is the number reported."""
+    _seed(api_harness)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    for segment in ("in_sample", "out_of_sample"):
+        drawdown = body["curves"][segment]["drawdown"]
+        assert max(drawdown) <= 0.0
+        assert min(drawdown) == body["report"][segment]["strategy"]["max_drawdown"]
+
+
+def test_split_date_is_the_first_out_of_sample_bar(api_harness: ApiHarness) -> None:
+    _seed(api_harness)
+    curves = api_harness.client.post("/api/backtest", json=_request()).json()["curves"]
+
+    assert curves["split_date"] == curves["out_of_sample"]["dates"][0]
+    # The in-sample block ends before the split, so the marker separates them.
+    assert curves["in_sample"]["dates"][-1] < curves["split_date"]
+
+
+def test_trade_markers_fall_inside_the_charted_segments(api_harness: ApiHarness) -> None:
+    _seed(api_harness)
+    curves = api_harness.client.post("/api/backtest", json=_request()).json()["curves"]
+
+    charted = set(curves["in_sample"]["dates"]) | set(curves["out_of_sample"]["dates"])
+    assert curves["trades"]
+    for marker in curves["trades"]:
+        assert set(marker) == {"date", "side", "price"}
+        assert marker["side"] in {"buy", "sell"}
+        assert marker["price"] > 0
+        assert marker["date"] in charted
+
+
+def test_a_run_that_never_happened_has_no_curves(api_harness: ApiHarness) -> None:
+    """``curves`` is null exactly where ``report`` is: nothing ran, nothing to draw."""
+    _seed(api_harness, count=100)
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+
+    assert body["status"] == "insufficient_data"
+    assert body["report"] is None
+    assert body["curves"] is None
+
+
+def test_every_shipped_strategy_produces_the_same_curve_shape(
+    api_harness: ApiHarness,
+) -> None:
+    _seed(api_harness)
+    baseline = api_harness.client.post("/api/backtest", json=_request()).json()["curves"]
+
+    for strategy_id in STRATEGY_IDS:
+        curves = api_harness.client.post(
+            "/api/backtest", json=_request(strategy=strategy_id)
+        ).json()["curves"]
+        assert curves.keys() == baseline.keys(), strategy_id
+        for segment in ("in_sample", "out_of_sample"):
+            assert curves[segment].keys() == baseline[segment].keys(), strategy_id
+            # Both strategies are measured over the same bars; only the path differs.
+            assert curves[segment]["dates"] == baseline[segment]["dates"], strategy_id
+        assert curves["split_date"] == baseline["split_date"], strategy_id
+
+
+def test_the_kelly_import_surface_does_not_carry_backtest_curves(
+    api_harness: ApiHarness,
+) -> None:
+    """The Kelly import shares ``execute_backtest`` but serves its own model.
+
+    It returns a ``KellyInputView`` (or a structured refusal), never the backtest
+    response, so the new chart series must not appear on that surface -- whatever
+    the sample gate decides about this fixture's round trips.
+    """
+    _seed(api_harness)
+    response = api_harness.client.post(
+        "/api/kelly-inputs/2330/import-backtest", json=_request()
+    )
+
+    assert response.status_code in (200, 422)
+    assert "curves" not in response.text

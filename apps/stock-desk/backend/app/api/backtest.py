@@ -53,7 +53,12 @@ from app.api.kelly_wording import (
     KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
 )
 from app.backtest.engine import BacktestResult, run_backtest
-from app.backtest.report import TRADING_DAYS_PER_YEAR, walk_forward_report
+from app.backtest.report import (
+    TRADING_DAYS_PER_YEAR,
+    WalkForwardCurves,
+    walk_forward_curves,
+    walk_forward_report,
+)
 from app.backtest.splits import WalkForwardFold, walk_forward_splits
 from app.backtest.strategies import STRATEGY_IDS, STRATEGY_WARMUP_BARS, build_strategy
 from app.data.interface import PriceBar
@@ -364,6 +369,12 @@ class BacktestResponse(BaseModel):
     reason: str | None
     #: Exactly ``app.backtest.report.walk_forward_report`` output, or ``None``.
     report: dict[str, Any] | None
+    #: The same two segments as per-bar series, for the equity/drawdown chart:
+    #: ``app.backtest.report.walk_forward_curves`` output. Built from the same
+    #: slices and the same Buy & Hold path as ``report`` above, so a chart and
+    #: the table beside it cannot state different numbers. ``None`` exactly when
+    #: ``report`` is -- no run, nothing to draw.
+    curves: WalkForwardCurves | None
     #: The fold geometry the report was built from.
     folds: list[dict[str, int]]
     #: The rates actually applied, with their verification flag.
@@ -444,6 +455,7 @@ def execute_backtest(
                 status="insufficient_data",
                 reason=reason,
                 report=None,
+                curves=None,
                 folds=[],
                 cost_model=costs.model_dump(),
                 rates_verified=costs.rates_verified,
@@ -514,6 +526,7 @@ def execute_backtest(
             status="ok",
             reason=None,
             report=report.model_dump(),
+            curves=walk_forward_curves(result, folds),
             folds=[
                 {
                     "fold": fold.fold,
