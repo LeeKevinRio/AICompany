@@ -810,13 +810,15 @@ export interface CostModelSettings {
 }
 
 /**
- * Backend `STRATEGY_IDS` (app/backtest/strategies.py, verified) — the three
- * shipped strategies (FR-10/FR-11 added `rsi_reversal` and `breakout`). Each
+ * Backend `STRATEGY_IDS` (app/backtest/strategies.py, verified) — the shipped
+ * strategies (FR-10/FR-11 added `rsi_reversal` and `breakout`; CEO 2026-09-09
+ * 回測 added `five_conditions`, the first five rows of the 六項觀察條件 panel —
+ * the sixth, rule-engine row is out of a price-only backtest's reach). Each
  * is a textbook example the walk-forward engine can measure, not a
  * recommendation; the form's option labels stay descriptive nouns for the
  * same reason (see `STRATEGY_OPTIONS` in `lib/format.ts`).
  */
-export type BacktestStrategy = "ma_cross" | "rsi_reversal" | "breakout";
+export type BacktestStrategy = "ma_cross" | "rsi_reversal" | "breakout" | "five_conditions";
 
 /** Backend `BacktestRequest` (app/api/backtest.py, verified). */
 export interface BacktestRequest {

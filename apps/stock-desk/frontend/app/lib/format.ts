@@ -344,11 +344,23 @@ const BACKTEST_STRATEGY_LABELS: Record<BacktestStrategy, string> = {
   ma_cross: "均線交叉",
   rsi_reversal: "RSI 反轉",
   breakout: "N 日突破",
+  // CEO 2026-09-09 回測：六項觀察條件面板的前五條（第六條為規則引擎，價格回測不納入）。
+  five_conditions: "五項觀察條件",
 };
 
 export const STRATEGY_OPTIONS: { value: BacktestStrategy; label: string }[] = (
   Object.keys(BACKTEST_STRATEGY_LABELS) as BacktestStrategy[]
 ).map((value) => ({ value, label: BACKTEST_STRATEGY_LABELS[value] }));
+
+/**
+ * 風控 2026-09-09 REQ-3 路徑 (b): the Kelly import dialog offers no
+ * `five_conditions` until a result on real (non-demo) bars has been reviewed.
+ * That path renders the bare strategy label with none of the report's
+ * `notes`, so the five-of-six / exit-rule disclosure the `/backtest` page
+ * carries would never reach the reader there. Same list otherwise.
+ */
+export const KELLY_IMPORT_STRATEGY_OPTIONS: { value: BacktestStrategy; label: string }[] =
+  STRATEGY_OPTIONS.filter((opt) => opt.value !== "five_conditions");
 
 export function strategyLabel(value: BacktestStrategy): string {
   return BACKTEST_STRATEGY_LABELS[value];

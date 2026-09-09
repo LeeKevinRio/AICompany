@@ -20,7 +20,8 @@
  *
  * **This file renders no Chinese literal of its own** beyond the mini
  * backtest-spec form's own chrome, which reuses the exact same shared
- * option lists (`STRATEGY_OPTIONS`, `INSTRUMENT_TYPE_OPTIONS`) and layout
+ * option lists (`KELLY_IMPORT_STRATEGY_OPTIONS` — `STRATEGY_OPTIONS` minus
+ * `five_conditions`, 風控 2026-09-09 REQ-3 — and `INSTRUMENT_TYPE_OPTIONS`) and layout
  * `BacktestForm.tsx` already ships and already has scan coverage for — this
  * dialog does not invent a second wording for backtest parameters. Every
  * sentence *about the import itself* (the dialog's title/body/button
@@ -77,7 +78,7 @@
 
 import { useState } from "react";
 import { ApiError, getKellyDisclosures, parseKellyImportRefusal } from "../lib/api";
-import { INSTRUMENT_TYPE_OPTIONS, STRATEGY_OPTIONS } from "../lib/format";
+import { INSTRUMENT_TYPE_OPTIONS, KELLY_IMPORT_STRATEGY_OPTIONS } from "../lib/format";
 import { useImportKellyBacktest } from "../lib/queries";
 import type {
   BacktestRequest,
@@ -243,7 +244,7 @@ export function KellyImportDialog({
             onChange={(e) => updateSpec("strategy", e.target.value as BacktestStrategy)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           >
-            {STRATEGY_OPTIONS.map((opt) => (
+            {KELLY_IMPORT_STRATEGY_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>

@@ -149,3 +149,24 @@ describe("buildKellyImportRequest — 列管 L11 (every field is on-screen, none
     }
   });
 });
+
+describe("KELLY_IMPORT_STRATEGY_OPTIONS — 風控 2026-09-09 REQ-3 路徑 (b)", () => {
+  it("offers every shipped strategy except five_conditions, in the same order as the /backtest form", async () => {
+    const { KELLY_IMPORT_STRATEGY_OPTIONS, STRATEGY_OPTIONS } = await import("../format");
+    expect(STRATEGY_OPTIONS.map((o) => o.value)).toContain("five_conditions");
+    expect(KELLY_IMPORT_STRATEGY_OPTIONS.map((o) => o.value)).toEqual(
+      STRATEGY_OPTIONS.map((o) => o.value).filter((v) => v !== "five_conditions"),
+    );
+    expect(KELLY_IMPORT_STRATEGY_OPTIONS.length).toBe(STRATEGY_OPTIONS.length - 1);
+  });
+
+  it("the dialog source reads the Kelly-specific list and never the full STRATEGY_OPTIONS", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../../settings/KellyImportDialog.tsx"), "utf8");
+    // Import line and the <option> map both point at the Kelly-specific list; the full list must not be imported.
+    expect(src).toMatch(/import \{[^}]*\bKELLY_IMPORT_STRATEGY_OPTIONS\b[^}]*\} from "\.\.\/lib\/format"/);
+    expect(src).toMatch(/\{KELLY_IMPORT_STRATEGY_OPTIONS\.map\(/);
+    expect(src.replace(/KELLY_IMPORT_STRATEGY_OPTIONS/g, "")).not.toMatch(/\bSTRATEGY_OPTIONS\b(?!`)/);
+  });
+});
