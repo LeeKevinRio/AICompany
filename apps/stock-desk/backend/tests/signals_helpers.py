@@ -53,14 +53,25 @@ def bars_from_closes(
     symbol: str = "TEST",
     market: Market = "TW",
     volume: int = 1_000,
+    volumes: Sequence[int] | None = None,
     source: str = "twse",
 ) -> list[PriceBar]:
-    """Consecutive daily bars from a close series (high=low=open=close)."""
+    """Consecutive daily bars from a close series (high=low=open=close).
+
+    ``volumes`` supplies a per-bar volume series and must be the same length as
+    ``closes``; omitted, every bar carries the same ``volume``. A flat volume
+    column has zero variance, which leaves the 20-bar volume z-score
+    **undefined** -- fine for the price-only strategies, but it silently
+    disables any condition that reads volume, so a caller that needs one must
+    pass a varying series rather than assume the default is neutral.
+    """
+    if volumes is not None and len(volumes) != len(closes):
+        raise ValueError("volumes must be the same length as closes")
     return [
         make_bar(
             day_offset=i,
             close=c,
-            volume=volume,
+            volume=volume if volumes is None else volumes[i],
             symbol=symbol,
             market=market,
             source=source,

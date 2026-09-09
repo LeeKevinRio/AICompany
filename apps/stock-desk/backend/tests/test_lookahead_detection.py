@@ -117,9 +117,28 @@ def _cyclical_closes(bars: int = 300) -> list[float]:
     Amplitude and period are chosen so the path makes new highs, new lows and
     RSI extremes repeatedly -- a monotone path would leave the mean-reversion
     strategy flat and make the shift test vacuous.
+
+    The seeded noise term is load-bearing rather than cosmetic: on a perfectly
+    smooth wave RSI(14) saturates at its extremes, so ``five_conditions`` (whose
+    momentum condition is the 30-70 mid band) would never take a position and
+    would pass the shift test by never trading at all.
     """
     t = np.arange(bars, dtype="float64")
-    return list(100.0 + 20.0 * np.sin(2.0 * np.pi * t / 45.0) + 0.05 * t)
+    noise = np.random.default_rng(20260909).normal(0.0, 1.2, bars).cumsum()
+    return list(100.0 + 12.0 * np.sin(2.0 * np.pi * t / 90.0) + noise + 0.05 * t)
+
+
+def _cyclical_volumes(bars: int = 300) -> list[int]:
+    """A varying volume column, for the same reason.
+
+    A constant volume has zero variance, which leaves the 20-bar z-score
+    **undefined** and therefore leaves ``five_conditions`` flat forever. The
+    three price-only strategies never read this column, so their results are
+    unchanged by it.
+    """
+    t = np.arange(bars, dtype="float64")
+    jitter = np.random.default_rng(4021).normal(0.0, 2_500.0, bars)
+    return [int(v) for v in 20_000.0 + 6_000.0 * np.sin(2.0 * np.pi * t / 13.0) + jitter]
 
 
 def _reading_tomorrows_close(strategy: Strategy, closes: list[float]) -> Strategy:
@@ -141,7 +160,7 @@ def _reading_tomorrows_close(strategy: Strategy, closes: list[float]) -> Strateg
 @pytest.mark.parametrize("strategy_id", STRATEGY_IDS)
 def test_each_shipped_strategy_reacts_to_a_one_bar_close_shift(strategy_id: str) -> None:
     closes = _cyclical_closes()
-    frame = bars_to_frame(bars_from_closes(closes))
+    frame = bars_to_frame(bars_from_closes(closes, volumes=_cyclical_volumes()))
     base = run_backtest(
         frame, build_strategy(strategy_id), initial_cash=10_000.0, cost_model=ZERO_COST
     )

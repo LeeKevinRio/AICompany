@@ -154,6 +154,24 @@ upsert 會直接把它蓋掉，而 `--reset` 只刪 `demo_synthetic` 的列、�
   因為系統還沒有指數資料 adapter。即使 seed 了 `0050`，該章的拆解與情境推估仍會誠實回報
   `insufficient_data`；本模式不會偷偷拿別的標的替代。
 
+## 事件研究 CLI（`app/backtest/event_study.py`）
+
+```bash
+uv run python -m app.backtest.event_study 2330 --market TW
+```
+
+「五項觀察條件同時成立之後，歷史上怎麼走」的研究工具（CEO 2026-09-09）：找出五條
+同時成立的日線，統計其後 5／10／20／60 根的前瞻報酬分布（中位數、四分位、正報酬
+比例＋Wilson 95% 區間、樣本數），與同期無條件基準並列，並依日期切前後兩半分別報。
+
+- **只讀本機 `price_bars_cache`**，不打外網、不耗 provider 配額；每次輸出都印出 bar 的
+  `source`（`demo_synthetic` 會另外印警告）。
+- 面板六條中的**第 6 條（建議引擎防禦型規則）未納入**——它依賴持倉狀態與規則引擎，
+  價格序列算不出來。輸出的說明段每次都會重述這件事。
+- 方法論、參數來源、限制與 demo 實跑數字：`work/stock-desk-五條件回測-方法論.md`。
+- 同一組條件的含成本 walk-forward 版本是回測策略 `five_conditions`
+  （`POST /api/backtest`）。
+
 ## 排程（`app/scheduler.py`）
 
 `python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。兩個 interval job：

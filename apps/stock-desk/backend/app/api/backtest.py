@@ -80,6 +80,23 @@ UNVERIFIED_RATES_NOTE = (
     "費率（手續費、證交稅、規費）尚未經主要來源查證（verified_on 為 null），"
     "本報告的成本相關數字應視為待查證狀態。"
 )
+#: 風控 2026-09-09 REQ-1: appended only when ``strategy == "five_conditions"``.
+#: The label alone ("五項觀察條件") borrows the name of the 個股頁 panel, so the
+#: report has to say, on the page itself, that it covers five of the panel's six
+#: conditions and that every number also depends on the fixed exit rules the
+#: reader would otherwise never see. Wording is risk-compliance reviewed; any
+#: change goes back through risk-compliance-officer (pinned verbatim in
+#: ``tests/test_event_study_wording.py``).
+FIVE_CONDITIONS_NOTE = (
+    "本策略對應個股頁「六項觀察條件」面板中可由日線價量重算的前五條；"
+    "第 6 條（防禦型規則）依賴持倉狀態與規則引擎，價格序列無法重算，未納入，"
+    "故本報告不是該面板六條的歷史表現。"
+    "報告數字另受回測固定採用的出場規則影響："
+    "收盤跌破「開倉基準價 − 2×ATR(14)」與「開倉基準價 × 0.92」中較緊者"
+    "（ATR 無法計算時只用後者）、"
+    "收盤觸及開倉基準價 × 1.2、或收盤低於 MA60，任一觸發即全數出場。"
+    "以上為本回測的固定衡量設定，不是操作建議。"
+)
 
 # --- 除權息還原揭露：一組固定句子，每次回測必出現其中之一 -------------------
 # 這些字串是面向使用者的說明文案，任何修改都要重新過 risk-compliance-officer。
@@ -411,6 +428,8 @@ def execute_backtest(
     base_notes = [BUY_AND_HOLD_NOTE]
     if not costs.rates_verified:
         base_notes.append(UNVERIFIED_RATES_NOTE)
+    if body.strategy == "five_conditions":
+        base_notes.append(FIVE_CONDITIONS_NOTE)
 
     loaded = load_bars(
         resolver, symbol=body.symbol, market=body.market, start=body.start, end=body.end

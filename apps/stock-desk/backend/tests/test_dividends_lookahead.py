@@ -57,9 +57,22 @@ SHIFT_SENSITIVITY_THRESHOLD = 0.01
 
 
 def _cyclical_closes(bars: int = 200) -> list[float]:
-    """A path with real reversals so every shipped strategy actually trades."""
+    """A path with real reversals so every shipped strategy actually trades.
+
+    Seeded noise, not a clean wave: a smooth path saturates RSI(14) and would
+    leave ``five_conditions`` flat on every bar, which would make the
+    equivalence test below pass by measuring nothing.
+    """
     t = np.arange(bars, dtype="float64")
-    return list(100.0 + 20.0 * np.sin(2.0 * np.pi * t / 45.0) + 0.05 * t)
+    noise = np.random.default_rng(20260909).normal(0.0, 1.2, bars).cumsum()
+    return list(100.0 + 12.0 * np.sin(2.0 * np.pi * t / 90.0) + noise + 0.05 * t)
+
+
+def _cyclical_volumes(bars: int = 200) -> list[int]:
+    """A varying volume column: a constant one leaves the z-score undefined."""
+    t = np.arange(bars, dtype="float64")
+    jitter = np.random.default_rng(4021).normal(0.0, 2_500.0, bars)
+    return [int(v) for v in 20_000.0 + 6_000.0 * np.sin(2.0 * np.pi * t / 13.0) + jitter]
 
 
 def _event_on(offset: int, bars: list[PriceBar], *, payout: str) -> DividendEvent:
@@ -79,7 +92,7 @@ def _event_on(offset: int, bars: list[PriceBar], *, payout: str) -> DividendEven
 
 
 def _series() -> tuple[list[PriceBar], list[DividendEvent]]:
-    bars = bars_from_closes(_cyclical_closes())
+    bars = bars_from_closes(_cyclical_closes(), volumes=_cyclical_volumes())
     events = [
         _event_on(60, bars, payout="4.0"),
         _event_on(120, bars, payout="3.5"),

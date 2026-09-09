@@ -9,6 +9,7 @@ from typing import Any
 from app.api import kelly_wording as wording
 from app.api.backtest import (
     BUY_AND_HOLD_NOTE,
+    FIVE_CONDITIONS_NOTE,
     UNVERIFIED_RATES_NOTE,
     BacktestMetricLabels,
     BacktestRequest,
@@ -182,7 +183,11 @@ def test_every_shipped_strategy_produces_the_same_report_shape(
                 == baseline["report"][segment]["strategy"].keys()
             )
         assert body["cost_model"] == baseline["cost_model"]
-        assert body["notes"] == baseline["notes"]
+        # 風控 2026-09-09 REQ-1: five_conditions is the one strategy that carries
+        # its own disclosure; everything else shares the baseline notes exactly.
+        expected_notes = [note for note in body["notes"] if note != FIVE_CONDITIONS_NOTE]
+        assert expected_notes == baseline["notes"]
+        assert (FIVE_CONDITIONS_NOTE in body["notes"]) == (strategy_id == "five_conditions")
         assert body["folds"] == baseline["folds"]
 
 

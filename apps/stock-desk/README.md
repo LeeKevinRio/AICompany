@@ -146,7 +146,7 @@ apps/stock-desk/
 | `app/signals/` | 技術指標計算（MA、RSI、ATR、MACD 等）與風險度量（回撤、波動率等） |
 | `app/advice/` | 規則式建議引擎（YAML 規則、Context 構築、規則求值、卡片組裝） |
 | `app/leverage/` | 槓桿 ETF 拆解（偵測、報酬衰減分解、情境推估） |
-| `app/backtest/` | Walk-forward 回測、績效計算（Sharpe / Sortino / 最大回撤等）；內建 `ma_cross`、`rsi_reversal`、`breakout` 三種策略 |
+| `app/backtest/` | Walk-forward 回測、績效計算（Sharpe / Sortino / 最大回撤等）；內建 `ma_cross`、`rsi_reversal`、`breakout`、`five_conditions` 四種策略；`event_study.py` 為五項觀察條件的事件研究（含 CLI，方法論見 `work/stock-desk-五條件回測-方法論.md`） |
 | `app/portfolio/` | 持倉組合摘要、估值聚合、P&L 計算 |
 | `app/positions/` | CRUD 與 CSV 匯入；存儲到 SQLite；`sector`（台股產業別，封閉清單）欄位與驗證 |
 | `app/alerts/` | 警示規則定義、評估引擎、推播（Discord/Telegram）；規則可整條替換（PUT）或部分修改（PATCH），沿用原 id |
