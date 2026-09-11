@@ -158,12 +158,19 @@ upsert 會直接把它蓋掉，而 `--reset` 只刪 `demo_synthetic` 的列、�
 
 ```bash
 uv run python -m app.backtest.event_study 2330 --market TW
+# 另存自包含的 SVG 圖表頁（事件後 0～60 根路徑、各橫軸正報酬率區間、中位數與四分位）
+uv run python -m app.backtest.event_study 2330 --market TW --html event_study_2330.html
 ```
 
 「五項觀察條件同時成立之後，歷史上怎麼走」的研究工具（CEO 2026-09-09）：找出五條
 同時成立的日線，統計其後 5／10／20／60 根的前瞻報酬分布（中位數、四分位、正報酬
 比例＋Wilson 95% 區間、樣本數），與同期無條件基準並列，並依日期切前後兩半分別報。
 
+- 終端機輸出在每段數字表之後附「正報酬率一覽」文字長條（0–100% 同一把尺，事件 vs 基準，
+  Wilson 95% 區間＋比例位置），可直接目視兩個區間是否重疊；`--html` 另產出五張 SVG 圖
+  （`app/backtest/event_study_charts.py`，無外部依賴、無互動、深色底）。
+  已知限制：長條用的 ▓░●◇ 在 CJK 終端機字型下可能以全形（雙寬）顯示而拉寬尺規；
+  格子順序與旁邊的數字不受影響。
 - **只讀本機 `price_bars_cache`**，不打外網、不耗 provider 配額；每次輸出都印出 bar 的
   `source`（`demo_synthetic` 會另外印警告）。
 - 面板六條中的**第 6 條（建議引擎防禦型規則）未納入**——它依賴持倉狀態與規則引擎，

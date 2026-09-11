@@ -89,6 +89,9 @@ HORIZONS: tuple[int, ...] = (5, 10, 20, 60)
 #: Confidence level of every interval reported here.
 ALPHA = 0.05
 
+#: The forward path is traced bar by bar up to the longest horizon asked for.
+PATH_MAX_HORIZON = max(HORIZONS)
+
 
 @dataclass(frozen=True)
 class HorizonStats:
@@ -115,6 +118,23 @@ class HorizonStats:
 
 
 @dataclass(frozen=True)
+class PathPoint:
+    """The forward-return distribution of one cohort ``horizon`` bars out.
+
+    One point of the bar-by-bar path (``horizon`` runs 1..``PATH_MAX_HORIZON``);
+    the same measurement as :class:`HorizonStats` restricted to the three
+    quantiles, over the **full** (overlapping) sample. ``n`` shrinks with the
+    horizon for the same reason it does in :class:`HorizonStats`.
+    """
+
+    horizon: int
+    n: int
+    median: float | None
+    q1: float | None
+    q3: float | None
+
+
+@dataclass(frozen=True)
 class CohortReport:
     """One measured set of bars (the events, or the unconditional baseline)."""
 
@@ -122,6 +142,9 @@ class CohortReport:
     #: Bars in the cohort before any horizon truncation.
     n_bars: int
     horizons: tuple[HorizonStats, ...]
+    #: Bar-by-bar forward path, horizon 1..``PATH_MAX_HORIZON`` (CEO 2026-09-11
+    #: 「CLI 圖形化」: the median line and Q1-Q3 band of the path chart).
+    path: tuple[PathPoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -203,9 +226,7 @@ def _quantiles(values: np.ndarray) -> tuple[float | None, float | None, float | 
     return median, q1, q3
 
 
-def summarise_horizon(
-    returns: np.ndarray, indices: Sequence[int], horizon: int
-) -> HorizonStats:
+def summarise_horizon(returns: np.ndarray, indices: Sequence[int], horizon: int) -> HorizonStats:
     """Summarise ``returns`` at ``indices`` for one horizon.
 
     ``indices`` may include bars whose forward return is undefined (too close to
@@ -234,13 +255,18 @@ def summarise_horizon(
         positive_interval=wilson_interval(n_positive, n, alpha=ALPHA),
         independent_n=independent_n,
         independent_n_positive=independent_positive,
-        independent_positive_rate=(
-            independent_positive / independent_n if independent_n else None
-        ),
+        independent_positive_rate=(independent_positive / independent_n if independent_n else None),
         independent_positive_interval=wilson_interval(
             independent_positive, independent_n, alpha=ALPHA
         ),
     )
+
+
+def summarise_path_point(returns: np.ndarray, indices: Sequence[int], horizon: int) -> PathPoint:
+    """The three quantiles of ``returns`` at ``indices`` for one path step."""
+    values = np.asarray([returns[i] for i in indices if not np.isnan(returns[i])], dtype="float64")
+    median, q1, q3 = _quantiles(values)
+    return PathPoint(horizon=horizon, n=int(values.size), median=median, q1=q1, q3=q3)
 
 
 def _cohort(
@@ -249,13 +275,13 @@ def _cohort(
     returns_by_horizon: dict[int, np.ndarray],
     indices: Sequence[int],
     horizons: tuple[int, ...],
+    path_horizons: tuple[int, ...] = (),
 ) -> CohortReport:
     return CohortReport(
         label=label,
         n_bars=len(indices),
-        horizons=tuple(
-            summarise_horizon(returns_by_horizon[h], indices, h) for h in horizons
-        ),
+        horizons=tuple(summarise_horizon(returns_by_horizon[h], indices, h) for h in horizons),
+        path=tuple(summarise_path_point(returns_by_horizon[h], indices, h) for h in path_horizons),
     )
 
 
@@ -268,6 +294,7 @@ def _period(
     start: int,
     stop: int,
     horizons: tuple[int, ...],
+    path_horizons: tuple[int, ...] = (),
 ) -> PeriodReport:
     """Build one period report over the half-open bar range ``[start, stop)``.
 
@@ -293,12 +320,14 @@ def _period(
             returns_by_horizon=returns_by_horizon,
             indices=event_indices,
             horizons=horizons,
+            path_horizons=path_horizons,
         ),
         baseline=_cohort(
             "同期所有 bar（無條件基準）",
             returns_by_horizon=returns_by_horizon,
             indices=all_indices,
             horizons=horizons,
+            path_horizons=path_horizons,
         ),
     )
 
@@ -321,10 +350,11 @@ def run_event_study(
     dates = [ts.date().isoformat() for ts in frame.index]
     n = len(frame)
     close = frame[CLOSE].to_numpy(dtype="float64") if n else np.empty(0, dtype="float64")
-    event_flags = (
-        five_condition_series(frame).all_met if n else np.empty(0, dtype=bool)
-    )
-    returns_by_horizon = {h: forward_returns(close, h) for h in horizons}
+    event_flags = five_condition_series(frame).all_met if n else np.empty(0, dtype=bool)
+    # The path is traced at every bar up to the longest horizon; the summary
+    # horizons are a subset of those steps, so one dict serves both.
+    path_horizons = tuple(range(1, min(max(horizons), PATH_MAX_HORIZON) + 1)) if horizons else ()
+    returns_by_horizon = {h: forward_returns(close, h) for h in set(horizons) | set(path_horizons)}
     split = n // 2
 
     periods = (
@@ -336,6 +366,7 @@ def run_event_study(
             start=0,
             stop=n,
             horizons=horizons,
+            path_horizons=path_horizons,
         ),
         _period(
             "前半（樣本內）",
@@ -345,6 +376,7 @@ def run_event_study(
             start=0,
             stop=split,
             horizons=horizons,
+            path_horizons=path_horizons,
         ),
         _period(
             "後半（樣本外）",
@@ -354,6 +386,7 @@ def run_event_study(
             start=split,
             stop=n,
             horizons=horizons,
+            path_horizons=path_horizons,
         ),
     )
     return EventStudyReport(
@@ -455,6 +488,9 @@ def _cohort_lines(cohort: CohortReport) -> list[str]:
 
 def format_report(report: EventStudyReport) -> str:
     """Render the study as a Traditional-Chinese plain-text report."""
+    # Imported here: the charts module builds on this module's report types.
+    from app.backtest.event_study_charts import TERMINAL_GROUP_LEGEND, positive_rate_lines
+
     lines = [
         _RULE,
         f"五項觀察條件 事件研究 — {report.symbol}（{report.market}）",
@@ -477,6 +513,13 @@ def format_report(report: EventStudyReport) -> str:
         )
         lines.extend(_cohort_lines(period.events))
         lines.extend(_cohort_lines(period.baseline))
+        # CEO 2026-09-11 CLI 圖形化: one 0-100% ruler per horizon so the two
+        # Wilson intervals can be compared without arithmetic (full sample only;
+        # the subsample stays in the table above).
+        # creative-lead (風控 S2): printed with every period so an excerpt of
+        # one period still carries the group definitions.
+        lines.append(f"  {TERMINAL_GROUP_LEGEND}")
+        lines.extend(positive_rate_lines(period))
     lines.append(_THIN)
     lines.append("說明與限制：")
     lines.extend(f"  - {note}" for note in FOOTNOTES)
@@ -527,8 +570,7 @@ def _adjust_for_dividends(
 
     if not requested:
         return bars, (
-            "未還原除權息（--no-adjust-dividends）：報酬不含股利；"
-            "若該區間實際有配息，報酬會低估。"
+            "未還原除權息（--no-adjust-dividends）：報酬不含股利；若該區間實際有配息，報酬會低估。"
         )
     store = DividendEventStore()
     if not store.is_synced():
@@ -568,6 +610,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="不做除權息還原（預設會嘗試還原，並在輸出標明實際結果）",
     )
+    parser.add_argument(
+        "--html",
+        metavar="PATH",
+        default=None,
+        help="另存自包含的 SVG 圖表頁（路徑圖、正報酬率區間、中位數與四分位）到此路徑",
+    )
     args = parser.parse_args(argv)
 
     market: Market = "US" if args.market == "US" else "TW"
@@ -588,11 +636,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     bars, dividend_note = _adjust_for_dividends(
         bars, args.symbol, market, requested=not args.no_adjust_dividends
     )
-    report = run_event_study(
-        bars_to_frame(bars), symbol=args.symbol, market=market, source=source
-    )
+    report = run_event_study(bars_to_frame(bars), symbol=args.symbol, market=market, source=source)
     print(format_report(report))
     print(f"除權息：{dividend_note}")
+    if args.html:
+        from datetime import datetime
+        from pathlib import Path
+        from zoneinfo import ZoneInfo
+
+        from app.backtest.event_study_charts import render_html
+
+        generated_at = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M 台北時間")
+        target = Path(args.html)
+        target.write_text(
+            render_html(report, dividend_note=dividend_note, generated_at=generated_at),
+            encoding="utf-8",
+        )
+        print(f"圖表頁已寫入：{target}")
     return 0
 
 
