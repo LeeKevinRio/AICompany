@@ -1,3 +1,4 @@
+import type { EventStudyRequest } from "./eventStudy";
 import type {
   AdviceResponse,
   AlertEvaluationResponse,
@@ -36,6 +37,7 @@ import type {
   SettingsResponse,
   SignalsResponse,
   UpdatePositionInput,
+  EventStudyResponse,
 } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -272,6 +274,15 @@ export function getLeverageChapter(symbol: string, market: Market): Promise<Leve
 
 export function runBacktest(input: BacktestRequest): Promise<BacktestResponse> {
   return request<BacktestResponse>("/api/backtest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/** `POST /api/event-study` — the five-condition event study for the report on screen (ADR-0008 D-4). */
+export function runEventStudy(input: EventStudyRequest): Promise<EventStudyResponse> {
+  return request<EventStudyResponse>("/api/event-study", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

@@ -6,6 +6,7 @@ import type {
 } from "../lib/types";
 import { formatDateTime, formatMoneyNumber, formatNumber, formatPercent, marketCurrency } from "../lib/format";
 import type { Market } from "../lib/types";
+import { DataMetaStatusBadge } from "../components/DataMetaStatusBadge";
 import { EquityCurveChart } from "./EquityCurveChart";
 
 interface MetricRow {
@@ -156,6 +157,12 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
           {report.symbol}（{report.market}）回測資料不足
         </h2>
         <p className="mt-2 text-sm text-amber-300">{report.reason ?? "資料不足，無法計算。"}</p>
+        {/* 風控 2026-09-12 R-2: the demo warning stands on this branch too. */}
+        {report.data_warning && (
+          <p role="alert" className="mt-2 text-sm text-amber-300">
+            {report.data_warning}
+          </p>
+        )}
       </section>
     );
   }
@@ -168,6 +175,30 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         </h2>
         <span className="text-xs text-neutral-500">產出時間：{formatDateTime(report.as_of)}</span>
       </div>
+      {/* 風控 2026-09-12 REQ-W10: the report names its own bars' source and freshness (S-2: body size, like the event-study section's line). */}
+      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
+        來源：{report.data.source}
+        <DataMetaStatusBadge
+          status={report.data.status}
+          stalenessMinutes={report.data.staleness_minutes}
+          isWithinTtl={report.data.is_within_ttl}
+        />
+      </p>
+
+      {/*
+        風控 2026-09-12 複審 R-2 (required): "every number on this page is
+        synthetic" outranks the fee alert, so the backend's demo sentence is a
+        standing alert at the same level as `rates_verified`, placed before it,
+        never a bullet inside `notes`. Wording is the backend's, verbatim.
+      */}
+      {report.data_warning && (
+        <p
+          role="alert"
+          className="mt-3 rounded-md border border-amber-800 bg-amber-950/40 px-4 py-2 text-sm text-amber-300"
+        >
+          {report.data_warning}
+        </p>
+      )}
 
       {/*
         D2 item 4 (限制清單 #10 / 機會清單 D2): a standing disclosure, not

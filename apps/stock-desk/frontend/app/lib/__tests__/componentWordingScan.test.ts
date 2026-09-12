@@ -247,6 +247,10 @@ const SCANNED_FILES = [
   // that renders it (legend, split labels, tooltip field names, empty state).
   "../../backtest/EquityCurveChart.tsx",
   "../backtestCurveWording.ts",
+  // CEO 2026-09-12 event study on /backtest: the shell's own sentences and the page intro.
+  "../../backtest/EventStudySection.tsx",
+  "../../backtest/page.tsx",
+  "../eventStudyWording.ts",
   // 排程台 (`/playbook`, work/stock-desk-快市排程-視覺規範.md 派工單
   // 2026-08-12): new surface, new hard-coded JSX text (headings, the
   // EMERGENCY_EXIT flow's risk-compliance-approved button labels, the mirrored

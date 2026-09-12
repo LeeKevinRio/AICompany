@@ -53,6 +53,7 @@ from app.api.kelly_wording import (
     KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
 )
 from app.backtest.engine import BacktestResult, run_backtest
+from app.backtest.event_study import DEMO_DATA_WARNING
 from app.backtest.report import (
     TRADING_DAYS_PER_YEAR,
     WalkForwardCurves,
@@ -383,6 +384,11 @@ class BacktestResponse(BaseModel):
     #: Whether the price series was 除權息-adjusted, and if not, why not.
     dividend_adjustment: dict[str, Any]
     notes: list[str]
+    #: 風控 2026-09-12 REQ-W10／複審 R-2: ``DEMO_DATA_WARNING`` verbatim when the
+    #: bars are the offline demo set, else ``None``. Its own field, not a note,
+    #: so the client can rank it above every other disclosure (the whole page
+    #: being synthetic outranks an unverified fee rate).
+    data_warning: str | None
     data: DataMeta
     as_of: str
     #: Server-owned labels for the two risk-approved metric rows (C8-3 路徑 a).
@@ -445,6 +451,9 @@ def execute_backtest(
     loaded = load_bars(
         resolver, symbol=body.symbol, market=body.market, start=body.start, end=body.end
     )
+    # 風控 2026-09-12 REQ-W10: the report says out loud when its bars are the
+    # offline demo set, with the same sentence the event study prints.
+    data_warning = DEMO_DATA_WARNING if loaded.source == "demo_synthetic" else None
 
     def unavailable(reason: str | None) -> BacktestRun:
         return BacktestRun(
@@ -468,6 +477,7 @@ def execute_backtest(
                     market=body.market,
                 ),
                 notes=base_notes,
+                data_warning=data_warning,
                 data=data_meta(loaded.meta()),
                 as_of=now_iso(),
             ),
@@ -541,6 +551,7 @@ def execute_backtest(
             rates_verified=costs.rates_verified,
             dividend_adjustment=dividends.block,
             notes=notes,
+            data_warning=data_warning,
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
         ),

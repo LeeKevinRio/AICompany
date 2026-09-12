@@ -499,3 +499,23 @@ def test_the_kelly_import_surface_does_not_carry_backtest_curves(
 
     assert response.status_code in (200, 422)
     assert "curves" not in response.text
+
+
+def test_backtest_carries_the_demo_data_warning_as_its_own_field(api_harness: ApiHarness) -> None:
+    # 風控 2026-09-12 REQ-W10／R-2: the event study's demo sentence, verbatim, in a
+    # field of its own so the page can rank it above every note; null otherwise.
+    from app.backtest.event_study import DEMO_DATA_WARNING
+
+    _seed(api_harness)
+    api_harness.price_service.source = "demo_synthetic"
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+    assert body["data_warning"] == DEMO_DATA_WARNING
+    assert DEMO_DATA_WARNING not in body["notes"]
+    api_harness.price_service.source = "fake"
+    body = api_harness.client.post("/api/backtest", json=_request()).json()
+    assert body["data_warning"] is None
+    # The insufficient-data branch says it too: those bars are just as synthetic.
+    api_harness.price_service.source = "demo_synthetic"
+    body = api_harness.client.post("/api/backtest", json=_request(train_size=5000)).json()
+    assert body["status"] == "insufficient_data"
+    assert body["data_warning"] == DEMO_DATA_WARNING

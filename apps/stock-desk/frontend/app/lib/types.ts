@@ -924,9 +924,54 @@ export interface BacktestResponse {
   rates_verified: boolean;
   dividend_adjustment: DividendAdjustment;
   notes: string[];
+  /**
+   * 風控 2026-09-12 REQ-W10／R-2: the backend's own sentence saying the bars
+   * are the offline demo set (`DEMO_DATA_WARNING`), or null for market data.
+   * Kept apart from `notes` so the page can show it as a standing alert above
+   * every other disclosure instead of as one bullet among them.
+   */
+  data_warning: string | null;
   data: DataMeta;
   as_of: string;
   metric_labels: BacktestMetricLabels;
+}
+
+/* --- Event study (backend/app/api/event_study.py, ADR-0008) --------------- */
+
+export interface EventStudyHeaderItem {
+  /** `meta` | `notice` | `legend` — rendered top to bottom, never reordered. */
+  role: string;
+  text: string;
+}
+
+export interface EventStudySection {
+  key: string;
+  title: string;
+  note: string;
+  extra_note: string | null;
+  no_events_note: string | null;
+  empty_statement: string | null;
+  /** Backend-built inline SVG (numbers only, every text node escaped); null with `empty_statement`. */
+  svg: string | null;
+}
+
+export interface EventStudyPage {
+  title: string;
+  header: EventStudyHeaderItem[];
+  sections: EventStudySection[];
+  footnotes_heading: string;
+  footnotes: string[];
+}
+
+export interface EventStudyResponse {
+  symbol: string;
+  market: string;
+  status: PayloadStatus;
+  reason: string | null;
+  /** null exactly when `status` is `insufficient_data`. */
+  page: EventStudyPage | null;
+  data: DataMeta;
+  as_of: string;
 }
 
 /* --- Settings (backend/app/api/settings.py + settings/models.py) --------- */

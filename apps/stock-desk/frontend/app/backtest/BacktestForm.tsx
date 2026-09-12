@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS, STRATEGY_OPTIONS } from "../lib/format";
 import { useRunBacktest, useSettings } from "../lib/queries";
+import type { FormSnapshot } from "../lib/eventStudy";
 import type {
   BacktestRequest,
   BacktestResponse,
@@ -41,8 +42,25 @@ const EMPTY_FORM: FormState = {
   slippage_bps: "0",
 };
 
-export function BacktestForm({ onResult }: { onResult: (report: BacktestResponse) => void }) {
+export function BacktestForm({
+  onResult,
+  onFormChange,
+}: {
+  /** The report and the exact request that produced it (the event study is keyed to that request). */
+  onResult: (report: BacktestResponse, request: BacktestRequest) => void;
+  /** Live form values, so the page can tell when the form has drifted from the displayed report (風控 REQ-W5). */
+  onFormChange?: (snapshot: FormSnapshot) => void;
+}) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  useEffect(() => {
+    onFormChange?.({
+      symbol: form.symbol,
+      market: form.market,
+      strategy: form.strategy,
+      start: form.start,
+      end: form.end,
+    });
+  }, [form.symbol, form.market, form.strategy, form.start, form.end, onFormChange]);
   const mutation = useRunBacktest();
   // Only fetched to build a full `CostModelSettings` override (the backend
   // model has no "just this one field" patch for the per-run `cost` override —
@@ -76,7 +94,7 @@ export function BacktestForm({ onResult }: { onResult: (report: BacktestResponse
       cost,
     };
     mutation.mutate(payload, {
-      onSuccess: (data) => onResult(data),
+      onSuccess: (data) => onResult(data, payload),
     });
   }
 
