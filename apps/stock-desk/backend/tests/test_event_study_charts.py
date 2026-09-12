@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 
 from app.backtest import event_study_charts as charts
+from app.backtest import event_study_page as page_mod
 from app.backtest.event_study import (
     DEMO_DATA_WARNING,
     FOOTNOTES,
@@ -159,6 +160,9 @@ def test_html_wording_is_pinned_verbatim() -> None:
     assert charts.generated_at_line("2026-09-11 14:03 台北時間") == (
         "本頁產出時間 2026-09-11 14:03 台北時間，為靜態快照，不會自動更新。"
     )
+    assert charts.generated_at_line("2026-09-11 14:03 台北時間", subject="本節") == (
+        "本節產出時間 2026-09-11 14:03 台北時間，為靜態快照，不會自動更新。"
+    )
 
 
 # --- terminal block --------------------------------------------------------------------
@@ -230,32 +234,35 @@ def test_format_report_prints_the_group_legend_once_and_a_ruler_block_per_period
 
 
 def test_html_repeats_the_study_notices_verbatim_and_in_order() -> None:
-    page = charts.render_html(
+    page = page_mod.render_html(
         _report(), dividend_note="未還原除權息：測試", generated_at="2026-09-11 14:03 台北時間"
     )
     assert page.startswith("<!doctype html>")
     assert "<script" not in page and "http://" not in page.replace("http://www.w3.org/2000/svg", "")
     for sentence in (SCOPE_NOTICE, DEMO_DATA_WARNING, *FOOTNOTES):
-        assert charts._esc(sentence) in page
-    assert page.index(charts._esc(SCOPE_NOTICE)) < page.index(charts._esc(DEMO_DATA_WARNING))
-    assert page.index(charts._esc(DEMO_DATA_WARNING)) < page.index(charts.PATH_CHART_TITLE)
+        assert charts.escape_text(sentence) in page
+    assert page.index(charts.escape_text(SCOPE_NOTICE)) < page.index(
+        charts.escape_text(DEMO_DATA_WARNING)
+    )
+    assert page.index(charts.escape_text(DEMO_DATA_WARNING)) < page.index(charts.PATH_CHART_TITLE)
     # 風控 R1 / R8: the research-use notice and the snapshot stamp precede the first chart.
-    assert page.index(charts._esc(RESEARCH_USE_NOTICE)) < page.index(charts.PATH_CHART_TITLE)
+    assert page.index(charts.escape_text(RESEARCH_USE_NOTICE)) < page.index(charts.PATH_CHART_TITLE)
     assert page.index("本頁產出時間 2026-09-11 14:03 台北時間") < page.index(
         charts.PATH_CHART_TITLE
     )
     # The footer lists every footnote in order (rindex: the first footnote is also
     # repeated at the top of the page, 風控 R1).
-    footnote_positions = [page.rindex(charts._esc(note)) for note in FOOTNOTES]
+    footnote_positions = [page.rindex(charts.escape_text(note)) for note in FOOTNOTES]
     assert footnote_positions == sorted(footnote_positions)
     assert page.index(charts.QUARTILE_CHART_TITLE) < footnote_positions[0]
     # 風控 R9: the dividend line is a notice, not a muted meta line.
-    assert '<p class="notice">除權息：未還原除權息：測試</p>' in page
-    assert "除權息：未還原除權息：測試" in page
+    # 風控 2026-09-12 S-1: the sentence carries its own subject, no second prefix.
+    assert '<p class="notice">未還原除權息：測試</p>' in page
+    assert "未還原除權息：測試" in page and "除權息：未還原除權息" not in page
 
 
 def test_html_has_five_charts_in_the_agreed_order() -> None:
-    page = charts.render_html(
+    page = page_mod.render_html(
         _report(), dividend_note="未還原除權息：測試", generated_at="2026-09-11 14:03 台北時間"
     )
     titles = [
@@ -271,7 +278,7 @@ def test_html_has_five_charts_in_the_agreed_order() -> None:
 
 
 def test_html_does_not_flag_demo_data_for_a_real_source() -> None:
-    page = charts.render_html(
+    page = page_mod.render_html(
         _report(source="twse"),
         dividend_note="未還原除權息：測試",
         generated_at="2026-09-11 14:03 台北時間",
@@ -307,7 +314,7 @@ def test_a_period_with_no_events_draws_no_event_geometry() -> None:
     ):
         assert charts.EVENT_COLOR not in svg
         assert charts.BASELINE_COLOR in svg
-    page = charts.render_html(
+    page = page_mod.render_html(
         report, dividend_note="未還原除權息：測試", generated_at="2026-09-11 14:03 台北時間"
     )
     assert charts.HTML_NO_EVENTS in page
@@ -315,7 +322,7 @@ def test_a_period_with_no_events_draws_no_event_geometry() -> None:
 
 def test_an_empty_period_gets_the_no_bars_statement_instead_of_a_chart() -> None:
     report = run_event_study(bars_to_frame([]), symbol="2330", source="demo_synthetic")
-    page = charts.render_html(
+    page = page_mod.render_html(
         report, dividend_note="未還原除權息：測試", generated_at="2026-09-11 14:03 台北時間"
     )
     assert charts.no_bars_statement("全期") in page
@@ -326,7 +333,7 @@ def test_an_empty_period_gets_the_no_bars_statement_instead_of_a_chart() -> None
 
 
 def _page_text() -> str:
-    page = charts.render_html(
+    page = page_mod.render_html(
         _report(), dividend_note="未還原除權息：測試", generated_at="2026-09-11 14:03 台北時間"
     )
     return page.replace("&amp;", "&")
@@ -369,4 +376,21 @@ def test_cli_writes_the_html_page_when_asked(
     assert main(["2330", "--html", str(target)]) == 0
     page = target.read_text(encoding="utf-8")
     assert charts.PATH_CHART_TITLE in page
-    assert "除權息：測試未還原" in page
+    assert "測試未還原" in page and "除權息：測試未還原" not in page
+
+
+def test_cli_reports_an_unwritable_html_path_instead_of_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bars = bars_from_closes(_FIVE_CLOSES, volumes=_FIVE_VOLUMES)
+    monkeypatch.setattr(
+        "app.backtest.event_study._load_cached_bars", lambda *a, **k: (bars, "demo_synthetic")
+    )
+    monkeypatch.setattr(
+        "app.backtest.event_study._adjust_for_dividends", lambda b, *a, **k: (b, "測試未還原")
+    )
+    target = tmp_path / "missing-dir" / "es.html"
+    assert main(["2330", "--html", str(target)]) == 1
+    out = capsys.readouterr().out
+    assert "圖表頁無法寫入" in out
+    assert "請確認目錄存在且可寫入" in out

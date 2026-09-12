@@ -10,11 +10,11 @@ Two renderings of the same :class:`~app.backtest.event_study.EventStudyReport`:
   their Wilson intervals drawn on it, so two intervals can be compared without
   arithmetic. Full sample only (the non-overlapping subsample stays in the
   numeric table above it).
-* :func:`render_html` -- a self-contained HTML page (inline SVG, no scripts,
-  no external assets, fixed 960px, dark surface) with five charts: the
-  bar-by-bar forward path (median + Q1-Q3 band), the positive-rate intervals
-  per horizon (full sample beside the non-overlapping subsample), the same
-  interval chart for each half, and the median / quartile ranges per horizon.
+* three ``*_chart_svg`` builders -- the bar-by-bar forward path (median +
+  Q1-Q3 band), the positive-rate intervals per horizon (full sample beside the
+  non-overlapping subsample) and the median / quartile ranges per horizon.
+  :mod:`app.backtest.event_study_page` assembles them, with the page
+  sentences, into the page model the CLI ``--html`` file and the web API share.
 
 Encoding (dataviz skill, S1 色彩不承載價值判斷): events are blue ``#3987e5``,
 solid, circle; the baseline is yellow ``#c98500``, dashed, diamond -- the pair
@@ -36,16 +36,7 @@ import html
 from collections.abc import Iterable
 
 from app.backtest.episodes import ProportionInterval
-from app.backtest.event_study import (
-    DEMO_DATA_WARNING,
-    FOOTNOTES,
-    RESEARCH_USE_NOTICE,
-    SCOPE_NOTICE,
-    EventStudyReport,
-    HorizonStats,
-    PathPoint,
-    PeriodReport,
-)
+from app.backtest.event_study import HorizonStats, PathPoint, PeriodReport
 
 # --- wording (creative-lead 定稿, pinned verbatim in tests) -------------------
 
@@ -107,9 +98,14 @@ def no_bars_statement(period_label: str) -> str:
     return f"本段：{period_label}，尚無日線資料，無法繪製此圖。"
 
 
-def generated_at_line(timestamp: str) -> str:
-    """風控 R8: the page is a snapshot; say when it was made."""
-    return f"本頁產出時間 {timestamp}，為靜態快照，不會自動更新。"
+def generated_at_line(timestamp: str, *, subject: str = "本頁") -> str:
+    """風控 R8: the output is a snapshot; say when it was made.
+
+    ``subject`` is 「本頁」 for the CLI file and 「本節」 when the same charts sit
+    inside the ``/backtest`` page (風控 REQ-W12: only the referent changes, the
+    rest of the sentence is verbatim).
+    """
+    return f"{subject}產出時間 {timestamp}，為靜態快照，不會自動更新。"
 
 
 # --- terminal ------------------------------------------------------------------
@@ -193,13 +189,16 @@ TEXT_SECONDARY = "#a3a3a3"
 TEXT_MUTED = "#737373"
 BAND_OPACITY = "0.12"
 
-PAGE_WIDTH = 960
 CHART_WIDTH = 900
 FONT = "font-family:system-ui,-apple-system,'Segoe UI','Noto Sans TC','PingFang TC',sans-serif"
 
 
-def _esc(text: str) -> str:
+def escape_text(text: str) -> str:
+    """HTML-escape one text node (the only escaping this package does)."""
     return html.escape(text, quote=True)
+
+
+_esc = escape_text
 
 
 def _fmt(value: float) -> str:
@@ -292,10 +291,10 @@ def _nice_step(span: float, target_ticks: int = 5) -> float:
     return float(10 * magnitude)
 
 
-def _svg_open(height: int) -> str:
+def _svg_open(height: int, width: int = CHART_WIDTH) -> str:
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{CHART_WIDTH}" height="{height}" '
-        f'viewBox="0 0 {CHART_WIDTH} {height}" role="img" style="{FONT}">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" style="{FONT}">'
     )
 
 
@@ -312,10 +311,12 @@ def _path_pct(points: tuple[PathPoint, ...]) -> list[tuple[int, float, float, fl
     return out
 
 
-def path_chart_svg(period: PeriodReport, horizons: tuple[int, ...]) -> str:
+def path_chart_svg(
+    period: PeriodReport, horizons: tuple[int, ...], *, width: int = CHART_WIDTH
+) -> str:
     left, right, top, bottom = 64, 24, 20, 76
     height = 380
-    plot_w = CHART_WIDTH - left - right
+    plot_w = width - left - right
     plot_h = height - top - bottom
 
     event_pts = _path_pct(period.events.path) if period.n_events > 0 else []
@@ -335,7 +336,7 @@ def path_chart_svg(period: PeriodReport, horizons: tuple[int, ...]) -> str:
     def y_of(v: float) -> float:
         return top + plot_h * (1 - (v - lo) / (hi - lo))
 
-    parts = [_svg_open(height)]
+    parts = [_svg_open(height, width)]
     # Gridlines on nice y ticks; zero line in neutral grey.
     step = _nice_step(hi - lo)
     tick = (lo // step) * step
@@ -460,14 +461,14 @@ def _rate_panel(
     return parts
 
 
-def rate_chart_svg(period: PeriodReport) -> str:
+def rate_chart_svg(period: PeriodReport, *, width: int = CHART_WIDTH) -> str:
     row_h = 44
     pairs = list(zip(period.events.horizons, period.baseline.horizons, strict=True))
     top = 40
     height = int(top + row_h * len(pairs) + 44)
     gap = 40
-    panel_w = (CHART_WIDTH - gap) / 2
-    parts = [_svg_open(height)]
+    panel_w = (width - gap) / 2
+    parts = [_svg_open(height, width)]
     draw_events = period.n_events > 0
     for j, (sub, independent) in enumerate(
         ((RATE_CHART_SUB_FULL, False), (RATE_CHART_SUB_INDEPENDENT, True))
@@ -496,13 +497,13 @@ def rate_chart_svg(period: PeriodReport) -> str:
 # --- chart 3: median and quartiles --------------------------------------------------
 
 
-def quartile_chart_svg(period: PeriodReport) -> str:
+def quartile_chart_svg(period: PeriodReport, *, width: int = CHART_WIDTH) -> str:
     row_h = 48
     pairs = list(zip(period.events.horizons, period.baseline.horizons, strict=True))
     top, left, n_w = 32, 64, 78
     height = int(top + row_h * len(pairs) + 44)
     plot_x = left
-    plot_w = CHART_WIDTH - left - n_w - 8
+    plot_w = width - left - n_w - 8
     draw_events = period.n_events > 0
 
     values: list[float] = []
@@ -519,7 +520,7 @@ def quartile_chart_svg(period: PeriodReport) -> str:
     def x_of(v: float) -> float:
         return plot_x + plot_w * (v - lo) / (hi - lo)
 
-    parts = [_svg_open(height)]
+    parts = [_svg_open(height, width)]
     step = _nice_step(hi - lo)
     tick = (lo // step) * step
     while tick <= hi:
@@ -546,9 +547,9 @@ def quartile_chart_svg(period: PeriodReport) -> str:
             color = EVENT_COLOR if is_event else BASELINE_COLOR
             if stats.median is not None and stats.q1 is not None and stats.q3 is not None:
                 x1, x2 = x_of(stats.q1 * 100.0), x_of(stats.q3 * 100.0)
-                width = _fmt(max(x2 - x1, 1.0))
+                bar_w = _fmt(max(x2 - x1, 1.0))
                 parts.append(
-                    f'<rect x="{_fmt(x1)}" y="{_fmt(y - 4)}" width="{width}" height="8" '
+                    f'<rect x="{_fmt(x1)}" y="{_fmt(y - 4)}" width="{bar_w}" height="8" '
                     f'rx="3" fill="{color}" fill-opacity="0.35"/>'
                 )
                 parts.append(_mark(x_of(stats.median * 100.0), y, event=is_event, filled=True))
@@ -567,126 +568,9 @@ def quartile_chart_svg(period: PeriodReport) -> str:
     return "".join(parts)
 
 
-# --- page -------------------------------------------------------------------------
-
-_CSS = (
-    f"body{{margin:0;background:{SURFACE};color:{TEXT_PRIMARY};{FONT};font-size:14px;line-height:1.5}}"
-    f"main{{width:{PAGE_WIDTH}px;margin:0 auto;padding:24px 30px 40px}}"
-    "h1{font-size:20px;margin:0 0 6px}"
-    "h2{font-size:15px;margin:28px 0 4px}"
-    f".meta{{color:{TEXT_SECONDARY};font-size:14px;margin:2px 0}}"
-    f".notice{{border:1px solid {AXIS};border-radius:6px;padding:8px 12px;"
-    "margin:10px 0;font-size:14px}"
-    f".legend{{color:{TEXT_SECONDARY};font-size:14px;margin:12px 0 4px}}"
-    f".legend span{{margin-right:18px}}"
-    f".note{{color:{TEXT_SECONDARY};font-size:14px;margin:4px 0 0}}"
-    f".empty{{color:{TEXT_SECONDARY};font-size:14px;border:1px dashed {AXIS};"
-    "border-radius:6px;padding:10px 12px}"
-    f"figure{{margin:6px 0 0;background:{PANEL};border:1px solid {GRID};"
-    "border-radius:6px;padding:12px 12px 6px}"
-    f"ul.footnotes{{color:{TEXT_SECONDARY};font-size:14px;padding-left:20px}}"
-    f"ul.footnotes li{{margin:4px 0}}"
-)
-
-
-def _figure(
-    title: str,
-    note: str,
-    svg: str | None,
-    *,
-    empty: str | None = None,
-    extra_note: str | None = None,
-) -> str:
-    body = f"<figure>{svg}</figure>" if svg else f'<p class="empty">{_esc(empty or "")}</p>'
-    notes = f'<p class="note">{_esc(note)}</p>'
-    if extra_note:
-        notes += f'<p class="note">{_esc(extra_note)}</p>'
-    return f"<section><h2>{_esc(title)}</h2>{body}{notes}</section>"
-
-
-def _period_or_empty(
-    period: PeriodReport, chart: str, title: str, note: str, *, extra_note: str | None = None
-) -> str:
-    if period.n_bars == 0:
-        return _figure(
-            title, note, None, empty=no_bars_statement(period.label), extra_note=extra_note
-        )
-    prefix = f'<p class="note">{_esc(HTML_NO_EVENTS)}</p>' if period.n_events == 0 else ""
-    return _figure(title, note, chart, extra_note=extra_note).replace(
-        "<figure>", prefix + "<figure>", 1
-    )
-
-
-def render_html(report: EventStudyReport, *, dividend_note: str, generated_at: str) -> str:
-    """The self-contained chart page for one report."""
-    full, first, second = report.periods[0], report.periods[1], report.periods[2]
-    title = f"五項觀察條件 事件研究 — {report.symbol}（{report.market}）{HTML_TITLE_SUFFIX}"
-    source = report.source or "未知"
-    data_line = (
-        f"日線 {report.n_bars} 根｜{report.first_date} ～ {report.last_date}｜資料來源：{source}"
-    )
-    split_line = f"前後對半切點：bar {report.split_index}（{report.split_date or '—'}）"
-    head = [
-        f"<h1>{_esc(title)}</h1>",
-        f'<p class="meta">{_esc(data_line)}</p>',
-        f'<p class="notice">{_esc(SCOPE_NOTICE)}</p>',
-        f'<p class="meta">{_esc(split_line)}</p>',
-    ]
-    if report.source == "demo_synthetic":
-        head.append(f'<p class="notice">{_esc(DEMO_DATA_WARNING)}</p>')
-    # 風控 R1: the research-use notice stands before the first chart as well as
-    # in the footer; a screenshot that loses the tail still carries it.
-    head.append(f'<p class="notice">{_esc(RESEARCH_USE_NOTICE)}</p>')
-    head.append(f'<p class="meta">{_esc(generated_at_line(generated_at))}</p>')
-    # 風控 R9: the dividend line is a return-bias disclosure, never optional,
-    # and sits at notice level beside the scope notice.
-    head.append(f'<p class="notice">{_esc("除權息：" + dividend_note)}</p>')
-    head.append(
-        '<p class="legend">'
-        f"<span>{_esc(HTML_LEGEND_EVENT)}</span><span>{_esc(HTML_LEGEND_BASELINE)}</span>"
-        f"<span>{_esc(HTML_LEGEND_SAMPLE)}</span></p>"
-    )
-
-    sections = [
-        _period_or_empty(
-            full, path_chart_svg(full, report.horizons), PATH_CHART_TITLE, PATH_CHART_NOTE
-        ),
-        _period_or_empty(full, rate_chart_svg(full), RATE_CHART_TITLE, RATE_CHART_NOTE),
-        _period_or_empty(
-            first,
-            rate_chart_svg(first),
-            RATE_CHART_TITLE_FIRST_HALF,
-            RATE_CHART_NOTE,
-            extra_note=RATE_CHART_HALF_NOTE,
-        ),
-        _period_or_empty(
-            second,
-            rate_chart_svg(second),
-            RATE_CHART_TITLE_SECOND_HALF,
-            RATE_CHART_NOTE,
-            extra_note=RATE_CHART_HALF_NOTE,
-        ),
-        _period_or_empty(full, quartile_chart_svg(full), QUARTILE_CHART_TITLE, QUARTILE_CHART_NOTE),
-    ]
-    footer = [f"<h2>{_esc(FOOTNOTES_HEADING)}</h2>", '<ul class="footnotes">']
-    footer.extend(f"<li>{_esc(note)}</li>" for note in FOOTNOTES)
-    footer.append("</ul>")
-
-    return (
-        "<!doctype html>\n"
-        '<html lang="zh-Hant-TW"><head><meta charset="utf-8">'
-        f"<title>{_esc(title)}</title><style>{_CSS}</style></head><body><main>"
-        + "".join(head)
-        + "".join(sections)
-        + "".join(footer)
-        + "</main></body></html>\n"
-    )
-
-
 __all__ = [
     "positive_rate_lines",
     "path_chart_svg",
     "rate_chart_svg",
     "quartile_chart_svg",
-    "render_html",
 ]

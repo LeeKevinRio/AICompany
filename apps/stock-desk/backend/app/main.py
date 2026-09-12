@@ -11,6 +11,7 @@ from app.api import (
     backtest,
     bars,
     directory,
+    event_study,
     kelly,
     leverage,
     playbook,
@@ -41,6 +42,7 @@ app.include_router(signals.router)
 app.include_router(advice.router)
 app.include_router(leverage.router)
 app.include_router(backtest.router)
+app.include_router(event_study.router)
 app.include_router(settings.router)
 app.include_router(alerts.router)
 app.include_router(directory.router)

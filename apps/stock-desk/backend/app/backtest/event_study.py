@@ -554,6 +554,59 @@ def _load_cached_bars(
     return list(result.bars), result.source
 
 
+def dividend_sentence(
+    reason_code: str,
+    *,
+    market: Market,
+    events_applied: int = 0,
+    events_skipped: int = 0,
+) -> str:
+    """The 除權息 line for one adjustment outcome (shared by the CLI and the web API).
+
+    ``reason_code`` follows :func:`app.api.backtest.resolve_dividend_adjustment`
+    (``adjusted`` / ``never_synced`` / ``no_events`` / ``unusable_events`` /
+    ``disabled``). Every sentence is risk-compliance reviewed (2026-09-11 R5:
+    conditional, never asserting a loss that may not have happened). ``no_events``
+    is the one code whose *fact* differs by market (風控 2026-09-12 複審 R-1, same
+    red line as ``app.api.backtest.dividend_notes_by_code``): in TW the store
+    covers the market and found nothing; anywhere else there is no coverage to
+    search, and saying "nothing found" would be a claim this system cannot make.
+    ``market`` has no default on purpose (風控 2026-09-12 L-ES-2): a caller that
+    forgets it must fail, not silently fall back to the Taiwan wording.
+    The sentences already name their subject ("已還原／未還原除權息："), so callers
+    print them as-is, without a second 「除權息：」 prefix (S-1).
+    """
+    if reason_code == "adjusted":
+        return f"已還原除權息：套用 {events_applied} 筆事件（比例法 back-adjustment）。"
+    if reason_code == "never_synced":
+        return (
+            "未還原除權息：本機尚未同步過任何除權息資料"
+            "（未執行 uv run python -m app.dividends.sync）；報酬若實際有配息會低估。"
+        )
+    if reason_code == "disabled":
+        return (
+            "未還原除權息（--no-adjust-dividends）：報酬不含股利；若該區間實際有配息，報酬會低估。"
+        )
+    if reason_code == "no_events":
+        if market == "TW":
+            return (
+                "未還原除權息：本機雖有除權息資料，但查無本商品在此區間的除權息紀錄。"
+                "可能是該期間真的沒有配息，也可能是資料覆蓋不足（目前只涵蓋台股上市，不含上櫃），"
+                "系統無法分辨兩者；若實際有配息，前瞻報酬會低估。"
+            )
+        return (
+            "未還原除權息：本系統的除權息資料只涵蓋台股上市，不涵蓋本市場，"
+            "不是查無配息，而是沒有資料可查。若本商品有配息，前瞻報酬會低估。"
+        )
+    if reason_code == "unusable_events":
+        return (
+            "未還原除權息：查到本商品在此區間的除權息紀錄，但欄位不足以推算調整因子，"
+            f"已整筆略過（{events_skipped} 筆）而非用推估值代替；前瞻報酬會低估。"
+            "請重跑同步，或回報此代號與區間供人工覆核來源欄位。"
+        )
+    raise ValueError(f"unknown dividend reason_code: {reason_code!r}")
+
+
 def _adjust_for_dividends(
     bars: list[PriceBar], symbol: str, market: Market, *, requested: bool
 ) -> tuple[list[PriceBar], str]:
@@ -569,26 +622,22 @@ def _adjust_for_dividends(
     from app.dividends.store import DividendEventStore
 
     if not requested:
-        return bars, (
-            "未還原除權息（--no-adjust-dividends）：報酬不含股利；若該區間實際有配息，報酬會低估。"
-        )
+        return bars, dividend_sentence("disabled", market=market)
     store = DividendEventStore()
     if not store.is_synced():
-        return bars, (
-            "未還原除權息：本機尚未同步過任何除權息資料"
-            "（未執行 uv run python -m app.dividends.sync）；報酬若實際有配息會低估。"
-        )
+        return bars, dividend_sentence("never_synced", market=market)
     events = store.events_for(
         symbol, market, start=min(b.date for b in bars), end=max(b.date for b in bars)
     )
     adjustment = back_adjust_bars(bars, events)
     if not adjustment.applied:
-        return list(adjustment.bars), (
-            "未還原除權息：本機有除權息資料，但查無本商品在此區間可用的紀錄"
-            f"（略過 {adjustment.events_skipped} 筆）；報酬若實際有配息會低估。"
+        # Same split as the API resolver: rows found but unusable vs nothing found.
+        code = "unusable_events" if adjustment.events_skipped else "no_events"
+        return list(adjustment.bars), dividend_sentence(
+            code, market=market, events_skipped=adjustment.events_skipped
         )
-    return list(adjustment.bars), (
-        f"已還原除權息：套用 {adjustment.events_applied} 筆事件（比例法 back-adjustment）。"
+    return list(adjustment.bars), dividend_sentence(
+        "adjusted", market=market, events_applied=adjustment.events_applied
     )
 
 
@@ -638,20 +687,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     report = run_event_study(bars_to_frame(bars), symbol=args.symbol, market=market, source=source)
     print(format_report(report))
-    print(f"除權息：{dividend_note}")
+    print(dividend_note)
     if args.html:
         from datetime import datetime
         from pathlib import Path
         from zoneinfo import ZoneInfo
 
-        from app.backtest.event_study_charts import render_html
+        from app.backtest.event_study_page import render_html
 
         generated_at = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M 台北時間")
         target = Path(args.html)
-        target.write_text(
-            render_html(report, dividend_note=dividend_note, generated_at=generated_at),
-            encoding="utf-8",
-        )
+        page = render_html(report, dividend_note=dividend_note, generated_at=generated_at)
+        try:
+            target.write_text(page, encoding="utf-8")
+        except OSError as error:
+            print(f"圖表頁無法寫入 {target}：{error.strerror or error}（請確認目錄存在且可寫入）")
+            return 1
         print(f"圖表頁已寫入：{target}")
     return 0
 
