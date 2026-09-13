@@ -4,6 +4,9 @@
 - 日期：2026-09-12
 - 決策者：tech-architect（草案）、CEO（2026-09-13 核可）
 - 適用範圍：僅 product/stock-desk 產品線
+- 修訂（2026-09-13，ADR-0009）：D-6「不改 TW 的 `cache_first`」、Consequences「Q3 誠實版代價」與約束句「與 ADR-0005 D-1 一致」
+  已被 ADR-0009 取代——台股快取先行改以交易日判定新鮮度，同一交易日內事件研究按鈕不再多打 TWSE；
+  D-6 其餘（同一條 `load_bars`、不共用回測序列、不加 run cache）維持。
 
 ## Context（背景）
 
