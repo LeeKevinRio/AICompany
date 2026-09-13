@@ -1,8 +1,8 @@
 # ADR-0005：stock-desk 指數日線來源、標的指數對應表、美股額度管理與 ticker 正規化
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-09-13 核可；決策四第 1～4 點與約束 D-1 已依 2026-09-13 修訂註記由 ADR-0009 取代，其餘條文生效）
 - 日期：2026-07-26
-- 決策者：tech-architect（草案）；待 CEO 核可
+- 決策者：tech-architect（草案）；CEO 2026-09-13 核可
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
   - ADR-0002（`MarketDataProvider` 抽象、SQLite/WAL、compose 三 service）
