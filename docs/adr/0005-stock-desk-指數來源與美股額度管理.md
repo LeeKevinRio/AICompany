@@ -10,6 +10,7 @@
   - skill `data-source-integration`（adapter／契約測試／離線 fixture／紅線）
 - 與既有 ADR 的關係：**不取代任何 ADR**。本則補齊 ADR-0003 完全未涵蓋的「指數日線」，並具體化 ADR-0003「對實作的約束」第 3 條（額度計數器）與「尚缺的事實」第 4 條（ticker 正規化）。
   唯一一處**修訂**：ADR-0003 約束 1 的降級鏈由四層改為五層（新增 layer 0「TTL 內快取先行」，僅對有額度上限的來源啟用），理由見決策四。ADR-0003 其餘內容維持 accepted。
+  2026-09-13 修訂（ADR-0009）：決策四第 1～4 點與約束 D-1（「TTL 24h」、「TW 不開 layer 0」、`cached_stale` 核可字面）被 ADR-0009 取代——layer 0 改以「交易日」判定新鮮度，所有市場一律開啟；`is_within_ttl` 欄位名保留，語意改為「快取已含最近已公布交易日」，且此語意適用於每一條回傳 `cached_stale` 的路徑；第 3 點改寫為「不得為了節省額度而延長指數路徑的 `recheck_cooldown`」。
   2026-08-03 修訂：I-3 與決策一第 3 點的措辭原寫為「恆為 `BACKUP`」，範圍過寬且與 `DataStatus.BACKUP` 的定義及本 ADR 決策四第 4 點／D-2 衝突，經 tech-architect 裁決收窄為「不得標為 `FRESH`、且不得將快取結果升級為 `BACKUP`」。本次僅修訂措辭，決策實質與實作均未改變。
 
 ---
@@ -203,8 +204,8 @@ WHERE used < limit_value;
 1. `ProviderResult` 新增 `is_within_ttl: bool | None`（live 來源為 `None`）。
 2. `MarketDataService` 新增 `cache_first: bool = False`；**US 與 index 服務開啟，TW 服務維持關閉**（把 Phase 7 的變更半徑鎖在美股與指數）。開啟時順序為：
    `layer 0 TTL 內快取 → Alpha Vantage → yfinance → 任何快取（含過期）→ unavailable`。
-3. **TTL 一律 24h**。**明確否決「指數 TTL 拉長以節省額度」**：drag 是端點對端點的報酬比較，末端一天用到過期序列會直接讓 `actual`／`naive` 的比較基準錯位；而且指數走 yfinance，本來就不吃 AV 額度，拉長 TTL 換不到額度收益，只換來失真。
-4. 前端對 `cached_stale` 的文案必須依 `is_within_ttl` 分岔：`true` → 「本機快取（今日已更新，N 分鐘前）」；`false` → 「快取資料，已延遲 N 分鐘」。兩者都不得顯示為即時。
+3. ~~TTL 一律 24h~~（2026-09-13 ADR-0009 取代：新鮮度改以交易日判定；本點改寫為**不得為了節省額度而延長指數路徑的 `recheck_cooldown`**）。原文：**明確否決「指數 TTL 拉長以節省額度」**：drag 是端點對端點的報酬比較，末端一天用到過期序列會直接讓 `actual`／`naive` 的比較基準錯位；而且指數走 yfinance，本來就不吃 AV 額度，拉長 TTL 換不到額度收益，只換來失真。
+4. （2026-09-13 ADR-0009 D-5 取代本點字面，改為陳述「資料截至 {last_bar_date}」；以下為原核可字面）前端對 `cached_stale` 的文案必須依 `is_within_ttl` 分岔：`true` → 「本機快取（今日已更新，N 分鐘前）」；`false` → 「快取資料，已延遲 N 分鐘」。兩者都不得顯示為即時。
 
 ---
 
