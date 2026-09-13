@@ -55,6 +55,7 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
               status={advice.data.data.status}
               stalenessMinutes={advice.data.data.staleness_minutes}
               isWithinTtl={advice.data.data.is_within_ttl}
+              lastBarDate={advice.data.data.last_bar_date}
             />
           </span>
         )}

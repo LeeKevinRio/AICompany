@@ -8,23 +8,53 @@
  * date math is needed here (unlike `DataStatusBadge`, which derives it from
  * `as_of`).
  *
- * `cached_stale` copy branches on `isWithinTtl` (ADR-0005 決策四 / D-2,
- * wording finalized there): `true` means the cache is honestly "today's
- * data, served from cache" and gets its own sentence; `false` or `null`
- * (the field only ever applies to this one status, so `null` here means
- * "unknown", not "not applicable") uses the ADR's 「快取資料，已延遲 N 分鐘」
- * (D3b: the ADR wording supersedes the earlier 「資料延遲」 draft; with no
- * minute count available either sentence truncates rather than fabricating
- * a number). Neither branch may read as live.
+ * `cached_stale` copy (ADR-0005 決策四 / D-2, superseded by ADR-0009 D-5;
+ * 風控 2026-09-13 第二輪核可方案 A 八句): the badge
+ * states a *verifiable fact* -- the date the data runs to
+ * (`DataMeta.last_bar_date`) and when it was last obtained -- instead of a
+ * clock claim (「今日已更新」 was false on any weekend) or an inference
+ * (「已含最近交易日」 reads as "today" during the session). `isWithinTtl`
+ * (backend: "cache holds the latest published session") only picks the
+ * frame: `true` → 本機快取; `false`/`null` (the field only ever applies to
+ * this status, so `null` means "unknown") → 快取資料 + 「可能未含最近交易日」.
+ * A missing date or minute count truncates the sentence rather than
+ * fabricating a value. Neither branch may read as live.
  */
+export function cachedStaleLabel({
+  stalenessMinutes,
+  isWithinTtl,
+  lastBarDate,
+}: {
+  stalenessMinutes: number | null;
+  isWithinTtl: boolean | null;
+  lastBarDate: string | null;
+}): string {
+  const obtained = stalenessMinutes !== null ? `${stalenessMinutes} 分鐘前取得` : null;
+  if (isWithinTtl === true) {
+    if (lastBarDate !== null) {
+      return obtained !== null ? `本機快取，資料截至 ${lastBarDate}（${obtained}）` : `本機快取，資料截至 ${lastBarDate}`;
+    }
+    return obtained !== null ? `本機快取（${obtained}）` : "本機快取";
+  }
+  if (lastBarDate !== null) {
+    return obtained !== null
+      ? `快取資料，資料截至 ${lastBarDate}（${obtained}，可能未含最近交易日）`
+      : `快取資料，資料截至 ${lastBarDate}（可能未含最近交易日）`;
+  }
+  return obtained !== null ? `快取資料，${obtained}，可能未含最近交易日` : "快取資料（取得時間不明，可能未含最近交易日）";
+}
+
 export function DataMetaStatusBadge({
   status,
   stalenessMinutes,
   isWithinTtl,
+  lastBarDate = null,
 }: {
   status: string;
   stalenessMinutes: number | null;
   isWithinTtl: boolean | null;
+  /** `DataMeta.last_bar_date`; omit only where the payload carries no bar dates. */
+  lastBarDate?: string | null;
 }) {
   switch (status) {
     case "fresh":
@@ -38,9 +68,7 @@ export function DataMetaStatusBadge({
     case "cached_stale":
       return (
         <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-          {isWithinTtl === true
-            ? `本機快取（今日已更新${stalenessMinutes !== null ? `，${stalenessMinutes} 分鐘前` : ""}）`
-            : `快取資料${stalenessMinutes !== null ? `，已延遲 ${stalenessMinutes} 分鐘` : ""}`}
+          {cachedStaleLabel({ stalenessMinutes, isWithinTtl, lastBarDate })}
         </span>
       );
     case "unavailable":

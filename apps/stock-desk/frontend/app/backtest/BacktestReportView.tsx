@@ -178,10 +178,12 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
       {/* 風控 2026-09-12 REQ-W10: the report names its own bars' source and freshness (S-2: body size, like the event-study section's line). */}
       <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
         來源：{report.data.source}
+        {report.data.last_bar_date !== null && <span>｜資料截至 {report.data.last_bar_date}</span>}
         <DataMetaStatusBadge
           status={report.data.status}
           stalenessMinutes={report.data.staleness_minutes}
           isWithinTtl={report.data.is_within_ttl}
+          lastBarDate={report.data.last_bar_date}
         />
       </p>
 

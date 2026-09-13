@@ -304,6 +304,7 @@ export default function PositionDetailPage() {
                   status={bars.data.data.status}
                   stalenessMinutes={bars.data.data.staleness_minutes}
                   isWithinTtl={bars.data.data.is_within_ttl}
+                  lastBarDate={bars.data.data.last_bar_date}
                 />
               </span>
             )}
@@ -396,6 +397,7 @@ export default function PositionDetailPage() {
                   status={signals.data.data.status}
                   stalenessMinutes={signals.data.data.staleness_minutes}
                   isWithinTtl={signals.data.data.is_within_ttl}
+                  lastBarDate={signals.data.data.last_bar_date}
                 />
               </span>
             )}

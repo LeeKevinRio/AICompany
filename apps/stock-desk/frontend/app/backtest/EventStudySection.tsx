@@ -130,10 +130,12 @@ export function EventStudySection({ report, request, formMatches }: Props) {
           {/* 風控 REQ-W11: this section's own data freshness, from its own response. */}
           <p className="flex flex-wrap items-center gap-2 text-sm text-neutral-400">
             來源：{result.data.source}
+            {result.data.last_bar_date !== null && <span>｜資料截至 {result.data.last_bar_date}</span>}
             <DataMetaStatusBadge
               status={result.data.status}
               stalenessMinutes={result.data.staleness_minutes}
               isWithinTtl={result.data.is_within_ttl}
+              lastBarDate={result.data.last_bar_date}
             />
           </p>
           <h3 className="mt-2 text-base font-semibold text-neutral-100">{result.page.title}</h3>
