@@ -1,8 +1,8 @@
 # ADR-0009：stock-desk 日線快取以「交易日」判定新鮮度，不以時鐘 TTL
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-09-13 核可；tech-architect／risk-compliance-officer／qa-reviewer 三輪審查通過）
 - 日期：2026-09-13（tech-architect 第一輪 NEEDS_CHANGES 後修訂）
-- 決策者：tech-architect（草案與審查）、CEO（2026-09-13 授權「你決定」，待核可）
+- 決策者：tech-architect（草案與審查）、CEO（2026-09-13 授權「你決定」並核可）
 - 適用範圍：僅 product/stock-desk 產品線
 - 修訂：
   - **取代 ADR-0003** 決策摘要「24h TTL」與對實作的約束第 4 條（每標的記 `last_fetch_at`、只重抓過期者）。

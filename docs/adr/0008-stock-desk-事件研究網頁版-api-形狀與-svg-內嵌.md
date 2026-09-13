@@ -1,8 +1,8 @@
 # ADR-0008：stock-desk 事件研究網頁版的 API 形狀與 SVG 內嵌
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-09-13 核可）
 - 日期：2026-09-12
-- 決策者：tech-architect（草案）、CEO（待核可）
+- 決策者：tech-architect（草案）、CEO（2026-09-13 核可）
 - 適用範圍：僅 product/stock-desk 產品線
 
 ## Context（背景）
