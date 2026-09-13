@@ -16,7 +16,7 @@ from app.data.interface import (
     PriceBar,
     ProviderResult,
 )
-from app.data.service import MarketDataService
+from app.data.service import RECENT_ATTEMPT_FAILED_REASON, MarketDataService
 
 START = date(2024, 1, 1)
 END = date(2024, 1, 31)
@@ -208,9 +208,7 @@ def test_expected_unavailable_is_logged_at_info_not_exception_level(
         r.levelno == logging.INFO and "returned no usable data" in r.getMessage()
         for r in caplog.records
     )
-    assert not any(
-        "unexpected provider error" in r.getMessage() for r in caplog.records
-    )
+    assert not any("unexpected provider error" in r.getMessage() for r in caplog.records)
 
 
 def test_fresh_and_backup_results_carry_no_ttl_opinion(tmp_path: Path) -> None:
@@ -224,18 +222,24 @@ def test_fresh_and_backup_results_carry_no_ttl_opinion(tmp_path: Path) -> None:
     assert result.is_within_ttl is None
 
 
-def test_cache_fallback_carries_is_within_ttl(tmp_path: Path) -> None:
-    cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=60 * 60)
-    cache.put([_bar("twse")], source="twse", fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC))
+def test_cache_fallback_is_never_called_current_when_a_session_is_missing(
+    tmp_path: Path,
+) -> None:
+    """ADR-0009 R-1: the fallback path uses the session rule, not the rows' age."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put([_bar("twse")], source="twse", fetched_at=fetched_at)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched_at)
 
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     backup = _StubProvider(source_id="finmind", status=DataStatus.UNAVAILABLE)
-    # clock is 3 hours after fetch -- past the 1h TTL used here.
+    # Thursday 2024-01-04 08:00 UTC = 16:00 Taipei: the 01-03 and 01-04 closes
+    # are published, the cache stops at 01-02, fetched 46 hours ago.
     service = MarketDataService(
         primary=primary,
         backups=[backup],
         cache=cache,
-        clock=lambda: datetime(2024, 1, 2, 13, 0, tzinfo=UTC),
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
     )
 
     result = service.get_daily_bars("2330", "TW", START, END)
@@ -243,11 +247,87 @@ def test_cache_fallback_carries_is_within_ttl(tmp_path: Path) -> None:
     assert result.is_within_ttl is False
 
 
-class TestCacheFirst:
-    """ADR-0005 決策四: 'layer 0' TTL-fresh cache short-circuit.
+def test_cache_fallback_is_current_when_the_cache_holds_the_latest_session(
+    tmp_path: Path,
+) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put([_bar("twse")], source="twse", fetched_at=fetched_at)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched_at)
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    # 2024-01-03 02:00 UTC = 10:00 Taipei: the latest published session is
+    # still 01-02, which the cache has.
+    service = MarketDataService(
+        primary=primary,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 2, 0, tzinfo=UTC),
+    )
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is True
+    # R-2: age counts from the last live check, not the oldest row.
+    assert result.as_of == fetched_at and result.staleness_minutes == 16 * 60
 
-    Default (``cache_first=False``) must reproduce every existing TW test
-    above byte-for-byte -- these tests only exercise the opt-in behaviour.
+
+def test_a_partial_answer_is_cached_but_its_range_is_not_recorded_as_covered(
+    tmp_path: Path,
+) -> None:
+    """ADR-0009 R-4: a skipped month must be asked for again, not frozen in."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+
+    class _PartialProvider(_StubProvider):
+        def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+            result = super().get_daily_bars(symbol, start, end)
+            return result.model_copy(update={"complete": False})
+
+    primary = _PartialProvider(source_id="twse", bars=[_bar("twse")])
+    service = MarketDataService(
+        primary=primary,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    service.get_daily_bars("2330", "TW", START, END)
+    assert cache.get("2330", "TW", START, END) is not None
+    assert cache.fetch_coverage("2330", "TW") is None
+    assert cache.last_attempt_at("2330", "TW") is not None
+
+
+def test_while_sources_fail_the_ladder_runs_once_per_cooldown_not_per_click(
+    tmp_path: Path,
+) -> None:
+    """ADR-0009 R-8: a seeded cache with no coverage still honours the cooldown."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put(
+        [_bar("demo_synthetic")],
+        source="demo_synthetic",
+        fetched_at=datetime(2024, 1, 2, 14, 0, tzinfo=UTC),  # an hour before the first click
+    )
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    now = {"at": datetime(2024, 1, 2, 15, 0, tzinfo=UTC)}
+    service = MarketDataService(
+        primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    first = service.get_daily_bars("2330", "TW", START, END)  # ladder runs, fails
+    now["at"] = datetime(2024, 1, 2, 15, 20, tzinfo=UTC)  # inside the TW cooldown
+    second = service.get_daily_bars("2330", "TW", START, END)
+    now["at"] = datetime(2024, 1, 2, 16, 30, tzinfo=UTC)  # cooldown expired
+    third = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 2
+    assert first.status is second.status is third.status is DataStatus.CACHED_STALE
+    assert second.is_within_ttl is False
+    # The reader is told why the answer is the cache (ADR-0003 約束 7), and
+    # the age is the rows' real fetch time, not the failed attempt's (R-10).
+    assert second.reason == RECENT_ATTEMPT_FAILED_REASON
+    assert second.staleness_minutes is not None and second.staleness_minutes >= 20
+
+
+class TestCacheFirst:
+    """ADR-0005 決策四 'layer 0', judged by session per ADR-0009.
+
+    The cache answers when it already holds the latest published session and
+    a live source was once asked for at least this range; otherwise the
+    ladder runs as before. ``cache_first=False`` keeps the pre-layer-0 ladder.
     """
 
     def test_default_is_disabled(self, tmp_path: Path) -> None:
@@ -258,22 +338,23 @@ class TestCacheFirst:
         # covered end-to-end by the rest of this module's TW-flavoured tests.
         assert service is not None
 
-    def test_serves_ttl_fresh_cache_without_calling_any_provider(
+    def test_serves_a_cache_holding_the_latest_session_without_calling_any_provider(
         self, tmp_path: Path
     ) -> None:
-        cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=24 * 60 * 60)
-        cache.put(
-            [_us_bar("alpha_vantage")],
-            source="alpha_vantage",
-            fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
-        )
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+        cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
+        cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         backup = _StubProvider(source_id="yfinance", bars=[_us_bar("yfinance")])
         service = MarketDataService(
             primary=primary,
             backups=[backup],
             cache=cache,
-            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),  # 2h later, within 24h TTL
+            # 2024-01-02 12:00 UTC = 07:00 New York, before that day's publish
+            # cutoff: the latest published session is Monday 01-01, and the
+            # cache holds a bar from 01-02 already.
+            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
             cache_first=True,
         )
 
@@ -285,20 +366,19 @@ class TestCacheFirst:
         assert primary.call_count == 0
         assert backup.call_count == 0
 
-    def test_falls_through_to_providers_when_cache_is_expired(
-        self, tmp_path: Path
-    ) -> None:
-        cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=60 * 60)
-        cache.put(
-            [_us_bar("alpha_vantage")],
-            source="alpha_vantage",
-            fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
-        )
+    def test_falls_through_to_providers_when_a_newer_session_exists(self, tmp_path: Path) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+        cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
+        cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = MarketDataService(
             primary=primary,
             cache=cache,
-            clock=lambda: datetime(2024, 1, 2, 13, 0, tzinfo=UTC),  # 3h later, past 1h TTL
+            # Thursday 2024-01-04 01:00 UTC = Wednesday 20:00 New York: the
+            # 01-03 close is published, the cache stops at 01-02, and the last
+            # live check (01-02) is outside the 24h cooldown.
+            clock=lambda: datetime(2024, 1, 4, 1, 0, tzinfo=UTC),
             cache_first=True,
         )
 
@@ -307,9 +387,55 @@ class TestCacheFirst:
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
 
-    def test_falls_through_to_providers_when_no_cache_entry_exists(
+    def test_a_recent_live_check_is_honoured_and_disclosed_as_short(self, tmp_path: Path) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        cache.put(
+            [_us_bar("alpha_vantage")],
+            source="alpha_vantage",
+            fetched_at=datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
+        )
+        # A live source was asked at 00:30 UTC on 01-04 and had nothing newer.
+        cache.record_fetch(
+            "2330", "US", start=START, end=END, fetched_at=datetime(2024, 1, 4, 0, 30, tzinfo=UTC)
+        )
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        service = MarketDataService(
+            primary=primary,
+            cache=cache,
+            clock=lambda: datetime(2024, 1, 4, 1, 0, tzinfo=UTC),
+            cache_first=True,
+        )
+
+        result = service.get_daily_bars("2330", "US", START, END)
+
+        assert result.status is DataStatus.CACHED_STALE
+        assert result.is_within_ttl is False
+        assert primary.call_count == 0
+
+    def test_a_request_reaching_further_back_than_ever_fetched_goes_live(
         self, tmp_path: Path
     ) -> None:
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+        cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
+        cache.record_fetch("2330", "US", start=date(2024, 1, 2), end=END, fetched_at=fetched_at)
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        service = MarketDataService(
+            primary=primary,
+            cache=cache,
+            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
+            cache_first=True,
+        )
+
+        result = service.get_daily_bars("2330", "US", START, END)  # START < 01-02
+
+        assert result.status is DataStatus.FRESH
+        assert primary.call_count == 1
+        # ...and the widened range is now on record, so the next read is local.
+        again = service.get_daily_bars("2330", "US", START, END)
+        assert again.status is DataStatus.CACHED_STALE and primary.call_count == 1
+
+    def test_falls_through_to_providers_when_no_cache_entry_exists(self, tmp_path: Path) -> None:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = MarketDataService(primary=primary, cache=cache, cache_first=True)
@@ -318,3 +444,72 @@ class TestCacheFirst:
 
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
+
+    def test_a_seeded_cache_with_no_live_fetch_on_record_does_not_short_circuit(
+        self, tmp_path: Path
+    ) -> None:
+        # Demo-seeded or pre-ADR-0009 rows: nobody ever asked a live source,
+        # so layer 0 cannot vouch for coverage and the ladder runs once.
+        cache = PriceBarCache(db_path=tmp_path / "cache.db")
+        cache.put([_us_bar("demo_synthetic")], source="demo_synthetic")
+        primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
+        service = MarketDataService(
+            primary=primary,
+            cache=cache,
+            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
+            cache_first=True,
+        )
+
+        result = service.get_daily_bars("2330", "US", START, END)
+
+        assert result.status is DataStatus.FRESH
+        assert primary.call_count == 1
+
+
+def test_widening_the_range_right_after_a_successful_fetch_goes_live(tmp_path: Path) -> None:
+    """ADR-0009 D-3, driven by two real calls: a success is not a failed attempt."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
+    now = {"at": datetime(2024, 1, 2, 15, 0, tzinfo=UTC)}
+    service = MarketDataService(
+        primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    service.get_daily_bars("2330", "TW", date(2024, 1, 2), END)
+    now["at"] = datetime(2024, 1, 2, 15, 2, tzinfo=UTC)  # two minutes later
+    widened = service.get_daily_bars("2330", "TW", START, END)  # START < 01-02
+    assert primary.call_count == 2
+    assert widened.status is DataStatus.FRESH
+
+
+def test_a_historical_coverage_is_not_reused_for_a_request_that_runs_to_today(
+    tmp_path: Path,
+) -> None:
+    """ADR-0009: CHECKED_RECENTLY needs the coverage to reach the expected session."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put([_bar("twse")], source="twse", fetched_at=fetched_at)
+    # A complete fetch of history ending 01-02, asked for 40 minutes ago.
+    checked = datetime(2024, 1, 4, 7, 20, tzinfo=UTC)
+    cache.record_fetch("2330", "TW", start=START, end=date(2024, 1, 2), fetched_at=checked)
+    cache.record_attempt("2330", "TW", at=checked)
+    primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
+    service = MarketDataService(
+        primary=primary,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),  # Thu 16:00 Taipei
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", START, END)  # END runs past 01-04
+    assert primary.call_count == 1 and result.status is DataStatus.FRESH
+
+
+def test_the_service_propagates_a_partial_answer(tmp_path: Path) -> None:
+    class _PartialProvider(_StubProvider):
+        def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+            return super().get_daily_bars(symbol, start, end).model_copy(update={"complete": False})
+
+    service = MarketDataService(
+        primary=_PartialProvider(source_id="twse", bars=[_bar("twse")]),
+        cache=PriceBarCache(db_path=tmp_path / "cache.db"),
+    )
+    assert service.get_daily_bars("2330", "TW", START, END).complete is False

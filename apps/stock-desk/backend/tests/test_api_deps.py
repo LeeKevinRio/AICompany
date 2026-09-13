@@ -52,9 +52,7 @@ def test_every_provider_is_memoized_per_process(isolated_deps: None) -> None:
     assert deps.get_quota_ledger() is deps.get_quota_ledger()
 
 
-def test_stores_land_on_the_configured_database_path(
-    isolated_deps: None, tmp_path: Path
-) -> None:
+def test_stores_land_on_the_configured_database_path(isolated_deps: None, tmp_path: Path) -> None:
     expected = tmp_path / "stock-desk.db"
     assert deps.get_position_store().db_path == expected
     assert deps.get_settings_store().db_path == expected
@@ -82,10 +80,11 @@ def test_the_us_ladder_is_alpha_vantage_then_yfinance(isolated_deps: None) -> No
     ]
 
 
-def test_cache_first_is_on_for_us_and_index_and_off_for_tw(isolated_deps: None) -> None:
+def test_cache_first_is_on_for_every_ladder(isolated_deps: None) -> None:
     resolver = deps.get_market_resolver()
     # ADR-0005 D-1: Taiwan has no quota pressure and its behaviour must not move.
-    assert resolver["TW"]._cache_first is False  # type: ignore[attr-defined]
+    # ADR-0009: TW gets layer 0 too, under the session rule (no TTL involved).
+    assert resolver["TW"]._cache_first is True  # type: ignore[attr-defined]
     assert resolver["US"]._cache_first is True  # type: ignore[attr-defined]
     index_service = deps.get_index_resolver()["TW"]
     assert isinstance(index_service, IndexSeriesService)

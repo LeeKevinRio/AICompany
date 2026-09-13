@@ -74,9 +74,10 @@ class LoadedBars:
     source: str = "none"
     staleness_minutes: int | None = None
     reason: str | None = None
-    #: Only meaningful for ``cached_stale``: whether the cached data is still
-    #: inside its TTL (ADR-0005 決策四 / constraint D-2). ``None`` for every
-    #: live rung, where "within TTL" is not a question that applies.
+    #: Only meaningful for ``cached_stale``: whether the cache already holds
+    #: the latest session the market has published (ADR-0009; the field name
+    #: predates it -- ADR-0005 決策四 / constraint D-2). ``None`` for every
+    #: live rung, where the question does not apply.
     is_within_ttl: bool | None = None
     #: How many observed market sessions happened after ``last_bar_date``
     #: (C4). ``None`` means "no trading calendar was available to ask", which

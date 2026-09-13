@@ -77,9 +77,7 @@ class TwseAdapter(MarketDataProvider):
     source_id: ClassVar[str] = "twse"
 
     def __init__(self, client: RateLimitedClient | None = None) -> None:
-        self._client = client or RateLimitedClient(
-            base_url=TWSE_BASE_URL, min_interval_seconds=0.5
-        )
+        self._client = client or RateLimitedClient(base_url=TWSE_BASE_URL, min_interval_seconds=0.5)
         self._owns_client = client is None
 
     def close(self) -> None:
@@ -89,6 +87,9 @@ class TwseAdapter(MarketDataProvider):
     def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
         now = datetime.now(UTC)
         bars: list[PriceBar] = []
+        # ADR-0009: a skipped month makes the answer partial; the service then
+        # caches what came back but does not record the range as covered.
+        skipped_months = 0
         try:
             for month_start in iter_month_starts(start, end):
                 response = self._client.get(
@@ -106,6 +107,7 @@ class TwseAdapter(MarketDataProvider):
                         symbol,
                         month_start.isoformat(),
                     )
+                    skipped_months += 1
                     continue
                 try:
                     payload = response.json()
@@ -115,6 +117,7 @@ class TwseAdapter(MarketDataProvider):
                         symbol,
                         month_start.isoformat(),
                     )
+                    skipped_months += 1
                     continue
                 bars.extend(self._parse_month(payload, symbol, start, end, now))
         except httpx.TransportError as exc:
@@ -142,6 +145,7 @@ class TwseAdapter(MarketDataProvider):
             as_of=now,
             source=self.source_id,
             staleness_minutes=0,
+            complete=skipped_months == 0,
         )
 
     def _parse_month(

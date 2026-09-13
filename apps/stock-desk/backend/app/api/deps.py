@@ -70,14 +70,20 @@ def _default_yfinance() -> YFinanceAdapter:
 def _default_resolver() -> MarketDataResolver:
     """market -> price service, one degradation ladder per market.
 
-    TW: TWSE 主 + TPEx/FinMind 備援, ``cache_first`` **off**. Taiwan has no
-    comparable quota pressure and ADR-0005 constraint D-1 pins its behaviour
-    exactly as it was.
+    Both ladders run ``cache_first`` (layer 0) under ADR-0009's session rule:
+    a cache that already holds the latest published session answers without
+    a live call, and a series short of a session is re-fetched at most once
+    per market cooldown (``app/data/freshness.py``: TW 1h, US 24h).
 
-    US: Alpha Vantage 主 + yfinance 備援, ``cache_first`` **on** -- the full
-    five-layer chain of ADR-0005 決策四 (TTL 內快取 -> AV -> yfinance -> 任何
-    快取 -> unavailable). Layer 0 is what stops a page reload from burning the
-    day's Alpha Vantage budget on a symbol fetched an hour ago.
+    TW: TWSE 主 + TPEx/FinMind 備援. ADR-0005 D-1 ("TW always calls the
+    provider") is superseded: with daily bars there is nothing to learn from
+    TWSE between two closes, and every click used to cost one request per
+    calendar month of the range.
+
+    US: Alpha Vantage 主 + yfinance 備援 -- the five-layer chain of ADR-0005
+    決策四 (layer 0 -> AV -> yfinance -> 任何快取 -> unavailable). The 24h
+    cooldown keeps the worst case (holiday re-checks) at the old TTL's cost,
+    so a page reload can still never burn the day's Alpha Vantage budget.
 
     Fail-closed is deliberate: with no ``ALPHA_VANTAGE_API_KEY`` the primary
     declines without issuing a request, and if the backup cannot be reached
@@ -90,6 +96,7 @@ def _default_resolver() -> MarketDataResolver:
         primary=TwseAdapter(),
         backups=[TpexAdapter(), FinMindAdapter()],
         cache=cache,
+        cache_first=True,
     )
     us_service = MarketDataService(
         primary=AlphaVantageAdapter(),
@@ -106,9 +113,13 @@ def _default_index_resolver() -> IndexServiceResolver:
 
     The index path is assembled here and nowhere else: the yfinance adapter's
     index method is bridged onto the provider contract
-    (:class:`IndexProviderBridge`), given the same cache and layer 0 as the US
-    ladder, and then presented through :class:`IndexSeriesService` so the
-    series can never be labelled ``fresh`` (ADR-0005 constraint I-3).
+    (:class:`IndexProviderBridge`), given the same cache and a layer 0 of its
+    own, and then presented through :class:`IndexSeriesService` so the
+    series can never be labelled ``fresh`` (ADR-0005 constraint I-3). Layer 0
+    judges by the *market the caller names* (``^TWII`` is asked for as TW and
+    gets the Taipei cutoff; ``^GSPC`` as US gets New York), so an index and
+    the US equity ladder do not share one clock -- see ADR-0009 S-1 for the
+    open point that the cooldown is really a property of the source.
 
     Alpha Vantage is absent by design -- it never participates in the index
     path, so no index lookup can eat into the quota reserved for the symbols a

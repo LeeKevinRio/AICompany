@@ -55,7 +55,6 @@ def test_put_then_get_round_trips_bar_fields(tmp_path: Path) -> None:
     assert got.currency == bar.currency
     assert result.source == "twse"
     assert result.staleness_minutes == 0
-    assert result.is_within_ttl is True
 
 
 def test_get_returns_none_when_no_rows_in_range(tmp_path: Path) -> None:
@@ -78,7 +77,7 @@ def test_put_upserts_existing_row(tmp_path: Path) -> None:
 
 
 def test_staleness_minutes_computed_from_fetched_at(tmp_path: Path) -> None:
-    cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=60 * 60)
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
     fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
     cache.put([_bar()], source="twse", fetched_at=fetched_at)
 
@@ -86,18 +85,74 @@ def test_staleness_minutes_computed_from_fetched_at(tmp_path: Path) -> None:
     result = cache.get("2330", "TW", date(2024, 1, 1), date(2024, 1, 31), now=now)
     assert result is not None
     assert result.staleness_minutes == 90
-    assert result.is_within_ttl is False  # 90 min > 60 min TTL
 
 
-def test_within_ttl_true_when_fresh_enough(tmp_path: Path) -> None:
-    cache = PriceBarCache(db_path=tmp_path / "cache.db", ttl_seconds=24 * 60 * 60)
-    fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
-    cache.put([_bar()], source="twse", fetched_at=fetched_at)
+# --- ADR-0009: fetch coverage and attempt log --------------------------------------
 
-    now = fetched_at + timedelta(hours=2)
-    result = cache.get("2330", "TW", date(2024, 1, 1), date(2024, 1, 31), now=now)
-    assert result is not None
-    assert result.is_within_ttl is True
+
+def test_fetch_coverage_is_none_until_a_complete_live_fetch_is_recorded(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar()], source="twse")
+    assert cache.fetch_coverage("2330", "TW") is None
+    at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.record_fetch("2330", "TW", start=date(2024, 1, 1), end=date(2024, 1, 31), fetched_at=at)
+    coverage = cache.fetch_coverage("2330", "TW")
+    assert coverage is not None
+    assert (coverage.covered_start, coverage.covered_end) == (date(2024, 1, 1), date(2024, 1, 31))
+    assert coverage.last_fetched_at == at
+
+
+def test_overlapping_or_touching_ranges_widen_the_coverage(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.record_fetch("2330", "TW", start=date(2024, 1, 1), end=date(2024, 1, 31))
+    cache.record_fetch("2330", "TW", start=date(2024, 2, 1), end=date(2024, 2, 29))  # touches
+    cache.record_fetch("2330", "TW", start=date(2023, 6, 1), end=date(2024, 1, 15))  # overlaps
+    coverage = cache.fetch_coverage("2330", "TW")
+    assert coverage is not None
+    assert (coverage.covered_start, coverage.covered_end) == (date(2023, 6, 1), date(2024, 2, 29))
+
+
+def test_a_disjoint_range_replaces_the_coverage_instead_of_bridging_the_gap(
+    tmp_path: Path,
+) -> None:
+    # qa 2026-09-13: MIN/MAX over 2020 and 2024 would claim 2021-2023 was fetched.
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.record_fetch("2330", "TW", start=date(2020, 1, 1), end=date(2020, 6, 30))
+    cache.record_fetch("2330", "TW", start=date(2024, 1, 1), end=date(2024, 6, 30))
+    coverage = cache.fetch_coverage("2330", "TW")
+    assert coverage is not None
+    assert (coverage.covered_start, coverage.covered_end) == (date(2024, 1, 1), date(2024, 6, 30))
+
+
+def test_coverage_is_per_series(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.record_fetch("2330", "TW", start=date(2024, 1, 1), end=date(2024, 1, 31))
+    assert cache.fetch_coverage("2330", "US") is None
+    assert cache.fetch_coverage("2317", "TW") is None
+
+
+def test_attempt_log_records_the_latest_ask(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    assert cache.last_attempt_at("2330", "TW") is None
+    first = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.record_attempt("2330", "TW", at=first)
+    cache.record_attempt("2330", "TW", at=first + timedelta(hours=1))
+    assert cache.last_attempt_at("2330", "TW") == first + timedelta(hours=1)
+
+
+def test_deleting_a_source_forgets_the_affected_series_logs(tmp_path: Path) -> None:
+    # ADR-0009 R-5: rows gone, coverage claim gone; other series untouched.
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_bar(symbol="2330")], source="demo_synthetic")
+    cache.put([_bar(symbol="2317")], source="twse")
+    for symbol in ("2330", "2317"):
+        cache.record_fetch(symbol, "TW", start=date(2024, 1, 1), end=date(2024, 1, 31))
+        cache.record_attempt(symbol, "TW")
+    assert cache.delete_by_source("demo_synthetic") == 1
+    assert cache.fetch_coverage("2330", "TW") is None
+    assert cache.last_attempt_at("2330", "TW") is None
+    assert cache.fetch_coverage("2317", "TW") is not None
+    assert cache.last_attempt_at("2317", "TW") is not None
 
 
 def test_get_filters_by_symbol_and_market(tmp_path: Path) -> None:

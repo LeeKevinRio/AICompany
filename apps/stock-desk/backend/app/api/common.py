@@ -33,10 +33,14 @@ class DataMeta(BaseModel):
     source: str
     staleness_minutes: int | None
     #: Only meaningful when ``status == "cached_stale"``: ``true`` means the
-    #: cached data is still inside its TTL and was served without calling any
-    #: provider, ``false`` means it really is out of date. A reader must look
-    #: at both fields to describe freshness honestly (ADR-0005 D-2); ``null``
-    #: on every live rung, where the question does not apply.
+    #: cache already holds the latest session the market has completed and
+    #: published (ADR-0009: as current as a live fetch would be, whatever its
+    #: age); ``false`` means it is known or suspected to be short of at least
+    #: one session. The field keeps its pre-ADR-0009 name (the only consumer
+    #: is this repo's frontend; renaming was judged not worth touching every
+    #: type) -- read it as "cache holds latest session". A reader must look at
+    #: both fields to describe freshness honestly (ADR-0005 D-2); ``null`` on
+    #: every live rung, where the question does not apply.
     is_within_ttl: bool | None
     bar_count: int
     first_bar_date: str | None

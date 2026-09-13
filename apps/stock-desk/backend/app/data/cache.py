@@ -17,7 +17,7 @@ import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Final
@@ -25,12 +25,13 @@ from typing import Final
 from app.data.interface import Market, PriceBar
 
 DEFAULT_DB_PATH: Final[str] = "./data/stock-desk.db"
-DEFAULT_TTL_SECONDS: Final[int] = 24 * 60 * 60
 
 #: How many trade dates go into one ``IN (...)`` probe. Comfortably below
 #: SQLite's host-parameter limit (999 on the oldest builds still in the wild),
 #: so a multi-year batch is chunked instead of failing at the driver.
 _PROBE_CHUNK_SIZE: Final[int] = 400
+#: Milliseconds a connection waits for a concurrent writer before failing.
+_BUSY_TIMEOUT_MS: Final[int] = 5000
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS price_bars_cache (
@@ -64,6 +65,34 @@ CREATE INDEX IF NOT EXISTS idx_price_bars_cache_market_date
 ON price_bars_cache (market, trade_date)
 """
 
+#: One row per series: the one contiguous date range a live source has
+#: answered *in full*, and when it last did (ADR-0009). Layer 0 reads this to
+#: know (a) whether a request reaches outside anything ever fetched and (b)
+#: when a live source last confirmed there was nothing newer -- ``fetched_at``
+#: on the bar rows cannot say either (a holiday fetch writes no new rows).
+_CREATE_FETCH_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS price_bars_fetch_log (
+    symbol TEXT NOT NULL,
+    market TEXT NOT NULL,
+    covered_start TEXT NOT NULL,
+    covered_end TEXT NOT NULL,
+    last_fetched_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, market)
+)
+"""
+
+#: When a live source was last *asked* for a series, successful or not
+#: (ADR-0009 R-8): while the sources are down, this is what keeps layer 0 from
+#: re-running the whole ladder on every click.
+_CREATE_ATTEMPT_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS price_bars_attempt_log (
+    symbol TEXT NOT NULL,
+    market TEXT NOT NULL,
+    last_attempt_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, market)
+)
+"""
+
 
 def resolve_db_path() -> Path:
     """Resolve the cache database path from ``STOCK_DESK_DB_PATH`` (or the default)."""
@@ -77,13 +106,23 @@ class CacheReadResult:
 
     ``fetched_at`` is the oldest ``fetched_at`` among the returned rows
     (the conservative choice: staleness is reported as "at least this old").
+    Whether the rows are *current* is not a question of their age (ADR-0009):
+    the service answers it from the fetch log and the market's session rule.
     """
 
     bars: list[PriceBar]
     fetched_at: datetime
     source: str
     staleness_minutes: int
-    is_within_ttl: bool
+
+
+@dataclass(frozen=True)
+class FetchCoverage:
+    """What live sources were ever asked for one series, and when last (ADR-0009)."""
+
+    covered_start: date
+    covered_end: date
+    last_fetched_at: datetime
 
 
 @dataclass(frozen=True)
@@ -99,25 +138,15 @@ class ForeignBarConflict:
 class PriceBarCache:
     """SQLite (WAL mode) cache of daily price bars, keyed by symbol/market/date."""
 
-    def __init__(
-        self,
-        db_path: str | Path | None = None,
-        *,
-        ttl_seconds: int = DEFAULT_TTL_SECONDS,
-    ) -> None:
+    def __init__(self, db_path: str | Path | None = None) -> None:
         self._db_path = Path(db_path) if db_path is not None else resolve_db_path()
         if str(self._db_path) != ":memory:":
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ttl_seconds = ttl_seconds
         self._init_schema()
 
     @property
     def db_path(self) -> Path:
         return self._db_path
-
-    @property
-    def ttl_seconds(self) -> int:
-        return self._ttl_seconds
 
     def _connect(self) -> sqlite3.Connection:
         # WAL is a persistent, on-disk property of the database file, so it is
@@ -126,7 +155,13 @@ class PriceBarCache:
         # (or an equivalent try/finally) so it is explicitly closed; the
         # sqlite3 connection context manager only commits/rolls back the
         # transaction, it does NOT close the connection.
-        return sqlite3.connect(self._db_path)
+        conn = sqlite3.connect(self._db_path)
+        # API and scheduler are documented dual writers (ADR-0005 P-1) and the
+        # request path now writes two small log rows per live fetch; wait for
+        # a writer instead of surfacing "database is locked" as a 500 (same
+        # convention as ``QuotaLedger``).
+        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        return conn
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
@@ -134,6 +169,8 @@ class PriceBarCache:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
             conn.execute(_CREATE_MARKET_DATE_INDEX_SQL)
+            conn.execute(_CREATE_FETCH_LOG_SQL)
+            conn.execute(_CREATE_ATTEMPT_LOG_SQL)
 
     def put(
         self,
@@ -190,6 +227,123 @@ class PriceBarCache:
                 """,
                 rows,
             )
+
+    def record_fetch(
+        self,
+        symbol: str,
+        market: Market,
+        *,
+        start: date,
+        end: date,
+        fetched_at: datetime | None = None,
+    ) -> None:
+        """Note that a live source answered ``[start, end]`` of this series in full.
+
+        The coverage is kept as **one contiguous interval**: a new range that
+        overlaps or touches the recorded one widens it; a disjoint range
+        replaces it (qa 2026-09-13: merging two far-apart ranges with MIN/MAX
+        would claim the gap between them was fetched). The *requested* range
+        is what gets recorded, not the returned bars' span, so a series listed
+        after the requested start is not re-fetched on every request; the
+        caller must only call this for a complete answer
+        (``ProviderResult.complete``), never for a partial one.
+
+        The read-then-write is serialised with ``BEGIN IMMEDIATE`` (qa
+        2026-09-13 second round): the API and the scheduler are dual writers,
+        and although a lost update here could only narrow the recorded range
+        (one extra live fetch, never a claim about an unfetched range), taking
+        the write lock before reading costs nothing and removes the race.
+        """
+        moment = fetched_at if fetched_at is not None else datetime.now(UTC)
+        with closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT covered_start, covered_end FROM price_bars_fetch_log "
+                "WHERE symbol = ? AND market = ?",
+                (symbol, market),
+            ).fetchone()
+            covered_start, covered_end = start, end
+            if row is not None:
+                old_start: date | None
+                old_end: date | None
+                try:
+                    old_start, old_end = date.fromisoformat(row[0]), date.fromisoformat(row[1])
+                except ValueError:
+                    old_start = old_end = None
+                if (
+                    old_start is not None
+                    and old_end is not None
+                    and start <= old_end + timedelta(days=1)
+                    and end >= old_start - timedelta(days=1)
+                ):
+                    covered_start, covered_end = min(start, old_start), max(end, old_end)
+            conn.execute(
+                """
+                INSERT INTO price_bars_fetch_log
+                    (symbol, market, covered_start, covered_end, last_fetched_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, market) DO UPDATE SET
+                    covered_start=excluded.covered_start,
+                    covered_end=excluded.covered_end,
+                    last_fetched_at=excluded.last_fetched_at
+                """,
+                (
+                    symbol,
+                    market,
+                    covered_start.isoformat(),
+                    covered_end.isoformat(),
+                    moment.isoformat(),
+                ),
+            )
+
+    def fetch_coverage(self, symbol: str, market: Market) -> FetchCoverage | None:
+        """The recorded complete live-fetch coverage for one series, or ``None``."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT covered_start, covered_end, last_fetched_at
+                FROM price_bars_fetch_log WHERE symbol = ? AND market = ?
+                """,
+                (symbol, market),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return FetchCoverage(
+                covered_start=date.fromisoformat(row[0]),
+                covered_end=date.fromisoformat(row[1]),
+                last_fetched_at=datetime.fromisoformat(row[2]),
+            )
+        except ValueError:
+            return None
+
+    def record_attempt(self, symbol: str, market: Market, *, at: datetime | None = None) -> None:
+        """Note that the ladder asked live sources for this series, whatever they answered."""
+        moment = at if at is not None else datetime.now(UTC)
+        with closing(self._connect()) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO price_bars_attempt_log (symbol, market, last_attempt_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(symbol, market) DO UPDATE SET
+                    last_attempt_at=excluded.last_attempt_at
+                """,
+                (symbol, market, moment.isoformat()),
+            )
+
+    def last_attempt_at(self, symbol: str, market: Market) -> datetime | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT last_attempt_at FROM price_bars_attempt_log "
+                "WHERE symbol = ? AND market = ?",
+                (symbol, market),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return datetime.fromisoformat(row[0])
+        except ValueError:
+            return None
 
     def find_foreign_bars(
         self, bars: Sequence[PriceBar], *, source: str
@@ -295,9 +449,26 @@ class PriceBarCache:
         without touching rows any other provider wrote into the same cache.
         """
         with closing(self._connect()) as conn, conn:
-            cursor = conn.execute(
-                "DELETE FROM price_bars_cache WHERE source = ?", (source,)
-            )
+            # ADR-0009 R-5: a series that loses rows must also lose its
+            # coverage claim, or layer 0 would serve the hollowed-out remainder
+            # as complete. Forgetting costs one live fetch per series.
+            for table in ("price_bars_fetch_log", "price_bars_attempt_log"):
+                # Plain EXISTS with fully qualified names: no row-value IN and no
+                # DELETE alias, so nothing here needs a newer SQLite than the
+                # 999-parameter cap ``find_foreign_bars`` already assumes.
+                conn.execute(
+                    f"""
+                    DELETE FROM {table}
+                    WHERE EXISTS (
+                        SELECT 1 FROM price_bars_cache
+                        WHERE price_bars_cache.symbol = {table}.symbol
+                              AND price_bars_cache.market = {table}.market
+                              AND price_bars_cache.source = ?
+                    )
+                    """,
+                    (source,),
+                )
+            cursor = conn.execute("DELETE FROM price_bars_cache WHERE source = ?", (source,))
             return cursor.rowcount
 
     def get(
@@ -312,10 +483,9 @@ class PriceBarCache:
         """Return cached bars for ``symbol``/``market`` within ``[start, end]``.
 
         Returns ``None`` if no rows exist for the range at all. When rows do
-        exist, they are returned regardless of TTL (the cache is a
-        last-resort layer in the degradation ladder) but ``is_within_ttl``
-        tells the caller whether the data is still inside the configured
-        freshness window.
+        exist, they are returned whatever their age (the cache is the
+        last-resort layer of the degradation ladder); how current they are is
+        the service's judgement (ADR-0009), not a property of the rows.
         """
         moment = now if now is not None else datetime.now(UTC)
         with closing(self._connect()) as conn:
@@ -379,11 +549,9 @@ class PriceBarCache:
 
         staleness = moment - oldest_fetched_at
         staleness_minutes = max(0, int(staleness.total_seconds() // 60))
-        is_within_ttl = staleness.total_seconds() <= self._ttl_seconds
         return CacheReadResult(
             bars=bars,
             fetched_at=oldest_fetched_at,
             source=row_source,
             staleness_minutes=staleness_minutes,
-            is_within_ttl=is_within_ttl,
         )

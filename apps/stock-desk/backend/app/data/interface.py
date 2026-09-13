@@ -86,8 +86,11 @@ class PriceBar(BaseModel):
 class ProviderResult(BaseModel):
     """Envelope returned by every ``MarketDataProvider.get_daily_bars`` call.
 
-    ``is_within_ttl`` (ADR-0005 決策四, "TTL 內快取先行"): whether the served
-    data is still inside the cache's freshness window. It is meaningful only
+    ``is_within_ttl`` (ADR-0005 決策四 "TTL 內快取先行", freshness rule revised
+    by ADR-0009): whether the served cache already holds the latest session
+    the market has completed and published -- ``True`` means "as current as a
+    live fetch would be", ``False`` means the cache is known to be short of at
+    least one session (served anyway, disclosed as stale). It is meaningful only
     for ``status=CACHED_STALE`` responses and is ``None`` for any live source
     (``FRESH``/``BACKUP``) and for ``UNAVAILABLE``, where "within TTL" is not
     a question that applies. This does **not** add a fifth ``DataStatus`` --
@@ -116,6 +119,14 @@ class ProviderResult(BaseModel):
     staleness_minutes: int | None = None
     is_within_ttl: bool | None = None
     reason: str | None = None
+    #: ``False`` when the provider answered for only part of the requested
+    #: range (a month endpoint failed and was skipped) but still had bars to
+    #: return. The service then writes what came back through to the cache but
+    #: does **not** record the range as covered, so the hole is re-fetched on
+    #: the next request instead of being frozen in by layer 0 (ADR-0009 R-4).
+    #: The service propagates it on the result it returns; surfacing it on the
+    #: API's ``data`` block is a follow-up, not yet wired.
+    complete: bool = True
 
     @field_validator("as_of")
     @classmethod
@@ -144,9 +155,7 @@ class MarketDataProvider(ABC):
     source_id: ClassVar[str]
 
     @abstractmethod
-    def get_daily_bars(
-        self, symbol: str, start: date_type, end: date_type
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, start: date_type, end: date_type) -> ProviderResult:
         """Return daily OHLCV bars for ``symbol`` within ``[start, end]``.
 
         Implementations must not raise for *expected* failure modes (network

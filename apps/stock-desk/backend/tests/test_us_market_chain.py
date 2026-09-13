@@ -4,9 +4,8 @@ ADR-0005 決策四 defines the US chain as ``TTL 內快取 -> Alpha Vantage ->
 yfinance -> 任何快取（含過期）-> unavailable``. Each rung is exercised here with
 fake providers, plus the two properties the assembly exists to guarantee:
 
-* ``cache_first`` is what makes layer 0 real, and it must stay off for TW
-  (ADR-0005 constraint D-1) -- a service built the TW way calls its provider on
-  every request, no matter how warm the cache is;
+* ``cache_first`` is what makes layer 0 real; since ADR-0009 every ladder
+  runs it under the session rule (TW included).
 * whatever reason a rung gave for declining (quota spent, no API key, source
   unreachable) has to survive all the way to what the API layer shows. Losing
   it turns three very different situations into one opaque "no data".
@@ -208,9 +207,15 @@ def test_layer_zero_serves_a_fresh_cache_without_spending_quota(tmp_path: Path) 
     assert result.is_within_ttl is True
 
 
-def test_an_expired_cache_does_not_short_circuit_the_ladder(tmp_path: Path) -> None:
+def test_a_cache_short_of_a_session_does_not_short_circuit_the_ladder(tmp_path: Path) -> None:
+    """ADR-0009: age alone is not the test -- a missing published session is."""
     cache = PriceBarCache(db_path=tmp_path / "us.db")
-    cache.put(_us_bars(), source="fake_us", fetched_at=_NOW - timedelta(days=3))
+    # Cached and last checked three days ago, and the series stops three
+    # sessions before the latest one the market has published.
+    stale_end = _END - timedelta(days=5)
+    old_bars = recent_bars(trending_closes(20), symbol="AAPL", market="US", end=stale_end)
+    cache.put(old_bars, source="fake_us", fetched_at=_NOW - timedelta(days=3))
+    cache.record_fetch("AAPL", "US", start=_START, end=_END, fetched_at=_NOW - timedelta(days=3))
     primary = FakeProvider("alpha_vantage", bars=_us_bars())
     service = _us_service(
         tmp_path,
@@ -223,8 +228,21 @@ def test_an_expired_cache_does_not_short_circuit_the_ladder(tmp_path: Path) -> N
     assert result.status is DataStatus.FRESH
 
 
-def test_a_tw_shaped_service_still_calls_its_provider_every_time(tmp_path: Path) -> None:
-    """ADR-0005 D-1: ``cache_first`` defaults off and TW keeps that default."""
+def test_an_old_cache_that_holds_the_latest_session_is_still_current(tmp_path: Path) -> None:
+    """ADR-0009 supersedes the 24h TTL: a Friday fetch is current on Sunday."""
+    cache = PriceBarCache(db_path=tmp_path / "us.db")
+    cache.put(_us_bars(), source="fake_us", fetched_at=_NOW - timedelta(days=2))
+    cache.record_fetch("AAPL", "US", start=_START, end=_END, fetched_at=_NOW - timedelta(days=2))
+    primary = FakeProvider("alpha_vantage", bars=_us_bars())
+    service = _us_service(tmp_path, primary=primary, backup=FakeProvider("yfinance"), cache=cache)
+    result = service.get_daily_bars("AAPL", "US", _START, _END)
+    assert primary.calls == 0
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is True
+
+
+def test_a_ladder_without_layer_zero_still_calls_its_provider_every_time(tmp_path: Path) -> None:
+    """``cache_first=False`` keeps the pre-layer-0 ladder (no market uses it now)."""
     primary = FakeProvider("twse", bars=_us_bars())
     service = MarketDataService(
         primary=primary,
@@ -237,6 +255,23 @@ def test_a_tw_shaped_service_still_calls_its_provider_every_time(tmp_path: Path)
     assert result.status is DataStatus.FRESH
 
 
+def test_a_tw_ladder_calls_twse_once_per_published_session(tmp_path: Path) -> None:
+    """ADR-0009: the TW ladder runs layer 0 too -- the second click is local."""
+    tw_bars = recent_bars(trending_closes(20), symbol="2330", market="TW", end=_END)
+    primary = FakeProvider("twse", bars=tw_bars)
+    service = MarketDataService(
+        primary=primary,
+        cache=PriceBarCache(db_path=tmp_path / "tw.db"),
+        clock=lambda: _NOW,
+        cache_first=True,
+    )
+    first = service.get_daily_bars("2330", "TW", _START, _END)
+    second = service.get_daily_bars("2330", "TW", _START, _END)
+    assert primary.calls == 1
+    assert first.status is DataStatus.FRESH
+    assert second.status is DataStatus.CACHED_STALE and second.is_within_ttl is True
+
+
 # --- All the way out to the API's data envelope ------------------------------
 
 
@@ -246,9 +281,7 @@ def test_the_reason_reaches_the_data_envelope(tmp_path: Path) -> None:
         primary=FakeProvider("alpha_vantage", reason=QUOTA_SPENT),
         backup=FakeProvider("yfinance", reason=YF_DOWN),
     )
-    loaded = load_bars(
-        {"US": service}, symbol="AAPL", market="US", start=_START, end=_END
-    )
+    loaded = load_bars({"US": service}, symbol="AAPL", market="US", start=_START, end=_END)
     meta = loaded.meta()
     assert loaded.bars == []
     assert isinstance(meta["reason"], str)
@@ -266,9 +299,7 @@ def test_the_envelope_reports_ttl_freshness_for_a_layer_zero_hit(tmp_path: Path)
         backup=FakeProvider("yfinance"),
     )
     service.get_daily_bars("AAPL", "US", _START, _END)
-    meta = load_bars(
-        {"US": service}, symbol="AAPL", market="US", start=_START, end=_END
-    ).meta()
+    meta = load_bars({"US": service}, symbol="AAPL", market="US", start=_START, end=_END).meta()
     # ADR-0005 D-2: both fields, or the reader cannot tell "cached but updated
     # today" from "cached and out of date".
     assert meta["status"] == DataStatus.CACHED_STALE.value
@@ -281,8 +312,6 @@ def test_a_live_rung_reports_no_ttl_answer(tmp_path: Path) -> None:
         primary=FakeProvider("alpha_vantage", bars=_us_bars()),
         backup=FakeProvider("yfinance"),
     )
-    meta = load_bars(
-        {"US": service}, symbol="AAPL", market="US", start=_START, end=_END
-    ).meta()
+    meta = load_bars({"US": service}, symbol="AAPL", market="US", start=_START, end=_END).meta()
     assert meta["status"] == DataStatus.FRESH.value
     assert meta["is_within_ttl"] is None

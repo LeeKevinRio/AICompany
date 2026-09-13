@@ -12,7 +12,8 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 
-from app.data.cache import PriceBarCache
+from app.data.cache import CacheReadResult, PriceBarCache
+from app.data.freshness import Verdict, expected_session, judge, policy_for
 from app.data.interface import DataStatus, Market, MarketDataProvider, ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,15 @@ logger = logging.getLogger(__name__)
 _REASON_SEPARATOR = "；"
 
 UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一層。"
+#: Carried by a cache answer served because the last live ask (inside the
+#: market's cooldown) failed or came back partial -- the reader must not be
+#: left thinking nothing was wrong (ADR-0003 約束 7). Wording approved by
+#: risk-compliance-officer 2026-09-13 (第三輪). **Not yet user-visible**: the
+#: ``load_bars`` success branch does not forward ``reason`` and no component
+#: renders ``DataMeta.reason`` for a successful load, so today this sentence
+#: lives in the service result and the logs only; the badge's 「可能未含最近
+#: 交易日」 is what the user sees. Wiring it through is 列管 (ADR-0009).
+RECENT_ATTEMPT_FAILED_REASON = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
 
 
 def _combine_reasons(reasons: Sequence[str]) -> str | None:
@@ -54,19 +64,24 @@ class MarketDataService:
     Every successful live fetch is written through to the cache so it is
     available for a later degrade-to-cache fallback.
 
-    ``cache_first`` (ADR-0005 決策四, "TTL 內快取先行" -- a revision to
-    ADR-0003's four-layer ladder, adding a "layer 0" ahead of the primary
-    provider): when ``True``, a cache entry that is still within its TTL is
-    served immediately, without calling any provider at all. This exists
-    because Alpha Vantage's daily quota is cheap to burn through on repeat
-    requests for the same symbol within the same day (e.g. a page reload),
-    and the quota ledger (``app.data.quota.QuotaLedger``) alone cannot help
-    with that -- it only stops *new* symbols once the day's budget is spent,
-    it does nothing to avoid spending budget on a symbol already fetched an
-    hour ago. Per ADR-0005, ``cache_first`` must stay ``False`` for the TW
-    service (Taiwan has no comparable quota pressure) so this class's
-    existing behaviour for TW is unchanged byte-for-byte when the flag is
-    left at its default.
+    ``cache_first`` (ADR-0005 決策四 "layer 0", freshness rule revised by
+    ADR-0009): when ``True``, a cache that already holds the latest session
+    the market has completed and published is served immediately, without
+    calling any provider. The judgement is :func:`app.data.freshness.judge`
+    -- session-based, not clock-based: a Friday fetch is still current on
+    Sunday, and a fetch from an hour ago is *not* current once the market has
+    closed and published a newer session. When the cache is short of a
+    session but a live source was consulted within the market's
+    ``recheck_cooldown`` and had nothing newer (holiday, close not yet
+    published), the cache is served too, disclosed as stale
+    (``is_within_ttl=False``), so a holiday cannot turn into a live call per
+    click. Layer 0 also needs the recorded live-fetch coverage
+    (:meth:`PriceBarCache.fetch_coverage`) to reach at least as far back as
+    the request; otherwise a widened date range goes to the provider.
+
+    Per ADR-0009 every ladder turns this on (TW included -- ADR-0005 D-1's
+    "TW always calls the provider" is superseded); the cooldown per market is
+    what protects Alpha Vantage's daily budget (ADR-0005).
 
     Degradation reasons are not swallowed: every rung that declined to answer
     contributes its ``ProviderResult.reason`` to the ``reason`` of whatever
@@ -91,11 +106,9 @@ class MarketDataService:
         self._clock = clock
         self._cache_first = cache_first
 
-    def get_daily_bars(
-        self, symbol: str, market: Market, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         if self._cache_first:
-            layer_zero = self._try_ttl_fresh_cache(symbol, market, start, end)
+            layer_zero = self._try_session_fresh_cache(symbol, market, start, end)
             if layer_zero is not None:
                 return layer_zero
 
@@ -113,44 +126,136 @@ class MarketDataService:
                 if reason is not None:
                     reasons.append(reason)
                 continue
-            self._cache.put(result.bars, source=result.source, fetched_at=self._clock())
+            fetched_at = self._clock()
+            self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
+            # ADR-0009: the attempt log feeds the cooldown; the fetch log
+            # (coverage) is written only for a complete answer, so a range
+            # with a skipped month is asked for again instead of frozen in.
+            self._cache.record_attempt(symbol, market, at=fetched_at)
+            if result.complete:
+                self._cache.record_fetch(
+                    symbol, market, start=start, end=end, fetched_at=fetched_at
+                )
+            else:
+                logger.info(
+                    "partial answer for %s from %s: coverage not recorded, "
+                    "the range will be asked for again",
+                    symbol,
+                    result.source,
+                )
             return ProviderResult(
                 bars=result.bars,
                 status=status,
                 as_of=result.as_of,
                 source=result.source,
                 staleness_minutes=0,
+                complete=result.complete,
             )
 
+        # Every live rung declined: remember the attempt so the cooldown applies
+        # to the *next* click even though nothing was fetched (ADR-0009 R-8).
+        self._cache.record_attempt(symbol, market, at=self._clock())
         return self._fall_back_to_cache(symbol, market, start, end, reasons)
 
-    def _try_ttl_fresh_cache(
+    def _try_session_fresh_cache(
         self, symbol: str, market: Market, start: date, end: date
     ) -> ProviderResult | None:
-        """``cache_first`` layer 0: serve a still-fresh cache hit, calling nobody.
+        """``cache_first`` layer 0 (ADR-0009): serve the cache when no newer session can exist.
 
         Returns ``None`` (meaning "fall through to the normal ladder") when
-        there is no cached data for this range, or when what is cached has
-        already aged past the TTL -- an expired cache entry must not be
-        assumed good enough to skip a live fetch.
+        there is no cached data for this range, when no complete live fetch
+        covering ``start`` is on record and no live attempt was made within
+        the cooldown, or when the cache is short of the latest published
+        session and nobody has asked a live source within the cooldown.
         """
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
-        if cached is None or not cached.is_within_ttl:
+        if cached is None:
+            return None
+        policy = policy_for(market)
+        coverage = self._cache.fetch_coverage(symbol, market)
+        last_success = coverage.last_fetched_at if coverage is not None else None
+        if coverage is None or coverage.covered_start > start:
+            # Never fetched live in full (a seeded, legacy or holed cache), or
+            # the request reaches further back than any complete fetch: the
+            # ladder must run. The one exception (ADR-0009 R-8): the last live
+            # ask -- strictly *after* the last complete success, i.e. one that
+            # failed or came back partial -- is inside the cooldown, so serve
+            # what we have rather than re-run the whole ladder per click. A
+            # widened range right after a successful fetch is not that case.
+            attempted = self._cache.last_attempt_at(symbol, market)
+            if (
+                attempted is not None
+                and (last_success is None or attempted > last_success)
+                and policy.is_within_cooldown(now, attempted)
+            ):
+                logger.info(
+                    "cache_first: serving %s from cache after a failed live attempt %d min ago",
+                    symbol,
+                    (now - attempted).total_seconds() // 60,
+                )
+                # Age is the rows' real fetch time, never the failed attempt's
+                # (風控 2026-09-13 R-10: nothing was obtained then).
+                return self._cached_result(
+                    cached,
+                    checked_at=cached.fetched_at,
+                    now=now,
+                    current=False,
+                    reason=RECENT_ATTEMPT_FAILED_REASON,
+                )
+            return None
+        verdict = judge(
+            policy,
+            last_bar_date=max(bar.date for bar in cached.bars),
+            last_checked_at=coverage.last_fetched_at,
+            requested_end=end,
+            now=now,
+        )
+        if verdict is Verdict.REFETCH:
+            return None
+        if verdict is Verdict.CHECKED_RECENTLY and coverage.covered_end < expected_session(
+            policy, requested_end=end, now=now
+        ):
+            # The recorded complete fetch never reached the session this
+            # request expects (a historical fetch being reused for a request
+            # that runs to today): that is a range gap, not a holiday.
             return None
         logger.info(
-            "cache_first: serving %s from cache (%d min old, within TTL); "
-            "skipping all live providers for this request",
+            "cache_first: serving %s from cache (%s); skipping all live providers",
             symbol,
-            cached.staleness_minutes,
+            verdict.value,
         )
+        return self._cached_result(
+            cached,
+            checked_at=coverage.last_fetched_at,
+            now=now,
+            current=verdict is Verdict.HAS_LATEST_SESSION,
+        )
+
+    @staticmethod
+    def _cached_result(
+        cached: CacheReadResult,
+        *,
+        checked_at: datetime,
+        now: datetime,
+        current: bool,
+        reason: str | None = None,
+    ) -> ProviderResult:
+        """A ``CACHED_STALE`` answer whose age is when the data was last obtained.
+
+        ``checked_at`` is the last *complete* live fetch when one is on record
+        (a two-year series fetched this morning is minutes old, not a year --
+        ADR-0009 R-2), else the rows' own oldest ``fetched_at``. It is never a
+        failed attempt's time: nothing was obtained then (風控 R-10).
+        """
         return ProviderResult(
             bars=cached.bars,
             status=DataStatus.CACHED_STALE,
-            as_of=cached.fetched_at,
+            as_of=checked_at,
             source=cached.source,
-            staleness_minutes=cached.staleness_minutes,
-            is_within_ttl=True,
+            staleness_minutes=max(0, int((now - checked_at).total_seconds() // 60)),
+            is_within_ttl=current,
+            reason=reason,
         )
 
     def _try_provider(
@@ -183,16 +288,14 @@ class MarketDataService:
             result = provider.get_daily_bars(symbol, start, end)
         except Exception:
             logger.exception(
-                "unexpected provider error: %s raised while fetching %s; "
-                "degrading to next layer",
+                "unexpected provider error: %s raised while fetching %s; degrading to next layer",
                 provider_label,
                 symbol,
             )
             return None, UNEXPECTED_ERROR_REASON.format(provider=provider_label)
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
             logger.info(
-                "provider %s returned no usable data (status=%s) for %s; "
-                "degrading to next layer",
+                "provider %s returned no usable data (status=%s) for %s; degrading to next layer",
                 provider_label,
                 result.status.value,
                 symbol,
@@ -212,22 +315,34 @@ class MarketDataService:
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
         if cached is not None:
+            # ADR-0009 R-1: the same session rule decides ``is_within_ttl`` on
+            # this path too -- a cache that lacks a published session is never
+            # called current just because it was fetched recently.
+            current = False
+            checked_at = cached.fetched_at
+            coverage = self._cache.fetch_coverage(symbol, market)
+            if coverage is not None and coverage.covered_start <= start:
+                checked_at = coverage.last_fetched_at
+                current = (
+                    judge(
+                        policy_for(market),
+                        last_bar_date=max(bar.date for bar in cached.bars),
+                        last_checked_at=coverage.last_fetched_at,
+                        requested_end=end,
+                        now=now,
+                    )
+                    is Verdict.HAS_LATEST_SESSION
+                )
             logger.warning(
                 "all providers unavailable for %s; serving cached data (%d min stale)",
                 symbol,
                 cached.staleness_minutes,
             )
-            return ProviderResult(
-                bars=cached.bars,
-                status=DataStatus.CACHED_STALE,
-                as_of=cached.fetched_at,
-                source=cached.source,
-                staleness_minutes=cached.staleness_minutes,
-                is_within_ttl=cached.is_within_ttl,
-                # Why the live rungs were skipped travels with the cached
-                # answer too: "served from cache" alone does not tell the
-                # reader whether the quota ran out or the vendor was down.
-                reason=combined,
+            # Why the live rungs were skipped travels with the cached answer
+            # too: "served from cache" alone does not tell the reader whether
+            # the quota ran out or the vendor was down.
+            return self._cached_result(
+                cached, checked_at=checked_at, now=now, current=current, reason=combined
             )
 
         logger.error("no provider and no cache entry available for %s", symbol)
