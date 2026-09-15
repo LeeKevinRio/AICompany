@@ -136,6 +136,7 @@ export function EventStudySection({ report, request, formMatches }: Props) {
               stalenessMinutes={result.data.staleness_minutes}
               isWithinTtl={result.data.is_within_ttl}
               lastBarDate={result.data.last_bar_date}
+              reason={result.data.reason}
             />
           </p>
           <h3 className="mt-2 text-base font-semibold text-neutral-100">{result.page.title}</h3>

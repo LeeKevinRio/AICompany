@@ -184,6 +184,7 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
           stalenessMinutes={report.data.staleness_minutes}
           isWithinTtl={report.data.is_within_ttl}
           lastBarDate={report.data.last_bar_date}
+          reason={report.data.reason}
         />
       </p>
 

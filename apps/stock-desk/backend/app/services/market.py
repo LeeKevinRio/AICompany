@@ -181,6 +181,10 @@ def load_bars(
         source=result.source,
         staleness_minutes=result.staleness_minutes,
         is_within_ttl=result.is_within_ttl,
+        # A cache answer can carry why it is the cache (ADR-0009 D-3: the last
+        # live ask failed); dropping it here left the reader with a badge and
+        # no cause (風控 2026-09-13 第三輪 required 追蹤).
+        reason=result.reason,
         trading_days_behind=trading_days_behind_market(
             calendar_source,
             market=market,

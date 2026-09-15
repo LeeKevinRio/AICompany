@@ -298,13 +298,14 @@ export default function PositionDetailPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-neutral-200">日K線與均線</h3>
             {chartTab === "local" && bars.isSuccess && (
-              <span className="flex items-center text-xs text-neutral-500">
+              <span className="flex flex-wrap items-center text-xs text-neutral-500">
                 資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
                 <DataMetaStatusBadge
                   status={bars.data.data.status}
                   stalenessMinutes={bars.data.data.staleness_minutes}
                   isWithinTtl={bars.data.data.is_within_ttl}
                   lastBarDate={bars.data.data.last_bar_date}
+                  reason={bars.data.data.reason}
                 />
               </span>
             )}
@@ -391,13 +392,14 @@ export default function PositionDetailPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-neutral-200">技術指標</h3>
             {signals.isSuccess && (
-              <span className="flex items-center text-xs text-neutral-500">
+              <span className="flex flex-wrap items-center text-xs text-neutral-500">
                 資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
                 <DataMetaStatusBadge
                   status={signals.data.data.status}
                   stalenessMinutes={signals.data.data.staleness_minutes}
                   isWithinTtl={signals.data.data.is_within_ttl}
                   lastBarDate={signals.data.data.last_bar_date}
+                  reason={signals.data.data.reason}
                 />
               </span>
             )}

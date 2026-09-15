@@ -96,6 +96,7 @@ function SourcesSection({ sources }: { sources: SymbolDataMeta[] }) {
               stalenessMinutes={source.data.staleness_minutes}
               isWithinTtl={source.data.is_within_ttl}
               lastBarDate={source.data.last_bar_date}
+              reason={source.data.reason}
             />
           </li>
         ))}

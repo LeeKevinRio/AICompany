@@ -49,13 +49,14 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
           gated on `advice.isSuccess` alone, not on a card being present.
         */}
         {advice.isSuccess && (
-          <span className="flex items-center text-xs text-neutral-500">
+          <span className="flex flex-wrap items-center text-xs text-neutral-500">
             資料時間：{formatDateTime(advice.data.as_of)}｜來源：{advice.data.data.source}
             <DataMetaStatusBadge
               status={advice.data.data.status}
               stalenessMinutes={advice.data.data.staleness_minutes}
               isWithinTtl={advice.data.data.is_within_ttl}
               lastBarDate={advice.data.data.last_bar_date}
+              reason={advice.data.data.reason}
             />
           </span>
         )}

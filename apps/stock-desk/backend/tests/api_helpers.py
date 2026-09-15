@@ -124,6 +124,8 @@ class FakePriceService:
             source=self.source,
             staleness_minutes=self.staleness_minutes,
             is_within_ttl=self.is_within_ttl,
+            # A cache answer may carry why it is the cache (ADR-0009 D-3).
+            reason=self.reason,
         )
 
 

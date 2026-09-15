@@ -17,9 +17,7 @@ def _service() -> FakePriceService:
 
 
 def test_bars_are_returned_with_their_provenance() -> None:
-    loaded = load_bars(
-        {"TW": _service()}, symbol="2330", market="TW", start=_START, end=_END
-    )
+    loaded = load_bars({"TW": _service()}, symbol="2330", market="TW", start=_START, end=_END)
     assert len(loaded.bars) == 50
     assert loaded.status is DataStatus.FRESH
     assert loaded.source == "fake"
@@ -27,9 +25,7 @@ def test_bars_are_returned_with_their_provenance() -> None:
 
 
 def test_meta_block_summarises_the_window() -> None:
-    meta = load_bars(
-        {"TW": _service()}, symbol="2330", market="TW", start=_START, end=_END
-    ).meta()
+    meta = load_bars({"TW": _service()}, symbol="2330", market="TW", start=_START, end=_END).meta()
     assert meta["bar_count"] == 50
     assert meta["last_bar_date"] == _END.isoformat()
     assert meta["first_bar_date"] == (_END - timedelta(days=49)).isoformat()
@@ -44,9 +40,7 @@ def test_a_market_without_an_adapter_is_explained_not_raised() -> None:
 
 
 def test_an_empty_provider_result_is_explained() -> None:
-    loaded = load_bars(
-        {"TW": _service()}, symbol="9999", market="TW", start=_START, end=_END
-    )
+    loaded = load_bars({"TW": _service()}, symbol="9999", market="TW", start=_START, end=_END)
     assert loaded.bars == []
     assert loaded.reason is not None
     assert "沒有可用的日線資料" in loaded.reason
@@ -61,3 +55,20 @@ def test_a_degraded_rung_is_reported_verbatim() -> None:
     loaded = load_bars({"TW": service}, symbol="2330", market="TW", start=_START, end=_END)
     assert loaded.status is DataStatus.BACKUP
     assert loaded.meta()["source"] == "finmind"
+
+
+def test_a_successful_cache_answer_keeps_its_reason() -> None:
+    """ADR-0009 D-3: why the answer is the cache travels to the ``data`` block."""
+    from app.data.service import RECENT_ATTEMPT_FAILED_REASON
+    from app.services.market import load_bars
+    from tests.api_helpers import FakePriceService, recent_bars, trending_closes
+
+    service = FakePriceService(
+        {"2330": recent_bars(trending_closes(30), symbol="2330", end=date(2026, 7, 26))},
+        status=DataStatus.CACHED_STALE,
+        reason=RECENT_ATTEMPT_FAILED_REASON,
+    )
+    loaded = load_bars(
+        {"TW": service}, symbol="2330", market="TW", start=date(2026, 6, 1), end=date(2026, 7, 26)
+    )
+    assert loaded.bars and loaded.meta()["reason"] == RECENT_ATTEMPT_FAILED_REASON

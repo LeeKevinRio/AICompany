@@ -1,5 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { cachedStaleLabel } from "../../components/DataMetaStatusBadge";
+import { DataMetaStatusBadge, cachedStaleLabel } from "../../components/DataMetaStatusBadge";
 
 /**
  * 風控 2026-09-13 第二輪核可（ADR-0009 D-5）方案 A 八句，逐字釘住：徽章陳述可驗證的
@@ -47,5 +49,30 @@ describe("DataMetaStatusBadge cached_stale wording — 風控 2026-09-13 方案 
         }
       }
     }
+  });
+});
+
+describe("DataMetaStatusBadge reason — 風控 2026-09-13 第三輪 required 追蹤（2026-09-15 接通）", () => {
+  const reason = "最近一次向來源取得資料未成功，暫以本機快取回覆。";
+  it("shows DataMeta.reason standing beside a cached badge, as plain text", () => {
+    const html = renderToStaticMarkup(
+      createElement(DataMetaStatusBadge, {
+        status: "cached_stale",
+        stalenessMinutes: 80,
+        isWithinTtl: false,
+        lastBarDate: "2026-09-11",
+        reason,
+      }),
+    );
+    expect(html).toContain("快取資料，資料截至 2026-09-11（80 分鐘前取得，可能未含最近交易日）");
+    expect(html).toContain(reason);
+    expect(html).not.toContain("title=");
+  });
+  it("renders nothing extra when there is no reason, and nothing at all when fresh", () => {
+    const cached = renderToStaticMarkup(
+      createElement(DataMetaStatusBadge, { status: "cached_stale", stalenessMinutes: null, isWithinTtl: true }),
+    );
+    expect(cached).toBe('<span class="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">本機快取</span>');
+    expect(renderToStaticMarkup(createElement(DataMetaStatusBadge, { status: "fresh", stalenessMinutes: null, isWithinTtl: null, reason }))).toBe("");
   });
 });
