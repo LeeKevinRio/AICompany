@@ -54,6 +54,21 @@ def test_price_above_fires_and_states_observation_and_threshold(store: AlertStor
     assert event.acknowledged is False
 
 
+def test_a_fired_message_carries_the_data_layers_own_sentence(store: AlertStore) -> None:
+    """風控 2026-09-15 R1-a: a crossing judged on a spliced or cached series says so
+    in the message the user receives, not only on a skip."""
+    spliced = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+    add_rule(store, price_rule(above=True, threshold=100.0))
+    result = evaluate_alerts(
+        store, _loader(snapshot(close=120.0, data_disclosure=spliced)), now=_NOW
+    )
+    assert len(result.events) == 1
+    assert result.events[0].message.endswith(spliced)
+    # Fires again after the cooldown, on a snapshot without a sentence: nothing is invented.
+    later = evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW + timedelta(hours=2))
+    assert spliced not in later.events[0].message
+
+
 def test_price_above_stays_quiet_below_the_threshold(store: AlertStore) -> None:
     add_rule(store, price_rule(above=True, threshold=200.0))
     result = evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW)
@@ -85,9 +100,7 @@ def test_no_price_is_a_skip_with_a_reason_not_a_silent_pass(store: AlertStore) -
 
 def test_signal_condition_fires_on_the_signal_vocabulary(store: AlertStore) -> None:
     add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
-    result = evaluate_alerts(
-        store, _loader(snapshot(signals=uptrend_signals(rsi=82.0))), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(signals=uptrend_signals(rsi=82.0))), now=_NOW)
     assert len(result.events) == 1
     assert "14 日 RSI 最新值" in result.events[0].message
     assert result.events[0].observed["value"] == 82.0
@@ -95,9 +108,7 @@ def test_signal_condition_fires_on_the_signal_vocabulary(store: AlertStore) -> N
 
 def test_signal_condition_stays_quiet_when_the_comparison_is_false(store: AlertStore) -> None:
     add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
-    result = evaluate_alerts(
-        store, _loader(snapshot(signals=uptrend_signals(rsi=40.0))), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(signals=uptrend_signals(rsi=40.0))), now=_NOW)
     assert _statuses(result) == ["quiet"]
 
 
@@ -112,9 +123,7 @@ def test_signal_condition_supports_a_field_to_field_reference(store: AlertStore)
     rule = signal_rule()
     rule["params"] = {"condition": {"field": "ma5.last", "op": "gt", "ref": "ma20.last"}}
     add_rule(store, rule)
-    result = evaluate_alerts(
-        store, _loader(snapshot(signals=uptrend_signals())), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(signals=uptrend_signals())), now=_NOW)
     assert len(result.events) == 1
     assert result.events[0].observed["compared_to"] == 105.0
 
@@ -140,9 +149,7 @@ def test_no_signals_at_all_is_a_skip(store: AlertStore) -> None:
 
 def test_risk_limit_breach_fires_and_quotes_the_numbered_cap(store: AlertStore) -> None:
     add_rule(store, limit_rule(limit_id="any"))
-    result = evaluate_alerts(
-        store, _loader(snapshot(context=breaching_context())), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(context=breaching_context())), now=_NOW)
     assert len(result.events) == 1
     message = result.events[0].message
     assert "觸發風險上限" in message
@@ -152,9 +159,7 @@ def test_risk_limit_breach_fires_and_quotes_the_numbered_cap(store: AlertStore) 
 
 def test_risk_limit_rule_can_watch_one_named_cap(store: AlertStore) -> None:
     add_rule(store, limit_rule(limit_id="gross_exposure"))
-    result = evaluate_alerts(
-        store, _loader(snapshot(context=breaching_context())), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(context=breaching_context())), now=_NOW)
     # Gross exposure is not evaluable in that context, and "cannot check" must
     # not read as "checked and fine".
     assert _statuses(result) == ["skipped"]
@@ -163,9 +168,7 @@ def test_risk_limit_rule_can_watch_one_named_cap(store: AlertStore) -> None:
 
 def test_compliant_book_keeps_the_risk_rule_quiet(store: AlertStore) -> None:
     add_rule(store, limit_rule(limit_id="single_position_weight"))
-    result = evaluate_alerts(
-        store, _loader(snapshot(context=compliant_context())), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(context=compliant_context())), now=_NOW)
     assert _statuses(result) == ["quiet"]
 
 
@@ -175,9 +178,7 @@ def test_a_watched_cap_absent_from_the_results_is_a_skip(store: AlertStore) -> N
     # asked to watch is not in the results" must never read as "not breached".
     add_rule(store, limit_rule(limit_id="kelly_fraction"))
     full = snapshot(context=breaching_context())
-    partial = replace(
-        full, limits=[check for check in full.limits if check.id != "kelly_fraction"]
-    )
+    partial = replace(full, limits=[check for check in full.limits if check.id != "kelly_fraction"])
     result = evaluate_alerts(store, _loader(partial), now=_NOW)
     assert _statuses(result) == ["skipped"]
     assert "不在本次檢查結果中" in (result.outcomes[0].reason or "")
@@ -192,9 +193,7 @@ def test_a_fired_risk_limit_message_carries_the_fx_disclosure(store: AlertStore)
     disclosure = "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；端點未經查證。"
     result = evaluate_alerts(
         store,
-        _loader(
-            snapshot(context=breaching_context(), currency="USD", fx_disclosure=disclosure)
-        ),
+        _loader(snapshot(context=breaching_context(), currency="USD", fx_disclosure=disclosure)),
         now=_NOW,
     )
     assert len(result.events) == 1
@@ -207,9 +206,7 @@ def test_a_twd_holding_gets_no_fx_disclosure_it_did_not_use(store: AlertStore) -
     # Nothing was converted, so there is no rate to qualify; padding every
     # message with the sentence would train the reader to skip past it.
     add_rule(store, limit_rule(limit_id="any"))
-    result = evaluate_alerts(
-        store, _loader(snapshot(context=breaching_context())), now=_NOW
-    )
+    result = evaluate_alerts(store, _loader(snapshot(context=breaching_context())), now=_NOW)
     assert "匯率" not in result.events[0].message
 
 
@@ -238,9 +235,7 @@ def test_an_unevaluable_cap_says_why_the_inputs_were_missing(store: AlertStore) 
     add_rule(store, limit_rule(limit_id="gross_exposure"))
     result = evaluate_alerts(
         store,
-        _loader(
-            snapshot(context=breaching_context(), reason="無法取得匯率換算（USDTWD）。")
-        ),
+        _loader(snapshot(context=breaching_context(), reason="無法取得匯率換算（USDTWD）。")),
         now=_NOW,
     )
     assert _statuses(result) == ["skipped"]
@@ -270,9 +265,7 @@ def test_cooldown_suppresses_a_repeat_within_the_window(store: AlertStore) -> No
     add_rule(store, price_rule(threshold=100.0))
     loader = _loader(snapshot(close=120.0))
     first = evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW)
-    second = evaluate_alerts(
-        store, loader, cooldown_minutes=60, now=_NOW + timedelta(minutes=30)
-    )
+    second = evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW + timedelta(minutes=30))
     assert len(first.events) == 1
     assert second.events == []
     assert _statuses(second) == ["suppressed"]
@@ -283,9 +276,7 @@ def test_cooldown_expires_and_the_rule_fires_again(store: AlertStore) -> None:
     add_rule(store, price_rule(threshold=100.0))
     loader = _loader(snapshot(close=120.0))
     evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW)
-    later = evaluate_alerts(
-        store, loader, cooldown_minutes=60, now=_NOW + timedelta(minutes=90)
-    )
+    later = evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW + timedelta(minutes=90))
     assert len(later.events) == 1
 
 
@@ -293,9 +284,7 @@ def test_zero_cooldown_disables_suppression(store: AlertStore) -> None:
     add_rule(store, price_rule(threshold=100.0))
     loader = _loader(snapshot(close=120.0))
     evaluate_alerts(store, loader, cooldown_minutes=0, now=_NOW)
-    again = evaluate_alerts(
-        store, loader, cooldown_minutes=0, now=_NOW + timedelta(seconds=1)
-    )
+    again = evaluate_alerts(store, loader, cooldown_minutes=0, now=_NOW + timedelta(seconds=1))
     assert len(again.events) == 1
 
 

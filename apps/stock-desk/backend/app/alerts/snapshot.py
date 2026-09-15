@@ -93,11 +93,15 @@ def build_snapshot(
         net_worth=net_worth,
         kelly=kelly,
     )
-    data_reason = (
+    # The data layer's own sentence (served from cache, spliced sources -- ADR-0009
+    # D-7) is kept next to the layer note, never replaced by it: a spliced series
+    # arrives as ``fresh`` and would otherwise say nothing (風控 2026-09-15 R1-a).
+    layer_note = (
         None
         if loaded.status is DataStatus.FRESH
         else f"資料來自 {loaded.status.value} 層（{loaded.source}）。"
     )
+    data_reason = _joined_reason(layer_note, loaded.reason)
     # Disclosed on exactly the condition ``build_book_context`` uses: only a
     # rate that was actually applied to a figure needs its methodology stated.
     # A TWD holding resolves no quote at all, and a failed lookup has nothing to
@@ -113,6 +117,7 @@ def build_snapshot(
         as_of=latest.date.isoformat(),
         reason=_joined_reason(data_reason, book.fx_note),
         fx_disclosure=fx_disclosure,
+        data_disclosure=loaded.reason,
     )
 
 

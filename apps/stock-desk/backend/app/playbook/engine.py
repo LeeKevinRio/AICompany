@@ -107,6 +107,7 @@ def _make_directive(
         limit_note=limit_note,
         data_status=snapshot.data_status,
         source=snapshot.source,
+        data_reason=snapshot.data_reason,
     )
 
 

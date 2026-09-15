@@ -155,6 +155,10 @@ class MarketSnapshot(BaseModel):
     #: ``unavailable``) -- 風控 R5.
     data_status: str
     source: str
+    #: The data layer's own sentence about the series (``ProviderResult.reason``):
+    #: why it is the cache, or that it is spliced from more than one source
+    #: (ADR-0009 D-7 / ADR-0005 D-5). ``None`` when there is nothing to say.
+    data_reason: str | None = None
     #: 高波動清單 membership only changes the P3 threshold (15% -> 20%).
     high_volatility: bool = False
 
@@ -176,6 +180,10 @@ class IndexSnapshot(BaseModel):
     large_move_days: int
     data_status: str
     source: str
+    #: The data layer's sentence about the index series (cache, spliced sources
+    #: -- ADR-0009 D-7), carried so the mode reason it feeds can be qualified
+    #: (風控 2026-09-15 R1-b). ``None`` when there is nothing to say.
+    data_reason: str | None = None
 
 
 class BatchState(BaseModel):
@@ -331,6 +339,10 @@ class Directive(BaseModel):
     limit_note: str
     data_status: str
     source: str
+    #: ``MarketSnapshot.data_reason`` as it was when the line was issued --
+    #: persisted, not recomputed, so the ledger can show the data state the
+    #: line was actually decided on (風控 2026-09-15 R3).
+    data_reason: str | None = None
     status: DirectiveStatus = "pending"
 
 

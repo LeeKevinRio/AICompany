@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import NamedTuple
 
 from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
@@ -92,12 +93,28 @@ def latest_bar_date(*bar_groups: Sequence[PriceBar]) -> date | None:
     return max((bar.date for bars in bar_groups for bar in bars), default=None)
 
 
+class LoadedSeries(NamedTuple):
+    """One symbol's bars as the data ladder returned them, with its provenance."""
+
+    bars: list[PriceBar]
+    status: str
+    source: str
+    #: ``ProviderResult.reason`` -- carried into the snapshot and every
+    #: directive issued from it (風控 2026-09-15 R3), never dropped here.
+    reason: str | None = None
+
+
+#: What a symbol the ladder never answered for looks like.
+NOTHING_LOADED = LoadedSeries([], "unavailable", "none", None)
+
+
 def build_market_snapshot(
     symbol: str,
     bars: Sequence[PriceBar],
     *,
     status: str,
     source: str,
+    reason: str | None = None,
     high_volatility: bool = False,
 ) -> MarketSnapshot | None:
     """One symbol's snapshot, or ``None`` when no bar came back at all."""
@@ -115,12 +132,18 @@ def build_market_snapshot(
         bias25=indicators.bias(latest.close, ma25),
         data_status=status,
         source=source,
+        data_reason=reason,
         high_volatility=high_volatility,
     )
 
 
 def build_index_snapshot(
-    bars: Sequence[PriceBar], *, status: str, source: str, params: RuleParams
+    bars: Sequence[PriceBar],
+    *,
+    status: str,
+    source: str,
+    params: RuleParams,
+    reason: str | None = None,
 ) -> IndexSnapshot | None:
     """加權指數 snapshot: 月線, its run of closes below it, and the fast-market pair."""
     ordered = indicators.sorted_closes(bars)
@@ -143,6 +166,7 @@ def build_index_snapshot(
         ),
         data_status=status,
         source=source,
+        data_reason=reason,
     )
 
 
@@ -192,24 +216,26 @@ class PlaybookService:
     def store(self) -> PlaybookStore:
         return self._store
 
-    def _load_symbol_bars(
-        self, symbols: Sequence[str], *, today: date
-    ) -> dict[str, tuple[list[PriceBar], str, str]]:
+    def _load_symbol_bars(self, symbols: Sequence[str], *, today: date) -> dict[str, LoadedSeries]:
         start = today - timedelta(days=LOOKBACK_DAYS)
-        loaded: dict[str, tuple[list[PriceBar], str, str]] = {}
+        loaded: dict[str, LoadedSeries] = {}
         for symbol in symbols:
             result = load_bars(
                 self._markets, symbol=symbol, market=PLAYBOOK_MARKET, start=start, end=today
             )
-            loaded[symbol] = (list(result.bars), result.status.value, result.source)
+            loaded[symbol] = LoadedSeries(
+                list(result.bars), result.status.value, result.source, result.reason
+            )
         return loaded
 
-    def _load_index_bars(self, *, today: date) -> tuple[list[PriceBar], str, str]:
+    def _load_index_bars(self, *, today: date) -> LoadedSeries:
         start = today - timedelta(days=LOOKBACK_DAYS)
         benchmark = load_market_benchmark(
             self._indices, market=PLAYBOOK_MARKET, start=start, end=today
         )
-        return list(benchmark.bars), benchmark.status.value, benchmark.source
+        return LoadedSeries(
+            list(benchmark.bars), benchmark.status.value, benchmark.source, benchmark.reason
+        )
 
     def settle_pending(self, *, today: date | None = None) -> SettlementResult:
         """Stamp every due T+1 line against its 預定執行日 opening price.
@@ -247,9 +273,9 @@ class PlaybookService:
         unsettled: list[UnsettledLine] = []
         for item in pending:
             directive = item.directive
-            bars, status, source = loaded.get(directive.symbol, ([], "unavailable", "none"))
+            series = loaded.get(directive.symbol, NOTHING_LOADED)
             opening = next(
-                (bar.open for bar in bars if bar.date == directive.execution_date), None
+                (bar.open for bar in series.bars if bar.date == directive.execution_date), None
             )
             if opening is None:
                 unsettled.append(
@@ -259,8 +285,8 @@ class PlaybookService:
                         reason=wording.SETTLEMENT_NO_OPEN_PRICE.format(
                             symbol=directive.symbol,
                             execution_date=directive.execution_date.isoformat(),
-                            status=status,
-                            source=source,
+                            status=series.status,
+                            source=series.source,
                         ),
                     )
                 )
@@ -322,8 +348,14 @@ class PlaybookService:
         for batch in batches:
             if batch.status != "open" or batch.remaining_shares <= 0:
                 continue
-            bars, status, source = loaded.get(batch.symbol, ([], "unavailable", "none"))
-            snapshot = build_market_snapshot(batch.symbol, bars, status=status, source=source)
+            series = loaded.get(batch.symbol, NOTHING_LOADED)
+            snapshot = build_market_snapshot(
+                batch.symbol,
+                series.bars,
+                status=series.status,
+                source=series.source,
+                reason=series.reason,
+            )
             if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
                 missing.append(batch.symbol)
                 continue
@@ -437,8 +469,8 @@ class PlaybookService:
         """
         symbols = sorted({batch.symbol for batch in self._store.list_batches()})
         loaded = self._load_symbol_bars(symbols, today=as_of)
-        index_bars, _, _ = self._load_index_bars(today=as_of)
-        latest = latest_bar_date(*(bars for bars, _, _ in loaded.values()), index_bars)
+        index_bars = self._load_index_bars(today=as_of).bars
+        latest = latest_bar_date(*(series.bars for series in loaded.values()), index_bars)
         return as_of if latest is None else min(latest, as_of)
 
     def _rule_set_status(self, as_of: date) -> RuleSetStatus:
@@ -603,13 +635,14 @@ class PlaybookService:
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
         loaded = self._load_symbol_bars(symbols, today=as_of)
-        index_bars, index_status, index_source = self._load_index_bars(today=as_of)
+        index_series = self._load_index_bars(today=as_of)
+        index_bars = index_series.bars
 
         calendar = build_calendar(
-            *(bars for bars, _, _ in loaded.values()),
+            *(series.bars for series in loaded.values()),
             index_bars,
         )
-        data_date = latest_bar_date(*(bars for bars, _, _ in loaded.values()), index_bars)
+        data_date = latest_bar_date(*(series.bars for series in loaded.values()), index_bars)
         if data_date is None:
             # Nothing came back at all: still a 200-shaped answer, with the
             # gap stated, never a fabricated evaluation (鐵律⑤).
@@ -617,11 +650,21 @@ class PlaybookService:
 
         params = self._store.active_params(data_date)
         index = build_index_snapshot(
-            index_bars, status=index_status, source=index_source, params=params
+            index_bars,
+            status=index_series.status,
+            source=index_series.source,
+            params=params,
+            reason=index_series.reason,
         )
         markets: dict[str, MarketSnapshot] = {}
-        for symbol, (bars, status, source) in loaded.items():
-            snapshot = build_market_snapshot(symbol, bars, status=status, source=source)
+        for symbol, series in loaded.items():
+            snapshot = build_market_snapshot(
+                symbol,
+                series.bars,
+                status=series.status,
+                source=series.source,
+                reason=series.reason,
+            )
             if snapshot is not None:
                 markets[symbol] = snapshot
 
@@ -650,8 +693,14 @@ class PlaybookService:
         # fell back to the system default carries a derived date, and the page
         # states this one as the rule set's own (裁決: 禁推斷頂替).
         rules_effective_date = self._store.in_force_effective_date(data_date)
+        # 風控 2026-09-15 R1-b: what the data layer said about the index series
+        # (cache, spliced sources) is shown with the evaluation it fed, verbatim.
+        warnings = list(evaluation.warnings)
+        if index is not None and index.data_reason:
+            warnings.append(wording.INDEX_DATA_REASON_NOTE.format(reason=index.data_reason))
         return evaluation.model_copy(
             update={
+                "warnings": warnings,
                 "settlement": settlement,
                 "attribution": wording.attribution_note(authorship),
                 "rules_effective_date": rules_effective_date,
@@ -695,8 +744,8 @@ class PlaybookService:
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
         loaded = self._load_symbol_bars(symbols, today=as_of)
-        index_bars, _, _ = self._load_index_bars(today=as_of)
-        calendar = build_calendar(*(bars for bars, _, _ in loaded.values()), index_bars)
+        index_bars = self._load_index_bars(today=as_of).bars
+        calendar = build_calendar(*(series.bars for series in loaded.values()), index_bars)
         params = self._store.active_params(as_of)
 
         execution_date = calendar.next_trading_day(as_of)
@@ -707,12 +756,18 @@ class PlaybookService:
         for batch in batches:
             if batch.status != "open" or batch.remaining_shares <= 0:
                 continue
-            bars, status, source = loaded.get(batch.symbol, ([], "unavailable", "none"))
-            snapshot = build_market_snapshot(batch.symbol, bars, status=status, source=source)
+            series = loaded.get(batch.symbol, NOTHING_LOADED)
+            snapshot = build_market_snapshot(
+                batch.symbol,
+                series.bars,
+                status=series.status,
+                source=series.source,
+                reason=series.reason,
+            )
             if snapshot is None:
                 warnings.append(
                     wording.DATA_GAP_NOTE.format(
-                        symbol=batch.symbol, status=status, source=source
+                        symbol=batch.symbol, status=series.status, source=series.source
                     )
                 )
             total += batch.remaining_shares
@@ -733,8 +788,9 @@ class PlaybookService:
                     limit_low=None,
                     limit_high=None,
                     limit_note=wording.EMERGENCY_EXIT_NO_BAND_NOTE,
-                    data_status=status,
-                    source=source,
+                    data_status=series.status,
+                    source=series.source,
+                    data_reason=series.reason,
                 )
             )
         freeze_days = params.emergency_freeze_trading_days

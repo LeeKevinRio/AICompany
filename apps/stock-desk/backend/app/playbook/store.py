@@ -143,6 +143,7 @@ _SCHEMA = (
         limit_note TEXT NOT NULL DEFAULT '',
         data_status TEXT NOT NULL,
         source TEXT NOT NULL,
+        data_reason TEXT,
         status TEXT NOT NULL,
         settled INTEGER NOT NULL DEFAULT 0,
         settled_at TEXT,
@@ -161,6 +162,9 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("playbook_directives", "settled", "INTEGER NOT NULL DEFAULT 0"),
     ("playbook_directives", "settled_at", "TEXT"),
     ("playbook_directives", "settled_open_price", "TEXT"),
+    # 風控 2026-09-15 R3: the data layer's reason (spliced sources, served from
+    # cache) travels with the line it was decided on; older rows read back NULL.
+    ("playbook_directives", "data_reason", "TEXT"),
 )
 
 _BATCH_COLUMNS = (
@@ -793,8 +797,9 @@ class PlaybookStore:
                     INSERT INTO playbook_directives
                         (created_at, rules_version, symbol, batch_no, action, shares, rule_id,
                          rule_summary, data_date, execution_date, reference_price, limit_low,
-                         limit_high, limit_note, data_status, source, status, settled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         limit_high, limit_note, data_status, source, data_reason, status,
+                         settled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         moment,
@@ -813,6 +818,7 @@ class PlaybookStore:
                         directive.limit_note,
                         directive.data_status,
                         directive.source,
+                        directive.data_reason,
                         directive.status,
                         int(directive.action not in ORDER_ACTIONS),
                     ),
@@ -842,7 +848,8 @@ class PlaybookStore:
         query = (
             "SELECT id, symbol, batch_no, action, shares, rule_id, rule_summary, data_date, "
             "execution_date, reference_price, limit_low, limit_high, limit_note, data_status, "
-            "source, status FROM playbook_directives WHERE settled = 0 AND status = 'pending' "
+            "source, status, data_reason FROM playbook_directives "
+            "WHERE settled = 0 AND status = 'pending' "
             f"AND action IN ({_ORDER_ACTION_PLACEHOLDERS})"
         )
         params: tuple[str, ...] = ORDER_ACTIONS
@@ -870,6 +877,7 @@ class PlaybookStore:
                     data_status=str(row[13]),
                     source=str(row[14]),
                     status=row[15],
+                    data_reason=None if row[16] is None else str(row[16]),
                 ),
             )
             for row in rows

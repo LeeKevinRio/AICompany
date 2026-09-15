@@ -67,6 +67,12 @@ class SymbolSnapshot:
     #: TWD-converted figures, so this sentence has to travel with the *fired*
     #: message -- all the way to Discord/Telegram -- not merely with a skip.
     fx_disclosure: str | None = None
+    #: The data layer's own sentence about the bars the rule was judged on
+    #: (``ProviderResult.reason``: served from cache, spliced from more than one
+    #: source -- ADR-0009 D-7 / ADR-0005 D-5). A threshold crossing can be made
+    #: by the seam of a spliced series, so this travels with every **fired**
+    #: message (風控 2026-09-15 R1-a), the same way ``fx_disclosure`` does.
+    data_disclosure: str | None = None
 
 
 #: Loads the snapshot for one symbol/market. Supplied by the caller.
@@ -243,6 +249,11 @@ def evaluate_alerts(
         if not crossed:
             outcomes.append(RuleOutcome(rule_id=rule.id, status="quiet"))
             continue
+        # What the data layer said about the bars this crossing was judged on
+        # (cache, spliced sources) goes out with the message itself: the feed,
+        # Discord and Telegram are what the user reads (風控 2026-09-15 R1-a).
+        if snapshot.data_disclosure:
+            message = f"{message} {snapshot.data_disclosure}"
         if _in_cooldown(store, rule, now=moment, cooldown_minutes=cooldown_minutes):
             outcomes.append(
                 RuleOutcome(

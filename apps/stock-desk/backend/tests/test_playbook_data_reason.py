@@ -1,0 +1,65 @@
+"""The data layer's own sentence travels into the playbook's output (風控 2026-09-15).
+
+R3: every directive persists the ``reason`` of the series it was decided on, so
+the ledger can show it later. R1-b: the index series' reason is shown with the
+evaluation it fed, verbatim, as a warning line.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.playbook import wording
+from app.playbook.service import PlaybookService
+from app.playbook.store import PlaybookStore
+from tests.api_helpers import FakePriceService, recent_bars
+from tests.playbook_helpers import TUESDAY, confirm_rule_set
+
+SERIES_END = date(2026, 8, 14)
+HISTORY = 40
+SPLICED = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+CACHED = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
+
+
+@dataclass
+class Harness:
+    service: PlaybookService
+    store: PlaybookStore
+
+
+@pytest.fixture
+def harness(tmp_path: Path) -> Iterator[Harness]:
+    store = PlaybookStore(db_path=tmp_path / "playbook.db")
+    confirm_rule_set(store)
+    prices = FakePriceService(reason=SPLICED)
+    prices.seed("2330", recent_bars([100.0] * HISTORY, symbol="2330", end=SERIES_END))
+    index = FakePriceService(reason=CACHED)
+    index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=SERIES_END))
+    store.ensure_batches(["2330"], batches_per_target=3)
+    store.set_capital(cash=Decimal("1000000"), total_deploy=Decimal("1000000"), source="initial")
+    yield Harness(
+        service=PlaybookService(
+            store=store,
+            market_resolver={"TW": prices},
+            index_resolver={"TW": index, "US": index},
+        ),
+        store=store,
+    )
+
+
+def test_every_directive_persists_the_reason_of_its_series(harness: Harness) -> None:
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+    assert evaluation.directives, "a schedule day with confirmed rules produces a line"
+    assert all(line.data_reason == SPLICED for line in evaluation.directives)
+    assert all(row["data_reason"] == SPLICED for row in harness.store.directive_log())
+
+
+def test_the_index_series_reason_is_shown_with_the_evaluation(harness: Harness) -> None:
+    evaluation = harness.service.evaluate_today(today=TUESDAY)
+    assert wording.INDEX_DATA_REASON_NOTE.format(reason=CACHED) in evaluation.warnings

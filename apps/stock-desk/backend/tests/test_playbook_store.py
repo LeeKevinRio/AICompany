@@ -159,9 +159,7 @@ def test_deferral_counter_and_skip_persist(store: PlaybookStore) -> None:
 def test_selling_marks_p1_and_reduces_the_remainder(store: PlaybookStore) -> None:
     store.ensure_batches(["2330"], batches_per_target=3)
     store.save_batch(helper.batch(cost="100", shares=300))
-    store.settle(
-        _directive(action="sell", shares=100, rule_id="P1", status="executed")
-    )
+    store.settle(_directive(action="sell", shares=100, rule_id="P1", status="executed"))
     stored = store.get_batch("2330", 1)
     assert stored is not None
     assert stored.remaining_shares == 200
@@ -195,6 +193,30 @@ def test_the_directive_log_keeps_provenance_for_every_line(store: PlaybookStore)
     assert rows[0]["execution_date"] == WEDNESDAY.isoformat()
     assert rows[0]["reference_price"] == "100"
     assert rows[0]["source"] == "twse"
+
+
+def test_the_data_reason_is_persisted_with_the_line_and_read_back(
+    store: PlaybookStore,
+) -> None:
+    """風控 2026-09-15 R3: the sentence the line was decided on is stored, not recomputed."""
+    spliced = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+    store.record_directives(_evaluation(_directive(data_reason=spliced), _directive(rule_id="S1")))
+    rows = store.directive_log()
+    assert [row["data_reason"] for row in rows] == [spliced, None]
+    pending = store.pending_directives()
+    assert [item.directive.data_reason for item in pending] == [spliced, None]
+
+
+def test_an_older_database_gains_the_data_reason_column(tmp_path: Path) -> None:
+    import sqlite3
+
+    db_path = tmp_path / "playbook.db"
+    PlaybookStore(db_path=db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE playbook_directives DROP COLUMN data_reason")
+    store = PlaybookStore(db_path=db_path)  # re-open: migration adds it back
+    store.record_directives(_evaluation(_directive(data_reason="拼接")))
+    assert store.directive_log()[0]["data_reason"] == "拼接"
 
 
 def test_schedule_rows_record_the_planned_date_and_follow_the_outcome(

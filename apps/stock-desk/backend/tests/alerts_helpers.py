@@ -75,11 +75,10 @@ def snapshot(
     budget: RiskBudget | None = None,
     reason: str | None = None,
     fx_disclosure: str | None = None,
+    data_disclosure: str | None = None,
 ) -> SymbolSnapshot:
     """A snapshot with only the parts a test needs; the rest stays empty."""
-    limits = (
-        evaluate_limits(budget or RiskBudget(), context) if context is not None else ()
-    )
+    limits = evaluate_limits(budget or RiskBudget(), context) if context is not None else ()
     return SymbolSnapshot(
         symbol=symbol,
         market=market,
@@ -90,6 +89,7 @@ def snapshot(
         as_of="2026-07-25",
         reason=reason,
         fx_disclosure=fx_disclosure,
+        data_disclosure=data_disclosure,
     )
 
 

@@ -273,6 +273,11 @@ def load_index_series(
         status=disclosed_status(result.status),
         source=result.source,
         staleness_minutes=result.staleness_minutes,
+        # A successful answer can still carry the data layer's sentence (served
+        # from cache after a failed attempt, spliced from more than one source
+        # -- ADR-0009 D-3 / D-7); it is forwarded, never dropped here (風控
+        # 2026-09-15 R1-b).
+        reason=result.reason,
         notes=notes,
     )
 
@@ -391,5 +396,7 @@ def load_market_benchmark(
         status=disclosed_status(result.status),
         source=result.source,
         staleness_minutes=result.staleness_minutes,
+        # Forwarded, never dropped (風控 2026-09-15 R1-b) -- see load_index_series.
+        reason=result.reason,
         notes=notes,
     )

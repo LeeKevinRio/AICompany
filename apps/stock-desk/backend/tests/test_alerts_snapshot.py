@@ -51,9 +51,7 @@ class StubFxProvider(FxRateProvider):
     def get_daily_rates(self, pair: str, start: date, end: date) -> FxRateResult:
         now = datetime.now(UTC)
         return FxRateResult(
-            rates=[
-                FxRate(pair=pair, date=end, rate=self._rate, as_of=now, source=self.source_id)
-            ],
+            rates=[FxRate(pair=pair, date=end, rate=self._rate, as_of=now, source=self.source_id)],
             status=DataStatus.FRESH,
             as_of=now,
             source=self.source_id,
@@ -67,9 +65,7 @@ def store(tmp_path: Path) -> PositionStore:
 
 def _price_service(currency: str) -> FakePriceService:
     service = FakePriceService()
-    service.seed(
-        "2330", recent_bars(trending_closes(60), symbol="2330", currency=currency)
-    )
+    service.seed("2330", recent_bars(trending_closes(60), symbol="2330", currency=currency))
     return service
 
 
@@ -108,6 +104,32 @@ def _snapshot(
         fx_provider=fx_provider,
         net_worth=net_worth,
     )
+
+
+def test_the_data_layers_sentence_on_a_fresh_series_reaches_the_snapshot(
+    store: PositionStore,
+) -> None:
+    """風控 2026-09-15 R1-a: a spliced series arrives as ``fresh``; its reason is
+    kept for the fired message and still shown on a skip, not replaced by the
+    layer note (which says nothing on ``fresh``)."""
+    spliced = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+    service = _price_service("TWD")
+    service.reason = spliced
+    snapshot = build_snapshot(
+        "2330",
+        "TW",
+        resolver={"TW": service},
+        store=store,
+        valuator=PositionValuator(
+            market_services={"TW": service}, fx_provider=UnavailableFxProvider()
+        ),
+        budget=RiskBudget(),
+        fx_provider=None,
+        net_worth=None,
+    )
+    assert snapshot.close is not None
+    assert snapshot.data_disclosure == spliced
+    assert spliced in (snapshot.reason or "")
 
 
 def test_the_exposure_cap_is_off_until_a_net_worth_reaches_the_snapshot(
@@ -204,9 +226,7 @@ def _fire_limit_alert(
 ) -> EvaluationResult:
     """Run a real ``risk_limit_breach`` tick over the real snapshot builder."""
     service = _price_service(currency)
-    valuator = PositionValuator(
-        market_services={"TW": service}, fx_provider=StubFxProvider()
-    )
+    valuator = PositionValuator(market_services={"TW": service}, fx_provider=StubFxProvider())
     # A deliberately tight loss budget: the point of these two tests is the
     # wording of a *fired* message, and the cap has to breach for there to be
     # one. The default 1% happens not to be crossed by this fixture's ATR.

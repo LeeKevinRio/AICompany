@@ -231,6 +231,12 @@ REFERENCE_PRICE_UNAVAILABLE_NOTE = "（無可用參考價）"
 #: 資料缺漏 (鐵律⑤ / 風控 R6): the symbol produces no line at all that day.
 DATA_GAP_NOTE = "{symbol} 資料狀態為 {status}（來源 {source}），依鐵律⑤當日不產生指令。"
 
+#: The data layer's own sentence about the 加權指數 series the M1 / fast-market
+#: judgement was made on (served from cache, spliced from more than one source
+#: -- ADR-0009 D-7). Quoted verbatim under a label, never paraphrased (風控
+#: 2026-09-15 R1-b).
+INDEX_DATA_REASON_NOTE = "加權指數資料：{reason}"
+
 #: S-2: the same gap on a symbol that still holds shares. 「資料缺漏致停損無法
 #: 評估須主動顯著揭露不得靜默」, so the missing stop-loss evaluation is named
 #: rather than left to be inferred from the absence of a line.

@@ -71,6 +71,17 @@ def test_a_stale_cache_is_not_upgraded_into_backup() -> None:
     assert I.disclosed_status(DataStatus.UNAVAILABLE) is DataStatus.UNAVAILABLE
 
 
+def test_a_successful_load_forwards_the_data_layers_reason() -> None:
+    """風控 2026-09-15 R1-b: the cache/splice sentence is not dropped on success."""
+    sentence = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
+    service = _service(status=DataStatus.CACHED_STALE, reason=sentence)
+    loaded = _load({"TW": service}, "00675L")
+    assert loaded.available is True and loaded.reason == sentence
+    assert loaded.meta()["reason"] == sentence
+    benchmark = I.load_market_benchmark({"TW": service}, market="TW", start=START, end=END)
+    assert benchmark.bars and benchmark.reason == sentence
+
+
 def test_meta_carries_the_mapping_facts_for_the_ui() -> None:
     meta = _load({"TW": _service()}, "00675L").meta()
     assert meta["series_symbol"] == "^TWII"
@@ -194,9 +205,7 @@ def test_a_live_benchmark_series_is_disclosed_as_backup_never_fresh() -> None:
 
 
 def test_a_benchmark_source_with_no_bars_is_reported_not_substituted() -> None:
-    loaded = I.load_market_benchmark(
-        {"TW": FakePriceService()}, market="TW", start=START, end=END
-    )
+    loaded = I.load_market_benchmark({"TW": FakePriceService()}, market="TW", start=START, end=END)
     assert loaded.bars == []
     assert loaded.available is False
     # Which series was wanted is still stated: it is the useful half of the fact.
