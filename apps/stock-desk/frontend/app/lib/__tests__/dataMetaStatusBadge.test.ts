@@ -68,11 +68,29 @@ describe("DataMetaStatusBadge reason — 風控 2026-09-13 第三輪 required �
     expect(html).toContain(reason);
     expect(html).not.toContain("title=");
   });
-  it("renders nothing extra when there is no reason, and nothing at all when fresh", () => {
+  it("renders nothing extra when there is no reason, and nothing at all when fresh without one", () => {
     const cached = renderToStaticMarkup(
       createElement(DataMetaStatusBadge, { status: "cached_stale", stalenessMinutes: null, isWithinTtl: true }),
     );
     expect(cached).toBe('<span class="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">本機快取</span>');
-    expect(renderToStaticMarkup(createElement(DataMetaStatusBadge, { status: "fresh", stalenessMinutes: null, isWithinTtl: null, reason }))).toBe("");
+    expect(renderToStaticMarkup(createElement(DataMetaStatusBadge, { status: "fresh", stalenessMinutes: null, isWithinTtl: null }))).toBe("");
+  });
+});
+
+describe("DataMetaStatusBadge reason in every status — ADR-0009 D-7 混源明示", () => {
+  const spliced = "本序列由多個來源拼接（finmind、twse），各筆日線保留自身來源。";
+  it("a fresh answer with a reason shows the reason alone, body size, no tooltip", () => {
+    const html = renderToStaticMarkup(
+      createElement(DataMetaStatusBadge, { status: "fresh", stalenessMinutes: 0, isWithinTtl: null, reason: spliced }),
+    );
+    expect(html).toBe(`<span class="ml-1.5 text-sm text-neutral-400">${spliced}</span>`);
+  });
+  it("a backup answer with a reason keeps its badge and adds the reason after it", () => {
+    const html = renderToStaticMarkup(
+      createElement(DataMetaStatusBadge, { status: "backup", stalenessMinutes: 0, isWithinTtl: null, reason: spliced }),
+    );
+    expect(html).toContain("備援源");
+    expect(html.indexOf("備援源")).toBeLessThan(html.indexOf(spliced));
+    expect(html).not.toContain("title=");
   });
 });

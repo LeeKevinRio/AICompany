@@ -61,8 +61,10 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
         only overlays *additionally* on a non-fresh status (returns `null` on
         `fresh`), matching §3.3's "只有在非 fresh 時額外疊加既有徽章樣式".
         `stalenessMinutes`/`isWithinTtl` are `null` because `Directive` carries
-        no per-line staleness-minute field (only `data_status`/`source`) —
-        known limitation, noted in the hand-off report.
+        no per-line staleness-minute field — known limitation, noted in the
+        hand-off report. `data_reason` (風控 2026-09-15 R3) is the data layer's
+        sentence persisted with the line — a spliced series is served as
+        `fresh`, so this is the only way the ledger can say so.
       */}
       <p className="mt-1 flex flex-wrap items-center text-xs text-neutral-400">
         資料狀態 {directive.data_status}・來源 {directive.source}
@@ -70,6 +72,7 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
           status={directive.data_status}
           stalenessMinutes={null}
           isWithinTtl={null}
+          reason={directive.data_reason}
         />
       </p>
     </li>

@@ -1308,6 +1308,10 @@ export interface PlaybookDirective {
   limit_note: string;
   data_status: string;
   source: string;
+  //: The data layer's own sentence about the series this line was decided on
+  //: (served from cache, spliced from more than one source — ADR-0009 D-7),
+  //: persisted with the line; `null` when there was nothing to say.
+  data_reason: string | null;
   status: PlaybookDirectiveStatus;
 }
 

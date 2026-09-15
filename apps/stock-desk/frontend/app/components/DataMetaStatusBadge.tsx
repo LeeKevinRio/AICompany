@@ -57,11 +57,36 @@ export function DataMetaStatusBadge({
   /** `DataMeta.last_bar_date`; omit only where the payload carries no bar dates. */
   lastBarDate?: string | null;
   /**
-   * `DataMeta.reason` -- the backend's own sentence for *why* the answer is
-   * the cache (e.g. the last live ask failed, ADR-0009 D-3). Shown standing
-   * beside the badge, never folded into a tooltip (風控 2026-09-13 第三輪).
+   * `DataMeta.reason` -- the backend's own sentence about the answer: why it
+   * is the cache (the last live ask failed, ADR-0009 D-3), or that the series
+   * is spliced from more than one source (ADR-0009 D-7, ADR-0005 D-5). It is
+   * shown standing beside the badge in *every* status, `fresh` included -- a
+   * spliced series is served as `fresh` and would otherwise say nothing --
+   * and never folded into a tooltip (風控 2026-09-13 第三輪).
    */
   reason?: string | null;
+}) {
+  const badge = statusBadge({ status, stalenessMinutes, isWithinTtl, lastBarDate });
+  if (!reason) return badge;
+  return (
+    <>
+      {badge}
+      {/* 風控 2026-09-15 條件式核可：the reason is disclosure prose, body size (text-sm), never smaller than the line it explains. */}
+      <span className="ml-1.5 text-sm text-neutral-400">{reason}</span>
+    </>
+  );
+}
+
+function statusBadge({
+  status,
+  stalenessMinutes,
+  isWithinTtl,
+  lastBarDate,
+}: {
+  status: string;
+  stalenessMinutes: number | null;
+  isWithinTtl: boolean | null;
+  lastBarDate: string | null;
 }) {
   switch (status) {
     case "fresh":
@@ -74,13 +99,9 @@ export function DataMetaStatusBadge({
       );
     case "cached_stale":
       return (
-        <>
-          <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-            {cachedStaleLabel({ stalenessMinutes, isWithinTtl, lastBarDate })}
-          </span>
-          {/* 風控 2026-09-15 條件式核可：the reason is disclosure prose, body size (text-sm), never smaller than the line it explains. */}
-          {reason && <span className="ml-1.5 text-sm text-neutral-400">{reason}</span>}
-        </>
+        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
+          {cachedStaleLabel({ stalenessMinutes, isWithinTtl, lastBarDate })}
+        </span>
       );
     case "unavailable":
       return (

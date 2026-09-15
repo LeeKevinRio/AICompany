@@ -50,6 +50,7 @@ function directiveLine(ruleId: string, symbol: string, line = ""): PlaybookDirec
       limit_note: "限價帶",
       data_status: "fresh",
       source: "twse",
+      data_reason: null,
       status: "pending",
     },
   };
