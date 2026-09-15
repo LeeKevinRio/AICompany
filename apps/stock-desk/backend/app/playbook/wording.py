@@ -234,8 +234,19 @@ DATA_GAP_NOTE = "{symbol} 資料狀態為 {status}（來源 {source}），依鐵
 #: The data layer's own sentence about the 加權指數 series the M1 / fast-market
 #: judgement was made on (served from cache, spliced from more than one source
 #: -- ADR-0009 D-7). Quoted verbatim under a label, never paraphrased (風控
-#: 2026-09-15 R1-b).
-INDEX_DATA_REASON_NOTE = "加權指數資料：{reason}"
+#: 2026-09-15 R1-b); the trailing clause names what the series feeds
+#: (creative-lead, `work/stock-desk-alerts-asof揭露句-文案.md`; fixed verbatim by
+#: risk-compliance-officer 2026-09-15 -- the noun-phrase alternative
+#: 「（M1 與快市判定之共同輸入）」 may be swapped in without re-review). Format it
+#: with :func:`index_data_reason_note` so the quoted sentence's own full stop
+#: does not land before the clause.
+INDEX_DATA_REASON_NOTE = "加權指數資料：{reason}（用於 M1 與快市判定）。"
+
+
+def index_data_reason_note(reason: str) -> str:
+    """``INDEX_DATA_REASON_NOTE`` with the quoted sentence's full stop moved after the clause."""
+    return INDEX_DATA_REASON_NOTE.format(reason=reason.rstrip("。"))
+
 
 #: S-2: the same gap on a symbol that still holds shares. 「資料缺漏致停損無法
 #: 評估須主動顯著揭露不得靜默」, so the missing stop-loss evaluation is named

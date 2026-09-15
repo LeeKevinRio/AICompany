@@ -695,9 +695,12 @@ class PlaybookService:
         rules_effective_date = self._store.in_force_effective_date(data_date)
         # 風控 2026-09-15 R1-b: what the data layer said about the index series
         # (cache, spliced sources) is shown with the evaluation it fed, verbatim.
+        # Read from the loaded series, not the snapshot: when no bar came back
+        # at all the snapshot is ``None`` and the loader's own sentence (which
+        # source reported what) is exactly what the reader needs (風控 R4-a).
         warnings = list(evaluation.warnings)
-        if index is not None and index.data_reason:
-            warnings.append(wording.INDEX_DATA_REASON_NOTE.format(reason=index.data_reason))
+        if index_series.reason:
+            warnings.append(wording.index_data_reason_note(index_series.reason))
         return evaluation.model_copy(
             update={
                 "warnings": warnings,

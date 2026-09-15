@@ -102,6 +102,14 @@ class EvaluationResult:
     outcomes: list[RuleOutcome]
 
 
+#: Appended to a fired price-threshold or signal-condition message: the bar
+#: date the quoted figures come from, as opposed to the evaluation time the
+#: push adds. Wording by creative-lead (`work/stock-desk-alerts-asof揭露句-文案.md`),
+#: fixed verbatim by risk-compliance-officer 2026-09-15 for those two rule
+#: types only; any change, or use on another type, goes back to them.
+BAR_AS_OF_NOTE = "上述數值之資料日為 {as_of}。"
+
+
 def _fmt(value: float) -> str:
     """Render a number for a message without exponent noise or trailing zeros."""
     return f"{value:,.4f}".rstrip("0").rstrip(".") if value % 1 else f"{value:,.0f}"
@@ -249,9 +257,16 @@ def evaluate_alerts(
         if not crossed:
             outcomes.append(RuleOutcome(rule_id=rule.id, status="quiet"))
             continue
-        # What the data layer said about the bars this crossing was judged on
-        # (cache, spliced sources) goes out with the message itself: the feed,
-        # Discord and Telegram are what the user reads (風控 2026-09-15 R1-a).
+        # The bar date the figures come from, then what the data layer said
+        # about those bars (cache, spliced sources), go out with the message
+        # itself: the feed, Discord and Telegram are what the user reads, and
+        # the push only adds the *evaluation* time (風控 2026-09-15 R1-a / R4-a).
+        # Not on ``risk_limit_breach``: its figures are portfolio weights built
+        # from every holding's own latest close (and a rate that may date from
+        # an earlier day), so one bar date would overstate their precision
+        # (風控 2026-09-15 R4-a 覆審 VETO, direction (c)).
+        if snapshot.as_of and not isinstance(rule.params, RiskLimitParams):
+            message = f"{message} {BAR_AS_OF_NOTE.format(as_of=snapshot.as_of)}"
         if snapshot.data_disclosure:
             message = f"{message} {snapshot.data_disclosure}"
         if _in_cooldown(store, rule, now=moment, cooldown_minutes=cooldown_minutes):

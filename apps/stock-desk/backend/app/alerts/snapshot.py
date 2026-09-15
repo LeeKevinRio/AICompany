@@ -117,7 +117,9 @@ def build_snapshot(
         as_of=latest.date.isoformat(),
         reason=_joined_reason(data_reason, book.fx_note),
         fx_disclosure=fx_disclosure,
-        data_disclosure=loaded.reason,
+        # Layer note included (風控 R4-a): a crossing judged on a cached bar must
+        # say so where the user reads it, not only on the badge the push lacks.
+        data_disclosure=data_reason,
     )
 
 

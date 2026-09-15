@@ -62,4 +62,24 @@ def test_every_directive_persists_the_reason_of_its_series(harness: Harness) -> 
 
 def test_the_index_series_reason_is_shown_with_the_evaluation(harness: Harness) -> None:
     evaluation = harness.service.evaluate_today(today=TUESDAY)
-    assert wording.INDEX_DATA_REASON_NOTE.format(reason=CACHED) in evaluation.warnings
+    note = wording.index_data_reason_note(CACHED)
+    assert note in evaluation.warnings
+    # The quoted sentence's own full stop moves after the clause (風控 suggested a).
+    assert note.endswith("（用於 M1 與快市判定）。") and "。（" not in note
+
+
+def test_an_index_that_returned_nothing_still_has_its_reason_shown(tmp_path: Path) -> None:
+    """風控 R4-a: with no index bar at all the snapshot is None, yet the loader's
+    sentence (which source reported what) must still reach the page."""
+    store = PlaybookStore(db_path=tmp_path / "playbook.db")
+    confirm_rule_set(store)
+    prices = FakePriceService()
+    prices.seed("2330", recent_bars([100.0] * HISTORY, symbol="2330", end=SERIES_END))
+    index = FakePriceService(reason=CACHED)  # nothing seeded: no bars come back
+    store.ensure_batches(["2330"], batches_per_target=3)
+    service = PlaybookService(
+        store=store, market_resolver={"TW": prices}, index_resolver={"TW": index, "US": index}
+    )
+    evaluation = service.evaluate_today(today=TUESDAY)
+    notes = [w for w in evaluation.warnings if w.startswith("加權指數資料：")]
+    assert len(notes) == 1 and CACHED.rstrip("。") in notes[0]

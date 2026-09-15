@@ -19,8 +19,10 @@ from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar,
 logger = logging.getLogger(__name__)
 
 #: Joins several layers' reasons into the one ``reason`` slot a
-#: ``ProviderResult`` has, in ladder order.
-_REASON_SEPARATOR = "；"
+#: ``ProviderResult`` has, in ladder order. Each sentence keeps its own full
+#: stop and the next starts after a space: a semicolon would collide with the
+#: one inside the spliced-sources sentence (風控 2026-09-15 suggested).
+_REASON_SEPARATOR = "。 "
 
 UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一層。"
 #: Carried by a cache answer served because the last live ask (inside the
@@ -54,9 +56,8 @@ def _combine_reasons(reasons: Sequence[str]) -> str | None:
 
     A degraded response usually has more than one cause worth stating ("no API
     key" *and* "backup unreachable"); keeping only the first would misattribute
-    the failure. Each layer's text is preserved verbatim apart from a trailing
-    full stop, which is re-added once at the end so the joined sentence reads
-    as one.
+    the failure. Each layer's text is preserved verbatim; sentences are joined
+    with a full stop and a space so each keeps its own boundary.
     """
     kept = [reason.strip() for reason in reasons if reason and reason.strip()]
     if not kept:

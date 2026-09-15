@@ -64,6 +64,8 @@ def test_a_fired_message_carries_the_data_layers_own_sentence(store: AlertStore)
     )
     assert len(result.events) == 1
     assert result.events[0].message.endswith(spliced)
+    # 風控 R4-a: the bar date comes right before it, so "最新收盤價" is dated.
+    assert "上述數值之資料日為 2026-07-25。 " + spliced in result.events[0].message
     # Fires again after the cooldown, on a snapshot without a sentence: nothing is invented.
     later = evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW + timedelta(hours=2))
     assert spliced not in later.events[0].message
@@ -155,6 +157,24 @@ def test_risk_limit_breach_fires_and_quotes_the_numbered_cap(store: AlertStore) 
     assert "觸發風險上限" in message
     assert "單一標的佔比上限" in message
     assert result.events[0].observed["violated_count"] == 1.0
+
+
+def test_a_risk_limit_message_is_not_given_one_bar_date(store: AlertStore) -> None:
+    """風控 R4-a 覆審: portfolio weights come from every holding's own close (and
+    a possibly earlier rate), so a single bar date would overstate precision."""
+    add_rule(store, limit_rule(limit_id="any"))
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(
+                context=breaching_context(), data_disclosure="資料來自 cached_stale 層（twse）。"
+            )
+        ),
+        now=_NOW,
+    )
+    message = result.events[0].message
+    assert "資料日為" not in message
+    assert message.endswith("資料來自 cached_stale 層（twse）。")
 
 
 def test_risk_limit_rule_can_watch_one_named_cap(store: AlertStore) -> None:

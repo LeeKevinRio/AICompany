@@ -130,6 +130,23 @@ def test_the_data_layers_sentence_on_a_fresh_series_reaches_the_snapshot(
     assert snapshot.close is not None
     assert snapshot.data_disclosure == spliced
     assert spliced in (snapshot.reason or "")
+    # 風控 R4-a: on a cached bar the layer note travels with the fired message too.
+    service.status = DataStatus.CACHED_STALE
+    cached = build_snapshot(
+        "2330",
+        "TW",
+        resolver={"TW": service},
+        store=store,
+        valuator=PositionValuator(
+            market_services={"TW": service}, fx_provider=UnavailableFxProvider()
+        ),
+        budget=RiskBudget(),
+        fx_provider=None,
+        net_worth=None,
+    )
+    assert cached.data_disclosure is not None
+    assert cached.data_disclosure.startswith("資料來自 cached_stale 層（")
+    assert cached.data_disclosure.endswith(spliced)
 
 
 def test_the_exposure_cap_is_off_until_a_net_worth_reaches_the_snapshot(
