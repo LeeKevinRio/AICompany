@@ -16,7 +16,12 @@ from app.data.interface import (
     PriceBar,
     ProviderResult,
 )
-from app.data.service import RECENT_ATTEMPT_FAILED_REASON, MarketDataService
+from app.data.service import (
+    MERGE_READBACK_FAILED_REASON,
+    MIXED_SOURCES_REASON,
+    RECENT_ATTEMPT_FAILED_REASON,
+    MarketDataService,
+)
 
 START = date(2024, 1, 1)
 END = date(2024, 1, 31)
@@ -611,3 +616,217 @@ def test_a_covered_series_whose_sources_are_failing_also_honours_the_cooldown(
     now["at"] = datetime(2024, 1, 3, 9, 30, tzinfo=UTC)
     service.get_daily_bars("2330", "TW", START, END)  # cooldown expired: try again
     assert primary.call_count == 2
+
+
+# --- ADR-0009 D-7 (方案 F): ask the live source only for the missing tail ------------
+
+
+class _RangeRecorder(_StubProvider):
+    """A provider that answers with the bars inside the range it was asked for."""
+
+    def __init__(self, *, source_id: str, bars: list[PriceBar]) -> None:
+        super().__init__(source_id=source_id, bars=bars)
+        self.ranges: list[tuple[date, date]] = []
+
+    def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+        self.ranges.append((start, end))
+        window = [bar for bar in self._bars if start <= bar.date <= end]
+        result = super().get_daily_bars(symbol, start, end)
+        return result.model_copy(update={"bars": window})
+
+
+def _daily(symbol: str, days: list[date]) -> list[PriceBar]:
+    return [_tw_bar(symbol, day) for day in days]
+
+
+def test_a_refetch_asks_only_from_the_last_cached_month_and_returns_the_whole_range(
+    tmp_path: Path,
+) -> None:
+    """Two-year backtest range, one new session: one month asked for, not twenty-four."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    history = _daily("2330", [date(2023, 11, 1), date(2023, 12, 15), date(2024, 1, 2)])
+    provider = _RangeRecorder(source_id="twse", bars=list(history))
+    now = {"at": datetime(2024, 1, 2, 10, 0, tzinfo=UTC)}
+    service = MarketDataService(
+        primary=provider, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    first = service.get_daily_bars("2330", "TW", date(2023, 11, 1), date(2024, 1, 31))
+    assert provider.ranges == [(date(2023, 11, 1), date(2024, 1, 31))]
+    assert [bar.date for bar in first.bars] == [d.date for d in history]
+    # Thursday 16:00 Taipei: Wednesday's close is out and the cache stops at Tuesday.
+    provider._bars.append(_tw_bar("2330", date(2024, 1, 3)))
+    now["at"] = datetime(2024, 1, 4, 8, 0, tzinfo=UTC)
+    second = service.get_daily_bars("2330", "TW", date(2023, 11, 1), date(2024, 1, 31))
+    assert provider.ranges[-1] == (date(2024, 1, 1), date(2024, 1, 31))
+    assert second.status is DataStatus.FRESH
+    assert [bar.date for bar in second.bars] == [
+        date(2023, 11, 1),
+        date(2023, 12, 15),
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+    ]
+    # And the whole range is on record as covered, so the next click is local.
+    now["at"] = datetime(2024, 1, 4, 8, 10, tzinfo=UTC)
+    third = service.get_daily_bars("2330", "TW", date(2023, 11, 1), date(2024, 1, 31))
+    assert len(provider.ranges) == 2 and third.status is DataStatus.CACHED_STALE
+
+
+def test_without_coverage_or_when_reaching_earlier_the_whole_range_is_asked(
+    tmp_path: Path,
+) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 2)]))
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    # Seeded rows, no coverage: whole range.
+    cache.put(_daily("2330", [date(2024, 1, 2)]), source="demo_synthetic")
+    service.get_daily_bars("2330", "TW", START, END)
+    assert provider.ranges[-1] == (START, END)
+    # Coverage from 01-01, request from 2023-12-01: whole range.
+    service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert provider.ranges[-1] == (date(2023, 12, 1), END)
+
+
+def test_a_cached_tail_past_the_coverage_does_not_narrow_the_fetch(tmp_path: Path) -> None:
+    """A partial fetch left March rows beyond a January coverage: narrowing to March
+    would silently claim February; ask for everything instead."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 31, 10, 0, tzinfo=UTC)
+    cache.put(_daily("2330", [date(2024, 1, 2)]), source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=date(2024, 1, 31), fetched_at=fetched)
+    cache.put(_daily("2330", [date(2024, 3, 1)]), source="twse")  # from a partial answer
+    provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 3, 4)]))
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 3, 5, 8, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    service.get_daily_bars("2330", "TW", START, date(2024, 3, 31))
+    assert provider.ranges[-1] == (START, date(2024, 3, 31))
+
+
+def test_a_spliced_series_names_both_sources(tmp_path: Path) -> None:
+    """ADR-0005 D-5 through ADR-0009 D-7: a finmind head under a twse tail is said out loud."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    # The head was fetched in full from finmind, last bar in December; a request
+    # from November narrows the live ask to [Dec 1, END] (last cached month).
+    head = [
+        bar.model_copy(update={"source": "finmind"})
+        for bar in _daily("2330", [date(2023, 11, 15), date(2023, 12, 15)])
+    ]
+    cache.put(head, source="finmind", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=date(2023, 11, 1), end=END, fetched_at=fetched)
+    provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", date(2023, 11, 1), END)
+    assert provider.ranges == [(date(2023, 12, 1), END)]
+    assert result.status is DataStatus.FRESH
+    assert [bar.source for bar in result.bars] == ["finmind", "finmind", "twse"]
+    assert result.reason == MIXED_SOURCES_REASON.format(sources="finmind、twse")
+
+
+def test_a_spliced_cache_keeps_saying_so_on_every_later_answer(tmp_path: Path) -> None:
+    """風控 2026-09-15 R1: the splice is permanent, so the disclosure is too --
+    layer 0 and the degraded cache path both carry it, head-to-tail order."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 3, 10, 0, tzinfo=UTC)
+    head = [
+        bar.model_copy(update={"source": "yfinance"})
+        for bar in _daily("2330", [date(2023, 12, 15)])
+    ]
+    cache.put(head, source="yfinance", fetched_at=fetched)
+    cache.put(_daily("2330", [date(2024, 1, 3)]), source="alpha_vantage", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=date(2023, 12, 1), end=END, fetched_at=fetched)
+    spliced = MIXED_SOURCES_REASON.format(sources="yfinance、alpha_vantage")
+    provider = _RangeRecorder(source_id="twse", bars=[])
+    now = {"at": datetime(2024, 1, 3, 10, 30, tzinfo=UTC)}  # Wed 18:30 Taipei: has 01-03
+    service = MarketDataService(
+        primary=provider, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    served = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert provider.ranges == [] and served.status is DataStatus.CACHED_STALE
+    assert served.reason == spliced
+    # Next session expected, source down: the failure reason and the splice both stand.
+    now["at"] = datetime(2024, 1, 4, 8, 0, tzinfo=UTC)
+    degraded = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert provider.ranges == [(date(2024, 1, 1), END)]
+    assert degraded.status is DataStatus.CACHED_STALE and degraded.reason == spliced
+    now["at"] = datetime(2024, 1, 4, 8, 5, tzinfo=UTC)  # inside the attempt cooldown
+    cooled = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert cooled.reason is not None
+    assert cooled.reason.startswith(RECENT_ATTEMPT_FAILED_REASON.rstrip("。"))
+    assert cooled.reason.endswith(spliced)
+
+
+class _CacheThatCannotReadBack(PriceBarCache):
+    """After the live tail is written, the merged read fails (F-4's theoretical path)."""
+
+    def __init__(self, *, db_path: Path) -> None:
+        super().__init__(db_path=db_path)
+        self.fail_reads = False
+
+    def get(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def, override]
+        if self.fail_reads:
+            return None
+        return super().get(*args, **kwargs)  # type: ignore[arg-type]
+
+    def put(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+        super().put(*args, **kwargs)  # type: ignore[arg-type]
+        self.fail_reads = True
+
+
+def test_a_failed_read_back_degrades_and_claims_no_coverage(tmp_path: Path) -> None:
+    """tech-architect F-4 / qa 第七輪: the tail alone is never the answer, and the
+    fetch log is not stamped for a range that was not served."""
+    cache = _CacheThatCannotReadBack(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put(
+        _daily("2330", [date(2023, 12, 15), date(2024, 1, 2)]), source="twse", fetched_at=fetched
+    )
+    cache.fail_reads = False
+    cache.record_fetch("2330", "TW", start=date(2023, 12, 1), end=END, fetched_at=fetched)
+    provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert provider.ranges == [(date(2024, 1, 1), END)]
+    assert result.status is DataStatus.UNAVAILABLE  # the cache rung cannot read either
+    assert result.reason is not None and MERGE_READBACK_FAILED_REASON.rstrip("。") in result.reason
+    coverage = cache.fetch_coverage("2330", "TW")
+    assert coverage is not None and coverage.last_fetched_at == fetched
+
+
+def test_a_same_source_incremental_fetch_carries_no_reason(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put(
+        _daily("2330", [date(2023, 12, 15), date(2024, 1, 2)]), source="twse", fetched_at=fetched
+    )
+    cache.record_fetch("2330", "TW", start=date(2023, 12, 1), end=END, fetched_at=fetched)
+    provider = _RangeRecorder(
+        source_id="twse", bars=_daily("2330", [date(2024, 1, 2), date(2024, 1, 3)])
+    )
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
+    assert provider.ranges == [(date(2024, 1, 1), END)]
+    assert result.reason is None and len(result.bars) == 3

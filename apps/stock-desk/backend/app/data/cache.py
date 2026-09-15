@@ -331,6 +331,28 @@ class PriceBarCache:
                 (symbol, market, moment.isoformat()),
             )
 
+    def last_trade_date(self, symbol: str, market: Market, start: date, end: date) -> date | None:
+        """The newest cached ``trade_date`` of one series inside ``[start, end]``, or ``None``.
+
+        A single ``MAX`` on the primary key instead of :meth:`get` (which builds
+        every row): the incremental-fetch decision (ADR-0009 D-7) needs only
+        this one date, and must not grow with the length of the range.
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(trade_date) FROM price_bars_cache
+                WHERE symbol = ? AND market = ? AND trade_date BETWEEN ? AND ?
+                """,
+                (symbol, market, start.isoformat(), end.isoformat()),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            return date.fromisoformat(row[0])
+        except ValueError:
+            return None
+
     def market_has_session(
         self, market: Market, day: date, *, exclude_source: str = "demo_synthetic"
     ) -> bool:

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
-from app.data.interface import DataStatus, Market, MarketDataProvider, ProviderResult
+from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,23 @@ UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一
 #: 2026-09-15: ``load_bars`` forwards ``reason`` on a successful load and
 #: ``DataMetaStatusBadge`` shows ``DataMeta.reason`` standing beside the badge.
 RECENT_ATTEMPT_FAILED_REASON = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
+#: ADR-0005 D-5 (跨來源不得靜默拼接), discharged through ``reason`` since
+#: ``ProviderResult`` has no ``notes``: an incremental fetch (ADR-0009 D-7) can
+#: leave a series whose head was written by one provider and whose tail by
+#: another; every bar keeps its own ``source``, and the reader is told -- on
+#: *every* answer that carries such bars, cached ones included, because the
+#: splice is permanent while the fetch that made it happens once (風控 R1).
+#: Wording fixed verbatim by risk-compliance-officer 2026-09-15 (含失效條件:
+#: 不同來源的價格處理可能不同); any change goes back to them. ``{sources}`` is
+#: filled head-to-tail, in the order the bars carry them.
+MIXED_SOURCES_REASON = (
+    "這段日線資料由多個來源拼接（{sources}），每筆保留原本的來源；"
+    "不同來源的價格處理方式可能不同，接合處的數值可能出現落差。"
+)
+#: The cached head could not be read back after a narrowed fetch: returning the
+#: tail alone as a full answer would be a silent truncation (tech-architect F-4),
+#: so the rung is treated as failed instead.
+MERGE_READBACK_FAILED_REASON = "增量抓取後無法讀回本機快取的頭段，已降級至下一層。"
 
 
 def _combine_reasons(reasons: Sequence[str]) -> str | None:
@@ -45,6 +62,20 @@ def _combine_reasons(reasons: Sequence[str]) -> str | None:
     if not kept:
         return None
     return _REASON_SEPARATOR.join(text.rstrip("。") for text in kept) + "。"
+
+
+def mixed_sources_reason(bars: Sequence[PriceBar]) -> str | None:
+    """The D-5 disclosure for ``bars``, or ``None`` when they all share one source.
+
+    Sources are listed head-to-tail (first appearance in date order), so the
+    reader is not left to guess which provider wrote the older part. Applied
+    to whatever is about to be returned -- a live answer, an incremental
+    merge or a cache read -- never inferred from how the answer was produced.
+    """
+    sources = list(dict.fromkeys(bar.source for bar in sorted(bars, key=lambda bar: bar.date)))
+    if len(sources) <= 1:
+        return None
+    return MIXED_SOURCES_REASON.format(sources="、".join(sources))
 
 
 class MarketDataService:
@@ -85,8 +116,9 @@ class MarketDataService:
     contributes its ``ProviderResult.reason`` to the ``reason`` of whatever
     the ladder ends up returning (the cache rung or ``unavailable``), so the
     API layer can tell a user "the daily quota is spent" instead of a generic
-    "no data". A successful fetch carries no reason -- there is nothing to
-    explain.
+    "no data". A successful fetch carries a reason only when the series it
+    returns is spliced from more than one provider (ADR-0005 D-5 via ADR-0009
+    D-7); otherwise there is nothing to explain.
     """
 
     def __init__(
@@ -114,22 +146,56 @@ class MarketDataService:
             (self._primary, DataStatus.FRESH),
             *((backup, DataStatus.BACKUP) for backup in self._backups),
         ]
+        # ADR-0009 D-7 (方案 F): when the cache already holds a complete,
+        # contiguous head of the range, ask the live source only for the tail.
+        fetch_start = self._incremental_start(symbol, market, start, end)
 
         # Every rung that declined to answer states why; those sentences are
         # what the API layer shows when the whole ladder comes up empty.
         reasons: list[str] = []
         for provider, status in providers:
-            result, reason = self._try_provider(provider, symbol, start, end)
+            result, reason = self._try_provider(provider, symbol, fetch_start, end)
             if result is None:
                 if reason is not None:
                     reasons.append(reason)
                 continue
             fetched_at = self._clock()
             self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
-            # ADR-0009: the attempt log feeds the cooldown; the fetch log
-            # (coverage) is written only for a complete answer, so a range
-            # with a skipped month is asked for again instead of frozen in.
+            # ADR-0009: the attempt log feeds the cooldown, whatever happens next.
             self._cache.record_attempt(symbol, market, at=fetched_at)
+            bars = result.bars
+            if fetch_start > start:
+                # The answer is the cached head plus the live tail, read back as
+                # one series. Every bar keeps its own ``source``; when the head
+                # was written by a different provider the reader is told
+                # (ADR-0005 D-5 -- never a silent splice).
+                merged = self._cache.get(symbol, market, start, end, now=fetched_at)
+                if merged is None:
+                    # F-4: the tail alone is not the answer that was asked for,
+                    # and no coverage is claimed for a range that was not served.
+                    logger.error(
+                        "incremental fetch for %s: cached head could not be read back; "
+                        "degrading past %s",
+                        symbol,
+                        result.source,
+                    )
+                    reasons.append(MERGE_READBACK_FAILED_REASON)
+                    continue
+                bars = merged.bars
+                logger.info(
+                    "incremental fetch for %s: asked %s for %s..%s instead of %s..%s",
+                    symbol,
+                    result.source,
+                    fetch_start,
+                    end,
+                    start,
+                    end,
+                )
+            # The fetch log (coverage) is written only for a complete answer, so
+            # a range with a skipped month is asked for again instead of frozen
+            # in. An incremental tail completes the *whole* request: the head
+            # was already covered (that is what allowed narrowing) and has just
+            # been read back.
             if result.complete:
                 self._cache.record_fetch(
                     symbol, market, start=start, end=end, fetched_at=fetched_at
@@ -142,18 +208,46 @@ class MarketDataService:
                     result.source,
                 )
             return ProviderResult(
-                bars=result.bars,
+                bars=bars,
                 status=status,
                 as_of=result.as_of,
                 source=result.source,
                 staleness_minutes=0,
                 complete=result.complete,
+                reason=mixed_sources_reason(bars),
             )
 
         # Every live rung declined: remember the attempt so the cooldown applies
         # to the *next* click even though nothing was fetched (ADR-0009 R-8).
         self._cache.record_attempt(symbol, market, at=self._clock())
         return self._fall_back_to_cache(symbol, market, start, end, reasons)
+
+    def _incremental_start(self, symbol: str, market: Market, start: date, end: date) -> date:
+        """Where a live fetch for ``[start, end]`` may begin without losing anything (D-7).
+
+        The cache can stand in for the head of the range only when a complete
+        live fetch is on record from ``start`` onwards *and* the cached series
+        runs contiguously into the month the live ask will start from. Then the
+        ask begins at the first day of the last cached bar's month: month-shaped
+        sources (TWSE / TPEx) then spend one call per month spanned instead of
+        one per month of the whole range, and that last month is re-pulled in
+        full so an in-month revision is still picked up. Anything less certain
+        -- no coverage, a request reaching earlier than the coverage, a cached
+        tail that outruns the coverage (a partial fetch left rows past it) --
+        falls back to asking for the whole range, exactly as before.
+        """
+        if not self._cache_first:
+            return start
+        coverage = self._cache.fetch_coverage(symbol, market)
+        if coverage is None or coverage.covered_start > start:
+            return start
+        last_bar = self._cache.last_trade_date(symbol, market, start, end)
+        if last_bar is None:
+            return start
+        month_start = last_bar.replace(day=1)
+        if month_start > coverage.covered_end + timedelta(days=1):
+            return start
+        return max(start, month_start)
 
     def _try_session_fresh_cache(
         self, symbol: str, market: Market, start: date, end: date
@@ -275,6 +369,11 @@ class MarketDataService:
         (a two-year series fetched this morning is minutes old, not a year --
         ADR-0009 R-2), else the rows' own oldest ``fetched_at``. It is never a
         failed attempt's time: nothing was obtained then (風控 R-10).
+
+        A cache that holds rows from more than one provider (the lasting
+        effect of an incremental fetch, ADR-0009 D-7) says so here as well:
+        the splice outlives the fetch that made it, and this is the path that
+        answers every later click (風控 2026-09-15 R1).
         """
         return ProviderResult(
             bars=cached.bars,
@@ -283,7 +382,7 @@ class MarketDataService:
             source=cached.source,
             staleness_minutes=max(0, int((now - checked_at).total_seconds() // 60)),
             is_within_ttl=current,
-            reason=reason,
+            reason=_combine_reasons([reason or "", mixed_sources_reason(cached.bars) or ""]),
         )
 
     def _try_provider(
