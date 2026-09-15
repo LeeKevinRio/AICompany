@@ -331,6 +331,28 @@ class PriceBarCache:
                 (symbol, market, moment.isoformat()),
             )
 
+    def market_has_session(
+        self, market: Market, day: date, *, exclude_source: str = "demo_synthetic"
+    ) -> bool:
+        """Positive evidence that ``market`` published ``day``: some live series has its bar.
+
+        Used only in the monotone direction (ADR-0009 修訂 2026-09-15): it can
+        make layer 0 fetch *more* (a close that came out before the assumed
+        ``publish_cutoff``), never suppress a fetch. Demo rows are excluded by
+        default -- the offline seeder writes a weekday grid with no holidays,
+        which would "prove" every weekday a session.
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM price_bars_cache
+                WHERE market = ? AND trade_date = ? AND source != ?
+                LIMIT 1
+                """,
+                (market, day.isoformat(), exclude_source),
+            ).fetchone()
+        return row is not None
+
     def last_attempt_at(self, symbol: str, market: Market) -> datetime | None:
         with closing(self._connect()) as conn:
             row = conn.execute(

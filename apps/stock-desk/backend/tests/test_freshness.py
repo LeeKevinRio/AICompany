@@ -18,6 +18,7 @@ from app.data.freshness import (
     SessionFreshnessPolicy,
     Verdict,
     judge,
+    next_weekday,
     policy_for,
 )
 
@@ -198,3 +199,8 @@ def test_is_within_cooldown_matches_judge_on_the_future_clock() -> None:
     assert _POLICY.is_within_cooldown(now, _taipei(2026, 9, 14, 15, 30)) is True
     assert _POLICY.is_within_cooldown(now, _taipei(2026, 9, 14, 14, 59)) is False
     assert _POLICY.is_within_cooldown(now, _taipei(2026, 9, 14, 18)) is False  # future
+
+
+def test_next_weekday_skips_the_weekend() -> None:
+    assert next_weekday(date(2026, 9, 11)) == date(2026, 9, 14)  # Fri -> Mon
+    assert next_weekday(date(2026, 9, 9)) == date(2026, 9, 10)  # Wed -> Thu

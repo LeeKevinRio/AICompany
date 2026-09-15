@@ -89,6 +89,14 @@ class SessionFreshnessPolicy:
         return _previous_weekday_or_same(day)
 
 
+def next_weekday(day: date) -> date:
+    """The first Monday-Friday date strictly after ``day``."""
+    day += timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day
+
+
 def _previous_weekday_or_same(day: date) -> date:
     while day.weekday() >= 5:
         day -= timedelta(days=1)

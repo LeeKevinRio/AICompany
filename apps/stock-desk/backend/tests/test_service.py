@@ -513,3 +513,101 @@ def test_the_service_propagates_a_partial_answer(tmp_path: Path) -> None:
         cache=PriceBarCache(db_path=tmp_path / "cache.db"),
     )
     assert service.get_daily_bars("2330", "TW", START, END).complete is False
+
+
+# --- ADR-0009 修訂 2026-09-15: a close published earlier than assumed -----------------
+
+
+def _tw_bar(symbol: str, day: date) -> PriceBar:
+    return _bar("twse").model_copy(update={"symbol": symbol, "date": day})
+
+
+def test_another_series_holding_the_next_session_means_the_close_is_out(tmp_path: Path) -> None:
+    """Wed 14:30 Taipei (before the 15:00 cutoff): 2330's cache holds Tue and would be
+    called current, but 2317 already has Wednesday's bar -- the close is published."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)  # Tuesday, well outside the cooldown
+    cache.put([_tw_bar("2330", date(2024, 1, 2))], source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
+    cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
+    primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
+    now = {"at": datetime(2024, 1, 3, 6, 30, tzinfo=UTC)}  # Wed 14:30 Taipei
+    service = MarketDataService(
+        primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    first = service.get_daily_bars("2330", "TW", START, END)
+    assert first.status is DataStatus.FRESH and primary.call_count == 1
+    # Bounded: the refetch just happened, so the next click is local again.
+    now["at"] = datetime(2024, 1, 3, 6, 40, tzinfo=UTC)
+    second = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 1 and second.status is DataStatus.CACHED_STALE
+
+
+def test_early_publication_evidence_never_suppresses_a_fetch(tmp_path: Path) -> None:
+    """Without evidence the ordinary rule stands: before the cutoff, Tuesday is current."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put([_tw_bar("2330", date(2024, 1, 2))], source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
+    primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
+    service = MarketDataService(
+        primary=primary,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 6, 30, tzinfo=UTC),
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 0
+    assert result.status is DataStatus.CACHED_STALE and result.is_within_ttl is True
+
+
+def test_demo_rows_are_not_evidence_that_the_market_traded(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put([_tw_bar("DEMO", date(2024, 1, 3))], source="demo_synthetic")
+    assert cache.market_has_session("TW", date(2024, 1, 3)) is False
+    cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
+    assert cache.market_has_session("TW", date(2024, 1, 3)) is True
+
+
+def test_a_series_that_already_holds_the_next_session_is_not_refetched_on_evidence(
+    tmp_path: Path,
+) -> None:
+    """tech-architect F-1: the evidence is about a bar this series may already have."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 3, 5, 0, tzinfo=UTC)  # Wed 13:00 Taipei, two hours ago
+    cache.put([_tw_bar("2330", date(2024, 1, 3))], source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
+    cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
+    primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
+    service = MarketDataService(
+        primary=primary,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 6, 30, tzinfo=UTC),  # Wed 14:30 Taipei
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 0 and result.status is DataStatus.CACHED_STALE
+
+
+def test_a_covered_series_whose_sources_are_failing_also_honours_the_cooldown(
+    tmp_path: Path,
+) -> None:
+    """tech-architect F-2: R-8 holds on the covered path, not only without coverage."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    success = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)  # Tuesday: complete, up to 01-02
+    cache.put([_tw_bar("2330", date(2024, 1, 2))], source="twse", fetched_at=success)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=success)
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    now = {"at": datetime(2024, 1, 3, 8, 0, tzinfo=UTC)}  # Wed 16:00 Taipei: 01-03 expected
+    service = MarketDataService(
+        primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    first = service.get_daily_bars("2330", "TW", START, END)  # ladder runs, fails
+    assert primary.call_count == 1 and first.status is DataStatus.CACHED_STALE
+    now["at"] = datetime(2024, 1, 3, 8, 20, tzinfo=UTC)
+    second = service.get_daily_bars("2330", "TW", START, END)  # inside the cooldown
+    assert primary.call_count == 1
+    assert second.is_within_ttl is False and second.reason == RECENT_ATTEMPT_FAILED_REASON
+    now["at"] = datetime(2024, 1, 3, 9, 30, tzinfo=UTC)
+    service.get_daily_bars("2330", "TW", START, END)  # cooldown expired: try again
+    assert primary.call_count == 2

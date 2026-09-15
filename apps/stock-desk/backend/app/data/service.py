@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 
 from app.data.cache import CacheReadResult, PriceBarCache
-from app.data.freshness import Verdict, expected_session, judge, policy_for
+from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
 from app.data.interface import DataStatus, Market, MarketDataProvider, ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,9 @@ UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一
 #: Carried by a cache answer served because the last live ask (inside the
 #: market's cooldown) failed or came back partial -- the reader must not be
 #: left thinking nothing was wrong (ADR-0003 約束 7). Wording approved by
-#: risk-compliance-officer 2026-09-13 (第三輪). **Not yet user-visible**: the
-#: ``load_bars`` success branch does not forward ``reason`` and no component
-#: renders ``DataMeta.reason`` for a successful load, so today this sentence
-#: lives in the service result and the logs only; the badge's 「可能未含最近
-#: 交易日」 is what the user sees. Wiring it through is 列管 (ADR-0009).
+#: risk-compliance-officer 2026-09-13 (第三輪). Reaches the screen since
+#: 2026-09-15: ``load_bars`` forwards ``reason`` on a successful load and
+#: ``DataMetaStatusBadge`` shows ``DataMeta.reason`` standing beside the badge.
 RECENT_ATTEMPT_FAILED_REASON = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
 
 
@@ -204,18 +202,48 @@ class MarketDataService:
                     reason=RECENT_ATTEMPT_FAILED_REASON,
                 )
             return None
+        last_bar = max(bar.date for bar in cached.bars)
         verdict = judge(
             policy,
-            last_bar_date=max(bar.date for bar in cached.bars),
+            last_bar_date=last_bar,
             last_checked_at=coverage.last_fetched_at,
             requested_end=end,
             now=now,
         )
-        if verdict is Verdict.REFETCH:
-            return None
-        if verdict is Verdict.CHECKED_RECENTLY and coverage.covered_end < expected_session(
-            policy, requested_end=end, now=now
+        expected = expected_session(policy, requested_end=end, now=now)
+        if verdict is Verdict.HAS_LATEST_SESSION and not policy.is_within_cooldown(
+            now, coverage.last_fetched_at
         ):
+            # ADR-0009 修訂 2026-09-15 (tech-architect S3-1): the one place the
+            # session rule can *overclaim* is a close published before the
+            # assumed ``publish_cutoff``. If another live series of this market
+            # already holds the next weekday's bar, that close is out: fetch
+            # now rather than wait for the clock. Monotone -- this only ever
+            # adds a fetch -- and bounded to one per cooldown by the guard above.
+            later = next_weekday(expected)
+            if later <= end and later > last_bar and self._cache.market_has_session(market, later):
+                verdict = Verdict.REFETCH
+        if verdict is Verdict.REFETCH:
+            # ADR-0009 R-8, applied to the covered path too (tech-architect
+            # F-2): a live ask newer than the last complete success that is
+            # still inside the cooldown means the sources are failing right
+            # now -- serve the cache with the reason instead of re-running the
+            # whole ladder per click.
+            attempted = self._cache.last_attempt_at(symbol, market)
+            if (
+                attempted is not None
+                and attempted > coverage.last_fetched_at
+                and policy.is_within_cooldown(now, attempted)
+            ):
+                return self._cached_result(
+                    cached,
+                    checked_at=coverage.last_fetched_at,
+                    now=now,
+                    current=False,
+                    reason=RECENT_ATTEMPT_FAILED_REASON,
+                )
+            return None
+        if verdict is Verdict.CHECKED_RECENTLY and coverage.covered_end < expected:
             # The recorded complete fetch never reached the session this
             # request expects (a historical fetch being reused for a request
             # that runs to today): that is a range gap, not a holiday.
