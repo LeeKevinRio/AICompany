@@ -90,15 +90,23 @@ function isMarket(value: string | null): value is Market {
 type ChartTab = "tradingview" | "local";
 
 /**
- * CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView is the default tab —
- * the self-built K-line (bound to this system's verified data chain, used
- * for indicator overlay comparison) stays available one click away, never
- * removed.
+ * CEO 2026-09-16: the TradingView embed never rendered on the CEO's machine,
+ * so the tab is switched off and the self-built K-line (bound to this
+ * system's verified data chain) is the only chart shown. Nothing is removed:
+ * `TradingViewChartPanel`, its risk-approved wording and the symbol mapping
+ * stay in place, and flipping this back on restores the two-tab layout of
+ * CEO 派工單 2026-08-16 (TradingView as the default tab).
  */
-const CHART_TABS: { key: ChartTab; label: string }[] = [
+const TRADINGVIEW_CHART_ENABLED = false;
+
+const ALL_CHART_TABS: { key: ChartTab; label: string }[] = [
   { key: "tradingview", label: "互動圖表（TradingView）" },
   { key: "local", label: "本地圖表" },
 ];
+
+const CHART_TABS = ALL_CHART_TABS.filter((tab) => TRADINGVIEW_CHART_ENABLED || tab.key !== "tradingview");
+
+const DEFAULT_CHART_TAB: ChartTab = TRADINGVIEW_CHART_ENABLED ? "tradingview" : "local";
 
 export default function PositionDetailPage() {
   const params = useParams<{ symbol: string }>();
@@ -135,7 +143,7 @@ export default function PositionDetailPage() {
   // other one from already-cached query data, rather than keeping a hidden,
   // zero-width chart container around. Known trade-off: no zoom/scroll state
   // survives a tab switch (see 已知限制 in the handoff report).
-  const [chartTab, setChartTab] = useState<ChartTab>("tradingview");
+  const [chartTab, setChartTab] = useState<ChartTab>(DEFAULT_CHART_TAB);
 
   // TradingView exchange prefix for TW symbols (fix: 上櫃 stocks were always
   // sent as `TWSE:` and rendered as an invalid symbol). Inferred from the bars
@@ -314,7 +322,10 @@ export default function PositionDetailPage() {
           {/*
             CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView 為預設頁籤，
             本地圖表（既有、綁已驗證資料，供指標對照）保留於第二頁籤，非移除。
+            CEO 2026-09-16: TradingView 頁籤以 `TRADINGVIEW_CHART_ENABLED` 關閉，
+            只剩本地圖表時不渲染 tablist（見上方常數說明）。
           */}
+          {CHART_TABS.length > 1 && (
           <div role="tablist" aria-label="圖表來源" className="mt-3 flex gap-1 border-b border-neutral-800">
             {CHART_TABS.map((tab) => (
               <button
@@ -333,6 +344,7 @@ export default function PositionDetailPage() {
               </button>
             ))}
           </div>
+          )}
 
           {/*
             Each panel only renders while its tab is active (not just CSS
@@ -344,7 +356,7 @@ export default function PositionDetailPage() {
             The `bars`/`signals` React Query results this reads are already
             cached, so re-mounting costs no extra network round-trip.
           */}
-          {chartTab === "tradingview" && (
+          {TRADINGVIEW_CHART_ENABLED && chartTab === "tradingview" && (
             <div role="tabpanel" className="mt-3">
               {/*
                 Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, Medium
