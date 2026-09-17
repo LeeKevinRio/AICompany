@@ -378,7 +378,13 @@ export default function PositionDetailPage() {
 
           {chartTab === "local" && (
             <div role="tabpanel">
-              {(bars.isPending || signals.isPending) && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
+              {/*
+                CEO 2026-09-17: the K-line waits for the bars query only. The
+                MA overlay comes from the (slower) signals query and is drawn
+                once it lands; before that the chart still shows the bars,
+                instead of sitting behind a skeleton until every indicator is in.
+              */}
+              {bars.isPending && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
               {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
               {bars.isSuccess && bars.data.status === "insufficient_data" && (
                 <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
