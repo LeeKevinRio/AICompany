@@ -155,9 +155,7 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
             kelly=kelly_inputs_for(kelly_store, symbol, market),
         )
 
-    result = evaluate_alerts(
-        alert_store, load, cooldown_minutes=settings.alerts.cooldown_minutes
-    )
+    result = evaluate_alerts(alert_store, load, cooldown_minutes=settings.alerts.cooldown_minutes)
     logger.info(
         "alert evaluation: %d rules evaluated, %d fired", result.evaluated, len(result.events)
     )
@@ -198,6 +196,11 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         # replayed N times.
         max_instances=1,
         coalesce=True,
+        # ADR-0010 D-4: warm the cache as soon as the scheduler starts. An
+        # interval trigger otherwise fires first only after one whole interval
+        # (24h by default), during which a cache-only book valuation (D-1)
+        # would find nothing for a freshly started process.
+        next_run_time=datetime.now(UTC),
     )
     engine.add_job(
         _guarded("alert_evaluation", evaluate_alerts_tick),

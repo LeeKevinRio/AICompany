@@ -37,7 +37,7 @@ ever interpolated or fabricated.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -67,6 +67,25 @@ class PriceService(Protocol):
     def get_daily_bars(
         self, symbol: str, market: Market, start: date, end: date
     ) -> ProviderResult: ...
+
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        """The same range from the local cache only -- never a live call (ADR-0010 D-1)."""
+        ...
+
+
+#: How a valuator obtains prices (ADR-0010 D-1). ``live`` runs the full
+#: degradation ladder per position; ``cache_only`` reads what the cache already
+#: holds and never asks a source. An explicit constructor argument, never an
+#: environment switch: two machines running the same code must produce the same
+#: data-layer answer for the same request (tech-architect R-8).
+PriceMode = Literal["live", "cache_only"]
+
+#: ``Valuation.missing`` token for a cache-only read that found no rows: the
+#: source was not asked this time, which is a different fact from "the source
+#: had nothing" (tech-architect R-5).
+PRICE_NOT_QUERIED = "price_not_queried"
 
 
 @dataclass(frozen=True)
@@ -163,20 +182,42 @@ class PositionValuator:
         market_services: Mapping[Market, PriceService],
         fx_provider: FxRateProvider,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        price_mode: PriceMode = "live",
     ) -> None:
         self._market_services = dict(market_services)
         self._fx_provider = fx_provider
         self._clock = clock
+        self._price_mode: PriceMode = price_mode
 
-    def value_position(self, position: Position) -> PositionValuation:
+    @property
+    def price_mode(self) -> PriceMode:
+        return self._price_mode
+
+    def value_all(self, positions: Sequence[Position]) -> list[PositionValuation]:
+        """Value every position of one book in one pass.
+
+        FX lookups for the same ``(pair, date)`` are answered once per pass
+        (ADR-0010 D-2): within a single request the answer cannot differ, and
+        without this a book of N foreign holdings asks the FX source N times
+        for the same day's rate.
+        """
+        fx_memo: dict[tuple[str, date], Decimal | None] = {}
+        return [self.value_position(position, fx_memo=fx_memo) for position in positions]
+
+    def value_position(
+        self,
+        position: Position,
+        *,
+        fx_memo: dict[tuple[str, date], Decimal | None] | None = None,
+    ) -> PositionValuation:
         today = self._clock().date()
         missing: list[str] = []
 
-        price_info, price_now = self._resolve_price(position, today)
+        price_info, price_now, price_missing = self._resolve_price(position, today)
         if price_now is None:
-            missing.append("price")
+            missing.append(price_missing)
 
-        fx_open, fx_now = self._resolve_fx(position, today, missing)
+        fx_open, fx_now = self._resolve_fx(position, today, missing, fx_memo)
 
         price_open = position.avg_cost
         quantity = position.quantity
@@ -228,14 +269,19 @@ class PositionValuator:
 
     def _resolve_price(
         self, position: Position, today: date
-    ) -> tuple[PriceInfo | None, Decimal | None]:
+    ) -> tuple[PriceInfo | None, Decimal | None, str]:
+        """``(info, close, missing_token)`` -- the token names *why* when close is None."""
+        missing_token = PRICE_NOT_QUERIED if self._price_mode == "cache_only" else "price"
         service = self._market_services.get(position.market)
         if service is None:
-            return None, None
+            return None, None, missing_token
         start = today - timedelta(days=PRICE_LOOKBACK_DAYS)
-        result = service.get_daily_bars(position.symbol, position.market, start, today)
+        if self._price_mode == "cache_only":
+            result = service.get_cached_bars(position.symbol, position.market, start, today)
+        else:
+            result = service.get_daily_bars(position.symbol, position.market, start, today)
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
-            return None, None
+            return None, None, missing_token
         latest = max(result.bars, key=lambda bar: bar.date)
         info = PriceInfo(
             value=latest.close,
@@ -243,17 +289,21 @@ class PositionValuator:
             source=result.source,
             data_status=result.status,
         )
-        return info, latest.close
+        return info, latest.close, ""
 
     def _resolve_fx(
-        self, position: Position, today: date, missing: list[str]
+        self,
+        position: Position,
+        today: date,
+        missing: list[str],
+        fx_memo: dict[tuple[str, date], Decimal | None] | None,
     ) -> tuple[Decimal | None, Decimal | None]:
         if position.currency == "TWD":
             # A TWD position is already in the reporting currency: F0 = F1 = 1
             # and the FX contribution is therefore identically zero.
             return _TWD_RATE, _TWD_RATE
         pair = f"{position.currency}TWD"
-        fx_now = self._latest_fx_on_or_before(pair, today)
+        fx_now = self._latest_fx_on_or_before(pair, today, fx_memo)
         if fx_now is None:
             missing.append("fx_now")
         # Without an open date there is no date to price F0 at, and no rate is
@@ -261,18 +311,33 @@ class PositionValuator:
         fx_open = (
             None
             if position.opened_at is None
-            else self._latest_fx_on_or_before(pair, position.opened_at)
+            else self._latest_fx_on_or_before(pair, position.opened_at, fx_memo)
         )
         if fx_open is None:
             missing.append("fx_open")
         return fx_open, fx_now
 
-    def _latest_fx_on_or_before(self, pair: str, target: date) -> Decimal | None:
+    def _latest_fx_on_or_before(
+        self,
+        pair: str,
+        target: date,
+        fx_memo: dict[tuple[str, date], Decimal | None] | None = None,
+    ) -> Decimal | None:
         """Return the FX rate on ``target``, else the nearest earlier one.
 
         Looks back up to ``FX_BACKTRACK_DAYS`` days; returns ``None`` if no rate
-        is published in that window (never guesses a rate).
+        is published in that window (never guesses a rate). ``fx_memo`` (one
+        per :meth:`value_all` pass) answers a repeated ``(pair, target)``
+        without a second lookup.
         """
+        if fx_memo is not None and (pair, target) in fx_memo:
+            return fx_memo[(pair, target)]
+        rate = self._lookup_fx(pair, target)
+        if fx_memo is not None:
+            fx_memo[(pair, target)] = rate
+        return rate
+
+    def _lookup_fx(self, pair: str, target: date) -> Decimal | None:
         start = target - timedelta(days=FX_BACKTRACK_DAYS)
         result = self._fx_provider.get_daily_rates(pair, start, target)
         if result.status is DataStatus.UNAVAILABLE or not result.rates:

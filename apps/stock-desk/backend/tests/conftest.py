@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_cached_valuator,
     get_dividend_store,
     get_fx_provider,
     get_index_resolver,
@@ -121,11 +122,19 @@ def api_harness(
         market_services={"TW": price_service},
         fx_provider=fx_provider,
     )
+    # ADR-0010 D-1: the advice card values the book from the cache only; the
+    # fake answers both reads from the same canned bars.
+    cached_valuator = PositionValuator(
+        market_services={"TW": price_service},
+        fx_provider=fx_provider,
+        price_mode="cache_only",
+    )
 
     app.dependency_overrides[get_position_store] = lambda: positions
     app.dependency_overrides[get_alert_store] = lambda: alerts
     app.dependency_overrides[get_settings_store] = lambda: settings
     app.dependency_overrides[get_valuator] = lambda: valuator
+    app.dependency_overrides[get_cached_valuator] = lambda: cached_valuator
     app.dependency_overrides[get_market_resolver] = lambda: {"TW": price_service}
     app.dependency_overrides[get_index_resolver] = lambda: {
         "TW": index_service,

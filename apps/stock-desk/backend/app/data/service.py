@@ -49,6 +49,24 @@ MIXED_SOURCES_REASON = (
 #: tail alone as a full answer would be a silent truncation (tech-architect F-4),
 #: so the rung is treated as failed instead.
 MERGE_READBACK_FAILED_REASON = "增量抓取後無法讀回本機快取的頭段，已降級至下一層。"
+#: ADR-0009 D-8: nothing cached for the series and the last live ask (inside
+#: the cooldown) failed -- the ladder is not re-run per click.
+#: ``{minutes}`` anchors "最近一次" in time (風控 B-1): with no bars there is no
+#: other timestamp on screen for the reader to relate it to. The second sentence
+#: states the cooldown length and that nothing retries on its own -- a fact,
+#: not a promise (風控 B-2). Wording by creative-lead
+#: (`work/stock-desk-ADR-0010-揭露句-文案.md`), fixed verbatim by
+#: risk-compliance-officer 2026-09-18 (三審); any change goes back to them.
+#: 列管: "約 0 分鐘前" and four-digit minutes on the US cooldown read badly.
+COOLDOWN_NO_CACHE_REASON = (
+    "本機尚無此標的的日線資料，最近一次向來源取得已於約 {minutes} 分鐘前未成功，冷卻期內暫不重試。"
+    "冷卻期為 {cooldown_hours} 小時，冷卻期內系統不會自動重試；"
+    "冷卻期結束後的下一次查詢才會重新向來源取得。"
+)
+#: ADR-0010 D-1: a cache-only read found no rows. Distinct from "the source had
+#: nothing" on purpose (tech-architect R-5): no source was asked this time.
+#: Wording fixed verbatim by risk-compliance-officer 2026-09-18 (C 核可).
+CACHE_ONLY_MISS_REASON = "本機尚無此標的的日線資料；本次未向來源查詢。"
 
 
 def _combine_reasons(reasons: Sequence[str]) -> str | None:
@@ -223,6 +241,47 @@ class MarketDataService:
         self._cache.record_attempt(symbol, market, at=self._clock())
         return self._fall_back_to_cache(symbol, market, start, end, reasons)
 
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        """Answer from the local cache only -- never a live call (ADR-0010 D-1).
+
+        For a book-wide valuation that only feeds risk-cap denominators, one
+        session of staleness is a rounding error while a minute of blank screen
+        is a certain harm, so this read applies the same session rule as layer
+        0 (:func:`app.data.freshness.judge`, R-3) but never falls through to
+        the ladder. It returns ``CACHED_STALE`` or ``UNAVAILABLE`` only (R-1)
+        and writes neither log nor rows (R-2): the attempt log means "a source
+        was asked", and nothing was.
+        """
+        now = self._clock()
+        cached = self._cache.get(symbol, market, start, end, now=now)
+        if cached is None:
+            return ProviderResult(
+                bars=[],
+                status=DataStatus.UNAVAILABLE,
+                as_of=now,
+                source="none",
+                staleness_minutes=None,
+                reason=CACHE_ONLY_MISS_REASON,
+            )
+        coverage = self._cache.fetch_coverage(symbol, market)
+        current = False
+        checked_at = cached.fetched_at
+        if coverage is not None and coverage.covered_start <= start:
+            checked_at = coverage.last_fetched_at
+            current = (
+                judge(
+                    policy_for(market),
+                    last_bar_date=max(bar.date for bar in cached.bars),
+                    last_checked_at=coverage.last_fetched_at,
+                    requested_end=end,
+                    now=now,
+                )
+                is Verdict.HAS_LATEST_SESSION
+            )
+        return self._cached_result(cached, checked_at=checked_at, now=now, current=current)
+
     def _incremental_start(self, symbol: str, market: Market, start: date, end: date) -> date:
         """Where a live fetch for ``[start, end]`` may begin without losing anything (D-7).
 
@@ -263,11 +322,39 @@ class MarketDataService:
         """
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
-        if cached is None:
-            return None
         policy = policy_for(market)
         coverage = self._cache.fetch_coverage(symbol, market)
         last_success = coverage.last_fetched_at if coverage is not None else None
+        if cached is None:
+            # ADR-0009 D-8 (tech-architect 2026-09-18): a series that has never
+            # been fetched successfully *and* whose sources are failing right
+            # now is the case that needs the cooldown most, and used to be the
+            # only one without it -- every click re-ran the whole ladder.
+            attempted = self._cache.last_attempt_at(symbol, market)
+            if (
+                attempted is not None
+                and (last_success is None or attempted > last_success)
+                and policy.is_within_cooldown(now, attempted)
+            ):
+                minutes_ago = int((now - attempted).total_seconds() // 60)
+                logger.info(
+                    "cache_first: nothing cached for %s and a live attempt %d min ago failed; "
+                    "not re-running the ladder inside the cooldown",
+                    symbol,
+                    minutes_ago,
+                )
+                return ProviderResult(
+                    bars=[],
+                    status=DataStatus.UNAVAILABLE,
+                    as_of=now,
+                    source="none",
+                    staleness_minutes=None,
+                    reason=COOLDOWN_NO_CACHE_REASON.format(
+                        minutes=minutes_ago,
+                        cooldown_hours=int(policy.recheck_cooldown.total_seconds() // 3600),
+                    ),
+                )
+            return None
         if coverage is None or coverage.covered_start > start:
             # Never fetched live in full (a seeded, legacy or holed cache), or
             # the request reaches further back than any complete fetch: the

@@ -141,6 +141,27 @@ class _FreshService:
             reason="上一層說了些什麼。",
         )
 
+    def get_cached_bars(
+        self, symbol: str, market: str, start: date, end: date
+    ) -> ProviderResult:
+        return ProviderResult(
+            bars=_index_bars(symbol),
+            status=DataStatus.CACHED_STALE,
+            as_of=_NOW,
+            source="yfinance",
+            staleness_minutes=30,
+            is_within_ttl=False,
+            reason="快取層說了些什麼。",
+        )
+
+
+def test_the_facade_passes_a_cache_only_read_through_untouched() -> None:
+    """ADR-0010 D-1: the cache-only read is already never ``fresh``, so nothing to relabel."""
+    service = I.IndexSeriesService(_FreshService())
+    result = service.get_cached_bars("^TWII", "TW", START, END)
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is False and result.reason == "快取層說了些什麼。"
+
 
 def test_the_facade_never_lets_an_index_series_be_fresh() -> None:
     service = I.IndexSeriesService(_FreshService())

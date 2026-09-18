@@ -156,6 +156,23 @@ def _default_valuator() -> PositionValuator:
 
 
 @lru_cache(maxsize=1)
+def _default_cached_valuator() -> PositionValuator:
+    """The book-wide valuator for the advice card (ADR-0010 D-1).
+
+    Same ladders, same FX adapter, but prices come from the local cache only:
+    the card's risk caps need book-level denominators, for which one session
+    of staleness is a rounding error while re-running twelve ladders per click
+    is minutes of blank screen. ``/api/portfolio/summary`` keeps the live
+    valuator (R-8) so a deliberate "value my book now" path always exists.
+    """
+    return PositionValuator(
+        market_services=dict(_default_resolver()),
+        fx_provider=_default_fx_provider(),
+        price_mode="cache_only",
+    )
+
+
+@lru_cache(maxsize=1)
 def _default_settings_store() -> SettingsStore:
     return SettingsStore()
 
@@ -263,6 +280,11 @@ def get_playbook_service() -> PlaybookService:
 def get_valuator() -> PositionValuator:
     """Return the process-wide position valuator."""
     return _default_valuator()
+
+
+def get_cached_valuator() -> PositionValuator:
+    """Return the cache-only book valuator used by the advice card (ADR-0010 D-1)."""
+    return _default_cached_valuator()
 
 
 def get_fx_provider() -> FxRateProvider:

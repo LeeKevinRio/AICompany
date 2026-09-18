@@ -24,7 +24,14 @@ from app.positions.store import PositionStore
 
 
 class Totals(BaseModel):
-    """Book-level totals in TWD, summed over the ``ok`` positions only."""
+    """Book-level totals in TWD, summed over the ``ok`` positions only.
+
+    ``status`` states *coverage* -- how many positions were valued -- and
+    nothing about freshness: a ``complete`` book valued from the local cache
+    (ADR-0010 D-1) is still ``complete``. How new the prices are travels on
+    each position's ``valuation.price.data_status`` and, on the advice card,
+    on the standing cache-only note (風控 2026-09-18 D-2).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -92,8 +99,8 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
     fx = Decimal(0)
     ok_count = 0
 
-    for position in positions:
-        valued = valuator.value_position(position)
+    # One pass per book (ADR-0010 D-2): repeated FX lookups are answered once.
+    for position, valued in zip(positions, valuator.value_all(positions), strict=True):
         summary_positions.append(
             _to_summary_position(
                 position, valued.valuation, valued.market_value_twd, valued.cost_twd

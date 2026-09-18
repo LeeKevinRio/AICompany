@@ -209,6 +209,12 @@ class IndexSeriesService:
             return result
         return result.model_copy(update={"status": disclosed})
 
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        """The cache-only read (ADR-0010 D-1), passed through; it never claims ``fresh``."""
+        return self._inner.get_cached_bars(symbol, market, start, end)
+
 
 def load_index_bars(
     resolver: IndexServiceResolver,

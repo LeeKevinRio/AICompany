@@ -15,6 +15,8 @@ from app.advice import book as book_module
 from app.advice.book import (
     EQUITY_BASIS_NOTE,
     GROSS_EXPOSURE_NOTE,
+    UNVALUED_POSITIONS_NOTE,
+    UNVALUED_POSITIONS_NOTE_CACHE_ONLY,
     FxQuote,
     build_book_context,
     build_book_level_context,
@@ -31,7 +33,7 @@ from app.advice.limits import (
 from app.data.interface import DataStatus
 from app.kelly.models import KellyInputRow
 from app.portfolio.summary import PortfolioSummary, SummaryPosition, Totals
-from app.portfolio.valuation import PriceInfo, Valuation
+from app.portfolio.valuation import PRICE_NOT_QUERIED, PriceInfo, Valuation
 from tests.advice_helpers import reported_net_worth
 
 
@@ -117,6 +119,43 @@ def _summary(*positions: SummaryPosition, market_value: str = "600000") -> Portf
         ),
         positions=list(positions),
     )
+
+
+def _not_queried(position: SummaryPosition) -> SummaryPosition:
+    """The same unvalued position as a cache-only book reports it (ADR-0010 D-1)."""
+    valuation = position.valuation.model_copy(update={"missing": [PRICE_NOT_QUERIED]})
+    return position.model_copy(update={"valuation": valuation})
+
+
+def test_unvalued_positions_are_counted_by_cause() -> None:
+    """風控 2026-09-18 A-5: "not asked this time" and "asked, nothing there" never share
+    one sentence; a book may carry both, each with its own count."""
+    asked = _position(2, "2317", price=None)  # missing == ["price"]
+    not_queried = _not_queried(_position(3, "2454", price=None))
+    both = build_book_context(
+        _summary(
+            _position(1, "2330"), asked, not_queried, not_queried.model_copy(update={"id": 4})
+        ),
+        symbol="2330",
+        market="TW",
+        close=600.0,
+        currency="TWD",
+    ).notes
+    assert UNVALUED_POSITIONS_NOTE.format(count=1) in both
+    assert UNVALUED_POSITIONS_NOTE_CACHE_ONLY.format(count=2) in both
+    only_cache = build_book_context(
+        _summary(_position(1, "2330"), not_queried),
+        symbol="2330",
+        market="TW",
+        close=600.0,
+        currency="TWD",
+    ).notes
+    assert UNVALUED_POSITIONS_NOTE_CACHE_ONLY.format(count=1) in only_cache
+    assert not any(note.startswith("組合中有") and "缺價格或匯率" in note for note in only_cache)
+    fully_valued = build_book_context(
+        _summary(_position(1, "2330")), symbol="2330", market="TW", close=600.0, currency="TWD"
+    ).notes
+    assert not any(note.startswith("組合中有") for note in fully_valued)
 
 
 def test_held_symbol_rolls_up_quantity_cost_and_value() -> None:

@@ -201,6 +201,15 @@ def test_is_within_cooldown_matches_judge_on_the_future_clock() -> None:
     assert _POLICY.is_within_cooldown(now, _taipei(2026, 9, 14, 18)) is False  # future
 
 
+def test_every_market_cooldown_is_a_whole_number_of_hours() -> None:
+    """ADR-0010 D-3's cooldown sentence prints ``{cooldown_hours} 小時`` by integer
+    division; a 90-minute cooldown would be shown as "1 小時" -- a false statement.
+    Change the sentence before changing a cooldown to a fraction of an hour."""
+    for market in ("TW", "US"):
+        seconds = policy_for(market).recheck_cooldown.total_seconds()
+        assert seconds % 3600 == 0 and seconds >= 3600, market
+
+
 def test_next_weekday_skips_the_weekend() -> None:
     assert next_weekday(date(2026, 9, 11)) == date(2026, 9, 14)  # Fri -> Mon
     assert next_weekday(date(2026, 9, 9)) == date(2026, 9, 10)  # Wed -> Thu

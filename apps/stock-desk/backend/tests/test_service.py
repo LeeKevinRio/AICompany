@@ -17,6 +17,8 @@ from app.data.interface import (
     ProviderResult,
 )
 from app.data.service import (
+    CACHE_ONLY_MISS_REASON,
+    COOLDOWN_NO_CACHE_REASON,
     MERGE_READBACK_FAILED_REASON,
     MIXED_SOURCES_REASON,
     RECENT_ATTEMPT_FAILED_REASON,
@@ -830,3 +832,105 @@ def test_a_same_source_incremental_fetch_carries_no_reason(tmp_path: Path) -> No
     result = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
     assert provider.ranges == [(date(2024, 1, 1), END)]
     assert result.reason is None and len(result.bars) == 3
+
+
+# --- ADR-0010 D-1: the cache-only read --------------------------------------------
+
+
+class _WriteSpyCache(PriceBarCache):
+    """Counts every write so a cache-only read can be shown to make none (R-2)."""
+
+    def __init__(self, *, db_path: Path) -> None:
+        super().__init__(db_path=db_path)
+        self.writes = 0
+
+    def put(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+        self.writes += 1
+        super().put(*args, **kwargs)  # type: ignore[arg-type]
+
+    def record_fetch(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+        self.writes += 1
+        super().record_fetch(*args, **kwargs)  # type: ignore[arg-type]
+
+    def record_attempt(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+        self.writes += 1
+        super().record_attempt(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_a_cache_only_read_never_asks_a_source_and_writes_nothing(tmp_path: Path) -> None:
+    cache = _WriteSpyCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
+    cache.put(_daily("2330", [date(2024, 1, 2)]), source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
+    cache.writes = 0
+    provider = _StubProvider(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
+    service = MarketDataService(
+        primary=provider,
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),  # a newer session exists
+        cache_first=True,
+    )
+    result = service.get_cached_bars("2330", "TW", START, END)
+    assert provider.call_count == 0 and cache.writes == 0  # R-1 / R-2
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is False  # R-3: same judge(), and it is short a session
+    assert [bar.date for bar in result.bars] == [date(2024, 1, 2)]
+    # Nothing cached at all: unavailable, and said as "not asked" (R-5).
+    empty = service.get_cached_bars("2317", "TW", START, END)
+    assert empty.status is DataStatus.UNAVAILABLE and empty.reason == CACHE_ONLY_MISS_REASON
+    assert provider.call_count == 0 and cache.writes == 0
+
+
+def test_a_cache_only_read_without_coverage_is_never_current(tmp_path: Path) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    cache.put(_daily("2330", [date(2024, 1, 3)]), source="twse")  # no fetch log at all
+    service = MarketDataService(
+        primary=_StubProvider(source_id="twse"),
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 10, 0, tzinfo=UTC),  # cache has the latest session
+        cache_first=True,
+    )
+    result = service.get_cached_bars("2330", "TW", START, END)
+    assert result.status is DataStatus.CACHED_STALE and result.is_within_ttl is False
+
+
+def test_a_cache_only_read_still_discloses_a_spliced_series(tmp_path: Path) -> None:
+    """R-4: the splice is permanent, so the cache-only reader says it too."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    head = [
+        bar.model_copy(update={"source": "finmind"}) for bar in _daily("2330", [date(2024, 1, 2)])
+    ]
+    cache.put(head, source="finmind")
+    cache.put(_daily("2330", [date(2024, 1, 3)]), source="twse")
+    service = MarketDataService(
+        primary=_StubProvider(source_id="twse"),
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 10, 0, tzinfo=UTC),
+        cache_first=True,
+    )
+    result = service.get_cached_bars("2330", "TW", START, END)
+    assert result.reason == MIXED_SOURCES_REASON.format(sources="finmind、twse")
+
+
+# --- ADR-0009 D-8: the cooldown also covers a series with nothing cached ---------
+
+
+def test_a_never_fetched_series_whose_sources_fail_is_not_retried_inside_the_cooldown(
+    tmp_path: Path,
+) -> None:
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    now = {"at": datetime(2024, 1, 3, 8, 0, tzinfo=UTC)}
+    service = MarketDataService(
+        primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
+    )
+    first = service.get_daily_bars("2330", "TW", START, END)  # the ladder runs and fails
+    assert primary.call_count == 1 and first.status is DataStatus.UNAVAILABLE
+    now["at"] = datetime(2024, 1, 3, 8, 20, tzinfo=UTC)  # inside TW's 1h cooldown
+    second = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 1  # not re-run per click any more
+    assert second.status is DataStatus.UNAVAILABLE
+    assert second.reason == COOLDOWN_NO_CACHE_REASON.format(minutes=20, cooldown_hours=1)
+    now["at"] = datetime(2024, 1, 3, 9, 30, tzinfo=UTC)  # cooldown over: try again
+    service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 2

@@ -80,6 +80,7 @@ from app.advice.limits import (
 from app.data.interface import DataStatus
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
+from app.portfolio.valuation import PRICE_NOT_QUERIED
 from app.positions.models import InstrumentType, Market
 
 #: The markets whose holdings may carry an industry category at all. TWSE's
@@ -153,6 +154,19 @@ SECTOR_UNCLASSIFIED_NOTE = (
 #: (:func:`build_book_level_context`) states the same fact about the same books.
 UNVALUED_POSITIONS_NOTE = (
     "組合中有 {count} 筆部位無法估值（缺價格或匯率），未計入總資產；比率會因此偏高。"
+)
+#: The same fact for the positions whose price was *not asked for this time*
+#: (a cache-only book, ADR-0010 D-1; ``Valuation.missing`` carries
+#: ``price_not_queried``) -- a different cause from "asked, nothing there",
+#: which the sentence above keeps describing. The two groups are counted
+#: separately (風控 A-5): a book may hold both. Consequence clause verbatim.
+#: Wording by creative-lead (`work/stock-desk-ADR-0010-揭露句-文案.md`), fixed
+#: verbatim by risk-compliance-officer 2026-09-18 (三審); any change goes back
+#: to them. 列管: if an FX cache layer ever makes a *rate* "not asked" too, the
+#: parenthetical must be re-reviewed.
+UNVALUED_POSITIONS_NOTE_CACHE_ONLY = (
+    "組合中有 {count} 筆部位無法估值（本次未向來源查詢，本機尚無可用的價格或匯率），"
+    "未計入總資產；比率會因此偏高。"
 )
 
 #: The same fact about *one* symbol's own lots. Extracted for the same reason:
@@ -528,7 +542,16 @@ def _book_level_notes(
     notes = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
     _, valued_count, total_count = _book_equity(summary)
     if total_count and valued_count < total_count:
-        notes.append(UNVALUED_POSITIONS_NOTE.format(count=total_count - valued_count))
+        # Counted by cause (風控 A-5): a cache-only book (ADR-0010 D-1) marks a
+        # price it did not ask for with ``price_not_queried``, while a missing
+        # FX rate was really asked for -- the two must not share one sentence.
+        unvalued = [item for item in summary.positions if item.valuation.status != "ok"]
+        not_queried = sum(PRICE_NOT_QUERIED in item.valuation.missing for item in unvalued)
+        asked = len(unvalued) - not_queried
+        if asked:
+            notes.append(UNVALUED_POSITIONS_NOTE.format(count=asked))
+        if not_queried:
+            notes.append(UNVALUED_POSITIONS_NOTE_CACHE_ONLY.format(count=not_queried))
     return notes
 
 

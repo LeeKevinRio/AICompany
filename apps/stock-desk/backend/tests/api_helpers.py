@@ -98,6 +98,8 @@ class FakePriceService:
         self.is_within_ttl = is_within_ttl
         #: Every call made, so a test can assert the range that was requested.
         self.calls: list[tuple[str, Market, date, date]] = []
+        #: Cache-only reads (ADR-0010 D-1), kept apart from live ``calls``.
+        self.cached_calls: list[tuple[str, Market, date, date]] = []
 
     def seed(self, symbol: str, bars: list[PriceBar]) -> None:
         """Make ``symbol`` resolvable to ``bars``."""
@@ -125,6 +127,35 @@ class FakePriceService:
             staleness_minutes=self.staleness_minutes,
             is_within_ttl=self.is_within_ttl,
             # A cache answer may carry why it is the cache (ADR-0009 D-3).
+            reason=self.reason,
+        )
+
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        """The cache-only read (ADR-0010 D-1): same canned bars, never ``fresh``/``backup``.
+
+        Recorded in ``cached_calls`` rather than ``calls`` so a test can assert
+        that a path made *no* live ask.
+        """
+        self.cached_calls.append((symbol, market, start, end))
+        window = [bar for bar in self.bars.get(symbol, []) if start <= bar.date <= end]
+        if not window:
+            return ProviderResult(
+                bars=[],
+                status=DataStatus.UNAVAILABLE,
+                as_of=_AS_OF,
+                source="none",
+                staleness_minutes=None,
+                reason=self.reason,
+            )
+        return ProviderResult(
+            bars=window,
+            status=DataStatus.CACHED_STALE,
+            as_of=_AS_OF,
+            source=self.source,
+            staleness_minutes=self.staleness_minutes,
+            is_within_ttl=self.is_within_ttl,
             reason=self.reason,
         )
 

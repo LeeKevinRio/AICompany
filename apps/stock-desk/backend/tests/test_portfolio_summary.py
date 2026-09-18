@@ -47,6 +47,13 @@ class _FakePriceService(PriceService):
         )
         return ProviderResult(bars=[bar], status=DataStatus.FRESH, as_of=NOW, source="fake")
 
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        # This file exercises the live valuator only; a cache-only read here is
+        # a test wiring mistake and should fail loudly, not return None.
+        raise NotImplementedError("use tests.api_helpers.FakePriceService for cache-only reads")
+
 
 class _FakeFxProvider(FxRateProvider):
     source_id = "fake_fx"

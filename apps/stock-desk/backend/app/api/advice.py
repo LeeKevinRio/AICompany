@@ -28,20 +28,20 @@ from app.advice.book import build_book_context, self_reported_net_worth
 from app.advice.engine import build_advice
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
+    get_cached_valuator,
     get_fx_provider,
     get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_price_bar_cache,
     get_settings_store,
-    get_valuator,
 )
 from app.api.kelly import kelly_inputs_for
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
 from app.data.cache import PriceBarCache
 from app.data.providers.fx import FxRateProvider
 from app.kelly.store import KellyInputStore
-from app.portfolio.summary import build_summary
+from app.portfolio.summary import PortfolioSummary, build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
 from app.positions.store import PositionStore
@@ -54,7 +54,9 @@ router = APIRouter(prefix="/api/advice", tags=["advice"])
 
 ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 StoreDep = Annotated[PositionStore, Depends(get_position_store)]
-ValuatorDep = Annotated[PositionValuator, Depends(get_valuator)]
+#: ADR-0010 D-1: the card values the *book* from the local cache only. The
+#: symbol itself is still loaded live (``load_bars`` below, R-6 order).
+ValuatorDep = Annotated[PositionValuator, Depends(get_cached_valuator)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
 CalendarDep = Annotated[PriceBarCache, Depends(get_price_bar_cache)]
@@ -76,6 +78,65 @@ class AdviceResponse(EnvelopeBase):
     portfolio_context: dict[str, Any]
     #: What had to be assumed, or was deliberately left out, and why.
     context_notes: list[str]
+
+
+#: ADR-0010 D-1 standing disclosure, first in ``context_notes`` (風控 A-6): the
+#: caps' book-level figures were valued from the local cache, not refreshed for
+#: this request. States the date range the cached closes run to (a verifiable
+#: fact, ADR-0009 D-5 style), the consequence for the caps (A-3) and the one
+#: other path, the overview page, as a conditional fact. Wording by creative-lead
+#: (`work/stock-desk-ADR-0010-揭露句-文案.md`), fixed verbatim by
+#: risk-compliance-officer 2026-09-18 (三審): any change goes back to them, and
+#: removing or silencing any of the three variants below reopens D-5.
+#: The overview page is named as the other path, as a conditional fact and not
+#: a promise of newer figures: its ladders run cache-first too (風控 複審 A-3).
+_OVERVIEW_CLAUSE = (
+    "總覽頁的整體持倉估值是否向來源查詢，同樣視快取涵蓋範圍而定，不代表其數字比本卡估值更新。"
+)
+CACHE_ONLY_BOOK_NOTE = (
+    "本卡風險上限所用的整體持倉估值取自本機快取，本次未向來源更新；"
+    "已估值持倉的價格分別截至 {earliest}～{latest}，上限判定可能建立在較舊的價格上。"
+    + _OVERVIEW_CLAUSE
+)
+#: A-7: the same sentence when every cached close is from one day -- a zero-width
+#: range reads like a bug, not like data.
+CACHE_ONLY_BOOK_NOTE_SINGLE_DAY = (
+    "本卡風險上限所用的整體持倉估值取自本機快取，本次未向來源更新；"
+    "已估值持倉的價格皆截至 {date}，上限判定可能建立在較舊的價格上。" + _OVERVIEW_CLAUSE
+)
+#: A-1: holdings exist but none was valued (no cached price, or a price with
+#: no FX rate -- the sentence names neither cause, both are covered). Same rank
+#: as the note above, never silence: this is the state in which the reader is
+#: least able to tell that the caps have nothing under them. An empty book
+#: (no holdings at all) gets no note: there is nothing to qualify.
+CACHE_ONLY_BOOK_NOTE_EMPTY = (
+    "本卡風險上限所用的整體持倉估值本次未向來源更新，且本機目前沒有任何一筆持倉完成估值；"
+    "以總資產為分母的相關比率，本次均無法計算。" + _OVERVIEW_CLAUSE
+)
+
+
+def _book_freshness_notes(summary: PortfolioSummary) -> list[str]:
+    """The cache-only disclosure, dated by the cached closes actually *used*.
+
+    Only ``ok`` valuations feed the totals and the caps' denominators, so only
+    their dates may set the range (風控 A-2): a holding that has a cached price
+    but no FX rate is not in the book, and letting its date pull ``latest``
+    forward would make the book look newer than what was actually used. With
+    no usable cached price at all the sentence changes, it does not disappear
+    (A-1).
+    """
+    if not summary.positions:
+        return []  # nothing held, nothing to qualify (風控 複審 A-1)
+    dates = sorted(
+        item.valuation.price.as_of
+        for item in summary.positions
+        if item.valuation.status == "ok" and item.valuation.price is not None
+    )
+    if not dates:
+        return [CACHE_ONLY_BOOK_NOTE_EMPTY]
+    if dates[0] == dates[-1]:
+        return [CACHE_ONLY_BOOK_NOTE_SINGLE_DAY.format(date=dates[0])]
+    return [CACHE_ONLY_BOOK_NOTE.format(earliest=dates[0], latest=dates[-1])]
 
 
 @router.get("/{symbol}", response_model=AdviceResponse)
@@ -146,6 +207,8 @@ def get_advice(
             held=book.held,
             position_ids=book.position_ids,
             portfolio_context=book.context.model_dump(),
+            # No card, no caps: the freshness note has nothing to qualify here,
+            # and the page renders only the insufficient panel (風控 A-8).
             context_notes=book.notes,
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
@@ -166,7 +229,9 @@ def get_advice(
         held=book.held,
         position_ids=book.position_ids,
         portfolio_context=book.context.model_dump(),
-        context_notes=book.notes,
+        # First, not last (風控 A-6): this sentence qualifies every figure the
+        # notes after it are about.
+        context_notes=[*_book_freshness_notes(summary), *book.notes],
         data=data_meta(loaded.meta()),
         as_of=now_iso(),
     )

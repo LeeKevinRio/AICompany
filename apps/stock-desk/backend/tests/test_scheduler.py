@@ -63,9 +63,7 @@ def _valuator(prices: FakePriceService) -> object:
     from app.portfolio.valuation import PositionValuator
     from tests.api_helpers import UnavailableFxProvider
 
-    return PositionValuator(
-        market_services={"TW": prices}, fx_provider=UnavailableFxProvider()
-    )
+    return PositionValuator(market_services={"TW": prices}, fx_provider=UnavailableFxProvider())
 
 
 def _held(store: PositionStore, symbol: str = "2330") -> None:
@@ -106,6 +104,25 @@ def test_both_jobs_are_registered_with_stable_ids(wired: dict[str, object]) -> N
         # coalesced into one run rather than replayed.
         assert job.max_instances == 1
         assert job.coalesce is True
+
+
+def test_the_data_refresh_first_run_is_immediate(wired: dict[str, object]) -> None:
+    """ADR-0010 D-4: the cache is warmed at start-up, not one interval (24h) later."""
+    from datetime import timedelta
+
+    # A pending job only gets its run time when the scheduler starts; paused
+    # means it starts, computes the times, and never fires a tick here.
+    engine = scheduler_module.build_scheduler(BackgroundScheduler(timezone="UTC"))
+    engine.start(paused=True)
+    try:
+        started = datetime.now(UTC)
+        first = engine.get_job("data_refresh").next_run_time
+        assert abs(first - started) < timedelta(seconds=30)
+        # The alert tick keeps its plain interval: nothing to warm there.
+        later = engine.get_job("alert_evaluation").next_run_time
+        assert later - started > timedelta(minutes=1)
+    finally:
+        engine.shutdown(wait=False)
 
 
 def test_alert_interval_comes_from_the_stored_settings(wired: dict[str, object]) -> None:
