@@ -205,11 +205,20 @@ export function buildStaleDataProminentNotice(lastBarDate: string, days: number)
  * modifies "系統手上的資料" (§5.3); update cadence is qualified with
  * "排程啟用時" so it never reads as a promise when the scheduler process is
  * not running (§5.4/AC-C8.4).
+ *
+ * ADR-0010 D-1 (2026-09-18, 風控 A-4, creative-lead 版本 (i)): the third
+ * sentence is scoped to *this symbol's* evaluation. The card's book-wide
+ * valuation is deliberately read from the local cache and not fetched, so
+ * "what the system can obtain right now" is true of the symbol only; the
+ * book's own standing note (`CACHE_ONLY_BOOK_NOTE`, backend) covers the rest.
+ * Fixed verbatim by risk-compliance-officer 2026-09-18 (複審 A-4 核可); any
+ * change goes back to them. 列管: a guard test that no page but the position
+ * page renders this constant, so the "本標的" scope cannot silently drift.
  */
 export const NON_REALTIME_NOTICE =
   "本產品採免費日線資料源，非即時報價系統；台股日線為盤後資料。" +
   "排程啟用時，資料約每 24 小時更新一次、警示評估約每 60 分鐘評估一次。" +
-  "以下評估以系統手上最新一份資料計算，反映的是打開頁面當下、系統能取得的資料，不代表市場當下狀況。";
+  "以下本標的評估以系統手上最新一份資料計算，反映的是打開頁面當下、系統能取得的本標的資料，不代表市場當下狀況。";
 
 const CONFIDENCE_LABELS: Record<Confidence, string> = {
   low: "低",

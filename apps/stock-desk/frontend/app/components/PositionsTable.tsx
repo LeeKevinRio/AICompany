@@ -13,6 +13,7 @@ import {
 } from "../lib/format";
 import { deleteButtonState } from "../lib/positionFormSubmit";
 import { useDeletePosition, useDirectoryNames } from "../lib/queries";
+import { missingSummary } from "../lib/valuationWording";
 import { DataStatusBadge } from "./DataStatusBadge";
 import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
@@ -43,9 +44,11 @@ function PriceCell({ position }: { position: SummaryPositionItem }) {
       <div>
         <span className="text-neutral-500">—</span>
         <DataStatusBadge price={valuation.price} />
+        {/* 風控 2026-09-18 C-1: tokens are labelled, never printed raw; each label
+            says whether the system asked and found nothing, or did not ask. */}
         {valuation.missing.length > 0 && (
           <p className="mt-0.5 text-xs text-neutral-500">
-            缺：{valuation.missing.join("、")}
+            {missingSummary(valuation.missing)}
           </p>
         )}
       </div>
