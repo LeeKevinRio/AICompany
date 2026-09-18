@@ -11,6 +11,8 @@
     ADR-0003 約束 7（快取命中須明示新鮮度、不得以舊值冒充最新）**維持有效**，由本 ADR D-5 的裁決分岔承擔。
   - **取代 ADR-0005** 決策四第 1～4 點與約束 D-1（TTL 24h、TW 不開 layer 0、`cached_stale` 核可字面）；
     第 3 點改寫為「不得為了節省額度而延長指數路徑的 `recheck_cooldown`」。其餘 ADR-0005 維持。
+  - **2026-09-18 新增 D-8**（attempt-log 冷卻適用於快取無列）；D-3 增列 cache-only 讀取為 `judge()`
+    第二個消費者且不寫兩張 log（ADR-0010 D-1）。
 
 ## Context（背景）
 
@@ -68,6 +70,10 @@ CEO 問「一天更新一次？還是真正有更新才更新？標準在哪？�
   代表該日收盤已公布而 `publish_cutoff` 設得偏晚 → 強制 REFETCH。此證據**只會增加抓取、絕不抑制抓取**，且每個冷卻窗至多一次；
   它修掉 D-2 自承的唯一會做出過度新鮮宣稱的盲區。**不做**負向推論（缺席表），理由見 Options E。
   `delete_by_source`（示範資料 reset）同步刪除受影響序列的兩張 log。
+  **（2026-09-18 增列，ADR-0010 D-1）** `judge()` 的消費者不只 layer 0 一處：cache-only 讀取
+  （`MarketDataService.get_cached_bars()`）是第二個消費者，套用同一個 `judge()`，但只回
+  `CACHED_STALE` 或 `UNAVAILABLE`，且**不寫** `price_bars_fetch_log`／`price_bars_attempt_log`
+  兩張表、不 `put`——cache-only 只讀不記。
 - **D-4（所有市場開啟）** TW 服務 `cache_first=True`，取代 ADR-0005 D-1。`cache_first=False` 仍存在
   （純降級鏈），但沒有市場使用。指數路徑依呼叫端指名的 market 取 policy（`^TWII` 走台北時鐘）。
 - **D-5（欄位與文案）** `is_within_ttl` 欄位名保留，語意改為「快取已含最近已公布交易日」，且**適用於每一條回傳
@@ -104,6 +110,14 @@ CEO 問「一天更新一次？還是真正有更新才更新？標準在哪？�
   頭段的列永遠停留在當初寫入它的 provider，即使主來源已恢復。要重新整段抓取，唯一路徑是清除該序列的快取列與 coverage。
 - **D-6（排程）** `scheduler.data_refresh` 不改：它走同一條 `load_bars`，自然只在有新交易日時才打來源。
   改為「收盤公布後 cron 預熱」與 `SCHEDULER_DATA_INTERVAL_MINUTES` 與冷卻的交互，列管 devops-sre。
+- **D-8（2026-09-18，attempt-log 冷卻適用於快取無列，即 ADR-0010 D-3）** 修補 D-3 的實作缺口：
+  `_try_session_fresh_cache` 原本在 `cached is None` 時直接跳出，導致 attempt-log 冷卻判斷讀不到——
+  結果是「從未成功抓過該序列」且「來源正在失敗」的序列，每次請求都跑完整梯子，最需要冷卻保護的情況
+  反而沒有冷卻。修正後：冷卻判斷移到 `cached is None` 之前；只要在冷卻期內，且最後一次向來源提問
+  晚於最後一次完整成功，即使快取完全沒有列，也直接回 `UNAVAILABLE` 並附上原因
+  （`COOLDOWN_NO_CACHE_REASON`，含「約 N 分鐘前未成功」時間戳與冷卻期長度句；出貨字面逐字登錄於
+  ADR-0010「需風控核可的揭露點」第 5 點，風控 2026-09-18 三審核可，本檔不重抄以免分岔），
+  不再對這類序列每次請求都重跑整條梯子。
 
 ## Consequences（後果）
 
