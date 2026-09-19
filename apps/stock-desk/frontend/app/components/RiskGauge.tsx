@@ -3,33 +3,41 @@
 import {
   formatDateTime,
   formatPercent,
-  limitStatusColorClass,
   limitStatusLabel,
   marketLabel,
 } from "../lib/format";
 import { usePortfolioLimits } from "../lib/queries";
-import { buildLimitGaugeViewModel, buildSourcesSummaryViewModel } from "../lib/riskGauge";
-import type { BookLimitCheck, SymbolDataMeta } from "../lib/types";
+import {
+  buildLimitGaugeViewModel,
+  buildSourcesSummaryViewModel,
+  riskGaugeChipClass,
+} from "../lib/riskGauge";
+import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
+import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
 import { ErrorPanel } from "./ErrorPanel";
 import { SkeletonBlock } from "./SkeletonBlock";
 
 /**
  * FR-8: the book-level view of the same five caps `app.advice.limits`
- * checks per symbol (verified source), now backed by `GET
- * /api/portfolio/limits` (`app/api/portfolio.py` + `app/advice/book_limits.py`,
- * verified). That endpoint runs the per-symbol check on every holding in the
- * book, exactly as the individual advice card does, and reports the worst
- * verdict per cap with what it had to leave out — this component renders
- * that response as-is (`status`/`observed`/`threshold`/`detail` verbatim);
- * it does not re-derive any of it client-side.
+ * checks per symbol (verified source), backed by `GET /api/portfolio/limits`
+ * (`app/api/portfolio.py` + `app/advice/book_limits.py`, verified). Renders
+ * that response as-is (`status`/`observed`/`threshold`/`detail` verbatim); it
+ * does not re-derive any of it client-side.
  *
- * Risk-compliance ruling carried forward unchanged from the previous
- * (all-`not_evaluable`) version of this file: a cap whose `status` is
+ * 首頁「一眼一句」簡化（`work/stock-desk-一眼一句-實作規格.md` §3.2，
+ * risk-compliance 2026-09-19 附錄 H1–H5）: the five caps collapsed from a
+ * multi-line card each into one grid row (name｜status chip｜thin bar｜
+ * observed/threshold), with the full `detail` sentence, the `excluded`
+ * reasons, the notes list and the per-symbol sources list all moved into one
+ * shared `<details>`. Every literal below is byte-for-byte the same as the
+ * previous version — this batch only changes *where* each one renders, per
+ * that spec's 鐵律 1/2.
+ *
+ * Risk-compliance ruling carried forward unchanged: a cap whose `status` is
  * `not_evaluable` must never draw a progress bar, not even an empty one —
- * see `shouldShowLimitBar` in `../lib/riskGauge.ts`, the single place that
- * decision is enforced now that real `observed`/`threshold` pairs exist to
- * draw a bar from for the other two statuses.
+ * `shouldShowLimitBar` in `../lib/riskGauge.ts` is the one place that
+ * decision is enforced (H1).
  */
 function LimitBar({ check }: { check: BookLimitCheck }) {
   const view = buildLimitGaugeViewModel(check);
@@ -37,7 +45,7 @@ function LimitBar({ check }: { check: BookLimitCheck }) {
   const fillColorClass = check.status === "violated" ? "bg-rose-500" : "bg-emerald-500";
   return (
     <div
-      className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800"
+      className="h-1 w-full overflow-hidden rounded-full bg-neutral-800"
       role="progressbar"
       aria-label={check.name}
       aria-valuenow={Math.round(view.barWidthPercent)}
@@ -51,11 +59,9 @@ function LimitBar({ check }: { check: BookLimitCheck }) {
 
 /**
  * Rule 2 of `app/advice/book_limits.py`: what was left out travels with the
- * verdict, reason verbatim.
- *
- * 風控快審 FR-8 八句（2026-08-09，work/reviews/股數區間文案裁決.md）UI 附帶條件：
- * excluded 與判定句同層級可見，不得摺疊——不可用 `<details>` 收合；有 excluded
- * 時不得只渲染綠色通過，未納入檔數與狀態同視覺層級（見 `LimitGaugeItem` 標頭徽章）。
+ * verdict, reason verbatim. Now rendered inside the shared `<details>`
+ * (H2 keeps only the excluded *count* badge on the main row — see
+ * `LimitGaugeRow` — the reasons themselves move here).
  */
 function ExcludedList({ excluded }: { excluded: BookLimitCheck["excluded"] }) {
   if (excluded.length === 0) return null;
@@ -73,20 +79,35 @@ function ExcludedList({ excluded }: { excluded: BookLimitCheck["excluded"] }) {
   );
 }
 
+/** One cap's full disclosure, restated inside the shared `<details>` (§3.2). */
+function LimitDetailItem({ check }: { check: BookLimitCheck }) {
+  return (
+    <li className="rounded-md border border-neutral-800 p-3">
+      <p className="font-medium text-neutral-200">
+        第 {check.index} 條・{check.name}
+      </p>
+      <p className="mt-1 text-neutral-400">{check.detail}</p>
+      {/* 風控退修:沿用後端 WORST_SYMBOL_PREFIX(book_limits.py)「觀測值最高」
+          這個限定語,不能只寫「最高」——這是逐檔比較裡「觀測值」最高的那一檔,
+          不是隨便一種「最高」。 */}
+      {check.worst_symbol !== null && <p className="mt-1 text-neutral-400">觀測值最高：{check.worst_symbol}</p>}
+      <ExcludedList excluded={check.excluded} />
+    </li>
+  );
+}
+
 /**
  * 風控快審附帶條件（work/reviews/股數區間文案裁決.md，2026-08-09）：任一 source
- * 非 fresh 時，summary 行必須帶警示且該情況下改為預設展開；全部 fresh 才維持
- * 收合。判斷邏輯見 `buildSourcesSummaryViewModel`（純函式，riskGauge.ts）。
+ * 非 fresh 時揭露義務不變——清單本身仍完整列出。H5（本批新增）：這份清單現在
+ * 併入外層共用的 `<details>`，本身不再有自己的巢狀 `<details>`；非 fresh 的
+ * 訊號改成半句掛在外層 summary 上（見 `RiskGaugeView`），details 不再因此
+ * 自動展開（風控核可的犧牲：使用者要先點開「詳細」才看得到清單本身）。
  */
-function SourcesSection({ sources }: { sources: SymbolDataMeta[] }) {
+function SourcesList({ sources }: { sources: SymbolDataMeta[] }) {
   if (sources.length === 0) return null;
-  const summary = buildSourcesSummaryViewModel(sources);
   return (
-    <details className="mt-3 text-xs text-neutral-400" open={summary.defaultOpen}>
-      <summary className="cursor-pointer text-neutral-400">
-        各標的資料來源（{sources.length}）
-        {!summary.allFresh && `——其中 ${summary.staleCount} 檔非即時`}
-      </summary>
+    <div>
+      <p className="font-semibold text-neutral-400">各標的資料來源（{sources.length}）</p>
       <ul className="mt-2 space-y-1">
         {sources.map((source) => (
           <li key={`${source.symbol}-${source.market}`} className="flex flex-wrap items-center">
@@ -101,44 +122,105 @@ function SourcesSection({ sources }: { sources: SymbolDataMeta[] }) {
           </li>
         ))}
       </ul>
-    </details>
+    </div>
   );
 }
 
-function LimitGaugeItem({ check }: { check: BookLimitCheck }) {
+/** One cap's five-column-grid row (B.3): name｜status chip (+ H2 badge)｜thin bar｜observed/threshold. */
+/**
+ * 375px 手機視口修正（qa 自我檢查，實作規格未明訂窄螢幕行為）：一開始用固定
+ * `grid-cols-[minmax(0,1fr)_auto_6rem_7rem]`（視覺規範 B.3 原樣）在 375px 下，
+ * 固定的 `auto`/`6rem`/`7rem` 三欄合計已逼近容器寬度，`minmax(0,1fr)` 的名稱欄
+ * 被壓到只剩個位數 px、名稱幾乎整個消失（哪一條上限都看不出來）。改用
+ * `flex flex-wrap`：名稱固定不縮（`shrink-0`），狀態/進度條/數值合成一組，
+ * 空間不夠時整組換到下一行，而不是把名稱擠沒——桌面寬度下兩者仍同一行，
+ * 不影響視覺規範原意的單行密度；只是窄螢幕改成最多兩行，字面與資訊量不變。
+ *
+ * qa 追加（2026-09-19）：名稱不再 `truncate`（會用刪節號吃掉看不完的字）——
+ * 容器已是 `flex-wrap`，改成讓名稱在窄螢幕自然換行，確保完整字面永遠可讀。
+ */
+function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
   const hasExcluded = check.excluded.length > 0;
   return (
-    <li className="rounded-md border border-neutral-800 p-3 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium text-neutral-100">
+    <li className="border-t border-neutral-800 py-2 text-sm first:border-t-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="max-w-full shrink-0 text-neutral-200">
           第 {check.index} 條・{check.name}
         </span>
-        <div className="flex items-center gap-2">
-          {/* 風控 UI 附帶條件：未納入檔數與狀態同視覺層級，故與狀態文字同排、
-              同字級呈現，而非只留在下方的清單裡。 */}
-          {hasExcluded && (
-            <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs font-semibold text-amber-300">
-              未納入 {check.excluded.length} 檔
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          <span className="flex items-center gap-1">
+            <span
+              className={`inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold ${riskGaugeChipClass(check.status)}`}
+            >
+              {limitStatusLabel(check.status)}
             </span>
-          )}
-          <span className={`text-xs font-semibold ${limitStatusColorClass(check.status)}`}>
-            {limitStatusLabel(check.status)}
+            {/* H2：未納入檔數與狀態同視覺層級，故同排、同字級呈現。 */}
+            {hasExcluded && (
+              <span className="whitespace-nowrap rounded bg-amber-900/40 px-1.5 py-0.5 text-xs font-semibold text-amber-300">
+                未納入 {check.excluded.length} 檔
+              </span>
+            )}
+          </span>
+          <div className="w-16 shrink-0 sm:w-24">
+            <LimitBar check={check} />
+          </div>
+          <span className="shrink-0 text-right font-mono text-xs text-neutral-400">
+            {formatPercent(check.observed)}／{formatPercent(check.threshold)}
           </span>
         </div>
       </div>
-      <LimitBar check={check} />
-      {/* §2.1 對比度裁量（沿用既有升級）：這句是每條上限唯一的敘述文字，不得低於
-          text-neutral-400。 */}
-      <p className="mt-2 text-neutral-400">{check.detail}</p>
-      <p className="mt-1 text-xs text-neutral-400">
-        觀察值：{formatPercent(check.observed)}　上限：{formatPercent(check.threshold)}
-        {/* 風控退修:沿用後端 WORST_SYMBOL_PREFIX(book_limits.py)「觀測值最高」
-            這個限定語,不能只寫「最高」——這是逐檔比較裡「觀測值」最高的那一檔,
-            不是隨便一種「最高」。 */}
-        {check.worst_symbol !== null && <>　觀測值最高：{check.worst_symbol}</>}
-      </p>
-      <ExcludedList excluded={check.excluded} />
+      {/* H3：worst_symbol 同列（第二行）。 */}
+      {check.worst_symbol !== null && (
+        <p className="mt-1 text-xs text-neutral-400">觀測值最高：{check.worst_symbol}</p>
+      )}
     </li>
+  );
+}
+
+/**
+ * Pure presentational half of the gauge, split out for unit testing without
+ * a query client (`RiskGauge` below wires it to `usePortfolioLimits`).
+ */
+export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
+  const sourcesSummary = buildSourcesSummaryViewModel(data.sources);
+  return (
+    <>
+      <ul className="mt-3">
+        {data.limits.map((check) => (
+          <LimitGaugeRow key={check.limit_id} check={check} />
+        ))}
+      </ul>
+
+      {/* H5：新鮮度訊號改成 summary 右側半句，details 不因此自動展開。 */}
+      <details className="group mt-3 text-xs text-neutral-400">
+        <summary className="cursor-pointer text-neutral-400">
+          {DETAILS_SUMMARY_RISK_GAUGE}
+          {!sourcesSummary.allFresh && `——其中 ${sourcesSummary.staleCount} 檔非即時`}
+        </summary>
+        <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3">
+          <ul className="space-y-2">
+            {data.limits.map((check) => (
+              <LimitDetailItem key={check.limit_id} check={check} />
+            ))}
+          </ul>
+
+          {data.notes.length > 0 && (
+            <div>
+              <p className="font-semibold text-neutral-400">
+                風險預算輸入的假設與限制（{data.notes.length}）
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {data.notes.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <SourcesList sources={data.sources} />
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -147,8 +229,17 @@ export function RiskGauge() {
 
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
-      <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
-      {/* 風控裁決(work/reviews/股數區間文案裁決.md,2026-08-09)核可全文,修改須重新送審。 */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
+        {/* 風控退修附帶:as_of 是伺服器回應時間,不是行情時間——行情新鮮度由下方
+            sources 徽章承載,這裡不得暗示「資料的時間」。標題列右側同排（§3.2）。 */}
+        {limits.isSuccess && (
+          <span className="text-xs text-neutral-500">判定產生時間：{formatDateTime(limits.data.as_of)}</span>
+        )}
+      </div>
+
+      {/* H4：頂部說明句常駐；風控裁決(work/reviews/股數區間文案裁決.md,2026-08-09)
+          核可全文,修改須重新送審。 */}
       <p className="mt-1 text-xs text-neutral-400">
         單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly
         部位上限為帳本層單一判定。未納入比較的標的列於各條之下。
@@ -156,11 +247,11 @@ export function RiskGauge() {
 
       {limits.isPending && (
         <div className="mt-3 space-y-2">
-          <SkeletonBlock className="h-16 w-full" />
-          <SkeletonBlock className="h-16 w-full" />
-          <SkeletonBlock className="h-16 w-full" />
-          <SkeletonBlock className="h-16 w-full" />
-          <SkeletonBlock className="h-16 w-full" />
+          <SkeletonBlock className="h-8 w-full" />
+          <SkeletonBlock className="h-8 w-full" />
+          <SkeletonBlock className="h-8 w-full" />
+          <SkeletonBlock className="h-8 w-full" />
+          <SkeletonBlock className="h-8 w-full" />
         </div>
       )}
 
@@ -170,40 +261,7 @@ export function RiskGauge() {
         </div>
       )}
 
-      {limits.isSuccess && (
-        <>
-          {/* 風控退修附帶:as_of 是伺服器回應時間,不是行情時間——行情新鮮度由下方
-              sources 徽章承載,這裡不得暗示「資料的時間」。 */}
-          <p className="mt-2 text-xs text-neutral-500">判定產生時間：{formatDateTime(limits.data.as_of)}</p>
-
-          <ul className="mt-3 space-y-2">
-            {limits.data.limits.map((check) => (
-              <LimitGaugeItem key={check.limit_id} check={check} />
-            ))}
-          </ul>
-
-          {/*
-            S3 一致性延伸(risk-final-review.md 列管項僅點名 context_notes,
-            此處為 RiskGauge 的等義欄位 `notes`,同一份假設揭露、同一個預設
-            收合問題,故同批一併處理,理由與 page.tsx 的 context_notes 相同):
-            改為常駐可見清單,不再需要點擊 <summary> 才看得到。文字內容不變。
-          */}
-          {limits.data.notes.length > 0 && (
-            <div className="mt-3 text-xs text-neutral-500">
-              <p className="font-semibold text-neutral-400">
-                風險預算輸入的假設與限制（{limits.data.notes.length}）
-              </p>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                {limits.data.notes.map((note, i) => (
-                  <li key={i}>{note}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <SourcesSection sources={limits.data.sources} />
-        </>
-      )}
+      {limits.isSuccess && <RiskGaugeView data={limits.data} />}
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   buildLimitGaugeViewModel,
@@ -5,7 +7,8 @@ import {
   limitBarWidthPercent,
   shouldShowLimitBar,
 } from "../riskGauge";
-import type { BookLimitCheck, SymbolDataMeta } from "../types";
+import { RiskGaugeView } from "../../components/RiskGauge";
+import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../types";
 
 function makeSource(symbol: string, status: string): SymbolDataMeta {
   return {
@@ -136,24 +139,22 @@ describe("buildLimitGaugeViewModel", () => {
 });
 
 describe("buildSourcesSummaryViewModel", () => {
-  it("stays collapsed with no warning when every source is fresh", () => {
+  it("reports no warning when every source is fresh", () => {
     const view = buildSourcesSummaryViewModel([
       makeSource("2330", "fresh"),
       makeSource("2454", "fresh"),
     ]);
     expect(view.allFresh).toBe(true);
     expect(view.staleCount).toBe(0);
-    expect(view.defaultOpen).toBe(false);
   });
 
-  it("defaults open and reports the stale count when one source is not fresh", () => {
+  it("reports the stale count when one source is not fresh", () => {
     const view = buildSourcesSummaryViewModel([
       makeSource("2330", "fresh"),
       makeSource("2454", "cached_stale"),
     ]);
     expect(view.allFresh).toBe(false);
     expect(view.staleCount).toBe(1);
-    expect(view.defaultOpen).toBe(true);
   });
 
   it("counts every non-fresh status (backup/cached_stale/unavailable), not just one kind", () => {
@@ -165,13 +166,155 @@ describe("buildSourcesSummaryViewModel", () => {
     ]);
     expect(view.allFresh).toBe(false);
     expect(view.staleCount).toBe(3);
-    expect(view.defaultOpen).toBe(true);
   });
 
-  it("an empty source list counts as all-fresh (no warning, collapsed)", () => {
+  it("an empty source list counts as all-fresh (no warning)", () => {
     const view = buildSourcesSummaryViewModel([]);
     expect(view.allFresh).toBe(true);
     expect(view.staleCount).toBe(0);
-    expect(view.defaultOpen).toBe(false);
+  });
+});
+
+/**
+ * `RiskGaugeView` rendering coverage (首頁「一眼一句」簡化 §3.2/§4,
+ * `work/stock-desk-一眼一句-實作規格.md`): the five-row grid must show
+ * name/status/observed for every cap, must never draw a progress bar for a
+ * `not_evaluable` cap (H1), and must render `worst_symbol` on the same row
+ * (H3) when present.
+ */
+function makeFullCheck(overrides: Partial<BookLimitCheck>): BookLimitCheck {
+  return {
+    index: 1,
+    limit_id: "single_position_weight",
+    name: "單一標的佔比上限",
+    status: "passed",
+    observed: 0.05,
+    threshold: 0.2,
+    detail: "detail sentence",
+    worst_symbol: null,
+    evaluated_count: 3,
+    excluded: [],
+    ...overrides,
+  };
+}
+
+const FIVE_CHECKS: BookLimitCheck[] = [
+  makeFullCheck({
+    index: 1,
+    limit_id: "single_position_weight",
+    name: "單一標的佔比上限",
+    status: "passed",
+    observed: 0.05,
+    threshold: 0.2,
+    worst_symbol: "2330",
+  }),
+  makeFullCheck({
+    index: 2,
+    limit_id: "sector_weight",
+    name: "單一產業佔比上限",
+    status: "violated",
+    observed: 0.3,
+    threshold: 0.25,
+    worst_symbol: "2454",
+    excluded: [{ symbol: "AAPL", market: "US", reason: "no sector data" }],
+  }),
+  makeFullCheck({
+    index: 3,
+    limit_id: "gross_exposure",
+    name: "總曝險上限",
+    status: "passed",
+    observed: 0.4,
+    threshold: 1,
+    worst_symbol: null,
+  }),
+  makeFullCheck({
+    index: 4,
+    limit_id: "per_trade_loss",
+    name: "單筆最大可承受虧損",
+    status: "not_evaluable",
+    observed: null,
+    threshold: null,
+    worst_symbol: null,
+  }),
+  makeFullCheck({
+    index: 5,
+    limit_id: "kelly_fraction",
+    name: "分數 Kelly 部位上限",
+    status: "not_evaluable",
+    observed: null,
+    threshold: null,
+    worst_symbol: null,
+  }),
+];
+
+const FAKE_LIMITS: PortfolioLimitsResponse = {
+  limits: FIVE_CHECKS,
+  notes: ["假設一", "假設二"],
+  sources: [
+    {
+      symbol: "2330",
+      market: "TW",
+      data: {
+        status: "fresh",
+        source: "twse",
+        staleness_minutes: null,
+        is_within_ttl: null,
+        bar_count: 100,
+        first_bar_date: "2026-01-01",
+        last_bar_date: "2026-09-18",
+        trading_days_behind: null,
+        reason: null,
+      },
+    },
+  ],
+  as_of: "2026-09-19T00:00:00Z",
+};
+
+function renderRiskGaugeView(data: PortfolioLimitsResponse): string {
+  return renderToStaticMarkup(createElement(RiskGaugeView, { data }));
+}
+
+describe("RiskGaugeView — 五列一行式渲染（實作規格 §3.2/§4）", () => {
+  it("every one of the five rows contains its name, status label and observed value", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    for (const check of FIVE_CHECKS) {
+      expect(html).toContain(`第 ${check.index} 條・${check.name}`);
+    }
+    expect(html).toContain("通過");
+    expect(html).toContain("已違反");
+    expect(html).toContain("無法評估");
+    // observed/threshold pairs, e.g. 5.00%／20.00%
+    expect(html).toMatch(/5\.00%／20\.00%/);
+    expect(html).toMatch(/30\.00%／25\.00%/);
+  });
+
+  it("H1: a not_evaluable row never draws a progressbar, even alongside rows that do", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    const progressbarCount = (html.match(/role="progressbar"/g) ?? []).length;
+    // Only the three non-not_evaluable checks (passed/violated/passed) draw a bar.
+    expect(progressbarCount).toBe(3);
+  });
+
+  it("H3: worst_symbol renders on the same row as its cap, right after that row's markup", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    const row1Index = html.indexOf("第 1 條・單一標的佔比上限");
+    const row2Index = html.indexOf("第 2 條・單一產業佔比上限");
+    const worstSymbolIndex = html.indexOf("觀測值最高：2330");
+    expect(worstSymbolIndex).toBeGreaterThan(row1Index);
+    expect(worstSymbolIndex).toBeLessThan(row2Index);
+    // A cap with no worst_symbol must not fabricate one.
+    const row3Index = html.indexOf("第 3 條・總曝險上限");
+    const row4Index = html.indexOf("第 4 條・單筆最大可承受虧損");
+    expect(html.slice(row3Index, row4Index)).not.toContain("觀測值最高");
+  });
+
+  it("H2: the excluded-count badge shows on the row that has exclusions, not elsewhere", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    expect(html).toContain("未納入 1 檔");
+  });
+
+  it("H4 頂部說明句與 H5 details summary 不在此純呈現元件內（由外層 RiskGauge 負責），但詳細 summary 入口字存在", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    expect(html).toContain("詳細：各項判定依據、假設與資料來源");
   });
 });

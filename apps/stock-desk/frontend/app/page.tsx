@@ -6,7 +6,7 @@ import { SummaryCards } from "./components/SummaryCards";
 import { SummaryCardsSkeleton, TableSkeleton } from "./components/SkeletonBlock";
 import { PositionsTable } from "./components/PositionsTable";
 import { RiskGauge } from "./components/RiskGauge";
-import { PendingAlertsPanel } from "./components/PendingAlertsPanel";
+import { AlertStatusStrip } from "./components/AlertStatusStrip";
 
 export default function HomePage() {
   const health = useHealth();
@@ -63,9 +63,15 @@ export default function HomePage() {
         </div>
       </div>
 
-      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* 首頁「一眼一句」簡化（work/stock-desk-一眼一句-實作規格.md §3.1）：
+          風險儀表與警示狀態列改全寬直排，不再並排——並排會讓長期為空的警示卡
+          看起來像壞掉（派工單 §1.3）。 */}
+      <div className="mt-8">
         <RiskGauge />
-        <PendingAlertsPanel />
+      </div>
+
+      <div className="mt-6">
+        <AlertStatusStrip />
       </div>
     </main>
   );

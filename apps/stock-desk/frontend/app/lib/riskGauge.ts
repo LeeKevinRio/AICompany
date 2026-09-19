@@ -59,19 +59,41 @@ export function buildLimitGaugeViewModel(check: BookLimitCheck): LimitGaugeViewM
 /**
  * FR-8 風控快審附帶條件（work/reviews/股數區間文案裁決.md，2026-08-09）：the
  * sources block's summary line must carry a warning whenever any source is
- * not `fresh`, and the `<details>` must default to *open* in that case — a
- * collapsed-by-default disclosure is not an acceptable place to hide "some
- * of this data is stale" from the reader. Only when every source is `fresh`
- * does the block stay collapsed by default.
+ * not `fresh`.
+ *
+ * 2026-09-19 H5 取代 2026-08-09「非 fresh 時 details 預設展開」條件，改為主
+ * 視圖保留新鮮度半句（`work/stock-desk-一眼一句-實作規格.md` §3.2）：
+ * `RiskGauge` 的共用 `<details>` 不再因任一 source 非 fresh 而自動展開，改成
+ * summary 右側常駐附一句「其中 N 檔非即時」，使用者不用展開就看得到警示訊號。
+ * `allFresh`/`staleCount` 仍是這句半句的唯一資料來源；原本的 `defaultOpen`
+ * 欄位已無任何消費者，移除。
  */
 export interface SourcesSummaryViewModel {
   allFresh: boolean;
   staleCount: number;
-  defaultOpen: boolean;
 }
 
 export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): SourcesSummaryViewModel {
   const staleCount = sources.filter((source) => source.data.status !== "fresh").length;
   const allFresh = staleCount === 0;
-  return { allFresh, staleCount, defaultOpen: !allFresh };
+  return { allFresh, staleCount };
+}
+
+/**
+ * H2 status-chip colour upgrade (首頁「一眼一句」簡化，
+ * `work/stock-desk-一眼一句-視覺規範.md` B.3): a translucent-background chip
+ * replacing the plain-text colour `limitStatusColorClass` (`app/lib/format.ts`)
+ * still uses. Kept as a separate, `RiskGauge`-only function rather than
+ * changing `limitStatusColorClass` itself, because that function is shared
+ * with the individual position page's `LimitsCheckList.tsx`, which this batch
+ * does not touch and whose visual is out of scope here.
+ */
+const RISK_GAUGE_CHIP_CLASS: Record<LimitStatus, string> = {
+  passed: "border-emerald-800 bg-emerald-950/40 text-emerald-300",
+  violated: "border-rose-800 bg-rose-950/40 text-rose-300",
+  not_evaluable: "border-amber-800 bg-amber-950/40 text-amber-300",
+};
+
+export function riskGaugeChipClass(status: LimitStatus): string {
+  return RISK_GAUGE_CHIP_CLASS[status];
 }
