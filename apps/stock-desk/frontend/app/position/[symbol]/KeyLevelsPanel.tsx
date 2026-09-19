@@ -221,6 +221,25 @@ export const KEY_LEVELS_BASIS_TARGET: BasisItem = {
     "「移動停利觀察」顯示的是 MA20 的同一數字，系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件。",
 };
 
+/**
+ * 決策卡（`work/stock-desk-一眼一句簡化-派工單.md` §5.4／視覺規範 B.7）required
+ * 條件 3（風控 2026-09-19 預審 APPROVE_WITH_CONDITIONS）：決策卡的停損／停利
+ * 距離小字是新推導數字，需在本組（關鍵價位參考）補一條算式行——分母為最新
+ * 收盤，與停損／停利參考本身「以基準價推得」的分母不同，qualifier 逐字揭露
+ * 兩者基準不同這件事。順序：緊接 `KEY_LEVELS_BASIS_TARGET` 之後、
+ * `KEY_LEVELS_BASIS_ANCHOR` 之前（`buildKeyLevelsFooterItems` 同步）。
+ */
+export const KEY_LEVELS_BASIS_CLOSE_DISTANCE: BasisItem = {
+  formula: [
+    "距最新收盤：",
+    "停損距離=(停損參考-最新收盤)/最新收盤×100%",
+    "停利距離=(停利參考-最新收盤)/最新收盤×100%",
+  ],
+  qualifier:
+    "停損參考與停利參考皆由基準價推得，此處距離之分母為最新收盤，兩者基準不同；" +
+    "距離為算式結果，不代表價格會依此幅度到達任一價位。",
+};
+
 export const KEY_LEVELS_BASIS_ANCHOR: BasisItem = {
   formula: [
     "基準價：",
@@ -546,6 +565,7 @@ export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, a
     KEY_LEVELS_BASIS_ATR,
     KEY_LEVELS_BASIS_STOP,
     KEY_LEVELS_BASIS_TARGET,
+    KEY_LEVELS_BASIS_CLOSE_DISTANCE,
     KEY_LEVELS_BASIS_ANCHOR,
     KEY_LEVELS_BASIS_PULLBACK,
     buildFooterSample(levels.barCount, levels.closeDate),

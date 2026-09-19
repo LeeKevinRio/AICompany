@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse } from "../types";
 import { buildSummaryFooterItems, buildOperationSummary } from "../operationSummary";
 import { SummaryBody } from "../../position/[symbol]/OperationSummaryPanel";
+import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
   AS_OF_AGE_UNKNOWN_STATEMENT,
   AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
@@ -827,14 +828,18 @@ describe("quantityRangeShares／quantityRangeBasis 拆分（一眼一句 §2.3 �
 });
 
 /**
- * R4／FR-3（一眼一句 §2.3 第 4 點）: basis renders exactly once, page-wide —
- * as the `role="alert"` box when the range does not restore compliance on a
- * defensive action, otherwise tucked into `<details>`. Rendered via
- * `renderToStaticMarkup` (not just the model) so this is a true DOM
- * assertion, not just a data-shape one — the bug this guards against was a
- * rendering-layer duplication, not a data one.
+ * R4／FR-3（一眼一句 §2.3 第 4 點；決策卡 required 條件 9 落地後更新，
+ * `work/stock-desk-一眼一句簡化-派工單.md` §5.4）: basis renders exactly once,
+ * PAGE-WIDE — as the `role="alert"` box when the range does not restore
+ * compliance on a defensive action, otherwise tucked into `<details>`. The
+ * `role="alert"` box moved out of `SummaryBody`'s main view into
+ * `DecisionCardBody` (rendered once, above 技術分析); `SummaryBody` no longer
+ * renders it at all. This test now renders BOTH components — the same way
+ * `page.tsx` mounts both exactly once — and counts occurrences across their
+ * concatenated output, so "恰一次" is asserted at the same page-wide scope a
+ * real page has, not just within one component's own markup.
  */
-describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境）", () => {
+describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境；決策卡＋操作摘要合計）", () => {
   const BASIS_ALERT = "目前部位超出「單一產業佔比上限」，建議量 200 股已為持股全數；該上限由其他部位驅動，賣出後仍為違反。";
   const BASIS_NORMAL = "以「單一標的佔比上限」為最小可用額度換算，最多可再買進 1000 股。";
 
@@ -842,22 +847,36 @@ describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境�
     return haystack.split(needle).length - 1;
   }
 
-  it("restores_compliance=false 且防禦型動作：basis 以 role=alert 呈現，且僅出現一次", () => {
+  it("restores_compliance=false 且防禦型動作：basis 以 role=alert 呈現於決策卡，且全頁（決策卡＋操作摘要）僅出現一次", () => {
     const response = makeResponse({
       advice: makeCard({
         action: "reduce",
         quantity_range: { min_shares: 200, max_shares: 200, restores_compliance: false, basis: BASIS_ALERT },
       }),
     }) as AdviceResponse;
-    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    expect(countOccurrences(html, BASIS_ALERT)).toBe(1);
-    expect(html).toContain('role="alert"');
+    const cardHtml = renderToStaticMarkup(
+      createElement(DecisionCardBody, { response, bars: null, anchorSource: "close-unknown", avgCost: null }),
+    );
+    const summaryHtml = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    // 決策卡本身就是 basis 唯一的 role=alert 呈現處。
+    expect(cardHtml).toContain('role="alert"');
+    expect(countOccurrences(cardHtml, BASIS_ALERT)).toBe(1);
+    // 操作摘要主視圖（<details> 之前）不得再重複渲染同一段 basis。
+    const summaryMain = summaryHtml.slice(0, summaryHtml.indexOf("<details"));
+    expect(summaryMain).not.toContain(BASIS_ALERT);
+    expect(summaryMain).not.toContain('role="alert"');
+    // 全頁（決策卡＋操作摘要，含操作摘要的 <details>）合計仍只出現一次。
+    expect(countOccurrences(cardHtml + summaryHtml, BASIS_ALERT)).toBe(1);
   });
 
-  it("restores_compliance=true：basis 不在主視圖以 alert 呈現，且全頁（含 <details>）僅出現一次", () => {
+  it("restores_compliance=true：basis 不在決策卡或操作摘要主視圖以 alert 呈現，且全頁（決策卡＋操作摘要含 <details>）僅出現一次", () => {
     const response = makeResponse() as AdviceResponse; // restores_compliance: true fixture
-    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    expect(countOccurrences(html, BASIS_NORMAL)).toBe(1);
+    const cardHtml = renderToStaticMarkup(
+      createElement(DecisionCardBody, { response, bars: null, anchorSource: "close-unknown", avgCost: null }),
+    );
+    const summaryHtml = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    expect(cardHtml).not.toContain('role="alert"');
+    expect(countOccurrences(cardHtml + summaryHtml, BASIS_NORMAL)).toBe(1);
   });
 });
 
@@ -924,12 +943,16 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
     expect(details).toContain(`規則評估：${HELD_ACTION_LABELS_LEGACY.add}`);
   });
 
-  it("held 分支：無股數區間時，主視圖印 QUANTITY_RANGE_ABSENT_SHORT，完整原因句只在 <details>", () => {
+  it("held 分支：無股數區間時，決策卡印 QUANTITY_RANGE_ABSENT_SHORT（操作摘要主視圖不再重複），完整原因句只在操作摘要 <details>（決策卡 required 條件 9 落地後更新）", () => {
     const response = makeResponse({ advice: makeCard({ quantity_range: null }) }) as AdviceResponse;
+    const cardHtml = renderToStaticMarkup(
+      createElement(DecisionCardBody, { response, bars: null, anchorSource: "close-unknown", avgCost: null }),
+    );
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
     const main = html.slice(0, html.indexOf("<details"));
     const details = html.slice(html.indexOf("<details"));
-    expect(main).toContain(QUANTITY_RANGE_ABSENT_SHORT);
+    expect(cardHtml).toContain(QUANTITY_RANGE_ABSENT_SHORT);
+    expect(main).not.toContain(QUANTITY_RANGE_ABSENT_SHORT);
     expect(main).not.toContain(QUANTITY_RANGE_ABSENCE_TEXT);
     expect(details).toContain(QUANTITY_RANGE_ABSENCE_TEXT);
   });

@@ -41,7 +41,12 @@ export const KEY_LEVELS_LADDER_DISTANCE_HEADER = "相對基準價";
 export const KEY_LEVELS_LADDER_NOTE =
   "排序與距離皆為算式結果，不代表價格會依此順序或幅度到達任一價位。";
 
-function fmtSigned(pct: number): string {
+/**
+ * Exported (only) for `DecisionCard.tsx`'s distance小字 (決策卡 required 條件 2,
+ * `work/stock-desk-一眼一句簡化-派工單.md` §5 風控預審): the decision card must
+ * reuse this exact rounding/sign implementation, never draft a second one.
+ */
+export function fmtSigned(pct: number): string {
   if (!Number.isFinite(pct)) return "—";
   // Values that round to 0.0 print as "0.0%", never "-0.0%" (風控 suggested).
   const rounded = Math.round(pct * 10) / 10;

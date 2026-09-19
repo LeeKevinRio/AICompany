@@ -51,6 +51,7 @@ import { NON_REALTIME_NOTICE } from "../adviceWording";
 import {
   KEY_LEVELS_BASIS_ANCHOR,
   KEY_LEVELS_BASIS_ATR,
+  KEY_LEVELS_BASIS_CLOSE_DISTANCE,
   KEY_LEVELS_BASIS_MA,
   KEY_LEVELS_BASIS_PULLBACK,
   KEY_LEVELS_BASIS_RECENT_LOW60,
@@ -195,6 +196,13 @@ import {
 } from "../oneLinerWording";
 import { RiskGaugeView } from "../../components/RiskGauge";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../types";
+import {
+  DECISION_CARD_ARIA_LABEL,
+  DECISION_CARD_DISTANCE_PREFIX,
+  DECISION_CARD_QUANTITY_LABEL,
+  buildDecisionCardDistance,
+} from "../decisionCardWording";
+import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -332,6 +340,10 @@ const SCANNED_FILES = [
   // `AlertStatusStrip.tsx` 先前都不在掃描清單內。
   "../oneLinerWording.ts",
   "../../components/AlertStatusStrip.tsx",
+  // 決策卡（`work/stock-desk-一眼一句簡化-派工單.md` §5.4；視覺規範 B.7）：
+  // 新元件與其專屬字面模組，先前都不在掃描清單內。
+  "../../position/[symbol]/DecisionCard.tsx",
+  "../decisionCardWording.ts",
 ] as const;
 
 /**
@@ -632,6 +644,7 @@ describe("KeyLevelsPanel 定稿字面", () => {
     KEY_LEVELS_BASIS_ATR: flatBasis(KEY_LEVELS_BASIS_ATR),
     KEY_LEVELS_BASIS_STOP: flatBasis(KEY_LEVELS_BASIS_STOP),
     KEY_LEVELS_BASIS_TARGET: flatBasis(KEY_LEVELS_BASIS_TARGET),
+    KEY_LEVELS_BASIS_CLOSE_DISTANCE: flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE),
     KEY_LEVELS_BASIS_ANCHOR: flatBasis(KEY_LEVELS_BASIS_ANCHOR),
     KEY_LEVELS_BASIS_PULLBACK: flatBasis(KEY_LEVELS_BASIS_PULLBACK),
     KEY_LEVELS_BASIS_UNADJUSTED_XREF,
@@ -791,6 +804,19 @@ describe("KeyLevelsPanel 定稿字面", () => {
         "同樣僅為本面板自訂之算式參數，並非本系統對任何族群實際行為的統計，本系統未持有此類統計資料；" +
         "「移動停利觀察」顯示的是 MA20 的同一數字，系統並未另行計算移動停利水位，僅以跌破 MA20 作為觀察條件。",
     });
+    // 決策卡 required 條件 3（`work/stock-desk-一眼一句簡化-派工單.md` §5.4）：
+    // 距最新收盤算式行＋qualifier，緊接 `KEY_LEVELS_BASIS_TARGET` 之後。
+    expect(KEY_LEVELS_BASIS_CLOSE_DISTANCE).toEqual({
+      formula: [
+        "距最新收盤：",
+        "停損距離=(停損參考-最新收盤)/最新收盤×100%",
+        "停利距離=(停利參考-最新收盤)/最新收盤×100%",
+      ],
+      qualifier:
+        "停損參考與停利參考皆由基準價推得，此處距離之分母為最新收盤，兩者基準不同；" +
+        "距離為算式結果，不代表價格會依此幅度到達任一價位。",
+    });
+    expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).toContain("不代表價格會依此幅度到達任一價位");
     expect(KEY_LEVELS_BASIS_ANCHOR).toEqual({
       formula: [
         "基準價：",
@@ -1349,6 +1375,9 @@ describe("揭露下沉頁尾 守門", () => {
       ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
       ["../../position/[symbol]/TechnicalIndicatorsPanel.tsx", "{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}"],
       ["../../position/[symbol]/AdviceCardView.tsx", "{buildFooterGuidance(ADVICE_CARD_TITLE)}"],
+      // R3（決策卡第二輪修正，風控複審 APPROVE_WITH_CONDITIONS）：本卡不設
+      // `<details>`，指引句常駐卡片底部，指向頁尾揭露區本身（非某一組）。
+      ["../../position/[symbol]/DecisionCard.tsx", "{buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)}"],
     ];
     for (const [rel, needle] of wiring) {
       const src = read(rel);
@@ -1421,7 +1450,10 @@ describe("揭露下沉頁尾 守門", () => {
     expect(leverage).not.toContain("{chapter.disclosure}");
     expect(pageSrc).toContain("[leverage.data.chapter.disclosure]");
 
-    // builder 產出：十條計算依據一條不減、順序不變、標題為組內小標、樣本句殿後。
+    // builder 產出：計算依據一條不減、順序不變、標題為組內小標、樣本句殿後。
+    // 決策卡 required 條件 3（`work/stock-desk-一眼一句簡化-派工單.md` §5.4）：
+    // `KEY_LEVELS_BASIS_TARGET` 之後新增 `KEY_LEVELS_BASIS_CLOSE_DISTANCE`，原
+    // 十條變十一條，其餘順序不變。
     const bar = (i: number): Bar => ({
       date: `2026-0${1 + Math.floor(i / 28)}-${String(1 + (i % 28)).padStart(2, "0")}`,
       open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
@@ -1439,12 +1471,12 @@ describe("揭露下沉頁尾 守門", () => {
       { heading: KEY_LEVELS_BASIS_SECTION_TITLE },
     ]);
     expect(items[8]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
-    const basis = items.slice(9, 19);
-    expect(basis).toHaveLength(10);
+    const basis = items.slice(9, 20);
+    expect(basis).toHaveLength(11);
     expect(basis.map((b) => (typeof b === "string" || !("formula" in b) ? "?" : b.formula[0]?.slice(0, 4)))).toEqual([
-      "收盤（本", "位階(近", "分類：位", "MA20", "近60日", "ATR(", "停損參考", "停利參考", "基準價：", "拉回觀察",
+      "收盤（本", "位階(近", "分類：位", "MA20", "近60日", "ATR(", "停損參考", "停利參考", "距最新收", "基準價：", "拉回觀察",
     ]);
-    expect(items[19]).toBe(buildFooterSample(80, bars[79]!.date));
+    expect(items[20]).toBe(buildFooterSample(80, bars[79]!.date));
     // 位階不可計算時（< 60 根）不含位階≠估值句，其餘順序不變。
     const short = buildKeyLevelsFooterItems(bars.slice(0, 40), null, "close-not-held");
     expect(short.slice(0, 4)).toEqual([
@@ -1523,9 +1555,12 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(badgeIdx, "NOT_HELD_BADGE 應在三元運算式的 true 分支").toBeGreaterThan(ternaryIdx);
     expect(badgeIdx).toBeLessThan(elseIdx);
     expect(noticeIdx, "candidateEvidenceNotice 應在三元運算式的 else 分支（徽章不渲染時的回退）").toBeGreaterThan(elseIdx);
+    // 決策卡 required 條件 9：候選分支的股數一行也從本檔主視圖移除，改由
+    // DecisionCard.tsx 渲染。
+    expect(mainRegion).not.toContain("QuantitySection");
   });
 
-  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料時間前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、role=alert、StaleDataAlert", () => {
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料時間前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
     const start = summarySrc.indexOf('// model.kind === "held"');
     const end = summarySrc.indexOf("function DataMetaPrefixLine");
     expect(start).toBeGreaterThan(-1);
@@ -1553,8 +1588,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("{model.topMatchedRule.name}");
     expect(mainRegion).not.toContain("{model.topMatchedRule.explanation}");
     expect(mainRegion).not.toContain("規則評估：");
-    expect(mainRegion).toContain('role="alert"');
     expect(mainRegion).toContain("<StaleDataAlert");
+    // 決策卡 required 條件 9：股數一行與 role="alert" 的 restoresComplianceWarning
+    // 從本檔主視圖移除（全頁恰一次改由 DecisionCard.tsx 渲染），不得回流。
+    expect(mainRegion).not.toContain('role="alert"');
+    expect(mainRegion).not.toContain("QuantitySection");
+    // Q4(a)（qa low，決策卡第二輪修正）：本檔主視圖區段不含 quantityRangeShares
+    // 這個欄位——股數一行已完全移交 DecisionCard.tsx，不留半殘引用。
+    expect(mainRegion).not.toContain("quantityRangeShares");
   });
 
   it("no_price／no_action 分支（wave3 改版）：disclaimer 整行移除（全站頁尾 app/layout.tsx 已有一句常駐免責），資料時間前綴與舊字面收進最小 <details>；no_action 主視圖改為大字「資料不足」＋常駐小字 INSUFFICIENT_DATA_NO_EVALUATION，不掛 RULE_SOURCE_CHIP", () => {
@@ -2017,5 +2058,155 @@ describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測�
     const html = renderToStaticMarkup(createElement(RiskGaugeView, { data }));
     expect(html).toContain(DETAILS_SUMMARY_RISK_GAUGE);
     expect(html).not.toContain("非即時");
+  });
+});
+
+/**
+ * 決策卡（`work/stock-desk-一眼一句簡化-派工單.md` §5.4／視覺規範 B.7）風控
+ * 2026-09-19 預審 APPROVE_WITH_CONDITIONS：新字面逐字釘住、位置守門。
+ */
+describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  const HELD_RESPONSE = {
+    status: "ok",
+    reason: null,
+    held: true,
+    position_ids: [1],
+    context_notes: [],
+    symbol: "2330",
+    market: "TW",
+    as_of: "2026-09-18T09:00:00+08:00",
+    portfolio_context: {} as unknown,
+    data: {
+      status: "fresh",
+      source: "twse",
+      staleness_minutes: 5,
+      is_within_ttl: null,
+      bar_count: 300,
+      first_bar_date: "2025-05-01",
+      last_bar_date: "2026-09-18",
+      trading_days_behind: null,
+      reason: null,
+    },
+    advice: {
+      symbol: "2330",
+      action: "add",
+      quantity_range: {
+        min_shares: 500,
+        max_shares: 1000,
+        restores_compliance: true,
+        basis: "以「單一標的佔比上限」為最小可用額度換算，最多可再買進 1000 股。",
+      },
+      matched_rules: [
+        {
+          id: "uptrend_ma_stack",
+          name: "均線多頭排列",
+          action: "add",
+          weight: 0.5,
+          weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+          explanation: "5 日、20 日、60 日均線由上而下排列。",
+        },
+      ],
+      counterarguments: [],
+      invalidation_conditions: [],
+      confidence: "medium",
+      confidence_meaning: "信心等級反映規則一致性與資料完整度，非勝率或機率",
+      rules_version: "1.0.2",
+      as_of: "2026-09-18T09:00:00+08:00",
+      observation_window: { start: "2025-05-01", end: "2026-09-18", bars: 300 },
+      disclaimer: "本工具為研究與教育用途，非投資建議",
+      limits_check: [],
+      action_weights: [],
+      direction_weights: [],
+      has_conflict: false,
+      aggregated_action: "add",
+      blocked_action: null,
+      blocked_notices: [],
+      downgrade_notices: [],
+      evaluation: { total_rules: 1, evaluated_rules: 1, matched_rules: 1, data_completeness: 1, skipped_rules: [] },
+    },
+  } as unknown as AdviceResponse;
+
+  it("required 條件 4／1：DECISION_CARD_ARIA_LABEL／DECISION_CARD_DISTANCE_PREFIX 逐字比對，且無 §1.3 禁用詞、無裸即時宣稱", () => {
+    expect(DECISION_CARD_ARIA_LABEL).toBe("決策摘要");
+    expect(DECISION_CARD_DISTANCE_PREFIX).toBe("距最新收盤 ");
+    // R1（決策卡第二輪修正，風控複審 APPROVE_WITH_CONDITIONS）：「股數」不予核可，改為「股數參考」。
+    expect(DECISION_CARD_QUANTITY_LABEL).toBe("股數參考");
+    for (const text of [DECISION_CARD_ARIA_LABEL, DECISION_CARD_DISTANCE_PREFIX, DECISION_CARD_QUANTITY_LABEL]) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("required 條件 1（風控 VETO）：「距現價」三字不得出現於任何面向使用者的字面（常數本身與其渲染輸出，不含解釋性 doc comment）", () => {
+    expect(buildDecisionCardDistance(-8)).not.toContain("距現價");
+    expect(buildDecisionCardDistance(-8)).toContain("距最新收盤");
+    for (const text of [DECISION_CARD_ARIA_LABEL, DECISION_CARD_DISTANCE_PREFIX, DECISION_CARD_QUANTITY_LABEL]) {
+      expect(text).not.toContain("距現價");
+    }
+    const bars: Bar[] = Array.from({ length: 80 }, (_, i) => ({
+      date: `2026-0${1 + Math.floor(i / 28)}-${String(1 + (i % 28)).padStart(2, "0")}`,
+      open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
+    }));
+    const html = renderToStaticMarkup(
+      createElement(DecisionCardBody, {
+        response: HELD_RESPONSE,
+        bars,
+        anchorSource: "cost",
+        avgCost: 1000,
+      }),
+    );
+    expect(html).not.toContain("距現價");
+    expect(html).toContain("距最新收盤");
+  });
+
+  it("required 條件 2：符號由 (水位－最新收盤)/最新收盤×100 決定，複用 fmtSigned；四捨五入為 0 印 0.0% 不得 -0.0%", () => {
+    expect(buildDecisionCardDistance(-8)).toBe("距最新收盤 -8.0%");
+    expect(buildDecisionCardDistance(19.98)).toBe("距最新收盤 +20.0%");
+    expect(buildDecisionCardDistance(0)).toBe("距最新收盤 0.0%");
+    expect(buildDecisionCardDistance(-0.02)).toBe("距最新收盤 0.0%");
+    expect(buildDecisionCardDistance(-0.02)).not.toContain("-0.0%");
+    // decisionCardWording.ts 不得另寫一份四捨五入／正負號邏輯——只允許 import fmtSigned。
+    const src = read("../decisionCardWording.ts");
+    expect(src).toContain('import { fmtSigned } from "../position/[symbol]/PriceLadder"');
+    expect(src).not.toMatch(/function fmtSigned/);
+  });
+
+  it("required 條件 4：<section aria-label={DECISION_CARD_ARIA_LABEL}> 且本卡不另外渲染任何 <h2> 可見標題", () => {
+    const src = read("../../position/[symbol]/DecisionCard.tsx");
+    expect(src).toContain("<section aria-label={DECISION_CARD_ARIA_LABEL}");
+    expect(src).not.toMatch(/<h2/);
+  });
+
+  it("P1（一眼一句 §2.1 之上）：<DecisionCard 出現在 page.tsx 技術分析 section 之前，且恰出現一次（Q4c）", () => {
+    const pageSrc = read("../../position/[symbol]/page.tsx");
+    const decisionCardIdx = pageSrc.indexOf("<DecisionCard");
+    const technicalIdx = pageSrc.indexOf(`{TECHNICAL_ANALYSIS_TITLE}</h2>`);
+    expect(decisionCardIdx).toBeGreaterThan(-1);
+    expect(technicalIdx).toBeGreaterThan(decisionCardIdx);
+    expect((pageSrc.match(/<DecisionCard/g) ?? []).length).toBe(1);
+  });
+
+  it("Q4(b)（qa low）：全部掃描檔案中，只有 DecisionCard.tsx 引用 quantityRangeShares（operationSummary.ts 是型別／建構來源，本身必然帶有欄位名，不計入）", () => {
+    for (const rel of SCANNED_FILES) {
+      if (rel === "../operationSummary.ts") continue; // 欄位定義／組裝來源，非「渲染引用」。
+      const src = read(rel);
+      if (rel === "../../position/[symbol]/DecisionCard.tsx") {
+        expect(src).toContain("quantityRangeShares");
+      } else {
+        expect(src, `${rel} 不應引用 quantityRangeShares`).not.toContain("quantityRangeShares");
+      }
+    }
+  });
+
+  it("Q4(d)（qa low／風控 S2）：DecisionCard.tsx 的 NumberCell 原始碼不含 rose-/red-/green-/emerald- 類別（required 條件 11：停損/停利大字與距離不上紅綠）", () => {
+    const src = read("../../position/[symbol]/DecisionCard.tsx");
+    const start = src.indexOf("function NumberCell");
+    const end = src.indexOf("function MainSlot");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const region = src.slice(start, end);
+    expect(region).not.toMatch(/rose-|red-|green-|emerald-/);
   });
 });

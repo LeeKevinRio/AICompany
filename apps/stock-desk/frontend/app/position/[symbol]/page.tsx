@@ -38,6 +38,7 @@ import { AdviceCardView, buildAdviceFooterItems } from "./AdviceCardView";
 import { LeverageChapterView } from "./LeverageChapterView";
 import { IndicatorOverviewChipsRow, TechnicalIndicatorsPanel, buildTechnicalFooterItems } from "./TechnicalIndicatorsPanel";
 import { OperationSummaryPanel } from "./OperationSummaryPanel";
+import { DecisionCard } from "./DecisionCard";
 
 /**
  * CEO 派工單 2026-08-16 (TradingView 嵌入) 第 2 點: loaded via `next/dynamic`
@@ -237,6 +238,21 @@ export default function PositionDetailPage() {
           回總覽
         </Link>
       </div>
+
+      {/*
+        --- Decision card (派工單 §5.4 dev-lead 草案／CEO 第三次裁定 §5.1／§5.3；
+        視覺規範 B.7) --------------------------------------------------------
+        整頁第一張卡，放在標題列與技術分析之間；動作大字＋收盤／停損／停利／
+        股數四格，全部沿用既有計算（`buildOperationSummary`／`computeKeyLevels`），
+        不新增任何模型或算式。`bars` 只在 `ok` envelope 時傳入真正的日線，否則
+        傳 `null`（`DecisionCard` 內部把「—」與「無法判定基準」分開處理）。
+      */}
+      <DecisionCard
+        advice={advice}
+        bars={bars.data && bars.data.status === "ok" ? bars.data.bars : null}
+        anchorSource={keyLevelsAnchor.anchorSource}
+        avgCost={keyLevelsAnchor.avgCost}
+      />
 
       {/*
         --- Technical analysis (FR-C1 information architecture + FR-C2 indicator

@@ -11,7 +11,6 @@ import {
   HELD_ACTION_LABELS_LEGACY,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
-  QUANTITY_RANGE_ABSENT_SHORT,
   RULE_BASIS_PREFIX,
   RULE_SOURCE_CHIP,
   summaryConfidenceLabel,
@@ -45,6 +44,16 @@ import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLine
  * DRAFT WORDING NOTICE: every visible sentence here traces back to
  * `app/lib/adviceWording.ts`, itself pending risk-compliance-officer's
  * dedicated FR-C6/C7 wording review (see that file's header).
+ *
+ * 決策卡 required 條件 9（`work/stock-desk-一眼一句簡化-派工單.md` §5.4／視覺
+ * 規範 B.7）：the held／candidate branches' main-view share-count line
+ * (`QuantitySection`) and the held branch's `role="alert"`
+ * `restoresComplianceWarning` box are REMOVED from this panel's main view —
+ * `DecisionCard.tsx` (rendered once, above 技術分析) is now the page's single
+ * main-view place for both, driven by the SAME `buildOperationSummary(response)`
+ * this panel calls. Nothing is deleted: the non-alert `quantityRangeBasis`
+ * sentence still renders exactly once inside this panel's own `<details>`
+ * (`basisIsAlert` below), unchanged from before this batch.
  */
 export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<AdviceResponse, Error> }) {
   return (
@@ -194,8 +203,6 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           <p className="text-sm text-neutral-200">{model.notSupportiveText}</p>
         )}
 
-        <QuantitySection shares={model.required.quantityRangeShares} />
-
         <StaleDataAlert notice={model.staleDataNotice} />
 
         <details className="group mt-1">
@@ -255,8 +262,13 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
   }
 
   // model.kind === "held"
-  // R4/FR-3: basis renders exactly once — as the alert when it is a
-  // non-restoring defensive quantity range, otherwise tucked into `<details>`.
+  // R4/FR-3 (決策卡 required 條件 9 落地後更新，qa Q3): basis renders exactly
+  // once, page-wide. The alert box itself now lives in `DecisionCard.tsx`
+  // (this panel no longer renders it at all — see this file's header);
+  // `basisIsAlert` here only decides whether THIS panel's own `<details>`
+  // still shows the non-alert `quantityRangeBasis` sentence (it must not,
+  // whenever the alert box in `DecisionCard.tsx` is the one showing the same
+  // text) or omits it.
   const basisIsAlert = model.restoresComplianceWarning !== null;
 
   return (
@@ -286,17 +298,6 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <p className="text-sm text-neutral-300">
           <span className="text-neutral-500">{RULE_BASIS_PREFIX}</span>
           {model.topMatchedRule.name}
-        </p>
-      )}
-
-      <QuantitySection shares={model.required.quantityRangeShares} />
-
-      {basisIsAlert && (
-        <p
-          role="alert"
-          className="rounded-md border border-rose-800 bg-rose-950/50 px-4 py-3 text-sm font-semibold text-rose-300"
-        >
-          {model.restoresComplianceWarning}
         </p>
       )}
 
@@ -414,35 +415,16 @@ function InlineDisclaimer({ text }: { text: string }) {
  * AC-C8.2's prominent data-age alert, in the one style every branch shares —
  * extracted (D3③) so the branches cannot drift apart on prominence. Renders
  * nothing when there is no stale gap to disclose.
+ *
+ * Exported (only) so `DecisionCard.tsx` renders the SAME style at the top of
+ * the decision card (決策卡 required 條件 10) instead of drafting a second
+ * `role="alert"` box — this panel's own usage above is unchanged.
  */
-function StaleDataAlert({ notice }: { notice: string | null }) {
+export function StaleDataAlert({ notice }: { notice: string | null }) {
   if (notice === null) return null;
   return (
     <p role="alert" className="rounded-md border border-amber-700 bg-amber-950/40 px-3 py-2 text-amber-300">
       {notice}
     </p>
-  );
-}
-
-/**
- * 一眼一句 §2.3 第 4 點: prints ONLY the share count ("{min} ~ {max} 股") —
- * the `basis` sentence that used to be bundled into the same string is now a
- * separate field the two branches above place exactly once (main-view alert
- * or `<details>`), never here. wave3（派工單 §4.3 第 4 點）: when there is no
- * range at all, the main view now prints the three-word
- * `QUANTITY_RANGE_ABSENT_SHORT` instead of the full cause sentence — the two
- * call sites above each place the full `quantityAbsenceReason` once in their
- * own `<details>` instead.
- */
-function QuantitySection({ shares }: { shares: string | null }) {
-  return (
-    <div>
-      <h3 className="text-sm font-semibold text-neutral-200">建議股數區間</h3>
-      {shares !== null ? (
-        <p className="mt-1 text-sm text-neutral-300">{shares}</p>
-      ) : (
-        <p className="mt-1 text-sm text-neutral-500">{QUANTITY_RANGE_ABSENT_SHORT}</p>
-      )}
-    </div>
   );
 }
