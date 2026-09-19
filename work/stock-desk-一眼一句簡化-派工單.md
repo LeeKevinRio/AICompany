@@ -193,3 +193,16 @@ not.toMatch(<details>/line-clamp/truncate…)」的硬性斷言（`componentWord
 不得以顏色單獨承載語意、不得低於正文字級；`insufficient_data` 須保留「資料不足」語意；出處不得消失——
 「規則評估：」可改小字 chip 但不得拿掉。限定語最短形式：標籤＋緊鄰小字「依規則」（如「停損　依規則」）；若「依規則」也移除，
 「參考／評估」二字必須保留，兩者至少存其一。
+
+### 4.3 第二輪字面定案（風控逐字審 2026-09-19 深夜；四項 VETO 改採風控定稿，其餘 APPROVE）
+
+| 位置 | 定案字面 | 備註 |
+|---|---|---|
+| `HELD_ACTION_LABELS` | add 加碼參考／hold 續抱參考／reduce 減碼參考／take_profit **分批獲利了結**／stop_loss 停損參考／insufficient_data **資料不足**＋緊鄰常駐小字「本次不提供操作評估」 | 「分批」為動作範圍不可省；資料不足卡不得掛「依規則」chip |
+| 來源 chip | 「依規則」（text-xs neutral-400 為下限，同列常駐，不得 hover-only） | 取代「規則評估：」前綴 |
+| 候選模式 | 「進場評估」不變；`CANDIDATE_NOT_SUPPORTIVE_TEXT` 短版 **「本次未支持進場」**；主視圖「未持有」狀態徽章（同列常駐），`CANDIDATE_EVIDENCE_NOTICE` 進詳細；徽章不渲染時原句須自動回主視圖（qa 斷言） | 「本次」為時間限定不可省 |
+| 主要依據 | 「依據：{規則名}」，explanation 進詳細 | |
+| 股數缺席 | 「未提供股數」，原句進詳細 | 主視圖顯示股數時 `restoresComplianceWarning` 仍須同層 |
+| 資料時間徽章 | 「資料截至 {MM-DD}」；**年份≠當年時顯示 YYYY-MM-DD**；時分／時區／來源／延遲分鐘進詳細；`DataMetaStatusBadge` 維持 | |
+| 信心 | 「信心 {高／中／低}」，定義句進詳細 | 純色點方案預先 VETO |
+| 首頁 | 風險儀表不加提示；匯率貢獻卡「備援匯率」徽章（任一部位 backup 即顯示，不得門檻、不得 hover-only） | |
