@@ -4,9 +4,10 @@ Everything here runs against ``httpx.MockTransport`` and temp SQLite files --
 never the real network -- per the data-source-integration skill's "測試一律
 用 fixture 不打外網" rule. The fixtures reused below (``twse_stock_day_*``,
 ``tpex_trading_stock_*``, ``finmind_taiwan_stock_price_*``,
-``bot_fx_usd_twd_*``, ``alpha_vantage_daily_*``, ``yfinance_chart_twii``) are
-the same synthetic, documented-but-unverified files every other adapter
-contract test in this directory already uses (see ``tests/fixtures/README.md``).
+``bot_fx_usd_twd_*``, ``bot_fx_challenge_page``, ``alpha_vantage_daily_*``,
+``yfinance_chart_twii``, ``yfinance_chart_twd_x``) are the same synthetic,
+documented-but-unverified files every other adapter contract test in this
+directory already uses (see ``tests/fixtures/README.md``).
 """
 
 from __future__ import annotations
@@ -286,7 +287,8 @@ def _offline_transport() -> httpx.MockTransport:
     finmind_payload = _fixture_json("finmind_taiwan_stock_price_2330.json")
     fx_csv = _fixture_text("bot_fx_usd_twd_20240102.csv")
     av_payload = _fixture_json("alpha_vantage_daily_aapl.json")
-    yf_payload = _fixture_json("yfinance_chart_twii.json")
+    yf_index_payload = _fixture_json("yfinance_chart_twii.json")
+    yf_fx_payload = _fixture_json("yfinance_chart_twd_x.json")
 
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
@@ -310,7 +312,11 @@ def _offline_transport() -> httpx.MockTransport:
         if host == "www.alphavantage.co":
             return httpx.Response(200, json=av_payload)
         if host == "query1.finance.yahoo.com":
-            return httpx.Response(200, json=yf_payload)
+            # ADR-0011: the FX backup rung (``TWD=X``) shares this host with
+            # the index path (``^TWII``); path decides which fixture answers.
+            if "TWD" in path:
+                return httpx.Response(200, json=yf_fx_payload)
+            return httpx.Response(200, json=yf_index_payload)
         raise AssertionError(f"unmapped host in offline test transport: {host}")
 
     return httpx.MockTransport(handler)
@@ -353,6 +359,7 @@ def test_run_end_to_end_all_pass_offline(tmp_path: Path) -> None:
         "bank_of_taiwan_fx": vmd.Verdict.PASS,
         "alpha_vantage": vmd.Verdict.PASS,
         "yfinance": vmd.Verdict.PASS,
+        "yfinance_fx": vmd.Verdict.PASS,
     }
     assert result.comparisons["2330"]
     assert all(row.verdict is vmd.Verdict.PASS for row in result.comparisons["2330"])
@@ -390,7 +397,7 @@ def test_main_writes_report_file_and_returns_zero_on_all_pass(tmp_path: Path) ->
     assert output_path.exists()
     content = output_path.read_text(encoding="utf-8")
     assert "Stock Desk 數據源驗證結果" in content
-    assert "六個 adapter 皆為 PASS" in content
+    assert "七個 adapter 皆為 PASS" in content
 
 
 def test_main_returns_nonzero_when_a_source_is_unreachable(tmp_path: Path) -> None:

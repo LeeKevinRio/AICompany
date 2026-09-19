@@ -15,7 +15,8 @@ from app.alerts.store import AlertStore
 from app.data.cache import PriceBarCache
 from app.data.providers.alpha_vantage import AlphaVantageAdapter
 from app.data.providers.finmind import FinMindAdapter
-from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateProvider
+from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateLadder, FxRateProvider
+from app.data.providers.fx_yfinance import YFinanceFxAdapter
 from app.data.providers.tpex import TpexAdapter
 from app.data.providers.twse import TwseAdapter
 from app.data.providers.yfinance import YFinanceAdapter
@@ -138,13 +139,25 @@ def _default_index_resolver() -> IndexServiceResolver:
 
 @lru_cache(maxsize=1)
 def _default_fx_provider() -> FxRateProvider:
-    """The one FX adapter, shared by the valuation and the risk-context path.
+    """The one FX ladder, shared by the valuation and the risk-context path.
 
     Both paths must read the same rates: a card whose caps were scaled by one
     quote while the portfolio total used another would be internally
     inconsistent for no visible reason.
+
+    ADR-0011: Bank of Taiwan's CSV endpoint has been serving an HTML anti-bot
+    challenge page for every date since 2026-09-19 (CEO 本機實測), so the bare
+    ``BankOfTaiwanFxAdapter`` alone leaves every non-TWD valuation without a
+    rate. The ladder falls back to :class:`YFinanceFxAdapter` built on the
+    *same* :func:`_default_yfinance` singleton as the US equity backup and the
+    index path, so the FX fallback shares that one ``RateLimitedClient`` and
+    its throttle budget instead of opening a second connection to the same
+    host.
     """
-    return BankOfTaiwanFxAdapter()
+    return FxRateLadder(
+        primary=BankOfTaiwanFxAdapter(),
+        backup=YFinanceFxAdapter(adapter=_default_yfinance()),
+    )
 
 
 @lru_cache(maxsize=1)

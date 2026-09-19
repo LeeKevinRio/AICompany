@@ -165,8 +165,7 @@ class YFinanceAdapter(MarketDataProvider):
             return _unavailable(
                 now,
                 reason=(
-                    f"「{symbol}」不是合法的美股個股代號格式；指數請改用 "
-                    "get_index_daily_bars。"
+                    f"「{symbol}」不是合法的美股個股代號格式；指數請改用 get_index_daily_bars。"
                 ),
             )
         provider_symbol = to_provider_symbol(canonical, provider_id=YFINANCE_PROVIDER_ID)
@@ -190,9 +189,7 @@ class YFinanceAdapter(MarketDataProvider):
             staleness_minutes=0,
         )
 
-    def get_index_daily_bars(
-        self, index_symbol: str, start: date, end: date
-    ) -> ProviderResult:
+    def get_index_daily_bars(self, index_symbol: str, start: date, end: date) -> ProviderResult:
         """Sole adapter for standard index series (ADR-0005 決策一).
 
         ``index_symbol`` must be one of :data:`INDEX_SYMBOL_METADATA`'s keys
@@ -242,6 +239,31 @@ class YFinanceAdapter(MarketDataProvider):
             staleness_minutes=0,
         )
 
+    def fetch_chart_closes(
+        self, request_symbol: str, start: date, end: date
+    ) -> tuple[list[PriceBar], str | None]:
+        """Public, symbol-agnostic entry point onto this adapter's chart parsing.
+
+        Neither :meth:`get_daily_bars` (validates via ``canonical_us_symbol``,
+        which rejects a symbol shape like ``"TWD=X"``) nor
+        :meth:`get_index_daily_bars` (restricted to :data:`INDEX_SYMBOL_METADATA`)
+        fits a caller that needs Yahoo's *FX cross-pair* symbol shape -- see
+        :class:`app.data.providers.fx_yfinance.YFinanceFxAdapter`. This method
+        exists so that caller reuses this module's HTTP + JSON parsing instead
+        of duplicating it (data-source-integration skill: "adapter 必要條件缺一
+        不可" applies once per parser, not once per symbol shape).
+
+        ``request_symbol`` is passed through to the request verbatim -- no
+        validation, no canonicalization. The returned bars' ``market``/
+        ``currency`` are placeholders (``"TW"``/``"TWD"``) since this method's
+        only established caller (the FX ladder) only reads ``date``/``close``;
+        it must **not** be used to build a ``ProviderResult`` presented as
+        equity or index data (those roles' own validation is what makes
+        ``get_daily_bars``/``get_index_daily_bars`` safe to call directly).
+        """
+        now = datetime.now(UTC)
+        return self._fetch(request_symbol, request_symbol, "TW", "TWD", start, end, now)
+
     def _fetch(
         self,
         request_symbol: str,
@@ -271,9 +293,7 @@ class YFinanceAdapter(MarketDataProvider):
             return [], "yfinance 連線逾時或發生錯誤，暫不可用。"
 
         if response.status_code != httpx.codes.OK:
-            logger.warning(
-                "yfinance returned HTTP %d for %s", response.status_code, request_symbol
-            )
+            logger.warning("yfinance returned HTTP %d for %s", response.status_code, request_symbol)
             return [], "yfinance 回應非預期的 HTTP 狀態，暫不可用。"
 
         try:
@@ -288,12 +308,9 @@ class YFinanceAdapter(MarketDataProvider):
 
         error = chart.get("error")
         if error:
-            description = (
-                error.get("description") if isinstance(error, dict) else str(error)
-            )
+            description = error.get("description") if isinstance(error, dict) else str(error)
             return [], (
-                f"yfinance 回報錯誤：{description}；"
-                "無法確定是代號不存在、已下市，或暫時無資料。"
+                f"yfinance 回報錯誤：{description}；無法確定是代號不存在、已下市，或暫時無資料。"
             )
 
         results = chart.get("result")

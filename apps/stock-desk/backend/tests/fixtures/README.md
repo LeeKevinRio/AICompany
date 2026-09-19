@@ -40,6 +40,8 @@ Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數�
 | `tpex_trading_stock_shares_unit_202609.json` | 同上端點，假設欄位標頭改回股數單位的情境 | 合成，純粹用於單元測試「欄位標頭決定是否乘 1000」的判斷邏輯，非真實回應樣本 |
 | `finmind_taiwan_stock_price_2330.json` | FinMind API v4 `dataset=TaiwanStockPrice` | 合成，依文件手工構造 |
 | `bot_fx_usd_twd_20240102.csv` | 台灣銀行牌告匯率歷史 CSV 匯出（`xrt/flcsv/0/<date>`） | 合成，依常見公開格式手工構造；欄位順序（現金/即期/遠期各買入賣出成對出現）**未經即時回應驗證**，`app/data/providers/fx.py` 因此改用「找標籤字串」而非寫死欄位索引來降低風險，找不到時明確回 `unavailable` 而非讀錯欄 |
+| `bot_fx_challenge_page.html` | 同上端點，防爬「Challenge Validation」回應樣本 | **表頭與結構依 CEO 本機 2026-09-19 實測回應摘錄**（`<title>Challenge Validation</title>`、`cp_clge_done`、`sec-cpt-if` iframe 三個特徵齊全）；用於測試 `app/data/providers/fx.py` 的 `_looks_like_challenge_page` 偵測與短路邏輯（ADR-0011） |
+| `yfinance_chart_twd_x.json` | 同上 yfinance chart 端點，FX 備援路徑（`TWD=X`，ADR-0011） | 合成，依常見公開格式手工構造；供 `app/data/providers/fx_yfinance.py` 的 `YFinanceFxAdapter` 契約測試使用；**完全未經即時回應驗證** |
 | `alpha_vantage_daily_aapl.json` | Alpha Vantage `TIME_SERIES_DAILY`（`function=TIME_SERIES_DAILY&outputsize=compact`，2026-08-16 由 `full` 改回 `compact`——CEO 本機實測 `full` 已是免費方案的付費限制，見 `app/data/providers/alpha_vantage.py` 檔頭 VERIFICATION STATUS 段） | 合成，依公開文件手工構造（ADR-0005/ADR-0003 範圍）；含一列全為 `"N/A"` 的不可解析日期，用於測試 adapter 的跳過（不臆測）邏輯；**欄位格式本身仍未經即時回應驗證**（key 有效性與 `outputsize` 限制已實測，但 `compact` 回應的實際欄位 schema 尚未經一次真實回應核對，待 CEO 重跑 `scripts/verify_market_data.py`） |
 | `yfinance_chart_tqqq.json` | Yahoo Finance 未公開 `v8/finance/chart/<symbol>` 端點（`app/data/providers/yfinance.py` 個股/ETF 備援路徑） | 合成，依常見公開格式手工構造；含一列全欄位為 `null` 的日期，模擬非交易日/資料缺漏的跳過邏輯；**此端點本身無官方文件，格式僅為廣泛引用的慣例，完全未經即時回應驗證** |
 | `yfinance_chart_ndx.json` | 同上端點，指數路徑（`^NDX`，ADR-0005 決策一） | 合成，依常見公開格式手工構造；指數 `volume` 以 `0` 表示（非缺漏）；**完全未經即時回應驗證** |

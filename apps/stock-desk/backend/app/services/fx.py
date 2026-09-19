@@ -34,33 +34,24 @@ logger = logging.getLogger(__name__)
 #: The reporting currency; it needs no conversion and therefore no quote.
 REPORTING_CURRENCY: Final = "TWD"
 
-#: Emitted when no provider was wired in at all.
-NO_PROVIDER_SOURCE: Final = "none"
-
-#: Per-source standing disclosure, surfaced wherever the rate is used. Bank of
-#: Taiwan publishes no single official daily close, so the adapter reports the
-#: mid-point of the spot buy/sell pair -- a model value, not an official rate --
-#: and its endpoint could not be verified against a live response in this
-#: environment (see the ``app/data/providers/fx.py`` header and
-#: ``tests/fixtures/README.md``). This text is user-facing on purpose (F-4).
-SOURCE_NOTES: Final[dict[str, str]] = {
-    "bank_of_taiwan": (
-        "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；"
-        "該端點與 CSV 欄位格式未經本環境線上查證（verified=false）。"
-    ),
-}
-
-#: Used for any source without an entry above: says what is unknown, and does
-#: not claim anything about the source's methodology.
-GENERIC_SOURCE_NOTE: Final = (
-    "此匯率來源的端點與欄位格式未經本環境線上查證（verified=false），"
-    "其數值口徑（即期／收盤／中點）以來源文件為準。"
+# The per-source disclosures live in ``app/services/fx_notes.py`` (no advice
+# dependency, so the valuator can import them); re-exported here for the
+# existing callers and tests.
+from app.services.fx_notes import (  # noqa: E402
+    GENERIC_SOURCE_NOTE,
+    NO_PROVIDER_SOURCE,
+    SOURCE_NOTES,
+    source_note,
 )
 
-
-def source_note(source: str) -> str:
-    """The standing disclosure for ``source``."""
-    return SOURCE_NOTES.get(source, GENERIC_SOURCE_NOTE)
+__all__ = [
+    "GENERIC_SOURCE_NOTE",
+    "NO_PROVIDER_SOURCE",
+    "REPORTING_CURRENCY",
+    "SOURCE_NOTES",
+    "resolve_fx_quote",
+    "source_note",
+]
 
 
 def resolve_fx_quote(

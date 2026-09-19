@@ -18,6 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.data.interface import DataStatus
 from app.portfolio.valuation import PositionValuator, Valuation
 from app.positions.models import Currency, InstrumentType, Market, Position
 from app.positions.store import PositionStore
@@ -85,6 +86,22 @@ class PortfolioSummary(BaseModel):
     as_of: str
     totals: Totals
     positions: list[SummaryPosition]
+    #: The standing disclosure of every FX source whose rate went into this
+    #: book's TWD figures (ADR-0011; 風控 2026-09-19 條件 (1)): shown beside the
+    #: converted totals, in first-seen order, each sentence once.
+    fx_disclosures: list[str] = []
+
+
+def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
+    """Unique ``source_note`` of every FX rate actually used, in first-seen order."""
+    seen: list[str] = []
+    for valuation in valuations:
+        info = valuation.fx
+        if info is None or info.data_status is DataStatus.UNAVAILABLE or not info.source_note:
+            continue
+        if info.source_note not in seen:
+            seen.append(info.source_note)
+    return seen
 
 
 def build_summary(store: PositionStore, valuator: PositionValuator) -> PortfolioSummary:
@@ -126,7 +143,12 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
         fx_contribution_twd=fx,
         status=_totals_status(total=len(positions), ok=ok_count),
     )
-    return PortfolioSummary(as_of=as_of, totals=totals, positions=summary_positions)
+    return PortfolioSummary(
+        as_of=as_of,
+        totals=totals,
+        positions=summary_positions,
+        fx_disclosures=fx_disclosures_for([item.valuation for item in summary_positions]),
+    )
 
 
 def _totals_status(*, total: int, ok: int) -> Literal["complete", "partial", "no_data"]:
@@ -151,9 +173,7 @@ def _to_summary_position(
         avg_cost=position.avg_cost,
         currency=position.currency,
         instrument_type=position.instrument_type,
-        opened_at=(
-            position.opened_at.isoformat() if position.opened_at is not None else None
-        ),
+        opened_at=(position.opened_at.isoformat() if position.opened_at is not None else None),
         sector=position.sector,
         note=position.note,
         valuation=valuation,

@@ -1,0 +1,28 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "TWD",
+          "symbol": "TWD=X",
+          "instrumentType": "CURRENCY",
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [1704157200, 1704243600, 1704330000, 1704416400],
+        "indicators": {
+          "quote": [
+            {
+              "open": [31.245, 31.310, 31.280, 31.355],
+              "high": [31.360, 31.395, 31.400, 31.420],
+              "low": [31.190, 31.250, 31.230, 31.300],
+              "close": [31.305, 31.275, 31.360, 31.398],
+              "volume": [0, 0, 0, 0]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  },
+  "_fixture_notice": "本資料為依 Yahoo Finance 未公開 chart JSON 端點常見格式手工構造的合成範例，用於 USD/TWD（TWD=X）匯率備援 adapter 的契約測試，未實錄真實回應（ADR-0011）。"
+}

@@ -48,6 +48,7 @@ from pydantic import BaseModel, ConfigDict
 from app.data.interface import DataStatus, Market, ProviderResult
 from app.data.providers.fx import FxRateProvider
 from app.positions.models import Currency, Position
+from app.services.fx_notes import source_note
 
 #: How far back to look for the latest daily close (skips weekends/holidays).
 PRICE_LOOKBACK_DAYS = 10
@@ -55,6 +56,9 @@ PRICE_LOOKBACK_DAYS = 10
 FX_BACKTRACK_DAYS = 7
 
 _TWD_RATE = Decimal(1)
+
+#: One ``value_all`` pass's FX answers, keyed by ``(pair, target)`` (ADR-0010 D-2).
+FxMemo = dict[tuple[str, date], tuple["Decimal | None", "FxInfo"]]
 
 
 class PriceService(Protocol):
@@ -130,6 +134,25 @@ class PriceInfo(BaseModel):
     data_status: DataStatus
 
 
+class FxInfo(BaseModel):
+    """The FX rate used for ``fx_now``, with provenance and freshness (ADR-0011).
+
+    Present for every non-TWD position whether or not a rate was found, so the
+    summary can disclose a backup-sourced rate (``data_status == BACKUP``)
+    exactly where the converted figures are shown, and can say "no rate" when
+    ``data_status == UNAVAILABLE``. ``source_note`` is the source's standing
+    disclosure (``app/services/fx.py``), fixed verbatim by risk-compliance.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pair: str
+    as_of: str | None
+    source: str
+    data_status: DataStatus
+    source_note: str
+
+
 class PnlOriginal(BaseModel):
     """Unrealized P&L in the instrument's own currency."""
 
@@ -147,6 +170,8 @@ class Valuation(BaseModel):
     status: Literal["ok", "insufficient_data"]
     missing: list[str]
     price: PriceInfo | None
+    #: ``None`` for a TWD position (no conversion, nothing to disclose).
+    fx: FxInfo | None = None
     pnl_original: PnlOriginal | None
     pnl_twd: Decimal | None
     asset_contribution_twd: Decimal | None
@@ -201,14 +226,14 @@ class PositionValuator:
         without this a book of N foreign holdings asks the FX source N times
         for the same day's rate.
         """
-        fx_memo: dict[tuple[str, date], Decimal | None] = {}
+        fx_memo: FxMemo = {}
         return [self.value_position(position, fx_memo=fx_memo) for position in positions]
 
     def value_position(
         self,
         position: Position,
         *,
-        fx_memo: dict[tuple[str, date], Decimal | None] | None = None,
+        fx_memo: FxMemo | None = None,
     ) -> PositionValuation:
         today = self._clock().date()
         missing: list[str] = []
@@ -217,7 +242,7 @@ class PositionValuator:
         if price_now is None:
             missing.append(price_missing)
 
-        fx_open, fx_now = self._resolve_fx(position, today, missing, fx_memo)
+        fx_open, fx_now, fx_info = self._resolve_fx(position, today, missing, fx_memo)
 
         price_open = position.avg_cost
         quantity = position.quantity
@@ -237,6 +262,7 @@ class PositionValuator:
                     status="insufficient_data",
                     missing=missing,
                     price=price_info,
+                    fx=fx_info,
                     pnl_original=pnl_original,
                     pnl_twd=None,
                     asset_contribution_twd=None,
@@ -258,6 +284,7 @@ class PositionValuator:
                 status="ok",
                 missing=[],
                 price=price_info,
+                fx=fx_info,
                 pnl_original=pnl_original,
                 pnl_twd=parts.total_twd,
                 asset_contribution_twd=parts.asset_contribution_twd,
@@ -296,14 +323,14 @@ class PositionValuator:
         position: Position,
         today: date,
         missing: list[str],
-        fx_memo: dict[tuple[str, date], Decimal | None] | None,
-    ) -> tuple[Decimal | None, Decimal | None]:
+        fx_memo: FxMemo | None,
+    ) -> tuple[Decimal | None, Decimal | None, FxInfo | None]:
         if position.currency == "TWD":
             # A TWD position is already in the reporting currency: F0 = F1 = 1
             # and the FX contribution is therefore identically zero.
-            return _TWD_RATE, _TWD_RATE
+            return _TWD_RATE, _TWD_RATE, None
         pair = f"{position.currency}TWD"
-        fx_now = self._latest_fx_on_or_before(pair, today, fx_memo)
+        fx_now, fx_info = self._latest_fx_on_or_before(pair, today, fx_memo)
         if fx_now is None:
             missing.append("fx_now")
         # Without an open date there is no date to price F0 at, and no rate is
@@ -311,38 +338,51 @@ class PositionValuator:
         fx_open = (
             None
             if position.opened_at is None
-            else self._latest_fx_on_or_before(pair, position.opened_at, fx_memo)
+            else self._latest_fx_on_or_before(pair, position.opened_at, fx_memo)[0]
         )
         if fx_open is None:
             missing.append("fx_open")
-        return fx_open, fx_now
+        return fx_open, fx_now, fx_info
 
     def _latest_fx_on_or_before(
         self,
         pair: str,
         target: date,
-        fx_memo: dict[tuple[str, date], Decimal | None] | None = None,
-    ) -> Decimal | None:
-        """Return the FX rate on ``target``, else the nearest earlier one.
+        fx_memo: FxMemo | None = None,
+    ) -> tuple[Decimal | None, FxInfo]:
+        """Return the FX rate on ``target`` (else the nearest earlier one) and its provenance.
 
-        Looks back up to ``FX_BACKTRACK_DAYS`` days; returns ``None`` if no rate
-        is published in that window (never guesses a rate). ``fx_memo`` (one
-        per :meth:`value_all` pass) answers a repeated ``(pair, target)``
+        Looks back up to ``FX_BACKTRACK_DAYS`` days; the rate is ``None`` if
+        none is published in that window (never guesses a rate). ``fx_memo``
+        (one per :meth:`value_all` pass) answers a repeated ``(pair, target)``
         without a second lookup.
         """
         if fx_memo is not None and (pair, target) in fx_memo:
             return fx_memo[(pair, target)]
-        rate = self._lookup_fx(pair, target)
+        answer = self._lookup_fx(pair, target)
         if fx_memo is not None:
-            fx_memo[(pair, target)] = rate
-        return rate
+            fx_memo[(pair, target)] = answer
+        return answer
 
-    def _lookup_fx(self, pair: str, target: date) -> Decimal | None:
+    def _lookup_fx(self, pair: str, target: date) -> tuple[Decimal | None, FxInfo]:
         start = target - timedelta(days=FX_BACKTRACK_DAYS)
         result = self._fx_provider.get_daily_rates(pair, start, target)
-        if result.status is DataStatus.UNAVAILABLE or not result.rates:
-            return None
         candidates = [rate for rate in result.rates if rate.date <= target]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda rate: rate.date).rate
+        if result.status is DataStatus.UNAVAILABLE or not candidates:
+            info = FxInfo(
+                pair=pair,
+                as_of=None,
+                source=result.source,
+                data_status=DataStatus.UNAVAILABLE,
+                source_note=source_note(result.source),
+            )
+            return None, info
+        latest = max(candidates, key=lambda rate: rate.date)
+        info = FxInfo(
+            pair=pair,
+            as_of=latest.date.isoformat(),
+            source=result.source,
+            data_status=result.status,
+            source_note=source_note(result.source),
+        )
+        return latest.rate, info

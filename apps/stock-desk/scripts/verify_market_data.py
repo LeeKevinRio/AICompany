@@ -1,4 +1,4 @@
-"""CEO 本機一鍵核實工具 -- stock-desk 六個市場資料 adapter 的真實連線驗證。
+"""CEO 本機一鍵核實工具 -- stock-desk 七個市場資料 adapter 的真實連線驗證。
 
 ## 背景
 
@@ -33,8 +33,8 @@ TPEx、FinMind、台灣銀行、Alpha Vantage、Yahoo Finance），所以每個 
 ## 這支工具做什麼、不做什麼
 
 做：
-- 對 6 個既有 adapter（twse / tpex / finmind / bank_of_taiwan fx / alpha_vantage /
-  yfinance）各打一次真實請求，用 PASS / FAIL / UNREACHABLE 三態分類：
+- 對 7 個既有 adapter（twse / tpex / finmind / bank_of_taiwan fx / alpha_vantage /
+  yfinance / yfinance_fx）各打一次真實請求，用 PASS / FAIL / UNREACHABLE 三態分類：
   - `UNREACHABLE`：連線層失敗（DNS、逾時、連線被拒、proxy 擋下），代表這台機器
     根本連不到對方網域。
   - `FAIL`：連得到，但沒拿到可用資料（缺憑證、schema 不符、額度用罄、代號查無
@@ -116,6 +116,7 @@ from app.data.interface import DataStatus, PriceBar
 from app.data.providers.alpha_vantage import ALPHA_VANTAGE_BASE_URL, AlphaVantageAdapter
 from app.data.providers.finmind import FINMIND_BASE_URL, FinMindAdapter
 from app.data.providers.fx import BOT_BASE_URL, BankOfTaiwanFxAdapter
+from app.data.providers.fx_yfinance import YFinanceFxAdapter
 from app.data.providers.tpex import TPEX_BASE_URL, TRADING_STOCK_PATH, TpexAdapter
 from app.data.providers.twse import TWSE_BASE_URL, TwseAdapter
 from app.data.providers.yfinance import YFINANCE_BASE_URL, YFinanceAdapter
@@ -372,8 +373,12 @@ def probe_fx(
         result = adapter.get_daily_rates(pair, start, end)
     finally:
         adapter.close()
-    # FxRateResult carries the same fields as ProviderResult minus `reason`;
-    # PriceBar-shaped classify_result() is reused by treating rates as bars.
+    # FxRateResult carries the same shape as ProviderResult (incl. `reason`
+    # since ADR-0011); PriceBar-shaped classify_result() is reused by treating
+    # rates as bars. When the endpoint is serving its anti-bot challenge page
+    # (ADR-0011), `result.reason` already reads "回應為 HTML 挑戰頁（防爬），
+    # 非 CSV，本次判定為不可用。" -- surfaced here instead of the generic
+    # "無可用資料" fallback, and never the raw HTML body itself.
     return classify_result(
         name="bank_of_taiwan_fx",
         endpoint=f"{BOT_BASE_URL}/xrt/flcsv/0/<date>",
@@ -382,7 +387,40 @@ def probe_fx(
         reachability=reachability,
         bars=result.rates,  # type: ignore[arg-type]
         status=result.status,
-        reason=None,
+        reason=result.reason,
+        as_of=result.as_of,
+    )
+
+
+def probe_yfinance_fx(
+    pair: str,
+    start: date,
+    end: date,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    reachability: ReachabilityResult | None = None,
+) -> AdapterProbeResult:
+    """ADR-0011: the FX ladder's backup rung, probed on its own (``TWD=X``)."""
+    client = _make_client(YFINANCE_BASE_URL, 1.0, transport=transport)
+    # A dedicated ``YFinanceAdapter`` (not the shared production singleton),
+    # closed directly: ``YFinanceFxAdapter`` never closes a caller-supplied
+    # adapter (see its docstring), by design, since production wiring shares
+    # one long-lived instance across roles.
+    inner_adapter = YFinanceAdapter(client=client)
+    adapter = YFinanceFxAdapter(adapter=inner_adapter)
+    try:
+        result = adapter.get_daily_rates(pair, start, end)
+    finally:
+        inner_adapter.close()
+    return classify_result(
+        name="yfinance_fx",
+        endpoint=f"{YFINANCE_BASE_URL}/v8/finance/chart/TWD=X",
+        credential_ok=True,
+        credential_hint="",
+        reachability=reachability,
+        bars=result.rates,  # type: ignore[arg-type]
+        status=result.status,
+        reason=result.reason,
         as_of=result.as_of,
     )
 
@@ -675,8 +713,7 @@ def check_leverage_registry() -> LeverageRegistryReport:
             issue = f"leverage_factor={meta.leverage_factor:g} 超出常見槓桿倍數範圍 [-5, 5]"
         elif not (0.0 <= meta.expense_ratio_annual <= 0.05):
             issue = (
-                f"expense_ratio_annual={meta.expense_ratio_annual:.4f} "
-                "超出常見年費率範圍 [0, 0.05]"
+                f"expense_ratio_annual={meta.expense_ratio_annual:.4f} 超出常見年費率範圍 [0, 0.05]"
             )
         if meta.verified:
             verified_count += 1
@@ -735,7 +772,7 @@ def render_report(
     )
     lines.append("")
 
-    lines.append("## 1. 六個 adapter 真實連線結果（checklist 第 1 項）")
+    lines.append("## 1. 七個 adapter 真實連線結果（checklist 第 1 項）")
     lines.append("")
     lines.append("| Adapter | Endpoint | 結果 | 細節 | 筆數 |")
     lines.append("| --- | --- | --- | --- | --- |")
@@ -851,7 +888,7 @@ def render_report(
             "請依上表逐一排除 FAIL/UNREACHABLE 後重跑本工具。"
         )
     else:
-        lines.append("六個 adapter 皆為 PASS，比對表亦無 FAIL——資料源真實性驗證通過。")
+        lines.append("七個 adapter 皆為 PASS，比對表亦無 FAIL——資料源真實性驗證通過。")
     lines.append("")
 
     return "\n".join(lines)
@@ -893,7 +930,7 @@ def _default_db_paths() -> list[Path]:
 def parse_args(argv: Sequence[str] | None) -> CliArgs:
     today = date.today()
     parser = argparse.ArgumentParser(
-        description="Stock Desk 六個市場資料 adapter 的 CEO 本機一鍵核實工具。",
+        description="Stock Desk 七個市場資料 adapter 的 CEO 本機一鍵核實工具。",
     )
     parser.add_argument("--start", type=date.fromisoformat, default=today - timedelta(days=10))
     parser.add_argument("--end", type=date.fromisoformat, default=today)
@@ -908,9 +945,7 @@ def parse_args(argv: Sequence[str] | None) -> CliArgs:
     ns = parser.parse_args(argv)
 
     db_paths = [Path(p) for p in ns.db_path] if ns.db_path else _default_db_paths()
-    output = ns.output or (
-        _REPO_ROOT / "work" / "research" / f"驗證結果-{today.isoformat()}.md"
-    )
+    output = ns.output or (_REPO_ROOT / "work" / "research" / f"驗證結果-{today.isoformat()}.md")
     return CliArgs(
         start=ns.start,
         end=ns.end,
@@ -936,9 +971,7 @@ def run(args: CliArgs, *, transport: httpx.BaseTransport | None = None) -> RunRe
     """Execute every check and return the rendered Markdown report plus raw results."""
 
     def reach(url: str) -> ReachabilityResult:
-        get_fn = (
-            (lambda u, t: _default_http_get(u, t, transport=transport)) if transport else None
-        )
+        get_fn = (lambda u, t: _default_http_get(u, t, transport=transport)) if transport else None
         return check_reachability(url, timeout=args.timeout, get_fn=get_fn)
 
     twse_symbol = args.tw_symbols[0] if args.tw_symbols else "2330"
@@ -981,6 +1014,13 @@ def run(args: CliArgs, *, transport: httpx.BaseTransport | None = None) -> RunRe
         ),
         probe_yfinance_index(
             args.index_symbol,
+            args.start,
+            args.end,
+            transport=transport,
+            reachability=reach(YFINANCE_BASE_URL),
+        ),
+        probe_yfinance_fx(
+            args.fx_pair,
             args.start,
             args.end,
             transport=transport,

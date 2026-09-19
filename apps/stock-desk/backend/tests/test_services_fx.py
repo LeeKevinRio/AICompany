@@ -125,3 +125,14 @@ def test_the_bank_of_taiwan_disclosure_is_the_one_attached_to_its_rates() -> Non
     assert "未經本環境線上查證" in quote.source_note
     # An unknown source gets a note that claims nothing about its methodology.
     assert F.source_note("something_else") == F.GENERIC_SOURCE_NOTE
+    # No source at all gets no note: nothing supplied the number (風控 2026-09-19).
+    assert F.source_note(F.NO_PROVIDER_SOURCE) == ""
+
+
+def test_the_yfinance_fx_backup_disclosure_names_it_as_a_non_official_backup() -> None:
+    """ADR-0011: the ladder's backup rung must disclose itself as non-official."""
+    provider = FakeFxProvider({TARGET: "31.5"}, source="yfinance_fx")
+    quote = F.resolve_fx_quote(provider, currency="USD", on=TARGET)
+    assert quote is not None
+    assert "Yahoo Finance" in quote.source_note
+    assert "備援" in quote.source_note

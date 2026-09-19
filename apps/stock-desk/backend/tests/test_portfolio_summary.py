@@ -24,14 +24,10 @@ class _FakePriceService(PriceService):
     def __init__(self, prices: dict[str, str]) -> None:
         self._prices = prices
 
-    def get_daily_bars(
-        self, symbol: str, market: Market, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         close = self._prices.get(symbol)
         if close is None:
-            return ProviderResult(
-                bars=[], status=DataStatus.UNAVAILABLE, as_of=NOW, source="fake"
-            )
+            return ProviderResult(bars=[], status=DataStatus.UNAVAILABLE, as_of=NOW, source="fake")
         bar = PriceBar(
             symbol=symbol,
             market=market,
@@ -244,3 +240,70 @@ def test_summary_amounts_serialize_as_strings(store: PositionStore) -> None:
         _teardown()
     for key in ("cost_twd", "market_value_twd", "unrealized_pnl_twd"):
         assert isinstance(body["totals"][key], str)
+
+
+class _BackupFxProvider(FxRateProvider):
+    """Stands in for the FX ladder answering from its yfinance rung (ADR-0011)."""
+
+    source_id = "fx_ladder"
+
+    def get_daily_rates(self, pair: str, start: date, end: date) -> FxRateResult:
+        rates = [
+            FxRate(pair=pair, date=day, rate=Decimal("32"), as_of=NOW, source="yfinance_fx")
+            for day in (date(2024, 1, 15), date(2024, 3, 19))
+            if start <= day <= end
+        ]
+        return FxRateResult(
+            rates=rates,
+            status=DataStatus.BACKUP,
+            as_of=NOW,
+            source="yfinance_fx",
+            staleness_minutes=None,
+        )
+
+
+def test_summary_discloses_a_backup_fx_rate_where_it_is_used(store: PositionStore) -> None:
+    """ADR-0011 / 風控 2026-09-19 條件 (1): a backup-sourced rate is visible on the summary.
+
+    The US position carries ``fx.data_status == backup`` with the fixed
+    disclosure, the TWD position carries no fx block, and the book lists the
+    disclosure once.
+    """
+    _seed(store, market="US", currency="USD", symbol="AAPL")
+    _seed(store, market="TW", currency="TWD", symbol="2330")
+    shared = _FakePriceService({"AAPL": "150", "2330": "550"})
+    services: dict[Market, PriceService] = {"TW": shared, "US": shared}
+    valuator = PositionValuator(
+        market_services=services, fx_provider=_BackupFxProvider(), clock=lambda: NOW
+    )
+    client = _wire(store, valuator)
+    try:
+        body = client.get("/api/portfolio/summary").json()
+    finally:
+        _teardown()
+
+    by_symbol = {p["symbol"]: p for p in body["positions"]}
+    us_fx = by_symbol["AAPL"]["valuation"]["fx"]
+    assert us_fx["pair"] == "USDTWD"
+    assert us_fx["data_status"] == "backup"
+    assert us_fx["source"] == "yfinance_fx"
+    assert us_fx["as_of"] == "2024-03-19"
+    assert "Yahoo Finance" in us_fx["source_note"]
+    assert by_symbol["2330"]["valuation"]["fx"] is None
+    assert body["fx_disclosures"] == [us_fx["source_note"]]
+    assert by_symbol["AAPL"]["valuation"]["status"] == "ok"
+
+
+def test_summary_fx_block_says_unavailable_when_no_rate_was_found(store: PositionStore) -> None:
+    _seed(store, market="US", currency="USD", symbol="AAPL")
+    valuator = _make_valuator({"AAPL": "150"}, {})
+    client = _wire(store, valuator)
+    try:
+        body = client.get("/api/portfolio/summary").json()
+    finally:
+        _teardown()
+    fx = body["positions"][0]["valuation"]["fx"]
+    assert fx["data_status"] == "unavailable"
+    assert fx["as_of"] is None
+    assert "fx_now" in body["positions"][0]["valuation"]["missing"]
+    assert body["fx_disclosures"] == []
