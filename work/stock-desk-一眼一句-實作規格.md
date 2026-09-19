@@ -145,7 +145,6 @@ no_price／no_action 分支：不變（`InsufficientPanel`／`StaleDataAlert`／
 | `DETAILS_SUMMARY_KEY_LEVELS` | 查看計算依據 |
 | `DETAILS_SUMMARY_ENTRY` | 詳細：六條逐項明細 |
 | `DETAILS_SUMMARY_TECHNICAL` | 詳細：七張指標卡與風險量測 |
-| `DETAILS_SUMMARY_ADVICE` | 詳細：命中規則明細 |
 | `DETAILS_SUMMARY_RISK_GAUGE` | 詳細：各項判定依據、假設與資料來源 |
 | `buildTechOneLiner(n, x)` | 近 {n} 根日線，收盤 {x}。 |
 | `buildKeyLevelsOneLiner(x, n, zone)` | 收盤 {x}，位於近 {n} 根區間{zone}。 |
@@ -156,6 +155,11 @@ no_price／no_action 分支：不變（`InsufficientPanel`／`StaleDataAlert`／
 | `buildAlertsQueriedAt(t)` | 查詢時間：{t} |
 | `buildAlertsPendingCount(n)` | {n} 條待處理警示 |
 | `ALERTS_MANAGE_LINK` | 管理警示規則（既有字面沿用） |
+| `ALERTS_SCHEDULER_DISABLED` | 排程目前未啟用，警示評估暫不會更新（風控 R-A3 第四態；creative-lead B4 狀態三候選 1） |
+| `ALERTS_LOAD_ERROR_PREFIX` | 無法載入警示狀態：（風控 R-A2-4 追認） |
+
+補記（2026-09-19 審查後）：`DETAILS_SUMMARY_ADVICE` 因建議卡 summary 改用 h2＋`buildAdviceHitCount`＋XREF 而未使用，已移除。
+警示狀態列優先序：事件 >0 → C；總開關 `settings.alerts.enabled=false` → D；規則 0 → A；否則 B（N＝規則總數，非 enabled 數）。
 
 ## 6. 分工
 
