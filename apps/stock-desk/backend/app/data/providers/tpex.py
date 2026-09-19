@@ -4,16 +4,20 @@ Data source: TPEx "個股日成交資訊" query, **new site** (``www.tpex.org.tw
 One HTTP call returns one calendar month of daily bars for a single stock, same
 as before.
 
-VERIFICATION STATUS: **NOT verified against a live response in this sandbox**
--- outbound HTTPS to ``www.tpex.org.tw`` is blocked by this environment's
-egress policy (``CONNECT`` returns 403). This rewrite targets the endpoint
-below per its publicly documented shape and community write-ups (queried
-against project knowledge on 2026-09-19), because the legacy endpoint this
-adapter used until 2026-09-19 (``/web/stock/aftertrading/daily_trading_info/
-st43_result.php``) was retired in TPEx's 2024 site migration and now returns
-404 / redirects to the homepage -- see
-``work/stock-desk-一眼一句簡化-派工單.md`` §1.2 for the incident that surfaced
-this. **CEO must run the real-endpoint check before this is trusted**::
+VERIFICATION STATUS: endpoint reached from the CEO's machine on 2026-09-19
+(HTTP 200, ``stat == "ok"``, JSON) via ``scripts/verify_market_data.py``; the
+live header was ``['日 期', '成交張數', '成交仟元', '開盤', '最高', '最低',
+'收盤', '漲跌', '筆數']`` -- note the space inside "日 期" and the volume
+column in 張 (board lots). The header matching below was adjusted to that
+response; a second run confirming bars actually parse is still owed (the
+first run's report is written by the script to ``work/research/`` on the
+CEO's machine and was not committed at the time of this change). This
+sandbox cannot reach ``www.tpex.org.tw`` (``CONNECT`` returns 403), so every
+change here is verified only through the offline fixtures until the CEO
+re-runs the check. The legacy endpoint this adapter used until 2026-09-19
+(``/web/stock/aftertrading/daily_trading_info/st43_result.php``) was retired
+in TPEx's 2024 site migration -- see ``work/stock-desk-一眼一句簡化-派工單.md``
+§1.2 for the incident that surfaced this. **Re-run after any header change**::
 
     cd apps/stock-desk/backend
     uv run python ../scripts/verify_market_data.py --tpex-symbol 6147
@@ -38,7 +42,7 @@ Response shape (JSON)::
         {
           "title": "...",
           "date": "20260901",
-          "fields": ["日期", "成交仟股", "成交仟元", "開盤", "最高",
+          "fields": ["日 期", "成交張數", "成交仟元", "開盤", "最高",
                      "最低", "收盤", "漲跌", "筆數"],
           "data": [["115/09/01", "1,234", "56,789", "45.50", "46.00",
                      "45.10", "45.80", "+0.30", "321"], ...],
@@ -51,13 +55,13 @@ Response shape (JSON)::
 Notes:
   - ROC dates, comma-separated numbers and "--" no-trade placeholders are
     parsed the same way as the TWSE adapter (``app/data/providers/_util.py``).
-  - The new site's volume column has been observed labelled both "成交股數"
-    (already in shares) and "成交仟股" (in thousands of shares, i.e. needs
-    ``* 1000``). This adapter never hardcodes which one is in effect: it reads
-    ``tables[0]["fields"]`` and multiplies by 1000 only when that column's own
-    header text contains "仟" or "千". A column layout this adapter cannot
-    recognise (missing date/volume/OHLC headers) is treated as an unparseable
-    month, not guessed at.
+  - The volume column is "成交張數" on the live site (board lots, 1 張 =
+    1,000 shares); public write-ups also show "成交股數" (already in shares)
+    and "成交仟股" (thousands). This adapter never hardcodes which one is in
+    effect: it reads ``tables[0]["fields"]`` (whitespace stripped) and
+    multiplies by 1000 only when that column's own header contains "張",
+    "仟" or "千". A column layout this adapter cannot recognise (missing
+    date/volume/OHLC headers) is a skipped month, not guessed at.
   - ``stat != "ok"`` (case-insensitive) is treated as "no bars this month",
     not a hard failure, same as before.
 """
@@ -91,18 +95,30 @@ CURRENCY = "TWD"
 #: adapter looks for them. Matched by substring (not exact string, not a
 #: fixed index) so a header wording change or reordering does not silently
 #: mis-map a column -- an unrecognised layout is skipped, never guessed at.
+#: Headers are compared with all whitespace removed: the live site pads
+#: "日 期" with a space (CEO 本機實測 2026-09-19).
 _DATE_HEADER_KEYWORDS = ("日期",)
-#: Specific first (the two headers seen so far), then a bare "股" fallback for
-#: a wording change; see ``_find_column`` for why a header matched by more
-#: than one column is refused rather than resolved to the first hit.
-_VOLUME_HEADER_KEYWORDS = ("成交股數", "成交仟股", "成交千股", "股")
+#: Specific first (the headers seen so far: "成交張數" on the live site
+#: 2026-09-19, "成交股數"/"成交仟股" in the public write-ups), then bare
+#: fallbacks for a wording change; see ``_find_column`` for why a header
+#: matched by more than one column is refused rather than resolved to the
+#: first hit.
+_VOLUME_HEADER_KEYWORDS = ("成交張數", "成交股數", "成交仟股", "成交千股", "張", "股")
 _OPEN_HEADER_KEYWORDS = ("開盤",)
 _HIGH_HEADER_KEYWORDS = ("最高",)
 _LOW_HEADER_KEYWORDS = ("最低",)
 _CLOSE_HEADER_KEYWORDS = ("收盤",)
-#: Either of these appearing in the volume column's own header means the
-#: figure is reported in thousands and must be multiplied by 1000.
-_THOUSANDS_MARKERS = ("仟", "千")
+#: Any of these in the volume column's own header means the figure is in
+#: thousands of shares and must be multiplied by 1000: 仟/千 (thousand) and
+#: 張 (a board lot, 1,000 shares on the Taiwan market).
+_THOUSANDS_MARKERS = ("仟", "千", "張")
+
+
+def _normalise_header(header: Any) -> str | None:
+    """A header with all whitespace stripped, or None when it is not a string."""
+    if not isinstance(header, str):
+        return None
+    return "".join(header.split())
 
 
 @dataclass(frozen=True)
@@ -136,11 +152,10 @@ def _find_column(fields: list[Any], keywords: tuple[str, ...]) -> int | None:
     silent mis-map to a neighbouring column is exactly the failure mode the
     header-driven lookup exists to prevent (qa-reviewer 2026-09-19).
     """
+    headers = [_normalise_header(header) for header in fields]
     for keyword in keywords:
         hits = [
-            idx
-            for idx, header in enumerate(fields)
-            if isinstance(header, str) and keyword in header
+            idx for idx, header in enumerate(headers) if header is not None and keyword in header
         ]
         if len(hits) > 1:
             raise UnrecognisedLayoutError(
@@ -166,10 +181,8 @@ def _resolve_columns(fields: list[Any]) -> _ColumnMap:
         raise UnrecognisedLayoutError(f"unrecognised TPEx fields {fields!r}: missing {missing}")
     volume_idx = required["成交量"]
     assert volume_idx is not None  # narrowed by the missing-check above
-    volume_header = fields[volume_idx]
-    volume_in_thousands = isinstance(volume_header, str) and any(
-        marker in volume_header for marker in _THOUSANDS_MARKERS
-    )
+    volume_header = _normalise_header(fields[volume_idx]) or ""
+    volume_in_thousands = any(marker in volume_header for marker in _THOUSANDS_MARKERS)
     return _ColumnMap(
         date=required["日期"],  # type: ignore[arg-type]
         volume=volume_idx,

@@ -36,7 +36,7 @@ Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數�
 | --- | --- | --- |
 | `twse_stock_day_2330_202401.json` | TWSE `exchangeReport/STOCK_DAY`（個股日成交資訊，`response=json`） | 合成，依文件手工構造；含一列 `--` 無成交佔位符用於測試跳過邏輯 |
 | `tpex_trading_stock_5483_202401.json` | TPEx **新站** `www/zh-tw/afterTrading/tradingStock`（個股日成交資訊，2026-09-19 由舊站 `st43_result.php` 改版而來，見 `app/data/providers/tpex.py` 檔頭） | 合成，依 CEO 提供之公開文件 schema 手工構造；**未在沙盒中對照真實回應驗證**，`成交股數` 欄位不含仟/千字樣，測「不誤乘 1000」分支 |
-| `tpex_trading_stock_6147_202609.json` | 同上端點，2026-09-19 頎邦（6147）資料不足事故的樣本標的與月份 | 合成，依 CEO 提供之公開文件 schema 手工構造；**未在沙盒中對照真實回應驗證**；`成交仟股` 欄位含仟字樣，測「乘 1000」轉換分支 |
+| `tpex_trading_stock_6147_202609.json` | 同上端點，2026-09-19 頎邦（6147）資料不足事故的樣本標的與月份 | 表頭依 CEO 本機 2026-09-19 真實回應抄錄（`日 期` 含空白、成交量欄為 `成交張數`）；資料列為合成值；測「表頭去空白」與「張 → ×1000」轉換分支 |
 | `tpex_trading_stock_shares_unit_202609.json` | 同上端點，假設欄位標頭改回股數單位的情境 | 合成，純粹用於單元測試「欄位標頭決定是否乘 1000」的判斷邏輯，非真實回應樣本 |
 | `finmind_taiwan_stock_price_2330.json` | FinMind API v4 `dataset=TaiwanStockPrice` | 合成，依文件手工構造 |
 | `bot_fx_usd_twd_20240102.csv` | 台灣銀行牌告匯率歷史 CSV 匯出（`xrt/flcsv/0/<date>`） | 合成，依常見公開格式手工構造；欄位順序（現金/即期/遠期各買入賣出成對出現）**未經即時回應驗證**，`app/data/providers/fx.py` 因此改用「找標籤字串」而非寫死欄位索引來降低風險，找不到時明確回 `unavailable` 而非讀錯欄 |

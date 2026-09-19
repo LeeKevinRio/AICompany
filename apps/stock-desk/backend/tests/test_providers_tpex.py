@@ -36,7 +36,11 @@ def _adapter_with_handler(handler: httpx.MockTransport) -> TpexAdapter:
 
 
 def test_get_daily_bars_parses_fixture_and_converts_thousands_of_shares() -> None:
-    """The 頎邦 (6147) fixture's "成交仟股" column must be scaled by 1000."""
+    """The 頎邦 (6147) fixture mirrors the live header (CEO 本機 2026-09-19).
+
+    "日 期" carries a space and the volume column is "成交張數" (board lots,
+    1 張 = 1,000 shares): both must resolve, and the volume must be scaled.
+    """
     payload = _fixture_json("tpex_trading_stock_6147_202609.json")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -58,9 +62,22 @@ def test_get_daily_bars_parses_fixture_and_converts_thousands_of_shares() -> Non
     assert first.symbol == "6147"
     assert first.market == "TW"
     assert first.currency == "TWD"
-    # Fixture says "1,234" 仟股 -> 1,234,000 shares.
+    # Fixture says "1,234" 張 -> 1,234,000 shares.
     assert first.volume == 1_234_000
     assert str(first.close) == "45.80"
+
+
+def test_a_thousand_shares_header_is_still_scaled() -> None:
+    """The documented "成交仟股" wording (public write-ups) keeps working alongside 張."""
+    rows = [["115/09/01", "1,234", "56,789", "45.50", "46.00", "45.10", "45.80", "+0.30", "321"]]
+    fields = ["日期", "成交仟股", "成交仟元", "開盤", "最高", "最低", "收盤", "漲跌", "筆數"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_month_payload(fields, rows))
+
+    adapter = _adapter_with_handler(httpx.MockTransport(handler))
+    result = adapter.get_daily_bars("6147", date(2026, 9, 1), date(2026, 9, 30))
+    assert result.bars[0].volume == 1_234_000
 
 
 def test_get_daily_bars_does_not_scale_a_plain_shares_column() -> None:
@@ -151,7 +168,7 @@ def _month_payload(fields: list[str], rows: list[list[str]]) -> dict[str, object
     return {"stat": "ok", "tables": [{"fields": fields, "data": rows}]}
 
 
-_GOOD_FIELDS = ["日期", "成交仟股", "成交仟元", "開盤", "最高", "最低", "收盤", "漲跌", "筆數"]
+_GOOD_FIELDS = ["日 期", "成交張數", "成交仟元", "開盤", "最高", "最低", "收盤", "漲跌", "筆數"]
 
 
 def test_an_unrecognised_layout_in_one_month_marks_the_answer_incomplete() -> None:
