@@ -17,6 +17,28 @@ body {
 }
 
 /* ============================================================
+   Print: force-expand the page-footer disclosures block.
+   風控 F-3（CEO 第三次裁定 2026-09-19 頁尾收成 <details> 的放行條件，
+   work/stock-desk-一眼一句簡化-派工單.md §5.2）: a printed or
+   saved-as-PDF page must carry every disclosure sentence even though
+   the block is collapsed on screen. Scoped by class so the section-level
+   <details> elsewhere keep their on-screen state when printed.
+   `::details-content` covers Chromium ≥131 / Firefox ≥138, where the
+   closed content lives in a pseudo-element with content-visibility:
+   hidden; the child selector covers older engines.
+   ============================================================ */
+@media print {
+  details.print-expand:not([open]) > :not(summary) {
+    display: block;
+  }
+  details.print-expand::details-content {
+    content-visibility: visible;
+    display: block;
+    height: auto;
+  }
+}
+
+/* ============================================================
    Dark-theme scrollbar — applies globally to every scrollable
    element (page body, `overflow-x-auto` table wrappers, modals).
    Design rationale: work/stock-desk-視覺規範-捲軸與表格.md

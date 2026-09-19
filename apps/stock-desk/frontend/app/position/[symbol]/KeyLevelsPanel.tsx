@@ -20,7 +20,8 @@ import { RangeGauge } from "./RangeGauge";
  * 視為漂移須重送風控。`componentWordingScan.test.ts` 逐字釘住＋禁用詞掃描。
  *
  * 呈現規範：揭露句與計算依據依 CEO 裁定 2026-09-06（兩次）下沉至頁尾揭露區
- * （`PageFooterDisclosures`，L1／L2：text-xs／neutral-400、常駐不摺疊），本面板只留
+ * （`PageFooterDisclosures`，L1：text-xs／neutral-400；L2 摺疊條款經 CEO 第三次裁定 2026-09-19
+ * 推翻，頁尾整區收成 `<details>`，派工單 §5），本面板只留
  * 大字標籤與一句指引句；S1 採納：大字不帶紅綠語意色。CEO 第二次裁定
  * （2026-09-19 深夜，`work/stock-desk-一眼一句簡化-派工單.md` §4）：
  * `KEY_LEVELS_HEADER_UNADJUSTED_NOTICE`（R7 未還原權值句）與停損大字下的 R6

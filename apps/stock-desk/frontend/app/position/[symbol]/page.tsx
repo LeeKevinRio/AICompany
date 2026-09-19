@@ -576,7 +576,7 @@ export default function PositionDetailPage() {
         </div>
       )}
 
-      {/* 頁尾揭露區：頁面最後一個節點（風控 L6-5），常駐不摺疊。 */}
+      {/* 頁尾揭露區：頁面最後一個節點（風控 L6-5）；CEO 第三次裁定 2026-09-19 收成 <details>（派工單 §5）。 */}
       <PageFooterDisclosures groups={footerGroups} />
     </main>
   );

@@ -36,6 +36,7 @@ import {
   TRADINGVIEW_CHART_INVALID_SYMBOL_MESSAGE,
 } from "../../position/[symbol]/TradingViewChartPanel";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
+import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
 import {
   ADVICE_CARD_XREF_TO_SUMMARY,
   KEY_LEVELS_TAGLINE,
@@ -1238,8 +1239,67 @@ describe("揭露下沉頁尾 守門", () => {
     expect(footerSrc).toMatch(/text-xs text-neutral-400/);
   });
 
-  it("L2：頁尾區不得摺疊、截斷、延後掛載", () => {
-    expect(footerSrc).not.toMatch(/<details|<summary|line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|\bhidden\b|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
+  it("L0（風控 F-7，2026-09-19）：app/layout.tsx 全站免責句自頁尾收成 details 起為全頁唯一常駐免責——不得移除、摺疊、下調字級或對比、不得移出頁面最後節點", () => {
+    const layoutSrc = read("../../layout.tsx");
+    const sentence = "本工具為研究與教育用途，非投資建議";
+    const idx = layoutSrc.indexOf(sentence);
+    expect(idx).toBeGreaterThan(-1);
+    expect(layoutSrc).not.toMatch(/<details|<summary|line-clamp|truncate|sr-only|\bhidden\b/);
+    // 所在 <footer> 的 class 不得低於 text-sm／neutral-400。
+    const footerTag = layoutSrc.slice(layoutSrc.lastIndexOf("<footer", idx), idx);
+    expect(footerTag).toMatch(/text-sm/);
+    expect(footerTag).toMatch(/text-neutral-400/);
+    expect(footerTag).not.toMatch(/text-xs|text-neutral-(5|6|7)00/);
+    // 頁面最後節點：<footer> 之後直到 </Providers> 只剩 </footer>。
+    const afterSentence = layoutSrc.slice(idx + sentence.length, layoutSrc.indexOf("</Providers>"));
+    expect(afterSentence.replace(/\s/g, "")).toBe("</footer>");
+  });
+
+  it("F-3（風控 2026-09-19 放行條件）：頁尾 <details> 掛 print-expand，globals.css 於 @media print 強制展開", () => {
+    expect(footerSrc).toMatch(/<details className="[^"]*\bprint-expand\b[^"]*"/);
+    const css = read("../../globals.css");
+    const printBlock = css.slice(css.indexOf("@media print"));
+    expect(printBlock).toMatch(/details\.print-expand:not\(\[open\]\) > :not\(summary\)\s*\{\s*display: block;/);
+    expect(printBlock).toMatch(/details\.print-expand::details-content\s*\{[^}]*content-visibility: visible;/);
+  });
+
+  it("L2'（CEO 第三次裁定 2026-09-19「頁尾那段也收成詳細」，派工單 §5）：頁尾區收成單一 <details>，summary 為既有標題常數；仍不得截斷、延後掛載", () => {
+    // 摺疊本身獲 CEO 書面裁定放行（推翻 2026-09-06「常駐不摺疊」與風控 L2 摺疊條款；風控否決紀錄見派工單 §5.2），
+    // 但只允許「一層 <details>、summary 即標題」；展開後內容仍須完整——截斷／延後掛載／黏附等構造照舊禁止。
+    // `[&::-webkit-details-marker]:hidden` 與 chevron 的 `aria-hidden="true"` 只藏原生三角／裝飾（各區塊 <details> 共用的同一 idiom），
+    // 不藏內容，先剔除再掃 `hidden`。qa 2026-09-19（low）：剔除要有界限——`aria-hidden` 只准出現在 <summary> 的 chevron 上、恰一次，
+    // 否則有人把揭露文字對 AT 隱藏也會被一併吃掉而逃過守門。
+    const summaryOnly = footerSrc.match(/<summary className=[\s\S]*?<\/summary>/)?.[0] ?? "";
+    expect((footerSrc.match(/aria-hidden/g) ?? []).length).toBe(1);
+    expect((summaryOnly.match(/aria-hidden="true"/g) ?? []).length).toBe(1);
+    const scanned = footerSrc.replaceAll("[&::-webkit-details-marker]:hidden", "").replace('aria-hidden="true"', "");
+    expect(scanned).not.toMatch(/line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|\bhidden\b|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
+    // 只數 JSX 標籤（註解裡的 `<details>` 反引號提及不算）。
+    expect((footerSrc.match(/<details className=/g) ?? []).length).toBe(1);
+    expect(footerSrc).toMatch(/<summary className=[^>]*>[\s\S]*?\{PAGE_FOOTER_DISCLOSURES_TITLE\}<\/h2>[\s\S]*?<\/summary>/);
+    // summary 不得另造入口字：<summary> 內唯一文字節點是標題常數（chevron 為 aria-hidden 裝飾）。
+    const summaryBlock = footerSrc.match(/<summary className=[\s\S]*?<\/summary>/)?.[0] ?? "";
+    expect(summaryBlock.replace(/<[^>]+>|\s|▸/g, "")).toBe("{PAGE_FOOTER_DISCLOSURES_TITLE}");
+    // 導語、分組、清單全部在 <details> 內（摺疊即整區摺疊，不留半截常駐）。
+    const detailsOpen = footerSrc.indexOf("<details className=");
+    const detailsClose = footerSrc.indexOf("</details>");
+    for (const needle of ["{PAGE_FOOTER_DISCLOSURES_INTRO}", "visible.map((group) =>", "<ul"]) {
+      const idx = footerSrc.indexOf(needle);
+      expect(idx, `${needle} 應在 <details> 內`).toBeGreaterThan(detailsOpen);
+      expect(idx).toBeLessThan(detailsClose);
+    }
+    // DOM：預設收合（無 open 屬性），展開內容仍逐字渲染。
+    const html = renderToStaticMarkup(
+      createElement(PageFooterDisclosures, {
+        groups: [{ title: "技術分析", items: ["句一。", { formula: ["a = b"], qualifier: "限定語。" }] }],
+      }),
+    );
+    expect(html).toContain("<details");
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+    expect(html).toContain(`<summary`);
+    expect(html).toContain(PAGE_FOOTER_DISCLOSURES_TITLE);
+    expect(html).toContain(PAGE_FOOTER_DISCLOSURES_INTRO);
+    for (const text of ["句一。", "a = b", "限定語。"]) expect(html).toContain(text);
   });
 
   it("L3／L4：分組順序寫死為頁面順序，組名以既有標題常數 import 取得", () => {
