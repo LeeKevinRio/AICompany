@@ -23,7 +23,12 @@ import { buildSummaryFooterItems } from "../../lib/operationSummary";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { ADVICE_CARD_XREF_TO_SUMMARY, PAGE_LEVEL_DISCLOSURE_SECTION_TITLE } from "../../lib/sectionTaglines";
 import { ADVICE_CARD_TITLE, LEVERAGE_CHAPTER_TITLE, OPERATION_SUMMARY_TITLE, TECHNICAL_ANALYSIS_TITLE } from "../../lib/sectionTitles";
-import { DETAILS_SUMMARY_TECHNICAL, buildAdviceHitCount, buildTechOneLiner } from "../../lib/oneLinerWording";
+import {
+  buildDataAsOfBadge,
+  DETAILS_SUMMARY_TECHNICAL,
+  buildAdviceHitCount,
+  buildTechOneLiner,
+} from "../../lib/oneLinerWording";
 import type { AnchorSource } from "../../lib/keyLevels";
 import type { PositionsResponse } from "../../lib/types";
 import { ErrorPanel } from "../../components/ErrorPanel";
@@ -249,32 +254,53 @@ export default function PositionDetailPage() {
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
-          {bars.isSuccess && (
-            <span className="flex flex-wrap items-center gap-1 text-xs text-neutral-500">
-              資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
-              <DataMetaStatusBadge
-                status={bars.data.data.status}
-                stalenessMinutes={bars.data.data.staleness_minutes}
-                isWithinTtl={bars.data.data.is_within_ttl}
-                lastBarDate={bars.data.data.last_bar_date}
-                reason={bars.data.data.reason}
-              />
-            </span>
-          )}
+          {/*
+            CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料時間：…｜
+            來源：…」前綴文字改印在下方「詳細」的第一行（字面不動）。
+
+            wave3（派工單 §4.3 第 5／9 點）：bars／signals 兩顆徽章合併同一列
+            （R-A1 只要求 signals 徽章本體留在主視圖，未要求另佔一行）；徽章本
+            身換成「資料截至 {MM-DD}」（取 bars 的 last_bar_date，本區塊唯一的
+            「資料截至」徽章）＋各自的 compact 狀態 chip，前綴「日線」「指標」
+            沿用 `buildDataTimesLine` 既有字面（entryObservationWording.ts）的
+            同一組子字串，不新造。完整版徽章與「資料時間：…｜來源：…」前綴改
+            印在下方「詳細」第一、二行。
+          */}
+          <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
+            {bars.isSuccess && buildDataAsOfBadge(bars.data.data.last_bar_date) !== null && (
+              <span className="rounded border border-neutral-700 px-1.5 py-0.5 text-neutral-400">
+                {buildDataAsOfBadge(bars.data.data.last_bar_date)}
+              </span>
+            )}
+            {bars.isSuccess && (
+              <span className="flex items-center gap-1">
+                日線
+                <DataMetaStatusBadge
+                  status={bars.data.data.status}
+                  stalenessMinutes={bars.data.data.staleness_minutes}
+                  isWithinTtl={bars.data.data.is_within_ttl}
+                  lastBarDate={bars.data.data.last_bar_date}
+                  reason={bars.data.data.reason}
+                  compact
+                />
+              </span>
+            )}
+            {/* R-A1（風控逐字審 R5 破線修正）: signals 徽章「本體」（compact）留在主視圖，不得收進 <details>。 */}
+            {signals.isSuccess && (
+              <span className="flex items-center gap-1">
+                指標
+                <DataMetaStatusBadge
+                  status={signals.data.data.status}
+                  stalenessMinutes={signals.data.data.staleness_minutes}
+                  isWithinTtl={signals.data.data.is_within_ttl}
+                  lastBarDate={signals.data.data.last_bar_date}
+                  reason={signals.data.data.reason}
+                  compact
+                />
+              </span>
+            )}
+          </span>
         </div>
-        {/* R-A1（風控逐字審 R5 破線修正）: signals 徽章列移回主視圖，作為 h2 徽章列第二段——不得收進 <details>。 */}
-        {signals.isSuccess && (
-          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
-            資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
-            <DataMetaStatusBadge
-              status={signals.data.data.status}
-              stalenessMinutes={signals.data.data.staleness_minutes}
-              isWithinTtl={signals.data.data.is_within_ttl}
-              lastBarDate={signals.data.data.last_bar_date}
-              reason={signals.data.data.reason}
-            />
-          </div>
-        )}
 
         {/*
           CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView 為預設頁籤，
@@ -382,6 +408,36 @@ export default function PositionDetailPage() {
             {DETAILS_SUMMARY_TECHNICAL}
           </summary>
           <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+            {/*
+              CEO 第二次裁定 2026-09-19：兩段「資料時間：…｜來源：…」前綴文字，
+              字面與主視圖徽章列原本一致。wave3（派工單 §4.3 追加第 9 點）：
+              完整版徽章（非 compact，含分鐘數／括號句／reason）同一行接在後
+              面——主視圖只留 compact 版，完整版一字不刪，只搬到這裡。
+            */}
+            {bars.isSuccess && (
+              <p>
+                資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
+                <DataMetaStatusBadge
+                  status={bars.data.data.status}
+                  stalenessMinutes={bars.data.data.staleness_minutes}
+                  isWithinTtl={bars.data.data.is_within_ttl}
+                  lastBarDate={bars.data.data.last_bar_date}
+                  reason={bars.data.data.reason}
+                />
+              </p>
+            )}
+            {signals.isSuccess && (
+              <p>
+                資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
+                <DataMetaStatusBadge
+                  status={signals.data.data.status}
+                  stalenessMinutes={signals.data.data.staleness_minutes}
+                  isWithinTtl={signals.data.data.is_within_ttl}
+                  lastBarDate={signals.data.data.last_bar_date}
+                  reason={signals.data.data.reason}
+                />
+              </p>
+            )}
             {/* signals 徽章列／Error／Insufficient 已移回主視圖（R-A1）；詳細只留 pending skeleton 與完整指標卡。 */}
             {signals.isPending && <SkeletonBlock className="h-40 w-full" />}
             {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
@@ -476,10 +532,10 @@ export default function PositionDetailPage() {
                 <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
                 <span className="text-sm text-neutral-400">{buildAdviceHitCount(advice.data.advice.matched_rules.length)}</span>
               </span>
-              {/* R9: the cross-reference sentence lives here, on the summary's own second line — `AdviceCardView` no longer repeats it inside. */}
-              <span className="text-xs text-neutral-400">{ADVICE_CARD_XREF_TO_SUMMARY}</span>
             </summary>
             <div className="space-y-3 border-t border-neutral-800 p-5">
+              {/* CEO 第二次裁定 2026-09-19：R9 交叉引用句從 summary 第二行移進展開內容第一行，字面不動。 */}
+              <p className="text-xs text-neutral-400">{ADVICE_CARD_XREF_TO_SUMMARY}</p>
               <p className="text-xs text-neutral-500">
                 {advice.data.held
                   ? `以目前持倉評估（部位 ID：${advice.data.position_ids.join("、")}）。`

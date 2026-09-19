@@ -38,6 +38,20 @@ export function buildAdviceHitCount(n: number): string {
   return `命中 ${n} 條`;
 }
 
+/**
+ * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3 第 5 點）：取代逐字的
+ * 「資料時間：…｜來源：…」主視圖前綴（該前綴已於上一批移進「詳細」）——同一
+ * 年份只印月-日，跨年份才印完整西元年，兩者共用同一句式「資料截至 {日期}」。
+ * `lastBarDate` 為 `null`（尚無日線）時不渲染任何徽章。
+ */
+export function buildDataAsOfBadge(lastBarDate: string | null): string | null {
+  if (lastBarDate === null) return null;
+  const year = lastBarDate.slice(0, 4);
+  const currentYear = String(new Date().getFullYear());
+  const monthDay = lastBarDate.slice(5);
+  return year === currentYear ? `資料截至 ${monthDay}` : `資料截至 ${lastBarDate}`;
+}
+
 /* ============================================================================
  * 首頁常數（frontend-engineer B，實作規格 §3、§6）：風險儀表「詳細」入口字、
  * 警示狀態列三態。字面同樣待風控逐字審，落地時一字不改。
@@ -88,3 +102,11 @@ export const ALERTS_SCHEDULER_DISABLED = "排程目前未啟用，警示評估�
 
 /** 警示狀態列查詢失敗前綴（`AlertStatusStrip.tsx`）。 */
 export const ALERTS_LOAD_ERROR_PREFIX = "無法載入警示狀態：";
+
+/**
+ * 第二波（派工單 §4.3，風控逐字審核可）：匯率貢獻卡標題旁的常駐徽章——任一
+ * 部位 `valuation.fx?.data_status === "backup"` 即顯示，不設門檻、不得
+ * hover-only。樣式沿用 `DataStatusBadge`／`FxStatusBadge` 的 backup 配色
+ * （`bg-amber-900/40 text-amber-300`），`SummaryCards.tsx` 消費。
+ */
+export const FX_BACKUP_BADGE = "備援匯率";

@@ -183,10 +183,12 @@ import {
   DETAILS_SUMMARY_OPERATION,
   DETAILS_SUMMARY_RISK_GAUGE,
   DETAILS_SUMMARY_TECHNICAL,
+  FX_BACKUP_BADGE,
   buildAdviceHitCount,
   buildAlertsPendingCount,
   buildAlertsQueriedAt,
   buildAlertsRulesNoEvents,
+  buildDataAsOfBadge,
   buildKeyLevelsOneLiner,
   buildTechOneLiner,
 } from "../oneLinerWording";
@@ -958,7 +960,8 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
       fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)),
       "utf8",
     );
-    // 一眼一句 §2.6：XREF 改由 page.tsx 的 <details> summary 第二行承載，AdviceCardView 本身不再重複渲染。
+    // 一眼一句 §2.6：XREF 改由 page.tsx 的 <details> 承載（CEO 第二次裁定
+    // 2026-09-19 後：展開內容第一行，非 summary），AdviceCardView 本身不再重複渲染。
     expect(src).not.toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
     const pageSrc = readFileSync(fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)), "utf8");
     expect(pageSrc).toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
@@ -1403,6 +1406,206 @@ describe("揭露下沉頁尾 守門", () => {
     expect((footerSrc.match(/className="[^"]*font-mono/g) ?? []).length).toBe(1);
   });
 });
+
+/**
+ * CEO 第二次裁定（2026-09-19 深夜，`work/stock-desk-一眼一句簡化-派工單.md` §4，
+ * dev-lead 派工「純搬移」）：主視圖不放任何免責、教育用途、解碼／限定句、指引
+ * 句——這批只搬移出現層級，字面一字不改。以下用原始碼位置比對取代「常駐不得
+ * 摺疊」的舊斷言：每個被搬移的字面，其在檔案中第一次出現的位置都必須晚於
+ * （深於）該區塊 `<details>` 的開啟位置，證明它只存在於 details 裡；沒有任何
+ * 字面被刪除，只有出現層級改變。
+ */
+describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 <details>", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const summarySrc = read("../../position/[symbol]/OperationSummaryPanel.tsx");
+  const keyLevelsSrc = read("../../position/[symbol]/KeyLevelsPanel.tsx");
+  const entrySrc = read("../../position/[symbol]/EntryObservationPanel.tsx");
+  const pageSrc = read("../../position/[symbol]/page.tsx");
+
+  it("操作摘要 candidate 分支（wave3，派工單 §4.3 第 2 點）：disclaimer／confidenceMeaning／反面論點／資料時間前綴／CANDIDATE_EVIDENCE_NOTICE 只出現在 <details> 之後；主視圖改留 NOT_HELD_BADGE，且徽章與原句用 showBadge 三元運算式互斥", () => {
+    const start = summarySrc.indexOf('if (model.kind === "candidate")');
+    const end = summarySrc.indexOf('// model.kind === "held"');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const region = summarySrc.slice(start, end);
+    // 用實際 JSX 標籤（含 className）比對，避免比對到上方 doc comment 裡提到的
+    // 「`<details>`」純文字 reference（同一子字串，但不是真正的標籤）。
+    const detailsIdx = region.indexOf('<details className="group mt-1">');
+    expect(detailsIdx).toBeGreaterThan(-1);
+    for (const needle of [
+      "<InlineDisclaimer text={model.required.disclaimer} />",
+      "{model.required.confidenceMeaning}",
+      "反面論點",
+      "<DataMetaPrefixLine response={response} />",
+    ]) {
+      const idx = region.indexOf(needle);
+      expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
+    }
+    // wave3：CANDIDATE_EVIDENCE_NOTICE 這句字面在檔案中出現兩處——一處是
+    // `showBadge ? 徽章 : 原句` 三元運算式的 else 分支（防呆用，主視圖區塊內，
+    // 但 `showBadge` 恆為 true 所以永遠不會實際渲染到），另一處才是真正常駐
+    // 渲染的 `<details>` 版本。用「出現次數」而非「第一次出現位置」驗證，
+    // 避免誤把防呆用的 else 分支誤判為「這句仍在主視圖顯示」。
+    const evidenceOccurrences = region.split("{model.required.candidateEvidenceNotice}").length - 1;
+    expect(evidenceOccurrences).toBe(2);
+    const lastEvidenceIdx = region.lastIndexOf("{model.required.candidateEvidenceNotice}");
+    expect(lastEvidenceIdx).toBeGreaterThan(detailsIdx);
+
+    // wave3：NOT_HELD_BADGE 徽章常駐主視圖（<details> 之前），且與 else 分支的
+    // candidateEvidenceNotice 是同一個三元運算式的兩側（`showBadge ? (badge) : (notice)`）。
+    const mainRegion = region.slice(0, detailsIdx);
+    expect(mainRegion).toContain("const showBadge = true");
+    expect(mainRegion).toMatch(/showBadge\s*\?\s*\(/);
+    const ternaryIdx = mainRegion.search(/showBadge\s*\?\s*\(/);
+    const badgeIdx = mainRegion.indexOf("{NOT_HELD_BADGE}", ternaryIdx);
+    const elseIdx = mainRegion.indexOf(") : (", ternaryIdx);
+    const noticeIdx = mainRegion.indexOf("{model.required.candidateEvidenceNotice}", ternaryIdx);
+    expect(badgeIdx, "NOT_HELD_BADGE 應在三元運算式的 true 分支").toBeGreaterThan(ternaryIdx);
+    expect(badgeIdx).toBeLessThan(elseIdx);
+    expect(noticeIdx, "candidateEvidenceNotice 應在三元運算式的 else 分支（徽章不渲染時的回退）").toBeGreaterThan(elseIdx);
+  });
+
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料時間前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、role=alert、StaleDataAlert", () => {
+    const start = summarySrc.indexOf('// model.kind === "held"');
+    const end = summarySrc.indexOf("function DataMetaPrefixLine");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const region = summarySrc.slice(start, end);
+    const detailsIdx = region.indexOf('<details className="group mt-1">');
+    expect(detailsIdx).toBeGreaterThan(-1);
+    for (const needle of [
+      "<InlineDisclaimer text={model.required.disclaimer} />",
+      "{model.required.confidenceMeaning}",
+      "反面論點",
+      "——{model.topMatchedRule.explanation}",
+      "<DataMetaPrefixLine response={response} />",
+      "{buildLegacyAttributedHeadline(model.action)}",
+    ]) {
+      const idx = region.indexOf(needle);
+      expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
+    }
+    const mainRegion = region.slice(0, detailsIdx);
+    expect(mainRegion).toContain("{model.attributedHeadline}");
+    expect(mainRegion).toContain("{RULE_SOURCE_CHIP}");
+    expect(mainRegion).toContain("{CONFIDENCE_PREFIX}");
+    expect(mainRegion).toContain("{summaryConfidenceLabel(model.required.confidence)}");
+    expect(mainRegion).toContain("{RULE_BASIS_PREFIX}");
+    expect(mainRegion).toContain("{model.topMatchedRule.name}");
+    expect(mainRegion).not.toContain("{model.topMatchedRule.explanation}");
+    expect(mainRegion).not.toContain("規則評估：");
+    expect(mainRegion).toContain('role="alert"');
+    expect(mainRegion).toContain("<StaleDataAlert");
+  });
+
+  it("no_price／no_action 分支（wave3 改版）：disclaimer 整行移除（全站頁尾 app/layout.tsx 已有一句常駐免責），資料時間前綴與舊字面收進最小 <details>；no_action 主視圖改為大字「資料不足」＋常駐小字 INSUFFICIENT_DATA_NO_EVALUATION，不掛 RULE_SOURCE_CHIP", () => {
+    const noPriceStart = summarySrc.indexOf('if (model.kind === "no_price")');
+    const noActionStart = summarySrc.indexOf('if (model.kind === "no_action")');
+    const candidateStart = summarySrc.indexOf('if (model.kind === "candidate")');
+    expect(noPriceStart).toBeGreaterThan(-1);
+    expect(noActionStart).toBeGreaterThan(noPriceStart);
+    expect(candidateStart).toBeGreaterThan(noActionStart);
+    const noPriceRegion = summarySrc.slice(noPriceStart, noActionStart);
+    const noActionRegion = summarySrc.slice(noActionStart, candidateStart);
+    for (const region of [noPriceRegion, noActionRegion]) {
+      expect(region).not.toContain("InlineDisclaimer");
+      expect(region).toContain("<DetailsDataMetaOnly response={response}");
+    }
+    expect(noActionRegion).toContain("{model.reason}");
+    expect(noActionRegion).toContain("{INSUFFICIENT_DATA_NO_EVALUATION}");
+    expect(noActionRegion).not.toContain("RULE_SOURCE_CHIP");
+    // 舊字面（HELD_ACTION_LABELS_LEGACY.insufficient_data）搬進這個分支自己的
+    // <details>（children），不是刪除。
+    const detailsIdx = noActionRegion.indexOf("<DetailsDataMetaOnly response={response}");
+    const legacyIdx = noActionRegion.indexOf("{HELD_ACTION_LABELS_LEGACY.insufficient_data}");
+    expect(legacyIdx).toBeGreaterThan(detailsIdx);
+  });
+
+  it("關鍵價位參考：R7 未還原權值句與 R6 停損兩句只出現在 <details> 之後，主視圖仍留兩個大字", () => {
+    const compStart = keyLevelsSrc.indexOf("export function KeyLevelsPanel(");
+    expect(compStart).toBeGreaterThan(-1);
+    // 用實際 JSX 標籤（含 className）比對，避免比對到上方 doc comment 裡提到的
+    // 「`<details>`」純文字references（同一子字串，但不是真正的標籤）。
+    const detailsIdx = keyLevelsSrc.indexOf('<details className="group mt-3">', compStart);
+    expect(detailsIdx).toBeGreaterThan(-1);
+    for (const needle of [
+      "{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}",
+      "{anchorBasisSentence(anchorSource, levels)}",
+      "KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE",
+    ]) {
+      const idx = keyLevelsSrc.indexOf(needle, compStart);
+      expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
+    }
+    const mainRegion = keyLevelsSrc.slice(compStart, detailsIdx);
+    expect(mainRegion).toContain("{KEY_LEVELS_STOP_CARD_TITLE}");
+    expect(mainRegion).toContain("{fmt(levels.stopSuggested)}");
+    expect(mainRegion).toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
+    expect(mainRegion).toContain("{fmt(levels.target2R)}");
+  });
+
+  it("六項觀察條件：E-1 與資料時間句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
+    const compStart = entrySrc.indexOf("export function EntryObservationPanel(");
+    expect(compStart).toBeGreaterThan(-1);
+    const detailsIdx = entrySrc.indexOf('<details className="group mt-3">', compStart);
+    expect(detailsIdx).toBeGreaterThan(-1);
+    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{buildDataTimesLine("]) {
+      const idx = entrySrc.indexOf(needle, compStart);
+      expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
+    }
+    const mainRegion = entrySrc.slice(compStart, detailsIdx);
+    expect(mainRegion).toContain("{ENTRY_PANEL_TITLE}");
+    expect(mainRegion).toContain("{buildConditionCount(");
+    expect(mainRegion).toContain("STATUS_GLYPH[c.status]");
+  });
+
+  it("技術分析（wave3，派工單 §4.3 第 5／9 點）：bars／signals 的「資料時間：…｜來源：…」前綴與完整版徽章只出現在 <details> 內；主視圖合併同一列，只留「資料截至」徽章＋compact 狀態 chip（「日線」「指標」前綴沿用既有字面）", () => {
+    const technicalDetailsIdx = pageSrc.indexOf("{DETAILS_SUMMARY_TECHNICAL}");
+    expect(technicalDetailsIdx).toBeGreaterThan(-1);
+    const barsPrefix = "資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}";
+    const signalsPrefix = "資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}";
+    expect(pageSrc.indexOf(barsPrefix)).toBeGreaterThan(technicalDetailsIdx);
+    expect(pageSrc.indexOf(signalsPrefix)).toBeGreaterThan(technicalDetailsIdx);
+    const mainRegion = pageSrc.slice(pageSrc.indexOf("{TECHNICAL_ANALYSIS_TITLE}</h2>"), technicalDetailsIdx);
+    expect(mainRegion).not.toContain(barsPrefix);
+    expect(mainRegion).not.toContain(signalsPrefix);
+    // 主視圖：資料截至徽章＋兩顆 compact chip，「日線」「指標」同一列。
+    expect(mainRegion).toContain("{buildDataAsOfBadge(bars.data.data.last_bar_date)}");
+    expect(mainRegion).toContain("日線");
+    expect(mainRegion).toContain("指標");
+    // 主視圖兩顆徽章都帶 `compact`（逐一檢查每個標籤本身的屬性，而非整段文字
+    // ——doc comment 裡也會提到這個詞，整段字串比對會誤判）。
+    const mainBadgeTagStarts = [...mainRegion.matchAll(/<DataMetaStatusBadge/g)].map((m) => m.index ?? -1);
+    expect(mainBadgeTagStarts.length).toBe(2);
+    for (const start of mainBadgeTagStarts) {
+      const tagEnd = mainRegion.indexOf("/>", start);
+      expect(mainRegion.slice(start, tagEnd)).toMatch(/\bcompact\b/);
+    }
+    // 完整版（非 compact）徽章緊接在詳細內的前綴文字後面，同一行、同一個 <p>。
+    const detailsRegion = pageSrc.slice(technicalDetailsIdx);
+    const detailsEndIdx = detailsRegion.indexOf("</details>");
+    const detailsBody = detailsRegion.slice(0, detailsEndIdx);
+    expect(detailsBody.indexOf(barsPrefix)).toBeGreaterThan(-1);
+    expect(detailsBody.indexOf(signalsPrefix)).toBeGreaterThan(-1);
+    // 兩顆完整版徽章都不帶 compact（逐一檢查每個 <DataMetaStatusBadge ... />
+    // 標籤本身的屬性，而非整段文字——doc comment 裡也會提到「compact」這個
+    // 詞，用整段字串比對會誤判）。
+    const badgeTagStarts = [...detailsBody.matchAll(/<DataMetaStatusBadge/g)].map((m) => m.index ?? -1);
+    expect(badgeTagStarts.length).toBe(2);
+    for (const start of badgeTagStarts) {
+      const tagEnd = detailsBody.indexOf("/>", start);
+      expect(detailsBody.slice(start, tagEnd)).not.toMatch(/\bcompact\b/);
+    }
+  });
+
+  it("建議卡：R9 XREF 句從 summary 第二行移進展開內容第一行", () => {
+    const adviceDetailsStart = pageSrc.indexOf('<details className="group rounded-lg border border-neutral-800">');
+    expect(adviceDetailsStart).toBeGreaterThan(-1);
+    const adviceRegion = pageSrc.slice(adviceDetailsStart, pageSrc.indexOf("</section>", adviceDetailsStart));
+    const summaryEndIdx = adviceRegion.indexOf("</summary>");
+    const xrefIdx = adviceRegion.indexOf("{ADVICE_CARD_XREF_TO_SUMMARY}");
+    expect(summaryEndIdx).toBeGreaterThan(-1);
+    expect(xrefIdx).toBeGreaterThan(summaryEndIdx);
+  });
+});
 /**
  * 六項觀察條件（CEO 2026-09-06；PRD `work/stock-desk-進場觀察條件-PRD.md` §4b；
  * 風控預審 R-01～R-22 → 守門 T1～T14）。
@@ -1523,7 +1726,7 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(buildConditionCount(3, 1)).toBe("6 條中成立 3 條，其中 1 條無法判定。");
   });
 
-  it("T4／T7／T8／T13：三重編碼、E-1～E-4（分佈主視圖／詳細，一眼一句 §2.5）、不 import 結論元素、計數字級 ≤ text-lg", () => {
+  it("T4／T7／T8／T13：三重編碼、E-1～E-4（CEO 第二次裁定 2026-09-19 後全數收進詳細）、不 import 結論元素、計數字級 ≤ text-lg", () => {
     expect(panelSrc).toContain("aria-label={`${conditionLabel(c.id, rangeBarCount)}：${observedText(c)}，${ENTRY_STATUS_LABELS[c.status]}`}");
     expect(panelSrc).toContain("{STATUS_GLYPH[c.status]}");
     expect(panelSrc).toContain("{ENTRY_STATUS_LABELS[c.status]}");
@@ -1534,9 +1737,11 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataTimesLine("]) {
       expect(panelSrc).toContain(needle);
     }
-    // 一眼一句 §2.5: E-1 與 (!synchronized 時的) 資料時間句常駐主視圖；六列明細、
-    // E-2/E-3 與 (synchronized 時的) 資料時間句改收進 `<details>`（六項觀察條件唯一
-    // 允許的摺疊區塊，summary＝`DETAILS_SUMMARY_ENTRY`）——不再是全面禁止 details 的區塊。
+    // CEO 第二次裁定 2026-09-19（推翻一眼一句 §2.5 的「E-1／資料時間句常駐主視圖」
+    // 舊裁定）：E-1、E-2、E-3、資料時間句（不論是否 synchronized）全數收進
+    // `<details>`（六項觀察條件唯一允許的摺疊區塊，summary＝`DETAILS_SUMMARY_ENTRY`）；
+    // 主視圖只留 h2、計數句、六圓點。精確的「只出現在 details 內」位置比對見
+    // 「CEO 第二次裁定 wave2」describe block。
     expect(panelSrc).toContain("<details");
     expect(panelSrc).toContain("<summary");
     // `[&::-webkit-details-marker]:hidden` is the same `<details>`-chevron idiom every
@@ -1608,8 +1813,10 @@ describe("六項觀察條件 守門（T1～T14）", () => {
  * 風控逐字審 R-A2（`work/stock-desk-一眼一句-實作規格.md` §5 全數 APPROVE 後
  * required）：`oneLinerWording.ts` header 自稱「逐字釘住」，但落地當下沒有任何
  * 斷言比對其字面——本節補齊：該檔全部 exported 常數與 builder 輸出樣板逐字
- * `toBe`；`RiskGauge.tsx` 的 H4 頂部說明句全文與 H5 summary 半句只加測試、不
- * 改元件（B 的檔案）；`AlertStatusStrip.tsx` 的查詢失敗前綴同時釘常數與 wiring。
+ * `toBe`；`RiskGauge.tsx` 的 H4 頂部說明句全文與 H5 summary 半句原本只加測試、
+ * 不改元件，但 CEO 2026-09-19 第二次裁定（派工單 §4.1）推翻 H4 常駐後，
+ * wave2-B 把這句搬進 details——本節斷言同步改為「字面仍在、但落在 details
+ * 內」；`AlertStatusStrip.tsx` 的查詢失敗前綴同時釘常數與 wiring。
  * qa 追加 low：`DETAILS_SUMMARY_ADVICE` 全專案未被引用，已直接自
  * `oneLinerWording.ts` 移除（規格 §5 清單同步由 dev-lead 更新），不留死碼。
  */
@@ -1631,6 +1838,17 @@ describe("oneLinerWording.ts 逐字釘住（風控逐字審 R-A2）", () => {
     expect(buildAdviceHitCount(3)).toBe("命中 3 條");
   });
 
+  /**
+   * wave3（派工單 §4.3 第 5 點）：同年只印月-日，跨年印完整西元年；`null`
+   * （尚無日線）不渲染任何徽章。
+   */
+  it("buildDataAsOfBadge：同年 MM-DD／跨年 YYYY-MM-DD／null 不渲染", () => {
+    const thisYear = new Date().getFullYear();
+    expect(buildDataAsOfBadge(`${thisYear}-09-18`)).toBe("資料截至 09-18");
+    expect(buildDataAsOfBadge(`${thisYear - 1}-09-18`)).toBe(`資料截至 ${thisYear - 1}-09-18`);
+    expect(buildDataAsOfBadge(null)).toBeNull();
+  });
+
   it("首頁警示狀態列常數與 3 個 builder 輸出樣板逐字比對", () => {
     expect(ALERTS_NO_RULES).toBe("尚未設定警示規則");
     expect(ALERTS_NO_RULES_LINK).toBe("去設定");
@@ -1645,6 +1863,17 @@ describe("oneLinerWording.ts 逐字釘住（風控逐字審 R-A2）", () => {
   it("AlertStatusStrip.tsx wiring：查詢失敗前綴確實由元件渲染", () => {
     const src = readFileSync(fileURLToPath(new URL("../../components/AlertStatusStrip.tsx", import.meta.url)), "utf8");
     expect(src).toContain("{ALERTS_LOAD_ERROR_PREFIX}");
+  });
+
+  /**
+   * 第二波（派工單 §4.3，風控逐字審核可）：匯率貢獻卡「備援匯率」徽章新常數
+   * 逐字比對，並確認 `SummaryCards.tsx` 確實渲染它、且不是 hover-only。
+   */
+  it("FX_BACKUP_BADGE 逐字比對，且 SummaryCards.tsx 確實渲染、非 hover-only", () => {
+    expect(FX_BACKUP_BADGE).toBe("備援匯率");
+    const src = readFileSync(fileURLToPath(new URL("../../components/SummaryCards.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("{FX_BACKUP_BADGE}");
+    expect(src).not.toMatch(/hover:[^\n"]*\{FX_BACKUP_BADGE\}/);
   });
 });
 
@@ -1683,7 +1912,7 @@ describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測�
     };
   }
 
-  it("H4：頂部說明句全文逐字存在於原始碼（風控裁決 2026-08-09 核可全文，不得改字）", () => {
+  it("H4：頂部說明句全文逐字存在於原始碼，且落在 details 內（CEO 2026-09-19 第二次裁定 §4.1 推翻 H4 常駐，wave2-B 純搬移；字面仍為風控裁決 2026-08-09 核可全文，不得改字）", () => {
     const src = readFileSync(fileURLToPath(new URL("../../components/RiskGauge.tsx", import.meta.url)), "utf8");
     // JSX 原始碼跨行縮排；比對前雙方都去除全部空白字元，避免換行/縮排造成假陰性。
     const flat = src.replace(/\s+/g, "");
@@ -1691,6 +1920,20 @@ describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測�
       "單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly" +
       "部位上限為帳本層單一判定。未納入比較的標的列於各條之下。";
     expect(flat).toContain(h4.replace(/\s+/g, ""));
+
+    // 不只存在於原始碼，且必須在渲染輸出裡落在 <details> 開標籤之後（在
+    // details 內）——主視圖不得再看到這句。
+    const data: PortfolioLimitsResponse = {
+      as_of: "2026-09-19T16:40:00+08:00",
+      limits: [makeCheck({})],
+      notes: [],
+      sources: [makeSource("2330", "fresh")],
+    } as unknown as PortfolioLimitsResponse;
+    const html = renderToStaticMarkup(createElement(RiskGaugeView, { data }));
+    const detailsIndex = html.indexOf("<details");
+    const h4Index = html.indexOf("單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較");
+    expect(detailsIndex).toBeGreaterThanOrEqual(0);
+    expect(h4Index).toBeGreaterThan(detailsIndex);
   });
 
   it("H5：非 fresh 時 summary 附「——其中 {N} 檔非即時」半句，緊接 DETAILS_SUMMARY_RISK_GAUGE 之後", () => {

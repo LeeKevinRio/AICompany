@@ -21,7 +21,10 @@ import { RangeGauge } from "./RangeGauge";
  *
  * 呈現規範：揭露句與計算依據依 CEO 裁定 2026-09-06（兩次）下沉至頁尾揭露區
  * （`PageFooterDisclosures`，L1／L2：text-xs／neutral-400、常駐不摺疊），本面板只留
- * 大字標籤與一句指引句；S1 採納：大字不帶紅綠語意色。
+ * 大字標籤與一句指引句；S1 採納：大字不帶紅綠語意色。CEO 第二次裁定
+ * （2026-09-19 深夜，`work/stock-desk-一眼一句簡化-派工單.md` §4）：
+ * `KEY_LEVELS_HEADER_UNADJUSTED_NOTICE`（R7 未還原權值句）與停損大字下的 R6
+ * 兩句（`anchorBasisSentence`／ATR 條件句）改收進 `<details>`，字面不動。
  * 數值來源 `app/lib/keyLevels.ts`（display-layer derived；backend/quant
  * 正式化為追蹤中的 follow-up）。
  */
@@ -400,11 +403,7 @@ export function KeyLevelsPanel({
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
           <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.stopSuggested)}</p>
-          {/* R6: the anchor-basis sentence and the ATR-availability condition stand beneath the stop figure. */}
-          <p className="mt-1 text-xs text-neutral-400">{anchorBasisSentence(anchorSource, levels)}</p>
-          <p className="mt-1 text-xs text-neutral-400">
-            {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
-          </p>
+          {/* CEO 第二次裁定 2026-09-19: R6 兩句改收進 <details>（見下方）。 */}
         </div>
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
@@ -412,9 +411,6 @@ export function KeyLevelsPanel({
           {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
         </div>
       </div>
-
-      {/* R7: 未還原權值句常駐於面板底、詳細之前。 */}
-      <p className="mt-3 text-xs text-neutral-400">{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
 
       <details className="group mt-3">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
@@ -424,6 +420,21 @@ export function KeyLevelsPanel({
           {DETAILS_SUMMARY_KEY_LEVELS}
         </summary>
         <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          {/* R7（CEO 第二次裁定 2026-09-19 收進詳細，字面不動）：未還原權值句。 */}
+          <p>{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
+
+          {/*
+            R6（CEO 第二次裁定 2026-09-19 收進詳細，字面不動）：停損大字下的
+            基準句與 ATR 條件句，原本緊接在主視圖的停損參考大字下方。
+          */}
+          <div>
+            <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
+            <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
+            <p className="mt-1">
+              {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
+            </p>
+          </div>
+
           {/*
             圖形化 item 1 (CEO 2026-09-06): 位階卡（RangeGauge＋MA60 乖離列），
             一眼一句 §2.4 決定整卡移入詳細（主視圖改由 PriceLadder 承擔主視覺）。

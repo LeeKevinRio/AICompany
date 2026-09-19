@@ -50,6 +50,7 @@ export function DataMetaStatusBadge({
   isWithinTtl,
   lastBarDate = null,
   reason = null,
+  compact = false,
 }: {
   status: string;
   stalenessMinutes: number | null;
@@ -63,9 +64,30 @@ export function DataMetaStatusBadge({
    * shown standing beside the badge in *every* status, `fresh` included -- a
    * spliced series is served as `fresh` and would otherwise say nothing --
    * and never folded into a tooltip (風控 2026-09-13 第三輪).
+   *
+   * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3 追加第 9 點）:
+   * with `compact`, the sentence is left to a second, non-`compact` render
+   * of this same component in the caller's `<details>` (same line as the
+   * "資料時間：…｜來源：…" prefix) -- never invented or paraphrased here --
+   * EXCEPT when the status is `fresh`: a `fresh` answer draws no chip, so a
+   * spliced series (ADR-0009 D-7, served as `fresh` with only `reason` to
+   * say so) would leave the main view blank. That case falls back to the
+   * full render (風控 2026-09-19 確認性覆核 required): the status is never
+   * silent in the main view.
    */
   reason?: string | null;
+  /**
+   * wave3: main-view chips are one short word (`fresh` renders nothing either
+   * way; `備援源` and `資料不足` are already the full labels for their statuses;
+   * `快取資料` stands for both `cached_stale` frames -- it is the more
+   * conservative of the two full-label openings, 「本機快取」 being the other).
+   * The complete sentence (minutes, parenthetical, `reason`) moves into
+   * `<details>` via a second, non-`compact` render of this same component —
+   * never dropped, only relocated one layer deeper.
+   */
+  compact?: boolean;
 }) {
+  if (compact && !(status === "fresh" && reason)) return compactStatusBadge(status);
   const badge = statusBadge({ status, stalenessMinutes, isWithinTtl, lastBarDate });
   if (!reason) return badge;
   return (
@@ -75,6 +97,33 @@ export function DataMetaStatusBadge({
       <span className="ml-1.5 text-sm text-neutral-400">{reason}</span>
     </>
   );
+}
+
+/**
+ * wave3 compact chip — see the `compact` prop's doc comment above for why
+ * each short word is an existing label substring, never a new coinage.
+ */
+function compactStatusBadge(status: string) {
+  switch (status) {
+    case "fresh":
+      return null;
+    case "backup":
+      return (
+        <span className="ml-1.5 rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">備援源</span>
+      );
+    case "cached_stale":
+      return (
+        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">快取資料</span>
+      );
+    case "unavailable":
+      return (
+        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">資料不足</span>
+      );
+    default:
+      return (
+        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">{status}</span>
+      );
+  }
 }
 
 function statusBadge({

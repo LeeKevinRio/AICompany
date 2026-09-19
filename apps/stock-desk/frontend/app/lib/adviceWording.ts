@@ -30,8 +30,29 @@ import type { CardAction, Confidence } from "./types";
  * *held* mode (the candidate-mode vocabulary is deliberately smaller — see
  * `CANDIDATE_NOT_SUPPORTIVE_TEXT` below, §3.2). Every label is name-formed
  * (not a verb phrase directed at the user) and carries no promise.
+ *
+ * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3 第 1 點，風控逐字核可）：
+ * CEO 對頎邦頁面的提問「為何評估叫做停損評估？我看不懂這一段」促成這批改寫——
+ * `stop_loss` 的舊字面把「規則評估」的來源感（見 `buildAttributedHeadline`
+ * 舊版）與動作本身黏在一起，讀成一個不知所云的複合詞。新字面把動作名稱單獨
+ * 留白話（「停損參考」），來源感改由同列的 `RULE_SOURCE_CHIP` 承擔。
  */
 export const HELD_ACTION_LABELS: Record<CardAction, string> = {
+  add: "加碼參考",
+  hold: "續抱參考",
+  reduce: "減碼參考",
+  take_profit: "分批獲利了結",
+  stop_loss: "停損參考",
+  insufficient_data: "資料不足",
+};
+
+/**
+ * wave3 之前核可的舊字面，逐字保留（一字不動）——不得刪除、不得裁剪。純搬移
+ * 原則的延伸：文案改版不等於文案消失，舊字面移進各分支「詳細」（見
+ * `buildLegacyAttributedHeadline`／`OperationSummaryPanel.tsx`），且仍由
+ * `componentWordingScan.test.ts` 逐字釘住。
+ */
+export const HELD_ACTION_LABELS_LEGACY: Record<CardAction, string> = {
   add: "加碼參考",
   hold: "續抱/維持現狀",
   reduce: "減碼參考",
@@ -43,13 +64,53 @@ export const HELD_ACTION_LABELS: Record<CardAction, string> = {
 /** §1.1: every action label's first appearance must carry an explicit source. */
 export const ATTRIBUTION_PREFIX = "規則評估";
 
-/** Builds the attributed headline for a held-mode action label (§1.1 required). */
+/**
+ * wave3: returns the pure label only — the old "規則評估：" concatenation
+ * (`buildLegacyAttributedHeadline` below) baked the source attribution into
+ * the same string as the action word, which is exactly what read as one
+ * confusing compound term. Attribution now travels as a separate, standing
+ * same-row chip (`RULE_SOURCE_CHIP`) instead.
+ */
 export function buildAttributedHeadline(action: CardAction): string {
-  return `${ATTRIBUTION_PREFIX}：${HELD_ACTION_LABELS[action]}`;
+  return HELD_ACTION_LABELS[action];
 }
+
+/**
+ * wave3 之前的 `buildAttributedHeadline`，逐字保留供「詳細」內揭露與測試釘住
+ * 舊字面（一字不動，僅搬移出現位置與呼叫者）。
+ */
+export function buildLegacyAttributedHeadline(action: CardAction): string {
+  return `${ATTRIBUTION_PREFIX}：${HELD_ACTION_LABELS_LEGACY[action]}`;
+}
+
+/**
+ * wave3: standing same-row chip beside the held-mode headline, replacing the
+ * old baked-in "規則評估：" prefix — text-xs neutral-400 is the floor, never
+ * smaller/lighter. Not shown beside the `insufficient_data` ("資料不足")
+ * headline: that branch has no matched rule to attribute anything to (see
+ * `INSUFFICIENT_DATA_NO_EVALUATION` instead).
+ */
+export const RULE_SOURCE_CHIP = "依規則";
+
+/**
+ * wave3: standing small text beside the `insufficient_data` ("資料不足")
+ * headline in the `no_action` branch — states plainly that this card has no
+ * evaluation this time, without pretending a rule was consulted.
+ */
+export const INSUFFICIENT_DATA_NO_EVALUATION = "本次不提供操作評估";
 
 /** FR-C7(b): candidate-mode heading, replacing the held-mode action label entirely. */
 export const CANDIDATE_HEADING_LABEL = "進場評估";
+
+/**
+ * wave3: standing badge beside `CANDIDATE_HEADING_LABEL`, stating the one
+ * fact every candidate card shares (this symbol is not currently held) as a
+ * short badge rather than folding it into a sentence. `kind === "candidate"`
+ * already implies "not held" (`buildOperationSummary`'s own branch guard), so
+ * this label never needs to be computed — it is unconditional whenever a
+ * candidate card renders at all.
+ */
+export const NOT_HELD_BADGE = "未持有";
 
 /**
  * §3.1: `add` in candidate mode may only be stated as a fact composition,
@@ -72,7 +133,13 @@ export const CANDIDATE_SUPPORTIVE_DISCLAIMER = "這不構成進場理由。";
  * held-mode verbs are banned here per §3.2). Softened variants ("可再觀察"
  * "時機未到" "可留意") are explicitly forbidden and must never replace this.
  */
-export const CANDIDATE_NOT_SUPPORTIVE_TEXT = "本次規則評估未支持進場";
+export const CANDIDATE_NOT_SUPPORTIVE_TEXT = "本次未支持進場";
+
+/**
+ * wave3 之前核可的舊字面，逐字保留供候選分支「詳細」內揭露與測試釘住（一字不
+ * 動，僅搬移出現位置）。
+ */
+export const CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY = "本次規則評估未支持進場";
 
 /** §2 item 8 / FR-C7(b): the always-on candidate-mode evidence-limit notice, verbatim. */
 export const CANDIDATE_EVIDENCE_NOTICE =
@@ -112,6 +179,29 @@ export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產(已估值
  * inline string, which this constant mirrors on purpose.
  */
 export const QUANTITY_RANGE_ABSENCE_TEXT = "此建議未附帶數量區間（無法從風險上限推導）。";
+
+/**
+ * wave3: the main-view short form when a card has no quantity range at all —
+ * `QUANTITY_RANGE_ABSENCE_TEXT` above (the full cause sentence) moves into
+ * `<details>`; this three-word short form is what stands in the main view's
+ * "建議股數區間" slot instead.
+ */
+export const QUANTITY_RANGE_ABSENT_SHORT = "未提供股數";
+
+/**
+ * wave3: replaces the old inline "主要依據：" label — drops "主要" since the
+ * main view now only ever shows the single heaviest matched rule anyway, so
+ * "主要" no longer disambiguates anything.
+ */
+export const RULE_BASIS_PREFIX = "依據：";
+
+/**
+ * wave3: replaces the old inline "信心等級：" label wherever the confidence
+ * chip stands next to a headline — shorter, same meaning; `confidenceMeaning`
+ * (the longer decoding sentence) already moved into `<details>` in the
+ * previous batch.
+ */
+export const CONFIDENCE_PREFIX = "信心 ";
 
 /** §2 item 6: the fixed "this is a rule engine, not a prediction" statement. */
 export function buildRulesStatement(rulesVersion: string): string {

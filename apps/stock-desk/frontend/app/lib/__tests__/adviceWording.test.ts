@@ -32,18 +32,27 @@ import {
   buildAttributedHeadline,
   buildCandidateCoverageStatement,
   buildCandidateSupportiveComposition,
+  buildLegacyAttributedHeadline,
   buildRulesStatement,
   buildStaleDataProminentNotice,
   CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
   CANDIDATE_EVIDENCE_NOTICE,
   CANDIDATE_HEADING_LABEL,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
+  CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY,
   CANDIDATE_QUANTITY_BASIS_NOTE,
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
+  CONFIDENCE_PREFIX,
   FRONTEND_FORBIDDEN_TERMS,
   HELD_ACTION_LABELS,
+  HELD_ACTION_LABELS_LEGACY,
+  INSUFFICIENT_DATA_NO_EVALUATION,
   NON_REALTIME_NOTICE,
+  NOT_HELD_BADGE,
   QUANTITY_RANGE_ABSENCE_TEXT,
+  QUANTITY_RANGE_ABSENT_SHORT,
+  RULE_BASIS_PREFIX,
+  RULE_SOURCE_CHIP,
   summaryConfidenceLabel,
 } from "../adviceWording";
 import type { CardAction, Confidence } from "../types";
@@ -55,10 +64,21 @@ const CONFIDENCES: Confidence[] = ["low", "medium", "high"];
 const RENDERED_SURFACE: string[] = [
   ...Object.values(HELD_ACTION_LABELS),
   ...HELD_ACTIONS.map(buildAttributedHeadline),
+  // wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3）：舊字面搬進「詳細」，
+  // 不是刪除——一併納入禁用詞掃描，與新字面（RULE_SOURCE_CHIP 等）並列。
+  ...Object.values(HELD_ACTION_LABELS_LEGACY),
+  ...HELD_ACTIONS.map(buildLegacyAttributedHeadline),
+  RULE_SOURCE_CHIP,
+  INSUFFICIENT_DATA_NO_EVALUATION,
+  RULE_BASIS_PREFIX,
+  QUANTITY_RANGE_ABSENT_SHORT,
+  CONFIDENCE_PREFIX,
+  NOT_HELD_BADGE,
   CANDIDATE_HEADING_LABEL,
   buildCandidateSupportiveComposition(3),
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
+  CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY,
   CANDIDATE_EVIDENCE_NOTICE,
   CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
   buildCandidateCoverageStatement(0.75, 4),
@@ -95,6 +115,68 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
 
   it("assertNoForbiddenTerms helper agrees with the it.each scan above (belt and suspenders)", () => {
     assertNoForbiddenTerms(joined, FRONTEND_FORBIDDEN_TERMS, "adviceWording.ts rendered surface");
+  });
+});
+
+/**
+ * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3，風控逐字核可）：
+ * CEO 對頎邦頁面「為何評估叫做停損評估？我看不懂這一段」的提問促成的改寫。
+ * 新字面與其對應的舊字面（`_LEGACY`）逐字釘住，兩者都不得漂移——舊字面搬進
+ * 「詳細」而非刪除，兩邊字面都要留一份釘死的紀錄。
+ */
+describe("wave3 — HELD_ACTION_LABELS 改寫與 LEGACY 對照（逐字釘住）", () => {
+  it("新字面：停損參考／續抱參考／分批獲利了結／資料不足", () => {
+    expect(HELD_ACTION_LABELS).toEqual({
+      add: "加碼參考",
+      hold: "續抱參考",
+      reduce: "減碼參考",
+      take_profit: "分批獲利了結",
+      stop_loss: "停損參考",
+      insufficient_data: "資料不足",
+    });
+  });
+
+  it("舊字面（LEGACY，一字不動）：續抱/維持現狀、分批獲利了結參考、停損評估、資料不足，本次不提供操作評估", () => {
+    expect(HELD_ACTION_LABELS_LEGACY).toEqual({
+      add: "加碼參考",
+      hold: "續抱/維持現狀",
+      reduce: "減碼參考",
+      take_profit: "分批獲利了結參考",
+      stop_loss: "停損評估",
+      insufficient_data: "資料不足，本次不提供操作評估",
+    });
+  });
+
+  it("buildAttributedHeadline 回傳純標籤（不再有「規則評估：」前綴）", () => {
+    for (const action of HELD_ACTIONS) {
+      expect(buildAttributedHeadline(action)).toBe(HELD_ACTION_LABELS[action]);
+      expect(buildAttributedHeadline(action)).not.toContain("：");
+    }
+  });
+
+  it("buildLegacyAttributedHeadline 逐字重現舊版「規則評估：{舊標籤}」", () => {
+    expect(buildLegacyAttributedHeadline("stop_loss")).toBe("規則評估：停損評估");
+    expect(buildLegacyAttributedHeadline("add")).toBe("規則評估：加碼參考");
+    for (const action of HELD_ACTIONS) {
+      expect(buildLegacyAttributedHeadline(action)).toBe(`規則評估：${HELD_ACTION_LABELS_LEGACY[action]}`);
+    }
+  });
+
+  it("RULE_SOURCE_CHIP／INSUFFICIENT_DATA_NO_EVALUATION 逐字比對", () => {
+    expect(RULE_SOURCE_CHIP).toBe("依規則");
+    expect(INSUFFICIENT_DATA_NO_EVALUATION).toBe("本次不提供操作評估");
+  });
+
+  it("CANDIDATE_NOT_SUPPORTIVE_TEXT 新舊字面逐字比對", () => {
+    expect(CANDIDATE_NOT_SUPPORTIVE_TEXT).toBe("本次未支持進場");
+    expect(CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY).toBe("本次規則評估未支持進場");
+  });
+
+  it("NOT_HELD_BADGE／RULE_BASIS_PREFIX／QUANTITY_RANGE_ABSENT_SHORT／CONFIDENCE_PREFIX 逐字比對", () => {
+    expect(NOT_HELD_BADGE).toBe("未持有");
+    expect(RULE_BASIS_PREFIX).toBe("依據：");
+    expect(QUANTITY_RANGE_ABSENT_SHORT).toBe("未提供股數");
+    expect(CONFIDENCE_PREFIX).toBe("信心 ");
   });
 });
 

@@ -23,9 +23,17 @@ import {
   buildAsOfStatement,
   buildStaleDataProminentNotice,
   CANDIDATE_NOT_SUPPORTIVE_TEXT,
+  CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY,
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
+  CONFIDENCE_PREFIX,
   HELD_ACTION_LABELS,
+  HELD_ACTION_LABELS_LEGACY,
+  INSUFFICIENT_DATA_NO_EVALUATION,
+  NOT_HELD_BADGE,
   QUANTITY_RANGE_ABSENCE_TEXT,
+  QUANTITY_RANGE_ABSENT_SHORT,
+  RULE_BASIS_PREFIX,
+  RULE_SOURCE_CHIP,
 } from "../adviceWording";
 
 function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
@@ -129,8 +137,12 @@ describe("buildOperationSummary — held mode", () => {
     // 8. candidate-only evidence notice must NOT appear in held mode
     expect(model.required.candidateEvidenceNotice).toBeNull();
 
-    // Held-mode-specific: attribution + whitelist label present together (§1.1/§1.2).
-    expect(model.attributedHeadline).toBe(`規則評估：${HELD_ACTION_LABELS.add}`);
+    // Held-mode-specific: whitelist label (§1.2). wave3（派工單 §4.3 第 1 點）：
+    // `buildAttributedHeadline` 回傳純標籤，不再烤入「規則評估：」前綴——來源
+    // 感改由 `OperationSummaryPanel.tsx` 同列的 `RULE_SOURCE_CHIP` 承擔；舊版
+    // 前綴串接見 `buildLegacyAttributedHeadline`（`adviceWording.test.ts` 逐字
+    // 釘住）。
+    expect(model.attributedHeadline).toBe(HELD_ACTION_LABELS.add);
     // AC-C6.1: main basis = the heaviest matched rule, not just "any" matched rule.
     expect(model.topMatchedRule).toEqual({
       name: "均線多頭排列",
@@ -846,5 +858,104 @@ describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境�
     const response = makeResponse() as AdviceResponse; // restores_compliance: true fixture
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
     expect(countOccurrences(html, BASIS_NORMAL)).toBe(1);
+  });
+});
+
+/**
+ * CEO 第二次裁定（2026-09-19 深夜，`work/stock-desk-一眼一句簡化-派工單.md`
+ * §4）：disclaimer／confidenceMeaning 移出主視圖，只在 `<details>` 內渲染
+ * （字面不變）。用實際渲染輸出（不只是原始碼掃描）驗證這兩句確實只出現在
+ * `<details>...</details>` 這一段 HTML 之內。
+ */
+describe("disclaimer／confidenceMeaning 只在 <details> 內渲染（DOM，CEO 第二次裁定 2026-09-19）", () => {
+  function detailsSlice(html: string): string {
+    const start = html.indexOf("<details");
+    expect(start, "html 應含 <details>").toBeGreaterThan(-1);
+    return html.slice(start);
+  }
+
+  it("held 分支：disclaimer／confidenceMeaning 只出現在 <details> 片段內", () => {
+    const response = makeResponse() as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const details = detailsSlice(html);
+    const disclaimer = "本工具為研究與教育用途，非投資建議";
+    const meaning = "信心等級反映規則一致性與資料完整度，非勝率或機率";
+    expect(details).toContain(disclaimer);
+    expect(details).toContain(meaning);
+    // 主視圖（<details> 之前）不得含這兩句。
+    const main = html.slice(0, html.indexOf("<details"));
+    expect(main).not.toContain(disclaimer);
+    expect(main).not.toContain(meaning);
+  });
+
+  it("candidate 分支：disclaimer／confidenceMeaning 只出現在 <details> 片段內", () => {
+    const response = makeResponse({ held: false }) as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const disclaimer = "本工具為研究與教育用途，非投資建議";
+    const meaning = "信心等級反映規則一致性與資料完整度，非勝率或機率";
+    const main = html.slice(0, html.indexOf("<details"));
+    const details = detailsSlice(html);
+    expect(main).not.toContain(disclaimer);
+    expect(main).not.toContain(meaning);
+    expect(details).toContain(disclaimer);
+    expect(details).toContain(meaning);
+  });
+});
+
+/**
+ * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3，風控逐字核可）：DOM
+ * 層驗證新字面確實渲染在正確位置——不只是原始碼位置掃描
+ * （`componentWordingScan.test.ts`），而是實際渲染輸出。
+ */
+describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RULE_BASIS_PREFIX／NOT_HELD_BADGE／QUANTITY_RANGE_ABSENT_SHORT／INSUFFICIENT_DATA_NO_EVALUATION）", () => {
+  it("held 分支：主視圖含 RULE_SOURCE_CHIP、CONFIDENCE_PREFIX+信心字、RULE_BASIS_PREFIX+規則名，不含舊「規則評估：」複合詞；舊字面搬進 <details>", () => {
+    const response = makeResponse() as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const main = html.slice(0, html.indexOf("<details"));
+    expect(main).toContain(RULE_SOURCE_CHIP);
+    expect(main).toContain(`${CONFIDENCE_PREFIX}中`);
+    // 「依據：」自成一個 <span>，其後緊接規則名的文字節點——分開比對而非找連續子字串。
+    expect(main).toContain(RULE_BASIS_PREFIX);
+    expect(main).toContain("均線多頭排列");
+    expect(main.indexOf(RULE_BASIS_PREFIX)).toBeLessThan(main.indexOf("均線多頭排列"));
+    expect(main).not.toContain("規則評估：");
+    expect(main).not.toContain("信心等級：");
+    const details = html.slice(html.indexOf("<details"));
+    expect(details).toContain(`規則評估：${HELD_ACTION_LABELS_LEGACY.add}`);
+  });
+
+  it("held 分支：無股數區間時，主視圖印 QUANTITY_RANGE_ABSENT_SHORT，完整原因句只在 <details>", () => {
+    const response = makeResponse({ advice: makeCard({ quantity_range: null }) }) as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const main = html.slice(0, html.indexOf("<details"));
+    const details = html.slice(html.indexOf("<details"));
+    expect(main).toContain(QUANTITY_RANGE_ABSENT_SHORT);
+    expect(main).not.toContain(QUANTITY_RANGE_ABSENCE_TEXT);
+    expect(details).toContain(QUANTITY_RANGE_ABSENCE_TEXT);
+  });
+
+  it("candidate 分支：主視圖含 NOT_HELD_BADGE 與新版 CANDIDATE_NOT_SUPPORTIVE_TEXT（非 add），CANDIDATE_EVIDENCE_NOTICE 與舊字面只在 <details>", () => {
+    const response = makeResponse({
+      held: false,
+      advice: makeCard({ action: "hold", matched_rules: [], counterarguments: [], invalidation_conditions: [] }),
+    }) as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const main = html.slice(0, html.indexOf("<details"));
+    const details = html.slice(html.indexOf("<details"));
+    expect(main).toContain(NOT_HELD_BADGE);
+    expect(main).toContain(CANDIDATE_NOT_SUPPORTIVE_TEXT);
+    expect(main).not.toContain(CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY);
+    expect(details).toContain(CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY);
+  });
+
+  it("no_action 分支：主視圖大字為 HELD_ACTION_LABELS.insufficient_data（「資料不足」）＋常駐 INSUFFICIENT_DATA_NO_EVALUATION，不含 RULE_SOURCE_CHIP；舊字面只在 <details>", () => {
+    const response = makeResponse({ advice: makeCard({ action: "insufficient_data", quantity_range: null }) }) as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    const main = html.slice(0, html.indexOf("<details"));
+    const details = html.slice(html.indexOf("<details"));
+    expect(main).toContain(HELD_ACTION_LABELS.insufficient_data);
+    expect(main).toContain(INSUFFICIENT_DATA_NO_EVALUATION);
+    expect(main).not.toContain(RULE_SOURCE_CHIP);
+    expect(details).toContain(HELD_ACTION_LABELS_LEGACY.insufficient_data);
   });
 });

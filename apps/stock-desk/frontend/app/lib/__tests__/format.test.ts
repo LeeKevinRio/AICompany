@@ -51,9 +51,13 @@ describe("ruleDirectionLabel — D2 item 3: AdviceCard.direction_weights labels"
 });
 
 describe("actionRawLabel — direction_weights[].actions labels", () => {
+  // wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3 第 1 點）：
+  // `HELD_ACTION_LABELS.stop_loss` 改為「停損參考」（原「停損評估」讀者看不懂，
+  // 見 CEO 對頎邦頁面的提問），`actionRawLabel` 動態查表，字面隨之更新——舊字面
+  // 見 `HELD_ACTION_LABELS_LEGACY`（`adviceWording.test.ts` 逐字釘住）。
   it("reuses the held-mode action label whitelist", () => {
     expect(actionRawLabel("add")).toBe("加碼參考");
-    expect(actionRawLabel("stop_loss")).toBe("停損評估");
+    expect(actionRawLabel("stop_loss")).toBe("停損參考");
   });
 
   it("degrades to the raw value for an unrecognised action, never throws", () => {

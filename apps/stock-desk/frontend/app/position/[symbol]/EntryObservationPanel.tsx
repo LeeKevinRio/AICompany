@@ -26,8 +26,10 @@ import { DETAILS_SUMMARY_ENTRY } from "../../lib/oneLinerWording";
  *   all-met case has NO special state (no branch on metCount anywhere in the
  *   markup), and the count never exceeds text-lg.
  * - R-21: status carries no hue — glyph (●○—) + word + aria, neutral greys only.
- * - E-1～E-4 stand inside the panel, ≥ text-sm / ≥ neutral-400, never collapsed;
- *   they are NOT covered by the 2026-09-06 footer rulings.
+ * - E-1～E-4 render inside the panel (NOT covered by the 2026-09-06 footer
+ *   rulings); CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
+ *   §4）moved all four, plus the data-times line, into `<details>` — the
+ *   main view keeps only the h2, the count sentence and the six dots.
  * - R-15: nothing from the advice headline / confidence / disclaimer is imported.
  * Every user-facing string is a pinned constant in `entryObservationWording.ts`.
  */
@@ -120,10 +122,11 @@ export function EntryObservationPanel({
         ))}
       </ul>
 
-      {/* R-08: E-1 stands with the count; E-2/E-3 and the (synchronized) data-times line move into `<details>`. */}
-      <p className="mt-3 text-xs text-neutral-400">{ENTRY_E1_QUALIFIER}</p>
-      {/* R-08: the data-times line is standing ONLY while the three queries disagree — a synchronized read moves into `<details>` instead. */}
-      {!synchronized && <p className="mt-1 text-xs text-neutral-400">{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>}
+      {/*
+        CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
+        §4）：E-1 與資料時間句一律收進 `<details>`，字面不動——主視圖只留
+        h2＋計數句＋六圓點。
+      */}
 
       <details className="group mt-3">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
@@ -133,6 +136,7 @@ export function EntryObservationPanel({
           {DETAILS_SUMMARY_ENTRY}
         </summary>
         <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          <p>{ENTRY_E1_QUALIFIER}</p>
           <ul className="divide-y divide-neutral-800/60 rounded-md border border-neutral-800 bg-neutral-900/40">
             {observation.conditions.map((c) => (
               <li
@@ -157,7 +161,7 @@ export function EntryObservationPanel({
           </ul>
           <p>{ENTRY_E2_XREF}</p>
           <p>{ENTRY_E3_DASH_NOTE}</p>
-          {synchronized && <p>{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>}
+          <p>{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>
           <p className="text-sm text-neutral-300">{buildFooterGuidance(ENTRY_PANEL_TITLE)}</p>
         </div>
       </details>
