@@ -375,6 +375,21 @@ class PriceBarCache:
             ).fetchone()
         return row is not None
 
+    def clear_attempt(self, symbol: str, market: Market) -> bool:
+        """Forget the last live attempt for one series so the next ask skips the cooldown.
+
+        An operator action (``python -m app.data.diagnose --clear-cooldown``),
+        not a product path: ADR-0009 D-8 keeps the cooldown durable across
+        restarts on purpose, so lifting it has to be explicit. Returns whether
+        a row existed.
+        """
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                "DELETE FROM price_bars_attempt_log WHERE symbol = ? AND market = ?",
+                (symbol, market),
+            )
+        return cursor.rowcount > 0
+
     def last_attempt_at(self, symbol: str, market: Market) -> datetime | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
