@@ -3,7 +3,7 @@
 Everything here runs against ``httpx.MockTransport`` and temp SQLite files --
 never the real network -- per the data-source-integration skill's "測試一律
 用 fixture 不打外網" rule. The fixtures reused below (``twse_stock_day_*``,
-``tpex_daily_trading_*``, ``finmind_taiwan_stock_price_*``,
+``tpex_trading_stock_*``, ``finmind_taiwan_stock_price_*``,
 ``bot_fx_usd_twd_*``, ``alpha_vantage_daily_*``, ``yfinance_chart_twii``) are
 the same synthetic, documented-but-unverified files every other adapter
 contract test in this directory already uses (see ``tests/fixtures/README.md``).
@@ -282,7 +282,7 @@ def test_check_leverage_registry_matches_known_registry_size() -> None:
 
 def _offline_transport() -> httpx.MockTransport:
     twse_payload = _fixture_json("twse_stock_day_2330_202401.json")
-    tpex_payload = _fixture_json("tpex_daily_trading_5483_202401.json")
+    tpex_payload = _fixture_json("tpex_trading_stock_5483_202401.json")
     finmind_payload = _fixture_json("finmind_taiwan_stock_price_2330.json")
     fx_csv = _fixture_text("bot_fx_usd_twd_20240102.csv")
     av_payload = _fixture_json("alpha_vantage_daily_aapl.json")
@@ -298,7 +298,7 @@ def _offline_transport() -> httpx.MockTransport:
         if host == "openapi.twse.com.tw":
             return httpx.Response(200, text="reachable")
         if host == "www.tpex.org.tw":
-            if path.endswith("st43_result.php"):
+            if path.endswith("tradingStock"):
                 return httpx.Response(200, json=tpex_payload)
             return httpx.Response(200, text="reachable")
         if host == "api.finmindtrade.com":

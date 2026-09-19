@@ -116,7 +116,7 @@ from app.data.interface import DataStatus, PriceBar
 from app.data.providers.alpha_vantage import ALPHA_VANTAGE_BASE_URL, AlphaVantageAdapter
 from app.data.providers.finmind import FINMIND_BASE_URL, FinMindAdapter
 from app.data.providers.fx import BOT_BASE_URL, BankOfTaiwanFxAdapter
-from app.data.providers.tpex import TPEX_BASE_URL, TpexAdapter
+from app.data.providers.tpex import TPEX_BASE_URL, TRADING_STOCK_PATH, TpexAdapter
 from app.data.providers.twse import TWSE_BASE_URL, TwseAdapter
 from app.data.providers.yfinance import YFINANCE_BASE_URL, YFinanceAdapter
 from app.data.quota import QuotaLedger
@@ -319,7 +319,7 @@ def probe_tpex(
         adapter.close()
     return classify_result(
         name="tpex",
-        endpoint=f"{TPEX_BASE_URL}/web/stock/aftertrading/daily_trading_info/st43_result.php",
+        endpoint=f"{TPEX_BASE_URL}{TRADING_STOCK_PATH}",
         credential_ok=True,
         credential_hint="",
         reachability=reachability,
