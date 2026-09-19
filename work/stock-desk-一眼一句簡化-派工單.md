@@ -275,3 +275,15 @@ not.toMatch(<details>/line-clamp/truncate…)」的硬性斷言（`componentWord
 
 風控預審重點：距離 % 是新推導數字（純算術，公式在頁尾揭露組已有 S／T 公式，需補一條「距現價」算式）；
 「現在怎麼做」是否構成祈使／指令形（§4.2 禁止事項）。
+
+### 5.5 決策卡落地審查（2026-09-19）
+
+- **風控預審**（APPROVE_WITH_CONDITIONS，12 條 required）→ frontend-engineer 落地 → **風控複審**：12 條全數符合；新增 3 條 required：
+  R-新1 `DECISION_CARD_QUANTITY_LABEL` 定稿**「股數參考」**（「股數」不予核可，理由：同列三格皆帶「參考」，唯獨推導出的股數用裸標籤屬不一致弱化）；
+  R-新2 持有狀態兩來源（positions query 的 `anchorSource` vs advice envelope 的 `held`）不一致時，一律降級為 close-unknown 路徑，不新造字面；
+  R-新3 卡底常駐指引句 `buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)`（text-sm neutral-300，不得在 details 內）。
+  engineer 兩項判斷獲核可：`StaleDataAlert` 置徽章列之後、動作大字之前；advice pending／error 整卡替換。`AdviceCardView` 不渲染股數，「全頁只渲染一處」成立。
+- **qa-reviewer**（第一輪 NEEDS_CHANGES）：high——未持有徽章與全句閘門不一致（bars 缺席時只剩徽章）；medium——`no_price` 股數格印「未提供股數」違反視覺規範 B.7.5（主字缺席四格皆「—」）；low——舊註解、紅綠色局部守門。Codex 未執行。
+- **dev-lead 裁定**：B.7.5 為準（`no_price`／`no_action` 股數格「—」）；徽章與全句同閘門（`levels` 缺席時價格以「—」代入）；
+  距離槽在無距離概念的格位改不可見佔位（不印「—」，避免與 `KEY_LEVELS_HEADER_DASH_NOTICE` 語意衝突）；四格數值 `whitespace-nowrap`。
+- 待：engineer 第二輪 → 風控限縮複審（R-新1～3）＋ qa 複審 → commit。qa-e2e 實機（S3：advice 資料不足但 bars 正常時，主字位 `InsufficientPanel` 與四格數字並置觀感）列管。
