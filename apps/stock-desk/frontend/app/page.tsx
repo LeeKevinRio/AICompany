@@ -51,7 +51,11 @@ export default function HomePage() {
           </p>
         )}
         {summary.isSuccess && (
-          <SummaryCards totals={summary.data.totals} asOf={summary.data.as_of} />
+          <SummaryCards
+            totals={summary.data.totals}
+            asOf={summary.data.as_of}
+            fxDisclosures={summary.data.fx_disclosures}
+          />
         )}
       </div>
 

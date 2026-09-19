@@ -28,9 +28,16 @@ function StatusBanner({ status }: { status: PortfolioTotals["status"] }) {
 export function SummaryCards({
   totals,
   asOf,
+  fxDisclosures,
 }: {
   totals: PortfolioTotals;
   asOf: string;
+  //: ADR-0011; 風控 2026-09-19 條件 (1): standing disclosure sentences for
+  //: every FX source actually used this pass (`PortfolioSummaryResponse
+  //: .fx_disclosures`), rendered verbatim beside the 匯率貢獻 card. Never
+  //: truncated or collapsed — same position, style and font size as every
+  //: other disclosure.
+  fxDisclosures: string[];
 }) {
   return (
     <div className="space-y-3">
@@ -75,6 +82,13 @@ export function SummaryCards({
           >
             {formatMoney(totals.fx_contribution_twd, "TWD", 0)}
           </p>
+          {fxDisclosures.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs text-neutral-400">
+              {fxDisclosures.map((disclosure) => (
+                <li key={disclosure}>{disclosure}</li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
     </div>

@@ -15,6 +15,7 @@ import { deleteButtonState } from "../lib/positionFormSubmit";
 import { useDeletePosition, useDirectoryNames } from "../lib/queries";
 import { missingSummary } from "../lib/valuationWording";
 import { DataStatusBadge } from "./DataStatusBadge";
+import { FxStatusBadge } from "./FxStatusBadge";
 import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
 import { ErrorPanel } from "./ErrorPanel";
@@ -185,6 +186,7 @@ export function PositionsTable({ positions }: { positions: SummaryPositionItem[]
                 </td>
                 <td className="whitespace-nowrap px-3 py-2">
                   <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
+                  <FxStatusBadge fx={position.valuation.fx} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2">
                   <MoneyOrDash

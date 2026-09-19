@@ -98,18 +98,38 @@ export interface PnlOriginal {
   currency: Currency;
 }
 
+/**
+ * Backend `FxInfo` (app/portfolio/valuation.py, ADR-0011) — the FX rate used
+ * for `fx_now`, with provenance. Present for every non-TWD position whether
+ * or not a rate was actually found, so the summary can disclose a
+ * backup-sourced rate (`data_status === "backup"`) exactly where the
+ * converted figures are shown, and can say "no rate" when
+ * `data_status === "unavailable"`. `source_note` is the source's standing
+ * disclosure sentence, fixed verbatim by risk-compliance — never
+ * paraphrased client-side.
+ */
+export interface PositionFx {
+  pair: string;
+  as_of: string | null;
+  source: string;
+  data_status: PriceDataStatus;
+  source_note: string;
+}
+
 export type ValuationStatus = "ok" | "insufficient_data";
 
 /**
  * Backend `Valuation` — nested under `SummaryPosition.valuation`. IMPORTANT:
- * `price`/`pnl_original`/`pnl_twd`/`asset_contribution_twd`/`fx_contribution_twd`
- * live here, NOT as sibling fields directly on the position (see
- * backend/app/portfolio/valuation.py::Valuation).
+ * `price`/`fx`/`pnl_original`/`pnl_twd`/`asset_contribution_twd`/
+ * `fx_contribution_twd` live here, NOT as sibling fields directly on the
+ * position (see backend/app/portfolio/valuation.py::Valuation).
  */
 export interface PositionValuation {
   status: ValuationStatus;
   missing: string[];
   price: PositionPrice | null;
+  //: `null` for a TWD position (no conversion, nothing to disclose).
+  fx: PositionFx | null;
   pnl_original: PnlOriginal | null;
   pnl_twd: string | null;
   asset_contribution_twd: string | null;
@@ -160,6 +180,10 @@ export interface PortfolioSummaryResponse {
   as_of: string;
   totals: PortfolioTotals;
   positions: SummaryPositionItem[];
+  //: ADR-0011; 風控 2026-09-19 條件 (1): the standing disclosure of every FX
+  //: source whose rate went into this book's TWD figures, in first-seen
+  //: order, each sentence once. Rendered verbatim, never paraphrased.
+  fx_disclosures: string[];
 }
 
 /** Backend `RowError`. */
