@@ -1,6 +1,5 @@
 import type { AdviceCard } from "../../lib/types";
 import { actionRawLabel, formatDateTime, formatNumber, formatPercent, ruleDirectionLabel } from "../../lib/format";
-import { ADVICE_CARD_XREF_TO_SUMMARY } from "../../lib/sectionTaglines";
 import { directionShares, hasDirectionShareBar, ruleDirection } from "../../lib/ruleDirection";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { ADVICE_CARD_TITLE } from "../../lib/sectionTitles";
@@ -117,16 +116,13 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
         個股頁減負 FR-4 方向 A（風控預審 C5–C7；逐字審第一輪）：headline／信心等級／
         confidenceMeaning／disclaimer／建議數量區間／反面論點／失效條件 同進同退，
         全部移出本卡——它們在上方「操作摘要」完整且唯一呈現（C5/C6）。本卡收斂為
-        純規則明細，最上方以交叉引用句銜接。
+        純規則明細。
 
-        R3 fix (risk-final-review.md) 的承載體改為這句銜接句：繼承 R3 呈現規格——
-        卡片最上方、≥ text-sm、≥ text-neutral-200、不可摺疊（風控逐字審第一輪
-        required）。不得再於本卡單獨放回 headline 而不帶 disclaimer（C5 紅線）。
+        一眼一句 §2.6：`ADVICE_CARD_XREF_TO_SUMMARY`（R9 交叉引用句）改由外層
+        `<details>` 的 summary 第二行承載（見 `page.tsx`），本卡內不再重複渲染；
+        summary 已滿足「不可摺疊、可見」的呈現要求（summary 本身恆常可見）。
       */}
-      <p className="rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
-        {ADVICE_CARD_XREF_TO_SUMMARY}
-      </p>
-      <p className="mt-2 text-xs text-neutral-500">
+      <p className="text-xs text-neutral-500">
         規則版本 {advice.rules_version}｜資料時間：{formatDateTime(advice.as_of)}｜觀察區間：
         {advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}
         （{advice.observation_window.bars ?? "—"} 根日線）

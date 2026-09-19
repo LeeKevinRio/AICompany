@@ -20,6 +20,8 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
 import {
@@ -169,6 +171,27 @@ import {
   buildRangeConditionLabel,
 } from "../entryObservationWording";
 import { ENTRY_PULLBACK_MAX_ABS_PCT, ENTRY_RANGE_MAX_PCT } from "../entryObservation";
+import {
+  ALERTS_LOAD_ERROR_PREFIX,
+  ALERTS_MANAGE_LINK,
+  ALERTS_NO_RULES,
+  ALERTS_NO_RULES_LINK,
+  ALERTS_SCHEDULER_DISABLED,
+  DETAILS_SUMMARY_ENTRY,
+  DETAILS_SUMMARY_GENERIC,
+  DETAILS_SUMMARY_KEY_LEVELS,
+  DETAILS_SUMMARY_OPERATION,
+  DETAILS_SUMMARY_RISK_GAUGE,
+  DETAILS_SUMMARY_TECHNICAL,
+  buildAdviceHitCount,
+  buildAlertsPendingCount,
+  buildAlertsQueriedAt,
+  buildAlertsRulesNoEvents,
+  buildKeyLevelsOneLiner,
+  buildTechOneLiner,
+} from "../oneLinerWording";
+import { RiskGaugeView } from "../../components/RiskGauge";
+import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../types";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -301,6 +324,11 @@ const SCANNED_FILES = [
   "../keyLevelsVisuals.ts",
   "../indicatorBands.ts",
   "../ruleDirection.ts",
+  // 一眼一句實作規格（`work/stock-desk-一眼一句-實作規格.md`）風控逐字審 R-A2 落地
+  // 條件 1：`oneLinerWording.ts`（個股頁＋首頁新字面集中檔）與首頁新元件
+  // `AlertStatusStrip.tsx` 先前都不在掃描清單內。
+  "../oneLinerWording.ts",
+  "../../components/AlertStatusStrip.tsx",
 ] as const;
 
 /**
@@ -887,47 +915,79 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
     }
   });
 
-  it("FR-2 wiring 守門：五則導讀各自的宿主元件確實渲染該常數（qa-reviewer 建議）", () => {
-    const wiring: [string, string][] = [
-      ["../../position/[symbol]/OperationSummaryPanel.tsx", "{OPERATION_SUMMARY_TAGLINE}"],
-      ["../../position/[symbol]/KeyLevelsPanel.tsx", "{KEY_LEVELS_TAGLINE}"],
-      ["../../position/[symbol]/page.tsx", "{TECHNICAL_CHART_TAGLINE}"],
-      ["../../position/[symbol]/page.tsx", "{TECHNICAL_INDICATORS_TAGLINE}"],
-      ["../../position/[symbol]/LeverageChapterView.tsx", "{LEVERAGE_CHAPTER_TAGLINE}"],
-    ];
+  it("FR-2 wiring 守門：LEVERAGE_CHAPTER_TAGLINE（唯一仍渲染的導讀）確實由其宿主元件渲染（qa-reviewer 建議）", () => {
+    const wiring: [string, string][] = [["../../position/[symbol]/LeverageChapterView.tsx", "{LEVERAGE_CHAPTER_TAGLINE}"]];
     for (const [rel, needle] of wiring) {
       const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
       expect(src, `${rel} 應渲染 ${needle}`).toContain(needle);
     }
   });
 
-  it("FR-4 C5 守門：AdviceCardView 必須渲染銜接句，且不得單獨放回 headline／disclaimer／信心等級", () => {
+  /**
+   * 一眼一句實作規格（`work/stock-desk-一眼一句-實作規格.md`）§2.2/§2.3/§2.4/§2.5：
+   * 五則導讀常數仍存在（供既有 import／守門引用），但改為主視圖一句結論或
+   * 直接省略——`OPERATION_SUMMARY_TAGLINE`／`KEY_LEVELS_TAGLINE`／
+   * `TECHNICAL_CHART_TAGLINE`／`TECHNICAL_INDICATORS_TAGLINE`（技術分析）／
+   * `ENTRY_PANEL_TAGLINE`（entryObservationWording.ts，非本檔「五則」之一）
+   * 不再被任何個股頁元件渲染；`LEVERAGE_CHAPTER_TAGLINE`（槓桿專章，既有不動）
+   * 是唯一例外，見上一則測試。
+   */
+  it("五則導讀＋ENTRY_PANEL_TAGLINE：常數仍存在但不再被個股頁元件渲染（一眼一句 §2.2–§2.5）", () => {
+    expect(OPERATION_SUMMARY_TAGLINE).toBeTruthy();
+    expect(KEY_LEVELS_TAGLINE).toBeTruthy();
+    expect(TECHNICAL_CHART_TAGLINE).toBeTruthy();
+    expect(TECHNICAL_INDICATORS_TAGLINE).toBeTruthy();
+    expect(ENTRY_PANEL_TAGLINE).toBeTruthy();
+    const retired: [string, string][] = [
+      ["../../position/[symbol]/OperationSummaryPanel.tsx", "{OPERATION_SUMMARY_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{OPERATION_SUMMARY_TAGLINE}"],
+      ["../../position/[symbol]/KeyLevelsPanel.tsx", "{KEY_LEVELS_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{KEY_LEVELS_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{TECHNICAL_CHART_TAGLINE}"],
+      ["../../position/[symbol]/page.tsx", "{TECHNICAL_INDICATORS_TAGLINE}"],
+      ["../../position/[symbol]/EntryObservationPanel.tsx", "{ENTRY_PANEL_TAGLINE}"],
+    ];
+    for (const [rel, needle] of retired) {
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src, `${rel} 不應再渲染 ${needle}`).not.toContain(needle);
+    }
+  });
+
+  it("FR-4 C5 守門：建議卡必須渲染銜接句，且 AdviceCardView 不得單獨放回 headline／disclaimer／信心等級", () => {
     const src = readFileSync(
       fileURLToPath(new URL("../../position/[symbol]/AdviceCardView.tsx", import.meta.url)),
       "utf8",
     );
-    expect(src).toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
+    // 一眼一句 §2.6：XREF 改由 page.tsx 的 <details> summary 第二行承載，AdviceCardView 本身不再重複渲染。
+    expect(src).not.toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
+    const pageSrc = readFileSync(fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)), "utf8");
+    expect(pageSrc).toContain("{ADVICE_CARD_XREF_TO_SUMMARY}");
     // C5：headline／信心等級／confidenceMeaning／disclaimer 同進同退——任何一項回流即紅燈。
     expect(src).not.toMatch(/buildAttributedHeadline|CANDIDATE_HEADING_LABEL|advice\.disclaimer|confidenceLabel\(|confidence_meaning/);
     // R-1：衝突揭露句指涉改為操作摘要的結論（逐字）。
     expect(src).toContain("本次同時命中方向相反的規則，上方操作摘要的結論只代表權重較高的一方。");
   });
 
-  it("P1／L6-5 順序守門：操作摘要最前、資料來源指引句緊接其後、頁尾揭露區為 </main> 前最後一個節點", () => {
+  it("P1／L6-5 順序守門（一眼一句 §2.1）：技術分析 → 操作摘要 → 關鍵價位參考，頁尾揭露區為 </main> 前最後一個節點", () => {
     const pageSource = readFileSync(
       fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)),
       "utf8",
     );
+    const technical = pageSource.indexOf(`{TECHNICAL_ANALYSIS_TITLE}</h2>`);
     const summary = pageSource.indexOf("<OperationSummaryPanel advice={advice} />");
-    const dataPointer = pageSource.indexOf("{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}");
     const keyLevels = pageSource.indexOf("<KeyLevelsPanel");
     const footer = pageSource.indexOf("<PageFooterDisclosures groups={footerGroups} />");
     const mainClose = pageSource.lastIndexOf("</main>");
-    expect(summary).toBeGreaterThan(-1);
-    expect(dataPointer).toBeGreaterThan(summary);
-    expect(keyLevels).toBeGreaterThan(dataPointer);
+    expect(technical).toBeGreaterThan(-1);
+    expect(summary).toBeGreaterThan(technical);
+    expect(keyLevels).toBeGreaterThan(summary);
     expect(footer).toBeGreaterThan(keyLevels);
     expect(mainClose).toBeGreaterThan(footer);
+    // 一眼一句 §2.1：移除操作摘要下方那句 buildFooterGuidanceForDataSource(...)（改放進操作摘要的「詳細」最後一行）。
+    expect(pageSource).not.toContain("buildFooterGuidanceForDataSource");
+    expect(
+      readFileSync(fileURLToPath(new URL("../../position/[symbol]/OperationSummaryPanel.tsx", import.meta.url)), "utf8"),
+    ).toContain("{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}");
     // 頁尾之後不得再有任何區塊：只剩空白與 </main>。
     expect(pageSource.slice(footer + "<PageFooterDisclosures groups={footerGroups} />".length, mainClose).trim()).toBe("");
   });
@@ -1180,11 +1240,12 @@ describe("揭露下沉頁尾 守門", () => {
   });
 
   it("L3／L4：分組順序寫死為頁面順序，組名以既有標題常數 import 取得", () => {
+    // 一眼一句 §2.1: 技術分析 → 操作摘要 → 關鍵價位參考（→ 六項觀察條件 → 建議卡，見 T9）→ 槓桿專章。
     const order = [
       "PAGE_LEVEL_DISCLOSURE_SECTION_TITLE",
+      "TECHNICAL_ANALYSIS_TITLE",
       "OPERATION_SUMMARY_TITLE",
       "KEY_LEVELS_PANEL_TITLE",
-      "TECHNICAL_ANALYSIS_TITLE",
       "ADVICE_CARD_TITLE",
       "LEVERAGE_CHAPTER_TITLE",
     ];
@@ -1217,7 +1278,9 @@ describe("揭露下沉頁尾 守門", () => {
 
   it("L5：每個有句子下沉的區塊都渲染帶組名的指引句，字級不低於導讀（text-sm / neutral-300）", () => {
     const wiring: [string, string][] = [
-      ["../../position/[symbol]/page.tsx", "{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}"],
+      // 一眼一句 §2.1: buildFooterGuidanceForDataSource(...) moved from page.tsx into
+      // OperationSummaryPanel's own `<details>` (its last line, held／candidate branches).
+      ["../../position/[symbol]/OperationSummaryPanel.tsx", "{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}"],
       ["../../position/[symbol]/OperationSummaryPanel.tsx", "{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}"],
       ["../../position/[symbol]/KeyLevelsPanel.tsx", "{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}"],
       ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
@@ -1234,9 +1297,14 @@ describe("揭露下沉頁尾 守門", () => {
 
   it("L6-1'（CEO 第二次裁定 2026-09-06 推翻風控 A+1～A+10）：十句一律下沉，原區塊不再渲染，由 builder 逐句產出", () => {
     const summary = read("../../position/[symbol]/OperationSummaryPanel.tsx");
-    for (const needle of ["{required.asOfStatement}", "{model.required.candidateEvidenceNotice}", "{model.notComparableNote}"]) {
+    for (const needle of ["{required.asOfStatement}", "{model.notComparableNote}"]) {
       expect(summary, `${needle} 應已下沉`).not.toContain(needle);
     }
+    // 一眼一句 §2.3 R2（推翻本節先前的下沉裁定）：candidateEvidenceNotice 回到結論旁，
+    // 常駐於面板主視圖，`buildSummaryFooterItems` 不再重複輸出（見下方 builder 斷言）。
+    expect(summary, "{model.required.candidateEvidenceNotice} 應已回到主視圖").toContain(
+      "{model.required.candidateEvidenceNotice}",
+    );
     expect(read("../../position/[symbol]/AdviceCardView.tsx")).not.toContain("{DIRECTION_SHARE_QUALIFIER}");
     const panel = read("../../position/[symbol]/KeyLevelsPanel.tsx");
     for (const needle of [
@@ -1455,18 +1523,26 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(buildConditionCount(3, 1)).toBe("6 條中成立 3 條，其中 1 條無法判定。");
   });
 
-  it("T4／T7／T8／T13：三重編碼、E-1～E-4 常駐不摺疊、不 import 結論元素、計數字級 ≤ text-lg", () => {
+  it("T4／T7／T8／T13：三重編碼、E-1～E-4（分佈主視圖／詳細，一眼一句 §2.5）、不 import 結論元素、計數字級 ≤ text-lg", () => {
     expect(panelSrc).toContain("aria-label={`${conditionLabel(c.id, rangeBarCount)}：${observedText(c)}，${ENTRY_STATUS_LABELS[c.status]}`}");
     expect(panelSrc).toContain("{STATUS_GLYPH[c.status]}");
     expect(panelSrc).toContain("{ENTRY_STATUS_LABELS[c.status]}");
-    // REQ-1: rows always listed; the footer group is unconditional; 「同步」 decided on raw stamps (REQ-3).
+    // REQ-1: rows always listed; the footer group is unconditional; 「同步」 決定 on raw stamps (REQ-3).
     expect(panelSrc).not.toContain("observation.allUnavailable ? (");
     expect(pageSrc).toContain("{ title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) }");
     expect(panelSrc).toContain("dataTimes.bars === dataTimes.signals && dataTimes.signals === dataTimes.advice");
     for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataTimesLine("]) {
       expect(panelSrc).toContain(needle);
     }
-    expect(panelSrc).not.toMatch(/<details|<summary|line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|className="[^"]*\bhidden\b|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
+    // 一眼一句 §2.5: E-1 與 (!synchronized 時的) 資料時間句常駐主視圖；六列明細、
+    // E-2/E-3 與 (synchronized 時的) 資料時間句改收進 `<details>`（六項觀察條件唯一
+    // 允許的摺疊區塊，summary＝`DETAILS_SUMMARY_ENTRY`）——不再是全面禁止 details 的區塊。
+    expect(panelSrc).toContain("<details");
+    expect(panelSrc).toContain("<summary");
+    // `[&::-webkit-details-marker]:hidden` is the same `<details>`-chevron idiom every
+    // other 一眼一句 panel already uses (KeyLevelsPanel／OperationSummaryPanel／page.tsx),
+    // not a content-hiding utility — excluded from this scan on that basis alone.
+    expect(panelSrc).not.toMatch(/line-clamp|truncate|max-h-|overflow-y-(auto|scroll)|sr-only|aria-expanded|IntersectionObserver|React\.lazy|Suspense|sticky/);
     expect(panelSrc).not.toMatch(/text-neutral-(5|6|7)00/);
     // R-15：只看 import 行與 JSX 取值，doc comment 提到這些詞不算。
     const importLines = panelSrc.split("\n").filter((l) => l.startsWith("import"));
@@ -1491,20 +1567,18 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(wordingSrc).not.toMatch(/=== 6\b|met === /);
   });
 
-  it("T9：位置——操作摘要 → 資料來源指引句 → 六項觀察條件 → 關鍵價位參考；頁尾組同序", () => {
+  it("T9（一眼一句 §2.1 改序）：位置——操作摘要 → 關鍵價位參考 → 六項觀察條件；頁尾組同序", () => {
     const summary = pageSrc.indexOf("<OperationSummaryPanel advice={advice} />");
-    const dataPointer = pageSrc.indexOf("{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}");
-    const entry = pageSrc.indexOf("<EntryObservationPanel");
     const keyLevels = pageSrc.indexOf("<KeyLevelsPanel");
+    const entry = pageSrc.indexOf("<EntryObservationPanel");
     expect(summary).toBeGreaterThan(-1);
-    expect(dataPointer).toBeGreaterThan(summary);
-    expect(entry).toBeGreaterThan(dataPointer);
-    expect(keyLevels).toBeGreaterThan(entry);
+    expect(keyLevels).toBeGreaterThan(summary);
+    expect(entry).toBeGreaterThan(keyLevels);
     const gEntry = pageSrc.indexOf("title: ENTRY_PANEL_TITLE");
     const gSummary = pageSrc.indexOf("title: OPERATION_SUMMARY_TITLE");
     const gKey = pageSrc.indexOf("title: KEY_LEVELS_PANEL_TITLE");
-    expect(gEntry).toBeGreaterThan(gSummary);
-    expect(gKey).toBeGreaterThan(gEntry);
+    expect(gKey).toBeGreaterThan(gSummary);
+    expect(gEntry).toBeGreaterThan(gKey);
     expect(panelSrc).toContain("{buildFooterGuidance(ENTRY_PANEL_TITLE)}");
   });
 
@@ -1527,5 +1601,118 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     ]) {
       expect(read(rel), `${rel} 不得引用六項觀察條件`).not.toMatch(/EntryObservation|metCount|entryObservation/);
     }
+  });
+});
+
+/**
+ * 風控逐字審 R-A2（`work/stock-desk-一眼一句-實作規格.md` §5 全數 APPROVE 後
+ * required）：`oneLinerWording.ts` header 自稱「逐字釘住」，但落地當下沒有任何
+ * 斷言比對其字面——本節補齊：該檔全部 exported 常數與 builder 輸出樣板逐字
+ * `toBe`；`RiskGauge.tsx` 的 H4 頂部說明句全文與 H5 summary 半句只加測試、不
+ * 改元件（B 的檔案）；`AlertStatusStrip.tsx` 的查詢失敗前綴同時釘常數與 wiring。
+ * qa 追加 low：`DETAILS_SUMMARY_ADVICE` 全專案未被引用，已直接自
+ * `oneLinerWording.ts` 移除（規格 §5 清單同步由 dev-lead 更新），不留死碼。
+ */
+describe("oneLinerWording.ts 逐字釘住（風控逐字審 R-A2）", () => {
+  it("DETAILS_SUMMARY_* 常數逐字比對，且死碼 DETAILS_SUMMARY_ADVICE 已移除", () => {
+    expect(DETAILS_SUMMARY_GENERIC).toBe("詳細說明與依據");
+    expect(DETAILS_SUMMARY_OPERATION).toBe("詳細：反面論點、失效條件與假設");
+    expect(DETAILS_SUMMARY_KEY_LEVELS).toBe("查看計算依據");
+    expect(DETAILS_SUMMARY_ENTRY).toBe("詳細：六條逐項明細");
+    expect(DETAILS_SUMMARY_TECHNICAL).toBe("詳細：七張指標卡與風險量測");
+    expect(DETAILS_SUMMARY_RISK_GAUGE).toBe("詳細：各項判定依據、假設與資料來源");
+    const src = readFileSync(fileURLToPath(new URL("../oneLinerWording.ts", import.meta.url)), "utf8");
+    expect(src).not.toContain("DETAILS_SUMMARY_ADVICE");
+  });
+
+  it("個股頁 3 個 builder 輸出樣板逐字比對", () => {
+    expect(buildTechOneLiner(386, "918.66")).toBe("近 386 根日線，收盤 918.66。");
+    expect(buildKeyLevelsOneLiner("918.66", 252, "上緣")).toBe("收盤 918.66，位於近 252 根區間上緣。");
+    expect(buildAdviceHitCount(3)).toBe("命中 3 條");
+  });
+
+  it("首頁警示狀態列常數與 3 個 builder 輸出樣板逐字比對", () => {
+    expect(ALERTS_NO_RULES).toBe("尚未設定警示規則");
+    expect(ALERTS_NO_RULES_LINK).toBe("去設定");
+    expect(ALERTS_MANAGE_LINK).toBe("管理警示規則");
+    expect(ALERTS_SCHEDULER_DISABLED).toBe("排程目前未啟用，警示評估暫不會更新");
+    expect(ALERTS_LOAD_ERROR_PREFIX).toBe("無法載入警示狀態：");
+    expect(buildAlertsRulesNoEvents(4)).toBe("4 條規則已設定，目前沒有待處理警示");
+    expect(buildAlertsQueriedAt("2026-09-19 16:40（台北時間）")).toBe("查詢時間：2026-09-19 16:40（台北時間）");
+    expect(buildAlertsPendingCount(2)).toBe("2 條待處理警示");
+  });
+
+  it("AlertStatusStrip.tsx wiring：查詢失敗前綴確實由元件渲染", () => {
+    const src = readFileSync(fileURLToPath(new URL("../../components/AlertStatusStrip.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("{ALERTS_LOAD_ERROR_PREFIX}");
+  });
+});
+
+describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測試，不改 B 的元件）", () => {
+  function makeSource(symbol: string, status: string): SymbolDataMeta {
+    return {
+      symbol,
+      market: "TW",
+      data: {
+        status,
+        source: "twse",
+        staleness_minutes: null,
+        is_within_ttl: null,
+        bar_count: 100,
+        first_bar_date: "2026-01-01",
+        last_bar_date: "2026-08-08",
+        trading_days_behind: null,
+        reason: null,
+      },
+    };
+  }
+
+  function makeCheck(overrides: Partial<BookLimitCheck>): BookLimitCheck {
+    return {
+      index: 1,
+      limit_id: "single_position_weight",
+      name: "單一標的佔比上限",
+      status: "passed",
+      observed: 0.05,
+      threshold: 0.2,
+      detail: "detail",
+      worst_symbol: null,
+      evaluated_count: 3,
+      excluded: [],
+      ...overrides,
+    };
+  }
+
+  it("H4：頂部說明句全文逐字存在於原始碼（風控裁決 2026-08-09 核可全文，不得改字）", () => {
+    const src = readFileSync(fileURLToPath(new URL("../../components/RiskGauge.tsx", import.meta.url)), "utf8");
+    // JSX 原始碼跨行縮排；比對前雙方都去除全部空白字元，避免換行/縮排造成假陰性。
+    const flat = src.replace(/\s+/g, "");
+    const h4 =
+      "單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly" +
+      "部位上限為帳本層單一判定。未納入比較的標的列於各條之下。";
+    expect(flat).toContain(h4.replace(/\s+/g, ""));
+  });
+
+  it("H5：非 fresh 時 summary 附「——其中 {N} 檔非即時」半句，緊接 DETAILS_SUMMARY_RISK_GAUGE 之後", () => {
+    const data: PortfolioLimitsResponse = {
+      as_of: "2026-09-19T16:40:00+08:00",
+      limits: [makeCheck({})],
+      notes: [],
+      sources: [makeSource("2330", "fresh"), makeSource("2317", "cached_stale")],
+    } as unknown as PortfolioLimitsResponse;
+    const html = renderToStaticMarkup(createElement(RiskGaugeView, { data }));
+    expect(html).toContain(`${DETAILS_SUMMARY_RISK_GAUGE}——其中 1 檔非即時`);
+  });
+
+  it("H5：全部 fresh 時 summary 不附半句", () => {
+    const data: PortfolioLimitsResponse = {
+      as_of: "2026-09-19T16:40:00+08:00",
+      limits: [makeCheck({})],
+      notes: [],
+      sources: [makeSource("2330", "fresh")],
+    } as unknown as PortfolioLimitsResponse;
+    const html = renderToStaticMarkup(createElement(RiskGaugeView, { data }));
+    expect(html).toContain(DETAILS_SUMMARY_RISK_GAUGE);
+    expect(html).not.toContain("非即時");
   });
 });

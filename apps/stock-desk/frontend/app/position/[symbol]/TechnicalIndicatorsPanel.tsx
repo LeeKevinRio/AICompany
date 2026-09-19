@@ -134,22 +134,42 @@ function IndicatorOverview({ chips }: { chips: OverviewChip[] }) {
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
       <h4 className="text-sm font-semibold text-neutral-100">{INDICATOR_OVERVIEW_TITLE}</h4>
-      {chips.length === 0 ? (
-        <p className="mt-2 text-sm text-neutral-400">{INDICATOR_OVERVIEW_EMPTY}</p>
-      ) : (
-        <ul className="mt-2 flex flex-wrap gap-2">
-          {chips.map((chip) => (
-            <li key={chip.key}>
-              <BandChip band={chip.band} label={chip.label} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="mt-2">
+        <ChipsList chips={chips} />
+      </div>
       {/*
         Legend (`INDICATOR_OVERVIEW_LEGEND`)：CEO 第二次裁定 2026-09-06 推翻風控 A+8，下沉頁尾
         （`buildTechnicalFooterItems`）；原位留指引句（L5）。
       */}
       <p className="mt-2 text-sm text-neutral-300">{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}</p>
+    </div>
+  );
+}
+
+function ChipsList({ chips }: { chips: OverviewChip[] }) {
+  if (chips.length === 0) return <p className="text-sm text-neutral-400">{INDICATOR_OVERVIEW_EMPTY}</p>;
+  return (
+    <ul className="flex flex-wrap gap-2">
+      {chips.map((chip) => (
+        <li key={chip.key}>
+          <BandChip band={chip.band} label={chip.label} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * 一眼一句 §2.2 主視圖：只放 chips 一列（無標題／無圖例／無 footer 指引），供
+ * `page.tsx` 在技術分析主視圖直接渲染；完整版（標題＋圖例指引＋同一份 chips）
+ * 留在 `<details>` 內的 `IndicatorOverview`（見上）——`collectOverviewChips`
+ * 是唯一的資料來源，兩處不會算出不同的 chips。
+ */
+export function IndicatorOverviewChipsRow({ payload }: { payload: SignalsPayload }) {
+  if (!payload.technical) return null;
+  return (
+    <div className="mt-3">
+      <ChipsList chips={collectOverviewChips(payload)} />
     </div>
   );
 }

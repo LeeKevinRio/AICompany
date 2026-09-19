@@ -5,7 +5,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
-import { formatDateTime, marketLabel } from "../../lib/format";
+import { formatDateTime, formatNumber, marketLabel } from "../../lib/format";
 import { inferTradingViewExchange } from "../../lib/tradingViewSymbol";
 import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, usePositions, useSignals } from "../../lib/queries";
 import type { Market } from "../../lib/types";
@@ -19,14 +19,11 @@ import { ENTRY_PANEL_TITLE, buildEntryFooterItems } from "../../lib/entryObserva
 import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
 import type { FooterGroup } from "../../components/PageFooterDisclosures";
 import { NON_REALTIME_NOTICE } from "../../lib/adviceWording";
-import { buildFooterGuidanceForDataSource } from "../../lib/footerDisclosureWording";
 import { buildSummaryFooterItems } from "../../lib/operationSummary";
-import {
-  PAGE_LEVEL_DISCLOSURE_SECTION_TITLE,
-  TECHNICAL_CHART_TAGLINE,
-  TECHNICAL_INDICATORS_TAGLINE,
-} from "../../lib/sectionTaglines";
+import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { ADVICE_CARD_XREF_TO_SUMMARY, PAGE_LEVEL_DISCLOSURE_SECTION_TITLE } from "../../lib/sectionTaglines";
 import { ADVICE_CARD_TITLE, LEVERAGE_CHAPTER_TITLE, OPERATION_SUMMARY_TITLE, TECHNICAL_ANALYSIS_TITLE } from "../../lib/sectionTitles";
+import { DETAILS_SUMMARY_TECHNICAL, buildAdviceHitCount, buildTechOneLiner } from "../../lib/oneLinerWording";
 import type { AnchorSource } from "../../lib/keyLevels";
 import type { PositionsResponse } from "../../lib/types";
 import { ErrorPanel } from "../../components/ErrorPanel";
@@ -34,7 +31,7 @@ import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
 import { AdviceCardView, buildAdviceFooterItems } from "./AdviceCardView";
 import { LeverageChapterView } from "./LeverageChapterView";
-import { TechnicalIndicatorsPanel, buildTechnicalFooterItems } from "./TechnicalIndicatorsPanel";
+import { IndicatorOverviewChipsRow, TechnicalIndicatorsPanel, buildTechnicalFooterItems } from "./TechnicalIndicatorsPanel";
 import { OperationSummaryPanel } from "./OperationSummaryPanel";
 
 /**
@@ -179,18 +176,10 @@ export default function PositionDetailPage() {
     constant that exists whatever the queries do; the other groups appear
     exactly when their section's data exists.
   */
+  // 一眼一句 §2.1: 分組順序寫死為頁面順序（技術分析 → 操作摘要 → 關鍵價位參考 →
+  // 六項觀察條件 → 建議卡 → 槓桿專章），L3/L4 沿用既有標題常數 import。
   const footerGroups: FooterGroup[] = [
     { title: PAGE_LEVEL_DISCLOSURE_SECTION_TITLE, items: [NON_REALTIME_NOTICE] },
-    { title: OPERATION_SUMMARY_TITLE, items: advice.data ? buildSummaryFooterItems(advice.data) : [] },
-    // 風控 REQ-1: the six thresholds are static facts — this group exists whatever the queries do.
-    { title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) },
-    {
-      title: KEY_LEVELS_PANEL_TITLE,
-      items:
-        bars.data && bars.data.status === "ok"
-          ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
-          : [],
-    },
     {
       title: TECHNICAL_ANALYSIS_TITLE,
       items:
@@ -198,6 +187,16 @@ export default function PositionDetailPage() {
           ? buildTechnicalFooterItems(signals.data.signals)
           : [],
     },
+    { title: OPERATION_SUMMARY_TITLE, items: advice.data ? buildSummaryFooterItems(advice.data) : [] },
+    {
+      title: KEY_LEVELS_PANEL_TITLE,
+      items:
+        bars.data && bars.data.status === "ok"
+          ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
+          : [],
+    },
+    // 風控 REQ-1: the six thresholds are static facts — this group exists whatever the queries do.
+    { title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) },
     {
       title: ADVICE_CARD_TITLE,
       items: advice.data?.status === "ok" && advice.data.advice ? buildAdviceFooterItems(advice.data.advice) : [],
@@ -235,97 +234,55 @@ export default function PositionDetailPage() {
       </div>
 
       {/*
-        --- Operation summary (FR-C1 AC-C1.1 / FR-C6 / FR-C7 / FR-C8) --------
-        Deliberately placed above the fold, ahead of the four-facet sections,
-        and driven by its own `useAdvice` query instance so a failure or
-        `insufficient_data` here never blocks the technical-analysis section
-        below (AC-C1.2 / AC-C1.3) — this is the same query the advice-card
-        section further down uses; React Query dedupes it into one request.
-      */}
-      <div className="mt-6">
-        <OperationSummaryPanel advice={advice} />
-      </div>
-
-      {/*
-        --- 資料來源揭露的指引句（揭露下沉頁尾，CEO 裁定 2026-09-06）------------
-        `NON_REALTIME_NOTICE` now lives in the footer's first group (titled
-        `PAGE_LEVEL_DISCLOSURE_SECTION_TITLE`); 風控 required-4 keeps a pointer at
-        the spot the page-level disclosure block used to occupy, right under the
-        操作摘要. Static — no query state involved.
-      */}
-      <p className="mt-3 text-sm text-neutral-300">{buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}</p>
-
-      {/*
-        --- 關鍵價位參考 (CEO 需求 2026-09-01 MVP; 風控 R10–R12 修訂) --------
-        Number-first digest of range position / pullback / stop / target
-        reference levels, fed by the same bars query as the 本地圖表 below
-        (React Query dedupes). Rendered only on an `ok` bars envelope (risk
-        R12: this panel's gate must be no looser than the chart's). The
-        anchor is a tri-state (risk R10/R11): a confirmed average cost taken
-        from the stored positions' native-currency `avg_cost` (risk R13/R14),
-        a CONFIRMED not-held state, or "unknown" while the positions query is
-        pending or a lot's cost is unusable — the panel words each state
-        differently and never claims 未持有 on "unknown".
-      */}
-      {/* R-19: 操作摘要 → 資料來源指引句 → 六項觀察條件 → 關鍵價位參考. */}
-      <EntryObservationPanel
-        observation={entryObservation}
-        rangeBarCount={entryLevels?.rangeBarCount ?? null}
-        dataTimes={{
-          bars: bars.data?.as_of ?? null,
-          signals: signals.data?.as_of ?? null,
-          advice: advice.data?.as_of ?? null,
-        }}
-      />
-
-      {bars.data && bars.data.status === "ok" && (
-        <KeyLevelsPanel
-          bars={bars.data.bars}
-          anchorSource={keyLevelsAnchor.anchorSource}
-          avgCost={keyLevelsAnchor.avgCost}
-          observationBand={entryObservation.observationBand}
-        />
-      )}
-
-      {/*
         --- Technical analysis (FR-C1 information architecture + FR-C2 indicator
         surfacing) -----------------------------------------------------------
-        Two independently-loaded subsections under one heading, each with its
-        own DataMeta badge (bars vs signals are separate API calls — AC-C1.2 /
-        AC-C8.1): a failure or `insufficient_data` in one never blocks the
-        other. FR-C3/C4/C5 (fundamentals/chip/news) are not part of this batch
-        — their spikes (S-1/S-2/S-3) have not landed — so this section only
-        covers what FR-C2 asks for.
+        一眼一句 §2.1/§2.2: moved to the top of the body (標題列之後、操作摘要之前).
+        Main view: h2 + bars badge + signals badge (風控 R-A1: provenance and
+        the signals error/insufficient states stay outside the fold), `PriceChart`,
+        chips row, one-line conclusion (`TECH_ONE_LINER`). `<details>` holds the
+        signals pending skeleton, the full `IndicatorOverview` (title+legend
+        pointer), the seven indicator cards, the three risk cards and the
+        sample-size sentence.
+        A failure or `insufficient_data` in bars vs signals never blocks the
+        other (AC-C1.2 / AC-C8.1) — each still has its own gate below.
       */}
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
-        <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
-        <p className="mt-1 text-sm text-neutral-300">{TECHNICAL_CHART_TAGLINE}</p>
-
-        {/* --- K-line + MA overlay ---------------------------------------- */}
-        <div className="mt-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-neutral-200">日K線與均線</h3>
-            {chartTab === "local" && bars.isSuccess && (
-              <span className="flex flex-wrap items-center text-xs text-neutral-500">
-                資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
-                <DataMetaStatusBadge
-                  status={bars.data.data.status}
-                  stalenessMinutes={bars.data.data.staleness_minutes}
-                  isWithinTtl={bars.data.data.is_within_ttl}
-                  lastBarDate={bars.data.data.last_bar_date}
-                  reason={bars.data.data.reason}
-                />
-              </span>
-            )}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
+          {bars.isSuccess && (
+            <span className="flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+              資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
+              <DataMetaStatusBadge
+                status={bars.data.data.status}
+                stalenessMinutes={bars.data.data.staleness_minutes}
+                isWithinTtl={bars.data.data.is_within_ttl}
+                lastBarDate={bars.data.data.last_bar_date}
+                reason={bars.data.data.reason}
+              />
+            </span>
+          )}
+        </div>
+        {/* R-A1（風控逐字審 R5 破線修正）: signals 徽章列移回主視圖，作為 h2 徽章列第二段——不得收進 <details>。 */}
+        {signals.isSuccess && (
+          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+            資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
+            <DataMetaStatusBadge
+              status={signals.data.data.status}
+              stalenessMinutes={signals.data.data.staleness_minutes}
+              isWithinTtl={signals.data.data.is_within_ttl}
+              lastBarDate={signals.data.data.last_bar_date}
+              reason={signals.data.data.reason}
+            />
           </div>
+        )}
 
-          {/*
-            CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView 為預設頁籤，
-            本地圖表（既有、綁已驗證資料，供指標對照）保留於第二頁籤，非移除。
-            CEO 2026-09-16: TradingView 頁籤以 `TRADINGVIEW_CHART_ENABLED` 關閉，
-            只剩本地圖表時不渲染 tablist（見上方常數說明）。
-          */}
-          {CHART_TABS.length > 1 && (
+        {/*
+          CEO 派工單 2026-08-16 (TradingView 嵌入): TradingView 為預設頁籤，
+          本地圖表（既有、綁已驗證資料，供指標對照）保留於第二頁籤，非移除。
+          CEO 2026-09-16: TradingView 頁籤以 `TRADINGVIEW_CHART_ENABLED` 關閉，
+          只剩本地圖表時不渲染 tablist（見上方常數說明）。
+        */}
+        {CHART_TABS.length > 1 && (
           <div role="tablist" aria-label="圖表來源" className="mt-3 flex gap-1 border-b border-neutral-800">
             {CHART_TABS.map((tab) => (
               <button
@@ -344,112 +301,186 @@ export default function PositionDetailPage() {
               </button>
             ))}
           </div>
-          )}
+        )}
 
-          {/*
-            Each panel only renders while its tab is active (not just CSS
-            `hidden`): `PriceChart`'s `lightweight-charts` canvas sizes itself
-            from its container's actual width via `autosize`, which a
-            `display:none` container reports as zero — mounting fresh on
-            activation, rather than toggling visibility on an already-mounted
-            zero-width canvas, is what keeps it correctly sized every time.
-            The `bars`/`signals` React Query results this reads are already
-            cached, so re-mounting costs no extra network round-trip.
-          */}
-          {TRADINGVIEW_CHART_ENABLED && chartTab === "tradingview" && (
-            <div role="tabpanel" className="mt-3">
-              {/*
-                Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, Medium
-                finding): `key` moved here, one level up from the inner
-                `<script>` tag it used to sit on — this forces a full
-                unmount/remount of the *whole* panel (host container +
-                copyright link + script, not just the script) whenever the
-                symbol or market changes, closing the stale-iframe overlap gap
-                an inner-only key left open on a same-page symbol change.
-              */}
-              <TradingViewChartPanel
-                key={`${market}:${symbol}:${tvExchangeHint ?? ""}`}
-                symbol={symbol}
-                market={market}
-                exchangeHint={tvExchangeHint}
-              />
-            </div>
-          )}
+        {/*
+          Each panel only renders while its tab is active (not just CSS
+          `hidden`): `PriceChart`'s `lightweight-charts` canvas sizes itself
+          from its container's actual width via `autosize`, which a
+          `display:none` container reports as zero — mounting fresh on
+          activation, rather than toggling visibility on an already-mounted
+          zero-width canvas, is what keeps it correctly sized every time.
+          The `bars`/`signals` React Query results this reads are already
+          cached, so re-mounting costs no extra network round-trip.
+        */}
+        {TRADINGVIEW_CHART_ENABLED && chartTab === "tradingview" && (
+          <div role="tabpanel" className="mt-3">
+            {/*
+              Security fix (qa-reviewer NEEDS_CHANGES on 4938eb5, Medium
+              finding): `key` moved here, one level up from the inner
+              `<script>` tag it used to sit on — this forces a full
+              unmount/remount of the *whole* panel (host container +
+              copyright link + script, not just the script) whenever the
+              symbol or market changes, closing the stale-iframe overlap gap
+              an inner-only key left open on a same-page symbol change.
+            */}
+            <TradingViewChartPanel
+              key={`${market}:${symbol}:${tvExchangeHint ?? ""}`}
+              symbol={symbol}
+              market={market}
+              exchangeHint={tvExchangeHint}
+            />
+          </div>
+        )}
 
-          {chartTab === "local" && (
-            <div role="tabpanel">
-              {/*
-                CEO 2026-09-17: the K-line waits for the bars query only. The
-                MA overlay comes from the (slower) signals query and is drawn
-                once it lands; before that the chart still shows the bars,
-                instead of sitting behind a skeleton until every indicator is in.
-              */}
-              {bars.isPending && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
-              {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
-              {bars.isSuccess && bars.data.status === "insufficient_data" && (
-                <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
-              )}
-              {bars.isSuccess && bars.data.status === "ok" && (
+        {chartTab === "local" && (
+          <div role="tabpanel">
+            {/*
+              CEO 2026-09-17: the K-line waits for the bars query only. The
+              MA overlay comes from the (slower) signals query and is drawn
+              once it lands; before that the chart still shows the bars,
+              instead of sitting behind a skeleton until every indicator is in.
+            */}
+            {bars.isPending && <SkeletonBlock className="mt-3 h-[360px] w-full" />}
+            {bars.isError && <div className="mt-3"><ErrorPanel label="無法載入日K線" error={bars.error} /></div>}
+            {bars.isSuccess && bars.data.status === "insufficient_data" && (
+              <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
+            )}
+            {bars.isSuccess && bars.data.status === "ok" && (
+              <>
                 <div className="mt-3">
                   <PriceChart
                     bars={bars.data.bars}
                     movingAverages={signals.data?.signals?.technical?.moving_averages}
                   />
-                  <p className="mt-2 text-xs text-neutral-500">
-                    共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
-                    {bars.data.data.last_bar_date ?? "—"}）。
-                  </p>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- Technical indicators (new, FR-C2) --------------------------- */}
-        <div className="mt-8 border-t border-neutral-800 pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-neutral-200">技術指標</h3>
-            {signals.isSuccess && (
-              <span className="flex flex-wrap items-center text-xs text-neutral-500">
-                資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
-                <DataMetaStatusBadge
-                  status={signals.data.data.status}
-                  stalenessMinutes={signals.data.data.staleness_minutes}
-                  isWithinTtl={signals.data.data.is_within_ttl}
-                  lastBarDate={signals.data.data.last_bar_date}
-                  reason={signals.data.data.reason}
-                />
-              </span>
+                {/* R-A1（風控逐字審 R5 破線修正）: signals 的 Error／Insufficient 移回主視圖（chips 列位置），不得收進 <details>。 */}
+                {signals.isError && <div className="mt-3"><ErrorPanel label="無法載入技術指標" error={signals.error} /></div>}
+                {signals.isSuccess && signals.data.status === "insufficient_data" && (
+                  <div className="mt-3"><InsufficientPanel reason={signals.data.reason} /></div>
+                )}
+                {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
+                  <IndicatorOverviewChipsRow payload={signals.data.signals} />
+                )}
+                {/* 一眼一句 §2.2 一句結論：TECH_ONE_LINER＝「近 {n} 根日線，收盤 {x}。」 */}
+                <p className="mt-2 text-sm text-neutral-200">
+                  {buildTechOneLiner(
+                    bars.data.bars.length,
+                    formatNumber(Number(bars.data.bars[bars.data.bars.length - 1]?.close ?? NaN), 2),
+                  )}
+                </p>
+              </>
             )}
           </div>
-          <p className="mt-1 text-sm text-neutral-300">{TECHNICAL_INDICATORS_TAGLINE}</p>
-          {signals.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
-          {signals.isError && (
-            <div className="mt-3"><ErrorPanel label="無法載入技術指標" error={signals.error} /></div>
-          )}
-          {signals.isSuccess && signals.data.status === "insufficient_data" && (
-            <div className="mt-3"><InsufficientPanel reason={signals.data.reason} /></div>
-          )}
-          {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
-            <div className="mt-3">
+        )}
+
+        <details className="group mt-3">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true" className="inline-block text-xs transition-transform duration-150 group-open:rotate-90">
+              ▸
+            </span>
+            {DETAILS_SUMMARY_TECHNICAL}
+          </summary>
+          <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+            {/* signals 徽章列／Error／Insufficient 已移回主視圖（R-A1）；詳細只留 pending skeleton 與完整指標卡。 */}
+            {signals.isPending && <SkeletonBlock className="h-40 w-full" />}
+            {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
               <TechnicalIndicatorsPanel payload={signals.data.signals} />
-            </div>
-          )}
-        </div>
+            )}
+            {bars.isSuccess && bars.data.status === "ok" && (
+              <p>
+                共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
+                {bars.data.data.last_bar_date ?? "—"}）。
+              </p>
+            )}
+            <p className="text-sm text-neutral-300">{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}</p>
+          </div>
+        </details>
       </section>
 
-      {/* --- Advice card ----------------------------------------------- */}
+      {/*
+        --- Operation summary (FR-C1 AC-C1.1 / FR-C6 / FR-C7 / FR-C8) --------
+        Driven by its own `useAdvice` query instance so a failure or
+        `insufficient_data` here never blocks the sections around it
+        (AC-C1.2 / AC-C1.3) — this is the same query the advice-card section
+        further down uses; React Query dedupes it into one request.
+      */}
+      <div className="mt-6">
+        <OperationSummaryPanel advice={advice} />
+      </div>
+
+      {/*
+        --- 關鍵價位參考 (CEO 需求 2026-09-01 MVP; 風控 R10–R12 修訂) --------
+        Number-first digest of range position / pullback / stop / target
+        reference levels, fed by the same bars query as the 技術分析 chart
+        above (React Query dedupes). Rendered only on an `ok` bars envelope
+        (risk R12: this panel's gate must be no looser than the chart's). The
+        anchor is a tri-state (risk R10/R11): a confirmed average cost taken
+        from the stored positions' native-currency `avg_cost` (risk R13/R14),
+        a CONFIRMED not-held state, or "unknown" while the positions query is
+        pending or a lot's cost is unusable — the panel words each state
+        differently and never claims 未持有 on "unknown".
+      */}
+      {bars.data && bars.data.status === "ok" && (
+        <KeyLevelsPanel
+          bars={bars.data.bars}
+          anchorSource={keyLevelsAnchor.anchorSource}
+          avgCost={keyLevelsAnchor.avgCost}
+          observationBand={entryObservation.observationBand}
+        />
+      )}
+
+      {/* 一眼一句 §2.1: 操作摘要 → 關鍵價位參考 → 六項觀察條件 → 建議卡. */}
+      <EntryObservationPanel
+        observation={entryObservation}
+        rangeBarCount={entryLevels?.rangeBarCount ?? null}
+        dataTimes={{
+          bars: bars.data?.as_of ?? null,
+          signals: signals.data?.as_of ?? null,
+          advice: advice.data?.as_of ?? null,
+        }}
+      />
+
+      {/*
+        --- Advice card（一眼一句 §2.6：整卡預設收合）---------------------
+        pending／error／insufficient 三態不包 `<details>`，直接渲染在 h2 之下；
+        `ok` 狀態才包進 `<details>`，summary 承載 h2＋命中數＋R9 交叉引用句
+        （`ADVICE_CARD_XREF_TO_SUMMARY`，`AdviceCardView` 本身不再重複渲染）。
+      */}
       <section className="mt-8">
-        <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
-        <div className="mt-3">
-          {advice.isPending && <SkeletonBlock className="h-64 w-full" />}
-          {advice.isError && <ErrorPanel label="無法載入建議" error={advice.error} />}
-          {advice.isSuccess && advice.data.status === "insufficient_data" && (
-            <InsufficientPanel reason={advice.data.reason} />
-          )}
-          {advice.isSuccess && advice.data.status === "ok" && advice.data.advice && (
-            <>
-              <p className="mb-3 text-xs text-neutral-500">
+        {advice.isPending && (
+          <>
+            <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
+            <div className="mt-3"><SkeletonBlock className="h-64 w-full" /></div>
+          </>
+        )}
+        {advice.isError && (
+          <>
+            <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
+            <div className="mt-3"><ErrorPanel label="無法載入建議" error={advice.error} /></div>
+          </>
+        )}
+        {advice.isSuccess && advice.data.status === "insufficient_data" && (
+          <>
+            <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
+            <div className="mt-3"><InsufficientPanel reason={advice.data.reason} /></div>
+          </>
+        )}
+        {advice.isSuccess && advice.data.status === "ok" && advice.data.advice && (
+          <details className="group rounded-lg border border-neutral-800">
+            <summary className="flex cursor-pointer list-none flex-col gap-1 p-4 [&::-webkit-details-marker]:hidden">
+              <span className="flex flex-wrap items-center gap-2">
+                <span aria-hidden="true" className="inline-block text-xs transition-transform duration-150 group-open:rotate-90">
+                  ▸
+                </span>
+                <h2 className="text-lg font-semibold text-neutral-100">{ADVICE_CARD_TITLE}</h2>
+                <span className="text-sm text-neutral-400">{buildAdviceHitCount(advice.data.advice.matched_rules.length)}</span>
+              </span>
+              {/* R9: the cross-reference sentence lives here, on the summary's own second line — `AdviceCardView` no longer repeats it inside. */}
+              <span className="text-xs text-neutral-400">{ADVICE_CARD_XREF_TO_SUMMARY}</span>
+            </summary>
+            <div className="space-y-3 border-t border-neutral-800 p-5">
+              <p className="text-xs text-neutral-500">
                 {advice.data.held
                   ? `以目前持倉評估（部位 ID：${advice.data.position_ids.join("、")}）。`
                   : "目前未持有此標的，以候選部位（0 股）評估。"}
@@ -474,9 +505,9 @@ export default function PositionDetailPage() {
                 </div>
               )}
               <AdviceCardView advice={advice.data.advice} />
-            </>
-          )}
-        </div>
+            </div>
+          </details>
+        )}
       </section>
 
       {/* --- Leverage chapter (conditional) ----------------------------- */}

@@ -6,7 +6,6 @@ import {
   ENTRY_E2_XREF,
   ENTRY_E3_DASH_NOTE,
   ENTRY_NO_DATA_STATEMENT,
-  ENTRY_PANEL_TAGLINE,
   ENTRY_PANEL_TITLE,
   ENTRY_STATUS_LABELS,
   buildConditionCount,
@@ -16,6 +15,7 @@ import {
 } from "../../lib/entryObservationWording";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { formatDateTime } from "../../lib/format";
+import { DETAILS_SUMMARY_ENTRY } from "../../lib/oneLinerWording";
 
 /**
  * 六條固定觀察條件面板 (CEO 需求 2026-09-06; PRD `work/stock-desk-進場觀察條件-PRD.md`
@@ -106,23 +106,34 @@ export function EntryObservationPanel({
           </p>
         )}
       </div>
-      <p className="mt-1 text-sm text-neutral-300">{ENTRY_PANEL_TAGLINE}</p>
-
       {/* 風控 REQ-1: the six rows are always listed (all 「—」 when nothing is loaded) so E-1's 「以上六條門檻」 always has its referent; only the count is withheld. */}
       {observation.allUnavailable && <p className="mt-3 text-sm text-neutral-300">{ENTRY_NO_DATA_STATEMENT}</p>}
-      {/* R-07: six dots, 1:1 with the rows below, same order, same size. Decorative here (S-4): the rows beneath carry the readable status text. */}
-          <ul className="mt-3 flex gap-2" aria-hidden="true">
-            {observation.conditions.map((c) => (
-              <li
-                key={c.id}
-                className={`flex h-6 w-6 items-center justify-center rounded-md border border-neutral-700 bg-neutral-900 text-sm ${STATUS_TEXT_CLASS[c.status]}`}
-              >
-                {STATUS_GLYPH[c.status]}
-              </li>
-            ))}
-          </ul>
+      {/* R-07: six dots, 1:1 with the rows below, same order, same size. Decorative here (S-4): a screen reader gets the full readable text from the detailed list in `<details>`. */}
+      <ul className="mt-3 flex gap-2" aria-hidden="true">
+        {observation.conditions.map((c) => (
+          <li
+            key={c.id}
+            className={`flex h-6 w-6 items-center justify-center rounded-md border border-neutral-700 bg-neutral-900 text-sm ${STATUS_TEXT_CLASS[c.status]}`}
+          >
+            {STATUS_GLYPH[c.status]}
+          </li>
+        ))}
+      </ul>
 
-          <ul className="mt-3 divide-y divide-neutral-800/60 rounded-md border border-neutral-800 bg-neutral-900/40">
+      {/* R-08: E-1 stands with the count; E-2/E-3 and the (synchronized) data-times line move into `<details>`. */}
+      <p className="mt-3 text-xs text-neutral-400">{ENTRY_E1_QUALIFIER}</p>
+      {/* R-08: the data-times line is standing ONLY while the three queries disagree — a synchronized read moves into `<details>` instead. */}
+      {!synchronized && <p className="mt-1 text-xs text-neutral-400">{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>}
+
+      <details className="group mt-3">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
+          <span aria-hidden="true" className="inline-block text-xs transition-transform duration-150 group-open:rotate-90">
+            ▸
+          </span>
+          {DETAILS_SUMMARY_ENTRY}
+        </summary>
+        <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          <ul className="divide-y divide-neutral-800/60 rounded-md border border-neutral-800 bg-neutral-900/40">
             {observation.conditions.map((c) => (
               <li
                 key={c.id}
@@ -144,15 +155,12 @@ export function EntryObservationPanel({
               </li>
             ))}
           </ul>
-
-      {/* E-1～E-4: standing, same block as the count, ≥ text-sm / ≥ neutral-400 (never in the footer). */}
-      <div className="mt-3 space-y-1 text-sm text-neutral-400">
-        <p className="text-neutral-300">{ENTRY_E1_QUALIFIER}</p>
-        <p>{ENTRY_E2_XREF}</p>
-        <p>{ENTRY_E3_DASH_NOTE}</p>
-        <p>{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>
-      </div>
-      <p className="mt-3 text-sm text-neutral-300">{buildFooterGuidance(ENTRY_PANEL_TITLE)}</p>
+          <p>{ENTRY_E2_XREF}</p>
+          <p>{ENTRY_E3_DASH_NOTE}</p>
+          {synchronized && <p>{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>}
+          <p className="text-sm text-neutral-300">{buildFooterGuidance(ENTRY_PANEL_TITLE)}</p>
+        </div>
+      </details>
     </section>
   );
 }

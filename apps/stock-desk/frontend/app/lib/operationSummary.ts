@@ -66,6 +66,22 @@ export interface RequiredElements {
   /** §2.7 — exactly one of the two is non-null */
   quantityRangeText: string | null;
   quantityAbsenceReason: string | null;
+  /**
+   * 個股頁減負批次 4 (`work/stock-desk-一眼一句-實作規格.md` §2.3 第 4 點):
+   * `quantityRangeText` above bundles "{min} ~ {max} 股" together with the
+   * card's own `basis` sentence as one string — the panel used to render
+   * that whole string AND, separately, `restoresComplianceWarning` (the SAME
+   * `basis` text, verbatim, whenever the quantity range does not restore
+   * compliance on a defensive action), printing the identical sentence
+   * twice. These two fields split the bundle so the panel can render the
+   * share count exactly once and decide, in exactly one place, whether the
+   * basis sentence goes into the alert box or the `<details>` (風控 R4:
+   * basis must render exactly once, page-wide). `quantityRangeText` is kept
+   * unchanged (and un-rendered by the panel) only for `operationSummary.test.ts`'s
+   * existing pinned assertions.
+   */
+  quantityRangeShares: string | null;
+  quantityRangeBasis: string | null;
   /** §2.8 — candidate mode only */
   candidateEvidenceNotice: string | null;
 }
@@ -179,11 +195,13 @@ function buildRequiredElements(
   lastBarDate: string | null,
   tradingDaysBehind: number | null,
 ): RequiredElements {
-  const quantityRangeText =
+  const quantityRangeShares =
     card.quantity_range === null
       ? null
       : `${card.quantity_range.min_shares.toLocaleString("zh-Hant-TW")} ~ ` +
-        `${card.quantity_range.max_shares.toLocaleString("zh-Hant-TW")} 股。${card.quantity_range.basis}`;
+        `${card.quantity_range.max_shares.toLocaleString("zh-Hant-TW")} 股`;
+  const quantityRangeText =
+    card.quantity_range === null ? null : `${quantityRangeShares}。${card.quantity_range.basis}`;
 
   return {
     disclaimer: card.disclaimer,
@@ -211,6 +229,8 @@ function buildRequiredElements(
     rulesStatement: buildRulesStatement(card.rules_version),
     quantityRangeText,
     quantityAbsenceReason: quantityRangeText === null ? QUANTITY_RANGE_ABSENCE_TEXT : null,
+    quantityRangeShares,
+    quantityRangeBasis: card.quantity_range === null ? null : card.quantity_range.basis,
     candidateEvidenceNotice: candidate ? CANDIDATE_EVIDENCE_NOTICE : null,
   };
 }
@@ -322,21 +342,15 @@ export function buildOperationSummary(
  */
 export function buildSummaryFooterItems(response: AdviceResponse): string[] {
   const model = buildOperationSummary(response);
-  // CEO 第二次裁定 2026-09-06（推翻風控 A+1～A+3）：candidateEvidenceNotice、
-  // notComparableNote、asOfStatement 亦下沉；順序沿用面板原本的呈現順序。
+  // CEO 第二次裁定 2026-09-06（推翻風控 A+1～A+3）：notComparableNote、
+  // asOfStatement 亦下沉；順序沿用面板原本的呈現順序。
+  //
+  // 一眼一句實作規格 §2.3（R2）: `candidateEvidenceNotice` moved BACK out of
+  // this footer and into the panel's main view (常駐一行, text-xs
+  // neutral-400) — the panel now renders it itself, exactly once, so it is
+  // deliberately dropped from this list rather than rendered twice.
   if (model.kind === "candidate") {
-    // `candidateEvidenceNotice` is non-null by construction in candidate mode
-    // (`buildRequiredElements(card, candidate=true)`); assert rather than mask.
-    if (model.required.candidateEvidenceNotice === null) {
-      throw new Error("candidate summary without candidateEvidenceNotice");
-    }
-    return [
-      model.required.candidateEvidenceNotice,
-      model.notComparableNote,
-      model.coverageStatement,
-      model.required.asOfStatement,
-      model.required.rulesStatement,
-    ];
+    return [model.notComparableNote, model.coverageStatement, model.required.asOfStatement, model.required.rulesStatement];
   }
   if (model.kind === "held") return [model.required.asOfStatement, model.required.rulesStatement];
   return [];

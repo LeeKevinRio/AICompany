@@ -1,7 +1,7 @@
 "use client";
 
-import { KEY_LEVELS_TAGLINE } from "../../lib/sectionTaglines";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { DETAILS_SUMMARY_KEY_LEVELS, buildKeyLevelsOneLiner } from "../../lib/oneLinerWording";
 import type { FooterItem } from "../../components/PageFooterDisclosures";
 import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
@@ -272,6 +272,18 @@ function rangeZoneOf(levels: KeyLevels): RangeZone | null {
   return levels.rangePositionPct !== null ? classifyRangeZone(levels.rangePositionPct) : null;
 }
 
+/**
+ * 一眼一句 §2.4 `KEYLEVELS_ONE_LINER`'s `{zone}` slot: the suffix half of the
+ * already risk-approved `ZONE_LABEL` ("區間下緣"/"區間中段"/"區間上緣") with
+ * the leading "區間" stripped, since the sentence template itself already
+ * supplies "近 {n} 根區間" — reusing the approved label's own substring
+ * rather than drafting a new word, so "近 252 根區間" + "下緣" reads as one
+ * phrase instead of repeating "區間" twice.
+ */
+function zoneSuffix(zone: RangeZone): string {
+  return ZONE_LABEL[zone].replace("區間", "");
+}
+
 function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
   const x = fmt(levels.anchorPrice);
   if (source === "cost") return buildStopBasisHeldWithCost(x);
@@ -348,128 +360,141 @@ export function KeyLevelsPanel({
   const zone = rangeZoneOf(levels);
   const ladder = buildLadderViewModel(levels, anchorSource);
 
+  // 一眼一句 §2.4 `KEYLEVELS_ONE_LINER`／R7 fallback: the same three-way branch
+  // the old position card used to decide its own headline (zone vs. the two
+  // insufficient/flat reasons), now driving the panel's single 一句結論.
+  const oneLiner =
+    zone !== null && levels.rangePositionPct !== null
+      ? buildKeyLevelsOneLiner(fmt(levels.close), levels.rangeBarCount, zoneSuffix(zone))
+      : levels.rangeUnavailableCause === "flat-range"
+        ? buildRangeFlatReason(levels.rangeBarCount)
+        : buildRangeInsufficientReason(levels.barCount);
+
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-lg font-semibold text-neutral-100">{KEY_LEVELS_PANEL_TITLE}</h2>
         <span className="text-sm text-neutral-400">{buildKeyLevelsCloseLine(fmt(levels.close), levels.closeDate)}</span>
       </div>
-      <p className="mt-1 text-sm text-neutral-300">{KEY_LEVELS_TAGLINE}</p>
+
+      {/* 一眼一句 §2.4: 一句結論，取代舊版位階卡大字（該卡連同 RangeGauge 移入詳細）。 */}
+      <p className="mt-2 text-sm text-neutral-200">{oneLiner}</p>
+
       {/*
-        頭部揭露（順序依成稿 §9）；NON_REALTIME_NOTICE 依減負 FR-3（風控 C1–C4）
-        只在頁尾揭露區的資料來源組出現一次，本面板不重複。均 ≥ text-sm、≥ neutral-400。
+        圖形化 item 2（主視覺）: the `PriceLadder` is the overview of every
+        level; 一眼一句 §2.4 keeps it as the panel's sole main-view graphic
+        (RangeGauge moves into `<details>` with the rest of the position card).
       */}
-      {/*
-        揭露下沉頁尾（CEO 裁定 2026-09-06；第二次裁定推翻風控 A+5／A+7／A+9／A+10）：
-        DISCLAIMER、DASH_NOTICE、STALENESS_SELF_NOTICE、位階≠估值句、停利 standing notice、
-        階梯註記皆下沉（`buildKeyLevelsFooterItems`）。UNADJUSTED_NOTICE 留原位以維持
-        計算依據 XREF「見面板頂部揭露」的指涉。
-      */}
-      <div className="mt-2 space-y-1 text-sm text-neutral-400">
-        <p>{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
+      <div className="mt-3">
+        <PriceLadder
+          model={ladder}
+          rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
+          groupLabel={ladderGroupLabel}
+          fmt={fmt}
+          observationBand={observationBand}
+        />
       </div>
 
-      {/*
-        圖形化 item 1 (CEO 2026-09-06): 位階卡 now leads with the gauge (`RangeGauge`),
-        full width. The zone 大字 keeps risk S1 (no red/green); the gauge bands are
-        one hue. The range's two ends moved from a text row onto the gauge's ends.
-      */}
-      <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
-        {zone !== null && levels.rangePositionPct !== null ? (
-          <>
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
-              <p className="text-xl font-bold text-neutral-100">
-                {ZONE_LABEL[zone]}
-                <span className="ml-2 align-middle font-mono text-sm font-normal text-neutral-400">
-                  {levels.rangePositionPct.toFixed(0)}%
-                </span>
-              </p>
-            </div>
-            <RangeGauge
-              rangeBarCount={levels.rangeBarCount}
-              rangePositionPct={levels.rangePositionPct}
-              zone={zone}
-              zoneLabels={ZONE_LABEL}
-              rangeLabel={buildRangeLabel(levels.rangeBarCount)}
-              lowText={fmt(levels.rangeLow)}
-              highText={fmt(levels.rangeHigh)}
-            />
-            <div className="mt-2 space-y-1">
-              <LevelRow label={KEY_LEVELS_MA60_DEVIATION_LABEL} value={fmtPct(levels.ma60DeviationPct)} />
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
-            <p className="mt-2 text-sm text-neutral-300">
-              {levels.rangeUnavailableCause === "flat-range"
-                ? buildRangeFlatReason(levels.rangeBarCount)
-                : buildRangeInsufficientReason(levels.barCount)}
-            </p>
-          </>
-        )}
-      </div>
-
-      {/*
-        圖形化 item 2: the `PriceLadder` below is the overview of every level.
-        風控 2026-09-06 R6(a)/R7(a): the 拉回 card keeps its three value rows
-        (the pinned 移動停利觀察 note points at "「拉回觀察」卡片的 MA20") and
-        the 停利 card keeps its 2R/+20% rows (KEY_LEVELS_TARGET_STANDING_NOTICE's
-        「以下數字皆由固定算式自基準價推得」 must have those numbers under it) —
-        the duplication with the ladder is accepted by 風控 (階梯是總覽). Only the
-        停損 card's two rows moved into the ladder (its sentences reference the
-        大字, not the rows).
-      */}
-      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {/* 拉回觀察卡 */}
-        <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
-          <p className="text-sm text-neutral-400">{KEY_LEVELS_PULLBACK_CARD_TITLE}</p>
-          <div className="mt-2 space-y-1">
-            <LevelRow label={KEY_LEVELS_PULLBACK_ROW_MA20} value={fmt(levels.ma20)} />
-            <LevelRow label={KEY_LEVELS_PULLBACK_ROW_MA60} value={fmt(levels.ma60)} />
-            <LevelRow label={KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60} value={fmt(levels.recentLow60)} />
-          </div>
-          <p className="mt-2 text-sm text-neutral-400">{KEY_LEVELS_PULLBACK_EXPLAIN_NOTE}</p>
-        </div>
-
-        {/* 停損參考卡 */}
-        <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+      {/* 兩個大字並排：停損／停利參考（無紅綠，風控 S1）。 */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-          <p className="mt-1 text-sm text-neutral-300">{anchorBasisSentence(anchorSource, levels)}</p>
           <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.stopSuggested)}</p>
-          <p className="mt-1 text-sm text-neutral-400">
+          {/* R6: the anchor-basis sentence and the ATR-availability condition stand beneath the stop figure. */}
+          <p className="mt-1 text-xs text-neutral-400">{anchorBasisSentence(anchorSource, levels)}</p>
+          <p className="mt-1 text-xs text-neutral-400">
             {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
           </p>
         </div>
-
-        {/* 停利參考卡 */}
-        <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+        <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-          <p className="mt-1 text-sm text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>
           <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.target2R)}</p>
-          <div className="mt-2 space-y-1">
-            <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={fmt(levels.target2R)} />
-            <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={fmt(levels.targetFixedPct)} />
-            <LevelRow label={KEY_LEVELS_TARGET_ROW_TRAILING_LABEL} value={fmt(levels.ma20)} />
-          </div>
-          <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}</p>
+          {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
         </div>
       </div>
 
-      <PriceLadder
-        model={ladder}
-        rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
-        groupLabel={ladderGroupLabel}
-        fmt={fmt}
-        observationBand={observationBand}
-      />
+      {/* R7: 未還原權值句常駐於面板底、詳細之前。 */}
+      <p className="mt-3 text-xs text-neutral-400">{KEY_LEVELS_HEADER_UNADJUSTED_NOTICE}</p>
 
-      {/*
-        計算依據十條、樣本句、S5 句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
-        （`buildKeyLevelsFooterItems` → `PageFooterDisclosures`），原位留指引句（風控 L5）。
-      */}
-      <p className="mt-3 text-sm text-neutral-300">{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}</p>
+      <details className="group mt-3">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
+          <span aria-hidden="true" className="inline-block text-xs transition-transform duration-150 group-open:rotate-90">
+            ▸
+          </span>
+          {DETAILS_SUMMARY_KEY_LEVELS}
+        </summary>
+        <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          {/*
+            圖形化 item 1 (CEO 2026-09-06): 位階卡（RangeGauge＋MA60 乖離列），
+            一眼一句 §2.4 決定整卡移入詳細（主視圖改由 PriceLadder 承擔主視覺）。
+          */}
+          <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+            {zone !== null && levels.rangePositionPct !== null ? (
+              <>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
+                  <p className="text-base font-bold text-neutral-100">
+                    {ZONE_LABEL[zone]}
+                    <span className="ml-2 align-middle font-mono text-xs font-normal text-neutral-400">
+                      {levels.rangePositionPct.toFixed(0)}%
+                    </span>
+                  </p>
+                </div>
+                <RangeGauge
+                  rangeBarCount={levels.rangeBarCount}
+                  rangePositionPct={levels.rangePositionPct}
+                  zone={zone}
+                  zoneLabels={ZONE_LABEL}
+                  rangeLabel={buildRangeLabel(levels.rangeBarCount)}
+                  lowText={fmt(levels.rangeLow)}
+                  highText={fmt(levels.rangeHigh)}
+                />
+                <div className="mt-2 space-y-1">
+                  <LevelRow label={KEY_LEVELS_MA60_DEVIATION_LABEL} value={fmtPct(levels.ma60DeviationPct)} />
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-neutral-400">{buildRangeCardTitle(levels.rangeBarCount)}</p>
+                <p className="mt-2 text-neutral-300">
+                  {levels.rangeUnavailableCause === "flat-range"
+                    ? buildRangeFlatReason(levels.rangeBarCount)
+                    : buildRangeInsufficientReason(levels.barCount)}
+                </p>
+              </>
+            )}
+          </div>
+
+          {/* 拉回觀察卡（完整） */}
+          <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+            <p className="text-neutral-400">{KEY_LEVELS_PULLBACK_CARD_TITLE}</p>
+            <div className="mt-2 space-y-1">
+              <LevelRow label={KEY_LEVELS_PULLBACK_ROW_MA20} value={fmt(levels.ma20)} />
+              <LevelRow label={KEY_LEVELS_PULLBACK_ROW_MA60} value={fmt(levels.ma60)} />
+              <LevelRow label={KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60} value={fmt(levels.recentLow60)} />
+            </div>
+            <p className="mt-2 text-neutral-400">{KEY_LEVELS_PULLBACK_EXPLAIN_NOTE}</p>
+          </div>
+
+          {/* 停利參考卡（完整：本檔決定收進詳細的三列與 anchor cross ref、trailing note）。 */}
+          <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+            <p className="text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
+            <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>
+            <div className="mt-2 space-y-1">
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={fmt(levels.target2R)} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={fmt(levels.targetFixedPct)} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_TRAILING_LABEL} value={fmt(levels.ma20)} />
+            </div>
+            <p className="mt-1 text-neutral-400">{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}</p>
+          </div>
+
+          {/*
+            計算依據十條、樣本句、S5 句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
+            （`buildKeyLevelsFooterItems` → `PageFooterDisclosures`），此處留指引句（風控 L5）。
+          */}
+          <p className="text-sm text-neutral-300">{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}</p>
+        </div>
+      </details>
     </section>
   );
 }

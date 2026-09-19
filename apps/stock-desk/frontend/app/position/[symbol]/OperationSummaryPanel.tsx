@@ -6,20 +6,22 @@ import { buildOperationSummary } from "../../lib/operationSummary";
 import { summaryConfidenceLabel } from "../../lib/adviceWording";
 import { formatDateTime } from "../../lib/format";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
-import { OPERATION_SUMMARY_TAGLINE } from "../../lib/sectionTaglines";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
-import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { buildFooterGuidance, buildFooterGuidanceForDataSource } from "../../lib/footerDisclosureWording";
 import { OPERATION_SUMMARY_TITLE } from "../../lib/sectionTitles";
+import { PAGE_LEVEL_DISCLOSURE_SECTION_TITLE } from "../../lib/sectionTaglines";
+import { DETAILS_SUMMARY_OPERATION } from "../../lib/oneLinerWording";
 
 /**
- * The place-topping operation summary (FR-C1 AC-C1.1, FR-C6, FR-C7, FR-C8).
- * Renders whatever `buildOperationSummary` (`app/lib/operationSummary.ts`)
- * derives from the same `useAdvice` payload the advice-card section further
- * down the page already fetches — no new endpoint, no new query. See that
- * module's doc comment for why the eight §2-required elements are modelled
- * as one always-populated object rather than left to ad-hoc JSX branches.
+ * 一眼一句實作規格 §2.3（`work/stock-desk-一眼一句-實作規格.md`）：the
+ * place-topping operation summary (FR-C1 AC-C1.1, FR-C6, FR-C7, FR-C8),
+ * reshaped into the standard 主視圖／`<details>` 兩層 — the eight §2-required
+ * elements still all travel with every rendered card (`buildOperationSummary`,
+ * `app/lib/operationSummary.ts`), just split across the two layers per the
+ *風控 R1–R10 最低常駐線 (see that spec's 附錄): only R1/R2/R3/R5/R10 stay in
+ * the always-visible main view, the rest move into `<details>`.
  *
  * DRAFT WORDING NOTICE: every visible sentence here traces back to
  * `app/lib/adviceWording.ts`, itself pending risk-compliance-officer's
@@ -61,7 +63,6 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
           </span>
         )}
       </div>
-      <p className="mt-1 text-sm text-neutral-300">{OPERATION_SUMMARY_TAGLINE}</p>
 
       {advice.isPending && <SkeletonBlock className="mt-3 h-40 w-full" />}
       {advice.isError && (
@@ -74,13 +75,20 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
   );
 }
 
-function SummaryBody({ response }: { response: AdviceResponse }) {
+/**
+ * Exported (only) so `operationSummary.test.ts` can render it directly via
+ * `renderToStaticMarkup` for the R4/一眼一句 §2.3 "basis renders exactly
+ * once" DOM assertion — every other caller should go through
+ * `OperationSummaryPanel` above.
+ */
+export function SummaryBody({ response }: { response: AdviceResponse }) {
   const model = buildOperationSummary(response);
 
   // AC-C1.3 / AC-C7.4: no price at all anywhere in the three-tier ladder —
   // no card, no fabricated evaluation, reason shown as-is. D3③: when the
   // envelope still carries a bar date the calendar has moved past, its age is
   // disclosed here too (see `buildOperationSummary`), not only on cards.
+  // 一眼一句 §2.3: unchanged besides the disclaimer's banner→inline text style.
   if (model.kind === "no_price") {
     return (
       <div className="mt-3 space-y-3">
@@ -97,15 +105,16 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
       <div className="mt-3 space-y-3">
         <InsufficientPanel reason={model.reason} />
         <StaleDataAlert notice={model.staleDataNotice} />
-        <DisclaimerBanner text={model.disclaimer} />
+        <InlineDisclaimer text={model.disclaimer} />
       </div>
     );
   }
 
   if (model.kind === "candidate") {
+    const [firstCounterargument, ...restCounterarguments] = model.required.counterarguments;
     return (
       <div className="mt-3 space-y-4">
-        {/* P1 結論位（風控替代路徑，CEO 2026-09-05）：結論標籤放大為 2xl，與免責同區、同進同退（R3）。 */}
+        {/* P1 結論位（風控替代路徑，CEO 2026-09-05）：結論標籤放大為 2xl，與信心 chip／說明句同列。 */}
         <div className="flex flex-wrap items-center gap-3">
           <span className="inline-block rounded-md border border-sky-800 bg-sky-950/40 px-4 py-2 text-2xl font-bold text-sky-300">
             {model.headingLabel}
@@ -113,19 +122,16 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
           <span className="text-sm text-neutral-400">
             信心等級：{summaryConfidenceLabel(model.required.confidence)}
           </span>
+          {/* R10: the confidence chip and its meaning sentence stand or fall together, same row. */}
+          <span className="text-xs text-neutral-400">{model.required.confidenceMeaning}</span>
         </div>
-        {/* §2.2 required: kept in the same eye-span as the confidence badge above, not moved to the meta footer. */}
-        <p className="-mt-2 text-xs text-neutral-500">{model.required.confidenceMeaning}</p>
 
         {/*
           §2.1 required: the disclaimer must sit in the same visual region as
-          the headline, never collapsed, never smaller than this block's own
-          body text — rendered here (not tucked into the meta footer below)
-          precisely so top-pinning the summary cannot visually demote it.
+          the headline, never collapsed — rendered here as a standing text-xs
+          line (風控核可，一眼一句 §2.3 第 3 點), not a bordered banner.
         */}
-        <DisclaimerBanner text={model.required.disclaimer} />
-
-        {/* §2.8 candidateEvidenceNotice：CEO 第二次裁定 2026-09-06 下沉頁尾（`buildSummaryFooterItems`）。 */}
+        <InlineDisclaimer text={model.required.disclaimer} />
 
         {model.supportive ? (
           <p className="text-sm text-neutral-200">
@@ -136,23 +142,76 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
           <p className="text-sm text-neutral-200">{model.notSupportiveText}</p>
         )}
 
+        <QuantitySection shares={model.required.quantityRangeShares} absenceReason={model.required.quantityAbsenceReason} />
+
         {/*
-          §3.3 coverageStatement 與 §3.4 notComparableNote：依 CEO 裁定 2026-09-06（含第二次
-          裁定推翻風控 A+3）下沉頁尾（`buildSummaryFooterItems`），完整數字不變。
+          R2: `CANDIDATE_EVIDENCE_NOTICE` is rendered here, standing, once —
+          `buildSummaryFooterItems` no longer duplicates it in the footer
+          (operationSummary.ts).
         */}
+        {model.required.candidateEvidenceNotice && (
+          <p className="text-xs text-neutral-400">{model.required.candidateEvidenceNotice}</p>
+        )}
 
-        <QuantitySection
-          text={model.required.quantityRangeText}
-          absenceReason={model.required.quantityAbsenceReason}
-          basisNote={model.quantityBasisNote}
-        />
+        {/* R3: only the first counterargument stays standing; the rest move to <details>. */}
+        {firstCounterargument && (
+          <div>
+            <h4 className="text-xs font-semibold text-neutral-400">反面論點</h4>
+            <p className="mt-1 text-sm text-neutral-300">{firstCounterargument}</p>
+          </div>
+        )}
 
-        <RequiredElementsFooter required={model.required} staleDataNotice={model.staleDataNotice} />
+        <StaleDataAlert notice={model.staleDataNotice} />
+
+        <details className="group mt-1">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
+            <span
+              aria-hidden="true"
+              className="inline-block text-xs transition-transform duration-150 group-open:rotate-90"
+            >
+              ▸
+            </span>
+            {DETAILS_SUMMARY_OPERATION}
+          </summary>
+          <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+            {model.quantityBasisNote && <p>{model.quantityBasisNote}</p>}
+            {model.required.quantityRangeBasis && <p>{model.required.quantityRangeBasis}</p>}
+            {restCounterarguments.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-neutral-400">反面論點</h4>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {restCounterarguments.map((text, i) => (
+                    <li key={i}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {model.required.invalidationConditions.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {model.required.invalidationConditions.map((text, i) => (
+                    <li key={i}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
+            <p className="text-sm text-neutral-300">
+              {buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}
+            </p>
+          </div>
+        </details>
       </div>
     );
   }
 
   // model.kind === "held"
+  const [firstCounterargument, ...restCounterarguments] = model.required.counterarguments;
+  // R4/FR-3: basis renders exactly once — as the alert when it is a
+  // non-restoring defensive quantity range, otherwise tucked into `<details>`.
+  const basisIsAlert = model.restoresComplianceWarning !== null;
+
   return (
     <div className="mt-3 space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -162,11 +221,11 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         <span className="text-sm text-neutral-400">
           信心等級：{summaryConfidenceLabel(model.required.confidence)}
         </span>
+        {/* R10: the confidence chip and its meaning sentence stand or fall together, same row. */}
+        <span className="text-xs text-neutral-400">{model.required.confidenceMeaning}</span>
       </div>
-      {/* §2.2 required: kept in the same eye-span as the confidence badge above, not moved to the meta footer. */}
-      <p className="-mt-2 text-xs text-neutral-500">{model.required.confidenceMeaning}</p>
 
-      <DisclaimerBanner text={model.required.disclaimer} />
+      <InlineDisclaimer text={model.required.disclaimer} />
 
       {/* AC-C6.1: the conclusion's main basis — the single heaviest matched rule. */}
       {model.topMatchedRule && (
@@ -176,13 +235,9 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         </p>
       )}
 
-      <QuantitySection
-        text={model.required.quantityRangeText}
-        absenceReason={model.required.quantityAbsenceReason}
-        basisNote={null}
-      />
+      <QuantitySection shares={model.required.quantityRangeShares} absenceReason={model.required.quantityAbsenceReason} />
 
-      {model.restoresComplianceWarning && (
+      {basisIsAlert && (
         <p
           role="alert"
           className="rounded-md border border-rose-800 bg-rose-950/50 px-4 py-3 text-sm font-semibold text-rose-300"
@@ -191,29 +246,72 @@ function SummaryBody({ response }: { response: AdviceResponse }) {
         </p>
       )}
 
-      <RequiredElementsFooter required={model.required} staleDataNotice={model.staleDataNotice} />
+      {/* R3: only the first counterargument stays standing; the rest move to <details>. */}
+      {firstCounterargument && (
+        <div>
+          <h4 className="text-xs font-semibold text-neutral-400">反面論點</h4>
+          <p className="mt-1 text-sm text-neutral-300">{firstCounterargument}</p>
+        </div>
+      )}
+
+      <StaleDataAlert notice={model.staleDataNotice} />
+
+      <details className="group mt-1">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
+          <span aria-hidden="true" className="inline-block text-xs transition-transform duration-150 group-open:rotate-90">
+            ▸
+          </span>
+          {DETAILS_SUMMARY_OPERATION}
+        </summary>
+        <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          {!basisIsAlert && model.required.quantityRangeBasis && <p>{model.required.quantityRangeBasis}</p>}
+
+          {restCounterarguments.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-neutral-400">反面論點</h4>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                {restCounterarguments.map((text, i) => (
+                  <li key={i}>{text}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {model.required.invalidationConditions.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                {model.required.invalidationConditions.map((text, i) => (
+                  <li key={i}>{text}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
+          <p className="text-sm text-neutral-300">
+            {buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}
+          </p>
+        </div>
+      </details>
     </div>
   );
 }
 
 /**
- * §2.1 required: the fixed disclaimer, always rendered at (at least) the
- * block's own body text size — never the smaller "meta" size used for
- * source/timestamp captions elsewhere on this page — and never collapsible.
+ * §2.1 required: the fixed disclaimer, now a standing `text-xs neutral-400`
+ * line right beneath the headline (風控核可，一眼一句 §2.3 第 3 點) — never
+ * `truncate`/`line-clamp`, replacing the old `DisclaimerBanner` bordered
+ * style everywhere it was rendered (held／candidate／no_action alike).
  */
-function DisclaimerBanner({ text }: { text: string }) {
-  return (
-    <p className="rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
-      {text}
-    </p>
-  );
+function InlineDisclaimer({ text }: { text: string }) {
+  return <p className="text-xs text-neutral-400">{text}</p>;
 }
 
 /**
  * AC-C8.2's prominent data-age alert, in the one style every branch shares —
- * extracted (D3③) so the two insufficient_data branches and
- * `RequiredElementsFooter` cannot drift apart on prominence. Renders nothing
- * when there is no stale gap to disclose.
+ * extracted (D3③) so the branches cannot drift apart on prominence. Renders
+ * nothing when there is no stale gap to disclose.
  */
 function StaleDataAlert({ notice }: { notice: string | null }) {
   if (notice === null) return null;
@@ -224,75 +322,21 @@ function StaleDataAlert({ notice }: { notice: string | null }) {
   );
 }
 
-function QuantitySection({
-  text,
-  absenceReason,
-  basisNote,
-}: {
-  text: string | null;
-  absenceReason: string | null;
-  basisNote: string | null;
-}) {
+/**
+ * 一眼一句 §2.3 第 4 點: prints ONLY the share count ("{min} ~ {max} 股") —
+ * the `basis` sentence that used to be bundled into the same string is now a
+ * separate field the two branches above place exactly once (main-view alert
+ * or `<details>`), never here.
+ */
+function QuantitySection({ shares, absenceReason }: { shares: string | null; absenceReason: string | null }) {
   return (
     <div>
       <h3 className="text-sm font-semibold text-neutral-200">建議股數區間</h3>
-      {text !== null ? (
-        <div className="mt-1 text-sm text-neutral-300">
-          <p>{text}</p>
-          {basisNote && <p className="mt-1 text-xs text-neutral-500">{basisNote}</p>}
-        </div>
+      {shares !== null ? (
+        <p className="mt-1 text-sm text-neutral-300">{shares}</p>
       ) : (
         <p className="mt-1 text-sm text-neutral-500">{absenceReason}</p>
       )}
-    </div>
-  );
-}
-
-/**
- * Renders §2 items 3/4/5/6 together, in one always-visible block. Item 1
- * (disclaimer) and item 2 (confidence meaning) are rendered separately, right
- * beside the headline/confidence badge above (see the call sites above), so
- * top-pinning the summary cannot visually demote or separate them from what
- * they qualify. Never behind a `<details>`: §2.5 explicitly bars hiding
- * counterarguments/invalidation conditions behind an "expand" link.
- */
-function RequiredElementsFooter({
-  required,
-  staleDataNotice,
-}: {
-  required: import("../../lib/operationSummary").RequiredElements;
-  staleDataNotice: string | null;
-}) {
-  return (
-    <div className="space-y-3 border-t border-neutral-800 pt-4 text-sm">
-      <StaleDataAlert notice={staleDataNotice} />
-
-      {/* §2.3 asOfStatement：CEO 第二次裁定 2026-09-06 推翻風控 A+1，下沉頁尾；StaleDataAlert 為功能性狀態，留原位。 */}
-
-      {required.counterarguments.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-neutral-400">反面論點</h4>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-neutral-400">
-            {required.counterarguments.map((text, i) => (
-              <li key={i}>{text}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {required.invalidationConditions.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-neutral-400">
-            {required.invalidationConditions.map((text, i) => (
-              <li key={i}>{text}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* §2.6 rulesStatement 下沉頁尾（CEO 裁定 2026-09-06）；原位留指引句（風控 L5，≥ 導讀字級）。 */}
-      <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
     </div>
   );
 }

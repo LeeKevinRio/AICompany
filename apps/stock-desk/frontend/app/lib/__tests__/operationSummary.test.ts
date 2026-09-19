@@ -9,9 +9,12 @@
  * hand-off notes for the "vitest, minimal, no jsdom yet" trade-off).
  */
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse } from "../types";
 import { buildSummaryFooterItems, buildOperationSummary } from "../operationSummary";
+import { SummaryBody } from "../../position/[symbol]/OperationSummaryPanel";
 import {
   AS_OF_AGE_UNKNOWN_STATEMENT,
   AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
@@ -751,14 +754,13 @@ describe("buildSummaryFooterItems — 頁尾操作摘要組", () => {
     expect(buildSummaryFooterItems(response)).toEqual([model.required.asOfStatement, model.required.rulesStatement]);
   });
 
-  it("candidate: candidateEvidenceNotice、notComparableNote、coverageStatement、asOfStatement、rulesStatement 依序，且五句皆非空", () => {
+  it("candidate: notComparableNote、coverageStatement、asOfStatement、rulesStatement 依序，且四句皆非空（一眼一句 §2.3 R2：candidateEvidenceNotice 回到面板主視圖，不再下沉頁尾）", () => {
     const response = makeResponse({ held: false }) as AdviceResponse;
     const model = buildOperationSummary(response);
     expect(model.kind).toBe("candidate");
     if (model.kind !== "candidate") return;
     const items = buildSummaryFooterItems(response);
     expect(items).toEqual([
-      model.required.candidateEvidenceNotice,
       model.notComparableNote,
       model.coverageStatement,
       model.required.asOfStatement,
@@ -767,6 +769,9 @@ describe("buildSummaryFooterItems — 頁尾操作摘要組", () => {
     expect(items.every((s) => s.length > 0)).toBe(true);
     // 完整數字不簡化：覆蓋度句保留百分比與條數。
     expect(model.coverageStatement).toMatch(/\d/);
+    // candidateEvidenceNotice 本身仍非空（面板主視圖渲染它），只是不再出現在這份頁尾清單裡。
+    expect(model.required.candidateEvidenceNotice).toBeTruthy();
+    expect(items).not.toContain(model.required.candidateEvidenceNotice);
   });
 
   it("no_price／no_action: []", () => {
@@ -776,5 +781,70 @@ describe("buildSummaryFooterItems — 頁尾操作摘要組", () => {
     const noAction = makeResponse({ advice: makeCard({ action: "insufficient_data" }) }) as AdviceResponse;
     expect(buildOperationSummary(noAction).kind).toBe("no_action");
     expect(buildSummaryFooterItems(noAction)).toEqual([]);
+  });
+});
+
+/**
+ * 一眼一句實作規格 §2.3 第 4 點（`work/stock-desk-一眼一句-實作規格.md`）：
+ * `quantityRangeText` used to bundle "{min} ~ {max} 股" together with the
+ * card's own `basis` sentence — and the panel separately rendered
+ * `restoresComplianceWarning` (the SAME `basis` text) as a red alert
+ * whenever the range did not restore compliance on a defensive action,
+ * printing `basis` twice. `quantityRangeShares`／`quantityRangeBasis` split
+ * the bundle so the panel can place `basis` exactly once (R4).
+ */
+describe("quantityRangeShares／quantityRangeBasis 拆分（一眼一句 §2.3 第 4 點）", () => {
+  it("拆出的兩個欄位各自對應 quantityRangeText 的兩半，且 quantityRangeText 保持不變（既有測試相容）", () => {
+    const model = buildOperationSummary(makeResponse());
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.required.quantityRangeShares).toBe("500 ~ 1,000 股");
+    expect(model.required.quantityRangeBasis).toBe(
+      "以「單一標的佔比上限」為最小可用額度換算，最多可再買進 1000 股。",
+    );
+    expect(model.required.quantityRangeText).toBe(
+      `${model.required.quantityRangeShares}。${model.required.quantityRangeBasis}`,
+    );
+  });
+
+  it("quantity_range 為 null 時，shares／basis 皆為 null（與既有 quantityRangeText/quantityAbsenceReason 一致）", () => {
+    const model = buildOperationSummary(makeResponse({ advice: makeCard({ quantity_range: null }) }));
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.required.quantityRangeShares).toBeNull();
+    expect(model.required.quantityRangeBasis).toBeNull();
+  });
+});
+
+/**
+ * R4／FR-3（一眼一句 §2.3 第 4 點）: basis renders exactly once, page-wide —
+ * as the `role="alert"` box when the range does not restore compliance on a
+ * defensive action, otherwise tucked into `<details>`. Rendered via
+ * `renderToStaticMarkup` (not just the model) so this is a true DOM
+ * assertion, not just a data-shape one — the bug this guards against was a
+ * rendering-layer duplication, not a data one.
+ */
+describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境）", () => {
+  const BASIS_ALERT = "目前部位超出「單一產業佔比上限」，建議量 200 股已為持股全數；該上限由其他部位驅動，賣出後仍為違反。";
+  const BASIS_NORMAL = "以「單一標的佔比上限」為最小可用額度換算，最多可再買進 1000 股。";
+
+  function countOccurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  it("restores_compliance=false 且防禦型動作：basis 以 role=alert 呈現，且僅出現一次", () => {
+    const response = makeResponse({
+      advice: makeCard({
+        action: "reduce",
+        quantity_range: { min_shares: 200, max_shares: 200, restores_compliance: false, basis: BASIS_ALERT },
+      }),
+    }) as AdviceResponse;
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    expect(countOccurrences(html, BASIS_ALERT)).toBe(1);
+    expect(html).toContain('role="alert"');
+  });
+
+  it("restores_compliance=true：basis 不在主視圖以 alert 呈現，且全頁（含 <details>）僅出現一次", () => {
+    const response = makeResponse() as AdviceResponse; // restores_compliance: true fixture
+    const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+    expect(countOccurrences(html, BASIS_NORMAL)).toBe(1);
   });
 });
