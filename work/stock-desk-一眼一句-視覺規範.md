@@ -341,6 +341,199 @@
 
 ---
 
+### B.7 決策卡（個股頁頂部，`page.tsx` 技術分析之上）
+
+任務來源：派工單 §5.4（dev-lead 草案，2026-09-19）＋ CEO 第三次裁定 §5.1／§5.3。
+本卡是整頁**第一張卡**，放在標題列與技術分析之間；全部數字沿用既有計算
+（`computeKeyLevels()`／`buildOperationSummary()`／`adviceWording.ts`），
+**不新增任何模型或算式**，只重排既有結果的呈現位置。本卡**不設「詳細」**——
+下方各區塊本身就是它的展開版，因此不套用 B.1 的 `<details>` 收合結構。
+
+盤點基準（同 B.1 沿用清單另加）：`OperationSummaryPanel.tsx`（三種動作大字方框樣式、
+`RULE_SOURCE_CHIP`／`NOT_HELD_BADGE`、`DataMetaStatusBadge` compact 用法）、
+`KeyLevelsPanel.tsx`（`LevelRow`、停損/停利大字 `font-mono text-xl font-bold` 並排）、
+`InsufficientPanel.tsx`／`ErrorPanel.tsx`（既有缺席態元件，本節不改其內部樣式，只補外層
+wrapper 高度）。
+
+#### B.7.1 版面
+
+容器沿用 B.1：`rounded-lg border border-neutral-800 p-4`（不需要 `p-5`，本卡內容量少，
+維持與其餘區塊相同 padding，不因為是第一張卡就加大）。
+
+桌機（`sm:` 以上，一列：主字左、四個數字右）：
+
+```tsx
+<section className="rounded-lg border border-neutral-800 p-4">
+  {/* 徽章列：資料截至徽章＋狀態 chip，樣式與 OperationSummaryPanel 徽章列（page.tsx 同款）一致 */}
+  <div className="flex flex-wrap items-center justify-between gap-2">
+    <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
+      <span className="rounded border border-neutral-700 px-1.5 py-0.5 text-neutral-400">
+        資料截至 {mmdd}
+      </span>
+      <DataMetaStatusBadge status={...} stalenessMinutes={...} isWithinTtl={...} lastBarDate={...} reason={...} compact />
+      {notHeld && (
+        <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-neutral-400">
+          {NOT_HELD_BADGE}
+        </span>
+      )}
+    </span>
+  </div>
+
+  {/* 主字（左）＋ 四個數字（右） */}
+  <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    {/* 主字位：動作大字＋依規則 chip，或缺席態元件（見 B.7.5） */}
+    <div className="flex min-h-[3.5rem] flex-wrap items-center gap-3">
+      <span className="inline-block rounded-md border border-neutral-700 bg-neutral-900 px-4 py-2 text-2xl font-bold text-neutral-100">
+        {actionLabel}
+      </span>
+      <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-400">
+        {RULE_SOURCE_CHIP}
+      </span>
+    </div>
+
+    {/* 四個數字：收盤／停損參考／停利參考／股數，2×2（手機）→ 一列四欄（桌機） */}
+    <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 sm:gap-x-6">
+      <NumberCell label="收盤" value={closeText} />
+      <NumberCell label="停損參考" value={stopText} distance={distanceToStopText} />
+      <NumberCell label="停利參考" value={targetText} distance={distanceToTargetText} />
+      <NumberCell label="股數" value={quantityText} />
+    </div>
+  </div>
+</section>
+```
+
+手機（375px，即未加 `sm:` 前綴的預設值）：`flex-col` 讓主字列與數字區塊垂直堆疊、
+主字本身 `flex-wrap` 佔滿卡片寬度為一列；數字區塊預設 `grid-cols-2` 即為 2×2，不需要另寫
+手機專屬 override class——桌機用 `sm:grid-cols-4` 覆蓋成一列四欄。
+
+`NumberCell`（四個數字共用）：
+
+```tsx
+function NumberCell({ label, value, distance }: { label: string; value: string; distance?: string }) {
+  return (
+    <div className="flex min-h-[4.5rem] flex-col items-start sm:items-end">
+      <p className="text-sm text-neutral-400">{label}</p>
+      <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{value}</p>
+      <p className="mt-0.5 text-xs text-neutral-400">{distance ?? "—"}</p>
+    </div>
+  );
+}
+```
+
+- 手機靠左對齊（`items-start`）配合 2×2 掃讀順序（左上收盤→右上停損→左下停利→右下股數）；
+  桌機靠右對齊（`sm:items-end`）貼齊卡片右緣，四欄數字視覺上排成一條右邊界。
+- `distance` 一律渲染一行（無值時印「—」而非整行消失），四格 `min-h-[4.5rem]`（72px）一致，
+  不論該格是否真的有距離小字，高度都相同——這是 B.7.5 防版面跳動的具體實作，不只是缺席態才用。
+
+#### B.7.2 字級階層
+
+| 元素 | class | 說明 |
+|---|---|---|
+| 動作大字 | `text-2xl font-bold`（**不用 `text-3xl`**，見 B.7.4 理由） | 沿用 `OperationSummaryPanel.tsx` 三種既有方框樣式（見 B.7.3） |
+| 四個數字 | `font-mono text-xl font-bold text-neutral-100` | 與 `KeyLevelsPanel.tsx` 停損/停利大字同一 class，維持站內數字排版慣例一致 |
+| 標籤（收盤／停損參考／停利參考／股數） | `text-sm text-neutral-400` | 與 `KeyLevelsPanel.tsx` `LevelRow` 標籤同 class |
+| 距離小字（距現價 ±x%） | `text-xs text-neutral-400` | **這是風控下限**：依 B.6 第 3 條「本規範新增的一句白話結論／數值欄一律 `text-neutral-400` 以上」，此為主視圖新句（距離 %），不得再降到 `text-neutral-500` |
+| 徽章列（資料截至徽章／狀態 chip／未持有徽章） | `text-xs` | 沿用既有徽章 class，見 B.7.1 程式碼 |
+
+#### B.7.3 顏色
+
+1. **停損／停利大字不上紅綠**（風控 S1，沿用 B.6 第 1 條）：`NumberCell` 一律
+   `text-neutral-100`，不得依「高於/低於現價」動態切換 `rose`/`emerald`。
+2. **距離 % 也不上色**：即使停損距離必為負值（`−a%`）、停利距離必為正值（`+b%`），
+   符號本身已經表意，`text-neutral-400` 固定不變，不得因正負號套 `rose`/`emerald`。
+3. **唯一允許的語意色**：
+   - 既有徽章：`DataMetaStatusBadge` 的既有色彙（含 amber backup／stale 等級）、
+     `NOT_HELD_BADGE` 沿用中性 `neutral` 徽章樣式；
+   - `role="alert"` 的既有警示框：`StaleDataAlert`（amber）、`restoresComplianceWarning`
+     （rose，見 §5.4「股數：`restoresComplianceWarning` 同層」）、`ErrorPanel`（red）、
+     `InsufficientPanel`（amber）——這四個是**既有共用元件的既有樣式**，本節只決定
+     「放不放在主字位」（見 B.7.5），不新賦予或修改其色彙。
+   - 動作大字本身沿用 `OperationSummaryPanel.tsx` 既有三種方框（held：`border-neutral-700
+     bg-neutral-900 text-neutral-100` 中性；candidate：`border-sky-800 bg-sky-950/40
+     text-sky-300`，屬 B.6 已核准的候選模式語意色；insufficient/no_price：見 B.7.5 缺席態），
+     決策卡不另創新配色，一律沿用既有三態。
+4. 不得為了「這是第一張卡」而加粗邊框或提高背景對比（如 `border-2`／`border-neutral-600`）
+   ——卡片框線與其他區塊一律同一個 `border-neutral-800`，差異只在版面順序，不在視覺強度。
+
+#### B.7.4 與技術分析的間距與視覺分量
+
+- 間距：決策卡與其下方「技術分析」區塊之間沿用站內既有區塊間距 `mt-6`（`page.tsx:254`、
+  `KeyLevelsPanel.tsx:378` 既有慣例），不因為決策卡重要就加大留白，也不因為想省空間就縮小。
+- 視覺分量的上限是 `h1`：`page.tsx:223` 的個股代號/名稱標題是 `text-2xl font-bold
+  text-neutral-100`。決策卡動作大字**維持 `text-2xl`、不得用 `text-3xl`**——若動作大字比
+  `h1` 還大，會讓使用者的第一眼落在決策卡而非頁面在講哪一檔股票，違反本節「不得比 h1 標題
+  還搶」的前提。動作大字與 `h1` 同字級但視覺上仍能區分主從：動作大字外框有
+  `border-neutral-700 bg-neutral-900`（或 candidate 的 `sky`）方框，`h1` 是純文字無框，
+  框線本身已提供層級差異，不需要再靠字級拉開。
+- 卡內部層級：動作大字 `text-2xl` ＞ 四個數字 `text-xl` ＞ 標籤/距離 `text-sm`/`text-xs`，
+  與技術分析區塊自己的 `h2 text-lg` 相比，決策卡數字（`text-xl`）故意大於技術分析的 `h2`，
+  但決策卡整體（含徽章列的 `text-xs`）不掛任何比 `h2`更顯眼的裝飾性色塊或動畫，維持「決策卡
+  數字最搶眼、但技術分析標題仍清楚是下一個獨立區塊」的分寸。
+
+#### B.7.5 缺席態的視覺
+
+- **數字缺席**（bars 不足或該數字算不出來）：沿用既有 `fmt()` 慣例，直接印「—」，
+  class 不變（仍是 `font-mono text-xl font-bold text-neutral-100`），不得把缺席的數字
+  改小、改灰或整格拿掉——`NumberCell` 骨架（含 `min-h-[4.5rem]`）在有資料／無資料兩態下
+  結構完全相同，只有文字內容從數字換成「—」，避免使用者感覺「版面壞了」。
+- **主字位缺席**（`advice` 查詢失敗或 `insufficient_data`/`no_price`）：改放
+  `ErrorPanel`／`InsufficientPanel` 取代動作大字＋依規則 chip 那一組。兩者本身都是單行
+  `<p>`（`px-4 py-3 text-sm`），比動作大字方框（`px-4 py-2 text-2xl`）矮，若直接替換會讓
+  卡片在「有動作」與「缺席」兩態間高度跳動——因此 B.7.1 已在主字位外層包一個
+  `flex min-h-[3.5rem] items-center` 容器，兩種內容都放進同一個 wrapper，**不修改
+  `ErrorPanel`／`InsufficientPanel` 本身的 class**，只在決策卡這一層用 wrapper 補足高度差。
+- 主字位是 `ErrorPanel`/`InsufficientPanel` 時，右側四個數字仍照 B.7.1 骨架完整掛載
+  （`grid-cols-2 sm:grid-cols-4` ＋四個 `min-h-[4.5rem]` 的 `NumberCell`），只是每格數值
+  都印「—」——不得因為主字缺席就把整個數字區塊拿掉，否則桌機的「一列、主字左數字右」與
+  手機的「主字上、2×2 下」兩種版面骨架會在同一頁面因資料狀態不同而長得不一樣，那才是真正
+  的版面跳動。
+
+#### B.7.6 版面示意（ASCII）
+
+桌機（≥ 640px，主字左、四個數字一列四欄）：
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 資料截至 09-18 [已快取]                                                    │ ← 徽章列 text-xs
+│                                                                            │
+│ ┌────────────┐ [依規則]         收盤        停損參考      停利參考     股數 │ ← 標籤 text-sm
+│ │  停損參考  │                 105.00       95.00        125.00  120~150股│ ← 數字 text-xl mono
+│ └────────────┘                              距現價 −9.5%  距現價 +19%   —  │ ← 距離 text-xs
+│  ↑ 動作大字 text-2xl                         ↑ 四個數字，靠右對齊           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+手機（375px，主字一列、數字 2×2）：
+
+```
+┌───────────────────────────────┐
+│ 資料截至 09-18 [已快取]         │ ← 徽章列
+│                                 │
+│ ┌────────────┐ [依規則]         │ ← 主字一列，靠左
+│ │  停損參考  │                 │
+│ └────────────┘                  │
+│                                 │
+│ 收盤              停損參考       │ ← 數字 2×2，第一列
+│ 105.00            95.00         │
+│ —                 距現價 −9.5%  │
+│                                 │
+│ 停利參考           股數          │ ← 數字 2×2，第二列
+│ 125.00            120~150股     │
+│ 距現價 +19%        —            │
+└───────────────────────────────┘
+```
+
+#### B.7.7 待審事項（不預先燒進字面）
+
+- 卡片標題（§5.4：候選「現在怎麼做」／「決策摘要」／不設標題只留動作大字）：本節版面示意
+  採「不設標題」畫法（動作大字本身即入口），若 creative-lead／風控最終選了有標題的版本，
+  標題沿用 B.1 模板的 `h2 text-lg font-semibold text-neutral-100`，插入徽章列上方，不改動
+  本節其餘版面。
+- 距離小字文案「距現價 ±x%」：字面待風控核准（§5.4 風控預審重點：新推導算式需補頁尾算式
+  行）；本節只定位置與字級，字面（含「距現價」三字与百分比格式）不預先定案。
+
+---
+
 ## 交接
 
 1. 本規範 → 交 `frontend-engineer` 依 B.1–B.4 落地；B.2③ 免責字級與 B.4 「查詢時間 vs 評估時間」
