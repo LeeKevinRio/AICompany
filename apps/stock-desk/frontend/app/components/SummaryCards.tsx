@@ -1,5 +1,6 @@
 import type { PortfolioTotals } from "../lib/types";
 import { formatDateTime, formatMoney, pnlColorClass } from "../lib/format";
+import { DETAILS_SUMMARY_GENERIC, FX_BACKUP_BADGE } from "../lib/oneLinerWording";
 
 function StatusBanner({ status }: { status: PortfolioTotals["status"] }) {
   if (status === "partial") {
@@ -29,15 +30,21 @@ export function SummaryCards({
   totals,
   asOf,
   fxDisclosures,
+  fxBackupActive,
 }: {
   totals: PortfolioTotals;
   asOf: string;
-  //: ADR-0011; 風控 2026-09-19 條件 (1): standing disclosure sentences for
-  //: every FX source actually used this pass (`PortfolioSummaryResponse
-  //: .fx_disclosures`), rendered verbatim beside the 匯率貢獻 card. Never
-  //: truncated or collapsed — same position, style and font size as every
-  //: other disclosure.
+  //: ADR-0011; disclosure sentences for every FX source actually used this
+  //: pass (`PortfolioSummaryResponse.fx_disclosures`), rendered verbatim
+  //: inside the 匯率貢獻 card. CEO 2026-09-19 第二次裁定（派工單 §4.1）推翻
+  //: 風控 2026-09-19 條件 (1) 的「同位置常駐、不得摺疊」要求：句子字面不改，
+  //: 只改出現層級——本批純搬移進卡內的 `<details>`（wave2-B，鐵律 1/2）。
   fxDisclosures: string[];
+  //: 第二波（派工單 §4.3，風控逐字審核可）：true when *any* position's
+  //: `valuation.fx?.data_status === "backup"` (`page.tsx` derives this from
+  //: `summary.data.positions`). Drives the standing `FX_BACKUP_BADGE` badge
+  //: beside the 匯率貢獻 title — no threshold, never hover-only.
+  fxBackupActive: boolean;
 }) {
   return (
     <div className="space-y-3">
@@ -60,9 +67,8 @@ export function SummaryCards({
           >
             {formatMoney(totals.unrealized_pnl_twd, "TWD", 0)}
           </p>
-          <p className="mt-1 text-xs text-neutral-500">
-            資料時間：{formatDateTime(asOf)}
-          </p>
+          {/* 「資料時間」原本兩卡各印一次，字面完全重複；本批只留總資產卡一處
+              （wave2-B 純搬移，句子本身不改字）。 */}
         </div>
       </div>
 
@@ -76,18 +82,31 @@ export function SummaryCards({
           </p>
         </div>
         <div className="rounded-lg border border-neutral-800 p-4">
-          <p className="text-sm text-neutral-400">匯率貢獻</p>
+          <p className="flex flex-wrap items-center gap-1.5 text-sm text-neutral-400">
+            匯率貢獻
+            {/* 第二波（派工單 §4.3）：任一部位匯率為備援源即常駐顯示，不設
+                門檻、不得 hover-only；配色沿用 DataStatusBadge/FxStatusBadge
+                的 backup 樣式。 */}
+            {fxBackupActive && (
+              <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">
+                {FX_BACKUP_BADGE}
+              </span>
+            )}
+          </p>
           <p
             className={`mt-1 text-xl font-semibold ${pnlColorClass(totals.fx_contribution_twd)}`}
           >
             {formatMoney(totals.fx_contribution_twd, "TWD", 0)}
           </p>
           {fxDisclosures.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs text-neutral-400">
-              {fxDisclosures.map((disclosure) => (
-                <li key={disclosure}>{disclosure}</li>
-              ))}
-            </ul>
+            <details className="group mt-2 text-xs text-neutral-400">
+              <summary className="cursor-pointer text-neutral-400">{DETAILS_SUMMARY_GENERIC}</summary>
+              <ul className="mt-2 space-y-0.5">
+                {fxDisclosures.map((disclosure) => (
+                  <li key={disclosure}>{disclosure}</li>
+                ))}
+              </ul>
+            </details>
           )}
         </div>
       </div>

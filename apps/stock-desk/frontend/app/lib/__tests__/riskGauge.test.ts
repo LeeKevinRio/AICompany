@@ -313,8 +313,23 @@ describe("RiskGaugeView — 五列一行式渲染（實作規格 §3.2/§4）", 
     expect(html).toContain("未納入 1 檔");
   });
 
-  it("H4 頂部說明句與 H5 details summary 不在此純呈現元件內（由外層 RiskGauge 負責），但詳細 summary 入口字存在", () => {
+  it("H5 details summary 入口字存在", () => {
     const html = renderRiskGaugeView(FAKE_LIMITS);
     expect(html).toContain("詳細：各項判定依據、假設與資料來源");
+  });
+
+  /**
+   * wave2-B（CEO 2026-09-19 第二次裁定 §4.1，推翻 H4）：頂部說明句與「判定
+   * 產生時間」不再常駐主視圖，改搬進這個共用 `<details>` 內——字面不變，只
+   * 驗證它現在確實落在 `<details>` 標籤之後（在 details 內），而不是主視圖。
+   */
+  it("H4：頂部說明句與判定產生時間搬進 details 內，且落在 <details> 開標籤之後", () => {
+    const html = renderRiskGaugeView(FAKE_LIMITS);
+    const detailsIndex = html.indexOf("<details");
+    const h4Index = html.indexOf("單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較");
+    const judgedAtIndex = html.indexOf("判定產生時間：");
+    expect(detailsIndex).toBeGreaterThanOrEqual(0);
+    expect(h4Index).toBeGreaterThan(detailsIndex);
+    expect(judgedAtIndex).toBeGreaterThan(detailsIndex);
   });
 });

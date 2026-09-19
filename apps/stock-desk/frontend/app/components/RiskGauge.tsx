@@ -34,6 +34,13 @@ import { SkeletonBlock } from "./SkeletonBlock";
  * previous version — this batch only changes *where* each one renders, per
  * that spec's 鐵律 1/2.
  *
+ * Second pass (CEO 2026-09-19 深夜第二次裁定 §4.1，派工單同章節，wave2-B，
+ * 純搬移): the CEO's second ruling explicitly overturns H4 (頂部說明句常駐)
+ * — the top explanatory sentence and the "判定產生時間" timestamp move from
+ * the main view into the same shared `<details>` (as its first two lines),
+ * so the main view now shows only the h2 title, the five rows and the
+ * details summary line. Literal text unchanged, only *where* it renders.
+ *
  * Risk-compliance ruling carried forward unchanged: a cap whose `status` is
  * `not_evaluable` must never draw a progress bar, not even an empty one —
  * `shouldShowLimitBar` in `../lib/riskGauge.ts` is the one place that
@@ -198,6 +205,16 @@ export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
           {!sourcesSummary.allFresh && `——其中 ${sourcesSummary.staleCount} 檔非即時`}
         </summary>
         <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3">
+          {/* CEO 2026-09-19 第二次裁定（§4.1）推翻 H4：頂部說明句原本常駐主
+              視圖，本批純搬移進詳細第一行——字面（含標點）一字不改，只改出現
+              層級。原風控裁決（work/reviews/股數區間文案裁決.md,2026-08-09）
+              核可的是這段文字本身，不是它的常駐位置。 */}
+          <p>
+            單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly
+            部位上限為帳本層單一判定。未納入比較的標的列於各條之下。
+          </p>
+          {/* 「判定產生時間」原在主視圖標題列右側；同批一併搬進詳細。 */}
+          <p>判定產生時間：{formatDateTime(data.as_of)}</p>
           <ul className="space-y-2">
             {data.limits.map((check) => (
               <LimitDetailItem key={check.limit_id} check={check} />
@@ -229,21 +246,11 @@ export function RiskGauge() {
 
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
-        {/* 風控退修附帶:as_of 是伺服器回應時間,不是行情時間——行情新鮮度由下方
-            sources 徽章承載,這裡不得暗示「資料的時間」。標題列右側同排（§3.2）。 */}
-        {limits.isSuccess && (
-          <span className="text-xs text-neutral-500">判定產生時間：{formatDateTime(limits.data.as_of)}</span>
-        )}
-      </div>
-
-      {/* H4：頂部說明句常駐；風控裁決(work/reviews/股數區間文案裁決.md,2026-08-09)
-          核可全文,修改須重新送審。 */}
-      <p className="mt-1 text-xs text-neutral-400">
-        單一標的佔比、單一產業佔比、單筆最大可承受虧損三條為逐檔比較，回報最差結果；總曝險與 Kelly
-        部位上限為帳本層單一判定。未納入比較的標的列於各條之下。
-      </p>
+      <h2 className="text-lg font-semibold text-neutral-100">風險儀表</h2>
+      {/* 風控退修附帶（沿用不變）:as_of 是伺服器回應時間,不是行情時間——行情
+          新鮮度由下方 sources 徽章承載,這裡不得暗示「資料的時間」。「判定產生
+          時間」與頂部說明句（原 H4）已隨 CEO 第二次裁定（§4.1）搬進
+          `RiskGaugeView` 的共用 `<details>`，主視圖只留 h2、五列與 summary。 */}
 
       {limits.isPending && (
         <div className="mt-3 space-y-2">

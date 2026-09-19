@@ -55,6 +55,11 @@ export default function HomePage() {
             totals={summary.data.totals}
             asOf={summary.data.as_of}
             fxDisclosures={summary.data.fx_disclosures}
+            // 第二波（派工單 §4.3，風控逐字審核可）：任一部位匯率為備援源
+            // 即觸發常駐「備援匯率」徽章——不設門檻，故用 .some 而非計數。
+            fxBackupActive={summary.data.positions.some(
+              (position) => position.valuation.fx?.data_status === "backup",
+            )}
           />
         )}
       </div>
