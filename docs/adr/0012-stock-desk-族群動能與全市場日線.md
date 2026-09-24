@@ -13,9 +13,11 @@
 - 輸入：
   - `work/stock-desk-族群動能-PRD.md`（第三版，已併入風控第二次裁定 R-A～R-C）
   - `work/stock-desk-族群動能-資料評估.md`（data-engineer）
-  - `work/stock-desk-族群動能-方法論.md`（quant-researcher，v1 草案第三版）
+  - `work/stock-desk-族群動能-方法論.md`（quant-researcher，v1 草案第四版；D-8 的 T 對照表以第四版 §8.3 為準）
   - `work/stock-desk-族群動能-派工單.md` §4（風控預審：APPROVE_WITH_CONDITIONS；成分股技術面分數 VETO）
   - `work/stock-desk-族群動能-派工單.md` §5（風控第二次裁定：三態 `gate_status`、第一階段不列歷史比例、主視圖 q_net、成交金額倍數）
+  - `work/stock-desk-族群動能-派工單.md` §6（風控逐字審：NE 原因句定稿、NR-2、§6.2 (a)(c)、§6.3 H-2 與空狀態、§6.4 `pending_review` 採用）
+  - qa-reviewer 規格審查（2026-09-24，NEEDS_CHANGES；派工單 §7）
 - 修訂：
   - v1（2026-09-24）：初稿，當時上述輸入都還沒有。
   - v3（2026-09-24）：併入 PRD、資料評估、方法論第二版與風控預審。移除成分股分數；新增覆蓋率、市場範圍標記、point-in-time 缺口機制、多資產籃子回測器；全市場日線改放獨立 SQLite 檔。
@@ -30,6 +32,17 @@
     - 刪除「書面接受分類 look-ahead 即放行」例外的所有痕跡；`backfill_non_pit` 只存研究 DB，API 不得讀取；新增 D-14 與 T-10 偏誤版研究隔離。
     - 預期時程統一為約 3.1 年（理由見 D-12）。
     - dev-lead「v3 殘留差異」註記結案。
+  - v5（2026-09-24）：併入 qa 規格審查（NEEDS_CHANGES）與風控逐字審（派工單 §6）。
+    - C-23／T-14 改為「不含任何歷史比例統計數值」，新增「受 `gate_status` 管制欄位總表」，明列永遠顯示的描述欄位。
+    - NE-7 改為方法論 §8 T1～T9 任一未過；D-8 新增方法論 T ↔ ADR T ↔ runtime／CI 對照表；T10 不屬 NE-7。
+    - 補三條機械測試：T-18（C-15 識別字掃描）、T-16（C-21 SQLite trigger，registry 有兩個「NULL→值一次」的例外）、T-17（C-24 靜態掃描）。
+    - `pending_review` 改為已採用（風控 §6.4）；核准 CLI 的執行者、書面憑據、`--review-doc` 必填（C-31）。
+    - NR-2：NE-8 永遠優先；卡片層級示範資料警告依 `data_source` 驅動（C-29）。
+    - 同一集合 C_g(t,L)（C-32）、門檻由 API 輸出（C-33）、`held: bool | None`（C-34）、成分股 ≥ 3 不變量（C-35）。
+    - 補齊缺測試的約束，新增約束 ↔ 測試對照表。
+    - 明文記錄對 backtest-protocol 鐵律 3 的已知偏離，列入 CEO 核可事項。
+    - 時程：使用者可見的「約 3 年」是風控定稿的簡化說法，內部下限為 3.1 年。
+    - DE-5 歸類與方法論一致（NE-1）。
 
 ## Context（背景）
 
@@ -213,7 +226,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - TPEx 第一階段不抓。
 
 - **D-4 報酬與除權息（依方法論第三版 §2.4，已定案）**
-  - 報酬函式只有一處，在 `index.py`。算法是期初等權、期間持有：`R_g(t,L) = mean_{i∈C_g(t,L)} (P_i(t)/P_i(t−L) − 1)`。C_g(t,L) 指第 t 日合格、(t−L, t] 內沒有除權息日、而且價格完整的成分股。
+  - 報酬函式只有一處，在 `index.py`。算法是期初等權、期間持有：`R_g(t,L) = mean_{i∈C_g(t,L)} (P_i(t)/P_i(t−L) − 1)`。C_g(t,L) 指第 t 日合格、(t−L, t] 內沒有除權息日、價格完整、且未被公司行動保險條款排除的成分股。**C_g(t,L) 是族群報酬、`up_count`／`constituent_count`、成分股列示三者共用的唯一集合**（風控 §6.2 (a)，C-32）。
   - **回看窗（用於排行）**：成分股在 (t−L, t] 內有除權息日時，該窗排除這一檔，並計入 `ex_date_excluded_count`。判斷依據是 `recorded_at ≤ cutoff(t)` 的 `TWT48U_ALL`。`TWT48U_ALL` 的 `ok` run 沒涵蓋最近 L 個交易日時，整卡回 `insufficient_data`。
   - **標籤（只在 `sector_eval`）**：用前瞻保存的除權息公告，加上除權息日當天快照的參考價（`close − change`），算出乘法還原因子。`change` 是否以除權息參考價為基準，待 DE-5 查證；查證前標籤因子不可用，判定端為 NE-1。
   - v3 的 `reference_chain` 不用於排行，只保留為上述標籤因子的算法來源。
@@ -252,7 +265,39 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 建構時驗證：`method_version` 字串中的 `L{n}`、`H{n}` 必須分別等於 `lookback_days`、`holding_days`；L 只能是 5 或 20。
   - **不得依任何統計結果在執行期間切換 L 或 H。** 要切換就是開新版本，依方法論 §11.2：凍結 → m 加 1 → 送風控限縮複審 → 告知 CEO。
   - **判定用 α/m**：Wilson 與 bootstrap 區間的信賴水準為 1 − 0.05/m；置換檢定門檻為 0.05/m。
-  - **m 的持久化**：存在主 DB 表 `sector_method_registry`，只增不刪。
+  - **m 的持久化**：存在主 DB 表 `sector_method_registry`，只增不刪。主 DB 四張判定相關表都用 SQLite trigger 實作只增不刪（C-21）：
+
+    ```sql
+    -- same UPDATE/DELETE pair for sector_rank_stats, sector_gate_checks, sector_gate_approvals
+    CREATE TRIGGER IF NOT EXISTS sector_rank_stats_no_update
+    BEFORE UPDATE ON sector_rank_stats BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS sector_rank_stats_no_delete
+    BEFORE DELETE ON sector_rank_stats BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+
+    CREATE TRIGGER IF NOT EXISTS sector_method_registry_no_delete
+    BEFORE DELETE ON sector_method_registry BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+    -- the only permitted UPDATEs: first_forward_eval_at NULL -> value once (with counts_toward_m -> 1),
+    -- and accumulation_start (D0) NULL -> value once; every other column must stay identical
+    CREATE TRIGGER IF NOT EXISTS sector_method_registry_update_guard
+    BEFORE UPDATE ON sector_method_registry
+    WHEN NOT (
+        NEW.method_version IS OLD.method_version
+        AND NEW.lookback_days IS OLD.lookback_days
+        AND NEW.holding_days IS OLD.holding_days
+        AND NEW.frozen_commit IS OLD.frozen_commit
+        AND NEW.registered_at IS OLD.registered_at
+        AND (NEW.accumulation_start IS OLD.accumulation_start
+             OR (OLD.accumulation_start IS NULL AND NEW.accumulation_start IS NOT NULL))
+        AND (NEW.first_forward_eval_at IS OLD.first_forward_eval_at
+             OR (OLD.first_forward_eval_at IS NULL AND NEW.first_forward_eval_at IS NOT NULL
+                 AND NEW.counts_toward_m = 1))
+        AND (NEW.counts_toward_m IS OLD.counts_toward_m
+             OR (OLD.first_forward_eval_at IS NULL AND NEW.first_forward_eval_at IS NOT NULL))
+    )
+    BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+    ```
+
+    - `accumulation_start` 的例外是 v5 新增：版本登記通常早於 D0，而 D-12 規定 D0 要寫入 registry，所以需要一次 NULL→值。
     - 欄位：`method_version, lookback_days, holding_days, frozen_commit, registered_at, accumulation_start, first_forward_eval_at, counts_toward_m`。
     - 某版本第一次在 `forward_pit` 資料上算統計時，寫入 `first_forward_eval_at` 並設 `counts_toward_m=1`。看過偏誤研究後才提出的版本，同樣設 `counts_toward_m=1`。
     - m = `counts_toward_m=1` 的版本數；每列統計記錄 `m_at_evaluation`。
@@ -263,10 +308,12 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`。
 
 - **D-7 成分股**
-  - 取族群內合格且有資料的成分股，依 `(−return_L, symbol)` 排序，取位置 `[0, 1, −1]`；成分股不超過 3 檔時全列。
-  - 缺資料的成分股計入 `missing_count`。
+  - 成分股候選集合就是 D-4 的 C_g(t,L)，與族群報酬、`up_count`／`constituent_count` 共用同一集合。依 `(−return_L, symbol)` 排序，取位置 `[0, 1, −1]`。
+  - 缺資料、窗內除權息、公司行動保險條款排除的成分股都不在 C_g(t,L) 內，分別計入 `missing_count`、`ex_date_excluded_count`。最小成分數與族群覆蓋率都用排除後的 |C_g(t,L)| 判定。
+  - **不變量**：有排名的族群 |C_g(t,L)| ≥ `min_constituents`（5），所以 `constituents` 恆為 3 檔；空狀態句已撤除（風控 §6.3）。計算時若發現有排名族群的 `constituents` 少於 3 檔（只可能是 bug），該族群改列 `excluded_sectors`，`reason_code='low_coverage'`，寫一筆內部紀錄 `internal_reason='constituent_invariant_violated'`（不經 API 輸出），並讓當日判定帶上 NE-6（`data_quality`）。
+    - 原因碼沿用風控建議的 `low_coverage`，不另開新碼。理由：新碼需要新的風控定稿句，而這條路徑只在程式錯誤時才會出現。代價是當日該族群的「資料覆蓋率低於 {門檻}%」一句可能與實際覆蓋率不符，可追溯性由 NE-6 與內部紀錄補足。若風控認為不可接受，改開 `data_integrity` 新碼並送審字面。
   - 不產生、不儲存任何分數，不附歷史比例，不帶任何規則引擎輸出。
-  - `held`（是否持有）由 API 在讀取時查 positions 表得出。
+  - `held` 由 API 在讀取時查 positions 表得出。查詢失敗時為 None，前端不渲染持有徽章，並把「列示順序僅依近 5 日漲跌幅，不代表任何優先順序。」帶回主視圖（風控 §6.3 H-2）。
 
 - **D-8 三態判定（依方法論第三版 §6.3）**
   - 令 `b = max(q_gross, 0.5)`。
@@ -280,11 +327,31 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     | NE-4 | 距上次重算超過 20 個交易日 | `stale_recompute` | `gate.py`（讀取時） |
     | NE-5 | board 與統計的 `method_version` 不一致 | `version_mismatch` | `gate.py`（讀取時） |
     | NE-6 | 資料品質檢查未過（未來日期、重複、覆蓋率） | `data_quality` | `sector_eval` |
-    | NE-7 | look-ahead 與偏誤自檢未全過 | `lookahead_tests_failed` | `sector_eval` |
+    | NE-7 | 方法論 §8 的 T1～T9 任一未通過（判定依據：runtime 實跑項目，加上部署版本的 CI 門結果，見下方對照表；T10 不屬此條） | `lookahead_tests_failed` | `sector_eval` |
     | NE-8 | 資料為 `demo_synthetic` | `demo_data` | `sector_eval` |
 
-    - 多個原因同時成立時，`not_evaluated_reason` 取編號最小的一項（前端依此選用風控核可句），`not_evaluated_reasons` 列出全部。
-    - NE-7 的執行期自檢：每次判定都在真實資料上跑 T-5（50 個隨機日的未來擾動）、T-9（線上與判定一致）、T-10 的來源檢查、T-13 的基準一致。CI 單元測試是另一道門，沒過就不得合併。
+    - **`not_evaluated_reason` 的選取規則**：資料來源為 `demo_synthetic` 時一律為 `demo_data`（NE-8 永遠優先，排除「取編號最小者」規則，風控 §6.1 NR-2）；其他情況取成立者中編號最小的一項；`pending_review` 排最後。`not_evaluated_reasons` 列出全部成立者。前端依 `not_evaluated_reason` 選用風控 §6.1 的定稿句。
+    - **NE-7 ＝ 方法論 §8 的 T1～T9 任一未通過**（dev-lead 裁定以方法論為準；T10 不屬 NE-7，由 CI 與 D-14 的結構防線處理）。
+      - 「通過」須同時滿足：runtime 項目在本次判定中於真實前瞻資料上實跑並通過；CI 項目在目前部署的 commit 上為綠燈（`ci_passed_commit` 與部署 commit 比對不符即 NE-7）。
+      - runtime 狀態 `skipped_insufficient_n` 只允許在 N < 30（NE-2 期間）；N ≥ 150 後 skip 一律視為未通過。前瞻期沒有下市或改類事件時，T5／T6 runtime 記為 `vacuous`，由 CI 覆蓋並揭露。
+      - 只能在合成資料上驗證的項目列為 CI 門：沒過不得合併、不得部署；以部署版本的 commit 為憑，執行期不重跑。
+      - 執行期結果寫入 `sector_gate_checks`（`check_kind='selfcheck'`，只增不刪），不經 API 輸出。
+
+      | 方法論 | ADR 測試 | runtime（真實資料，每次判定） | CI（合成資料，合併門） |
+      | --- | --- | --- | --- |
+      | T1 未來擾動不變性 | T-5 | 是：隨機 50 個決策日，把 `recorded_at > cutoff(t)` 的所有列換成雜訊，逐位元比對 | 是：另測 `PointInTimePanel` 越界時拋錯 |
+      | T2 向量化與逐日一致 | T-15 | 只在存在向量化路徑時執行：抽 50 日比對 | 是：靜態斷言判定只經逐日函式；日後引入向量化時，一致性測試同批落地 |
+      | T3a 注入洩漏的正向對照 | T-6 | 是：以 t+H 收盤注入洩漏，比例必須大幅上升；真實訊號若已接近洩漏版，判為疑似洩漏 | 是：閾值 δ_leak 以合成資料校準後凍結於版本 |
+      | T3b 延遲 1 日 | T-6 | 是：只看是否執行並記錄，不以結果構成 NE-7 失敗 | 是 |
+      | T4 除權息不洩漏 | T-7 | 是：前瞻段含至少一筆除權息事件時實跑；尚無事件時記 `vacuous` 並以 CI 為準 | 是：測試路徑上必須有事件 |
+      | T5 存活者偏差 | T-8 | 是：第 t 日母體等於第 t 日可見的名單快照，不是最新的 directory；無下市事件時 `vacuous` | 是：合成一檔 t+k 下市的股票 |
+      | T6 分類 PIT | T-8 | 是：第 t 日族群歸屬等於 `recorded_at ≤ cutoff(t)` 的最新分類快照；無改類事件時 `vacuous` | 是：合成一檔 t+k 改類的股票；無例外 |
+      | T7 基準一致 | T-13 | 是：B_EW 成分等於同日合格母體 | 是 |
+      | T8 安慰劑 | T-13 | 是：判定用「時間平移」安慰劑，|Δ 中位數| < 2.5pp；「打亂產業標籤」只作診斷，不構成 NE-7 | 是 |
+      | T9 線上與判定一致＋同一集合 | T-9 | 是：board 第 t 日結果逐欄等於 `sector_eval` 回放；族群報酬、`up_count`、成分股三者集合相等 | 是 |
+      | T10 偏誤版隔離 | T-10 | 不屬 NE-7；`SectorStatsRepository` 的拒收在執行期恆生效（fail-closed） | 是：import 邊界、字串掃描 |
+
+    - 本對照表與 quant-researcher 方法論第四版 §8.3 一致；日後不一致時以方法論為準，並回頭修訂本表。
   - **`failed`**：G0 成立、統計已算出，但 G1～G6 有任一不成立：
     - G1：N ≥ 150 且 N_eff ≥ 60。
     - G2：Wilson 與 block bootstrap 的下界都 > b，信賴水準 1 − 0.05/m。
@@ -293,10 +360,20 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - G5：分段看、各相位看、剔除最常出現的族群後看，p_net 都 > b。
     - G6：最近 12 個月的 p_net > b。
   - **`passed`**：G0 成立，而且 G1～G6 全過。
-  - **轉態與核准**：核准紀錄存在主 DB 的 `sector_gate_approvals`，只增不刪，只能用 CLI `python -m app.services.sector_board approve --kind ... --run-id ... --reviewer ...` 寫入。
-    - 某版本**第一次**離開 `not_evaluated` 時，必須有 `kind='first_transition_risk'` 的紀錄（即已重送風控）；沒有就維持 `not_evaluated`，原因碼為 `pending_review`。這個碼是本 ADR 提議的，不在 NE-1～NE-8 內，待 quant 與風控確認。
+  - **轉態與核准**：核准紀錄存在主 DB 的 `sector_gate_approvals`（只增不刪，C-21），只能用 CLI 寫入：`python -m app.services.sector_board approve --kind {first_transition_risk|quarterly_qa} --run-id ... --operator {ceo|dev-lead} --reviewer ... --review-doc <path>`。
+    - **`pending_review`（已採用，風控 §6.4）**：
+      - 每個 `method_version` 第一次離開 `not_evaluated` 時，不論候選結果是 `passed` 還是 `failed`，都先進入 `pending_review`。
+      - 進入條件：NE-1～NE-8 全不成立（NE-8 永遠優先）。
+      - 期間 `gate_status='not_evaluated'`、`not_evaluated_reason='pending_review'`，`historical_stat`、`gate_checks` 皆為 None；候選 gate 結果不以任何欄位、任何形式傳出 API。
+      - 要有 `kind='first_transition_risk'` 紀錄才會離開。
     - `passed` → `failed`：自動、立即。
     - `failed` → `passed`：需要同一 `run_id` 的 `kind='quarterly_qa'` 紀錄；沒有就維持 `failed`。
+    - **CLI 執行者與書面憑據（C-31）**：
+      - `first_transition_risk`：由 CEO 或 dev-lead 執行，前提是 risk-compliance-officer 已出具**書面 APPROVE**。
+      - `quarterly_qa`：由 dev-lead 執行，前提是 qa-reviewer 已出具**書面確認**。
+      - `--operator`、`--reviewer`、`--review-doc` 都必填。CLI 會驗證審查文件存在於 repo 內、內文含該 `run_id` 與 `method_version`，並把文件路徑與 git blob hash 寫進核准列。
+      - 除 CEO 與 dev-lead 依上述書面憑據執行外，唯讀職能（qa-reviewer、risk-compliance-officer）與其他任何 agent 都不得代寫；沒有書面憑據時，任何人都不得寫入。
+      - CLI 的 operator 與文件檢查只是減速帶，不是強制機制（與 ADR-0007 揭露的現況一致）。這條規則的效力來自規範與審查，違反即違規。
   - 有效的 `gate_status` 只在 `app/sectors/gate.py` 一處組合，來源是：`sector_eval` 的候選結果、讀取時算出的 NE-3／4／5、核准紀錄。前端只依 `gate_status` 與 `not_evaluated_reason` 選用風控核可字面，**不得**自行由數字推導；`not_evaluated` 時不得使用「未達門檻」句。
   - 以下情況整卡回 `insufficient_data`：沒有 board、`data_as_of` 未知、整體覆蓋率 < 98%，或 `TWT48U_ALL` 沒涵蓋最近 L 日。
 
@@ -321,7 +398,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
       "data_quality",             # NE-6
       "lookahead_tests_failed",   # NE-7
       "demo_data",                # NE-8
-      "pending_review",           # D-8 first transition (proposed; pending quant/risk)
+      "pending_review",           # D-8 first transition (adopted, risk §6.4)
   ]
 
   class Accumulation(BaseModel):          # always present; feeds 「目前已累積 {n} 個」
@@ -366,7 +443,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
       symbol: str
       name: str
       return_L: float | None              # signed; no rank-number field
-      held: bool
+      held: bool | None                   # None when the positions lookup failed; front end renders no badge (risk §6.3 H-2)
 
   class SectorItem(BaseModel):
       rank: int
@@ -400,16 +477,20 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
       data_as_of: str | None              # latest complete session; one date for the whole board
       market_scope: Literal["twse_only"]  # drives 「僅上市」 tag
       benchmark: Literal["equal_weight_market"]
+      data_source: str                    # e.g. "twse_snapshot" | "demo_synthetic"; drives the NE-8 card-level warning
       coverage: Coverage | None
+      min_constituents: int               # same constant object the gate uses (definition.coverage)
+      sector_coverage_threshold: float    # same constant object the gate uses (0.90)
+      overall_coverage_threshold: float   # same constant object the gate uses (0.98)
       headline_count: int
       sectors: list[SectorItem]           # full ranking incl. tail (PRD FR-2 詳細)
       excluded_sectors: list[ExcludedSector]
       gate_status: GateStatus
-      not_evaluated_reason: NotEvaluatedReason | None     # lowest-numbered reason; None unless not_evaluated
+      not_evaluated_reason: NotEvaluatedReason | None     # demo_data if data_source is demo_synthetic, else lowest-numbered; None unless not_evaluated
       not_evaluated_reasons: list[NotEvaluatedReason]     # all reasons; [] unless not_evaluated
       accumulation: Accumulation
-      historical_stat: HistoricalStat | None              # MUST be None when not_evaluated
-      gate_checks: list[GateCheck] | None                 # MUST be None when not_evaluated
+      historical_stat: HistoricalStat | None              # MUST be None when not_evaluated (incl. pending_review)
+      gate_checks: list[GateCheck] | None                 # MUST be None when not_evaluated (incl. pending_review)
       fee_verified_on: str | None
       disclosures: list[str]              # risk-approved, always rendered
       data: DataMeta                      # reused unchanged
@@ -420,6 +501,18 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - `historical_stat` 只取 `data_regime='forward_pit'` 的統計；`backfill_non_pit`（偏誤研究）不經 API（D-14）。
   - 分名次統計只放研究報告，不進 API（方法論 §6.1）。
   - 回應 schema 的欄位名不得含 `volume`、`hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。
+  - **受 `gate_status` 管制欄位總表**：
+
+    | 類別 | 欄位 | `not_evaluated`（含 `pending_review`） | `failed` | `passed` |
+    | --- | --- | --- | --- | --- |
+    | A. 歷史比例統計（受管制） | `historical_stat` 整個物件：`beat_count_net`、`beat_count_gross`、`sample_count`、`effective_sample_count`、`base_rate_net`、`base_rate_gross`、`ci_low_net`、`ci_high_net`、`bootstrap_low_net`、`bootstrap_high_net`、`m_at_evaluation`、`sample_start`、`sample_end`、`stats_as_of` | None | 有值（「詳細」照實列出） | 有值 |
+    | A. 門檻明細（受管制） | `gate_checks` | None | 有值 | 有值 |
+    | A. 候選判定結果（永不輸出） | `sector_eval` 的候選 gate 結果 | 不存在於 API | 不存在於 API | 不存在於 API |
+    | B. 判定狀態（永遠輸出） | `gate_status`、`not_evaluated_reason`、`not_evaluated_reasons`、`accumulation`（只有 n、起算日、需求數）、`fee_verified_on` | 輸出 | 輸出（原因為 None／[]） | 輸出 |
+    | C. 描述欄位（不受 gate 管制，永遠輸出） | `sector_return_L`、`benchmark_return_L`、`rel_return_L`、`up_count`、`constituent_count`、`coverage`（含 `coverage_ratio`）、`turnover_value_ratio_5_20`、`reference_taiex_return_L`、`top_contributor_share`、`single_stock_dominated`、`constituents`、`excluded_sectors`、`min_constituents`、`sector_coverage_threshold`、`overall_coverage_threshold`、`data_source`、`data` | 輸出 | 輸出 | 輸出 |
+
+    - A 類在 `not_evaluated` 時是整個物件為 None，不是個別欄位為 null。B、C 類不因 `gate_status` 改變。
+    - `turnover_value_ratio_5_20`、`reference_taiex_return_L` 只放「詳細」，這是呈現規則，不是 gate 管制。
   - 沿用 `DataMeta`，不加欄位，各欄對應如下：
     - `status`：有 board 時為 `cached_stale`，沒有時為 `unavailable`。
     - `source`：`data_as_of` 那天所採用的 bars run 來源。
@@ -450,8 +543,8 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - 每筆都帶 `recorded_at`，只增不刪、不回填；缺日沿用前一份，連續缺超過 5 個交易日的樣本不計入。
   - **偏誤版回測**（D-14）：只存研究 DB，標示「含已知偏誤，不得上畫面」，API 不得讀取。它用 D0 前的資料，與判定資料不重疊，所以不計入 m。
   - **轉態路徑 (b)（回補）**：須先依方法論 §12 送風控。在那之前，一切回補結果都屬偏誤研究，不影響 `gate_status`。
-  - **預期時程：約 3.1 年**（N ≥ 150，每年約 49 個不重疊的 5 日樣本）。v3 的較長估計作廢，理由如下：
-    - 方法論第三版規定參數在 D0 前凍結並 commit。前瞻段是凍結後才產生的，沒有任何參數用它擬合過，所以整段都算樣本外。walk-forward 的 504 日訓練窗在這裡沒有擬合用途，只保留 126 日一段的測試窗幾何作分段報告，因此不需要從前瞻段扣掉訓練窗。
+  - **預期時程：內部下限約 3.1 年**（N ≥ 150，每年約 49 個不重疊的 5 日樣本）。使用者可見句寫「約需 3 年」，是風控定稿（派工單 §5-4）的簡化說法，兩者不矛盾；工程與規格文件一律用 3.1 年下限。v3 的較長估計作廢，理由如下：
+    - 方法論規定參數在 D0 前凍結並 commit。前瞻段是凍結之後才產生的，沒有任何參數用它擬合過，所以整段都算樣本外。walk-forward 的 504 日訓練窗在這裡沒有擬合用途，只保留每 126 日一段的測試窗幾何作分段報告，因此不需要從前瞻段扣掉訓練窗。這是對 backtest-protocol 鐵律 3 的已知偏離，見 Consequences。
     - 3.1 年是**下限**：缺日作廢的樣本、N_eff < 60（序列相依）都會拉長時程。CEO 本機 scheduler 的常駐率直接決定累積速度。
 
 - **D-13 多資產籃子回測器**
@@ -494,22 +587,31 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-12** 快照的交易日不得由時鐘推定，必須由資料自證（D-3）。
 - **C-13** `refresh_market_data` 與 `DATA_REFRESH_LOOKBACK_DAYS` 不變。
 - **C-14** 純核心只接受 `PointInTimePanel`；`regime="pit"` 的實例只能由 `MarketPanel.as_of()` 產生；判定端的可見性一律是 `recorded_at ≤ cutoff(t)`。
-- **C-15** forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`；研究 package 內的複本受 C-27 隔離。
+- **C-15** forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`；研究 package 內的複本受 C-27 隔離。機械檢查：識別字 `forward_return*`、`excess_gross`、`excess_net`、`label_return*`、`round_trip_cost` 只能在 `app/backtest/basket.py`、`app/backtest/sector_eval.py`、`app/research/**` 定義。既有的 `app/backtest/event_study.py::forward_returns` 列入白名單：它在 v4 之前就存在，且 C-2 已保證 `app.sectors` 碰不到它（T-18）。
 - **C-16** 定義只有一處；`method_version` 必須與 `lookback_days`、`holding_days` 一致；L ∈ {5, 20}；API 不跨版本配對；切換版本須寫入 `sector_method_registry`。
 - **C-17** 成分股依 `(−return_L, symbol)` 排序，取 `[0, 1, −1]`；不使用 advice 或 signals 的輸出；`app/sectors` 內不得出現 score／rating 類識別字。
 - **C-18** 報酬函式只有一處；回看窗排除窗內有除權息的成分股；`TWT48U_ALL` 沒涵蓋最近 L 日時，整卡回 `insufficient_data`。
 - **C-19** 判定用 p_net 對 `b = max(q_gross, 0.5)`、效果量 ≥ 5pp、信賴水準 1 − 0.05/m，門檻只能調嚴；主視圖呈現 p_net 對 q_net；p_net 與 q_gross 不得並排。
 - **C-20** 有效 `gate_status` 只在 `app/sectors/gate.py` 組合；核准紀錄只增不刪。
-- **C-21** `sector_rank_stats`、`sector_gate_checks`、`sector_gate_approvals`、`sector_method_registry` 只能新增列。唯一例外是 registry 的 `first_forward_eval_at`，允許由 NULL 寫入一次。
+- **C-21** 主 DB 的 `sector_rank_stats`、`sector_gate_checks`、`sector_gate_approvals`、`sector_method_registry` 只能新增列。實作方式是 SQLite trigger（`BEFORE UPDATE`／`BEFORE DELETE` 一律 `RAISE(ABORT)`，SQL 見 D-6），store 也不提供 UPDATE／DELETE 方法。唯一例外在 `sector_method_registry`：`first_forward_eval_at`（同時 `counts_toward_m` 改為 1）與 `accumulation_start` 各允許一次由 NULL 寫入值，其餘欄位必須不變（T-16）。
 - **C-22** `backfill_non_pit` 與 `forward_pit` 分開存：前者只在研究 DB，後者在主 DB；API 只回 `forward_pit`。
-- **C-23** `gate_status == "not_evaluated"` 時，`historical_stat is None` 且 `gate_checks is None`，回應中不含任何比例數字。
-- **C-24** 程式中不存在任何可以繞過 NE-1～NE-8 的開關、清單或環境變數。
+- **C-23** `gate_status == "not_evaluated"`（含 `pending_review`）時，回應不含任何歷史比例統計數值：`historical_stat is None`、`gate_checks is None`。因此 `beat_count_*`、`sample_count`、`effective_sample_count`、`base_rate_*`（p／q 的 gross／net）、`ci_*`、`bootstrap_*`、`m_at_evaluation` 都不會出現在回應的任何位置；候選 gate 結果在任何狀態下都不輸出。D-10「受 `gate_status` 管制欄位總表」的 C 類描述欄位不受 gate 管制，永遠輸出（T-14）。
+- **C-24** 程式中不存在任何可以繞過 NE-1～NE-8 的開關、清單或環境變數。機械檢查：`app/sectors/gate.py`、`app/sectors/coverage.py`、`app/backtest/sector_eval.py` 不得使用 `os.environ`、`os.getenv`、`getenv`，不得 import `os`、`dotenv`、`configparser`、`tomllib`、`yaml`、`app.settings`；`gate.py` 另不得 import `sqlite3`，只吃 store 讀好的列。判定結果只能由三樣東西決定：NE 條件、統計列、核准列（T-17）。
 - **C-25** `CostModel.verified_on is None` 時，NE-3 必定成立，`gate_status` 必為 `not_evaluated`。
 - **C-26** `turnover_value_ratio_5_20` 不得作為 `rank_sectors` 的輸入，只放「詳細」；回應 schema 欄位名不得含 `volume`、`hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。
 - **C-27** 除 `app.research` 自身外，任何 `app.*` 模組都不得可達 `app.research`；字串 `STOCK_DESK_RESEARCH_DB_PATH` 只出現在 `app/research/` 與 tests；`hindsight_view` 只在 `app/research/` 內定義與呼叫；`SectorStatsRepository` 拒收非 PIT 紀錄。
 - **C-28** `rank` 只在族群層級；`historical_stat` 只在卡片層級出現一次；整張 board 只有一個 `data_as_of`。
-- **C-29** `demo_synthetic` 資料必定觸發 NE-8。
+- **C-29** `demo_synthetic` 資料必定觸發 NE-8，且 `not_evaluated_reason` 必為 `demo_data`（NE-8 永遠優先，風控 §6.1 NR-2）。卡片層級的示範資料警告由 `data_source` 驅動，不受 `gate_status` 影響，屬絕對底線（T-11、T-14）。
 - **C-30** 使用者看得到的字面全部要經風控核可，並逐字寫死在常數與測試裡；`not_evaluated` 時不得使用「未達門檻」句。
+- **C-31** 核准列只能由 CLI 寫入。
+  - `first_transition_risk`：由 CEO 或 dev-lead 依風控書面 APPROVE 執行。
+  - `quarterly_qa`：由 dev-lead 依 qa-reviewer 書面確認執行。
+  - `--operator`（`ceo`／`dev-lead`）、`--reviewer`、`--review-doc` 必填。CLI 驗證審查文件存在、內文含該 `run_id` 與 `method_version`，並記錄文件路徑與 git blob hash。
+  - 唯讀職能與其他 agent 不得代寫；沒有書面憑據時任何人都不得寫入（T-19）。
+- **C-32** 族群報酬、`up_count`／`constituent_count`、成分股列示使用同一集合 C_g(t,L)。被排除的成分股（缺資料、窗內除權息、公司行動保險條款）要計入覆蓋率與最小成分數判定（T-20）。
+- **C-33** API 輸出 `min_constituents`、`sector_coverage_threshold`、`overall_coverage_threshold`，值直接取自 `SectorMomentumDefinition.coverage`，與 gate 用的是同一個常數物件。每個族群輸出實際的 `coverage.coverage_ratio`。前端不得寫死這些數字（T-20）。
+- **C-34** `held` 型別為 `bool | None`：持倉查詢成功才是 bool，失敗為 None。為 None 時前端不渲染徽章，並把「列示順序」句帶回主視圖（T-20）。
+- **C-35** 有排名的族群，`constituents` 恆為 3 檔（|C_g(t,L)| ≥ `min_constituents`）。不變量破壞時，該族群改列 `excluded_sectors`（`low_coverage`），當日判定帶 NE-6（T-20）。
 
 ## 測試策略（全部離線；對應方法論 §8 T1～T10）
 
@@ -517,9 +619,14 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 列舉 `app/sectors` 下的每一個檔案，確認都在守門清單內。
   - 驗證模組名稱都能解析，避免拼錯導致測試形同虛設。
   - 加一個 teeth test（故意違規時，測試確實會失敗）。
-  - 掃描 advice 輸出欄位名與 score 類識別字。
+  - C-2 的 `httpx`：掃描 `app/sectors/**` 的 `import httpx`／`from httpx`，含 `importlib` 或字串 `"httpx"` 形式的動態 import，並附 teeth test。
+  - C-17 原始碼掃描：`app/sectors/**` 的識別字、屬性、字串常數不得含 `score`、`rating`、`AdviceCard`、`matched_rules`、`direction_weights`、`ACTION_DIRECTION`（比照 `test_playbook_boundary.py::_identifiers`）。
 - **T-2** 零 IO：注入「任何呼叫都拋錯」的 resolver 與 transport，端點仍回 200；以 `set_trace_callback` 計算兩個 DB 合計的 SQL 條數 ≤ 7，而且 10 個與 40 個族群時條數相同。
-- **T-3** 資料鏈隔離：擷取與暖身前後，`price_bars_cache` 與兩張 log 的 checksum 不變；主 DB 內不存在 `market_daily_bars`。
+- **T-3** 資料鏈與檔案配置：
+  - C-7 前半：擷取與暖身前後，`price_bars_cache` 與兩張 log 的 checksum 不變。
+  - C-7 後半：import-graph 斷言 `app.services.market`、`app.data.service`、`app.portfolio.*`、`app.advice.*` 不可達 `app.data.market_panel`；字串 `STOCK_DESK_MARKET_DB_PATH` 只出現在 `app/data/market_panel.py` 與 tests。
+  - C-8：三個 DB 初始化後，以 `sqlite_master` 斷言每個檔只含 C-8 指定的表。主 DB 內沒有 `market_daily_bars` 與 `pit_*`；市場 DB 內沒有 `sector_*`。
+  - C-13：`DATA_REFRESH_LOOKBACK_DAYS == 540`；`refresh_market_data` 的既有測試不修改且全綠。
 - **T-4** PIT 儲存：
   - UPDATE／DELETE 一律失敗（store 不提供方法，trigger 也會擋下）；
   - `recorded_at` 無法由呼叫端傳入；
@@ -527,6 +634,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 缺日時沿用前一份並標 `carried_forward`，連續缺超過 5 個交易日的樣本作廢；
   - `cutoff(t)` 之後寫入的 run，對第 t 日的決策不可見；
   - D0 之後暖身 CLI 拒絕執行。
+  - C-11：`build_scheduler()` 註冊的 job id 集合恰為既有兩個再加 `pit_snapshot_capture`、`sector_board_refresh`；import-graph 斷言 `app.scheduler` 不可達 `app.research`；scheduler 原始碼不引用暖身函式。
 - **T-5** 未來擾動不變性（方法論 T1）：隨機取 50 個 t，把 t 之後（以 `recorded_at` 為準）的所有列（價格、名單、分類、事件）換成雜訊，第 t 日的輸出必須逐位元相同；`PointInTimePanel` 存取範圍外的資料必須拋錯。
 - **T-6** Shift 測試（方法論 T3a、T3b）：注入洩漏時，比例必須明顯上升；延遲 1 日的結果要記錄。
 - **T-7** 除權息不洩漏（方法論 T4）：排除清單只依 `recorded_at ≤ cutoff(t)` 的公告；測試路徑上必須真的有除權息事件。
@@ -541,7 +649,9 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 把 hindsight 或 `backfill_non_pit` 紀錄交給 `SectorStatsRepository`，必須拋 `BiasedDataRejected`。
   - 研究 DB 存在且有資料時，API 回應必須和研究 DB 不存在時完全相同。
 - **T-11** 三態：
-  - NE-1～NE-8 與 `pending_review` 各有一個單獨成立的案例，每個案例都驗證 `historical_stat is None`、`gate_checks is None`，且 `not_evaluated_reason` 取編號最小者；
+  - NE-1～NE-8 與 `pending_review` 各有一個單獨成立的案例，每個案例都驗證 `historical_stat is None`、`gate_checks is None`；
+  - 多個原因並存時，`not_evaluated_reason` 取編號最小者；**但** `data_source == "demo_synthetic"` 時必為 `demo_data`（例如 NE-1 與 NE-8 並存時為 `demo_data`，NR-2）；
+  - `pending_review` 只在 NE-1～NE-8 全不成立時出現；候選為 `passed` 與 `failed` 兩種情況都要測，而且回應中找不到候選結果；
   - `verified_on=None` 時必定出現 NE-3；
   - NE-4 邊界：第 20 個交易日不成立，第 21 個交易日成立；
   - G1～G6 各自單獨不過時，結果為 `failed`；
@@ -551,10 +661,58 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 擾動 `turnover_value_ratio_5_20` 時名次完全不變；
   - m 由 registry 計算，並寫入 `m_at_evaluation`。
 - **T-13** 基準與安慰劑（方法論 T7、T8）：B_EW 成分等於同日合格母體；B_EW 不扣成本；打亂標籤或平移訊號後，比例落在 q 的區間內。
-- **T-14** Schema 與字面：
-  - 掃描 OpenAPI schema，確認沒有 C-26 禁止的欄位名；
-  - `not_evaluated` 時，回應 JSON 不含任何比例數值；
+- **T-14** Schema、欄位管制與字面：
+  - 掃描 OpenAPI schema，確認沒有 C-26 禁止的欄位名。
+  - C-23：`not_evaluated`（含 `pending_review`）時，遞迴走訪回應 JSON，不得出現任何 A 類鍵名：`beat_count_net`、`beat_count_gross`、`sample_count`、`effective_sample_count`、`base_rate_net`、`base_rate_gross`、`ci_low_net`、`ci_high_net`、`bootstrap_low_net`、`bootstrap_high_net`、`m_at_evaluation`。同時斷言 C 類描述欄位全部存在，且在資料可得時有值。
+  - C-28：`historical_stat` 只在頂層出現一次；`rank` 只在 `SectorItem` 裡；整份回應只有一個 `data_as_of`。
+  - C-29：`data_source == "demo_synthetic"` 時，前端在任何 `gate_status` 下都渲染卡片層級的警告句（絕對底線）。
   - 風控定稿字面在前端與後端兩邊逐字釘住。
+
+- **T-15** 方法論 T2（單一路徑）：靜態斷言 `sector_eval` 只經 `ranking.rank_sectors` 等逐日函式產生第 t 日結果，不存在向量化替代路徑。日後若引入向量化，要抽 50 日比對「整段一次算出的第 t 列」與「只餵 ≤ t 資料算出的最後一列」逐位元相同，並與向量化同批落地。
+- **T-16** C-21 只增不刪：
+  - 對四張表各做一次 UPDATE 與一次 DELETE，都必須拋 `sqlite3.IntegrityError`（來自 `RAISE(ABORT)`）。
+  - `sector_method_registry`：
+    - `first_forward_eval_at` 由 NULL 寫入值（同時 `counts_toward_m` 改為 1），第一次成功，第二次失敗；
+    - 同一次 UPDATE 順帶改其他欄位，失敗；
+    - `accumulation_start` 由 NULL 寫入值，第一次成功，第二次失敗。
+  - 以 `sqlite_master` 斷言每張表的 trigger 都存在。teeth test：在暫存 DB 拿掉一個 trigger，存在性檢查必須失敗。
+- **T-17** C-24、C-20 靜態掃描：
+  - AST 掃描 `app/sectors/gate.py`、`app/sectors/coverage.py`、`app/backtest/sector_eval.py`：不得出現 `os.environ`、`os.getenv`、`getenv`，不得 import `os`、`dotenv`、`configparser`、`tomllib`、`yaml`、`app.settings`；`gate.py` 不得 import `sqlite3`。
+  - C-20：對 `gate_status` 的賦值（含 dict key、關鍵字參數）只出現在 `app/sectors/gate.py`。
+  - teeth test：對一個含 `os.environ.get("X")` 的暫存檔跑同一掃描，必須報錯。
+- **T-18** C-15 識別字掃描：AST 掃描 `app/**` 的函式、變數、屬性與 dataclass 欄位名。名稱符合 `forward_return*`、`excess_gross`、`excess_net`、`label_return*`、`round_trip_cost` 者，其定義只能出現在 `app/backtest/basket.py`、`app/backtest/sector_eval.py`、`app/research/**`，以及白名單 `app/backtest/event_study.py`。附 teeth test。
+- **T-19** C-31 核准 CLI，以下情況一律拒絕：
+  - 缺 `--operator`、`--reviewer`、`--review-doc` 任一；
+  - `--operator` 不是 `ceo`／`dev-lead`；
+  - `quarterly_qa` 的 operator 不是 `dev-lead`；
+  - 審查文件不存在，或內文不含 `run_id`／`method_version`。
+  - 成功時，核准列須寫入文件路徑與 git blob hash。
+- **T-20** 描述欄位與成分股（C-17、C-18、C-32～C-35）：
+  - **同一集合**（風控 §6.2 (a) 的 qa 斷言）：對每個族群，`constituent_count == |C_g(t,L)|`，`up_count` 以同一集合計算，`constituents` 每一檔都屬於該集合；窗內除權息的成分股不在集合內，並計入 `ex_date_excluded_count`；最小成分數以排除後的檔數判定。
+  - **門檻輸出**（風控 §6.2 (c)、§6.4-2）：回應中的 `min_constituents`、`sector_coverage_threshold`、`overall_coverage_threshold`，與 `SectorMomentumDefinition.coverage` 的值逐一相等；前端 wording 模組與元件原始碼不得含 `90%`、`98%`、`5 檔` 字面。
+  - **`held`**：持倉查詢拋錯時，所有 `held is None`；前端不渲染徽章，並顯示「列示順序」句。
+  - **不變量**：有排名族群的 `constituents` 長度恆為 3。以故障注入讓某族群只剩 2 檔時，該族群改列 `excluded_sectors`（`low_coverage`），當日判定帶 NE-6。
+  - **C-18**：`TWT48U_ALL` 的 `ok` run 沒涵蓋最近 L 日時，整卡回 `insufficient_data`。
+- **T-21** C-9：每個新 store 的連線執行 `PRAGMA busy_timeout`，回傳值 > 0。
+
+**約束 ↔ 測試對照**
+
+| 約束 | 測試 | 約束 | 測試 | 約束 | 測試 |
+| --- | --- | --- | --- | --- | --- |
+| C-1 | T-1 | C-13 | T-3 | C-25 | T-11 |
+| C-2 | T-1 | C-14 | T-5 | C-26 | T-12、T-14 |
+| C-3 | T-1 | C-15 | T-18 | C-27 | T-10 |
+| C-4 | T-10 | C-16 | T-12 | C-28 | T-14 |
+| C-5 | T-1、T-10 | C-17 | T-1、T-20 | C-29 | T-11、T-14 |
+| C-6 | T-2 | C-18 | T-7、T-20 | C-30 | T-14 |
+| C-7 | T-3 | C-19 | T-11 | C-31 | T-19 |
+| C-8 | T-3 | C-20 | T-17 | C-32 | T-20 |
+| C-9 | T-21 | C-21 | T-16 | C-33 | T-20 |
+| C-10 | T-4 | C-22 | T-10 | C-34 | T-20 |
+| C-11 | T-4 | C-23 | T-14 | C-35 | T-20 |
+| C-12 | T-4 | C-24 | T-17 | | |
+
+方法論 T1～T10 與 ADR 測試、runtime／CI 的對照見 D-8。
 
 ## Consequences（後果）
 
@@ -575,9 +733,12 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 資料量：前瞻每年約 1,100 × 245 ≈ 27 萬列日線；名單、分類、除權息用內容定址去重。實際量待實測。
   - 只含上市，「僅上市」標記常駐；上櫃的記憶體股、IC 設計股都會缺席。
   - 新增 2 個 job、約 12 張表；API 程序與 scheduler 程序的限流不共享。
+  - **對 backtest-protocol 鐵律 3（walk-forward 分割）的已知偏離**：判定資料（`forward_pit`）不切訓練窗，整段視為樣本外；walk-forward 只保留每 126 日一段的測試窗幾何，用於分段報告（G5）。理由是 v1 參數在 D0 前凍結並 commit，沒有任何參數用前瞻資料擬合（方法論第四版 §5.3）。偏誤版研究仍依鐵律 3 分列樣本內與樣本外。此偏離列入 CEO 核可事項。
 - **已知限制**
   - `cutoff(t)` 取當地 23:59:59，所以 21:30 之後的更正要到次日才對決策可見。
-  - `pending_review` 原因碼待 quant 與風控確認。
+  - `pending_review` 已由風控採用（§6.4），方法論第四版 §6.3 已補列。
+  - 核准 CLI 的 operator 與文件檢查只是減速帶；「唯讀職能與其他 agent 不得代寫」的效力來自規範與審查（ADR-0007 揭露的現況）。
+  - 成分股不變量破壞時，`low_coverage` 那句可能與實際覆蓋率不符（見 D-7）。
   - 持倉資料鏈若要改從市場面板取價，須另立 ADR。
 
 ## 與既有 ADR 的關係（§7）
@@ -598,7 +759,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 | DE-2 | FinMind 額度 | 逐檔已驗證；額度未知 | 已定案：只用於暖身與日期自證；額度**待查證** |
 | DE-3 | 速率界線 | 未知 | **待查證**；先沿用現有下限 |
 | DE-4 | 上櫃產業別；非普通股排除 | 上櫃無來源；以 `t187ap03_L` 正向篩選 | 已定案：`twse_only` 加白名單母體 |
-| DE-5 | `change` 是否以參考價為基準；`TWT48U_ALL` 能否算出乘法因子 | 未知 | **待查證**；查證前標籤因子不可用（NE-1） |
+| DE-5 | `change` 是否以參考價為基準；`TWT48U_ALL` 能否算出乘法因子 | 未知 | **待查證**。查證前，前瞻段的除權息紀錄不足以還原標籤，歸 NE-1（`pit_history_missing`），與方法論第四版一致（結構性來源缺口，非單次品質問題）。排行本身不受影響（回看窗採排除法，D-4） |
 | DE-6 | 資料量 | 前瞻每年約 27 萬列日線，快照去重 | **待實測** |
 | DE-7 | 資料公布時間 | 建議 17:00 之後 | 已定案：17:30／19:30／21:30 加日期自證；實際時間**待查證** |
 | DE-8 | 已下市股票 | 無來源 | 前瞻累積自然解決；路徑 (b) **待查證** |
@@ -619,12 +780,14 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 
 **其他部門**
 
-- **quant-researcher 與 risk-compliance-officer**：確認 `pending_review` 原因碼。
-- **creative-lead 與 risk-compliance-officer**：起草並審定 NE-3～NE-8 與 `pending_review` 的原因句，以及混源、同一檔兩種價格的揭露句。
+- **quant-researcher**：方法論第四版已補列 `pending_review` 並提供 §8.3 對照表；D-8 對照表已對齊。
+- **creative-lead 與 risk-compliance-officer**：NE-3～NE-8、`pending_review`、NE-8 卡片警告句已定稿（派工單 §6.1）；待辦為混源揭露句。若風控不接受 D-7 對 `low_coverage` 的沿用，再起草 `data_integrity` 的原因句。風控另在裁定：整體覆蓋率是否含除權息排除、是否新增 `ex_dividend_exclusion` 排除原因碼、NE-1 詳細句的精確度（待風控）。
+- **qa-reviewer**：複審 v5（本版回應其 NEEDS_CHANGES）。
 - **product-manager**：PRD 第三版已併入 R-A～R-C；N 維持 3。
 - **devops-sre**：三個 DB 的備份（市場 DB 為最高等級）、scheduler 常駐監控、暖身回補操作手冊。
 - **CEO**：
-  - 是否接受第一階段不列歷史比例，且累積時程下限約 3.1 年；
+  - 是否接受第一階段不列歷史比例，且累積時程下限約 3.1 年（使用者可見句寫「約 3 年」）；
+  - 是否核可對 backtest-protocol 鐵律 3 的已知偏離（判定資料不切訓練窗，見 Consequences）；
   - D0 日期（v1 參數須在 D0 前 commit，暖身須在 D0 前完成）；
   - 三個 DB 檔的配置；
   - §7 對 ADR-0002 的擴充解讀。
