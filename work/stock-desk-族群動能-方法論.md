@@ -209,6 +209,8 @@ R_g(t, L) = mean_{i in C_g(t, L)} ( P_i(t) / P_i(t−L) − 1 )
 
 每個完整交易日、每個族群輸出一列。欄位不使用 `hit_rate`、`win_rate`、`score`、`rating`。
 
+> **命名權威**（dev-lead 裁定 2026-09-24，qa 複審 blocking）：本節描述欄位的**含義**；API 欄位名稱一律以 ADR-0012 D-10 為唯一權威，本表已同步改用 D-10 名稱。
+
 | 欄位 | 含義 |
 |---|---|
 | `method_version` | 例如 `sector-rel-v1.0-L5-H5`。線上排行與判定共用同一個版本字串 |
@@ -216,15 +218,15 @@ R_g(t, L) = mean_{i in C_g(t, L)} ( P_i(t) / P_i(t−L) − 1 )
 | `as_of` | 最後一個全市場完整交易日（所有族群用同一日期） |
 | `market_scope` | `twse_only` |
 | `sector_code` / `sector_name` | 官方產業別 |
-| `rank` | 名次；不合格時為 null，並附 `excluded_reason` |
+| `rank` | 名次；不合格的族群不在排行中，改列 `excluded_sectors` 並附 `reason_code` |
 | `sector_return_L` / `benchmark_return_L` / `rel_return_L` | **只描述過去** |
 | `up_count` / `constituent_count` | 上漲 k／n 家（同一個 L 窗） |
 | `turnover_value_ratio_5_20` | 成交金額倍數＝族群成分股近 5 個交易日平均成交金額 ÷ 近 20 個交易日平均成交金額（20 日含最近 5 日）。**只放「詳細」，只作描述，不進排名** |
-| `coverage_ratio` / `coverage_threshold` / `min_constituents` / `missing_count` / `suspended_count` / `ex_date_excluded_count` / `corporate_action_excluded_count` | 族群覆蓋率與三類排除計數（§2.2）。`coverage_threshold`（90）與 `min_constituents`（5）和 gate 共用同一個常數 |
-| `data_completeness_ratio` | 整體資料完整率（只扣第 ① 類），門檻 98% |
+| `coverage_ratio` / `sector_coverage_threshold` / `min_constituents` / `missing_count` / `suspended_count` / `ex_date_excluded_count` / `corporate_action_excluded_count` | 族群覆蓋率與三類排除計數（§2.2）。`sector_coverage_threshold`（90）與 `min_constituents`（5）和 gate 共用同一個常數 |
+| `coverage.completeness_ratio`（整卡；顯示值 `completeness_pct_display`）/ `overall_coverage_threshold` | 整體資料完整率（只扣第 ① 類），門檻 98% |
 | `computable_ratio` / `computable_ratio_min` | 整卡可計算比例 \|C_M\|÷\|E_M\| 與下限（暫定 0.80，和判定共用同一常數） |
 | `market_ex_date_excluded_count` / `market_missing_count` / `market_corporate_action_excluded_count` / `market_ex_date_excluded_ratio` / `ex_date_tag_ratio_min` | 全市場三類排除檔數、除權息排除比例，以及 tag 門檻（0.05，同一常數） |
-| `excluded_reason` / `computable_count` / `expected_count` | 族群排除原因（依 §2.3 歸因順序只取一個）；{c}＝\|C_g\|、{e}＝\|E_g\| |
+| `reason_code`（於 `excluded_sectors`）/ `computable_count` / `expected_count` | 族群排除原因（依 §2.3 歸因順序只取一個）；{c}＝\|C_g\|、{e}＝\|E_g\| |
 | `pit_gaps` | `list[Literal["pit_universe","pit_classification","pit_ex_dividend","de5_unverified"]]`，依此固定順序輸出。NE-1 成立時**不得為空**；其他狀態下為空清單。前端不得自行推導 |
 | `accumulation_start` | D0；尚未開始逐日保存時為 null（前端改用風控定稿句 2'） |
 | `top_contributor_share` / `single_stock_dominated` | §2.1 |
@@ -693,7 +695,7 @@ q_gross、q_net 用同樣方法求出區間 [q_min, q_max]。
   - D-8、T-11 的原因碼優先序改為「NE-8 優先，`pending_review` 最低」。
   - `pending_review` 從「提議」改為「已採用」，期間 API 全部欄位回 None。
   - 同一集合 C_g 的單一函式與斷言。
-  - `coverage_threshold`、`min_constituents` 由 API 輸出，並和 gate 共用同一常數。
+  - `sector_coverage_threshold`、`min_constituents` 由 API 輸出，並和 gate 共用同一常數。
   - 成分股不變量被破壞時使用的原因碼。
 - **risk-compliance-officer**：
   - 審 §12 路徑 (b) 的方法草案。

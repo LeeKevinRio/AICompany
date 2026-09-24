@@ -13,7 +13,7 @@
 - 輸入：
   - `work/stock-desk-族群動能-PRD.md`（第三版，已併入風控第二次裁定 R-A～R-C）
   - `work/stock-desk-族群動能-資料評估.md`（data-engineer）
-  - `work/stock-desk-族群動能-方法論.md`（quant-researcher，v1 草案第五版；D-8 的 T 對照表以其 §8.3 為準，API 欄位命名以其 §4 為準，唯 `ExcludedSector.reason_code` 沿用 ADR 名稱）
+  - `work/stock-desk-族群動能-方法論.md`（quant-researcher，v1 草案第五版；D-8 的 T 對照表以其 §8.3 為準，**API 欄位命名一律以本 ADR D-10 為唯一權威**；方法論 §4 已同步改用 D-10 名稱（qa 複審 blocking，dev-lead 裁定 2026-09-24）。對照：方法論舊稱 `coverage_threshold` ＝ `sector_coverage_threshold`；`data_completeness_ratio` ＝ `coverage.completeness_ratio`（巢狀於整卡 `coverage`），顯示值 `completeness_pct_display`、門檻 `overall_coverage_threshold`；`excluded_reason` ＝ `ExcludedSector.reason_code`）
   - `work/stock-desk-族群動能-派工單.md` §4（風控預審：APPROVE_WITH_CONDITIONS；成分股技術面分數 VETO）
   - `work/stock-desk-族群動能-派工單.md` §5（風控第二次裁定：三態 `gate_status`、第一階段不列歷史比例、主視圖 q_net、成交金額倍數）
   - `work/stock-desk-族群動能-派工單.md` §6（風控逐字審：NE 原因句定稿、NR-2、§6.2 (a)(c)、§6.3 H-2 與空狀態、§6.4 `pending_review` 採用）
@@ -360,7 +360,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     | NE-4 | 距上次重算超過 20 個交易日 | `stale_recompute` | `gate.py`（讀取時） |
     | NE-5 | board 與統計的 `method_version` 不一致 | `version_mismatch` | `gate.py`（讀取時） |
     | NE-6 | 資料品質檢查未過（未來日期、重複、覆蓋率） | `data_quality` | `sector_eval` |
-    | NE-7 | 方法論 §8 的 T1～T9 任一未通過（判定依據：runtime 實跑項目，加上部署版本的 CI 門結果，見下方對照表；T10 不屬此條） | `lookahead_tests_failed` | `sector_eval` |
+    | NE-7 | 方法論 §8 的 T1～T9 任一未通過（判定依據：runtime 實跑項目，加上部署版本的 CI 門結果，見下方對照表；T10 不屬此條） | `lookahead_tests_failed` | `sector_eval`＋`gate.py`（讀取時比對 commit） |
     | NE-8 | 資料為 `demo_synthetic` | `demo_data` | `sector_eval` |
 
     - **`not_evaluated_reason` 的選取規則**：資料來源為 `demo_synthetic` 時一律為 `demo_data`（NE-8 永遠優先，排除「取編號最小者」規則，風控 §6.1 NR-2）；其他情況取成立者中編號最小的一項；`pending_review` 排最後。`not_evaluated_reasons` 列出全部成立者。前端依 `not_evaluated_reason` 選用風控 §6.1 的定稿句。
@@ -374,6 +374,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
         - **判定時**（scheduler 程序的 `services.sector_board`）：`running_commit = git rev-parse HEAD`。以下任一情況即為 NE-7：工作樹不乾淨、讀不到 git、缺 attestation、`running_commit != ci_passed_commit`、`suite_hash` 不符。`running_commit` 寫入該次統計列。
         - **讀取時**（`gate.py`）：輸入由 services 層在程序啟動時讀好後傳入，符合 C-24。`stats.running_commit` 與目前部署的 `ci_passed_commit` 不符即為 NE-7。
         - 這是本機的自我證明，不是外部 CI 簽章；執行期不查 GitHub。
+        - **部署期間的預期行為**（qa 複審 medium）：API 程序與 scheduler 程序切換到新 commit 的時點不同時，讀取端會因 `stats.running_commit` 與部署的 `ci_passed_commit` 不符而短暫判為 NE-7，直到 scheduler 以新 commit 重新判定為止。這是預期行為、不是故障，不發告警；本機部署腳本應同時重啟兩個程序並在啟動後立即補跑一次判定（D-5）以縮短此窗口。交 devops-sre 納入部署手冊。
         - T-1～T-4、T-10～T-12、T-14、T-16～T-21、T-23～T-28 屬合併門，不屬 NE-7，也不進 attestation 集合。
 
       | 方法論 | ADR 測試 | runtime（真實資料，每次判定） | CI（合成資料，合併門） |

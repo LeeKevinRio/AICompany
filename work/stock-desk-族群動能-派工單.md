@@ -257,3 +257,16 @@ dev-lead 處置：IP-3 順序、`insufficient_reason` 五碼、{e,a,b,c,x} 欄�
 - ⑤ 的 {n1}、{n2}、{n3} 依 §8-2 歸因順序計數，相加等於族群總數（qa 斷言）。
 
 dev-lead 處置：欄位分立、`overall_*` 完整率欄位、{n1,n2,n3} 輸出、AS_OF 常數守門轉 tech-architect（併入 v6）；PRD 3.2 引用 §9、§10 即可。
+
+## 11. qa-reviewer 規格包複審（2026-09-24）與收斂
+
+結論 NEEDS_CHANGES（1 blocking），上輪 B1～B7、M1～M3、L1～L3 **全部確認已解**；C-1～C-45 皆有對應 T-1～T-28。Codex 未執行（本機無 CLI）。qa 註明：修正欄位命名後即可視為收斂，不需整份重審。
+
+| qa 發現 | severity | dev-lead 處置（已落檔） |
+|---|---|---|
+| ADR 宣告「API 命名以方法論 §4 為準」，但兩者名稱不同（`coverage_threshold` vs `sector_coverage_threshold`、`data_completeness_ratio` vs `coverage.completeness_ratio`、`excluded_reason` vs `reason_code`） | blocking | **裁定 ADR D-10 為 API 命名唯一權威**；方法論 §4 改用 D-10 名稱並加命名權威註記；ADR 輸入說明列出舊稱對照 |
+| `ci_passed_commit` 在部署期間兩程序切換時點不同，會短暫判 NE-7 | medium | ADR D-8 補「預期行為、不告警；部署腳本同時重啟兩程序並立即補跑判定」，交 devops-sre 納入部署手冊 |
+| PRD FR-3 漏列 `unranked_category` | low | PRD 補為第 0 種排除原因，引用 §6.2 (c) 定稿 |
+| ADR NE-7 判定位置欄未標讀取時 | nit | 改為「`sector_eval`＋`gate.py`（讀取時比對 commit）」 |
+
+**規格包狀態：收斂，可送 CEO 核可。**
