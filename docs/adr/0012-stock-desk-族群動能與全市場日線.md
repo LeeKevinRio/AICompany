@@ -1,39 +1,67 @@
-# ADR-0012：stock-desk 族群動能板與全市場日線
+# ADR-0012：stock-desk 族群動能排行與全市場日線
 
 - 狀態：proposed
 - 日期：2026-09-24
 - 決策者：tech-architect（草案）；待 CEO 核可
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
-  - ADR-0002：SQLite WAL、單機；「所有市場資料存取走抽象介面」。本 ADR D-3 對後者做了擴充解讀，見 §7。
-  - ADR-0005：指數路徑 yfinance 恆為 `backup`。
-  - ADR-0009：交易日新鮮度、D-3 正向證據、D-8 冷卻。
-  - ADR-0010：單一請求 IO 預算、cache-only 讀取。
+  - ADR-0002：SQLite WAL、單機、「所有市場資料存取走抽象介面」。本 ADR D-3 對後者做擴充解讀，見 §7。
+  - ADR-0005：指數路徑恆標 `backup`。
+  - ADR-0009：交易日新鮮度。
+  - ADR-0010：單一請求 IO 預算。
   - skill `backtest-protocol`、skill `data-source-integration`。
-- 輸入狀態：`work/stock-desk-族群動能-PRD.md`、`-資料評估.md`、`-方法論.md` 撰寫本 ADR 時**尚未產出**。凡標「條件式」的決策，要等 §8 的開放問題回答後修訂本 ADR 才能定案。**在那之前本 ADR 不得轉為 accepted。**
-- **待修訂（dev-lead 註記，2026-09-24）**：本草案完稿早於風控預審（`work/stock-desk-族群動能-派工單.md` §4）。以下與風控條件衝突，下一輪修訂必須處理：
-  - D-7、C-16 與 API `ConstituentItem.score`／`score_components`：風控 VETO 成分股「技術面分數」。第一階段成分股只依族群排名所用的同一已發生變數（例：近 5 日漲跌幅）排序，不產生分數。
-  - D-10 `SectorHistoryStats.hit_rate`：風控 QR-6 要求欄位改 `beat_count`／`sample_count`／`base_rate`，另需基準率 q、成本狀態、分名次區間統計。
-  - D-8 門檻：以風控 §4.3 顯示門檻 a–f 為下限（樣本外、不重疊 N ≥ 60、CI 下界 > 基準率、扣成本判定、12 個月滾動失效、定義鎖版）。
-  - D-10 回應須帶覆蓋率（應有／缺漏檔數）、「僅上市／僅上櫃」標記、統計截至日與樣本外期間（風控 §4.5）。
-- 修訂：（無，本次為新增）
+- 輸入：
+  - `work/stock-desk-族群動能-PRD.md`（狀態 spec）
+  - `work/stock-desk-族群動能-資料評估.md`（data-engineer）
+  - `work/stock-desk-族群動能-方法論.md`（quant-researcher，v1 草案第二版）
+  - `work/stock-desk-族群動能-派工單.md` §4（風控預審：APPROVE_WITH_CONDITIONS；成分股技術面分數 VETO）
+- 修訂：
+  - v1（2026-09-24）：初稿，完成時上述輸入都還沒有。
+  - v3（2026-09-24）：併入上述全部輸入。
+    - 移除成分股分數。
+    - 統計欄位與門檻改依方法論。
+    - 新增覆蓋率、市場範圍標記、point-in-time 缺口機制、多資產籃子回測器。
+    - 全市場日線改放獨立 SQLite 檔。
+    - dev-lead 的「待修訂」註記結案。
+- **v3 殘留差異（dev-lead 註記，2026-09-24，下一版 v4 修正）**：v3 依方法論第二版撰寫，晚於它的兩份輸入尚未吸收：
+  1. 風控第二次裁定（派工單 §5）已定案：主視圖 q 配 **q_net**（第 2 點）；「均量」改「成交金額 5 日均／20 日均」且只放詳細（第 3 點）；`not_evaluated` 時主視圖**與詳細**皆不列任何比例數字，故 D-12「『詳細』可以照實列出兩段統計」與 §8 相關待裁定題目作廢，`backfill_non_pit` 不得露出（第 4 點）。
+  2. 方法論第三版：`not_evaluated_reason` 列舉 NE-1～NE-8、`not_evaluated` 時統計欄位回 null；D9 費率未查證即 `not_evaluated`；`method_version` 命名為 `sector-rel-v1.0-L5-H5`，回看窗 L 與持有期 H 為兩個參數；判定用 α/m；刪除 T6 例外；T10 偏誤版研究與 API 隔離。
+  3. 預期時程：方法論第三版為參數於 D0 前凍結、前瞻段全段視同樣本外，約 3.1 年（N ≥ 150）；v3 D-12 加上 504 日訓練窗得「5 年以上」，兩者須統一。
+- 修訂：v3 為目前版本。
 
 ## Context（背景）
 
-CEO 2026-09-24 裁定開第一階段：首頁新增「族群動能排行＋歷史機率」卡。第一階段只用日線，不接基本面，也不接消息面。
+CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」卡，只呈現「近 5 日相對強弱」加上「歷史比例」，不做「預測會漲」。第一階段只用日線。
 
-要做到這件事，系統得具備三種現在沒有的能力：
+風控核可族群層級的框架，但附了條件：
+- 否決成分股的技術面分數；
+- 規定歷史比例的呈現方式與降級門檻；
+- 規定資料時效、覆蓋率、存活者偏差、point-in-time 分類與除權息的處理。
 
-1. **全市場日線**。既有資料鏈只抓「持倉」：`scheduler.refresh_market_data` 只對 `PositionStore.list_all()` 的標的逐檔走 `load_bars`，程式註解寫明 “not to crawl a universe”。provider 介面 `MarketDataProvider.get_daily_bars(symbol, start, end)` 是「單一序列、時間區間」的形狀。`TwseAdapter` 每個日曆月一次 HTTP。拿這個介面去抓約兩千檔、每檔 N 個月，請求數是「檔數 × 月數」，不可行。
-2. **跨標的的橫斷面計算**：族群等權指數、排名、成分股評分。既有 `app/signals` 是單一標的量測，而且 `signals/service.py` 明文寫「刻意不出 score／rating／buy-sell 欄位」。既有 `app/backtest/engine.py` 是單一資產回測。
-3. **歷史命中率**：每天的排名都要附「歷史上第 1 名的族群，下 5 個交易日跑贏大盤的比例（N、期間）」。這需要 walk-forward 的橫斷面回測，而且線上排名和回測排名必須是同一段計算碼，否則顯示的機率不屬於畫面上那個排名。
+方法論的定案內容：
+- 排名訊號 S_A：近 5 日等權族群報酬，減去等權全市場（B_EW）報酬。
+- 時序：第 t 日收盤出訊號，第 t+1 日開盤進場，第 t+5 日收盤出場。
+- 門檻 G0～G7，方法論事前就預期結果多半會降級。
 
-另有四個既有事實限制了方案形狀：
+既有程式的限制：
+- 既有資料鏈只抓持倉（`scheduler.refresh_market_data` 註解明寫 “not to crawl a universe”）。
+- `MarketDataProvider` 的形狀是「單一序列、一段區間」。
+- `PriceBarCache.put()` 是最後寫入者勝出，不看來源；混源會觸發 ADR-0009 D-7 的揭露句。
+- `market_trading_days()` 在每一次 `/api/advice` 都會被呼叫。
+- `run_backtest` 只能回測單一資產。
+- `app/signals` 明文不出 score。
+- `SecurityDirectoryStore._connect` 沒有設 `busy_timeout`。
 
-- `PriceBarCache.put()` 以 `(symbol, market, trade_date)` 做 upsert，**不看既有列的 `source`**，最後寫入者勝出。`mixed_sources_reason()` 只要回傳的 bars 來源超過一個，就附上風控定稿句（ADR-0009 D-7）。
-- `PriceBarCache.market_trading_days()` 在**每一次** `/api/advice` 都會被呼叫；`market_has_session()` 是 ADR-0009 D-3 的正向證據。兩者都掃 `price_bars_cache` 的整個市場。
-- `security_directory.sector` 只涵蓋上市。上櫃和 ETF 是 NULL（`directory/models.py`）。而且它是**同步當下的快照**，沒有歷史分類。
-- 本雲端開發環境打不到 TWSE／TPEx（`directory/sync.py`、`tpex.py` 檔頭都有記錄）。所有真實抓取只能在 CEO 本機跑。
+資料評估確認的外部事實（本環境不能連外；標「未驗證」者待 CEO 本機查證）：
+- **全市場端點**：
+  - `STOCK_DAY_ALL` 只給**當日**上市快照，約 1,379 筆，含開高低收、量、成交金額、`Change`。已有 fixture，CEO 實測 PASS。
+  - TPEx mainboard 同樣只給當日，而且混了大量非普通股。
+  - 可指定歷史日期的全市場端點（`MI_INDEX` 等）未驗證。
+- **歷史回補**：唯一已驗證、效率又可行的路徑是 FinMind `TaiwanStockPrice` 逐檔抓，一檔一次請求拿整段；額度未驗證。
+- **產業分類**：上市只有 `t187ap03_L` 的**當下快照**，`apply_sectors` 只做 UPDATE、不留歷史；上櫃沒有任何來源。
+- **存活者偏差**：所有候選來源只列目前掛牌的股票，已下市名單沒有來源。
+- **除權息**：沒有歷史還原因子。`TWT48U_ALL` 只有未來預告，而且只涵蓋上市。
+- **成本費率**：未查證，`CostModel.verified_on=None`。
 
 ## Options（選項比較）
 
@@ -41,336 +69,488 @@ CEO 2026-09-24 裁定開第一階段：首頁新增「族群動能排行＋歷�
 
 | 方案 | 優點 | 缺點 | 風險 |
 | --- | --- | --- | --- |
-| **A1 新 package `app/sectors/`（純計算＋自有 store），評估碼放 `app/backtest/sector_eval.py`，編排放 `app/services/sector_board.py`（採用）** | 排名／評分有獨立的家，不污染 `signals` 的「純量測」定位。評估碼（會讀未來資料）和線上碼分屬不同 package，可以用 import-graph 硬性隔離 | 多一個 package、多一組邊界測試 | 低 |
-| A2 併入 `app/signals` | 少一個 package | `signals` 明文不出 score；它被 advice、alerts、playbook 廣泛依賴，族群排名一進來，建議卡就能隨手取用 | 動能排名悄悄流進建議卡或風險上限，構成未經風控的推薦 → 否決 |
-| A3 併入 `app/advice` | 可沿用規則引擎 | advice 是單一標的＋整書風險上限，會把 ADR-0010 的 IO 預算（`build_summary`）帶進首頁；候選股和建議動作混在一起就是推薦 | 否決 |
-| A4 全放 `app/backtest` | 回測與線上天然共碼 | 線上服務要依賴回測套件；計算 forward return 的碼和線上路徑同一個 package，look-ahead 守門只能靠自律 | 否決 |
+| **A1 新 package `app/sectors/`（純計算加自有 store）；籃子引擎放 `app/backtest/basket.py`；評估放 `app/backtest/sector_eval.py`；編排放 `app/services/sector_board.py`（採用）** | 排名有獨立的位置；讀未來資料的碼和線上碼分屬不同 package，可以用 import-graph 硬性隔離 | 要多寫一組邊界測試 | 低 |
+| A2 併入 `app/signals` | 少一個 package | `signals` 明文不出 score，而且它被 advice、alerts 廣泛依賴 | 排名可能流進建議卡，否決 |
+| A3 併入 `app/advice` | 無 | 風控 §4.1-d 禁止首頁卡出現規則引擎輸出；也會把 ADR-0010 的 IO 預算帶進首頁 | 否決 |
+| A4 全部放進 `app/backtest` | 線上和回測天然共碼 | 線上路徑和計算 forward return 的碼同在一個 package | 否決 |
 
 ### B. 全市場日線的儲存
 
 | 方案 | 優點 | 缺點 | 風險 |
 | --- | --- | --- | --- |
-| B1 共用 `price_bars_cache` | 只有一張價格表；觀測到的市場日曆更完整 | `put()` 最後寫入者勝出：bulk 來源會覆寫持倉序列的列，持倉頁因此常駐 `MIXED_SOURCES_REASON`。bulk 列若不寫 fetch log，layer 0 用不上；若寫，會扭曲 ADR-0009「單一連續 coverage」的語意。`market_trading_days`／`market_has_session` 的掃描面放大約兩個數量級。每列多存兩個 ISO 時間戳，浪費空間 | 持倉資料鏈的行為和揭露句被非持倉的工作改變 → 否決 |
-| **B2 獨立表 `market_daily_bars`＋`market_ingest_log`，同一個 SQLite 檔（採用）** | 持倉資料鏈零改動；以「交易日×交易所」為單位記錄抓取；schema 可以精簡 | 同一檔股票會有兩份價格（持倉鏈一份、bulk 一份），來源不同時數值可能不同 | 見 Consequences |
-| B3 另開 SQLite 檔，或改用 DuckDB／Parquet | 隔離最好；列式分析快 | 偏離 ADR-0002（DuckDB 已被否決）；要新增依賴；備份點變成兩處 | 否決。DB 量體到 GB 級再另立 ADR |
+| B1 共用 `price_bars_cache` | 只有一張價格表 | 最後寫入者勝出會污染持倉列並觸發混源揭露；扭曲 ADR-0009 的 coverage 語意；`market_trading_days` 的掃描量暴增（資料評估 §6 也同意） | 否決 |
+| B2 新表放在同一個 SQLite 檔（v1 的決定） | 不多一個檔案 | 約 260 萬列可重建資料，會和不可重建的使用者資料共用備份與 WAL；回補期間和持倉查詢搶同一把寫鎖（資料評估 §6-2） | v3 推翻 |
+| **B3 新表放獨立 SQLite 檔 `STOCK_DESK_MARKET_DB_PATH`，預設 `./data/stock-desk-market.db`（採用）** | 寫鎖隔離；可重建資料和不可重建資料分開；主 DB 備份維持小 | 多管一個檔；API 讀取要開兩個連線 | 低，檔案遺失的處置寫進 devops 手冊 |
+| B4 DuckDB／Parquet | 分析快 | 偏離 ADR-0002 | 否決 |
+
+表名採 `market_daily_bars`，不用資料評估建議的 `sector_universe_daily_bars`。理由有兩個：
+- 這張表存的是市場日線這個資料事實，裡面包含 B_EW 要用、但不參與族群排名的「其他業」股票，母體和族群母體不一樣。
+- 以消費功能命名，日後其他用途（例如持倉資料鏈改從這張表取價，須另立 ADR）會出現語意錯置。
+
+log 表命名為 `market_ingest_log`，吸收資料評估 §8.1 提的 `status`、`actual_count`、`expected_count`。
 
 ### C. 計算時點
 
 | 方案 | 優點 | 缺點 | 風險 |
 | --- | --- | --- | --- |
-| **C1 收盤後批次預算並落表，首頁只讀（採用）** | 請求零 HTTP、SQL 次數固定；排名、成分股、命中率三者出自同一次計算、同一個 `method_version`，可重現、可稽核 | 排程沒跑就是舊資料（要揭露）；多一個排程工作；盤中看到的是前一交易日的結果（本來就是日線，不算退步） | 冷啟動時沒有資料 → 回 `insufficient_data` 並附原因 |
-| C2 請求時即時計算 | 沒有排程依賴 | 每次請求要讀約 4 萬～12 萬列（約兩千檔 × 21～61 個交易日，粗估），逐列解析 Decimal 再做 pivot；成分股的 MA60／RSI 要 60 根以上。命中率要用整段歷史，請求內根本算不完，只能另外落表，而那樣就退化成 C1 加上 skew 風險 | 違反 ADR-0010 精神；排名與命中率可能來自不同版本的計算 → 否決 |
-| C3 批次加程序內 memo | 首次請求之後都快 | 第一次請求仍然慢；API 和 scheduler 兩個程序各持一份（ADR-0010 D-5 同樣的問題） | 不需要：C1 讀表本身已經夠快 |
+| **C1 盤後批次預先算好落表，首頁只讀（採用）** | 請求零 HTTP、SQL 條數固定，滿足 PRD FR-8「P95 ≤ 2 秒」；所有結果出自同一個 `definition_version` | 排程沒跑就是舊資料，由常駐揭露與 20 交易日降級處理 | 冷啟動時整卡回 `insufficient_data` |
+| C2 請求時即時計算 | 無 | 統計要整段歷史加上 1 萬次 bootstrap，請求內算不完；最後還是得落表，等於 C1 再加上兩邊不一致的風險 | 否決 |
+| C3 批次加上程序內 memo | 無 | API 和 scheduler 兩個程序各持一份 | 不需要 |
 
-### D. 回測與線上排名的關係
+### D. 回測與線上的關係
 
 | 方案 | 優點 | 缺點 | 風險 |
 | --- | --- | --- | --- |
-| **D1 同一段純函式，以 `PointInTimePanel` 型別守門：線上算最新一天，評估器逐日回放（採用）** | 沒有 training/serving skew；look-ahead 守門集中在一個型別上 | 評估器逐日回放較慢（約一千多個交易日，粗估數十秒以內） | 低 |
-| D2 線上用 SQL，回測用 pandas，各寫一套 | 線上可能更快 | 兩套實作必然漂移，顯示的命中率不屬於畫面上的排名 | 否決 |
-| D3 線上直接取回測輸出的最後一天 | 共碼 | 線上可用性被綁在較重的評估工作上；評估器失敗就沒有排名 | 否決。改成 D1，讓兩個工作分開、各自可失敗 |
+| **D1 同一段純函式，以 `PointInTimePanel` 守門；線上只算最新一日，評估器逐日呼叫（採用）** | 同時滿足方法論 T9 和風控 §4.3-f | 逐日回放較慢，約 2,600 日，粗估數十秒內 | 低 |
+| D2 線上和回測各寫一套 | 無 | 兩套必然漂移 | 否決 |
+| D3 評估器另寫向量化版本 | 快 | 需要額外的 T2 一致性測試 | v1 不採用；日後要引入，T2 必須同批落地 |
 
 ### E. 新依賴
 
 | 方案 | 優點 | 缺點 | 風險 |
 | --- | --- | --- | --- |
-| **E1 不新增（採用）**：pandas、numpy、APScheduler（`CronTrigger`）、stdlib 已足夠；`app.backtest.episodes.wilson_interval` 已經存在；精確二項檢定可以用 `math.comb` 寫 | 零供應鏈變動 | 較進階的檢定要自己寫 | 低 |
-| E2 scipy | 統計檢定齊全 | 新依賴、體積大；只為了一個檢定 | quant 若需要 block bootstrap 以外的方法，再另外立案 |
-| E3 polars／DuckDB | 快 | 偏離 ADR-0002 | 否決 |
+| **E1 不新增（採用）**：用 pandas、numpy（block bootstrap、置換檢定）、`CronTrigger`、stdlib；既有 `wilson_interval`、`walk_forward_splits`、`CostModel`、`PerformanceMetrics` 都能直接用 | 供應鏈零變動 | 檢定要自己寫 | 低 |
+| E2 scipy／statsmodels | 功能齊全 | 多一個依賴 | 真有需要時另立案 |
+
+### F. 成分股列示
+
+| 方案 | 優點 | 缺點 | 風險 |
+| --- | --- | --- | --- |
+| **F1 用成分股自己的近 5 日還原漲跌幅（和 S_A 同一個變數）；取最大 2 檔加最小 1 檔；同分依代碼（採用）** | 風控條件式核可；能呈現族群內部的離散程度 | 排在最前面的必然是已經漲最多的（方法論 §7.2 已揭露） | 低 |
+| F2 技術面分數 | 無 | 風控 VETO | 否決；要做須依 §4.1-g 另立任務 |
+| F3 規則引擎輸出 | 無 | 風控 §4.1-d 禁止 | 否決 |
+
+### G. 多資產籃子回測器
+
+| 方案 | 優點 | 缺點 | 風險 |
+| --- | --- | --- | --- |
+| **G1 新的通用引擎 `app/backtest/basket.py`：不認識「族群」，只接受「決策日 → 目標籃子」的策略（採用）** | 可重用；和 `run_backtest` 同構，策略只拿得到 ≤ t 的切片 | 多一個引擎要維護 | 低 |
+| G2 把 `run_backtest` 擴充成多資產 | 只有一個引擎 | 要改動既有單資產引擎與它的 golden 測試；兩者的成交時序不同 | 否決 |
+| G3 直接寫在 `sector_eval.py` 裡 | 檔案最少 | 引擎和族群定義耦合 | 否決 |
 
 ## Decision（決策）
 
-- **D-1（套件配置與依賴方向）**
+- **D-1 套件配置與依賴方向**
 
   ```
-  app/data/market_panel.py        # store: market_daily_bars, market_ingest_log (I/O)
-  app/data/market_panel_sync.py   # bulk ladder + ingest job + CLI (network)
-  app/data/providers/*_bulk.py    # MarketSnapshotProvider adapters
-  app/sectors/                    # pure core + own store
-      models.py  params.py  panel.py  index.py  ranking.py  constituents.py  membership.py
-      store.py                    # sector_board*, sector_rank_stats, membership snapshots (I/O)
-  app/backtest/sector_eval.py     # walk-forward hit-rate; the ONLY place forward returns are computed
-  app/services/sector_board.py    # orchestration: panel -> sectors -> sector_eval -> store
+  app/data/panel.py               # PointInTimePanel / MarketPanel (pure, pandas, no I/O)
+  app/data/market_panel.py        # store: market_daily_bars, market_ingest_log (market DB)
+  app/data/market_panel_sync.py   # snapshot ingest + FinMind backfill CLI (network)
+  app/data/providers/twse_snapshot.py   # MarketSnapshotProvider over STOCK_DAY_ALL
+  app/directory/classification_history.py  # sector_classification_history store (main DB)
+  app/sectors/                    # pure core + own store (main DB)
+      definition.py  models.py  universe.py  index.py  ranking.py
+      constituents.py  coverage.py  degrade.py  limitations.py  store.py
+  app/backtest/basket.py          # generic point-in-time multi-asset basket engine
+  app/backtest/sector_eval.py     # labels, stats, gate G0–G7; the ONLY place forward returns exist
+  app/services/sector_board.py    # orchestration + CLI (approve-gate, rebuild)
   app/api/sectors.py              # read-only router
-  app/api/sectors_wording.py      # risk-approved sentences, imports nothing from app.*
   ```
 
   依賴方向：
-  - `api.sectors → sectors.store / sectors.models / data.market_panel（唯讀）`
-  - `services.sector_board → {data.market_panel, sectors.*, backtest.sector_eval}`
-  - `backtest.sector_eval → sectors 純核心`
-  - `sectors 純核心 → {signals.*, data.interface, data.calendar, positions.sectors}`
-  - **`app.sectors` 不得 import `app.backtest`**。反方向（backtest 依賴 sectors）與既有的「backtest 依賴 signals」同構。
+  - `api.sectors` → `{sectors 純核心, sectors.store, data.market_panel（唯讀）, positions.store（只讀持有旗標）}`
+  - `services.sector_board` → `{data.market_panel, directory.classification_history, sectors.*, backtest.sector_eval}`
+  - `backtest.sector_eval` → `{sectors 純核心, backtest.basket, costs, splits, episodes, report}`
+  - `backtest.basket` → `{data.panel, costs, report}`
+  - `sectors 純核心` → `{data.panel, data.interface, data.calendar, positions.sectors}`
 
-- **D-2（全市場日線是獨立資料鏈，不寫、不讀 `price_bars_cache`）**
-  - 新表 `market_daily_bars`：
-    - 主鍵 `(trade_date, exchange, symbol)`，`WITHOUT ROWID`，供橫斷面讀取。
-    - 次索引 `(symbol, trade_date)`，供成分股序列讀取。
-    - 欄位：`market`（沿用 `Literal["TW"]`）、`exchange`（`TWSE`｜`TPEX`）、OHLC（Decimal 字串）、`volume`（一律正規化為「股」）、`change`（漲跌價差，可為 NULL）、`source`。
-    - 列上**不存** `as_of`／`fetched_at`，由 ingest log 以「交易日×交易所」為單位承擔。
-  - 新表 `market_ingest_log`：
-    - 主鍵 `(exchange, trade_date)`。
-    - `status` ∈ {`ok`, `partial`, `empty_unconfirmed`, `closed`, `failed`}，另有 `source`、`row_count`、`fetched_at`、`last_attempt_at`、`reason`。
-    - `empty_unconfirmed` 只有在「之後某個交易日已經 `ok`，而該日仍然是空的」時才升級為 `closed`。這是**全市場層級**的推論，理由與 ADR-0009 Options E 否決單一序列負向推論的理由不衝突，因為全市場端點回空的成因遠比單一序列單純。
-    - **這個 `closed` 判定只存在於 `market_ingest_log`，不得回饋給 `freshness.judge()`**。要回饋，須修訂 ADR-0009。
+  禁止事項：
+  - **`app.sectors` 不得 import `app.advice`、`app.signals`、`app.backtest`、`app.directory`。**
+  - `app.backtest.basket` 不得 import `app.sectors`。
 
-- **D-3（新 provider 介面）**
-  - 在 `app/data/interface.py` 新增與 `MarketDataProvider` 同層的抽象類別 `MarketSnapshotProvider`：
+- **D-2 全市場日線是獨立資料鏈，放在獨立檔案**
+  - 市場 DB 內的兩張表：
+    - `market_daily_bars`
+      - 主鍵 `(trade_date, exchange, symbol)`，`WITHOUT ROWID`；另建次索引 `(symbol, trade_date)`。
+      - 欄位：`market`、`exchange`、開高低收（存 Decimal 字串）、`volume`（股）、`turnover`（成交金額，元）、`change`（可為 NULL）、`source`。
+    - `market_ingest_log`
+      - 主鍵 `(exchange, trade_date)`。
+      - `status` 只能是 `complete`、`partial`、`empty_unconfirmed`、`closed`、`failed` 之一。
+      - 另有 `source`、`actual_count`、`expected_count`、`fetched_at`、`last_attempt_at`、`reason`。
+  - `complete` 的條件：`actual_count / expected_count` 達到 `min_overall_coverage`。
+  - `empty_unconfirmed` 要等之後有交易日 `complete`，才升級成 `closed`。這個判定不回饋給 `freshness.judge()`。
+  - 寫入規則是「主來源優先、備援只補缺」：`twse_snapshot` 可以覆寫 `finmind` 的列，反過來不行。這和 `PriceBarCache.put()` 刻意不同。
+  - 全市場資料不寫也不讀 `price_bars_cache` 及它的兩張 log 表。
 
-    ```python
-    class MarketSnapshotProvider(ABC):
-        source_id: ClassVar[str]
-        exchange: ClassVar[Literal["TWSE", "TPEX"]]
+- **D-3 provider 介面與資料來源**
+  - 在 `app/data/interface.py` 新增 `MarketSnapshotProvider.get_latest_snapshot() -> SnapshotResult`。這個方法沒有日期參數，因為 `STOCK_DAY_ALL` 本身就只給當日。
+  - **交易日由資料自證（DE-1'）**：
+    - payload 帶交易日時，以 payload 為準。
+    - payload 不帶交易日時，不得用時鐘推定。改用 FinMind 逐檔抽 3 檔（固定清單加隨機抽樣，seed 要記錄），比對 `expected_session` 那天的收盤價與成交量；完全相符才認定快照屬於該日，否則記 `failed`。
+  - 歷史回補與漏抓補洞一律走 CLI：`python -m app.data.market_panel_sync --backfill --since YYYY-MM-DD`。
+    - 用 FinMind 逐檔抓，以 symbol 為最小重試單位。
+    - checkpoint 記在 `market_backfill_progress`。
+    - 一檔一個 transaction。
+    - 節流沿用現有下限：FinMind 0.3 秒、TWSE 0.5 秒。
+    - **scheduler 不觸發回補，也不觸發補洞。**
+  - `MI_INDEX` 如果經 CEO 本機查證可用，另外修訂本 ADR 把它納入。
+  - TPEx 第一階段不抓。
 
-        @abstractmethod
-        def get_market_snapshot(self, trade_date: date) -> SnapshotResult:
-            """All securities' daily bars for one session on one exchange.
-            Must not raise for expected failures; returns status UNAVAILABLE."""
-    ```
+- **D-4 報酬與除權息**
+  - 報酬函式只有一處，在 `index.py`。算法是期初等權、期間持有：`R_g(t,L) = mean_i(P_i(t)/P_i(t−L) − 1)`。
+  - 還原方式由 `definition.adjustment_method` 決定，線上和回測一定用同一種：
+    - (a) `reference_chain`：日報酬 `r_t = change_t / (close_t − change_t)`，逐日連乘。這是乘法因子，符合方法論 §2.4 的前提。**前提是 CEO 本機查證 `Change` 和 FinMind 的 `spread` 都以除權息參考價為基準（DE-5）。** 查證通過就優先用這個。
+    - (b) `ex_date_excluded`：成分股在視窗內遇到除權息日就排除。除權息日期從上線日起每天同步 `TWT48U_ALL` 累積，只涵蓋上市。
+  - 兩種方式都不成立的日期，歸到 D-12 的 `dividend_adjustment_gap`。
+  - 額外加一道保險：成分股在視窗內單日報酬超過漲跌幅上限加容差，就排除該檔並記錄。
 
-  - `SnapshotResult` 帶 `bars`、`status: DataStatus`、`as_of`、`source`、`complete`、`reason`，以及 `published: bool | None`。`published` 表示端點本身能否區分「該日無交易」與「失敗」，能不能區分由 DE-1 決定。
-  - 梯子：主來源是各交易所的全市場端點，備援是 FinMind（DE-2）。沒有 cache 層，因為表本身就是儲存。
-  - 同一程序內，同一個 host 只能有一個 `RateLimitedClient`（比照 `deps._default_yfinance` 的單例原則）。
+- **D-5 計算時點：盤後批次**
+  - scheduler 新增三個 job。全部用 `CronTrigger`、時區 Asia/Taipei、只在平日跑、`max_instances=1`、`coalesce=True`，並在啟動時各補跑一次：
+    - `market_snapshot_ingest`：17:30、19:30、21:30 各跑一次。
+    - `sector_board_refresh`：只在當日 ingest 狀態為 `complete` 時才計算。
+    - `classification_snapshot`：每日一次，只抓 `TwseSectorProfileAdapter` 並做 resolve，**不跑**會寫入 positions 的完整目錄同步。
+  - `sector_board_refresh` 的流程：
+    1. 寫入當日的 `sector_board`、`sector_board_members`、`sector_board_excluded`。
+    2. 每新完成一個不重疊的 5 日樣本，就呼叫 `sector_eval` 重算統計與門檻；`sector_rank_stats`、`sector_gate_checks` 只新增、不修改。
+  - 評估失敗不影響 board 本身；API 讀取時會依 `stats_stale` 降級。
 
-- **D-4（除權息，條件式，待 DE-5／Q-1）**
-  - 族群報酬**不得**直接用「未還原收盤價比值」跨越除權息日計算。
-  - 三個候選：
-    - (a) 用漲跌價差推日報酬，`r_t = change_t / (close_t − change_t)`。前提是 DE-1 確認漲跌價差以除權息參考價為基準。
-    - (b) 全市場除權息事件，套用 `app.dividends.adjust`。
-    - (c) 視窗內有除權息日的標的，在該視窗剔除。
-  - 架構師傾向 (a)：零額外資料源，而且和交易所公告的漲跌幅同口徑。
-  - 不管選哪一個，報酬函式都只能有一處，放在 `app/sectors/index.py`。
-
-- **D-5（盤後批次）**
-  - scheduler 新增一個 job `sector_board_refresh`。用 `CronTrigger`，時區 `Asia/Taipei`，只在平日跑，一天可排多次補跑；首次時間必須晚於 `policy_for("TW").publish_cutoff`，確切時點列管 devops-sre／DE-7。啟動時立即補跑一次，比照 ADR-0010 D-4。
-  - 一次 job 依序做三件事，每一步各自可失敗、各自記錄：
-    1. ingest：對 `expected_session` 之前還沒有 `ok` 的交易日補抓。已經 `ok` 就跳過，冪等。
-    2. 計算 board：寫入 `sector_board`、`sector_board_constituents`，以 `(trade_date, method_version)` 為鍵。
-    3. 評估：`sector_eval` 寫入 `sector_rank_stats`，只新增列、不覆寫歷史列（backtest-protocol「不刪除難看結果」）。
-  - 第 3 步失敗時第 2 步照樣生效，只是 API 的 `history` 會是 null，措辭強制降級（D-8）。
-  - 歷史回補（backfill）**只走 CLI**：`python -m app.data.market_panel_sync --backfill --since YYYY-MM-DD`。在 CEO 本機執行，**每個交易日一個 transaction**，不做單一巨型 transaction。可以中斷後續跑。節流值由 DE-3 查證後寫進常數。
-  - scheduler **不得**自動觸發 backfill。
-
-- **D-6（計算核心與 look-ahead 守門層）**
-  - 線上和評估器共用 `app/sectors/ranking.py::rank_sectors` 與 `constituents.py::score_constituents`。這兩個函式**只接受 `PointInTimePanel`**：
+- **D-6 共用計算碼、定義版本鎖定、look-ahead 守門**
+  - `definition.py` 是唯一定義處，v1 的凍結值以方法論 §11.1 為準：
 
     ```python
     @dataclass(frozen=True)
-    class PointInTimePanel:
-        as_of: date
-        frame: pd.DataFrame  # rows with trade_date <= as_of only; enforced in truncate()
-        @classmethod
-        def truncate(cls, panel: MarketPanel, as_of: date) -> PointInTimePanel: ...
-
-    def rank_sectors(
-        panel: PointInTimePanel, membership: MembershipView, params: RankingParams
-    ) -> SectorRanking: ...
+    class SectorMomentumDefinition:
+        version: str                      # e.g. "sector-rel-return-v1.0-L5"; any change => new version
+        market_scope: Literal["twse_only"]
+        ranking_signal: Literal["rel_return_5d"]      # S_A; S_B registered for testing only
+        benchmark: Literal["equal_weight_market"]     # B_EW
+        adjustment_method: Literal["reference_chain", "ex_date_excluded"]
+        constituent_rule: Literal["top2_bottom1"]
+        universe: UniverseRules           # listing age, liquidity, excluded codes (20 unranked, 91 excluded)
+        coverage: CoverageRules           # min members 5, sector >= 0.90, overall >= 0.98 (risk to confirm)
+        schedule: Literal["t_close_signal_t1_open_t5_close_non_overlapping"]
+        gate: GateRules                   # G0–G7 thresholds; may only be tightened
     ```
 
-  - 分類也要 point-in-time。`MembershipView.at(t)` 取 `snapshot_date ≤ t` 的最新快照；t 早於最早快照時，退回最早快照並設 `membership_backfilled=True`。
-  - **forward return 只准出現在 `app/backtest/sector_eval.py`**。評估器的執行延遲參數 `execution_lag_sessions` 必須 ≥ 1，傳入 0 就拋 `ValueError`。理由：排名要等收盤公布後才算得出來，不可能在同一個收盤成交。
-  - `method_version`（例如 `"sector-momentum-v1"`）是 `params.py` 的常數。任何參數變動都要升版；統計列與 board 列都以它為鍵，API 只把同版本的兩者配在一起。
+  - 線上和評估器共用 `universe.eligible`、`index.member_returns`、`ranking.rank_sectors`、`constituents.list_constituents`、`coverage.assess`。這些函式只接受 `PointInTimePanel`。
+  - `PointInTimePanel` 只能由 `MarketPanel.as_of(t)` 建立，建立時就把資料截到 ≤ t；存取 t 之後的列會直接拋錯。
+  - `ClassificationView.at(t)` 只取 `observed_on ≤ t` 的分類。
+  - forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`。
 
-- **D-7（成分股分數）**
-  - 輸入限定為 `app.signals.*` 的量測值，以及 D-1 面板上算得出來的量。**禁止使用 `app.advice` 的任何輸出**（action、confidence、weight、matched_rules）。
-  - 若 PRD／Q-7 決定沿用「五項觀察條件」，`five_condition_series` 要從 `app.backtest.strategies` 下移到 `app/signals/observations.py`（純量測、無 I/O）。`app.backtest.strategies` 改成從 signals import（re-export 保持相容），既有事件研究與 look-ahead 測試必須逐字不改而且全綠。
-  - 分數的組合方式（加權、排序、並列時用 symbol 決勝）放在 `app/sectors/constituents.py`，不放在 `signals`。
+- **D-7 成分股**
+  - 取族群內合格且有資料的成分股，依 `(−return_5d, symbol)` 排序，取位置 `[0, 1, −1]`；成分股不超過 3 檔時全列。
+  - 缺資料的成分股計入 `missing_count`。
+  - 不產生、不儲存任何分數，不附歷史比例，不帶任何規則引擎輸出。
+  - `held`（是否持有）由 API 在讀取時查 positions 表得出。
 
-- **D-8（措辭層級由後端判定）**
-  - `wording_tier` ∈ {`probability`, `strength_only`}，只由後端根據 `sector_rank_stats.meets_threshold` 決定。門檻由 Q-5 在樣本內定案，並以 `method_version` 凍結。
-  - 以下情況一律回 `strength_only`：沒有同版本統計、`trials` 低於 quant 訂的最低樣本數、`membership_backfilled=True` 且風控要求降級。
-  - 前端只把 tier 對應到風控核可的字面（`app/api/sectors_wording.py` 與前端常數），**不自行判斷**。
+- **D-8 門檻與降級：兩段判定**
+  - **評估器**依方法論 §6.3 算出 G0～G5，以及 G6 前半（最近 12 個月的 p ≤ q_gross），並輸出 `gate_candidate`。
+    - 門檻判定一律拿扣成本後的 p_net 和 q_gross 比。
+    - G0 的內容：不是 `demo_synthetic`、D-12 的缺口都已解除或已登記接受、品質檢查通過、look-ahead 測試全綠。
+  - **核准**：`gate_candidate=passed` 還不夠，必須在 `sector_gate_approvals` 有對應同一個 `definition_version` 與 `run_id` 的列，`gate_status` 才會是 `passed`。
+    - 這一列由 CLI `approve-gate` 寫入，只在每季檢視時經 qa-reviewer 確認後執行。
+    - 候選結果是 `failed` 時立即生效，不需要核准。
+  - **讀取時**由 `degrade.py` 單一路徑判定。以下任一條件成立，`wording_tier` 就是 `strength_only`：
+    - `gate_status` 不是 `passed`；
+    - `stats_stale`：`stats_panel_through` 之後又出現超過 20 個 `complete` 交易日；
+    - `definition_mismatch`；
+    - `forward_divergence`：上線後滿 26 個樣本，且二項檢定 p < 0.05；
+    - 整體覆蓋率降級。
+  - 前端只依 `wording_tier` 選用風控定稿句，不得自己推導。
+  - 整卡回 `insufficient_data` 的情況：沒有 board、`data_as_of` 未知、或整體覆蓋率低於門檻。
 
-- **D-9（基準，條件式，待 Q-2）**
-  - 架構師傾向用**同一面板算出的等權全市場指數**當基準。理由有三：
-    1. 和等權族群指數是同口徑比較（apples to apples）。
-    2. 不依賴 yfinance 的 `^TWII`；那條路恆為 `backup`，而且未經查證（ADR-0005）。
-    3. 除權息處理和族群指數同一套。
-  - 加權指數是市值加權，受單一權值股主導，「跑贏大盤」會退化成「跑贏權值股」。
-  - 如果 quant 選用加權指數，必須走既有的指數路徑，並揭露 `backup` 狀態。
+- **D-9 基準**
+  - 門檻判定和主視圖一律用 B_EW，母體和還原方式都與族群相同。
+  - B_TAIEX（加權指數）、B_BH（買進持有）只出現在研究報告，走指數路徑並標 `backup`；第一階段 API 不輸出。
 
-### API 形狀（D-10）
+- **D-10 API**：`GET /api/sectors/momentum?market=TW`
+  - 收合態顯示的族群數 `headline_count` 是伺服器常數，預設 3、上限 5。
+  - 零 HTTP；兩個 DB 合計 SQL ≤ 7 條，而且條數不隨族群數或個股數增加。
 
-`GET /api/sectors/momentum?market=TW&limit={N}`
+  ```python
+  GateStatus = Literal["passed", "failed", "not_evaluated"]
+  WordingTier = Literal["probability", "strength_only"]
+  DataRegime = Literal["forward_pit", "backfill_non_pit"]
 
-- `limit` 預設值和上限由 PRD 決定。`market` 第一階段只接受 `TW`；其他值回 `insufficient_data`。
-- 端點**零 HTTP**，SQL 語句數固定、與族群數和全市場檔數無關，上限是 6 條。
-- 端點不呼叫 `load_bars`、`MarketDataService`、`build_summary`，也不做任何計算。
+  class Coverage(BaseModel):
+      expected_count: int
+      missing_count: int
+      suspended_count: int | None          # None: no suspension-list source (all counted as missing)
+      coverage_ratio: float | None
 
-```python
-class SectorMetrics(BaseModel):
-    rel_return_5d: float | None
-    rel_return_20d: float | None
-    advance_ratio: float | None      # advancing members / members with a bar
-    volume_change: float | None      # definition per methodology Q-3
+  class BaseRate(BaseModel):
+      gross: float                         # q_gross (gate comparator)
+      net: float                           # q_net (display pairing pending risk)
 
-class SectorHistoryStats(BaseModel):
-    rank_position: int
-    horizon_sessions: int            # 5 in phase 1
-    execution_lag_sessions: int      # >= 1
-    trials: int
-    successes: int
-    hit_rate: float
-    ci_low: float | None             # Wilson (app.backtest.episodes)
-    ci_high: float | None
-    oos_start: str                   # out-of-sample only (backtest-protocol)
-    oos_end: str
-    meets_threshold: bool
-    computed_at: str
+  class RankStats(BaseModel):
+      rank_position: int
+      data_regime: DataRegime
+      definition_version: str
+      run_id: str
+      cost_basis: Literal["net_round_trip"]
+      beat_count: int
+      sample_count: int
+      effective_sample_count: float | None
+      base_rate: BaseRate
+      wilson_low: float | None
+      wilson_high: float | None
+      bootstrap_low: float | None
+      bootstrap_high: float | None
+      bootstrap_block_length: int
+      permutation_p_holm: float | None
+      mean_excess_gross: float | None
+      mean_excess_net: float | None
+      median_excess_net: float | None
+      stats_as_of: str                     # last sample whose forward window completed
+      stats_panel_through: str             # panel date the evaluator ran on
+      oos_start: str | None
+      oos_end: str | None
+      computed_at: str
 
-class ConstituentItem(BaseModel):
-    symbol: str
-    name: str                        # denormalised at compute time
-    market: str
-    score: float
-    score_components: dict[str, float | bool | None]
-    last_bar_date: str
+  class GateCheck(BaseModel):
+      gate: str                            # "G0".."G7"
+      passed: bool | None                  # None = not evaluable
+      detail: str | None
 
-class SectorItem(BaseModel):
-    rank: int
-    sector: str                      # one of TWSE_SECTORS (+ TPEx mapping per DE-4)
-    member_count: int
-    metrics: SectorMetrics
-    history: SectorHistoryStats | None
-    top_constituents: list[ConstituentItem]   # <= 3, deterministic order
+  class DegradeReason(BaseModel):
+      code: str
+      message: str                         # risk-approved sentence
 
-class SectorBoard(BaseModel):
-    trade_date: str
-    computed_at: str
-    method_version: str
-    benchmark: str                   # e.g. "ew_all_market"
-    wording_tier: Literal["probability", "strength_only"]
-    universe_exchanges: list[str]    # ["TWSE"] or ["TWSE", "TPEX"]
-    universe_symbol_count: int
-    excluded_counts: dict[str, int]  # reason -> count (no sector, illiquid, ...)
-    membership_as_of: str
-    membership_backfilled: bool
+  class ConstituentItem(BaseModel):
+      symbol: str
+      name: str
+      exchange: str
+      return_5d: float | None              # adjusted, signed
+      held: bool
 
-class SectorMomentumResponse(BaseModel):
-    market: str
-    status: PayloadStatus            # "ok" | "insufficient_data"
-    reason: str | None
-    board: SectorBoard | None
-    sectors: list[SectorItem]
-    disclosures: list[str]           # risk-approved, always rendered
-    data: DataMeta                   # reused unchanged, mapping below
-    as_of: str
-```
+  class SectorItem(BaseModel):
+      rank: int
+      sector_code: str
+      sector_name: str                     # official classification only
+      sector_return_5d: float | None
+      benchmark_return_5d: float | None
+      rel_return_5d: float | None
+      rel_return_20d: float | None
+      up_count: int
+      constituent_count: int
+      turnover_ratio_5_20: float | None    # traded value basis (wording pending risk)
+      coverage: Coverage
+      top_contributor_share: float | None
+      single_stock_dominated: bool
+      constituents: list[ConstituentItem]  # order: top2 then bottom1, no rank numbers
 
-`DataMeta` 沿用，不加欄位，前端 `DataMetaStatusBadge` 不必改。語意對應如下（寫進 schema docstring）：
+  class ExcludedSector(BaseModel):
+      sector_code: str
+      sector_name: str
+      reason_code: Literal["too_few_members", "low_coverage", "unranked_category"]
+      coverage: Coverage
 
-- `status`：有 board 時恆為 `cached_stale`，因為這是本機預算結果；沒有 board 時為 `unavailable`。
-- `source`：board 那個交易日實際 ingest 的來源。多個來源用 `+` 連接，完整清單放在 `reason`。
-- `staleness_minutes`：現在減去該交易日 ingest 的 `fetched_at`；有兩個交易所時取較舊者。
-- `is_within_ttl`：`board.trade_date ≥ freshness.expected_session(policy_for("TW"), …)`。
-- `bar_count`：面板視窗的交易日數。`first_bar_date` 是視窗起日；`last_bar_date` 是 `board.trade_date`，徽章「資料截至」讀這個欄位。
-- `trading_days_behind`：`market_ingest_log`（狀態 `ok`）在 `board.trade_date` 之後又觀測到幾個交易日。`market_panel` store 實作 `TradingCalendarSource`，直接重用 `trading_days_behind_market`。
-- `reason`：ingest `partial`、備援來源、分類回補等原因句，用 `_combine_reasons` 的慣例串接。所有字面都要經風控核可。
+  class SectorMomentumResponse(BaseModel):
+      market: str
+      status: PayloadStatus
+      reason: str | None
+      definition_version: str | None
+      data_as_of: str | None               # latest complete session; one date for the whole board
+      market_scope: Literal["twse_only"]   # drives 「僅上市」 tag
+      benchmark: Literal["equal_weight_market"]
+      adjustment_method: str | None
+      coverage: Coverage | None
+      headline_count: int
+      sectors: list[SectorItem]            # full ranking incl. tail (PRD FR-2 詳細)
+      excluded_sectors: list[ExcludedSector]
+      gate_status: GateStatus
+      wording_tier: WordingTier
+      degraded_reasons: list[DegradeReason]
+      rank1_stats: RankStats | None        # card-level, once; regime used for the gate
+      rank_stats_detail: list[RankStats]   # per rank position, per regime (detail view)
+      gate_checks: list[GateCheck]
+      pit_regime_start: str | None
+      limitations: list[str]               # D-12 gap codes, always echoed
+      disclosures: list[str]               # risk-approved, always rendered
+      data: DataMeta                       # reused unchanged
+      as_of: str                           # response production time (company convention)
+  ```
+
+  - 百分比 p 由前端用 `beat_count / sample_count` 計算，只准透過單一格式化函式。
+  - 回應 schema 不得出現 `hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。
+  - 沿用 `DataMeta`，不加欄位，各欄對應如下：
+    - `status`：有 board 時為 `cached_stale`，沒有時為 `unavailable`。
+    - `source`：`data_as_of` 那天的實際來源。
+    - `staleness_minutes`：取 ingest 的 `fetched_at`。
+    - `is_within_ttl`：`data_as_of ≥ expected_session(...)`。
+    - `bar_count`：計算視窗的交易日數。
+    - `last_bar_date`：等於 `data_as_of`。
+    - `trading_days_behind`：由 ingest log 的觀測日曆經 `trading_days_behind_market` 算出；值為 `None` 時，前端對應 `AS_OF_CALENDAR_UNCONFIRMED_STATEMENT`。
+    - `reason`：揭露字面須經風控核可。
+
+- **D-11 資料截至日（as-of）**
+  - 第一階段固定 `market_scope="twse_only"`，`data_as_of` 為上市最新一個 `complete` 的交易日。整張 board 只有這一個日期。
+  - 日後要納入上櫃，必須升 `definition_version`。屆時上市與上櫃的截至日不同時，取較早的一天；或只算已更新的那個市場，但前提是該市場範圍的變體有同版本的統計（風控 §4.5-1）。
+
+- **D-12 存活者偏差與 point-in-time 缺口期間的系統行為**
+  - `limitations.py` 定義四個缺口碼，每個都附偵測方式與解除條件：
+    - `classification_pit_gap`：缺歷史分類。
+    - `survivorship_gap`：缺已下市名單。
+    - `dividend_adjustment_gap`：缺除權息或還原資料。
+    - `suspension_list_missing`：缺暫停交易名單。缺這份名單時，暫停交易股一律計入缺漏，偏向保守。
+  - 評估器把樣本拆成兩段分開存，**永不合併成一個數字**：
+    - `backfill_non_pit`：用現行分類、只含現存股的回補期間。
+    - `forward_pit`：從 `pit_regime_start` 開始的期間。
+  - `pit_regime_start` 取下列三個日期中最晚的一個：
+    - 分類歷史的首次觀測日；
+    - 每日快照開始累積的日期；
+    - 還原方法可以使用的起始日。
+  - **缺口未解前，`wording_tier` 是否恆為 `strength_only`？答案是「是」。** 只要門檻評估用的那段期間落在任何未解除、也未登記接受的缺口內，G0 就不成立，`gate_candidate` 為 `not_evaluated`，所以 `wording_tier` 一定是 `strength_only`。此時 `degraded_reasons` 逐條列出缺口碼，`limitations` 常駐回傳。
+  - 「詳細」可以照實列出兩段統計。但 `backfill_non_pit` 那段能不能露出、要附什麼揭露句，待風控裁定。
+  - **例外登記**：CEO 與風控若書面接受某個缺口，要在 `limitations.py` 的 `ACCEPTED_LIMITATIONS` 常數新增一筆，並經 qa-reviewer 審查。每筆要寫明缺口碼、核准人、日期、文件路徑、風控定稿的揭露句。不得用環境變數或 DB 開關代替。
+  - **上線後往前累積的機制**：
+    1. **分類**：`classification_snapshot` 每日把分類寫進主 DB 的 `sector_classification_history`。
+       - 欄位：`symbol, market, sector_code, sector_name, source, observed_on, superseded_on`。
+       - 只在分類有變化時開新列；`superseded_on` 只寫入一次。
+       - 生效日保守地取 `observed_on`。
+       - 兩次成功觀測之間超過 10 個交易日，這段期間標記 `classification_pit_gap`。
+       - 這張表無法重建，放主 DB 並列入備份。
+    2. **存活者偏差**：每日快照含當日所有交易中的上市股，所以從累積起始日開始，日後下市的股票和它當時的分類會被自然保留。
+    3. **除權息**：`reference_chain` 查證通過的話，從快照有 `Change` 那天起就能用；否則每日同步 `TWT48U_ALL` 把預告的除權息日期存下來，從上線日起累積。
+    4. `forward_pit` 這段就是方法論 §6.3 講的前瞻紀錄。
+  - **預期時程**：`forward_pit` 要達到 G1（N ≥ 150、N_eff ≥ 60），加上 504 日的訓練窗，約需 5 年以上。
+
+- **D-13 多資產籃子回測器**
+  - 介面：`app/backtest/basket.py` 的 `run_basket_backtest(panel: MarketPanel, strategy: BasketStrategy, *, schedule, cost_model, execution) -> BasketResult`。
+
+    ```python
+    #: Decides on a point-in-time view; returns target weights by symbol (may be empty).
+    BasketStrategy = Callable[[PointInTimePanel], Mapping[str, float]]
+    ```
+
+  - 引擎自己持有完整面板，策略只拿得到 `panel.as_of(t)`。
+  - 成交規則：
+    - t+1 開盤成交。
+    - 開盤價 ≥ 參考價 × 1.095 的成分股從籃子剔除。參考價取 close − change；沒有 change 時用前一日收盤價並揭露。
+    - t+H 收盤出場。
+    - 成本走 `CostModel`，每個樣本扣完整一次來回。
+  - 輸出：每個樣本的 excess（扣成本前與扣成本後），以及 `PerformanceMetrics` 的全部欄位。
+  - 引擎不認識族群。`sector_eval` 負責把族群排名包成 `BasketStrategy`，並負責 q、檢定與門檻。
 
 ### 對實作的約束（逐條可檢查）
 
-- **C-1**：`app.sectors` 底下任何模組，transitively 可達的 `app.*` 模組必須是白名單的子集，白名單為 `app.sectors.*`、`app.signals.*`、`app.data.interface`、`app.data.calendar`、`app.positions.sectors`。`app.sectors.store` 額外允許 `app.data.cache`，只能用來取 `resolve_db_path`。
-- **C-2**：`app.sectors` 不得可達 `app.backtest`、`app.advice`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.api`、`app.services`、`app.data.providers`、`app.data.service`、`app.data.http`，也不得 import `httpx`。
-- **C-3**：反方向同樣禁止：`app.advice`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.signals` 都不得可達 `app.sectors`。族群動能要進入建議卡、風險上限、指令或警示，須另立 ADR 並經風控審查。
-- **C-4**：`app.backtest` 只能 import `app.sectors` 的純核心，不得 import `app.sectors.store`。
-- **C-5**：`app.api.sectors` 的直接 import 不得包含 `app.advice`、`app.data.service`、`app.services.market`、`app.portfolio`、`app.backtest`。
-- **C-6**：`/api/sectors/momentum` 零 HTTP，SQL 語句數 ≤ 6 條，而且與族群數和檔數無關。
-- **C-7**：任何程式碼都不得把 bulk 資料寫進 `price_bars_cache`、`price_bars_fetch_log`、`price_bars_attempt_log`。持倉資料鏈（`load_bars`、`MarketDataService`、`get_cached_bars`）第一階段不得讀 `market_daily_bars`。
-- **C-8**：`scheduler.refresh_market_data` 的行為和 `DATA_REFRESH_LOOKBACK_DAYS` 不變。族群工作是另一個 job id，`max_instances=1`，`coalesce=True`。
-- **C-9**：新增的 store 一律在 `_connect` 設 `PRAGMA busy_timeout`，比照 `PriceBarCache`。注意現行 `SecurityDirectoryStore` 沒有設，**不得照抄它的寫法**。
-- **C-10**：寫入 `market_daily_bars` 時，一個 transaction 最多一個交易日加一個交易所。backfill 不得由 scheduler 觸發。
-- **C-11**：`rank_sectors`、`score_constituents` 的面板參數型別是 `PointInTimePanel`，不接受裸的 `DataFrame` 或 `MarketPanel`。`PointInTimePanel` 只能經由 `truncate()` 建立。
-- **C-12**：forward return 只出現在 `app/backtest/sector_eval.py`；`execution_lag_sessions < 1` 會拋錯。
-- **C-13**：`method_version` 只有一處定義；統計列與 board 列都以它為鍵；API 不跨版本配對。
-- **C-14**：`sector_rank_stats` 只新增列，不 UPDATE、不 DELETE。API 只顯示樣本外（OOS）區間的統計。
-- **C-15**：`wording_tier` 只由後端決定；前端不得用 `hit_rate` 自行推導措辭。
-- **C-16**：成分股分數不得使用 `app.advice` 的任何輸出。若要沿用五項觀察條件，須依 D-7 下移，而且既有測試不得修改。
-- **C-17**：報酬計算只有一處，在 `app/sectors/index.py`，並依 D-4 處理除權息；不得用裸的收盤價比值跨越除權息日。
-- **C-18**：`market_ingest_log` 的 `closed` 判定不得被 `app/data/freshness.py` 或 `app/data/service.py` 讀取。
-- **C-19**：所有使用者可見字面，包括 `disclosures`、`reason`、tier 對應句，都要經 risk-compliance-officer 核可並逐字鎖定在常數與測試裡。
-- **C-20**：真實端點的 URL、欄位、單位都依 DE-1 查證結果撰寫，adapter 檔頭要有 `VERIFICATION STATUS`，比照 `twse.py`。
+- **C-1** `app.sectors` 各模組 transitively 可達的 `app.*` 模組，必須落在白名單 `{app.sectors.*, app.data.panel, app.data.interface, app.data.calendar, app.positions.sectors}` 之內。唯一例外：`app.sectors.store` 可以 import `app.data.cache`，但只能用 `resolve_db_path`。
+- **C-2** **`app.sectors` 不得可達 `app.advice`。** 也不得可達 `app.signals`、`app.backtest`、`app.directory`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.api`、`app.services`、`app.data.providers`、`app.data.service`、`app.data.http`、`httpx`。
+- **C-3** `app.advice`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.signals` 都不得可達 `app.sectors`；族群排行不接推播與警示。
+- **C-4** `app.backtest.basket` 不得 import `app.sectors`；`app.backtest.*` 都不得 import `app.sectors.store`。
+- **C-5** `app.api.sectors` 的直接 import 不得包含 `app.advice`、`app.signals`、`app.backtest`、`app.data.service`、`app.services.market`、`app.portfolio`。
+- **C-6** 端點零 HTTP，SQL ≤ 7 條，條數不隨族群數或個股數增加。
+- **C-7** 全市場資料不寫也不讀 `price_bars_cache` 與它的兩張 log；持倉資料鏈不讀 `market_daily_bars`。
+- **C-8** 市場相關三張表（`market_daily_bars`、`market_ingest_log`、`market_backfill_progress`）放在 `STOCK_DESK_MARKET_DB_PATH`；分類歷史、board、統計、核准紀錄放主 DB。
+- **C-9** 新增的 store 一律設 `busy_timeout`。
+- **C-10** 寫入規則為主來源優先、備援只補缺；回補一檔一個 transaction；scheduler 不觸發回補與補洞。
+- **C-11** 快照的交易日不得由時鐘推定。
+- **C-12** `refresh_market_data` 與 `DATA_REFRESH_LOOKBACK_DAYS` 不變。
+- **C-13** 純核心只接受 `PointInTimePanel`，而它只能由 `as_of()` 建立。
+- **C-14** forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`。
+- **C-15** 定義只有一處；所有結果以 `definition_version` 為鍵；API 不跨版本拼湊資料。
+- **C-16** 成分股依 `(−return_5d, symbol)` 排序、取 `[0, 1, −1]`；不使用 advice 或 signals 的輸出；`app/sectors` 裡不得出現 score／rating 類識別字。
+- **C-17** 報酬函式只有一處，還原方式由定義決定。
+- **C-18** 門檻判定用 p_net 對 q_gross；門檻值只能比方法論 §6.3 更嚴，不能放寬。
+- **C-19** `gate_status=passed` 必須有對應 `run_id` 的核准紀錄；`failed` 立即生效。
+- **C-20** 降級判定只存在於 `degrade.py`。
+- **C-21** `sector_rank_stats`、`sector_gate_checks`、`sector_gate_approvals`、`sector_classification_history` 只能新增列。唯一例外是分類歷史的 `superseded_on`，允許由 NULL 寫入一次。
+- **C-22** `backfill_non_pit` 與 `forward_pit` 兩段分開存、分開回傳。
+- **C-23** D-12 的缺口未解除也未登記接受時，`wording_tier` 必須是 `strength_only`；接受紀錄只能以程式常數登記並經 qa 審查。
+- **C-24** 回應 schema 不含 `hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。
+- **C-25** `rank1_stats` 只在卡片層級出現一次。
+- **C-26** 整張 board 只有一個 `data_as_of`。
+- **C-27** `demo_synthetic` 資料一律為 `not_evaluated`。
+- **C-28** 使用者看得到的字面全部要經風控核可，並逐字寫死在常數與測試裡。
 
-## 測試策略（全部離線，用 `httpx.MockTransport`／合成 fixture）
+## 測試策略（全部離線；對應方法論 T1～T9）
 
-- **T-1 邊界測試** `tests/test_sectors_boundary.py`：沿用 `tests/import_graph.py`，涵蓋 C-1～C-5。
-  - 比照 `test_playbook_boundary.py`：要求 `app/sectors/*.py` 每一個檔都列入守門清單，並驗證每個守門模組名稱都解析得到（防止拼錯讓測試變空洞）。
-  - 要有 teeth test：證明 `app.api.backtest` 可達 `app.backtest` 時，掃描確實抓得到。
-- **T-2 零 IO**：注入一個「任何呼叫即拋錯」的 resolver 和 HTTP transport，端點仍回 200。用 `sqlite3.Connection.set_trace_callback` 計數 SQL 語句數 ≤ 6，並在 10 個與 200 個族群的 fixture 下數值相同（C-6）。
-- **T-3 資料鏈隔離**：跑完一次 ingest 後，`price_bars_cache`、`price_bars_fetch_log`、`price_bars_attempt_log` 的列數與 checksum 不變；`refresh_market_data` 的既有測試全綠（C-7、C-8）。
-- **T-4 ingest 語意**：
-  - 部分成功記 `partial` 而不是 `ok`。
-  - 重跑冪等。
-  - 回空記 `empty_unconfirmed`；之後的交易日 `ok` 才升級為 `closed`。
-  - 張與股的單位正規化。
-  - 每個交易日一個 transaction（C-10）。
-- **T-5 未來不變性（look-ahead，決定性）**：對隨機的 t，以下三種情況下 `rank_sectors` 與 `score_constituents` 的輸出必須完全相同：原始面板截到 t；在 t 之後附加亂數列；把 t 之後的列改成極端值。此外要驗證 `PointInTimePanel.truncate` 以外的建構方式會失敗（C-11）。
-- **T-6 平移敏感（backtest-protocol 鐵律 2）**：在「動能會延續」的合成面板上，把排名序列往未來平移一格，命中率必須實質改變；同時用常數訊號證明偵測器有牙齒，比照 `test_lookahead_detection.py`。
-- **T-7 線上與回測一致**：同一份 fixture 面板，批次 job 寫入的 `(trade_date=t)` 排名和成分股，必須等於 `sector_eval` 在 t 的回放結果，逐欄相等（D-6）。
-- **T-8 延遲與版本**：`execution_lag_sessions=0` 拋錯；版本不符時 `history` 為 null，而且 tier 是 `strength_only`（C-12、C-13、D-8）。
-- **T-9 分類 point-in-time**：`MembershipView.at(t)` 只取 `snapshot_date ≤ t` 的快照；t 早於最早快照時 `membership_backfilled=True`。
-- **T-10 字面鎖定**：風控核可的句子要在後端常數測試和前端 `*.test.ts` 兩邊都逐字釘住（C-19）。
+- **T-1** `tests/test_sectors_boundary.py`：沿用 `import_graph`，涵蓋 C-1～C-5。
+  - 列舉 `app/sectors` 下的檔案，確認每一個都被測到。
+  - 驗證模組名稱都能解析，避免拼錯導致測試形同虛設。
+  - 加一個 teeth test（故意違規時測試確實會紅）。
+  - 掃描 advice 輸出的欄位名與 score 類識別字。
+- **T-2** 零 IO：注入「任何呼叫就拋錯」的 resolver 與 transport，端點仍回 200；用 `set_trace_callback` 計算兩個 DB 合計 SQL ≤ 7，而且 10 個族群與 40 個族群時條數相同。
+- **T-3** 資料鏈隔離：ingest 與回補前後，`price_bars_cache` 與兩張 log 的 checksum 不變；主 DB 裡不存在 `market_daily_bars`。
+- **T-4** ingest：
+  - 覆蓋率不足時不得標 `complete`；
+  - 主來源優先；
+  - 無法自證日期時記 `failed`；
+  - 冪等；
+  - 回補能從 checkpoint 續跑。
+- **T-5** 未來擾動不變性：隨機取 50 個 t，把 t 之後的資料全部換成雜訊，第 t 日的輸出必須逐位元相同；`PointInTimePanel` 存取 t 之後的資料必須拋錯。
+- **T-6** Shift 測試：注入洩漏時，比例必須明顯上升；延遲 1 日的結果要記錄。
+- **T-7** 除權息不洩漏：兩種還原方法都要測，而且測試路徑上必須真的有除權息事件。
+- **T-8** 存活者偏差與分類 point-in-time：會下市的股票必須出現在下市前的母體裡；分類在 `observed_on` 之前不得生效；缺口期間的樣本歸入 `backfill_non_pit`。
+- **T-9** 線上與回測一致：同一個第 t 日，board 的輸出必須逐欄等於 `sector_eval` 的回放結果。
+- **T-10** 門檻與降級：
+  - G0～G7 每一項各自失敗時都要降級；
+  - 用 fake clock 測 `stats_stale` 的邊界：第 20 個交易日不降級，第 21 個降級；
+  - 有候選結果但沒有核准紀錄時為 `strength_only`；
+  - 缺口未登記接受時恆為 `strength_only`；
+  - `demo_synthetic` 為 `not_evaluated`。
+- **T-11** 基準與安慰劑：B_EW 的成分等於合格母體；打亂標籤或平移訊號後，比例要落在 q 的區間內。
+- **T-12** 掃描 OpenAPI schema 確認 C-24；風控定稿字面在前端與後端兩邊逐字釘住。
 
 ## Consequences（後果）
 
 - **好處**
-  - 首頁卡片零 HTTP、SQL 語句數固定；持倉資料鏈、ADR-0009 冷卻與 ADR-0010 預算都**不受影響**。
-  - 排名、成分股、命中率三者同版本、同一段計算碼，可以重現、可以稽核。
-  - look-ahead 從「靠審查者細心」變成「型別加 import-graph 加決定性測試」三道防線。
-  - 每日增量抓取只是「每個交易所每個交易日」一到兩次 HTTP，遠少於逐檔抓取（DE-1 確認後生效）。
+  - 首頁零 HTTP，滿足 PRD FR-8；持倉資料鏈與 ADR-0009、ADR-0010 都不受影響。
+  - 線上與回測同一段碼、同一個版本，可以用測試證明兩者一致。
+  - 資料缺口變成機器可判定的降級條件，不靠人記得。
+  - 可重建的資料和不可重建的資料分開存放。
 - **代價（照實計）**
-  - **DB 量體**：粗估約兩千檔 × 每年約 245 個交易日，約 49 萬列／年，精簡 schema 約 60 MB／年；5 年約 300 MB。這是架構師估計，DE-6 要實測。SQLite 檔和備份都會從 MB 級變成百 MB 級。
-  - **backfill 負擔**：只能在 CEO 本機跑，雲端環境 egress 被封鎖。歷史深度（Q-9）直接決定請求數與耗時。
-  - **跨程序限流沒有共享**：API 程序和 scheduler 程序各有自己的 `RateLimitedClient`。若 bulk 端點和 `STOCK_DAY` 同一個 host，兩個程序合計的速率可能超過交易所容忍度。若 IP 被封鎖，持倉資料鏈會降級到 FinMind，結果是持倉頁出現混源揭露。每日增量的量很小，風險主要在 backfill（DE-3）。
-  - **同一檔兩份價格**：首頁成分股的 5／20 日報酬（bulk 面板，依 D-4 還原），可能和點進個股頁看到的價格走勢（持倉鏈，未還原）數字不同。需要一句風控核可的揭露，或由 PRD 決定首頁不顯示單檔報酬數字。
-  - **分類 look-ahead**：分類快照只從本 ADR 落地那天開始累積，更早的歷史回測只能套用現行分類，會有倖存者偏差與重新分類的偏差。`membership_backfilled` 會常駐揭露，偏差大小由 Q-6 評估。
-  - **覆蓋率缺口**：上櫃沒有產業別（DE-4 未解之前），第一階段可能只涵蓋上市。例如記憶體族群的上櫃成員會缺席，`excluded_counts` 必須在畫面上可見。
-  - **盤中顯示前一交易日結果**：D-5 第一次跑之前，當日排名不存在。這是日線的本質，由徽章揭露。
-  - **多一個排程工作、七張新表**：維運面增加（devops-sre）。
+  - **長期停在描述模式**：缺口未解前 `wording_tier` 恆為 `strength_only`；完全靠往前累積的話，要 5 年以上才可能評估門檻。**這是本 ADR 最大的代價，必須由 CEO 接受。**
+  - **資料量**：約 260 萬列（2016 年起、約 1,000 檔、約 2,600 個交易日）。資料評估以現有 schema 估每列 300～400 B；本案的精簡 schema 應該更小，但還沒實測。
+  - **回補與補洞只能在 CEO 本機用 CLI 跑**。`STOCK_DAY_ALL` 只給當日，機器關機那幾天漏掉的資料，只能靠 FinMind 逐檔補，每次約 1,000 個請求。
+  - 兩個 DB 檔要分別訂備份策略；市場 DB 遺失就要重新回補。
+  - API 程序和 scheduler 程序的限流沒有共享。
+  - 首頁用還原後的報酬，個股頁用未還原價格，同一檔股票會看到兩個不同數字，需要揭露句。
+  - 第一階段只含上市，所以「僅上市」標記常駐；上櫃的記憶體股、IC 設計股都會缺席。
+  - 新增 3 個 job、約 12 張表，維運負擔增加。
 - **已知限制**
-  - `market_trading_days` 和 ADR-0009 D-3 的正向證據沒有吃到 bulk 面板這個更完整的日曆證據，這是刻意維持持倉鏈零改動的代價。
-  - 持倉鏈改由 bulk 面板供價（每日一次請求就涵蓋所有持倉）是很有吸引力的後續方向，但會改變 ADR-0009 的 coverage 語意與混源揭露，**須另立 ADR**。
+  - 分類的生效日一律取觀測日，最多會晚一個觀測間隔。
+  - `market_ingest_log` 的休市判定不回饋給 ADR-0009。
+  - 持倉資料鏈若要改從市場面板取價，須另立 ADR。
 
 ## 與既有 ADR 的關係（§7）
 
-- **ADR-0002**：不取代。其約束「所有市場資料存取走 `MarketDataProvider` 抽象介面」，本 ADR 解讀為「走 `app/data` 內可替換的抽象介面」，並新增同層的 `MarketSnapshotProvider`。若 CEO 要求字面遵守，替代作法是在 `MarketDataProvider` 加一個預設 `NotImplementedError` 的 `get_market_snapshot`，代價是既有六個 adapter 都要表態。請 CEO 在核可時一併裁定。
-- **ADR-0009、ADR-0010**：不取代、不修訂。C-7、C-8、C-18 保證兩者的行為不變。
-- **ADR-0005**：若 Q-2 選用加權指數，沿用指數路徑 `backup` 紀律。
-- **ADR-0004、ADR-0006**：不涉及；C-3、C-16 保證建議引擎與 Kelly 輸入不受影響。
+- **ADR-0002**：不取代。本 ADR 把「走 `MarketDataProvider`」擴充解讀為「走 `app/data` 內可替換的抽象介面」，並新增同層的 `MarketSnapshotProvider`；另外多一個 SQLite 檔，技術棧不變。請 CEO 核可時一併裁定。
+- **ADR-0009、ADR-0010**：不修訂（見 C-7、C-12）。
+- **ADR-0005**：B_TAIEX／B_BH 沿用 `backup` 紀律。
+- **ADR-0004、ADR-0006**：不涉及。
 
-## 開放問題（§8，定案前必須回答，需記錄查證日期）
+## 開放問題答覆（§8）
 
-**data-engineer**（`work/stock-desk-族群動能-資料評估.md`）
+**data-engineer（依資料評估）**
 
-- **DE-1**：TWSE 上市、TPEx 上櫃「可指定日期」的全市場單日日線端點。需要：路徑與參數、欄位（是否含漲跌價差和參考價，漲跌價差是否以除權息參考價為基準）、可回溯多遠、成交量單位、休市日的回應形狀（能否區分休市與失敗）。另外要確認 `STOCK_DAY_ALL` 是否只回最新一日，若是，就不能用於 backfill。
-- **DE-2**：FinMind 在 CEO 現有 token 等級下，能否不指定 `data_id` 查全市場單日；額度多少。
-- **DE-3**：TWSE／TPEx 的速率界線與封鎖行為（實測值），用來訂 backfill 節流常數。
-- **DE-4**：上櫃產業別的來源與代碼對照；以及 ETF、特別股、權證、存託憑證、全額交割股、處置股的排除規則。
-- **DE-5**：除權息處理方式，D-4 的 (a)、(b)、(c) 三選一，附驗證。
-- **DE-6**：實測每日列數、每列位元組數、N 年 DB 增量、一次 backfill 的耗時。
-- **DE-7**：bulk 端點的實際公布時間；它可能與 `STOCK_DAY` 不同，而 15:00 這個值本身也未經查證（ADR-0009 D-2）。
-- **DE-8**：下市、暫停交易的標的在 bulk 回應中怎麼呈現（關係到倖存者偏差）。
+| # | 題目 | 答覆 | 狀態 |
+| --- | --- | --- | --- |
+| DE-1 | 可指定日期的全市場端點 | `STOCK_DAY_ALL` 只給當日；TPEx 只給當日且混了非普通股；`MI_INDEX` 未驗證 | 已定案（D-3）；`MI_INDEX` **待 CEO 本機查證** |
+| DE-1' | payload 是否帶交易日 | 未知 | **待 CEO 本機查證**；查證前走交叉比對 |
+| DE-2 | FinMind 全市場查詢與額度 | 不依賴全市場查詢；逐檔已驗證；額度未知 | 已定案：逐檔回補；額度**待查證** |
+| DE-3 | 速率界線 | 未知 | **待查證**；先沿用現有下限 |
+| DE-4 | 上櫃產業別；非普通股排除 | 上櫃無來源；非普通股以 `t187ap03_L` 白名單排除 | 已定案：`twse_only` 加白名單母體 |
+| DE-5 | 除權息 | 無歷史來源 | 已定案（D-4）；`Change`／`spread` 語意**待查證** |
+| DE-6 | 資料量 | 估 3 年 400～550 MB | **待實測**（先灌一個月資料） |
+| DE-7 | 資料公布時間 | 建議 17:00 之後 | 已定案：17:30／19:30／21:30 加日期自證；實際時間**待查證** |
+| DE-8 | 已下市股票 | 無來源 | **待查證**（FinMind）；查證前依 D-12 處理 |
+| DE-9 | 歷史產業分類 | 無來源 | 已定案：往前累積；是否有歷史來源**待查證** |
+| DE-10 | 成本費率 | 未查證 | **待查證**；查證前附 `UNVERIFIED_RATES_NOTE` |
 
-**quant-researcher**（`work/stock-desk-族群動能-方法論.md`）
+**quant-researcher（依方法論，全部定案；門檻只能調嚴）**
 
-- **Q-1**：族群指數怎麼建：等權、成分股最低家數、流動性門檻、漲跌停與處置股怎麼處理。
-- **Q-2**：基準選等權全市場還是加權指數（架構師傾向前者，見 D-9）。
-- **Q-3**：排名訊號的合成方式、`volume_change` 的定義、並列時怎麼排。
-- **Q-4**：命中率定義：
-  - 視窗起點與 `execution_lag_sessions` 設多少；
-  - 重疊的 5 日視窗怎麼處理（non-overlapping，或 block bootstrap）；
-  - 顯著性檢定用什麼方法，能否不用 scipy；
-  - walk-forward 的窗長；最低樣本數。
-- **Q-5**：「降級為純強弱」的量化門檻，須在樣本內決定並以 `method_version` 凍結。
-- **Q-6**：只有現行分類時，分類 look-ahead 的影響多大；歷史回測從哪天起算。
-- **Q-7**：成分股分數的定義；它本身是否也需要回測證據（沒有證據就列三檔股票，在風控上接近推薦）；是否沿用五項觀察條件（會觸發 D-7 的下移）。
-- **Q-8**：命中率要不要計入換手成本，還是另外並列淨報酬。
-- **Q-9**：需要多少年的歷史，這會決定 backfill 的範圍與 DB 量體。
+- **Q-1 母體與權重**：等權、期初等權期間持有；上市滿 60 日；20 日成交金額中位數 ≥ 1,000 萬元，且 20 日內有成交的天數 ≥ 18；族群成分股 ≥ 5 檔；排除代碼 91；代碼 20 不排名但計入 B_EW。
+- **Q-2 基準**：判定一律用 B_EW；B_TAIEX 只供參考。
+- **Q-3 訊號**：S_A 為主訊號；S_B 只登記用於檢定；同名次依代碼排序；上漲家數比與量能只當描述欄位。
+- **Q-4 時序與統計**：t 收盤出訊號 → t+1 開盤進場 → t+5 收盤出場，樣本不重疊。統計方法用 Wilson 區間、circular block bootstrap（區塊長度 4、1 萬次、記錄 seed）、置換檢定、Holm 多重比較校正；walk-forward 為 504／126／126。
+- **Q-5 門檻**：G0～G7。
+- **Q-6 缺口處理**：見 D-12。
+- **Q-7 q 的算法**：每週全部族群的平均，gross 與 net 各一份；主視圖要配哪一份**待風控裁定**。
+- **Q-8 成本**：每個樣本扣完整一次來回成本；策略層依實際週轉計算；滑價 0／10／20 bps。
+- **Q-9 回測起點**：從 2016-01-01 起，最短 5.3 年。
 
 **其他部門**
 
-- **product-manager**：N 值、版位、第一次盤後計算之前首頁顯示什麼、落後幾個交易日就隱藏卡片、首頁是否顯示單檔報酬數字。
+- **product-manager**：修改 PRD FR-3 的「排名依據」與基準舉例；N 維持 3。
 - **risk-compliance-officer**：
-  - 候選股列示是否構成推薦；
-  - `strength_only`／`probability` 兩個層級的字面；
-  - 以下情況的揭露句：面板混源、分類回補、覆蓋率缺口、同一檔兩份價格。
-- **devops-sre**：cron 時點與補跑策略、scheduler 在 CEO 本機是否常駐、DB 備份量、backfill 操作手冊。
+  - q 在主視圖配 q_net 還是 q_gross；
+  - 覆蓋率門檻 90%／98%；
+  - 「均量」是否改稱「成交金額」；
+  - `backfill_non_pit` 能否露出；
+  - 各缺口碼、混源、同一檔兩種價格的揭露句。
+- **devops-sre**：cron 時點、兩個 DB 的備份（主 DB 必須備份）、回補與補洞的操作手冊。
+- **CEO**：
+  - 是否接受 D-12 的長期描述模式；
+  - 是否書面接受任何缺口（依 C-23 登記）；
+  - §7 對 ADR-0002 的擴充解讀。
