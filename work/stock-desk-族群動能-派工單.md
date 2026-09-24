@@ -194,3 +194,26 @@ dev-lead 處置：ADR 連動修改（NR-2、`pending_review` 已採用與 API �
 | L3 | C-2／C-7／C-8／C-9／C-11／C-13／C-17／C-18／C-28 缺對應 T | low | ADR 逐條指派 T |
 
 已分派：tech-architect（ADR v5 修改清單，另併風控 §6 連動）、quant-researcher（方法論第四版）、product-manager（PRD 3.1 小修）。三份回來後送 qa-reviewer 複審。
+
+## 8. 風控裁定：方法論第四版口徑與 T8（2026-09-24）
+
+定稿（含標點）一字不得改；「5」依 `lookback_days` 代入。
+
+1. **整體覆蓋率 98% 只算資料缺漏**（APPROVE_WITH_CONDITIONS）：
+   - C1-1：新增整卡「可計算比例」下限 |C_M(t,L)| ÷ |E_M(t)|（扣三類排除後），暫定 **80%**，未達整卡降級為不足；最終值由 data-engineer 量測旺季量級後 quant 提出、只可調嚴；API 輸出、與判定同一常數；降級原因句另由 creative 起草送審，不得沿用資料缺漏類句子。
+   - C1-2：主視圖常駐 tag（條件式）：全市場除權息排除比例 ≥ 5%（API 輸出、同一常數），或本次有族群因 `ex_dividend_exclusion` 未列入排行。定稿：「除權息排除 {m} 檔」。
+   - C1-3：「詳細」列全市場三類排除（缺漏、除權息、公司行動）各自檔數。
+2. **新增 `ex_dividend_exclusion`**（APPROVE）。排除原因歸因順序（取第一個成立者，不得並列）：`too_few_members`（結構性 |E_g(t)| < 最小數）→ `low_coverage`（只看缺漏已低於門檻或最小數）→ `ex_dividend_exclusion`（加上除權息或公司行動排除後才低於）。短語定稿：
+   > 近 5 日遇除權息或減資等事件的成分股暫不計入，可計算成分股 {c}／{e} 檔，未達列入排行的標準
+   {c}＝|C_g(t,L)|、{e}＝|E_g(t)|，由 API 輸出。`too_few_members`、`low_coverage` 短語字面維持，只收窄適用範圍。qa 要三碼各一個單獨案例，加「缺漏與除權息並存取 `low_coverage`」案例。
+3. **NE-1「詳細」條件化**（APPROVE）。取代先前 NE-1／NE-2 詳細第 1、2 句（第 3 句不變）：
+   - 句 1（NE-1、NE-2 共用，常駐）：「本卡目前不提供歷史比例。系統開始逐日保存資料以前的期間，已下市個股資料、當時的產業分類與除權息紀錄皆無可用來源，以那段期間回推的結果會有無法估計幅度的系統性偏誤，因此不予使用。」
+   - 句 G（僅 NE-1 且缺口清單非空）：「目前仍待補齊：{缺口清單}；補齊前不進行門檻判定。」缺口項固定順序以「、」串接：`pit_universe`「當時上市名單（含其後下市個股）的逐日保存」、`pit_classification`「當時產業分類的逐日保存」、`pit_ex_dividend`「除權息紀錄的逐日保存」、`de5_unverified`「除權息還原所需參考價欄位的定義查證」。
+   - 句 2（有 D0）：維持原定稿。句 2'（`accumulation_start` 為 null）：「系統尚未開始逐日保存上述資料，目前已累積 0 個樣本。」
+   - required：API 輸出 `pit_gaps: list[Literal[...]]`，前端不得推導；NE-1 成立時清單不得為空，否則改走 NE-6。DE-5 維持歸 NE-1。
+4. **T8 安慰劑**（APPROVE_WITH_CONDITIONS）：判定用時間平移 |Δ 中位數| < 2.5pp；標籤打亂只作診斷。`passed`／`failed` 時「詳細」必放兩句定稿：
+   - T8-1：「本統計另做過時間平移對照，可排除「不論何時都成立」的結構性偏誤，但無法排除只在特定期間出現的偏誤。」
+   - T8-2：「對照檢查：打亂產業歸屬後，第 1 名比例高出全部族群平均 {Δ_shuffle} 個百分點（實際為 {Δ_real} 個百分點）；兩者越接近，表示本比例越可能來自個股本身，而非族群。」兩個 Δ 為扣成本口徑，由 API 輸出。
+   - T8-3：標籤打亂不列 gate，但為 `pending_review` 首次轉態複審必審項；若 Δ_shuffle ≥ Δ_real 的一半，風控保留要求主視圖加註或更名的權利。T8-4（suggested）：研究報告列 Δ_k 全分布。
+
+dev-lead 處置：ADR v6 小修（C1-1～C1-3 欄位與常數、`ex_dividend_exclusion` 與 c／e、`pit_gaps`、Δ_shuffle／Δ_real、`accumulation_start` null 行為）轉 tech-architect；方法論第五版（可計算比例下限、歸因順序、T8 揭露）轉 quant-researcher；可計算比例降級原因句轉 creative-lead；旺季除權息排除量級量測轉 data-engineer（需本機資料，列 CEO 本機待辦）。
