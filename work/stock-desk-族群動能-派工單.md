@@ -172,3 +172,25 @@ dev-lead 處置：R-A～R-C 轉 product-manager、R-D 與三態轉 quant-researc
 2. **覆蓋率門檻不寫死、也不得不寫數字**：採「資料覆蓋率低於 {門檻}%」，由 API 輸出、與 gate 同一常數、有守門測試。
 
 dev-lead 處置：ADR 連動修改（NR-2、`pending_review` 已採用與 API 全 None、(a) 同一集合、(c) 門檻由 API 輸出、H-2、空狀態不變量與原因碼、NE-8 卡片警告）待 qa-reviewer 規格審查回來後一併送 tech-architect 修訂為 v5；方法論 §6.3 補 `pending_review` 轉 quant-researcher。
+
+## 7. qa-reviewer 規格包審查（2026-09-24）與 dev-lead 處置
+
+審查對象：ADR-0012 v4、方法論第三版、PRD 第三版。結論 **NEEDS_CHANGES**（BLOCKING_ISSUES=true）。Codex 未執行（本機無 CLI）。
+
+| # | qa 發現 | severity | dev-lead 處置 |
+|---|---|---|---|
+| B1 | ADR C-23／T-14「不含任何比例數字」過寬，與 PRD 常駐的族群報酬、上漲 k／n 家、覆蓋率衝突 | blocking | 改為「不含歷史比例統計數值」，ADR 加「受 gate 管制欄位總表」；PRD 補澄清句 |
+| B2 | NE-7 即時自檢範圍：ADR 納 T10、漏 T3/T4/T5-6；方法論定義為 T1～T9 | blocking | **裁定以方法論為準**：NE-7＝方法論 T1～T9 任一未過；能在真實資料上執行的每一項每次線上判定都實跑，其餘列 CI 門；T10 不屬 NE-7（CI＋import 邊界）。兩份文件加 T 編號對照表 |
+| B3 | C-15（forward return 只在兩檔）無機械測試 | blocking | ADR 補識別字掃描測試 |
+| B4 | C-21（主 DB 四表 append-only）無實作機制與測試 | blocking | ADR 補 trigger 機制與測試 |
+| B5 | C-24（無繞過開關）只有文字宣稱 | blocking | ADR 補靜態掃描＋teeth test |
+| B6 | `pending_review` 未經風控核可即寫入 schema | blocking | 已由風控 §6.4 採用；ADR 改「已採用」 |
+| B7 | 核准 CLI 執行者不明，可能要求唯讀職能寫 DB | blocking | `first_transition_risk` 由 CEO 或 dev-lead 依風控書面 APPROVE 執行；`quarterly_qa` 由 dev-lead 依 qa 書面確認執行；唯讀職能與 agent 不得代寫 |
+| M1 | 方法論「Holm」與 α/m 混用 | medium | 統一為 Bonferroni（α/m），刪除 Holm |
+| M2 | 使用者句「約 3 年」vs 內部 3.1 年 | medium | 明文為刻意簡化（風控定稿）＋內部下限 3.1 年 |
+| M3 | 對 backtest-protocol 鐵律 3 的偏離（判定資料不切訓練窗）未明文承認 | medium | ADR 與方法論明列為已知偏離，列入 CEO 核可事項 |
+| L1 | PRD 風險第 8 點（同分排序）過時 | low | PRD 改為已定案 |
+| L2 | DE-5 歸 NE-1 或 NE-6 | nit | quant 與 tech-architect 對齊 |
+| L3 | C-2／C-7／C-8／C-9／C-11／C-13／C-17／C-18／C-28 缺對應 T | low | ADR 逐條指派 T |
+
+已分派：tech-architect（ADR v5 修改清單，另併風控 §6 連動）、quant-researcher（方法論第四版）、product-manager（PRD 3.1 小修）。三份回來後送 qa-reviewer 複審。
