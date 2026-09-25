@@ -698,7 +698,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-23** `gate_status == "not_evaluated"`（含 `pending_review`）時，回應不含任何歷史比例統計數值：`historical_stat is None`、`gate_checks is None`。因此 `beat_count_*`、`sample_count`、`effective_sample_count`、`base_rate_*`（p／q 的 gross／net）、`ci_*`、`bootstrap_*`、`m_at_evaluation` 都不會出現在回應的任何位置；候選 gate 結果在任何狀態下都不輸出。D-10「受 `gate_status` 管制欄位總表」的 C 類描述欄位不受 gate 管制，永遠輸出（T-14）。
 - **C-24** 程式中不存在任何可以繞過 NE-1～NE-8 的開關、清單或環境變數。機械檢查：`app/sectors/gate.py`、`app/sectors/coverage.py`、`app/backtest/sector_eval.py` 不得使用 `os.environ`、`os.getenv`、`getenv`，不得 import `os`、`dotenv`、`configparser`、`tomllib`、`yaml`、`app.settings`；`gate.py` 另不得 import `sqlite3`，只吃 store 讀好的列。判定結果只能由三樣東西決定：NE 條件、統計列、核准列（T-17）。
 - **C-25** `CostModel.verified_on is None` 時，NE-3 必定成立，`gate_status` 必為 `not_evaluated`。
-- **C-26** `turnover_value_ratio_5_20` 不得作為 `rank_sectors` 的輸入，只放「詳細」；回應 schema 欄位名不得含 `volume`、`hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。
+- **C-26** `turnover_value_ratio_5_20` 不得作為 `rank_sectors` 的輸入，只放「詳細」；回應 schema 欄位名不得含 `volume`、`hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。禁用字掃描以子字串比對，唯一白名單複合詞為 `corporate_action`（D-10 自己定義的第③類「公司行動」排除計數，與規則引擎的 `action` 無關；dev-lead 施工裁定 2026-09-25）。
 - **C-27** 除 `app.research` 自身外，任何 `app.*` 模組都不得可達 `app.research`；字串 `STOCK_DESK_RESEARCH_DB_PATH` 只出現在 `app/research/` 與 tests；`hindsight_view` 只在 `app/research/` 內定義與呼叫；`SectorStatsRepository` 拒收非 PIT 紀錄。
 - **C-28** `rank` 只在族群層級；`historical_stat` 只在卡片層級出現一次；整張 board 只有一個 `data_as_of`。
 - **C-29** `demo_synthetic` 資料必定觸發 NE-8，且 `not_evaluated_reason` 必為 `demo_data`（NE-8 永遠優先，風控 §6.1 NR-2）。卡片層級的示範資料警告由 `data_source` 驅動，不受 `gate_status` 影響，屬絕對底線（T-11、T-14）。
