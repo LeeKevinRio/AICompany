@@ -1,7 +1,7 @@
 # ADR-0012：stock-desk 族群動能排行與全市場日線
 
 - 狀態：accepted（CEO 2026-09-25 書面核可五項裁決事項，見派工單 §12）
-- 日期：2026-09-24
+- 日期：2026-09-24（v7 文件性修訂：2026-09-25）
 - 決策者：tech-architect（草案）；CEO 核可（2026-09-25）
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
@@ -57,6 +57,12 @@
     - 對齊方法論第四、五版：C_g(t,L) 由 `universe.calculation_set()` 單一函式產生；補第③類排除計數；`ci_passed_commit` 機制（C-36、T-22）；T-6～T-9、T-13、T-15 對齊 §8.2。
     - dev-lead 併入派工單 §10：`no_sector_computable` 輸出 `excluded_reason_counts`（{n1}／{n2}／{n3}）；③④⑤ 比例與門檻欄位分立、前端模板各自綁定；族群卡不得使用 `AS_OF_DATE_UNKNOWN_FULL_STATEMENT`（C-44、C-45、T-28）。
     - 同步「受 `gate_status` 管制欄位總表」與「約束 ↔ 測試對照」。
+  - v7（2026-09-25）：文件性補丁，使規格與第二波已落地程式碼一致，**不改任何行為**，不需重新核可。
+    - D-1：追認 `backtest.basket` 依賴 `backtest.engine`（只取 `BacktestResult`、`Trade`）與 `positions.models`；`backtest.sector_eval` 依賴 `data.panel`。
+    - D-13：`run_basket_backtest` 新增必填 keyword-only `benchmark`；B_EW 與籃子用同一套成交與還原規則，唯一差別是不扣成本；判定路徑直接組用引擎零件。
+    - bootstrap 採固定長度 4 的 circular block（方法論「平均區塊長度」的取捨見 D-8 G2）；N_eff 以 N 為上限。
+    - 登記 `GateRules.leak_margin = 0.20`（T3a δ_leak）；T3a 兩條件代數等價，只實作一次。
+    - 釘住第二波 qa 認可的詮釋：G5 中點切半與子集 b、G6 窗口、T4 ② 重建的定義、整卡不足不構成樣本、標籤因子不可用即剔除、`GateCheck.detail` 恆為 None、T7 以目標成員比對。
 
 ## Context（背景）
 
@@ -200,14 +206,15 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - `api.sectors` → `{sectors 純核心, sectors.store, data.market_panel（唯讀）, positions.store（只讀持有旗標）}`
   - `services.pit_snapshot` → `{data.market_panel, data.providers.*, directory.providers, dividends.providers}`
   - `services.sector_board` → `{data.market_panel, sectors.*, backtest.sector_eval}`
-  - `backtest.sector_eval` → `{sectors 純核心, backtest.basket, costs, splits, episodes, report, event_study}`
-  - `backtest.basket` → `{data.panel, costs, report}`
+  - `backtest.sector_eval` → `{sectors 純核心, backtest.basket, costs, splits, episodes, report, event_study, data.panel}`（`data.panel` 為 v7 追認；「sectors 純核心」含 `gate`、`models`，不含 `store`，見 C-4）
+  - `backtest.basket` → `{data.panel, costs, report, engine, positions.models}`（`engine` 只取 `BacktestResult`、`Trade` 兩個型別；`positions.models` 只取 `Market`、`InstrumentType`；v7 追認）
   - `research.sector_biased` → `{sectors 純核心, backtest.*, data.panel, data.market_panel（唯讀）}`
   - `sectors 純核心` → `{data.panel, data.interface, data.calendar, positions.sectors}`
 
   禁止事項：
   - **`app.sectors` 不得 import `app.advice`、`app.signals`、`app.backtest`、`app.directory`、`app.research`。**
   - `app.backtest.basket` 不得 import `app.sectors`。
+  - `app.backtest.basket` 對 `app.backtest.engine` 只可 import `BacktestResult`、`Trade` 兩個資料型別，不得呼叫 `run_backtest`，也不得使用 `Strategy`（v7）。理由：`app.backtest.report` 以這兩個型別為輸入，籃子引擎要產出標準報告就必須產出同一型別；但兩個引擎的成交時序不同，成交邏輯不得共用（Options G2）。
   - 除 `app.research` 自身外，任何 `app.*` 模組都不得 import `app.research`。
 
 - **D-2 全市場日線與前瞻 PIT 快照（市場 DB，只增不刪）**
@@ -255,7 +262,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - **三類排除的歸屬**：同一檔同時符合多類時只計一次，歸屬順序為 ① → ② → ③（風控 §9）。族群層級與全市場層級都適用，因此 |E| − ① − ② − ③ ＝ |C|。
     - **C_g(t,L) 是族群報酬、`up_count`／`constituent_count`、成分股列示三者共用的唯一集合**（風控 §6.2 (a)，C-32）。B_EW 同理，使用 E_M(t) 與 C_M(t,L)。
   - **回看窗（用於排行）**：成分股在 (t−L, t] 內有除權息日時，該窗排除這一檔，並計入 `ex_date_excluded_count`。判斷依據是 `recorded_at ≤ cutoff(t)` 的 `TWT48U_ALL`。`TWT48U_ALL` 的 `ok` run 沒涵蓋最近 L 個交易日時，整卡回 `insufficient_data`。
-  - **標籤（只在 `sector_eval`）**：用前瞻保存的除權息公告，加上除權息日當天快照的參考價（`close − change`），算出乘法還原因子。`change` 是否以除權息參考價為基準，待 DE-5 查證；查證前標籤因子不可用，判定端為 NE-1。
+  - **標籤（只在 `sector_eval`）**：用前瞻保存的除權息公告，加上除權息日當天快照的參考價（`close − change`），算出乘法還原因子。`change` 是否以除權息參考價為基準，待 DE-5 查證；查證前標籤因子不可用，判定端為 NE-1。DE-5 查證之後，個別事件的因子仍可能不可用（除權息日沒有 bar、沒有 `change`、參考價非正、沒有前一日收盤）。這時該檔在該樣本從籃子剔除並計數（D-13），不觸發 NE-1。
   - v3 的 `reference_chain` 不用於排行，只保留為上述標籤因子的算法來源。
   - 保險：成分股在窗內單日報酬超過漲跌幅上限加容差時，排除該窗並記錄。
 
@@ -287,10 +294,11 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
         coverage: CoverageRules           # members >= 5, sector >= 0.90, overall completeness >= 0.98 (missing only),
                                           # computable_ratio_min 0.80 (provisional; tighten only), ex_date_tag_ratio_min 0.05 (risk §8)
         gate: GateRules                   # N >= 150, N_eff >= 60, b = max(q_gross, 0.5), effect 5pp, alpha/m
+                                          # leak_margin 0.20 = T3a delta_leak (calibrated on a synthetic null market; tighten only)
         open_limit_up_factor: float       # 1.095
     ```
 
-  - 建構時驗證：`method_version` 字串中的 `L{n}`、`H{n}` 必須分別等於 `lookback_days`、`holding_days`；L 只能是 5 或 20。
+  - 建構時驗證：`method_version` 字串中的 `L{n}`、`H{n}` 必須分別等於 `lookback_days`、`holding_days`；L 只能是 5 或 20。各子規則（`UniverseRules`、`CoverageRules`、`GateRules`）在 `__post_init__` 拒絕任何比 v1 寬鬆的已登記門檻，`GateRules.leak_margin` 亦同（須 ≥ 0.20）。
   - **不得依任何統計結果在執行期間切換 L 或 H。** 要切換就是開新版本，依方法論 §11.2：凍結 → m 加 1 → 送風控限縮複審 → 告知 CEO。
   - **判定用 α/m**：Wilson 與 bootstrap 區間的信賴水準為 1 − 0.05/m；置換檢定門檻為 0.05/m。
   - **m 的持久化**：存在主 DB 表 `sector_method_registry`，只增不刪。主 DB 四張判定相關表都用 SQLite trigger 實作只增不刪（C-21）：
@@ -383,7 +391,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
       | --- | --- | --- | --- |
       | T1 未來擾動不變性 | T-5 | 是：隨機 50 個決策日，把 `recorded_at > cutoff(t)` 的所有列換成雜訊，逐位元比對 | 是：另測 `PointInTimePanel` 越界時拋錯 |
       | T2 向量化與逐日一致 | T-15 | v1 不適用：評估器與線上排行呼叫同一個函式物件 | 是：結構斷言同一函式物件、沒有第二份實作；日後引入向量化時，逐列相等測試須在 CI 與 runtime 同批落地 |
-      | T3a 注入洩漏的正向對照 | T-6 | 是：以 t+H 收盤注入洩漏，比例必須大幅上升；真實訊號若已接近洩漏版，判為疑似洩漏 | 是：閾值 δ_leak 以合成資料校準後凍結於版本 |
+      | T3a 注入洩漏的正向對照 | T-6 | 是：以 t+H 收盤注入洩漏，比例必須大幅上升；真實訊號若已接近洩漏版，判為疑似洩漏 | 是：閾值 δ_leak 以合成資料校準後凍結為 `GateRules.leak_margin`（v1 = 0.20，只可調嚴） |
       | T3b 延遲 1 日 | T-6 | 是：只看是否執行並記錄，不以結果構成 NE-7 失敗 | 是 |
       | T4 除權息不洩漏 | T-7 | 是：前瞻段含至少一筆除權息事件時實跑；尚無事件時記 `vacuous` 並以 CI 為準 | 是：測試路徑上必須有事件 |
       | T5 存活者偏差 | T-8 | 是：第 t 日母體等於第 t 日可見的名單快照，不是最新的 directory；無下市事件時 `vacuous` | 是：合成一檔 t+k 下市的股票 |
@@ -398,10 +406,16 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - **`failed`**：G0 成立、統計已算出，但 G1～G6 有任一不成立：
     - G1：N ≥ 150 且 N_eff ≥ 60。
     - G2：Wilson 與 block bootstrap 的下界都 > b，信賴水準 1 − 0.05/m。
+      - **bootstrap 採固定區塊長度 4 的 circular block**（v7 註明）。方法論 §6.2 第 2 點寫「平均區塊長度 4」，字面上指向區塊長度隨機（幾何分布）的 stationary bootstrap；但 §6.3 G2 與 §11.1 寫的是「區塊長度 4」。取捨如下：固定長度讓凍結的參數就是實際使用的長度，可以逐位元重現；circular 包繞讓每個樣本被抽中的機率相同，沒有端點偏誤；區塊長度的敏感度由另列的 2、8 涵蓋。代價是重抽序列在區塊接縫處不平穩，但這對「平均數的區間」不構成問題。這屬於對方法論字面的詮釋，請 quant-researcher 下一版把 §6.2 改為「固定區塊長度 4」。
+      - N_eff ＝ N ×（二項變異數 ÷ 區塊長度 4 的 bootstrap 變異數），並以 N 為上限。這是保守側處理：負自相關時，不得宣稱比樣本數更多的資訊。
     - G3：p_net − b ≥ 5pp。
     - G4：置換檢定 p < 0.05/m，且扣成本後的平均超額 > 0。
-    - G5：分段看、各相位看、剔除最常出現的族群後看，p_net 都 > b。
-    - G6：最近 12 個月的 p_net > b。
+    - G5：分段看、各相位看、剔除最常出現的族群後看，p_net 都 > b。v7 釘住以下詮釋：
+      - 「分段」＝有效樣本依決策日排序，在中點切成兩半（前 ⌊N/2⌋ 筆、後 N − ⌊N/2⌋ 筆），兩半各自 p_net > b。126 日段逐段計算並列入報告，**不進 G5**（方法論 §6.3「至少前半段與後半段」解讀為 G5 只硬性要求兩半）。
+      - 「各相位」＝H 種起點相位（phase 0 … H−1）各自形成一條不重疊的樣本序列；主結果只用 phase 0，其餘相位全部計算、全部列出，不挑選。
+      - 「最常出現的族群」＝擔任第 1 名次數最多者，同數時取代碼最小者；剔除它擔任第 1 名的那幾週後重算。
+      - 每個子集的 b 都以**該子集自己的** q_gross 計算（b_sub = max(q_gross_sub, 0.5)），因為 p 與 q 必須來自同一批週（方法論 §6.1）。子集為空時，該項不通過。
+    - G6：最近 12 個月的 p_net > b。v7 釘住以下詮釋：以最後一個有效樣本的決策日 t_last 為錨，取決策日落在 (t_last 往前一年的同月同日, t_last] 的有效樣本（2 月 29 日往前一年取 2 月 28 日），也就是約 365 個日曆日；b 用該子集自己的 q_gross；子集為空時不通過。
   - **`passed`**：G0 成立，而且 G1～G6 全過。
   - **轉態與核准**：核准紀錄存在主 DB 的 `sector_gate_approvals`（只增不刪，C-21），只能用 CLI 寫入：`python -m app.services.sector_board approve --kind {first_transition_risk|quarterly_qa} --run-id ... --operator {ceo|dev-lead} --reviewer ... --review-doc <path>`。
     - **`pending_review`（已採用，風控 §6.4）**：
@@ -430,7 +444,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 
 - **D-9 基準**
   - 門檻判定和主視圖一律用 B_EW，母體和還原方式都與族群相同。
-  - B_EW 是對照組，**不扣成本**；族群一方每個樣本扣一次來回成本。
+  - B_EW 是對照組，**不扣成本**；族群一方每個樣本扣一次來回成本。除成本之外，B_EW 與族群一方套用完全相同的成交與還原規則（D-13）。
   - 加權指數只在「詳細」作參考（風控 R-C）：由 `sector_board_refresh` 從既有指數路徑（`backup`）取得並落表，API 以 `reference_taiex_return_L` 輸出；不用於排名，也不用於判定。
   - B_BH（買進持有）只出現在研究報告。
 
@@ -469,7 +483,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
       base_rate_gross: float              # q_gross: enters the gate via b; detail view only
       ci_low_net: float                   # Wilson, level 1 - 0.05/m
       ci_high_net: float
-      bootstrap_low_net: float            # circular block bootstrap, block length 4
+      bootstrap_low_net: float            # circular block bootstrap, fixed block length 4, level 1 - 0.05/m
       bootstrap_high_net: float
       delta_real: float                   # p_net - q_net, percentage points, net of cost (risk §8-4 T8-2)
       delta_shuffle: float                # mean over label shuffles of (p_net - q_net), percentage points; diagnostic, not a gate
@@ -483,7 +497,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   class GateCheck(BaseModel):
       gate: Literal["G1", "G2", "G3", "G4", "G5", "G6"]
       passed: bool
-      detail: str | None
+      detail: str | None                  # always None in v1: free text could place p_net beside q_gross (risk VETO)
 
   class Coverage(BaseModel):              # counts attribute each name once: missing -> ex-date -> corporate action
       expected_count: int                 # |E|: eligible members (suspended removed only when a list exists)
@@ -643,6 +657,15 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     3. 除權息：每日保存 `TWT48U_ALL` 全量，並保存當日 bars 的 `change`（參考價），供標籤因子使用。
     4. 日線：每日保存 `STOCK_DAY_ALL`。
     - 每筆都帶 `recorded_at`，只增不刪、不回填；缺日沿用前一份，連續缺超過 5 個交易日的樣本不計入。
+    - **不計入 N 的決策日**（v7 註明，對應 `sector_eval` 的 `invalid_reason`）：
+      - 當日沒有 board（`no_board`）；
+      - **當日整卡為 `insufficient_data`**（C-42 任一原因，`card_insufficient`）：整卡不足時畫面上沒有排名，不可能構成樣本；
+      - 回看窗的交易日不完整（`lookback_gap`）；
+      - 名單、分類或除權息快照已沿用超過 5 個交易日（`snapshot_stale`）；
+      - 持有期內缺 bars（`bars_gap`）；
+      - 沒有任何有排名的族群（`no_ranked_sector`）；
+      - 第 1 名籃子全數被剔除（`all_excluded`），或對照組為空（`empty_benchmark`）。
+      - 各原因的件數保留在評估結果的 `invalid_counts`，供揭露使用。
   - **偏誤版回測**（D-14）：只存研究 DB，標示「含已知偏誤，不得上畫面」，API 不得讀取。它用 D0 前的資料，與判定資料不重疊，所以不計入 m。
   - **轉態路徑 (b)（回補）**：須先依方法論 §12 送風控。在那之前，一切回補結果都屬偏誤研究，不影響 `gate_status`。
   - **預期時程：內部下限約 3.1 年**（N ≥ 150，每年約 49 個不重疊的 5 日樣本）。使用者可見句寫「約需 3 年」，是風控定稿（派工單 §5-4）的簡化說法，兩者不矛盾；工程與規格文件一律用 3.1 年下限。v3 的較長估計作廢，理由如下：
@@ -650,21 +673,25 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - 3.1 年是**下限**：缺日作廢的樣本、N_eff < 60（序列相依）都會拉長時程。CEO 本機 scheduler 的常駐率直接決定累積速度。
 
 - **D-13 多資產籃子回測器**
-  - 介面：`app/backtest/basket.py` 的 `run_basket_backtest(panel: MarketPanel, strategy: BasketStrategy, *, schedule, cost_model, execution) -> BasketResult`。
+  - 介面：`app/backtest/basket.py` 的 `run_basket_backtest(panel: MarketPanel, strategy: BasketStrategy, *, schedule: BasketSchedule, cost_model: CostModel, execution: BasketExecution, benchmark: BasketStrategy) -> BasketResult`。
 
     ```python
     #: Decides on a point-in-time view; returns target weights by symbol (may be empty).
     BasketStrategy = Callable[[PointInTimePanel], Mapping[str, float]]
     ```
 
-  - 引擎自己持有完整面板，策略只拿得到 `panel.as_of(t)`。
+  - 引擎自己持有完整面板，`strategy` 與 `benchmark` 都只拿得到 `panel.as_of(t)`。
+  - `benchmark` 是必填的 keyword-only 參數，沒有預設值（v7）。原因：引擎不認識族群、算不出 C_M(t,L)，對照組母體只能由呼叫端以同形的 `BasketStrategy` 提供（族群卡用 `sector_eval.benchmark_strategy`）。
   - 成交規則（方法論 §5.1）：
     - t+1 開盤成交；籃子名單固定為第 t 日的判定結果。
     - t+1 開盤價 ≥ 參考價 × 1.095 的成分股從籃子剔除。參考價取 close − change；沒有 change 時用前一日收盤價並揭露。
     - t+H 收盤出場；下一次決策在 t+H 收盤，樣本**不重疊**。
     - 成本：籃子一方每個樣本用 `CostModel` 扣一次完整來回；B_EW 對照組**不扣成本**。
-  - 輸出：每個樣本的 `excess_gross`、`excess_net`，以及 `PerformanceMetrics` 全部欄位。診斷版（收盤 t → 收盤 t+H）另列，不作判定。
+    - **對照組走同一套成交規則**（方法論 §5.7「同一種算法、同一種除權息處理」）：t+1 開盤漲停剔除、無進場價剔除、持有期內除權息乘法還原、標籤因子不可用剔除，都與籃子一方相同；剔除後其餘成員依原目標權重重新正規化。兩邊唯一的差別是對照組不扣成本。
+    - **標籤因子不可用**（`AdjustmentFactor` 回傳 None）：該檔在該樣本記為 `label_factor_unavailable`，從籃子剔除並計入 `BasketFill.excluded`，不以未還原價格代入。這是單檔、單樣本層級的處理；結構性的 DE-5 未查證仍屬 NE-1（D-4）。
+  - 輸出：每個樣本的 `excess_gross`、`excess_net`，以及 `PerformanceMetrics` 全部欄位。診斷版（收盤 t → 收盤 t+H）另列，不作判定。策略層報告沿用 `build_segment_report`；報告中的 `buy_and_hold` 欄在本引擎代表同窗持有的對照組路徑（毛額、不扣成本），以機器碼 `buy_and_hold_column_is_equal_weight_benchmark` 揭露；B_BH 只在研究報告另列（D-9）。
   - 引擎不認識族群。`sector_eval` 負責把族群排名包成 `BasketStrategy`，並負責 q、檢定與三態判定。
+  - 判定路徑不經 `run_basket_backtest`（v7 註明）。原因：q 要求同一週每個有排名的族群都對**同一份** B_EW 成交結果標籤，所以 `sector_eval` 直接組用引擎公開的零件（`holding_outcomes`、`fill_basket`、`compare_fills`、`assemble_result`）。成交、還原與扣成本的公式仍只在 `basket.py` 一處（C-15）。`tests/test_sector_eval.py::test_matches_the_generic_engine_on_the_main_phase` 斷言：第 1 名的標籤與 `run_basket_backtest(rank_1_strategy, benchmark=benchmark_strategy)` 逐樣本相等。
 
 - **D-14 偏誤版研究的隔離（Options H2；方法論 §5.4、T10）**
   - 程式只能放在 `app/research/sector_biased/`；結果只能寫入 `STOCK_DESK_RESEARCH_DB_PATH`（預設 `./data/stock-desk-research.db`）。API 程序永不開啟此檔。
@@ -756,13 +783,16 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - C-11：`build_scheduler()` 註冊的 job id 集合恰為既有兩個再加 `pit_snapshot_capture`、`sector_board_refresh`；import-graph 斷言 `app.scheduler` 不可達 `app.research`；scheduler 原始碼不引用暖身函式。
 - **T-5** 未來擾動不變性（方法論 T1）：隨機取 50 個 t，把 t 之後（以 `recorded_at` 為準）的所有列（價格、名單、分類、事件）換成雜訊，第 t 日的輸出必須逐位元相同；`PointInTimePanel` 存取範圍外的資料必須拋錯。
 - **T-6** Shift 測試（方法論 T3a、T3b）：
-  - T3a 通過條件：p_leak − p_real ≥ δ_leak，且 p_real ≤ p_leak − δ_leak。δ_leak 在 CI 以合成資料校準，寫入 `method_version` 凍結。CI teeth test：已知有洩漏的管線必須被判為疑似洩漏。
+  - T3a 通過條件：p_leak − p_real ≥ δ_leak。方法論 §8.2 並列的第二個條件「p_real ≤ p_leak − δ_leak」與第一個代數等價，實作只判一次（`sector_eval.leak_control_status`），不算遺漏。
+  - δ_leak 凍結為 `GateRules.leak_margin = 0.20`（v1），隨 `SectorMomentumDefinition` 一起凍結，數值不編進 `method_version` 字串；只可調嚴（建構時拒絕 < 0.20）。校準方式：在沒有任何族群效果的合成 null market 上，p_leak − p_real 的實測差距至少是 δ_leak 的兩倍（`tests/test_sector_eval_lookahead.py::test_leak_margin_calibration_on_a_null_market`）。
+  - CI teeth test：對已知有洩漏的管線，差距必須 < δ_leak，也就是被判為疑似洩漏。
+  - 洩漏排名用 close(t) → close(t+H) 的未來報酬，計分方式與真實排名相同（excess_net > 0）。
   - T3b 只要求實際執行並寫入紀錄。
   - N < 30 時 T3a 記 `skipped_insufficient_n`。
   - runtime 與 CI 都執行。
 - **T-7** 除權息不洩漏（方法論 T4）：
   - ① 每個決策日的排除清單，都能追溯到 `recorded_at ≤ cutoff(t)` 的公告；cutoff(t) 之後才記錄的公告，不得讓任何成分股被排除。
-  - ② 標籤因子只用當時保存的快照計算，且與全庫重建的結果一致。
+  - ② 標籤因子只用當時保存的快照計算，且與全庫重建的結果一致。「全庫重建」指：以**同一套 PIT 可見性規則**（只取 `ok` run、`recorded_at ≤ cutoff(ex_date)`、依 bars 來源優先序），不經 `PointInTimePanel` 的視圖機制，直接從原始列獨立重算每一個因子（`sector_eval._rebuild_factor`），兩者的相對誤差須 ≤ 1e-12。它**不是**用事後可得的全部資料（hindsight）重算：那樣的結果必然與 PIT 因子不同，不構成一個能通過的測試。
   - ③ 評估期間沒有除權息事件時，runtime 記 `vacuous` 並揭露。
   - CI 的合成路徑必須含除權息事件。runtime 與 CI 都執行。
 - **T-8** 存活者偏差與分類 PIT（方法論 T5、T6）：
@@ -796,7 +826,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 擾動 `turnover_value_ratio_5_20` 時名次完全不變；
   - m 由 registry 計算，並寫入 `m_at_evaluation`。
 - **T-13** 基準與安慰劑（方法論 T7、T8）：
-  - T7：B_EW 成員等於 C_M(t,L)；B_EW 不扣成本。
+  - T7：B_EW 的**目標**成員（`requested`）等於 C_M(t,L)，且等權；實際持有的成員可依 D-13 同一套剔除規則少於此集合，不算違反。B_EW 不扣成本：每個族群樣本的 excess_gross − excess_net 恰好等於一次來回成本。
   - T8 ② 時間平移（判定用）：k 取 4 ≤ k ≤ N−4，Δ_k = p_k − q_k（扣成本後）的中位數絕對值須 < 2.5pp。N < 30 時記 `skipped_insufficient_n`。
   - T8 ① 標籤打亂（只作診斷，但必須輸出）：在族群大小不變的前提下打亂 1,000 次（記錄 seed），產出 `delta_shuffle` 與 `delta_real` 並寫入統計列；沒有產出即為 T8 未通過。
   - CI teeth test：在沒有個股效果、也沒有族群效果的合成資料上，Δ 接近 0；刻意漏算成本、或刻意偏袒小族群時，測試必須失敗。
@@ -965,7 +995,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **Q-1 母體與權重**：等權，期初等權、期間持有。條件：上市滿 60 個交易日；20 日成交金額中位數 ≥ NT$1,000 萬，且 20 日內有成交 ≥ 18 天；族群成分 ≥ 5 檔；族群覆蓋率 ≥ 90%、整體 ≥ 98%。排除代碼 91；代碼 20 不排名但計入 B_EW。
 - **Q-2 基準**：判定與主視圖用 B_EW（不扣成本）；加權指數只在「詳細」作參考。
 - **Q-3 訊號**：只用 C1（`rel_return_L`）；C2～C6 已登記但未啟用；同名次依代碼排序；上漲家數與成交金額倍數只當描述欄位。
-- **Q-4 時序與統計**：t+1 開盤進、t+H 收盤出，樣本不重疊。統計用 Wilson、circular block bootstrap（區塊長度 4、1 萬次、記錄 seed）、置換檢定；顯著水準 α/m。
+- **Q-4 時序與統計**：t+1 開盤進、t+H 收盤出，樣本不重疊。統計用 Wilson、circular block bootstrap（固定區塊長度 4，另列 2、8；1 萬次、記錄 seed；取捨見 D-8 G2）、置換檢定；顯著水準 α/m。
 - **Q-5 判定**：G0（NE-1～NE-8 全不成立）加 G1～G6，詳見 D-8。
 - **Q-6 缺口處理**：見 D-12。
 - **Q-7 q**：每週全部合格族群的平均，分 gross、net 兩種。主視圖用 q_net；判定用 b = max(q_gross, 50%)。風控已於 §5-2 定案。
