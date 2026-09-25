@@ -11,7 +11,9 @@ T-1 (C-1..C-5, C-17):
   string naming it);
 * C-3: advice, playbook, kelly, portfolio, alerts and signals never reach
   ``app.sectors``;
-* C-5: the ``app.api.sectors`` router's direct imports;
+* C-5: the ``app.api.sectors`` router's direct imports, and its transitive
+  reach held to ADR-0012 D-1 (``api.sectors -> {sectors core, sectors.store,
+  data.market_panel, positions.store}``) plus the named schema modules;
 * C-17: no score / rating vocabulary and no advice-engine field name in any
   identifier, attribute or string of ``app/sectors`` (docstrings excluded).
 
@@ -94,6 +96,30 @@ ROUTER_FORBIDDEN = (
     "app.services.market",
     "app.portfolio",
 )
+
+
+#: ADR-0012 D-1: what ``api.sectors`` may depend on, closed over their own
+#: (already guarded) imports -- the pure core's C-1 whitelist, the store's cache
+#: path, and ``positions.store``'s model and sector-code modules.
+ROUTER_D1_REACH = frozenset(
+    {
+        *PURE_CORE,
+        STORE,
+        *WHITELIST,
+        *STORE_EXTRA,
+        "app.data.market_panel",
+        "app.positions.store",
+        "app.positions.models",
+    }
+)
+#: Beyond D-1, only what the D-10 response needs from shared, I/O-free modules:
+#: the ``app.api`` package itself, ``DataMeta`` (reused unchanged), the card's
+#: verbatim wording, and ``expected_session`` for ``DataMeta.is_within_ttl``
+#: (D-10: ``data_as_of >= expected_session(...)``).
+ROUTER_SCHEMA_EXTRAS = frozenset(
+    {"app.api", "app.api.common", "app.api.sectors_wording", "app.data.freshness"}
+)
+ROUTER_ALLOWED = ROUTER_D1_REACH | ROUTER_SCHEMA_EXTRAS | {ROUTER}
 
 
 def _real_modules(names: set[str]) -> set[str]:
@@ -253,6 +279,57 @@ def test_router_direct_imports() -> None:
     direct = imported_modules(path, ROUTER)
     for forbidden in ROUTER_FORBIDDEN:
         assert offenders(direct, forbidden) == [], forbidden
+
+
+def _router_outside_d1(reachable: set[str]) -> list[str]:
+    return sorted(_real_modules(reachable) - ROUTER_ALLOWED)
+
+
+def test_router_allowed_modules_resolve() -> None:
+    for module in ROUTER_ALLOWED:
+        assert module_path(module) is not None, module
+
+
+def test_router_transitive_reach_is_d1() -> None:
+    reachable = reachable_app_modules((ROUTER,))
+    assert _router_outside_d1(reachable) == [], "app.api.sectors reaches beyond ADR-0012 D-1"
+    for forbidden in ROUTER_FORBIDDEN:
+        assert offenders(reachable, forbidden) == [], forbidden
+    # Nothing that wires services or providers, directly or not.
+    for forbidden in ("app.api.deps", "app.services", "app.data.providers", "app.data.http"):
+        assert offenders(reachable, forbidden) == [], forbidden
+
+
+@pytest.mark.parametrize(
+    ("extra_root", "leak"),
+    [
+        # The two paths qa found (review of wave 3): the shared deps module...
+        ("app.api.deps", "app.portfolio.valuation"),
+        ("app.api.deps", "app.services.market"),
+        ("app.api.deps", "app.data.service"),
+        # ...and the services-side runtime loader, which reaches the cost model.
+        ("app.services.sector_runtime", "app.backtest.costs"),
+    ],
+)
+def test_router_transitive_scan_has_teeth(extra_root: str, leak: str) -> None:
+    reachable = reachable_app_modules((ROUTER, extra_root))
+    assert leak in _router_outside_d1(reachable)
+    forbidden = next(f for f in ROUTER_FORBIDDEN if leak == f or leak.startswith(f"{f}."))
+    assert offenders(reachable, forbidden) != []
+
+
+def test_router_transitive_scan_catches_a_new_import(tmp_path: Path) -> None:
+    """A router edit that pulls in ``app.api.deps`` again fails the scan."""
+    path = module_path(ROUTER)
+    assert path is not None
+    leaked = tmp_path / "sectors.py"
+    leaked.write_text(
+        path.read_text(encoding="utf-8") + "\nfrom app.api.deps import get_position_store\n",
+        encoding="utf-8",
+    )
+    direct = imported_modules(leaked, ROUTER)
+    reachable = reachable_app_modules(tuple(sorted(direct)))
+    assert "app.portfolio.valuation" in _router_outside_d1(reachable)
 
 
 # ---------------------------------------------------------------------------

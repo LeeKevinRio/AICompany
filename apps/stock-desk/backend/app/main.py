@@ -21,6 +21,7 @@ from app.api import (
     settings,
     signals,
 )
+from app.services.sector_runtime import process_gate_runtime
 
 SERVICE_NAME = "backend"
 
@@ -50,6 +51,9 @@ app.include_router(directory.router)
 app.include_router(playbook.router)
 app.include_router(kelly.router)
 app.include_router(sectors.router)
+# The sector card's gate inputs come from the services layer, wired here so the
+# read-only router never reaches it (ADR-0012 D-1, C-5).
+sectors.install_gate_runtime(app, process_gate_runtime)
 
 
 @app.get("/health")

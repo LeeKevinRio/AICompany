@@ -16,26 +16,22 @@ The scheduler re-reads them at every judgement (it records ``running_commit``
 on the statistics row); the API process reads them once and keeps them, so a
 deploy switches both together only after a restart (ADR-0012 D-8 "部署期間的
 預期行為").
+
+The API side is wired by the composition root: :mod:`app.main` installs
+:func:`process_gate_runtime` on the app, so ``app.api.sectors`` never imports
+this module (and, through it, ``app.backtest``) -- ADR-0012 D-1, C-5.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 from app.backtest.costs import CostModel
 from app.data.providers.twse_snapshot import CHANGE_SEMANTICS_VERIFIED_ON
+from app.sectors.gate import SectorGateRuntime
 from app.services.sector_attestation import BACKEND_ROOT, AttestationCheck, GitProbe, verify
-
-
-@dataclass(frozen=True)
-class SectorGateRuntime:
-    """What the gate needs besides database rows (all ``None`` = not verified)."""
-
-    ci_passed_commit: str | None
-    fee_verified_on: date | None
-    de5_verified_on: date | None
 
 
 def fee_verified_on(cost_model: CostModel) -> date | None:
@@ -61,3 +57,9 @@ def load_gate_runtime(
 ) -> SectorGateRuntime:
     """Read the three inputs now (git, the attestation file, two code constants)."""
     return runtime_from_check(verify(root, git=git))
+
+
+@lru_cache(maxsize=1)
+def process_gate_runtime() -> SectorGateRuntime:
+    """The API process's inputs, read once at first use and kept (ADR-0012 D-8 read time)."""
+    return load_gate_runtime()

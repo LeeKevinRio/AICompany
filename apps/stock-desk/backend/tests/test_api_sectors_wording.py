@@ -4,9 +4,11 @@ Two independent pins per sentence:
 
 * the constant equals the literal below, copied from
   ``work/stock-desk-族群動能-派工單.md`` (§4.3, §4.5-5, §5-2, §5-3, §6.2, §6.3,
-  §9, §10) -- including every punctuation mark and the spaces around numbers;
+  §9, §10, §13) -- including every punctuation mark and the spaces around numbers;
 * the constant still appears word for word in that file, so a later edit of
-  either side fails here instead of drifting.
+  either side fails here instead of drifting. The sentences risk ruled on in
+  §13 (R-2, R-6) must appear in §13 itself, and the §10 ③ detail text that
+  R-6 voided may no longer be used by any constant.
 
 Plus the only two run-time substitutions risk sanctioned (the lookback L, and
 the numbers from the response's own fields).
@@ -44,9 +46,10 @@ VERBATIM: dict[str, str] = {
         "全市場資料完整率 {x}%，低於 {門檻}%（{e} 檔中缺漏 {a} 檔），本次不呈現族群動能排行。"
     ),
     "OVERALL_COMPLETENESS_LOW_DETAIL": (
-        "全市場應有資料 {e} 檔，其中 {a} 檔在資料截至日沒有日線資料（原因未能判定；未取得"
-        "暫停交易名單時，暫停交易的個股也計入缺漏），資料完整率 {x}%，低於 {門檻}%。缺漏"
-        "過多時，無法確認缺漏是否集中在特定族群，因此本卡不呈現族群動能排行。"
+        "全市場應有資料 {e} 檔，其中 {a} 檔在計算近 5 日漲跌幅所需的交易日中，至少一天沒有"
+        "日線資料（原因未能判定；未取得暫停交易名單時，暫停交易的個股也計入缺漏），資料完整"
+        "率 {x}%，低於 {門檻}%。缺漏過多時，無法確認缺漏是否集中在特定族群，因此本卡不呈現"
+        "族群動能排行。"
     ),
     "NO_SECTOR_COMPUTABLE_MAIN": (
         "本次所有官方產業分類的族群皆未達列入排行的標準，不呈現族群動能排行。"
@@ -74,6 +77,11 @@ VERBATIM: dict[str, str] = {
         "加權指數報酬僅供參考，不用於排名或歷史比例的判定；兩者一律以等權全市場為基準。加"
         "權指數以市值加權且不含股利，與等權全市場不可直接比較。"
     ),
+    "MARKET_EXCLUSION_COUNTS": (
+        "本次全市場應納入計算的上市普通股共 {e} 檔；其中近 5 日因資料缺漏排除 {a} 檔、因除"
+        "權息排除 {b} 檔、因單日價格變動超過漲跌幅限制（例如減資後恢復交易）排除 {c} 檔，這"
+        "些個股皆未納入族群報酬與等權全市場的計算。"
+    ),
     "EX_DATE_EXCLUSION": (
         "近 5 日內遇到除權息的成分股，不納入本次族群報酬計算（本次共 {m} 檔）；因此本排行"
         "的數字可能與個股頁以未還原收盤價呈現的走勢不同。"
@@ -93,6 +101,24 @@ VERBATIM: dict[str, str] = {
 }
 
 
+#: Constants whose final text is risk's 2026-09-25 ruling (派工單 §13).
+RULED_IN_SECTION_13 = ("MARKET_EXCLUSION_COUNTS", "OVERALL_COMPLETENESS_LOW_DETAIL")
+
+#: The §10 ③ detail text R-6 voided (kept here only to prove nothing uses it).
+VOID_OVERALL_COMPLETENESS_LOW_DETAIL = (
+    "全市場應有資料 {e} 檔，其中 {a} 檔在資料截至日沒有日線資料（原因未能判定；未取得"
+    "暫停交易名單時，暫停交易的個股也計入缺漏），資料完整率 {x}%，低於 {門檻}%。缺漏"
+    "過多時，無法確認缺漏是否集中在特定族群，因此本卡不呈現族群動能排行。"
+)
+
+
+def _section_13() -> str:
+    text = DISPATCH.read_text(encoding="utf-8")
+    heading = "## 13. 第三波風控裁定（2026-09-25）"
+    assert text.count(heading) == 1
+    return text.split(heading, 1)[1]
+
+
 def test_every_constant_is_pinned() -> None:
     names = {
         name for name in dir(wording) if name.isupper() and isinstance(getattr(wording, name), str)
@@ -109,6 +135,37 @@ def test_the_constant_is_the_final_text(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(VERBATIM))
 def test_the_final_text_is_still_in_the_dispatch_sheet(name: str) -> None:
     assert VERBATIM[name] in DISPATCH.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", RULED_IN_SECTION_13)
+def test_section_13_rulings_are_quoted_from_section_13(name: str) -> None:
+    assert VERBATIM[name] in _section_13()
+
+
+def test_the_voided_completeness_detail_is_used_by_no_constant() -> None:
+    constants = [getattr(wording, name) for name in VERBATIM]
+    assert VOID_OVERALL_COMPLETENESS_LOW_DETAIL not in constants
+    assert all("在資料截至日沒有日線資料" not in text for text in constants)
+    # §13 records it as void, quoting it once.
+    assert VOID_OVERALL_COMPLETENESS_LOW_DETAIL in _section_13()
+
+
+def test_the_market_exclusion_counts_print_zero() -> None:
+    standing = wording.standing_disclosures(
+        lookback_days=5,
+        market_expected_count=900,
+        market_missing_count=0,
+        market_ex_date_excluded_count=0,
+        market_corporate_action_excluded_count=0,
+        has_taiex_reference=False,
+    )
+    assert standing[0] == wording.HISTORICAL_DESCRIPTION_ONLY
+    assert (
+        "本次全市場應納入計算的上市普通股共 900 檔；其中近 5 日因資料缺漏排除 0 檔、"
+        "因除權息排除 0 檔、因單日價格變動超過漲跌幅限制（例如減資後恢復交易）排除 0 檔，"
+        "這些個股皆未納入族群報酬與等權全市場的計算。"
+    ) in standing
+    assert not any("本次共" in sentence for sentence in standing)  # §6.2 (a) only when m > 0
 
 
 def test_each_insufficient_reason_has_its_own_pair() -> None:
@@ -132,9 +189,17 @@ def test_the_lookback_is_the_only_rewrite() -> None:
     assert wording.with_lookback(wording.LISTING_ORDER, 5) == wording.LISTING_ORDER
     # The turnover decode's 5 / 20 are the ratio's own windows, never L.
     standing = wording.standing_disclosures(
-        lookback_days=20, ex_date_excluded_count=0, has_taiex_reference=False
+        lookback_days=20,
+        market_expected_count=1000,
+        market_missing_count=1,
+        market_ex_date_excluded_count=0,
+        market_corporate_action_excluded_count=0,
+        has_taiex_reference=False,
     )
     assert wording.TURNOVER_RATIO_DECODE in standing
+    assert any("其中近 20 日因資料缺漏排除 1 檔" in sentence for sentence in standing)
+    detail = wording.with_lookback(wording.OVERALL_COMPLETENESS_LOW_DETAIL, 20)
+    assert "計算近 20 日漲跌幅所需的交易日中" in detail
 
 
 def test_numbers_are_formatted_as_risk_prints_them() -> None:

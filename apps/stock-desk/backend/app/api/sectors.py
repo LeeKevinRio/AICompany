@@ -20,9 +20,18 @@ number of sectors or stocks:
 The effective ``gate_status`` is composed by :func:`app.sectors.gate.evaluate`
 and handed over by :func:`app.sectors.gate.response_fields` (C-20). The gate's
 process-level inputs -- deployed ``ci_passed_commit``, fee and DE-5
-verification dates -- are read once per process by
-:mod:`app.services.sector_runtime` (C-24). Wording is
-:mod:`app.api.sectors_wording` (verbatim risk text, C-30).
+verification dates -- are read once per process by the services layer
+(:mod:`app.services.sector_runtime`, C-24) and installed on the app by the
+composition root (:func:`install_gate_runtime`, called from :mod:`app.main`).
+Wording is :mod:`app.api.sectors_wording` (verbatim risk text, C-30).
+
+Import boundary (ADR-0012 D-1, C-5; ``tests/test_sectors_boundary.py``): this
+module reaches only the sectors core and store, ``data.market_panel``,
+``positions.store`` and the shared schema/freshness modules the D-10 mapping
+needs. It therefore never imports ``app.api.deps`` (which wires the market
+services and portfolio) nor ``app.services`` (which reaches ``app.backtest``):
+the positions store has its own provider below and the gate runtime is
+installed from outside.
 """
 
 from __future__ import annotations
@@ -34,11 +43,10 @@ from datetime import UTC, date, datetime
 from functools import lru_cache
 from typing import Annotated, Final, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, FastAPI, Request
 
 from app.api import sectors_wording as wording
 from app.api.common import DataMeta
-from app.api.deps import get_position_store
 from app.data.calendar import TradingCalendar
 from app.data.freshness import TW_POLICY, expected_session
 from app.data.interface import SnapshotKind
@@ -48,7 +56,13 @@ from app.positions.store import PositionStore
 from app.sectors import coverage, gate
 from app.sectors.coverage import CardAssessment
 from app.sectors.definition import SECTOR_MOMENTUM_V1, SectorMomentumDefinition
-from app.sectors.gate import GateInputs, InsufficientChecks, PitStatus
+from app.sectors.gate import (
+    UNVERIFIED_RUNTIME,
+    GateInputs,
+    InsufficientChecks,
+    PitStatus,
+    SectorGateRuntime,
+)
 from app.sectors.models import (
     ConstituentItem,
     ExcludedSector,
@@ -58,7 +72,6 @@ from app.sectors.models import (
     SectorMomentumResponse,
 )
 from app.sectors.store import CardRead, SectorCardReader, StoredBoard
-from app.services.sector_runtime import SectorGateRuntime, load_gate_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +83,8 @@ DEFINITION: Final[SectorMomentumDefinition] = SECTOR_MOMENTUM_V1
 HEADLINE_COUNT: Final = 3
 #: ``data_source`` / ``DataMeta.source`` when there is no board to name one.
 NO_SOURCE: Final = "none"
+#: ``app.state`` attribute holding the zero-argument gate runtime loader.
+GATE_RUNTIME_STATE: Final = "sector_gate_runtime"
 
 SectorMomentumPayload = SectorMomentumResponse[DataMeta]
 
@@ -89,8 +104,8 @@ def _default_sources() -> SectorCardSources:
 
 
 @lru_cache(maxsize=1)
-def _default_runtime() -> SectorGateRuntime:
-    return load_gate_runtime()
+def _default_positions() -> PositionStore:
+    return PositionStore()
 
 
 def get_sector_card_sources() -> SectorCardSources:
@@ -98,9 +113,33 @@ def get_sector_card_sources() -> SectorCardSources:
     return _default_sources()
 
 
-def get_sector_gate_runtime() -> SectorGateRuntime:
-    """Deployed ``ci_passed_commit`` and verification dates, read once at first use."""
-    return _default_runtime()
+def get_sector_position_store() -> PositionStore:
+    """The positions store, read only for the held flags (C-34).
+
+    The card's own provider rather than ``app.api.deps.get_position_store``:
+    that module wires the market services and the portfolio, which this
+    router may not reach (ADR-0012 D-1, C-5). Same default database.
+    """
+    return _default_positions()
+
+
+def install_gate_runtime(app: FastAPI, loader: Callable[[], SectorGateRuntime]) -> None:
+    """Called by the composition root with the services layer's process-wide loader."""
+    setattr(app.state, GATE_RUNTIME_STATE, loader)
+
+
+def get_sector_gate_runtime(request: Request) -> SectorGateRuntime:
+    """Deployed ``ci_passed_commit`` and verification dates (read once, by the loader).
+
+    With no loader installed the card fails closed: every input unverified, so
+    NE-3 and NE-7 hold and ``gate_status`` is ``not_evaluated`` (C-24, C-25).
+    """
+    loader = getattr(request.app.state, GATE_RUNTIME_STATE, None)
+    runtime = loader() if callable(loader) else None
+    if not isinstance(runtime, SectorGateRuntime):
+        logger.error("sector card: no gate runtime installed; treating every input as unverified")
+        return UNVERIFIED_RUNTIME
+    return runtime
 
 
 def get_sector_clock() -> Callable[[], datetime]:
@@ -110,7 +149,7 @@ def get_sector_clock() -> Callable[[], datetime]:
 
 SourcesDep = Annotated[SectorCardSources, Depends(get_sector_card_sources)]
 RuntimeDep = Annotated[SectorGateRuntime, Depends(get_sector_gate_runtime)]
-PositionsDep = Annotated[PositionStore, Depends(get_position_store)]
+PositionsDep = Annotated[PositionStore, Depends(get_sector_position_store)]
 ClockDep = Annotated[Callable[[], datetime], Depends(get_sector_clock)]
 
 
@@ -174,7 +213,10 @@ def build_sector_momentum(
 ) -> SectorMomentumPayload:
     """The D-10 payload from what the readers returned (no I/O)."""
     rules = definition.coverage
-    board = read.board
+    board = usable_board(read.board)
+    # The source is the stored board's even when that board is ignored (R-5):
+    # a demo_synthetic board must keep its demo warning (IP-6, NR-2).
+    data_source = read.board.data_source if read.board is not None else NO_SOURCE
     card = (
         coverage.card_from_counts(
             expected=board.market_expected_count,
@@ -207,7 +249,7 @@ def build_sector_momentum(
     outcome = gate.evaluate(
         GateInputs(
             definition=definition,
-            data_source=board.data_source if board is not None else NO_SOURCE,
+            data_source=data_source,
             board_method_version=board.method_version if board is not None else None,
             board_invariant_violated=(
                 board.constituent_invariant_violated if board is not None else False
@@ -243,11 +285,7 @@ def build_sector_momentum(
         disclosures = [wording.fill(detail, values, lookback_days=lookback)]
     else:
         reason = None
-        disclosures = wording.standing_disclosures(
-            lookback_days=lookback,
-            ex_date_excluded_count=board.market_ex_date_excluded_count if board else None,
-            has_taiex_reference=board is not None and board.reference_taiex_return_L is not None,
-        )
+        disclosures = _standing_disclosures(board, card, lookback)
 
     return SectorMomentumPayload(
         market=market,
@@ -260,7 +298,7 @@ def build_sector_momentum(
         data_as_of=board.data_as_of.isoformat() if board is not None else None,
         market_scope=definition.market_scope,
         benchmark=definition.benchmark,
-        data_source=board.data_source if board is not None else NO_SOURCE,
+        data_source=data_source,
         coverage=card.coverage if card is not None else None,
         min_constituents=rules.min_constituents,
         sector_coverage_threshold=rules.sector_coverage_threshold,
@@ -291,6 +329,35 @@ def build_sector_momentum(
         as_of=now.isoformat(),
         **gate.response_fields(outcome, insufficient=insufficient is not None),
     )
+
+
+def _standing_disclosures(
+    board: StoredBoard | None, card: CardAssessment | None, lookback: int
+) -> list[str]:
+    """The ok card's 「詳細」 sentences, numbers bound to the response's own fields."""
+    if board is None or card is None:  # unreachable: no board is as_of_unknown
+        raise ValueError("an ok sector card needs a board")
+    return wording.standing_disclosures(
+        lookback_days=lookback,
+        market_expected_count=card.market_expected_count,
+        market_missing_count=card.market_missing_count,
+        market_ex_date_excluded_count=card.market_ex_date_excluded_count,
+        market_corporate_action_excluded_count=card.market_corporate_action_excluded_count,
+        has_taiex_reference=board.reference_taiex_return_L is not None,
+    )
+
+
+def usable_board(board: StoredBoard | None) -> StoredBoard | None:
+    """``None`` for a board with no expected stock at all (risk R-5).
+
+    With |E_M| = 0 no market data was taken in, so the board's date says
+    nothing about any close; the card reads as having no usable board and
+    reports ① ``as_of_unknown`` -- never ⑤ with 「成分股不足 0 個」.
+    """
+    if board is not None and board.market_expected_count <= 0:
+        logger.warning("sector card: board %s has no expected stock; ignored", board.board_id)
+        return None
+    return board
 
 
 def _insufficient_values(

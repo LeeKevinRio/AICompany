@@ -1,4 +1,4 @@
-"""Risk-approved wording the sector card's backend emits (ADR-0012 C-30; 派工單 §5, §6, §9, §10).
+"""Risk-approved wording the sector card's backend emits (ADR-0012 C-30; 派工單 §5-§13).
 
 Every sentence below is copied **verbatim** from ``work/stock-desk-族群動能-派工單.md``
 (risk's final text, punctuation included) and pinned by
@@ -63,10 +63,10 @@ EX_DIVIDEND_FEED_GAP_DETAIL: Final = (
 OVERALL_COMPLETENESS_LOW_MAIN: Final = (
     "全市場資料完整率 {x}%，低於 {門檻}%（{e} 檔中缺漏 {a} 檔），本次不呈現族群動能排行。"
 )
-#: ③ overall_completeness_low -- detail (§10).
+#: ③ overall_completeness_low -- detail (§13 R-6; replaces the §10 text, which is void).
 OVERALL_COMPLETENESS_LOW_DETAIL: Final = (
-    "全市場應有資料 {e} 檔，其中 {a} 檔在資料截至日沒有日線資料"
-    "（原因未能判定；未取得暫停交易名單時，暫停交易的個股也計入缺漏），"
+    "全市場應有資料 {e} 檔，其中 {a} 檔在計算近 5 日漲跌幅所需的交易日中，"
+    "至少一天沒有日線資料（原因未能判定；未取得暫停交易名單時，暫停交易的個股也計入缺漏），"
     "資料完整率 {x}%，低於 {門檻}%。缺漏過多時，無法確認缺漏是否集中在特定族群，"
     "因此本卡不呈現族群動能排行。"
 )
@@ -129,6 +129,15 @@ TURNOVER_RATIO_DECODE: Final = (
 LISTING_ORDER: Final = "列示順序僅依近 5 日漲跌幅，不代表任何優先順序。"
 #: 派工單 §4.3 「詳細」.
 HISTORICAL_DESCRIPTION_ONLY: Final = "本排行與歷史比例僅為歷史統計描述，不代表未來會重演。"
+#: 派工單 §13 R-2: the three market exclusion counts, always when the card is ok
+#: (0 printed as 0). {e}/{a}/{b}/{c} = ``market_expected_count`` /
+#: ``market_missing_count`` / ``market_ex_date_excluded_count`` /
+#: ``market_corporate_action_excluded_count``.
+MARKET_EXCLUSION_COUNTS: Final = (
+    "本次全市場應納入計算的上市普通股共 {e} 檔；其中近 5 日因資料缺漏排除 {a} 檔、"
+    "因除權息排除 {b} 檔、因單日價格變動超過漲跌幅限制（例如減資後恢復交易）排除 {c} 檔，"
+    "這些個股皆未納入族群報酬與等權全市場的計算。"
+)
 #: 派工單 §6.2 (a): only when names were excluded for an ex-date in the window.
 EX_DATE_EXCLUSION: Final = (
     "近 5 日內遇到除權息的成分股，不納入本次族群報酬計算（本次共 {m} 檔）；"
@@ -158,6 +167,7 @@ ALL_SENTENCES: Final[tuple[str, ...]] = (
     TURNOVER_RATIO_DECODE,
     LISTING_ORDER,
     HISTORICAL_DESCRIPTION_ONLY,
+    MARKET_EXCLUSION_COUNTS,
     EX_DATE_EXCLUSION,
     TAIEX_REFERENCE,
 )
@@ -199,28 +209,44 @@ def fill(template: str, values: dict[str, object], *, lookback_days: int) -> str
 def standing_disclosures(
     *,
     lookback_days: int,
-    ex_date_excluded_count: int | None,
+    market_expected_count: int,
+    market_missing_count: int,
+    market_ex_date_excluded_count: int,
+    market_corporate_action_excluded_count: int,
     has_taiex_reference: bool,
 ) -> list[str]:
     """The 「詳細」 sentences shown whatever the gate state, when the card is ok.
 
-    Always: end-of-day data, TWSE only, what the benchmark is, the turnover
-    decode, the listing order, "historical description only". Conditional:
-    the ex-date exclusion sentence when names were excluded for an ex-date
-    ({m} = ``market_ex_date_excluded_count``), and the TAIEX reference
-    sentence when a reference return is output.
+    Always, in this order: "historical description only" first (risk
+    suggestion, 派工單 §13), end-of-day data, TWSE only, what the benchmark is,
+    the turnover decode, the listing order, and the market exclusion counts
+    (R-2; printed even when every count is 0). Conditional: the ex-date
+    exclusion sentence when names were excluded for an ex-date ({m} =
+    ``market_ex_date_excluded_count``, the same field as R-2's {b}), and the
+    TAIEX reference sentence when a reference return is output.
     """
+    counts: dict[str, object] = {
+        "e": market_expected_count,
+        "a": market_missing_count,
+        "b": market_ex_date_excluded_count,
+        "c": market_corporate_action_excluded_count,
+    }
     sentences = [
+        HISTORICAL_DESCRIPTION_ONLY,
         END_OF_DAY_DATA,
         TWSE_ONLY,
         EQUAL_WEIGHT_BENCHMARK,
         TURNOVER_RATIO_DECODE,
         with_lookback(LISTING_ORDER, lookback_days),
-        HISTORICAL_DESCRIPTION_ONLY,
+        fill(MARKET_EXCLUSION_COUNTS, counts, lookback_days=lookback_days),
     ]
-    if ex_date_excluded_count:
+    if market_ex_date_excluded_count:
         sentences.append(
-            fill(EX_DATE_EXCLUSION, {"m": ex_date_excluded_count}, lookback_days=lookback_days)
+            fill(
+                EX_DATE_EXCLUSION,
+                {"m": market_ex_date_excluded_count},
+                lookback_days=lookback_days,
+            )
         )
     if has_taiex_reference:
         sentences.append(TAIEX_REFERENCE)

@@ -31,6 +31,7 @@ from app.api.deps import (
     get_settings_store,
     get_valuator,
 )
+from app.api.sectors import get_sector_position_store
 from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
@@ -131,6 +132,8 @@ def api_harness(
     )
 
     app.dependency_overrides[get_position_store] = lambda: positions
+    # The sector card has its own positions provider (ADR-0012 D-1, C-5).
+    app.dependency_overrides[get_sector_position_store] = lambda: positions
     app.dependency_overrides[get_alert_store] = lambda: alerts
     app.dependency_overrides[get_settings_store] = lambda: settings
     app.dependency_overrides[get_valuator] = lambda: valuator

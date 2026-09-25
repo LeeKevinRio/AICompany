@@ -14,14 +14,17 @@ Two layers:
 from __future__ import annotations
 
 import dataclasses
+import re
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import sectors as api
@@ -31,13 +34,13 @@ from app.api.deps import get_index_resolver, get_market_resolver
 from app.main import app
 from app.sectors.definition import SECTOR_MOMENTUM_V1 as V1
 from app.sectors.definition import CoverageRules, SectorMomentumDefinition
+from app.sectors.gate import UNVERIFIED_RUNTIME, SectorGateRuntime
 from app.sectors.models import ApprovalRecord
 from app.sectors.store import (
     CardRead,
     StoredBoard,
 )
 from app.services.market import trading_days_behind_market
-from app.services.sector_runtime import SectorGateRuntime
 from tests.sector_board_helpers import (
     card_client,
     excluded_sector,
@@ -527,6 +530,12 @@ def test_the_filled_sentences_bind_their_own_numbers() -> None:
         "可計算比例 79.0%，低於 80%。排除過多時，等權全市場已不足以代表全市場，"
         "因此本次不呈現族群動能排行。"
     ]
+    assert completeness["disclosures"] == [
+        "全市場應有資料 1000 檔，其中 21 檔在計算近 5 日漲跌幅所需的交易日中，"
+        "至少一天沒有日線資料（原因未能判定；未取得暫停交易名單時，暫停交易的個股也計入缺漏），"
+        "資料完整率 97.9%，低於 98%。缺漏過多時，無法確認缺漏是否集中在特定族群，"
+        "因此本卡不呈現族群動能排行。"
+    ]
     none_ranked = cases["no_sector_computable"]
     assert none_ranked["excluded_reason_counts"] == {
         "too_few_members": 1,
@@ -571,16 +580,87 @@ def test_the_card_never_uses_the_stock_page_as_of_constant() -> None:
     assert body["data_as_of"] is None and body["data"]["status"] == "unavailable"
 
 
+def _assert_as_of_unknown(body: dict[str, Any]) -> None:
+    assert body["status"] == "insufficient_data"
+    assert body["insufficient_reason"] == "as_of_unknown"
+    assert body["reason"] is not None and body["reason"] == wording.AS_OF_UNKNOWN_MAIN
+    assert body["disclosures"] == [wording.AS_OF_UNKNOWN_DETAIL]
+    assert body["excluded_reason_counts"] is None
+    assert body["data_as_of"] is None and body["data"]["status"] == "unavailable"
+
+
+def test_no_board_is_as_of_unknown_with_a_reason() -> None:
+    """Risk item 3, condition 2: board None -> ① with a non-null reason."""
+    _assert_as_of_unknown(_build(None))
+
+
+@pytest.mark.parametrize(
+    "excluded",
+    [
+        [],
+        [excluded_sector("01", "too_few_members", expected=0)],
+        [
+            excluded_sector("01", "too_few_members", expected=0),
+            excluded_sector("20", "unranked_category"),
+        ],
+    ],
+)
+def test_an_empty_expected_market_is_as_of_unknown_never_no_sector_computable(
+    excluded: list[object],
+) -> None:
+    """R-5: |E_M| = 0 is no usable board -> ①, never ⑤ (「成分股不足 0 個」)."""
+    body = _build(
+        _board(expected=0, missing=0, ex_date=0, corporate_action=0, ranked=[], excluded=excluded),
+        stats=(_stats(),),
+        approvals=(_approval(),),
+    )
+    _assert_as_of_unknown(body)
+    assert body["insufficient_reason"] != "no_sector_computable"
+    assert body["sectors"] == [] and body["excluded_sectors"] == []
+    assert body["market_expected_count"] is None and body["coverage"] is None
+    assert not any("成分股不足" in text for text in [body["reason"], *body["disclosures"]])
+    assert body["historical_stat"] is None and body["gate_checks"] is None
+
+
+def test_an_ignored_empty_demo_board_keeps_its_demo_source() -> None:
+    """R-5 x IP-6: the ignored board's source still drives the demo warning."""
+    body = _build(
+        _board(
+            data_source="demo_synthetic",
+            expected=0,
+            missing=0,
+            ex_date=0,
+            corporate_action=0,
+            ranked=[],
+            excluded=[],
+        )
+    )
+    assert body["data_source"] == "demo_synthetic"
+    assert body["insufficient_reason"] == "as_of_unknown"
+    assert body["reason"] == wording.AS_OF_UNKNOWN_MAIN
+    assert body["not_evaluated_reason"] == "demo_data"  # the gate saw the same source
+
+
+def test_a_one_stock_market_is_still_read() -> None:
+    """The R-5 cut is exactly |E_M| = 0: one expected stock is a real board."""
+    body = _build(_board(expected=1, missing=0, ex_date=0, ranked=[], excluded=[]))
+    assert body["insufficient_reason"] == "no_sector_computable"
+    assert body["data_as_of"] == AS_OF.isoformat()
+
+
 def test_standing_disclosures_when_the_card_is_ok() -> None:
-    body = _build(_board(ex_date=12, taiex=0.0123))
+    body = _build(_board(ex_date=12, corporate_action=3, taiex=0.0123))
     assert body["reason"] is None
     assert body["disclosures"] == [
+        wording.HISTORICAL_DESCRIPTION_ONLY,  # risk suggestion: first (派工單 §13)
         wording.END_OF_DAY_DATA,
         wording.TWSE_ONLY,
         wording.EQUAL_WEIGHT_BENCHMARK,
         wording.TURNOVER_RATIO_DECODE,
         wording.LISTING_ORDER,
-        wording.HISTORICAL_DESCRIPTION_ONLY,
+        "本次全市場應納入計算的上市普通股共 1000 檔；其中近 5 日因資料缺漏排除 5 檔、"
+        "因除權息排除 12 檔、因單日價格變動超過漲跌幅限制（例如減資後恢復交易）排除 3 檔，"
+        "這些個股皆未納入族群報酬與等權全市場的計算。",
         "近 5 日內遇到除權息的成分股，不納入本次族群報酬計算（本次共 12 檔）；"
         "因此本排行的數字可能與個股頁以未還原收盤價呈現的走勢不同。",
         wording.TAIEX_REFERENCE,
@@ -588,6 +668,61 @@ def test_standing_disclosures_when_the_card_is_ok() -> None:
     bare = _build(_board(ex_date=0, taiex=None))
     assert wording.TAIEX_REFERENCE not in bare["disclosures"]
     assert not any("本次共" in sentence for sentence in bare["disclosures"])
+
+
+def _market_exclusion_sentence(body: dict[str, Any]) -> str:
+    prefix = wording.MARKET_EXCLUSION_COUNTS.split("{", 1)[0]
+    found = [sentence for sentence in body["disclosures"] if sentence.startswith(prefix)]
+    assert len(found) == 1, body["disclosures"]
+    return found[0]
+
+
+def _numbers(sentence: str) -> list[int]:
+    return [int(number) for number in re.findall(r"\d+", sentence)]
+
+
+@pytest.mark.parametrize(
+    ("missing", "ex_date", "corporate_action"), [(5, 12, 3), (0, 0, 0), (19, 0, 7)]
+)
+def test_the_market_exclusion_counts_are_always_disclosed_when_ok(
+    missing: int, ex_date: int, corporate_action: int
+) -> None:
+    """R-2: e/a/b/c bound to the response fields; e - a - b - c = |C_M|; 0 is printed."""
+    body = _build(_board(missing=missing, ex_date=ex_date, corporate_action=corporate_action))
+    assert body["status"] == "ok"
+    sentence = _market_exclusion_sentence(body)
+    e, a, b, c = (
+        body["market_expected_count"],
+        body["market_missing_count"],
+        body["market_ex_date_excluded_count"],
+        body["market_corporate_action_excluded_count"],
+    )
+    assert sentence == wording.fill(
+        wording.MARKET_EXCLUSION_COUNTS, {"e": e, "a": a, "b": b, "c": c}, lookback_days=5
+    )
+    # 「近 5 日」 is the lookback, then e, a, b, c in that order.
+    assert _numbers(sentence) == [e, 5, a, b, c]
+    assert (a, b, c) == (missing, ex_date, corporate_action)
+    assert e - a - b - c == body["coverage"]["calculation_count"]  # |C_M(t,L)|
+    ex_date_sentences = [s for s in body["disclosures"] if "本次共" in s]
+    if b:
+        # §6.2 (a)'s {m} is R-2's {b}, in the same response.
+        assert ex_date_sentences == [
+            wording.fill(wording.EX_DATE_EXCLUSION, {"m": b}, lookback_days=5)
+        ]
+    else:
+        assert ex_date_sentences == []  # §6.2 (a) stays conditional (m > 0)
+
+
+def test_the_market_exclusion_counts_follow_the_lookback() -> None:
+    body = _build(_board(lookback_days=20))
+    assert "其中近 20 日因資料缺漏排除" in _market_exclusion_sentence(body)
+
+
+def test_insufficient_cards_never_carry_the_market_exclusion_counts() -> None:
+    prefix = wording.MARKET_EXCLUSION_COUNTS.split("{", 1)[0]
+    for code, body in _insufficient_cases().items():
+        assert not any(sentence.startswith(prefix) for sentence in body["disclosures"]), code
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +763,41 @@ def test_no_board_is_unavailable() -> None:
     meta = _build(None)["data"]
     assert meta["status"] == "unavailable" and meta["source"] == "none"
     assert meta["bar_count"] == 0 and meta["trading_days_behind"] is None
+
+
+# ---------------------------------------------------------------------------
+# Gate runtime wiring (ADR-0012 D-1, C-5: installed by the composition root)
+# ---------------------------------------------------------------------------
+
+
+def _request_for(target: object) -> Any:
+    return SimpleNamespace(app=target)
+
+
+def test_the_composition_root_installs_the_services_runtime() -> None:
+    from app.services.sector_runtime import process_gate_runtime
+
+    assert getattr(app.state, api.GATE_RUNTIME_STATE) is process_gate_runtime
+
+
+def test_an_installed_loader_is_what_the_card_reads() -> None:
+    target = FastAPI()
+    api.install_gate_runtime(target, verified_runtime)
+    assert api.get_sector_gate_runtime(_request_for(target)) == verified_runtime()
+
+
+def test_without_an_installed_runtime_the_card_fails_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bare = SimpleNamespace(state=SimpleNamespace())
+    with caplog.at_level("ERROR"):
+        runtime = api.get_sector_gate_runtime(_request_for(bare))
+    assert runtime == UNVERIFIED_RUNTIME
+    assert "no gate runtime installed" in caplog.text
+    body = _build(_board(), stats=(_stats(),), approvals=(_approval(),), runtime=runtime)
+    assert body["gate_status"] == "not_evaluated"
+    assert {"fee_unverified", "lookahead_tests_failed"} <= set(body["not_evaluated_reasons"])
+    assert body["historical_stat"] is None
 
 
 def test_the_statement_counter_has_teeth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

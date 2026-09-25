@@ -173,9 +173,10 @@ def card_from_counts(
         )
         computable_low = not ratio_at_least(computable, expected, rules.computable_ratio_min)
         ex_date_reached = ratio_at_least(ex_date, expected, rules.ex_date_tag_ratio_min)
-    # |E_M| == 0 leaves the ratios undefined: neither ③ nor ④ can be asserted,
-    # and with no expected member every sector is too_few_members, so the card
-    # falls through to no_sector_computable (⑤).
+    # |E_M| == 0 leaves the ratios undefined: neither ③ nor ④ can be asserted.
+    # The card never reads such a board: the API treats it as no usable board
+    # and reports ① as_of_unknown (risk R-5, app.api.sectors.usable_board),
+    # never the ⑤ sentence with zero counts.
     return CardAssessment(
         coverage=coverage_from_counts(
             expected=expected, missing=missing, ex_date=ex_date, corporate_action=corporate_action

@@ -32,6 +32,7 @@ from app.data.interface import (
 from app.data.market_panel import MarketPanelReader, MarketPanelStore
 from app.positions.store import PositionStore
 from app.sectors.coverage import coverage_from_counts
+from app.sectors.gate import SectorGateRuntime
 from app.sectors.models import ReasonCode, StatsRecord
 from app.sectors.store import (
     SectorCardReader,
@@ -40,7 +41,6 @@ from app.sectors.store import (
     StoredExcludedSector,
     StoredRankedSector,
 )
-from app.services.sector_runtime import SectorGateRuntime
 from tests.sector_eval_helpers import SyntheticMarket
 
 
@@ -292,12 +292,12 @@ def card_client(
     The readers are built here, before any request, so a statement counter
     installed afterwards sees only what one request runs.
     """
-    from app.api.deps import get_position_store
     from app.api.sectors import (
         SectorCardSources,
         get_sector_card_sources,
         get_sector_clock,
         get_sector_gate_runtime,
+        get_sector_position_store,
     )
     from app.main import app
 
@@ -308,7 +308,7 @@ def card_client(
     overrides: dict[Callable[..., object], Callable[..., object]] = {
         get_sector_card_sources: lambda: sources,
         get_sector_gate_runtime: lambda: runtime,
-        get_position_store: lambda: positions,
+        get_sector_position_store: lambda: positions,
         get_sector_clock: lambda: lambda: now,
     }
     app.dependency_overrides.update(overrides)

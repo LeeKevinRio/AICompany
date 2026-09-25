@@ -226,6 +226,27 @@ def insufficient_reason(checks: InsufficientChecks) -> InsufficientReason | None
 
 
 @dataclass(frozen=True)
+class SectorGateRuntime:
+    """The gate's process-level inputs besides database rows (all ``None`` = not verified).
+
+    Read once per process by the services layer
+    (:mod:`app.services.sector_runtime`) and handed in; the type lives here so
+    the read-only router can accept it without reaching the services layer
+    (ADR-0012 D-1, C-5).
+    """
+
+    ci_passed_commit: str | None
+    fee_verified_on: date | None
+    de5_verified_on: date | None
+
+
+#: Nothing verified: NE-3 and NE-7 hold and ``de5_unverified`` stays in ``pit_gaps``.
+UNVERIFIED_RUNTIME: Final = SectorGateRuntime(
+    ci_passed_commit=None, fee_verified_on=None, de5_verified_on=None
+)
+
+
+@dataclass(frozen=True)
 class GateInputs:
     definition: SectorMomentumDefinition
     #: The board's bars source; ``demo_synthetic`` forces NE-8.
