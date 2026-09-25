@@ -1,7 +1,7 @@
 # ADR-0012：stock-desk 族群動能排行與全市場日線
 
 - 狀態：accepted（CEO 2026-09-25 書面核可五項裁決事項，見派工單 §12）
-- 日期：2026-09-24（v7 文件性修訂、v8 研究端敏感度變體：2026-09-25）
+- 日期：2026-09-24（v7 文件性修訂、v8 研究端敏感度變體、v9 來源指紋與判定部署約束：2026-09-25）
 - 決策者：tech-architect（草案）；CEO 核可（2026-09-25）
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
@@ -64,6 +64,12 @@
     - 登記 `GateRules.leak_margin = 0.20`（T3a δ_leak）；T3a 兩條件代數等價，只實作一次。
     - 釘住第二波 qa 認可的詮釋：G5 中點切半與子集 b、G6 窗口、T4 ② 重建的定義、整卡不足不構成樣本、標籤因子不可用即剔除、`GateCheck.detail` 恆為 None、T7 以目標成員比對。
   - v8（2026-09-25）：新增 D-15 研究端敏感度變體（Options I2，採 quant-researcher 提案並依 tech-architect 裁決修改）、C-46～C-49、T-29～T-32；封住「以 v1 字串建構不同參數定義」的漏洞。判定門檻、m 規則、使用者可見字面皆不變；變體值早已登記於方法論 §11.1，不需 CEO 事前核可，以本紀錄知會 CEO。
+  - v9（2026-09-25）：統計列的來源證明與判定部署約束（Options J、K）。
+    - D-14：`source_run_ids` 全列表改為來源指紋（首末 run、截止交易日、計數、SHA-256 摘要）；寫入時完整驗證，讀取時輕量驗證（C-50）。起因：暖身每檔每日一個 run（約 9 萬個），全列表使每列統計約 0.7 MB，且讀取 JOIN 使該欄隨 16 列檢查重複取回；API 每次請求都要讀出並核對整段歷史，N≈150 時違反 PRD FR-8「P95 ≤ 2 秒」。
+    - D-2：`run_id` 單調遞增、永不重用改為規範性要求（指紋依賴此性質）；D-3 註明暖身 run 粒度。
+    - C-51：API 讀取量不得隨市場 DB 的 run 數成長。
+    - C-52：判定只在 git checkout 上可用；**CEO 2026-09-25 裁定採主機 git checkout 直接執行**（Options K1 的主機形式）。image 內無 `.git` 的部署下 NE-7 恆成立，屬 fail-closed 的預期結果，不得以放寬 C-36 解決；`running_commit` 等輸入不得來自環境變數。
+    - 新增 T-33～T-36。判定門檻、NE／G 規則、使用者可見字面、API 欄位皆不變。
 
 ## Context（背景）
 
@@ -195,6 +201,26 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 | I5 研究端複製 universe／ranking | 正式碼不動 | 等於第二份實作，違反 T-15／方法論 T2，敏感度測到的是另一套碼 | 否決 |
 | I6 把下限驗證從 `__post_init__` 移到發布時才檢查 | 仍只有單一型別 | 任何 app 模組都能造出放寬的定義；T-12「建構即失敗」的保證會消失 | 否決 |
 
+### J. 統計列的來源證明（v9）
+
+| 方案 | 優點 | 缺點 | 風險 |
+| --- | --- | --- | --- |
+| J1 維持 `source_run_ids` 全列表 | 無改動 | 每列約 0.7 MB，讀取 JOIN 使其隨 16 列檢查重複取回，N≈150 時單次請求實體化字串推估約 1.7 GB；`run_id` 為自動編號，換檔幾乎擋不住 | 違反 FR-8，否決 |
+| J2 只記判定窗內（D0 後）的前瞻 run | 變小 | D0 後前約 80 個交易日的決策讀了暖身 bars，不記即漏報來源；仍隨時間平方成長 | 否決 |
+| **J3 來源指紋：首末 run、截止日、計數、SHA-256；寫入時完整驗證，讀取時驗端點與最新一列計數（採用，見 C-50）** | 保住原防護目的，且摘要綁定 run 內容，比「id 存在」更強；每列固定約 150 B，讀取一條 SQL | 寫入時要重算兩次摘要（批次內，推估每次不到 1 秒） | 低（T-33～T-35） |
+| J4 拆表正規化 | 保住目的 | 去重後仍約 10 萬列，讀取仍要把約 10 萬個 id 送去市場 DB；改用 ATTACH 會破壞 C-1 注入邊界 | 否決 |
+| J5 保留全列表，讀取只驗最新一列 | 改動小 | 舊列不驗、換檔擋不住；主 DB 每年增約 34 MB 且要備份 | 退路，不採用 |
+
+另評估過「暖身改成每日一個 run」：會改動 D-3「以 symbol 為最小重試單位」，且只把 9 萬降到約 80，前瞻 run 的平方成長仍在，不單獨採用。
+
+### K. 判定的部署方式（v9）
+
+| 方案 | 優點 | 缺點 | 風險 |
+| --- | --- | --- | --- |
+| **K1 判定程序與 API 程序從同一個 git checkout 執行（採用，見 C-52；CEO 裁定採主機直接執行形式）** | C-36／T-22 語意完全不變 | 現行 compose 的 image-only 部署不能用來判定；依賴不受 commit 綁定，部署時要 `uv sync --frozen` | 低 |
+| K2 image 內烘入 commit 與 attestation | 純 image 部署也能判定 | 改變 C-36「讀不到 git 就是 NE-7」；`running_commit` 變成 build 的自我宣告；suite_hash 無法在 image 內重算；layer cache 可能沿用舊 attestation；有人可能「簡化」成用 build arg 或環境變數塞 commit | 未採用；要採用須另立修訂並經 CEO 核可 |
+| K3 接受 image 部署，NE-7 恆成立 | 零工 | N≥150 以前 NE-2 排在前面看不出問題；之後卡片永遠停在 `not_evaluated` | 只當 K1 落地前的 fail-closed 現況 |
+
 ## Decision（決策）
 
 - **D-1 套件配置與依賴方向**
@@ -232,7 +258,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **D-2 全市場日線與前瞻 PIT 快照（市場 DB，只增不刪）**
   - 市場 DB 內的表：
     - `pit_snapshot_runs`：每次擷取寫一列。
-      - 欄位：`run_id`（PK）、`kind` ∈ {`bars`, `listing`, `classification`, `dividend_announce`}、`session_date`、`recorded_at`、`source`、`status` ∈ {`ok`, `partial`, `failed`, `quality_failed`}、`row_count`、`expected_count`、`content_hash`、`reason`。
+      - 欄位：`run_id`（`INTEGER PRIMARY KEY AUTOINCREMENT`：單調遞增、永不重用；v9 起為規範性要求，C-50 的來源指紋依賴此性質；市場 DB 的遷移與備份還原不得重編 `run_id`）、`kind` ∈ {`bars`, `listing`, `classification`, `dividend_announce`}、`session_date`、`recorded_at`、`source`、`status` ∈ {`ok`, `partial`, `failed`, `quality_failed`}、`row_count`、`expected_count`、`content_hash`、`reason`。
       - 取代 v3 的擷取紀錄表。
     - `market_daily_bars`：
       - 主鍵 `(run_id, symbol)`，`WITHOUT ROWID`；次索引 `(session_date, symbol)`、`(symbol, session_date)`。
@@ -259,7 +285,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - bars 覆蓋率＝`|bars 代號 ∩ 名單普通股| ÷ |名單普通股|`，名單用同一次擷取的 `t187ap03_L`；該次失敗時用最近一份可見 ok listing；兩者皆無時 bars 只能標 `partial`。正常交易日的實際覆蓋率由 CEO 本機查證腳本量測（若本來就低於 0.98，閘門門檻須重新評估，送風控與 quant）。
   - 暖身回補只走 CLI：`python -m app.services.pit_snapshot --warmup --since YYYY-MM-DD`。
     - 用 FinMind 逐檔抓 D0 前至少 80 個交易日的日線（上市天數 60 加流動性 20 日窗）。以 symbol 為最小重試單位，一檔一個 transaction，checkpoint 記在 `market_backfill_progress`。
-    - 寫成 `kind='bars'`、`source='finmind_warmup'` 的 run，`recorded_at` 必須早於 D0。**暖身必須在 D0 前完成**；D0 之後 CLI 拒絕執行暖身。
+    - 寫成 `kind='bars'`、`source='finmind_warmup'` 的 run，`recorded_at` 必須早於 D0。粒度為每檔每日一個 run（`market_daily_bars` 主鍵為 `(run_id, symbol)`，一個 transaction 寫一檔的全部日子），所以暖身約產生「檔數 × 暖身日數」≈ 9 萬個 run；統計列不逐一列舉，改以 C-50 的來源指紋涵蓋（v9 註明）。**暖身必須在 D0 前完成**；D0 之後 CLI 拒絕執行暖身。
     - 節流沿用現有下限：FinMind 0.3 秒、TWSE 0.5 秒。
     - D0 之後漏抓的日子**不補**（不回填原則），該日依 D-2 沿用前一份。
     - 更長的歷史只能由 `app/research/sector_biased/` 抓取並寫入研究 DB（D-14）。
@@ -395,9 +421,9 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
         - **build 階段**：`scripts/attest_sector_gate.py` 只在乾淨工作樹（`git status --porcelain` 為空）上執行 NE-7 的 CI 測試集合（pytest marker `sector_ne7`：T-5～T-9、T-13 的 CI 半部，加上 T-15）。全綠才寫 `app/_build/ci_attestation.json`，內容為 `ci_passed_commit`、`suite_hash`（測試檔清單與內容的 SHA-256）、`passed_at`；未全綠則刪除舊檔。此檔列入 `.gitignore`。
         - **判定時**（scheduler 程序的 `services.sector_board`）：`running_commit = git rev-parse HEAD`。以下任一情況即為 NE-7：工作樹不乾淨、讀不到 git、缺 attestation、`running_commit != ci_passed_commit`、`suite_hash` 不符。`running_commit` 寫入該次統計列。
         - **讀取時**（`gate.py`）：輸入由 services 層在程序啟動時讀好後傳入，符合 C-24。`stats.running_commit` 與目前部署的 `ci_passed_commit` 不符即為 NE-7。
-        - 這是本機的自我證明，不是外部 CI 簽章；執行期不查 GitHub。
+        - 這是本機的自我證明，不是外部 CI 簽章；執行期不查 GitHub。**執行環境**（v9）：本機制只在 git checkout 上成立。image 內沒有 `.git`、`tests/`、`git` 時，判定端恆為 `git_unreadable`（並伴隨 `suite_hash` 不符），讀取端拿到的 `ci_passed_commit` 恆為 null，NE-7 恆成立。這是 fail-closed 的預期結果，不是故障；部署約束見 C-52。
         - **部署期間的預期行為**（qa 複審 medium）：API 程序與 scheduler 程序切換到新 commit 的時點不同時，讀取端會因 `stats.running_commit` 與部署的 `ci_passed_commit` 不符而短暫判為 NE-7，直到 scheduler 以新 commit 重新判定為止。這是預期行為、不是故障，不發告警；本機部署腳本應同時重啟兩個程序並在啟動後立即補跑一次判定（D-5）以縮短此窗口。交 devops-sre 納入部署手冊。
-        - T-1～T-4、T-10～T-12、T-14、T-16～T-21、T-23～T-32 屬合併門，不屬 NE-7，也不進 attestation 集合。
+        - T-1～T-4、T-10～T-12、T-14、T-16～T-21、T-23～T-36 屬合併門，不屬 NE-7，也不進 attestation 集合。
 
       | 方法論 | ADR 測試 | runtime（真實資料，每次判定） | CI（合成資料，合併門） |
       | --- | --- | --- | --- |
@@ -709,7 +735,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 程式只能放在 `app/research/sector_biased/`；結果只能寫入 `STOCK_DESK_RESEARCH_DB_PATH`（預設 `./data/stock-desk-research.db`）。API 程序永不開啟此檔。
   - 每一列輸出、每一份報告、每一張圖都帶 `bias_label="含已知偏誤，不得上畫面"`，並寫明三項偏誤的方向：存活者偏差造成往上高估；分類 look-ahead 偏向動能；未還原的除權息使高殖利率族群被低估。
   - `hindsight` 視圖（忽略 `recorded_at`）只能由 `app.research.sector_biased.hindsight_view()` 建立。
-  - `app.sectors.store.SectorStatsRepository.save()`／`load()` 只接受同時滿足以下條件的紀錄：`regime="pit"`、`data_regime="forward_pit"`、`source_run_ids` 全部存在於市場 DB 的 `pit_snapshot_runs`。其餘一律拋 `BiasedDataRejected`。
+  - `app.sectors.store.SectorStatsRepository.save()`／`load()` 只接受同時滿足以下條件的紀錄：`regime="pit"`、`data_regime="forward_pit"`、來源指紋（`source_run_min`、`source_run_max`、`source_session_end`、`source_run_count`、`source_digest`）與市場 DB 的 `pit_snapshot_runs` 相符：`save()` 完整驗證（重算摘要），讀取端驗證首末 run 與最新一列的計數（C-50）。其餘一律拋 `BiasedDataRejected`；讀取端拒收時，API 以 NE-6（`data_quality`）fail-closed。v9 以來源指紋取代 v8 以前的 `source_run_ids` 全列表（Options J）。
   - 看過偏誤研究後才提出的新版本要計入 m（D-6）。
 
 - **D-15 研究端敏感度變體（Options I2；方法論 §11.1「只列出，不拿來挑選」；v8）**
@@ -778,7 +804,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-24** 程式中不存在任何可以繞過 NE-1～NE-8 的開關、清單或環境變數。機械檢查：`app/sectors/gate.py`、`app/sectors/coverage.py`、`app/backtest/sector_eval.py` 不得使用 `os.environ`、`os.getenv`、`getenv`，不得 import `os`、`dotenv`、`configparser`、`tomllib`、`yaml`、`app.settings`；`gate.py` 另不得 import `sqlite3`，只吃 store 讀好的列。判定結果只能由三樣東西決定：NE 條件、統計列、核准列（T-17）。
 - **C-25** `CostModel.verified_on is None` 時，NE-3 必定成立，`gate_status` 必為 `not_evaluated`。
 - **C-26** `turnover_value_ratio_5_20` 不得作為 `rank_sectors` 的輸入，只放「詳細」；回應 schema 欄位名不得含 `volume`、`hit_rate`、`win_rate`、`score`、`rating`、`confidence`、`action`。禁用字掃描以子字串比對，唯一白名單複合詞為 `corporate_action`（D-10 自己定義的第③類「公司行動」排除計數，與規則引擎的 `action` 無關；dev-lead 施工裁定 2026-09-25）。
-- **C-27** 除 `app.research` 自身外，任何 `app.*` 模組都不得可達 `app.research`；字串 `STOCK_DESK_RESEARCH_DB_PATH` 只出現在 `app/research/` 與 tests；`hindsight_view` 只在 `app/research/` 內定義與呼叫；`SectorStatsRepository` 拒收非 PIT 紀錄。
+- **C-27** 除 `app.research` 自身外，任何 `app.*` 模組都不得可達 `app.research`；字串 `STOCK_DESK_RESEARCH_DB_PATH` 只出現在 `app/research/` 與 tests；`hindsight_view` 只在 `app/research/` 內定義與呼叫；`SectorStatsRepository` 拒收非 PIT 紀錄，以及來源指紋與市場 DB 不符的紀錄（C-50）。
 - **C-28** `rank` 只在族群層級；`historical_stat` 只在卡片層級出現一次；整張 board 只有一個 `data_as_of`。
 - **C-29** `demo_synthetic` 資料必定觸發 NE-8，且 `not_evaluated_reason` 必為 `demo_data`（NE-8 永遠優先，風控 §6.1 NR-2）。卡片層級的示範資料警告由 `data_source` 驅動，不受 `gate_status` 影響，屬絕對底線（T-11、T-14）。
 - **C-30** 使用者看得到的字面全部要經風控核可，並逐字寫死在常數與測試裡；`not_evaluated` 時不得使用「未達門檻」句。
@@ -812,6 +838,22 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-47** 會落地或輸出的入口都先經 `require_published`（物件同一性）；`SectorStatsRepository` 與核准 CLI 拒收未發布的 `method_version`。相等的複本、子類別實例、研究變體全部被拒（T-30）。
 - **C-48** 研究變體的具體型別只在 `app/research/sector_biased/sensitivity.py`：不繼承、不 replace、不建構已發布型別；`method_version` 屬 `research-sens-` 命名空間且不符合 `_VERSION_PATTERN`；每個變體只改一個參數、`gate` 與基準同一物件；`SENSITIVITY_VARIANTS` 與方法論 §11.1 一致；全部一起跑、全部列出（T-31）。
 - **C-49** 偏誤研究與敏感度只接受 hindsight 視圖、`backfill_non_pit` 來源、早於 D0 的交易日，違反即拋錯且不寫入；結果只進研究 DB。看過敏感度後提出的新版本 `counts_toward_m=1`，由 qa 在審查 register 呼叫時確認（T-32）。
+- **C-50** 統計列的來源證明（D-14；v9 取代 `source_run_ids`）：
+  - `sector_rank_stats` 以 `source_run_min`、`source_run_max`（INTEGER）、`source_session_end`、`source_run_count`（> 0）、`source_digest`（SHA-256 hex，64 字元）取代 `source_run_ids`；表內不得再有逐一列舉來源 run 的欄位。
+  - 來源集合 𝒮 ＝ 市場 DB `pit_snapshot_runs` 中同時滿足 `status='ok'`、`session_date IS NOT NULL`、`session_date ≤ source_session_end`、`run_id ≤ source_run_max` 的全部 run（含暖身）。因為市場 DB 只增不刪（C-10）且 `run_id` 單調遞增（D-2），𝒮 寫定後永不改變。
+  - 評估必須載入 𝒮 的全部 run（現行 `EVALUATION_HISTORY_START`）；指紋取自評估實際使用的 `PanelFrames.runs` 中的 `ok` run，`source_run_max`、`source_session_end` 取該集合的最大值。日後改為部分載入時，須先修訂本條。
+  - 指紋只由 `app.data.panel` 的單一函式計算：依 `run_id` 排序，把 `RUNS_COLUMNS` 各欄正規化後做 SHA-256。評估器與市場 DB 驗證端都呼叫它；驗證端的輸入用 `load_panel_frames` 同一個 row→frame 轉換建出。
+  - 寫入時（`save()`）：經注入的驗證介面在市場 DB 重算 𝒮 的指紋，五欄全部相等才寫入；同時重算同版本上一列的指紋並比對。任一不符即拋 `BiasedDataRejected`，本次判定不寫入任何列（T-22）。
+  - 讀取時（`load()`、`latest_history()`、`find()`、`SectorCardReader`）：每一列的 `source_run_min`、`source_run_max` 都必須是市場 DB 中存在的 `ok` run；最新一列（`computed_at`、`run_id` 最大者）另外比對 𝒮 的計數與首末 run。整批只呼叫驗證介面一次、只用一條 SQL；任一不符就整批拒收，API 以 NE-6 fail-closed，`historical_stat`、`gate_checks` 為 null。讀取端不重算摘要。
+  - `app.sectors` 仍只經注入介面觸及市場 DB（C-1）；介面實作放在 `app.data.market_panel`，由 services 與 api 注入。
+  - 舊 schema（含 `source_run_ids` 欄）：表為空時可以重建；表內已有列時不得自動遷移，判定端拒絕寫入並記錯誤。本項 schema 變更必須在 D0 前落地。
+- **C-51** API 讀取量不得隨市場 DB 的 run 數成長：端點 SQL 條數維持 C-6（≤ 7），來源驗證恰一條；每列統計取回的來源欄位固定寬度（≤ 256 位元組）；API 讀 board 的 SQL 不取 `sector_board.source_run_ids`（該欄會隨成員列重複）；同一份主 DB 下，市場 DB 的 run 數由 1,000 增為 100,000 時，API 一次請求自主 DB 取回的資料量不變。
+- **C-52** 判定的部署約束（D-8 `ci_passed_commit` 機制的執行環境；CEO 2026-09-25 裁定）：
+  - 執行 `sector_board_refresh` 判定的程序與 API 程序，必須在主機上從同一個 git checkout 的 `apps/stock-desk/backend` 直接執行（uv 管理的 venv）：`git` 可執行、`.git` 可讀、`tests/` 存在，且已在該 checkout 跑過 `scripts/attest_sector_gate.py`。部署時兩個程序都要 `uv sync --frozen` 並重新啟動（D-8 部署期間行為）。
+  - image 內沒有 `.git`／`tests/`／`git` 的部署（例如現行 `compose.yaml`）不能用來判定：每列統計 `selfcheck_passed=false`，N ≥ 150 後 NE-7 恆成立。這是 fail-closed 的預期結果，**不得以放寬 C-36 解決**。改用容器（例如唯讀 bind mount 整個 checkout）須另立修訂。
+  - `running_commit`、`ci_passed_commit`、`suite_hash` 只能來自 `git rev-parse HEAD`、attestation 檔與磁碟上的測試檔。`app/services/sector_attestation.py`、`app/services/sector_runtime.py` 不得使用 `os.environ`、`os.getenv`、`getenv`，不得 import `dotenv`、`app.settings`；不得以環境變數、build arg、設定檔提供或覆寫上述值，也不得藉此略過任一檢查。
+  - `apps/stock-desk/backend/.dockerignore` 須排除 `app/_build/`、`.env`、`*.key`、`.codex/`（避免 image 夾帶本機 attestation 或祕密）。
+  - 「image 內烘入 commit 與 attestation」（Options K2）未採用。要採用須另立修訂、經 CEO 核可、由 quant-researcher 確認方法論 §8.3 對照表，並在累積 N 達 150 之前完成。
 
 ## 測試策略（全部離線；對應方法論 §8 T1～T10）
 
@@ -865,7 +907,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **T-10** 偏誤版研究隔離（方法論 T10）：
   - import 邊界守門 C-4、C-5、C-27，寫法比照 C-1～C-5：`GUARDED_MODULES` 列出 `app.api.sectors`、`app.sectors.*`、`app.services.sector_board`、`app.backtest.sector_eval`、`app.backtest.basket`，全部不得可達 `app.research`；另列舉 `app/research/` 下的檔案，確認都有被掃到；加 teeth test。
   - 以字串與識別字掃描，確認 `STOCK_DESK_RESEARCH_DB_PATH`、`hindsight_view` 只出現在允許的位置。
-  - 把 hindsight 或 `backfill_non_pit` 紀錄交給 `SectorStatsRepository`，必須拋 `BiasedDataRejected`。
+  - 把 hindsight 或 `backfill_non_pit` 紀錄交給 `SectorStatsRepository`，必須拋 `BiasedDataRejected`；來源指紋不符的情形見 T-33、T-35。
   - 研究 DB 存在且有資料時，API 回應必須和研究 DB 不存在時完全相同。
 - **T-11** 三態：
   - NE-1～NE-8 與 `pending_review` 各有一個單獨成立的案例，每個案例都驗證 `historical_stat is None`、`gate_checks is None`；
@@ -935,7 +977,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
     - N ≥ 150 時出現 `skipped_insufficient_n`，觸發 NE-7；
     - T5／T6 沒有事件時為 `vacuous`，不觸發 NE-7；
     - T8 沒產出 `delta_shuffle`、`delta_real`，觸發 NE-7；
-    - T-10 的 `BiasedDataRejected` 讓本次判定中止，不寫入任何統計列。
+    - T-10 的 `BiasedDataRejected`（含 C-50 寫入時來源指紋不符）讓本次判定中止，不寫入任何統計列與檢查列。
 - **T-23** 整卡可計算比例與 e、a、b、c、x（C-37）：
   - 邊界：`computable_ratio` 恰等於 `computable_ratio_min` 時不降級；略低時整卡 `insufficient_data`，`insufficient_reason='computable_ratio_low'`。
   - 旺季案例：資料完整（`completeness_ratio` ≥ 0.98），但除權息排除使 `computable_ratio` < 0.80 時，原因必為 `computable_ratio_low`，不是 `overall_completeness_low`。
@@ -969,6 +1011,24 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **T-30** 表格驅動：對 C-47 的每個入口，分別餵入研究變體、`dataclasses.replace(SECTOR_MOMENTUM_V1)` 的相等複本、子類別實例、沿用 v1 字串的調嚴複本，全部必須被拒；`SECTOR_MOMENTUM_V1` 本身必須被接受。repository 與 registry 對未知字串必須拒收。teeth test：AST 確認每個入口函式本體都呼叫 `require_published`，暫存檔移除呼叫後測試必須失敗。
 - **T-31** AST 掃描 `app/research/**`：沒有繼承、`replace`、建構已發布型別的程式碼。`ResearchVariant` 對 `sector-rel-*` 字串與不合命名空間的字串都拒絕；與基準的差異欄位恰好一個；`variant.gate is base.gate`；`SENSITIVITY_VARIANTS` 恰為兩條各自獨立的變體軸，共四個變體：流動性 {5e6, 2e7}（成分數維持基準）、最小成分數 {3, 8}（流動性維持基準），不含交叉組合。
 - **T-32** 分別餵入 PIT 視圖、非 backfill 來源、含 ≥ D0 交易日的 panel，都必須拋錯且研究 DB 的列數不變；一次執行的輸出含基準加上全部變體；敏感度路徑用的 `calculation_set` 與 `rank_sectors` 與 `app.sectors` 中的函式是同一個物件；沿用 T-10，研究 DB 存在與否，API 回應都完全相同。
+- **T-33** 來源指紋，寫入端（C-50）：
+  - 以真實 `MarketPanelStore` 建庫（含暖身形狀的每檔每日 run 與前瞻四種 kind）：評估器算出的指紋與驗證端重算的指紋，五欄逐一相等。
+  - 評估後再寫入新 run（含 `session_date ≤ source_session_end` 的更正 run），同一組 (`source_run_max`, `source_session_end`) 的指紋不變。
+  - 以下各自單獨讓 `save()` 拋 `BiasedDataRejected`，且主 DB 列數不變：計數差 1、摘要改一個字元、`source_run_max` 不存在、`source_run_max` 指向非 `ok` run、`source_run_min` 不符、`source_run_count = 0`、指紋由研究 DB（`bf-*` run）算出、同版本上一列的指紋與市場 DB 不符。
+  - teeth test：驗證端改成只查 `source_run_max` 是否存在時，本測試必須失敗。
+- **T-34** 規模（C-51）：以 100,000 個 `ok` run（1,100 檔 × 80 日暖身，加上前瞻四種 kind）與 160 列統計建庫：
+  - `PRAGMA table_info(sector_rank_stats)` 不含 `source_run_ids`；每列來源欄位合計 ≤ 256 位元組。
+  - `GET /api/sectors/momentum` 的 SQL 仍 ≤ 7 條，來源驗證恰一條，驗證介面恰呼叫一次。
+  - 市場 DB run 數為 1,000 與 100,000 時，API 自主 DB 取回的總字元數相同；API 的 board 查詢不含 `source_run_ids`。
+  - P95 由 devops-sre 以非合併門的量測腳本在 CEO 本機實測並記入部署手冊；CI 不做計時斷言。
+- **T-35** 來源指紋，讀取端（C-50）：
+  - 市場 DB 換成 run 數更多、內容不同的另一個檔：最新一列計數不符，整批拒收；API 回 200，`not_evaluated_reasons` 含 `data_quality`，`historical_stat is None`。
+  - 舊列的 `source_run_min` 在市場 DB 不存在：整批拒收。市場 DB 檔不存在：整批拒收，API 仍回 200。
+  - 驗證只呼叫一次、一條 SQL；讀取路徑不呼叫摘要函式（spy 斷言）。
+- **T-36** 判定部署（C-52）：
+  - AST 掃描 `app/services/sector_attestation.py`、`app/services/sector_runtime.py`：不得出現 `os.environ`、`os.getenv`、`getenv`，不得 import `dotenv`、`app.settings`；附 teeth test。
+  - 模擬 image 佈局（把 `app/` 與 attestation 複製到沒有 `.git`、沒有 `tests/` 的暫存目錄）：`verify()` 同時回報 `git_unreadable` 與 `suite_hash_mismatch`；該次統計列 `selfcheck_passed=false`；讀取端的 `not_evaluated_reasons` 含 `lookahead_tests_failed`。
+  - `apps/stock-desk/backend/.dockerignore` 存在，且含 `app/_build`。
 
 **約束 ↔ 測試對照**
 
@@ -990,7 +1050,8 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 | C-14 | T-5 | C-29 | T-11、T-14 | C-44 | T-28 |
 | C-15 | T-18 | C-30 | T-14、T-26、T-27 | C-45 | T-28 |
 | C-46 | T-29 | C-47 | T-30 | C-48 | T-31 |
-| C-49 | T-32 | | | | |
+| C-49 | T-32 | C-50 | T-10、T-33、T-35 | C-51 | T-34 |
+| C-52 | T-36 | | | | |
 
 方法論 T1～T10 與 ADR 測試、runtime／CI 的對照見 D-8。
 
@@ -1024,6 +1085,10 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - `ci_passed_commit` 是本機 build 的自我證明，不是外部 CI 簽章；能擋下未測試的 commit 與被改動的工作樹，擋不住刻意偽造。
   - 前瞻期內沒有下市、改類或除權息事件時，T4 ③、T5、T6 的 runtime 為 `vacuous`，這段期間只有 CI 合成案例提供保證。
   - 持倉資料鏈若要改從市場面板取價，須另立 ADR。
+  - 來源指紋（C-50）與 v8 以前的 `source_run_ids` 一樣，是評估器的自我宣告：它證明所宣告的 run 集合真實存在於市場 DB、寫定後沒有變，但不證明統計只由這些 run 算出。研究端能唯讀市場 DB，理論上抄得出合法指紋；擋偏誤資料的主防線仍是 `regime`／`data_regime` 標記、CHECK 約束與 C-27 的 import 邊界。
+  - 讀取端只核對首末 run 與最新一列的計數，不重算摘要；舊列的完整核對在寫入時與下一次判定時進行。市場 DB 在兩次判定之間被換掉時，最遲會在下一次讀取（計數不符）或下一次判定（摘要不符）被發現，兩者都 fail-closed。
+  - C-36 綁定程式碼與測試檔，不綁定已安裝的依賴；部署時須 `uv sync --frozen`（C-52）。
+  - 現行 `compose.yaml` 的 image 部署產生不了可發布的判定（C-52）。N 達 150 之前，對外原因是 NE-2，看不出差異；之後卡片會停在 `not_evaluated`（NE-7）。
 
 ## 與既有 ADR 的關係（§7）
 
@@ -1076,10 +1141,11 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 若風控不接受 D-7 在不變量破壞時沿用 `low_coverage`，另起草 `data_integrity` 的原因句。
 - **qa-reviewer**：複審 v5（本版回應其 NEEDS_CHANGES）。
 - **product-manager**：PRD 第三版已併入 R-A～R-C；N 維持 3。
-- **devops-sre**：三個 DB 的備份（市場 DB 為最高等級）、scheduler 常駐監控、暖身回補操作手冊。
+- **devops-sre**：三個 DB 的備份（市場 DB 為最高等級）、scheduler 常駐監控、暖身回補操作手冊。v9 起另有：依 C-52 撰寫主機 git checkout 直接執行的部署手冊；新增 backend/.dockerignore；部署時 uv sync --frozen 並重跑 attestation；監控 scheduler 的 attestation notes，部署窗口內的 commit_mismatch 屬 D-8 預期行為、不告警，git_unreadable、attestation_missing、dirty_worktree、suite_hash_mismatch 持續出現即告警；市場 DB 備份還原不得重編 run_id（D-2）；以非合併門腳本量測 /api/sectors/momentum 的 P95（T-34）。
 - **CEO**：
   - 是否接受第一階段不列歷史比例，且累積時程下限約 3.1 年（使用者可見句寫「約 3 年」）；
   - 是否核可對 backtest-protocol 鐵律 3 的已知偏離（判定資料不切訓練窗，見 Consequences）；
   - D0 日期（v1 參數須在 D0 前 commit，暖身須在 D0 前完成）；
   - 三個 DB 檔的配置；
   - §7 對 ADR-0002 的擴充解讀。
+  - （v9，已裁定）判定的部署方式：CEO 2026-09-25 裁定採主機 git checkout 直接執行（C-52）。日後若改採容器或 image 內烘入 attestation（Options K2），須另立修訂並核可。
