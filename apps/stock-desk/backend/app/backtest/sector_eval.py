@@ -121,7 +121,8 @@ T8_SHUFFLE: Final = "T8_label_shuffle"
 T9: Final = "T9_board_replay_same_set"
 SELFCHECK_ORDER: Final[tuple[str, ...]] = (T1, T3A, T3B, T4, T5, T6, T7, T8, T8_SHUFFLE, T9)
 #: C-36: which checks may be ``skipped_insufficient_n`` (N < 30) or ``vacuous``.
-SKIPPABLE_CHECKS: Final[frozenset[str]] = frozenset({T3A, T8})
+#: The label shuffle is the diagnostic half of T8, so it shares T8's allowance.
+SKIPPABLE_CHECKS: Final[frozenset[str]] = frozenset({T3A, T8, T8_SHUFFLE})
 VACUOUS_ALLOWED: Final[frozenset[str]] = frozenset({T4, T5, T6})
 
 InvalidReason = Literal[
@@ -1841,10 +1842,15 @@ def evaluate(
         )
     )
     produced = statistics.delta_real is not None and statistics.delta_shuffle is not None
+    # N = 0: nothing to shuffle -- a skip (C-36 state semantics), never a pass. With
+    # any sample the two deltas must exist, else T8 fails (C-36, C-41).
+    shuffle_status: SelfcheckStatus = (
+        "pass" if produced else ("skipped_insufficient_n" if n == 0 else "fail")
+    )
     selfchecks.append(
         SelfcheckRecord(
             check_name=T8_SHUFFLE,
-            status="pass" if produced or n == 0 else "fail",
+            status=shuffle_status,
             seed=statistics.seeds["label_shuffle"],
             value=statistics.delta_shuffle,
         )

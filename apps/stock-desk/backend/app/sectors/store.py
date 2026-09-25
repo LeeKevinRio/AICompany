@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -541,116 +541,208 @@ class SectorBoardStore(_SectorDb):
 
     def latest_board_id(self, market: str) -> str | None:
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT board_id FROM sector_board WHERE market = ? "
-                "ORDER BY data_as_of DESC, computed_at DESC, board_id DESC LIMIT 1",
-                (market,),
-            ).fetchone()
+            row = conn.execute(_LATEST_BOARD_ID_SQL, (market,)).fetchone()
         return str(row[0]) if row else None
 
     def load_board(self, board_id: str) -> StoredBoard | None:
+        """One board -- header, ranked and excluded rows -- in one JOIN statement."""
         with closing(self._connect()) as conn:
-            header = conn.execute(
+            rows = conn.execute(_board_sql("SELECT ? AS board_id"), (board_id,)).fetchall()
+        return _board_from_rows(rows)
+
+    def latest_board(self, market: str) -> StoredBoard | None:
+        """The newest board of ``market`` (latest session, then latest computation)."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(_board_sql(_LATEST_BOARD_ID_SQL), (market,)).fetchall()
+        return _board_from_rows(rows)
+
+    def latest_boards(self, market: str, method_version: str) -> tuple[StoredBoard, ...]:
+        """The last board written for each session of one method version, oldest first.
+
+        What the evaluator's T9 compares against its replay (ADR-0012 D-8): a
+        session recomputed after a later capture keeps only its final board.
+        """
+        with closing(self._connect()) as conn:
+            ids = conn.execute(
                 """
-                SELECT board_id, market, method_version, lookback_days, holding_days,
-                       data_as_of, window_start, data_source, bars_run_id, bars_recorded_at,
-                       computed_at, benchmark_return_l, reference_taiex_return_l,
-                       market_expected_count, market_missing_count,
-                       market_ex_date_excluded_count, market_corporate_action_excluded_count,
-                       ex_dividend_feed_covered, constituent_invariant_violated, source_run_ids
-                FROM sector_board WHERE board_id = ?
+                SELECT board_id FROM (
+                    SELECT board_id, data_as_of, ROW_NUMBER() OVER (
+                        PARTITION BY data_as_of ORDER BY computed_at DESC, board_id DESC
+                    ) AS position
+                    FROM sector_board WHERE market = ? AND method_version = ?
+                ) WHERE position = 1 ORDER BY data_as_of
                 """,
-                (board_id,),
-            ).fetchone()
-            if header is None:
-                return None
-            members = conn.execute(
-                """
-                SELECT rank, sector_code, sector_name, sector_return_l, rel_return_l, up_count,
-                       expected_count, missing_count, ex_date_excluded_count,
-                       corporate_action_excluded_count, turnover_value_ratio_5_20,
-                       top_contributor_share, single_stock_dominated, member_symbols, constituents
-                FROM sector_board_members WHERE board_id = ? ORDER BY rank
-                """,
-                (board_id,),
+                (market, method_version),
             ).fetchall()
-            excluded = conn.execute(
-                """
-                SELECT sector_code, sector_name, reason_code, expected_count, missing_count,
-                       ex_date_excluded_count, corporate_action_excluded_count, internal_reason
-                FROM sector_board_excluded WHERE board_id = ? ORDER BY sector_code
-                """,
-                (board_id,),
-            ).fetchall()
-        ranked = tuple(
-            StoredRankedSector(
-                rank=int(row[0]),
-                sector_code=str(row[1]),
-                sector_name=str(row[2]),
-                sector_return_L=float(row[3]),
-                rel_return_L=float(row[4]),
-                up_count=int(row[5]),
-                coverage=coverage_from_counts(
-                    expected=int(row[6]),
-                    missing=int(row[7]),
-                    ex_date=int(row[8]),
-                    corporate_action=int(row[9]),
-                ),
-                turnover_value_ratio_5_20=row[10],
-                top_contributor_share=row[11],
-                single_stock_dominated=bool(row[12]),
-                member_symbols=tuple(json.loads(row[13])),
-                constituents=tuple(
-                    StoredConstituent(
-                        symbol=item["symbol"], name=item["name"], return_L=item["return_L"]
-                    )
-                    for item in json.loads(row[14])
-                ),
+            boards = [
+                _board_from_rows(conn.execute(_board_sql("SELECT ? AS board_id"), row).fetchall())
+                for row in ids
+            ]
+        return tuple(board for board in boards if board is not None)
+
+
+_LATEST_BOARD_ID_SQL: Final = (
+    "SELECT board_id FROM sector_board WHERE market = ? "
+    "ORDER BY data_as_of DESC, computed_at DESC, board_id DESC LIMIT 1"
+)
+_HEADER_COLUMNS: Final[tuple[str, ...]] = (
+    "board_id",
+    "market",
+    "method_version",
+    "lookback_days",
+    "holding_days",
+    "data_as_of",
+    "window_start",
+    "data_source",
+    "bars_run_id",
+    "bars_recorded_at",
+    "computed_at",
+    "benchmark_return_l",
+    "reference_taiex_return_l",
+    "market_expected_count",
+    "market_missing_count",
+    "market_ex_date_excluded_count",
+    "market_corporate_action_excluded_count",
+    "ex_dividend_feed_covered",
+    "constituent_invariant_violated",
+    "source_run_ids",
+)
+_MEMBER_COLUMNS: Final[tuple[str, ...]] = (
+    "rank",
+    "sector_code",
+    "sector_name",
+    "sector_return_l",
+    "rel_return_l",
+    "up_count",
+    "expected_count",
+    "missing_count",
+    "ex_date_excluded_count",
+    "corporate_action_excluded_count",
+    "turnover_value_ratio_5_20",
+    "top_contributor_share",
+    "single_stock_dominated",
+    "member_symbols",
+    "constituents",
+)
+_EXCLUDED_COLUMNS: Final[tuple[str, ...]] = (
+    "sector_code",
+    "sector_name",
+    "reason_code",
+    "expected_count",
+    "missing_count",
+    "ex_date_excluded_count",
+    "corporate_action_excluded_count",
+    "internal_reason",
+)
+_H, _M = len(_HEADER_COLUMNS), len(_MEMBER_COLUMNS)
+
+
+def _board_sql(target: str) -> str:
+    """Header x ranked rows, then header x excluded rows, as one statement.
+
+    ``target`` is a SELECT yielding the one ``board_id`` to read. Each result
+    row is ``part, header..., member..., excluded...`` with the other part's
+    columns NULL; a board without ranked rows still yields its header once
+    (the LEFT JOIN). Ordered by part, then rank, then excluded sector code.
+    """
+    header = ", ".join(f"b.{column}" for column in _HEADER_COLUMNS)
+    members = ", ".join(f"m.{column}" for column in _MEMBER_COLUMNS)
+    excluded = ", ".join(f"e.{column}" for column in _EXCLUDED_COLUMNS)
+    no_members = ", ".join("NULL" for _ in _MEMBER_COLUMNS)
+    no_excluded = ", ".join("NULL" for _ in _EXCLUDED_COLUMNS)
+    rank_column, code_column = 2 + _H, 2 + _H + _M
+    return f"""
+        WITH target AS ({target})
+        SELECT 'm' AS part, {header}, {members}, {no_excluded}
+        FROM sector_board b JOIN target t ON t.board_id = b.board_id
+        LEFT JOIN sector_board_members m ON m.board_id = b.board_id
+        UNION ALL
+        SELECT 'x' AS part, {header}, {no_members}, {excluded}
+        FROM sector_board b JOIN target t ON t.board_id = b.board_id
+        JOIN sector_board_excluded e ON e.board_id = b.board_id
+        ORDER BY 1, {rank_column}, {code_column}
+    """
+
+
+def _coverage_of(row: Sequence[object]) -> Coverage:
+    return coverage_from_counts(
+        expected=int(cast(int, row[0])),
+        missing=int(cast(int, row[1])),
+        ex_date=int(cast(int, row[2])),
+        corporate_action=int(cast(int, row[3])),
+    )
+
+
+def _board_from_rows(rows: Sequence[Sequence[object]]) -> StoredBoard | None:
+    """Rebuild a :class:`StoredBoard` from the rows of :func:`_board_sql`."""
+    if not rows:
+        return None
+    header = rows[0][1 : 1 + _H]
+    ranked: list[StoredRankedSector] = []
+    excluded: list[StoredExcludedSector] = []
+    for row in rows:
+        part = row[0]
+        member = row[1 + _H : 1 + _H + _M]
+        other = row[1 + _H + _M :]
+        if part == "m" and member[0] is not None:
+            ranked.append(
+                StoredRankedSector(
+                    rank=int(cast(int, member[0])),
+                    sector_code=str(member[1]),
+                    sector_name=str(member[2]),
+                    sector_return_L=float(cast(float, member[3])),
+                    rel_return_L=float(cast(float, member[4])),
+                    up_count=int(cast(int, member[5])),
+                    coverage=_coverage_of(member[6:10]),
+                    turnover_value_ratio_5_20=cast(float | None, member[10]),
+                    top_contributor_share=cast(float | None, member[11]),
+                    single_stock_dominated=bool(member[12]),
+                    member_symbols=tuple(json.loads(str(member[13]))),
+                    constituents=tuple(
+                        StoredConstituent(
+                            symbol=item["symbol"], name=item["name"], return_L=item["return_L"]
+                        )
+                        for item in json.loads(str(member[14]))
+                    ),
+                )
             )
-            for row in members
-        )
-        excluded_rows = tuple(
-            StoredExcludedSector(
-                sector_code=str(row[0]),
-                sector_name=str(row[1]),
-                reason_code=cast(ReasonCode, row[2]),
-                coverage=coverage_from_counts(
-                    expected=int(row[3]),
-                    missing=int(row[4]),
-                    ex_date=int(row[5]),
-                    corporate_action=int(row[6]),
-                ),
-                internal_reason=row[7],
+        elif part == "x":
+            excluded.append(
+                StoredExcludedSector(
+                    sector_code=str(other[0]),
+                    sector_name=str(other[1]),
+                    reason_code=cast(ReasonCode, other[2]),
+                    coverage=_coverage_of(other[3:7]),
+                    internal_reason=cast(str | None, other[7]),
+                )
             )
-            for row in excluded
-        )
-        data_as_of = _date(header[5])
-        if data_as_of is None:  # pragma: no cover - NOT NULL column
-            raise ValueError("sector_board.data_as_of is NULL")
-        return StoredBoard(
-            board_id=str(header[0]),
-            market=str(header[1]),
-            method_version=str(header[2]),
-            lookback_days=int(header[3]),
-            holding_days=int(header[4]),
-            data_as_of=data_as_of,
-            window_start=_date(header[6]),
-            data_source=str(header[7]),
-            bars_run_id=header[8],
-            bars_recorded_at=header[9],
-            computed_at=str(header[10]),
-            benchmark_return_L=header[11],
-            reference_taiex_return_L=header[12],
-            market_expected_count=int(header[13]),
-            market_missing_count=int(header[14]),
-            market_ex_date_excluded_count=int(header[15]),
-            market_corporate_action_excluded_count=int(header[16]),
-            ex_dividend_feed_covered=bool(header[17]),
-            constituent_invariant_violated=bool(header[18]),
-            source_run_ids=tuple(json.loads(header[19])),
-            ranked=ranked,
-            excluded=excluded_rows,
-        )
+    data_as_of = _date(cast(str | None, header[5]))
+    if data_as_of is None:  # pragma: no cover - NOT NULL column
+        raise ValueError("sector_board.data_as_of is NULL")
+    return StoredBoard(
+        board_id=str(header[0]),
+        market=str(header[1]),
+        method_version=str(header[2]),
+        lookback_days=int(cast(int, header[3])),
+        holding_days=int(cast(int, header[4])),
+        data_as_of=data_as_of,
+        window_start=_date(cast(str | None, header[6])),
+        data_source=str(header[7]),
+        bars_run_id=cast(str | None, header[8]),
+        bars_recorded_at=cast(str | None, header[9]),
+        computed_at=str(header[10]),
+        benchmark_return_L=cast(float | None, header[11]),
+        reference_taiex_return_L=cast(float | None, header[12]),
+        market_expected_count=int(cast(int, header[13])),
+        market_missing_count=int(cast(int, header[14])),
+        market_ex_date_excluded_count=int(cast(int, header[15])),
+        market_corporate_action_excluded_count=int(cast(int, header[16])),
+        ex_dividend_feed_covered=bool(header[17]),
+        constituent_invariant_violated=bool(header[18]),
+        source_run_ids=tuple(json.loads(str(header[19]))),
+        ranked=tuple(ranked),
+        excluded=tuple(excluded),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -698,19 +790,8 @@ class SectorStatsRepository(_SectorDb):
     def _admit(
         self, *, regime: str, data_regime: str, source_run_ids: tuple[str, ...], run_id: str
     ) -> None:
-        if regime != "pit" or data_regime != "forward_pit":
-            raise BiasedDataRejected(
-                f"stats run {run_id}: regime={regime!r}, data_regime={data_regime!r}; "
-                "only pit / forward_pit may reach the gate (ADR-0012 D-14)"
-            )
-        if not source_run_ids:
-            raise BiasedDataRejected(f"stats run {run_id}: no source_run_ids")
-        known = self._verifier.existing_run_ids(source_run_ids)
-        unknown = sorted(set(source_run_ids) - set(known))
-        if unknown:
-            raise BiasedDataRejected(
-                f"stats run {run_id}: source runs {unknown} are not in pit_snapshot_runs"
-            )
+        _admit_regime(regime, data_regime, source_run_ids, run_id)
+        _admit_sources(self._verifier, [(run_id, source_run_ids)])
 
     def save(self, record: StatsRecord) -> None:
         """Append one statistics row and its G1..G6 / T1..T9 check rows."""
@@ -788,99 +869,149 @@ class SectorStatsRepository(_SectorDb):
 
     def _load(self, where: str, params: tuple[object, ...]) -> tuple[StatsRecord, ...]:
         with closing(self._connect()) as conn:
-            rows = conn.execute(
-                f"SELECT {', '.join(_STATS_COLUMNS)} FROM sector_rank_stats {where} "
-                "ORDER BY computed_at, run_id",
-                params,
-            ).fetchall()
-            run_ids = [str(row[0]) for row in rows]
-            checks: dict[str, list[tuple[str, str, str, int | None, float | None, str | None]]]
-            checks = {run_id: [] for run_id in run_ids}
-            if run_ids:
-                marks = ", ".join("?" for _ in run_ids)
-                for check in conn.execute(
-                    "SELECT run_id, check_kind, check_name, status, seed, value, detail "
-                    f"FROM sector_gate_checks WHERE run_id IN ({marks}) "
-                    "ORDER BY run_id, rowid",
-                    run_ids,
-                ).fetchall():
-                    checks[str(check[0])].append(
-                        (check[1], check[2], check[3], check[4], check[5], check[6])
-                    )
-        records: list[StatsRecord] = []
-        for row in rows:
-            data = dict(zip(_STATS_COLUMNS, row, strict=True))
-            source_run_ids = tuple(json.loads(str(data["source_run_ids"])))
-            self._admit(
-                regime=str(data["regime"]),
-                data_regime=str(data["data_regime"]),
-                source_run_ids=source_run_ids,
-                run_id=str(data["run_id"]),
-            )
-            own = checks[str(data["run_id"])]
-            records.append(
-                StatsRecord(
-                    run_id=str(data["run_id"]),
-                    method_version=str(data["method_version"]),
-                    regime=cast(StatsRegime, data["regime"]),
-                    data_regime=cast(DataRegime, data["data_regime"]),
-                    source_run_ids=source_run_ids,
-                    m_at_evaluation=int(cast(int, data["m_at_evaluation"])),
-                    sample_count=int(cast(int, data["sample_count"])),
-                    effective_sample_count=float(cast(float, data["effective_sample_count"])),
-                    beat_count_net=int(cast(int, data["beat_count_net"])),
-                    beat_count_gross=int(cast(int, data["beat_count_gross"])),
-                    base_rate_net=float(cast(float, data["base_rate_net"])),
-                    base_rate_gross=float(cast(float, data["base_rate_gross"])),
-                    ci_low_net=float(cast(float, data["ci_low_net"])),
-                    ci_high_net=float(cast(float, data["ci_high_net"])),
-                    bootstrap_low_net=float(cast(float, data["bootstrap_low_net"])),
-                    bootstrap_high_net=float(cast(float, data["bootstrap_high_net"])),
-                    delta_real=cast(float | None, data["delta_real"]),
-                    delta_shuffle=cast(float | None, data["delta_shuffle"]),
-                    sample_start=date.fromisoformat(str(data["sample_start"])),
-                    sample_end=date.fromisoformat(str(data["sample_end"])),
-                    stats_as_of=date.fromisoformat(str(data["stats_as_of"])),
-                    computed_at=datetime.fromisoformat(str(data["computed_at"])),
-                    recompute_session=date.fromisoformat(str(data["recompute_session"])),
-                    running_commit=str(data["running_commit"]),
-                    selfcheck_passed=bool(data["selfcheck_passed"]),
-                    data_quality_passed=bool(data["data_quality_passed"]),
-                    pit_history_missing=bool(data["pit_history_missing"]),
-                    gate_checks=tuple(
-                        GateCheckRecord(
-                            gate=cast(GateName, name), passed=status == "pass", detail=detail
-                        )
-                        for kind, name, status, _seed, _value, detail in own
-                        if kind == "gate"
-                    ),
-                    selfchecks=tuple(
-                        SelfcheckRecord(
-                            check_name=name,
-                            status=cast(SelfcheckStatus, status),
-                            seed=seed,
-                            value=value,
-                            detail=detail,
-                        )
-                        for kind, name, status, seed, value, detail in own
-                        if kind == "selfcheck"
-                    ),
-                )
-            )
-        return tuple(records)
+            rows = conn.execute(_stats_sql(where), params).fetchall()
+        return _records_from_rows(rows, self._verifier)
 
     def load(self, method_version: str) -> tuple[StatsRecord, ...]:
         """Every row of ``method_version``, oldest first (each re-checked on the way out)."""
-        return self._load("WHERE method_version = ?", (method_version,))
+        return self._load("s.method_version = ?", (method_version,))
 
     def latest_history(self) -> tuple[StatsRecord, ...]:
         """The history of whichever version wrote the most recent row (gate input)."""
-        with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT method_version FROM sector_rank_stats "
-                "ORDER BY computed_at DESC, run_id DESC LIMIT 1"
-            ).fetchone()
-        return self.load(str(row[0])) if row else ()
+        return self._load(f"s.method_version = {_LATEST_STATS_VERSION_SQL}", ())
+
+    def find(self, run_id: str) -> StatsRecord | None:
+        """One row by ``run_id`` (re-checked like every read), or ``None``."""
+        found = self._load("s.run_id = ?", (run_id,))
+        return found[0] if found else None
+
+
+#: The version of the most recent statistics row (the gate reads that version's history).
+_LATEST_STATS_VERSION_SQL: Final = (
+    "(SELECT method_version FROM sector_rank_stats ORDER BY computed_at DESC, run_id DESC LIMIT 1)"
+)
+_CHECK_COLUMNS: Final[tuple[str, ...]] = (
+    "check_kind",
+    "check_name",
+    "status",
+    "seed",
+    "value",
+    "detail",
+)
+
+
+def _stats_sql(where: str) -> str:
+    """Statistics rows matching ``where`` with their check rows, as one LEFT JOIN statement."""
+    stats = ", ".join(f"s.{column}" for column in _STATS_COLUMNS)
+    checks = ", ".join(f"c.{column}" for column in _CHECK_COLUMNS)
+    return f"""
+        SELECT {stats}, {checks}
+        FROM sector_rank_stats s LEFT JOIN sector_gate_checks c ON c.run_id = s.run_id
+        WHERE {where}
+        ORDER BY s.computed_at, s.run_id, c.rowid
+    """
+
+
+def _admit_regime(
+    regime: str, data_regime: str, source_run_ids: tuple[str, ...], run_id: str
+) -> None:
+    if regime != "pit" or data_regime != "forward_pit":
+        raise BiasedDataRejected(
+            f"stats run {run_id}: regime={regime!r}, data_regime={data_regime!r}; "
+            "only pit / forward_pit may reach the gate (ADR-0012 D-14)"
+        )
+    if not source_run_ids:
+        raise BiasedDataRejected(f"stats run {run_id}: no source_run_ids")
+
+
+def _admit_sources(verifier: RunIdVerifier, rows: Sequence[tuple[str, tuple[str, ...]]]) -> None:
+    """Every row's source runs exist in the market DB -- asked in **one** verifier call."""
+    wanted = {run for _, sources in rows for run in sources}
+    if not wanted:
+        return
+    known = verifier.existing_run_ids(wanted)
+    for run_id, sources in rows:
+        unknown = sorted(set(sources) - set(known))
+        if unknown:
+            raise BiasedDataRejected(
+                f"stats run {run_id}: source runs {unknown} are not in pit_snapshot_runs"
+            )
+
+
+def _records_from_rows(
+    rows: Sequence[Sequence[object]], verifier: RunIdVerifier
+) -> tuple[StatsRecord, ...]:
+    """Rebuild statistics records from :func:`_stats_sql` rows; refuse any biased one."""
+    width = len(_STATS_COLUMNS)
+    grouped: dict[str, tuple[dict[str, object], list[Sequence[object]]]] = {}
+    for row in rows:
+        data = dict(zip(_STATS_COLUMNS, row[:width], strict=True))
+        run_id = str(data["run_id"])
+        if run_id not in grouped:
+            grouped[run_id] = (data, [])
+        check = row[width:]
+        if check[0] is not None:
+            grouped[run_id][1].append(check)
+    sources: list[tuple[str, tuple[str, ...]]] = []
+    for run_id, (data, _) in grouped.items():
+        source_run_ids = tuple(json.loads(str(data["source_run_ids"])))
+        _admit_regime(str(data["regime"]), str(data["data_regime"]), source_run_ids, run_id)
+        sources.append((run_id, source_run_ids))
+    _admit_sources(verifier, sources)
+    records: list[StatsRecord] = []
+    for (data, own), (_, source_run_ids) in zip(grouped.values(), sources, strict=True):
+        records.append(
+            StatsRecord(
+                run_id=str(data["run_id"]),
+                method_version=str(data["method_version"]),
+                regime=cast(StatsRegime, data["regime"]),
+                data_regime=cast(DataRegime, data["data_regime"]),
+                source_run_ids=source_run_ids,
+                m_at_evaluation=int(cast(int, data["m_at_evaluation"])),
+                sample_count=int(cast(int, data["sample_count"])),
+                effective_sample_count=float(cast(float, data["effective_sample_count"])),
+                beat_count_net=int(cast(int, data["beat_count_net"])),
+                beat_count_gross=int(cast(int, data["beat_count_gross"])),
+                base_rate_net=float(cast(float, data["base_rate_net"])),
+                base_rate_gross=float(cast(float, data["base_rate_gross"])),
+                ci_low_net=float(cast(float, data["ci_low_net"])),
+                ci_high_net=float(cast(float, data["ci_high_net"])),
+                bootstrap_low_net=float(cast(float, data["bootstrap_low_net"])),
+                bootstrap_high_net=float(cast(float, data["bootstrap_high_net"])),
+                delta_real=cast(float | None, data["delta_real"]),
+                delta_shuffle=cast(float | None, data["delta_shuffle"]),
+                sample_start=date.fromisoformat(str(data["sample_start"])),
+                sample_end=date.fromisoformat(str(data["sample_end"])),
+                stats_as_of=date.fromisoformat(str(data["stats_as_of"])),
+                computed_at=datetime.fromisoformat(str(data["computed_at"])),
+                recompute_session=date.fromisoformat(str(data["recompute_session"])),
+                running_commit=str(data["running_commit"]),
+                selfcheck_passed=bool(data["selfcheck_passed"]),
+                data_quality_passed=bool(data["data_quality_passed"]),
+                pit_history_missing=bool(data["pit_history_missing"]),
+                gate_checks=tuple(
+                    GateCheckRecord(
+                        gate=cast(GateName, check[1]),
+                        passed=check[2] == "pass",
+                        detail=cast(str | None, check[5]),
+                    )
+                    for check in own
+                    if check[0] == "gate"
+                ),
+                selfchecks=tuple(
+                    SelfcheckRecord(
+                        check_name=str(check[1]),
+                        status=cast(SelfcheckStatus, check[2]),
+                        seed=cast(int | None, check[3]),
+                        value=cast(float | None, check[4]),
+                        detail=cast(str | None, check[5]),
+                    )
+                    for check in own
+                    if check[0] == "selfcheck"
+                ),
+            )
+        )
+    return tuple(records)
 
 
 # ---------------------------------------------------------------------------
@@ -921,19 +1052,26 @@ class SectorApprovalStore(_SectorDb):
                 """,
                 (method_version,),
             ).fetchall()
-        return tuple(
-            ApprovalRecord(
-                kind=cast(ApprovalKind, row[0]),
-                run_id=str(row[1]),
-                method_version=str(row[2]),
-                operator=cast(ApprovalOperator, row[3]),
-                reviewer=str(row[4]),
-                review_doc_path=str(row[5]),
-                review_doc_blob_hash=str(row[6]),
-                approved_at=datetime.fromisoformat(str(row[7])),
-            )
-            for row in rows
-        )
+        return tuple(_approval_from_row(row) for row in rows)
+
+
+_APPROVAL_COLUMNS: Final = (
+    "kind, run_id, method_version, operator, reviewer, review_doc_path, "
+    "review_doc_blob_hash, approved_at"
+)
+
+
+def _approval_from_row(row: Sequence[object]) -> ApprovalRecord:
+    return ApprovalRecord(
+        kind=cast(ApprovalKind, row[0]),
+        run_id=str(row[1]),
+        method_version=str(row[2]),
+        operator=cast(ApprovalOperator, row[3]),
+        reviewer=str(row[4]),
+        review_doc_path=str(row[5]),
+        review_doc_blob_hash=str(row[6]),
+        approved_at=datetime.fromisoformat(str(row[7])),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1025,3 +1163,77 @@ class SectorMethodRegistry(_SectorDb):
                 "SELECT COUNT(*) FROM sector_method_registry WHERE counts_toward_m = 1"
             ).fetchone()
         return int(count)
+
+
+# ---------------------------------------------------------------------------
+# The card's read path (API process): four statements on one connection
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CardRead:
+    """Everything ``GET /api/sectors/momentum`` needs from the main DB."""
+
+    board: StoredBoard | None
+    #: Rows of the version that wrote the latest statistics row, oldest first.
+    stats_history: tuple[StatsRecord, ...]
+    #: Approvals of that same version.
+    approvals: tuple[ApprovalRecord, ...]
+    #: D0 of the requested method version (registry); None before D0 / unregistered.
+    accumulation_start: date | None
+    #: Why the statistics were refused on the way out (D-14, fail closed); None if not.
+    stats_rejected: str | None = None
+
+
+class SectorCardReader:
+    """The API's read of the card: one connection, at most four SQL statements.
+
+    1. the latest board (header, ranked, excluded) -- one JOIN;
+    2. the latest version's statistics with their check rows -- one LEFT JOIN;
+    3. that version's approvals;
+    4. the requested version's D0 from the registry.
+
+    The statistics are then re-admitted exactly as :class:`SectorStatsRepository`
+    does (D-14), with one call to ``verifier`` for every row's source runs.
+    ``busy_timeout`` is set through the connection's ``timeout`` (C-9), so no
+    ``PRAGMA`` statement is spent per request (C-6 counts statements).
+    """
+
+    def __init__(self, verifier: RunIdVerifier, db_path: str | Path | None = None) -> None:
+        self._db_path = ensure_schema(db_path)
+        self._verifier = verifier
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
+
+    def read(self, market: str, method_version: str) -> CardRead:
+        with closing(self._connect()) as conn:
+            board_rows = conn.execute(_board_sql(_LATEST_BOARD_ID_SQL), (market,)).fetchall()
+            stats_rows = conn.execute(
+                _stats_sql(f"s.method_version = {_LATEST_STATS_VERSION_SQL}")
+            ).fetchall()
+            approval_rows = conn.execute(
+                f"SELECT {_APPROVAL_COLUMNS} FROM sector_gate_approvals "
+                f"WHERE method_version = {_LATEST_STATS_VERSION_SQL} "
+                "ORDER BY approved_at, approval_id"
+            ).fetchall()
+            registry = conn.execute(
+                "SELECT accumulation_start FROM sector_method_registry WHERE method_version = ?",
+                (method_version,),
+            ).fetchone()
+        rejected: str | None = None
+        try:
+            history = _records_from_rows(stats_rows, self._verifier)
+        except BiasedDataRejected as exc:
+            history, rejected = (), str(exc)
+        return CardRead(
+            board=_board_from_rows(board_rows),
+            stats_history=history,
+            approvals=tuple(_approval_from_row(row) for row in approval_rows) if history else (),
+            accumulation_start=_date(cast(str | None, registry[0])) if registry else None,
+            stats_rejected=rejected,
+        )

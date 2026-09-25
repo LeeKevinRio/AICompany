@@ -25,8 +25,10 @@ _VERSION_PATTERN: Final = re.compile(r"^sector-rel-v(\d+)\.(\d+)-L(\d+)-H(\d+)$"
 ALLOWED_LOOKBACK_DAYS: Final[frozenset[int]] = frozenset({5, 20})
 
 #: ``PanelFrames.listing.security_type`` value of an ordinary listed share.
-#: The listing snapshot is already the positive filter ``STOCK_DAY_ALL`` ∩
-#: ``t187ap03_L`` (ADR-0012 D-3); this is the belt-and-braces type check.
+#: The listing snapshot is the full common-stock roster of ``t187ap03_L``
+#: (ADR-0012 D-3 as amended 2026-09-25: it no longer depends on that day's
+#: ``STOCK_DAY_ALL``; code 91 rows are typed ``tdr``); this is the
+#: belt-and-braces type check.
 COMMON_STOCK_SECURITY_TYPE: Final = "common_stock"
 
 

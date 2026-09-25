@@ -97,6 +97,7 @@ def test_frozen_family_fields_cannot_be_changed() -> None:
         (GateRules, {"min_effect": 0.01}),
         (GateRules, {"alpha": 0.10}),
         (GateRules, {"stale_after_sessions": 30}),
+        (GateRules, {"leak_margin": 0.1}),
         (UniverseRules, {"min_listing_sessions": 20}),
         (UniverseRules, {"min_median_traded_value": 5_000_000.0}),
         (UniverseRules, {"min_traded_sessions": 10}),

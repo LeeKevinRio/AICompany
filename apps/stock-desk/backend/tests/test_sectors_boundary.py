@@ -11,7 +11,7 @@ T-1 (C-1..C-5, C-17):
   string naming it);
 * C-3: advice, playbook, kelly, portfolio, alerts and signals never reach
   ``app.sectors``;
-* C-5: the future ``app.api.sectors`` router's direct imports (wave 3);
+* C-5: the ``app.api.sectors`` router's direct imports;
 * C-17: no score / rating vocabulary and no advice-engine field name in any
   identifier, attribute or string of ``app/sectors`` (docstrings excluded).
 
@@ -247,8 +247,7 @@ def test_other_packages_never_reach_sectors(package: str) -> None:
     assert offenders(reachable_app_modules(roots), "app.sectors") == []
 
 
-@pytest.mark.skipif(module_path(ROUTER) is None, reason="app.api.sectors lands in wave 3")
-def test_router_direct_imports() -> None:  # pragma: no cover - activates in wave 3
+def test_router_direct_imports() -> None:
     path = module_path(ROUTER)
     assert path is not None
     direct = imported_modules(path, ROUTER)

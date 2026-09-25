@@ -57,7 +57,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -248,6 +248,28 @@ def _to_utc_timestamp(recorded_at: str) -> pd.Timestamp:
     """
     ts = pd.Timestamp(recorded_at)
     return ts.tz_convert("UTC") if ts.tzinfo is not None else ts.tz_localize("UTC")
+
+
+def _numeric_ids(run_ids: Iterable[str]) -> list[int]:
+    numeric: list[int] = []
+    for value in run_ids:
+        try:
+            numeric.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return numeric
+
+
+def _existing_run_ids(conn: sqlite3.Connection, run_ids: Iterable[str]) -> set[str]:
+    """``MarketPanelStore.existing_run_ids`` on an open connection: one statement."""
+    numeric = _numeric_ids(run_ids)
+    if not numeric:
+        return set()
+    rows = conn.execute(
+        "SELECT run_id FROM pit_snapshot_runs WHERE run_id IN (SELECT value FROM json_each(?))",
+        (json.dumps(numeric),),
+    ).fetchall()
+    return {str(run_id) for (run_id,) in rows}
 
 
 def _canonical_content_hash(rows: Sequence[tuple[object, ...]]) -> str:
@@ -727,25 +749,15 @@ class MarketPanelStore:
         to real market-DB runs before accepting it. Non-numeric or blank
         values are simply never matched (never raised on) -- verifying
         *existence* is this method's whole job, not validating shape.
+
+        The ids travel as **one** JSON array parameter (``json_each``), not one
+        ``?`` per id: a statistics row over the full history names every
+        warm-up run (one per symbol per session, ~10^5 at real scale), far past
+        SQLite's bound-variable limit, and the API's SQL budget (C-6) counts
+        statements, so this must stay a single statement at any size.
         """
-        candidates = list(run_ids)
-        if not candidates:
-            return set()
-        numeric_ids: list[int] = []
-        for value in candidates:
-            try:
-                numeric_ids.append(int(value))
-            except (TypeError, ValueError):
-                continue
-        if not numeric_ids:
-            return set()
-        placeholders = ", ".join("?" * len(numeric_ids))
         with closing(self._connect()) as conn:
-            rows = conn.execute(
-                f"SELECT run_id FROM pit_snapshot_runs WHERE run_id IN ({placeholders})",  # noqa: S608 - '?' placeholders only
-                numeric_ids,
-            ).fetchall()
-        return {str(run_id) for (run_id,) in rows}
+            return _existing_run_ids(conn, run_ids)
 
     def load_panel_frames(self, start: date, end: date) -> PanelFrames:
         """Return the raw ``PanelFrames`` for ``[start, end]`` (by ``session_date``).
@@ -979,3 +991,56 @@ class MarketPanelStore:
                     }
                 )
         return pd.DataFrame(records, columns=list(EX_DIVIDEND_COLUMNS))
+
+
+class MarketPanelReader:
+    """Read-only access to the market DB for the API process (ADR-0012 D-1, C-6).
+
+    ``app.api.sectors`` reads the market DB and never writes it, so this class
+    opens it with ``mode=ro`` and never creates it: a missing file simply
+    reads as "no runs". Each method is one SQL statement on its own
+    connection; ``busy_timeout`` comes from the connection's ``timeout``
+    argument (C-9) rather than a ``PRAGMA`` statement, so the endpoint's
+    statement count (C-6, T-2) is exactly the queries it runs.
+    """
+
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self._db_path = Path(db_path) if db_path is not None else resolve_market_db_path()
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    def _connect(self) -> sqlite3.Connection | None:
+        if not self._db_path.is_file():
+            return None
+        uri = f"{self._db_path.resolve().as_uri()}?mode=ro"
+        return sqlite3.connect(uri, uri=True, timeout=_BUSY_TIMEOUT_MS / 1000)
+
+    def ok_sessions(self, start: date, end: date) -> dict[SnapshotKind, frozenset[date]]:
+        """Sessions in ``[start, end]`` with an ``ok`` run, per kind (one statement)."""
+        found: dict[SnapshotKind, set[date]] = {kind: set() for kind in _ALL_KINDS}
+        conn = self._connect()
+        if conn is None:
+            return {kind: frozenset() for kind in _ALL_KINDS}
+        with closing(conn):
+            rows = conn.execute(
+                "SELECT DISTINCT kind, session_date FROM pit_snapshot_runs "
+                "WHERE status = 'ok' AND session_date IS NOT NULL "
+                "AND session_date BETWEEN ? AND ?",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        for kind, session in rows:
+            if kind in found:
+                found[kind].add(date.fromisoformat(session))
+        return {kind: frozenset(days) for kind, days in found.items()}
+
+    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
+        """Which of ``run_ids`` exist (one statement); satisfies ``RunIdVerifier``."""
+        if not _numeric_ids(run_ids):
+            return frozenset()
+        conn = self._connect()
+        if conn is None:
+            return frozenset()
+        with closing(conn):
+            return frozenset(_existing_run_ids(conn, run_ids))

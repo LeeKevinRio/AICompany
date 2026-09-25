@@ -36,11 +36,20 @@ that run's own ``run_id`` (the content-addressed ``pit_*_rows`` tables are
 expanded per run by ``app.data.market_panel``), so a run's snapshot is exactly
 the rows carrying its ``run_id``.
 
+Speed (wave 3): :func:`_visible` and :func:`_resolve_bars` are the reference
+definition of the rules above. ``MarketPanel`` answers ``as_of`` through
+:class:`_PanelIndex` instead -- the history is sorted once with the resolution
+keys, and each view is a prefix slice plus vectorised masks -- and must return
+the same rows, order and dtypes (``tests/test_panel_index_equivalence.py``,
+part of the NE-7 attestation set). No decision or view is cached.
+
 The ``hindsight`` regime (ignores ``recorded_at``) exists for the biased
 research package only (ADR-0012 D-14). Its entry point here is the private
 ``_hindsight_view``; it is not exported, nothing under ``app.sectors`` may call
 it, and ``app.research.sector_biased.hindsight_view`` (wave 2) is the only
-sanctioned caller. ``tests/test_sectors_pit_invariance.py`` scans for it.
+sanctioned caller. ``tests/test_research_isolation.py`` fails if it is defined
+anywhere but here, referenced outside ``app/research/``, or if ``_VIEW_KEY``
+(which could build such a view directly) appears outside this module.
 """
 
 from __future__ import annotations
@@ -51,6 +60,7 @@ from datetime import date, datetime, time
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 #: Columns of ``PanelFrames.bars`` (one row per snapshot run x symbol).
@@ -216,23 +226,248 @@ def _normalise(frames: PanelFrames) -> PanelFrames:
     return PanelFrames(**out)
 
 
-def _resolve_bars(bars: pd.DataFrame) -> pd.DataFrame:
-    """One row per ``(session_date, symbol)``: source priority, then latest run."""
-    if bars.empty:
-        return bars.copy()
-    ranked = bars.assign(
+#: Sort keys of bar resolution: session, symbol, source priority, newest record, run id.
+_RESOLVE_KEYS: Final = ["session_date", "symbol", "_priority", "recorded_at", "run_id"]
+_RESOLVE_ASCENDING: Final = [True, True, True, False, True]
+
+
+def _with_priority(bars: pd.DataFrame) -> pd.DataFrame:
+    return bars.assign(
         _priority=[
             BARS_SOURCE_PRIORITY.get(str(source), _UNKNOWN_SOURCE_PRIORITY)
             for source in bars["source"]
         ]
     )
-    ranked = ranked.sort_values(
-        ["session_date", "symbol", "_priority", "recorded_at", "run_id"],
-        ascending=[True, True, True, False, True],
-        kind="mergesort",
+
+
+def _resolve_bars(bars: pd.DataFrame) -> pd.DataFrame:
+    """One row per ``(session_date, symbol)``: source priority, then latest run.
+
+    The reference definition of bar resolution. :class:`MarketPanel` answers
+    the same question through :class:`_PanelIndex` (one sort for the whole
+    history instead of one per view); ``tests/test_panel_index_equivalence.py``
+    holds the two bit for bit equal.
+    """
+    if bars.empty:
+        return bars.copy()
+    ranked = _with_priority(bars).sort_values(
+        _RESOLVE_KEYS, ascending=_RESOLVE_ASCENDING, kind="mergesort"
     )
     resolved = ranked.drop_duplicates(["session_date", "symbol"], keep="first")
     return resolved.drop(columns="_priority").reset_index(drop=True)
+
+
+#: Sorts after every real ordinal / timestamp: a missing date or record time is never visible.
+_NEVER: Final = np.iinfo(np.int64).max
+#: ``date(1970, 1, 1).toordinal()``: day 0 of ``datetime64[D]``.
+_EPOCH_ORDINAL: Final = date(1970, 1, 1).toordinal()
+
+
+def _ordinals(column: pd.Series) -> np.ndarray:
+    """``date.toordinal()`` per row, vectorised; a missing date maps to :data:`_NEVER`."""
+    if column.empty:
+        return np.empty(0, dtype=np.int64)
+    stamps = pd.to_datetime(column, errors="coerce")
+    days = stamps.to_numpy().astype("datetime64[D]").astype(np.int64) + _EPOCH_ORDINAL
+    days[stamps.isna().to_numpy()] = _NEVER
+    return np.asarray(days, dtype=np.int64)
+
+
+def _nanoseconds(column: pd.Series) -> np.ndarray:
+    """UTC nanoseconds per row (``recorded_at`` is tz-aware UTC); NaT maps to :data:`_NEVER`."""
+    if column.empty:
+        return np.empty(0, dtype=np.int64)
+    values = np.array(column.array.as_unit("ns").asi8, dtype=np.int64)
+    values[column.isna().to_numpy()] = _NEVER
+    return values
+
+
+@dataclass(frozen=True)
+class _ResolvedBars:
+    """A view's resolved bars plus the keys its accessors slice by (rows sorted by session)."""
+
+    frame: pd.DataFrame
+    #: Session ordinal per row, ascending (resolution sorts by session first).
+    sessions: np.ndarray
+    #: Per row, a code into ``symbol_names`` (a factorisation of the symbols).
+    symbol_codes: np.ndarray
+    symbol_names: np.ndarray
+
+
+@dataclass(frozen=True)
+class _FrameKeys:
+    """Per-row visibility keys of one normalised frame, in the frame's own row order."""
+
+    session: np.ndarray
+    recorded: np.ndarray
+    #: Code of the row's ``run_id`` in the panel-wide run-id factorisation.
+    run: np.ndarray
+
+
+def _resolution_order(bars: pd.DataFrame, keys: _FrameKeys, symbol_codes: np.ndarray) -> np.ndarray:
+    """Row order of :func:`_resolve_bars`'s sort, computed from integer keys.
+
+    Session ascending, symbol ascending (``symbol_codes`` come from a sorted
+    factorisation), source priority ascending, ``recorded_at`` descending, run
+    id ascending; a missing date or record time sorts last, as pandas puts
+    ``NaT`` last. ``np.lexsort`` is stable, so rows equal on every key keep the
+    frame's own order -- exactly what the reference's ``kind="mergesort"`` does.
+    """
+    if bars.empty:
+        return np.empty(0, dtype=np.int64)
+    priority = (
+        bars["source"]
+        .astype(str)
+        .map(BARS_SOURCE_PRIORITY)
+        .fillna(_UNKNOWN_SOURCE_PRIORITY)
+        .to_numpy(dtype=np.int64)
+    )
+    newest_first = np.where(keys.recorded == _NEVER, _NEVER, -keys.recorded)
+    run_codes, _ = pd.factorize(bars["run_id"].to_numpy(dtype=object), sort=True)
+    # np.lexsort sorts by the last key first.
+    return np.lexsort(
+        (np.asarray(run_codes), newest_first, priority, symbol_codes, keys.session)
+    ).astype(np.int64)
+
+
+class _PanelIndex:
+    """Precomputed keys that make :meth:`MarketPanel.as_of` a slice, not a re-sort.
+
+    Built once per :class:`MarketPanel`. It is a pure acceleration of
+    :func:`_visible` followed by :func:`_resolve_bars` -- the same rows, in the
+    same order, with the same dtypes (``tests/test_panel_index_equivalence.py``)
+    -- and holds no decision, no ranking and no per-date cache:
+
+    * the bars are stably sorted **once** with exactly the resolution keys, so
+      the rows of any view are a subsequence of that order; ``session_date <=
+      t`` is then a prefix found by ``searchsorted``, and "first row per
+      ``(session, symbol)``" is a comparison with the previous row;
+    * ``run_id`` is factorised once across all frames, so "the run is a visible
+      ok run of the matching kind" is an array lookup instead of a string
+      ``isin``;
+    * dates and record times are integer arrays, so the window tests are
+      vectorised comparisons instead of object comparisons.
+    """
+
+    __slots__ = (
+        "_bar_order",
+        "_bar_symbol",
+        "_frames",
+        "_keys",
+        "_kind",
+        "_ok",
+        "_run_codes",
+        "_sorted",
+        "_symbol_names",
+    )
+
+    def __init__(self, frames: PanelFrames) -> None:
+        self._frames = frames
+        names = tuple(_FRAME_COLUMNS)
+        ids = [getattr(frames, name)["run_id"].to_numpy(dtype=object) for name in names]
+        codes, uniques = pd.factorize(np.concatenate(ids))
+        self._run_codes = len(uniques)
+        bounds = np.cumsum([0, *(len(part) for part in ids)])
+        self._keys: dict[str, _FrameKeys] = {}
+        for position, name in enumerate(names):
+            frame: pd.DataFrame = getattr(frames, name)
+            self._keys[name] = _FrameKeys(
+                session=_ordinals(frame["session_date"]),
+                recorded=_nanoseconds(frame["recorded_at"]),
+                run=np.asarray(codes[bounds[position] : bounds[position + 1]], dtype=np.int64),
+            )
+        runs = frames.runs
+        self._ok = (runs["status"] == "ok").to_numpy(dtype=bool)
+        self._kind = runs["kind"].to_numpy(dtype=object)
+
+        bars = frames.bars
+        keys = self._keys["bars"]
+        # Sorted factorisation: code order == string order, as the reference sort has it.
+        codes_by_symbol, symbol_names = pd.factorize(
+            bars["symbol"].to_numpy(dtype=object), sort=True
+        )
+        symbol_codes = np.asarray(codes_by_symbol, dtype=np.int64)
+        order = _resolution_order(bars, keys, symbol_codes)
+        self._bar_order = order
+        self._bar_symbol = symbol_codes[order]
+        self._symbol_names = np.asarray(symbol_names, dtype=object)
+        self._sorted = _FrameKeys(
+            session=keys.session[order], recorded=keys.recorded[order], run=keys.run[order]
+        )
+
+    def _window(self, keys: _FrameKeys, t_ord: int, cut_ns: int | None) -> np.ndarray:
+        mask = keys.session <= t_ord
+        if cut_ns is not None:
+            mask &= keys.recorded <= cut_ns
+        return mask
+
+    def visible(self, t: date, cut: pd.Timestamp | None) -> tuple[PanelFrames, _ResolvedBars]:
+        """:func:`_visible` then :func:`_resolve_bars`, answered from the precomputed keys."""
+        t_ord = t.toordinal()
+        cut_ns = int(cut.value) if cut is not None else None
+        frames = self._frames
+        run_mask = self._window(self._keys["runs"], t_ord, cut_ns)
+        ok_runs = run_mask & self._ok
+        run_codes = self._keys["runs"].run
+        ok_lookup: dict[str, np.ndarray] = {}
+        for name, kind in _FRAME_RUN_KIND.items():
+            lookup = np.zeros(self._run_codes, dtype=bool)
+            lookup[run_codes[ok_runs & (self._kind == kind)]] = True
+            ok_lookup[name] = lookup
+        resolved = self._resolve(t_ord, cut_ns, ok_lookup["bars"])
+        out: dict[str, pd.DataFrame] = {
+            "runs": frames.runs.take(np.flatnonzero(run_mask)).reset_index(drop=True),
+            "bars": resolved.frame,
+        }
+        for name in ("listing", "classification", "ex_dividend"):
+            keys = self._keys[name]
+            mask = self._window(keys, t_ord, cut_ns)
+            if name == "ex_dividend":
+                mask &= ok_lookup[name][keys.run]
+            else:
+                # Only the snapshot in force is ever read (PointInTimePanel.snapshot),
+                # so keep that run's rows and nothing else.
+                mask &= keys.run == self._latest_run(out["runs"], run_codes, run_mask, name)
+            frame: pd.DataFrame = getattr(frames, name)
+            out[name] = frame.take(np.flatnonzero(mask)).reset_index(drop=True)
+        return PanelFrames(**out), resolved
+
+    def _latest_run(
+        self, visible_runs: pd.DataFrame, run_codes: np.ndarray, run_mask: np.ndarray, kind: str
+    ) -> int:
+        """Code of the run :meth:`PointInTimePanel.snapshot` picks for ``kind``; -1 if none."""
+        codes = run_codes[run_mask]
+        candidates = np.flatnonzero(
+            (visible_runs["kind"] == kind).to_numpy(dtype=bool)
+            & (visible_runs["status"] == "ok").to_numpy(dtype=bool)
+        )
+        if candidates.size == 0:
+            return -1
+        ordered = visible_runs.take(candidates).sort_values(
+            ["session_date", "recorded_at", "run_id"], kind="mergesort"
+        )
+        # ``take`` keeps the row labels of ``visible_runs`` (a RangeIndex): a position.
+        return int(codes[int(ordered.index[-1])])
+
+    def _resolve(self, t_ord: int, cut_ns: int | None, ok_lookup: np.ndarray) -> _ResolvedBars:
+        keys = self._sorted
+        prefix = int(np.searchsorted(keys.session, t_ord, side="right"))
+        mask = ok_lookup[keys.run[:prefix]]
+        if cut_ns is not None:
+            mask &= keys.recorded[:prefix] <= cut_ns
+        rows = np.flatnonzero(mask)
+        sessions = keys.session[rows]
+        symbols = self._bar_symbol[rows]
+        first = np.ones(rows.size, dtype=bool)
+        first[1:] = (sessions[1:] != sessions[:-1]) | (symbols[1:] != symbols[:-1])
+        picked = rows[first]
+        frame = self._frames.bars.take(self._bar_order[picked]).reset_index(drop=True)
+        return _ResolvedBars(
+            frame=frame,
+            sessions=keys.session[picked],
+            symbol_codes=self._bar_symbol[picked],
+            symbol_names=self._symbol_names,
+        )
 
 
 @dataclass(frozen=True)
@@ -266,6 +501,8 @@ class PointInTimePanel:
     """
 
     __slots__ = (
+        "_bar_sessions",
+        "_bar_symbols",
         "_bars",
         "_classification",
         "_cutoff",
@@ -285,6 +522,7 @@ class PointInTimePanel:
         regime: Regime,
         cutoff_at: pd.Timestamp | None,
         frames: PanelFrames,
+        resolved: _ResolvedBars | None = None,
     ) -> None:
         if key is not _VIEW_KEY:
             raise TypeError("PointInTimePanel is built by MarketPanel.as_of() only")
@@ -293,12 +531,33 @@ class PointInTimePanel:
         self._decision_date = decision_date
         self._regime: Regime = regime
         self._cutoff = cutoff_at
-        self._bars = _resolve_bars(frames.bars)
+        if resolved is None:
+            # Reference path: resolve the visible rows here (the indexed path
+            # hands in the identical result, already resolved).
+            bars = _resolve_bars(frames.bars)
+            codes, names = pd.factorize(bars["symbol"].to_numpy(dtype=object))
+            resolved = _ResolvedBars(
+                frame=bars,
+                sessions=_ordinals(bars["session_date"]),
+                symbol_codes=np.asarray(codes, dtype=np.int64),
+                symbol_names=np.asarray(names, dtype=object),
+            )
+        self._bars = resolved.frame
+        self._bar_sessions = resolved.sessions
+        self._bar_symbols = (resolved.symbol_codes, resolved.symbol_names)
         self._listing = frames.listing
         self._classification = frames.classification
         self._ex_dividend = frames.ex_dividend
         self._runs = frames.runs
-        self._sessions: tuple[date, ...] = tuple(sorted(set(self._bars["session_date"])))
+        self._sessions: tuple[date, ...] = tuple(
+            date.fromordinal(int(ordinal)) for ordinal in np.unique(self._bar_sessions)
+        )
+
+    def _session_rows(self, first: date, last: date) -> slice:
+        """Row positions of resolved bars with ``first <= session_date <= last``."""
+        low = int(np.searchsorted(self._bar_sessions, first.toordinal(), side="left"))
+        high = int(np.searchsorted(self._bar_sessions, last.toordinal(), side="right"))
+        return slice(low, max(low, high))
 
     # -- identity -----------------------------------------------------------
 
@@ -342,8 +601,7 @@ class PointInTimePanel:
     def bars(self, start: date, end: date) -> pd.DataFrame:
         """Resolved bar rows with ``start <= session_date <= end``."""
         self._check(end)
-        mask = (self._bars["session_date"] >= start) & (self._bars["session_date"] <= end)
-        return self._bars.loc[mask].reset_index(drop=True).copy()
+        return self._bars.iloc[self._session_rows(start, end)].reset_index(drop=True).copy()
 
     def field_matrix(
         self, field: str, days: Sequence[date], symbols: Sequence[str] | None = None
@@ -354,7 +612,16 @@ class PointInTimePanel:
         for day in days:
             self._check(day)
         wanted_days = list(days)
-        rows = self._bars.loc[self._bars["session_date"].isin(set(wanted_days))]
+        # Rows of each wanted session are one contiguous block (resolution sorts
+        # by session first); taking the blocks in session order keeps the rows
+        # in the frame's own order, exactly as a boolean ``isin`` mask would.
+        blocks = [
+            np.arange(block.start, block.stop)
+            for day in sorted(set(wanted_days))
+            if (block := self._session_rows(day, day)).stop > block.start
+        ]
+        positions = np.concatenate(blocks) if blocks else np.empty(0, dtype=np.int64)
+        rows = self._bars.iloc[positions]
         if symbols is not None:
             rows = rows.loc[rows["symbol"].isin(set(symbols))]
         values = pd.to_numeric(rows[field], errors="coerce").astype(float)
@@ -373,13 +640,19 @@ class PointInTimePanel:
         """The earliest visible session each symbol has a bar on."""
         if self._bars.empty:
             return {}
-        firsts = self._bars.groupby("symbol", sort=True)["session_date"].min()
-        return {str(symbol): day for symbol, day in firsts.items()}
+        # Rows are sorted by session, so a symbol's first row is its earliest session.
+        codes, names = self._bar_symbols
+        present, first_rows = np.unique(codes, return_index=True)
+        sessions = self._bars["session_date"].to_numpy(dtype=object)
+        firsts = {
+            str(names[code]): sessions[row] for code, row in zip(present, first_rows, strict=True)
+        }
+        return {symbol: firsts[symbol] for symbol in sorted(firsts)}
 
     def bars_source_on(self, day: date) -> str | None:
         """Source of the preferred resolved rows on ``day`` (the board's data source)."""
         self._check(day)
-        rows = self._bars.loc[self._bars["session_date"] == day]
+        rows = self._bars.iloc[self._session_rows(day, day)]
         if rows.empty:
             return None
         counts = rows["source"].astype(str).value_counts()
@@ -437,10 +710,11 @@ class MarketPanel:
     receives one (C-14). Decisions go through :meth:`as_of`.
     """
 
-    __slots__ = ("_frames",)
+    __slots__ = ("_frames", "_index")
 
     def __init__(self, frames: PanelFrames) -> None:
         self._frames = _normalise(frames)
+        self._index = _PanelIndex(self._frames)
 
     @property
     def frames(self) -> PanelFrames:
@@ -450,17 +724,24 @@ class MarketPanel:
     def as_of(self, t: date) -> PointInTimePanel:
         """The ``regime="pit"`` view of decision date ``t`` (ADR-0012 D-2, D-6)."""
         cut = cutoff(t)
+        frames, resolved = self._index.visible(t, cut)
         return PointInTimePanel(
             key=_VIEW_KEY,
             decision_date=t,
             regime="pit",
             cutoff_at=cut,
-            frames=_visible(self._frames, t, cut),
+            frames=frames,
+            resolved=resolved,
         )
 
 
 def _visible(frames: PanelFrames, t: date, cut: pd.Timestamp | None) -> PanelFrames:
-    """Rows a decision on ``t`` may read; ``cut=None`` skips the recorded_at test."""
+    """Rows a decision on ``t`` may read; ``cut=None`` skips the recorded_at test.
+
+    The reference definition of visibility; :class:`_PanelIndex` answers the
+    same question for :meth:`MarketPanel.as_of` and must stay bit-identical to
+    it (``tests/test_panel_index_equivalence.py``).
+    """
 
     def in_window(frame: pd.DataFrame) -> pd.Series:
         mask = frame["session_date"] <= t
@@ -488,10 +769,12 @@ def _hindsight_view(panel: MarketPanel, t: date) -> PointInTimePanel:
     ``tests/test_sectors_pit_invariance.py`` fails if it appears outside this
     module and ``app/research/``.
     """
+    frames, resolved = panel._index.visible(t, None)
     return PointInTimePanel(
         key=_VIEW_KEY,
         decision_date=t,
         regime="hindsight",
         cutoff_at=None,
-        frames=_visible(panel.frames, t, None),
+        frames=frames,
+        resolved=resolved,
     )

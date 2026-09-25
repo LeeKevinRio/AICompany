@@ -23,6 +23,10 @@ def module_path(module: str) -> Path | None:
     """The source file for ``app.x.y``, module or package, or ``None``."""
     if module != "app" and not module.startswith("app."):
         return None
+    if module == "app":
+        # ``Path()`` has no name to give a suffix to; the root is its package file.
+        root = APP_ROOT / "__init__.py"
+        return root if root.is_file() else None
     relative = Path(*module.split(".")[1:])
     candidate = APP_ROOT / relative.with_suffix(".py")
     if candidate.is_file():

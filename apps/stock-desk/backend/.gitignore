@@ -9,3 +9,6 @@ htmlcov/
 *.db
 *.db-shm
 *.db-wal
+
+# ADR-0012 C-36: local NE-7 build attestation (scripts/attest_sector_gate.py)
+/app/_build/

@@ -17,6 +17,7 @@ from app.api import (
     playbook,
     portfolio,
     positions,
+    sectors,
     settings,
     signals,
 )
@@ -48,6 +49,7 @@ app.include_router(alerts.router)
 app.include_router(directory.router)
 app.include_router(playbook.router)
 app.include_router(kelly.router)
+app.include_router(sectors.router)
 
 
 @app.get("/health")

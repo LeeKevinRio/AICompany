@@ -53,7 +53,7 @@ from app.sectors.definition import GateRules, SectorMomentumDefinition
 from app.sectors.gate import EvaluationWindow, GateInputs, PitStatus
 from app.sectors.models import SelfcheckRecord, StatsRecord
 from app.sectors.store import BiasedDataRejected, SectorStatsRepository
-from tests.import_graph import APP_ROOT, module_path
+from tests.import_graph import APP_ROOT
 from tests.sector_eval_helpers import SyntheticMarket, boards_for, replace_frame, synthetic_market
 
 #: V1 with fewer T1 dates, only to keep CI time sane; every other value is V1's.
@@ -110,15 +110,13 @@ def test_evaluator_calls_the_core_function_objects() -> None:
 
 
 @pytest.mark.sector_ne7
-@pytest.mark.skipif(
-    module_path("app.services.sector_board") is None, reason="services.sector_board: wave 3"
-)
-def test_services_call_the_same_function_objects() -> None:  # pragma: no cover - wave 3
-    import importlib
+def test_services_call_the_same_function_objects() -> None:
+    from app.services import sector_board
 
-    board = importlib.import_module("app.services.sector_board")
-    assert board.calculation_set is universe.calculation_set
-    assert board.rank_sectors is ranking.rank_sectors
+    assert sector_board.calculation_set is universe.calculation_set
+    assert sector_board.rank_sectors is ranking.rank_sectors
+    assert sector_board.calculation_set is sector_eval.calculation_set
+    assert sector_board.rank_sectors is sector_eval.rank_sectors
 
 
 def _definitions_of(names: Collection[str], root: Path = APP_ROOT) -> dict[str, list[str]]:
@@ -699,6 +697,30 @@ def test_skip_is_allowed_only_for_t3a_and_t8_below_thirty() -> None:
     assert not selfchecks_passed(skipped, 150, V1)
     other = _checks(**{sector_eval.T7: "skipped_insufficient_n"})
     assert not selfchecks_passed(other, 10, V1)
+
+
+@pytest.mark.sector_ne7
+def test_label_shuffle_is_skipped_not_passed_without_samples(market: SyntheticMarket) -> None:
+    """C-36 state semantics: with N = 0 nothing was shuffled, so it is a skip, not a pass."""
+    empty = sector_eval.evaluate(
+        market.panel,
+        FAST,
+        cost_model=CostModel(),
+        start=market.calendar[-3],
+        m=1,
+        seed=SEED,
+        pit_status=_pit_status(market),
+        de5_verified_on=DE5,
+    )
+    assert empty.sample_count == 0
+    statuses = {check.check_name: check.status for check in empty.selfchecks}
+    assert statuses[sector_eval.T8_SHUFFLE] == "skipped_insufficient_n"
+    assert statuses[sector_eval.T8] == "skipped_insufficient_n"
+    # The skip is T8's allowance (N < 30 only); past it the same status fails the set.
+    shuffle_skipped = _checks(**{sector_eval.T8_SHUFFLE: "skipped_insufficient_n"})
+    assert selfchecks_passed(shuffle_skipped, 0, V1)
+    assert not selfchecks_passed(shuffle_skipped, 30, V1)
+    assert not selfchecks_passed(shuffle_skipped, 150, V1)
 
 
 @pytest.mark.sector_ne7

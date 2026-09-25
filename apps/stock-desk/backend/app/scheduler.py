@@ -1,4 +1,4 @@
-"""Background scheduler: daily data refresh and alert evaluation.
+"""Background scheduler: data refresh, alert evaluation and the sector card's batch.
 
 Runs as ``python -m app.scheduler`` (unchanged, so the compose service command
 does not move) on APScheduler's ``BlockingScheduler``. Two interval jobs:
@@ -14,6 +14,27 @@ does not move) on APScheduler's ``BlockingScheduler``. Two interval jobs:
     exposes, then pushes any fired events to the configured webhooks. Both the
     interval and the cooldown come from the stored alert settings, re-read each
     tick so a settings change takes effect without a restart.
+
+and two cron jobs for the sector momentum card (ADR-0012 D-5), weekdays only,
+Asia/Taipei, each also run once at start-up:
+
+``pit_snapshot_capture`` (17:30 / 19:30 / 21:30)
+    One whole-market point-in-time capture into the market DB
+    (:func:`app.services.pit_snapshot.capture_once`: the four kinds succeed or
+    fail independently; a kind already ``ok`` for the session is skipped). The
+    classification kind reads ``t187ap03_L`` only; the directory sync that
+    writes positions is not run. Each capture is followed by a board refresh,
+    so a session's last board always reflects its last capture (T9 replays
+    exactly that view).
+
+``sector_board_refresh`` (17:45 / 19:45 / 21:45)
+    :meth:`app.services.sector_board.SectorBoardService.refresh`: D0, the
+    board of the latest session with an ``ok`` bars run (written only when it
+    changed), and a forward point-in-time evaluation whenever a new H-session
+    sample has completed. Serialised with the capture-chained refresh.
+
+Neither job back-fills, fills gaps or runs the biased research (C-11): the
+pre-D0 history is a CLI-only step before D0.
 
 Robustness rules, because a scheduler that dies silently is worse than no
 scheduler:
@@ -32,12 +53,14 @@ from __future__ import annotations
 import logging
 import os
 import signal
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from types import FrameType
 
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.advice.book import self_reported_net_worth
 from app.alerts.engine import SymbolSnapshot, evaluate_alerts
@@ -46,7 +69,9 @@ from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_directory_store,
     get_fx_provider,
+    get_index_resolver,
     get_kelly_input_store,
     get_market_resolver,
     get_position_store,
@@ -54,8 +79,13 @@ from app.api.deps import (
     get_valuator,
 )
 from app.api.kelly import kelly_inputs_for
+from app.data.market_panel import MarketPanelStore
+from app.data.providers.twse_snapshot import TwseSnapshotAdapter
 from app.positions.models import Market
+from app.services.index import load_market_benchmark
 from app.services.market import load_bars
+from app.services.pit_snapshot import CaptureSummary, capture_once
+from app.services.sector_board import RefreshResult, SectorBoardService
 
 #: How many calendar days of history the refresh job pulls per symbol.
 DATA_REFRESH_LOOKBACK_DAYS = 540
@@ -66,6 +96,17 @@ DATA_INTERVAL_ENV = "SCHEDULER_DATA_INTERVAL_MINUTES"
 ALERT_INTERVAL_ENV = "SCHEDULER_ALERT_INTERVAL_MINUTES"
 
 DEFAULT_DATA_INTERVAL_MINUTES = 24 * 60
+
+#: ADR-0012 D-5 job ids and schedule (weekdays, exchange time zone).
+PIT_CAPTURE_JOB_ID = "pit_snapshot_capture"
+SECTOR_REFRESH_JOB_ID = "sector_board_refresh"
+SECTOR_JOBS_TIMEZONE = "Asia/Taipei"
+SECTOR_JOBS_DAYS = "mon-fri"
+SECTOR_JOBS_HOURS = "17,19,21"
+PIT_CAPTURE_MINUTE = 30
+SECTOR_REFRESH_MINUTE = 45
+#: The start-up refresh waits for the start-up capture's own chained refresh.
+SECTOR_REFRESH_STARTUP_DELAY = timedelta(minutes=2)
 
 logger = logging.getLogger("scheduler")
 
@@ -165,6 +206,87 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
     return len(result.events)
 
 
+@lru_cache(maxsize=1)
+def get_market_panel_store() -> MarketPanelStore:
+    """The market DB store (its own file, ADR-0012 B3), one per process."""
+    return MarketPanelStore()
+
+
+def directory_names(symbols: Collection[str]) -> dict[str, str]:
+    """Display names for listed constituents, from the security directory (display only)."""
+    store = get_directory_store()
+    names: dict[str, str] = {}
+    for symbol in symbols:
+        entry = store.resolve(symbol)
+        if entry is not None:
+            names[symbol] = entry.name
+    return names
+
+
+def taiex_reference_return(start: date, end: date) -> float | None:
+    """TAIEX close ``start`` -> close ``end`` over the existing index path (D-9, ``backup``).
+
+    Reference only (the 「詳細」 ``reference_taiex_return_L``): never a ranking
+    input or a comparator. Any gap in the series is ``None``, never a guess.
+    """
+    try:
+        loaded = load_market_benchmark(get_index_resolver(), market="TW", start=start, end=end)
+    except Exception:
+        logger.exception("sector board: TAIEX reference unavailable")
+        return None
+    closes = {bar.date: bar.close for bar in loaded.bars}
+    first, last = closes.get(start), closes.get(end)
+    if first is None or last is None or first <= 0:
+        return None
+    return float(last / first - 1)
+
+
+@lru_cache(maxsize=1)
+def get_sector_board_service() -> SectorBoardService:
+    """One service per process: it serialises refreshes and remembers attempted samples."""
+    return SectorBoardService(
+        market_store=get_market_panel_store(),
+        names=directory_names,
+        reference_taiex=taiex_reference_return,
+    )
+
+
+def refresh_sector_board() -> RefreshResult:
+    """ADR-0012 D-5 ``sector_board_refresh``."""
+    result = get_sector_board_service().refresh()
+    logger.info(
+        "sector board refresh: session=%s board=%s stats=%s notes=%s",
+        result.session,
+        result.board_id,
+        result.stats_run_id,
+        ",".join(result.notes),
+    )
+    return result
+
+
+def capture_pit_snapshot() -> CaptureSummary:
+    """ADR-0012 D-5 ``pit_snapshot_capture``, followed by a board refresh."""
+    adapter = TwseSnapshotAdapter()
+    try:
+        summary = capture_once(adapter, get_market_panel_store())
+    finally:
+        adapter.close()
+    for record in summary.records:
+        logger.info(
+            "pit capture %s %s: status=%s rows=%d skipped_already_ok=%s",
+            summary.session_date,
+            record.kind,
+            record.status,
+            record.row_count,
+            record.skipped_already_ok,
+        )
+    try:
+        refresh_sector_board()
+    except Exception:
+        logger.exception("sector board refresh after capture failed; the capture stands")
+    return summary
+
+
 def _guarded(name: str, job: Callable[[], object]) -> Callable[[], None]:
     """Wrap a job so an exception is logged and the schedule survives it."""
 
@@ -211,10 +333,44 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         max_instances=1,
         coalesce=True,
     )
+    started = datetime.now(UTC)
+    engine.add_job(
+        _guarded(PIT_CAPTURE_JOB_ID, capture_pit_snapshot),
+        trigger=CronTrigger(
+            day_of_week=SECTOR_JOBS_DAYS,
+            hour=SECTOR_JOBS_HOURS,
+            minute=PIT_CAPTURE_MINUTE,
+            timezone=SECTOR_JOBS_TIMEZONE,
+        ),
+        id=PIT_CAPTURE_JOB_ID,
+        name="whole-market point-in-time snapshot capture",
+        max_instances=1,
+        coalesce=True,
+        # D-5: also once at start-up, so a machine that was off at 21:30 catches up.
+        next_run_time=started,
+    )
+    engine.add_job(
+        _guarded(SECTOR_REFRESH_JOB_ID, refresh_sector_board),
+        trigger=CronTrigger(
+            day_of_week=SECTOR_JOBS_DAYS,
+            hour=SECTOR_JOBS_HOURS,
+            minute=SECTOR_REFRESH_MINUTE,
+            timezone=SECTOR_JOBS_TIMEZONE,
+        ),
+        id=SECTOR_REFRESH_JOB_ID,
+        name="sector momentum board refresh",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=started + SECTOR_REFRESH_STARTUP_DELAY,
+    )
     logger.info(
-        "scheduler jobs registered: data_refresh every %d min, alert_evaluation every %d min",
+        "scheduler jobs registered: data_refresh every %d min, alert_evaluation every %d min, "
+        "%s and %s on weekdays at %s (Asia/Taipei)",
         data_minutes,
         alert_minutes,
+        PIT_CAPTURE_JOB_ID,
+        SECTOR_REFRESH_JOB_ID,
+        SECTOR_JOBS_HOURS,
     )
     return engine
 

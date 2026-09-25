@@ -32,11 +32,11 @@ a new risk review** (risk §9 IP-3); ``tests/test_sectors_gate.py`` pins it.
 
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Final, Literal, get_args
+from typing import Final, Literal, TypedDict, get_args
 
 from app.data.calendar import TradingCalendar
 from app.sectors.definition import SectorMomentumDefinition
@@ -104,6 +104,7 @@ ERROR_MALFORMED_GATE_CHECKS: Final = "malformed_gate_checks"
 ERROR_MIXED_VERSIONS: Final = "stats_history_mixes_versions"
 ERROR_CONSTITUENT_INVARIANT: Final = "constituent_invariant_violated"
 ERROR_T8_NOT_PRODUCED: Final = "t8_deltas_missing"
+ERROR_STATS_REJECTED: Final = "stats_rejected_on_read"
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +148,23 @@ def _kind_has_gap(status: PitStatus, kind: PitKind, window: EvaluationWindow) ->
         if carried > MAX_CARRIED_SESSIONS:
             return True
     return False
+
+
+def judged_window(
+    trading_days: Sequence[date], accumulation_start: date | None, holding_days: int
+) -> EvaluationWindow:
+    """The read-time judged period: the evaluator's main-phase decision dates.
+
+    Mirrors ``sector_eval``: from D0, every ``holding_days``-th session whose
+    holding window has completed within ``trading_days`` (non-overlapping
+    samples, methodology §5.1). Before D0 there is nothing judged.
+    """
+    days = tuple(sorted(set(trading_days)))
+    if accumulation_start is None:
+        return EvaluationWindow(decision_dates=(), trading_days=days)
+    first = bisect_left(days, accumulation_start)
+    decisions = days[first : max(first, len(days) - holding_days) : holding_days]
+    return EvaluationWindow(decision_dates=decisions, trading_days=days)
 
 
 def pit_gaps(
@@ -230,6 +248,9 @@ class GateInputs:
     #: latest row's); forward_pit only (the repository refuses anything else).
     stats_history: tuple[StatsRecord, ...]
     approvals: tuple[ApprovalRecord, ...]
+    #: The repository refused the statistics on the way out (D-14): fail closed as
+    #: NE-6, with no statistics row to publish.
+    stats_rejected: bool = False
 
 
 @dataclass(frozen=True)
@@ -419,6 +440,10 @@ def evaluate(inputs: GateInputs) -> GateOutcome:
         ):
             holds.add("lookahead_tests_failed")
 
+    if inputs.stats_rejected:
+        holds.add("data_quality")
+        errors.append(ERROR_STATS_REJECTED)
+
     if inputs.data_source == DEMO_DATA_SOURCE:
         holds.add("demo_data")
 
@@ -467,4 +492,39 @@ def evaluate(inputs: GateInputs) -> GateOutcome:
         gate_checks=_gate_checks(stats),
         fee_verified_on=fee,
         internal_errors=tuple(errors),
+    )
+
+
+class GateResponseFields(TypedDict):
+    """The D-10 fields :func:`response_fields` hands to the response model."""
+
+    gate_status: GateStatus
+    not_evaluated_reason: NotEvaluatedReason | None
+    not_evaluated_reasons: list[NotEvaluatedReason]
+    pit_gaps: list[PitGap]
+    accumulation: Accumulation
+    historical_stat: HistoricalStat | None
+    gate_checks: list[GateCheck] | None
+    fee_verified_on: str | None
+
+
+def response_fields(outcome: GateOutcome, *, insufficient: bool) -> GateResponseFields:
+    """The gate's part of the D-10 response: B-class state and A-class statistics.
+
+    The API unpacks this into ``SectorMomentumResponse`` so that ``gate_status``
+    keeps a single assignment site (C-20, T-17). When the whole card is
+    ``insufficient_data`` the A-class objects are dropped whatever the state
+    (IP-5, C-43); B-class fields are output unchanged for the record.
+    """
+    return GateResponseFields(
+        gate_status=outcome.gate_status,
+        not_evaluated_reason=outcome.not_evaluated_reason,
+        not_evaluated_reasons=list(outcome.not_evaluated_reasons),
+        pit_gaps=list(outcome.pit_gaps),
+        accumulation=outcome.accumulation,
+        historical_stat=None if insufficient else outcome.historical_stat,
+        gate_checks=(
+            None if insufficient or outcome.gate_checks is None else list(outcome.gate_checks)
+        ),
+        fee_verified_on=outcome.fee_verified_on,
     )

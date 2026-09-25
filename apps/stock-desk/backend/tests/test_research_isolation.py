@@ -50,7 +50,11 @@ from tests.import_graph import (
     offenders,
     reachable_app_modules,
 )
+from tests.sector_board_helpers import LiveCard, card_client, live_card, verified_runtime
 from tests.sector_eval_helpers import SyntheticMarket, synthetic_market
+
+#: The momentum response clock (fixed, so two responses can be compared byte for byte).
+CARD_NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
 
 RESEARCH_ROOT = APP_ROOT / "research"
 
@@ -61,8 +65,6 @@ GUARDED = (
     "app.backtest.sector_eval",
     "app.backtest.basket",
 )
-#: Wave 3 lands these; until then they must simply not exist.
-LATER_WAVES = frozenset({"app.api.sectors", "app.services.sector_board"})
 
 
 def _module_name(path: Path) -> str:
@@ -78,12 +80,10 @@ def _all_app_modules() -> list[str]:
 
 
 def _outside_research() -> tuple[str, ...]:
-    # ``app`` itself is left out: ``import_graph.module_path("app")`` cannot build a
-    # path for the bare root, and ``app/__init__.py`` imports nothing.
     return tuple(
         name
         for name in _all_app_modules()
-        if name != "app" and not (name == "app.research" or name.startswith("app.research."))
+        if not (name == "app.research" or name.startswith("app.research."))
     )
 
 
@@ -92,18 +92,16 @@ def _outside_research() -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def test_guarded_modules_resolve_or_belong_to_a_later_wave() -> None:
+def test_guarded_modules_resolve() -> None:
     for module in GUARDED:
-        if module_path(module) is None:
-            assert module in LATER_WAVES, f"{module} is missing"
+        assert module_path(module) is not None, f"{module} is missing"
     sectors = [name for name in _all_app_modules() if name.startswith("app.sectors")]
     assert "app.sectors.universe" in sectors and "app.sectors.store" in sectors
 
 
 @pytest.mark.parametrize("module", [*GUARDED, "app.sectors", "app.scheduler", "app.main"])
 def test_guarded_modules_never_reach_research(module: str) -> None:
-    if module_path(module) is None:
-        pytest.skip(f"{module} lands in a later wave")
+    assert module_path(module) is not None, module
     assert offenders(reachable_app_modules((module,)), "app.research") == []
 
 
@@ -227,6 +225,114 @@ def test_hindsight_scan_has_teeth(tmp_path: Path) -> None:
     )
     (tmp_path / "shadow.py").write_text("def hindsight_view(p, t):\n    pass\n", encoding="utf-8")
     assert _hindsight_offenders(tmp_path) == ["leak.py", "shadow.py"]
+
+
+# The private entry point behind ``hindsight_view`` (C-27, qa wave-2 finding): the
+# public-name scan above matches ``hindsight_view`` exactly and cannot see
+# ``app.data.panel._hindsight_view`` -- "private" is only a naming convention, any
+# module can import it. ``_VIEW_KEY`` is guarded with it, because holding the key
+# is enough to build a ``regime="hindsight"`` view without calling either.
+
+PANEL_RELATIVE = Path("data") / "panel.py"
+PRIVATE_HINDSIGHT = "_hindsight_view"
+VIEW_KEY = "_VIEW_KEY"
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _private_uses(path: Path, name: str) -> tuple[bool, bool]:
+    """``(defines, references)`` of ``name`` in ``path``: code, imports and strings."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = _docstring_ids(tree)
+    defines = references = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            defines |= node.name == name
+        elif isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Store):
+                defines |= node.id == name
+            else:
+                references |= node.id == name
+        elif isinstance(node, ast.Attribute):
+            references |= node.attr == name
+        elif isinstance(node, ast.alias):
+            references |= name in (node.name.split(".")[-1], node.asname)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # getattr(panel, "_hindsight_view"), importlib strings, ...
+            references |= id(node) not in docstrings and name in node.value
+    return defines, references
+
+
+def _private_hindsight_offenders(root: Path) -> list[str]:
+    """Where the private hindsight entry point or the view key escape their box.
+
+    * ``_hindsight_view`` is defined only in ``data/panel.py`` and referenced
+      only there and under ``research/``;
+    * ``_VIEW_KEY`` appears only in ``data/panel.py``.
+    """
+    found: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root)
+        in_panel = relative == PANEL_RELATIVE
+        in_research = "research" in relative.parts
+        defines, references = _private_uses(path, PRIVATE_HINDSIGHT)
+        if defines and not in_panel:
+            found.append(f"{relative.as_posix()}:defines {PRIVATE_HINDSIGHT}")
+        if references and not (in_panel or in_research):
+            found.append(f"{relative.as_posix()}:uses {PRIVATE_HINDSIGHT}")
+        if any(_private_uses(path, VIEW_KEY)) and not in_panel:
+            found.append(f"{relative.as_posix()}:uses {VIEW_KEY}")
+    return found
+
+
+def test_private_hindsight_entry_is_defined_in_panel_and_used_only_by_research() -> None:
+    assert _private_hindsight_offenders(APP_ROOT) == []
+    panel = APP_ROOT / PANEL_RELATIVE
+    assert _private_uses(panel, PRIVATE_HINDSIGHT)[0], "panel.py must define it"
+    users = [
+        path.relative_to(APP_ROOT).as_posix()
+        for path in sorted(RESEARCH_ROOT.rglob("*.py"))
+        if _private_uses(path, PRIVATE_HINDSIGHT)[1]
+    ]
+    assert users == ["research/sector_biased/hindsight.py"]
+
+
+def test_private_hindsight_scan_has_teeth(tmp_path: Path) -> None:
+    files = {
+        "data/panel.py": (
+            "_VIEW_KEY = object()\ndef _hindsight_view(p, t):\n    return _VIEW_KEY\n"
+        ),
+        "research/sector_biased/hindsight.py": (
+            "from app.data.panel import _hindsight_view\nv = _hindsight_view(p, t)\n"
+        ),
+        "research/sector_biased/shadow.py": "def _hindsight_view(p, t):\n    pass\n",
+        "sectors/leak.py": "from app.data.panel import _hindsight_view\n",
+        "api/attr.py": "import app.data.panel as panel\nv = panel._hindsight_view(p, t)\n",
+        "services/dynamic.py": "v = getattr(panel_module, '_hindsight_view')(p, t)\n",
+        "backtest/key.py": "from app.data.panel import _VIEW_KEY\n",
+        "data/rebind.py": "_hindsight_view = None\n",
+        "data/prose.py": '"""Mentions _hindsight_view in a docstring only."""\n',
+    }
+    for relative, source in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source, encoding="utf-8")
+    assert _private_hindsight_offenders(tmp_path) == [
+        "api/attr.py:uses _hindsight_view",
+        "backtest/key.py:uses _VIEW_KEY",
+        "data/rebind.py:defines _hindsight_view",
+        "research/sector_biased/shadow.py:defines _hindsight_view",
+        "sectors/leak.py:uses _hindsight_view",
+        "services/dynamic.py:uses _hindsight_view",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +566,45 @@ def test_the_repository_refuses_biased_records(
         repo.save(_record(run_id="r2", **overrides))
 
 
-@pytest.mark.skipif(module_path("app.api.sectors") is None, reason="app.api.sectors: wave 3")
-def test_api_response_ignores_the_research_db() -> None:  # pragma: no cover - wave 3
-    pytest.fail("wave 3: compare the momentum response with and without a populated research DB")
+def _momentum(card: LiveCard) -> bytes:
+    with card_client(
+        main_db=card.main_db,
+        market_db=card.market_db,
+        positions=card.positions,
+        runtime=verified_runtime(),
+        now=CARD_NOW,
+    ) as client:
+        response = client.get("/api/sectors/momentum")
+    assert response.status_code == 200
+    return response.content
+
+
+def test_api_response_ignores_the_research_db(
+    backfill_panel: tuple[SyntheticMarket, MarketPanel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-10: with the research DB present and populated, the response is byte-identical."""
+    card = live_card(tmp_path / "card", 8, now=CARD_NOW)
+    monkeypatch.setenv(RESEARCH_DB_PATH_ENV_VAR, str(tmp_path / "absent" / "research.db"))
+    without = _momentum(card)
+    assert not (tmp_path / "absent").exists()
+
+    market, panel = backfill_panel
+    research = tmp_path / "research" / "research.db"
+    store = ResearchStore(research)
+    report = run_biased_study(
+        panel,
+        V1,
+        cost_model=CostModel(),
+        start=market.calendar[70],
+        seed=4,
+        train_sessions=60,
+        test_sessions=20,
+    )
+    save_study(report, store)
+    before = research.read_bytes()
+    monkeypatch.setenv(RESEARCH_DB_PATH_ENV_VAR, str(research))
+    with_research = _momentum(card)
+    assert with_research == without
+    assert research.read_bytes() == before  # never opened, let alone written

@@ -7,8 +7,12 @@ classification, events, runs -- is replaced with noise (and extra noise rows
 are added). ``calculation_set``, ``rank_sectors`` and ``list_constituents``
 for day ``t`` must come out bit-for-bit identical.
 
+The three T-5 tests carry the ``sector_ne7`` marker: they belong to the NE-7
+CI attestation set (ADR-0012 D-8, C-36; ``scripts/attest_sector_gate.py``).
+
 Also here: the private hindsight entry point may only be referenced from
-``app/data/panel.py`` and ``app/research/`` (ADR-0012 D-14, C-27).
+``app/data/panel.py`` and ``app/research/`` (ADR-0012 D-14, C-27); the stricter
+definition / reference / view-key scan lives in ``tests/test_research_isolation.py``.
 """
 
 from __future__ import annotations
@@ -163,6 +167,7 @@ def _decision(market: MarketPanel, t: date) -> object:
     )
 
 
+@pytest.mark.sector_ne7
 def test_future_noise_never_changes_a_decision() -> None:
     rng = random.Random(SEED)
     market = _synthetic_market(rng)
@@ -179,6 +184,7 @@ def test_future_noise_never_changes_a_decision() -> None:
     assert ranked_somewhere, "the synthetic market must actually rank something"
 
 
+@pytest.mark.sector_ne7
 def test_the_noise_is_not_vacuous() -> None:
     """Teeth: the same noise applied to *visible* rows does change the decision."""
     rng = random.Random(SEED)
@@ -191,6 +197,7 @@ def test_the_noise_is_not_vacuous() -> None:
     assert _decision(MarketPanel(replace(frames, bars=bars)), t) != _decision(market, t)
 
 
+@pytest.mark.sector_ne7
 def test_the_view_refuses_the_future_it_filtered_out() -> None:
     market = _synthetic_market(random.Random(SEED))
     sessions = sorted(set(market.frames.bars["session_date"]))
