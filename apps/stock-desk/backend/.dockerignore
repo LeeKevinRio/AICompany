@@ -1,0 +1,74 @@
+# Docker build-context excludes for the stock-desk backend image.
+#
+# ADR-0012 C-52 governs why this file exists at all: the sector-momentum
+# *judgement* (NE-7's ci_passed_commit check) never runs inside this image --
+# it only runs on a host git checkout (Options K1). This image is still used
+# to serve the read-only API and, per compose.yaml, to run the scheduler
+# process for everything else (data refresh, alerts, PIT snapshot capture);
+# it is simply never the process that is allowed to *judge* the sector card.
+# Excluding tests/ below does not change that conclusion -- NE-7 already
+# fails closed inside any image because `.git` is absent (C-52), independent
+# of whether the test files happen to be present.
+#
+# Dockerfile only `COPY`s pyproject.toml, uv.lock and app/, so none of this
+# is actually copied into the image layers today; this file matters anyway
+# because .dockerignore controls what gets uploaded into the *build context*
+# sent to the Docker daemon, not just what a COPY instruction picks up -- a
+# broadened COPY (e.g. an accidental `COPY . .` in a future edit) must not be
+# able to smuggle any of this in either.
+
+# --- Secrets (never in the image, never even in the build context) ---
+# ADR-0012 C-52 explicit requirement.
+.env
+.env.*
+!.env.example
+*.key
+# Local OpenAI Codex CLI state/session data (company-wide convention, see
+# root .gitignore); may contain local session artifacts, never a build input.
+.codex/
+
+# --- Local NE-7 build attestation (ADR-0012 C-36, C-52) ---
+# app/_build/ci_attestation.json is meaningful only bound to the exact git
+# commit and worktree state it was produced on (scripts/attest_sector_gate.py
+# on the host checkout). Baking a stale copy into an image would be
+# misleading even though app.services.sector_attestation.verify() already
+# fails closed on a missing `.git` regardless (defense in depth, not the
+# primary control).
+app/_build/
+
+# --- Host virtual environment ---
+# The image builds its own venv via `uv sync --frozen` against uv.lock
+# inside the container; a host .venv/ is a different platform/arch (this
+# repo is developed and CI'd on Linux, but the operator's own workstation
+# may be Windows) and is large enough to slow every build context upload.
+.venv/
+
+# --- Bytecode and tool caches ---
+# Never needed at runtime; regenerated on first import. Keeping them out
+# also avoids ever shipping stale .pyc files that no longer match app/.
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local SQLite data files ---
+# The three ADR-0012 databases (main / market / research) and any dev/demo
+# DB must never be baked into an image: they hold real position data and,
+# per D-2, the market DB is an append-only PIT artifact that must not be
+# silently duplicated into an unrelated build. Runtime data always comes
+# from a mounted path (STOCK_DESK_DB_PATH / STOCK_DESK_MARKET_DB_PATH /
+# STOCK_DESK_RESEARCH_DB_PATH), never from the image.
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# --- Tests ---
+# Not needed to run the API or scheduler process; excluding them shrinks the
+# image and build context. Per the note above, this is a hygiene move only:
+# it does not change C-52's conclusion, since the image already cannot judge
+# (no `.git`) with or without tests/ present.
+tests/
