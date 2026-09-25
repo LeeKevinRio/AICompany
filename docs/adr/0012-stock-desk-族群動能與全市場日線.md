@@ -1,8 +1,8 @@
 # ADR-0012：stock-desk 族群動能排行與全市場日線
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-09-25 書面核可五項裁決事項，見派工單 §12）
 - 日期：2026-09-24
-- 決策者：tech-architect（草案）；待 CEO 核可
+- 決策者：tech-architect（草案）；CEO 核可（2026-09-25）
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
   - ADR-0002：SQLite WAL、單機、「所有市場資料存取走抽象介面」。本 ADR D-3 對後者做擴充解讀，見 §7。

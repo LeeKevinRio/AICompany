@@ -270,3 +270,21 @@ dev-lead 處置：欄位分立、`overall_*` 完整率欄位、{n1,n2,n3} 輸出
 | ADR NE-7 判定位置欄未標讀取時 | nit | 改為「`sector_eval`＋`gate.py`（讀取時比對 commit）」 |
 
 **規格包狀態：收斂，可送 CEO 核可。**
+
+## 12. CEO 核可（2026-09-25，逐字）
+
+> 五項都核可，開始施工
+
+核可範圍（dev-lead 2026-09-24 送審清單）：
+1. 第一階段不顯示歷史比例，採前瞻累積（下限約 3 年）；不書面接受偏誤、不強制顯示。
+2. 上櫃本階段排除，畫面常駐「僅上市」。
+3. 首頁新卡收合態 170 字、預設顯示 3 個族群。
+4. 同意 backtest-protocol 鐵律 3 的已知偏離（判定資料不切訓練窗，方法論 §5.3、ADR Consequences）。
+5. 同意 ADR-0012 架構（市場 DB 只增不刪、研究 DB 隔離；市場 DB 列最高備份等級），ADR-0012 轉 **accepted**；§7 對 ADR-0002 的擴充解讀一併核可。
+
+施工分波（dev-lead）：
+- 第一波（平行，檔案不重疊）：data-engineer 市場資料層與 PIT 快照、CEO 本機查證腳本；dev-lead 族群純核心、gate、store、邊界測試。
+- 第二波：quant-researcher 籃子回測器、`sector_eval`、偏誤研究隔離。
+- 第三波：dev-lead 編排、排程 job、API、核准 CLI、attestation。
+- 第四波：frontend-engineer 首頁卡；風控字面核對、qa-reviewer、qa-e2e 實機。
+每波 qa-reviewer 審過才 commit。
