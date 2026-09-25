@@ -169,3 +169,11 @@ def api_harness(
 def api_client(api_harness: ApiHarness) -> TestClient:
     """Just the HTTP client, for tests that do not need the fakes directly."""
     return api_harness.client
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # ADR-0012 D-8 / C-36: the NE-7 CI attestation set (T-5..T-9, T-13 CI halves
+    # plus T-15) is selected with ``-m sector_ne7`` by scripts/attest_sector_gate.py.
+    config.addinivalue_line(
+        "markers", "sector_ne7: ADR-0012 NE-7 CI attestation set (methodology T1-T9)"
+    )

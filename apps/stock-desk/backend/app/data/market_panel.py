@@ -1,8 +1,8 @@
 """SQLite-backed, append-only store for the forward-looking PIT snapshot (ADR-0012 D-2).
 
 Separate database file from the main store (``STOCK_DESK_DB_PATH`` /
-``price_bars_cache``) and from the research store
-(``STOCK_DESK_RESEARCH_DB_PATH``): ``STOCK_DESK_MARKET_DB_PATH`` (default
+``price_bars_cache``) and from the research store (its own file, named only
+inside ``app/research/``, C-27): ``STOCK_DESK_MARKET_DB_PATH`` (default
 ``./data/stock-desk-market.db``). This string must only appear here and in
 tests (T-3, C-8) -- no other module may import or hardcode it.
 

@@ -115,10 +115,16 @@ class GateRules:
     lookahead_sample_dates: int = 50
     #: Runtime checks that depend on statistics may skip only below this N.
     skip_allowed_below_samples: int = 30
+    #: T3a delta_leak: the leaked ranking must beat the real one by at least this
+    #: (p_leak - p_real >= leak_margin). Calibrated on CI synthetic data and frozen
+    #: with the version (methodology §11.1; tests/test_sector_eval_lookahead.py).
+    leak_margin: float = 0.20
 
     def __post_init__(self) -> None:
         if self.min_samples < 150 or self.min_effective_samples < 60:
             raise ValueError("sample thresholds may only be tightened")
+        if self.leak_margin < 0.20:
+            raise ValueError("leak_margin may only be tightened (>= 0.20)")
         if self.base_rate_floor < 0.5 or self.min_effect < 0.05:
             raise ValueError("base_rate_floor / min_effect may only be tightened")
         if not 0.0 < self.alpha <= 0.05:
