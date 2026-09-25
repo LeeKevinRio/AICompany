@@ -1,7 +1,7 @@
 # ADR-0012：stock-desk 族群動能排行與全市場日線
 
 - 狀態：accepted（CEO 2026-09-25 書面核可五項裁決事項，見派工單 §12）
-- 日期：2026-09-24（v7 文件性修訂：2026-09-25）
+- 日期：2026-09-24（v7 文件性修訂、v8 研究端敏感度變體：2026-09-25）
 - 決策者：tech-architect（草案）；CEO 核可（2026-09-25）
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
@@ -63,6 +63,7 @@
     - bootstrap 採固定長度 4 的 circular block（方法論「平均區塊長度」的取捨見 D-8 G2）；N_eff 以 N 為上限。
     - 登記 `GateRules.leak_margin = 0.20`（T3a δ_leak）；T3a 兩條件代數等價，只實作一次。
     - 釘住第二波 qa 認可的詮釋：G5 中點切半與子集 b、G6 窗口、T4 ② 重建的定義、整卡不足不構成樣本、標籤因子不可用即剔除、`GateCheck.detail` 恆為 None、T7 以目標成員比對。
+  - v8（2026-09-25）：新增 D-15 研究端敏感度變體（Options I2，採 quant-researcher 提案並依 tech-architect 裁決修改）、C-46～C-49、T-29～T-32；封住「以 v1 字串建構不同參數定義」的漏洞。判定門檻、m 規則、使用者可見字面皆不變；變體值早已登記於方法論 §11.1，不需 CEO 事前核可，以本紀錄知會 CEO。
 
 ## Context（背景）
 
@@ -182,6 +183,17 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 | --- | --- | --- | --- |
 | H1 與判定統計放同一張表，以欄位區分 | 簡單 | 只靠一個 WHERE 條件把關，任何一處漏寫就會外洩到 API | 否決 |
 | **H2 獨立 package `app/research/sector_biased/`＋獨立 DB 檔 `STOCK_DESK_RESEARCH_DB_PATH`＋hindsight 視圖工廠只在研究 package 內＋repository 拒收（採用）** | import 層、檔案層、型別層、執行期四層防線 | 多一個 package 與一個檔 | 低 |
+
+### I. 研究端敏感度變體（方法論 §11.1；v8）
+
+| 方案 | 優點 | 缺點 | 風險 |
+| --- | --- | --- | --- |
+| I1 維持現狀，只跑調嚴變體（NT$2,000 萬、成分數 8） | 零改碼 | 方法論 §11.1 登記的 NT$500 萬、成分數 3 永遠跑不了；調嚴變體若沿用 v1 字串就是同名不同參數，開新版號則會污染 registry | 否決 |
+| **I2 structural Protocol＋研究端具體型別＋已發布物件閘門（採用，見 D-15）** | 能帶放寬值的具體型別只存在於隔離的 package；核心函式物件仍是同一個（T-15 不破）；順帶封住同名不同參數的漏洞 | 核心參數由名義型別改為結構型別，mypy 的保證變弱，改由 runtime 閘門補上；各入口要逐一加閘門；測試 `FAST` 要改寫 | 低（有 T-30 的 teeth test） |
+| I3 在 `SectorMomentumDefinition` 加 `research_only` 旗標，或依版本前綴放寬驗證 | 改動小 | 繞過開關長在正式型別上，違反 D-12 與 C-24「沒有例外通道」 | 否決 |
+| I4 研究端以子類別覆寫 `__post_init__` | 改動最小 | 子類別實例能通過 isinstance，閘門若用 isinstance 會被穿透；也違反 Liskov 替換原則 | 否決 |
+| I5 研究端複製 universe／ranking | 正式碼不動 | 等於第二份實作，違反 T-15／方法論 T2，敏感度測到的是另一套碼 | 否決 |
+| I6 把下限驗證從 `__post_init__` 移到發布時才檢查 | 仍只有單一型別 | 任何 app 模組都能造出放寬的定義；T-12「建構即失敗」的保證會消失 | 否決 |
 
 ## Decision（決策）
 
@@ -385,7 +397,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
         - **讀取時**（`gate.py`）：輸入由 services 層在程序啟動時讀好後傳入，符合 C-24。`stats.running_commit` 與目前部署的 `ci_passed_commit` 不符即為 NE-7。
         - 這是本機的自我證明，不是外部 CI 簽章；執行期不查 GitHub。
         - **部署期間的預期行為**（qa 複審 medium）：API 程序與 scheduler 程序切換到新 commit 的時點不同時，讀取端會因 `stats.running_commit` 與部署的 `ci_passed_commit` 不符而短暫判為 NE-7，直到 scheduler 以新 commit 重新判定為止。這是預期行為、不是故障，不發告警；本機部署腳本應同時重啟兩個程序並在啟動後立即補跑一次判定（D-5）以縮短此窗口。交 devops-sre 納入部署手冊。
-        - T-1～T-4、T-10～T-12、T-14、T-16～T-21、T-23～T-28 屬合併門，不屬 NE-7，也不進 attestation 集合。
+        - T-1～T-4、T-10～T-12、T-14、T-16～T-21、T-23～T-32 屬合併門，不屬 NE-7，也不進 attestation 集合。
 
       | 方法論 | ADR 測試 | runtime（真實資料，每次判定） | CI（合成資料，合併門） |
       | --- | --- | --- | --- |
@@ -700,6 +712,44 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - `app.sectors.store.SectorStatsRepository.save()`／`load()` 只接受同時滿足以下條件的紀錄：`regime="pit"`、`data_regime="forward_pit"`、`source_run_ids` 全部存在於市場 DB 的 `pit_snapshot_runs`。其餘一律拋 `BiasedDataRejected`。
   - 看過偏誤研究後才提出的新版本要計入 m（D-6）。
 
+- **D-15 研究端敏感度變體（Options I2；方法論 §11.1「只列出，不拿來挑選」；v8）**
+  - 型別分層：`app/sectors/definition.py` 定義四個 structural `Protocol`，所有成員都宣告為唯讀 `@property`：
+    - `UniverseRulesView`（`UniverseRules` 的全部欄位）、`CoverageRulesView`（`CoverageRules` 的全部欄位）；
+    - `SectorCoreDefinition`：`method_version`、`lookback_days`、`universe: UniverseRulesView`、`coverage: CoverageRulesView`、`single_stock_dominance_share`；
+    - `SectorEvalDefinition`：在 `SectorCoreDefinition` 之上再加 `holding_days`、`open_limit_up_factor`、`gate: GateRules`。
+  - 參數型別：
+    - 改接 `SectorCoreDefinition`：`universe.eligible`、`universe.calculation_set`、`ranking.rank_sectors`、`coverage.assess`、`coverage.ex_dividend_feed_covered`；
+    - 改接 `CoverageRulesView`：`coverage.attribute`、`coverage.assess_card`、`coverage.card_from_counts` 的 `rules` 參數；
+    - `index.py`、`constituents.py` 目前沒有 definition 參數，不受影響；`coverage.published_thresholds` 維持 `SectorMomentumDefinition`；
+    - `sector_eval.evaluate_views` 及其下游（`decide`、`build_week`、`summarise`、`compute_statistics`、`candidate_gates` 等）改接 `SectorEvalDefinition`。
+  - `gate` 永遠是具體型別 `GateRules`：研究端也不得放寬判定門檻。
+  - 已發布定義：
+    - `definition.py` 新增 `PUBLISHED_DEFINITIONS: Final = (SECTOR_MOMENTUM_V1,)`、`published_versions()`、`is_method_version(s)`（取代外部直接使用私有的 `_VERSION_PATTERN`），以及 `require_published(d)`。
+    - `require_published(d)` 以物件同一性（`is`）比對 `PUBLISHED_DEFINITIONS`，並在呼叫當下讀取模組屬性。相等的複本、子類別實例、研究變體一律拋 `UnpublishedDefinition`。
+    - 新版本的流程：凍結 → 在同一個 commit 內加入常數並列入 `PUBLISHED_DEFINITIONS` → register。
+  - 必須先通過 `require_published` 的入口：
+    - `sector_eval.evaluate`、`sector_eval.to_stats_record`；
+    - `gate.GateInputs`（建構時）、`coverage.published_thresholds`；
+    - `SectorBoardStore.save_board`、`SectorMethodRegistry.register`；
+    - `services.sector_board` 與 `api.sectors` 取用定義的唯一函式。
+  - 只收字串的持久層：`SectorStatsRepository._admit` 對 `method_version ∉ published_versions()` 拋 `BiasedDataRejected`；核准 CLI 同樣拒收。
+  - 已知限制：物件同一性閘門只保護列管入口。繞過入口、直接呼叫 `evaluate_views` 後手動組出沿用已發布字串的 `StatsRecord` 再呼叫 `SectorStatsRepository.save()`，字串檢查擋不住。是否把 `save()` 改為同時收 definition 物件並在內部 `require_published`，由 tech-architect 在 D-15 實作派工時裁定；在那之前，這條路徑**沒有機制防線**：C-15／T-18 管的是 `forward_return*` 等識別字的定義位置，不管 `StatsRecord` 的建構或 `save()` 的呼叫者；唯一的防線是 code review 與最小權限開發流程，與 ADR-0007 揭露的唯讀邊界現況一致。
+  - 研究變體：
+    - 具體型別只能放在 `app/research/sector_biased/sensitivity.py`（`ResearchVariant`、`ResearchUniverseRules`、`ResearchCoverageRules`，都是 frozen dataclass）。
+    - 不得繼承 `SectorMomentumDefinition`、`UniverseRules`、`CoverageRules`、`GateRules`；不得對它們或 `SECTOR_MOMENTUM_*` 使用 `dataclasses.replace`；不得呼叫 `SectorMomentumDefinition(...)`。
+    - `method_version` 必須 fullmatch `^research-sens-[a-z0-9.]+(?:-[a-z0-9.]+)*$`，而且 `is_method_version()` 必須為 False。例如 `research-sens-v1.0-L5-H5-liq5m`。
+    - 每個變體都由一個已發布定義衍生，**只改一個參數**：`gate` 與基準是同一個物件，`lookback_days`、`holding_days`、`open_limit_up_factor` 與基準相等；`min_constituents` 至少為 3（C-35 要求 top2＋bottom1）。
+    - 變體表固定為 `SENSITIVITY_VARIANTS`，內容與方法論 §11.1 一致：流動性 NT$500 萬、NT$2,000 萬；最小成分數 3、8。要增減變體，須先修方法論 §11.1 並經 qa 審查。
+    - 每次執行都跑全部變體加上基準，全部寫入、全部列出，不得只跑或只存其中一部分。
+  - 資料範圍（同樣適用於 `run_biased_study`）：
+    - 只接受 `hindsight_view`，執行結果的 `regime` 必須為 `hindsight`；
+    - panel 裡所有 run 的 `source` 都必須是 `backfill_non_pit`；
+    - 所有 `session_date` 都必須早於 D0。D0 由市場 DB（唯讀）依 D-12 定義推得：四種 kind 第一次全部 `ok` 的交易日；還沒有 D0 時不設限。
+    - 違反任一條即拋錯，不寫入任何資料。
+  - m：資料與判定段不重疊，所以不計入 m（方法論 §3.2）。看過敏感度結果後才提出的新版本，依 D-14 設 `counts_toward_m=1`。
+  - 輸出：只寫研究 DB，每列帶 `bias_label`、`variant_of`（基準的 `method_version`）與 `variant_diff`。
+  - 滑價敏感度（10、20 bps）走 `CostModel`，不屬本條；研究端不得寫入 `verified_on`。
+
 ### 對實作的約束（逐條可檢查）
 
 - **C-1** `app.sectors` 各模組 transitively 可達的 `app.*` 模組，必須落在白名單 `{app.sectors.*, app.data.panel, app.data.interface, app.data.calendar, app.positions.sectors}` 之內。唯一例外：`app.sectors.store` 可以 import `app.data.cache`，但只能用 `resolve_db_path`。
@@ -717,7 +767,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-13** `refresh_market_data` 與 `DATA_REFRESH_LOOKBACK_DAYS` 不變。
 - **C-14** 純核心只接受 `PointInTimePanel`；`regime="pit"` 的實例只能由 `MarketPanel.as_of()` 產生；判定端的可見性一律是 `recorded_at ≤ cutoff(t)`。
 - **C-15** forward return、標籤、成本扣除只存在於 `basket.py` 與 `sector_eval.py`；研究 package 內的複本受 C-27 隔離。機械檢查：識別字 `forward_return*`、`excess_gross`、`excess_net`、`label_return*`、`round_trip_cost` 只能在 `app/backtest/basket.py`、`app/backtest/sector_eval.py`、`app/research/**` 定義。既有的 `app/backtest/event_study.py::forward_returns` 列入白名單：它在 v4 之前就存在，且 C-2 已保證 `app.sectors` 碰不到它（T-18）。
-- **C-16** 定義只有一處；`method_version` 必須與 `lookback_days`、`holding_days` 一致；L ∈ {5, 20}；API 不跨版本配對；切換版本須寫入 `sector_method_registry`。
+- **C-16** 定義只有一處；`method_version` 必須與 `lookback_days`、`holding_days` 一致；L ∈ {5, 20}；API 不跨版本配對；切換版本須寫入 `sector_method_registry`。已發布定義只存在 `PUBLISHED_DEFINITIONS`；研究變體不是 method version（D-15）。
 - **C-17** 成分股依 `(−return_L, symbol)` 排序，取 `[0, 1, −1]`；不使用 advice 或 signals 的輸出；`app/sectors` 內不得出現 score／rating 類識別字。
 - **C-18** 報酬函式只有一處；回看窗排除窗內有除權息的成分股；`TWT48U_ALL` 沒涵蓋最近 L 日時，整卡回 `insufficient_data`。
 - **C-19** 判定用 p_net 對 `b = max(q_gross, 0.5)`、效果量 ≥ 5pp、信賴水準 1 − 0.05/m，門檻只能調嚴；主視圖呈現 p_net 對 q_net；p_net 與 q_gross 不得並排。
@@ -758,6 +808,10 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 - **C-43** 不足狀態下，`sectors == []`、`excluded_sectors == []`、`historical_stat is None`、`gate_checks is None`（IP-5）；`data_as_of`、`data_source`、`data` 照常輸出（IP-6）。前端不得渲染任何排名、族群名稱、成分股、NE 句或歷史句，只渲染該原因的定稿句、三類排除檔數與 IP-6 常駐項。傳給 `InsufficientPanel` 的 reason 不得為 null（IP-1）（T-27）。
 - **C-44** ③④⑤ 的 {x}／{門檻} 同名不同義，API 分立欄位：③ `completeness_pct_display`／`overall_coverage_threshold`、④ `computable_ratio_pct_display`／`computable_ratio_min`、⑤ `sector_coverage_threshold`。前端每個原因句模板只綁定自己的欄位，不得共用變數；{a}、{e} 在 ③④ 同名同義，取自同一欄位。⑤ 的 {n1}／{n2}／{n3} 取自 `excluded_reason_counts`，依 C-39 歸因順序計數，三者相加等於可排名族群總數（派工單 §10）（T-28）。
 - **C-45** 族群卡不得使用個股頁常數 `AS_OF_DATE_UNKNOWN_FULL_STATEMENT`；① `as_of_unknown` 用本卡獨立常數（派工單 §10 定稿）。交易日曆無法確認時沿用 `AS_OF_CALENDAR_UNCONFIRMED_STATEMENT` 維持（T-28）。
+- **C-46** 四個 definition Protocol 只能定義在 `app/sectors/definition.py`，成員都是唯讀 property。D-15 逐一列舉的 `app.sectors` 函式與 `sector_eval.evaluate_views` 及其下游的定義參數依 D-15 標註 Protocol；`gate` 一律是 `GateRules`（T-29）。
+- **C-47** 會落地或輸出的入口都先經 `require_published`（物件同一性）；`SectorStatsRepository` 與核准 CLI 拒收未發布的 `method_version`。相等的複本、子類別實例、研究變體全部被拒（T-30）。
+- **C-48** 研究變體的具體型別只在 `app/research/sector_biased/sensitivity.py`：不繼承、不 replace、不建構已發布型別；`method_version` 屬 `research-sens-` 命名空間且不符合 `_VERSION_PATTERN`；每個變體只改一個參數、`gate` 與基準同一物件；`SENSITIVITY_VARIANTS` 與方法論 §11.1 一致；全部一起跑、全部列出（T-31）。
+- **C-49** 偏誤研究與敏感度只接受 hindsight 視圖、`backfill_non_pit` 來源、早於 D0 的交易日，違反即拋錯且不寫入；結果只進研究 DB。看過敏感度後提出的新版本 `counts_toward_m=1`，由 qa 在審查 register 呼叫時確認（T-32）。
 
 ## 測試策略（全部離線；對應方法論 §8 T1～T10）
 
@@ -911,6 +965,10 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 同一份 payload 下，③④ 句中的 {a}、{e} 取自同一欄位且值相等；③ 句只綁 `completeness_pct_display`／`overall_coverage_threshold`，④ 句只綁 `computable_ratio_pct_display`／`computable_ratio_min`，⑤ 句只綁 `sector_coverage_threshold`；以不同門檻值的 fixture 斷言 ③ 句不印 ④ 的門檻、④ 句不印 ③ 的門檻。
   - `no_sector_computable` 時 `excluded_reason_counts` 非 null，三個計數相加等於可排名族群總數；其他狀態為 None。
   - 前端原始碼掃描：族群卡元件與 wording 模組不得引用 `AS_OF_DATE_UNKNOWN_FULL_STATEMENT`；`as_of_unknown` 渲染本卡獨立常數。
+- **T-29** mypy strict 通過，且 CI 內有把 `ResearchVariant` 指派給 `SectorEvalDefinition` 的型別斷言；AST 檢查四個 Protocol 只定義在 definition.py，並檢查 D-15 逐一列舉之函式的 `definition`／`rules` 參數註記；`gate.py`、`store.py`、`published_thresholds` 維持 `SectorMomentumDefinition`。
+- **T-30** 表格驅動：對 C-47 的每個入口，分別餵入研究變體、`dataclasses.replace(SECTOR_MOMENTUM_V1)` 的相等複本、子類別實例、沿用 v1 字串的調嚴複本，全部必須被拒；`SECTOR_MOMENTUM_V1` 本身必須被接受。repository 與 registry 對未知字串必須拒收。teeth test：AST 確認每個入口函式本體都呼叫 `require_published`，暫存檔移除呼叫後測試必須失敗。
+- **T-31** AST 掃描 `app/research/**`：沒有繼承、`replace`、建構已發布型別的程式碼。`ResearchVariant` 對 `sector-rel-*` 字串與不合命名空間的字串都拒絕；與基準的差異欄位恰好一個；`variant.gate is base.gate`；`SENSITIVITY_VARIANTS` 恰為兩條各自獨立的變體軸，共四個變體：流動性 {5e6, 2e7}（成分數維持基準）、最小成分數 {3, 8}（流動性維持基準），不含交叉組合。
+- **T-32** 分別餵入 PIT 視圖、非 backfill 來源、含 ≥ D0 交易日的 panel，都必須拋錯且研究 DB 的列數不變；一次執行的輸出含基準加上全部變體；敏感度路徑用的 `calculation_set` 與 `rank_sectors` 與 `app.sectors` 中的函式是同一個物件；沿用 T-10，研究 DB 存在與否，API 回應都完全相同。
 
 **約束 ↔ 測試對照**
 
@@ -931,6 +989,8 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 | C-13 | T-3 | C-28 | T-14 | C-43 | T-27 |
 | C-14 | T-5 | C-29 | T-11、T-14 | C-44 | T-28 |
 | C-15 | T-18 | C-30 | T-14、T-26、T-27 | C-45 | T-28 |
+| C-46 | T-29 | C-47 | T-30 | C-48 | T-31 |
+| C-49 | T-32 | | | | |
 
 方法論 T1～T10 與 ADR 測試、runtime／CI 的對照見 D-8。
 
@@ -954,6 +1014,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 資料量：前瞻每年約 1,100 × 245 ≈ 27 萬列日線；名單、分類、除權息用內容定址去重。實際量待實測。
   - 只含上市，「僅上市」標記常駐；上櫃的記憶體股、IC 設計股都會缺席。
   - 新增 2 個 job、約 12 張表；API 程序與 scheduler 程序的限流不共享。
+  - 核心定義參數由名義型別改為結構型別（D-15），型別層保證變弱，改由 C-47 runtime 閘門補足；以 v1 字串建構的測試定義（如 `tests/test_sector_eval.py::FAST`）須改為 monkeypatch `PUBLISHED_DEFINITIONS` 或直接呼叫 `evaluate_views`。敏感度只存在於 D0 前的偏誤資料；前瞻資料上的敏感度會計入 m，v1 不做。
   - **對 backtest-protocol 鐵律 3（walk-forward 分割）的已知偏離**：判定資料（`forward_pit`）不切訓練窗，整段視為樣本外；walk-forward 只保留每 126 日一段的測試窗幾何，用於分段報告（G5）。理由是 v1 參數在 D0 前凍結並 commit，沒有任何參數用前瞻資料擬合（方法論第四版 §5.3）。偏誤版研究仍依鐵律 3 分列樣本內與樣本外。此偏離列入 CEO 核可事項。
 - **已知限制**
   - `cutoff(t)` 取當地 23:59:59，所以 21:30 之後的更正要到次日才對決策可見。
