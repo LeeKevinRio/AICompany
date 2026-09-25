@@ -235,7 +235,9 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - **交易日由資料自證（DE-1'）**：
     - payload 帶交易日時，以 payload 為準。
     - payload 不帶交易日時，不得用時鐘推定。改用 FinMind 逐檔抽 3 檔（固定清單加隨機抽樣，seed 要記錄），比對 `expected_session` 那天的收盤價與成交量；完全相符才認定快照屬於該日，否則記 `failed`。
-  - 上市名單取自 `STOCK_DAY_ALL` 當日代號集合與 `t187ap03_L` 的交集（正向篩選）；分類取自 `t187ap03_L`；除權息取自 `TWT48U_ALL`。三者都是每日全量。
+  - 上市名單取自 `t187ap03_L` 的普通股全量（`security_type="common_stock"`；代碼 91 標 `tdr`）；分類取自 `t187ap03_L`；除權息取自 `TWT48U_ALL`。三者都是每日全量。
+    - **施工修訂（dev-lead 2026-09-25，qa 第一波 blocking）**：原寫法「`STOCK_DAY_ALL` 當日代號與 `t187ap03_L` 的交集」會讓名單隨日線一起縮水，使 bars 覆蓋率 0.98 閘門恆為通過（分母是分子的子集），且當日 PIT 名單被污染。改為名單不依賴當日日線；當日無成交或暫停交易的普通股仍在名單中，於下游計入第①類缺漏。
+    - bars 覆蓋率＝`|bars 代號 ∩ 名單普通股| ÷ |名單普通股|`，名單用同一次擷取的 `t187ap03_L`；該次失敗時用最近一份可見 ok listing；兩者皆無時 bars 只能標 `partial`。正常交易日的實際覆蓋率由 CEO 本機查證腳本量測（若本來就低於 0.98，閘門門檻須重新評估，送風控與 quant）。
   - 暖身回補只走 CLI：`python -m app.services.pit_snapshot --warmup --since YYYY-MM-DD`。
     - 用 FinMind 逐檔抓 D0 前至少 80 個交易日的日線（上市天數 60 加流動性 20 日窗）。以 symbol 為最小重試單位，一檔一個 transaction，checkpoint 記在 `market_backfill_progress`。
     - 寫成 `kind='bars'`、`source='finmind_warmup'` 的 run，`recorded_at` 必須早於 D0。**暖身必須在 D0 前完成**；D0 之後 CLI 拒絕執行暖身。
