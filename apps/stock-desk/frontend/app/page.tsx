@@ -7,6 +7,7 @@ import { SummaryCardsSkeleton, TableSkeleton } from "./components/SkeletonBlock"
 import { PositionsTable } from "./components/PositionsTable";
 import { RiskGauge } from "./components/RiskGauge";
 import { AlertStatusStrip } from "./components/AlertStatusStrip";
+import { SectorMomentumCard } from "./components/SectorMomentumCard";
 
 export default function HomePage() {
   const health = useHealth();
@@ -62,6 +63,13 @@ export default function HomePage() {
             )}
           />
         )}
+      </div>
+
+      {/* 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §1 FR-1）：
+          摘要卡之後、持倉明細之前——CEO 主動要求「直接顯示在首頁」的市場情
+          報，優先序高於持倉明細表格。 */}
+      <div className="mt-8">
+        <SectorMomentumCard />
       </div>
 
       <div className="mt-8">

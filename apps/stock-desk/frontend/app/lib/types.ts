@@ -1797,3 +1797,229 @@ export interface KellyImportRefusal {
   k_observed: number;
   k_distinct_specs: number;
 }
+
+/* ============================================================================
+ * 族群動能排行 (backend `app/sectors/models.py` + `app/api/sectors.py`,
+ * ADR-0012 D-10, verified field-for-field against source; D-10 is the single
+ * naming authority — do not rename to match an earlier methodology draft).
+ * `GET /api/sectors/momentum` — the homepage sector-momentum card (第四波,
+ * `work/stock-desk-族群動能-派工單.md` §12/§13).
+ * ==========================================================================*/
+
+/** Backend `GateStatus` (app/sectors/models.py). */
+export type SectorGateStatus = "passed" | "failed" | "not_evaluated";
+
+/** Backend `NotEvaluatedReason` (app/sectors/models.py) — NE-1..NE-8 + `pending_review`. */
+export type SectorNotEvaluatedReason =
+  | "pit_history_missing" // NE-1
+  | "accumulating" // NE-2
+  | "fee_unverified" // NE-3
+  | "stale_recompute" // NE-4
+  | "version_mismatch" // NE-5
+  | "data_quality" // NE-6
+  | "lookahead_tests_failed" // NE-7
+  | "demo_data" // NE-8
+  | "pending_review";
+
+/** Backend `ReasonCode` (app/sectors/models.py) — why one sector is excluded. */
+export type SectorReasonCode =
+  | "unranked_category"
+  | "too_few_members"
+  | "low_coverage"
+  | "ex_dividend_exclusion";
+
+/** Backend `PitGap` (app/sectors/models.py) — fixed output order (C-40). */
+export type SectorPitGap = "pit_universe" | "pit_classification" | "pit_ex_dividend" | "de5_unverified";
+
+/** Backend `InsufficientReason` (app/sectors/models.py) — fixed evaluation order (C-42). */
+export type SectorInsufficientReason =
+  | "as_of_unknown"
+  | "ex_dividend_feed_gap"
+  | "overall_completeness_low"
+  | "computable_ratio_low"
+  | "no_sector_computable";
+
+/** Backend `GateName` (app/sectors/models.py). */
+export type SectorGateName = "G1" | "G2" | "G3" | "G4" | "G5" | "G6";
+
+/** Backend `Accumulation` (app/sectors/models.py) — always present. */
+export interface SectorAccumulation {
+  accumulated_samples: number;
+  //: D0; `null` before D0 -> front end uses risk sentence 2' (派工單 §8-3).
+  accumulation_start: string | null;
+  required_samples: number;
+}
+
+/**
+ * Backend `HistoricalStat` (app/sectors/models.py) — rank 1 only, forward_pit
+ * only; `null` unless `gate_status` is `passed`/`failed` (A class, C-23).
+ */
+export interface SectorHistoricalStat {
+  rank_scope: "rank_1";
+  method_version: string;
+  m_at_evaluation: number;
+  sample_count: number;
+  effective_sample_count: number;
+  beat_count_net: number;
+  beat_count_gross: number;
+  //: q_net: the main-view comparator (risk §5-2, decided).
+  base_rate_net: number;
+  //: q_gross: enters the gate via `b`; detail view only.
+  base_rate_gross: number;
+  ci_low_net: number;
+  ci_high_net: number;
+  bootstrap_low_net: number;
+  bootstrap_high_net: number;
+  //: p_net - q_net, already in percentage points (risk §8-4 T8-2).
+  delta_real: number;
+  //: mean over label shuffles of (p_net - q_net), already in percentage points.
+  delta_shuffle: number;
+  benchmark: "equal_weight_market";
+  sample_start: string;
+  sample_end: string;
+  stats_as_of: string;
+  computed_at: string;
+  run_id: string;
+}
+
+/** Backend `GateCheck` (app/sectors/models.py) — `detail` is always `null` in v1. */
+export interface SectorGateCheck {
+  gate: SectorGateName;
+  passed: boolean;
+  detail: string | null;
+}
+
+/**
+ * Backend `Coverage` (app/sectors/models.py) — counts attribute each name
+ * once: missing -> ex-date -> corporate action.
+ */
+export interface SectorCoverage {
+  expected_count: number;
+  calculation_count: number;
+  missing_count: number;
+  ex_date_excluded_count: number;
+  corporate_action_excluded_count: number;
+  suspended_count: number | null;
+  coverage_ratio: number | null;
+  completeness_ratio: number | null;
+}
+
+/**
+ * Backend `ConstituentItem` (app/sectors/models.py). `held` is `null` when the
+ * positions lookup failed — the front end renders no badge then (risk §6.3
+ * H-2, C-34).
+ */
+export interface SectorConstituent {
+  symbol: string;
+  name: string;
+  return_L: number | null;
+  held: boolean | null;
+}
+
+/**
+ * Backend `SectorItem` (app/sectors/models.py) — one ranked sector.
+ * `constituents` is always length 3 for a ranked sector (top 2 then bottom 1,
+ * C-17/C-35); `turnover_value_ratio_5_20` / `reference_taiex_return_L` are
+ * detail-view only and never a ranking input (C-26).
+ */
+export interface SectorRankedItem {
+  rank: number;
+  sector_code: string;
+  sector_name: string;
+  sector_return_L: number | null;
+  benchmark_return_L: number | null;
+  rel_return_L: number | null;
+  up_count: number;
+  constituent_count: number;
+  turnover_value_ratio_5_20: number | null;
+  reference_taiex_return_L: number | null;
+  coverage: SectorCoverage;
+  top_contributor_share: number | null;
+  single_stock_dominated: boolean;
+  constituents: SectorConstituent[];
+}
+
+/** Backend `ExcludedSector` (app/sectors/models.py) — one non-ranked sector. */
+export interface SectorExcludedItem {
+  sector_code: string;
+  sector_name: string;
+  reason_code: SectorReasonCode;
+  //: c = |C_g(t,L)|
+  computable_count: number;
+  //: e = |E_g(t)|
+  expected_count: number;
+  coverage: SectorCoverage;
+}
+
+/** Backend `ExcludedReasonCounts` (app/sectors/models.py) — {n1}/{n2}/{n3} of the ⑤ sentence. */
+export interface SectorExcludedReasonCounts {
+  too_few_members: number;
+  low_coverage: number;
+  ex_dividend_exclusion: number;
+}
+
+/**
+ * Backend `SectorMomentumResponse[DataMeta]` (app/sectors/models.py, ADR-0012
+ * D-10) — `GET /api/sectors/momentum`. Field names are D-10's, verbatim; this
+ * is the single naming authority (qa re-review, dev-lead ruling 2026-09-24).
+ *
+ * Insufficient state (`status === "insufficient_data"`, C-43, IP-5): `sectors`
+ * and `excluded_sectors` are `[]`, `historical_stat`/`gate_checks` are `null`;
+ * `data_as_of`/`data_source`/`data` are still output (IP-6). The front end
+ * must not render any ranking, sector name, constituent or historical
+ * sentence in that state — only the `reason`, its detail sentence and the
+ * standing IP-6 items (`SectorMomentumCard.tsx`, `T-27`).
+ */
+export interface SectorMomentumResponse {
+  market: string;
+  status: PayloadStatus;
+  insufficient_reason: SectorInsufficientReason | null;
+  reason: string | null;
+  method_version: string | null;
+  lookback_days: number | null;
+  holding_days: number | null;
+  data_as_of: string | null;
+  //: Drives the standing 「僅上市」 tag (派工單 §12 核可第 2 項).
+  market_scope: "twse_only";
+  benchmark: "equal_weight_market";
+  //: Drives the NE-8 card-level warning when `"demo_synthetic"` (C-29, IP-6).
+  data_source: string;
+  coverage: SectorCoverage | null;
+  min_constituents: number;
+  sector_coverage_threshold: number;
+  overall_coverage_threshold: number;
+  computable_ratio: number | null;
+  computable_ratio_min: number;
+  //: {x} of reason ④; already floored to one decimal (C-37) — never re-rounded.
+  computable_ratio_pct_display: number | null;
+  //: {x} of reason ③; already floored to one decimal (C-37) — never re-rounded.
+  completeness_pct_display: number | null;
+  market_expected_count: number | null;
+  market_missing_count: number | null;
+  market_ex_date_excluded_count: number | null;
+  market_corporate_action_excluded_count: number | null;
+  market_ex_date_excluded_ratio: number | null;
+  ex_date_tag_ratio_min: number;
+  ex_date_tag: boolean;
+  //: Non-null iff `insufficient_reason === "no_sector_computable"` (C-44).
+  excluded_reason_counts: SectorExcludedReasonCounts | null;
+  //: Sectors shown collapsed (server constant; default 3, at most 5).
+  headline_count: number;
+  //: Full ranking incl. the tail; `[]` when insufficient (IP-5).
+  sectors: SectorRankedItem[];
+  excluded_sectors: SectorExcludedItem[];
+  gate_status: SectorGateStatus;
+  not_evaluated_reason: SectorNotEvaluatedReason | null;
+  not_evaluated_reasons: SectorNotEvaluatedReason[];
+  pit_gaps: SectorPitGap[];
+  accumulation: SectorAccumulation;
+  //: `null` whenever `gate_status !== "passed"/"failed"` or `status` is insufficient (C-23).
+  historical_stat: SectorHistoricalStat | null;
+  gate_checks: SectorGateCheck[] | null;
+  fee_verified_on: string | null;
+  //: Risk-approved, always rendered verbatim (never paraphrased) — the
+  //: backend's own standing/insufficient-reason sentences (ADR-0012 D-8).
+  disclosures: string[];
+  data: DataMeta;
+  as_of: string;
+}

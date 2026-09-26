@@ -34,6 +34,7 @@ import type {
   Position,
   PositionsResponse,
   SectorListResponse,
+  SectorMomentumResponse,
   SettingsResponse,
   SignalsResponse,
   UpdatePositionInput,
@@ -232,6 +233,18 @@ export function getPortfolioLimits(): Promise<PortfolioLimitsResponse> {
 /** The TWSE industry categories a TW position may declare (FR-12). */
 export function getSectors(): Promise<SectorListResponse> {
   return request<SectorListResponse>("/api/positions/sectors");
+}
+
+/**
+ * `GET /api/sectors/momentum` (ADR-0012 D-10, verified) — the homepage
+ * 族群動能排行 card (第四波). `market` defaults to `"TW"`, the only value the
+ * backend accepts today (`Literal["TW"]`); the parameter is kept for parity
+ * with every other endpoint's `market` query param rather than hard-coding
+ * the literal at every call site.
+ */
+export function getSectorMomentum(market: Market = "TW"): Promise<SectorMomentumResponse> {
+  const query = new URLSearchParams({ market });
+  return request<SectorMomentumResponse>(`/api/sectors/momentum?${query}`);
 }
 
 export function importPositionsCsv(file: File): Promise<ImportPositionsResponse> {

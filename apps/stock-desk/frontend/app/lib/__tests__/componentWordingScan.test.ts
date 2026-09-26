@@ -203,6 +203,13 @@ import {
   buildDecisionCardDistance,
 } from "../decisionCardWording";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
+import {
+  buildListingOrderSentence,
+  buildLookbackChip,
+  DEMO_DATA_CARD_WARNING,
+  SECTOR_CARD_TITLE,
+  TWSE_ONLY_TAG,
+} from "../sectorMomentumWording";
 
 /** P2 算式行改寫後，計算依據常數為 { formula, qualifier }；掃描與釘住以攤平字串進行。 */
 function flatBasis(item: BasisItem): string {
@@ -344,6 +351,10 @@ const SCANNED_FILES = [
   // 新元件與其專屬字面模組，先前都不在掃描清單內。
   "../../position/[symbol]/DecisionCard.tsx",
   "../decisionCardWording.ts",
+  // 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §12/§13）：新首頁
+  // 卡與其專屬字面模組，先前都不在掃描清單內。
+  "../../components/SectorMomentumCard.tsx",
+  "../sectorMomentumWording.ts",
 ] as const;
 
 /**
@@ -2208,5 +2219,25 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
     expect(end).toBeGreaterThan(start);
     const region = src.slice(start, end);
     expect(region).not.toMatch(/rose-|red-|green-|emerald-/);
+  });
+});
+
+/**
+ * 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §12/§13 風控逐字
+ * 定稿）：卡片標題、常駐 tag 與 NE-8 卡片層級警告逐字釘住。其餘句子（NE 原因
+ * 句、failed／passed 主視圖與詳細句、族群排除句等）由
+ * `sectorMomentumWording.test.ts` 逐句釘住，這裡只覆蓋跨檔案共用、最容易被
+ * 誤改的幾個常數，避免與該檔重複整份列表。
+ */
+describe("SectorMomentumCard — 標題與常駐 tag 定稿字面（§4.6 CL-2／§12／§6.1 NE-8）", () => {
+  it("標題、時間窗 chip、僅上市 tag、NE-8 卡片層級警告", () => {
+    expect(SECTOR_CARD_TITLE).toBe("族群動能排行");
+    expect(buildLookbackChip(5)).toBe("近 5 日");
+    expect(TWSE_ONLY_TAG).toBe("僅上市");
+    expect(DEMO_DATA_CARD_WARNING).toBe("警告：本卡使用的是離線示範資料（demo_synthetic），不是市場資料。");
+  });
+
+  it("列示順序句（§4.1e／§6.3 H-2）", () => {
+    expect(buildListingOrderSentence(5)).toBe("列示順序僅依近 5 日漲跌幅，不代表任何優先順序。");
   });
 });

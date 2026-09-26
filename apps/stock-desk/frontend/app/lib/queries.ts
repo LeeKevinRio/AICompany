@@ -21,6 +21,7 @@ import {
   getPortfolioLimits,
   getPortfolioSummary,
   getPositions,
+  getSectorMomentum,
   getSectors,
   getSettings,
   getSignals,
@@ -141,6 +142,22 @@ export function useSectors(enabled: boolean) {
     enabled,
     retry: 1,
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * `GET /api/sectors/momentum` (ADR-0012 D-10) — the homepage 族群動能排行 card
+ * (第四波). Independent query key from every portfolio query: this card has
+ * no positions dependency of its own beyond the read-only `held` flags the
+ * backend already resolves server-side (C-34), so no positions mutation here
+ * invalidates it.
+ */
+export function useSectorMomentum(enabled: boolean) {
+  return useQuery({
+    queryKey: ["sector-momentum"],
+    queryFn: () => getSectorMomentum("TW"),
+    enabled,
+    retry: 1,
   });
 }
 
