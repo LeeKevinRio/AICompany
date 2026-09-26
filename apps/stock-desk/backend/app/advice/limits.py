@@ -97,11 +97,17 @@ LIMIT_NAMES: dict[str, str] = {
 #: tables cannot drift apart silently.
 #:
 #: 風控核可文案,修改須重新送審(2026-08-09)
+#:
+#: The label slot itself was ruled to track ``HELD_ACTION_LABELS`` (2026-08-09
+#: ruling, "取值須等同 adviceWording.ts"). ``take_profit`` / ``stop_loss``
+#: follow the front-end wave3 wording, approved verbatim by risk-compliance on
+#: 2026-09-19 (``work/stock-desk-一眼一句簡化-派工單.md`` §4.3); the sentence
+#: templates around the slot are unchanged.
 RANGE_ACTION_LABELS: dict[str, str] = {
     "add": "加碼參考",
     "reduce": "減碼參考",
-    "take_profit": "分批獲利了結參考",
-    "stop_loss": "停損評估",
+    "take_profit": "分批獲利了結",
+    "stop_loss": "停損參考",
 }
 
 #: Tolerance used when comparing an observed ratio against a cap, so that a

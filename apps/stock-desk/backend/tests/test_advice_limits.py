@@ -1551,7 +1551,7 @@ def test_sell_basis_is_the_approved_copy_verbatim_when_selling_everything_falls_
     quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
     assert quantity is not None
     assert quantity.basis == (
-        "規則評估:停損評估,這個區間只有一個數字:500 股,也就是目前持股全數。"
+        "規則評估:停損參考,這個區間只有一個數字:500 股,也就是目前持股全數。"
         "目前部位已超出「總曝險上限」這條上限,"
         "但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。" + SKIPPED_NOTE
     )
