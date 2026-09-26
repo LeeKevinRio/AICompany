@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Final
 
 from app.data.interface import Market, PriceBar
@@ -31,7 +32,16 @@ DEFAULT_DB_PATH: Final[str] = "./data/stock-desk.db"
 #: so a multi-year batch is chunked instead of failing at the driver.
 _PROBE_CHUNK_SIZE: Final[int] = 400
 #: Milliseconds a connection waits for a concurrent writer before failing.
-_BUSY_TIMEOUT_MS: Final[int] = 5000
+#: Public because every store sharing this database file uses the same value.
+BUSY_TIMEOUT_MS: Final[int] = 5000
+#: Primary result code of ``SQLITE_BUSY`` (extended codes keep it in the low byte).
+_SQLITE_BUSY: Final[int] = 5
+#: First pause between :func:`enable_wal` attempts; doubles up to the maximum.
+_WAL_FIRST_RETRY_DELAY_S: Final[float] = 0.005
+_WAL_MAX_RETRY_DELAY_S: Final[float] = 0.1
+#: Journal modes :func:`enable_wal` accepts back: ``memory`` is what an
+#: in-memory database reports, since it has no file to put into WAL mode.
+_WAL_ACCEPTED_MODES: Final[frozenset[str]] = frozenset({"wal", "memory"})
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS price_bars_cache (
@@ -100,6 +110,55 @@ def resolve_db_path() -> Path:
     return Path(raw)
 
 
+def enable_wal(conn: sqlite3.Connection) -> None:
+    """Issue ``PRAGMA journal_mode=WAL`` on ``conn``, riding out a concurrent switch.
+
+    Stores put the shared database file into WAL mode when constructed. On a
+    file not in WAL mode yet -- a database written before WAL was adopted, or
+    a brand-new empty one -- the switch is a write: SQLite opens a read
+    transaction (shared lock), then upgrades it to an exclusive lock to
+    rewrite the file header. When two connections do this at once (the
+    backend and a CLI starting against the same file), both hold the shared
+    lock, one takes the reserved lock and waits for the other to let go, and
+    the other's upgrade is refused with ``SQLITE_BUSY`` *immediately*: SQLite
+    skips the busy handler for a lock upgrade out of an open read transaction
+    because waiting there could deadlock (``sqlite3_busy_handler`` docs). So
+    ``busy_timeout`` does not help and the loser failed with "database is
+    locked" within a millisecond.
+
+    The refusal comes before the loser has changed anything, and its read
+    transaction ends with the failed statement, so the switch is retried; by
+    then the winner has usually converted the file and the retry is a no-op.
+    Retries run for as long as the connection's own ``busy_timeout`` allows
+    -- the wait any other statement on it would get -- and a lock still held
+    past that deadline, like every other error, is raised unchanged.
+
+    SQLite does not fail a switch it cannot make; it answers with the mode the
+    database stayed in. Anything but ``wal`` (or ``memory`` for an in-memory
+    database) is therefore raised here, rather than letting the stores run on
+    a rollback journal whose readers and writers block each other.
+
+    Must be called outside any open transaction (SQLite refuses to change into
+    WAL mode inside one).
+    """
+    (timeout_ms,) = conn.execute("PRAGMA busy_timeout").fetchone()
+    deadline = monotonic() + int(timeout_ms) / 1000
+    delay = _WAL_FIRST_RETRY_DELAY_S
+    while True:
+        try:
+            (mode,) = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            break
+        except sqlite3.OperationalError as error:
+            if (error.sqlite_errorcode & 0xFF) != _SQLITE_BUSY or monotonic() >= deadline:
+                raise
+        sleep(delay)
+        delay = min(delay * 2, _WAL_MAX_RETRY_DELAY_S)
+    if str(mode).lower() not in _WAL_ACCEPTED_MODES:
+        raise sqlite3.OperationalError(
+            f"could not switch the database to WAL journal mode; it stayed in {mode!r}"
+        )
+
+
 @dataclass(frozen=True)
 class CacheReadResult:
     """What the cache has on hand for a requested symbol/date range.
@@ -160,12 +219,12 @@ class PriceBarCache:
         # request path now writes two small log rows per live fetch; wait for
         # a writer instead of surfacing "database is locked" as a 500 (same
         # convention as ``QuotaLedger``).
-        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         return conn
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
             conn.execute(_CREATE_MARKET_DATE_INDEX_SQL)

@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
 from app.kelly.models import KellyInputRecord, KellyInputRow, normalize_symbol
 from app.positions.models import Market
 
@@ -203,11 +203,11 @@ class KellyInputStore:
 
     def _connect(self) -> sqlite3.Connection:
         # Callers wrap this in contextlib.closing; see the module docstring.
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             _migrate_add_optional_columns(conn)
 

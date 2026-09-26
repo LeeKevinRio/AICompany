@@ -27,7 +27,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
 from app.directory.models import DirectoryEntry, DirectorySectorAssignment
 
 _CREATE_TABLE_SQL = """
@@ -106,11 +106,11 @@ class SecurityDirectoryStore:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             _migrate_add_sector_columns(conn)
             conn.execute(_CREATE_NAME_INDEX_SQL)

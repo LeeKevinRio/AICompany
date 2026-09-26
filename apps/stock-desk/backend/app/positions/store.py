@@ -20,7 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
 from app.positions.models import Position, PositionInput
 from app.positions.sectors import SECTOR_REJECTED_MESSAGE, is_valid_sector
 
@@ -176,11 +176,11 @@ class PositionStore:
 
     def _connect(self) -> sqlite3.Connection:
         # Callers wrap this in contextlib.closing; see module docstring.
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             _migrate_add_sector(conn)
             _migrate_opened_at_to_nullable(conn)
