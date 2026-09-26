@@ -58,7 +58,11 @@ from app.data.panel import TAIPEI
 from app.positions.store import PositionStore
 from app.sectors import coverage, gate
 from app.sectors.coverage import CardAssessment
-from app.sectors.definition import SECTOR_MOMENTUM_V1, SectorMomentumDefinition
+from app.sectors.definition import (
+    SECTOR_MOMENTUM_V1,
+    SectorMomentumDefinition,
+    require_published,
+)
 from app.sectors.gate import (
     UNVERIFIED_RUNTIME,
     GateInputs,
@@ -82,6 +86,20 @@ router = APIRouter(prefix="/api/sectors", tags=["sectors"])
 
 #: The definition the card serves (its thresholds are echoed from it, C-33).
 DEFINITION: Final[SectorMomentumDefinition] = SECTOR_MOMENTUM_V1
+
+
+def served_definition(
+    definition: SectorMomentumDefinition = DEFINITION,
+) -> SectorMomentumDefinition:
+    """The one way this router takes hold of a definition (ADR-0012 D-15, C-47).
+
+    Everything the card echoes comes off this object, so it must **be** a
+    published one: an equal copy, a subclass or a research variant raises
+    ``UnpublishedDefinition``.
+    """
+    return require_published(definition)
+
+
 #: Sectors shown collapsed (server constant; default 3, at most 5 -- D-10, PRD FR-3).
 HEADLINE_COUNT: Final = 3
 #: ``data_source`` / ``DataMeta.source`` when there is no board to name one.
@@ -168,7 +186,7 @@ def read_sector_momentum(
 ) -> SectorMomentumPayload:
     now = clock()
     today = now.astimezone(TAIPEI).date()
-    read = sources.card.read(market, DEFINITION.method_version)
+    read = sources.card.read(market, served_definition().method_version)
     ok = sources.market.ok_sessions(_calendar_start(read, today), today)
     return build_sector_momentum(
         market=market,
@@ -217,6 +235,7 @@ def build_sector_momentum(
     definition: SectorMomentumDefinition = DEFINITION,
 ) -> SectorMomentumPayload:
     """The D-10 payload from what the readers returned (no I/O)."""
+    definition = served_definition(definition)
     rules = definition.coverage
     board = usable_board(read.board)
     # The source is the stored board's even when that board is ignored (R-5):

@@ -41,6 +41,7 @@ from app.sectors.store import (
     StoredBoard,
 )
 from app.services.market import trading_days_behind_market
+from tests.published_helpers import published
 from tests.sector_board_helpers import (
     card_client,
     excluded_sector,
@@ -560,8 +561,9 @@ def test_same_named_placeholders_never_share_a_threshold() -> None:
         holding_days=5,
         coverage=CoverageRules(overall_coverage_threshold=0.99, computable_ratio_min=0.85),
     )
-    third = _build(_board(expected=1000, missing=15, ex_date=0), definition=strict)
-    fourth = _build(_board(expected=1000, missing=5, ex_date=200), definition=strict)
+    with published(strict):  # a stricter definition is served only once published (C-47)
+        third = _build(_board(expected=1000, missing=15, ex_date=0), definition=strict)
+        fourth = _build(_board(expected=1000, missing=5, ex_date=200), definition=strict)
     assert third["insufficient_reason"] == "overall_completeness_low"
     assert "低於 99%" in third["reason"] and "85" not in third["reason"]
     assert fourth["insufficient_reason"] == "computable_ratio_low"

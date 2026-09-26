@@ -31,6 +31,13 @@ digest. The market DB is reached through an injected :class:`RunIdVerifier`
 ``app.data.market_panel``, because this package may not import the market-DB
 store (C-1).
 
+Published definitions only (ADR-0012 D-15, C-47): ``save_board`` and
+``SectorMethodRegistry.register`` take a definition object and pass it through
+``require_published`` (object identity) first; the string-keyed layers --
+the statistics repository on save and on every read, and the registry's two
+one-time updates -- refuse a ``method_version`` outside
+``published_versions()``.
+
 A ``sector_rank_stats`` table of the pre-v9 schema (with ``source_run_ids``)
 is rebuilt when empty; with rows it is left as is and every save and load of
 statistics is refused (C-50: no automatic migration).
@@ -58,7 +65,12 @@ from typing import Final, Protocol, cast
 from app.data.cache import resolve_db_path
 from app.data.panel import SourceFingerprint, SourceTally
 from app.sectors.coverage import coverage_from_counts
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import (
+    SectorMomentumDefinition,
+    UnpublishedDefinition,
+    published_versions,
+    require_published,
+)
 from app.sectors.models import (
     ApprovalKind,
     ApprovalOperator,
@@ -511,6 +523,7 @@ class SectorBoardStore(_SectorDb):
         ``turnover`` is keyed by sector code (descriptive only); ``names`` maps
         symbols to display names (a missing name falls back to the symbol).
         """
+        definition = require_published(definition)
         if ranking.method_version != definition.method_version or (
             calc.method_version != definition.method_version
         ):
@@ -889,6 +902,11 @@ class SectorStatsRepository(_SectorDb):
             logger.error(message)
             raise BiasedDataRejected(message)
 
+    def _admit(self, record: StatsRecord) -> None:
+        """What a row must be before anything is recomputed: forward PIT, a published version."""
+        _admit_regime(record.regime, record.data_regime, record.run_id)
+        _admit_version(record.method_version, record.run_id)
+
     def _previous(self, method_version: str) -> tuple[str, SourceFingerprint] | None:
         """The version's latest stored row (``run_id``, fingerprint), unchecked."""
         with closing(self._connect()) as conn:
@@ -918,7 +936,7 @@ class SectorStatsRepository(_SectorDb):
         :class:`BiasedDataRejected` and nothing is written (C-50, T-22).
         """
         self._refuse_legacy()
-        _admit_regime(record.regime, record.data_regime, record.run_id)
+        self._admit(record)
         claimed = record_fingerprint(record)
         _admit_shape(record.run_id, claimed)
         previous = self._previous(record.method_version)
@@ -1049,6 +1067,23 @@ def _admit_regime(regime: str, data_regime: str, run_id: str) -> None:
         )
 
 
+def _admit_version(method_version: str, run_id: str) -> None:
+    """Only published method versions reach the gate (ADR-0012 D-15, C-47)."""
+    if method_version not in published_versions():
+        raise BiasedDataRejected(
+            f"stats run {run_id}: method_version {method_version!r} is not a published "
+            "version (PUBLISHED_DEFINITIONS); research variants never reach the gate "
+            "(ADR-0012 C-47)"
+        )
+
+
+def _require_published_version(method_version: str) -> None:
+    if method_version not in published_versions():
+        raise UnpublishedDefinition(
+            f"method_version {method_version!r} is not a published version (ADR-0012 C-47)"
+        )
+
+
 _DIGEST_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
 
@@ -1133,6 +1168,7 @@ def _records_from_rows(
     sources: list[tuple[str, SourceFingerprint]] = []
     for run_id, (data, _) in grouped.items():
         _admit_regime(str(data["regime"]), str(data["data_regime"]), run_id)
+        _admit_version(str(data["method_version"]), run_id)
         fingerprint = _fingerprint_from_values([data[column] for column in _SOURCE_COLUMNS])
         _admit_shape(run_id, fingerprint)
         sources.append((run_id, fingerprint))
@@ -1271,7 +1307,12 @@ class SectorMethodRegistry(_SectorDb):
         registered_at: datetime,
         counts_toward_m: bool = False,
     ) -> None:
-        """Register a frozen version. ``counts_toward_m=True`` for post-bias proposals (D-6)."""
+        """Register a frozen version. ``counts_toward_m=True`` for post-bias proposals (D-6).
+
+        Only a published object may be registered (C-47): an equal copy or a
+        research variant raises ``UnpublishedDefinition``.
+        """
+        definition = require_published(definition)
         with self._transaction() as conn:
             conn.execute(
                 """
@@ -1298,6 +1339,7 @@ class SectorMethodRegistry(_SectorDb):
 
     def record_accumulation_start(self, method_version: str, d0: date) -> None:
         """Write D0 once (D-12)."""
+        _require_published_version(method_version)
         self._set_once(
             "UPDATE sector_method_registry SET accumulation_start = ? "
             "WHERE method_version = ? AND accumulation_start IS NULL",
@@ -1307,6 +1349,7 @@ class SectorMethodRegistry(_SectorDb):
 
     def record_first_forward_eval(self, method_version: str, at: datetime) -> None:
         """First statistics on forward_pit data: stamp it and count the version in m (D-6)."""
+        _require_published_version(method_version)
         self._set_once(
             "UPDATE sector_method_registry SET first_forward_eval_at = ?, counts_toward_m = 1 "
             "WHERE method_version = ? AND first_forward_eval_at IS NULL",

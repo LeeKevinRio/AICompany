@@ -34,7 +34,7 @@ from types import MappingProxyType
 
 from app.data.panel import PointInTimePanel, Regime, Snapshot
 from app.sectors import index
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import SectorCoreDefinition
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ def _ref(snapshot: Snapshot | None) -> SnapshotRef | None:
 
 
 def _liquid(
-    panel: PointInTimePanel, symbols: set[str], definition: SectorMomentumDefinition
+    panel: PointInTimePanel, symbols: set[str], definition: SectorCoreDefinition
 ) -> set[str]:
     """Median traded value and traded-day count over the 20 sessions ending at t.
 
@@ -152,7 +152,7 @@ def _liquid(
 
 
 def _seasoned(
-    panel: PointInTimePanel, symbols: set[str], definition: SectorMomentumDefinition
+    panel: PointInTimePanel, symbols: set[str], definition: SectorCoreDefinition
 ) -> set[str]:
     """Listed for at least ``min_listing_sessions`` visible sessions up to t.
 
@@ -174,7 +174,7 @@ def _seasoned(
     return seasoned
 
 
-def eligible(panel: PointInTimePanel, definition: SectorMomentumDefinition) -> EligibleUniverse:
+def eligible(panel: PointInTimePanel, definition: SectorCoreDefinition) -> EligibleUniverse:
     """E_g(t) for every sector and E_M(t) (methodology §2.2-§2.3)."""
     panel = index.require_pit_view(panel)
     rules = definition.universe
@@ -255,9 +255,7 @@ def _split(
     )
 
 
-def calculation_set(
-    panel: PointInTimePanel, definition: SectorMomentumDefinition
-) -> CalculationSet:
+def calculation_set(panel: PointInTimePanel, definition: SectorCoreDefinition) -> CalculationSet:
     """The one producer of C_g(t,L) and C_M(t,L) (ADR-0012 D-4, C-32)."""
     panel = index.require_pit_view(panel)
     universe = eligible(panel, definition)

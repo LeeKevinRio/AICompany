@@ -203,12 +203,10 @@ def test_whitelist_scan_has_teeth() -> None:
 # C-2: httpx in any form
 # ---------------------------------------------------------------------------
 
-_HTTPX_PATTERNS = (
-    re.compile(r"^\s*import\s+httpx\b", re.MULTILINE),
-    re.compile(r"^\s*from\s+httpx\b", re.MULTILINE),
-    re.compile(r"\bimportlib\b"),
-    re.compile(r"\b__import__\b"),
-)
+#: Names through which code imports dynamically.
+_DYNAMIC_IMPORT_NAMES = frozenset({"importlib", "__import__"})
+#: Attributes through which code imports dynamically (``builtins.__import__``, ...).
+_DYNAMIC_IMPORT_ATTRIBUTES = frozenset({"__import__", "import_module"})
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
@@ -223,13 +221,49 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _httpx_hits(path: Path) -> list[str]:
-    source = path.read_text(encoding="utf-8")
-    hits = [pattern.pattern for pattern in _HTTPX_PATTERNS if pattern.search(source)]
-    tree = ast.parse(source)
-    docstrings = _docstring_nodes(tree)
+def _is_module(name: str | None, module: str) -> bool:
+    return name is not None and (name == module or name.startswith(f"{module}."))
+
+
+def _dynamic_import_uses(tree: ast.AST, docstrings: set[int]) -> list[str]:
+    """``importlib`` / ``__import__`` in code: imports, names, attributes, non-docstring strings.
+
+    Read off the AST, so a docstring or a comment that merely mentions them is
+    not a hit -- the same rule as the ``app.*`` string scan (qa v9 low item).
+    """
+    hits: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        if isinstance(node, ast.Import):
+            hits += [
+                f"import {alias.name}"
+                for alias in node.names
+                if _is_module(alias.name, "importlib")
+            ]
+        elif isinstance(node, ast.ImportFrom) and _is_module(node.module, "importlib"):
+            hits.append(f"from {node.module}")
+        elif isinstance(node, ast.Name) and node.id in _DYNAMIC_IMPORT_NAMES:
+            hits.append(f"name {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in _DYNAMIC_IMPORT_ATTRIBUTES:
+            hits.append(f"attribute {node.attr}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in docstrings and any(
+                name in node.value for name in _DYNAMIC_IMPORT_NAMES
+            ):
+                hits.append(f"string {node.value!r}")
+    return hits
+
+
+def _httpx_hits(path: Path) -> list[str]:
+    """``httpx`` in code, in any form: import, dynamic import, or a non-docstring string."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = _docstring_nodes(tree)
+    hits = _dynamic_import_uses(tree, docstrings)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            hits += [f"import {a.name}" for a in node.names if _is_module(a.name, "httpx")]
+        elif isinstance(node, ast.ImportFrom) and _is_module(node.module, "httpx"):
+            hits.append(f"from {node.module}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             if "httpx" in node.value and id(node) not in docstrings:
                 hits.append(f"string {node.value!r}")
     return hits
@@ -254,6 +288,20 @@ def test_httpx_scan_has_teeth(tmp_path: Path, source: str) -> None:
     path = tmp_path / "leak.py"
     path.write_text(source, encoding="utf-8")
     assert _httpx_hits(path) != []
+
+
+def test_httpx_scan_ignores_prose(tmp_path: Path) -> None:
+    """Docstrings and comments may name what code must not use."""
+    path = tmp_path / "prose.py"
+    path.write_text(
+        '"""No httpx here, and no importlib or __import__ either.\n\n'
+        'import httpx\n"""\n'
+        "# import httpx; importlib.import_module('x'); __import__('y')\n"
+        "def f() -> None:\n"
+        '    """Never importlib."""\n',
+        encoding="utf-8",
+    )
+    assert _httpx_hits(path) == []
 
 
 # ---------------------------------------------------------------------------
@@ -332,10 +380,9 @@ def _dynamic_import_hits(path: Path) -> list[str]:
     The same technique as the C-2 ``httpx`` scan, applied to every module the
     router reaches, so a dynamic import cannot slip past the transitive check.
     """
-    source = path.read_text(encoding="utf-8")
-    hits = [pattern.pattern for pattern in _HTTPX_PATTERNS[2:] if pattern.search(source)]
-    tree = ast.parse(source)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings = _docstring_nodes(tree)
+    hits = _dynamic_import_uses(tree, docstrings)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if id(node) in docstrings:
@@ -368,6 +415,9 @@ def test_router_closure_has_no_dynamic_import() -> None:
         "portfolio = __import__('app.portfolio.valuation')\n",
         "TARGET = 'app.advice.engine'\n",
         "CLIENT = 'httpx'\n",
+        "from importlib import import_module\nm = import_module('x')\n",
+        "import builtins\nloader = getattr(builtins, '__import__')\n",
+        "import builtins\nm = builtins.__import__('x')\n",
     ],
 )
 def test_router_dynamic_import_scan_has_teeth(tmp_path: Path, addition: str) -> None:
@@ -377,6 +427,21 @@ def test_router_dynamic_import_scan_has_teeth(tmp_path: Path, addition: str) -> 
     leaked = tmp_path / "market_panel.py"
     leaked.write_text(source.read_text(encoding="utf-8") + "\n" + addition, encoding="utf-8")
     assert _dynamic_import_hits(leaked) != []
+
+
+def test_router_dynamic_import_scan_ignores_docstrings_and_comments(tmp_path: Path) -> None:
+    """Prose about ``importlib`` / ``__import__`` / ``app.*`` is not a dynamic import."""
+    source = module_path("app.data.market_panel")
+    assert source is not None
+    prose = tmp_path / "market_panel.py"
+    prose.write_text(
+        source.read_text(encoding="utf-8")
+        + "\n# importlib.import_module('app.services.market'); __import__('httpx')\n"
+        + "def documented() -> None:\n"
+        + '    """Never importlib, never __import__, never app.advice.engine."""\n',
+        encoding="utf-8",
+    )
+    assert _dynamic_import_hits(prose) == []
 
 
 def test_router_transitive_scan_catches_a_new_import(tmp_path: Path) -> None:

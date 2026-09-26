@@ -18,7 +18,12 @@ What does **not** live here:
   with the very function objects of :mod:`app.sectors.universe` and
   :mod:`app.sectors.ranking` (T-15, methodology T2);
 * configuration or environment reads (C-24, T-17): every threshold comes from
-  the :class:`SectorMomentumDefinition` passed in.
+  the definition passed in. The engine room (:func:`evaluate_views` and
+  everything below it) reads a structural
+  :class:`~app.sectors.definition.SectorEvalDefinition`, so the research
+  package can run it on its sensitivity variants; the two entries whose output
+  can become a statistics row -- :func:`evaluate` and :func:`to_stats_record`
+  -- accept published objects only (ADR-0012 D-15, C-47).
 
 Timing (methodology §5.1): decide at the close of ``t`` on ``panel.as_of(t)``;
 enter at the t+1 open; exit at the t+H close; the next decision of the same
@@ -78,7 +83,11 @@ from app.data.panel import (
     source_fingerprint,
 )
 from app.sectors.coverage import ex_dividend_feed_covered
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import (
+    SectorEvalDefinition,
+    SectorMomentumDefinition,
+    require_published,
+)
 from app.sectors.gate import (
     EvaluationWindow,
     InsufficientChecks,
@@ -166,7 +175,7 @@ class Decision:
         return self.ranking.ranked[0].sector_code if self.ranking.ranked else None
 
 
-def decide(view: PointInTimePanel, definition: SectorMomentumDefinition) -> Decision:
+def decide(view: PointInTimePanel, definition: SectorEvalDefinition) -> Decision:
     """The board of ``view.decision_date``: ``calculation_set`` then ``rank_sectors``."""
     calc = calculation_set(view, definition)
     ranking = rank_sectors(calc, definition)
@@ -198,7 +207,7 @@ def decide(view: PointInTimePanel, definition: SectorMomentumDefinition) -> Deci
     )
 
 
-def rank_1_strategy(definition: SectorMomentumDefinition) -> BasketStrategy:
+def rank_1_strategy(definition: SectorEvalDefinition) -> BasketStrategy:
     """Equal weight over ``C_g(t,L)`` of the rank-1 sector (the judged basket)."""
 
     def strategy(view: PointInTimePanel) -> Mapping[str, float]:
@@ -208,7 +217,7 @@ def rank_1_strategy(definition: SectorMomentumDefinition) -> BasketStrategy:
     return strategy
 
 
-def benchmark_strategy(definition: SectorMomentumDefinition) -> BasketStrategy:
+def benchmark_strategy(definition: SectorEvalDefinition) -> BasketStrategy:
     """B_EW: equal weight over ``C_M(t,L)`` (T7: the same set the card uses)."""
 
     def strategy(view: PointInTimePanel) -> Mapping[str, float]:
@@ -454,7 +463,7 @@ def _carried(calendar: Sequence[date], since: date | None, t: date) -> int:
 def _invalid_reason(
     decision: Decision,
     calendar: Sequence[date],
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     book: PriceBook,
     window: HoldingWindow,
 ) -> InvalidReason | None:
@@ -488,7 +497,7 @@ def build_week(
     *,
     phase: int,
     calendar: Sequence[date],
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     book: PriceBook,
     execution: BasketExecution,
     cost: float,
@@ -569,7 +578,7 @@ def _q(beats: Mapping[str, bool]) -> float:
     return sum(beats.values()) / len(beats)
 
 
-def summarise(weeks: Sequence[Week], definition: SectorMomentumDefinition) -> RateSummary:
+def summarise(weeks: Sequence[Week], definition: SectorEvalDefinition) -> RateSummary:
     valid = [week for week in weeks if week.valid]
     n = len(valid)
     if n == 0:
@@ -933,7 +942,7 @@ def compute_statistics(
     main: Sequence[Week],
     phases: Sequence[Sequence[Week]],
     *,
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     m: int,
     seed: int,
     cost: float,
@@ -1067,7 +1076,7 @@ def compute_statistics(
 
 
 def candidate_gates(
-    stats: SectorStatistics, definition: SectorMomentumDefinition
+    stats: SectorStatistics, definition: SectorEvalDefinition
 ) -> tuple[GateCheckRecord, ...]:
     """G1..G6 as the evaluator sees them (methodology §6.3). A candidate, not a status.
 
@@ -1298,7 +1307,7 @@ def perturb_future(frames: PanelFrames, t: date, rng: np.random.Generator) -> Pa
 
 def future_perturbation_check(
     panel: MarketPanel,
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     dates: Sequence[date],
     *,
     seed: int,
@@ -1543,7 +1552,7 @@ class SectorEvaluation:
 def build_decisions_and_weeks(
     view_for: Callable[[date], PointInTimePanel],
     *,
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     book: PriceBook,
     calendar: Sequence[date],
     start: date,
@@ -1620,7 +1629,7 @@ class EngineRun:
 def evaluate_views(
     view_for: Callable[[date], PointInTimePanel],
     panel: MarketPanel,
-    definition: SectorMomentumDefinition,
+    definition: SectorEvalDefinition,
     *,
     cost_model: CostModel,
     start: date,
@@ -1706,7 +1715,7 @@ def evaluate_views(
 
 
 def leak_control_status(
-    p_real: float | None, p_leak: float | None, n: int, definition: SectorMomentumDefinition
+    p_real: float | None, p_leak: float | None, n: int, definition: SectorEvalDefinition
 ) -> SelfcheckStatus:
     """T3a: pass iff ``p_leak - p_real >= leak_margin`` (equivalently ``p_real <= p_leak - δ``).
 
@@ -1721,7 +1730,7 @@ def leak_control_status(
 
 
 def time_shift_status(
-    median: float | None, n: int, definition: SectorMomentumDefinition
+    median: float | None, n: int, definition: SectorEvalDefinition
 ) -> SelfcheckStatus:
     """T8 (judged half): pass iff |median Δ_k| < 2.5pp; skipped only below N=30."""
     if n < definition.gate.skip_allowed_below_samples:
@@ -1751,7 +1760,12 @@ def evaluate(
     are the stored boards (by decision date) the services layer projected with
     :func:`fingerprint_ranking`'s shape; without them T9 cannot compare and
     fails closed.
+
+    Published definitions only (ADR-0012 C-47): the result becomes a
+    statistics row, so an equal copy or a research variant raises
+    ``UnpublishedDefinition`` before anything is computed.
     """
+    definition = require_published(definition)
     factors = pit_label_factors(panel)
     audit = _Audit(frames=panel.frames, boards=boards)
     run = evaluate_views(
@@ -1912,7 +1926,7 @@ def _same_factor(left: float | None, right: float | None) -> bool:
 
 
 def selfchecks_passed(
-    selfchecks: Sequence[SelfcheckRecord], sample_count: int, definition: SectorMomentumDefinition
+    selfchecks: Sequence[SelfcheckRecord], sample_count: int, definition: SectorEvalDefinition
 ) -> bool:
     """C-36: every runtime item passed; skip only for T3a / T8 below N=30; vacuous only T4-T6."""
     names = {check.check_name for check in selfchecks}
@@ -1951,8 +1965,10 @@ def to_stats_record(
 
     The source columns are :func:`app.data.panel.source_fingerprint` of the ok
     runs the evaluation read -- the same function the market-DB verifier
-    recomputes it with on save (C-50).
+    recomputes it with on save (C-50). ``definition`` must be a published
+    object (C-47).
     """
+    definition = require_published(definition)
     if evaluation.regime != "pit" or evaluation.data_regime != "forward_pit":
         raise ValueError("only point-in-time forward evaluations become statistics rows")
     if evaluation.method_version != definition.method_version:

@@ -15,7 +15,9 @@ sitting exactly on a threshold is never pushed across it by float rounding
 (``floor(ratio * 1000) / 10``, risk §9): 79.99% is shown as 79.9, never 80.0.
 
 Nothing in this module reads configuration or the environment (C-24): every
-threshold comes from the :class:`SectorMomentumDefinition` passed in.
+threshold comes from the definition passed in (a published
+:class:`SectorMomentumDefinition`, or on the research path a structural
+:class:`~app.sectors.definition.SectorCoreDefinition`, ADR-0012 D-15).
 """
 
 from __future__ import annotations
@@ -28,7 +30,12 @@ from typing import Final
 
 from app.data.panel import PointInTimePanel
 from app.sectors import index
-from app.sectors.definition import CoverageRules, SectorMomentumDefinition
+from app.sectors.definition import (
+    CoverageRulesView,
+    SectorCoreDefinition,
+    SectorMomentumDefinition,
+    require_published,
+)
 from app.sectors.models import Coverage, ExcludedReasonCounts, ReasonCode
 from app.sectors.universe import CalculationSet, ExclusionSplit
 
@@ -91,13 +98,15 @@ def coverage_of(split: ExclusionSplit) -> Coverage:
     )
 
 
-def _meets(count: int, expected: int, rules: CoverageRules) -> bool:
+def _meets(count: int, expected: int, rules: CoverageRulesView) -> bool:
     return count >= rules.min_constituents and ratio_at_least(
         count, expected, rules.sector_coverage_threshold
     )
 
 
-def attribute(split: ExclusionSplit, *, unranked: bool, rules: CoverageRules) -> ReasonCode | None:
+def attribute(
+    split: ExclusionSplit, *, unranked: bool, rules: CoverageRulesView
+) -> ReasonCode | None:
     """Why a sector is not ranked, or ``None`` when it is rankable (C-39).
 
     The order is fixed and exactly one code is returned: ``too_few_members``
@@ -158,7 +167,7 @@ class CoverageAssessment:
 
 
 def card_from_counts(
-    *, expected: int, missing: int, ex_date: int, corporate_action: int, rules: CoverageRules
+    *, expected: int, missing: int, ex_date: int, corporate_action: int, rules: CoverageRulesView
 ) -> CardAssessment:
     """Card-level ratios, displays and threshold verdicts from the market counts."""
     computable = expected - missing - ex_date - corporate_action
@@ -200,7 +209,7 @@ def card_from_counts(
     )
 
 
-def assess_card(split: ExclusionSplit, rules: CoverageRules) -> CardAssessment:
+def assess_card(split: ExclusionSplit, rules: CoverageRulesView) -> CardAssessment:
     return card_from_counts(
         expected=len(split.expected),
         missing=len(split.missing),
@@ -210,7 +219,7 @@ def assess_card(split: ExclusionSplit, rules: CoverageRules) -> CardAssessment:
     )
 
 
-def assess(calc: CalculationSet, definition: SectorMomentumDefinition) -> CoverageAssessment:
+def assess(calc: CalculationSet, definition: SectorCoreDefinition) -> CoverageAssessment:
     """Per-sector attribution plus the card-level ratios, all from one ``calc``."""
     rules = definition.coverage
     sectors = tuple(
@@ -227,7 +236,7 @@ def assess(calc: CalculationSet, definition: SectorMomentumDefinition) -> Covera
     return CoverageAssessment(sectors=sectors, card=assess_card(calc.market, rules))
 
 
-def ex_dividend_feed_covered(panel: PointInTimePanel, definition: SectorMomentumDefinition) -> bool:
+def ex_dividend_feed_covered(panel: PointInTimePanel, definition: SectorCoreDefinition) -> bool:
     """Whether ``TWT48U_ALL`` ok runs cover each of the last L sessions (C-18).
 
     Strict reading of D-4: every one of the L most recent sessions up to and
@@ -265,8 +274,11 @@ def excluded_reason_counts(excluded_reason_codes: Iterable[ReasonCode]) -> Exclu
 
 
 def published_thresholds(definition: SectorMomentumDefinition) -> dict[str, int | float]:
-    """The five thresholds the API echoes, taken off the gate's own object (C-33)."""
-    rules = definition.coverage
+    """The five thresholds the API echoes, taken off the gate's own object (C-33).
+
+    Published definitions only (ADR-0012 C-47): an echoed threshold is output.
+    """
+    rules = require_published(definition).coverage
     return {
         "min_constituents": rules.min_constituents,
         "sector_coverage_threshold": rules.sector_coverage_threshold,

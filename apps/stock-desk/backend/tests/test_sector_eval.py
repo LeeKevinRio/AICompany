@@ -20,7 +20,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import math
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -54,10 +54,13 @@ from app.sectors.gate import EvaluationWindow, GateInputs, PitStatus
 from app.sectors.models import SelfcheckRecord, StatsRecord
 from app.sectors.store import BiasedDataRejected, SectorStatsRepository
 from tests.import_graph import APP_ROOT
+from tests.published_helpers import published
 from tests.sector_eval_helpers import SyntheticMarket, boards_for, replace_frame, synthetic_market
 from tests.source_helpers import FakeSources
 
 #: V1 with fewer T1 dates, only to keep CI time sane; every other value is V1's.
+#: Not a published object, so it is published for this module only (ADR-0012
+#: D-15 Consequences: monkeypatch ``PUBLISHED_DEFINITIONS``).
 FAST = SectorMomentumDefinition(
     method_version=V1.method_version,
     lookback_days=V1.lookback_days,
@@ -66,6 +69,13 @@ FAST = SectorMomentumDefinition(
 )
 DE5 = date(2026, 9, 1)
 SEED = 20260925
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_is_published() -> Iterator[None]:
+    """FAST is V1 with fewer T1 dates; the gated entries accept it only while published."""
+    with published(FAST):
+        yield
 
 
 def _pit_status(market: SyntheticMarket) -> PitStatus:

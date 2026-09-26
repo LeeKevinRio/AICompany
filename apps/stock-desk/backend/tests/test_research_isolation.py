@@ -29,6 +29,7 @@ import pytest
 
 from app.backtest import sector_eval
 from app.backtest.costs import CostModel
+from app.data.market_panel import MarketPanelReader, MarketPanelStore
 from app.data.panel import MarketPanel, PointInTimePanel
 from app.research.sector_biased import BIAS_DIRECTIONS, BIAS_LABEL, hindsight_view
 from app.research.sector_biased.store import (
@@ -113,7 +114,13 @@ def test_no_module_outside_research_reaches_research() -> None:
 
 def test_every_research_file_is_scanned() -> None:
     files = sorted(RESEARCH_ROOT.rglob("*.py"))
-    assert {path.name for path in files} >= {"__init__.py", "hindsight.py", "store.py", "study.py"}
+    assert {path.name for path in files} >= {
+        "__init__.py",
+        "hindsight.py",
+        "sensitivity.py",
+        "store.py",
+        "study.py",
+    }
     for path in files:
         name = _module_name(path)
         assert module_path(name) == path
@@ -150,6 +157,7 @@ PROTECTED_STRINGS = (
     "STOCK_DESK_RESEARCH_DB_PATH",
     "research_study_runs",
     "research_backfill_bars",
+    "research_sensitivity_runs",
 )
 
 
@@ -437,6 +445,14 @@ def backfill_panel() -> tuple[SyntheticMarket, MarketPanel]:
     return market, panel
 
 
+@pytest.fixture(scope="module")
+def no_d0_market_db(tmp_path_factory: pytest.TempPathFactory) -> MarketPanelReader:
+    """A market DB with no run yet: no D0, so no date limit (ADR-0012 D-15)."""
+    path = tmp_path_factory.mktemp("market") / "market.db"
+    MarketPanelStore(path)
+    return MarketPanelReader(path)
+
+
 def test_backfill_is_invisible_to_point_in_time_views(
     backfill_panel: tuple[SyntheticMarket, MarketPanel],
 ) -> None:
@@ -450,12 +466,14 @@ def test_backfill_is_invisible_to_point_in_time_views(
 
 def test_the_biased_study_is_labelled_split_and_stored_in_research_only(
     backfill_panel: tuple[SyntheticMarket, MarketPanel],
+    no_d0_market_db: MarketPanelReader,
     tmp_path: Path,
 ) -> None:
     market, panel = backfill_panel
     report = run_biased_study(
         panel,
         V1,
+        market_db=no_d0_market_db,
         cost_model=CostModel(),
         start=market.calendar[70],
         seed=4,
@@ -574,6 +592,7 @@ def _momentum(card: LiveCard) -> bytes:
 
 def test_api_response_ignores_the_research_db(
     backfill_panel: tuple[SyntheticMarket, MarketPanel],
+    no_d0_market_db: MarketPanelReader,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -589,6 +608,7 @@ def test_api_response_ignores_the_research_db(
     report = run_biased_study(
         panel,
         V1,
+        market_db=no_d0_market_db,
         cost_model=CostModel(),
         start=market.calendar[70],
         seed=4,

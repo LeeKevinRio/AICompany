@@ -10,7 +10,13 @@ Tables:
   history fetched after the fact, so it is never point-in-time and never goes
   near the market DB (ADR-0012 D-3: longer history only lands here);
 * ``research_study_runs`` -- one row per study segment (in-sample,
-  out-of-sample, full) with its rates and the full JSON report.
+  out-of-sample, full) with its rates and the full JSON report;
+* ``research_sensitivity_runs`` -- the sensitivity variants of methodology
+  §11.1 (ADR-0012 D-15): one row per definition and segment, the base and
+  every variant of one run written in one transaction, each row with
+  ``variant_of`` (the base's ``method_version``) and ``variant_diff`` (JSON,
+  ``{}`` for the base). A row that is not the base must carry a
+  ``research-sens-`` name (CHECK).
 
 Every row carries :data:`~app.research.sector_biased.hindsight.BIAS_LABEL`,
 enforced by a ``CHECK`` constraint, and the data regime is pinned to
@@ -23,7 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -42,7 +48,7 @@ DATA_REGIME: Final = "backfill_non_pit"
 
 #: Every table this file may hold (C-8; the isolation test compares sqlite_master).
 RESEARCH_TABLES: Final[frozenset[str]] = frozenset(
-    {"research_backfill_bars", "research_study_runs"}
+    {"research_backfill_bars", "research_study_runs", "research_sensitivity_runs"}
 )
 
 _LABEL_CHECK: Final = f"CHECK (bias_label = '{BIAS_LABEL}')"
@@ -87,6 +93,30 @@ _SCHEMA: Final[tuple[str, ...]] = (
         PRIMARY KEY (study_id, segment)
     )
     """,
+    f"""
+    CREATE TABLE IF NOT EXISTS research_sensitivity_runs (
+        sensitivity_id TEXT NOT NULL,
+        method_version TEXT NOT NULL,
+        variant_of TEXT NOT NULL,
+        variant_diff TEXT NOT NULL,
+        segment TEXT NOT NULL CHECK (segment IN ('in_sample', 'out_of_sample', 'full')),
+        regime TEXT NOT NULL CHECK (regime = 'hindsight'),
+        data_regime TEXT NOT NULL {_REGIME_CHECK},
+        bias_label TEXT NOT NULL {_LABEL_CHECK},
+        bias_directions TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        sample_start TEXT,
+        sample_end TEXT,
+        sample_count INTEGER NOT NULL,
+        beat_count_net INTEGER NOT NULL,
+        beat_count_gross INTEGER NOT NULL,
+        base_rate_net REAL,
+        base_rate_gross REAL,
+        report_json TEXT NOT NULL,
+        CHECK (method_version = variant_of OR method_version LIKE 'research-sens-%'),
+        PRIMARY KEY (sensitivity_id, method_version, segment)
+    )
+    """,
 )
 
 
@@ -108,6 +138,41 @@ class StudyRow:
     sample_count: int
     beat_count_net: int
     base_rate_net: float | None
+    report: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class SensitivityRow:
+    """One sensitivity row to write (see ``research_sensitivity_runs``)."""
+
+    sensitivity_id: str
+    method_version: str
+    variant_of: str
+    #: JSON text; ``{}`` for the base.
+    variant_diff: str
+    segment: str
+    created_at: datetime
+    sample_start: date | None
+    sample_end: date | None
+    sample_count: int
+    beat_count_net: int
+    beat_count_gross: int
+    base_rate_net: float | None
+    base_rate_gross: float | None
+    report: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class StoredSensitivityRow:
+    """One stored sensitivity row (what :meth:`ResearchStore.sensitivity_rows` returns)."""
+
+    sensitivity_id: str
+    method_version: str
+    variant_of: str
+    variant_diff: Mapping[str, object]
+    segment: str
+    bias_label: str
+    sample_count: int
     report: Mapping[str, object]
 
 
@@ -223,6 +288,71 @@ class ResearchStore:
                     json.dumps(payload, sort_keys=True, default=str),
                 ),
             )
+
+    def save_sensitivity_rows(self, rows: Sequence[SensitivityRow]) -> None:
+        """Every row of one sensitivity run, all or nothing (one transaction)."""
+        payload_base = {"bias_label": BIAS_LABEL, "bias_directions": dict(BIAS_DIRECTIONS)}
+        directions = json.dumps(dict(BIAS_DIRECTIONS), sort_keys=True)
+        with self._transaction() as conn:
+            conn.executemany(
+                "INSERT INTO research_sensitivity_runs (sensitivity_id, method_version, "
+                "variant_of, variant_diff, segment, regime, data_regime, bias_label, "
+                "bias_directions, created_at, sample_start, sample_end, sample_count, "
+                "beat_count_net, beat_count_gross, base_rate_net, base_rate_gross, report_json) "
+                "VALUES (?, ?, ?, ?, ?, 'hindsight', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row.sensitivity_id,
+                        row.method_version,
+                        row.variant_of,
+                        row.variant_diff,
+                        row.segment,
+                        DATA_REGIME,
+                        BIAS_LABEL,
+                        directions,
+                        row.created_at.isoformat(),
+                        row.sample_start.isoformat() if row.sample_start else None,
+                        row.sample_end.isoformat() if row.sample_end else None,
+                        row.sample_count,
+                        row.beat_count_net,
+                        row.beat_count_gross,
+                        row.base_rate_net,
+                        row.base_rate_gross,
+                        json.dumps({**payload_base, **row.report}, sort_keys=True, default=str),
+                    )
+                    for row in rows
+                ],
+            )
+
+    def sensitivity_rows(self, sensitivity_id: str) -> tuple[StoredSensitivityRow, ...]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT sensitivity_id, method_version, variant_of, variant_diff, segment, "
+                "bias_label, sample_count, report_json FROM research_sensitivity_runs "
+                "WHERE sensitivity_id = ? ORDER BY method_version, segment",
+                (sensitivity_id,),
+            ).fetchall()
+        return tuple(
+            StoredSensitivityRow(
+                sensitivity_id=str(row[0]),
+                method_version=str(row[1]),
+                variant_of=str(row[2]),
+                variant_diff=json.loads(row[3]),
+                segment=str(row[4]),
+                bias_label=str(row[5]),
+                sample_count=int(row[6]),
+                report=json.loads(row[7]),
+            )
+            for row in rows
+        )
+
+    def row_counts(self) -> dict[str, int]:
+        """Rows per research result table (what a refused run must leave unchanged)."""
+        with closing(self._connect()) as conn:
+            return {
+                table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in ("research_study_runs", "research_sensitivity_runs")
+            }
 
     def study_rows(self, study_id: str) -> tuple[StudyRow, ...]:
         with closing(self._connect()) as conn:

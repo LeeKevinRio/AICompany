@@ -14,6 +14,12 @@ keep it off the card:
 
 :func:`hindsight_view` is the one sanctioned way to build a view that ignores
 ``recorded_at``; it is defined and called nowhere else (C-27).
+
+The sensitivity variants of methodology §11.1 (:mod:`.sensitivity`, ADR-0012
+D-15) live here too: they are the only concrete types that can carry values
+looser than a published definition, their names are never method versions,
+and they run on the same admitted data as the study -- hindsight views,
+``backfill_non_pit`` runs, sessions before D0 (:func:`.study.admit_biased_panel`).
 """
 
 from app.research.sector_biased.hindsight import BIAS_DIRECTIONS, BIAS_LABEL, hindsight_view

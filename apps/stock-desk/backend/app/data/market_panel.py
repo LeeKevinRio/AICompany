@@ -350,6 +350,30 @@ def _source_tally_on(
     )
 
 
+def _first_all_kinds_ok_session_on(conn: sqlite3.Connection) -> date | None:
+    """D0 (ADR-0012 D-12): the earliest session all four kinds have an ``ok`` run."""
+    row = conn.execute(
+        """
+        SELECT MIN(session_date) FROM (
+            SELECT session_date FROM pit_snapshot_runs
+            WHERE kind = 'bars' AND status = 'ok' AND session_date IS NOT NULL
+            INTERSECT
+            SELECT session_date FROM pit_snapshot_runs
+            WHERE kind = 'listing' AND status = 'ok' AND session_date IS NOT NULL
+            INTERSECT
+            SELECT session_date FROM pit_snapshot_runs
+            WHERE kind = 'classification' AND status = 'ok' AND session_date IS NOT NULL
+            INTERSECT
+            SELECT session_date FROM pit_snapshot_runs
+            WHERE kind = 'dividend_announce' AND status = 'ok' AND session_date IS NOT NULL
+        )
+        """
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return date.fromisoformat(row[0])
+
+
 def _canonical_content_hash(rows: Sequence[tuple[object, ...]]) -> str:
     """SHA-256 of a day's full row set for one content-addressed kind.
 
@@ -689,26 +713,7 @@ class MarketPanelStore:
         ``INTERSECT`` query, not four round trips.
         """
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT MIN(session_date) FROM (
-                    SELECT session_date FROM pit_snapshot_runs
-                    WHERE kind = 'bars' AND status = 'ok' AND session_date IS NOT NULL
-                    INTERSECT
-                    SELECT session_date FROM pit_snapshot_runs
-                    WHERE kind = 'listing' AND status = 'ok' AND session_date IS NOT NULL
-                    INTERSECT
-                    SELECT session_date FROM pit_snapshot_runs
-                    WHERE kind = 'classification' AND status = 'ok' AND session_date IS NOT NULL
-                    INTERSECT
-                    SELECT session_date FROM pit_snapshot_runs
-                    WHERE kind = 'dividend_announce' AND status = 'ok' AND session_date IS NOT NULL
-                )
-                """
-            ).fetchone()
-        if row is None or row[0] is None:
-            return None
-        return date.fromisoformat(row[0])
+            return _first_all_kinds_ok_session_on(conn)
 
     def run_status_summary(self, start: date, end: date) -> dict[SnapshotKind, KindRunSummary]:
         """Per-kind run history within ``[start, end]``, in one query (D-12).
@@ -1081,6 +1086,20 @@ class MarketPanelReader:
             if kind in found:
                 found[kind].add(date.fromisoformat(session))
         return {kind: frozenset(days) for kind, days in found.items()}
+
+    def first_all_kinds_ok_session(self) -> date | None:
+        """D0 as :meth:`MarketPanelStore.first_all_kinds_ok_session`, read-only.
+
+        The biased research reads D0 here (ADR-0012 D-15: 「由市場 DB（唯讀）推得」).
+        A missing file raises ``FileNotFoundError`` rather than reading as "no
+        D0": for that caller, "no D0" lifts the date limit, so it must never be
+        the answer to a wrong path.
+        """
+        conn = self._connect()
+        if conn is None:
+            raise FileNotFoundError(f"market DB not found: {self._db_path}")
+        with closing(conn):
+            return _first_all_kinds_ok_session_on(conn)
 
     def source_fingerprint(self, run_max: int, session_end: date) -> SourceFingerprint | None:
         """:meth:`MarketPanelStore.source_fingerprint` on the read-only file; ``None`` if absent."""

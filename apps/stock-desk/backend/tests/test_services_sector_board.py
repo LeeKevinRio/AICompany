@@ -20,6 +20,7 @@ main DB in a temp directory; nothing touches the network or git.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -47,6 +48,7 @@ from app.services.sector_board import (
     same_board,
     stored_board_of,
 )
+from tests.published_helpers import published
 from tests.sector_board_helpers import store_market
 from tests.sector_eval_helpers import SyntheticMarket, synthetic_market
 
@@ -59,6 +61,13 @@ FAST = SectorMomentumDefinition(
 )
 NOW = datetime(2026, 9, 25, 14, 0, tzinfo=UTC)
 GOOD = AttestationCheck(running_commit="c0ffee", ci_passed_commit="c0ffee", problems=())
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_is_published() -> Iterator[None]:
+    """FAST is V1 with fewer T1 dates; the gated entries accept it only while published."""
+    with published(FAST):
+        yield
 
 
 @dataclass

@@ -36,6 +36,7 @@ from app.sectors.store import (
     SectorMethodRegistry,
     SectorStatsRepository,
 )
+from tests.published_helpers import published
 from tests.sectors_helpers import Member, members, scenario
 from tests.source_helpers import (
     DEFAULT_FINGERPRINT,
@@ -450,7 +451,8 @@ def test_m_counts_versions_that_count_toward_it(db: Path) -> None:
     l20 = SectorMomentumDefinition(
         method_version="sector-rel-v1.1-L20-H5", lookback_days=20, holding_days=5
     )
-    registry.register(l20, frozen_commit="beef", registered_at=at, counts_toward_m=True)
+    with published(l20):  # a second frozen version is published before it is registered
+        registry.register(l20, frozen_commit="beef", registered_at=at, counts_toward_m=True)
     assert registry.m() == 2
     row = registry.get(V1.method_version)
     assert row is not None and row.counts_toward_m and row.first_forward_eval_at is not None

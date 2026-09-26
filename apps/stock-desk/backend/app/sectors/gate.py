@@ -39,7 +39,7 @@ from datetime import date
 from typing import Final, Literal, TypedDict, get_args
 
 from app.data.calendar import TradingCalendar
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import SectorMomentumDefinition, require_published
 from app.sectors.models import (
     Accumulation,
     ApprovalRecord,
@@ -272,6 +272,10 @@ class GateInputs:
     #: The repository refused the statistics on the way out (D-14): fail closed as
     #: NE-6, with no statistics row to publish.
     stats_rejected: bool = False
+
+    def __post_init__(self) -> None:
+        # The gate's output reaches the card: published definitions only (C-47).
+        require_published(self.definition)
 
 
 @dataclass(frozen=True)

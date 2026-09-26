@@ -10,13 +10,31 @@ tightened: construction rejects anything looser than v1, and changing any value
 means a new ``method_version`` (methodology §11.2: freeze -> m + 1 -> risk
 re-review -> tell the CEO). Nothing here may be switched at run time on the
 strength of a statistic.
+
+Type layers (ADR-0012 D-15, C-46). The core functions read a definition
+through four structural protocols defined here and nowhere else --
+:class:`UniverseRulesView`, :class:`CoverageRulesView`,
+:class:`SectorCoreDefinition` and :class:`SectorEvalDefinition` -- every member
+a read-only property, while ``gate`` is always the concrete :class:`GateRules`
+(nobody may loosen the judgement thresholds, research included). That lets the
+isolated research package run the very same core functions on its sensitivity
+variants (methodology §11.1) without a loosened value ever being expressible
+in :class:`SectorMomentumDefinition`.
+
+Published definitions (C-16, C-47). The structural types weaken what mypy can
+promise, so every entry that persists or outputs something checks at run time
+that its definition **is** one of :data:`PUBLISHED_DEFINITIONS`
+(:func:`require_published`, object identity): an equal copy, a subclass
+instance or a research variant is refused with :class:`UnpublishedDefinition`.
+A new version is frozen, added as a constant and listed in
+:data:`PUBLISHED_DEFINITIONS` in the same commit, and then registered.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 #: ``sector-rel-v<major>.<minor>-L<lookback>-H<holding>``.
 _VERSION_PATTERN: Final = re.compile(r"^sector-rel-v(\d+)\.(\d+)-L(\d+)-H(\d+)$")
@@ -205,3 +223,123 @@ SECTOR_MOMENTUM_V1: Final = SectorMomentumDefinition(
     lookback_days=5,
     holding_days=5,
 )
+
+#: Every published method version, as the frozen objects themselves (C-16, D-15).
+#: Read through the module at call time (:func:`require_published`,
+#: :func:`published_versions`), never imported by name elsewhere.
+PUBLISHED_DEFINITIONS: Final = (SECTOR_MOMENTUM_V1,)
+
+
+# ---------------------------------------------------------------------------
+# Structural views (ADR-0012 D-15, C-46): read-only, defined here only
+# ---------------------------------------------------------------------------
+
+
+class UniverseRulesView(Protocol):
+    """Every field of :class:`UniverseRules`, read-only."""
+
+    @property
+    def min_listing_sessions(self) -> int: ...
+    @property
+    def liquidity_window_sessions(self) -> int: ...
+    @property
+    def min_median_traded_value(self) -> float: ...
+    @property
+    def min_traded_sessions(self) -> int: ...
+    @property
+    def eligible_security_types(self) -> frozenset[str]: ...
+    @property
+    def unranked_sector_codes(self) -> frozenset[str]: ...
+    @property
+    def excluded_sector_codes(self) -> frozenset[str]: ...
+    @property
+    def daily_price_limit(self) -> float: ...
+    @property
+    def daily_price_limit_tolerance(self) -> float: ...
+
+
+class CoverageRulesView(Protocol):
+    """Every field of :class:`CoverageRules`, read-only."""
+
+    @property
+    def min_constituents(self) -> int: ...
+    @property
+    def sector_coverage_threshold(self) -> float: ...
+    @property
+    def overall_coverage_threshold(self) -> float: ...
+    @property
+    def computable_ratio_min(self) -> float: ...
+    @property
+    def ex_date_tag_ratio_min(self) -> float: ...
+
+
+class SectorCoreDefinition(Protocol):
+    """What the universe, the coverage checks and the ranking read (D-15)."""
+
+    @property
+    def method_version(self) -> str: ...
+    @property
+    def lookback_days(self) -> int: ...
+    @property
+    def universe(self) -> UniverseRulesView: ...
+    @property
+    def coverage(self) -> CoverageRulesView: ...
+    @property
+    def single_stock_dominance_share(self) -> float: ...
+
+
+class SectorEvalDefinition(SectorCoreDefinition, Protocol):
+    """What the evaluator's engine room reads on top of the core (D-15).
+
+    ``gate`` is the concrete :class:`GateRules`: a research variant carries the
+    published object itself, so the judgement thresholds cannot be loosened.
+    """
+
+    @property
+    def holding_days(self) -> int: ...
+    @property
+    def open_limit_up_factor(self) -> float: ...
+    @property
+    def gate(self) -> GateRules: ...
+
+
+# ---------------------------------------------------------------------------
+# Published definitions (ADR-0012 C-16, C-47)
+# ---------------------------------------------------------------------------
+
+
+class UnpublishedDefinition(Exception):
+    """A definition that is not one of :data:`PUBLISHED_DEFINITIONS` reached a guarded entry."""
+
+
+def is_method_version(value: str) -> bool:
+    """Whether ``value`` has the shape of a method version (``sector-rel-v1.0-L5-H5``).
+
+    The public face of the version pattern: a research variant's name must not
+    match it (D-15), and nothing outside this module reads the pattern itself.
+    """
+    return _VERSION_PATTERN.fullmatch(value) is not None
+
+
+def published_versions() -> frozenset[str]:
+    """The ``method_version`` strings of :data:`PUBLISHED_DEFINITIONS`, read now."""
+    return frozenset(definition.method_version for definition in PUBLISHED_DEFINITIONS)
+
+
+def require_published(definition: object) -> SectorMomentumDefinition:
+    """``definition`` itself when it **is** a published object; else :class:`UnpublishedDefinition`.
+
+    Identity, not equality: ``dataclasses.replace(SECTOR_MOMENTUM_V1)`` compares
+    equal and is still refused, and so is a subclass instance, a tightened copy
+    that reuses a published version string, and every research variant.
+    :data:`PUBLISHED_DEFINITIONS` is looked up on each call, not captured.
+    """
+    for published in PUBLISHED_DEFINITIONS:
+        if definition is published:
+            return published
+    version = getattr(definition, "method_version", None)
+    raise UnpublishedDefinition(
+        f"definition {version!r} ({type(definition).__name__}) is not one of the published "
+        "objects in PUBLISHED_DEFINITIONS; equal copies, subclasses and research variants "
+        "are refused (ADR-0012 C-47)"
+    )

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import shutil
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from app.services.sector_attestation import (
 )
 from app.services.sector_board import SectorBoardService
 from app.services.sector_runtime import runtime_from_check
+from tests.published_helpers import published
 from tests.sector_board_helpers import card_client, store_market
 from tests.sector_eval_helpers import synthetic_market
 
@@ -51,6 +53,13 @@ FAST = SectorMomentumDefinition(
     holding_days=V1.holding_days,
     gate=GateRules(lookahead_sample_dates=4),
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_is_published() -> Iterator[None]:
+    """FAST is V1 with fewer T1 dates; the gated entries accept it only while published."""
+    with published(FAST):
+        yield
 
 
 # ---------------------------------------------------------------------------

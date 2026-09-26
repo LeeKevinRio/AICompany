@@ -26,7 +26,7 @@ from typing import Final
 from app.sectors import constituents, coverage, index
 from app.sectors.constituents import Constituent
 from app.sectors.coverage import CoverageAssessment
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import SectorCoreDefinition
 from app.sectors.models import Coverage, ReasonCode
 from app.sectors.universe import CalculationSet
 
@@ -84,7 +84,7 @@ class SectorRanking:
         return tuple(row.reason_code for row in self.excluded)
 
 
-def rank_sectors(calc: CalculationSet, definition: SectorMomentumDefinition) -> SectorRanking:
+def rank_sectors(calc: CalculationSet, definition: SectorCoreDefinition) -> SectorRanking:
     """Rank the rankable sectors of ``calc`` by S_A and list the rest as excluded."""
     if calc.method_version != definition.method_version:
         raise ValueError("calculation set and definition disagree on method_version")

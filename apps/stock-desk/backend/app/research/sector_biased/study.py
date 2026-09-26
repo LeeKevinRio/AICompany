@@ -17,6 +17,14 @@ so the split is a reporting discipline; the numbers still come with the label.
 classification into panel frames: the classic survivorship and classification
 look-ahead set-up, recorded at fetch time so that no point-in-time view can
 see any of it (only :func:`hindsight_view` can).
+
+Data scope (ADR-0012 D-15, C-49; the sensitivity variants of
+:mod:`.sensitivity` run through the same gate): a study reads hindsight views
+only and its result must say ``regime="hindsight"``; every run in the panel is
+``backfill_non_pit``; and every ``session_date`` precedes D0, which is read
+from the market DB (read-only, D-12: the first session all four kinds were
+``ok``; no D0 yet means no date limit). Any violation raises
+:class:`BiasedScopeViolation` before anything is computed or written.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from app.backtest.sector_eval import (
     summarise,
 )
 from app.backtest.splits import walk_forward_splits
+from app.data.market_panel import MarketPanelReader
 from app.data.panel import (
     BARS_COLUMNS,
     CLASSIFICATION_COLUMNS,
@@ -54,7 +63,7 @@ from app.data.panel import (
 )
 from app.research.sector_biased.hindsight import BIAS_DIRECTIONS, BIAS_LABEL, hindsight_view
 from app.research.sector_biased.store import DATA_REGIME, ResearchStore
-from app.sectors.definition import SectorMomentumDefinition
+from app.sectors.definition import SectorEvalDefinition, SectorMomentumDefinition
 
 #: Walk-forward geometry of the biased study (methodology §5.3).
 TRAIN_SESSIONS: Final = 504
@@ -62,6 +71,67 @@ TEST_SESSIONS: Final = 126
 BACKFILL_SOURCE: Final = "backfill_non_pit"
 
 Segment = Literal["in_sample", "out_of_sample", "full"]
+
+#: ``PanelFrames`` members that carry a ``session_date`` column (all checked against D0).
+_DATED_FRAMES: Final = ("runs", "bars", "listing", "classification", "ex_dividend")
+
+
+class BiasedScopeViolation(ValueError):
+    """The biased study was handed data outside its scope (ADR-0012 D-15, C-49)."""
+
+
+@dataclass(frozen=True)
+class BiasedScope:
+    """What :func:`admit_biased_panel` established about a panel."""
+
+    #: D0 read from the market DB; ``None`` while there is none (no date limit).
+    d0: date | None
+    #: The latest ``session_date`` anywhere in the panel.
+    data_end: date
+
+
+def admit_biased_panel(panel: MarketPanel, market_db: MarketPanelReader) -> BiasedScope:
+    """The panel is back-filled history from before D0, or :class:`BiasedScopeViolation`.
+
+    * every run's ``source`` (and every bar's) is ``backfill_non_pit``;
+    * every ``session_date`` is strictly before D0, D0 being read from the
+      market DB through the read-only reader (a missing file raises, since
+      "no D0" would lift the limit).
+    """
+    frames = panel.frames
+    if frames.runs.empty:
+        raise BiasedScopeViolation("the panel has no runs: nothing shows it is back-filled")
+    sources = set(_texts(frames.runs["source"])) | set(_texts(frames.bars["source"]))
+    foreign = sorted(sources - {BACKFILL_SOURCE})
+    if foreign:
+        raise BiasedScopeViolation(
+            f"the biased study reads {BACKFILL_SOURCE} runs only; found sources {foreign}"
+        )
+    sessions = [
+        day for name in _DATED_FRAMES for day in getattr(frames, name)["session_date"].dropna()
+    ]
+    if not sessions:
+        raise BiasedScopeViolation("the panel has no dated rows")
+    data_end = max(pd.Timestamp(day).date() for day in sessions)
+    d0 = market_db.first_all_kinds_ok_session()
+    if d0 is not None and data_end >= d0:
+        raise BiasedScopeViolation(
+            f"the panel reaches {data_end.isoformat()}, on or after D0 {d0.isoformat()}; "
+            "the biased study and its sensitivity variants stay before D0 (ADR-0012 C-49)"
+        )
+    return BiasedScope(d0=d0, data_end=data_end)
+
+
+def _texts(column: pd.Series) -> list[str]:
+    return [str(value) for value in column.to_numpy(dtype=object)]
+
+
+def require_before_d0(d0: date | None, data_end: date) -> None:
+    """The write-side repeat of the D0 check, on what a report says about itself."""
+    if d0 is not None and data_end >= d0:
+        raise BiasedScopeViolation(
+            f"research data reaching {data_end.isoformat()} is not before D0 {d0.isoformat()}"
+        )
 
 
 def backfill_frames(
@@ -179,6 +249,9 @@ class BiasedStudyReport:
     statistics: SectorStatistics
     #: Walk-forward folds as ``(train_start, train_stop, test_start, test_stop)`` session dates.
     folds: tuple[tuple[date, date, date, date], ...]
+    #: D0 when the study ran (``None``: none yet) and the panel's last session (C-49).
+    d0: date | None
+    data_end: date
 
     def segment(self, name: Segment) -> BiasedSegment:
         for item in self.segments:
@@ -204,6 +277,7 @@ def run_biased_study(
     panel: MarketPanel,
     definition: SectorMomentumDefinition,
     *,
+    market_db: MarketPanelReader,
     cost_model: CostModel,
     start: date,
     seed: int,
@@ -216,6 +290,40 @@ def run_biased_study(
     ``m`` is 1: this data precedes D0 and never overlaps the judged data, so it
     does not count towards the judged m (methodology §3.2) -- but a version
     proposed *after* reading this report does (ADR-0012 D-14).
+
+    ``market_db`` is the read-only market DB D0 is read from; the panel must
+    pass :func:`admit_biased_panel` first (C-49).
+    """
+    scope = admit_biased_panel(panel, market_db)
+    return study_on_hindsight(
+        panel,
+        definition,
+        scope=scope,
+        cost_model=cost_model,
+        start=start,
+        seed=seed,
+        calendar=calendar,
+        train_sessions=train_sessions,
+        test_sessions=test_sessions,
+    )
+
+
+def study_on_hindsight(
+    panel: MarketPanel,
+    definition: SectorEvalDefinition,
+    *,
+    scope: BiasedScope,
+    cost_model: CostModel,
+    start: date,
+    seed: int,
+    calendar: Sequence[date] | None,
+    train_sessions: int,
+    test_sessions: int,
+) -> BiasedStudyReport:
+    """One study on an admitted panel (shared by :func:`run_biased_study` and the sensitivity).
+
+    Raises :class:`BiasedScopeViolation` when the engine did not read hindsight
+    views -- the only views this package may study (C-49).
     """
     run = evaluate_views(
         lambda t: hindsight_view(panel, t),
@@ -227,8 +335,10 @@ def run_biased_study(
         seed=seed,
         calendar=calendar,
     )
-    if run.regime != "hindsight":  # pragma: no cover - the factory above builds hindsight only
-        raise RuntimeError("the biased study must read hindsight views")
+    if run.regime != "hindsight":
+        raise BiasedScopeViolation(
+            f"the biased study read {run.regime!r} views; it reads hindsight views only"
+        )
     main: tuple[Week, ...] = run.weeks[0] if run.weeks else ()
     sessions = [day for day in run.calendar if day >= start]
     folds = walk_forward_splits(
@@ -283,19 +393,21 @@ def run_biased_study(
         ),
         statistics=run.statistics,
         folds=fold_dates,
+        d0=scope.d0,
+        data_end=scope.data_end,
     )
 
 
-def _jsonable(value: object) -> object:
+def jsonable(value: object) -> object:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        return {f.name: jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         return model_dump()
     if isinstance(value, Mapping | MappingProxyType):
-        return {str(k): _jsonable(v) for k, v in value.items()}
+        return {str(k): jsonable(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return [_jsonable(v) for v in value]
+        return [jsonable(v) for v in value]
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, date):
@@ -307,6 +419,9 @@ def save_study(report: BiasedStudyReport, store: ResearchStore) -> str:
     """Write every segment of ``report`` to the research DB (and nowhere else)."""
     if report.data_regime != DATA_REGIME or report.bias_label != BIAS_LABEL:
         raise ValueError("research rows must be labelled backfill_non_pit with the bias label")
+    if report.regime != "hindsight":
+        raise BiasedScopeViolation("research rows come from hindsight views only")
+    require_before_d0(report.d0, report.data_end)
     created = datetime.now(UTC)
     for item in report.segments:
         store.save_study_segment(
@@ -322,9 +437,9 @@ def save_study(report: BiasedStudyReport, store: ResearchStore) -> str:
             base_rate_net=item.summary.q_net,
             base_rate_gross=item.summary.q_gross,
             report={
-                "segment": _jsonable(item),
-                "folds": _jsonable(report.folds),
-                "seeds": _jsonable(report.statistics.seeds),
+                "segment": jsonable(item),
+                "folds": jsonable(report.folds),
+                "seeds": jsonable(report.statistics.seeds),
                 "delta_real": report.statistics.delta_real,
                 "delta_shuffle": report.statistics.delta_shuffle,
             },

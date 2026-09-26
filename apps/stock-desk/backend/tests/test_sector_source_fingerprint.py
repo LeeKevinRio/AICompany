@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -50,6 +50,7 @@ from app.sectors.store import (
 )
 from app.services.sector_attestation import AttestationCheck
 from app.services.sector_board import EVALUATION_HISTORY_START, SectorBoardService
+from tests.published_helpers import published
 from tests.sector_board_helpers import (
     card_client,
     live_card,
@@ -69,6 +70,13 @@ FAST = SectorMomentumDefinition(
 )
 NOW = datetime(2026, 9, 25, 14, 0, tzinfo=UTC)
 GOOD = AttestationCheck(running_commit="c0ffee", ci_passed_commit="c0ffee", problems=())
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_is_published() -> Iterator[None]:
+    """FAST is V1 with fewer T1 dates; the gated entries accept it only while published."""
+    with published(FAST):
+        yield
 
 
 def _copy_db(source: Path, target: Path) -> Path:
@@ -158,11 +166,87 @@ def test_every_runs_column_is_bound_by_the_digest(column: str, value: object) ->
 
 def test_the_fingerprint_refuses_what_no_market_db_holds() -> None:
     assert source_fingerprint(_runs([BASE_RUNS[3]])) is None  # no ok run
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not a market-DB run id"):
         source_fingerprint(_runs([("bf-bars-000001", *BASE_RUNS[0][1:])]))
     naive = _runs(BASE_RUNS).assign(recorded_at=pd.Timestamp("2026-09-01 10:00"))
     with pytest.raises(ValueError, match="timezone"):
         source_fingerprint(naive)
+
+
+#: ``BASE_RUNS``' digest before free-text escaping existed (qa v9 low item): pinned,
+#: so escaping provably leaves every ordinary digest -- and every stored row -- as it was.
+BASE_RUNS_DIGEST = "ec07a1a6060e361d75400dde02267569ce17ba20212114f9439ba438bb48dbd3"
+
+
+def test_escaping_leaves_ordinary_digests_unchanged() -> None:
+    fingerprint = source_fingerprint(_runs(list[tuple[object, ...]](BASE_RUNS)))
+    assert fingerprint is not None and fingerprint.digest == BASE_RUNS_DIGEST
+
+
+def _forged_single_run() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Two honest runs, and one run whose ``source`` spells out the rest of both.
+
+    Without escaping, the forged run's canonical line is the two honest lines
+    joined by the line separator, so the digests collide.
+    """
+    rows: list[tuple[object, ...]] = [BASE_RUNS[0], BASE_RUNS[1]]
+    honest = _runs(rows)
+    separator = panel_module._FIELD_SEPARATOR
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(panel_module, "_escape_field", lambda text: text)
+        (_, first), (_, second) = panel_module._canonical_run_rows(honest)
+    first_fields, second_fields = first.split(separator), second.split(separator)
+    source = separator.join(first_fields[4:]) + "\n" + separator.join(second_fields[:5])
+    forged = _runs([(*BASE_RUNS[0][:4], source, "ok", 980, 1000)])
+    return honest, forged
+
+
+def test_a_separator_inside_a_text_field_cannot_forge_a_run_boundary() -> None:
+    honest, forged = _forged_single_run()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(panel_module, "_escape_field", lambda text: text)
+        unescaped = source_fingerprint(honest), source_fingerprint(forged)
+    assert unescaped[0] is not None and unescaped[1] is not None
+    assert unescaped[0].digest == unescaped[1].digest  # teeth: the forgery works unescaped
+    escaped = source_fingerprint(honest), source_fingerprint(forged)
+    assert escaped[0] is not None and escaped[1] is not None
+    assert escaped[0].digest != escaped[1].digest
+
+
+@pytest.mark.parametrize(
+    ("text", "escaped"),
+    [
+        ("twse_snapshot", "twse_snapshot"),
+        ("a\x1fb", "a\\x1fb"),
+        ("a\nb", "a\\nb"),
+        ("a\\b", "a\\\\b"),
+        # The literal characters of an escape are not confused with the escape itself.
+        ("a\\x1fb", "a\\\\x1fb"),
+    ],
+)
+def test_free_text_escaping_is_injective(text: str, escaped: str) -> None:
+    assert panel_module._escape_field(text) == escaped
+
+
+@pytest.mark.parametrize(
+    ("run_id", "message"),
+    [
+        ("bf-bars-000001", "not a market-DB run id"),
+        (1.0, "has type float"),
+        (True, "is a boolean"),
+    ],
+)
+def test_a_bad_run_id_says_whether_type_or_value_is_wrong(run_id: object, message: str) -> None:
+    frame = _runs([(run_id, *BASE_RUNS[0][1:])])
+    with pytest.raises(ValueError, match=message):
+        source_fingerprint(frame)
+
+
+def test_integer_run_ids_of_any_kind_are_accepted() -> None:
+    as_text = source_fingerprint(_runs(list[tuple[object, ...]](BASE_RUNS)))
+    rows: list[tuple[object, ...]] = [(int(str(row[0])), *row[1:]) for row in BASE_RUNS]
+    as_int = source_fingerprint(_runs(rows))
+    assert as_text == as_int
 
 
 # ---------------------------------------------------------------------------

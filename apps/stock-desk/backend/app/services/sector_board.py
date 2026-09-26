@@ -63,7 +63,14 @@ from app.backtest.sector_eval import BoardFingerprint, BoardRow
 from app.data.market_panel import MarketPanelStore
 from app.data.panel import MarketPanel, PointInTimePanel
 from app.sectors import coverage, index
-from app.sectors.definition import SECTOR_MOMENTUM_V1, SectorMomentumDefinition
+from app.sectors import definition as definition_module
+from app.sectors.definition import (
+    SECTOR_MOMENTUM_V1,
+    SectorMomentumDefinition,
+    UnpublishedDefinition,
+    published_versions,
+    require_published,
+)
 from app.sectors.gate import PitStatus, judged_window
 from app.sectors.models import ApprovalKind, ApprovalOperator, ApprovalRecord
 from app.sectors.ranking import SectorRanking, rank_sectors
@@ -100,10 +107,23 @@ EVALUATION_HISTORY_START: Final = date(1900, 1, 1)
 #: ``running_commit`` when git could not say (the row is NE-7 anyway).
 UNKNOWN_COMMIT: Final = "unknown"
 
-#: Method versions this build can register (only frozen definitions belong here).
-KNOWN_DEFINITIONS: Final[Mapping[str, SectorMomentumDefinition]] = {
-    SECTOR_MOMENTUM_V1.method_version: SECTOR_MOMENTUM_V1,
-}
+
+def published_definition(chosen: SectorMomentumDefinition | str) -> SectorMomentumDefinition:
+    """The one way this module takes hold of a method definition (ADR-0012 D-15, C-47).
+
+    An object must **be** one of ``PUBLISHED_DEFINITIONS`` (object identity);
+    a version string resolves to the published object carrying it. Anything
+    else -- an equal copy, a subclass, a research variant, an unknown string --
+    raises ``UnpublishedDefinition``. The service reads ``self.definition``
+    only through here, and ``register-version`` resolves its argument here.
+    """
+    if isinstance(chosen, str):
+        for candidate in definition_module.PUBLISHED_DEFINITIONS:
+            if candidate.method_version == chosen:
+                return require_published(candidate)
+        raise UnpublishedDefinition(f"method_version {chosen!r} is not a published version")
+    return require_published(chosen)
+
 
 #: Symbol -> display name for the listed constituents (display only).
 NameLookup = Callable[[Collection[str]], Mapping[str, str]]
@@ -315,6 +335,7 @@ class SectorBoardService:
     clock: Callable[[], datetime] = _utc_now
 
     def __post_init__(self) -> None:
+        published_definition(self.definition)  # fail at construction, not at 17:30
         self.boards = SectorBoardStore(self.main_db)
         # The market store is the repository's source verifier (C-50): ``app.sectors``
         # may not import it (C-1), so it is injected here.
@@ -350,7 +371,7 @@ class SectorBoardService:
         return RefreshResult(t, d0, board_id, stats_run_id, tuple(notes))
 
     def _accumulation_start(self, notes: list[str]) -> date | None:
-        version = self.definition.method_version
+        version = published_definition(self.definition).method_version
         row = self.registry.get(version)
         if row is None:
             notes.append("method_version_not_registered")
@@ -375,10 +396,11 @@ class SectorBoardService:
             return self._refresh_board(t, notes if notes is not None else [])
 
     def _refresh_board(self, t: date, notes: list[str]) -> str | None:
+        definition = published_definition(self.definition)
         frames = self.market_store.load_panel_frames(
             t - timedelta(days=BOARD_HISTORY_CALENDAR_DAYS), t
         )
-        computation = compute_board(MarketPanel(frames).as_of(t), self.definition)
+        computation = compute_board(MarketPanel(frames).as_of(t), definition)
         if computation is None:
             notes.append("no_visible_bars")
             return None
@@ -402,7 +424,7 @@ class SectorBoardService:
         )
         listed = {item.symbol for row in computation.ranking.ranked for item in row.constituents}
         names = dict(self.names(listed)) if listed else {}
-        fresh = stored_board_of(computation, provenance, self.definition, names)
+        fresh = stored_board_of(computation, provenance, definition, names)
         latest = self.boards.latest_board(self.market)
         if latest is not None and latest.data_as_of == t and same_board(latest, fresh):
             notes.append("board_unchanged")
@@ -414,7 +436,7 @@ class SectorBoardService:
                 ",".join(computation.ranking.invariant_violations),
             )
         self.boards.save_board(
-            definition=self.definition,
+            definition=definition,
             calc=computation.calc,
             ranking=computation.ranking,
             provenance=provenance,
@@ -424,17 +446,18 @@ class SectorBoardService:
         return provenance.board_id
 
     def _maybe_evaluate(self, t: date, d0: date | None, notes: list[str]) -> str | None:
-        version = self.definition.method_version
+        definition = published_definition(self.definition)
+        version = definition.method_version
         registered = self.registry.get(version)
         if d0 is None or registered is None:
             return None
         summary = self.market_store.run_status_summary(d0, t)
         days = sorted(summary["bars"].ok_sessions)
-        window = judged_window(days, d0, self.definition.holding_days)
+        window = judged_window(days, d0, definition.holding_days)
         if not window.decision_dates:
             return None
         last_decision = window.decision_dates[-1]
-        latest_exit = days[days.index(last_decision) + self.definition.holding_days]
+        latest_exit = days[days.index(last_decision) + definition.holding_days]
         try:
             history = self.stats.load(version)
         except BiasedDataRejected:
@@ -457,7 +480,7 @@ class SectorBoardService:
         m = self.registry.m() + (0 if registered.counts_toward_m else 1)
         evaluation = sector_eval.evaluate(
             panel,
-            self.definition,
+            definition,
             cost_model=self.cost_model,
             start=d0,
             m=m,
@@ -476,7 +499,7 @@ class SectorBoardService:
         now = self.clock()
         record = sector_eval.to_stats_record(
             evaluation,
-            self.definition,
+            definition,
             run_id=f"{version}:{latest_exit.isoformat()}:{now.strftime('%Y%m%dT%H%M%S%f')}",
             computed_at=now,
             recompute_session=latest_exit,
@@ -571,7 +594,11 @@ def approve(
     repo_root: Path = REPO_ROOT,
     clock: Callable[[], datetime] = _utc_now,
 ) -> ApprovalRecord:
-    """Write one ``sector_gate_approvals`` row after every C-31 check (T-19)."""
+    """Write one ``sector_gate_approvals`` row after every C-31 check (T-19).
+
+    A row whose ``method_version`` is not published raises ``BiasedDataRejected``
+    (ADR-0012 C-47), like the repository itself.
+    """
     checked_kind = _kind(kind)
     checked_operator = _operator(operator)
     if checked_kind == "quarterly_qa" and checked_operator != "dev-lead":
@@ -583,6 +610,12 @@ def approve(
     record = stats.find(run_id)
     if record is None:
         raise ApprovalRefused(f"找不到統計列 run_id={run_id}")
+    if record.method_version not in published_versions():
+        # The repository refuses such a row already; the CLI does not rely on it (C-47).
+        raise BiasedDataRejected(
+            f"stats run {run_id}: method_version {record.method_version!r} is not a published "
+            "version; approvals name published versions only (ADR-0012 C-47)"
+        )
     document = review_document(review_doc, repo_root, must_contain=(run_id, record.method_version))
     approval = ApprovalRecord(
         kind=checked_kind,
@@ -616,9 +649,10 @@ def register_version(
     the document is checked, not stored; its path and blob hash are printed.
     """
     _operator(operator)
-    definition = KNOWN_DEFINITIONS.get(method_version)
-    if definition is None:
-        raise ApprovalRefused(f"未知的 method_version：{method_version}")
+    try:
+        definition = published_definition(method_version)
+    except UnpublishedDefinition as exc:
+        raise ApprovalRefused(f"未知的 method_version：{method_version}") from exc
     review_document(review_doc, repo_root, must_contain=(method_version,))
     probe = git if git is not None else sector_attestation.SubprocessGit(repo_root)
     head, clean = probe.head(), probe.is_clean()
@@ -649,7 +683,9 @@ def _parser() -> argparse.ArgumentParser:
     approve_cmd.add_argument("--review-doc", required=True)
     register_cmd = commands.add_parser("register-version", help="登記凍結的計算版本（D-6）")
     register_cmd.add_argument(
-        "--method-version", default=SECTOR_MOMENTUM_V1.method_version, choices=KNOWN_DEFINITIONS
+        "--method-version",
+        default=SECTOR_MOMENTUM_V1.method_version,
+        choices=sorted(published_versions()),
     )
     register_cmd.add_argument("--operator", required=True, choices=OPERATORS)
     register_cmd.add_argument("--review-doc", required=True)
@@ -691,7 +727,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"registered {args.method_version} frozen_commit={commit}")
         return 0
-    except ApprovalRefused as exc:
+    except (ApprovalRefused, BiasedDataRejected) as exc:
         print(f"拒絕：{exc}", file=sys.stderr)
         return 1
 

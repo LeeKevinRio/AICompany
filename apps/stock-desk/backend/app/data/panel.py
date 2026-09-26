@@ -189,6 +189,40 @@ def _texts(column: pd.Series) -> list[str]:
     return [str(value) for value in column.to_numpy(dtype=object)]
 
 
+def _escape_field(text: str) -> str:
+    """Free text made safe to join: no raw field or line separator survives.
+
+    The backslash is escaped first, so the mapping is injective; text without
+    a backslash, U+001F or a newline -- every real ``kind`` / ``source`` /
+    ``status`` -- is unchanged, and so is every digest computed before this
+    escaping existed.
+    """
+    return text.replace("\\", "\\\\").replace(_FIELD_SEPARATOR, "\\x1f").replace("\n", "\\n")
+
+
+def _escaped_texts(column: pd.Series) -> list[str]:
+    return [_escape_field(text) for text in _texts(column)]
+
+
+def _run_id_int(value: object) -> int:
+    """A market-DB run id as an integer; the error says whether the type or the value is wrong."""
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(f"runs.run_id {value!r} is a boolean; market-DB run ids are integers")
+    if isinstance(value, int | np.integer):
+        return int(value)
+    if isinstance(value, str):
+        if value.isascii() and value.isdecimal():
+            return int(value)
+        raise ValueError(
+            f"runs.run_id {value!r} is not a market-DB run id (an integer); research "
+            "runs such as bf-* have no source fingerprint"
+        )
+    raise ValueError(
+        f"runs.run_id {value!r} has type {type(value).__name__}; the fingerprint needs "
+        "integer market-DB run ids (a float column usually means a missing run_id)"
+    )
+
+
 def _count_texts(column: pd.Series) -> list[str]:
     """Integer counts as decimal text; a missing count is empty text."""
     values = pd.to_numeric(column, errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
@@ -199,7 +233,7 @@ def _count_texts(column: pd.Series) -> list[str]:
 
 def _canonical_run_rows(ok: pd.DataFrame) -> list[tuple[int, str]]:
     """``(run_id, line)`` per run: every ``RUNS_COLUMNS`` field in canonical text."""
-    run_ids = [int(value) for value in _texts(ok["run_id"])]
+    run_ids = [_run_id_int(value) for value in ok["run_id"].to_numpy(dtype=object)]
     sessions = np.datetime_as_string(
         pd.to_datetime(ok["session_date"]).to_numpy(dtype="datetime64[D]"), unit="D"
     )
@@ -211,11 +245,11 @@ def _canonical_run_rows(ok: pd.DataFrame) -> list[tuple[int, str]]:
     recorded_text = np.datetime_as_string(recorded_utc.to_numpy(dtype="datetime64[us]"), unit="us")
     columns = (
         [str(run_id) for run_id in run_ids],
-        _texts(ok["kind"]),
+        _escaped_texts(ok["kind"]),
         [str(value) for value in sessions],
         [f"{value}+00:00" for value in recorded_text],
-        _texts(ok["source"]),
-        _texts(ok["status"]),
+        _escaped_texts(ok["source"]),
+        _escaped_texts(ok["status"]),
         _count_texts(ok["row_count"]),
         _count_texts(ok["expected_count"]),
     )
@@ -236,9 +270,12 @@ def source_fingerprint(runs: pd.DataFrame) -> SourceFingerprint | None:
     id, ISO session date, UTC ISO ``recorded_at`` to the microsecond, plain
     text, integer counts, empty text for a missing ``expected_count``), joined
     by U+001F, one run per line, after :data:`SOURCE_DIGEST_SCHEME`, and
-    hashed with SHA-256. ``None`` when there is no such run. A run id that is
-    not an integer (anything but a market-DB run, e.g. research ``bf-*`` ids)
-    raises ``ValueError``.
+    hashed with SHA-256. The free-text fields (``kind``, ``source``,
+    ``status``) are escaped first (backslash, U+001F and newline), so no value
+    can forge a field or run boundary; ordinary values are unchanged by it.
+    ``None`` when there is no such run. A run id that is not an integer
+    (anything but a market-DB run, e.g. research ``bf-*`` ids, or a float or
+    boolean column) raises ``ValueError`` naming which of the two it is.
     """
     missing = [column for column in RUNS_COLUMNS if column not in runs.columns]
     if missing:

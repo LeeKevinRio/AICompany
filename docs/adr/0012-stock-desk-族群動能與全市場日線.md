@@ -763,7 +763,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 研究變體：
     - 具體型別只能放在 `app/research/sector_biased/sensitivity.py`（`ResearchVariant`、`ResearchUniverseRules`、`ResearchCoverageRules`，都是 frozen dataclass）。
     - 不得繼承 `SectorMomentumDefinition`、`UniverseRules`、`CoverageRules`、`GateRules`；不得對它們或 `SECTOR_MOMENTUM_*` 使用 `dataclasses.replace`；不得呼叫 `SectorMomentumDefinition(...)`。
-    - `method_version` 必須 fullmatch `^research-sens-[a-z0-9.]+(?:-[a-z0-9.]+)*$`，而且 `is_method_version()` 必須為 False。例如 `research-sens-v1.0-L5-H5-liq5m`。
+    - `method_version` 必須 fullmatch `^research-sens-[a-z0-9.]+(?:-[a-z0-9.]+)*$`，而且 `is_method_version()` 必須為 False。例如 `research-sens-v1.0-l5-h5-liq5m`（v8 實作時更正：原範例含大寫 L、H，不符合本條 regex；以 regex 為準，版名一律小寫）。
     - 每個變體都由一個已發布定義衍生，**只改一個參數**：`gate` 與基準是同一個物件，`lookback_days`、`holding_days`、`open_limit_up_factor` 與基準相等；`min_constituents` 至少為 3（C-35 要求 top2＋bottom1）。
     - 變體表固定為 `SENSITIVITY_VARIANTS`，內容與方法論 §11.1 一致：流動性 NT$500 萬、NT$2,000 萬；最小成分數 3、8。要增減變體，須先修方法論 §11.1 並經 qa 審查。
     - 每次執行都跑全部變體加上基準，全部寫入、全部列出，不得只跑或只存其中一部分。
