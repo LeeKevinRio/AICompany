@@ -35,7 +35,7 @@ from app.main import app
 from app.sectors.definition import SECTOR_MOMENTUM_V1 as V1
 from app.sectors.definition import CoverageRules, SectorMomentumDefinition
 from app.sectors.gate import UNVERIFIED_RUNTIME, SectorGateRuntime
-from app.sectors.models import ApprovalRecord
+from app.sectors.models import ApprovalRecord, InsufficientReason
 from app.sectors.store import (
     CardRead,
     StoredBoard,
@@ -117,7 +117,7 @@ FORBIDDEN_FIELD_WORDS = (
 )
 
 
-def _stats(**overrides: object) -> Any:
+def _stats(**overrides: Any) -> Any:
     return stats_record("stats-1", **overrides)
 
 
@@ -206,7 +206,7 @@ def _count_statements(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     real_connect = sqlite3.connect
 
     def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-        conn = real_connect(*args, **kwargs)
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
 
@@ -469,7 +469,7 @@ def test_the_ex_date_tag_is_computed_by_the_backend(
 # ---------------------------------------------------------------------------
 
 
-def _insufficient_cases() -> dict[str, dict[str, Any]]:
+def _insufficient_cases() -> dict[InsufficientReason, dict[str, Any]]:
     return {
         "as_of_unknown": _build(None),
         "ex_dividend_feed_gap": _build(_board(feed_covered=False)),
@@ -690,7 +690,7 @@ def test_standing_disclosures_when_the_card_is_ok() -> None:
 
 def _market_exclusion_sentence(body: dict[str, Any]) -> str:
     prefix = wording.MARKET_EXCLUSION_COUNTS.split("{", 1)[0]
-    found = [sentence for sentence in body["disclosures"] if sentence.startswith(prefix)]
+    found: list[str] = [sentence for sentence in body["disclosures"] if sentence.startswith(prefix)]
     assert len(found) == 1, body["disclosures"]
     return found[0]
 
@@ -764,15 +764,15 @@ def test_trading_days_behind_is_the_c4_rule_on_the_market_calendar() -> None:
     sessions = frozenset(CALENDAR)
 
     class Source:
-        def market_trading_days(self, market: str, start: date, end: date) -> list[date]:
-            return [day for day in sessions if start <= day <= end]
+        def market_trading_days(self, market: str, start: date, end: date) -> frozenset[date]:
+            return frozenset(day for day in sessions if start <= day <= end)
 
     for last, today in ((CALENDAR[-4], AS_OF), (AS_OF, AS_OF + timedelta(days=3))):
         assert api.trading_days_behind(sessions, last, today) == trading_days_behind_market(
             Source(),
             market="TW",
             last_bar_date=last,
-            today=today,  # type: ignore[arg-type]
+            today=today,
         )
     assert api.trading_days_behind(frozenset(), AS_OF, AS_OF) is None
 

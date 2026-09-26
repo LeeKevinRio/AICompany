@@ -127,8 +127,8 @@ def synthetic_market(
     # Sector drift: AR(1) with ``sector_persistence``; zero-mean when 0.
     drift = np.zeros((n_days, len(codes)))
     shocks = rng.normal(0.0, sector_vol, (n_days, len(codes)))
-    for day in range(1, n_days):
-        drift[day] = sector_persistence * drift[day - 1] + shocks[day]
+    for step in range(1, n_days):
+        drift[step] = sector_persistence * drift[step - 1] + shocks[step]
     small = sorted(codes, key=lambda code: sectors[code])[:2]
     column = {code: index for index, code in enumerate(codes)}
     sector_ret = np.column_stack([drift[:, column[code_of[s]]] for s in symbols])
@@ -143,8 +143,8 @@ def synthetic_market(
     events: list[DividendEvent] = []
     candidates = rng.permutation(n_sym)[:n_dividends]
     for index in candidates:
-        day = int(rng.integers(warmup + 15, n_days - 10))
-        events.append(DividendEvent(symbols[index], days[day], 2.0))
+        ex_index = int(rng.integers(warmup + 15, n_days - 10))
+        events.append(DividendEvent(symbols[index], days[ex_index], 2.0))
     ex_by = {(e.symbol, e.ex_date): e for e in events}
 
     delisted = symbols[-1] if delist else None
@@ -157,17 +157,17 @@ def synthetic_market(
     closes = np.zeros((n_days, n_sym))
     changes = np.full((n_days, n_sym), np.nan)
     prev = np.full(n_sym, 50.0) * np.exp(rng.normal(0.0, 0.3, n_sym))
-    for day in range(n_days):
+    for step in range(n_days):
         reference = prev.copy()
         for index, symbol in enumerate(symbols):
-            event = ex_by.get((symbol, days[day]))
+            event = ex_by.get((symbol, days[step]))
             if event is not None:
                 reference[index] = prev[index] - event.dividend
-        opens[day] = reference * np.exp(overnight[day])
-        closes[day] = np.round(opens[day] * np.exp(intraday[day]), 2)
-        opens[day] = np.round(opens[day], 2)
-        changes[day] = np.round(closes[day] - reference, 2)
-        prev = closes[day]
+        opens[step] = reference * np.exp(overnight[step])
+        closes[step] = np.round(opens[step] * np.exp(intraday[step]), 2)
+        opens[step] = np.round(opens[step], 2)
+        changes[step] = np.round(closes[step] - reference, 2)
+        prev = closes[step]
 
     run_rows: list[dict[str, object]] = []
     bar_parts: list[pd.DataFrame] = []

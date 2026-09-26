@@ -778,12 +778,12 @@ class _CacheThatCannotReadBack(PriceBarCache):
         super().__init__(db_path=db_path)
         self.fail_reads = False
 
-    def get(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def, override]
+    def get(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
         if self.fail_reads:
             return None
         return super().get(*args, **kwargs)  # type: ignore[arg-type]
 
-    def put(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+    def put(self, *args: object, **kwargs: object) -> None:
         super().put(*args, **kwargs)  # type: ignore[arg-type]
         self.fail_reads = True
 
@@ -844,15 +844,15 @@ class _WriteSpyCache(PriceBarCache):
         super().__init__(db_path=db_path)
         self.writes = 0
 
-    def put(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+    def put(self, *args: object, **kwargs: object) -> None:
         self.writes += 1
         super().put(*args, **kwargs)  # type: ignore[arg-type]
 
-    def record_fetch(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+    def record_fetch(self, *args: object, **kwargs: object) -> None:
         self.writes += 1
         super().record_fetch(*args, **kwargs)  # type: ignore[arg-type]
 
-    def record_attempt(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+    def record_attempt(self, *args: object, **kwargs: object) -> None:
         self.writes += 1
         super().record_attempt(*args, **kwargs)  # type: ignore[arg-type]
 

@@ -83,9 +83,12 @@ def test_a_capture_is_followed_by_a_refresh(monkeypatch: pytest.MonkeyPatch) -> 
     summary = CaptureSummary(session_date=date(2026, 9, 25), records=())
     monkeypatch.setattr(scheduler_module, "TwseSnapshotAdapter", Adapter)
     monkeypatch.setattr(scheduler_module, "get_market_panel_store", lambda: object())
-    monkeypatch.setattr(
-        scheduler_module, "capture_once", lambda adapter, store: calls.append("capture") or summary
-    )
+
+    def capture(adapter: object, store: object) -> CaptureSummary:
+        calls.append("capture")
+        return summary
+
+    monkeypatch.setattr(scheduler_module, "capture_once", capture)
 
     def refresh() -> RefreshResult:
         calls.append("refresh")
@@ -147,8 +150,6 @@ class _Index:
 
     def get_daily_bars(self, symbol: str, market: str, start: date, end: date) -> ProviderResult:
         return ProviderResult(
-            symbol=symbol,
-            market="TW",
             bars=self._bars,
             status=DataStatus.BACKUP,
             source="fake",

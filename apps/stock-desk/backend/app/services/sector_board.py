@@ -57,7 +57,7 @@ from typing import Final, get_args
 
 import pandas as pd
 
-from app.backtest import sector_eval
+from app.backtest import sector_eval as sector_eval
 from app.backtest.costs import CostModel
 from app.backtest.sector_eval import BoardFingerprint, BoardRow
 from app.data.market_panel import MarketPanelStore
@@ -73,7 +73,8 @@ from app.sectors.definition import (
 )
 from app.sectors.gate import PitStatus, judged_window
 from app.sectors.models import ApprovalKind, ApprovalOperator, ApprovalRecord
-from app.sectors.ranking import SectorRanking, rank_sectors
+from app.sectors.ranking import SectorRanking
+from app.sectors.ranking import rank_sectors as rank_sectors
 from app.sectors.store import (
     BiasedDataRejected,
     BoardProvenance,
@@ -86,7 +87,8 @@ from app.sectors.store import (
     StoredExcludedSector,
     StoredRankedSector,
 )
-from app.sectors.universe import CalculationSet, calculation_set
+from app.sectors.universe import CalculationSet
+from app.sectors.universe import calculation_set as calculation_set
 from app.services import sector_attestation
 from app.services.sector_attestation import BACKEND_ROOT, AttestationCheck, GitProbe
 from app.services.sector_runtime import runtime_from_check
@@ -95,7 +97,8 @@ logger = logging.getLogger(__name__)
 
 # T-15: boards are built with the very function objects ``calculation_set`` and
 # ``rank_sectors`` imported above -- the ones the evaluator's replay calls
-# (tests/test_sector_eval.py asserts the identity).
+# (tests/test_sector_eval.py asserts the identity). They and ``sector_eval`` are
+# re-exported (``import x as x``) so the tests can reach them through this module.
 
 #: The repository root (review documents must live inside it, C-31).
 REPO_ROOT: Final = BACKEND_ROOT.parents[2]

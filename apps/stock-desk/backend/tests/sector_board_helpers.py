@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -29,6 +29,7 @@ from app.data.interface import (
     DividendAnnounceSnapshotRow,
     ListingSnapshotRow,
     SnapshotKind,
+    SnapshotRunStatus,
 )
 from app.data.market_panel import MarketPanelReader, MarketPanelStore
 from app.data.panel import SourceFingerprint, source_fingerprint
@@ -49,6 +50,32 @@ from tests.source_helpers import DEFAULT_FINGERPRINT
 
 def _decimal(value: object) -> Decimal:
     return Decimal(repr(float(value)))  # type: ignore[arg-type]
+
+
+def _date(value: object) -> date:
+    """A ``session_date`` / ``ex_date`` cell of a synthetic frame.
+
+    :func:`tests.sector_eval_helpers.synthetic_market` fills these object
+    columns with :class:`datetime.date` values only; pandas-stubs types a cell
+    as the whole ``Scalar`` union, so the known type is restated here.
+    """
+    return cast(date, value)
+
+
+def _recorded_at(value: object) -> datetime:
+    """A ``recorded_at`` cell (tz-aware ``datetime64[us, UTC]``) as a ``datetime``."""
+    # The column is datetime64, so the cell is a pd.Timestamp; the stubs say Scalar.
+    return pd.Timestamp(cast(pd.Timestamp, value)).to_pydatetime()
+
+
+class _RunArgs(TypedDict):
+    """The ``record_run`` arguments shared by every snapshot kind."""
+
+    kind: SnapshotKind
+    session_date: date
+    source: str
+    status: SnapshotRunStatus
+    expected_count: int
 
 
 def _groups(frame: pd.DataFrame) -> Mapping[str, pd.DataFrame]:
@@ -90,33 +117,39 @@ def store_market(
         runs = runs.loc[runs["source"] != "finmind_warmup"]
         warm_ids = set(warm["run_id"].astype(str))
         warm_bars = frames.bars.loc[frames.bars["run_id"].astype(str).isin(warm_ids)]
-        clock["now"] = pd.Timestamp(warm["recorded_at"].max()).to_pydatetime()
-        for symbol, rows in warm_bars.groupby("symbol", sort=True):
+        clock["now"] = _recorded_at(warm["recorded_at"].max())
+        for symbol, symbol_rows in warm_bars.groupby("symbol", sort=True):
             store.record_symbol_backfill(
                 symbol=str(symbol),
                 source="finmind_warmup",
-                rows=[(row.session_date, _bar_row(row)) for row in rows.itertuples(index=False)],
+                rows=[
+                    (_date(row.session_date), _bar_row(row))
+                    for row in symbol_rows.itertuples(index=False)
+                ],
             )
     for run in runs.itertuples(index=False):
         run_id = str(run.run_id)
-        clock["now"] = pd.Timestamp(run.recorded_at).to_pydatetime()
+        clock["now"] = _recorded_at(run.recorded_at)
         kind = str(run.kind)
-        common = {
-            "kind": kind,
-            "session_date": run.session_date,
+        common: _RunArgs = {
+            # frames.runs holds the market DB's own vocabulary (SnapshotKind /
+            # SnapshotRunStatus); a string column carries no Literal type.
+            "kind": cast(SnapshotKind, kind),
+            "session_date": _date(run.session_date),
             "source": str(run.source),
-            "status": str(run.status),
-            "expected_count": int(run.expected_count),
+            "status": cast(SnapshotRunStatus, str(run.status)),
+            # int64 column: the cell is an int at runtime, the stubs say Scalar.
+            "expected_count": int(cast(int, run.expected_count)),
         }
         if kind == "bars":
             rows = [_bar_row(row) for row in bars.get(run_id, empty).itertuples(index=False)]
-            store.record_run(**common, row_count=len(rows), bars_rows=rows)  # type: ignore[arg-type]
+            store.record_run(**common, row_count=len(rows), bars_rows=rows)
         elif kind == "listing":
             listed = [
                 ListingSnapshotRow(symbol=str(row.symbol), security_type=str(row.security_type))
                 for row in listing.get(run_id, empty).itertuples(index=False)
             ]
-            store.record_run(**common, row_count=len(listed), listing_rows=listed)  # type: ignore[arg-type]
+            store.record_run(**common, row_count=len(listed), listing_rows=listed)
         elif kind == "classification":
             classified = [
                 ClassificationSnapshotRow(
@@ -126,21 +159,17 @@ def store_market(
                 )
                 for row in classes.get(run_id, empty).itertuples(index=False)
             ]
-            store.record_run(  # type: ignore[arg-type]
-                **common, row_count=len(classified), classification_rows=classified
-            )
+            store.record_run(**common, row_count=len(classified), classification_rows=classified)
         else:
             announced = [
                 DividendAnnounceSnapshotRow(
                     symbol=str(row.symbol),
-                    ex_date=row.ex_date,
-                    raw={"Date": row.ex_date.isoformat(), "Code": str(row.symbol)},
+                    ex_date=_date(row.ex_date),
+                    raw={"Date": _date(row.ex_date).isoformat(), "Code": str(row.symbol)},
                 )
                 for row in dividends.get(run_id, empty).itertuples(index=False)
             ]
-            store.record_run(  # type: ignore[arg-type]
-                **common, row_count=len(announced), dividend_announce_rows=announced
-            )
+            store.record_run(**common, row_count=len(announced), dividend_announce_rows=announced)
     return store
 
 

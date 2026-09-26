@@ -106,8 +106,14 @@ from app.sectors.models import (
     SelfcheckStatus,
     StatsRecord,
 )
-from app.sectors.ranking import SectorRanking, rank_sectors
-from app.sectors.universe import CalculationSet, calculation_set
+from app.sectors.ranking import SectorRanking
+from app.sectors.ranking import rank_sectors as rank_sectors
+from app.sectors.universe import CalculationSet
+from app.sectors.universe import calculation_set as calculation_set
+
+# ``calculation_set`` / ``rank_sectors`` are re-exported (``import x as x``) on
+# purpose: T-15 asserts the evaluator and the services layer hold the very same
+# function objects.
 
 #: The test-window length of the walk-forward geometry kept for segment reports.
 SEGMENT_SESSIONS: Final = 126

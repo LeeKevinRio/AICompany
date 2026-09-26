@@ -59,6 +59,11 @@ class _Service:
         self.asked.append(symbol)
         return self.answers[symbol]
 
+    def get_cached_bars(self, symbol: str, market: str, start: date, end: date) -> ProviderResult:
+        # The probe only runs the live ladder (load_bars); a cache-only read
+        # here is a test wiring mistake and should fail loudly.
+        raise NotImplementedError("diagnose --probe never reads cache-only")
+
 
 def _weekday(days_ago: int) -> date:
     day = date.today() - timedelta(days=days_ago)

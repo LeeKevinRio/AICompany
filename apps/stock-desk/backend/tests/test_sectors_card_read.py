@@ -44,7 +44,7 @@ def _trace(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     real = sqlite3.connect
 
     def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-        conn = real(*args, **kwargs)
+        conn: sqlite3.Connection = real(*args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
 

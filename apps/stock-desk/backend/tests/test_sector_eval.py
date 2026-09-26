@@ -373,6 +373,16 @@ def test_the_ci_path_contains_ex_dividend_events(
     assert t4.status == "pass"
 
 
+def _cell(frame: pd.DataFrame, row: date, column: str) -> float:
+    """One float cell of a frame indexed by a unique ``session_date``.
+
+    pandas-stubs types ``frame.loc[row, column]`` as the whole ``Scalar`` union
+    (and rejects a ``date`` row label); reading the column first, then the row,
+    is the same cell with a type that converts cleanly to ``float``.
+    """
+    return float(frame[column].loc[row])
+
+
 @pytest.mark.sector_ne7
 def test_label_factor_is_previous_close_over_the_reference(market: SyntheticMarket) -> None:
     factors = sector_eval.pit_label_factors(market.panel)
@@ -387,8 +397,8 @@ def test_label_factor_is_previous_close_over_the_reference(market: SyntheticMark
         bars = bars.drop_duplicates("session_date", keep="last").set_index("session_date")
         days = list(bars.index)
         before = days[days.index(event.ex_date) - 1]
-        reference = bars.loc[event.ex_date, "close"] - bars.loc[event.ex_date, "change"]
-        expected = bars.loc[before, "close"] / reference
+        reference = _cell(bars, event.ex_date, "close") - _cell(bars, event.ex_date, "change")
+        expected = _cell(bars, before, "close") / reference
         (found,) = [f for f in factors.factors if f.symbol == event.symbol]
         assert found.factor == pytest.approx(expected, rel=1e-12)
         # T4 ②: the independent rebuild from raw rows agrees.

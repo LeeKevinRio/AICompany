@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 import random
 from datetime import date, timedelta
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -106,7 +107,7 @@ def assert_same_view(
     assert fast.sessions_before(t, 5) == slow.sessions_before(t, 5)
     assert fast.bars_source_on(t + timedelta(days=0)) == slow.bars_source_on(t)
     for kind in ("listing", "classification"):
-        left, right = fast.snapshot(kind), slow.snapshot(kind)  # type: ignore[arg-type]
+        left, right = fast.snapshot(kind), slow.snapshot(kind)
         assert (left is None) == (right is None)
         if left is not None and right is not None:
             assert (left.run_id, left.session_date, left.recorded_at, left.carried_sessions) == (
@@ -119,7 +120,7 @@ def assert_same_view(
     _same_frame(fast.ex_dividend_announcements(), slow.ex_dividend_announcements())
     _same_frame(fast.visible_runs(), slow.visible_runs())
     for run_kind in ("bars", "listing", "classification", "dividend_announce"):
-        assert fast.ok_run_sessions(run_kind) == slow.ok_run_sessions(run_kind)  # type: ignore[arg-type]
+        assert fast.ok_run_sessions(run_kind) == slow.ok_run_sessions(run_kind)
     assert sector_eval.decision_fingerprint(
         sector_eval.decide(fast, V1)
     ) == sector_eval.decision_fingerprint(sector_eval.decide(slow, V1))
@@ -229,7 +230,8 @@ def test_the_equivalence_check_has_teeth(messy: MarketPanel) -> None:
     slow = _reference(messy, t, hindsight=False)
     tampered = fast._bars.copy()
     tampered.loc[len(tampered) // 2, "close"] = (
-        float(tampered.loc[len(tampered) // 2, "close"]) + 0.01
+        # ``close`` is a float64 column; the stubs type a .loc cell as Scalar.
+        float(cast(float, tampered.loc[len(tampered) // 2, "close"])) + 0.01
     )
     object.__setattr__(fast, "_bars", tampered)
     with pytest.raises(AssertionError):

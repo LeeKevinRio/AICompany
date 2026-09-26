@@ -237,7 +237,7 @@ def _watch(main_db: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Traffic]:
         return row
 
     def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-        conn = real_connect(*args, **kwargs)
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
         conn.set_trace_callback(traffic.statements.append)
         if args and str(args[0]) == str(main_db):
             conn.row_factory = count_row

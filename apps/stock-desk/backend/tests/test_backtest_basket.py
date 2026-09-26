@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -48,7 +49,7 @@ DAYS = weekdays(12)
 Quote = tuple[float, float, float]
 
 
-def _flat(price: float = 100.0) -> list[Quote]:
+def _flat(price: float = 100.0) -> list[Quote | None]:
     return [(price, price, 0.0)] * len(DAYS)
 
 
@@ -380,4 +381,5 @@ def test_price_book_reads_corrections_recorded_after_the_session() -> None:
     assert book.value(book.close, symbol, DAYS[4]) == 123.0
     # ...while the decision view of that session does not see it yet.
     view = corrected.as_of(DAYS[4])
-    assert float(view.field_matrix("close", [DAYS[4]], [symbol]).iloc[0, 0]) == 100.0
+    # field_matrix is a float matrix; the stubs type an .iloc cell as Scalar.
+    assert float(cast(float, view.field_matrix("close", [DAYS[4]], [symbol]).iloc[0, 0])) == 100.0

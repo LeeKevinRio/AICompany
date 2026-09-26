@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -97,7 +97,7 @@ def _counts(main_db: Path) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 
-def _runs(rows: list[tuple[object, ...]]) -> pd.DataFrame:
+def _runs(rows: Sequence[tuple[object, ...]]) -> pd.DataFrame:
     return pd.DataFrame(
         rows,
         columns=[
@@ -156,7 +156,9 @@ def test_the_fingerprint_covers_ok_runs_in_run_id_order() -> None:
         ("expected_count", 999),
     ],
 )
-def test_every_runs_column_is_bound_by_the_digest(column: str, value: object) -> None:
+def test_every_runs_column_is_bound_by_the_digest(
+    column: str, value: str | date | pd.Timestamp | int
+) -> None:
     changed = _runs(BASE_RUNS)
     changed.loc[1, column] = value
     before, after = source_fingerprint(_runs(BASE_RUNS)), source_fingerprint(changed)
@@ -332,7 +334,7 @@ def test_runs_written_after_the_evaluation_leave_the_fingerprint_unchanged(
     clock["now"] = NOW + timedelta(days=1)
     for kind in ("bars", "listing", "classification", "dividend_announce"):
         store.record_run(
-            kind=kind,  # type: ignore[arg-type]
+            kind=kind,
             session_date=after,
             source="t",
             status="ok",
@@ -349,7 +351,7 @@ def test_runs_written_after_the_evaluation_leave_the_fingerprint_unchanged(
     assert _counts(main_db)[0] == _counts(judged.main_db)[0] + 1
 
 
-def _later(row: StatsRecord, **changes: object) -> StatsRecord:
+def _later(row: StatsRecord, **changes: Any) -> StatsRecord:
     return dataclasses.replace(
         row, run_id="tampered", computed_at=row.computed_at + timedelta(days=7), **changes
     )
@@ -529,7 +531,7 @@ def test_an_accepted_read_is_one_call_one_statement_and_no_digest(
     real_connect = sqlite3.connect
 
     def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-        conn = real_connect(*args, **kwargs)
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
 

@@ -587,7 +587,8 @@ def _momentum(card: LiveCard) -> bytes:
     ) as client:
         response = client.get("/api/sectors/momentum")
     assert response.status_code == 200
-    return response.content
+    content: bytes = response.content  # TestClient.get is typed Any
+    return content
 
 
 def test_api_response_ignores_the_research_db(
