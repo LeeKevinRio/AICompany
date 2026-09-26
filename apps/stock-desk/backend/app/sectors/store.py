@@ -17,11 +17,26 @@ No class here offers UPDATE or DELETE on a gate table; the registry's two
 permitted updates are the only UPDATE statements in the module.
 
 :class:`SectorStatsRepository` refuses, on save **and** on load, anything that
-is not ``regime="pit"`` + ``data_regime="forward_pit"`` with every
-``source_run_id`` present in the market DB's ``pit_snapshot_runs`` -- raising
-:class:`BiasedDataRejected` (D-14, C-27). The market DB is reached through an
-injected :class:`RunIdVerifier`, because this package may not import the
-market-DB store.
+is not ``regime="pit"`` + ``data_regime="forward_pit"`` with a source
+fingerprint (``source_run_min``, ``source_run_max``, ``source_session_end``,
+``source_run_count``, ``source_digest``) matching the market DB's
+``pit_snapshot_runs`` -- raising :class:`BiasedDataRejected` (D-14, C-27,
+C-50). ``save()`` recomputes the fingerprint in full, for the new row and for
+the version's previous row; every read (``load()``, ``latest_history()``,
+``find()``, :class:`SectorCardReader`) makes one light check for the whole
+batch -- every row's first and last run are existing ``ok`` runs, and the
+latest row's count and first / last run match -- and never recomputes a
+digest. The market DB is reached through an injected :class:`RunIdVerifier`
+(:class:`SourceTallyReader` for the card), implemented in
+``app.data.market_panel``, because this package may not import the market-DB
+store (C-1).
+
+A ``sector_rank_stats`` table of the pre-v9 schema (with ``source_run_ids``)
+is rebuilt when empty; with rows it is left as is and every save and load of
+statistics is refused (C-50: no automatic migration).
+
+``sector_board.source_run_ids`` is written for audit but never read back:
+the board SQL does not select it (C-51).
 
 Ratios are never stored: the header and sector rows keep counts, and readers
 rebuild ratios through :mod:`app.sectors.coverage`, the one formula.
@@ -30,6 +45,8 @@ rebuild ratios through :mod:`app.sectors.coverage`, the one formula.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
@@ -39,6 +56,7 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 
 from app.data.cache import resolve_db_path
+from app.data.panel import SourceFingerprint, SourceTally
 from app.sectors.coverage import coverage_from_counts
 from app.sectors.definition import SectorMomentumDefinition
 from app.sectors.models import (
@@ -58,6 +76,8 @@ from app.sectors.models import (
 )
 from app.sectors.ranking import SectorRanking
 from app.sectors.universe import CalculationSet
+
+logger = logging.getLogger(__name__)
 
 #: Milliseconds a connection waits for a concurrent writer (C-9).
 BUSY_TIMEOUT_MS: Final = 5000
@@ -144,7 +164,11 @@ _SCHEMA: Final[tuple[str, ...]] = (
         method_version TEXT NOT NULL,
         regime TEXT NOT NULL CHECK (regime = 'pit'),
         data_regime TEXT NOT NULL CHECK (data_regime = 'forward_pit'),
-        source_run_ids TEXT NOT NULL,
+        source_run_min INTEGER NOT NULL,
+        source_run_max INTEGER NOT NULL CHECK (source_run_max >= source_run_min),
+        source_session_end TEXT NOT NULL,
+        source_run_count INTEGER NOT NULL CHECK (source_run_count > 0),
+        source_digest TEXT NOT NULL CHECK (length(source_digest) = 64),
         m_at_evaluation INTEGER NOT NULL,
         sample_count INTEGER NOT NULL,
         effective_sample_count REAL NOT NULL,
@@ -275,13 +299,62 @@ EXPECTED_TRIGGERS: Final[frozenset[str]] = frozenset(
 
 
 class BiasedDataRejected(Exception):
-    """A statistics record that is not forward point-in-time data (D-14, C-27)."""
+    """A statistics record that is not forward point-in-time data (D-14, C-27, C-50)."""
 
 
-class RunIdVerifier(Protocol):
-    """Answers which snapshot run ids exist in the market DB's ``pit_snapshot_runs``."""
+class SourceTallyReader(Protocol):
+    """The read-time light check of statistics sources (C-50): one SQL statement.
 
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]: ...
+    ``endpoints`` are run ids that must be existing ``ok`` runs; ``run_max`` and
+    ``session_end`` name one row's source set, whose count and first / last run
+    are returned. Implemented in ``app.data.market_panel``; never computes a
+    digest.
+    """
+
+    def source_tally(
+        self, endpoints: Collection[int], run_max: int, session_end: date
+    ) -> SourceTally: ...
+
+
+class RunIdVerifier(SourceTallyReader, Protocol):
+    """Both source checks (C-50): the read-time tally and the write-time full recompute.
+
+    ``source_fingerprint`` recomputes the fingerprint of the source set
+    (every ``ok`` run with ``session_date <= session_end`` and
+    ``run_id <= run_max``) from the market DB, with the evaluator's own
+    ``app.data.panel.source_fingerprint``; ``None`` when that set is empty.
+    """
+
+    def source_fingerprint(self, run_max: int, session_end: date) -> SourceFingerprint | None: ...
+
+
+#: The pre-v9 column that listed every source run (C-50 replaced it).
+LEGACY_SOURCE_COLUMN: Final = "source_run_ids"
+
+
+def _legacy_stats_rows(conn: sqlite3.Connection) -> int | None:
+    """Rows of a pre-v9 ``sector_rank_stats``; an empty one is dropped for a rebuild.
+
+    ``None`` when the table is absent, current, or was empty and dropped. With
+    rows it is left untouched: C-50 forbids an automatic migration.
+    """
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
+    if LEGACY_SOURCE_COLUMN not in columns:
+        return None
+    (count,) = conn.execute("SELECT COUNT(*) FROM sector_rank_stats").fetchone()
+    if int(count) == 0:
+        # Its index and triggers go with it; _SCHEMA / _TRIGGERS recreate all three.
+        conn.execute("DROP TABLE sector_rank_stats")
+        return None
+    return int(count)
+
+
+def _legacy_message(rows: int) -> str:
+    return (
+        f"sector_rank_stats has the pre-v9 {LEGACY_SOURCE_COLUMN} column and {rows} row(s); "
+        "it is not migrated automatically, so statistics are neither written nor read "
+        "(ADR-0012 C-50)"
+    )
 
 
 class _SectorDb:
@@ -293,12 +366,18 @@ class _SectorDb:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            self._legacy_stats_rows = _legacy_stats_rows(conn)
             for statement in (*_SCHEMA, *_TRIGGERS):
                 conn.execute(statement)
 
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def legacy_stats_rows(self) -> int | None:
+        """Rows kept in a pre-v9 ``sector_rank_stats`` (C-50); ``None`` when current."""
+        return self._legacy_stats_rows
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -339,6 +418,7 @@ class BoardProvenance:
     bars_run_id: str | None
     bars_recorded_at: datetime | None
     computed_at: datetime
+    #: Written to ``sector_board.source_run_ids`` for audit; never read back (C-51).
     source_run_ids: tuple[str, ...]
     ex_dividend_feed_covered: bool
     reference_taiex_return_L: float | None = None  # noqa: N815 -- D-10 field name
@@ -409,7 +489,6 @@ class StoredBoard:
     market_corporate_action_excluded_count: int
     ex_dividend_feed_covered: bool
     constituent_invariant_violated: bool
-    source_run_ids: tuple[str, ...]
     ranked: tuple[StoredRankedSector, ...]
     excluded: tuple[StoredExcludedSector, ...]
 
@@ -585,6 +664,9 @@ _LATEST_BOARD_ID_SQL: Final = (
     "SELECT board_id FROM sector_board WHERE market = ? "
     "ORDER BY data_as_of DESC, computed_at DESC, board_id DESC LIMIT 1"
 )
+#: The header columns boards are read with. ``source_run_ids`` is deliberately
+#: absent: it grows with the market DB's runs and the join would repeat it on
+#: every member row (C-51).
 _HEADER_COLUMNS: Final[tuple[str, ...]] = (
     "board_id",
     "market",
@@ -605,7 +687,6 @@ _HEADER_COLUMNS: Final[tuple[str, ...]] = (
     "market_corporate_action_excluded_count",
     "ex_dividend_feed_covered",
     "constituent_invariant_violated",
-    "source_run_ids",
 )
 _MEMBER_COLUMNS: Final[tuple[str, ...]] = (
     "rank",
@@ -739,7 +820,6 @@ def _board_from_rows(rows: Sequence[Sequence[object]]) -> StoredBoard | None:
         market_corporate_action_excluded_count=int(cast(int, header[16])),
         ex_dividend_feed_covered=bool(header[17]),
         constituent_invariant_violated=bool(header[18]),
-        source_run_ids=tuple(json.loads(str(header[19]))),
         ranked=tuple(ranked),
         excluded=tuple(excluded),
     )
@@ -754,7 +834,11 @@ _STATS_COLUMNS: Final[tuple[str, ...]] = (
     "method_version",
     "regime",
     "data_regime",
-    "source_run_ids",
+    "source_run_min",
+    "source_run_max",
+    "source_session_end",
+    "source_run_count",
+    "source_digest",
     "m_at_evaluation",
     "sample_count",
     "effective_sample_count",
@@ -780,33 +864,77 @@ _STATS_COLUMNS: Final[tuple[str, ...]] = (
 )
 
 
+#: The five fixed-width source columns (C-50), in :class:`SourceFingerprint` order.
+_SOURCE_COLUMNS: Final[tuple[str, ...]] = (
+    "source_run_min",
+    "source_run_max",
+    "source_session_end",
+    "source_run_count",
+    "source_digest",
+)
+
+
 class SectorStatsRepository(_SectorDb):
     """``sector_rank_stats`` + ``sector_gate_checks``; forward PIT records only."""
 
     def __init__(self, verifier: RunIdVerifier, db_path: str | Path | None = None) -> None:
         super().__init__(db_path)
         self._verifier = verifier
+        if self.legacy_stats_rows is not None:
+            logger.error(_legacy_message(self.legacy_stats_rows))
 
-    def _admit(
-        self, *, regime: str, data_regime: str, source_run_ids: tuple[str, ...], run_id: str
-    ) -> None:
-        _admit_regime(regime, data_regime, source_run_ids, run_id)
-        _admit_sources(self._verifier, [(run_id, source_run_ids)])
+    def _refuse_legacy(self) -> None:
+        if self.legacy_stats_rows is not None:
+            message = _legacy_message(self.legacy_stats_rows)
+            logger.error(message)
+            raise BiasedDataRejected(message)
+
+    def _previous(self, method_version: str) -> tuple[str, SourceFingerprint] | None:
+        """The version's latest stored row (``run_id``, fingerprint), unchecked."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT run_id, source_run_min, source_run_max, source_session_end, "
+                "source_run_count, source_digest FROM sector_rank_stats "
+                "WHERE method_version = ? ORDER BY computed_at DESC, run_id DESC LIMIT 1",
+                (method_version,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row[0]), _fingerprint_from_values(row[1:6])
+
+    def _recompute(self, run_id: str, claimed: SourceFingerprint) -> None:
+        actual = self._verifier.source_fingerprint(claimed.run_max, claimed.session_end)
+        if actual != claimed:
+            raise BiasedDataRejected(
+                f"stats run {run_id}: source fingerprint {claimed} does not match the market "
+                f"DB's pit_snapshot_runs ({actual}) (ADR-0012 C-50)"
+            )
 
     def save(self, record: StatsRecord) -> None:
-        """Append one statistics row and its G1..G6 / T1..T9 check rows."""
-        self._admit(
-            regime=record.regime,
-            data_regime=record.data_regime,
-            source_run_ids=record.source_run_ids,
-            run_id=record.run_id,
-        )
+        """Append one statistics row and its G1..G6 / T1..T9 check rows.
+
+        The row's source fingerprint, and that of the version's previous row,
+        are recomputed in full from the market DB first; any difference raises
+        :class:`BiasedDataRejected` and nothing is written (C-50, T-22).
+        """
+        self._refuse_legacy()
+        _admit_regime(record.regime, record.data_regime, record.run_id)
+        claimed = record_fingerprint(record)
+        _admit_shape(record.run_id, claimed)
+        previous = self._previous(record.method_version)
+        self._recompute(record.run_id, claimed)
+        if previous is not None:
+            self._recompute(*previous)
         values = (
             record.run_id,
             record.method_version,
             record.regime,
             record.data_regime,
-            json.dumps(sorted(record.source_run_ids)),
+            claimed.run_min,
+            claimed.run_max,
+            claimed.session_end.isoformat(),
+            claimed.run_count,
+            claimed.digest,
             record.m_at_evaluation,
             record.sample_count,
             record.effective_sample_count,
@@ -868,12 +996,13 @@ class SectorStatsRepository(_SectorDb):
             )
 
     def _load(self, where: str, params: tuple[object, ...]) -> tuple[StatsRecord, ...]:
+        self._refuse_legacy()
         with closing(self._connect()) as conn:
             rows = conn.execute(_stats_sql(where), params).fetchall()
         return _records_from_rows(rows, self._verifier)
 
     def load(self, method_version: str) -> tuple[StatsRecord, ...]:
-        """Every row of ``method_version``, oldest first (each re-checked on the way out)."""
+        """Every row of ``method_version``, oldest first (the batch re-checked on the way out)."""
         return self._load("s.method_version = ?", (method_version,))
 
     def latest_history(self) -> tuple[StatsRecord, ...]:
@@ -912,36 +1041,85 @@ def _stats_sql(where: str) -> str:
     """
 
 
-def _admit_regime(
-    regime: str, data_regime: str, source_run_ids: tuple[str, ...], run_id: str
-) -> None:
+def _admit_regime(regime: str, data_regime: str, run_id: str) -> None:
     if regime != "pit" or data_regime != "forward_pit":
         raise BiasedDataRejected(
             f"stats run {run_id}: regime={regime!r}, data_regime={data_regime!r}; "
             "only pit / forward_pit may reach the gate (ADR-0012 D-14)"
         )
-    if not source_run_ids:
-        raise BiasedDataRejected(f"stats run {run_id}: no source_run_ids")
 
 
-def _admit_sources(verifier: RunIdVerifier, rows: Sequence[tuple[str, tuple[str, ...]]]) -> None:
-    """Every row's source runs exist in the market DB -- asked in **one** verifier call."""
-    wanted = {run for _, sources in rows for run in sources}
-    if not wanted:
+_DIGEST_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def record_fingerprint(record: StatsRecord) -> SourceFingerprint:
+    """The five ``source_*`` fields of ``record`` as one fingerprint."""
+    return SourceFingerprint(
+        run_min=record.source_run_min,
+        run_max=record.source_run_max,
+        session_end=record.source_session_end,
+        run_count=record.source_run_count,
+        digest=record.source_digest,
+    )
+
+
+def _fingerprint_from_values(values: Sequence[object]) -> SourceFingerprint:
+    """The fingerprint from stored ``source_run_min .. source_digest`` column values."""
+    return SourceFingerprint(
+        run_min=int(cast(int, values[0])),
+        run_max=int(cast(int, values[1])),
+        session_end=date.fromisoformat(str(values[2])),
+        run_count=int(cast(int, values[3])),
+        digest=str(values[4]),
+    )
+
+
+def _admit_shape(run_id: str, fingerprint: SourceFingerprint) -> None:
+    """A fingerprint that could describe a non-empty source set at all (C-50)."""
+    if fingerprint.run_count <= 0:
+        raise BiasedDataRejected(f"stats run {run_id}: no source runs (source_run_count <= 0)")
+    if not 0 < fingerprint.run_min <= fingerprint.run_max:
+        raise BiasedDataRejected(f"stats run {run_id}: source run range is not a market-DB range")
+    if not _DIGEST_PATTERN.fullmatch(fingerprint.digest):
+        raise BiasedDataRejected(f"stats run {run_id}: source_digest is not a SHA-256 hex digest")
+
+
+def _admit_sources(
+    verifier: SourceTallyReader, rows: Sequence[tuple[str, SourceFingerprint]]
+) -> None:
+    """The read-time light check of a whole batch: **one** verifier call (C-50).
+
+    Every row's first and last run must be existing ``ok`` runs; the latest row
+    (the last one, rows being ordered by ``computed_at``, ``run_id``) must also
+    match its source set's count and first / last run. No digest is recomputed.
+    """
+    if not rows:
         return
-    known = verifier.existing_run_ids(wanted)
-    for run_id, sources in rows:
-        unknown = sorted(set(sources) - set(known))
+    latest_id, latest = rows[-1]
+    endpoints = {run for _, fp in rows for run in (fp.run_min, fp.run_max)}
+    tally = verifier.source_tally(endpoints, latest.run_max, latest.session_end)
+    for run_id, fingerprint in rows:
+        unknown = sorted({fingerprint.run_min, fingerprint.run_max} - tally.ok_endpoints)
         if unknown:
             raise BiasedDataRejected(
-                f"stats run {run_id}: source runs {unknown} are not in pit_snapshot_runs"
+                f"stats run {run_id}: source runs {unknown} are not ok runs in pit_snapshot_runs"
             )
+    if (tally.run_count, tally.run_min, tally.run_max) != (
+        latest.run_count,
+        latest.run_min,
+        latest.run_max,
+    ):
+        raise BiasedDataRejected(
+            f"stats run {latest_id}: source set has {tally.run_count} run(s) "
+            f"{tally.run_min}..{tally.run_max} in the market DB, the row says "
+            f"{latest.run_count} run(s) {latest.run_min}..{latest.run_max} (ADR-0012 C-50)"
+        )
 
 
 def _records_from_rows(
-    rows: Sequence[Sequence[object]], verifier: RunIdVerifier
+    rows: Sequence[Sequence[object]], verifier: SourceTallyReader
 ) -> tuple[StatsRecord, ...]:
-    """Rebuild statistics records from :func:`_stats_sql` rows; refuse any biased one."""
+    """Rebuild statistics records from :func:`_stats_sql` rows; any doubt refuses the batch."""
     width = len(_STATS_COLUMNS)
     grouped: dict[str, tuple[dict[str, object], list[Sequence[object]]]] = {}
     for row in rows:
@@ -952,21 +1130,26 @@ def _records_from_rows(
         check = row[width:]
         if check[0] is not None:
             grouped[run_id][1].append(check)
-    sources: list[tuple[str, tuple[str, ...]]] = []
+    sources: list[tuple[str, SourceFingerprint]] = []
     for run_id, (data, _) in grouped.items():
-        source_run_ids = tuple(json.loads(str(data["source_run_ids"])))
-        _admit_regime(str(data["regime"]), str(data["data_regime"]), source_run_ids, run_id)
-        sources.append((run_id, source_run_ids))
+        _admit_regime(str(data["regime"]), str(data["data_regime"]), run_id)
+        fingerprint = _fingerprint_from_values([data[column] for column in _SOURCE_COLUMNS])
+        _admit_shape(run_id, fingerprint)
+        sources.append((run_id, fingerprint))
     _admit_sources(verifier, sources)
     records: list[StatsRecord] = []
-    for (data, own), (_, source_run_ids) in zip(grouped.values(), sources, strict=True):
+    for (data, own), (_, fingerprint) in zip(grouped.values(), sources, strict=True):
         records.append(
             StatsRecord(
                 run_id=str(data["run_id"]),
                 method_version=str(data["method_version"]),
                 regime=cast(StatsRegime, data["regime"]),
                 data_regime=cast(DataRegime, data["data_regime"]),
-                source_run_ids=source_run_ids,
+                source_run_min=fingerprint.run_min,
+                source_run_max=fingerprint.run_max,
+                source_session_end=fingerprint.session_end,
+                source_run_count=fingerprint.run_count,
+                source_digest=fingerprint.digest,
                 m_at_evaluation=int(cast(int, data["m_at_evaluation"])),
                 sample_count=int(cast(int, data["sample_count"])),
                 effective_sample_count=float(cast(float, data["effective_sample_count"])),
@@ -1194,13 +1377,27 @@ class SectorCardReader:
     4. the requested version's D0 from the registry.
 
     The statistics are then re-admitted exactly as :class:`SectorStatsRepository`
-    does (D-14), with one call to ``verifier`` for every row's source runs.
+    reads them (D-14, C-50): one ``verifier.source_tally`` call -- one market-DB
+    statement -- for the whole batch, never a digest. Every column read is
+    fixed width; ``sector_board.source_run_ids`` is not selected (C-51).
     ``busy_timeout`` is set through the connection's ``timeout`` (C-9), so no
     ``PRAGMA`` statement is spent per request (C-6 counts statements).
+
+    A pre-v9 statistics table with rows (C-50) is found once, at construction:
+    its statistics are then refused on every read (NE-6, fail closed) without
+    being queried.
     """
 
-    def __init__(self, verifier: RunIdVerifier, db_path: str | Path | None = None) -> None:
-        self._db_path = ensure_schema(db_path)
+    def __init__(self, verifier: SourceTallyReader, db_path: str | Path | None = None) -> None:
+        schema = _SectorDb(db_path)
+        self._db_path = schema.db_path
+        self._legacy = (
+            _legacy_message(schema.legacy_stats_rows)
+            if schema.legacy_stats_rows is not None
+            else None
+        )
+        if self._legacy is not None:
+            logger.error(self._legacy)
         self._verifier = verifier
 
     @property
@@ -1213,9 +1410,13 @@ class SectorCardReader:
     def read(self, market: str, method_version: str) -> CardRead:
         with closing(self._connect()) as conn:
             board_rows = conn.execute(_board_sql(_LATEST_BOARD_ID_SQL), (market,)).fetchall()
-            stats_rows = conn.execute(
-                _stats_sql(f"s.method_version = {_LATEST_STATS_VERSION_SQL}")
-            ).fetchall()
+            stats_rows = (
+                conn.execute(
+                    _stats_sql(f"s.method_version = {_LATEST_STATS_VERSION_SQL}")
+                ).fetchall()
+                if self._legacy is None
+                else []
+            )
             approval_rows = conn.execute(
                 f"SELECT {_APPROVAL_COLUMNS} FROM sector_gate_approvals "
                 f"WHERE method_version = {_LATEST_STATS_VERSION_SQL} "
@@ -1225,11 +1426,13 @@ class SectorCardReader:
                 "SELECT accumulation_start FROM sector_method_registry WHERE method_version = ?",
                 (method_version,),
             ).fetchone()
-        rejected: str | None = None
-        try:
-            history = _records_from_rows(stats_rows, self._verifier)
-        except BiasedDataRejected as exc:
-            history, rejected = (), str(exc)
+        rejected: str | None = self._legacy
+        history: tuple[StatsRecord, ...] = ()
+        if rejected is None:
+            try:
+                history = _records_from_rows(stats_rows, self._verifier)
+            except BiasedDataRejected as exc:
+                rejected = str(exc)
         return CardRead(
             board=_board_from_rows(board_rows),
             stats_history=history,

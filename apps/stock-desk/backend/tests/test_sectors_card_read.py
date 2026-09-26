@@ -1,12 +1,13 @@
 """The card's read path at the store level (ADR-0012 C-6, C-9, D-14; T-2, T-21).
 
-* ``load_board`` is **one** JOIN statement (header, ranked, excluded); the
-  statistics of a version with their checks are one LEFT JOIN, re-admitted
-  with **one** verifier call however many rows there are;
+* ``load_board`` is **one** JOIN statement (header, ranked, excluded) and never
+  selects ``sector_board.source_run_ids`` (C-51); the statistics of a version
+  with their checks are one LEFT JOIN, re-admitted with **one** light source
+  check however many rows there are and no digest recompute (C-50);
 * :class:`SectorCardReader` spends at most four statements on one connection,
   none of them a ``PRAGMA``, and still has a ``busy_timeout`` (C-9);
 * :class:`MarketPanelReader` is read only, never creates the market DB, and
-  checks ~10^5 run ids in one statement (beyond SQLite's variable limit);
+  answers the light check in one statement however many endpoints it is asked;
 * ``latest_boards`` keeps each session's last board only (what T9 replays).
 """
 
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
-from collections.abc import Collection
 from contextlib import closing
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -34,6 +34,7 @@ from app.sectors.store import (
 from app.services.sector_board import SectorBoardService
 from tests.sector_board_helpers import stats_record, store_market
 from tests.sector_eval_helpers import synthetic_market
+from tests.source_helpers import FakeSources, fingerprint
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
 
@@ -49,16 +50,6 @@ def _trace(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(sqlite3, "connect", connect)
     return statements
-
-
-class _Counting:
-    def __init__(self, known: Collection[str] | None = None) -> None:
-        self.calls = 0
-        self._known = known
-
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        self.calls += 1
-        return frozenset(run_ids) if self._known is None else frozenset(run_ids) & set(self._known)
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +75,7 @@ def test_load_board_is_one_join_statement(
     board = store.load_board(board_id)
     real = [s for s in statements if not s.upper().startswith("PRAGMA")]
     assert len(real) == 1 and " JOIN " in real[0].upper()
+    assert "source_run_ids" not in real[0]  # C-51: repeated on every member row
     assert board is not None and board.data_as_of == days[-1]
     assert board.ranked and [row.rank for row in board.ranked] == list(
         range(1, len(board.ranked) + 1)
@@ -120,28 +112,29 @@ def test_latest_boards_keeps_each_sessions_last_board(boards: tuple[Path, list[d
 def test_statistics_are_one_join_and_one_verifier_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    verifier = _Counting()
+    verifier = FakeSources()
     repo = SectorStatsRepository(verifier, tmp_path / "main.db")
     for n in range(4):
-        repo.save(
-            stats_record(f"r{n}", (str(n), "99"), computed_at=datetime(2029, 1, n + 1, tzinfo=UTC))
-        )
-    verifier.calls = 0
+        repo.save(stats_record(f"r{n}", computed_at=datetime(2029, 1, n + 1, tzinfo=UTC)))
+    verifier.tally_calls = verifier.fingerprint_calls = 0
     statements = _trace(monkeypatch)
     history = repo.latest_history()
     assert [row.run_id for row in history] == ["r0", "r1", "r2", "r3"]
-    assert verifier.calls == 1
+    assert (verifier.tally_calls, verifier.fingerprint_calls) == (1, 0)
     real = [s for s in statements if not s.upper().startswith("PRAGMA")]
     assert len(real) == 1 and "LEFT JOIN" in real[0].upper()
+    assert "source_run_ids" not in real[0]
     assert [check.gate for check in history[0].gate_checks] == ["G1", "G2", "G3", "G4", "G5", "G6"]
     assert repo.find("r2") == history[2] and repo.find("nope") is None
 
 
 def test_one_unknown_source_run_refuses_the_whole_read(tmp_path: Path) -> None:
-    saving = SectorStatsRepository(_Counting(), tmp_path / "main.db")
-    saving.save(stats_record("r1", ("1",)))
-    saving.save(stats_record("r2", ("2",), computed_at=datetime(2029, 4, 1, tzinfo=UTC)))
-    reading = SectorStatsRepository(_Counting(known={"1"}), tmp_path / "main.db")
+    first = fingerprint(run_min=1, run_max=1, run_count=1)
+    second = fingerprint(run_min=1, run_max=2, run_count=2, session_end=date(2026, 12, 2))
+    saving = SectorStatsRepository(FakeSources((first, second)), tmp_path / "main.db")
+    saving.save(stats_record("r1", first))
+    saving.save(stats_record("r2", second, computed_at=datetime(2029, 4, 1, tzinfo=UTC)))
+    reading = SectorStatsRepository(FakeSources((first, second), ok_runs={1}), tmp_path / "main.db")
     with pytest.raises(BiasedDataRejected, match="r2"):
         reading.latest_history()
 
@@ -153,23 +146,24 @@ def test_the_card_reader_spends_four_statements_and_no_pragma(
     copy = tmp_path / "main.db"
     with closing(sqlite3.connect(main_db)) as source, closing(sqlite3.connect(copy)) as target:
         source.backup(target)
-    SectorStatsRepository(_Counting(), copy).save(stats_record("s1", ("1", "2")))
+    SectorStatsRepository(FakeSources(), copy).save(stats_record("s1"))
     SectorMethodRegistry(copy).register(V1, frozen_commit="c0ffee", registered_at=NOW)
-    verifier = _Counting()
+    verifier = FakeSources()
     reader = SectorCardReader(verifier=verifier, db_path=copy)
     statements = _trace(monkeypatch)
     read = reader.read("TW", V1.method_version)
     assert len(statements) == 4, statements
     assert not any(s.upper().startswith("PRAGMA") for s in statements)
-    assert verifier.calls == 1
+    assert not any("source_run_ids" in s for s in statements)
+    assert (verifier.tally_calls, verifier.fingerprint_calls) == (1, 0)
     assert read.board is not None and read.board.data_as_of == days[-1]
     assert [row.run_id for row in read.stats_history] == ["s1"]
     assert read.accumulation_start is None and read.stats_rejected is None
 
 
 def test_the_card_reader_fails_closed_on_refused_statistics(tmp_path: Path) -> None:
-    SectorStatsRepository(_Counting(), tmp_path / "main.db").save(stats_record("s1", ("7",)))
-    read = SectorCardReader(verifier=_Counting(known=()), db_path=tmp_path / "main.db").read(
+    SectorStatsRepository(FakeSources(), tmp_path / "main.db").save(stats_record("s1"))
+    read = SectorCardReader(verifier=FakeSources(ok_runs=()), db_path=tmp_path / "main.db").read(
         "TW", V1.method_version
     )
     assert read.stats_history == () and read.approvals == ()
@@ -178,7 +172,7 @@ def test_the_card_reader_fails_closed_on_refused_statistics(tmp_path: Path) -> N
 
 def test_reader_connections_still_wait_for_writers(tmp_path: Path) -> None:
     """C-9 / T-21: busy_timeout comes from the connection's timeout, not a PRAGMA."""
-    reader = SectorCardReader(verifier=_Counting(), db_path=tmp_path / "main.db")
+    reader = SectorCardReader(verifier=FakeSources(), db_path=tmp_path / "main.db")
     with closing(reader._connect()) as conn:
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] > 0
     MarketPanelStore(tmp_path / "market.db")
@@ -191,7 +185,9 @@ def test_reader_connections_still_wait_for_writers(tmp_path: Path) -> None:
 
 def test_the_market_reader_is_read_only_and_never_creates_the_file(tmp_path: Path) -> None:
     missing = MarketPanelReader(tmp_path / "nowhere" / "market.db")
-    assert missing.existing_run_ids(["1"]) == frozenset()
+    nothing = missing.source_tally([1], 1, date(2026, 9, 25))
+    assert (nothing.ok_endpoints, nothing.run_count, nothing.run_min) == (frozenset(), 0, None)
+    assert missing.source_fingerprint(1, date(2026, 9, 25)) is None
     assert all(
         days == frozenset() for days in missing.ok_sessions(date(2026, 1, 1), NOW.date()).values()
     )
@@ -213,10 +209,15 @@ def test_the_market_reader_is_read_only_and_never_creates_the_file(tmp_path: Pat
         conn.execute(
             "INSERT INTO market_backfill_progress VALUES ('x', 'TW', 'done', NULL, NULL, 'now')"
         )
-    assert reader.existing_run_ids([str(run_id), "x"]) == {str(run_id)}
+    tally = reader.source_tally([run_id, 999], run_id, date(2026, 9, 25))
+    assert tally.ok_endpoints == {run_id}
+    assert (tally.run_count, tally.run_min, tally.run_max) == (1, run_id, run_id)
+    assert reader.source_fingerprint(run_id, date(2026, 9, 25)) == store.source_fingerprint(
+        run_id, date(2026, 9, 25)
+    )
 
 
-def test_a_hundred_thousand_run_ids_are_one_statement(
+def test_the_light_check_is_one_statement_however_many_endpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = MarketPanelStore(tmp_path / "market.db")
@@ -228,11 +229,12 @@ def test_a_hundred_thousand_run_ids_are_one_statement(
         row_count=0,
         expected_count=0,
     )
-    wanted = [str(n) for n in range(1, 100_001)]
+    wanted = range(1, 100_001)
     statements = _trace(monkeypatch)
-    assert MarketPanelReader(tmp_path / "market.db").existing_run_ids(wanted) == {str(real)}
+    tally = MarketPanelReader(tmp_path / "market.db").source_tally(wanted, real, date(2026, 9, 25))
+    assert tally.ok_endpoints == {real}
     assert len(statements) == 1
-    assert store.existing_run_ids(wanted) == {str(real)}
+    assert store.source_tally(wanted, real, date(2026, 9, 25)) == tally
 
 
 def test_the_board_signature_ignores_ids_and_clocks(boards: tuple[Path, list[date]]) -> None:
@@ -241,7 +243,7 @@ def test_the_board_signature_ignores_ids_and_clocks(boards: tuple[Path, list[dat
     board = SectorBoardStore(boards[0]).latest_board("TW")
     assert board is not None
     assert same_board(
-        board, dataclasses.replace(board, board_id="x", computed_at="y", source_run_ids=())
+        board, dataclasses.replace(board, board_id="x", computed_at="y", bars_recorded_at=None)
     )
     changed = dataclasses.replace(board.ranked[0], up_count=board.ranked[0].up_count + 1)
     assert not same_board(board, dataclasses.replace(board, ranked=(changed, *board.ranked[1:])))

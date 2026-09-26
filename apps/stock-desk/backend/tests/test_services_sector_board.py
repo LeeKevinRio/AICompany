@@ -28,7 +28,7 @@ import pytest
 
 from app.backtest import sector_eval
 from app.data.market_panel import MarketPanelStore
-from app.data.panel import MarketPanel
+from app.data.panel import MarketPanel, source_fingerprint
 from app.sectors.definition import SECTOR_MOMENTUM_V1 as V1
 from app.sectors.definition import GateRules, SectorMomentumDefinition
 from app.sectors.gate import judged_window
@@ -41,7 +41,6 @@ from app.sectors.store import (
 from app.services import sector_board
 from app.services.sector_attestation import AttestationCheck
 from app.services.sector_board import (
-    MarketRunIdVerifier,
     SectorBoardService,
     board_fingerprint,
     compute_board,
@@ -109,13 +108,21 @@ def _selfcheck(repo: SectorStatsRepository, name: str) -> tuple[str, str | None]
 # ---------------------------------------------------------------------------
 
 
-def test_the_run_id_verifier_adapts_the_market_store(world: World) -> None:
+def test_the_market_store_is_the_source_verifier(world: World) -> None:
+    """Both C-50 capabilities, straight off the store the service injects."""
     frames = world.store.load_panel_frames(world.calendar[0], world.calendar[-1])
-    real = sorted(frames.runs["run_id"])[:3]
-    verifier = MarketRunIdVerifier(world.store)
-    found = verifier.existing_run_ids([*real, "999999999", "bf-bars-000001"])
-    assert found == frozenset(real)
-    assert isinstance(found, frozenset)
+    sources = source_fingerprint(frames.runs)
+    assert sources is not None
+    assert world.store.source_fingerprint(sources.run_max, sources.session_end) == sources
+    tally = world.store.source_tally(
+        {sources.run_min, sources.run_max, 999_999_999}, sources.run_max, sources.session_end
+    )
+    assert tally.ok_endpoints == {sources.run_min, sources.run_max}
+    assert (tally.run_count, tally.run_min, tally.run_max) == (
+        sources.run_count,
+        sources.run_min,
+        sources.run_max,
+    )
 
 
 def test_a_stored_board_reads_back_exactly_as_computed(world: World, tmp_path: Path) -> None:
@@ -307,7 +314,7 @@ def test_biased_data_aborts_the_judgement(
     world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _register(tmp_path / "main.db")
-    monkeypatch.setattr(world.store, "existing_run_ids", lambda run_ids: set())
+    monkeypatch.setattr(world.store, "source_fingerprint", lambda run_max, session_end: None)
     service = _service(world, tmp_path / "main.db")
     result = service.refresh()
     assert "biased_data_rejected" in result.notes and result.stats_run_id is None

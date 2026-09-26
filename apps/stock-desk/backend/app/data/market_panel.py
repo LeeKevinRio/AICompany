@@ -57,7 +57,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -82,6 +82,9 @@ from app.data.panel import (
     LISTING_COLUMNS,
     RUNS_COLUMNS,
     PanelFrames,
+    SourceFingerprint,
+    SourceTally,
+    source_fingerprint,
 )
 
 #: Default location; overridden by the ``STOCK_DESK_MARKET_DB_PATH``
@@ -250,26 +253,101 @@ def _to_utc_timestamp(recorded_at: str) -> pd.Timestamp:
     return ts.tz_convert("UTC") if ts.tzinfo is not None else ts.tz_localize("UTC")
 
 
-def _numeric_ids(run_ids: Iterable[str]) -> list[int]:
-    numeric: list[int] = []
-    for value in run_ids:
-        try:
-            numeric.append(int(value))
-        except (TypeError, ValueError):
-            continue
-    return numeric
+#: Columns every ``pit_snapshot_runs`` read feeding :func:`_runs_frame` selects, in order.
+_RUN_SELECT_COLUMNS: Final = (
+    "run_id, kind, session_date, recorded_at, source, status, "
+    "row_count, expected_count, content_hash"
+)
+
+#: The source set 𝒮 of a statistics row (ADR-0012 C-50), for named parameters
+#: ``:session_end`` and ``:run_max``.
+_SOURCE_SET_WHERE: Final = (
+    "status = 'ok' AND session_date IS NOT NULL "
+    "AND session_date <= :session_end AND run_id <= :run_max"
+)
+
+#: Write time: every run of 𝒮, for the full recompute of its fingerprint.
+_SOURCE_RUNS_SQL: Final = (
+    f"SELECT {_RUN_SELECT_COLUMNS} FROM pit_snapshot_runs WHERE {_SOURCE_SET_WHERE} ORDER BY run_id"
+)
+
+#: Read time: the light check as ONE statement (C-50, C-51) -- which of the
+#: asked-for endpoints are existing ok runs, and the count / first / last run of
+#: the latest row's 𝒮. No row of 𝒮 leaves the database.
+_SOURCE_TALLY_SQL: Final = f"""
+    SELECT
+        (SELECT json_group_array(run_id) FROM pit_snapshot_runs
+         WHERE status = 'ok' AND session_date IS NOT NULL
+           AND run_id IN (SELECT value FROM json_each(:endpoints))),
+        COUNT(*), MIN(run_id), MAX(run_id)
+    FROM pit_snapshot_runs
+    WHERE {_SOURCE_SET_WHERE}
+"""
 
 
-def _existing_run_ids(conn: sqlite3.Connection, run_ids: Iterable[str]) -> set[str]:
-    """``MarketPanelStore.existing_run_ids`` on an open connection: one statement."""
-    numeric = _numeric_ids(run_ids)
-    if not numeric:
-        return set()
+def _runs_frame(rows: Sequence[Sequence[object]]) -> pd.DataFrame:
+    """``PanelFrames.runs`` from ``pit_snapshot_runs`` rows selected as :data:`_RUN_SELECT_COLUMNS`.
+
+    The one row -> frame conversion: :meth:`MarketPanelStore.load_panel_frames`
+    builds the evaluator's frame with it and the fingerprint recompute builds
+    the verifier's (ADR-0012 C-50), so both hash the same values.
+    """
+    return pd.DataFrame(
+        [
+            {
+                "run_id": str(run_id),
+                "kind": kind,
+                "session_date": date.fromisoformat(str(session_date)),
+                "recorded_at": _to_utc_timestamp(str(recorded_at)),
+                "source": source,
+                "status": status,
+                "row_count": row_count,
+                "expected_count": expected_count,
+            }
+            for (
+                run_id,
+                kind,
+                session_date,
+                recorded_at,
+                source,
+                status,
+                row_count,
+                expected_count,
+                _content_hash,
+            ) in rows
+        ],
+        columns=list(RUNS_COLUMNS),
+    )
+
+
+def _source_fingerprint_on(
+    conn: sqlite3.Connection, run_max: int, session_end: date
+) -> SourceFingerprint | None:
+    """Recompute the fingerprint of 𝒮(``run_max``, ``session_end``) from the runs on disk."""
     rows = conn.execute(
-        "SELECT run_id FROM pit_snapshot_runs WHERE run_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(numeric),),
+        _SOURCE_RUNS_SQL, {"session_end": session_end.isoformat(), "run_max": int(run_max)}
     ).fetchall()
-    return {str(run_id) for (run_id,) in rows}
+    return source_fingerprint(_runs_frame(rows))
+
+
+def _source_tally_on(
+    conn: sqlite3.Connection, endpoints: Collection[int], run_max: int, session_end: date
+) -> SourceTally:
+    row = conn.execute(
+        _SOURCE_TALLY_SQL,
+        {
+            "endpoints": json.dumps(sorted({int(value) for value in endpoints})),
+            "session_end": session_end.isoformat(),
+            "run_max": int(run_max),
+        },
+    ).fetchone()
+    found, count, first, last = row
+    return SourceTally(
+        ok_endpoints=frozenset(int(value) for value in json.loads(found or "[]")),
+        run_count=int(count),
+        run_min=int(first) if first is not None else None,
+        run_max=int(last) if last is not None else None,
+    )
 
 
 def _canonical_content_hash(rows: Sequence[tuple[object, ...]]) -> str:
@@ -729,35 +807,33 @@ class MarketPanelStore:
         folded straight into that result list.
         """
         row = conn.execute(
-            """
-            SELECT run_id, kind, session_date, recorded_at, source, status,
-                   row_count, expected_count, content_hash
-            FROM pit_snapshot_runs
-            WHERE kind = ? AND status = 'ok' AND session_date IS NOT NULL AND session_date < ?
-            ORDER BY session_date DESC, run_id DESC
-            LIMIT 1
-            """,
+            f"SELECT {_RUN_SELECT_COLUMNS} FROM pit_snapshot_runs "
+            "WHERE kind = ? AND status = 'ok' AND session_date IS NOT NULL AND session_date < ? "
+            "ORDER BY session_date DESC, run_id DESC LIMIT 1",
             (kind, before.isoformat()),
         ).fetchone()
         return tuple(row) if row is not None else None
 
-    def existing_run_ids(self, run_ids: Iterable[str]) -> set[str]:
-        """Which of ``run_ids`` (as strings, matching ``PanelFrames.run_id``) actually exist.
+    # -- statistics-row source verification (ADR-0012 C-50, D-14) ---------
 
-        One query. Used by the main DB's ``SectorStatsRepository`` (D-14,
-        C-27) to verify a statistics row's ``source_run_ids`` all trace back
-        to real market-DB runs before accepting it. Non-numeric or blank
-        values are simply never matched (never raised on) -- verifying
-        *existence* is this method's whole job, not validating shape.
+    def source_fingerprint(self, run_max: int, session_end: date) -> SourceFingerprint | None:
+        """Write time, in full: recompute the fingerprint of 𝒮(``run_max``, ``session_end``).
 
-        The ids travel as **one** JSON array parameter (``json_each``), not one
-        ``?`` per id: a statistics row over the full history names every
-        warm-up run (one per symbol per session, ~10^5 at real scale), far past
-        SQLite's bound-variable limit, and the API's SQL budget (C-6) counts
-        statements, so this must stay a single statement at any size.
+        One statement reads every run of 𝒮; the frame is built by
+        :func:`_runs_frame` (the conversion ``load_panel_frames`` uses) and
+        hashed by :func:`app.data.panel.source_fingerprint`, the evaluator's own
+        function. ``None`` when 𝒮 is empty. Satisfies the write half of
+        ``app.sectors.store.RunIdVerifier``.
         """
         with closing(self._connect()) as conn:
-            return _existing_run_ids(conn, run_ids)
+            return _source_fingerprint_on(conn, run_max, session_end)
+
+    def source_tally(
+        self, endpoints: Collection[int], run_max: int, session_end: date
+    ) -> SourceTally:
+        """Read time, light: one statement, no digest (see :data:`_SOURCE_TALLY_SQL`)."""
+        with closing(self._connect()) as conn:
+            return _source_tally_on(conn, endpoints, run_max, session_end)
 
     def load_panel_frames(self, start: date, end: date) -> PanelFrames:
         """Return the raw ``PanelFrames`` for ``[start, end]`` (by ``session_date``).
@@ -805,12 +881,8 @@ class MarketPanelStore:
         """
         with closing(self._connect()) as conn:
             runs = conn.execute(
-                """
-                SELECT run_id, kind, session_date, recorded_at, source, status,
-                       row_count, expected_count, content_hash
-                FROM pit_snapshot_runs
-                WHERE session_date IS NOT NULL AND session_date BETWEEN ? AND ?
-                """,
+                f"SELECT {_RUN_SELECT_COLUMNS} FROM pit_snapshot_runs "
+                "WHERE session_date IS NOT NULL AND session_date BETWEEN ? AND ?",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
 
@@ -819,32 +891,7 @@ class MarketPanelStore:
                 if lookback_run is not None:
                     runs = [*runs, lookback_run]
 
-            runs_frame = pd.DataFrame(
-                [
-                    {
-                        "run_id": str(run_id),
-                        "kind": kind,
-                        "session_date": date.fromisoformat(session_date),
-                        "recorded_at": _to_utc_timestamp(recorded_at),
-                        "source": source,
-                        "status": status,
-                        "row_count": row_count,
-                        "expected_count": expected_count,
-                    }
-                    for (
-                        run_id,
-                        kind,
-                        session_date,
-                        recorded_at,
-                        source,
-                        status,
-                        row_count,
-                        expected_count,
-                        _content_hash,
-                    ) in runs
-                ],
-                columns=list(RUNS_COLUMNS),
-            )
+            runs_frame = _runs_frame(runs)
 
             bars_frame = self._load_bars(conn, runs)
             listing_frame = self._load_content_frame(
@@ -1035,12 +1082,24 @@ class MarketPanelReader:
                 found[kind].add(date.fromisoformat(session))
         return {kind: frozenset(days) for kind, days in found.items()}
 
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        """Which of ``run_ids`` exist (one statement); satisfies ``RunIdVerifier``."""
-        if not _numeric_ids(run_ids):
-            return frozenset()
+    def source_fingerprint(self, run_max: int, session_end: date) -> SourceFingerprint | None:
+        """:meth:`MarketPanelStore.source_fingerprint` on the read-only file; ``None`` if absent."""
         conn = self._connect()
         if conn is None:
-            return frozenset()
+            return None
         with closing(conn):
-            return frozenset(_existing_run_ids(conn, run_ids))
+            return _source_fingerprint_on(conn, run_max, session_end)
+
+    def source_tally(
+        self, endpoints: Collection[int], run_max: int, session_end: date
+    ) -> SourceTally:
+        """The read-time light check (one statement); a missing file knows no run.
+
+        Satisfies ``app.sectors.store.SourceTallyReader`` -- the only market-DB
+        question the card's statistics read asks (ADR-0012 C-50, C-51).
+        """
+        conn = self._connect()
+        if conn is None:
+            return SourceTally(ok_endpoints=frozenset(), run_count=0, run_min=None, run_max=None)
+        with closing(conn):
+            return _source_tally_on(conn, endpoints, run_max, session_end)

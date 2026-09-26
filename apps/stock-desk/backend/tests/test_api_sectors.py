@@ -117,7 +117,7 @@ FORBIDDEN_FIELD_WORDS = (
 
 
 def _stats(**overrides: object) -> Any:
-    return stats_record("stats-1", ("41",), **overrides)
+    return stats_record("stats-1", **overrides)
 
 
 def _approval(kind: str = "first_transition_risk", run_id: str = "stats-1") -> ApprovalRecord:
@@ -639,13 +639,29 @@ def test_an_ignored_empty_demo_board_keeps_its_demo_source() -> None:
     assert body["insufficient_reason"] == "as_of_unknown"
     assert body["reason"] == wording.AS_OF_UNKNOWN_MAIN
     assert body["not_evaluated_reason"] == "demo_data"  # the gate saw the same source
+    # Deliberately apart: the top-level source keeps the demo warning, while
+    # ``data`` describes the board actually used -- none (DataMeta unchanged).
+    assert body["status"] == "insufficient_data"
+    assert body["data"]["source"] == "none" and body["data"]["status"] == "unavailable"
 
 
 def test_a_one_stock_market_is_still_read() -> None:
-    """The R-5 cut is exactly |E_M| = 0: one expected stock is a real board."""
-    body = _build(_board(expected=1, missing=0, ex_date=0, ranked=[], excluded=[]))
+    """The R-5 cut is exactly |E_M| = 0: one expected stock is a real board.
+
+    Its one sector is excluded as ``too_few_members``; the §10 counts n1 + n2 +
+    n3 add up to the rankable sectors (``unranked_category`` is not one).
+    """
+    excluded = [
+        excluded_sector("28", "too_few_members", expected=1),
+        excluded_sector("20", "unranked_category", expected=0),
+    ]
+    body = _build(_board(expected=1, missing=0, ex_date=0, ranked=[], excluded=excluded))
     assert body["insufficient_reason"] == "no_sector_computable"
     assert body["data_as_of"] == AS_OF.isoformat()
+    counts = body["excluded_reason_counts"]
+    assert counts == {"too_few_members": 1, "low_coverage": 0, "ex_dividend_exclusion": 0}
+    rankable = [row for row in excluded if row.reason_code != "unranked_category"]
+    assert sum(counts.values()) == len(rankable) == 1
 
 
 def test_standing_disclosures_when_the_card_is_ok() -> None:
@@ -772,6 +788,25 @@ def test_no_board_is_unavailable() -> None:
 
 def _request_for(target: object) -> Any:
     return SimpleNamespace(app=target)
+
+
+def test_the_cards_position_store_is_the_apps_position_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The card's own provider (C-5 keeps ``app.api.deps`` out) opens the same database."""
+    from app.api import deps
+
+    monkeypatch.setenv("STOCK_DESK_DB_PATH", str(tmp_path / "stock-desk.db"))
+    caches = (api._default_positions, deps._default_store)
+    for cache in caches:
+        cache.cache_clear()
+    try:
+        card_store = api.get_sector_position_store()
+        app_store = deps.get_position_store()
+        assert card_store.db_path == app_store.db_path == tmp_path / "stock-desk.db"
+    finally:
+        for cache in caches:
+            cache.cache_clear()
 
 
 def test_the_composition_root_installs_the_services_runtime() -> None:

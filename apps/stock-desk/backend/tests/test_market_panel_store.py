@@ -579,11 +579,11 @@ def test_load_panel_frames_lookback_is_a_noop_when_a_run_already_exists_in_windo
     assert (frames.runs["kind"] == "listing").sum() == 2
 
 
-# -- existing_run_ids (dev-lead coordination point 4, C-27) --------------------
+# -- source verification of statistics rows (ADR-0012 C-50) ----------------
 
 
-def test_existing_run_ids_reports_which_ids_are_real(store: MarketPanelStore) -> None:
-    run_id = store.record_run(
+def test_the_source_set_is_ok_runs_up_to_the_session_and_run_cut(store: MarketPanelStore) -> None:
+    first = store.record_run(
         kind="bars",
         session_date=date(2026, 9, 24),
         source="twse_snapshot",
@@ -592,12 +592,38 @@ def test_existing_run_ids_reports_which_ids_are_real(store: MarketPanelStore) ->
         expected_count=1,
         bars_rows=[_bar()],
     )
-    result = store.existing_run_ids([str(run_id), "999999", "not-a-number", ""])
-    assert result == {str(run_id)}
-
-
-def test_existing_run_ids_empty_input_returns_empty_set(store: MarketPanelStore) -> None:
-    assert store.existing_run_ids([]) == set()
+    failed = store.record_run(
+        kind="bars",
+        session_date=date(2026, 9, 24),
+        source="twse_snapshot",
+        status="failed",
+        row_count=0,
+        expected_count=1,
+    )
+    second = store.record_run(
+        kind="listing",
+        session_date=date(2026, 9, 25),
+        source="twse_t187ap03_L",
+        status="ok",
+        row_count=0,
+        expected_count=None,
+    )
+    later = store.record_run(
+        kind="listing",
+        session_date=date(2026, 9, 26),
+        source="twse_t187ap03_L",
+        status="ok",
+        row_count=0,
+        expected_count=None,
+    )
+    fingerprint = store.source_fingerprint(second, date(2026, 9, 25))
+    assert fingerprint is not None
+    assert (fingerprint.run_min, fingerprint.run_max, fingerprint.run_count) == (first, second, 2)
+    assert fingerprint.session_end == date(2026, 9, 25) and len(fingerprint.digest) == 64
+    tally = store.source_tally([first, failed, later, 999_999], second, date(2026, 9, 25))
+    assert tally.ok_endpoints == {first, later}  # a failed run is not an ok endpoint
+    assert (tally.run_count, tally.run_min, tally.run_max) == (2, first, second)
+    assert store.source_fingerprint(0, date(2026, 9, 25)) is None
 
 
 # -- minimal end-to-end regression: lookback carries forward through MarketPanel --

@@ -13,7 +13,10 @@ T-1 (C-1..C-5, C-17):
   ``app.sectors``;
 * C-5: the ``app.api.sectors`` router's direct imports, and its transitive
   reach held to ADR-0012 D-1 (``api.sectors -> {sectors core, sectors.store,
-  data.market_panel, positions.store}``) plus the named schema modules;
+  data.market_panel, positions.store}``) plus the named schema modules; no
+  module of that reach imports dynamically (``importlib`` / ``__import__`` or
+  a string naming an ``app.*`` module outside it, or ``httpx``) -- the C-2
+  technique, so the static walk has no blind spot;
 * C-17: no score / rating vocabulary and no advice-engine field name in any
   identifier, attribute or string of ``app/sectors`` (docstrings excluded).
 
@@ -316,6 +319,64 @@ def test_router_transitive_scan_has_teeth(extra_root: str, leak: str) -> None:
     assert leak in _router_outside_d1(reachable)
     forbidden = next(f for f in ROUTER_FORBIDDEN if leak == f or leak.startswith(f"{f}."))
     assert offenders(reachable, forbidden) != []
+
+
+#: A dotted ``app.*`` module name inside a string (what a dynamic import would name).
+_APP_MODULE_STRING = re.compile(r"\bapp(?:\.[A-Za-z_]\w*)+")
+
+
+def _dynamic_import_hits(path: Path) -> list[str]:
+    """What the static walk cannot follow: ``importlib`` / ``__import__``, or a string
+    naming an ``app.*`` module outside the router's D-1 reach (docstrings excluded).
+
+    The same technique as the C-2 ``httpx`` scan, applied to every module the
+    router reaches, so a dynamic import cannot slip past the transitive check.
+    """
+    source = path.read_text(encoding="utf-8")
+    hits = [pattern.pattern for pattern in _HTTPX_PATTERNS[2:] if pattern.search(source)]
+    tree = ast.parse(source)
+    docstrings = _docstring_nodes(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstrings:
+                continue
+            for name in _APP_MODULE_STRING.findall(node.value):
+                if name not in ROUTER_ALLOWED:
+                    hits.append(f"string {name!r}")
+            if "httpx" in node.value:
+                hits.append(f"string {node.value!r}")
+    return hits
+
+
+def _router_closure_files() -> list[Path]:
+    reachable = _real_modules(reachable_app_modules((ROUTER,)))
+    paths = [module_path(module) for module in sorted(reachable)]
+    return [path for path in paths if path is not None]
+
+
+def test_router_closure_has_no_dynamic_import() -> None:
+    files = _router_closure_files()
+    assert module_path(ROUTER) in files and module_path("app.data.market_panel") in files
+    for path in files:
+        assert _dynamic_import_hits(path) == [], path
+
+
+@pytest.mark.parametrize(
+    "addition",
+    [
+        "import importlib\nmarket = importlib.import_module('app.services.market')\n",
+        "portfolio = __import__('app.portfolio.valuation')\n",
+        "TARGET = 'app.advice.engine'\n",
+        "CLIENT = 'httpx'\n",
+    ],
+)
+def test_router_dynamic_import_scan_has_teeth(tmp_path: Path, addition: str) -> None:
+    """Appended to a module the router reaches, each form is caught."""
+    source = module_path("app.data.market_panel")
+    assert source is not None
+    leaked = tmp_path / "market_panel.py"
+    leaked.write_text(source.read_text(encoding="utf-8") + "\n" + addition, encoding="utf-8")
+    assert _dynamic_import_hits(leaked) != []
 
 
 def test_router_transitive_scan_catches_a_new_import(tmp_path: Path) -> None:

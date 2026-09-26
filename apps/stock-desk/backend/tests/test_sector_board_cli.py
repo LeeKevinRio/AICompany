@@ -14,7 +14,6 @@ known version named in a written record.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,14 +25,10 @@ from app.sectors.store import SectorApprovalStore, SectorMethodRegistry, SectorS
 from app.services import sector_board
 from app.services.sector_board import ApprovalRefused, approve, git_blob_hash, register_version
 from tests.sector_board_helpers import stats_record
+from tests.source_helpers import FakeSources
 
 NOW = datetime(2029, 3, 13, 9, tzinfo=UTC)
 RUN = "sector-rel-v1.0-L5-H5:2029-03-12:20290312T140000000000"
-
-
-class _AllKnown:
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        return frozenset(run_ids)
 
 
 @dataclass
@@ -49,8 +44,8 @@ def desk(tmp_path: Path) -> Desk:
     repo = tmp_path / "repo"
     (repo / "work" / "reviews").mkdir(parents=True)
     db = tmp_path / "main.db"
-    stats = SectorStatsRepository(_AllKnown(), db)
-    stats.save(stats_record(RUN, ("1", "2")))
+    stats = SectorStatsRepository(FakeSources(), db)
+    stats.save(stats_record(RUN))
     doc = repo / "work" / "reviews" / "risk-approve.md"
     doc.write_text(
         f"# 風控書面 APPROVE\n\nrun_id: {RUN}\nmethod_version: {V1.method_version}\n",

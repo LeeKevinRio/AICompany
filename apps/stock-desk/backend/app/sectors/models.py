@@ -319,17 +319,28 @@ class SelfcheckRecord:
 class StatsRecord:
     """One ``sector_rank_stats`` row: the evaluator's result for one run (wave 2 writes it).
 
-    ``regime`` / ``data_regime`` / ``source_run_ids`` are provenance the
-    repository checks on every save and load (D-14, C-27): anything but
-    ``pit`` + ``forward_pit`` with every run id present in the market DB is
-    rejected.
+    ``regime`` / ``data_regime`` and the five ``source_*`` fields are
+    provenance the repository checks on every save and load (D-14, C-27,
+    C-50): anything but ``pit`` + ``forward_pit`` whose source fingerprint
+    matches the market DB's ``pit_snapshot_runs`` is rejected. The fingerprint
+    describes the source set 𝒮 -- every ``ok`` run with ``session_date <=
+    source_session_end`` and ``run_id <= source_run_max`` -- in fixed width;
+    no field lists the source runs one by one (C-50, C-51).
     """
 
     run_id: str
     method_version: str
     regime: StatsRegime
     data_regime: DataRegime
-    source_run_ids: tuple[str, ...]
+    #: First and last market-DB ``run_id`` of 𝒮.
+    source_run_min: int
+    source_run_max: int
+    #: The latest ``session_date`` in 𝒮.
+    source_session_end: date
+    #: Number of runs in 𝒮 (> 0).
+    source_run_count: int
+    #: SHA-256 hex of 𝒮 (``app.data.panel.source_fingerprint``).
+    source_digest: str
     m_at_evaluation: int
     sample_count: int
     effective_sample_count: float

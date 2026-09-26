@@ -46,7 +46,7 @@ from app.backtest.sector_eval import (
     to_stats_record,
 )
 from app.data.calendar import TradingCalendar
-from app.data.panel import cutoff
+from app.data.panel import cutoff, source_fingerprint
 from app.sectors import gate, ranking, universe
 from app.sectors.definition import SECTOR_MOMENTUM_V1 as V1
 from app.sectors.definition import GateRules, SectorMomentumDefinition
@@ -55,6 +55,7 @@ from app.sectors.models import SelfcheckRecord, StatsRecord
 from app.sectors.store import BiasedDataRejected, SectorStatsRepository
 from tests.import_graph import APP_ROOT
 from tests.sector_eval_helpers import SyntheticMarket, boards_for, replace_frame, synthetic_market
+from tests.source_helpers import FakeSources
 
 #: V1 with fewer T1 dates, only to keep CI time sane; every other value is V1's.
 FAST = SectorMomentumDefinition(
@@ -754,12 +755,11 @@ def test_leak_and_placebo_statuses() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _Verifier:
-    def __init__(self, known: Collection[str]) -> None:
-        self._known = frozenset(known)
-
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        return frozenset(run_ids) & self._known
+def _market_of(evaluation: sector_eval.SectorEvaluation) -> FakeSources:
+    """A market DB holding exactly the source set the evaluation read."""
+    sources = source_fingerprint(evaluation.source_runs)
+    assert sources is not None
+    return FakeSources((sources,))
 
 
 def _record(evaluation: sector_eval.SectorEvaluation, *, ci_ok: bool = True) -> StatsRecord | None:
@@ -784,9 +784,11 @@ def test_stats_record_round_trips_through_the_repository(
     assert record.selfcheck_passed and record.data_quality_passed
     assert not record.pit_history_missing
     assert record.delta_real is not None and record.delta_shuffle is not None
-    repo = SectorStatsRepository(_Verifier(evaluation.source_run_ids), tmp_path / "main.db")
+    repo = SectorStatsRepository(_market_of(evaluation), tmp_path / "main.db")
     repo.save(record)
     (loaded,) = repo.load(record.method_version)
+    assert loaded.source_digest == record.source_digest
+    assert loaded.source_run_count == len(evaluation.source_runs)
     assert loaded.beat_count_net == record.beat_count_net
     assert {c.check_name for c in loaded.selfchecks} == set(sector_eval.SELFCHECK_ORDER)
 
@@ -866,11 +868,12 @@ def test_hindsight_or_backfill_records_never_become_rows(
         _record(backfill)
     record = _record(evaluation)
     assert record is not None
-    repo = SectorStatsRepository(_Verifier(evaluation.source_run_ids), tmp_path / "main.db")
+    repo = SectorStatsRepository(_market_of(evaluation), tmp_path / "main.db")
     for bad in (
         dataclasses.replace(record, regime="hindsight"),
         dataclasses.replace(record, data_regime="backfill_non_pit"),
-        dataclasses.replace(record, source_run_ids=("not-a-market-run",)),
+        dataclasses.replace(record, source_digest="0" * 64),
+        dataclasses.replace(record, source_run_count=record.source_run_count - 1),
     ):
         with pytest.raises(BiasedDataRejected):
             repo.save(bad)

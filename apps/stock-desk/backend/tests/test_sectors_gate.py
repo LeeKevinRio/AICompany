@@ -43,6 +43,7 @@ from app.sectors.models import (
     StatsRecord,
 )
 from tests.sectors_helpers import weekdays
+from tests.source_helpers import DEFAULT_FINGERPRINT, source_fields
 
 DAYS = tuple(weekdays(420, date(2026, 1, 5)))
 D0 = DAYS[0]
@@ -73,7 +74,7 @@ def _stats(
         method_version=V1.method_version,
         regime="pit",
         data_regime="forward_pit",
-        source_run_ids=("1", "2"),
+        **source_fields(DEFAULT_FINGERPRINT),  # type: ignore[arg-type]
         m_at_evaluation=1,
         sample_count=160,
         effective_sample_count=70.0,

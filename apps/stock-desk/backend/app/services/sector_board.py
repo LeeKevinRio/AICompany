@@ -18,7 +18,9 @@
    forward point-in-time data, with the stored boards projected to
    :class:`BoardFingerprint` for T9 (no boards -> T9 fails closed, NE-7), the
    judge-time attestation check of C-36, and append one ``sector_rank_stats``
-   row. A ``BiasedDataRejected`` aborts the judgement and writes nothing
+   row. A ``BiasedDataRejected`` -- the row's or the previous row's source
+   fingerprint not matching the market DB, stored rows refused on read, or a
+   pre-v9 statistics table (C-50) -- aborts the judgement and writes nothing
    (T-22). An evaluation failure never touches the board (D-5).
 
 This module decides nothing about ``gate_status`` (C-20): it writes the
@@ -117,20 +119,6 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class MarketRunIdVerifier:
-    """``RunIdVerifier`` over :meth:`MarketPanelStore.existing_run_ids` (D-14, C-27).
-
-    ``app.sectors`` may not import the market-DB store (C-1), so the main-DB
-    repository reaches it through this adapter, injected here.
-    """
-
-    def __init__(self, store: MarketPanelStore) -> None:
-        self._store = store
-
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        return frozenset(self._store.existing_run_ids(run_ids))
-
-
 # ---------------------------------------------------------------------------
 # One day's board
 # ---------------------------------------------------------------------------
@@ -225,7 +213,6 @@ def stored_board_of(
         market_corporate_action_excluded_count=len(market.corporate_action_excluded),
         ex_dividend_feed_covered=provenance.ex_dividend_feed_covered,
         constituent_invariant_violated=bool(ranking.invariant_violations),
-        source_run_ids=tuple(sorted(provenance.source_run_ids)),
         ranked=tuple(
             StoredRankedSector(
                 rank=row.rank,
@@ -264,12 +251,13 @@ def stored_board_of(
 
 
 def same_board(left: StoredBoard, right: StoredBoard) -> bool:
-    """Equal in every column the card or T9 reads (ids, clocks and provenance aside)."""
+    """Equal in every column the card or T9 reads (ids and clocks aside).
+
+    ``sector_board.source_run_ids`` is never read back (C-51), so it plays no part.
+    """
 
     def core(board: StoredBoard) -> StoredBoard:
-        return dataclasses.replace(
-            board, board_id="", computed_at="", bars_recorded_at=None, source_run_ids=()
-        )
+        return dataclasses.replace(board, board_id="", computed_at="", bars_recorded_at=None)
 
     return core(left) == core(right)
 
@@ -328,7 +316,9 @@ class SectorBoardService:
 
     def __post_init__(self) -> None:
         self.boards = SectorBoardStore(self.main_db)
-        self.stats = SectorStatsRepository(MarketRunIdVerifier(self.market_store), self.main_db)
+        # The market store is the repository's source verifier (C-50): ``app.sectors``
+        # may not import it (C-1), so it is injected here.
+        self.stats = SectorStatsRepository(self.market_store, self.main_db)
         self.registry = SectorMethodRegistry(self.main_db)
         self._lock = threading.RLock()
         #: The last sample exit an evaluation was attempted for (no row may result).
@@ -445,7 +435,12 @@ class SectorBoardService:
             return None
         last_decision = window.decision_dates[-1]
         latest_exit = days[days.index(last_decision) + self.definition.holding_days]
-        history = self.stats.load(version)
+        try:
+            history = self.stats.load(version)
+        except BiasedDataRejected:
+            logger.exception("stored statistics refused (C-50); this judgement writes nothing")
+            notes.append("biased_data_rejected")
+            return None
         if history and history[-1].recompute_session >= latest_exit:
             return None
         if self._attempted_exit == latest_exit:
@@ -671,7 +666,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         if args.command == "approve":
-            stats = SectorStatsRepository(MarketRunIdVerifier(MarketPanelStore()))
+            stats = SectorStatsRepository(MarketPanelStore())
             approval = approve(
                 kind=args.kind,
                 run_id=args.run_id,

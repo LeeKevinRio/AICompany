@@ -179,7 +179,7 @@ def synthetic_market(
     def new_run(kind: str, day: date, recorded: pd.Timestamp, run_source: str) -> str:
         nonlocal counter
         counter += 1
-        run_id = f"{kind[:2]}{counter:06d}"
+        run_id = f"{counter:06d}"  # a market-DB-shaped integer id (C-50 fingerprints need one)
         run_rows.append(
             {
                 "run_id": run_id,

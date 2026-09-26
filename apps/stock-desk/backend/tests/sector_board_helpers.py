@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -30,6 +31,7 @@ from app.data.interface import (
     SnapshotKind,
 )
 from app.data.market_panel import MarketPanelReader, MarketPanelStore
+from app.data.panel import SourceFingerprint, source_fingerprint
 from app.positions.store import PositionStore
 from app.sectors.coverage import coverage_from_counts
 from app.sectors.gate import SectorGateRuntime
@@ -42,6 +44,7 @@ from app.sectors.store import (
     StoredRankedSector,
 )
 from tests.sector_eval_helpers import SyntheticMarket
+from tests.source_helpers import DEFAULT_FINGERPRINT
 
 
 def _decimal(value: object) -> Decimal:
@@ -52,8 +55,29 @@ def _groups(frame: pd.DataFrame) -> Mapping[str, pd.DataFrame]:
     return {str(run_id): rows for run_id, rows in frame.groupby("run_id", sort=False)}
 
 
-def store_market(market: SyntheticMarket, path: Path) -> MarketPanelStore:
-    """Write every run of ``market`` into a fresh market DB at ``path``."""
+def _bar_row(row: Any) -> BarSnapshotRow:
+    return BarSnapshotRow(
+        symbol=str(row.symbol),
+        open=_decimal(row.open),
+        high=_decimal(row.high),
+        low=_decimal(row.low),
+        close=_decimal(row.close),
+        shares=int(row.shares),
+        traded_value=_decimal(row.traded_value),
+        change=None if math.isnan(float(row.change)) else _decimal(row.change),
+    )
+
+
+def store_market(
+    market: SyntheticMarket, path: Path, *, warmup_per_symbol: bool = False
+) -> MarketPanelStore:
+    """Write every run of ``market`` into a fresh market DB at ``path``.
+
+    With ``warmup_per_symbol`` the warm-up bars (source ``finmind_warmup``) are
+    written the way the pre-D0 CLI writes them (ADR-0012 D-3): one
+    :meth:`MarketPanelStore.record_symbol_backfill` per symbol -- one run per
+    symbol per day -- all recorded when the warm-up ran, before D0.
+    """
     clock = {"now": datetime(2000, 1, 1, tzinfo=UTC)}
     store = MarketPanelStore(path, clock=lambda: clock["now"])
     frames = market.panel.frames
@@ -61,6 +85,18 @@ def store_market(market: SyntheticMarket, path: Path) -> MarketPanelStore:
     classes, dividends = _groups(frames.classification), _groups(frames.ex_dividend)
     empty = pd.DataFrame()
     runs = frames.runs.sort_values(["recorded_at", "run_id"], kind="mergesort")
+    if warmup_per_symbol:
+        warm = runs.loc[runs["source"] == "finmind_warmup"]
+        runs = runs.loc[runs["source"] != "finmind_warmup"]
+        warm_ids = set(warm["run_id"].astype(str))
+        warm_bars = frames.bars.loc[frames.bars["run_id"].astype(str).isin(warm_ids)]
+        clock["now"] = pd.Timestamp(warm["recorded_at"].max()).to_pydatetime()
+        for symbol, rows in warm_bars.groupby("symbol", sort=True):
+            store.record_symbol_backfill(
+                symbol=str(symbol),
+                source="finmind_warmup",
+                rows=[(row.session_date, _bar_row(row)) for row in rows.itertuples(index=False)],
+            )
     for run in runs.itertuples(index=False):
         run_id = str(run.run_id)
         clock["now"] = pd.Timestamp(run.recorded_at).to_pydatetime()
@@ -73,19 +109,7 @@ def store_market(market: SyntheticMarket, path: Path) -> MarketPanelStore:
             "expected_count": int(run.expected_count),
         }
         if kind == "bars":
-            rows = [
-                BarSnapshotRow(
-                    symbol=str(row.symbol),
-                    open=_decimal(row.open),
-                    high=_decimal(row.high),
-                    low=_decimal(row.low),
-                    close=_decimal(row.close),
-                    shares=int(row.shares),
-                    traded_value=_decimal(row.traded_value),
-                    change=None if math.isnan(float(row.change)) else _decimal(row.change),
-                )
-                for row in bars.get(run_id, empty).itertuples(index=False)
-            ]
+            rows = [_bar_row(row) for row in bars.get(run_id, empty).itertuples(index=False)]
             store.record_run(**common, row_count=len(rows), bars_rows=rows)  # type: ignore[arg-type]
         elif kind == "listing":
             listed = [
@@ -120,7 +144,9 @@ def store_market(market: SyntheticMarket, path: Path) -> MarketPanelStore:
     return store
 
 
-def stats_record(run_id: str, source_run_ids: tuple[str, ...], **overrides: object) -> StatsRecord:
+def stats_record(
+    run_id: str, sources: SourceFingerprint = DEFAULT_FINGERPRINT, **overrides: object
+) -> StatsRecord:
     """A well-formed forward point-in-time statistics row (G1..G6 all passing)."""
     import dataclasses
 
@@ -132,7 +158,11 @@ def stats_record(run_id: str, source_run_ids: tuple[str, ...], **overrides: obje
         method_version=SECTOR_MOMENTUM_V1.method_version,
         regime="pit",
         data_regime="forward_pit",
-        source_run_ids=source_run_ids,
+        source_run_min=sources.run_min,
+        source_run_max=sources.run_max,
+        source_session_end=sources.session_end,
+        source_run_count=sources.run_count,
+        source_digest=sources.digest,
         m_at_evaluation=1,
         sample_count=160,
         effective_sample_count=120.0,
@@ -272,7 +302,6 @@ def make_board(
         market_corporate_action_excluded_count=corporate_action,
         ex_dividend_feed_covered=feed_covered,
         constituent_invariant_violated=False,
-        source_run_ids=("41",),
         ranked=tuple(ranked),
         excluded=tuple(excluded),
     )
@@ -354,10 +383,12 @@ def live_card(tmp_path: Path, sector_count: int, *, now: datetime) -> LiveCard:
     SectorBoardService(market_store=store, main_db=main_db, clock=lambda: now).refresh_board(
         market.calendar[-1]
     )
-    frames = store.load_panel_frames(market.calendar[0], market.calendar[-1])
-    run_ids = tuple(sorted(frames.runs["run_id"])[:5])
+    sources = source_fingerprint(
+        store.load_panel_frames(market.calendar[0], market.calendar[-1]).runs
+    )
+    assert sources is not None
     SectorStatsRepository(MarketPanelReader(market_db), main_db).save(
-        stats_record("stats-1", run_ids, recompute_session=market.calendar[-1])
+        stats_record("stats-1", sources, recompute_session=market.calendar[-1])
     )
     SectorApprovalStore(main_db).add(
         ApprovalRecord(

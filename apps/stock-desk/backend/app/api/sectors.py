@@ -13,8 +13,11 @@ number of sectors or stocks:
   as one JOIN, that version's approvals, the registry's D0;
 * market DB, read only (:class:`app.data.market_panel.MarketPanelReader`): the
   ``ok`` sessions per kind (calendar, ``pit_gaps`` input, data age) and --
-  only when statistics exist -- one existence check of their source runs
-  (D-14; the research DB is never opened, C-27);
+  only when statistics exist -- one light check of their source fingerprints
+  (D-14, C-50: every row's first / last run exists as an ``ok`` run, the
+  latest row's run count matches; no digest is recomputed and no list of
+  runs is read, so the request does not grow with the market DB, C-51; the
+  research DB is never opened, C-27);
 * positions: one read for the 「持有中／未持有」 flags (C-34).
 
 The effective ``gate_status`` is composed by :func:`app.sectors.gate.evaluate`
@@ -100,6 +103,8 @@ class SectorCardSources:
 @lru_cache(maxsize=1)
 def _default_sources() -> SectorCardSources:
     market = MarketPanelReader()
+    # The read-only market reader is the card's source verifier (C-50), injected
+    # here because ``app.sectors`` may not import the market-DB store (C-1).
     return SectorCardSources(card=SectorCardReader(verifier=market), market=market)
 
 

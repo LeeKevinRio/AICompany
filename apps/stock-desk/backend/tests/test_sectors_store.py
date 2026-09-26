@@ -4,8 +4,12 @@
   from ``RAISE(ABORT)``; the registry's two NULL -> value updates succeed once
   and only once; every trigger exists, and the existence check has teeth.
 * T-21: every connection runs with ``busy_timeout`` > 0.
-* T-10 (repository half): hindsight / backfill / unknown-run records raise
-  ``BiasedDataRejected`` on save and on load.
+* T-10 (repository half): hindsight / backfill records and records whose
+  source fingerprint the market DB does not confirm raise
+  ``BiasedDataRejected`` on save and on load (C-50; the real market DB is
+  exercised in ``test_sector_source_fingerprint.py``);
+* C-50: a pre-v9 ``sector_rank_stats`` (``source_run_ids``) is rebuilt when
+  empty and, with rows, never migrated: statistics are refused on save and read.
 * T-12 (registry half): m is counted from the registry.
 """
 
@@ -13,7 +17,6 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
-from collections.abc import Collection
 from contextlib import closing
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -34,16 +37,17 @@ from app.sectors.store import (
     SectorStatsRepository,
 )
 from tests.sectors_helpers import Member, members, scenario
+from tests.source_helpers import (
+    DEFAULT_FINGERPRINT,
+    FakeSources,
+    fingerprint,
+    source_fields,
+)
 
-KNOWN_RUNS = frozenset({"101", "102", "103"})
 
-
-class FakeRuns:
-    def __init__(self, known: frozenset[str] = KNOWN_RUNS) -> None:
-        self.known = known
-
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        return frozenset(run_ids) & self.known
+def _market(ok_runs: frozenset[int] | None = None) -> FakeSources:
+    """A market DB holding :data:`DEFAULT_FINGERPRINT`'s source set (runs 101..102)."""
+    return FakeSources((DEFAULT_FINGERPRINT,), ok_runs=ok_runs)
 
 
 def _stats(run_id: str = "s1", **kw: Any) -> StatsRecord:
@@ -52,7 +56,7 @@ def _stats(run_id: str = "s1", **kw: Any) -> StatsRecord:
         method_version=V1.method_version,
         regime="pit",
         data_regime="forward_pit",
-        source_run_ids=("101", "102"),
+        **source_fields(DEFAULT_FINGERPRINT),  # type: ignore[arg-type]
         m_at_evaluation=1,
         sample_count=12,
         effective_sample_count=10.5,
@@ -108,7 +112,7 @@ def db(tmp_path: Path) -> Path:
 
 
 def _seed_all(db: Path) -> None:
-    SectorStatsRepository(FakeRuns(), db).save(_stats())
+    SectorStatsRepository(_market(), db).save(_stats())
     SectorApprovalStore(db).add(_approval())
     SectorMethodRegistry(db).register(
         V1, frozen_commit="f00d", registered_at=datetime(2026, 9, 1, tzinfo=UTC)
@@ -246,7 +250,7 @@ def test_stores_offer_no_update_or_delete_methods() -> None:
 def test_every_store_connection_has_a_busy_timeout(db: Path) -> None:
     for instance in (
         SectorBoardStore(db),
-        SectorStatsRepository(FakeRuns(), db),
+        SectorStatsRepository(_market(), db),
         SectorApprovalStore(db),
         SectorMethodRegistry(db),
     ):
@@ -261,7 +265,7 @@ def test_every_store_connection_has_a_busy_timeout(db: Path) -> None:
 
 
 def test_stats_round_trip_with_checks(db: Path) -> None:
-    repo = SectorStatsRepository(FakeRuns(), db)
+    repo = SectorStatsRepository(_market(), db)
     record = _stats()
     repo.save(record)
     assert repo.load(V1.method_version) == (record,)
@@ -273,21 +277,141 @@ def test_stats_round_trip_with_checks(db: Path) -> None:
     [
         {"regime": "hindsight"},
         {"data_regime": "backfill_non_pit"},
-        {"source_run_ids": ()},
-        {"source_run_ids": ("101", "999")},
+        {"source_run_count": 0},
+        {"source_run_count": 3},
+        {"source_run_max": 999},
+        {"source_run_min": 0},
+        {"source_run_min": 103},
+        {"source_digest": "A" * 64},
+        {"source_digest": "a" * 63},
+        {"source_session_end": date(2026, 12, 2)},
     ],
 )
 def test_non_pit_records_are_rejected_on_save(db: Path, overrides: dict[str, Any]) -> None:
-    repo = SectorStatsRepository(FakeRuns(), db)
+    repo = SectorStatsRepository(_market(), db)
     with pytest.raises(BiasedDataRejected):
         repo.save(_stats(**overrides))
     assert repo.load(V1.method_version) == ()
 
 
 def test_rows_whose_source_runs_vanished_are_rejected_on_load(db: Path) -> None:
-    SectorStatsRepository(FakeRuns(), db).save(_stats())
+    SectorStatsRepository(_market(), db).save(_stats())
     with pytest.raises(BiasedDataRejected):
-        SectorStatsRepository(FakeRuns(frozenset({"101"})), db).load(V1.method_version)
+        SectorStatsRepository(_market(frozenset({101})), db).load(V1.method_version)
+
+
+def test_save_recomputes_the_new_and_the_previous_row_and_reads_never_do(db: Path) -> None:
+    later = fingerprint(run_max=140, run_count=40, session_end=date(2026, 12, 8))
+    market = FakeSources((DEFAULT_FINGERPRINT, later))
+    repo = SectorStatsRepository(market, db)
+    repo.save(_stats())
+    assert (market.fingerprint_calls, market.tally_calls) == (1, 0)
+    repo.save(
+        _stats("s2", computed_at=datetime(2026, 12, 9, 10, tzinfo=UTC), **source_fields(later))
+    )
+    assert (market.fingerprint_calls, market.tally_calls) == (3, 0)
+    assert [row.run_id for row in repo.load(V1.method_version)] == ["s1", "s2"]
+    assert repo.find("s1") is not None
+    assert repo.latest_history()[-1].source_run_count == 40
+    # Three reads: one light check each, never a recompute.
+    assert (market.fingerprint_calls, market.tally_calls) == (3, 3)
+
+
+def test_a_previous_row_the_market_db_no_longer_confirms_blocks_the_save(db: Path) -> None:
+    later = fingerprint(run_max=140, run_count=40, session_end=date(2026, 12, 8))
+    SectorStatsRepository(FakeSources((DEFAULT_FINGERPRINT,)), db).save(_stats())
+    tampered = FakeSources((fingerprint(digest="b" * 64), later))
+    repo = SectorStatsRepository(tampered, db)
+    with pytest.raises(BiasedDataRejected, match="s1"):
+        repo.save(
+            _stats("s2", computed_at=datetime(2026, 12, 9, 10, tzinfo=UTC), **source_fields(later))
+        )
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sector_rank_stats").fetchone() == (1,)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sector_gate_checks WHERE run_id = 's2'"
+        ).fetchone() == (0,)
+
+
+def test_the_latest_row_must_match_the_count_of_its_source_set(db: Path) -> None:
+    SectorStatsRepository(_market(), db).save(_stats())
+    grown = FakeSources((fingerprint(run_count=3),), ok_runs={101, 102})
+    with pytest.raises(BiasedDataRejected, match="source set"):
+        SectorStatsRepository(grown, db).load(V1.method_version)
+
+
+def test_no_column_lists_source_runs_and_the_source_columns_are_fixed_width(db: Path) -> None:
+    SectorStatsRepository(_market(), db).save(_stats())
+    with closing(sqlite3.connect(db)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
+        (width,) = conn.execute(
+            "SELECT length(source_run_min) + length(source_run_max) + length(source_session_end)"
+            " + length(source_run_count) + length(source_digest) FROM sector_rank_stats"
+        ).fetchone()
+    assert "source_run_ids" not in columns
+    assert {
+        "source_run_min",
+        "source_run_max",
+        "source_session_end",
+        "source_run_count",
+        "source_digest",
+    } <= columns
+    assert width <= 256
+
+
+_LEGACY_STATS_SQL = """
+    CREATE TABLE sector_rank_stats (
+        run_id TEXT PRIMARY KEY,
+        method_version TEXT NOT NULL,
+        regime TEXT NOT NULL CHECK (regime = 'pit'),
+        data_regime TEXT NOT NULL CHECK (data_regime = 'forward_pit'),
+        source_run_ids TEXT NOT NULL,
+        computed_at TEXT NOT NULL
+    )
+"""
+
+
+def test_an_empty_pre_v9_statistics_table_is_rebuilt(tmp_path: Path) -> None:
+    db = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(_LEGACY_STATS_SQL)
+    repo = SectorStatsRepository(_market(), db)
+    assert repo.legacy_stats_rows is None
+    repo.save(_stats())
+    assert [row.run_id for row in repo.load(V1.method_version)] == ["s1"]
+    with closing(sqlite3.connect(db)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
+        triggers = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+        }
+    assert "source_run_ids" not in columns
+    assert {"sector_rank_stats_no_update", "sector_rank_stats_no_delete"} <= triggers
+
+
+def test_a_pre_v9_statistics_table_with_rows_is_never_migrated(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    db = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(_LEGACY_STATS_SQL)
+        conn.execute(
+            "INSERT INTO sector_rank_stats VALUES ('old', ?, 'pit', 'forward_pit', '[\"1\"]', 'x')",
+            (V1.method_version,),
+        )
+    with caplog.at_level("ERROR", logger="app.sectors.store"):
+        repo = SectorStatsRepository(_market(), db)
+        assert repo.legacy_stats_rows == 1
+        with pytest.raises(BiasedDataRejected, match="pre-v9"):
+            repo.save(_stats())
+        with pytest.raises(BiasedDataRejected, match="pre-v9"):
+            repo.load(V1.method_version)
+    assert any("pre-v9" in record.getMessage() for record in caplog.records)
+    read = store.SectorCardReader(verifier=_market(), db_path=db).read("TW", V1.method_version)
+    assert read.stats_history == () and read.stats_rejected is not None
+    with closing(sqlite3.connect(db)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
+        assert conn.execute("SELECT run_id FROM sector_rank_stats").fetchall() == [("old",)]
+    assert "source_run_ids" in columns  # left exactly as found
 
 
 def test_the_table_itself_refuses_non_pit_rows(db: Path) -> None:

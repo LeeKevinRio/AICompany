@@ -366,8 +366,8 @@ risk-compliance-officer 對第三波（編排、API）的裁定，dev-lead 逐�
     - `ex_dividend_exclusion`（§8-2）：「近 5 日遇除權息或減資等事件的成分股暫不計入，可計算成分股 {c}／{e} 檔，未達列入排行的標準」；「近 5 日」依 `lookback_days` 代入；{c}／{e} 綁族群層級 `excluded_sectors[].computable_count`／`excluded_sectors[].expected_count`，與 13.1 R-2 句的全市場 {c}／{e}（`market_corporate_action_excluded_count`／`market_expected_count`）**同名不同義**，前端須分別綁定。
 12. §8-1 C1-2 除權息 tag（主視圖）：「除權息排除 {m} 檔」；`ex_date_tag` 為 true 時出現，{m} 綁 `market_ex_date_excluded_count`。
 13. §4.4-2 缺漏 tag（主視圖，絕對底線；字面見 §4.5-2）：「缺 {m} 檔資料」；{m} 綁 `market_missing_count`，`market_missing_count > 0` 就出現；不足狀態依 IP-5／IP-6 不渲染（見 13.2）。
-14. §4.5-3 資料過舊句（主視圖常駐）：「本排行所依據的全市場收盤資料為 {date}，距今已 {d} 個交易日未更新，排行不代表最新市況。」條件 `data.trading_days_behind ≥ 1`；{date} 綁 `data_as_of`、{d} 綁 `data.trading_days_behind`。
-15. §4.5-4 交易日曆無法確認（主視圖）：逐字沿用既有常數 `AS_OF_CALENDAR_UNCONFIRMED_STATEMENT`（`apps/stock-desk/frontend/app/lib/adviceWording.ts`；§10 附帶 required 維持沿用）；條件 `data.trading_days_behind` 為 null。
+14. §4.5-3 資料過舊句（主視圖常駐）：「本排行所依據的全市場收盤資料為 {date}，距今已 {d} 個交易日未更新，排行不代表最新市況。」條件 `data.trading_days_behind ≥ 1`；{date} 綁 `data_as_of`、{d} 綁 `data.trading_days_behind`；不足狀態仍出現（IP-6）。
+15. §4.5-4 交易日曆無法確認（主視圖）：逐字沿用既有常數 `AS_OF_CALENDAR_UNCONFIRMED_STATEMENT`（`apps/stock-desk/frontend/app/lib/adviceWording.ts`；§10 附帶 required 維持沿用）；條件 `data.trading_days_behind` 為 null；不足狀態仍出現（IP-6）。
 16. §6.3 H-2（主視圖）：任一成分股 `held` 為 null 時不渲染持有徽章，並把「列示順序僅依近 5 日漲跌幅，不代表任何優先順序。」帶回主視圖；字串須取自後端已代入 L 的 `disclosures` 中那一句，或同一 wording 模組以 `lookback_days` 代入，不得寫死 5。
 17. §6.2(b-i) 上櫃較晚更新：「上櫃資料未更新至 {date}，本次排行僅含上市公司。」第一階段不會觸發（上櫃本階段排除，§12 核可第 2 項；結構性僅上市改由 §6.2(b-ii) 後端常駐句揭露）。
 

@@ -9,6 +9,10 @@ the sector core (``app.sectors``, which only ever *consumes* a
 ``PanelFrames`` below is the frozen wire shape. Column names and dtypes are
 part of the contract; changing them is an ADR-0012 change.
 
+:func:`source_fingerprint` is the one implementation of a statistics row's
+source fingerprint (ADR-0012 C-50): the evaluator and the market-DB verifier
+both call it, so the two sides can never hash differently.
+
 ``MarketPanel`` / ``PointInTimePanel`` are implemented by dev-lead in wave 1
 (ADR-0012 D-6, C-13/C-14): ``MarketPanel.as_of(t)`` is the ONLY constructor of
 a ``regime="pit"`` view, keeps rows with ``session_date <= t`` AND
@@ -54,6 +58,7 @@ anywhere but here, referenced outside ``app/research/``, or if ``_VIEW_KEY``
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -135,6 +140,126 @@ class PanelFrames:
     classification: pd.DataFrame
     ex_dividend: pd.DataFrame
     runs: pd.DataFrame
+
+
+# ---------------------------------------------------------------------------
+# Source fingerprint of a statistics row (ADR-0012 C-50, D-14)
+# ---------------------------------------------------------------------------
+
+#: Hashed ahead of the rows: changing the canonical form below changes every digest.
+SOURCE_DIGEST_SCHEME: Final = "stock-desk/sector-source-runs/v1"
+_FIELD_SEPARATOR: Final = "\x1f"
+
+
+@dataclass(frozen=True)
+class SourceFingerprint:
+    """The source set 𝒮 of one statistics row, in fixed width (ADR-0012 C-50).
+
+    𝒮 is every ``status='ok'`` run with a ``session_date`` that is
+    ``<= session_end`` and whose ``run_id <= run_max``. The market DB is
+    append-only (C-10) and ``run_id`` is monotonic and never reused (D-2), so
+    𝒮 never changes once written; ``digest`` binds the runs' content, not just
+    their ids.
+    """
+
+    run_min: int
+    run_max: int
+    session_end: date
+    run_count: int
+    #: SHA-256 hex (64 characters) of 𝒮, see :func:`source_fingerprint`.
+    digest: str
+
+
+@dataclass(frozen=True)
+class SourceTally:
+    """The read-time light check (ADR-0012 C-50): one SQL statement, no digest.
+
+    ``ok_endpoints`` are the asked-for run ids that are existing ``ok`` runs;
+    ``run_count`` / ``run_min`` / ``run_max`` describe the source set of the
+    one row whose ``(run_max, session_end)`` was asked for.
+    """
+
+    ok_endpoints: frozenset[int]
+    run_count: int
+    run_min: int | None
+    run_max: int | None
+
+
+def _texts(column: pd.Series) -> list[str]:
+    return [str(value) for value in column.to_numpy(dtype=object)]
+
+
+def _count_texts(column: pd.Series) -> list[str]:
+    """Integer counts as decimal text; a missing count is empty text."""
+    values = pd.to_numeric(column, errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
+    missing = np.isnan(values)
+    texts = np.where(missing, 0, values).astype(np.int64).astype(str)
+    return [str(text) for text in np.where(missing, "", texts)]
+
+
+def _canonical_run_rows(ok: pd.DataFrame) -> list[tuple[int, str]]:
+    """``(run_id, line)`` per run: every ``RUNS_COLUMNS`` field in canonical text."""
+    run_ids = [int(value) for value in _texts(ok["run_id"])]
+    sessions = np.datetime_as_string(
+        pd.to_datetime(ok["session_date"]).to_numpy(dtype="datetime64[D]"), unit="D"
+    )
+    recorded = pd.to_datetime(ok["recorded_at"])
+    if getattr(recorded.dt, "tz", None) is None:
+        # A naive timestamp is ambiguous; the producers always write UTC-aware ones.
+        raise ValueError("runs.recorded_at must be timezone-aware")
+    recorded_utc = recorded.dt.tz_convert("UTC").dt.tz_localize(None)
+    recorded_text = np.datetime_as_string(recorded_utc.to_numpy(dtype="datetime64[us]"), unit="us")
+    columns = (
+        [str(run_id) for run_id in run_ids],
+        _texts(ok["kind"]),
+        [str(value) for value in sessions],
+        [f"{value}+00:00" for value in recorded_text],
+        _texts(ok["source"]),
+        _texts(ok["status"]),
+        _count_texts(ok["row_count"]),
+        _count_texts(ok["expected_count"]),
+    )
+    lines = [_FIELD_SEPARATOR.join(fields) for fields in zip(*columns, strict=True)]
+    return sorted(zip(run_ids, lines, strict=True))
+
+
+def source_fingerprint(runs: pd.DataFrame) -> SourceFingerprint | None:
+    """The fingerprint of the ``ok`` runs in ``runs`` (a ``PanelFrames.runs`` frame).
+
+    The only implementation (ADR-0012 C-50): the evaluator
+    (:func:`app.backtest.sector_eval.to_stats_record`) and the market-DB
+    verifier (:mod:`app.data.market_panel`) both call it, the latter on a frame
+    built by the same row -> frame conversion as ``load_panel_frames``.
+
+    Rows with ``status == "ok"`` and a ``session_date`` are kept and sorted by
+    integer ``run_id``; each ``RUNS_COLUMNS`` field is normalised (integer run
+    id, ISO session date, UTC ISO ``recorded_at`` to the microsecond, plain
+    text, integer counts, empty text for a missing ``expected_count``), joined
+    by U+001F, one run per line, after :data:`SOURCE_DIGEST_SCHEME`, and
+    hashed with SHA-256. ``None`` when there is no such run. A run id that is
+    not an integer (anything but a market-DB run, e.g. research ``bf-*`` ids)
+    raises ``ValueError``.
+    """
+    missing = [column for column in RUNS_COLUMNS if column not in runs.columns]
+    if missing:
+        raise ValueError(f"runs frame is missing columns {missing}")
+    ok = runs.loc[(runs["status"] == "ok") & runs["session_date"].notna()]
+    if ok.empty:
+        return None
+    rows = _canonical_run_rows(ok)
+    digest = hashlib.sha256()
+    digest.update(SOURCE_DIGEST_SCHEME.encode("utf-8"))
+    for _, line in rows:
+        digest.update(b"\n")
+        digest.update(line.encode("utf-8"))
+    session_end = pd.to_datetime(ok["session_date"]).max().date()
+    return SourceFingerprint(
+        run_min=rows[0][0],
+        run_max=rows[-1][0],
+        session_end=session_end,
+        run_count=len(rows),
+        digest=digest.hexdigest(),
+    )
 
 
 # ---------------------------------------------------------------------------

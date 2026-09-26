@@ -20,7 +20,6 @@ from __future__ import annotations
 import ast
 import dataclasses
 import sqlite3
-from collections.abc import Collection
 from contextlib import closing
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -52,6 +51,7 @@ from tests.import_graph import (
 )
 from tests.sector_board_helpers import LiveCard, card_client, live_card, verified_runtime
 from tests.sector_eval_helpers import SyntheticMarket, synthetic_market
+from tests.source_helpers import DEFAULT_FINGERPRINT, FakeSources, source_fields
 
 #: The momentum response clock (fixed, so two responses can be compared byte for byte).
 CARD_NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
@@ -506,21 +506,13 @@ def test_hindsight_runs_are_marked_and_cannot_mix_with_point_in_time(
         )
 
 
-class _Verifier:
-    def __init__(self, known: Collection[str]) -> None:
-        self._known = frozenset(known)
-
-    def existing_run_ids(self, run_ids: Collection[str]) -> frozenset[str]:
-        return frozenset(run_ids) & self._known
-
-
 def _record(**overrides: object) -> StatsRecord:
     base = StatsRecord(
         run_id="r1",
         method_version=V1.method_version,
         regime="pit",
         data_regime="forward_pit",
-        source_run_ids=("bars-1",),
+        **source_fields(DEFAULT_FINGERPRINT),  # type: ignore[arg-type]
         m_at_evaluation=1,
         sample_count=10,
         effective_sample_count=10.0,
@@ -553,14 +545,15 @@ def _record(**overrides: object) -> StatsRecord:
     [
         {"regime": "hindsight"},
         {"data_regime": "backfill_non_pit"},
-        {"source_run_ids": ("bf-bars-000001",)},
-        {"source_run_ids": ()},
+        # A fingerprint the market DB does not hold (e.g. computed over research runs).
+        {"source_digest": "b" * 64},
+        {"source_run_count": 0},
     ],
 )
 def test_the_repository_refuses_biased_records(
     tmp_path: Path, overrides: dict[str, object]
 ) -> None:
-    repo = SectorStatsRepository(_Verifier({"bars-1"}), tmp_path / "main.db")
+    repo = SectorStatsRepository(FakeSources(), tmp_path / "main.db")
     repo.save(_record())
     with pytest.raises(BiasedDataRejected):
         repo.save(_record(run_id="r2", **overrides))

@@ -75,6 +75,7 @@ from app.data.panel import (
     PointInTimePanel,
     Regime,
     cutoff,
+    source_fingerprint,
 )
 from app.sectors.coverage import ex_dividend_feed_covered
 from app.sectors.definition import SectorMomentumDefinition
@@ -1529,7 +1530,9 @@ class SectorEvaluation:
     basket_result: BasketResult
     round_trip_cost: float
     cost_verified_on: str | None
-    source_run_ids: tuple[str, ...]
+    #: The ``PanelFrames.runs`` rows the evaluation read with ``status == "ok"``:
+    #: the source set 𝒮 whose fingerprint :func:`to_stats_record` stores (C-50).
+    source_runs: pd.DataFrame = dataclasses.field(compare=False, repr=False)
     data_source: str | None
 
     @property
@@ -1873,7 +1876,7 @@ def evaluate(
     )
     gaps = tuple(pit_gaps(pit_status, de5_verified_on, window))
     frames = panel.frames
-    ok_runs = frames.runs.loc[frames.runs["status"] == "ok", "run_id"]
+    ok_runs = frames.runs.loc[frames.runs["status"] == "ok"].reset_index(drop=True)
     last_valid = [week for week in main if week.valid]
     view_source = (
         panel.as_of(last_valid[-1].decision_date).bars_source_on(last_valid[-1].decision_date)
@@ -1897,7 +1900,7 @@ def evaluate(
         basket_result=run.basket_result,
         round_trip_cost=run.round_trip_cost,
         cost_verified_on=cost_model.verified_on,
-        source_run_ids=tuple(sorted(set(str(run_id) for run_id in ok_runs))),
+        source_runs=ok_runs,
         data_source=view_source,
     )
 
@@ -1945,6 +1948,10 @@ def to_stats_record(
     Refuses anything but point-in-time forward data before the repository has
     to (D-14 defence in depth). ``ci_attestation_ok`` is the services layer's
     NE-7 CI half (clean tree, ``running_commit == ci_passed_commit``, suite hash).
+
+    The source columns are :func:`app.data.panel.source_fingerprint` of the ok
+    runs the evaluation read -- the same function the market-DB verifier
+    recomputes it with on save (C-50).
     """
     if evaluation.regime != "pit" or evaluation.data_regime != "forward_pit":
         raise ValueError("only point-in-time forward evaluations become statistics rows")
@@ -1957,13 +1964,20 @@ def to_stats_record(
         return None
     block = stats.bootstrap[definition.gate.bootstrap_block_length]
     valid = [week for week in evaluation.main if week.valid]
+    sources = source_fingerprint(evaluation.source_runs)
+    if sources is None:
+        raise ValueError("an evaluation without ok source runs cannot become a statistics row")
     assert main.p_net is not None and main.q_net is not None and main.q_gross is not None
     return StatsRecord(
         run_id=run_id,
         method_version=evaluation.method_version,
         regime="pit",
         data_regime="forward_pit",
-        source_run_ids=evaluation.source_run_ids,
+        source_run_min=sources.run_min,
+        source_run_max=sources.run_max,
+        source_session_end=sources.session_end,
+        source_run_count=sources.run_count,
+        source_digest=sources.digest,
         m_at_evaluation=stats.m,
         sample_count=n,
         effective_sample_count=stats.effective_sample_count,

@@ -309,7 +309,7 @@ def test_a_row_from_another_commit_is_ne7_at_read_time() -> None:
                 ci_passed_commit=deployed,
                 pit_status=PitStatus(accumulation_start=date(2026, 1, 5), ok_sessions={}),
                 window=EvaluationWindow(decision_dates=(), trading_days=()),
-                stats_history=(stats_record("r1", ("1",)),),
+                stats_history=(stats_record("r1"),),
                 approvals=(),
             )
         )
