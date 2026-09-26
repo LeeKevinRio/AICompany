@@ -441,8 +441,8 @@ risk-compliance-officer 對第四波首頁族群動能卡（前端）的 ALL-1 �
     > 風控建議。維持預設顯示 3 個族群，多出來的全是揭露內容；「單一個股集中」等條件式標籤觸發時另計。
   - 未選的選項：「維持 170 字、改顯示 2 個族群」。
 - 依上述裁定與風控選項 A 的原意，執行規則如下：
-  - 收合態**恆常項目**上限由 170 字調為 **185 字**；預設仍顯示 3 個族群。
-  - **全部條件式底線**觸發時各自另計，不計入 185 字基準，也不得以 185 字為由壓縮、刪減或弱化任何一項（PM-3、§4.4）。共八項：
+  - 收合態**恆常項目**上限由 170 字調為 **185 字**（已由 §14.6 改為 205 字）；預設仍顯示 3 個族群。
+  - **全部條件式底線**觸發時各自另計，不計入字數上限基準（185 字，已由 §14.6 改為 205 字），也不得以字數上限為由壓縮、刪減或弱化任何一項（PM-3、§4.4）。共八項：
     1. NE-8 示範資料警告（`data_source === "demo_synthetic"`）；
     2. 卡片層級除權息 tag（`ex_date_tag`，§8-1 C1-2）；
     3. 卡片層級「缺 {m} 檔資料」tag（`market_missing_count > 0`，§4.4-2／§13.5-13）；
@@ -452,7 +452,7 @@ risk-compliance-officer 對第四波首頁族群動能卡（前端）的 ALL-1 �
     7. 族群層級「缺 {m} 檔資料」tag（`sectors[].coverage.missing_count > 0`）；
     8. 「單一個股集中」tag（`single_stock_dominated === true`）。
   - 第 4、5 項互斥（`trading_days_behind` 不可能同時 ≥ 1 與為 null），因此「最壞情境」為其餘七項全部觸發，第 4／5 項取較長的第 4 項（資料過舊句）。
-- 一般情境（八項皆未觸發：`data_source` 非示範、`ex_date_tag` 為 false、`market_missing_count` 為 0、`trading_days_behind` 為 0、`held` 皆非 null、各族群 `missing_count` 為 0、`single_stock_dominated` 皆為 false）收合態 ≤ 185 字。
+- 一般情境（八項皆未觸發：`data_source` 非示範、`ex_date_tag` 為 false、`market_missing_count` 為 0、`trading_days_behind` 為 0、`held` 皆非 null、各族群 `missing_count` 為 0、`single_stock_dominated` 皆為 false）收合態 ≤ 185 字（已由 §14.6 改為 205 字）。
 - 實際字數以 qa-e2e 用 PRD 計數法（AC-1：不含族群名稱、個股代號名稱、報酬與家數數字本身）實機量測為準，分別量「一般情境」與上述「最壞情境」；最壞情境不設上限，只記錄實測值。
 
 ### 14.6 CEO 字數重訂（2026-09-26，取代 §14.5 的 185 字數值）
