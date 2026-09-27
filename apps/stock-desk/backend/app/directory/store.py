@@ -27,7 +27,8 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 from app.directory.models import DirectoryEntry, DirectorySectorAssignment
 
 _CREATE_TABLE_SQL = """

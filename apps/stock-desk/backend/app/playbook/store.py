@@ -45,8 +45,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.calendar import TradingCalendar
+from app.data.sqlite_util import enable_wal
 from app.playbook.models import (
     BatchState,
     Directive,
@@ -290,11 +291,11 @@ class PlaybookStore:
 
     def _connect(self) -> sqlite3.Connection:
         # Callers wrap this in contextlib.closing; see app/positions/store.py.
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             for statement in _SCHEMA:
                 conn.execute(statement)
             for table, column, definition in _MIGRATIONS:

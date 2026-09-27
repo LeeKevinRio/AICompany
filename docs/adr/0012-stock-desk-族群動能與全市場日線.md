@@ -1,7 +1,7 @@
 # ADR-0012：stock-desk 族群動能排行與全市場日線
 
 - 狀態：accepted（CEO 2026-09-25 書面核可五項裁決事項，見派工單 §12）
-- 日期：2026-09-24（v7 文件性修訂、v8 研究端敏感度變體、v9 來源指紋與判定部署約束：2026-09-25）
+- 日期：2026-09-24（v7 文件性修訂、v8 研究端敏感度變體、v9 來源指紋與判定部署約束：2026-09-25；v10 SQLite WAL 共用工具邊界：2026-09-26）
 - 決策者：tech-architect（草案）；CEO 核可（2026-09-25）
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：
@@ -70,6 +70,10 @@
     - C-51：API 讀取量不得隨市場 DB 的 run 數成長。
     - C-52：判定只在 git checkout 上可用；**CEO 2026-09-25 裁定採主機 git checkout 直接執行**（Options K1 的主機形式）。image 內無 `.git` 的部署下 NE-7 恆成立，屬 fail-closed 的預期結果，不得以放寬 C-36 解決；`running_commit` 等輸入不得來自環境變數。
     - 新增 T-33～T-36。判定門檻、NE／G 規則、使用者可見字面、API 欄位皆不變。
+  - v10（2026-09-26）：文件性補丁，**不改任何判定行為**，不需重新核可，以本紀錄知會 CEO。
+    - 新增葉節點模組 `app.data.sqlite_util`（`enable_wal`：遇 `SQLITE_BUSY` 以退避重試 `PRAGMA journal_mode=WAL` 至該連線 `busy_timeout` 期限，並驗證回傳模式為 `wal`／`memory`）。起因：舊版 DB 於 rollback 模式下兩個程序同時切 WAL，輸家立即 `SQLITE_BUSY`；CEO 2026-09-26 裁定所有 store 改用此函式。
+    - C-1：`app.sectors.store` 的例外加入 `app.data.sqlite_util`（只取 `enable_wal`）；純核心白名單不變。
+    - D-1：註明 `data.sqlite_util` 為葉節點；`research.sector_biased` 追認依賴 `data.sqlite_util`。
 
 ## Context（背景）
 
@@ -246,8 +250,9 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - `services.sector_board` → `{data.market_panel, sectors.*, backtest.sector_eval}`
   - `backtest.sector_eval` → `{sectors 純核心, backtest.basket, costs, splits, episodes, report, event_study, data.panel}`（`data.panel` 為 v7 追認；「sectors 純核心」含 `gate`、`models`，不含 `store`，見 C-4）
   - `backtest.basket` → `{data.panel, costs, report, engine, positions.models}`（`engine` 只取 `BacktestResult`、`Trade` 兩個型別；`positions.models` 只取 `Market`、`InstrumentType`；v7 追認）
-  - `research.sector_biased` → `{sectors 純核心, backtest.*, data.panel, data.market_panel（唯讀）}`
+  - `research.sector_biased` → `{sectors 純核心, backtest.*, data.panel, data.market_panel（唯讀）, data.sqlite_util}`
   - `sectors 純核心` → `{data.panel, data.interface, data.calendar, positions.sectors}`
+  - `data.sqlite_util` 是葉節點：只 import 標準函式庫，不 import 任何 `app.*`，不讀環境變數或設定，不開啟任何資料庫（只操作呼叫端傳入的連線）。任何 store 都可依賴它；它進入某模組的可達集合時，不擴大該模組觸及的資料庫或網路範圍（v10）。
 
   禁止事項：
   - **`app.sectors` 不得 import `app.advice`、`app.signals`、`app.backtest`、`app.directory`、`app.research`。**
@@ -778,7 +783,7 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
 
 ### 對實作的約束（逐條可檢查）
 
-- **C-1** `app.sectors` 各模組 transitively 可達的 `app.*` 模組，必須落在白名單 `{app.sectors.*, app.data.panel, app.data.interface, app.data.calendar, app.positions.sectors}` 之內。唯一例外：`app.sectors.store` 可以 import `app.data.cache`，但只能用 `resolve_db_path`。
+- **C-1** `app.sectors` 各模組 transitively 可達的 `app.*` 模組，必須落在白名單 `{app.sectors.*, app.data.panel, app.data.interface, app.data.calendar, app.positions.sectors}` 之內。例外只有 `app.sectors.store`：可以 import `app.data.cache`，但只能用 `resolve_db_path`；可以 import 葉節點 `app.data.sqlite_util`，但只能用 `enable_wal`（v10）。純核心不得觸及 `app.data.sqlite_util`。
 - **C-2** **`app.sectors` 不得可達 `app.advice`。** 也不得可達 `app.signals`、`app.backtest`、`app.directory`、`app.research`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.api`、`app.services`、`app.data.providers`、`app.data.service`、`app.data.http`、`httpx`。
 - **C-3** `app.advice`、`app.playbook`、`app.kelly`、`app.portfolio`、`app.alerts`、`app.signals` 都不得可達 `app.sectors`；族群排行不接推播與警示。
 - **C-4** `app.backtest.basket` 不得 import `app.sectors`；`app.backtest.*` 不得 import `app.sectors.store` 或 `app.research`。

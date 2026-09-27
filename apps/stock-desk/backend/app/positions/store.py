@@ -20,7 +20,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 from app.positions.models import Position, PositionInput
 from app.positions.sectors import SECTOR_REJECTED_MESSAGE, is_valid_sector
 

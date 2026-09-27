@@ -45,7 +45,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 
 #: Environment variable names, exactly as named in ADR-0005 決策三 so the
 #: ADR text and the code can be cross-referenced without translation.
@@ -69,8 +70,9 @@ DEFAULT_MIN_INTERVAL_SECONDS = 12.0
 
 #: ``PRAGMA busy_timeout`` applied to every connection (milliseconds). Not an
 #: environment-configured value per ADR-0005 決策三 point 3 -- it is an
-#: internal contention-handling knob, not a budget number.
-DEFAULT_BUSY_TIMEOUT_MS = 5_000
+#: internal contention-handling knob, not a budget number. The same value as
+#: every other store on this database file, not a second copy of it.
+DEFAULT_BUSY_TIMEOUT_MS = BUSY_TIMEOUT_MS
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS provider_quota_usage (
@@ -281,7 +283,7 @@ class QuotaLedger:
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
 
     def reserve(

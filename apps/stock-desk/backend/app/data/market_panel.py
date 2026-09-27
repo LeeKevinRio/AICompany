@@ -86,6 +86,7 @@ from app.data.panel import (
     SourceTally,
     source_fingerprint,
 )
+from app.data.sqlite_util import enable_wal
 
 #: Default location; overridden by the ``STOCK_DESK_MARKET_DB_PATH``
 #: environment variable. This literal string, and the env var name below,
@@ -427,7 +428,7 @@ class MarketPanelStore:
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_RUNS_SQL)
             conn.execute(_CREATE_RUNS_INDEX_SQL)
             conn.execute(_CREATE_BARS_SQL)

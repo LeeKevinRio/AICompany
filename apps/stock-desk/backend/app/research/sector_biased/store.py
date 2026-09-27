@@ -38,6 +38,7 @@ from typing import Final
 
 import pandas as pd
 
+from app.data.sqlite_util import enable_wal
 from app.research.sector_biased.hindsight import BIAS_DIRECTIONS, BIAS_LABEL
 
 #: Environment variable naming the research DB file (read here and nowhere else).
@@ -183,7 +184,7 @@ class ResearchStore:
         self._db_path = Path(db_path) if db_path is not None else resolve_research_db_path()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._transaction() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             for statement in _SCHEMA:
                 conn.execute(statement)
 

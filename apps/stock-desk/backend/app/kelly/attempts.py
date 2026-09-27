@@ -33,7 +33,8 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 from app.kelly.models import KellyAttemptRecord, normalize_symbol
 from app.positions.models import Market
 
@@ -97,11 +98,11 @@ class KellyAttemptStore:
 
     def _connect(self) -> sqlite3.Connection:
         # Callers wrap this in contextlib.closing; see the module docstring.
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
 

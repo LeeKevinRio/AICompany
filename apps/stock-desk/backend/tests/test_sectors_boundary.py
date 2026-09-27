@@ -4,8 +4,9 @@ T-1 (C-1..C-5, C-17):
 
 * every file under ``app/sectors`` is listed and every listed name resolves;
 * C-1: all ``app.*`` modules reachable from the pure core sit inside the
-  whitelist; ``store`` may add ``app.data.cache`` and take only
-  ``resolve_db_path`` from it;
+  whitelist; ``store`` may add ``app.data.cache`` (taking only
+  ``resolve_db_path``) and the leaf ``app.data.sqlite_util`` (taking only
+  ``enable_wal``), never as a plain ``import`` (v10);
 * C-2: none of the forbidden packages is reachable, and ``httpx`` is not
   imported in any form (plain, ``from``, ``importlib`` / ``__import__`` or a
   string naming it);
@@ -63,9 +64,12 @@ GUARDED_MODULES = (*PURE_CORE, STORE)
 WHITELIST = frozenset(
     {"app.data.panel", "app.data.interface", "app.data.calendar", "app.positions.sectors"}
 )
-#: The one extra module the store may reach, and the one name it may take from it.
-STORE_EXTRA = frozenset({"app.data.cache"})
-STORE_CACHE_NAMES = frozenset({"resolve_db_path"})
+#: The extra modules the store may reach, and exactly the names it takes from each (v10).
+STORE_EXTRA = frozenset({"app.data.cache", "app.data.sqlite_util"})
+STORE_TAKEN_NAMES: dict[str, frozenset[str]] = {
+    "app.data.cache": frozenset({"resolve_db_path"}),
+    "app.data.sqlite_util": frozenset({"enable_wal"}),
+}
 
 #: C-2: never reachable from app.sectors.
 FORBIDDEN_FROM_SECTORS = (
@@ -103,7 +107,7 @@ ROUTER_FORBIDDEN = (
 
 #: ADR-0012 D-1: what ``api.sectors`` may depend on, closed over their own
 #: (already guarded) imports -- the pure core's C-1 whitelist, the store's cache
-#: path, and ``positions.store``'s model and sector-code modules.
+#: path and WAL helper, and ``positions.store``'s model and sector-code modules.
 ROUTER_D1_REACH = frozenset(
     {
         *PURE_CORE,
@@ -171,21 +175,26 @@ def test_pure_core_reaches_only_the_whitelist(module: str) -> None:
     assert found == [], f"{module} reaches {found} (ADR-0012 C-1)"
 
 
-def test_store_reaches_only_the_whitelist_plus_the_cache_path() -> None:
+def test_store_reaches_only_the_whitelist_plus_its_extras() -> None:
     found = _outside_whitelist(reachable_app_modules((STORE,)), STORE_EXTRA)
     assert found == [], f"{STORE} reaches {found} (ADR-0012 C-1)"
 
 
-def test_store_takes_only_resolve_db_path_from_the_cache() -> None:
+def test_store_taken_names_cover_every_extra() -> None:
+    assert set(STORE_TAKEN_NAMES) == STORE_EXTRA
+
+
+@pytest.mark.parametrize("extra", sorted(STORE_TAKEN_NAMES))
+def test_store_takes_only_the_allowed_names_from_each_extra(extra: str) -> None:
     path = module_path(STORE)
     assert path is not None
     taken: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.ImportFrom) and node.module == "app.data.cache":
+        if isinstance(node, ast.ImportFrom) and node.module == extra:
             taken |= {alias.name for alias in node.names}
         if isinstance(node, ast.Import):
-            assert all(alias.name != "app.data.cache" for alias in node.names)
-    assert taken == STORE_CACHE_NAMES
+            assert all(alias.name != extra for alias in node.names), f"plain import of {extra}"
+    assert taken == STORE_TAKEN_NAMES[extra], f"{STORE} takes {sorted(taken)} from {extra}"
 
 
 @pytest.mark.parametrize("forbidden", FORBIDDEN_FROM_SECTORS)

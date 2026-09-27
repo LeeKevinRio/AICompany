@@ -33,7 +33,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.data.cache import BUSY_TIMEOUT_MS, enable_wal, resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 from app.kelly.models import KellyInputRecord, KellyInputRow, normalize_symbol
 from app.positions.models import Market
 

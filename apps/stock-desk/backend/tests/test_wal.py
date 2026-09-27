@@ -18,19 +18,53 @@ from typing import Protocol
 
 import pytest
 
-from app.data.cache import BUSY_TIMEOUT_MS, PriceBarCache, enable_wal
+from app.alerts.store import AlertStore
+from app.data import market_panel
+from app.data.cache import BUSY_TIMEOUT_MS, PriceBarCache
+from app.data.market_panel import MarketPanelStore
+from app.data.quota import QuotaLedger
+from app.data.sqlite_util import enable_wal
 from app.directory.store import SecurityDirectoryStore
+from app.dividends.store import DividendEventStore
+from app.kelly.attempts import KellyAttemptStore
 from app.kelly.store import KellyInputStore
+from app.playbook.store import PlaybookStore
 from app.positions.store import PositionStore
+from app.research.sector_biased import store as research_store
+from app.research.sector_biased.store import ResearchStore
+from app.sectors import store as sectors_store
+from app.sectors.store import SectorApprovalStore
+from app.settings.store import SettingsStore
 
 #: How long the competing writer keeps the lock; well inside the 5 s busy timeout.
 _HOLD_SECONDS = 0.3
 
-#: Every store that shares the database file and switches it to WAL on construction.
+#: Every store that switches its database file to WAL on construction, with the
+#: busy timeout its database's own policy sets. ``MarketPanelStore`` owns the
+#: market DB (ADR-0012 D-2) and ``ResearchStore`` the research DB; each keeps
+#: its own value, as do the sector stores (their own ``BUSY_TIMEOUT_MS``). The
+#: rest share the main file and its ``BUSY_TIMEOUT_MS``. ``QuotaLedger``
+#: connects in autocommit mode and sets ``busy_timeout`` per instance (its
+#: default is pinned). ``SectorApprovalStore`` has no ``__init__`` of its own
+#: and stands in for the shared ``_SectorDb`` constructor (``SectorBoardStore``
+#: and ``SectorCardReader`` need a verifier).
 _STORES = pytest.mark.parametrize(
-    "open_store",
-    [PriceBarCache, SecurityDirectoryStore, PositionStore, KellyInputStore],
-    ids=["price_bar_cache", "directory", "positions", "kelly"],
+    ("open_store", "busy_timeout_ms"),
+    [
+        pytest.param(PriceBarCache, BUSY_TIMEOUT_MS, id="price_bar_cache"),
+        pytest.param(SecurityDirectoryStore, BUSY_TIMEOUT_MS, id="directory"),
+        pytest.param(PositionStore, BUSY_TIMEOUT_MS, id="positions"),
+        pytest.param(KellyInputStore, BUSY_TIMEOUT_MS, id="kelly"),
+        pytest.param(KellyAttemptStore, BUSY_TIMEOUT_MS, id="kelly_attempts"),
+        pytest.param(SettingsStore, BUSY_TIMEOUT_MS, id="settings"),
+        pytest.param(PlaybookStore, BUSY_TIMEOUT_MS, id="playbook"),
+        pytest.param(AlertStore, BUSY_TIMEOUT_MS, id="alerts"),
+        pytest.param(DividendEventStore, BUSY_TIMEOUT_MS, id="dividends"),
+        pytest.param(QuotaLedger, BUSY_TIMEOUT_MS, id="quota"),
+        pytest.param(MarketPanelStore, market_panel._BUSY_TIMEOUT_MS, id="market_panel"),
+        pytest.param(SectorApprovalStore, sectors_store.BUSY_TIMEOUT_MS, id="sectors"),
+        pytest.param(ResearchStore, research_store.BUSY_TIMEOUT_MS, id="research"),
+    ],
 )
 
 
@@ -67,7 +101,7 @@ def _hold_write_lock(db_path: Path) -> sqlite3.Connection:
 
 @_STORES
 def test_a_store_waits_out_a_writer_instead_of_failing_the_wal_switch(
-    tmp_path: Path, open_store: Callable[..., object]
+    tmp_path: Path, open_store: Callable[..., object], busy_timeout_ms: int
 ) -> None:
     """SQLite refuses this upgrade without calling the busy handler; the store must wait.
 
@@ -109,7 +143,7 @@ def test_enable_wal_does_not_retry_an_error_that_is_not_busy(
 ) -> None:
     """Only lock contention is waited out; anything else is raised on the first try."""
     pauses: list[float] = []
-    monkeypatch.setattr("app.data.cache.sleep", pauses.append)
+    monkeypatch.setattr("app.data.sqlite_util.sleep", pauses.append)
     db_path = tmp_path / "legacy.db"
     _rollback_journal_db(db_path)
 
@@ -127,7 +161,7 @@ def test_enable_wal_converts_the_file_without_waiting_when_uncontended(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, already_wal: bool
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr("app.data.cache.sleep", pauses.append)
+    monkeypatch.setattr("app.data.sqlite_util.sleep", pauses.append)
     db_path = tmp_path / "legacy.db"
     _rollback_journal_db(db_path)
     if already_wal:
@@ -142,8 +176,8 @@ def test_enable_wal_converts_the_file_without_waiting_when_uncontended(
 
 
 @_STORES
-def test_every_store_connection_waits_the_shared_busy_timeout(
-    tmp_path: Path, open_store: Callable[..., _ConnectingStore]
+def test_every_store_connection_waits_its_database_busy_timeout(
+    tmp_path: Path, open_store: Callable[..., _ConnectingStore], busy_timeout_ms: int
 ) -> None:
     """``enable_wal`` retries for the connection's busy timeout; pin it, not a driver default."""
     store = open_store(db_path=tmp_path / "stock-desk.db")
@@ -151,7 +185,7 @@ def test_every_store_connection_waits_the_shared_busy_timeout(
     with closing(store._connect()) as conn:
         (timeout_ms,) = conn.execute("PRAGMA busy_timeout").fetchone()
 
-    assert timeout_ms == BUSY_TIMEOUT_MS
+    assert timeout_ms == busy_timeout_ms
 
 
 def test_enable_wal_raises_when_the_database_stays_out_of_wal_mode() -> None:

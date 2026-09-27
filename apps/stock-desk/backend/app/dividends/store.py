@@ -28,7 +28,8 @@ from datetime import date as date_type
 from decimal import Decimal
 from pathlib import Path
 
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 from app.dividends.models import DividendEvent
 from app.positions.models import Market
 
@@ -83,11 +84,11 @@ class DividendEventStore:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_DATE_INDEX_SQL)
             self._migrate_add_stock_dividend_ratio_column(conn)

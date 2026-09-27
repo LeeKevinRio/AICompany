@@ -149,6 +149,37 @@ def test_backtest_never_reaches_the_sector_store_or_research() -> None:
     assert offenders(reached, "app.research") == []
 
 
+RESEARCH_STORE = "app.research.sector_biased.store"
+
+
+def _research_store_foreign_imports(path: Path) -> list[str]:
+    """``app.*`` modules ``path`` imports outside ``app.research`` and the WAL leaf (v10)."""
+    return sorted(
+        name
+        for name in imported_modules(path, RESEARCH_STORE)
+        if module_path(name) is not None
+        and not (name == "app.research" or name.startswith("app.research."))
+        and name != "app.data.sqlite_util"
+    )
+
+
+def test_research_store_imports_only_research_and_the_wal_leaf() -> None:
+    path = module_path(RESEARCH_STORE)
+    assert path is not None
+    assert _research_store_foreign_imports(path) == []
+
+
+def test_research_store_import_scan_has_teeth(tmp_path: Path) -> None:
+    path = module_path(RESEARCH_STORE)
+    assert path is not None
+    leaked = tmp_path / "store.py"
+    leaked.write_text(
+        path.read_text(encoding="utf-8") + "\nfrom app.data.cache import resolve_db_path\n",
+        encoding="utf-8",
+    )
+    assert _research_store_foreign_imports(leaked) == ["app.data.cache"]
+
+
 # ---------------------------------------------------------------------------
 # String / identifier layer
 # ---------------------------------------------------------------------------

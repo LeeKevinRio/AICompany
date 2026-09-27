@@ -64,6 +64,7 @@ from typing import Final, Protocol, cast
 
 from app.data.cache import resolve_db_path
 from app.data.panel import SourceFingerprint, SourceTally
+from app.data.sqlite_util import enable_wal
 from app.sectors.coverage import coverage_from_counts
 from app.sectors.definition import (
     SectorMomentumDefinition,
@@ -377,7 +378,7 @@ class _SectorDb:
         if str(self._db_path) != ":memory:":
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             self._legacy_stats_rows = _legacy_stats_rows(conn)
             for statement in (*_SCHEMA, *_TRIGGERS):
                 conn.execute(statement)

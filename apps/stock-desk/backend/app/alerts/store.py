@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from app.alerts.models import AlertEvent, AlertRule, AlertRuleInput
-from app.data.cache import resolve_db_path
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
+from app.data.sqlite_util import enable_wal
 
 _CREATE_RULES_SQL = """
 CREATE TABLE IF NOT EXISTS alert_rules (
@@ -102,11 +103,11 @@ class AlertStore:
 
     def _connect(self) -> sqlite3.Connection:
         # Callers wrap this in contextlib.closing; see app/positions/store.py.
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     def _init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(conn)
             conn.execute(_CREATE_RULES_SQL)
             conn.execute(_CREATE_EVENTS_SQL)
             conn.execute(_CREATE_EVENT_INDEX_SQL)
