@@ -31,6 +31,8 @@ jobs:
         run: uv sync --frozen
       - name: Ruff
         run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
       - name: Mypy (strict)
         run: uv run mypy app tests
       - name: Pytest
