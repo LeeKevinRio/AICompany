@@ -71,9 +71,7 @@ NO_SERVICE_REASON = (
     "本模組不會改以其他標的替代。"
 )
 
-NO_BARS_REASON = (
-    "指數 {series_symbol} 在指定區間內沒有可用的日線資料（來源與快取皆無）。"
-)
+NO_BARS_REASON = "指數 {series_symbol} 在指定區間內沒有可用的日線資料（來源與快取皆無）。"
 
 UNOFFICIAL_SOURCE_NOTE = (
     "指數序列取自非官方來源，資料狀態一律以 backup 呈現，不標示為即時（fresh）。"
@@ -149,9 +147,7 @@ class IndexBarsProvider(Protocol):
     bending its own contract to fit.
     """
 
-    def get_index_daily_bars(
-        self, index_symbol: str, start: date, end: date
-    ) -> ProviderResult: ...
+    def get_index_daily_bars(self, index_symbol: str, start: date, end: date) -> ProviderResult: ...
 
 
 class IndexProviderBridge(MarketDataProvider):
@@ -200,9 +196,7 @@ class IndexSeriesService:
     def __init__(self, inner: PriceService) -> None:
         self._inner = inner
 
-    def get_daily_bars(
-        self, symbol: str, market: Market, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         result = self._inner.get_daily_bars(symbol, market, start, end)
         disclosed = disclosed_status(result.status)
         if disclosed is result.status:
@@ -376,9 +370,7 @@ def load_market_benchmark(
         return LoadedBenchmark(
             series_symbol=benchmark.series_symbol,
             label=benchmark.label,
-            reason=NO_SERVICE_REASON.format(
-                market=market, series_symbol=benchmark.series_symbol
-            ),
+            reason=NO_SERVICE_REASON.format(market=market, series_symbol=benchmark.series_symbol),
             notes=notes,
         )
 

@@ -50,8 +50,20 @@ DirectiveStatus = Literal["pending", "executed", "missed"]
 #: recomputation of TOTAL_DEPLOY (CEO 裁決一), which is a dated capital decision
 #: rather than a market rule, and so has no R/S/P number of its own.
 RuleId = Literal[
-    "R1", "R2", "R3", "R4", "S1", "S2", "S3", "P1", "P2", "P3", "M1", "IRON1",
-    "EMERGENCY", "REBALANCE",
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "S1",
+    "S2",
+    "S3",
+    "P1",
+    "P2",
+    "P3",
+    "M1",
+    "IRON1",
+    "EMERGENCY",
+    "REBALANCE",
 ]
 
 

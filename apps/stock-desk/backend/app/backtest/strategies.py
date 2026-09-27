@@ -68,9 +68,7 @@ BREAKOUT_ENTRY_WINDOW = 20
 BREAKOUT_EXIT_WINDOW = 10
 
 
-def ma_cross(
-    *, fast: int = DEFAULT_FAST_WINDOW, slow: int = DEFAULT_SLOW_WINDOW
-) -> Strategy:
+def ma_cross(*, fast: int = DEFAULT_FAST_WINDOW, slow: int = DEFAULT_SLOW_WINDOW) -> Strategy:
     """Long while ``MA(fast) > MA(slow)``, flat otherwise (long-only, all-or-nothing).
 
     Before ``slow`` bars exist the slow average is undefined, so the strategy is
@@ -311,9 +309,7 @@ def five_condition_series(frame: pd.DataFrame) -> FiveConditionSeries:
 
     # 2) 趨勢 and 3) 拉回.
     ma60 = close.rolling(window=FIVE_TREND_MA_WINDOW, min_periods=FIVE_TREND_MA_WINDOW).mean()
-    ma20 = close.rolling(
-        window=FIVE_PULLBACK_MA_WINDOW, min_periods=FIVE_PULLBACK_MA_WINDOW
-    ).mean()
+    ma20 = close.rolling(window=FIVE_PULLBACK_MA_WINDOW, min_periods=FIVE_PULLBACK_MA_WINDOW).mean()
     trend_ok = close > ma60
     distance_pct = (close / ma20.where(ma20 > 0.0) - 1.0) * 100.0
     pullback_ok = distance_pct.abs() <= FIVE_PULLBACK_MAX_ABS_PCT + FIVE_THRESHOLD_EPSILON
@@ -327,9 +323,9 @@ def five_condition_series(frame: pd.DataFrame) -> FiveConditionSeries:
     # same "missing input means no claim" rule the indicator itself follows.
     volume = frame[VOLUME]
     vol_mean = volume.rolling(window=FIVE_VOLUME_Z_WINDOW, min_periods=FIVE_VOLUME_Z_WINDOW).mean()
-    vol_std = volume.rolling(
-        window=FIVE_VOLUME_Z_WINDOW, min_periods=FIVE_VOLUME_Z_WINDOW
-    ).std(ddof=0)
+    vol_std = volume.rolling(window=FIVE_VOLUME_Z_WINDOW, min_periods=FIVE_VOLUME_Z_WINDOW).std(
+        ddof=0
+    )
     volume_z = (volume - vol_mean).where(vol_std != 0.0) / vol_std.where(vol_std != 0.0)
     volume_ok = (volume_z > -FIVE_VOLUME_Z_ABS_MAX) & (volume_z < FIVE_VOLUME_Z_ABS_MAX)
 

@@ -290,8 +290,7 @@ KELLY_REFUSAL_ATTEMPT_LOGGED = (
 #: not enough. If the surface cannot hold (b), this sentence does not appear
 #: alone.
 KELLY_NON_FINITE_ATTEMPT_LOGGED = (
-    "這次嘗試已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）；"
-    "這筆輸入，這次沒有被寫入。"
+    "這次嘗試已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）；這筆輸入，這次沒有被寫入。"
 )
 
 # ---------------------------------------------------------------------------
@@ -528,8 +527,7 @@ KELLY_DIVIDEND_DIRECTION_SCOPE = (
 
 #: 機制事實句 1/5, ``disabled``. 風控 2026-08-22 逐字定稿（第八輪，組一）。
 KELLY_DIVIDEND_DISABLED_FACT = (
-    "這筆 Kelly 輸入所依據的回測，回測帶入當時依請求關閉了除權息還原"
-    "（adjust_dividends=false）。"
+    "這筆 Kelly 輸入所依據的回測，回測帶入當時依請求關閉了除權息還原（adjust_dividends=false）。"
 )
 
 #: 機制事實句 2/5, ``never_synced``. 風控 2026-08-22 逐字定稿（第八輪，組一）。
@@ -1032,9 +1030,7 @@ KELLY_DELETE_NOTICE_SCOPE_OVERRIDDEN = (
 )
 
 #: (刪除段二) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
-KELLY_DELETE_NOTICE_NO_RECOVERY = (
-    "本系統沒有版本紀錄，事後也沒有畫面可以找回被刪除的這一列。"
-)
+KELLY_DELETE_NOTICE_NO_RECOVERY = "本系統沒有版本紀錄，事後也沒有畫面可以找回被刪除的這一列。"
 
 #: (刪除段三) 風控 2026-08-22 逐字定稿（第十五輪，第十批主案原文）。
 #: Both halves of the L7 disclosure and the state transition live in this one

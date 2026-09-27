@@ -74,9 +74,7 @@ def download_template() -> Response:
     return Response(
         content=build_template_csv(),
         media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="{_TEMPLATE_FILENAME}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{_TEMPLATE_FILENAME}"'},
     )
 
 
@@ -103,9 +101,7 @@ def update_position(
 ) -> Position:
     updated = store.update(position_id, body)
     if updated is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位")
     return updated
 
 
@@ -115,7 +111,5 @@ def delete_position(
     store: StoreDep,
 ) -> Response:
     if not store.delete(position_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

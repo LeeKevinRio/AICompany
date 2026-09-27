@@ -392,9 +392,7 @@ def build_segment_report(
     seg_start = result.dates[start] if dates else None
     seg_end = result.dates[end - 1] if dates else None
     trades = [
-        t
-        for t in result.trades
-        if seg_start is not None and seg_start <= t.date <= (seg_end or "")
+        t for t in result.trades if seg_start is not None and seg_start <= t.date <= (seg_end or "")
     ]
 
     # Round trips are attributed by bar index over the very same ``[start, end)``
@@ -460,9 +458,7 @@ def _walk_forward_bounds(
     )
 
 
-def walk_forward_curves(
-    result: BacktestResult, folds: list[WalkForwardFold]
-) -> WalkForwardCurves:
+def walk_forward_curves(result: BacktestResult, folds: list[WalkForwardFold]) -> WalkForwardCurves:
     """The chart peer of :func:`walk_forward_report` over the same segments.
 
     Fills are selected by ``bar_index`` against the same bounds the segments

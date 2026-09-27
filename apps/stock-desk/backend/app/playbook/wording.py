@@ -49,9 +49,7 @@ ATTRIBUTION_DATE_STATUS_UNREADABLE = "規則版本 {version} 的生效日期讀�
 #: 四輪收斂裁決 §6 三句's second sentence, branch (c): the first sentence of
 #: :data:`ATTRIBUTION_NO_USER_RULES`, reused rather than retyped so the two can
 #: never drift apart. ``ATTRIBUTION_NO_USER_RULES`` is composed from it below.
-ATTRIBUTION_NO_USER_RULES_FIRST = (
-    "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
-)
+ATTRIBUTION_NO_USER_RULES_FIRST = "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。"
 
 #: 歸屬語情境 1: there is no user submission record at all. The 歸屬語 itself is
 #: not shown -- claiming authorship of a system default would be the exact
@@ -64,8 +62,7 @@ ATTRIBUTION_NO_USER_RULES_FIRST = (
 #: third sentence may not be shortened into a pointer, and de-duplicating this
 #: string in a view may not truncate it.
 ATTRIBUTION_NO_USER_RULES = (
-    ATTRIBUTION_NO_USER_RULES_FIRST
-    + "本模組僅依你設定的規則集產生進場、停損、停利指令，"
+    ATTRIBUTION_NO_USER_RULES_FIRST + "本模組僅依你設定的規則集產生進場、停損、停利指令，"
     "在你確認規則集之前不會產生這類指令。"
     "你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。"
 )
@@ -152,8 +149,7 @@ MODE_LABELS: dict[Mode, str] = {
 RULE_TEXT: dict[str, str] = {
     "R1": "R1 排程日進場：排程日買進該檔下一批。",
     "R2": (
-        "R2 不追價煞車：當日漲幅 >{r2_change_pct_limit}% 或 "
-        "BIAS25 >+{r2_bias_limit}% 時順延該批。"
+        "R2 不追價煞車：當日漲幅 >{r2_change_pct_limit}% 或 BIAS25 >+{r2_bias_limit}% 時順延該批。"
     ),
     "R3": "R3 順延上限：同一批順延累計 {r3_max_defers} 次後跳過該批。",
     "R4": "R4 凍結期間不執行進場：凍結或排程暫停期間不產生 R 系列進場。",
@@ -181,8 +177,7 @@ RULE_TEXT: dict[str, str] = {
         "強制減 1/3，每 {p3_cooldown_trading_days} 交易日限一次。"
     ),
     "M1": (
-        "M1 大盤總開關：指數收盤低於月線連續 {m1_consecutive_days} 日進入防守模式，"
-        "站回月線解除。"
+        "M1 大盤總開關：指數收盤低於月線連續 {m1_consecutive_days} 日進入防守模式，站回月線解除。"
     ),
     "IRON1": (
         "鐵律①現金 {cash_floor_ratio}% 不可破：進場金額使現金低於 "
@@ -209,15 +204,13 @@ LIMIT_BAND_NOTE = (
 #: sentence may not promise a fill, so the condition under which a market order
 #: does not fill is part of the same sentence rather than a footnote.
 STOP_LOSS_NO_BAND_NOTE = (
-    "停損指令不設滑價帶，T+1 開盤以市價單送出；"
-    "市價單在跌停或無量時可能無法成交。"
+    "停損指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。"
 )
 
 #: EMERGENCY_EXIT lines are not stop-loss lines and no longer borrow that
 #: sentence (覆審: service.py 不得再掛停損句).
 EMERGENCY_EXIT_NO_BAND_NOTE = (
-    "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；"
-    "市價單在跌停或無量時可能無法成交。"
+    "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。"
 )
 
 #: 風控 R17: every reference price says which trading day it came from and what
@@ -260,14 +253,11 @@ DATA_GAP_HOLDING_NOTE = (
 #: 指數缺漏主句. Split from the deferral clause (覆審): the deferral only happens
 #: on a schedule day, so it may not be asserted on a day that had no entry due.
 INDEX_DATA_GAP_NOTE = (
-    "加權指數資料狀態為 {status}（來源 {source}），M1 今日未評估、沿用前一狀態；"
-    "當日不新開倉。"
+    "加權指數資料狀態為 {status}（來源 {source}），M1 今日未評估、沿用前一狀態；當日不新開倉。"
 )
 
 #: Rendered only when the R series was actually deferred today (index_gap_defer).
-INDEX_DATA_GAP_DEFER_NOTE = (
-    "今日為排程日，R 系列進場改為順延並計入順延次數（逐批列示）。"
-)
+INDEX_DATA_GAP_DEFER_NOTE = "今日為排程日，R 系列進場改為順延並計入順延次數（逐批列示）。"
 
 #: M1-1: 指數缺漏當日 R 系列一律順延（真正的順延，不是靜默跳過）。
 INDEX_GAP_DEFER_NOTE = "M1 今日未評估（加權指數資料 {status}），本批順延第 {count} 次。"
@@ -608,9 +598,7 @@ def mode_reason_emergency(*, frozen_day: int, freeze_days: int, until: date) -> 
     )
 
 
-def fast_market_note(
-    *, vol: float | None, lookback: int, moves: int, move_pct: Decimal
-) -> str:
+def fast_market_note(*, vol: float | None, lookback: int, moves: int, move_pct: Decimal) -> str:
     """快市 statement appended to a refusal, with or without the volatility half."""
     if vol is None:
         return FAST_MARKET_NO_VOL_NOTE.format(
@@ -621,9 +609,7 @@ def fast_market_note(
     )
 
 
-def fast_market_reason(
-    *, vol: float | None, lookback: int, moves: int, move_pct: Decimal
-) -> str:
+def fast_market_reason(*, vol: float | None, lookback: int, moves: int, move_pct: Decimal) -> str:
     """The measurement a 快市 verdict was reached on.
 
     With no volatility reading the full statement is used instead of the

@@ -95,9 +95,7 @@ SECTOR_CLASSIFIED_MARKETS: frozenset[Market] = frozenset({"TW"})
 #: industry taxonomy classifies listed companies, so an ETF has nothing true it
 #: could be filed under, and cap 2 must say that instead of directing its owner
 #: to fill the field (D6, :data:`app.advice.limits.NO_SECTOR_ETF_DETAIL`).
-ETF_INSTRUMENT_TYPES: frozenset[InstrumentType] = frozenset(
-    {"etf", "leveraged_etf", "futures_etf"}
-)
+ETF_INSTRUMENT_TYPES: frozenset[InstrumentType] = frozenset({"etf", "leveraged_etf", "futures_etf"})
 
 #: Stated on every context so the equity assumption travels with the numbers.
 EQUITY_BASIS_NOTE = (
@@ -371,9 +369,7 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
     ]
     if not classifiable:
         return None, "unsupported_market"
-    if all(
-        position.instrument_type in ETF_INSTRUMENT_TYPES for position in classifiable
-    ):
+    if all(position.instrument_type in ETF_INSTRUMENT_TYPES for position in classifiable):
         # Every TW lot behind this symbol is a fund: there is no company-level
         # industry it could truthfully be filed under, so the "fill it in"
         # guidance would be an instruction the owner cannot follow (D6). The
@@ -472,9 +468,7 @@ def self_reported_net_worth(
     # A timestamp in the future (clock skew, or an edited database) is treated
     # as "reported now" rather than as a negative age.
     age_days = max((moment - reported).days, 0)
-    return SelfReportedNetWorth(
-        amount_twd=amount_twd, reported_at=updated_at, age_days=age_days
-    )
+    return SelfReportedNetWorth(amount_twd=amount_twd, reported_at=updated_at, age_days=age_days)
 
 
 def kelly_inputs_of(

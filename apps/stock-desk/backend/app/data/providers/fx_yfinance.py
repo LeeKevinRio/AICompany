@@ -97,8 +97,7 @@ class YFinanceFxAdapter(FxRateProvider):
                 source=self.source_id,
                 staleness_minutes=None,
                 reason=(
-                    f"「{pair}」不是本 adapter 支援的匯率代碼格式"
-                    "（需為 6 碼字母組合，如 USDTWD）。"
+                    f"「{pair}」不是本 adapter 支援的匯率代碼格式（需為 6 碼字母組合，如 USDTWD）。"
                 ),
             )
 

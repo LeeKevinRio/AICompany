@@ -159,8 +159,9 @@ def evaluate_rule(rule: Rule, context: Mapping[str, float | None]) -> RuleOutcom
     missing: list[str] = []
     matched = _evaluate_node(rule.condition, context, missing)
     unique_missing = list(dict.fromkeys(missing))
-    return RuleOutcome(rule=rule, matched=matched and not unique_missing,
-                       missing_fields=unique_missing)
+    return RuleOutcome(
+        rule=rule, matched=matched and not unique_missing, missing_fields=unique_missing
+    )
 
 
 def _action_weights(outcomes: list[RuleOutcome]) -> list[dict[str, Any]]:
@@ -173,9 +174,7 @@ def _action_weights(outcomes: list[RuleOutcome]) -> list[dict[str, Any]]:
         action = outcome.rule.action
         totals[action] = totals.get(action, 0.0) + outcome.rule.weight
         rule_ids.setdefault(action, []).append(outcome.rule.id)
-    ordered = sorted(
-        totals.items(), key=lambda item: (-item[1], ACTION_PRECEDENCE.index(item[0]))
-    )
+    ordered = sorted(totals.items(), key=lambda item: (-item[1], ACTION_PRECEDENCE.index(item[0])))
     return [
         {"action": action, "weight": round(weight, 6), "rule_ids": rule_ids[action]}
         for action, weight in ordered
@@ -248,11 +247,7 @@ def _confidence(
     if matched_count == 0:
         # Nothing fired, but the rule set was measurable: a defensible "hold".
         return "medium" if completeness >= HIGH_COMPLETENESS else "low"
-    if (
-        completeness >= HIGH_COMPLETENESS
-        and agreement >= HIGH_AGREEMENT
-        and matched_count >= 2
-    ):
+    if completeness >= HIGH_COMPLETENESS and agreement >= HIGH_AGREEMENT and matched_count >= 2:
         return "high"
     if completeness >= MEDIUM_COMPLETENESS and agreement >= MEDIUM_AGREEMENT:
         return "medium"
@@ -381,9 +376,7 @@ def build_advice(
             "evaluated_rules": len(evaluated),
             "matched_rules": len(matched),
             "data_completeness": round(completeness, 4),
-            "skipped_rules": [
-                _skipped_entry(outcome) for outcome in outcomes if outcome.skipped
-            ],
+            "skipped_rules": [_skipped_entry(outcome) for outcome in outcomes if outcome.skipped],
         },
     }
 

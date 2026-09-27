@@ -253,9 +253,7 @@ def parse_dividend_row(row: Any, *, source: str, as_of: datetime) -> DividendEve
     if cash is not None and cash < 0:
         raise UnparseableRowError(f"negative CashDividend in row: {row!r}")
 
-    stock_ratio = _parse_amount(
-        _cell(row, _STOCK_DIVIDEND_RATIO_KEY), field="stock_dividend_ratio"
-    )
+    stock_ratio = _parse_amount(_cell(row, _STOCK_DIVIDEND_RATIO_KEY), field="stock_dividend_ratio")
     if stock_ratio is not None and stock_ratio < 0:
         raise UnparseableRowError(f"negative StockDividendRatio in row: {row!r}")
     if exdividend in _STOCK_COMPONENT_EXDIVIDEND_VALUES and stock_ratio is None:

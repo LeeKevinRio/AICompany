@@ -205,9 +205,7 @@ def align_closes(
     """
     etf_close = bars_to_frame(etf_bars)[CLOSE]
     index_close = bars_to_frame(index_bars)[CLOSE]
-    joined = pd.concat(
-        {_ETF: etf_close, _INDEX: index_close}, axis=1, join="inner"
-    ).sort_index()
+    joined = pd.concat({_ETF: etf_close, _INDEX: index_close}, axis=1, join="inner").sort_index()
     joined = joined.dropna()
     if opened_at is not None:
         joined = joined[joined.index >= pd.Timestamp(opened_at)]
@@ -399,9 +397,7 @@ def decompose_drag(
         days_since_opened_at=(end_date - opened_at).days if opened_at else None,
     )
 
-    index_returns = [
-        index_close[i] / index_close[i - 1] - 1.0 for i in range(1, len(index_close))
-    ]
+    index_returns = [index_close[i] / index_close[i - 1] - 1.0 for i in range(1, len(index_close))]
     index_return = index_close[-1] / index_close[0] - 1.0
     actual_return = etf_close[-1] / etf_close[0] - 1.0
     naive = leverage_factor * index_return
@@ -417,9 +413,7 @@ def decompose_drag(
     notes: list[str] = []
     residual_alert = abs(residual) > RESIDUAL_ALERT_ABS
     if residual_alert:
-        notes.append(
-            RESIDUAL_ALERT_NOTE.format(residual=residual, threshold=RESIDUAL_ALERT_ABS)
-        )
+        notes.append(RESIDUAL_ALERT_NOTE.format(residual=residual, threshold=RESIDUAL_ALERT_ABS))
 
     volatility = annualized_volatility(index_returns, periods_per_year=trading_days_per_year)
     if volatility is None or len(index_returns) < MIN_RETURNS_FOR_THEORY:

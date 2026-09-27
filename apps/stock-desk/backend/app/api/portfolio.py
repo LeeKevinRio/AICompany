@@ -138,9 +138,7 @@ def portfolio_limits(
             start=date.today() - timedelta(days=DEFAULT_LOOKBACK_DAYS),
             end=date.today(),
         )
-        sources.append(
-            SymbolDataMeta(symbol=symbol, market=market, data=data_meta(loaded.meta()))
-        )
+        sources.append(SymbolDataMeta(symbol=symbol, market=market, data=data_meta(loaded.meta())))
         if not loaded.bars:
             continue
         latest = max(loaded.bars, key=lambda bar: bar.date)

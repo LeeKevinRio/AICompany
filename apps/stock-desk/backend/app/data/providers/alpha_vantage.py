@@ -269,10 +269,7 @@ class AlphaVantageAdapter(MarketDataProvider):
             )
             return _unavailable(
                 now,
-                reason=(
-                    "Alpha Vantage 今日查詢額度已用罄，本次不呼叫主來源，"
-                    "請由備援來源接手。"
-                ),
+                reason=("Alpha Vantage 今日查詢額度已用罄，本次不呼叫主來源，請由備援來源接手。"),
             )
 
         provider_symbol = to_provider_symbol(canonical, provider_id=ALPHA_VANTAGE_PROVIDER_ID)
@@ -291,9 +288,7 @@ class AlphaVantageAdapter(MarketDataProvider):
             return _unavailable(now, reason="Alpha Vantage 連線逾時或發生錯誤，暫不可用。")
 
         if response.status_code != httpx.codes.OK:
-            logger.warning(
-                "Alpha Vantage returned HTTP %d for %s", response.status_code, canonical
-            )
+            logger.warning("Alpha Vantage returned HTTP %d for %s", response.status_code, canonical)
             return _unavailable(now, reason="Alpha Vantage 回應非預期的 HTTP 狀態，暫不可用。")
 
         try:
@@ -384,9 +379,7 @@ class AlphaVantageAdapter(MarketDataProvider):
                 bars.append(bar)
         return bars
 
-    def _parse_row(
-        self, trade_date_str: str, row: Any, canonical: str, now: datetime
-    ) -> PriceBar:
+    def _parse_row(self, trade_date_str: str, row: Any, canonical: str, now: datetime) -> PriceBar:
         if not isinstance(row, dict):
             raise TypeError(f"row is not an object: {row!r}")
         return PriceBar(

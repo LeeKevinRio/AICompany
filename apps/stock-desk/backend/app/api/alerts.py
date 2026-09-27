@@ -99,9 +99,7 @@ def list_rules(
     store: AlertStoreDep,
     enabled_only: Annotated[bool, Query(description="只列出啟用中的規則")] = False,
 ) -> AlertRuleListResponse:
-    return AlertRuleListResponse(
-        items=store.list_rules(enabled_only=enabled_only), as_of=now_iso()
-    )
+    return AlertRuleListResponse(items=store.list_rules(enabled_only=enabled_only), as_of=now_iso())
 
 
 @router.post("", response_model=AlertRule, status_code=status.HTTP_201_CREATED)
@@ -120,9 +118,7 @@ def replace_rule(rule_id: int, body: AlertRuleInput, store: AlertStoreDep) -> Al
     """
     updated = store.update_rule(rule_id, body)
     if updated is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則")
     return updated
 
 
@@ -137,9 +133,7 @@ def patch_rule(rule_id: int, body: AlertRulePatch, store: AlertStoreDep) -> Aler
     """
     current = store.get_rule(rule_id)
     if current is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則")
     try:
         merged = body.apply_to(current)
     except ValidationError as exc:
@@ -151,9 +145,7 @@ def patch_rule(rule_id: int, body: AlertRulePatch, store: AlertStoreDep) -> Aler
         ) from exc
     updated = store.update_rule(rule_id, merged)
     if updated is None:  # pragma: no cover - the rule was read a moment ago
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則")
     return updated
 
 
@@ -168,9 +160,7 @@ def _validation_detail(exc: ValidationError) -> list[dict[str, object]]:
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_rule(rule_id: int, store: AlertStoreDep) -> Response:
     if not store.delete_rule(rule_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示規則")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -192,9 +182,7 @@ def list_events(
 def acknowledge_event(event_id: int, store: AlertStoreDep) -> AlertEvent:
     event = store.acknowledge(event_id)
     if event is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示事件"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的警示事件")
     return event
 
 

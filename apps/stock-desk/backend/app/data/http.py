@@ -142,9 +142,7 @@ def estimate_unreachable_chain_worst_case_seconds(
     since :class:`MarketDataService` tries each rung strictly in sequence
     (see ``app/data/service.py``).
     """
-    per_provider = (max_retries + 1) * connect_timeout_seconds + sum(
-        backoff_seconds[:max_retries]
-    )
+    per_provider = (max_retries + 1) * connect_timeout_seconds + sum(backoff_seconds[:max_retries])
     return provider_count * per_provider
 
 

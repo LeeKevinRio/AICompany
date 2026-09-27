@@ -66,8 +66,7 @@ KELLY_SOFT_NOTICE_DAYS = 7
 KELLY_STALE_AFTER_DAYS = 30
 
 KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE = (
-    "勝率必須大於 0 且小於 1（收到 {value}）。"
-    "系統不會自行調整這個數字，請確認後重新輸入。"
+    "勝率必須大於 0 且小於 1（收到 {value}）。系統不會自行調整這個數字，請確認後重新輸入。"
 )
 
 #: 風控 2026-08-22 第十輪 條件 86: the noun phrase below is **the** approved label
@@ -332,9 +331,7 @@ class KellyInputRecord(BaseModel):
         imported number rather than typing one from nowhere.
         """
         values = {name: getattr(previous, name) for name in cls.model_fields}
-        values.update(
-            win_rate=win_rate, payoff_ratio=payoff_ratio, source="backtest_overridden"
-        )
+        values.update(win_rate=win_rate, payoff_ratio=payoff_ratio, source="backtest_overridden")
         return cls(**values)
 
 

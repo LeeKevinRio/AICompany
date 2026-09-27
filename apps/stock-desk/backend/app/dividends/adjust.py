@@ -187,9 +187,7 @@ def _fill_previous_close_from_bars(
         if index < 0:
             resolved.append(event)
             continue
-        resolved.append(
-            event.model_copy(update={"previous_close": ordered_bars[index].close})
-        )
+        resolved.append(event.model_copy(update={"previous_close": ordered_bars[index].close}))
     return resolved
 
 

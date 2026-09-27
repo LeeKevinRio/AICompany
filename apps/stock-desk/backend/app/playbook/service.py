@@ -191,9 +191,7 @@ def build_exit_confirm(
         freeze_days=freeze_days,
         freeze_until=freeze_until,
         checks=list(
-            wording.exit_confirm_checks(
-                freeze_days=freeze_days, freeze_until=freeze_until
-            )
+            wording.exit_confirm_checks(freeze_days=freeze_days, freeze_until=freeze_until)
         ),
     )
 
@@ -299,9 +297,7 @@ class PlaybookService:
                 continue
             self._store.settle(outcome, fill_price=opening)
             settled.append(
-                SettledLine(
-                    directive_id=item.directive_id, directive=outcome, open_price=opening
-                )
+                SettledLine(directive_id=item.directive_id, directive=outcome, open_price=opening)
             )
 
         result = SettlementResult(
@@ -492,9 +488,7 @@ class PlaybookService:
         """
         return self._rule_set_status(today or datetime.now(UTC).date())
 
-    def confirm_rules(
-        self, *, capital: Decimal, today: date | None = None
-    ) -> RuleSetStatus:
+    def confirm_rules(self, *, capital: Decimal, today: date | None = None) -> RuleSetStatus:
         """Adopt the rule set in force as the user's own and record the capital.
 
         This is the one action that lifts the 歸屬語情境 1 block: before it the
@@ -576,11 +570,7 @@ class PlaybookService:
                 if batch.status == "open" and batch.remaining_shares > 0
             }
         )
-        warnings = (
-            [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="、".join(held))]
-            if held
-            else []
-        )
+        warnings = [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="、".join(held))] if held else []
         return PlaybookEvaluation(
             data_date=as_of,
             execution_date=as_of,
@@ -682,9 +672,7 @@ class PlaybookService:
             portfolio=self._store.portfolio_state(),
             previous_fast_market=self._store.fast_market_state(),
         )
-        self._store.apply_effects(
-            evaluation.effects, data_date=data_date, calendar=calendar
-        )
+        self._store.apply_effects(evaluation.effects, data_date=data_date, calendar=calendar)
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
         self._store.record_schedule(evaluation)
         self._store.record_directives(evaluation)

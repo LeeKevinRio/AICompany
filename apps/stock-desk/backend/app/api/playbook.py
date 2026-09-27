@@ -314,9 +314,7 @@ def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
         user_authored=authorship.user_authored,
         rules_version=authorship.version if authorship.user_authored else None,
         rules_effective_date=(
-            None
-            if status.rules_effective_date is None
-            else status.rules_effective_date.isoformat()
+            None if status.rules_effective_date is None else status.rules_effective_date.isoformat()
         ),
         attribution=wording.attribution_note(authorship),
         rules=[
@@ -364,9 +362,7 @@ def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
         ),
         attribution=evaluation.attribution,
         settlement=(
-            None
-            if evaluation.settlement is None
-            else _settlement_response(evaluation.settlement)
+            None if evaluation.settlement is None else _settlement_response(evaluation.settlement)
         ),
         exit_confirm=evaluation.exit_confirm,
         as_of=now_iso(),

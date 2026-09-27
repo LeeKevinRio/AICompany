@@ -129,8 +129,7 @@ DIVIDEND_METHOD_NOTE = (
 #: 避免讀者把策略欄的偏誤幅度當成同一個數。附加在每一句「未還原」句尾，讓所有
 #: 降級情境的限定語一致。
 DIVIDEND_BIAS_SCOPE_NOTE = (
-    "此低估（若發生）落在 Buy & Hold 與持有期間的報酬；策略欄因進出場時點不同，"
-    "偏誤幅度不一定相同。"
+    "此低估（若發生）落在 Buy & Hold 與持有期間的報酬；策略欄因進出場時點不同，偏誤幅度不一定相同。"
 )
 DIVIDEND_NOT_SYNCED_NOTE = (
     "本回測未還原除權息：本機尚未同步過任何除權息資料"
@@ -159,6 +158,7 @@ DIVIDEND_DISABLED_NOTE = (
     "本次依請求關閉除權息還原（adjust_dividends=false），報酬率不含股利；"
     "台股高配息情況下會低估。" + DIVIDEND_BIAS_SCOPE_NOTE
 )
+
 
 def dividend_notes_by_code(market: Market) -> dict[str, str]:
     """reason_code -> the sentence shown for it in ``market``.
@@ -289,9 +289,7 @@ def resolve_dividend_adjustment(
             first_ex_date=(
                 adjustment.first_ex_date.isoformat() if adjustment.first_ex_date else None
             ),
-            last_ex_date=(
-                adjustment.last_ex_date.isoformat() if adjustment.last_ex_date else None
-            ),
+            last_ex_date=(adjustment.last_ex_date.isoformat() if adjustment.last_ex_date else None),
             understatement=adjustment.understatement,
             last_synced_at=last_synced_iso,
         ),
@@ -521,9 +519,7 @@ def execute_backtest(
         market=body.market,
         instrument_type=body.instrument_type,
     )
-    folds = walk_forward_splits(
-        len(frame), train_size=body.train_size, test_size=body.test_size
-    )
+    folds = walk_forward_splits(len(frame), train_size=body.train_size, test_size=body.test_size)
     if not folds:  # pragma: no cover - the length check above already guarantees one
         return unavailable("資料長度不足以切出任何 walk-forward fold。")
 

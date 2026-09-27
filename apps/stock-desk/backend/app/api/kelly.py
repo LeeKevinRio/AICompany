@@ -700,9 +700,7 @@ def _sample_detail(row: KellyInputRow) -> KellyBacktestSampleDetail:
     """
     rows: list[KellyDetailRow] = []
     if row.strategy_id is not None:
-        rows.append(
-            KellyDetailRow(label=KELLY_DETAIL_STRATEGY_LABEL, value=row.strategy_id)
-        )
+        rows.append(KellyDetailRow(label=KELLY_DETAIL_STRATEGY_LABEL, value=row.strategy_id))
     if row.oos_start_date is not None and row.oos_end_date is not None:
         rows.append(
             KellyDetailRow(
@@ -716,9 +714,7 @@ def _sample_detail(row: KellyInputRow) -> KellyBacktestSampleDetail:
         if n == n_win + n_loss:
             rows.append(KellyDetailRow(label=KELLY_DETAIL_ROUND_TRIPS_LABEL, value=str(n)))
             rows.append(KellyDetailRow(label=KELLY_DETAIL_WIN_TRIPS_LABEL, value=str(n_win)))
-            rows.append(
-                KellyDetailRow(label=KELLY_DETAIL_LOSS_TRIPS_LABEL, value=str(n_loss))
-            )
+            rows.append(KellyDetailRow(label=KELLY_DETAIL_LOSS_TRIPS_LABEL, value=str(n_loss)))
         else:
             # 條件 43: 「不成立禁三欄並列」. Not a crash and not a silent partial
             # display of two of the three -- all three are withheld, and the
@@ -748,9 +744,7 @@ def _sample_detail(row: KellyInputRow) -> KellyBacktestSampleDetail:
         )
     if row.oos_observations is not None:
         rows.append(
-            KellyDetailRow(
-                label=KELLY_DETAIL_OBSERVATIONS_LABEL, value=str(row.oos_observations)
-            )
+            KellyDetailRow(label=KELLY_DETAIL_OBSERVATIONS_LABEL, value=str(row.oos_observations))
         )
     if row.p_ci_low is not None and row.p_ci_high is not None:
         rows.append(
@@ -832,18 +826,14 @@ def _f_star_interval(
         return (None, None)
     if not kelly_usable(inputs):
         return (None, None)
-    allowed = kelly_allowed_weight(
-        budget, PortfolioContext(symbol=row.symbol, kelly=inputs)
-    )
+    allowed = kelly_allowed_weight(budget, PortfolioContext(symbol=row.symbol, kelly=inputs))
     if allowed is None:  # pragma: no cover - kelly_usable already established it
         return (None, None)
     sentence = KELLY_F_STAR_INTERVAL_DISCLOSURE.format(
         f_star_ci_low_pct=format_percent(row.f_star_ci_low),
         f_star_ci_high_pct=format_percent(row.f_star_ci_high),
     )
-    cap = KellyEffectiveCapView(
-        label=LIMIT_NAMES["kelly_fraction"], value=format_percent(allowed)
-    )
+    cap = KellyEffectiveCapView(label=LIMIT_NAMES["kelly_fraction"], value=format_percent(allowed))
     return (sentence, cap)
 
 
@@ -1054,9 +1044,7 @@ def ci_includes_no_edge(row: KellyInputRow) -> bool:
     return row.f_star_ci_low is not None and row.f_star_ci_low <= 0.0
 
 
-def kelly_inputs_for(
-    store: KellyInputStore, symbol: str, market: Market
-) -> KellyInputs | None:
+def kelly_inputs_for(store: KellyInputStore, symbol: str, market: Market) -> KellyInputs | None:
     """Cap 5's input for one holding, or ``None`` when none was ever entered.
 
     The one place the "read the row -> reduce the interval -> age it" chain is
@@ -1106,9 +1094,7 @@ def list_kelly_inputs(store: KellyStoreDep) -> KellyInputListView:
     import-attempt log (約束 35) -- what is in force is read from the input rows
     themselves.
     """
-    return KellyInputListView(
-        items=[_view(row) for row in store.list_all()], as_of=now_iso()
-    )
+    return KellyInputListView(items=[_view(row) for row in store.list_all()], as_of=now_iso())
 
 
 @router.get("/{symbol}", response_model=KellyInputView)
@@ -1232,9 +1218,7 @@ def write_kelly_input(
 
 
 @router.delete("/{symbol}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_kelly_input(
-    symbol: str, store: KellyStoreDep, market: MarketQuery = "TW"
-) -> Response:
+def delete_kelly_input(symbol: str, store: KellyStoreDep, market: MarketQuery = "TW") -> Response:
     """Remove the input in force for one instrument.
 
     Only the input row. The import-attempt log keeps every row it had, so
@@ -1242,9 +1226,7 @@ def delete_kelly_input(
     """
     if not store.delete(symbol, market):
         raise _not_found(normalize_symbol(symbol), market)
-    logger.info(
-        "kelly input deleted: symbol=%s market=%s", normalize_symbol(symbol), market
-    )
+    logger.info("kelly input deleted: symbol=%s market=%s", normalize_symbol(symbol), market)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1286,9 +1268,7 @@ def _bootstrap_seed(spec_hash: str) -> int:
     return int(spec_hash[:8], 16)
 
 
-def _measured_columns(
-    attribution: RoundTripAttribution, *, dates: list[str]
-) -> dict[str, Any]:
+def _measured_columns(attribution: RoundTripAttribution, *, dates: list[str]) -> dict[str, Any]:
     """The sample facts an attempt row and a stored row both carry.
 
     ``oos_observations`` is the number of **bars** the out-of-sample window
@@ -1440,9 +1420,7 @@ def import_kelly_input_from_backtest(
                 # and to no other. The membership test is the condition itself,
                 # written out rather than inferred from the message.
                 frame=(
-                    KELLY_REFUSAL_FRAME
-                    if review.reason_code in _SAMPLE_SIZE_REASON_CODES
-                    else None
+                    KELLY_REFUSAL_FRAME if review.reason_code in _SAMPLE_SIZE_REASON_CODES else None
                 ),
                 attempt_logged=KELLY_REFUSAL_ATTEMPT_LOGGED,
                 selection_bias=_selection_bias(k_observed, k_distinct_specs),

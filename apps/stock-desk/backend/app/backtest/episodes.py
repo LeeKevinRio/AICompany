@@ -226,9 +226,7 @@ def oos_window(folds: Sequence[WalkForwardFold]) -> tuple[int, int]:
     return folds[0].test_start, folds[-1].test_stop
 
 
-def attribute_round_trips(
-    result: BacktestResult, *, start: int, stop: int
-) -> RoundTripAttribution:
+def attribute_round_trips(result: BacktestResult, *, start: int, stop: int) -> RoundTripAttribution:
     """Attribute round trips to the bar window ``[start, stop)``, fully contained.
 
     A round trip belongs to the window only when it both opens and closes inside

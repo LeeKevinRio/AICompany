@@ -105,9 +105,7 @@ class ErosionEstimate(BaseModel):
     reason: str | None = None
 
 
-NATURE: Final = (
-    "情境推估（conditional scenario），非預測；所有數字以「指數橫盤且波動維持」為前提。"
-)
+NATURE: Final = "情境推估（conditional scenario），非預測；所有數字以「指數橫盤且波動維持」為前提。"
 
 
 def erosion_at_horizon(

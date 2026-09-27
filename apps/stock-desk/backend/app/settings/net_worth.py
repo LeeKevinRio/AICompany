@@ -61,13 +61,11 @@ NET_WORTH_STANDING_FAR_ABOVE_NOTE = (
 )
 
 NET_WORTH_NO_VALUED_BOOK_NOTE = (
-    "目前沒有任何部位可估值，無法用部位市值檢查這個數字是否合理；"
-    "本次只檢查了數值必須大於 0。"
+    "目前沒有任何部位可估值，無法用部位市值檢查這個數字是否合理；本次只檢查了數值必須大於 0。"
 )
 
 NET_WORTH_PARTIAL_BOOK_NOTE = (
-    "有 {missing} 筆部位無法估值，本次的合理性檢查只比對了已估值的 {valued} 筆；"
-    "比對基準因此偏低。"
+    "有 {missing} 筆部位無法估值，本次的合理性檢查只比對了已估值的 {valued} 筆；比對基準因此偏低。"
 )
 
 

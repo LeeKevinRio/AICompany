@@ -230,8 +230,10 @@ def _print_sector_sync_result(
 
 def _print_backfill_report(report: SectorBackfillReport) -> None:
     """Report the holdings backfill: filled, skipped, and each skip's reason."""
-    print(f"持倉產業別回填：檢視 {report.considered_count} 檔，補上 {report.filled_count} 檔，"
-          f"跳過 {report.skipped_count} 檔")
+    print(
+        f"持倉產業別回填：檢視 {report.considered_count} 檔，補上 {report.filled_count} 檔，"
+        f"跳過 {report.skipped_count} 檔"
+    )
     for symbol, sector in report.filled:
         print(f"  補上 {symbol} -> {sector}")
     if report.skipped_already_set:

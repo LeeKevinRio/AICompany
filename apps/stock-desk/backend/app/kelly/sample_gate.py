@@ -154,10 +154,7 @@ def review_symbol_match(
     direction: guessing which one the user meant would file one symbol's
     evidence under another's name.
     """
-    if (
-        path_symbol.strip().upper() == body_symbol.strip().upper()
-        and path_market == body_market
-    ):
+    if path_symbol.strip().upper() == body_symbol.strip().upper() and path_market == body_market:
         return KellySampleGateReview()
     return KellySampleGateReview(
         reason_code="symbol_mismatch",
@@ -170,9 +167,7 @@ def review_symbol_match(
     )
 
 
-def review_estimates(
-    win_rate: float | None, payoff_ratio: float | None
-) -> KellySampleGateReview:
+def review_estimates(win_rate: float | None, payoff_ratio: float | None) -> KellySampleGateReview:
     """Whether both halves of the pair exist.
 
     Either one missing refuses the whole attempt: a Kelly input is the pair,
@@ -185,9 +180,7 @@ def review_estimates(
     return KellySampleGateReview(reason_code="pb_none", rejection=PB_NONE_MESSAGE)
 
 
-def review_sample(
-    round_trips: int, win_trips: int, loss_trips: int
-) -> KellySampleGateReview:
+def review_sample(round_trips: int, win_trips: int, loss_trips: int) -> KellySampleGateReview:
     """Check one out-of-sample round-trip count against the three thresholds.
 
     Order is total, then wins, then losses -- the order a reader would ask the
@@ -210,17 +203,11 @@ def review_sample(
     if win_trips < MIN_OOS_WIN_TRIPS:
         return KellySampleGateReview(
             reason_code="low_win_trips",
-            rejection=LOW_WIN_TRIPS_MESSAGE.format(
-                count=win_trips, threshold=MIN_OOS_WIN_TRIPS
-            ),
+            rejection=LOW_WIN_TRIPS_MESSAGE.format(count=win_trips, threshold=MIN_OOS_WIN_TRIPS),
         )
     if loss_trips < MIN_OOS_LOSS_TRIPS:
         return KellySampleGateReview(
             reason_code="low_loss_trips",
-            rejection=LOW_LOSS_TRIPS_MESSAGE.format(
-                count=loss_trips, threshold=MIN_OOS_LOSS_TRIPS
-            ),
+            rejection=LOW_LOSS_TRIPS_MESSAGE.format(count=loss_trips, threshold=MIN_OOS_LOSS_TRIPS),
         )
-    return KellySampleGateReview(
-        low_sample_warning=round_trips < SOFT_WARNING_ROUND_TRIPS
-    )
+    return KellySampleGateReview(low_sample_warning=round_trips < SOFT_WARNING_ROUND_TRIPS)

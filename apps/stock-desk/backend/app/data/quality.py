@@ -103,9 +103,7 @@ def _check_future_dates(
     return issues
 
 
-def _check_currency(
-    bars: Sequence[PriceBar], expected_currency: str | None
-) -> list[QualityIssue]:
+def _check_currency(bars: Sequence[PriceBar], expected_currency: str | None) -> list[QualityIssue]:
     if expected_currency is None:
         return []
     issues: list[QualityIssue] = []

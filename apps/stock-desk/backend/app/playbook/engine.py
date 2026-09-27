@@ -245,8 +245,10 @@ def _defense_transition(
         return portfolio.defense_active, effects, warnings
 
     below = index.close < index.monthly_line
-    if not portfolio.defense_active and below and index.days_below_monthly_line >= (
-        params.m1_consecutive_days
+    if (
+        not portfolio.defense_active
+        and below
+        and index.days_below_monthly_line >= (params.m1_consecutive_days)
     ):
         effects.append(
             StateEffect(
@@ -312,9 +314,7 @@ def _fast_market(
         # The note is put on the state as well as into ``warnings`` so a badge
         # rendered from this state can show why it is on without the caller
         # having to recognise the sentence in a list of unrelated ones.
-        return carried.model_copy(
-            update={"carried_forward": True, "carried_note": note}
-        ), [note]
+        return carried.model_copy(update={"carried_forward": True, "carried_note": note}), [note]
     vol = index.annualized_vol_20d
     by_vol = vol is not None and vol > params.fast_market_vol_threshold
     by_moves = index.large_move_days >= params.fast_market_move_count
@@ -748,9 +748,7 @@ def _defer_for_index_gap(
             rule_id="R3" if skipping else "M1",
             rule_summary=_measured(
                 "R3" if skipping else "M1",
-                wording.R3_SKIP_AFTER_LIMIT_NOTE.format(
-                    detail=detail, limit=params.r3_max_defers
-                )
+                wording.R3_SKIP_AFTER_LIMIT_NOTE.format(detail=detail, limit=params.r3_max_defers)
                 if skipping
                 else detail,
                 params,
@@ -960,8 +958,7 @@ def _evaluate_entries(
             rule_id="R1",
             rule_summary=_measured(
                 "R1",
-                f"排程日進場第 {batch.batch_no} 批，參考價 {_price(snapshot.close)}，"
-                f"股數 {shares}",
+                f"排程日進場第 {batch.batch_no} 批，參考價 {_price(snapshot.close)}，股數 {shares}",
                 params,
             ),
             snapshot=snapshot,
@@ -1181,8 +1178,7 @@ def evaluate(
             # stop loss could not be evaluated today, which has to be said out
             # loud rather than left to be inferred from a missing line.
             holds = any(
-                item.status == "open" and item.remaining_shares > 0
-                for item in symbol_batches
+                item.status == "open" and item.remaining_shares > 0 for item in symbol_batches
             )
             note = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
             warnings.append(note.format(symbol=symbol, status=status, source=source))
@@ -1289,10 +1285,7 @@ def evaluate(
     # * no 鐵律① shrink -- a line the cash floor cut or cancelled is a rule that
     #   did fire, which 「無任何規則命中」 would contradict.
     rules_fully_evaluated = (
-        bool(batches)
-        and entries_allowed
-        and every_symbol_evaluated
-        and not shrink_warnings
+        bool(batches) and entries_allowed and every_symbol_evaluated and not shrink_warnings
     )
 
     return PlaybookEvaluation(

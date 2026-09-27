@@ -54,9 +54,7 @@ _OPTIONAL_COLUMNS: frozenset[str] = frozenset({"sector"})
 
 _MARKETS: frozenset[str] = frozenset({"TW", "US"})
 _CURRENCIES: frozenset[str] = frozenset({"TWD", "USD"})
-_INSTRUMENT_TYPES: frozenset[str] = frozenset(
-    {"stock", "etf", "leveraged_etf", "futures_etf"}
-)
+_INSTRUMENT_TYPES: frozenset[str] = frozenset({"stock", "etf", "leveraged_etf", "futures_etf"})
 
 #: Two illustrative rows shipped with the template (one TW, one US).
 #: The US row leaves ``sector`` empty on purpose: the TWSE categories do not
@@ -110,9 +108,7 @@ def parse_import_csv(
 
     header = [cell.strip() for cell in rows[0]]
     missing = [
-        column
-        for column in COLUMNS
-        if column not in header and column not in _OPTIONAL_COLUMNS
+        column for column in COLUMNS if column not in header and column not in _OPTIONAL_COLUMNS
     ]
     if missing:
         return [], [
@@ -189,8 +185,7 @@ def _parse_row(
     if instrument_type not in _INSTRUMENT_TYPES:
         fail(
             "instrument_type",
-            "商品類型必須是 stock、etf、leveraged_etf 或 futures_etf，"
-            f"收到「{instrument_type}」",
+            f"商品類型必須是 stock、etf、leveraged_etf 或 futures_etf，收到「{instrument_type}」",
         )
 
     sector = _parse_sector(_cell(raw_row, index_of, "sector"), market, fail)
@@ -238,9 +233,7 @@ def _parse_positive_decimal(
     return value
 
 
-def _parse_sector(
-    raw: str, market: str, fail: Callable[[str, str], None]
-) -> str | None:
+def _parse_sector(raw: str, market: str, fail: Callable[[str, str], None]) -> str | None:
     """Parse the optional industry category (FR-12).
 
     A blank cell means "not stated" and imports fine; anything outside the TWSE
@@ -260,9 +253,7 @@ def _parse_sector(
     return raw
 
 
-def _parse_opened_at(
-    raw: str, today: date, fail: Callable[[str, str], None]
-) -> date | None:
+def _parse_opened_at(raw: str, today: date, fail: Callable[[str, str], None]) -> date | None:
     """Parse the optional open date; a blank cell means "not stated".
 
     Returns ``None`` both for a blank cell and for a rejected value, which the

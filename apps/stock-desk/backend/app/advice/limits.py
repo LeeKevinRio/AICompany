@@ -206,9 +206,7 @@ KELLY_STALE_AFTER_DAYS = 30
 #: The ``unsupported_market`` residual disclosure (D8 句 2, approved 2026-08-19)
 #: is governed the same way -- see
 #: :data:`NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL`.
-SectorGap = Literal[
-    "no_position", "unfiled", "etf_instrument", "unsupported_market", "mixed"
-]
+SectorGap = Literal["no_position", "unfiled", "etf_instrument", "unsupported_market", "mixed"]
 
 NO_SECTOR_CANDIDATE_DETAIL = (
     "此標的目前沒有持倉，單一產業佔比上限沒有可分類的部位，本次不計算，回報 not_evaluable。"
@@ -275,8 +273,7 @@ NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL = (
 )
 
 NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
-    NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL
-    + NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
+    NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL + NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
 )
 
 #: The same symbol held twice under two different categories: which one the
@@ -286,9 +283,7 @@ NO_SECTOR_UNSUPPORTED_MARKET_DETAIL = (
 #: (FR-12 句 3), with the guidance sentence below added at their own suggestion;
 #: it lives here rather than in ``book.py`` because cap 2's ``detail`` says the
 #: same thing as the context note and the two must not drift apart.
-SECTOR_MIXED_NOTE = (
-    "此標的的持倉填了不只一種產業別，無法決定單一產業，單一產業佔比上限不計算。"
-)
+SECTOR_MIXED_NOTE = "此標的的持倉填了不只一種產業別，無法決定單一產業，單一產業佔比上限不計算。"
 SECTOR_MIXED_GUIDANCE = "請將同一標的的持倉統一為同一種產業別後恢復計算。"
 SECTOR_MIXED_DETAIL = SECTOR_MIXED_NOTE + SECTOR_MIXED_GUIDANCE
 
@@ -306,8 +301,7 @@ NO_SECTOR_DETAILS: dict[SectorGap, str] = {
 #: sentence so a user who never entered a net worth sees no change at all, with
 #: the one input that would make the cap evaluable named after it.
 NO_NET_WORTH_DETAIL = (
-    "缺少組合總市值，無法計算總曝險。"
-    "可在設定頁輸入「帳戶總淨值（新台幣）」後啟用這條上限。"
+    "缺少組合總市值，無法計算總曝險。可在設定頁輸入「帳戶總淨值（新台幣）」後啟用這條上限。"
 )
 
 #: AC-9.4. Wording is fixed: the reader has to be told the input expired, not
@@ -1459,9 +1453,7 @@ def _passes(
     budget, and sizing a suggestion off "we could not check" would put the
     engine's name to a quantity it never verified.
     """
-    return (
-        limit_status_after(budget, ctx, limit_id=binding_id, share_delta=share_delta) == "passed"
-    )
+    return limit_status_after(budget, ctx, limit_id=binding_id, share_delta=share_delta) == "passed"
 
 
 def _largest_compliant_buy(

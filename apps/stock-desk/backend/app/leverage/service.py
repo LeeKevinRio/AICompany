@@ -230,9 +230,7 @@ def build_leverage_chapter(
             # Same insufficient_data block the module produces for "no bars",
             # with the generic wording replaced by what is actually established
             # about this benchmark (I-5).
-            decomposition = decomposition.model_copy(
-                update={"reason": series_unavailable_reason}
-            )
+            decomposition = decomposition.model_copy(update={"reason": series_unavailable_reason})
         drag_ok = decomposition.status == "ok"
         chapter["drag"] = decomposition.model_dump()
         # The residual trip is a chapter-level qualifier, not a detail buried in

@@ -37,9 +37,7 @@ from app.positions.models import InstrumentType, Market
 Side = Literal["buy", "sell"]
 
 # ETF-like instruments are taxed at the lower TW securities-transaction-tax rate.
-_ETF_LIKE: frozenset[InstrumentType] = frozenset(
-    {"etf", "leveraged_etf", "futures_etf"}
-)
+_ETF_LIKE: frozenset[InstrumentType] = frozenset({"etf", "leveraged_etf", "futures_etf"})
 
 
 @dataclass(frozen=True)

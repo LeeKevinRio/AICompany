@@ -115,14 +115,11 @@ QUOTA_UNREADABLE_NOTE = "無法讀取額度計數器，今日用量暫時無法�
 #: roughly thirty times, and the 10x warning is only the *second* line of
 #: defence against that; this sentence is the first.
 NET_WORTH_CURRENCY_NOTE = (
-    "此欄位只收新台幣。若你有外幣資產，請自行換算為台幣後填入；"
-    "系統不會為此欄位做匯率換算。"
+    "此欄位只收新台幣。若你有外幣資產，請自行換算為台幣後填入；系統不會為此欄位做匯率換算。"
 )
 
 #: The state the product shipped in for months, and still the default one.
-NET_WORTH_ABSENT_NOTE = (
-    "尚未輸入帳戶總淨值，第 3 條總曝險上限維持 not_evaluable（無法評估）。"
-)
+NET_WORTH_ABSENT_NOTE = "尚未輸入帳戶總淨值，第 3 條總曝險上限維持 not_evaluable（無法評估）。"
 
 NET_WORTH_AGEING_NOTE = "帳戶總淨值已 {age_days} 天未更新，滿 {days} 天後第 3 條上限將停止計算。"
 
@@ -351,9 +348,7 @@ def _review_reported_net_worth(
     comparison, and storing a zero would later read as one that happened.
     """
     summary = build_summary(positions, valuator)
-    valued = [
-        position for position in summary.positions if position.valuation.status == "ok"
-    ]
+    valued = [position for position in summary.positions if position.valuation.status == "ok"]
     market_value = float(summary.totals.market_value_twd)
     review = review_net_worth(
         amount_twd,

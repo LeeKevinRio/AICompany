@@ -364,9 +364,7 @@ def correlation_matrix(
             corr = float(joined["a"].corr(joined["b"]))
             matrix[a][b] = None if math.isnan(corr) else corr
 
-    status: Literal["ok", "insufficient_data"] = (
-        "insufficient_data" if len(symbols) < 2 else "ok"
-    )
+    status: Literal["ok", "insufficient_data"] = "insufficient_data" if len(symbols) < 2 else "ok"
     return CorrelationResult(
         status=status,
         symbols=symbols,
