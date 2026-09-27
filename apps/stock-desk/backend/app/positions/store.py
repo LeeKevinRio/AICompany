@@ -189,9 +189,7 @@ class PositionStore:
     def list_all(self) -> list[Position]:
         """Return every stored position, ordered by id ascending."""
         with closing(self._connect()) as conn:
-            cursor = conn.execute(
-                f"SELECT {_SELECT_COLUMNS} FROM positions ORDER BY id ASC"
-            )
+            cursor = conn.execute(f"SELECT {_SELECT_COLUMNS} FROM positions ORDER BY id ASC")
             rows = cursor.fetchall()
         return [self._row_to_position(row) for row in rows]
 
@@ -319,9 +317,7 @@ class PositionStore:
     def delete(self, position_id: int) -> bool:
         """Delete ``position_id``; return ``True`` if a row was removed."""
         with closing(self._connect()) as conn, conn:
-            cursor = conn.execute(
-                "DELETE FROM positions WHERE id = ?", (position_id,)
-            )
+            cursor = conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
             return cursor.rowcount > 0
 
     @staticmethod

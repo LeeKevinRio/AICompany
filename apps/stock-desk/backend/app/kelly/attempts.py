@@ -106,9 +106,7 @@ class KellyAttemptStore:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
 
-    def append(
-        self, record: KellyAttemptRecord, *, attempted_at: datetime | None = None
-    ) -> int:
+    def append(self, record: KellyAttemptRecord, *, attempted_at: datetime | None = None) -> int:
         """Record one attempt; return the id SQLite assigned it.
 
         Called for every attempt that got past request validation, whatever the
@@ -121,15 +119,12 @@ class KellyAttemptStore:
         proceeded without its attempt being recorded would under-report
         ``K_observed`` for good.
         """
-        moment = (
-            attempted_at if attempted_at is not None else datetime.now(UTC)
-        ).isoformat()
+        moment = (attempted_at if attempted_at is not None else datetime.now(UTC)).isoformat()
         values = [getattr(record, name) for name in KellyAttemptRecord.model_fields]
         values.append(moment)
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
-                f"INSERT INTO kelly_import_attempts ({_INSERT_COLUMNS}) "
-                f"VALUES ({_PLACEHOLDERS})",
+                f"INSERT INTO kelly_import_attempts ({_INSERT_COLUMNS}) VALUES ({_PLACEHOLDERS})",
                 values,
             )
             return int(cursor.lastrowid or 0)

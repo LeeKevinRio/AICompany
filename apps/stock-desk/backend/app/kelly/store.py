@@ -129,9 +129,7 @@ assert set(_OPTIONAL_COLUMN_TYPES) < set(_COLUMNS)
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
 _PLACEHOLDERS = ", ".join("?" for _ in _COLUMNS)
 #: The key columns are the conflict target, so they are never reassigned.
-_UPSERT_ASSIGNMENTS = ", ".join(
-    f"{column} = excluded.{column}" for column in _COLUMNS[2:]
-)
+_UPSERT_ASSIGNMENTS = ", ".join(f"{column} = excluded.{column}" for column in _COLUMNS[2:])
 
 
 def _missing_optional_columns(conn: sqlite3.Connection) -> list[str]:
@@ -180,8 +178,7 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
             return
         for column in missing:
             conn.execute(
-                f"ALTER TABLE kelly_inputs ADD COLUMN {column} "
-                f"{_OPTIONAL_COLUMN_TYPES[column]}"
+                f"ALTER TABLE kelly_inputs ADD COLUMN {column} {_OPTIONAL_COLUMN_TYPES[column]}"
             )
         conn.execute("COMMIT")
     except BaseException:
@@ -234,9 +231,7 @@ class KellyInputStore:
             ).fetchone()
         return None if row is None else _row_to_input(row)
 
-    def upsert(
-        self, record: KellyInputRecord, *, now: datetime | None = None
-    ) -> KellyInputRow:
+    def upsert(self, record: KellyInputRecord, *, now: datetime | None = None) -> KellyInputRow:
         """Write ``record`` as the input in force for its key; return it stored.
 
         ``now`` exists for tests and for a caller that already fixed a moment;

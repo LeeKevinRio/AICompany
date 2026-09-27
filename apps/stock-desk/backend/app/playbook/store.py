@@ -395,8 +395,7 @@ class PlaybookStore:
     def get_batch(self, symbol: str, batch_no: int) -> BatchState | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                f"SELECT {_BATCH_SELECT} FROM playbook_batches "
-                "WHERE symbol = ? AND batch_no = ?",
+                f"SELECT {_BATCH_SELECT} FROM playbook_batches WHERE symbol = ? AND batch_no = ?",
                 (symbol, batch_no),
             ).fetchone()
         return None if row is None else self._row_to_batch(row)
@@ -540,9 +539,7 @@ class PlaybookStore:
             {
                 STATE_FAST_MARKET_ACTIVE: "1" if state.active else "0",
                 STATE_FAST_MARKET_VOL: (
-                    None
-                    if state.annualized_vol_20d is None
-                    else str(state.annualized_vol_20d)
+                    None if state.annualized_vol_20d is None else str(state.annualized_vol_20d)
                 ),
                 STATE_FAST_MARKET_MOVES: str(state.large_move_days),
                 STATE_FAST_MARKET_REASON: state.reason,
@@ -640,9 +637,7 @@ class PlaybookStore:
             rule_set_date=None if row is None else _day_or_none(row[1]),
         )
 
-    def confirm_rule_set(
-        self, params: RuleParams, *, confirmed_at: datetime | None = None
-    ) -> None:
+    def confirm_rule_set(self, params: RuleParams, *, confirmed_at: datetime | None = None) -> None:
         """Record that the user adopted ``params`` as their own rule set.
 
         This is the one write that makes the playbook produce directives at all
@@ -726,9 +721,7 @@ class PlaybookStore:
                     rule_id="S2",
                 )
             elif effect.kind == "freeze_portfolio":
-                self.freeze(
-                    until=calendar.shift(data_date, effect.value or 0), reason=effect.note
-                )
+                self.freeze(until=calendar.shift(data_date, effect.value or 0), reason=effect.note)
             elif effect.kind == "defense_on":
                 self.set_defense(active=True, since=data_date)
             elif effect.kind == "defense_off":
@@ -748,9 +741,7 @@ class PlaybookStore:
             elif effect.kind == "trailing_on" and effect.symbol is not None:
                 self._update_batch(effect.symbol, effect.batch_no, {"trailing_active": True})
 
-    def _update_batch(
-        self, symbol: str, batch_no: int | None, changes: Mapping[str, Any]
-    ) -> None:
+    def _update_batch(self, symbol: str, batch_no: int | None, changes: Mapping[str, Any]) -> None:
         if batch_no is None:
             return
         batch = self.get_batch(symbol, batch_no)
@@ -828,9 +819,7 @@ class PlaybookStore:
     def directive_log(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM playbook_directives ORDER BY id ASC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM playbook_directives ORDER BY id ASC").fetchall()
         return [dict(row) for row in rows]
 
     def pending_directives(self, *, on_or_before: date | None = None) -> list[PendingDirective]:
@@ -921,9 +910,7 @@ class PlaybookStore:
             # the retry counter is what the R3-aligned ceiling reads.
             batch = self.get_batch(directive.symbol, directive.batch_no)
             if batch is not None:
-                self.save_batch(
-                    batch.model_copy(update={"missed_count": batch.missed_count + 1})
-                )
+                self.save_batch(batch.model_copy(update={"missed_count": batch.missed_count + 1}))
         if directive.status != "executed" or directive.batch_no is None:
             self._mark_schedule(directive)
             return
