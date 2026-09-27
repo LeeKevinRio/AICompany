@@ -49,9 +49,7 @@ class FakeIndexAdapter:
         #: Every symbol the adapter was asked for, verbatim.
         self.calls: list[tuple[str, date, date]] = []
 
-    def get_index_daily_bars(
-        self, index_symbol: str, start: date, end: date
-    ) -> ProviderResult:
+    def get_index_daily_bars(self, index_symbol: str, start: date, end: date) -> ProviderResult:
         self.calls.append((index_symbol, start, end))
         window = [bar for bar in self.bars.get(index_symbol, []) if start <= bar.date <= end]
         if not window:
@@ -128,9 +126,7 @@ class _FreshService:
     def __init__(self, status: DataStatus = DataStatus.FRESH) -> None:
         self.status = status
 
-    def get_daily_bars(
-        self, symbol: str, market: str, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: str, start: date, end: date) -> ProviderResult:
         return ProviderResult(
             bars=_index_bars(symbol),
             status=self.status,
@@ -141,9 +137,7 @@ class _FreshService:
             reason="上一層說了些什麼。",
         )
 
-    def get_cached_bars(
-        self, symbol: str, market: str, start: date, end: date
-    ) -> ProviderResult:
+    def get_cached_bars(self, symbol: str, market: str, start: date, end: date) -> ProviderResult:
         return ProviderResult(
             bars=_index_bars(symbol),
             status=DataStatus.CACHED_STALE,

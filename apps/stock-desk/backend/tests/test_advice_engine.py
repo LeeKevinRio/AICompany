@@ -403,8 +403,9 @@ def test_any_group_matches_when_all_inputs_are_present(tmp_path: Path) -> None:
 
 def test_add_is_blocked_when_a_limit_is_violated_and_the_cap_is_named() -> None:
     # Golden case: the holding is already at the 15% single-name cap.
-    card = _card(uptrend_signals(), _portfolio(position_market_value_twd=150_000.0,
-                                               quantity=1_363.0))
+    card = _card(
+        uptrend_signals(), _portfolio(position_market_value_twd=150_000.0, quantity=1_363.0)
+    )
     assert card["action"] == "hold"
     assert card["blocked_action"] == "add"
     assert card["blocked_notices"] == ["加碼建議被第 1 條上限（單一標的佔比上限）擋下。"]

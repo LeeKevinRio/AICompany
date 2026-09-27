@@ -107,16 +107,15 @@ def test_lookback_days_is_honoured_and_bounded(api_harness: ApiHarness) -> None:
     api_harness.client.get("/api/bars/2330", params={"lookback_days": 30})
     _, _, start, end = api_harness.price_service.calls[-1]
     assert (end - start).days == 30
-    assert len(api_harness.client.get(
-        "/api/bars/2330", params={"lookback_days": 30}
-    ).json()["bars"]) == 31
+    assert (
+        len(api_harness.client.get("/api/bars/2330", params={"lookback_days": 30}).json()["bars"])
+        == 31
+    )
 
-    assert api_harness.client.get(
-        "/api/bars/2330", params={"lookback_days": 0}
-    ).status_code == 422
-    assert api_harness.client.get(
-        "/api/bars/2330", params={"lookback_days": 5000}
-    ).status_code == 422
+    assert api_harness.client.get("/api/bars/2330", params={"lookback_days": 0}).status_code == 422
+    assert (
+        api_harness.client.get("/api/bars/2330", params={"lookback_days": 5000}).status_code == 422
+    )
 
 
 def test_unknown_market_is_422(api_harness: ApiHarness) -> None:

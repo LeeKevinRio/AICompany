@@ -42,9 +42,7 @@ class StubFxProvider(FxRateProvider):
     def get_daily_rates(self, pair: str, start: date, end: date) -> FxRateResult:
         now = datetime.now(UTC)
         return FxRateResult(
-            rates=[
-                FxRate(pair=pair, date=end, rate=self._rate, as_of=now, source=self.source_id)
-            ],
+            rates=[FxRate(pair=pair, date=end, rate=self._rate, as_of=now, source=self.source_id)],
             status=DataStatus.FRESH,
             as_of=now,
             source=self.source_id,
@@ -112,9 +110,7 @@ def test_candidate_skips_the_position_rules_by_naming_the_missing_fields(
     _seed_bars(api_harness, symbol="2454")
     card = api_harness.client.get("/api/advice/2454").json()["advice"]
     skipped_fields = {
-        field
-        for entry in card["evaluation"]["skipped_rules"]
-        for field in entry["missing_fields"]
+        field for entry in card["evaluation"]["skipped_rules"] for field in entry["missing_fields"]
     }
     # Nothing is held anywhere, so the book has no equity and this symbol has no
     # weight in it. The rules reading position weight must be skipped with the
@@ -151,9 +147,7 @@ def test_a_reported_net_worth_turns_the_exposure_cap_on(api_harness: ApiHarness)
     )
     assert _gross_check(api_harness)["status"] == "not_evaluable"
 
-    api_harness.client.put(
-        "/api/settings", json={"net_worth": {"total_net_worth_twd": valued * 2}}
-    )
+    api_harness.client.put("/api/settings", json={"net_worth": {"total_net_worth_twd": valued * 2}})
     check = _gross_check(api_harness)
     assert check["status"] == "passed"
     assert check["observed"] == pytest.approx(0.5)
@@ -190,9 +184,7 @@ def test_an_expired_net_worth_takes_the_exposure_cap_back_off(
     api_harness.settings.save(
         current.model_copy(
             update={
-                "net_worth": NetWorthSettings(
-                    total_net_worth_twd=99_000_000.0, updated_at=stale
-                )
+                "net_worth": NetWorthSettings(total_net_worth_twd=99_000_000.0, updated_at=stale)
             }
         )
     )
@@ -306,9 +298,7 @@ def test_advice_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
     api_harness.client.post("/api/positions", json=position_payload())
     # 0.45: clearly not the 0.15 default, and still inside the hard ceiling
     # (`MAX_POSITION_WEIGHT_CEILING`) that a settings write cannot pass.
-    api_harness.client.put(
-        "/api/settings", json={"risk_budget": {"max_position_weight": 0.45}}
-    )
+    api_harness.client.put("/api/settings", json={"risk_budget": {"max_position_weight": 0.45}})
     body = api_harness.client.get("/api/advice/2330").json()
     weight_cap = next(
         c for c in body["advice"]["limits_check"] if c["id"] == "single_position_weight"
@@ -494,9 +484,7 @@ def test_a_stored_pair_makes_cap_5_evaluable_through_the_endpoint(
     """
     _seed_bars(api_harness)
     api_harness.client.post("/api/positions", json=position_payload())
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0})
 
     check = _kelly_check(api_harness)
 
@@ -514,9 +502,7 @@ def test_an_expired_pair_reaches_the_card_as_expired_not_as_absent(
     """(g-2) end to end, with the anchor and the age the endpoint computed."""
     _seed_bars(api_harness)
     api_harness.client.post("/api/positions", json=position_payload())
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0})
     stored = api_harness.kelly_inputs.get("2330", "TW")
     assert stored is not None
     # Re-stamped 40 days back through the store's own writer, so the age the
@@ -537,9 +523,7 @@ def test_a_non_positive_edge_reaches_the_card_as_its_own_sentence(
     """D-5 end to end: violated, dedicated sentence, and no sizing from a zero."""
     _seed_bars(api_harness)
     api_harness.client.post("/api/positions", json=position_payload())
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.3, "payoff_ratio": 1.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.3, "payoff_ratio": 1.0})
 
     body = api_harness.client.get("/api/advice/2330").json()
     check = next(c for c in body["advice"]["limits_check"] if c["id"] == "kelly_fraction")

@@ -63,9 +63,7 @@ def _state(
         index = helper.index(close="18000", monthly_line="19000", days_below=3)
     elif name == "blacklisted":
         symbols = {
-            "2330": SymbolState(
-                symbol="2330", blacklisted=True, blacklist_until=FREEZE_UNTIL
-            )
+            "2330": SymbolState(symbol="2330", blacklisted=True, blacklist_until=FREEZE_UNTIL)
         }
     return portfolio, symbols, index
 
@@ -167,9 +165,7 @@ def _apply_state(store: PlaybookStore, name: str) -> None:
 
 
 @pytest.mark.parametrize("state", STATES)
-def test_the_emergency_exit_is_reachable_in_every_state(
-    harness: Harness, state: str
-) -> None:
+def test_the_emergency_exit_is_reachable_in_every_state(harness: Harness, state: str) -> None:
     """EX-2/EX-4：緊急出口與鐵律④切割，任何狀態下都不得有等待期或前置條件."""
     _apply_state(harness.store, state)
 

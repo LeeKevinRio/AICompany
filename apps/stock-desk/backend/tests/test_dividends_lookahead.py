@@ -119,9 +119,7 @@ def test_visible_window_differs_from_the_point_in_time_one_only_by_a_constant() 
 
     for t in (30, 61, 90, 121, 150, 171, len(bars) - 1):
         pit = _point_in_time_window(bars, events, t)
-        ratios = [
-            float(full[i].close) / float(pit[i].close) for i in range(t + 1)
-        ]
+        ratios = [float(full[i].close) / float(pit[i].close) for i in range(t + 1)]
         # One constant for the whole visible window: max/min == 1 to numerical
         # precision (the tolerance covers only the 1e-6 price quantum, i.e. a
         # ~1e-8 relative rounding per bar). Anything larger would mean a future

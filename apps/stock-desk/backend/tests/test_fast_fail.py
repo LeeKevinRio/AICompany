@@ -215,9 +215,7 @@ class TestUsLadderAllUnreachable:
         )
         backup = YFinanceAdapter(client=_unreachable_client(clock))
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
-        return MarketDataService(
-            primary=primary, backups=[backup], cache=cache, cache_first=True
-        )
+        return MarketDataService(primary=primary, backups=[backup], cache=cache, cache_first=True)
 
     def test_falls_through_to_unavailable_within_the_estimated_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -28,9 +28,7 @@ EXPECTED_UNMAPPED = {"00631L", "00632R", "00680L", "SOXL", "SOXS"}
 def test_module_imports_no_provider_and_no_io() -> None:
     tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
     imported = {
-        node.module or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     } | {
         alias.name
         for node in ast.walk(tree)
@@ -55,8 +53,7 @@ def test_the_whole_leverage_package_stays_out_of_the_data_layer() -> None:
             elif isinstance(node, ast.Import):
                 module = node.names[0].name
             assert not module.startswith("app.data.providers"), (
-                f"{path.name} imports a provider; the data-layer junction is "
-                "app/services/index.py"
+                f"{path.name} imports a provider; the data-layer junction is app/services/index.py"
             )
 
 

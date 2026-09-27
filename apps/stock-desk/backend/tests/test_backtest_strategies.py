@@ -439,42 +439,54 @@ def _stop_replay(
 
 
 def test_replay_holds_while_no_exit_level_is_reached() -> None:
-    assert _stop_replay(
-        closes=[100.0, 99.9], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 90.0]
-    ) == 1.0
+    assert (
+        _stop_replay(closes=[100.0, 99.9], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 90.0])
+        == 1.0
+    )
 
 
 def test_replay_leaves_on_each_exit_branch_independently() -> None:
     # Stop: 100 - 2*ATR(1.0) = 98 is the tighter of the two stops (the fixed one
     # sits at 92), and the close reaches it.
-    assert _stop_replay(
-        closes=[100.0, 98.0], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 90.0]
-    ) == 0.0
+    assert (
+        _stop_replay(closes=[100.0, 98.0], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 90.0])
+        == 0.0
+    )
     # Take profit at +20%.
-    assert _stop_replay(
-        closes=[100.0, 100.0 * FIVE_TAKE_PROFIT_RATIO],
-        entries=[True, False],
-        atr=[1.0, 1.0],
-        ma60=[90.0, 90.0],
-    ) == 0.0
+    assert (
+        _stop_replay(
+            closes=[100.0, 100.0 * FIVE_TAKE_PROFIT_RATIO],
+            entries=[True, False],
+            atr=[1.0, 1.0],
+            ma60=[90.0, 90.0],
+        )
+        == 0.0
+    )
     # Trend break alone: above both stops, far below the target.
-    assert _stop_replay(
-        closes=[100.0, 99.0], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 99.5]
-    ) == 0.0
+    assert (
+        _stop_replay(closes=[100.0, 99.0], entries=[True, False], atr=[1.0, 1.0], ma60=[90.0, 99.5])
+        == 0.0
+    )
 
 
 def test_replay_falls_back_to_the_fixed_stop_without_an_atr() -> None:
     fixed = 100.0 * FIVE_STOP_FIXED_RATIO
     assert five_condition_stop_level(100.0, float("nan")) == fixed
-    assert _stop_replay(
-        closes=[100.0, fixed], entries=[True, False], atr=[np.nan, np.nan], ma60=[90.0, 90.0]
-    ) == 0.0
-    assert _stop_replay(
-        closes=[100.0, fixed + 0.01],
-        entries=[True, False],
-        atr=[np.nan, np.nan],
-        ma60=[90.0, 90.0],
-    ) == 1.0
+    assert (
+        _stop_replay(
+            closes=[100.0, fixed], entries=[True, False], atr=[np.nan, np.nan], ma60=[90.0, 90.0]
+        )
+        == 0.0
+    )
+    assert (
+        _stop_replay(
+            closes=[100.0, fixed + 0.01],
+            entries=[True, False],
+            atr=[np.nan, np.nan],
+            ma60=[90.0, 90.0],
+        )
+        == 1.0
+    )
 
 
 def test_replay_ignores_an_entry_flag_while_already_holding() -> None:
@@ -490,12 +502,15 @@ def test_replay_ignores_an_entry_flag_while_already_holding() -> None:
 
 
 def test_replay_can_re_enter_after_an_exit() -> None:
-    assert _stop_replay(
-        closes=[100.0, 90.0, 95.0],
-        entries=[True, False, True],
-        atr=[1.0, 1.0, 1.0],
-        ma60=[80.0, 80.0, 80.0],
-    ) == 1.0
+    assert (
+        _stop_replay(
+            closes=[100.0, 90.0, 95.0],
+            entries=[True, False, True],
+            atr=[1.0, 1.0, 1.0],
+            ma60=[80.0, 80.0, 80.0],
+        )
+        == 1.0
+    )
 
 
 # --- point-in-time and look-ahead ----------------------------------------------

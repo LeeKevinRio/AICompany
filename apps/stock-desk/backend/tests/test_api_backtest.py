@@ -169,9 +169,7 @@ def test_every_shipped_strategy_produces_the_same_report_shape(
     _seed(api_harness)
     baseline = api_harness.client.post("/api/backtest", json=_request()).json()
     for strategy_id in STRATEGY_IDS:
-        body = api_harness.client.post(
-            "/api/backtest", json=_request(strategy=strategy_id)
-        ).json()
+        body = api_harness.client.post("/api/backtest", json=_request(strategy=strategy_id)).json()
         assert body["status"] == "ok", strategy_id
         assert body["strategy"] == strategy_id
         assert set(body) == set(baseline)
@@ -179,8 +177,7 @@ def test_every_shipped_strategy_produces_the_same_report_shape(
         for segment, segment_report in body["report"].items():
             assert segment_report.keys() == baseline["report"][segment].keys()
             assert (
-                segment_report["strategy"].keys()
-                == baseline["report"][segment]["strategy"].keys()
+                segment_report["strategy"].keys() == baseline["report"][segment]["strategy"].keys()
             )
         assert body["cost_model"] == baseline["cost_model"]
         # 風控 2026-09-09 REQ-1: five_conditions is the one strategy that carries
@@ -210,9 +207,7 @@ def test_new_strategies_report_insufficient_data_without_enough_history(
     # AC-10.5 / AC-11.5: too short for one fold is still a 200 + insufficient.
     _seed(api_harness, count=100)
     for strategy_id in ("rsi_reversal", "breakout"):
-        body = api_harness.client.post(
-            "/api/backtest", json=_request(strategy=strategy_id)
-        ).json()
+        body = api_harness.client.post("/api/backtest", json=_request(strategy=strategy_id)).json()
         assert body["status"] == "insufficient_data"
         assert body["report"] is None
         assert "不以單一切分代替" in body["reason"]
@@ -493,9 +488,7 @@ def test_the_kelly_import_surface_does_not_carry_backtest_curves(
     the sample gate decides about this fixture's round trips.
     """
     _seed(api_harness)
-    response = api_harness.client.post(
-        "/api/kelly-inputs/2330/import-backtest", json=_request()
-    )
+    response = api_harness.client.post("/api/kelly-inputs/2330/import-backtest", json=_request())
 
     assert response.status_code in (200, 422)
     assert "curves" not in response.text

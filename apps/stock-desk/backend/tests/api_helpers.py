@@ -105,9 +105,7 @@ class FakePriceService:
         """Make ``symbol`` resolvable to ``bars``."""
         self.bars[symbol] = bars
 
-    def get_daily_bars(
-        self, symbol: str, market: Market, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         self.calls.append((symbol, market, start, end))
         window = [bar for bar in self.bars.get(symbol, []) if start <= bar.date <= end]
         if not window:

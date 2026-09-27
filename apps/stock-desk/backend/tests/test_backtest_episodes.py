@@ -237,16 +237,12 @@ def test_out_of_sample_sample_holds_only_fully_contained_round_trips() -> None:
     all_spans = _spans(result)
     contained = {(e.entry_idx, e.exit_idx) for e in attribution.episodes}
     straddling = [
-        span
-        for span in all_spans
-        if span not in contained and span[1] >= start and span[0] < stop
+        span for span in all_spans if span not in contained and span[1] >= start and span[0] < stop
     ]
     # Straddlers are excluded *and* counted -- never quietly credited or split.
     assert len(straddling) == attribution.excluded_boundary_trips
     assert straddling
-    outside = [
-        span for span in all_spans if span not in contained and span not in straddling
-    ]
+    outside = [span for span in all_spans if span not in contained and span not in straddling]
     assert len(contained) + len(straddling) + len(outside) == len(all_spans)
     assert attribution.stats.n == len(contained)
 
@@ -529,9 +525,7 @@ def test_intervals_reject_an_impossible_confidence_level() -> None:
     with pytest.raises(ValueError):
         wilson_interval(6, 10, alpha=0.0)
     with pytest.raises(ValueError):
-        bootstrap_fraction_ci(
-            [0.1, -0.1], fraction_fn=kelly_fraction, seed=1, draws=4, alpha=1.0
-        )
+        bootstrap_fraction_ci([0.1, -0.1], fraction_fn=kelly_fraction, seed=1, draws=4, alpha=1.0)
 
 
 def test_the_out_of_sample_window_refuses_an_empty_fold_set() -> None:
@@ -544,6 +538,4 @@ def test_the_out_of_sample_window_refuses_an_empty_fold_set() -> None:
 def test_a_fraction_fn_returning_none_fails_loudly() -> None:
     # Dropping the draw would bias the interval; refusing is the honest option.
     with pytest.raises(ValueError):
-        bootstrap_fraction_ci(
-            [0.1, -0.1], fraction_fn=lambda _p, _b: None, seed=1, draws=4
-        )
+        bootstrap_fraction_ci([0.1, -0.1], fraction_fn=lambda _p, _b: None, seed=1, draws=4)

@@ -185,8 +185,7 @@ def test_t3_defense_tightens_s1_to_093_and_trails_profitable_batches() -> None:
     # 92 sits above the normal 0.90 threshold and below the defense 0.93 one.
     assert rule_ids(evaluation) == ["S1"]
     assert any(
-        effect.kind == "trailing_on" and effect.symbol == "2454"
-        for effect in evaluation.effects
+        effect.kind == "trailing_on" and effect.symbol == "2454" for effect in evaluation.effects
     )
 
 
@@ -235,8 +234,13 @@ def test_t4b_trailing_stop_liquidates_the_remainder_below_the_peak() -> None:
         markets={"2330": helper.market(close="120", ma25="115", bias25="4")},
         batches=[
             helper.batch(
-                cost="100", shares=300, remaining=100, p1_done=True, p2_done=True,
-                trailing=True, peak="140",
+                cost="100",
+                shares=300,
+                remaining=100,
+                p1_done=True,
+                p2_done=True,
+                trailing=True,
+                peak="140",
             )
         ],
     )
@@ -261,9 +265,7 @@ def test_t4c_bias_above_15pct_forces_a_one_third_reduction() -> None:
 def test_t4c_high_volatility_list_uses_the_20pct_threshold() -> None:
     """T4(c): 高波動清單的門檻是 +20%，18% 不觸發（改由 P1 判斷）."""
     evaluation = run(
-        markets={
-            "2330": helper.market(close="118", ma25="100", bias25="18", high_volatility=True)
-        },
+        markets={"2330": helper.market(close="118", ma25="100", bias25="18", high_volatility=True)},
         batches=[helper.batch(cost="100", shares=300)],
     )
     assert "P3" not in rule_ids(evaluation)
@@ -381,9 +383,7 @@ def test_t7_stop_loss_fires_on_day_four_of_an_s3_freeze() -> None:
         data_date=date(2026, 8, 11),  # the fourth trading day of the freeze
         markets={"2330": helper.market(close="89", ma25="100")},
         batches=[helper.batch(cost="100", shares=300), helper.planned("2454", 1)],
-        portfolio=helper.portfolio(
-            freeze_until=date(2026, 8, 19), freeze_reason="S3 組合熔斷"
-        ),
+        portfolio=helper.portfolio(freeze_until=date(2026, 8, 19), freeze_reason="S3 組合熔斷"),
     )
     assert evaluation.mode == "frozen"
     sells = [item for item in evaluation.directives if item.rule_id == "S1"]
@@ -397,9 +397,7 @@ def test_t7_take_profit_also_survives_a_freeze() -> None:
     evaluation = run(
         markets={"2330": helper.market(close="121", ma25="110", bias25="5")},
         batches=[helper.batch(cost="100", shares=300)],
-        portfolio=helper.portfolio(
-            freeze_until=date(2026, 8, 19), freeze_reason="S3 組合熔斷"
-        ),
+        portfolio=helper.portfolio(freeze_until=date(2026, 8, 19), freeze_reason="S3 組合熔斷"),
     )
     assert rule_ids(evaluation) == ["P1"]
 
@@ -632,17 +630,20 @@ def test_a_carried_verdict_carries_its_explanation_on_the_state_itself() -> None
     assert carried.carried_note is not None
     assert "快市判定沿用前一次評估結果" in carried.carried_note
     # 不是搬走，是同一句同時在兩處：warnings 仍然帶著它。
-    assert carried.carried_note in evaluate(
-        data_date=TUESDAY,
-        calendar=helper.calendar(),
-        params=helper.params(),
-        index=helper.index(status="unavailable", source="none"),
-        markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
-        batches=[helper.planned()],
-        symbols={},
-        portfolio=helper.portfolio(),
-        previous_fast_market=previous,
-    ).warnings
+    assert (
+        carried.carried_note
+        in evaluate(
+            data_date=TUESDAY,
+            calendar=helper.calendar(),
+            params=helper.params(),
+            index=helper.index(status="unavailable", source="none"),
+            markets={"2330": helper.market(close="100", change_pct="0", bias25="0")},
+            batches=[helper.planned()],
+            symbols={},
+            portfolio=helper.portfolio(),
+            previous_fast_market=previous,
+        ).warnings
+    )
 
 
 def test_a_measured_verdict_has_no_carried_explanation() -> None:
@@ -730,8 +731,9 @@ def test_a_non_schedule_day_produces_no_entry_but_still_evaluates_stops() -> Non
             "2330": helper.market(close="89", ma25="100", data_date=FRIDAY),
             # A profitable second holding keeps the portfolio above the S3
             # threshold, so this test measures the schedule day and nothing else.
-            "2454": helper.market("2454", close="110", ma25="100", change_pct="0",
-                                  bias25="0", data_date=FRIDAY),
+            "2454": helper.market(
+                "2454", close="110", ma25="100", change_pct="0", bias25="0", data_date=FRIDAY
+            ),
         },
         batches=[
             helper.batch(cost="100", shares=300),
@@ -777,21 +779,16 @@ def test_the_index_gap_deferral_clause_only_appears_on_a_deferring_day() -> None
         batches=[helper.planned()],
     )
     assert any("當日不新開倉。" in warning for warning in deferring.warnings)
-    assert any(
-        "R 系列進場改為順延並計入順延次數" in warning for warning in deferring.warnings
-    )
+    assert any("R 系列進場改為順延並計入順延次數" in warning for warning in deferring.warnings)
 
     quiet_day = run(
         data_date=FRIDAY,  # 非排程日：今天本來就沒有進場要順延
         index=helper.index(status="unavailable", source="none", data_date=FRIDAY),
-        markets={"2330": helper.market(close="100", change_pct="0", bias25="0",
-                                       data_date=FRIDAY)},
+        markets={"2330": helper.market(close="100", change_pct="0", bias25="0", data_date=FRIDAY)},
         batches=[helper.planned()],
     )
     assert any("當日不新開倉。" in warning for warning in quiet_day.warnings)
-    assert not any(
-        "R 系列進場改為順延並計入順延次數" in warning for warning in quiet_day.warnings
-    )
+    assert not any("R 系列進場改為順延並計入順延次數" in warning for warning in quiet_day.warnings)
 
 
 def test_a_held_symbol_with_no_data_says_the_stop_loss_was_not_evaluated() -> None:

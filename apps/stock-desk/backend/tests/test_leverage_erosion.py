@@ -137,9 +137,7 @@ def test_too_few_observations_is_insufficient_data() -> None:
 
 
 def test_no_bars_is_insufficient_data() -> None:
-    result = E.estimate_erosion(
-        index_bars=[], leverage_factor=2.0, expense_ratio_annual=0.0113
-    )
+    result = E.estimate_erosion(index_bars=[], leverage_factor=2.0, expense_ratio_annual=0.0113)
     assert result.status == "insufficient_data"
     assert result.reason is not None
     assert result.as_of is None

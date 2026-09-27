@@ -54,9 +54,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     index = FakePriceService()
     index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=SERIES_END))
     store.ensure_batches(["2330"], batches_per_target=3)
-    store.set_capital(
-        cash=Decimal("1000000"), total_deploy=Decimal("1000000"), source="initial"
-    )
+    store.set_capital(cash=Decimal("1000000"), total_deploy=Decimal("1000000"), source="initial")
     yield Harness(
         service=PlaybookService(
             store=store,
@@ -234,9 +232,7 @@ def test_an_index_gap_clears_the_flag() -> None:
 
 def test_a_frozen_book_clears_the_flag() -> None:
     evaluation = _run(
-        portfolio=helper.portfolio(
-            freeze_until=date(2026, 8, 20), freeze_reason="S3 熔斷"
-        )
+        portfolio=helper.portfolio(freeze_until=date(2026, 8, 20), freeze_reason="S3 熔斷")
     )
 
     assert evaluation.mode == "frozen"
@@ -253,9 +249,7 @@ def test_a_paused_or_blacklisted_symbol_clears_the_flag() -> None:
     )
     blacklisted = _run(
         symbols={
-            "2330": SymbolState(
-                symbol="2330", blacklisted=True, blacklist_until=date(2026, 12, 1)
-            )
+            "2330": SymbolState(symbol="2330", blacklisted=True, blacklist_until=date(2026, 12, 1))
         }
     )
 
@@ -288,6 +282,5 @@ def test_the_flag_is_not_read_out_of_the_warning_text() -> None:
     assert evaluation.rules_fully_evaluated is True
     # 非排程日提示本來就會出現在許多天；旗標與這類句子沒有耦合關係。
     assert not any(
-        warning.startswith(wording.NOT_SCHEDULE_DAY_NOTE[:6])
-        for warning in evaluation.warnings
+        warning.startswith(wording.NOT_SCHEDULE_DAY_NOTE[:6]) for warning in evaluation.warnings
     )

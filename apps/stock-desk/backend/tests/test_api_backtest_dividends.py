@@ -151,7 +151,7 @@ def test_never_synced_store_still_runs_the_backtest_and_says_so(
 def test_synced_store_without_an_event_for_this_symbol_gets_its_own_sentence(
     api_harness: ApiHarness,
 ) -> None:
-    """"No data for this symbol" and "never synced" are different facts."""
+    """ "No data for this symbol" and "never synced" are different facts."""
     _seed_bars(api_harness)
     _seed_event(api_harness, symbol="2884")  # some other symbol was synced
     body = _post(api_harness)
@@ -241,7 +241,7 @@ def test_every_note_sentence_states_the_direction_of_the_bias(
 def test_no_sentence_claims_an_unqualified_systematic_understatement(
     api_harness: ApiHarness,
 ) -> None:
-    """"系統性低估" over-claimed: it is B&H / holding-period that is understated.
+    """ "系統性低估" over-claimed: it is B&H / holding-period that is understated.
 
     The strategy column trades in and out, so its bias size is not the same
     number; the scope sentence says so on every degraded branch that carries a

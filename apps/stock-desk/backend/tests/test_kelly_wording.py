@@ -474,9 +474,7 @@ def test_the_wording_module_imports_no_application_code() -> None:
     path = _APP_ROOT / "api" / "kelly_wording.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported = {
-        node.module or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     } | {
         alias.name
         for node in ast.walk(tree)
@@ -876,8 +874,7 @@ def test_no_field_11_message_carries_a_struck_literal(
     assert literal not in block, f"({reason_code}/{market}) {ruling}：「{literal}」"
 
 
-def test_the_kelly_dividend_notes_are_this_module_s_own(
-) -> None:
+def test_the_kelly_dividend_notes_are_this_module_s_own() -> None:
     """條件 62: backtest.py's constants are neither imported nor spliced in.
 
     The two families describe the same mechanism to different readers, and the
@@ -1034,17 +1031,13 @@ def test_no_constant_name_leaks_into_the_copy_it_names() -> None:
         "KELLY_SELECTION_BIAS_UNLOGGED",
     }
     for name in family:
-        assert not any(
-            banned in name for banned in ("_NO_BIAS", "_CORRECTED", "_NONE")
-        ), name
+        assert not any(banned in name for banned in ("_NO_BIAS", "_CORRECTED", "_NONE")), name
 
 
 #: (b)'s three cells, by the review's own ids. 條件 98's fourth cell has no
 #: sentence by ruling, so it has no entry here.
 SELECTION_BIAS_FAMILY: dict[str, str] = {
-    item: text
-    for item, text in wording.RISK_CONFIRMED_WORDING.items()
-    if item.startswith("b-")
+    item: text for item, text in wording.RISK_CONFIRMED_WORDING.items() if item.startswith("b-")
 }
 
 
@@ -1161,13 +1154,9 @@ def test_a_struck_delete_wording_survives_only_where_the_review_allowed(
         for path in _shipped_sources()
         if literal in path.read_text(encoding="utf-8")
     }
-    allowed = {
-        entry[0] for entry in FORBIDDEN_DELETE_WORDING_ALLOWLIST if entry[1] == literal
-    }
+    allowed = {entry[0] for entry in FORBIDDEN_DELETE_WORDING_ALLOWLIST if entry[1] == literal}
 
-    assert observed == allowed, (
-        f"「{literal}」出現於核可出處以外（條件 111）。實測：{observed}"
-    )
+    assert observed == allowed, f"「{literal}」出現於核可出處以外（條件 111）。實測：{observed}"
 
 
 @pytest.mark.parametrize("literal", ["Original values", "Back"])
@@ -1372,9 +1361,7 @@ def test_the_overwrite_dialog_shows_no_measured_value() -> None:
 
 
 @pytest.mark.parametrize(("ruling", "literal"), OVERWRITE_NOTICE_FORBIDDEN)
-def test_no_overwrite_dialog_text_carries_a_struck_literal(
-    ruling: str, literal: str
-) -> None:
+def test_no_overwrite_dialog_text_carries_a_struck_literal(ruling: str, literal: str) -> None:
     """條件 71/77, over every string this dialog can put on a screen."""
     rendered = [
         wording.KELLY_OVERWRITE_NOTICE_TITLE,
@@ -1443,8 +1430,7 @@ def test_the_full_file_literals_appear_only_where_the_review_allowed() -> None:
     )
     allowed = tuple((entry[0], entry[1]) for entry in CONDITION_83_ALLOWLIST)
     assert observed == allowed, (
-        "kelly_wording 全檔掃描出現新的條件 61 字面（第四處即紅燈）。"
-        f"實測：{observed}"
+        f"kelly_wording 全檔掃描出現新的條件 61 字面（第四處即紅燈）。實測：{observed}"
     )
 
 
@@ -1819,9 +1805,7 @@ def test_the_anchor_renders_as_a_plain_date(item: str) -> None:
 @pytest.mark.parametrize("item", FRESHNESS_SENTENCES)
 def test_the_plain_date_assertion_has_teeth(item: str) -> None:
     """The same check, fed the ISO datetime 6-A forbids, must fail."""
-    rendered = SHIPPED[item].format(
-        anchored_on="2026-07-01T00:00:00+08:00", age_days=52, days=30
-    )
+    rendered = SHIPPED[item].format(anchored_on="2026-07-01T00:00:00+08:00", age_days=52, days=30)
 
     assert "T" in rendered and re.search(r"\d{2}:\d{2}", rendered) is not None
 

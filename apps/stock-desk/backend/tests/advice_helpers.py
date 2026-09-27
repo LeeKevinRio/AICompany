@@ -34,9 +34,7 @@ _KELLY_ANCHOR = "2026-07-24"
 #: The aligned date index the real indicators publish. An indicator that
 #: reported ``insufficient_data`` publishes an empty one, as it does in
 #: ``app/signals/technical.py``.
-_DATES = [
-    (_LAST_BAR - timedelta(days=_BAR_COUNT - 1 - i)).isoformat() for i in range(_BAR_COUNT)
-]
+_DATES = [(_LAST_BAR - timedelta(days=_BAR_COUNT - 1 - i)).isoformat() for i in range(_BAR_COUNT)]
 
 
 def _indicator(name: str, last: dict[str, float | None] | None) -> dict[str, Any]:
@@ -146,9 +144,7 @@ def uptrend_signals(**overrides: Any) -> dict[str, Any]:
 def write_rule_file(tmp_path: Path, payload: object, *, name: str = "custom.yaml") -> Path:
     """Dump ``payload`` as YAML into ``tmp_path`` and return the file path."""
     path = tmp_path / name
-    path.write_text(
-        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return path
 
 

@@ -143,9 +143,10 @@ def _disclosures(harness: ApiHarness, row: KellyInputRecord | None = None) -> di
     """
     if row is not None:
         harness.kelly_inputs.upsert(row)
-        if row.source != "manual" and harness.kelly_attempts.k_observed(
-            row.symbol, row.market
-        ) == 0:
+        if (
+            row.source != "manual"
+            and harness.kelly_attempts.k_observed(row.symbol, row.market) == 0
+        ):
             _attempt(harness, market=row.market)
     block: dict[str, Any] = _get(harness)["disclosures"]
     return block
@@ -227,9 +228,7 @@ def test_the_source_sentence_and_label_travel_together(
     source: str, statement: str, label: str, api_harness: ApiHarness
 ) -> None:
     """任務 4 (FR-6) + 條件 84: each source has both a sentence and a label."""
-    row = {"manual": _manual, "backtest_overridden": _overridden, "backtest": _imported}[
-        source
-    ]()
+    row = {"manual": _manual, "backtest_overridden": _overridden, "backtest": _imported}[source]()
 
     block = _disclosures(api_harness, row)
 
@@ -370,9 +369,7 @@ def test_the_missing_record_sentence_renders_no_count_at_all(
 
 
 @pytest.mark.parametrize("source", ["manual", "absent"])
-def test_the_fourth_cell_of_the_k_branch_stays_empty(
-    source: str, api_harness: ApiHarness
-) -> None:
+def test_the_fourth_cell_of_the_k_branch_stays_empty(source: str, api_harness: ApiHarness) -> None:
     """條件 98/100, cell 4 and the row-less screen: no (b) of any kind.
 
     A typed pair with no import history is the normal state, and a screen with
@@ -487,9 +484,7 @@ def test_an_unanchorable_row_reports_expired_with_no_age_to_render(
     body = _get(api_harness)
 
     assert body["kelly_input"]["age_days"] is None
-    assert body["disclosures"]["freshness_badge_label"] == (
-        wording.KELLY_FRESHNESS_BADGE_EXPIRED
-    )
+    assert body["disclosures"]["freshness_badge_label"] == (wording.KELLY_FRESHNESS_BADGE_EXPIRED)
 
 
 # ---------------------------------------------------------------------------
@@ -714,9 +709,7 @@ def test_the_dividend_row_carries_kellys_own_block(
     """條件 62: the four degraded codes take Kelly's block, not the backtester's."""
     symbol_path = "/api/kelly-inputs/2330/disclosures" + ("?market=US" if market == "US" else "")
     _attempt(api_harness, market=market)
-    api_harness.kelly_inputs.upsert(
-        _imported(market=market, dividend_reason_code=reason_code)
-    )
+    api_harness.kelly_inputs.upsert(_imported(market=market, dividend_reason_code=reason_code))
 
     block = _get(api_harness, symbol_path)["disclosures"]
     assert block is not None
@@ -741,9 +734,7 @@ def test_an_unknown_dividend_code_produces_no_row_at_all(api_harness: ApiHarness
 
 
 @pytest.mark.parametrize("source", ["manual", "backtest_overridden"])
-def test_the_sample_detail_is_shown_for_imports_only(
-    source: str, api_harness: ApiHarness
-) -> None:
+def test_the_sample_detail_is_shown_for_imports_only(source: str, api_harness: ApiHarness) -> None:
     """條件 42:「11 欄明細僅 source=='backtest' 顯示」.
 
     An overridden row showing it would put the imported sample beside hand-keyed
@@ -795,9 +786,7 @@ def test_the_original_values_view_carries_no_out_of_sample_field(
     either, or a front end could put it back on the screen without any backend
     change and without any of the sentences it obliges.
     """
-    original = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))[
-        "original_values"
-    ]
+    original = _disclosures(api_harness, _overridden(oos_end_date="2026-06-30"))["original_values"]
 
     assert [key for key in original if key.startswith("oos")] == []
     assert set(original) == {
@@ -816,9 +805,7 @@ def test_the_original_values_view_carries_no_out_of_sample_field(
 
 
 @pytest.mark.parametrize("source", ["backtest", "manual", "backtest_overridden"])
-def test_no_response_carries_the_revoked_period_label(
-    source: str, api_harness: ApiHarness
-) -> None:
+def test_no_response_carries_the_revoked_period_label(source: str, api_harness: ApiHarness) -> None:
     """第十三輪: the (任務 8) label was **revoked**, not shelved (E-12).
 
     With the view narrowed there is no surface for it, so the approval was
@@ -1008,9 +995,7 @@ def test_only_two_connector_shapes_are_used_and_neither_crosses_over(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "source", ["absent", "manual", "backtest", "backtest_overridden"]
-)
+@pytest.mark.parametrize("source", ["absent", "manual", "backtest", "backtest_overridden"])
 def test_the_import_trigger_label_is_present_in_all_four_cells(
     source: str, api_harness: ApiHarness
 ) -> None:
@@ -1208,9 +1193,7 @@ def test_the_delete_dialog_states_the_scope_the_store_actually_has(
     # entered, and (b) still standing on the attempts that survived.
     after = _get(api_harness)
     assert after["kelly_input"] is None
-    assert after["disclosures"]["freshness_badge_label"] == (
-        wording.KELLY_FRESHNESS_BADGE_ABSENT
-    )
+    assert after["disclosures"]["freshness_badge_label"] == (wording.KELLY_FRESHNESS_BADGE_ABSENT)
     assert after["disclosures"]["selection_bias"] == (
         wording.KELLY_SELECTION_BIAS_FULL.format(k_observed=2, k_distinct_specs=2)
     )

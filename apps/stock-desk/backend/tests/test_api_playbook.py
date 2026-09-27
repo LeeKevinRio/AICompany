@@ -152,9 +152,7 @@ def test_the_no_hit_sentence_is_only_sent_on_a_fully_evaluated_empty_day() -> No
 
 def test_the_no_hit_sentence_is_not_sent_when_the_ledger_has_lines() -> None:
     """有指令的一天沒有「未產生指令」這回事."""
-    with_lines = _evaluation(
-        directives=[_directive()], rules_fully_evaluated=True
-    )
+    with_lines = _evaluation(directives=[_directive()], rules_fully_evaluated=True)
 
     assert _to_response(with_lines).no_directive_note is None
 
@@ -342,9 +340,7 @@ def test_settle_moves_the_book_and_refuses_to_do_it_twice(
 ) -> None:
     """BLOCKING 修復：結算有生產呼叫點，且重放不重複扣減."""
     harness.store.ensure_batches(["2330"], batches_per_target=3)
-    harness.store.set_capital(
-        cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test"
-    )
+    harness.store.set_capital(cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test")
     _seed_symbol(harness, "2330", [100.0] * HISTORY)
     _log_a_pending_entry(harness, execution_date=date.today() - timedelta(days=1))
 
@@ -382,9 +378,7 @@ def test_today_settles_the_previous_day_before_building_the_table(
 ) -> None:
     """GET /today 開頭自動結算昨日待結指令（冪等）."""
     harness.store.ensure_batches(["2330"], batches_per_target=3)
-    harness.store.set_capital(
-        cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test"
-    )
+    harness.store.set_capital(cash=Decimal("1000000"), total_deploy=Decimal("0"), source="test")
     _seed_symbol(harness, "2330", [100.0] * HISTORY)
     _log_a_pending_entry(harness, execution_date=date.today() - timedelta(days=1))
 

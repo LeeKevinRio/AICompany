@@ -109,15 +109,9 @@ def test_the_advice_price_field_appears_in_no_playbook_instruction_payload() -> 
 
 def test_every_price_field_of_the_real_payloads_is_declared_in_the_table() -> None:
     """A new price column has to be classified, not just added."""
-    directive_prices = {
-        name
-        for name in Directive.model_fields
-        if name.endswith(_PRICE_SUFFIXES)
-    }
+    directive_prices = {name for name in Directive.model_fields if name.endswith(_PRICE_SUFFIXES)}
     snapshot_prices = {
-        name
-        for name in BatchSnapshot.model_fields
-        if name.endswith(_PRICE_SUFFIXES)
+        name for name in BatchSnapshot.model_fields if name.endswith(_PRICE_SUFFIXES)
     }
     assert directive_prices == set(DIRECTIVE_PRICE_FIELDS)
     assert snapshot_prices == set(SNAPSHOT_PRICE_FIELDS)

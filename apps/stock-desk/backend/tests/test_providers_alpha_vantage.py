@@ -308,9 +308,7 @@ def test_information_body_is_treated_as_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json={"Information": "This endpoint requires a premium key."}
-        )
+        return httpx.Response(200, json={"Information": "This endpoint requires a premium key."})
 
     ledger = QuotaLedger(db_path=tmp_path / "quota.db")
     adapter = _adapter_with_handler(
@@ -338,9 +336,7 @@ def test_non_200_http_status_is_unavailable(
     assert result.reason is not None and "HTTP 狀態" in result.reason
 
 
-def test_non_json_body_is_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_non_json_body_is_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not json at all")
 
@@ -395,9 +391,7 @@ def test_close_closes_a_self_constructed_client(
     adapter.close()  # must not raise
 
 
-def test_filters_bars_to_requested_range(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_filters_bars_to_requested_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = _fixture_json("alpha_vantage_daily_aapl.json")
 
     def handler(request: httpx.Request) -> httpx.Response:

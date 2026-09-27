@@ -44,8 +44,15 @@ def test_layer_and_indicator_toggles() -> None:
     bars = bars_from_closes([100.0 + i for i in range(60)])
     cfg = SignalConfig(
         enable_risk=False,
-        technical=TechnicalConfig(rsi=True, macd=False, moving_averages=False,
-                                  bollinger=False, atr=False, kd=False, volume_zscore=False),
+        technical=TechnicalConfig(
+            rsi=True,
+            macd=False,
+            moving_averages=False,
+            bollinger=False,
+            atr=False,
+            kd=False,
+            volume_zscore=False,
+        ),
     )
     out = compute_signals("X", bars, config=cfg)
     assert "risk" not in out
@@ -64,8 +71,16 @@ def test_no_recommendation_fields_present() -> None:
     # Red line: the signal surface must never emit advice/target-price semantics.
     bars = bars_from_closes([100.0 + i for i in range(60)])
     out = compute_signals("X", bars)
-    banned = {"target_price", "recommendation", "rating", "signal_action",
-              "buy", "sell", "action", "verdict"}
+    banned = {
+        "target_price",
+        "recommendation",
+        "rating",
+        "signal_action",
+        "buy",
+        "sell",
+        "action",
+        "verdict",
+    }
     flat = str(out).lower()
     for term in banned:
         assert term not in flat

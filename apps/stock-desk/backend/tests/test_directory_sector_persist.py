@@ -86,8 +86,14 @@ def _write_legacy_db(db_path: Path, rows: int) -> None:
             "INSERT INTO security_directory (symbol, market, name, source, as_of, synced_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             [
-                (f"{1000 + i}", "TW", f"舊資料公司{i}", "twse_openapi", AS_OF.isoformat(),
-                 AS_OF.isoformat())
+                (
+                    f"{1000 + i}",
+                    "TW",
+                    f"舊資料公司{i}",
+                    "twse_openapi",
+                    AS_OF.isoformat(),
+                    AS_OF.isoformat(),
+                )
                 for i in range(rows)
             ],
         )

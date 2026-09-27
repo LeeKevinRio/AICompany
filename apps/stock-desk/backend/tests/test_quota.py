@@ -105,9 +105,7 @@ def test_quota_date_uses_the_configured_reset_timezone(tmp_path: Path) -> None:
     )
     assert reservation.quota_date == "2026-07-27"
 
-    reservation_utc = ledger.reserve(
-        "alpha_vantage", limit_value=1, now=late_utc, reset_tz="UTC"
-    )
+    reservation_utc = ledger.reserve("alpha_vantage", limit_value=1, now=late_utc, reset_tz="UTC")
     assert reservation_utc.quota_date == "2026-07-26"
 
 
@@ -179,9 +177,7 @@ class TestResolveQuotaConfig:
         config = resolve_quota_config()
         assert config.effective_limit == 10 - config.safety_margin
 
-    def test_effective_limit_never_goes_negative(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_effective_limit_never_goes_negative(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(DAILY_LIMIT_ENV_VAR, "1")
         monkeypatch.setenv(SAFETY_MARGIN_ENV_VAR, "99")
         config = resolve_quota_config()
@@ -208,9 +204,7 @@ class TestResolveQuotaConfig:
         config = resolve_quota_config()
         assert config.min_interval_seconds > 0
 
-    def test_min_interval_seconds_is_read_from_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_min_interval_seconds_is_read_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(DAILY_LIMIT_ENV_VAR, "10")
         monkeypatch.setenv(MIN_INTERVAL_ENV_VAR, "3.5")
         config = resolve_quota_config()

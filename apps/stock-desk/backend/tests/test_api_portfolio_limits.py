@@ -194,9 +194,7 @@ def test_an_expired_net_worth_does_not_produce_a_silent_pass(
     api_harness.settings.save(
         current.model_copy(
             update={
-                "net_worth": NetWorthSettings(
-                    total_net_worth_twd=99_000_000.0, updated_at=stale
-                )
+                "net_worth": NetWorthSettings(total_net_worth_twd=99_000_000.0, updated_at=stale)
             }
         )
     )

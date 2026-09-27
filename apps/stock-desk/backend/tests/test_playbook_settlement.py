@@ -80,9 +80,7 @@ def _flat_with(day: date, value: float, *, base: float = 100.0) -> list[float]:
 
 
 def _fund(harness: Harness, *, cash: str = "1000000", deploy: str = "1000000") -> None:
-    harness.store.set_capital(
-        cash=Decimal(cash), total_deploy=Decimal(deploy), source="initial"
-    )
+    harness.store.set_capital(cash=Decimal(cash), total_deploy=Decimal(deploy), source="initial")
 
 
 def _entry_day(harness: Harness, closes: list[float]) -> None:

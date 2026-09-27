@@ -98,9 +98,7 @@ def test_events_are_returned_ascending_and_bounded_inclusively(tmp_path: Path) -
     store.upsert([_event("2330", day) for day in reversed(days)], synced_at=SYNCED_AT)
 
     assert [event.ex_date for event in store.events_for("2330", "TW")] == days
-    windowed = store.events_for(
-        "2330", "TW", start=date(2024, 3, 1), end=date(2024, 6, 17)
-    )
+    windowed = store.events_for("2330", "TW", start=date(2024, 3, 1), end=date(2024, 6, 17))
     assert [event.ex_date for event in windowed] == days[:2]
 
 

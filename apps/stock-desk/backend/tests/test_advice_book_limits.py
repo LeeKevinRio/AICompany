@@ -495,9 +495,9 @@ def test_an_empty_book_reports_every_cap_as_not_evaluable() -> None:
 def test_an_empty_book_says_there_is_nothing_to_judge_not_that_data_is_missing() -> None:
     checks = _by_id(evaluate_book_limits(book_summary(), BUDGET))
     for limit_id in ("single_position_weight", "sector_weight", "per_trade_loss"):
-        assert checks[limit_id].detail == EMPTY_BOOK_DETAIL.format(
-            name=checks[limit_id].name
-        ), limit_id
+        assert checks[limit_id].detail == EMPTY_BOOK_DETAIL.format(name=checks[limit_id].name), (
+            limit_id
+        )
         assert checks[limit_id].excluded == []
 
 

@@ -151,9 +151,7 @@ def test_factors_compound_across_two_events() -> None:
         float(Decimal("100.00") * f1 * f2), abs=1e-6
     )
     # Middle bar sits after the first event, before the second -> only f2.
-    assert float(adjustment.bars[1].close) == pytest.approx(
-        float(Decimal("104.00") * f2), abs=1e-6
-    )
+    assert float(adjustment.bars[1].close) == pytest.approx(float(Decimal("104.00") * f2), abs=1e-6)
     assert adjustment.bars[2].close == Decimal("110.00")
 
 

@@ -116,9 +116,7 @@ def test_today_blocks_until_the_rule_set_is_confirmed(harness: Harness) -> None:
 
 def test_confirming_lifts_the_block_and_records_the_capital(harness: Harness) -> None:
     """確認後: authorship 成立、資本落 timestamp+source、/today 不再阻斷."""
-    response = harness.client.post(
-        "/api/playbook/confirm-rules", json={"capital": "1000000"}
-    )
+    response = harness.client.post("/api/playbook/confirm-rules", json={"capital": "1000000"})
     assert response.status_code == 200
     body = response.json()
 
@@ -158,9 +156,7 @@ def test_deploy_ratio_pct_is_rendered_from_the_active_deploy_ratio(
     # (the ratio itself is never sent for this sentence) and no unit of its own.
     assert not body["deploy_ratio_pct"].startswith("0.")
     # 確認之後仍是同一支換算, 不會因為寫入而漂掉。
-    after = harness.client.post(
-        "/api/playbook/confirm-rules", json={"capital": "1000000"}
-    ).json()
+    after = harness.client.post("/api/playbook/confirm-rules", json={"capital": "1000000"}).json()
     assert after["deploy_ratio_pct"] == body["deploy_ratio_pct"]
 
 
@@ -174,9 +170,7 @@ def test_confirming_dates_the_rule_set_at_the_data_date_it_was_evaluated_on(
     set the user had just confirmed.
     """
     data_date = date.today() - timedelta(days=3)
-    harness.index.seed(
-        "^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=data_date)
-    )
+    harness.index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=data_date))
 
     confirmed = harness.client.post(
         "/api/playbook/confirm-rules", json={"capital": "1000000"}
@@ -194,9 +188,10 @@ def test_confirming_dates_the_rule_set_at_the_data_date_it_was_evaluated_on(
         )
         in body["page_summary"]
     )
-    assert wording.PAGE_SUMMARY_RULES_UNREADABLE.format(
-        version=body["rules_version"]
-    ) not in body["page_summary"]
+    assert (
+        wording.PAGE_SUMMARY_RULES_UNREADABLE.format(version=body["rules_version"])
+        not in body["page_summary"]
+    )
     # The 歸屬語 names the same date: one rule set, one 生效日 (禁推斷頂替).
     assert body["attribution"] == wording.ATTRIBUTION_NOTE.format(
         RULE_SET_DATE=data_date.isoformat()
@@ -205,12 +200,8 @@ def test_confirming_dates_the_rule_set_at_the_data_date_it_was_evaluated_on(
 
 def test_confirming_twice_adds_no_rule_version(harness: Harness) -> None:
     """冪等: 重複送出不會一次一版把規則集往前推, 資本仍逐次落檔."""
-    first = harness.client.post(
-        "/api/playbook/confirm-rules", json={"capital": "1000000"}
-    ).json()
-    second = harness.client.post(
-        "/api/playbook/confirm-rules", json={"capital": "1200000"}
-    ).json()
+    first = harness.client.post("/api/playbook/confirm-rules", json={"capital": "1000000"}).json()
+    second = harness.client.post("/api/playbook/confirm-rules", json={"capital": "1200000"}).json()
 
     assert second["rules_version"] == first["rules_version"] == 1
     assert second["rules_effective_date"] == first["rules_effective_date"]
@@ -238,9 +229,7 @@ def test_a_confirmation_cannot_carry_a_threshold_change(harness: Harness) -> Non
 @pytest.mark.parametrize("capital", ["0", "-1"])
 def test_a_non_positive_capital_is_refused(harness: Harness, capital: str) -> None:
     """資本額必須為正數: 0 或負數不是這套規則集能運作的帳本."""
-    response = harness.client.post(
-        "/api/playbook/confirm-rules", json={"capital": capital}
-    )
+    response = harness.client.post("/api/playbook/confirm-rules", json={"capital": capital})
 
     assert response.status_code == 422
     assert harness.store.rule_set_authorship(date.today()).user_authored is False

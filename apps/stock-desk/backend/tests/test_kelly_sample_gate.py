@@ -81,9 +81,7 @@ def test_the_total_gate_is_reported_before_the_one_sided_ones() -> None:
     assert review_sample(3, 1, 2).reason_code == "low_round_trips"
 
 
-@pytest.mark.parametrize(
-    ("win_rate", "payoff_ratio"), [(None, 1.8), (0.55, None), (None, None)]
-)
+@pytest.mark.parametrize(("win_rate", "payoff_ratio"), [(None, 1.8), (0.55, None), (None, None)])
 def test_a_missing_half_of_the_pair_is_refused(
     win_rate: float | None, payoff_ratio: float | None
 ) -> None:

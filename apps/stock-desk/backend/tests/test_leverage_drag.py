@@ -159,9 +159,7 @@ def test_theory_and_measurement_agree_in_sign_and_magnitude_when_sideways() -> N
         assert theory.measured_reset_effect is not None
         assert theory.theoretical_drag < 0.0
         assert theory.measured_reset_effect < 0.0
-        assert math.isclose(
-            theory.theoretical_drag, theory.measured_reset_effect, rel_tol=0.15
-        )
+        assert math.isclose(theory.theoretical_drag, theory.measured_reset_effect, rel_tol=0.15)
         assert theory.difference is not None
         assert math.isclose(
             theory.difference,

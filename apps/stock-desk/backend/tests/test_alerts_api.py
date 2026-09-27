@@ -32,9 +32,7 @@ def test_list_can_be_restricted_to_enabled_rules(api_harness: ApiHarness) -> Non
     api_harness.client.post("/api/alerts", json=price_rule(threshold=700.0))
     api_harness.client.post("/api/alerts", json=price_rule(threshold=800.0, enabled=False))
     all_rules = api_harness.client.get("/api/alerts").json()["items"]
-    enabled = api_harness.client.get(
-        "/api/alerts", params={"enabled_only": True}
-    ).json()["items"]
+    enabled = api_harness.client.get("/api/alerts", params={"enabled_only": True}).json()["items"]
     assert len(all_rules) == 2
     assert len(enabled) == 1
 
@@ -57,9 +55,7 @@ def test_params_must_match_the_declared_type(api_harness: ApiHarness) -> None:
 def test_signal_condition_rejects_a_field_outside_the_vocabulary(
     api_harness: ApiHarness,
 ) -> None:
-    response = api_harness.client.post(
-        "/api/alerts", json=signal_rule(field="moon_phase.last")
-    )
+    response = api_harness.client.post("/api/alerts", json=signal_rule(field="moon_phase.last"))
     assert response.status_code == 422
     assert "未知的欄位" in response.text
 
@@ -117,18 +113,14 @@ def test_patch_toggles_enabled_and_leaves_every_other_field_alone(
     assert updated["note"] == "原註記"
     assert updated["type"] == created["type"]
     # A disabled rule is skipped by the next tick.
-    assert api_harness.client.get(
-        "/api/alerts", params={"enabled_only": True}
-    ).json()["items"] == []
+    assert (
+        api_harness.client.get("/api/alerts", params={"enabled_only": True}).json()["items"] == []
+    )
 
 
 def test_patch_can_clear_a_note_only_when_asked_to(api_harness: ApiHarness) -> None:
-    created = api_harness.client.post(
-        "/api/alerts", json=price_rule(note="原註記")
-    ).json()
-    kept = api_harness.client.patch(
-        f"/api/alerts/{created['id']}", json={"note": None}
-    ).json()
+    created = api_harness.client.post("/api/alerts", json=price_rule(note="原註記")).json()
+    kept = api_harness.client.patch(f"/api/alerts/{created['id']}", json={"note": None}).json()
     assert kept["note"] == "原註記"
     cleared = api_harness.client.patch(
         f"/api/alerts/{created['id']}", json={"clear_note": True}
@@ -143,9 +135,7 @@ def test_clear_note_wins_over_a_note_sent_in_the_same_patch(
     # pinned here rather than left to whichever branch of ``apply_to`` runs
     # first: ``clear_note`` is the field that exists solely to answer "keep or
     # remove", so it decides, and a note sent beside it is ignored.
-    created = api_harness.client.post(
-        "/api/alerts", json=price_rule(note="原註記")
-    ).json()
+    created = api_harness.client.post("/api/alerts", json=price_rule(note="原註記")).json()
     response = api_harness.client.patch(
         f"/api/alerts/{created['id']}", json={"note": "新註記", "clear_note": True}
     )
@@ -159,9 +149,7 @@ def test_an_invalid_edit_is_422_and_changes_nothing(api_harness: ApiHarness) -> 
     # AC-1.3: no partial write; the stored rule keeps its old value.
     created = api_harness.client.post("/api/alerts", json=price_rule(threshold=1000.0)).json()
     responses = (
-        api_harness.client.put(
-            f"/api/alerts/{created['id']}", json=price_rule(threshold=-100.0)
-        ),
+        api_harness.client.put(f"/api/alerts/{created['id']}", json=price_rule(threshold=-100.0)),
         api_harness.client.patch(
             f"/api/alerts/{created['id']}", json={"params": {"threshold": -100.0}}
         ),
@@ -198,9 +186,7 @@ def test_a_type_switch_without_matching_params_is_422(api_harness: ApiHarness) -
     # PUT: the body itself is inconsistent.
     payload = price_rule(threshold=1000.0)
     payload["type"] = "signal_condition"
-    assert (
-        api_harness.client.put(f"/api/alerts/{created['id']}", json=payload).status_code == 422
-    )
+    assert api_harness.client.put(f"/api/alerts/{created['id']}", json=payload).status_code == 422
     # PATCH: the *merged* rule is inconsistent, which is only visible after the
     # merge -- the stored params still belong to the old type.
     response = api_harness.client.patch(
@@ -213,9 +199,7 @@ def test_a_type_switch_without_matching_params_is_422(api_harness: ApiHarness) -
 
 def test_patch_rejects_an_unknown_field(api_harness: ApiHarness) -> None:
     created = api_harness.client.post("/api/alerts", json=price_rule()).json()
-    response = api_harness.client.patch(
-        f"/api/alerts/{created['id']}", json={"threshold": 900.0}
-    )
+    response = api_harness.client.patch(f"/api/alerts/{created['id']}", json={"threshold": 900.0})
     assert response.status_code == 422
 
 
@@ -266,9 +250,7 @@ def test_the_manual_tick_hands_cap_5_the_stored_pair(
     """
     _seed_market(api_harness)
     api_harness.client.post("/api/alerts", json=price_rule(threshold=100.0))
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0})
 
     pairs: list[object] = []
 
@@ -303,9 +285,9 @@ def test_events_can_be_filtered_by_acknowledgement(api_harness: ApiHarness) -> N
     api_harness.client.post("/api/alerts/evaluate")
     event_id = api_harness.client.get("/api/alerts/events").json()["items"][0]["id"]
 
-    unack = api_harness.client.get(
-        "/api/alerts/events", params={"unacknowledged": True}
-    ).json()["items"]
+    unack = api_harness.client.get("/api/alerts/events", params={"unacknowledged": True}).json()[
+        "items"
+    ]
     assert len(unack) == 1
 
     acked = api_harness.client.post(f"/api/alerts/events/{event_id}/ack").json()
@@ -313,16 +295,16 @@ def test_events_can_be_filtered_by_acknowledgement(api_harness: ApiHarness) -> N
     assert acked["acknowledged_at"] is not None
 
     assert (
-        api_harness.client.get(
-            "/api/alerts/events", params={"unacknowledged": True}
-        ).json()["items"]
+        api_harness.client.get("/api/alerts/events", params={"unacknowledged": True}).json()[
+            "items"
+        ]
         == []
     )
     assert (
         len(
-            api_harness.client.get(
-                "/api/alerts/events", params={"unacknowledged": False}
-            ).json()["items"]
+            api_harness.client.get("/api/alerts/events", params={"unacknowledged": False}).json()[
+                "items"
+            ]
         )
         == 1
     )

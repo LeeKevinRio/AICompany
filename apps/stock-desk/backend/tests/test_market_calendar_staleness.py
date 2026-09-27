@@ -143,9 +143,7 @@ def test_a_calendar_that_observed_nothing_is_unknown(tmp_path: Path) -> None:
 
 def test_no_last_bar_date_is_unknown(tmp_path: Path) -> None:
     assert (
-        trading_days_behind_market(
-            _cache(tmp_path), market="TW", last_bar_date=None, today=MONDAY
-        )
+        trading_days_behind_market(_cache(tmp_path), market="TW", last_bar_date=None, today=MONDAY)
         is None
     )
 

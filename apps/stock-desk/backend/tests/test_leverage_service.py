@@ -90,11 +90,14 @@ def test_full_chapter_is_ok_and_carries_every_block() -> None:
 
 def test_chapter_numbers_reproduce_the_decomposition_identity() -> None:
     drag = _chapter()["drag"]
-    assert abs(
-        drag["actual_return"]
-        - drag["naive_expected_return"]
-        - (drag["fee_effect"] + drag["reset_effect"] + drag["residual"])
-    ) < 1e-12
+    assert (
+        abs(
+            drag["actual_return"]
+            - drag["naive_expected_return"]
+            - (drag["fee_effect"] + drag["reset_effect"] + drag["residual"])
+        )
+        < 1e-12
+    )
     # Sideways index, 2x fund: the whole shortfall is mechanical, not directional.
     assert abs(drag["index_return"]) < 1e-12
     assert drag["reset_effect"] < 0.0
@@ -249,9 +252,7 @@ def test_blocks_can_be_switched_off() -> None:
     assert chapter["erosion"]["status"] == "ok"
     assert chapter["chapter_status"] == "partial"
 
-    both_off = _chapter(
-        config=S.LeverageChapterConfig(enable_drag=False, enable_erosion=False)
-    )
+    both_off = _chapter(config=S.LeverageChapterConfig(enable_drag=False, enable_erosion=False))
     assert both_off["chapter_status"] == "insufficient_data"
 
 

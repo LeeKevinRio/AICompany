@@ -52,9 +52,7 @@ def test_a_manual_input_anchors_on_its_write_stamp() -> None:
 
 def test_an_imported_input_anchors_on_the_end_of_its_segment() -> None:
     """Not on the run time: a re-run of an old window must not look fresh."""
-    row = _row(
-        source="backtest", oos_end_date="2026-06-30", updated_at=_NOW - timedelta(hours=1)
-    )
+    row = _row(source="backtest", oos_end_date="2026-06-30", updated_at=_NOW - timedelta(hours=1))
 
     ageing = ageing_of(row, now=_NOW)
 

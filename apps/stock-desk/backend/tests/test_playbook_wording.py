@@ -28,9 +28,7 @@ from tests import playbook_helpers as helper
 
 #: Digits that belong to a *name* rather than to a threshold: the rule ids
 #: themselves, the indicator names and the fractions the rule set writes out.
-_NAME_TOKENS = tuple(
-    sorted((*wording.RULE_TEXT, "BIAS25", "25MA", "1/3"), key=len, reverse=True)
-)
+_NAME_TOKENS = tuple(sorted((*wording.RULE_TEXT, "BIAS25", "25MA", "1/3"), key=len, reverse=True))
 
 #: A second parameter set with every threshold moved somewhere it could not be
 #: confused with a default. If a literal survived in a sentence, rendering with
@@ -205,8 +203,7 @@ def test_the_exit_confirmation_has_four_checks_and_no_fast_market_note() -> None
     checks = wording.exit_confirm_checks(freeze_days=20, freeze_until=date(2026, 9, 9))
     assert len(checks) == 4
     assert checks[1] == (
-        "送出後，R 系列（新倉進場）暫停 20 個交易日"
-        "（預計恢復日：2026-09-09，依交易日曆計算）。"
+        "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-09，依交易日曆計算）。"
     )
     assert checks[2] == (
         "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。"
@@ -269,9 +266,7 @@ def test_the_attribution_names_the_user_and_the_rule_set_date() -> None:
     note = wording.attribution_note(
         RuleSetAuthorship(user_authored=True, version=3, rule_set_date=date(2026, 1, 1))
     )
-    assert note == (
-        "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。"
-    )
+    assert note == ("此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。")
 
 
 def test_an_unreadable_rule_set_date_uses_the_one_permitted_status_string() -> None:
@@ -345,16 +340,12 @@ def test_the_unconfirmed_mode_label_does_not_read_as_a_disabled_module() -> None
 
 def test_a_missing_volatility_is_stated_never_rendered_as_a_dash() -> None:
     """定稿: vol 不可得時禁「—%」，改說本次未採用波動率門檻."""
-    note = wording.fast_market_note(
-        vol=None, lookback=5, moves=3, move_pct=Decimal("2")
-    )
+    note = wording.fast_market_note(vol=None, lookback=5, moves=3, move_pct=Decimal("2"))
     assert "—" not in note
     assert "20 日年化波動率資料暫缺，本次未採用波動率門檻" in note
     assert "近 5 交易日有 3 日 |漲跌幅| ≥2%" in note
     assert "快市期間規則不放寬。" in note
-    reason = wording.fast_market_reason(
-        vol=None, lookback=5, moves=3, move_pct=Decimal("2")
-    )
+    reason = wording.fast_market_reason(vol=None, lookback=5, moves=3, move_pct=Decimal("2"))
     assert "—" not in reason
 
 
@@ -368,9 +359,7 @@ def test_the_index_gap_note_does_not_claim_a_deferral_by_itself() -> None:
 
 def test_a_held_symbol_says_its_stop_loss_could_not_be_evaluated() -> None:
     """S-2: 資料缺漏致停損無法評估須主動顯著揭露，不得靜默."""
-    note = wording.DATA_GAP_HOLDING_NOTE.format(
-        symbol="2330", status="unavailable", source="none"
-    )
+    note = wording.DATA_GAP_HOLDING_NOTE.format(symbol="2330", status="unavailable", source="none")
     assert note.startswith("【停損今日無法評估】")
     assert "本檔目前持有部位" in note
 
@@ -431,9 +420,7 @@ def test_the_exit_no_band_note_is_not_the_stop_loss_sentence() -> None:
 
 def test_the_calendar_helper_is_the_one_used_by_the_counter() -> None:
     """凍結第 N 日是交易日曆算出來的，不是日曆天."""
-    calendar = TradingCalendar(
-        {date(2026, 8, 11), date(2026, 8, 12), date(2026, 8, 13)}
-    )
+    calendar = TradingCalendar({date(2026, 8, 11), date(2026, 8, 12), date(2026, 8, 13)})
     assert (
         emergency_frozen_day(
             calendar=calendar,

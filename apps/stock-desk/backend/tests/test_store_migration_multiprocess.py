@@ -155,9 +155,7 @@ def test_two_real_processes_migrating_the_same_legacy_database_both_survive(
 
     # Both migrations finished exactly once, whoever won each of them.
     with closing(sqlite3.connect(db_path)) as conn:
-        position_columns = [
-            column[1] for column in conn.execute("PRAGMA table_info(positions)")
-        ]
+        position_columns = [column[1] for column in conn.execute("PRAGMA table_info(positions)")]
         opened_at_not_null = any(
             column[1] == "opened_at" and column[3]
             for column in conn.execute("PRAGMA table_info(positions)").fetchall()

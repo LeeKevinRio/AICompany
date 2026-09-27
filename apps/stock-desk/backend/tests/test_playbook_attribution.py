@@ -57,9 +57,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     index = FakePriceService()
     index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=SERIES_END))
     store.ensure_batches(["2330"], batches_per_target=3)
-    store.set_capital(
-        cash=Decimal("1000000"), total_deploy=Decimal("1000000"), source="initial"
-    )
+    store.set_capital(cash=Decimal("1000000"), total_deploy=Decimal("1000000"), source="initial")
     yield Harness(
         service=PlaybookService(
             store=store,
@@ -127,9 +125,7 @@ def test_a_held_position_is_disclosed_while_the_rule_set_is_unconfirmed(
     evaluation = harness.service.evaluate_today(today=TUESDAY)
 
     assert evaluation.directives == []
-    assert evaluation.warnings == [
-        wording.UNAUTHORED_HOLDING_NOTE.format(symbols="2330、2454")
-    ]
+    assert evaluation.warnings == [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="2330、2454")]
     # {symbols} 全列不截斷：每一檔持倉都要看得到。
     assert "2330" in evaluation.warnings[0] and "2454" in evaluation.warnings[0]
     # 僅存在性檢查：不載行情、不留痕。
@@ -145,9 +141,7 @@ def test_a_book_with_nothing_left_to_sell_carries_no_holding_disclosure(
     _hold_a_batch(harness.store)
     batch = harness.store.get_batch("2330", 1)
     assert batch is not None
-    harness.store.save_batch(
-        batch.model_copy(update={"status": "closed", "remaining_shares": 0})
-    )
+    harness.store.save_batch(batch.model_copy(update={"status": "closed", "remaining_shares": 0}))
 
     evaluation = harness.service.evaluate_today(today=TUESDAY)
 

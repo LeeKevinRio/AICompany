@@ -276,9 +276,7 @@ def test_the_unsupported_market_cause_never_ships_without_its_residual_disclosur
     # Same construction as R-D6-1: the two sentences are one constant, in a
     # fixed order, and the mapping every caller reads holds only the
     # concatenated form -- so no reachable string carries the cause alone.
-    assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL.startswith(
-        NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL
-    )
+    assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL.startswith(NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL)
     assert NO_SECTOR_UNSUPPORTED_MARKET_DETAIL.endswith(
         NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
     )
@@ -296,9 +294,7 @@ def test_the_unsupported_market_residual_is_its_own_constant_not_the_etf_one() -
     # 風控落地條件 (2026-08-19): the two residual sentences must not share a
     # constant -- each is pinned verbatim by its own test, so neither can be
     # edited through the other. Their subjects differ ("此持倉" vs "此 ETF").
-    assert (
-        NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL != NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL
-    )
+    assert NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL != NO_SECTOR_ETF_RESIDUAL_RISK_DETAIL
     assert "此持倉" in NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
     assert "此 ETF" not in NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL
 
@@ -510,10 +506,7 @@ def test_reported_at_is_converted_to_taipei_and_labelled() -> None:
     # A real conversion: 15:51 UTC is 23:51 the same day in Taipei. Labelled,
     # because an unlabelled local time reads exactly like an unconverted UTC
     # one and the two are eight hours apart.
-    assert (
-        format_reported_at("2026-08-05T15:51:56.015754+00:00")
-        == "2026-08-05 23:51（台北時間）"
-    )
+    assert format_reported_at("2026-08-05T15:51:56.015754+00:00") == "2026-08-05 23:51（台北時間）"
 
 
 def test_reported_at_crossing_midnight_moves_the_date_too() -> None:
@@ -732,9 +725,7 @@ def test_the_source_literal_matches_the_stored_one() -> None:
     assert set(get_args(KellyInputSource)) == set(get_args(kelly_models.KellySource))
 
 
-@pytest.mark.parametrize(
-    ("age_days", "anchored_at"), [(30, None), (None, "2026-06-30")]
-)
+@pytest.mark.parametrize(("age_days", "anchored_at"), [(30, None), (None, "2026-06-30")])
 def test_an_age_without_an_anchor_is_not_a_constructible_state(
     age_days: int | None, anchored_at: str | None
 ) -> None:
@@ -823,9 +814,7 @@ def test_an_expired_overridden_pair_gets_g_overridden_verbatim() -> None:
     """
     check = _check(
         _ctx(
-            kelly=kelly_inputs(
-                source="backtest_overridden", age_days=31, anchored_at="2026-07-01"
-            )
+            kelly=kelly_inputs(source="backtest_overridden", age_days=31, anchored_at="2026-07-01")
         ),
         "kelly_fraction",
     )
@@ -850,9 +839,12 @@ def test_the_overridden_cell_no_longer_borrows_the_plain_backtest_sentence() -> 
         _ctx(kelly=kelly_inputs(source="backtest_overridden", age_days=31)), "kelly_fraction"
     ).detail
 
-    assert wording.KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED.format(
-        anchored_on="2026-07-24", age_days=31, days=KELLY_STALE_AFTER_DAYS
-    ) != detail
+    assert (
+        wording.KELLY_NOT_EVALUABLE_BACKTEST_EXPIRED.format(
+            anchored_on="2026-07-24", age_days=31, days=KELLY_STALE_AFTER_DAYS
+        )
+        != detail
+    )
     assert "（來源：回測帶入）" not in detail
     assert "已手動調整" in detail
 
@@ -1024,9 +1016,7 @@ def test_the_anchor_is_a_plain_date_and_never_an_iso_datetime() -> None:
 
 def test_the_boundary_day_expires_and_the_day_before_it_does_not() -> None:
     """``>=`` at the window, the same direction every other cap breaches in."""
-    inside = _check(
-        _ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS - 1)), "kelly_fraction"
-    )
+    inside = _check(_ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS - 1)), "kelly_fraction")
     outside = _check(_ctx(kelly=kelly_inputs(age_days=KELLY_STALE_AFTER_DAYS)), "kelly_fraction")
 
     assert inside.status != "not_evaluable"
@@ -1280,9 +1270,7 @@ def test_cap_5_is_never_the_binding_cap_on_a_sell_side_range(action: str) -> Non
 
 def test_a_positive_edge_carries_no_zero_allowance_sentence() -> None:
     """The sentence states a finding; a cap that did size something has none."""
-    quantity = suggest_quantity_range(
-        BUDGET, _ctx(kelly=kelly_inputs(0.6, 2.0)), action="add"
-    )
+    quantity = suggest_quantity_range(BUDGET, _ctx(kelly=kelly_inputs(0.6, 2.0)), action="add")
 
     assert quantity is not None
     assert wording.KELLY_ZERO_ALLOWANCE_RANGE_NOTE not in quantity.basis
@@ -1434,9 +1422,10 @@ def test_limit_status_after_projects_the_whole_book() -> None:
     assert after.sector_market_value_twd == pytest.approx(300_000.0)
     # Equity is untouched: a market-price trade swaps cash for shares.
     assert after.total_equity_twd == ctx.total_equity_twd
-    assert limit_status_after(
-        BUDGET, ctx, limit_id="single_position_weight", share_delta=1_000.0
-    ) == "violated"
+    assert (
+        limit_status_after(BUDGET, ctx, limit_id="single_position_weight", share_delta=1_000.0)
+        == "violated"
+    )
 
 
 def test_selling_everything_is_the_floor_when_nothing_else_clears_the_cap() -> None:
@@ -1732,14 +1721,10 @@ def test_sizing_requires_an_explicit_pass_not_merely_a_non_violation() -> None:
     # helper must report that as "not a pass".
     blind = ctx.model_copy(update={"total_equity_twd": None})
     assert (
-        limits.limit_status_after(
-            BUDGET, blind, limit_id="single_position_weight", share_delta=1.0
-        )
+        limits.limit_status_after(BUDGET, blind, limit_id="single_position_weight", share_delta=1.0)
         == "not_evaluable"
     )
-    assert not limits._passes(
-        BUDGET, blind, binding_id="single_position_weight", share_delta=1.0
-    )
+    assert not limits._passes(BUDGET, blind, binding_id="single_position_weight", share_delta=1.0)
 
 
 def test_reduce_range_is_none_for_a_compliant_position() -> None:

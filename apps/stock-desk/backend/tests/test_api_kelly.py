@@ -99,17 +99,13 @@ def test_a_win_rate_outside_the_open_unit_interval_is_a_422(
     # ``detail[].msg`` is what the front end renders, and pydantic's default
     # wrapping put an English 「Value error, 」 in front of a sentence that was
     # signed off character for character.
-    assert _range_message(response) == KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE.format(
-        value=win_rate
-    )
+    assert _range_message(response) == KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE.format(value=win_rate)
     assert not _range_message(response).startswith("Value error")
     assert api_harness.kelly_inputs.get("2330", "TW") is None
 
 
 @pytest.mark.parametrize("payoff_ratio", [0.0, -1.5])
-def test_a_non_positive_payoff_ratio_is_a_422(
-    api_harness: ApiHarness, payoff_ratio: float
-) -> None:
+def test_a_non_positive_payoff_ratio_is_a_422(api_harness: ApiHarness, payoff_ratio: float) -> None:
     response = api_harness.client.put(
         "/api/kelly-inputs/2330", json={"win_rate": 0.55, "payoff_ratio": payoff_ratio}
     )
@@ -269,9 +265,7 @@ def test_a_manual_input_ages_from_its_write_stamp(
     api_harness: ApiHarness, age_days: int, expected: str
 ) -> None:
     api_harness.kelly_inputs.upsert(
-        KellyInputRecord.manual(
-            symbol="2330", market="TW", win_rate=0.55, payoff_ratio=1.8
-        ),
+        KellyInputRecord.manual(symbol="2330", market="TW", win_rate=0.55, payoff_ratio=1.8),
         now=datetime.now(UTC) - timedelta(days=age_days),
     )
 
@@ -284,9 +278,7 @@ def test_a_manual_input_ages_from_its_write_stamp(
 def test_an_expired_input_is_still_returned(api_harness: ApiHarness) -> None:
     """Entered long ago and never entered are different states."""
     api_harness.kelly_inputs.upsert(
-        KellyInputRecord.manual(
-            symbol="2330", market="TW", win_rate=0.55, payoff_ratio=1.8
-        ),
+        KellyInputRecord.manual(symbol="2330", market="TW", win_rate=0.55, payoff_ratio=1.8),
         now=datetime.now(UTC) - timedelta(days=400),
     )
 
@@ -384,9 +376,7 @@ def test_the_no_edge_flag_is_true_only_when_the_interval_reaches_zero(
 
 def test_a_row_with_no_interval_at_all_is_not_flagged(api_harness: ApiHarness) -> None:
     """Every manual pair. The flag reports a finding, not the absence of one."""
-    api_harness.kelly_inputs.upsert(
-        _row(source="manual", oos_end_date=None, strategy_id=None)
-    )
+    api_harness.kelly_inputs.upsert(_row(source="manual", oos_end_date=None, strategy_id=None))
 
     assert ci_includes_no_edge(_stored(api_harness, "2330")) is False
 

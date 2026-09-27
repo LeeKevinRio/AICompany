@@ -104,9 +104,7 @@ def _chapters() -> list[dict[str, Any]]:
         opened_at: date = date(2024, 1, 1),
     ) -> dict[str, Any]:
         return S.build_leverage_chapter(
-            make_position(
-                symbol=symbol, instrument_type=instrument_type, opened_at=opened_at
-            ),
+            make_position(symbol=symbol, instrument_type=instrument_type, opened_at=opened_at),
             bars(etf_closes, symbol=symbol),
             index_bars if with_index else None,
         )

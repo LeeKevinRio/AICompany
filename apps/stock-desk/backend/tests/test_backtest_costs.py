@@ -64,18 +64,17 @@ def test_slippage_is_symmetric_and_additive() -> None:
 
 
 def test_zero_notional_costs_nothing() -> None:
-    assert CostModel().trade_cost(
-        notional=0.0, side="buy", market="TW", instrument_type="stock"
-    ) == 0.0
+    assert (
+        CostModel().trade_cost(notional=0.0, side="buy", market="TW", instrument_type="stock")
+        == 0.0
+    )
 
 
 def test_rates_are_configurable_not_baked_in() -> None:
     # Overriding a default must flow straight through (proves rates live on the
     # settings object, ready for data-engineer to correct once verified).
     model = CostModel(tw_broker_fee_rate=0.001, tw_tax_rate_stock=0.0015)
-    cost = model.trade_cost(
-        notional=NOTIONAL, side="sell", market="TW", instrument_type="stock"
-    )
+    cost = model.trade_cost(notional=NOTIONAL, side="sell", market="TW", instrument_type="stock")
     assert math.isclose(cost, 100.0 + 150.0, abs_tol=TOL)
 
 

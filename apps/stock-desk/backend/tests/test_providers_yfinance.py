@@ -310,9 +310,7 @@ class TestFetchErrorBranches:
                 200,
                 json={
                     "chart": {
-                        "result": [
-                            {"timestamp": [1704205800], "indicators": {"quote": "nope"}}
-                        ],
+                        "result": [{"timestamp": [1704205800], "indicators": {"quote": "nope"}}],
                         "error": None,
                     }
                 },

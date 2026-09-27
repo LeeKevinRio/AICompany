@@ -89,9 +89,7 @@ def test_hard_ceilings_survive_the_settings_page(api_harness: ApiHarness) -> Non
             "/api/settings", json={"risk_budget": {field: ceiling + 0.01}}
         )
         assert response.status_code == 422
-        errors = [
-            err for err in response.json()["detail"] if tuple(err["loc"])[-1:] == (field,)
-        ]
+        errors = [err for err in response.json()["detail"] if tuple(err["loc"])[-1:] == (field,)]
         assert errors, response.json()
         assert f"{ceiling:.2f}" in errors[0]["msg"]
         assert "硬性上界" in errors[0]["msg"]
@@ -441,9 +439,7 @@ def test_reading_the_settings_page_prices_nothing(api_harness: ApiHarness) -> No
 
 def _quota_block(harness: ApiHarness) -> dict[str, Any]:
     quotas = harness.client.get("/api/settings").json()["data_sources"]["quotas"]
-    block: dict[str, Any] = next(
-        block for block in quotas if block["provider"] == "alpha_vantage"
-    )
+    block: dict[str, Any] = next(block for block in quotas if block["provider"] == "alpha_vantage")
     return block
 
 

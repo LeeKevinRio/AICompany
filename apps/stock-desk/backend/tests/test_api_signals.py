@@ -19,9 +19,7 @@ def _seed_benchmark(harness: ApiHarness, count: int = 200) -> None:
     makes beta undefined, which would test the wrong branch.
     """
     series = MARKET_BENCHMARK["TW"].series_symbol
-    harness.index_service.seed(
-        series, recent_bars(oscillating_closes(count), symbol=series)
-    )
+    harness.index_service.seed(series, recent_bars(oscillating_closes(count), symbol=series))
 
 
 def test_signals_returns_the_compute_signals_shape(api_harness: ApiHarness) -> None:

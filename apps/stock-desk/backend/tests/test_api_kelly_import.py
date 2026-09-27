@@ -154,9 +154,7 @@ def test_an_import_stores_the_pair_the_server_computed(api_harness: ApiHarness) 
     assert 0.0 < item["win_rate"] < 1.0
     assert item["payoff_ratio"] > 0.0
     # p is the share of round trips that made money, by construction.
-    assert item["win_rate"] == pytest.approx(
-        item["oos_win_trips"] / item["oos_round_trips"]
-    )
+    assert item["win_rate"] == pytest.approx(item["oos_win_trips"] / item["oos_round_trips"])
 
 
 def test_the_sample_that_cleared_the_gate_is_the_one_that_was_stored(
@@ -310,9 +308,7 @@ def test_the_stored_fraction_is_the_one_the_injected_formula_produces(
 
     item = _import(api_harness).json()["item"]
 
-    assert item["f_star"] == pytest.approx(
-        kelly_fraction(item["win_rate"], item["payoff_ratio"])
-    )
+    assert item["f_star"] == pytest.approx(kelly_fraction(item["win_rate"], item["payoff_ratio"]))
     assert item["f_star_ci_low"] <= item["f_star"] <= item["f_star_ci_high"]
     assert item["p_ci_low"] <= item["win_rate"] <= item["p_ci_high"]
 
@@ -338,9 +334,7 @@ def test_an_import_replaces_a_hand_entered_row_with_the_measured_one(
     api_harness: ApiHarness,
 ) -> None:
     _seed(api_harness, _CLEARS_GATE)
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.9, "payoff_ratio": 9.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.9, "payoff_ratio": 9.0})
 
     item = _import(api_harness).json()["item"]
 
@@ -878,9 +872,7 @@ def test_no_refusal_claims_the_attempt_record_is_missing(
     """
     detail = _refuse_with(code, api_harness, monkeypatch)
 
-    assert kelly_wording.KELLY_SELECTION_BIAS_UNLOGGED not in json.dumps(
-        detail, ensure_ascii=False
-    )
+    assert kelly_wording.KELLY_SELECTION_BIAS_UNLOGGED not in json.dumps(detail, ensure_ascii=False)
     assert detail["k_observed"] >= 1
     assert detail["attempt_logged"] == kelly_wording.KELLY_REFUSAL_ATTEMPT_LOGGED
 

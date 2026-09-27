@@ -46,19 +46,13 @@ def _position(
 
 
 class _FakePriceService(PriceService):
-    def __init__(
-        self, close: str | None, *, status: DataStatus = DataStatus.FRESH
-    ) -> None:
+    def __init__(self, close: str | None, *, status: DataStatus = DataStatus.FRESH) -> None:
         self._close = close
         self._status = status
 
-    def get_daily_bars(
-        self, symbol: str, market: Market, start: date, end: date
-    ) -> ProviderResult:
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         if self._close is None:
-            return ProviderResult(
-                bars=[], status=DataStatus.UNAVAILABLE, as_of=NOW, source="fake"
-            )
+            return ProviderResult(bars=[], status=DataStatus.UNAVAILABLE, as_of=NOW, source="fake")
         bar = PriceBar(
             symbol=symbol,
             market=market,
@@ -72,9 +66,7 @@ class _FakePriceService(PriceService):
             as_of=NOW,
             source="fake",
         )
-        return ProviderResult(
-            bars=[bar], status=self._status, as_of=NOW, source="fake"
-        )
+        return ProviderResult(bars=[bar], status=self._status, as_of=NOW, source="fake")
 
     def get_cached_bars(
         self, symbol: str, market: Market, start: date, end: date
@@ -101,9 +93,7 @@ class _FakeFxProvider(FxRateProvider):
             return FxRateResult(
                 rates=[], status=DataStatus.UNAVAILABLE, as_of=NOW, source="fake_fx"
             )
-        return FxRateResult(
-            rates=rates, status=DataStatus.FRESH, as_of=NOW, source="fake_fx"
-        )
+        return FxRateResult(rates=rates, status=DataStatus.FRESH, as_of=NOW, source="fake_fx")
 
 
 def _valuator(
@@ -135,9 +125,7 @@ def test_us_market_without_adapter_is_missing_price() -> None:
 def test_tw_position_has_zero_fx_contribution_and_is_ok() -> None:
     services: dict[Market, PriceService] = {"TW": _FakePriceService("550")}
     valuator = _valuator(services=services, fx={})
-    position = _position(
-        market="TW", currency="TWD", avg_cost="500", quantity="100", symbol="2330"
-    )
+    position = _position(market="TW", currency="TWD", avg_cost="500", quantity="100", symbol="2330")
     result = valuator.value_position(position)
     assert result.valuation.status == "ok"
     assert result.valuation.missing == []

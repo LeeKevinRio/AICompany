@@ -171,9 +171,7 @@ def test_the_advice_endpoint_hands_cap_5_the_pair_it_has_stored(
     monkeypatch.setattr(advice_module, "build_book_context", recorder)
     api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
     api_harness.client.post("/api/positions", json=position_payload())
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0})
 
     assert api_harness.client.get("/api/advice/2330").json()["status"] == "ok"
 
@@ -192,9 +190,7 @@ def test_the_portfolio_limits_endpoint_hands_each_holding_its_own_pair(
     monkeypatch.setattr(book_limits_module, "build_book_context", recorder)
     api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
     api_harness.client.post("/api/positions", json=position_payload())
-    api_harness.client.put(
-        "/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0}
-    )
+    api_harness.client.put("/api/kelly-inputs/2330", json={"win_rate": 0.6, "payoff_ratio": 2.0})
 
     assert api_harness.client.get("/api/portfolio/limits").status_code == 200
 

@@ -231,9 +231,7 @@ def test_backfill_on_an_unsynced_directory_changes_nothing(tmp_path: Path) -> No
     _add(positions, symbol="2330")
     empty_directory = SecurityDirectoryStore(db_path=tmp_path / "empty.db")
 
-    report = backfill_position_sectors(
-        position_store=positions, directory_store=empty_directory
-    )
+    report = backfill_position_sectors(position_store=positions, directory_store=empty_directory)
 
     assert report.filled == ()
     assert report.skipped_not_in_directory == 1

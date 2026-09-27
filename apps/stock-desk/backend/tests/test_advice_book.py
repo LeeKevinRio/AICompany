@@ -245,9 +245,7 @@ def test_an_expired_net_worth_is_not_described_as_the_current_denominator() -> N
     assert "not_evaluable" in note
     assert "為分子" not in note
     # And the cap agrees with the note.
-    check = next(
-        c for c in evaluate_limits(RiskBudget(), book.context) if c.id == "gross_exposure"
-    )
+    check = next(c for c in evaluate_limits(RiskBudget(), book.context) if c.id == "gross_exposure")
     assert check.status == "not_evaluable"
 
 
@@ -311,9 +309,7 @@ def test_self_reported_net_worth_is_withheld_when_it_cannot_be_trusted() -> None
 
 def test_a_future_timestamp_is_not_a_negative_age() -> None:
     now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
-    reported = self_reported_net_worth(
-        2_000_000.0, (now + timedelta(days=3)).isoformat(), now=now
-    )
+    reported = self_reported_net_worth(2_000_000.0, (now + timedelta(days=3)).isoformat(), now=now)
     assert reported is not None
     assert reported.age_days == 0
 
@@ -704,9 +700,7 @@ def test_no_default_rate_literal_lurks_in_the_conversion_path() -> None:
 
 
 def test_atr_is_passed_through_when_supplied() -> None:
-    book = build_book_context(
-        _summary(_position(1, "2330")), symbol="2330", close=600.0, atr=12.5
-    )
+    book = build_book_context(_summary(_position(1, "2330")), symbol="2330", close=600.0, atr=12.5)
     assert book.context.atr == 12.5
 
 

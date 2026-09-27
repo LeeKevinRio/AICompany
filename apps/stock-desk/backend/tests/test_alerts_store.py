@@ -80,9 +80,7 @@ def test_last_triggered_at_drives_the_cooldown(store: AlertStore) -> None:
     rule = add_rule(store, price_rule())
     assert store.last_triggered_at(rule.id) is None
     store.append_event(rule=rule, message="x", observed={}, triggered_at=_NOW)
-    store.append_event(
-        rule=rule, message="y", observed={}, triggered_at=_NOW + timedelta(hours=2)
-    )
+    store.append_event(rule=rule, message="y", observed={}, triggered_at=_NOW + timedelta(hours=2))
     assert store.last_triggered_at(rule.id) == _NOW + timedelta(hours=2)
 
 
