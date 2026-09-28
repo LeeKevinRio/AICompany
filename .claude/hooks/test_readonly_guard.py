@@ -156,8 +156,41 @@ class BashAllowedUnitTests(unittest.TestCase):
     def test_git_diff_extra_whitespace_tolerated(self):
         self.check("   git diff   --stat   ", True)
 
+    def test_git_diff_cached_allowed(self):
+        # qa-reviewer's actual default workflow (code-review-checklist SKILL.md
+        # step 1): review the staged diff. `--cached` is git's own long-standing
+        # flag for "diff against the index", not shell/output redirection —
+        # omitting it blocked the role's normal job (usability bug, not a
+        # safety gap).
+        self.check("git diff --cached", True)
+
+    def test_git_diff_staged_allowed(self):
+        # `--staged` is git's documented synonym for `--cached`.
+        self.check("git diff --staged", True)
+
+    def test_git_diff_cached_stat_allowed(self):
+        self.check("git diff --cached --stat", True)
+
+    def test_git_diff_cached_name_only_allowed(self):
+        self.check("git diff --cached --name-only", True)
+
+    def test_git_diff_cached_with_pathspec_allowed(self):
+        self.check("git diff --cached -- apps/x.py", True)
+
     def test_git_diff_quoted_semicolon_path_allowed(self):
         self.check("git diff -- 'weird;name.py'", True)
+
+    # --- git --no-pager diff: CEO ruling (qa-reviewer NEEDS_CHANGES retry) -----
+    def test_git_no_pager_diff_staged_stat_allowed(self):
+        # The company's actual documented standard usage: code-review-checklist
+        # SKILL.md step 1 and commands/review.md step 1.
+        self.check("git --no-pager diff --staged --stat", True)
+
+    def test_git_no_pager_diff_cached_with_path_allowed(self):
+        self.check("git --no-pager diff --cached -- apps/x.py", True)
+
+    def test_git_no_pager_diff_bare_allowed(self):
+        self.check("git --no-pager diff", True)
 
     def test_git_diff_anything_after_dashdash_allowed_as_pathspec(self):
         # Anything after a literal "--" is a pathspec to git, not re-parsed as a
@@ -191,6 +224,36 @@ class BashAllowedUnitTests(unittest.TestCase):
         # Allowlist, not denylist: a flag nobody has named yet still gets denied.
         self.check("git diff --some-flag-nobody-thought-of", False)
 
+    # --- git diff --cached/--staged + dangerous flag: regression (must stay denied
+    # even after --cached/--staged and --no-pager were added to the allowlist) ---
+    def test_cached_output_equals_flag_denied(self):
+        self.check("git diff --cached --output=x", False)
+
+    def test_staged_orderfile_short_flag_denied(self):
+        self.check("git diff --staged -O/tmp/x", False)
+
+    def test_cached_ext_diff_denied(self):
+        self.check("git diff --cached --ext-diff", False)
+
+    def test_no_pager_cached_output_equals_flag_denied(self):
+        self.check("git --no-pager diff --cached --output=x", False)
+
+    def test_no_pager_config_override_denied(self):
+        # -c is a git *global* option (comes before the subcommand, like
+        # --no-pager) but unlike --no-pager it can override arbitrary config
+        # (e.g. core.pager, diff.external) — must stay denied.
+        self.check("git -c core.pager=x diff --cached", False)
+
+    def test_no_pager_repeated_denied(self):
+        # Only exactly one --no-pager, in the one documented position, is allowed.
+        self.check("git --no-pager --no-pager diff", False)
+
+    def test_paginate_global_flag_denied(self):
+        self.check("git --paginate diff", False)
+
+    def test_capital_c_workdir_global_flag_denied(self):
+        self.check("git -C /tmp diff", False)
+
     # --- historical over-broad usage now correctly denied ---------------
     def test_which_codex_denied(self):
         self.check("which codex", False)
@@ -212,6 +275,30 @@ class BashAllowedUnitTests(unittest.TestCase):
 
     def test_git_checkout_denied(self):
         self.check("git checkout -- file", False)
+
+    def test_git_diff_piped_to_grep_denied(self):
+        # The blanket dangerous-character deny doesn't see "|" (it's a subcommand
+        # separator, handled by _split_subcommands), so this must be caught by the
+        # per-subcommand rule match instead: "grep x" alone matches no rule.
+        self.check("git diff | grep x", False)
+
+    def test_python_dash_c_denied(self):
+        # Payload deliberately contains no dangerous characters (no parens/$/`/<>)
+        # so this test actually exercises the "子命令不在任何白名單規則內" layer
+        # (whitelist/shape check), not the earlier dangerous-character blanket
+        # deny. `python3 -c "print(1)"` would also be denied, but for the wrong
+        # reason (the "(" in the payload trips `_contains_dangerous_construct`
+        # before the command is even split into subcommands/tokens) — see
+        # test_python_dash_c_with_parens_denied_by_dangerous_char_check below for
+        # that layer, tested on its own terms.
+        self.check("python3 --version", False)
+
+    def test_python_dash_c_with_parens_denied_by_dangerous_char_check(self):
+        # Same intent as qa-reviewer's original NEEDS_CHANGES-triggering test, but
+        # now explicit about *which* layer is being exercised: the payload's "("
+        # and ")" are caught by the blanket dangerous-character deny, before
+        # subcommand splitting / whitelist matching ever runs.
+        self.check('python3 -c "print(1)"', False)
 
     def test_bare_codex_version_denied(self):
         # Real historical usage (env probing), no longer allowed: exact-shape
@@ -535,6 +622,97 @@ class SubprocessBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
 
+    def test_qa_reviewer_git_diff_cached_allowed(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git diff --cached")
+        self.assertEqual(result.returncode, 0)
+
+    def test_qa_reviewer_git_diff_cached_stat_allowed(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git diff --cached --stat")
+        self.assertEqual(result.returncode, 0)
+
+    def test_qa_reviewer_git_diff_cached_name_only_allowed(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git diff --cached --name-only")
+        self.assertEqual(result.returncode, 0)
+
+    def test_qa_reviewer_git_diff_cached_with_path_allowed(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git diff --cached -- apps/x.py"
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_qa_reviewer_git_diff_head_tilde_with_path_allowed(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git diff HEAD~1 -- apps/x.py"
+        )
+        self.assertEqual(result.returncode, 0)
+
+    # --- qa-reviewer Bash: git --no-pager diff, CEO ruling (this retry) --------
+    def test_qa_reviewer_no_pager_diff_staged_stat_allowed(self):
+        # Exactly the standard usage from code-review-checklist SKILL.md step 1 /
+        # commands/review.md step 1 — the command qa-reviewer's NEEDS_CHANGES
+        # report said was actually blocked in a real review session.
+        result = call(
+            "Bash",
+            agent_type="qa-reviewer",
+            command="git --no-pager diff --staged --stat",
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_qa_reviewer_no_pager_diff_cached_with_path_allowed(self):
+        result = call(
+            "Bash",
+            agent_type="qa-reviewer",
+            command="git --no-pager diff --cached -- apps/x.py",
+        )
+        self.assertEqual(result.returncode, 0)
+
+    # --- qa-reviewer Bash: --cached/--staged + dangerous flag, regression -------
+    def test_qa_reviewer_cached_output_equals_flag_denied(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git diff --cached --output=x"
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_staged_orderfile_short_flag_denied(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git diff --staged -O/tmp/x"
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_cached_ext_diff_denied(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git diff --cached --ext-diff"
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_no_pager_cached_output_equals_flag_denied(self):
+        result = call(
+            "Bash",
+            agent_type="qa-reviewer",
+            command="git --no-pager diff --cached --output=x",
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_config_override_diff_cached_denied(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git -c core.pager=x diff --cached"
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_no_pager_repeated_denied(self):
+        result = call(
+            "Bash", agent_type="qa-reviewer", command="git --no-pager --no-pager diff"
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_paginate_global_flag_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git --paginate diff")
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_capital_c_workdir_global_flag_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git -C /tmp diff")
+        self.assertEqual(result.returncode, 2)
+
     def test_qa_reviewer_chained_allowed_allowed(self):
         result = call(
             "Bash",
@@ -548,6 +726,29 @@ class SubprocessBehaviourTests(unittest.TestCase):
         result = call("Bash", agent_type="qa-reviewer", command="grep -n foo bar.py")
         self.assertEqual(result.returncode, 2)
         self.assertIn(b"qa-reviewer", result.stderr)
+
+    def test_qa_reviewer_ls_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="ls")
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_which_codex_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="which codex")
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_git_diff_piped_to_grep_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="git diff | grep x")
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_python_dash_c_denied(self):
+        # No dangerous characters in the payload: this exercises the whitelist/
+        # shape layer specifically, not the dangerous-character blanket deny —
+        # see the unit-level test of the same name for the full explanation.
+        result = call("Bash", agent_type="qa-reviewer", command="python3 --version")
+        self.assertEqual(result.returncode, 2)
+
+    def test_qa_reviewer_npx_codex_denied(self):
+        result = call("Bash", agent_type="qa-reviewer", command="npx codex")
+        self.assertEqual(result.returncode, 2)
 
     def test_qa_reviewer_sed_injection_denied(self):
         result = call(

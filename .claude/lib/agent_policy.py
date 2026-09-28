@@ -60,13 +60,18 @@ Given that, each BASH_RULES entry now carries a `match(tokens)` callable that
 receives the *already shell-tokenized* subcommand (see readonly_guard.py's
 `_tokenize`) and decides allow/deny structurally, per-tool:
 
-- git diff: prefix must be literally ["git", "diff"], then every flag token (one
-  starting with "-") before a literal "--" must be in an explicit allowlist of
-  known-harmless flags; a literal "--" switches to "everything after this is a
-  pathspec, not re-parsed as a flag by git" and is unconditionally allowed. This is
-  an allowlist, not a denylist of the flags security named
-  (-o/--output/-O/--ext-diff/--textconv/--no-textconv/-c): a denylist only stops
-  the flags someone thought to name, an allowlist stops everything not named safe.
+- git diff: prefix must be literally ["git", "diff"], or ["git", "--no-pager",
+  "diff"] (CEO ruling: the company's documented standard usage in
+  code-review-checklist SKILL.md step 1 / commands/review.md steps 1-2 is
+  `git --no-pager diff --staged ...`, and --no-pager is a no-write global flag —
+  see `_match_git_diff`'s docstring for the exact boundary of what else is still
+  denied), then every flag token (one starting with "-") before a literal "--"
+  must be in an explicit allowlist of known-harmless flags; a literal "--"
+  switches to "everything after this is a pathspec, not re-parsed as a flag by
+  git" and is unconditionally allowed. This is an allowlist, not a denylist of the
+  flags security named (-o/--output/-O/--ext-diff/--textconv/--no-textconv/-c): a
+  denylist only stops the flags someone thought to name, an allowlist stops
+  everything not named safe.
 - codex: exact-shape match against the literal command forms documented as the
   company's actual sanctioned usage in `.claude/commands/review.md` step 2 (the
   custom-prompt headless review) and its 備註 (the `codex exec review --uncommitted`
@@ -125,6 +130,14 @@ _GIT_DIFF_ALLOWED_FLAGS = frozenset(
         "--shortstat",
         "-p",
         "--patch",
+        # qa-reviewer's actual documented default workflow (code-review-checklist
+        # SKILL.md step 1, qa-reviewer.md's own 唯讀權限判準常數 note) reviews the
+        # *staged* diff, e.g. `git diff --cached --stat`. Both are git's own
+        # long-standing synonyms for "diff against the index" — neither writes
+        # anything; omitting them was a usability bug (blocks the role's normal
+        # job), not a safety gap.
+        "--cached",
+        "--staged",
     }
 )
 _GIT_DIFF_UNIFIED_CONTEXT_RE = re.compile(r"-U\d+")  # e.g. -U0, -U200, -U1000
@@ -132,18 +145,40 @@ _GIT_DIFF_UNIFIED_CONTEXT_RE = re.compile(r"-U\d+")  # e.g. -U0, -U200, -U1000
 
 def _match_git_diff(tokens: Sequence[str]) -> bool:
     """git diff <flags-from-allowlist>* [--] <anything, as pathspecs>*
+    or  git --no-pager diff <flags-from-allowlist>* [--] <anything, as pathspecs>*
 
-    Everything before a literal "--" that starts with "-" must be an explicitly
-    allowed read-only flag; anything else before "--" (not starting with "-") is a
-    ref/range/commit-ish and is always allowed. A literal "--" switches to "rest is
-    pathspec" and every remaining token is allowed unconditionally, because git
-    itself stops treating tokens after "--" as flags — this is standard "end of
-    options" behaviour, not something this matcher has to trust the caller about.
+    CEO 辦公室裁定（qa-reviewer NEEDS_CHANGES 退件，chore/agent-readonly-hook）：
+    `.claude/skills/code-review-checklist/SKILL.md` 步驟 1 與 `.claude/commands/
+    review.md` 步驟 1/2 是公司文件教的標準用法，兩者都用
+    `git --no-pager diff --staged ...`，而不是裸的 `git diff ...`。`--no-pager` 是
+    git 的*全域*選項（出現在子命令 "diff" 之前，不是 diff 自己的旗標），且只會停用
+    分頁器，沒有寫入或執行能力 —— 停用分頁器純粹是 headless/非互動環境下避免卡在
+    `less` 的必要之舉，跟 -o/--output 那類「看起來人畜無害、其實會寫檔」的旗標不是
+    同一種風險。因此這裡放行的形狀恰好兩種：
+      - ["git", "diff", ...]
+      - ["git", "--no-pager", "diff", ...]
+    只允許 --no-pager 出現恰好一次、且必須緊接在 "git" 之後、"diff" 之前；不放行任何
+    其他 git 全域選項（-c、-C、--git-dir、--work-tree、--exec-path、-p/--paginate、
+    --no-pager 重複出現等）——這些不在文件教的用法裡，且部分本身就有寫入/執行風險
+    （例如 -c 可覆寫任意 git 設定值），所以維持一律阻擋，不因為要放行 --no-pager 就
+    連帶放寬。
+
+    "diff" 之後的部分不變：每個以 "-" 開頭、出現在字面 "--" 之前的 token 都必須在
+    明確的白名單裡；不是以 "-" 開頭的 token 是 ref/range/commit-ish，一律允許。字面
+    "--" 之後切換成「其餘皆為 pathspec」，之後每個 token 都無條件允許，因為 git 本身
+    在 "--" 之後就不再把 token 當成旗標解析 —— 這是標準的「選項結束」行為，不是這個
+    matcher 自己要信任呼叫者的地方。
     """
-    if len(tokens) < 2 or tokens[0] != "git" or tokens[1] != "diff":
+    if len(tokens) < 2 or tokens[0] != "git":
+        return False
+    if tokens[1] == "diff":
+        rest_start = 2
+    elif tokens[1] == "--no-pager" and len(tokens) >= 3 and tokens[2] == "diff":
+        rest_start = 3
+    else:
         return False
     seen_dashdash = False
-    for tok in tokens[2:]:
+    for tok in tokens[rest_start:]:
         if seen_dashdash:
             continue
         if tok == "--":
@@ -204,11 +239,15 @@ BASH_RULES: tuple[BashRule, ...] = (
         declared="Bash(git diff:*)",
         label="git-diff",
         rationale=(
-            "qa-reviewer reads the staged/committed diff to review it. Flags that "
-            "only change *how much* is shown (--stat, --name-only, -U<n>, ...) are "
-            "harmless; git's own -o/--output/-O write an arbitrary file regardless "
-            "of whether the diff itself is read-only, so flags are allowlisted, "
-            "not denylisted — see module docstring, security-engineer CRITICAL-1."
+            "qa-reviewer reads the staged/committed diff to review it, exactly as "
+            "documented in code-review-checklist SKILL.md step 1 / commands/"
+            "review.md steps 1-2 (`git --no-pager diff --staged ...`), so both the "
+            "bare and --no-pager-prefixed shapes are allowed (CEO ruling; "
+            "--no-pager is a no-write global flag). Flags that only change *how "
+            "much* is shown (--stat, --name-only, -U<n>, ...) are harmless; git's "
+            "own -o/--output/-O write an arbitrary file regardless of whether the "
+            "diff itself is read-only, so flags are allowlisted, not denylisted — "
+            "see module docstring, security-engineer CRITICAL-1."
         ),
         match=_match_git_diff,
     ),
