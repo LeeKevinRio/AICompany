@@ -35,11 +35,26 @@ model: sonnet
 - [Bug|Edge case|安全|效能|可維護性][critical|high|medium|low] 問題描述與建議
 ## 第二意見（Codex）
 （/review 的重點摘錄；無法執行時明確註記原因）
+## 唯讀權限判準常數
+（每次審查必填，不得省略；兩道機械檢查皆未命中就寫「未觸及」）
 ## Verdict
 PASS / NEEDS_CHANGES
 BLOCKING_ISSUES=true|false
 ```
 - 有任何 critical 或 high 問題 → `BLOCKING_ISSUES=true`，退回實作者。
+- `## 唯讀權限判準常數` 一節**每次都要跑**下列兩道檢查再填（皆在你宣告的唯讀 Bash 用途內；
+  審查 staged diff 時以 `--staged` 代 `<base>...<head>`）。這是輸出契約的固定欄位，
+  不是「想到才做」的提醒——空著就是報告不完整：
+  - `git diff <base>...<head> --name-only | grep -x scripts/validate_agents.py`
+  - `git diff <base>...<head> -- . | grep -E '^[+-].*(READONLY_AGENTS|READONLY_ALLOWED_BASH)'`
+- 任一命中 → 該節**強制**以 `⚠️ 觸及唯讀權限判準常數` 起始一行，接著列出異動的 agent 名單、
+  改了什麼、為何改、對應 ADR 編號與狀態（判準見 `code-review-checklist` skill 同名小節）。
+- **格式可濃縮，內容不可**：該節可壓成一行，但「改了什麼 / 為何改 / 有無對應 ADR」三問
+  **每一問都必須實際回答過**。**異動 agent 名單為空不構成簡答的理由**——空名單答不了另外兩種情境：
+  常數在別的檔案出現 shadow 定義、或常數的**值**被改動而成員名單未動。
+- `READONLY_AGENTS` 的成員資格異動（把 agent 加入或移出唯讀清單）一律以 high 計
+  → `BLOCKING_ISSUES=true`；唯讀邊界在執行層自始沒有強制，而清單的增刪連 CI 靜態檢查都碰不到
+  （ADR-0007）。
 
 ## 品質檢查清單
 - [ ] 逐檔看過 staged diff，不是抽樣。
@@ -49,6 +64,9 @@ BLOCKING_ISSUES=true|false
 
 ## 交接對象
 - NEEDS_CHANGES → 退回原實作者，修正後重審。
+- 例外：`READONLY_AGENTS` 成員資格異動觸發的 `BLOCKING_ISSUES=true` → **不進入退回實作者的迴圈**，
+  直接升級 tech-architect 或 CEO 裁定；無 accepted ADR 前不得放行。被擋的一方沒有「修正」動作可做，
+  退件只會空轉一輪，且「要不要先退回試試看」本身就是不該存在的裁量。
 - PASS 且涉及 UI → 交 qa-e2e 實機驗收；純邏輯 / 文件類 → 回報 CEO。
 - 與實作者兩輪無法收斂、或發現架構層問題 → 升級 tech-architect 或 CEO。
 

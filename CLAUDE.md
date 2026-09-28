@@ -52,7 +52,15 @@
 ## 4. 安全守則
 
 - 祕密只能來自環境變數或 `.env`（已被 `.gitignore`）；`.env.example` 只放假值。
-- 新增 agent 或 skill 時遵守**最小權限**：唯讀職能（審查、風控、架構評估）不得有 Write / Edit / Bash。
+- 新增 / 修改 agent 遵守最小權限。**唯讀職能（審查、驗收、風控、架構評估）不得有 Write / Edit / 未限定範圍的 Bash**，
+  實際可下的指令以 `scripts/validate_agents.py` 的 `READONLY_ALLOWED_BASH` 明列之**非變更性且可窮舉**者為限
+  （目前：`codex`、`git diff`）；新增項目須經 tech-architect 出 ADR 並由 CEO 核可。
+  這是**規範性要求**：越界即違規，**不因系統沒擋下來而免責**。
+- **現況揭露：這條邊界目前只是宣告，執行層沒有強制。** agent frontmatter 的 `tools:` 是工具粒度白名單，
+  `Bash(pattern)` 的括號部分不被解析、不構成命令級限制；`scripts/validate_agents.py` 只靜態檢查定義檔上的宣告，
+  管不到任何一次實際呼叫。強制機制（PreToolUse hook）由 devops-sre 建置中，**落地前唯讀邊界僅靠自律與審查維持**。
+  依據與實證（含 review 過程中三次實際改動原始碼）見 `docs/adr/0007-唯讀驗收職能的權限邊界與-e2e-降級路徑.md`（proposed）。
+- **工具缺席不得以放寬唯讀邊界解決**：改走「執行/判斷分離」，或由 devops-sre 建置能力受限的執行介面（MCP / 受限 CLI）。
 - repo 若可能設為 public，提交前確認無 `*.key` / `.codex/` / `.env` 被追蹤。
 
 ---
