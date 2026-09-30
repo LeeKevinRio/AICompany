@@ -108,7 +108,9 @@ Known residual risk (documented honestly, not claimed away):
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -281,6 +283,84 @@ def _bash_command_allowed(command: object, rules: "tuple") -> tuple[bool, str]:
     return True, ""
 
 
+def _load_policy():
+    """Load .claude/lib/agent_policy.py from its explicit file path.
+
+    Deliberately does NOT touch sys.path (security-engineer 2026-09-29, CEO-approved
+    T2). The previous approach (prepend lib/ to the module search path, then a plain
+    `import agent_policy`) meant any
+    file dropped into .claude/lib/ named like a stdlib module (dataclasses.py,
+    typing.py, copy.py, inspect.py, ...) shadowed the real one when agent_policy.py
+    imported it, and `python3 -I` cannot stop that because the shadowing directory
+    was put on sys.path by this very script. Loading by explicit path means lib/ is
+    never searched for imports; agent_policy's own stdlib imports resolve normally.
+
+    Raises (never returns None) on a missing file or a failed load, so the caller's
+    fail-closed handler in main() turns it into exit 2.
+    """
+    policy_path = Path(__file__).resolve().parents[1] / "lib" / "agent_policy.py"
+    if not policy_path.is_file():
+        raise FileNotFoundError(f"政策檔不存在：{policy_path}")
+    spec = importlib.util.spec_from_file_location("agent_policy", str(policy_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"無法建立政策檔的 import spec：{policy_path}")
+    module = importlib.util.module_from_spec(spec)
+    # Must be registered BEFORE exec_module: @dataclass looks the defining module up in
+    # sys.modules[cls.__module__] while the class body is being processed.
+    sys.modules["agent_policy"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop("agent_policy", None)
+        raise
+    return module
+
+
+# Perimeter path guard (T3, CEO-approved "partial mitigation" 2026-09-29).
+# Paths, relative to the project root, that a non-maintainer subagent may not write
+# with the Write / Edit tools: (path, is_directory).
+_PERIMETER_PATHS = (
+    (".claude/settings.json", False),
+    (".claude/settings.local.json", False),
+    (".claude/hooks", True),
+    (".claude/lib", True),
+)
+
+
+def _perimeter_violation(file_path: object) -> str | None:
+    """Return the protected path that `file_path` resolves into, or None.
+
+    Path handling: `file_path` is taken from tool_input; a relative path is resolved
+    against CLAUDE_PROJECT_DIR (cwd if unset). Both the candidate and the protected
+    paths go through os.path.realpath, which collapses `..` and follows symlinks, so
+    `.claude/lib/../lib/agent_policy.py` and a symlink pointing into .claude/hooks are
+    both caught. Comparison is exact (case-sensitive); on a case-insensitive
+    filesystem `.CLAUDE/hooks` would NOT match -- this guard assumes the Linux
+    sessions CLAUDE.md section 4 already declares as the supported environment.
+
+    LIMITATION (must be read as part of the rule): this only inspects the Write and
+    Edit tools. It cannot see Bash, so `sed -i`, `echo > file`, `python3 - <<EOF`,
+    `cp`, `git checkout` etc. still write these files freely. It is a partial
+    mitigation against accidental / careless edits by the Write and Edit tools, not a
+    security boundary against a deliberate actor. It also cannot stop
+    `.claude/settings.local.json` `disableAllHooks` being created through Bash.
+    """
+    if file_path is None:
+        return None  # No path: nothing to guard (the tool itself will reject the call).
+    if not isinstance(file_path, str) or not file_path:
+        raise ValueError(f"file_path 不是非空字串：{file_path!r}")
+
+    base = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    base = os.path.realpath(base)
+    target = os.path.realpath(os.path.join(base, file_path))  # absolute file_path wins
+
+    for rel, is_dir in _PERIMETER_PATHS:
+        protected = os.path.realpath(os.path.join(base, rel))
+        if target == protected or (is_dir and target.startswith(protected + os.sep)):
+            return rel
+    return None
+
+
 def _decide(data: dict) -> int:
     """Return the process exit code: 2 to deny/block, 0 to allow/not-intervene."""
     # Main-thread short-circuit, deliberately placed BEFORE the policy import (ADR-0013 D6).
@@ -296,24 +376,38 @@ def _decide(data: dict) -> int:
     if data.get("agent_type") is None:
         return 0
 
-    # Import here (not at module top level) so any failure — missing file, syntax
-    # error, whatever — is caught by the single try/except in main() and denies,
+    # Load the policy here (not at module top level) so any failure — missing file,
+    # syntax error, whatever — is caught by the single try/except in main() and denies,
     # instead of crashing the interpreter before main() even starts (which would
     # exit 1, not the guaranteed-blocking exit 2).
     # .claude/lib, not scripts/ — see agent_policy.py's module docstring for why
     # (tech-architect ruling, ADR-0007 review).
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-    from agent_policy import (
-        BASH_RULES,
-        READONLY_AGENTS,
-        READONLY_BASH_SCOPED_AGENTS,
-    )
+    policy = _load_policy()
+    BASH_RULES = policy.BASH_RULES
+    READONLY_AGENTS = policy.READONLY_AGENTS
+    READONLY_BASH_SCOPED_AGENTS = policy.READONLY_BASH_SCOPED_AGENTS
+    PERIMETER_MAINTAINERS = policy.PERIMETER_MAINTAINERS
 
     tool_name = data.get("tool_name")
     agent_type = data.get("agent_type")
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
+
+    # Perimeter path guard, stacked on top of the read-only rules below (read-only
+    # roles are still blocked from ALL Write/Edit further down). Applies to every
+    # subagent except the listed maintainers; the main thread already returned above.
+    # Partial mitigation only: Bash is not covered -- see _perimeter_violation.
+    if tool_name in ("Write", "Edit") and agent_type not in PERIMETER_MAINTAINERS:
+        hit = _perimeter_violation(tool_input.get("file_path"))
+        if hit is not None:
+            print(
+                f"readonly_guard: 阻擋 — {agent_type} 不得用 {tool_name} 寫入執行層周界"
+                f"路徑 {hit}（維護者 {sorted(PERIMETER_MAINTAINERS)} 除外）。"
+                "注意：此守衛只擋 Write/Edit，擋不住 Bash，屬部分緩解。",
+                file=sys.stderr,
+            )
+            return 2
 
     if agent_type not in READONLY_AGENTS:
         # Main thread, or an implementation role. Not our concern — CEO's

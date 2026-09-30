@@ -77,6 +77,7 @@ git --no-pager diff --staged --name-status -- .claude/lib/ .claude/hooks/ .claud
 
 **T1：直接升級 tech-architect／CEO，不進退回迴圈；沒有 accepted ADR 不得放行。**
 被擋的一方沒有「修正」動作可做，退件只會空轉一輪。
+T1 的四問隨升級一併交給 tech-architect／CEO，不退回實作者。
 
 - `READONLY_AGENTS` 或 `READONLY_BASH_SCOPED_AGENTS` 成員異動（加入或移出）。
 - 新增 `BashRule` 或新的 declared token。

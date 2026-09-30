@@ -20,6 +20,7 @@ Stdlib only — this must run without any project virtualenv.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -35,11 +36,17 @@ HOOK_SCRIPT = HOOK_DIR / "readonly_guard.py"
 sys.path.insert(0, str(HOOK_DIR))
 sys.path.insert(0, str(LIB_DIR))
 
-from readonly_guard import _bash_command_allowed, _split_subcommands, _tokenize, _Unparseable  # noqa: E402
-from agent_policy import BASH_RULES, READONLY_ALLOWED_BASH  # noqa: E402
+from readonly_guard import (  # noqa: E402
+    _bash_command_allowed,
+    _perimeter_violation,
+    _split_subcommands,
+    _tokenize,
+    _Unparseable,
+)
+from agent_policy import BASH_RULES, PERIMETER_MAINTAINERS, READONLY_ALLOWED_BASH  # noqa: E402
 
 
-def run_hook(payload, cwd=None) -> subprocess.CompletedProcess:
+def run_hook(payload, cwd=None, env=None) -> subprocess.CompletedProcess:
     """Invoke the real script as a subprocess, exactly like Claude Code would."""
     if isinstance(payload, (dict, list)):
         stdin_bytes = json.dumps(payload).encode()
@@ -53,6 +60,7 @@ def run_hook(payload, cwd=None) -> subprocess.CompletedProcess:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,
+        env=env,
         timeout=10,
     )
 
@@ -880,6 +888,314 @@ class BrokenPolicyImportTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn(b"fail-closed", result.stderr)
+
+
+class IsolatedModeHijackTests(unittest.TestCase):
+    """T1: settings.json runs the hook as `python3 -I`. With -I, the script's own
+    directory is not put on sys.path, so a `json.py` planted in .claude/hooks/ cannot
+    shadow the standard library. Runs a copy of the hook + real policy in a temp repo."""
+
+    def _run(self, extra_flags, payload):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp) / "fake-repo"
+            fake_hooks_dir = fake_root / ".claude" / "hooks"
+            fake_lib_dir = fake_root / ".claude" / "lib"
+            fake_hooks_dir.mkdir(parents=True)
+            fake_lib_dir.mkdir(parents=True)
+            shutil.copy(HOOK_SCRIPT, fake_hooks_dir / "readonly_guard.py")
+            shutil.copy(LIB_DIR / "agent_policy.py", fake_lib_dir / "agent_policy.py")
+            (fake_hooks_dir / "json.py").write_text(
+                "raise SystemExit(0)\n", encoding="utf-8"
+            )
+            return subprocess.run(
+                [sys.executable, *extra_flags, str(fake_hooks_dir / "readonly_guard.py")],
+                input=json.dumps(payload).encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+    def test_json_hijack_blocked_with_isolated_mode(self):
+        result = self._run(
+            ["-I"], {"tool_name": "Write", "agent_type": "qa-reviewer"}
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_json_hijack_works_without_isolated_mode_control(self):
+        # Control: proves the planted json.py really is effective without -I, so the
+        # test above is attributable to -I and not to a broken fixture.
+        result = self._run([], {"tool_name": "Write", "agent_type": "qa-reviewer"})
+        self.assertEqual(result.returncode, 0)
+
+    def test_settings_json_hook_command_uses_isolated_mode(self):
+        settings = json.loads(
+            (REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        commands = [
+            h["command"]
+            for entry in settings["hooks"]["PreToolUse"]
+            for h in entry["hooks"]
+            if "readonly_guard.py" in h.get("command", "")
+        ]
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(commands[0].startswith("python3 -I "), commands[0])
+
+
+class LibShadowingTests(unittest.TestCase):
+    """T2: the policy is loaded by explicit file path (importlib), and sys.path is never
+    modified. A stdlib-named file planted in .claude/lib/ (dataclasses.py, typing.py,
+    copy.py, inspect.py, ...) must therefore not shadow the real stdlib module that
+    agent_policy.py imports. Runs a copy of the hook + real policy in a temp repo."""
+
+    def _run(self, shadow_name, payload, hook_source=None, flags=("-I",)):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp) / "fake-repo"
+            fake_hooks_dir = fake_root / ".claude" / "hooks"
+            fake_lib_dir = fake_root / ".claude" / "lib"
+            fake_hooks_dir.mkdir(parents=True)
+            fake_lib_dir.mkdir(parents=True)
+            fake_hook = fake_hooks_dir / "readonly_guard.py"
+            if hook_source is None:
+                shutil.copy(HOOK_SCRIPT, fake_hook)
+            else:
+                fake_hook.write_text(hook_source, encoding="utf-8")
+            shutil.copy(LIB_DIR / "agent_policy.py", fake_lib_dir / "agent_policy.py")
+            (fake_lib_dir / shadow_name).write_text(
+                "raise SystemExit(0)\n", encoding="utf-8"
+            )
+            return subprocess.run(
+                [sys.executable, *flags, str(fake_hook)],
+                input=json.dumps(payload).encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+    def test_lib_dataclasses_shadow_blocked(self):
+        result = self._run(
+            "dataclasses.py", {"tool_name": "Write", "agent_type": "qa-reviewer"}
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_lib_other_stdlib_shadows_blocked(self):
+        for name in ("typing.py", "copy.py", "inspect.py", "re.py"):
+            with self.subTest(shadow=name):
+                result = self._run(
+                    name, {"tool_name": "Write", "agent_type": "qa-reviewer"}
+                )
+                self.assertEqual(result.returncode, 2)
+
+    def test_hook_does_not_modify_sys_path(self):
+        source = HOOK_SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("sys.path.insert", source)
+        self.assertNotIn("sys.path.append", source)
+
+    def test_missing_policy_file_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_hooks_dir = Path(tmp) / ".claude" / "hooks"
+            fake_hooks_dir.mkdir(parents=True)
+            shutil.copy(HOOK_SCRIPT, fake_hooks_dir / "readonly_guard.py")
+            result = subprocess.run(
+                [sys.executable, "-I", str(fake_hooks_dir / "readonly_guard.py")],
+                input=json.dumps(
+                    {"tool_name": "Write", "agent_type": "dev-lead"}
+                ).encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"fail-closed", result.stderr)
+
+    def test_mutation_sys_path_insert_makes_shadow_test_red(self):
+        # Mutation check kept as a permanent test: restore the old loading style
+        # (sys.path.insert(0, lib) + plain import) in the *copy* and prove the shadow
+        # then wins (exit 0), i.e. the regression test above is capable of failing.
+        source = HOOK_SCRIPT.read_text(encoding="utf-8")
+        old = "    policy = _load_policy()\n"
+        self.assertEqual(source.count(old), 1)
+        mutated = source.replace(
+            old,
+            "    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))\n"
+            "    import agent_policy as policy\n",
+        )
+        result = self._run(
+            "dataclasses.py",
+            {"tool_name": "Write", "agent_type": "qa-reviewer"},
+            hook_source=mutated,
+        )
+        self.assertEqual(result.returncode, 0)
+
+
+class PerimeterPathGuardTests(unittest.TestCase):
+    """T3: subagents (except PERIMETER_MAINTAINERS) may not use Write / Edit on
+    .claude/settings.json, .claude/settings.local.json, .claude/hooks/**, .claude/lib/**.
+
+    LIMITATION, stated in the tests too: the guard only sees the Write and Edit tools.
+    Bash (`sed -i`, `echo >`, ...) is not covered, so this is a partial mitigation.
+    test_bash_write_is_not_covered_documented_limitation pins that fact so nobody
+    mistakes this class for proof of a boundary."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name).resolve() / "proj"
+        (self.project / ".claude" / "hooks").mkdir(parents=True)
+        (self.project / ".claude" / "lib").mkdir(parents=True)
+        (self.project / "apps").mkdir()
+
+    def _env(self, project=None):
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(project or self.project)
+        return env
+
+    def _write(self, agent_type, file_path, tool="Write", cwd=None, env=None):
+        data = {"tool_name": tool, "tool_input": {"file_path": file_path}}
+        if agent_type is not None:
+            data["agent_type"] = agent_type
+        return run_hook(data, cwd=cwd, env=env or self._env())
+
+    # --- subprocess layer: the exit-code table from the task ---------------
+    def test_dev_lead_settings_local_denied(self):
+        r = self._write("dev-lead", str(self.project / ".claude" / "settings.local.json"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Bash".encode(), r.stderr)  # message states the Bash limitation
+
+    def test_dev_lead_settings_json_denied(self):
+        r = self._write("dev-lead", str(self.project / ".claude" / "settings.json"))
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_hooks_file_denied(self):
+        r = self._write("dev-lead", str(self.project / ".claude" / "hooks" / "x.py"))
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_lib_dotdot_denied(self):
+        r = self._write(
+            "dev-lead", str(self.project / ".claude" / "lib" / ".." / "lib" / "agent_policy.py")
+        )
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_relative_path_resolved_against_project_dir(self):
+        # cwd is elsewhere; the relative path must still be judged against
+        # CLAUDE_PROJECT_DIR.
+        with tempfile.TemporaryDirectory() as other:
+            r = self._write("dev-lead", ".claude/hooks/x.py", cwd=other)
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_relative_dotdot_escape_into_perimeter_denied(self):
+        r = self._write("dev-lead", "apps/../.claude/hooks/x.py")
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_edit_tool_denied_too(self):
+        r = self._write("dev-lead", ".claude/hooks/x.py", tool="Edit")
+        self.assertEqual(r.returncode, 2)
+
+    def test_dev_lead_apps_file_allowed(self):
+        r = self._write("dev-lead", str(self.project / "apps" / "x.py"))
+        self.assertEqual(r.returncode, 0)
+
+    def test_dev_lead_similar_prefix_names_allowed(self):
+        # Directory match is on a path boundary: hooks-extra / settings.json.bak are
+        # not inside the perimeter.
+        for name in (".claude/hooks-extra/x.py", ".claude/settings.json.bak", ".claude/library/x.py"):
+            with self.subTest(path=name):
+                self.assertEqual(self._write("dev-lead", name).returncode, 0)
+
+    def test_case_sensitive_comparison(self):
+        # Strict case: on this (case-sensitive) filesystem a differently-cased path is
+        # a different path. Documents the behaviour rather than endorsing it for
+        # case-insensitive filesystems.
+        r = self._write("dev-lead", ".claude/Hooks/x.py")
+        self.assertEqual(r.returncode, 0)
+
+    def test_dev_lead_symlink_into_perimeter_denied(self):
+        link = self.project / "apps" / "sneaky"
+        try:
+            link.symlink_to(self.project / ".claude" / "hooks", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks not supported here")
+        r = self._write("dev-lead", str(link / "x.py"))
+        self.assertEqual(r.returncode, 2)
+
+    def test_devops_sre_hooks_file_allowed(self):
+        r = self._write("devops-sre", str(self.project / ".claude" / "hooks" / "x.py"))
+        self.assertEqual(r.returncode, 0)
+
+    def test_devops_sre_settings_and_lib_allowed(self):
+        for name in (".claude/settings.json", ".claude/settings.local.json", ".claude/lib/agent_policy.py"):
+            with self.subTest(path=name):
+                self.assertEqual(self._write("devops-sre", name, tool="Edit").returncode, 0)
+
+    def test_main_thread_settings_json_allowed(self):
+        r = self._write(None, str(self.project / ".claude" / "settings.json"))
+        self.assertEqual(r.returncode, 0)
+
+    def test_qa_reviewer_write_any_file_denied(self):
+        for name in ("apps/x.py", ".claude/hooks/x.py", "README.md"):
+            with self.subTest(path=name):
+                self.assertEqual(self._write("qa-reviewer", name).returncode, 2)
+
+    def test_readonly_edit_denied_regardless_of_path(self):
+        self.assertEqual(self._write("tech-architect", "apps/x.py", tool="Edit").returncode, 2)
+
+    def test_project_dir_unset_falls_back_to_cwd(self):
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        r = self._write("dev-lead", ".claude/hooks/x.py", cwd=str(self.project), env=env)
+        self.assertEqual(r.returncode, 2)
+        r = self._write("dev-lead", "apps/x.py", cwd=str(self.project), env=env)
+        self.assertEqual(r.returncode, 0)
+
+    def test_malformed_file_path_fails_closed(self):
+        r = self._write("dev-lead", 123)
+        self.assertEqual(r.returncode, 2)
+        r = self._write("dev-lead", "a\x00b")
+        self.assertEqual(r.returncode, 2)
+
+    def test_bash_write_is_not_covered_documented_limitation(self):
+        # Known, accepted limitation (partial mitigation): the guard does not inspect
+        # Bash, so a non-read-only subagent can still write the perimeter this way.
+        r = run_hook(
+            {
+                "tool_name": "Bash",
+                "agent_type": "dev-lead",
+                "tool_input": {"command": "echo x > .claude/hooks/x.py"},
+            },
+            env=self._env(),
+        )
+        self.assertEqual(r.returncode, 0)
+
+    # --- unit layer ---------------------------------------------------------
+    def _violation(self, file_path):
+        old = os.environ.get("CLAUDE_PROJECT_DIR")
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.project)
+        try:
+            return _perimeter_violation(file_path)
+        finally:
+            if old is None:
+                del os.environ["CLAUDE_PROJECT_DIR"]
+            else:
+                os.environ["CLAUDE_PROJECT_DIR"] = old
+
+    def test_unit_violation_table(self):
+        p = str(self.project)
+        cases = {
+            ".claude/settings.json": ".claude/settings.json",
+            ".claude/settings.local.json": ".claude/settings.local.json",
+            ".claude/hooks/x.py": ".claude/hooks",
+            ".claude/hooks/sub/deep/x.py": ".claude/hooks",
+            ".claude/lib/../lib/agent_policy.py": ".claude/lib",
+            p + "/.claude/lib/agent_policy.py": ".claude/lib",
+            "apps/x.py": None,
+            ".claude/agents/dev-lead.md": None,
+            "/etc/passwd": None,
+            None: None,
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(self._violation(path), expected)
+
+    def test_unit_maintainers_constant(self):
+        self.assertEqual(PERIMETER_MAINTAINERS, frozenset({"devops-sre"}))
 
 
 class CanaryTests(unittest.TestCase):

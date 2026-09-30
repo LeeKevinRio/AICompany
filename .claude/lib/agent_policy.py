@@ -117,6 +117,20 @@ READONLY_AGENTS = frozenset(
 READONLY_BASH_SCOPED_AGENTS = frozenset({"qa-reviewer"})
 
 
+# Maintainers of the enforcement perimeter (.claude/settings.json,
+# .claude/settings.local.json, .claude/hooks/**, .claude/lib/**). The path guard in
+# .claude/hooks/readonly_guard.py blocks every OTHER subagent from writing those paths
+# with the Write / Edit tools; roles listed here are exempt. devops-sre owns these
+# files (CI / hook / environment wiring). `agent_type` is filled in by the harness,
+# not by the model, so a subagent cannot claim to be a maintainer. Without this
+# exemption the legitimate maintainer could only edit the perimeter by falling back to
+# Bash (sed / echo >), which the guard cannot see -- strictly worse. Adding a name here
+# is a privilege GRANT over the enforcement layer itself: needs security-engineer
+# review. LIMITATION: the guard only covers Write and Edit, not Bash, so this is a
+# partial mitigation, not a boundary (see readonly_guard.py `_perimeter_violation`).
+PERIMETER_MAINTAINERS = frozenset({"devops-sre"})
+
+
 def _tokens_are(tokens: Sequence[str], *expected: str) -> bool:
     return list(tokens) == list(expected)
 
