@@ -61,11 +61,13 @@
   政策的唯一權威來源是 `.claude/lib/agent_policy.py`（`scripts/validate_agents.py` 亦從此匯入）。
   唯讀角色的 Write / Edit 一律阻擋；Bash 僅 qa-reviewer 有白名單（`git diff` 與兩種核准的 `codex` 用法），
   其餘唯讀角色的 Bash 一律阻擋；**對唯讀角色預設阻擋**，腳本內部錯誤時以 exit 2 阻擋（fail-closed）；
-  **非唯讀角色與主執行緒不受此 hook 影響**（主執行緒的錯誤路徑見下方已知限制 ⑤）。
+  **非唯讀角色與主執行緒不受唯讀規則影響；但所有 subagent（devops-sre 除外）以 Write／Edit 寫入周界路徑時受路徑守衛約束（見已知限制 ⑦）**（主執行緒的錯誤路徑見下方已知限制 ⑤）。
   agent frontmatter 的 `tools:` 仍是工具粒度白名單，`Bash(pattern)` 的括號部分不被解析、不構成命令級限制；強制力來自 hook，不是 frontmatter。
 - **已知限制（如實揭露）：**
   ① 前提是執行環境有 `python3`——依官方文件只有 exit 2 會阻擋，找不到指令屬非阻擋性錯誤，工具呼叫會被放行（fail-open）。
   CEO 2026-09-28 裁定目前只在雲端 Linux session 使用、列為前提並如實揭露；日後若要在原生 Windows 使用，須先解決這一點。
+  另：上文「腳本內部錯誤以 exit 2 阻擋」不適用於直譯器層錯誤（例如 `PYTHONHOME` 使直譯器啟動失敗為 exit 1，同樣等於放行）；
+  hook 指令自 2026-09-30 起改為 `python3 -I`，已縮小此面，但 `env` 若改 `PATH` 使 `python3` 指向他處，`-I` 擋不住（未處理）。
   ② hook 的指令拆解器是手寫的、未做過 fuzz 測試；設計上寧可誤擋，但無法排除有未知的 shell 構造能繞過。
   ③ hook 只管 Write / Edit / Bash；唯讀角色的其他工具仍由 frontmatter 的 `tools:` 白名單控制。
   ④ 只在「含有這份 `settings.json` 的分支被 checkout 的工作目錄」中生效；合併進 main 後，各產品線須 `merge origin/main` 同步才會生效。
@@ -76,6 +78,12 @@
   且未進版控的本機設定可能讓 hook 失效。這一項以 ADR-0013 的周界檢查、審查前的 liveness canary 與
   CODEOWNERS 加 branch protection 維持；其中 CODEOWNERS 與 branch protection 屬平台層控制，
   落地狀態以 ADR-0013 為準，**未在 GitHub 設定完成前不構成控制**。
+  ⑦ `disableAllHooks`：依官方文件，在 `.claude/settings.local.json`（不進版控）或 CLI 的 `--settings` 寫入
+  `"disableAllHooks": true` 即可停用專案 hook，只有 managed settings 的 hook 關不掉。任何有 Write 或 Bash 的角色都能自行建立該檔，
+  CODEOWNERS 與審查都偵測不到；2026-09-30 加入的路徑守衛（subagent 以 Write／Edit 寫 `.claude/settings.json`、`.claude/settings.local.json`、`.claude/hooks/`、
+  `.claude/lib/` 一律阻擋，devops-sre 豁免）只擋 Write／Edit、擋不住 Bash 寫檔，屬部分緩解。
+  因此 hook 的實際保證等級是**防意外與合作式越界，不是對抗性防護**；事後偵測靠審查時的 canary（canary 只能證明本 session、該角色的 hook 有生效）。
+  managed settings 需 Team 或 Enterprise 方案，目前不列為承諾，待 CEO 確認方案後由 tech-architect 評估。細節見 ADR-0013「2026-09-30 後續修補與揭露」。
   依據、實證與完整殘餘風險見 `docs/adr/0007-唯讀驗收職能的權限邊界與-e2e-降級路徑.md`（accepted）與
   `docs/adr/0013-唯讀邊界執行層的完整性周界與審查分級.md`（accepted，延伸 ADR-0007，不取代）。
 - **工具缺席不得以放寬唯讀邊界解決**：改走「執行/判斷分離」，或由 devops-sre 建置能力受限的執行介面（MCP / 受限 CLI）。
