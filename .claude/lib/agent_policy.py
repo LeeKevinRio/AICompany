@@ -16,10 +16,10 @@ one. It also lowers the blast radius of an unrelated refactor: `scripts/` is a
 generic-sounding directory that tends to get touched for reasons that have nothing
 to do with agent policy (a new build script, a rename to `tools/`, packaging
 changes) — and because `.claude/hooks/readonly_guard.py` fails closed (denies
-Write/Edit/Bash for *everyone*, not just read-only agents, if this import breaks;
-see readonly_guard.py's module docstring), an import path a future refactor doesn't
-expect to matter is exactly the kind of thing that causes a company-wide outage
-nobody saw coming.
+Write/Edit/Bash for every *subagent*, not just read-only ones, if this import
+breaks; only the main thread is let through so it can repair the file — ADR-0013
+D6), an import path a future refactor doesn't expect to matter is exactly the kind
+of thing that halts every delegated role at once.
 
 Background: before this file existed, both checks lived only as prose in agent
 frontmatter (`tools: Read, Grep, Glob, Bash(codex:*), Bash(git diff:*)`) and as a

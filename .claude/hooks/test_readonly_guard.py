@@ -832,5 +832,78 @@ class SubprocessBehaviourTests(unittest.TestCase):
         self.assertIn(b"fail-closed", result.stderr)
 
 
+class BrokenPolicyImportTests(unittest.TestCase):
+    """ADR-0013 D6: when the policy import fails (e.g. a syntax error in
+    agent_policy.py), the main thread must NOT be deadlocked, while every subagent
+    stays fail-closed. Runs a copy of the hook next to a deliberately broken lib dir."""
+
+    def _run_with_broken_policy(self, payload):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp) / "fake-repo"
+            fake_hooks_dir = fake_root / ".claude" / "hooks"
+            fake_lib_dir = fake_root / ".claude" / "lib"
+            fake_hooks_dir.mkdir(parents=True)
+            fake_lib_dir.mkdir(parents=True)
+            shutil.copy(HOOK_SCRIPT, fake_hooks_dir / "readonly_guard.py")
+            (fake_lib_dir / "agent_policy.py").write_text(
+                "READONLY_AGENTS = frozenset({\n", encoding="utf-8"  # SyntaxError
+            )
+            return subprocess.run(
+                [sys.executable, str(fake_hooks_dir / "readonly_guard.py")],
+                input=json.dumps(payload).encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+    def test_broken_policy_main_thread_write_allowed(self):
+        result = self._run_with_broken_policy({"tool_name": "Write"})
+        self.assertEqual(result.returncode, 0)
+
+    def test_broken_policy_main_thread_bash_allowed(self):
+        # agent_type explicitly null is also "no subagent".
+        result = self._run_with_broken_policy(
+            {"tool_name": "Bash", "agent_type": None, "tool_input": {"command": "ls"}}
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_broken_policy_readonly_subagent_denied(self):
+        result = self._run_with_broken_policy(
+            {"tool_name": "Write", "agent_type": "qa-reviewer"}
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"fail-closed", result.stderr)
+
+    def test_broken_policy_implementation_subagent_denied(self):
+        result = self._run_with_broken_policy(
+            {"tool_name": "Write", "agent_type": "dev-lead"}
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"fail-closed", result.stderr)
+
+
+class CanaryTests(unittest.TestCase):
+    """ADR-0013 D3: a reviewer can run this exact command as qa-reviewer to prove the
+    hook is live in the current session (it must be blocked, exit 2). This test locks
+    the behaviour: it is denied because the command contains '(' and ')'. If someone
+    removes those characters from _DANGEROUS_CHARS, this goes red in CI."""
+
+    CANARY = "git --no-pager diff --stat -- 'readonly-guard-canary()'"
+
+    def test_canary_denied_for_qa_reviewer(self):
+        result = call("Bash", agent_type="qa-reviewer", command=self.CANARY)
+        self.assertEqual(result.returncode, 2)
+
+    def test_canary_denial_is_caused_by_parentheses(self):
+        # Same command without the parentheses is an allowed git diff form, so the
+        # denial above is attributable to '(' / ')' and not to something else.
+        result = call(
+            "Bash",
+            agent_type="qa-reviewer",
+            command="git --no-pager diff --stat -- 'readonly-guard-canary'",
+        )
+        self.assertEqual(result.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

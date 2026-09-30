@@ -53,13 +53,31 @@
 
 - 祕密只能來自環境變數或 `.env`（已被 `.gitignore`）；`.env.example` 只放假值。
 - 新增 / 修改 agent 遵守最小權限。**唯讀職能（審查、驗收、風控、架構評估）不得有 Write / Edit / 未限定範圍的 Bash**，
-  實際可下的指令以 `scripts/validate_agents.py` 的 `READONLY_ALLOWED_BASH` 明列之**非變更性且可窮舉**者為限
+  實際可下的指令以 `.claude/lib/agent_policy.py` 的 `READONLY_ALLOWED_BASH`（hook 與 `scripts/validate_agents.py` 共用）明列之**非變更性且可窮舉**者為限
   （目前：`codex`、`git diff`）；新增項目須經 tech-architect 出 ADR 並由 CEO 核可。
   這是**規範性要求**：越界即違規，**不因系統沒擋下來而免責**。
-- **現況揭露：這條邊界目前只是宣告，執行層沒有強制。** agent frontmatter 的 `tools:` 是工具粒度白名單，
-  `Bash(pattern)` 的括號部分不被解析、不構成命令級限制；`scripts/validate_agents.py` 只靜態檢查定義檔上的宣告，
-  管不到任何一次實際呼叫。強制機制（PreToolUse hook）由 devops-sre 建置中，**落地前唯讀邊界僅靠自律與審查維持**。
-  依據與實證（含 review 過程中三次實際改動原始碼）見 `docs/adr/0007-唯讀驗收職能的權限邊界與-e2e-降級路徑.md`（proposed）。
+- **現況揭露：執行層已由 PreToolUse hook 強制（2026-09-28 於 `chore/agent-readonly-hook` 落地，合併進 main 後生效）。**
+  `.claude/settings.json` 登記 matcher 為 `Write|Edit|Bash` 的 hook，執行 `.claude/hooks/readonly_guard.py`；
+  政策的唯一權威來源是 `.claude/lib/agent_policy.py`（`scripts/validate_agents.py` 亦從此匯入）。
+  唯讀角色的 Write / Edit 一律阻擋；Bash 僅 qa-reviewer 有白名單（`git diff` 與兩種核准的 `codex` 用法），
+  其餘唯讀角色的 Bash 一律阻擋；**對唯讀角色預設阻擋**，腳本內部錯誤時以 exit 2 阻擋（fail-closed）；
+  **非唯讀角色與主執行緒不受此 hook 影響**（主執行緒的錯誤路徑見下方已知限制 ⑤）。
+  agent frontmatter 的 `tools:` 仍是工具粒度白名單，`Bash(pattern)` 的括號部分不被解析、不構成命令級限制；強制力來自 hook，不是 frontmatter。
+- **已知限制（如實揭露）：**
+  ① 前提是執行環境有 `python3`——依官方文件只有 exit 2 會阻擋，找不到指令屬非阻擋性錯誤，工具呼叫會被放行（fail-open）。
+  CEO 2026-09-28 裁定目前只在雲端 Linux session 使用、列為前提並如實揭露；日後若要在原生 Windows 使用，須先解決這一點。
+  ② hook 的指令拆解器是手寫的、未做過 fuzz 測試；設計上寧可誤擋，但無法排除有未知的 shell 構造能繞過。
+  ③ hook 只管 Write / Edit / Bash；唯讀角色的其他工具仍由 frontmatter 的 `tools:` 白名單控制。
+  ④ 只在「含有這份 `settings.json` 的分支被 checkout 的工作目錄」中生效；合併進 main 後，各產品線須 `merge origin/main` 同步才會生效。
+  ⑤ 死結與修正：原設計中，hook 匯入政策檔時若出錯（例如政策檔損壞），會連主執行緒的 Write / Edit / Bash 一起擋，
+  導致無法用工具修復政策檔。ADR-0013 D6 的修正是「先對沒有 `agent_type` 的呼叫（主執行緒）放行，再匯入政策」：
+  修正後政策檔損壞時，**復原方式是由主執行緒直接修復政策檔**；subagent 仍維持 fail-closed。
+  ⑥ 執行層的檔案（政策、hook、`settings.json`、validator、CI 設定、審查規則本身）可被非唯讀角色修改，
+  且未進版控的本機設定可能讓 hook 失效。這一項以 ADR-0013 的周界檢查、審查前的 liveness canary 與
+  CODEOWNERS 加 branch protection 維持；其中 CODEOWNERS 與 branch protection 屬平台層控制，
+  落地狀態以 ADR-0013 為準，**未在 GitHub 設定完成前不構成控制**。
+  依據、實證與完整殘餘風險見 `docs/adr/0007-唯讀驗收職能的權限邊界與-e2e-降級路徑.md`（accepted）與
+  `docs/adr/0013-唯讀邊界執行層的完整性周界與審查分級.md`（accepted，延伸 ADR-0007，不取代）。
 - **工具缺席不得以放寬唯讀邊界解決**：改走「執行/判斷分離」，或由 devops-sre 建置能力受限的執行介面（MCP / 受限 CLI）。
 - repo 若可能設為 public，提交前確認無 `*.key` / `.codex/` / `.env` 被追蹤。
 

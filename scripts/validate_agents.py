@@ -10,6 +10,9 @@ Checks (see CLAUDE.md / docs/org-chart.md):
 - read-only roles do not have Write/Edit/unscoped Bash, and their scoped Bash
   patterns are limited to the explicit READONLY_ALLOWED_BASH list
 - docs/org-chart.md department table matches agent files exactly
+- every READONLY_AGENTS member has a matching .claude/agents/<name>.md (no dangling
+  policy entries: renaming a read-only agent file would otherwise silently escape the
+  hook, which matches READONLY_AGENTS against the runtime agent_type)
 
 Stdlib only (no PyYAML) so it runs anywhere. Exits non-zero on any error,
 printing file, line number, and reason for each failure.
@@ -213,6 +216,25 @@ def check_org_chart(agent_names: set[str]) -> None:
             err(ORG_CHART, line, f"部門總表列出的 {name} 沒有對應的 .claude/agents/{name}.md")
 
 
+def check_readonly_agents_exist() -> None:
+    """ADR-0013 D5: every READONLY_AGENTS member must have an agent file.
+
+    The hook compares the runtime `agent_type` against READONLY_AGENTS. If a read-only
+    agent file is renamed (e.g. qa-reviewer.md -> qa-review.md) and org-chart is synced,
+    every other check still passes, the new name is not in READONLY_AGENTS, and the
+    renamed agent can then be given Write without touching any policy file. Requiring
+    the file for each policy entry closes that path: the rename now fails CI.
+    """
+    for name in sorted(READONLY_AGENTS):
+        expected = AGENTS_DIR / f"{name}.md"
+        if not expected.is_file():
+            errors.append(
+                f"{expected.relative_to(ROOT)}:1: 唯讀角色 {name} 在 READONLY_AGENTS 中，"
+                f"但 .claude/agents/{name}.md 不存在（疑似改名或刪除而逃出唯讀邊界；"
+                "請還原檔名，或依 ADR 流程同步修改 .claude/lib/agent_policy.py）"
+            )
+
+
 def main() -> int:
     if not AGENTS_DIR.is_dir():
         print(f"{AGENTS_DIR.relative_to(ROOT)}: 目錄不存在", file=sys.stderr)
@@ -226,6 +248,7 @@ def main() -> int:
     for path in agent_files:
         check_agent(path, seen_names)
     check_org_chart({p.stem for p in agent_files})
+    check_readonly_agents_exist()
 
     if errors:
         print(f"validate_agents: {len(errors)} 個問題\n", file=sys.stderr)

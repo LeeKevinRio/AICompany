@@ -254,7 +254,7 @@ def _bash_command_allowed(command: object, rules: "tuple") -> tuple[bool, str]:
 
     if _contains_dangerous_construct(command):
         return False, (
-            "指令含 $ ` < > { } ~ ! ( ) 其中之一"
+            "指令含 $ ` < > { } ! ( ) 其中之一"
             "（命令替換/程序替換/重導向/heredoc/其他 shell 特殊語法一律阻擋）"
         )
 
@@ -283,6 +283,19 @@ def _bash_command_allowed(command: object, rules: "tuple") -> tuple[bool, str]:
 
 def _decide(data: dict) -> int:
     """Return the process exit code: 2 to deny/block, 0 to allow/not-intervene."""
+    # Main-thread short-circuit, deliberately placed BEFORE the policy import (ADR-0013 D6).
+    # Claude Code only sets `agent_type` when the call comes from a subagent; the main
+    # thread (which is where the CEO / orchestrator repairs things) has none. Without
+    # this line, a syntax error in agent_policy.py made the import below raise, main()
+    # fail-closed with exit 2, and EVERY main-thread Write/Edit/Bash got blocked --
+    # including the very edit needed to repair agent_policy.py (an unrecoverable
+    # deadlock). Behaviour when the import succeeds is unchanged: None is never in
+    # READONLY_AGENTS, so the main thread was already allowed further down. What changes
+    # is only the import-failure case: main thread is allowed through, while every
+    # subagent (read-only or not) still hits the import below and stays fail-closed.
+    if data.get("agent_type") is None:
+        return 0
+
     # Import here (not at module top level) so any failure — missing file, syntax
     # error, whatever — is caught by the single try/except in main() and denies,
     # instead of crashing the interpreter before main() even starts (which would
