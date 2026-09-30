@@ -1,17 +1,31 @@
-# CODEOWNERS — 唯讀角色權限邊界的守門檔案
+# CODEOWNERS — 唯讀邊界「執行層完整性周界」的守門檔案
 #
-# security-engineer 在 ADR-0007 相關審查中指出：readonly_guard.py 與它依賴的政策模組
-# 本身沒有任何竄改偵測——任何具 Write 權限的角色（例如 dev-lead）都能直接改這支腳本，
-# 而它一旦被改弱，唯讀角色的權限邊界就整個失效卻不會有任何告警。這是預期中的信任邊界
-# （不是本次 PR 新引入的弱點），但值得用 CODEOWNERS 補一道「這些路徑的變更必須經過
-# 額外審查」的門檻。
+# 依據：ADR-0013「唯讀邊界執行層的完整性周界與審查分級」（CEO 2026-09-29 核可）。
+# 背景沿用 ADR-0007：readonly_guard.py 與它依賴的政策模組本身沒有任何竄改偵測——
+# 任何具 Write 權限的角色（例如 dev-lead）都能直接改這些檔案，而一旦被改弱，唯讀角色
+# 的權限邊界就整個失效卻不會有任何告警。ADR-0013 把守門範圍從 hook / 政策 / validator
+# 三處，擴大為下列「周界」共 9 個路徑（8 個執行層路徑，加上 CODEOWNERS 本身，避免有人
+# 先改掉本檔再改周界檔）：
+#   - hook 與政策：/.claude/hooks/、/.claude/lib/
+#   - hook 的註冊與本機覆蓋：/.claude/settings.json、/.claude/settings.local.json
+#   - 設計時檢查與 CI：/scripts/validate_agents.py、/.github/workflows/validate.yml
+#   - 審查流程與審查者本身：code-review-checklist 的 SKILL.md、qa-reviewer.md
+#   - /CODEOWNERS
+# 注意：/.claude/settings.local.json 目前被 .gitignore 排除、不會進 repo，列在這裡是為了
+# 日後若有人取消忽略、把它加進版本控制時自動落入周界。
 #
-# 注意：這個檔案本身不會自動生效——GitHub 需要在 repo 的 branch protection 規則裡開啟
-# 「Require review from Code Owners」，這件事需要 repo 管理員（CEO）在 GitHub 設定裡
-# 手動打開。@LeeKevinRio 是目前 remote 的擁有者帳號；若 security-engineer 有獨立的
-# GitHub 帳號應改指到那個帳號，我目前查不到（本 repo 目前所有 commit 作者都是
-# Claude <noreply@anthropic.com>，沒有可用的人類帳號對應資訊），需要 CEO 確認。
+# 注意：這個檔案本身不會自動生效——GitHub 需要在 branch protection / ruleset 裡開啟
+# 「Require review from Code Owners」，這件事需要 repo 管理員（CEO）在 GitHub 網頁上
+# 手動設定。@LeeKevinRio 是目前 remote 的擁有者帳號；若 security-engineer 有獨立的
+# GitHub 帳號應改指到那個帳號（目前所有 commit 作者都是 Claude <noreply@anthropic.com>，
+# 查不到可用的人類帳號對應資訊，需要 CEO 確認）。
 
-/.claude/hooks/                 @LeeKevinRio
-/.claude/lib/agent_policy.py    @LeeKevinRio
-/scripts/validate_agents.py     @LeeKevinRio
+/.claude/lib/                                   @LeeKevinRio
+/.claude/hooks/                                 @LeeKevinRio
+/.claude/settings.json                          @LeeKevinRio
+/.claude/settings.local.json                    @LeeKevinRio
+/scripts/validate_agents.py                     @LeeKevinRio
+/.github/workflows/validate.yml                 @LeeKevinRio
+/.claude/skills/code-review-checklist/SKILL.md  @LeeKevinRio
+/.claude/agents/qa-reviewer.md                  @LeeKevinRio
+/CODEOWNERS                                     @LeeKevinRio
