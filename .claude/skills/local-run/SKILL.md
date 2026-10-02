@@ -21,6 +21,18 @@ bash apps/stock-desk/dev-up.sh
 腳本會依序:拉最新 code → 起後端(port 8000)→ 起前端(port 3000)。
 按 `Ctrl+C` 會同時停掉前後端。
 
+### Windows(CEO 慣用):雙擊 bat
+
+在檔案總管雙擊 `apps\stock-desk\dev-up.bat`(或在任何目錄的命令列執行它)。
+它會依序:檢查 git / uv / npm → 確認分支與工作樹乾淨 → `git pull` →
+(若 8000 / 3000 被舊程序占用,詢問後結束)→ `uv sync --locked` / `npm install --no-save`(不改寫 lock 檔)→
+各開一個「stock-desk 後端」「stock-desk 前端」視窗 → 後端 `/health` 通過、前端有回應後自動開瀏覽器。
+
+- 停止:關掉兩個 stock-desk 視窗即可。
+- 出錯時視窗不會自動關閉,請把視窗內容截圖給我們。
+- 已追蹤檔案有未提交改動時 bat 會停止(不會自動 stash 或丟棄);未追蹤檔案不影響。
+- `.gitattributes` 讓 bat 在 Windows checkout 時固定為 CRLF 換行。
+
 ## 手動指令(腳本不可用時)
 
 ### 0. 拉最新 code(repo 根目錄)
