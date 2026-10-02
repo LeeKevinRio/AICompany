@@ -90,6 +90,14 @@ export interface PositionPrice {
   as_of: string;
   source: string;
   data_status: PriceDataStatus;
+  /**
+   * Only meaningful for `cached_stale`: `true` means the local cache already
+   * holds the latest completed session (as current as a live fetch); `false`
+   * means it is known to be short of one. `null` for live sources.
+   */
+  is_within_ttl: boolean | null;
+  /** The data layer's user-facing degradation reason, `null` on success. */
+  reason: string | null;
 }
 
 /** Backend `PnlOriginal` — unrealized P&L in the position's own currency. */

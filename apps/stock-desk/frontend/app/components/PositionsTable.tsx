@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useState } from "react";
 import type { PnlOriginal, SummaryPositionItem } from "../lib/types";
 import {
-  formatDateTime,
   formatMoney,
   formatQuantity,
   instrumentTypeLabel,
@@ -14,7 +13,7 @@ import {
 import { deleteButtonState } from "../lib/positionFormSubmit";
 import { useDeletePosition, useDirectoryNames } from "../lib/queries";
 import { missingSummary } from "../lib/valuationWording";
-import { DataStatusBadge } from "./DataStatusBadge";
+import { DataStatusBadge, priceDateTooltip } from "./DataStatusBadge";
 import { FxStatusBadge } from "./FxStatusBadge";
 import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
@@ -58,7 +57,7 @@ function PriceCell({ position }: { position: SummaryPositionItem }) {
   return (
     <div>
       <span
-        title={`資料來源：${valuation.price.source}／${formatDateTime(valuation.price.as_of)}`}
+        title={`資料來源：${valuation.price.source}／${priceDateTooltip(valuation.price.as_of)}`}
       >
         {formatMoney(valuation.price.value, position.currency, 2)}
       </span>

@@ -132,6 +132,13 @@ class PriceInfo(BaseModel):
     as_of: str
     source: str
     data_status: DataStatus
+    #: Passed through verbatim from the data layer's ``ProviderResult``.
+    #: For ``CACHED_STALE`` it says whether the local cache already holds the
+    #: latest completed session (``True``) or is known to be short of one
+    #: (``False``); ``None`` for live sources, where the question does not apply.
+    is_within_ttl: bool | None = None
+    #: The data layer's user-facing degradation reason, ``None`` on success.
+    reason: str | None = None
 
 
 class FxInfo(BaseModel):
@@ -315,6 +322,8 @@ class PositionValuator:
             as_of=latest.date.isoformat(),
             source=result.source,
             data_status=result.status,
+            is_within_ttl=result.is_within_ttl,
+            reason=result.reason,
         )
         return info, latest.close, ""
 

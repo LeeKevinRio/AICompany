@@ -205,6 +205,18 @@ export function formatDateTime(iso: string | null | undefined): string {
   return `${formatted}（台北時間）`;
 }
 
+/**
+ * `"2026-09-30"` -> `"09/30"`. A trading date is a calendar label, not an
+ * instant: it is sliced as a string and never passed through `new Date()`,
+ * which would read a bare date as UTC midnight and shift it by the viewer's
+ * timezone. Anything that is not `YYYY-MM-DD…` is returned unchanged rather
+ * than guessed at.
+ */
+export function formatTradingDateMonthDay(isoDate: string): string {
+  const match = /^\d{4}-(\d{2})-(\d{2})/.exec(isoDate);
+  return match === null ? isoDate : `${match[1]}/${match[2]}`;
+}
+
 /** Minutes elapsed between the given ISO timestamp and now, floored at 0. */
 export function staleMinutesSince(iso: string): number {
   const d = new Date(iso);

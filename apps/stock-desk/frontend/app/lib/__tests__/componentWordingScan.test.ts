@@ -264,6 +264,10 @@ const SCANNED_FILES = [
   // company names inline — neither surface was scanned before this batch.
   "../directorySearch.ts",
   "../../components/PositionsTable.tsx",
+  // CEO 2026-10-02「先修延遲標示」: the price badge gained new hard-coded
+  // copy ("MM/DD 收盤", "資料較舊", "可能未含最近交易日", the tooltip's
+  // "資料日期 MM/DD（日線收盤，非即時）") and was never itself in this scan.
+  "../../components/DataStatusBadge.tsx",
   // CEO 指示 2026-08-09: 代號目錄自動完成接到「新增部位」表單的代號欄。
   // `SymbolCombobox.tsx` is the shared combobox both `ManualAddForm.tsx` and
   // `EditPositionModal.tsx` now render; its own hard-coded strings (aria
