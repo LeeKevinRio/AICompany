@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PositionsTableView } from "../../components/PositionsTable";
+import { LimitsCheckList } from "../../position/[symbol]/LimitsCheckList";
 import {
   DETAIL_FIELD_LABELS,
   FOREIGN_PNL_PERCENT_NOTE,
@@ -23,7 +24,7 @@ import {
   sortStateFromOptionId,
 } from "../positionsTableView";
 import { riskGaugeBarFillClass, riskGaugeChipClass } from "../riskGauge";
-import type { LimitStatus, SummaryPositionItem } from "../types";
+import type { LimitCheck, LimitStatus, SummaryPositionItem } from "../types";
 
 /**
  * 首頁重排第一階段（CEO 2026-10-03；`work/stock-desk-首頁重排-視覺規範-
@@ -335,6 +336,26 @@ describe("風險儀表配色（非紅綠）", () => {
     expect(riskGaugeChipClass("not_evaluable")).toContain("border-dashed");
     expect(riskGaugeBarFillClass("violated")).toBe("bg-orange-400");
     expect(riskGaugeBarFillClass("passed")).toBe("bg-neutral-400");
+  });
+
+  it("個股頁 LimitsCheckList 的狀態 chip 與首頁風險儀表同 class（G4，不另立第三套配色）", () => {
+    const limits: LimitCheck[] = statuses.map((status, i) => ({
+      id: `limit-${i}`,
+      index: i + 1,
+      name: `cap-${i}`,
+      status,
+      detail: "detail",
+      observed: 0.1,
+      threshold: 0.2,
+    }));
+    const html = renderToStaticMarkup(createElement(LimitsCheckList, { limits }));
+    for (const status of statuses) {
+      expect(html).toContain(riskGaugeChipClass(status));
+    }
+    expect(html).not.toMatch(/emerald|rose|green|red-/);
+    const src = readSource("../../position/[symbol]/LimitsCheckList.tsx");
+    expect(src).toContain("riskGaugeChipClass(limit.status)");
+    expect(src).not.toContain("limitStatusColorClass");
   });
 
   it("字面不變：RiskGauge 沒有新增 ✓ ✕ ？ 符號", () => {

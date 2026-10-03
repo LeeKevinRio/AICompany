@@ -337,18 +337,6 @@ export function limitStatusLabel(value: LimitStatus): string {
   return LIMIT_STATUS_LABELS[value];
 }
 
-export function limitStatusColorClass(value: LimitStatus): string {
-  switch (value) {
-    case "passed":
-      return "text-emerald-300";
-    case "violated":
-      return "text-rose-300";
-    case "not_evaluable":
-    default:
-      return "text-amber-300";
-  }
-}
-
 const CHAPTER_STATUS_LABELS: Record<ChapterStatus, string> = {
   ok: "完整",
   partial: "部分可算",

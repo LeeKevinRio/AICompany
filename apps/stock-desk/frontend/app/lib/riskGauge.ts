@@ -81,14 +81,11 @@ export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): Sources
 
 /**
  * H2 status-chip colour upgrade (首頁「一眼一句」簡化，
- * `work/stock-desk-一眼一句-視覺規範.md` B.3): a translucent-background chip
- * replacing the plain-text colour `limitStatusColorClass` (`app/lib/format.ts`)
- * still uses. Kept as a separate, `RiskGauge`-only function rather than
- * changing `limitStatusColorClass` itself, because that function is shared
- * with the individual position page's `LimitsCheckList.tsx`, which this batch
- * does not touch and whose visual is out of scope here.
- */
-/**
+ * `work/stock-desk-一眼一句-視覺規範.md` B.3): a translucent-background chip.
+ * Since 2026-10-03 (home reflow spec §14 G4) this is the single chip palette
+ * for limit status: the position page `LimitsCheckList.tsx` uses it too, and
+ * the old plain-text `limitStatusColorClass` was removed from `format.ts`.
+ *
  * Home reflow, phase 1 (CEO 2026-10-03; `work/stock-desk-首頁重排-視覺規範-
  * 2026-10-03.md` §5.2): "passed / violated" no longer uses red/green. Taiwan
  * convention is red-up green-down for P&L, so two colour semantics would clash
@@ -96,8 +93,7 @@ export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): Sources
  * outline), loud "violated" (solid orange); red/green is reserved for P&L
  * figures. Wording unchanged, classes only; the ✓ ✕ ？ glyphs would be new
  * visible characters and were dropped (art-lead 2026-10-03: the text label is
- * already the strongest non-colour cue). The position page `LimitsCheckList`
- * (`limitStatusColorClass`) is out of scope for this phase.
+ * already the strongest non-colour cue).
  */
 const RISK_GAUGE_CHIP_CLASS: Record<LimitStatus, string> = {
   passed: "border-neutral-600 bg-transparent text-neutral-300",

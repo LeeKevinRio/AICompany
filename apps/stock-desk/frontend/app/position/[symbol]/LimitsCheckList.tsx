@@ -1,5 +1,6 @@
 import type { LimitCheck } from "../../lib/types";
-import { formatPercent, limitStatusColorClass, limitStatusLabel } from "../../lib/format";
+import { formatPercent, limitStatusLabel } from "../../lib/format";
+import { riskGaugeChipClass } from "../../lib/riskGauge";
 
 /**
  * Renders every risk-budget cap (`app.advice.limits.LimitCheck`, verified
@@ -20,7 +21,9 @@ export function LimitsCheckList({ limits }: { limits: LimitCheck[] }) {
             <span className="font-medium text-neutral-100">
               第 {limit.index} 條・{limit.name}
             </span>
-            <span className={`text-xs font-semibold ${limitStatusColorClass(limit.status)}`}>
+            <span
+              className={`inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold ${riskGaugeChipClass(limit.status)}`}
+            >
               {limitStatusLabel(limit.status)}
             </span>
           </div>
