@@ -47,7 +47,10 @@ import { isDataStaleByTradingDays } from "./tradingCalendar";
  * matched rule yet to quote a counterargument from), never "omitted by
  * mistake" — every field is rendered either by the panel or by the 頁尾揭露區
  * (`buildSummaryFooterItems`, CEO 裁定 2026-09-06), so a missing one is a
- * builder bug, not a display choice.
+ * builder bug, not a display choice. One deliberate exception: the confidence
+ * chip is withheld when `showConfidence` is false (conclusion downgraded or
+ * capped; interim measure per risk review 2026-10-03) -- that is a gate, not
+ * a bug.
  */
 export interface RequiredElements {
   /** §2.1 */
@@ -98,6 +101,19 @@ export interface HeldSummary {
    * came from no rule at all (risk review 2026-10-03).
    */
   topMatchedRule: { name: string; explanation: string } | null;
+  /**
+   * Whether the summary's confidence chip renders. `false` when the conclusion
+   * was downgraded or capped (action !== aggregated_action, including a null
+   * aggregated_action): the confidence was computed for the pre-override
+   * direction, so showing it next to the final conclusion misleads.
+   *
+   * INTERIM MEASURE: a conservative stop-gap that applies the same gate as the
+   * decision card (`DecisionCard.tsx`, commit d585594) and `pickTopMatchedRule`,
+   * pending a defined meaning for confidence on a downgraded conclusion. Source:
+   * `work/reviews/2026-10-03-決策卡-實作-風控複審.md` 「列管事項」. Only the chip
+   * is gated; `required.confidenceMeaning` (inside `<details>`) is unchanged.
+   */
+  showConfidence: boolean;
   restoresComplianceWarning: string | null;
   staleDataNotice: string | null;
   required: RequiredElements;
@@ -113,6 +129,19 @@ export interface CandidateSummary {
   quantityBasisNote: string | null;
   coverageStatement: string;
   notComparableNote: string;
+  /**
+   * Whether the summary's confidence chip renders. `false` when the conclusion
+   * was downgraded or capped (action !== aggregated_action, including a null
+   * aggregated_action): the confidence was computed for the pre-override
+   * direction, so showing it next to the final conclusion misleads.
+   *
+   * INTERIM MEASURE: a conservative stop-gap that applies the same gate as the
+   * decision card (`DecisionCard.tsx`, commit d585594) and `pickTopMatchedRule`,
+   * pending a defined meaning for confidence on a downgraded conclusion. Source:
+   * `work/reviews/2026-10-03-決策卡-實作-風控複審.md` 「列管事項」. Only the chip
+   * is gated; `required.confidenceMeaning` (inside `<details>`) is unchanged.
+   */
+  showConfidence: boolean;
   staleDataNotice: string | null;
   required: RequiredElements;
 }
@@ -139,6 +168,17 @@ export type OperationSummaryModel = HeldSummary | CandidateSummary | NoPriceSumm
 const DEFENSIVE_ACTIONS: readonly CardAction[] = ["reduce", "stop_loss", "take_profit"];
 
 /**
+ * True when the card's conclusion came straight from the rules, i.e.
+ * `action === aggregated_action` and `aggregated_action` is not null. A
+ * downgraded or capped conclusion (or a null `aggregated_action`) returns
+ * false. Single source of the gate shared by `pickTopMatchedRule` and
+ * `showConfidence` (risk review 2026-10-03).
+ */
+export function isConclusionFromRules(card: AdviceCard): boolean {
+  return card.aggregated_action !== null && card.action === card.aggregated_action;
+}
+
+/**
  * AC-C6.1's main basis, direction-fixed (risk-compliance review 2026-10-03,
  * item 4-4): the heaviest matched rule *proposing the card's own action* --
  * option C, shared with the decision card's invalidation line via
@@ -157,7 +197,7 @@ function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: stri
   // aggregated_action) no rule produced it, so quoting one -- even a hold rule
   // that happens to match -- would misattribute the conclusion. Same gate as
   // the decision card's confidence and invalidation lines.
-  if (card.aggregated_action === null || card.action !== card.aggregated_action) {
+  if (!isConclusionFromRules(card)) {
     return null;
   }
   const top = pickRuleForAction(card.matched_rules, card.action);
@@ -323,6 +363,7 @@ export function buildOperationSummary(
         card.evaluation.skipped_rules.length,
       ),
       notComparableNote: CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
+      showConfidence: isConclusionFromRules(card),
       staleDataNotice,
       required: buildRequiredElements(card, true, lastBarDate, tradingDaysBehind),
     };
@@ -340,6 +381,7 @@ export function buildOperationSummary(
     attributedHeadline: buildAttributedHeadline(card.action),
     action: card.action,
     topMatchedRule: pickTopMatchedRule(card),
+    showConfidence: isConclusionFromRules(card),
     restoresComplianceWarning,
     staleDataNotice,
     required: buildRequiredElements(card, false, lastBarDate, tradingDaysBehind),

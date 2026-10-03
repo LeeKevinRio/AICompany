@@ -816,6 +816,53 @@ describe(
   },
 );
 
+describe("信心 chip 閘門（風控 2026-10-03 暫行處置：action !== aggregated_action 時不渲染）", () => {
+  const chipRe = new RegExp(`${CONFIDENCE_PREFIX}(?:<!-- -->)?中`);
+  const mainOf = (html: string): string => html.slice(0, html.indexOf("<details"));
+  const render = (response: AdviceResponse): string =>
+    mainOf(renderToStaticMarkup(createElement(SummaryBody, { response })));
+
+  for (const held of [true, false]) {
+    const branch = held ? "held" : "candidate";
+
+    it(`${branch}：結論被降級（action !== aggregated_action）時 showConfidence 為 false，主視圖不渲染信心 chip`, () => {
+      const response = makeResponse({
+        held,
+        advice: makeCard({
+          action: "hold",
+          aggregated_action: "add",
+          downgrade_notices: ["另有 1 條防禦型規則同時命中（防禦型規則），加碼建議改為觀望。"],
+        }),
+      }) as AdviceResponse;
+      const model = buildOperationSummary(response);
+      if (model.kind !== branch) throw new Error("unreachable");
+      expect(model.showConfidence).toBe(false);
+      const main = render(response);
+      expect(main).not.toContain(CONFIDENCE_PREFIX);
+      expect(main).not.toMatch(chipRe);
+    });
+
+    it(`${branch}：aggregated_action 為 null 時 showConfidence 為 false，主視圖不渲染信心 chip`, () => {
+      const response = makeResponse({
+        held,
+        advice: makeCard({ action: "hold", aggregated_action: null }),
+      }) as AdviceResponse;
+      const model = buildOperationSummary(response);
+      if (model.kind !== branch) throw new Error("unreachable");
+      expect(model.showConfidence).toBe(false);
+      expect(render(response)).not.toContain(CONFIDENCE_PREFIX);
+    });
+
+    it(`${branch}：結論來自規則（action === aggregated_action）時 showConfidence 為 true，信心 chip 照常渲染`, () => {
+      const response = makeResponse({ held }) as AdviceResponse;
+      const model = buildOperationSummary(response);
+      if (model.kind !== branch) throw new Error("unreachable");
+      expect(model.showConfidence).toBe(true);
+      expect(render(response)).toMatch(chipRe);
+    });
+  }
+});
+
 describe("buildOperationSummary — candidate mode (FR-C7)", () => {
   it("carries all eight §2 required elements, plus the three candidate-only §3 disclosures, on a supportive card", () => {
     const model = buildOperationSummary(makeResponse({ held: false }));

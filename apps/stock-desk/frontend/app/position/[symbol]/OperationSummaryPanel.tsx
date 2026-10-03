@@ -36,7 +36,8 @@ import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLine
  * `CANDIDATE_EVIDENCE_NOTICE` 移進詳細，主要依據改短前綴「依據：」，信心改短
  * 前綴「信心 」，股數缺席改短句「未提供股數」。舊字面（`HELD_ACTION_LABELS_LEGACY`
  * 等）逐字保留、只搬進「詳細」，不刪除。主視圖只留：徽章列（資料截至徽章＋
- * compact 狀態 chip）、結論大字＋來源 chip／信心 chip、「依據：{規則名}」、
+ * compact 狀態 chip）、結論大字＋來源 chip／信心 chip（only while
+ * `model.showConfidence`; gated when the conclusion was downgraded or capped）、「依據：{規則名}」、
  * 股數一行、`StaleDataAlert`、`restoresComplianceWarning`（role=alert）、候選
  * 分支的「未持有」徽章。`buildOperationSummary`（`app/lib/operationSummary.ts`）
  * 本身不變，八要素仍全部由本檔某處渲染。
@@ -188,10 +189,12 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           ) : (
             <span className="text-xs text-neutral-400">{model.required.candidateEvidenceNotice}</span>
           )}
-          <span className="text-sm text-neutral-400">
-            {CONFIDENCE_PREFIX}
-            {summaryConfidenceLabel(model.required.confidence)}
-          </span>
+          {model.showConfidence && (
+            <span className="text-sm text-neutral-400">
+              {CONFIDENCE_PREFIX}
+              {summaryConfidenceLabel(model.required.confidence)}
+            </span>
+          )}
         </div>
 
         {model.supportive ? (
@@ -281,10 +284,12 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-400">
           {RULE_SOURCE_CHIP}
         </span>
-        <span className="text-sm text-neutral-400">
-          {CONFIDENCE_PREFIX}
-          {summaryConfidenceLabel(model.required.confidence)}
-        </span>
+        {model.showConfidence && (
+          <span className="text-sm text-neutral-400">
+            {CONFIDENCE_PREFIX}
+            {summaryConfidenceLabel(model.required.confidence)}
+          </span>
+        )}
       </div>
 
       {/*
