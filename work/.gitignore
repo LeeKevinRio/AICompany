@@ -72,3 +72,7 @@
 !stock-desk-族群動能-方法論.md
 !stock-desk-族群動能-文案稿.md
 !stock-desk-族群動能-回測紀錄.md
+# Risk-approved user-facing copy and its approval records must be tracked (ADR-0014 I-26).
+!copy/
+!copy/**
+!stock-desk-全員問卷-2026-10-03.md
