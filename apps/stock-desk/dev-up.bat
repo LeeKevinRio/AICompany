@@ -2,9 +2,10 @@
 setlocal enabledelayedexpansion
 title stock-desk dev-up
 
-REM One-click launcher for stock-desk on Windows: git pull + backend + frontend.
+REM One-click launcher for stock-desk on Windows: git pull + backend + scheduler + frontend.
 REM Double-click it or run it from any directory; all paths derive from %~dp0.
-REM Backend MUST start from its own directory so SQLite resolves to ./data/stock-desk.db.
+REM Backend and scheduler MUST start from the backend directory so SQLite resolves to the same ./data/stock-desk.db.
+REM Order: backend, then wait for /health, then scheduler, then frontend, then status lines.
 
 set "TARGET_BRANCH=product/stock-desk"
 set "BACKEND_DIR=%~dp0backend"
@@ -79,10 +80,12 @@ if errorlevel 1 (
 
 REM ---- 4. stop old processes (before install, so Windows does not lock .venv / node_modules) ----
 echo.
-echo [2/4] Checking for old processes on port 8000 / 3000
+echo [2/4] Checking for old processes on port 8000 / 3000 and for an old scheduler
 call :ensure_port_free 8000
 if errorlevel 1 goto fail
 call :ensure_port_free 3000
+if errorlevel 1 goto fail
+call :ensure_scheduler_free
 if errorlevel 1 goto fail
 
 REM ---- 5. dependencies ----
@@ -106,48 +109,67 @@ if errorlevel 1 (
 )
 popd
 
-REM ---- 6. start backend + frontend (each in its own window, kept open by /k) ----
+REM ---- 6. backend first, then (after /health) scheduler + frontend; each in its own window kept open by /k ----
 echo.
-echo [4/4] Starting backend and frontend
+echo [4/4] Starting backend, scheduler and frontend
 start "stock-desk backend" cmd /k "cd /d "%BACKEND_DIR%" && uv run uvicorn app.main:app --reload --port 8000"
-start "stock-desk frontend" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
 
-REM ---- 7. wait for backend (max 60s) then frontend (max 90s) ----
-echo Waiting for backend (up to 60 seconds)...
+REM ---- 7. wait for backend /health (max 60s) ----
+echo Waiting for backend /health (up to 60 seconds)...
 set /a TRIES=0
 :wait_backend
 call :probe "http://localhost:8000/health"
 if not errorlevel 1 goto backend_ok
 set /a TRIES+=1
-if !TRIES! GEQ 30 goto start_timeout
+if !TRIES! GEQ 30 goto backend_timeout
 call :sleep2
 goto wait_backend
 
 :backend_ok
-echo Backend is up. Waiting for frontend (up to 90 seconds)...
+echo Backend is healthy. Starting scheduler and frontend.
+REM Same directory as the backend, so both use the same SQLite file. Env vars (STOCK_DESK_DB_PATH, FINMIND_API_TOKEN) are inherited.
+start "stock-desk scheduler" cmd /k "cd /d "%BACKEND_DIR%" && uv run python -m app.scheduler"
+start "stock-desk frontend" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
+
+REM ---- 8. wait for frontend (max 90s) ----
+echo Waiting for frontend (up to 90 seconds)...
 set /a TRIES=0
 :wait_frontend
 call :probe "http://localhost:3000"
 if not errorlevel 1 goto frontend_ok
 set /a TRIES+=1
-if !TRIES! GEQ 45 goto start_timeout
+if !TRIES! GEQ 45 goto frontend_timeout
 call :sleep2
 goto wait_frontend
 
 :frontend_ok
+REM ---- 9. status lines for the three processes ----
+call :sleep2
+echo.
+call :probe "http://localhost:8000/health"
+if errorlevel 1 (echo [FAIL] backend   not answering at http://localhost:8000/health) else (echo [OK]   backend   http://localhost:8000/health)
+call :check_scheduler
+if errorlevel 1 (echo [FAIL] scheduler not running - check the 'stock-desk scheduler' window. The app still works but there is no background refresh or alerts.) else (echo [OK]   scheduler running - window 'stock-desk scheduler')
+call :probe "http://localhost:3000"
+if errorlevel 1 (echo [FAIL] frontend  not answering at http://localhost:3000) else (echo [OK]   frontend  http://localhost:3000)
 REM Empty first quoted arg is the window title; otherwise start treats the URL as the title.
 start "" "http://localhost:3000"
 echo.
 echo Done.
-echo To stop: close the two stock-desk windows.
+echo To stop: close the three stock-desk windows.
 echo URL: http://localhost:3000
 echo.
 pause
 exit /b 0
 
-:start_timeout
+:backend_timeout
 echo.
-echo [TIMEOUT] Backend or frontend did not start in time. Check the error in the 'stock-desk backend' window and send a screenshot to Claude.
+echo [TIMEOUT] Backend did not become healthy in time. Check the error in the 'stock-desk backend' window and send a screenshot to Claude.
+goto fail
+
+:frontend_timeout
+echo.
+echo [TIMEOUT] Frontend did not start in time. Check the error in the 'stock-desk frontend' window and send a screenshot to Claude.
 goto fail
 
 :fail
@@ -207,6 +229,39 @@ call :sleep2
 call :scan_port %~1
 if not "!PORT_PIDS!"==" " (
   echo [FAILED] Port %~1 is still in use, PID: !PORT_PIDS!
+  exit /b 1
+)
+exit /b 0
+
+:check_scheduler
+REM Returns errorlevel 0 when a python process running app.scheduler exists.
+REM The Name filter keeps this powershell call (whose command line also contains the text) from matching itself.
+powershell -NoProfile -Command "if (@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*app.scheduler*' }).Count -gt 0) { exit 0 } else { exit 1 }"
+exit /b %errorlevel%
+
+:scan_scheduler
+REM Sets SCHED_PIDS to a space-padded PID list of running app.scheduler processes (" " = none).
+set "SCHED_PIDS= "
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*app.scheduler*' } | ForEach-Object { $_.ProcessId }"`) do set "SCHED_PIDS=!SCHED_PIDS!%%P "
+exit /b 0
+
+:ensure_scheduler_free
+REM Two schedulers on one database would raise every alert twice, so an old one must go first.
+call :scan_scheduler
+if "!SCHED_PIDS!"==" " exit /b 0
+echo.
+echo [NOTICE] An old scheduler is still running, PID: !SCHED_PIDS!
+echo   Two schedulers at once would send every alert twice.
+choice /c YN /n /m "Stop the old scheduler? [Y/N] "
+if errorlevel 2 (
+  echo Cancelled. Not starting a second copy.
+  exit /b 1
+)
+for %%P in (!SCHED_PIDS!) do taskkill /PID %%P /F /T >nul 2>nul
+call :sleep2
+call :scan_scheduler
+if not "!SCHED_PIDS!"==" " (
+  echo [FAILED] Scheduler is still running, PID: !SCHED_PIDS!
   exit /b 1
 )
 exit /b 0
