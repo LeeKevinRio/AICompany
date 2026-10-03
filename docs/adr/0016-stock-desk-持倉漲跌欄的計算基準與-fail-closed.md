@@ -15,6 +15,7 @@
   - 檔內「風控 2b／2c(ii)／2d／(a)～(d)／第 4 項／待裁示點 (i)」等引用，指 `work/reviews/2026-10-03-首頁重排-第二階段字面-風控核可.md` 所列項目（草案相關檔案清單列有該檔；tech-writer 僅確認該檔存在，未逐項核對編號）。
   - 草案對 ADR-0014、ADR-0012 的行號引用，tech-writer 於 ADR-0014 加註前抽驗了 ADR-0014 的 L3（proposed）、L7、L123、L318、L430、L539 與 ADR-0012 L1116（DE-5），皆相符；其餘行號未驗證。ADR-0014 加註後行號已位移（L3、L7、L123 不變；以下括號前為加註前舊行號，括號內為 2026-10-03 加註後 qa-reviewer 查得之位置），請以原文定位：L318（今 L325）＝防線 2 的 ADR-0015 加註、L340（今 L347）＝合成 fixture 檔名明標 `synthetic`、L430（今 L437）＝I-4 的 ADR-0015 加註、L539（今 L550）＝附錄否決「用環境變數開關盤中功能」。檔內他處所引 ADR-0014 L340、L539 亦為舊行號。
   - 本 ADR 內的「附錄」為草案「評估摘要」，原樣轉錄。
+  - 2026-10-03 實作註記：commit `0281f0c`、`52c6e8b`（`product/stock-desk`）落地後，依 qa-reviewer 審查指出與 tech-architect 同日裁定，於 D-3、D-4、D-5 加註標明「〔2026-10-03 實作註記〕」的條目，僅記錄實作上的保守行為、常數與指稱更正，不放寬任何決策；此等加註與本 ADR 同屬待 CEO 核可內容。
 
 ---
 
@@ -86,10 +87,14 @@ class PriceChange(BaseModel):          # frozen
 - 只有 `api/portfolio.py:99-100` 注入實際的 screen。其他四個呼叫端（`api/portfolio.py:125`、`alerts/snapshot.py:83`、`api/advice.py:165`、`api/settings.py:350`）不注入，`change` 恆為 null。
 - `ChangeScreen` 依賴兩個 Protocol：
   - `ExDateLookup`：整本帳一次批次查詢，由 `DividendStore` 實作（`dividends/store.py:169`）。
+    - **〔2026-10-03 實作註記〕** 實作類別為 `DividendEventStore`，批次方法為 `ex_dates_between`；上句 `DividendStore`（`dividends/store.py:169`）為草案撰寫時的指稱。該方法依儲存值精確比對代號，正規化（`strip().upper()`）由呼叫端 `price_change.py` 負責。
   - `TradingCalendarSource`：沿用 `services/market.py:42`，底層是 `cache.market_trading_days`（`cache.py:459`）。
+- **〔2026-10-03 實作註記：dev-lead 於 `0281f0c` 追加、`52c6e8b` 擴大為整段保護，qa-reviewer 接受，tech-architect 確認不違反本 ADR〕** `ChangeScreen.screen` 整體 fail-closed：篩選過程任一處拋出例外，包括除權息查詢（`ExDateLookup`）、行事曆查詢（`TradingCalendarSource`）、D-5 覆蓋判定（`ExDateCoverageRule`），以及逐列計算遇極端值（例如 `change_pct` 量化時的 `InvalidOperation`），該本帳所有列的 `change` 一律為 null，並以 `logger.exception` 記錄，原因不得進入回應（K-6）。`GET /api/portfolio/summary` 照常回應估值與 totals，不因漲跌欄失敗而回 500：漲跌欄是輔助欄，估值不是。代價：程式錯誤也會被吞成整欄「—」，只留在 ERROR log。
 
 **D-4 收盤版的 fail-closed 條件**：任一成立，該列 `change=null`。
 - F1：現價不可得。
+  - **〔2026-10-03 實作註記：dev-lead 於 `0281f0c` 自行追加之保守行為，qa-reviewer 接受，tech-architect 確認不違反本 ADR〕** F1 另涵蓋以下情形，皆判 null：(i) 現價 `PriceInfo.value ≤ 0`；(ii) `PriceInfo.value` 不等於 `change_basis.latest.close`，或 `PriceInfo.as_of` 不等於 `change_basis.latest.date` 的 ISO 字串，也就是畫面現價並非出自同一份基準 bar，不滿足 D-2 與風控 2c(ii) 的同源前提。
+  - **〔2026-10-03 實作註記〕** F1 只判斷現價是否可得，不看 `valuation.status`。因匯率缺漏而為 `insufficient_data`、但現價與前一根收盤皆可得的列，照常計算：兩者同幣別相除，與匯率無關。
 - F2：同一份 `ProviderResult` 在回看窗內不到 2 根 bar。
 - F3：兩根 bar 的 `source` 不同，或任一根的 `source` 以 `+divadj` 結尾。
 - F4：`basis_price ≤ 0`，或 `basis_date ≥ price_date`。
@@ -97,10 +102,12 @@ class PriceChange(BaseModel):          # frozen
 - F6：已知有除權息事件，且 `basis_date < ex_date ≤ price_date`。
 - F7：TW 標的（該部位 `market=="TW"`，含 ETF 與上櫃股）的 `|pct|` 嚴格大於 11（`pct` 為百分比單位，以 D-1 量化到 0.0001 後的值比較；恰為 `11.0000` 不判 null）。11 由本模組兩個常數相加而得：漲跌停 `Decimal("10")` 加容忍 `Decimal("1")`（百分比單位），比照 `sectors/definition.py:69-70` 的第 ③ 類公司行動保險（0.10＋0.01、嚴格大於），但要在本模組自己定義常數，不得 import `app.sectors`。槓桿或反向 ETF 的漲跌幅限制待 data-engineer 查證，查證前一律套這個門檻（方向是 fail-closed）。
 - F8：沒有注入 `change_screen`。
+- **〔2026-10-03 實作註記：dev-lead 於 `0281f0c` 自行追加之保守行為，qa-reviewer 接受，tech-architect 確認不違反本 ADR〕** 本版 D-7 盤中版未開，凡 `PriceInfo.price_kind != "daily_close"` 的列，`change` 一律為 null（通過 F1 同源檢查後，log 代碼為 `D7_not_enabled`），與 P-17 開關狀態無關。此條比 ADR-0014 I-34 更嚴，並確保收盤版篩選不會產生違反 D-1 對應關係（`basis_kind`／`price_kind`）或 D-8 不變式的結果。本條不編 F 號，不影響 T-1「F1～F8 每條至少一例」的計數，另由 `tests/test_price_change.py::test_intraday_priced_row_is_withheld_until_d7` 覆蓋。D-7 落地時以 G1～G5 取代本條，並同步修訂本條。
 
 **D-5 除權息事件的覆蓋判定**
 - 只有「最新 bar 的 `source=="twse"`」（比照 ADR-0014 D-8 ②）**而且**同步紀錄能證明窗內任何除權息日在某次同步時仍屬未來，才算覆蓋已知。具體規則由 data-engineer 寫成函式並附測試。
 - 覆蓋未知時照常顯示，但這屬於剩餘風險，由 D-6 的揭露承擔。
+- **〔2026-10-03 實作註記，來源：commit `0281f0c` 之 qa-reviewer 審查；tech-architect 裁定〕** 「覆蓋未知時照常顯示」由 `app/portfolio/price_change.py` 的模組級常數 `SHOW_WHEN_COVERAGE_UNKNOWN`（`Final`，預設 `True`）表達。它是程式碼常數，不是環境變數，也不得改由環境變數、設定檔或任何 runtime 輸入決定（比照 ADR-0014 附錄否決以環境變數開關功能）。data-engineer 交付 D-5 覆蓋判定函式前，覆蓋規則以 stub `CoverageNotYetJudged` 代替，對每列一律回答 `unknown`；此期間把常數改為 `False` 等於整欄全 null，屬 fail-closed 退路，不是調參旋鈕。改動此常數須 CEO 核可並以修訂本 ADR 留紀錄，不得以 hotfix 處理。`tests/test_price_change.py::test_unknown_coverage_still_shows_the_change` 釘住其值為 `True`，改值必然改動該測試，review 時據此追溯核可紀錄。覆蓋規則對某列未回答時，視同 `unknown`。
 
 **D-6 剩餘揭露**：上櫃股、美股、未同步期間的除權息，以及分割，會有假漲跌。這句要由 creative-lead 起草、風控逐字核可。**建議與收盤版同 PR 上線。**
 - **〔2026-10-03 定稿，來源：risk-compliance-officer 2026-10-03 核可（非 tech-architect 草案）〕** 剩餘揭露句已由風控逐字核可：

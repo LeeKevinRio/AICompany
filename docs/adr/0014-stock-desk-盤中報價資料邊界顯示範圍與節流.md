@@ -4,11 +4,11 @@
 - 日期：2026-10-03
 - 決策者：tech-architect（草案）、CEO（待核可；2026-10-02 已裁定「加盤中價」與「主來源採 MIS」；2026-10-03 另裁定五點（第 1～3 點為前兩批、第 4～5 點為第三批），見「CEO 裁定（2026-10-03）」一節）
 - 適用範圍：僅 product/stock-desk 產品線
-- 修訂：新增。**不取代任何 ADR。** 2026-10-03 依 ADR-0015（accepted）C-17 加註兩處修訂註記（I-4、防線 2），並調整 D-9 前置條件、W11 列、「前置條件（明列）」段對 ADR-0015 的引用字樣；僅調整引用與註記，決策內容未變。2026-10-03 依 ADR-0016 加註：D-1（`prev_close` 註解、說明一項、`interface.py` docstring 同 PR 補正一項）、D-4（補一項界定「日線梯子」）、D-5、D-6、D-7 表、待實測參數段、I-18、I-28、「前置條件（明列）」段，新增 P-17 與 I-33～I-35；其餘決策內容未變。ADR-0016 核可前，上述加註同屬待核可內容。
+- 修訂：新增。**不取代任何 ADR。** 2026-10-03 依 ADR-0015（accepted）C-17 加註兩處修訂註記（I-4、防線 2），並調整 D-9 前置條件、W11 列、「前置條件（明列）」段對 ADR-0015 的引用字樣；僅調整引用與註記，決策內容未變。2026-10-03 依 ADR-0016 加註：D-1（`prev_close` 註解、說明一項、`interface.py` docstring 同 PR 補正一項）、D-4（補一項界定「日線梯子」）、D-5、D-6、D-7 表、待實測參數段、I-18、I-28、「前置條件（明列）」段，新增 P-17 與 I-33～I-35；其餘決策內容未變。ADR-0016 核可前，上述加註同屬待核可內容。2026-10-03 另依 ADR-0016 收盤版實作（commit `0281f0c`）於 I-17 加註封閉 key 集合測試的例外一項，同屬 ADR-0016 待核可內容。
   - 落實 ADR-0003:32「日後需要即時報價另案評估」這一條另案。
   - 擴充 ADR-0010 R-1：`cache_only` 一律不取盤中報價。
 - 編號說明：0013 已由員工線（`chore/agent-readonly-hook`）的唯讀 hook ADR 佔用，該 ADR 之後會 merge 進產品線，故本 ADR 使用 0014（來源：任務單，2026-10-03）。
-- 來源與版本：本檔為 tech-architect 2026-10-03 草案的落檔，僅做格式調整，另含落檔時補明一處（D-3 的 13:25～13:30）；「CEO 裁定」一節來自 CEO 2026-10-03 裁定（由任務單轉述；第 4、5 點為 2026-10-03 第三批，CEO 原話逐字見該節）。D-3 的 13:25～13:30 補明已於第三批獲 CEO 確認（第 4 點）。檔內 `檔案:行號` 為草案作者所引，落檔時未重新對 code 驗證，行號會隨 commit 漂移，引用時以原文定位。2026-10-03 依 ADR-0016 加註的各處（修訂行、D-1 三處、D-4、D-5、D-6、D-7 表、待實測參數段、P-17、「前置條件（明列）」段、I-18、I-28、I-33～I-35），來源為 tech-architect 2026-10-03 草案「二、ADR-0014 修訂條文」1～9，以及 tech-architect 同日落檔覆核裁定（D-4 一項、待實測參數段、前置條件段、I-28 的 P-17 加註、D-5 加註的「D1」改字、D-6 `change_mode` 項的層級、D-1 docstring 項的 PR 歸屬）；tech-writer 逐字落檔（`2026-10-0X` 填為 2026-10-03）。其中 `interface.py:463-464`、`:480` 由 tech-architect 於 2026-10-03 落檔覆核時讀檔確認仍相符。
+- 來源與版本：本檔為 tech-architect 2026-10-03 草案的落檔，僅做格式調整，另含落檔時補明一處（D-3 的 13:25～13:30）；「CEO 裁定」一節來自 CEO 2026-10-03 裁定（由任務單轉述；第 4、5 點為 2026-10-03 第三批，CEO 原話逐字見該節）。D-3 的 13:25～13:30 補明已於第三批獲 CEO 確認（第 4 點）。檔內 `檔案:行號` 為草案作者所引，落檔時未重新對 code 驗證，行號會隨 commit 漂移，引用時以原文定位。2026-10-03 依 ADR-0016 加註的各處（修訂行、D-1 三處、D-4、D-5、D-6、D-7 表、待實測參數段、P-17、「前置條件（明列）」段、I-18、I-28、I-33～I-35），來源為 tech-architect 2026-10-03 草案「二、ADR-0014 修訂條文」1～9，以及 tech-architect 同日落檔覆核裁定（D-4 一項、待實測參數段、前置條件段、I-28 的 P-17 加註、D-5 加註的「D1」改字、D-6 `change_mode` 項的層級、D-1 docstring 項的 PR 歸屬）；tech-writer 逐字落檔（`2026-10-0X` 填為 2026-10-03）。其中 `interface.py:463-464`、`:480` 由 tech-architect 於 2026-10-03 落檔覆核時讀檔確認仍相符。2026-10-03 另依 ADR-0016 收盤版實作（commit `0281f0c`）於 I-17 加註封閉 key 集合測試之例外一項，來源為 tech-architect 同日讀碼後之實作註記；tech-writer 逐字落檔。
 
 ---
 
@@ -448,6 +448,7 @@ class QuoteProvider(ABC):
 - **I-15** D-10 的每個拒絕碼都至少有一個單元測試；被拒絕時 `PriceInfo.intraday_fallback` 非 null，並寫一行 log。
 - **I-16** 報價被拒絕或不在盤中時段時，`PriceInfo` 的 `value`／`as_of`／`source`／`data_status`／`is_within_ttl`／`reason` 與「沒傳 `intraday`」時完全相同。
 - **I-17** `PriceInfo` 的三個新欄位都有預設值；三個既有估值測試檔不改任何斷言即可通過。
+  - **〔2026-10-03 依 ADR-0016 加註（實作註記，來源：commit `0281f0c` 之 qa-reviewer 審查；tech-architect 裁定）：本條「三個既有估值測試檔」指防線 8 所列 `test_valuation.py`、`test_valuation_golden.py`、`test_valuation_cache_only.py`。`tests/test_price_info_freshness.py::test_summary_price_contract_has_exact_key_set` 以封閉集合（`set(price) == {...}`）斷言 summary 回應中 `price` 的 key；ADR-0016 K-8 先行新增 `PriceInfo.price_kind` 必然使該集合變動。該檔不在前述三檔之內，其變動為允許的例外，不視為違反本條。例外限於：集合只增不減（不刪除、不改名既有 key），且既有 key 的值斷言不得放寬。W6 補上 `quote_time`、`intraday_fallback` 時，同一測試的變動依相同條件處理，並須在該 PR 說明中引用本註記。〕**
 - **I-18** 報價被接受時，該部位不呼叫 `get_daily_bars`；`get_cached_bars` 至多呼叫一次，且僅供 ADR-0016 漲跌基準使用（假服務計數）。
 - **I-19** US 持倉永遠是 `price_kind="daily_close"`，而且不觸發報價請求（有測試）。
 - **I-20** 示範持倉（備註帶 `DEMO_NOTE_PREFIX`，或快取最後一根 `source="demo_synthetic"`）永遠是 `daily_close`，拒絕碼 `demo_series`（有測試）。
