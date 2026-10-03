@@ -150,10 +150,13 @@ export function waitingKinds(counts: readonly number[], setsNeeded: number): num
 
 type GroupTable = Map<number, number>; // key = sets * 2 + head, value = max partials
 
-const groupCache = new Map<number, GroupTable>();
+// Suits and honors use separate caches: their base-5 keys overlap (e.g. honors E S W and suit 2345).
+const suitCache = new Map<number, GroupTable>();
+const honorCache = new Map<number, GroupTable>();
 
 function analyseGroup(counts: readonly number[], from: number, len: number, honor: boolean): GroupTable {
-  let key = honor ? 1 : 0;
+  const groupCache = honor ? honorCache : suitCache;
+  let key = 0;
   for (let i = 0; i < len; i++) key = key * 5 + counts[from + i]!;
   const cached = groupCache.get(key);
   if (cached) return cached;

@@ -36,6 +36,12 @@ describe('hand analysis', () => {
     expect(shapes).toEqual([0, 3]);
   });
 
+  it('shanten caches for honors and suits do not collide', () => {
+    // Honors E S W and suit 2345 share the same base-5 key; analysing honors first used to poison the suit.
+    expect(shanten(counts('E S W 1p 9p 1s 9s'), 5)).toBe(10);
+    expect(shanten(counts('2m 3m 4m 5m 1p 9p 1s 9s'), 5)).toBe(8);
+  });
+
   it('computes shanten', () => {
     expect(shanten(counts('123m 456m 789m 234p 567s 99s'), 5)).toBe(-1);
     expect(shanten(counts('123m 456m 234s 567s 88s 23p'), 5)).toBe(0);
