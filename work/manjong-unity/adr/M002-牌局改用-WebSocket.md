@@ -10,7 +10,8 @@ CEO 要求牌局連線改用 socket，且每次摸牌後由後端告知能否胡
 
 ## 決策
 
-1. 牌局走 WebSocket（`/ws`，`@fastify/websocket`，底層 `ws`）。帳號、排行榜維持 HTTP。牌局 HTTP 端點移除，避免兩條路徑。
+1. 牌局走 WebSocket（`/ws`，`@fastify/websocket`，底層 `ws`）。牌局 HTTP 端點移除，避免兩條路徑。
+   **補充（CEO 2026-10-03）：登入、暱稱、救濟金、排行榜也改走 WebSocket**，HTTP API 全部移除，只留健康檢查與 WebGL 靜態檔。
 2. 認證：連線後第一則訊息帶 token（不放 URL query，避免 token 進存取紀錄）。同一玩家只保留最新一條連線。
 3. **伺服器控制節奏**：AI 動作之間由伺服器等待（預設 600ms，`AI_DELAY_MS` 可調，測試設 0），事件即時推送。
    這和之後真人多人連線的形態一致，引擎與 session 不必再改。
