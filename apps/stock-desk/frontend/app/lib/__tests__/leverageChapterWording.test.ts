@@ -3,6 +3,11 @@
  * (work/reviews/2026-10-03-槓桿章節-觀測值字面-風控核可.md) 前端落地條件：
  * 三個列標／標籤、附註字面、附註 class、附註位置（表格之後、警示之前）、常駐、
  * 不在 details／title，且 LeverageChapterView.tsx 不再含舊字面。
+ *
+ * 風控 2026-10-03 槓桿章節小節標題核可
+ * (work/reviews/2026-10-03-槓桿章節-小節標題-風控核可.md) 落地條件 6a／6b：
+ * 標題常數逐字釘住、元件以 {LEVERAGE_DRAG_SECTION_TITLE}</h3> 渲染、h3 class 不變、
+ * 不含「已實現」與「報酬拆解（drag）」。
  */
 
 import { readFileSync } from "node:fs";
@@ -16,6 +21,7 @@ import {
   LEVERAGE_DRAG_OBSERVED_NOTE,
   LEVERAGE_DRAG_OBSERVED_ROW_LABEL,
   LEVERAGE_DRAG_RESET_EFFECT_LABEL,
+  LEVERAGE_DRAG_SECTION_TITLE,
 } from "../leverageWording";
 import type { DragDecomposition, LeverageChapter } from "../types";
 
@@ -118,7 +124,38 @@ function readSource(rel: string): string {
   return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf-8");
 }
 
+const SECTION_H3 = '<h3 class="text-sm font-semibold text-neutral-200">Gap 拆解：觀測值與 Naive 期望的差距</h3>';
+
 describe("槓桿章節 drag 表：風控核可字面逐字釘住", () => {
+  it("小節標題常數逐字等於核可字面（T1）", () => {
+    expect(LEVERAGE_DRAG_SECTION_TITLE).toBe("Gap 拆解：觀測值與 Naive 期望的差距");
+  });
+
+  it("小節標題 wiring：元件以常數渲染 h3，不含舊字面「已實現」「報酬拆解（drag）」", () => {
+    const src = readSource("../../position/[symbol]/LeverageChapterView.tsx");
+    expect(src).toContain("{LEVERAGE_DRAG_SECTION_TITLE}</h3>");
+    expect(src.match(/\{LEVERAGE_DRAG_SECTION_TITLE\}/g)).toHaveLength(1);
+    expect(src).not.toContain("已實現");
+    expect(src).not.toContain("報酬拆解（drag）");
+    expect(src).not.toContain("Gap 拆解：觀測值與 Naive 期望的差距");
+  });
+
+  it("小節標題渲染：h3 class 不變、無 title、不在 <details> 內", () => {
+    const html = render(makeDrag());
+    expect(html).toContain(SECTION_H3);
+    expect(html.split(LEVERAGE_DRAG_SECTION_TITLE)).toHaveLength(2); // exactly once
+    expect(html).not.toContain("已實現");
+    expect(html).not.toContain("報酬拆解（drag）");
+    expect(html).not.toMatch(/title="[^"]*Gap 拆解/);
+    const titleIdx = html.indexOf(LEVERAGE_DRAG_SECTION_TITLE);
+    for (const m of html.matchAll(/<details[\s\S]*?<\/details>/g)) {
+      const start = m.index ?? 0;
+      expect(titleIdx >= start && titleIdx < start + m[0].length, "title inside <details>").toBe(false);
+    }
+    // the title is also shown when the drag table itself is not rendered
+    expect(render(null)).toContain(SECTION_H3);
+  });
+
   it("三個列標／標籤常數逐字等於核可字面", () => {
     expect(LEVERAGE_DRAG_OBSERVED_ROW_LABEL).toBe("ETF 收盤價觀測值（未還原）");
     expect(LEVERAGE_DRAG_GAP_ROW_LABEL).toBe("Gap（觀測值 − naive）");

@@ -168,8 +168,10 @@ def test_no_advice_vocabulary_in_any_string(chapter: dict[str, Any]) -> None:
 # Retired wording: the "ETF price" column is an unadjusted close-price
 # observation, not the holder's return, and every effect in the drag table is a
 # theoretical quantity, so neither phrase may reach the UI (risk-compliance
-# review 2026-10-03, 槓桿章節-觀測值字面).
-RETIRED_ZH = ("實際報酬", "實測")
+# review 2026-10-03, 槓桿章節-觀測值字面). "已發生的報酬拆解" was replaced in the
+# disclosure by the Gap wording (risk-compliance review 2026-10-03,
+# 槓桿章節-小節標題, condition 6c).
+RETIRED_ZH = ("實際報酬", "實測", "已發生的報酬拆解")
 
 
 @pytest.mark.parametrize("chapter", _chapters())
@@ -191,6 +193,28 @@ def test_source_files_contain_no_retired_wording() -> None:
         text = file.read_text(encoding="utf-8")
         for phrase in RETIRED_ZH:
             assert phrase not in text, f"retired wording {phrase!r} in {file.name}"
+
+
+# Verbatim wording approved by risk-compliance (2026-10-03, 槓桿章節-小節標題,
+# condition 6c). Any edit to the disclosure must go back through that review.
+APPROVED_DISCLOSURE = (
+    "本章僅中性陳述日度重置型槓桿／反向 ETF 的運作機制與可計算的數字："
+    "歷史觀測值與 Naive 期望之間的 Gap 拆解，以及在明確假設下的情境推估。"
+    "情境數字不是預測，也不構成任何操作指引；"
+    "所有含費用率與倍數的數字都依附於尚未查證的 metadata。"
+)
+
+
+def test_disclosure_matches_approved_wording_verbatim() -> None:
+    assert S.DISCLOSURE == APPROVED_DISCLOSURE
+    assert "已發生" not in S.DISCLOSURE
+    assert "報酬拆解" not in S.DISCLOSURE
+    assert "不是預測" in S.DISCLOSURE
+
+
+def test_chapter_serializes_the_approved_disclosure() -> None:
+    for chapter in _chapters():
+        assert chapter["disclosure"] == APPROVED_DISCLOSURE
 
 
 def test_chapter_ships_its_disclosure_and_assumptions() -> None:

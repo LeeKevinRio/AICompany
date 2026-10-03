@@ -4,9 +4,16 @@
  * (risk-compliance-officer, 2026-10-03). Any change to these strings is drift
  * and must be re-submitted to risk review.
  *
+ * Section title (LEVERAGE_DRAG_SECTION_TITLE) verbatim approval:
+ * work/reviews/2026-10-03-槓桿章節-小節標題-風控核可.md
+ * (risk-compliance-officer, 2026-10-03, title T1, landing conditions 6a/6b).
+ *
  * `componentWordingScan.test.ts` scans this file for banned terms and
  * `leverageChapterWording.test.ts` pins every literal verbatim.
  */
+
+/** h3 title of the drag section: states that the Gap is observed value minus naive expectation. */
+export const LEVERAGE_DRAG_SECTION_TITLE = "Gap 拆解：觀測值與 Naive 期望的差距";
 
 /** Row label of the observed ETF close-to-close return (unadjusted prices). */
 export const LEVERAGE_DRAG_OBSERVED_ROW_LABEL = "ETF 收盤價觀測值（未還原）";

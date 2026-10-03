@@ -43,7 +43,8 @@ from app.signals.risk import TRADING_DAYS_PER_YEAR
 ChapterStatus = Literal["ok", "partial", "insufficient_data", "not_applicable"]
 
 DISCLOSURE: Final = (
-    "本章僅中性陳述日度重置型槓桿／反向 ETF 的運作機制與可計算的數字：已發生的報酬拆解，"
+    "本章僅中性陳述日度重置型槓桿／反向 ETF 的運作機制與可計算的數字："
+    "歷史觀測值與 Naive 期望之間的 Gap 拆解，"
     "以及在明確假設下的情境推估。情境數字不是預測，也不構成任何操作指引；"
     "所有含費用率與倍數的數字都依附於尚未查證的 metadata。"
 )

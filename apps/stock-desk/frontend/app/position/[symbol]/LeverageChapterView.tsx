@@ -15,6 +15,7 @@ import {
   LEVERAGE_DRAG_OBSERVED_NOTE,
   LEVERAGE_DRAG_OBSERVED_ROW_LABEL,
   LEVERAGE_DRAG_RESET_EFFECT_LABEL,
+  LEVERAGE_DRAG_SECTION_TITLE,
 } from "../../lib/leverageWording";
 
 function AssumptionsList({ items }: { items: string[] }) {
@@ -107,7 +108,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
 
       {/* --- Drag decomposition ------------------------------------------ */}
       <section className="mt-4">
-        <h3 className="text-sm font-semibold text-neutral-200">已實現報酬拆解（drag）</h3>
+        <h3 className="text-sm font-semibold text-neutral-200">{LEVERAGE_DRAG_SECTION_TITLE}</h3>
         {chapter.drag === null || chapter.drag.status !== "ok" ? (
           <p className="mt-1 text-sm text-neutral-500">
             {chapter.drag?.reason ?? "本項未啟用或未計算。"}
