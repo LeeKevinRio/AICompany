@@ -14,13 +14,19 @@ import {
 import { deleteButtonState } from "../lib/positionFormSubmit";
 import {
   DETAIL_FIELD_LABELS,
+  FOREIGN_PNL_PERCENT_NOTE,
   PRIMARY_HEADER_LABELS,
+  SORT_CONTROL_LABEL,
+  SORT_OPTIONS,
   formatSignedPercent,
-  nextPnlSortDirection,
+  hasForeignCurrencyPosition,
+  nextSortState,
   pnlPercentTwd,
-  sortByPnlTwd,
+  sortOptionId,
+  sortPositions,
+  sortStateFromOptionId,
 } from "../lib/positionsTableView";
-import type { PnlSortDirection } from "../lib/positionsTableView";
+import type { SortDirection, SortKey, SortState } from "../lib/positionsTableView";
 import { useDeletePosition, useDirectoryNames } from "../lib/queries";
 import { missingSummary } from "../lib/valuationWording";
 import { DataStatusBadge, priceDateTooltip } from "./DataStatusBadge";
@@ -44,9 +50,12 @@ import { ErrorPanel } from "./ErrorPanel";
 // (`TODAY_CHANGE_SLOT`; no backend field yet, header wording pending risk
 // review). Enabling it later means one extra track in ROW_GRID and the header.
 
-/** Row grid shared by the header and every row. Mobile: name+price | pnl | chevron. */
+/**
+ * Row grid shared by the header and every row. Mobile: name+price | pnl% and
+ * pnl stacked | chevron. Desktop: chevron | name | price | pnl% (96px) | pnl.
+ */
 const ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,40%)_2.75rem] gap-x-3 md:grid-cols-[2.75rem_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(8rem,1fr)]";
+  "grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,40%)_2.75rem] gap-x-3 md:grid-cols-[2.75rem_minmax(0,1.4fr)_minmax(0,1.3fr)_6rem_minmax(8rem,1fr)]";
 
 const PLACEHOLDER = <span className="text-neutral-400">—</span>;
 
@@ -107,13 +116,28 @@ function MoneyOrDash({
 }
 
 /**
- * 台幣損益 + FX provenance. The TWD-basis percentage is intentionally NOT
- * rendered in phase 1: risk-compliance-officer (2026-10-03) vetoed an
- * unlabelled percentage (a TWD-basis figure on a foreign holding embeds FX
- * and reads like a share-price move). It returns once creative-lead drafts a
- * label and risk approves it word-for-word (spec §8 L3). `pnlPercentTwd` and
- * `formatSignedPercent` stay available for that phase.
+ * 台幣損益％ (home reflow phase 2, spec §8 L3). Risk-approved label
+ * `PRIMARY_HEADER_LABELS.pnlPercentTwd`; the value always carries `%` and an
+ * explicit sign (`formatSignedPercent`), and shows "—" when it cannot be
+ * computed. The small label is mobile-only (desktop has the column header).
  */
+function PnlPercentCell({ position }: { position: SummaryPositionItem }) {
+  const percent = pnlPercentTwd(position);
+  return (
+    <div className="text-right">
+      <p className="text-xs text-neutral-400 md:hidden">{PRIMARY_HEADER_LABELS.pnlPercentTwd}</p>
+      <p className="text-sm tabular-nums">
+        {percent === null ? (
+          PLACEHOLDER
+        ) : (
+          <span className={pnlColorClass(position.valuation.pnl_twd)}>{formatSignedPercent(percent)}</span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** 台幣損益 + FX provenance (the FX date and badge are disclosures and stay in the default view). */
 function PnlTwdCell({ position }: { position: SummaryPositionItem }) {
   return (
     <div className="text-right">
@@ -147,11 +171,62 @@ export interface PositionsTableViewProps {
   onDelete: (position: SummaryPositionItem) => void;
 }
 
-function ariaSortValue(direction: PnlSortDirection): "ascending" | "descending" | "none" {
-  if (direction === "desc") return "descending";
-  if (direction === "asc") return "ascending";
-  return "none";
+function ariaSortValue(
+  state: SortState,
+  key: SortKey,
+): "ascending" | "descending" | "none" {
+  if (state === null || state.key !== key) return "none";
+  return state.direction === "desc" ? "descending" : "ascending";
 }
+
+function directionArrow(direction: SortDirection | null): string {
+  if (direction === "desc") return "▾";
+  if (direction === "asc") return "▴";
+  return "↕";
+}
+
+/**
+ * Desktop sortable column header. Accessible name = the visible label; the
+ * direction is announced through `aria-sort` on the enclosing columnheader.
+ * The arrow is neutral grey on purpose (never red/green).
+ */
+function SortableHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: SortState;
+  onSort: (next: SortState) => void;
+  align: "left" | "right";
+}) {
+  const active = sort !== null && sort.key === sortKey;
+  return (
+    <span
+      role="columnheader"
+      aria-sort={ariaSortValue(sort, sortKey)}
+      className={align === "right" ? "text-right" : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(nextSortState(sort, sortKey))}
+        className={`inline-flex min-h-8 items-center gap-1 whitespace-nowrap rounded px-1 font-medium hover:text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 ${
+          active ? "text-neutral-100" : "text-neutral-400"
+        }`}
+      >
+        {label}
+        <span aria-hidden="true" className="text-xs text-neutral-400">
+          {directionArrow(active ? sort.direction : null)}
+        </span>
+      </button>
+    </span>
+  );
+}
+
+const SORT_SELECT_ID = "positions-sort-select";
 
 function toggleId(setter: Dispatch<SetStateAction<ReadonlySet<number>>>, id: number) {
   setter((current) => {
@@ -165,7 +240,8 @@ function toggleId(setter: Dispatch<SetStateAction<ReadonlySet<number>>>, id: num
 /**
  * Presentational half (no query client needed) so the structure can be
  * unit-tested with `renderToStaticMarkup`. Default order is the backend's;
- * clicking the 台幣損益 header cycles desc -> asc -> backend order.
+ * clicking a sortable header cycles default direction -> reverse -> backend
+ * order. The mobile (< md) dropdown reads and writes the same `sort` state.
  */
 export function PositionsTableView({
   positions,
@@ -176,10 +252,32 @@ export function PositionsTableView({
   onDelete,
 }: PositionsTableViewProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set(initialExpandedIds));
-  const [sortDirection, setSortDirection] = useState<PnlSortDirection>(null);
-  const rows = sortByPnlTwd(positions, sortDirection);
+  const [sort, setSort] = useState<SortState>(null);
+  const rows = sortPositions(positions, sort);
 
   return (
+    <div>
+    {/* Basis sentence: between the page h2 and the table/list, both widths, never a title or inside the expandable block. */}
+    {hasForeignCurrencyPosition(positions) && (
+      <p className="mb-2 text-xs text-neutral-400">{FOREIGN_PNL_PERCENT_NOTE}</p>
+    )}
+    <div className="mb-2 flex items-center justify-end gap-2 md:hidden">
+      <label htmlFor={SORT_SELECT_ID} className="text-sm text-neutral-300">
+        {SORT_CONTROL_LABEL}
+      </label>
+      <select
+        id={SORT_SELECT_ID}
+        value={sortOptionId(sort)}
+        onChange={(e) => setSort(sortStateFromOptionId(e.target.value))}
+        className="min-h-11 rounded-md border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+      >
+        {SORT_OPTIONS.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </div>
     <div
       role="table"
       aria-label="持倉明細表"
@@ -188,22 +286,28 @@ export function PositionsTableView({
       <div role="rowgroup" className="hidden bg-neutral-900 text-neutral-400 md:block">
         <div role="row" className={`${ROW_GRID} items-center px-3 py-2 text-sm font-medium`}>
           <span role="columnheader" aria-hidden="true" />
-          <span role="columnheader">{PRIMARY_HEADER_LABELS.symbol}</span>
+          <SortableHeader
+            label={PRIMARY_HEADER_LABELS.symbol}
+            sortKey="symbol"
+            sort={sort}
+            onSort={setSort}
+            align="left"
+          />
           <span role="columnheader">{PRIMARY_HEADER_LABELS.price}</span>
-          <span role="columnheader" aria-sort={ariaSortValue(sortDirection)} className="text-right">
-            <button
-              type="button"
-              onClick={() => setSortDirection(nextPnlSortDirection(sortDirection))}
-              className={`inline-flex min-h-8 items-center gap-1 rounded px-1 font-medium hover:text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 ${
-                sortDirection === null ? "text-neutral-400" : "text-neutral-100"
-              }`}
-            >
-              {PRIMARY_HEADER_LABELS.pnlTwd}
-              <span aria-hidden="true" className="text-xs text-neutral-400">
-                {sortDirection === "desc" ? "▾" : sortDirection === "asc" ? "▴" : "↕"}
-              </span>
-            </button>
-          </span>
+          <SortableHeader
+            label={PRIMARY_HEADER_LABELS.pnlPercentTwd}
+            sortKey="pnlPercentTwd"
+            sort={sort}
+            onSort={setSort}
+            align="right"
+          />
+          <SortableHeader
+            label={PRIMARY_HEADER_LABELS.pnlTwd}
+            sortKey="pnlTwd"
+            sort={sort}
+            onSort={setSort}
+            align="right"
+          />
         </div>
       </div>
 
@@ -231,8 +335,13 @@ export function PositionsTableView({
                   <PriceCell position={position} />
                 </div>
               </div>
-              <div role="cell" className="min-w-0 md:col-start-4 md:row-start-1">
-                <PnlTwdCell position={position} />
+              <div className="min-w-0 space-y-1 md:contents">
+                <div role="cell" className="min-w-0 md:col-start-4 md:row-start-1">
+                  <PnlPercentCell position={position} />
+                </div>
+                <div role="cell" className="min-w-0 md:col-start-5 md:row-start-1">
+                  <PnlTwdCell position={position} />
+                </div>
               </div>
               <div
                 role="cell"
@@ -317,6 +426,7 @@ export function PositionsTableView({
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

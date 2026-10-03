@@ -1,10 +1,11 @@
 /**
- * Pure view logic for the home-page holdings table (first-phase reflow,
+ * Pure view logic for the home-page holdings table (home reflow,
  * `work/stock-desk-首頁重排-視覺規範-2026-10-03.md` §2).
  *
- * Nothing in here introduces a user-visible string: every label is reused
- * from the pre-reflow table headers, and the percentage is derived from the
- * TWD figures the backend already returns.
+ * Phase 1 reused only pre-reflow labels. Phase 2 adds the strings below, all
+ * word-for-word from the risk-approved draft
+ * (`work/reviews/2026-10-03-首頁重排-第二階段字面-風控核可.md`); changing any of
+ * them needs a fresh risk review and the pinned tests in `homeReflow.test.ts`.
  */
 
 import type { SummaryPositionItem } from "./types";
@@ -29,6 +30,36 @@ export const PRIMARY_HEADER_LABELS = {
   symbol: "代號",
   price: "現價",
   pnlTwd: "台幣損益",
+  /** Desktop header and mobile mini-label share this one string (spec §2.2). */
+  pnlPercentTwd: "台幣損益％",
+} as const;
+
+/**
+ * Basis sentence for the TWD P&L percentage. Shown between the section h2 and
+ * the table/list, at both widths, whenever at least one listed position is
+ * non-TWD (risk condition: the trigger looks only at `currency`, never at
+ * whether that row's percentage is computable or the FX lookup succeeded).
+ * Never a `title`, never inside the expandable block.
+ */
+export const FOREIGN_PNL_PERCENT_NOTE = "外幣持倉的台幣損益％含匯率變動。";
+
+/** True when any listed row is held in a currency other than TWD. */
+export function hasForeignCurrencyPosition(
+  positions: readonly Pick<SummaryPositionItem, "currency">[],
+): boolean {
+  return positions.some((p) => p.currency !== "TWD");
+}
+
+/** Visible label of the mobile (< md) sort dropdown; bound to the select via `<label htmlFor>`. */
+export const SORT_CONTROL_LABEL = "排序";
+
+/** Option for "back to backend order" in the mobile sort dropdown. */
+export const SORT_DEFAULT_OPTION_LABEL = "預設順序";
+
+/** Direction words used in the mobile sort options. */
+const SORT_WORDS = {
+  text: { asc: "小到大", desc: "大到小" },
+  number: { asc: "低到高", desc: "高到低" },
 } as const;
 
 /**
@@ -98,6 +129,112 @@ export function sortByPnlTwd(
     if (av === null) return 1;
     if (bv === null) return -1;
     return (av - bv) * sign;
+  });
+}
+
+/** Columns the user can sort by. The price column is deliberately not sortable (spec §2.4). */
+export type SortKey = "symbol" | "pnlPercentTwd" | "pnlTwd";
+export type SortDirection = "asc" | "desc";
+/** `null` = backend order. One state shared by the desktop headers and the mobile dropdown. */
+export type SortState = { key: SortKey; direction: SortDirection } | null;
+
+/** Direction of a column's first click (spec §2.4): symbol small-to-large, P&L large-to-small. */
+export function defaultSortDirection(key: SortKey): SortDirection {
+  return key === "symbol" ? "asc" : "desc";
+}
+
+/** Header click cycle per column: default direction -> reverse -> backend order. */
+export function nextSortState(current: SortState, key: SortKey): SortState {
+  const first = defaultSortDirection(key);
+  if (current === null || current.key !== key) return { key, direction: first };
+  if (current.direction === first) return { key, direction: first === "asc" ? "desc" : "asc" };
+  return null;
+}
+
+export interface SortOption {
+  /** Stable value for the `<select>`. */
+  id: string;
+  /** Visible text; the column name is the same constant the table header uses. */
+  label: string;
+  state: SortState;
+}
+
+function sortOption(key: SortKey, direction: SortDirection, columnLabel: string, kind: "text" | "number"): SortOption {
+  return {
+    id: `${key}:${direction}`,
+    label: `${columnLabel} ${SORT_WORDS[kind][direction]}`,
+    state: { key, direction },
+  };
+}
+
+/**
+ * Mobile sort dropdown options, in display order. Column names come straight
+ * from `PRIMARY_HEADER_LABELS` (risk required: never hand-typed a second time).
+ * Phase 2 renders seven options; the two change-column options wait for the
+ * backend field.
+ */
+export const SORT_OPTIONS: readonly SortOption[] = [
+  { id: "default", label: SORT_DEFAULT_OPTION_LABEL, state: null },
+  sortOption("symbol", "asc", PRIMARY_HEADER_LABELS.symbol, "text"),
+  sortOption("symbol", "desc", PRIMARY_HEADER_LABELS.symbol, "text"),
+  sortOption("pnlPercentTwd", "desc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
+  sortOption("pnlPercentTwd", "asc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
+  sortOption("pnlTwd", "desc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
+  sortOption("pnlTwd", "asc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
+];
+
+/** The dropdown option id that represents `state` (every reachable state has one). */
+export function sortOptionId(state: SortState): string {
+  if (state === null) return "default";
+  return `${state.key}:${state.direction}`;
+}
+
+/** Resolves a `<select>` value back to a sort state; unknown values fall back to backend order. */
+export function sortStateFromOptionId(id: string): SortState {
+  return SORT_OPTIONS.find((o) => o.id === id)?.state ?? null;
+}
+
+function numericOrNull(raw: string | null): number | null {
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Sorts by any sortable column. `null` state returns the input order
+ * untouched. Missing values (symbol empty, percentage/P&L not computable)
+ * always sort last in either direction; the sort is stable so ties keep
+ * backend order.
+ */
+export function sortPositions(
+  positions: readonly SummaryPositionItem[],
+  state: SortState,
+): SummaryPositionItem[] {
+  if (state === null) return [...positions];
+  const sign = state.direction === "desc" ? -1 : 1;
+  const value = (p: SummaryPositionItem): number | string | null => {
+    switch (state.key) {
+      case "symbol":
+        return p.symbol === "" ? null : p.symbol;
+      case "pnlPercentTwd":
+        return pnlPercentTwd(p);
+      case "pnlTwd":
+        return numericOrNull(p.valuation.pnl_twd);
+    }
+  };
+  const compare = (a: number | string, b: number | string): number => {
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    const as = String(a);
+    const bs = String(b);
+    return as < bs ? -1 : as > bs ? 1 : 0;
+  };
+  return [...positions].sort((a, b) => {
+    const av = value(a);
+    const bv = value(b);
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return compare(av, bv) * sign;
   });
 }
 

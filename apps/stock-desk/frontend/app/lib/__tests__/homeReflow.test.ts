@@ -6,12 +6,21 @@ import { describe, expect, it } from "vitest";
 import { PositionsTableView } from "../../components/PositionsTable";
 import {
   DETAIL_FIELD_LABELS,
+  FOREIGN_PNL_PERCENT_NOTE,
+  PRIMARY_HEADER_LABELS,
+  SORT_CONTROL_LABEL,
+  SORT_OPTIONS,
   TODAY_CHANGE_SLOT,
   formatSignedPercent,
+  hasForeignCurrencyPosition,
   isNavItemActive,
   nextPnlSortDirection,
+  nextSortState,
   pnlPercentTwd,
   sortByPnlTwd,
+  sortOptionId,
+  sortPositions,
+  sortStateFromOptionId,
 } from "../positionsTableView";
 import { riskGaugeBarFillClass, riskGaugeChipClass } from "../riskGauge";
 import type { LimitStatus, SummaryPositionItem } from "../types";
@@ -120,14 +129,66 @@ describe("損益％（台幣口徑）", () => {
     expect(formatSignedPercent(-3.1)).toBe("-3.10%");
     expect(formatSignedPercent(0.001)).toBe("0.00%");
   });
+});
 
-  it("phase 1 renders no percentage in the default row (risk veto 2026-10-03: unlabelled TWD-basis % pending wording)", () => {
-    for (const pnl of [null, "12340", "-3100"]) {
-      const html = render([makePosition(1, "AAA", { pnl_twd: pnl })]);
-      expect(html).not.toMatch(/\d%</);
-      expect(html).not.toContain("+12.34%");
-      expect(html).not.toContain("-3.10%");
-    }
+describe("損益％（第二階段：標籤、口徑句、顯示）", () => {
+  it("字面逐字（風控核可 2026-10-03）", () => {
+    expect(PRIMARY_HEADER_LABELS.pnlPercentTwd).toBe("台幣損益％");
+    expect(FOREIGN_PNL_PERCENT_NOTE).toBe("外幣持倉的台幣損益％含匯率變動。");
+    expect(SORT_CONTROL_LABEL).toBe("排序");
+  });
+
+  it("百分比格永遠帶 % 與正負號；算不出來顯示「—」且不帶 %", () => {
+    const html = render([
+      makePosition(1, "AAA", { pnl_twd: "12340", cost_twd: "100000" }),
+      makePosition(2, "BBB", { pnl_twd: "-3100", cost_twd: "100000" }),
+      makePosition(3, "CCC", { pnl_twd: "0", cost_twd: "100000" }),
+    ]);
+    expect(html).toContain(">+12.34%<");
+    expect(html).toContain(">-3.10%<");
+    expect(html).toContain(">0.00%<");
+    // every percent cell (the one right after the mobile mini-label) is "—" or a signed number with %
+    const cells = [...html.matchAll(/md:hidden">台幣損益％<\/p><p class="text-sm tabular-nums">(.*?)<\/p>/g)].map((m) =>
+      (m[1] ?? "").replace(/<[^>]+>/g, ""),
+    );
+    expect(cells).toEqual(["+12.34%", "-3.10%", "0.00%"]);
+
+    const dash = render([makePosition(4, "DDD", { pnl_twd: "100", cost_twd: null })]);
+    const pct = /<p class="text-xs text-neutral-400 md:hidden">台幣損益％<\/p><p class="text-sm tabular-nums"><span class="text-neutral-400">—<\/span><\/p>/;
+    expect(dash).toMatch(pct);
+    expect(dash).not.toContain("%<");
+  });
+
+  it("標籤：桌機表頭一欄、手機小標同字串", () => {
+    const html = render([makePosition(1, "AAA")]);
+    // header button text (desktop) + mobile mini-label
+    expect(html).toMatch(/<button[^>]*>台幣損益％<span/);
+    expect(html).toContain('<p class="text-xs text-neutral-400 md:hidden">台幣損益％</p>');
+  });
+
+  it("口徑句：有外幣列才顯示；位置在排序列與表格之前；text-xs text-neutral-400；不放 title", () => {
+    const usd = makePosition(2, "AAPL", { currency: "USD" });
+    const html = render([makePosition(1, "2330"), usd]);
+    expect(html).toContain('<p class="mb-2 text-xs text-neutral-400">外幣持倉的台幣損益％含匯率變動。</p>');
+    expect(html.indexOf(FOREIGN_PNL_PERCENT_NOTE)).toBeLessThan(html.indexOf('role="table"'));
+    expect(html).not.toContain(`title="${FOREIGN_PNL_PERCENT_NOTE}`);
+    // never inside the expandable block
+    const detailStart = html.indexOf('id="pos-detail-1"');
+    expect(html.indexOf(FOREIGN_PNL_PERCENT_NOTE)).toBeLessThan(detailStart);
+    expect(html.split(FOREIGN_PNL_PERCENT_NOTE).length - 1).toBe(1);
+  });
+
+  it("全台幣持倉不顯示口徑句", () => {
+    const html = render([makePosition(1, "2330"), makePosition(2, "2317")]);
+    expect(html).not.toContain(FOREIGN_PNL_PERCENT_NOTE);
+    expect(html).not.toContain("含匯率變動");
+  });
+
+  it("觸發只看 currency：該列％為「—」或匯率缺失也照樣顯示", () => {
+    const noPercent = makePosition(1, "AAPL", { currency: "USD", pnl_twd: null, cost_twd: null, fx: null });
+    expect(hasForeignCurrencyPosition([noPercent])).toBe(true);
+    expect(render([noPercent])).toContain(FOREIGN_PNL_PERCENT_NOTE);
+    expect(hasForeignCurrencyPosition([])).toBe(false);
   });
 });
 
@@ -306,7 +367,119 @@ describe("NavBar 目前頁", () => {
     const src = readSource("../../components/NavBar.tsx");
     expect(src).toContain('aria-current={active ? "page" : undefined}');
     expect(src).toContain("border-b-2");
-    expect(src).toContain("匯入 / 新增部位");
+    expect(src).toContain('label: "匯入／新增"');
+    expect(src).not.toContain("匯入 / 新增部位");
     expect(src).not.toContain("font-medium\" : \"");
+  });
+});
+
+describe("手機排序下拉（< md）", () => {
+  const rows = [
+    makePosition(1, "B", { pnl_twd: "-500", cost_twd: "1000" }),
+    makePosition(2, "C", { pnl_twd: null }),
+    makePosition(3, "A", { pnl_twd: "900", cost_twd: "1000" }),
+    makePosition(4, "D", { pnl_twd: "100", cost_twd: "1000" }),
+  ];
+  const ids = (list: SummaryPositionItem[]) => list.map((p) => p.id);
+
+  it("選項字面與順序逐字釘住（7 項；漲跌兩項本階段不渲染）", () => {
+    expect(SORT_OPTIONS.map((o) => o.label)).toEqual([
+      "預設順序",
+      "代號 小到大",
+      "代號 大到小",
+      "台幣損益％ 高到低",
+      "台幣損益％ 低到高",
+      "台幣損益 高到低",
+      "台幣損益 低到高",
+    ]);
+    const html = render(rows);
+    expect(html).not.toContain("漲跌");
+    expect([...html.matchAll(/<option /g)]).toHaveLength(7);
+  });
+
+  it("選項欄名引用表頭同一字串常數（不是第二份手打）", () => {
+    expect(SORT_OPTIONS[1]?.label.startsWith(`${PRIMARY_HEADER_LABELS.symbol} `)).toBe(true);
+    expect(SORT_OPTIONS[3]?.label.startsWith(`${PRIMARY_HEADER_LABELS.pnlPercentTwd} `)).toBe(true);
+    expect(SORT_OPTIONS[5]?.label.startsWith(`${PRIMARY_HEADER_LABELS.pnlTwd} `)).toBe(true);
+    const src = readSource("../positionsTableView.ts");
+    const optionsBlock = src.slice(src.indexOf("export const SORT_OPTIONS"), src.indexOf("/** The dropdown option id"));
+    expect(optionsBlock).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(optionsBlock).toContain("PRIMARY_HEADER_LABELS.pnlPercentTwd");
+  });
+
+  it("可見 <label> 綁 <select>，只在 < md 顯示，min-h-11", () => {
+    const html = render(rows);
+    expect(html).toMatch(/<label for="positions-sort-select"[^>]*>排序<\/label>/);
+    expect(html).toMatch(/<select id="positions-sort-select"[^>]*min-h-11/);
+    expect(html).toMatch(/class="mb-2 flex items-center justify-end gap-2 md:hidden"/);
+    expect(html).not.toMatch(/<select[^>]*aria-label/);
+  });
+
+  it("預設選第一項「預設順序」", () => {
+    expect(render(rows)).toMatch(/<option value="default" selected="">預設順序<\/option>/);
+  });
+
+  it("代號排序：小到大／大到小", () => {
+    expect(ids(sortPositions(rows, { key: "symbol", direction: "asc" }))).toEqual([3, 1, 2, 4]);
+    expect(ids(sortPositions(rows, { key: "symbol", direction: "desc" }))).toEqual([4, 2, 1, 3]);
+  });
+
+  it("損益％與台幣損益排序：空值永遠最後", () => {
+    // pnl%: A 90, D 10, B -50, C null
+    expect(ids(sortPositions(rows, { key: "pnlPercentTwd", direction: "desc" }))).toEqual([3, 4, 1, 2]);
+    expect(ids(sortPositions(rows, { key: "pnlPercentTwd", direction: "asc" }))).toEqual([1, 4, 3, 2]);
+    expect(ids(sortPositions(rows, { key: "pnlTwd", direction: "desc" }))).toEqual([3, 4, 1, 2]);
+    expect(ids(sortPositions(rows, { key: "pnlTwd", direction: "asc" }))).toEqual([1, 4, 3, 2]);
+    expect(ids(sortPositions(rows, null))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("與桌機表頭共用同一 state：表頭循環與下拉 id 互相對得上", () => {
+    // header cycle per column: default direction -> reverse -> backend order
+    let state = nextSortState(null, "symbol");
+    expect(state).toEqual({ key: "symbol", direction: "asc" });
+    state = nextSortState(state, "symbol");
+    expect(state).toEqual({ key: "symbol", direction: "desc" });
+    expect(nextSortState(state, "symbol")).toBeNull();
+    expect(nextSortState(null, "pnlPercentTwd")).toEqual({ key: "pnlPercentTwd", direction: "desc" });
+    expect(nextSortState({ key: "pnlTwd", direction: "desc" }, "pnlPercentTwd")).toEqual({
+      key: "pnlPercentTwd",
+      direction: "desc",
+    });
+    // every reachable state has a dropdown option and round-trips
+    for (const option of SORT_OPTIONS) {
+      expect(sortStateFromOptionId(sortOptionId(option.state))).toEqual(option.state);
+    }
+    expect(sortStateFromOptionId("nonsense")).toBeNull();
+    // one `useState<SortState>` drives both the headers and the select
+    const src = readSource("../../components/PositionsTable.tsx");
+    expect(src.match(/useState<SortState>/g)).toHaveLength(1);
+    expect(src).toContain("onChange={(e) => setSort(sortStateFromOptionId(e.target.value))}");
+  });
+
+  it("桌機表頭：代號、台幣損益％、台幣損益三欄皆為 button＋aria-sort，現價不可排序", () => {
+    const html = render(rows);
+    expect([...html.matchAll(/aria-sort="none"[^>]*><button/g)]).toHaveLength(3);
+    expect(html).not.toMatch(/<button[^>]*>現價/);
+  });
+
+  it("展開鈕 aria-label 維持 {代號} 持倉明細", () => {
+    expect(render(rows)).toContain('aria-label="B 持倉明細"');
+  });
+});
+
+describe("NavBar 第二階段（匯入／新增、< 768px 兩列）", () => {
+  const src = readSource("../../components/NavBar.tsx");
+
+  it("導覽字面為「匯入／新增」（全形斜線），舊字面不在導覽；頁面 h1 維持原字", () => {
+    expect(src).toContain('label: "匯入／新增"');
+    expect(src).not.toContain("匯入 / 新增部位");
+    expect(readSource("../../positions/import/page.tsx")).toContain("匯入 / 新增部位");
+  });
+
+  it("< 768px logo 自成一列、導覽單列；≥ 768px 才並排（斷點為 md，不是 sm）", () => {
+    expect(src).toContain("flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-4");
+    expect(src).toContain("flex flex-wrap justify-between gap-x-4 gap-y-1 md:justify-start");
+    expect(src).toContain("md:flex-row md:items-center md:justify-between");
+    expect(src).not.toContain("sm:flex-row");
   });
 });

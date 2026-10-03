@@ -277,11 +277,12 @@ function SymbolSearch() {
   );
 }
 
-// Labels unchanged: renaming "匯入 / 新增部位" is a wording change pending creative-lead / risk review.
+// "匯入／新增" (full-width slash) is the approved short label (spec §6.2; risk
+// 2026-10-03: navigation wording, no objection). The page h1 keeps its own text.
 const NAV_ITEMS = [
   { href: "/", label: "總覽" },
   { href: "/playbook", label: "排程台" },
-  { href: "/positions/import", label: "匯入 / 新增部位" },
+  { href: "/positions/import", label: "匯入／新增" },
   { href: "/backtest", label: "回測" },
   { href: "/settings", label: "設定" },
 ] as const;
@@ -294,12 +295,13 @@ export function NavBar() {
   const pathname = usePathname();
   return (
     <header className="border-b border-neutral-800 px-4 py-3">
-      <div className="mx-auto flex max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center justify-between gap-4">
+      <div className="mx-auto flex max-w-5xl flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        {/* < 768px: logo on its own row, the five nav items on one row below it (spec §6.2). */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-4">
           <Link href="/" className="text-lg font-bold text-neutral-100">
             stock-desk
           </Link>
-          <nav className="flex flex-wrap gap-x-4 gap-y-1">
+          <nav className="flex flex-wrap justify-between gap-x-4 gap-y-1 md:justify-start">
             {NAV_ITEMS.map((item) => {
               const active = isNavItemActive(pathname, item.href);
               return (
