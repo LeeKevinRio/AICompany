@@ -1,13 +1,22 @@
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 
-/** Seedable PRNG (sfc32). Deterministic for tests; seeded from crypto in production. */
 export interface Rng {
   next(): number; // [0, 1)
   int(maxExclusive: number): number;
 }
 
+/**
+ * Without a seed the RNG is backed by the OS CSPRNG, so shuffles cannot be predicted from the tiles a
+ * player sees. A seed gives a deterministic sfc32 stream for tests and simulations only.
+ */
 export function createRng(seed?: number): Rng {
-  let s = seed ?? randomBytes(4).readUInt32LE(0);
+  if (seed === undefined) {
+    return {
+      int: (n) => randomInt(n),
+      next: () => randomInt(2 ** 32) / 2 ** 32,
+    };
+  }
+  let s = seed;
   let a = 0x9e3779b9 ^ s;
   let b = 0x243f6a88 ^ (s = Math.imul(s ^ (s >>> 16), 0x85ebca6b));
   let c = 0xb7e15162 ^ (s = Math.imul(s ^ (s >>> 13), 0xc2b2ae35));
