@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal enabledelayedexpansion
 title stock-desk dev-up
 
@@ -16,21 +15,21 @@ REM ---- 1. prerequisites ----
 set "MISSING="
 where git >nul 2>nul
 if errorlevel 1 (
-  echo [缺少] git，請到 https://git-scm.com/download/win 安裝
+  echo [MISSING] git - install from https://git-scm.com/download/win
   set "MISSING=1"
 )
 where uv >nul 2>nul
 if errorlevel 1 (
-  echo [缺少] uv，請到 https://docs.astral.sh/uv/getting-started/installation/ 安裝
+  echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/
   set "MISSING=1"
 )
 where npm >nul 2>nul
 if errorlevel 1 (
-  echo [缺少] npm，請到 https://nodejs.org 安裝 Node.js
+  echo [MISSING] npm - install Node.js from https://nodejs.org
   set "MISSING=1"
 )
 if defined MISSING (
-  echo 安裝後請重新開啟本程式。
+  echo After installing, run this script again.
   goto fail
 )
 
@@ -41,7 +40,7 @@ if not errorlevel 1 set "HAVE_CURL=1"
 REM ---- 2. repo state checks ----
 git -C "%REPO_ROOT%" rev-parse --is-inside-work-tree >nul 2>nul
 if errorlevel 1 (
-  echo [錯誤] 找不到 git repo：!REPO_ROOT!
+  echo [ERROR] Not a git repo: !REPO_ROOT!
   goto fail
 )
 
@@ -49,38 +48,38 @@ REM Tracked changes only: untracked files do not block a fast-forward pull.
 set "DIRTY="
 for /f "delims=" %%L in ('git -C "%REPO_ROOT%" status --porcelain --untracked-files=no') do set "DIRTY=1"
 if defined DIRTY (
-  echo 你本機有改動，請先處理或告訴 Claude
+  echo [STOP] You have local changes to tracked files. Please tell Claude before continuing.
   goto fail
 )
 
 set "CUR_BRANCH="
 for /f "delims=" %%B in ('git -C "%REPO_ROOT%" rev-parse --abbrev-ref HEAD') do set "CUR_BRANCH=%%B"
 if not "!CUR_BRANCH!"=="%TARGET_BRANCH%" (
-  echo 目前分支是 !CUR_BRANCH!，不是 %TARGET_BRANCH%
-  choice /c YN /n /m "要切換到 %TARGET_BRANCH% 嗎 [Y/N]？ "
+  echo Current branch is !CUR_BRANCH!, not %TARGET_BRANCH%
+  choice /c YN /n /m "Switch to %TARGET_BRANCH%? [Y/N] "
   if errorlevel 2 (
-    echo 已取消。
+    echo Cancelled.
     goto fail
   )
   git -C "%REPO_ROOT%" checkout %TARGET_BRANCH%
   if errorlevel 1 (
-    echo [錯誤] 切換分支失敗
+    echo [ERROR] Branch switch failed
     goto fail
   )
 )
 
 REM ---- 3. pull latest code ----
 echo.
-echo [1/4] 更新程式碼 git pull
+echo [1/4] Updating code (git pull)
 git -C "%REPO_ROOT%" pull --ff-only origin %TARGET_BRANCH%
 if errorlevel 1 (
-  echo [錯誤] git pull 失敗，請把上面的訊息截圖給 Claude
+  echo [ERROR] git pull failed - please send a screenshot of the messages above to Claude
   goto fail
 )
 
 REM ---- 4. stop old processes (before install, so Windows does not lock .venv / node_modules) ----
 echo.
-echo [2/4] 檢查舊程序 port 8000 / 3000
+echo [2/4] Checking for old processes on port 8000 / 3000
 call :ensure_port_free 8000
 if errorlevel 1 goto fail
 call :ensure_port_free 3000
@@ -88,12 +87,12 @@ if errorlevel 1 goto fail
 
 REM ---- 5. dependencies ----
 echo.
-echo [3/4] 安裝依賴
+echo [3/4] Installing dependencies
 pushd "%BACKEND_DIR%"
 uv sync --locked
 if errorlevel 1 (
   popd
-  echo [錯誤] 後端 uv sync 失敗
+  echo [ERROR] Backend uv sync failed
   goto fail
 )
 popd
@@ -102,19 +101,19 @@ REM npm is a .cmd file: it needs CALL, otherwise this script would stop after it
 call npm install --no-save
 if errorlevel 1 (
   popd
-  echo [錯誤] 前端 npm install 失敗
+  echo [ERROR] Frontend npm install failed
   goto fail
 )
 popd
 
 REM ---- 6. start backend + frontend (each in its own window, kept open by /k) ----
 echo.
-echo [4/4] 啟動前後端
-start "stock-desk 後端" cmd /k "cd /d "%BACKEND_DIR%" && uv run uvicorn app.main:app --reload --port 8000"
-start "stock-desk 前端" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
+echo [4/4] Starting backend and frontend
+start "stock-desk backend" cmd /k "cd /d "%BACKEND_DIR%" && uv run uvicorn app.main:app --reload --port 8000"
+start "stock-desk frontend" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
 
 REM ---- 7. wait for backend (max 60s) then frontend (max 90s) ----
-echo 等待後端啟動，最多 60 秒...
+echo Waiting for backend (up to 60 seconds)...
 set /a TRIES=0
 :wait_backend
 call :probe "http://localhost:8000/health"
@@ -125,7 +124,7 @@ call :sleep2
 goto wait_backend
 
 :backend_ok
-echo 後端已啟動，等待前端，最多 90 秒...
+echo Backend is up. Waiting for frontend (up to 90 seconds)...
 set /a TRIES=0
 :wait_frontend
 call :probe "http://localhost:3000"
@@ -139,16 +138,16 @@ goto wait_frontend
 REM Empty first quoted arg is the window title; otherwise start treats the URL as the title.
 start "" "http://localhost:3000"
 echo.
-echo 完成。
-echo 要停止：關掉兩個 stock-desk 視窗即可。
-echo 網址：http://localhost:3000
+echo Done.
+echo To stop: close the two stock-desk windows.
+echo URL: http://localhost:3000
 echo.
 pause
 exit /b 0
 
 :start_timeout
 echo.
-echo 後端／前端沒有在時間內啟動，請看「stock-desk 後端」視窗的錯誤訊息
+echo [TIMEOUT] Backend or frontend did not start in time. Check the error in the 'stock-desk backend' window and send a screenshot to Claude.
 goto fail
 
 :fail
@@ -190,24 +189,24 @@ REM %~1 = port. Asks before killing; returns errorlevel 1 if the port stays occu
 call :scan_port %~1
 if "!PORT_PIDS!"==" " exit /b 0
 echo.
-echo [注意] port %~1 已被占用：
+echo [NOTICE] Port %~1 is already in use:
 for %%P in (!PORT_PIDS!) do (
   if "%%P"=="4" (
-    echo   PID 4 是 Windows 系統程序，無法結束；請改用其他 port 或重開機後再試。
+    echo   PID 4 is a Windows system process and cannot be stopped. Reboot and try again.
     exit /b 1
   )
-  for /f "tokens=1" %%N in ('tasklist /FI "PID eq %%P" /NH') do echo   PID %%P：%%N
+  for /f "tokens=1" %%N in ('tasklist /FI "PID eq %%P" /NH') do echo   PID %%P: %%N
 )
-choice /c YN /n /m "要結束舊程序嗎 [Y/N]？ "
+choice /c YN /n /m "Stop the old process? [Y/N] "
 if errorlevel 2 (
-  echo 已取消，不會啟動第二份。
+  echo Cancelled. Not starting a second copy.
   exit /b 1
 )
 for %%P in (!PORT_PIDS!) do taskkill /PID %%P /F /T
 call :sleep2
 call :scan_port %~1
 if not "!PORT_PIDS!"==" " (
-  echo [失敗] port %~1 仍被占用，PID：!PORT_PIDS!
+  echo [FAILED] Port %~1 is still in use, PID: !PORT_PIDS!
   exit /b 1
 )
 exit /b 0
