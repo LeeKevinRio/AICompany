@@ -88,11 +88,31 @@ export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): Sources
  * with the individual position page's `LimitsCheckList.tsx`, which this batch
  * does not touch and whose visual is out of scope here.
  */
+/**
+ * Home reflow, phase 1 (CEO 2026-10-03; `work/stock-desk-首頁重排-視覺規範-
+ * 2026-10-03.md` §5.2): "passed / violated" no longer uses red/green. Taiwan
+ * convention is red-up green-down for P&L, so two colour semantics would clash
+ * and colour-blind users could not tell them apart. Now: quiet "passed" (grey
+ * outline), loud "violated" (solid orange); red/green is reserved for P&L
+ * figures. Wording unchanged, classes only; the ✓ ✕ ？ glyphs would be new
+ * visible characters and are deferred. The position page `LimitsCheckList`
+ * (`limitStatusColorClass`) is out of scope for this phase.
+ */
 const RISK_GAUGE_CHIP_CLASS: Record<LimitStatus, string> = {
-  passed: "border-emerald-800 bg-emerald-950/40 text-emerald-300",
-  violated: "border-rose-800 bg-rose-950/40 text-rose-300",
-  not_evaluable: "border-amber-800 bg-amber-950/40 text-amber-300",
+  passed: "border-neutral-600 bg-transparent text-neutral-300",
+  violated: "border-orange-400 bg-orange-400 font-semibold text-neutral-950",
+  not_evaluable: "border-dashed border-amber-700 bg-amber-950/40 text-amber-300",
 };
+
+/**
+ * Progress-bar fill (首頁重排第一階段, art-lead 2026-10-03 §5.2): the same
+ * non-red/green pairing as the chip — quiet grey while within the cap, solid
+ * orange once violated. `not_evaluable` never draws a bar (H1), so it has no
+ * entry; the neutral fallback is only for type completeness.
+ */
+export function riskGaugeBarFillClass(status: LimitStatus): string {
+  return status === "violated" ? "bg-orange-400" : "bg-neutral-400";
+}
 
 export function riskGaugeChipClass(status: LimitStatus): string {
   return RISK_GAUGE_CHIP_CLASS[status];

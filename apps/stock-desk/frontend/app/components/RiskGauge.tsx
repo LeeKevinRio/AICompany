@@ -10,6 +10,7 @@ import { usePortfolioLimits } from "../lib/queries";
 import {
   buildLimitGaugeViewModel,
   buildSourcesSummaryViewModel,
+  riskGaugeBarFillClass,
   riskGaugeChipClass,
 } from "../lib/riskGauge";
 import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
@@ -49,7 +50,7 @@ import { SkeletonBlock } from "./SkeletonBlock";
 function LimitBar({ check }: { check: BookLimitCheck }) {
   const view = buildLimitGaugeViewModel(check);
   if (!view.showBar) return null;
-  const fillColorClass = check.status === "violated" ? "bg-rose-500" : "bg-emerald-500";
+  const fillColorClass = riskGaugeBarFillClass(check.status);
   return (
     <div
       className="h-1 w-full overflow-hidden rounded-full bg-neutral-800"

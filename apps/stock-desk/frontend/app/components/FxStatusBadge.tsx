@@ -6,7 +6,8 @@ function assertNever(value: never): never {
   throw new Error(`未處理的匯率資料狀態: ${String(value)}`);
 }
 
-const MUTED_BADGE_CLASS = "ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400";
+const MUTED_BADGE_CLASS =
+  "whitespace-nowrap rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400";
 
 /**
  * The rate's calendar date, shown next to the converted figures as
@@ -16,7 +17,7 @@ const MUTED_BADGE_CLASS = "ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs t
  */
 function RateDateLabel({ asOf }: { asOf: string }) {
   return (
-    <span className="ml-1.5 text-xs text-neutral-500">
+    <span className="whitespace-nowrap text-xs tabular-nums text-neutral-400">
       {formatTradingDateMonthDay(asOf)} 匯率
     </span>
   );
@@ -34,7 +35,7 @@ function StatusLabel({ fx, prefix }: { fx: PositionFx; prefix: string }) {
     case "backup":
       return (
         <span
-          className="ml-1.5 rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300"
+          className="whitespace-nowrap rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300"
           title={fx.source_note || undefined}
         >
           {prefix}備援源
@@ -77,9 +78,9 @@ export function FxStatusBadge({ fx }: { fx: PositionFx | null }) {
   if (fx === null) return null;
   const hasDate = fx.as_of !== null;
   return (
-    <>
+    <span className="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
       {fx.as_of !== null && <RateDateLabel asOf={fx.as_of} />}
       <StatusLabel fx={fx} prefix={hasDate ? "" : "匯率 "} />
-    </>
+    </span>
   );
 }

@@ -220,6 +220,7 @@ function flatBasis(item: BasisItem): string {
 }
 
 const SCANNED_FILES = [
+  "../positionsTableView.ts",
   "../../position/[symbol]/OperationSummaryPanel.tsx",
   "../../position/[symbol]/page.tsx",
   "../../components/NavBar.tsx",

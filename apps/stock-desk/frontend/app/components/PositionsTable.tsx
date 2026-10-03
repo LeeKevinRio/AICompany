@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { PnlOriginal, SummaryPositionItem } from "../lib/types";
 import {
   formatMoney,
@@ -11,6 +12,15 @@ import {
   pnlColorClass,
 } from "../lib/format";
 import { deleteButtonState } from "../lib/positionFormSubmit";
+import {
+  DETAIL_FIELD_LABELS,
+  PRIMARY_HEADER_LABELS,
+  formatSignedPercent,
+  nextPnlSortDirection,
+  pnlPercentTwd,
+  sortByPnlTwd,
+} from "../lib/positionsTableView";
+import type { PnlSortDirection } from "../lib/positionsTableView";
 import { useDeletePosition, useDirectoryNames } from "../lib/queries";
 import { missingSummary } from "../lib/valuationWording";
 import { DataStatusBadge, priceDateTooltip } from "./DataStatusBadge";
@@ -19,37 +29,40 @@ import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
 import { ErrorPanel } from "./ErrorPanel";
 
-const COLUMN_HEADERS = [
-  "代號",
-  "市場",
-  "類型",
-  "數量",
-  "平均成本（原幣）",
-  "建倉日期",
-  "現價",
-  "原幣損益",
-  "台幣損益",
-  "標的貢獻",
-  "匯率貢獻",
-  "操作",
-];
-
 // NOTE: price/pnl_original/pnl_twd/asset_contribution_twd/fx_contribution_twd
 // all live under `position.valuation`, never as sibling fields on the
 // position itself — verified against backend/app/portfolio/valuation.py.
+//
+// Home reflow, phase 1 (CEO 2026-10-03: "simple, inventory status and market
+// risk at a glance"; `work/stock-desk-首頁重排-視覺規範-2026-10-03.md` §2).
+// Default view keeps only symbol/name, price + date, TWD P&L (with the
+// TWD-basis percentage); the other eight fields move into a per-row expandable
+// block with their labels unchanged. No fixed min-width or horizontal scroll:
+// desktop uses grid columns, mobile (< md) re-flows the same DOM into a
+// two-column card.
+// Reserved but not rendered: the "today's change" column slot
+// (`TODAY_CHANGE_SLOT`; no backend field yet, header wording pending risk
+// review). Enabling it later means one extra track in ROW_GRID and the header.
+
+/** Row grid shared by the header and every row. Mobile: name+price | pnl | chevron. */
+const ROW_GRID =
+  "grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,40%)_2.75rem] gap-x-3 md:grid-cols-[2.75rem_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(8rem,1fr)]";
+
+const PLACEHOLDER = <span className="text-neutral-400">—</span>;
+
 function PriceCell({ position }: { position: SummaryPositionItem }) {
   const { valuation } = position;
   if (valuation.status === "insufficient_data" || valuation.price === null) {
     return (
       <div>
-        <span className="text-neutral-500">—</span>
-        <DataStatusBadge price={valuation.price} />
+        {PLACEHOLDER}
+        <div className="mt-0.5">
+          <DataStatusBadge price={valuation.price} />
+        </div>
         {/* 風控 2026-09-18 C-1: tokens are labelled, never printed raw; each label
             says whether the system asked and found nothing, or did not ask. */}
         {valuation.missing.length > 0 && (
-          <p className="mt-0.5 text-xs text-neutral-500">
-            {missingSummary(valuation.missing)}
-          </p>
+          <p className="mt-0.5 text-xs text-neutral-400">{missingSummary(valuation.missing)}</p>
         )}
       </div>
     );
@@ -57,11 +70,14 @@ function PriceCell({ position }: { position: SummaryPositionItem }) {
   return (
     <div>
       <span
+        className="text-sm tabular-nums text-neutral-100"
         title={`資料來源：${valuation.price.source}／${priceDateTooltip(valuation.price.as_of)}`}
       >
         {formatMoney(valuation.price.value, position.currency, 2)}
       </span>
-      <DataStatusBadge price={valuation.price} />
+      <div className="mt-0.5">
+        <DataStatusBadge price={valuation.price} />
+      </div>
     </div>
   );
 }
@@ -69,7 +85,7 @@ function PriceCell({ position }: { position: SummaryPositionItem }) {
 // `pnl_original` is an object `{ value, currency }`, not a bare string, so
 // it gets its own cell renderer rather than reusing `MoneyOrDash`.
 function PnlOriginalCell({ pnlOriginal }: { pnlOriginal: PnlOriginal | null }) {
-  if (pnlOriginal === null) return <span className="text-neutral-500">—</span>;
+  if (pnlOriginal === null) return PLACEHOLDER;
   return (
     <span className={pnlColorClass(pnlOriginal.value)}>
       {formatMoney(pnlOriginal.value, pnlOriginal.currency, 2)}
@@ -86,8 +102,223 @@ function MoneyOrDash({
   currency: string;
   decimals: number;
 }) {
-  if (value === null) return <span className="text-neutral-500">—</span>;
+  if (value === null) return PLACEHOLDER;
   return <span className={pnlColorClass(value)}>{formatMoney(value, currency, decimals)}</span>;
+}
+
+/**
+ * 台幣損益 + FX provenance. The TWD-basis percentage is intentionally NOT
+ * rendered in phase 1: risk-compliance-officer (2026-10-03) vetoed an
+ * unlabelled percentage (a TWD-basis figure on a foreign holding embeds FX
+ * and reads like a share-price move). It returns once creative-lead drafts a
+ * label and risk approves it word-for-word (spec §8 L3). `pnlPercentTwd` and
+ * `formatSignedPercent` stay available for that phase.
+ */
+function PnlTwdCell({ position }: { position: SummaryPositionItem }) {
+  return (
+    <div className="text-right">
+      <p className="text-xs text-neutral-400 md:hidden">{PRIMARY_HEADER_LABELS.pnlTwd}</p>
+      <p className="text-sm tabular-nums">
+        <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
+      </p>
+      <div className="mt-0.5">
+        <FxStatusBadge fx={position.valuation.fx} />
+      </div>
+    </div>
+  );
+}
+
+function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-neutral-400">{label}</dt>
+      <dd className="mt-0.5 break-words text-sm text-neutral-300">{children}</dd>
+    </div>
+  );
+}
+
+export interface PositionsTableViewProps {
+  positions: SummaryPositionItem[];
+  namesBySymbol: Record<string, string>;
+  /** Ids of the rows whose block is open; defaults to none (all collapsed). */
+  initialExpandedIds?: readonly number[];
+  pendingDeleteId: number | null;
+  onEdit: (position: SummaryPositionItem) => void;
+  onDelete: (position: SummaryPositionItem) => void;
+}
+
+function ariaSortValue(direction: PnlSortDirection): "ascending" | "descending" | "none" {
+  if (direction === "desc") return "descending";
+  if (direction === "asc") return "ascending";
+  return "none";
+}
+
+function toggleId(setter: Dispatch<SetStateAction<ReadonlySet<number>>>, id: number) {
+  setter((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+}
+
+/**
+ * Presentational half (no query client needed) so the structure can be
+ * unit-tested with `renderToStaticMarkup`. Default order is the backend's;
+ * clicking the 台幣損益 header cycles desc -> asc -> backend order.
+ */
+export function PositionsTableView({
+  positions,
+  namesBySymbol,
+  initialExpandedIds = [],
+  pendingDeleteId,
+  onEdit,
+  onDelete,
+}: PositionsTableViewProps) {
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set(initialExpandedIds));
+  const [sortDirection, setSortDirection] = useState<PnlSortDirection>(null);
+  const rows = sortByPnlTwd(positions, sortDirection);
+
+  return (
+    <div
+      role="table"
+      aria-label="持倉明細表"
+      className="overflow-hidden rounded-md border border-neutral-800"
+    >
+      <div role="rowgroup" className="hidden bg-neutral-900 text-neutral-400 md:block">
+        <div role="row" className={`${ROW_GRID} items-center px-3 py-2 text-sm font-medium`}>
+          <span role="columnheader" aria-hidden="true" />
+          <span role="columnheader">{PRIMARY_HEADER_LABELS.symbol}</span>
+          <span role="columnheader">{PRIMARY_HEADER_LABELS.price}</span>
+          <span role="columnheader" aria-sort={ariaSortValue(sortDirection)} className="text-right">
+            <button
+              type="button"
+              onClick={() => setSortDirection(nextPnlSortDirection(sortDirection))}
+              className={`inline-flex min-h-8 items-center gap-1 rounded px-1 font-medium hover:text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 ${
+                sortDirection === null ? "text-neutral-400" : "text-neutral-100"
+              }`}
+            >
+              {PRIMARY_HEADER_LABELS.pnlTwd}
+              <span aria-hidden="true" className="text-xs text-neutral-400">
+                {sortDirection === "desc" ? "▾" : sortDirection === "asc" ? "▴" : "↕"}
+              </span>
+            </button>
+          </span>
+        </div>
+      </div>
+
+      {rows.map((position) => {
+        const open = expanded.has(position.id);
+        const detailId = `pos-detail-${position.id}`;
+        const deleteState = deleteButtonState(pendingDeleteId, position.id);
+        const name = namesBySymbol[position.symbol];
+        return (
+          <div key={position.id} role="rowgroup" className="border-t border-neutral-800 first:border-t-0">
+            <div role="row" className={`${ROW_GRID} items-start px-3 py-2.5`}>
+              <div className="min-w-0 space-y-1 md:contents">
+                <div role="cell" className="min-w-0">
+                  <p className="font-medium">
+                    <Link
+                      href={`/position/${encodeURIComponent(position.symbol)}?market=${position.market}`}
+                      className="text-sky-400 underline hover:text-sky-300"
+                    >
+                      {position.symbol}
+                    </Link>
+                  </p>
+                  {name && <p className="truncate text-xs text-neutral-400">{name}</p>}
+                </div>
+                <div role="cell" className="min-w-0">
+                  <PriceCell position={position} />
+                </div>
+              </div>
+              <div role="cell" className="min-w-0 md:col-start-4 md:row-start-1">
+                <PnlTwdCell position={position} />
+              </div>
+              <div
+                role="cell"
+                className="flex justify-end md:col-start-1 md:row-start-1 md:justify-center"
+              >
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  aria-controls={detailId}
+                  aria-label={`${position.symbol} 持倉明細`}
+                  onClick={() => toggleId(setExpanded, position.id)}
+                  className="group inline-flex h-11 w-11 items-center justify-center rounded text-neutral-400 hover:text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 active:text-neutral-100"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-block text-xs transition-transform duration-150 group-aria-expanded:rotate-90 motion-reduce:transition-none"
+                  >
+                    ▸
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Always in the DOM (hidden while collapsed) so `aria-controls` resolves. */}
+            <div role="row" id={detailId} hidden={!open}>
+              <div
+                role="cell"
+                className="border-t border-neutral-800 bg-neutral-900/40 px-3 py-3"
+              >
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4 md:gap-x-6">
+                  <DetailField label={DETAIL_FIELD_LABELS.market}>{marketLabel(position.market)}</DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.instrumentType}>
+                    {instrumentTypeLabel(position.instrument_type)}
+                  </DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.quantity}>
+                    {formatQuantity(position.quantity)}
+                  </DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.avgCost}>
+                    {formatMoney(position.avg_cost, position.currency, 2)}
+                  </DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.openedAt}>{position.opened_at ?? "—"}</DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.pnlOriginal}>
+                    <PnlOriginalCell pnlOriginal={position.valuation.pnl_original} />
+                  </DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.assetContribution}>
+                    <MoneyOrDash
+                      value={position.valuation.asset_contribution_twd}
+                      currency="TWD"
+                      decimals={0}
+                    />
+                  </DetailField>
+                  <DetailField label={DETAIL_FIELD_LABELS.fxContribution}>
+                    <MoneyOrDash
+                      value={position.valuation.fx_contribution_twd}
+                      currency="TWD"
+                      decimals={0}
+                    />
+                  </DetailField>
+                </dl>
+                <div className="mt-3 flex gap-2 md:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => onEdit(position)}
+                    disabled={pendingDeleteId === position.id}
+                    aria-label={`編輯 ${position.symbol} 持倉`}
+                    className="min-h-11 flex-1 rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 active:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-8 md:flex-none"
+                  >
+                    編輯
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(position)}
+                    disabled={deleteState.disabled}
+                    aria-label={`刪除 ${position.symbol} 持倉`}
+                    className="min-h-11 flex-1 rounded-md border border-red-900 px-3 py-1 text-xs text-red-300 hover:bg-red-950/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 active:bg-red-950/60 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-8 md:flex-none"
+                  >
+                    {deleteState.label}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function PositionsTable({ positions }: { positions: SummaryPositionItem[] }) {
@@ -134,100 +365,13 @@ export function PositionsTable({ positions }: { positions: SummaryPositionItem[]
           <ErrorPanel label="刪除失敗" error={deleteMutation.error} />
         </div>
       )}
-      <div className="overflow-x-auto rounded-md border border-neutral-800">
-        <table className="w-full min-w-[980px] text-left text-sm">
-          <caption className="sr-only">持倉明細表</caption>
-          <thead className="bg-neutral-900 text-neutral-400">
-            <tr>
-              {COLUMN_HEADERS.map((header) => (
-                <th key={header} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">
-                  {header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((position) => (
-              <tr key={position.id} className="border-t border-neutral-800">
-                <td className="whitespace-nowrap px-3 py-2 font-medium">
-                  <Link
-                    href={`/position/${encodeURIComponent(position.symbol)}?market=${position.market}`}
-                    className="text-sky-400 underline hover:text-sky-300"
-                  >
-                    {position.symbol}
-                  </Link>
-                  {namesBySymbol[position.symbol] && (
-                    <span className="ml-1 text-xs font-normal text-neutral-500">
-                      {namesBySymbol[position.symbol]}
-                    </span>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                  {marketLabel(position.market)}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                  {instrumentTypeLabel(position.instrument_type)}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                  {formatQuantity(position.quantity)}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                  {formatMoney(position.avg_cost, position.currency, 2)}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                  {position.opened_at ?? "—"}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <PriceCell position={position} />
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <PnlOriginalCell pnlOriginal={position.valuation.pnl_original} />
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
-                  <FxStatusBadge fx={position.valuation.fx} />
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <MoneyOrDash
-                    value={position.valuation.asset_contribution_twd}
-                    currency="TWD"
-                    decimals={0}
-                  />
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <MoneyOrDash
-                    value={position.valuation.fx_contribution_twd}
-                    currency="TWD"
-                    decimals={0}
-                  />
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditingPosition(position)}
-                      disabled={pendingDeleteId === position.id}
-                      aria-label={`編輯 ${position.symbol} 持倉`}
-                      className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      編輯
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(position)}
-                      disabled={deleteButtonState(pendingDeleteId, position.id).disabled}
-                      aria-label={`刪除 ${position.symbol} 持倉`}
-                      className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {deleteButtonState(pendingDeleteId, position.id).label}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <PositionsTableView
+        positions={positions}
+        namesBySymbol={namesBySymbol}
+        pendingDeleteId={pendingDeleteId}
+        onEdit={setEditingPosition}
+        onDelete={handleDelete}
+      />
 
       {editingPosition && (
         <EditPositionModal position={editingPosition} onClose={() => setEditingPosition(null)} />

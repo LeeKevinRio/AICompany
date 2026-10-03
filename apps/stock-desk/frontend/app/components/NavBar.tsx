@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { DirectoryItem, Market } from "../lib/types";
 import { MARKET_OPTIONS, marketLabel } from "../lib/format";
 import { resolveDirectorySymbol } from "../lib/api";
+import { isNavItemActive } from "../lib/positionsTableView";
 import { useDirectorySearch } from "../lib/queries";
 import {
   DIRECTORY_SEARCH_DEBOUNCE_MS,
@@ -276,7 +277,21 @@ function SymbolSearch() {
   );
 }
 
+// Labels unchanged: renaming "匯入 / 新增部位" is a wording change pending creative-lead / risk review.
+const NAV_ITEMS = [
+  { href: "/", label: "總覽" },
+  { href: "/playbook", label: "排程台" },
+  { href: "/positions/import", label: "匯入 / 新增部位" },
+  { href: "/backtest", label: "回測" },
+  { href: "/settings", label: "設定" },
+] as const;
+
+/** Every item reserves `border-b-2` so highlighting never shifts layout (no font-weight swap either). */
+const NAV_LINK_BASE =
+  "inline-flex min-h-10 items-center whitespace-nowrap border-b-2 text-sm hover:text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400";
+
 export function NavBar() {
+  const pathname = usePathname();
   return (
     <header className="border-b border-neutral-800 px-4 py-3">
       <div className="mx-auto flex max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -284,22 +299,24 @@ export function NavBar() {
           <Link href="/" className="text-lg font-bold text-neutral-100">
             stock-desk
           </Link>
-          <nav className="flex flex-wrap gap-4 text-sm text-neutral-400">
-            <Link href="/" className="hover:text-neutral-100">
-              總覽
-            </Link>
-            <Link href="/playbook" className="hover:text-neutral-100">
-              排程台
-            </Link>
-            <Link href="/positions/import" className="hover:text-neutral-100">
-              匯入 / 新增部位
-            </Link>
-            <Link href="/backtest" className="hover:text-neutral-100">
-              回測
-            </Link>
-            <Link href="/settings" className="hover:text-neutral-100">
-              設定
-            </Link>
+          <nav className="flex flex-wrap gap-x-4 gap-y-1">
+            {NAV_ITEMS.map((item) => {
+              const active = isNavItemActive(pathname, item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`${NAV_LINK_BASE} ${
+                    active
+                      ? "border-neutral-100 text-neutral-100"
+                      : "border-transparent text-neutral-400"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
         <SymbolSearch />

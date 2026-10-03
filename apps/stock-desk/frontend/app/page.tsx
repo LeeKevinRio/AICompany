@@ -66,13 +66,6 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §1 FR-1）：
-          摘要卡之後、持倉明細之前——CEO 主動要求「直接顯示在首頁」的市場情
-          報，優先序高於持倉明細表格。 */}
-      <div className="mt-8">
-        <SectorMomentumCard />
-      </div>
-
       <div className="mt-8">
         <h2 className="text-lg font-semibold text-neutral-100">持倉明細</h2>
         <div className="mt-3">
@@ -90,6 +83,16 @@ export default function HomePage() {
 
       <div className="mt-6">
         <AlertStatusStrip />
+      </div>
+
+      {/* Home reflow, phase 1 (CEO 2026-10-03; `work/stock-desk-首頁重排-視覺規範-
+          2026-10-03.md` §1): order is summary -> positions -> risk gauge + alerts
+          -> sector momentum. Sector momentum is market intelligence, not my
+          positions, so it moves last (reverses wave 4 FR-1 "sector card before
+          the positions table"). Risk gauge and sector card are both close-based
+          (C4), with only the alert strip between them. */}
+      <div className="mt-8">
+        <SectorMomentumCard />
       </div>
     </main>
   );

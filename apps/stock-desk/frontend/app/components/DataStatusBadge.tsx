@@ -17,7 +17,8 @@ export function priceDateTooltip(asOf: string): string {
   return `資料日期 ${formatTradingDateMonthDay(asOf)}（日線收盤，非即時）`;
 }
 
-const MUTED_BADGE_CLASS = "ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400";
+const MUTED_BADGE_CLASS =
+  "whitespace-nowrap rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400";
 
 /**
  * The price's trading date, always shown next to the price as "MM/DD 收盤".
@@ -26,7 +27,7 @@ const MUTED_BADGE_CLASS = "ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs t
  */
 function TradingDateLabel({ asOf }: { asOf: string }) {
   return (
-    <span className="ml-1.5 text-xs text-neutral-500">
+    <span className="whitespace-nowrap text-xs tabular-nums text-neutral-400">
       {formatTradingDateMonthDay(asOf)} 收盤
     </span>
   );
@@ -38,7 +39,7 @@ function StatusLabel({ price }: { price: PositionPrice }) {
       return null;
     case "backup":
       return (
-        <span className="ml-1.5 rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">
+        <span className="whitespace-nowrap rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">
           備援源
         </span>
       );
@@ -74,10 +75,12 @@ export function DataStatusBadge({ price }: { price: PositionPrice | null }) {
   if (price === null) {
     return <span className={MUTED_BADGE_CLASS}>資料不足</span>;
   }
+  // The date label sits on its own line under the price (CEO 2026-10-03 首頁
+  // 重排); badges share that line and wrap between tags, never inside one.
   return (
-    <>
+    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
       <TradingDateLabel asOf={price.as_of} />
       <StatusLabel price={price} />
-    </>
+    </span>
   );
 }
