@@ -4,11 +4,11 @@
 - 日期：2026-10-03
 - 決策者：tech-architect（草案）、CEO（待核可；2026-10-02 已裁定「加盤中價」與「主來源採 MIS」；2026-10-03 另裁定五點（第 1～3 點為前兩批、第 4～5 點為第三批），見「CEO 裁定（2026-10-03）」一節）
 - 適用範圍：僅 product/stock-desk 產品線
-- 修訂：新增。**不取代任何 ADR。** 2026-10-03 依 ADR-0015（accepted）C-17 加註兩處修訂註記（I-4、防線 2），並調整 D-9 前置條件、W11 列、「前置條件（明列）」段對 ADR-0015 的引用字樣；僅調整引用與註記，決策內容未變。
+- 修訂：新增。**不取代任何 ADR。** 2026-10-03 依 ADR-0015（accepted）C-17 加註兩處修訂註記（I-4、防線 2），並調整 D-9 前置條件、W11 列、「前置條件（明列）」段對 ADR-0015 的引用字樣；僅調整引用與註記，決策內容未變。2026-10-03 依 ADR-0016 加註：D-1（`prev_close` 註解、說明一項、`interface.py` docstring 同 PR 補正一項）、D-4（補一項界定「日線梯子」）、D-5、D-6、D-7 表、待實測參數段、I-18、I-28、「前置條件（明列）」段，新增 P-17 與 I-33～I-35；其餘決策內容未變。ADR-0016 核可前，上述加註同屬待核可內容。
   - 落實 ADR-0003:32「日後需要即時報價另案評估」這一條另案。
   - 擴充 ADR-0010 R-1：`cache_only` 一律不取盤中報價。
 - 編號說明：0013 已由員工線（`chore/agent-readonly-hook`）的唯讀 hook ADR 佔用，該 ADR 之後會 merge 進產品線，故本 ADR 使用 0014（來源：任務單，2026-10-03）。
-- 來源與版本：本檔為 tech-architect 2026-10-03 草案的落檔，僅做格式調整，另含落檔時補明一處（D-3 的 13:25～13:30）；「CEO 裁定」一節來自 CEO 2026-10-03 裁定（由任務單轉述；第 4、5 點為 2026-10-03 第三批，CEO 原話逐字見該節）。D-3 的 13:25～13:30 補明已於第三批獲 CEO 確認（第 4 點）。檔內 `檔案:行號` 為草案作者所引，落檔時未重新對 code 驗證，行號會隨 commit 漂移，引用時以原文定位。
+- 來源與版本：本檔為 tech-architect 2026-10-03 草案的落檔，僅做格式調整，另含落檔時補明一處（D-3 的 13:25～13:30）；「CEO 裁定」一節來自 CEO 2026-10-03 裁定（由任務單轉述；第 4、5 點為 2026-10-03 第三批，CEO 原話逐字見該節）。D-3 的 13:25～13:30 補明已於第三批獲 CEO 確認（第 4 點）。檔內 `檔案:行號` 為草案作者所引，落檔時未重新對 code 驗證，行號會隨 commit 漂移，引用時以原文定位。2026-10-03 依 ADR-0016 加註的各處（修訂行、D-1 三處、D-4、D-5、D-6、D-7 表、待實測參數段、P-17、「前置條件（明列）」段、I-18、I-28、I-33～I-35），來源為 tech-architect 2026-10-03 草案「二、ADR-0014 修訂條文」1～9，以及 tech-architect 同日落檔覆核裁定（D-4 一項、待實測參數段、前置條件段、I-28 的 P-17 加註、D-5 加註的「D1」改字、D-6 `change_mode` 項的層級、D-1 docstring 項的 PR 歸屬）；tech-writer 逐字落檔（`2026-10-0X` 填為 2026-10-03）。其中 `interface.py:463-464`、`:480` 由 tech-architect 於 2026-10-03 落檔覆核時讀檔確認仍相符。
 
 ---
 
@@ -120,7 +120,7 @@ class QuoteKey(BaseModel): symbol: str; board: Board
 class Quote(BaseModel):            # frozen; every datetime tz-aware
     symbol: str; board: Board; currency: Literal["TWD"]
     price: Decimal                 # parsed from MIS `z` only
-    prev_close: Decimal | None     # `y`; check input only, never a price fallback
+    prev_close: Decimal | None     # `y`; check input only (P-12 band; ADR-0016 basis witness), never a price fallback, never a denominator
     limit_up: Decimal | None; limit_down: Decimal | None   # `u`/`w` if present (待實測)
     trade_date: date               # exchange-local (Asia/Taipei)
     quote_time: datetime           # from `tlong`
@@ -139,6 +139,8 @@ class QuoteProvider(ABC):
 - `Quote` **沒有**委買價、委賣價、開盤、最高、最低這類欄位可以被誤當成價格取用。
 - provider 只做**結構性檢查**：rtcode、代號與市場別是否和請求一致、`z` 是否為 `"-"`、價格是否 ≤0、是否重複。
 - 跟時間有關的判斷交給服務層；前例是 `interface.py:190-198`，品質判定在事後指派，不由 provider 自己決定。
+- **〔2026-10-03 依 ADR-0016 修訂：`prev_close` 新增第二種檢查用途——盤中漲跌基準的等值見證。漲跌分母一律取日線快取中 `trade_date` 之前最近一根 bar 的未調整收盤；`prev_close` 只用來比對兩者是否相等，不相等即該列漲跌為 null。`prev_close` 仍不得作價格備援，也不得直接作漲跌分母；若要改為直接作分母，須另修本 ADR，並以 data-engineer 對 `y` 於除權息日語意的查證紀錄為前置。〕**
+- **〔2026-10-03 依 ADR-0016：`prev_close` 新增等值見證用途的實作 PR（ADR-0016 D-7），須同 PR 把 `interface.py` 中 `Quote` docstring 的 `prev_close` 說明（`:463-464`）與欄位註解（`:480`）補成與上一項相同的語意（英文）。〕**
 
 **D-2 模組配置。**
 - `app/data/providers/twse_mis.py`：adapter。
@@ -162,8 +164,10 @@ class QuoteProvider(ABC):
 - `value_all` 保持原本的簽名，改為回傳 `value_book(...).valuations`。
 - 不得用「估值器實例上的狀態」傳遞盤中上下文，因為估值器是跨執行緒共用的單例。
 - 報價被接受時，該部位**不跑**日線梯子。被拒絕或不在盤中時段，走原本的日線路徑，結果與未啟用盤中功能時相同，只多一個原因欄位。
+- **〔2026-10-03 依 ADR-0016 加註：上一項「不跑日線梯子」指不呼叫 `get_daily_bars`（不向任何日線來源發出請求）。ADR-0016 D-7 為漲跌基準所做的至多一次 `get_cached_bars`（cache-only、不寫任何表，該方法 docstring 明載不落入梯子）不屬日線梯子；其結果只作漲跌分母，不得作為該部位現價或價格備援。計數見 I-18。〕**
 
 **D-5 `PriceInfo` 擴充，三個欄位都有預設值。**
+**〔2026-10-03 依 ADR-0016 加註：`price_kind` 可隨 ADR-0016 收盤版漲跌欄的後端實作（`work/stock-desk-首頁重排-視覺規範-2026-10-03.md` 第 9 節依賴項 D1，dev-lead；與本 ADR Options D1 無關）先行落地，W15 前恆為 `"daily_close"`；`quote_time`、`intraday_fallback` 仍隨 W6。〕**
 - `price_kind: Literal["daily_close", "intraday_quote"] = "daily_close"`
 - `quote_time: datetime | None = None`
 - `intraday_fallback: QuoteRejectCode | None = None`：在盤中時段卻退回收盤時，填上原因碼。
@@ -177,6 +181,7 @@ class QuoteProvider(ABC):
 - `PortfolioSummary` 新增兩個區塊：
   - `price_basis`：盤中幾檔、收盤幾檔、最早／最晚成交時間、收盤日期範圍。**〔CEO 裁定 2：總覽需揭露「含 N 檔盤中、M 檔收盤」，見「CEO 裁定」。〕**
   - `intraday`：`session_state`、`source_status`、`refresh_after_s`、`reason`。
+- **〔2026-10-03 依 ADR-0016 加註〕** `PortfolioSummary` 另新增欄位 `change_mode`：`"close_only"`｜`"may_include_intraday"`，由估值器建構參數決定（非資料、非環境變數）；W15 前恆為 `"close_only"`。前端漲跌欄表頭與「允許渲染 `intraday_quote` 列」只讀此欄（ADR-0016 D-8；風控 2026-10-03 第 2b 項）。
 - `Totals` 欄位與 `status` 語意不變（`summary.py:27-44`）。
 
 **D-7 畫面影響範圍（回答第 2 題）：**
@@ -192,6 +197,7 @@ class QuoteProvider(ABC):
 | 建議卡 `/api/advice` | `cache_only` 整書＋本標的 `load_bars` | **收盤** |
 | 操作指令頁「現價」（`PositionSnapshotTable.tsx:41`） | 基準日收盤，已有說明句 | **收盤** |
 | 設定頁淨值檢核、回測、事件研究、Kelly | 日線 | **收盤** |
+| 持倉明細「漲跌」欄 | summary `positions[].change`（ADR-0016） | **依該列 `price_kind`**；標籤由 `basis_kind`／`basis_date` 驅動，前端不推算 |
 
 避免使用者看到兩個對不上的數字而困惑，作法如下：
 - (a) **時間基準不變式**：每個價格數字，以及由價格算出的金額，在同一個視覺單元內一定附上基準標籤：「盤中 HH:MM:SS 成交」或「MM/DD 收盤」。`intraday_quote` 不得出現「收盤」字樣；`daily_close` 不得出現成交時間。
@@ -236,7 +242,7 @@ class QuoteProvider(ABC):
 
 **D-12 美股延後。** US 持倉一律 `daily_close`，不觸發任何報價請求。
 
-**待實測參數**：全部集中在單一模組的常數裡，不得用環境變數設定。CEO 2026-10-05 報告回填後，由 data-engineer 更新常數並回頭修訂本表。**全部 P-1～P-16 皆為「待 10/05 實測」的預設值，不是已驗證的數值。**
+**待實測參數**：全部集中在單一模組的常數裡，不得用環境變數設定。CEO 2026-10-05 報告回填後，由 data-engineer 更新常數並回頭修訂本表。**全部 P-1～P-16 皆為「待 10/05 實測」的預設值，不是已驗證的數值。** **〔2026-10-03 依 ADR-0016 加註：P-17 同屬本段範圍（常數放 `app/data/quote_params.py`，不讀環境變數，預設關閉）；但 P-17 的開啟除實測查證外，另需風控 2d 前置 (a)～(d) 完成，不由 data-engineer 單獨回填開啟（故 W13 仍為 P-1～P-16）。〕**
 
 | 編號 | 參數 | 實測前預設 | 判準（對照腳本檢查項） |
 | --- | --- | --- | --- |
@@ -256,6 +262,7 @@ class QuoteProvider(ABC):
 | P-14 | cookie | 依 B1 結果 | 需要 cookie → session 只存在記憶體，暖機請求也計入 P-2 |
 | P-15 | yfinance 備援 | 不接 | 兩次 mid 的 C 延遲中位數 ≤ 2 分鐘、且 D 為 all_close → 可提案接成 BACKUP，但要有獨立節流預算並揭露延遲 |
 | P-16 | 雙通道探測 | 關閉 | 額外跑一次 `--symbols tse:5483,otc:2330`：錯誤通道只是從 `msgArray` 缺席、`rtcode` 仍為 `"0000"` → 開啟 |
+| P-17 | 盤中漲跌（ADR-0016 D-7） | 關閉 | data-engineer 以 10/05 `.real.json` 確認一般交易日 `y`＝前一交易日官方收盤；除權息日 `y` 語意以實測樣本或官方文件查證並留紀錄；兩者齊備且風控 2d 前置 (a)～(d) 完成才開啟 |
 
 **實測補充請求（請轉 CEO，在 10/05 同一天加跑）：**
 1. 跑一次錯誤市場別探測（P-16）。
@@ -417,7 +424,7 @@ class QuoteProvider(ABC):
 **前置條件（明列）：**
 - **示範持倉排除盤中價。** 示範持倉用真實代號但成本取自合成序列（`demo/seed.py:107-114,158-169`），接上 MIS 會變成「真實現價減去合成成本」的捏造損益，所以一律走 `daily_close`、拒絕碼 `demo_series`（D-8 ②、D-10、I-20；評估摘要阻擋項 2）。
 - **前端自動輪詢必須等匯率跨請求快取（W11，即 ADR-0010 S-1 或等效作法；已由 ADR-0015（accepted）承接，W16 解鎖條件以 ADR-0015 C-19 為準）落地。** 在那之前後端 `refresh_after_s` 恆為 `null`（D-9 前置條件、I-25、W16）。原因：每輪輪詢都會讓每個非 TWD 部位重打匯率來源，最多 16 次 HTTP（評估摘要阻擋項 3）。
-- **P-1～P-16 皆為「待 10/05 實測」的預設值。** 實測回填前，這些數值不得當作已驗證的事實引用；回填後由 data-engineer 更新常數並回修參數表（W13、I-28）。
+- **P-1～P-16 皆為「待 10/05 實測」的預設值。** 實測回填前，這些數值不得當作已驗證的事實引用；回填後由 data-engineer 更新常數並回修參數表（W13、I-28）。**〔2026-10-03 依 ADR-0016 加註：P-17 的預設「關閉」比照本條，屬待查證狀態。〕**
 
 ---
 
@@ -441,7 +448,7 @@ class QuoteProvider(ABC):
 - **I-15** D-10 的每個拒絕碼都至少有一個單元測試；被拒絕時 `PriceInfo.intraday_fallback` 非 null，並寫一行 log。
 - **I-16** 報價被拒絕或不在盤中時段時，`PriceInfo` 的 `value`／`as_of`／`source`／`data_status`／`is_within_ttl`／`reason` 與「沒傳 `intraday`」時完全相同。
 - **I-17** `PriceInfo` 的三個新欄位都有預設值；三個既有估值測試檔不改任何斷言即可通過。
-- **I-18** 報價被接受時，該部位不呼叫 `get_daily_bars`／`get_cached_bars`（假服務計數）。
+- **I-18** 報價被接受時，該部位不呼叫 `get_daily_bars`；`get_cached_bars` 至多呼叫一次，且僅供 ADR-0016 漲跌基準使用（假服務計數）。
 - **I-19** US 持倉永遠是 `price_kind="daily_close"`，而且不觸發報價請求（有測試）。
 - **I-20** 示範持倉（備註帶 `DEMO_NOTE_PREFIX`，或快取最後一根 `source="demo_synthetic"`）永遠是 `daily_close`，拒絕碼 `demo_series`（有測試）。
 - **I-21** 上市／上櫃判定不會預設成 `tse`；回傳列的 `c` 或 `ex` 與請求不一致時拒絕；`app/data/**` 不 import `app.directory`（import graph 測試）。
@@ -452,10 +459,14 @@ class QuoteProvider(ABC):
 - **I-26** 新增的使用者可見字面不含「即時」的正向用法；每一句都要有風控逐字核可紀錄，並以守門測試逐字釘住。
 - **I-27** `NON_REALTIME_NOTICE` 改字與 W15 接線在同一個 PR。
 - **I-28** P-1～P-16 集中在單一模組常數中，每個常數註明「ADR-0014 P-x，待實測／查證日期」；不讀環境變數。
+  - **〔2026-10-03 依 ADR-0016 加註：P-17 納入本條，與 P-1～P-16 同置 `app/data/quote_params.py`，常數註明「ADR-0014 P-17，待查證」；比照該模組 docstring「no constant ships unused」的慣例，於消費它的程式（ADR-0016 D-7 G1）落地的同一個 PR 新增。〕**
 - **I-29** W15 接線 commit 之前，已有以真實 `.real.json` 去敏 fixture 為基礎的 MIS 契約測試合入。
 - **I-30** 若 ADR-0010 D-5 的 memo 落地：盤中估值路徑不在 memo 範圍內，或 memo 的 TTL ≤ P-1 且鍵含報價批次的 `as_of`。
 - **I-31** 每次 MIS 請求寫一行 log（時間、通道數、HTTP 狀態、耗時、拒絕碼計數）；cookie 值不進 log、fixture 或任何檔案。
 - **I-32** 部署維持單一 uvicorn worker；改成多 worker 前要先修訂本 ADR（devops-sre 確認）。
+- **I-33** `change_mode=="close_only"` 時，回應中沒有任何 `price_kind=="intraday_quote"` 或 `change.basis_kind=="intraday"`（有測試）。
+- **I-34** P-17 關閉時，所有 `intraday_quote` 列的 `change` 恆為 null（有測試）。
+- **I-35** `prev_close` 在 `app/portfolio/price_change.py` 只出現在等值比較，不參與任何除法（grep＋review）。
 
 ---
 
