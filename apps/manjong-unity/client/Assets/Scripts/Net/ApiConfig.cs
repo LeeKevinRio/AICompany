@@ -7,11 +7,12 @@ namespace Manjong.Net
     /// Resolves the backend base URL.
     /// WebGL: the page origin (same-origin hosting). The "?api=&lt;url&gt;" override is honoured only when the
     /// page itself is served from localhost, so a crafted link cannot send the guest token to another server.
-    /// Editor / other platforms: http://127.0.0.1:3000 (the backend binds to loopback by default).
+    /// Editor / other platforms: the MANJONG_API_URL environment variable if set (e.g. when the backend runs on
+    /// another port), otherwise http://127.0.0.1:7316 (the backend binds to loopback by default).
     /// </summary>
     public static class ApiConfig
     {
-        public const string DefaultBaseUrl = "http://127.0.0.1:3000";
+        public const string DefaultBaseUrl = "http://127.0.0.1:7316";
 
         static string cachedBaseUrl;
 
@@ -40,6 +41,9 @@ namespace Manjong.Net
                 }
             }
             Debug.LogWarning("[Manjong] Could not derive API origin from page URL, falling back to " + DefaultBaseUrl);
+#else
+            string fromEnv = Environment.GetEnvironmentVariable("MANJONG_API_URL");
+            if (!string.IsNullOrEmpty(fromEnv)) return TrimTrailingSlash(fromEnv.Trim());
 #endif
             return DefaultBaseUrl;
         }

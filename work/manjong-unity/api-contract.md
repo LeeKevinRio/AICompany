@@ -1,6 +1,6 @@
 # manjong-unity API 契約 v0.1
 
-- Base URL：開發時 `http://localhost:3000`；WebGL 與伺服器同源時用頁面 origin。
+- Base URL：開發時 `http://127.0.0.1:7316`；WebGL 與伺服器同源時用頁面 origin。
 - 所有路徑前綴 `/api`，請求與回應都是 JSON（`Content-Type: application/json`）。
 - 需要登入的端點帶 `Authorization: Bearer <token>`。
 - **JsonUtility 相容規則**：回應永遠是物件（不是頂層陣列）；欄位永遠存在、不送 `null`

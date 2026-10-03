@@ -11,7 +11,7 @@ Unity 用戶端只送「選了哪個合法動作」。
 
 ```bash
 npm install
-npm run dev        # http://127.0.0.1:3000，存檔自動重啟
+npm run dev        # http://127.0.0.1:7316，存檔自動重啟
 npm test           # 單元 + API 整合測試
 npm run typecheck
 npm run simulate -- 1000   # 1000 場全 AI 對打：檢查牌數守恆、零和，並輸出台型統計
@@ -21,10 +21,10 @@ npm run simulate -- 1000   # 1000 場全 AI 對打：檢查牌數守恆、零和
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
-| `PORT` | `3000` | |
+| `PORT` | `7316` | |
 | `HOST` | `127.0.0.1` | 要讓同網段其他裝置連線時設 `0.0.0.0` |
 | `DATA_FILE` | `data/players.json` | 玩家資料（已被 `.gitignore`） |
-| `WEBGL_DIR` | `../client/Build/WebGL` | 有 Unity WebGL build 時，伺服器同源提供網頁（開 `http://127.0.0.1:3000/`） |
+| `WEBGL_DIR` | `../client/Build/WebGL` | 有 Unity WebGL build 時，伺服器同源提供網頁（開 `http://127.0.0.1:7316/`） |
 | `CORS_ORIGIN` | （全部允許） | 逗號分隔的允許來源，正式部署時要設 |
 
 ## 目錄

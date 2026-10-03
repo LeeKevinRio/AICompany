@@ -34,12 +34,13 @@ UI 使用 `StandaloneInputModule`（舊版 Input Manager）。請確認：
    npm install
    npm run dev
    ```
-   預設監聽 `http://127.0.0.1:3000`。
+   預設監聽 `http://127.0.0.1:7316`。
 2. 回到 Unity，開啟 `Assets/Scenes/Main.unity`，按 **Play**。
 3. 第一次會自動建立訪客帳號（token 存在 `PlayerPrefs`，key：`manjong.token`）。
    想換一個新帳號：Play 停止後，在 Unity 選單 `Edit > Clear All PlayerPrefs`。
 
-Editor 與桌面平台一律連 `http://127.0.0.1:3000`（集中在 `Assets/Scripts/Net/ApiConfig.cs`）。
+Editor 與桌面平台預設連 `http://127.0.0.1:7316`（集中在 `Assets/Scripts/Net/ApiConfig.cs`）。
+若 7316 被佔用：後端用 `PORT=<新 port> npm run dev` 啟動，並在**啟動 Unity Hub / Editor 之前**設定環境變數 `MANJONG_API_URL=http://127.0.0.1:<新 port>`（環境變數要在 Editor 啟動前設定才會生效）。
 
 ## 3. Build WebGL 並由後端同源提供
 
@@ -49,8 +50,8 @@ Editor 與桌面平台一律連 `http://127.0.0.1:3000`（集中在 `Assets/Scri
      <Unity 執行檔> -batchmode -quit -projectPath apps/manjong-unity/client -executeMethod ManjongBuild.BuildWebGL
      ```
 2. 啟動後端；後端會讀環境變數 `WEBGL_DIR`（預設 `../client/Build/WebGL`）當作靜態檔目錄。
-3. 瀏覽器開 `http://127.0.0.1:3000/`。WebGL 版本會自動用**頁面的 origin** 當 API 位置（同源，不需要 CORS）。
-   - 本機開發時可用網址參數指定 API：`http://localhost:8080/index.html?api=http://127.0.0.1:3000`。基於安全考量，`?api=` **只在頁面本身來自 localhost / 127.0.0.1 時生效**（避免惡意連結把 token 送到別的伺服器）；正式部署請同源提供。
+3. 瀏覽器開 `http://127.0.0.1:7316/`。WebGL 版本會自動用**頁面的 origin** 當 API 位置（同源，不需要 CORS）。
+   - 本機開發時可用網址參數指定 API：`http://localhost:8080/index.html?api=http://127.0.0.1:7316`。基於安全考量，`?api=` **只在頁面本身來自 localhost / 127.0.0.1 時生效**（避免惡意連結把 token 送到別的伺服器）；正式部署請同源提供。
      （此時後端需允許該來源的 CORS）。
 
 壓縮格式設為 `Disabled` 是為了讓後端不必設定 `Content-Encoding` 標頭；正式部署若要 gzip / brotli，需同步調整後端。
@@ -80,10 +81,10 @@ Assets/
 
 | 狀況 | 原因與處理 |
 | --- | --- |
-| 開啟後出現「連不上伺服器」 | 後端沒啟動或不在 `127.0.0.1:3000`。先 `npm run dev`，再按「重試」。 |
+| 開啟後出現「連不上伺服器」 | 後端沒啟動或不在 `127.0.0.1:7316`。先 `npm run dev`，再按「重試」。 |
 | 按鈕都點不到 | Active Input Handling 設成只用新版 Input System，改為 Old 或 Both（見上方）。 |
 | 字變成方塊 / 缺字 | 粉圓字型是子集，只含常用字；若後端訊息出現子集外的字會顯示成方塊。找不到字型檔時會改用 Unity 內建字型並在 Console 警告。 |
 | WebGL 版打不了中文暱稱 | 瀏覽器中 uGUI 舊版 `InputField` 收不到輸入法（IME）組字。WebGL 版暱稱旁有「中文輸入」按鈕，會跳出瀏覽器輸入框。 |
-| WebGL 開啟後一片空白 / 載入失敗 | 確認是透過後端（`http://127.0.0.1:3000/`）開啟，而不是直接雙擊 `index.html`（`file://` 無法載入）。 |
+| WebGL 開啟後一片空白 / 載入失敗 | 確認是透過後端（`http://127.0.0.1:7316/`）開啟，而不是直接雙擊 `index.html`（`file://` 無法載入）。 |
 | 想重開一個新帳號 | Editor：`Edit > Clear All PlayerPrefs`。WebGL：清除該網站的瀏覽器資料（PlayerPrefs 存在 IndexedDB）。 |
 | 打到一半按「離開」 | 牌局保留在伺服器（伺服器重啟才會消失）；回大廳再按「開始遊戲」會接續同一場。 |
