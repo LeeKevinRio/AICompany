@@ -63,8 +63,8 @@
 
 ### 對實作的約束（R-1～R-14）
 
-- **R-1** cache-only 路徑只能回 `CACHED_STALE` 或 `UNAVAILABLE`（測試要求：零 HTTP 呼叫）。
-- **R-2** cache-only 路徑不得呼叫 `record_fetch`／`record_attempt`／`put`。
+- **R-1** cache-only 路徑只能回 `CACHED_STALE` 或 `UNAVAILABLE`（測試要求：零 HTTP 呼叫）。〔2026-10-03：僅約束價格路徑；cache_only 的匯率路徑為 ADR-0015 F1 的明示例外〕
+- **R-2** cache-only 路徑不得呼叫 `record_fetch`／`record_attempt`／`put`。〔2026-10-03：僅約束價格路徑；cache_only 的匯率路徑為 ADR-0015 F1 的明示例外〕
 - **R-3** `is_within_ttl` 一律由同一個 `judge()` 產生；沒有 coverage 資訊一律回 `False`。
 - **R-4** `mixed_sources_reason` 照既有規則套用，不因 cache-only 而省略。
 - **R-5** 沒有快取列時回 `insufficient_data`；`missing` 需以 `price_not_queried` 與 `price`
@@ -128,13 +128,13 @@
   - D-3 的冷卻機制也會擋掉冷卻期內使用者主動重試的請求（等到冷卻窗過才會再打來源）。
 - 已知限制：
   - D-5、D-6 尚未落地，僅為決策記錄，實作前不得宣稱已生效。
-  - FX 完整快取層（S-1）未落地前，非 TWD 持倉的匯率查詢仍是每次請求對來源查詢（只是同批內去重）。
+  - FX 完整快取層（S-1）未落地前，非 TWD 持倉的匯率查詢仍是每次請求對來源查詢（只是同批內去重）。〔2026-10-03：見 ADR-0015〕
 - 約束：D-5、D-6 落地前，`/api/advice` 的效能改善範圍僅限於 D-1～D-4 所涵蓋者；擴大 cache-only
   適用範圍或調整 D-2 的收斂邏輯須回頭修訂本 ADR 或另立新 ADR。
 
 ## Suggestion／列管
 
-- **S-1** FX 完整快取層：列管 data-engineer，另立 ADR。
+- **S-1** FX 完整快取層：列管 data-engineer，另立 ADR。〔2026-10-03：已另立 ADR-0015（proposed）〕
 - **S-2** 不得為了節省請求數，在 FX 回看邏輯中跳過週末（與 ADR-0009 Options E 被否決的理由同構——
   以「應該休市」的推論取代實際查證）。
 - **S-3** 收斂 `LatestPriceService`（重複實作，待後續整理）。

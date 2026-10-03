@@ -9,6 +9,7 @@
   - ADR-0005（指數來源 yfinance、非官方來源一律 `status=backup` 不得標 `fresh` 的揭露紀律，本 ADR 的匯率備援直接沿用此紀律）
   - skill `data-source-integration`（adapter／契約測試／離線 fixture／降級策略／紅線）
 - 與既有 ADR 的關係：**不取代任何 ADR**。本則補上匯率（FX）這個垂直的降級鏈；`app/data/providers/fx.py` 檔頭既有的「即期買賣中點模型值、非官方收盤匯率、端點未查證」聲明維持有效，本 ADR 只處理「主來源現在整天回不了 CSV」這個新事實。
+  - 〔2026-10-03：Consequences「FX 目前仍然沒有本地快取層」一段與「需要 CEO 或使用者決定」第 3 題，擬由 ADR-0015（proposed）處理，ADR-0015 核可後本段失效。本 ADR 狀態不變，其餘決策與紅線維持。〕
 
 ---
 
@@ -97,7 +98,7 @@ CEO 本機於 2026-09-19 執行 `scripts/verify_market_data.py`，發現台灣�
 
 - **yfinance 匯率是 Yahoo 的市場報價，不是台灣銀行的官方即期中價**，兩者口徑（例如報價時間點、買賣價處理方式）可能有落差，備援生效期間的匯率精度會比平常略低。這個落差對使用者的揭露句由 **risk-compliance-officer 另審**，本 ADR 不代為決定文案（`app/services/fx.py` 的 `SOURCE_NOTES["yfinance_fx"]` 先給出一句工程side的事實陳述，最終使用者可見文案仍需風控過）。
 - **一次呼叫中途遇到挑戰頁會捨棄該次呼叫中已成功抓到的日期**，即使那幾天其實是真資料。這是本 ADR 為了避免「部分真、部分假、呼叫端要自己判斷可信度」的複雜度而接受的簡化，代價是理論上會比逐日獨立重試多流失一點點資料（實務上因為觸發情境是「每天都被擋」，這個代價幾乎不會發生）。
-- **FX 目前仍然沒有本地快取層**：本 ADR 只加了「線上主 → 線上備援」，沒有比照 ADR-0005/ADR-0009 加上 cache-first／cached_stale。若兩個線上來源都掛掉，即使前一天才成功抓過匯率，這次查詢也還是 `UNAVAILABLE`，不會像價格那樣退回快取。
+- **FX 目前仍然沒有本地快取層**：本 ADR 只加了「線上主 → 線上備援」，沒有比照 ADR-0005/ADR-0009 加上 cache-first／cached_stale。若兩個線上來源都掛掉，即使前一天才成功抓過匯率，這次查詢也還是 `UNAVAILABLE`，不會像價格那樣退回快取。〔2026-10-03：擬由 ADR-0015（proposed）處理，ADR-0015 核可後本段失效〕
 - **`YFinanceFxAdapter` 與美股個股備援、指數路徑共用同一個 `RateLimitedClient`**：三個角色的節流預算現在互相排擠（原本只有兩個角色）。目前流量規模下影響可忽略，但若未來 FX 查詢頻率大增，需要重新評估節流間隔是否足夠。
 
 ---
@@ -106,7 +107,7 @@ CEO 本機於 2026-09-19 執行 `scripts/verify_market_data.py`，發現台灣�
 
 1. **要不要投入成本查證央行或商用 ExchangeRate API 作為更接近官方的匯率來源？** 選項：(a) 維持本 ADR 的 yfinance 備援，接受「非官方」的代價；(b) 由 devops-sre 在有網路環境查證中央銀行是否有結構化免費端點；(c) 申請商用 API key（涉及費用，依章程紅線需先停下交 CEO 裁決）。data-engineer 立場：先上線方案 A 止血，(b)/(c) 列為後續 ADR。
 2. **`yfinance_fx` 備援生效時，前端要不要新增一句常駐揭露？** 工程面已有 `app/services/fx.py` 的 `SOURCE_NOTES["yfinance_fx"]` 文字，但最終使用者可見措辭（是否要用類似 `DataMetaStatusBadge` 的徽章樣式呈現）需要 creative-lead／risk-compliance-officer 過審，本 ADR 不代決。
-3. **是否要幫 FX 也補上快取層（比照 `PriceBarCache`）？** 這會把降級鏈從三層擴充到四層（主 → 備援 → 快取 → 不可用），是否值得投入取決於台銀端點恢復正常的時間長短——若挑戰頁只是短期措施，優先順序可以降低。
+3. **是否要幫 FX 也補上快取層（比照 `PriceBarCache`）？** 這會把降級鏈從三層擴充到四層（主 → 備援 → 快取 → 不可用），是否值得投入取決於台銀端點恢復正常的時間長短——若挑戰頁只是短期措施，優先順序可以降低。〔2026-10-03：擬由 ADR-0015（proposed）處理，ADR-0015 核可後本段失效〕
 
 ---
 

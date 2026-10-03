@@ -4,7 +4,7 @@
 - 日期：2026-10-03
 - 決策者：tech-architect（草案）、CEO（待核可；2026-10-02 已裁定「加盤中價」與「主來源採 MIS」；2026-10-03 另裁定三點，見「CEO 裁定（2026-10-03）」一節）
 - 適用範圍：僅 product/stock-desk 產品線
-- 修訂：（無，新增）。**不取代任何 ADR。**
+- 修訂：新增。**不取代任何 ADR。** 2026-10-03 依 ADR-0015（proposed）C-17 加註兩處修訂註記（I-4、防線 2），並調整 D-9 前置條件、W11 列、「前置條件（明列）」段對 ADR-0015 的引用字樣；僅調整引用與註記，決策內容未變。
   - 落實 ADR-0003:32「日後需要即時報價另案評估」這一條另案。
   - 擴充 ADR-0010 R-1：`cache_only` 一律不取盤中報價。
 - 編號說明：0013 已由員工線（`chore/agent-readonly-hook`）的唯讀 hook ADR 佔用，該 ADR 之後會 merge 進產品線，故本 ADR 使用 0014（來源：任務單，2026-10-03）。
@@ -219,7 +219,7 @@ class QuoteProvider(ABC):
   - 只有 `["portfolio-summary"]` 輪詢，間隔取回應的 `intraday.refresh_after_s`（`null` 就不輪詢），且設 `refetchIntervalInBackground: false`，分頁隱藏時停止。
   - 前端寫死 15 秒下限作為防呆。
   - limits 與族群動能**不輪詢**。
-- **前置條件**：匯率有跨請求快取（ADR-0010 S-1 或等效作法）之前，`refresh_after_s` 一律回 `null`，也就是只靠既有的切回視窗時重新整理。
+- **前置條件**：匯率有跨請求快取（ADR-0010 S-1 或等效作法；2026-10-03 起由 ADR-0015（proposed）承接，解鎖條件以 ADR-0015 C-19 為準）之前，`refresh_after_s` 一律回 `null`，也就是只靠既有的切回視窗時重新整理。
 - 排程程序不得持有或呼叫 `IntradayQuoteService`，所以只有 API 程序會打 MIS。部署前提是單一 uvicorn worker（`compose.yaml:20` 目前就是）；改成多 worker 必須回頭修訂本 ADR。
 
 **D-10 品質檢查。** 拒絕碼如下，每一種都必須浮上檯面：寫 log、寫進回應的 `intraday_fallback`。
@@ -304,6 +304,7 @@ class QuoteProvider(ABC):
 **防線（逐層）：**
 1. **型別隔離**：`Quote` 不是 `PriceBar`，而且不存在任何 `Quote` → `PriceBar` 的轉換函式。
 2. **儲存隔離**：一輪含盤中報價的估值，前後的 SQLite 每張表列數都不變。比照 `tests/test_market_panel_boundary.py:31` 的 C-7 寫法。
+   - **〔2026-10-03 依 ADR-0015 C-17 修訂：「報價不寫入任何表」的不變式維持；「每張表列數不變」僅排除 `fx_rate_cache`、`fx_lookup_log` 兩張表（以表名明列，不得以 `fx_%` 之類的萬用字元排除），`price_bars_cache` 仍在範圍內；或該測試改用不經快取的假匯率 provider，此時不排除任何表。〕**
 3. **import graph**：沿用 `tests/import_graph.py` 的 `reachable_app_modules`。signals、backtest、advice、kelly、sectors、research、alerts、playbook、leverage、dividends、scheduler 都不可達報價模組。
 4. **接線隔離**：只有 summary 端點用盤中估值器。limits、advice、alerts、settings PUT、`scheduler.evaluate_alerts_tick`、`data_refresh`，搭配「被呼叫就 raise」的假 QuoteService 都要跑通。
 5. `cache_only` 加上盤中參數，建構時就 `ValueError`。
@@ -360,7 +361,7 @@ class QuoteProvider(ABC):
 | W8 | 邊界與污染測試（防線 2～5） | dev-lead | W6、W7 |
 | W9 | 前端型別、標籤分岔、輪詢函式（先用占位字面，並以守門測試禁止占位字面出貨） | frontend-engineer | W7 的 schema |
 | W10 | 揭露文案起草，接著風控審查 | creative-lead → risk-compliance-officer | 本 ADR |
-| W11 | 匯率跨請求快取（ADR-0010 S-1），另立 ADR | data-engineer → tech-architect | 無；這是輪詢的前置條件 |
+| W11 | 匯率跨請求快取（ADR-0010 S-1），另立 ADR（已立：ADR-0015，proposed） | data-engineer → tech-architect | 無；這是輪詢的前置條件 |
 
 **必須等實測：**
 
@@ -404,7 +405,7 @@ class QuoteProvider(ABC):
 
 **前置條件（明列）：**
 - **示範持倉排除盤中價。** 示範持倉用真實代號但成本取自合成序列（`demo/seed.py:107-114,158-169`），接上 MIS 會變成「真實現價減去合成成本」的捏造損益，所以一律走 `daily_close`、拒絕碼 `demo_series`（D-8 ②、D-10、I-20；評估摘要阻擋項 2）。
-- **前端自動輪詢必須等匯率跨請求快取（W11，即 ADR-0010 S-1 或等效作法）落地。** 在那之前後端 `refresh_after_s` 恆為 `null`（D-9 前置條件、I-25、W16）。原因：每輪輪詢都會讓每個非 TWD 部位重打匯率來源，最多 16 次 HTTP（評估摘要阻擋項 3）。
+- **前端自動輪詢必須等匯率跨請求快取（W11，即 ADR-0010 S-1 或等效作法；已由 ADR-0015（proposed）承接，W16 解鎖條件以 ADR-0015 C-19 為準）落地。** 在那之前後端 `refresh_after_s` 恆為 `null`（D-9 前置條件、I-25、W16）。原因：每輪輪詢都會讓每個非 TWD 部位重打匯率來源，最多 16 次 HTTP（評估摘要阻擋項 3）。
 - **P-1～P-16 皆為「待 10/05 實測」的預設值。** 實測回填前，這些數值不得當作已驗證的事實引用；回填後由 data-engineer 更新常數並回修參數表（W13、I-28）。
 
 ---
@@ -415,6 +416,7 @@ class QuoteProvider(ABC):
 - **I-2** `Quote` 模型沒有 bid／ask／open／high／low 欄位；`Quote.price` 唯一的指派來源是 MIS 的 `z`（code review 加上 parser 測試）。
 - **I-3** `Quote` 的 `as_of`／`quote_time`／`server_time` 都有 tz-aware validator；`trade_date` 以 Asia/Taipei 計算（有測試）。
 - **I-4** 報價模組不 import `app.data.cache`、`app.data.market_panel`，也不 import 任何 store；含盤中報價的 `build_summary` 前後，SQLite 每張表列數不變（有測試）。
+  - **〔2026-10-03 依 ADR-0015 C-17 修訂：「報價不寫入任何表」的不變式維持；「每張表列數不變」僅排除 `fx_rate_cache`、`fx_lookup_log` 兩張表（以表名明列，不得以 `fx_%` 之類的萬用字元排除），`price_bars_cache` 仍在範圍內；或該測試改用不經快取的假匯率 provider，此時不排除任何表。〕**
 - **I-5** 程式碼中沒有任何從 `Quote` 建構 `PriceBar` 或 `BarSnapshotRow` 的地方（grep 加 review）。
 - **I-6** import graph 測試：signals、backtest、advice、kelly、sectors、research、alerts、playbook、leverage、dividends、scheduler 都不可達 `app.services.quotes` 與 `app.data.providers.twse_mis`。
 - **I-7** `get_intraday_valuator`（dependency，內部呼叫 factory `deps._default_intraday_valuator()`）只在 `api/portfolio.py` 的 `portfolio_summary` 被引用；`_default_valuator` 與 `_default_cached_valuator` 的建構參數不含 `intraday`（grep 加測試）。
