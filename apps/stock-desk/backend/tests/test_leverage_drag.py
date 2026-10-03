@@ -278,6 +278,41 @@ def test_provenance_and_assumptions_survive() -> None:
     assert len(result.assumptions) >= 5
 
 
+# --- Risk-approved wording, pinned verbatim ------------------------------------
+# Approved word-for-word in work/reviews/2026-10-03-槓桿章節-觀測值字面-風控核可.md.
+# Any edit to these sentences needs a fresh risk-compliance sign-off, so the
+# literals below are deliberately *not* derived from the module's constants.
+
+_RESIDUAL_ASSUMPTION = (
+    "殘差＝ETF 收盤價觀測值（未還原，不含配息、不處理分割）與上述理想路徑及費用近似之間"
+    "剩下的部分，可能來自追蹤誤差、期貨換倉與融資／放空成本、配息與分割未計入、"
+    "以及指數與基金價格來源差異；本模組不再往下細拆。"
+)
+_THEORY_ASSUMPTION = (
+    "理論近似式 drag ~= -0.5 * beta * (beta - 1) * sigma^2 * T "
+    "假設報酬獨立同分布、可連續重置、單日幅度小；"
+    "其與重置（複利）效應的差異照實並列，不做調整使兩者相符。"
+)
+# Risk compliance rejected rewriting this one ("所有數字" would also cover the
+# index series, whose dividend basis is unverified), so it stays as it was.
+_CLOSE_PRICE_ASSUMPTION = "所有數字以收盤價計算，未含使用者端的交易稅費，也未含匯率影響。"
+
+
+def test_residual_assumption_matches_the_approved_wording_verbatim() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)
+    assert _RESIDUAL_ASSUMPTION in result.assumptions
+
+
+def test_theory_assumption_matches_the_approved_wording_verbatim() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)
+    assert _THEORY_ASSUMPTION in result.assumptions
+
+
+def test_close_price_assumption_is_left_unchanged() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)
+    assert _CLOSE_PRICE_ASSUMPTION in result.assumptions
+
+
 # --- Index provenance and the residual reminder ------------------------------
 
 

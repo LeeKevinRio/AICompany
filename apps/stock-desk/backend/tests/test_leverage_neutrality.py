@@ -165,6 +165,34 @@ def test_no_advice_vocabulary_in_any_string(chapter: dict[str, Any]) -> None:
             assert phrase not in lowered, f"advice wording {phrase!r} at {path}"
 
 
+# Retired wording: the "ETF price" column is an unadjusted close-price
+# observation, not the holder's return, and every effect in the drag table is a
+# theoretical quantity, so neither phrase may reach the UI (risk-compliance
+# review 2026-10-03, 槓桿章節-觀測值字面).
+RETIRED_ZH = ("實際報酬", "實測")
+
+
+@pytest.mark.parametrize("chapter", _chapters())
+def test_no_retired_wording_in_any_string(chapter: dict[str, Any]) -> None:
+    for path, leaf in _walk(chapter):
+        if not isinstance(leaf, str):
+            continue
+        for phrase in RETIRED_ZH:
+            assert phrase not in leaf, f"retired wording {phrase!r} at {path}"
+
+
+def test_source_files_contain_no_retired_wording() -> None:
+    # Same reasoning as the advice scan below: Chinese in this package is
+    # output text, so catching it in source also covers templates and
+    # assumption lists on code paths the chapter fixtures do not reach.
+    files = sorted(LEVERAGE_PACKAGE.glob("*.py"))
+    assert files
+    for file in files:
+        text = file.read_text(encoding="utf-8")
+        for phrase in RETIRED_ZH:
+            assert phrase not in text, f"retired wording {phrase!r} in {file.name}"
+
+
 def test_chapter_ships_its_disclosure_and_assumptions() -> None:
     chapter = _chapters()[0]
     assert "不是預測" in chapter["disclosure"]

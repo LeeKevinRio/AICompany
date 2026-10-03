@@ -10,6 +10,12 @@ import {
 import { MeasureStatusBadge } from "../../components/MeasureStatusBadge";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { LEVERAGE_CHAPTER_TITLE } from "../../lib/sectionTitles";
+import {
+  LEVERAGE_DRAG_GAP_ROW_LABEL,
+  LEVERAGE_DRAG_OBSERVED_NOTE,
+  LEVERAGE_DRAG_OBSERVED_ROW_LABEL,
+  LEVERAGE_DRAG_RESET_EFFECT_LABEL,
+} from "../../lib/leverageWording";
 
 function AssumptionsList({ items }: { items: string[] }) {
   if (items.length === 0) return null;
@@ -113,7 +119,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                 <tbody className="text-neutral-300">
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-500">
-                      實際報酬
+                      {LEVERAGE_DRAG_OBSERVED_ROW_LABEL}
                     </th>
                     <td>{formatPercent(chapter.drag.actual_return)}</td>
                   </tr>
@@ -131,7 +137,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-500">
-                      Gap（實際 − naive）
+                      {LEVERAGE_DRAG_GAP_ROW_LABEL}
                     </th>
                     <td>{formatPercent(chapter.drag.gap)}</td>
                   </tr>
@@ -143,7 +149,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-500">
-                      重置（複利）效應
+                      {LEVERAGE_DRAG_RESET_EFFECT_LABEL}
                     </th>
                     <td>{formatPercent(chapter.drag.reset_effect)}</td>
                   </tr>
@@ -162,13 +168,14 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                 </tbody>
               </table>
             </div>
+            <p className="mt-2 text-xs text-neutral-400">{LEVERAGE_DRAG_OBSERVED_NOTE}</p>
             {chapter.drag.ideal_path_wiped_out && (
               <p className="mt-1 text-xs text-rose-300">理想路徑在此期間已跌破 -100%（歸零）。</p>
             )}
             <p className="mt-2 text-xs text-neutral-500">
               理論近似 drag（{chapter.drag.theoretical.formula}）：
               {chapter.drag.theoretical.status === "ok"
-                ? `${formatPercent(chapter.drag.theoretical.theoretical_drag)}（與實測重置效應差異 ${formatPercent(
+                ? `${formatPercent(chapter.drag.theoretical.theoretical_drag)}（與${LEVERAGE_DRAG_RESET_EFFECT_LABEL}差異 ${formatPercent(
                     chapter.drag.theoretical.difference,
                   )}）`
                 : chapter.drag.theoretical.reason}

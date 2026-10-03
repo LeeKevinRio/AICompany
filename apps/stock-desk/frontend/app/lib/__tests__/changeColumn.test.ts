@@ -566,9 +566,9 @@ describe("剩餘揭露句（風控 required (a)～(e)）", () => {
     const literal = nonTestSources().filter((rel) => readApp(rel).includes("漲跌未計入除權息與分割"));
     expect(literal).toEqual(["lib/positionsTableView.ts"]);
     // 損益％ column and every other surface never borrow the phrase (risk required 2). Allowlist:
-    // the note's own constant, plus the leverage chapter's legacy row label, which has a task
-    // ticket to be reworded; remove that entry once it is.
-    const actualReturnAllowlist = ["lib/positionsTableView.ts", "position/[symbol]/LeverageChapterView.tsx"];
+    // the note's own constant only (the leverage chapter's legacy row label was reworded on
+    // 2026-10-03, so its allowlist entry is gone).
+    const actualReturnAllowlist = ["lib/positionsTableView.ts"];
     const withPhrase = nonTestSources().filter((rel) => readApp(rel).includes("實際報酬"));
     expect(withPhrase.sort()).toEqual([...actualReturnAllowlist].sort());
     // the 損益％ label stays free of 漲跌／漲幅

@@ -251,6 +251,10 @@ const SCANNED_FILES = [
   "../../components/PageFooterDisclosures.tsx",
   "../footerDisclosureWording.ts",
   "../sectionTitles.ts",
+  // 風控 2026-10-03 槓桿章節觀測值字面核可（落地條件 3）：drag 表列標／附註的具名常數
+  // 與渲染它們的元件都納入掃描；逐字釘住見 leverageChapterWording.test.ts。
+  "../leverageWording.ts",
+  "../../position/[symbol]/LeverageChapterView.tsx",
   // 六項觀察條件（CEO 2026-09-06；PRD §4b 風控 R-01～R-22）：面板、字面模組、純函式。
   "../../position/[symbol]/EntryObservationPanel.tsx",
   "../entryObservationWording.ts",
