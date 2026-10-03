@@ -407,6 +407,22 @@ export const FRONTEND_FORBIDDEN_TERMS: readonly string[] = [
   "最新報價",
   "最新股價",
   "最新行情",
+  // ADR-0014 P13 (final list, risk-approved 2026-10-03). "盤中" above stays
+  // banned (condition (a)): the only exemption is whole-sentence equality
+  // with the allowlist in `intradayWording.ts`, enforced by
+  // `__tests__/intradayWording.test.ts`. "即時報價" is deliberately not
+  // listed; bare "即時" is handled by `findBareRealtimeClaims` ("非即時" ok).
+  "即時價",
+  "即時行情",
+  "即時股價",
+  "即時更新",
+  "即時顯示",
+  "即時同步",
+  "實時",
+  "最新成交",
+  "及時",
+  "零延遲",
+  "無延遲",
   // 行銷語氣
   "穩健獲利",
   "輕鬆賺",
