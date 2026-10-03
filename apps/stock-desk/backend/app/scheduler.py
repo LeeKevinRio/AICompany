@@ -1,15 +1,21 @@
 """Background scheduler: data refresh, alert evaluation and the sector card's batch.
 
 Runs as ``python -m app.scheduler`` (unchanged, so the compose service command
-does not move) on APScheduler's ``BlockingScheduler``. Two interval jobs:
+does not move) on APScheduler's ``BlockingScheduler``. Two core jobs:
 
-``data_refresh``
+``data_refresh`` (once at start-up, then shortly after each market's close)
     Warms the price cache for every symbol the user actually holds, so an
     outage of the upstream providers degrades to *recent* cached bars rather
     than to nothing. It fetches through :class:`MarketDataService`, which
     write-throughs to the cache; nothing is computed or stored beyond that.
+    ADR-0010 D-4 (revised 2026-10-03): weekdays at 15:10 / 16:30 / 18:30
+    Asia/Taipei for TW, and 18:30 then every half hour to 23:30
+    America/New_York for US (daylight saving follows the zone). Whether a
+    run actually asks a source is decided only by ADR-0009's ``judge()`` and
+    cooldowns -- the later points are the retry table, not a bypass. Setting
+    ``SCHEDULER_DATA_INTERVAL_MINUTES`` restores the old fixed interval.
 
-``alert_evaluation``
+``alert_evaluation`` (interval)
     Runs the same :func:`app.alerts.engine.evaluate_alerts` tick the API
     exposes, then pushes any fired events to the configured webhooks. Both the
     interval and the cooldown come from the stored alert settings, re-read each
@@ -54,12 +60,16 @@ import logging
 import os
 import signal
 from collections.abc import Callable, Collection
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from functools import lru_cache
+from time import monotonic
 from types import FrameType
+from typing import Literal
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from app.advice.book import self_reported_net_worth
@@ -79,6 +89,7 @@ from app.api.deps import (
     get_valuator,
 )
 from app.api.kelly import kelly_inputs_for
+from app.data.freshness import TW_POLICY, US_POLICY
 from app.data.market_panel import MarketPanelStore
 from app.data.providers.twse_snapshot import TwseSnapshotAdapter
 from app.positions.models import Market
@@ -91,11 +102,41 @@ from app.services.sector_board import RefreshResult, SectorBoardService
 DATA_REFRESH_LOOKBACK_DAYS = 540
 
 #: Env overrides for the two intervals (minutes). The alert interval falls back
-#: to the stored alert settings when unset.
+#: to the stored alert settings when unset. The data interval has no default:
+#: unset, ``data_refresh`` runs on the close-of-session cron below; set to a
+#: positive integer, it falls back to the legacy fixed interval.
 DATA_INTERVAL_ENV = "SCHEDULER_DATA_INTERVAL_MINUTES"
 ALERT_INTERVAL_ENV = "SCHEDULER_ALERT_INTERVAL_MINUTES"
 
-DEFAULT_DATA_INTERVAL_MINUTES = 24 * 60
+#: ADR-0010 D-4 (revised 2026-10-03) ``data_refresh`` cron, weekdays only. The
+#: wall times are checked against ``app.data.freshness`` by the tests (K-8):
+#:
+#: * TW, Asia/Taipei: the first point sits 10 min past ``TW_POLICY``'s
+#:   publish cutoff (an earlier run could only expect yesterday); consecutive
+#:   points are more than ``recheck_cooldown`` + 20 min apart, because a
+#:   "not published yet" check is recorded when the fetch *ends* and the
+#:   cooldown is a strict "less than"; the last point sits between the 17:xx
+#:   and 19:xx sector batches.
+#: * US, America/New_York: the first point sits 30 min past ``US_POLICY``'s
+#:   publish cutoff, then every half hour to the end of the window. The 24h
+#:   cooldown is counted from the end of the previous day's fetch, so the
+#:   same wall time a day later is still inside it; the half-hour points let
+#:   ``judge()`` pick the first moment a fetch is allowed.
+DATA_REFRESH_JOB_ID = "data_refresh"
+DATA_REFRESH_DAYS = "mon-fri"
+DATA_REFRESH_TW_TIMES: tuple[time, ...] = (time(15, 10), time(16, 30), time(18, 30))
+DATA_REFRESH_US_FIRST = time(18, 30)
+DATA_REFRESH_US_RETRY_HOURS = "19-23"
+DATA_REFRESH_US_RETRY_MINUTES = "0,30"
+#: A data_refresh point missed by up to this much (a busy or briefly paused
+#: process) still runs; APScheduler's own default is one second.
+DATA_REFRESH_MISFIRE_GRACE_SECONDS = 15 * 60
+
+#: What started a ``data_refresh`` run, as written on its log line.
+DataRefreshTrigger = Literal["startup", "cron", "interval"]
+
+_TAIPEI = ZoneInfo(TW_POLICY.timezone)
+_NEW_YORK = ZoneInfo(US_POLICY.timezone)
 
 #: ADR-0012 D-5 job ids and schedule (weekdays, exchange time zone).
 PIT_CAPTURE_JOB_ID = "pit_snapshot_capture"
@@ -136,6 +177,72 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def _data_interval_minutes() -> int | None:
+    """``SCHEDULER_DATA_INTERVAL_MINUTES`` as a positive integer, else ``None`` (cron).
+
+    Unset or blank keeps the close-of-session cron silently. A value that is
+    set but unusable also keeps the cron, with a warning: falling back to a
+    made-up interval would silently change the schedule the operator asked
+    to override.
+    """
+    raw = os.environ.get(DATA_INTERVAL_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; keeping the close-of-session cron", DATA_INTERVAL_ENV, raw
+        )
+        return None
+    if value <= 0:
+        logger.warning(
+            "%s=%d must be positive; keeping the close-of-session cron", DATA_INTERVAL_ENV, value
+        )
+        return None
+    return value
+
+
+def data_refresh_cron_trigger() -> OrTrigger:
+    """The ``data_refresh`` schedule: five weekday crons, each in its exchange's zone."""
+    taipei = [
+        CronTrigger(
+            day_of_week=DATA_REFRESH_DAYS,
+            hour=at.hour,
+            minute=at.minute,
+            timezone=TW_POLICY.timezone,
+        )
+        for at in DATA_REFRESH_TW_TIMES
+    ]
+    new_york = [
+        CronTrigger(
+            day_of_week=DATA_REFRESH_DAYS,
+            hour=DATA_REFRESH_US_FIRST.hour,
+            minute=DATA_REFRESH_US_FIRST.minute,
+            timezone=US_POLICY.timezone,
+        ),
+        CronTrigger(
+            day_of_week=DATA_REFRESH_DAYS,
+            hour=DATA_REFRESH_US_RETRY_HOURS,
+            minute=DATA_REFRESH_US_RETRY_MINUTES,
+            timezone=US_POLICY.timezone,
+        ),
+    ]
+    return OrTrigger([*taipei, *new_york])
+
+
+def _data_refresh_plan(interval_minutes: int | None) -> str:
+    """The registration log's description of the data_refresh schedule."""
+    if interval_minutes is not None:
+        return f"legacy interval {interval_minutes} min"
+    taipei = ",".join(at.strftime("%H:%M") for at in DATA_REFRESH_TW_TIMES)
+    return (
+        f"cron {DATA_REFRESH_DAYS} {taipei} ({TW_POLICY.timezone}) and "
+        f"{DATA_REFRESH_US_FIRST:%H:%M} then hours {DATA_REFRESH_US_RETRY_HOURS} "
+        f"at minutes {DATA_REFRESH_US_RETRY_MINUTES} ({US_POLICY.timezone})"
+    )
+
+
 def refresh_market_data(*, today: date | None = None) -> int:
     """Warm the price cache for every held symbol. Returns the symbols refreshed.
 
@@ -157,6 +264,75 @@ def refresh_market_data(*, today: date | None = None) -> int:
             logger.info("data refresh: no bars for %s/%s (%s)", market, symbol, loaded.reason)
     logger.info("data refresh: %d/%d symbols refreshed", refreshed, len(wanted))
     return refreshed
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class DataRefreshRun:
+    """The ``data_refresh`` job body: one :func:`refresh_market_data` call, one log line.
+
+    The first call in a process is the start-up run (``next_run_time=now``);
+    every later one was fired by ``scheduled`` -- the cron, or the legacy
+    interval. ``today`` is the Taipei date of ``clock()``, the same date the
+    compose containers' ``TZ=Asia/Taipei`` gives ``date.today()``; it is never
+    behind New York's, so it cannot lower the session a US series is expected
+    to hold.
+
+    The line carries no URL, query, key or response body, and reports
+    ``with_bars`` (holdings that came back with bars), not "fetched": whether
+    a holding was a cache hit is not visible from here. A failure is logged
+    as ``outcome=error`` and re-raised, so :func:`_guarded` still records the
+    traceback and the job stays scheduled.
+    """
+
+    def __init__(
+        self,
+        *,
+        scheduled: Literal["cron", "interval"],
+        clock: Callable[[], datetime] = _utc_now,
+    ) -> None:
+        self._scheduled: DataRefreshTrigger = scheduled
+        self._clock = clock
+        self._ran = False
+
+    def __call__(self) -> int:
+        trigger: DataRefreshTrigger = self._scheduled if self._ran else "startup"
+        self._ran = True
+        now = self._clock()
+        taipei = now.astimezone(_TAIPEI)
+        new_york = now.astimezone(_NEW_YORK)
+        began = monotonic()
+        try:
+            with_bars = refresh_market_data(today=taipei.date())
+        except Exception:
+            self._log(logging.ERROR, trigger, taipei, new_york, 0, began, "error")
+            raise
+        self._log(logging.INFO, trigger, taipei, new_york, with_bars, began, "ok")
+        return with_bars
+
+    @staticmethod
+    def _log(
+        level: int,
+        trigger: DataRefreshTrigger,
+        taipei: datetime,
+        new_york: datetime,
+        with_bars: int,
+        began: float,
+        outcome: Literal["ok", "error"],
+    ) -> None:
+        logger.log(
+            level,
+            "data refresh run: trigger=%s taipei=%s new_york=%s with_bars=%d "
+            "duration_ms=%d outcome=%s",
+            trigger,
+            taipei.isoformat(timespec="minutes"),
+            new_york.isoformat(timespec="minutes"),
+            with_bars,
+            max(0, round((monotonic() - began) * 1000)),
+            outcome,
+        )
 
 
 def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
@@ -300,27 +476,35 @@ def _guarded(name: str, job: Callable[[], object]) -> Callable[[], None]:
 
 
 def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingScheduler:
-    """Create the scheduler with both jobs registered (no side effects yet)."""
+    """Create the scheduler with every job registered (no side effects yet)."""
     engine = scheduler if scheduler is not None else BlockingScheduler(timezone="UTC")
-    data_minutes = _positive_int_env(DATA_INTERVAL_ENV, DEFAULT_DATA_INTERVAL_MINUTES)
+    data_minutes = _data_interval_minutes()
     alert_minutes = _positive_int_env(
         ALERT_INTERVAL_ENV, get_settings_store().load().alerts.evaluation_interval_minutes
     )
 
+    data_trigger: dict[str, object] = (
+        {"trigger": data_refresh_cron_trigger()}
+        if data_minutes is None
+        else {"trigger": "interval", "minutes": data_minutes}
+    )
     engine.add_job(
-        _guarded("data_refresh", refresh_market_data),
-        trigger="interval",
-        minutes=data_minutes,
-        id="data_refresh",
-        name="daily market data refresh",
+        _guarded(
+            DATA_REFRESH_JOB_ID,
+            DataRefreshRun(scheduled="cron" if data_minutes is None else "interval"),
+        ),
+        **data_trigger,
+        id=DATA_REFRESH_JOB_ID,
+        name="market data refresh after the close",
         # A slow fetch must not stack another fetch behind it, and a tick missed
         # while the process was down is coalesced into one run rather than
         # replayed N times.
         max_instances=1,
         coalesce=True,
-        # ADR-0010 D-4: warm the cache as soon as the scheduler starts. An
-        # interval trigger otherwise fires first only after one whole interval
-        # (24h by default), during which a cache-only book valuation (D-1)
+        misfire_grace_time=DATA_REFRESH_MISFIRE_GRACE_SECONDS,
+        # ADR-0010 D-4: warm the cache as soon as the scheduler starts, rather
+        # than at the next close-of-session point (or one whole interval later
+        # in legacy mode), during which a cache-only book valuation (D-1)
         # would find nothing for a freshly started process.
         next_run_time=datetime.now(UTC),
     )
@@ -364,9 +548,9 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         next_run_time=started + SECTOR_REFRESH_STARTUP_DELAY,
     )
     logger.info(
-        "scheduler jobs registered: data_refresh every %d min, alert_evaluation every %d min, "
-        "%s and %s on weekdays at %s (Asia/Taipei)",
-        data_minutes,
+        "scheduler jobs registered: data_refresh at start-up then %s, "
+        "alert_evaluation every %d min, %s and %s on weekdays at %s (Asia/Taipei)",
+        _data_refresh_plan(data_minutes),
         alert_minutes,
         PIT_CAPTURE_JOB_ID,
         SECTOR_REFRESH_JOB_ID,

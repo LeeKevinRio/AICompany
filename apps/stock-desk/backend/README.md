@@ -56,7 +56,7 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 | `ALERT_DISCORD_WEBHOOK_URL` | 警示推播的 Discord webhook；**祕密，只走環境變數 / `.env`**。未設定就跳過該通道 | 無 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | 警示推播的 Telegram bot token；**祕密**。與 chat id 兩者都有才會送出 | 無 |
 | `ALERT_TELEGRAM_CHAT_ID` | 警示推播的 Telegram chat id | 無 |
-| `SCHEDULER_DATA_INTERVAL_MINUTES` | 排程的資料更新間隔（分鐘） | `1440` |
+| `SCHEDULER_DATA_INTERVAL_MINUTES` | 設定為正整數時，`data_refresh` 改回固定間隔（分鐘，舊行為）；未設定或空白時走收盤後 cron（見下方「排程」）；值不合法時記一行 warning 並維持 cron | 無（cron） |
 | `SCHEDULER_ALERT_INTERVAL_MINUTES` | 排程的警示評估間隔（分鐘）；未設定時取 `/api/settings` 的 `alerts.evaluation_interval_minutes` | 設定值（預設 60） |
 
 ## 資料持久化（Docker 部署）
@@ -181,7 +181,14 @@ uv run python -m app.backtest.event_study 2330 --market TW --html event_study_23
 
 ## 排程（`app/scheduler.py`）
 
-`python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。兩個 interval job：
-`data_refresh`（只抓實際持有的標的，替快取層保鮮）與 `alert_evaluation`（跑
-`evaluate_alerts` 並推播）。收到 SIGTERM／SIGINT 時 `wait=True` 乾淨關閉，重複收到訊號
+`python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。資料面的兩個 job（另有族群 PIT 與 board 兩個 cron job，見 ADR-0012）：
+`data_refresh`（只抓實際持有的標的，替快取層保鮮）與 `alert_evaluation`（interval，跑
+`evaluate_alerts` 並推播）。
+
+`data_refresh` 啟動即跑一次，之後平日於收盤公布後觸發（ADR-0010 D-4，2026-10-03 修訂）：
+台股 15:10、16:30、18:30（Asia/Taipei）；美股 18:30 起至 23:30 每 30 分（America/New_York，
+夏令／冬令由時區處理）。是否真的向來源抓取仍只由 ADR-0009 的 `judge()` 與冷卻決定，
+後面的觸發點是重試表、不會繞過冷卻。每次執行恰記一行
+`data refresh run: trigger=<startup|cron|interval> taipei=… new_york=… with_bars=… duration_ms=… outcome=<ok|error>`。
+設定 `SCHEDULER_DATA_INTERVAL_MINUTES` 時退回固定間隔（舊行為）。收到 SIGTERM／SIGINT 時 `wait=True` 乾淨關閉，重複收到訊號
 不會變成 traceback。

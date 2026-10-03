@@ -174,7 +174,7 @@ apps/stock-desk/
 | `ALERT_DISCORD_WEBHOOK_URL` | Discord 推播 webhook | 無 | 選用 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | Telegram bot token | 無 | 選用（需搭配 CHAT_ID） |
 | `ALERT_TELEGRAM_CHAT_ID` | Telegram chat id | 無 | 選用（需搭配 BOT_TOKEN） |
-| `SCHEDULER_DATA_INTERVAL_MINUTES` | 資料更新間隔 | 1440 (24h) | 選用 |
+| `SCHEDULER_DATA_INTERVAL_MINUTES` | 資料預熱改用固定間隔（分鐘）。未設定時預熱於啟動即跑一次，之後平日收盤公布後依 cron 觸發（台股 15:10／16:30／18:30 台北時間；美股紐約時間 18:30 起至 23:30 每 30 分）；值不合法時記一行 warning 並維持 cron | 無（cron） | 選用 |
 | `SCHEDULER_ALERT_INTERVAL_MINUTES` | 警示評估間隔 | 60 | 選用 |
 
 所有祕密（token、webhook）**絕不進版管**；僅透過環境變數或 `.env` 檔（已被 `.gitignore`）讀取。
