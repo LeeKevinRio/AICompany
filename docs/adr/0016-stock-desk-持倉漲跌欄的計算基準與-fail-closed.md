@@ -8,6 +8,7 @@
   - 修訂 ADR-0014（`0014-stock-desk-盤中報價資料邊界顯示範圍與節流.md`）：D-1（`prev_close` 註解、說明、`interface.py` docstring 同 PR 補正）、D-4（「日線梯子」界定）、D-5、D-6、D-7 表、待實測參數段、「前置條件（明列）」段、I-18、I-28，新增 P-17 與 I-33～I-35。ADR-0014 目前為 `proposed`，依 ADR-0001 可原地加修訂註記；修訂註記已於 2026-10-03 落在 ADR-0014（來源：本 ADR 草案「二、ADR-0014 修訂條文」1～9，及 tech-architect 同日落檔覆核裁定）。本 ADR 獲 CEO 核可前，ADR-0014 的上述加註同屬待核可內容，不得據以放寬 I-18 的實作。ADR-0014 其餘決策內容未變。
   - 沿用 ADR-0014 D-1「`prev_close` check input only」的字面（草案以 β 方案維持此字面，見 Decision D-7）。
   - 引用 ADR-0009（`PRICE_LOOKBACK_DAYS` 的 coverage 與增量抓取，見 D-2）、ADR-0012（`TWT48U_ALL` 與 DE-5 查證狀態）、ADR-0010（SQLite 查詢量級估算）。
+  - **〔2026-10-03 修訂〕不對 ADR-0012 C-7（accepted）開例外**：D-5 覆蓋判定與 F6 一律只讀主 DB，不讀市場 DB；持倉資料鏈（含 `GET /api/portfolio/summary` 的組裝點 `app/api/portfolio.py`）不得可達 `app.data.market_panel`。理由與資料流見 D-5 的 2026-10-03 修訂。本 ADR 不修訂 ADR-0012 任何條文。
 - 編號說明：0013 已由員工線（`chore/agent-readonly-hook`）的唯讀 hook ADR 佔用（見 ADR-0014 編號說明）；0016 在草案作者撰寫時 grep 無結果，tech-writer 落檔時於 `docs/adr/` 目錄亦查無 0016。
 - 來源與版本：本檔為 tech-architect 2026-10-03 草案（ADR-0016「stock-desk 持倉漲跌欄的計算基準與 fail-closed」）的落檔，僅做格式調整；另依 tech-architect 2026-10-03 落檔覆核裁定改動：「與既有 ADR 的關係」之 ADR-0014 項、行號抽驗說明、F7 門檻定義、K-8 的 D1 指涉、T-1 的 F7 邊界測項、「需要 CEO 決定」第 2 點；D-6 另有 2026-10-03 定稿 bullet（來源：風控核可）。除此之外技術內容未增補。
   - 落檔時的快照：分支 `product/stock-desk`，HEAD `1c8cdcd66b274f57084aa9e410fc7ee2bfb46659`（tech-writer 於落檔時讀取 `.git/refs/heads/product/stock-desk`）。此為落檔時快照；之後 HEAD 已前進，不代表檔內行號仍對應，也不表示內容已對新 HEAD 重新驗證。
@@ -16,6 +17,7 @@
   - 草案對 ADR-0014、ADR-0012 的行號引用，tech-writer 於 ADR-0014 加註前抽驗了 ADR-0014 的 L3（proposed）、L7、L123、L318、L430、L539 與 ADR-0012 L1116（DE-5），皆相符；其餘行號未驗證。ADR-0014 加註後行號已位移（L3、L7、L123 不變；以下括號前為加註前舊行號，括號內為 2026-10-03 加註後 qa-reviewer 查得之位置），請以原文定位：L318（今 L325）＝防線 2 的 ADR-0015 加註、L340（今 L347）＝合成 fixture 檔名明標 `synthetic`、L430（今 L437）＝I-4 的 ADR-0015 加註、L539（今 L550）＝附錄否決「用環境變數開關盤中功能」。檔內他處所引 ADR-0014 L340、L539 亦為舊行號。
   - 本 ADR 內的「附錄」為草案「評估摘要」，原樣轉錄。
   - 2026-10-03 實作註記：commit `0281f0c`、`52c6e8b`（`product/stock-desk`）落地後，依 qa-reviewer 審查指出與 tech-architect 同日裁定，於 D-3、D-4、D-5 加註標明「〔2026-10-03 實作註記〕」的條目，僅記錄實作上的保守行為、常數與指稱更正，不放寬任何決策；此等加註與本 ADR 同屬待 CEO 核可內容。
+  - 2026-10-03 D-5 修訂：依 tech-architect 對 data-engineer 接線前三議題（ADR-0012 C-7 衝突、`MIN_ANNOUNCE_LEAD_DAYS` 未查證、F6 與覆蓋判定讀不同庫）之裁定，於 D-5 新增「〔2026-10-03 修訂〕」條目，新增 K-16～K-21、T-12～T-15 與「待查證參數」段（V-1），並於 Consequences、交接與升級、需要 CEO 決定、不該做的事加註；此等內容同屬待 CEO 核可內容。
 
 ---
 
@@ -108,6 +110,58 @@ class PriceChange(BaseModel):          # frozen
 - 只有「最新 bar 的 `source=="twse"`」（比照 ADR-0014 D-8 ②）**而且**同步紀錄能證明窗內任何除權息日在某次同步時仍屬未來，才算覆蓋已知。具體規則由 data-engineer 寫成函式並附測試。
 - 覆蓋未知時照常顯示，但這屬於剩餘風險，由 D-6 的揭露承擔。
 - **〔2026-10-03 實作註記，來源：commit `0281f0c` 之 qa-reviewer 審查；tech-architect 裁定〕** 「覆蓋未知時照常顯示」由 `app/portfolio/price_change.py` 的模組級常數 `SHOW_WHEN_COVERAGE_UNKNOWN`（`Final`，預設 `True`）表達。它是程式碼常數，不是環境變數，也不得改由環境變數、設定檔或任何 runtime 輸入決定（比照 ADR-0014 附錄否決以環境變數開關功能）。data-engineer 交付 D-5 覆蓋判定函式前，覆蓋規則以 stub `CoverageNotYetJudged` 代替，對每列一律回答 `unknown`；此期間把常數改為 `False` 等於整欄全 null，屬 fail-closed 退路，不是調參旋鈕。改動此常數須 CEO 核可並以修訂本 ADR 留紀錄，不得以 hotfix 處理。`tests/test_price_change.py::test_unknown_coverage_still_shows_the_change` 釘住其值為 `True`，改值必然改動該測試，review 時據此追溯核可紀錄。覆蓋規則對某列未回答時，視同 `unknown`。
+- **〔2026-10-03 修訂，來源：tech-architect 裁定 data-engineer 接線前三議題〕**
+  - **D-5.1 首句的補正**：首句「同步紀錄能證明窗內任何除權息日在某次同步時仍屬未來」不足以證明覆蓋：某次同步時日期仍屬未來，不代表該事件那時已列出。覆蓋已知須同時滿足 D-5.3 的四個條件，其中條件 ③（列出前置天數 V-1）補足首句。
+  - **D-5.2 資料來源（裁定：主 DB 同步紀錄；不開 ADR-0012 C-7 例外）**
+    - 覆蓋判定只讀主 DB 的 `dividend_sync_runs` 與 `dividend_sync_unparsed`，由 `app/dividends/store.py` 提供讀取方法，經結構型 Protocol `AnnounceRunSource`（`app/dividends/coverage.py`）接入 `AnnounceRunCoverageRule`。
+    - 市場 DB 的 `pit_snapshot_runs`／`pit_dividend_announce_rows` 不作為覆蓋判定或 F6 的執行期來源。`MarketPanelReader.dividend_announce_observations` 只供測試與 V-1 離線查證使用。
+    - 寫入：唯一的同步函式（`app.dividends.sync.sync_dividends`，CLI 與排程共用）在**同一個 SQLite transaction** 內完成 `dividend_events` 的 upsert 與一列 `dividend_sync_runs` 的寫入。因此某次 ok 同步列出的事件必然已在 `dividend_events`，F6 看得到。
+    - schema 草案（主 DB；兩表皆 append-only，比照 `app/data/market_panel.py` 以 `BEFORE UPDATE`／`BEFORE DELETE` trigger `RAISE(ABORT, 'append-only')`；表名不得以 `pit_` 開頭）：
+      ```sql
+      CREATE TABLE IF NOT EXISTS dividend_sync_runs (
+          run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recorded_at TEXT NOT NULL,      -- store clock, tz-aware ISO 8601 (UTC)
+          trigger TEXT NOT NULL CHECK (trigger IN ('scheduled', 'cli')),
+          source TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('ok', 'failed')),
+          event_count INTEGER NOT NULL,
+          unparsed_count INTEGER NOT NULL,
+          unattributed_count INTEGER NOT NULL,
+          reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_dividend_sync_runs_status_recorded
+          ON dividend_sync_runs (status, recorded_at);
+      CREATE TABLE IF NOT EXISTS dividend_sync_unparsed (
+          run_id INTEGER NOT NULL,
+          symbol TEXT NOT NULL,           -- strip().upper() of a row whose date did not parse
+          PRIMARY KEY (run_id, symbol)
+      ) WITHOUT ROWID;
+      ```
+    - 欄位語意：
+      - `recorded_at`：store 自身時鐘（可注入供測試），UTC、帶時區，固定為 ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffff+00:00` 以確保字串比較即時間比較；不得接受呼叫端傳入（比照 ADR-0012 C-10），現行 `upsert(..., synced_at=)` 參數不得用來填此欄。
+      - `status='ok'` ⇔ adapter 回 ok、`event_count > 0`，且同一 transaction 的 upsert 成功；其餘一律 `failed`。`reason` 只進資料庫與 log，不進 API 回應（K-6）。
+      - `unparsed_count`：有 `Code` 但日期無法解析的列數，代號逐一寫入 `dividend_sync_unparsed`。
+      - `unattributed_count`：沒有 `Code`、無法歸屬代號的列數。
+    - 讀取：ok run（`recorded_at >= recorded_not_before`）左連查詢代號的 `dividend_sync_unparsed`，**整本帳一條 SQL**（K-7），回傳 `DividendAnnounceObservation` 形狀：
+      - 與查詢代號無關的 run 回一筆 `symbol=None`；
+      - `dividend_sync_unparsed` 命中者回 `symbol=該代號、ex_date=None`；
+      - `unattributed_count > 0` 的 run，對**每個查詢代號**各回一筆 `ex_date=None`（該 run 可能藏有該代號的事件）。
+      - 主 DB 的表不存在時視為「沒有 run」。
+  - **D-5.3 `known` 的四條件**（全部成立才回 `known`，否則回 `unknown`）：
+    - ① 該列 `market=="TW"`、最新 bar `source=="twse"`，且 `basis_date < price_date`。
+    - ② 存在 ok run，其 `recorded_at` 換算 Asia/Taipei 的日期 ≤ `basis_date`；取日期最晚者為錨點。
+    - ③ `price_date ≤ 錨點日期 + MIN_ANNOUNCE_LEAD_DAYS`（V-1）。
+    - ④ 自錨點日期起（含當日）的每個 ok run，都沒有該代號 `ex_date` 為 null 的觀測，也沒有 `basis_date < ex_date ≤ price_date` 的觀測。
+    - 補充規則：
+      - 任一相關 run 的 `recorded_at` 沒有時區：該列回 `unknown`，不得略過該 run。
+      - 讀取失敗（`sqlite3.Error`、`OSError`、`ValueError`）：整本帳回 `unknown`，記 WARNING，不拋出（不觸發 D-3 的整欄 null）。
+      - 本資料流下，④ 的「窗內有日期」分支與 F6 重疊（同 transaction 保證），保留作為防線，不得因重疊而刪除。
+  - **D-5.4 F6 與覆蓋判定同源**：F6 只讀主 DB `dividend_events`，不讀 `pit_dividend_announce_rows`。同源的前提是 TWT48U 同步排程化（見交接與升級，CEO 核可、devops-sre 執行）。排程落地前同步紀錄只來自手動 CLI，覆蓋判定多數回 `unknown`，行為等同 `CoverageNotYetJudged`，不構成退步。
+  - **D-5.5 顯示效果的誠實說明**：`SHOW_WHEN_COVERAGE_UNKNOWN = True` 下，`known` 與 `unknown` 皆照常顯示，覆蓋判定不改變任何回應內容。它的作用是 (i) 經由排程同步讓 F6 擁有同源事件資料；(ii) 為日後是否檢討該常數提供可量測依據。
+  - **D-5.6 參數與改動治理**
+    - `MIN_ANNOUNCE_LEAD_DAYS`（`app/dividends/coverage.py`，`Final`，預設 `1`）為待查證參數 V-1（見「待查證參數」段）；不得由環境變數、設定檔或任何 runtime 輸入決定；建構子拒絕 `< 1`。
+    - 調高 V-1 須具備 V-1 判準所列證據，以修訂本 ADR 的 V-1 列留紀錄，經 tech-architect 覆核；若當時 `SHOW_WHEN_COVERAGE_UNKNOWN` 為 `False`，另須 CEO 核可。不得以 hotfix 處理。`tests/test_dividends_coverage.py::test_monday_after_a_friday_anchor_is_unknown_under_the_default_lead` 釘住現值，改值必然改動該測試，review 時據此追溯紀錄。
+    - `SHOW_WHEN_COVERAGE_UNKNOWN` 的治理不變（見上一則實作註記）。
 
 **D-6 剩餘揭露**：上櫃股、美股、未同步期間的除權息，以及分割，會有假漲跌。這句要由 creative-lead 起草、風控逐字核可。**建議與收盤版同 PR 上線。**
 - **〔2026-10-03 定稿，來源：risk-compliance-officer 2026-10-03 核可（非 tech-architect 草案）〕** 剩餘揭露句已由風控逐字核可：
@@ -144,12 +198,17 @@ class PriceChange(BaseModel):          # frozen
 - 標籤由構造保證為真，分子和現價同源。
 - 除權息日的 `y` 語意即使錯判，也只會變成「—」。
 - 零額外網路 IO。SQLite 每本帳多兩次查詢（除權息一次、行事曆每個市場一次），在 ADR-0010 L119 估算的量級之內。
+  - **〔2026-10-03 修訂〕** D-5 接線後每本帳再多一條主 DB 查詢（覆蓋判定），合計三次；請求路徑仍不讀市場 DB、仍零網路 IO。
 
 **代價：**
 - 長假之後、快取缺日、跨來源拼接、公司行動，都會出現「—」。
 - 除權息只擋得住上市股，而且前提是有同步。剩餘部分要多一句揭露。
 - portfolio 層新增對 `app.dividends.store` 的依賴，**只能是 store，不得是 adjust**。
 - ADR-0014 需要修訂 I-18。
+- **〔2026-10-03 修訂〕** 主 DB 新增 `dividend_sync_runs`、`dividend_sync_unparsed` 兩張 append-only 表。
+- **〔2026-10-03 修訂〕** 排程化後，TWT48U 每個交易日由兩條鏈各抓一次（市場 DB 擷取、主 DB 同步），兩份紀錄在邊界時點可能不一致；各自內部一致即可，不做對帳。
+- **〔2026-10-03 修訂〕** 排程化同步會讓回測、Kelly、事件研究讀到的 `dividend_events` 逐日增長，其「未還原」揭露的觸發情形隨之改變（各功能 owner 知悉，不在本 ADR 範圍）。
+- **〔2026-10-03 修訂〕** 已實作的 `MarketPanelReader.dividend_announce_observations` 不進持倉資料鏈，只留給測試與 V-1 查證；覆蓋規則須另接主 DB adapter。
 
 **已知限制：** 沒有假日表；`market_trading_days` 在示範加真實資料混合的資料庫裡會多算交易日（`cache.py:476-483`），F5 在那種情況會偏向判 null。
 
@@ -166,6 +225,12 @@ class PriceChange(BaseModel):          # frozen
 - **K-6**：`change` 為 null 時，不得回傳可供顯示的原因字串。目前沒有核可字面，原因只寫 log。
 - **K-7**：除權息查詢和行事曆查詢每本帳各一次批次，不得每檔一次。
 - **K-8**：收盤版漲跌欄的後端 PR（`work/stock-desk-首頁重排-視覺規範-2026-10-03.md` 第 9 節依賴項 D1；與 ADR-0014 Options D1 無關）要先加 `PriceInfo.price_kind`（預設 `"daily_close"`），前端就不必推斷 kind。
+- **K-16**（2026-10-03 修訂）：`app.api.portfolio`、`app.portfolio.*`、`app.advice.*`、`app.dividends.coverage`、`app.dividends.store`、`app.dividends.sync` 皆不可達 `app.data.market_panel`；`app.portfolio.*` 不可達 `app.dividends.coverage`（依賴單向）。（import graph 測試）
+- **K-17**（2026-10-03 修訂）：`AnnounceRunCoverageRule` 只在 `app/api/portfolio.py` 的 summary 端點注入 `ChangeScreen`（與 D-3 同一處）；其他 `build_summary` 呼叫端不注入。
+- **K-18**（2026-10-03 修訂）：`dividend_events` upsert 與 `dividend_sync_runs` 寫入在同一 transaction；`recorded_at` 只來自 store 時鐘；CLI 與排程走同一個同步函式。
+- **K-19**（2026-10-03 修訂）：`dividend_sync_runs`、`dividend_sync_unparsed` 具 append-only trigger；表名不以 `pit_` 開頭。
+- **K-20**（2026-10-03 修訂）：覆蓋判定整本帳一條 SQL；讀取失敗、naive 時間戳一律回 `unknown`，不拋例外。
+- **K-21**（2026-10-03 修訂）：`MIN_ANNOUNCE_LEAD_DAYS`、`SHOW_WHEN_COVERAGE_UNKNOWN` 為 `Final` 模組常數；`app/` 內無環境變數或設定讀取參與兩者（grep 測試）。
 
 **前端（frontend-engineer）**
 - **K-9**：只有一個衍生值：`allowIntraday = summary.change_mode === "may_include_intraday"`。以下全部只讀它：
@@ -207,6 +272,10 @@ class PriceChange(BaseModel):          # frozen
 - **T-4**：計數測試：收盤版不增加價格服務呼叫。盤中版 `get_daily_bars` 0 次、`get_cached_bars` ≤1 次。
 - **T-5**：用合成 fixture 測「`y` 不等於快取收盤」⇒ null；檔名要明標 `synthetic`（ADR-0014 L340）。
 - **T-6**：import graph（K-3）與 `.change` 的 grep（K-4）。
+- **T-12**（2026-10-03 修訂）：K-16 的 import graph；同時把既有 `tests/test_market_panel_boundary.py::test_c7_import_graph_cannot_reach_market_panel_from_the_positions_chain` 補齊 ADR-0012 T-3 所列 `app.portfolio.*`、`app.advice.*`。
+- **T-13**（2026-10-03 修訂）：同步紀錄。成功同步 ⇒ 一列 ok run 且事件已寫入；注入寫入中途失敗 ⇒ 兩者皆不落地；adapter 失敗 ⇒ failed run、`dividend_events` 不變；對兩表 UPDATE／DELETE 皆 abort；呼叫端無法指定 `recorded_at`。
+- **T-14**（2026-10-03 修訂）：以主 DB adapter 重跑 `tests/test_dividends_coverage.py` 全部情境，另加：unparsed 代號 ⇒ `unknown`；`unattributed_count > 0` 的 run ⇒ 每個查詢代號 `unknown`；naive ⇒ `unknown`；讀取錯誤 ⇒ `unknown`；整本帳一條 SQL。
+- **T-15**（2026-10-03 修訂）：summary 端點整合。覆蓋判定拋錯或同步表不存在時回 200，漲跌欄依 `SHOW_WHEN_COVERAGE_UNKNOWN` 照常；`MIN_ANNOUNCE_LEAD_DAYS == 1` 與 `SHOW_WHEN_COVERAGE_UNKNOWN is True` 皆有測試釘住。
 
 **前端（vitest）**
 - **T-7**：兩個表頭字面逐字釘住；表頭、手機小標、排序第 8／9 項指向同一常數。
@@ -219,6 +288,24 @@ class PriceChange(BaseModel):          # frozen
 
 ---
 
+## 待查證參數
+
+〔2026-10-03 修訂新增〕本段參數皆為未查證的保守預設，不得當作已驗證事實引用。不併入 ADR-0014 P 表：P 表綁定 MIS 盤中實測（10/05、W13、`quote_params.py`、I-28），V 系列屬 `TWT48U_ALL` 與本 ADR。
+
+| 編號 | 參數 | 預設 | 定義 | 狀態 |
+| --- | --- | --- | --- | --- |
+| V-1 | `MIN_ANNOUNCE_LEAD_DAYS`（`app/dividends/coverage.py`） | 1 | 最大整數 L，使任一上市除權息事件（除權息日 E）自 Asia/Taipei E−L 日 00:00 起至 E 前，每一次 ok 同步皆列於 `TWT48U_ALL`。這是資料集的列出時點，不是發行公司的公告義務 | 待查證 |
+
+V-1 查證判準：
+1. 主證據為實測：data-engineer 以唯讀離線腳本讀市場 DB 的 `pit_snapshot_runs`（`kind='dividend_announce'`、`status='ok'`）與 `pit_dividend_announce_rows`（離線查證不屬持倉資料鏈，不違反 ADR-0012 C-7），對每個事件 (symbol, E) 計算 ℓ = ⌊(E 當日 00:00 Asia/Taipei − 首次列出該事件之 run 的 `recorded_at`) ÷ 1 日⌋。
+2. 持續性：同一事件自首次列出至 E 前的每個 ok run 都須列出；消失或日期變更者逐筆列出並說明，有未說明者不得調高。
+3. 樣本：至少涵蓋一個完整的 6～9 月除權息旺季；回報事件數、run 數與缺 run 的日期。
+4. 新值 ≤ min(ℓ) − 1。
+5. 官方規章只作佐證：由有網路者取得，記錄名稱、條次、URL、取得日期與原文摘錄；規章約束的是發行公司，不證明 OpenAPI 的列出時點，不得單獨作為調高依據；規章下界小於第 4 點的值時，取較小者。
+6. 證據放 `work/`，並修訂本表 V-1 列（新值、查證日期、證據路徑）；治理依 D-5.6。
+
+---
+
 ## 不該做的事
 
 - 不用還原價、不用參考價、不用 `y` 直接當分母，也不用 `y` 去補缺的基準。
@@ -227,6 +314,8 @@ class PriceChange(BaseModel):          # frozen
 - 不把 `change` 交給規則引擎、警示或風控上限使用。
 - 不新增 `DataStatus` 值，也不把 MIS 價格寫進日線（ADR-0014 I-1、D-3）。
 - 不在剩餘揭露核可前，就默認除權息假跌「已處理」。
+- 〔2026-10-03 修訂〕不在持倉資料鏈（含 `app/api/portfolio.py`）讀市場 DB，也不讓 F6 讀 `pit_dividend_announce_rows`；要改須另立 ADR 取代 ADR-0012 C-7 的相關部分。
+- 〔2026-10-03 修訂〕主 DB 同步不共用市場 DB 擷取的 HTTP 結果，兩條鏈不寫入對方的資料庫。
 
 ---
 
@@ -239,6 +328,8 @@ class PriceChange(BaseModel):          # frozen
   - 查證 F7 中槓桿或反向 ETF 的漲跌幅限制。
   - 查證 P-17（`y` 在一般日和除權息日的語意）。
   - 建議把 TWT48U 同步排進排程。這件事要 CEO 核可、devops-sre 執行。
+  - **〔2026-10-03 修訂〕** 依 D-5.2 實作主 DB 同步紀錄（兩表、同 transaction、store 讀取方法與 adapter；adapter 需能分辨 unparsed 代號與無代號列）；執行 V-1 實測查證；把 `MarketPanelReader.dividend_announce_observations` 與 `DividendAnnounceObservation` 的 docstring 改為「市場 DB 版本僅供測試與 V-1 查證，持倉資料鏈不得呼叫（ADR-0012 C-7）」。
+- **devops-sre**（2026-10-03 修訂新增）：CEO 核可後，在 `app/scheduler.py` 新增 TWT48U 同步排程：平日、Asia/Taipei、排在 `pit_snapshot_capture` 之後；同一台北日期已有 ok run 即跳過；沿用既有 `_guarded`、`max_instances=1`、`coalesce=True`；呼叫與 CLI 相同的同步函式（`trigger='scheduled'`）；不新增任何會改變覆蓋判定語意的環境變數。
 - **frontend-engineer**：負責 K-9～K-15、T-7～T-11。
 - **creative-lead 到 risk-compliance-officer**：
   - D-6 的剩餘揭露句。
@@ -252,6 +343,9 @@ class PriceChange(BaseModel):          # frozen
 
 1. **核可 ADR-0016 與 ADR-0014 的修訂。**
 2. **裁定剩餘揭露（D-6）是否必須與收盤版同時上線。** tech-architect 建議同一批上線，並請風控或 CEO 決定是否放寬成不擋上線。風控立場：必須同 PR。
+3. **〔2026-10-03 修訂〕核可 D-5 的 2026-10-03 修訂**：不對 ADR-0012 C-7 開例外；覆蓋判定與 F6 只讀主 DB；主 DB 新增兩張同步紀錄表。
+4. **〔2026-10-03 修訂〕核可 TWT48U 同步排程化**（devops-sre 執行）。影響：D-5 開始可能回 `known`；`dividend_events` 逐日累積，回測、Kelly、事件研究的除權息還原範圍隨之改變。不核可時，覆蓋判定只在手動同步後短暫可能回 `known`，F6 維持手動資料，其餘維持現狀。
+5. **〔2026-10-03 修訂，知會〕** `SHOW_WHEN_COVERAGE_UNKNOWN` 本次不提改動；排程上線滿四週後，由 data-engineer 提交 `known` 比例統計，再請 CEO 決定是否檢討。
 
 ---
 
