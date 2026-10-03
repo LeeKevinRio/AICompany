@@ -158,6 +158,16 @@ class FxInfo(BaseModel):
     source: str
     data_status: DataStatus
     source_note: str
+    #: Mirrors ``PriceInfo.is_within_ttl`` so both badges read one contract.
+    #: The FX data layer (``FxRateResult``, ADR-0011) has no cache rung and no
+    #: TTL concept: it only ever answers ``FRESH`` / ``BACKUP`` (a live fetch)
+    #: or ``UNAVAILABLE``, never ``CACHED_STALE``. ``PriceInfo``'s rule for a
+    #: live source is ``None`` ("the question does not apply"), so this is
+    #: always ``None`` until the FX data layer itself grows a cache rung.
+    is_within_ttl: bool | None = None
+    #: The FX data layer's user-facing degradation reason
+    #: (``FxRateResult.reason``), passed through verbatim; ``None`` on success.
+    reason: str | None = None
 
 
 class PnlOriginal(BaseModel):
@@ -384,6 +394,7 @@ class PositionValuator:
                 source=result.source,
                 data_status=DataStatus.UNAVAILABLE,
                 source_note=source_note(result.source),
+                reason=result.reason,
             )
             return None, info
         latest = max(candidates, key=lambda rate: rate.date)
@@ -393,5 +404,6 @@ class PositionValuator:
             source=result.source,
             data_status=result.status,
             source_note=source_note(result.source),
+            reason=result.reason,
         )
         return latest.rate, info

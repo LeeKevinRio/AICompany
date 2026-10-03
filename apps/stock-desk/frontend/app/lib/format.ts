@@ -217,14 +217,6 @@ export function formatTradingDateMonthDay(isoDate: string): string {
   return match === null ? isoDate : `${match[1]}/${match[2]}`;
 }
 
-/** Minutes elapsed between the given ISO timestamp and now, floored at 0. */
-export function staleMinutesSince(iso: string): number {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 0;
-  const diffMs = Date.now() - d.getTime();
-  return Math.max(0, Math.round(diffMs / 60000));
-}
-
 /**
  * Profit -> red, loss -> green (see module doc comment for rationale).
  * Neutral/unknown values stay in the default text colour.

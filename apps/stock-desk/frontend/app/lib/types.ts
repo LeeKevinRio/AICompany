@@ -122,6 +122,13 @@ export interface PositionFx {
   source: string;
   data_status: PriceDataStatus;
   source_note: string;
+  /**
+   * Same contract as `PositionPrice.is_within_ttl`. The FX data layer has no
+   * cache rung (ADR-0011), so the backend currently always sends `null`.
+   */
+  is_within_ttl: boolean | null;
+  /** The FX data layer's user-facing degradation reason, `null` on success. */
+  reason: string | null;
 }
 
 export type ValuationStatus = "ok" | "insufficient_data";
