@@ -134,7 +134,7 @@
 
 ## Suggestion／列管
 
-- **S-1** FX 完整快取層：列管 data-engineer，另立 ADR。〔2026-10-03：已另立 ADR-0015（proposed）〕
+- **S-1** FX 完整快取層：列管 data-engineer，另立 ADR。〔2026-10-03：已另立 ADR-0015（accepted）〕
 - **S-2** 不得為了節省請求數，在 FX 回看邏輯中跳過週末（與 ADR-0009 Options E 被否決的理由同構——
   以「應該休市」的推論取代實際查證）。
 - **S-3** 收斂 `LatestPriceService`（重複實作，待後續整理）。
