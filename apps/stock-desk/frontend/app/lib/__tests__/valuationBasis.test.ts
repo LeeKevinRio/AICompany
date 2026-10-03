@@ -164,7 +164,7 @@ describe("SummaryCards — valuation basis sentence (C3-3 + C5-1)", () => {
     expect(visible).not.toContain("14:05:09");
   });
 
-  it("sits right under the market value, in the main view (not inside <details>), text-xs and not darker than neutral-400", () => {
+  it("lives inside the card's <details> as its first item (CEO 2026-10-03), text-xs and not darker than neutral-400", () => {
     const html = render([position(1, price("2026-10-02"))]);
     const sentenceIndex = html.indexOf("估值基準：");
     expect(sentenceIndex).toBeGreaterThan(html.indexOf("NT$"));
@@ -174,8 +174,21 @@ describe("SummaryCards — valuation basis sentence (C3-3 + C5-1)", () => {
     expect(tag).toContain("text-xs");
     expect(tag).toContain("text-neutral-400");
     expect(tag).not.toMatch(/text-neutral-(500|600|700)/);
-    // no <details> encloses it
-    expect(html.slice(0, sentenceIndex).split("<details").length).toBe(html.slice(0, sentenceIndex).split("</details>").length);
+    // a <details> encloses it, and the sentence is its first content after <summary>
+    const before = html.slice(0, sentenceIndex);
+    expect(before.split("<details").length).toBe(before.split("</details>").length + 1);
+    const detailsStart = before.lastIndexOf("<details");
+    const afterSummary = html.slice(html.indexOf("</summary>", detailsStart) + "</summary>".length);
+    expect(afterSummary.startsWith("<p")).toBe(true);
+    expect(afterSummary.indexOf("估值基準：")).toBeLessThan(afterSummary.indexOf("</details>"));
+  });
+
+  it("main view (everything outside <details>) never shows the basis sentence or the response time", () => {
+    const html = render([position(1, price("2026-10-02"))]);
+    const mainView = html.replace(/<details[\s\S]*?<\/details>/g, "");
+    expect(mainView).not.toContain("估值基準");
+    expect(mainView).not.toContain("資料時間");
+    expect(mainView).not.toContain("14:05:09");
   });
 
   it("empty state: no positions, or no priced positions, shows no basis sentence", () => {

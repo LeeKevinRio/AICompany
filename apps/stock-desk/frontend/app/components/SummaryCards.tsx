@@ -36,10 +36,11 @@ export function SummaryCards({
 }: {
   totals: PortfolioTotals;
   //: Response generation time; shown only inside the basis sentence's tooltip
-  //: (C5-1), never as a visible label.
+  //: (C5-1), never as a visible label. The sentence itself is collapsed in
+  //: a <details> (CEO 2026-10-03 ruling).
   asOf: string;
   //: `PortfolioSummaryResponse.positions`; each `valuation.price.as_of` feeds
-  //: the C3-3 valuation-basis sentence under the market-value figure.
+  //: the C3-3 valuation-basis sentence inside the 總資產 card's <details>.
   positions: readonly SummaryPositionItem[];
   //: ADR-0011; disclosure sentences for every FX source actually used this
   //: pass (`PortfolioSummaryResponse.fx_disclosures`), rendered verbatim
@@ -64,16 +65,22 @@ export function SummaryCards({
           <p className="mt-1 text-3xl font-bold text-neutral-100">
             {formatMoney(totals.market_value_twd, "TWD", 0)}
           </p>
-          {/* C3-3 valuation-basis sentence (main view, never inside a
-              <details>; text-xs, no darker than neutral-400). Replaces the
-              old 資料時間 line; the response time lives in the C5-1 tooltip. */}
+          {/* C3-3 valuation-basis sentence. CEO 2026-10-03 ruling: moved into
+              the card's <details> (overrides the risk-compliance "always in the
+              main view" stance); wording, placeholders and the C5-1 title
+              tooltip are unchanged, only the hierarchy level changed. The old
+              資料時間 line stays gone; the response time lives in the tooltip.
+              Nothing renders when there is no priced position. */}
           {basis !== null && (
-            <p
-              className="mt-1 text-xs text-neutral-400"
-              title={buildBasisTooltip(asOf) ?? undefined}
-            >
-              {buildBasisSentence(basis)}
-            </p>
+            <details className="group mt-2 text-xs text-neutral-400">
+              <summary className="cursor-pointer text-neutral-400">{DETAILS_SUMMARY_GENERIC}</summary>
+              <p
+                className="mt-2 text-xs text-neutral-400"
+                title={buildBasisTooltip(asOf) ?? undefined}
+              >
+                {buildBasisSentence(basis)}
+              </p>
+            </details>
           )}
         </div>
         <div className="rounded-lg border border-neutral-800 p-5">

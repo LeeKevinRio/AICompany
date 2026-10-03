@@ -110,6 +110,7 @@ CEO 問「一天更新一次？還是真正有更新才更新？標準在哪？�
   頭段的列永遠停留在當初寫入它的 provider，即使主來源已恢復。要重新整段抓取，唯一路徑是清除該序列的快取列與 coverage。
 - **D-6（排程）** `scheduler.data_refresh` 不改：它走同一條 `load_bars`，自然只在有新交易日時才打來源。
   改為「收盤公布後 cron 預熱」與 `SCHEDULER_DATA_INTERVAL_MINUTES` 與冷卻的交互，列管 devops-sre。
+  〔2026-10-03：「收盤公布後 cron 預熱」已由 ADR-0010 D-4 修訂註記處理；排程仍只走 `load_bars`，本 ADR 的判定、參數與冷卻不變。公布時間查證仍列管 devops-sre。〕
 - **D-8（2026-09-18，attempt-log 冷卻適用於快取無列，即 ADR-0010 D-3）** 修補 D-3 的實作缺口：
   `_try_session_fresh_cache` 原本在 `cached is None` 時直接跳出，導致 attempt-log 冷卻判斷讀不到——
   結果是「從未成功抓過該序列」且「來源正在失敗」的序列，每次請求都跑完整梯子，最需要冷卻保護的情況
