@@ -306,8 +306,8 @@ function drawFor(game: GameState, seat: number, fromBack: boolean, emit: Emit): 
     }
     p.hand = sortTiles([...p.hand, tile]);
     p.drawn = tile;
-    emit({ type: 'draw', seat, tile, tiles: [], text: '', privateTo: seat });
     hand.phase = { type: 'turn', seat, justDrew: true };
+    emit({ type: 'draw', seat, tile, tiles: [], text: '', privateTo: seat });
     return;
   }
 }
@@ -484,6 +484,7 @@ function resolveClaim(game: GameState, emit: Emit): void {
     p.melds.push({ type: isKan ? 'kan' : 'pon', tiles, fromSeat: discarder });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
+    if (!isKan) hand.phase = { type: 'turn', seat: ponSeat, justDrew: false };
     emit({
       type: isKan ? 'kan' : 'pon',
       seat: ponSeat,
@@ -491,9 +492,10 @@ function resolveClaim(game: GameState, emit: Emit): void {
       tiles,
       text: `${game.names[ponSeat]} ${isKan ? '槓' : '碰'} ${tileName(tile)}`,
     });
-    if (isKan) drawFor(game, ponSeat, true, emit);
-    else hand.phase = { type: 'turn', seat: ponSeat, justDrew: false };
-    if (isKan && hand.phase.type === 'turn') hand.kongBloom = true;
+    if (isKan) {
+      drawFor(game, ponSeat, true, emit);
+      if (hand.phase.type === 'turn') hand.kongBloom = true;
+    }
     return;
   }
 
@@ -509,8 +511,8 @@ function resolveClaim(game: GameState, emit: Emit): void {
     p.melds.push({ type: 'chi', tiles: option.tiles, fromSeat: discarder });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
-    emit({ type: 'chi', seat: chiSeat, tile, tiles: option.tiles, text: `${game.names[chiSeat]} 吃 ${runName(option.tiles)}` });
     hand.phase = { type: 'turn', seat: chiSeat, justDrew: false };
+    emit({ type: 'chi', seat: chiSeat, tile, tiles: option.tiles, text: `${game.names[chiSeat]} 吃 ${runName(option.tiles)}` });
     return;
   }
 

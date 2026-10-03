@@ -33,7 +33,7 @@ const nicknameSchema = {
     type: 'object',
     required: ['nickname'],
     additionalProperties: false,
-    properties: { nickname: { type: 'string', maxLength: 64 } },
+    properties: { nickname: { type: 'string' } },
   },
 } as const;
 

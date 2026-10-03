@@ -27,9 +27,10 @@ export class GameManager {
       onHandEnd: (result) => this.accounts.recordHand(player, result, HUMAN_SEAT),
       coins: () => player.coins,
     });
+    const response = session.start();
     this.sessions.set(id, session);
     this.byPlayer.set(player.id, id);
-    return this.finishIfOver(session, session.start());
+    return this.finishIfOver(session, response);
   }
 
   view(player: PlayerRecord, gameId: string): ActionResponse {

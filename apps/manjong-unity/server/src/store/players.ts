@@ -46,13 +46,17 @@ export class JsonPlayerRepository implements PlayerRepository {
   private readonly byId = new Map<string, PlayerRecord>();
   private readonly byToken = new Map<string, PlayerRecord>();
   private timer: NodeJS.Timeout | null = null;
+  private dirty = false;
 
   constructor(
     private readonly filePath: string | null,
     private readonly flushDelayMs = 200,
   ) {
     if (filePath && existsSync(filePath)) {
-      const data = JSON.parse(readFileSync(filePath, 'utf8')) as FileShape;
+      const data = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<FileShape>;
+      if (data.version !== 1 || !Array.isArray(data.players)) {
+        throw new Error(`Unrecognised player data file: ${filePath}`);
+      }
       for (const p of data.players) this.index(p);
     }
   }
@@ -93,20 +97,28 @@ export class JsonPlayerRepository implements PlayerRepository {
     this.byToken.set(record.tokenHash, record);
   }
 
-  private scheduleFlush(): void {
+  private scheduleFlush(delayMs = this.flushDelayMs): void {
+    this.dirty = true;
     if (!this.filePath || this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.flush();
-    }, this.flushDelayMs);
+      try {
+        this.flush();
+      } catch (err) {
+        // Keep serving from memory and retry later instead of crashing the process.
+        console.error('[players] failed to save player data, retrying in 5s:', err);
+        this.scheduleFlush(5_000);
+      }
+    }, delayMs);
   }
 
   private flush(): void {
-    if (!this.filePath) return;
+    if (!this.filePath || !this.dirty) return;
     mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
+    const tmp = `${this.filePath}.${process.pid}.tmp`;
     const data: FileShape = { version: 1, players: this.all() };
     writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
     renameSync(tmp, this.filePath);
+    this.dirty = false;
   }
 }

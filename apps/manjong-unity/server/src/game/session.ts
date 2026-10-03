@@ -62,20 +62,29 @@ export class GameSession {
 
   /** Steps produced while creating the game (deal + AI moves up to the first human decision). */
   start(): ActionResponse {
-    nextHand(this.game, (e) => this.record(e));
-    this.runAi();
-    return this.flush();
+    return this.transaction(() => nextHand(this.game, (e) => this.record(e)));
   }
 
   act(actionId: string): ActionResponse {
     this.lastActivity = Date.now();
-    if (actionId === 'next' && viewerOptions(this.game, HUMAN_SEAT).some((o) => o.id === 'next')) {
-      nextHand(this.game, (e) => this.record(e));
-    } else {
-      applyAction(this.game, HUMAN_SEAT, actionId, (e) => this.record(e));
+    return this.transaction(() => {
+      if (actionId === 'next' && viewerOptions(this.game, HUMAN_SEAT).some((o) => o.id === 'next')) {
+        nextHand(this.game, (e) => this.record(e));
+      } else {
+        applyAction(this.game, HUMAN_SEAT, actionId, (e) => this.record(e));
+      }
+    });
+  }
+
+  /** Runs a human step plus the AI moves after it; buffered steps never outlive a failed call. */
+  private transaction(step: () => void): ActionResponse {
+    try {
+      step();
+      this.runAi();
+      return this.flush();
+    } finally {
+      this.steps = [];
     }
-    this.runAi();
-    return this.flush();
   }
 
   view(): GameViewDto {
