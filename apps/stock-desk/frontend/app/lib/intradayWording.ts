@@ -144,6 +144,26 @@ export const C15_1_ALERT_NO_DATE = "警示以收盤資料評估，不隨盤中�
 /** allowlist #30, C15-2. */
 export const C15_2_ADVICE_CARD = "本卡以 {MM/DD} 收盤資料評估，不使用盤中價。";
 
+/*
+ * Approved literals that do NOT contain the term, kept next to the allowlist
+ * so the total-assets card reads its wording from one place. They are NOT
+ * allowlist sentences (definition section 5, line 352: no term, so not on the
+ * list) and are not part of `INTRADAY_ALLOWED_SENTENCES`; they still pass the
+ * banned-term scan. Pinned verbatim in `__tests__/intradayWording.test.ts`.
+ */
+
+/** C3-3 (all positions on closing prices, single trading date). Not on the allowlist. */
+export const C3_3_BASIS_ALL_CLOSE_SINGLE = "估值基準：{M} 檔皆為收盤價（{MM/DD}）";
+
+/** C3-3 (all positions on closing prices, date range). Not on the allowlist. */
+export const C3_3_BASIS_ALL_CLOSE_RANGE = "估值基準：{M} 檔皆為收盤價（{MM/DD}～{MM/DD}）";
+
+/** C5-1 tooltip, sentence 1. Not on the allowlist. */
+export const C5_1_TOOLTIP_SENTENCE_1 = "各檔價格旁標示該檔的成交時間或收盤日期。";
+
+/** C5-1 tooltip, sentence 2 ({MM/DD} here is the Taipei calendar day of the computation). Not on the allowlist. */
+export const C5_1_TOOLTIP_SENTENCE_2 = "本頁於 {MM/DD} {HH:mm:ss}（台北時間）計算，這是本產品算出總計的時間，不是成交時間。";
+
 /**
  * The 30 approved template sentences (allowlist, section 5), in table order.
  * Includes the three PENDING_PRECONDITION sentences (#23, #24, #25): being on

@@ -77,6 +77,17 @@ const PINNED: ReadonlyArray<readonly [number, string, string]> = [
 ];
 
 /**
+ * Approved literals without the term (definition section 5 line 352): C3-3
+ * (two versions) and the two C5-1 tooltip sentences. Not on the allowlist.
+ */
+const NON_TERM_PINNED: ReadonlyArray<readonly [string, string]> = [
+  ["C3_3_BASIS_ALL_CLOSE_SINGLE", "估值基準：{M} 檔皆為收盤價（{MM/DD}）"],
+  ["C3_3_BASIS_ALL_CLOSE_RANGE", "估值基準：{M} 檔皆為收盤價（{MM/DD}～{MM/DD}）"],
+  ["C5_1_TOOLTIP_SENTENCE_1", "各檔價格旁標示該檔的成交時間或收盤日期。"],
+  ["C5_1_TOOLTIP_SENTENCE_2", "本頁於 {MM/DD} {HH:mm:ss}（台北時間）計算，這是本產品算出總計的時間，不是成交時間。"],
+];
+
+/**
  * The allowlist the scans compare against is this pinned table, never the
  * module's own array: otherwise editing a sentence in the source would move
  * the allowlist with it and the scan could not notice.
@@ -135,12 +146,25 @@ describe("intradayWording — 30 句允許清單逐字釘住", () => {
     expect([...INTRADAY_ALLOWED_SENTENCES]).toEqual(PINNED.map(([, , literal]) => literal));
   });
 
-  it("模組只匯出這 30 個字串常數：沒有清單以外的字串（含「盤中」或不含）混進來", () => {
+  it("模組只匯出這 30 個字串常數加 4 個不含「盤中」的核可字面：沒有其他字串混進來", () => {
     const stringExports = Object.entries(intraday)
       .filter(([, value]) => typeof value === "string")
       .map(([key]) => key)
       .sort();
-    expect(stringExports).toEqual(PINNED.map(([, name]) => name).sort());
+    expect(stringExports).toEqual([...PINNED.map(([, name]) => name), ...NON_TERM_PINNED.map(([name]) => name)].sort());
+  });
+
+  it.each(NON_TERM_PINNED)("%s（不含「盤中」的核可字面）逐字相等，且不在允許清單內", (name, literal) => {
+    expect(exportedValue(name)).toBe(literal);
+    expect(literal).not.toContain(TERM);
+    expect(INTRADAY_ALLOWED_SENTENCES).not.toContain(literal);
+  });
+
+  it.each(NON_TERM_PINNED)("%s 仍過其餘全部禁用詞與裸「即時」掃描", (_name, literal) => {
+    for (const term of FRONTEND_FORBIDDEN_TERMS) {
+      expect(literal, `contains banned term ${JSON.stringify(term)}`).not.toContain(term);
+    }
+    expect(findBareRealtimeClaims(literal)).toEqual([]);
   });
 
   it("30 句每一句都含「盤中」，且切句後恰為自己一句（整句比對的前提）", () => {

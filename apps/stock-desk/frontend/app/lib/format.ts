@@ -206,6 +206,39 @@ export function formatDateTime(iso: string | null | undefined): string {
 }
 
 /**
+ * An instant (ISO timestamp) as its Taipei calendar day and clock time:
+ * `{ monthDay: "10/03", time: "14:05:09" }`. Used for "this page computed at"
+ * wording, where the date is the wall-clock day in Taipei, not a trading day.
+ * Returns `null` for a missing or unparseable instant rather than guessing.
+ * Parts are read from `formatToParts` with a 24h cycle, so midnight is
+ * `00:00:00` and never `24:00:00`.
+ */
+export function formatTaipeiMonthDayTime(
+  iso: string | null | undefined,
+): { monthDay: string; time: string } | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Taipei",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const pick = (type: string): string => parts.find((part) => part.type === type)?.value ?? "";
+  const month = pick("month");
+  const day = pick("day");
+  const hour = pick("hour");
+  const minute = pick("minute");
+  const second = pick("second");
+  if (month === "" || day === "" || hour === "" || minute === "" || second === "") return null;
+  return { monthDay: `${month}/${day}`, time: `${hour}:${minute}:${second}` };
+}
+
+/**
  * `"2026-09-30"` -> `"09/30"`. A trading date is a calendar label, not an
  * instant: it is sliced as a string and never passed through `new Date()`,
  * which would read a bare date as UTC midnight and shift it by the viewer's

@@ -26,6 +26,7 @@ describe("SummaryCards — fx_disclosures rendering", () => {
       createElement(SummaryCards, {
         totals,
         asOf: "2026-09-19T00:00:00Z",
+        positions: [],
         fxDisclosures: [],
         fxBackupActive: false,
       }),
@@ -42,6 +43,7 @@ describe("SummaryCards — fx_disclosures rendering", () => {
       createElement(SummaryCards, {
         totals,
         asOf: "2026-09-19T00:00:00Z",
+        positions: [],
         fxDisclosures: disclosures,
         fxBackupActive: false,
       }),
@@ -82,6 +84,7 @@ describe("SummaryCards — fxBackupActive badge (派工單 §4.3)", () => {
       createElement(SummaryCards, {
         totals,
         asOf: "2026-09-19T00:00:00Z",
+        positions: [],
         fxDisclosures: [],
         fxBackupActive: true,
       }),
@@ -95,6 +98,7 @@ describe("SummaryCards — fxBackupActive badge (派工單 §4.3)", () => {
       createElement(SummaryCards, {
         totals,
         asOf: "2026-09-19T00:00:00Z",
+        positions: [],
         fxDisclosures: [],
         fxBackupActive: false,
       }),
