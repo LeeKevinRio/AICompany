@@ -337,34 +337,43 @@ def test_dividend_store_batch_lookup(tmp_path: Path) -> None:
     assert store.ex_dates_between([], FRI, MON) == {}
 
 
-def test_dividend_store_batch_lookup_across_chunks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dividend_store_batch_lookup_across_chunks(tmp_path: Path) -> None:
     """The >500-symbol path answers exactly what one query per key would."""
     from app.dividends import store as store_module
 
+    chunk = store_module._MAX_SYMBOLS_PER_QUERY
+    assert chunk == 500
     store = DividendEventStore(db_path=tmp_path / "dividends.db")
     symbols = [f"S{number:04d}" for number in range(1200)]
-    # Sorted positions 0..1199 split into chunks [0, 500), [500, 1000), [1000, 1200).
-    hit = {symbols[0]: FRI, symbols[499]: MON, symbols[500]: FRI, symbols[1000]: MON}
-    hit[symbols[1199]] = FRI
+    keys: list[tuple[str, Market]] = [(symbol, "TW") for symbol in symbols]
+    keys.append(("2330", "TW"))
+    # The store chunks the *sorted distinct* symbols: 1201 of them here, with
+    # "2330" first (ASCII digits sort before "S"), giving chunks
+    # [0, 500), [500, 1000) and [1000, 1201).
+    ordered = sorted({symbol for symbol, _ in keys})
+    assert len(ordered) == 1201
+    assert ordered[0] == "2330"
+    boundary_hits = {
+        ordered[chunk - 1]: MON,  # last of chunk 0
+        ordered[chunk]: FRI,  # first of chunk 1
+        ordered[2 * chunk - 1]: MON,  # last of chunk 1
+        ordered[2 * chunk]: FRI,  # first of chunk 2
+        ordered[-1]: MON,  # last of chunk 2
+    }
     events = [
         DividendEvent(symbol=symbol, market="TW", ex_date=day, source="t", as_of=NOW)
-        for symbol, day in hit.items()
+        for symbol, day in boundary_hits.items()
     ]
     events += [
         # Outside the window: must not appear.
-        DividendEvent(symbol=symbols[750], market="TW", ex_date=THU, source="t", as_of=NOW),
+        DividendEvent(symbol=ordered[750], market="TW", ex_date=THU, source="t", as_of=NOW),
         # Same symbol, two markets: only the requested market may match.
         DividendEvent(symbol="2330", market="TW", ex_date=MON, source="t", as_of=NOW),
         DividendEvent(symbol="2330", market="US", ex_date=FRI, source="t", as_of=NOW),
         # Stored under US, requested under TW: no match.
-        DividendEvent(symbol=symbols[800], market="US", ex_date=MON, source="t", as_of=NOW),
+        DividendEvent(symbol=ordered[800], market="US", ex_date=MON, source="t", as_of=NOW),
     ]
     store.upsert(events)
-    keys: list[tuple[str, Market]] = [(symbol, "TW") for symbol in symbols]
-    keys.append(("2330", "TW"))
-    assert len({symbol for symbol, _ in keys}) > store_module._MAX_SYMBOLS_PER_QUERY * 2
 
     statements: list[str] = []
     connect = store._connect
@@ -374,9 +383,9 @@ def test_dividend_store_batch_lookup_across_chunks(
         conn.set_trace_callback(statements.append)
         return conn
 
-    monkeypatch.setattr(store, "_connect", traced)
-    found = store.ex_dates_between(keys, FRI, MON)
-    monkeypatch.undo()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store, "_connect", traced)
+        found = store.ex_dates_between(keys, FRI, MON)
 
     selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
     assert len(selects) == 3
@@ -385,13 +394,16 @@ def test_dividend_store_batch_lookup_across_chunks(
         for key in keys
     }
     assert found == {key: days for key, days in expected.items() if days}
+    for symbol, day in boundary_hits.items():
+        assert found[(symbol, "TW")] == frozenset({day})
     assert found[("2330", "TW")] == frozenset({MON})
     assert ("2330", "US") not in found
-    assert (symbols[800], "TW") not in found
-    assert (symbols[750], "TW") not in found
+    assert (ordered[800], "TW") not in found
+    assert (ordered[750], "TW") not in found
     assert len(found) == 6
 
 
+@pytest.mark.allow_price_change_error
 def test_screen_failure_on_an_extreme_price_keeps_the_summary(
     book: Book, client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:

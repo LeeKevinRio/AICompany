@@ -8,6 +8,7 @@ basis is exactly what ``_resolve_price`` read out of one ``ProviderResult``.
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -367,10 +368,51 @@ def test_a_price_not_read_from_the_basis_bars_is_withheld() -> None:
     assert _screen([(position, forged)]) == [None]
 
 
-def test_a_failing_lookup_withholds_the_book_without_raising() -> None:
-    row = _valued([_bar(FRI, "100"), _bar(MON, "101")])
-    screen = ChangeScreen(ex_dates=_Raising(), calendar=_Calendar())
-    assert screen.screen([row, row]) == [None, None]
+class _RaisingCalendar:
+    def market_trading_days(self, market: Market, start: date, end: date) -> frozenset[date]:
+        raise RuntimeError("calendar read failed")
+
+
+class _RaisingCoverage:
+    def coverage(self, queries: Sequence[CoverageQuery]) -> Mapping[CoverageQuery, ExDateCoverage]:
+        raise RuntimeError("coverage rule failed")
+
+
+def _screen_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name == "app.portfolio.price_change" and record.levelno >= logging.ERROR
+    ]
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        pytest.param(ChangeScreen(ex_dates=_Raising(), calendar=_Calendar()), id="ex-date lookup"),
+        pytest.param(ChangeScreen(ex_dates=_ExDates(), calendar=_RaisingCalendar()), id="calendar"),
+        pytest.param(
+            ChangeScreen(
+                ex_dates=_ExDates(), calendar=_Calendar(), coverage_rule=_RaisingCoverage()
+            ),
+            id="D-5 coverage rule",
+        ),
+    ],
+)
+@pytest.mark.allow_price_change_error
+def test_a_failing_dependency_withholds_the_book_without_raising(
+    screen: ChangeScreen, caplog: pytest.LogCaptureFixture
+) -> None:
+    rows = [_valued([_bar(FRI, "100"), _bar(MON, "101")]) for _ in range(2)]
+    # Without the failure both rows would be shown.
+    healthy = ChangeScreen(ex_dates=_ExDates(), calendar=_Calendar())
+    assert all(change is not None for change in healthy.screen(rows))
+    with caplog.at_level(logging.ERROR, logger="app.portfolio.price_change"):
+        assert screen.screen(rows) == [None, None]
+    failures = _screen_failures(caplog)
+    assert len(failures) == 1
+    assert failures[0].exc_info is not None
+    assert failures[0].exc_info[0] is RuntimeError
 
 
 def test_insufficient_fx_does_not_withhold_the_price_change() -> None:

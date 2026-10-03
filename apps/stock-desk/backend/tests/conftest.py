@@ -8,6 +8,7 @@ developer's real database. It is deliberately separate from the fixture in
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,3 +181,41 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "sector_ne7: ADR-0012 NE-7 CI attestation set (methodology T1-T9)"
     )
+    config.addinivalue_line(
+        "markers",
+        "allow_price_change_error: the test drives ChangeScreen's fail-closed path on "
+        "purpose, so ERROR records from app.portfolio.price_change are expected",
+    )
+
+
+class _ErrorRecords(logging.Handler):
+    """Collects ERROR-and-above records from one logger."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture(autouse=True)
+def _price_change_screen_must_not_fail(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Fail any test during which the change screen swallowed an exception.
+
+    ``ChangeScreen.screen`` turns *any* exception into "every change is null"
+    (ADR-0016 fail-closed). That is right in production and dangerous in tests:
+    a negative case asserting ``[None]`` would pass just as well because of a
+    programming error. Tests that drive that path on purpose opt out with
+    ``@pytest.mark.allow_price_change_error``.
+    """
+    logger = logging.getLogger("app.portfolio.price_change")
+    handler = _ErrorRecords()
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+    if handler.records and request.node.get_closest_marker("allow_price_change_error") is None:
+        messages = "; ".join(record.getMessage() for record in handler.records)
+        pytest.fail(f"app.portfolio.price_change logged ERROR: {messages}")
