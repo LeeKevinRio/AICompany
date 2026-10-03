@@ -1,10 +1,10 @@
 using System;
 
-// DTOs mirror work/manjong-unity/api-contract.md v0.1 exactly.
+// DTOs mirror work/manjong-unity/api-contract.md v0.2 exactly.
 // JsonUtility rules: [Serializable] classes, public fields, camelCase names identical to the contract.
 namespace Manjong.Net
 {
-    // ---------- Errors ----------
+    // ---------- HTTP errors ----------
 
     [Serializable]
     public class ErrorBody
@@ -19,7 +19,7 @@ namespace Manjong.Net
         public ErrorBody error;
     }
 
-    // ---------- Requests ----------
+    // ---------- HTTP requests ----------
 
     [Serializable]
     public class EmptyRequest
@@ -30,12 +30,6 @@ namespace Manjong.Net
     public class NicknameRequest
     {
         public string nickname;
-    }
-
-    [Serializable]
-    public class ActionRequest
-    {
-        public string actionId;
     }
 
     // ---------- Account ----------
@@ -85,6 +79,31 @@ namespace Manjong.Net
         public LeaderboardEntry[] entries;
     }
 
+    // ---------- WebSocket envelopes ----------
+
+    /// <summary>Client -> server. type: auth | start | action | ping.</summary>
+    [Serializable]
+    public class ClientMessage
+    {
+        public string type;
+        public string token;
+        public string actionId;
+    }
+
+    /// <summary>Server -> client. type: auth_ok | step | state | player | error | pong.</summary>
+    [Serializable]
+    public class ServerMessage
+    {
+        public string type;
+        public int seq;
+        public PlayerDto player;
+        public StepDto step;
+        public GameView view;
+        // UNAUTHORIZED | NOT_ENOUGH_COINS | NO_GAME | ILLEGAL_ACTION | BAD_MESSAGE | INTERNAL
+        public string code;
+        public string message;
+    }
+
     // ---------- Game ----------
 
     [Serializable]
@@ -107,10 +126,11 @@ namespace Manjong.Net
     }
 
     [Serializable]
-    public class ActionResponse
+    public class WaitDto
     {
-        public StepDto[] steps;
-        public GameView view;
+        public string tile;
+        /// <summary>Copies still unseen from my point of view.</summary>
+        public int left;
     }
 
     [Serializable]
@@ -149,6 +169,10 @@ namespace Manjong.Net
         public string tile;
         public string[] tiles;
         public string label;
+        /// <summary>discard only: what I would be waiting on after discarding this tile (empty = not ready).</summary>
+        public WaitDto[] waits;
+        /// <summary>tsumo / ron only: tai of this win (without dealer tai); otherwise -1.</summary>
+        public int tai;
     }
 
     [Serializable]
@@ -190,6 +214,8 @@ namespace Manjong.Net
         public int lastDiscardSeat;
         public string lastDiscardTile;
         public int myCoins;
+        /// <summary>Tiles I am currently waiting on (empty while I have to discard; see discard options' waits).</summary>
+        public WaitDto[] myWaits;
         public PlayerView[] players;
         public OptionDto[] options;
         public bool hasResult;
@@ -245,6 +271,11 @@ namespace Manjong.Net
                 if (v.options[i] != null && v.options[i].type == "discard") return true;
             }
             return false;
+        }
+
+        public static bool HasOptions(GameView v)
+        {
+            return v != null && v.options != null && v.options.Length > 0;
         }
     }
 }

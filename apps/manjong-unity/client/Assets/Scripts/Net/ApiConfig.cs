@@ -25,6 +25,21 @@ namespace Manjong.Net
             }
         }
 
+        /// <summary>Game WebSocket endpoint derived from BaseUrl: http -> ws, https -> wss, plus "/ws".</summary>
+        public static string WebSocketUrl
+        {
+            get { return ToWebSocketUrl(BaseUrl); }
+        }
+
+        public static string ToWebSocketUrl(string httpBase)
+        {
+            string b = TrimTrailingSlash(httpBase ?? "");
+            if (b.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return "wss://" + b.Substring(8) + "/ws";
+            if (b.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return "ws://" + b.Substring(7) + "/ws";
+            if (b.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) || b.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) return b + "/ws";
+            return "ws://" + b + "/ws";
+        }
+
         static string Resolve()
         {
 #if UNITY_WEBGL && !UNITY_EDITOR

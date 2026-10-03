@@ -4,6 +4,14 @@ using System.Runtime.InteropServices;
 
 namespace Manjong.UI
 {
+    public enum PromptStatus
+    {
+        Ok,
+        Cancelled,
+        /// <summary>The browser refused to show the dialog (or the platform has none).</summary>
+        Blocked
+    }
+
     /// <summary>
     /// Browser text prompt used on WebGL so players can type Chinese via the OS IME.
     /// On other platforms IsAvailable is false and the regular InputField is used.
@@ -11,6 +19,7 @@ namespace Manjong.UI
     public static class WebPrompt
     {
         const string CancelSentinel = "\u0001";
+        const string BlockedSentinel = "\u0002";
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         [DllImport("__Internal")]
@@ -29,15 +38,18 @@ namespace Manjong.UI
             }
         }
 
-        /// <summary>Shows a blocking prompt. Returns null when cancelled or unavailable.</summary>
-        public static string Ask(string message, string defaultValue)
+        /// <summary>Shows a blocking prompt. "text" is only meaningful when the status is Ok.</summary>
+        public static PromptStatus Ask(string message, string defaultValue, out string text)
         {
+            text = null;
 #if UNITY_WEBGL && !UNITY_EDITOR
             string result = ManjongPrompt(message ?? "", defaultValue ?? "");
-            if (result == null || result == CancelSentinel) return null;
-            return result;
+            if (result == null || result == BlockedSentinel) return PromptStatus.Blocked;
+            if (result == CancelSentinel) return PromptStatus.Cancelled;
+            text = result;
+            return PromptStatus.Ok;
 #else
-            return null;
+            return PromptStatus.Blocked;
 #endif
         }
     }
