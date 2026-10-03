@@ -7,10 +7,12 @@ wiring of ``GET /api/portfolio/summary`` to the real 除權息 store and bar cac
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -333,6 +335,80 @@ def test_dividend_store_batch_lookup(tmp_path: Path) -> None:
     found = store.ex_dates_between([("2330", "TW"), ("2317", "TW"), ("2330", "US")], FRI, MON)
     assert found == {("2330", "TW"): frozenset({MON}), ("2317", "TW"): frozenset({FRI})}
     assert store.ex_dates_between([], FRI, MON) == {}
+
+
+def test_dividend_store_batch_lookup_across_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The >500-symbol path answers exactly what one query per key would."""
+    from app.dividends import store as store_module
+
+    store = DividendEventStore(db_path=tmp_path / "dividends.db")
+    symbols = [f"S{number:04d}" for number in range(1200)]
+    # Sorted positions 0..1199 split into chunks [0, 500), [500, 1000), [1000, 1200).
+    hit = {symbols[0]: FRI, symbols[499]: MON, symbols[500]: FRI, symbols[1000]: MON}
+    hit[symbols[1199]] = FRI
+    events = [
+        DividendEvent(symbol=symbol, market="TW", ex_date=day, source="t", as_of=NOW)
+        for symbol, day in hit.items()
+    ]
+    events += [
+        # Outside the window: must not appear.
+        DividendEvent(symbol=symbols[750], market="TW", ex_date=THU, source="t", as_of=NOW),
+        # Same symbol, two markets: only the requested market may match.
+        DividendEvent(symbol="2330", market="TW", ex_date=MON, source="t", as_of=NOW),
+        DividendEvent(symbol="2330", market="US", ex_date=FRI, source="t", as_of=NOW),
+        # Stored under US, requested under TW: no match.
+        DividendEvent(symbol=symbols[800], market="US", ex_date=MON, source="t", as_of=NOW),
+    ]
+    store.upsert(events)
+    keys: list[tuple[str, Market]] = [(symbol, "TW") for symbol in symbols]
+    keys.append(("2330", "TW"))
+    assert len({symbol for symbol, _ in keys}) > store_module._MAX_SYMBOLS_PER_QUERY * 2
+
+    statements: list[str] = []
+    connect = store._connect
+
+    def traced() -> sqlite3.Connection:
+        conn = connect()
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(store, "_connect", traced)
+    found = store.ex_dates_between(keys, FRI, MON)
+    monkeypatch.undo()
+
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 3
+    expected = {
+        key: frozenset(event.ex_date for event in store.events_for(*key, start=FRI, end=MON))
+        for key in keys
+    }
+    assert found == {key: days for key, days in expected.items() if days}
+    assert found[("2330", "TW")] == frozenset({MON})
+    assert ("2330", "US") not in found
+    assert (symbols[800], "TW") not in found
+    assert (symbols[750], "TW") not in found
+    assert len(found) == 6
+
+
+def test_screen_failure_on_an_extreme_price_keeps_the_summary(
+    book: Book, client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A per-row computation that raises withholds the whole book, not the response."""
+    # 1E+999990 values fine (the market value stays inside Decimal's exponent
+    # range) but cannot be quantized to 0.0001 -> InvalidOperation in change_pct.
+    book.prices.seed("2330", _bars("2330", [(FRI, "1072.00"), (MON, "1E+999990")]))
+    with caplog.at_level(logging.ERROR, logger="app.portfolio.price_change"):
+        response = client.get("/api/portfolio/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["change"] for row in body["positions"]] == [None, None, None, None]
+    failures = [record for record in caplog.records if "screen failed" in record.getMessage()]
+    assert len(failures) == 1
+    assert failures[0].exc_info is not None
+    assert failures[0].exc_info[0] is InvalidOperation
+    assert body["change_mode"] == "close_only"
 
 
 def test_summary_model_defaults_keep_old_constructors_valid() -> None:

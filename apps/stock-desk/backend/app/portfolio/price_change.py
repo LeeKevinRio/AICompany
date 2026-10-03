@@ -180,9 +180,20 @@ class ChangeScreen:
     ) -> list[PriceChange | None]:
         """One ``PriceChange | None`` per row, in order.
 
-        A lookup that fails withholds every change in the book rather than
-        failing the summary: the column is auxiliary, the valuation is not.
+        Fail-closed as a whole: any exception -- a lookup that fails, or a
+        per-row computation that raises on an extreme value -- withholds every
+        change in the book rather than failing the summary. The column is
+        auxiliary; the valuation is not.
         """
+        try:
+            return self._screen(rows)
+        except Exception:
+            logger.exception("price change withheld for the whole book: screen failed")
+            return [None] * len(rows)
+
+    def _screen(
+        self, rows: Sequence[tuple[Position, PositionValuation]]
+    ) -> list[PriceChange | None]:
         candidates: list[_Candidate] = []
         for index, (position, valued) in enumerate(rows):
             candidate, withheld = _row_candidate(index, position, valued)
@@ -193,12 +204,7 @@ class ChangeScreen:
         results: list[PriceChange | None] = [None] * len(rows)
         if not candidates:
             return results
-        try:
-            surviving = self._book_checks(candidates, rows)
-        except Exception:
-            logger.exception("price change withheld for the whole book: lookup failed")
-            return results
-        for candidate in surviving:
+        for candidate in self._book_checks(candidates, rows):
             results[candidate.index] = PriceChange(
                 pct=candidate.pct,
                 basis_kind="close",
