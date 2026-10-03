@@ -21,8 +21,11 @@
 #          原文案宣稱「已接近單一標的佔比上限」，在使用者把上限調到 12% 以下時，
 #          會把「已違反上限」講成「接近上限」。現在只陳述規則自身算得出來的事實，
 #          並把上限的實際判定指回卡片的風險上限清單。
-version: "1.0.2"
-updated_at: "2026-07-26"
+# 1.0.3 -- 依 risk-compliance-officer 裁示改寫 price_below_ma60 的 counterargument：
+#          「震盪盤中」易被讀成「盤中」（交易時段內），與本規則以收盤價判定不符，
+#          改為「震盪整理期間」。invalidation 全數未變動。
+version: "1.0.3"
+updated_at: "2026-10-03"
 
 rules:
   - id: uptrend_ma_stack
@@ -101,7 +104,7 @@ rules:
       op: lt
       ref: ma60.last
     explanation: 收盤價低於 60 日均線，中期趨勢的參考支撐已失守。
-    counterargument: 單日跌破可能是假訊號，季線附近的來回穿越在震盪盤中相當常見。
+    counterargument: 單日跌破可能是假訊號，季線附近的來回穿越在震盪整理期間相當常見。
     invalidation: 收盤價重新站上 60 日均線並延續三個交易日以上。
 
   - id: rsi_overbought
