@@ -58,6 +58,7 @@ ADVICE_MODULES = (
     "app.advice.engine",
     "app.advice.limits",
     "app.advice.loader",
+    "app.advice.selection",
 )
 
 #: The two Kelly modules that touch SQLite. These are what the ratified
