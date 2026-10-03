@@ -22,6 +22,7 @@ function price(asOf: string): PositionPrice {
     value: "100",
     as_of: asOf,
     source: "twse",
+    price_kind: "daily_close",
     data_status: "fresh",
     is_within_ttl: null,
     reason: null,
@@ -52,6 +53,7 @@ function position(id: number, priceValue: PositionPrice | null): SummaryPosition
     },
     market_value_twd: null,
     cost_twd: null,
+    change: null,
   };
 }
 

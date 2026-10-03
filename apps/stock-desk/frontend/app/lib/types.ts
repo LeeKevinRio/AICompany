@@ -84,11 +84,19 @@ export type UpdatePositionInput = PositionInput;
 /** Backend `DataStatus` (StrEnum) — the four-layer price degradation ladder. */
 export type PriceDataStatus = "fresh" | "backup" | "cached_stale" | "unavailable";
 
+/**
+ * Backend `PriceInfo.price_kind` (ADR-0016 K-8). The frontend reads it, never
+ * infers it. This release the backend only ever sends `"daily_close"`.
+ */
+export type PriceKind = "daily_close" | "intraday_quote";
+
 /** Backend `PriceInfo`. */
 export interface PositionPrice {
   value: string;
   as_of: string;
   source: string;
+  /** Which kind of price `value` is; always `"daily_close"` this release (ADR-0016 K-8). */
+  price_kind: PriceKind;
   data_status: PriceDataStatus;
   /**
    * Only meaningful for `cached_stale`: `true` means the local cache already
@@ -176,7 +184,37 @@ export interface SummaryPositionItem {
   //: The matching contribution to `totals.cost_twd`, or `null` on the same
   //: terms (backend `SummaryPosition.cost_twd`).
   cost_twd: string | null;
+  //: Price change against the previous close (ADR-0016), or `null` when the
+  //: backend fail-closed it. Rendered as "—" when `null`; no reason string is
+  //: ever sent (K-6).
+  change: PriceChange | null;
 }
+
+/** Backend `PriceChange.basis_kind` (ADR-0016 D-1). */
+export type ChangeBasisKind = "close" | "intraday";
+
+/**
+ * Backend `PriceChange` (ADR-0016 D-1) — computed by the backend only; the
+ * frontend never recomputes `pct` from prices (K-5).
+ */
+export interface PriceChange {
+  /**
+   * Percent units as a decimal string quantised to 0.0001 (e.g. `"2.5900"`).
+   * Display-only: never used for arithmetic that changes the value.
+   */
+  pct: string;
+  basis_kind: ChangeBasisKind;
+  /** `YYYY-MM-DD` of the close the change is measured against. */
+  basis_date: string;
+  /** Raw (unadjusted) close on `basis_date`. Not displayed. */
+  basis_price: string;
+}
+
+/**
+ * Backend `PortfolioSummary.change_mode` (ADR-0016 D-8): fixed per deployment
+ * by the valuator's constructor, never by data. `"close_only"` this release.
+ */
+export type ChangeMode = "close_only" | "may_include_intraday";
 
 export type SummaryStatus = "complete" | "partial" | "no_data";
 
@@ -199,6 +237,9 @@ export interface PortfolioSummaryResponse {
   //: source whose rate went into this book's TWD figures, in first-seen
   //: order, each sentence once. Rendered verbatim, never paraphrased.
   fx_disclosures: string[];
+  //: ADR-0016 D-8: the only input that decides the change column header, its
+  //: sort-option names and whether intraday rows may render.
+  change_mode: ChangeMode;
 }
 
 /** Backend `RowError`. */

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { PnlOriginal, SummaryPositionItem } from "../lib/types";
+import type { ChangeMode, PnlOriginal, SummaryPositionItem } from "../lib/types";
 import {
   formatMoney,
   formatQuantity,
@@ -13,16 +13,22 @@ import {
 } from "../lib/format";
 import { deleteButtonState } from "../lib/positionFormSubmit";
 import {
+  CHANGE_COLUMN_RESIDUAL_NOTE,
   DETAIL_FIELD_LABELS,
   FOREIGN_PNL_PERCENT_NOTE,
   PRIMARY_HEADER_LABELS,
   SORT_CONTROL_LABEL,
-  SORT_OPTIONS,
+  allowIntradayFromMode,
+  changeHeaderLabel,
   formatSignedPercent,
   hasForeignCurrencyPosition,
+  isChangeColumnRendered,
+  isNonDailyClosePrice,
   nextSortState,
   pnlPercentTwd,
+  resolveChangeCell,
   sortOptionId,
+  sortOptions,
   sortPositions,
   sortStateFromOptionId,
 } from "../lib/positionsTableView";
@@ -46,21 +52,27 @@ import { ErrorPanel } from "./ErrorPanel";
 // block with their labels unchanged. No fixed min-width or horizontal scroll:
 // desktop uses grid columns, mobile (< md) re-flows the same DOM into a
 // two-column card.
-// Reserved but not rendered: the "today's change" column slot
-// (`TODAY_CHANGE_SLOT`; no backend field yet, header wording pending risk
-// review). Enabling it later means one extra track in ROW_GRID and the header.
+// Phase 2 adds the change column (ADR-0016 K-9..K-15): the header, the mobile
+// mini-label and sort options 8/9 all read one derived value,
+// `allowIntraday` (from the backend's `change_mode`); every cell is fail-closed
+// through `resolveChangeCell`; nothing is recomputed or inferred here.
 
 /**
- * Row grid shared by the header and every row. Mobile: name+price | pnl% and
- * pnl stacked | chevron. Desktop: chevron | name | price | pnl% (96px) | pnl.
+ * Row grid shared by the header and every row. Mobile: name+price | pnl%, pnl
+ * and change stacked | chevron. Desktop: chevron | name | price | pnl% (96px)
+ * | pnl | change.
  */
 const ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,40%)_2.75rem] gap-x-3 md:grid-cols-[2.75rem_minmax(0,1.4fr)_minmax(0,1.3fr)_6rem_minmax(8rem,1fr)]";
+  "grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,40%)_2.75rem] gap-x-3 md:grid-cols-[2.75rem_minmax(0,1.4fr)_minmax(0,1.3fr)_6rem_minmax(8rem,1fr)_minmax(7.5rem,1fr)]";
 
 const PLACEHOLDER = <span className="text-neutral-400">—</span>;
 
 function PriceCell({ position }: { position: SummaryPositionItem }) {
   const { valuation } = position;
+  // K-10 / K-14: any price whose kind is not `daily_close` (an intraday row has
+  // no approved label in this build; an unknown kind is never guessed) shows a
+  // bare "—": no "收盤" date label, no intraday label.
+  if (isNonDailyClosePrice(position)) return <div>{PLACEHOLDER}</div>;
   if (valuation.status === "insufficient_data" || valuation.price === null) {
     return (
       <div>
@@ -137,6 +149,38 @@ function PnlPercentCell({ position }: { position: SummaryPositionItem }) {
   );
 }
 
+/**
+ * Change column cell (ADR-0016). Line 1 is the signed percentage (`+2.59%`,
+ * always with `%`, red up / green down via `pnlColorClass`) and line 2 is the
+ * basis label `較 MM/DD 收盤`: a number always has its label, and a "—" never
+ * has any basis wording. When there is no label, line 2 is an invisible
+ * placeholder that keeps the row height (art-lead spec §3). The small label is
+ * mobile-only (desktop has the column header) and is the same constant as the
+ * header. No `title`, no expandable block.
+ */
+function ChangeCell({ position, allowIntraday }: { position: SummaryPositionItem; allowIntraday: boolean }) {
+  const view = resolveChangeCell(position, allowIntraday);
+  return (
+    <div className="text-right">
+      <p className="text-xs text-neutral-400 md:hidden">{changeHeaderLabel(allowIntraday)}</p>
+      <p className="text-sm tabular-nums">
+        {view.kind === "dash" ? (
+          PLACEHOLDER
+        ) : (
+          <span className={pnlColorClass(view.colorValue)}>{view.text}</span>
+        )}
+      </p>
+      {view.kind === "dash" ? (
+        <p className="mt-0.5 text-xs" aria-hidden="true">
+          &nbsp;
+        </p>
+      ) : (
+        <p className="mt-0.5 text-xs tabular-nums text-neutral-400">{view.basisLabel}</p>
+      )}
+    </div>
+  );
+}
+
 /** 台幣損益 + FX provenance (the FX date and badge are disclosures and stay in the default view). */
 function PnlTwdCell({ position }: { position: SummaryPositionItem }) {
   return (
@@ -166,6 +210,8 @@ export interface PositionsTableViewProps {
   namesBySymbol: Record<string, string>;
   /** Ids of the rows whose block is open; defaults to none (all collapsed). */
   initialExpandedIds?: readonly number[];
+  /** Backend `change_mode`; the only input that decides the change column's header and options. */
+  changeMode: ChangeMode;
   pendingDeleteId: number | null;
   onEdit: (position: SummaryPositionItem) => void;
   onDelete: (position: SummaryPositionItem) => void;
@@ -247,13 +293,19 @@ export function PositionsTableView({
   positions,
   namesBySymbol,
   initialExpandedIds = [],
+  changeMode,
   pendingDeleteId,
   onEdit,
   onDelete,
 }: PositionsTableViewProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set(initialExpandedIds));
   const [sort, setSort] = useState<SortState>(null);
-  const rows = sortPositions(positions, sort);
+  // K-9: the one derived value. Header, mobile mini-label, sort options 8/9 and
+  // whether an intraday row may render all read only this.
+  const allowIntraday = allowIntradayFromMode(changeMode);
+  const rows = sortPositions(positions, sort, allowIntraday);
+  // The change column (and so its residual note) exists only while the table has rows.
+  if (!isChangeColumnRendered(positions)) return null;
 
   return (
     <div>
@@ -261,6 +313,10 @@ export function PositionsTableView({
     {hasForeignCurrencyPosition(positions) && (
       <p className="mb-2 text-xs text-neutral-400">{FOREIGN_PNL_PERCENT_NOTE}</p>
     )}
+    {/* Change column residual disclosure (ADR-0016 D-6): its own paragraph right under the
+        foreign-currency sentence, same class, both widths. Gated only by the column being
+        rendered: never by `change` nullness, never by `change_mode`; never a title or details. */}
+    <p className="mb-2 text-xs text-neutral-400">{CHANGE_COLUMN_RESIDUAL_NOTE}</p>
     <div className="mb-2 flex items-center justify-end gap-2 md:hidden">
       <label htmlFor={SORT_SELECT_ID} className="text-sm text-neutral-300">
         {SORT_CONTROL_LABEL}
@@ -271,7 +327,7 @@ export function PositionsTableView({
         onChange={(e) => setSort(sortStateFromOptionId(e.target.value))}
         className="min-h-11 rounded-md border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
       >
-        {SORT_OPTIONS.map((option) => (
+        {sortOptions(allowIntraday).map((option) => (
           <option key={option.id} value={option.id}>
             {option.label}
           </option>
@@ -304,6 +360,13 @@ export function PositionsTableView({
           <SortableHeader
             label={PRIMARY_HEADER_LABELS.pnlTwd}
             sortKey="pnlTwd"
+            sort={sort}
+            onSort={setSort}
+            align="right"
+          />
+          <SortableHeader
+            label={changeHeaderLabel(allowIntraday)}
+            sortKey="change"
             sort={sort}
             onSort={setSort}
             align="right"
@@ -341,6 +404,9 @@ export function PositionsTableView({
                 </div>
                 <div role="cell" className="min-w-0 md:col-start-5 md:row-start-1">
                   <PnlTwdCell position={position} />
+                </div>
+                <div role="cell" className="min-w-0 md:col-start-6 md:row-start-1">
+                  <ChangeCell position={position} allowIntraday={allowIntraday} />
                 </div>
               </div>
               <div
@@ -431,7 +497,13 @@ export function PositionsTableView({
   );
 }
 
-export function PositionsTable({ positions }: { positions: SummaryPositionItem[] }) {
+export function PositionsTable({
+  positions,
+  changeMode,
+}: {
+  positions: SummaryPositionItem[];
+  changeMode: ChangeMode;
+}) {
   const [editingPosition, setEditingPosition] = useState<SummaryPositionItem | null>(null);
   // `useDeletePosition()` is a *single* mutation instance shared by every
   // row's button below — `pendingDeleteId` (not `deleteMutation.variables`)
@@ -478,6 +550,7 @@ export function PositionsTable({ positions }: { positions: SummaryPositionItem[]
       <PositionsTableView
         positions={positions}
         namesBySymbol={namesBySymbol}
+        changeMode={changeMode}
         pendingDeleteId={pendingDeleteId}
         onEdit={setEditingPosition}
         onDelete={handleDelete}

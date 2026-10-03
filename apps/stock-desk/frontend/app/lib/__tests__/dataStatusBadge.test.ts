@@ -24,6 +24,7 @@ describe("DataStatusBadge — trading date and honest freshness label", () => {
       value: "550",
       as_of: "2026-09-30",
       source: "twse",
+      price_kind: "daily_close",
       data_status: "fresh",
       is_within_ttl: null,
       reason: null,

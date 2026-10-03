@@ -8,7 +8,8 @@
  * them needs a fresh risk review and the pinned tests in `homeReflow.test.ts`.
  */
 
-import type { SummaryPositionItem } from "./types";
+import { formatTradingDateMonthDay } from "./format";
+import type { ChangeMode, SummaryPositionItem } from "./types";
 
 /**
  * Labels of the fields moved into each row's expandable block. Byte-for-byte
@@ -63,12 +64,153 @@ const SORT_WORDS = {
 } as const;
 
 /**
- * Reserved slot for the 今日漲跌 column (spec §3). Phase 1 deliberately does
- * not render it: the backend has no such field and its header wording is
- * still pending risk review. Flip `enabled` only together with the API field
- * and the approved wording; no render path reads it today.
+ * Change column (ADR-0016 K-9..K-15). Header wording, risk-approved
+ * word-for-word (`work/reviews/2026-10-03-首頁重排-第二階段字面-風控核可.md`
+ * item 2a / 2b). The header, the mobile mini-label and sort options 8/9 all read
+ * these two constants through `changeHeaderLabel`; nothing else types them.
  */
-export const TODAY_CHANGE_SLOT = { enabled: false } as const;
+export const CHANGE_HEADER_LABELS = {
+  closeOnly: "收盤漲跌",
+  mayIncludeIntraday: "漲跌",
+} as const;
+
+/**
+ * The single derived switch (K-9): true only when the backend says the column
+ * may hold intraday rows. Anything else - including a missing or unknown
+ * value - is treated as close-only (fail closed). Header, mobile mini-label,
+ * sort options 8/9 and "may an intraday row render" read only this.
+ */
+export function allowIntradayFromMode(mode: ChangeMode | undefined): boolean {
+  return mode === "may_include_intraday";
+}
+
+/** Header / mobile mini-label / sort-option column name for the change column. */
+export function changeHeaderLabel(allowIntraday: boolean): string {
+  return allowIntraday ? CHANGE_HEADER_LABELS.mayIncludeIntraday : CHANGE_HEADER_LABELS.closeOnly;
+}
+
+/**
+ * Basis label under a change figure, close basis only (risk 2c): `較 MM/DD 收盤`.
+ * `MM/DD` is the backend's `basis_date`, string-formatted and never
+ * date-computed (K-12). Returns `null` unless the input is a well-formed
+ * `YYYY-MM-DD`, so an empty or garbled date can never print `較 — 收盤`.
+ */
+export function formatChangeBasisLabel(basisDate: string | null): string | null {
+  // String range check only (month 01-12, day 01-31); never date arithmetic.
+  if (basisDate === null || !/^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(basisDate)) return null;
+  return `較 ${formatTradingDateMonthDay(basisDate)} 收盤`;
+}
+
+/**
+ * Residual-risk disclosure for the change column (ADR-0016 D-6; risk
+ * approved word-for-word 2026-10-03, `work/reviews/2026-10-03-漲跌欄-剩餘揭露-
+ * 風控核可.md`). Rendered once, as its own paragraph directly under the
+ * foreign-currency basis sentence (if any), at both widths, and only while the
+ * change column itself is rendered (`isChangeColumnRendered`). It must never
+ * read `change` nullness or `change_mode`, never go into a `title` or the
+ * expandable block, and must appear nowhere else in the app: no other column,
+ * page or label may reuse it or the phrase "實際報酬" (risk required 2).
+ */
+export const CHANGE_COLUMN_RESIDUAL_NOTE = "漲跌未計入除權息與分割，可能與實際報酬不同。";
+
+/**
+ * Whether the change column is rendered at all. The column is part of every
+ * table render, so this is true exactly when there is at least one listed
+ * position; it deliberately ignores every cell's content and `change_mode`.
+ * `PositionsTableView` assumes its caller already blocks the empty list
+ * (`PositionsTable` shows `EmptyPositionsState`); given an empty array it
+ * returns `null` rather than render a column-less frame.
+ */
+export function isChangeColumnRendered(positions: readonly unknown[]): boolean {
+  return positions.length > 0;
+}
+
+/** Largest integer-digit count accepted for a backend `pct` before the cell fails closed. */
+const MAX_PCT_INTEGER_DIGITS = 7;
+
+/**
+ * Rounds a decimal string to two places, half away from zero, using integer
+ * arithmetic only (no float rounding). Returns `null` for anything that is
+ * not a plain decimal (`"2.5900"`, `"-0.0040"`, `"3"`), and for more than
+ * `MAX_PCT_INTEGER_DIGITS` integer digits (a percentage that large is a
+ * contract violation, and it would lose precision or overflow as a double).
+ */
+function roundDecimalStringTo2dp(raw: string): string | null {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(raw);
+  if (match === null) return null;
+  const sign = match[1] ?? "";
+  const intPart = match[2] ?? "";
+  if (intPart.replace(/^0+(?=\d)/, "").length > MAX_PCT_INTEGER_DIGITS) return null;
+  const fracPadded = (match[3] ?? "").padEnd(3, "0");
+  let scaled = BigInt(intPart + fracPadded.slice(0, 2));
+  if (fracPadded.charCodeAt(2) >= 53) scaled += BigInt(1); // third digit >= "5"
+  const digits = scaled.toString().padStart(3, "0");
+  const text = `${digits.slice(0, -2)}.${digits.slice(-2)}`;
+  return scaled === BigInt(0) ? text : `${sign}${text}`;
+}
+
+/** What one change cell shows. `dash` = the whole cell is only "—", with no basis wording at all. */
+export type ChangeCellView =
+  | { kind: "dash" }
+  | {
+      kind: "value";
+      /** Signed percent text with `%`, e.g. `+2.59%`. */
+      text: string;
+      /** Two-place decimal string the text was rounded from; feeds the red/green class. */
+      colorValue: string;
+      /** `較 MM/DD 收盤`. */
+      basisLabel: string;
+      /** The rounded value that is displayed, so ordering matches what the user sees. */
+      sortValue: number;
+    };
+
+const DASH_VIEW: ChangeCellView = { kind: "dash" };
+
+/**
+ * Decides what a row's change cell shows. Fail-closed: the cell is a bare "—"
+ * unless every condition holds (K-10, K-11, K-14):
+ * - `change` present and `pct` parses as a plain decimal;
+ * - `basis_date` is a well-formed date (never null, empty or garbled);
+ * - `basis_kind` is a known kind and matches the row's own `price_kind`
+ *   (`close` with `daily_close`);
+ * - no intraday row renders while the mode is close-only (K-10), and intraday
+ *   basis stays "—" in every mode until its wording is approved into code (K-14).
+ * The frontend never recomputes `pct` and never infers a kind (K-5).
+ */
+export function resolveChangeCell(position: SummaryPositionItem, allowIntraday: boolean): ChangeCellView {
+  const { change } = position;
+  if (change === null || change === undefined) return DASH_VIEW;
+  const priceKind = position.valuation.price?.price_kind;
+  if (!allowIntraday && priceKind === "intraday_quote") return DASH_VIEW;
+  if (change.basis_kind === "intraday") return DASH_VIEW;
+  if (change.basis_kind !== "close") return DASH_VIEW;
+  if (priceKind !== "daily_close") return DASH_VIEW;
+  const basisLabel = formatChangeBasisLabel(change.basis_date);
+  if (basisLabel === null) return DASH_VIEW;
+  const rounded = roundDecimalStringTo2dp(change.pct);
+  if (rounded === null) return DASH_VIEW;
+  const numeric = Number(rounded);
+  if (!Number.isFinite(numeric)) return DASH_VIEW;
+  return {
+    kind: "value",
+    text: formatSignedPercent(numeric),
+    colorValue: rounded,
+    basisLabel,
+    sortValue: numeric,
+  };
+}
+
+/**
+ * True when the price cell must show only "—": a present price whose
+ * `price_kind` is not `daily_close` (an intraday row has no approved price
+ * label in this build; an unknown or missing kind is never guessed at).
+ * Mirrors the change cell's fail-closed rule. A missing price is handled by the
+ * cell's own insufficient-data branch.
+ */
+export function isNonDailyClosePrice(position: SummaryPositionItem): boolean {
+  const { price } = position.valuation;
+  return price !== null && price !== undefined && price.price_kind !== "daily_close";
+}
 
 /**
  * TWD-basis P&L percentage: `pnl_twd / cost_twd * 100`. Returns `null` when
@@ -133,12 +275,12 @@ export function sortByPnlTwd(
 }
 
 /** Columns the user can sort by. The price column is deliberately not sortable (spec §2.4). */
-export type SortKey = "symbol" | "pnlPercentTwd" | "pnlTwd";
+export type SortKey = "symbol" | "pnlPercentTwd" | "pnlTwd" | "change";
 export type SortDirection = "asc" | "desc";
 /** `null` = backend order. One state shared by the desktop headers and the mobile dropdown. */
 export type SortState = { key: SortKey; direction: SortDirection } | null;
 
-/** Direction of a column's first click (spec §2.4): symbol small-to-large, P&L large-to-small. */
+/** Direction of a column's first click (spec §2.4): symbol small-to-large, P&L and change large-to-small. */
 export function defaultSortDirection(key: SortKey): SortDirection {
   return key === "symbol" ? "asc" : "desc";
 }
@@ -168,20 +310,25 @@ function sortOption(key: SortKey, direction: SortDirection, columnLabel: string,
 }
 
 /**
- * Mobile sort dropdown options, in display order. Column names come straight
- * from `PRIMARY_HEADER_LABELS` (risk required: never hand-typed a second time).
- * Phase 2 renders seven options; the two change-column options wait for the
- * backend field.
+ * Mobile sort dropdown options, in display order (nine items). Column names
+ * come straight from `PRIMARY_HEADER_LABELS` and `changeHeaderLabel` (risk
+ * required: never hand-typed a second time); items 8 and 9 follow the same
+ * `allowIntraday` switch as the change column header (K-9).
  */
-export const SORT_OPTIONS: readonly SortOption[] = [
-  { id: "default", label: SORT_DEFAULT_OPTION_LABEL, state: null },
-  sortOption("symbol", "asc", PRIMARY_HEADER_LABELS.symbol, "text"),
-  sortOption("symbol", "desc", PRIMARY_HEADER_LABELS.symbol, "text"),
-  sortOption("pnlPercentTwd", "desc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
-  sortOption("pnlPercentTwd", "asc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
-  sortOption("pnlTwd", "desc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
-  sortOption("pnlTwd", "asc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
-];
+export function sortOptions(allowIntraday: boolean): readonly SortOption[] {
+  const changeLabel = changeHeaderLabel(allowIntraday);
+  return [
+    { id: "default", label: SORT_DEFAULT_OPTION_LABEL, state: null },
+    sortOption("symbol", "asc", PRIMARY_HEADER_LABELS.symbol, "text"),
+    sortOption("symbol", "desc", PRIMARY_HEADER_LABELS.symbol, "text"),
+    sortOption("pnlPercentTwd", "desc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
+    sortOption("pnlPercentTwd", "asc", PRIMARY_HEADER_LABELS.pnlPercentTwd, "number"),
+    sortOption("pnlTwd", "desc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
+    sortOption("pnlTwd", "asc", PRIMARY_HEADER_LABELS.pnlTwd, "number"),
+    sortOption("change", "desc", changeLabel, "number"),
+    sortOption("change", "asc", changeLabel, "number"),
+  ];
+}
 
 /** The dropdown option id that represents `state` (every reachable state has one). */
 export function sortOptionId(state: SortState): string {
@@ -191,7 +338,8 @@ export function sortOptionId(state: SortState): string {
 
 /** Resolves a `<select>` value back to a sort state; unknown values fall back to backend order. */
 export function sortStateFromOptionId(id: string): SortState {
-  return SORT_OPTIONS.find((o) => o.id === id)?.state ?? null;
+  // Ids are the same in both modes (only the label text differs).
+  return sortOptions(false).find((o) => o.id === id)?.state ?? null;
 }
 
 function numericOrNull(raw: string | null): number | null {
@@ -202,13 +350,16 @@ function numericOrNull(raw: string | null): number | null {
 
 /**
  * Sorts by any sortable column. `null` state returns the input order
- * untouched. Missing values (symbol empty, percentage/P&L not computable)
- * always sort last in either direction; the sort is stable so ties keep
- * backend order.
+ * untouched. Missing values (symbol empty, percentage/P&L not computable, a
+ * change cell that shows "—") always sort last in either direction; the sort
+ * is stable so ties keep backend order. The change column orders by exactly
+ * what it displays, so a fail-closed "—" row is always last; `allowIntraday`
+ * defaults to the fail-closed close-only reading.
  */
 export function sortPositions(
   positions: readonly SummaryPositionItem[],
   state: SortState,
+  allowIntraday = false,
 ): SummaryPositionItem[] {
   if (state === null) return [...positions];
   const sign = state.direction === "desc" ? -1 : 1;
@@ -220,6 +371,10 @@ export function sortPositions(
         return pnlPercentTwd(p);
       case "pnlTwd":
         return numericOrNull(p.valuation.pnl_twd);
+      case "change": {
+        const cell = resolveChangeCell(p, allowIntraday);
+        return cell.kind === "value" ? cell.sortValue : null;
+      }
     }
   };
   const compare = (a: number | string, b: number | string): number => {

@@ -70,7 +70,9 @@ export default function HomePage() {
         <h2 className="text-lg font-semibold text-neutral-100">持倉明細</h2>
         <div className="mt-3">
           {summary.isPending && <TableSkeleton />}
-          {summary.isSuccess && <PositionsTable positions={summary.data.positions} />}
+          {summary.isSuccess && (
+            <PositionsTable positions={summary.data.positions} changeMode={summary.data.change_mode} />
+          )}
         </div>
       </div>
 

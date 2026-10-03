@@ -10,8 +10,6 @@ import {
   FOREIGN_PNL_PERCENT_NOTE,
   PRIMARY_HEADER_LABELS,
   SORT_CONTROL_LABEL,
-  SORT_OPTIONS,
-  TODAY_CHANGE_SLOT,
   formatSignedPercent,
   hasForeignCurrencyPosition,
   isNavItemActive,
@@ -20,11 +18,15 @@ import {
   pnlPercentTwd,
   sortByPnlTwd,
   sortOptionId,
+  sortOptions,
   sortPositions,
   sortStateFromOptionId,
 } from "../positionsTableView";
 import { riskGaugeBarFillClass, riskGaugeChipClass } from "../riskGauge";
-import type { LimitCheck, LimitStatus, SummaryPositionItem } from "../types";
+import type { LimitCheck, LimitStatus, PriceChange, SummaryPositionItem } from "../types";
+
+// Phase-2 sort options for the current (close-only) deployment.
+const SORT_OPTIONS = sortOptions(false);
 
 /**
  * 首頁重排第一階段（CEO 2026-10-03；`work/stock-desk-首頁重排-視覺規範-
@@ -46,6 +48,7 @@ function makePosition(
     currency?: "TWD" | "USD";
     fx?: SummaryPositionItem["valuation"]["fx"];
     price?: SummaryPositionItem["valuation"]["price"];
+    change?: PriceChange | null;
   } = {},
 ): SummaryPositionItem {
   const currency = overrides.currency ?? "TWD";
@@ -62,12 +65,13 @@ function makePosition(
     note: null,
     market_value_twd: "110000",
     cost_twd: overrides.cost_twd === undefined ? "100000" : overrides.cost_twd,
+    change: overrides.change === undefined ? null : overrides.change,
     valuation: {
       status: "ok",
       missing: [],
       price:
         overrides.price === undefined
-          ? { value: "110", as_of: "2026-10-02", source: "twse", data_status: "fresh", is_within_ttl: null, reason: null }
+          ? { value: "110", as_of: "2026-10-02", source: "twse", price_kind: "daily_close", data_status: "fresh", is_within_ttl: null, reason: null }
           : overrides.price,
       fx: overrides.fx ?? null,
       pnl_original: { value: "10000", currency },
@@ -87,6 +91,7 @@ function render(
       positions,
       namesBySymbol: extra.names ?? {},
       initialExpandedIds: extra.initialExpandedIds,
+      changeMode: "close_only",
       pendingDeleteId: null,
       onEdit: () => {},
       onDelete: () => {},
@@ -301,9 +306,10 @@ describe("持倉表結構（瘦身）", () => {
     expect(open).not.toMatch(/id="pos-detail-7"[^>]*hidden/);
   });
 
-  it("今日漲跌：槽位預留但不渲染", () => {
-    expect(TODAY_CHANGE_SLOT.enabled).toBe(false);
-    expect(html).not.toContain("漲跌");
+  it("漲跌欄已是真實欄位：預設視圖有表頭，舊 placeholder 已刪除（ADR-0016 K-9）", () => {
+    expect(html).toContain("收盤漲跌");
+    expect(readSource("../positionsTableView.ts")).not.toContain("TODAY_CHANGE_SLOT");
+    expect(readSource("../../components/PositionsTable.tsx")).not.toContain("TODAY_CHANGE_SLOT");
   });
 });
 
@@ -403,7 +409,7 @@ describe("手機排序下拉（< md）", () => {
   ];
   const ids = (list: SummaryPositionItem[]) => list.map((p) => p.id);
 
-  it("選項字面與順序逐字釘住（7 項；漲跌兩項本階段不渲染）", () => {
+  it("選項字面與順序逐字釘住（9 項；收盤漲跌表頭下第 8、9 項為「收盤漲跌」）", () => {
     expect(SORT_OPTIONS.map((o) => o.label)).toEqual([
       "預設順序",
       "代號 小到大",
@@ -412,10 +418,11 @@ describe("手機排序下拉（< md）", () => {
       "台幣損益％ 低到高",
       "台幣損益 高到低",
       "台幣損益 低到高",
+      "收盤漲跌 高到低",
+      "收盤漲跌 低到高",
     ]);
     const html = render(rows);
-    expect(html).not.toContain("漲跌");
-    expect([...html.matchAll(/<option /g)]).toHaveLength(7);
+    expect([...html.matchAll(/<option /g)]).toHaveLength(9);
   });
 
   it("選項欄名引用表頭同一字串常數（不是第二份手打）", () => {
@@ -423,9 +430,10 @@ describe("手機排序下拉（< md）", () => {
     expect(SORT_OPTIONS[3]?.label.startsWith(`${PRIMARY_HEADER_LABELS.pnlPercentTwd} `)).toBe(true);
     expect(SORT_OPTIONS[5]?.label.startsWith(`${PRIMARY_HEADER_LABELS.pnlTwd} `)).toBe(true);
     const src = readSource("../positionsTableView.ts");
-    const optionsBlock = src.slice(src.indexOf("export const SORT_OPTIONS"), src.indexOf("/** The dropdown option id"));
+    const optionsBlock = src.slice(src.indexOf("export function sortOptions"), src.indexOf("/** The dropdown option id"));
     expect(optionsBlock).not.toMatch(/[\u4e00-\u9fff]/);
     expect(optionsBlock).toContain("PRIMARY_HEADER_LABELS.pnlPercentTwd");
+    expect(optionsBlock).toContain("changeHeaderLabel(allowIntraday)");
   });
 
   it("可見 <label> 綁 <select>，只在 < md 顯示，min-h-11", () => {
@@ -471,15 +479,16 @@ describe("手機排序下拉（< md）", () => {
       expect(sortStateFromOptionId(sortOptionId(option.state))).toEqual(option.state);
     }
     expect(sortStateFromOptionId("nonsense")).toBeNull();
+    expect(nextSortState(null, "change")).toEqual({ key: "change", direction: "desc" });
     // one `useState<SortState>` drives both the headers and the select
     const src = readSource("../../components/PositionsTable.tsx");
     expect(src.match(/useState<SortState>/g)).toHaveLength(1);
     expect(src).toContain("onChange={(e) => setSort(sortStateFromOptionId(e.target.value))}");
   });
 
-  it("桌機表頭：代號、台幣損益％、台幣損益三欄皆為 button＋aria-sort，現價不可排序", () => {
+  it("桌機表頭：代號、台幣損益％、台幣損益、收盤漲跌四欄皆為 button＋aria-sort，現價不可排序", () => {
     const html = render(rows);
-    expect([...html.matchAll(/aria-sort="none"[^>]*><button/g)]).toHaveLength(3);
+    expect([...html.matchAll(/aria-sort="none"[^>]*><button/g)]).toHaveLength(4);
     expect(html).not.toMatch(/<button[^>]*>現價/);
   });
 
