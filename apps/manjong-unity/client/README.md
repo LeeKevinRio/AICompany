@@ -3,13 +3,13 @@
 台灣 16 張麻將「可愛麻將」的 Unity 用戶端：1 位玩家對 3 個 AI。
 規則、洗牌、AI、聽牌與台數計算、結算全部在後端（`apps/manjong-unity/server`），用戶端只負責畫面與送出「選了哪個合法動作」。
 
-- **連線方式（契約 v0.2）**：帳號與排行榜走 HTTP；**牌局全部走 WebSocket**（`/ws`），沒有任何 `/api/games` 呼叫。
+- **連線方式（契約 v0.3）**：登入、暱稱、救濟金、排行榜與牌局**全部走同一條 WebSocket**（`/ws`）；用戶端不呼叫任何 HTTP API（伺服器只剩 `/api/health` 與 WebGL 靜態檔）。
 
 - 全部 UI 都由程式碼建立（uGUI legacy `Text` / `Image` / `Button`），**不需要手拉 scene 或 prefab**。
 - 進入點：`Assets/Scripts/Core/Bootstrap.cs`（`RuntimeInitializeOnLoadMethod`，scene 載入後自動建立畫面）。
 - 字型：`Assets/Resources/Fonts/huninn.ttf`（jf open 粉圓子集，授權見同資料夾 `LICENSE-jf-openhuninn.txt`）。
 - 圖形：圓角牌、按鈕、面板、圓形頭像都在執行期用 `Texture2D` 產生，專案裡沒有任何圖檔。
-- API 契約：`work/manjong-unity/api-contract.md`（v0.2）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
+- API 契約：`work/manjong-unity/api-contract.md`（v0.3）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
 
 ## 1. 開啟專案
 
@@ -38,7 +38,7 @@ UI 使用 `StandaloneInputModule`（舊版 Input Manager）。請確認：
    ```
    預設監聽 `http://127.0.0.1:7316`。
 2. 回到 Unity，開啟 `Assets/Scenes/Main.unity`，按 **Play**。
-3. 第一次會自動建立訪客帳號（token 存在 `PlayerPrefs`，key：`manjong.token`）。
+3. 開啟後會自動連線：沒有 token 就送 `guest` 建立訪客帳號，token 存在 `PlayerPrefs`（key：`manjong.token`）；之後都用 `auth` 登入同一個帳號。
    想換一個新帳號：Play 停止後，在 Unity 選單 `Edit > Clear All PlayerPrefs`。
 
 Editor 與桌面平台預設連 `http://127.0.0.1:7316`（集中在 `Assets/Scripts/Net/ApiConfig.cs`）。
@@ -50,18 +50,33 @@ Editor 與桌面平台預設連 `http://127.0.0.1:7316`（集中在 `Assets/Scri
 
 | 用途 | 位址 | 來源 |
 | --- | --- | --- |
-| HTTP（帳號、排行榜） | `ApiConfig.BaseUrl` | Editor / 桌面：`MANJONG_API_URL` 或預設 `http://127.0.0.1:7316`；WebGL：頁面 origin（loopback 頁面可用 `?api=`） |
-| WebSocket（牌局） | `ApiConfig.WebSocketUrl` | 由 BaseUrl 換算：`http→ws`、`https→wss`，再加 `/ws`。例：`ws://127.0.0.1:7316/ws` |
+| 伺服器基底位址 | `ApiConfig.BaseUrl` | Editor / 桌面：`MANJONG_API_URL` 或預設 `http://127.0.0.1:7316`；WebGL：頁面 origin（loopback 頁面可用 `?api=`） |
+| WebSocket（所有功能） | `ApiConfig.WebSocketUrl` | 由 BaseUrl 換算：`http→ws`、`https→wss`，再加 `/ws`。例：`ws://127.0.0.1:7316/ws` |
 
 ### WebSocket 流程（`Assets/Scripts/Net/GameConnection.cs`）
 
-1. 按「開始遊戲」才建立連線；連上後第一則一定送 `auth`（token 放訊息裡，不放 URL），收到 `auth_ok` 才算連上，接著送 `start`。
-2. 伺服器即時推送 `step`（摸牌、打牌、吃碰槓…）與 `state`（輪到你時的權威快照）。用戶端把它們排進同一個佇列依序播放：
+1. 程式一啟動就連線。第一則是 `auth`（有已存的 token，token 放在訊息裡、不放 URL）或 `guest`（沒有 token），收到 `auth_ok` 才算連上；`auth_ok` 帶回新 token 時會存進 PlayerPrefs。
+   大廳右上角會顯示連線狀態，未連上時大廳按鈕都會停用。
+2. 每則請求（`me`、`nickname`、`relief`、`leaderboard`、`start`、`action`）都帶遞增的 `requestId`；伺服器的回應與錯誤用 `replyTo` 帶回，
+   用戶端據此把錯誤顯示在對的地方：改暱稱的錯誤在暱稱提示欄、救濟金用 toast、開始遊戲的錯誤在開始按鈕下方、牌局動作照牌桌流程處理。
+   沒有回應的請求 15 秒後視為逾時；斷線時進行中的請求全部視為失敗並提示。「重新整理」會送 `me` 與 `leaderboard`。
+3. 伺服器即時推送 `step`（摸牌、打牌、吃碰槓…）與 `state`（輪到你時的權威快照）。用戶端把它們排進同一個佇列依序播放：
    每步約 0.35 秒（開局 0.8 秒、胡牌 1.2 秒），佇列超過 6 步或點畫面任意處會快轉到每步約 0.08 秒；
    `state` 排到時才套用，此時若有 options 才解鎖操作。送出 `action` 後會鎖住，直到收到下一個 `state`。
-3. 連上後每 25 秒送 `ping`。
-4. 斷線時自動重連（0.5、1、2、4、8 秒，上限 10 秒），牌桌上方會出現「連線中斷，正在重新連線…」；重連成功會再送 `start` 取得最新 `state`。
-5. close code `4401`（token 無效）：清掉 token、重新建立訪客帳號；`4000`（同帳號在別的視窗開了牌局）：回大廳並提示，**不會自動重連**，在這個視窗再按「開始遊戲」就會把連線搶回來。
+4. 連上後每 25 秒送 `ping`；超過 60 秒沒收到任何伺服器訊息（含 `pong`）就視為斷線。連線階段與登入階段各有約 10–12 秒的逾時。
+5. 斷線時自動重連（0.5、1、2、4、8 秒，上限 10 秒；連線穩定 30 秒後才把退避次數歸零），牌桌上方會出現「連線中斷，正在重新連線…」。
+   重連成功後若在牌桌上會再送 `start` 取得最新 `state`；但若最後畫面已是整場結束（`game_end`），**不會**送 `start`（避免悄悄開新局），只保留「回大廳」。
+   重連後若收到的 `gameId` 和原本不同（例如伺服器重啟），會先提示「牌局已重新開始」並清空事件列。
+6. 關閉代碼與錯誤碼：
+
+   | close / error | 意義 | 用戶端處理 |
+   | --- | --- | --- |
+   | `4401` + `INVALID_TOKEN` | 已存的 token 無效 | **唯一會清掉 token 的情況**，立刻改送 `guest` 建立新訪客帳號 |
+   | `4408` + `AUTH_TIMEOUT` | 10 秒內沒完成登入 | 保留 token，照退避重連 |
+   | `4401` + `UNAUTHORIZED` | 未登入就送了需要登入的訊息（用戶端程式錯誤） | 保留 token，Console 記 error，照退避重連 |
+   | `4000` | 同帳號在別的視窗登入 | 停止重連，大廳顯示「已在其他視窗登入」與「重新連線」按鈕 |
+   | `4403` | 網頁來源不被伺服器允許 | 停止重連並說明原因 |
+   | `1008` | 超過防洗版限制 | 照一般斷線重連 |
 
 實作：WebGL 用 `Assets/Plugins/WebGL/ManjongSocket.jslib` 包瀏覽器 `WebSocket`，C# 每個 frame 輪詢取訊息（不用 SendMessage）；
 Editor / 桌面用 `System.Net.WebSockets.ClientWebSocket`（`NativeSocketTransport.cs`），背景接收迴圈把完整訊息（分段 frame 會組回）放進 `ConcurrentQueue`，
@@ -73,6 +88,7 @@ Editor / 桌面用 `System.Net.WebSockets.ClientWebSocket`（`NativeSocketTransp
 - 用瀏覽器開發者工具 → Network → WS，可以看到 WebGL 版每一則收送的訊息。
 - 不開 Unity 也能測後端：`server/test/socket.test.ts` 有完整的 WebSocket 測試用戶端。
 - 想讓 AI 出牌節奏變快：後端用 `AI_DELAY_MS=0` 啟動（預設 600ms）。
+- `curl http://127.0.0.1:7316/api/health` 回 `{"ok":true}` 代表伺服器活著；若 health 正常但大廳一直「連不上伺服器」，問題在 WebSocket（例如反向代理沒轉 upgrade）。
 - 後端有防洗版限制（每條連線 10 秒內最多 100 則訊息，超過以 close `1008` 關閉）；用戶端會照一般斷線處理並自動重連。
 
 ## 4. Build WebGL 並由後端同源提供
@@ -102,9 +118,9 @@ Assets/
     ManjongSocket.jslib      WebGL 專用：瀏覽器 WebSocket 橋接（輪詢式）
   Resources/Fonts/huninn.ttf
   Scripts/
-    Core/  Bootstrap（進入點）、AppController（畫面切換、登入流程、HTTP 呼叫、牌局訊息路由與錯誤處理）、
+    Core/  Bootstrap（進入點）、AppController（畫面切換、requestId / replyTo 路由、牌局訊息與錯誤處理）、
            Economy（底 / 每台 / 門檻 / 救濟金，必須與 server/src/engine/rules.ts 的 ECONOMY 同步）
-    Net/   ApiConfig（HTTP 與 WebSocket 位址）、ApiClient（UnityWebRequest + coroutine）、Dto（契約 v0.2 DTO）、
+    Net/   ApiConfig（伺服器與 WebSocket 位址）、TokenStore（PlayerPrefs token）、Dto（契約 v0.3 DTO）、
            GameConnection（auth / ping / 重連）、SocketTransport（介面）、WebGLSocketTransport、NativeSocketTransport
     UI/    Palette（配色）、RoundedSprite（執行期圓角圖）、UiFactory（建 UI 的 helper）、
            TileFace（牌碼→字/顏色/中文名）、TileView（牌面/牌背）、Format、WebPrompt
@@ -127,9 +143,10 @@ async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，We
 | 狀況 | 原因與處理 |
 | --- | --- |
 | 開啟後出現「連不上伺服器」 | 後端沒啟動或不在 `127.0.0.1:7316`。先 `npm run dev`，再按「重試」。 |
-| 按「開始遊戲」後跳出「連不上伺服器」 | HTTP 通但 WebSocket 連不上：確認後端版本含 `/ws`（契約 v0.2）、反向代理有轉 WebSocket upgrade。 |
+| 大廳右上角一直顯示「連不上伺服器，正在重試…」 | 後端沒啟動、port 不對，或 WebSocket 被擋：確認 `/api/health` 正常、後端版本為契約 v0.3、反向代理有轉 WebSocket upgrade。 |
+| 結算畫面顯示「金幣歸零，牌局結束」 | 金幣下限是 0，輸到 0 時整場立即結束。回大廳領救濟金（補到 10,000）即可再開局。結算的金幣增減是實際收付（可能因金幣不足而少於台數算出的金額）。 |
 | 牌桌上方一直顯示「連線中斷，正在重新連線…」 | 後端停了或網路斷了；會持續以最多 10 秒的間隔重試。可以按「離開」回大廳，牌局保留在伺服器。 |
-| 跳出「已在其他視窗登入」 | 同一個帳號在別的視窗或分頁開了牌局（close 4000）。在這個視窗按「開始遊戲」即可接回來。 |
+| 跳出「已在其他視窗登入」 | 同一個帳號在別的視窗或分頁登入（close 4000）。按大廳右上角的「重新連線」即可把連線搶回這個視窗。 |
 | 按鈕都點不到 | Active Input Handling 設成只用新版 Input System，改為 Old 或 Both（見上方）。 |
 | 字變成方塊 / 缺字 | 粉圓字型是子集，只含常用字；若後端訊息出現子集外的字會顯示成方塊。找不到字型檔時會改用 Unity 內建字型並在 Console 警告。 |
 | WebGL 版打不了中文暱稱 | 瀏覽器中 uGUI 舊版 `InputField` 收不到輸入法（IME）組字。WebGL 版暱稱旁有「中文輸入」按鈕，會跳出瀏覽器輸入框；若被瀏覽器擋下（例如放在 iframe 裡），會提示改用欄位輸入。 |

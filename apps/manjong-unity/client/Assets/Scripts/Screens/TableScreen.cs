@@ -215,11 +215,14 @@ namespace Manjong.Screens
             }
         }
 
-        /// <summary>Waits hint just above my flowers, next to the hand: "打出後聽…" / "聽牌中…".</summary>
+        /// <summary>
+        /// Waits hint at the bottom-left, above my flowers and clear of my meld row (which can reach y = 212):
+        /// "打出後聽…" / "聽牌中…".
+        /// </summary>
         void BuildHintBar()
         {
             hintBar = UiFactory.CreatePanel(root, "WaitHint", Palette.Card, 20);
-            UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 196f), new Vector2(700f, 50f));
+            UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 222f), new Vector2(700f, 50f));
             UiFactory.AddShadow(hintBar, Palette.CardShadow, new Vector2(0f, -3f));
             hintRing = UiFactory.CreateRing(hintBar.transform, "Ring", Palette.Coral, 20, 3, 0f);
             hintText = UiFactory.CreateLabel(hintBar.transform, "Text", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
@@ -241,6 +244,12 @@ namespace Manjong.Screens
         }
 
         // ---------- Public API (called by AppController) ----------
+
+        /// <summary>The last known view is game_end: a reconnect must not send "start" (it would open a new game).</summary>
+        public bool IsGameOver
+        {
+            get { return view != null && view.phase == "game_end"; }
+        }
 
         /// <summary>Entering the table after "start" (new or resumed game). Messages follow via Enqueue*.</summary>
         public void BeginGame()
@@ -371,6 +380,7 @@ namespace Manjong.Screens
                 while (queue.Count > 0)
                 {
                     QueuedItem item = queue.Dequeue();
+                    CheckGameChanged(item.state != null ? item.state : (item.step != null ? item.step.view : null));
                     if (item.state != null)
                     {
                         // Authoritative snapshot: apply it and unlock (input is possible only if options exist).
@@ -403,6 +413,20 @@ namespace Manjong.Screens
                 playing = false;
             }
             if (view != null && !lastRenderFinal) Render(view, false);
+        }
+
+        /// <summary>
+        /// A different gameId than the one on screen (e.g. the server restarted while we were reconnecting):
+        /// tell the player and start the event log afresh before applying it.
+        /// </summary>
+        void CheckGameChanged(GameView next)
+        {
+            if (next == null || view == null) return;
+            if (string.IsNullOrEmpty(next.gameId) || string.IsNullOrEmpty(view.gameId) || next.gameId == view.gameId) return;
+            app.ShowToast("牌局已重新開始");
+            events.Clear();
+            RefreshEventLog();
+            selectedIndex = -1;
         }
 
         float CurrentDelay(string eventType)
@@ -515,15 +539,24 @@ namespace Manjong.Screens
 
         // ----- Waits hint -----
 
+        const int MaxWaitsShown = 4;
+
+        /// <summary>"三筒（剩 2）、六筒（剩 3）"; more than 4 waits are cut to "…等 N 張" so the bar stays one line.</summary>
         static string FormatWaits(WaitDto[] waits)
         {
             var sb = new StringBuilder();
+            int total = 0;
+            int shown = 0;
             for (int i = 0; i < waits.Length; i++)
             {
                 if (waits[i] == null || string.IsNullOrEmpty(waits[i].tile)) continue;
+                total++;
+                if (shown >= MaxWaitsShown) continue;
                 if (sb.Length > 0) sb.Append('、');
                 sb.Append(TileFace.Name(waits[i].tile)).Append("（剩 ").Append(Mathf.Max(0, waits[i].left)).Append('）');
+                shown++;
             }
+            if (total > shown) sb.Append("…等 ").Append(total).Append(" 張");
             return sb.ToString();
         }
 
@@ -958,7 +991,11 @@ namespace Manjong.Screens
         {
             if (view == null || awaiting || pumping) return;
             OptionDto next = DtoUtil.FindOption(view, "next");
-            if (app.SendAction(next != null ? next.id : "next")) awaiting = true;
+            if (app.SendAction(next != null ? next.id : "next"))
+            {
+                awaiting = true;
+                resultPanel.SetNextPending();
+            }
         }
 
         void OnBackToLobby()
