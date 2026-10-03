@@ -82,7 +82,7 @@ describe('accounts', () => {
     const { auth } = await guest();
     const ok = await app.inject({ method: 'POST', url: '/api/me/nickname', headers: auth, payload: { nickname: '  小明  ' } });
     expect(ok.json().player.nickname).toBe('小明');
-    for (const nickname of ['', '   ', '一二三四五六七八九十一二三', 'a\u0000b']) {
+    for (const nickname of ['', '   ', '一二三四五六七八九十一二三', 'a\u0000b', 'x'.repeat(100)]) {
       const r = await app.inject({ method: 'POST', url: '/api/me/nickname', headers: auth, payload: { nickname } });
       expect(r.statusCode).toBe(400);
       expect(r.json().error.code).toBe('INVALID_NICKNAME');

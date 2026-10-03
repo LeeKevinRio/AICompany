@@ -156,6 +156,9 @@ describe('tai table', () => {
     const set = score(base, '4p', { flowers: ['F1', 'F2', 'F3', 'F4', 'F6'] });
     expect(set.names).toContain('花槓（春夏秋冬）');
     expect(set.names).toContain('正花'); // only 蘭 (F6); 夏 is inside the completed set
+    const plants = score(base, '4p', { flowers: ['F5', 'F6', 'F7', 'F8', 'F2'] });
+    expect(plants.names).toContain('花槓（梅蘭竹菊）');
+    expect(plants.names).toContain('正花'); // 夏 (F2) only
   });
 
   it('situational items', () => {

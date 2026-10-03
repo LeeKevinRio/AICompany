@@ -26,6 +26,8 @@ interface Setup {
   melds?: Meld[][];
   flowers?: string[][];
   dealer?: number;
+  /** First go-around: nobody has discarded or called yet (天胡 / 地胡 / 人胡). */
+  fresh?: boolean;
 }
 
 function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: GameEvent) => void } {
@@ -42,7 +44,7 @@ function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: Ga
   hand.streak = 0;
   hand.roundIndex = 0;
   hand.result = null;
-  hand.noCallsYet = false;
+  hand.noCallsYet = cfg.fresh ?? false;
   hand.kongBloom = false;
   hand.lastDiscard = null;
   hand.players.forEach((p, i) => {
@@ -51,7 +53,7 @@ function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: Ga
     p.flowers = cfg.flowers?.[i] ?? [];
     p.discards = [];
     p.drawn = i === cfg.turn ? (cfg.drawn ?? null) : null;
-    p.hasDiscarded = true;
+    p.hasDiscarded = !cfg.fresh;
   });
   const back = tiles(cfg.back ?? '');
   const filler = Array.from({ length: RULES.deadWallSize - back.length }, () => 'WD');
@@ -234,5 +236,141 @@ describe('hand end', () => {
       expect(game.roundIndex).toBe(RULES.rounds);
       expect(game.sessionDeltas.reduce((a, b) => a + b, 0)).toBe(0);
     }
+  });
+});
+
+const WIN_17 = '123m 456m 789m 234p 567s 99s';
+const names = (game: GameState) => game.hand.result!.items.map((i) => i.name);
+
+describe('first go-around wins', () => {
+  it('天胡: the dealer wins with the opening hand', () => {
+    const { game, emit } = setup({ hands: [WIN_17, '', '', ''], turn: 0, dealer: 0, fresh: true, front: '1s' });
+    applyAction(game, 0, 'tsumo', emit);
+    expect(names(game)).toContain('天胡');
+    expect(names(game)).not.toContain('門清自摸');
+  });
+
+  it('地胡: a non-dealer self-draws on the first draw', () => {
+    const { game, emit } = setup({
+      hands: ['1m 1m 1m 2m 2m 2m 3m 3m 3m 4m 4m 4m 5p 5p 5p 7s 8s', '123m 456m 789m 234p 567s 9s', '', ''],
+      front: '9s',
+      turn: 0,
+      dealer: 0,
+      fresh: true,
+    });
+    applyAction(game, 0, 'discard:8s', emit);
+    applyAction(game, 1, 'pass', emit); // could chi the 8s; declining keeps the first go-around call-free
+    expect(ids(game, 1)).toContain('tsumo');
+    applyAction(game, 1, 'tsumo', emit);
+    expect(names(game)).toContain('地胡');
+  });
+
+  it('人胡: a non-dealer wins on the dealer’s first discard; not after a call', () => {
+    const hands = ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '', '123m 456p 789p 234s 567s 5m'];
+    const first = setup({ hands, front: '9m', turn: 0, dealer: 0, fresh: true });
+    applyAction(first.game, 0, 'discard:5m', first.emit);
+    applyAction(first.game, 3, 'ron', first.emit);
+    expect(names(first.game)).toContain('人胡');
+    expect(names(first.game)).not.toContain('門清');
+
+    const later = setup({ hands, front: '9m', turn: 0, dealer: 0, fresh: true });
+    later.game.hand.noCallsYet = false;
+    applyAction(later.game, 0, 'discard:5m', later.emit);
+    applyAction(later.game, 3, 'ron', later.emit);
+    expect(names(later.game)).not.toContain('人胡');
+  });
+
+  it('the dealer cannot score 人胡', () => {
+    const { game, emit } = setup({
+      hands: ['', '5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', ''],
+      front: '9m',
+      turn: 1,
+      dealer: 0,
+      fresh: true,
+    });
+    game.hand.players[0]!.hand = sortTiles(tiles('123m 456p 789p 234s 567s 5m'));
+    applyAction(game, 1, 'discard:5m', emit);
+    applyAction(game, 0, 'ron', emit);
+    expect(names(game)).not.toContain('人胡');
+  });
+});
+
+describe('more kongs and last tiles', () => {
+  it('明槓 from a discard draws a replacement from the back', () => {
+    const { game, emit } = setup({
+      hands: ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '5m 5m 5m 111s 999s 777p E N', ''],
+      front: '9m',
+      back: 'S',
+      turn: 0,
+    });
+    applyAction(game, 0, 'discard:5m', emit);
+    applyAction(game, 2, 'kan', emit);
+    const p = game.hand.players[2]!;
+    expect(p.melds[0]).toEqual({ type: 'kan', tiles: ['5m', '5m', '5m', '5m'], fromSeat: 0 });
+    expect(p.drawn).toBe('S');
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: true });
+  });
+
+  it('暗槓 cannot be robbed', () => {
+    const { game, emit } = setup({
+      hands: ['5m 5m 5m 5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s E', '', '123m 456p 789p 234s 567s 5m', ''],
+      front: '9m',
+      back: 'S',
+      turn: 0,
+      drawn: '5m',
+    });
+    applyAction(game, 0, 'ankan:5m', emit);
+    expect(ids(game, 2)).toEqual([]);
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 0, justDrew: true });
+  });
+
+  it('海底撈月 on the last drawable tile, 河底撈魚 on the discard after it', () => {
+    const draw = setup({
+      hands: ['1m 2m 3m 4m 5m 6m 7m 8m 9m 1p 2p 3p 4p 5p 6p 7p 8p', '123m 456m 789m 234p 567s 9s', '', ''],
+      front: '9s',
+      turn: 0,
+    });
+    applyAction(draw.game, 0, 'discard:8p', draw.emit);
+    applyAction(draw.game, 1, 'tsumo', draw.emit);
+    expect(names(draw.game)).toContain('海底撈月');
+
+    const discard = setup({
+      hands: ['', '1m 2m 3m 4m 5m 6m 7m 8m 9m 1p 2p 3p 4p 5p 6p 7p 9s', '123m 456m 789m 234p 567s 9s', ''],
+      turn: 1,
+    });
+    applyAction(discard.game, 1, 'discard:9s', discard.emit);
+    applyAction(discard.game, 2, 'ron', discard.emit);
+    expect(names(discard.game)).toContain('河底撈魚');
+  });
+});
+
+describe('dealer rotation', () => {
+  it('dealer win keeps the deal (連莊); a non-dealer win passes it on', () => {
+    const hands = ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '', '123m 456p 789p 234s 567s 5m'];
+    const nonDealer = setup({ hands, front: '9m', turn: 0, dealer: 0 });
+    applyAction(nonDealer.game, 0, 'discard:5m', nonDealer.emit);
+    applyAction(nonDealer.game, 3, 'ron', nonDealer.emit);
+    expect(nonDealer.game.dealer).toBe(1);
+    expect(nonDealer.game.streak).toBe(0);
+    expect(nonDealer.game.dealerRotations).toBe(1);
+
+    const dealer = setup({ hands, front: '9m', turn: 0, dealer: 3 });
+    applyAction(dealer.game, 0, 'discard:5m', dealer.emit);
+    applyAction(dealer.game, 3, 'ron', dealer.emit);
+    expect(dealer.game.dealer).toBe(3);
+    expect(dealer.game.streak).toBe(1);
+    // Dealer bonus 1 + 0 streak applies because the dealer is involved.
+    expect(dealer.game.hand.result!.dealerTai).toBe(1);
+  });
+
+  it('the round ends after the deal has passed four times', () => {
+    const hands = ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '', '123m 456p 789p 234s 567s 5m'];
+    const { game, emit } = setup({ hands, front: '9m', turn: 0, dealer: 0 });
+    game.dealerRotations = 3;
+    applyAction(game, 0, 'discard:5m', emit);
+    applyAction(game, 3, 'ron', emit);
+    expect(game.roundIndex).toBe(1);
+    expect(game.over).toBe(true);
+    expect(game.hand.result!.gameOver).toBe(true);
   });
 });
