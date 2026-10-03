@@ -31,7 +31,7 @@ describe("submitButtonState — 儲存/新增/匯入 single-instance button", ()
   });
 
   it("carries each caller's own verbatim labels through unchanged", () => {
-    expect(submitButtonState(true, "新增部位", "新增中…")).toEqual({
+    expect(submitButtonState(true, "新增", "新增中…")).toEqual({
       disabled: true,
       label: "新增中…",
     });
@@ -42,14 +42,14 @@ describe("submitButtonState — 儲存/新增/匯入 single-instance button", ()
   });
 });
 
-describe("deleteButtonState — per-row 刪除 button on a shared mutation instance", () => {
+describe("deleteButtonState — per-row 移除 button on a shared mutation instance", () => {
   it("is idle and enabled for every row when nothing is pending", () => {
-    expect(deleteButtonState(null, 1)).toEqual({ disabled: false, label: "刪除" });
-    expect(deleteButtonState(null, 2)).toEqual({ disabled: false, label: "刪除" });
+    expect(deleteButtonState(null, 1)).toEqual({ disabled: false, label: "移除" });
+    expect(deleteButtonState(null, 2)).toEqual({ disabled: false, label: "移除" });
   });
 
-  it("shows 刪除中… only on the row actually being deleted", () => {
-    expect(deleteButtonState(1, 1)).toEqual({ disabled: true, label: "刪除中…" });
+  it("shows 移除中… only on the row actually being deleted", () => {
+    expect(deleteButtonState(1, 1)).toEqual({ disabled: true, label: "移除中…" });
   });
 
   it("disables every other row too, so a second row's delete cannot race the first on the shared instance", () => {
@@ -57,10 +57,10 @@ describe("deleteButtonState — per-row 刪除 button on a shared mutation insta
     // row 1's delete is in flight — otherwise clicking it would fire a
     // second `mutate()` on the same `useDeletePosition()` instance and steal
     // row 1's pending indicator (the bug this module exists to close).
-    expect(deleteButtonState(1, 2)).toEqual({ disabled: true, label: "刪除" });
+    expect(deleteButtonState(1, 2)).toEqual({ disabled: true, label: "移除" });
   });
 
   it("clears back to idle for all rows once pendingDeleteId resets to null", () => {
-    expect(deleteButtonState(null, 1)).toEqual({ disabled: false, label: "刪除" });
+    expect(deleteButtonState(null, 1)).toEqual({ disabled: false, label: "移除" });
   });
 });

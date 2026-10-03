@@ -102,9 +102,6 @@ function render(positions: SummaryPositionItem[], mode: ChangeMode = "close_only
       positions,
       namesBySymbol: {},
       changeMode: mode,
-      pendingDeleteId: null,
-      onEdit: () => {},
-      onDelete: () => {},
     }),
   );
 }

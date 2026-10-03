@@ -11,7 +11,6 @@ import {
   marketLabel,
   pnlColorClass,
 } from "../lib/format";
-import { deleteButtonState } from "../lib/positionFormSubmit";
 import {
   CHANGE_COLUMN_RESIDUAL_NOTE,
   DETAIL_FIELD_LABELS,
@@ -33,13 +32,13 @@ import {
   sortStateFromOptionId,
 } from "../lib/positionsTableView";
 import type { SortDirection, SortKey, SortState } from "../lib/positionsTableView";
-import { useDeletePosition, useDirectoryNames } from "../lib/queries";
+import { HOME_LINK_TO_INVENTORY } from "../lib/inventoryWording";
+import { positionAnchorId } from "../lib/inventoryEdit";
+import { useDirectoryNames } from "../lib/queries";
 import { missingSummary } from "../lib/valuationWording";
 import { DataStatusBadge, priceDateTooltip } from "./DataStatusBadge";
 import { FxStatusBadge } from "./FxStatusBadge";
-import { EditPositionModal } from "./EditPositionModal";
 import { EmptyPositionsState } from "./EmptyPositionsState";
-import { ErrorPanel } from "./ErrorPanel";
 
 // NOTE: price/pnl_original/pnl_twd/asset_contribution_twd/fx_contribution_twd
 // all live under `position.valuation`, never as sibling fields on the
@@ -212,9 +211,6 @@ export interface PositionsTableViewProps {
   initialExpandedIds?: readonly number[];
   /** Backend `change_mode`; the only input that decides the change column's header and options. */
   changeMode: ChangeMode;
-  pendingDeleteId: number | null;
-  onEdit: (position: SummaryPositionItem) => void;
-  onDelete: (position: SummaryPositionItem) => void;
 }
 
 function ariaSortValue(
@@ -294,9 +290,6 @@ export function PositionsTableView({
   namesBySymbol,
   initialExpandedIds = [],
   changeMode,
-  pendingDeleteId,
-  onEdit,
-  onDelete,
 }: PositionsTableViewProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set(initialExpandedIds));
   const [sort, setSort] = useState<SortState>(null);
@@ -377,7 +370,6 @@ export function PositionsTableView({
       {rows.map((position) => {
         const open = expanded.has(position.id);
         const detailId = `pos-detail-${position.id}`;
-        const deleteState = deleteButtonState(pendingDeleteId, position.id);
         const name = namesBySymbol[position.symbol];
         return (
           <div key={position.id} role="rowgroup" className="border-t border-neutral-800 first:border-t-0">
@@ -467,25 +459,15 @@ export function PositionsTableView({
                     />
                   </DetailField>
                 </dl>
-                <div className="mt-3 flex gap-2 md:justify-end">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(position)}
-                    disabled={pendingDeleteId === position.id}
-                    aria-label={`編輯 ${position.symbol} 持倉`}
-                    className="min-h-11 flex-1 rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 active:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-8 md:flex-none"
+                {/* Editing and removing live on the inventory page; this link is
+                    identical on every row (it never varies with P&L or risk). */}
+                <div className="mt-3 flex md:justify-end">
+                  <Link
+                    href={`/positions#${positionAnchorId(position.id)}`}
+                    className="inline-flex min-h-11 items-center text-sm text-sky-400 underline hover:text-sky-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
                   >
-                    編輯
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(position)}
-                    disabled={deleteState.disabled}
-                    aria-label={`刪除 ${position.symbol} 持倉`}
-                    className="min-h-11 flex-1 rounded-md border border-red-900 px-3 py-1 text-xs text-red-300 hover:bg-red-950/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 active:bg-red-950/60 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-8 md:flex-none"
-                  >
-                    {deleteState.label}
-                  </button>
+                    {HOME_LINK_TO_INVENTORY}
+                  </Link>
                 </div>
               </div>
             </div>
@@ -504,16 +486,6 @@ export function PositionsTable({
   positions: SummaryPositionItem[];
   changeMode: ChangeMode;
 }) {
-  const [editingPosition, setEditingPosition] = useState<SummaryPositionItem | null>(null);
-  // `useDeletePosition()` is a *single* mutation instance shared by every
-  // row's button below — `pendingDeleteId` (not `deleteMutation.variables`)
-  // is what actually tracks which row is in flight, because keying off the
-  // shared instance's `variables` breaks the moment a second row's delete is
-  // confirmed before the first finishes (see `deleteButtonState`'s doc
-  // comment in `lib/positionFormSubmit.ts` — this is the delete-side half of
-  // the CEO's 2026-08-16 送出體驗 UX 缺陷 report).
-  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
-  const deleteMutation = useDeletePosition();
   // FR-6/AC-14: company name next to the symbol link. A directory miss
   // simply leaves that symbol out of the map, so the row falls back to
   // showing the symbol alone — no placeholder text (same rule as the
@@ -524,41 +496,5 @@ export function PositionsTable({
     return <EmptyPositionsState />;
   }
 
-  function handleDelete(position: SummaryPositionItem) {
-    // Blocks both a re-click on the same row and a click on a *different*
-    // row while a delete is already in flight — the latter is what used to
-    // silently steal the first row's pending indicator on the shared
-    // mutation instance.
-    if (pendingDeleteId !== null) return;
-    const confirmed = window.confirm(
-      `確定刪除 ${position.symbol} 的持倉？此動作無法復原。`,
-    );
-    if (!confirmed) return;
-    setPendingDeleteId(position.id);
-    deleteMutation.mutate(position.id, {
-      onSettled: () => setPendingDeleteId(null),
-    });
-  }
-
-  return (
-    <div>
-      {deleteMutation.isError && (
-        <div className="mb-3">
-          <ErrorPanel label="刪除失敗" error={deleteMutation.error} />
-        </div>
-      )}
-      <PositionsTableView
-        positions={positions}
-        namesBySymbol={namesBySymbol}
-        changeMode={changeMode}
-        pendingDeleteId={pendingDeleteId}
-        onEdit={setEditingPosition}
-        onDelete={handleDelete}
-      />
-
-      {editingPosition && (
-        <EditPositionModal position={editingPosition} onClose={() => setEditingPosition(null)} />
-      )}
-    </div>
-  );
+  return <PositionsTableView positions={positions} namesBySymbol={namesBySymbol} changeMode={changeMode} />;
 }

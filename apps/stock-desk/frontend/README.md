@@ -20,6 +20,7 @@ npm start              # 啟動 production build，port 3000
 ## 目前狀態
 
 Phase 3 M1（部位管理）：總覽頁（`/`）串接 `/health` 與 `/api/portfolio/summary`，
-匯入 / 新增部位頁（`/positions/import`）串接 CSV 匯入與手動新增 API。
-持倉編輯 / 刪除 UI 尚未實作（API 已定義，待後續 phase 排入）。
+庫存頁（`/positions`）列出全部持倉，可行內修改數量／平均成本／備註（`PATCH /api/positions/{id}`）、
+移除、手動新增與 CSV 匯入；舊路徑 `/positions/import` 由 `next.config.ts` 轉址到 `/positions`。
+首頁展開列以「到庫存修改」連到 `/positions#pos-{id}`。
 `lightweight-charts` 待 M7 再加入。

@@ -334,7 +334,21 @@ const SCANNED_FILES = [
   // dropdown and both position forms now render `SECTOR_SOURCE_DISCLOSURE`.
   // The add form was never in this scan at all despite carrying hard-coded
   // field labels and hints since it shipped.
-  "../../positions/import/ManualAddForm.tsx",
+  "../../positions/ManualAddForm.tsx",
+  // 庫存頁 (CEO 2026-10-03, 風控 `work/reviews/2026-10-03-庫存頁-字面-風控確認.md`
+  // required 6): the inventory page replaces 匯入／新增 at `/positions`. The page,
+  // list, inline-edit row, the two collapsible sections, the moved
+  // `ImportCsvSection`, the shared empty state and the wording module all carry
+  // user-visible literals and none of them was in this scan before.
+  "../../positions/page.tsx",
+  "../../positions/InventoryList.tsx",
+  "../../positions/InventoryRow.tsx",
+  "../../positions/InventoryRowView.tsx",
+  "../../positions/DisclosureSection.tsx",
+  "../../positions/ImportCsvSection.tsx",
+  "../../components/EmptyPositionsState.tsx",
+  "../inventoryWording.ts",
+  "../inventoryEdit.ts",
   // TradingView 嵌入 (CEO 派工單 2026-08-16): the chart panel's disclosure
   // sentence and the widget-load fallback message are new hard-coded JSX
   // literals; this file was never in the scan before this batch existed.

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DirectoryItem, Market } from "../lib/types";
 import { MARKET_OPTIONS, marketLabel } from "../lib/format";
 import { resolveDirectorySymbol } from "../lib/api";
+import { INVENTORY_NAV_LABEL, INVENTORY_ROUTE } from "../lib/inventoryWording";
 import { isNavItemActive } from "../lib/positionsTableView";
 import { useDirectorySearch } from "../lib/queries";
 import {
@@ -277,12 +278,12 @@ function SymbolSearch() {
   );
 }
 
-// "匯入／新增" (full-width slash) is the approved short label (spec §6.2; risk
-// 2026-10-03: navigation wording, no objection). The page h1 keeps its own text.
+// The third item is the inventory page (risk 2026-10-03: "庫存" approved);
+// its label and route come from `inventoryWording.ts`.
 const NAV_ITEMS = [
   { href: "/", label: "總覽" },
   { href: "/playbook", label: "排程台" },
-  { href: "/positions/import", label: "匯入／新增" },
+  { href: INVENTORY_ROUTE, label: INVENTORY_NAV_LABEL },
   { href: "/backtest", label: "回測" },
   { href: "/settings", label: "設定" },
 ] as const;

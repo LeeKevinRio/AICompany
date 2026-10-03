@@ -81,6 +81,35 @@ export interface SectorListResponse {
 export type CreatePositionInput = PositionInput;
 export type UpdatePositionInput = PositionInput;
 
+/**
+ * Body of `PATCH /api/positions/{id}`: only the three fields the inventory
+ * page edits inline. Decimals travel as strings; `note: null` clears the
+ * note. Only keys that actually changed are ever present.
+ */
+export interface PositionPatchInput {
+  quantity?: string;
+  avg_cost?: string;
+  note?: string | null;
+}
+
+/**
+ * The fields `EditPositionModal` reads. Both `Position` (`GET /api/positions`,
+ * the inventory page) and `SummaryPositionItem` (portfolio summary) satisfy
+ * it, so the modal no longer depends on the valuation-carrying shape.
+ */
+export interface EditablePosition {
+  id: number;
+  symbol: string;
+  market: Market;
+  quantity: string;
+  avg_cost: string;
+  currency: Currency;
+  instrument_type: InstrumentType;
+  opened_at: string | null;
+  sector?: string | null;
+  note: string | null;
+}
+
 /** Backend `DataStatus` (StrEnum) — the four-layer price degradation ladder. */
 export type PriceDataStatus = "fresh" | "backup" | "cached_stale" | "unavailable";
 

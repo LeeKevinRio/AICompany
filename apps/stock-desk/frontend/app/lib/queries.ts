@@ -1,7 +1,9 @@
 "use client";
 
+import type { QueryClient } from "@tanstack/react-query";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ApiError,
   ackAlertEvent,
   createAlert,
   createPosition,
@@ -28,6 +30,7 @@ import {
   importKellyBacktest,
   importPositionsCsv,
   patchAlert,
+  patchPosition,
   postPlaybookConfirmRules,
   postPlaybookEmergencyExit,
   putKellyInput,
@@ -47,6 +50,8 @@ import type {
   KellyManualInput,
   Market,
   PlaybookConfirmRulesInput,
+  PositionPatchInput,
+  PositionsResponse,
   UpdatePositionInput,
 } from "./types";
 
@@ -88,24 +93,30 @@ export function usePositions(enabled: boolean) {
 }
 
 /**
- * 送出體驗體檢 (CEO 實測 2026-08-16): a position edit changes market value,
- * so an edit's invalidation must reach every screen a market-value change
- * could stale, not just the positions list — `["portfolio-summary"]` (總覽
- * table + summary cards) *and* `["portfolio-limits"]` (FR-8's five risk
- * caps, judged over the whole book). All three of `useCreatePosition` /
- * `useUpdatePosition` / `useDeletePosition` / `useImportPositionsCsv` below
- * already invalidated all three keys before this audit — confirmed complete,
- * no query key was missing.
+ * Query-key prefixes a position change can stale. A quantity / cost edit moves
+ * market value, risk limits and (through the held flag and cost basis) the
+ * per-symbol advice and leverage views, so all five prefixes are invalidated
+ * together by every position mutation.
  */
+export const POSITION_DEPENDENT_QUERY_KEYS = [
+  "positions",
+  "portfolio-summary",
+  "portfolio-limits",
+  "advice",
+  "leverage",
+] as const;
+
+export function invalidatePositionQueries(queryClient: QueryClient): void {
+  for (const key of POSITION_DEPENDENT_QUERY_KEYS) {
+    void queryClient.invalidateQueries({ queryKey: [key] });
+  }
+}
+
 export function useCreatePosition() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreatePositionInput) => createPosition(input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
-    },
+    onSuccess: () => invalidatePositionQueries(queryClient),
   });
 }
 
@@ -114,10 +125,29 @@ export function useUpdatePosition() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: UpdatePositionInput }) =>
       updatePosition(id, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
+    onSuccess: () => invalidatePositionQueries(queryClient),
+  });
+}
+
+/**
+ * Inline inventory edit: `PATCH /api/positions/{id}` with only the changed
+ * subset of `{quantity, avg_cost, note}`. The server's response replaces that
+ * row in the cached list (server-confirmed data, not an optimistic guess) so
+ * the row never flashes its old value, and every dependent query is then
+ * re-fetched.
+ */
+export function usePatchPosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number; input: PositionPatchInput }) =>
+      patchPosition(id, input),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<PositionsResponse>(["positions"], (current) =>
+        current
+          ? { ...current, items: current.items.map((item) => (item.id === saved.id ? saved : item)) }
+          : current,
+      );
+      invalidatePositionQueries(queryClient);
     },
   });
 }
@@ -126,10 +156,11 @@ export function useDeletePosition() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => deletePosition(id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
+    onSuccess: () => invalidatePositionQueries(queryClient),
+    // A 404 means the row is already gone elsewhere: re-fetch so the list
+    // catches up instead of keeping a stale row.
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 404) invalidatePositionQueries(queryClient);
     },
   });
 }
@@ -165,11 +196,7 @@ export function useImportPositionsCsv() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => importPositionsCsv(file),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
-    },
+    onSuccess: () => invalidatePositionQueries(queryClient),
   });
 }
 

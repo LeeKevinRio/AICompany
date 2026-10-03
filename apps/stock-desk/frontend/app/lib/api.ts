@@ -32,6 +32,7 @@ import type {
   PortfolioLimitsResponse,
   PortfolioSummaryResponse,
   Position,
+  PositionPatchInput,
   PositionsResponse,
   SectorListResponse,
   SectorMomentumResponse,
@@ -210,6 +211,15 @@ export function createPosition(input: CreatePositionInput): Promise<Position> {
 export function updatePosition(id: number, input: UpdatePositionInput): Promise<Position> {
   return request<Position>(`/api/positions/${id}`, {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/** `PATCH /api/positions/{id}`: partial update of quantity / avg_cost / note only. */
+export function patchPosition(id: number, input: PositionPatchInput): Promise<Position> {
+  return request<Position>(`/api/positions/${id}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });

@@ -27,6 +27,11 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  // The old 匯入／新增 page became the inventory page at `/positions`; keep
+  // old bookmarks working. Temporary (307) so the move stays reversible.
+  async redirects() {
+    return [{ source: "/positions/import", destination: "/positions", permanent: false }];
+  },
 };
 
 export default nextConfig;

@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { positionsTemplateCsvUrl } from "../../lib/api";
-import { ErrorPanel } from "../../components/ErrorPanel";
-import { shouldBlockPositionSubmit, submitButtonState } from "../../lib/positionFormSubmit";
-import { useImportPositionsCsv } from "../../lib/queries";
+import { positionsTemplateCsvUrl } from "../lib/api";
+import { ErrorPanel } from "../components/ErrorPanel";
+import { shouldBlockPositionSubmit, submitButtonState } from "../lib/positionFormSubmit";
+import { useImportPositionsCsv } from "../lib/queries";
 
 export function ImportCsvSection() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -30,31 +30,27 @@ export function ImportCsvSection() {
   }
 
   return (
-    <section className="rounded-lg border border-neutral-800 p-5">
-      <h2 className="text-lg font-semibold text-neutral-100">CSV 匯入</h2>
-      <p className="mt-1 text-sm text-neutral-400">
-        下載範本並依格式填寫後上傳，即可一次匯入多筆部位。
-      </p>
+    <div>
       <a
         href={positionsTemplateCsvUrl}
-        className="mt-3 inline-block text-sm text-sky-400 underline hover:text-sky-300"
+        className="inline-flex min-h-11 items-center text-sm text-sky-400 underline hover:text-sky-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
       >
         下載 CSV 範本
       </a>
 
-      <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <form onSubmit={handleSubmit} className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
         <input
           ref={fileInputRef}
           type="file"
           accept=".csv,text/csv"
           aria-label="選擇 CSV 檔案"
           onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-          className="text-sm text-neutral-300 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-2 file:text-sm file:text-neutral-100 hover:file:bg-neutral-700"
+          className="text-sm text-neutral-300 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-800 file:min-h-11 file:px-3 file:py-2 file:text-sm file:text-neutral-100 hover:file:bg-neutral-700"
         />
         <button
           type="submit"
           disabled={!selectedFile || submitButton.disabled}
-          className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitButton.label}
         </button>
@@ -70,7 +66,7 @@ export function ImportCsvSection() {
         <div className="mt-4 space-y-3">
           <p role="status" className="rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
             成功匯入 {importMutation.data.imported} 筆。
-            <Link href="/" className="ml-2 underline hover:text-emerald-200">
+            <Link href="/" className="ml-2 inline-flex min-h-11 items-center underline hover:text-emerald-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
               回總覽查看
             </Link>
           </p>
@@ -106,6 +102,6 @@ export function ImportCsvSection() {
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }

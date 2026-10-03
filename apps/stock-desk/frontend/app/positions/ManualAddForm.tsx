@@ -1,26 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError } from "../../lib/api";
-import { ErrorPanel } from "../../components/ErrorPanel";
-import { SymbolCombobox } from "../../components/SymbolCombobox";
-import { applyDirectorySelection, sectorAfterDirectorySelection } from "../../lib/directorySearch";
+import { ApiError } from "../lib/api";
+import { ErrorPanel } from "../components/ErrorPanel";
+import { SymbolCombobox } from "../components/SymbolCombobox";
+import { applyDirectorySelection, sectorAfterDirectorySelection } from "../lib/directorySearch";
 import {
   CURRENCY_OPTIONS,
   INSTRUMENT_TYPE_OPTIONS,
   MARKET_OPTIONS,
   SECTOR_SOURCE_DISCLOSURE,
   SECTOR_US_DISABLED_HINT,
-} from "../../lib/format";
-import { shouldBlockPositionSubmit, submitButtonState } from "../../lib/positionFormSubmit";
-import { useCreatePosition, useSectors } from "../../lib/queries";
+} from "../lib/format";
+import { unmappedFieldMessages } from "../lib/inventoryEdit";
+import { ADD_FAILED_LABEL, ADD_PENDING_LABEL, ADD_SUBMIT_LABEL } from "../lib/inventoryWording";
+import { shouldBlockPositionSubmit, submitButtonState } from "../lib/positionFormSubmit";
+import { useCreatePosition, useSectors } from "../lib/queries";
 import type {
   CreatePositionInput,
   Currency,
   DirectoryItem,
   InstrumentType,
   Market,
-} from "../../lib/types";
+} from "../lib/types";
 
 interface FormState {
   symbol: string;
@@ -63,13 +65,21 @@ function FieldError({ message }: { message: string | undefined }) {
   return <p className="mt-1 text-xs text-red-400">{message}</p>;
 }
 
-export function ManualAddForm() {
+/**
+ * Add form of the inventory page. The surrounding section title and the
+ * success line live on the page (the section may be collapsed when the add
+ * succeeds), so this component only reports success through `onSuccess`.
+ */
+export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => void } = {}) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const createMutation = useCreatePosition();
   const sectors = useSectors(true);
 
   const fieldErrors = createMutation.error instanceof ApiError ? createMutation.error.fieldErrors : {};
-  const submitButton = submitButtonState(createMutation.isPending, "新增部位", "新增中…");
+  // Field errors without an input in this form (e.g. the model-level `body`
+  // error) are shown in an error panel instead of being dropped.
+  const unmappedErrors = unmappedFieldMessages(createMutation.error, Object.keys(FIELD_LABELS));
+  const submitButton = submitButtonState(createMutation.isPending, ADD_SUBMIT_LABEL, ADD_PENDING_LABEL);
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -120,14 +130,16 @@ export function ManualAddForm() {
       note: form.note.trim() === "" ? null : form.note.trim(),
     };
     createMutation.mutate(payload, {
-      onSuccess: () => setForm(EMPTY_FORM),
+      onSuccess: (created) => {
+        setForm(EMPTY_FORM);
+        onSuccess?.(created.symbol);
+      },
     });
   }
 
   return (
-    <section className="rounded-lg border border-neutral-800 p-5">
-      <h2 className="text-lg font-semibold text-neutral-100">手動新增部位</h2>
-      <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div>
+      <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="symbol" className="block text-sm text-neutral-400">
             {FIELD_LABELS.symbol}
@@ -314,7 +326,7 @@ export function ManualAddForm() {
           <button
             type="submit"
             disabled={submitButton.disabled}
-            className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-11 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitButton.label}
           </button>
@@ -323,15 +335,14 @@ export function ManualAddForm() {
 
       {createMutation.isError && Object.keys(fieldErrors).length === 0 && (
         <div className="mt-4">
-          <ErrorPanel label="新增失敗" error={createMutation.error} />
+          <ErrorPanel label={ADD_FAILED_LABEL} error={createMutation.error} />
         </div>
       )}
-
-      {createMutation.isSuccess && (
-        <p role="status" className="mt-4 rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
-          已新增部位「{createMutation.data.symbol}」
-        </p>
-      )}
-    </section>
+      {unmappedErrors.map((message) => (
+        <div key={message} className="mt-4">
+          <ErrorPanel label={ADD_FAILED_LABEL} error={new ApiError(message, 422)} />
+        </div>
+      ))}
+    </div>
   );
 }

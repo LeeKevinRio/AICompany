@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { ErrorPanel } from "./ErrorPanel";
 import { SymbolCombobox } from "./SymbolCombobox";
+import { unmappedFieldMessages } from "../lib/inventoryEdit";
+import { SAVE_FAILED_LABEL } from "../lib/inventoryWording";
 import { applyDirectorySelection, sectorAfterDirectorySelection } from "../lib/directorySearch";
 import {
   CURRENCY_OPTIONS,
@@ -18,8 +20,8 @@ import type {
   Currency,
   DirectoryItem,
   InstrumentType,
+  EditablePosition,
   Market,
-  SummaryPositionItem,
   UpdatePositionInput,
 } from "../lib/types";
 
@@ -35,10 +37,10 @@ interface FormState {
   note: string;
 }
 
-// `SummaryPositionItem` carries every `PositionInput` field plus `id`, so
-// the edit form can be pre-filled from the row the user clicked without an
-// extra fetch.
-function toFormState(position: SummaryPositionItem): FormState {
+// `EditablePosition` carries every `PositionInput` field plus `id`, so the
+// edit form can be pre-filled from the row the user clicked (home summary or
+// inventory list) without an extra fetch.
+function toFormState(position: EditablePosition): FormState {
   return {
     symbol: position.symbol,
     market: position.market,
@@ -88,7 +90,7 @@ export function EditPositionModal({
   position,
   onClose,
 }: {
-  position: SummaryPositionItem;
+  position: EditablePosition;
   onClose: () => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(position));
@@ -97,6 +99,9 @@ export function EditPositionModal({
 
   const fieldErrors =
     updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
+  // Field errors without an input in this form (e.g. the model-level `body`
+  // error) are shown in an error panel instead of being dropped.
+  const unmappedErrors = unmappedFieldMessages(updateMutation.error, Object.keys(FIELD_LABELS));
   const saveButton = submitButtonState(updateMutation.isPending, "儲存變更", "儲存中…");
 
   useEffect(() => {
@@ -397,6 +402,11 @@ export function EditPositionModal({
             <ErrorPanel label="儲存失敗" error={updateMutation.error} />
           </div>
         )}
+        {unmappedErrors.map((message) => (
+          <div key={message} className="mt-4">
+            <ErrorPanel label={SAVE_FAILED_LABEL} error={new ApiError(message, 422)} />
+          </div>
+        ))}
       </div>
     </div>
   );

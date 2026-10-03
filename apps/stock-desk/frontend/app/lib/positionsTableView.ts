@@ -396,7 +396,7 @@ export function sortPositions(
 /**
  * NavBar current-page rule (spec §6.1). Whole path segments are compared:
  * `/position/<symbol>` (single-stock page, reached from 總覽) highlights 總覽,
- * and must never be confused with `/positions/import` — they differ by one
+ * and must never be confused with `/positions` (the inventory page) — they differ by one
  * `s`, so a bare `startsWith("/position")` would be wrong.
  */
 export function isNavItemActive(pathname: string | null, href: string): boolean {

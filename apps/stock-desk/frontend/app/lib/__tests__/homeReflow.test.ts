@@ -22,6 +22,7 @@ import {
   sortPositions,
   sortStateFromOptionId,
 } from "../positionsTableView";
+import { INVENTORY_NAV_LABEL, INVENTORY_PAGE_TITLE, INVENTORY_ROUTE } from "../inventoryWording";
 import { riskGaugeBarFillClass, riskGaugeChipClass } from "../riskGauge";
 import type { LimitCheck, LimitStatus, PriceChange, SummaryPositionItem } from "../types";
 
@@ -92,9 +93,6 @@ function render(
       namesBySymbol: extra.names ?? {},
       initialExpandedIds: extra.initialExpandedIds,
       changeMode: "close_only",
-      pendingDeleteId: null,
-      onEdit: () => {},
-      onDelete: () => {},
     }),
   );
 }
@@ -283,14 +281,43 @@ describe("持倉表結構（瘦身）", () => {
     expect(html).toContain("focus-visible:outline-2");
   });
 
-  it("展開區八個欄位標籤齊全（沿用舊表頭字面）＋編輯／刪除", () => {
+  it("展開區八個欄位標籤齊全（沿用舊表頭字面）＋「到庫存修改」連結，無編輯／刪除／移除按鈕", () => {
     const detail = html.slice(html.indexOf('id="pos-detail-7"'), html.indexOf('id="pos-detail-8"'));
     for (const label of Object.values(DETAIL_FIELD_LABELS)) {
       expect(detail, label).toContain(label);
     }
-    expect(detail).toContain("編輯");
-    expect(detail).toContain("刪除");
+    expect(detail).toContain("到庫存修改");
     expect(detail).toContain("min-h-11");
+    expect(detail).not.toContain("編輯");
+    expect(detail).not.toContain("刪除");
+    expect(detail).not.toContain("移除");
+    // Up to this row's own end (the next row group starts with its own chevron button).
+    const ownDetail = detail.slice(0, detail.indexOf('<div role="rowgroup"') === -1 ? undefined : detail.indexOf('<div role="rowgroup"'));
+    expect(ownDetail).not.toContain("<button");
+  });
+
+  it("AC-8／S19：連結指向 /positions#pos-{id}，sky 底線、44px、focus-visible；每列字面與 class 一致", () => {
+    const detail7 = html.slice(html.indexOf('id="pos-detail-7"'), html.indexOf('id="pos-detail-8"'));
+    const link = /<a class="([^"]*)" href="\/positions#pos-7">到庫存修改<\/a>/.exec(detail7);
+    expect(link, "link markup").not.toBeNull();
+    const cls = link?.[1] ?? "";
+    for (const token of ["text-sky-400", "underline", "min-h-11", "focus-visible:outline-sky-400"]) {
+      expect(cls, token).toContain(token);
+    }
+    const detail8 = html.slice(html.indexOf('id="pos-detail-8"'));
+    const link8 = /<a class="([^"]*)" href="\/positions#pos-8">到庫存修改<\/a>/.exec(detail8);
+    expect(link8?.[1]).toBe(cls);
+  });
+
+  it("首頁原始碼不再持有 EditPositionModal／刪除流程，也不依損益或風險改變連結", () => {
+    const src = readSource("../../components/PositionsTable.tsx");
+    expect(src).not.toContain("EditPositionModal");
+    expect(src).not.toContain("useDeletePosition");
+    expect(src).not.toContain("window.confirm");
+    expect(src).not.toContain("deleteButtonState");
+    expect(src).not.toContain("onEdit");
+    expect(src).not.toContain("onDelete");
+    expect(src).toContain("HOME_LINK_TO_INVENTORY");
   });
 
   it("展開區的欄位不在預設可見區（預設列內沒有這些標籤）", () => {
@@ -371,15 +398,16 @@ describe("風險儀表配色（非紅綠）", () => {
 });
 
 describe("NavBar 目前頁", () => {
-  it("總覽：/ 與 /position/<symbol>，但 /positions/import 不亮總覽", () => {
+  it("總覽：/ 與 /position/<symbol>，但 /positions 不亮總覽", () => {
     expect(isNavItemActive("/", "/")).toBe(true);
     expect(isNavItemActive("/position/2330", "/")).toBe(true);
-    expect(isNavItemActive("/positions/import", "/")).toBe(false);
+    expect(isNavItemActive("/positions", "/")).toBe(false);
   });
 
-  it("匯入／新增只亮在 /positions/import", () => {
-    expect(isNavItemActive("/positions/import", "/positions/import")).toBe(true);
-    expect(isNavItemActive("/position/2330", "/positions/import")).toBe(false);
+  it("庫存只亮在 /positions；/position/2330 不亮庫存（只差一個 s）", () => {
+    expect(isNavItemActive("/positions", "/positions")).toBe(true);
+    expect(isNavItemActive("/position/2330", "/positions")).toBe(false);
+    expect(isNavItemActive("/", "/positions")).toBe(false);
   });
 
   it("其他頁完整路徑段比對", () => {
@@ -394,7 +422,9 @@ describe("NavBar 目前頁", () => {
     const src = readSource("../../components/NavBar.tsx");
     expect(src).toContain('aria-current={active ? "page" : undefined}');
     expect(src).toContain("border-b-2");
-    expect(src).toContain('label: "匯入／新增"');
+    expect(src).toContain("label: INVENTORY_NAV_LABEL");
+    expect(src).toContain("href: INVENTORY_ROUTE");
+    expect(src).not.toContain("匯入／新增");
     expect(src).not.toContain("匯入 / 新增部位");
     expect(src).not.toContain("font-medium\" : \"");
   });
@@ -497,13 +527,26 @@ describe("手機排序下拉（< md）", () => {
   });
 });
 
-describe("NavBar 第二階段（匯入／新增、< 768px 兩列）", () => {
+describe("NavBar 第二階段（庫存、< 768px 兩列）", () => {
   const src = readSource("../../components/NavBar.tsx");
 
-  it("導覽字面為「匯入／新增」（全形斜線），舊字面不在導覽；頁面 h1 維持原字", () => {
-    expect(src).toContain('label: "匯入／新增"');
+  it("導覽第三項為「庫存」→ /positions（S1），舊字面不在導覽；頁面 h1 為「庫存」（S2）", () => {
+    expect(INVENTORY_NAV_LABEL).toBe("庫存");
+    expect(INVENTORY_ROUTE).toBe("/positions");
+    expect(src).toContain("{ href: INVENTORY_ROUTE, label: INVENTORY_NAV_LABEL }");
+    expect(src).not.toContain("匯入／新增");
     expect(src).not.toContain("匯入 / 新增部位");
-    expect(readSource("../../positions/import/page.tsx")).toContain("匯入 / 新增部位");
+    expect(INVENTORY_PAGE_TITLE).toBe("庫存");
+    expect(readSource("../../positions/page.tsx")).toContain("{INVENTORY_PAGE_TITLE}");
+  });
+
+  it("導覽順序：總覽、排程台、庫存、回測、設定，且 NAV 區塊內無 /positions/import", () => {
+    const start = src.indexOf("const NAV_ITEMS");
+    const block = src.slice(start, src.indexOf("] as const", start));
+    const order = ["總覽", "/playbook", "INVENTORY_ROUTE", "/backtest", "/settings"].map((n) => block.indexOf(n));
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(block).not.toContain("/positions/import");
   });
 
   it("< 768px logo 自成一列、導覽單列；≥ 768px 才並排（斷點為 md，不是 sm）", () => {

@@ -1,7 +1,7 @@
 /**
  * Pure guard/state-derivation functions behind the pending-state fix for the
  * four持倉 submit surfaces (EditPositionModal 儲存, ManualAddForm 新增,
- * ImportCsvSection 匯入, PositionsTable 刪除 — CEO 實測 2026-08-16:「編輯現有
+ * ImportCsvSection 匯入, inventory page 移除 — CEO 實測 2026-08-16:「編輯現有
  * 庫存時按下儲存不會馬上更新且畫面沒有 loading」).
  *
  * Every one of the four already rendered a "動作中…" label from
@@ -18,7 +18,7 @@
  * of every `handleSubmit` so a second mutate() can never fire while the
  * first is still in flight, regardless of which input path triggered it.
  *
- * The delete action is different in shape: `PositionsTable` shares one
+ * The remove action is different in shape: the inventory page shares one
  * `useDeletePosition()` mutation *instance* across every row (a single hook
  * call feeding many buttons), so keying a row's pending indicator off
  * `mutation.variables` (the id of whichever delete request is most recently
@@ -27,10 +27,12 @@
  * the first row's button silently stops looking disabled while its request
  * is still outstanding — a second click there fires a *second* DELETE for
  * the same id. `deleteButtonState` derives every row's button from a
- * locally-tracked `pendingDeleteId` instead (owned by `PositionsTable`) and
+ * locally-tracked `pendingDeleteId` instead (owned by the inventory page) and
  * disables *every* row's button while any delete is in flight, so two
  * deletes can never race on the one shared mutation instance.
  */
+
+import { ROW_REMOVE_LABEL, ROW_REMOVING_LABEL } from "./inventoryWording";
 
 export interface SubmitButtonState {
   disabled: boolean;
@@ -63,15 +65,15 @@ export function submitButtonState(
 }
 
 /**
- * Per-row 刪除 button state derived from a locally-tracked in-flight id
+ * Per-row 移除 button state derived from a locally-tracked in-flight id
  * (see module doc comment for why this cannot simply read
  * `deleteMutation.variables` off the shared mutation instance). Every row is
  * disabled while any delete is pending; only the row actually being deleted
- * shows the "刪除中…" label.
+ * shows the "移除中…" label.
  */
 export function deleteButtonState(pendingDeleteId: number | null, rowId: number): SubmitButtonState {
   return {
     disabled: pendingDeleteId !== null,
-    label: pendingDeleteId === rowId ? "刪除中…" : "刪除",
+    label: pendingDeleteId === rowId ? ROW_REMOVING_LABEL : ROW_REMOVE_LABEL,
   };
 }
