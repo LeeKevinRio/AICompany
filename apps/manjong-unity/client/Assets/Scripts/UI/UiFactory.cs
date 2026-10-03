@@ -189,6 +189,10 @@ namespace Manjong.UI
             colors.colorMultiplier = 1f;
             colors.fadeDuration = 0.08f;
             btn.colors = colors;
+            // Mouse / touch UI: no automatic keyboard navigation that could leave a stray "selected" tint.
+            var nav = btn.navigation;
+            nav.mode = Navigation.Mode.None;
+            btn.navigation = nav;
 
             var text = CreateLabel(img.transform, "Label", label, fontSize, Palette.Ink, TextAnchor.MiddleCenter);
             Stretch(text.rectTransform, 12f, 4f, 12f, 4f);

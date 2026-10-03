@@ -33,10 +33,10 @@ namespace Manjong.UI
     {
         /// <summary>My own hand.</summary>
         public static readonly TileSize Large = new TileSize(76f, 106f, 46, 20, 12, 6f);
-        /// <summary>Discard rivers and my melds.</summary>
-        public static readonly TileSize Small = new TileSize(40f, 54f, 25, 12, 7, 3f);
-        /// <summary>Opponent melds / flowers, result panel hands.</summary>
-        public static readonly TileSize Mini = new TileSize(30f, 42f, 19, 10, 6, 3f);
+        /// <summary>Discard rivers and my melds. Sub caption (萬/筒/條) >= 16 so it stays legible at 1280x720.</summary>
+        public static readonly TileSize Small = new TileSize(44f, 60f, 27, 18, 8, 3f);
+        /// <summary>Opponent melds / flowers, result panel hands. Sub caption >= 13.</summary>
+        public static readonly TileSize Mini = new TileSize(32f, 44f, 20, 14, 6, 3f);
         /// <summary>Opponent concealed hands (backs only).</summary>
         public static readonly TileSize Back = new TileSize(26f, 36f, 0, 0, 5, 3f);
     }

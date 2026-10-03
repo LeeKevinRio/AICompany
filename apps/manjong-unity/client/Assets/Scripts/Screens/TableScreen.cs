@@ -10,9 +10,12 @@ using UnityEngine.UI;
 namespace Manjong.Screens
 {
     /// <summary>
-    /// The game table. Every render takes a whole GameView; each region keeps a signature string and is
-    /// rebuilt (old objects destroyed) only when its data changed.
-    /// Relative seat = (seat - mySeat + 4) % 4: 0 me (bottom), 1 next (right), 2 opposite (top), 3 previous (left).
+    /// The game table, driven by WebSocket messages (contract v0.2).
+    /// "step" and "state" messages go into one FIFO queue that a coroutine plays in order: each step is drawn and
+    /// held for a short delay; a "state" is applied when it reaches the head of the queue and only then unlocks
+    /// input (when its options are non-empty). Sending start / action locks input until the next "state".
+    /// Every render takes a whole GameView; each region keeps a signature string and is rebuilt only when its
+    /// data changed. Relative seat = (seat - mySeat + 4) % 4: 0 me (bottom), 1 next (right), 2 opposite (top), 3 previous (left).
     /// </summary>
     public class TableScreen : MonoBehaviour
     {
@@ -20,12 +23,15 @@ namespace Manjong.Screens
         const float StepDelay = 0.35f;
         const float HandStartDelay = 0.8f;
         const float WinDelay = 1.2f;
+        const float FastDelay = 0.08f;
+        const int FastForwardQueueLength = 6;
 
         const float InfoW = 250f;
         const float InfoH = 110f;
-        const float SidePanelW = 270f;
+        const float SidePanelW = 300f;
         const float SidePanelH = 530f;
-        const int RiverCols = 9;
+        const int RiverColsWide = 10;   // bottom / top rivers
+        const int RiverColsNarrow = 8;  // left / right rivers
         const float RiverGap = 2f;
         const float SelectLift = 24f;
 
@@ -39,6 +45,13 @@ namespace Manjong.Screens
             public string flowerSig;
             public string handSig;
             public string meldSig;
+        }
+
+        /// <summary>Exactly one of step / state is set.</summary>
+        class QueuedItem
+        {
+            public StepDto step;
+            public GameView state;
         }
 
         AppController app;
@@ -57,14 +70,26 @@ namespace Manjong.Screens
         RectTransform actionBar;
         string actionSig;
 
+        Image hintBar;
+        Image hintRing;
+        Text hintText;
+
+        GameObject connectionBanner;
+        Text connectionText;
+        ConnectionState connectionState = ConnectionState.Ready;
+
         readonly Text[] eventLines = new Text[MaxEvents];
         readonly List<string> events = new List<string>();
 
         ResultPanel resultPanel;
 
+        readonly Queue<QueuedItem> queue = new Queue<QueuedItem>();
         GameView view;
+        bool lastRenderFinal;
+        bool pumping;
         bool playing;
         bool awaiting;
+        bool fastForward;
         int selectedIndex = -1;
         string myHandContentSig;
         readonly List<string> handOrder = new List<string>();
@@ -80,40 +105,51 @@ namespace Manjong.Screens
             for (int rel = 0; rel < 4; rel++) seats[rel] = BuildSeat(rel);
             BuildTopBar();
             BuildEventLog();
+            BuildHintBar();
 
             actionBar = UiFactory.CreateRect("ActionBar", root);
             UiFactory.Place(actionBar, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-24f, 232f), new Vector2(1000f, 84f));
 
+            BuildConnectionBanner();
+
             resultPanel = new ResultPanel();
             resultPanel.Build(root);
+        }
+
+        static int RiverColsFor(int rel)
+        {
+            return rel == 0 || rel == 2 ? RiverColsWide : RiverColsNarrow;
         }
 
         void BuildTable()
         {
             var table = UiFactory.CreatePanel(root, "Table", Palette.Mint, 48);
             tableArea = table.rectTransform;
-            UiFactory.Place(tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 10f), new Vector2(1240f, 660f));
+            UiFactory.Place(tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 16f), new Vector2(1240f, 680f));
             UiFactory.CreateRing(table.transform, "Edge", Palette.MintDeep, 48, 8, 0f);
 
             // Center info
             var info = UiFactory.CreatePanel(tableArea, "CenterInfo", Palette.Card, 28);
-            UiFactory.Place(info.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(370f, 170f));
+            UiFactory.Place(info.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(340f, 150f));
             UiFactory.AddShadow(info, Palette.CardShadow, new Vector2(0f, -4f));
-            centerRound = UiFactory.CreateLabel(info.transform, "Round", "", 34, Palette.Ink, TextAnchor.MiddleCenter);
+            centerRound = UiFactory.CreateLabel(info.transform, "Round", "", 32, Palette.Ink, TextAnchor.MiddleCenter);
             centerRound.fontStyle = FontStyle.Bold;
-            UiFactory.Place(centerRound.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -14f), new Vector2(340f, 46f));
-            centerWall = UiFactory.CreateLabel(info.transform, "Wall", "", 30, Palette.Ink, TextAnchor.MiddleCenter);
-            UiFactory.Place(centerWall.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(340f, 42f));
+            UiFactory.Place(centerRound.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -10f), new Vector2(316f, 44f));
+            centerWall = UiFactory.CreateLabel(info.transform, "Wall", "", 28, Palette.Ink, TextAnchor.MiddleCenter);
+            UiFactory.Place(centerWall.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -56f), new Vector2(316f, 40f));
             centerTurn = UiFactory.CreateLabel(info.transform, "Turn", "", 24, Palette.InkSoft, TextAnchor.MiddleCenter);
-            UiFactory.Place(centerTurn.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -110f), new Vector2(350f, 44f));
+            UiFactory.Place(centerTurn.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -98f), new Vector2(326f, 42f));
 
-            // Rivers, positioned around the center info (table-local coordinates).
-            float riverW = RiverCols * (TileSizes.Small.width + RiverGap) - RiverGap;
+            // Rivers around the center info (table-local coordinates). Bottom/top: 10 columns, sides: 8 columns.
+            float step = TileSizes.Small.width + RiverGap;
+            float wideW = RiverColsWide * step - RiverGap;
+            float narrowW = RiverColsNarrow * step - RiverGap;
             float riverH = 4f * (TileSizes.Small.height + RiverGap);
-            rivers[0] = MakeArea("River0", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 1f), new Vector2(0f, -95f), new Vector2(riverW, riverH));
-            rivers[2] = MakeArea("River2", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 95f), new Vector2(riverW, riverH));
-            rivers[1] = MakeArea("River1", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0f, 0.5f), new Vector2(200f, 0f), new Vector2(riverW, riverH));
-            rivers[3] = MakeArea("River3", tableArea, new Vector2(0.5f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-200f, 0f), new Vector2(riverW, riverH));
+            float sideX = wideW * 0.5f + 12f;
+            rivers[0] = MakeArea("River0", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 1f), new Vector2(0f, -85f), new Vector2(wideW, riverH));
+            rivers[2] = MakeArea("River2", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 85f), new Vector2(wideW, riverH));
+            rivers[1] = MakeArea("River1", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0f, 0.5f), new Vector2(sideX, 0f), new Vector2(narrowW, riverH));
+            rivers[3] = MakeArea("River3", tableArea, new Vector2(0.5f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-sideX, 0f), new Vector2(narrowW, riverH));
         }
 
         static RectTransform MakeArea(string name, Transform parent, Vector2 anchor, Vector2 pivot, Vector2 pos, Vector2 size)
@@ -130,15 +166,15 @@ namespace Manjong.Screens
             {
                 case 0: // me, bottom
                     s.info = MakeArea("Seat0Info", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 24f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat0Flowers", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 146f), new Vector2(InfoW, 44f));
-                    s.melds = MakeArea("Seat0Melds", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 156f), new Vector2(900f, TileSizes.Small.height));
+                    s.flowers = MakeArea("Seat0Flowers", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 146f), new Vector2(InfoW, TileSizes.Mini.height));
+                    s.melds = MakeArea("Seat0Melds", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 152f), new Vector2(1000f, TileSizes.Small.height));
                     s.hand = MakeArea("Seat0Hand", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 20f), new Vector2(1400f, TileSizes.Large.height + SelectLift));
                     break;
                 case 2: // opposite, top
                     s.info = MakeArea("Seat2Info", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -20f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat2Flowers", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -136f), new Vector2(InfoW, 44f));
+                    s.flowers = MakeArea("Seat2Flowers", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -136f), new Vector2(InfoW, TileSizes.Mini.height));
                     s.hand = MakeArea("Seat2Hand", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -20f), new Vector2(620f, TileSizes.Back.height));
-                    s.melds = MakeArea("Seat2Melds", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -68f), new Vector2(760f, TileSizes.Mini.height));
+                    s.melds = MakeArea("Seat2Melds", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(760f, TileSizes.Mini.height));
                     break;
                 default: // sides: 1 right, 3 left
                 {
@@ -146,10 +182,11 @@ namespace Manjong.Screens
                     var panel = MakeArea("Seat" + rel + "Panel", root,
                         new Vector2(right ? 1f : 0f, 0.5f), new Vector2(right ? 1f : 0f, 0.5f),
                         new Vector2(right ? -20f : 20f, 45f), new Vector2(SidePanelW, SidePanelH));
+                    float innerW = SidePanelW - 20f;
                     s.info = MakeArea("Info", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, 0f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Flowers", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -118f), new Vector2(InfoW, 44f));
-                    s.hand = MakeArea("Hand", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -170f), new Vector2(InfoW, 3f * (TileSizes.Back.height + 2f)));
-                    s.melds = MakeArea("Melds", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -296f), new Vector2(InfoW, 3f * (TileSizes.Mini.height + 4f)));
+                    s.flowers = MakeArea("Flowers", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -118f), new Vector2(innerW, TileSizes.Mini.height));
+                    s.hand = MakeArea("Hand", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -172f), new Vector2(innerW, 3f * (TileSizes.Back.height + 2f)));
+                    s.melds = MakeArea("Melds", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -298f), new Vector2(innerW, 3f * (TileSizes.Mini.height + 4f)));
                     break;
                 }
             }
@@ -178,35 +215,96 @@ namespace Manjong.Screens
             }
         }
 
-        // ---------- Public API ----------
-
-        /// <summary>Entering the table (new or resumed game).</summary>
-        public void BeginGame(ActionResponse response)
+        /// <summary>Waits hint just above my flowers, next to the hand: "打出後聽…" / "聽牌中…".</summary>
+        void BuildHintBar()
         {
-            ResetState();
-            Play(response);
+            hintBar = UiFactory.CreatePanel(root, "WaitHint", Palette.Card, 20);
+            UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 196f), new Vector2(700f, 50f));
+            UiFactory.AddShadow(hintBar, Palette.CardShadow, new Vector2(0f, -3f));
+            hintRing = UiFactory.CreateRing(hintBar.transform, "Ring", Palette.Coral, 20, 3, 0f);
+            hintText = UiFactory.CreateLabel(hintBar.transform, "Text", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
+            UiFactory.Stretch(hintText.rectTransform, 18f, 4f, 14f, 4f);
+            hintBar.gameObject.SetActive(false);
         }
 
-        /// <summary>Plays the steps one by one, then applies the final view. Input is locked meanwhile.</summary>
-        public void Play(ActionResponse response)
+        void BuildConnectionBanner()
+        {
+            var banner = UiFactory.CreatePanel(root, "ConnectionBanner", Palette.Butter, 22);
+            UiFactory.Place(banner.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -118f), new Vector2(660f, 58f));
+            UiFactory.AddShadow(banner, Palette.CardShadow, new Vector2(0f, -3f));
+            UiFactory.CreateRing(banner.transform, "Ring", Palette.LastDiscardRing, 22, 3, 0f);
+            connectionText = UiFactory.CreateLabel(banner.transform, "Text", "", 28, Palette.Ink, TextAnchor.MiddleCenter);
+            connectionText.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(connectionText.rectTransform, 16f, 4f, 16f, 4f);
+            connectionBanner = banner.gameObject;
+            connectionBanner.SetActive(false);
+        }
+
+        // ---------- Public API (called by AppController) ----------
+
+        /// <summary>Entering the table after "start" (new or resumed game). Messages follow via Enqueue*.</summary>
+        public void BeginGame()
         {
             StopAllCoroutines();
-            awaiting = false;
-            StartCoroutine(PlayRoutine(response));
+            ResetState();
+            awaiting = true; // locked until the first "state"
+            connectionState = ConnectionState.Ready;
+            connectionBanner.SetActive(false);
         }
 
-        /// <summary>The request failed without a new view: unlock and redraw the last known state.</summary>
-        public void OnActionFailed()
+        public void EnqueueStep(StepDto step)
+        {
+            if (step == null) return;
+            queue.Enqueue(new QueuedItem { step = step });
+            EnsurePump();
+        }
+
+        public void EnqueueState(GameView state)
+        {
+            if (state == null) return;
+            queue.Enqueue(new QueuedItem { state = state });
+            EnsurePump();
+        }
+
+        /// <summary>Reconnected: drop whatever was still queued and wait for the fresh snapshot.</summary>
+        public void PrepareResync()
+        {
+            queue.Clear();
+            fastForward = false;
+            awaiting = true;
+            selectedIndex = -1;
+            if (view != null && !pumping) Render(view, lastRenderFinal);
+        }
+
+        /// <summary>The server reported an error that is not followed by a state: unlock and redraw.</summary>
+        public void OnServerError()
         {
             awaiting = false;
-            if (view != null) Render(view, true);
+            if (view != null && !pumping) Render(view, true);
+        }
+
+        public void SetConnectionState(ConnectionState state)
+        {
+            connectionState = state;
+            if (view != null && !pumping) Render(view, lastRenderFinal);
+            bool ok = state == ConnectionState.Ready;
+            connectionBanner.SetActive(!ok);
+            if (!ok)
+            {
+                connectionText.text = state == ConnectionState.Stopped ? "連線已中斷" : "連線中斷，正在重新連線…";
+                // Above everything on the table, including an open result panel.
+                connectionBanner.transform.SetAsLastSibling();
+            }
         }
 
         public void Hide()
         {
             StopAllCoroutines();
+            pumping = false;
             playing = false;
             awaiting = false;
+            fastForward = false;
+            queue.Clear();
             if (resultPanel != null) resultPanel.Hide();
             gameObject.SetActive(false);
         }
@@ -215,9 +313,13 @@ namespace Manjong.Screens
 
         void ResetState()
         {
+            queue.Clear();
             view = null;
+            lastRenderFinal = false;
+            pumping = false;
             playing = false;
             awaiting = false;
+            fastForward = false;
             selectedIndex = -1;
             myHandContentSig = null;
             handOrder.Clear();
@@ -235,36 +337,93 @@ namespace Manjong.Screens
                     seats[i].meldSig = null;
                 }
             }
+            hintBar.gameObject.SetActive(false);
             resultPanel.Hide();
         }
 
-        IEnumerator PlayRoutine(ActionResponse response)
+        void EnsurePump()
         {
-            playing = true;
-            selectedIndex = -1;
-            resultPanel.Hide();
-            if (view != null) Render(view, false);
+            if (pumping || !gameObject.activeInHierarchy) return;
+            StartCoroutine(PumpRoutine());
+        }
 
-            StepDto[] steps = DtoUtil.Safe(response.steps);
-            for (int i = 0; i < steps.Length; i++)
+        void Update()
+        {
+            // Tap / click anywhere fast-forwards the queued playback.
+#if ENABLE_LEGACY_INPUT_MANAGER
+            if (pumping && playing && !fastForward)
             {
-                StepDto step = steps[i];
-                if (step == null) continue;
-                if (step.view != null) Render(step.view, false);
-                string type = step.@event != null ? step.@event.type : "";
-                if (step.@event != null) PushEvent(step.@event.text);
-                yield return new WaitForSeconds(DelayFor(type));
+                bool tapped = Input.GetMouseButtonDown(0);
+                for (int i = 0; !tapped && i < Input.touchCount; i++)
+                {
+                    if (Input.GetTouch(i).phase == TouchPhase.Began) tapped = true;
+                }
+                if (tapped) fastForward = true;
             }
-
-            playing = false;
-            if (response.view != null) Render(response.view, true);
+#endif
         }
 
-        static float DelayFor(string eventType)
+        IEnumerator PumpRoutine()
         {
+            pumping = true;
+            try
+            {
+                while (queue.Count > 0)
+                {
+                    QueuedItem item = queue.Dequeue();
+                    if (item.state != null)
+                    {
+                        // Authoritative snapshot: apply it and unlock (input is possible only if options exist).
+                        playing = false;
+                        awaiting = false;
+                        fastForward = false;
+                        Render(item.state, true);
+                        continue;
+                    }
+
+                    StepDto step = item.step;
+                    playing = true;
+                    resultPanel.Hide();
+                    if (step.view != null) Render(step.view, false);
+                    PushEvent(EventText(step));
+
+                    string type = step.@event != null ? step.@event.type : "";
+                    float elapsed = 0f;
+                    while (elapsed < CurrentDelay(type))
+                    {
+                        elapsed += Time.unscaledDeltaTime;
+                        yield return null;
+                    }
+                }
+            }
+            finally
+            {
+                // Guaranteed even if a render throws, so the table never stays locked in "playing".
+                pumping = false;
+                playing = false;
+            }
+            if (view != null && !lastRenderFinal) Render(view, false);
+        }
+
+        float CurrentDelay(string eventType)
+        {
+            if (fastForward || queue.Count > FastForwardQueueLength) return FastDelay;
             if (eventType == "hand_start") return HandStartDelay;
             if (eventType == "win") return WinDelay;
             return StepDelay;
+        }
+
+        /// <summary>Server text, except my own draw whose text is empty by contract: "你 摸到 五萬".</summary>
+        static string EventText(StepDto step)
+        {
+            EventDto e = step.@event;
+            if (e == null) return "";
+            string text = DtoUtil.Safe(e.text);
+            if (text.Length == 0 && e.type == "draw" && step.view != null && e.seat == step.view.mySeat && !string.IsNullOrEmpty(e.tile))
+            {
+                return "你 摸到 " + TileFace.Name(e.tile);
+            }
+            return text;
         }
 
         void PushEvent(string text)
@@ -292,7 +451,11 @@ namespace Manjong.Screens
 
         bool CanAct
         {
-            get { return !playing && !awaiting && view != null && view.phase == "playing"; }
+            get
+            {
+                return !playing && !awaiting && view != null && view.phase == "playing" &&
+                       connectionState == ConnectionState.Ready && DtoUtil.HasOptions(view);
+            }
         }
 
         // ---------- Render ----------
@@ -301,6 +464,7 @@ namespace Manjong.Screens
         {
             if (v == null) return;
             view = v;
+            lastRenderFinal = isFinal;
             int mySeat = v.mySeat;
 
             for (int seat = 0; seat < 4; seat++)
@@ -317,6 +481,7 @@ namespace Manjong.Screens
             }
 
             RenderCenter(v);
+            RenderHint(v);
             myCoinsText.text = "我的金幣 " + Format.Coins(v.myCoins);
             RenderActions(v, isFinal);
 
@@ -334,7 +499,8 @@ namespace Manjong.Screens
             if (v.phase == "playing")
             {
                 if (CanAct && DtoUtil.HasDiscardOption(v)) turn = "輪到你：點一張牌，再點一次打出";
-                else if (CanAct && DtoUtil.Safe(v.options).Length > 0) turn = "請選擇動作";
+                else if (CanAct) turn = "請選擇動作";
+                else if (awaiting && !playing) turn = "等待伺服器…";
                 else if (v.turnSeat >= 0)
                 {
                     var p = DtoUtil.Player(v, v.turnSeat);
@@ -344,7 +510,70 @@ namespace Manjong.Screens
             else if (v.phase == "hand_end") turn = "本局結束";
             else if (v.phase == "game_end") turn = "整場結束";
             centerTurn.text = turn;
-            centerTurn.color = CanAct && DtoUtil.Safe(v.options).Length > 0 ? Palette.Ink : Palette.InkSoft;
+            centerTurn.color = CanAct ? Palette.Ink : Palette.InkSoft;
+        }
+
+        // ----- Waits hint -----
+
+        static string FormatWaits(WaitDto[] waits)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < waits.Length; i++)
+            {
+                if (waits[i] == null || string.IsNullOrEmpty(waits[i].tile)) continue;
+                if (sb.Length > 0) sb.Append('、');
+                sb.Append(TileFace.Name(waits[i].tile)).Append("（剩 ").Append(Mathf.Max(0, waits[i].left)).Append('）');
+            }
+            return sb.ToString();
+        }
+
+        static bool AnyDiscardWaits(GameView v)
+        {
+            OptionDto[] opts = DtoUtil.Safe(v.options);
+            for (int i = 0; i < opts.Length; i++)
+            {
+                if (opts[i] != null && opts[i].type == "discard" && DtoUtil.Safe(opts[i].waits).Length > 0) return true;
+            }
+            return false;
+        }
+
+        void RenderHint(GameView v)
+        {
+            string text = "";
+            bool listening = false;
+            bool canDiscard = CanAct && DtoUtil.HasDiscardOption(v);
+
+            if (canDiscard)
+            {
+                if (selectedIndex >= 0 && selectedIndex < handOrder.Count)
+                {
+                    OptionDto opt = DtoUtil.FindOption(v, "discard:" + handOrder[selectedIndex]);
+                    WaitDto[] waits = opt != null ? DtoUtil.Safe(opt.waits) : new WaitDto[0];
+                    string list = FormatWaits(waits);
+                    text = list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌";
+                    listening = list.Length > 0;
+                }
+                else if (AnyDiscardWaits(v))
+                {
+                    text = "有「聽」標記的牌，打出後就會聽牌";
+                }
+            }
+            else if (v.phase == "playing")
+            {
+                string list = FormatWaits(DtoUtil.Safe(v.myWaits));
+                if (list.Length > 0)
+                {
+                    text = "聽牌中：" + list;
+                    listening = true;
+                }
+            }
+
+            bool show = text.Length > 0;
+            hintBar.gameObject.SetActive(show);
+            if (!show) return;
+            hintText.text = text;
+            hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
+            hintRing.gameObject.SetActive(listening);
         }
 
         // ----- Info card -----
@@ -529,7 +758,10 @@ namespace Manjong.Screens
                 OptionDto[] opts = DtoUtil.Safe(v.options);
                 for (int i = 0; i < opts.Length; i++)
                 {
-                    if (opts[i] != null && opts[i].type == "discard") sb.Append(opts[i].id).Append(';');
+                    if (opts[i] != null && opts[i].type == "discard")
+                    {
+                        sb.Append(opts[i].id).Append('/').Append(DtoUtil.Safe(opts[i].waits).Length).Append(';');
+                    }
                 }
             }
             string contentSig = sb.ToString();
@@ -570,9 +802,11 @@ namespace Manjong.Screens
                 bool selected = i == selectedIndex;
                 UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, selected ? SelectLift : 0f), size.Vector);
 
-                bool discardable = canDiscard && DtoUtil.FindOption(v, "discard:" + code) != null;
+                OptionDto opt = canDiscard ? DtoUtil.FindOption(v, "discard:" + code) : null;
+                bool discardable = opt != null;
                 if (canDiscard && !discardable) TileView.AddVeil(tile, size);
                 if (selected) TileView.AddRing(tile, Palette.SelectRing, size, 4);
+                if (discardable && DtoUtil.Safe(opt.waits).Length > 0) AddWaitBadge(tile, size);
 
                 if (discardable)
                 {
@@ -589,6 +823,17 @@ namespace Manjong.Screens
             }
         }
 
+        /// <summary>Small "聽" pill sitting on the top edge of a tile: discarding it leaves me ready.</summary>
+        static void AddWaitBadge(RectTransform tile, TileSize size)
+        {
+            var pill = UiFactory.CreatePanel(tile, "WaitBadge", Palette.Coral, 12);
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, -12f), new Vector2(40f, 28f));
+            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 12, 2, 0f);
+            var t = UiFactory.CreateLabel(pill.transform, "Text", "聽", 20, Palette.Ink, TextAnchor.MiddleCenter);
+            t.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
+        }
+
         // ----- River -----
 
         void RenderRiver(int rel, PlayerView p, GameView v)
@@ -603,10 +848,11 @@ namespace Manjong.Screens
             RectTransform area = rivers[rel];
             UiFactory.DestroyChildren(area);
             TileSize size = TileSizes.Small;
+            int cols = RiverColsFor(rel);
             for (int i = 0; i < discards.Length; i++)
             {
-                int c = i % RiverCols;
-                int r = i / RiverCols;
+                int c = i % cols;
+                int r = i / cols;
                 var t = TileView.CreateFace(area, discards[i], size);
                 UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f),
                     new Vector2(c * (size.width + RiverGap), -r * (size.height + RiverGap)), size.Vector);
@@ -677,7 +923,7 @@ namespace Manjong.Screens
 
         void OnTileClicked(int index)
         {
-            if (!CanAct || app.IsBusy) return;
+            if (!CanAct) return;
             if (index < 0 || index >= handOrder.Count) return;
             string code = handOrder[index];
             OptionDto opt = DtoUtil.FindOption(view, "discard:" + code);
@@ -690,29 +936,29 @@ namespace Manjong.Screens
             }
             selectedIndex = index;
             RenderMyHand(DtoUtil.Player(view, view.mySeat), view);
+            RenderHint(view);
         }
 
         void OnOptionClicked(string actionId)
         {
-            if (!CanAct || app.IsBusy) return;
+            if (!CanAct) return;
             if (DtoUtil.FindOption(view, actionId) == null) return;
             Send(actionId);
         }
 
         void Send(string actionId)
         {
-            awaiting = true;
+            if (!app.SendAction(actionId)) return;
+            awaiting = true; // until the next "state"
             selectedIndex = -1;
             Render(view, true);
-            app.SendAction(view.gameId, actionId);
         }
 
         void OnNextHand()
         {
-            if (view == null || awaiting || app.IsBusy) return;
+            if (view == null || awaiting || pumping) return;
             OptionDto next = DtoUtil.FindOption(view, "next");
-            awaiting = true;
-            app.SendAction(view.gameId, next != null ? next.id : "next");
+            if (app.SendAction(next != null ? next.id : "next")) awaiting = true;
         }
 
         void OnBackToLobby()

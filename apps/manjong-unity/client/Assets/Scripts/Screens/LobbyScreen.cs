@@ -113,7 +113,8 @@ namespace Manjong.Screens
             reliefButton = UiFactory.CreateButton(card, "ReliefButton", "領救濟金", Palette.Butter, 34, OnRelief);
             TopLeft((RectTransform)reliefButton.transform, 40f, 620f, 300f, 80f);
 
-            reliefHint = UiFactory.CreateText(card, "ReliefHint", "金幣低於 1,000 時可領，\n補到 10,000 金幣", 24, Palette.InkSoft, TextAnchor.MiddleLeft);
+            reliefHint = UiFactory.CreateText(card, "ReliefHint",
+                "金幣低於 " + Format.Coins(Economy.MinCoinsToPlay) + " 時可領，\n補到 " + Format.Coins(Economy.ReliefAmount) + " 金幣", 24, Palette.InkSoft, TextAnchor.MiddleLeft);
             TopLeft(reliefHint.rectTransform, 360f, 620f, 420f, 80f);
 
             var note = UiFactory.CreateLabel(card, "CoinNote", "金幣為遊戲內虛擬點數，不可儲值、不可兌換。", 24, Palette.InkSoft, TextAnchor.MiddleLeft);
@@ -162,20 +163,29 @@ namespace Manjong.Screens
             statsText.text = "已打 " + me.handsPlayed + " 局·胡牌 " + me.handsWon + " 次·自摸 " + me.selfDraws +
                              " 次·放槍 " + me.dealIns + " 次·最大 " + me.bestTai + " 台";
 
-            bool canPlay = me.coins >= AppController.MinCoinsToPlay;
-            UiFactory.SetInteractable(startButton, canPlay);
+            bool canPlay = me.coins >= Economy.MinCoinsToPlay;
+            // The start button stays enabled below the threshold: the server still lets the player resume a game
+            // that is already in progress, and answers NOT_ENOUGH_COINS otherwise (shown via SetStartError).
+            UiFactory.SetInteractable(startButton, true);
             UiFactory.SetInteractable(reliefButton, !canPlay);
             if (canPlay)
             {
-                startHint.text = "底 100·每台 50·打一圈（東風圈）";
+                startHint.text = "底 " + Economy.BasePoints + "·每台 " + Economy.PerTai + "·打一圈（東風圈）";
                 startHint.color = Palette.InkSoft;
             }
             else
             {
-                startHint.text = "金幣不足 1,000，無法開局，請先領救濟金";
+                startHint.text = "金幣不足 " + Format.Coins(Economy.MinCoinsToPlay) + "，只能接續進行中的牌局，請先領救濟金";
                 startHint.color = Palette.Loss;
             }
             reliefHint.color = canPlay ? Palette.InkSoft : Palette.Ink;
+        }
+
+        /// <summary>Server refused "start" (e.g. NOT_ENOUGH_COINS): show the reason under the start button.</summary>
+        public void SetStartError(string message)
+        {
+            startHint.text = message;
+            startHint.color = Palette.Loss;
         }
 
         public void SetNicknameHint(string message, bool isError)
@@ -254,7 +264,9 @@ namespace Manjong.Screens
 
         void OnNicknameEndEdit(string _)
         {
+#if ENABLE_LEGACY_INPUT_MANAGER
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)) SubmitNickname();
+#endif
         }
 
         void SubmitNickname()
@@ -279,20 +291,21 @@ namespace Manjong.Screens
         void OpenBrowserPrompt()
         {
             string current = string.IsNullOrEmpty(nicknameInput.text) ? (me != null ? me.nickname : "") : nicknameInput.text;
-            string answer = WebPrompt.Ask("輸入新暱稱（1–12 個字）", current);
-            if (answer == null) return;
-            nicknameInput.text = answer.Trim();
+            string answer;
+            PromptStatus status = WebPrompt.Ask("輸入新暱稱（1–12 個字）", current, out answer);
+            if (status == PromptStatus.Blocked)
+            {
+                SetNicknameHint("瀏覽器擋下了輸入框，請改用上方欄位", true);
+                return;
+            }
+            if (status != PromptStatus.Ok) return;
+            nicknameInput.text = (answer ?? "").Trim();
             SubmitNickname();
         }
 
         void OnStart()
         {
             if (app.IsBusy) return;
-            if (me != null && me.coins < AppController.MinCoinsToPlay)
-            {
-                app.ShowToast("金幣不足 1,000，請先領救濟金");
-                return;
-            }
             app.StartGame();
         }
 

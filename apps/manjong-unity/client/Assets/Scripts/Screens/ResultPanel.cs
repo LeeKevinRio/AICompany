@@ -212,7 +212,7 @@ namespace Manjong.Screens
         static void BuildRevealedTiles(RectTransform area, PlayerView p)
         {
             TileSize size = TileSizes.Mini;
-            const float step = 31f;
+            float step = size.width + 1f;
             const float groupGap = 10f;
             float x = 0f;
 
