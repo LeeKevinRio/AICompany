@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 from app.advice.context import build_context, describe_field
 from app.advice.limits import (
@@ -107,6 +107,27 @@ COMPARISON_OPS: dict[str, Callable[[float, float], bool]] = {
     "abs_gt": lambda left, right: abs(left) > right,
     "abs_lt": lambda left, right: abs(left) < right,
 }
+
+
+class MatchedRule(TypedDict):
+    """One entry of a card's ``matched_rules``, in rule-file order.
+
+    ``invalidation`` is the rule's own ``invalidation`` text from the rule
+    file, verbatim. It is carried per rule (and not only in the card-level,
+    de-duplicated ``invalidation_conditions``) so a consumer can name the
+    invalidation of one specific rule without pairing the two lists by index
+    -- which breaks as soon as two rules share a text. Typed ``str | None``
+    so the wire contract states "no text" as ``null``; the current loader
+    requires the text, so the engine always fills it today.
+    """
+
+    id: str
+    name: str
+    action: str
+    weight: float
+    weight_meaning: str
+    explanation: str
+    invalidation: str | None
 
 
 @dataclass
@@ -254,6 +275,19 @@ def _confidence(
     return "low"
 
 
+def _matched_entry(outcome: RuleOutcome) -> MatchedRule:
+    rule = outcome.rule
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "action": rule.action,
+        "weight": rule.weight,
+        "weight_meaning": WEIGHT_MEANING,
+        "explanation": rule.explanation,
+        "invalidation": rule.invalidation or None,
+    }
+
+
 def _skipped_entry(outcome: RuleOutcome) -> dict[str, Any]:
     fields = "、".join(describe_field(path) for path in outcome.missing_fields)
     return {
@@ -335,17 +369,7 @@ def build_advice(
         "symbol": symbol,
         "action": action,
         "quantity_range": quantity.model_dump() if quantity is not None else None,
-        "matched_rules": [
-            {
-                "id": outcome.rule.id,
-                "name": outcome.rule.name,
-                "action": outcome.rule.action,
-                "weight": outcome.rule.weight,
-                "weight_meaning": WEIGHT_MEANING,
-                "explanation": outcome.rule.explanation,
-            }
-            for outcome in matched
-        ],
+        "matched_rules": [_matched_entry(outcome) for outcome in matched],
         "counterarguments": list(
             dict.fromkeys(outcome.rule.counterargument for outcome in matched)
         ),
@@ -432,6 +456,7 @@ __all__ = [
     "DISCLAIMER",
     "CardAction",
     "Confidence",
+    "MatchedRule",
     "RuleOutcome",
     "build_advice",
     "evaluate_rule",

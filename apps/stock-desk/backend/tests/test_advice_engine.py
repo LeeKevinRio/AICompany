@@ -169,6 +169,7 @@ def test_matched_rules_expose_their_evidence_and_both_sides() -> None:
             "weight",
             "weight_meaning",
             "explanation",
+            "invalidation",
         }
         assert rule["explanation"]
     assert len(card["counterarguments"]) == 2
