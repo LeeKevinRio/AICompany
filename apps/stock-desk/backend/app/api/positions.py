@@ -1,4 +1,4 @@
-"""Position CRUD, CSV template download, and CSV import endpoints."""
+"""Position CRUD (including a partial ``PATCH``), CSV template download, and CSV import."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.api.deps import get_position_store
 from app.positions.csv_io import ImportResult, build_template_csv, parse_import_csv
-from app.positions.models import Position, PositionInput
+from app.positions.models import Position, PositionPatch, PositionWriteInput
 from app.positions.sectors import TWSE_SECTORS
 from app.positions.store import PositionStore
 
@@ -51,7 +51,7 @@ def list_positions(
 
 @router.post("", response_model=Position, status_code=status.HTTP_201_CREATED)
 def create_position(
-    body: PositionInput,
+    body: PositionWriteInput,
     store: StoreDep,
 ) -> Position:
     return store.create(body)
@@ -96,13 +96,33 @@ async def import_positions(
 @router.put("/{position_id}", response_model=Position)
 def update_position(
     position_id: int,
-    body: PositionInput,
+    body: PositionWriteInput,
     store: StoreDep,
 ) -> Position:
     updated = store.update(position_id, body)
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位")
     return updated
+
+
+@router.patch("/{position_id}", response_model=Position)
+def patch_position(
+    position_id: int,
+    body: PositionPatch,
+    store: StoreDep,
+) -> Position:
+    """Change only the fields sent (``quantity`` / ``avg_cost`` / ``note``).
+
+    Unlike ``PUT`` this never rewrites a column the client did not send, so a
+    concurrent narrow write (the sector backfill) is not undone. An empty body
+    returns the row unchanged without advancing ``updated_at``. No
+    market/currency check: neither field can change here, and a legacy
+    mismatched row must stay editable (C4).
+    """
+    patched = store.patch_fields(position_id, body.changes())
+    if patched is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到指定的部位")
+    return patched
 
 
 @router.delete("/{position_id}", status_code=status.HTTP_204_NO_CONTENT)

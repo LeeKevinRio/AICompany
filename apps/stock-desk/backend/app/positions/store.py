@@ -14,15 +14,16 @@ the transaction, not the handle).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.sqlite_util import enable_wal
-from app.positions.models import Position, PositionInput
+from app.positions.models import Position, PositionInput, check_avg_cost, check_quantity
 from app.positions.sectors import SECTOR_REJECTED_MESSAGE, is_valid_sector
 
 #: Parameterised by table name so the schema migration can build the
@@ -65,6 +66,11 @@ _COLUMNS = (
 )
 
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
+
+#: The only columns :meth:`PositionStore.patch_fields` may write. A closed set
+#: because the column names are spliced into the SQL text (values never are),
+#: and because these are the fields ``PositionPatch`` accepts.
+_PATCHABLE_COLUMNS: Final[frozenset[str]] = frozenset({"quantity", "avg_cost", "note"})
 
 
 def _opened_at_to_db(opened_at: date | None) -> str | None:
@@ -314,8 +320,70 @@ class PositionStore:
                 return None
         return self.get(position_id)
 
+    def patch_fields(
+        self,
+        position_id: int,
+        changes: Mapping[str, Decimal | str | None],
+        *,
+        now: datetime | None = None,
+    ) -> Position | None:
+        """Write only the columns in ``changes``; return the row as it now stands.
+
+        A narrow write, like :meth:`fill_sector_if_empty` and for the same
+        reason: one ``UPDATE`` naming only the columns the client sent, never a
+        read followed by a whole-row write-back (tech-architect C2). A column
+        another writer touched since the client's read -- typically ``sector``
+        from the backfill -- therefore keeps that writer's value.
+
+        ``changes`` keys must be in :data:`_PATCHABLE_COLUMNS`. ``quantity`` and
+        ``avg_cost`` must be positive ``Decimal`` values (the same check the API
+        model runs, so this door accepts exactly what that one does); ``note``
+        may be ``None`` or blank, both stored as NULL.
+
+        An empty ``changes`` writes nothing and does not advance ``updated_at``:
+        it returns the stored row, or ``None`` if there is none. Otherwise
+        ``updated_at`` advances, ``created_at`` is untouched, and ``None`` means
+        no position with that id exists.
+        """
+        unknown = set(changes) - _PATCHABLE_COLUMNS
+        if unknown:
+            raise ValueError(f"not patchable: {', '.join(sorted(unknown))}")
+        if not changes:
+            return self.get(position_id)
+
+        columns: list[str] = []
+        values: list[str | None] = []
+        for column in sorted(changes):
+            value = changes[column]
+            if column == "note":
+                if value is not None and not isinstance(value, str):
+                    raise TypeError("note must be a string or None")
+                values.append(None if value is None else (value.strip() or None))
+            else:
+                if not isinstance(value, Decimal):
+                    raise TypeError(f"{column} must be a Decimal")
+                check = check_quantity if column == "quantity" else check_avg_cost
+                values.append(str(check(value)))
+            columns.append(column)
+
+        moment = (now if now is not None else datetime.now(UTC)).isoformat()
+        assignments = ", ".join(f"{column} = ?" for column in columns)
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                f"UPDATE positions SET {assignments}, updated_at = ? WHERE id = ?",
+                (*values, moment, position_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get(position_id)
+
     def delete(self, position_id: int) -> bool:
-        """Delete ``position_id``; return ``True`` if a row was removed."""
+        """Delete ``position_id``; return ``True`` if a row was removed.
+
+        A hard delete of this one row and nothing else (tech-architect C6):
+        alert rules, Kelly inputs and playbook state are keyed by symbol, not by
+        position id, and outlive the holding on purpose.
+        """
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
             return cursor.rowcount > 0

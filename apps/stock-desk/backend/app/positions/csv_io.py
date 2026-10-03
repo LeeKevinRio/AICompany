@@ -20,12 +20,15 @@ from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel
 
 from app.positions.models import (
+    CURRENCY_MARKET_MISMATCH_MESSAGE,
     INDEX_SYMBOL_PREFIX,
     INDEX_SYMBOL_REJECTED_MESSAGE,
     Currency,
     InstrumentType,
     Market,
     PositionInput,
+    PositionWriteInput,
+    currency_matches_market,
 )
 from app.positions.sectors import (
     SECTOR_REJECTED_MESSAGE,
@@ -178,6 +181,11 @@ def _parse_row(
     currency = _cell(raw_row, index_of, "currency")
     if currency not in _CURRENCIES:
         fail("currency", f"幣別必須是 TWD 或 USD，收到「{currency}」")
+    elif market in _MARKETS and not currency_matches_market(market, currency):
+        # The same rule and sentence as the API's ``PositionWriteInput``; only
+        # checked once both cells are individually valid, so a bad market is
+        # reported once, against the market column.
+        fail("currency", CURRENCY_MARKET_MISMATCH_MESSAGE)
 
     opened_at = _parse_opened_at(_cell(raw_row, index_of, "opened_at"), today, fail)
 
@@ -197,8 +205,11 @@ def _parse_row(
         return None, errors
 
     # Every field checked out; the enums are narrowed by the guards above.
+    # Built with the API's write model (ADR-0017 C9) so this door enforces the
+    # same rules as ``POST``; it cannot raise here, because every rule it runs
+    # has been restated as a ``fail`` above and ``errors`` is empty.
     return (
-        PositionInput(
+        PositionWriteInput(
             symbol=symbol,
             market=_as_market(market),
             quantity=quantity,  # type: ignore[arg-type]

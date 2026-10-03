@@ -47,7 +47,7 @@ from app.demo.series import DEMO_SOURCE
 from app.dividends.store import DividendEventStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator
-from app.positions.models import PositionInput
+from app.positions.models import MARKET_CURRENCY, PositionInput, PositionWriteInput
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
 from tests.api_helpers import UnavailableFxProvider
@@ -225,6 +225,20 @@ def test_seed_writes_positions_and_alert_rules_marked_as_demo(
     # The portfolio page has real totals rather than an empty book.
     summary = demo_harness.client.get("/api/portfolio/summary").json()
     assert Decimal(summary["totals"]["market_value_twd"]) > 0
+
+
+def test_seeded_positions_satisfy_the_market_currency_rule(demo_harness: DemoHarness) -> None:
+    """The demo book must pass the same rule a hand-entered holding does."""
+    _seed(demo_harness)
+
+    stored = demo_harness.positions.list_all()
+    assert len(stored) == len(DEMO_POSITIONS)
+    for position in stored:
+        assert MARKET_CURRENCY[position.market] == position.currency, position.symbol
+        # And the write model -- what POST / PUT validate with -- accepts it.
+        PositionWriteInput.model_validate(
+            position.model_dump(exclude={"id", "created_at", "updated_at"})
+        )
 
 
 def test_seeded_alert_rules_actually_fire(demo_harness: DemoHarness) -> None:

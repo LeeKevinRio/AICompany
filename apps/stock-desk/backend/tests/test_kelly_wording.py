@@ -1091,8 +1091,11 @@ def test_the_trigger_label_is_the_approved_one_and_neither_candidate() -> None:
 
 
 #: 條件 111 零出現守門的 allowlist，粒度同本檔其他 allowlist（檔案＋字面＋出處）。
-#: 只剩一類：``PositionsTable`` 的持倉刪除 confirm 早於本批、不在 Kelly 面，
-#: 第十五輪明示**不追溯**。
+#: 只剩一類：持倉移除確認句，不在 Kelly 面。原本是 ``PositionsTable`` 的刪除
+#: confirm（第十五輪明示**不追溯**）；庫存頁上線後首頁那段確認句已整段移除，
+#: 改由庫存頁 S7 定稿接手，出處依風控 2026-10-03 二審核可改登記為
+#: ``inventoryWording.ts``（見 ``work/reviews/2026-10-03-庫存頁-字面-風控確認.md``）。
+#: 「確定刪除」隨首頁確認句一起消失，條目已刪：它現在是真正的零出現。
 #:
 #: 曾經還有一類「待清除」——``KellyManualInputForm`` 的 ``window.confirm`` 整句
 #: （條件 112）與 ``KellyDisclosuresPanel`` 的兩個英文按鈕（條件 116）。前端已於
@@ -1101,14 +1104,16 @@ def test_the_trigger_label_is_the_approved_one_and_neither_candidate() -> None:
 #: 對方落地即刪」是這批的作法，不是被遺忘的例外。
 FORBIDDEN_DELETE_WORDING_ALLOWLIST: tuple[tuple[str, str, str], ...] = (
     (
-        "frontend/app/components/PositionsTable.tsx",
+        "frontend/app/lib/inventoryWording.ts",
         "此動作無法復原",
-        "第十五輪 條件 111：持倉刪除 confirm 早於本批、非 Kelly 面，明示不追溯",
+        "風控 2026-10-03 二審逐字核可庫存頁 S7「確定移除本系統中 {代號} 的持倉紀錄"
+        "（{數量} 股）？此動作無法復原。」（work/reviews/2026-10-03-庫存頁-字面-風控確認.md）；"
+        "非 Kelly 面",
     ),
     (
-        "frontend/app/components/PositionsTable.tsx",
-        "確定刪除",
-        "第十五輪 條件 111：同上一筆同一行",
+        "frontend/app/lib/__tests__/inventoryWording.test.ts",
+        "此動作無法復原",
+        "同上一筆：該測試逐字釘住 S7 定稿，_shipped_sources() 掃得到 __tests__",
     ),
     (
         "frontend/app/position/[symbol]/LeverageChapterView.tsx",
@@ -1195,8 +1200,9 @@ def test_every_allowlisted_line_still_exists() -> None:
         assert path.is_file(), name
         assert literal in path.read_text(encoding="utf-8"), (name, literal)
 
-    # Every entry is 不追溯 and outside the Kelly surface. A Kelly file appearing
-    # here would mean the ruling was reinterpreted, not that a guard was tuned.
+    # Every entry is outside the Kelly surface (an unrelated use, or the
+    # inventory page's risk-approved S7 sentence). A Kelly file appearing here
+    # would mean the ruling was reinterpreted, not that a guard was tuned.
     for name, _, _ in FORBIDDEN_DELETE_WORDING_ALLOWLIST:
         assert not name.startswith(KELLY_SURFACE), name
 
