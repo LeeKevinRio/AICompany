@@ -19,7 +19,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from app.data.interface import DataStatus
-from app.portfolio.valuation import PositionValuator, Valuation
+from app.portfolio.price_change import ChangeScreen, PriceChange
+from app.portfolio.valuation import ChangeMode, PositionValuator, Valuation
 from app.positions.models import Currency, InstrumentType, Market, Position
 from app.positions.store import PositionStore
 
@@ -76,6 +77,11 @@ class SummaryPosition(BaseModel):
     #: in TWD and the other in the instrument's own currency would report a
     #: return that is really an exchange rate.
     cost_twd: Decimal | None
+    #: Day-over-day change of ``valuation.price`` (ADR-0016). ``None`` whenever
+    #: it cannot be stated truthfully -- with no reason attached (K-6) -- and on
+    #: every row of a summary built without a ``ChangeScreen`` (D-3, F8). A
+    #: display column only: nothing downstream may read it (K-4).
+    change: PriceChange | None = None
 
 
 class PortfolioSummary(BaseModel):
@@ -90,6 +96,10 @@ class PortfolioSummary(BaseModel):
     #: book's TWD figures (ADR-0011; 風控 2026-09-19 條件 (1)): shown beside the
     #: converted totals, in first-seen order, each sentence once.
     fx_disclosures: list[str] = []
+    #: Which change bases this book's rows may carry (ADR-0016 D-8), fixed by
+    #: how the valuator was built. ``close_only`` guarantees no
+    #: ``intraday_quote`` price and no ``intraday`` change basis in the payload.
+    change_mode: ChangeMode = "close_only"
 
 
 def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
@@ -104,8 +114,17 @@ def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
     return seen
 
 
-def build_summary(store: PositionStore, valuator: PositionValuator) -> PortfolioSummary:
-    """Value every stored position and roll the ``ok`` ones up into totals."""
+def build_summary(
+    store: PositionStore,
+    valuator: PositionValuator,
+    *,
+    change_screen: ChangeScreen | None = None,
+) -> PortfolioSummary:
+    """Value every stored position and roll the ``ok`` ones up into totals.
+
+    ``change_screen`` is injected by ``GET /api/portfolio/summary`` alone
+    (ADR-0016 D-3); without it every row's ``change`` is ``None`` (F8).
+    """
     as_of = datetime.now(UTC).isoformat()
     positions = store.list_all()
 
@@ -117,10 +136,15 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
     ok_count = 0
 
     # One pass per book (ADR-0010 D-2): repeated FX lookups are answered once.
-    for position, valued in zip(positions, valuator.value_all(positions), strict=True):
+    valuations = valuator.value_all(positions)
+    rows = list(zip(positions, valuations, strict=True))
+    changes: list[PriceChange | None] = (
+        change_screen.screen(rows) if change_screen is not None else [None] * len(rows)
+    )
+    for (position, valued), change in zip(rows, changes, strict=True):
         summary_positions.append(
             _to_summary_position(
-                position, valued.valuation, valued.market_value_twd, valued.cost_twd
+                position, valued.valuation, valued.market_value_twd, valued.cost_twd, change
             )
         )
         if valued.valuation.status == "ok":
@@ -148,6 +172,7 @@ def build_summary(store: PositionStore, valuator: PositionValuator) -> Portfolio
         totals=totals,
         positions=summary_positions,
         fx_disclosures=fx_disclosures_for([item.valuation for item in summary_positions]),
+        change_mode=valuator.change_mode,
     )
 
 
@@ -164,6 +189,7 @@ def _to_summary_position(
     valuation: Valuation,
     market_value_twd: Decimal | None,
     cost_twd: Decimal | None,
+    change: PriceChange | None = None,
 ) -> SummaryPosition:
     return SummaryPosition(
         id=position.id,
@@ -179,4 +205,5 @@ def _to_summary_position(
         valuation=valuation,
         market_value_twd=market_value_twd,
         cost_twd=cost_twd,
+        change=change,
     )

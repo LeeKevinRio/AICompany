@@ -9,9 +9,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_position_store, get_valuator
+from app.api.deps import (
+    get_dividend_store,
+    get_position_store,
+    get_price_bar_cache,
+    get_valuator,
+)
+from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
+from app.dividends.store import DividendEventStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator, PriceService
 from app.positions.models import Currency, PositionInput
@@ -113,6 +120,14 @@ def _seed(
 def _wire(store: PositionStore, valuator: PositionValuator) -> TestClient:
     app.dependency_overrides[get_position_store] = lambda: store
     app.dependency_overrides[get_valuator] = lambda: valuator
+    # ADR-0016: the summary endpoint also reads the 除權息 store and the bar
+    # cache (as a trading calendar); keep both off the developer's database.
+    app.dependency_overrides[get_dividend_store] = lambda: DividendEventStore(
+        db_path=store.db_path.parent / "dividends.db"
+    )
+    app.dependency_overrides[get_price_bar_cache] = lambda: PriceBarCache(
+        db_path=store.db_path.parent / "bars.db"
+    )
     return TestClient(app)
 
 

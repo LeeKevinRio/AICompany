@@ -45,7 +45,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from app.data.interface import DataStatus, Market, ProviderResult
+from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.data.providers.fx import FxRateProvider
 from app.positions.models import Currency, Position
 from app.services.fx_notes import source_note
@@ -90,6 +90,17 @@ PriceMode = Literal["live", "cache_only"]
 #: source was not asked this time, which is a different fact from "the source
 #: had nothing" (tech-architect R-5).
 PRICE_NOT_QUERIED = "price_not_queried"
+
+#: What kind of price ``PriceInfo.value`` is (ADR-0014 D-5). Only
+#: ``daily_close`` is ever produced until the intraday quote path lands (W15);
+#: the field ships ahead of it so the front end reads the kind instead of
+#: inferring it (ADR-0016 K-8).
+PriceKind = Literal["daily_close", "intraday_quote"]
+
+#: Which price bases a summary's change column may carry (ADR-0016 D-8). Fixed
+#: by how the valuator was constructed, never by the data in one response and
+#: never by an environment switch.
+ChangeMode = Literal["close_only", "may_include_intraday"]
 
 
 @dataclass(frozen=True)
@@ -139,6 +150,9 @@ class PriceInfo(BaseModel):
     is_within_ttl: bool | None = None
     #: The data layer's user-facing degradation reason, ``None`` on success.
     reason: str | None = None
+    #: ``daily_close`` for every price this valuator produces today
+    #: (ADR-0014 D-5, shipped ahead by ADR-0016 K-8).
+    price_kind: PriceKind = "daily_close"
 
 
 class FxInfo(BaseModel):
@@ -196,6 +210,22 @@ class Valuation(BaseModel):
 
 
 @dataclass(frozen=True)
+class ChangeBasis:
+    """The two bars a day-over-day change would be read from (ADR-0016 D-2).
+
+    Both come out of the **same** ``ProviderResult`` that priced the position,
+    so the change's numerator is by construction the price on screen and no
+    second series is ever consulted. ``latest`` is the bar behind
+    ``PriceInfo.value``; ``previous`` is the newest bar strictly before it, or
+    ``None`` when the lookback window held only one. Whether a change may be
+    shown from them is :mod:`app.portfolio.price_change`'s call, not this one's.
+    """
+
+    latest: PriceBar
+    previous: PriceBar | None
+
+
+@dataclass(frozen=True)
 class PositionValuation:
     """A valuation plus the TWD cost/market-value used to aggregate totals.
 
@@ -203,11 +233,15 @@ class PositionValuation:
     is ``ok`` (i.e. every input was available); they are the per-position
     contributions to ``totals`` and are ``None`` otherwise so callers never sum
     fabricated numbers.
+
+    ``change_basis`` is internal (never serialized): ``None`` whenever no price
+    was resolved.
     """
 
     valuation: Valuation
     cost_twd: Decimal | None
     market_value_twd: Decimal | None
+    change_basis: ChangeBasis | None = None
 
 
 class PositionValuator:
@@ -235,6 +269,16 @@ class PositionValuator:
     def price_mode(self) -> PriceMode:
         return self._price_mode
 
+    @property
+    def change_mode(self) -> ChangeMode:
+        """Which change bases this valuator's summaries may carry (ADR-0016 D-8).
+
+        Derived from construction alone. No constructor argument can introduce
+        an intraday price yet (ADR-0014 D-4 is not wired), so this is always
+        ``close_only``; the intraday branch arrives with that parameter.
+        """
+        return "close_only"
+
     def value_all(self, positions: Sequence[Position]) -> list[PositionValuation]:
         """Value every position of one book in one pass.
 
@@ -255,7 +299,7 @@ class PositionValuator:
         today = self._clock().date()
         missing: list[str] = []
 
-        price_info, price_now, price_missing = self._resolve_price(position, today)
+        price_info, price_now, price_missing, change_basis = self._resolve_price(position, today)
         if price_now is None:
             missing.append(price_missing)
 
@@ -287,6 +331,7 @@ class PositionValuator:
                 ),
                 cost_twd=None,
                 market_value_twd=None,
+                change_basis=change_basis,
             )
 
         parts = decompose(
@@ -309,24 +354,32 @@ class PositionValuator:
             ),
             cost_twd=quantity * price_open * fx_open,
             market_value_twd=quantity * price_now * fx_now,
+            change_basis=change_basis,
         )
 
     def _resolve_price(
         self, position: Position, today: date
-    ) -> tuple[PriceInfo | None, Decimal | None, str]:
-        """``(info, close, missing_token)`` -- the token names *why* when close is None."""
+    ) -> tuple[PriceInfo | None, Decimal | None, str, ChangeBasis | None]:
+        """``(info, close, missing_token, change_basis)``.
+
+        The token names *why* when close is None. ``change_basis`` is read from
+        the same ``result.bars`` as the close (ADR-0016 D-2): no extra service
+        call, no wider lookback.
+        """
         missing_token = PRICE_NOT_QUERIED if self._price_mode == "cache_only" else "price"
         service = self._market_services.get(position.market)
         if service is None:
-            return None, None, missing_token
+            return None, None, missing_token, None
         start = today - timedelta(days=PRICE_LOOKBACK_DAYS)
         if self._price_mode == "cache_only":
             result = service.get_cached_bars(position.symbol, position.market, start, today)
         else:
             result = service.get_daily_bars(position.symbol, position.market, start, today)
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
-            return None, None, missing_token
+            return None, None, missing_token, None
         latest = max(result.bars, key=lambda bar: bar.date)
+        earlier = [bar for bar in result.bars if bar.date < latest.date]
+        previous = max(earlier, key=lambda bar: bar.date) if earlier else None
         info = PriceInfo(
             value=latest.close,
             as_of=latest.date.isoformat(),
@@ -335,7 +388,7 @@ class PositionValuator:
             is_within_ttl=result.is_within_ttl,
             reason=result.reason,
         )
-        return info, latest.close, ""
+        return info, latest.close, "", ChangeBasis(latest=latest, previous=previous)
 
     def _resolve_fx(
         self,

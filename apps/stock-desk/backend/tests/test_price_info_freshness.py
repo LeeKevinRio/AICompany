@@ -17,9 +17,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_position_store, get_valuator
+from app.api.deps import (
+    get_dividend_store,
+    get_position_store,
+    get_price_bar_cache,
+    get_valuator,
+)
+from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.data.providers.fx import FxRateProvider, FxRateResult
+from app.dividends.store import DividendEventStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator, PriceInfo, PriceService
 from app.positions.models import Position, PositionInput
@@ -178,6 +185,14 @@ def wire(store: PositionStore) -> Iterator[Wire]:
     def _wire(service: PriceService) -> TestClient:
         app.dependency_overrides[get_position_store] = lambda: store
         app.dependency_overrides[get_valuator] = lambda: _valuator(service)
+        # ADR-0016: the summary endpoint also reads the 除權息 store and the bar
+        # cache (as a trading calendar); keep both off the developer's database.
+        app.dependency_overrides[get_dividend_store] = lambda: DividendEventStore(
+            db_path=store.db_path.parent / "dividends.db"
+        )
+        app.dependency_overrides[get_price_bar_cache] = lambda: PriceBarCache(
+            db_path=store.db_path.parent / "bars.db"
+        )
         return TestClient(app)
 
     yield _wire
@@ -194,7 +209,17 @@ def _summary_price(client: TestClient) -> dict[str, object]:
 
 def test_summary_price_contract_has_exact_key_set(wire: Wire) -> None:
     price = _summary_price(wire(_ResultPriceService(DataStatus.FRESH)))
-    assert set(price) == {"value", "as_of", "source", "data_status", "is_within_ttl", "reason"}
+    # ``price_kind`` shipped ahead of the intraday path (ADR-0016 K-8, ADR-0014 D-5).
+    assert set(price) == {
+        "value",
+        "as_of",
+        "source",
+        "data_status",
+        "is_within_ttl",
+        "reason",
+        "price_kind",
+    }
+    assert price["price_kind"] == "daily_close"
     assert price["as_of"] == "2026-09-30"
     assert price["is_within_ttl"] is None
     assert price["reason"] is None

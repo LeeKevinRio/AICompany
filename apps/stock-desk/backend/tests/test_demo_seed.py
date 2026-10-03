@@ -22,8 +22,10 @@ from fastapi.testclient import TestClient
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_dividend_store,
     get_market_resolver,
     get_position_store,
+    get_price_bar_cache,
     get_settings_store,
     get_valuator,
 )
@@ -42,6 +44,7 @@ from app.demo.seed import (
     seed_demo,
 )
 from app.demo.series import DEMO_SOURCE
+from app.dividends.store import DividendEventStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import PositionInput
@@ -122,6 +125,11 @@ def demo_harness(tmp_path: Path) -> Iterator[DemoHarness]:
     app.dependency_overrides[get_settings_store] = lambda: settings
     app.dependency_overrides[get_valuator] = lambda: valuator
     app.dependency_overrides[get_market_resolver] = lambda: {"TW": service}
+    # ADR-0016: the summary endpoint also reads the 除權息 store and the bar
+    # cache (as a trading calendar); both stay on the demo database.
+    dividends = DividendEventStore(db_path)
+    app.dependency_overrides[get_dividend_store] = lambda: dividends
+    app.dependency_overrides[get_price_bar_cache] = lambda: cache
 
     with TestClient(app) as client:
         yield DemoHarness(

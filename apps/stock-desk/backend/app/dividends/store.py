@@ -21,7 +21,7 @@ the adjustment factor is a ratio of two of them.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from datetime import date as date_type
@@ -63,6 +63,10 @@ _CREATE_DATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_dividend_events_ex_date
 ON dividend_events (ex_date)
 """
+
+#: Symbols per ``IN (...)`` clause in :meth:`DividendEventStore.ex_dates_between`,
+#: well below SQLite's historical 999 bound-parameter limit.
+_MAX_SYMBOLS_PER_QUERY = 500
 
 _SELECT_COLUMNS = (
     "symbol, market, ex_date, previous_close, reference_price, "
@@ -193,6 +197,46 @@ class DividendEventStore:
             )
             rows = cursor.fetchall()
         return [_row_to_event(row) for row in rows]
+
+    def ex_dates_between(
+        self,
+        keys: Collection[tuple[str, Market]],
+        start: date_type,
+        end: date_type,
+    ) -> dict[tuple[str, Market], frozenset[date_type]]:
+        """Ex-dates in ``[start, end]`` for many ``(symbol, market)`` keys at once.
+
+        One read for a whole book (ADR-0016 K-7) instead of one
+        :meth:`events_for` per holding. Keys with no event in the window are
+        absent from the result. Symbols are matched exactly as stored; the
+        caller normalizes them the way the sync writes them.
+        """
+        # Typed keys by their raw column values, so a row maps back to the
+        # caller's own key and a symbol stored under another market is dropped.
+        wanted: dict[tuple[str, str], tuple[str, Market]] = {
+            (symbol, str(market)): (symbol, market) for symbol, market in keys
+        }
+        found: dict[tuple[str, Market], set[date_type]] = {}
+        symbols = sorted({symbol for symbol, _ in wanted})
+        if not symbols:
+            return {}
+        with closing(self._connect()) as conn:
+            # Chunked only to stay under SQLite's bound-parameter limit; a
+            # book small enough to fit (every real one) is a single query.
+            for offset in range(0, len(symbols), _MAX_SYMBOLS_PER_QUERY):
+                chunk = symbols[offset : offset + _MAX_SYMBOLS_PER_QUERY]
+                placeholders = ", ".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    "SELECT symbol, market, ex_date FROM dividend_events "
+                    f"WHERE ex_date BETWEEN ? AND ? AND symbol IN ({placeholders})",
+                    (start.isoformat(), end.isoformat(), *chunk),
+                )
+                for symbol, market, ex_date in cursor.fetchall():
+                    key = wanted.get((str(symbol), str(market)))
+                    if key is None:
+                        continue
+                    found.setdefault(key, set()).add(date_type.fromisoformat(str(ex_date)))
+        return {key: frozenset(days) for key, days in found.items()}
 
     def last_synced_at(self) -> datetime | None:
         """The most recent sync timestamp, or ``None`` when never synced."""

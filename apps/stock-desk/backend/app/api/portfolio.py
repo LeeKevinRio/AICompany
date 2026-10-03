@@ -16,17 +16,22 @@ from app.advice.book_limits import (
 )
 from app.api.common import DataMeta, data_meta, now_iso
 from app.api.deps import (
+    get_dividend_store,
     get_fx_provider,
     get_kelly_input_store,
     get_market_resolver,
     get_position_store,
+    get_price_bar_cache,
     get_settings_store,
     get_valuator,
 )
 from app.api.kelly import kelly_inputs_by_symbol
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
+from app.data.cache import PriceBarCache
 from app.data.providers.fx import FxRateProvider
+from app.dividends.store import DividendEventStore
 from app.kelly.store import KellyInputStore
+from app.portfolio.price_change import ChangeScreen
 from app.portfolio.summary import PortfolioSummary, build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market
@@ -49,6 +54,8 @@ ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 FxProviderDep = Annotated[FxRateProvider, Depends(get_fx_provider)]
 KellyStoreDep = Annotated[KellyInputStore, Depends(get_kelly_input_store)]
+DividendStoreDep = Annotated[DividendEventStore, Depends(get_dividend_store)]
+CalendarDep = Annotated[PriceBarCache, Depends(get_price_bar_cache)]
 
 #: Only cap 4 reads a signal here, and it reads exactly one: ATR(14). Computing
 #: the other nine indicators once per holding would cost the whole book's worth
@@ -96,8 +103,16 @@ class PortfolioLimitsResponse(BaseModel):
 
 
 @router.get("/summary", response_model=PortfolioSummary)
-def portfolio_summary(store: StoreDep, valuator: ValuatorDep) -> PortfolioSummary:
-    return build_summary(store, valuator)
+def portfolio_summary(
+    store: StoreDep,
+    valuator: ValuatorDep,
+    dividends: DividendStoreDep,
+    calendar: CalendarDep,
+) -> PortfolioSummary:
+    # The only caller that screens a day-over-day change in (ADR-0016 D-3);
+    # every other build_summary caller leaves ``change`` null on every row.
+    change_screen = ChangeScreen(ex_dates=dividends, calendar=calendar)
+    return build_summary(store, valuator, change_screen=change_screen)
 
 
 @router.get("/limits", response_model=PortfolioLimitsResponse)
