@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { ErrorPanel } from "./ErrorPanel";
 import { SymbolCombobox } from "./SymbolCombobox";
+import { fieldErrorAria, fieldErrorId } from "../lib/fieldErrorA11y";
+import { FIRST_FIELD_SELECTOR, FOCUSABLE_SELECTOR, trapTabTarget } from "../lib/focusTrap";
 import { unmappedFieldMessages } from "../lib/inventoryEdit";
 import { SAVE_FAILED_LABEL } from "../lib/inventoryWording";
 import { applyDirectorySelection, sectorAfterDirectorySelection } from "../lib/directorySearch";
@@ -66,9 +68,13 @@ const FIELD_LABELS: Record<keyof FormState, string> = {
   note: "備註",
 };
 
-function FieldError({ message }: { message: string | undefined }) {
+function FieldError({ fieldId, message }: { fieldId: string; message: string | undefined }) {
   if (!message) return null;
-  return <p className="mt-1 text-xs text-red-400">{message}</p>;
+  return (
+    <p id={fieldErrorId(fieldId)} role="alert" className="mt-1 text-xs text-red-400">
+      {message}
+    </p>
+  );
 }
 
 // AC-12.6: a sector only ever applies to a TW position. Used by
@@ -96,6 +102,8 @@ export function EditPositionModal({
   const [form, setForm] = useState<FormState>(() => toFormState(position));
   const updateMutation = useUpdatePosition();
   const sectors = useSectors(true);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const fieldErrors =
     updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
@@ -114,6 +122,31 @@ export function EditPositionModal({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose, updateMutation.isPending]);
+
+  // `role="dialog"` + `aria-modal` promise a managed focus: on open, move it
+  // to the first field so keyboard / screen-reader users start inside the
+  // dialog. Returning focus to the trigger on close is the caller's job
+  // (`InventoryRow.handleModalClose`).
+  useEffect(() => {
+    formRef.current?.querySelector<HTMLElement>(FIRST_FIELD_SELECTOR)?.focus();
+  }, []);
+
+  // Simple focus trap: Tab / Shift+Tab wrap around inside the dialog instead
+  // of leaking to the (inert-looking) page behind it.
+  function handleDialogKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+    const target = trapTabTarget(
+      focusable.length,
+      focusable.findIndex((element) => element === document.activeElement),
+      event.shiftKey,
+    );
+    if (target === null) return;
+    event.preventDefault();
+    focusable[target]?.focus();
+  }
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -178,9 +211,11 @@ export function EditPositionModal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="edit-position-title"
+        onKeyDown={handleDialogKeyDown}
         className="max-h-full w-full max-w-lg overflow-y-auto rounded-lg border border-neutral-800 bg-neutral-950 p-5"
       >
         <div className="flex items-center justify-between">
@@ -198,7 +233,7 @@ export function EditPositionModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <form ref={formRef} onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="edit-symbol" className="block text-sm text-neutral-400">
               {FIELD_LABELS.symbol}
@@ -206,11 +241,12 @@ export function EditPositionModal({
             <SymbolCombobox
               id="edit-symbol"
               required
+              {...fieldErrorAria("edit-symbol", fieldErrors.symbol)}
               value={form.symbol}
               onChange={(value) => updateField("symbol", value)}
               onSelect={handleSelectSymbolCandidate}
             />
-            <FieldError message={fieldErrors.symbol} />
+            <FieldError fieldId="edit-symbol" message={fieldErrors.symbol} />
           </div>
 
           <div>
@@ -219,6 +255,7 @@ export function EditPositionModal({
             </label>
             <select
               id="edit-market"
+              {...fieldErrorAria("edit-market", fieldErrors.market)}
               required
               value={form.market}
               onChange={(e) => handleMarketChange(e.target.value as Market)}
@@ -233,7 +270,7 @@ export function EditPositionModal({
                 </option>
               ))}
             </select>
-            <FieldError message={fieldErrors.market} />
+            <FieldError fieldId="edit-market" message={fieldErrors.market} />
           </div>
 
           <div>
@@ -242,6 +279,7 @@ export function EditPositionModal({
             </label>
             <select
               id="edit-instrument_type"
+              {...fieldErrorAria("edit-instrument_type", fieldErrors.instrument_type)}
               required
               value={form.instrument_type}
               onChange={(e) => updateField("instrument_type", e.target.value as InstrumentType)}
@@ -256,7 +294,7 @@ export function EditPositionModal({
                 </option>
               ))}
             </select>
-            <FieldError message={fieldErrors.instrument_type} />
+            <FieldError fieldId="edit-instrument_type" message={fieldErrors.instrument_type} />
           </div>
 
           <div>
@@ -265,6 +303,7 @@ export function EditPositionModal({
             </label>
             <select
               id="edit-currency"
+              {...fieldErrorAria("edit-currency", fieldErrors.currency)}
               required
               value={form.currency}
               onChange={(e) => updateField("currency", e.target.value as Currency)}
@@ -279,7 +318,7 @@ export function EditPositionModal({
                 </option>
               ))}
             </select>
-            <FieldError message={fieldErrors.currency} />
+            <FieldError fieldId="edit-currency" message={fieldErrors.currency} />
           </div>
 
           <div>
@@ -288,13 +327,14 @@ export function EditPositionModal({
             </label>
             <input
               id="edit-quantity"
+              {...fieldErrorAria("edit-quantity", fieldErrors.quantity)}
               required
               inputMode="decimal"
               value={form.quantity}
               onChange={(e) => updateField("quantity", e.target.value)}
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             />
-            <FieldError message={fieldErrors.quantity} />
+            <FieldError fieldId="edit-quantity" message={fieldErrors.quantity} />
           </div>
 
           <div>
@@ -303,13 +343,14 @@ export function EditPositionModal({
             </label>
             <input
               id="edit-avg_cost"
+              {...fieldErrorAria("edit-avg_cost", fieldErrors.avg_cost)}
               required
               inputMode="decimal"
               value={form.avg_cost}
               onChange={(e) => updateField("avg_cost", e.target.value)}
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             />
-            <FieldError message={fieldErrors.avg_cost} />
+            <FieldError fieldId="edit-avg_cost" message={fieldErrors.avg_cost} />
           </div>
 
           <div>
@@ -318,12 +359,13 @@ export function EditPositionModal({
             </label>
             <input
               id="edit-opened_at"
+              {...fieldErrorAria("edit-opened_at", fieldErrors.opened_at)}
               type="date"
               value={form.opened_at}
               onChange={(e) => updateField("opened_at", e.target.value)}
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             />
-            <FieldError message={fieldErrors.opened_at} />
+            <FieldError fieldId="edit-opened_at" message={fieldErrors.opened_at} />
           </div>
 
           <div>
@@ -332,6 +374,7 @@ export function EditPositionModal({
             </label>
             <select
               id="edit-sector"
+              {...fieldErrorAria("edit-sector", fieldErrors.sector)}
               value={form.sector}
               disabled={form.market !== "TW" || sectors.isPending}
               onChange={(e) => updateField("sector", e.target.value)}
@@ -362,7 +405,7 @@ export function EditPositionModal({
                 {sectors.error instanceof ApiError ? sectors.error.message : "未知錯誤"}
               </p>
             )}
-            <FieldError message={fieldErrors.sector} />
+            <FieldError fieldId="edit-sector" message={fieldErrors.sector} />
           </div>
 
           <div className="sm:col-span-2">
@@ -371,11 +414,12 @@ export function EditPositionModal({
             </label>
             <input
               id="edit-note"
+              {...fieldErrorAria("edit-note", fieldErrors.note)}
               value={form.note}
               onChange={(e) => updateField("note", e.target.value)}
               className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
             />
-            <FieldError message={fieldErrors.note} />
+            <FieldError fieldId="edit-note" message={fieldErrors.note} />
           </div>
 
           <div className="flex gap-3 sm:col-span-2">

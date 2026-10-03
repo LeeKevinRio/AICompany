@@ -12,6 +12,7 @@ import {
   SECTOR_SOURCE_DISCLOSURE,
   SECTOR_US_DISABLED_HINT,
 } from "../lib/format";
+import { fieldErrorAria, fieldErrorId } from "../lib/fieldErrorA11y";
 import { unmappedFieldMessages } from "../lib/inventoryEdit";
 import { ADD_FAILED_LABEL, ADD_PENDING_LABEL, ADD_SUBMIT_LABEL } from "../lib/inventoryWording";
 import { shouldBlockPositionSubmit, submitButtonState } from "../lib/positionFormSubmit";
@@ -60,9 +61,13 @@ const FIELD_LABELS: Record<keyof FormState, string> = {
   note: "備註",
 };
 
-function FieldError({ message }: { message: string | undefined }) {
+function FieldError({ fieldId, message }: { fieldId: string; message: string | undefined }) {
   if (!message) return null;
-  return <p className="mt-1 text-xs text-red-400">{message}</p>;
+  return (
+    <p id={fieldErrorId(fieldId)} role="alert" className="mt-1 text-xs text-red-400">
+      {message}
+    </p>
+  );
 }
 
 /**
@@ -147,12 +152,13 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           <SymbolCombobox
             id="symbol"
             required
+            {...fieldErrorAria("symbol", fieldErrors.symbol)}
             value={form.symbol}
             onChange={(value) => updateField("symbol", value)}
             onSelect={handleSelectSymbolCandidate}
             placeholder="例如 2330"
           />
-          <FieldError message={fieldErrors.symbol} />
+          <FieldError fieldId="symbol" message={fieldErrors.symbol} />
         </div>
 
         <div>
@@ -161,6 +167,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <select
             id="market"
+            {...fieldErrorAria("market", fieldErrors.market)}
             required
             value={form.market}
             onChange={(e) => handleMarketChange(e.target.value as Market)}
@@ -175,7 +182,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
               </option>
             ))}
           </select>
-          <FieldError message={fieldErrors.market} />
+          <FieldError fieldId="market" message={fieldErrors.market} />
         </div>
 
         <div>
@@ -184,6 +191,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <select
             id="instrument_type"
+            {...fieldErrorAria("instrument_type", fieldErrors.instrument_type)}
             required
             value={form.instrument_type}
             onChange={(e) => updateField("instrument_type", e.target.value as InstrumentType)}
@@ -198,7 +206,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
               </option>
             ))}
           </select>
-          <FieldError message={fieldErrors.instrument_type} />
+          <FieldError fieldId="instrument_type" message={fieldErrors.instrument_type} />
         </div>
 
         <div>
@@ -207,6 +215,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <select
             id="currency"
+            {...fieldErrorAria("currency", fieldErrors.currency)}
             required
             value={form.currency}
             onChange={(e) => updateField("currency", e.target.value as Currency)}
@@ -221,7 +230,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
               </option>
             ))}
           </select>
-          <FieldError message={fieldErrors.currency} />
+          <FieldError fieldId="currency" message={fieldErrors.currency} />
         </div>
 
         <div>
@@ -230,6 +239,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <input
             id="quantity"
+            {...fieldErrorAria("quantity", fieldErrors.quantity)}
             required
             inputMode="decimal"
             value={form.quantity}
@@ -237,7 +247,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
             placeholder="例如 1000"
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
-          <FieldError message={fieldErrors.quantity} />
+          <FieldError fieldId="quantity" message={fieldErrors.quantity} />
         </div>
 
         <div>
@@ -246,6 +256,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <input
             id="avg_cost"
+            {...fieldErrorAria("avg_cost", fieldErrors.avg_cost)}
             required
             inputMode="decimal"
             value={form.avg_cost}
@@ -253,7 +264,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
             placeholder="例如 605.5"
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
-          <FieldError message={fieldErrors.avg_cost} />
+          <FieldError fieldId="avg_cost" message={fieldErrors.avg_cost} />
         </div>
 
         <div>
@@ -262,12 +273,13 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <input
             id="opened_at"
+            {...fieldErrorAria("opened_at", fieldErrors.opened_at)}
             type="date"
             value={form.opened_at}
             onChange={(e) => updateField("opened_at", e.target.value)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
-          <FieldError message={fieldErrors.opened_at} />
+          <FieldError fieldId="opened_at" message={fieldErrors.opened_at} />
         </div>
 
         <div>
@@ -276,6 +288,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <select
             id="sector"
+            {...fieldErrorAria("sector", fieldErrors.sector)}
             value={form.sector}
             disabled={form.market !== "TW" || sectors.isPending}
             onChange={(e) => updateField("sector", e.target.value)}
@@ -306,7 +319,7 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
               {sectors.error instanceof ApiError ? sectors.error.message : "未知錯誤"}
             </p>
           )}
-          <FieldError message={fieldErrors.sector} />
+          <FieldError fieldId="sector" message={fieldErrors.sector} />
         </div>
 
         <div className="sm:col-span-2">
@@ -315,11 +328,12 @@ export function ManualAddForm({ onSuccess }: { onSuccess?: (symbol: string) => v
           </label>
           <input
             id="note"
+            {...fieldErrorAria("note", fieldErrors.note)}
             value={form.note}
             onChange={(e) => updateField("note", e.target.value)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
-          <FieldError message={fieldErrors.note} />
+          <FieldError fieldId="note" message={fieldErrors.note} />
         </div>
 
         <div className="sm:col-span-2">

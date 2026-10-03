@@ -359,7 +359,10 @@ export function InventoryRowView({
           </>
         ) : (
           <div className="flex gap-2 lg:block">
-            <span className="text-xs text-neutral-400 lg:hidden">{INVENTORY_COLUMN_LABELS.note}</span>
+            {/* shrink-0: the label must keep its one-line width when a long note squeezes the flex row */}
+            <span className="shrink-0 whitespace-nowrap text-xs text-neutral-400 lg:hidden">
+              {INVENTORY_COLUMN_LABELS.note}
+            </span>
             {position.note !== null && position.note.trim() !== "" ? (
               <span className="min-w-0 break-words text-sm text-neutral-300 lg:line-clamp-2">
                 {position.note}

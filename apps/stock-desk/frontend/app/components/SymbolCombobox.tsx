@@ -9,6 +9,7 @@ import {
   createDebouncer,
   decideComboboxKeyDown,
   directorySearchNotice,
+  shouldOpenAfterDebounce,
   shouldShowCandidates,
 } from "../lib/directorySearch";
 
@@ -49,6 +50,8 @@ export function SymbolCombobox({
   required = false,
   placeholder,
   className,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
 }: {
   id: string;
   value: string;
@@ -57,11 +60,16 @@ export function SymbolCombobox({
   required?: boolean;
   placeholder?: string;
   className?: string;
+  "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
 }) {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const debouncerRef = useRef(createDebouncer(DIRECTORY_SEARCH_DEBOUNCE_MS));
+  // Mirrors the input's focus so the debounce callback (which outlives a blur)
+  // can tell whether opening the dropdown is still wanted.
+  const focusedRef = useRef(false);
 
   const search = useDirectorySearch(debouncedQuery, debouncedQuery.length > 0);
   const candidates = shouldShowCandidates(search.data) && search.data ? search.data.items : [];
@@ -92,7 +100,8 @@ export function SymbolCombobox({
     }
     debouncerRef.current.schedule(() => {
       setDebouncedQuery(trimmed);
-      setOpen(true);
+      // A blur inside the debounce window must not be undone by this late open.
+      if (shouldOpenAfterDebounce(focusedRef.current)) setOpen(true);
     });
   }
 
@@ -153,13 +162,17 @@ export function SymbolCombobox({
             : undefined
         }
         required={required}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
         value={value}
         onChange={(e) => handleChange(e.target.value)}
         onKeyDown={handleKeyDown}
         onFocus={() => {
+          focusedRef.current = true;
           if (candidates.length > 0 || notice !== null) setOpen(true);
         }}
         onBlur={() => {
+          focusedRef.current = false;
           // mousedown on a candidate (below) fires before this blur commits,
           // so a short delay lets the click's own handler run first — same
           // pattern as NavBar's `SymbolSearch`.

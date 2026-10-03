@@ -60,6 +60,18 @@ export function createDebouncer(delayMs: number) {
 }
 
 /**
+ * Whether the debounced query may open the dropdown. The debounce fires
+ * `DIRECTORY_SEARCH_DEBOUNCE_MS` after the last keystroke, so a user who types
+ * and moves on (Tab / click elsewhere) within that window would otherwise get
+ * a dropdown popping open on an input that no longer has focus, and nothing
+ * left to close it (the blur already happened). Only an input that still has
+ * focus may open it.
+ */
+export function shouldOpenAfterDebounce(inputFocused: boolean): boolean {
+  return inputFocused;
+}
+
+/**
  * Arrow-key navigation over the candidate list (AC-8), wrapping at both
  * ends so repeated ArrowDown/ArrowUp cycles instead of getting stuck.
  * `-1` means "nothing highlighted"; an empty list always stays at `-1`.
