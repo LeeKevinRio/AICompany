@@ -7,16 +7,20 @@ import { computeKeyLevels } from "../../lib/keyLevels";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import type { OperationSummaryModel } from "../../lib/operationSummary";
 import {
+  CONFIDENCE_PREFIX,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
   QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
+  summaryConfidenceLabel,
 } from "../../lib/adviceWording";
+import { pickRuleForAction } from "../../lib/ruleSelection";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_QUANTITY_LABEL,
   buildDecisionCardDistance,
+  pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
 import {
   PAGE_FOOTER_DISCLOSURES_TITLE,
@@ -152,7 +156,13 @@ function NumberCell({
  * `compositionText`／`supportiveDisclaimer`／`notSupportiveText`；no_action：
  * `INSUFFICIENT_DATA_NO_EVALUATION`；no_price：`InsufficientPanel`）。
  */
-function MainSlot({ model }: { model: OperationSummaryModel }) {
+function MainSlot({
+  model,
+  showConfidence,
+}: {
+  model: OperationSummaryModel;
+  showConfidence: boolean;
+}) {
   if (model.kind === "no_price") {
     return <InsufficientPanel reason={model.reason} />;
   }
@@ -202,6 +212,19 @@ function MainSlot({ model }: { model: OperationSummaryModel }) {
       <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-400">
         {RULE_SOURCE_CHIP}
       </span>
+      {/*
+        風控 2026-10-03 BLOCKING 2／3：信心與結論大字同一列、緊接 RULE_SOURCE_CHIP，
+        class 與 OperationSummaryPanel 的信心 chip 完全相同（text-sm text-neutral-400），
+        No colour, never hover-only. Rendered only when the conclusion comes
+        from the rules (action === aggregated_action, `showConfidence`); the
+        candidate mode hides confidence per the CEO's choice of option K2.
+      */}
+      {showConfidence && (
+        <span className="text-sm text-neutral-400">
+          {CONFIDENCE_PREFIX}
+          {summaryConfidenceLabel(model.required.confidence)}
+        </span>
+      )}
     </>
   );
 }
@@ -282,6 +305,31 @@ export function DecisionCardBody({
   const restoresWarning =
     model.kind === "held" ? model.restoresComplianceWarning : null;
 
+  // Risk review 2026-10-03 BLOCKING 3: when the conclusion was downgraded or
+  // capped (action !== aggregated_action) neither the confidence nor the
+  // invalidation line renders -- the conclusion no longer comes from the rules
+  // and the confidence was computed for the pre-override direction.
+  const card = response.advice;
+  const conclusionFromRules =
+    card !== null && card.action === card.aggregated_action;
+  const showConfidence = model.kind === "held" && conclusionFromRules;
+
+  // 失效條件行：只在 held，或候選且「支持進場」（action === "add"）時渲染；
+  // A candidate that is not supported for entry renders nothing (BLOCKING 5).
+  // The body comes only from `pickRuleForAction(...)?.invalidation` (rule text
+  // verbatim), never from an `invalidation_conditions` index (BLOCKING 1); when
+  // nothing is found the whole line is omitted, no substitute wording.
+  const invalidationBody =
+    card !== null &&
+    conclusionFromRules &&
+    card.invalidation_conditions.length > 0 &&
+    (model.kind === "held" || (model.kind === "candidate" && model.supportive))
+      ? (pickRuleForAction(card.matched_rules, card.action)?.invalidation ??
+        null)
+      : null;
+  const invalidationPrefix =
+    card !== null ? pickInvalidationPrefix(card.invalidation_conditions.length) : null;
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -327,7 +375,7 @@ export function DecisionCardBody({
 
       <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-h-[3.5rem] flex-wrap items-center gap-3">
-          <MainSlot model={model} />
+          <MainSlot model={model} showConfidence={showConfidence} />
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 sm:gap-x-6">
@@ -348,6 +396,22 @@ export function DecisionCardBody({
           />
         </div>
       </div>
+
+      {/*
+        Risk review 2026-10-03 item 4: prefix and body share one <p> at the
+        same size and grey (text-xs text-neutral-400 is the floor: nothing
+        fainter, smaller or italic); wrapping allowed, no truncate / line-clamp /
+        max-h / overflow / nowrap / tooltip; never inside <details>; body
+        verbatim with nothing spliced before or after.
+      */}
+      {invalidationBody !== null &&
+        invalidationBody !== "" &&
+        invalidationPrefix !== null && (
+          <p className="mt-2 text-xs text-neutral-400">
+            {invalidationPrefix}
+            {invalidationBody}
+          </p>
+        )}
 
       {/* 風控 required 條件 5：基準來源標籤與停損／停利同層常駐一次。 */}
       {anchorLabel !== null && (

@@ -18,6 +18,7 @@
  * 要素的滿足依賴 page.tsx 必定渲染 `<PageFooterDisclosures>`——
  * `componentWordingScan.test.ts` 有守門測試。
  */
+import { pickRuleForAction } from "./ruleSelection";
 import type { AdviceCard, AdviceResponse, CardAction } from "./types";
 import {
   AS_OF_CALENDAR_UNCONFIRMED_STATEMENT,
@@ -90,7 +91,12 @@ export interface HeldSummary {
   kind: "held";
   attributedHeadline: string;
   action: CardAction;
-  /** AC-C6.1: "該結論的主要依據（權重最高的命中規則一句話）" — `null` only when nothing matched. */
+  /**
+   * AC-C6.1: "該結論的主要依據（權重最高的命中規則一句話）" — the heaviest rule
+   * proposing the card's own action. `null` when nothing matched, or when the
+   * conclusion was downgraded / capped (action !== aggregated_action) and so
+   * came from no rule at all (risk review 2026-10-03).
+   */
   topMatchedRule: { name: string; explanation: string } | null;
   restoresComplianceWarning: string | null;
   staleDataNotice: string | null;
@@ -133,18 +139,29 @@ export type OperationSummaryModel = HeldSummary | CandidateSummary | NoPriceSumm
 const DEFENSIVE_ACTIONS: readonly CardAction[] = ["reduce", "stop_loss", "take_profit"];
 
 /**
- * AC-C6.1's "權重最高的命中規則" — `matched_rules` is returned in rule-file
- * order, not weight order (see `build_advice` in `app/advice/engine.py`), so
- * the heaviest one has to be picked client-side. Ties keep the first one
- * encountered (stable, deterministic, matches the backend's own tie-break
- * convention of "first in file order" used elsewhere on the card).
+ * AC-C6.1's main basis, direction-fixed (risk-compliance review 2026-10-03,
+ * item 4-4): the heaviest matched rule *proposing the card's own action* --
+ * option C, shared with the decision card's invalidation line via
+ * `pickRuleForAction` so 依據 and 失效條件 come from the same rule. The old
+ * "heaviest rule overall" pick showed `uptrend_ma_stack` (add 0.5) as the basis
+ * of a 減碼參考 conclusion when `rsi_overbought` (reduce 0.4) and
+ * `kd_high_level_weakening` (reduce 0.35) outweighed it as a direction.
+ * `matched_rules` is in rule-file order, not weight order; ties keep the
+ * earlier rule. `null` when the conclusion was downgraded or capped (gate
+ * below) or when no matched rule proposes the card's action: no basis is
+ * quoted rather than one pointing the other way.
  */
 function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: string } | null {
-  if (card.matched_rules.length === 0) return null;
-  const top = card.matched_rules.reduce((heaviest, rule) =>
-    rule.weight > heaviest.weight ? rule : heaviest,
-  );
-  return { name: top.name, explanation: top.explanation };
+  // Risk review 2026-10-03 (limited re-review): when the conclusion was
+  // downgraded or capped (action !== aggregated_action, including a null
+  // aggregated_action) no rule produced it, so quoting one -- even a hold rule
+  // that happens to match -- would misattribute the conclusion. Same gate as
+  // the decision card's confidence and invalidation lines.
+  if (card.aggregated_action === null || card.action !== card.aggregated_action) {
+    return null;
+  }
+  const top = pickRuleForAction(card.matched_rules, card.action);
+  return top === null ? null : { name: top.name, explanation: top.explanation };
 }
 
 /**

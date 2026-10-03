@@ -45,3 +45,24 @@ export const DECISION_CARD_QUANTITY_LABEL = "股數參考";
 export function buildDecisionCardDistance(pct: number): string {
   return `${DECISION_CARD_DISTANCE_PREFIX}${fmtSigned(pct)}`;
 }
+
+/**
+ * Prefixes for the decision card's "invalidation condition" line, approved
+ * word-for-word by risk-compliance-officer (2026-10-03 review, item 3:
+ * `work/reviews/2026-10-03-決策卡-信心與失效條件-風控審查.md`).
+ * Full-width colon; prefix and body share one `<p>`, same size and grey.
+ * The body is the backend `matched_rules[].invalidation` text, verbatim,
+ * trailing "。" kept. `invalidation_conditions.length === 1` uses
+ * `DECISION_CARD_INVALIDATION_PREFIX`, `>= 2` uses `..._ONE_OF`.
+ * Pinned verbatim by `componentWordingScan.test.ts`; any change is wording
+ * drift and must go back to risk review.
+ */
+export const DECISION_CARD_INVALIDATION_PREFIX = "失效條件：";
+export const DECISION_CARD_INVALIDATION_PREFIX_ONE_OF = "失效條件之一：";
+
+/** Prefix by the total count of the card's invalidation conditions. */
+export function pickInvalidationPrefix(conditionCount: number): string {
+  return conditionCount === 1
+    ? DECISION_CARD_INVALIDATION_PREFIX
+    : DECISION_CARD_INVALIDATION_PREFIX_ONE_OF;
+}

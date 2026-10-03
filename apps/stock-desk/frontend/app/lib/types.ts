@@ -477,6 +477,11 @@ export interface MatchedRule {
   weight: number;
   weight_meaning: string;
   explanation: string;
+  /**
+   * The rule's own invalidation text, verbatim from the rule file (backend
+   * `matched_rules[].invalidation`). `null` when the backend predates the field.
+   */
+  invalidation: string | null;
 }
 
 /** One entry of `build_advice()`'s `evaluation.skipped_rules`. */

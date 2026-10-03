@@ -199,6 +199,8 @@ import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "..
 import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_DISTANCE_PREFIX,
+  DECISION_CARD_INVALIDATION_PREFIX,
+  DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
   buildDecisionCardDistance,
 } from "../decisionCardWording";
@@ -2125,6 +2127,7 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
           weight: 0.5,
           weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
           explanation: "5 日、20 日、60 日均線由上而下排列。",
+          invalidation: null,
         },
       ],
       counterarguments: [],
@@ -2156,6 +2159,30 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
       assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
       expect(findBareRealtimeClaims(text)).toEqual([]);
     }
+  });
+
+  it("風控 2026-10-03 第 3 項：失效條件兩個前綴逐字比對（全形冒號），且無禁用詞、無裸即時宣稱", () => {
+    expect(DECISION_CARD_INVALIDATION_PREFIX).toBe("失效條件：");
+    expect(DECISION_CARD_INVALIDATION_PREFIX_ONE_OF).toBe("失效條件之一：");
+    for (const text of [DECISION_CARD_INVALIDATION_PREFIX, DECISION_CARD_INVALIDATION_PREFIX_ONE_OF]) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("風控 2026-10-03 BLOCKING 4：備選 B 截斷字面與「此依據的失效條件：」不得出現在任何掃描檔的原始碼字面中", () => {
+    for (const rel of SCANNED_FILES) {
+      const src = read(rel);
+      expect(src, rel).not.toContain("此依據的失效條件：");
+      expect(src, rel).not.toContain("（規則一致性與資料完整度）");
+    }
+  });
+
+  it("風控 2026-10-03 BLOCKING 1：DecisionCard.tsx 以 pickRuleForAction 取失效條件內文，不得用 invalidation_conditions 索引", () => {
+    const src = read("../../position/[symbol]/DecisionCard.tsx");
+    expect(src).toContain("pickRuleForAction(card.matched_rules, card.action)");
+    expect(src).not.toMatch(/invalidation_conditions\s*\[/);
+    expect(src).not.toMatch(/invalidation_conditions\.(?:at|map|find|slice|join)\(/);
   });
 
   it("required 條件 1（風控 VETO）：「距現價」三字不得出現於任何面向使用者的字面（常數本身與其渲染輸出，不含解釋性 doc comment）", () => {

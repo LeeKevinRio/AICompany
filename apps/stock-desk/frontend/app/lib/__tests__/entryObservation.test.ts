@@ -47,7 +47,7 @@ function signals(rsi: number | null, z: number | null): SignalsPayload {
 
 function advice(rules: { action: string }[], directions: { direction: string; actions: string[] }[]): AdviceCard {
   return {
-    matched_rules: rules.map((r, i) => ({ id: `r${i}`, name: "", action: r.action, weight: 1, weight_meaning: "", explanation: "" })),
+    matched_rules: rules.map((r, i) => ({ id: `r${i}`, name: "", action: r.action, weight: 1, weight_meaning: "", explanation: "", invalidation: null })),
     direction_weights: directions.map((d) => ({ ...d, weight: 1 })),
   } as unknown as AdviceCard;
 }

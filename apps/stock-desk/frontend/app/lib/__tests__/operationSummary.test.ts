@@ -55,6 +55,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
         weight: 0.5,
         weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
         explanation: "5 日、20 日、60 日均線由上而下排列。",
+        invalidation: null,
       },
     ],
     counterarguments: ["均線由過去價格計算，轉折時排列會落後於價格。"],
@@ -163,6 +164,7 @@ describe("buildOperationSummary — held mode", () => {
               weight: 0.2,
               weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
               explanation: "輕權重規則的說明。",
+              invalidation: null,
             },
             {
               id: "heavy_rule",
@@ -171,6 +173,7 @@ describe("buildOperationSummary — held mode", () => {
               weight: 0.6,
               weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
               explanation: "重權重規則的說明。",
+              invalidation: null,
             },
           ],
         }),
@@ -286,50 +289,161 @@ describe("buildOperationSummary — held mode", () => {
     expect(model.required.asOfStatement).not.toContain(AS_OF_AGE_UNKNOWN_STATEMENT);
   });
 
-  it(
-    "picks the heaviest matched rule as the main basis even when it points the opposite way from the " +
-      "final (defensive-downgraded) action — current behaviour pinned as-is, not a fix: AC-C6.1 only asks " +
-      "for \"the heaviest matched rule\", not \"the heaviest rule in the winning direction\", so whether a " +
-      "direction-aware pick is required is an open PM/risk-compliance question, not decided by this test",
-    () => {
-      const model = buildOperationSummary(
-        makeResponse({
-          advice: makeCard({
-            action: "hold",
-            aggregated_action: "add",
-            matched_rules: [
-              {
-                id: "defensive_rule",
-                name: "防禦型規則",
-                action: "stop_loss",
-                weight: 0.4,
-                weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
-                explanation: "防禦型規則命中，觸發加碼降級為觀望。",
-              },
-              {
-                id: "add_rule",
-                name: "均線多頭排列",
-                action: "add",
-                weight: 0.6,
-                weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
-                explanation: "5 日、20 日、60 日均線由上而下排列。",
-              },
-            ],
-            downgrade_notices: ["另有 1 條防禦型規則同時命中（防禦型規則），加碼建議改為觀望。"],
-          }),
+  it("direction fix (risk review 2026-10-03 item 4-4): the basis is the heaviest rule proposing the card's own action, never the heaviest rule overall", () => {
+    const rule = (id: string, name: string, action: string, weight: number, explanation: string) => ({
+      id,
+      name,
+      action,
+      weight,
+      weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+      explanation,
+      invalidation: null,
+    });
+    // The review's counter-example: the constructive rule is the heaviest single
+    // rule, but the defensive side wins on its summed weight -> 減碼參考.
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({
+          action: "reduce",
+          aggregated_action: "reduce",
+          matched_rules: [
+            rule("uptrend_ma_stack", "均線多頭排列", "add", 0.5, "多頭排列的說明。"),
+            rule("rsi_overbought", "RSI 超買", "reduce", 0.4, "RSI 超買的說明。"),
+            rule("kd_high_level_weakening", "KD 高檔轉弱", "reduce", 0.35, "KD 高檔轉弱的說明。"),
+          ],
         }),
-      );
-      if (model.kind !== "held") throw new Error("unreachable");
-      expect(model.action).toBe("hold");
-      // Pinned: the weight-only pick surfaces the *constructive* rule as the
-      // "main basis" even though the card's final action is the defensive
-      // "hold" — a reader could misread this as contradicting the headline.
-      expect(model.topMatchedRule).toEqual({
-        name: "均線多頭排列",
-        explanation: "5 日、20 日、60 日均線由上而下排列。",
-      });
-    },
-  );
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.action).toBe("reduce");
+    expect(model.topMatchedRule).toEqual({ name: "RSI 超買", explanation: "RSI 超買的說明。" });
+  });
+
+  it("direction fix: equal weights keep the earlier rule, and a rule of another action never qualifies", () => {
+    const rule = (id: string, action: string, weight: number) => ({
+      id,
+      name: id,
+      action,
+      weight,
+      weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+      explanation: `${id} 的說明。`,
+      invalidation: null,
+    });
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({
+          action: "reduce",
+          aggregated_action: "reduce",
+          matched_rules: [rule("heavy_add", "add", 0.9), rule("first_reduce", "reduce", 0.4), rule("second_reduce", "reduce", 0.4)],
+        }),
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.topMatchedRule?.name).toBe("first_reduce");
+  });
+
+  it("direction fix: when no matched rule proposes the card's action (defensive downgrade to hold), no basis is quoted rather than one pointing the other way", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({
+          action: "hold",
+          aggregated_action: "add",
+          matched_rules: [
+            {
+              id: "defensive_rule",
+              name: "防禦型規則",
+              action: "stop_loss",
+              weight: 0.4,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "防禦型規則命中，觸發加碼降級為觀望。",
+              invalidation: null,
+            },
+            {
+              id: "add_rule",
+              name: "均線多頭排列",
+              action: "add",
+              weight: 0.6,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "5 日、20 日、60 日均線由上而下排列。",
+              invalidation: null,
+            },
+          ],
+          downgrade_notices: ["另有 1 條防禦型規則同時命中（防禦型規則），加碼建議改為觀望。"],
+        }),
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.action).toBe("hold");
+    expect(model.topMatchedRule).toBeNull();
+  });
+
+  it("gate (risk re-review 2026-10-03): a downgraded conclusion quotes no basis even when a hold rule happens to match", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({
+          action: "hold",
+          aggregated_action: "add",
+          matched_rules: [
+            {
+              id: "volume_spike_watch",
+              name: "量能異常放大",
+              action: "hold",
+              weight: 0.3,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "成交量放大，先觀察。",
+              invalidation: "量能回到近 20 日均量以下。",
+            },
+            {
+              id: "add_rule",
+              name: "均線多頭排列",
+              action: "add",
+              weight: 0.6,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "5 日、20 日、60 日均線由上而下排列。",
+              invalidation: null,
+            },
+            {
+              id: "defensive_rule",
+              name: "防禦型規則",
+              action: "stop_loss",
+              weight: 0.4,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "防禦型規則命中，觸發加碼降級為觀望。",
+              invalidation: null,
+            },
+          ],
+          downgrade_notices: ["另有 1 條防禦型規則同時命中（防禦型規則），加碼建議改為觀望。"],
+        }),
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.action).toBe("hold");
+    expect(model.topMatchedRule).toBeNull();
+  });
+
+  it("gate (risk re-review 2026-10-03): a null aggregated_action quotes no basis", () => {
+    const model = buildOperationSummary(
+      makeResponse({
+        advice: makeCard({
+          action: "hold",
+          aggregated_action: null,
+          matched_rules: [
+            {
+              id: "volume_spike_watch",
+              name: "量能異常放大",
+              action: "hold",
+              weight: 0.3,
+              weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+              explanation: "成交量放大，先觀察。",
+              invalidation: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (model.kind !== "held") throw new Error("unreachable");
+    expect(model.topMatchedRule).toBeNull();
+  });
 
   it("falls back to the generic absence reason, not a rewritten cause, when quantity_range is null", () => {
     const model = buildOperationSummary(makeResponse({ advice: makeCard({ quantity_range: null }) }));

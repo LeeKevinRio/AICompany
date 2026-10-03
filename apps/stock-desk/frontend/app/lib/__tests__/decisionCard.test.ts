@@ -14,9 +14,13 @@ import type { AdviceCard, AdviceResponse, Bar } from "../types";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
   DECISION_CARD_ARIA_LABEL,
+  DECISION_CARD_INVALIDATION_PREFIX,
+  DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
 } from "../decisionCardWording";
 import {
+  CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
+  CONFIDENCE_PREFIX,
   HELD_ACTION_LABELS,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
@@ -58,6 +62,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
         weight: 0.5,
         weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
         explanation: "5 日、20 日、60 日均線由上而下排列。",
+        invalidation: null,
       },
     ],
     counterarguments: [],
@@ -475,5 +480,255 @@ describe("DecisionCardBody — StaleDataAlert 渲染在卡片內", () => {
     expect(html).toMatch(
       /role="alert"[^>]*>[^<]*本評估所依據的收盤資料為 2026-09-10/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 決策卡「信心」與「一條失效條件」（風控 2026-10-03 審查 BLOCKING 1～5；CEO 選 K2）
+// ---------------------------------------------------------------------------
+
+const RSI_INVALIDATION = "RSI 回落至 50 與 70 之間，且收盤價維持在 20 日均線之上。";
+const MA_INVALIDATION = "收盤價跌破 60 日均線，或 5 日均線下彎並跌破 20 日均線。";
+const KD_INVALIDATION = "K 值重新向上穿越 D 值，或 K 值回落至 50 以下後止跌。";
+
+function rule(
+  id: string,
+  action: string,
+  weight: number,
+  invalidation: string | null,
+): AdviceCard["matched_rules"][number] {
+  return {
+    id,
+    name: id,
+    action,
+    weight,
+    weight_meaning: "權重為規則優先序，非機率、勝率或預期報酬",
+    explanation: `${id} 的說明。`,
+    invalidation,
+  };
+}
+
+/** The review's counter-example: reduce wins on summed weight, MA stack is the heaviest single rule. */
+function counterExampleCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
+  return makeCard({
+    action: "reduce",
+    aggregated_action: "reduce",
+    matched_rules: [
+      rule("uptrend_ma_stack", "add", 0.5, MA_INVALIDATION),
+      rule("rsi_overbought", "reduce", 0.4, RSI_INVALIDATION),
+      rule("kd_high_level_weakening", "reduce", 0.35, KD_INVALIDATION),
+    ],
+    // Deliberately in a different order than matched_rules: the body must come
+    // from the picked rule, never from an index into this list.
+    invalidation_conditions: [KD_INVALIDATION, MA_INVALIDATION, RSI_INVALIDATION],
+    ...overrides,
+  });
+}
+
+function renderHeld(card: AdviceCard, held = true, anchorSource: "cost" | "close-not-held" = "cost"): string {
+  return renderCard({
+    response: makeResponse({ held, advice: card }),
+    bars: makeBars(80),
+    anchorSource,
+    avgCost: anchorSource === "cost" ? 120 : null,
+  });
+}
+
+/** The MainSlot flex row (the first flex row of the card body that holds the action headline). */
+function mainSlot(html: string): string {
+  const m = html.match(/<div class="flex min-h-\[3\.5rem\][^"]*">([\s\S]*?)<\/div><div class="grid/);
+  if (m === null) throw new Error("MainSlot not found");
+  return m[1]!;
+}
+
+function invalidationParagraph(html: string): string | null {
+  const m = html.match(/<p class="[^"]*">失效條件[^<]*<\/p>/);
+  return m === null ? null : m[0];
+}
+
+const CONFIDENCE_RE = new RegExp(`${CONFIDENCE_PREFIX}(?:<!-- -->)?中`);
+
+describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
+  it("held 且 action === aggregated_action：信心在 MainSlot 同一列、緊接 RULE_SOURCE_CHIP 之後，class 為 text-sm text-neutral-400", () => {
+    const html = renderHeld(counterExampleCard());
+    const slot = mainSlot(html);
+    expect(slot).toContain(RULE_SOURCE_CHIP);
+    const chipEnd = slot.indexOf(RULE_SOURCE_CHIP) + RULE_SOURCE_CHIP.length;
+    const conf = slot.search(CONFIDENCE_RE);
+    expect(conf).toBeGreaterThan(chipEnd);
+    // Nothing but the chip's closing tag and the confidence span's opening tag in between.
+    expect(slot.slice(chipEnd, conf)).toBe('</span><span class="text-sm text-neutral-400">');
+    // Not in the footer / elsewhere: exactly one confidence line on the whole card.
+    expect(html.match(new RegExp(CONFIDENCE_RE, "g"))).toHaveLength(1);
+  });
+
+  it("信心 class 與 OperationSummaryPanel 的信心 chip 完全相同，不上色、無 hover-only／title／tooltip", () => {
+    const html = renderHeld(counterExampleCard());
+    const m = html.match(/<span class="([^"]*)">信心 /);
+    expect(m?.[1]).toBe("text-sm text-neutral-400");
+    const tag = html.match(/<span[^>]*>信心 /)![0];
+    expect(tag).not.toMatch(/title=|hidden|group-hover|hover:|opacity|sr-only/);
+  });
+
+  it("action !== aggregated_action（降級或被上限擋下）：信心與失效條件兩行都不渲染", () => {
+    const html = renderHeld(
+      counterExampleCard({ action: "hold", aggregated_action: "reduce" }),
+    );
+    expect(html).not.toMatch(CONFIDENCE_RE);
+    expect(html).not.toContain(CONFIDENCE_PREFIX);
+    expect(html).not.toContain("失效條件");
+    // Heading is still the held conclusion.
+    expect(html).toContain(RULE_SOURCE_CHIP);
+  });
+
+  it("aggregated_action 為 null 時（action !== aggregated_action）兩行都不渲染", () => {
+    const html = renderHeld(counterExampleCard({ aggregated_action: null }));
+    expect(html).not.toContain(CONFIDENCE_PREFIX);
+    expect(html).not.toContain("失效條件");
+  });
+
+  it("K2：候選模式（支持與未支持）都不渲染信心行，也不出現 K1 句", () => {
+    const supportive = renderHeld(
+      makeCard({
+        action: "add",
+        aggregated_action: "add",
+        matched_rules: [rule("uptrend_ma_stack", "add", 0.5, MA_INVALIDATION)],
+        invalidation_conditions: [MA_INVALIDATION],
+      }),
+      false,
+      "close-not-held",
+    );
+    const notSupportive = renderHeld(
+      makeCard({ action: "hold", aggregated_action: "hold", matched_rules: [], invalidation_conditions: [] }),
+      false,
+      "close-not-held",
+    );
+    for (const html of [supportive, notSupportive]) {
+      expect(html).not.toContain(CONFIDENCE_PREFIX);
+      expect(html).not.toContain(CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE);
+    }
+  });
+
+  it("no_action／no_price 不渲染信心行", () => {
+    const noAction = renderHeld(
+      counterExampleCard({ action: "insufficient_data", aggregated_action: "insufficient_data", quantity_range: null }),
+    );
+    const noPrice = renderCard({
+      response: makeResponse({ status: "insufficient_data", reason: "資料不足，無法計算。", advice: null }),
+      bars: null,
+      anchorSource: "close-unknown",
+      avgCost: null,
+    });
+    for (const html of [noAction, noPrice]) {
+      expect(html).not.toContain(CONFIDENCE_PREFIX);
+      expect(html).not.toContain("失效條件");
+    }
+  });
+});
+
+describe("DecisionCardBody — 失效條件行（BLOCKING 1／3／5）", () => {
+  it("反例：減碼參考時取 rsi_overbought 的原文（不是權重最重的均線多頭排列、也不是索引第 0 項），句尾「。」保留、逐字", () => {
+    const html = renderHeld(counterExampleCard());
+    const p = invalidationParagraph(html);
+    expect(p).not.toBeNull();
+    expect(p).toContain(`${DECISION_CARD_INVALIDATION_PREFIX_ONE_OF}${RSI_INVALIDATION}</p>`);
+    expect(html).not.toContain(MA_INVALIDATION);
+    expect(html).not.toContain(KD_INVALIDATION);
+  });
+
+  it("前綴：invalidation_conditions.length === 1 → 「失效條件：」；>= 2 → 「失效條件之一：」", () => {
+    const one = renderHeld(
+      counterExampleCard({ invalidation_conditions: [RSI_INVALIDATION] }),
+    );
+    expect(invalidationParagraph(one)).toContain(
+      `>${DECISION_CARD_INVALIDATION_PREFIX}${RSI_INVALIDATION}</p>`,
+    );
+    expect(one).not.toContain(DECISION_CARD_INVALIDATION_PREFIX_ONE_OF);
+    const many = renderHeld(counterExampleCard());
+    expect(invalidationParagraph(many)).toContain(`>${DECISION_CARD_INVALIDATION_PREFIX_ONE_OF}`);
+  });
+
+  it("前綴與內文同一個 <p>，class 恰為 text-xs text-neutral-400；無截斷／折疊／更淡／斜體／tooltip 類 class，且不在 <details> 內", () => {
+    const html = renderHeld(counterExampleCard());
+    const p = invalidationParagraph(html)!;
+    expect(p).toMatch(/^<p class="mt-2 text-xs text-neutral-400">/);
+    expect(p).not.toMatch(
+      /truncate|line-clamp|max-h|overflow|nowrap|italic|neutral-500|neutral-600|opacity|hidden|hover:|title=|sr-only/,
+    );
+    // Whole-card: no <details> anywhere (the card never folds), no tooltip attribute on the line.
+    expect(html).not.toContain("<details");
+  });
+
+  it("內文前後不拼接任何祈使或動作語：<p> 內容恰為 前綴＋原文", () => {
+    const html = renderHeld(counterExampleCard());
+    const text = invalidationParagraph(html)!.replace(/<[^>]+>/g, "");
+    expect(text).toBe(`${DECISION_CARD_INVALIDATION_PREFIX_ONE_OF}${RSI_INVALIDATION}`);
+  });
+
+  it("invalidation_conditions 為空時整行不渲染", () => {
+    const html = renderHeld(counterExampleCard({ invalidation_conditions: [] }));
+    expect(html).not.toContain("失效條件");
+  });
+
+  it("選出的規則沒有 invalidation 文字（null）時整行不渲染，不退回索引或其他規則", () => {
+    const html = renderHeld(
+      counterExampleCard({
+        matched_rules: [
+          rule("uptrend_ma_stack", "add", 0.5, MA_INVALIDATION),
+          rule("rsi_overbought", "reduce", 0.4, null),
+          rule("kd_high_level_weakening", "reduce", 0.35, KD_INVALIDATION),
+        ],
+      }),
+    );
+    expect(html).not.toContain("失效條件");
+    expect(html).not.toContain(KD_INVALIDATION);
+  });
+
+  it("沒有任何命中規則提議該 action 時整行不渲染", () => {
+    const html = renderHeld(
+      counterExampleCard({ matched_rules: [rule("uptrend_ma_stack", "add", 0.5, MA_INVALIDATION)] }),
+    );
+    expect(html).not.toContain("失效條件");
+  });
+
+  it("候選支持進場（action add）渲染；候選「本次未支持進場」不渲染", () => {
+    const supportive = renderHeld(
+      makeCard({
+        action: "add",
+        aggregated_action: "add",
+        matched_rules: [rule("uptrend_ma_stack", "add", 0.5, MA_INVALIDATION)],
+        invalidation_conditions: [MA_INVALIDATION],
+      }),
+      false,
+      "close-not-held",
+    );
+    expect(invalidationParagraph(supportive)).toContain(
+      `${DECISION_CARD_INVALIDATION_PREFIX}${MA_INVALIDATION}</p>`,
+    );
+    // Not supportive: even with an invalidation text and a hold rule on hand.
+    const notSupportive = renderHeld(
+      makeCard({
+        action: "hold",
+        aggregated_action: "hold",
+        matched_rules: [rule("volume_spike_watch", "hold", 0.3, "成交量回到近 20 日均量附近。")],
+        invalidation_conditions: ["成交量回到近 20 日均量附近。"],
+      }),
+      false,
+      "close-not-held",
+    );
+    expect(notSupportive).not.toContain("失效條件");
+    expect(notSupportive).toContain("本次未支持進場");
+  });
+
+  it("備選 B 與「此依據的失效條件：」不出現在任何狀態的輸出", () => {
+    const outputs = [
+      renderHeld(counterExampleCard()),
+      renderHeld(counterExampleCard({ invalidation_conditions: [RSI_INVALIDATION] })),
+    ];
+    for (const html of outputs) {
+      expect(html).not.toContain("此依據的失效條件");
+      expect(html).not.toContain("（規則一致性與資料完整度）");
+      expect(html).not.toMatch(/信心 (?:<!-- -->)?[低中高]（/);
+    }
   });
 });
