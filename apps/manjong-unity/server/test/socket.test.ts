@@ -80,18 +80,13 @@ class Client {
   }
 }
 
-async function guest(): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/guest', payload: {} });
-  return res.json().token as string;
-}
-
-async function login(token?: string): Promise<{ client: Client; token: string }> {
-  const t = token ?? (await guest());
+async function login(token?: string): Promise<{ client: Client; token: string; player: Msg }> {
   const client = await Client.open();
-  client.send({ type: 'auth', token: t });
+  client.send(token ? { type: 'auth', token, requestId: 'r1' } : { type: 'guest', requestId: 'r1' });
   const ok = await client.next();
   expect(ok.type).toBe('auth_ok');
-  return { client, token: t };
+  expect(ok.replyTo).toBe('r1');
+  return { client, token: token ?? ok.token, player: ok.player };
 }
 
 // ---- independent re-computation of what the server should tell the player ----
@@ -290,8 +285,11 @@ describe('websocket game', () => {
         client.send({ type: 'action', actionId: pick.id });
       }
       // Coins were settled server-side and pushed after each hand.
-      const me = (await app.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${token}` } })).json().player;
+      client.send({ type: 'me', requestId: 'me' });
+      const me = (await client.next((x) => x.replyTo === 'me')).player;
       expect(me.handsPlayed).toBeGreaterThan(0);
+      expect(me.coins).toBeGreaterThanOrEqual(0);
+      expect(repo.getByTokenHash(hashToken(token))!.coins).toBe(me.coins);
       const lastPlayer = [...client.messages].reverse().find((x) => x.type === 'player');
       expect(lastPlayer.player.coins).toBe(me.coins);
       client.close();
@@ -320,14 +318,16 @@ describe('websocket game', () => {
     client.close();
   });
 
-  it('requires auth first and closes with 4401 on a bad token', async () => {
+  it('requires auth first; a bad token is INVALID_TOKEN / 4401', async () => {
     const a = await Client.open();
     a.send({ type: 'start' });
     expect((await a.next()).code).toBe('UNAUTHORIZED');
     expect(await a.closed).toBe(4401);
     const b = await Client.open();
-    b.send({ type: 'auth', token: 'x'.repeat(40) });
-    expect((await b.next()).code).toBe('UNAUTHORIZED');
+    b.send({ type: 'auth', token: 'x'.repeat(40), requestId: 'a1' });
+    const err = await b.next();
+    expect(err.code).toBe('INVALID_TOKEN');
+    expect(err.replyTo).toBe('a1');
     expect(await b.closed).toBe(4401);
   });
 
@@ -360,7 +360,105 @@ describe('websocket game', () => {
     const { client } = await login();
     client.send({ type: 'ping' });
     const m = await client.next();
-    expect(Object.keys(m).sort()).toEqual(['code', 'message', 'player', 'seq', 'step', 'type', 'view']);
+    expect(Object.keys(m).sort()).toEqual(
+      ['code', 'entries', 'message', 'player', 'replyTo', 'seq', 'step', 'token', 'type', 'view'].sort(),
+    );
+    client.close();
+  });
+});
+
+describe('websocket accounts', () => {
+  it('guest login returns a token that works for later auth', async () => {
+    const first = await login();
+    expect(first.token).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(first.player.coins).toBe(20000);
+    expect(first.player.nickname).toMatch(/^訪客\d{4}$/);
+    first.client.close();
+    await first.client.closed;
+    const again = await login(first.token);
+    expect(again.player.id).toBe(first.player.id);
+    again.client.send({ type: 'guest', requestId: 'g2' });
+    expect((await again.client.next((m) => m.replyTo === 'g2')).code).toBe('BAD_MESSAGE');
+    again.client.close();
+  });
+
+  it('nickname validation with replyTo on errors', async () => {
+    const { client } = await login();
+    client.send({ type: 'nickname', nickname: '  小明  ', requestId: 'n1' });
+    const ok = await client.next((m) => m.replyTo === 'n1');
+    expect(ok.type).toBe('player');
+    expect(ok.player.nickname).toBe('小明');
+    let i = 0;
+    for (const nickname of ['', '   ', '一二三四五六七八九十一二三', 'a\u0000b', 'x'.repeat(100), 42]) {
+      const id = `bad${i++}`;
+      client.send({ type: 'nickname', nickname, requestId: id });
+      const err = await client.next((m) => m.replyTo === id);
+      expect(err.type).toBe('error');
+      expect(err.code).toBe('INVALID_NICKNAME');
+    }
+    client.close();
+  });
+
+  it('relief only below the threshold', async () => {
+    const { client, token } = await login();
+    client.send({ type: 'relief', requestId: 'r' });
+    expect((await client.next((m) => m.replyTo === 'r')).code).toBe('RELIEF_NOT_ELIGIBLE');
+    repo.getByTokenHash(hashToken(token))!.coins = 0;
+    client.send({ type: 'relief', requestId: 'r2' });
+    expect((await client.next((m) => m.replyTo === 'r2')).player.coins).toBe(10000);
+    client.close();
+  });
+
+  it('leaderboard is sorted by coins and marks the caller', async () => {
+    const a = await login();
+    const b = await login();
+    repo.getByTokenHash(hashToken(b.token))!.coins = 99999;
+    a.client.send({ type: 'leaderboard', requestId: 'lb' });
+    const lb = await a.client.next((m) => m.replyTo === 'lb');
+    expect(lb.type).toBe('leaderboard');
+    const ids = lb.entries.map((e: Msg) => e.coins);
+    expect([...ids].sort((x: number, y: number) => y - x)).toEqual(ids);
+    expect(lb.entries.filter((e: Msg) => e.isMe)).toHaveLength(1);
+    expect(lb.entries[0].coins).toBe(99999);
+    a.client.close();
+    b.client.close();
+  });
+});
+
+describe('coin floor', () => {
+  it('a bankrupt player ends the game; coins never go negative', async () => {
+    const { client, token } = await login();
+    const record = repo.getByTokenHash(hashToken(token))!;
+    record.coins = 1000; // the minimum to start
+    client.send({ type: 'start' });
+    let endReason = '';
+    for (let i = 0; i < 20000 && !endReason; i++) {
+      const m = await client.next((x) => x.type === 'state');
+      const view = m.view;
+      expect(view.myCoins).toBeGreaterThanOrEqual(0);
+      if (view.phase === 'game_end') {
+        endReason = view.endReason;
+        expect(view.options).toEqual([]);
+        if (endReason === 'bankrupt') expect(view.myCoins).toBe(0);
+        break;
+      }
+      expect(view.endReason).toBe('');
+      // Lose as fast as possible: never win, always pass, throw away the drawn tile.
+      const opts: Msg[] = view.options;
+      const pick =
+        opts.find((o) => o.type === 'next') ??
+        opts.find((o) => o.type === 'pass') ??
+        opts.find((o) => o.type === 'discard' && o.tile === view.players[view.mySeat].drawnTile) ??
+        opts.find((o) => o.type === 'discard');
+      client.send({ type: 'action', actionId: pick.id });
+    }
+    expect(['bankrupt', 'rounds_complete']).toContain(endReason);
+    expect(record.coins).toBeGreaterThanOrEqual(0);
+    if (endReason === 'bankrupt') {
+      expect(record.coins).toBe(0);
+      client.send({ type: 'start', requestId: 's' });
+      expect((await client.next((m) => m.type === 'error')).code).toBe('NOT_ENOUGH_COINS');
+    }
     client.close();
   });
 });

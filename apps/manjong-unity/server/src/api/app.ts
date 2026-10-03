@@ -1,13 +1,14 @@
-// HTTP API (contract: work/manjong-unity/api-contract.md).
+// HTTP surface: health check, WebSocket endpoint and optional WebGL static files.
+// Everything else goes through the WebSocket protocol (contract: work/manjong-unity/api-contract.md).
 
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { existsSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import type { PlayerRecord, PlayerRepository } from '../store/players.js';
-import { Accounts, ApiError, toPlayerDto } from './accounts.js';
+import type { PlayerRepository } from '../store/players.js';
+import { Accounts, ApiError } from './accounts.js';
 import { GameManager } from './games.js';
 import { handleGameSocket } from './socket.js';
 
@@ -23,15 +24,6 @@ export interface AppOptions {
   /** WebSocket flood guard (client messages per 10 s); raised in tests that play at machine speed. */
   wsMessagesPer10s?: number;
 }
-
-const nicknameSchema = {
-  body: {
-    type: 'object',
-    required: ['nickname'],
-    additionalProperties: false,
-    properties: { nickname: { type: 'string' } },
-  },
-} as const;
 
 // Unity WebGL builds may be pre-compressed; serve them with the matching encoding.
 const ENCODINGS: Record<string, string> = { '.gz': 'gzip', '.br': 'br' };
@@ -50,7 +42,7 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
   await app.register(websocket, { options: { maxPayload: 4 * 1024 } });
   await app.register(cors, {
     origin: options.corsOrigin,
-    methods: ['GET', 'POST'],
+    methods: ['GET'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
@@ -66,31 +58,7 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
     return reply.status(500).send({ error: { code: 'INTERNAL', message: '伺服器發生錯誤' } });
   });
 
-  const requirePlayer = (request: FastifyRequest): PlayerRecord => {
-    const player = accounts.authenticate(request.headers.authorization);
-    if (!player) throw new ApiError(401, 'UNAUTHORIZED', '請重新登入');
-    return player;
-  };
-
   app.get('/api/health', async () => ({ ok: true }));
-
-  app.post('/api/auth/guest', async () => {
-    const { token, player } = accounts.createGuest();
-    return { token, player: toPlayerDto(player) };
-  });
-
-  app.get('/api/me', async (request) => ({ player: toPlayerDto(requirePlayer(request)) }));
-
-  app.post('/api/me/nickname', { schema: nicknameSchema }, async (request) => {
-    const { nickname } = request.body as { nickname: string };
-    return { player: toPlayerDto(accounts.rename(requirePlayer(request), nickname)) };
-  });
-
-  app.post('/api/me/relief', async (request) => ({ player: toPlayerDto(accounts.relief(requirePlayer(request))) }));
-
-  app.get('/api/leaderboard', async (request) => ({
-    entries: accounts.leaderboard(accounts.authenticate(request.headers.authorization)),
-  }));
 
   app.get('/ws', { websocket: true }, (socket, request) => {
     handleGameSocket(socket, request.headers.origin, options.corsOrigin, accounts, games, options.wsMessagesPer10s);

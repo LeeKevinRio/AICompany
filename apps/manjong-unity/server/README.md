@@ -1,7 +1,7 @@
 # manjong-unity server
 
 台灣 16 張麻將的權威伺服器（TypeScript / Node.js 22 / Fastify）。規則、洗牌、AI、聽牌計算、台數與結算全部在這裡；
-Unity 用戶端只送「選了哪個合法動作」。帳號 / 排行榜走 HTTP，牌局走 WebSocket（`/ws`），見 API 契約 v0.2。
+Unity 用戶端只送「選了哪個合法動作」。**所有功能（登入、暱稱、救濟金、排行榜、牌局）都走 WebSocket（`/ws`）**，HTTP 只剩 `/api/health` 與 WebGL 靜態檔，見 API 契約 v0.3。
 
 - 規則與台數表：`work/manjong-unity/規則與台數表.md`（數值在 `src/engine/rules.ts`）
 - API 契約：`work/manjong-unity/api-contract.md`
@@ -12,7 +12,7 @@ Unity 用戶端只送「選了哪個合法動作」。帳號 / 排行榜走 HTTP
 ```bash
 npm install
 npm run dev        # http://127.0.0.1:7316，存檔自動重啟
-npm test           # 單元 + HTTP + WebSocket 整合測試
+npm test           # 單元 + WebSocket 整合測試
 WS_GAMES=200 npx vitest run test/socket.test.ts   # 長時間驗證：透過 WebSocket 打 200 場，逐步比對聽牌 / 槓 / 胡 / 台數
 npm run typecheck
 npm run simulate -- 1000   # 1000 場全 AI 對打：檢查牌數守恆、零和，並輸出台型統計
@@ -35,12 +35,12 @@ npm run simulate -- 1000   # 1000 場全 AI 對打：檢查牌數守恆、零和
 src/engine/   規則引擎：牌碼、牌型分析（向聽 / 聽牌 / 拆解）、台數計算、狀態機
 src/ai/       AI（牌效：向聽數 + 有效牌，三種吃碰個性）
 src/game/     一人對三 AI 的 session、每座位的畫面（隱藏資訊不外流）、全 AI 模擬
-src/api/      HTTP 路由、WebSocket 牌局協定（socket.ts）、訪客帳號、金幣與排行榜、牌局管理
+src/api/      WebSocket 協定（socket.ts）、訪客帳號、金幣（下限 0）與排行榜、牌局管理
 src/store/    玩家資料儲存（JSON 檔，原子寫入）
 ```
 
 ## 已知限制（v0.1）
 
 - 牌局狀態放記憶體，伺服器重啟會中斷進行中的牌局（金幣結算是每局即時寫入，不受影響）。
-- HTTP 沒有 rate limit（WebSocket 有每 10 秒 100 則的簡易限制）；正式部署前要補。
+- WebSocket 只有每連線每 10 秒 100 則的簡易限制，沒有跨連線的建帳號節流；正式部署前要補。
 - 中途離開不會被判輸；目前排行榜只有自己，之後做多人時再處理。
