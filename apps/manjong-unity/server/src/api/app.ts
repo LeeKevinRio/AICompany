@@ -23,6 +23,8 @@ export interface AppOptions {
   aiDelayMs?: number;
   /** WebSocket flood guard (client messages per 10 s); raised in tests that play at machine speed. */
   wsMessagesPer10s?: number;
+  /** How long a new connection may stay unauthenticated (ms); shortened in tests. */
+  wsAuthTimeoutMs?: number;
 }
 
 // Unity WebGL builds may be pre-compressed; serve them with the matching encoding.
@@ -61,7 +63,15 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
   app.get('/api/health', async () => ({ ok: true }));
 
   app.get('/ws', { websocket: true }, (socket, request) => {
-    handleGameSocket(socket, request.headers.origin, options.corsOrigin, accounts, games, options.wsMessagesPer10s);
+    handleGameSocket(
+      socket,
+      request.headers.origin,
+      options.corsOrigin,
+      accounts,
+      games,
+      options.wsMessagesPer10s,
+      options.wsAuthTimeoutMs,
+    );
   });
 
   if (options.webglDir && existsSync(resolve(options.webglDir, 'index.html'))) {

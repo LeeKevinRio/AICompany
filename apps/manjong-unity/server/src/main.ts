@@ -8,6 +8,10 @@ const host = process.env.HOST ?? '127.0.0.1';
 const dataFile = resolve(process.env.DATA_FILE ?? 'data/players.json');
 const webglDir = resolve(process.env.WEBGL_DIR ?? '../client/Build/WebGL');
 const aiDelayMs = Number(process.env.AI_DELAY_MS ?? 600);
+if (!Number.isFinite(aiDelayMs) || aiDelayMs < 0) {
+  console.error(`AI_DELAY_MS 必須是 0 以上的數字（目前是 ${process.env.AI_DELAY_MS}）。`);
+  process.exit(1);
+}
 const corsOrigin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim()) : true;
 if (process.env.NODE_ENV === 'production' && corsOrigin === true) {
   console.error('NODE_ENV=production 時必須設定 CORS_ORIGIN（逗號分隔的允許來源）。');

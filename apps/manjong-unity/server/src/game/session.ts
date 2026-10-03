@@ -152,7 +152,10 @@ export class GameSession {
       // Clear the busy flag before publishing, so a listener may act on the new state immediately.
       this.pumping = null;
       if (state) this.hooks.onState(state);
-    })();
+    })().catch((err: unknown) => {
+      this.pumping = null;
+      this.hooks.onError(err);
+    });
   }
 
   /** Plays AI seats until the human owes a decision or the hand ends; returns the snapshot to publish. */

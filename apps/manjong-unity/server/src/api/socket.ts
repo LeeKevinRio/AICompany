@@ -7,7 +7,7 @@ import type { PlayerRecord } from '../store/players.js';
 import { ApiError, toPlayerDto, type Accounts } from './accounts.js';
 import type { GameManager, GameSink } from './games.js';
 
-const AUTH_TIMEOUT_MS = 10_000;
+export const DEFAULT_AUTH_TIMEOUT_MS = 10_000;
 const CLOSE_UNAUTHORIZED = 4401;
 /** Auth timeout uses its own code so the client never mistakes it for an invalid (to be discarded) token. */
 const CLOSE_AUTH_TIMEOUT = 4408;
@@ -34,6 +34,7 @@ export function handleGameSocket(
   accounts: Accounts,
   games: GameManager,
   maxMessagesPer10s = DEFAULT_MESSAGES_PER_10S,
+  authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
 ): void {
   if (allowedOrigins !== true && origin !== undefined && !allowedOrigins.includes(origin)) {
     socket.close(CLOSE_FORBIDDEN_ORIGIN, 'origin not allowed');
@@ -72,7 +73,7 @@ export function handleGameSocket(
     if (player) return;
     sendError('AUTH_TIMEOUT', '登入逾時，請重新連線');
     socket.close(CLOSE_AUTH_TIMEOUT, 'auth timeout');
-  }, AUTH_TIMEOUT_MS);
+  }, authTimeoutMs);
 
   const resync = (): void => {
     if (!player) return;

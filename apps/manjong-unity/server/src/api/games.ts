@@ -71,6 +71,8 @@ export class GameManager {
         },
         onError: (err) => {
           console.error(`[game ${id}] AI loop failed:`, err);
+          // Drop the broken game so the next `start` opens a fresh one instead of resuming it.
+          this.remove(session);
           sinkOf()?.error('INTERNAL', '伺服器發生錯誤，請重新開始牌局');
         },
       },
@@ -109,7 +111,11 @@ export class GameManager {
 
   /** A finished game no longer counts as the player's active game. */
   private releaseIfOver(session: GameSession): void {
-    if (!session.isOver) return;
+    if (session.isOver) this.remove(session);
+  }
+
+  private remove(session: GameSession): void {
+    session.dispose();
     if (this.byPlayer.get(session.playerId) === session.id) this.byPlayer.delete(session.playerId);
     this.sessions.delete(session.id);
   }
