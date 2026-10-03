@@ -344,7 +344,7 @@ describe("DecisionCardBody — no_action（規則引擎回報資料不足）", (
     });
     expect(html).not.toContain(QUANTITY_RANGE_ABSENT_SHORT);
     expect(html).toContain(
-      `${DECISION_CARD_QUANTITY_LABEL}</p><p class="mt-1 whitespace-nowrap font-mono text-xl font-bold text-neutral-100">—</p>`,
+      `${DECISION_CARD_QUANTITY_LABEL}</p><p class="mt-1 break-words font-mono text-xl font-bold text-neutral-100">—</p>`,
     );
   });
 });
@@ -381,7 +381,7 @@ describe("DecisionCardBody — no_price（連收盤價都沒有）", () => {
     });
     expect(html).not.toContain(QUANTITY_RANGE_ABSENT_SHORT);
     expect(html).toContain(
-      `${DECISION_CARD_QUANTITY_LABEL}</p><p class="mt-1 whitespace-nowrap font-mono text-xl font-bold text-neutral-100">—</p>`,
+      `${DECISION_CARD_QUANTITY_LABEL}</p><p class="mt-1 break-words font-mono text-xl font-bold text-neutral-100">—</p>`,
     );
   });
 });
@@ -416,6 +416,68 @@ describe("DecisionCardBody — bars 為 null（日線不可用，與 advice 狀�
     // renderToStaticMarkup 會把 &nbsp; 輸出成 U+00A0 或實體，兩種都接受。
     const placeholders = html.match(/<p class="[^"]*" aria-hidden="true">(?:&nbsp;|\u00a0)<\/p>/g) ?? [];
     expect(placeholders).toHaveLength(4);
+  });
+});
+
+describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢位／貼合）", () => {
+  const LONG_RANGES: Array<[number, number, string]> = [
+    [3168, 5000, "3,168 ~ 5,000 股"],
+    [10000, 12500, "10,000 ~ 12,500 股"],
+  ];
+
+  function renderLong(min: number, max: number): string {
+    return renderCard({
+      response: makeResponse({
+        advice: makeCard({
+          quantity_range: {
+            min_shares: min,
+            max_shares: max,
+            restores_compliance: true,
+            basis: "以「單一標的佔比上限」為最小可用額度換算。",
+          },
+        }),
+      }),
+      bars: makeBars(80),
+      anchorSource: "cost",
+      avgCost: 120,
+    });
+  }
+
+  for (const [min, max, text] of LONG_RANGES) {
+    it(`「${text}」：字面逐字保留，股數格 <p> 不含 whitespace-nowrap、可折行（break-words），字級不小於 text-xl`, () => {
+      const html = renderLong(min, max);
+      const m = html.match(
+        new RegExp(`<p class="([^"]*)">${text}</p>`),
+      );
+      expect(m).not.toBeNull();
+      const cls = m![1]!;
+      expect(cls).not.toContain("whitespace-nowrap");
+      expect(cls).toContain("break-words");
+      expect(cls).toContain("text-xl");
+      expect(cls).not.toMatch(/\btext-(xs|sm|base)\b/);
+      expect(cls).not.toMatch(/\b(truncate|line-clamp|overflow-hidden)/);
+    });
+
+    it(`「${text}」：整張卡不再出現任何 whitespace-nowrap`, () => {
+      expect(renderLong(min, max)).not.toContain("whitespace-nowrap");
+    });
+  }
+
+  it("四格容器有 gap（欄距 gap-x 與列距 gap-y），相鄰數字不貼合；<md 為 2×2、md+ 為四欄", () => {
+    const html = renderLong(3168, 5000);
+    const m = html.match(/<div class="(grid [^"]*)">/);
+    expect(m).not.toBeNull();
+    const cls = m![1]!;
+    expect(cls).toMatch(/\bgap-x-\d+\b/);
+    expect(cls).toMatch(/\bgap-y-\d+\b/);
+    expect(cls).toMatch(/\bgrid-cols-2\b/);
+    expect(cls).toMatch(/\bmd:grid-cols-4\b/);
+  });
+
+  it("格子本身 min-w-0（讓長字串能在 grid 欄內折行而非撐出頁面）", () => {
+    expect(renderLong(10000, 12500)).toMatch(
+      /<div class="[^"]*\bmin-w-0\b[^"]*"><p class="text-sm text-neutral-400">/,
+    );
   });
 });
 

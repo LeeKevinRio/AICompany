@@ -67,8 +67,12 @@ import {
  *       `null`（水位缺席）時渲染不可見佔位（`aria-hidden`＋`&nbsp;`），不得印
  *       「—」——頁尾 `KEY_LEVELS_HEADER_DASH_NOTICE` 已把「—」定義為「日線根數
  *       不足」，用在「這格沒有距離」上會誤導。
- *   V2. 四格 `value` 的 `<p>` 加 `whitespace-nowrap`（375px 實測「股」字被擠到
- *       下一行）。
+ *   V2. （已被 V3 取代）四格 `value` 的 `<p>` 曾加 `whitespace-nowrap`。
+ *   V3. qa-e2e 2026-10-03 第四輪：「3,168 ~ 5,000 股」這類長股數字串在 375px 使頁面
+ *       橫向溢位、1280px 與左鄰數字貼合。移除 `whitespace-nowrap` 改 `break-words`
+ *       （可折行，不截斷、不縮字），格子加 `min-w-0`，四格 grid 與主字／四格的
+ *       左右並排斷點由 `sm` 改 `md`（<md 為 2×2、主字在上四格在下，<md 左對齊、
+ *       md+ 右對齊且折行文字同樣右對齊），列／欄間距 `gap-x-4 gap-y-3`、md+ `gap-x-6`。
  *
  * 風控 2026-09-19 預審 APPROVE_WITH_CONDITIONS（逐條對應本檔）：
  *   1/2. 距離小字固定前綴「距最新收盤 」（`buildDecisionCardDistance`），符號由
@@ -102,7 +106,7 @@ import {
  *       `buildOperationSummary(advice.data)`；bars 不 ok 或 `computeKeyLevels`
  *       為 null → 收盤／停損／停利三格「—」、不畫距離。
  *
- * 版面依視覺規範 B.7：桌機主字左、四格右（`grid grid-cols-2 sm:grid-cols-4`）；
+ * 版面依視覺規範 B.7：桌機主字左、四格右（`grid grid-cols-2 md:grid-cols-4`，V3）；
  * 主字 `text-2xl font-bold`（不超過 `h1`）；數字 `font-mono text-xl font-bold
  * text-neutral-100`；標籤 `text-sm text-neutral-400`；距離小字
  * `text-xs text-neutral-400`。
@@ -133,9 +137,9 @@ function NumberCell({
   distance?: string | null;
 }) {
   return (
-    <div className="flex min-h-[4.5rem] flex-col items-start sm:items-end">
+    <div className="flex min-h-[4.5rem] min-w-0 flex-col items-start text-left md:items-end md:text-right">
       <p className="text-sm text-neutral-400">{label}</p>
-      <p className="mt-1 whitespace-nowrap font-mono text-xl font-bold text-neutral-100">
+      <p className="mt-1 break-words font-mono text-xl font-bold text-neutral-100">
         {value}
       </p>
       {distance != null ? (
@@ -373,12 +377,12 @@ export function DecisionCardBody({
         <StaleDataAlert notice={model.staleDataNotice} />
       </div>
 
-      <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-3 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex min-h-[3.5rem] flex-wrap items-center gap-3">
           <MainSlot model={model} showConfidence={showConfidence} />
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 sm:gap-x-6">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4 md:gap-x-6">
           <NumberCell label={KEY_LEVELS_LADDER_RUNG_CLOSE} value={closeText} />
           <NumberCell
             label={KEY_LEVELS_STOP_CARD_TITLE}
