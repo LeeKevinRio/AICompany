@@ -1,7 +1,17 @@
 // Builds the per-seat view sent to the client. Hidden information (other hands, the wall)
 // never leaves the server while a hand is in progress.
 
-import { liveWallCount, optionsFor, roundWind, seatWind, type GameEvent, type GameOption, type GameState } from '../engine/engine.js';
+import {
+  currentWaits,
+  liveWallCount,
+  optionsFor,
+  roundWind,
+  seatWind,
+  type GameEvent,
+  type GameOption,
+  type GameState,
+  type WaitInfo,
+} from '../engine/engine.js';
 import type { HandResult, Meld } from '../engine/types.js';
 
 export interface MeldDto {
@@ -38,6 +48,8 @@ export interface GameViewDto {
   lastDiscardSeat: number;
   lastDiscardTile: string;
   myCoins: number;
+  /** My current waits (聽牌) when my concealed hand is one tile short; empty otherwise. */
+  myWaits: WaitInfo[];
   players: PlayerViewDto[];
   options: GameOption[];
   hasResult: boolean;
@@ -70,7 +82,7 @@ const EMPTY_RESULT: HandResult = {
   gameOver: false,
 };
 
-export const NEXT_OPTION: GameOption = { id: 'next', type: 'next', tile: '', tiles: [], label: '下一局' };
+export const NEXT_OPTION: GameOption = { id: 'next', type: 'next', tile: '', tiles: [], label: '下一局', waits: [], tai: -1 };
 
 /** Options for the viewer, including the session-level "next hand" option. */
 export function viewerOptions(game: GameState, seat: number): GameOption[] {
@@ -131,6 +143,7 @@ export function buildView(
     lastDiscardSeat: hand.lastDiscard?.seat ?? -1,
     lastDiscardTile: hand.lastDiscard?.tile ?? '',
     myCoins,
+    myWaits: ended ? [] : currentWaits(game, viewer),
     players,
     options: includeOptions ? viewerOptions(game, viewer) : [],
     hasResult: hand.result !== null,

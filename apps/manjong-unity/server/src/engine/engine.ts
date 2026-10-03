@@ -4,7 +4,7 @@
 // The engine knows nothing about humans or AI: callers ask for each seat's legal options and
 // submit an option id. Every state change is reported through an emit callback.
 
-import { isComplete } from './hand.js';
+import { isComplete, waitingKinds } from './hand.js';
 import { createRng, shuffle, type Rng } from './rng.js';
 import { RULES } from './rules.js';
 import { dealerBonusTai, scoreFlowerWin, scoreWin, settle, type ScoreResult } from './scoring.js';
@@ -62,12 +62,22 @@ export type OptionType =
   | 'pass'
   | 'next';
 
+/** A tile that would complete the hand, with how many copies are still unseen by that seat. */
+export interface WaitInfo {
+  tile: Tile;
+  left: number;
+}
+
 export interface GameOption {
   id: string;
   type: OptionType;
   tile: Tile;
   tiles: Tile[];
   label: string;
+  /** discard: the waits after discarding this tile (empty = not tenpai). Empty for other types. */
+  waits: WaitInfo[];
+  /** tsumo / ron: tai this win would score (excluding the dealer bonus); -1 otherwise. */
+  tai: number;
 }
 
 export interface PlayerState {
@@ -131,7 +141,37 @@ export interface GameState {
 const NO_TILE = '';
 
 function opt(id: string, type: OptionType, label: string, tile: Tile = NO_TILE, tiles: Tile[] = []): GameOption {
-  return { id, type, tile, tiles, label };
+  return { id, type, tile, tiles, label, waits: [], tai: -1 };
+}
+
+/** Tiles this seat can see: own hand plus every discard and meld on the table. */
+function visibleCounts(game: GameState, seat: number): number[] {
+  const seen = toCounts(game.hand.players[seat]!.hand);
+  for (const p of game.hand.players) {
+    for (const t of p.discards) seen[kindOf(t)]!++;
+    for (const m of p.melds) for (const t of m.tiles) seen[kindOf(t)]!++;
+  }
+  return seen;
+}
+
+function waitInfos(game: GameState, seat: number, concealed: Tile[], sets: number): WaitInfo[] {
+  const seen = visibleCounts(game, seat);
+  return waitingKinds(toCounts(concealed), sets).map((k) => ({ tile: codeOf(k), left: Math.max(0, 4 - seen[k]!) }));
+}
+
+/**
+ * Current waits for a seat whose concealed hand is one tile short of complete (i.e. not holding a
+ * drawn / claimed tile that must be discarded). Empty when not tenpai or when it is mid-turn.
+ */
+export function currentWaits(game: GameState, seat: number): WaitInfo[] {
+  const p = game.hand.players[seat]!;
+  const sets = setsNeeded(p);
+  if (p.hand.length !== sets * 3 + 1 || p.hand.some(isFlower)) return [];
+  return waitInfos(game, seat, p.hand, sets);
+}
+
+function waitsLabel(waits: WaitInfo[]): string {
+  return waits.map((w) => tileName(w.tile)).join('、');
 }
 
 export function roundWind(game: GameState): Wind {
@@ -341,7 +381,10 @@ function turnOptions(game: GameState, seat: number, justDrew: boolean): GameOpti
   const options: GameOption[] = [];
   const canKong = liveWallCount(game.hand) > 0;
   if (justDrew) {
-    if (isComplete(toCounts(p.hand), setsNeeded(p))) options.push(opt('tsumo', 'tsumo', '自摸'));
+    if (isComplete(toCounts(p.hand), setsNeeded(p))) {
+      const tai = tsumoScore(game, seat).score.total;
+      options.push({ ...opt('tsumo', 'tsumo', `自摸（${tai} 台）`), tai });
+    }
     if (canKong) {
       for (const t of new Set(p.hand)) {
         if (countOf(p.hand, t) === 4) options.push(opt(`ankan:${t}`, 'ankan', `暗槓 ${tileName(t)}`, t));
@@ -354,14 +397,23 @@ function turnOptions(game: GameState, seat: number, justDrew: boolean): GameOpti
       }
     }
   }
-  for (const t of new Set(p.hand)) options.push(opt(`discard:${t}`, 'discard', `打 ${tileName(t)}`, t));
+  for (const t of new Set(p.hand)) {
+    const rest = [...p.hand];
+    rest.splice(rest.indexOf(t), 1);
+    const waits = waitInfos(game, seat, rest, setsNeeded(p));
+    const label = waits.length > 0 ? `打 ${tileName(t)}（聽 ${waitsLabel(waits)}）` : `打 ${tileName(t)}`;
+    options.push({ ...opt(`discard:${t}`, 'discard', label, t), waits });
+  }
   return options;
 }
 
 function claimOptions(game: GameState, seat: number, discarder: number, tile: Tile): GameOption[] {
   const p = game.hand.players[seat]!;
   const options: GameOption[] = [];
-  if (isComplete(toCounts([...p.hand, tile]), setsNeeded(p))) options.push(opt('ron', 'ron', '胡', tile));
+  if (isComplete(toCounts([...p.hand, tile]), setsNeeded(p))) {
+    const tai = ronScore(game, seat, discarder, tile, {}).total;
+    options.push({ ...opt('ron', 'ron', `胡（${tai} 台）`, tile), tai });
+  }
   const n = countOf(p.hand, tile);
   if (n >= 2) options.push(opt('pon', 'pon', `碰 ${tileName(tile)}`, tile));
   if (n >= 3 && liveWallCount(game.hand) > 0) options.push(opt('kan', 'kan', `槓 ${tileName(tile)}`, tile));
@@ -460,17 +512,12 @@ function resolveClaim(game: GameState, emit: Emit): void {
 
   const ronSeat = order.find((s) => phase.responses[s] === 'ron');
   if (ronSeat !== undefined) {
+    // Score before moving the tile so the result matches the tai previewed on the option.
+    const score = ronScore(game, ronSeat, discarder, tile, {});
     removeLastDiscard(game, discarder, tile);
     const winner = hand.players[ronSeat]!;
     winner.hand = sortTiles([...winner.hand, tile]);
-    const lastTile = liveWallCount(hand) <= 0;
-    const human = hand.noCallsYet && !winner.hasDiscarded && ronSeat !== game.dealer;
-    finishWin(game, emit, {
-      winner: ronSeat,
-      loser: discarder,
-      tile,
-      score: scoreFor(game, ronSeat, tile, false, { lastTile, human }),
-    });
+    finishWin(game, emit, { winner: ronSeat, loser: discarder, tile, score });
     return;
   }
 
@@ -519,7 +566,8 @@ function resolveClaim(game: GameState, emit: Emit): void {
   drawFor(game, (discarder + 1) % 4, false, emit);
 }
 
-function doTsumo(game: GameState, seat: number, emit: Emit): void {
+/** Score of a self-draw by `seat` right now (also used to preview the tai on the tsumo option). */
+function tsumoScore(game: GameState, seat: number): { tile: Tile; score: ScoreResult } {
   const hand = game.hand;
   const p = hand.players[seat]!;
   const firstTurn = hand.noCallsYet && !p.hasDiscarded;
@@ -534,6 +582,20 @@ function doTsumo(game: GameState, seat: number, emit: Emit): void {
     if (!best || score.total > best.score.total) best = { tile, score };
   }
   if (!best) throw new Error('Tsumo without a winning hand');
+  return best;
+}
+
+/** Score of `seat` winning on `tile` from `from` (discard or robbed kong), without changing state. */
+function ronScore(game: GameState, seat: number, from: number, tile: Tile, flags: { robKong?: boolean }): ScoreResult {
+  const hand = game.hand;
+  const p = hand.players[seat]!;
+  const lastTile = !flags.robKong && liveWallCount(hand) <= 0;
+  const human = !flags.robKong && hand.noCallsYet && !p.hasDiscarded && seat !== game.dealer;
+  return scoreFor(game, seat, tile, false, { ...flags, lastTile, human }, [...p.hand, tile]);
+}
+
+function doTsumo(game: GameState, seat: number, emit: Emit): void {
+  const best = tsumoScore(game, seat);
   finishWin(game, emit, { winner: seat, loser: -1, tile: best.tile, score: best.score });
 }
 
@@ -555,7 +617,8 @@ function doKakan(game: GameState, seat: number, tile: Tile, emit: Emit): void {
     if (s === seat) return [];
     const p = hand.players[s]!;
     if (!isComplete(toCounts([...p.hand, tile]), setsNeeded(p))) return [];
-    return [opt('ron', 'ron', '搶槓胡', tile), opt('pass', 'pass', '過')];
+    const tai = ronScore(game, s, seat, tile, { robKong: true }).total;
+    return [{ ...opt('ron', 'ron', `搶槓胡（${tai} 台）`, tile), tai }, opt('pass', 'pass', '過')];
   });
   if (options.every((o) => o.length === 0)) {
     completeKakan(game, seat, tile, emit);
@@ -594,17 +657,13 @@ function resolveRobKong(game: GameState, emit: Emit): void {
     completeKakan(game, phase.seat, phase.tile, emit);
     return;
   }
+  const score = ronScore(game, ronSeat, phase.seat, phase.tile, { robKong: true });
   const kongPlayer = hand.players[phase.seat]!;
   removeTiles(kongPlayer.hand, [phase.tile]);
   kongPlayer.drawn = null;
   const winner = hand.players[ronSeat]!;
   winner.hand = sortTiles([...winner.hand, phase.tile]);
-  finishWin(game, emit, {
-    winner: ronSeat,
-    loser: phase.seat,
-    tile: phase.tile,
-    score: scoreFor(game, ronSeat, phase.tile, false, { robKong: true }),
-  });
+  finishWin(game, emit, { winner: ronSeat, loser: phase.seat, tile: phase.tile, score });
 }
 
 function scoreFor(
@@ -613,10 +672,11 @@ function scoreFor(
   winTile: Tile,
   selfDraw: boolean,
   flags: { lastTile?: boolean; heaven?: boolean; earth?: boolean; human?: boolean; robKong?: boolean; kongBloom?: boolean },
+  concealed?: Tile[],
 ): ScoreResult {
   const p = game.hand.players[seat]!;
   const score = scoreWin({
-    concealed: p.hand,
+    concealed: concealed ?? p.hand,
     melds: p.melds,
     flowers: p.flowers,
     winTile,
