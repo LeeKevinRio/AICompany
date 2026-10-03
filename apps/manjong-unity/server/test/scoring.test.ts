@@ -215,6 +215,17 @@ describe('settlement (底 100 / 每台 50)', () => {
     expect(d).toEqual([-250, 650, -200, -200]);
   });
 
+  it('caps a payer at their remaining coins; the winner only receives what was paid', () => {
+    // Seat 0 has 120 coins left and owes 100 + 3*50 = 250 on a discard win.
+    expect(settle({ winner: 1, payers: [0], tai: 3, dealer: 2, streak: 0, budgets: [120, null, null, null] })).toEqual([
+      -120, 120, 0, 0,
+    ]);
+    // Self-draw by seat 1: seat 0 (budget 0) pays nothing, the others pay in full.
+    expect(settle({ winner: 1, payers: [0, 2, 3], tai: 1, dealer: 3, streak: 0, budgets: [0, null, null, null] })).toEqual([
+      0, 150 + 200, -150, -200,
+    ]);
+  });
+
   it('is zero-sum', () => {
     const d = settle({ winner: 2, payers: [0, 1, 3], tai: 7, dealer: 3, streak: 2 });
     expect(d.reduce((a, b) => a + b, 0)).toBe(0);

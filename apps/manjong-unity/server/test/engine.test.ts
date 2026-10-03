@@ -374,3 +374,33 @@ describe('dealer rotation', () => {
     expect(game.hand.result!.gameOver).toBe(true);
   });
 });
+
+describe('coin floor (budgets)', () => {
+  const hands = ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '', '123m 456p 789p 234s 567s 5m'];
+
+  it('caps the payment at the remaining coins and ends the game when they reach 0', () => {
+    const { game, emit, events } = setup({ hands, front: '9m', turn: 0, dealer: 1 });
+    game.budgets[0] = 120;
+    applyAction(game, 0, 'discard:5m', emit);
+    applyAction(game, 3, 'ron', emit);
+    const r = game.hand.result!;
+    expect(r.deltas[0]).toBe(-120);
+    expect(r.deltas[3]).toBe(120);
+    expect(r.deltas.reduce((a, b) => a + b, 0)).toBe(0);
+    expect(game.budgets[0]).toBe(0);
+    expect(game.over).toBe(true);
+    expect(game.endReason).toBe('bankrupt');
+    expect(r.gameOver).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'game_end', text: '金幣歸零，牌局結束' });
+  });
+
+  it('a payment that leaves coins above 0 does not end the game', () => {
+    const { game, emit } = setup({ hands, front: '9m', turn: 0, dealer: 1 });
+    game.budgets[0] = 5000;
+    applyAction(game, 0, 'discard:5m', emit);
+    applyAction(game, 3, 'ron', emit);
+    expect(game.budgets[0]).toBe(5000 + game.hand.result!.deltas[0]!);
+    expect(game.over).toBe(false);
+    expect(game.endReason).toBe('');
+  });
+});

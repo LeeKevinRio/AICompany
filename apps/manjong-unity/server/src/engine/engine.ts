@@ -134,7 +134,13 @@ export interface GameState {
   dealerRotations: number;
   roundIndex: number;
   sessionDeltas: number[];
+  /**
+   * Remaining coins per seat for capped payments (null = unlimited). The session sets the human's
+   * persistent balance here; a seat that reaches 0 ends the game ("bankrupt").
+   */
+  budgets: (number | null)[];
   over: boolean;
+  endReason: '' | 'rounds_complete' | 'bankrupt';
   hand: HandState;
 }
 
@@ -224,7 +230,9 @@ export function createGame(params: { id: string; names: string[]; seed?: number 
     dealerRotations: 0,
     roundIndex: 0,
     sessionDeltas: [0, 0, 0, 0],
+    budgets: [null, null, null, null],
     over: false,
+    endReason: '',
     hand: emptyHand(0, 0, 0),
   };
   return game;
@@ -706,6 +714,7 @@ function finishWin(
     tai: win.score.total,
     dealer: game.dealer,
     streak: game.streak,
+    budgets: game.budgets,
   });
   const dealerInvolved = win.winner === game.dealer || payers.includes(game.dealer);
   const result: HandResult = {
@@ -751,7 +760,11 @@ function finishExhaustive(game: GameState, emit: Emit): void {
 
 function endHand(game: GameState, result: HandResult, dealerStays: boolean, emit: Emit, event: GameEvent): void {
   const hand = game.hand;
-  for (let s = 0; s < 4; s++) game.sessionDeltas[s]! += result.deltas[s]!;
+  for (let s = 0; s < 4; s++) {
+    game.sessionDeltas[s]! += result.deltas[s]!;
+    const budget = game.budgets[s];
+    if (budget !== null && budget !== undefined) game.budgets[s] = budget + result.deltas[s]!;
+  }
   if (dealerStays) {
     game.streak++;
   } else {
@@ -760,13 +773,18 @@ function endHand(game: GameState, result: HandResult, dealerStays: boolean, emit
     game.dealerRotations++;
     if (game.dealerRotations % 4 === 0) game.roundIndex++;
   }
-  game.over = game.roundIndex >= RULES.rounds;
+  const bankrupt = game.budgets.some((b) => b !== null && b <= 0);
+  game.endReason = bankrupt ? 'bankrupt' : game.roundIndex >= RULES.rounds ? 'rounds_complete' : '';
+  game.over = game.endReason !== '';
   result.gameOver = game.over;
   hand.result = result;
   hand.phase = { type: 'ended' };
   for (const p of hand.players) p.drawn = null;
   emit(event);
-  if (game.over) emit({ type: 'game_end', seat: -1, tile: NO_TILE, tiles: [], text: '整場結束' });
+  if (game.over) {
+    const text = game.endReason === 'bankrupt' ? '金幣歸零，牌局結束' : '整場結束';
+    emit({ type: 'game_end', seat: -1, tile: NO_TILE, tiles: [], text });
+  }
 }
 
 /** Total number of tiles in play; must always be 144. */

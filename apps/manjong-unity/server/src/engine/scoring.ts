@@ -252,7 +252,8 @@ export function dealerBonusTai(streak: number): number {
 
 /**
  * Zero-sum settlement. Each payer pays base + tai * perTai; the dealer bonus is added only to
- * payments where the dealer is the winner or the payer.
+ * payments where the dealer is the winner or the payer. A payer with a budget (remaining coins)
+ * never pays more than that budget, and the winner only receives what was actually paid.
  */
 export function settle(params: {
   winner: number;
@@ -260,15 +261,19 @@ export function settle(params: {
   tai: number;
   dealer: number;
   streak: number;
+  /** Remaining coins per seat; null = no limit. Not modified. */
+  budgets?: readonly (number | null)[];
 }): number[] {
   const deltas = [0, 0, 0, 0];
   const bonus = dealerBonusTai(params.streak);
   for (const payer of params.payers) {
     const involvesDealer = payer === params.dealer || params.winner === params.dealer;
     const tai = params.tai + (involvesDealer ? bonus : 0);
+    const budget = params.budgets?.[payer] ?? null;
     const amount = ECONOMY.base + tai * ECONOMY.perTai;
-    deltas[payer]! -= amount;
-    deltas[params.winner]! += amount;
+    const paid = budget === null ? amount : Math.max(0, Math.min(amount, budget));
+    deltas[payer]! -= paid;
+    deltas[params.winner]! += paid;
   }
   return deltas;
 }

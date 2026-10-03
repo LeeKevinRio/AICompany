@@ -82,6 +82,7 @@ export class GameSession {
 
   /** Deal the first hand and let the AI play up to the first human decision. */
   start(): void {
+    this.game.budgets[HUMAN_SEAT] = this.hooks.coins();
     nextHand(this.game, (e) => this.record(e));
     this.pump();
   }
@@ -94,6 +95,8 @@ export class GameSession {
     this.lastActivity = Date.now();
     if (this.pumping) throw new BusyError();
     if (actionId === 'next' && viewerOptions(this.game, HUMAN_SEAT).some((o) => o.id === 'next')) {
+      // Coins are the source of truth between hands (they persist after every settlement).
+      this.game.budgets[HUMAN_SEAT] = this.hooks.coins();
       nextHand(this.game, (e) => this.record(e));
     } else {
       applyAction(this.game, HUMAN_SEAT, actionId, (e) => this.record(e));

@@ -48,6 +48,8 @@ export interface GameViewDto {
   lastDiscardSeat: number;
   lastDiscardTile: string;
   myCoins: number;
+  /** Why the game ended (phase game_end): rounds_complete | bankrupt; "" otherwise. */
+  endReason: string;
   /** My current waits (聽牌) when my concealed hand is one tile short; empty otherwise. */
   myWaits: WaitInfo[];
   players: PlayerViewDto[];
@@ -143,6 +145,7 @@ export function buildView(
     lastDiscardSeat: hand.lastDiscard?.seat ?? -1,
     lastDiscardTile: hand.lastDiscard?.tile ?? '',
     myCoins,
+    endReason: ended && game.over ? game.endReason : '',
     myWaits: ended ? [] : currentWaits(game, viewer),
     players,
     options: includeOptions ? viewerOptions(game, viewer) : [],

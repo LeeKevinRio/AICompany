@@ -113,7 +113,8 @@ export class Accounts {
 
   /** Apply one finished hand to the human player (seat `seat`). */
   recordHand(player: PlayerRecord, result: HandResult, seat: number): void {
-    player.coins += result.deltas[seat]!;
+    // Payments are capped by the engine, so this never goes below 0; clamp anyway as a last guard.
+    player.coins = Math.max(0, player.coins + result.deltas[seat]!);
     player.handsPlayed++;
     if (result.kind === 'win' && result.winnerSeat === seat) {
       player.handsWon++;
