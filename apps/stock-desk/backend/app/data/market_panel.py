@@ -70,6 +70,7 @@ import pandas as pd
 from app.data.interface import (
     BarSnapshotRow,
     ClassificationSnapshotRow,
+    DividendAnnounceObservation,
     DividendAnnounceSnapshotRow,
     ListingSnapshotRow,
     SnapshotKind,
@@ -283,6 +284,23 @@ _SOURCE_TALLY_SQL: Final = f"""
         COUNT(*), MIN(run_id), MAX(run_id)
     FROM pit_snapshot_runs
     WHERE {_SOURCE_SET_WHERE}
+"""
+
+
+#: One statement for a whole symbol set (tests and ADR-0016 V-1 offline checks;
+#: not for the positions data chain, ADR-0012 C-7): every ``ok`` dividend-announce
+#: run since a date, each joined to the stored rows of the wanted symbols (a run
+#: with none still yields one row, ``symbol`` NULL). ``json_each`` keeps the
+#: bound-parameter count fixed however many symbols the book holds.
+_ANNOUNCE_OBSERVATIONS_SQL: Final = """
+    SELECT r.run_id, r.recorded_at, p.symbol, p.ex_date
+    FROM pit_snapshot_runs AS r
+    LEFT JOIN pit_dividend_announce_rows AS p
+        ON p.content_hash = r.content_hash
+        AND UPPER(p.symbol) IN (SELECT value FROM json_each(:symbols))
+    WHERE r.kind = 'dividend_announce' AND r.status = 'ok'
+        AND r.content_hash IS NOT NULL AND r.recorded_at >= :not_before
+    ORDER BY r.run_id
 """
 
 
@@ -1101,6 +1119,40 @@ class MarketPanelReader:
             raise FileNotFoundError(f"market DB not found: {self._db_path}")
         with closing(conn):
             return _first_all_kinds_ok_session_on(conn)
+
+    def dividend_announce_observations(
+        self, symbols: Collection[str], recorded_not_before: date
+    ) -> list[DividendAnnounceObservation]:
+        """Ok dividend-announce runs recorded on/after a UTC date, with ``symbols``' rows.
+
+        ``symbols`` are matched upper-cased. One statement however many symbols
+        (ADR-0016 K-7); a missing market DB file, or no symbols, reads as "no
+        run" and costs none. Rows come back as written -- deciding what they
+        prove is the coverage rule's job (``app.dividends.coverage``).
+
+        For tests and ADR-0016 V-1 offline checks only; the positions data chain
+        must not call it (ADR-0012 C-7).
+        """
+        wanted = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        if not wanted:
+            return []
+        conn = self._connect()
+        if conn is None:
+            return []
+        with closing(conn):
+            rows = conn.execute(
+                _ANNOUNCE_OBSERVATIONS_SQL,
+                {"symbols": json.dumps(wanted), "not_before": recorded_not_before.isoformat()},
+            ).fetchall()
+        return [
+            DividendAnnounceObservation(
+                run_id=int(run_id),
+                recorded_at=datetime.fromisoformat(str(recorded_at)),
+                symbol=str(symbol).upper() if symbol is not None else None,
+                ex_date=date.fromisoformat(str(ex_date)) if ex_date is not None else None,
+            )
+            for run_id, recorded_at, symbol, ex_date in rows
+        ]
 
     def source_fingerprint(self, run_max: int, session_end: date) -> SourceFingerprint | None:
         """:meth:`MarketPanelStore.source_fingerprint` on the read-only file; ``None`` if absent."""
