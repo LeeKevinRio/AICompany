@@ -11,13 +11,14 @@ it) so staleness and provenance are always answerable questions.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import date as date_type
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 Market = Literal["TW", "US"]
 
@@ -367,4 +368,245 @@ class MarketSnapshotProvider(ABC):
         take down the others (mirrors ``MarketDataProvider.get_daily_bars``'s
         discipline, and ADR-0012 D-5 "四種 kind 各自獨立成敗").
         """
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# ADR-0014 D-1: intraday quote provider (a third, independent provider shape).
+# ---------------------------------------------------------------------------
+#
+# ``MarketDataProvider`` answers "one symbol, one date range" and its output is
+# what ``price_bars_cache`` stores. An intraday quote answers "right now, many
+# channels" and is a different kind of fact: it is **never** a ``PriceBar``,
+# there is no conversion from one to the other, and nothing in this section may
+# be written to ``price_bars_cache`` (a half-finished session stored as a bar
+# would make the freshness judgement believe today has already closed).
+
+#: TWSE listing board: ``tse`` = 上市, ``otc`` = 上櫃 (the MIS channel prefix).
+Board = Literal["tse", "otc"]
+
+
+class QuoteRejectCode(StrEnum):
+    """Why a quote (or a whole batch) was not accepted.
+
+    Every rejection must surface: callers log it and carry it to the response
+    as the reason a position fell back to its daily close. None of these may
+    be answered by substituting another number (previous close, open, bid/ask,
+    interpolation) for the missing trade price.
+
+    Batch-level codes reject every requested channel at once; per-symbol codes
+    reject one. The last group is assigned by the service layer, not by
+    ``app.data.quote_quality``.
+    """
+
+    # Batch level.
+    BATCH_BLOCKED = "batch_blocked"
+    BATCH_FAILED = "batch_failed"
+    RTCODE_NOT_OK = "rtcode_not_ok"
+    SERVER_TIME_MISSING = "server_time_missing"
+    CLOCK_SKEW = "clock_skew"
+    FEED_LAGGING = "feed_lagging"
+
+    # Per symbol.
+    SYMBOL_MISSING = "symbol_missing"
+    CODE_MISMATCH = "code_mismatch"
+    BOARD_MISMATCH = "board_mismatch"
+    DUPLICATE_ROW = "duplicate_row"
+    NO_TRADE = "no_trade"
+    PRICE_NON_POSITIVE = "price_non_positive"
+    QUOTE_TIME_MISSING = "quote_time_missing"
+    NOT_TODAY = "not_today"
+    FUTURE_QUOTE_TIME = "future_quote_time"
+    OUTSIDE_PRICE_LIMITS = "outside_price_limits"
+    IMPLAUSIBLE_MOVE = "implausible_move"
+    TRIAL_MATCH = "trial_match"
+
+    # Judgement / state codes owned by the service layer (not by quote_quality).
+    BOARD_UNKNOWN = "board_unknown"
+    BOARD_AMBIGUOUS = "board_ambiguous"
+    DEMO_SERIES = "demo_series"
+    SOURCE_COOLDOWN = "source_cooldown"
+    THROTTLED_NO_CACHE = "throttled_no_cache"
+
+
+def _require_aware(value: datetime, name: str) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return value
+
+
+class QuoteKey(BaseModel):
+    """One requested channel: a symbol on a specific board.
+
+    The board is part of the key on purpose. It is never guessed (ADR-0014 E3):
+    a caller that cannot name the board does not get to ask.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    board: Board
+
+    @field_validator("symbol")
+    @classmethod
+    def _symbol_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must not be blank")
+        return value
+
+
+class Quote(BaseModel):
+    """The last trade price of one symbol at one moment.
+
+    Deliberately narrow (ADR-0014 I-2): there is no bid, ask, open, high or low
+    field that could be mistaken for a price, and ``price`` is the only value
+    ever presented as one. ``prev_close`` exists as a **check input only**
+    (plausibility band); it is never a fallback price.
+
+    ``session_state`` is deliberately absent: whether a session is open is a
+    clock judgement made by the service layer, not a property of the data.
+    ``as_of`` is when *we* retrieved the batch (same convention as every other
+    object across this boundary); ``quote_time`` is when the exchange says the
+    trade happened. All datetimes are timezone-aware.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    board: Board
+    currency: Literal["TWD"]
+    #: Last trade price. Must be strictly positive.
+    price: Decimal
+    #: Previous close as reported by the source. Check input only.
+    prev_close: Decimal | None
+    #: Daily price limits when the source reports them (unverified: pending
+    #: 10/05 field verification), else ``None``.
+    limit_up: Decimal | None
+    limit_down: Decimal | None
+    #: Exchange-local (Asia/Taipei) calendar date of the trade.
+    trade_date: date_type
+    #: When the exchange says the last trade happened.
+    quote_time: datetime
+    #: The source's own clock at response time, when it reports one.
+    server_time: datetime | None
+    as_of: datetime
+    source: str
+
+    @field_validator("as_of")
+    @classmethod
+    def _as_of_must_be_aware(cls, value: datetime) -> datetime:
+        return _require_aware(value, "as_of")
+
+    @field_validator("quote_time")
+    @classmethod
+    def _quote_time_must_be_aware(cls, value: datetime) -> datetime:
+        return _require_aware(value, "quote_time")
+
+    @field_validator("server_time")
+    @classmethod
+    def _server_time_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _require_aware(value, "server_time")
+
+    @field_validator("price")
+    @classmethod
+    def _price_must_be_positive(cls, value: Decimal) -> Decimal:
+        if not value > 0:
+            raise ValueError("price must be positive")
+        return value
+
+    @field_validator("symbol", "source")
+    @classmethod
+    def _must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value
+
+
+class QuoteRejection(BaseModel):
+    """One channel (or batch) refused, and why.
+
+    ``detail`` is an English diagnostic for logs, not user-facing copy: the
+    sentence a user reads for each code goes through creative review and risk
+    review, outside this data layer.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    board: Board | None
+    code: QuoteRejectCode
+    detail: str
+
+
+QuoteBatchStatus = Literal["ok", "partial", "failed", "blocked"]
+
+
+class QuoteBatch(BaseModel):
+    """Everything one ``QuoteProvider.get_quotes`` call produced.
+
+    status:
+        ok       -- every requested channel was accepted.
+        partial  -- some accepted, some rejected (see ``rejections``).
+        failed   -- nothing accepted.
+        blocked  -- the source refused us (HTTP refusal / redirect / non-JSON /
+                    bad ``rtcode``); the caller should back off.
+
+    ``reject_code`` is set when the whole batch was rejected for a batch-level
+    reason; every requested channel then also carries that code in
+    ``rejections`` so each position can report why it fell back.
+    ``reason`` is an English diagnostic, not user-facing copy.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    quotes: tuple[Quote, ...]
+    rejections: tuple[QuoteRejection, ...]
+    status: QuoteBatchStatus
+    as_of: datetime
+    source: str
+    reason: str | None = None
+    reject_code: QuoteRejectCode | None = None
+
+    @field_validator("as_of")
+    @classmethod
+    def _as_of_must_be_aware(cls, value: datetime) -> datetime:
+        return _require_aware(value, "as_of")
+
+    @field_validator("source")
+    @classmethod
+    def _source_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("source must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _status_must_agree_with_contents(self) -> QuoteBatch:
+        if self.status in ("failed", "blocked") and self.quotes:
+            raise ValueError(f"status={self.status} must not carry quotes")
+        if self.status == "ok" and self.rejections:
+            raise ValueError("status=ok must not carry rejections")
+        return self
+
+
+class QuoteProvider(ABC):
+    """Abstract adapter for an intraday last-trade-price source.
+
+    Unlike ``MarketDataProvider`` there is no date range: the answer is "the
+    latest trade of each requested channel, right now".
+
+    Implementations must not raise for expected failure modes; they return a
+    ``QuoteBatch`` whose ``status`` and rejections say what went wrong. They
+    do **not** judge time-dependent questions (is the session open, is this
+    trade from today, is the feed stalled): those belong to
+    ``app.data.quote_quality`` and the service layer, which receive the clock as
+    an input. An adapter stamps ``as_of`` from an injected clock, never from an
+    inline ``datetime.now()``.
+    """
+
+    #: Short machine-readable identifier written into ``Quote.source``.
+    source_id: ClassVar[str]
+
+    @abstractmethod
+    def get_quotes(self, keys: Sequence[QuoteKey]) -> QuoteBatch:
+        """Fetch the latest trade of every channel in ``keys`` in one batch."""
         raise NotImplementedError
