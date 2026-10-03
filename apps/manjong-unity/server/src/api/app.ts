@@ -2,13 +2,14 @@
 
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { existsSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import { IllegalActionError } from '../engine/engine.js';
 import type { PlayerRecord, PlayerRepository } from '../store/players.js';
 import { Accounts, ApiError, toPlayerDto } from './accounts.js';
 import { GameManager } from './games.js';
+import { handleGameSocket } from './socket.js';
 
 export interface AppOptions {
   repo: PlayerRepository;
@@ -17,16 +18,11 @@ export interface AppOptions {
   /** Directory of a Unity WebGL build to serve at "/", if present. */
   webglDir?: string;
   logger?: boolean;
+  /** Pause before each AI move (ms). */
+  aiDelayMs?: number;
+  /** WebSocket flood guard (client messages per 10 s); raised in tests that play at machine speed. */
+  wsMessagesPer10s?: number;
 }
-
-const actionSchema = {
-  body: {
-    type: 'object',
-    required: ['actionId'],
-    additionalProperties: false,
-    properties: { actionId: { type: 'string', minLength: 1, maxLength: 32 } },
-  },
-} as const;
 
 const nicknameSchema = {
   body: {
@@ -34,14 +30,6 @@ const nicknameSchema = {
     required: ['nickname'],
     additionalProperties: false,
     properties: { nickname: { type: 'string' } },
-  },
-} as const;
-
-const gameParams = {
-  params: {
-    type: 'object',
-    required: ['id'],
-    properties: { id: { type: 'string', pattern: '^g_[0-9a-f]{16}$' } },
   },
 } as const;
 
@@ -57,8 +45,9 @@ const INNER_TYPES: Record<string, string> = {
 export async function buildApp(options: AppOptions): Promise<{ app: FastifyInstance; games: GameManager }> {
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 16 * 1024 });
   const accounts = new Accounts(options.repo);
-  const games = new GameManager(accounts);
+  const games = new GameManager(accounts, { aiDelayMs: options.aiDelayMs ?? 0 });
 
+  await app.register(websocket, { options: { maxPayload: 4 * 1024 } });
   await app.register(cors, {
     origin: options.corsOrigin,
     methods: ['GET', 'POST'],
@@ -68,9 +57,6 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       return reply.status(error.status).send({ error: { code: error.code, message: error.message } });
-    }
-    if (error instanceof IllegalActionError) {
-      return reply.status(400).send({ error: { code: 'ILLEGAL_ACTION', message: '這個動作現在不能做' } });
     }
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status >= 400 && status < 500) {
@@ -106,17 +92,8 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
     entries: accounts.leaderboard(accounts.authenticate(request.headers.authorization)),
   }));
 
-  app.post('/api/games', async (request) => games.startOrResume(requirePlayer(request)));
-
-  app.get('/api/games/:id', { schema: gameParams }, async (request) => {
-    const { id } = request.params as { id: string };
-    return games.view(requirePlayer(request), id);
-  });
-
-  app.post('/api/games/:id/actions', { schema: { ...gameParams, ...actionSchema } }, async (request) => {
-    const { id } = request.params as { id: string };
-    const { actionId } = request.body as { actionId: string };
-    return games.act(requirePlayer(request), id, actionId);
+  app.get('/ws', { websocket: true }, (socket, request) => {
+    handleGameSocket(socket, request.headers.origin, options.corsOrigin, accounts, games, options.wsMessagesPer10s);
   });
 
   if (options.webglDir && existsSync(resolve(options.webglDir, 'index.html'))) {

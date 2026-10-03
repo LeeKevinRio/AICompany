@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/engine/rng.js';
-import { GameSession } from '../src/game/session.js';
+import { IllegalActionError } from '../src/engine/engine.js';
+import { BusyError, GameSession } from '../src/game/session.js';
 
 describe('rng', () => {
   it('unseeded RNG (production) stays in range', () => {
@@ -23,13 +24,35 @@ describe('rng', () => {
 });
 
 describe('session', () => {
-  it('a rejected action does not leak buffered steps into the next response', () => {
-    const session = new GameSession('g_0000000000000000', 'p', '你', { onHandEnd() {}, coins: () => 0 }, 3);
+  it('rejects actions while the AI is playing and accepts them once it stops', async () => {
+    const states: number[] = [];
+    let steps = 0;
+    const session = new GameSession(
+      'g_0000000000000000',
+      'p',
+      '你',
+      {
+        onHandEnd() {},
+        coins: () => 0,
+        onStep: () => {
+          steps++;
+        },
+        onState: (v) => states.push(v.options.length),
+        onError: (e) => {
+          throw e;
+        },
+      },
+      { seed: 3 },
+    );
     session.start();
-    expect(() => session.act('discard:XX')).toThrow();
-    const view = session.view();
-    const legal = view.options[0]!;
-    const res = session.act(legal.id);
-    for (const step of res.steps) expect(step.event.type).not.toBe('hand_start');
+    expect(session.isBusy).toBe(true);
+    expect(() => session.act('pass')).toThrow(BusyError);
+    await session.idle();
+    expect(steps).toBeGreaterThan(0);
+    expect(states).toHaveLength(1);
+    expect(() => session.act('discard:XX')).toThrow(IllegalActionError);
+    session.act(session.view().options[0]!.id);
+    await session.idle();
+    expect(states).toHaveLength(2);
   });
 });

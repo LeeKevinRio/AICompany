@@ -7,6 +7,7 @@ const port = Number(process.env.PORT ?? 7316);
 const host = process.env.HOST ?? '127.0.0.1';
 const dataFile = resolve(process.env.DATA_FILE ?? 'data/players.json');
 const webglDir = resolve(process.env.WEBGL_DIR ?? '../client/Build/WebGL');
+const aiDelayMs = Number(process.env.AI_DELAY_MS ?? 600);
 const corsOrigin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim()) : true;
 if (process.env.NODE_ENV === 'production' && corsOrigin === true) {
   console.error('NODE_ENV=production 時必須設定 CORS_ORIGIN（逗號分隔的允許來源）。');
@@ -14,7 +15,7 @@ if (process.env.NODE_ENV === 'production' && corsOrigin === true) {
 }
 
 const repo = new JsonPlayerRepository(dataFile);
-const { app } = await buildApp({ repo, corsOrigin, webglDir, logger: true });
+const { app } = await buildApp({ repo, corsOrigin, webglDir, aiDelayMs, logger: true });
 
 const shutdown = async (): Promise<void> => {
   await app.close();

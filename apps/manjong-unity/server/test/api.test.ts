@@ -1,8 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/api/app.js';
-import type { ActionResponse } from '../src/game/session.js';
-import type { GameViewDto } from '../src/game/view.js';
 import { JsonPlayerRepository } from '../src/store/players.js';
 
 let app: FastifyInstance;
@@ -20,46 +18,6 @@ async function guest(): Promise<{ token: string; auth: Record<string, string> }>
   expect(res.statusCode).toBe(200);
   const token = res.json().token as string;
   return { token, auth: { authorization: `Bearer ${token}` } };
-}
-
-function assertNoLeaks(view: GameViewDto): void {
-  // Hands are revealed only once the hand has a result.
-  if (view.hasResult) return;
-  expect(view.phase).toBe('playing');
-  for (const p of view.players) {
-    if (p.seat === view.mySeat) continue;
-    expect(p.hand).toEqual([]);
-    expect(p.drawnTile).toBe('');
-  }
-}
-
-/** Plays the whole game choosing simple legal actions; returns the final view. */
-async function playToEnd(auth: Record<string, string>, first: ActionResponse): Promise<GameViewDto> {
-  let res = first;
-  for (let i = 0; i < 5000; i++) {
-    for (const step of res.steps) {
-      assertNoLeaks(step.view);
-      if (step.event.type === 'draw' && step.event.seat !== step.view.mySeat) expect(step.event.tile).toBe('');
-    }
-    const view = res.view;
-    assertNoLeaks(view);
-    if (view.phase === 'game_end') return view;
-    const pick =
-      view.options.find((o) => ['tsumo', 'ron', 'next'].includes(o.type)) ??
-      view.options.find((o) => o.type === 'pass') ??
-      view.options.find((o) => o.type === 'discard' && o.tile === view.players[view.mySeat]!.drawnTile) ??
-      view.options[view.options.length - 1];
-    expect(pick, 'the human must always have something to do while the game is running').toBeDefined();
-    const r = await app.inject({
-      method: 'POST',
-      url: `/api/games/${view.gameId}/actions`,
-      headers: auth,
-      payload: { actionId: pick!.id },
-    });
-    expect(r.statusCode).toBe(200);
-    res = r.json();
-  }
-  throw new Error('game did not finish');
 }
 
 describe('accounts', () => {
@@ -104,50 +62,5 @@ describe('accounts', () => {
     expect(entries).toHaveLength(2);
     expect(entries.filter((e) => e.isMe)).toHaveLength(1);
     expect(entries.map((e) => e.rank)).toEqual([1, 2]);
-  });
-});
-
-describe('games', () => {
-  it('plays a full game, hides other hands, persists coins and updates stats', async () => {
-    const { auth } = await guest();
-    const start = await app.inject({ method: 'POST', url: '/api/games', headers: auth, payload: {} });
-    expect(start.statusCode).toBe(200);
-    const first = start.json() as ActionResponse;
-    expect(first.steps[0]!.event.type).toBe('hand_start');
-    expect(first.view.players[0]!.name).toMatch(/^訪客/);
-    expect(first.view.players.slice(1).map((p) => p.avatar)).toEqual(['bear', 'cat', 'rabbit']);
-
-    const end = await playToEnd(auth, first);
-    expect(end.hasResult).toBe(true);
-    expect(end.result.gameOver).toBe(true);
-
-    const me = (await app.inject({ method: 'GET', url: '/api/me', headers: auth })).json().player;
-    expect(me.handsPlayed).toBe(end.handNo);
-    expect(me.coins).toBe(20000 + end.players[0]!.sessionDelta);
-    expect(end.myCoins).toBe(me.coins);
-  });
-
-  it('resumes the active game instead of starting another', async () => {
-    const { auth } = await guest();
-    const a = (await app.inject({ method: 'POST', url: '/api/games', headers: auth, payload: {} })).json();
-    const b = (await app.inject({ method: 'POST', url: '/api/games', headers: auth, payload: {} })).json();
-    expect(b.view.gameId).toBe(a.view.gameId);
-    expect(b.steps).toEqual([]);
-    const get = await app.inject({ method: 'GET', url: `/api/games/${a.view.gameId}`, headers: auth });
-    expect(get.json().view.gameId).toBe(a.view.gameId);
-  });
-
-  it('rejects illegal actions and other players’ games', async () => {
-    const me = await guest();
-    const other = await guest();
-    const start = (await app.inject({ method: 'POST', url: '/api/games', headers: me.auth, payload: {} })).json();
-    const url = `/api/games/${start.view.gameId}/actions`;
-    const illegal = await app.inject({ method: 'POST', url, headers: me.auth, payload: { actionId: 'discard:XX' } });
-    expect(illegal.statusCode).toBe(400);
-    expect(illegal.json().error.code).toBe('ILLEGAL_ACTION');
-    const stolen = await app.inject({ method: 'POST', url, headers: other.auth, payload: { actionId: 'pass' } });
-    expect(stolen.statusCode).toBe(404);
-    const malformed = await app.inject({ method: 'POST', url, headers: me.auth, payload: { foo: 1 } });
-    expect(malformed.statusCode).toBe(400);
   });
 });
