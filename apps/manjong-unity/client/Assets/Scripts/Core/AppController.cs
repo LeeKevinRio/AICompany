@@ -1,5 +1,5 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using Manjong.Net;
 using Manjong.Screens;
 using Manjong.UI;
@@ -10,17 +10,37 @@ using UnityEngine.UI;
 namespace Manjong.Core
 {
     /// <summary>
-    /// Owns the canvas, the HTTP client (account / leaderboard), the game WebSocket, the logged-in player and
-    /// screen switching. Screens call the public methods here.
-    /// HTTP calls go through Call&lt;T&gt;(); game traffic goes through GameConnection (contract v0.2 section 2).
+    /// Owns the canvas, the WebSocket connection (contract v0.3: login, account, leaderboard and game), the
+    /// logged-in player and screen switching. Screens call the public methods here.
+    /// Every request carries a requestId; replies / errors come back with the same id in replyTo, which is how
+    /// an error is routed to the UI that asked (nickname hint, relief toast, start hint, ...).
     /// </summary>
     public class AppController : MonoBehaviour
     {
         const float BusyLabelDelay = 0.4f;
-        const float StartTimeoutSeconds = 15f;
         const float ToastSeconds = 3.2f;
+        const float RequestTimeoutSeconds = 15f;
 
-        public ApiClient Api { get; private set; }
+        enum RequestKind
+        {
+            Me,
+            Nickname,
+            Relief,
+            Leaderboard,
+            /// <summary>"start" from the lobby: busy until the first step / state, then the table opens.</summary>
+            Start,
+            /// <summary>"start" sent after a reconnect while sitting at the table.</summary>
+            Resync,
+            Action
+        }
+
+        class PendingRequest
+        {
+            public RequestKind kind;
+            public float sentAt;
+            public bool busy;
+        }
+
         public PlayerDto Me { get; private set; }
 
         Canvas canvas;
@@ -50,18 +70,20 @@ namespace Manjong.Core
         Text toastText;
         float toastUntil;
 
-        bool loggingIn;
-
-        // Game socket
+        // Connection
         GameConnection connection;
-        /// <summary>"start" requested from the lobby; waiting for the first step / state / error.</summary>
-        bool pendingStart;
-        float pendingStartSince;
+        readonly Dictionary<string, PendingRequest> pending = new Dictionary<string, PendingRequest>();
+        readonly List<string> scratchIds = new List<string>();
         bool onTable;
 
         public bool IsBusy
         {
-            get { return busyCount > 0 || loggingIn; }
+            get { return busyCount > 0; }
+        }
+
+        public bool IsConnected
+        {
+            get { return connection != null && connection.IsReady; }
         }
 
         // ---------- Lifecycle ----------
@@ -69,14 +91,12 @@ namespace Manjong.Core
         void Awake()
         {
             // Note: Application.targetFrameRate is deliberately left alone; on WebGL the browser drives the frame loop.
-            Api = new ApiClient();
-            connection = new GameConnection(() => Api.Token);
+            connection = new GameConnection(TokenStore.Load, TokenStore.Save, TokenStore.Clear);
             connection.Ready += OnSocketReady;
             connection.MessageReceived += OnSocketMessage;
-            connection.ConnectFailed += OnSocketConnectFailed;
             connection.StateChanged += OnSocketStateChanged;
-            connection.AuthRejected += OnSocketAuthRejected;
-            connection.Replaced += OnSocketReplaced;
+            connection.TokenReset += OnSocketTokenReset;
+            connection.Stopped += OnSocketStopped;
             EnsureCamera();
             EnsureEventSystem();
             BuildCanvas();
@@ -93,7 +113,8 @@ namespace Manjong.Core
 
         void Start()
         {
-            StartCoroutine(LoginFlow());
+            ShowLobby();
+            connection.Open(); // logs in with the stored token, or as a new guest
         }
 
         void OnDestroy()
@@ -110,12 +131,7 @@ namespace Manjong.Core
         void Update()
         {
             connection.Tick(Time.unscaledTime);
-            if (pendingStart && Time.unscaledTime - pendingStartSince > StartTimeoutSeconds)
-            {
-                // Connected (or still trying) but no game message arrived: do not leave the lobby blocked.
-                FinishPendingStart();
-                ShowDialog("伺服器沒有回應", "開始遊戲的要求逾時，請稍後再試。", "重試", StartGame, "關閉", null);
-            }
+            ExpireRequests();
 
             if (busyLabel != null)
             {
@@ -304,130 +320,6 @@ namespace Manjong.Core
             if (a != null) a();
         }
 
-        void ShowNetworkError(Action retry, bool allowClose)
-        {
-            ShowDialog(
-                "連不上伺服器",
-                "請確認網路連線與後端伺服器已啟動。\n伺服器位置：" + ApiConfig.BaseUrl,
-                "重試",
-                retry,
-                allowClose ? "關閉" : null,
-                null);
-        }
-
-        // ---------- Generic call ----------
-
-        /// <summary>
-        /// Performs a request with the busy blocker. Network failures show a retry dialog;
-        /// 401 triggers a fresh guest login; other API errors go to onFail or a toast with the server message.
-        /// </summary>
-        public void Call<T>(string method, string path, string jsonBody, Action<T> onOk, Action<ApiError> onFail) where T : class
-        {
-            StartCoroutine(CallRoutine(method, path, jsonBody, onOk, onFail));
-        }
-
-        IEnumerator CallRoutine<T>(string method, string path, string jsonBody, Action<T> onOk, Action<ApiError> onFail) where T : class
-        {
-            T result = null;
-            ApiError error = null;
-            BeginBusy();
-            try
-            {
-                if (method == "GET")
-                {
-                    yield return StartCoroutine(Api.Get<T>(path, r => result = r, e => error = e));
-                }
-                else
-                {
-                    yield return StartCoroutine(Api.Post<T>(path, jsonBody, r => result = r, e => error = e));
-                }
-            }
-            finally
-            {
-                EndBusy();
-            }
-
-            if (error == null)
-            {
-                if (onOk != null) onOk(result);
-                yield break;
-            }
-            if (error.isNetwork)
-            {
-                ShowNetworkError(() => Call(method, path, jsonBody, onOk, onFail), true);
-                if (onFail != null) onFail(error);
-                yield break;
-            }
-            if (error.status == 401)
-            {
-                ShowToast("登入已失效，正在重新登入…");
-                Api.ClearToken();
-                Me = null;
-                StartCoroutine(LoginFlow());
-                yield break;
-            }
-            if (onFail != null) onFail(error);
-            else ShowToast(error.message);
-        }
-
-        // ---------- Login ----------
-
-        IEnumerator LoginFlow()
-        {
-            if (loggingIn) yield break;
-            loggingIn = true;
-
-            PlayerDto player = null;
-            ApiError error = null;
-
-            BeginBusy();
-            try
-            {
-                if (Api.HasToken)
-                {
-                    yield return StartCoroutine(Api.Get<PlayerResponse>("/api/me", r => player = r != null ? r.player : null, e => error = e));
-                    if (error != null && error.status == 401)
-                    {
-                        // Stale token: discard and fall through to a new guest account.
-                        Api.ClearToken();
-                        error = null;
-                        player = null;
-                    }
-                }
-
-                if (error == null && player == null)
-                {
-                    AuthResponse auth = null;
-                    yield return StartCoroutine(Api.Post<AuthResponse>("/api/auth/guest", "{}", r => auth = r, e => error = e));
-                    if (error == null && auth != null && !string.IsNullOrEmpty(auth.token))
-                    {
-                        Api.SetToken(auth.token);
-                        player = auth.player;
-                    }
-                    else if (error == null)
-                    {
-                        error = new ApiError { status = 0, code = "BAD_RESPONSE", message = "伺服器回傳的登入資料不完整", isNetwork = false };
-                    }
-                }
-            }
-            finally
-            {
-                EndBusy();
-                loggingIn = false;
-            }
-
-            if (error != null)
-            {
-                Action retry = () => StartCoroutine(LoginFlow());
-                if (error.isNetwork) ShowNetworkError(retry, false);
-                else ShowDialog("登入失敗", error.message, "重試", retry, null, null);
-                yield break;
-            }
-
-            Me = player;
-            ShowLobby();
-        }
-
         // ---------- Screen switching ----------
 
         public void ShowLobby()
@@ -435,6 +327,7 @@ namespace Manjong.Core
             onTable = false;
             table.Hide();
             lobby.gameObject.SetActive(true);
+            lobby.SetConnectionState(connection.State, connection.HasEverConnected, connection.StopCode);
             lobby.Show(Me);
             RefreshLobby();
         }
@@ -444,83 +337,143 @@ namespace Manjong.Core
             onTable = true;
             lobby.gameObject.SetActive(false);
             table.gameObject.SetActive(true);
+            table.SetConnectionState(connection.State);
         }
 
-        // ---------- Lobby actions (HTTP) ----------
+        // ---------- Requests ----------
+
+        /// <summary>Sends a request and remembers what it was for. Null when not connected.</summary>
+        string Send(RequestKind kind, string type, string actionId, string nickname, bool busy)
+        {
+            string id = connection.Request(type, actionId, nickname);
+            if (id == null) return null;
+            pending[id] = new PendingRequest { kind = kind, sentAt = Time.unscaledTime, busy = busy };
+            if (busy) BeginBusy();
+            return id;
+        }
+
+        PendingRequest Take(string requestId)
+        {
+            if (string.IsNullOrEmpty(requestId)) return null;
+            PendingRequest p;
+            if (!pending.TryGetValue(requestId, out p)) return null;
+            pending.Remove(requestId);
+            if (p.busy) EndBusy();
+            return p;
+        }
+
+        /// <summary>Removes every pending request of a kind (used for start / action, whose success is a push).</summary>
+        bool TakeAll(RequestKind kind)
+        {
+            scratchIds.Clear();
+            foreach (var kv in pending)
+            {
+                if (kv.Value.kind == kind) scratchIds.Add(kv.Key);
+            }
+            for (int i = 0; i < scratchIds.Count; i++) Take(scratchIds[i]);
+            return scratchIds.Count > 0;
+        }
+
+        bool HasPending(RequestKind kind)
+        {
+            foreach (var kv in pending)
+            {
+                if (kv.Value.kind == kind) return true;
+            }
+            return false;
+        }
+
+        void ExpireRequests()
+        {
+            if (pending.Count == 0) return;
+            float t = Time.unscaledTime;
+            scratchIds.Clear();
+            foreach (var kv in pending)
+            {
+                // Actions have no reply of their own (success = steps + state); the table stays locked until a state.
+                if (kv.Value.kind != RequestKind.Action && t - kv.Value.sentAt > RequestTimeoutSeconds) scratchIds.Add(kv.Key);
+            }
+            for (int i = 0; i < scratchIds.Count; i++)
+            {
+                PendingRequest p = Take(scratchIds[i]);
+                if (p != null) FailRequest(p.kind, "伺服器沒有回應，請再試一次");
+            }
+        }
+
+        /// <summary>Shows a failure where the player asked for it.</summary>
+        void FailRequest(RequestKind kind, string message)
+        {
+            switch (kind)
+            {
+                case RequestKind.Nickname:
+                    lobby.SetNicknameHint(message, true);
+                    break;
+                case RequestKind.Relief:
+                case RequestKind.Me:
+                    ShowToast(message);
+                    break;
+                case RequestKind.Leaderboard:
+                    lobby.SetLeaderboardError(message);
+                    break;
+                case RequestKind.Start:
+                    lobby.SetStartError(message);
+                    break;
+                case RequestKind.Resync:
+                case RequestKind.Action:
+                    if (onTable) table.OnServerError();
+                    break;
+            }
+        }
+
+        // ---------- Lobby actions ----------
 
         public void RefreshLobby()
         {
-            if (loggingIn) return;
-            Call<PlayerResponse>("GET", "/api/me", null, r =>
-            {
-                if (r != null && r.player != null)
-                {
-                    Me = r.player;
-                    lobby.Show(Me);
-                }
-            }, null);
+            if (!connection.IsReady) return;
+            if (!HasPending(RequestKind.Me)) Send(RequestKind.Me, "me", "", "", false);
             LoadLeaderboard();
         }
 
         public void LoadLeaderboard()
         {
-            lobby.SetLeaderboardLoading();
-            // Not wrapped in Call(): leaderboard failures are shown inline in the list instead of a dialog.
-            StartCoroutine(Api.Get<LeaderboardResponse>("/api/leaderboard",
-                r => lobby.SetLeaderboard(r),
-                e => lobby.SetLeaderboardError(e.isNetwork ? "連不上伺服器，請按「重新整理」重試" : e.message)));
+            if (!connection.IsReady || HasPending(RequestKind.Leaderboard)) return;
+            if (Send(RequestKind.Leaderboard, "leaderboard", "", "", false) != null) lobby.SetLeaderboardLoading();
         }
 
         public void ChangeNickname(string nickname)
         {
-            var body = JsonUtility.ToJson(new NicknameRequest { nickname = nickname });
-            Call<PlayerResponse>("POST", "/api/me/nickname", body, r =>
+            if (Send(RequestKind.Nickname, "nickname", "", nickname, true) == null)
             {
-                if (r != null && r.player != null) Me = r.player;
-                lobby.Show(Me);
-                lobby.SetNicknameHint("暱稱已更新", false);
-                LoadLeaderboard();
-            }, e =>
-            {
-                if (!e.isNetwork) lobby.SetNicknameHint(e.message, true);
-            });
+                lobby.SetNicknameHint("尚未連上伺服器，請稍候再試", true);
+            }
         }
 
         public void ClaimRelief()
         {
-            Call<PlayerResponse>("POST", "/api/me/relief", "{}", r =>
-            {
-                if (r != null && r.player != null) Me = r.player;
-                lobby.Show(Me);
-                ShowToast("已領取救濟金，目前金幣 " + Format.Coins(Me != null ? Me.coins : 0));
-                LoadLeaderboard();
-            }, null);
+            if (Send(RequestKind.Relief, "relief", "", "", true) == null) ShowToast("尚未連上伺服器，請稍候再試");
         }
 
-        // ---------- Game (WebSocket) ----------
-
-        /// <summary>Lobby "start": opens the socket if needed and sends "start" (new game or resume).</summary>
+        /// <summary>Lobby "start": new game or resume. The table opens on the first step / state.</summary>
         public void StartGame()
         {
-            if (IsBusy || pendingStart) return;
-            pendingStart = true;
-            pendingStartSince = Time.unscaledTime;
-            BeginBusy();
-            if (connection.IsReady) connection.SendStart();
-            else connection.Open(); // "start" goes out in OnSocketReady
+            if (IsBusy || HasPending(RequestKind.Start)) return;
+            if (Send(RequestKind.Start, "start", "", "", true) == null) lobby.SetStartError("尚未連上伺服器，請稍候再試");
         }
 
-        /// <summary>Sends an option id. Returns false (and tells the player) when the socket is not ready.</summary>
+        /// <summary>Reconnect after Stopped (logged in elsewhere) or Idle.</summary>
+        public void Reconnect()
+        {
+            connection.Open();
+        }
+
+        // ---------- Table actions ----------
+
+        /// <summary>Sends an option id. Returns false (and tells the player) when not connected.</summary>
         public bool SendAction(string actionId)
         {
-            if (connection.SendAction(actionId)) return true;
+            if (Send(RequestKind.Action, "action", actionId, "", false) != null) return true;
             ShowToast("連線中斷，正在重新連線…");
             return false;
-        }
-
-        public bool IsGameConnected
-        {
-            get { return connection != null && connection.IsReady; }
         }
 
         /// <summary>Leave the table; the game stays on the server and resumes with "start" from the lobby.</summary>
@@ -529,25 +482,21 @@ namespace Manjong.Core
             ShowLobby();
         }
 
-        void FinishPendingStart()
-        {
-            if (!pendingStart) return;
-            pendingStart = false;
-            EndBusy();
-        }
+        // ---------- Socket events ----------
 
         void OnSocketReady()
         {
-            if (pendingStart)
+            if (onTable)
             {
-                connection.SendStart();
-            }
-            else if (onTable)
-            {
-                // Reconnected while at the table: resync with a fresh snapshot.
+                if (table.IsGameOver)
+                {
+                    // Never "start" here: it would silently open a new game. The result panel's "回大廳" still works.
+                    return;
+                }
                 table.PrepareResync();
-                connection.SendStart();
+                Send(RequestKind.Resync, "start", "", "", false);
             }
+            // In the lobby the auth_ok handler below refreshes the profile and leaderboard.
         }
 
         void OnSocketMessage(ServerMessage msg)
@@ -555,12 +504,15 @@ namespace Manjong.Core
             switch (msg.type)
             {
                 case "auth_ok":
+                    SetMe(msg.player);
+                    if (!onTable) LoadLeaderboard();
+                    break;
                 case "player":
-                    if (msg.player != null && !string.IsNullOrEmpty(msg.player.id))
-                    {
-                        Me = msg.player;
-                        if (lobby.gameObject.activeSelf) lobby.Show(Me);
-                    }
+                    OnPlayer(msg);
+                    break;
+                case "leaderboard":
+                    Take(msg.replyTo);
+                    lobby.SetLeaderboard(msg.entries);
                     break;
                 case "step":
                     if (!EnterTableIfStarting()) return;
@@ -568,93 +520,132 @@ namespace Manjong.Core
                     break;
                 case "state":
                     if (!EnterTableIfStarting()) return;
+                    TakeAll(RequestKind.Action);
+                    TakeAll(RequestKind.Resync);
                     if (msg.view != null) table.EnqueueState(msg.view);
                     break;
                 case "error":
-                    OnSocketError(msg.code, msg.message);
+                    OnSocketError(msg);
                     break;
             }
         }
 
-        /// <summary>Switches to the table on the first game message after "start". False when we are not playing.</summary>
+        void SetMe(PlayerDto player)
+        {
+            if (player == null || string.IsNullOrEmpty(player.id)) return;
+            Me = player;
+            if (lobby.gameObject.activeSelf) lobby.Show(Me);
+        }
+
+        void OnPlayer(ServerMessage msg)
+        {
+            PendingRequest req = Take(msg.replyTo);
+            SetMe(msg.player);
+            if (req == null) return; // post-hand push or "me" reply already handled by SetMe
+            if (req.kind == RequestKind.Nickname)
+            {
+                lobby.SetNicknameHint("暱稱已更新", false);
+                LoadLeaderboard();
+            }
+            else if (req.kind == RequestKind.Relief)
+            {
+                ShowToast("已領取救濟金，目前金幣 " + Format.Coins(Me != null ? Me.coins : 0));
+                LoadLeaderboard();
+            }
+        }
+
+        /// <summary>Opens the table on the first game message after a lobby "start". False when not playing.</summary>
         bool EnterTableIfStarting()
         {
-            if (pendingStart)
+            if (TakeAll(RequestKind.Start))
             {
-                FinishPendingStart();
                 ShowTable();
                 table.BeginGame();
                 return true;
             }
-            // Messages that arrive while the player sits in the lobby are ignored; "start" brings a fresh state.
+            // Game messages that arrive while the player sits in the lobby are ignored; "start" brings a fresh state.
             return onTable;
         }
 
-        void OnSocketError(string code, string message)
+        void OnSocketError(ServerMessage msg)
         {
-            string text = string.IsNullOrEmpty(message) ? "伺服器發生錯誤" : message;
+            string code = msg.code ?? "";
+            string text = string.IsNullOrEmpty(msg.message) ? "伺服器發生錯誤" : msg.message;
+            PendingRequest req = Take(msg.replyTo);
+
             switch (code)
             {
-                case "ILLEGAL_ACTION":
-                    // The server follows up with a fresh "state", which unlocks the table.
-                    ShowToast(text);
-                    break;
+                case "INVALID_TOKEN":
+                case "AUTH_TIMEOUT":
+                case "UNAUTHORIZED":
+                    // The close that follows is handled by GameConnection (token kept unless INVALID_TOKEN).
+                    return;
                 case "NO_GAME":
-                    FinishPendingStart();
                     ShowLobby();
                     ShowToast("牌局已結束，請重新開始");
-                    break;
+                    return;
                 case "NOT_ENOUGH_COINS":
-                    FinishPendingStart();
                     if (onTable) ShowLobby();
                     lobby.SetStartError(text);
-                    break;
-                case "UNAUTHORIZED":
-                    // A 4401 close follows and is handled in OnSocketAuthRejected.
-                    Debug.LogWarning("[Manjong] WebSocket UNAUTHORIZED: " + text);
-                    break;
-                default:
-                    // BAD_MESSAGE / INTERNAL / unknown: no state is guaranteed to follow, so unlock.
-                    FinishPendingStart();
+                    return;
+                case "ILLEGAL_ACTION":
+                    // A rejected action is followed by a fresh state. "Wait for the other players" (BusyError) is not:
+                    // that state arrives when the AI turns finish, so the table simply stays locked until then.
                     ShowToast(text);
-                    if (onTable) table.OnServerError();
-                    break;
+                    return;
             }
-        }
 
-        void OnSocketConnectFailed()
-        {
-            if (!pendingStart) return; // at the table the banner shows and the connection keeps retrying
-            FinishPendingStart();
-            connection.Shutdown();
-            ShowNetworkError(StartGame, true);
+            if (req != null)
+            {
+                FailRequest(req.kind, text);
+                return;
+            }
+            // BAD_MESSAGE / INTERNAL / unknown without a matching request.
+            ShowToast(text);
+            if (onTable) table.OnServerError();
         }
 
         void OnSocketStateChanged(ConnectionState state)
         {
+            lobby.SetConnectionState(state, connection.HasEverConnected, connection.StopCode);
             if (onTable) table.SetConnectionState(state);
+            if (state != ConnectionState.Ready && pending.Count > 0)
+            {
+                // Replies can never arrive on a new socket: fail everything that was in flight.
+                scratchIds.Clear();
+                foreach (var kv in pending) scratchIds.Add(kv.Key);
+                var ids = new List<string>(scratchIds);
+                for (int i = 0; i < ids.Count; i++)
+                {
+                    PendingRequest p = Take(ids[i]);
+                    if (p != null) FailRequest(p.kind, "連線中斷，請再試一次");
+                }
+            }
         }
 
-        void OnSocketAuthRejected()
+        void OnSocketTokenReset()
         {
-            FinishPendingStart();
-            ShowToast("登入已失效，正在重新登入…");
-            Api.ClearToken();
             Me = null;
-            StartCoroutine(LoginFlow()); // ends in ShowLobby()
+            ShowToast("登入資料已失效，將建立新的訪客帳號");
+            if (onTable) ShowLobby();
         }
 
-        void OnSocketReplaced()
+        void OnSocketStopped(int closeCode)
         {
-            FinishPendingStart();
+            if (closeCode == GameConnection.CloseOriginRejected)
+            {
+                ShowLobby();
+                ShowDialog(
+                    "伺服器拒絕連線",
+                    "這個網頁的來源不在伺服器允許的清單中（close 4403）。\n請改從伺服器提供的網址開啟遊戲。",
+                    "知道了", null, null, null);
+                return;
+            }
             ShowLobby();
             ShowDialog(
                 "已在其他視窗登入",
-                "這個帳號在其他視窗或分頁開始了牌局，這裡的連線已中斷。\n若要改在這裡玩，請按「開始遊戲」。",
-                "知道了",
-                null,
-                null,
-                null);
+                "這個帳號在其他視窗或分頁登入了，這裡的連線已中斷。\n若要改在這裡玩，請按大廳右上角的「重新連線」。",
+                "知道了", null, null, null);
         }
     }
 }

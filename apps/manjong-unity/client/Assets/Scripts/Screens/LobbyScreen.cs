@@ -32,6 +32,11 @@ namespace Manjong.Screens
         ScrollRect listScroll;
         Text listStatus;
 
+        Image connectionPill;
+        Text connectionText;
+        Button reconnectButton;
+        bool connected;
+
         PlayerDto me;
 
         public void Init(AppController owner)
@@ -47,6 +52,25 @@ namespace Manjong.Screens
 
             BuildProfileCard(root);
             BuildLeaderboardCard(root);
+            BuildConnectionStatus(root);
+
+            nicknameText.text = "連線中…";
+            coinsText.text = "";
+            statsText.text = "";
+            ApplyButtonStates();
+        }
+
+        /// <summary>Top-right pill: connection state, plus a reconnect button when we stopped trying.</summary>
+        void BuildConnectionStatus(Transform root)
+        {
+            connectionPill = UiFactory.CreatePanel(root, "ConnectionStatus", Palette.Butter, 22);
+            UiFactory.Place(connectionPill.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-24f, -24f), new Vector2(560f, 64f));
+            UiFactory.AddShadow(connectionPill, Palette.CardShadow, new Vector2(0f, -3f));
+            connectionText = UiFactory.CreateLabel(connectionPill.transform, "Text", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
+            UiFactory.Stretch(connectionText.rectTransform, 20f, 4f, 20f, 4f);
+            reconnectButton = UiFactory.CreateButton(connectionPill.transform, "Reconnect", "重新連線", Palette.Pink, 26, OnReconnect);
+            UiFactory.Place((RectTransform)reconnectButton.transform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-8f, 0f), new Vector2(160f, 50f));
+            reconnectButton.gameObject.SetActive(false);
         }
 
         // ---------- Build ----------
@@ -157,17 +181,18 @@ namespace Manjong.Screens
         public void Show(PlayerDto player)
         {
             me = player;
-            if (me == null) return;
+            if (me == null)
+            {
+                ApplyButtonStates();
+                return;
+            }
             nicknameText.text = me.nickname;
             coinsText.text = "金幣 " + Format.Coins(me.coins);
             statsText.text = "已打 " + me.handsPlayed + " 局·胡牌 " + me.handsWon + " 次·自摸 " + me.selfDraws +
                              " 次·放槍 " + me.dealIns + " 次·最大 " + me.bestTai + " 台";
 
             bool canPlay = me.coins >= Economy.MinCoinsToPlay;
-            // The start button stays enabled below the threshold: the server still lets the player resume a game
-            // that is already in progress, and answers NOT_ENOUGH_COINS otherwise (shown via SetStartError).
-            UiFactory.SetInteractable(startButton, true);
-            UiFactory.SetInteractable(reliefButton, !canPlay);
+            ApplyButtonStates();
             if (canPlay)
             {
                 startHint.text = "底 " + Economy.BasePoints + "·每台 " + Economy.PerTai + "·打一圈（東風圈）";
@@ -181,6 +206,57 @@ namespace Manjong.Screens
             reliefHint.color = canPlay ? Palette.InkSoft : Palette.Ink;
         }
 
+        /// <summary>
+        /// Everything needs the socket. The start button stays enabled below the coin threshold: the server still
+        /// lets the player resume a game in progress and answers NOT_ENOUGH_COINS otherwise (shown via SetStartError).
+        /// </summary>
+        void ApplyButtonStates()
+        {
+            bool ready = connected && me != null;
+            bool canPlay = me != null && me.coins >= Economy.MinCoinsToPlay;
+            UiFactory.SetInteractable(startButton, ready);
+            UiFactory.SetInteractable(reliefButton, ready && !canPlay);
+            UiFactory.SetInteractable(renameButton, ready);
+            UiFactory.SetInteractable(refreshButton, ready);
+        }
+
+        public void SetConnectionState(ConnectionState state, bool everConnected, int stopCode)
+        {
+            connected = state == ConnectionState.Ready;
+            bool stopped = state == ConnectionState.Stopped || state == ConnectionState.Idle;
+            string text;
+            Color bg;
+            switch (state)
+            {
+                case ConnectionState.Ready:
+                    text = "已連線";
+                    bg = Palette.Mint;
+                    break;
+                case ConnectionState.Connecting:
+                case ConnectionState.Authenticating:
+                    text = everConnected ? "重新連線中…" : "連線中…";
+                    bg = Palette.Butter;
+                    break;
+                case ConnectionState.Reconnecting:
+                    text = everConnected ? "連線中斷，正在重新連線…" : "連不上伺服器，正在重試…";
+                    bg = Palette.Butter;
+                    break;
+                case ConnectionState.Stopped:
+                    text = stopCode == GameConnection.CloseOriginRejected ? "伺服器拒絕這個網頁來源" : "已在其他視窗登入";
+                    bg = Palette.Coral;
+                    break;
+                default:
+                    text = "未連線";
+                    bg = Palette.Coral;
+                    break;
+            }
+            connectionText.text = text;
+            connectionPill.color = bg;
+            reconnectButton.gameObject.SetActive(stopped && stopCode != GameConnection.CloseOriginRejected);
+            connectionText.rectTransform.offsetMax = new Vector2(reconnectButton.gameObject.activeSelf ? -176f : -20f, -4f);
+            if (me == null && !connected) nicknameText.text = text;
+            ApplyButtonStates();
+        }
         /// <summary>Server refused "start" (e.g. NOT_ENOUGH_COINS): show the reason under the start button.</summary>
         public void SetStartError(string message)
         {
@@ -207,7 +283,7 @@ namespace Manjong.Screens
 
         public void SetLeaderboardError(string message)
         {
-            UiFactory.SetInteractable(refreshButton, true);
+            ApplyButtonStates();
             UiFactory.DestroyChildren(listContent);
             updatedText.text = "";
             listStatus.text = "排行榜載入失敗\n" + message;
@@ -215,14 +291,14 @@ namespace Manjong.Screens
             listStatus.gameObject.SetActive(true);
         }
 
-        public void SetLeaderboard(LeaderboardResponse data)
+        public void SetLeaderboard(LeaderboardEntry[] data)
         {
-            UiFactory.SetInteractable(refreshButton, true);
+            ApplyButtonStates();
             UiFactory.DestroyChildren(listContent);
             listStatus.color = Palette.InkSoft;
             updatedText.text = "更新時間 " + DateTime.Now.ToString("HH:mm:ss");
 
-            LeaderboardEntry[] entries = data != null ? DtoUtil.Safe(data.entries) : new LeaderboardEntry[0];
+            LeaderboardEntry[] entries = DtoUtil.Safe(data);
             if (entries.Length == 0)
             {
                 listStatus.text = "目前還沒有人上榜";
@@ -313,6 +389,11 @@ namespace Manjong.Screens
         {
             if (app.IsBusy) return;
             app.ClaimRelief();
+        }
+
+        void OnReconnect()
+        {
+            app.Reconnect();
         }
 
         void OnRefresh()

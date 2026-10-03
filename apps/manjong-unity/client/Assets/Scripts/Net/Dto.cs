@@ -1,37 +1,9 @@
 using System;
 
-// DTOs mirror work/manjong-unity/api-contract.md v0.2 exactly.
+// DTOs mirror work/manjong-unity/api-contract.md v0.3 exactly (everything goes over the WebSocket).
 // JsonUtility rules: [Serializable] classes, public fields, camelCase names identical to the contract.
 namespace Manjong.Net
 {
-    // ---------- HTTP errors ----------
-
-    [Serializable]
-    public class ErrorBody
-    {
-        public string code;
-        public string message;
-    }
-
-    [Serializable]
-    public class ErrorEnvelope
-    {
-        public ErrorBody error;
-    }
-
-    // ---------- HTTP requests ----------
-
-    [Serializable]
-    public class EmptyRequest
-    {
-    }
-
-    [Serializable]
-    public class NicknameRequest
-    {
-        public string nickname;
-    }
-
     // ---------- Account ----------
 
     [Serializable]
@@ -47,19 +19,6 @@ namespace Manjong.Net
         public int bestTai;
     }
 
-    [Serializable]
-    public class AuthResponse
-    {
-        public string token;
-        public PlayerDto player;
-    }
-
-    [Serializable]
-    public class PlayerResponse
-    {
-        public PlayerDto player;
-    }
-
     // ---------- Leaderboard ----------
 
     [Serializable]
@@ -73,33 +32,36 @@ namespace Manjong.Net
         public bool isMe;
     }
 
-    [Serializable]
-    public class LeaderboardResponse
-    {
-        public LeaderboardEntry[] entries;
-    }
-
     // ---------- WebSocket envelopes ----------
 
-    /// <summary>Client -> server. type: auth | start | action | ping.</summary>
+    /// <summary>Client -> server. type: auth | guest | me | nickname | relief | leaderboard | start | action | ping.</summary>
     [Serializable]
     public class ClientMessage
     {
         public string type;
+        /// <summary>Echoed back as ServerMessage.replyTo on the reply / error.</summary>
+        public string requestId;
         public string token;
         public string actionId;
+        public string nickname;
     }
 
-    /// <summary>Server -> client. type: auth_ok | step | state | player | error | pong.</summary>
+    /// <summary>Server -> client. type: auth_ok | player | leaderboard | step | state | error | pong.</summary>
     [Serializable]
     public class ServerMessage
     {
         public string type;
         public int seq;
+        /// <summary>requestId of the request this answers; "" for pushes (step / state / post-hand player).</summary>
+        public string replyTo;
+        /// <summary>Only on auth_ok after "guest": the new account's token (store it).</summary>
+        public string token;
         public PlayerDto player;
+        public LeaderboardEntry[] entries;
         public StepDto step;
         public GameView view;
-        // UNAUTHORIZED | NOT_ENOUGH_COINS | NO_GAME | ILLEGAL_ACTION | BAD_MESSAGE | INTERNAL
+        // INVALID_TOKEN | AUTH_TIMEOUT | UNAUTHORIZED | INVALID_NICKNAME | RELIEF_NOT_ELIGIBLE | NOT_ENOUGH_COINS
+        // | NO_GAME | ILLEGAL_ACTION | BAD_MESSAGE | INTERNAL
         public string code;
         public string message;
     }
@@ -213,7 +175,10 @@ namespace Manjong.Net
         public int wallRemaining;
         public int lastDiscardSeat;
         public string lastDiscardTile;
+        /// <summary>Persistent coins including this hand's settlement; never below 0.</summary>
         public int myCoins;
+        /// <summary>phase = game_end: "rounds_complete" or "bankrupt"; otherwise "".</summary>
+        public string endReason;
         /// <summary>Tiles I am currently waiting on (empty while I have to discard; see discard options' waits).</summary>
         public WaitDto[] myWaits;
         public PlayerView[] players;

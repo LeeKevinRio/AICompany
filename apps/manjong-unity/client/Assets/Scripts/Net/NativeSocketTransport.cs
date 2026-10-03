@@ -11,9 +11,12 @@ namespace Manjong.Net
 {
     /// <summary>
     /// Editor / desktop WebSocket on System.Net.WebSockets.ClientWebSocket.
-    /// A background task connects, then runs a receive loop (re-assembling fragmented frames) and a send loop.
-    /// Everything it produces goes through a ConcurrentQueue that the main thread drains in Update.
-    /// Close() cancels the token, aborts the socket and lets both loops end; no thread outlives it.
+    /// Each Connect() creates a Session owning its own socket, cancellation token, outbox and send signal, so
+    /// nothing is shared across connections. A background task connects, then runs a receive loop (re-assembling
+    /// fragmented frames) and a send loop. Everything it produces goes into the session's ConcurrentQueue, which
+    /// the main thread drains in Update. A send failure aborts the socket so the normal close / reconnect path
+    /// runs (no silently dropped messages, Send() returns false from then on).
+    /// Close() cancels the token and aborts the socket; both loops end and no thread outlives the session.
     /// This file is excluded from WebGL player builds (browsers have no sockets; see WebGLSocketTransport).
     /// </summary>
     public class NativeSocketTransport : ISocketTransport
@@ -21,73 +24,27 @@ namespace Manjong.Net
         const int ConnectTimeoutMs = 10000;
         const int ReceiveBufferSize = 16 * 1024;
 
-        struct Tagged
+        sealed class Session
         {
-            public int generation;
-            public SocketEvent ev;
-        }
+            public readonly ClientWebSocket socket = new ClientWebSocket();
+            public readonly CancellationTokenSource cts = new CancellationTokenSource();
+            public readonly SemaphoreSlim sendSignal = new SemaphoreSlim(0);
+            public readonly ConcurrentQueue<string> outbox = new ConcurrentQueue<string>();
+            public readonly ConcurrentQueue<SocketEvent> inbox = new ConcurrentQueue<SocketEvent>();
+            /// <summary>True between a successful connect and the first failure / close.</summary>
+            public volatile bool open;
+            /// <summary>Set by Close(); the session's events are no longer wanted.</summary>
+            public volatile bool discarded;
 
-        readonly ConcurrentQueue<Tagged> inbox = new ConcurrentQueue<Tagged>();
-        readonly ConcurrentQueue<string> outbox = new ConcurrentQueue<string>();
-
-        ClientWebSocket socket;
-        CancellationTokenSource cts;
-        SemaphoreSlim sendSignal;
-        int generation;
-        volatile bool open;
-
-        public void Connect(string url)
-        {
-            Close();
-            ClearQueues();
-
-            generation++;
-            int myGeneration = generation;
-            cts = new CancellationTokenSource();
-            socket = new ClientWebSocket();
-            sendSignal = new SemaphoreSlim(0);
-
-            ClientWebSocket ws = socket;
-            CancellationToken token = cts.Token;
-            SemaphoreSlim signal = sendSignal;
-            Task.Run(() => RunAsync(ws, url, token, signal, myGeneration));
-        }
-
-        public bool Send(string text)
-        {
-            if (!open || socket == null || sendSignal == null) return false;
-            outbox.Enqueue(text);
-            try
+            public void Post(SocketEvent ev)
             {
-                sendSignal.Release();
+                if (!discarded) inbox.Enqueue(ev);
             }
-            catch (ObjectDisposedException)
-            {
-                return false;
-            }
-            return true;
-        }
 
-        public bool TryDequeue(out SocketEvent ev)
-        {
-            Tagged t;
-            while (inbox.TryDequeue(out t))
+            /// <summary>Stops the session from any thread: no more sends, pending I/O completes with an exception.</summary>
+            public void Kill()
             {
-                // Drop anything produced by a socket that has since been closed or replaced.
-                if (t.generation != generation) continue;
-                ev = t.ev;
-                return true;
-            }
-            ev = default(SocketEvent);
-            return false;
-        }
-
-        public void Close()
-        {
-            open = false;
-            generation++; // events from the old socket are dropped from now on
-            if (cts != null)
-            {
+                open = false;
                 try
                 {
                     cts.Cancel();
@@ -95,10 +52,6 @@ namespace Manjong.Net
                 catch (ObjectDisposedException)
                 {
                 }
-            }
-            if (socket != null)
-            {
-                // Abort is immediate and makes any pending ReceiveAsync / SendAsync complete with an exception.
                 try
                 {
                     socket.Abort();
@@ -107,49 +60,70 @@ namespace Manjong.Net
                 {
                 }
             }
-            socket = null;
-            cts = null;
-            sendSignal = null;
-            ClearQueues();
         }
 
-        void ClearQueues()
+        Session current;
+
+        public void Connect(string url)
         {
-            Tagged ignoredEvent;
-            while (inbox.TryDequeue(out ignoredEvent))
-            {
-            }
-            string ignoredText;
-            while (outbox.TryDequeue(out ignoredText))
-            {
-            }
+            Close();
+            var session = new Session();
+            current = session;
+            Task.Run(() => RunAsync(session, url));
         }
 
-        void Post(int myGeneration, SocketEvent ev)
+        public bool Send(string text)
         {
-            // Events are tagged; TryDequeue discards those whose generation is no longer current.
-            if (myGeneration == Volatile.Read(ref generation)) inbox.Enqueue(new Tagged { generation = myGeneration, ev = ev });
+            Session s = current;
+            if (s == null || !s.open) return false;
+            s.outbox.Enqueue(text);
+            try
+            {
+                s.sendSignal.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            return s.open;
         }
 
-        async Task RunAsync(ClientWebSocket ws, string url, CancellationToken token, SemaphoreSlim signal, int myGeneration)
+        public bool TryDequeue(out SocketEvent ev)
+        {
+            Session s = current;
+            if (s != null && s.inbox.TryDequeue(out ev)) return true;
+            ev = default(SocketEvent);
+            return false;
+        }
+
+        public void Close()
+        {
+            Session s = current;
+            current = null;
+            if (s == null) return;
+            s.discarded = true;
+            s.Kill();
+        }
+
+        static async Task RunAsync(Session s, string url)
         {
             int closeCode = 1006;
             try
             {
-                using (var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+                using (var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(s.cts.Token))
                 {
                     connectTimeout.CancelAfter(ConnectTimeoutMs);
-                    await ws.ConnectAsync(new Uri(url), connectTimeout.Token).ConfigureAwait(false);
+                    await s.socket.ConnectAsync(new Uri(url), connectTimeout.Token).ConfigureAwait(false);
                 }
-                open = myGeneration == Volatile.Read(ref generation);
-                Post(myGeneration, SocketEvent.Opened());
+                s.open = true;
+                s.Post(SocketEvent.Opened());
 
-                using (var sendCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                using (var sendCts = CancellationTokenSource.CreateLinkedTokenSource(s.cts.Token))
                 {
-                    Task sendLoop = SendLoopAsync(ws, sendCts.Token, signal);
+                    Task sendLoop = SendLoopAsync(s, sendCts.Token);
                     try
                     {
-                        closeCode = await ReceiveLoopAsync(ws, token, myGeneration).ConfigureAwait(false);
+                        closeCode = await ReceiveLoopAsync(s).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -162,54 +136,56 @@ namespace Manjong.Net
                         }
                         catch (Exception)
                         {
-                            // Ends with OperationCanceledException / WebSocketException by design.
+                            // Ends with OperationCanceledException by design.
                         }
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                if (!token.IsCancellationRequested) Post(myGeneration, SocketEvent.Failed("connect timeout"));
+                if (!s.cts.IsCancellationRequested) s.Post(SocketEvent.Failed("connect timeout"));
             }
             catch (Exception e)
             {
-                Post(myGeneration, SocketEvent.Failed(e.GetType().Name + ": " + e.Message));
+                s.Post(SocketEvent.Failed(e.GetType().Name + ": " + e.Message));
             }
             finally
             {
-                if (myGeneration == Volatile.Read(ref generation)) open = false;
+                s.open = false;
                 try
                 {
-                    ws.Dispose();
+                    s.socket.Dispose();
                 }
                 catch (Exception)
                 {
                 }
                 try
                 {
-                    signal.Dispose();
+                    s.sendSignal.Dispose();
                 }
                 catch (Exception)
                 {
                 }
-                Post(myGeneration, SocketEvent.Closed(closeCode));
+                s.Post(SocketEvent.Closed(closeCode));
             }
         }
 
-        async Task<int> ReceiveLoopAsync(ClientWebSocket ws, CancellationToken token, int myGeneration)
+        static async Task<int> ReceiveLoopAsync(Session s)
         {
             var buffer = new ArraySegment<byte>(new byte[ReceiveBufferSize]);
+            CancellationToken token = s.cts.Token;
             using (var message = new MemoryStream())
             {
-                while (!token.IsCancellationRequested && ws.State == WebSocketState.Open)
+                while (!token.IsCancellationRequested && s.socket.State == WebSocketState.Open)
                 {
-                    WebSocketReceiveResult result = await ws.ReceiveAsync(buffer, token).ConfigureAwait(false);
+                    WebSocketReceiveResult result = await s.socket.ReceiveAsync(buffer, token).ConfigureAwait(false);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
+                        s.open = false;
                         int code = result.CloseStatus.HasValue ? (int)result.CloseStatus.Value : 1005;
                         try
                         {
-                            await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None).ConfigureAwait(false);
+                            await s.socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None).ConfigureAwait(false);
                         }
                         catch (Exception)
                         {
@@ -223,7 +199,7 @@ namespace Manjong.Net
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
                         string text = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
-                        Post(myGeneration, SocketEvent.Text(text));
+                        s.Post(SocketEvent.Text(text));
                     }
                     message.SetLength(0);
                 }
@@ -231,17 +207,31 @@ namespace Manjong.Net
             return 1006;
         }
 
-        async Task SendLoopAsync(ClientWebSocket ws, CancellationToken token, SemaphoreSlim signal)
+        static async Task SendLoopAsync(Session s, CancellationToken token)
         {
-            while (!token.IsCancellationRequested)
+            try
             {
-                await signal.WaitAsync(token).ConfigureAwait(false);
-                string text;
-                while (outbox.TryDequeue(out text))
+                while (!token.IsCancellationRequested)
                 {
-                    byte[] bytes = Encoding.UTF8.GetBytes(text);
-                    await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, token).ConfigureAwait(false);
+                    await s.sendSignal.WaitAsync(token).ConfigureAwait(false);
+                    string text;
+                    while (s.outbox.TryDequeue(out text))
+                    {
+                        byte[] bytes = Encoding.UTF8.GetBytes(text);
+                        await s.socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, token).ConfigureAwait(false);
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown.
+            }
+            catch (Exception e)
+            {
+                // A failed send means the connection is unusable: abort so the receive loop ends and the owner
+                // sees Error + Close and reconnects, instead of messages vanishing while Send() keeps saying true.
+                s.Post(SocketEvent.Failed("send failed: " + e.GetType().Name + ": " + e.Message));
+                s.Kill();
             }
         }
     }

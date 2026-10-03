@@ -20,6 +20,7 @@ namespace Manjong.Screens
         RectTransform card;
         Action onNext;
         Action onLobby;
+        Button nextButton;
 
         public bool IsVisible
         {
@@ -85,7 +86,17 @@ namespace Manjong.Screens
                 title = "流局";
                 subtitle = "牌摸完了，沒有人胡牌";
             }
-            if (gameEnd && r != null) title = "整場結束·" + title;
+            bool bankrupt = gameEnd && v.endReason == "bankrupt";
+            if (bankrupt)
+            {
+                // Coins hit 0: the game ended immediately. Keep this hand's outcome as the subtitle.
+                subtitle = r != null ? title + (subtitle.Length > 0 ? "·" + subtitle : "") : "";
+                title = "金幣歸零，牌局結束";
+            }
+            else if (gameEnd && r != null)
+            {
+                title = "整場結束·" + title;
+            }
 
             var titleText = UiFactory.CreateLabel(card, "Title", title, 56, Palette.Ink, TextAnchor.MiddleCenter);
             titleText.fontStyle = FontStyle.Bold;
@@ -153,14 +164,17 @@ namespace Manjong.Screens
             }
 
             // ----- Buttons -----
+            nextButton = null;
             if (gameEnd)
             {
-                var lobbyBtn = UiFactory.CreateButton(card, "LobbyButton", "回大廳", Palette.Butter, 38, OnLobby);
-                UiFactory.Place((RectTransform)lobbyBtn.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 28f), new Vector2(360f, 88f));
+                string label = bankrupt ? "回大廳領救濟金" : "回大廳";
+                var lobbyBtn = UiFactory.CreateButton(card, "LobbyButton", label, Palette.Butter, 38, OnLobby);
+                UiFactory.Place((RectTransform)lobbyBtn.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 28f), new Vector2(bankrupt ? 440f : 360f, 88f));
             }
             else
             {
                 var nextBtn = UiFactory.CreateButton(card, "NextButton", "下一局", Palette.Pink, 38, OnNext);
+                nextButton = nextBtn;
                 UiFactory.Place((RectTransform)nextBtn.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(170f, 28f), new Vector2(320f, 88f));
                 var leaveBtn = UiFactory.CreateButton(card, "LeaveButton", "先回大廳", Palette.Gray, 34, OnLobby);
                 UiFactory.Place((RectTransform)leaveBtn.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-170f, 28f), new Vector2(280f, 88f));
@@ -274,6 +288,14 @@ namespace Manjong.Screens
         static void PlaceAt(RectTransform tile, float x)
         {
             UiFactory.Place(tile, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(x, 0f), tile.sizeDelta);
+        }
+
+        /// <summary>"下一局" was sent: show it as waiting and block a second press until the next render.</summary>
+        public void SetNextPending()
+        {
+            if (nextButton == null) return;
+            UiFactory.ButtonLabel(nextButton).text = "等待中…";
+            UiFactory.SetInteractable(nextButton, false);
         }
 
         void OnNext()
