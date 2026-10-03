@@ -95,7 +95,8 @@ export function buildSourcesSummaryViewModel(sources: SymbolDataMeta[]): Sources
  * and colour-blind users could not tell them apart. Now: quiet "passed" (grey
  * outline), loud "violated" (solid orange); red/green is reserved for P&L
  * figures. Wording unchanged, classes only; the ✓ ✕ ？ glyphs would be new
- * visible characters and are deferred. The position page `LimitsCheckList`
+ * visible characters and were dropped (art-lead 2026-10-03: the text label is
+ * already the strongest non-colour cue). The position page `LimitsCheckList`
  * (`limitStatusColorClass`) is out of scope for this phase.
  */
 const RISK_GAUGE_CHIP_CLASS: Record<LimitStatus, string> = {

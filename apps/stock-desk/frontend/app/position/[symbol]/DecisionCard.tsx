@@ -106,7 +106,7 @@ import {
  *       `buildOperationSummary(advice.data)`；bars 不 ok 或 `computeKeyLevels`
  *       為 null → 收盤／停損／停利三格「—」、不畫距離。
  *
- * 版面依視覺規範 B.7：桌機主字左、四格右（`grid grid-cols-2 md:grid-cols-4`，V3）；
+ * 版面依視覺規範 B.7（首頁重排規範第 13 節修訂）：<md 主字在上、2×2 在下；md–lg 主字左、2×2 右；lg 起四欄一列（`grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4`，V3，art-lead 2026-10-03 追認）；
  * 主字 `text-2xl font-bold`（不超過 `h1`）；數字 `font-mono text-xl font-bold
  * text-neutral-100`；標籤 `text-sm text-neutral-400`；距離小字
  * `text-xs text-neutral-400`。
@@ -382,7 +382,7 @@ export function DecisionCardBody({
           <MainSlot model={model} showConfidence={showConfidence} />
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4 md:gap-x-6">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-4">
           <NumberCell label={KEY_LEVELS_LADDER_RUNG_CLOSE} value={closeText} />
           <NumberCell
             label={KEY_LEVELS_STOP_CARD_TITLE}

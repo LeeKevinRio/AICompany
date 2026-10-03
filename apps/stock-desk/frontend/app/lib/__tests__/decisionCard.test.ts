@@ -471,7 +471,9 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
     expect(cls).toMatch(/\bgap-x-\d+\b/);
     expect(cls).toMatch(/\bgap-y-\d+\b/);
     expect(cls).toMatch(/\bgrid-cols-2\b/);
-    expect(cls).toMatch(/\bmd:grid-cols-4\b/);
+    expect(cls).toMatch(/\bmd:grid-cols-2\b/);
+    expect(cls).toMatch(/\blg:grid-cols-4\b/);
+    expect(cls).not.toMatch(/\bmd:grid-cols-4\b/);
   });
 
   it("格子本身 min-w-0（讓長字串能在 grid 欄內折行而非撐出頁面）", () => {
