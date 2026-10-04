@@ -9,9 +9,11 @@ developer's real database. It is deliberately separate from the fixture in
 from __future__ import annotations
 
 import logging
+import socket
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +47,7 @@ from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
 from tests.api_helpers import FakePriceService, UnavailableFxProvider
+from tests.isolation_helpers import NetworkBlockedError, is_blocked_address
 
 
 @dataclass
@@ -219,3 +222,75 @@ def _price_change_screen_must_not_fail(request: pytest.FixtureRequest) -> Iterat
     if handler.records and request.node.get_closest_marker("allow_price_change_error") is None:
         messages = "; ".join(record.getMessage() for record in handler.records)
         pytest.fail(f"app.portfolio.price_change logged ERROR: {messages}")
+
+
+# --- Test isolation guards ------------------------------------------------------
+#
+# Two rules every test must keep: it never touches ``backend/data/*.db`` and never
+# reaches the network. A test that builds a store with no ``db_path`` (directly, or
+# through a job such as ``capture_pit_snapshot``) resolves the path from these
+# environment variables, so each test gets them pointed at an empty directory
+# first. If anything is created there the test used a default-path store it never
+# injected, and fails -- at the test that did it, not whenever someone next
+# notices a drifted database.
+#
+# Known limits (the guard errs towards missing a write, never a false alarm):
+# a store memoised by ``lru_cache`` (``app.api.deps``, ``app.scheduler``) is
+# bound to the sentinel of the test that first built it, so a later test
+# reusing the cached instance writes into an already-checked directory; stores
+# built at import/collection time are outside any test's window. Tests should
+# override dependencies or use ``api_client`` rather than rely on this guard.
+
+#: Every environment variable that selects a SQLite file for a default-path store.
+DEFAULT_DB_ENV_VARS = (
+    "STOCK_DESK_DB_PATH",
+    "STOCK_DESK_MARKET_DB_PATH",
+    "STOCK_DESK_RESEARCH_DB_PATH",
+)
+
+
+@pytest.fixture(autouse=True)
+def _default_db_paths_must_stay_unused(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """Point every default DB path at a sentinel directory and fail if it is used."""
+    sentinel_dir = tmp_path_factory.mktemp("unused_default_db")
+    for name in DEFAULT_DB_ENV_VARS:
+        monkeypatch.setenv(name, str(sentinel_dir / f"{name.lower()}.db"))
+    yield sentinel_dir
+    created = sorted(path.name for path in sentinel_dir.iterdir())
+    if created:
+        pytest.fail(
+            "the test created a database at a default path it did not inject "
+            f"(inject a tmp_path store instead): {', '.join(created)}"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Refuse non-loopback and proxy connections, and fail the test that tried one.
+
+    Raising alone is not enough: provider code turns a connection error into a
+    "failed" result, so the attempt is also recorded and fails the test at teardown.
+    """
+    attempts: list[str] = []
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(self: socket.socket, address: Any) -> None:
+        if is_blocked_address(address, self.family):
+            attempts.append(repr(address))
+            raise NetworkBlockedError(f"test tried to connect to {address!r}")
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self: socket.socket, address: Any) -> int:
+        if is_blocked_address(address, self.family):
+            attempts.append(repr(address))
+            raise NetworkBlockedError(f"test tried to connect to {address!r}")
+        return real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+    yield attempts
+    if attempts:
+        pytest.fail(f"the test attempted outbound connections: {', '.join(attempts)}")

@@ -384,10 +384,12 @@ def test_row_that_is_not_an_object_is_skipped(
 
 
 def test_close_closes_a_self_constructed_client(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(API_KEY_ENV_VAR, "fixture-test-key-not-real")
-    adapter = AlphaVantageAdapter()  # no client passed in -> adapter owns one
+    # No client passed in -> the adapter owns one. The ledger is injected: left
+    # to default it would open the real ./data/stock-desk.db.
+    adapter = AlphaVantageAdapter(ledger=QuotaLedger(db_path=tmp_path / "quota.db"))
     adapter.close()  # must not raise
 
 

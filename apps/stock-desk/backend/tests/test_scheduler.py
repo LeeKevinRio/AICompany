@@ -263,11 +263,26 @@ def test_alert_tick_does_not_deliver_when_webhooks_are_off(
 
 
 def test_run_registers_signal_handlers_and_shuts_down_cleanly(
-    wired: dict[str, object],
+    wired: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # BackgroundScheduler subclasses BlockingScheduler and returns from
     # ``start`` immediately, so ``run`` can be driven to completion in-process
     # and the real signal-handler path exercised.
+    #
+    # This test is about signal handling, not about the jobs. Several jobs carry
+    # a start-up ``next_run_time`` (data refresh, PIT capture, sector refresh), so
+    # a started engine would fire them on worker threads at once: real TWSE
+    # requests and a write to the default market DB. Drop every job after the
+    # real ``build_scheduler`` has registered them; registration itself is pinned
+    # by the ``build_scheduler`` tests above.
+    real_build = scheduler_module.build_scheduler
+
+    def build_without_jobs(scheduler: BlockingScheduler | None = None) -> BlockingScheduler:
+        built = real_build(scheduler)
+        built.remove_all_jobs()
+        return built
+
+    monkeypatch.setattr(scheduler_module, "build_scheduler", build_without_jobs)
     engine = BackgroundScheduler(timezone="UTC")
     scheduler_module.run(engine)
     assert engine.running is True

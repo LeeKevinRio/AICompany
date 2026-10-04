@@ -22,7 +22,11 @@ from fastapi.testclient import TestClient
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
+    get_cached_valuator,
     get_dividend_store,
+    get_fx_provider,
+    get_index_resolver,
+    get_kelly_input_store,
     get_market_resolver,
     get_position_store,
     get_price_bar_cache,
@@ -45,6 +49,7 @@ from app.demo.seed import (
 )
 from app.demo.series import DEMO_SOURCE
 from app.dividends.store import DividendEventStore
+from app.kelly.store import KellyInputStore
 from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import MARKET_CURRENCY, PositionInput, PositionWriteInput
@@ -130,6 +135,26 @@ def demo_harness(tmp_path: Path) -> Iterator[DemoHarness]:
     dividends = DividendEventStore(db_path)
     app.dependency_overrides[get_dividend_store] = lambda: dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: cache
+    # Every other dependency the endpoints reach is overridden too: left alone it
+    # resolves a process-wide default, i.e. a real yfinance index adapter (network)
+    # and the developer's ./data/stock-desk.db. The index series gets its own
+    # offline service on its own cache, never the security bars' store.
+    index_service = MarketDataService(
+        primary=OfflineProvider(), cache=PriceBarCache(tmp_path / "index-bars.db")
+    )
+    cached_valuator = PositionValuator(
+        market_services={"TW": service},
+        fx_provider=UnavailableFxProvider(),
+        price_mode="cache_only",
+    )
+    kelly_inputs = KellyInputStore(db_path=tmp_path / "kelly.db")
+    app.dependency_overrides[get_index_resolver] = lambda: {
+        "TW": index_service,
+        "US": index_service,
+    }
+    app.dependency_overrides[get_cached_valuator] = lambda: cached_valuator
+    app.dependency_overrides[get_fx_provider] = lambda: UnavailableFxProvider()
+    app.dependency_overrides[get_kelly_input_store] = lambda: kelly_inputs
 
     with TestClient(app) as client:
         yield DemoHarness(

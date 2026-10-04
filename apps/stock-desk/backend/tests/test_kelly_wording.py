@@ -46,7 +46,6 @@ from pydantic import ValidationError
 from app.api import kelly_wording as wording
 from app.api.kelly import KELLY_NON_FINITE_INTERVAL_MESSAGE
 from app.kelly import models, sample_gate
-from app.main import app
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _APP_ROOT = _BACKEND_ROOT / "app"
@@ -1850,7 +1849,9 @@ def test_a_refusal_message_embeds_no_measured_value(item: str) -> None:
     }
 
 
-def test_a_range_refusal_reaches_the_client_as_the_approved_sentence_alone() -> None:
+def test_a_range_refusal_reaches_the_client_as_the_approved_sentence_alone(
+    api_client: TestClient,
+) -> None:
     """qa 2026-08-22 B2（條件 57）: 422 的 detail[].msg 逐字等於核可常數.
 
     pydantic v2 renders a ``ValueError`` raised inside a validator as
@@ -1864,7 +1865,9 @@ def test_a_range_refusal_reaches_the_client_as_the_approved_sentence_alone() -> 
     fault was never in the constants: it was in what the framework did to them
     on the way out.
     """
-    client = TestClient(app)
+    # ``api_client`` swaps every store for a tmp_path one: a bare ``TestClient(app)``
+    # resolves the Kelly store before validation runs and opens the real database.
+    client = api_client
     cases = (
         ({"win_rate": 1.4, "payoff_ratio": 1.8}, models.KELLY_WIN_RATE_OUT_OF_RANGE_MESSAGE, 1.4),
         (
