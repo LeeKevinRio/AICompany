@@ -2474,7 +2474,7 @@ describe("目前回撤卡（TechnicalIndicatorsPanel.tsx）新字面逐字釘住
   });
 
   it("技術裁示 1：兩句說明 ≥ text-xs text-neutral-400（不得用 neutral-500）、常駐不截斷", () => {
-    expect(cardSrc).toContain('descriptionClassName="text-neutral-400"');
+    expect(cardSrc).not.toContain("descriptionClassName");
     expect(cardSrc).not.toMatch(/neutral-(5|6|7)00/);
     expect(cardSrc).not.toMatch(/truncate|line-clamp|tooltip|<details|nowrap/);
     expect(cardSrc).not.toMatch(/<(p|span|div)\b[^>]*\stitle=/);

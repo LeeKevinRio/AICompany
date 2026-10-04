@@ -3,10 +3,12 @@
  * 無 last_bar_date 不顯示資料截至／最大回撤卡輸出不變。
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DrawdownResult, InputsUsed, SignalsPayload } from "../../../lib/types";
+import type { DrawdownResult, IndicatorResult, InputsUsed, SignalsPayload } from "../../../lib/types";
 import {
   CURRENT_DRAWDOWN_DESCRIPTION_1,
   CURRENT_DRAWDOWN_DESCRIPTION_2,
@@ -151,9 +153,9 @@ describe("最大回撤卡輸出不變", () => {
     expect(html).toContain(">最大回撤<");
     expect(html).toContain("觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。");
     expect(html).toContain("-25.00%（高點 2026-03-02 → 低點 2026-06-15）");
-    // The max-drawdown description keeps its original neutral-500 tone.
+    // Contrast lift (art-lead 2026-10-04): every card description is neutral-400, max-drawdown included.
     expect(html).toContain(
-      '<p class="mt-1 text-xs text-neutral-500">觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。</p>',
+      '<p class="mt-1 text-xs text-neutral-400">觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。</p>',
     );
     expect(html.indexOf(">最大回撤<")).toBeLessThan(html.indexOf(`>${CURRENT_DRAWDOWN_TITLE}<`));
   });
@@ -163,5 +165,96 @@ describe("最大回撤卡輸出不變", () => {
     const b = render({ ...BASE_DRAWDOWN, current: -0.5, current_peak_date: "2026-01-01" });
     const maxCard = (h: string) => h.slice(h.indexOf(">最大回撤<"), h.indexOf(`>${CURRENT_DRAWDOWN_TITLE}<`));
     expect(maxCard(a)).toBe(maxCard(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contrast lift (art-lead 2026-10-04 / risk L-2): descriptions and data rows >= neutral-400.
+// ---------------------------------------------------------------------------
+
+const FIXTURE_DATES = ["2026-09-28", "2026-09-29", "2026-09-30"];
+
+function okIndicator(name: string, last: Record<string, number | null>): IndicatorResult {
+  const series: Record<string, (number | null)[]> = {};
+  for (const [key, value] of Object.entries(last)) series[key] = [value, value, value];
+  return {
+    name,
+    status: "ok",
+    params: {},
+    dates: FIXTURE_DATES,
+    series,
+    last,
+    inputs_used: INPUTS_USED,
+    as_of: "2026-10-04T08:00:00Z",
+    source: "demo",
+  };
+}
+
+function fullPayload(): SignalsPayload {
+  const base = payloadWith(BASE_DRAWDOWN);
+  const risk = base.risk;
+  if (risk === undefined) throw new Error("fixture must carry a risk block");
+  return {
+    ...base,
+    technical: {
+      moving_averages: okIndicator("moving_averages", { ma_5: 1, ma_20: 2, ma_60: 3 }),
+      rsi: okIndicator("rsi", { rsi: 55 }),
+      macd: okIndicator("macd", { macd: 1, signal: 2, histogram: -1 }),
+      bollinger: okIndicator("bollinger", { upper: 3, middle: 2, lower: 1, percent_b: 0.5, bandwidth: 0.2 }),
+      atr: okIndicator("atr", { atr: 1.5 }),
+      kd: okIndicator("kd", { k: 50, d: 45 }),
+      volume_zscore: okIndicator("volume_zscore", { zscore: 0.3 }),
+    },
+    risk,
+  };
+}
+
+function renderFull(): string {
+  return renderToStaticMarkup(createElement(TechnicalIndicatorsPanel, { payload: fullPayload(), lastBarDate: "2026-10-02" }));
+}
+
+describe("對比提亮：IndicatorCard description 與資料行", () => {
+  it("每張 IndicatorCard 的 description 皆為 text-xs text-neutral-400，無任何 description 使用 text-neutral-500", () => {
+    const html = renderFull();
+    const descriptions = [...html.matchAll(/<h4 class="text-sm font-semibold text-neutral-100">[^<]*<\/h4><p class="([^"]*)">/g)].map(
+      (m) => m[1],
+    );
+    // 7 technical + 4 risk cards (max drawdown, current drawdown, volatility, beta).
+    expect(descriptions).toHaveLength(11);
+    for (const cls of descriptions) {
+      expect(cls).toBe("mt-1 text-xs text-neutral-400");
+      expect(cls).not.toContain("text-neutral-500");
+    }
+  });
+
+  it("insufficient 狀態下的 description 同樣為 neutral-400", () => {
+    const html = render({ ...BASE_DRAWDOWN, status: "insufficient_data", current: null, current_peak_date: null });
+    expect(html).not.toMatch(/<h4 class="text-sm font-semibold text-neutral-100">[^<]*<\/h4><p class="[^"]*text-neutral-500/);
+  });
+
+  it("Bollinger %B／通道寬度行、RecentValuesTable thead、MA 小標籤皆為 neutral-400", () => {
+    const html = renderFull();
+    expect(html).toMatch(/<p class="mt-1 text-xs text-neutral-400">\s*%B：/);
+    expect(html).toContain('<tr class="border-b border-neutral-800 text-neutral-400">');
+    for (const label of ["MA5", "MA20", "MA60"]) {
+      expect(html).toContain(`<p class="text-xs text-neutral-400">${label}</p>`);
+    }
+  });
+
+  it("IndicatorCard 不再有 descriptionClassName prop（色階單一來源）", () => {
+    const source = readFileSync(resolve(__dirname, "../TechnicalIndicatorsPanel.tsx"), "utf8");
+    expect(source).not.toContain("descriptionClassName");
+  });
+
+  it("兩個分組標題「技術指標」「風險量測」仍為 uppercase label 的 neutral-500", () => {
+    const html = renderFull();
+    for (const title of ["技術指標", "風險量測"]) {
+      expect(html).toContain(`<h4 class="text-xs font-semibold uppercase tracking-wide text-neutral-500">${title}</h4>`);
+    }
+  });
+
+  it("整個面板輸出中，text-neutral-500 只出現在兩個分組標題", () => {
+    const html = renderFull();
+    expect(html.match(/text-neutral-500/g)).toHaveLength(2);
   });
 });

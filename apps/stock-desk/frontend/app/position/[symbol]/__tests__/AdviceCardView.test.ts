@@ -135,7 +135,7 @@ describe("AdviceCardView 資料截至行（風控 D-1 (b)）", () => {
   it("lastBarDate 為 null：整行不顯示", () => {
     const html = renderCard(null);
     expect(html).not.toContain("資料截至");
-    expect(html.startsWith('<div class="rounded-lg border border-neutral-800 p-5"><p class="text-xs text-neutral-500">規則版本')).toBe(true);
+    expect(html.startsWith('<div class="rounded-lg border border-neutral-800 p-5"><p class="text-xs text-neutral-400">規則版本')).toBe(true);
   });
 
   it("版本行整行字面（ADR-0019 D-5 (b)）：無「日線取得時間」、不渲染 as_of，且在資料截至行之後", () => {
@@ -146,7 +146,7 @@ describe("AdviceCardView 資料截至行（風控 D-1 (b)）", () => {
     const line = visible.slice(start, visible.indexOf("</p>", start));
     expect(line).toBe("規則版本 1.1.0｜觀察區間：2031-01-02 ~ 2031-02-09（20 根日線）");
     expect(visible).toContain(
-      '<p class="text-xs text-neutral-500">規則版本 1.1.0｜觀察區間：2031-01-02 ~ 2031-02-09（20 根日線）</p>',
+      '<p class="text-xs text-neutral-400">規則版本 1.1.0｜觀察區間：2031-01-02 ~ 2031-02-09（20 根日線）</p>',
     );
     expect(visible).not.toContain("日線取得時間");
     expect(visible).not.toContain("取得");

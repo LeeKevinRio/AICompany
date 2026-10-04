@@ -127,7 +127,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
         summary 已滿足「不可摺疊、可見」的呈現要求（summary 本身恆常可見）。
       */}
       {dataAsOfBadge !== null && <p className="mb-1 text-xs text-neutral-400">{dataAsOfBadge}</p>}
-      <p className="text-xs text-neutral-500">
+      <p className="text-xs text-neutral-400">
         規則版本 {advice.rules_version}｜觀察區間：
         {advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}
         （{advice.observation_window.bars ?? "—"} 根日線）

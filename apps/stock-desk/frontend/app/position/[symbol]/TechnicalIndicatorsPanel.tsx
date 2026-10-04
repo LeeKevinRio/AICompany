@@ -194,19 +194,16 @@ function requiredBarsLabel(name: string, window: Record<string, number>): string
 function IndicatorCard({
   title,
   description,
-  descriptionClassName = "text-neutral-500",
   children,
 }: {
   title: string;
   description: string;
-  /** Colour class for the description line; defaults to the panel's existing `text-neutral-500`. */
-  descriptionClassName?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg border border-neutral-800 p-4">
       <h4 className="text-sm font-semibold text-neutral-100">{title}</h4>
-      <p className={`mt-1 text-xs ${descriptionClassName}`}>{description}</p>
+      <p className="mt-1 text-xs text-neutral-400">{description}</p>
       <div className="mt-3">{children}</div>
     </div>
   );
@@ -238,7 +235,7 @@ function RecentValuesTable({
     <div className="mt-3 overflow-x-auto">
       <table className="w-full text-left text-xs text-neutral-400">
         <thead>
-          <tr className="border-b border-neutral-800 text-neutral-500">
+          <tr className="border-b border-neutral-800 text-neutral-400">
             <th className="py-1 pr-3 font-normal">日期</th>
             {lines.map((line) => (
               <th key={line.key} className="py-1 pr-3 font-normal">
@@ -287,7 +284,7 @@ function MovingAveragesCard({ result, barCount }: { result: IndicatorResult; bar
             const value = result.last[w.key] ?? null;
             return (
               <div key={w.key}>
-                <p className="text-xs text-neutral-500">{w.label}</p>
+                <p className="text-xs text-neutral-400">{w.label}</p>
                 {value === null ? (
                   <p className="mt-1 text-xs text-amber-300">
                     資料不足，需要至少 {w.window} 根日線（目前 {barCount} 根）。
@@ -406,7 +403,7 @@ function BollingerCard({ result, barCount }: { result: IndicatorResult; barCount
             {formatNumber(result.last.middle ?? null, 2)}
             　下軌：{formatNumber(result.last.lower ?? null, 2)}
           </p>
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-400">
             %B：{formatPercent(result.last.percent_b ?? null)}　通道寬度：
             {formatPercent(result.last.bandwidth ?? null)}
           </p>
@@ -571,7 +568,6 @@ function CurrentDrawdownCard({
     <IndicatorCard
       title={CURRENT_DRAWDOWN_TITLE}
       description={`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`}
-      descriptionClassName="text-neutral-400"
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote message={CURRENT_DRAWDOWN_INSUFFICIENT} />
