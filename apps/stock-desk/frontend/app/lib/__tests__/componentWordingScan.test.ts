@@ -121,6 +121,15 @@ import {
   KEY_LEVELS_LADDER_TITLE,
 } from "../../position/[symbol]/PriceLadder";
 import {
+  CURRENT_DRAWDOWN_AS_OF_PREFIX,
+  CURRENT_DRAWDOWN_DESCRIPTION_1,
+  CURRENT_DRAWDOWN_DESCRIPTION_2,
+  CURRENT_DRAWDOWN_INSUFFICIENT,
+  CURRENT_DRAWDOWN_MISSING,
+  CURRENT_DRAWDOWN_PEAK_DATE_LABEL,
+  CURRENT_DRAWDOWN_TITLE,
+  buildCurrentDrawdownAsOfLine,
+  buildCurrentDrawdownValueLine,
   INDICATOR_OVERVIEW_EMPTY,
   INDICATOR_OVERVIEW_LEGEND,
   INDICATOR_OVERVIEW_TITLE,
@@ -2398,5 +2407,125 @@ describe("SectorMomentumCard — 標題與常駐 tag 定稿字面（§4.6 CL-2�
 
   it("列示順序句（§4.1e／§6.3 H-2）", () => {
     expect(buildListingOrderSentence(5)).toBe("列示順序僅依近 5 日漲跌幅，不代表任何優先順序。");
+  });
+});
+
+/**
+ * 目前回撤卡（風控 2026-10-04，`work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md`
+ * 項目二 required 2／3／4）：新字面逐字釘住，並納入禁語／方向符號／紅綠色票／裸「即時」掃描。
+ */
+describe("目前回撤卡（TechnicalIndicatorsPanel.tsx）新字面逐字釘住與守門", () => {
+  const techSrc = readFileSync(
+    fileURLToPath(new URL("../../position/[symbol]/TechnicalIndicatorsPanel.tsx", import.meta.url)),
+    "utf8",
+  );
+  const cardSrc = techSrc.slice(
+    techSrc.indexOf("function CurrentDrawdownCard"),
+    techSrc.indexOf("function BetaCard"),
+  );
+  const approved = {
+    CURRENT_DRAWDOWN_TITLE: [CURRENT_DRAWDOWN_TITLE, "目前回撤"],
+    CURRENT_DRAWDOWN_PEAK_DATE_LABEL: [CURRENT_DRAWDOWN_PEAK_DATE_LABEL, "區間最高收盤日"],
+    CURRENT_DRAWDOWN_DESCRIPTION_1: [
+      CURRENT_DRAWDOWN_DESCRIPTION_1,
+      "最新收盤價相對區間最高收盤價的回撤，會隨最新收盤改變；最大回撤是區間內曾出現的最深一段回落，兩者不一定相同。",
+    ],
+    CURRENT_DRAWDOWN_DESCRIPTION_2: [
+      CURRENT_DRAWDOWN_DESCRIPTION_2,
+      "目前回撤描述價格自身的回落幅度，並非持倉損益，也不代表後續走勢。",
+    ],
+    CURRENT_DRAWDOWN_INSUFFICIENT: [CURRENT_DRAWDOWN_INSUFFICIENT, "資料不足，可用天數不足以計算。"],
+    CURRENT_DRAWDOWN_AS_OF_PREFIX: [CURRENT_DRAWDOWN_AS_OF_PREFIX, "資料截至 "],
+    CURRENT_DRAWDOWN_MISSING: [CURRENT_DRAWDOWN_MISSING, "—"],
+  } as const;
+
+  for (const [name, [actual, expected]] of Object.entries(approved)) {
+    it(`${name} 與風控核可字面逐字相同`, () => {
+      expect(actual).toBe(expected);
+    });
+    it(`${name} 不含 §1.3 禁語、無裸「即時」`, () => {
+      assertNoForbiddenTerms(actual, FRONTEND_FORBIDDEN_TERMS, name);
+      expect(findBareRealtimeClaims(actual)).toEqual([]);
+    });
+  }
+
+  it("C-4 數值列與 C-11 資料截至行的渲染輸出逐字、且不含禁語", () => {
+    const value = buildCurrentDrawdownValueLine(-0.0812, "2026-09-18");
+    expect(value).toBe("-8.12%（區間最高收盤日 2026-09-18）");
+    const asOf = buildCurrentDrawdownAsOfLine("2026-10-02");
+    expect(asOf).toBe("資料截至 2026-10-02");
+    for (const text of [value, asOf ?? ""]) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, "current drawdown rendered line");
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("required 4：任何字面不得宣稱「此為規則所用之數值」", () => {
+    for (const [actual] of Object.values(approved)) {
+      expect(actual).not.toMatch(/規則(所|使)用|規則採用|規則判斷/);
+    }
+  });
+
+  it("技術裁示 1：兩句說明 ≥ text-xs text-neutral-400（不得用 neutral-500）、常駐不截斷", () => {
+    expect(cardSrc).toContain('descriptionClassName="text-neutral-400"');
+    expect(cardSrc).not.toMatch(/neutral-(5|6|7)00/);
+    expect(cardSrc).not.toMatch(/truncate|line-clamp|tooltip|<details|nowrap/);
+    expect(cardSrc).not.toMatch(/<(p|span|div)\b[^>]*\stitle=/);
+    expect(cardSrc).toContain("`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`");
+  });
+
+  it("required 3：數值列不上色、無 chip、無箭頭，且不入 IndicatorOverview chip 列", () => {
+    expect(cardSrc).not.toMatch(/BandChip|chip|OverviewChip/i);
+    expect(cardSrc).not.toMatch(/(red|green|rose|emerald|amber|sky)-\d/);
+    expect(cardSrc).not.toMatch(/[▲▼△▽↑↓↗↘⇧⇩🔺🔻]/);
+    const collect = techSrc.slice(techSrc.indexOf("function collectOverviewChips"), techSrc.indexOf("function IndicatorOverview("));
+    expect(collect).not.toMatch(/drawdown|current/);
+  });
+
+  it("C-11：資料截至取 last_bar_date，絕不取 as_of", () => {
+    expect(cardSrc).not.toContain("as_of");
+    expect(techSrc).toContain("lastBarDate");
+    const page = readFileSync(fileURLToPath(new URL("../../position/[symbol]/page.tsx", import.meta.url)), "utf8");
+    expect(page).toContain("lastBarDate={signals.data.data.last_bar_date}");
+  });
+
+  it("最大回撤卡標題與 description 一字不動", () => {
+    expect(techSrc).toContain('title="最大回撤"');
+    expect(techSrc).toContain('description="觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。"');
+  });
+});
+
+/**
+ * 風控 D-1 裁示 (b) 2026-10-04（`work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md` 末段）：
+ * AdviceCardView 卡框內第一行為既有 `buildDataAsOfBadge(last_bar_date)` 輸出，與決策卡、操作摘要面板同字面同來源。
+ */
+describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const cardSrc = read("../../position/[symbol]/AdviceCardView.tsx");
+  const pageSrc = read("../../position/[symbol]/page.tsx");
+
+  it("page.tsx 傳 lastBarDate={advice.data.data.last_bar_date}（與決策卡、面板同源的 /api/advice DataMeta）", () => {
+    expect(pageSrc).toContain("lastBarDate={advice.data.data.last_bar_date}");
+    expect(pageSrc).toContain("<AdviceCardView advice={advice.data.advice} lastBarDate={advice.data.data.last_bar_date} />");
+  });
+
+  it("AdviceCardView 以 buildDataAsOfBadge(lastBarDate) 組此行，不另寫字串常數", () => {
+    expect(cardSrc).toContain('import { buildDataAsOfBadge } from "../../lib/oneLinerWording";');
+    expect(cardSrc).toContain("buildDataAsOfBadge(lastBarDate)");
+    expect(cardSrc).not.toContain("資料截至");
+  });
+
+  it("此行不得以 as_of／observation_window／signals 的 last_bar_date 組成", () => {
+    const start = cardSrc.indexOf("const dataAsOfBadge");
+    const end = cardSrc.indexOf("return (", start);
+    expect(start).toBeGreaterThan(-1);
+    const derivation = cardSrc.slice(start, end);
+    expect(derivation).not.toMatch(/as_of|observation_window|signals/);
+    const jsxLine = cardSrc.split("\n").find((l) => l.includes("{dataAsOfBadge}")) ?? "";
+    expect(jsxLine).not.toMatch(/as_of|observation_window|signals/);
+    expect(jsxLine).toContain("text-xs text-neutral-400");
+    expect(jsxLine).not.toMatch(/truncate|title=|sr-only|aria-hidden|tooltip/);
+    // The line precedes the 規則版本 line inside the card frame.
+    expect(cardSrc.indexOf("{dataAsOfBadge}")).toBeLessThan(cardSrc.indexOf("規則版本 {advice.rules_version}"));
   });
 });

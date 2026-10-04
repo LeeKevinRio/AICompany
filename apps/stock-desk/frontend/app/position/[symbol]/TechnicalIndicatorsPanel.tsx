@@ -194,16 +194,19 @@ function requiredBarsLabel(name: string, window: Record<string, number>): string
 function IndicatorCard({
   title,
   description,
+  descriptionClassName = "text-neutral-500",
   children,
 }: {
   title: string;
   description: string;
+  /** Colour class for the description line; defaults to the panel's existing `text-neutral-500`. */
+  descriptionClassName?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg border border-neutral-800 p-4">
       <h4 className="text-sm font-semibold text-neutral-100">{title}</h4>
-      <p className="mt-1 text-xs text-neutral-500">{description}</p>
+      <p className={`mt-1 text-xs ${descriptionClassName}`}>{description}</p>
       <div className="mt-3">{children}</div>
     </div>
   );
@@ -510,6 +513,80 @@ function DrawdownCard({ result }: { result: DrawdownResult }) {
   );
 }
 
+/* ---------- 目前回撤卡（風控 2026-10-04，`work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md` 項目二） ---------- */
+
+/**
+ * Every literal below is an approved verbatim string (核可字面總表 C-1／C-4／C-6′／C-8′／C-10／C-11／缺值)
+ * and is pinned by `componentWordingScan.test.ts`. No literal may claim this is "the value the rule used":
+ * the rule engine reads `/api/advice`, this card reads `/api/signals` (required 4).
+ */
+export const CURRENT_DRAWDOWN_TITLE = "目前回撤";
+
+export const CURRENT_DRAWDOWN_PEAK_DATE_LABEL = "區間最高收盤日";
+
+export const CURRENT_DRAWDOWN_DESCRIPTION_1 =
+  "最新收盤價相對區間最高收盤價的回撤，會隨最新收盤改變；最大回撤是區間內曾出現的最深一段回落，兩者不一定相同。";
+
+export const CURRENT_DRAWDOWN_DESCRIPTION_2 =
+  "目前回撤描述價格自身的回落幅度，並非持倉損益，也不代表後續走勢。";
+
+export const CURRENT_DRAWDOWN_INSUFFICIENT = "資料不足，可用天數不足以計算。";
+
+export const CURRENT_DRAWDOWN_AS_OF_PREFIX = "資料截至 ";
+
+/** Shown in place of a missing `current` / `current_peak_date` (status ok but field absent); no extra sentence. */
+export const CURRENT_DRAWDOWN_MISSING = "—";
+
+/**
+ * C-4 value row: `{formatPercent(current)}（區間最高收盤日 {current_peak_date ?? "—"}）`.
+ * A value that rounds to zero at 2 decimals always prints "0.00%", never "-0.00%"
+ * (風控技術裁示 2；handled here, the shared `formatPercent` is deliberately untouched).
+ */
+export function buildCurrentDrawdownValueLine(
+  current: number | null | undefined,
+  peakDate: string | null | undefined,
+): string {
+  const value = current ?? null;
+  const percent =
+    value !== null && Number.isFinite(value) && Number((value * 100).toFixed(2)) === 0
+      ? formatPercent(0)
+      : formatPercent(value);
+  return `${percent}（${CURRENT_DRAWDOWN_PEAK_DATE_LABEL} ${peakDate || CURRENT_DRAWDOWN_MISSING}）`;
+}
+
+/** C-11: "資料截至 {YYYY-MM-DD}" from `SignalsResponse.data.last_bar_date` (never `as_of`); no value, no line. */
+export function buildCurrentDrawdownAsOfLine(lastBarDate: string | null | undefined): string | null {
+  return lastBarDate ? `${CURRENT_DRAWDOWN_AS_OF_PREFIX}${lastBarDate}` : null;
+}
+
+function CurrentDrawdownCard({
+  result,
+  lastBarDate,
+}: {
+  result: DrawdownResult;
+  lastBarDate: string | null;
+}) {
+  const asOfLine = buildCurrentDrawdownAsOfLine(lastBarDate);
+  return (
+    <IndicatorCard
+      title={CURRENT_DRAWDOWN_TITLE}
+      description={`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`}
+      descriptionClassName="text-neutral-400"
+    >
+      {result.status === "insufficient_data" ? (
+        <InsufficientNote message={CURRENT_DRAWDOWN_INSUFFICIENT} />
+      ) : (
+        <>
+          <p className="text-sm text-neutral-200">
+            {buildCurrentDrawdownValueLine(result.current, result.current_peak_date)}
+          </p>
+          {asOfLine !== null && <p className="mt-1 text-xs text-neutral-400">{asOfLine}</p>}
+        </>
+      )}
+    </IndicatorCard>
+  );
+}
+
 function BetaCard({ result }: { result: BetaResult }) {
   return (
     <IndicatorCard
@@ -533,7 +610,14 @@ function BetaCard({ result }: { result: BetaResult }) {
   );
 }
 
-export function TechnicalIndicatorsPanel({ payload }: { payload: SignalsPayload }) {
+export function TechnicalIndicatorsPanel({
+  payload,
+  lastBarDate,
+}: {
+  payload: SignalsPayload;
+  /** `SignalsResponse.data.last_bar_date` — the close date the 目前回撤 card is anchored to (not `as_of`). */
+  lastBarDate: string | null;
+}) {
   const barCount = payload.bar_count;
   const tech = payload.technical;
   const risk = payload.risk;
@@ -570,8 +654,9 @@ export function TechnicalIndicatorsPanel({ payload }: { payload: SignalsPayload 
             風險量測
           </h4>
           <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <VolatilityCard result={risk.volatility} />
             <DrawdownCard result={risk.drawdown} />
+            <CurrentDrawdownCard result={risk.drawdown} lastBarDate={lastBarDate} />
+            <VolatilityCard result={risk.volatility} />
             <BetaCard result={risk.beta} />
           </div>
         </div>

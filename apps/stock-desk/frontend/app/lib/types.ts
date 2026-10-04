@@ -398,6 +398,14 @@ export interface DrawdownResult {
   max_drawdown: number | null;
   peak_date: string | null;
   trough_date: string | null;
+  /**
+   * Latest close vs. the highest close in the window (`<= 0`), and the most
+   * recent date the close stood at that highest level (app/signals/risk.py).
+   * Optional + nullable: older payloads omit them, and a backend that cannot
+   * compute them sends `null` — the UI prints "—" for either, never a zero.
+   */
+  current?: number | null;
+  current_peak_date?: string | null;
   observations: number;
   inputs_used: InputsUsed;
   as_of: string | null;

@@ -333,6 +333,7 @@ describe("AdviceCardView — 不渲染任何規則的失效條件，因此不出
           matched_rules: [PROTECTION, DEEP],
           invalidation_conditions: [PROTECTION_INV, DEEP_INV],
         }),
+        lastBarDate: null,
       }),
     );
     expect(html).not.toContain(PROTECTION_INV);

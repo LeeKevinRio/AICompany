@@ -45,7 +45,8 @@ export function buildAdviceHitCount(n: number): string {
  * `lastBarDate` 為 `null`（尚無日線）時不渲染任何徽章。
  */
 export function buildDataAsOfBadge(lastBarDate: string | null): string | null {
-  if (lastBarDate === null) return null;
+  // An empty string carries no date either; render nothing rather than a bare prefix.
+  if (lastBarDate === null || lastBarDate === "") return null;
   const year = lastBarDate.slice(0, 4);
   const currentYear = String(new Date().getFullYear());
   const monthDay = lastBarDate.slice(5);

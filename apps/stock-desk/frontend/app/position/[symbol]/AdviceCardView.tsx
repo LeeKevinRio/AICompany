@@ -2,6 +2,7 @@ import type { AdviceCard } from "../../lib/types";
 import { actionRawLabel, formatDateTime, formatNumber, formatPercent, ruleDirectionLabel } from "../../lib/format";
 import { directionShares, hasDirectionShareBar, ruleDirection } from "../../lib/ruleDirection";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
+import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import { ADVICE_CARD_TITLE } from "../../lib/sectionTitles";
 import { LimitsCheckList } from "./LimitsCheckList";
 
@@ -107,8 +108,11 @@ export function hasOpposingDirections(advice: AdviceCard): boolean {
   return directions.has("defensive") && directions.has("constructive");
 }
 
-export function AdviceCardView({ advice }: { advice: AdviceCard }) {
+export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; lastBarDate: string | null }) {
   const hasBlockedNotices = advice.blocked_notices.length > 0;
+  // 風控 D-1 裁示 (b) 2026-10-04: same badge text as DecisionCard / OperationSummaryPanel, from the
+  // same `/api/advice` DataMeta.last_bar_date; never `as_of` or `observation_window.end`.
+  const dataAsOfBadge = buildDataAsOfBadge(lastBarDate);
 
   return (
     <div className="rounded-lg border border-neutral-800 p-5">
@@ -122,6 +126,7 @@ export function AdviceCardView({ advice }: { advice: AdviceCard }) {
         `<details>` 的 summary 第二行承載（見 `page.tsx`），本卡內不再重複渲染；
         summary 已滿足「不可摺疊、可見」的呈現要求（summary 本身恆常可見）。
       */}
+      {dataAsOfBadge !== null && <p className="mb-1 text-xs text-neutral-400">{dataAsOfBadge}</p>}
       <p className="text-xs text-neutral-500">
         規則版本 {advice.rules_version}｜資料時間：{formatDateTime(advice.as_of)}｜觀察區間：
         {advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}

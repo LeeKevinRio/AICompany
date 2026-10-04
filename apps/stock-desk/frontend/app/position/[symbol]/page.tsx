@@ -457,7 +457,10 @@ export default function PositionDetailPage() {
             {/* signals 徽章列／Error／Insufficient 已移回主視圖（R-A1）；詳細只留 pending skeleton 與完整指標卡。 */}
             {signals.isPending && <SkeletonBlock className="h-40 w-full" />}
             {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
-              <TechnicalIndicatorsPanel payload={signals.data.signals} />
+              <TechnicalIndicatorsPanel
+                payload={signals.data.signals}
+                lastBarDate={signals.data.data.last_bar_date}
+              />
             )}
             {bars.isSuccess && bars.data.status === "ok" && (
               <p>
@@ -576,7 +579,7 @@ export default function PositionDetailPage() {
                   </ul>
                 </div>
               )}
-              <AdviceCardView advice={advice.data.advice} />
+              <AdviceCardView advice={advice.data.advice} lastBarDate={advice.data.data.last_bar_date} />
             </div>
           </details>
         )}
