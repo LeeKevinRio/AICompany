@@ -54,10 +54,12 @@ export const HELD_ACTION_LABELS: Record<CardAction, string> = {
 };
 
 /**
- * wave3 之前核可的舊字面，逐字保留（一字不動）——不得刪除、不得裁剪。純搬移
- * 原則的延伸：文案改版不等於文案消失，舊字面移進各分支「詳細」（見
- * `buildLegacyAttributedHeadline`／`OperationSummaryPanel.tsx`），且仍由
- * `componentWordingScan.test.ts` 逐字釘住。
+ * Pre-wave3 approved wording, kept verbatim (not a single character changed).
+ * Archive only, except `insufficient_data`, which is still rendered in the
+ * no_action branch of `OperationSummaryPanel.tsx`. Per the risk-compliance
+ * ruling of 2026-10-04 (L-11 (d)) the other five entries are no longer rendered
+ * anywhere in the UI (the "規則評估：{legacy label}" line was removed from the
+ * held-branch details); they remain pinned verbatim by `adviceWording.test.ts`.
  */
 export const HELD_ACTION_LABELS_LEGACY: Record<CardAction, string> = {
   add: "加碼參考",
@@ -68,14 +70,19 @@ export const HELD_ACTION_LABELS_LEGACY: Record<CardAction, string> = {
   insufficient_data: "資料不足，本次不提供操作評估",
 };
 
-/** §1.1: every action label's first appearance must carry an explicit source. */
+/**
+ * §1.1: every action label's first appearance must carry an explicit source.
+ * Orphaned constant since L-11 (d) (risk-compliance ruling 2026-10-04) removed
+ * its only consumer, `buildLegacyAttributedHeadline`; kept on purpose to avoid
+ * widening the change. Provenance on screen now comes from `RULE_SOURCE_CHIP`.
+ */
 export const ATTRIBUTION_PREFIX = "規則評估";
 
 /**
  * wave3: returns the pure label only — the old "規則評估：" concatenation
- * (`buildLegacyAttributedHeadline` below) baked the source attribution into
- * the same string as the action word, which is exactly what read as one
- * confusing compound term. Attribution now travels as a separate, standing
+ * (`buildLegacyAttributedHeadline`, removed in L-11 (d), risk-compliance ruling
+ * 2026-10-04) baked the source attribution into the same string as the action
+ * word, which is exactly what read as one confusing compound term. Attribution now travels as a separate, standing
  * same-row chip (`RULE_SOURCE_CHIP`) instead.
  */
 export function buildAttributedHeadline(action: CardAction): string {
@@ -83,16 +90,9 @@ export function buildAttributedHeadline(action: CardAction): string {
 }
 
 /**
- * wave3 之前的 `buildAttributedHeadline`，逐字保留供「詳細」內揭露與測試釘住
- * 舊字面（一字不動，僅搬移出現位置與呼叫者）。
- */
-export function buildLegacyAttributedHeadline(action: CardAction): string {
-  return `${ATTRIBUTION_PREFIX}：${HELD_ACTION_LABELS_LEGACY[action]}`;
-}
-
-/**
  * wave3: standing same-row chip beside the held-mode headline, replacing the
- * old baked-in "規則評估：" prefix — text-xs neutral-400 is the floor, never
+ * old baked-in "規則評估：" prefix (the legacy line itself was dropped in L-11 (d),
+ * risk-compliance ruling 2026-10-04, so this chip is the sole provenance cue) — text-xs neutral-400 is the floor, never
  * smaller/lighter. Not shown beside the `insufficient_data` ("資料不足")
  * headline: that branch has no matched rule to attribute anything to (see
  * `INSUFFICIENT_DATA_NO_EVALUATION` instead).

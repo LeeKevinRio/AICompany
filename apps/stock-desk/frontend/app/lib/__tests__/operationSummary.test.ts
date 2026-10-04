@@ -142,8 +142,8 @@ describe("buildOperationSummary — held mode", () => {
     // Held-mode-specific: whitelist label (§1.2). wave3（派工單 §4.3 第 1 點）：
     // `buildAttributedHeadline` 回傳純標籤，不再烤入「規則評估：」前綴——來源
     // 感改由 `OperationSummaryPanel.tsx` 同列的 `RULE_SOURCE_CHIP` 承擔；舊版
-    // 前綴串接見 `buildLegacyAttributedHeadline`（`adviceWording.test.ts` 逐字
-    // 釘住）。
+    // 前綴串接函式 `buildLegacyAttributedHeadline` 已於 L-11 (d)（風控
+    // 2026-10-04 裁示）移除，舊標籤常數仍由 `adviceWording.test.ts` 逐字釘住。
     expect(model.attributedHeadline).toBe(HELD_ACTION_LABELS.add);
     // AC-C6.1: main basis = the heaviest matched rule, not just "any" matched rule.
     expect(model.topMatchedRule).toEqual({
@@ -1088,7 +1088,7 @@ describe("disclaimer／confidenceMeaning 只在 <details> 內渲染（DOM，CEO 
  * （`componentWordingScan.test.ts`），而是實際渲染輸出。
  */
 describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RULE_BASIS_PREFIX／NOT_HELD_BADGE／QUANTITY_RANGE_ABSENT_SHORT／INSUFFICIENT_DATA_NO_EVALUATION）", () => {
-  it("held 分支：主視圖含 RULE_SOURCE_CHIP、CONFIDENCE_PREFIX+信心字、RULE_BASIS_PREFIX+規則名，不含舊「規則評估：」複合詞；舊字面搬進 <details>", () => {
+  it("held 分支：主視圖含 RULE_SOURCE_CHIP、CONFIDENCE_PREFIX+信心字、RULE_BASIS_PREFIX+規則名，不含舊「規則評估：」複合詞；詳細內也不再渲染該行（L-11 (d)）", () => {
     const response = makeResponse() as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
     const main = html.slice(0, html.indexOf("<details"));
@@ -1101,8 +1101,51 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
     expect(main).not.toContain("規則評估：");
     expect(main).not.toContain("信心等級：");
     const details = html.slice(html.indexOf("<details"));
-    expect(details).toContain(`規則評估：${HELD_ACTION_LABELS_LEGACY.add}`);
+    // L-11 (d) (risk-compliance ruling 2026-10-04): the legacy attributed
+    // headline line is no longer rendered inside the details block.
+    expect(details).toContain("<details");
+    expect(details).toContain(makeCard().confidence_meaning);
+    expect(details).not.toContain("規則評估：");
   });
+
+  // L-11 (d): for every held action the details block must not carry any legacy
+  // action wording nor the full-width "規則評估：" attributed headline.
+  const L11_CASES: ReadonlyArray<{
+    action: "stop_loss" | "take_profit" | "hold";
+    legacyLabel: string;
+    quantityRange: AdviceCard["quantity_range"];
+  }> = [
+    { action: "stop_loss", legacyLabel: "停損評估", quantityRange: makeCard().quantity_range },
+    { action: "take_profit", legacyLabel: "分批獲利了結參考", quantityRange: makeCard().quantity_range },
+    { action: "hold", legacyLabel: "續抱/維持現狀", quantityRange: null },
+  ];
+  it.each(L11_CASES)(
+    "held 分支 $action：詳細內不含舊字面「$legacyLabel」與「規則評估：」（L-11 (d)）",
+    ({ action, legacyLabel, quantityRange }) => {
+      // Guard: the literals under test really are the archived legacy values.
+      expect(HELD_ACTION_LABELS_LEGACY[action]).toBe(legacyLabel);
+      const base = makeCard();
+      const card = makeCard({
+        action,
+        quantity_range: quantityRange,
+        matched_rules: base.matched_rules.map((rule) => ({ ...rule, action })),
+      });
+      const response = makeResponse({ advice: card }) as AdviceResponse;
+      const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
+      const detailsIdx = html.indexOf("<details");
+      expect(detailsIdx).toBeGreaterThan(-1);
+      const details = html.slice(detailsIdx);
+      // Non-vacuous: the details block is rendered and still carries the
+      // disclosures that remain (confidenceMeaning, counterarguments).
+      expect(details).toContain(card.confidence_meaning);
+      expect(details).toContain(card.counterarguments[0]);
+      for (const banned of ["停損評估", "分批獲利了結參考", "續抱/維持現狀", "規則評估："]) {
+        expect(details, `${action} 詳細內不得含「${banned}」`).not.toContain(banned);
+      }
+      // The main view still shows the new headline label for this action.
+      expect(html.slice(0, detailsIdx)).toContain(HELD_ACTION_LABELS[action]);
+    },
+  );
 
   it("held 分支：無股數區間時，決策卡印 QUANTITY_RANGE_ABSENT_SHORT（操作摘要主視圖不再重複），完整原因句只在操作摘要 <details>（決策卡 required 條件 9 落地後更新）", () => {
     const response = makeResponse({ advice: makeCard({ quantity_range: null }) }) as AdviceResponse;

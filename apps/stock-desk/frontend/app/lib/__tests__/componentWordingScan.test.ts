@@ -1653,7 +1653,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).not.toContain("QuantitySection");
   });
 
-  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴只出現在 <details> 之後；整個 held 區段（含 <details>）不再渲染舊「規則評估：{動作}」行（L-11 (d)，風控 2026-10-04 裁示，不含 buildLegacyAttributedHeadline 與全形「規則評估：」）；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
     const start = summarySrc.indexOf('// model.kind === "held"');
     const end = summarySrc.indexOf("function DataMetaPrefixLine");
     expect(start).toBeGreaterThan(-1);
@@ -1667,7 +1667,6 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
       "反面論點",
       "——{model.topMatchedRule.explanation}",
       "<DataMetaPrefixLine response={response} />",
-      "{buildLegacyAttributedHeadline(model.action)}",
     ]) {
       const idx = region.indexOf(needle);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
@@ -1681,6 +1680,12 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("{model.topMatchedRule.name}");
     expect(mainRegion).not.toContain("{model.topMatchedRule.explanation}");
     expect(mainRegion).not.toContain("規則評估：");
+    // L-11 (d): the legacy attributed headline line is gone from the whole held
+    // region (main view and <details>). Only the full-width colon form is banned;
+    // the half-width "規則評估:" in the backend basis sentence may still appear
+    // in rendered output and is not matched here.
+    expect(region).not.toContain("buildLegacyAttributedHeadline");
+    expect(region).not.toContain("規則評估：");
     expect(mainRegion).toContain("<StaleDataAlert");
     // 決策卡 required 條件 9：股數一行與 role="alert" 的 restoresComplianceWarning
     // 從本檔主視圖移除（全頁恰一次改由 DecisionCard.tsx 渲染），不得回流。

@@ -32,7 +32,6 @@ import {
   buildAttributedHeadline,
   buildCandidateCoverageStatement,
   buildCandidateSupportiveComposition,
-  buildLegacyAttributedHeadline,
   buildRulesStatement,
   buildStaleDataProminentNotice,
   CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE,
@@ -64,10 +63,10 @@ const CONFIDENCES: Confidence[] = ["low", "medium", "high"];
 const RENDERED_SURFACE: string[] = [
   ...Object.values(HELD_ACTION_LABELS),
   ...HELD_ACTIONS.map(buildAttributedHeadline),
-  // wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3）：舊字面搬進「詳細」，
-  // 不是刪除——一併納入禁用詞掃描，與新字面（RULE_SOURCE_CHIP 等）並列。
+  // wave3 archive: legacy wording stays in the forbidden-term scan alongside the
+  // new wording (RULE_SOURCE_CHIP etc.). Since L-11 (d) only `insufficient_data`
+  // is still rendered; the rest are archive-only.
   ...Object.values(HELD_ACTION_LABELS_LEGACY),
-  ...HELD_ACTIONS.map(buildLegacyAttributedHeadline),
   RULE_SOURCE_CHIP,
   INSUFFICIENT_DATA_NO_EVALUATION,
   RULE_BASIS_PREFIX,
@@ -151,14 +150,6 @@ describe("wave3 — HELD_ACTION_LABELS 改寫與 LEGACY 對照（逐字釘住）
     for (const action of HELD_ACTIONS) {
       expect(buildAttributedHeadline(action)).toBe(HELD_ACTION_LABELS[action]);
       expect(buildAttributedHeadline(action)).not.toContain("：");
-    }
-  });
-
-  it("buildLegacyAttributedHeadline 逐字重現舊版「規則評估：{舊標籤}」", () => {
-    expect(buildLegacyAttributedHeadline("stop_loss")).toBe("規則評估：停損評估");
-    expect(buildLegacyAttributedHeadline("add")).toBe("規則評估：加碼參考");
-    for (const action of HELD_ACTIONS) {
-      expect(buildLegacyAttributedHeadline(action)).toBe(`規則評估：${HELD_ACTION_LABELS_LEGACY[action]}`);
     }
   });
 

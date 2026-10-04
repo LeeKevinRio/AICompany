@@ -5,7 +5,6 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse, MatchedRule } from "../../lib/types";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import {
-  buildLegacyAttributedHeadline,
   CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY,
   CONFIDENCE_PREFIX,
   HELD_ACTION_LABELS_LEGACY,
@@ -34,8 +33,12 @@ import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLine
  * 全部收進 `<details>`；wave3 進一步把 held 分支的舊「規則評估：{動作}」複合詞
  * 拆成純標籤＋同列 `RULE_SOURCE_CHIP` chip，候選分支加「未持有」徽章、
  * `CANDIDATE_EVIDENCE_NOTICE` 移進詳細，主要依據改短前綴「依據：」，信心改短
- * 前綴「信心 」，股數缺席改短句「未提供股數」。舊字面（`HELD_ACTION_LABELS_LEGACY`
- * 等）逐字保留、只搬進「詳細」，不刪除。主視圖只留：徽章列（資料截至徽章＋
+ * 前綴「信心 」，股數缺席改短句「未提供股數」。 [L-11 (d), risk-compliance
+ * ruling 2026-10-04: the held-branch legacy "規則評估：{action}" line was removed
+ * from the details block for every held action; provenance is carried by the
+ * standing `RULE_SOURCE_CHIP`. `HELD_ACTION_LABELS_LEGACY` stays archived in
+ * adviceWording.ts, and only its `insufficient_data` entry is still rendered
+ * (no_action branch).] 主視圖只留：徽章列（資料截至徽章＋
  * compact 狀態 chip）、結論大字＋來源 chip／信心 chip（only while
  * `model.showConfidence`; gated when the conclusion was downgraded or capped）、「依據：{規則名}」、
  * 股數一行、`StaleDataAlert`、`restoresComplianceWarning`（role=alert）、候選
@@ -274,7 +277,7 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <span className="inline-block rounded-md border border-neutral-700 bg-neutral-900 px-4 py-2 text-2xl font-bold text-neutral-100">
           {model.attributedHeadline}
         </span>
-        {/* wave3（派工單 §4.3 第 1 點）：來源感改由這顆常駐 chip 承擔，取代舊版烤進大字本身、以 `ATTRIBUTION_PREFIX` 開頭的前綴（見 `buildLegacyAttributedHeadline`）。 */}
+        {/* wave3 (dispatch sheet 4.3 point 1): provenance is carried by this standing chip, replacing the old prefix baked into the headline itself (the `ATTRIBUTION_PREFIX` concatenation, removed in L-11 (d)). */}
         <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-400">
           {RULE_SOURCE_CHIP}
         </span>
@@ -314,8 +317,7 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           {/* CEO 第二次裁定 2026-09-19：disclaimer／confidenceMeaning 收進詳細。 */}
           <InlineDisclaimer text={model.required.disclaimer} />
           <p>{model.required.confidenceMeaning}</p>
-          {/* wave3：舊「規則評估：{動作}」複合詞逐字保留在詳細，供對照與測試釘住。 */}
-          <p>{buildLegacyAttributedHeadline(model.action)}</p>
+          {/* L-11 (d): the legacy attributed headline line is intentionally not rendered here for any held action (risk ruling 2026-10-04); the action name lives in the main-view headline and provenance in the chip. */}
           {model.topMatchedRule && <p>——{model.topMatchedRule.explanation}</p>}
           {!basisIsAlert && model.required.quantityRangeBasis && <p>{model.required.quantityRangeBasis}</p>}
           {model.required.quantityAbsenceReason !== null && <p>{model.required.quantityAbsenceReason}</p>}
