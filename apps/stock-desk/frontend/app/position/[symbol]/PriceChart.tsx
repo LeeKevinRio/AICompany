@@ -116,7 +116,7 @@ export function PriceChart({
 
   if (bars.length === 0) {
     return (
-      <p className="rounded-md border border-dashed border-neutral-800 p-8 text-center text-sm text-neutral-500">
+      <p className="rounded-md border border-dashed border-neutral-800 p-8 text-center text-sm text-neutral-400">
         無 K 線資料可繪製。
       </p>
     );

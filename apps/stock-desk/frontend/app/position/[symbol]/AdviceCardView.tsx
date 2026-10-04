@@ -159,7 +159,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
 
       <Section title={`命中規則（${advice.matched_rules.length} 條）`}>
         {advice.matched_rules.length === 0 ? (
-          <p className="text-sm text-neutral-500">目前沒有規則命中。</p>
+          <p className="text-sm text-neutral-400">目前沒有規則命中。</p>
         ) : (
           <ul className="space-y-2">
             {advice.matched_rules.map((rule) => {
@@ -176,7 +176,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
                   </span>
                 </div>
                 <p className="mt-1 text-neutral-400">{rule.explanation}</p>
-                <p className="mt-1 text-xs text-neutral-600">{rule.weight_meaning}</p>
+                <p className="mt-1 text-xs text-neutral-400">{rule.weight_meaning}</p>
               </li>
               );
             })}
@@ -242,7 +242,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
           {formatPercent(advice.evaluation.data_completeness)}。
         </p>
         {advice.evaluation.skipped_rules.length > 0 && (
-          <details className="mt-2 text-sm text-neutral-500">
+          <details className="mt-2 text-sm text-neutral-400">
             <summary className="cursor-pointer text-neutral-400">
               因資料不足被跳過的規則（{advice.evaluation.skipped_rules.length} 條）
             </summary>

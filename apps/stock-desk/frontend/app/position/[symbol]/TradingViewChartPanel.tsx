@@ -257,7 +257,7 @@ export function TradingViewChartPanel({
             part of the official embed snippet; must not be removed or
             reworded (CEO 派工單 2026-08-16 第 2 點).
           */}
-          <div className="tradingview-widget-copyright mt-1 text-xs text-neutral-600">
+          <div className="tradingview-widget-copyright mt-1 text-xs text-neutral-400">
             <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
               <span className="text-sky-500">Track all markets on TradingView</span>
             </a>

@@ -359,7 +359,7 @@ export function DecisionCardBody({
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
+        <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-400">
           {buildDataAsOfBadge(response.data.last_bar_date) !== null && (
             <span className="rounded border border-neutral-700 px-1.5 py-0.5 text-neutral-400">
               {buildDataAsOfBadge(response.data.last_bar_date)}

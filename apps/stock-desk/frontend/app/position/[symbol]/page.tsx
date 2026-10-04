@@ -282,7 +282,7 @@ export default function PositionDetailPage() {
             同一組子字串，不新造。完整版徽章與「資料來源：…」前綴改
             印在下方「詳細」第一、二行。
           */}
-          <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
+          <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-400">
             {bars.isSuccess && buildDataAsOfBadge(bars.data.data.last_bar_date) !== null && (
               <span className="rounded border border-neutral-700 px-1.5 py-0.5 text-neutral-400">
                 {buildDataAsOfBadge(bars.data.data.last_bar_date)}
@@ -560,7 +560,7 @@ export default function PositionDetailPage() {
             <div className="space-y-3 border-t border-neutral-800 p-5">
               {/* CEO 第二次裁定 2026-09-19：R9 交叉引用句從 summary 第二行移進展開內容第一行，字面不動。 */}
               <p className="text-xs text-neutral-400">{ADVICE_CARD_XREF_TO_SUMMARY}</p>
-              <p className="text-xs text-neutral-500">
+              <p className="text-xs text-neutral-400">
                 {advice.data.held
                   ? `以目前持倉評估（部位 ID：${advice.data.position_ids.join("、")}）。`
                   : "目前未持有此標的，以候選部位（0 股）評估。"}
@@ -573,7 +573,7 @@ export default function PositionDetailPage() {
                 矛盾,故改為與該處一致的常駐可見清單。文字內容不變。
               */}
               {advice.data.context_notes.length > 0 && (
-                <div className="mb-3 text-xs text-neutral-500">
+                <div className="mb-3 text-xs text-neutral-400">
                   <p className="font-semibold text-neutral-400">
                     風險預算輸入的假設與限制（{advice.data.context_notes.length}）
                   </p>

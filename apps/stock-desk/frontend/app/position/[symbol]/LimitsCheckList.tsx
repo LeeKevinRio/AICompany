@@ -28,7 +28,7 @@ export function LimitsCheckList({ limits }: { limits: LimitCheck[] }) {
             </span>
           </div>
           <p className="mt-1 text-neutral-400">{limit.detail}</p>
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-400">
             觀察值：{formatPercent(limit.observed)}　上限：{formatPercent(limit.threshold)}
           </p>
         </li>
