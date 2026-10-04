@@ -8,8 +8,10 @@
 - 全部 UI 都由程式碼建立（uGUI legacy `Text` / `Image` / `Button`），**不需要手拉 scene 或 prefab**。
 - 進入點：`Assets/Scripts/Core/Bootstrap.cs`（`RuntimeInitializeOnLoadMethod`，scene 載入後自動建立畫面）。
 - 字型：`Assets/Resources/Fonts/huninn.ttf`（jf open 粉圓子集，授權見同資料夾 `LICENSE-jf-openhuninn.txt`）。
-- 圖形：圓角牌、按鈕、面板、圓形頭像都在執行期用 `Texture2D` 產生，專案裡沒有任何圖檔。
-- API 契約：`work/manjong-unity/api-contract.md`（v0.3）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
+- 圖形：**牌面用傳統麻將牌的圖**（`Assets/Resources/Tiles/<牌碼>.png`，牌背 `back.png`，每張 150×200 px、圓角外透明）；
+  找不到圖時自動退回程式畫的文字牌，並在 Console 警告一次。按鈕、面板、圓形頭像等可愛風 UI 仍在執行期用 `Texture2D` 產生。
+- 牌圖匯入設定由 `Assets/Editor/ManjongTileImporter.cs`（AssetPostprocessor）自動套用：不產生 mipmap、不壓縮、Bilinear、alpha 為透明、不縮放成 2 的次方。
+- API 契約：`work/manjong-unity/api-contract.md`（v0.3.1）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
 
 ## 1. 開啟專案
 
@@ -113,32 +115,55 @@ Assets/
   Editor/
     ManjongProjectSetup.cs   首次開啟建立 Main.unity、Build Settings、Player Settings；選單 Manjong/Setup Project
     ManjongBuild.cs          選單 Manjong/Build WebGL
+    ManjongTileImporter.cs   Resources/Tiles 牌圖的匯入設定（AssetPostprocessor）
   Plugins/WebGL/
     ManjongPrompt.jslib      WebGL 專用：用瀏覽器 prompt 輸入中文暱稱（見常見問題）
     ManjongSocket.jslib      WebGL 專用：瀏覽器 WebSocket 橋接（輪詢式）
   Resources/Fonts/huninn.ttf
+  Resources/Tiles/*.png      牌面圖（1m…9m、1p…9p、1s…9s、E S W N、RD GD WD、F1…F8、back）
   Scripts/
     Core/  Bootstrap（進入點）、AppController（畫面切換、requestId / replyTo 路由、牌局訊息與錯誤處理）、
            Economy（底 / 每台 / 門檻 / 救濟金，必須與 server/src/engine/rules.ts 的 ECONOMY 同步）
     Net/   ApiConfig（伺服器與 WebSocket 位址）、TokenStore（PlayerPrefs token）、Dto（契約 v0.3 DTO）、
            GameConnection（auth / ping / 重連）、SocketTransport（介面）、WebGLSocketTransport、NativeSocketTransport
     UI/    Palette（配色）、RoundedSprite（執行期圓角圖）、UiFactory（建 UI 的 helper）、
-           TileFace（牌碼→字/顏色/中文名）、TileView（牌面/牌背）、Format、WebPrompt
-    Screens/ LobbyScreen（大廳）、TableScreen（牌桌）、ResultPanel（結算）
+           TileFace（牌碼→字/顏色/中文名）、TileView（牌圖載入與快取、文字牌 fallback、副露組）、Format、WebPrompt
+    Screens/ LobbyScreen（大廳）、TableScreen（牌桌）、ActionPanel（吃碰槓聽胡過面板）、ResultPanel（結算）
 ```
 
 技術限制（刻意的選擇）：不用 TextMeshPro、不用 Input System 套件、不用第三方套件、JSON 只用 `JsonUtility`、C# 語法不超過 9.0。
 async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，WebGL build 不會編入）；其他程式一律用 coroutine。
 
-## 6. 畫面上的聽牌與台數資訊（全部由後端提供）
+## 6. 牌桌版面與操作
+
+**版面固定、不會跳動**（參考解析度 1920×1080；1280×720 等 16:9 視窗是同一份版面等比縮小）：
+
+- 我的手牌從固定的左邊界排起，最多 17 格，右邊隔一段距離是固定的「摸牌格」。摸牌只出現在摸牌格，其他牌完全不動；
+  打出後剩下的牌重新排序並靠左。吃碰後手牌變少，也是從左邊排起。
+- 對手的手牌、副露、花牌、牌河、資訊卡都在固定位置、固定格線；副露從固定起點往右延伸（側邊玩家排滿一列才換行）。
+- 副露照 `tiles` 順序顯示，從別家拿來的那張（`claimedIndex`）**橫放**；吃牌時被吃的那張在中間。暗槓外側兩張蓋牌。
+
+**操作面板**（我的手牌上方偏右，位置固定）：只要有吃、碰、槓、胡、過任一個選項，或打出某張就會聽牌，面板就會彈出，
+固定六顆按鈕依序是 **吃、碰、槓、聽、胡、過**。可以用的按鈕會亮起並有脈動光暈，不能用的變灰、按不了；沒有任何操作時面板收起。
+
+| 按鈕 | 對應 | 說明 |
+| --- | --- | --- |
+| 吃 | `chi:*` | 只有一種吃法就直接送出；多種時跳出小選單，用三張牌圖顯示順子（被吃的那張有外框） |
+| 碰 | `pon` | |
+| 槓 | `kan`、`ankan:*`、`kakan:*` | 只有一個就直接送出；多個時跳出小選單，標示「明槓／暗槓／加槓」並附牌圖 |
+| 聽 | （不送伺服器） | 切換提示：所有打出就會聽的牌加上外框，提示列列出「打 五萬：聽 三筒（剩 2）…」 |
+| 胡 | `ron` / `tsumo` | 按鈕文字是「胡」或「自摸」，下面小字是台數（option 的 `tai`） |
+| 過 | `pass` | 只有別人打牌或加槓、等你決定時才亮；輪到你打牌時是灰的 |
+
+## 7. 畫面上的聽牌與台數資訊（全部由後端提供）
 
 - 輪到你打牌時，打出後會聽牌的牌，牌面上方有珊瑚色的「聽」標記。
 - 點一下牌（浮起）時，畫面左下（手牌左側、花牌上方）的提示列會顯示「打出後聽：三筒（剩 2）、六筒（剩 3）」，不會聽牌則顯示「打出後未聽牌」。剩餘張數是後端只用你看得到的牌推算的。
 - 不是你的回合但已聽牌時，提示列常駐顯示「聽牌中：…」。
-- 自摸 / 胡的按鈕文字直接用後端的 label（已含台數，例如「自摸（5 台）」）；暗槓、加槓各自一顆按鈕。
+- 操作面板的「胡」按鈕會顯示「胡」或「自摸」，下面一行小字是這手的台數（後端的 `tai`）；槓有多種時（明槓／暗槓／加槓）會跳出選單。
 - 自己摸牌時，事件列會顯示「你 摸到 五萬」。
 
-## 7. 常見問題
+## 8. 常見問題
 
 | 狀況 | 原因與處理 |
 | --- | --- |
@@ -148,6 +173,7 @@ async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，We
 | 牌桌上方一直顯示「連線中斷，正在重新連線…」 | 後端停了或網路斷了；會持續以最多 10 秒的間隔重試。可以按「離開」回大廳，牌局保留在伺服器。 |
 | 跳出「已在其他視窗登入」 | 同一個帳號在別的視窗或分頁登入（close 4000）。按大廳右上角的「重新連線」即可把連線搶回這個視窗。 |
 | 按鈕都點不到 | Active Input Handling 設成只用新版 Input System，改為 Old 或 Both（見上方）。 |
+| 牌面是白底文字而不是牌圖 | `Assets/Resources/Tiles/` 下缺少對應的 png（Console 會有 `Tile image ... not found` 警告）。補上圖檔即可，檔名就是牌碼。 |
 | 字變成方塊 / 缺字 | 粉圓字型是子集，只含常用字；若後端訊息出現子集外的字會顯示成方塊。找不到字型檔時會改用 Unity 內建字型並在 Console 警告。 |
 | WebGL 版打不了中文暱稱 | 瀏覽器中 uGUI 舊版 `InputField` 收不到輸入法（IME）組字。WebGL 版暱稱旁有「中文輸入」按鈕，會跳出瀏覽器輸入框；若被瀏覽器擋下（例如放在 iframe 裡），會提示改用欄位輸入。 |
 | WebGL 開啟後一片空白 / 載入失敗 | 確認是透過後端（`http://127.0.0.1:7316/`）開啟，而不是直接雙擊 `index.html`（`file://` 無法載入）。 |

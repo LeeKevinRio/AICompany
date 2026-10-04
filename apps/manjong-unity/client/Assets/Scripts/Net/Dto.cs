@@ -1,6 +1,6 @@
 using System;
 
-// DTOs mirror work/manjong-unity/api-contract.md v0.3 exactly (everything goes over the WebSocket).
+// DTOs mirror work/manjong-unity/api-contract.md v0.3.1 exactly (everything goes over the WebSocket).
 // JsonUtility rules: [Serializable] classes, public fields, camelCase names identical to the contract.
 namespace Manjong.Net
 {
@@ -100,8 +100,13 @@ namespace Manjong.Net
     {
         // chi | pon | kan | ankan | kakan
         public string type;
+        /// <summary>Display order; for chi the claimed tile is in the middle.</summary>
         public string[] tiles;
         public int fromSeat;
+        /// <summary>The tile taken from another seat ("" for ankan).</summary>
+        public string claimedTile;
+        /// <summary>Index of claimedTile in tiles (chi: 1, ankan: -1).</summary>
+        public int claimedIndex;
     }
 
     [Serializable]

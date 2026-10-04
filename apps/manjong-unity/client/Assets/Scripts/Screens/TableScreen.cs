@@ -29,11 +29,33 @@ namespace Manjong.Screens
         const float InfoW = 250f;
         const float InfoH = 110f;
         const float SidePanelW = 300f;
-        const float SidePanelH = 530f;
+        const float SidePanelH = 540f;
         const int RiverColsWide = 10;   // bottom / top rivers
         const int RiverColsNarrow = 8;  // left / right rivers
         const float RiverGap = 2f;
-        const float SelectLift = 24f;
+        const float SelectLift = 20f;
+
+        // Fixed geometry of my hand (reference 1920x1080, bottom-left origin). Tiles never move when a tile is
+        // drawn: slot i is at HandStartX + i * SlotStep, the drawn tile always sits in the separate drawn slot.
+        const float HandStartX = 296f;
+        const float HandY = 20f;
+        const float SlotGap = 4f;
+        const float SlotStep = 75f + SlotGap;       // TileSizes.Large.width + gap
+        const int MaxSlots = 17;
+        const float DrawnGap = 24f;
+        const float DrawnSlotX = MaxSlots * SlotStep - SlotGap + DrawnGap; // relative to HandStartX
+        const float HandAreaW = DrawnSlotX + 75f;
+        const float MyMeldsY = 152f;
+        // Waits hint bar (bottom-left, above my flowers, left of the bottom river, below the left seat panel).
+        const float HintY = 222f;
+        const float HintW = 700f;
+        const float HintH = 50f;
+        const float HintTallH = 88f;
+        const float MyMeldsW = 1000f;
+        // Opposite seat: fixed left edge for its concealed row and melds (relative to the screen centre).
+        const float TopRowX = -260f;
+        // Action panel: bottom-right offset; above the hand's right part, right of my melds, below the right seat.
+        static readonly Vector2 ActionPanelOffset = new Vector2(-24f, 160f);
 
         class SeatUi
         {
@@ -67,8 +89,9 @@ namespace Manjong.Screens
         Text centerTurn;
         Text myCoinsText;
 
-        RectTransform actionBar;
-        string actionSig;
+        ActionPanel actionPanel;
+        /// <summary>聽 toggled on: mark every ready discard and list them all in the hint bar.</summary>
+        bool tingOn;
 
         Image hintBar;
         Image hintRing;
@@ -107,8 +130,7 @@ namespace Manjong.Screens
             BuildEventLog();
             BuildHintBar();
 
-            actionBar = UiFactory.CreateRect("ActionBar", root);
-            UiFactory.Place(actionBar, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-24f, 232f), new Vector2(1000f, 84f));
+            actionPanel = ActionPanel.Create(root, ActionPanelOffset, OnOptionClicked, OnToggleTing);
 
             BuildConnectionBanner();
 
@@ -166,15 +188,15 @@ namespace Manjong.Screens
             {
                 case 0: // me, bottom
                     s.info = MakeArea("Seat0Info", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 24f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat0Flowers", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 146f), new Vector2(InfoW, TileSizes.Mini.height));
-                    s.melds = MakeArea("Seat0Melds", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 152f), new Vector2(1000f, TileSizes.Small.height));
-                    s.hand = MakeArea("Seat0Hand", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 20f), new Vector2(1400f, TileSizes.Large.height + SelectLift));
+                    s.flowers = MakeArea("Seat0Flowers", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 140f), new Vector2(8f * TileSizes.Mini.width, TileSizes.Mini.height));
+                    s.melds = MakeArea("Seat0Melds", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(HandStartX, MyMeldsY), new Vector2(MyMeldsW, TileSizes.Small.height));
+                    s.hand = MakeArea("Seat0Hand", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(HandStartX, HandY), new Vector2(HandAreaW, TileSizes.Large.height + SelectLift));
                     break;
                 case 2: // opposite, top
                     s.info = MakeArea("Seat2Info", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -20f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat2Flowers", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -136f), new Vector2(InfoW, TileSizes.Mini.height));
-                    s.hand = MakeArea("Seat2Hand", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -20f), new Vector2(620f, TileSizes.Back.height));
-                    s.melds = MakeArea("Seat2Melds", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(760f, TileSizes.Mini.height));
+                    s.flowers = MakeArea("Seat2Flowers", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(-560f - InfoW * 0.5f, -136f), new Vector2(8f * TileSizes.Mini.width, TileSizes.Mini.height));
+                    s.hand = MakeArea("Seat2Hand", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(TopRowX, -20f), new Vector2(MaxSlots * (TileSizes.Back.width + 1f), TileSizes.Back.height));
+                    s.melds = MakeArea("Seat2Melds", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(TopRowX, -64f), new Vector2(780f, TileSizes.Mini.height));
                     break;
                 default: // sides: 1 right, 3 left
                 {
@@ -185,8 +207,8 @@ namespace Manjong.Screens
                     float innerW = SidePanelW - 20f;
                     s.info = MakeArea("Info", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, 0f), new Vector2(InfoW, InfoH));
                     s.flowers = MakeArea("Flowers", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -118f), new Vector2(innerW, TileSizes.Mini.height));
-                    s.hand = MakeArea("Hand", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -172f), new Vector2(innerW, 3f * (TileSizes.Back.height + 2f)));
-                    s.melds = MakeArea("Melds", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -298f), new Vector2(innerW, 3f * (TileSizes.Mini.height + 4f)));
+                    s.hand = MakeArea("Hand", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -170f), new Vector2(innerW, 3f * (TileSizes.Back.height + 2f)));
+                    s.melds = MakeArea("Melds", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -292f), new Vector2(innerW, 5f * (TileSizes.Mini.height + 4f)));
                     break;
                 }
             }
@@ -222,7 +244,7 @@ namespace Manjong.Screens
         void BuildHintBar()
         {
             hintBar = UiFactory.CreatePanel(root, "WaitHint", Palette.Card, 20);
-            UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 222f), new Vector2(700f, 50f));
+            UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, HintY), new Vector2(HintW, HintH));
             UiFactory.AddShadow(hintBar, Palette.CardShadow, new Vector2(0f, -3f));
             hintRing = UiFactory.CreateRing(hintBar.transform, "Ring", Palette.Coral, 20, 3, 0f);
             hintText = UiFactory.CreateLabel(hintBar.transform, "Text", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
@@ -315,6 +337,7 @@ namespace Manjong.Screens
             fastForward = false;
             queue.Clear();
             if (resultPanel != null) resultPanel.Hide();
+            if (actionPanel != null) actionPanel.Fold();
             gameObject.SetActive(false);
         }
 
@@ -334,7 +357,8 @@ namespace Manjong.Screens
             handOrder.Clear();
             events.Clear();
             RefreshEventLog();
-            actionSig = null;
+            tingOn = false;
+            actionPanel.Fold();
             for (int i = 0; i < 4; i++)
             {
                 riverSigs[i] = null;
@@ -507,7 +531,7 @@ namespace Manjong.Screens
             RenderCenter(v);
             RenderHint(v);
             myCoinsText.text = "我的金幣 " + Format.Coins(v.myCoins);
-            RenderActions(v, isFinal);
+            actionPanel.Apply(v, isFinal && CanAct, tingOn);
 
             bool showResult = isFinal && (v.hasResult || v.phase == "hand_end" || v.phase == "game_end");
             if (showResult) resultPanel.Show(v, OnNextHand, OnBackToLobby);
@@ -560,6 +584,22 @@ namespace Manjong.Screens
             return sb.ToString();
         }
 
+        /// <summary>"打 五萬：聽 三筒（剩 2）、六筒（剩 3）；打 七條：聽 …" for every ready discard.</summary>
+        static string AllReadyDiscards(GameView v)
+        {
+            var sb = new StringBuilder();
+            var seen = new HashSet<string>();
+            OptionDto[] opts = DtoUtil.Safe(v.options);
+            for (int i = 0; i < opts.Length; i++)
+            {
+                OptionDto o = opts[i];
+                if (o == null || o.type != "discard" || DtoUtil.Safe(o.waits).Length == 0 || !seen.Add(o.tile)) continue;
+                if (sb.Length > 0) sb.Append('；');
+                sb.Append("打 ").Append(TileFace.Name(o.tile)).Append("：聽 ").Append(FormatWaits(o.waits));
+            }
+            return sb.ToString();
+        }
+
         static bool AnyDiscardWaits(GameView v)
         {
             OptionDto[] opts = DtoUtil.Safe(v.options);
@@ -586,9 +626,14 @@ namespace Manjong.Screens
                     text = list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌";
                     listening = list.Length > 0;
                 }
+                else if (tingOn && AnyDiscardWaits(v))
+                {
+                    text = AllReadyDiscards(v);
+                    listening = true;
+                }
                 else if (AnyDiscardWaits(v))
                 {
-                    text = "有「聽」標記的牌，打出後就會聽牌";
+                    text = "有「聽」標記的牌，打出後就會聽牌（按「聽」全部顯示）";
                 }
             }
             else if (v.phase == "playing")
@@ -604,6 +649,9 @@ namespace Manjong.Screens
             bool show = text.Length > 0;
             hintBar.gameObject.SetActive(show);
             if (!show) return;
+            // Two lines (taller bar, growing upward) only for the full 聽 list; it stays below the left seat panel.
+            bool twoLines = tingOn && canDiscard && selectedIndex < 0;
+            hintBar.rectTransform.sizeDelta = new Vector2(HintW, twoLines ? HintTallH : HintH);
             hintText.text = text;
             hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
             hintRing.gameObject.SetActive(listening);
@@ -671,7 +719,7 @@ namespace Manjong.Screens
             for (int i = 0; i < flowers.Length; i++)
             {
                 var t = TileView.CreateFace(s.flowers, flowers[i], size);
-                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * (size.width + 1f), 0f), size.Vector);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * size.width, 0f), size.Vector); // fixed grid, 8 flowers = 8 widths
             }
         }
 
@@ -685,56 +733,40 @@ namespace Manjong.Screens
             for (int i = 0; i < melds.Length; i++)
             {
                 if (melds[i] == null) continue;
-                sb.Append(melds[i].type).Append(':').Append(string.Join(",", DtoUtil.Safe(melds[i].tiles))).Append(';');
+                sb.Append(melds[i].type).Append(':').Append(string.Join(",", DtoUtil.Safe(melds[i].tiles))).Append('@').Append(melds[i].claimedIndex).Append(';');
             }
             string sig = sb.ToString();
             if (sig == s.meldSig) return;
             s.meldSig = sig;
             UiFactory.DestroyChildren(s.melds);
 
-            if (rel == 0) LayoutMelds(s.melds, melds, TileSizes.Small, 14f, 99, true);
-            else if (rel == 2) LayoutMelds(s.melds, melds, TileSizes.Mini, 12f, 99, true);
-            else LayoutMelds(s.melds, melds, TileSizes.Mini, 10f, 2, false);
+            if (rel == 0) LayoutMelds(s.melds, melds, TileSizes.Small, 12f);
+            else if (rel == 2) LayoutMelds(s.melds, melds, TileSizes.Mini, 10f);
+            else LayoutMelds(s.melds, melds, TileSizes.Mini, 10f);
         }
 
-        /// <summary>Lays melds out in rows of "groupsPerRow" groups; concealed kongs show the outer two tiles face down.</summary>
-        static void LayoutMelds(RectTransform area, MeldDto[] melds, TileSize size, float groupGap, int groupsPerRow, bool center)
+        /// <summary>
+        /// Lays melds out from the area's fixed top-left corner, left to right, wrapping to a new row only when the
+        /// next meld would cross the area's right edge. Earlier melds never move when a new one is added.
+        /// </summary>
+        static void LayoutMelds(RectTransform area, MeldDto[] melds, TileSize size, float groupGap)
         {
-            const float tileGap = 1f;
-            var valid = new List<MeldDto>();
+            float areaW = area.sizeDelta.x;
+            float x = 0f;
+            float y = 0f;
             for (int i = 0; i < melds.Length; i++)
             {
-                if (melds[i] != null && DtoUtil.Safe(melds[i].tiles).Length > 0) valid.Add(melds[i]);
-            }
-
-            float areaW = area.sizeDelta.x;
-            for (int rowStart = 0; rowStart < valid.Count; rowStart += groupsPerRow)
-            {
-                int rowEnd = Mathf.Min(valid.Count, rowStart + groupsPerRow);
-                float rowW = 0f;
-                for (int g = rowStart; g < rowEnd; g++)
+                MeldDto m = melds[i];
+                if (m == null || DtoUtil.Safe(m.tiles).Length == 0) continue;
+                float w = TileView.MeldWidth(m, size);
+                if (x > 0f && x + w > areaW)
                 {
-                    int n = valid[g].tiles.Length;
-                    rowW += n * (size.width + tileGap) - tileGap;
-                    if (g < rowEnd - 1) rowW += groupGap;
+                    x = 0f;
+                    y -= size.height + 4f;
                 }
-                float x = center ? Mathf.Max(0f, (areaW - rowW) * 0.5f) : 0f;
-                float y = -(rowStart / groupsPerRow) * (size.height + 4f);
-
-                for (int g = rowStart; g < rowEnd; g++)
-                {
-                    MeldDto m = valid[g];
-                    string[] tiles = m.tiles;
-                    bool concealed = m.type == "ankan" && tiles.Length == 4;
-                    for (int i = 0; i < tiles.Length; i++)
-                    {
-                        bool faceDown = concealed && (i == 0 || i == 3);
-                        RectTransform t = faceDown ? TileView.CreateBack(area, size) : TileView.CreateFace(area, tiles[i], size);
-                        UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, y), size.Vector);
-                        x += size.width + tileGap;
-                    }
-                    x += groupGap - tileGap;
-                }
+                RectTransform box = TileView.CreateMeld(area, m, size);
+                UiFactory.Place(box, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, y), box.sizeDelta);
+                x += w + groupGap;
             }
         }
 
@@ -752,14 +784,12 @@ namespace Manjong.Screens
             int count = Mathf.Max(0, p.handCount);
             if (rel == 2)
             {
-                // Single centered row.
+                // Single row from a fixed left edge (not re-centred when the count changes).
                 float step = size.width + 1f;
-                float total = count * step - 1f;
-                float x = Mathf.Max(0f, (s.hand.sizeDelta.x - total) * 0.5f);
                 for (int i = 0; i < count; i++)
                 {
                     var t = TileView.CreateBack(s.hand, size);
-                    UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x + i * step, 0f), size.Vector);
+                    UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * step, 0f), size.Vector);
                 }
             }
             else
@@ -804,8 +834,9 @@ namespace Manjong.Screens
             {
                 myHandContentSig = contentSig;
                 selectedIndex = -1;
+                tingOn = false;
             }
-            string sig = contentSig + "#" + selectedIndex;
+            string sig = contentSig + "#" + selectedIndex + "#" + tingOn;
             if (sig == s.handSig) return;
             s.handSig = sig;
             UiFactory.DestroyChildren(s.hand);
@@ -816,17 +847,14 @@ namespace Manjong.Screens
             if (selectedIndex >= handOrder.Count) selectedIndex = -1;
 
             TileSize size = TileSizes.Large;
-            const float gap = 4f;
-            const float drawnGap = 26f;
             int n = handOrder.Count;
-            float total = n * size.width + Mathf.Max(0, n - 1) * gap + (drawn.Length > 0 ? drawnGap : 0f);
-            float startX = (s.hand.sizeDelta.x - total) * 0.5f;
 
             for (int i = 0; i < n; i++)
             {
                 string code = handOrder[i];
                 bool isDrawn = drawn.Length > 0 && i == n - 1;
-                float x = startX + i * (size.width + gap) + (isDrawn ? drawnGap : 0f);
+                // Fixed slots from the left edge; the drawn tile always goes to the separate drawn slot.
+                float x = isDrawn ? DrawnSlotX : i * SlotStep;
 
                 var slot = UiFactory.CreateRect("Slot" + i, s.hand);
                 UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(x, 0f), size.Vector);
@@ -839,7 +867,9 @@ namespace Manjong.Screens
                 bool discardable = opt != null;
                 if (canDiscard && !discardable) TileView.AddVeil(tile, size);
                 if (selected) TileView.AddRing(tile, Palette.SelectRing, size, 4);
-                if (discardable && DtoUtil.Safe(opt.waits).Length > 0) AddWaitBadge(tile, size);
+                bool readyDiscard = discardable && DtoUtil.Safe(opt.waits).Length > 0;
+                if (readyDiscard && tingOn) TileView.AddRing(tile, Palette.Coral, size, 5);
+                if (readyDiscard) AddWaitBadge(tile, size);
 
                 if (discardable)
                 {
@@ -860,7 +890,8 @@ namespace Manjong.Screens
         static void AddWaitBadge(RectTransform tile, TileSize size)
         {
             var pill = UiFactory.CreatePanel(tile, "WaitBadge", Palette.Coral, 12);
-            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, -12f), new Vector2(40f, 28f));
+            // Pokes 10 units above the tile top so a lifted tile's badge stays below my meld row.
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, -18f), new Vector2(40f, 28f));
             UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 12, 2, 0f);
             var t = UiFactory.CreateLabel(pill.transform, "Text", "聽", 20, Palette.Ink, TextAnchor.MiddleCenter);
             t.fontStyle = FontStyle.Bold;
@@ -893,65 +924,6 @@ namespace Manjong.Screens
             }
         }
 
-        // ----- Action bar -----
-
-        void RenderActions(GameView v, bool isFinal)
-        {
-            var list = new List<OptionDto>();
-            if (isFinal && CanAct)
-            {
-                OptionDto[] opts = DtoUtil.Safe(v.options);
-                for (int i = 0; i < opts.Length; i++)
-                {
-                    OptionDto o = opts[i];
-                    if (o == null || o.type == "discard" || o.type == "next") continue;
-                    list.Add(o);
-                }
-            }
-
-            var sb = new StringBuilder();
-            for (int i = 0; i < list.Count; i++) sb.Append(list[i].id).Append('=').Append(list[i].label).Append(';');
-            string sig = sb.ToString();
-            if (sig == actionSig) return;
-            actionSig = sig;
-            UiFactory.DestroyChildren(actionBar);
-
-            // Right-aligned, laid out from the right edge leftwards; "pass" ends up right-most.
-            float x = 0f;
-            for (int i = list.Count - 1; i >= 0; i--)
-            {
-                OptionDto o = list[i];
-                string label = string.IsNullOrEmpty(o.label) ? o.id : o.label;
-                float width = Mathf.Clamp(70f + label.Length * 34f, 150f, 360f);
-                var btn = UiFactory.CreateButton(actionBar, "Action_" + o.id, label, ColorFor(o.type), 34, null);
-                UiFactory.Place((RectTransform)btn.transform, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-x, 0f), new Vector2(width, 84f));
-                if (o.type == "tsumo" || o.type == "ron")
-                {
-                    UiFactory.CreateRing(btn.transform, "Glow", Palette.LastDiscardRing, 26, 4, 4f);
-                    UiFactory.ButtonLabel(btn).fontStyle = FontStyle.Bold;
-                }
-                string id = o.id;
-                btn.onClick.AddListener(() => OnOptionClicked(id));
-                x += width + 14f;
-            }
-        }
-
-        static Color ColorFor(string type)
-        {
-            switch (type)
-            {
-                case "tsumo":
-                case "ron":
-                    return Palette.Coral;
-                case "pass":
-                    return Palette.Gray;
-                case "chi":
-                    return Palette.Butter;
-                default:
-                    return Palette.Sky;
-            }
-        }
-
         // ---------- Input ----------
 
         void OnTileClicked(int index)
@@ -970,6 +942,15 @@ namespace Manjong.Screens
             selectedIndex = index;
             RenderMyHand(DtoUtil.Player(view, view.mySeat), view);
             RenderHint(view);
+        }
+
+        void OnToggleTing()
+        {
+            if (!CanAct) return;
+            tingOn = !tingOn;
+            RenderMyHand(DtoUtil.Player(view, view.mySeat), view);
+            RenderHint(view);
+            actionPanel.Apply(view, CanAct, tingOn);
         }
 
         void OnOptionClicked(string actionId)

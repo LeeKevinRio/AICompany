@@ -258,14 +258,12 @@ namespace Manjong.Screens
             MeldDto[] melds = DtoUtil.Safe(p.melds);
             for (int m = 0; m < melds.Length; m++)
             {
-                if (melds[m] == null) continue;
+                if (melds[m] == null || DtoUtil.Safe(melds[m].tiles).Length == 0) continue;
                 x += groupGap;
-                string[] tiles = DtoUtil.Safe(melds[m].tiles);
-                for (int i = 0; i < tiles.Length; i++)
-                {
-                    PlaceAt(TileView.CreateFace(area, tiles[i], size), x);
-                    x += step;
-                }
+                // Same meld picture as on the table: claimed tile sideways, concealed kong outer tiles face down.
+                RectTransform box = TileView.CreateMeld(area, melds[m], size);
+                PlaceAt(box, x);
+                x += TileView.MeldWidth(melds[m], size) + 1f;
             }
 
             string[] flowers = DtoUtil.Safe(p.flowers);
