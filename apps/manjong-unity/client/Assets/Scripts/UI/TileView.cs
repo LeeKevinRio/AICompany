@@ -194,60 +194,77 @@ namespace Manjong.UI
             UiFactory.Stretch(veil.rectTransform);
         }
 
+        /// <summary>
+        /// "Same kind" highlight while a hand tile is selected: a pale yellow wash over the tile plus a thick amber
+        /// outline (the outline has 3:1 contrast against the mint table).
+        /// </summary>
+        public static void AddSameKindHighlight(RectTransform tile, TileSize size)
+        {
+            var wash = UiFactory.CreatePanel(tile, "SameKindWash", Palette.SameKindWash, size.radius);
+            UiFactory.Stretch(wash.rectTransform);
+            AddRing(tile, Palette.SameKindRing, size, Mathf.Max(3, Mathf.RoundToInt(size.width / 14f)));
+        }
+
+        /// <summary>Small pill sitting on a tile's top edge ("聽", "胡", "自摸"), poking "above" units over the top.</summary>
+        public static void AddBadge(RectTransform tile, string text, Color bg, float above)
+        {
+            float w = 18f + 22f * text.Length;
+            var pill = UiFactory.CreatePanel(tile, "Badge_" + text, bg, 12);
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, above - 28f), new Vector2(w, 28f));
+            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 12, 2, 0f);
+            var t = UiFactory.CreateLabel(pill.transform, "Text", text, 20, Palette.Ink, TextAnchor.MiddleCenter);
+            t.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
+        }
+
         // ---------- Melds ----------
 
-        /// <summary>Width a meld occupies: upright tiles plus one sideways tile (the claimed one), 1-unit gaps.</summary>
+        /// <summary>Width of a meld: every tile upright and equally spaced (1-unit gaps).</summary>
         public static float MeldWidth(MeldDto m, TileSize size)
         {
             if (m == null) return 0f;
             int n = DtoUtil.Safe(m.tiles).Length;
-            if (n == 0) return 0f;
-            bool sideways = HasSidewaysTile(m, n);
-            return (sideways ? (n - 1) * size.width + size.height : n * size.width) + (n - 1);
-        }
-
-        static bool HasSidewaysTile(MeldDto m, int n)
-        {
-            return m.type != "ankan" && m.claimedIndex >= 0 && m.claimedIndex < n;
+            return n == 0 ? 0f : n * size.width + (n - 1);
         }
 
         /// <summary>
         /// Builds one meld in a container of size (MeldWidth, size.height) whose children use top-left coordinates;
-        /// the caller positions the container. The claimed tile (claimedIndex) lies sideways and bottom-aligned,
-        /// as on a real table; a concealed kong shows its two outer tiles face down.
+        /// the caller positions the container. Tiles are upright in the server's order (for chi the claimed tile
+        /// is already in the middle); a concealed kong shows its two outer tiles face down.
+        /// Face-up tiles equal to "highlightCode" get the same-kind highlight.
         /// </summary>
-        public static RectTransform CreateMeld(Transform parent, MeldDto m, TileSize size)
+        public static RectTransform CreateMeld(Transform parent, MeldDto m, TileSize size, string highlightCode)
         {
             var box = UiFactory.CreateRect("Meld_" + DtoUtil.Safe(m.type), parent);
             box.sizeDelta = new Vector2(MeldWidth(m, size), size.height);
 
             string[] tiles = DtoUtil.Safe(m.tiles);
             bool concealed = m.type == "ankan" && tiles.Length == 4;
-            bool sideways = HasSidewaysTile(m, tiles.Length);
-            float x = 0f;
             for (int i = 0; i < tiles.Length; i++)
             {
-                if (sideways && i == m.claimedIndex)
-                {
-                    RectTransform t = CreateFace(box, tiles[i], size);
-                    t.anchorMin = new Vector2(0f, 1f);
-                    t.anchorMax = new Vector2(0f, 1f);
-                    t.pivot = new Vector2(0.5f, 0.5f);
-                    t.sizeDelta = size.Vector;
-                    t.localEulerAngles = new Vector3(0f, 0f, 90f);
-                    // Rotated footprint is height x width; centre it horizontally and sit it on the row's bottom edge.
-                    t.anchoredPosition = new Vector2(x + size.height * 0.5f, -(size.height - size.width * 0.5f));
-                    x += size.height + 1f;
-                }
-                else
-                {
-                    bool faceDown = concealed && (i == 0 || i == 3);
-                    RectTransform t = faceDown ? CreateBack(box, size) : CreateFace(box, tiles[i], size);
-                    UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, 0f), size.Vector);
-                    x += size.width + 1f;
-                }
+                bool faceDown = concealed && (i == 0 || i == 3);
+                RectTransform t = faceDown ? CreateBack(box, size) : CreateFace(box, tiles[i], size);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * (size.width + 1f), 0f), size.Vector);
+                if (!faceDown && !string.IsNullOrEmpty(highlightCode) && tiles[i] == highlightCode) AddSameKindHighlight(t, size);
             }
             return box;
+        }
+
+        /// <summary>Visible copies of a kind in a meld: everything except the two face-down tiles of a concealed kong.</summary>
+        /// <summary>
+        /// Copies of `code` accounted for by this meld. A concealed kong shows its two inner tiles face up, so
+        /// its kind is public and all four copies are known to be used (same rule as the server's `left`).
+        /// </summary>
+        public static int VisibleCount(MeldDto m, string code)
+        {
+            if (m == null) return 0;
+            string[] tiles = DtoUtil.Safe(m.tiles);
+            int n = 0;
+            for (int i = 0; i < tiles.Length; i++)
+            {
+                if (tiles[i] == code) n++;
+            }
+            return n;
         }
     }
 }

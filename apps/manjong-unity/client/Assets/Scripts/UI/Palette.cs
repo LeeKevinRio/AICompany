@@ -51,6 +51,9 @@ namespace Manjong.UI
         public static readonly Color LastDiscardRing = Hex(0xD9, 0x48, 0x0F);
         public static readonly Color SelectRing = Hex(0x2F, 0x80, 0xC9);
         public static readonly Color TurnRing = Hex(0xD9, 0x48, 0x0F);
+        /// <summary>Same-kind highlight while choosing a discard: amber outline (3.74:1 on Mint, 4.68:1 on the ivory tile) + pale yellow wash.</summary>
+        public static readonly Color SameKindRing = Hex(0x9A, 0x62, 0x00);
+        public static readonly Color SameKindWash = new Color(1f, 0.86f, 0.15f, 0.38f);
 
         public static readonly Color Dim = new Color(0.20f, 0.13f, 0.09f, 0.55f);
         public static readonly Color Transparent = new Color(0f, 0f, 0f, 0f);

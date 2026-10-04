@@ -114,6 +114,8 @@ namespace Manjong.Screens
         bool awaiting;
         bool fastForward;
         int selectedIndex = -1;
+        /// <summary>Kind of the selected hand tile; every visible copy on the table is highlighted ("" = none).</summary>
+        string highlightCode = "";
         string myHandContentSig;
         readonly List<string> handOrder = new List<string>();
 
@@ -123,6 +125,15 @@ namespace Manjong.Screens
         {
             app = owner;
             root = (RectTransform)transform;
+
+            // Transparent full-screen catcher behind everything: clicking empty space cancels the selection.
+            var catcher = UiFactory.CreateBlocker(root, "DeselectCatcher", Palette.Transparent);
+            var catcherBtn = catcher.gameObject.AddComponent<Button>();
+            catcherBtn.transition = Selectable.Transition.None;
+            var catcherNav = catcherBtn.navigation;
+            catcherNav.mode = Navigation.Mode.None;
+            catcherBtn.navigation = catcherNav;
+            catcherBtn.onClick.AddListener(ClearSelection);
 
             BuildTable();
             for (int rel = 0; rel < 4; rel++) seats[rel] = BuildSeat(rel);
@@ -515,16 +526,20 @@ namespace Manjong.Screens
             lastRenderFinal = isFinal;
             int mySeat = v.mySeat;
 
+            // My hand first: it settles the selection and therefore which kind is highlighted everywhere else.
+            PlayerView mine = DtoUtil.Player(v, mySeat);
+            if (mine != null) RenderMyHand(mine, v);
+            else highlightCode = "";
+
             for (int seat = 0; seat < 4; seat++)
             {
                 int rel = (seat - mySeat + 4) % 4;
                 PlayerView p = DtoUtil.Player(v, seat);
                 if (p == null) continue;
                 RenderInfo(rel, p, v);
-                RenderFlowers(rel, p);
+                RenderFlowers(rel, p, v);
                 RenderMelds(rel, p);
-                if (rel == 0) RenderMyHand(p, v);
-                else RenderOtherHand(rel, p);
+                if (rel != 0) RenderOtherHand(rel, p, v);
                 RenderRiver(rel, p, v);
             }
 
@@ -639,10 +654,12 @@ namespace Manjong.Screens
             {
                 if (selectedIndex >= 0 && selectedIndex < handOrder.Count)
                 {
-                    OptionDto opt = DtoUtil.FindOption(v, "discard:" + handOrder[selectedIndex]);
+                    string code = handOrder[selectedIndex];
+                    OptionDto opt = DtoUtil.FindOption(v, "discard:" + code);
                     WaitDto[] waits = opt != null ? DtoUtil.Safe(opt.waits) : new WaitDto[0];
                     string list = FormatWaits(waits);
-                    text = list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌";
+                    text = (list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌") + "\n" +
+                           TileFace.Name(code) + "：場上已出現 " + CountOnTable(v, code) + " 張，你手上 " + CountInHand(code) + " 張";
                     listening = list.Length > 0;
                 }
                 else if (tingOn && AnyDiscardWaits(v))
@@ -669,11 +686,44 @@ namespace Manjong.Screens
             hintBar.gameObject.SetActive(show);
             if (!show) return;
             // Two lines (taller bar, growing upward) only for the full 聽 list; it stays below the left seat panel.
-            bool twoLines = tingOn && canDiscard && selectedIndex < 0;
+            bool twoLines = canDiscard && (selectedIndex >= 0 || tingOn);
             hintBar.rectTransform.sizeDelta = new Vector2(HintW, twoLines ? HintTallH : HintH);
             hintText.text = text;
             hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
             hintRing.gameObject.SetActive(listening);
+        }
+
+        /// <summary>
+        /// Visible copies of a kind on the table: every river plus every meld's face-up tiles (a concealed kong's
+        /// two face-down tiles are not counted). Flowers are a different kind and never match.
+        /// </summary>
+        static int CountOnTable(GameView v, string code)
+        {
+            int n = 0;
+            PlayerView[] players = DtoUtil.Safe(v.players);
+            for (int i = 0; i < players.Length; i++)
+            {
+                PlayerView p = players[i];
+                if (p == null) continue;
+                string[] discards = DtoUtil.Safe(p.discards);
+                for (int k = 0; k < discards.Length; k++)
+                {
+                    if (discards[k] == code) n++;
+                }
+                MeldDto[] melds = DtoUtil.Safe(p.melds);
+                for (int k = 0; k < melds.Length; k++) n += TileView.VisibleCount(melds[k], code);
+            }
+            return n;
+        }
+
+        int CountInHand(string code)
+        {
+            int n = 0;
+            for (int i = 0; i < handOrder.Count; i++)
+            {
+                if (handOrder[i] == code) n++;
+            }
+            return n;
         }
 
         // ----- Info card -----
@@ -725,11 +775,14 @@ namespace Manjong.Screens
 
         // ----- Flowers -----
 
-        void RenderFlowers(int rel, PlayerView p)
+        void RenderFlowers(int rel, PlayerView p, GameView v)
         {
             SeatUi s = seats[rel];
             string[] flowers = DtoUtil.Safe(p.flowers);
-            string sig = string.Join(",", flowers);
+            // Flower win (八仙過海 / 七搶一): the winning flower is marked here instead of next to the hand.
+            WinSplit split = WinSplit.For(v, p, null, TileFace.IsFlower(v.hasResult && v.result != null ? v.result.winningTile : ""));
+            string mark = split.IsFlowerWin ? split.WinningTile + "@" + split.FlowerIndex : "";
+            string sig = string.Join(",", flowers) + "|" + mark;
             if (sig == s.flowerSig) return;
             s.flowerSig = sig;
             UiFactory.DestroyChildren(s.flowers);
@@ -739,7 +792,23 @@ namespace Manjong.Screens
             {
                 var t = TileView.CreateFace(s.flowers, flowers[i], size);
                 UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * size.width, 0f), size.Vector); // fixed grid, 8 flowers = 8 widths
+                if (split.IsFlowerWin && i == split.FlowerIndex) MarkWinningTile(t, size, split.SelfDraw, 4f);
             }
+            if (split.IsFlowerWin && split.FlowerIndex < 0)
+            {
+                // The winner does not hold that flower (七搶一: they hold 7, someone else drew the 8th): show it in
+                // the next flower cell, which is still inside the fixed 8-cell flower grid.
+                var t = TileView.CreateFace(s.flowers, split.WinningTile, size);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(Mathf.Min(flowers.Length, 7) * size.width, 0f), size.Vector);
+                MarkWinningTile(t, size, split.SelfDraw, 4f);
+            }
+        }
+
+        /// <summary>Winning tile: thick coral outline plus a "胡" / "自摸" badge.</summary>
+        static void MarkWinningTile(RectTransform tile, TileSize size, bool selfDraw, float badgeAbove)
+        {
+            TileView.AddRing(tile, Palette.LastDiscardRing, size, Mathf.Max(3, Mathf.RoundToInt(size.width / 15f)));
+            TileView.AddBadge(tile, selfDraw ? "自摸" : "胡", Palette.Coral, badgeAbove);
         }
 
         // ----- Melds -----
@@ -752,23 +821,24 @@ namespace Manjong.Screens
             for (int i = 0; i < melds.Length; i++)
             {
                 if (melds[i] == null) continue;
-                sb.Append(melds[i].type).Append(':').Append(string.Join(",", DtoUtil.Safe(melds[i].tiles))).Append('@').Append(melds[i].claimedIndex).Append(';');
+                sb.Append(melds[i].type).Append(':').Append(string.Join(",", DtoUtil.Safe(melds[i].tiles))).Append(';');
             }
+            sb.Append('#').Append(highlightCode);
             string sig = sb.ToString();
             if (sig == s.meldSig) return;
             s.meldSig = sig;
             UiFactory.DestroyChildren(s.melds);
 
-            if (rel == 0) LayoutMelds(s.melds, melds, TileSizes.Small, 12f);
-            else if (rel == 2) LayoutMelds(s.melds, melds, TileSizes.Mini, 10f);
-            else LayoutMelds(s.melds, melds, TileSizes.Mini, 10f);
+            if (rel == 0) LayoutMelds(s.melds, melds, TileSizes.Small, 12f, highlightCode);
+            else if (rel == 2) LayoutMelds(s.melds, melds, TileSizes.Mini, 10f, highlightCode);
+            else LayoutMelds(s.melds, melds, TileSizes.Mini, 10f, highlightCode);
         }
 
         /// <summary>
         /// Lays melds out from the area's fixed top-left corner, left to right, wrapping to a new row only when the
         /// next meld would cross the area's right edge. Earlier melds never move when a new one is added.
         /// </summary>
-        static void LayoutMelds(RectTransform area, MeldDto[] melds, TileSize size, float groupGap)
+        static void LayoutMelds(RectTransform area, MeldDto[] melds, TileSize size, float groupGap, string highlight)
         {
             float areaW = area.sizeDelta.x;
             float x = 0f;
@@ -783,7 +853,7 @@ namespace Manjong.Screens
                     x = 0f;
                     y -= size.height + 4f;
                 }
-                RectTransform box = TileView.CreateMeld(area, m, size);
+                RectTransform box = TileView.CreateMeld(area, m, size, highlight);
                 UiFactory.Place(box, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, y), box.sizeDelta);
                 x += w + groupGap;
             }
@@ -791,38 +861,40 @@ namespace Manjong.Screens
 
         // ----- Hands -----
 
-        void RenderOtherHand(int rel, PlayerView p)
+        void RenderOtherHand(int rel, PlayerView p, GameView v)
         {
             SeatUi s = seats[rel];
-            string sig = p.handCount.ToString();
+            List<string> revealed = TileFace.Sorted(p.hand); // only non-empty at hand end
+            WinSplit split = WinSplit.For(v, p, revealed, TileFace.IsFlower(v.hasResult && v.result != null ? v.result.winningTile : ""));
+            bool showWin = split.HasWinningTile && !split.IsFlowerWin;
+            string sig = p.handCount + "|" + string.Join(",", split.Hand) + "|" + (showWin ? split.WinningTile : "");
             if (sig == s.handSig) return;
             s.handSig = sig;
             UiFactory.DestroyChildren(s.hand);
 
             TileSize size = TileSizes.Back;
-            int count = Mathf.Max(0, p.handCount);
-            if (rel == 2)
+            int count = revealed.Count > 0 ? split.Hand.Count : Mathf.Max(0, p.handCount);
+            for (int i = 0; i < count; i++)
             {
-                // Single row from a fixed left edge (not re-centred when the count changes).
-                float step = size.width + 1f;
-                for (int i = 0; i < count; i++)
-                {
-                    var t = TileView.CreateBack(s.hand, size);
-                    UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * step, 0f), size.Vector);
-                }
+                RectTransform t = revealed.Count > 0 ? TileView.CreateFace(s.hand, split.Hand[i], size) : TileView.CreateBack(s.hand, size);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), OtherHandCell(rel, i, size), size.Vector);
             }
-            else
+            if (showWin)
             {
-                // Compact grid, 8 per row.
-                const int cols = 8;
-                for (int i = 0; i < count; i++)
-                {
-                    int c = i % cols;
-                    int r = i / cols;
-                    var t = TileView.CreateBack(s.hand, size);
-                    UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(c * (size.width + 2f), -r * (size.height + 2f)), size.Vector);
-                }
+                // Fixed cell well apart from the hand: after slot 17 on the top row, the last grid cell on the sides.
+                var t = TileView.CreateFace(s.hand, split.WinningTile, size);
+                Vector2 pos = rel == 2 ? new Vector2(MaxSlots * (size.width + 1f) + size.width * 0.5f, 0f) : OtherHandCell(rel, 23, size);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), pos, size.Vector);
+                MarkWinningTile(t, size, split.SelfDraw, rel == 2 ? 12f : 4f);
             }
+        }
+
+        /// <summary>Fixed cell positions: one row from a fixed left edge (top), or an 8-column grid (sides).</summary>
+        static Vector2 OtherHandCell(int rel, int i, TileSize size)
+        {
+            if (rel == 2) return new Vector2(i * (size.width + 1f), 0f);
+            const int cols = 8;
+            return new Vector2((i % cols) * (size.width + 2f), -(i / cols) * (size.height + 2f));
         }
 
         void RenderMyHand(PlayerView p, GameView v)
@@ -831,6 +903,21 @@ namespace Manjong.Screens
             List<string> sorted = TileFace.Sorted(p.hand);
             string drawn = DtoUtil.Safe(p.drawnTile);
             bool canDiscard = CanAct && DtoUtil.HasDiscardOption(v);
+
+            // Hand end: if I won, take the winning tile out of the revealed hand and show it in the drawn slot.
+            string winTile = "";
+            bool winSelfDraw = false;
+            if (v.phase != "playing")
+            {
+                WinSplit split = WinSplit.For(v, p, sorted, TileFace.IsFlower(v.hasResult && v.result != null ? v.result.winningTile : ""));
+                if (split.HasWinningTile && !split.IsFlowerWin)
+                {
+                    sorted = split.Hand;
+                    winTile = split.WinningTile;
+                    winSelfDraw = split.SelfDraw;
+                    drawn = "";
+                }
+            }
 
             var sb = new StringBuilder();
             for (int i = 0; i < sorted.Count; i++) sb.Append(sorted[i]).Append(',');
@@ -846,6 +933,7 @@ namespace Manjong.Screens
                     }
                 }
             }
+            sb.Append("|win:").Append(winTile);
             string contentSig = sb.ToString();
 
             // Hand contents or playability changed: any previous selection is meaningless now.
@@ -855,15 +943,16 @@ namespace Manjong.Screens
                 selectedIndex = -1;
                 tingOn = false;
             }
+            handOrder.Clear();
+            handOrder.AddRange(sorted);
+            if (drawn.Length > 0) handOrder.Add(drawn);
+            if (selectedIndex >= handOrder.Count || !canDiscard) selectedIndex = -1;
+            highlightCode = selectedIndex >= 0 ? handOrder[selectedIndex] : "";
+
             string sig = contentSig + "#" + selectedIndex + "#" + tingOn;
             if (sig == s.handSig) return;
             s.handSig = sig;
             UiFactory.DestroyChildren(s.hand);
-
-            handOrder.Clear();
-            handOrder.AddRange(sorted);
-            if (drawn.Length > 0) handOrder.Add(drawn);
-            if (selectedIndex >= handOrder.Count) selectedIndex = -1;
 
             TileSize size = TileSizes.Large;
             int n = handOrder.Count;
@@ -886,9 +975,11 @@ namespace Manjong.Screens
                 bool discardable = opt != null;
                 if (canDiscard && !discardable) TileView.AddVeil(tile, size);
                 if (selected) TileView.AddRing(tile, Palette.SelectRing, size, 4);
+                else if (highlightCode.Length > 0 && code == highlightCode) TileView.AddSameKindHighlight(tile, size);
                 bool readyDiscard = discardable && DtoUtil.Safe(opt.waits).Length > 0;
                 if (readyDiscard && tingOn) TileView.AddRing(tile, Palette.Coral, size, 5);
-                if (readyDiscard) AddWaitBadge(tile, size);
+                // Pokes 10 units above the tile top so a lifted tile's badge stays below my meld row.
+                if (readyDiscard) TileView.AddBadge(tile, "聽", Palette.Coral, 10f);
 
                 if (discardable)
                 {
@@ -903,18 +994,16 @@ namespace Manjong.Screens
                     btn.onClick.AddListener(() => OnTileClicked(index));
                 }
             }
-        }
 
-        /// <summary>Small "聽" pill sitting on the top edge of a tile: discarding it leaves me ready.</summary>
-        static void AddWaitBadge(RectTransform tile, TileSize size)
-        {
-            var pill = UiFactory.CreatePanel(tile, "WaitBadge", Palette.Coral, 12);
-            // Pokes 10 units above the tile top so a lifted tile's badge stays below my meld row.
-            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, -18f), new Vector2(40f, 28f));
-            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 12, 2, 0f);
-            var t = UiFactory.CreateLabel(pill.transform, "Text", "聽", 20, Palette.Ink, TextAnchor.MiddleCenter);
-            t.fontStyle = FontStyle.Bold;
-            UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
+            if (winTile.Length > 0)
+            {
+                var slot = UiFactory.CreateRect("WinningTile", s.hand);
+                UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(DrawnSlotX, 0f), size.Vector);
+                var tile = TileView.CreateFace(slot, winTile, size);
+                UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), Vector2.zero, size.Vector);
+                TileView.AddRing(tile, Palette.LastDiscardRing, size, 5);
+                TileView.AddBadge(tile, winSelfDraw ? "自摸" : "胡", Palette.Coral, 10f);
+            }
         }
 
         // ----- River -----
@@ -924,7 +1013,7 @@ namespace Manjong.Screens
             string[] discards = DtoUtil.Safe(p.discards);
             bool highlightLast = discards.Length > 0 && v.lastDiscardSeat == p.seat &&
                                  discards[discards.Length - 1] == v.lastDiscardTile;
-            string sig = string.Join(",", discards) + "|" + highlightLast;
+            string sig = string.Join(",", discards) + "|" + highlightLast + "|" + highlightCode;
             if (sig == riverSigs[rel]) return;
             riverSigs[rel] = sig;
 
@@ -939,6 +1028,7 @@ namespace Manjong.Screens
                 var t = TileView.CreateFace(area, discards[i], size);
                 UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f),
                     new Vector2(c * (size.width + RiverGap), -r * (size.height + RiverGap)), size.Vector);
+                if (discards[i] == highlightCode) TileView.AddSameKindHighlight(t, size);
                 if (highlightLast && i == discards.Length - 1) TileView.AddRing(t, Palette.LastDiscardRing, size, 4);
             }
         }
@@ -959,8 +1049,15 @@ namespace Manjong.Screens
                 return;
             }
             selectedIndex = index;
-            RenderMyHand(DtoUtil.Player(view, view.mySeat), view);
-            RenderHint(view);
+            Render(view, lastRenderFinal); // regions are signature-gated: only the hand, the hint and matching areas rebuild
+        }
+
+        /// <summary>Clicking empty space: drop the selection and every same-kind highlight.</summary>
+        void ClearSelection()
+        {
+            if (selectedIndex < 0 || view == null) return;
+            selectedIndex = -1;
+            Render(view, lastRenderFinal);
         }
 
         void OnToggleTing()
