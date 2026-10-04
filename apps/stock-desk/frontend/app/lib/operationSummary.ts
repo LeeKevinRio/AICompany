@@ -265,9 +265,8 @@ function buildRequiredElements(
     confidence: card.confidence,
     confidenceMeaning: card.confidence_meaning,
     // §2 item 3 / AC-C8.2: the literal YYYY-MM-DD trading date behind the
-    // evaluation, NOT `card.as_of` (that is the latest bar's *retrieval*
-    // timestamp, a full ISO 8601 datetime — see `app/signals/frame.py
-    // ::provenance`). Under `cached_stale`/backup-source conditions the
+    // evaluation, NOT `card.as_of` (row-level provenance; not rendered,
+    // ADR-0019 D-5 (b)). Under `cached_stale`/backup-source conditions the
     // retrieval time and the bar's own trading date can genuinely differ, so
     // this must come from `response.data.last_bar_date` (verified against
     // the same `DataMeta` the bars endpoint publishes), falling back to the

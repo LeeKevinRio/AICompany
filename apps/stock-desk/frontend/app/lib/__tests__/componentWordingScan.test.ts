@@ -2553,6 +2553,17 @@ describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現�
     });
   }
 
+  // ADR-0019 D-5 (b)：建議卡不得再渲染或讀取 row-level `advice.as_of`（日線取得時間已移除）。
+  it("AdviceCardView.tsx（去註解後）不得含「取得」", () => {
+    expect(stripComments(read("../../position/[symbol]/AdviceCardView.tsx"))).not.toContain("取得");
+  });
+
+  it("AdviceCardView.tsx（去註解後）不得讀取 advice.as_of", () => {
+    const code = stripComments(read("../../position/[symbol]/AdviceCardView.tsx"));
+    expect(code).not.toContain("advice.as_of");
+    expect(code).not.toContain(".as_of}");
+  });
+
   // L-10b（風控核可字面，唯一版型）：`資料截至：日線 {D_b}｜指標 {D_s}｜規則評估 {D_a}`。
   describe("buildDataAsOfLine（E-4，L-10b）", () => {
     const thisYear = new Date().getFullYear();
@@ -2621,10 +2632,10 @@ describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現�
     });
   });
 
-  it("新字面就位：日線取得時間（建議卡／槓桿章節）、資料來源前綴（面板／page）", () => {
-    expect(stripComments(read("../../position/[symbol]/AdviceCardView.tsx"))).toContain(
-      "規則版本 {advice.rules_version}｜日線取得時間：{formatDateTime(advice.as_of)}｜觀察區間：",
-    );
+  it("新字面就位：日線取得時間（槓桿章節）、資料來源前綴（面板／page）", () => {
+    const adviceCode = stripComments(read("../../position/[symbol]/AdviceCardView.tsx"));
+    expect(adviceCode).toContain("規則版本 {advice.rules_version}｜觀察區間：");
+    expect(adviceCode).not.toContain("日線取得時間");
     const lev = stripComments(read("../../position/[symbol]/LeverageChapterView.tsx"));
     expect(lev).toContain(
       "日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}",

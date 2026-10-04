@@ -138,6 +138,24 @@ describe("AdviceCardView 資料截至行（風控 D-1 (b)）", () => {
     expect(html.startsWith('<div class="rounded-lg border border-neutral-800 p-5"><p class="text-xs text-neutral-500">規則版本')).toBe(true);
   });
 
+  it("版本行整行字面（ADR-0019 D-5 (b)）：無「日線取得時間」、不渲染 as_of，且在資料截至行之後", () => {
+    const html = renderCard("2020-03-05");
+    // Static markup inserts `<!-- -->` between adjacent text nodes; drop them to compare the visible line.
+    const visible = html.replace(/<!-- -->/g, "");
+    const start = visible.indexOf("規則版本");
+    const line = visible.slice(start, visible.indexOf("</p>", start));
+    expect(line).toBe("規則版本 1.1.0｜觀察區間：2031-01-02 ~ 2031-02-09（20 根日線）");
+    expect(visible).toContain(
+      '<p class="text-xs text-neutral-500">規則版本 1.1.0｜觀察區間：2031-01-02 ~ 2031-02-09（20 根日線）</p>',
+    );
+    expect(visible).not.toContain("日線取得時間");
+    expect(visible).not.toContain("取得");
+    expect(visible).not.toContain("2031-07-08");
+    expect(visible).not.toContain("04:00");
+    expect(visible.indexOf("資料截至")).toBeGreaterThan(-1);
+    expect(visible.indexOf("資料截至")).toBeLessThan(start);
+  });
+
   it("日期只取 lastBarDate：不誤用 as_of 或 observation_window.end", () => {
     const html = renderCard("2020-03-05");
     const start = html.lastIndexOf("<p", html.indexOf("資料截至"));
