@@ -225,8 +225,9 @@ export const KEY_LEVELS_BASIS_TARGET: BasisItem = {
  * 決策卡（`work/stock-desk-一眼一句簡化-派工單.md` §5.4／視覺規範 B.7）required
  * 條件 3（風控 2026-09-19 預審 APPROVE_WITH_CONDITIONS）：決策卡的停損／停利
  * 距離小字是新推導數字，需在本組（關鍵價位參考）補一條算式行——分母為最新
- * 收盤，與停損／停利參考本身「以基準價推得」的分母不同，qualifier 逐字揭露
- * 兩者基準不同這件事。順序：緊接 `KEY_LEVELS_BASIS_TARGET` 之後、
+ * 收盤；風控 2026-10-04 核可補兩行越過時的算式（分母改為該參考本身），
+ * qualifier 改為逐字揭露分母依條件而定、不是持倉平均成本、距離亦非持倉損益。
+ * 順序：緊接 `KEY_LEVELS_BASIS_TARGET` 之後、
  * `KEY_LEVELS_BASIS_ANCHOR` 之前（`buildKeyLevelsFooterItems` 同步）。
  */
 export const KEY_LEVELS_BASIS_CLOSE_DISTANCE: BasisItem = {
@@ -234,9 +235,12 @@ export const KEY_LEVELS_BASIS_CLOSE_DISTANCE: BasisItem = {
     "距最新收盤：",
     "停損距離=(停損參考-最新收盤)/最新收盤×100%",
     "停利距離=(停利參考-最新收盤)/最新收盤×100%",
+    "最新收盤高於停利參考、或低於停損參考時，該項距離改為：",
+    "距離=(最新收盤-該參考)/該參考×100%",
   ],
   qualifier:
-    "停損參考與停利參考皆由基準價推得，此處距離之分母為最新收盤，兩者基準不同；" +
+    "停損參考與停利參考皆由基準價推得；此處距離之分母依上列條件為最新收盤或該參考本身，" +
+    "不是持倉平均成本，距離亦非持倉損益；" +
     "距離為算式結果，不代表價格會依此幅度到達任一價位。",
 };
 

@@ -198,11 +198,15 @@ import { RiskGaugeView } from "../../components/RiskGauge";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../types";
 import {
   DECISION_CARD_ARIA_LABEL,
+  DECISION_CARD_CROSSED_DISCLOSURE,
+  DECISION_CARD_CROSSED_STOP_PREFIX,
+  DECISION_CARD_CROSSED_TARGET_PREFIX,
   DECISION_CARD_DISTANCE_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
   buildDecisionCardDistance,
+  pickDecisionCardDistance,
 } from "../decisionCardWording";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
@@ -846,17 +850,24 @@ describe("KeyLevelsPanel 定稿字面", () => {
     });
     // 決策卡 required 條件 3（`work/stock-desk-一眼一句簡化-派工單.md` §5.4）：
     // 距最新收盤算式行＋qualifier，緊接 `KEY_LEVELS_BASIS_TARGET` 之後。
+    // 風控 2026-10-04（`work/reviews/2026-10-04-決策卡-已越過水位-風控審查.md`）required 3：
+    // 既有三行一字不動，同一 <li> 補兩行，qualifier 改為核可修正版。
     expect(KEY_LEVELS_BASIS_CLOSE_DISTANCE).toEqual({
       formula: [
         "距最新收盤：",
         "停損距離=(停損參考-最新收盤)/最新收盤×100%",
         "停利距離=(停利參考-最新收盤)/最新收盤×100%",
+        "最新收盤高於停利參考、或低於停損參考時，該項距離改為：",
+        "距離=(最新收盤-該參考)/該參考×100%",
       ],
       qualifier:
-        "停損參考與停利參考皆由基準價推得，此處距離之分母為最新收盤，兩者基準不同；" +
+        "停損參考與停利參考皆由基準價推得；此處距離之分母依上列條件為最新收盤或該參考本身，不是持倉平均成本，距離亦非持倉損益；" +
         "距離為算式結果，不代表價格會依此幅度到達任一價位。",
     });
     expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).toContain("不代表價格會依此幅度到達任一價位");
+    expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).toContain("距離亦非持倉損益");
+    // The superseded sentence must be gone.
+    expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).not.toContain("此處距離之分母為最新收盤，兩者基準不同");
     expect(KEY_LEVELS_BASIS_ANCHOR).toEqual({
       formula: [
         "基準價：",
@@ -1532,6 +1543,37 @@ describe("揭露下沉頁尾 守門", () => {
     expect(buildSummaryFooterItems(noPrice)).toEqual([]);
   });
 
+  it("風控 2026-10-04 required 3：越過算式兩行與 qualifier 同一 <li>、同字級同色；頁尾仍 11 條", () => {
+    const html = renderToStaticMarkup(
+      createElement(PageFooterDisclosures, {
+        groups: [{ title: "關鍵價位參考", items: [KEY_LEVELS_BASIS_CLOSE_DISTANCE] }],
+      }),
+    );
+    const lis = html.match(/<li[ >][\s\S]*?<\/li>/g) ?? [];
+    expect(lis).toHaveLength(1);
+    const li = lis[0]!;
+    expect(li.startsWith('<li class="text-xs text-neutral-400">')).toBe(true);
+    for (const line of KEY_LEVELS_BASIS_CLOSE_DISTANCE.formula) {
+      expect(li).toContain(
+        `<span class="block whitespace-pre-wrap font-mono text-xs text-neutral-400">${line}</span>`,
+      );
+    }
+    expect(li).toContain(
+      `<span class="block text-xs text-neutral-400">${KEY_LEVELS_BASIS_CLOSE_DISTANCE.qualifier}</span>`,
+    );
+    for (const forbidden of ["title=", "opacity", "sr-only", "rose-", "red-", "green-", "emerald-"]) {
+      expect(li).not.toContain(forbidden);
+    }
+    // Footer item count is unchanged (still 11 basis items), see the builder test above.
+    const bars: Bar[] = Array.from({ length: 80 }, (_, i) => ({
+      date: `2026-0${1 + Math.floor(i / 28)}-${String(1 + (i % 28)).padStart(2, "0")}`,
+      open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
+    }));
+    const items = buildKeyLevelsFooterItems(bars, null, "close-not-held");
+    expect(items.slice(9, 20)).toHaveLength(11);
+    expect(items).toContain(KEY_LEVELS_BASIS_CLOSE_DISTANCE);
+  });
+
   it("P2 落地條件隨句移動：頁尾算式行與限定語同 <li>、同字級同顏色，font-mono 只在算式行", () => {
     expect(footerSrc).toMatch(/className="block whitespace-pre-wrap font-mono text-xs text-neutral-400"/);
     expect(footerSrc).toMatch(/item\.qualifier !== null && <span className="block text-xs text-neutral-400">/);
@@ -2178,6 +2220,54 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
       assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
       expect(findBareRealtimeClaims(text)).toEqual([]);
     }
+  });
+
+  it("風控 2026-10-04 required 3：越過句兩個前綴與揭露行逐字釘住（含尾空白），無禁用詞、無裸即時宣稱", () => {
+    expect(DECISION_CARD_CROSSED_TARGET_PREFIX).toBe("最新收盤高於此參考水位 ");
+    expect(DECISION_CARD_CROSSED_STOP_PREFIX).toBe("最新收盤低於此參考水位 ");
+    expect(DECISION_CARD_CROSSED_DISCLOSURE).toBe("上方動作由規則判斷，規則未讀取停損參考與停利參考。");
+    const samples = [
+      DECISION_CARD_CROSSED_TARGET_PREFIX,
+      DECISION_CARD_CROSSED_STOP_PREFIX,
+      DECISION_CARD_CROSSED_DISCLOSURE,
+      pickDecisionCardDistance("target", 1305, 1191.62, true).text,
+      pickDecisionCardDistance("stop", 900, 945.08, true).text,
+    ];
+    for (const text of samples) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+      for (const banned of ["已高於", "已低於", "越過", "已達", "觸發", "跌破此", "此水位 "]) {
+        expect(text).not.toContain(banned);
+      }
+    }
+  });
+
+  it("風控 2026-10-04 required 1：pickDecisionCardDistance 逐字輸出；分母為該參考本身；原值嚴格比較；非 cost 一律不出越過句", () => {
+    expect(pickDecisionCardDistance("target", 1305, 1191.62, true)).toEqual({
+      text: "最新收盤高於此參考水位 +9.5%",
+      crossed: true,
+    });
+    expect(pickDecisionCardDistance("stop", 900, 945.08, true)).toEqual({
+      text: "最新收盤低於此參考水位 -4.8%",
+      crossed: true,
+    });
+    // Equality is the original branch; so is the non-crossing side of each level.
+    expect(pickDecisionCardDistance("target", 116, 116, true)).toEqual({ text: "距最新收盤 0.0%", crossed: false });
+    expect(pickDecisionCardDistance("stop", 92, 92, true)).toEqual({ text: "距最新收盤 0.0%", crossed: false });
+    expect(pickDecisionCardDistance("target", 100, 116, true).crossed).toBe(false);
+    expect(pickDecisionCardDistance("stop", 100, 92, true).crossed).toBe(false);
+    // Raw value above but rounds to zero: crossed sentence prints 0.0%.
+    expect(pickDecisionCardDistance("target", 116.01, 116, true).text).toBe("最新收盤高於此參考水位 0.0%");
+    expect(pickDecisionCardDistance("stop", 91.99, 92, true).text).toBe("最新收盤低於此參考水位 0.0%");
+    // allowCrossed=false (anchor is not the cost) never yields a crossed sentence.
+    expect(pickDecisionCardDistance("target", 1305, 1191.62, false)).toEqual({
+      text: buildDecisionCardDistance(((1191.62 - 1305) / 1305) * 100),
+      crossed: false,
+    });
+    expect(pickDecisionCardDistance("stop", 900, 945.08, false).crossed).toBe(false);
+    // Source: the percentage still comes from fmtSigned, never a second formatter.
+    const src = read("../decisionCardWording.ts");
+    expect(src).not.toMatch(/function fmtSigned|toFixed/);
   });
 
   it("風控 2026-10-03 第 3 項：失效條件兩個前綴逐字比對（全形冒號），且無禁用詞、無裸即時宣稱", () => {

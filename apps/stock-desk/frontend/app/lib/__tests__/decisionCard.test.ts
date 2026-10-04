@@ -12,8 +12,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse, Bar } from "../types";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
+import { computeKeyLevels } from "../keyLevels";
 import {
   DECISION_CARD_ARIA_LABEL,
+  DECISION_CARD_CROSSED_DISCLOSURE,
   DECISION_CARD_INVALIDATION_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
@@ -794,5 +796,140 @@ describe("DecisionCardBody — 失效條件行（BLOCKING 1／3／5）", () => {
       expect(html).not.toContain("（規則一致性與資料完整度）");
       expect(html).not.toMatch(/信心 (?:<!-- -->)?[低中高]（/);
     }
+  });
+});
+
+/**
+ * Risk review 2026-10-04 (`work/reviews/2026-10-04-決策卡-已越過水位-風控審查.md`)
+ * required 2: crossed-level small print and the conditional disclosure line.
+ * A single bar (< 15 bars, so no ATR) makes the references deterministic:
+ * stop = avgCost x 0.92, target = avgCost + 2 x (avgCost - stop) = avgCost x 1.16.
+ */
+describe("DecisionCardBody — crossed reference levels (risk review 2026-10-04)", () => {
+  const DISCLOSURE_P = `<p class="mt-2 text-xs text-neutral-400">${DECISION_CARD_CROSSED_DISCLOSURE}</p>`;
+  const BANNED = ["已高於", "已低於", "越過", "已達", "觸發", "跌破此", "此水位 "];
+
+  /** Small-print texts of the stop and target cells, in DOM order. */
+  function distances(html: string): string[] {
+    return [
+      ...html.matchAll(/<p class="mt-0\.5 text-xs text-neutral-400">([^<]*)<\/p>/g),
+    ].map((m) => m[1]!);
+  }
+
+  function renderCost(close: number, avgCost: number): string {
+    return renderCard({
+      response: makeResponse(),
+      bars: makeBars(1, () => close),
+      anchorSource: "cost",
+      avgCost,
+    });
+  }
+
+  function expectNoBanned(html: string): void {
+    for (const banned of BANNED) expect(html).not.toContain(banned);
+  }
+
+  it("1305 vs target 1191.62: target cell prints 最新收盤高於此參考水位 +9.5% (denominator = target); stop cell keeps 距最新收盤", () => {
+    // avgCost 1027.25 -> stop 945.07, target 1191.61.
+    const html = renderCost(1305, 1027.25);
+    expect(distances(html)).toEqual([
+      "距最新收盤 -27.6%",
+      "最新收盤高於此參考水位 +9.5%",
+    ]);
+    expect(html).toContain(DISCLOSURE_P);
+    expectNoBanned(html);
+  });
+
+  it("900 vs stop 945.08: stop cell prints 最新收盤低於此參考水位 -4.8% (denominator = stop); target cell keeps 距最新收盤", () => {
+    const html = renderCost(900, 1027.25);
+    expect(distances(html)).toEqual([
+      "最新收盤低於此參考水位 -4.8%",
+      "距最新收盤 +32.4%",
+    ]);
+    expect(html).toContain(DISCLOSURE_P);
+    expectNoBanned(html);
+  });
+
+  it("equality uses the original branch: 距最新收盤 0.0%, no crossed sentence, no disclosure line", () => {
+    const levels = computeKeyLevels(makeBars(1, () => 100), 100)!;
+    const atTarget = renderCost(levels.target2R, 100);
+    expect(distances(atTarget)[1]).toBe("距最新收盤 0.0%");
+    expect(atTarget).not.toContain("此參考水位");
+    expect(atTarget).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+    const atStop = renderCost(levels.stopSuggested, 100);
+    expect(distances(atStop)[0]).toBe("距最新收盤 0.0%");
+    expect(atStop).not.toContain("此參考水位");
+    expect(atStop).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+  });
+
+  it("raw value above the level but rounded to 0: 最新收盤高於此參考水位 0.0% (and the stop mirror), strict comparison on raw values", () => {
+    const levels = computeKeyLevels(makeBars(1, () => 100), 100)!;
+    const above = renderCost(levels.target2R + 0.01, 100);
+    expect(distances(above)[1]).toBe("最新收盤高於此參考水位 0.0%");
+    expect(above).not.toContain("-0.0%");
+    const below = renderCost(levels.stopSuggested - 0.01, 100);
+    expect(distances(below)[0]).toBe("最新收盤低於此參考水位 0.0%");
+    expect(below).not.toContain("-0.0%");
+  });
+
+  it("not crossed (stop < close < target): both cells keep 距最新收盤; disclosure line renders 0 times", () => {
+    const html = renderCost(100, 100);
+    expect(distances(html)).toEqual(["距最新收盤 -8.0%", "距最新收盤 +16.0%"]);
+    expect(html).not.toContain("此參考水位");
+    expect(html.split(DECISION_CARD_CROSSED_DISCLOSURE).length - 1).toBe(0);
+  });
+
+  it("disclosure line renders exactly once with a fixed class, and once even when both cells could cross", () => {
+    const html = renderCost(1305, 1027.25);
+    expect(html.split(DECISION_CARD_CROSSED_DISCLOSURE).length - 1).toBe(1);
+    expect(html).toContain(DISCLOSURE_P);
+    // Exact element string already rules out title / hover / opacity / sr-only / colour on the <p> itself.
+    for (const extra of ["title=", "opacity", "sr-only", "<details", "truncate", "line-clamp", "overflow-hidden", "whitespace-nowrap"]) {
+      expect(DISCLOSURE_P).not.toContain(extra);
+    }
+  });
+
+  it("disclosure line sits after the anchor label paragraph", () => {
+    const html = renderCost(1305, 1027.25);
+    const anchorIdx = html.indexOf("基準價");
+    expect(anchorIdx).toBeGreaterThan(-1);
+    expect(html.indexOf(DECISION_CARD_CROSSED_DISCLOSURE)).toBeGreaterThan(anchorIdx);
+  });
+
+  it("crossed sentence and number share one <p>, with no nowrap / truncate / line-clamp / max-h / overflow-hidden / title", () => {
+    for (const html of [renderCost(1305, 1027.25), renderCost(900, 1027.25)]) {
+      const crossed = [
+        ...html.matchAll(/<p class="[^"]*">最新收盤[高低]於此參考水位 [+-]?\d+\.\d%<\/p>/g),
+      ].map((m) => m[0]);
+      expect(crossed).toHaveLength(1);
+      expect(crossed[0]).toMatch(/^<p class="mt-0\.5 text-xs text-neutral-400">/);
+      expect(crossed[0]).not.toMatch(/nowrap|truncate|line-clamp|max-h-|overflow|title=|opacity|sr-only/);
+    }
+  });
+
+  it("no crossed sentence or disclosure for close-not-held, close-unknown and the R2 downgrades, even if the numbers would cross", () => {
+    const bars = makeBars(1, () => 1305);
+    const cases: Array<Parameters<typeof DecisionCardBody>[0]> = [
+      // close-not-held: anchor is the close itself.
+      { response: makeResponse({ held: false, advice: makeCard({ action: "hold" }) }), bars, anchorSource: "close-not-held", avgCost: 1027.25 },
+      // close-unknown: levels suppressed entirely.
+      { response: makeResponse(), bars, anchorSource: "close-unknown", avgCost: 1027.25 },
+      // R2: held advice but close-not-held source.
+      { response: makeResponse(), bars, anchorSource: "close-not-held", avgCost: 1027.25 },
+      // R2: candidate advice but cost source.
+      { response: makeResponse({ held: false, advice: makeCard({ action: "add" }) }), bars, anchorSource: "cost", avgCost: 1027.25 },
+    ];
+    for (const props of cases) {
+      const html = renderCard(props);
+      expect(html).not.toContain("此參考水位");
+      expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+      expectNoBanned(html);
+    }
+  });
+
+  it("bars unavailable (null): no crossed sentence or disclosure line", () => {
+    const html = renderCard({ response: makeResponse(), bars: null, anchorSource: "cost", avgCost: 1027.25 });
+    expect(html).not.toContain("此參考水位");
+    expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
   });
 });

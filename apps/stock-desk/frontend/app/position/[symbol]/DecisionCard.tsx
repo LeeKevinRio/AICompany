@@ -19,7 +19,8 @@ import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_QUANTITY_LABEL,
-  buildDecisionCardDistance,
+  DECISION_CARD_CROSSED_DISCLOSURE,
+  pickDecisionCardDistance,
   pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
 import {
@@ -77,7 +78,13 @@ import {
  * 風控 2026-09-19 預審 APPROVE_WITH_CONDITIONS（逐條對應本檔）：
  *   1/2. 距離小字固定前綴「距最新收盤 」（`buildDecisionCardDistance`），符號由
  *        (水位－最新收盤)/最新收盤×100 算出，一律複用 `PriceLadder.tsx` 的
- *        `fmtSigned`（同一份實作，未另寫）。
+ *        `fmtSigned`（同一份實作，未另寫）。唯一分母為最新收盤的說法已不成立：
+ *        風控 2026-10-04 核可「越過」句型——`effectiveAnchorSource === "cost"` 且
+ *        最新收盤（原值、嚴格比較）高於停利參考／低於停損參考時，該格改印
+ *        「最新收盤高於／低於此參考水位 」＋`fmtSigned`，分母為該參考水位本身
+ *        （`pickDecisionCardDistance`）；相等與其餘情況維持「距最新收盤 」，分母為
+ *        最新收盤。任一格出現越過句時另常駐一行揭露
+ *        （`DECISION_CARD_CROSSED_DISCLOSURE`，`anchorLabel` 段落之後）。
  *   3. 頁尾「關鍵價位參考」組新增的 `KEY_LEVELS_BASIS_CLOSE_DISTANCE` 算式行見
  *      `KeyLevelsPanel.tsx`／`buildKeyLevelsFooterItems`。
  *   4. 本卡不設可見標題；`<section aria-label={DECISION_CARD_ARIA_LABEL}>`。
@@ -280,18 +287,31 @@ export function DecisionCardBody({
     levels !== null && !suppressAnchor ? fmt(levels.stopSuggested) : "—";
   const targetText =
     levels !== null && !suppressAnchor ? fmt(levels.target2R) : "—";
-  const stopDistance =
+  // Crossed sentences only exist for the cost anchor (risk review 2026-10-04,
+  // required item 1); close-not-held / close-unknown / R2 downgrade never get one.
+  const allowCrossed = effectiveAnchorSource === "cost";
+  const stopPick =
     levels !== null && !suppressAnchor
-      ? buildDecisionCardDistance(
-          ((levels.stopSuggested - levels.close) / levels.close) * 100,
+      ? pickDecisionCardDistance(
+          "stop",
+          levels.close,
+          levels.stopSuggested,
+          allowCrossed,
         )
       : null;
-  const targetDistance =
+  const targetPick =
     levels !== null && !suppressAnchor
-      ? buildDecisionCardDistance(
-          ((levels.target2R - levels.close) / levels.close) * 100,
+      ? pickDecisionCardDistance(
+          "target",
+          levels.close,
+          levels.target2R,
+          allowCrossed,
         )
       : null;
+  const stopDistance = stopPick !== null ? stopPick.text : null;
+  const targetDistance = targetPick !== null ? targetPick.text : null;
+  const showCrossedDisclosure =
+    (stopPick?.crossed ?? false) || (targetPick?.crossed ?? false);
   const anchorLabel =
     levels !== null && !suppressAnchor
       ? effectiveAnchorSource === "cost"
@@ -420,6 +440,18 @@ export function DecisionCardBody({
       {/* 風控 required 條件 5：基準來源標籤與停損／停利同層常駐一次。 */}
       {anchorLabel !== null && (
         <p className="mt-2 text-xs text-neutral-400">{anchorLabel}</p>
+      )}
+
+      {/*
+        Risk review 2026-10-04 required item 4: conditional disclosure, standing
+        while any cell shows a crossed sentence, absent otherwise. Same size and
+        grey as the neighbouring lines; no colour, no <details>, no title, no
+        tooltip, no opacity / sr-only.
+      */}
+      {showCrossedDisclosure && (
+        <p className="mt-2 text-xs text-neutral-400">
+          {DECISION_CARD_CROSSED_DISCLOSURE}
+        </p>
       )}
 
       {/* 風控 required 條件 9：restoresComplianceWarning 與股數同層，全頁唯一渲染處。 */}
