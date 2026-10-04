@@ -10,11 +10,11 @@
  *   1. uppercase `tracking-wide` group headings (TechnicalIndicatorsPanel h4 "技術指標" / "風險量測",
  *      a settled exception);
  *   2. genuinely disabled controls (`disabled:text-neutral-*` variants only);
- *   3. batch 3 TODO items below, each pinned to its exact source line and occurrence count.
  * Backgrounds and divider lines are not matched at all (`bg-` / `border-` utilities are not `text-`).
  *
- * The batch 3 table is a temporary exception, not a permanent allowance: when a batch 3 item is
- * lifted to `text-neutral-400`, delete its entry here (a stale entry fails the scan on purpose).
+ * Batch 3 (labels and controls: drag table row headers, PriceLadder thead, RangeGauge range label,
+ * OperationSummaryPanel "依據：" prefix, inactive chart tab) has been lifted to `text-neutral-400`
+ * and its temporary exception table is gone; nothing but the permanent whitelist remains.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -27,51 +27,6 @@ const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").repl
 const APP_DIR = fileURLToPath(new URL("../../", import.meta.url));
 const TEXT_LOW_CONTRAST = /text-neutral-(500|600)/;
 const TEXT_LOW_CONTRAST_GLOBAL = /text-neutral-(500|600)/g;
-
-/** `{ file (relative to app/), exact trimmed source line, expected occurrence count }`. */
-interface PendingBatch3 {
-  readonly line: string;
-  readonly count: number;
-  readonly item: string;
-}
-
-/**
- * 批次 3 待辦（標籤與控制項，會改表格與 tab 視覺層級，需前後截圖後才提亮）。
- * 本批（批次 2）不含；art-lead 裁示的批次 3 清單逐項列於此。
- */
-const BATCH_3_PENDING: Readonly<Record<string, readonly PendingBatch3[]>> = {
-  "position/[symbol]/LeverageChapterView.tsx": [
-    {
-      line: '<th scope="row" className="py-1 pr-4 font-normal text-neutral-500">',
-      count: 8,
-      item: "批次 3：drag 表八個列標 th",
-    },
-  ],
-  "position/[symbol]/PriceLadder.tsx": [
-    {
-      line: '<tr className="border-b border-neutral-800 text-xs text-neutral-500">',
-      count: 1,
-      item: "批次 3：PriceLadder thead",
-    },
-  ],
-  "position/[symbol]/RangeGauge.tsx": [
-    { line: '<span className="text-neutral-500">{rangeLabel}</span>', count: 1, item: "批次 3：RangeGauge 區間標籤" },
-  ],
-  "position/[symbol]/OperationSummaryPanel.tsx": [
-    {
-      line: '<span className="text-neutral-500">{RULE_BASIS_PREFIX}</span>',
-      count: 1,
-      item: "批次 3：OperationSummaryPanel「依據：」前綴",
-    },
-  ],
-  "position/[symbol]/page.tsx": [
-    {
-      line: ': "border-transparent text-neutral-500 hover:text-neutral-300"',
-      count: 1,
-      item: "批次 3：page.tsx 未選取 tab（非 disabled，不適用豁免）",
-    },
-  ],
-};
 
 const positionFiles: string[] = readdirSync(APP_DIR, { recursive: true, encoding: "utf8" })
   .map((p) => p.split("\\").join("/"))
@@ -88,15 +43,13 @@ function isPermanentlyAllowed(line: string): boolean {
   return matches.length > 0 && matches.every((m) => m.startsWith("disabled:"));
 }
 
-/** Lines that hit `text-neutral-(500|600)` and are neither permanent whitelist nor a batch 3 entry. */
-function findViolations(rel: string, code: string): string[] {
-  const pending = BATCH_3_PENDING[rel] ?? [];
+/** Lines that hit `text-neutral-(500|600)` and are not on the permanent whitelist. */
+function findViolations(_rel: string, code: string): string[] {
   return code
     .split("\n")
     .map((l, i) => ({ text: l.trim(), no: i + 1 }))
     .filter(({ text }) => TEXT_LOW_CONTRAST.test(text))
     .filter(({ text }) => !isPermanentlyAllowed(text))
-    .filter(({ text }) => !pending.some((p) => p.line === text))
     .map(({ text, no }) => `L${no}: ${text}`);
 }
 
@@ -124,29 +77,41 @@ describe("對比掃描（art-lead 批次 2）：app/position/** 內 text-neutral
     });
   }
 
-  it("批次 3 待辦每一條都仍存在且次數吻合（提亮後須刪除該條，不得過期）", () => {
-    for (const [rel, entries] of Object.entries(BATCH_3_PENDING)) {
+  it("批次 3 已提亮：各項來源行改為 text-neutral-400，次數吻合", () => {
+    const lifted: ReadonlyArray<{ rel: string; line: string; count: number }> = [
+      { rel: "position/[symbol]/LeverageChapterView.tsx", line: '<th scope="row" className="py-1 pr-4 font-normal text-neutral-400">', count: 8 },
+      { rel: "position/[symbol]/PriceLadder.tsx", line: '<tr className="border-b border-neutral-800 text-xs text-neutral-400">', count: 1 },
+      { rel: "position/[symbol]/RangeGauge.tsx", line: '<span className="text-neutral-400">{rangeLabel}</span>', count: 1 },
+      { rel: "position/[symbol]/OperationSummaryPanel.tsx", line: '<span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>', count: 1 },
+      { rel: "position/[symbol]/page.tsx", line: ': "border-transparent text-neutral-400 hover:text-neutral-300"', count: 1 },
+    ];
+    for (const { rel, line, count } of lifted) {
       expect(positionFiles, rel).toContain(rel);
       const lines = codeOf(rel)
         .split("\n")
         .map((l) => l.trim());
-      for (const entry of entries) {
-        expect(lines.filter((l) => l === entry.line).length, `${rel} ${entry.item}`).toBe(entry.count);
-      }
+      expect(lines.filter((l) => l === line).length, `${rel} ${line}`).toBe(count);
     }
   });
 
-  it("批次 3 待辦總數固定為 12 處（八個 th、PriceLadder thead、RangeGauge、OperationSummaryPanel 前綴、tab）", () => {
-    const total = Object.values(BATCH_3_PENDING)
-      .flat()
-      .reduce((sum, e) => sum + e.count, 0);
-    expect(total).toBe(12);
+  it("永久白名單剩餘命中固定：全 app/position 僅 TechnicalIndicatorsPanel 兩個 uppercase tracking-wide 分組標題", () => {
+    // Exclude disabled: variants so a future legitimate disabled control does not
+    // trip this pin; only the uppercase tracking-wide group titles are pinned here.
+    const remaining = positionFiles.flatMap((rel) =>
+      codeOf(rel)
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => TEXT_LOW_CONTRAST.test(l))
+        .filter((l) => !/disabled:text-neutral-(500|600)/.test(l) || /(^|\s)text-neutral-(500|600)/.test(l))
+        .map((l) => `${rel} :: ${l}`),
+    );
+    expect(remaining).toEqual([
+      'position/[symbol]/TechnicalIndicatorsPanel.tsx :: <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">',
+      'position/[symbol]/TechnicalIndicatorsPanel.tsx :: <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">',
+    ]);
   });
 
-  it("text-neutral-600 不得用於任何文字：白名單與批次 3 待辦都不含 600（disabled 變體除外）", () => {
-    for (const entries of Object.values(BATCH_3_PENDING)) {
-      for (const e of entries) expect(e.line, e.item).not.toContain("text-neutral-600");
-    }
+  it("text-neutral-600 不得用於任何文字（disabled 變體除外）", () => {
     for (const rel of positionFiles) {
       const hits = (codeOf(rel).match(/([\w:-]*)text-neutral-600/g) ?? []).filter((m) => !m.startsWith("disabled:"));
       expect(hits, rel).toEqual([]);

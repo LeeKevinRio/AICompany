@@ -298,7 +298,7 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
       */}
       {model.topMatchedRule && (
         <p className="text-sm text-neutral-300">
-          <span className="text-neutral-500">{RULE_BASIS_PREFIX}</span>
+          <span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>
           {model.topMatchedRule.name}
         </p>
       )}

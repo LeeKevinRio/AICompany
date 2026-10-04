@@ -78,7 +78,7 @@ export function PriceLadder({
       <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead>
-            <tr className="border-b border-neutral-800 text-xs text-neutral-500">
+            <tr className="border-b border-neutral-800 text-xs text-neutral-400">
               <th className="py-1 pr-3 font-normal" scope="col">
                 項目
               </th>
