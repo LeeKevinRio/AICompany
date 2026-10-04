@@ -62,7 +62,13 @@ namespace Manjong.UI
         {
             if (string.IsNullOrEmpty(code)) return null;
             Sprite cached;
-            if (SpriteCache.TryGetValue(code, out cached)) return cached; // null is cached too (warn once)
+            if (SpriteCache.TryGetValue(code, out cached))
+            {
+                // A cached "missing" entry is a real null (warn once). A sprite destroyed by Unity (e.g. Play mode
+                // without domain reload) compares equal to null but is not a null reference: rebuild it.
+                if (ReferenceEquals(cached, null) || cached != null) return cached;
+                SpriteCache.Remove(code);
+            }
 
             Sprite sprite = null;
             var tex = Resources.Load<Texture2D>(ResourceFolder + code);

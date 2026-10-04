@@ -585,17 +585,36 @@ namespace Manjong.Screens
         }
 
         /// <summary>"打 五萬：聽 三筒（剩 2）、六筒（剩 3）；打 七條：聽 …" for every ready discard.</summary>
+        /// <summary>Above this many tenpai discards the hint lists only the tiles to discard (it would not fit).</summary>
+        const int MaxDetailedReadyDiscards = 4;
+
         static string AllReadyDiscards(GameView v)
         {
-            var sb = new StringBuilder();
+            var ready = new List<OptionDto>();
             var seen = new HashSet<string>();
             OptionDto[] opts = DtoUtil.Safe(v.options);
             for (int i = 0; i < opts.Length; i++)
             {
                 OptionDto o = opts[i];
                 if (o == null || o.type != "discard" || DtoUtil.Safe(o.waits).Length == 0 || !seen.Add(o.tile)) continue;
-                if (sb.Length > 0) sb.Append('；');
-                sb.Append("打 ").Append(TileFace.Name(o.tile)).Append("：聽 ").Append(FormatWaits(o.waits));
+                ready.Add(o);
+            }
+            var sb = new StringBuilder();
+            if (ready.Count > MaxDetailedReadyDiscards)
+            {
+                sb.Append("打出後會聽牌的有 ").Append(ready.Count).Append(" 張：");
+                for (int i = 0; i < ready.Count; i++)
+                {
+                    if (i > 0) sb.Append('、');
+                    sb.Append(TileFace.Name(ready[i].tile));
+                }
+                sb.Append("（點選該牌看聽哪些）");
+                return sb.ToString();
+            }
+            for (int i = 0; i < ready.Count; i++)
+            {
+                if (i > 0) sb.Append('；');
+                sb.Append("打 ").Append(TileFace.Name(ready[i].tile)).Append("：聽 ").Append(FormatWaits(ready[i].waits));
             }
             return sb.ToString();
         }

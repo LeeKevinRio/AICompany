@@ -10,7 +10,8 @@
 - 字型：`Assets/Resources/Fonts/huninn.ttf`（jf open 粉圓子集，授權見同資料夾 `LICENSE-jf-openhuninn.txt`）。
 - 圖形：**牌面用傳統麻將牌的圖**（`Assets/Resources/Tiles/<牌碼>.png`，牌背 `back.png`，每張 150×200 px、圓角外透明）；
   找不到圖時自動退回程式畫的文字牌，並在 Console 警告一次。按鈕、面板、圓形頭像等可愛風 UI 仍在執行期用 `Texture2D` 產生。
-- 牌圖匯入設定由 `Assets/Editor/ManjongTileImporter.cs`（AssetPostprocessor）自動套用：不產生 mipmap、不壓縮、Bilinear、alpha 為透明、不縮放成 2 的次方。
+- 牌圖匯入設定由 `Assets/Editor/ManjongTileImporter.cs`（AssetPostprocessor）自動套用：產生 mipmap（Kaiser 濾鏡，避免小牌走樣）、不壓縮、Trilinear、alpha 為透明、不縮放成 2 的次方。
+  第一次開專案時 `Manjong/Setup Project` 會強制重新匯入牌圖，確保套到這組設定；若牌面仍偏糊，在 Project 視窗對 `Assets/Resources/Tiles` 按右鍵 → Reimport。
 - API 契約：`work/manjong-unity/api-contract.md`（v0.3.1）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
 
 ## 1. 開啟專案
