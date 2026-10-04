@@ -26,8 +26,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
+import httpx
 import pytest
 
+from app.data.http import RateLimitedClient
 from app.data.interface import DividendAnnounceObservation, DividendAnnounceSnapshotRow
 from app.data.market_panel import MarketPanelReader, MarketPanelStore
 from app.dividends.coverage import (
@@ -37,7 +39,7 @@ from app.dividends.coverage import (
     AnnounceRunSource,
 )
 from app.dividends.models import DividendEvent
-from app.dividends.providers import DividendFetchResult
+from app.dividends.providers import TWSE_OPENAPI_BASE_URL, DividendFetchResult, TwseDividendAdapter
 from app.dividends.store import DividendEventStore
 from app.dividends.sync import sync_dividends
 from app.portfolio.price_change import (
@@ -586,6 +588,16 @@ def test_a_lead_below_one_day_is_refused(tmp_path: Path, make_log: Callable[[Pat
         AnnounceRunCoverageRule(make_log(tmp_path).source(), min_announce_lead_days=0)
 
 
+def test_market_db_a_missing_file_reads_as_unknown_and_is_not_created(tmp_path: Path) -> None:
+    # ``MarketPanelReader`` opens read-only and never creates the file: a rule over a
+    # market DB that does not exist answers ``unknown`` and leaves the directory empty.
+    path = tmp_path / "absent-market.db"
+    query = _query()
+    assert AnnounceRunCoverageRule(MarketPanelReader(path)).coverage([query]) == {query: "unknown"}
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_the_coverage_module_cannot_reach_the_market_db_module() -> None:
     # ADR-0012 C-7: the positions data chain does not read the market DB, and the
     # coverage rule is what that chain will call. The reader only satisfies its
@@ -664,6 +676,53 @@ def test_main_db_an_unparsed_symbol_makes_only_that_symbol_unknown(
     log.run(EVENING[THU], [OTHER, ("2330", None)])
     blocked, free = _query("2330"), _query("2317")
     assert log.rule().coverage([blocked, free]) == {blocked: "unknown", free: "known"}
+
+
+def _real_adapter_log(tmp_path: Path, payload: list[object]) -> _MainLog:
+    """A main DB synced by the real adapter (``httpx.MockTransport``) at 21:30 Taipei."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = RateLimitedClient(
+        base_url=TWSE_OPENAPI_BASE_URL,
+        min_interval_seconds=0.0,
+        transport=httpx.MockTransport(handler),
+        sleep_fn=lambda _s: None,
+    )
+    log = _MainLog(tmp_path)
+    log.clock.now = EVENING[THU]
+    sync_dividends(store=log.store, adapter=TwseDividendAdapter(client=client), trigger="scheduled")
+    return log
+
+
+@pytest.mark.parametrize(
+    ("symbol", "row"),
+    [
+        # A legal date (2026-10-21), but the Exdividend flag is not one of the known three.
+        ("9999", {"Date": "1151021", "Exdividend": "?", "CashDividend": "1.0"}),
+        # A legal date, a stock component flagged, but no StockDividendRatio.
+        ("8888", {"Date": "1151021", "Exdividend": "權息", "CashDividend": "1.0"}),
+        # A legal date, but a negative amount.
+        ("7777", {"Date": "1151021", "Exdividend": "息", "CashDividend": "-1.0"}),
+    ],
+    ids=["flag_unknown", "missing_stock_ratio", "negative_cash_dividend"],
+)
+def test_main_db_a_dated_row_refused_for_another_reason_makes_its_symbol_unknown(
+    tmp_path: Path, symbol: str, row: dict[str, str]
+) -> None:
+    # The date parses, so this is not the "garbled date" case: the row is refused for
+    # some other reason, lands in ``dividend_sync_unparsed`` and blocks the symbol.
+    payload: list[object] = [
+        {"Code": "1101", "Date": "1151120", "Exdividend": "息", "CashDividend": "2.0"},
+        {"Code": symbol, **row},
+    ]
+    log = _real_adapter_log(tmp_path, payload)
+    with closing(sqlite3.connect(log.path)) as conn:
+        assert conn.execute("SELECT symbol FROM dividend_sync_unparsed").fetchall() == [(symbol,)]
+        assert conn.execute("SELECT symbol FROM dividend_events").fetchall() == [("1101",)]
+    refused, clean = _query(symbol), _query("2330")
+    assert log.rule().coverage([refused, clean]) == {refused: "unknown", clean: "known"}
 
 
 def test_main_db_unattributed_rows_make_every_queried_symbol_unknown(

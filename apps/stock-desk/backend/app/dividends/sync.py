@@ -55,6 +55,7 @@ from typing import Protocol
 
 from app.data.http import RateLimitedClient
 from app.dividends.providers import (
+    REJECTION_OTHER,
     TWSE_OPENAPI_BASE_URL,
     DividendFetchResult,
     TwseDividendAdapter,
@@ -108,6 +109,7 @@ def sync_dividends(
     event rows; the run's ``recorded_at`` is the store's own clock.
     """
     result = adapter.fetch()
+    _log_rejected_rows(result)
     store.record_sync(
         trigger=trigger,
         source=result.source,
@@ -121,6 +123,24 @@ def sync_dividends(
     if not result.ok:
         logger.warning("dividend sync failed (%s): %s", trigger, result.reason)
     return result
+
+
+def _log_rejected_rows(result: DividendFetchResult) -> None:
+    """One WARNING line per run with the refused-row counts by reason code.
+
+    Counts and fixed reason codes only: never a URL, a response body, a row or a
+    key. Silent when no row was refused. A refusal the adapter did not classify
+    (a stub result, an older adapter) is counted under ``other`` so the line
+    always adds up to ``skipped_rows``.
+    """
+    counts = dict(result.rejected_by_reason)
+    unclassified = result.skipped_rows - sum(counts.values())
+    if unclassified > 0:
+        counts[REJECTION_OTHER] = counts.get(REJECTION_OTHER, 0) + unclassified
+    if not counts:
+        return
+    summary = " ".join(f"{reason}={count}" for reason, count in sorted(counts.items()) if count)
+    logger.warning("dividend sync rejected rows: %s", summary)
 
 
 def _print_banner() -> None:

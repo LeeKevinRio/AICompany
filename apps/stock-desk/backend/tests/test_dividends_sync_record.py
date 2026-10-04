@@ -8,6 +8,7 @@ network.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import closing
 from datetime import UTC, date, datetime
@@ -273,24 +274,51 @@ def test_a_failure_while_writing_events_leaves_no_run(tmp_path: Path) -> None:
     assert _runs(store.db_path) == []
 
 
-def test_the_write_lock_is_taken_up_front(tmp_path: Path) -> None:
-    # BEGIN IMMEDIATE: a second writer is refused before it changes anything.
+def test_the_write_lock_is_taken_up_front(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # BEGIN IMMEDIATE: while another writer holds the lock, a sync is refused before
+    # it changes anything -- neither the events nor the run row land.
     store = DividendEventStore(tmp_path / "main.db", clock=lambda: CLOCK_NOW)
+    # A short busy timeout so the refused writer gives up quickly.
+    monkeypatch.setattr("app.dividends.store.BUSY_TIMEOUT_MS", 50)
     blocker = sqlite3.connect(store.db_path, isolation_level=None)
     try:
         blocker.execute("BEGIN IMMEDIATE")
-        # A short timeout so the refused writer gives up quickly.
-        other = sqlite3.connect(store.db_path, timeout=0.05, isolation_level=None)
-        try:
-            with pytest.raises(sqlite3.OperationalError, match="locked"):
-                other.execute("BEGIN IMMEDIATE")
-        finally:
-            other.close()
+        with pytest.raises(sqlite3.OperationalError, match="locked|busy"):
+            sync_dividends(store=store, adapter=_ok([_event()], unparsed=("9999",)))
     finally:
         blocker.execute("ROLLBACK")
         blocker.close()
+    assert store.count() == 0
+    assert _runs(store.db_path) == []
+    assert _unparsed(store.db_path) == []
+    # Once the lock is released the same call goes through.
     sync_dividends(store=store, adapter=_ok([_event()]))
     assert len(_runs(store.db_path)) == 1
+
+
+def test_the_clock_is_read_only_after_the_write_lock_is_held(tmp_path: Path) -> None:
+    # A clock that cannot be read while another writer holds the lock proves the
+    # order: the sync is refused (locked) without ever calling the clock.
+    calls: list[int] = []
+
+    def clock() -> datetime:
+        calls.append(1)
+        return CLOCK_NOW
+
+    store = DividendEventStore(tmp_path / "main.db", clock=clock)
+    blocker = sqlite3.connect(store.db_path, isolation_level=None)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("app.dividends.store.BUSY_TIMEOUT_MS", 50)
+            with pytest.raises(sqlite3.OperationalError):
+                sync_dividends(store=store, adapter=_ok([_event()]))
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+    assert calls == []
+    sync_dividends(store=store, adapter=_ok([_event()]))
+    assert calls == [1]
 
 
 def test_recorded_at_comes_from_the_store_clock_only(tmp_path: Path) -> None:
@@ -507,3 +535,95 @@ def test_the_cli_reports_a_failed_write_without_a_traceback(
     assert "整筆回復" in captured.err
     assert store.count() == 0
     assert _runs(db_path) == []
+
+
+# ------------------------------------------- the one-line rejected-rows WARNING
+
+_REJECTED_LOGGER = "app.dividends.sync"
+_REJECTED_PREFIX = "dividend sync rejected rows:"
+
+
+def _rejected_lines(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name == _REJECTED_LOGGER and record.getMessage().startswith(_REJECTED_PREFIX)
+    ]
+
+
+def test_a_sync_logs_one_warning_with_the_rejection_counts_by_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload: list[object] = [
+        _row("2330", "1151020"),  # parses
+        _row("9999", "1151021", flag="?"),  # flag unknown
+        _row("9998", "1151021", flag="x"),  # flag unknown
+        _row("9997", "1151021", flag=""),  # flag blank: also unknown
+        _row("8888", "1151021", flag="權息"),  # stock component without a ratio
+        _row("7777", "garbled"),  # date refused
+        _row(None, "1151020"),  # no Code
+        "not an object",
+    ]
+    store = _store(tmp_path)
+    with caplog.at_level(logging.WARNING, logger=_REJECTED_LOGGER):
+        sync_dividends(store=store, adapter=TwseDividendAdapter(client=_twse_client(payload)))
+    lines = _rejected_lines(caplog)
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.WARNING
+    assert lines[0].getMessage() == (
+        "dividend sync rejected rows: date_unparseable=1 flag_unknown=3 "
+        "missing_stock_ratio=1 missing_symbol=1 not_an_object=1"
+    )
+
+
+def test_the_rejection_warning_carries_no_url_row_or_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TWSE_API_KEY", "super-secret-key")
+    payload: list[object] = [_row("2330", "1151020"), _row("9999", "1151021", flag="?")]
+    store = _store(tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=_REJECTED_LOGGER):
+        sync_dividends(store=store, adapter=TwseDividendAdapter(client=_twse_client(payload)))
+    (line,) = _rejected_lines(caplog)
+    text = line.getMessage() + " " + " ".join(str(arg) for arg in line.args or ())
+    for forbidden in ("http", "openapi.twse.com.tw", "TWT48U", "9999", "super-secret-key", "Code"):
+        assert forbidden not in text
+    assert line.getMessage() == "dividend sync rejected rows: flag_unknown=1"
+
+
+def test_no_warning_is_logged_when_no_row_was_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = _store(tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=_REJECTED_LOGGER):
+        sync_dividends(
+            store=store,
+            adapter=TwseDividendAdapter(client=_twse_client([_row("2330", "1151020")])),
+        )
+    assert _rejected_lines(caplog) == []
+
+
+def test_an_all_refused_failed_run_still_logs_its_rejection_counts(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = _store(tmp_path)
+    payload: list[object] = [_row("9999", "1151021", flag="?")]
+    with caplog.at_level(logging.WARNING, logger=_REJECTED_LOGGER):
+        result = sync_dividends(
+            store=store, adapter=TwseDividendAdapter(client=_twse_client(payload))
+        )
+    assert result.ok is False
+    (line,) = _rejected_lines(caplog)
+    assert line.getMessage() == "dividend sync rejected rows: flag_unknown=1"
+
+
+def test_a_result_without_a_breakdown_is_counted_as_other(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = _store(tmp_path)
+    with caplog.at_level(logging.WARNING, logger=_REJECTED_LOGGER):
+        sync_dividends(
+            store=store, adapter=_ok([_event()], unparsed=("9999", "9999"), unattributed=1)
+        )
+    (line,) = _rejected_lines(caplog)
+    assert line.getMessage() == "dividend sync rejected rows: other=3"

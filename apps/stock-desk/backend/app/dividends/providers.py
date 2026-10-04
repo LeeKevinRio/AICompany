@@ -110,6 +110,7 @@ docstring for the full rationale and the CLI's user-facing wording.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as date_type
@@ -151,6 +152,31 @@ _MIN_PLAUSIBLE_YEAR = 2000
 _MAX_PLAUSIBLE_YEAR = 2100
 
 
+class DividendRowRejected(UnparseableRowError):
+    """A refused row, tagged with a stable machine-readable ``reason`` code.
+
+    Still an :class:`UnparseableRowError` (callers that catch the parent are
+    unaffected). The code, not the message, is what the sync's one-line summary
+    counts: the message carries the raw row and must never reach an info log.
+    """
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+#: Reason code for a refusal that carries no tag (a plain ``ValueError`` out of a
+#: parser, or an ``UnparseableRowError`` raised by a helper outside this module).
+REJECTION_OTHER = "other"
+
+
+def rejection_reason(error: Exception) -> str:
+    """The reason code of a refused row; :data:`REJECTION_OTHER` when untagged."""
+    if isinstance(error, DividendRowRejected):
+        return error.reason
+    return REJECTION_OTHER
+
+
 @dataclass(frozen=True)
 class DividendFetchResult:
     """One fetch's outcome: a batch of events, or an honest failure reason.
@@ -174,6 +200,9 @@ class DividendFetchResult:
     unparsed_symbols: tuple[str, ...] = ()
     #: Refused rows with no usable ``Code``: they cannot be attributed to any symbol.
     unattributed_rows: int = 0
+    #: ``(reason code, row count)`` per refusal reason, sorted by code. Log-only
+    #: detail (the sync writes one WARNING line from it); it is not stored.
+    rejected_by_reason: tuple[tuple[str, int], ...] = ()
 
 
 def _cell(row: dict[str, Any], key: str) -> str | None:
@@ -212,11 +241,15 @@ def parse_twse_date(value: str) -> date_type:
     if "/" in text:
         parts = text.split("/")
         if len(parts) != 3:
-            raise UnparseableRowError(f"unrecognized date format: {value!r}")
+            raise DividendRowRejected(
+                f"unrecognized date format: {value!r}", reason="date_unparseable"
+            )
         try:
             year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
         except ValueError as exc:
-            raise UnparseableRowError(f"unrecognized date format: {value!r}") from exc
+            raise DividendRowRejected(
+                f"unrecognized date format: {value!r}", reason="date_unparseable"
+            ) from exc
         if year < 1911:
             year += ROC_YEAR_OFFSET
     elif len(text) == 8 and text.isdigit():
@@ -224,13 +257,13 @@ def parse_twse_date(value: str) -> date_type:
     elif len(text) == 7 and text.isdigit():
         year, month, day = int(text[0:3]) + ROC_YEAR_OFFSET, int(text[3:5]), int(text[5:7])
     else:
-        raise UnparseableRowError(f"unrecognized date format: {value!r}")
+        raise DividendRowRejected(f"unrecognized date format: {value!r}", reason="date_unparseable")
     try:
         result = date_type(year, month, day)
     except ValueError as exc:
-        raise UnparseableRowError(f"impossible date: {value!r}") from exc
+        raise DividendRowRejected(f"impossible date: {value!r}", reason="date_unparseable") from exc
     if not (_MIN_PLAUSIBLE_YEAR <= result.year <= _MAX_PLAUSIBLE_YEAR):
-        raise UnparseableRowError(f"implausible year in date: {value!r}")
+        raise DividendRowRejected(f"implausible year in date: {value!r}", reason="date_unparseable")
     return result
 
 
@@ -240,7 +273,9 @@ def _parse_amount(value: str | None, *, field: str) -> Decimal | None:
     try:
         return Decimal(value.replace(",", ""))
     except InvalidOperation as exc:
-        raise UnparseableRowError(f"unparseable {field} cell: {value!r}") from exc
+        raise DividendRowRejected(
+            f"unparseable {field} cell: {value!r}", reason="amount_unparseable"
+        ) from exc
 
 
 def parse_dividend_row(row: Any, *, source: str, as_of: datetime) -> DividendEvent:
@@ -253,32 +288,39 @@ def parse_dividend_row(row: Any, *, source: str, as_of: datetime) -> DividendEve
     "Exdividend value domain" sections for what *is*.
     """
     if not isinstance(row, dict):
-        raise UnparseableRowError(f"row is not an object: {row!r}")
+        raise DividendRowRejected(f"row is not an object: {row!r}", reason="not_an_object")
 
     symbol = _cell(row, _CODE_KEY)
     if symbol is None:
-        raise UnparseableRowError(f"missing symbol in row: {row!r}")
+        raise DividendRowRejected(f"missing symbol in row: {row!r}", reason="missing_symbol")
 
     raw_date = _cell(row, _DATE_KEY)
     if raw_date is None:
-        raise UnparseableRowError(f"missing ex-date in row: {row!r}")
+        raise DividendRowRejected(f"missing ex-date in row: {row!r}", reason="missing_date")
     ex_date = parse_twse_date(raw_date)
 
     exdividend = _cell(row, _EXDIVIDEND_KEY)
     if exdividend is None or exdividend not in _KNOWN_EXDIVIDEND_VALUES:
-        raise UnparseableRowError(f"unrecognized Exdividend flag {exdividend!r} in row: {row!r}")
+        raise DividendRowRejected(
+            f"unrecognized Exdividend flag {exdividend!r} in row: {row!r}", reason="flag_unknown"
+        )
 
     cash = _parse_amount(_cell(row, _CASH_DIVIDEND_KEY), field="cash_dividend")
     if cash is not None and cash < 0:
-        raise UnparseableRowError(f"negative CashDividend in row: {row!r}")
+        raise DividendRowRejected(
+            f"negative CashDividend in row: {row!r}", reason="negative_cash_dividend"
+        )
 
     stock_ratio = _parse_amount(_cell(row, _STOCK_DIVIDEND_RATIO_KEY), field="stock_dividend_ratio")
     if stock_ratio is not None and stock_ratio < 0:
-        raise UnparseableRowError(f"negative StockDividendRatio in row: {row!r}")
+        raise DividendRowRejected(
+            f"negative StockDividendRatio in row: {row!r}", reason="negative_stock_ratio"
+        )
     if exdividend in _STOCK_COMPONENT_EXDIVIDEND_VALUES and stock_ratio is None:
-        raise UnparseableRowError(
+        raise DividendRowRejected(
             f"Exdividend={exdividend!r} implies a stock component but "
-            f"StockDividendRatio is blank in row: {row!r}"
+            f"StockDividendRatio is blank in row: {row!r}",
+            reason="missing_stock_ratio",
         )
 
     return DividendEvent(
@@ -341,11 +383,13 @@ class TwseDividendAdapter:
         events: list[DividendEvent] = []
         unparsed: list[str] = []
         unattributed = 0
+        reasons: Counter[str] = Counter()
         for row in payload:
             try:
                 events.append(parse_dividend_row(row, source=self.source_id, as_of=now))
             except (UnparseableRowError, ValueError) as exc:
                 logger.debug("skipping unparseable TWSE dividend row: %s", exc)
+                reasons[rejection_reason(exc)] += 1
                 # Any refused row that names a symbol is kept against that symbol,
                 # whatever the refusal reason: it is an event that did not reach
                 # ``dividend_events``, so no coverage claim may ignore it.
@@ -363,6 +407,7 @@ class TwseDividendAdapter:
                 skipped=skipped,
                 unparsed_symbols=tuple(unparsed),
                 unattributed=unattributed,
+                rejected_by_reason=tuple(sorted(reasons.items())),
             )
         return DividendFetchResult(
             events=tuple(events),
@@ -373,6 +418,7 @@ class TwseDividendAdapter:
             skipped_rows=skipped,
             unparsed_symbols=tuple(unparsed),
             unattributed_rows=unattributed,
+            rejected_by_reason=tuple(sorted(reasons.items())),
         )
 
     def _failure(
@@ -383,6 +429,7 @@ class TwseDividendAdapter:
         skipped: int = 0,
         unparsed_symbols: tuple[str, ...] = (),
         unattributed: int = 0,
+        rejected_by_reason: tuple[tuple[str, int], ...] = (),
     ) -> DividendFetchResult:
         return DividendFetchResult(
             events=(),
@@ -393,4 +440,5 @@ class TwseDividendAdapter:
             skipped_rows=skipped,
             unparsed_symbols=unparsed_symbols,
             unattributed_rows=unattributed,
+            rejected_by_reason=rejected_by_reason,
         )

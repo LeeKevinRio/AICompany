@@ -247,13 +247,15 @@ class DividendEventStore:
         else:
             recorded_reason = "adapter returned ok with no events"
         moment = synced_at if synced_at is not None else datetime.now(UTC)
-        recorded_at = _format_recorded_at(self._clock())
         # ``isolation_level=None``: this method owns BEGIN/COMMIT itself so the
         # write lock is taken up front (IMMEDIATE) and held across all three writes.
         conn = sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
         with closing(conn):
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Read the clock only once the write lock is held, so ``recorded_at``
+                # order agrees with commit order (a writer that waited reads it last).
+                recorded_at = _format_recorded_at(self._clock())
                 if usable:
                     _upsert_on(conn, events, moment)
                 cursor = conn.execute(
@@ -280,7 +282,9 @@ class DividendEventStore:
                 )
                 conn.execute("COMMIT")
             except BaseException:
-                conn.execute("ROLLBACK")
+                # A failed COMMIT may already have ended the transaction.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise
         return int(run_id)
 
