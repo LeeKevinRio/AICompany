@@ -199,9 +199,35 @@ def draw_bird(img):
         d.line([(cx + cw * dx, cy + ch * 0.36), (cx + cw * dx, cy + ch * 0.46)], fill=RED, width=int(4 * S))
 
 
+def tilted_stick(img, cx, cy, w, h, angle, color):
+    """Draw a stick on its own layer, rotate it (degrees, counter-clockwise) and composite it at (cx, cy)."""
+    size = int(max(w, h) * 1.6)
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    stick(ImageDraw.Draw(layer), size / 2, size / 2, w, h, color)
+    layer = layer.rotate(angle, resample=Image.BICUBIC)
+    img.alpha_composite(layer, (int(cx - size / 2), int(cy - size / 2)))
+
+
+def draw_eight_bamboo(img):
+    """8條: the classic 'M' on top and an upside-down 'M' below (outer sticks upright, inner two leaning)."""
+    cw, ch = CX1 - CX0, CY1 - CY0
+    w = min(cw * 0.13, 20 * S)
+    h = ch * 0.40
+    for half, (cy_frac, sign) in enumerate(((0.26, 1), (0.74, -1))):
+        cy = CY0 + ch * cy_frac
+        tilted_stick(img, CX0 + cw * 0.12, cy, w, h, 0, GREEN)
+        tilted_stick(img, CX0 + cw * 0.88, cy, w, h, 0, GREEN)
+        # top half: inner sticks meet at the bottom (a 'V' inside the M); bottom half mirrors it
+        tilted_stick(img, CX0 + cw * 0.37, cy, w, h * 1.04, 22 * sign, GREEN)
+        tilted_stick(img, CX0 + cw * 0.63, cy, w, h * 1.04, -22 * sign, GREEN)
+
+
 def draw_sou(img, n):
     if n == 1:
         draw_bird(img)
+        return
+    if n == 8:
+        draw_eight_bamboo(img)
         return
     d = ImageDraw.Draw(img)
     cw, ch = CX1 - CX0, CY1 - CY0
