@@ -29,6 +29,7 @@
 #          （最新收盤相對區間內至最新收盤為止的最高收盤之回撤），門檻 -0.2／-0.3 不變。
 #          兩條規則的 invalidation 原文本就以「目前回撤」描述，未變動；其餘規則未變動。
 #          name／explanation／counterargument 的字面調整 2026-10-04 risk-compliance-officer 有條件 APPROVE，字面依 work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md。
+#          上線前仍待 R2（CEO 書面知悉兩項代價：門檻附近來回跳；卡片可能由停損／減碼參考翻成加碼參考）；R2 完成前不得發版。
 version: "1.1.0"
 updated_at: "2026-10-04"
 
