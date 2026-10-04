@@ -1,8 +1,9 @@
 # ADR-0017：stock-desk 持倉部分更新與寫入路徑的市場幣別一致性
 
-- 狀態：proposed
+- 狀態：accepted
+- 2026-10-04 accepted；此後變更以修訂註記或新 ADR 處理（依 ADR-0001，生效後不得原地改寫決策）。
 - 日期：2026-10-03
-- 決策者：tech-architect（草案）；CEO 待核可（見「需要 CEO 決定」）
+- 決策者：tech-architect（草案）；CEO 核可 2026-10-04（CEO 原話：「ADR-0016、ADR-0017 可以開始執行」；來源：2026-10-04 任務單轉述）。各待決事項的處理結果見「需要 CEO 決定」
 - 適用範圍：僅 product/stock-desk 產品線
 - 與既有 ADR 的關係：不取代、不修訂任何既有 ADR。承接 PRD `work/stock-desk-庫存頁-PRD.md` §4 第 1 點與待裁定 Q1（是否新增 `PATCH /api/positions/{id}`）、Q3（`/positions/import` 轉址作法）。
 - 編號說明：0013 缺號，但已被 ADR-0014、ADR-0016 與 `work/` 內的草稿引用（指員工線 `chore/agent-readonly-hook` 的唯讀 hook ADR），依 ADR-0001「編號不重用」不得挪用；0015、0016 已落檔，故本 ADR 使用 0017（來源：tech-architect 2026-10-03 裁定）。落檔時 `docs/adr/` 目錄查無 0017，`grep 0017` 於 repo 內亦無 ADR 引用。
@@ -149,8 +150,10 @@
 
 ## 需要 CEO 決定
 
-1. 核可本 ADR。
-2. 合併前，在實機 DB 跑唯讀盤點 SQL：
+> 裁定結果（2026-10-04，來源：CEO 2026-10-04 核可「ADR-0016、ADR-0017 可以開始執行」；各點結果依任務單轉述）。
+
+1. 核可本 ADR。 **〔裁定 2026-10-04：✔ 核可。〕**
+2. 合併前，在實機 DB 跑唯讀盤點 SQL： **〔2026-10-04：待 CEO 本機執行；尚無執行結果，結果出來前此點未結。〕**
 
    ```sql
    SELECT id, symbol, market, currency FROM positions WHERE (market='TW' AND currency<>'TWD') OR (market='US' AND currency<>'USD');
