@@ -142,6 +142,7 @@ class PriceChange(BaseModel):          # frozen
       - `recorded_at`：store 自身時鐘（可注入供測試），UTC、帶時區，固定為 ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffff+00:00` 以確保字串比較即時間比較；不得接受呼叫端傳入（比照 ADR-0012 C-10），現行 `upsert(..., synced_at=)` 參數不得用來填此欄。
       - `status='ok'` ⇔ adapter 回 ok、`event_count > 0`，且同一 transaction 的 upsert 成功；其餘一律 `failed`。`reason` 只進資料庫與 log，不進 API 回應（K-6）。
       - `unparsed_count`：有 `Code` 但日期無法解析的列數，代號逐一寫入 `dividend_sync_unparsed`。
+        > 〔2026-10-04 實作註記，tech-architect 確認〕`unparsed_count` 與 `dividend_sync_unparsed` 的實際範圍為「有 `Code`、但未以事件寫入 `dividend_events` 的列」，不限於日期無法解析（例如 Exdividend 旗標不明、權／權息缺股票股利比）。理由：此類列 F6 看不到，必須擋覆蓋。方向比原文保守；`SHOW_WHEN_COVERAGE_UNKNOWN = True` 下不改變任何回應內容。schema 註解 `strip().upper() of a row whose date did not parse` 依此理解。
       - `unattributed_count`：沒有 `Code`、無法歸屬代號的列數。
     - 讀取：ok run（`recorded_at >= recorded_not_before`）左連查詢代號的 `dividend_sync_unparsed`，**整本帳一條 SQL**（K-7），回傳 `DividendAnnounceObservation` 形狀：
       - 與查詢代號無關的 run 回一筆 `symbol=None`；
@@ -157,6 +158,7 @@ class PriceChange(BaseModel):          # frozen
       - 任一相關 run 的 `recorded_at` 沒有時區：該列回 `unknown`，不得略過該 run。
       - 讀取失敗（`sqlite3.Error`、`OSError`、`ValueError`）：整本帳回 `unknown`，記 WARNING，不拋出（不觸發 D-3 的整欄 null）。
       - 本資料流下，④ 的「窗內有日期」分支與 F6 重疊（同 transaction 保證），保留作為防線，不得因重疊而刪除。
+        > 〔2026-10-04 實作註記，tech-architect 確認〕主 DB 資料流下，adapter 依 D-5.2 讀取規格不產出帶日期的觀測；④ 的「窗內有日期」分支實質由 F6（同讀 `dividend_events`）承擔。規則程式碼中該分支保留、不得刪除，供其他 `AnnounceRunSource` 實作使用。不要求主 DB adapter 另行 JOIN `dividend_events`：其與 F6 同源，不構成獨立防線。
   - **D-5.4 F6 與覆蓋判定同源**：F6 只讀主 DB `dividend_events`，不讀 `pit_dividend_announce_rows`。同源的前提是 TWT48U 同步排程化（見交接與升級，CEO 核可、devops-sre 執行）。排程落地前同步紀錄只來自手動 CLI，覆蓋判定多數回 `unknown`，行為等同 `CoverageNotYetJudged`，不構成退步。
   - **D-5.5 顯示效果的誠實說明**：`SHOW_WHEN_COVERAGE_UNKNOWN = True` 下，`known` 與 `unknown` 皆照常顯示，覆蓋判定不改變任何回應內容。它的作用是 (i) 經由排程同步讓 F6 擁有同源事件資料；(ii) 為日後是否檢討該常數提供可量測依據。
   - **D-5.6 參數與改動治理**
@@ -401,3 +403,9 @@ V-1 查證判準：
    - 擋得住的部分：`dividend_events` 能證明窗內有除權息日時回 null。但 `TWT48U_ALL` 只涵蓋上市股，而且只列未來的除權息日（`dividends/providers.py:92-97,101-106`；ADR-0012 L122），scheduler 也沒有排程同步（`scheduler.py` 查無 dividend 字樣）。
    - 擋不住的部分：上櫃股、美股、未同步期間的除權息，以及美股或 ETF 分割。這些需要一句揭露，由 creative-lead 起草、風控審。**我建議它和收盤版同一批上線**（請風控或 CEO 決定是否放寬成不擋上線）。
 5. **事實更正**：風控紀錄 L61 寫「accepted ADR」，但 ADR-0014 目前是 `proposed`（ADR-0014 L3）。依 ADR-0001 L18，proposed 狀態可以原地加修訂註記，比照它在 L7 / L318 / L430 依 ADR-0015 加註的寫法。CLAUDE.md §2 的規則仍然照常適用，視同約束。
+
+---
+
+## 實作紀錄
+
+- 2026-10-04：D-5.2 主 DB 同步紀錄與 adapter 已落地（commit `69c3c22`，未接線）；K-17 接線與 D-5.4 排程另案進行。
