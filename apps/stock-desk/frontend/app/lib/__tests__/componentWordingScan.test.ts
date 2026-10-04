@@ -1607,7 +1607,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
   const entrySrc = read("../../position/[symbol]/EntryObservationPanel.tsx");
   const pageSrc = read("../../position/[symbol]/page.tsx");
 
-  it("操作摘要 candidate 分支（wave3，派工單 §4.3 第 2 點）：disclaimer／confidenceMeaning／反面論點／資料時間前綴／CANDIDATE_EVIDENCE_NOTICE 只出現在 <details> 之後；主視圖改留 NOT_HELD_BADGE，且徽章與原句用 showBadge 三元運算式互斥", () => {
+  it("操作摘要 candidate 分支（wave3，派工單 §4.3 第 2 點）：disclaimer／confidenceMeaning／反面論點／資料來源前綴／CANDIDATE_EVIDENCE_NOTICE 只出現在 <details> 之後；主視圖改留 NOT_HELD_BADGE，且徽章與原句用 showBadge 三元運算式互斥", () => {
     const start = summarySrc.indexOf('if (model.kind === "candidate")');
     const end = summarySrc.indexOf('// model.kind === "held"');
     expect(start).toBeGreaterThan(-1);
@@ -1653,7 +1653,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).not.toContain("QuantitySection");
   });
 
-  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料時間前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴／舊「規則評估：」複合詞只出現在 <details> 之後；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
     const start = summarySrc.indexOf('// model.kind === "held"');
     const end = summarySrc.indexOf("function DataMetaPrefixLine");
     expect(start).toBeGreaterThan(-1);
@@ -1691,7 +1691,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).not.toContain("quantityRangeShares");
   });
 
-  it("no_price／no_action 分支（wave3 改版）：disclaimer 整行移除（全站頁尾 app/layout.tsx 已有一句常駐免責），資料時間前綴與舊字面收進最小 <details>；no_action 主視圖改為大字「資料不足」＋常駐小字 INSUFFICIENT_DATA_NO_EVALUATION，不掛 RULE_SOURCE_CHIP", () => {
+  it("no_price／no_action 分支（wave3 改版）：disclaimer 整行移除（全站頁尾 app/layout.tsx 已有一句常駐免責），資料來源前綴與舊字面收進最小 <details>；no_action 主視圖改為大字「資料不足」＋常駐小字 INSUFFICIENT_DATA_NO_EVALUATION，不掛 RULE_SOURCE_CHIP", () => {
     const noPriceStart = summarySrc.indexOf('if (model.kind === "no_price")');
     const noActionStart = summarySrc.indexOf('if (model.kind === "no_action")');
     const candidateStart = summarySrc.indexOf('if (model.kind === "candidate")');
@@ -1736,7 +1736,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("{fmt(levels.target2R)}");
   });
 
-  it("六項觀察條件：E-1 與資料時間句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
+  it("六項觀察條件：E-1 與回應產生時間句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
     const compStart = entrySrc.indexOf("export function EntryObservationPanel(");
     expect(compStart).toBeGreaterThan(-1);
     const detailsIdx = entrySrc.indexOf('<details className="group mt-3">', compStart);
@@ -1751,11 +1751,11 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("STATUS_GLYPH[c.status]");
   });
 
-  it("技術分析（wave3，派工單 §4.3 第 5／9 點）：bars／signals 的「資料時間：…｜來源：…」前綴與完整版徽章只出現在 <details> 內；主視圖合併同一列，只留「資料截至」徽章＋compact 狀態 chip（「日線」「指標」前綴沿用既有字面）", () => {
+  it("技術分析（wave3，派工單 §4.3 第 5／9 點）：bars／signals 的「資料來源：…」前綴（L-10：已拿掉時間）與完整版徽章只出現在 <details> 內；主視圖合併同一列，只留「資料截至」徽章＋compact 狀態 chip（「日線」「指標」前綴沿用既有字面）", () => {
     const technicalDetailsIdx = pageSrc.indexOf("{DETAILS_SUMMARY_TECHNICAL}");
     expect(technicalDetailsIdx).toBeGreaterThan(-1);
-    const barsPrefix = "資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}";
-    const signalsPrefix = "資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}";
+    const barsPrefix = "資料來源：{bars.data.data.source}";
+    const signalsPrefix = "資料來源：{signals.data.data.source}";
     expect(pageSrc.indexOf(barsPrefix)).toBeGreaterThan(technicalDetailsIdx);
     expect(pageSrc.indexOf(signalsPrefix)).toBeGreaterThan(technicalDetailsIdx);
     const mainRegion = pageSrc.slice(pageSrc.indexOf("{TECHNICAL_ANALYSIS_TITLE}</h2>"), technicalDetailsIdx);
@@ -1895,11 +1895,11 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(LADDER_BAND_TAG).toBe("MA20 ±3%");
     expect(LADDER_BAND_NOTE).toBe("有「MA20 ±3%」標籤的列，價位皆在該範圍內。");
     expect(buildDefensiveHitsText(1)).toBe("命中 1 條");
-    expect(buildDataTimesLine("A", "B", "C", false)).toBe("資料時間：日線 A｜指標 B｜規則評估 C");
-    expect(buildDataTimesLine("A", "A", "A", true)).toBe("資料時間：A（日線／指標／規則評估同步）");
+    expect(buildDataTimesLine("A", "B", "C", false)).toBe("回應產生時間：日線 A｜指標 B｜規則評估 C");
+    expect(buildDataTimesLine("A", "A", "A", true)).toBe("回應產生時間：A");
     // REQ-3: identical display strings are NOT enough — the caller decides from raw stamps.
-    expect(buildDataTimesLine("A", "A", "A", false)).toBe("資料時間：日線 A｜指標 A｜規則評估 A");
-    expect(buildDataTimesLine(null, null, null, false)).toBe("資料時間：日線 —｜指標 —｜規則評估 —");
+    expect(buildDataTimesLine("A", "A", "A", false)).toBe("回應產生時間：日線 A｜指標 A｜規則評估 A");
+    expect(buildDataTimesLine(null, null, null, false)).toBe("回應產生時間：日線 —｜指標 —｜規則評估 —");
     expect(buildEntryBasisRange(null).formula[0]).toContain("位階(近N根)");
     expect(buildEntryRangeNotValuationNote(null)).toBe("位階數字僅反映價格在近 N 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
     expect(buildEntryRangeNotValuationNote(252)).toBe("位階數字僅反映價格在近 252 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
@@ -1931,8 +1931,8 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataTimesLine("]) {
       expect(panelSrc).toContain(needle);
     }
-    // CEO 第二次裁定 2026-09-19（推翻一眼一句 §2.5 的「E-1／資料時間句常駐主視圖」
-    // 舊裁定）：E-1、E-2、E-3、資料時間句（不論是否 synchronized）全數收進
+    // CEO 第二次裁定 2026-09-19（推翻一眼一句 §2.5 的「E-1／時間句常駐主視圖」
+    // 舊裁定）：E-1、E-2、E-3、回應產生時間句（不論是否 synchronized）全數收進
     // `<details>`（六項觀察條件唯一允許的摺疊區塊，summary＝`DETAILS_SUMMARY_ENTRY`）；
     // 主視圖只留 h2、計數句、六圓點。精確的「只出現在 details 內」位置比對見
     // 「CEO 第二次裁定 wave2」describe block。
@@ -2527,5 +2527,55 @@ describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
     expect(jsxLine).not.toMatch(/truncate|title=|sr-only|aria-hidden|tooltip/);
     // The line precedes the 規則版本 line inside the card frame.
     expect(cardSrc.indexOf("{dataAsOfBadge}")).toBeLessThan(cardSrc.indexOf("規則版本 {advice.rules_version}"));
+  });
+});
+
+describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現「資料時間：」（含全形冒號）", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  // Strip block comments (incl. JSX `{/* */}`) and whole-line `//` comments so that only
+  // code and user-visible literals are scanned; explanatory comments may name the old label.
+  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const FILES: ReadonlyArray<readonly [string, string]> = [
+    ["AdviceCardView.tsx", "../../position/[symbol]/AdviceCardView.tsx"],
+    ["OperationSummaryPanel.tsx", "../../position/[symbol]/OperationSummaryPanel.tsx"],
+    ["page.tsx", "../../position/[symbol]/page.tsx"],
+    ["LeverageChapterView.tsx", "../../position/[symbol]/LeverageChapterView.tsx"],
+    ["entryObservationWording.ts", "../entryObservationWording.ts"],
+  ];
+
+  for (const [name, rel] of FILES) {
+    it(`${name} 不得含「資料時間：」`, () => {
+      const code = stripComments(read(rel));
+      expect(code).not.toContain("資料時間：");
+      expect(code).not.toContain("資料時間:");
+    });
+  }
+
+  it("buildDataTimesLine 各分支輸出不得含「資料時間」，且皆以「回應產生時間：」開頭", () => {
+    const outputs = [
+      buildDataTimesLine("A", "B", "C", false),
+      buildDataTimesLine("A", "A", "A", true),
+      buildDataTimesLine("A", "A", "A", false),
+      buildDataTimesLine(null, null, null, false),
+    ];
+    for (const out of outputs) {
+      expect(out).not.toContain("資料時間");
+      expect(out.startsWith("回應產生時間：")).toBe(true);
+      expect(out).not.toContain("同步");
+    }
+  });
+
+  it("新字面就位：日線取得時間（建議卡／槓桿章節）、資料來源前綴（面板／page）", () => {
+    expect(stripComments(read("../../position/[symbol]/AdviceCardView.tsx"))).toContain(
+      "規則版本 {advice.rules_version}｜日線取得時間：{formatDateTime(advice.as_of)}｜觀察區間：",
+    );
+    const lev = stripComments(read("../../position/[symbol]/LeverageChapterView.tsx"));
+    expect(lev).toContain(
+      "日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}",
+    );
+    expect(lev).toContain("指數日線取得時間：");
+    expect(stripComments(read("../../position/[symbol]/OperationSummaryPanel.tsx"))).toContain(
+      "資料來源：{response.data.source}",
+    );
   });
 });

@@ -18,9 +18,9 @@ describe("formatDateTime — S1: every timestamp names its own timezone", () => 
   });
 
   it("does not fabricate a timezone label for a missing/invalid timestamp", () => {
-    expect(formatDateTime(null)).toBe("資料時間不明");
-    expect(formatDateTime(undefined)).toBe("資料時間不明");
-    expect(formatDateTime("not-a-date")).toBe("資料時間不明");
+    expect(formatDateTime(null)).toBe("時間不明");
+    expect(formatDateTime(undefined)).toBe("時間不明");
+    expect(formatDateTime("not-a-date")).toBe("時間不明");
   });
 });
 

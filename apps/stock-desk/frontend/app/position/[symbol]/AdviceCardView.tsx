@@ -128,7 +128,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
       */}
       {dataAsOfBadge !== null && <p className="mb-1 text-xs text-neutral-400">{dataAsOfBadge}</p>}
       <p className="text-xs text-neutral-500">
-        規則版本 {advice.rules_version}｜資料時間：{formatDateTime(advice.as_of)}｜觀察區間：
+        規則版本 {advice.rules_version}｜日線取得時間：{formatDateTime(advice.as_of)}｜觀察區間：
         {advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}
         （{advice.observation_window.bars ?? "—"} 根日線）
       </p>

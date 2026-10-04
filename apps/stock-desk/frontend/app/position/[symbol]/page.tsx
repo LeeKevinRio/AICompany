@@ -5,7 +5,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { ApiError } from "../../lib/api";
-import { formatDateTime, formatNumber, marketLabel } from "../../lib/format";
+import { formatNumber, marketLabel } from "../../lib/format";
 import { inferTradingViewExchange } from "../../lib/tradingViewSymbol";
 import { useAdvice, useBars, useDirectoryResolve, useLeverageChapter, usePositions, useSignals } from "../../lib/queries";
 import type { Market } from "../../lib/types";
@@ -271,15 +271,15 @@ export default function PositionDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
           {/*
-            CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料時間：…｜
-            來源：…」前綴文字改印在下方「詳細」的第一行（字面不動）。
+            CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料來源：…」
+            前綴文字改印在下方「詳細」的第一行（L-10 已拿掉時間）。
 
             wave3（派工單 §4.3 第 5／9 點）：bars／signals 兩顆徽章合併同一列
             （R-A1 只要求 signals 徽章本體留在主視圖，未要求另佔一行）；徽章本
             身換成「資料截至 {MM-DD}」（取 bars 的 last_bar_date，本區塊唯一的
             「資料截至」徽章）＋各自的 compact 狀態 chip，前綴「日線」「指標」
             沿用 `buildDataTimesLine` 既有字面（entryObservationWording.ts）的
-            同一組子字串，不新造。完整版徽章與「資料時間：…｜來源：…」前綴改
+            同一組子字串，不新造。完整版徽章與「資料來源：…」前綴改
             印在下方「詳細」第一、二行。
           */}
           <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
@@ -425,14 +425,14 @@ export default function PositionDetailPage() {
           </summary>
           <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
             {/*
-              CEO 第二次裁定 2026-09-19：兩段「資料時間：…｜來源：…」前綴文字，
-              字面與主視圖徽章列原本一致。wave3（派工單 §4.3 追加第 9 點）：
+              CEO 第二次裁定 2026-09-19：兩段「資料來源：…」前綴文字
+              （L-10 風控核可 2026-10-04：已拿掉時間，只留來源）。wave3（派工單 §4.3 追加第 9 點）：
               完整版徽章（非 compact，含分鐘數／括號句／reason）同一行接在後
               面——主視圖只留 compact 版，完整版一字不刪，只搬到這裡。
             */}
             {bars.isSuccess && (
               <p>
-                資料時間：{formatDateTime(bars.data.as_of)}｜來源：{bars.data.data.source}
+                資料來源：{bars.data.data.source}
                 <DataMetaStatusBadge
                   status={bars.data.data.status}
                   stalenessMinutes={bars.data.data.staleness_minutes}
@@ -444,7 +444,7 @@ export default function PositionDetailPage() {
             )}
             {signals.isSuccess && (
               <p>
-                資料時間：{formatDateTime(signals.data.as_of)}｜來源：{signals.data.data.source}
+                資料來源：{signals.data.data.source}
                 <DataMetaStatusBadge
                   status={signals.data.data.status}
                   stalenessMinutes={signals.data.data.staleness_minutes}

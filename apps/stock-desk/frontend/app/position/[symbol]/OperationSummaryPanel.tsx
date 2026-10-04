@@ -15,7 +15,6 @@ import {
   RULE_SOURCE_CHIP,
   summaryConfidenceLabel,
 } from "../../lib/adviceWording";
-import { formatDateTime } from "../../lib/format";
 import { invalidationDisclosureForCondition } from "../../lib/ruleSelection";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
@@ -31,7 +30,7 @@ import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLine
  * 裁定（2026-09-19 深夜，`work/stock-desk-一眼一句簡化-派工單.md` §4）＋
  * wave3 字面重寫（同檔 §4.3，風控逐字核可）：主視圖不放任何免責、教育用途、
  * 解碼／限定句、指引句——disclaimer、`confidenceMeaning`、反面論點、
- * `buildFooterGuidance`／`buildFooterGuidanceForDataSource`、資料時間前綴文字
+ * `buildFooterGuidance`／`buildFooterGuidanceForDataSource`、資料來源前綴文字
  * 全部收進 `<details>`；wave3 進一步把 held 分支的舊「規則評估：{動作}」複合詞
  * 拆成純標籤＋同列 `RULE_SOURCE_CHIP` chip，候選分支加「未持有」徽章、
  * `CANDIDATE_EVIDENCE_NOTICE` 移進詳細，主要依據改短前綴「依據：」，信心改短
@@ -80,14 +79,14 @@ export function OperationSummaryPanel({ advice }: { advice: UseQueryResult<Advic
           which still returns `data=data_meta(loaded.meta())`), so this is
           gated on `advice.isSuccess` alone, not on a card being present.
 
-          CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料時間：…｜
-          來源：…」前綴文字改由 `SummaryBody` 印在各分支自己的 `<details>`
-          第一行（`DataMetaPrefixLine`），字面不變。
+          CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料來源：…」
+          前綴文字改由 `SummaryBody` 印在各分支自己的 `<details>`
+          第一行（`DataMetaPrefixLine`）；L-10 已拿掉回應時間。
 
           wave3（派工單 §4.3 第 5／9 點）：徽章本體本身也換成「資料截至
           {MM-DD}」＋狀態縮寫 chip（`compact`），完整版（分鐘數、括號句、
           `reason`）改由 `DataMetaPrefixLine` 在 `<details>` 內用同一元件的
-          非 compact 版渲染，同一行接在「資料時間：…｜來源：…」後面。
+          非 compact 版渲染，同一行接在「資料來源：…」後面。
         */}
         {advice.isSuccess && (
           <span className="flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
@@ -384,8 +383,8 @@ function InvalidationConditions({
 
 /**
  * CEO 第二次裁定 2026-09-19：主視圖只留 `DataMetaStatusBadge` 徽章本體，
- * 「資料時間：…｜來源：…」前綴文字（原本就在 `OperationSummaryPanel` 的 h2
- * 徽章列裡）改印在各分支自己 `<details>` 的第一行，字面完全相同、不新造。
+ * 「資料來源：…」前綴文字（原本就在 `OperationSummaryPanel` 的 h2
+ * 徽章列裡）改印在各分支自己 `<details>` 的第一行，L-10 風控核可（2026-10-04）已拿掉回應時間，只留來源。
  * wave3（派工單 §4.3 追加第 9 點）：主視圖徽章換成 compact 版之後，完整版
  * （分鐘數、括號句、`reason`）改用同一元件的非 compact 版渲染在這一行，緊接
  * 在文字前綴之後——沒有任何字面被刪除，只有出現位置變了。
@@ -393,7 +392,7 @@ function InvalidationConditions({
 function DataMetaPrefixLine({ response }: { response: AdviceResponse }) {
   return (
     <p>
-      資料時間：{formatDateTime(response.as_of)}｜來源：{response.data.source}
+      資料來源：{response.data.source}
       <DataMetaStatusBadge
         status={response.data.status}
         stalenessMinutes={response.data.staleness_minutes}
@@ -407,7 +406,7 @@ function DataMetaPrefixLine({ response }: { response: AdviceResponse }) {
 
 /**
  * no_price／no_action 分支內容本就極簡（Insufficient／Stale 兩塊而已），沒有
- * 既存的 `<details>` 可承接資料時間前綴——這裡補一個只裝這一行的最小
+ * 既存的 `<details>` 可承接資料來源前綴——這裡補一個只裝這一行的最小
  * `<details>`，維持「主視圖只留徽章本體」的規則，不額外新造任何字面。
  * `children`（wave3 追加）讓 no_action 分支能一併把 `HELD_ACTION_LABELS_LEGACY.insufficient_data`
  * 舊字面放進同一個詳細區，不必為它另開一個 `<details>`。

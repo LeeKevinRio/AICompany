@@ -182,7 +182,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                 : chapter.drag.theoretical.reason}
             </p>
             <p className="mt-2 text-xs text-neutral-600">
-              資料時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}
+              日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}
             </p>
             <AssumptionsList items={chapter.drag.assumptions} />
           </>
@@ -240,7 +240,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
               </table>
             </div>
             <p className="mt-2 text-xs text-neutral-600">
-              波動估計視窗：{chapter.erosion.observations}／{chapter.erosion.window} 個報酬｜資料時間：
+              波動估計視窗：{chapter.erosion.observations}／{chapter.erosion.window} 個報酬｜指數日線取得時間：
               {formatDateTime(chapter.erosion.as_of)}
             </p>
             <AssumptionsList items={chapter.erosion.assumptions} />

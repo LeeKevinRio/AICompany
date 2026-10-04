@@ -124,7 +124,7 @@ export function EntryObservationPanel({
 
       {/*
         CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
-        §4）：E-1 與資料時間句一律收進 `<details>`，字面不動——主視圖只留
+        §4）：E-1 與回應產生時間句（E-4）一律收進 `<details>`，字面不動——主視圖只留
         h2＋計數句＋六圓點。
       */}
 

@@ -254,7 +254,7 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
             D3 suggested (波次1文案裁決.md 複審): `last_synced_at` is null in
             exactly one case — the store has no rows at all, i.e. never synced
             (`DividendStore.last_synced_at`). Passing that null to
-            `formatDateTime` printed 「資料時間不明」, which claims the timestamp
+            `formatDateTime` printed 「時間不明」, which claims the timestamp
             is unknown when it is in fact known to not exist; say so instead.
           */}
           <p className="mt-2 text-xs text-neutral-500">

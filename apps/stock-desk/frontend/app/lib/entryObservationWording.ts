@@ -78,9 +78,9 @@ export function buildDataTimesLine(
   const s = signals ?? "—";
   const a = advice ?? "—";
   if (synchronized && bars !== null) {
-    return `資料時間：${b}（日線／指標／規則評估同步）`;
+    return `回應產生時間：${b}`;
   }
-  return `資料時間：日線 ${b}｜指標 ${s}｜規則評估 ${a}`;
+  return `回應產生時間：日線 ${b}｜指標 ${s}｜規則評估 ${a}`;
 }
 
 export const ENTRY_NO_DATA_STATEMENT = "目前資料不足，六條條件均無法判定。";

@@ -190,9 +190,9 @@ export function formatQuantity(value: string): string {
  * per-call-site wording decision.
  */
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "資料時間不明";
+  if (!iso) return "時間不明";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "資料時間不明";
+  if (Number.isNaN(d.getTime())) return "時間不明";
   const formatted = new Intl.DateTimeFormat("zh-Hant-TW", {
     timeZone: "Asia/Taipei",
     year: "numeric",

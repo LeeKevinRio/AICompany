@@ -68,7 +68,7 @@ export function DataMetaStatusBadge({
    * wave3（`work/stock-desk-一眼一句簡化-派工單.md` §4.3 追加第 9 點）:
    * with `compact`, the sentence is left to a second, non-`compact` render
    * of this same component in the caller's `<details>` (same line as the
-   * "資料時間：…｜來源：…" prefix) -- never invented or paraphrased here --
+   * "資料來源：…" prefix) -- never invented or paraphrased here --
    * EXCEPT when the status is `fresh`: a `fresh` answer draws no chip, so a
    * spliced series (ADR-0009 D-7, served as `fresh` with only `reason` to
    * say so) would leave the main view blank. That case falls back to the
