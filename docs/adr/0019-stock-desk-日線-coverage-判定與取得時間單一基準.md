@@ -1,6 +1,6 @@
 # ADR-0019：stock-desk 日線 coverage 判定與「取得時間」單一基準（部分取代 ADR-0009 D-3／D-5）
 
-- 狀態：proposed
+- 狀態：proposed（待 CEO 核可；D-5 已由風控裁示 (b)）
 - 日期：2026-10-04
 - 決策者：tech-architect（草案）、CEO（核可）；D-5 字面由 risk-compliance-officer 裁示
 - 適用範圍：僅 product/stock-desk 產品線
@@ -25,9 +25,11 @@
 - 源於：L-10／L-10c，見 `work/reviews/2026-10-04-個股頁-資料時間標籤-風控審查.md`。
 - 對 ADR-0009 的處理：ADR-0009 只在檔頭「修訂」清單加一行指標（見 K-14），不改決策內文；該指標行標明「ADR-0019 accepted 後生效」。
 - 對 ADR-0010 的影響：D-1 的 cache-only 讀取改用本 ADR D-1 判定式（見檔頭「取代」）；本落檔未修改 ADR-0010。
+- 風控立場（`work/reviews/2026-10-04-個股頁-資料時間標籤-風控審查.md` 末段，2026-10-04）：D-1（空洞）與 D-2（P4）為 required 等級，不接受以揭露代替修正（列管 L-10h）；
+  L-10g（`LeverageChapterView.tsx` 以「日線取得時間」顯示列層 `as_of`）為新增列管，本 ADR 改 accepted 前必須結案（見 K-13）。
 - 狀態為 proposed 的理由：
   1. 待 CEO 核可。
-  2. D-5 (a)／(b) 待 risk-compliance-officer 裁示（tech-architect 偏好 (b)，見 D-5）。
+  2. D-5 已由 risk-compliance-officer 於 2026-10-04 裁示 (b)（見 D-5）；僅待 CEO 核可。
 
 ---
 
@@ -98,12 +100,11 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
 - **D-5（L-10c 對齊基準，資料介面層表態；字面由風控裁示）**
   序列層級的「取得時間」只有一個定義：服務回傳的 `ProviderResult.as_of`（快取路徑即 `checked_at`）。
   `PriceBar.as_of` 與訊號層各 `as_of` 欄（`signals/frame.py::provenance` 等）是機器可讀的列出處，**不得**以「取得」字樣顯示給使用者。
-  風控二擇一：
-  (a) **對齊**：`LoadedBars`／`DataMeta` 新增 `fetched_at: str | None`（ISO 8601、帶時區，取自同一個 `ProviderResult.as_of`；UNAVAILABLE 為 null），
-      卡片改讀同一個 `/api/advice` 回應的 `data.fetched_at`（比照它已經讀 `data.last_bar_date`），不再讀 `advice.as_of`；
-      分鐘數仍只取 `staleness_minutes`，前端不自行由 `fetched_at` 重算。
-  (b) **拿掉卡片時間**（比照 V-3A）。不新增欄位。
-  架構上兩者皆可。tech-architect 偏好 (b)：介面面積較小，provenance 只留在徽章一處。
+  **風控裁示（2026-10-04）：選 (b) 拿掉建議卡時間（比照 V-3A），不新增欄位。** (a)（對齊：`DataMeta` 新增 `fetched_at`、卡片改讀 `data.fetched_at`）已否決，理由見
+  `work/reviews/2026-10-04-個股頁-資料時間標籤-風控審查.md` 末段「L-10c／ADR-0019 D-5 與 L-10b-2 裁示」。
+  (b) 的核可字面（`AdviceCardView.tsx`，風控紀錄逐字）：
+  `規則版本 {advice.rules_version}｜觀察區間：{advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}（{advice.observation_window.bars ?? "—"} 根日線）`。
+  卡片任何位置不得再渲染 `advice.as_of`。
 
 ## Consequences（後果）
 
@@ -140,8 +141,8 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
 - **K-9** 判定 coverage 時不得使用 `market_trading_days` 或任何列連續性的啟發式；測試裡可以用它當 oracle。
 - **K-10** `_incremental_start`（D-7）的三個條件不變。
 - **K-11** live rung 回傳的 `ProviderResult.as_of` 必須等於同一次 `put`／`record_fetch` 用的 `fetched_at`（D-4）。實作前 dev-lead 要先 grep 服務端 `as_of` 的所有消費者（含指數與基準路徑），列在 PR 裡。
-- **K-12** 本 ADR 不改徽章八句字面（`dataMetaStatusBadge.test.ts` 不得修改）。D-5 的任何畫面字面都要等風控裁示後才落地。
-- **K-13** 不論 D-5 選 (a) 或 (b)，`AdviceCardView.tsx` 都不得再以「取得」字樣顯示 `advice.as_of`。選 (a) 時只能讀 `data.fetched_at`。
+- **K-12** 本 ADR 不改徽章八句字面（`dataMetaStatusBadge.test.ts` 不得修改）。D-5 的畫面字面以風控 2026-10-04 核可版為準（見 D-5），不得另行變動。
+- **K-13** 前端任何檔案不得以「取得」字樣顯示 `PriceBar.as_of` 或訊號層各 `as_of` 欄；`AdviceCardView.tsx` 不得讀 `advice.as_of`；`LeverageChapterView.tsx` 現行兩行（L-10g）為已知殘餘，替代字面落地前暫留，本 ADR 改 accepted 前必須結案；以 grep 守門測試釘住。
 - **K-14** ADR-0009 只在檔頭加指標行，不改 D-x 內文。
 
 ---
@@ -192,7 +193,7 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
 - **T-11** `test_a_disjoint_range_replaces_the_coverage_instead_of_bridging_the_gap` 保留，並補上兩欄的斷言。
 - **T-12** D-7 增量抓取在修正後仍只發 1～2 次呼叫，且 `tail_fetched_at` 有推進。
 - **T-13** P1 情境（尾段某月 `complete=False`）在修正後的行為照 Consequences 所述：冷卻期內 `is_within_ttl=False` 並附原因；冷卻期過後重抓。
-- **T-14（D-4）** live 回應的 `as_of`、fetch log 的 `tail_fetched_at`、之後快取回應的 `as_of` 三者相等。若 D-5 選 (a)，再加：`DataMeta.fetched_at` 等於同一值，且前端卡片讀 `data.fetched_at`。
+- **T-14（D-4）** live 回應的 `as_of`、fetch log 的 `tail_fetched_at`、之後快取回應的 `as_of` 三者相等。
 
 既有測試若斷言「`covered_end < expected` 仍由快取服務」，代表該測試釘住的正是這個 bug。只能依 D-1 改寫，PR 要逐條說明，不得放寬。
 
