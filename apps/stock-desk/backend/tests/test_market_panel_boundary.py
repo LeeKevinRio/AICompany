@@ -17,7 +17,7 @@ from app.data.cache import PriceBarCache
 from app.data.interface import BarSnapshotRow, Market, PriceBar
 from app.data.market_panel import MarketPanelStore
 from app.scheduler import DATA_REFRESH_LOOKBACK_DAYS
-from tests.import_graph import module_path, reachable_app_modules
+from tests.import_graph import APP_ROOT, module_path, offenders, reachable_app_modules
 
 
 def _file_sha256(path: Path) -> str:
@@ -110,17 +110,53 @@ def test_c7_price_bars_cache_untouched_by_a_market_db_capture(tmp_path: Path) ->
     assert not any(name.startswith("pit_") for name in tables)
 
 
+def _package_modules(package: str) -> tuple[str, ...]:
+    """Every module of ``app.x`` (the package itself, its modules and sub-packages)."""
+    root = APP_ROOT.joinpath(*package.split(".")[1:])
+    modules = [package]
+    for source in sorted(root.rglob("*.py")):
+        if source.name == "__init__.py":
+            relative = source.parent.relative_to(root)
+            parts = [package, *relative.parts]
+        else:
+            parts = [package, *source.relative_to(root).with_suffix("").parts]
+        modules.append(".".join(parts))
+    return tuple(dict.fromkeys(modules))
+
+
+#: ADR-0012 T-3 roots plus ADR-0016 K-16 / T-12: the positions data chain.
+_POSITIONS_CHAIN_ROOTS = (
+    "app.services.market",
+    "app.data.service",
+    "app.api.portfolio",
+    "app.dividends.store",
+    "app.dividends.sync",
+    "app.dividends.coverage",
+    *_package_modules("app.portfolio"),
+    *_package_modules("app.advice"),
+)
+
+
 def test_c7_import_graph_cannot_reach_market_panel_from_the_positions_chain() -> None:
-    forbidden_roots = (
-        "app.services.market",
-        "app.data.service",
-    )
-    for root in forbidden_roots:
+    # ``app.portfolio.*`` / ``app.advice.*`` are enumerated from the source tree, so
+    # a module added later is covered without editing this list (ADR-0012 T-3).
+    assert "app.portfolio.price_change" in _POSITIONS_CHAIN_ROOTS
+    assert "app.advice.engine" in _POSITIONS_CHAIN_ROOTS
+    for root in _POSITIONS_CHAIN_ROOTS:
         assert module_path(root) is not None, f"{root} should resolve to a source file"
         reachable = reachable_app_modules((root,))
         assert "app.data.market_panel" not in reachable, (
             f"{root} must not be able to reach app.data.market_panel (C-7)"
         )
+        assert offenders(reachable, "app.data.market_panel") == []
+
+
+def test_k16_portfolio_modules_cannot_reach_the_coverage_rule() -> None:
+    # Dependency is one way: the coverage rule implements portfolio protocols, never
+    # the other way round (ADR-0016 K-16).
+    for root in _package_modules("app.portfolio"):
+        reachable = reachable_app_modules((root,))
+        assert "app.dividends.coverage" not in reachable, root
 
 
 def test_market_type_export_still_matches_positions_chain_literal() -> None:

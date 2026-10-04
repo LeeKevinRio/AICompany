@@ -29,6 +29,14 @@ adapter 已把 ``httpx.TransportError``（DNS 失敗、連線被拒、proxy CONN
 轉成 ``ok=False`` 加一句可讀的中文原因，不會讓例外往外傳；``main()`` 另外印出
 「請在有網路的機器重跑」的明確指引，而不是印一段裸 traceback。
 
+## 同步紀錄（ADR-0016 D-5.2、K-18）
+
+``sync_dividends`` 是 CLI 與排程共用的唯一同步函式：在**同一個 SQLite
+transaction**（``BEGIN IMMEDIATE``）內完成 ``dividend_events`` 的 upsert 與一列
+``dividend_sync_runs``（含無法解析的列所屬代號）。ok 的同步所列出的事件因此必然
+已在 ``dividend_events``。寫入中途失敗時兩者皆不落地，例外照常往外傳。
+``recorded_at`` 只來自 store 自己的時鐘，這裡不接受也不傳入。
+
 ## 測試
 
 ``tests/test_dividends_sync.py`` 用 ``httpx.MockTransport`` 合成 fixture 驗證
@@ -38,9 +46,12 @@ parsing、冪等與不可達行為，一律不打外網。
 from __future__ import annotations
 
 import argparse
+import logging
+import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from app.data.http import RateLimitedClient
 from app.dividends.providers import (
@@ -48,7 +59,9 @@ from app.dividends.providers import (
     DividendFetchResult,
     TwseDividendAdapter,
 )
-from app.dividends.store import DividendEventStore
+from app.dividends.store import DividendEventStore, SyncTrigger
+
+logger = logging.getLogger(__name__)
 
 _BANNER_RULE = "=" * 72
 
@@ -73,17 +86,40 @@ _SCHEMA_GUIDANCE = (
 )
 
 
+class DividendFetcher(Protocol):
+    """What :func:`sync_dividends` needs from an adapter (``TwseDividendAdapter`` fits)."""
+
+    def fetch(self) -> DividendFetchResult: ...
+
+
 def sync_dividends(
     *,
     store: DividendEventStore,
-    adapter: TwseDividendAdapter,
+    adapter: DividendFetcher,
     synced_at: datetime | None = None,
+    trigger: SyncTrigger = "cli",
 ) -> DividendFetchResult:
-    """Fetch the ex-dividend dataset and upsert whatever parsed cleanly."""
-    moment = synced_at if synced_at is not None else datetime.now(UTC)
+    """Fetch the ex-dividend dataset, upsert what parsed, and record the run -- atomically.
+
+    One transaction holds the ``dividend_events`` upsert and the
+    ``dividend_sync_runs`` row (ADR-0016 K-18). An adapter failure is recorded as
+    a ``failed`` run and leaves ``dividend_events`` untouched; a failure while
+    writing rolls everything back and propagates. ``synced_at`` only stamps the
+    event rows; the run's ``recorded_at`` is the store's own clock.
+    """
     result = adapter.fetch()
-    if result.ok and result.events:
-        store.upsert(list(result.events), synced_at=moment)
+    store.record_sync(
+        trigger=trigger,
+        source=result.source,
+        adapter_ok=result.ok,
+        reason=result.reason,
+        events=list(result.events),
+        unparsed_symbols=result.unparsed_symbols,
+        unattributed_count=result.unattributed_rows,
+        synced_at=synced_at,
+    )
+    if not result.ok:
+        logger.warning("dividend sync failed (%s): %s", trigger, result.reason)
     return result
 
 
@@ -135,7 +171,13 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_banner()
     try:
-        result = sync_dividends(store=store, adapter=adapter)
+        result = sync_dividends(store=store, adapter=adapter, trigger="cli")
+    except sqlite3.Error as error:
+        print(
+            f"同步結果寫入資料庫失敗，已整筆回復（事件與同步紀錄皆未寫入）：{error}",
+            file=sys.stderr,
+        )
+        return 1
     finally:
         adapter.close()
         client.close()

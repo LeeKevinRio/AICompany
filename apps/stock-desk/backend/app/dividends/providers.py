@@ -168,6 +168,12 @@ class DividendFetchResult:
     #: Rows the parser refused. A non-zero count alongside ``ok=True`` means
     #: partial coverage, which the CLI prints rather than swallows.
     skipped_rows: int = 0
+    #: ``strip().upper()`` of the ``Code`` of every refused row that has one, one
+    #: entry per row (a code may repeat). Such a row may hide an event of this
+    #: symbol, so the sync record keeps it (ADR-0016 D-5.2 ``dividend_sync_unparsed``).
+    unparsed_symbols: tuple[str, ...] = ()
+    #: Refused rows with no usable ``Code``: they cannot be attributed to any symbol.
+    unattributed_rows: int = 0
 
 
 def _cell(row: dict[str, Any], key: str) -> str | None:
@@ -177,6 +183,19 @@ def _cell(row: dict[str, Any], key: str) -> str | None:
         return None
     text = str(value).strip()
     return text if text and text not in _BLANK_CELLS else None
+
+
+def row_code(row: Any) -> str | None:
+    """The normalized ``Code`` of a raw row, or ``None`` when it has none to read.
+
+    Used for refused rows only: it decides whether a refusal can still be
+    attributed to a symbol. Same normalization as the sync record and the
+    coverage rule (``strip().upper()``).
+    """
+    if not isinstance(row, dict):
+        return None
+    code = _cell(row, _CODE_KEY)
+    return code.upper() if code is not None else None
 
 
 def parse_twse_date(value: str) -> date_type:
@@ -320,19 +339,30 @@ class TwseDividendAdapter:
             )
 
         events: list[DividendEvent] = []
-        skipped = 0
+        unparsed: list[str] = []
+        unattributed = 0
         for row in payload:
             try:
                 events.append(parse_dividend_row(row, source=self.source_id, as_of=now))
             except (UnparseableRowError, ValueError) as exc:
                 logger.debug("skipping unparseable TWSE dividend row: %s", exc)
-                skipped += 1
+                # Any refused row that names a symbol is kept against that symbol,
+                # whatever the refusal reason: it is an event that did not reach
+                # ``dividend_events``, so no coverage claim may ignore it.
+                code = row_code(row)
+                if code is None:
+                    unattributed += 1
+                else:
+                    unparsed.append(code)
+        skipped = len(unparsed) + unattributed
         if not events:
             return self._failure(
                 now,
                 f"TWSE OpenAPI 除權息預告表回應中沒有任何可解析的列（略過 {skipped} 列）；"
                 "欄位名稱可能與已驗證版本不符，需覆核官方文件",
                 skipped=skipped,
+                unparsed_symbols=tuple(unparsed),
+                unattributed=unattributed,
             )
         return DividendFetchResult(
             events=tuple(events),
@@ -341,9 +371,19 @@ class TwseDividendAdapter:
             source=self.source_id,
             as_of=now,
             skipped_rows=skipped,
+            unparsed_symbols=tuple(unparsed),
+            unattributed_rows=unattributed,
         )
 
-    def _failure(self, now: datetime, reason: str, *, skipped: int = 0) -> DividendFetchResult:
+    def _failure(
+        self,
+        now: datetime,
+        reason: str,
+        *,
+        skipped: int = 0,
+        unparsed_symbols: tuple[str, ...] = (),
+        unattributed: int = 0,
+    ) -> DividendFetchResult:
         return DividendFetchResult(
             events=(),
             ok=False,
@@ -351,4 +391,6 @@ class TwseDividendAdapter:
             source=self.source_id,
             as_of=now,
             skipped_rows=skipped,
+            unparsed_symbols=unparsed_symbols,
+            unattributed_rows=unattributed,
         )

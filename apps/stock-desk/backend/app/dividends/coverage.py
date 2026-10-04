@@ -13,8 +13,11 @@ the table. So a run after the ex-date proves nothing about it. The only proof is
 a run that took place while the date was still in the future.
 
 The authoritative source of those runs is the main DB's sync record, per
-ADR-0016 D-5.2 (``dividend_sync_runs`` / ``dividend_sync_unparsed``; not yet
-implemented). ``app.data.market_panel.MarketPanelReader`` happens to satisfy the
+ADR-0016 D-5.2 (``dividend_sync_runs`` / ``dividend_sync_unparsed``), read through
+``app.dividends.store.DividendEventStore``, which satisfies the
+:class:`AnnounceRunSource` Protocol. (Wiring it into the summary endpoint is a
+separate step; until then the screen still uses the always-``unknown`` stub.)
+``app.data.market_panel.MarketPanelReader`` also happens to satisfy the
 :class:`AnnounceRunSource` Protocol (it reads the capture's ``dividend_announce``
 runs), but it is for tests and the ADR-0016 V-1 offline check only: the
 positions data chain must never call it (ADR-0012 C-7). Swapping the source
@@ -48,14 +51,17 @@ evidence.
   day's own last capture (21:30) and dated within the lead is outside what this
   rule verified; that is the unverified-lead assumption above, not a proof.
 
-* Rows of the table without a ``Code`` are dropped by the capture before they
-  are stored, so they cannot be attributed to a symbol here.
+* The market DB capture drops rows without a ``Code`` before storing them. The
+  main DB record keeps their count (``unattributed_count``) and the source then
+  returns an ``ex_date=None`` observation for every queried symbol of such a run:
+  it cannot say which symbol the row was about, so it proves nothing for any.
 * ``unknown`` is not "an event exists": it means this rule cannot prove there is
   none. Under ``SHOW_WHEN_COVERAGE_UNKNOWN`` the change is still shown.
-* The ex-dates F6 itself reads live in the main DB's ``dividend_events``, fed by
-  a manual CLI. The test-only market DB reader is a different store; point 4
-  only guards against that store knowing an event ``dividend_events`` lacks, it
-  does not reconcile the two. D-5.2 moves the proof into the main DB.
+* The ex-dates F6 itself reads live in the main DB's ``dividend_events``. With
+  the main DB source, point 4's "dated inside the window" branch has nothing to
+  see: dated events are written by the same transaction as the run and F6
+  already reads them there. The branch stays as a guard for sources that do
+  return dated observations (the test-only market DB reader).
 
 One read per book (K-7). This module imports nothing from ``app.portfolio``
 beyond the Protocol types it implements, and must not reach
@@ -93,10 +99,11 @@ _TAIPEI: Final = ZoneInfo("Asia/Taipei")
 
 
 class AnnounceRunSource(Protocol):
-    """Read side of the sync record (ADR-0016 D-5.2 source, adapter pending).
+    """Read side of the sync record (ADR-0016 D-5.2).
 
-    ``MarketPanelReader`` satisfies it structurally, for tests and V-1 offline
-    checks only; the positions data chain must not call it (ADR-0012 C-7).
+    ``DividendEventStore`` (main DB) is the runtime implementation.
+    ``MarketPanelReader`` satisfies it structurally too, for tests and V-1
+    offline checks only; the positions data chain must not call it (ADR-0012 C-7).
     """
 
     def dividend_announce_observations(

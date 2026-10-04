@@ -1130,8 +1130,9 @@ class MarketPanelReader:
         run" and costs none. Rows come back as written -- deciding what they
         prove is the coverage rule's job (``app.dividends.coverage``).
 
-        For tests and ADR-0016 V-1 offline checks only; the positions data chain
-        must not call it (ADR-0012 C-7).
+        The market DB version: for tests and ADR-0016 V-1 offline checks only; the
+        positions data chain must not call it (ADR-0012 C-7). The runtime source
+        is ``app.dividends.store.DividendEventStore`` (main DB, ADR-0016 D-5.2).
         """
         wanted = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
         if not wanted:

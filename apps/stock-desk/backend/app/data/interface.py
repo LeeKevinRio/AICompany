@@ -278,15 +278,21 @@ class DividendAnnounceSnapshotRow(BaseModel):
 
 
 class DividendAnnounceObservation(BaseModel):
-    """What one ok ``dividend_announce`` run says about one wanted symbol (read side).
+    """What one ok sync run says about one wanted symbol (read side).
 
-    One value per (run, stored row of a wanted symbol) pair, read back from the
-    market DB. For tests and ADR-0016 V-1 offline checks only; the positions data
-    chain must not call it (ADR-0012 C-7). ``symbol is None``
-    means the run exists and is ``ok`` but holds no row for any wanted symbol --
-    the run still proves that nothing was announced for them at ``recorded_at``.
-    ``symbol`` set with ``ex_date is None`` is a row whose date the capture could
-    not parse: an event of unknown date, which no coverage claim may ignore.
+    One value per (run, relevant row) pair. Two stores produce it. The main DB's
+    ``app.dividends.store.DividendEventStore.dividend_announce_observations`` is
+    the one the positions data chain uses (ADR-0016 D-5.2). The market DB's
+    ``MarketPanelReader.dividend_announce_observations`` is for tests and the
+    ADR-0016 V-1 offline check only: the positions data chain must not call it
+    (ADR-0012 C-7).
+
+    ``symbol is None`` means the run exists and is ``ok`` but holds nothing
+    against any wanted symbol -- the run still proves that nothing was announced
+    for them at ``recorded_at``. ``symbol`` set with ``ex_date is None`` is an
+    event of unknown date (a row whose date could not be parsed, or, in the main
+    DB, a row the capture could not attribute to any symbol), which no coverage
+    claim may ignore.
 
     ``recorded_at`` is the store's own clock (never caller-supplied, ADR-0012 C-10).
     """

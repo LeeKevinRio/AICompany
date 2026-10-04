@@ -1,18 +1,30 @@
-"""ADR-0016 D-5: the ex-date coverage rule over the market DB's dividend-announce run log.
+"""ADR-0016 D-5 / T-14: the ex-date coverage rule over each run-log source.
 
-Every database here lives under ``tmp_path``; nothing touches the development
-DB and nothing goes over the network. Runs are written through the real
-``MarketPanelStore`` (so ``recorded_at`` is the store's own clock) and read back
-through the real read-only ``MarketPanelReader``.
+Every scenario below runs against two ``AnnounceRunSource`` implementations:
+
+* ``market`` -- the market DB's ``dividend_announce`` runs, written through the real
+  ``MarketPanelStore`` and read through the read-only ``MarketPanelReader``. Test and
+  V-1 offline use only (ADR-0012 C-7).
+* ``main`` -- the main DB's sync record (ADR-0016 D-5.2), written through the real
+  ``sync_dividends`` and read through ``DividendEventStore``. This is the runtime source.
+
+Every database lives under ``tmp_path``; nothing touches the development DB and
+nothing goes over the network. In both, ``recorded_at`` is the store's own clock.
+A row ``(symbol, None)`` is an event whose date could not be parsed. A dated row is
+an event: the market DB returns it as an observation, the main DB keeps it in
+``dividend_events`` where F6 reads it (D-5.3), so the scenarios that depend on a
+dated observation are split per source below.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
@@ -22,8 +34,12 @@ from app.dividends.coverage import (
     LISTED_BAR_SOURCE,
     MIN_ANNOUNCE_LEAD_DAYS,
     AnnounceRunCoverageRule,
+    AnnounceRunSource,
 )
+from app.dividends.models import DividendEvent
+from app.dividends.providers import DividendFetchResult
 from app.dividends.store import DividendEventStore
+from app.dividends.sync import sync_dividends
 from app.portfolio.price_change import (
     ChangeScreen,
     CoverageQuery,
@@ -51,8 +67,30 @@ class _Clock:
         return self.now
 
 
-class _Log:
-    """A tmp market DB with a settable clock, writing ``dividend_announce`` runs."""
+class _Log(Protocol):
+    """A tmp run log with a settable clock, in one of the two sources."""
+
+    clock: _Clock
+
+    def run(
+        self, at: datetime, rows: Sequence[tuple[str, date | None]], *, status: str = "ok"
+    ) -> int: ...
+
+    def source(self) -> AnnounceRunSource: ...
+
+    def rule(self) -> AnnounceRunCoverageRule: ...
+
+    def traced(self) -> tuple[AnnounceRunSource, list[str]]:
+        """A fresh source over the same file, and the SQL statements it runs."""
+        ...
+
+    def insert_ok_run(self, recorded_at: str) -> None:
+        """Append one dirty ``ok`` run with a raw ``recorded_at`` (INSERT is not blocked)."""
+        ...
+
+
+class _MarketLog:
+    """The market DB, writing ``dividend_announce`` runs."""
 
     def __init__(self, tmp_path: Path) -> None:
         self.clock = _Clock()
@@ -88,8 +126,113 @@ class _Log:
             dividend_announce_rows=announce if status == "ok" else [],
         )
 
+    def source(self) -> AnnounceRunSource:
+        return MarketPanelReader(self.path)
+
     def rule(self) -> AnnounceRunCoverageRule:
-        return AnnounceRunCoverageRule(MarketPanelReader(self.path))
+        return AnnounceRunCoverageRule(self.source())
+
+    def traced(self) -> tuple[AnnounceRunSource, list[str]]:
+        reader = _TracedReader(self.path)
+        return reader, reader.statements
+
+    def insert_ok_run(self, recorded_at: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO pit_snapshot_runs (kind, session_date, recorded_at, source, status, "
+                "row_count, expected_count, content_hash, reason) "
+                "VALUES ('dividend_announce', '2026-10-01', ?, 'x', 'ok', 1, NULL, 'dirty', NULL)",
+                (recorded_at,),
+            )
+
+
+class _MainLog:
+    """The main DB, written by the real ``sync_dividends`` through a canned adapter."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.clock = _Clock()
+        self.path = tmp_path / "main.db"
+        self.store = DividendEventStore(self.path, clock=self.clock)
+
+    def run(
+        self,
+        at: datetime,
+        rows: Sequence[tuple[str, date | None]],
+        *,
+        status: str = "ok",
+    ) -> int:
+        self.clock.now = at
+        events = [
+            DividendEvent(
+                symbol=symbol,
+                market="TW",
+                ex_date=ex_date,
+                cash_dividend=Decimal("1"),
+                source="stub",
+                as_of=at,
+            )
+            for symbol, ex_date in rows
+            if ex_date is not None
+        ]
+        unparsed = tuple(symbol for symbol, ex_date in rows if ex_date is None)
+        # The main DB records only ``ok`` and ``failed``; "partial" is a failed run here.
+        ok = status == "ok"
+        result = DividendFetchResult(
+            events=tuple(events) if ok else (),
+            ok=ok,
+            reason=None if ok else "stub failure",
+            source="stub",
+            as_of=at,
+            skipped_rows=len(unparsed),
+            unparsed_symbols=unparsed if ok else (),
+        )
+        sync_dividends(store=self.store, adapter=_Canned(result), trigger="scheduled")
+        with closing(sqlite3.connect(self.path)) as conn:
+            (run_id,) = conn.execute("SELECT MAX(run_id) FROM dividend_sync_runs").fetchone()
+        return int(run_id)
+
+    def source(self) -> AnnounceRunSource:
+        return DividendEventStore(self.path)
+
+    def rule(self) -> AnnounceRunCoverageRule:
+        return AnnounceRunCoverageRule(self.source())
+
+    def traced(self) -> tuple[AnnounceRunSource, list[str]]:
+        store = _TracedStore(self.path)
+        return store, store.statements
+
+    def insert_ok_run(self, recorded_at: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO dividend_sync_runs (recorded_at, trigger, source, status, "
+                "event_count, unparsed_count, unattributed_count, reason) "
+                "VALUES (?, 'cli', 'x', 'ok', 1, 0, 0, NULL)",
+                (recorded_at,),
+            )
+
+
+class _Canned:
+    def __init__(self, result: DividendFetchResult) -> None:
+        self.result = result
+
+    def fetch(self) -> DividendFetchResult:
+        return self.result
+
+
+@pytest.fixture(params=["market", "main"])
+def make_log(request: pytest.FixtureRequest) -> Callable[[Path], _Log]:
+    """The run-log factory; every test using it runs once per source."""
+    return _MarketLog if request.param == "market" else _MainLog
+
+
+@pytest.fixture
+def make_market_log() -> Callable[[Path], _MarketLog]:
+    return _MarketLog
+
+
+@pytest.fixture
+def make_main_log() -> Callable[[Path], _MainLog]:
+    return _MainLog
 
 
 def _query(
@@ -109,120 +252,153 @@ def _query(
 OTHER = ("1101", date(2026, 11, 20))
 
 
-def test_synced_before_the_window_and_no_event_is_known(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_synced_before_the_window_and_no_event_is_known(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "known"}
 
 
-def test_a_far_off_event_outside_the_window_does_not_block_known(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_a_far_off_event_outside_the_window_does_not_block_known(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER, ("2330", date(2026, 10, 20))])
     query = _query()
     assert log.rule().coverage([query]) == {query: "known"}
 
 
-def test_never_synced_is_unknown(tmp_path: Path) -> None:
-    # Neither a missing market DB file nor a DB without any dividend run proves coverage.
-    missing = AnnounceRunCoverageRule(MarketPanelReader(tmp_path / "absent.db"))
+def test_never_synced_is_unknown(tmp_path: Path, make_log: Callable[[Path], _Log]) -> None:
+    # A database without any dividend run proves nothing.
     query = _query()
-    assert missing.coverage([query]) == {query: "unknown"}
-    assert not (tmp_path / "absent.db").exists()  # the reader never creates the file
-
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_unfinished_runs_do_not_count(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_unfinished_runs_do_not_count(tmp_path: Path, make_log: Callable[[Path], _Log]) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [], status="failed")
     log.run(EVENING[THU], [OTHER], status="partial")
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_a_sync_after_price_date_cannot_prove_the_window_was_future(tmp_path: Path) -> None:
+def test_a_sync_after_price_date_cannot_prove_the_window_was_future(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     # The table drops an ex-date once it has passed, so a run recorded after
     # the window cannot say whether an event was ever announced.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(datetime(2026, 10, 6, 13, 30, tzinfo=UTC), [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_a_sync_after_basis_date_cannot_anchor(tmp_path: Path) -> None:
+def test_a_sync_after_basis_date_cannot_anchor(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     # Recorded on price_date itself: an event dated price_date may already be gone from the table.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(EVENING[FRI], [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_an_earlier_anchor_still_counts_when_later_runs_exist(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_an_earlier_anchor_still_counts_when_later_runs_exist(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER])
     log.run(EVENING[FRI], [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "known"}
 
 
-def test_a_stale_anchor_is_unknown(tmp_path: Path) -> None:
+def test_a_stale_anchor_is_unknown(tmp_path: Path, make_log: Callable[[Path], _Log]) -> None:
     # Synced a week before basis_date: events announced since are not excluded.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(datetime(2026, 9, 24, 13, 30, tzinfo=UTC), [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_monday_after_a_friday_anchor_is_unknown_under_the_default_lead(tmp_path: Path) -> None:
+def test_monday_after_a_friday_anchor_is_unknown_under_the_default_lead(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     assert MIN_ANNOUNCE_LEAD_DAYS == 1
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(EVENING[FRI], [OTHER])
     query = _query(basis=FRI, price=MON)
     assert log.rule().coverage([query]) == {query: "unknown"}
     # With a longer (evidenced) lead the same log proves it.
-    wider = AnnounceRunCoverageRule(MarketPanelReader(log.path), min_announce_lead_days=3)
+    wider = AnnounceRunCoverageRule(log.source(), min_announce_lead_days=3)
     assert wider.coverage([query]) == {query: "known"}
 
 
-def test_run_date_is_the_taipei_date_not_the_utc_date(tmp_path: Path) -> None:
+def test_run_date_is_the_taipei_date_not_the_utc_date(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     # 17:00 UTC on 10/01 is 01:00 on 10/02 in Taipei: after basis_date, so no anchor.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(datetime(2026, 10, 1, 17, 0, tzinfo=UTC), [OTHER])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
     # 15:59 UTC on 10/01 is 23:59 on 10/01 in Taipei: still on basis_date.
-    other = _Log(tmp_path / "b")
+    other = make_log(tmp_path / "b")
     other.run(datetime(2026, 10, 1, 15, 59, tzinfo=UTC), [OTHER])
     assert other.rule().coverage([query]) == {query: "known"}
 
 
-def test_an_event_in_the_window_is_not_known(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_market_db_an_event_in_the_window_is_not_known(
+    tmp_path: Path, make_market_log: Callable[[Path], _MarketLog]
+) -> None:
+    log = make_market_log(tmp_path)
     log.run(EVENING[THU], [OTHER, ("2330", FRI)])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_an_event_dated_on_basis_date_is_outside_the_window(tmp_path: Path) -> None:
+def test_main_db_leaves_a_dated_event_in_the_window_to_f6(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    # The main DB source returns no dated observation: the event is in the same
+    # transaction's ``dividend_events``, where F6 withholds the change before the
+    # coverage rule is even asked (``ChangeScreen``: a known ex-date wins).
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER, ("2330", FRI)])
+    query = _query()
+    assert log.rule().coverage([query]) == {query: "known"}
+    assert log.store.ex_dates_between([("2330", "TW")], query.basis_date, query.price_date) == {
+        ("2330", "TW"): frozenset({FRI})
+    }
+
+
+def test_an_event_dated_on_basis_date_is_outside_the_window(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     # Same boundary as F6: basis_date < ex_date <= price_date.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER, ("2330", THU)])
     query = _query()
     assert log.rule().coverage([query]) == {query: "known"}
 
 
-def test_an_event_with_an_unparseable_date_is_not_known(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_an_event_with_an_unparseable_date_is_not_known(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER, ("2330", None)])
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_an_unparseable_row_from_before_the_anchor_is_ignored(tmp_path: Path) -> None:
+def test_an_unparseable_row_from_before_the_anchor_is_ignored(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
     # The anchor run supersedes older snapshots of the same table.
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(datetime(2026, 9, 30, 13, 30, tzinfo=UTC), [OTHER, ("2330", None)])
     log.run(EVENING[THU], [OTHER])
     query = _query()
@@ -240,21 +416,23 @@ def test_an_unparseable_row_from_before_the_anchor_is_ignored(tmp_path: Path) ->
     ],
 )
 def test_otc_us_and_other_sources_are_unknown_without_reading(
-    tmp_path: Path, market: Market, source: str
+    tmp_path: Path, make_log: Callable[[Path], _Log], market: Market, source: str
 ) -> None:
-    log = _Log(tmp_path)
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER])
-    spy = _Spy(MarketPanelReader(log.path))
+    spy = _Spy(log.source())
     query = _query(market=market, source=source)
     assert AnnounceRunCoverageRule(spy).coverage([query]) == {query: "unknown"}
     assert spy.calls == 0
 
 
-def test_a_whole_book_is_one_call_and_one_statement(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_a_whole_book_is_one_call_and_one_statement(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     for day in (THU, FRI):
         log.run(EVENING[day], [OTHER])
-    reader = _TracedReader(log.path)
+    reader, statements = log.traced()
     rule = AnnounceRunCoverageRule(reader)
     queries = [
         _query("2330"),
@@ -268,19 +446,23 @@ def test_a_whole_book_is_one_call_and_one_statement(tmp_path: Path) -> None:
     assert answers[queries[1]] == "known"
     assert answers[queries[3]] == "unknown"
     assert answers[queries[4]] == "unknown"
-    assert len(reader.statements) == 1
+    assert len(statements) == 1
 
 
-def test_every_query_gets_an_answer_even_when_the_log_is_empty(tmp_path: Path) -> None:
-    rule = AnnounceRunCoverageRule(MarketPanelReader(tmp_path / "absent.db"))
+def test_every_query_gets_an_answer_even_when_the_log_is_empty(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    rule = make_log(tmp_path).rule()
     queries = [_query("2330"), _query("AAPL", market="US", source="yfinance")]
     assert rule.coverage(queries) == {query: "unknown" for query in queries}
     assert rule.coverage([]) == {}
 
 
-def test_symbols_are_matched_case_insensitively(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
-    log.run(EVENING[THU], [OTHER, ("00981A", FRI)])
+def test_symbols_are_matched_case_insensitively(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
+    log.run(EVENING[THU], [OTHER, ("00981A", None)])
     query = _query("00981a")
     assert log.rule().coverage([query]) == {query: "unknown"}
 
@@ -369,24 +551,39 @@ def test_a_naive_run_with_an_unparseable_date_row_is_unknown() -> None:
     assert AnnounceRunCoverageRule(Mixed()).coverage([query]) == {query: "unknown"}
 
 
-def test_a_corrupt_stored_timestamp_is_unknown_not_an_exception(tmp_path: Path) -> None:
-    log = _Log(tmp_path)
+def test_a_corrupt_stored_timestamp_is_unknown_not_an_exception(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    log = make_log(tmp_path)
     log.run(EVENING[THU], [OTHER])
     # Append-only triggers block UPDATE/DELETE, not INSERT: add one dirty ok run.
-    with closing(sqlite3.connect(log.path)) as conn, conn:
-        conn.execute(
-            "INSERT INTO pit_snapshot_runs (kind, session_date, recorded_at, source, status, "
-            "row_count, expected_count, content_hash, reason) "
-            "VALUES ('dividend_announce', '2026-10-01', 'not-a-timestamp', 'x', 'ok', 1, NULL, "
-            "'dirty', NULL)"
-        )
+    log.insert_ok_run("not-a-timestamp")
     query = _query()
     assert log.rule().coverage([query]) == {query: "unknown"}
 
 
-def test_a_lead_below_one_day_is_refused(tmp_path: Path) -> None:
+def test_main_db_a_stored_naive_run_never_anchors_and_its_unparsed_symbol_blocks(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER])
+    query = _query()
+    assert log.rule().coverage([query]) == {query: "known"}
+    # A naive-time ok run cannot be placed on the calendar, so it cannot anchor ...
+    log.insert_ok_run("2026-10-01T21:30:00.000000")
+    assert log.rule().coverage([query]) == {query: "known"}
+    # ... but an event it carries for the symbol still blocks (never skipped).
+    with closing(sqlite3.connect(log.path)) as conn, conn:
+        conn.execute("INSERT INTO dividend_sync_unparsed (run_id, symbol) VALUES (2, '2330')")
+    assert log.rule().coverage([query]) == {query: "unknown"}
+    # Another symbol's answer is unaffected.
+    other = _query("2317")
+    assert log.rule().coverage([other]) == {other: "known"}
+
+
+def test_a_lead_below_one_day_is_refused(tmp_path: Path, make_log: Callable[[Path], _Log]) -> None:
     with pytest.raises(ValueError, match="at least 1"):
-        AnnounceRunCoverageRule(MarketPanelReader(tmp_path / "x.db"), min_announce_lead_days=0)
+        AnnounceRunCoverageRule(make_log(tmp_path).source(), min_announce_lead_days=0)
 
 
 def test_the_coverage_module_cannot_reach_the_market_db_module() -> None:
@@ -404,8 +601,10 @@ class _NoCalendar:
         return frozenset()
 
 
-def test_the_rule_plugs_into_the_change_screen(tmp_path: Path) -> None:
-    rule: ExDateCoverageRule = _Log(tmp_path).rule()
+def test_the_rule_plugs_into_the_change_screen(
+    tmp_path: Path, make_log: Callable[[Path], _Log]
+) -> None:
+    rule: ExDateCoverageRule = make_log(tmp_path).rule()
     screen = ChangeScreen(
         ex_dates=DividendEventStore(tmp_path / "main.db"),
         calendar=_NoCalendar(),
@@ -416,7 +615,7 @@ def test_the_rule_plugs_into_the_change_screen(tmp_path: Path) -> None:
 
 
 class _Spy:
-    def __init__(self, inner: MarketPanelReader) -> None:
+    def __init__(self, inner: AnnounceRunSource) -> None:
         self.inner = inner
         self.calls = 0
 
@@ -425,6 +624,20 @@ class _Spy:
     ) -> Sequence[DividendAnnounceObservation]:
         self.calls += 1
         return self.inner.dividend_announce_observations(symbols, recorded_not_before)
+
+
+class _TracedStore(DividendEventStore):
+    """A main DB store that records every SQL statement its read connections run."""
+
+    def __init__(self, path: Path) -> None:
+        self.statements: list[str] = []
+        super().__init__(path)
+        self.statements.clear()  # drop the schema statements of construction
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = super()._connect()
+        conn.set_trace_callback(self.statements.append)
+        return conn
 
 
 class _TracedReader(MarketPanelReader):
@@ -439,3 +652,146 @@ class _TracedReader(MarketPanelReader):
         if conn is not None:
             conn.set_trace_callback(self.statements.append)
         return conn
+
+
+# --- main DB adapter specifics (ADR-0016 D-5.2 read side, K-20) ---------------------
+
+
+def test_main_db_an_unparsed_symbol_makes_only_that_symbol_unknown(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER, ("2330", None)])
+    blocked, free = _query("2330"), _query("2317")
+    assert log.rule().coverage([blocked, free]) == {blocked: "unknown", free: "known"}
+
+
+def test_main_db_unattributed_rows_make_every_queried_symbol_unknown(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER])
+    queries = [_query("2330"), _query("2317"), _query("2454")]
+    assert set(log.rule().coverage(queries).values()) == {"known"}
+
+    # A run whose capture held a row with no Code: it may hide an event of any symbol.
+    other = make_main_log(tmp_path / "unattributed")
+    other.clock.now = EVENING[THU]
+    sync_dividends(
+        store=other.store,
+        adapter=_Canned(
+            DividendFetchResult(
+                events=(
+                    DividendEvent(
+                        symbol="1101",
+                        market="TW",
+                        ex_date=date(2026, 11, 20),
+                        source="stub",
+                        as_of=EVENING[THU],
+                    ),
+                ),
+                ok=True,
+                reason=None,
+                source="stub",
+                as_of=EVENING[THU],
+                skipped_rows=1,
+                unattributed_rows=1,
+            )
+        ),
+    )
+    assert other.rule().coverage(queries) == {query: "unknown" for query in queries}
+
+
+def test_main_db_a_later_clean_run_supersedes_an_unattributed_one(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.clock.now = datetime(2026, 9, 30, 13, 30, tzinfo=UTC)
+    sync_dividends(
+        store=log.store,
+        adapter=_Canned(
+            DividendFetchResult(
+                events=(
+                    DividendEvent(
+                        symbol="1101",
+                        market="TW",
+                        ex_date=date(2026, 11, 20),
+                        source="stub",
+                        as_of=log.clock.now,
+                    ),
+                ),
+                ok=True,
+                reason=None,
+                source="stub",
+                as_of=log.clock.now,
+                skipped_rows=1,
+                unattributed_rows=1,
+            )
+        ),
+    )
+    log.run(EVENING[THU], [OTHER])
+    query = _query()
+    assert log.rule().coverage([query]) == {query: "known"}
+
+
+def test_main_db_observations_have_the_documented_shape(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    clean = log.run(EVENING[THU], [OTHER])
+    dirty = log.run(EVENING[FRI], [OTHER, ("2330", None), ("2317", None)])
+    log.run(datetime(2026, 9, 1, tzinfo=UTC), [OTHER, ("2330", None)])  # before the bound
+    observations = log.store.dividend_announce_observations({"2330", " 00981a "}, date(2026, 10, 1))
+    assert [(o.run_id, o.symbol, o.ex_date) for o in observations] == [
+        (clean, None, None),
+        (dirty, "2330", None),
+    ]
+    assert all(o.recorded_at.tzinfo is not None for o in observations)
+    assert log.store.dividend_announce_observations(set(), date(2026, 10, 1)) == []
+    # The bound is a UTC date, inclusive.
+    assert [
+        o.run_id for o in log.store.dividend_announce_observations({"x"}, date(2026, 10, 2))
+    ] == [dirty]
+    assert log.store.dividend_announce_observations({"x"}, date(2026, 10, 3)) == []
+
+
+def test_main_db_failed_runs_are_never_returned(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER], status="failed")
+    assert log.store.dividend_announce_observations({"2330"}, date(2026, 9, 1)) == []
+    query = _query()
+    assert log.rule().coverage([query]) == {query: "unknown"}
+
+
+def test_main_db_missing_sync_tables_read_as_no_run(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER])
+    with closing(sqlite3.connect(log.path)) as conn, conn:
+        conn.execute("DROP TABLE dividend_sync_unparsed")
+        conn.execute("DROP TABLE dividend_sync_runs")
+    assert log.store.dividend_announce_observations({"2330"}, date(2026, 9, 1)) == []
+    query = _query()
+    assert AnnounceRunCoverageRule(log.store).coverage([query]) == {query: "unknown"}
+
+
+def test_main_db_any_other_read_error_reaches_the_rule_and_reads_as_unknown(
+    tmp_path: Path, make_main_log: Callable[[Path], _MainLog]
+) -> None:
+    log = make_main_log(tmp_path)
+    log.run(EVENING[THU], [OTHER])
+    with closing(sqlite3.connect(log.path)) as conn, conn:
+        conn.execute("DROP INDEX idx_dividend_sync_runs_status_recorded")
+        conn.execute("ALTER TABLE dividend_sync_runs RENAME COLUMN status TO state")
+    with pytest.raises(sqlite3.OperationalError):
+        log.store.dividend_announce_observations({"2330"}, date(2026, 9, 1))
+    query = _query()
+    assert AnnounceRunCoverageRule(log.store).coverage([query]) == {query: "unknown"}
+
+
+def test_main_db_store_satisfies_the_protocol_structurally(tmp_path: Path) -> None:
+    source: AnnounceRunSource = DividendEventStore(tmp_path / "main.db")
+    assert source.dividend_announce_observations(["2330"], date(2026, 9, 1)) == []
