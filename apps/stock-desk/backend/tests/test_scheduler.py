@@ -98,12 +98,14 @@ def test_heartbeat_message_timestamp_is_parseable_iso8601() -> None:
 def test_every_job_is_registered_with_a_stable_id(wired: dict[str, object]) -> None:
     engine = scheduler_module.build_scheduler(BlockingScheduler(timezone="UTC"))
     jobs = {job.id: job for job in engine.get_jobs()}
-    # ADR-0012 T-4 (C-11): exactly the two existing jobs plus the sector card's two.
+    # ADR-0012 T-4 (C-11): the two existing jobs plus the sector card's two, and
+    # ADR-0016 D-5.4's ``dividend_sync`` -- nothing else.
     assert set(jobs) == {
         "data_refresh",
         "alert_evaluation",
         "pit_snapshot_capture",
         "sector_board_refresh",
+        "dividend_sync",
     }
     for job in jobs.values():
         # A slow tick must not stack another behind it, and a missed tick is

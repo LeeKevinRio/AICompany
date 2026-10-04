@@ -42,6 +42,21 @@ Asia/Taipei, each also run once at start-up:
 Neither job back-fills, fills gaps or runs the biased research (C-11): the
 pre-D0 history is a CLI-only step before D0.
 
+One more weekday cron job keeps the main DB's ex-dividend events current
+(ADR-0016 D-5.2 / D-5.4):
+
+``dividend_sync`` (17:50 / 19:50 / 21:50, Asia/Taipei, no start-up run)
+    The same :func:`app.dividends.sync.sync_dividends` the CLI runs, with
+    ``trigger="scheduled"``: one TWT48U fetch, the event upsert and one
+    ``dividend_sync_runs`` row in a single transaction. It sits after the
+    capture (17:30) and both board refreshes (chained, then 17:45), so the
+    two TWT48U chains never fire in the same minute. The three points are a
+    retry table: a Taipei date that already has an ``ok`` run is skipped, a
+    ``failed`` run (adapter or empty answer) is simply tried again at the next
+    point. It is not run at start-up: the table is a forward-looking notice
+    that accumulates, so a missed day costs nothing a later run does not
+    recover. No environment variable switches it off or changes what it does.
+
 Robustness rules, because a scheduler that dies silently is worse than no
 scheduler:
 
@@ -59,9 +74,12 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import sqlite3
 from collections.abc import Callable, Collection
+from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from functools import lru_cache
+from pathlib import Path
 from time import monotonic
 from types import FrameType
 from typing import Literal
@@ -80,6 +98,7 @@ from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
     get_directory_store,
+    get_dividend_store,
     get_fx_provider,
     get_index_resolver,
     get_kelly_input_store,
@@ -89,9 +108,14 @@ from app.api.deps import (
     get_valuator,
 )
 from app.api.kelly import kelly_inputs_for
+from app.data.cache import BUSY_TIMEOUT_MS
 from app.data.freshness import TW_POLICY, US_POLICY
+from app.data.http import RateLimitedClient
 from app.data.market_panel import MarketPanelStore
 from app.data.providers.twse_snapshot import TwseSnapshotAdapter
+from app.dividends.providers import TWSE_OPENAPI_BASE_URL, DividendFetchResult, TwseDividendAdapter
+from app.dividends.store import DividendEventStore, SyncTrigger
+from app.dividends.sync import DividendFetcher, sync_dividends
 from app.positions.models import Market
 from app.services.index import load_market_benchmark
 from app.services.market import load_bars
@@ -148,6 +172,15 @@ PIT_CAPTURE_MINUTE = 30
 SECTOR_REFRESH_MINUTE = 45
 #: The start-up refresh waits for the start-up capture's own chained refresh.
 SECTOR_REFRESH_STARTUP_DELAY = timedelta(minutes=2)
+
+#: ADR-0016 D-5.4 ``dividend_sync``: the sector batches' hours and zone, minute
+#: 50 -- after the capture (:30) and the board refresh (:45), in a minute
+#: of its own. No start-up run and no explicit misfire grace (like the sector
+#: jobs): a tick missed by more than a second is covered by the next point.
+DIVIDEND_SYNC_JOB_ID = "dividend_sync"
+DIVIDEND_SYNC_MINUTE = 50
+#: The CLI's own request spacing (``app.dividends.sync.main``).
+DIVIDEND_SYNC_MIN_INTERVAL_SECONDS = 0.5
 
 logger = logging.getLogger("scheduler")
 
@@ -463,6 +496,103 @@ def capture_pit_snapshot() -> CaptureSummary:
     return summary
 
 
+def latest_ok_dividend_sync_date(db_path: Path) -> date | None:
+    """Taipei date of the newest ``ok`` ``dividend_sync_runs`` row, or ``None``.
+
+    Read-only (``PRAGMA query_only``): one ``SELECT`` over the existing
+    ``(status, recorded_at)`` index. A missing table reads as "no run"; a stored
+    timestamp that does not parse is warned about and also reads as "no run",
+    because syncing once too often is an idempotent upsert while skipping on a
+    value nobody can read could starve the table for good. ``recorded_at`` is
+    UTC (store clock) and is converted to Taipei time before taking the date.
+    """
+    with closing(sqlite3.connect(db_path, timeout=BUSY_TIMEOUT_MS / 1000)) as conn:
+        conn.execute("PRAGMA query_only = ON")
+        try:
+            row = conn.execute(
+                "SELECT recorded_at FROM dividend_sync_runs WHERE status = 'ok' "
+                "ORDER BY recorded_at DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError as error:
+            if "no such table" in str(error):
+                return None
+            raise
+    if row is None:
+        return None
+    try:
+        recorded = datetime.fromisoformat(str(row[0]))
+    except ValueError:
+        logger.warning("dividend sync: unreadable recorded_at %r; treating as no ok run", row[0])
+        return None
+    if recorded.tzinfo is None:
+        recorded = recorded.replace(tzinfo=UTC)
+    return recorded.astimezone(_TAIPEI).date()
+
+
+def run_dividend_sync(
+    *,
+    store: DividendEventStore | None = None,
+    adapter: DividendFetcher | None = None,
+    clock: Callable[[], datetime] = _utc_now,
+) -> DividendFetchResult | None:
+    """ADR-0016 D-5.4 ``dividend_sync``: one scheduled TWT48U sync, or a skip.
+
+    Returns the fetch result, or ``None`` when the Taipei date already has an
+    ``ok`` run (nothing fetched, nothing written). An adapter failure or an
+    answer with no events is a ``failed`` run recorded inside
+    :func:`sync_dividends` plus a WARNING line here, and a normal return: the
+    job succeeded and the next point retries. Anything unexpected -- notably a
+    failure while writing, which ``sync_dividends`` re-raises after rolling the
+    whole transaction back -- is deliberately **not** caught here (tech-architect
+    ruling): it propagates to :func:`_guarded`, which logs an ERROR with the
+    traceback and keeps the schedule alive, so a broken write is not swallowed
+    into one more line among the routine warnings. ``adapter`` is for tests; by
+    default it is built the way the CLI builds it and closed afterwards.
+    """
+    trigger: SyncTrigger = "scheduled"
+    began = monotonic()
+    today = clock().astimezone(_TAIPEI).date()
+    target = store if store is not None else get_dividend_store()
+    last_ok = latest_ok_dividend_sync_date(target.db_path)
+    if last_ok == today:
+        logger.info(
+            "dividend sync run: trigger=%s taipei=%s outcome=skipped (ok run already today)",
+            trigger,
+            today.isoformat(),
+        )
+        return None
+    owned: list[TwseDividendAdapter | RateLimitedClient] = []
+    try:
+        if adapter is None:
+            client = RateLimitedClient(
+                base_url=TWSE_OPENAPI_BASE_URL,
+                min_interval_seconds=DIVIDEND_SYNC_MIN_INTERVAL_SECONDS,
+            )
+            built = TwseDividendAdapter(client=client)
+            owned.extend((built, client))
+            adapter = built
+        result = sync_dividends(store=target, adapter=adapter, trigger=trigger)
+    finally:
+        for resource in owned:
+            resource.close()
+    # Same rule as ``DividendEventStore.record_sync``: an ok adapter answer with
+    # no events is recorded as a failed run with zero events.
+    usable = result.ok and len(result.events) > 0
+    logger.log(
+        logging.INFO if usable else logging.WARNING,
+        "dividend sync run: trigger=%s taipei=%s status=%s event_count=%d "
+        "unparsed_count=%d unattributed_count=%d duration_ms=%d",
+        trigger,
+        today.isoformat(),
+        "ok" if usable else "failed",
+        len(result.events) if usable else 0,
+        len(result.unparsed_symbols),
+        result.unattributed_rows,
+        max(0, round((monotonic() - began) * 1000)),
+    )
+    return result
+
+
 def _guarded(name: str, job: Callable[[], object]) -> Callable[[], None]:
     """Wrap a job so an exception is logged and the schedule survives it."""
 
@@ -547,14 +677,32 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         coalesce=True,
         next_run_time=started + SECTOR_REFRESH_STARTUP_DELAY,
     )
+    engine.add_job(
+        _guarded(DIVIDEND_SYNC_JOB_ID, run_dividend_sync),
+        trigger=CronTrigger(
+            day_of_week=SECTOR_JOBS_DAYS,
+            hour=SECTOR_JOBS_HOURS,
+            minute=DIVIDEND_SYNC_MINUTE,
+            timezone=SECTOR_JOBS_TIMEZONE,
+        ),
+        id=DIVIDEND_SYNC_JOB_ID,
+        name="TWT48U ex-dividend sync",
+        max_instances=1,
+        coalesce=True,
+        # No next_run_time: no start-up run (see the module docstring).
+    )
     logger.info(
         "scheduler jobs registered: data_refresh at start-up then %s, "
-        "alert_evaluation every %d min, %s and %s on weekdays at %s (Asia/Taipei)",
+        "alert_evaluation every %d min, %s and %s on weekdays at %s (Asia/Taipei), "
+        "%s on weekdays at %s:%d (Asia/Taipei)",
         _data_refresh_plan(data_minutes),
         alert_minutes,
         PIT_CAPTURE_JOB_ID,
         SECTOR_REFRESH_JOB_ID,
         SECTOR_JOBS_HOURS,
+        DIVIDEND_SYNC_JOB_ID,
+        SECTOR_JOBS_HOURS,
+        DIVIDEND_SYNC_MINUTE,
     )
     return engine
 

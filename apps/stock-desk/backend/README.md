@@ -181,7 +181,7 @@ uv run python -m app.backtest.event_study 2330 --market TW --html event_study_23
 
 ## 排程（`app/scheduler.py`）
 
-`python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。資料面的兩個 job（另有族群 PIT 與 board 兩個 cron job，見 ADR-0012）：
+`python -m app.scheduler`（compose 的 `scheduler` service 指令不變）。資料面的兩個 job（另有族群 PIT 與 board 兩個 cron job，見 ADR-0012；以及下方的 `dividend_sync`）：
 `data_refresh`（只抓實際持有的標的，替快取層保鮮）與 `alert_evaluation`（interval，跑
 `evaluate_alerts` 並推播）。
 
@@ -192,3 +192,11 @@ uv run python -m app.backtest.event_study 2330 --market TW --html event_study_23
 `data refresh run: trigger=<startup|cron|interval> taipei=… new_york=… with_bars=… duration_ms=… outcome=<ok|error>`。
 設定 `SCHEDULER_DATA_INTERVAL_MINUTES` 時退回固定間隔（舊行為）。收到 SIGTERM／SIGINT 時 `wait=True` 乾淨關閉，重複收到訊號
 不會變成 traceback。
+
+`dividend_sync`（ADR-0016 D-5.2／D-5.4）：平日 17:50、19:50、21:50（Asia/Taipei）各觸發一次，排在 `pit_snapshot_capture`（:30）
+與板塊 refresh（:45）之後；呼叫與 CLI（`python -m app.dividends.sync`）相同的 `sync_dividends`，`trigger='scheduled'`，
+把 TWT48U 除權息預告寫進主 DB 的 `dividend_events` 與 `dividend_sync_runs`。三個時點是重試表：該台北日期已有 `ok` run
+就跳過（不抓取、不寫入）；`failed` run（來源失敗、或回 ok 卻無事件）不算，下一個時點會再試。**啟動時不立即跑**（預告表逐日累積，
+漏一天不影響下一次補上），也**沒有任何環境變數開關**。每次執行恰記一行
+`dividend sync run: trigger=scheduled taipei=… status=<ok|failed> event_count=… unparsed_count=… unattributed_count=… duration_ms=…`
+（跳過時為 `outcome=skipped`）；來源失敗或無事件只記 failed run 與 WARNING，job 視為成功；寫入中途失敗時整筆回復並**往外拋**（job 內不 catch，job 結果為失敗），由 `_guarded` 記一條 ERROR 與 traceback，排程照樣存活。
