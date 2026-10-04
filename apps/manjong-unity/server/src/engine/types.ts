@@ -8,6 +8,8 @@ export interface Meld {
   tiles: Tile[];
   /** Seat the claimed tile came from; the owner's seat for ankan. */
   fromSeat: number;
+  /** The tile taken from another player ("" for ankan). For kakan it is the originally ponged tile. */
+  claimedTile: Tile;
 }
 
 export interface TaiItem {

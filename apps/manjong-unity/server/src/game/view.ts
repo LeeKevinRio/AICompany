@@ -16,8 +16,25 @@ import type { HandResult, Meld } from '../engine/types.js';
 
 export interface MeldDto {
   type: Meld['type'];
+  /** Display order: for chi the claimed tile sits in the middle; otherwise sorted. */
   tiles: string[];
   fromSeat: number;
+  /** The tile taken from another player ("" for ankan). */
+  claimedTile: string;
+  /** Index in `tiles` of the claimed tile (-1 for ankan). */
+  claimedIndex: number;
+}
+
+/** Chi is shown as [other, claimed, other] (the Taiwanese table convention); other melds keep their order. */
+export function toMeldDto(m: Meld): MeldDto {
+  let tiles = [...m.tiles];
+  if (m.type === 'chi' && m.claimedTile) {
+    const others = [...m.tiles];
+    others.splice(others.indexOf(m.claimedTile), 1);
+    tiles = [others[0]!, m.claimedTile, others[1]!];
+  }
+  const claimedIndex = m.type === 'ankan' ? -1 : m.type === 'chi' ? 1 : tiles.indexOf(m.claimedTile);
+  return { type: m.type, tiles, fromSeat: m.fromSeat, claimedTile: m.claimedTile, claimedIndex };
 }
 
 export interface PlayerViewDto {
@@ -125,7 +142,7 @@ export function buildView(
       handCount: p.hand.length,
       hand: concealed,
       drawnTile,
-      melds: p.melds.map((m) => ({ type: m.type, tiles: [...m.tiles], fromSeat: m.fromSeat })),
+      melds: p.melds.map(toMeldDto),
       flowers: [...p.flowers],
       discards: [...p.discards],
       sessionDelta: game.sessionDeltas[seat]!,

@@ -97,7 +97,7 @@ describe('claims', () => {
     applyAction(game, 1, 'chi:4m', emit);
     applyAction(game, 2, 'pon', emit);
     applyAction(game, 3, 'pass', emit);
-    expect(game.hand.players[2]!.melds).toEqual([{ type: 'pon', tiles: ['5m', '5m', '5m'], fromSeat: 0 }]);
+    expect(game.hand.players[2]!.melds).toEqual([{ type: 'pon', tiles: ['5m', '5m', '5m'], fromSeat: 0, claimedTile: '5m' }]);
     expect(game.hand.players[0]!.discards).toEqual([]);
     expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false });
     expect(ids(game, 2).every((id) => id.startsWith('discard:'))).toBe(true);
@@ -109,7 +109,7 @@ describe('claims', () => {
     applyAction(game, 1, 'chi:4m', emit);
     applyAction(game, 2, 'pass', emit);
     applyAction(game, 3, 'pass', emit);
-    expect(game.hand.players[1]!.melds[0]).toEqual({ type: 'chi', tiles: ['4m', '5m', '6m'], fromSeat: 0 });
+    expect(game.hand.players[1]!.melds[0]).toEqual({ type: 'chi', tiles: ['4m', '5m', '6m'], fromSeat: 0, claimedTile: '5m' });
     expect(game.hand.players[1]!.hand).not.toContain('4m');
   });
 
@@ -162,7 +162,7 @@ describe('kongs', () => {
     applyAction(game, 0, 'kakan:5m', emit);
     applyAction(game, 2, 'pass', emit);
     const p = game.hand.players[0]!;
-    expect(p.melds[0]).toEqual({ type: 'kakan', tiles: ['5m', '5m', '5m', '5m'], fromSeat: 1 });
+    expect(p.melds[0]).toEqual({ type: 'kakan', tiles: ['5m', '5m', '5m', '5m'], fromSeat: 1, claimedTile: '5m' });
     expect(p.drawn).toBe('S');
     expect(game.hand.kongBloom).toBe(true);
   });
@@ -306,7 +306,7 @@ describe('more kongs and last tiles', () => {
     applyAction(game, 0, 'discard:5m', emit);
     applyAction(game, 2, 'kan', emit);
     const p = game.hand.players[2]!;
-    expect(p.melds[0]).toEqual({ type: 'kan', tiles: ['5m', '5m', '5m', '5m'], fromSeat: 0 });
+    expect(p.melds[0]).toEqual({ type: 'kan', tiles: ['5m', '5m', '5m', '5m'], fromSeat: 0, claimedTile: '5m' });
     expect(p.drawn).toBe('S');
     expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: true });
   });
@@ -402,5 +402,34 @@ describe('coin floor (budgets)', () => {
     expect(game.budgets[0]).toBe(5000 + game.hand.result!.deltas[0]!);
     expect(game.over).toBe(false);
     expect(game.endReason).toBe('');
+  });
+});
+
+describe('meld display', () => {
+  it('chi shows the claimed tile in the middle; the engine keeps tiles sorted for scoring', async () => {
+    const { toMeldDto } = await import('../src/game/view.js');
+    for (const [claimed, expected] of [
+      ['3m', ['4m', '3m', '5m']],
+      ['4m', ['3m', '4m', '5m']],
+      ['5m', ['3m', '5m', '4m']],
+    ] as const) {
+      const dto = toMeldDto({ type: 'chi', tiles: ['3m', '4m', '5m'], fromSeat: 3, claimedTile: claimed });
+      expect(dto.tiles).toEqual(expected);
+      expect(dto.claimedIndex).toBe(1);
+      expect(dto.claimedTile).toBe(claimed);
+    }
+    expect(toMeldDto({ type: 'ankan', tiles: ['E', 'E', 'E', 'E'], fromSeat: 0, claimedTile: '' }).claimedIndex).toBe(-1);
+    expect(toMeldDto({ type: 'pon', tiles: ['E', 'E', 'E'], fromSeat: 2, claimedTile: 'E' }).claimedIndex).toBe(0);
+  });
+
+  it('a chi claimed on its lowest tile still scores as the right sequence', () => {
+    const { game, emit } = setup({
+      hands: ['3m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '4m 5m 111p 222p 333s 444s 9s 7s', '', ''],
+      front: '9m 9m',
+      turn: 0,
+    });
+    applyAction(game, 0, 'discard:3m', emit);
+    applyAction(game, 1, 'chi:3m', emit);
+    expect(game.hand.players[1]!.melds[0]).toEqual({ type: 'chi', tiles: ['3m', '4m', '5m'], fromSeat: 0, claimedTile: '3m' });
   });
 });

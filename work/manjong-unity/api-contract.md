@@ -1,5 +1,7 @@
-# manjong-unity API 契約 v0.3
+# manjong-unity API 契約 v0.3.1
 
+> v0.3.1（2026-10-04，CEO 回饋）：副露新增 `claimedTile` / `claimedIndex`，吃牌時被吃的那張排在中間。
+>
 > v0.3 變更（2026-10-03，CEO 要求）：
 > - **登入、暱稱、救濟金、排行榜也改走 WebSocket**，HTTP API 全部移除（只留 `/api/health` 與 WebGL 靜態檔）。
 > - **金幣下限 0**：玩家最多輸到 0；輸到 0 時整場立即結束，無法打下一局（`view.endReason = "bankrupt"`）。
@@ -106,6 +108,14 @@ GameView = {
   "result": HandResult           // hasResult=false 時為空殼
 }
 
+MeldDto = {
+  "type": "chi | pon | kan | ankan | kakan",
+  "tiles": ["4m","3m","5m"],   // 顯示順序：吃牌時被吃的那張放中間（台灣牌桌慣例）；其他副露照原順序
+  "fromSeat": 3,               // 被吃碰槓的牌來自哪個座位（暗槓為自己）
+  "claimedTile": "3m",         // 從別家拿來的那張（暗槓為 ""）
+  "claimedIndex": 1            // claimedTile 在 tiles 中的位置（吃固定為 1；暗槓 -1），用戶端用來標示
+}
+
 WaitDto = { "tile": "3p", "left": 2 }   // left = 以我看得到的牌（自己手牌 + 全部牌河 + 全部副露）推算還剩幾張
 
 PlayerView = {
@@ -113,7 +123,7 @@ PlayerView = {
   "handCount": 16,            // 手牌張數（含剛摸的牌）
   "hand": ["1m","2m"],        // 只有自己有內容；hand_end 時四家都攤開；不含 drawnTile
   "drawnTile": "",            // 只有自己、且剛摸牌時才有值（UI 放在手牌最右邊）
-  "melds": [ { "type": "chi | pon | kan | ankan | kakan", "tiles": ["3m","4m","5m"], "fromSeat": 3 } ],
+  "melds": [ MeldDto ],
   "flowers": ["F1"], "discards": ["9s","E"],
   "sessionDelta": 0           // 本場累計輸贏
 }

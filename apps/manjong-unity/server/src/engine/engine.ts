@@ -536,7 +536,7 @@ function resolveClaim(game: GameState, emit: Emit): void {
     removeTiles(p.hand, isKan ? [tile, tile, tile] : [tile, tile]);
     removeLastDiscard(game, discarder, tile);
     const tiles = isKan ? [tile, tile, tile, tile] : [tile, tile, tile];
-    p.melds.push({ type: isKan ? 'kan' : 'pon', tiles, fromSeat: discarder });
+    p.melds.push({ type: isKan ? 'kan' : 'pon', tiles, fromSeat: discarder, claimedTile: tile });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
     if (!isKan) hand.phase = { type: 'turn', seat: ponSeat, justDrew: false };
@@ -563,7 +563,7 @@ function resolveClaim(game: GameState, emit: Emit): void {
     need.splice(need.indexOf(tile), 1);
     removeTiles(p.hand, need);
     removeLastDiscard(game, discarder, tile);
-    p.melds.push({ type: 'chi', tiles: option.tiles, fromSeat: discarder });
+    p.melds.push({ type: 'chi', tiles: option.tiles, fromSeat: discarder, claimedTile: tile });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
     hand.phase = { type: 'turn', seat: chiSeat, justDrew: false };
@@ -612,7 +612,7 @@ function doAnkan(game: GameState, seat: number, tile: Tile, emit: Emit): void {
   const p = hand.players[seat]!;
   removeTiles(p.hand, [tile, tile, tile, tile]);
   p.drawn = null;
-  p.melds.push({ type: 'ankan', tiles: [tile, tile, tile, tile], fromSeat: seat });
+  p.melds.push({ type: 'ankan', tiles: [tile, tile, tile, tile], fromSeat: seat, claimedTile: '' });
   hand.noCallsYet = false;
   emit({ type: 'ankan', seat, tile, tiles: [tile, tile, tile, tile], text: `${game.names[seat]} 暗槓` });
   drawFor(game, seat, true, emit);

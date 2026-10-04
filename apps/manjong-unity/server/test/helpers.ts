@@ -15,8 +15,9 @@ export function tiles(notation: string): string[] {
   return out;
 }
 
-export function meld(type: Meld['type'], notation: string, fromSeat = 1): Meld {
-  return { type, tiles: tiles(notation), fromSeat };
+export function meld(type: Meld['type'], notation: string, fromSeat = 1, claimedTile?: string): Meld {
+  const t = tiles(notation);
+  return { type, tiles: t, fromSeat, claimedTile: type === 'ankan' ? '' : (claimedTile ?? t[0]!) };
 }
 
 export function names(items: { name: string }[]): string[] {
