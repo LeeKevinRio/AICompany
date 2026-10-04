@@ -61,9 +61,10 @@ ADJUSTED_SOURCE_SUFFIX: Final = "+divadj"
 #: D-5 -- show the change when ex-date coverage cannot be established, as
 #: ADR-0016 D-5 states. The remaining false moves (OTC, US, unsynced periods,
 #: splits) are carried by the D-6 disclosure, which the *frontend* must render in
-#: the same PR as the column; this screen does not enforce that. While the D-5
-#: coverage rule is only the ``CoverageNotYetJudged`` stub, ``False`` would null
-#: the whole column, so this is a fail-closed fallback, not a tuning knob:
+#: the same PR as the column; this screen does not enforce that. Wherever the
+#: D-5 verdict is ``unknown`` (the ``CoverageNotYetJudged`` default, or the real
+#: rule before its sync record exists), ``False`` would null the whole column,
+#: so this is a fail-closed fallback, not a tuning knob:
 #: changing it is a CEO decision recorded by amending ADR-0016, never a hotfix.
 SHOW_WHEN_COVERAGE_UNKNOWN: Final = True
 
@@ -129,7 +130,8 @@ class ExDateCoverageRule(Protocol):
     ``known`` only when the latest bar's source is ``twse`` **and** the sync
     record proves every ex-date in ``(basis_date, price_date]`` was still in the
     future at some sync. Answered for the whole book at once (K-7). The real
-    rule is data-engineer's to write; :class:`CoverageNotYetJudged` stands in.
+    rule is ``app.dividends.coverage.AnnounceRunCoverageRule``, injected only by
+    the summary endpoint (K-17); :class:`CoverageNotYetJudged` is the default.
     """
 
     def coverage(
@@ -138,7 +140,10 @@ class ExDateCoverageRule(Protocol):
 
 
 class CoverageNotYetJudged:
-    """STUB for :class:`ExDateCoverageRule` until data-engineer delivers D-5.
+    """Default :class:`ExDateCoverageRule`: the always-``unknown`` answer.
+
+    The real rule (``app.dividends.coverage.AnnounceRunCoverageRule``) is
+    injected only by the summary endpoint (K-17); every other screen keeps this.
 
     Answers ``unknown`` for every row -- the conservative statement, since
     nothing here proves coverage. Under :data:`SHOW_WHEN_COVERAGE_UNKNOWN` the

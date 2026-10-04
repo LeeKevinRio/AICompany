@@ -15,8 +15,9 @@ a run that took place while the date was still in the future.
 The authoritative source of those runs is the main DB's sync record, per
 ADR-0016 D-5.2 (``dividend_sync_runs`` / ``dividend_sync_unparsed``), read through
 ``app.dividends.store.DividendEventStore``, which satisfies the
-:class:`AnnounceRunSource` Protocol. (Wiring it into the summary endpoint is a
-separate step; until then the screen still uses the always-``unknown`` stub.)
+:class:`AnnounceRunSource` Protocol. The summary endpoint in
+``app.api.portfolio`` injects this rule into the screen (K-17); every other
+``build_summary`` caller passes no screen, so ``change`` stays null (D-3).
 ``app.data.market_panel.MarketPanelReader`` also happens to satisfy the
 :class:`AnnounceRunSource` Protocol (it reads the capture's ``dividend_announce``
 runs), but it is for tests and the ADR-0016 V-1 offline check only: the

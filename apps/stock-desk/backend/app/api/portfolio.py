@@ -29,6 +29,7 @@ from app.api.kelly import kelly_inputs_by_symbol
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
 from app.data.cache import PriceBarCache
 from app.data.providers.fx import FxRateProvider
+from app.dividends.coverage import AnnounceRunCoverageRule
 from app.dividends.store import DividendEventStore
 from app.kelly.store import KellyInputStore
 from app.portfolio.price_change import ChangeScreen
@@ -111,7 +112,16 @@ def portfolio_summary(
 ) -> PortfolioSummary:
     # The only caller that screens a day-over-day change in (ADR-0016 D-3);
     # every other build_summary caller leaves ``change`` null on every row.
-    change_screen = ChangeScreen(ex_dates=dividends, calendar=calendar)
+    # F6's ex-dates and the D-5 coverage rule read the same main-DB store
+    # instance (ADR-0016 D-5.4, K-17): never the market DB (ADR-0012 C-7).
+    # No try/except here on purpose: the rule turns an unreadable sync record
+    # into ``unknown`` itself (D-5.3), and anything else is the screen's
+    # whole-book fail-closed path (D-3), not something to hide as ``unknown``.
+    change_screen = ChangeScreen(
+        ex_dates=dividends,
+        calendar=calendar,
+        coverage_rule=AnnounceRunCoverageRule(dividends),
+    )
     return build_summary(store, valuator, change_screen=change_screen)
 
 
