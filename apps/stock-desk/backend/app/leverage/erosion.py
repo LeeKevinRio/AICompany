@@ -33,7 +33,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from app.data.interface import PriceBar
-from app.signals.frame import CLOSE, bars_to_frame, provenance
+from app.signals.frame import CLOSE, bars_to_frame, latest_bar_date, provenance
 from app.signals.models import InputsUsed, Status
 from app.signals.risk import TRADING_DAYS_PER_YEAR, annualized_volatility
 
@@ -100,8 +100,16 @@ class ErosionEstimate(BaseModel):
     scenarios: list[ErosionScenario]
     assumptions: list[str]
     inputs_used: InputsUsed
+    #: ``as_of`` / ``source`` describe the latest *index* bar: the index is this
+    #: block's only input. They predate the prefix convention and keep their
+    #: unprefixed names (renaming would be a breaking change).
     as_of: str | None = None
     source: str | None = None
+    #: Trading date (``YYYY-MM-DD``) of the latest underlying-index bar handed
+    #: in. Prefixed because, within the leverage payload, an unprefixed
+    #: ``*_bar_date`` always refers to the ETF; this always equals
+    #: ``DragDecomposition.index_last_bar_date`` for the same index series.
+    index_last_bar_date: str | None = None
     reason: str | None = None
 
 
@@ -159,6 +167,7 @@ def estimate_erosion(
         ),
     )
     as_of, source = provenance(index_bars)
+    index_last_bar_date = latest_bar_date(index_bars)
 
     def _insufficient(reason: str, observations: int) -> ErosionEstimate:
         return ErosionEstimate(
@@ -176,6 +185,7 @@ def estimate_erosion(
             inputs_used=inputs_used,
             as_of=as_of,
             source=source,
+            index_last_bar_date=index_last_bar_date,
             reason=reason,
         )
 
@@ -240,5 +250,6 @@ def estimate_erosion(
         inputs_used=inputs_used,
         as_of=as_of,
         source=source,
+        index_last_bar_date=index_last_bar_date,
         reason=None,
     )

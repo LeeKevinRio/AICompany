@@ -73,6 +73,18 @@ def provenance(bars: list[PriceBar]) -> tuple[str | None, str | None]:
     return latest.as_of.isoformat(), latest.source
 
 
+def latest_bar_date(bars: list[PriceBar]) -> str | None:
+    """Return the most recent bar's trading date as ``YYYY-MM-DD``, or ``None``.
+
+    Picks the same bar :func:`provenance` does (max by ``date``), but answers a
+    different question: *which trading day the data runs up to*, not when it was
+    retrieved. Returns ``None`` for an empty input.
+    """
+    if not bars:
+        return None
+    return max(bars, key=lambda bar: bar.date).date.isoformat()
+
+
 def clean_series(series: pd.Series) -> list[float | None]:
     """Render a float Series as a JSON-safe list with ``NaN`` mapped to ``None``.
 

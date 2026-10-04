@@ -76,6 +76,10 @@ def test_index_blocks_report_insufficient_data_for_an_unmapped_symbol(
     note = INDEX_MAPPING["00631L"].note
     assert chapter["notes"].count(note) == 1
     assert api_harness.index_service.calls == []
+    # No index was consulted, so neither block can date one.
+    assert chapter["drag"]["index_last_bar_date"] is None
+    assert chapter["erosion"]["index_last_bar_date"] is None
+    assert chapter["drag"]["last_bar_date"] == chapter["holding"]["last_bar_date"]
 
 
 def test_a_mapped_symbol_is_computed_against_its_real_index_series(
@@ -97,6 +101,27 @@ def test_a_mapped_symbol_is_computed_against_its_real_index_series(
     # The mapping facts travel with the numbers, still unverified.
     assert chapter["index_mapping"]["series_symbol"] == "^TWII"
     assert chapter["index_mapping_verified"] is False
+
+
+def test_the_payload_carries_each_series_last_bar_date(api_harness: ApiHarness) -> None:
+    etf_bars = recent_bars(trending_closes(300), symbol="00675L")
+    index_bars = recent_bars(oscillating_closes(300), symbol="^TWII", end=etf_bars[-1].date)
+    api_harness.price_service.seed("00675L", etf_bars)
+    api_harness.index_service.seed("^TWII", index_bars[:-1])
+    api_harness.client.post("/api/positions", json=_MAPPED_LEVERAGED)
+    chapter = api_harness.client.get("/api/leverage/00675L").json()["chapter"]
+
+    drag, erosion = chapter["drag"], chapter["erosion"]
+    assert drag["status"] == "ok"
+    # The index series stops one day short of the ETF; each keeps its own date.
+    assert drag["last_bar_date"] == etf_bars[-1].date.isoformat()
+    assert drag["index_last_bar_date"] == index_bars[-2].date.isoformat()
+    assert erosion["index_last_bar_date"] == drag["index_last_bar_date"]
+    assert drag["last_bar_date"] == chapter["holding"]["last_bar_date"]
+    # Retrieval provenance is kept alongside, unchanged.
+    assert drag["as_of"] is not None
+    assert drag["index_as_of"] is not None
+    assert erosion["as_of"] is not None
 
 
 def test_a_mapped_symbol_with_no_index_source_says_which_series_is_missing(

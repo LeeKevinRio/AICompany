@@ -119,6 +119,13 @@ def test_provenance_is_carried_through() -> None:
     assert result.inputs_used.window["lookback_returns"] == 60
 
 
+def test_index_last_bar_date_is_the_index_latest_trading_date() -> None:
+    result = _estimate()
+    assert result.status == "ok"
+    # 61 consecutive bars from 2024-01-01 end on 2024-03-01.
+    assert result.index_last_bar_date == "2024-03-01"
+
+
 # --- insufficient_data paths -------------------------------------------------
 
 
@@ -159,3 +166,18 @@ def test_single_return_cannot_produce_a_sigma() -> None:
     )
     assert result.status == "insufficient_data"
     assert result.annualized_volatility is None
+
+
+def test_insufficient_data_still_reports_the_index_last_bar_date() -> None:
+    # One bar cannot produce a return, but it still has a trading date.
+    single = E.estimate_erosion(
+        index_bars=bars([100.0], symbol="TW50"),
+        leverage_factor=2.0,
+        expense_ratio_annual=0.0113,
+    )
+    assert single.status == "insufficient_data"
+    assert single.index_last_bar_date == "2024-01-01"
+
+    empty = E.estimate_erosion(index_bars=[], leverage_factor=2.0, expense_ratio_annual=0.0113)
+    assert empty.status == "insufficient_data"
+    assert empty.index_last_bar_date is None

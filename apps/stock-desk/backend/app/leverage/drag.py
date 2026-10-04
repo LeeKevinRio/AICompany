@@ -53,7 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.data.interface import PriceBar
 from app.leverage.index_mapping import IndexBasis, ReturnBasis
-from app.signals.frame import CLOSE, bars_to_frame, provenance
+from app.signals.frame import CLOSE, bars_to_frame, latest_bar_date, provenance
 from app.signals.models import InputsUsed, Status
 from app.signals.risk import TRADING_DAYS_PER_YEAR, annualized_volatility
 
@@ -178,8 +178,17 @@ class DragDecomposition(BaseModel):
     inputs_used: InputsUsed
     as_of: str | None = None
     source: str | None = None
+    #: Trading date (``YYYY-MM-DD``) of the latest ETF bar handed in -- the day
+    #: the ETF series runs up to, not when it was retrieved (that is ``as_of``).
+    #: Taken from the full ``etf_bars``, so the ``opened_at`` cut never moves it.
+    #: Convention: within the leverage payload an unprefixed ``*_bar_date``
+    #: always refers to the ETF; the index carries an ``index_`` prefix.
+    last_bar_date: str | None = None
     index_as_of: str | None = None
     index_source: str | None = None
+    #: Trading date (``YYYY-MM-DD``) of the latest underlying-index bar handed
+    #: in; ``None`` when no index series was available.
+    index_last_bar_date: str | None = None
     #: How the series used relates to the fund's stated benchmark, echoed back
     #: so a reader never has to assume it was the official index (I-4).
     index_basis: IndexBasis = "official_index"
@@ -314,6 +323,8 @@ def decompose_drag(
     """
     as_of, source = provenance(etf_bars)
     index_as_of, index_source = provenance(index_bars)
+    etf_last_bar_date = latest_bar_date(etf_bars)
+    index_last_bar_date = latest_bar_date(index_bars)
     assumptions = _assumptions_for(index_basis, index_return_basis)
     inputs_used = _inputs_used(
         etf_bars=len(etf_bars),
@@ -348,8 +359,10 @@ def decompose_drag(
             ),
             as_of=as_of,
             source=source,
+            last_bar_date=etf_last_bar_date,
             index_as_of=index_as_of,
             index_source=index_source,
+            index_last_bar_date=index_last_bar_date,
             index_basis=index_basis,
             index_return_basis=index_return_basis,
             residual_alert=False,
@@ -474,8 +487,10 @@ def decompose_drag(
         ),
         as_of=as_of,
         source=source,
+        last_bar_date=etf_last_bar_date,
         index_as_of=index_as_of,
         index_source=index_source,
+        index_last_bar_date=index_last_bar_date,
         index_basis=index_basis,
         index_return_basis=index_return_basis,
         residual_alert=residual_alert,

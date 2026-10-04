@@ -278,6 +278,86 @@ def test_provenance_and_assumptions_survive() -> None:
     assert len(result.assumptions) >= 5
 
 
+# --- Last bar dates (trading day each series runs up to) ---------------------
+
+
+def test_last_bar_dates_are_each_series_own_latest_date() -> None:
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN)
+    assert result.status == "ok"
+    # bars() starts at 2024-01-01, so three bars end on 2024-01-03.
+    assert result.last_bar_date == "2024-01-03"
+    assert result.index_last_bar_date == "2024-01-03"
+
+
+def test_etf_and_index_last_bar_dates_can_differ() -> None:
+    # The ETF has one more bar than the index: the aligned window stops at the
+    # last common date, but each series still reports its own latest date.
+    index_closes = zigzag_closes(amplitude=0.02, returns=19)
+    etf_closes = ideal_leveraged_closes(
+        zigzag_closes(amplitude=0.02, returns=20), leverage_factor=2.0
+    )
+    result = _decompose(index_closes, etf_closes)
+    assert result.status == "ok"
+    assert result.last_bar_date == "2024-01-21"
+    assert result.index_last_bar_date == "2024-01-20"
+    assert result.window.end_date == "2024-01-20"
+
+
+def test_index_longer_than_etf_keeps_its_own_last_bar_date() -> None:
+    # Mirror of the case above: the index has one more bar than the ETF. The
+    # index date must come from the full index series, not from the aligned
+    # window, so a wrong implementation reading the window would report 01-20.
+    index_closes = zigzag_closes(amplitude=0.02, returns=20)
+    etf_closes = ideal_leveraged_closes(
+        zigzag_closes(amplitude=0.02, returns=19), leverage_factor=2.0
+    )
+    result = _decompose(index_closes, etf_closes)
+    assert result.status == "ok"
+    assert result.index_last_bar_date == "2024-01-21"
+    assert result.last_bar_date == "2024-01-20"
+    assert result.window.end_date == "2024-01-20"
+
+
+def test_opened_at_cut_does_not_move_last_bar_date() -> None:
+    index_closes = zigzag_closes(amplitude=0.02, returns=20)
+    etf_closes = ideal_leveraged_closes(index_closes, leverage_factor=2.0)
+    full = _decompose(index_closes, etf_closes)
+    late = _decompose(index_closes, etf_closes, opened_at=date(2024, 1, 11))
+    assert late.window.aligned_bars < full.window.aligned_bars
+    assert late.last_bar_date == full.last_bar_date == "2024-01-21"
+    assert late.index_last_bar_date == full.index_last_bar_date == "2024-01-21"
+
+
+def test_opened_at_after_all_bars_still_reports_last_bar_dates() -> None:
+    # Insufficient data for the window, but the series themselves still exist.
+    result = _decompose(_INDEX_GOLDEN, _ETF_GOLDEN, opened_at=date(2024, 6, 1))
+    assert result.status == "insufficient_data"
+    assert result.last_bar_date == "2024-01-03"
+    assert result.index_last_bar_date == "2024-01-03"
+
+
+def test_empty_bars_give_null_last_bar_dates() -> None:
+    no_index = G.decompose_drag(
+        etf_bars=bars(_ETF_GOLDEN, symbol="00631L"),
+        index_bars=[],
+        leverage_factor=_BETA,
+        expense_ratio_annual=_EXPENSE,
+    )
+    assert no_index.status == "insufficient_data"
+    assert no_index.last_bar_date == "2024-01-03"
+    assert no_index.index_last_bar_date is None
+
+    no_etf = G.decompose_drag(
+        etf_bars=[],
+        index_bars=bars(_INDEX_GOLDEN, symbol="TW50", source="twse-index"),
+        leverage_factor=_BETA,
+        expense_ratio_annual=_EXPENSE,
+    )
+    assert no_etf.status == "insufficient_data"
+    assert no_etf.last_bar_date is None
+    assert no_etf.index_last_bar_date == "2024-01-03"
+
+
 # --- Risk-approved wording, pinned verbatim ------------------------------------
 # Approved word-for-word in work/reviews/2026-10-03-槓桿章節-觀測值字面-風控核可.md.
 # Any edit to these sentences needs a fresh risk-compliance sign-off, so the

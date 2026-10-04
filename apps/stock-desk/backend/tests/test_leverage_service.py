@@ -164,6 +164,29 @@ def test_an_unmapped_fund_refuses_both_blocks_with_the_mapping_note() -> None:
     assert any("不是官方標的指數" in line for line in chapter["drag"]["assumptions"])
 
 
+def test_last_bar_dates_reach_the_chapter_and_the_index_date_agrees() -> None:
+    chapter = _chapter()
+    drag, erosion = chapter["drag"], chapter["erosion"]
+    # 61 consecutive bars from 2024-01-01 end on 2024-03-01 for both series.
+    assert drag["last_bar_date"] == "2024-03-01"
+    assert drag["index_last_bar_date"] == "2024-03-01"
+    assert erosion["index_last_bar_date"] == "2024-03-01"
+    # Both blocks read the same index series, so they must state the same date.
+    assert drag["index_last_bar_date"] == erosion["index_last_bar_date"]
+    # Unprefixed *_bar_date means the ETF across the chapter.
+    assert drag["last_bar_date"] == chapter["holding"]["last_bar_date"]
+
+
+def test_an_unmapped_fund_reports_no_index_last_bar_date() -> None:
+    # Index bars were handed in, but an unmapped fund never consults them.
+    chapter = _chapter(symbol="00631L")
+    assert chapter["drag"]["index_last_bar_date"] is None
+    assert chapter["erosion"]["index_last_bar_date"] is None
+    assert chapter["drag"]["index_last_bar_date"] == chapter["erosion"]["index_last_bar_date"]
+    # The ETF series itself is still there and still dated.
+    assert chapter["drag"]["last_bar_date"] == "2024-03-01"
+
+
 def test_unmapped_reason_does_not_read_as_a_temporary_outage() -> None:
     reason = _chapter(symbol="00632R")["drag"]["reason"]
     for phrase in ("暫時", "稍後", "重試", "故障"):
