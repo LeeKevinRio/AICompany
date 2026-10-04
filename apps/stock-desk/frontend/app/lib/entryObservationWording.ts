@@ -73,7 +73,7 @@ const DATA_AS_OF_UNKNOWN = "日期不明";
  * `MM-DD`, any other year prints the full date, and null / empty / anything
  * else (ISO timestamps included) prints 「日期不明」. Validation lives here, not in the badge.
  */
-function formatDataAsOfDate(lastBarDate: string | null): string {
+export function formatDataAsOfDate(lastBarDate: string | null): string {
   if (lastBarDate === null || !DATE_ONLY_PATTERN.test(lastBarDate)) return DATA_AS_OF_UNKNOWN;
   const currentYear = String(new Date().getFullYear());
   return lastBarDate.slice(0, 4) === currentYear ? lastBarDate.slice(5) : lastBarDate;

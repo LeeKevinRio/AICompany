@@ -18,7 +18,7 @@
  * rather than silently widening this list's exceptions.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -2537,11 +2537,16 @@ describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
   });
 });
 
+/**
+ * Strip block comments (incl. JSX `{/* *\/}`) and whole-line `//` comments so that only code and
+ * user-visible literals are scanned; explanatory comments may name the old label.
+ * Trailing `//` on a code line is deliberately NOT stripped: that only over-reports, never misses
+ * (ADR-0019 K-13 G-0). Single definition, shared by the L-10 and K-13 blocks below.
+ */
+const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
 describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現「資料時間：」（含全形冒號）", () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-  // Strip block comments (incl. JSX `{/* */}`) and whole-line `//` comments so that only
-  // code and user-visible literals are scanned; explanatory comments may name the old label.
-  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const FILES: ReadonlyArray<readonly [string, string]> = [
     ["AdviceCardView.tsx", "../../position/[symbol]/AdviceCardView.tsx"],
     ["OperationSummaryPanel.tsx", "../../position/[symbol]/OperationSummaryPanel.tsx"],
@@ -2637,17 +2642,181 @@ describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現�
     });
   });
 
-  it("新字面就位：日線取得時間（槓桿章節）、資料來源前綴（面板／page）", () => {
+  // ADR-0019 D-5 / L-10g：槓桿章節改正向斷言風控核可後的 W-1／W-2 建構函式接線；OperationSummaryPanel 段保留。
+  it("新字面就位：資料截至（槓桿章節 W-1／W-2）、資料來源前綴（面板／page）", () => {
     const adviceCode = stripComments(read("../../position/[symbol]/AdviceCardView.tsx"));
     expect(adviceCode).toContain("規則版本 {advice.rules_version}｜觀察區間：");
     expect(adviceCode).not.toContain("日線取得時間");
     const lev = stripComments(read("../../position/[symbol]/LeverageChapterView.tsx"));
-    expect(lev).toContain(
-      "日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}",
-    );
-    expect(lev).toContain("指數日線取得時間：");
+    expect(lev).toContain("buildLeverageDataAsOfLine(");
+    expect(lev).toContain("chapter.drag.last_bar_date,");
+    expect(lev).toContain("chapter.drag.index_last_bar_date,");
+    expect(lev).toContain("chapter.drag.window.end_date,");
+    expect(lev).toContain("buildErosionIndexAsOf(chapter.erosion.index_last_bar_date)");
+    expect(lev).toContain("波動估計視窗：{chapter.erosion.observations}／{chapter.erosion.window} 個報酬｜");
+    expect(lev).not.toContain("日線取得時間");
+    expect(lev).not.toContain("指數日線取得時間");
     expect(stripComments(read("../../position/[symbol]/OperationSummaryPanel.tsx"))).toContain(
       "資料來源：{response.data.source}",
     );
+  });
+});
+
+/**
+ * K-13 守門（ADR-0019 D-5「K-13 守門規格」G-0～G-4；風控 L-10g required 5）。
+ *
+ * 允許清單（明文寫在這裡，不寫進例外表）：
+ * - `DataMetaStatusBadge` 的「N 分鐘前取得」讀的是 `DataMeta.staleness_minutes`，來源是序列層
+ *   `checked_at`（D-5 唯一的取得時間定義）；G-1～G-4 都不會命中，不要把它加進 G-1。
+ * - `generated_at`（回應產生時間）不是 `as_of`，不在 K-13 範圍，不列禁止樣式。
+ * - `RiskGauge`、`DirectorySection`、`BacktestReportView`、`FxStatusBadge`、`DataStatusBadge`、
+ *   `PositionsTable` 讀的 `as_of` 不是 `PriceBar` 或訊號層的列出處，也沒有搭配「取得」，現有規則不會命中。
+ * - 已知限制：「取得」放在別檔常數再拼接渲染，G-4 抓不到，由 G-1／G-2 在兩個關鍵檔補位。
+ * 例外表（`K13_POSITION_IDENTIFIER_EXCEPTIONS`）必須為空；新增任何一條都須附風控紀錄路徑。
+ */
+describe("K-13（ADR-0019 D-5）：列層 as_of 不得以「取得」顯示", () => {
+  const APP_DIR = fileURLToPath(new URL("../../", import.meta.url));
+  const toPosix = (p: string) => p.split("\\").join("/");
+
+  // G-0: every production source under app/ (no glob dependency; `recursive` needs Node >= 20).
+  const APP_SOURCE_FILES: string[] = readdirSync(APP_DIR, { recursive: true, encoding: "utf8" })
+    .map(toPosix)
+    .filter((rel) => /\.(ts|tsx)$/.test(rel))
+    .filter((rel) => !rel.split("/").includes("__tests__"))
+    .filter((rel) => !rel.split("/").includes("node_modules"))
+    .filter((rel) => !/\.test\.[^/]*$/.test(rel))
+    .sort();
+  const codeOf = (rel: string) => stripComments(readFileSync(`${APP_DIR}${rel}`, "utf8"));
+
+  const ADVICE_CARD = "position/[symbol]/AdviceCardView.tsx";
+  const LEVERAGE_VIEW = "position/[symbol]/LeverageChapterView.tsx";
+
+  /**
+   * G-2 exception table, same shape as `ALLOWED_SOURCE_CONTEXTS`: per-file *exact source lines*
+   * (trimmed) masked before matching. Every entry must cite the risk-review record path.
+   * Initially (and required to stay) empty.
+   */
+  const K13_POSITION_IDENTIFIER_EXCEPTIONS: Readonly<Record<string, readonly string[]>> = {};
+
+  /** G-4 core: lines i-2..i+2 around any line containing 「取得」 must not name `as_of` / `index_as_of`. */
+  function findNearbyAsOf(code: string): string[] {
+    const lines = code.split("\n");
+    const hits: string[] = [];
+    lines.forEach((line, i) => {
+      if (!line.includes("取得")) return;
+      const windowText = lines.slice(Math.max(0, i - 2), i + 3).join("\n");
+      if (/\b(index_)?as_of\b/.test(windowText)) hits.push(`L${i + 1}: ${line.trim()}`);
+    });
+    return hits;
+  }
+
+  const ACCESSOR_PATTERNS: readonly RegExp[] = [/\b(advice|drag|erosion)\??\.as_of\b/, /\.index_as_of\b/];
+
+  it("G-0：掃描清單非空，且含 AdviceCardView.tsx、LeverageChapterView.tsx；不含測試檔", () => {
+    expect(APP_SOURCE_FILES.length).toBeGreaterThan(0);
+    expect(APP_SOURCE_FILES).toContain(ADVICE_CARD);
+    expect(APP_SOURCE_FILES).toContain(LEVERAGE_VIEW);
+    expect(APP_SOURCE_FILES).toContain("lib/types.ts");
+    for (const rel of APP_SOURCE_FILES) {
+      expect(rel, rel).not.toMatch(/__tests__|\.test\./);
+    }
+  });
+
+  it("G-2 例外表必須為空（新增任何一條須附風控紀錄並改本斷言）", () => {
+    expect(Object.keys(K13_POSITION_IDENTIFIER_EXCEPTIONS)).toEqual([]);
+  });
+
+  describe("G-1：AdviceCardView.tsx／LeverageChapterView.tsx 逐檔（去註解後）", () => {
+    for (const rel of [ADVICE_CARD, LEVERAGE_VIEW]) {
+      it(`${rel} 不得含「取得」，不得匹配 \\bas_of\\b／\\bindex_as_of\\b`, () => {
+        const code = codeOf(rel);
+        expect(code).not.toContain("取得");
+        expect(code).not.toMatch(/\bas_of\b/);
+        expect(code).not.toMatch(/\bindex_as_of\b/);
+      });
+    }
+
+    it("LeverageChapterView.tsx 不得以 formatDateTime 包 *_bar_date（日期欄走 formatDataAsOfDate）", () => {
+      expect(codeOf(LEVERAGE_VIEW)).not.toMatch(/formatDateTime\([^)]*_bar_date/);
+    });
+  });
+
+  describe("G-2：app/position/** 識別字禁止（data_as_of／sector_as_of／stats_as_of 因 \\b 邊界不命中，屬允許）", () => {
+    const positionFiles = APP_SOURCE_FILES.filter((rel) => rel.startsWith("position/"));
+
+    it("position/** 清單非空", () => {
+      expect(positionFiles.length).toBeGreaterThan(0);
+    });
+
+    it("例外表中的每一條都必須仍存在於該檔（不得過期）", () => {
+      for (const [rel, lines] of Object.entries(K13_POSITION_IDENTIFIER_EXCEPTIONS)) {
+        const codeLines = codeOf(rel).split("\n").map((l) => l.trim());
+        for (const line of lines) expect(codeLines, `${rel}: stale exception`).toContain(line.trim());
+      }
+    });
+
+    for (const rel of positionFiles) {
+      it(`${rel} 去註解後不得匹配 \\bas_of\\b／\\bindex_as_of\\b`, () => {
+        const masked = new Set((K13_POSITION_IDENTIFIER_EXCEPTIONS[rel] ?? []).map((l) => l.trim()));
+        const code = codeOf(rel)
+          .split("\n")
+          .filter((l) => !masked.has(l.trim()))
+          .join("\n");
+        expect(code).not.toMatch(/\bas_of\b/);
+        expect(code).not.toMatch(/\bindex_as_of\b/);
+      });
+    }
+  });
+
+  describe("G-3：全 app/** accessor 封閉清單（advice／drag／erosion 的 .as_of、任何 .index_as_of）", () => {
+    for (const rel of APP_SOURCE_FILES) {
+      it(`${rel}`, () => {
+        const code = codeOf(rel);
+        for (const pattern of ACCESSOR_PATTERNS) expect(code, String(pattern)).not.toMatch(pattern);
+      });
+    }
+  });
+
+  describe("G-4：全 app/** 鄰近視窗（含「取得」的行，前後 2 行不得出現 as_of／index_as_of）", () => {
+    for (const rel of APP_SOURCE_FILES) {
+      it(`${rel}`, () => {
+        expect(findNearbyAsOf(codeOf(rel))).toEqual([]);
+      });
+    }
+  });
+
+  describe("守門本身有牙：合成輸入必須命中", () => {
+    it("G-4 抓得到跨行寫法（舊 L243–L244 型態）與同行寫法，且不誤報距離 3 行以外", () => {
+      const crossLine = [
+        "<p>",
+        "  指數日線取得時間：",
+        "  {formatDateTime(chapter.erosion.as_of)}",
+        "</p>",
+      ].join("\n");
+      expect(findNearbyAsOf(crossLine)).toHaveLength(1);
+      expect(findNearbyAsOf("日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}")).toHaveLength(1);
+      expect(findNearbyAsOf("取得\n{index_as_of}")).toHaveLength(1);
+      expect(findNearbyAsOf(["取得", "a", "b", "c", "{as_of}"].join("\n"))).toEqual([]);
+      expect(findNearbyAsOf("N 分鐘前取得 {staleness_minutes}｜{data_as_of}")).toEqual([]);
+    });
+
+    it("G-3 抓得到 advice／drag／erosion（含 ?.）與 .index_as_of；不誤報型別宣告與 data.as_of", () => {
+      const hit = (src: string) => ACCESSOR_PATTERNS.some((p) => p.test(src));
+      expect(hit("advice.as_of")).toBe(true);
+      expect(hit("chapter.drag.as_of")).toBe(true);
+      expect(hit("chapter.erosion?.as_of")).toBe(true);
+      expect(hit("chapter.drag.index_as_of")).toBe(true);
+      expect(hit("  index_as_of: string | null;")).toBe(false);
+      expect(hit("data.as_of")).toBe(false);
+    });
+
+    it("G-1／G-2 的識別字樣式命中解構寫法，且放過 data_as_of／sector_as_of／stats_as_of", () => {
+      expect(/\bas_of\b/.test("const { as_of } = advice")).toBe(true);
+      expect(/\bindex_as_of\b/.test("const { index_as_of } = drag")).toBe(true);
+      for (const ok of ["data_as_of", "sector_as_of", "stats_as_of"]) {
+        expect(/\bas_of\b/.test(ok), ok).toBe(false);
+      }
+      expect(/formatDateTime\([^)]*_bar_date/.test("formatDateTime(chapter.drag.index_last_bar_date)")).toBe(true);
+    });
   });
 });

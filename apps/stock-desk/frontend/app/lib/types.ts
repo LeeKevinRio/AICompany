@@ -789,6 +789,12 @@ export interface TheoreticalDrag {
   reason: string | null;
 }
 
+/** Backend `IndexBasis` (app/leverage/index_mapping.py). */
+export type LeverageIndexBasis = "official_index" | "proxy_etf" | "unmapped";
+
+/** Backend `ReturnBasis` (app/leverage/index_mapping.py). */
+export type LeverageIndexReturnBasis = "price" | "total_return" | "unknown";
+
 /** Backend `DragDecomposition` (app/leverage/drag.py). */
 export interface DragDecomposition {
   status: MeasureStatus;
@@ -808,10 +814,25 @@ export interface DragDecomposition {
   theoretical: TheoreticalDrag;
   assumptions: string[];
   inputs_used: InputsUsed;
+  /** row-level provenance (PriceBar.as_of); never render (ADR-0019 K-13) */
   as_of: string | null;
   source: string | null;
+  /** Trading date (`YYYY-MM-DD`) of the latest ETF bar; `null` when no ETF series. */
+  last_bar_date: string | null;
+  /** row-level provenance (PriceBar.as_of); never render (ADR-0019 K-13) */
   index_as_of: string | null;
   index_source: string | null;
+  /** Trading date (`YYYY-MM-DD`) of the latest underlying-index bar; `null` when no index series. */
+  index_last_bar_date: string | null;
+  /** How the index series relates to the fund's stated benchmark (not rendered). */
+  index_basis: LeverageIndexBasis;
+  /** Dividend treatment of the index series (not rendered). */
+  index_return_basis: LeverageIndexReturnBasis;
+  /** `true` when `|residual|` crossed `residual_alert_threshold` (not rendered). */
+  residual_alert: boolean;
+  residual_alert_threshold: number;
+  /** Qualifiers about this result (not rendered). */
+  notes: string[];
   reason: string | null;
 }
 
@@ -839,8 +860,11 @@ export interface ErosionEstimate {
   scenarios: ErosionScenario[];
   assumptions: string[];
   inputs_used: InputsUsed;
+  /** row-level provenance (PriceBar.as_of); never render (ADR-0019 K-13) */
   as_of: string | null;
   source: string | null;
+  /** Trading date (`YYYY-MM-DD`) of the latest underlying-index bar; `null` when no index series. */
+  index_last_bar_date: string | null;
   reason: string | null;
 }
 

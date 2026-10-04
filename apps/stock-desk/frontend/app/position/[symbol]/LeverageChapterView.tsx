@@ -3,7 +3,6 @@ import { LEVERAGE_CHAPTER_TAGLINE } from "../../lib/sectionTaglines";
 import {
   chapterStatusLabel,
   detectionStatusLabel,
-  formatDateTime,
   formatNumber,
   formatPercent,
 } from "../../lib/format";
@@ -11,6 +10,8 @@ import { MeasureStatusBadge } from "../../components/MeasureStatusBadge";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { LEVERAGE_CHAPTER_TITLE } from "../../lib/sectionTitles";
 import {
+  buildErosionIndexAsOf,
+  buildLeverageDataAsOfLine,
   LEVERAGE_DRAG_GAP_ROW_LABEL,
   LEVERAGE_DRAG_OBSERVED_NOTE,
   LEVERAGE_DRAG_OBSERVED_ROW_LABEL,
@@ -21,7 +22,7 @@ import {
 function AssumptionsList({ items }: { items: string[] }) {
   if (items.length === 0) return null;
   return (
-    <details className="mt-2 text-xs text-neutral-500">
+    <details className="mt-2 text-xs text-neutral-400">
       <summary className="cursor-pointer text-neutral-400">假設清單（{items.length}）</summary>
       <ul className="mt-2 list-disc space-y-1 pl-5">
         {items.map((text, i) => (
@@ -58,7 +59,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
         <p className="mt-2 text-sm text-amber-300">{chapter.reason}</p>
       )}
       {chapter.notes.length > 0 && (
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-neutral-500">
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-neutral-400">
           {chapter.notes.map((note, i) => (
             <li key={i}>{note}</li>
           ))}
@@ -83,10 +84,10 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
             </p>
           </div>
         ) : (
-          <p className="mt-2 text-sm text-neutral-500">{chapter.detection.reason}</p>
+          <p className="mt-2 text-sm text-neutral-400">{chapter.detection.reason}</p>
         )}
         {chapter.detection.source_note && (
-          <p className="mt-1 text-xs text-neutral-500">{chapter.detection.source_note}</p>
+          <p className="mt-1 text-xs text-neutral-400">{chapter.detection.source_note}</p>
         )}
       </section>
 
@@ -98,11 +99,11 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
         </h3>
         {chapter.holding.status === "ok" ? (
           <p className="mt-1 text-sm text-neutral-400">
-            建倉日 {chapter.holding.opened_at} ～ 最新日線 {chapter.holding.last_bar_date}，共{" "}
+            建倉日 {chapter.holding.opened_at} ～ 資料截至 {chapter.holding.last_bar_date}，共{" "}
             {chapter.holding.holding_trading_days} 個交易日（{chapter.holding.holding_days} 曆日）。
           </p>
         ) : (
-          <p className="mt-1 text-sm text-neutral-500">{chapter.holding.reason}</p>
+          <p className="mt-1 text-sm text-neutral-400">{chapter.holding.reason}</p>
         )}
       </section>
 
@@ -110,7 +111,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
       <section className="mt-4">
         <h3 className="text-sm font-semibold text-neutral-200">{LEVERAGE_DRAG_SECTION_TITLE}</h3>
         {chapter.drag === null || chapter.drag.status !== "ok" ? (
-          <p className="mt-1 text-sm text-neutral-500">
+          <p className="mt-1 text-sm text-neutral-400">
             {chapter.drag?.reason ?? "本項未啟用或未計算。"}
           </p>
         ) : (
@@ -173,7 +174,7 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
             {chapter.drag.ideal_path_wiped_out && (
               <p className="mt-1 text-xs text-rose-300">理想路徑在此期間已跌破 -100%（歸零）。</p>
             )}
-            <p className="mt-2 text-xs text-neutral-500">
+            <p className="mt-2 text-xs text-neutral-400">
               理論近似 drag（{chapter.drag.theoretical.formula}）：
               {chapter.drag.theoretical.status === "ok"
                 ? `${formatPercent(chapter.drag.theoretical.theoretical_drag)}（與${LEVERAGE_DRAG_RESET_EFFECT_LABEL}差異 ${formatPercent(
@@ -182,7 +183,11 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                 : chapter.drag.theoretical.reason}
             </p>
             <p className="mt-2 text-xs text-neutral-400">
-              日線取得時間：ETF {formatDateTime(chapter.drag.as_of)}／指數 {formatDateTime(chapter.drag.index_as_of)}
+              {buildLeverageDataAsOfLine(
+                chapter.drag.last_bar_date,
+                chapter.drag.index_last_bar_date,
+                chapter.drag.window.end_date,
+              )}
             </p>
             <AssumptionsList items={chapter.drag.assumptions} />
           </>
@@ -192,11 +197,11 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
       {/* --- Erosion scenarios -------------------------------------------- */}
       <section className="mt-4">
         <h3 className="text-sm font-semibold text-neutral-200">橫盤情境侵蝕推估（erosion）</h3>
-        <p className="mt-1 text-xs text-neutral-500">
+        <p className="mt-1 text-xs text-neutral-400">
           {chapter.erosion?.nature ?? "情境推估，非預測。"}
         </p>
         {chapter.erosion === null || chapter.erosion.status !== "ok" ? (
-          <p className="mt-1 text-sm text-neutral-500">
+          <p className="mt-1 text-sm text-neutral-400">
             {chapter.erosion?.reason ?? "本項未啟用或未計算。"}
           </p>
         ) : (
@@ -240,17 +245,13 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
               </table>
             </div>
             <p className="mt-2 text-xs text-neutral-400">
-              波動估計視窗：{chapter.erosion.observations}／{chapter.erosion.window} 個報酬｜指數日線取得時間：
-              {formatDateTime(chapter.erosion.as_of)}
+              波動估計視窗：{chapter.erosion.observations}／{chapter.erosion.window} 個報酬｜
+              {buildErosionIndexAsOf(chapter.erosion.index_last_bar_date)}
             </p>
             <AssumptionsList items={chapter.erosion.assumptions} />
           </>
         )}
       </section>
-
-      <p className="mt-4 text-xs text-neutral-400">
-        產生時間：{formatDateTime(chapter.generated_at)}
-      </p>
     </div>
   );
 }
