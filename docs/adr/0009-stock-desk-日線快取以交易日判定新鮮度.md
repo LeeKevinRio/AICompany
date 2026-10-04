@@ -13,6 +13,7 @@
     第 3 點改寫為「不得為了節省額度而延長指數路徑的 `recheck_cooldown`」。其餘 ADR-0005 維持。
   - **2026-09-18 新增 D-8**（attempt-log 冷卻適用於快取無列）；D-3 增列 cache-only 讀取為 `judge()`
     第二個消費者且不寫兩張 log（ADR-0010 D-1）。
+  - **2026-10-04 起（ADR-0019 accepted 後生效）**：D-3 的 layer 0 條件、以及 `last_fetched_at` 作為 `judge()` 冷卻基準與 staleness 基準的角色，由 ADR-0019 D-1／D-2 取代；其餘條文不變。
 
 ## Context（背景）
 
