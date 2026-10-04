@@ -15,6 +15,10 @@
   - 「附錄 A：方案比較」兩張表、「附錄 B：架構師評估摘要」逐字取自該 handback（附錄 A 僅將原標題降階以符合本檔層級）。
   - 檔內所有 `檔案:行號`（例：`service.py` L414–L426）、函式名、欄位名、數字（例：TW 540 天約 18 次 HTTP、`max_gap_days=830`、540 根）均為草案作者與其引用的 L-10c 路徑分析所述；tech-writer 落檔時**未重新對 code 驗證**。行號會隨 commit 漂移，引用時以原文定位。
   - 落檔時的快照：分支 `product/stock-desk`，HEAD `588ded64be25d505e1d8d6df8bfcd0b6c33dc3f6`（tech-writer 於落檔時讀取 `.git/refs/heads/product/stock-desk`）。此為快照，之後 HEAD 可能前進。
+  - 補充（2026-10-04，同日第二次落檔）：D-6、Consequences 的「`DragDecomposition` 落後 5 欄」另案註記、「K-13 守門規格」、附錄 A 的「欄名方案比較（L-10g）」，
+    逐字取自 tech-architect 2026-10-04 的 K-13 守門／欄名決策 handback（原文落於 scratchpad `adr0019-k13-architect-text.md`，B 類轉錄，僅做格式調整，技術內容未增補、結論未改動）。
+    該 handback 內的 `檔案:行號`（例：`componentWordingScan.test.ts` L2539、L2624–L2633、`LeverageChapterView.tsx` L185／L243–L244、`AdviceCardView.tsx` L131）、
+    函式名、正規式與實測敘述均為 tech-architect 所述，tech-writer **未重新對 code 驗證**。
   - 此為 proposed 狀態；依 ADR-0001，生效前的內容可修訂，生效後不得原地改寫決策。
 
 ---
@@ -106,6 +110,23 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
   `規則版本 {advice.rules_version}｜觀察區間：{advice.observation_window.start ?? "—"} ~ {advice.observation_window.end ?? "—"}（{advice.observation_window.bars ?? "—"} 根日線）`。
   卡片任何位置不得再渲染 `advice.as_of`。
 
+- **D-6（L-10g 槓桿章節日期欄與欄名原則）**（tech-architect 2026-10-04）
+  1. **欄名**
+     - drag 新增 `last_bar_date`、`index_last_bar_date`。
+     - erosion 新增 `index_last_bar_date`。
+     - 三個欄位一律 `str | None = None`，格式 `YYYY-MM-DD`。
+     - 既有的 `as_of`、`source`、`index_as_of` 保留，不改名。
+     - 原則補一句：「leverage payload 內，無前綴的 `*_bar_date` 一律代表 ETF」。這條原則的效力高於 model 內部的命名一致性。
+  2. **helper**
+     - 放在 `frame.py` 的 `provenance()` 旁。
+     - 理由：與 `provenance` 取同一根 bar；drag 和 erosion 本來就 import `frame`；依賴方向（leverage→signals.frame）沒有改變。
+     - 規格：`max(bars, key=lambda b: b.date).date.isoformat()`，空清單回 `None`。
+     - 不得改 `provenance()` 的簽章。它還有 signals/technical、risk、service 等消費者。
+     - 命名建議用 `latest_bar_date`。如果用 `last_bar_date`，在函式裡寫 `last_bar_date = last_bar_date(...)` 會觸發 `UnboundLocalError`，而且與 `freshness.judge(last_bar_date=...)` 等 kwarg 同名。dev-lead 若堅持原名也可以，但同一個函式內不得有同名的區域變數。
+  3. **`types.ts`**
+     - 新欄宣告成 `string | null`，不加 `?`，因為後端一律會序列化。
+     - `as_of`/`index_as_of` 保留。建議加 doc comment：「row-level provenance (PriceBar.as_of); never render (ADR-0019 K-13)」。
+
 ## Consequences（後果）
 
 - 好處：空洞序列不再被說成「本機快取、已含最近交易日」，指標不再跨空洞計算；歷史區間抓取不再讓徽章與冷卻看起來剛確認過最新；
@@ -119,7 +140,10 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
     分鐘數取最舊列」，冷卻期過後重抓。這是保守方向（只增加抓取、只降低宣稱）；與 L-10c P3 的「回落最舊 `fetched_at`」同屬既有 R-2 取捨。
   - 遷移回填的殘餘誤差：P4 與部分抓取都發生過的序列，回填值可能仍比真實尾端時間新，到下一次尾端抓取時自癒。
 - 已知限制：降級路徑（R-8、全梯子失敗）仍回傳快取中現有的列，可能含內部缺口，但一律 `is_within_ttl=False` 並附原因；本 ADR 不新增缺口揭露。
-- 約束：見「對實作的約束」K-1～K-14。
+- 另案（tech-architect 2026-10-04）：`DragDecomposition` 落後 5 欄（`index_basis`、`index_return_basis`、`residual_alert`、`residual_alert_threshold`、`notes`）列為另案，不屬本 ADR 範圍，理由：與 K-13 和 coverage 無關，ADR 不擴大範圍。
+  - 允許在 L-10g PR 裡用獨立 commit 一併補齊，條件是只改型別和 `makeDrag` fixture，不做任何渲染。
+  - 之後若要渲染 `residual_alert` 或 `notes`，屬於使用者可見文案，要走 creative-lead 起草、風控審。
+- 約束：見「對實作的約束」K-1～K-14，以及「K-13 守門規格」。
 
 ---
 
@@ -144,6 +168,51 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
 - **K-12** 本 ADR 不改徽章八句字面（`dataMetaStatusBadge.test.ts` 不得修改）。D-5 的畫面字面以風控 2026-10-04 核可版為準（見 D-5），不得另行變動。
 - **K-13** 前端任何檔案不得以「取得」字樣顯示 `PriceBar.as_of` 或訊號層各 `as_of` 欄；`AdviceCardView.tsx` 不得讀 `advice.as_of`；`LeverageChapterView.tsx` 現行兩行（L-10g）為已知殘餘，替代字面落地前暫留，本 ADR 改 accepted 前必須結案；以 grep 守門測試釘住。
 - **K-14** ADR-0009 只在檔頭加指標行，不改 D-x 內文。
+
+### K-13 守門規格（K-13 子條；tech-architect 2026-10-04，可以直接寫成測試）
+
+掛在 `apps/stock-desk/frontend/app/lib/__tests__/componentWordingScan.test.ts`，新增 `describe("K-13（ADR-0019 D-5）：列層 as_of 不得以「取得」顯示")`。
+
+- **G-0 共用前處理**
+  - 把 L2539 的 `stripComments`（區塊註解含 JSX `{/* */}`，加上整行 `//`）提到 module scope，只定義一份，L-10 block 改用它。
+  - 行尾的 `//` 不去除。這是保守方向：只會多報，不會漏報。
+  - 列檔案用 `readdirSync(dir, { recursive: true })`，不新增 glob 依賴。
+  - 範圍是 `app/**/*.{ts,tsx}`，排除 `**/__tests__/**`、`*.test.*`、`node_modules`。
+  - 斷言掃到的檔案數大於 0，且清單包含 `AdviceCardView.tsx`、`LeverageChapterView.tsx`，防止空掃。
+- **G-1 嚴格逐檔**（`position/[symbol]/AdviceCardView.tsx`、`position/[symbol]/LeverageChapterView.tsx`）
+  - 去註解後不得含「取得」。
+  - 不得匹配 `/\bas_of\b/` 或 `/\bindex_as_of\b/`。這會連解構 `{ as_of }` 一起擋掉。
+  - `LeverageChapterView.tsx` 另外不得匹配 `/formatDateTime\([^)]*_bar_date/`。新日期欄要用 E-4 的 `formatDataAsOfDate`。
+  - 註記（coordinator 2026-10-04 查證）：「E-4」為進場觀察條件 PRD（`work/stock-desk-進場觀察條件-PRD.md` §4b）的揭露項編號「三份查詢的資料時間」；`formatDataAsOfDate` 為 `apps/stock-desk/frontend/app/lib/entryObservationWording.ts` 內的私有 helper（L-10b 落地，commit `748c617`），今年印 `MM-DD`、非今年 `YYYY-MM-DD`、null／空／格式不符印「日期不明」。L-10g 落地時須 export 或抽共用，行為不變。
+- **G-2 `app/position/**` 識別字禁止**
+  - 去註解後不得匹配 `/\bas_of\b/`、`/\bindex_as_of\b/`。
+  - `data_as_of`、`sector_as_of`、`stats_as_of` 因為 `\b` 邊界不會命中，屬於允許。
+  - 現況命中的只有上面兩個檔案（`page.tsx` L511 和 `TechnicalIndicatorsPanel` L557/L618 都在註解內）。
+  - 例外表比照 `ALLOWED_SOURCE_CONTEXTS` 的格式，每一條都要附風控紀錄路徑，初始為空。
+- **G-3 全 `app/**` accessor 封閉清單**
+  - 去註解後不得匹配 `/\b(advice|drag|erosion)\??\.as_of\b/` 或 `/\.index_as_of\b/`。
+  - 以點號作為前綴，所以 `types.ts` 的宣告 `index_as_of:` 不會命中，`types.ts` 不必排除。
+- **G-4 全 `app/**` 鄰近視窗**
+  - 去註解後，任何含「取得」的第 i 行，第 i-2 到 i+2 行合起來不得匹配 `/\b(index_)?as_of\b/`。
+  - 這條能抓到 L243–L244 那種跨行寫法。
+  - 實測：未去註解時全 `app/` 只命中 L185、L243–244 和 `AdviceCardView` L131，沒有誤報。
+  - 已知限制：取得字樣放在別檔的常數、再拼接渲染的情形，G-4 抓不到，由 G-1/G-2 在兩個關鍵檔補位。
+- **允許清單（明文寫進測試註解，不寫進例外表）**
+  - `DataMetaStatusBadge` 的「N 分鐘前取得」讀的是 `DataMeta.staleness_minutes`，來源是序列層 `checked_at`，也就是 D-5 唯一的取得時間定義。G-1 到 G-4 都不會命中，不要把它加進 G-1。
+  - `generated_at`（L252「產生時間」）不是 `as_of`，不在 K-13 範圍，不列禁止樣式。它的字面問題由風控另行決定是否列管。
+  - `RiskGauge`、`DirectorySection`、`BacktestReportView`、`FxStatusBadge`、`DataStatusBadge`、`PositionsTable` 讀的 `as_of` 不是 `PriceBar` 或訊號層的列出處，也沒有搭配「取得」，現有規則不會命中。
+- **既有斷言改寫**
+  - L2624–L2633「新字面就位」裡，`AdviceCardView` 和 `LeverageChapterView` 兩段斷言舊字面的內容要刪掉。
+  - `AdviceCardView` 改成正向斷言 D-5 (b) 的逐字字面。
+  - `LeverageChapterView` 改成正向斷言風控核可後的新字面。
+  - `OperationSummaryPanel` 那段保留。
+  - L-10c 先合併（照 dev-lead 排序）。
+- **時序**
+  - 目前工作樹的 `AdviceCardView.tsx` L131 還在渲染 `advice.as_of`（D-5 (b) 尚未落地），所以守門測試不能先合、也不能帶殘餘豁免合入。
+  - 守門必須與 L-10g 同一個 PR 合入，且 D-5 (b) 要在它之前或同時合入，合入時 G-1 到 G-4 全綠、例外表為空。
+  - G-1 到 G-4 在 product/stock-desk 轉綠，是 ADR-0019 改為 accepted 的前置條件之一。
+- **後端測試欄名同步**
+  - 原本的 `drag.index_last_bar_date == erosion.last_bar_date` 改成 `== erosion.index_last_bar_date`。
 
 ---
 
@@ -218,6 +287,13 @@ L-10c 路徑分析（`work/research/L-10c-取得時間基準不一致-路徑分�
 | H2 `record_fetch` 不相交時拒絕取代（一律保留舊區間） | 不會出現「coverage 是舊歷史、列卻是新的」 | 舊區間若是歷史段，近期請求就永遠拿不到 coverage，每次點都整段重抓；也不能單獨修好 layer 0 | **否決** |
 | H2′ 不相交時保留 `covered_end` 較晚者 | 保住每日主路徑的增量抓取 | 回測反覆調參時每次都整段重抓（正是 ADR-0009 Context 當初的痛點）；正確性仍靠 H1 | 只是成本取捨，不修正確性。不採，維持取代 |
 | H3 layer 0 檢查快取列的連續性（用 `market_trading_days` 量缺口） | 直接量出洞 | 是啟發式：停牌、未抓到的序列都會誤判；每次請求多一次全市場掃描 | 誤判會擋住服務。不採，但可當測試 oracle |
+
+### 欄名方案比較（L-10g，tech-architect 2026-10-04）
+
+| 方案 | 優點 | 缺點 | 風險 |
+|---|---|---|---|
+| `erosion.last_bar_date` | 在 `ErosionEstimate` 內部與 `as_of`/`source` 一致（三者都來自 `index_bars`） | 同一份 payload 裡，`holding.last_bar_date`、envelope `data.last_bar_date`、`drag.last_bar_date` 都代表 ETF，只有 erosion 這個同名欄代表指數 | 前端或文案把指數日期標成 ETF。這正是 L-10g 要防的那類錯標，否決 |
+| **`erosion.index_last_bar_date`（採用）** | 整份 payload 同一個欄名只代表同一條序列；`drag.index_last_bar_date == erosion.index_last_bar_date` 這種斷言一看就懂 | erosion 內部會混用：舊欄 `as_of`/`source` 無前綴，新欄有前綴 | 低。在 model 欄位註解寫明「erosion 唯一輸入是指數」即可，舊欄不改名（改名是破壞性變更） |
 
 ---
 
