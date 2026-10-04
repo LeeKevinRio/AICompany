@@ -174,7 +174,7 @@ import {
   LADDER_BAND_NOTE,
   LADDER_BAND_TAG,
   buildConditionCount,
-  buildDataTimesLine,
+  buildDataAsOfLine,
   buildDefensiveHitsText,
   buildEntryBasisRange,
   buildEntryFooterItems,
@@ -1736,12 +1736,12 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("{fmt(levels.target2R)}");
   });
 
-  it("六項觀察條件：E-1 與回應產生時間句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
+  it("六項觀察條件：E-1 與資料截至句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
     const compStart = entrySrc.indexOf("export function EntryObservationPanel(");
     expect(compStart).toBeGreaterThan(-1);
     const detailsIdx = entrySrc.indexOf('<details className="group mt-3">', compStart);
     expect(detailsIdx).toBeGreaterThan(-1);
-    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{buildDataTimesLine("]) {
+    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{buildDataAsOfLine("]) {
       const idx = entrySrc.indexOf(needle, compStart);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
     }
@@ -1749,6 +1749,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).toContain("{ENTRY_PANEL_TITLE}");
     expect(mainRegion).toContain("{buildConditionCount(");
     expect(mainRegion).toContain("STATUS_GLYPH[c.status]");
+    // L-10b: E-4 is rendered unconditionally — its own <p> line is not wrapped in `&&` / ternary.
+    const e4Line = entrySrc.split("\n").find((l) => l.includes("{buildDataAsOfLine("));
+    expect(e4Line?.trim()).toBe("<p>{buildDataAsOfLine(dataAsOfDates.bars, dataAsOfDates.signals, dataAsOfDates.advice)}</p>");
+    const e4Idx = entrySrc.indexOf("{buildDataAsOfLine(");
+    const lineStart = entrySrc.lastIndexOf("\n", e4Idx);
+    const prevLine = entrySrc.slice(entrySrc.lastIndexOf("\n", lineStart - 1) + 1, lineStart).trim();
+    expect(prevLine).toBe("<p>{ENTRY_E3_DASH_NOTE}</p>");
+    expect(e4Line).not.toMatch(/&&|\?|:\s*null/);
   });
 
   it("技術分析（wave3，派工單 §4.3 第 5／9 點）：bars／signals 的「資料來源：…」前綴（L-10：已拿掉時間）與完整版徽章只出現在 <details> 內；主視圖合併同一列，只留「資料截至」徽章＋compact 狀態 chip（「日線」「指標」前綴沿用既有字面）", () => {
@@ -1826,9 +1834,9 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     rangeLabel: buildRangeConditionLabel(252),
     rangeLabelNull: buildRangeConditionLabel(null),
     hits: buildDefensiveHitsText(1),
-    times: buildDataTimesLine("A", "B", "C", false),
-    timesSame: buildDataTimesLine("A", "A", "A", true),
-    timesMissing: buildDataTimesLine(null, null, null, false),
+    asOfSame: buildDataAsOfLine(`${new Date().getFullYear()}-10-02`, `${new Date().getFullYear()}-10-02`, `${new Date().getFullYear()}-10-02`),
+    asOfDiff: buildDataAsOfLine(`${new Date().getFullYear()}-10-02`, `${new Date().getFullYear()}-10-02`, `${new Date().getFullYear()}-10-01`),
+    asOfMissing: buildDataAsOfLine(null, null, null),
     basisRangeNull: flatBasis(buildEntryBasisRange(null)),
     rangeNoteNull: buildEntryRangeNotValuationNote(null),
     rangeNote: buildEntryRangeNotValuationNote(252),
@@ -1895,11 +1903,6 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(LADDER_BAND_TAG).toBe("MA20 ±3%");
     expect(LADDER_BAND_NOTE).toBe("有「MA20 ±3%」標籤的列，價位皆在該範圍內。");
     expect(buildDefensiveHitsText(1)).toBe("命中 1 條");
-    expect(buildDataTimesLine("A", "B", "C", false)).toBe("回應產生時間：日線 A｜指標 B｜規則評估 C");
-    expect(buildDataTimesLine("A", "A", "A", true)).toBe("回應產生時間：A");
-    // REQ-3: identical display strings are NOT enough — the caller decides from raw stamps.
-    expect(buildDataTimesLine("A", "A", "A", false)).toBe("回應產生時間：日線 A｜指標 A｜規則評估 A");
-    expect(buildDataTimesLine(null, null, null, false)).toBe("回應產生時間：日線 —｜指標 —｜規則評估 —");
     expect(buildEntryBasisRange(null).formula[0]).toContain("位階(近N根)");
     expect(buildEntryRangeNotValuationNote(null)).toBe("位階數字僅反映價格在近 N 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
     expect(buildEntryRangeNotValuationNote(252)).toBe("位階數字僅反映價格在近 252 根區間中的相對位置，與便宜或昂貴的估值判斷無關。");
@@ -1924,15 +1927,14 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(panelSrc).toContain("aria-label={`${conditionLabel(c.id, rangeBarCount)}：${observedText(c)}，${ENTRY_STATUS_LABELS[c.status]}`}");
     expect(panelSrc).toContain("{STATUS_GLYPH[c.status]}");
     expect(panelSrc).toContain("{ENTRY_STATUS_LABELS[c.status]}");
-    // REQ-1: rows always listed; the footer group is unconditional; 「同步」 決定 on raw stamps (REQ-3).
+    // REQ-1: rows always listed; the footer group is unconditional; E-4 has no equality / collapse logic (L-10b).
     expect(panelSrc).not.toContain("observation.allUnavailable ? (");
     expect(pageSrc).toContain("{ title: ENTRY_PANEL_TITLE, items: buildEntryFooterItems(entryLevels?.rangeBarCount ?? null) }");
-    expect(panelSrc).toContain("dataTimes.bars === dataTimes.signals && dataTimes.signals === dataTimes.advice");
-    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataTimesLine("]) {
+    for (const needle of ["{ENTRY_E1_QUALIFIER}", "{ENTRY_E2_XREF}", "{ENTRY_E3_DASH_NOTE}", "{buildDataAsOfLine("]) {
       expect(panelSrc).toContain(needle);
     }
     // CEO 第二次裁定 2026-09-19（推翻一眼一句 §2.5 的「E-1／時間句常駐主視圖」
-    // 舊裁定）：E-1、E-2、E-3、回應產生時間句（不論是否 synchronized）全數收進
+    // 舊裁定）：E-1、E-2、E-3、資料截至句（E-4，唯一版型、無收合分支）全數收進
     // `<details>`（六項觀察條件唯一允許的摺疊區塊，summary＝`DETAILS_SUMMARY_ENTRY`）；
     // 主視圖只留 h2、計數句、六圓點。精確的「只出現在 details 內」位置比對見
     // 「CEO 第二次裁定 wave2」describe block。
@@ -2551,18 +2553,72 @@ describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現�
     });
   }
 
-  it("buildDataTimesLine 各分支輸出不得含「資料時間」，且皆以「回應產生時間：」開頭", () => {
-    const outputs = [
-      buildDataTimesLine("A", "B", "C", false),
-      buildDataTimesLine("A", "A", "A", true),
-      buildDataTimesLine("A", "A", "A", false),
-      buildDataTimesLine(null, null, null, false),
+  // L-10b（風控核可字面，唯一版型）：`資料截至：日線 {D_b}｜指標 {D_s}｜規則評估 {D_a}`。
+  describe("buildDataAsOfLine（E-4，L-10b）", () => {
+    const thisYear = new Date().getFullYear();
+    const lastYear = thisYear - 1;
+    const CASES: ReadonlyArray<readonly [string, string | null, string | null, string | null, string]> = [
+      ["1 三份相同仍分列", `${thisYear}-10-02`, `${thisYear}-10-02`, `${thisYear}-10-02`, "資料截至：日線 10-02｜指標 10-02｜規則評估 10-02"],
+      ["2 三份不同", `${thisYear}-10-02`, `${thisYear}-10-02`, `${thisYear}-10-01`, "資料截至：日線 10-02｜指標 10-02｜規則評估 10-01"],
+      ["3 跨年混合", `${thisYear}-10-02`, `${lastYear}-12-31`, `${thisYear}-10-01`, `資料截至：日線 10-02｜指標 ${lastYear}-12-31｜規則評估 10-01`],
+      ["4 三份皆去年", `${lastYear}-10-02`, `${lastYear}-10-02`, `${lastYear}-10-02`, `資料截至：日線 ${lastYear}-10-02｜指標 ${lastYear}-10-02｜規則評估 ${lastYear}-10-02`],
+      ["5a 單份缺值（指標）", `${thisYear}-10-02`, null, `${thisYear}-10-02`, "資料截至：日線 10-02｜指標 日期不明｜規則評估 10-02"],
+      ["5b 單份缺值（日線）", null, `${thisYear}-10-02`, `${thisYear}-10-02`, "資料截至：日線 日期不明｜指標 10-02｜規則評估 10-02"],
+      ["5c 單份缺值（規則評估）", `${thisYear}-10-02`, `${thisYear}-10-02`, null, "資料截至：日線 10-02｜指標 10-02｜規則評估 日期不明"],
+      ["6 全缺", null, null, null, "資料截至：日線 日期不明｜指標 日期不明｜規則評估 日期不明"],
+      ["7 空字串", "", `${thisYear}-10-02`, `${thisYear}-10-02`, "資料截至：日線 日期不明｜指標 10-02｜規則評估 10-02"],
+      ["8 ISO 時間戳", `${thisYear}-10-02T07:54:00+08:00`, `${thisYear}-10-02`, `${thisYear}-10-02`, "資料截至：日線 日期不明｜指標 10-02｜規則評估 10-02"],
+      ["9 斜線格式", "2026/10/02", `${thisYear}-10-02`, `${thisYear}-10-02`, "資料截至：日線 日期不明｜指標 10-02｜規則評估 10-02"],
     ];
-    for (const out of outputs) {
-      expect(out).not.toContain("資料時間");
-      expect(out.startsWith("回應產生時間：")).toBe(true);
-      expect(out).not.toContain("同步");
+
+    for (const [name, b, s, a, expected] of CASES) {
+      it(`精確輸出：${name}`, () => {
+        expect(buildDataAsOfLine(b, s, a)).toBe(expected);
+      });
     }
+
+    it("負向守門：所有案例以「資料截至：」開頭、「｜」恰 2、三個名稱各 1 次、不含禁字", () => {
+      const forbidden = ["—", "同步", "最新", "即時", "資料時間", "回應產生時間", "皆", "一致", "相同", "不同"];
+      for (const [name, b, s, a] of CASES) {
+        const out = buildDataAsOfLine(b, s, a);
+        expect(out.startsWith("資料截至："), name).toBe(true);
+        expect(out.split("｜").length - 1, name).toBe(2);
+        for (const label of ["日線", "指標", "規則評估"]) expect(out.split(label).length - 1, `${name} ${label}`).toBe(1);
+        for (const f of forbidden) expect(out, `${name} 不得含「${f}」`).not.toContain(f);
+      }
+    });
+
+    it("不收合守門：EntryObservationPanel.tsx 不含 synchronized，不對三份日期做 ===；函式只收三參數", () => {
+      const panel = read("../../position/[symbol]/EntryObservationPanel.tsx");
+      expect(panel).not.toContain("synchronized");
+      expect(panel).not.toMatch(/dataAsOfDates\.\w+\s*===/);
+      expect(panel).not.toMatch(/===\s*dataAsOfDates/);
+      expect(panel).not.toMatch(/(bars|signals|advice)\s*===\s*(bars|signals|advice)/);
+      expect(panel).not.toContain("formatDateTime");
+      expect(buildDataAsOfLine.length).toBe(3);
+      const wording = read("../entryObservationWording.ts");
+      const fnStart = wording.indexOf("export function buildDataAsOfLine(");
+      const fnEnd = wording.indexOf("export const ENTRY_NO_DATA_STATEMENT");
+      expect(wording.slice(fnStart, fnEnd)).not.toMatch(/===|!==\s*(bars|signals|advice)|synchronized/);
+    });
+
+    it("「回應產生時間」不得再出現在 EntryObservationPanel.tsx／entryObservationWording.ts 使用者可見字面", () => {
+      for (const rel of ["../../position/[symbol]/EntryObservationPanel.tsx", "../entryObservationWording.ts"]) {
+        expect(stripComments(read(rel)), rel).not.toContain("回應產生時間");
+      }
+    });
+
+    it("page.tsx E-4 props 讀 bars／signals／advice 的 data.last_bar_date，不接 .as_of", () => {
+      const page = read("../../position/[symbol]/page.tsx");
+      const start = page.indexOf("dataAsOfDates={{");
+      expect(start).toBeGreaterThan(-1);
+      const block = page.slice(start, page.indexOf("}}", start));
+      expect(block).toContain("bars: bars.data?.data.last_bar_date ?? null");
+      expect(block).toContain("signals: signals.data?.data.last_bar_date ?? null");
+      expect(block).toContain("advice: advice.data?.data.last_bar_date ?? null");
+      expect(block).not.toContain(".as_of");
+      expect(page).not.toContain("dataTimes");
+    });
   });
 
   it("新字面就位：日線取得時間（建議卡／槓桿章節）、資料來源前綴（面板／page）", () => {

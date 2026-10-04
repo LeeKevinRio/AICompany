@@ -278,7 +278,7 @@ export default function PositionDetailPage() {
             （R-A1 只要求 signals 徽章本體留在主視圖，未要求另佔一行）；徽章本
             身換成「資料截至 {MM-DD}」（取 bars 的 last_bar_date，本區塊唯一的
             「資料截至」徽章）＋各自的 compact 狀態 chip，前綴「日線」「指標」
-            沿用 `buildDataTimesLine` 既有字面（entryObservationWording.ts）的
+            沿用 `buildDataAsOfLine` 既有字面（entryObservationWording.ts）的
             同一組子字串，不新造。完整版徽章與「資料來源：…」前綴改
             印在下方「詳細」第一、二行。
           */}
@@ -505,14 +505,19 @@ export default function PositionDetailPage() {
         />
       )}
 
-      {/* 一眼一句 §2.1: 操作摘要 → 關鍵價位參考 → 六項觀察條件 → 建議卡. */}
+      {/*
+        一眼一句 §2.1: 操作摘要 → 關鍵價位參考 → 六項觀察條件 → 建議卡.
+        E-4 (風控 L-10b): the dates come from the SAME three query objects the six
+        conditions are computed from (`data.last_bar_date`, never `.as_of`); the
+        panel formats them and never compares them with each other.
+      */}
       <EntryObservationPanel
         observation={entryObservation}
         rangeBarCount={entryLevels?.rangeBarCount ?? null}
-        dataTimes={{
-          bars: bars.data?.as_of ?? null,
-          signals: signals.data?.as_of ?? null,
-          advice: advice.data?.as_of ?? null,
+        dataAsOfDates={{
+          bars: bars.data?.data.last_bar_date ?? null,
+          signals: signals.data?.data.last_bar_date ?? null,
+          advice: advice.data?.data.last_bar_date ?? null,
         }}
       />
 

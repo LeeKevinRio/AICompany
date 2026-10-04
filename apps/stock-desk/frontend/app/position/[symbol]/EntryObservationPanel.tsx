@@ -9,12 +9,11 @@ import {
   ENTRY_PANEL_TITLE,
   ENTRY_STATUS_LABELS,
   buildConditionCount,
-  buildDataTimesLine,
+  buildDataAsOfLine,
   buildDefensiveHitsText,
   buildRangeConditionLabel,
 } from "../../lib/entryObservationWording";
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
-import { formatDateTime } from "../../lib/format";
 import { DETAILS_SUMMARY_ENTRY } from "../../lib/oneLinerWording";
 
 /**
@@ -28,8 +27,10 @@ import { DETAILS_SUMMARY_ENTRY } from "../../lib/oneLinerWording";
  * - R-21: status carries no hue — glyph (●○—) + word + aria, neutral greys only.
  * - E-1～E-4 render inside the panel (NOT covered by the 2026-09-06 footer
  *   rulings); CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
- *   §4）moved all four, plus the data-times line, into `<details>` — the
- *   main view keeps only the h2, the count sentence and the six dots.
+ *   §4）moved all four into `<details>` — the main view keeps only the h2, the
+ *   count sentence and the six dots. E-4 is the 「資料截至：日線｜指標｜規則評估」
+ *   line (風控 L-10b): always rendered, always three separate dates, no
+ *   equality / collapse logic anywhere (equal dates do not mean equal data).
  * - R-15: nothing from the advice headline / confidence / disclaimer is imported.
  * Every user-facing string is a pinned constant in `entryObservationWording.ts`.
  */
@@ -80,23 +81,14 @@ function conditionLabel(id: ConditionId, rangeBarCount: number | null): string {
 export function EntryObservationPanel({
   observation,
   rangeBarCount,
-  dataTimes,
+  dataAsOfDates,
 }: {
   observation: EntryObservation;
   /** `KeyLevels.rangeBarCount` when bars are loaded (R-14: the row prints the real bar count). */
   rangeBarCount: number | null;
-  /** E-4: the three queries' own as_of stamps (bars / signals / advice), null when not loaded. */
-  dataTimes: { bars: string | null; signals: string | null; advice: string | null };
+  /** E-4: each query's own `data.last_bar_date` (bars / signals / advice), null when not loaded. Passed through untouched; the wording layer validates and formats. */
+  dataAsOfDates: { bars: string | null; signals: string | null; advice: string | null };
 }) {
-  const times = {
-    bars: dataTimes.bars ? formatDateTime(dataTimes.bars) : null,
-    signals: dataTimes.signals ? formatDateTime(dataTimes.signals) : null,
-    advice: dataTimes.advice ? formatDateTime(dataTimes.advice) : null,
-  };
-  // 風控 REQ-3: 「同步」 is decided on the RAW ISO stamps, never on the minute-rounded display strings.
-  const synchronized =
-    dataTimes.bars !== null && dataTimes.bars === dataTimes.signals && dataTimes.signals === dataTimes.advice;
-
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -124,8 +116,8 @@ export function EntryObservationPanel({
 
       {/*
         CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
-        §4）：E-1 與回應產生時間句（E-4）一律收進 `<details>`，字面不動——主視圖只留
-        h2＋計數句＋六圓點。
+        §4）：E-1 與資料截至句（E-4）一律收進 `<details>`，字面不動——主視圖只留
+        h2＋計數句＋六圓點。E-4 不得被任何條件包住（風控 L-10b）。
       */}
 
       <details className="group mt-3">
@@ -161,7 +153,7 @@ export function EntryObservationPanel({
           </ul>
           <p>{ENTRY_E2_XREF}</p>
           <p>{ENTRY_E3_DASH_NOTE}</p>
-          <p>{buildDataTimesLine(times.bars, times.signals, times.advice, synchronized)}</p>
+          <p>{buildDataAsOfLine(dataAsOfDates.bars, dataAsOfDates.signals, dataAsOfDates.advice)}</p>
           <p className="text-sm text-neutral-300">{buildFooterGuidance(ENTRY_PANEL_TITLE)}</p>
         </div>
       </details>

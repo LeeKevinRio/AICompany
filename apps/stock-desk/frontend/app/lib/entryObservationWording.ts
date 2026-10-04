@@ -63,24 +63,29 @@ export const ENTRY_E2_XREF = "本面板不是操作摘要結論的一部分；�
 
 export const ENTRY_E3_DASH_NOTE = "「—」代表無法判定，不代表數值為零，也不代表未成立。";
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Shown when a query carries no usable date; never a dash (E-3 reserves 「—」 for 無法判定). */
+const DATA_AS_OF_UNKNOWN = "日期不明";
+
 /**
- * E-4: the three queries' own timestamps (full `formatDateTime` output — the
- * year is never dropped). Collapses to one stamp only when all three match.
+ * One date cell of E-4. Only a bare `YYYY-MM-DD` is accepted: this year prints
+ * `MM-DD`, any other year prints the full date, and null / empty / anything
+ * else (ISO timestamps included) prints 「日期不明」. Validation lives here, not in the badge.
  */
-export function buildDataTimesLine(
-  bars: string | null,
-  signals: string | null,
-  advice: string | null,
-  /** 風控 REQ-3: computed by the caller from the RAW ISO stamps, not from the display strings. */
-  synchronized: boolean,
-): string {
-  const b = bars ?? "—";
-  const s = signals ?? "—";
-  const a = advice ?? "—";
-  if (synchronized && bars !== null) {
-    return `回應產生時間：${b}`;
-  }
-  return `回應產生時間：日線 ${b}｜指標 ${s}｜規則評估 ${a}`;
+function formatDataAsOfDate(lastBarDate: string | null): string {
+  if (lastBarDate === null || !DATE_ONLY_PATTERN.test(lastBarDate)) return DATA_AS_OF_UNKNOWN;
+  const currentYear = String(new Date().getFullYear());
+  return lastBarDate.slice(0, 4) === currentYear ? lastBarDate.slice(5) : lastBarDate;
+}
+
+/**
+ * E-4 (PRD §4b; 風控 L-10b 核可字面，唯一版型): each query's own `data.last_bar_date`
+ * (bars / signals / advice), always listed separately. There is deliberately no equality
+ * or collapse branch: equal dates do not mean equal data (REQ-3's sync check is superseded).
+ */
+export function buildDataAsOfLine(bars: string | null, signals: string | null, advice: string | null): string {
+  return `資料截至：日線 ${formatDataAsOfDate(bars)}｜指標 ${formatDataAsOfDate(signals)}｜規則評估 ${formatDataAsOfDate(advice)}`;
 }
 
 export const ENTRY_NO_DATA_STATEMENT = "目前資料不足，六條條件均無法判定。";
