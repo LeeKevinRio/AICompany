@@ -96,18 +96,23 @@ LIMIT_NAMES: dict[str, str] = {
 #: ``test_advice_limits.py`` reads that file and compares the four keys, so the
 #: tables cannot drift apart silently.
 #:
-#: 風控核可文案,修改須重新送審(2026-08-09)
+#: 風控核可文案,修改須重新送審(2026-08-09;stop_loss 標籤 2026-10-04 改核)
 #:
 #: The label slot itself was ruled to track ``HELD_ACTION_LABELS`` (2026-08-09
-#: ruling, "取值須等同 adviceWording.ts"). ``take_profit`` / ``stop_loss``
-#: follow the front-end wave3 wording, approved verbatim by risk-compliance on
-#: 2026-09-19 (``work/stock-desk-一眼一句簡化-派工單.md`` §4.3); the sentence
-#: templates around the slot are unchanged.
+#: ruling, "取值須等同 adviceWording.ts"). ``take_profit`` follows the front-end
+#: wave3 wording, approved verbatim by risk-compliance on 2026-09-19
+#: (``work/stock-desk-一眼一句簡化-派工單.md`` §4.3). ``stop_loss`` is
+#: "停損型減碼參考", approved verbatim by risk-compliance on 2026-10-04
+#: (``work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md`` item 1,
+#: S-1): it replaces the 2026-09-19 value "停損參考", which read the same as the
+#: decision card's stop-level cell title. The sentence templates around the slot
+#: are unchanged; only the slot value moved (both sell-side branches are pinned
+#: verbatim as S-5a / S-5b in that record).
 RANGE_ACTION_LABELS: dict[str, str] = {
     "add": "加碼參考",
     "reduce": "減碼參考",
     "take_profit": "分批獲利了結",
-    "stop_loss": "停損參考",
+    "stop_loss": "停損型減碼參考",
 }
 
 #: Tolerance used when comparing an observed ratio against a cap, so that a

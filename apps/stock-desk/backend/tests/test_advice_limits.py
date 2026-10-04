@@ -1535,12 +1535,27 @@ def test_sell_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_cap()
     )
 
 
+def test_stop_loss_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_cap() -> None:
+    # S-5a in work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md:
+    # the compliant sell branch with the 2026-10-04 stop_loss label in the slot.
+    ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
+    quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
+    assert quantity is not None
+    assert quantity.basis == (
+        "規則評估:停損型減碼參考,區間為賣出 501 ~ 2,000 股。"
+        "目前部位已超出「單一標的佔比上限」這條上限,"
+        "賣出 501 股後可回到這條上限的範圍內;"
+        "區間上緣 2,000 股是目前持股全數,是這個區間的上界,"
+        "不是這條上限要求賣到的數量。" + SKIPPED_NOTE
+    )
+
+
 def test_sell_basis_is_the_approved_copy_verbatim_when_selling_everything_falls_short() -> None:
     ctx = _ctx(gross_exposure_twd=2_000_000.0)
     quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
     assert quantity is not None
     assert quantity.basis == (
-        "規則評估:停損參考,這個區間只有一個數字:500 股,也就是目前持股全數。"
+        "規則評估:停損型減碼參考,這個區間只有一個數字:500 股,也就是目前持股全數。"
         "目前部位已超出「總曝險上限」這條上限,"
         "但這條上限主要由其他部位造成,把這一檔全部賣出後仍然超標。" + SKIPPED_NOTE
     )

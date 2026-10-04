@@ -125,13 +125,13 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
  * 「詳細」而非刪除，兩邊字面都要留一份釘死的紀錄。
  */
 describe("wave3 — HELD_ACTION_LABELS 改寫與 LEGACY 對照（逐字釘住）", () => {
-  it("新字面：停損參考／續抱參考／分批獲利了結／資料不足", () => {
+  it("新字面：停損型減碼參考／續抱參考／分批獲利了結／資料不足", () => {
     expect(HELD_ACTION_LABELS).toEqual({
       add: "加碼參考",
       hold: "續抱參考",
       reduce: "減碼參考",
       take_profit: "分批獲利了結",
-      stop_loss: "停損參考",
+      stop_loss: "停損型減碼參考",
       insufficient_data: "資料不足",
     });
   });

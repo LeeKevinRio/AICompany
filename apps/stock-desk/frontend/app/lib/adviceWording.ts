@@ -35,14 +35,21 @@ import type { CardAction, Confidence } from "./types";
  * CEO 對頎邦頁面的提問「為何評估叫做停損評估？我看不懂這一段」促成這批改寫——
  * `stop_loss` 的舊字面把「規則評估」的來源感（見 `buildAttributedHeadline`
  * 舊版）與動作本身黏在一起，讀成一個不知所云的複合詞。新字面把動作名稱單獨
- * 留白話（「停損參考」），來源感改由同列的 `RULE_SOURCE_CHIP` 承擔。
+ * 留白話（當時為「停損參考」），來源感改由同列的 `RULE_SOURCE_CHIP` 承擔。
+ *
+ * 2026-10-04 (`work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md`
+ * item 1, S-1, approved verbatim by risk-compliance): `stop_loss` is now
+ * 「停損型減碼參考」. The wave3 value「停損參考」read the same as the decision
+ * card's stop-level cell title, so the action and the price level looked like
+ * one thing. Must stay equal to `RANGE_ACTION_LABELS["stop_loss"]` in
+ * `backend/app/advice/limits.py` (same commit, same deploy).
  */
 export const HELD_ACTION_LABELS: Record<CardAction, string> = {
   add: "加碼參考",
   hold: "續抱參考",
   reduce: "減碼參考",
   take_profit: "分批獲利了結",
-  stop_loss: "停損參考",
+  stop_loss: "停損型減碼參考",
   insufficient_data: "資料不足",
 };
 
