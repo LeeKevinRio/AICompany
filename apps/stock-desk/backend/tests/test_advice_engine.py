@@ -195,7 +195,9 @@ def test_drawdown_rules_fire_together_and_the_heaviest_action_wins() -> None:
     # Below the 60-day average with a -35% drawdown: three defensive rules fire.
     # ``reduce`` carries 0.6 + 0.5 against ``stop_loss``'s 0.8, so ``reduce``
     # wins -- and the stop-loss rule stays visible on the card either way.
-    card = _card(uptrend_signals(max_drawdown=-0.35), _portfolio(close=90.0))
+    card = _card(
+        uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35), _portfolio(close=90.0)
+    )
     ids = [rule["id"] for rule in card["matched_rules"]]
     assert {"drawdown_protection", "deep_drawdown_stop", "price_below_ma60"} <= set(ids)
     assert card["action"] == "reduce"
@@ -208,6 +210,7 @@ def test_drawdown_rules_fire_together_and_the_heaviest_action_wins() -> None:
 def test_a_lone_deep_drawdown_produces_a_stop_loss() -> None:
     signals = uptrend_signals(
         max_drawdown=-0.35,
+        current_drawdown=-0.35,
         ma={"ma_5": 100.0, "ma_20": 100.0, "ma_60": 100.0},
         macd={"macd": 0.0, "signal": 0.0, "histogram": 0.0},
     )
@@ -215,6 +218,54 @@ def test_a_lone_deep_drawdown_produces_a_stop_loss() -> None:
     # the single ``reduce`` (0.6).
     card = _card(signals, _portfolio(close=100.0))
     assert card["action"] == "stop_loss"
+
+
+def _drawdown_rule_ids(card: dict[str, Any]) -> set[str]:
+    return {r["id"] for r in card["matched_rules"]} & {"drawdown_protection", "deep_drawdown_stop"}
+
+
+def test_drawdown_rules_read_the_current_drawdown_not_the_historical_max() -> None:
+    # Rule set 1.1.0 (CEO D1): a -35% fall earlier in the window, but the price
+    # is back at its high. 1.0.3 fired both drawdown rules here; 1.1.0 fires none.
+    card = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=0.0), _portfolio())
+    assert _drawdown_rule_ids(card) == set()
+    assert card["action"] == "add"
+
+
+def test_a_current_drawdown_between_the_thresholds_fires_only_the_lighter_rule() -> None:
+    card = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.25), _portfolio())
+    assert _drawdown_rule_ids(card) == {"drawdown_protection"}
+
+
+def test_the_drawdown_thresholds_are_strict() -> None:
+    at_20 = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.2), _portfolio())
+    at_30 = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.3), _portfolio())
+    assert _drawdown_rule_ids(at_20) == set()
+    assert _drawdown_rule_ids(at_30) == {"drawdown_protection"}
+
+
+def test_a_missing_current_drawdown_skips_both_rules_and_names_the_field() -> None:
+    card = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=None), _portfolio())
+    skipped = {entry["id"]: entry for entry in card["evaluation"]["skipped_rules"]}
+    for rule_id in ("drawdown_protection", "deep_drawdown_stop"):
+        assert skipped[rule_id]["missing_fields"] == ["drawdown.current"]
+        assert describe_field("drawdown.current") in skipped[rule_id]["reason"]
+
+
+def test_real_bars_recovered_to_a_new_high_fire_no_drawdown_rule() -> None:
+    # Rise to 130, fall 31% to 90, recover to a new high of 140: the window's
+    # historical max drawdown is below -30% but the latest close is the high.
+    closes = (
+        [100.0 + i * 0.5 for i in range(61)]
+        + [130.0 - i * 2.0 for i in range(1, 21)]
+        + [90.0 + i * 1.0 for i in range(1, 51)]
+    )
+    signals = compute_signals("2330", bars_from_closes(closes))
+    drawdown = signals["risk"]["drawdown"]
+    assert drawdown["max_drawdown"] < -0.3
+    assert drawdown["current"] == 0.0
+    card = _card(signals, _portfolio(close=closes[-1]))
+    assert _drawdown_rule_ids(card) == set()
 
 
 def test_overbought_and_upper_band_downgrade_a_bullish_add_to_hold() -> None:
@@ -254,7 +305,7 @@ def test_conflicting_actions_are_both_listed_and_the_heavier_one_wins() -> None:
     # Bullish MA stack (add 0.5 + 0.35) against a deep drawdown (stop_loss 0.8
     # + reduce 0.6): the defensive side is heavier and wins, but the bullish
     # side stays on the card.
-    card = _card(uptrend_signals(max_drawdown=-0.35), _portfolio())
+    card = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35), _portfolio())
     actions = {entry["action"]: entry["weight"] for entry in card["action_weights"]}
     assert card["has_conflict"] is True
     assert actions["add"] == pytest.approx(0.85)
@@ -438,7 +489,7 @@ def test_every_violated_cap_is_quoted_when_several_block_the_add() -> None:
 
 def test_a_violated_cap_does_not_rewrite_a_defensive_action() -> None:
     card = _card(
-        uptrend_signals(max_drawdown=-0.35),
+        uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35),
         _portfolio(position_market_value_twd=200_000.0, quantity=1_818.0),
     )
     assert card["action"] in {"reduce", "stop_loss"}
@@ -518,7 +569,7 @@ def test_agreement_is_measured_on_the_winning_direction(tmp_path: Path) -> None:
 
 
 def test_confidence_drops_when_rules_disagree() -> None:
-    card = _card(uptrend_signals(max_drawdown=-0.35), _portfolio())
+    card = _card(uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35), _portfolio())
     assert card["has_conflict"] is True
     assert card["confidence"] in {"low", "medium"}
 
@@ -550,6 +601,8 @@ def test_build_context_reads_the_real_signal_output() -> None:
     assert context["rsi14.last"] is not None
     assert context["atr14.last"] is not None
     assert context["drawdown.max_drawdown"] is not None
+    # A steadily rising series closes on its high: current drawdown is zero.
+    assert context["drawdown.current"] == 0.0
     assert context["position.weight"] == pytest.approx(0.05)
 
 

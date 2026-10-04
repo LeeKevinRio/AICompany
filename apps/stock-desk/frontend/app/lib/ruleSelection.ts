@@ -19,6 +19,7 @@
  * that. The gate is the caller's.
  */
 
+import { RULE_INVALIDATION_DISCLOSURES } from "./adviceWording";
 import type { MatchedRule } from "./types";
 
 export function pickRuleForAction(
@@ -32,4 +33,34 @@ export function pickRuleForAction(
     if (picked === null || rule.weight > picked.weight) picked = rule;
   }
   return picked;
+}
+
+/**
+ * The risk-approved disclosure sentence for a rule, keyed by the rule's `id`
+ * (never by wording). `null` for every rule that has none.
+ */
+export function invalidationDisclosureForRule(rule: MatchedRule | null): string | null {
+  if (rule === null) return null;
+  return Object.hasOwn(RULE_INVALIDATION_DISCLOSURES, rule.id)
+    ? (RULE_INVALIDATION_DISCLOSURES[rule.id] ?? null)
+    : null;
+}
+
+/**
+ * Disclosure for one entry of the card-level `invalidation_conditions` list,
+ * which carries bare strings with no rule id. The backend builds that list
+ * from `matched_rules[].invalidation` (de-duplicated), so an entry is tied back
+ * to its rule by equality with that field; the disclosure itself is still
+ * chosen by the rule's `id`. An entry no matched rule owns gets none.
+ */
+export function invalidationDisclosureForCondition(
+  matchedRules: readonly MatchedRule[],
+  conditionText: string,
+): string | null {
+  for (const rule of matchedRules) {
+    if (rule.invalidation !== conditionText) continue;
+    const disclosure = invalidationDisclosureForRule(rule);
+    if (disclosure !== null) return disclosure;
+  }
+  return null;
 }

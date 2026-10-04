@@ -44,6 +44,60 @@ def test_max_drawdown_monotonic_up_is_zero() -> None:
     assert result[0] == 0.0
 
 
+def test_current_drawdown_golden() -> None:
+    # path 100 ->120 ->90 ->130 ->117. Highest close so far 130 (idx3);
+    # current = 117/130 - 1 = -0.1, while the historical max stays -0.25.
+    result = R.current_drawdown([100.0, 120.0, 90.0, 130.0, 117.0])
+    assert result is not None
+    value, peak_i = result
+    assert math.isclose(value, -0.1, abs_tol=1e-12)
+    assert peak_i == 3
+    worst = R.max_drawdown([100.0, 120.0, 90.0, 130.0, 117.0])
+    assert worst is not None and math.isclose(worst[0], -0.25, abs_tol=1e-12)
+
+
+def test_current_drawdown_still_below_the_old_high() -> None:
+    # 100 ->120 ->90 ->108: never regained 120, so current = 108/120 - 1 = -0.1.
+    result = R.current_drawdown([100.0, 120.0, 90.0, 108.0])
+    assert result is not None
+    assert math.isclose(result[0], -0.1, abs_tol=1e-12)
+    assert result[1] == 1
+
+
+def test_current_drawdown_is_zero_on_a_new_high() -> None:
+    result = R.current_drawdown([100.0, 70.0, 130.0])
+    assert result == (0.0, 2)
+
+
+def test_current_drawdown_peak_is_the_latest_touch_of_the_high() -> None:
+    # 120 reached at idx1 and again at idx3: the revisit is reported.
+    result = R.current_drawdown([100.0, 120.0, 90.0, 120.0, 108.0])
+    assert result is not None
+    assert math.isclose(result[0], -0.1, abs_tol=1e-12)
+    assert result[1] == 3
+
+
+def test_current_drawdown_needs_two_points() -> None:
+    assert R.current_drawdown([100.0]) is None
+    assert R.current_drawdown([]) is None
+
+
+def test_current_drawdown_is_the_last_point_of_the_underwater_path() -> None:
+    paths = (
+        [100.0, 120.0, 90.0, 130.0, 117.0],
+        [50.0, 40.0, 30.0, 35.0],
+        [10.0, 11.0, 12.0],
+        [100.0, 100.0, 99.0],
+    )
+    for path in paths:
+        result = R.current_drawdown(path)
+        worst = R.max_drawdown(path)
+        assert result is not None and worst is not None
+        assert result[0] == R.drawdown_series(path)[-1]
+        # Current can never be deeper than the window's historical maximum.
+        assert worst[0] <= result[0] <= 0.0
+
+
 def test_beta_golden_two_x() -> None:
     # asset = 2 * benchmark exactly -> beta = 2.
     value = R.beta([0.02, -0.04, 0.06], [0.01, -0.02, 0.03])
@@ -78,6 +132,38 @@ def test_drawdown_wrapper_reports_dates() -> None:
     assert math.isclose(result.max_drawdown, -0.25, abs_tol=1e-12)
     assert result.peak_date == bars[1].date.isoformat()
     assert result.trough_date == bars[2].date.isoformat()
+
+
+def test_drawdown_wrapper_reports_current_and_its_peak_date() -> None:
+    bars = bars_from_closes([100.0, 120.0, 90.0, 130.0, 117.0])
+    result = R.drawdown(bars)
+    assert result.status == "ok"
+    assert result.current is not None
+    assert math.isclose(result.current, -0.1, abs_tol=1e-12)
+    assert result.current_peak_date == bars[3].date.isoformat()
+    # The historical fields are untouched by the new ones (backward compatible).
+    assert result.max_drawdown is not None
+    assert math.isclose(result.max_drawdown, -0.25, abs_tol=1e-12)
+    assert result.peak_date == bars[1].date.isoformat()
+    assert result.trough_date == bars[2].date.isoformat()
+
+
+def test_drawdown_wrapper_insufficient_has_no_current() -> None:
+    result = R.drawdown(bars_from_closes([100.0]))
+    assert result.status == "insufficient_data"
+    assert result.current is None
+    assert result.current_peak_date is None
+
+
+def test_drawdown_result_without_the_new_fields_still_validates() -> None:
+    # A payload produced before ``current`` existed (e.g. a stored snapshot)
+    # must still load: the two fields are additive with ``None`` defaults.
+    legacy = R.drawdown(bars_from_closes([100.0, 120.0, 90.0])).model_dump()
+    del legacy["current"]
+    del legacy["current_peak_date"]
+    restored = R.DrawdownResult.model_validate(legacy)
+    assert restored.current is None
+    assert restored.max_drawdown == legacy["max_drawdown"]
 
 
 def test_position_beta_missing_benchmark_is_insufficient() -> None:

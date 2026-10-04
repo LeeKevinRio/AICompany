@@ -63,11 +63,18 @@ def make_signals(
     volume_z: float | None = None,
     volatility: float | None = None,
     max_drawdown: float | None = None,
+    current_drawdown: float | None = None,
     beta: float | None = None,
     symbol: str = "2330",
     as_of: str | None = _AS_OF,
 ) -> dict[str, Any]:
-    """A ``compute_signals``-shaped dict; every argument left out is missing."""
+    """A ``compute_signals``-shaped dict; every argument left out is missing.
+
+    ``current_drawdown`` fills ``risk.drawdown.current`` (what rule set 1.1.0's
+    drawdown rules read); ``max_drawdown`` stays the historical extreme. A real
+    series always has ``current >= max_drawdown``; callers keep that order.
+    """
+    drawdown_missing = max_drawdown is None and current_drawdown is None
     return {
         "symbol": symbol,
         "bar_count": _BAR_COUNT,
@@ -95,10 +102,12 @@ def make_signals(
                 "source": "twse",
             },
             "drawdown": {
-                "status": "insufficient_data" if max_drawdown is None else "ok",
+                "status": "insufficient_data" if drawdown_missing else "ok",
                 "max_drawdown": max_drawdown,
                 "peak_date": None,
                 "trough_date": None,
+                "current": current_drawdown,
+                "current_peak_date": None,
                 "observations": 0,
                 "inputs_used": {"columns": [], "window": {}, "description": "test fixture"},
                 "as_of": as_of,
@@ -135,6 +144,7 @@ def uptrend_signals(**overrides: Any) -> dict[str, Any]:
         "volume_z": 0.5,
         "volatility": 0.25,
         "max_drawdown": -0.05,
+        "current_drawdown": -0.02,
         "beta": 1.1,
     }
     defaults.update(overrides)

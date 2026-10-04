@@ -2,9 +2,10 @@
 
 Two seams on purpose:
 
-* Pure numeric functions (``annualized_volatility``, ``max_drawdown``, ``beta``)
-  take plain float sequences so their behaviour is pinned by golden tests with
-  hand-computed values, independent of any bar plumbing.
+* Pure numeric functions (``annualized_volatility``, ``max_drawdown``,
+  ``current_drawdown``, ``beta``) take plain float sequences so their behaviour
+  is pinned by golden tests with hand-computed values, independent of any bar
+  plumbing.
 * Bar-level wrappers (``position_risk``, ``correlation_matrix``) convert bars to
   returns/prices once and delegate, attaching ``inputs_used`` provenance.
 
@@ -53,7 +54,24 @@ class VolatilityResult(BaseModel):
 
 
 class DrawdownResult(BaseModel):
-    """Maximum drawdown of a price/equity path with its peak and trough dates."""
+    """Drawdown of a price/equity path: the worst one, and the one in force now.
+
+    ``max_drawdown`` / ``peak_date`` / ``trough_date`` describe the *historical
+    extreme* over the whole window: once a deep fall happened inside the window
+    the number stays put until that stretch rolls out, even after the price has
+    made new highs.
+
+    ``current`` / ``current_peak_date`` describe *where the latest close stands
+    now*: ``latest close / highest close up to and including the latest bar - 1``
+    (``<= 0``; ``0.0`` on the day of a new high). Only closes on or before the
+    latest bar enter it, so it is point-in-time by construction. It is the last
+    point of :func:`drawdown_series` and therefore never below ``max_drawdown``.
+    ``current_peak_date`` is the **most recent** date the close stood at that
+    highest level (a revisit of an earlier high moves it forward).
+
+    Both new fields default to ``None`` so a payload produced before they
+    existed still validates (backward compatible, additive only).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -65,6 +83,8 @@ class DrawdownResult(BaseModel):
     inputs_used: InputsUsed
     as_of: str | None = None
     source: str | None = None
+    current: float | None = None
+    current_peak_date: str | None = None
 
 
 class BetaResult(BaseModel):
@@ -155,6 +175,28 @@ def max_drawdown(prices: Sequence[float]) -> tuple[float, int, int] | None:
     return worst, peak_index, trough_index
 
 
+def current_drawdown(prices: Sequence[float]) -> tuple[float, int] | None:
+    """Return ``(current_drawdown, peak_index)`` or ``None``.
+
+    ``current_drawdown`` is ``prices[-1] / max(prices) - 1`` (``<= 0``): how far
+    the latest price sits below the highest price seen up to and including
+    itself. Because the latest point is the end of the path, the running peak at
+    that point *is* the overall maximum -- no later price exists to enter it.
+    The value equals ``drawdown_series(prices)[-1]`` by construction.
+
+    ``peak_index`` is the **last** index at which the price equalled that
+    maximum, so a path that revisits its high reports the revisit, not the
+    first touch. Needs at least 2 prices (same floor as :func:`max_drawdown`).
+    """
+    values = np.asarray(prices, dtype="float64")
+    if values.size < 2:
+        return None
+    drawdown = _drawdown_path(values)
+    peak_value = float(np.max(values))
+    peak_index = int(np.flatnonzero(values == peak_value)[-1])
+    return float(drawdown[-1]), peak_index
+
+
 def beta(asset_returns: Sequence[float], benchmark_returns: Sequence[float]) -> float | None:
     """Return beta = cov(asset, benchmark) / var(benchmark), or ``None``.
 
@@ -218,13 +260,21 @@ def volatility(
 
 
 def drawdown(bars: list[PriceBar]) -> DrawdownResult:
-    """Maximum drawdown of a symbol's close path with peak/trough dates."""
+    """Drawdown of a symbol's close path: historical maximum and current value.
+
+    ``max_drawdown`` (with peak/trough dates) is the worst ``close/running_peak
+    - 1`` over the window; ``current`` (with ``current_peak_date``) is the latest
+    close against the highest close up to and including the latest bar. See
+    :class:`DrawdownResult` for how the two differ.
+    """
     inputs_used = InputsUsed(
         columns=[CLOSE],
         window={"lookback_bars": len(bars)},
         description=(
-            "Max of close/running_peak - 1 over the full close path; needs at "
-            "least 2 bars. Peak/trough reported as ISO dates."
+            "max_drawdown: most negative close/running_peak - 1 over the full "
+            "close path. current: latest close / highest close up to and "
+            "including the latest bar - 1. Needs at least 2 bars. Dates "
+            "reported as ISO dates."
         ),
     )
     as_of, source = provenance(bars)
@@ -244,6 +294,9 @@ def drawdown(bars: list[PriceBar]) -> DrawdownResult:
     result = max_drawdown(close.tolist())
     assert result is not None  # len >= 2 guaranteed above
     worst, peak_index, trough_index = result
+    now = current_drawdown(close.tolist())
+    assert now is not None  # same length floor as max_drawdown
+    current, current_peak_index = now
     dates = [ts.date().isoformat() for ts in frame.index]
     return DrawdownResult(
         status="ok",
@@ -254,6 +307,8 @@ def drawdown(bars: list[PriceBar]) -> DrawdownResult:
         inputs_used=inputs_used,
         as_of=as_of,
         source=source,
+        current=current,
+        current_peak_date=dates[current_peak_index],
     )
 
 

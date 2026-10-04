@@ -196,7 +196,10 @@ def test_aggregated_action_always_has_a_rule_on_real_cards() -> None:
         uptrend_signals(),
         _overbought_uptrend_signals(),
         uptrend_signals(
-            ma={"ma_5": 90.0, "ma_20": 95.0, "ma_60": 100.0}, max_drawdown=-0.35, volume_z=3.0
+            ma={"ma_5": 90.0, "ma_20": 95.0, "ma_60": 100.0},
+            max_drawdown=-0.35,
+            current_drawdown=-0.35,
+            volume_z=3.0,
         ),
     ):
         card = build_advice(symbol="2330", signals=signals, portfolio=_portfolio())

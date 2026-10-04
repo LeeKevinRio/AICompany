@@ -89,7 +89,9 @@ def _cards() -> list[dict[str, Any]]:
         build_advice(symbol="2330", signals=uptrend_signals(), portfolio=portfolio),
         build_advice(symbol="2330", signals=uptrend_signals(), portfolio=at_the_cap),
         build_advice(
-            symbol="2330", signals=uptrend_signals(max_drawdown=-0.35), portfolio=portfolio
+            symbol="2330",
+            signals=uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35),
+            portfolio=portfolio,
         ),
         build_advice(symbol="2330", signals=uptrend_signals(rsi=78.0), portfolio=portfolio),
         build_advice(symbol="2330", signals=make_signals(), portfolio=portfolio),

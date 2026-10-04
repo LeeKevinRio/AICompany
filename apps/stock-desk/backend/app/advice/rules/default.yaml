@@ -24,8 +24,13 @@
 # 1.0.3 -- 依 risk-compliance-officer 裁示改寫 price_below_ma60 的 counterargument：
 #          「震盪盤中」易被讀成「盤中」（交易時段內），與本規則以收盤價判定不符，
 #          改為「震盪整理期間」。invalidation 全數未變動。
-version: "1.0.3"
-updated_at: "2026-10-03"
+# 1.1.0 -- 依 CEO 2026-10-04 裁示（D1）：drawdown_protection、deep_drawdown_stop 的命中條件
+#          由 drawdown.max_drawdown（觀察區間內的歷史最大回撤）改為 drawdown.current
+#          （最新收盤相對區間內至最新收盤為止的最高收盤之回撤），門檻 -0.2／-0.3 不變。
+#          兩條規則的 invalidation 原文本就以「目前回撤」描述，未變動；其餘規則未變動。
+#          name／explanation／counterargument 的字面調整 2026-10-04 risk-compliance-officer 有條件 APPROVE，字面依 work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md。
+version: "1.1.0"
+updated_at: "2026-10-04"
 
 rules:
   - id: uptrend_ma_stack
@@ -148,27 +153,27 @@ rules:
     invalidation: 布林 %B 回落至 0.8 以下，或通道寬度明顯收斂。
 
   - id: drawdown_protection
-    name: 區間回撤超過兩成
+    name: 目前回撤深於兩成
     action: reduce
     weight: 0.6
     condition:
-      field: drawdown.max_drawdown
+      field: drawdown.current
       op: lt
       value: -0.2
-    explanation: 此標的在觀察區間內的歷史價格回撤已深於 -20%，該數字描述價格自身的回落幅度，與此部位的未實現損益無關。
-    counterargument: 回撤是已發生的歷史統計，在低點降低部位會把帳面虧損轉為實現虧損。
+    explanation: 此標的最新收盤價，相對觀察區間內的最高收盤價，回撤幅度已深於 -20%。該數字描述價格自身的回落幅度，與此部位的未實現損益無關。
+    counterargument: 目前回撤是截至最新收盤已發生的價格統計；若此部位帳面上有虧損，在低位降低部位會把帳面虧損轉為實現虧損。
     invalidation: 價格回到前波高點附近，或回撤幅度收斂至 -10% 以內。
 
   - id: deep_drawdown_stop
-    name: 區間回撤超過三成
+    name: 目前回撤深於三成
     action: stop_loss
     weight: 0.8
     condition:
-      field: drawdown.max_drawdown
+      field: drawdown.current
       op: lt
       value: -0.3
-    explanation: 此標的價格在觀察區間內的最大回撤已達本規則設定的 -30% 門檻，該數字僅描述價格自身的回落幅度。
-    counterargument: 深度回撤後的反彈幅度往往也大，執行停損會放棄反彈區間的空間。
+    explanation: 此標的最新收盤價，相對觀察區間內的最高收盤價，回撤幅度已深於本規則設定的 -30% 門檻。該數字僅描述價格自身的回落幅度，與此部位的未實現損益無關。
+    counterargument: 若價格之後反彈，執行停損會放棄該段反彈的空間。
     invalidation: 回撤幅度收斂至 -20% 以內，且收盤價站回 60 日均線之上。
 
   - id: volume_spike_watch

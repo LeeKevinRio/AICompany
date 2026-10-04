@@ -14,7 +14,7 @@ import {
   RULE_SOURCE_CHIP,
   summaryConfidenceLabel,
 } from "../../lib/adviceWording";
-import { pickRuleForAction } from "../../lib/ruleSelection";
+import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/ruleSelection";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import {
   DECISION_CARD_ARIA_LABEL,
@@ -343,14 +343,16 @@ export function DecisionCardBody({
   // The body comes only from `pickRuleForAction(...)?.invalidation` (rule text
   // verbatim), never from an `invalidation_conditions` index (BLOCKING 1); when
   // nothing is found the whole line is omitted, no substitute wording.
-  const invalidationBody =
+  const invalidationRule =
     card !== null &&
     conclusionFromRules &&
     card.invalidation_conditions.length > 0 &&
     (model.kind === "held" || (model.kind === "candidate" && model.supportive))
-      ? (pickRuleForAction(card.matched_rules, card.action)?.invalidation ??
-        null)
+      ? pickRuleForAction(card.matched_rules, card.action)
       : null;
+  const invalidationBody = invalidationRule?.invalidation ?? null;
+  // Risk review 2026-10-04 R1 (position B): keyed by the picked rule's id.
+  const invalidationDisclosure = invalidationDisclosureForRule(invalidationRule);
   const invalidationPrefix =
     card !== null ? pickInvalidationPrefix(card.invalidation_conditions.length) : null;
 
@@ -435,6 +437,18 @@ export function DecisionCardBody({
             {invalidationPrefix}
             {invalidationBody}
           </p>
+        )}
+      {/*
+        Risk review 2026-10-04 R1 (position B): directly beneath the invalidation
+        line, same size and grey (text-xs text-neutral-400); never inside
+        <details>, no title / tooltip / opacity / sr-only. Rendered only when the
+        invalidation line above is rendered.
+      */}
+      {invalidationBody !== null &&
+        invalidationBody !== "" &&
+        invalidationPrefix !== null &&
+        invalidationDisclosure !== null && (
+          <p className="mt-1 text-xs text-neutral-400">{invalidationDisclosure}</p>
         )}
 
       {/* 風控 required 條件 5：基準來源標籤與停損／停利同層常駐一次。 */}

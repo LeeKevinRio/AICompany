@@ -11,7 +11,7 @@ CI run:
    against the *complete* ``FRONTEND_FORBIDDEN_TERMS`` list, plus the bare
    "即時" rule of the front end's ``findBareRealtimeClaims`` ("非即時" passes).
 2. The 12 ``invalidation`` texts reviewed with rule set 1.0.2 (unchanged in
-   1.0.3) are pinned verbatim.
+   1.0.3 and 1.1.0) are pinned verbatim.
 
 Single-source decision (option (b), not a shared JSON): the backend test parses
 the array literal out of ``adviceWording.ts`` itself, so the TS file stays the
@@ -64,7 +64,10 @@ _REALTIME_TERMS_ADDED_2026_10_03: tuple[str, ...] = (
 
 _REVIEW_MESSAGE = "改字需重送風控逐字審"
 
-#: Reviewed with rule set 1.0.2, unchanged in 1.0.3, verbatim. Changing any
+#: Reviewed with rule set 1.0.2, unchanged in 1.0.3 and 1.1.0, verbatim. 1.1.0
+#: moved the two drawdown rules' *conditions* to ``drawdown.current`` (CEO D1,
+#: 2026-10-04) precisely so that their pinned invalidations below, which already
+#: speak of the drawdown in force now, describe what the program checks. Changing any
 #: character must go back to risk-compliance-officer for a word-by-word review
 #: (see ``_REVIEW_MESSAGE``).
 EXPECTED_INVALIDATIONS: dict[str, str] = {
@@ -277,14 +280,16 @@ def test_invalidations_have_no_forbidden_terms_or_bare_realtime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Verbatim pin of the invalidation text reviewed with rule set 1.0.2 (unchanged in 1.0.3).
+# Verbatim pin of the invalidation text reviewed with rule set 1.0.2 (unchanged in
+# 1.0.3 and 1.1.0).
 # ---------------------------------------------------------------------------
 
 
 def test_invalidation_rule_ids_match_the_reviewed_set() -> None:
     actual_ids = [rule["id"] for rule in _load_rules()]
     assert actual_ids == list(EXPECTED_INVALIDATIONS), (
-        f"規則 id 清單與風控審過的 1.0.2（1.0.3 未變動）不同（新增、刪除或改序）。{_REVIEW_MESSAGE}"
+        f"規則 id 清單與風控審過的 1.0.2（1.0.3、1.1.0 未變動）不同（新增、刪除或改序）。"
+        f"{_REVIEW_MESSAGE}"
     )
 
 
@@ -292,7 +297,8 @@ def test_invalidation_rule_ids_match_the_reviewed_set() -> None:
 def test_invalidation_text_is_verbatim_as_reviewed(rule_id: str) -> None:
     actual = {rule["id"]: rule["invalidation"] for rule in _load_rules()}
     assert actual.get(rule_id) == EXPECTED_INVALIDATIONS[rule_id], (
-        f"{rule_id}.invalidation 與風控審過的 1.0.2（1.0.3 未變動）原文不同。{_REVIEW_MESSAGE}。\n"
+        f"{rule_id}.invalidation 與風控審過的 1.0.2（1.0.3、1.1.0 未變動）原文不同。"
+        f"{_REVIEW_MESSAGE}。\n"
         f"expected: {EXPECTED_INVALIDATIONS[rule_id]!r}\n"
         f"actual:   {actual.get(rule_id)!r}"
     )

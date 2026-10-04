@@ -113,6 +113,27 @@ export const CANDIDATE_HEADING_LABEL = "進場評估";
 export const NOT_HELD_BADGE = "未持有";
 
 /**
+ * Disclosure sentences for two rules whose invalidation text no longer matches
+ * their (rule set 1.1.0) condition, keyed by the matched rule's `id`.
+ * Approved word-for-word by risk-compliance-officer
+ * (`work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md`, item 4 and the
+ * 核可字面總表; required condition R1, position B): wherever one of these two
+ * rules' invalidation text is on screen, the matching sentence stands directly
+ * beneath it, at the same size and colour as that invalidation line. It is not
+ * placed inside the explanation field; it follows the invalidation text wherever
+ * that text appears, including the copy inside the panel's `<details>` (risk
+ * ruling 2026-10-04). Half-width hyphen-minus and spaces kept as
+ * approved. Pinned verbatim by `componentWordingScan.test.ts`; any change is
+ * wording drift and must go back to risk review.
+ */
+export const RULE_INVALIDATION_DISCLOSURES: Readonly<Record<string, string>> = {
+  drawdown_protection:
+    "本規則在目前回撤回到 -20% 以內時即不再命中，比失效條件所述的 -10% 更早。本規則不再命中，不代表失效條件已達成。",
+  deep_drawdown_stop:
+    "本規則在目前回撤回到 -30% 以內時即不再命中，比失效條件所述的 -20% 更早。本規則不再命中，不代表失效條件已達成。",
+};
+
+/**
  * §3.1: `add` in candidate mode may only be stated as a fact composition,
  * never as a positive conclusion ("可以進場" and siblings are vetoed
  * outright). `constructiveCount` is the number of matched rules whose action

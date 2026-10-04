@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { AdviceResponse } from "../../lib/types";
+import type { AdviceResponse, MatchedRule } from "../../lib/types";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import {
   buildLegacyAttributedHeadline,
@@ -16,6 +16,7 @@ import {
   summaryConfidenceLabel,
 } from "../../lib/adviceWording";
 import { formatDateTime } from "../../lib/format";
+import { invalidationDisclosureForCondition } from "../../lib/ruleSelection";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
@@ -244,16 +245,10 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
                 </ul>
               </div>
             )}
-            {model.required.invalidationConditions.length > 0 && (
-              <div>
-                <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {model.required.invalidationConditions.map((text, i) => (
-                    <li key={i}>{text}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <InvalidationConditions
+              conditions={model.required.invalidationConditions}
+              matchedRules={response.advice?.matched_rules ?? []}
+            />
             <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
             <p className="text-sm text-neutral-300">
               {buildFooterGuidanceForDataSource(PAGE_LEVEL_DISCLOSURE_SECTION_TITLE)}
@@ -337,16 +332,10 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
             </div>
           )}
 
-          {model.required.invalidationConditions.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
-              <ul className="mt-1 list-disc space-y-1 pl-5">
-                {model.required.invalidationConditions.map((text, i) => (
-                  <li key={i}>{text}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <InvalidationConditions
+            conditions={model.required.invalidationConditions}
+            matchedRules={response.advice?.matched_rules ?? []}
+          />
 
           <p className="text-sm text-neutral-300">{buildFooterGuidance(OPERATION_SUMMARY_TITLE)}</p>
           <p className="text-sm text-neutral-300">
@@ -354,6 +343,41 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           </p>
         </div>
       </details>
+    </div>
+  );
+}
+
+/**
+ * The 失效條件 list inside each branch's `<details>`. Risk review 2026-10-04 R1
+ * (position B): when an entry is the invalidation of `drawdown_protection` or
+ * `deep_drawdown_stop`, that rule's disclosure sentence stands directly beneath
+ * it, inside the same `<li>`, at the same size and grey as the entry itself
+ * (the container's `text-xs text-neutral-400`; nothing fainter, no title /
+ * tooltip / opacity / sr-only). Matched by rule id via `matchedRules`, never by
+ * wording; entries no such rule owns render exactly as before.
+ */
+function InvalidationConditions({
+  conditions,
+  matchedRules,
+}: {
+  conditions: string[];
+  matchedRules: readonly MatchedRule[];
+}) {
+  if (conditions.length === 0) return null;
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-neutral-400">失效條件</h4>
+      <ul className="mt-1 list-disc space-y-1 pl-5">
+        {conditions.map((text, i) => {
+          const disclosure = invalidationDisclosureForCondition(matchedRules, text);
+          return (
+            <li key={i}>
+              {text}
+              {disclosure !== null && <p className="mt-1 text-xs text-neutral-400">{disclosure}</p>}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

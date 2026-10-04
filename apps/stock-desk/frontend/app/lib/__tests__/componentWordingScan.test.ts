@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
+import { FRONTEND_FORBIDDEN_TERMS, RULE_INVALIDATION_DISCLOSURES } from "../adviceWording";
 import {
   CONFIGURED_SOURCES,
   US_DATA_SOURCE_DISCLOSURE_STATEMENT,
@@ -384,6 +384,8 @@ const SCANNED_FILES = [
   // 新元件與其專屬字面模組，先前都不在掃描清單內。
   "../../position/[symbol]/DecisionCard.tsx",
   "../decisionCardWording.ts",
+  // 風控 2026-10-04 R1：回撤規則揭露句的取用邏輯（常數本身在 adviceWording.ts，下方逐字釘住）。
+  "../ruleSelection.ts",
   // 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §12/§13）：新首頁
   // 卡與其專屬字面模組，先前都不在掃描清單內。
   "../../components/SectorMomentumCard.tsx",
@@ -2276,6 +2278,19 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
     for (const text of [DECISION_CARD_INVALIDATION_PREFIX, DECISION_CARD_INVALIDATION_PREFIX_ONE_OF]) {
       assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
       expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+  });
+
+  it("風控 2026-10-04 R1：回撤規則兩句揭露句逐字釘住（含標點與半形空格），無禁用詞、無裸即時宣稱（「時即不再」非「即時」）", () => {
+    expect(RULE_INVALIDATION_DISCLOSURES).toEqual({
+      drawdown_protection:
+        "本規則在目前回撤回到 -20% 以內時即不再命中，比失效條件所述的 -10% 更早。本規則不再命中，不代表失效條件已達成。",
+      deep_drawdown_stop:
+        "本規則在目前回撤回到 -30% 以內時即不再命中，比失效條件所述的 -20% 更早。本規則不再命中，不代表失效條件已達成。",
+    });
+    for (const [id, text] of Object.entries(RULE_INVALIDATION_DISCLOSURES)) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, id);
+      expect(findBareRealtimeClaims(text), id).toEqual([]);
     }
   });
 

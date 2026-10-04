@@ -10,6 +10,7 @@ from app.advice.context import KNOWN_FIELDS
 from app.advice.loader import (
     BANNED_PHRASES,
     DEFAULT_RULES_PATH,
+    Comparison,
     RuleSetError,
     condition_fields,
     load_default_rules,
@@ -25,8 +26,8 @@ VALID_ACTIONS = {"add", "hold", "reduce", "stop_loss", "take_profit"}
 
 def test_default_rules_load_and_are_well_formed() -> None:
     ruleset = load_default_rules()
-    assert ruleset.version == "1.0.3"
-    assert ruleset.updated_at.isoformat() == "2026-10-03"
+    assert ruleset.version == "1.1.0"
+    assert ruleset.updated_at.isoformat() == "2026-10-04"
     assert 8 <= len(ruleset.rules) <= 12
     assert len(set(ruleset.rule_ids())) == len(ruleset.rules)
     for rule in ruleset.rules:
@@ -49,6 +50,27 @@ def test_default_rules_cover_the_required_themes() -> None:
     assert {"rsi_overbought", "rsi_oversold_with_trend"} <= ids
     assert {"drawdown_protection", "deep_drawdown_stop"} <= ids
     assert "volume_spike_watch" in ids
+
+
+def test_drawdown_rules_read_the_current_drawdown() -> None:
+    # Rule set 1.1.0 (CEO D1, 2026-10-04): both drawdown rules compare the
+    # drawdown in force now, thresholds unchanged from 1.0.3.
+    rules = {rule.id: rule for rule in load_default_rules().rules}
+    expected = {"drawdown_protection": -0.2, "deep_drawdown_stop": -0.3}
+    for rule_id, threshold in expected.items():
+        condition = rules[rule_id].condition
+        assert isinstance(condition, Comparison)
+        assert (condition.field, condition.op, condition.value) == (
+            "drawdown.current",
+            "lt",
+            threshold,
+        )
+    readers = [
+        rule.id
+        for rule in rules.values()
+        if "drawdown.max_drawdown" in condition_fields(rule.condition)
+    ]
+    assert readers == []
 
 
 def test_load_default_rules_is_cached() -> None:
