@@ -76,19 +76,19 @@ export function PriceLadder({
       <p className="mt-1 text-sm text-neutral-400">{KEY_LEVELS_LADDER_INTRO}</p>
 
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-sm">
+        <table className="w-full text-left text-sm sm:min-w-[640px]">
           <thead>
             <tr className="border-b border-neutral-800 text-xs text-neutral-400">
-              <th className="py-1 pr-3 font-normal" scope="col">
+              <th className="py-1 pr-2 font-normal sm:pr-3" scope="col">
                 項目
               </th>
-              <th className="py-1 pr-3 text-right font-normal" scope="col">
+              <th className="py-1 pr-2 text-right font-normal sm:pr-3" scope="col">
                 價位
               </th>
-              <th className="py-1 pr-3 text-right font-normal" scope="col">
+              <th className="whitespace-nowrap py-1 pr-2 text-right font-normal sm:pr-3" scope="col">
                 {KEY_LEVELS_LADDER_DISTANCE_HEADER}
               </th>
-              <th className="w-[40%] py-1 font-normal" scope="col" aria-hidden="true" />
+              <th className="w-[24%] py-1 font-normal sm:w-[40%]" scope="col" aria-hidden="true" />
             </tr>
           </thead>
           <tbody>
@@ -102,8 +102,8 @@ export function PriceLadder({
                   key={rung.id}
                   className={`border-b border-neutral-800/60 ${isAnchor ? "bg-neutral-800/40" : inBand ? "bg-neutral-800/20" : ""}`}
                 >
-                  <td className="py-1.5 pr-3">
-                    <span className="flex items-center gap-2 whitespace-nowrap">
+                  <td className="py-1.5 pr-2 sm:pr-3">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 sm:flex-nowrap sm:whitespace-nowrap">
                       <span className={isAnchor ? "font-semibold text-neutral-100" : "text-neutral-200"}>
                         {rungLabel(rung)}
                       </span>
@@ -122,8 +122,8 @@ export function PriceLadder({
                       )}
                     </span>
                   </td>
-                  <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-neutral-100">{fmt(rung.price)}</td>
-                  <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-neutral-300">
+                  <td className="whitespace-nowrap py-1.5 pr-2 text-right font-mono tabular-nums text-neutral-100 sm:pr-3">{fmt(rung.price)}</td>
+                  <td className="whitespace-nowrap py-1.5 pr-2 text-right font-mono tabular-nums text-neutral-300 sm:pr-3">
                     {isAnchor ? "—" : fmtSigned(rung.distancePct)}
                   </td>
                   <td className="py-1.5">

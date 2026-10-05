@@ -106,7 +106,7 @@ export function RangeGauge({
         <span>
           {KEY_LEVELS_GAUGE_LOW_END_LABEL} <span className="font-mono text-neutral-200">{lowText}</span>
         </span>
-        <span className="text-neutral-400">{rangeLabel}</span>
+        <span className="whitespace-nowrap text-neutral-400">{rangeLabel}</span>
         <span>
           {KEY_LEVELS_GAUGE_HIGH_END_LABEL} <span className="font-mono text-neutral-200">{highText}</span>
         </span>

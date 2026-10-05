@@ -117,55 +117,55 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
         ) : (
           <>
             <div className="mt-2 overflow-x-auto">
-              <table className="min-w-[480px] text-left text-sm">
+              <table className="w-full break-words text-left text-sm sm:w-auto sm:min-w-[480px]">
                 <tbody className="text-neutral-300">
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       {LEVERAGE_DRAG_OBSERVED_ROW_LABEL}
                     </th>
-                    <td>{formatPercent(chapter.drag.actual_return)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.actual_return)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       Naive 期望（β×指數報酬）
                     </th>
-                    <td>{formatPercent(chapter.drag.naive_expected_return)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.naive_expected_return)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       理想每日重置路徑
                     </th>
-                    <td>{formatPercent(chapter.drag.ideal_daily_reset_return)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.ideal_daily_reset_return)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       {LEVERAGE_DRAG_GAP_ROW_LABEL}
                     </th>
-                    <td>{formatPercent(chapter.drag.gap)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.gap)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       費用效應
                     </th>
-                    <td>{formatPercent(chapter.drag.fee_effect)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.fee_effect)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       {LEVERAGE_DRAG_RESET_EFFECT_LABEL}
                     </th>
-                    <td>{formatPercent(chapter.drag.reset_effect)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.reset_effect)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       殘差
                     </th>
-                    <td>{formatPercent(chapter.drag.residual)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatPercent(chapter.drag.residual)}</td>
                   </tr>
                   <tr>
                     <th scope="row" className="py-1 pr-4 font-normal text-neutral-400">
                       恆等式誤差
                     </th>
-                    <td>{formatNumber(chapter.drag.identity_abs_error, 6)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{formatNumber(chapter.drag.identity_abs_error, 6)}</td>
                   </tr>
                 </tbody>
               </table>

@@ -253,15 +253,15 @@ describe("對比提亮：IndicatorCard description 與資料行", () => {
     expect(source).not.toContain("descriptionClassName");
   });
 
-  it("兩個分組標題「技術指標」「風險量測」仍為 uppercase label 的 neutral-500", () => {
+  it("兩個分組標題「技術指標」「風險量測」已提亮為 neutral-400（第四批，撤回 uppercase 白名單）", () => {
     const html = renderFull();
     for (const title of ["技術指標", "風險量測"]) {
-      expect(html).toContain(`<h4 class="text-xs font-semibold uppercase tracking-wide text-neutral-500">${title}</h4>`);
+      expect(html).toContain(`<h4 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">${title}</h4>`);
     }
   });
 
-  it("整個面板輸出中，text-neutral-500 只出現在兩個分組標題", () => {
+  it("整個面板輸出中，不再出現任何 text-neutral-500", () => {
     const html = renderFull();
-    expect(html.match(/text-neutral-500/g)).toHaveLength(2);
+    expect(html).not.toContain("text-neutral-500");
   });
 });

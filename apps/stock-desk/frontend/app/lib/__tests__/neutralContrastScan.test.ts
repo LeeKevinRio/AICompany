@@ -7,8 +7,9 @@
  * AA 4.5) and ~3.8:1 on card backgrounds; 600 is ~2.5:1 and must not be used for any text.
  *
  * Inside `app/position/**`, `text-neutral-(500|600)` is therefore allowed only for:
- *   1. uppercase `tracking-wide` group headings (TechnicalIndicatorsPanel h4 "技術指標" / "風險量測",
- *      a settled exception);
+ *   1. uppercase `tracking-wide` group headings set in Latin letters (uppercase has no effect on CJK
+ *      and 12px 500 is below AA, so the former CJK h4 exception was withdrawn in batch 4 and those
+ *      two headings are now `text-neutral-400`; the allowance is kept only for Latin-letter titles);
  *   2. genuinely disabled controls (`disabled:text-neutral-*` variants only);
  * Backgrounds and divider lines are not matched at all (`bg-` / `border-` utilities are not `text-`).
  *
@@ -36,7 +37,10 @@ const positionFiles: string[] = readdirSync(APP_DIR, { recursive: true, encoding
 
 const codeOf = (rel: string) => stripComments(readFileSync(`${APP_DIR}${rel}`, "utf8"));
 
-/** Permanent whitelist: uppercase tracking-wide group headings, and disabled-only variants. */
+/**
+ * Permanent whitelist: uppercase tracking-wide group headings (reserved for Latin-letter titles;
+ * no CJK heading may rely on it), and disabled-only variants.
+ */
 function isPermanentlyAllowed(line: string): boolean {
   if (/\buppercase\b/.test(line) && /\btracking-wide\b/.test(line)) return true;
   const matches = line.match(/([\w:-]*)text-neutral-(?:500|600)/g) ?? [];
@@ -81,7 +85,7 @@ describe("對比掃描（art-lead 批次 2）：app/position/** 內 text-neutral
     const lifted: ReadonlyArray<{ rel: string; line: string; count: number }> = [
       { rel: "position/[symbol]/LeverageChapterView.tsx", line: '<th scope="row" className="py-1 pr-4 font-normal text-neutral-400">', count: 8 },
       { rel: "position/[symbol]/PriceLadder.tsx", line: '<tr className="border-b border-neutral-800 text-xs text-neutral-400">', count: 1 },
-      { rel: "position/[symbol]/RangeGauge.tsx", line: '<span className="text-neutral-400">{rangeLabel}</span>', count: 1 },
+      { rel: "position/[symbol]/RangeGauge.tsx", line: '<span className="whitespace-nowrap text-neutral-400">{rangeLabel}</span>', count: 1 },
       { rel: "position/[symbol]/OperationSummaryPanel.tsx", line: '<span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>', count: 1 },
       { rel: "position/[symbol]/page.tsx", line: ': "border-transparent text-neutral-400 hover:text-neutral-300"', count: 1 },
     ];
@@ -94,9 +98,9 @@ describe("對比掃描（art-lead 批次 2）：app/position/** 內 text-neutral
     }
   });
 
-  it("永久白名單剩餘命中固定：全 app/position 僅 TechnicalIndicatorsPanel 兩個 uppercase tracking-wide 分組標題", () => {
+  it("app/position 不再有任何 text-neutral-500 文字", () => {
     // Exclude disabled: variants so a future legitimate disabled control does not
-    // trip this pin; only the uppercase tracking-wide group titles are pinned here.
+    // trip this pin; no other text-neutral-(500|600) hit may remain anywhere.
     const remaining = positionFiles.flatMap((rel) =>
       codeOf(rel)
         .split("\n")
@@ -105,10 +109,7 @@ describe("對比掃描（art-lead 批次 2）：app/position/** 內 text-neutral
         .filter((l) => !/disabled:text-neutral-(500|600)/.test(l) || /(^|\s)text-neutral-(500|600)/.test(l))
         .map((l) => `${rel} :: ${l}`),
     );
-    expect(remaining).toEqual([
-      'position/[symbol]/TechnicalIndicatorsPanel.tsx :: <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">',
-      'position/[symbol]/TechnicalIndicatorsPanel.tsx :: <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">',
-    ]);
+    expect(remaining).toEqual([]);
   });
 
   it("text-neutral-600 不得用於任何文字（disabled 變體除外）", () => {

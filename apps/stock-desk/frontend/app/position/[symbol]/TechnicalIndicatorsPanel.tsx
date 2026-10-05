@@ -644,7 +644,7 @@ export function TechnicalIndicatorsPanel({
       {tech && <IndicatorOverview chips={collectOverviewChips(payload)} />}
       {tech && (
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
             技術指標
           </h4>
           <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -661,7 +661,7 @@ export function TechnicalIndicatorsPanel({
 
       {risk && (
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
             風險量測
           </h4>
           <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
