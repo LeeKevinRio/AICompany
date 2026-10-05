@@ -107,7 +107,7 @@
 ### K-x（逐條可檢查）
 
 - **K-1**：新增 app/signals/window.py（名稱可議，落檔時定案），內容為 OBSERVATION_LOOKBACK_DAYS: Final = 540。這個模組不得 import 任何 app.*（純葉模組，AST 檢查）。
-  - 落檔註記（tech-writer）：「落檔時定案」一語出自裁示原文；本檔落檔時**未另行更名，沿用 `app/signals/window.py`**。若 dev-lead 要改名（例如 constants.py），回報 tech-architect 確認後再修訂本 ADR。
+  - 定案註記（tech-writer，2026-10-05 更新）：已定案 `app/signals/window.py`，實作 commit `7dd272b`（2026-10-05），qa-reviewer PASS。（來源：任務單轉述，B 類；tech-writer 未重新讀 code 驗證該 commit 內容。）原註記「名稱可議，落檔時定案」之「落檔時定案」一語出自裁示原文，已由此註記取代。
 - **K-2**：app/api/signals.py 的 DEFAULT_LOOKBACK_DAYS 改成從 K-1 re-export。既有的 advice／bars／portfolio／scripts import 不必改；改 import 新位置也可以。全 repo 只能有一處整數字面 540 作為觀察窗定義。DATA_REFRESH_LOOKBACK_DAYS、diagnose 依 K-5 處理。
 - **K-3**：app.signals.* 碰不到任何 app.api.*。app.alerts.* 能碰到的 app.api 模組必須是白名單 {app.api, app.api.kelly_wording} 的子集（現況債務）；尤其不得碰到 app.api.signals。用 tests/import_graph.py 的 reachable_app_modules 加 offenders 實作，寫法比照 test_market_panel_boundary.py，app.alerts 的模組清單要從原始碼樹列舉。
 - **K-4**：移除 build_snapshot 的 lookback_days 參數，函式內直接用 K-1 常數。如果 dev-lead 有理由保留，預設值必須是 K-1 常數，而且 app/ 底下的非測試檔不得傳入這個參數（grep）。
@@ -131,8 +131,13 @@
 ## 發版要求（第 3 題）
 
 - **release note：必要。** 用一般使用者看得懂的話寫。
-  - 草稿字面（tech-architect 原文，**待風控快審**，在 risk-compliance-officer 審過前不得視為定稿或對外發布）：
-    「回撤、波動警示的計算區間改成和建議卡、訊號頁一致（約 18 個月）。升級後，部分回撤警示可能會首次觸發，或觸發時機改變；這反映的是建議卡上早已顯示的狀態。」
+  - ~~草稿字面（tech-architect 原文，**待風控快審**，在 risk-compliance-officer 審過前不得視為定稿或對外發布）：
+    「回撤、波動警示的計算區間改成和建議卡、訊號頁一致（約 18 個月）。升級後，部分回撤警示可能會首次觸發，或觸發時機改變；這反映的是建議卡上早已顯示的狀態。」~~
+  - **【已被取代，不得對外】** 本草稿已被風控核可版取代（2026-10-05），以 `work/reviews/2026-10-04-規則集-1.2.0-前置-風控預審.md`「T4／L-6 揭露字面與 release note 審查」核可字面總表 RN-1～RN-6 為準，不得以本草稿對外。否決理由：含安撫語、只寫單一方向、「訊號頁」在 UI 不存在。（原草稿文字保留於上，僅劃記為已取代。）
+  - **風控核可版 release note（RN-1～RN-6，依序六句，同一段，逐字）**：
+    「警示的計算區間由 400 個日曆日改為 540 個日曆日（約 18 個月）。警示與個股頁的建議卡、技術分析，現在使用同一個計算區間。警示與個股頁分別計算，同一標的的數值仍可能不同。使用回撤或波動度條件的警示，數值與觸發時機可能和升級前不同。部分警示可能多觸發，也可能少觸發。升級後的第一次檢查，可能一次出現多則通知，均依新的計算區間判斷。」
+    - 發布條件：只能隨實際含本 ADR 修正的版本發布（release-flow 確認部署狀態）。
+    - 來源：風控預審 `work/reviews/2026-10-04-規則集-1.2.0-前置-風控預審.md` 核可字面總表 RN-1～RN-6（tech-writer 已逐句與該檔 L131–L136 核對字面一致）。
 - **風控**：程式碼本身不必過 risk-gate（字面沒變，K-7）。但要送風控：知會這次行為改變，以及請他快審 release note 那一段。風控如果要求在警示訊息裡標出區間，就另開字面單處理。
 - **CEO**：知悉即可，不需要裁決。需要 CEO 知道：部署後第一個 tick 可能集中推播一批警示。架構師不建議壓掉這批推播。
 - **版本號**：依 release-flow 以 fix（patch）處理。
@@ -148,11 +153,13 @@
 
 ## 未查證
 
-- calendar_source 是否影響 bars 內容（交 dev-lead 確認）。
-- 現行規則集和使用者已建規則有沒有引用 beta.value。
-- ADR-0018 K-6 的計數測試目前是否已存在。
+以下三項原為裁示原文所列「未查證」，2026-10-05 已更新為查證結果：
 
-以上三項為裁示原文所列；另，本檔所有 `檔案:行號` 與 code 現況是否相符，tech-writer 落檔時未重新驗證（見檔頭「來源與版本」），待 dev-lead 於實作時以原文定位核對。
+- calendar_source 是否影響 bars 內容：**已查證，不影響 bars。** calendar_source 只影響 meta 的 `trading_days_behind`（`app/services/market.py` L166、L177、L188–L193）。列為**已知差異，本 ADR 不處理**。（tech-writer 已讀 `apps/stock-desk/backend/app/services/market.py` L150–L194：bars 取自 L166 `service.get_daily_bars(...)` 與 L177 `list(result.bars)`，`calendar_source` 僅傳入 L188–L193 的 `trading_days_behind_market(...)`。）
+- 現行規則集和使用者已建規則有沒有引用 beta.value：**已查證（部分）。** 現行規則集 `default.yaml` 無任何 `beta.value` 引用；僅 `tests/test_advice_engine.py` 以合成規則測「欄位缺值即 skip」。使用者已建規則存於 DB，依隔離規定**未查**。（tech-writer 以 grep 確認 `apps/stock-desk` 下 `*.yaml` 無 `beta.value`，`apps/stock-desk/backend/tests/test_advice_engine.py` L385、L408、L430、L444 為合成規則。）
+- ADR-0018 K-6 的計數測試目前是否已存在：**已查證，目前不存在**（repo 無 keylevels 模組）。（tech-writer 以 glob 確認 `apps/stock-desk/backend/app/**/keylevels*` 無檔案。）
+
+另，本檔其餘 `檔案:行號` 與 code 現況是否相符，tech-writer 落檔時未重新驗證（見檔頭「來源與版本」），待 dev-lead 於實作時以原文定位核對；上列三項所引行號為 2026-10-05 重新讀取者。
 
 ## 相關檔案
 
