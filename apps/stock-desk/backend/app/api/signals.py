@@ -20,7 +20,7 @@ every other indicator is computed from the symbol's own bars and is unaffected.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
@@ -31,15 +31,18 @@ from app.positions.models import Market
 from app.services.index import IndexServiceResolver, load_market_benchmark
 from app.services.market import MarketDataResolver, load_bars
 from app.signals.service import compute_signals
+from app.signals.window import OBSERVATION_LOOKBACK_DAYS
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 
 ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 IndexResolverDep = Annotated[IndexServiceResolver, Depends(get_index_resolver)]
 
-#: Calendar days of history requested. Roughly 18 months, comfortably more than
-#: the longest indicator window (MA60) plus the risk layer's return sample.
-DEFAULT_LOOKBACK_DAYS = 540
+#: Calendar days of history requested: the shared observation window, re-exported
+#: so the endpoints keep importing it from here (ADR-0020). Defined in
+#: ``app.signals.window`` because the alert snapshot must use the same value
+#: without importing the API layer.
+DEFAULT_LOOKBACK_DAYS: Final = OBSERVATION_LOOKBACK_DAYS
 
 
 class BenchmarkMeta(BaseModel):

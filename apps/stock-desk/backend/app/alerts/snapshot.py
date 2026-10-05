@@ -1,10 +1,15 @@
 """Build a :class:`SymbolSnapshot` from the real services.
 
-This is the one place that wires "symbol -> bars -> signals -> risk caps", so
-the alert engine, the alert API and the scheduler all observe the same numbers
-the ``/api/signals`` and ``/api/advice`` endpoints show. Keeping it out of
-``app/alerts/engine.py`` leaves the engine free of data access and therefore
-testable without a network or a database.
+This is the one place that wires "symbol -> bars -> signals -> risk caps" for
+the alert engine, the alert API and the scheduler. The bars are loaded over the
+shared observation window (``app.signals.window.OBSERVATION_LOOKBACK_DAYS``,
+ADR-0020) -- the same window ``/api/signals`` and ``/api/advice`` load -- so for
+the same symbol, bars and day an alert sees the same window-sensitive numbers
+(``drawdown.current``, ``drawdown.max_drawdown``, ``volatility.annualized``) the
+advice card shows. Beta is not among them: like the advice card, the snapshot
+loads no benchmark, so ``beta.value`` stays unavailable here (``/api/signals``
+alone loads one). Keeping this out of ``app/alerts/engine.py`` leaves the engine
+free of data access and therefore testable without a network or a database.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
 from app.signals.service import atr_from_signals, compute_signals
+from app.signals.window import OBSERVATION_LOOKBACK_DAYS
 
 
 def build_snapshot(
@@ -36,10 +42,13 @@ def build_snapshot(
     fx_provider: FxRateProvider | None = None,
     net_worth: SelfReportedNetWorth | None = None,
     kelly: KellyInputs | None = None,
-    lookback_days: int = 400,
     today: date | None = None,
 ) -> SymbolSnapshot:
     """Fetch bars, run the signal layer, and evaluate the risk caps for one symbol.
+
+    The window is ``[today - OBSERVATION_LOOKBACK_DAYS, today]`` and is not a
+    parameter: a caller-chosen length is how this path drifted from the advice
+    card's in the first place (ADR-0020).
 
     A missing market adapter, an unavailable provider or an empty bar list all
     produce a thin snapshot with ``reason`` set, which the engine turns into a
@@ -70,7 +79,11 @@ def build_snapshot(
     """
     end = today if today is not None else date.today()
     loaded = load_bars(
-        resolver, symbol=symbol, market=market, start=end - timedelta(days=lookback_days), end=end
+        resolver,
+        symbol=symbol,
+        market=market,
+        start=end - timedelta(days=OBSERVATION_LOOKBACK_DAYS),
+        end=end,
     )
     if not loaded.bars:
         return SymbolSnapshot(symbol=symbol, market=market, reason=loaded.reason)

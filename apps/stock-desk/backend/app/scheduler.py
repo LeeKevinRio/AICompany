@@ -122,7 +122,9 @@ from app.services.market import load_bars
 from app.services.pit_snapshot import CaptureSummary, capture_once
 from app.services.sector_board import RefreshResult, SectorBoardService
 
-#: How many calendar days of history the refresh job pulls per symbol.
+#: How many calendar days of history the refresh job pulls per symbol. Must cover
+#: the shared observation window (``app.signals.window``, ADR-0020 K-5) so every
+#: reader finds its whole window warmed; pinned at 540 by ADR-0012 C-13.
 DATA_REFRESH_LOOKBACK_DAYS = 540
 
 #: Env overrides for the two intervals (minutes). The alert interval falls back

@@ -35,7 +35,9 @@ from app.positions.store import PositionStore
 from app.services.market import MarketDataResolver, load_bars, trading_days_behind_market
 
 #: Same window the scheduler warms (``app/scheduler.py``), so "what the cache
-#: holds" is judged over the range the product actually reads.
+#: holds" is judged over the range the product actually reads. Equal to the
+#: shared observation window (``app.signals.window``) but defined locally so
+#: ``app.data`` does not import upward; a test pins the two together (ADR-0020 K-5).
 DEFAULT_LOOKBACK_DAYS = 540
 
 VERDICT_OK = "正常"

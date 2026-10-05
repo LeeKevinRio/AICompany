@@ -184,12 +184,12 @@ DEMO_POSITIONS: Final[tuple[DemoPositionSpec, ...]] = (
 _PRICE_ALERT_HEADROOM: Final = Decimal("1.05")
 
 #: The drawdown the demo ``signal_condition`` rule watches on the leveraged ETF.
-#: Calibrated against the *alert engine's* 400-day snapshot window (see
-#: ``app.alerts.snapshot``), which is shorter than the 540-day window
-#: ``/api/signals`` reports against and therefore sees a shallower drawdown. A
-#: threshold tuned to the longer window would leave the rule permanently quiet,
-#: which would look like "nothing happened" rather than "not measured" -- the
-#: exact confusion the alert layer is built to avoid.
+#: The alert snapshot reads the same observation window as ``/api/signals`` and
+#: the advice card (``app.signals.window``, ADR-0020), so the rule is judged on
+#: the drawdown the signals page shows. The demo series falls well past this
+#: level, so one evaluation run fires the rule: a demo rule that never fires
+#: would look like "nothing happened" rather than "not measured" -- the exact
+#: confusion the alert layer is built to avoid.
 _DRAWDOWN_ALERT_THRESHOLD: Final = -0.20
 
 
