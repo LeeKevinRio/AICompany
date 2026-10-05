@@ -6,6 +6,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.data.cache import PriceBarCache
 from app.data.diagnose import (
     VERDICT_NONE,
@@ -72,7 +74,26 @@ def _weekday(days_ago: int) -> date:
     return day
 
 
-def test_cache_only_diagnosis_separates_ok_stale_and_missing(tmp_path: Path) -> None:
+def _weekdays_before(today: date, count: int) -> list[date]:
+    """The ``count`` most recent weekdays strictly before ``today``, newest first."""
+    days: list[date] = []
+    day = today
+    while len(days) < count:
+        day -= timedelta(days=1)
+        if day.weekday() < 5:
+            days.append(day)
+    return days
+
+
+# A fixed Monday, Wednesday and Saturday: the verdicts must not depend on which
+# day of the week the suite runs (on a real Monday, ``_weekday(1/2/3)`` all
+# collapse onto the same Friday).
+@pytest.mark.parametrize(
+    "today",
+    [date(2026, 10, 5), date(2026, 10, 7), date(2026, 10, 10)],
+    ids=["monday", "wednesday", "saturday"],
+)
+def test_cache_only_diagnosis_separates_ok_stale_and_missing(tmp_path: Path, today: date) -> None:
     db = tmp_path / "desk.db"
     positions = PositionStore(db_path=db)
     cache = PriceBarCache(db_path=db)
@@ -80,10 +101,10 @@ def test_cache_only_diagnosis_separates_ok_stale_and_missing(tmp_path: Path) -> 
         _hold(positions, symbol)
     # 2330 has the last three sessions; 6147 stopped 20 days ago, so the cache
     # has observed >= 2 sessions it lacks -- stale by sessions, not by calendar.
-    cache.put([_bar("2330", _weekday(d)) for d in (1, 2, 3)], source="twse")
-    cache.put([_bar("6147", _weekday(20))], source="tpex")
+    cache.put([_bar("2330", d) for d in _weekdays_before(today, 3)], source="twse")
+    cache.put([_bar("6147", _weekdays_before(today - timedelta(days=19), 1)[0])], source="tpex")
 
-    rows = diagnose_positions(positions=positions, cache=cache)
+    rows = diagnose_positions(positions=positions, cache=cache, today=today)
 
     by_symbol = {r.symbol: r for r in rows}
     assert by_symbol["2330"].verdict == VERDICT_OK

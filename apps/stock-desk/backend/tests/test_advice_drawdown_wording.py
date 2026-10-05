@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 from app.advice.context import FIELD_LABELS, describe_field
-from app.advice.loader import DEFAULT_RULES_PATH, load_default_rules
+from app.advice.loader import DEFAULT_RULES_PATH, Comparison, load_default_rules
 
 _REVIEW_MESSAGE = "改字需重送風控逐字審（work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md）"
 
@@ -94,7 +94,9 @@ def test_drawdown_rules_read_the_current_drawdown() -> None:
     # The wording above describes ``drawdown.current``; pin the pairing.
     rules = {rule.id: rule for rule in load_default_rules().rules}
     for rule_id in DRAWDOWN_RULE_IDS:
-        assert rules[rule_id].condition.field == "drawdown.current", rule_id
+        condition = rules[rule_id].condition
+        assert isinstance(condition, Comparison), rule_id
+        assert condition.field == "drawdown.current", rule_id
 
 
 def test_current_drawdown_field_label_is_pinned() -> None:
