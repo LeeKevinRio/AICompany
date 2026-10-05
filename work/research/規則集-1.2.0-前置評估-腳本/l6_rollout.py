@@ -6,12 +6,8 @@ jump is current_t - counterfactual_t (>= 0: the drawdown shrinks).
 """
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, "/tmp/claude-0/-home-user-AICompany/3f76d891-50d3-55e1-b39d-925b8a90241a/scratchpad")
 from common import WINDOW_BARS, demo_series, pit_drawdown  # noqa: E402
 
 RULES = {"drawdown_protection": -0.20, "deep_drawdown_stop": -0.30}

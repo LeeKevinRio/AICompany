@@ -7,14 +7,12 @@ float64 value from app.signals.risk._drawdown_path (values / running_peak - 1).
 """
 from __future__ import annotations
 
-import sys
 from decimal import ROUND_HALF_UP, Decimal
 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, "/tmp/claude-0/-home-user-AICompany/3f76d891-50d3-55e1-b39d-925b8a90241a/scratchpad")
 from common import WINDOW_BARS, demo_series, pit_drawdown  # noqa: E402
+
 from app.signals.risk import current_drawdown  # noqa: E402
 
 T_LIST = (-0.2, -0.3)
@@ -33,40 +31,75 @@ def etf_tick_cents(c):
     return 1 if c < 5000 else 5
 
 
-def tie_part():
-    print("## A. 收盤恰為高點的 80%／70%（數學上等於門檻）時，float64 比較結果")
-    print("直接用 app 的 current_drawdown([P, C]) 計算，價格皆在台股升降單位格點上。\n")
-    print("| 格點 | 比例 | 可成對的 (P, C) 組數 | current 的值（去重） | lt 門檻命中 | 不命中 | 前端顯示 |")
-    print("|---|---|---|---|---|---|---|")
+P_BANDS = (  # (label, lo_cents inclusive, hi_cents exclusive)
+    ("1～10", 100, 1000),
+    ("10～50", 1000, 5000),
+    ("50～100", 5000, 10000),
+    ("100～500", 10000, 50000),
+    ("500～1000", 50000, 100000),
+    ("1000～2000", 100000, 200001),
+    ("**100～2000 合計**", 10000, 200001),
+)
+
+
+def tie_records():
+    """All (grid, num, P_cents, C_cents, value, hit) ties with P, C on TW tick grids."""
+    recs = []
     for gname, tick in (("股票", stock_tick_cents), ("ETF", etf_tick_cents), ("demo 0.01", lambda c: 1)):
         for num, T in ((8, -0.2), (7, -0.3)):
-            vals, hit, miss, n = set(), 0, 0, 0
             c = 100
             while c <= 200000:  # P from 1.00 to 2000.00
                 if c % tick(c) == 0 and (c * num) % 10 == 0:
                     cc = c * num // 10
                     if cc % tick(cc) == 0:
                         v = current_drawdown([c / 100, cc / 100])[0]
-                        vals.add(repr(v))
-                        n += 1
-                        if v < T:
-                            hit += 1
-                        else:
-                            miss += 1
+                        recs.append((gname, num, c, cc, v, v < T))
                 c += 1
+    return recs
+
+
+def tie_part():
+    print("## A. 收盤恰為高點的 80%／70%（數學上等於門檻）時，float64 比較結果")
+    print("直接用 app 的 current_drawdown([P, C]) 計算，價格皆在台股升降單位格點上。\n")
+    print("| 格點 | 比例 | 可成對的 (P, C) 組數 | current 的值（去重） | lt 門檻命中 | 不命中 | 前端顯示 |")
+    print("|---|---|---|---|---|---|---|")
+    recs = tie_records()
+    for gname in ("股票", "ETF", "demo 0.01"):
+        for num in (8, 7):
+            sel = [r for r in recs if r[0] == gname and r[1] == num]
+            vals = {repr(r[4]) for r in sel}
+            hit = sum(r[5] for r in sel)
             dv = sorted({str(disp(float(x))) for x in vals})
-            print(f"| {gname} | {num}/10 | {n} | {', '.join(sorted(vals))} | {hit} | {miss} | {', '.join(dv)}% |")
+            print(f"| {gname} | {num}/10 | {len(sel)} | {', '.join(sorted(vals))} | {hit} | {len(sel) - hit} | {', '.join(dv)}% |")
     print()
     for T in T_LIST:
         print(f"- 常數 {T!r} 的 float64 精確值：{Decimal(T)}")
     print(f"- 0.8 − 1 → {Decimal(0.8 - 1)}；0.7 − 1 → {Decimal(0.7 - 1)}")
+
+    print("\n### A2. 依高點價格 P 分層（平手命中比例）")
+    print("C = 0.8P 或 0.7P；C < 100 元時升降單位為 0.1（< 50 元為 0.05），C 多半不能精確表示成二進位，結果隨價格而變。\n")
+    print("| 格點 | 比例 | P 區間（元） | 組數 | 命中 | 命中比例 | 其中 C < 100 元 組數 | C < 100 元 命中比例 | C ≥ 100 元 組數 | C ≥ 100 元 命中比例 |")
+    print("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    for gname in ("股票", "ETF"):
+        for num in (8, 7):
+            for label, lo, hi in P_BANDS:
+                sel = [r for r in recs if r[0] == gname and r[1] == num and lo <= r[2] < hi]
+                if not sel:
+                    continue
+                lo_c = [r for r in sel if r[3] < 10000]
+                hi_c = [r for r in sel if r[3] >= 10000]
+
+                def share(rs):
+                    return f"{sum(r[5] for r in rs) / len(rs):.0%}" if rs else "—"
+
+                print(f"| {gname} | {num}/10 | {label} | {len(sel)} | {sum(r[5] for r in sel)} | {share(sel)} "
+                      f"| {len(lo_c)} | {share(lo_c)} | {len(hi_c)} | {share(hi_c)} |")
 
 
 def band_counts(cur):
     out = {}
     for T in T_LIST:
         v = cur[~np.isnan(cur)]
-        tie = np.zeros(len(v), dtype=bool)
         dmiss = dhit = amiss = ahit = 0
         for x in v:
             if abs(x - T) > 1e-3:
@@ -95,13 +128,25 @@ def demo_part():
     print("\n## B. demo（全期可計算日，含區間不足日）")
     print("| 標的 | 日數 | 門檻 | 門檻 ±0.5pp 內日數 | 前端顯示恰為門檻且不命中 | 顯示恰為門檻且命中 | 期望值：每日落入 5e-5 不命中帶機率（密度估計） |")
     print("|---|---|---|---|---|---|---|")
+    days = []
     for sym, (dates, close) in demo_series().items():
-        cur, *_ = pit_drawdown(dates, close)
+        cur, _, _, partial = pit_drawdown(dates, close)
         bc = band_counts(cur)
         n = int((~np.isnan(cur)).sum())
         for T in T_LIST:
             near = int(np.sum(np.abs(cur[~np.isnan(cur)] - T) < 0.005))
             print(f"| {sym} | {n} | {T:.0%} | {near} | {bc[T][0]} | {bc[T][1]} | {density(cur, T) * 5e-5:.2e} |")
+        for i, x in enumerate(cur):
+            if np.isnan(x):
+                continue
+            for T in T_LIST:
+                if disp(float(x)) == Decimal(repr(T * 100)).quantize(Decimal("0.01")):
+                    days.append((sym, dates[i], T, float(x), bool(x < T), bool(partial[i])))
+    print("\n前端顯示恰為門檻的 demo 日（逐日列出）：\n")
+    print("| 標的 | 日期 | 門檻 | current（%，6 位小數） | 命中 | 區間不足日 |")
+    print("|---|---|---|---|---|---|")
+    for sym, d, T, x, hit, part in days:
+        print(f"| {sym} | {d} | {T:.0%} | {x * 100:.6f} | {'是' if hit else '否'} | {'是' if part else '否'} |")
 
 
 def tick_round(p, etf=False):

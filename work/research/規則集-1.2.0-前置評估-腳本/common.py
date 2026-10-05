@@ -8,12 +8,14 @@ from __future__ import annotations
 import bisect
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 
-BACKEND = "/home/user/AICompany/apps/stock-desk/backend"
-if BACKEND not in sys.path:
-    sys.path.insert(0, BACKEND)
+# Repo-relative: <repo>/work/research/<this dir>/common.py -> parents[3] is <repo>.
+BACKEND = Path(__file__).resolve().parents[3] / "apps/stock-desk/backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
 
 from app.api.signals import DEFAULT_LOOKBACK_DAYS  # noqa: E402
 from app.signals.risk import current_drawdown  # noqa: E402

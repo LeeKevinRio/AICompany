@@ -9,13 +9,10 @@ Hypothetical yields only; no dividend_events are read.
 """
 from __future__ import annotations
 
-import sys
 from datetime import date
 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, "/tmp/claude-0/-home-user-AICompany/3f76d891-50d3-55e1-b39d-925b8a90241a/scratchpad")
 from common import WINDOW_BARS, demo_series, pit_drawdown  # noqa: E402
 
 FREQS = {"年配": [(7, 15)], "半年配": [(1, 15), (7, 15)], "季配": [(1, 15), (4, 15), (7, 15), (10, 15)]}
@@ -128,7 +125,51 @@ def mc_part(n_paths=400, years=10, mu=0.08, seed=4):
                 print(f"| {sigma} | {y:.0%} | {fname} | {res[0][0]:.1f} | {res[0][1]:.0%} | {res[1][0]:.1f} | {res[1][1]:.0%} | {g.mean():.2f} |")
 
 
+def bound_part(n_paths=200, years=10, mu=0.08, sigma=0.20, y=0.06, seed=7):
+    """Check of the section-2.1 inequality when the TR peak q differs from the raw peak p.
+
+    q >= p always (raw peak dominates every earlier raw close; the TR multiplier
+    only grows). With D_q = cumulative dividend rate on ex-dates in (q, t]:
+        raw <= (1 + tr) * (1 - D_q) - 1 <= tr
+    With D_p (ex-dates in (p, t]) instead, the formula value is <= raw.
+    """
+    print(f"\n## D. 高點不同日時的不等式檢查（GBM σ={sigma}、殖利率 {y:.0%} 年配、{n_paths} 條 × {years} 年，模型非資料）")
+    rng = np.random.default_rng(seed)
+    Tn = WINDOW_BARS + 252 * years
+    lr = rng.normal((mu - sigma**2 / 2) / 252, sigma / np.sqrt(252), size=(Tn, n_paths))
+    A = 100 * np.exp(np.cumsum(lr, axis=0))
+    mask = np.zeros(Tn, dtype=bool)
+    mask[126::252] = True
+    F = np.cumprod(np.where(mask, 1 - y, 1.0))[:, None] * np.ones((1, n_paths))
+    R = A * F
+    eps = 1e-12
+    n_eval = n_diff = q_before_p = viol_lo = viol_hi = dp_above_raw = 0
+    for t in range(WINDOW_BARS, Tn):
+        w0 = t - WINDOW_BARS + 1
+        Rw, Aw, Fw = R[w0 : t + 1], A[w0 : t + 1], F[w0 : t + 1]
+        p_idx = Rw.shape[0] - 1 - np.argmax(Rw[::-1], axis=0)
+        q_idx = Aw.shape[0] - 1 - np.argmax(Aw[::-1], axis=0)
+        cols = np.arange(n_paths)
+        raw = Rw[-1] / Rw[p_idx, cols] - 1
+        tr = Aw[-1] / Aw[q_idx, cols] - 1
+        Dq = 1 - Fw[-1] / Fw[q_idx, cols]
+        Dp = 1 - Fw[-1] / Fw[p_idx, cols]
+        fq = (1 + tr) * (1 - Dq) - 1
+        fp = (1 + tr) * (1 - Dp) - 1
+        n_eval += n_paths
+        d = p_idx != q_idx
+        n_diff += int(d.sum())
+        q_before_p += int(np.sum(q_idx < p_idx))
+        viol_lo += int(np.sum(raw > fq + eps))
+        viol_hi += int(np.sum(fq > tr + eps))
+        dp_above_raw += int(np.sum(d & (fp > raw + eps)))
+    print("| 評估日×路徑 | 高點不同日 | 其中 q 早於 p | 違反「原始 ≤ 公式(D_q)」 | 違反「公式(D_q) ≤ 含息」 | 高點不同日中「公式(D_p) > 原始」 |")
+    print("|---:|---:|---:|---:|---:|---:|")
+    print(f"| {n_eval} | {n_diff}（{n_diff / n_eval:.1%}） | {q_before_p} | {viol_lo} | {viol_hi} | {dp_above_raw} |")
+
+
 if __name__ == "__main__":
     analytic()
     demo_part()
     mc_part()
+    bound_part()
