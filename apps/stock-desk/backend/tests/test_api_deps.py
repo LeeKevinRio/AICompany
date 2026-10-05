@@ -121,3 +121,7 @@ def test_every_ladder_shares_one_cache(isolated_deps: None) -> None:
     assert resolver["TW"]._cache is shared  # type: ignore[attr-defined]
     assert resolver["US"]._cache is shared  # type: ignore[attr-defined]
     assert index_inner._cache is shared
+    # The trading calendar behind ``data.trading_days_behind`` is that same
+    # object, so every bar a ladder serves is a session the calendar has seen
+    # (L-10j, pinned end to end in ``tests/test_api_advice.py``).
+    assert deps.get_price_bar_cache() is shared

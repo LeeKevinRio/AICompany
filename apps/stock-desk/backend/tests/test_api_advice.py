@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
+import app.api.advice as advice_module
 from app.advice.book import EQUITY_BASIS_NOTE, GROSS_EXPOSURE_NOTE
 from app.advice.engine import DISCLAIMER
 from app.advice.limits import (
@@ -16,15 +18,17 @@ from app.advice.limits import (
     NO_SECTOR_UNFILED_DETAIL,
     SECTOR_MIXED_DETAIL,
 )
-from app.api.deps import get_fx_provider
+from app.api.deps import get_fx_provider, get_market_resolver, get_price_bar_cache
 from app.api.kelly_wording import (
     KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_NON_POSITIVE_FRACTION_DETAIL,
     KELLY_NOT_EVALUABLE_NO_INPUT,
     KELLY_WIN_RATE_IS_NOT_PROBABILITY,
 )
-from app.data.interface import DataStatus
+from app.api.signals import DEFAULT_LOOKBACK_DAYS
+from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
+from app.data.service import MarketDataService
 from app.main import app
 from app.settings.models import NetWorthSettings
 from tests.api_helpers import position_payload, recent_bars, trending_closes
@@ -291,6 +295,196 @@ def test_without_bars_neither_the_card_nor_the_basis_date_is_published(
     foreign = api_harness.client.get("/api/advice/AAPL", params={"market": "US"}).json()
     assert foreign["advice"] is None
     assert foreign["data"]["last_bar_date"] is None
+
+
+class _CannedProvider(MarketDataProvider):
+    """An offline ladder rung: answers with canned bars, or declines when it has none."""
+
+    source_id = "canned"
+
+    def __init__(self, bars: list[PriceBar], clock: Callable[[], datetime]) -> None:
+        self._bars = bars
+        self._clock = clock
+
+    def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+        now = self._clock()
+        bars = [bar for bar in self._bars if bar.symbol == symbol and start <= bar.date <= end]
+        if not bars:
+            return ProviderResult(
+                bars=[],
+                status=DataStatus.UNAVAILABLE,
+                as_of=now,
+                source=self.source_id,
+                staleness_minutes=None,
+                reason="canned provider has no bars for this range",
+            )
+        return ProviderResult(
+            bars=bars,
+            status=DataStatus.FRESH,
+            as_of=now,
+            source=self.source_id,
+            staleness_minutes=0,
+        )
+
+
+class _NeverCalledProvider(MarketDataProvider):
+    """A live rung that must not be reached; records any call before failing it.
+
+    The service swallows provider exceptions (it degrades to the next layer),
+    so the raise alone would not fail a test -- ``calls`` is what is asserted.
+    """
+
+    source_id = "never_called"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, date, date]] = []
+
+    def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
+        self.calls.append((symbol, start, end))
+        raise AssertionError("provider must not be called")
+
+
+def _fixed_date(today: date) -> type[date]:
+    """A ``date`` whose ``today()`` is pinned, for the endpoint that reads the clock."""
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls) -> _FixedDate:
+            return cls(today.year, today.month, today.day)
+
+    return _FixedDate
+
+
+@pytest.mark.parametrize(
+    ("today", "lag_days"),
+    [
+        # A Wednesday whose own session is the newest bar.
+        (date(2026, 10, 7), 0),
+        # A Saturday: no session today, the newest bar is the Friday before.
+        (date(2026, 10, 10), 0),
+        # A Saturday with the series a week behind its newest possible bar.
+        (date(2026, 10, 10), 7),
+    ],
+    ids=["wednesday-lag0", "saturday-lag0", "saturday-lag7"],
+)
+@pytest.mark.parametrize("rung", ["live", "cache", "cache_layer0"])
+@pytest.mark.parametrize(
+    ("market", "symbol"),
+    [("TW", "2330"), ("US", "AAPL")],
+    ids=["TW", "US"],
+)
+def test_a_card_with_a_bar_date_always_carries_a_measured_session_gap(
+    api_harness: ApiHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    market: Market,
+    symbol: str,
+    rung: str,
+    today: date,
+    lag_days: int,
+) -> None:
+    """L-10j: ``data.last_bar_date is not None`` implies ``trading_days_behind`` is an int >= 0.
+
+    Under the production wiring this holds by construction: the trading
+    calendar (``get_price_bar_cache``) is the same ``PriceBarCache`` every
+    ``MarketDataService`` ladder writes through (``app/api/deps.py``), each
+    bar a live rung returns is ``cache.put`` before it is served
+    (``app/data/service.py``), and ``market_trading_days`` reads a range whose
+    both ends include ``last_bar_date`` -- so the calendar has always observed
+    at least the series' own last session and the gap is measured, never
+    ``null``. The ``null`` in ``test_market_calendar_staleness.py`` comes from
+    ``FakePriceService`` not writing to the cache, i.e. from the stand-in, not
+    from the product. **If this test goes red, the premise that a dated card
+    never shows "cannot judge staleness" is broken: stop and take it back to
+    risk-compliance for a fresh decision rather than adjusting the assertion.**
+
+    This test also pins that the price ladder and the trading calendar share
+    one cache: the service the endpoint resolves must hold the very object
+    ``get_price_bar_cache`` returns (an identity check, not two equalities).
+    The production half of that pairing is pinned in
+    ``tests/test_api_deps.py::test_every_ladder_shares_one_cache``.
+
+    Driven through the real endpoint with a real ``MarketDataService`` on the
+    harness's temp-directory cache, so only the network-facing rung is a
+    stand-in; the harness's FX provider stays unavailable and a USD card is
+    still issued. Covered: TW and US; a live answer, the cache rung after the
+    live source declined, and layer 0 serving the cache without asking any
+    source (``cache_first``); a weekday and a Saturday ``today`` (pinned for both
+    the endpoint's ``date.today()`` and the service's clock, so layer 0's
+    session judgement and the request window agree).
+    """
+    clock_now = datetime(today.year, today.month, today.day, 12, tzinfo=UTC)
+
+    def clock() -> datetime:
+        return clock_now
+
+    monkeypatch.setattr(advice_module, "date", _fixed_date(today))
+    last_session = today
+    while last_session.weekday() >= 5:
+        last_session -= timedelta(days=1)
+    bars = [
+        bar
+        for bar in recent_bars(
+            trending_closes(200),
+            symbol=symbol,
+            market=market,
+            end=last_session - timedelta(days=lag_days),
+        )
+        if bar.date.weekday() < 5
+    ]
+    never_called = _NeverCalledProvider()
+    provider: MarketDataProvider
+    if rung == "cache":
+        api_harness.bar_cache.put(bars, source="canned")
+        provider = _CannedProvider([], clock)
+    elif rung == "cache_layer0":
+        # A complete live fetch of the endpoint's whole window is on record as
+        # of "now", so layer 0 serves the cache without asking any source.
+        api_harness.bar_cache.put(bars, source="canned", fetched_at=clock_now)
+        api_harness.bar_cache.record_fetch(
+            symbol,
+            market,
+            start=today - timedelta(days=DEFAULT_LOOKBACK_DAYS),
+            end=today,
+            fetched_at=clock_now,
+        )
+        provider = never_called
+    else:
+        provider = _CannedProvider(bars, clock)
+    service = MarketDataService(
+        primary=provider, cache=api_harness.bar_cache, clock=clock, cache_first=True
+    )
+    app.dependency_overrides[get_market_resolver] = lambda: {market: service}
+
+    # The ladder the endpoint resolves holds the calendar's cache object itself.
+    resolved = app.dependency_overrides[get_market_resolver]()[market]
+    calendar = app.dependency_overrides[get_price_bar_cache]()
+    assert isinstance(resolved, MarketDataService)
+    assert resolved._cache is calendar
+
+    response = api_harness.client.get(f"/api/advice/{symbol}", params={"market": market})
+    assert response.status_code == 200
+    body = response.json()
+
+    # Preconditions, so the implication below is never vacuously true.
+    assert body["advice"] is not None
+    assert body["data"]["last_bar_date"] == bars[-1].date.isoformat()
+    assert never_called.calls == []
+    expected_status = {
+        "live": (DataStatus.FRESH.value, None),
+        # The fallback after the live source declined: known to be short.
+        "cache": (DataStatus.CACHED_STALE.value, False),
+        # Layer 0, no source asked: "holds the latest session" exactly when the
+        # newest bar is the latest session (lag 0); a week-old series that was
+        # checked recently is served too, but flagged as short of it.
+        "cache_layer0": (DataStatus.CACHED_STALE.value, lag_days == 0),
+    }[rung]
+    assert (body["data"]["status"], body["data"]["is_within_ttl"]) == expected_status
+    gap = body["data"]["trading_days_behind"]
+    assert isinstance(gap, int) and not isinstance(gap, bool)
+    assert gap >= 0
+    if today.weekday() >= 5 and lag_days == 0:
+        # A weekend has no session of its own: the Friday bar is not behind.
+        assert gap == 0
 
 
 def test_advice_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
