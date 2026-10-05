@@ -124,6 +124,7 @@ import {
   CURRENT_DRAWDOWN_AS_OF_PREFIX,
   CURRENT_DRAWDOWN_DESCRIPTION_1,
   CURRENT_DRAWDOWN_DESCRIPTION_2,
+  CURRENT_DRAWDOWN_DESCRIPTION_3,
   CURRENT_DRAWDOWN_INSUFFICIENT,
   CURRENT_DRAWDOWN_MISSING,
   CURRENT_DRAWDOWN_PEAK_DATE_LABEL,
@@ -2441,6 +2442,10 @@ describe("目前回撤卡（TechnicalIndicatorsPanel.tsx）新字面逐字釘住
       CURRENT_DRAWDOWN_DESCRIPTION_2,
       "目前回撤描述價格自身的回落幅度，並非持倉損益，也不代表後續走勢。",
     ],
+    CURRENT_DRAWDOWN_DESCRIPTION_3: [
+      CURRENT_DRAWDOWN_DESCRIPTION_3,
+      "目前回撤以未還原權值之原始收盤價計算。除權息日的價格下調會計入，發放的現金股利與配股不計入，數值可能因此失真。分割、減資、反分割等公司行動未處理，數值可能大幅失真。區間最高收盤價只取最近 540 個日曆日內的收盤價。舊高點滑出區間後，改以區間內剩下的最高收盤價為基準。目前回撤可能在價格沒有回升時變淺。",
+    ],
     CURRENT_DRAWDOWN_INSUFFICIENT: [CURRENT_DRAWDOWN_INSUFFICIENT, "資料不足，可用天數不足以計算。"],
     CURRENT_DRAWDOWN_AS_OF_PREFIX: [CURRENT_DRAWDOWN_AS_OF_PREFIX, "資料截至 "],
     CURRENT_DRAWDOWN_MISSING: [CURRENT_DRAWDOWN_MISSING, "—"],
@@ -2478,7 +2483,9 @@ describe("目前回撤卡（TechnicalIndicatorsPanel.tsx）新字面逐字釘住
     expect(cardSrc).not.toMatch(/neutral-(5|6|7)00/);
     expect(cardSrc).not.toMatch(/truncate|line-clamp|tooltip|<details|nowrap/);
     expect(cardSrc).not.toMatch(/<(p|span|div)\b[^>]*\stitle=/);
-    expect(cardSrc).toContain("`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`");
+    expect(cardSrc).toContain(
+      "`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}`",
+    );
   });
 
   it("required 3：數值列不上色、無 chip、無箭頭，且不入 IndicatorOverview chip 列", () => {
@@ -2501,6 +2508,105 @@ describe("目前回撤卡（TechnicalIndicatorsPanel.tsx）新字面逐字釘住
     expect(techSrc).toContain('description="觀察區間內高點到低點之最大跌幅，屬歷史統計描述，不代表未來會重演。"');
   });
 });
+
+/**
+ * 目前回撤卡位置 1 揭露句落地（風控 2026-10-05，`work/reviews/2026-10-04-規則集-1.2.0-前置-風控預審.md`
+ * 末段 E-1／E-3／E-5(b)(c)）：整段 description（DESCRIPTION_1+2+3）禁語／反向斷言／不得截斷／540 綁定。
+ */
+describe("目前回撤卡 description 全段（位置 1 揭露句，E-1／E-3／E-5）", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const techSrc = read("../../position/[symbol]/TechnicalIndicatorsPanel.tsx");
+  const cardSrc = techSrc.slice(
+    techSrc.indexOf("function CurrentDrawdownCard"),
+    techSrc.indexOf("function BetaCard"),
+  );
+  const indicatorCardSrc = techSrc.slice(
+    techSrc.indexOf("function IndicatorCard("),
+    techSrc.indexOf("function InsufficientNote"),
+  );
+  const fullDescription = `${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}`;
+
+  it("整段 description 不含 FRONTEND_FORBIDDEN_TERMS、無裸「即時」", () => {
+    assertNoForbiddenTerms(fullDescription, FRONTEND_FORBIDDEN_TERMS, "current drawdown full description");
+    expect(findBareRealtimeClaims(fullDescription)).toEqual([]);
+  });
+
+  it("反向斷言：整段 description 不得含風控列舉之禁語", () => {
+    const banned = [
+      "規則",
+      "門檻",
+      "命中",
+      "-20%",
+      "-30%",
+      "實際",
+      "真實",
+      "含息",
+      "總報酬",
+      "高估",
+      "誤觸",
+      "假訊號",
+      "較早",
+      "較常",
+      "安全",
+      "偏保守",
+      "風險下降",
+      "已排除",
+      "已調整",
+      "無配息",
+      "約 18 個月",
+    ];
+    for (const term of banned) {
+      expect(fullDescription.includes(term), `description contains banned term ${JSON.stringify(term)}`).toBe(false);
+    }
+  });
+
+  it("渲染的 description 為同一個 <p>，常駐（含 insufficient_data）且逐字完整", () => {
+    expect(cardSrc).toContain(
+      "description={`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}`}",
+    );
+    // The description prop is passed unconditionally: no conditional expression between the prop and the card.
+    expect(cardSrc).not.toMatch(/CURRENT_DRAWDOWN_DESCRIPTION_3\s*(&&|\?)/);
+    expect(cardSrc).not.toMatch(/(&&|\?)\s*CURRENT_DRAWDOWN_DESCRIPTION_3/);
+    expect(indicatorCardSrc).toContain('<p className="mt-1 text-xs text-neutral-400">{description}</p>');
+  });
+
+  it("DESCRIPTION_3 渲染處原始碼不得含 line-clamp／truncate／title=／sr-only／<details>", () => {
+    for (const [label, src] of [
+      ["CurrentDrawdownCard", cardSrc],
+      ["IndicatorCard", indicatorCardSrc],
+    ] as const) {
+      // `title={CURRENT_DRAWDOWN_TITLE}` is the IndicatorCard heading prop (C-1), not an HTML tooltip attribute.
+      const code = stripCommentsLocal(src).replace("title={CURRENT_DRAWDOWN_TITLE}", "");
+      for (const token of ["line-clamp", "truncate", "title=", "sr-only", "<details"]) {
+        expect(code.includes(token), `${label} contains ${token}`).toBe(false);
+      }
+    }
+  });
+
+  it("E-5(b)：卡上的 540 與後端 OBSERVATION_LOOKBACK_DAYS 連動", () => {
+    const py = read("../../../../backend/app/signals/window.py");
+    const match = /^OBSERVATION_LOOKBACK_DAYS\s*:\s*Final(?:\[\w+\])?\s*=\s*(\d+)\s*$/m.exec(py);
+    expect(match, "OBSERVATION_LOOKBACK_DAYS not found in window.py").not.toBeNull();
+    const n = match?.[1] ?? "";
+    expect(CURRENT_DRAWDOWN_DESCRIPTION_3).toContain(`最近 ${n} 個日曆日`);
+    expect(CURRENT_DRAWDOWN_DESCRIPTION_3.match(/\d+/g)).toEqual([n]);
+  });
+
+  it("E-5(c)：useSignals 呼叫 getSignals 不得傳 lookbackDays", () => {
+    const queries = read("../queries.ts");
+    const start = queries.indexOf("export function useSignals(");
+    expect(start).toBeGreaterThan(-1);
+    const end = queries.indexOf("\n}\n", start);
+    const body = queries.slice(start, end);
+    expect(body).toMatch(/getSignals\(/);
+    expect(body).not.toMatch(/lookbackDays|lookback_days/);
+    expect(/getSignals\([^)]*\)/.exec(body)?.[0]).toBe("getSignals(symbol, market)");
+  });
+});
+
+function stripCommentsLocal(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
 
 /**
  * 風控 D-1 裁示 (b) 2026-10-04（`work/reviews/2026-10-04-回撤規則-1.1.0-字面-風控審查.md` 末段）：

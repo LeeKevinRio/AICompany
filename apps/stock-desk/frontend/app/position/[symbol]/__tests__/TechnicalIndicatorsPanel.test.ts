@@ -12,6 +12,7 @@ import type { DrawdownResult, IndicatorResult, InputsUsed, SignalsPayload } from
 import {
   CURRENT_DRAWDOWN_DESCRIPTION_1,
   CURRENT_DRAWDOWN_DESCRIPTION_2,
+  CURRENT_DRAWDOWN_DESCRIPTION_3,
   CURRENT_DRAWDOWN_INSUFFICIENT,
   CURRENT_DRAWDOWN_TITLE,
   TechnicalIndicatorsPanel,
@@ -80,7 +81,9 @@ describe("目前回撤卡渲染", () => {
     const card = currentCard(render(BASE_DRAWDOWN));
     expect(card).toContain(">目前回撤<");
     expect(card).toContain("-8.12%（區間最高收盤日 2026-09-18）");
-    expect(card).toContain(`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`);
+    expect(card).toContain(
+      `${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}</p>`,
+    );
     expect(card).toContain(`class="mt-1 text-xs text-neutral-400">${CURRENT_DRAWDOWN_DESCRIPTION_1}`);
     expect(card).toContain("資料截至 2026-10-02");
     // 資料截至 follows the value row.
@@ -103,6 +106,10 @@ describe("目前回撤卡渲染", () => {
   it("status 非 ok：印「資料不足，可用天數不足以計算。」，無數值列、無資料截至", () => {
     const card = currentCard(render({ ...BASE_DRAWDOWN, status: "insufficient_data", current: null, current_peak_date: null }));
     expect(card).toContain(CURRENT_DRAWDOWN_INSUFFICIENT);
+    // The disclosure sentences are unconditional: still rendered when data is insufficient.
+    expect(card).toContain(
+      `${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}</p>`,
+    );
     expect(card).not.toContain("區間最高收盤日 ");
     expect(card).not.toContain("資料截至");
   });

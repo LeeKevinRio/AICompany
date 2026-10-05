@@ -527,6 +527,21 @@ export const CURRENT_DRAWDOWN_DESCRIPTION_1 =
 export const CURRENT_DRAWDOWN_DESCRIPTION_2 =
   "目前回撤描述價格自身的回落幅度，並非持倉損益，也不代表後續走勢。";
 
+/**
+ * Position-1 disclosure (風控 2026-10-05 `work/reviews/2026-10-04-規則集-1.2.0-前置-風控預審.md` 末段,
+ * 核可字面 A-1／A-2′／A-3′／A-5／A-6a／A-6b concatenated verbatim, no extra punctuation between sentences).
+ * Always rendered right after DESCRIPTION_2 in the same <p>, including the insufficient_data state.
+ * The "540" is a string literal on purpose (verbatim approval); `componentWordingScan.test.ts` binds it to
+ * `OBSERVATION_LOOKBACK_DAYS` in the backend `signals/window.py`.
+ */
+export const CURRENT_DRAWDOWN_DESCRIPTION_3 =
+  "目前回撤以未還原權值之原始收盤價計算。" +
+  "除權息日的價格下調會計入，發放的現金股利與配股不計入，數值可能因此失真。" +
+  "分割、減資、反分割等公司行動未處理，數值可能大幅失真。" +
+  "區間最高收盤價只取最近 540 個日曆日內的收盤價。" +
+  "舊高點滑出區間後，改以區間內剩下的最高收盤價為基準。" +
+  "目前回撤可能在價格沒有回升時變淺。";
+
 export const CURRENT_DRAWDOWN_INSUFFICIENT = "資料不足，可用天數不足以計算。";
 
 export const CURRENT_DRAWDOWN_AS_OF_PREFIX = "資料截至 ";
@@ -567,7 +582,7 @@ function CurrentDrawdownCard({
   return (
     <IndicatorCard
       title={CURRENT_DRAWDOWN_TITLE}
-      description={`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}`}
+      description={`${CURRENT_DRAWDOWN_DESCRIPTION_1}${CURRENT_DRAWDOWN_DESCRIPTION_2}${CURRENT_DRAWDOWN_DESCRIPTION_3}`}
     >
       {result.status === "insufficient_data" ? (
         <InsufficientNote message={CURRENT_DRAWDOWN_INSUFFICIENT} />
