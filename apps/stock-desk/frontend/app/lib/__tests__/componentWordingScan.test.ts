@@ -2570,14 +2570,25 @@ describe("目前回撤卡 description 全段（位置 1 揭露句，E-1／E-3／
     expect(indicatorCardSrc).toContain('<p className="mt-1 text-xs text-neutral-400">{description}</p>');
   });
 
-  it("DESCRIPTION_3 渲染處原始碼不得含 line-clamp／truncate／title=／sr-only／<details>", () => {
+  it("DESCRIPTION_3 渲染處原始碼不得含 line-clamp／truncate／title=／sr-only／<details>／nowrap／overflow-hidden／max-h／aria-hidden／opacity", () => {
     for (const [label, src] of [
       ["CurrentDrawdownCard", cardSrc],
       ["IndicatorCard", indicatorCardSrc],
     ] as const) {
       // `title={CURRENT_DRAWDOWN_TITLE}` is the IndicatorCard heading prop (C-1), not an HTML tooltip attribute.
       const code = stripCommentsLocal(src).replace("title={CURRENT_DRAWDOWN_TITLE}", "");
-      for (const token of ["line-clamp", "truncate", "title=", "sr-only", "<details"]) {
+      for (const token of [
+        "line-clamp",
+        "truncate",
+        "title=",
+        "sr-only",
+        "<details",
+        "nowrap",
+        "overflow-hidden",
+        "max-h",
+        "aria-hidden",
+        "opacity",
+      ]) {
         expect(code.includes(token), `${label} contains ${token}`).toBe(false);
       }
     }

@@ -270,10 +270,17 @@ export const AS_OF_AGE_UNKNOWN_STATEMENT = "因此本次也無法判斷這份資
 
 /**
  * The two sentences above as one string, because they must reach the screen as
- * one uninterrupted paragraph: same slot, same font size, same contrast, never
- * folded away (R-D5②-1 呈現要求). Concatenating them here rather than rendering
- * a second element means no call site can publish the first without the second,
- * and no styling change can demote one below the other.
+ * one uninterrupted paragraph: same slot, same font size, same contrast.
+ * Concatenating them here rather than rendering a second element means no call
+ * site can publish the first without the second, and no styling change can
+ * demote one below the other.
+ *
+ * Note: the original R-D5②-1 presentation requirement ("never folded away") has
+ * been superseded by CEO rulings of 2026-09-06 (asOfStatement moved down to the
+ * page footer) and 2026-09-19 (page footer collapsed into a `<details>`). It is
+ * now rendered inside the footer `<details>` in `PageFooterDisclosures.tsx`.
+ * Source: `work/reviews/2026-10-04-個股頁-資料時間標籤-風控審查.md`, section
+ * "B. C-3／D-1".
  */
 export const AS_OF_DATE_UNKNOWN_FULL_STATEMENT =
   AS_OF_DATE_UNKNOWN_STATEMENT + AS_OF_AGE_UNKNOWN_STATEMENT;
