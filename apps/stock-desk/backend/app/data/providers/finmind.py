@@ -130,7 +130,7 @@ class FinMindAdapter(MarketDataProvider):
             logger.warning("FinMind returned non-JSON body for %s", symbol)
             return _unavailable(now)
 
-        bars = self._parse_payload(payload, symbol, now)
+        bars = self._parse_payload(payload, symbol, start, end, now)
         if not bars:
             return _unavailable(now)
         bars.sort(key=lambda bar: bar.date)
@@ -142,7 +142,9 @@ class FinMindAdapter(MarketDataProvider):
             staleness_minutes=0,
         )
 
-    def _parse_payload(self, payload: Any, symbol: str, now: datetime) -> list[PriceBar]:
+    def _parse_payload(
+        self, payload: Any, symbol: str, start: date, end: date, now: datetime
+    ) -> list[PriceBar]:
         if not isinstance(payload, dict) or payload.get("status") != 200:
             logger.warning(
                 "FinMind response body status not OK for %s: %r",
@@ -154,10 +156,14 @@ class FinMindAdapter(MarketDataProvider):
         bars: list[PriceBar] = []
         for row in rows:
             try:
-                bars.append(self._parse_row(row, symbol, now))
+                bar = self._parse_row(row, symbol, now)
             except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
                 logger.debug("skipping unparseable FinMind row for %s: %s", symbol, exc)
                 continue
+            # Do not trust the server-side start_date/end_date window alone: a
+            # bar dated after ``end`` would surface as a future "as of" date.
+            if start <= bar.date <= end:
+                bars.append(bar)
         return bars
 
     def _parse_row(self, row: dict[str, Any], symbol: str, now: datetime) -> PriceBar:

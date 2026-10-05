@@ -95,3 +95,77 @@ def test_returns_unavailable_on_transport_error(monkeypatch: pytest.MonkeyPatch)
     adapter = FinMindAdapter(client=client)
     result = adapter.get_daily_bars("2330", date(2024, 1, 1), date(2024, 1, 31))
     assert result.status is DataStatus.UNAVAILABLE
+
+
+def _finmind_row(day: str, close: str) -> dict[str, object]:
+    return {
+        "date": day,
+        "stock_id": "2330",
+        "Trading_Volume": 1_000,
+        "Trading_money": 1_000_000,
+        "open": close,
+        "max": close,
+        "min": close,
+        "close": close,
+        "spread": 0,
+        "Trading_turnover": 10,
+    }
+
+
+def test_get_daily_bars_drops_rows_outside_requested_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The server is expected to honour start_date/end_date, but the adapter
+    # must not depend on it: rows before ``start`` or after ``end`` (e.g. a
+    # future-dated bar) are dropped locally, boundaries inclusive.
+    monkeypatch.setenv(TOKEN_ENV_VAR, "fixture-test-token-not-real")
+    payload = {
+        "msg": "success",
+        "status": 200,
+        "data": [
+            _finmind_row("2024-01-01", "590.0"),  # before start
+            _finmind_row("2024-01-02", "594.0"),  # == start
+            _finmind_row("2024-01-03", "596.5"),
+            _finmind_row("2024-01-04", "600.0"),  # == end
+            _finmind_row("2024-01-05", "605.0"),  # after end
+            _finmind_row("2099-12-31", "999.0"),  # far future
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["start_date"] == "2024-01-02"
+        assert request.url.params["end_date"] == "2024-01-04"
+        return httpx.Response(200, json=payload)
+
+    adapter = _adapter_with_handler(httpx.MockTransport(handler))
+    result = adapter.get_daily_bars("2330", date(2024, 1, 2), date(2024, 1, 4))
+
+    assert result.status is DataStatus.FRESH
+    assert [bar.date for bar in result.bars] == [
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+        date(2024, 1, 4),
+    ]
+    # In-window bars are untouched by the filter.
+    assert [str(bar.close) for bar in result.bars] == ["594.0", "596.5", "600.0"]
+    assert all(bar.volume == 1_000 for bar in result.bars)
+
+
+def test_returns_unavailable_when_every_row_is_outside_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(TOKEN_ENV_VAR, "fixture-test-token-not-real")
+    payload = {
+        "msg": "success",
+        "status": 200,
+        "data": [_finmind_row("2024-02-01", "610.0")],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    adapter = _adapter_with_handler(httpx.MockTransport(handler))
+    result = adapter.get_daily_bars("2330", date(2024, 1, 2), date(2024, 1, 4))
+
+    assert result.status is DataStatus.UNAVAILABLE
+    assert result.bars == []
