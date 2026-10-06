@@ -87,6 +87,15 @@ describe("DataStatusBadge — trading date and honest freshness label", () => {
     expect(render(null)).toContain("資料不足");
   });
 
+  it("unavailable and null price share the bright bordered chip class; 資料較舊 stays muted (風控 O-3)", () => {
+    const cls = "whitespace-nowrap rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200";
+    expect(render(price({ data_status: "unavailable" }))).toContain(`<span class="${cls}">資料不足</span>`);
+    expect(render(null)).toBe(`<span class="${cls}">資料不足</span>`);
+    const stale = render(price({ data_status: "cached_stale", is_within_ttl: false }));
+    expect(stale).toContain("text-neutral-400");
+    expect(stale).not.toContain("border-neutral-500");
+  });
+
   it("never mentions 延遲 or 分鐘, in any state", () => {
     const states: PositionPrice[] = [
       price({ data_status: "fresh" }),

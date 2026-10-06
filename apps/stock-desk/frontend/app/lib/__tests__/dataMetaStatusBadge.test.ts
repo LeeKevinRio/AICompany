@@ -133,7 +133,17 @@ describe("DataMetaStatusBadge compact — wave3 主視圖短字（既有標籤�
     const html = renderToStaticMarkup(
       createElement(DataMetaStatusBadge, { status: "unavailable", stalenessMinutes: null, isWithinTtl: null, compact: true }),
     );
-    expect(html).toBe('<span class="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">資料不足</span>');
+    expect(html).toBe('<span class="ml-1.5 rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">資料不足</span>');
+  });
+
+  it("unavailable 完整版與未知狀態（default）皆用同一組亮色＋框線 class；cached_stale 仍為 text-neutral-400（風控 O-3）", () => {
+    const cls = "ml-1.5 rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200";
+    const render = (status: string, compact: boolean) =>
+      renderToStaticMarkup(createElement(DataMetaStatusBadge, { status, stalenessMinutes: null, isWithinTtl: null, compact }));
+    expect(render("unavailable", false)).toBe(`<span class="${cls}">資料不足</span>`);
+    expect(render("something_new", false)).toBe(`<span class="${cls}">something_new</span>`);
+    expect(render("something_new", true)).toBe(`<span class="${cls}">something_new</span>`);
+    expect(render("cached_stale", true)).not.toContain("border-neutral-500");
   });
 
   it("reason 一律被忽略（不論是否為 compact 唯一差異）——完整版才會渲染它", () => {

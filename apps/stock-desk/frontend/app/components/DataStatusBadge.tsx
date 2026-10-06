@@ -21,6 +21,13 @@ const MUTED_BADGE_CLASS =
   "whitespace-nowrap rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400";
 
 /**
+ * 風控 2026-10-06 O-3 / art-lead: "資料不足" is the most severe state, so it is
+ * brighter and bordered (no red) instead of sharing the muted chip look.
+ */
+const UNAVAILABLE_BADGE_CLASS =
+  "whitespace-nowrap rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200";
+
+/**
  * The price's trading date, always shown next to the price as "MM/DD 收盤".
  * `as_of` is a bare trading date (`"2026-09-30"`), so it is formatted as a
  * string — never via the `Date` constructor, which would invent a time of day.
@@ -58,7 +65,7 @@ function StatusLabel({ price }: { price: PositionPrice }) {
         </span>
       );
     case "unavailable":
-      return <span className={MUTED_BADGE_CLASS}>資料不足</span>;
+      return <span className={UNAVAILABLE_BADGE_CLASS}>資料不足</span>;
     default:
       return assertNever(price.data_status);
   }
@@ -73,7 +80,7 @@ function StatusLabel({ price }: { price: PositionPrice }) {
  */
 export function DataStatusBadge({ price }: { price: PositionPrice | null }) {
   if (price === null) {
-    return <span className={MUTED_BADGE_CLASS}>資料不足</span>;
+    return <span className={UNAVAILABLE_BADGE_CLASS}>資料不足</span>;
   }
   // The date label sits on its own line under the price (CEO 2026-10-03 首頁
   // 重排); badges share that line and wrap between tags, never inside one.

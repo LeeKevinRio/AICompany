@@ -44,6 +44,15 @@ export function cachedStaleLabel({
   return obtained !== null ? `快取資料，${obtained}，可能未含最近交易日` : "快取資料（取得時間不明，可能未含最近交易日）";
 }
 
+/**
+ * 風控 2026-10-06 O-3 / art-lead: `unavailable` (and the unknown-status
+ * fallback, treated the same) is the most severe state, so it must not look
+ * like the muted `cached_stale` chip. Brighter text plus a neutral border; no
+ * red, base fill unchanged.
+ */
+const UNAVAILABLE_CHIP_CLASS =
+  "ml-1.5 rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200";
+
 export function DataMetaStatusBadge({
   status,
   stalenessMinutes,
@@ -116,12 +125,10 @@ function compactStatusBadge(status: string) {
         <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">快取資料</span>
       );
     case "unavailable":
-      return (
-        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">資料不足</span>
-      );
+      return <span className={UNAVAILABLE_CHIP_CLASS}>資料不足</span>;
     default:
       return (
-        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">{status}</span>
+        <span className={UNAVAILABLE_CHIP_CLASS}>{status}</span>
       );
   }
 }
@@ -153,16 +160,8 @@ function statusBadge({
         </span>
       );
     case "unavailable":
-      return (
-        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-          資料不足
-        </span>
-      );
+      return <span className={UNAVAILABLE_CHIP_CLASS}>資料不足</span>;
     default:
-      return (
-        <span className="ml-1.5 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-          {status}
-        </span>
-      );
+      return <span className={UNAVAILABLE_CHIP_CLASS}>{status}</span>;
   }
 }
