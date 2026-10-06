@@ -10,6 +10,10 @@ tests pin that split from both sides:
   field of a creatable set comes out non-``None`` and every field outside it
   comes out ``None`` -- so the sets cannot claim a field the pipeline does not
   produce, nor omit one it does.
+* The ``close`` block checks the one field ``signal_context`` adds on top of
+  the signal layer: a missing, zero, negative or NaN close skips a close rule
+  (as ``field`` or ``ref``) with the "missing input" reason instead of raising,
+  and a usable close is really compared.
 * T-2 inserts old rules naming the excluded fields straight into SQLite and
   checks they still list, skip, disable and delete (K-4 / K-5 / K-6).
 * T-3 checks a *submitted* rule naming one is a 422 (K-4).
@@ -271,6 +275,120 @@ def test_t1_the_advice_card_produces_exactly_the_advice_fields(
         path for path in KNOWN_FIELDS - ADVICE_RULE_FIELDS if context[path] is not None
     )
     assert produced == [], f"這些欄位建議卡產得出來，卻不在 ADVICE_RULE_FIELDS：{produced}"
+
+
+# --- K-1 close: the one field ``signal_context`` adds to the signal layer ---------
+
+
+#: The "missing input" skip reason for ``close``, transcribed by hand from
+#: ``describe_field`` (``FIELD_LABELS["close"]``) as it stands at ADR-0021, so a
+#: rewrite of the template or the label shows up here.
+CLOSE_MISSING_REASON = "缺少輸入欄位：close（最新收盤價）"
+
+#: Closes ``signal_context`` must treat as "no price": ``PortfolioContext.close``
+#: is ``gt=0.0``, so passing any of them through would raise a ValidationError
+#: and take the whole tick down instead of skipping one rule.
+UNUSABLE_CLOSES = [
+    pytest.param(None, id="none"),
+    pytest.param(0.0, id="zero"),
+    pytest.param(-5.0, id="negative"),
+    pytest.param(float("nan"), id="nan"),
+]
+
+#: A field-vs-value rule on the close, and a field-vs-ref rule with the close
+#: as the ref (``ma20.last`` is 105.0 in ``uptrend_signals``).
+CLOSE_AS_FIELD = {"field": "close", "op": "gt", "value": 100.0}
+CLOSE_AS_REF = {"field": "ma20.last", "op": "lt", "ref": "close"}
+
+
+def _close_rule(condition: dict[str, Any]) -> dict[str, Any]:
+    return {**signal_rule(), "params": {"condition": condition}}
+
+
+def test_close_signal_context_carries_a_positive_close() -> None:
+    context = signal_context(snapshot(close=120.0, signals=uptrend_signals()))
+    assert context["close"] == 120.0
+
+
+@pytest.mark.parametrize("close", UNUSABLE_CLOSES)
+def test_close_signal_context_drops_an_unusable_close(close: float | None) -> None:
+    # Must not raise: the guard sits in front of ``PortfolioContext(gt=0.0)``.
+    context = signal_context(snapshot(close=close, signals=uptrend_signals()))
+    assert context["close"] is None
+    # Only the close is dropped; the signal layer still comes through.
+    assert context["ma20.last"] == 105.0
+    assert set(context) == KNOWN_FIELDS
+
+
+@pytest.mark.parametrize("condition", [CLOSE_AS_FIELD, CLOSE_AS_REF], ids=["field", "ref"])
+@pytest.mark.parametrize("close", UNUSABLE_CLOSES)
+def test_close_rule_is_skipped_on_an_unusable_close(
+    tmp_path: Path, close: float | None, condition: dict[str, Any]
+) -> None:
+    store = AlertStore(db_path=tmp_path / "alerts.db")
+    rule = add_rule(store, _close_rule(condition))
+    snap = snapshot(close=close, signals=uptrend_signals())
+    result = evaluate_alerts(store, RecordingLoader(snap), cooldown_minutes=0)
+    [outcome] = result.outcomes
+    assert outcome.rule_id == rule.id
+    assert outcome.status == "skipped"
+    assert outcome.reason == CLOSE_MISSING_REASON
+    assert result.events == []
+
+
+@pytest.mark.parametrize(
+    ("close", "expected"),
+    [
+        pytest.param(120.0, "fired", id="above"),
+        pytest.param(100.0, "quiet", id="equal"),
+        pytest.param(80.0, "quiet", id="below"),
+    ],
+)
+def test_close_rule_fires_only_above_its_threshold(
+    tmp_path: Path, close: float, expected: str
+) -> None:
+    # The end-to-end half of the fix in 3f277cd: before it, a close rule was
+    # skipped on every tick, so "quiet" here must be a real comparison.
+    store = AlertStore(db_path=tmp_path / "alerts.db")
+    add_rule(store, _close_rule(CLOSE_AS_FIELD))
+    snap = snapshot(close=close, signals=uptrend_signals())
+    result = evaluate_alerts(store, RecordingLoader(snap), cooldown_minutes=0)
+    [outcome] = result.outcomes
+    assert outcome.status == expected
+    assert outcome.reason is None
+    if expected == "fired":
+        [event] = result.events
+        assert event.observed["field"] == "close"
+        assert event.observed["value"] == close
+        assert event.observed["compared_to"] == 100.0
+        assert "close（最新收盤價） 目前為 120" in event.message
+    else:
+        assert result.events == []
+
+
+@pytest.mark.parametrize(
+    ("close", "expected"),
+    [
+        pytest.param(120.0, "fired", id="close-above-ma20"),
+        pytest.param(100.0, "quiet", id="close-below-ma20"),
+    ],
+)
+def test_close_as_ref_is_evaluated(tmp_path: Path, close: float, expected: str) -> None:
+    store = AlertStore(db_path=tmp_path / "alerts.db")
+    add_rule(store, _close_rule(CLOSE_AS_REF))
+    snap = snapshot(close=close, signals=uptrend_signals())
+    result = evaluate_alerts(store, RecordingLoader(snap), cooldown_minutes=0)
+    [outcome] = result.outcomes
+    assert outcome.status == expected
+    assert outcome.reason is None
+    if expected == "fired":
+        [event] = result.events
+        assert event.observed["field"] == "ma20.last"
+        assert event.observed["value"] == 105.0
+        assert event.observed["compared_to"] == close
+        assert "符合設定的條件 lt close（最新收盤價）" in event.message
+    else:
+        assert result.events == []
 
 
 # --- T-2: old rules stay readable, skippable, editable and deletable -------------
@@ -570,6 +688,13 @@ def _front_end_signal_field_options() -> dict[str, str]:
     assert block is not None, f"SIGNAL_FIELD_OPTIONS not found in {FRONTEND_FORMAT}"
     pairs = re.findall(r'\{\s*value:\s*"([^"]+)",\s*label:\s*"([^"]*)"\s*,?\s*\}', block.group(1))
     assert pairs, "SIGNAL_FIELD_OPTIONS parsed as empty"
+    # Every entry must have been parsed: an entry the pattern skips (a new key,
+    # single quotes, a reordered object) would silently drop out of the subset
+    # check below instead of failing it.
+    entries = re.findall(r"\{[^{}]*\}", block.group(1))
+    assert len(pairs) == len(entries), (
+        f"SIGNAL_FIELD_OPTIONS has {len(entries)} entries but only {len(pairs)} parsed"
+    )
     options = dict(pairs)
     assert len(options) == len(pairs), "SIGNAL_FIELD_OPTIONS lists a value twice"
     return options
