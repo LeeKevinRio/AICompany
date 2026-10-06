@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import {
   ALERT_RULE_UNEVALUABLE_NOTICE,
@@ -138,6 +138,20 @@ export function UnrenderedFieldErrors({ messages }: { messages: string[] }) {
 }
 
 /**
+ * Brings the first error box (`[role="alert"]`, in document order — the
+ * `UnrenderedFieldErrors` block or the generic failure line) into view inside
+ * the dialog's own scroll container (W-R8). `block: "nearest"` scrolls only as
+ * far as needed and is a no-op when the box is already visible; no `smooth`
+ * behavior is used, so `prefers-reduced-motion` is not affected. Takes the
+ * minimal `querySelector` shape so it can be unit-tested without a DOM.
+ */
+export function scrollFirstAlertIntoView(
+  root: { querySelector(selectors: string): { scrollIntoView(arg?: ScrollIntoViewOptions): void } | null } | null,
+): void {
+  root?.querySelector('[role="alert"]')?.scrollIntoView({ block: "nearest" });
+}
+
+/**
  * Notice block for a stored rule naming a field alerts cannot evaluate
  * (ADR-0021 K-9 / W-3): the original field's name, then the approved notice
  * directly after it. Pure view so it can be unit-tested without hooks.
@@ -256,6 +270,19 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
   // first menu entry for an old rule.
   const storedField = rule.type === "signal_condition" ? paramsToForm(rule).field : undefined;
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const showGenericError = updateMutation.isError && Object.keys(fieldErrors).length === 0;
+  // Changes whenever an error box appears or its text changes ("" = none), so
+  // the scroll below fires on a fresh 422 but not on unrelated re-renders.
+  const alertKey = showGenericError
+    ? `generic:${updateMutation.error instanceof ApiError ? updateMutation.error.message : ""}`
+    : extraErrorMessages.join("\n");
+
+  useEffect(() => {
+    if (alertKey === "") return;
+    scrollFirstAlertIntoView(dialogRef.current);
+  }, [alertKey]);
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -292,6 +319,7 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="edit-alert-title"
@@ -437,7 +465,7 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
           </div>
         </form>
 
-        {updateMutation.isError && Object.keys(fieldErrors).length === 0 && (
+        {showGenericError && (
           <p
             role="alert"
             className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300"

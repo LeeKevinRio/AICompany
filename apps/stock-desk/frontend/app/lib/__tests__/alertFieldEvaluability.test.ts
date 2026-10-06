@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
 import {
   ALERT_FIELD_BETA_NOTE,
@@ -33,6 +33,7 @@ import {
   UnrenderedFieldErrors,
   buildAlertRulePatch,
   decideAlertRuleSubmit,
+  scrollFirstAlertIntoView,
   toFormState,
   unrenderedFieldErrorMessages,
 } from "../../settings/EditAlertRuleModal";
@@ -347,6 +348,47 @@ describe("W-R4：未被接住的 fieldErrors 逐字顯示在對話框內", () =>
     expect(html).toContain('role="alert"');
     expect(html).toContain(`<p>${W4_BETA}</p>`);
     expect(renderToStaticMarkup(createElement(UnrenderedFieldErrors, { messages: [] }))).toBe("");
+  });
+});
+
+describe("W-R8：送出 422 後錯誤框捲入對話框可視範圍", () => {
+  // This suite runs under the node environment (no jsdom, see vitest.config.ts),
+  // so there is no `Element.prototype`; a minimal fake root stands in for the
+  // dialog and records the selector the helper asks for.
+  type ScrollMock = ReturnType<typeof vi.fn<(arg?: ScrollIntoViewOptions) => void>>;
+  function fakeRoot(alertsInDocumentOrder: Array<{ scrollIntoView: ScrollMock }>) {
+    const querySelector = vi.fn((selectors: string) => (selectors === '[role="alert"]' ? (alertsInDocumentOrder[0] ?? null) : null));
+    return { querySelector };
+  }
+
+  it("對第一個 [role=alert] 呼叫 scrollIntoView({ block: 'nearest' })（不用 smooth）", () => {
+    const first = { scrollIntoView: vi.fn<(arg?: ScrollIntoViewOptions) => void>() };
+    const second = { scrollIntoView: vi.fn<(arg?: ScrollIntoViewOptions) => void>() };
+    const root = fakeRoot([first, second]);
+    scrollFirstAlertIntoView(root);
+    expect(root.querySelector).toHaveBeenCalledWith('[role="alert"]');
+    expect(first.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(first.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(second.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("root 為 null 或沒有錯誤框時不丟錯", () => {
+    expect(() => scrollFirstAlertIntoView(null)).not.toThrow();
+    expect(() => scrollFirstAlertIntoView(fakeRoot([]))).not.toThrow();
+  });
+
+  it("W-4 句經 422 → unrenderedFieldErrorMessages → UnrenderedFieldErrors：[role=alert] 內逐字為 W-4，且是 helper 選取的那個元素", () => {
+    const form = toFormState(valueRule("beta.value"));
+    const messages = unrenderedFieldErrorMessages({ params: W4_BETA }, form);
+    const html = renderToStaticMarkup(createElement(UnrenderedFieldErrors, { messages }));
+    expect(html).toMatch(/^<div role="alert"/);
+    expect(html).toContain(`<p>${W4_BETA}</p>`);
+  });
+
+  it("EditAlertRuleModal 把 ref 掛在對話框、於錯誤出現時（useEffect）呼叫 helper", () => {
+    const src = readFileSync(fileURLToPath(new URL("../../settings/EditAlertRuleModal.tsx", import.meta.url)), "utf8");
+    expect(src).toMatch(/ref=\{dialogRef\}\s+role="dialog"/);
+    expect(src).toMatch(/useEffect\(\(\) => \{\s+if \(alertKey === ""\) return;\s+scrollFirstAlertIntoView\(dialogRef\.current\);\s+\}, \[alertKey\]\);/);
   });
 });
 
