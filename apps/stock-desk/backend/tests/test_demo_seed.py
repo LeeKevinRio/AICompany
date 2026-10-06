@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.advice.engine import COMPARISON_OPS
+from app.alerts.models import SignalConditionParams
 from app.alerts.store import AlertStore
 from app.api.deps import (
     get_alert_store,
@@ -42,6 +44,7 @@ from app.demo.seed import (
     INDEX_PROXY_SYMBOL,
     LEVERAGED_SYMBOL,
     DemoSeedConflictError,
+    _rule_inputs,
     build_demo_bars,
     main,
     reset_demo,
@@ -271,6 +274,69 @@ def test_seeded_alert_rules_actually_fire(demo_harness: DemoHarness) -> None:
     _seed(demo_harness)
     result = demo_harness.client.post("/api/alerts/evaluate").json()
     assert result["events"], result["outcomes"]
+
+
+#: The vocabulary field the demo drawdown rule watches. It is the selector, not
+#: the expectation: threshold and operator are read from the seeder's own rule
+#: definition so a change there is what this test judges.
+_DRAWDOWN_FIELD = "drawdown.max_drawdown"
+
+
+def test_seeded_drawdown_rule_fires_on_the_leveraged_etf(demo_harness: DemoHarness) -> None:
+    """The demo drawdown rule itself fires, not just "some" demo rule.
+
+    ``events`` being non-empty is satisfied by the ``price_below`` rule alone,
+    so it cannot tell whether the drawdown rule still crosses over the
+    observation window the signals page uses. The demo calendar is anchored on
+    ``today`` and the window moves with it, so this pins the rule on every run.
+    As the seeder comment warns, a demo rule that never fires would be read as
+    "nothing happened", which is exactly the confusion the alerts layer must avoid.
+    Measured at commit 7dd272b: 00631L max_drawdown is about -0.4603 over the 540
+    day window, roughly 26 percentage points past the -0.20 threshold. That margin
+    is a measurement of the synthetic series at the time, not a guarantee.
+    """
+    seed_demo(
+        cache=demo_harness.cache,
+        positions=demo_harness.positions,
+        alerts=demo_harness.alerts,
+        today=_TODAY,
+    )
+    specs = [
+        spec
+        for spec in _rule_inputs(build_demo_bars(today=_TODAY))
+        if isinstance(spec.params, SignalConditionParams)
+        and spec.params.condition.field == _DRAWDOWN_FIELD
+    ]
+    assert len(specs) == 1, "demo seed must define exactly one drawdown rule"
+    spec = specs[0]
+    assert isinstance(spec.params, SignalConditionParams)
+    assert spec.symbol == LEVERAGED_SYMBOL
+    expected = spec.params.condition
+
+    stored = [
+        rule
+        for rule in demo_harness.alerts.list_rules()
+        if (rule.type, rule.symbol, rule.market) == (spec.type, spec.symbol, spec.market)
+    ]
+    assert len(stored) == 1, stored
+    rule_id = stored[0].id
+
+    result = demo_harness.client.post("/api/alerts/evaluate").json()
+    # The original guarantee still holds alongside the specific one.
+    assert result["events"], result["outcomes"]
+
+    outcome = next(item for item in result["outcomes"] if item["rule_id"] == rule_id)
+    assert outcome["status"] == "fired", outcome
+
+    events = [event for event in result["events"] if event["rule_id"] == rule_id]
+    assert len(events) == 1, result["events"]
+    observed = events[0]["observed"]
+    assert observed["field"] == _DRAWDOWN_FIELD
+    assert observed["op"] == expected.op
+    assert observed["compared_to"] == expected.value
+    # The figure the event quotes is past the seeder's threshold.
+    assert expected.value is not None
+    assert COMPARISON_OPS[expected.op](observed["value"], expected.value), observed
 
 
 def test_seeding_twice_is_idempotent(demo_harness: DemoHarness) -> None:
