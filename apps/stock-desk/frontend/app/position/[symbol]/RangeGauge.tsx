@@ -27,6 +27,12 @@ export function buildGaugeAriaLabel(n: number, pct: number, zoneLabel: string): 
   return `近 ${n} 根日線位階量表：收盤位於區間的 ${pct.toFixed(0)}%，${zoneLabel}`;
 }
 
+/**
+ * Half of the widest marker label plus 1px slack. 「收盤位於 100%」 measures 98px with a 0.6em
+ * monospace fallback (4 CJK glyphs at 14px + 5 ASCII glyphs at 8.4px), so 49px + 1px.
+ */
+const LABEL_HALF_WIDTH_PX = 50;
+
 const ZONE_BAND_CLASS: Record<RangeZone, string> = {
   low: "bg-sky-950",
   mid: "bg-sky-900",
@@ -58,11 +64,15 @@ export function RangeGauge({
       aria-label={buildGaugeAriaLabel(rangeBarCount, rangePositionPct, zoneLabels[zone])}
       className="mt-3"
     >
-      {/* Marker label rides above the track at the marker's x; clamped by translate so it never overflows. */}
+      {/*
+        Marker label rides above the track at the marker's x. Only the TEXT label is clamped
+        (half the widest label plus 1px slack, see LABEL_HALF_WIDTH_PX) so it stays inside the figure at 0%/100%;
+        the dot below still sits at the true position.
+      */}
       <div className="relative h-5">
         <span
           className="absolute -translate-x-1/2 whitespace-nowrap font-mono text-sm text-neutral-200"
-          style={{ left: `${left}%` }}
+          style={{ left: `clamp(${LABEL_HALF_WIDTH_PX}px, ${left}%, calc(100% - ${LABEL_HALF_WIDTH_PX}px))` }}
         >
           {KEY_LEVELS_GAUGE_MARKER_LABEL} {rangePositionPct.toFixed(0)}%
         </span>

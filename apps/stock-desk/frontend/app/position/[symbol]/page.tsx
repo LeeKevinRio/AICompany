@@ -289,7 +289,7 @@ export default function PositionDetailPage() {
               </span>
             )}
             {bars.isSuccess && (
-              <span className="flex items-center gap-1">
+              <span className="flex items-baseline gap-1">
                 <span className="shrink-0 whitespace-nowrap">日線</span>
                 <DataMetaStatusBadge
                   status={bars.data.data.status}
@@ -303,7 +303,7 @@ export default function PositionDetailPage() {
             )}
             {/* R-A1（風控逐字審 R5 破線修正）: signals 徽章「本體」（compact）留在主視圖，不得收進 <details>。 */}
             {signals.isSuccess && (
-              <span className="flex items-center gap-1">
+              <span className="flex items-baseline gap-1">
                 <span className="shrink-0 whitespace-nowrap">指標</span>
                 <DataMetaStatusBadge
                   status={signals.data.data.status}
