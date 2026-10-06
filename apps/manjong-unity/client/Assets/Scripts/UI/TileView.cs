@@ -250,7 +250,6 @@ namespace Manjong.UI
             return box;
         }
 
-        /// <summary>Visible copies of a kind in a meld: everything except the two face-down tiles of a concealed kong.</summary>
         /// <summary>
         /// Copies of `code` accounted for by this meld. A concealed kong shows its two inner tiles face up, so
         /// its kind is public and all four copies are known to be used (same rule as the server's `left`).
