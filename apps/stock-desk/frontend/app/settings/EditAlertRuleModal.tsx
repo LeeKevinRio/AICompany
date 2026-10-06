@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
+import {
+  ALERT_RULE_UNEVALUABLE_NOTICE,
+  conditionUsesUnevaluableField,
+} from "../lib/alertFields";
 import { ALERT_TYPE_OPTIONS, MARKET_OPTIONS, comparisonOpLabel, signalFieldLabel } from "../lib/format";
 import {
   buildAlertParams,
@@ -95,6 +99,57 @@ export function isRefCondition(form: Pick<AlertParamFormValues, "type" | "condit
  * per the dispatch's own instruction to surface every new sentence.
  */
 export const REF_CONDITION_READONLY_HINT = "此規則的比較條件為欄位對欄位，目前不支援在此表單修改。";
+
+/**
+ * API field errors the dialog has no per-field slot for, as the backend's own
+ * sentences (W-R4, ADR-0021). The dialog renders a message under `symbol` and
+ * `note` always, under `threshold` for a price rule, and under `value` for a
+ * `value`-side signal condition; everything else — a 422 whose `loc` ends in
+ * `params`, `field`, `ref`, `market`, … or any unknown key — would otherwise
+ * be swallowed (the generic failure line is hidden whenever `fieldErrors` is
+ * non-empty). Messages are returned verbatim (no prefix, no rewording) and
+ * de-duplicated.
+ */
+export function unrenderedFieldErrorMessages(
+  fieldErrors: Record<string, string>,
+  form: Pick<AlertParamFormValues, "type" | "conditionRef">,
+): string[] {
+  const rendered = new Set<string>(["symbol", "note"]);
+  if (form.type === "price_above" || form.type === "price_below") rendered.add("threshold");
+  if (form.type === "signal_condition" && !isRefCondition(form)) rendered.add("value");
+  const messages: string[] = [];
+  for (const [key, message] of Object.entries(fieldErrors)) {
+    if (rendered.has(key) || message === "" || messages.includes(message)) continue;
+    messages.push(message);
+  }
+  return messages;
+}
+
+/** Shows `unrenderedFieldErrorMessages` inside the dialog; renders nothing when there are none. */
+export function UnrenderedFieldErrors({ messages }: { messages: string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div role="alert" className="space-y-1 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+      {messages.map((message) => (
+        <p key={message}>{message}</p>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Notice block for a stored rule naming a field alerts cannot evaluate
+ * (ADR-0021 K-9 / W-3): the original field's name, then the approved notice
+ * directly after it. Pure view so it can be unit-tested without hooks.
+ */
+export function UnevaluableFieldNotice({ field, refField }: { field: string; refField: string | null }) {
+  if (!conditionUsesUnevaluableField(field, refField)) return null;
+  return (
+    <p className="mt-0.5 border-l-2 border-amber-400 pl-1.5 text-xs leading-snug text-amber-400">
+      {ALERT_RULE_UNEVALUABLE_NOTICE}
+    </p>
+  );
+}
 
 /**
  * Builds the `PATCH` body for saving `form`'s edits to `rule`, or `null`
@@ -195,6 +250,11 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
   const [localFieldErrors, setLocalFieldErrors] = useState<Record<string, string>>({});
   const apiFieldErrors = updateMutation.error instanceof ApiError ? updateMutation.error.fieldErrors : {};
   const fieldErrors = { ...apiFieldErrors, ...localFieldErrors };
+  const extraErrorMessages = unrenderedFieldErrorMessages(fieldErrors, form);
+  // The field the rule was stored with: kept selectable even when the menu no
+  // longer offers it (ADR-0021 K-9), so the select never silently shows the
+  // first menu entry for an old rule.
+  const storedField = rule.type === "signal_condition" ? paramsToForm(rule).field : undefined;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -323,18 +383,28 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
                 訊號欄位：{signalFieldLabel(form.field)}　條件：{comparisonOpLabel(form.op)}　比較欄位：
                 {signalFieldLabel(form.conditionRef ?? "")}
               </p>
+              <UnevaluableFieldNotice field={form.field} refField={form.conditionRef} />
               <p role="note" className="mt-2 text-xs text-amber-400">
                 {REF_CONDITION_READONLY_HINT}
               </p>
             </div>
           ) : (
-            <AlertParamFields
-              idPrefix="edit-alert"
-              values={form}
-              onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
-              thresholdError={fieldErrors.threshold}
-              valueError={fieldErrors.value}
-            />
+            <>
+              {form.type === "signal_condition" && conditionUsesUnevaluableField(form.field, null) && (
+                <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
+                  <p className="text-sm text-neutral-300">訊號欄位：{signalFieldLabel(form.field)}</p>
+                  <UnevaluableFieldNotice field={form.field} refField={null} />
+                </div>
+              )}
+              <AlertParamFields
+                idPrefix="edit-alert"
+                values={form}
+                onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+                thresholdError={fieldErrors.threshold}
+                valueError={fieldErrors.value}
+                storedField={storedField}
+              />
+            </>
           )}
 
           <label className="flex items-center gap-2 text-sm text-neutral-300">
@@ -346,6 +416,8 @@ export function EditAlertRuleModal({ rule, onClose }: { rule: AlertRule; onClose
             />
             啟用中
           </label>
+
+          <UnrenderedFieldErrors messages={extraErrorMessages} />
 
           <div className="flex gap-3">
             <button

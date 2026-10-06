@@ -31,7 +31,12 @@ from app.alerts.engine import (
     SymbolSnapshot,
     evaluate_alerts,
 )
-from app.alerts.models import AlertEvent, AlertRule, AlertRuleInput, AlertRulePatch
+from app.alerts.models import (
+    AlertEvent,
+    AlertRule,
+    AlertRulePatch,
+    SubmittedAlertRuleInput,
+)
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
 from app.api.common import now_iso
@@ -103,18 +108,19 @@ def list_rules(
 
 
 @router.post("", response_model=AlertRule, status_code=status.HTTP_201_CREATED)
-def create_rule(body: AlertRuleInput, store: AlertStoreDep) -> AlertRule:
+def create_rule(body: SubmittedAlertRuleInput, store: AlertStoreDep) -> AlertRule:
     return store.create_rule(body)
 
 
 @router.put("/{rule_id}", response_model=AlertRule)
-def replace_rule(rule_id: int, body: AlertRuleInput, store: AlertStoreDep) -> AlertRule:
+def replace_rule(rule_id: int, body: SubmittedAlertRuleInput, store: AlertStoreDep) -> AlertRule:
     """Replace every user field of one rule, keeping its id (FR-1).
 
     A full replacement, validated exactly like a ``POST``: switching a rule's
     ``type`` therefore has to bring the matching ``params`` document with it,
     and the old type's parameters cannot survive the switch because ``params``
-    is stored as one document rather than a column per type (AC-1.5).
+    is stored as one document rather than a column per type (AC-1.5). Being a
+    submission, it is also held to the alert-evaluable fields (ADR-0021 K-4).
     """
     updated = store.update_rule(rule_id, body)
     if updated is None:
@@ -130,6 +136,10 @@ def patch_rule(rule_id: int, body: AlertRulePatch, store: AlertStoreDep) -> Aler
     patch that would produce an impossible rule (a threshold on a rule that is
     no longer a price rule, a negative threshold, ...) is a 422 and the stored
     rule is left untouched -- never partially applied (AC-1.3).
+
+    Submitted ``params`` are held to the alert-evaluable fields; the stored
+    ``params`` a patch keeps are not (ADR-0021 K-4), so a rule saved under the
+    wider vocabulary can still be turned off or re-noted.
     """
     current = store.get_rule(rule_id)
     if current is None:

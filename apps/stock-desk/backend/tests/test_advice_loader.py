@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.advice.context import KNOWN_FIELDS
+from app.advice.context import ADVICE_RULE_FIELDS, KNOWN_FIELDS
 from app.advice.loader import (
     BANNED_PHRASES,
     DEFAULT_RULES_PATH,
@@ -37,9 +37,11 @@ def test_default_rules_load_and_are_well_formed() -> None:
 
 
 def test_default_rules_only_reference_known_fields() -> None:
+    # ADR-0021 T-4: the shipped file is held to the advice-evaluable subset,
+    # not merely to the readable vocabulary.
     for rule in load_default_rules().rules:
         for path in condition_fields(rule.condition):
-            assert path in KNOWN_FIELDS, f"{rule.id} 使用了未知欄位 {path}"
+            assert path in ADVICE_RULE_FIELDS, f"{rule.id} 使用了建議卡無法評估的欄位 {path}"
 
 
 def test_default_rules_cover_the_required_themes() -> None:
@@ -139,6 +141,54 @@ def test_nested_condition_error_points_at_the_rule(tmp_path: Path) -> None:
     message = _error(tmp_path, minimal_ruleset(minimal_rule(condition=condition)))
     assert "sample_rule" in message
     assert "nope.last" in message
+
+
+# --- ADR-0021 K-3 / T-4: the advice-evaluable subset ---------------------------
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"field": "beta.value", "op": "gt", "value": 1.0},
+        {"field": "close", "op": "gt", "ref": "beta.value"},
+        {
+            "all": [
+                {"field": "rsi14.last", "op": "gt", "value": 1},
+                {"field": "beta.value", "op": "gt", "value": 1},
+            ]
+        },
+        {
+            "any": [
+                {"field": "rsi14.last", "op": "gt", "value": 1},
+                {"field": "beta.value", "op": "gt", "value": 1},
+            ]
+        },
+    ],
+    ids=["field", "ref", "nested_all", "nested_any"],
+)
+def test_a_rule_file_naming_beta_fails_to_load(
+    tmp_path: Path, condition: dict[str, object]
+) -> None:
+    message = _error(tmp_path, minimal_ruleset(minimal_rule(condition=condition)))
+    assert "sample_rule" in message
+    assert "beta.value" in message
+
+
+def test_beta_is_still_a_readable_comparison_field() -> None:
+    # K-2: the subset check lives on the rule set, never on ``Comparison`` --
+    # the alert models read stored rules through it.
+    assert "beta.value" in KNOWN_FIELDS
+    assert Comparison(field="beta.value", op="gt", value=1.0).field == "beta.value"
+
+
+@pytest.mark.parametrize("field", ["position.weight", "position.unrealized_pnl_pct"])
+def test_a_rule_file_may_name_the_position_fields(tmp_path: Path, field: str) -> None:
+    # The card carries a position, so these stay creatable on the advice side.
+    condition = {"field": field, "op": "gt", "value": 0.1}
+    ruleset = load_rules(
+        write_rule_file(tmp_path, minimal_ruleset(minimal_rule(condition=condition)))
+    )
+    assert condition_fields(ruleset.rules[0].condition) == [field]
 
 
 def test_condition_needs_exactly_one_right_hand_side(tmp_path: Path) -> None:

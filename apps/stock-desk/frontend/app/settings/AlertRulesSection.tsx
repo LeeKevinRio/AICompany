@@ -11,6 +11,7 @@ import {
   limitSelectorLabel,
   signalFieldLabel,
 } from "../lib/format";
+import { ALERT_RULE_UNEVALUABLE_NOTICE, ruleUsesUnevaluableField } from "../lib/alertFields";
 import { EMPTY_ALERT_PARAM_FORM, buildAlertParams } from "../lib/alertRuleForm";
 import { useAlerts, useCreateAlert, useDeleteAlert, useEvaluateAlertsNow } from "../lib/queries";
 import type { AlertRule, AlertRuleInput, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
@@ -72,6 +73,96 @@ export function ruleDescription(rule: AlertRule): string {
     default:
       return "—";
   }
+}
+
+/**
+ * The rule-list table. A pure view (props in, markup out) so the W-3 notice
+ * and the status column can be rendered in tests without react-query.
+ */
+export function AlertRulesTable({
+  rules,
+  onEdit,
+  onDelete,
+  deleting,
+}: {
+  rules: AlertRule[];
+  onEdit: (rule: AlertRule) => void;
+  onDelete: (id: number) => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-md border border-neutral-800">
+      <table className="min-w-[620px] text-left text-sm">
+        <thead className="bg-neutral-900 text-neutral-400">
+          <tr>
+            <th scope="col" className="px-3 py-2 font-medium">
+              代號
+            </th>
+            <th scope="col" className="px-3 py-2 font-medium">
+              類型
+            </th>
+            <th scope="col" className="px-3 py-2 font-medium">
+              條件
+            </th>
+            <th scope="col" className="px-3 py-2 font-medium">
+              狀態
+            </th>
+            <th scope="col" className="px-3 py-2 font-medium">
+              建立時間
+            </th>
+            <th scope="col" className="px-3 py-2 font-medium">
+              操作
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rules.map((rule) => (
+            <tr key={rule.id} className="border-t border-neutral-800">
+              <td className="px-3 py-2 text-neutral-100">
+                <div>
+                  {rule.symbol}（{rule.market}）
+                </div>
+                {/* ADR-0021 W-3: text (not colour alone), decided only by UNEVALUABLE_ALERT_FIELDS.
+                    Kept in the first column so it stays inside the initial viewport at 375/390px. */}
+                {ruleUsesUnevaluableField(rule) && (
+                  <div className="mt-0.5 max-w-[9rem] border-l-2 border-amber-400 pl-1.5 text-xs leading-snug text-amber-400">
+                    {ALERT_RULE_UNEVALUABLE_NOTICE}
+                  </div>
+                )}
+              </td>
+              <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
+              <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
+              <td className="px-3 py-2 text-neutral-300">
+                {rule.enabled ? "啟用中" : "已停用"}
+              </td>
+              <td className="px-3 py-2 text-xs text-neutral-500">
+                {formatDateTime(rule.created_at)}
+              </td>
+              <td className="px-3 py-2">
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onEdit(rule)}
+                    className="text-xs text-sky-400 underline hover:text-sky-300"
+                  >
+                    編輯
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(rule.id)}
+                    disabled={deleting}
+                    className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
+                  >
+                    刪除
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function AlertRulesSection() {
@@ -221,68 +312,12 @@ export function AlertRulesSection() {
           <p className="text-sm text-neutral-500">目前尚無警示規則。</p>
         )}
         {alerts.isSuccess && alerts.data.items.length > 0 && (
-          <div className="overflow-x-auto rounded-md border border-neutral-800">
-            <table className="min-w-[620px] text-left text-sm">
-              <thead className="bg-neutral-900 text-neutral-400">
-                <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    代號
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    類型
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    條件
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    狀態
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    建立時間
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.data.items.map((rule) => (
-                  <tr key={rule.id} className="border-t border-neutral-800">
-                    <td className="px-3 py-2 text-neutral-100">
-                      {rule.symbol}（{rule.market}）
-                    </td>
-                    <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
-                    <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
-                    <td className="px-3 py-2 text-neutral-300">
-                      {rule.enabled ? "啟用中" : "已停用"}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">
-                      {formatDateTime(rule.created_at)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setEditingRule(rule)}
-                          className="text-xs text-sky-400 underline hover:text-sky-300"
-                        >
-                          編輯
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteMutation.mutate(rule.id)}
-                          disabled={deleteMutation.isPending}
-                          className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
-                        >
-                          刪除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AlertRulesTable
+            rules={alerts.data.items}
+            onEdit={setEditingRule}
+            onDelete={(id) => deleteMutation.mutate(id)}
+            deleting={deleteMutation.isPending}
+          />
         )}
       </div>
 

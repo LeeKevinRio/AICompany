@@ -36,6 +36,7 @@ from app.alerts.models import (
     PriceThresholdParams,
     RiskLimitParams,
     SignalConditionParams,
+    unevaluable_alert_fields,
 )
 from app.alerts.store import AlertStore
 from app.positions.models import Market
@@ -138,15 +139,26 @@ def _price_outcome(
     return crossed, message, observed
 
 
+def signal_context(snapshot: SymbolSnapshot) -> dict[str, float | None]:
+    """The rule inputs a ``signal_condition`` alert is judged on.
+
+    The snapshot's signal layer plus its latest close, and no portfolio
+    position: the fields this can produce as non-``None`` are exactly
+    :data:`app.advice.context.ALERT_RULE_FIELDS` (ADR-0021 K-1). ``beta.value``
+    needs a benchmark the snapshot does not load (K-7) and ``position.*`` needs
+    a position it does not carry; both stay ``None`` here, and a rule naming one
+    is skipped before this is consulted (see :func:`_evaluate_one`).
+    """
+    close = snapshot.close if snapshot.close is not None and snapshot.close > 0 else None
+    return build_context(snapshot.signals, PortfolioContext(symbol=snapshot.symbol, close=close))
+
+
 def _signal_outcome(
     rule: AlertRule, snapshot: SymbolSnapshot, params: SignalConditionParams
 ) -> tuple[bool, str, dict[str, float | str | None]] | str:
     """``(crossed, message, observed)``, or a skip reason string."""
     comparison = params.condition
-    # A ``signal_condition`` alert reads the signal fields only; the two
-    # position-derived fields of the vocabulary stay ``None`` and a rule naming
-    # one of them is skipped with that field named, as in the advice engine.
-    context = build_context(snapshot.signals, PortfolioContext(symbol=rule.symbol))
+    context = signal_context(snapshot)
     left = context.get(comparison.field)
     if left is None:
         return f"缺少輸入欄位：{describe_field(comparison.field)}"
@@ -292,6 +304,14 @@ def evaluate_alerts(
     )
 
 
+def count_unevaluable_rules(rules: Sequence[AlertRule]) -> int:
+    """How many of ``rules`` name a field alerts cannot evaluate (ADR-0021 K-8).
+
+    Read-only diagnostic: such rules are left exactly as stored.
+    """
+    return sum(1 for rule in rules if unevaluable_alert_fields(rule.params))
+
+
 def _evaluate_one(
     rule: AlertRule, snapshot: SymbolSnapshot
 ) -> tuple[bool, str, dict[str, float | str | None]] | str:
@@ -302,6 +322,20 @@ def _evaluate_one(
             return snapshot.reason or "沒有可用的最新收盤價。"
         return _price_outcome(rule, snapshot, params)
     if isinstance(params, SignalConditionParams):
+        unevaluable = unevaluable_alert_fields(params)
+        if unevaluable:
+            # ADR-0021 K-6: a stored rule naming a field alerts never produce is
+            # skipped on membership, not on the value being ``None`` -- and ahead
+            # of the "no signals" check, because its cause does not go away
+            # when the data comes back. Wording is ADR-0021 W-2, approved
+            # verbatim by risk-compliance-officer 2026-10-06
+            # (`work/reviews/2026-10-06-ADR-0021-警示欄位可評估性-字面-風控審查.md`);
+            # any change goes back to them.
+            path = unevaluable[0]
+            return (
+                f"此規則使用的 {describe_field(path)}，警示不提供作為條件。"
+                "每次檢查都會略過此規則，不會觸發。可改用其他欄位的條件，或刪除此規則。"
+            )
         if not snapshot.signals:
             return snapshot.reason or "沒有可用的訊號輸出。"
         return _signal_outcome(rule, snapshot, params)

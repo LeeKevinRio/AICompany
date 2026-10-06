@@ -5,7 +5,12 @@ file fails at load time instead of quietly producing a rule that never fires:
 
 * ``extra="forbid"`` everywhere -- a misspelled key is an error, not a no-op.
 * Every ``field``/``ref`` in a condition must be in
-  :data:`app.advice.context.KNOWN_FIELDS`.
+  :data:`app.advice.context.KNOWN_FIELDS` (checked per :class:`Comparison`) and,
+  for a rule file, in the narrower
+  :data:`app.advice.context.ADVICE_RULE_FIELDS` (checked by :class:`RuleSet`,
+  ADR-0021 K-3). The second check deliberately stays off :class:`Comparison`:
+  the alert models reuse it to read stored rules, and those must keep loading
+  under the wide vocabulary.
 * A comparison carries exactly one right-hand side: a literal ``value`` or a
   ``ref`` to another field.
 * Rule ids are unique and the file declares a semver ``version``.
@@ -36,7 +41,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.advice.context import KNOWN_FIELDS
+from app.advice.context import ADVICE_RULE_FIELDS, KNOWN_FIELDS
 
 #: The rule file shipped with the product.
 DEFAULT_RULES_PATH = Path(__file__).parent / "rules" / "default.yaml"
@@ -175,6 +180,23 @@ class RuleSet(BaseModel):
             if rule.id in seen:
                 raise ValueError(f"規則 id 重複：{rule.id}")
             seen.add(rule.id)
+        return self
+
+    @model_validator(mode="after")
+    def _fields_are_evaluable(self) -> RuleSet:
+        """Every field a rule reads must be one the advice card can produce.
+
+        ADR-0021 K-3: :class:`Comparison` only checks the readable superset, so
+        a rule naming ``beta.value`` would load and then be skipped on every
+        card. Rejecting it here makes that a load-time error instead.
+        """
+        for rule in self.rules:
+            for path in condition_fields(rule.condition):
+                if path not in ADVICE_RULE_FIELDS:
+                    raise ValueError(
+                        f"規則 {rule.id} 使用了建議卡無法評估的欄位 {path!r}，"
+                        "可用欄位為 app/advice/context.py 的 ADVICE_RULE_FIELDS"
+                    )
         return self
 
     def rule_ids(self) -> list[str]:

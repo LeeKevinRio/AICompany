@@ -23,6 +23,7 @@ import type {
   Market,
 } from "./types";
 import { HELD_ACTION_LABELS } from "./adviceWording";
+import { unevaluableAlertFieldLabel } from "./alertFields";
 
 const INSTRUMENT_TYPE_LABELS: Record<InstrumentType, string> = {
   stock: "股票",
@@ -446,10 +447,15 @@ export function limitSelectorLabel(value: LimitSelector): string {
 }
 
 /**
- * Mirrors `app.advice.context.FIELD_LABELS` (backend/app/advice/context.py,
- * verified source) — the closed vocabulary of fields the signal/advice layer
- * can name. Reused here so an alert rule can only target a field that layer
- * actually produces.
+ * The field menu for creating or editing an alert rule. Labels are copied
+ * verbatim from the backend `FIELD_LABELS` (backend/app/advice/context.py) and
+ * the values are a SUBSET of the backend `ALERT_RULE_FIELDS` — the fields an
+ * alert can actually evaluate (ADR-0021 K-9). Deliberately absent:
+ * `beta.value`, `position.weight` and `position.unrealized_pnl_pct` (see
+ * `UNEVALUABLE_ALERT_FIELDS` in `alertFields.ts`; old rules keep their labels
+ * through `signalFieldLabel`), and `drawdown.current` (whether it belongs in
+ * the menu is still a product-manager decision, frozen). A backend test parses
+ * this literal, so keep every entry on one line as `{ value, label }`.
  */
 export const SIGNAL_FIELD_OPTIONS: { value: string; label: string }[] = [
   { value: "close", label: "最新收盤價" },
@@ -471,22 +477,23 @@ export const SIGNAL_FIELD_OPTIONS: { value: string; label: string }[] = [
   { value: "volume_z.last", label: "成交量 z 分數最新值" },
   { value: "volatility.annualized", label: "年化波動度" },
   { value: "drawdown.max_drawdown", label: "區間最大回撤" },
-  { value: "beta.value", label: "相對指標的 beta" },
 ];
 
 /**
- * Looks up a signal field's display label from `SIGNAL_FIELD_OPTIONS`,
- * falling back to the raw field key for anything not in that closed
- * vocabulary (defensive only — every field a rule can store is validated
- * against it server-side). Single source of truth for this lookup: reused
- * by `EditAlertRuleModal`'s ref-condition read-only block and
+ * Looks up a signal field's display label from `SIGNAL_FIELD_OPTIONS`, then
+ * from the legacy label table for the fields alerts can no longer evaluate
+ * (so an old beta rule still reads "相對指標的 beta", never the raw key), and
+ * finally falls back to the raw field key (defensive only). Single source of
+ * truth for this lookup: reused by `EditAlertRuleModal`'s ref-condition read-only block and
  * `AlertRulesSection`'s rule-list description (順手 fix, 2026-08-09 —
  * the list used to read only `condition.value` for a `signal_condition`
  * row and show "close 大於 —" for a `ref` (field-vs-field) rule instead of
  * naming the compared-against field).
  */
 export function signalFieldLabel(value: string): string {
-  return SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
+  return (
+    SIGNAL_FIELD_OPTIONS.find((opt) => opt.value === value)?.label ?? unevaluableAlertFieldLabel(value) ?? value
+  );
 }
 
 /**

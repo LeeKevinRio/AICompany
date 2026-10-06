@@ -7,9 +7,12 @@ ADR-0020) -- the same window ``/api/signals`` and ``/api/advice`` load -- so for
 the same symbol, bars and day an alert sees the same window-sensitive numbers
 (``drawdown.current``, ``drawdown.max_drawdown``, ``volatility.annualized``) the
 advice card shows. Beta is not among them: like the advice card, the snapshot
-loads no benchmark, so ``beta.value`` stays unavailable here (``/api/signals``
-alone loads one). Keeping this out of ``app/alerts/engine.py`` leaves the engine
-free of data access and therefore testable without a network or a database.
+loads no benchmark (ADR-0021 K-7; ``/api/signals`` alone loads one), which is
+why ``beta.value`` is outside :data:`app.advice.context.ALERT_RULE_FIELDS` --
+the set of fields a snapshot can produce, and the only fields a new alert rule
+may name (ADR-0021 K-1). Keeping this out of ``app/alerts/engine.py`` leaves the
+engine free of data access and therefore testable without a network or a
+database.
 """
 
 from __future__ import annotations

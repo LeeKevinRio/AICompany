@@ -1,6 +1,7 @@
 "use client";
 
-import { COMPARISON_OP_OPTIONS, LIMIT_SELECTOR_OPTIONS, SIGNAL_FIELD_OPTIONS } from "../lib/format";
+import { ALERT_FIELD_BETA_NOTE } from "../lib/alertFields";
+import { COMPARISON_OP_OPTIONS, LIMIT_SELECTOR_OPTIONS, SIGNAL_FIELD_OPTIONS, signalFieldLabel } from "../lib/format";
 import type { AlertParamFormValues } from "../lib/alertRuleForm";
 
 /**
@@ -15,6 +16,7 @@ export function AlertParamFields({
   onChange,
   thresholdError,
   valueError,
+  storedField,
 }: {
   idPrefix: string;
   values: AlertParamFormValues;
@@ -26,7 +28,21 @@ export function AlertParamFields({
   onChange: (patch: Partial<AlertParamFormValues>) => void;
   thresholdError?: string;
   valueError?: string;
+  /**
+   * The field an edited rule was stored with. When it is no longer in the
+   * field menu (an old rule, ADR-0021 K-9) it is kept as an extra option so
+   * the controlled select shows the rule's real field instead of silently
+   * falling back to the first menu entry.
+   */
+  storedField?: string;
 }) {
+  // Fields the select must still be able to show although the menu no longer
+  // offers them: the stored one, and whatever the form currently holds.
+  const menuValues = new Set(SIGNAL_FIELD_OPTIONS.map((opt) => opt.value));
+  const extraFields = [...new Set([storedField, values.field])].filter(
+    (field): field is string => field !== undefined && field !== "" && !menuValues.has(field),
+  );
+
   if (values.type === "price_above" || values.type === "price_below") {
     return (
       <div className="max-w-xs">
@@ -57,14 +73,24 @@ export function AlertParamFields({
             id={`${idPrefix}-field`}
             value={values.field}
             onChange={(e) => onChange({ field: e.target.value })}
+            aria-describedby={`${idPrefix}-field-note`}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           >
+            {extraFields.map((field) => (
+              <option key={field} value={field}>
+                {signalFieldLabel(field)}
+              </option>
+            ))}
             {SIGNAL_FIELD_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
             ))}
           </select>
+          {/* ADR-0021 W-1: always visible, whichever field is selected — no tooltip, truncation or sr-only. */}
+          <p id={`${idPrefix}-field-note`} className="mt-1 text-xs text-neutral-400">
+            {ALERT_FIELD_BETA_NOTE}
+          </p>
         </div>
         <div>
           <label htmlFor={`${idPrefix}-op`} className="block text-sm text-neutral-400">

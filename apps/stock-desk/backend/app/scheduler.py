@@ -91,7 +91,7 @@ from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from app.advice.book import self_reported_net_worth
-from app.alerts.engine import SymbolSnapshot, evaluate_alerts
+from app.alerts.engine import SymbolSnapshot, count_unevaluable_rules, evaluate_alerts
 from app.alerts.notify import notify_all
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
@@ -733,9 +733,29 @@ def shutdown(engine: BlockingScheduler) -> None:
         logger.info("scheduler already stopped; ignoring repeated shutdown request")
 
 
+def log_unevaluable_alert_rules(store: AlertStore | None = None) -> int | None:
+    """Log how many enabled alert rules name a field alerts cannot evaluate.
+
+    ADR-0021 K-8: a read-only start-up diagnostic. It logs a count and nothing
+    else -- no rule ids, symbols or fields -- and changes no rule; such rules
+    stay as the user saved them and are skipped on each tick. Returns the
+    count, or ``None`` when the store could not be read (which must never stop
+    the scheduler from starting).
+    """
+    try:
+        rules = (store if store is not None else get_alert_store()).list_rules(enabled_only=True)
+    except Exception:
+        logger.exception("alert rule diagnostic: could not read the alert rules")
+        return None
+    count = count_unevaluable_rules(rules)
+    logger.info("alert rule diagnostic: %d enabled rule(s) reference unevaluable fields", count)
+    return count
+
+
 def run(scheduler: BlockingScheduler | None = None) -> None:
     """Start the scheduler and block until a shutdown signal arrives."""
     engine = build_scheduler(scheduler)
+    log_unevaluable_alert_rules()
 
     def handle_signal(_signum: int, _frame: FrameType | None) -> None:
         logger.info("scheduler shutdown requested")

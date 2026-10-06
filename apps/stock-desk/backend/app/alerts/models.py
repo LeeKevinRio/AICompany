@@ -7,9 +7,13 @@ rejected at the API boundary rather than at evaluation time:
     The latest close crosses a threshold, in the instrument's own currency.
 ``signal_condition``
     One comparison over the signal vocabulary. It reuses
-    :class:`app.advice.loader.Comparison` verbatim, so an alert can only name a
-    field the signal layer actually publishes -- the same closed vocabulary the
-    advice rules are held to, with no second list to drift.
+    :class:`app.advice.loader.Comparison` verbatim, so a *stored* rule is read
+    against the same closed vocabulary (:data:`app.advice.context.KNOWN_FIELDS`)
+    the advice rules are. A rule a user *submits* is held to the narrower
+    :data:`app.advice.context.ALERT_RULE_FIELDS` on top of that (ADR-0021 K-4):
+    only the fields an alert snapshot can actually produce. The two checks are
+    split on purpose -- a stored rule naming a field outside the subset must
+    still list, disable, edit and delete; it is skipped at evaluation instead.
 ``risk_limit_breach``
     A named risk cap (or any cap) reports ``violated`` for this symbol.
 
@@ -24,8 +28,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
+from app.advice.context import ALERT_RULE_FIELDS, describe_field
 from app.advice.limits import LIMIT_IDS
 from app.advice.loader import Comparison
 from app.positions.models import Market
@@ -79,8 +85,60 @@ AlertParams = Annotated[
 ]
 
 
+def unevaluable_alert_fields(params: BaseModel) -> list[str]:
+    """The fields ``params`` names that an alert cannot evaluate (ADR-0021).
+
+    Empty for every rule type but ``signal_condition``, and for a comparison
+    whose ``field`` and ``ref`` are both in
+    :data:`app.advice.context.ALERT_RULE_FIELDS`. Decided by set membership,
+    not by whether the value happens to be ``None`` on some tick: these fields
+    are unavailable by construction, not for want of data.
+    """
+    if not isinstance(params, SignalConditionParams):
+        return []
+    condition = params.condition
+    return [
+        path
+        for path in (condition.field, condition.ref)
+        if path is not None and path not in ALERT_RULE_FIELDS
+    ]
+
+
+#: ADR-0021 W-4, approved verbatim by risk-compliance-officer 2026-10-06
+#: (`work/reviews/2026-10-06-ADR-0021-警示欄位可評估性-字面-風控審查.md`); any
+#: change goes back to them. ``{field}`` is :func:`describe_field` of the first
+#: offending path and is followed directly by 作為, with no space.
+UNEVALUABLE_FIELD_MESSAGE = "警示不提供 {field}作為條件，請改用其他欄位。"
+
+
+def _require_evaluable(params: AlertParams) -> AlertParams:
+    """Reject newly submitted ``params`` naming a field alerts cannot evaluate.
+
+    ADR-0021 K-4. Applied only where a user sends ``params`` (``POST``, ``PUT``,
+    ``PATCH`` with ``params``), never when a stored rule is re-validated.
+
+    Raised as a :class:`PydanticCustomError` so the 422's ``msg`` is the
+    approved sentence exactly -- a plain ``ValueError`` would reach the caller
+    with pydantic's ``Value error, `` prefix in front of it.
+    """
+    unevaluable = unevaluable_alert_fields(params)
+    if unevaluable:
+        raise PydanticCustomError(
+            "alert_field_unevaluable",
+            UNEVALUABLE_FIELD_MESSAGE,
+            {"field": describe_field(unevaluable[0])},
+        )
+    return params
+
+
 class AlertRuleInput(BaseModel):
-    """The user-supplied fields of an alert rule (the ``POST`` body)."""
+    """The user fields of an alert rule, as stored and as re-validated.
+
+    This is the *readable* shape: :class:`AlertRule` and
+    :meth:`AlertRulePatch.apply_to` validate stored data through it, so it must
+    not apply the submit-only field check (ADR-0021 K-4). Request bodies that
+    carry new ``params`` use :class:`SubmittedAlertRuleInput` instead.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -103,6 +161,19 @@ class AlertRuleInput(BaseModel):
         if not isinstance(self.params, expected):
             raise ValueError(f"type 為 {self.type} 時，params 的欄位不符合該類型的規格")
         return self
+
+
+class SubmittedAlertRuleInput(AlertRuleInput):
+    """The ``POST`` / ``PUT`` body: :class:`AlertRuleInput` plus ADR-0021 K-4.
+
+    A user can no longer *create* a rule an alert can never evaluate; existing
+    ones stay readable through the base class.
+    """
+
+    @field_validator("params")
+    @classmethod
+    def _params_must_be_evaluable(cls, params: AlertParams) -> AlertParams:
+        return _require_evaluable(params)
 
 
 class AlertRule(AlertRuleInput):
@@ -145,6 +216,18 @@ class AlertRulePatch(BaseModel):
     #: question, so the specific instruction beats the general one rather than
     #: the merge depending on which branch happens to run first. Pinned by test.
     clear_note: bool = False
+
+    @field_validator("params")
+    @classmethod
+    def _new_params_must_be_evaluable(cls, params: AlertParams | None) -> AlertParams | None:
+        """Hold ``params`` the user sends to ADR-0021 K-4; omitted means "keep".
+
+        Only the submitted document is checked. The stored ``params`` a patch
+        leaves alone are re-validated by :meth:`apply_to` against the readable
+        vocabulary, so ``{"enabled": false}`` still works on an old rule naming
+        a field alerts cannot evaluate.
+        """
+        return None if params is None else _require_evaluable(params)
 
     def apply_to(self, current: AlertRule) -> AlertRuleInput:
         """Return the stored rule's user fields with the supplied ones replaced.

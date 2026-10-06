@@ -10,6 +10,15 @@ silently never fires.
 A field is ``None`` whenever the underlying indicator is missing or reported
 ``insufficient_data``. The engine turns a ``None`` input into a *skipped* rule
 with the missing field named; it never substitutes a default.
+
+The vocabulary is layered (ADR-0021). :data:`KNOWN_FIELDS` is the *readable*
+superset: what a stored rule may name and what :func:`build_context` produces,
+kept wide so data written under an older vocabulary still loads and still has a
+label. Each rule consumer then has its own *creatable* subset --
+:data:`ADVICE_RULE_FIELDS` and :data:`ALERT_RULE_FIELDS` -- holding only the
+fields that consumer's pipeline can actually produce as non-``None`` when the
+data is sufficient. New rules are validated against the subset; reading old
+ones is validated against the superset only.
 """
 
 from __future__ import annotations
@@ -49,6 +58,23 @@ FIELD_LABELS: dict[str, str] = {
 }
 
 KNOWN_FIELDS = frozenset(FIELD_LABELS)
+
+#: Fields the advice card can evaluate (ADR-0021 K-1): everything but
+#: ``beta.value``. ``/api/advice`` loads no benchmark (ADR-0010 D-1), so beta is
+#: ``None`` on every card; the rule-file loader rejects it so a shipped rule
+#: cannot be one that never runs.
+ADVICE_RULE_FIELDS: frozenset[str] = KNOWN_FIELDS - {"beta.value"}
+
+#: Fields a ``signal_condition`` alert can evaluate (ADR-0021 K-1). On top of
+#: beta, the alert snapshot carries no portfolio position, so the two
+#: ``position.*`` fields are ``None`` there too. Only rules a user *submits* are
+#: held to this set; a stored rule is read against :data:`KNOWN_FIELDS` and, if
+#: it names a field outside this set, is skipped at evaluation, never dropped.
+ALERT_RULE_FIELDS: frozenset[str] = KNOWN_FIELDS - {
+    "beta.value",
+    "position.weight",
+    "position.unrealized_pnl_pct",
+}
 
 #: The one raw price level the advice side may read (風控 required R19).
 #:

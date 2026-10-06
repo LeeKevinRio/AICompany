@@ -382,7 +382,12 @@ def test_thin_data_never_produces_an_add(tmp_path: Path) -> None:
             weight=0.5,
             condition={"field": "rsi14.last", "op": "lt", "value": 90},
         ),
-        minimal_rule(id="needs_beta", condition={"field": "beta.value", "op": "gt", "value": 1}),
+        # ADR-0021 K-11: a legal advice field that ``make_signals(rsi=...)``
+        # leaves missing (was ``beta.value``, which no rule file may name now).
+        minimal_rule(
+            id="needs_volatility",
+            condition={"field": "volatility.annualized", "op": "gt", "value": 0.1},
+        ),
         minimal_rule(id="needs_kd", condition={"field": "kd.k", "op": "gt", "value": 50}),
         minimal_rule(id="needs_ma", condition={"field": "ma60.last", "op": "gt", "value": 1}),
     )
@@ -405,7 +410,12 @@ def test_thin_data_keeps_a_defensive_action(tmp_path: Path) -> None:
             weight=0.5,
             condition={"field": "rsi14.last", "op": "gt", "value": 50},
         ),
-        minimal_rule(id="needs_beta", condition={"field": "beta.value", "op": "gt", "value": 1}),
+        # ADR-0021 K-11: a legal advice field that ``make_signals(rsi=...)``
+        # leaves missing (was ``beta.value``, which no rule file may name now).
+        minimal_rule(
+            id="needs_volatility",
+            condition={"field": "volatility.annualized", "op": "gt", "value": 0.1},
+        ),
         minimal_rule(id="needs_kd", condition={"field": "kd.k", "op": "gt", "value": 50}),
         minimal_rule(id="needs_ma", condition={"field": "ma60.last", "op": "gt", "value": 1}),
     )
@@ -427,21 +437,22 @@ def test_a_partially_decidable_any_group_is_still_skipped(tmp_path: Path) -> Non
     condition = {
         "any": [
             {"field": "rsi14.last", "op": "gt", "value": 10},
-            {"field": "beta.value", "op": "gt", "value": 10},
+            {"field": "volatility.annualized", "op": "gt", "value": 10},
         ]
     }
     payload = minimal_ruleset(minimal_rule(condition=condition))
     ruleset = load_rules(write_rule_file(tmp_path, payload))
-    card = _card(uptrend_signals(beta=None), _portfolio(), ruleset=ruleset)
+    card = _card(uptrend_signals(volatility=None), _portfolio(), ruleset=ruleset)
     assert card["matched_rules"] == []
-    assert card["evaluation"]["skipped_rules"][0]["missing_fields"] == ["beta.value"]
+    assert card["evaluation"]["skipped_rules"][0]["missing_fields"] == ["volatility.annualized"]
 
 
 def test_any_group_matches_when_all_inputs_are_present(tmp_path: Path) -> None:
     condition = {
         "any": [
             {"field": "rsi14.last", "op": "gt", "value": 90},
-            {"field": "beta.value", "op": "gt", "value": 1.0},
+            # uptrend_signals() reports 0.25, so only this branch holds.
+            {"field": "volatility.annualized", "op": "gt", "value": 0.2},
         ]
     }
     payload = minimal_ruleset(minimal_rule(condition=condition))
