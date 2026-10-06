@@ -207,19 +207,19 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
         ) : (
           <>
             <div className="mt-2 overflow-x-auto rounded-md border border-neutral-800">
-              <table className="min-w-[480px] text-left text-sm">
+              <table className="w-full text-left text-sm sm:w-auto sm:min-w-[480px]">
                 <thead className="bg-neutral-900 text-neutral-400">
                   <tr>
-                    <th scope="col" className="px-3 py-2 font-medium">
+                    <th scope="col" className="py-2 pl-1.5 pr-1 font-medium sm:px-3">
                       情境
                     </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
+                    <th scope="col" className="whitespace-nowrap px-1 py-2 text-right font-medium sm:px-3">
                       波動侵蝕
                     </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
+                    <th scope="col" className="whitespace-nowrap px-1 py-2 text-right font-medium sm:px-3">
                       費用侵蝕
                     </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
+                    <th scope="col" className="whitespace-nowrap px-1 py-2 text-right font-medium sm:px-3">
                       合計侵蝕
                     </th>
                   </tr>
@@ -227,16 +227,17 @@ export function LeverageChapterView({ chapter }: { chapter: LeverageChapter }) {
                 <tbody>
                   {chapter.erosion.scenarios.map((scenario) => (
                     <tr key={scenario.label} className="border-t border-neutral-800">
-                      <td className="px-3 py-2 text-neutral-300">
-                        {scenario.label}（{scenario.horizon_trading_days} 交易日）
+                      <td className="break-words py-2 pl-1.5 pr-1 text-neutral-300 sm:px-3">
+                        <span className="block sm:inline">{scenario.label}</span>
+                        <span className="block whitespace-nowrap text-xs tracking-tight sm:inline sm:tracking-normal sm:text-sm">（{scenario.horizon_trading_days} 交易日）</span>
                       </td>
-                      <td className="px-3 py-2 text-neutral-300">
+                      <td className="whitespace-nowrap px-1 py-2 text-right tabular-nums text-neutral-300 sm:px-3">
                         {formatPercent(scenario.volatility_drag_pct)}
                       </td>
-                      <td className="px-3 py-2 text-neutral-300">
+                      <td className="whitespace-nowrap px-1 py-2 text-right tabular-nums text-neutral-300 sm:px-3">
                         {formatPercent(scenario.expense_pct)}
                       </td>
-                      <td className="px-3 py-2 font-medium text-neutral-100">
+                      <td className="whitespace-nowrap px-1 py-2 text-right font-medium tabular-nums text-neutral-100 sm:px-3">
                         {formatPercent(scenario.total_expected_erosion_pct)}
                       </td>
                     </tr>

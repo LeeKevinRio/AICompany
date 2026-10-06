@@ -102,12 +102,14 @@ export function RangeGauge({
         ))}
       </div>
       {/* 風控 S-a: the two end values are the formula's denominator inputs — text-sm like every other value row. */}
-      <figcaption className="mt-1 flex justify-between text-sm text-neutral-400">
-        <span>
+      <figcaption className="mt-1 flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm text-neutral-400">
+        <span className="whitespace-nowrap">
           {KEY_LEVELS_GAUGE_LOW_END_LABEL} <span className="font-mono text-neutral-200">{lowText}</span>
         </span>
-        <span className="whitespace-nowrap text-neutral-400">{rangeLabel}</span>
-        <span>
+        <div className="order-first basis-full text-center sm:order-none sm:basis-auto">
+          <span className="whitespace-nowrap text-neutral-400">{rangeLabel}</span>
+        </div>
+        <span className="whitespace-nowrap">
           {KEY_LEVELS_GAUGE_HIGH_END_LABEL} <span className="font-mono text-neutral-200">{highText}</span>
         </span>
       </figcaption>
