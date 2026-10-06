@@ -250,13 +250,47 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
     }
   });
 
+  it("D-12 (b)：窄幅狀態副標在第一欄 W-3 之後（sm:hidden），狀態欄 th／td 僅 sm 以上顯示，每列狀態字面恰好 2 次（互斥顯示）", () => {
+    for (const [enabled, status] of [
+      [true, "啟用中"],
+      [false, "已停用"],
+    ] as const) {
+      const html = renderTable([valueRule("beta.value", { enabled })]);
+      const cells = [...html.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)].map((m) => ({ attrs: m[1] ?? "", inner: m[2] ?? "" }));
+      // First column: W-3 stays, then the status subtitle comes after it.
+      const first = cells[0]?.inner ?? "";
+      const subtitle = /<div class="([^"]*)">([^<]*)<\/div>$/.exec(first);
+      expect(subtitle).not.toBeNull();
+      expect(subtitle?.[2]).toBe(status);
+      const subtitleClasses = (subtitle?.[1] ?? "").split(" ");
+      expect(subtitleClasses).toContain("sm:hidden");
+      expect(subtitleClasses).toContain("text-neutral-300");
+      expect(first.indexOf(status)).toBeGreaterThan(first.indexOf(W3));
+      expect(occurrences(first, W3)).toBe(1);
+      // Status column: cells[3] is still the status, hidden below sm.
+      expect(cells[3]?.inner).toBe(status);
+      const tdClasses = (/class="([^"]*)"/.exec(cells[3]?.attrs ?? "")?.[1] ?? "").split(" ");
+      expect(tdClasses).toContain("hidden");
+      expect(tdClasses).toContain("sm:table-cell");
+      // Header: still "狀態" at index 3, hidden below sm.
+      const ths = [...html.matchAll(/<th([^>]*)>([\s\S]*?)<\/th>/g)].map((m) => ({ attrs: m[1] ?? "", inner: m[2] ?? "" }));
+      expect(ths[3]?.inner).toBe("狀態");
+      const thClasses = (/class="([^"]*)"/.exec(ths[3]?.attrs ?? "")?.[1] ?? "").split(" ");
+      expect(thClasses).toContain("hidden");
+      expect(thClasses).toContain("sm:table-cell");
+      // Same text rendered twice (mutually exclusive by breakpoint); keep both in sync.
+      expect(occurrences(html, `>${status}<`)).toBe(2);
+      expect(html).toContain("min-w-[620px]");
+    }
+  });
+
   it("以文字加左側豎線呈現（art-lead 裁示）：text-xs、text-amber-400、max-w-[9rem]、可換行，無 truncate／tooltip", () => {
     const html = renderTable([valueRule("position.weight")]);
     const match = /<div class="([^"]*)">不會觸發（欄位不提供）<\/div>/.exec(html);
     expect(match).not.toBeNull();
     const classes = (match?.[1] ?? "").split(" ");
     expect(classes).toEqual(
-      expect.arrayContaining(["text-xs", "text-amber-400", "border-l-2", "border-amber-400", "max-w-[9rem]", "leading-snug"]),
+      expect.arrayContaining(["text-xs", "text-amber-400", "border-l-2", "border-amber-400", "max-w-[9rem]", "leading-snug", "text-balance"]),
     );
     for (const banned of ["truncate", "sr-only", "whitespace-nowrap", "text-neutral-500", "text-neutral-600"]) {
       expect(classes).not.toContain(banned);

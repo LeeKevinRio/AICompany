@@ -104,7 +104,7 @@ export function AlertRulesTable({
             <th scope="col" className="px-3 py-2 font-medium">
               條件
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">
               狀態
             </th>
             <th scope="col" className="px-3 py-2 font-medium">
@@ -116,49 +116,53 @@ export function AlertRulesTable({
           </tr>
         </thead>
         <tbody>
-          {rules.map((rule) => (
-            <tr key={rule.id} className="border-t border-neutral-800">
-              <td className="px-3 py-2 text-neutral-100">
-                <div>
-                  {rule.symbol}（{rule.market}）
-                </div>
-                {/* ADR-0021 W-3: text (not colour alone), decided only by UNEVALUABLE_ALERT_FIELDS.
-                    Kept in the first column so it stays inside the initial viewport at 375/390px. */}
-                {ruleUsesUnevaluableField(rule) && (
-                  <div className="mt-0.5 max-w-[9rem] border-l-2 border-amber-400 pl-1.5 text-xs leading-snug text-amber-400">
-                    {ALERT_RULE_UNEVALUABLE_NOTICE}
+          {rules.map((rule) => {
+            // Single source for both the status cell (>= sm) and the first-column subtitle (< sm).
+            const statusText = rule.enabled ? "啟用中" : "已停用";
+            return (
+              <tr key={rule.id} className="border-t border-neutral-800">
+                <td className="px-3 py-2 text-neutral-100">
+                  <div>
+                    {rule.symbol}（{rule.market}）
                   </div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
-              <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
-              <td className="px-3 py-2 text-neutral-300">
-                {rule.enabled ? "啟用中" : "已停用"}
-              </td>
-              <td className="px-3 py-2 text-xs text-neutral-500">
-                {formatDateTime(rule.created_at)}
-              </td>
-              <td className="px-3 py-2">
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(rule)}
-                    className="text-xs text-sky-400 underline hover:text-sky-300"
-                  >
-                    編輯
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(rule.id)}
-                    disabled={deleting}
-                    className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
-                  >
-                    刪除
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+                  {/* ADR-0021 W-3: text (not colour alone), decided only by UNEVALUABLE_ALERT_FIELDS.
+                      Kept in the first column so it stays inside the initial viewport at 375/390px. */}
+                  {ruleUsesUnevaluableField(rule) && (
+                    <div className="mt-0.5 max-w-[9rem] border-l-2 border-amber-400 pl-1.5 text-xs leading-snug text-amber-400 text-balance">
+                      {ALERT_RULE_UNEVALUABLE_NOTICE}
+                    </div>
+                  )}
+                  {/* D-12 (b): below sm the status column is hidden, so the status stays visible here. */}
+                  <div className="mt-1 text-xs text-neutral-300 sm:hidden">{statusText}</div>
+                </td>
+                <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
+                <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
+                <td className="hidden px-3 py-2 text-neutral-300 sm:table-cell">{statusText}</td>
+                <td className="px-3 py-2 text-xs text-neutral-500">
+                  {formatDateTime(rule.created_at)}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => onEdit(rule)}
+                      className="text-xs text-sky-400 underline hover:text-sky-300"
+                    >
+                      編輯
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(rule.id)}
+                      disabled={deleting}
+                      className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
+                    >
+                      刪除
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
