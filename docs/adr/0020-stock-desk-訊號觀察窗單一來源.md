@@ -115,6 +115,7 @@
 - **K-6**：app/alerts/snapshot.py 的 docstring 必須和實作一致。app/demo/seed.py L186–L192 的「400-day」校準說明刪除或改寫；_DRAWDOWN_ALERT_THRESHOLD 要在 540 窗下重新確認。
 - **K-7**：不改任何警示、建議的字面與規則門檻（字面若有變動就改走風控閘門）。
 - **K-8**：不在本單新增 benchmark 載入，也不改 beta.value 欄位的可選性。
+  - 交叉引用：本題由 ADR-0021（proposed）承接，裁示採 b′ 分層詞彙、本期不載入 benchmark。
 
 ---
 
@@ -148,6 +149,7 @@
 
 - 現況：beta.value 列在 advice 的欄位表裡，alerts 也能選到，但永遠拿不到值。
 - 待評估選項：(a) advice、alerts 也載入 benchmark；(b) 把 beta.value 從警示、規則可選欄位拿掉並揭露；(c) 維持現況但 UI 標「此欄位無法評估」。初步傾向 (b) 或 (c)。要先查現行規則集和使用者已建規則有沒有引用 beta.value。這張單不擋本修正。
+- 交叉引用：本題由 ADR-0021（proposed）承接，裁示採 b′ 分層詞彙、本期不載入 benchmark。
 
 ---
 
