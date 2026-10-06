@@ -97,6 +97,32 @@ def test_no_price_is_a_skip_with_a_reason_not_a_silent_pass(store: AlertStore) -
     assert result.outcomes[0].reason == "沒有可用的日線資料。"
 
 
+@pytest.mark.parametrize("above", [True, False], ids=["above", "below"])
+@pytest.mark.parametrize(
+    "close",
+    [
+        pytest.param(0.0, id="zero"),
+        pytest.param(-5.0, id="negative"),
+        pytest.param(float("nan"), id="nan"),
+    ],
+)
+def test_an_unusable_price_is_a_skip_not_a_comparison(
+    store: AlertStore, close: float, above: bool
+) -> None:
+    # Before the shared guard, a zero close "crossed below" any positive
+    # threshold and a NaN one was quietly never above or below it.
+    add_rule(store, price_rule(above=above, threshold=100.0))
+    result = evaluate_alerts(
+        store,
+        # An unrelated note on the snapshot must not stand in for the cause.
+        _loader(snapshot(close=close, reason="資料來自 backup 層（fake）。")),
+        now=_NOW,
+    )
+    assert result.events == []
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == "沒有可用的最新收盤價。"
+
+
 # --- Signal condition rules --------------------------------------------------
 
 

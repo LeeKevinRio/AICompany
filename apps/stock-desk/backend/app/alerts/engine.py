@@ -116,12 +116,24 @@ def _fmt(value: float) -> str:
     return f"{value:,.4f}".rstrip("0").rstrip(".") if value % 1 else f"{value:,.0f}"
 
 
+def usable_close(snapshot: SymbolSnapshot) -> float | None:
+    """The snapshot's close if a price rule or ``close`` field may use it, else ``None``.
+
+    The one guard both alert paths share: a missing, zero, negative or NaN
+    close is "no price". ``PriceBar.close`` rejects NaN but not ``<= 0``, and a
+    snapshot can be built by any loader, so the guard sits here rather than
+    upstream. ``NaN > 0`` is false, so the single comparison covers NaN too.
+    """
+    close = snapshot.close
+    return close if close is not None and close > 0 else None
+
+
 def _price_outcome(
     rule: AlertRule, snapshot: SymbolSnapshot, params: PriceThresholdParams
 ) -> tuple[bool, str, dict[str, float | str | None]]:
     """``(crossed, message, observed)`` for a price threshold rule."""
-    close = snapshot.close
-    assert close is not None  # the caller skips a snapshot without a price
+    close = usable_close(snapshot)
+    assert close is not None  # the caller skips a snapshot without a usable price
     above = rule.type == "price_above"
     crossed = close > params.threshold if above else close < params.threshold
     direction = "高於" if above else "低於"
@@ -149,8 +161,10 @@ def signal_context(snapshot: SymbolSnapshot) -> dict[str, float | None]:
     a position it does not carry; both stay ``None`` here, and a rule naming one
     is skipped before this is consulted (see :func:`_evaluate_one`).
     """
-    close = snapshot.close if snapshot.close is not None and snapshot.close > 0 else None
-    return build_context(snapshot.signals, PortfolioContext(symbol=snapshot.symbol, close=close))
+    return build_context(
+        snapshot.signals,
+        PortfolioContext(symbol=snapshot.symbol, close=usable_close(snapshot)),
+    )
 
 
 def _signal_outcome(
@@ -320,6 +334,10 @@ def _evaluate_one(
     if isinstance(params, PriceThresholdParams):
         if snapshot.close is None:
             return snapshot.reason or "沒有可用的最新收盤價。"
+        if usable_close(snapshot) is None:
+            # A close that is present but zero, negative or NaN: ``reason`` may
+            # hold an unrelated note (data layer, FX), so name the price itself.
+            return "沒有可用的最新收盤價。"
         return _price_outcome(rule, snapshot, params)
     if isinstance(params, SignalConditionParams):
         unevaluable = unevaluable_alert_fields(params)

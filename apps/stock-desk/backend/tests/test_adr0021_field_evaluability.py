@@ -61,7 +61,12 @@ from app.advice.context import (
 )
 from app.advice.limits import PortfolioContext, RiskBudget
 from app.advice.loader import BANNED_PHRASES, Comparison
-from app.alerts.engine import count_unevaluable_rules, evaluate_alerts, signal_context
+from app.alerts.engine import (
+    count_unevaluable_rules,
+    evaluate_alerts,
+    signal_context,
+    usable_close,
+)
 from app.alerts.models import AlertRuleInput
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
@@ -71,7 +76,7 @@ from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
 from tests.advice_helpers import uptrend_signals
-from tests.alerts_helpers import RecordingLoader, add_rule, signal_rule, snapshot
+from tests.alerts_helpers import RecordingLoader, add_rule, price_rule, signal_rule, snapshot
 from tests.api_helpers import FakePriceService, UnavailableFxProvider, position_payload
 from tests.conftest import ApiHarness
 from tests.test_rules_invalidation_wording import (
@@ -282,7 +287,8 @@ def test_t1_the_advice_card_produces_exactly_the_advice_fields(
 
 #: The "missing input" skip reason for ``close``, transcribed by hand from
 #: ``describe_field`` (``FIELD_LABELS["close"]``) as it stands at ADR-0021, so a
-#: rewrite of the template or the label shows up here.
+#: rewrite of the template or the label shows up here. Not a risk-approved
+#: verbatim string; changes do not require risk re-review.
 CLOSE_MISSING_REASON = "缺少輸入欄位：close（最新收盤價）"
 
 #: Closes ``signal_context`` must treat as "no price": ``PortfolioContext.close``
@@ -320,6 +326,33 @@ def test_close_signal_context_drops_an_unusable_close(close: float | None) -> No
     assert set(context) == KNOWN_FIELDS
 
 
+@pytest.mark.parametrize("close", UNUSABLE_CLOSES)
+def test_close_usable_close_is_the_one_guard_both_paths_share(close: float | None) -> None:
+    snap = snapshot(close=close, signals=uptrend_signals())
+    assert usable_close(snap) is None
+    assert signal_context(snap)["close"] is None
+
+
+def test_close_usable_close_passes_a_positive_close_through() -> None:
+    assert usable_close(snapshot(close=120.0)) == 120.0
+
+
+@pytest.mark.parametrize("close", UNUSABLE_CLOSES)
+def test_close_unusable_close_skips_price_and_signal_rules_alike(
+    tmp_path: Path, close: float | None
+) -> None:
+    # A price rule must not stay "quiet" (or fire) on a close the signal path
+    # refuses: both rule types watching the same snapshot report a skip.
+    store = AlertStore(db_path=tmp_path / "alerts.db")
+    price = add_rule(store, price_rule(above=False, threshold=150.0))
+    signal = add_rule(store, _close_rule(CLOSE_AS_FIELD))
+    snap = snapshot(close=close, signals=uptrend_signals())
+    result = evaluate_alerts(store, RecordingLoader(snap), cooldown_minutes=0)
+    statuses = {outcome.rule_id: outcome.status for outcome in result.outcomes}
+    assert statuses == {price.id: "skipped", signal.id: "skipped"}
+    assert result.events == []
+
+
 @pytest.mark.parametrize("condition", [CLOSE_AS_FIELD, CLOSE_AS_REF], ids=["field", "ref"])
 @pytest.mark.parametrize("close", UNUSABLE_CLOSES)
 def test_close_rule_is_skipped_on_an_unusable_close(
@@ -347,7 +380,7 @@ def test_close_rule_is_skipped_on_an_unusable_close(
 def test_close_rule_fires_only_above_its_threshold(
     tmp_path: Path, close: float, expected: str
 ) -> None:
-    # The end-to-end half of the fix in 3f277cd: before it, a close rule was
+    # Before close was carried into the signal context, a close rule was
     # skipped on every tick, so "quiet" here must be a real comparison.
     store = AlertStore(db_path=tmp_path / "alerts.db")
     add_rule(store, _close_rule(CLOSE_AS_FIELD))
@@ -370,6 +403,7 @@ def test_close_rule_fires_only_above_its_threshold(
     ("close", "expected"),
     [
         pytest.param(120.0, "fired", id="close-above-ma20"),
+        pytest.param(105.0, "quiet", id="close-equals-ma20"),
         pytest.param(100.0, "quiet", id="close-below-ma20"),
     ],
 )
