@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from contextlib import closing
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.advice.limits import PortfolioContext, RiskBudget, evaluate_limits
@@ -62,6 +67,26 @@ def limit_rule(*, limit_id: str = "any", symbol: str = "2330", **overrides: Any)
 def add_rule(store: AlertStore, payload: dict[str, Any]) -> Any:
     """Validate ``payload`` and store it, returning the stored rule."""
     return store.create_rule(AlertRuleInput.model_validate(payload))
+
+
+def insert_legacy_signal_rule(db_path: Path, *, field: str, symbol: str = "2330") -> int:
+    """Store a ``signal_condition`` rule on ``field`` past every model.
+
+    The shape an older build could have left in the database, for a field new
+    rules may no longer name (ADR-0021 K-6). Returns the new rule id.
+    """
+    moment = datetime(2026, 9, 1, tzinfo=UTC).isoformat()
+    params = {"condition": {"field": field, "op": "gt", "value": 0.5, "ref": None}}
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO alert_rules
+                (type, symbol, market, params, enabled, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("signal_condition", symbol, "TW", json.dumps(params), 1, None, moment, moment),
+        )
+        return int(cursor.lastrowid or 0)
 
 
 def snapshot(

@@ -293,12 +293,14 @@ CLOSE_MISSING_REASON = "缺少輸入欄位：close（最新收盤價）"
 
 #: Closes ``signal_context`` must treat as "no price": ``PortfolioContext.close``
 #: is ``gt=0.0``, so passing any of them through would raise a ValidationError
-#: and take the whole tick down instead of skipping one rule.
+#: and take the whole tick down instead of skipping one rule. Infinity would
+#: not raise, but it is no price either (``engine.usable_price``).
 UNUSABLE_CLOSES = [
     pytest.param(None, id="none"),
     pytest.param(0.0, id="zero"),
     pytest.param(-5.0, id="negative"),
     pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="inf"),
 ]
 
 #: A field-vs-value rule on the close, and a field-vs-ref rule with the close

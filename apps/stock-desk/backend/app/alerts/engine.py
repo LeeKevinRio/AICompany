@@ -22,6 +22,9 @@ every tick.
 
 from __future__ import annotations
 
+import logging
+import math
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -41,6 +44,8 @@ from app.alerts.models import (
 from app.alerts.store import AlertStore
 from app.positions.models import Market
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class SymbolSnapshot:
@@ -50,6 +55,16 @@ class SymbolSnapshot:
     ``None`` without usable bars, ``signals`` is empty when the signal layer was
     not run, ``limits`` is empty when no risk context could be built. Each rule
     type turns its own missing input into a skip.
+
+    Two ways a snapshot ends up empty besides missing bars:
+
+    * The latest bar's close is unusable (see :func:`usable_price`). The signal
+      layer is then not run (``signals`` is empty) and the risk caps are built
+      without a price or an ATR, but ``close`` keeps the bar's raw value, so a
+      price rule reports the price itself as the missing input.
+    * The loader raised. :func:`evaluate_alerts` then stands in a bare
+      ``SymbolSnapshot(symbol, market)`` for that symbol for the rest of the
+      tick, so its rules are skipped with their type's usual reason.
     """
 
     symbol: str
@@ -116,16 +131,25 @@ def _fmt(value: float) -> str:
     return f"{value:,.4f}".rstrip("0").rstrip(".") if value % 1 else f"{value:,.0f}"
 
 
+def usable_price(close: float | None) -> float | None:
+    """``close`` if it is a usable latest close, else ``None``.
+
+    The single definition of "usable": a missing, zero, negative or non-finite
+    close is "no price". ``PriceBar.close`` rejects NaN but not ``<= 0``, and a
+    snapshot can be built by any loader, so the guard sits in the alert layer
+    rather than upstream. Shared by :func:`usable_close` (the rule paths) and
+    :func:`app.alerts.snapshot.build_snapshot` (whether to run the signal layer
+    and price the risk caps at all), so the two can never disagree.
+    """
+    return close if close is not None and math.isfinite(close) and close > 0 else None
+
+
 def usable_close(snapshot: SymbolSnapshot) -> float | None:
     """The snapshot's close if a price rule or ``close`` field may use it, else ``None``.
 
-    The one guard both alert paths share: a missing, zero, negative or NaN
-    close is "no price". ``PriceBar.close`` rejects NaN but not ``<= 0``, and a
-    snapshot can be built by any loader, so the guard sits here rather than
-    upstream. ``NaN > 0`` is false, so the single comparison covers NaN too.
+    The one guard both alert paths share; see :func:`usable_price`.
     """
-    close = snapshot.close
-    return close if close is not None and close > 0 else None
+    return usable_price(snapshot.close)
 
 
 def _price_outcome(
@@ -259,7 +283,14 @@ def evaluate_alerts(
     cooldown_minutes: int = 60,
     now: datetime | None = None,
 ) -> EvaluationResult:
-    """Evaluate every enabled rule once and persist the events that fired."""
+    """Evaluate every enabled rule once and persist the events that fired.
+
+    A loader that raises for one (symbol, market) does not end the tick: that
+    symbol gets a bare snapshot for the rest of the tick (no retry), so each of
+    its rules is skipped with its type's existing reason, and every other
+    symbol is evaluated as usual. Only :class:`Exception` is caught; an
+    interrupt or a system exit still propagates.
+    """
     moment = now if now is not None else datetime.now(UTC)
     rules = store.list_rules(enabled_only=True)
     outcomes: list[RuleOutcome] = []
@@ -268,11 +299,14 @@ def evaluate_alerts(
     # One snapshot per (symbol, market) is reused by every rule watching it, so
     # ten rules on one symbol cost one data fetch, not ten.
     snapshots: dict[tuple[str, Market], SymbolSnapshot] = {}
+    rules_per_key = Counter((rule.symbol, rule.market) for rule in rules)
 
     for rule in rules:
         key = (rule.symbol, rule.market)
         if key not in snapshots:
-            snapshots[key] = loader(rule.symbol, rule.market)
+            snapshots[key] = _load_isolated(
+                loader, rule.symbol, rule.market, rule_count=rules_per_key[key]
+            )
         snapshot = snapshots[key]
 
         evaluated = _evaluate_one(rule, snapshot)
@@ -316,6 +350,28 @@ def evaluate_alerts(
         events=events,
         outcomes=outcomes,
     )
+
+
+def _load_isolated(
+    loader: SnapshotLoader, symbol: str, market: Market, *, rule_count: int
+) -> SymbolSnapshot:
+    """``loader(symbol, market)``, or a bare snapshot if it raised.
+
+    The warning carries a count and the exception class only -- no rule id
+    and no symbol, the same as the start-up diagnostic
+    (``app.scheduler.log_unevaluable_alert_rules``); the traceback rides on
+    ``exc_info`` for whoever reads the log.
+    """
+    try:
+        return loader(symbol, market)
+    except Exception as exc:
+        logger.warning(
+            "alert evaluation: snapshot load failed (%s); %d rule(s) skipped this tick",
+            type(exc).__name__,
+            rule_count,
+            exc_info=True,
+        )
+        return SymbolSnapshot(symbol=symbol, market=market)
 
 
 def count_unevaluable_rules(rules: Sequence[AlertRule]) -> int:

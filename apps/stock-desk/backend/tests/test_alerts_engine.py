@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from app.alerts import engine as engine_module
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.store import AlertStore
+from app.positions.models import Market
 from app.services.fx import source_note
 from tests.advice_helpers import make_signals, uptrend_signals
 from tests.alerts_helpers import (
@@ -17,6 +20,7 @@ from tests.alerts_helpers import (
     add_rule,
     breaching_context,
     compliant_context,
+    insert_legacy_signal_rule,
     limit_rule,
     price_rule,
     signal_rule,
@@ -354,3 +358,109 @@ def test_alert_messages_carry_no_action_wording(store: AlertStore) -> None:
     banned = ("買進", "賣出", "加碼", "減碼", "建議", "保證", "必漲", "穩賺")
     for event in result.events:
         assert not any(word in event.message for word in banned)
+
+
+# --- A loader that raises for one symbol (方案 B) ------------------------------
+
+
+_FAILING = "2330"
+_HEALTHY = "2317"
+
+
+class _FailingForOneSymbol:
+    """Raises ``error`` for one symbol, serves a healthy snapshot for any other."""
+
+    def __init__(self, error: BaseException) -> None:
+        self._error = error
+        self.calls: list[tuple[str, Market]] = []
+
+    def __call__(self, symbol: str, market: Market) -> SymbolSnapshot:
+        self.calls.append((symbol, market))
+        if symbol == _FAILING:
+            raise self._error
+        return snapshot(
+            symbol=symbol,
+            close=120.0,
+            signals=uptrend_signals(),
+            context=breaching_context(symbol),
+        )
+
+
+def _healthy_rules(store: AlertStore) -> list[int]:
+    return [
+        add_rule(store, price_rule(threshold=100.0, symbol=_HEALTHY)).id,
+        add_rule(store, signal_rule(field="rsi14.last", op="gt", value=0.0, symbol=_HEALTHY)).id,
+        add_rule(store, limit_rule(limit_id="single_position_weight", symbol=_HEALTHY)).id,
+    ]
+
+
+def test_a_loader_failure_skips_only_that_symbol(
+    store: AlertStore, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The exception text carries the symbol on purpose: it may reach the
+    # traceback, never the log line itself.
+    loader = _FailingForOneSymbol(RuntimeError(f"boom on {_FAILING}"))
+    failing = {
+        "price": add_rule(store, price_rule(threshold=100.0, symbol=_FAILING)).id,
+        "signal": add_rule(store, signal_rule(symbol=_FAILING)).id,
+        "limit": add_rule(store, limit_rule(symbol=_FAILING)).id,
+        "beta": insert_legacy_signal_rule(store.db_path, field="beta.value", symbol=_FAILING),
+    }
+    healthy = _healthy_rules(store)
+
+    with caplog.at_level(logging.WARNING, logger=engine_module.logger.name):
+        result = evaluate_alerts(store, loader, now=_NOW)
+
+    outcomes = {outcome.rule_id: outcome for outcome in result.outcomes}
+    # Each rule type's existing fallback, verbatim -- no new wording.
+    assert outcomes[failing["price"]].reason == "沒有可用的最新收盤價。"
+    assert outcomes[failing["signal"]].reason == "沒有可用的訊號輸出。"
+    assert outcomes[failing["limit"]].reason == "沒有可用的風險上限檢查結果（缺少組合估值）。"
+    assert outcomes[failing["beta"]].reason == (
+        "此規則使用的 beta.value（相對指標的 beta），警示不提供作為條件。"
+        "每次檢查都會略過此規則，不會觸發。可改用其他欄位的條件，或刪除此規則。"
+    )
+    assert {outcomes[rule_id].status for rule_id in failing.values()} == {"skipped"}
+    # Not retried within the tick, however many rules watch the symbol.
+    assert loader.calls.count((_FAILING, "TW")) == 1
+    assert loader.calls.count((_HEALTHY, "TW")) == 1
+
+    # The healthy symbol reads exactly as it does on a tick without the failing one.
+    baseline_store = AlertStore(db_path=tmp_path / "baseline.db")
+    _healthy_rules(baseline_store)
+    baseline = evaluate_alerts(baseline_store, _FailingForOneSymbol(RuntimeError()), now=_NOW)
+    assert [(outcomes[rule_id].status, outcomes[rule_id].reason) for rule_id in healthy] == [
+        (outcome.status, outcome.reason) for outcome in baseline.outcomes
+    ]
+    assert [event.message for event in result.events] == [
+        event.message for event in baseline.events
+    ]
+    assert len(result.events) == 3
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    # A count and the exception class, nothing else: no symbol, no rule id.
+    assert record.getMessage() == (
+        "alert evaluation: snapshot load failed (RuntimeError); 4 rule(s) skipped this tick"
+    )
+    assert record.exc_info is not None and record.exc_info[0] is RuntimeError
+
+
+def test_a_loader_failure_is_logged_once_per_symbol_not_per_rule(
+    store: AlertStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    for threshold in (100.0, 110.0, 120.0):
+        add_rule(store, price_rule(threshold=threshold, symbol=_FAILING))
+    with caplog.at_level(logging.WARNING, logger=engine_module.logger.name):
+        result = evaluate_alerts(store, _FailingForOneSymbol(ValueError("bad bar")), now=_NOW)
+    assert _statuses(result) == ["skipped", "skipped", "skipped"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "alert evaluation: snapshot load failed (ValueError); 3 rule(s) skipped this tick"
+    ]
+
+
+def test_an_interrupt_in_the_loader_is_not_swallowed(store: AlertStore) -> None:
+    # Only ``Exception`` is isolated: stopping the process must still stop it.
+    add_rule(store, price_rule(symbol=_FAILING))
+    with pytest.raises(KeyboardInterrupt):
+        evaluate_alerts(store, _FailingForOneSymbol(KeyboardInterrupt()), now=_NOW)

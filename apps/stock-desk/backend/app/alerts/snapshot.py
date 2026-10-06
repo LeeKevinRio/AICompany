@@ -18,10 +18,11 @@ database.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any
 
 from app.advice.book import build_book_context
 from app.advice.limits import KellyInputs, RiskBudget, SelfReportedNetWorth, evaluate_limits
-from app.alerts.engine import SymbolSnapshot
+from app.alerts.engine import SymbolSnapshot, usable_price
 from app.data.interface import DataStatus
 from app.data.providers.fx import FxRateProvider
 from app.portfolio.summary import build_summary
@@ -56,6 +57,16 @@ def build_snapshot(
     A missing market adapter, an unavailable provider or an empty bar list all
     produce a thin snapshot with ``reason`` set, which the engine turns into a
     *skipped* rule rather than a silent non-firing one.
+
+    A latest bar whose close is unusable (zero, negative or non-finite -- the
+    one definition is :func:`app.alerts.engine.usable_price`) produces an
+    empty snapshot too: the signal layer is not run (``signals`` is empty), and
+    the risk caps are built with no price and no ATR, so the price-based caps
+    report ``not_evaluable`` instead of the whole tick failing on
+    ``PortfolioContext.close``. Signals are withheld rather than computed
+    because a bad latest bar would feed figures such as ``drawdown.current``
+    that a rule could fire on. ``close`` keeps the bar's raw value so the
+    engine's own guard names the price as the missing input on a price rule.
 
     ``fx_provider`` is what makes the price-based caps evaluable for a non-TWD
     holding. Without it (or without a usable rate) those caps stay
@@ -93,8 +104,12 @@ def build_snapshot(
 
     latest = max(loaded.bars, key=lambda bar: bar.date)
     close = float(latest.close)
-    signals = compute_signals(symbol, loaded.bars)
-    atr = atr_from_signals(signals)
+    priced = usable_price(close)
+    signals: dict[str, Any] = {}
+    atr: float | None = None
+    if priced is not None:
+        signals = compute_signals(symbol, loaded.bars)
+        atr = atr_from_signals(signals)
 
     summary = build_summary(store, valuator)
     fx = resolve_fx_quote(fx_provider, currency=latest.currency, on=latest.date)
@@ -102,7 +117,7 @@ def build_snapshot(
         summary,
         symbol=symbol,
         market=market,
-        close=close,
+        close=priced,
         currency=latest.currency,
         atr=atr,
         fx=fx,

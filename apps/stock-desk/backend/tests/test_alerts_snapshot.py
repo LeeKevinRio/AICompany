@@ -14,9 +14,11 @@ is not a disclosure.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,20 +26,28 @@ from app.advice.limits import RiskBudget, SelfReportedNetWorth
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
-from app.data.interface import DataStatus
+from app.data.interface import DataStatus, PriceBar
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import Market, PositionInput
 from app.positions.store import PositionStore
 from app.services.fx import source_note
 from tests.advice_helpers import reported_net_worth
-from tests.alerts_helpers import add_rule, limit_rule
+from tests.alerts_helpers import (
+    add_rule,
+    insert_legacy_signal_rule,
+    limit_rule,
+    price_rule,
+    signal_rule,
+)
 from tests.api_helpers import (
     FakePriceService,
     UnavailableFxProvider,
+    position_payload,
     recent_bars,
     trending_closes,
 )
+from tests.conftest import ApiHarness
 
 
 class StubFxProvider(FxRateProvider):
@@ -294,3 +304,225 @@ def test_a_fired_alert_on_a_twd_holding_stays_free_of_fx_wording(
     message = result.events[0].message
     assert "單筆最大可承受虧損" in message
     assert "匯率" not in message
+
+
+# --- An unusable latest close skips one symbol, not the whole tick -------------
+#
+# 2026-10-06 任務單「單一標的收盤價不合法不中斷整輪警示檢查」, 方案 A′: a latest
+# bar whose close is zero or negative used to reach ``PortfolioContext.close``
+# (``gt=0``) and raise, which took every rule of every symbol down with it.
+
+BAD = "2330"
+GOOD = "2317"
+UNUSABLE_LATEST_CLOSES = [pytest.param(0.0, id="zero"), pytest.param(-1.0, id="negative")]
+
+#: Existing reasons, verbatim; nothing here is new wording.
+NO_CLOSE_REASON = "沒有可用的最新收盤價。"
+NO_SIGNALS_REASON = "沒有可用的訊號輸出。"
+#: ADR-0021 W-2 for ``beta.value``, verbatim (see test_adr0021_field_evaluability).
+BETA_W2_REASON = (
+    "此規則使用的 beta.value（相對指標的 beta），警示不提供作為條件。"
+    "每次檢查都會略過此規則，不會觸發。可改用其他欄位的條件，或刪除此規則。"
+)
+
+
+def _bad_latest_bars(close: float) -> list[PriceBar]:
+    closes = trending_closes(60)
+    closes[-1] = close
+    return recent_bars(closes, symbol=BAD)
+
+
+def _two_symbol_service(bad_close: float) -> FakePriceService:
+    service = FakePriceService()
+    service.seed(BAD, _bad_latest_bars(bad_close))
+    service.seed(GOOD, recent_bars(trending_closes(60), symbol=GOOD))
+    return service
+
+
+def _hold_symbol(store: PositionStore, symbol: str) -> None:
+    store.create(
+        PositionInput(
+            symbol=symbol,
+            market="TW",
+            quantity=Decimal(1000),
+            avg_cost=Decimal(100),
+            currency="TWD",
+            opened_at=date(2024, 1, 2),
+            instrument_type="stock",
+            note=None,
+        )
+    )
+
+
+def _bad_symbol_rules() -> dict[str, dict[str, Any]]:
+    return {
+        # Would fire on a close of 0 or -1 if the price got through.
+        "price": price_rule(above=False, threshold=150.0, symbol=BAD),
+        # Would fire on the bad bar's drawdown (-100% or worse) if the signal
+        # layer were run on it -- the reason signals are withheld, not computed.
+        "signal": signal_rule(field="drawdown.current", op="lt", value=-0.5, symbol=BAD),
+        "per_trade_loss": limit_rule(limit_id="per_trade_loss", symbol=BAD),
+        "any_limit": limit_rule(limit_id="any", symbol=BAD),
+    }
+
+
+def _good_symbol_rules() -> list[dict[str, Any]]:
+    return [
+        price_rule(above=True, threshold=1.0, symbol=GOOD),
+        signal_rule(field="rsi14.last", op="gt", value=0.0, symbol=GOOD),
+        limit_rule(limit_id="any", symbol=GOOD),
+    ]
+
+
+def _loader_for(
+    service: FakePriceService, positions: PositionStore
+) -> Callable[[str, Market], SymbolSnapshot]:
+    valuator = PositionValuator(
+        market_services={"TW": service}, fx_provider=UnavailableFxProvider()
+    )
+
+    def load(symbol: str, market: Market) -> SymbolSnapshot:
+        return build_snapshot(
+            symbol,
+            market,
+            resolver={"TW": service},
+            store=positions,
+            valuator=valuator,
+            budget=RiskBudget(),
+            net_worth=reported_net_worth(10_000_000.0),
+        )
+
+    return load
+
+
+def _comparable(result: EvaluationResult) -> list[tuple[str, str | None, str | None]]:
+    return [
+        (outcome.status, outcome.reason, outcome.event.message if outcome.event else None)
+        for outcome in result.outcomes
+    ]
+
+
+@pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
+def test_an_unusable_latest_close_withholds_signals_and_the_price(
+    store: PositionStore, monkeypatch: pytest.MonkeyPatch, bad_close: float
+) -> None:
+    import app.alerts.snapshot as snapshot_module
+
+    def must_not_run(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise AssertionError("compute_signals ran on an unusable latest close")
+
+    monkeypatch.setattr(snapshot_module, "compute_signals", must_not_run)
+    _hold_symbol(store, GOOD)
+    service = _two_symbol_service(bad_close)
+    snap = _loader_for(service, store)(BAD, "TW")
+
+    assert snap.signals == {}
+    # Kept raw, so the engine's own guard names the price on a price rule.
+    assert snap.close == bad_close
+    assert snap.as_of == date.today().isoformat()
+    caps = {check.id: check.status for check in snap.limits}
+    # The price-based cap is not guessed; the book-level caps still answer.
+    assert caps["per_trade_loss"] == "not_evaluable"
+    assert caps["single_position_weight"] == "passed"
+
+
+@pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
+def test_an_unusable_latest_close_skips_that_symbol_and_spares_the_rest(
+    store: PositionStore, tmp_path: Path, bad_close: float
+) -> None:
+    _hold_symbol(store, GOOD)
+    service = _two_symbol_service(bad_close)
+    load = _loader_for(service, store)
+    now = datetime(2026, 10, 6, 6, 0, tzinfo=UTC)
+
+    alerts = AlertStore(db_path=tmp_path / "alerts.db")
+    bad_ids = {name: add_rule(alerts, payload).id for name, payload in _bad_symbol_rules().items()}
+    bad_ids["beta"] = insert_legacy_signal_rule(alerts.db_path, field="beta.value", symbol=BAD)
+    for payload in _good_symbol_rules():
+        add_rule(alerts, payload)
+
+    result = evaluate_alerts(alerts, load, now=now)
+
+    outcomes = {outcome.rule_id: outcome for outcome in result.outcomes}
+    assert outcomes[bad_ids["price"]].status == "skipped"
+    assert outcomes[bad_ids["price"]].reason == NO_CLOSE_REASON
+    assert outcomes[bad_ids["signal"]].status == "skipped"
+    assert outcomes[bad_ids["signal"]].reason == NO_SIGNALS_REASON
+    # ADR-0021 K-6: the permanent cause still wins over the empty signal layer.
+    assert outcomes[bad_ids["beta"]].status == "skipped"
+    assert outcomes[bad_ids["beta"]].reason == BETA_W2_REASON
+    per_trade = outcomes[bad_ids["per_trade_loss"]]
+    assert per_trade.status == "skipped"
+    assert (per_trade.reason or "").startswith("監看的上限（")
+    assert outcomes[bad_ids["any_limit"]].status == "quiet"
+    assert all(event.symbol != BAD for event in result.events)
+
+    # The healthy symbol reads exactly as it does on a tick without the bad one.
+    baseline_store = AlertStore(db_path=tmp_path / "baseline.db")
+    for payload in _good_symbol_rules():
+        add_rule(baseline_store, payload)
+    baseline = evaluate_alerts(baseline_store, load, now=now)
+    good_only = EvaluationResult(
+        as_of=result.as_of,
+        evaluated=len(baseline.outcomes),
+        events=[event for event in result.events if event.symbol == GOOD],
+        outcomes=[o for o in result.outcomes if o.rule_id not in set(bad_ids.values())],
+    )
+    assert _comparable(good_only) == _comparable(baseline)
+    assert [outcome.status for outcome in baseline.outcomes][:2] == ["fired", "fired"]
+
+
+@pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
+def test_the_manual_tick_answers_200_on_an_unusable_latest_close(
+    api_harness: ApiHarness, bad_close: float
+) -> None:
+    client = api_harness.client
+    api_harness.price_service.seed(BAD, _bad_latest_bars(bad_close))
+    api_harness.price_service.seed(GOOD, recent_bars(trending_closes(60), symbol=GOOD))
+    assert client.post("/api/positions", json=position_payload(symbol=GOOD)).status_code == 201
+    bad_ids = {
+        name: client.post("/api/alerts", json=payload).json()["id"]
+        for name, payload in _bad_symbol_rules().items()
+    }
+    bad_ids["beta"] = insert_legacy_signal_rule(
+        api_harness.alerts.db_path, field="beta.value", symbol=BAD
+    )
+    good_ids = [
+        client.post("/api/alerts", json=payload).json()["id"] for payload in _good_symbol_rules()
+    ]
+
+    response = client.post("/api/alerts/evaluate")
+
+    assert response.status_code == 200
+    outcomes = {outcome["rule_id"]: outcome for outcome in response.json()["outcomes"]}
+    assert outcomes[bad_ids["price"]]["status"] == "skipped"
+    assert outcomes[bad_ids["price"]]["reason"] == NO_CLOSE_REASON
+    assert outcomes[bad_ids["signal"]]["status"] == "skipped"
+    assert outcomes[bad_ids["beta"]]["reason"] == BETA_W2_REASON
+    assert outcomes[bad_ids["per_trade_loss"]]["status"] == "skipped"
+    assert outcomes[bad_ids["any_limit"]]["status"] == "quiet"
+    assert outcomes[good_ids[0]]["status"] == "fired"
+    events = client.get("/api/alerts/events").json()["items"]
+    assert events and all(event["symbol"] == GOOD for event in events)
+
+
+def test_a_held_symbol_with_a_negative_close_is_caught_by_the_engine(
+    store: PositionStore, tmp_path: Path
+) -> None:
+    """A′ withholds the price, but a *held* symbol is also valued at that close by
+    the portfolio layer (out of scope here, F-1): its negative market value still
+    fails ``PortfolioContext``. The engine's per-symbol isolation (方案 B) is
+    what keeps that one symbol from ending the tick."""
+    _hold_symbol(store, BAD)
+    _hold_symbol(store, GOOD)
+    service = _two_symbol_service(-1.0)
+    alerts = AlertStore(db_path=tmp_path / "alerts.db")
+    price = add_rule(alerts, price_rule(above=False, threshold=150.0, symbol=BAD))
+    good = add_rule(alerts, price_rule(above=True, threshold=1.0, symbol=GOOD))
+
+    result = evaluate_alerts(alerts, _loader_for(service, store), cooldown_minutes=0)
+
+    outcomes = {outcome.rule_id: outcome for outcome in result.outcomes}
+    assert outcomes[price.id].status == "skipped"
+    assert outcomes[price.id].reason == NO_CLOSE_REASON
+    assert outcomes[good.id].status == "fired"
