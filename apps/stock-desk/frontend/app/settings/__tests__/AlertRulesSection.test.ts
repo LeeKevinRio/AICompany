@@ -30,13 +30,13 @@ describe("ruleDescription — signal_condition", () => {
     const rule = makeRule({
       params: { condition: { field: "ma5.last", op: "gt", value: null, ref: "ma20.last" } },
     });
-    expect(ruleDescription(rule)).toBe("ma5.last 大於（>） 20 日均線最新值");
+    expect(ruleDescription(rule)).toBe("5 日均線最新值 大於（>） 20 日均線最新值");
   });
 
   it("still shows the literal value for a value-side condition (unchanged behaviour)", () => {
     const rule = makeRule({
       params: { condition: { field: "close", op: "gt", value: 600, ref: null } },
     });
-    expect(ruleDescription(rule)).toBe("close 大於（>） 600");
+    expect(ruleDescription(rule)).toBe("最新收盤價 大於（>） 600");
   });
 });

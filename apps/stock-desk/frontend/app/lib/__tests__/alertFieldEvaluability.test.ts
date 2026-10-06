@@ -244,8 +244,8 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
       expect(cells[0]).toContain(W3);
       expect(cells[0]?.indexOf(W3)).toBeGreaterThan(cells[0]?.indexOf("2330（TW）") ?? Infinity);
       for (const other of cells.slice(1)) expect(other).not.toContain(W3);
-      // The condition column carries the description only.
-      expect(cells[2]).toBe("beta.value 大於（&gt;） 1.2");
+      // The condition column carries the description only, with the legacy label (S6-1), not the raw key.
+      expect(cells[2]).toBe("相對指標的 beta 大於（&gt;） 1.2");
       expect(cells[3]).toBe(status);
     }
   });
@@ -299,6 +299,40 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
     expect(html).not.toContain("title=");
     expect(html).toContain("min-w-[620px]");
     expect(html).toContain("overflow-x-auto");
+  });
+});
+
+describe("S6-1：規則清單「條件」欄以標籤顯示欄位，不露出原始鍵", () => {
+  function conditionCell(rule: AlertRule): string {
+    const cells = [...renderTable([rule]).matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1] ?? "");
+    return cells[2] ?? "";
+  }
+
+  it("close 規則顯示「最新收盤價」而非 close", () => {
+    const cell = conditionCell(valueRule("close"));
+    expect(cell).toBe("最新收盤價 大於（&gt;） 1.2");
+    expect(cell).not.toContain("close");
+  });
+
+  it("ref 型兩側皆為標籤", () => {
+    const cell = conditionCell(refRule("ma5.last", "ma20.last"));
+    expect(cell).toBe("5 日均線最新值 大於（&gt;） 20 日均線最新值");
+    expect(cell).not.toContain("ma5.last");
+    expect(cell).not.toContain("ma20.last");
+  });
+
+  it("已移除欄位（beta.value／position.*）顯示舊標籤", () => {
+    expect(conditionCell(refRule("position.weight", "beta.value"))).toBe(
+      "此標的佔投資組合比重 大於（&gt;） 相對指標的 beta",
+    );
+  });
+
+  it("未知欄位 fallback 為原始鍵，不為空字串或 undefined", () => {
+    const cell = conditionCell(valueRule("legacy.unknown_field"));
+    expect(cell).toBe("legacy.unknown_field 大於（&gt;） 1.2");
+    expect(cell).not.toContain("undefined");
+    const refCell = conditionCell(refRule("legacy.unknown_field", "other.unknown"));
+    expect(refCell).toBe("legacy.unknown_field 大於（&gt;） other.unknown");
   });
 });
 

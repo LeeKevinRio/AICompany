@@ -66,7 +66,10 @@ export function ruleDescription(rule: AlertRule): string {
       // `EditAlertRuleModal`'s read-only block uses, rather than a second
       // ad-hoc table.
       const rhs = condition.ref != null ? signalFieldLabel(condition.ref) : (condition.value ?? "—");
-      return `${condition.field} ${comparisonOpLabel(condition.op)} ${rhs}`;
+      // The field side also goes through `signalFieldLabel` (S6-1) so the list
+      // matches the labels used everywhere else; unknown keys fall back to the
+      // raw key inside that function, never an empty string.
+      return `${signalFieldLabel(condition.field)} ${comparisonOpLabel(condition.op)} ${rhs}`;
     }
     case "risk_limit_breach":
       return `${limitSelectorLabel((rule.params as { limit_id: LimitSelector }).limit_id)} 被觸發`;
