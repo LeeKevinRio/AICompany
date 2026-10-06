@@ -1259,6 +1259,21 @@ export interface DirectoryItem {
 }
 
 /**
+ * Backend `ResolveMiss` (app/api/directory.py) — `GET
+ * /api/directory/resolve/{symbol}` when the directory has no entry for the
+ * symbol: `200` with `found: false`, never a `DirectoryItem` with blank
+ * fields. A hit carries no `found` key at all, so `found === false` is the
+ * only discriminator. `directory_synced: false` means the directory has
+ * never been synced (FR-7), as on `DirectorySearchResponse`.
+ */
+export interface DirectoryResolveMiss {
+  found: false;
+  symbol: string;
+  directory_synced: boolean;
+  as_of: string;
+}
+
+/**
  * Backend `SearchResponse` (app/api/directory.py, verified) —
  * `GET /api/directory/search`. `directory_synced: false` means the local
  * directory has never been synced (FR-7): the caller must degrade to plain

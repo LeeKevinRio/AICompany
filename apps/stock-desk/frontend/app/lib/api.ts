@@ -14,6 +14,7 @@ import type {
   BarsResponse,
   CreatePositionInput,
   DirectoryItem,
+  DirectoryResolveMiss,
   DirectorySearchResponse,
   HealthResponse,
   ImportPositionsResponse,
@@ -383,20 +384,36 @@ export function searchDirectory(q: string, limit?: number): Promise<DirectorySea
 }
 
 /**
- * `GET /api/directory/resolve/{symbol}` (backend, verified). Unlike every
- * other request helper in this module, a 404 here is not an exceptional
- * failure — it is the honest "not in the directory" signal FR-2/FR-6's Q1(b)
- * fallback is built on (miss -> ask the user to pick a market; miss on the
- * company-name lookup -> show the symbol alone). Callers branch on `null`
- * rather than catching `ApiError`.
+ * `GET /api/directory/resolve/{symbol}` (backend, verified). A miss is not an
+ * exceptional failure — it is the honest "not in the directory" signal
+ * FR-2/FR-6's Q1(b) fallback is built on (miss -> ask the user to pick a
+ * market; miss on the company-name lookup -> show the symbol alone). Callers
+ * branch on `null` rather than catching `ApiError`.
+ *
+ * The backend reports a miss as `200` with `found: false`
+ * (`DirectoryResolveMiss`), so a miss no longer logs a browser console error.
+ * A `404` is still read as a miss too, so this client keeps working against
+ * an older backend that predates the `found: false` shape. Any other non-2xx
+ * (5xx, network failure) still throws.
  */
 export async function resolveDirectorySymbol(symbol: string): Promise<DirectoryItem | null> {
+  let body: DirectoryItem | DirectoryResolveMiss;
   try {
-    return await request<DirectoryItem>(`/api/directory/resolve/${encodeURIComponent(symbol)}`);
+    body = await request<DirectoryItem | DirectoryResolveMiss>(
+      `/api/directory/resolve/${encodeURIComponent(symbol)}`,
+    );
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   }
+  return isDirectoryResolveMiss(body) ? null : body;
+}
+
+/** A hit carries no `found` key at all; only a miss says `found: false`. */
+function isDirectoryResolveMiss(
+  body: DirectoryItem | DirectoryResolveMiss,
+): body is DirectoryResolveMiss {
+  return isRecord(body) && "found" in body && body.found === false;
 }
 
 /* --- 排程台 / Playbook (app/api/playbook.py, verified) ------------------- */

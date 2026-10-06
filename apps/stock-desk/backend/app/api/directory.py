@@ -2,9 +2,14 @@
 
 ``GET /api/directory/resolve/{symbol}`` backs FR-2's automatic market
 determination: a hit means the caller can trust the returned ``market``
-without asking the user to pick one; a miss (404) is the honest "not in the
+without asking the user to pick one; a miss is the honest "not in the
 directory" signal FR-2's Q1 fallback (CEO 裁示 (b)：僅在查無時跳出縮小版手動
-選市場) is built on.
+選市場) is built on. A miss is an expected answer, not a failure, so it comes
+back as ``200`` with ``found: false`` (see ``ResolveMiss``) rather than a 404:
+every individual position page looks its own symbol up, and a 404 there showed
+up as a browser console error on every page whose symbol the directory lacks.
+A hit's body is unchanged. Genuine failures (an unreadable directory DB) still
+surface as 5xx.
 
 ``GET /api/directory/search`` backs FR-3's combobox candidates: symbol-prefix
 + name-substring, merged and capped, with an honest ``directory_synced`` flag
@@ -19,9 +24,9 @@ leaves it empty rather than being filed somewhere plausible.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 
 from app.api.common import now_iso
@@ -70,6 +75,26 @@ class DirectoryItem(BaseModel):
     sector_as_of: str | None
 
 
+class ResolveMiss(BaseModel):
+    """``GET /api/directory/resolve/{symbol}`` when the directory has no entry.
+
+    Carries none of ``DirectoryItem``'s ``name`` / ``market`` / sector
+    fields -- not even as ``null`` -- so a caller can never mistake a miss for
+    a hit with blank fields. ``found`` is the discriminator: a hit carries no
+    ``found`` key at all, keeping its body exactly what it was before this
+    model existed. ``directory_synced`` mirrors ``SearchResponse`` so a caller can
+    tell "not in the directory" from "directory never synced" (FR-7).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    found: Literal[False]
+    #: Echo of the requested symbol, unchanged.
+    symbol: str
+    directory_synced: bool
+    as_of: str
+
+
 class SearchResponse(BaseModel):
     """``GET /api/directory/search``."""
 
@@ -102,11 +127,16 @@ def _to_item(entry: DirectoryEntry) -> DirectoryItem:
     )
 
 
-@router.get("/resolve/{symbol}", response_model=DirectoryItem)
-def resolve_symbol(symbol: str, store: DirectoryStoreDep) -> DirectoryItem:
+@router.get("/resolve/{symbol}", response_model=DirectoryItem | ResolveMiss)
+def resolve_symbol(symbol: str, store: DirectoryStoreDep) -> DirectoryItem | ResolveMiss:
     entry = store.resolve(symbol)
     if entry is None:
-        raise HTTPException(status_code=404, detail="目錄查無此代號")
+        return ResolveMiss(
+            found=False,
+            symbol=symbol,
+            directory_synced=store.is_synced(),
+            as_of=now_iso(),
+        )
     return _to_item(entry)
 
 

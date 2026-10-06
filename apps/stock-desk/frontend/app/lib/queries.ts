@@ -374,7 +374,8 @@ export function useDirectoryStatus() {
  * the positions table. Shares the `["directory-resolve", symbol]` cache key
  * with that hook so the two surfaces never issue duplicate requests for the
  * same symbol. `data` is `null` (not an error) on a directory miss —
- * `resolveDirectorySymbol` already turns the backend's 404 into that.
+ * `resolveDirectorySymbol` turns both the backend's `found: false` body and a
+ * legacy 404 into that.
  */
 export function useDirectoryResolve(symbol: string, enabled: boolean) {
   return useQuery({

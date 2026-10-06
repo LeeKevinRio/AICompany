@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,17 +53,81 @@ def test_resolve_hit_returns_symbol_name_market(
     assert "as_of" in body
 
 
-def test_resolve_miss_returns_404(client: TestClient, store: SecurityDirectoryStore) -> None:
+def test_resolve_hit_body_carries_no_found_key(
+    client: TestClient, store: SecurityDirectoryStore
+) -> None:
+    """A hit's body is unchanged by the miss shape: no ``found`` key at all."""
+    store.upsert([_entry("2330", "台積電")])
+
+    body = client.get("/api/directory/resolve/2330").json()
+
+    assert set(body) == {
+        "symbol",
+        "name",
+        "market",
+        "source",
+        "as_of",
+        "sector",
+        "sector_source",
+        "sector_as_of",
+    }
+
+
+def test_resolve_miss_returns_200_with_found_false(
+    client: TestClient, store: SecurityDirectoryStore
+) -> None:
     store.upsert([_entry("2330", "台積電")])
 
     response = client.get("/api/directory/resolve/9999X")
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    body = response.json()
+    assert body["found"] is False
+    assert body["symbol"] == "9999X"
+    assert body["directory_synced"] is True
+    assert "as_of" in body
+    # Never a hit with blank fields: none of the hit-only keys appear.
+    for key in ("name", "market", "source", "sector", "sector_source", "sector_as_of"):
+        assert key not in body
 
 
-def test_resolve_on_empty_directory_returns_404(client: TestClient) -> None:
+def test_resolve_on_empty_directory_returns_found_false_unsynced(client: TestClient) -> None:
     response = client.get("/api/directory/resolve/2330")
-    assert response.status_code == 404
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["found"] is False
+    assert body["symbol"] == "2330"
+    assert body["directory_synced"] is False
+
+
+def test_resolve_store_failure_is_still_a_server_error(tmp_path: Path) -> None:
+    """A real failure must not be laundered into ``found: false``."""
+
+    class _BrokenStore(SecurityDirectoryStore):
+        def resolve(self, symbol: str) -> DirectoryEntry | None:
+            raise sqlite3.OperationalError("unable to open database file")
+
+    broken = _BrokenStore(db_path=tmp_path / "broken.db")
+    app.dependency_overrides[get_directory_store] = lambda: broken
+    try:
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = test_client.get("/api/directory/resolve/2330")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code >= 500
+
+
+def test_resolve_openapi_documents_both_shapes(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    ok = schema["paths"]["/api/directory/resolve/{symbol}"]["get"]["responses"]["200"]
+    refs = {
+        option["$ref"].rsplit("/", 1)[-1]
+        for option in ok["content"]["application/json"]["schema"]["anyOf"]
+    }
+    assert refs == {"DirectoryItem", "ResolveMiss"}
+    assert "404" not in schema["paths"]["/api/directory/resolve/{symbol}"]["get"]["responses"]
 
 
 def test_search_prefix_match(client: TestClient, store: SecurityDirectoryStore) -> None:
