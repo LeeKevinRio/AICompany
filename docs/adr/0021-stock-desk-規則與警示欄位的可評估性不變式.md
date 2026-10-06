@@ -9,9 +9,10 @@
 - 來源與版本：本檔為 tech-architect 2026-10-06 裁示（「規則與警示欄位的可評估性不變式（ADR-0021 草案要點）」，原文落於 scratchpad `adr0021-architect-ruling.md`）的落檔，B 類轉錄，僅做格式調整，技術內容未增補、結論未改動。
   - 「評估摘要」「查證結果」「方案比較」「Decision」「Consequences」「重啟條件」「對實作的約束」K-1～K-11、「測試要求」T-1～T-7、「需風控審字面」W-1～W-5、「相關檔案」「交接」皆逐字取自該裁示。
   - 檔內所有 `檔案:行號`（例：`engine.py` L146–L149、`store.py` L283–L307、`format.ts` L454–L475）、函式名、常數名、數字（例：540 日 bars、+288 服務呼叫／日、最壞約 20 秒）均為 tech-architect 所述；tech-writer 落檔時**未重新對 code 驗證**。行號會隨 commit 漂移，引用時以原文定位。
+  - 2026-10-06 依風控審查結果增補狀態註記（B 類；來源：`work/reviews/2026-10-06-ADR-0021-警示欄位可評估性-字面-風控審查.md`）。
   - 落檔時的快照：分支 `product/stock-desk`，HEAD `28cb65ed1ce14f98beee0dc0c2d40b8550578e40`（tech-writer 於落檔時讀取 `.git/refs/heads/product/stock-desk`）。此為快照，之後 HEAD 可能前進。
   - 此為 proposed 狀態；依 ADR-0001，生效前的內容可修訂，生效後不得原地改寫決策。
-  - W-1～W-5 為裁示列出的「需風控審字面」項目，**尚未有字面**：待 creative-lead 出稿、風控審，非定稿。
+  - W-1～W-4 已核可（2026-10-06）、W-5 退回重寫（見「需風控審字面」段與風控審查紀錄）。
 
 ---
 
@@ -87,6 +88,7 @@
 - cache-only 讀取＋預熱；
 - 修訂 ADR-0010 並對照 ADR-0012 C-11／C-13；
 - 風控核可 fired 訊息指數來源揭露字面。
+- 任何讓 `ALERT_RULE_FIELDS` 納入 `beta.value` 或 position.* 的變更，同一變更內 W-1～W-5 失效並重送風控。（來源：風控審查紀錄 2026-10-06 U-5(iii)、W-R6）
 
 只有 CEO／PM 想要「beta 警示」功能才改走 (a′)＋新 ADR 並先修訂 ADR-0010。CEO 知悉即可。
 
@@ -103,6 +105,7 @@
 - **K-7**：不得在 advice、alerts、snapshot 呼叫 load_market_benchmark 或 index resolver；compute_signals 維持不傳 benchmark_bars（api/advice.py L175、alerts/snapshot.py L93）。
 - **K-8**：不刪除、停用或改寫任何既有使用者規則（無 data migration）。允許唯讀診斷：scheduler 啟動時 log 一行「引用不可評估欄位的啟用規則數」，只記數量。
 - **K-9**：前端 SIGNAL_FIELD_OPTIONS（format.ts L454–L475）移除 beta.value；signalFieldLabel 不得退化成 raw key（舊規則仍顯示「相對指標的 beta」，可另放 legacy 標籤表或後端回傳）；AlertRulesSection 規則清單（L55–L68）對舊規則顯示 W-3；EditAlertRuleModal 開啟舊規則不得讓受控 select 默默顯示第一個選項，須明示原欄位與 W-3，並允許只改 enabled／note 後儲存。
+  - 交叉引用：編輯對話框不得靜默吞掉 422（W-R4，required），見風控審查紀錄落地 required 4。
 - **K-10**：不改任何既有警示／建議字面與門檻；新字面 W-1～W-5 走風控閘門；snapshot.py L9–L10 與 engine.py L146–L148 docstring 改寫為引用 K-1 集合。
 - **K-11**：tests/test_advice_engine.py L385／L408／L430／L437／L444 以 beta.value 當「必缺欄位」的夾具，換成合法但可為 None 的欄位（如 bars 不足時的 ma60.last）或沿用 L420 dict.fromkeys(KNOWN_FIELDS, None)；測試意圖不得削弱。
 
@@ -120,15 +123,23 @@
 
 ---
 
-## 需風控審字面（待 creative-lead 出稿、風控審，非定稿）
+## 需風控審字面（W-1～W-4 已核可；W-5 待重寫）
 
-以下五項為裁示列出、須先交 creative-lead 出稿再送 risk-compliance-officer 審的字面需求；**目前皆無字面**，下列僅為各項的範圍與限制，不是定稿文案。
+以下五項為裁示列出、須先交 creative-lead 出稿再送 risk-compliance-officer 審的字面需求；下列為各項的範圍與限制，不是文案本身，核可字面見段末所列風控審查紀錄。
 
 - **W-1**：警示表單「訊號欄位」下方常駐說明——Beta 不提供作為警示條件，可在個股頁「風險量測」區看到；禁用「訊號頁」。
+  - 狀態：**已核可（2026-10-06）**，逐字以該審查紀錄核可字面總表為準。
 - **W-2**：舊規則 skip reason，取代「缺少輸入欄位」；講清楚是常態非暫時，寫出處理方式（編輯或刪除）。
+  - 狀態：**已核可（2026-10-06）**，逐字以該審查紀錄核可字面總表為準。
+  - 處置句以風控核可字面為準（「可改用其他欄位的條件，或刪除此規則」），取代本文原寫的「編輯或刪除」。
 - **W-3**：規則清單與編輯對話框中舊規則的標示。
+  - 狀態：**已核可（2026-10-06）**，逐字以該審查紀錄核可字面總表為準。
 - **W-4**：422 錯誤訊息（beta 一句；position.* 一句，目前只有 API 用得到）。
+  - 狀態：**已核可（2026-10-06）**，逐字以該審查紀錄核可字面總表為準。
 - **W-5**：release note 一句，範圍限警示可選欄位變動與既有 beta 規則處置，比照 RN-1～RN-6 中性寫法。
+  - 狀態：**現稿 VETO，退回重寫**；須揭露此版本之前 Beta 規則亦不會觸發（待 dev-lead 查證歷史）。
+
+- 風控審查紀錄：`work/reviews/2026-10-06-ADR-0021-警示欄位可評估性-字面-風控審查.md`（risk-compliance-officer 審查、coordinator 轉錄，2026-10-06）。上列各項狀態與 W-2 處置句取自該紀錄的結論、「核可字面總表」與 U-1；本文不重抄字面，避免兩處漂移。
 
 ---
 
