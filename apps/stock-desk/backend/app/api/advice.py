@@ -39,6 +39,7 @@ from app.api.deps import (
 from app.api.kelly import kelly_inputs_for
 from app.api.signals import DEFAULT_LOOKBACK_DAYS
 from app.data.cache import PriceBarCache
+from app.data.price_guard import usable_price
 from app.data.providers.fx import FxRateProvider
 from app.kelly.store import KellyInputStore
 from app.portfolio.summary import PortfolioSummary, build_summary
@@ -171,8 +172,12 @@ def get_advice(
         settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
     )
 
-    latest = max(loaded.bars, key=lambda bar: bar.date) if loaded.bars else None
-    signals = compute_signals(symbol, loaded.bars) if loaded.bars else {}
+    newest = max(loaded.bars, key=lambda bar: bar.date) if loaded.bars else None
+    # A newest bar whose close is unusable is no price (task F-1): the card takes
+    # the same path as having no bar at all, so no signal is computed from it,
+    # no rate is resolved for it, and no earlier bar stands in for it.
+    latest = newest if newest is not None and usable_price(newest.close) else None
+    signals = compute_signals(symbol, loaded.bars) if latest is not None else {}
     # The rate is resolved as of the bar being converted, not "today": the caps
     # compare a close from that date, so the conversion has to be from it too.
     fx = (
@@ -202,7 +207,9 @@ def get_advice(
             symbol=symbol,
             market=market,
             status="insufficient_data",
-            reason=loaded.reason,
+            # The data layer's sentence explains an empty load only; on an
+            # unusable close it would name a cause that is not this one.
+            reason=loaded.reason if newest is None else None,
             advice=None,
             held=book.held,
             position_ids=book.position_ids,

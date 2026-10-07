@@ -581,13 +581,13 @@ def test_the_manual_tick_answers_200_on_an_unusable_latest_close(
     assert events and all(event["symbol"] == GOOD for event in events)
 
 
-def test_a_held_symbol_with_a_negative_close_is_caught_by_the_engine(
+def test_a_held_symbol_with_a_negative_close_is_not_a_load_failure(
     store: PositionStore, tmp_path: Path
 ) -> None:
-    """A′ withholds the price, but a *held* symbol is also valued at that close by
-    the portfolio layer (out of scope here, F-1): its negative market value still
-    fails ``PortfolioContext``. The engine's per-symbol isolation (方案 B) is
-    what keeps that one symbol from ending the tick."""
+    """F-1: the portfolio valuator no longer values a *held* symbol at a negative
+    close -- it is unvalued, exactly like a holding with no bar -- so the
+    snapshot builds and the engine's per-symbol isolation (方案 B) is not what
+    keeps the tick alive any more. The rules still skip for the same reason."""
     _hold_symbol(store, BAD)
     _hold_symbol(store, GOOD)
     service = _two_symbol_service(-1.0)
@@ -597,6 +597,7 @@ def test_a_held_symbol_with_a_negative_close_is_caught_by_the_engine(
 
     result = evaluate_alerts(alerts, _loader_for(service, store), cooldown_minutes=0)
 
+    assert result.load_failures == 0
     outcomes = {outcome.rule_id: outcome for outcome in result.outcomes}
     assert outcomes[price.id].status == "skipped"
     assert outcomes[price.id].reason == NO_CLOSE_REASON

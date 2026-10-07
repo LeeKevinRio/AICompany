@@ -78,6 +78,7 @@ from app.advice.limits import (
     format_reported_at,
 )
 from app.data.interface import DataStatus
+from app.data.price_guard import usable_price
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.portfolio.valuation import PRICE_NOT_QUERIED
@@ -619,6 +620,14 @@ def build_book_context(
     ``close`` is the latest close **in the instrument's own currency** (the unit
     the caps compare); pass ``None`` when no price is available and the
     price-dependent caps will report ``not_evaluable`` instead of guessing.
+    A close that is not usable (zero, negative or not finite, per
+    :func:`app.data.price_guard.usable_price`) is withheld exactly like
+    ``None``, and ``atr`` is withheld with it -- one judgement for both, since
+    an ATR computed from the same bad bar is no evidence either. No note is
+    added for this; the caps that read the price or the ATR report
+    ``not_evaluable`` with their existing reasons. This layer judges what it is
+    handed: the callers load bars separately from the valuator, so the guard
+    is applied here too rather than trusted from upstream.
     A symbol with no holding yields a *candidate* context
     (``position_market_value_twd=0``, ``quantity=0``) so a card can still be
     produced for something the user does not own yet.
@@ -642,6 +651,8 @@ def build_book_context(
     production call sites are pinned by
     ``tests/test_book_context_call_sites.py``.
     """
+    # One judgement for both price inputs (task F-1, constraint 4).
+    priced = close is not None and usable_price(close)
     fully_valued = _fully_valued(summary)
     notes: list[str] = _book_level_notes(summary, net_worth)
     equity, _, _ = _book_equity(summary)
@@ -692,12 +703,12 @@ def build_book_context(
         net_worth=net_worth,
         book_fully_valued=fully_valued,
         quantity=quantity,
-        close=close if rate is not None else None,
+        close=close if priced and rate is not None else None,
         # ``close`` is ``None`` whenever ``rate`` is, so this 1.0 is never
         # applied to a foreign-currency amount; it only satisfies the field's
         # "must be a positive float" contract.
         fx_to_twd=rate if rate is not None else 1.0,
-        atr=atr if rate is not None else None,
+        atr=atr if priced and rate is not None else None,
         sector=sector,
         sector_market_value_twd=sector_market_value,
         sector_gap=sector_gap,

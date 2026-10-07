@@ -23,7 +23,6 @@ every tick.
 from __future__ import annotations
 
 import logging
-import math
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -42,6 +41,7 @@ from app.alerts.models import (
     unevaluable_alert_fields,
 )
 from app.alerts.store import AlertStore
+from app.data.price_guard import usable_price as is_usable_price
 from app.positions.models import Market
 
 logger = logging.getLogger(__name__)
@@ -177,14 +177,15 @@ def _fmt(value: float) -> str:
 def usable_price(close: float | None) -> float | None:
     """``close`` if it is a usable latest close, else ``None``.
 
-    The single definition of "usable": a missing, zero, negative or non-finite
-    close is "no price". ``PriceBar.close`` rejects NaN but not ``<= 0``, and a
-    snapshot can be built by any loader, so the guard sits in the alert layer
-    rather than upstream. Shared by :func:`usable_close` (the rule paths) and
+    "Usable" is defined once, by :func:`app.data.price_guard.usable_price` (a
+    missing, zero, negative or non-finite close is "no price"); this keeps its
+    name and its value-or-``None`` shape for the alert layer. A snapshot can be
+    built by any loader, so the alert layer still applies the guard itself.
+    Shared by :func:`usable_close` (the rule paths) and
     :func:`app.alerts.snapshot.build_snapshot` (whether to run the signal layer
     and price the risk caps at all), so the two can never disagree.
     """
-    return close if close is not None and math.isfinite(close) and close > 0 else None
+    return close if close is not None and is_usable_price(close) else None
 
 
 def usable_close(snapshot: SymbolSnapshot) -> float | None:

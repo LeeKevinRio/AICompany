@@ -28,15 +28,27 @@ approximation, and is asserted by the golden tests. (The mirror convention --
 FX on the price move and asset at original FX -- would also sum to total; we
 fix this one so the attribution is deterministic and testable.)
 
-Any missing input (no price adapter for the market, no cached/live price, no
-open date to price F0 at, no FX rate on or before the open date within the
-lookback window) yields
+Any missing input (no price adapter for the market, no cached/live price, a
+latest close that is unusable, no open date to price F0 at, no FX rate on or
+before the open date within the lookback window) yields
 ``status = insufficient_data`` with the affected outputs left null. Nothing is
 ever interpolated or fabricated.
+
+An unusable latest close -- zero, negative or not finite, as judged by the one
+definition in :func:`app.data.price_guard.usable_price` -- is treated exactly
+like having no bar at all: no ``PriceInfo``, no change basis, and the same
+missing token. The earlier bars in the window are **not** fallen back on; the
+bar is dropped and a warning is logged so the bad row can be traced. No new
+token is introduced for this case, which means the live-mode token ``price``
+also covers "a price was found, but its latest close is unusable", not only
+"no price was found" (risk-compliance R-1); the cache-only token
+``price_not_queried`` keeps its meaning, since a cache-only read never asked a
+source either way.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -46,9 +58,12 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
+from app.data.price_guard import usable_price
 from app.data.providers.fx import FxRateProvider
 from app.positions.models import Currency, Position
 from app.services.fx_notes import source_note
+
+logger = logging.getLogger(__name__)
 
 #: How far back to look for the latest daily close (skips weekends/holidays).
 PRICE_LOOKBACK_DAYS = 10
@@ -365,6 +380,10 @@ class PositionValuator:
         The token names *why* when close is None. ``change_basis`` is read from
         the same ``result.bars`` as the close (ADR-0016 D-2): no extra service
         call, no wider lookback.
+
+        A latest bar whose close is unusable returns exactly what "no bar"
+        returns; an earlier bar is never substituted for it (see the module
+        docstring).
         """
         missing_token = PRICE_NOT_QUERIED if self._price_mode == "cache_only" else "price"
         service = self._market_services.get(position.market)
@@ -378,6 +397,17 @@ class PositionValuator:
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
             return None, None, missing_token, None
         latest = max(result.bars, key=lambda bar: bar.date)
+        if not usable_price(latest.close):
+            logger.warning(
+                "unusable latest close dropped from valuation: symbol=%s market=%s "
+                "date=%s close=%s source=%s",
+                position.symbol,
+                position.market,
+                latest.date.isoformat(),
+                latest.close,
+                result.source,
+            )
+            return None, None, missing_token, None
         earlier = [bar for bar in result.bars if bar.date < latest.date]
         previous = max(earlier, key=lambda bar: bar.date) if earlier else None
         info = PriceInfo(
