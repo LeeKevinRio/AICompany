@@ -5,7 +5,8 @@
   - 改 accepted 的前提（來源：風控審查檔「ADR-0022 改 accepted 前提」(a)～(c)，2026-10-07）：(a) 審查檔已轉錄——完成；(b) coordinator 確認 CEO 未推翻 2026-10-07 路線裁定——**待 CEO 表態**；(c) 本 ADR 註記 W7 納入核可範圍、核可字面以審查檔為準——已於本段完成。(a)(c) 已完成，**(b) 未完成前本 ADR 不得改為 accepted**。
   - 本次整理（2026-10-07）併入風控審查檔「D-d1 更正」節與 6-c／F-1b 裁定（見下「來源與版本」）；其中尚有待補項（`SECTOR_UNCLASSIFIED_NOTE` 中性句，見「交接」）。來源未載這些待補項是否列為 accepted 前提，待 coordinator 確認。
   - 補段落檔（2026-10-07，第二次）：`/limits` 彙總對 mixed 群組的規則（原待補項）已由 tech-architect 寫明、風控裁定，收於 Decision 1 補充段（M-1～M-5）。**W-6m**（M-4 新增字面）已於 2026-10-07 經風控逐字核可修正版（風控審查檔 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第三段，下稱「風控第三段」），並依 coordinator 指示收錄於 Decision 1 補充段的「W-6m 字面表」（W-6m 為本 ADR 不收錄字面原則的第二個例外；與風控審查檔不一致時以審查檔為準）。W-6m 的 PR 合併前提見 M-4。
-  - 補段落檔（2026-10-07，第三次）：風控對 ADR-0022 PR 衝突 1 的裁定——`/limits` 方向子句優先序更正（Decision 5）、表二 g、M-4 第三點拆分與新字面 **W-6u**（Decision 1 補充）、失效條件 F-11／F-12、驗收摘要。來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u（2026-10-07，風控對 ADR-0022 PR 衝突 1 的裁定，coordinator 轉錄）」段。**依風控裁定直接落檔，tech-architect 未另出補段**（coordinator 定案，CEO 可推翻；理由：裁定文本已逐條指明改法，且風控已讀碼確認「Y 有定義 ⇔ comparable 非空」）。**W-6u 字面尚未起草／核可，未核可並落地前本 ADR 的 PR 不得合併**（列入合併前提，見 Decision 1 補充 M-4 與 W-6u 小節）。
+  - 補段落檔（2026-10-07，第三次）：風控對 ADR-0022 PR 衝突 1 的裁定——`/limits` 方向子句優先序更正（Decision 5）、表二 g、M-4 第三點拆分與新字面 **W-6u**（Decision 1 補充）、失效條件 F-11／F-12、驗收摘要。來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u（2026-10-07，風控對 ADR-0022 PR 衝突 1 的裁定，coordinator 轉錄）」段。**依風控裁定直接落檔，tech-architect 未另出補段**（coordinator 定案，CEO 可推翻；理由：裁定文本已逐條指明改法，且風控已讀碼確認「Y 有定義 ⇔ comparable 非空」）。W-6u 列入本 ADR 的 PR 合併前提（見 Decision 1 補充 M-4 與 W-6u 小節；字面核可狀態見下一行）。
+  - **W-6u 已核可（2026-10-07）**：risk-compliance-officer 對 W-6u 逐字審，採替代案 W-6u-B（主案否決）；來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「W-6u 逐字審（2026-10-07，risk-compliance-officer 唯讀裁定，coordinator 轉錄）」段。核可字面收錄於 Decision 1 補充「W-6u」小節（W-6u 為本 ADR 不收錄字面原則的第三個例外，沿用 W-6m 先例；與風控審查檔不一致時以審查檔為準）。合併前提改為 **RU-1～RU-8 落地且 qa-reviewer 無 BLOCKING_ISSUES**。本 ADR 狀態維持 proposed。
 - 日期：2026-10-07（tech-architect 評估與風控路線裁定日；本次整理與補段落檔同日）
 - 決策者：tech-architect（路線 C′ 評估；6-c 評估）；risk-compliance-officer（路線裁定：APPROVE 附條件；W1～W7 逐字審；6-c 與 F-1b 裁定）；CEO 為最終負責人（若對裁定有異議）。
 - 適用範圍：僅 product/stock-desk 產品線。
@@ -189,7 +190,10 @@
 - Y 在比較中（C′ 下必為 violated）→ 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`。
 - categories(G) 為空（unknown），依 compared 是否為空拆為兩支（2026-10-07 風控裁定，來源：風控審查檔檔尾「`/limits` 方向子句優先序更正與 W-6u」段 R-5；原寫法「categories(G) 為空 → 續用」已被取代）：
   - **compared 非空** → 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`（那時該句為真）。
-  - **compared 為空 → W-6u 新字面**（見下「W-6u」小節）。原因：此情境下現行句「此標的可能屬於已納入比較的產業，使該產業的佔比被低估」無所指，且與同一則回應第 2 條 detail（`NO_CANDIDATE_DETAIL`）互相矛盾（風控所述；F-1 測試的帳本即會產生這句，該測試只斷言 `startswith(SYMBOL_UNVALUED_NOTE)` 故未抓到）。
+  - **compared 為空（W-6u）→ `SYMBOL_UNVALUED_NOTE` ＋ W-6u 核可字面**（風控 2026-10-07 逐字核可，核可日 2026-10-07；採替代案 W-6u-B，主案否決——主案的部分否定「不代表所有產業都未超過上限」易讀成「有產業超過上限」，對 not_evaluable 的判定給了方向暗示）。逐字，不改任何字、只能整句照抄，57 字，無變數：
+    > 本條上限的比較未納入此標的；此標的沒有產業別資料，本次沒有任何產業納入比較，因此無法確認各產業的佔比是否超過上限。
+
+    詳見「W-6u」小節。原因：此情境下現行句「此標的可能屬於已納入比較的產業，使該產業的佔比被低估」無所指，且與同一則回應第 2 條 detail（`NO_CANDIDATE_DETAIL`）互相矛盾（風控所述；F-1 測試的帳本即會產生這句，該測試只斷言 `startswith(SYMBOL_UNVALUED_NOTE)` 故未抓到）。
   - 「compared」沿用風控用語，對應本節開頭「比較中產業」＝最終 comparable 的 sector 集合。
 - mixed 且至少一個產業在比較中 → 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`（逐字不變）。
 - **mixed 且沒有任何產業在比較中（含 comparable 為空）→ W-6m 新字面，與 C′、W6 同一 PR**（風控裁定採 (i)，不准續用現行句：現行句「可能屬於已納入比較的產業」在此情境為假，comparable 為空時更無所指）。組法：`SYMBOL_UNVALUED_NOTE` 接 W-6m。
@@ -202,17 +206,37 @@
   - 必須包含「未納入比較不代表這些產業未超過上限」。
   - 不寫「屬於」單一產業，不帶任何指引。
 - 流程：creative-lead 起草 → risk-compliance-officer 逐字審。**W-6m 已於 2026-10-07 核可（修正版，風控第三段）**；原「W-6m 字面未經風控逐字核可前，本 ADR 的 PR 不得合併」之條件已滿足，**合併前提改為：RM-1～RM-5 落地、排序鍵已寫入本 ADR（本段）、B(1) required 完成（本段 M-1 required：寫明高估方向，grep＋測試釘住「不得加總或平均各產業比率」）、qa-reviewer 無 BLOCKING_ISSUES（含 Codex 第二意見；環境不可用須註明）、CI 綠燈**（風控第三段五）。
-- **合併前提增補（2026-10-07，風控 W-6u 段 R-5 與「交接與 CEO 異議」；coordinator 定案）**：**W-6u 已由風控逐字核可並落地；W-6u 未核可並落地前，本 ADR 的 PR 不得合併。** 此條與上列 W-6m 的合併前提並列、同時成立。
+- **合併前提增補（2026-10-07，風控 W-6u 段 R-5 與「交接與 CEO 異議」；coordinator 定案；2026-10-07 依「W-6u 逐字審」段更新）**：W-6u 字面已核可；**ADR-0022 PR 要等 RU-1～RU-8 都落地，且 qa-reviewer 審查通過（沒有 BLOCKING_ISSUES）之後，才可以合併**（風控「W-6u 逐字審」段「合併前提沿用 R-5」）。此條與上列 W-6m 的合併前提並列、同時成立。
 
-**W-6u（2026-10-07 風控裁定新增；字面尚未核可）**
+**W-6u（2026-10-07 風控裁定新增；2026-10-07 已逐字核可，採替代案 W-6u-B）**
 
-來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u」段，逐條意見 R-5（required，與本 PR 同時落地）。本 ADR **不收錄 W-6u 字面**（尚未起草、未經核可；核可後字面以該審查檔為準，是否比照 W-6m 收錄由 coordinator 決定）。
+來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u」段（逐條意見 R-5，required，與本 PR 同時落地）與其後「W-6u 逐字審」段（核可字面、RU-1～RU-9、失效條件增補；2026-10-07，coordinator 轉錄）。
+
+**W-6u 字面表**（收錄原因：沿用 W-6m 先例，coordinator 指示寫入核可字面；為「不收錄字面」原則的第三個例外；W1～W7 字面仍不收；與風控審查檔不一致時以審查檔為準）
+
+| 代號 | 逐字核可字面 | 變數 | 顯示條件 | 字數 |
+|---|---|---|---|---|
+| **W-6u**（替代案 W-6u-B，無修正） | 本條上限的比較未納入此標的；此標的沒有產業別資料，本次沒有任何產業納入比較，因此無法確認各產業的佔比是否超過上限。 | 無 | `/limits` excluded reason。categories(G) 為空，**且** compared 為空（compared 須為驅動第 2 條 detail 的同一集合，單一來源，不得另算）。組法 `SYMBOL_UNVALUED_NOTE` ＋ W-6u。 | 57（含全形標點，14＋11＋13＋19） |
+
+- **核可日**：2026-10-07。核可不帶修正，字面就是 creative-lead 送來的替代案原句，只能整句照抄。
+- **主案否決**：主案含「未納入比較不代表所有產業都未超過上限」。風控認為它是部分否定，一般讀法易讀成「有產業超過上限」，而第 2 條在此情境為 not_evaluable、根本沒有計算，等於給了偏向「超過」的方向暗示，屬誘導性表述（與隱藏不確定性同樣違反誠實原則，方向相反）；「所有產業」的範圍也不清楚。主案字面不收錄於本 ADR。
+- **採替代案的理由（風控所述）**：直接講出不確定性「無法確認…是否超過上限」，不往超過或未超過偏，對應 not_evaluable；「無法確認」W2 已核可過；擋住「沒被列出 → 已通過」的推論，與 R-5 要求的「同義」成立。
+- **共用語**：「此標的沒有產業別資料」對 tw_unfiled／etf／non_tw 三子類皆為真（風控所述：`sector_categories` 回傳 `frozenset(position.sector for … if position.sector)`，categories(G) 為空即每一筆持倉都沒有產業別值）；只講資料狀態，不暗示使用者漏填，不帶「請填」。不採 W3 的「無法判斷其所屬產業」。
+- **與 `NO_CANDIDATE_DETAIL` 並列**：風控讀碼確認一致（第 2 條 `compared_sectors` 取自 `_one_per_sector` 之後的 comparable，會丟掉 sector 為 None 的候選，故 compared 為空等於 comparable 為空；此時 detail 一定是 `NO_CANDIDATE_DETAILS["sector_weight"]`，不會是 `EMPTY_BOOK_DETAIL`）。與同回應的 D-a「比率會因此偏高。」不衝突（D-a 講有印出的比率，第 2 條沒印；與 a0 語意相同）。以上函式、變數與行號為風控所述，tech-writer 未重新對 code 驗證。
+- **禁詞複核（風控人工逐字比對，仍須依 RU-6 實跑）**：`shared/forbidden-terms.json`、`FRONTEND_FORBIDDEN_TERMS`、`loader.BANNED_PHRASES`、裸「即時」類、R-5 指定詞（「屬於」「可能屬於已納入比較的產業」「被低估」）及「所屬」「等」「涉及」「請」「仍」「通過」「安全」等延伸詞皆 0 命中。
+
+**W-6u 範圍與顯示條件**（風控裁定 5；四個分支涵蓋所有情況）
+- categories(G) 為空且 compared 為空 → W-6u。
+- unknown 且 compared 非空 → 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`。
+- 單一產業 Y 不在比較中 → W6。
+- mixed 且沒有交集 → W-6m。
+- 第 1、4、5 條不受影響，仍用 `UNVALUED_EXCLUSION_SUFFIX`；已估值但無產業的標的走 `candidate_exclusions`，reason 是 `check.detail`，不會接到 W-6u（風控所述）。
 
 - **處理範圍**：`book_limits.py:596-615` `_sector_unvalued_suffix` 的最後一個分支（行號為風控所述，未重新對 code 驗證）。
 - **顯示條件**：categories(G) 為空（unknown），**且** compared 為空。compared 非空時，unknown 續用現行 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`。
 - **為何本 PR 一併處理**（風控所述）：C′ 會讓此情境變多。例：2330（半導體，已估值，未達上限）＋2303（半導體，未估值）＋0050（ETF，未估值）——2330 因 W1 被排除後 comparable 為空，0050 就會拿到無所指的現行句。理由與 required 1-a（W6 與 C′ 同 PR）、W-6m（不准續用現行句）同型，依先例須同 PR。
-- **流程**：creative-lead 起草 → risk-compliance-officer 逐字審。
-- **起草約束（R-5，逐字轉錄）**：
+- **流程**：creative-lead 起草 → risk-compliance-officer 逐字審——**已完成，核可替代案 W-6u-B（2026-10-07）**。
+- **起草約束（R-5，逐字轉錄；已由核可字面滿足，保留作紀錄與日後重審依據）**：
   - 開頭比照 W6／W-6m「本條上限的比較未納入此標的；」。
   - 寫明本次沒有任何產業納入比較（與 `NO_CANDIDATE_DETAIL` 一致）。
   - 不得出現「屬於」「可能屬於已納入比較的產業」「被低估」。
@@ -220,7 +244,18 @@
   - 不帶「請填產業」類指引（W3／D6 先例）。
   - 必含與「未納入比較不代表…未超過上限」同義的不確定性表述。
   - 禁詞零命中。
-- **落地 required（R-5）**：常數註解附核可日期與審查檔路徑；測試覆蓋三子類（tw_unfiled／etf／non_tw）；加不變式測試「`SECTOR_UNVALUED_EXCLUSION_SUFFIX` 只在 compared 非空時出現」；新句納入既有三份禁詞掃描。
+- **落地 required（R-5）**：常數註解附核可日期與審查檔路徑；測試覆蓋三子類（tw_unfiled／etf／non_tw）；加不變式測試「`SECTOR_UNVALUED_EXCLUSION_SUFFIX` 只在 compared 非空時出現」；新句納入既有三份禁詞掃描。具體化為下列 RU-1～RU-9。
+- **RU-1～RU-9（風控「W-6u 逐字審」段「落地 required」，2026-10-07，摘要；qa 逐條）**：
+  - **RU-1**（常數，required）：`SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX` 型別改 `str`、值為核可字面且逐位元組相同；註解拿掉「PENDING／has not been approved」，換成 `風控核可文案,修改須重新送審(2026-10-07)` 加風控審查檔路徑（W-6u）；比照 W6、W-6m 以英文簡述寫法（no category, nothing compared, states the cap could not be confirmed either way）。
+  - **RU-2**（`_sector_unvalued_suffix`，required）：`not categories and not compared` 分支無條件回傳 W-6u；刪掉 `is not None` 判斷、退回 `SECTOR_UNVALUED_EXCLUSION_SUFFIX` 的路徑與 TODO；docstring 第三點改成已落地敘述。風控讀碼發現：dev-lead 工作樹目前該常數為 `None` 時退回舊句，只可當未合併分支的暫時狀態，**不得帶進合併**。
+  - **RU-3**（三子類測試，required）：tw_unfiled／etf／non_tw 各配 live、cache_only；斷言第 2 條該標的 excluded reason 等於 `SYMBOL_UNVALUED_NOTE.format(count=n) + W-6u`；至少涵蓋 F-1 帳本與 C′ 帳本（2330 半導體已估值未達上限、2303 半導體未估值、0050 ETF 未估值，斷言 0050 拿到 W-6u）；拿掉這些測試的 `xfail(strict=True)`。
+  - **RU-4**（不變式測試，required）：第 2 條任何 excluded reason 含 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`（或子字串「可能屬於已納入比較的產業」）⇒ `evaluated_count > 0`；含 W-6u ⇒ `evaluated_count == 0` 且 detail 等於 `NO_CANDIDATE_DETAILS["sector_weight"]`；單元測試 `_sector_unvalued_suffix(frozenset(), frozenset())` 等於 W-6u、`_sector_unvalued_suffix(frozenset(), frozenset({SEMI}))` 等於舊句。
+  - **RU-5**（負向測試，required）：第 1、4、5 條 excluded reason 不得含 W-6u；unknown 且 compared 非空時不得出現 W-6u；已估值無產業的標的（`candidate_exclusions`）不得出現 W-6u。
+  - **RU-6**（禁詞掃描，required）：W-6u 本身與 `SYMBOL_UNVALUED_NOTE.format(count=2) + W-6u` 整句加進 `test_adr0022_sector_unvalued.py` 的 `_rendered_new_sentences()`，跑過三份禁詞表與 `find_bare_realtime_claims`；另斷言「屬於」「所屬」「被低估」「等」「涉及」不在句中。
+  - **RU-7**（既有測試，required）：`test_advice_book_limits.py:447`、`test_adr0022_sector_unvalued.py:610/618/651` 與 F-1 測試皆不改；風控為讀碼推論，dev-lead 實作後以實跑結果確認並回報。
+  - **RU-8**（ADR，required）：tech-writer 於本節 M-4 第三點寫入核可字面、日期與主案否決，並將 F-12 增補併入失效條件 10——**本次已完成**。
+  - **RU-9**（suggested）：`book_limits.py` 模組 docstring 列出 W-6u 常數；qa-e2e 於 375／1280 抽驗 `/limits` 在 0050 情境下 excluded reason 整句渲染，不得截斷或折疊。
+  - 以上 RU 內的檔名、行號與函式名皆為風控所述，tech-writer 未重新對 code 驗證。
 - **若 CEO 決定讓 W-6u 延到下一個 PR**：風控保留書面否決紀錄，理由是 C′ 讓無所指句子的出現頻率增加，與 required 1-a、W-6m 的先例不一致；最終責任由 CEO 承擔，並列入 CEO 知悉清單（風控審查檔同段「交接與 CEO 異議」）。
 
 **W-6m 字面表**（風控第三段一，2026-10-07 逐字核可修正版；`{sectors}` 算 1 字。W1～W7 字面不收於本 ADR，見風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`。**收錄原因（coordinator 2026-10-07 確認為「不收錄字面」原則的第二個例外）：風控要求排序鍵與 W-6m 字面進 ADR**，見風控第三段 RM-2 與五）
@@ -440,6 +475,8 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
     - unknown 子類或分類改變（例如 ETF 穿透）。
     - 「compared 產業集合」的定義改變。
     - `NO_CANDIDATE_DETAIL` 字面改變。
+    - （2026-10-07 增補，來源：風控審查檔「W-6u 逐字審」段「失效條件」，沿用 F-12 增補兩點，逐字）第 2 條在 compared 為空時改成會產生任何比率或判定，例如加上帳本層級的備援計算。這時「無法確認…是否超過上限」會變成假句。這點和 F-11 第一點同時觸發。
+    - （同上，逐字）「產業別資料」的來源或 `sector_categories` 的定義改變。例如系統自動帶入交易所產業別、空白字串改算成有值，或 W-6u 被接到 `SYMBOL_UNVALUED_NOTE` 以外的 reason 後面（那時就不再有筆數陳述）。
 
 其他：
 
@@ -450,7 +487,7 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
 - W1～W7：creative-lead 起草 → risk-compliance-officer 逐字審——**已核可（2026-10-07）**；改 accepted 尚待 CEO 未推翻之確認（見狀態欄）。
 - 實作：dev-lead（F-1 合併後 rebase）→ qa-reviewer（K-1～K-11 逐條，K-8 重點）→ 風控單項核對。
 - W-6m：creative-lead 起草 → 風控逐字審——**已核可修正版（2026-10-07，風控第三段）**；PR 合併前提見 Decision 1 補充 M-4。
-- **W-6u（2026-10-07，風控 W-6u 段 R-5）**：creative-lead 起草（進行中，coordinator 所述）→ 風控逐字審——**尚未核可**；起草約束與落地 required 見 Decision 1 補充「W-6u」。**未核可並落地前本 ADR 的 PR 不得合併。**
+- **W-6u（2026-10-07，風控 W-6u 段 R-5）**：creative-lead 起草 → 風控逐字審——**已核可替代案 W-6u-B（2026-10-07，風控「W-6u 逐字審」段）**；字面、RU-1～RU-9 見 Decision 1 補充「W-6u」。**合併前提：RU-1～RU-8 落地且 qa-reviewer 無 BLOCKING_ISSUES。**
 - 實作補充（風控 W-6u 段）：dev-lead 照做 R-1～R-4、R-6（R-6 在 ADR-0023 KD-5，屬 6-b 範圍）；實作後以測試結果確認「既有測試修改清單：無」的四處斷言。
 - **結案（2026-10-07）**：tech-architect 補寫 `/limits` 彙總對 mixed 產業的同等規則（原待補項）——已於 Decision 1 補充段（M-1～M-5）寫明，風控 2026-10-07 裁定（風控審查檔第二段 B；排序鍵與 W-6m 見第三段）。
 - **待補（來源明載，尚未完成）**：
