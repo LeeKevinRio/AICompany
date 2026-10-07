@@ -463,8 +463,9 @@ def test_the_sector_cap_discloses_that_an_exclusion_can_understate_it() -> None:
         )
     )
     cap = checks["sector_weight"]
-    # Route (a): the verdict is still reported, with the caveat stated -- not
-    # withdrawn into not_evaluable.
+    # Same industry now takes route C' (ADR-0022): the comparable holding is past
+    # the cap, so it stays violated with W2 instead of being withdrawn into
+    # not_evaluable. A withheld holding with no industry still takes route (a).
     assert cap.status != "not_evaluable"
     assert "使該產業的佔比被低估" in cap.excluded[0].reason
     # Cap 1 and cap 4 must not carry the sentence: their observed value belongs

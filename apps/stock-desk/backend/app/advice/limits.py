@@ -311,6 +311,54 @@ NO_SECTOR_DETAILS: dict[SectorGap, str] = {
     "mixed": SECTOR_MIXED_DETAIL,
 }
 
+#: ADR-0022 route C' (cap 2 when the book holds positions that could not be
+#: valued). An unvalued lot is outside every industry's numerator, so when one
+#: belongs -- or may belong -- to this card's industry X, the computed share is
+#: short by it. Three sentences, one per branch of :func:`_check_sector_weight`:
+#:
+#: * W1 -- some unvalued lot is in X ("same", which counts this symbol's own
+#:   unvalued lots too) and the computed share is under the cap: the share is a
+#:   floor, a ``passed`` built on it would be the dangerous direction, so the cap
+#:   is withheld (``not_evaluable``, ``observed`` ``None``, threshold unchanged).
+#: * W2 -- the same, but the computed share already reaches the cap: the breach
+#:   stands (adding the missing lots can only raise the true share when every
+#:   unvalued lot is in X, and is handled conservatively otherwise), so the
+#:   verdict stays ``violated`` -- the only status that blocks an ``add`` -- and
+#:   this sentence is appended to it. It reaches alert pushes; it claims no
+#:   lower bound and carries no instruction (required 2-b).
+#: * W3 -- no unvalued lot is known to be in X, but some cannot be placed in any
+#:   industry ("unknown"): the ``passed`` verdict stays (risk-compliance 2026-10-07 did not
+#:   adopt the stricter variant) and says it may rest on an understated share.
+#:
+#: ``{count}`` is ``own_lots + same_sector_lots`` (ADR-0022 Decision 1); W1 and
+#: W2 share it on purpose, because the card already carries
+#: ``SYMBOL_UNVALUED_NOTE`` for the symbol's own lots.
+#:
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W1, W2, W3)
+SECTOR_UNVALUED_SAME_NOT_EVALUABLE_DETAIL = (
+    "{sector} 產業有 {count} 筆持倉無法估值，未計入該產業的市值，佔比的分子不完整，"
+    "只以已估值持倉計算的佔比可能偏低；因此單一產業佔比上限本次不計算，"
+    "回報 not_evaluable，無法判定是否違反。"
+)
+#: W2, appended after the existing ``violated`` sentence (see above).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W2)
+SECTOR_UNVALUED_SAME_VIOLATED_DETAIL = (
+    "{sector} 產業另有 {count} 筆持倉無法估值，上述佔比只以已估值的持倉計算，"
+    "實際佔比無法確認；單一產業佔比上限仍以已達上限處理。"
+)
+#: W3, appended after the existing ``passed`` sentence (see above). It names no
+#: count and no sub-type, and never says the lots "belong" to the industry: the
+#: system cannot tell, and for an ETF or a non-TW holding there is nothing to
+#: fill in (D6).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W3)
+SECTOR_UNVALUED_UNKNOWN_PASSED_DETAIL = (
+    "帳本內有部位無法估值，且無法判斷其所屬產業，{sector} 產業的佔比可能被低估，"
+    "上述低於上限的結果也可能建立在偏低的佔比上。"
+)
+
 #: AC-9.2: what cap 3 said before FR-9 existed, kept verbatim as the opening
 #: sentence so a user who never entered a net worth sees no change at all, with
 #: the one input that would make the cap evaluable named after it.
@@ -614,6 +662,65 @@ class KellyInputs(BaseModel):
         return self
 
 
+class UnknownSectorLots(BaseModel):
+    """Lots that sit in no industry at all, counted by *why* (ADR-0022 required 5-a).
+
+    A holding with no category is one of three different things -- a TW stock
+    nobody filed (``tw_unfiled``), a fund TWSE's company taxonomy does not
+    classify (``etf``), or a holding in a market with no taxonomy (``non_tw``)
+    -- and the three are kept apart so the reason survives. Every rule that
+    *decides* something reads :meth:`total` only: for cap 2 all three "may
+    belong" to any industry, and an ETF that counts as "may belong" while
+    unvalued must count the same way once it is valued (ADR-0022 Decision 4).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tw_unfiled: int = Field(default=0, ge=0)
+    etf: int = Field(default=0, ge=0)
+    non_tw: int = Field(default=0, ge=0)
+
+    def total(self) -> int:
+        """All three sub-types together, which is all a verdict may read."""
+        return self.tw_unfiled + self.etf + self.non_tw
+
+
+class UnvaluedComposition(BaseModel):
+    """Where the book's unvalued lots sit relative to this card's industry X.
+
+    ADR-0022 Decision 1. Classified once, by :mod:`app.advice.book`, per
+    ``(symbol, market)`` group rather than per lot: a group filed under X (even
+    with an unfiled lot beside it) or filed under several categories one of
+    which is X counts as X. The four counts partition the book's unvalued lots
+    -- they always add up to the number of positions whose valuation is not
+    ``ok`` -- so no lot is counted twice or dropped.
+
+    * ``own_lots`` -- this symbol's own unvalued lots. Counted here whatever X
+      is, and never as ``same`` when X is ``None``.
+    * ``same_sector_lots`` -- *other* symbols' unvalued lots in X; ``0`` when X
+      is ``None``.
+    * ``unknown_sector_lots`` -- lots in groups with no category at all.
+    * ``other_sector_lots`` -- lots in groups filed only under industries
+      other than X.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    own_lots: int = Field(ge=0)
+    same_sector_lots: int = Field(ge=0)
+    unknown_sector_lots: UnknownSectorLots
+    other_sector_lots: int = Field(ge=0)
+
+    def total(self) -> int:
+        """Every unvalued lot in the book, once."""
+        return (
+            self.own_lots
+            + self.same_sector_lots
+            + self.unknown_sector_lots.total()
+            + self.other_sector_lots
+        )
+
+
 class PortfolioContext(BaseModel):
     """Everything the caps need about one symbol and the book around it.
 
@@ -669,6 +776,21 @@ class PortfolioContext(BaseModel):
     #: the stored row; ``None`` for every hand-assembled context, which is why
     #: the field defaults to it.
     kelly: KellyInputs | None = None
+    #: Where the book's unvalued lots sit relative to :attr:`sector`, set by
+    #: :func:`app.advice.book.build_book_context` (ADR-0022 Decision 1). ``None``
+    #: means the caller did not say -- a hand-assembled context -- and cap 2
+    #: then falls back to "industry unknown" unless :attr:`book_fully_valued`
+    #: is an explicit ``True`` (Decision 2): it never guesses "same industry"
+    #: and never guesses "no overlap" from silence.
+    unvalued: UnvaluedComposition | None = None
+    #: Valued lots that sit in no industry at all (AC-12.5), by sub-type, set
+    #: by the same builder from the same per-group classification as
+    #: :attr:`unvalued`. They are inside total equity but outside every
+    #: industry's numerator, so while any exists cap 2 is not used for sizing
+    #: (ADR-0022 Decision 4, C-1). ``None`` means the caller did not say; only
+    #: hand-assembled contexts leave it unset, and its verdict is unaffected
+    #: either way -- the standing AC-12.5 note carries that disclosure.
+    valued_unclassified_lots: UnknownSectorLots | None = None
 
     def position_weight(self) -> float | None:
         """This symbol's share of total equity, or ``None`` if not computable."""
@@ -874,8 +996,65 @@ def _inferred_sector_gap(ctx: PortfolioContext) -> SectorGap:
     return "unfiled"
 
 
+class SectorNumeratorGaps(BaseModel):
+    """What cap 2's numerator may be missing, for one context (ADR-0022).
+
+    The single reading of :attr:`PortfolioContext.unvalued` and
+    :attr:`PortfolioContext.valued_unclassified_lots` that both the verdict
+    (:func:`_check_sector_weight`) and the sizing gate (:func:`notional_caps`)
+    use, so "may cap 2 be sized from?" is one expression (ADR-0022 Decision 4,
+    K-3) and cannot disagree with the verdict about which lots were missing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: Unvalued lots known to be in this card's industry, this symbol's own
+    #: included (``own_lots + same_sector_lots``); ``0`` when there is no
+    #: industry to be in.
+    same: int
+    #: Whether any unvalued lot cannot be placed in an industry at all.
+    unknown: bool
+    #: Whether any *valued* lot sits in no industry (AC-12.5, C-1).
+    valued_unclassified: bool
+
+    def complete(self) -> bool:
+        """Whether nothing that may belong to this industry is missing from it.
+
+        Only an unvalued lot filed under some *other* industry leaves the
+        numerator whole (the computed share then reads high, which is the
+        direction the caps may err in). Anything else -- same, unknown, or a
+        valued holding with no category -- may be missing from it.
+        """
+        return self.same == 0 and not self.unknown and not self.valued_unclassified
+
+
+def sector_numerator_gaps(ctx: PortfolioContext) -> SectorNumeratorGaps:
+    """Read cap 2's numerator gaps off ``ctx``, with ADR-0022's fallback.
+
+    A context that does not say where its unvalued lots sit (``unvalued`` is
+    ``None``, i.e. hand-assembled) is read as "no overlap" only when it also
+    says the book was fully valued; otherwise as "industry unknown"
+    (Decision 2). Neither "same industry" nor "no overlap" is ever guessed.
+    """
+    composition = ctx.unvalued
+    if composition is None:
+        same, unknown = 0, ctx.book_fully_valued is not True
+    else:
+        same = composition.own_lots + composition.same_sector_lots if ctx.sector is not None else 0
+        unknown = composition.unknown_sector_lots.total() > 0
+    unclassified = ctx.valued_unclassified_lots
+    return SectorNumeratorGaps(
+        same=same,
+        unknown=unknown,
+        valued_unclassified=unclassified is not None and unclassified.total() > 0,
+    )
+
+
 def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResult:
     threshold = budget.max_sector_weight
+    # A symbol with no industry keeps its own sentence ahead of route C': its
+    # own unvalued lots are not "same" when there is no industry to be in
+    # (ADR-0022 Decision 3, KC-4).
     if ctx.sector is None or ctx.sector_market_value_twd is None:
         gap = ctx.sector_gap if ctx.sector_gap is not None else _inferred_sector_gap(ctx)
         return (
@@ -887,21 +1066,35 @@ def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResu
     if ctx.total_equity_twd is None or not ctx.total_equity_twd > 0.0:
         return ("not_evaluable", "缺少總資產，無法計算產業佔比。", None, threshold)
     weight = ctx.sector_market_value_twd / ctx.total_equity_twd
+    gaps = sector_numerator_gaps(ctx)
     if _breaches(weight, threshold):
-        return (
-            "violated",
+        violated = (
             f"{ctx.sector} 產業佔總資產 {format_percent(weight)}，"
-            f"已達或超過上限 {format_percent(threshold)}。",
-            weight,
+            f"已達或超過上限 {format_percent(threshold)}。"
+        )
+        if gaps.same > 0:
+            # Route C': a breach that is provable from the valued lots alone
+            # stays a breach -- only ``violated`` blocks an ``add``.
+            violated += SECTOR_UNVALUED_SAME_VIOLATED_DETAIL.format(
+                sector=ctx.sector, count=gaps.same
+            )
+        return ("violated", violated, weight, threshold)
+    if gaps.same > 0:
+        # Route C': the computed share is short by lots in this very industry,
+        # so a pass would be read off a floor. Withheld, not passed.
+        return (
+            "not_evaluable",
+            SECTOR_UNVALUED_SAME_NOT_EVALUABLE_DETAIL.format(sector=ctx.sector, count=gaps.same),
+            None,
             threshold,
         )
-    return (
-        "passed",
+    passed = (
         f"{ctx.sector} 產業佔總資產 {format_percent(weight)}，"
-        f"低於上限 {format_percent(threshold)}。",
-        weight,
-        threshold,
+        f"低於上限 {format_percent(threshold)}。"
     )
+    if gaps.unknown:
+        passed += SECTOR_UNVALUED_UNKNOWN_PASSED_DETAIL.format(sector=ctx.sector)
+    return ("passed", passed, weight, threshold)
 
 
 def _net_worth_disclosure(net_worth: SelfReportedNetWorth) -> str:
@@ -1220,7 +1413,18 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
 
     caps["single_position_weight"] = budget.max_position_weight * equity
 
-    if ctx.sector is not None and ctx.sector_market_value_twd is not None and current is not None:
+    # Cap 2 is sized from only when its numerator is complete (ADR-0022
+    # Decision 4): an unvalued lot that is or may be in this industry, or a
+    # valued holding in no industry, leaves the headroom overstated -- and
+    # that holds for a ``passed`` with W3 (unknown only) as much as for any
+    # other branch. The condition is :func:`sector_numerator_gaps`, the one
+    # :func:`_check_sector_weight` reads.
+    if (
+        ctx.sector is not None
+        and ctx.sector_market_value_twd is not None
+        and current is not None
+        and sector_numerator_gaps(ctx).complete()
+    ):
         others = max(ctx.sector_market_value_twd - current, 0.0)
         caps["sector_weight"] = max(budget.max_sector_weight * equity - others, 0.0)
 

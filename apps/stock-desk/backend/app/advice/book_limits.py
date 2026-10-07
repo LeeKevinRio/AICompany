@@ -35,7 +35,14 @@ from:
    Cap 2 is the one cap where withholding a holding can understate a verdict
    that *is* reported -- the holding may belong to an industry still in the
    comparison -- so its exclusion sentence discloses that
-   (:data:`SECTOR_UNVALUED_EXCLUSION_SUFFIX`).
+   (:data:`SECTOR_UNVALUED_EXCLUSION_SUFFIX`). Since ADR-0022 the holdings that
+   *are* compared carry the same fact in their own verdict (route C'), and the
+   exclusion sentence is chosen once the comparison is known: a holding whose
+   industries are all outside it says so instead
+   (:data:`SECTOR_UNVALUED_OUTSIDE_COMPARISON_SUFFIX`,
+   :data:`SECTOR_UNVALUED_MIXED_OUTSIDE_COMPARISON_SUFFIX`), and a holding with
+   no category while nothing at all was compared says that
+   (:data:`SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX`).
 4. **An empty book is not a book that passed.** With no holding at all there is
    no weight, no industry and no stop-out loss to compare, and no exposure to
    put in cap 3's numerator either: every cap that measures holdings reports
@@ -48,7 +55,7 @@ without a network.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict
@@ -56,8 +63,11 @@ from pydantic import BaseModel, ConfigDict
 from app.advice.book import (
     SYMBOL_UNVALUED_NOTE,
     FxQuote,
+    SectorComparison,
+    book_notes,
     build_book_context,
     build_book_level_context,
+    sector_categories,
 )
 from app.advice.limits import (
     LIMIT_IDS,
@@ -72,6 +82,7 @@ from app.advice.limits import (
 )
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
+from app.positions.sectors import TWSE_SECTORS
 
 #: The caps whose observed value belongs to one holding, and which are therefore
 #: aggregated by comparing every symbol in the book. The one absent id
@@ -98,8 +109,16 @@ PER_SYMBOL_LIMIT_IDS: tuple[str, ...] = (
 WORST_SYMBOL_PREFIX = "逐檔評估帳本內 {count} 檔標的，觀測值最高者為 {symbol}："
 
 #: The same for cap 2, which compares industries rather than holdings -- the
-#: verdict that follows names the industry itself.
-WORST_SECTOR_PREFIX = "逐項彙總帳本內 {count} 個產業，觀測值最高者為："
+#: verdict that follows names the industry itself. ``{count}`` is the number of
+#: industries actually compared (``len(comparable)``), which is why the
+#: sentence says "納入比較的" rather than "帳本內": route C' and the excluded
+#: holdings make the two differ, and a holding filed under several categories
+#: is never counted here (ADR-0022 M-2a).
+#:
+#: W7, replacing the 2026-08-09 sentence unconditionally.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W7)
+WORST_SECTOR_PREFIX = "逐項彙總納入比較的 {count} 個產業，觀測值最高者為："
 
 #: Rule 2: the aggregate says what it could not look at, next to the verdict.
 EXCLUDED_SUFFIX = "另有 {count} 檔標的未納入本條上限的比較，各自的成因逐檔列出。"
@@ -115,9 +134,54 @@ UNVALUED_EXCLUSION_SUFFIX = "本條上限的逐檔比較未納入此標的。"
 #: direction is stated here, next to the holding that causes it, because the
 #: book-level notes say the opposite ("偏高") about a different quantity.
 #: 風控核可文案,修改須重新送審(2026-08-09)
+#:
+#: Since ADR-0022 (M-4) it is used only where it is true: the withheld holding
+#: has no category while some industry is compared, or is filed under an
+#: industry still in the comparison, or under several categories at least one
+#: of which is. The other states have their own sentences below.
 SECTOR_UNVALUED_EXCLUSION_SUFFIX = (
     "本條上限的比較未納入此標的；此標的可能屬於已納入比較的產業，使該產業的佔比被低估。"
 )
+
+#: W6: the withheld holding is filed under one industry Y, and Y is not in the
+#: comparison at all -- so the sentence above ("may belong to a compared
+#: industry") would be false. Says instead that Y was not compared, and that
+#: not being compared is not the same as being under the cap.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W6)
+SECTOR_UNVALUED_OUTSIDE_COMPARISON_SUFFIX = (
+    "本條上限的比較未納入此標的；此標的屬於 {sector} 產業，該產業本次沒有任何持倉納入比較，"
+    "未納入比較不代表該產業未超過上限。"
+)
+
+#: W-6m: the withheld holding's lots were filed under several categories, and
+#: none of them is in the comparison (the comparison may be empty). It names
+#: every category the user filed -- what the data says, not a claim about the
+#: company's business -- in :func:`format_sector_list` order, all of them.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`` (第三段 W-6m)
+SECTOR_UNVALUED_MIXED_OUTSIDE_COMPARISON_SUFFIX = (
+    "本條上限的比較未納入此標的；此標的的持倉所填產業別為 {sectors}，"
+    "這些產業本次沒有任何持倉納入比較，未納入比較不代表這些產業未超過上限。"
+)
+
+#: W-6u: the withheld holding was filed under no category at all and *nothing*
+#: was compared, so the 2026-08-09 sentence above ("may belong to a compared
+#: industry") would point at nothing and contradict cap 2's own "nothing
+#: could be compared". No category, nothing compared: the sentence says so and
+#: states that the cap could not be confirmed either way -- neither "under"
+#: nor "over" (the drafted "does not mean no industry is over" was vetoed as
+#: leaning towards "over"). One sentence for all three sub-types, no count
+#: (``SYMBOL_UNVALUED_NOTE`` carries it) and no fill-in guidance (D6).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W-6u 逐字審)
+SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX = (
+    "本條上限的比較未納入此標的；此標的沒有產業別資料，本次沒有任何產業納入比較，"
+    "因此無法確認各產業的佔比是否超過上限。"
+)
+
+#: The joiner of :func:`format_sector_list`: every name, no "等", no truncation.
+SECTOR_LIST_SEPARATOR = "、"
 
 #: Nothing is held at all: there is no holding to compare, which is a different
 #: statement from "the holdings could not be judged" below. Also used by cap 3,
@@ -130,6 +194,7 @@ EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部�
 #: would describe every gap with one gap's reason (AC-12.3), and the causes are
 #: already carried verbatim, one per holding, in ``excluded``.
 #: 風控核可文案,修改須重新送審(2026-08-09);第 2 條採路線(a)揭露低估,已核可
+#: 第 2 條 same 情境改採路線 C′（ADR-0022，風控 2026-10-07 核可）；sector 為 None 仍採路線(a)
 NO_CANDIDATE_DETAIL = (
     "{name}沒有可納入比較的{unit}，本次不計算，回報 not_evaluable；各標的的成因逐檔列出。"
 )
@@ -225,9 +290,10 @@ class BookLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     limits: list[BookLimitCheck]
-    #: The book-level notes :mod:`app.advice.book` attaches to any context built
-    #: from this summary (equity basis, exposure denominator, unvalued
-    #: positions, unclassified holdings).
+    #: The book-level notes :mod:`app.advice.book` states about this summary
+    #: (equity basis, exposure denominator, unvalued positions, unclassified
+    #: holdings), assembled by :func:`app.advice.book.book_notes` after every
+    #: verdict above exists.
     notes: list[str]
 
 
@@ -246,12 +312,29 @@ class _UnvaluedSymbol:
     """A holding rule 3 withholds, with the note that establishes why.
 
     The per-cap suffix is attached where the exclusion is reported rather than
-    here, because cap 2 has to disclose something the other two caps do not.
+    here, because cap 2 has to disclose something the other two caps do not --
+    and which sentence is true depends on the comparison, which is only known
+    once every candidate has been judged (ADR-0022 M-4, RM-3).
     """
 
     symbol: str
     market: Market
     note: str
+    #: categories(G): every industry the holding's lots were filed under.
+    categories: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _Aggregate:
+    """One per-symbol cap's book-level verdict, plus the industry it reports.
+
+    ``reported_sector`` is only set for cap 2 when an industry was compared:
+    the overview's notes need it (ADR-0022 M-5), and it is not part of the
+    response itself.
+    """
+
+    check: BookLimitCheck
+    reported_sector: str | None = None
 
 
 @dataclass(frozen=True)
@@ -294,22 +377,28 @@ def evaluate_book_limits(
     groups = _group_positions(summary)
     candidates, unvalued = _split_by_valuation(summary, budget, groups, prices, kelly, net_worth)
 
-    limits = [
-        (
-            _aggregate(
-                limit_id,
-                index,
-                baseline[limit_id],
-                candidates=candidates,
-                unvalued=unvalued,
-                book_is_empty=not groups,
-            )
-            if limit_id in PER_SYMBOL_LIMIT_IDS
-            else _book_level_check(index, baseline[limit_id], book_is_empty=not groups)
+    limits: list[BookLimitCheck] = []
+    reported_sector: str | None = None
+    for index, limit_id in enumerate(LIMIT_IDS, start=1):
+        if limit_id not in PER_SYMBOL_LIMIT_IDS:
+            limits.append(_book_level_check(index, baseline[limit_id], book_is_empty=not groups))
+            continue
+        aggregate = _aggregate(
+            limit_id,
+            index,
+            baseline[limit_id],
+            candidates=candidates,
+            unvalued=unvalued,
+            book_is_empty=not groups,
         )
-        for index, limit_id in enumerate(LIMIT_IDS, start=1)
-    ]
-    return BookLimits(limits=limits, notes=book.notes)
+        limits.append(aggregate.check)
+        if limit_id == "sector_weight":
+            reported_sector = aggregate.reported_sector
+    # Last, once every verdict exists: the notes' direction clause reads the
+    # industry cap 2 reported (ADR-0022 M-5), and they are assembled by the
+    # one finalizer every response uses (ADR-0023 Decision 8-1).
+    notes = book_notes(book, sector_comparison=SectorComparison(reported_sector=reported_sector))
+    return BookLimits(limits=limits, notes=notes)
 
 
 def _book_level_check(index: int, check: LimitCheck, *, book_is_empty: bool) -> BookLimitCheck:
@@ -378,6 +467,7 @@ def _split_by_valuation(
                     symbol=group.symbol,
                     market=group.market,
                     note=SYMBOL_UNVALUED_NOTE.format(count=skipped),
+                    categories=sector_categories(group.positions),
                 )
             )
             continue
@@ -424,7 +514,7 @@ def _aggregate(
     candidates: list[_Candidate],
     unvalued: list[_UnvaluedSymbol],
     book_is_empty: bool,
-) -> BookLimitCheck:
+) -> _Aggregate:
     """The worst holding's verdict for one cap, with everything left out named.
 
     ``baseline`` is the same cap evaluated against the book-level context. Only
@@ -432,20 +522,19 @@ def _aggregate(
     *status* is an artefact of a context with no holding in it and would be a
     claim about the user's book if it were reported (see
     :func:`app.advice.book.build_book_level_context`).
+
+    The comparison is settled first and the withheld holdings' sentences are
+    chosen after it (ADR-0022 M-4, RM-3): for cap 2, which sentence is true of
+    a withheld holding depends on which industries ended up compared. The
+    withheld holdings still come first in ``excluded``, as they always have.
     """
     by_sector = limit_id == "sector_weight"
-    unvalued_suffix = SECTOR_UNVALUED_EXCLUSION_SUFFIX if by_sector else UNVALUED_EXCLUSION_SUFFIX
-    excluded = [
-        ExcludedSymbol(
-            symbol=entry.symbol, market=entry.market, reason=entry.note + unvalued_suffix
-        )
-        for entry in unvalued
-    ]
     comparable: list[_Candidate] = []
+    candidate_exclusions: list[ExcludedSymbol] = []
     for candidate in candidates:
         check = candidate.checks[limit_id]
         if check.status == "not_evaluable":
-            excluded.append(
+            candidate_exclusions.append(
                 ExcludedSymbol(
                     symbol=candidate.symbol, market=candidate.market, reason=check.detail
                 )
@@ -455,6 +544,23 @@ def _aggregate(
 
     if by_sector:
         comparable = _one_per_sector(comparable)
+    compared_sectors = frozenset(
+        candidate.sector for candidate in comparable if candidate.sector is not None
+    )
+    excluded = [
+        ExcludedSymbol(
+            symbol=entry.symbol,
+            market=entry.market,
+            reason=entry.note
+            + (
+                _sector_unvalued_suffix(entry.categories, compared_sectors)
+                if by_sector
+                else UNVALUED_EXCLUSION_SUFFIX
+            ),
+        )
+        for entry in unvalued
+    ]
+    excluded.extend(candidate_exclusions)
 
     if not comparable:
         detail = (
@@ -462,17 +568,19 @@ def _aggregate(
             if book_is_empty
             else NO_CANDIDATE_DETAILS[limit_id]
         )
-        return BookLimitCheck(
-            index=index,
-            limit_id=limit_id,
-            name=baseline.name,
-            status="not_evaluable",
-            observed=None,
-            threshold=baseline.threshold,
-            detail=detail,
-            worst_symbol=None,
-            evaluated_count=0,
-            excluded=excluded,
+        return _Aggregate(
+            BookLimitCheck(
+                index=index,
+                limit_id=limit_id,
+                name=baseline.name,
+                status="not_evaluable",
+                observed=None,
+                threshold=baseline.threshold,
+                detail=detail,
+                worst_symbol=None,
+                evaluated_count=0,
+                excluded=excluded,
+            )
         )
 
     worst = max(comparable, key=lambda c: _worst_key(c.checks[limit_id]))
@@ -483,20 +591,82 @@ def _aggregate(
         else WORST_SYMBOL_PREFIX.format(count=len(comparable), symbol=worst.symbol)
     )
     suffix = EXCLUDED_SUFFIX.format(count=len(excluded)) if excluded else ""
-    return BookLimitCheck(
-        index=index,
-        limit_id=limit_id,
-        name=check.name,
-        status=check.status,
-        observed=check.observed,
-        threshold=check.threshold,
-        detail=prefix + check.detail + suffix,
-        # Cap 2's observed value is an industry's share, not this holding's, so
-        # naming the holding it was read from would misattribute it.
-        worst_symbol=None if by_sector else worst.symbol,
-        evaluated_count=len(comparable),
-        excluded=excluded,
+    return _Aggregate(
+        BookLimitCheck(
+            index=index,
+            limit_id=limit_id,
+            name=check.name,
+            status=check.status,
+            observed=check.observed,
+            threshold=check.threshold,
+            detail=prefix + check.detail + suffix,
+            # Cap 2's observed value is an industry's share, not this holding's,
+            # so naming the holding it was read from would misattribute it.
+            worst_symbol=None if by_sector else worst.symbol,
+            evaluated_count=len(comparable),
+            excluded=excluded,
+        ),
+        reported_sector=worst.sector if by_sector else None,
     )
+
+
+def _sector_unvalued_suffix(categories: frozenset[str], compared: frozenset[str]) -> str:
+    """Cap 2's sentence for a withheld holding, given what was compared (M-4).
+
+    * Filed under one industry Y (unfiled lots beside it included), Y not
+      compared -> W6 naming Y.
+    * Filed under several, none compared (or nothing compared) -> W-6m naming
+      them all.
+    * Filed under no category while nothing at all was compared -> W-6u
+      (:data:`SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX`): "may belong
+      to a compared industry" would point at nothing.
+    * Otherwise -- no category with some industry compared, or an industry
+      still in the comparison -> the 2026-08-09 sentence, unchanged: there it
+      is true.
+    """
+    if len(categories) == 1:
+        (sector,) = categories
+        if sector not in compared:
+            return SECTOR_UNVALUED_OUTSIDE_COMPARISON_SUFFIX.format(sector=sector)
+        return SECTOR_UNVALUED_EXCLUSION_SUFFIX
+    if len(categories) > 1 and not categories & compared:
+        return SECTOR_UNVALUED_MIXED_OUTSIDE_COMPARISON_SUFFIX.format(
+            sectors=format_sector_list(categories)
+        )
+    if not categories and not compared:
+        return SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX
+    # Only reachable with something compared: the old sentence has a referent.
+    return SECTOR_UNVALUED_EXCLUSION_SUFFIX
+
+
+#: Position of each TWSE category in the exchange's own order, for
+#: :func:`format_sector_list`.
+_TWSE_SECTOR_RANK: dict[str, int] = {name: rank for rank, name in enumerate(TWSE_SECTORS)}
+
+
+def _sector_list_key(sector: str) -> tuple[int, int, str]:
+    """Sort key for one category: TWSE order first, anything else after it.
+
+    A total order over every string, so sorting can never raise: a category
+    in :data:`app.positions.sectors.TWSE_SECTORS` sorts by its index there; a
+    value that is not (legacy data) sorts after all of them, by code point.
+    """
+    rank = _TWSE_SECTOR_RANK.get(sector)
+    if rank is None:
+        return (1, 0, sector)
+    return (0, rank, "")
+
+
+def format_sector_list(categories: Iterable[str]) -> str:
+    """Every category in ``categories``, once, in TWSE order, joined by "、".
+
+    ADR-0022 M-4 / RM-2 -- W-6m's ``{sectors}``: de-duplicated, ordered by
+    :data:`app.positions.sectors.TWSE_SECTORS` (the order the user picks from
+    on the positions form) with any other value last, joined with "、", never
+    shortened and never ending in "等". Its own function on purpose: the order
+    a reader sees is not borrowed from any other sort in the code base.
+    """
+    return SECTOR_LIST_SEPARATOR.join(sorted(set(categories), key=_sector_list_key))
 
 
 def _one_per_sector(candidates: list[_Candidate]) -> list[_Candidate]:

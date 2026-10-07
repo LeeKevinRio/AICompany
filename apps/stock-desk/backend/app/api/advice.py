@@ -24,7 +24,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import ConfigDict
 
-from app.advice.book import build_book_context, self_reported_net_worth
+from app.advice.book import book_notes, build_book_context, self_reported_net_worth
 from app.advice.engine import build_advice
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
@@ -216,7 +216,7 @@ def get_advice(
             portfolio_context=book.context.model_dump(),
             # No card, no caps: the freshness note has nothing to qualify here,
             # and the page renders only the insufficient panel (風控 A-8).
-            context_notes=book.notes,
+            context_notes=book_notes(book),
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
         )
@@ -227,6 +227,9 @@ def get_advice(
         portfolio=book.context,
         budget=budget,
     )
+    # Assembled after the caps were evaluated (ADR-0023 Decision 8-1): the
+    # notes are built by the one finalizer, never read off the context.
+    notes = book_notes(book)
     return AdviceResponse(
         symbol=symbol,
         market=market,
@@ -238,7 +241,7 @@ def get_advice(
         portfolio_context=book.context.model_dump(),
         # First, not last (風控 A-6): this sentence qualifies every figure the
         # notes after it are about.
-        context_notes=[*_book_freshness_notes(summary), *book.notes],
+        context_notes=[*_book_freshness_notes(summary), *notes],
         data=data_meta(loaded.meta()),
         as_of=now_iso(),
     )

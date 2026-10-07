@@ -41,6 +41,15 @@ Three honesty rules govern what is filled in:
    the five are different problems and only this layer can tell them apart
    (AC-12.3).
 
+   Since ADR-0022 a category belongs to the *holding* (one symbol in one
+   market), not to the lot: an unfiled lot beside a filed one counts in that
+   industry, and a holding filed under several counts in each. The unvalued
+   lots are classified the same way against the card's industry
+   (:class:`app.advice.limits.UnvaluedComposition`), because a lot missing
+   from the industry's numerator makes its share read *low* -- which is why
+   the notes' "比率會因此偏高" is chosen per response by :func:`book_notes`
+   rather than fixed.
+
 5. **The Kelly pair is passed in, never fetched.** Since C5 there *is* a source
    for it (``kelly_inputs``, ADR-0006 D-2), but reading it here would put a
    database call inside the one purely-computational assembly point. The caller
@@ -63,19 +72,25 @@ conversion", because they call for different things from the reader.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from app.advice.limits import (
+    LIMIT_NAMES,
     NET_WORTH_STALE_AFTER_DAYS,
     SECTOR_MIXED_DETAIL,
     KellyInputs,
     PortfolioContext,
     SectorGap,
     SelfReportedNetWorth,
+    UnknownSectorLots,
+    UnvaluedComposition,
     format_percent,
     format_reported_at,
+    sector_numerator_gaps,
 )
 from app.data.interface import DataStatus
 from app.data.price_guard import usable_price
@@ -148,24 +163,116 @@ SECTOR_UNCLASSIFIED_NOTE = (
 )
 
 #: Rule 1 stated on the book as a whole: positions that could not be valued are
-#: outside every total, so every ratio built on the valued book reads high.
-#: A constant rather than an inline f-string because the book-level assembly
-#: (:func:`build_book_level_context`) states the same fact about the same books.
-UNVALUED_POSITIONS_NOTE = (
-    "組合中有 {count} 筆部位無法估值（缺價格或匯率），未計入總資產；比率會因此偏高。"
-)
+#: outside every total. Since ADR-0022 the sentence is "{cause}；{direction}":
+#: the cause half (W4 here, W5 below) is the 2026-09-18 wording unchanged, and
+#: the direction half is chosen per card / per overview, because "every ratio
+#: reads high" is only true when no unvalued lot may belong to the industry
+#: cap 2 measures. Constants rather than inline f-strings because the
+#: book-level assembly (:func:`build_book_level_context`) states the same fact
+#: about the same books.
+#:
+#: Live (W4) and cache-only (W5) cause halves: unchanged from 2026-09-18; the
+#: fixed sentences were turned into this conditional form and re-approved by
+#: risk-compliance on 2026-10-07. Under the ratios-read-high direction the
+#: output is byte-identical to the 2026-09-18 sentences
+#: (:data:`UNVALUED_POSITIONS_NOTE`, :data:`UNVALUED_POSITIONS_NOTE_CACHE_ONLY`).
+#: 風控核可文案,修改須重新送審(2026-10-07;live／cache_only 條件式重新核可)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W4, W5, 組合方式)
+UNVALUED_POSITIONS_CAUSE = "組合中有 {count} 筆部位無法估值（缺價格或匯率），未計入總資產"
 #: The same fact for the positions whose price was *not asked for this time*
 #: (a cache-only book, ADR-0010 D-1; ``Valuation.missing`` carries
 #: ``price_not_queried``) -- a different cause from "asked, nothing there",
 #: which the sentence above keeps describing. The two groups are counted
-#: separately (風控 A-5): a book may hold both. Consequence clause verbatim.
+#: separately (風控 A-5): a book may hold both.
 #: Wording by creative-lead (`work/stock-desk-ADR-0010-揭露句-文案.md`), fixed
 #: verbatim by risk-compliance-officer 2026-09-18 (三審); any change goes back
 #: to them. 列管: if an FX cache layer ever makes a *rate* "not asked" too, the
 #: parenthetical must be re-reviewed.
-UNVALUED_POSITIONS_NOTE_CACHE_ONLY = (
-    "組合中有 {count} 筆部位無法估值（本次未向來源查詢，本機尚無可用的價格或匯率），"
-    "未計入總資產；比率會因此偏高。"
+#: 風控核可文案,修改須重新送審(2026-10-07;live／cache_only 條件式重新核可)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W5)
+UNVALUED_POSITIONS_CAUSE_CACHE_ONLY = (
+    "組合中有 {count} 筆部位無法估值（本次未向來源查詢，本機尚無可用的價格或匯率），未計入總資產"
+)
+#: "{成因}；{方向子句}" -- the one way a cause and its direction become one note.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (組合方式)
+UNVALUED_NOTE_TEMPLATE = "{cause}；{direction}"
+#: D-a: every ratio built on the valued book reads high. True whenever no
+#: unvalued lot is, or may be, in the industry cap 2 measures.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-a)
+UNVALUED_DIRECTION_READS_HIGH = "比率會因此偏高。"
+#: D-P: caps 1, 4 and 5 still read high, but cap 2's industry share may read
+#: *low*, because an unvalued lot may be in that very industry. ``{target}`` is
+#: :data:`UNVALUED_DIRECTION_TARGET_SYMBOL` on the card and
+#: :data:`UNVALUED_DIRECTION_TARGET_BOOK` on the overview.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-P)
+UNVALUED_DIRECTION_SECTOR_MAY_READ_LOW = (
+    "第 1、4、5 條上限的比率會因此偏高；第 2 條上限（單一產業佔比上限）則不一定偏高，"
+    "因為部分無法估值的持倉可能屬於{target}，使該產業的佔比偏低。"
+)
+#: D-P's ``{target}`` on the card: the card's own industry, with the leading
+#: half-width space the approval specifies.
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-P target)
+UNVALUED_DIRECTION_TARGET_SYMBOL = " {sector} 產業"
+#: D-P's ``{target}`` on the overview (``/api/portfolio/limits``).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-P target)
+UNVALUED_DIRECTION_TARGET_BOOK = "已納入比較的產業"
+
+#: The caps whose ratio sits on this symbol's own position (caps 1, 4 and 5):
+#: an unvalued lot of the symbol itself is missing from their numerator. Named
+#: from :data:`app.advice.limits.LIMIT_NAMES`, never typed (risk-compliance required).
+_OWN_POSITION_LIMIT_IDS: tuple[str, ...] = (
+    "single_position_weight",
+    "per_trade_loss",
+    "kelly_fraction",
+)
+#: The joiner between those names inside D-d1 / D-d2's parenthesis.
+_OWN_POSITION_NAME_SEPARATOR = "、"
+_OWN_POSITION_LIMIT_NAMES = _OWN_POSITION_NAME_SEPARATOR.join(
+    LIMIT_NAMES[limit_id] for limit_id in _OWN_POSITION_LIMIT_IDS
+)
+
+#: D-d1: this symbol's own lots are the only unvalued lots in the book. Caps
+#: 1, 4 and 5 then read *low* -- a definite floor, cap 4 included, because
+#: ``held_shares`` counts only the valued shares while the stop distance does
+#: not depend on valuation (risk-compliance D-d1 correction, tech-architect's proof). Card only.
+#: ``{names}`` is filled from :data:`LIMIT_NAMES` below.
+#: 風控核可文案,修改須重新送審(2026-10-07;D-d1 第二次核可（更正）2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-d1 更正節)
+UNVALUED_DIRECTION_OWN_ONLY_TEMPLATE = (
+    "因本標的自身的持倉無法估值，第 1、4、5 條上限（{names}）的比率會偏低，"
+    "其低於上限的結果也可能建立在偏低的比率上。"
+)
+UNVALUED_DIRECTION_OWN_ONLY = UNVALUED_DIRECTION_OWN_ONLY_TEMPLATE.format(
+    names=_OWN_POSITION_LIMIT_NAMES
+)
+#: D-d2: this symbol's own lots *and* other holdings' lots are unvalued. The
+#: two push caps 1, 4 and 5 in opposite directions, so the direction is not
+#: known. Card only. This is the clause-carrying version; the version without
+#: the "低於上限的結果…" clause replaces both in 6-a (ADR-0023 Decision 4).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-d2)
+UNVALUED_DIRECTION_OWN_AND_OTHERS_TEMPLATE = (
+    "因本標的自身與其他標的的持倉皆無法估值，第 1、4、5 條上限（{names}）的比率方向不定，"
+    "可能偏高也可能偏低，低於上限的結果也可能建立在偏低的比率上。"
+)
+UNVALUED_DIRECTION_OWN_AND_OTHERS = UNVALUED_DIRECTION_OWN_AND_OTHERS_TEMPLATE.format(
+    names=_OWN_POSITION_LIMIT_NAMES
+)
+
+#: The 2026-09-18 live sentence, kept as the cause joined to D-a -- what every
+#: book whose unvalued lots cannot touch cap 2's industry still reads, byte for
+#: byte (K-11). Fixed verbatim by risk-compliance-officer 2026-09-18 (三審).
+UNVALUED_POSITIONS_NOTE = UNVALUED_NOTE_TEMPLATE.format(
+    cause=UNVALUED_POSITIONS_CAUSE, direction=UNVALUED_DIRECTION_READS_HIGH
+)
+#: The 2026-09-18 cache-only sentence, likewise (K-11).
+UNVALUED_POSITIONS_NOTE_CACHE_ONLY = UNVALUED_NOTE_TEMPLATE.format(
+    cause=UNVALUED_POSITIONS_CAUSE_CACHE_ONLY, direction=UNVALUED_DIRECTION_READS_HIGH
 )
 
 #: The same fact about *one* symbol's own lots. Extracted for the same reason:
@@ -235,21 +342,65 @@ class FxQuote:
 BOOK_LEVEL_SYMBOL = "（整體帳本）"
 
 
+#: Which response a :class:`BookContext` was built for: one symbol's advice
+#: card (``symbol``) or the whole-book overview (``book``). The two choose the
+#: notes' direction clause by different rules (ADR-0022 Decision 5).
+BookScope = Literal["symbol", "book"]
+
+
+@dataclass(frozen=True)
+class SectorComparison:
+    """What the overview's cap 2 aggregate reported, as its notes need it.
+
+    ``reported_sector`` is the industry the aggregate's verdict was read from
+    (the "回報產業 Y" of ADR-0022), or ``None`` when no industry could be
+    compared at all. It only exists once the aggregate has been computed,
+    which is why the overview's notes are assembled after it (ADR-0022 M-5,
+    ADR-0023 Decision 8-1).
+    """
+
+    reported_sector: str | None
+
+
 @dataclass(frozen=True)
 class BookContext:
-    """A :class:`PortfolioContext` plus what had to be assumed or left out."""
+    """A :class:`PortfolioContext` plus what had to be assumed or left out.
+
+    The notes are not stored: what they say depends on verdicts that do not
+    exist yet when the context is built (the overview's reported industry; in
+    a later change, cap 3's status), so the context keeps the *inputs* and the
+    caller assembles the notes with :func:`book_notes` once those verdicts are
+    known (ADR-0023 Decision 8-1).
+    """
 
     context: PortfolioContext
     held: bool
+    #: The summary every book-level note is stated about.
+    summary: PortfolioSummary
+    scope: BookScope
     position_ids: list[int] = field(default_factory=list)
     #: Currency of the matched holding(s), or ``None`` for a candidate.
     currency: str | None = None
-    notes: list[str] = field(default_factory=list)
+    #: The notes about this symbol (or, for the book scope, about the book's
+    #: classification) that follow the book-level ones, already final.
+    symbol_notes: tuple[str, ...] = ()
     #: The rate applied (``1.0`` for TWD), or ``None`` when none could be.
     fx_rate: float | None = None
-    #: The single FX sentence from ``notes``, for callers whose output shape has
-    #: no notes list of its own (the alert snapshot).
+    #: The single FX sentence from the notes, for callers whose output shape
+    #: has no notes list of its own (the alert snapshot).
     fx_note: str | None = None
+
+    @property
+    def notes(self) -> list[str]:
+        """Compatibility view: :func:`book_notes` for a symbol-scope context.
+
+        Production code does not read this (ADR-0023 KD-2): every response is
+        assembled through :func:`book_notes` at the point its verdicts are
+        known. A book-scope context has no notes before its aggregate exists,
+        so reading this on one raises rather than guessing the reported
+        industry.
+        """
+        return book_notes(self)
 
 
 def _matching(
@@ -348,6 +499,18 @@ def _position_rollup(
     )
 
 
+def sector_categories(positions: list[SummaryPosition]) -> frozenset[str]:
+    """The distinct industry categories filed on ``positions`` -- categories(G).
+
+    ADR-0022 M-1/M-3: the one definition of "which industries a holding was
+    filed under", read by every per-group rule (the industry numerators, the
+    unvalued classification, the AC-12.5 rollup, the overview's exclusion
+    sentences). A set, not a sequence: anything that prints these in an order
+    sorts them itself (:func:`app.advice.book_limits.format_sector_list`).
+    """
+    return frozenset(position.sector for position in positions if position.sector)
+
+
 def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorGap | None]:
     """The symbol's industry category -> ``(sector, gap)``.
 
@@ -360,7 +523,7 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
     """
     if not matched:
         return None, "no_position"
-    categories = sorted({position.sector for position in matched if position.sector})
+    categories = sorted(sector_categories(matched))
     if len(categories) > 1:
         return None, "mixed"
     if categories:
@@ -384,42 +547,168 @@ def _resolve_sector(matched: list[SummaryPosition]) -> tuple[str | None, SectorG
     return None, "unfiled"
 
 
-def _sector_rollup(summary: PortfolioSummary, sector: str) -> float:
+#: The sub-type an unclassified group is counted under, by the gap
+#: :func:`_resolve_sector` gives it. A group with no category can only be in
+#: one of these three states (``no_position`` needs no holding, ``mixed`` needs
+#: two categories), and valued and unvalued lots read the same table, so an
+#: ETF can never count as "may belong" while unvalued and "does not" once
+#: valued (ADR-0022 Decision 4, C-1).
+_UNKNOWN_SUBTYPE: dict[SectorGap, Literal["tw_unfiled", "etf", "non_tw"]] = {
+    "unfiled": "tw_unfiled",
+    "etf_instrument": "etf",
+    "unsupported_market": "non_tw",
+}
+
+
+@dataclass(frozen=True)
+class _SectorGroup:
+    """One ``(symbol, market)`` group of the book with its industry facts.
+
+    ADR-0022 classifies per holding, not per lot: a lot with no category
+    beside a lot filed under X is an X lot, and a holding filed under X and Y
+    counts in both. ``gap`` is :func:`_resolve_sector`'s answer for the group,
+    so the sub-type of an unclassified group is decided by the same rules as
+    cap 2's own sentence for that holding.
+    """
+
+    positions: tuple[SummaryPosition, ...]
+    categories: frozenset[str]
+    gap: SectorGap | None
+
+    def unknown_subtype(self) -> Literal["tw_unfiled", "etf", "non_tw"]:
+        """Which kind of "no industry" this group is; only for an empty group."""
+        if self.gap is None:  # pragma: no cover - callers check ``categories`` first
+            raise ValueError("a group with a resolved category has no unknown sub-type")
+        return _UNKNOWN_SUBTYPE[self.gap]
+
+
+def _sector_groups(summary: PortfolioSummary) -> list[_SectorGroup]:
+    """The book as ``(symbol, market)`` groups, each classified once.
+
+    The single per-holding resolution ADR-0022 Decision 1 requires: the
+    industry numerators (:func:`_sector_rollup`), the AC-12.5 rollup
+    (:func:`_valued_unclassified`) and the unvalued classification
+    (:func:`_unvalued_composition`) all read these groups and nothing else.
+    The key matches :func:`app.advice.book_limits._group_positions`.
+    """
+    grouped: dict[tuple[str, Market], list[SummaryPosition]] = {}
+    for position in summary.positions:
+        grouped.setdefault((position.symbol.strip().upper(), position.market), []).append(position)
+    return [
+        _SectorGroup(
+            positions=tuple(positions),
+            categories=sector_categories(positions),
+            gap=_resolve_sector(positions)[1],
+        )
+        for positions in grouped.values()
+    ]
+
+
+def _is_valued(position: SummaryPosition) -> bool:
+    """Whether ``position`` contributes to the book's totals (rule 1)."""
+    return position.valuation.status == "ok" and position.market_value_twd is not None
+
+
+def _sector_rollup(groups: list[_SectorGroup], sector: str) -> float:
     """``sector``'s TWD market value across the whole book.
 
     Only ``ok`` valuations are summed (rule 1) and only their own TWD
     contribution is used, so the numerator and ``total_equity_twd`` come from
-    the same figures.
+    the same figures. Per holding (ADR-0022 M-1, K-2): every valued lot of a
+    holding filed under ``sector`` counts, its unfiled lots included, and a
+    holding filed under several categories counts in full in each of them --
+    the conservative reading, which can only make a share read high. Shares of
+    different industries therefore may not be added up: nothing in the
+    product does (M-1 required).
     """
     total = Decimal(0)
-    for position in summary.positions:
-        if position.valuation.status != "ok" or position.market_value_twd is None:
+    for group in groups:
+        if sector not in group.categories:
             continue
-        if position.sector == sector:
-            total += position.market_value_twd
+        for position in group.positions:
+            if _is_valued(position) and position.market_value_twd is not None:
+                total += position.market_value_twd
     return float(total)
 
 
-def _unclassified_rollup(summary: PortfolioSummary) -> tuple[int, float]:
+def _valued_unclassified(groups: list[_SectorGroup]) -> tuple[UnknownSectorLots, float]:
+    """Valued lots of holdings filed under no category: ``(sub-types, value)``."""
+    counts: Counter[str] = Counter()
+    value = Decimal(0)
+    for group in groups:
+        if group.categories:
+            continue
+        for position in group.positions:
+            if _is_valued(position) and position.market_value_twd is not None:
+                counts[group.unknown_subtype()] += 1
+                value += position.market_value_twd
+    return UnknownSectorLots(**counts), float(value)
+
+
+def _unclassified_rollup(groups: list[_SectorGroup]) -> tuple[int, float]:
     """Valued holdings that sit outside every industry: ``(count, market value)``.
 
     This is what AC-12.5 requires disclosing: valued holdings that belong to
     *some* industry the user has not named, and therefore make every industry's
     share look smaller than it is. The value is carried beside the count because
     the count alone does not say how much of the book is missing from the ratio.
+    Only holdings with no category at all count (ADR-0022 M-1): an unfiled lot
+    beside a filed one is already in that industry's numerator.
     """
-    count = 0
-    value = Decimal(0)
-    for position in summary.positions:
-        if position.valuation.status != "ok" or position.market_value_twd is None:
-            continue
-        if position.sector is None:
-            count += 1
-            value += position.market_value_twd
-    return count, float(value)
+    lots, value = _valued_unclassified(groups)
+    return lots.total(), value
 
 
-def _sector_unclassified_note(summary: PortfolioSummary, equity: float) -> str | None:
+def _unvalued_composition(
+    groups: list[_SectorGroup], matched: list[SummaryPosition], sector: str | None
+) -> UnvaluedComposition:
+    """Partition the book's unvalued lots relative to industry ``sector``.
+
+    ADR-0022 Decision 1 / M-3: this symbol's own lots are ``own`` whatever
+    ``sector`` is; another holding is ``same`` when ``sector`` is among its
+    categories, ``unknown`` (by sub-type) when it has none, ``other``
+    otherwise. "Unvalued" is a valuation that is not ``ok`` -- the same test
+    the book-level note counts with, so the four counts add up to that note's.
+    """
+    own_ids = {id(position) for position in matched}
+    own = same = other = 0
+    unknown: Counter[str] = Counter()
+    for group in groups:
+        for position in group.positions:
+            if position.valuation.status == "ok":
+                continue
+            if id(position) in own_ids:
+                own += 1
+            elif sector is not None and sector in group.categories:
+                same += 1
+            elif not group.categories:
+                unknown[group.unknown_subtype()] += 1
+            else:
+                other += 1
+    return UnvaluedComposition(
+        own_lots=own,
+        same_sector_lots=same,
+        unknown_sector_lots=UnknownSectorLots(**unknown),
+        other_sector_lots=other,
+    )
+
+
+def unvalued_lots_in_sector(summary: PortfolioSummary, sector: str) -> int:
+    """Unvalued lots of every holding filed under ``sector`` (ADR-0022 M-3/M-5).
+
+    What "the reported industry Y has same" means on the overview: a holding
+    filed under several categories counts for each of them.
+    """
+    return sum(
+        1
+        for group in _sector_groups(summary)
+        if sector in group.categories
+        for position in group.positions
+        if position.valuation.status != "ok"
+    )
+
+
+def _sector_unclassified_note(groups: list[_SectorGroup], equity: float) -> str | None:
     """AC-12.5's disclosure, or ``None`` when there is nothing to disclose.
 
     The share is only stated when there is a denominator to state it against. An
@@ -428,7 +717,7 @@ def _sector_unclassified_note(summary: PortfolioSummary, equity: float) -> str |
     equity-based cap already reports ``not_evaluable`` and this disclosure would
     have nothing to qualify.
     """
-    count, value = _unclassified_rollup(summary)
+    count, value = _unclassified_rollup(groups)
     if not count or equity <= 0.0:
         return None
     return SECTOR_UNCLASSIFIED_NOTE.format(
@@ -525,7 +814,7 @@ def kelly_inputs_of(
 
 
 def _book_level_notes(
-    summary: PortfolioSummary, net_worth: SelfReportedNetWorth | None
+    summary: PortfolioSummary, net_worth: SelfReportedNetWorth | None, *, direction: str
 ) -> list[str]:
     """The notes that describe the book itself, whatever symbol is being asked about.
 
@@ -533,6 +822,11 @@ def _book_level_notes(
     state the same three things about the same book: what stands in for total
     equity, which state the exposure cap's denominator is in, and how much of
     the book could not be valued at all.
+
+    ``direction`` is the clause that says which way the unvalued lots bend the
+    ratios (ADR-0022 Decision 5), chosen once per response by the caller --
+    :func:`book_notes` -- from the rule for that response's scope. Both cause
+    sentences take the same clause.
     """
     notes = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
     _, valued_count, total_count = _book_equity(summary)
@@ -544,10 +838,119 @@ def _book_level_notes(
         not_queried = sum(PRICE_NOT_QUERIED in item.valuation.missing for item in unvalued)
         asked = len(unvalued) - not_queried
         if asked:
-            notes.append(UNVALUED_POSITIONS_NOTE.format(count=asked))
+            notes.append(
+                UNVALUED_NOTE_TEMPLATE.format(
+                    cause=UNVALUED_POSITIONS_CAUSE.format(count=asked), direction=direction
+                )
+            )
         if not_queried:
-            notes.append(UNVALUED_POSITIONS_NOTE_CACHE_ONLY.format(count=not_queried))
+            notes.append(
+                UNVALUED_NOTE_TEMPLATE.format(
+                    cause=UNVALUED_POSITIONS_CAUSE_CACHE_ONLY.format(count=not_queried),
+                    direction=direction,
+                )
+            )
     return notes
+
+
+def _symbol_direction(context: PortfolioContext) -> str:
+    """The direction clause for one symbol's advice card (ADR-0022 Decision 5).
+
+    Order of the rules, first match wins:
+
+    1. This symbol has unvalued lots of its own (``own_lots > 0``) -> D-d1
+       when they are the book's only unvalued lots (the other three counts
+       are 0), else D-d2 -- ahead of every rule below and whatever X is.
+       TODO(6-a): the clause-carrying D-d1 / D-d2 are replaced there by the
+       approved deleted-clause versions (ADR-0023 Decision 4, R-6).
+    2. The card has no industry (X is ``None``) -> D-a.
+    3. Some unvalued lot is, or may be, in X (same or unknown) -> D-P.
+    4. Otherwise -> D-a.
+
+    "Same" and "unknown" are read through
+    :func:`app.advice.limits.sector_numerator_gaps`, the reading cap 2's own
+    verdict uses, so the clause and the verdict cannot disagree.
+    """
+    composition = context.unvalued
+    if composition is None:
+        raise ValueError("a symbol-scope context must carry its unvalued composition")
+    if composition.own_lots > 0:
+        others = (
+            composition.same_sector_lots
+            + composition.unknown_sector_lots.total()
+            + composition.other_sector_lots
+        )
+        return UNVALUED_DIRECTION_OWN_ONLY if others == 0 else UNVALUED_DIRECTION_OWN_AND_OTHERS
+    if context.sector is None:
+        return UNVALUED_DIRECTION_READS_HIGH
+    gaps = sector_numerator_gaps(context)
+    if gaps.same > 0 or gaps.unknown:
+        return UNVALUED_DIRECTION_SECTOR_MAY_READ_LOW.format(
+            target=UNVALUED_DIRECTION_TARGET_SYMBOL.format(sector=context.sector)
+        )
+    return UNVALUED_DIRECTION_READS_HIGH
+
+
+def _book_direction(book: BookContext, comparison: SectorComparison) -> str:
+    """The direction clause for the overview (ADR-0022 Decision 5, M-5).
+
+    First match wins (risk-compliance 2026-10-07 correction: "Y undefined"
+    comes first, otherwise D-P would name compared industries that do not
+    exist, right beside a cap 2 that says none could be compared):
+
+    1. No industry could be compared (Y undefined,
+       ``comparison.reported_sector is None``) -> D-a.
+    2. The book holds an unvalued lot in no industry, or the reported industry
+       Y has an unvalued lot (a holding filed under several categories counts
+       for each, M-3 / M-5) -> D-P.
+    3. Otherwise -> D-a.
+
+    Whether anything was compared is read off ``comparison`` only -- the
+    aggregate in :mod:`app.advice.book_limits` is its single source -- and
+    never recomputed here.
+    """
+    composition = book.context.unvalued
+    if composition is None:
+        raise ValueError("a book-scope context must carry its unvalued composition")
+    reported = comparison.reported_sector
+    if reported is None:
+        return UNVALUED_DIRECTION_READS_HIGH
+    if (
+        composition.unknown_sector_lots.total() > 0
+        or unvalued_lots_in_sector(book.summary, reported) > 0
+    ):
+        return UNVALUED_DIRECTION_SECTOR_MAY_READ_LOW.format(target=UNVALUED_DIRECTION_TARGET_BOOK)
+    return UNVALUED_DIRECTION_READS_HIGH
+
+
+def book_notes(
+    book: BookContext, *, sector_comparison: SectorComparison | None = None
+) -> list[str]:
+    """Every note of one response, assembled once its verdicts are known.
+
+    The finalizer ADR-0023 Decision 8-1 asks for: both responses -- the advice
+    card and the overview -- build their ``notes`` here and nowhere else, after
+    the caps have been evaluated, in the same order :attr:`BookContext.notes`
+    always had (book-level notes first, then the symbol's own).
+
+    ``sector_comparison`` is the overview's cap 2 result and is required for a
+    book-scope context (its D-P rule reads the reported industry, which only
+    the aggregate knows) and refused for a symbol-scope one (the card's rule
+    does not read it). A later change adds cap 3's status the same way, as a
+    keyword-only argument.
+    """
+    if book.scope == "symbol":
+        if sector_comparison is not None:
+            raise ValueError("a symbol-scope context takes no sector comparison")
+        direction = _symbol_direction(book.context)
+    else:
+        if sector_comparison is None:
+            raise ValueError("a book-scope context needs the aggregate's sector comparison")
+        direction = _book_direction(book, sector_comparison)
+    return [
+        *_book_level_notes(book.summary, book.context.net_worth, direction=direction),
+        *book.symbol_notes,
+    ]
 
 
 def build_book_level_context(
@@ -575,12 +978,14 @@ def build_book_level_context(
     context stands for no holding.
     """
     equity, _, _ = _book_equity(summary)
-    notes = _book_level_notes(summary, net_worth)
+    # Classified once per context and shared by every per-group rule below.
+    groups = _sector_groups(summary)
+    notes: list[str] = []
     # Attached on the same condition as in :func:`build_book_context`: the
     # sentence qualifies an industry ratio, so it is stated when there is at
     # least one classified valued holding for that ratio to be computed from.
     if _has_classified_holding(summary):
-        unclassified_note = _sector_unclassified_note(summary, equity)
+        unclassified_note = _sector_unclassified_note(groups, equity)
         if unclassified_note is not None:
             notes.append(unclassified_note)
     context = PortfolioContext(
@@ -591,8 +996,16 @@ def build_book_level_context(
         gross_exposure_twd=equity if net_worth is not None else None,
         net_worth=net_worth,
         book_fully_valued=_fully_valued(summary),
+        # Classified like any other context, with no symbol of its own and no
+        # industry: so no path that is shown to a user ever reaches the
+        # "caller did not say" fallback (ADR-0023 R-10), and the overview's
+        # direction clause can read the unknown lots off it.
+        unvalued=_unvalued_composition(groups, [], None),
+        valued_unclassified_lots=_valued_unclassified(groups)[0],
     )
-    return BookContext(context=context, held=False, notes=notes)
+    return BookContext(
+        context=context, held=False, summary=summary, scope="book", symbol_notes=tuple(notes)
+    )
 
 
 def _has_classified_holding(summary: PortfolioSummary) -> bool:
@@ -654,8 +1067,13 @@ def build_book_context(
     # One judgement for both price inputs (task F-1, constraint 4).
     priced = close is not None and usable_price(close)
     fully_valued = _fully_valued(summary)
-    notes: list[str] = _book_level_notes(summary, net_worth)
+    # The book-level notes are not assembled here: their direction clause
+    # depends on this context's classification and is chosen by
+    # :func:`book_notes` once the response is assembled.
+    notes: list[str] = []
     equity, _, _ = _book_equity(summary)
+    # Classified once per context and shared by every per-group rule below.
+    groups = _sector_groups(summary)
 
     matched = _matching(summary, symbol, market)
     market_value, cost, quantity, skipped = _position_rollup(matched)
@@ -667,8 +1085,8 @@ def build_book_context(
         notes.append(SECTOR_MIXED_DETAIL)
     sector_market_value: float | None = None
     if sector is not None:
-        sector_market_value = _sector_rollup(summary, sector)
-        unclassified_note = _sector_unclassified_note(summary, equity)
+        sector_market_value = _sector_rollup(groups, sector)
+        unclassified_note = _sector_unclassified_note(groups, equity)
         if unclassified_note is not None:
             notes.append(unclassified_note)
 
@@ -713,13 +1131,18 @@ def build_book_context(
         sector_market_value_twd=sector_market_value,
         sector_gap=sector_gap,
         kelly=kelly,
+        # ADR-0022 Decision 1: classified once, here, per holding.
+        unvalued=_unvalued_composition(groups, matched, sector),
+        valued_unclassified_lots=_valued_unclassified(groups)[0],
     )
     return BookContext(
         context=context,
         held=bool(matched),
+        summary=summary,
+        scope="symbol",
         position_ids=[position.id for position in matched],
         currency=effective_currency,
-        notes=notes,
+        symbol_notes=tuple(notes),
         fx_rate=rate,
         fx_note=fx_note,
     )
