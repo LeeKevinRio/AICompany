@@ -10,26 +10,29 @@ namespace Manjong.Screens
     /// <summary>
     /// Hand / game result overlay.
     /// Top: title, subtitle and (for a win) a separate tai block (items, total, dealer tai).
-    /// Then one row per seat, the winner first and highlighted. Each row has clearly separated blocks, left to right:
-    ///   1. avatar, name, seat wind / tags, this hand's delta (large)
-    ///   2. 手牌: concealed tiles, sorted, tight
-    ///   3. melds: one group per meld with a caption (吃 / 碰 / 槓 / 暗槓), gaps between groups
-    ///   4. the winning tile on its own (winner only) with an outline and a 胡 / 自摸 caption
-    ///   5. 花牌: one size smaller, at the end of the row; on a second line if the row would overflow
-    /// Blocks are separated by at least one tile width. Content is rebuilt on every Show().
+    /// Then one row per seat, the winner first and highlighted. No captions: the layout tells the tile groups apart.
+    /// Left block: avatar, name, seat wind / tags, this hand's delta (large).
+    /// Tiles, left to right (all one Small tile tall except the flowers, which are one size smaller):
+    ///   flowers, then the melds (a clear gap between groups; a chi has the claimed tile in the middle, a concealed
+    ///   kong shows its two outer tiles face down, an open / added kong shows four face-up tiles);
+    ///   ... then, right-aligned, the concealed hand, and after a wide gap the winning tile with an outline
+    ///   (winner only; every row keeps that slot free so all hands end at the same x).
+    /// A flower win marks the winning flower inside the flower group instead. Content is rebuilt on every Show().
+    /// The card is narrower than 1920 on purpose: the canvas scales with match 0.5, so a 16:10 screen is only about
+    /// 1821 units wide.
     /// </summary>
     public class ResultPanel
     {
-        public const float CardWidth = 1860f;
+        public const float CardWidth = 1780f;
         public const float CardHeight = 1040f;
         public const float RowPadX = 30f;              // card edge -> row
-        public const float InfoBlockW = 280f;          // block 1
-        public const float TilesStartX = 300f;         // row-local x where block 2 starts
-        public const float BlockGap = 42f;             // = one Small tile width
-        public const float MeldGap = 24f;
+        public const float InfoBlockW = 280f;          // name / delta block
+        public const float TilesStartX = 300f;         // row-local x where the tile area starts
+        public const float BlockGap = 48f;             // flowers -> melds, hand -> winning tile (wider than a tile)
+        public const float MeldGap = 36f;              // between melds
         public const float RowPadRight = 16f;
-        public const float CaptionH = 22f;
-        public const float RowTopPad = 8f;
+        public const float RowMinHeight = 96f;         // fits the name block
+        public const float TilesTop = 20f;             // (RowMinHeight - Small.height) / 2
         public const float RowBottomPad = 10f;
         public const float RowGap = 8f;
         public const float FlowerLineGap = 6f;
@@ -148,7 +151,7 @@ namespace Manjong.Screens
                 int delta = seat < deltas.Length ? deltas[seat] : 0;
                 bool isWinner = isWin && seat == r.winnerSeat;
                 bool isLoser = isWin && !r.selfDraw && seat == r.loserSeat;
-                y += BuildPlayerRow(v, p, delta, isWinner, isLoser, gameEnd, y, innerW) + RowGap;
+                y += BuildPlayerRow(v, p, delta, isWinner, isLoser, gameEnd, isWin, y, innerW) + RowGap;
             }
             if (y > CardHeight - ButtonsReserve)
             {
@@ -213,29 +216,11 @@ namespace Manjong.Screens
 
         // ---------- Row layout (pure geometry, shared with the drawing code) ----------
 
-        /// <summary>Width of the main line's tile blocks (hand, melds, winning tile), starting at TilesStartX.</summary>
-        public static float MainLineWidth(int handTiles, IList<int> meldSizes, bool hasWinningTile)
+        static float TileStep { get { return HandSize.width + 1f; } }
+
+        public static float HandWidth(int handTiles)
         {
-            float step = HandSize.width + 1f;
-            float x = 0f;
-            bool any = false;
-            if (handTiles > 0)
-            {
-                x += handTiles * step - 1f;
-                any = true;
-            }
-            for (int i = 0; i < meldSizes.Count; i++)
-            {
-                x += any ? (i == 0 ? BlockGap : MeldGap) : 0f;
-                x += meldSizes[i] * step - 1f;
-                any = true;
-            }
-            if (hasWinningTile)
-            {
-                x += any ? BlockGap : 0f;
-                x += HandSize.width;
-            }
-            return x;
+            return handTiles <= 0 ? 0f : handTiles * TileStep - 1f;
         }
 
         public static float FlowersWidth(int flowers)
@@ -243,24 +228,47 @@ namespace Manjong.Screens
             return flowers <= 0 ? 0f : flowers * (FlowerSize.width + 1f) - 1f;
         }
 
-        public static float RowHeight(bool flowersOnSecondLine)
+        public static float MeldsWidth(IList<int> meldSizes)
         {
-            float h = RowTopPad + CaptionH + HandSize.height + RowBottomPad;
-            if (flowersOnSecondLine) h += FlowerLineGap + CaptionH + FlowerSize.height;
-            return h;
+            float w = 0f;
+            for (int i = 0; i < meldSizes.Count; i++)
+            {
+                w += (i > 0 ? MeldGap : 0f) + meldSizes[i] * TileStep - 1f;
+            }
+            return w;
         }
 
-        /// <summary>Flowers stay on the main line when it still fits inside the row; otherwise they wrap.</summary>
-        public static bool FlowersWrap(float rowWidth, float mainLine, int flowers)
+        /// <summary>Left block: flowers, a gap, then the melds. flowers = 0 when they wrap to a second line.</summary>
+        public static float LeftWidth(int flowers, IList<int> meldSizes)
+        {
+            float w = FlowersWidth(flowers);
+            if (meldSizes.Count > 0) w += (flowers > 0 ? BlockGap : 0f) + MeldsWidth(meldSizes);
+            return w;
+        }
+
+        /// <summary>Right block: the hand plus (when a win exists on the table) the reserved winning-tile slot.</summary>
+        public static float RightWidth(int handTiles, bool reserveWinSlot)
+        {
+            return HandWidth(handTiles) + (reserveWinSlot ? BlockGap + HandSize.width : 0f);
+        }
+
+        /// <summary>Flowers stay on the main line only while the left and right blocks still keep a block gap apart.</summary>
+        public static bool FlowersWrap(float rowWidth, int flowers, IList<int> meldSizes, int handTiles, bool reserveWinSlot)
         {
             if (flowers <= 0) return false;
-            float end = TilesStartX + mainLine + (mainLine > 0f ? BlockGap : 0f) + FlowersWidth(flowers) + RowPadRight;
-            return end > rowWidth;
+            float avail = rowWidth - RowPadRight - TilesStartX;
+            return LeftWidth(flowers, meldSizes) + BlockGap + RightWidth(handTiles, reserveWinSlot) > avail;
+        }
+
+        public static float RowHeight(bool flowersOnSecondLine)
+        {
+            if (!flowersOnSecondLine) return RowMinHeight;
+            return Mathf.Max(RowMinHeight, TilesTop + HandSize.height + FlowerLineGap + FlowerSize.height + RowBottomPad);
         }
 
         // ---------- Row drawing ----------
 
-        float BuildPlayerRow(GameView v, PlayerView p, int delta, bool isWinner, bool isLoser, bool gameEnd, float top, float rowW)
+        float BuildPlayerRow(GameView v, PlayerView p, int delta, bool isWinner, bool isLoser, bool gameEnd, bool winOnTable, float top, float rowW)
         {
             List<string> sorted = TileFace.Sorted(p.hand);
             string winning = v.hasResult && v.result != null ? DtoUtil.Safe(v.result.winningTile) : "";
@@ -281,8 +289,7 @@ namespace Manjong.Screens
             string[] flowers = DtoUtil.Safe(p.flowers);
             int flowerCount = flowers.Length + (split.IsFlowerWin && split.FlowerIndex < 0 ? 1 : 0);
 
-            float mainLine = MainLineWidth(handTiles, meldSizes, winTileApart);
-            bool wrap = FlowersWrap(rowW, mainLine, flowerCount);
+            bool wrap = FlowersWrap(rowW, flowerCount, meldSizes, handTiles, winOnTable);
             float height = RowHeight(wrap);
 
             var row = UiFactory.CreatePanel(card, "Row" + p.seat, isWinner ? Palette.RowHighlight : Palette.Cream, 20);
@@ -290,7 +297,7 @@ namespace Manjong.Screens
             if (isWinner) UiFactory.CreateRing(row.transform, "WinRing", Palette.Coral, 20, 3, 0f);
             RectTransform rt = row.rectTransform;
 
-            // ----- Block 1: who and how much -----
+            // ----- Who and how much -----
             var avatar = UiFactory.CreateAvatar(rt, p.avatar, 56f);
             UiFactory.Place(avatar, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -20f), new Vector2(56f, 56f));
 
@@ -323,86 +330,52 @@ namespace Manjong.Screens
             var divider = UiFactory.CreatePanel(rt, "Divider", new Color(0.42f, 0.30f, 0.24f, 0.25f), 1);
             TopLeft(divider.rectTransform, InfoBlockW + 8f, 10f, 2f, height - 20f);
 
-            // ----- Blocks 2-4 on the main line -----
+            // ----- Left: flowers (one size smaller), then the melds -----
             TileSize size = HandSize;
-            float step = size.width + 1f;
-            float tilesTop = RowTopPad + CaptionH;
+            TileSize fs = FlowerSize;
             float x = TilesStartX;
-            bool any = false;
-
-            if (handTiles > 0)
-            {
-                Caption(rt, "手牌", x, RowTopPad, handTiles * step - 1f, Palette.InkSoft);
-                for (int i = 0; i < handTiles; i++)
-                {
-                    RectTransform t = handIsBacks ? TileView.CreateBack(rt, size) : TileView.CreateFace(rt, split.Hand[i], size);
-                    TopLeft(t, x + i * step, tilesTop, size.width, size.height);
-                }
-                x += handTiles * step - 1f;
-                any = true;
-            }
-
-            for (int m = 0; m < meldList.Count; m++)
-            {
-                x += any ? (m == 0 ? BlockGap : MeldGap) : 0f;
-                float w = TileView.MeldWidth(meldList[m], size);
-                Caption(rt, MeldCaption(meldList[m].type), x, RowTopPad, w, Palette.Ink);
-                RectTransform box = TileView.CreateMeld(rt, meldList[m], size, "");
-                TopLeft(box, x, tilesTop, w, size.height);
-                x += w;
-                any = true;
-            }
-
-            if (winTileApart)
-            {
-                x += any ? BlockGap : 0f;
-                Caption(rt, split.SelfDraw ? "自摸" : "胡", x - 10f, RowTopPad, size.width + 20f, Palette.Loss);
-                RectTransform t = TileView.CreateFace(rt, split.WinningTile, size);
-                TopLeft(t, x, tilesTop, size.width, size.height);
-                TileView.AddRing(t, Palette.LastDiscardRing, size, 4);
-                x += size.width;
-                any = true;
-            }
-
-            // ----- Block 5: flowers (end of the main line, or a second line when it would overflow) -----
             if (flowerCount > 0)
             {
-                TileSize fs = FlowerSize;
-                float fx = wrap ? TilesStartX : x + (any ? BlockGap : 0f);
-                float captionTop = wrap ? RowTopPad + CaptionH + HandSize.height + FlowerLineGap : RowTopPad;
-                float fTop = captionTop + CaptionH + (wrap ? 0f : HandSize.height - fs.height); // bottom-aligned with the main tiles
-                string caption = "花牌";
-                if (split.IsFlowerWin) caption += split.SelfDraw ? "（自摸 " : "（胡 ";
-                if (split.IsFlowerWin) caption += TileFace.Name(split.WinningTile) + "）";
-                Caption(rt, caption, fx, captionTop, Mathf.Max(FlowersWidth(flowerCount), 120f), split.IsFlowerWin ? Palette.Loss : Palette.InkSoft);
+                // Bottom-aligned with the main tiles, or on a second line when the row would be too tight.
+                float fTop = wrap ? TilesTop + size.height + FlowerLineGap : TilesTop + size.height - fs.height;
                 for (int i = 0; i < flowerCount; i++)
                 {
                     string code = i < flowers.Length ? flowers[i] : split.WinningTile;
                     RectTransform t = TileView.CreateFace(rt, code, fs);
-                    TopLeft(t, fx + i * (fs.width + 1f), fTop, fs.width, fs.height);
+                    TopLeft(t, x + i * (fs.width + 1f), fTop, fs.width, fs.height);
                     bool isWinFlower = split.IsFlowerWin && (i == split.FlowerIndex || i >= flowers.Length);
                     if (isWinFlower) TileView.AddRing(t, Palette.LastDiscardRing, fs, 3);
                 }
+                if (!wrap) x += FlowersWidth(flowerCount) + BlockGap;
+            }
+
+            for (int m = 0; m < meldList.Count; m++)
+            {
+                if (m > 0) x += MeldGap;
+                float w = TileView.MeldWidth(meldList[m], size);
+                RectTransform box = TileView.CreateMeld(rt, meldList[m], size, "");
+                TopLeft(box, x, TilesTop, w, size.height);
+                x += w;
+            }
+
+            // ----- Right: the hand (right-aligned), then a wide gap and the winning tile -----
+            float rightEdge = rowW - RowPadRight;
+            float winX = rightEdge - size.width;
+            float handRight = winOnTable ? winX - BlockGap : rightEdge;
+            float handLeft = handRight - HandWidth(handTiles);
+            for (int i = 0; i < handTiles; i++)
+            {
+                RectTransform t = handIsBacks ? TileView.CreateBack(rt, size) : TileView.CreateFace(rt, split.Hand[i], size);
+                TopLeft(t, handLeft + i * TileStep, TilesTop, size.width, size.height);
+            }
+
+            if (winTileApart)
+            {
+                RectTransform t = TileView.CreateFace(rt, split.WinningTile, size);
+                TopLeft(t, winX, TilesTop, size.width, size.height);
+                TileView.AddRing(t, Palette.LastDiscardRing, size, 4);
             }
             return height;
-        }
-
-        static string MeldCaption(string type)
-        {
-            switch (type)
-            {
-                case "chi": return "吃";
-                case "pon": return "碰";
-                case "ankan": return "暗槓";
-                default: return "槓"; // kan, kakan
-            }
-        }
-
-        static void Caption(RectTransform row, string text, float x, float y, float w, Color color)
-        {
-            var t = UiFactory.CreateLabel(row, "Caption", text, 18, color, TextAnchor.MiddleLeft);
-            t.fontStyle = FontStyle.Bold;
-            TopLeft(t.rectTransform, x, y, Mathf.Max(w, 40f), CaptionH);
         }
 
         /// <summary>"下一局" was sent: show it as waiting and block a second press until the next render.</summary>
