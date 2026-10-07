@@ -3,15 +3,21 @@
 - 狀態：**proposed**。
   - 字面核可：W1～W7 已於 2026-10-07 經 risk-compliance-officer 逐字核可；W7（取代 `WORST_SECTOR_PREFIX`）納入核可範圍；核可字面以 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`（下稱「風控審查檔」）為準。本 ADR 不收錄 W1～W7 字面（唯一例外：「D-d1 更正註記」一節依 coordinator 指示收錄 D-d1 原字面與新字面作更正紀錄；兩處與審查檔不一致時以審查檔為準）。
   - 改 accepted 的前提（來源：風控審查檔「ADR-0022 改 accepted 前提」(a)～(c)，2026-10-07）：(a) 審查檔已轉錄——完成；(b) coordinator 確認 CEO 未推翻 2026-10-07 路線裁定——**待 CEO 表態**；(c) 本 ADR 註記 W7 納入核可範圍、核可字面以審查檔為準——已於本段完成。(a)(c) 已完成，**(b) 未完成前本 ADR 不得改為 accepted**。
-  - 本次整理（2026-10-07）併入風控審查檔「D-d1 更正」節與 6-c／F-1b 裁定（見下「來源與版本」）；其中尚有待補項（`/limits` 彙總規則、`SECTOR_UNCLASSIFIED_NOTE` 中性句，見「交接」）。來源未載這些待補項是否列為 accepted 前提，待 coordinator 確認。
-- 日期：2026-10-07（tech-architect 評估與風控路線裁定日；本次整理同日）
+  - 本次整理（2026-10-07）併入風控審查檔「D-d1 更正」節與 6-c／F-1b 裁定（見下「來源與版本」）；其中尚有待補項（`SECTOR_UNCLASSIFIED_NOTE` 中性句，見「交接」）。來源未載這些待補項是否列為 accepted 前提，待 coordinator 確認。
+  - 補段落檔（2026-10-07，第二次）：`/limits` 彙總對 mixed 群組的規則（原待補項）已由 tech-architect 寫明、風控裁定，收於 Decision 1 補充段（M-1～M-5）。**W-6m**（M-4 新增字面）已於 2026-10-07 經風控逐字核可修正版（風控審查檔 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第三段，下稱「風控第三段」），並依 coordinator 指示收錄於 Decision 1 補充段的「W-6m 字面表」（W-6m 為本 ADR 不收錄字面原則的第二個例外；與風控審查檔不一致時以審查檔為準）。W-6m 的 PR 合併前提見 M-4。
+- 日期：2026-10-07（tech-architect 評估與風控路線裁定日；本次整理與補段落檔同日）
 - 決策者：tech-architect（路線 C′ 評估；6-c 評估）；risk-compliance-officer（路線裁定：APPROVE 附條件；W1～W7 逐字審；6-c 與 F-1b 裁定）；CEO 為最終負責人（若對裁定有異議）。
 - 適用範圍：僅 product/stock-desk 產品線。
 - 來源與版本（B 類轉錄）：
   - 主要來源：`work/dispatch/2026-10-07-任務單-產業上限對同產業未估值持股的判定與揭露.md` 中三段——「tech-architect 評估（2026-10-07，HEAD b92cbbd 唯讀；coordinator 轉錄）」、「風控路線裁定（2026-10-07，唯讀讀碼，coordinator 轉錄）」、「tech-architect 對 creative-lead 三問與 6-c 的評估」與「風控對 6-c 與 F-1b 的裁定」（兩段皆 2026-10-07，coordinator 轉錄）。
   - 字面與方向子句：風控審查檔（2026-10-07，HEAD d91fa8f 讀碼，coordinator 轉錄），含檔尾「D-d1 更正」節。
   - 附帶列管：`work/dispatch/2026-10-07-任務單-6-a-決策卡第1與第5條在本標的有未估值批次時偏低.md`、`work/dispatch/2026-10-07-任務單-6-b-總曝險上限帳本不完整但已超標時不擋加碼.md`（各含 tech-architect 評估與風控裁定，2026-10-07）。
-  - 本檔為 tech-writer 落檔與整理，**技術內容未增補、結論未改動**；Decision、K-n、required 編號（1-a～6-c 等）皆沿用來源。
+  - 補段來源（2026-10-07，第二次落檔）：
+    - tech-architect 補段：`work/reviews/2026-10-07-tech-architect-D-a3資料流-M段最終版-ADR-0022-0023補段.md`（讀碼基準 `product/stock-desk` HEAD `f25c90d`；coordinator 原文轉錄）——第二段（unknown-only 不進 `notional_caps` 的確認，Decision 4 選填句）、第四段（Decision 1 補充段 M-1～M-5）。
+    - 風控審查檔：`work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`——第二段 B（M-1～M-4 裁定）、第三段（W-6m 修正版核可、排序鍵、RM-1～RM-5、F-8）。
+    - tech-architect 補段第四段 M-4 的排序描述（`sorted()` 對字串排序）已被風控第三段 RM-2 取代，以風控第三段為準（補段檔頭「注意」亦明載）。
+    - 本次快照：分支 `product/stock-desk`，HEAD `d66183e`（coordinator 任務單所述；tech-writer 未另行以 git 驗證）。
+  - 本檔為 tech-writer 落檔與整理，**技術內容未增補、結論未改動**；Decision、K-n、required 編號（1-a～6-c 等）皆沿用來源。第二次落檔（2026-10-07）同樣只轉錄上列補段來源，M-1～M-5、RM-1～RM-5 等編號沿用來源。
   - 來源內所有 `檔案:行號`（`engine.py:354-363`、`limits.py:868-895`、`book_limits.py:105-120`、`book_limits.py:132`、`book.py:397` 等）、函式名、常數名、測試名與行號皆為 tech-architect／風控所述，tech-writer **未重新對 code 驗證**；行號會隨 commit 漂移，引用時以原文定位。
   - 快照：分支 `product/stock-desk`。初次落檔時 HEAD `8e8ccb59fe62e2ec4c66a2c28c86ce7c8ff5bded`；本次整理時 HEAD `331d42d73461c3584d62526fe248109500bfc714`（tech-writer 讀取 `.git/refs/heads/product/stock-desk`）。tech-architect 初評所用 HEAD 為 `b92cbbd`，風控審查檔為 `d91fa8f`，皆不同，此為快照。
   - 編號說明：落檔時 `docs/adr/` 最後一份為 0021；repo 內查無 ADR-0022 或 `0022-` 的引用，故使用 0022。ADR-0023 為本單衍生的通則（見「關聯」）。
@@ -93,7 +99,7 @@
      - mixed 群組（產業清單有多個值）：**含 X 算 same，否則算 other**（tech-architect 原註「風控可改」；風控審查檔確認此規則）。
      - 只有 None → 算 **unknown**，依三子類計數。
    - **required（共用同一函式）**：未估值分類、`_sector_rollup`（6-c-1，見 K-2）、`_unclassified_rollup` 三者**共用同一個以標的為單位的解析函式**。已估值部位若為 mixed 且含 X，**整檔計入 X**（保守）。
-   - **待補**：`/limits` 彙總對 mixed 的同等規則，**由 tech-architect 寫明再送風控**（來源：風控審查檔「D-d1 更正」節）；本 ADR 未收，待補前不得視為已定。
+   - `/limits` 彙總對 mixed 群組的同等規則（原「待補」，來源：風控審查檔「D-d1 更正」節）：**已由 tech-architect 寫明、風控 2026-10-07 裁定**，全文見下「Decision 1 補充：mixed 群組的歸類（M-1～M-5）」（置於 Decision 5 之後、「分支條件表」之前）。
    - `build_book_context` 一次分類，結果放入新欄位 `PortfolioContext.unvalued: UnvaluedComposition | None`（來源：tech-architect 三問評估第 1 點），結構如下，分類欄位皆為筆數：
      - `own_lots`：本標的自身未估值批次數（＝`_position_rollup` 的 `skipped`，`book.py:650`，tech-architect 所述）。
      - `same_sector_lots`：**其他標的**且屬 X 的未估值筆數；X 為 None 時恆為 0。
@@ -110,7 +116,7 @@
    - same（`own_lots + same_sector_lots`）> 0：算出值 ≥ 上限 → **violated**，detail 附 W2；否則 → **not_evaluable**，detail 附 W1，`observed` 為 None，`threshold` 照舊。
    - same = 0 且 unknown > 0：violated 不變；**passed 附 W3**。
    - 重疊皆 0（或 `book_fully_valued is True`）：status／detail／observed **逐字不變**。
-4. **`notional_caps` 排除：**same 或 unknown > 0 時，第 2 條**不放進** `notional_caps`。「第 2 條可否被試算採用」為單一判斷式，與 `_check_sector_weight` 共用。
+4. **`notional_caps` 排除：**same 或 unknown > 0 時，第 2 條**不放進** `notional_caps`。此含 unknown-only 且第 2 條 passed（附 W3）的情形；判定上為 ADR-0023 非對稱通則的明列例外，試算上屬分子不完整（ADR-0023 KC-2）。（本句為 tech-architect 補段第二段 2026-10-07 之選填句，依 coordinator 指示加入。）「第 2 條可否被試算採用」為單一判斷式，與 `_check_sector_weight` 共用。
    - **C-1 擴及 AC-12.5（6-c，風控 2026-10-07 裁定）**：已估值但未填產業的持股（sector None）存在時，第 2 條同樣不放進 `notional_caps`。已估值 ETF／非台股算「可能屬於」（與裁定 5 一致）。**required**：已估值與未估值**共用同一子類分類函式與同一份子類清單**（tech-architect 架構約束：ETF 不能未估值算「可能屬於」、已估值算「不屬於」）。
    - 全 repo 的「上限可否用於試算」單一判斷式涵蓋第 1～5 條，見 ADR-0023。
 5. **「比率會因此偏高」依分支條件表收窄**（W4／W5）；W1～W7 的字面由 creative-lead 起草、風控已逐字核可（見狀態欄；核可字面以風控審查檔為準）。
@@ -118,7 +124,7 @@
    - W2：附 violated 後（會進推播）。
    - W3：附 passed 後（產業未知）。
    - W4／W5：`UNVALUED_POSITIONS_NOTE` 的 live／cache_only 成因句。**組合方式為「{成因}；{方向子句}」成一則 note**；方向子句自成因句拆出，依下列優先序選用 D-a／D-P／D-d1／D-d2，決策卡與 `/limits` 兩範圍不同。**D-a 條件下，組合輸出須與 2026-09-18 兩則既有核可整句（live／cache_only）逐位元組相同**；cache_only 成因逐字保留。cache_only 固定句改為條件式一事，風控已於 2026-10-07 重新核可。
-   - W6：`/limits` 中產業已知（Y）且**不在比較中**的未估值持股排除句。取代 `SECTOR_UNVALUED_EXCLUSION_SUFFIX` 的範圍只限「Y 有確定值且不在比較中」；Y 在比較中（C′ 下必為 violated）續用現行句；Y 的判定沿 `_resolve_sector`（批次產業不一致或 None 續用現行句）。
+   - W6：`/limits` 中產業已知（Y）且**不在比較中**的未估值持股排除句。取代 `SECTOR_UNVALUED_EXCLUSION_SUFFIX` 的範圍只限「Y 有確定值且不在比較中」；Y 在比較中（C′ 下必為 violated）續用現行句；Y 的判定沿 `_resolve_sector`（批次產業不一致或 None 續用現行句）。（2026-10-07 補註：其中「批次產業不一致」即 mixed；mixed 且沒有任何產業在比較中者改用 W-6m，其餘仍續用現行句，見 Decision 1 補充 M-4。）
    - W7：`WORST_SECTOR_PREFIX` **無條件替換**（風控 2026-10-07 逐字核可，來源：風控審查檔核定字面總表 W7 列與「逐條」第 6 點）：不再以「帳本內 {count} 個產業不成立時才附」為條件；`{count}` ＝ `len(comparable)`。（任務單來源原述「不成立時附 W7」與審查檔核可範圍不同，以審查檔為準。）`WORST_SYMBOL_PREFIX` 對齊列 suggested 另案。
    - **方向子句優先序（風控 required，來源：風控審查檔「方向子句優先序」節；摘要，不含字面）**：
      - 決策卡：(1) 本標的有自身無法估值批次（`own_lots > 0`）→ d1 條件成立用 D-d1，否則 D-d2；**不受卡片產業 X 是否為 None 影響**（D-d1／D-d2 不被 X 為 None 覆蓋）。(2) X 為 None（且 `own_lots = 0`）→ D-a。(3) same 或 unknown > 0 → D-P。(4) 其餘 → D-a。
@@ -131,6 +137,101 @@
      - W6 只用於 Y 不在比較中。
      - 名稱：D-d1／D-d2 的上限名稱一律以 `LIMIT_NAMES` 組字串，不得手打（風控 required）。
      - 通則：無保證字眼、不寫「安全」「暫無問題」、推播不含操作指示。
+
+### Decision 1 補充：mixed 群組的歸類（M-1～M-5）
+
+（tech-architect 2026-10-07 擬，HEAD f25c90d 對照；風控 2026-10-07 裁定，見 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第二段 B。本段取代 Decision 1「待補：`/limits` 彙總對 mixed 的同等規則」那一條。M-4 的排序規則與 W-6m 字面依風控第三段（2026-10-07）修訂：tech-architect 補段原文的「`sorted()` 對產業名稱字串排序」已被 RM-2 取代，W-6m 字面為風控修正版。）
+
+**定義**
+- 群組 G＝同一 (symbol, market) 的全部批次，不論是否已估值。categories(G)＝G 中所有非 None 產業的集合。
+- sector(G)＝`_resolve_sector`（`book.py:351`）的解析結果：categories(G)＝{X} → X（含 [X, None]）；|categories(G)| ≥ 2 → mixed（sector None、`sector_gap="mixed"`）；空集合 → gap 子類（`tw_unfiled`／`etf`／`non_tw`）。
+
+**事實（讀碼）**
+- `/limits` 每個候選者都經 `build_book_context`（`book_limits.py:406`），分子與同產業分類自動繼承。
+- mixed 候選者的 sector 為 None → 第 2 條 not_evaluable，附 `SECTOR_MIXED_DETAIL`，在 `book_limits.py:445-452` 列入排除，到不了 `_one_per_sector`。
+- 未估值群組的排除句目前在 comparable 決定之前就組好（`book_limits.py:438-443`）。M-4 需要改成先算出 comparable（含 `_one_per_sector` 之後）再組排除句，由 dev-lead 調整順序。
+
+**M-1 分子**（修訂 K-2；風控確認不需新揭露）
+- 產業 X 的分子＝所有 X ∈ categories(G) 的群組中，全部已估值批次的市值合計。
+  - [X, None] 的 None 批次計入 X（6-c-1）。
+  - 已估值的 mixed [X, Y] 整檔同時計入 X 與 Y（保守）。
+  - 未估值批次仍不進任何產業分子（K-2 前半維持；`test_an_unvalued_holding_is_left_out_of_the_sector_total` 不改）。
+  - `_unclassified_rollup` 只計 categories(G) 為空的群組。
+- **印出的產業佔比可能因 mixed 整檔計入而高估**：誤差只往高估方向，各產業分子加總可能大於總資產。風控裁定不需新揭露，理由是 mixed 由使用者資料造成、可以修正，且已附 `SECTOR_MIXED_DETAIL` 與指引。CEO 知悉 (vii)：違規推播可能建立在高估的比率上。
+- **required**：產品任何地方都不得加總或平均各產業的比率或分子，範圍含後端 API 欄位、前端畫面、推播、匯出。qa 以 grep 加測試釘住；測試用「mixed 全已估值、各產業分子加總大於總資產」的帳本，斷言 `/limits` 與決策卡回應不含任何跨產業的合計或平均值。
+
+**M-2a mixed 候選者**（採用；否決 M-2b）
+- mixed 候選者不代表任何產業：只以 `SECTOR_MIXED_DETAIL` 原文列入排除，不計入 W7 的 `{count}`（＝`len(comparable)`）。`/limits` 不得另行合成各產業的判定。
+- M-2b 否決：它會形成第二條判定路徑，違反 book_limits 規則 1、2。
+- 殘留（風控接受，列管 low）：只透過 mixed 標的持有的產業不會被比較，只由 `SECTOR_MIXED_DETAIL` 揭露。日後補「不計算不代表沒有產業集中風險」這類句子（比照 D8）另案送審，本 PR 不要求新字面。
+
+**M-3 未估值分類**（對決策卡產業 X）
+- 本標的自身批次 → own。X 為 None 時亦同，且不計入 same。
+- 其他群組中 X ∈ categories(G) → same。
+- categories(G) 為空 → unknown（三子類）。
+- 其餘 → other。
+- mixed 群組永遠不是 unknown，且對它的每一個產業都算 same。四類加總仍等於全書未估值筆數。
+
+**`_one_per_sector` 不變式**：解析產業同為 X 的所有候選者，第 2 條的 status／detail／observed 完全相同（以測試釘住，函式不改）。
+
+**M-4 `/limits` 未估值群組的排除句**（「比較中產業」＝最終 comparable 的 sector 集合）
+- sector(G)＝Y 且 Y 不在比較中 → `SYMBOL_UNVALUED_NOTE`＋W6。
+- Y 在比較中（C′ 下必為 violated）→ 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`。
+- categories(G) 為空（unknown）→ 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`。
+- mixed 且至少一個產業在比較中 → 續用 `SECTOR_UNVALUED_EXCLUSION_SUFFIX`（逐字不變）。
+- **mixed 且沒有任何產業在比較中（含 comparable 為空）→ W-6m 新字面，與 C′、W6 同一 PR**（風控裁定採 (i)，不准續用現行句：現行句「可能屬於已納入比較的產業」在此情境為假，comparable 為空時更無所指）。組法：`SYMBOL_UNVALUED_NOTE` 接 W-6m。
+- W-6m 字面約束（風控第二段 B(3)；排序規則依風控第三段 RM-2 修訂）：
+  - 比照 W6 句構。
+  - 列出該群組 categories(G) 的全部產業，不用「等」、不截斷。
+  - **排序規則（RM-2；風控第三段指定由 tech-architect 寫入本 ADR）**：先對 categories(G) 去重；排序鍵為 `TWSE_SECTORS` 索引；不在 `TWSE_SECTORS` 的舊資料值排最後，再依字碼排序；排序鍵必須全序、不得拋例外；以「、」連接，不加「等」、不截斷；排序寫成**獨立單一函式**，不得借用 `_resolve_sector`（`book.py:363`）內部的 `sorted()`。測試釘住。
+  - 排序鍵的理由（風控第三段二.3）：`TWSE_SECTORS`（`app/positions/sectors.py:38-80`）即 TWSE 分類順序，為封閉列舉、亦是 `GET /api/positions/sectors` 下拉來源，使用者看到的順序就是這個；中文字碼序對讀者無意義；結果決定性、與平台編碼無關。不用字典序。
+  - 寫明這些產業本次沒有任何持倉納入比較。
+  - 必須包含「未納入比較不代表這些產業未超過上限」。
+  - 不寫「屬於」單一產業，不帶任何指引。
+- 流程：creative-lead 起草 → risk-compliance-officer 逐字審。**W-6m 已於 2026-10-07 核可（修正版，風控第三段）**；原「W-6m 字面未經風控逐字核可前，本 ADR 的 PR 不得合併」之條件已滿足，**合併前提改為：RM-1～RM-5 落地、排序鍵已寫入本 ADR（本段）、B(1) required 完成（本段 M-1 required：寫明高估方向，grep＋測試釘住「不得加總或平均各產業比率」）、qa-reviewer 無 BLOCKING_ISSUES（含 Codex 第二意見；環境不可用須註明）、CI 綠燈**（風控第三段五）。
+
+**W-6m 字面表**（風控第三段一，2026-10-07 逐字核可修正版；`{sectors}` 算 1 字。W1～W7 字面不收於本 ADR，見風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`。**收錄原因（coordinator 2026-10-07 確認為「不收錄字面」原則的第二個例外）：風控要求排序鍵與 W-6m 字面進 ADR**，見風控第三段 RM-2 與五）
+
+| 代號 | 逐字核可字面 | 變數 | 顯示條件 | 字數 |
+|---|---|---|---|---|
+| **W-6m**（修正版） | 本條上限的比較未納入此標的；此標的的持倉所填產業別為 {sectors}，這些產業本次沒有任何持倉納入比較，未納入比較不代表這些產業未超過上限。 | `{sectors}`＝mixed 群組 `categories(G)` 全部產業（規則見 M-4 排序規則 RM-2）；前留一個半形空白、後不留 | `/limits` excluded reason。該標的屬 mixed 未估值群組（`categories(G)` ≥2 產業）且每一產業都不在 comparable 產業集合。組法 `SYMBOL_UNVALUED_NOTE` 接 W-6m。至少一產業在比較中 → 續用現行 `SECTOR_UNVALUED_EXCLUSION_SUFFIX` 逐字不變。 | 64（兩產業 73、三產業 80） |
+
+- 修正內容（風控第三段二.2）：「涉及 {sectors} 產業」→「所填產業別為 {sectors}」。理由：「涉及」可能被讀成系統判斷該公司業務橫跨多產業，而 mixed 的事實是同一標的批次被填了不同產業別（資料狀態）；「所填產業別為」與已核可 `SECTOR_MIXED_NOTE`「填了不只一種產業別」（`limits.py:300`）一致；句尾「產業」一併拿掉，避免名單中有不以「業」結尾者（紡織纖維、電機機械、存託憑證）時範圍不清。W-6m-B 風控不採。
+- 展開例（TWSE 順序，風控第三段）：
+  - 兩產業：「本條上限的比較未納入此標的；此標的的持倉所填產業別為 金融保險業、半導體業，這些產業本次沒有任何持倉納入比較，未納入比較不代表這些產業未超過上限。」
+  - 三產業名單：「金融保險業、半導體業、電子零組件業」。
+- 禁詞複核（風控第三段二.4）：W-6m 修正版與 `TWSE_SECTORS` 全部 37 個產業名對 `loader.BANNED_PHRASES` 等禁詞表 0 命中（風控所述，tech-writer 未重驗）。
+
+**W-6m 落地 required（風控第三段三，qa 逐條核對）**
+- **RM-1**：常數註解「風控核可文案,修改須重新送審(2026-10-07)」＋風控審查檔路徑（`work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`）。
+- **RM-2**：`{sectors}` 組字規則，見上「排序規則」。
+- **RM-3**：顯示條件依 M-4，先算 comparable 再組排除句（dev-lead 調整順序）。
+- **RM-4**：測試——渲染結果引用常數；兩產業、三產業各一例並斷言排序；斷言不含「屬於」「等」「涉及」；用 `TWSE_SECTORS` 全部名稱渲染一次跑三份禁詞掃描；mixed 且至少一產業在比較中 → 現行句逐位元組不變；mixed 已估值 → 維持 `SECTOR_MIXED_DETAIL` 不受影響。
+- **RM-5**：qa-e2e 於 375 與 1280 抽驗三產業 excluded reason，不得截斷或省略（只能折行）。
+
+**M-5**：`/limits` 方向子句中的「回報產業 Y 有 same」依 M-3 判定，未估值 mixed 群組的 categories 含 Y 就算（→ D-P）。D-a 位置的 D-a3 替換見 ADR-0023 Decision 8-1。
+
+**一致性**
+- M-1、M-3 只在 `build_book_context` 做一次，與 `_sector_rollup`、`_unclassified_rollup`、未估值分類共用同一個以標的為單位的解析函式（K-1）。`/limits` 經 `_symbol_context` 繼承。
+- `/limits` 專屬的規則只有 M-2a、M-4。
+
+**與失效條件 4 的關係**
+- 6-c-1 加 M-1 在形式上改變了 `_sector_rollup` 語意。風控裁定「**已涵蓋，不需重審**」，理由如下：
+  - W1／W2 的 `{count}` 依 M-3 的保守歸屬仍然成立。
+  - W3：mixed 永遠不是 unknown。
+  - W6 只用於 Y 有確定值的情形。
+  - W7 的 `{count}` 不含 mixed。
+  - D-P／D-a 的「可能」「因此偏高」不會因 M-1 的額外高估而變假。
+- 失效條件 4 對 M-1／M-3 以外的再變更仍然有效（ADR-0023 F-7，即風控審查檔第一段「四、失效條件增補」之 F-7：M-1 整檔計入或 M-3 分類改變 → 重審 B(1)／B(4)；全文見 ADR-0023「重審與失效條件」）。
+
+**測試**
+- T-1：mixed 全已估值時，分子含整檔，且同時計入其每一個產業。
+- T-2：只透過 mixed 標的持有的產業不被比較。
+- T-3：[半導體, None] 兩筆皆已估值時兩筆都計入。
+- T-4：未估值 mixed 的各排除句情境，含 W-6m 與 comparable 為空。
+- T-5：同產業兩個候選者的 check 完全相同。
+- T-6：不加總、不平均（見 M-1 required）。
+- 既有 `test_advice_book_limits`（L155／174／190／201／214／422／454）與 `test_advice_book`（L535／548／581／590）的斷言零修改，L454 只改註解。
 
 ### 分支條件表（轉錄，不含字面）
 
@@ -184,7 +285,7 @@ d1 的第 1、4、5 條偏低是**確定**的下限（風控審查檔 D-d1 更�
 風控裁定 1（同意）：**只限 same 情境**。
 
 - same：候選者轉 excluded 並以 W1 為由，或 ≥ 上限時以 violated 留下（符合 book_limits 規則 1）。
-- **不變**：sector 為 None 的排除句、`EXCLUDED_SUFFIX`、空帳本、`NO_CANDIDATE_DETAIL` 字面照舊；sector None 仍走路線 (a)。
+- **不變**：sector 為 None 的排除句、`EXCLUDED_SUFFIX`、空帳本、`NO_CANDIDATE_DETAIL` 字面照舊；sector None 仍走路線 (a)。（2026-10-07 補註：mixed 未估值群組的 sector 亦為 None；其中「沒有任何產業在比較中」者改用 W-6m，其餘續用現行句，見 Decision 1 補充 M-4。）
 - required 1-a：**W6 與 C′ 判定同一 PR 落地**（C′ 會讓「產業已知 Y、Y 不在比較中」變多）。
 - required 1-b：`app/advice/book_limits.py:132` `NO_CANDIDATE_DETAIL` 的**註解**更新（字串不改）；註解內容依風控審查檔逐條第 7 點 (5)：「第 2 條 same 情境改採路線 C′（ADR-0022，風控 2026-10-07 核可）；sector 為 None 仍採路線(a)」。
 - required 1-c：`test_advice_book_limits.py:466`「Route (a)」註解寫明 same 走 C′、sector None 仍走路線 (a)。
@@ -285,12 +386,13 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
 以下任一觸發，須回送風控重審（來源：風控審查檔「失效條件」節，2026-10-07；與原先分列的 S-B2、`notional_caps` 重審條目合併）：
 
 1. 6-b 修法讓第 3 條在有無法估值部位時算出比率（D-a 會涵蓋偏低的第 3 條）。見 ADR-0023「6-b 與方向子句耦合」。
-2. 6-a 修法改變第 1、5 條對本標的無法估值批次的處理（D-d1／D-d2 重審或撤除）。（風控審查檔原文僅列「第 1、5 條」；D-d1 更正後第 4 條亦在 6-a 範圍，是否需改寫此條文字，待風控確認。）
-3. 6-c 擴及 AC-12.5，或 same／unknown／other 分類變更（如 ETF 穿透）。任何讓 `notional_caps` 納入第 2 條的變更，須回頭核對 Decision 4。（6-c 已由風控同日裁定採 C-1，審查檔列此條時尚未裁定；此條對「6-c 擴及」是否已被該裁定涵蓋，來源未載，待風控確認。）
+2. 6-a 修法改變第 1、**4**、5 條對本標的無法估值批次的處理（D-d1／D-d2 重審或撤除）。（2026-10-07 更正：風控審查檔原文僅列「第 1、5 條」，風控於該檔第一段「二、逐條」第 7 點更正為「第 1、4、5 條」；原「待風控確認」已結案。）
+3. 6-c 擴及 AC-12.5，或 same／unknown／other 分類變更（如 ETF 穿透）。任何讓 `notional_caps` 納入第 2 條的變更，須回頭核對 Decision 4。（2026-10-07 風控裁定，風控審查檔第一段二.7：「6-c 擴及」**已被 C-1 涵蓋**；分類變更段繼續有效，並加「M-1／M-3 以外的再變更」。原「待風控確認」已結案。）
 4. `_sector_rollup` 語意、`book_limits` 規則 3、`_one_per_sector` 變動，或上限編號／名稱／數量變動。（K-2 的以標的為單位改動即屬 `_sector_rollup` 變動，風控已同意。）
 5. 允許零或負市值（空頭），或總資產可能小於產業市值。（F-1b 匯率 ≤ 0 的影響見 ADR-0023。）
 6. 推播組成改變，使 W2 不再緊接產業句。
 7. S-B2 失效條件 1 觸發（quiet reason 進 UI／推播／feed 或被 F-4「查看略過原因」納入）：併審 W3 的 quiet 殘留（見 Consequences 4）。ADR-0010 第 6 列管仍有效。
+8. **F-8**（2026-10-07 增補；來源：風控第三段「四、失效條件增補」。此處「F-8」為風控審查檔的失效條件編號，與本 ADR 關聯段的 F-1 任務單無關）：`categories(G)` 改為包含非使用者填寫值（如系統推斷）、None 被算成一個類別、產業別改自由文字，或 `TWSE_SECTORS` 名稱或順序變動 → 重審 W-6m「所填產業別為」與排序。
 
 其他：
 
@@ -300,8 +402,9 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
 
 - W1～W7：creative-lead 起草 → risk-compliance-officer 逐字審——**已核可（2026-10-07）**；改 accepted 尚待 CEO 未推翻之確認（見狀態欄）。
 - 實作：dev-lead（F-1 合併後 rebase）→ qa-reviewer（K-1～K-11 逐條，K-8 重點）→ 風控單項核對。
+- W-6m：creative-lead 起草 → 風控逐字審——**已核可修正版（2026-10-07，風控第三段）**；PR 合併前提見 Decision 1 補充 M-4。
+- **結案（2026-10-07）**：tech-architect 補寫 `/limits` 彙總對 mixed 產業的同等規則（原待補項）——已於 Decision 1 補充段（M-1～M-5）寫明，風控 2026-10-07 裁定（風控審查檔第二段 B；排序鍵與 W-6m 見第三段）。
 - **待補（來源明載，尚未完成）**：
-  - tech-architect：`/limits` 彙總對 mixed 產業的同等規則，寫明後再送風控。
   - creative-lead：`SECTOR_UNCLASSIFIED_NOTE` 三子類皆成立的中性句（low）。
   - creative-lead：6-a 落地後 D-d1／D-d2 的處置（見 ADR-0023）。
 - 6-a、6-b 另開單（判定見 ADR-0023）；own>0 加碼降級交 tech-architect；F-1b 交 dev-lead／devops-sre。
