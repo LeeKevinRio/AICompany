@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { chooseAction, type Personality } from '../src/ai/ai.js';
 import {
   IllegalActionError,
   applyAction,
   createGame,
   nextHand,
   optionsFor,
+  pendingSeats,
+  tileCount,
   type GameEvent,
   type GameState,
 } from '../src/engine/engine.js';
 import { RULES } from '../src/engine/rules.js';
+import { createRng } from '../src/engine/rng.js';
 import { sortTiles } from '../src/engine/tiles.js';
 import type { Meld } from '../src/engine/types.js';
 import { simulateGame } from '../src/game/simulate.js';
@@ -28,6 +32,8 @@ interface Setup {
   dealer?: number;
   /** First go-around: nobody has discarded or called yet (天胡 / 地胡 / 人胡). */
   fresh?: boolean;
+  /** Seats that have already declared ready (報聽). */
+  declared?: number[];
 }
 
 function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: GameEvent) => void } {
@@ -54,6 +60,7 @@ function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: Ga
     p.discards = [];
     p.drawn = i === cfg.turn ? (cfg.drawn ?? null) : null;
     p.hasDiscarded = !cfg.fresh;
+    p.declared = cfg.declared?.includes(i) ?? false;
   });
   const back = tiles(cfg.back ?? '');
   const filler = Array.from({ length: RULES.deadWallSize - back.length }, () => 'WD');
@@ -100,7 +107,9 @@ describe('claims', () => {
     expect(game.hand.players[2]!.melds).toEqual([{ type: 'pon', tiles: ['5m', '5m', '5m'], fromSeat: 0, claimedTile: '5m' }]);
     expect(game.hand.players[0]!.discards).toEqual([]);
     expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false });
-    expect(ids(game, 2).every((id) => id.startsWith('discard:'))).toBe(true);
+    // No draw, so no tsumo / kongs: only discards, plus 報聽 for the discards that leave the hand ready.
+    expect(ids(game, 2).every((id) => id.startsWith('discard:') || id.startsWith('ting:'))).toBe(true);
+    expect(ids(game, 2).filter((id) => id.startsWith('ting:')).sort()).toEqual(['ting:E', 'ting:N']);
   });
 
   it('chi when nobody else claims', () => {
@@ -431,5 +440,185 @@ describe('meld display', () => {
     applyAction(game, 0, 'discard:3m', emit);
     applyAction(game, 1, 'chi:3m', emit);
     expect(game.hand.players[1]!.melds[0]).toEqual({ type: 'chi', tiles: ['3m', '4m', '5m'], fromSeat: 0, claimedTile: '3m' });
+  });
+});
+
+describe('報聽 (ting)', () => {
+  // 16 ready tiles plus N: discarding N waits on E (單吊), discarding E waits on N.
+  const READY = '123m 456m 789m 123p 456p E N';
+
+  it('offers ting:<tile> only where the discard leaves the hand ready; every discard stays', () => {
+    const { game } = setup({ hands: [READY, '', '', ''], front: '9s', turn: 0, drawn: 'N' });
+    const options = optionsFor(game, 0);
+    const discards = options.filter((o) => o.type === 'discard');
+    expect(discards.map((o) => o.tile)).toEqual([...new Set(game.hand.players[0]!.hand)]);
+    const ting = options.filter((o) => o.type === 'ting');
+    expect(ting.map((o) => o.id).sort()).toEqual(['ting:E', 'ting:N']);
+    for (const o of ting) {
+      const same = discards.find((d) => d.tile === o.tile)!;
+      expect(o.waits.length).toBeGreaterThan(0);
+      expect(o.waits).toEqual(same.waits);
+      expect(o.tai).toBe(-1);
+      expect(o.tiles).toEqual([]);
+    }
+    expect(ting.find((o) => o.id === 'ting:N')!.label).toBe('聽牌 打 北風（聽 東風）');
+    expect(ting.find((o) => o.id === 'ting:N')!.waits).toEqual([{ tile: 'E', left: 3 }]);
+  });
+
+  it('offers no ting when no discard makes the hand ready', () => {
+    const { game } = setup({ hands: ['1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s 7s 9s E N', '', '', ''], front: '9s', turn: 0 });
+    expect(ids(game, 0).some((id) => id.startsWith('ting:'))).toBe(false);
+    expect(() => applyAction(game, 0, 'ting:E', () => {})).toThrow(IllegalActionError);
+  });
+
+  it('declaring marks the seat, announces ting, then plays exactly like the discard', () => {
+    const { game, events, emit } = setup({ hands: [READY, '', '', ''], front: '9s 9s', turn: 0, drawn: 'N' });
+    applyAction(game, 0, 'ting:N', emit);
+    const p = game.hand.players[0]!;
+    expect(p.declared).toBe(true);
+    expect(events.slice(0, 2)).toEqual([
+      { type: 'ting', seat: 0, tile: 'N', tiles: [], text: 'A 聽牌' },
+      { type: 'discard', seat: 0, tile: 'N', tiles: [], text: 'A 打出 北風' },
+    ]);
+    expect(p.discards).toEqual(['N']);
+    expect(p.hand).not.toContain('N');
+    expect(game.hand.lastDiscard).toEqual({ seat: 0, tile: 'N' });
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: true });
+    expect(game.hand.players.filter((x) => x.declared)).toHaveLength(1);
+  });
+
+  it('a declared seat can only let the drawn tile go: no kong, no other discard, no ting', () => {
+    // Four 1s (ankan) and a pon of 5m with the fourth 5m in hand (kakan); the drawn E does not win.
+    const cfg = {
+      hands: ['1s 1s 1s 1s 5m 123p 456p 9p 9p E', '', '', ''],
+      melds: [[meld('pon', '5m 5m 5m', 1)]],
+      front: '9m',
+      turn: 0,
+      drawn: 'E',
+    };
+    const open = setup(cfg);
+    expect(ids(open.game, 0)).toEqual(expect.arrayContaining(['ankan:1s', 'kakan:5m', 'discard:1s']));
+    const { game, emit } = setup({ ...cfg, declared: [0] });
+    expect(ids(game, 0)).toEqual(['discard:E']);
+    expect(() => applyAction(game, 0, 'discard:1s', emit)).toThrow(IllegalActionError);
+    expect(() => applyAction(game, 0, 'ankan:1s', emit)).toThrow(IllegalActionError);
+    applyAction(game, 0, 'discard:E', emit);
+    expect(game.hand.players[0]!.discards).toEqual(['E']);
+  });
+
+  it('a declared seat that can self-draw chooses between tsumo and letting the tile go (過)', () => {
+    const cfg = { hands: ['123m 456m 789m 123p 456p E E', '', '', ''], front: '9s 9s', turn: 0, drawn: 'E', declared: [0] };
+    const win = setup(cfg);
+    const options = optionsFor(win.game, 0);
+    expect(options.map((o) => o.id)).toEqual(['tsumo', 'discard:E']);
+    expect(options[0]!.tai).toBeGreaterThanOrEqual(0);
+    applyAction(win.game, 0, 'tsumo', win.emit);
+    expect(win.game.hand.result?.winnerSeat).toBe(0);
+    expect(win.game.hand.result?.totalTai).toBe(options[0]!.tai);
+
+    const skip = setup(cfg);
+    applyAction(skip.game, 0, 'discard:E', skip.emit);
+    expect(skip.game.hand.result).toBeNull();
+    expect(skip.game.hand.players[0]!.declared).toBe(true);
+    expect(skip.game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: true });
+  });
+
+  it('a declared seat gets no chi / pon / kan on a discard, only ron + pass when it wins', () => {
+    const { game, emit } = setup({ hands: CLAIM_HANDS, front: '9m 9m', turn: 0, declared: [1, 2, 3] });
+    applyAction(game, 0, 'discard:5m', emit);
+    expect(ids(game, 1)).toEqual([]);
+    expect(ids(game, 2)).toEqual([]);
+    expect(ids(game, 3)).toEqual(['ron', 'pass']);
+    applyAction(game, 3, 'ron', emit);
+    expect(game.hand.result?.winnerSeat).toBe(3);
+
+    const kan = setup({
+      hands: ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s 4s 5s 6s E', '', '5m 5m 5m 111s 999s 777p E N', ''],
+      front: '9m',
+      turn: 0,
+      declared: [2],
+    });
+    applyAction(kan.game, 0, 'discard:5m', kan.emit);
+    expect(ids(kan.game, 2)).toEqual([]);
+    expect(kan.game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: true });
+
+    // Declining a win keeps the seat declared and the draw goes on as usual.
+    const pass = setup({ hands: CLAIM_HANDS, front: '9m 9m', turn: 0, declared: [1, 2, 3] });
+    applyAction(pass.game, 0, 'discard:5m', pass.emit);
+    applyAction(pass.game, 3, 'pass', pass.emit);
+    expect(pass.game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: true });
+    expect(pass.game.hand.players[3]!.declared).toBe(true);
+  });
+
+  it('a declared seat may still rob a kong (ron + pass)', () => {
+    const { game, emit } = setup({
+      hands: ['5m 1p 2p 3p 4p 5p 6p 7p 8p 9p 1s 2s 3s E', '', '123m 456p 789p 234s 567s 5m', ''],
+      melds: [[meld('pon', '5m 5m 5m', 1)]],
+      front: '9m',
+      turn: 0,
+      drawn: '5m',
+      declared: [2],
+    });
+    applyAction(game, 0, 'kakan:5m', emit);
+    expect(ids(game, 2)).toEqual(['ron', 'pass']);
+    applyAction(game, 2, 'ron', emit);
+    expect(game.hand.result?.winnerSeat).toBe(2);
+  });
+
+  it('every new hand starts undeclared', () => {
+    const { game, emit } = setup({ hands: CLAIM_HANDS, front: '9m 9m', turn: 0, declared: [0, 1, 2, 3] });
+    applyAction(game, 0, 'discard:5m', emit);
+    applyAction(game, 3, 'ron', emit);
+    expect(game.hand.phase.type).toBe('ended');
+    nextHand(game, emit);
+    expect(game.hand.players.map((p) => p.declared)).toEqual([false, false, false, false]);
+  });
+
+  it('the AI never declares', () => {
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      const { game } = setup({ hands: [READY, '', '', ''], front: '9s', turn: 0, drawn: 'N' });
+      const options = optionsFor(game, 0);
+      expect(options.some((o) => o.type === 'ting')).toBe(true);
+      expect(chooseAction(game, 0, options, personality, createRng(1))).toMatch(/^discard:/);
+    }
+  });
+
+  it('full games where one seat declares whenever it can: 144 tiles, zero-sum, declared seats stay restricted', () => {
+    let declarations = 0;
+    let declaredWins = 0;
+    for (let seed = 101; seed <= 130; seed++) {
+      const game = createGame({ id: `ting-${seed}`, names: ['甲', '乙', '丙', '丁'], seed });
+      const rng = createRng(seed);
+      const emit = (): void => {
+        expect(tileCount(game)).toBe(144);
+      };
+      nextHand(game, emit);
+      for (let guard = 0; guard < 100_000; guard++) {
+        const hand = game.hand;
+        if (hand.phase.type === 'ended') {
+          const r = hand.result!;
+          expect(r.deltas.reduce((a, b) => a + b, 0)).toBe(0);
+          if (r.kind === 'win' && hand.players[r.winnerSeat]!.declared) declaredWins++;
+          if (game.over) break;
+          nextHand(game, emit);
+          continue;
+        }
+        const seat = pendingSeats(game)[0]!;
+        const options = optionsFor(game, seat);
+        const p = hand.players[seat]!;
+        if (p.declared) {
+          expect(options.every((o) => ['tsumo', 'ron', 'pass', 'discard'].includes(o.type))).toBe(true);
+          const discards = options.filter((o) => o.type === 'discard');
+          expect(discards.length).toBeLessThanOrEqual(1);
+          if (discards.length === 1) expect(discards[0]!.tile).toBe(p.drawn);
+        }
+        const ting = seat === 0 ? options.find((o) => o.type === 'ting') : undefined;
+        if (ting) declarations++;
+        applyAction(game, seat, ting?.id ?? chooseAction(game, seat, options, 'rabbit', rng), emit);
+      }
+      expect(game.over).toBe(true);
+    }
+    expect(declarations).toBeGreaterThan(0);
+    expect(declaredWins).toBeGreaterThan(0);
   });
 });

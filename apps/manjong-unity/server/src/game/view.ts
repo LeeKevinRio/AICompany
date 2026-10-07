@@ -49,6 +49,8 @@ export interface PlayerViewDto {
   melds: MeldDto[];
   flowers: string[];
   discards: string[];
+  /** Declared ready (報聽) this hand; public for every seat. */
+  declared: boolean;
   sessionDelta: number;
 }
 
@@ -145,6 +147,7 @@ export function buildView(
       melds: p.melds.map(toMeldDto),
       flowers: [...p.flowers],
       discards: [...p.discards],
+      declared: p.declared,
       sessionDelta: game.sessionDeltas[seat]!,
     };
   });

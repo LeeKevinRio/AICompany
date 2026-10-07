@@ -1,5 +1,11 @@
-# manjong-unity API 契約 v0.3.1
+# manjong-unity API 契約 v0.4
 
+> v0.4（2026-10-07，CEO 回饋）：**報聽改走後端**。原本用戶端的「聽」只是本地提示，現在是真正的宣告：
+> - 新選項 `ting:<牌>`（打出這張並宣告聽牌）；新事件 `ting`；`PlayerView` 新增 `declared`（四家公開）。
+> - 宣告後不能再吃、碰、槓（含暗槓、加槓）與換牌：伺服器**自動代打**摸到的牌（只送 `step`，不送 `state`），
+>   直到能胡（自摸或胡別人）時才停下來給選項。**不做自動胡**，胡不胡由玩家決定。
+> - 報聽**不加台**（是否加「報聽 1 台」待 CEO 決定）。規則見 §2.4。
+>
 > v0.3.1（2026-10-04，CEO 回饋）：副露新增 `claimedTile` / `claimedIndex`，吃牌時被吃的那張排在中間。
 >
 > v0.3 變更（2026-10-03，CEO 要求）：
@@ -72,8 +78,8 @@ StepDto = { "event": EventDto, "view": GameView }
 | --- | --- |
 | `auth_ok` | `auth` 或 `guest` 成功（`guest` 時 `token` 有值）。 |
 | `leaderboard` | 回應 `leaderboard`。 |
-| `step` | 牌局中每發生一個事件就**即時**推送（摸牌、補花、打牌、吃碰槓、胡、流局…）。AI 的動作由伺服器控制節奏（預設每個 AI 動作間隔約 0.6 秒），用戶端收到就播放。`step.view` 是該事件之後的畫面，**不含 options**（輪到你之前不能操作）。 |
-| `state` | 權威快照：開局 / 接續時、每次輪到你需要決定時、每局結束時、動作被拒時。`view.options` 非空 = 等你做決定。 |
+| `step` | 牌局中每發生一個事件就**即時**推送（摸牌、補花、報聽、打牌、吃碰槓、胡、流局…）。AI 的動作由伺服器控制節奏（預設每個 AI 動作間隔約 0.6 秒），用戶端收到就播放。`step.view` 是該事件之後的畫面，**不含 options**（輪到你之前不能操作）。 |
+| `state` | 權威快照：開局 / 接續時、每次輪到你需要決定時、每局結束時、動作被拒時。`view.options` 非空 = 等你做決定。已報聽且只能打掉摸到的牌時由伺服器自動代打，**不送** `state`（§2.4）。 |
 | `player` | 回應 `me` / `nickname` / `relief`；另外每局結算後主動推送最新的 PlayerDto（金幣、戰績）。 |
 | `error` | 見 `code`。 |
 | `pong` | 回應 `ping`。 |
@@ -84,12 +90,13 @@ StepDto = { "event": EventDto, "view": GameView }
 
 ```json
 EventDto = {
-  "type": "hand_start | draw | flower | discard | chi | pon | kan | ankan | kakan | win | exhaustive | game_end",
+  "type": "hand_start | draw | flower | ting | discard | chi | pon | kan | ankan | kakan | win | exhaustive | game_end",
   "seat": 0,             // 事件主角座位，無則 -1
   "tile": "5m",          // 相關牌；別家摸牌一律 ""（自己摸牌會告訴你摸到哪張）
   "tiles": ["4m","5m","6m"],
   "text": "熊熊 碰 五萬"   // 伺服器產生的繁中描述（自己摸牌時為空字串）
 }
+// ting：seat = 宣告者，tile = 宣告時打出的牌，tiles = []，text = "<名字> 聽牌"；緊接著一定是同一張牌的 discard 事件。
 
 GameView = {
   "gameId": "g_xxx",
@@ -125,16 +132,17 @@ PlayerView = {
   "drawnTile": "",            // 只有自己、且剛摸牌時才有值（UI 放在手牌最右邊）
   "melds": [ MeldDto ],
   "flowers": ["F1"], "discards": ["9s","E"],
+  "declared": false,          // 本局是否已報聽（四家都公開；每局開始為 false）
   "sessionDelta": 0           // 本場累計輸贏
 }
 
 OptionDto = {
-  "id": "discard:5m | tsumo | ron | pon | kan | chi:3m | ankan:5m | kakan:5m | pass | next",
-  "type": "discard | tsumo | ron | pon | kan | chi | ankan | kakan | pass | next",
-  "tile": "5m",               // discard / ankan / kakan 的牌；ron / pon / kan / chi 為被吃碰胡的牌；其他 ""
+  "id": "discard:5m | ting:5m | tsumo | ron | pon | kan | chi:3m | ankan:5m | kakan:5m | pass | next",
+  "type": "discard | ting | tsumo | ron | pon | kan | chi | ankan | kakan | pass | next",
+  "tile": "5m",               // discard / ting / ankan / kakan 的牌；ron / pon / kan / chi 為被吃碰胡的牌；其他 ""
   "tiles": ["3m","4m","5m"],  // chi 的順子組成；其他 []
-  "label": "打 五萬（聽 三筒、六筒）",
-  "waits": [ WaitDto ],       // 只有 discard：打出這張之後聽哪些牌（空 = 打這張不會聽牌）
+  "label": "打 五萬（聽 三筒、六筒）",   // ting 例："聽牌 打 五萬（聽 三筒、六筒）"
+  "waits": [ WaitDto ],       // discard / ting：打出這張之後聽哪些牌（discard 可為空 = 打這張不會聽牌；ting 一定非空）
   "tai": 5                    // 只有 tsumo / ron：這手胡下去的台數（不含莊家台）；其他 -1
 }
 ```
@@ -144,8 +152,10 @@ OptionDto = {
 - 能不能胡：有 `tsumo` 選項，`tai` 是台數。
 - 能不能槓、槓哪張、哪一種：`ankan:<牌>`（暗槓）或 `kakan:<牌>`（加槓），一張牌一個選項。
 - 打哪張會聽、聽哪些：每個 `discard:<牌>` 選項的 `waits`。
+- 能不能報聽：打出後會聽牌的每張牌各有一個 `ting:<牌>`（`waits` 同對應的 `discard:<牌>`）。
 - 別人打牌時：`ron`（含 `tai`）、`pon`、`kan`（明槓）、`chi:<順子最小牌>`、`pass`。
 - 不是你的回合時：`view.myWaits` 是你目前聽的牌。
+- 已報聽時選項大幅縮減，見 §2.4。
 
 ```json
 HandResult = {
@@ -163,3 +173,39 @@ HandResult = {
 
 - 結算與台數全部由伺服器計算；`next` 選項（hand_end 時出現）開下一局；game_end 時 options 為空，回大廳。
 - 金幣歸零後要再玩：先 `relief` 領救濟金（補到 10,000），再 `start`。
+
+### 2.4 報聽（v0.4）
+
+**何時能報聽**：輪到自己打牌時（摸牌後，或吃 / 碰之後要打牌時都可以）、且本局尚未報聽。
+對每張「打出後會聽牌」（`waits` 非空）的牌各給一個選項：
+
+```json
+{ "id": "ting:5m", "type": "ting", "tile": "5m", "tiles": [],
+  "label": "聽牌 打 五萬（聽 三筒、六筒）", "waits": [ WaitDto ], "tai": -1 }
+```
+
+- 原本所有 `discard:<牌>` 選項照舊保留（不想報聽就照常打牌）。
+- 送 `action`（`actionId = "ting:5m"`）後：該玩家 `declared = true`，事件流先有
+  `{ "type": "ting", "seat": 0, "tile": "5m", "tiles": [], "text": "<暱稱> 聽牌" }`，
+  接著是一模一樣的打牌流程（`discard` 事件、其他家吃碰胡的判斷都不變）。
+- 報聽**不加台**，台數表不變。
+
+**已報聽的玩家**（`players[seat].declared = true`，直到這局結束）：
+
+| 時機 | 選項 |
+| --- | --- |
+| 自己摸牌後，可以自摸 | 只有 `tsumo`（含 `tai`）與 `discard:<剛摸到的牌>`（= 不胡，把摸到的牌打掉） |
+| 自己摸牌後，不能自摸 | 只有 `discard:<剛摸到的牌>` → **伺服器自動代打**（見下） |
+| 別家打牌，可以胡 | 只有 `ron`（含 `tai`）與 `pass` |
+| 別家打牌，不能胡 | 沒有選項（不能吃、碰、明槓） |
+| 別家加槓，可以搶槓胡 | `ron` 與 `pass`（同上） |
+
+- 已報聽不會再有 `ankan` / `kakan` / `pon` / `kan` / `chi` / `ting`，也不能選擇打別張牌。補花照舊自動處理。
+- **自動代打**：選項只剩一個 `discard` 時，伺服器像 AI 一樣替你打（同樣的節奏，約 0.6 秒），
+  **不送 `state`**，你只會收到 `draw`（看得到自己摸到的牌）與 `discard` 的 `step`。
+  只有真的要你決定（可自摸、可胡別人）或這局結束時，才送 `state`。自動代打期間送 `action` 會被拒
+  （`ILLEGAL_ACTION`「請等其他玩家動作完」），跟 AI 行動中一樣。
+- **不做自動胡**：可自摸 / 可胡時一定停下來等你選；選 `discard:<牌>` 或 `pass` 就繼續自動代打。
+- `view.myWaits` 照舊：不是你的回合時是你目前聽的牌；輪到你（手上有剛摸的牌）時為空，改看 `discard` 選項的 `waits`。
+- 下一局開始時四家的 `declared` 都重設為 `false`。
+- AI 目前不會報聽。

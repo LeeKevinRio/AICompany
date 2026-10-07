@@ -127,6 +127,8 @@ export function chooseAction(
   const seen = visibleCounts(game, seat);
 
   if (byType('discard').length) {
+    // The AI never declares (報聽); should a seat ever be declared, play the one discard it is offered.
+    if (p.declared) return byType('discard')[0]!.id;
     const discard = bestDiscard(p.hand, sets, seen, rng);
     for (const o of byType('ankan')) {
       const after = without(p.hand, [o.tile, o.tile, o.tile, o.tile]);

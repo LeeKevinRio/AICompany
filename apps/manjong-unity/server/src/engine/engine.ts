@@ -29,6 +29,7 @@ export type EventType =
   | 'draw'
   | 'flower'
   | 'discard'
+  | 'ting'
   | 'chi'
   | 'pon'
   | 'kan'
@@ -52,6 +53,7 @@ export type Emit = (event: GameEvent) => void;
 
 export type OptionType =
   | 'discard'
+  | 'ting'
   | 'tsumo'
   | 'ron'
   | 'pon'
@@ -74,7 +76,7 @@ export interface GameOption {
   tile: Tile;
   tiles: Tile[];
   label: string;
-  /** discard: the waits after discarding this tile (empty = not tenpai). Empty for other types. */
+  /** discard / ting: the waits after discarding this tile (empty = not tenpai). Empty for other types. */
   waits: WaitInfo[];
   /** tsumo / ron: tai this win would score (excluding the dealer bonus); -1 otherwise. */
   tai: number;
@@ -89,6 +91,11 @@ export interface PlayerState {
   discards: Tile[];
   /** Has discarded at least once this hand (used for 天胡 / 地胡 / 人胡). */
   hasDiscarded: boolean;
+  /**
+   * Declared ready (報聽) this hand. From then on the seat may only win or discard the tile it just
+   * drew: no chi / pon / kan / ankan / kakan and no choice of discard.
+   */
+  declared: boolean;
 }
 
 type Phase =
@@ -251,6 +258,7 @@ function emptyHand(dealer: number, streak: number, roundIndex: number): HandStat
       flowers: [],
       discards: [],
       hasDiscarded: false,
+      declared: false,
     })),
     phase: { type: 'ended' },
     noCallsYet: true,
@@ -384,15 +392,31 @@ export function pendingSeats(game: GameState): number[] {
   return [0, 1, 2, 3].filter((s) => optionsFor(game, s).length > 0);
 }
 
+function discardOption(game: GameState, seat: number, tile: Tile): GameOption {
+  const p = game.hand.players[seat]!;
+  const rest = [...p.hand];
+  rest.splice(rest.indexOf(tile), 1);
+  const waits = waitInfos(game, seat, rest, setsNeeded(p));
+  const label = waits.length > 0 ? `打 ${tileName(tile)}（聽 ${waitsLabel(waits)}）` : `打 ${tileName(tile)}`;
+  return { ...opt(`discard:${tile}`, 'discard', label, tile), waits };
+}
+
 function turnOptions(game: GameState, seat: number, justDrew: boolean): GameOption[] {
   const p = game.hand.players[seat]!;
   const options: GameOption[] = [];
   const canKong = liveWallCount(game.hand) > 0;
+  if (justDrew && isComplete(toCounts(p.hand), setsNeeded(p))) {
+    const tai = tsumoScore(game, seat).score.total;
+    options.push({ ...opt('tsumo', 'tsumo', `自摸（${tai} 台）`), tai });
+  }
+  if (p.declared) {
+    // After 報聽 the only choice besides a win is to let the drawn tile go.
+    // (A declared seat always reaches its turn by drawing; the fallback only guards odd states.)
+    const tiles = p.drawn ? [p.drawn] : [...new Set(p.hand)];
+    for (const t of tiles) options.push(discardOption(game, seat, t));
+    return options;
+  }
   if (justDrew) {
-    if (isComplete(toCounts(p.hand), setsNeeded(p))) {
-      const tai = tsumoScore(game, seat).score.total;
-      options.push({ ...opt('tsumo', 'tsumo', `自摸（${tai} 台）`), tai });
-    }
     if (canKong) {
       for (const t of new Set(p.hand)) {
         if (countOf(p.hand, t) === 4) options.push(opt(`ankan:${t}`, 'ankan', `暗槓 ${tileName(t)}`, t));
@@ -405,12 +429,13 @@ function turnOptions(game: GameState, seat: number, justDrew: boolean): GameOpti
       }
     }
   }
-  for (const t of new Set(p.hand)) {
-    const rest = [...p.hand];
-    rest.splice(rest.indexOf(t), 1);
-    const waits = waitInfos(game, seat, rest, setsNeeded(p));
-    const label = waits.length > 0 ? `打 ${tileName(t)}（聽 ${waitsLabel(waits)}）` : `打 ${tileName(t)}`;
-    options.push({ ...opt(`discard:${t}`, 'discard', label, t), waits });
+  const discards = [...new Set(p.hand)].map((t) => discardOption(game, seat, t));
+  options.push(...discards);
+  // 報聽: declaring is the same discard, offered only where it leaves the hand ready.
+  for (const d of discards) {
+    if (d.waits.length === 0) continue;
+    const label = `聽牌 打 ${tileName(d.tile)}（聽 ${waitsLabel(d.waits)}）`;
+    options.push({ ...opt(`ting:${d.tile}`, 'ting', label, d.tile), waits: d.waits.map((w) => ({ ...w })) });
   }
   return options;
 }
@@ -422,6 +447,7 @@ function claimOptions(game: GameState, seat: number, discarder: number, tile: Ti
     const tai = ronScore(game, seat, discarder, tile, {}).total;
     options.push({ ...opt('ron', 'ron', `胡（${tai} 台）`, tile), tai });
   }
+  if (p.declared) return options.length > 0 ? [...options, opt('pass', 'pass', '過')] : [];
   const n = countOf(p.hand, tile);
   if (n >= 2) options.push(opt('pon', 'pon', `碰 ${tileName(tile)}`, tile));
   if (n >= 3 && liveWallCount(game.hand) > 0) options.push(opt('kan', 'kan', `槓 ${tileName(tile)}`, tile));
@@ -470,6 +496,8 @@ export function applyAction(game: GameState, seat: number, actionId: string, emi
       return doTsumo(game, seat, emit);
     case 'discard':
       return doDiscard(game, seat, option.tile, emit);
+    case 'ting':
+      return doTing(game, seat, option.tile, emit);
     case 'ankan':
       return doAnkan(game, seat, option.tile, emit);
     case 'kakan':
@@ -508,6 +536,13 @@ function doDiscard(game: GameState, seat: number, tile: Tile, emit: Emit): void 
     options,
     responses: options.map((o) => (o.length === 0 ? 'none' : null)),
   };
+}
+
+/** 報聽: mark the seat as declared, announce it, then discard exactly like a plain discard. */
+function doTing(game: GameState, seat: number, tile: Tile, emit: Emit): void {
+  game.hand.players[seat]!.declared = true;
+  emit({ type: 'ting', seat, tile, tiles: [], text: `${game.names[seat]} 聽牌` });
+  doDiscard(game, seat, tile, emit);
 }
 
 function resolveClaim(game: GameState, emit: Emit): void {

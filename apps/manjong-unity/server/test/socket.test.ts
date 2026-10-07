@@ -133,6 +133,12 @@ interface Coverage {
   kongs: number;
   selfDraws: number;
   preempted: number;
+  /** 報聽 chosen by the test player. */
+  declared: number;
+  /** Discards the server played for the declared test player (no state in between). */
+  autoDiscards: number;
+  /** States shown to a declared player: a self-draw or a discard it could win on. */
+  declaredWinOffers: number;
 }
 
 /** Verifies every option the server offers against an independent computation. */
@@ -144,6 +150,15 @@ function verifyState(view: Msg, cov: Coverage): void {
   const full: string[] = [...me.hand, ...(me.drawnTile ? [me.drawnTile] : [])];
   const seen = visible(view);
   const types = view.options.map((o: Msg) => o.type);
+  const optionIds: string[] = view.options.map((o: Msg) => o.id);
+  for (const p of view.players) expect(typeof p.declared).toBe('boolean');
+
+  if (me.declared && view.phase === 'playing') {
+    // After 報聽 the server only stops for a win: tsumo + letting the drawn tile go, or ron + pass.
+    cov.declaredWinOffers++;
+    if (me.drawnTile !== '') expect(optionIds).toEqual(['tsumo', `discard:${me.drawnTile}`]);
+    else expect(optionIds).toEqual(['ron', 'pass']);
+  }
 
   for (const o of view.options) {
     expect(Array.isArray(o.waits)).toBe(true);
@@ -158,6 +173,15 @@ function verifyState(view: Msg, cov: Coverage): void {
         cov.discardWithWaits++;
         expect(o.label).toContain('聽');
       }
+    } else if (o.type === 'ting') {
+      expect(me.declared).toBe(false);
+      const same = view.options.find((d: Msg) => d.type === 'discard' && d.tile === o.tile);
+      expect(same).toBeDefined();
+      expect(o.id).toBe(`ting:${o.tile}`);
+      expect(o.waits.length).toBeGreaterThan(0);
+      expect(o.waits).toEqual(same.waits);
+      expect(o.tai).toBe(-1);
+      expect(o.label.startsWith(`聽牌 打 `)).toBe(true);
     } else if (o.type === 'tsumo') {
       expect(isComplete(toCounts(full), sets)).toBe(true);
       expect(o.tai).toBeGreaterThanOrEqual(0);
@@ -178,7 +202,7 @@ function verifyState(view: Msg, cov: Coverage): void {
   // Completeness: whatever the server should offer after a draw, it does offer.
   if (me.drawnTile !== '') {
     if (isComplete(toCounts(full), sets)) expect(types).toContain('tsumo');
-    if (view.wallRemaining > 0) {
+    if (view.wallRemaining > 0 && !me.declared) {
       for (const t of new Set(full)) {
         if (count(full, t) === 4) expect(view.options.map((o: Msg) => o.id)).toContain(`ankan:${t}`);
       }
@@ -187,6 +211,11 @@ function verifyState(view: Msg, cov: Coverage): void {
           expect(view.options.map((o: Msg) => o.id)).toContain(`kakan:${m.tiles[0]}`);
         }
       }
+    }
+    // 報聽 is offered for exactly the discards that leave the hand ready.
+    if (!me.declared) {
+      const tenpai = view.options.filter((o: Msg) => o.type === 'discard' && o.waits.length > 0).map((o: Msg) => `ting:${o.tile}`);
+      expect(optionIds.filter((id) => id.startsWith('ting:'))).toEqual(tenpai);
     }
   }
 
@@ -200,7 +229,7 @@ function verifyState(view: Msg, cov: Coverage): void {
   }
 }
 
-function choose(view: Msg, cov: Coverage): Msg {
+function choose(view: Msg, cov: Coverage, declareChance: { n: number }): Msg {
   const opts: Msg[] = view.options;
   const find = (t: string): Msg | undefined => opts.find((o) => o.type === t);
   const win = find('tsumo') ?? find('ron');
@@ -211,6 +240,13 @@ function choose(view: Msg, cov: Coverage): Msg {
   if (kong) {
     cov.kongs++;
     return kong;
+  }
+  // Declare (報聽) on three chances out of four, so both the declared and the free paths stay busy.
+  const ting = opts.filter((o) => o.type === 'ting');
+  if (ting.length > 0 && declareChance.n++ % 4 !== 3) {
+    const left = (o: Msg): number => o.waits.reduce((a: number, w: Msg) => a + w.left, 0);
+    cov.declared++;
+    return ting.reduce((a, b) => (left(b) > left(a) ? b : a));
   }
   if (find('pass')) return find('pon') ?? find('pass');
   // Play sensibly (lowest shanten) so the test regularly reaches tenpai and wins.
@@ -233,13 +269,29 @@ function choose(view: Msg, cov: Coverage): Msg {
 
 describe('websocket game', () => {
   it('plays full games; every option, wait, kong, tai and drawn tile matches an independent check', { timeout: 600_000 }, async () => {
-    const cov: Coverage = { states: 0, discardWithWaits: 0, myWaitsShown: 0, tsumo: 0, ron: 0, kongs: 0, selfDraws: 0, preempted: 0 };
+    const cov: Coverage = {
+      states: 0,
+      discardWithWaits: 0,
+      myWaitsShown: 0,
+      tsumo: 0,
+      ron: 0,
+      kongs: 0,
+      selfDraws: 0,
+      preempted: 0,
+      declared: 0,
+      autoDiscards: 0,
+      declaredWinOffers: 0,
+    };
+    const declareChance = { n: 0 };
     // WS_GAMES=200 npm test -- socket  runs a long verification pass (used before releases).
     const games = Number(process.env.WS_GAMES ?? 3);
     for (let game = 0; game < games; game++) {
       const { client, token } = await login();
       client.send({ type: 'start' });
       let pendingWin: Msg | null = null;
+      // The discard (or 報聽) I asked for; any other discard of mine was played by the server.
+      let ownDiscard: string | null = null;
+      let lastTing: Msg | null = null;
       for (let i = 0; i < 20000; i++) {
         const m = await client.next((x) => x.type === 'step' || x.type === 'state' || x.type === 'error');
         expect(m.type).not.toBe('error');
@@ -247,6 +299,26 @@ describe('websocket game', () => {
           const { event, view } = m.step;
           assertNoLeak(view);
           expect(view.options).toEqual([]);
+          if (lastTing) {
+            // 報聽 is always followed by the very same discard.
+            expect(event).toMatchObject({ type: 'discard', seat: lastTing.seat, tile: lastTing.tile });
+            lastTing = null;
+          }
+          if (event.type === 'ting') {
+            expect(event.seat).toBe(view.mySeat); // the AI never declares
+            expect(event.tile).toBe(ownDiscard);
+            expect(event.text).toContain('聽牌');
+            expect(view.players[view.mySeat].declared).toBe(true);
+            lastTing = event;
+          }
+          if (event.type === 'discard' && event.seat === view.mySeat) {
+            if (event.tile === ownDiscard) {
+              ownDiscard = null;
+            } else {
+              expect(view.players[view.mySeat].declared).toBe(true);
+              cov.autoDiscards++;
+            }
+          }
           if (event.type === 'draw') {
             if (event.seat === view.mySeat) {
               cov.selfDraws++;
@@ -275,8 +347,9 @@ describe('websocket game', () => {
         }
         if (view.phase === 'game_end') break;
         verifyState(view, cov);
-        const pick = choose(view, cov);
+        const pick = choose(view, cov, declareChance);
         expect(pick).toBeDefined();
+        ownDiscard = pick.type === 'discard' || pick.type === 'ting' ? pick.tile : null;
         if (pick.type === 'tsumo' || pick.type === 'ron') {
           pendingWin = pick;
           if (pick.type === 'tsumo') cov.tsumo++;
@@ -301,6 +374,9 @@ describe('websocket game', () => {
       expect(cov.myWaitsShown).toBeGreaterThan(0);
       expect(cov.tsumo + cov.ron).toBeGreaterThan(0);
       expect(cov.kongs).toBeGreaterThan(0);
+      expect(cov.declared).toBeGreaterThan(0);
+      expect(cov.autoDiscards).toBeGreaterThan(0);
+      expect(cov.declaredWinOffers).toBeGreaterThan(0);
     }
     // eslint-disable-next-line no-console
     console.log('coverage', cov);

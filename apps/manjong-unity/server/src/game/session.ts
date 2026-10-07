@@ -1,6 +1,7 @@
 // One human (seat 0) against three AI seats. The server paces the AI: every event is pushed to the
 // listener as it happens, and a fresh `state` snapshot is published whenever the human owes a decision
-// or a hand ends. The same shape works for real multiplayer later.
+// or a hand ends. A human who has declared ready (報聽) is auto-played the same way until a win is
+// possible. The same shape works for real multiplayer later.
 
 import { AI_PROFILES, chooseAction } from '../ai/ai.js';
 import {
@@ -163,8 +164,15 @@ export class GameSession {
     for (let moves = 0; moves < MAX_AI_MOVES; moves++) {
       if (this.disposed) return null;
       const pending = pendingSeats(this.game);
-      if (this.game.hand.phase.type === 'ended' || pending.length === 0 || pending.includes(HUMAN_SEAT)) {
-        return this.view();
+      if (this.game.hand.phase.type === 'ended' || pending.length === 0) return this.view();
+      if (pending.includes(HUMAN_SEAT)) {
+        // A declared (報聽) human with nothing to decide just lets the drawn tile go, paced like the AI.
+        const forced = this.forcedHumanAction();
+        if (forced === null) return this.view();
+        if (this.aiDelayMs > 0) await sleep(this.aiDelayMs);
+        if (this.disposed) return null;
+        applyAction(this.game, HUMAN_SEAT, forced, (e) => this.record(e));
+        continue;
       }
       if (this.aiDelayMs > 0) await sleep(this.aiDelayMs);
       if (this.disposed) return null;
@@ -174,5 +182,14 @@ export class GameSession {
       applyAction(this.game, seat, action, (e) => this.record(e));
     }
     throw new Error('AI did not reach a human decision');
+  }
+
+  /** The action the server plays for the human: a declared seat that has nothing to choose but a discard. */
+  private forcedHumanAction(): string | null {
+    if (!this.game.hand.players[HUMAN_SEAT]!.declared) return null;
+    const options = optionsFor(this.game, HUMAN_SEAT);
+    // Only discards left (normally exactly the drawn tile): the client cannot discard once declared,
+    // so play the first one rather than wait forever.
+    return options.length > 0 && options.every((o) => o.type === 'discard') ? options[0]!.id : null;
   }
 }

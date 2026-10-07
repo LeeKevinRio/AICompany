@@ -1,7 +1,7 @@
 # manjong-unity server
 
 台灣 16 張麻將的權威伺服器（TypeScript / Node.js 22 / Fastify）。規則、洗牌、AI、聽牌計算、台數與結算全部在這裡；
-Unity 用戶端只送「選了哪個合法動作」。**所有功能（登入、暱稱、救濟金、排行榜、牌局）都走 WebSocket（`/ws`）**，HTTP 只剩 `/api/health` 與 WebGL 靜態檔，見 API 契約 v0.3。
+Unity 用戶端只送「選了哪個合法動作」。**所有功能（登入、暱稱、救濟金、排行榜、牌局）都走 WebSocket（`/ws`）**，HTTP 只剩 `/api/health` 與 WebGL 靜態檔，見 API 契約 v0.4。
 
 - 規則與台數表：`work/manjong-unity/規則與台數表.md`（數值在 `src/engine/rules.ts`）
 - API 契約：`work/manjong-unity/api-contract.md`
@@ -27,7 +27,7 @@ npm run simulate -- 1000   # 1000 場全 AI 對打：檢查牌數守恆、零和
 | `DATA_FILE` | `data/players.json` | 玩家資料（已被 `.gitignore`） |
 | `WEBGL_DIR` | `../client/Build/WebGL` | 有 Unity WebGL build 時，伺服器同源提供網頁（開 `http://127.0.0.1:7316/`） |
 | `CORS_ORIGIN` | （全部允許） | 逗號分隔的允許來源（同時用來檢查 WebSocket 的 Origin）。`NODE_ENV=production` 時必填 |
-| `AI_DELAY_MS` | `600` | 每個 AI 動作前的等待（毫秒），控制牌局節奏 |
+| `AI_DELAY_MS` | `600` | 每個 AI 動作（以及玩家報聽後的自動代打）前的等待（毫秒），控制牌局節奏 |
 
 ## 目錄
 
