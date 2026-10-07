@@ -110,8 +110,9 @@ import {
  *       `StaleDataAlert`（`model.staleDataNotice`）渲染在卡片內頂部。
  *   11. 停損／停利大字與距離 % 不上紅綠（`text-neutral-100`／`text-neutral-400`）。
  *   12. 兩處動作大字（本卡與 `OperationSummaryPanel`）同一資料來源：都呼叫
- *       `buildOperationSummary(advice.data)`；bars 不 ok 或 `computeKeyLevels`
- *       為 null → 收盤／停損／停利三格「—」、不畫距離。
+ *       `buildOperationSummary(advice.data)`；bars 不 ok、advice 為 no_price
+ *       （`model.kind === "no_price"`，R-2-a），或 `computeKeyLevels` 為 null
+ *       → 收盤／停損／停利三格「—」、不畫距離。
  *
  * 版面依視覺規範 B.7（首頁重排規範第 13 節修訂）：<md 主字在上、2×2 在下；md–lg 主字左、2×2 右；lg 起四欄一列（`grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4`，V3，art-lead 2026-10-03 追認）；
  * 主字 `text-2xl font-bold`（不超過 `h1`）；數字 `font-mono text-xl font-bold
@@ -270,10 +271,16 @@ export function DecisionCardBody({
   const effectiveAnchorSource: AnchorSource =
     inconsistentHeld || inconsistentCandidate ? "close-unknown" : anchorSource;
 
+  // R-2-a (F-1 portfolio valuation guard): when the advice itself is no_price the
+  // latest close is untrustworthy, so treat bars as unavailable and never derive
+  // any value from them (computeKeyLevels is not called). Decided solely by
+  // model.kind; no bar-content threshold and no separate read of response.status.
+  const barsForLevels: Bar[] | null = model.kind === "no_price" ? null : bars;
+
   const levels =
-    bars !== null
+    barsForLevels !== null
       ? computeKeyLevels(
-          bars,
+          barsForLevels,
           effectiveAnchorSource === "cost" ? avgCost : null,
         )
       : null;

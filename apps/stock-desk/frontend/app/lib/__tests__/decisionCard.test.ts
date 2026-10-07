@@ -14,6 +14,10 @@ import type { AdviceCard, AdviceResponse, Bar } from "../types";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import { computeKeyLevels } from "../keyLevels";
 import {
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+} from "../../position/[symbol]/KeyLevelsPanel";
+import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_CROSSED_DISCLOSURE,
   DECISION_CARD_INVALIDATION_PREFIX,
@@ -931,5 +935,128 @@ describe("DecisionCardBody — crossed reference levels (risk review 2026-10-04)
     const html = renderCard({ response: makeResponse(), bars: null, anchorSource: "cost", avgCost: 1027.25 });
     expect(html).not.toContain("此參考水位");
     expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+  });
+});
+
+describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars 推導值", () => {
+  // R-2-a (F-1 portfolio valuation guard): when advice is no_price the card must
+  // treat bars as unavailable even if /api/bars returns an unusable latest close.
+  const NO_DATA_TEXT = "資料不足，無法計算。";
+  const NOT_HELD_FULL_SENTENCE =
+    "未持有此標的，以最新收盤 — 試算；此數字不是任何進場暗示。";
+
+  function badBars(lastClose: string): Bar[] {
+    const bars = makeBars(80);
+    const last = bars[bars.length - 1]!;
+    // high/low stay 105/95 (makeBars defaults); only the latest close is bad.
+    bars[bars.length - 1] = { ...last, close: lastClose };
+    return bars;
+  }
+
+  const noPriceResponse = (held: boolean): AdviceResponse =>
+    makeResponse({ status: "insufficient_data", reason: null, advice: null, held });
+
+  type Scenario = {
+    name: string;
+    held: boolean;
+    anchorSource: Parameters<typeof DecisionCardBody>[0]["anchorSource"];
+    avgCost: number | null;
+  };
+  const scenarios: Scenario[] = [
+    { name: "held (cost anchor)", held: true, anchorSource: "cost", avgCost: 120 },
+    { name: "not held", held: false, anchorSource: "close-not-held", avgCost: null },
+    { name: "unknown", held: false, anchorSource: "close-unknown", avgCost: null },
+  ];
+  const closes: Array<{ raw: string; value: number; fixed: string }> = [
+    { raw: "0", value: 0, fixed: "0.00" },
+    { raw: "-1", value: -1, fixed: "-1.00" },
+  ];
+
+  const toText = (n: number): string =>
+    n.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  for (const c of closes) {
+    for (const s of scenarios) {
+      it(`close ${c.raw} × ${s.name}: no bars-derived number or sentence appears`, () => {
+        const bars = badBars(c.raw);
+
+        // 1. Witness: the unguarded computation really yields the bad value, so
+        // this test proves the guard (if F-2 starts rejecting <= 0 closes, F-2
+        // rewrites this witness).
+        const witness = computeKeyLevels(bars, s.avgCost);
+        expect(witness).not.toBeNull();
+        expect(witness!.close).toBe(c.value);
+
+        const props = {
+          response: noPriceResponse(s.held),
+          anchorSource: s.anchorSource,
+          avgCost: s.avgCost,
+        };
+        const html = renderCard({ ...props, bars });
+
+        // 2. Main word position keeps the existing insufficient text.
+        expect(html).toContain(NO_DATA_TEXT);
+
+        // 3. No crossed disclosure, distance sentences, anchor labels or percentages.
+        expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+        expect(html).not.toContain("最新收盤低於此參考水位");
+        expect(html).not.toContain("最新收盤高於此參考水位");
+        expect(html).not.toContain("距最新收盤");
+        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST);
+        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE);
+        expect(html).not.toContain("%");
+
+        // 4. None of the witness-derived numbers is rendered.
+        const leaked = new Set<string>([
+          toText(witness!.close),
+          toText(witness!.stopSuggested),
+          toText(witness!.target2R),
+          toText(witness!.anchorPrice),
+          "0.00",
+          "-1.00",
+        ]);
+        for (const text of leaked) {
+          expect(html).not.toContain(text);
+        }
+
+        // 5. Four dash cells and four invisible distance placeholders.
+        expect(html.split(">—<").length - 1).toBe(4);
+        expect(html.split('aria-hidden="true"> <').length - 1).toBe(4);
+
+        // 6. Equivalence with bars === null for the same props.
+        expect(html).toBe(renderCard({ ...props, bars: null }));
+
+        // 7. Not-held badge and full sentence follow the existing Q1 gate only.
+        if (s.anchorSource === "close-not-held") {
+          expect(html).toContain(NOT_HELD_BADGE);
+          expect(html).toContain(NOT_HELD_FULL_SENTENCE);
+        } else {
+          expect(html).not.toContain(NOT_HELD_BADGE);
+        }
+      });
+    }
+  }
+
+  it("defensive: advice null with status ok is also treated as no_price (assertions 2, 3, 6)", () => {
+    for (const c of closes) {
+      for (const s of scenarios) {
+        const bars = badBars(c.raw);
+        const props = {
+          response: makeResponse({ status: "ok", reason: null, advice: null, held: s.held }),
+          anchorSource: s.anchorSource,
+          avgCost: s.avgCost,
+        };
+        const html = renderCard({ ...props, bars });
+        expect(html).toContain(NO_DATA_TEXT);
+        expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+        expect(html).not.toContain("最新收盤低於此參考水位");
+        expect(html).not.toContain("最新收盤高於此參考水位");
+        expect(html).not.toContain("距最新收盤");
+        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST);
+        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE);
+        expect(html).not.toContain("%");
+        expect(html).toBe(renderCard({ ...props, bars: null }));
+      }
+    }
   });
 });
