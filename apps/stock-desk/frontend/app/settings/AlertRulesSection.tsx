@@ -107,7 +107,7 @@ export function AlertRulesTable({
             <th scope="col" className="px-3 py-2 font-medium">
               條件
             </th>
-            <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">
+            <th scope="col" className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell">
               狀態
             </th>
             <th scope="col" className="px-3 py-2 font-medium">
@@ -140,7 +140,7 @@ export function AlertRulesTable({
                 </td>
                 <td className="px-3 py-2 text-neutral-300">{alertTypeLabel(rule.type)}</td>
                 <td className="px-3 py-2 text-neutral-300">{ruleDescription(rule)}</td>
-                <td className="hidden px-3 py-2 text-neutral-300 sm:table-cell">{statusText}</td>
+                <td className="hidden whitespace-nowrap px-3 py-2 text-neutral-300 sm:table-cell">{statusText}</td>
                 <td className="px-3 py-2 text-xs text-neutral-500">
                   {formatDateTime(rule.created_at)}
                 </td>

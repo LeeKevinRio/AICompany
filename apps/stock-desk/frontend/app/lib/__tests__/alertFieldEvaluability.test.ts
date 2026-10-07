@@ -272,12 +272,14 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
       const tdClasses = (/class="([^"]*)"/.exec(cells[3]?.attrs ?? "")?.[1] ?? "").split(" ");
       expect(tdClasses).toContain("hidden");
       expect(tdClasses).toContain("sm:table-cell");
+      expect(tdClasses).toContain("whitespace-nowrap");
       // Header: still "狀態" at index 3, hidden below sm.
       const ths = [...html.matchAll(/<th([^>]*)>([\s\S]*?)<\/th>/g)].map((m) => ({ attrs: m[1] ?? "", inner: m[2] ?? "" }));
       expect(ths[3]?.inner).toBe("狀態");
       const thClasses = (/class="([^"]*)"/.exec(ths[3]?.attrs ?? "")?.[1] ?? "").split(" ");
       expect(thClasses).toContain("hidden");
       expect(thClasses).toContain("sm:table-cell");
+      expect(thClasses).toContain("whitespace-nowrap");
       // Same text rendered twice (mutually exclusive by breakpoint); keep both in sync.
       expect(occurrences(html, `>${status}<`)).toBe(2);
       expect(html).toContain("min-w-[620px]");
