@@ -116,6 +116,9 @@ class EvaluationResult:
     evaluated: int
     events: list[AlertEvent]
     outcomes: list[RuleOutcome]
+    #: How many (symbol, market) snapshots failed to load this tick -- counted
+    #: per symbol, not per rule. Log-only: the API response does not carry it.
+    load_failures: int = 0
 
 
 #: Appended to a fired price-threshold or signal-condition message: the bar
@@ -243,9 +246,12 @@ def _limit_outcome(
         # is not_evaluable must not read as a passing cap.
         if all(check.status == "not_evaluable" for check in watched):
             names = "、".join(check.name for check in watched)
-            # The snapshot knows *why* the inputs are missing (no FX rate, a
-            # degraded data layer); "缺少輸入" alone would leave the reader to
-            # guess which of them it was.
+            # ``reason`` usually says *why* the inputs are missing (no FX rate,
+            # a degraded data layer); "缺少輸入" alone would leave the reader to
+            # guess which of them it was. Not always: when the close is present
+            # but unusable (A′), the price and ATR were withheld for that, and
+            # ``reason`` only holds whatever unrelated note the data layer or
+            # the FX lookup added -- or nothing.
             cause = f" {snapshot.reason}" if snapshot.reason else ""
             return f"監看的上限（{names}）缺少輸入，無法判定是否違反。{cause}"
         return False, "", {}
@@ -300,13 +306,17 @@ def evaluate_alerts(
     # ten rules on one symbol cost one data fetch, not ten.
     snapshots: dict[tuple[str, Market], SymbolSnapshot] = {}
     rules_per_key = Counter((rule.symbol, rule.market) for rule in rules)
+    load_failures = 0
 
     for rule in rules:
         key = (rule.symbol, rule.market)
         if key not in snapshots:
-            snapshots[key] = _load_isolated(
+            snapshots[key], loaded = _load_isolated(
                 loader, rule.symbol, rule.market, rule_count=rules_per_key[key]
             )
+            # Each key is loaded at most once per tick, so this counts symbols.
+            if not loaded:
+                load_failures += 1
         snapshot = snapshots[key]
 
         evaluated = _evaluate_one(rule, snapshot)
@@ -349,29 +359,31 @@ def evaluate_alerts(
         evaluated=len(rules),
         events=events,
         outcomes=outcomes,
+        load_failures=load_failures,
     )
 
 
 def _load_isolated(
     loader: SnapshotLoader, symbol: str, market: Market, *, rule_count: int
-) -> SymbolSnapshot:
-    """``loader(symbol, market)``, or a bare snapshot if it raised.
+) -> tuple[SymbolSnapshot, bool]:
+    """``(loader(symbol, market), True)``, or ``(bare snapshot, False)`` if it raised.
 
-    The warning carries a count and the exception class only -- no rule id
-    and no symbol, the same as the start-up diagnostic
+    The warning carries the market, a count and the exception class only --
+    no rule id and no symbol, the same as the start-up diagnostic
     (``app.scheduler.log_unevaluable_alert_rules``); the traceback rides on
     ``exc_info`` for whoever reads the log.
     """
     try:
-        return loader(symbol, market)
+        return loader(symbol, market), True
     except Exception as exc:
         logger.warning(
-            "alert evaluation: snapshot load failed (%s); %d rule(s) skipped this tick",
+            "alert evaluation: snapshot load failed (market=%s, %s); %d rule(s) skipped this tick",
+            market,
             type(exc).__name__,
             rule_count,
             exc_info=True,
         )
-        return SymbolSnapshot(symbol=symbol, market=market)
+        return SymbolSnapshot(symbol=symbol, market=market), False
 
 
 def count_unevaluable_rules(rules: Sequence[AlertRule]) -> int:
@@ -411,6 +423,11 @@ def _evaluate_one(
                 "每次檢查都會略過此規則，不會觸發。可改用其他欄位的條件，或刪除此規則。"
             )
         if not snapshot.signals:
+            if snapshot.close is not None and usable_close(snapshot) is None:
+                # Signals were withheld because the close is unusable (A′), not
+                # for whatever ``reason`` holds (data layer, FX) -- the same
+                # guard as the price path, so the existing wording stands alone.
+                return "沒有可用的訊號輸出。"
             return snapshot.reason or "沒有可用的訊號輸出。"
         return _signal_outcome(rule, snapshot, params)
     return _limit_outcome(rule, snapshot, params)

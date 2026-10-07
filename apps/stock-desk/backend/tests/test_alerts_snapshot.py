@@ -472,6 +472,54 @@ def test_an_unusable_latest_close_skips_that_symbol_and_spares_the_rest(
     assert [outcome.status for outcome in baseline.outcomes][:2] == ["fired", "fired"]
 
 
+def _cached_layer(service: FakePriceService) -> None:
+    service.status = DataStatus.CACHED_STALE
+    service.source = "finmind"
+
+
+def _data_layer_sentence(service: FakePriceService) -> None:
+    service.reason = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+
+
+def _foreign_currency(service: FakePriceService) -> None:
+    closes = trending_closes(60)
+    closes[-1] = float(service.bars[BAD][-1].close)
+    service.seed(BAD, recent_bars(closes, symbol=BAD, currency="USD"))
+
+
+@pytest.mark.parametrize(
+    "degrade",
+    [
+        pytest.param(_cached_layer, id="cached-layer"),
+        pytest.param(_data_layer_sentence, id="data-layer-sentence"),
+        pytest.param(_foreign_currency, id="non-twd"),
+    ],
+)
+@pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
+def test_an_unusable_latest_close_names_no_unrelated_note_on_a_signal_rule(
+    store: PositionStore,
+    tmp_path: Path,
+    bad_close: float,
+    degrade: Callable[[FakePriceService], None],
+) -> None:
+    """風控 R-B1: on A′ the signals are withheld for the close, so a cache, data
+    layer or FX note on the snapshot must not be read as the skip's cause."""
+    _hold_symbol(store, GOOD)
+    service = _two_symbol_service(bad_close)
+    degrade(service)
+    load = _loader_for(service, store)
+    # Precondition: the snapshot does carry an unrelated note for the engine to ignore.
+    assert load(BAD, "TW").reason
+
+    alerts = AlertStore(db_path=tmp_path / "alerts.db")
+    signal = add_rule(alerts, _bad_symbol_rules()["signal"]).id
+    result = evaluate_alerts(alerts, load, now=datetime(2026, 10, 6, 6, 0, tzinfo=UTC))
+
+    [outcome] = [o for o in result.outcomes if o.rule_id == signal]
+    assert outcome.status == "skipped"
+    assert outcome.reason == NO_SIGNALS_REASON
+
+
 @pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
 def test_the_manual_tick_answers_200_on_an_unusable_latest_close(
     api_harness: ApiHarness, bad_close: float

@@ -408,8 +408,14 @@ def evaluate_alerts_tick(*, store: AlertStore | None = None) -> int:
         )
 
     result = evaluate_alerts(alert_store, load, cooldown_minutes=settings.alerts.cooldown_minutes)
-    logger.info(
-        "alert evaluation: %d rules evaluated, %d fired", result.evaluated, len(result.events)
+    # A tick where a symbol's snapshot failed to load is not a clean tick: the
+    # summary rises to WARNING, as the data refresh run does on its own failure.
+    logger.log(
+        logging.WARNING if result.load_failures else logging.INFO,
+        "alert evaluation: %d rules evaluated, %d fired, failed_symbols=%d",
+        result.evaluated,
+        len(result.events),
+        result.load_failures,
     )
     if result.events and settings.alerts.notify_webhooks:
         for delivery in notify_all(result.events):

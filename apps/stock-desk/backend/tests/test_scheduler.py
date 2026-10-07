@@ -7,6 +7,7 @@ directly with the production dependency providers monkeypatched onto fakes.
 
 from __future__ import annotations
 
+import logging
 import signal
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -232,6 +233,56 @@ def test_the_alert_tick_hands_cap_5_the_stored_pair(
         assert pair != "<omitted>"
         assert pair is not None
         assert getattr(pair, "win_rate", None) == 0.6
+
+
+def _tick_summaries(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if "rules evaluated" in r.getMessage()]
+
+
+def test_the_alert_tick_summary_warns_with_the_failed_symbol_count(
+    wired: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    alerts = wired["alerts"]
+    assert isinstance(alerts, AlertStore)
+    # Two rules on the failing symbol: the count is per symbol, not per rule.
+    add_rule(alerts, price_rule(threshold=100.0, symbol="2330"))
+    add_rule(alerts, price_rule(threshold=110.0, symbol="2330"))
+
+    def failing(*args: Any, **kwargs: Any) -> SymbolSnapshot:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scheduler_module, "build_snapshot", failing)
+
+    with caplog.at_level(logging.INFO, logger=scheduler_module.logger.name):
+        assert scheduler_module.evaluate_alerts_tick() == 0
+
+    [summary] = _tick_summaries(caplog)
+    assert summary.levelno == logging.WARNING
+    assert summary.getMessage() == (
+        "alert evaluation: 2 rules evaluated, 0 fired, failed_symbols=1"
+    )
+
+
+def test_a_clean_alert_tick_summary_stays_at_info(
+    wired: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    alerts = wired["alerts"]
+    positions = wired["positions"]
+    assert isinstance(alerts, AlertStore)
+    assert isinstance(positions, PositionStore)
+    _held(positions)
+    add_rule(alerts, price_rule(threshold=100.0))
+
+    with caplog.at_level(logging.INFO, logger=scheduler_module.logger.name):
+        assert scheduler_module.evaluate_alerts_tick() == 1
+
+    [summary] = _tick_summaries(caplog)
+    assert summary.levelno == logging.INFO
+    assert summary.getMessage() == (
+        "alert evaluation: 1 rules evaluated, 1 fired, failed_symbols=0"
+    )
 
 
 def test_alert_tick_is_skipped_when_alerts_are_disabled(wired: dict[str, object]) -> None:

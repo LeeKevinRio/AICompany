@@ -130,6 +130,40 @@ def test_an_unusable_price_is_a_skip_not_a_comparison(
 # --- Signal condition rules --------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "close",
+    [
+        pytest.param(0.0, id="zero"),
+        pytest.param(-5.0, id="negative"),
+        pytest.param(float("nan"), id="nan"),
+    ],
+)
+def test_an_unusable_close_skips_a_signal_rule_without_an_unrelated_note(
+    store: AlertStore, close: float
+) -> None:
+    # Signals are withheld for the close (A′); a data-layer or FX note on the
+    # snapshot is not why, so it must not be given as the reason.
+    add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
+    result = evaluate_alerts(
+        store,
+        _loader(snapshot(close=close, reason="資料來自 cache 層（finmind）。")),
+        now=_NOW,
+    )
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == "沒有可用的訊號輸出。"
+
+
+def test_no_bars_still_skips_a_signal_rule_with_the_snapshots_reason(store: AlertStore) -> None:
+    add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
+    result = evaluate_alerts(
+        store,
+        _loader(snapshot(close=None, reason="沒有可用的日線資料。")),
+        now=_NOW,
+    )
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == "沒有可用的日線資料。"
+
+
 def test_signal_condition_fires_on_the_signal_vocabulary(store: AlertStore) -> None:
     add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
     result = evaluate_alerts(store, _loader(snapshot(signals=uptrend_signals(rsi=82.0))), now=_NOW)
@@ -438,9 +472,10 @@ def test_a_loader_failure_skips_only_that_symbol(
     assert len(result.events) == 3
 
     [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    # A count and the exception class, nothing else: no symbol, no rule id.
+    # The market, a count and the exception class, nothing else: no symbol, no rule id.
     assert record.getMessage() == (
-        "alert evaluation: snapshot load failed (RuntimeError); 4 rule(s) skipped this tick"
+        "alert evaluation: snapshot load failed (market=TW, RuntimeError); "
+        "4 rule(s) skipped this tick"
     )
     assert record.exc_info is not None and record.exc_info[0] is RuntimeError
 
@@ -455,8 +490,39 @@ def test_a_loader_failure_is_logged_once_per_symbol_not_per_rule(
     assert _statuses(result) == ["skipped", "skipped", "skipped"]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == [
-        "alert evaluation: snapshot load failed (ValueError); 3 rule(s) skipped this tick"
+        "alert evaluation: snapshot load failed (market=TW, ValueError); "
+        "3 rule(s) skipped this tick"
     ]
+
+
+def test_load_failures_counts_symbols_not_rules(store: AlertStore) -> None:
+    for threshold in (100.0, 110.0, 120.0):
+        add_rule(store, price_rule(threshold=threshold, symbol=_FAILING))
+    _healthy_rules(store)
+    result = evaluate_alerts(store, _FailingForOneSymbol(RuntimeError()), now=_NOW)
+    assert result.load_failures == 1
+
+
+def test_load_failures_counts_each_failing_symbol_once(store: AlertStore) -> None:
+    other = "2454"
+
+    def load(symbol: str, market: Market) -> SymbolSnapshot:
+        if symbol in {_FAILING, other}:
+            raise RuntimeError("boom")
+        return snapshot(symbol=symbol, close=120.0)
+
+    for symbol in (_FAILING, other):
+        for threshold in (100.0, 110.0):
+            add_rule(store, price_rule(threshold=threshold, symbol=symbol))
+    add_rule(store, price_rule(threshold=100.0, symbol=_HEALTHY))
+    result = evaluate_alerts(store, load, now=_NOW)
+    assert result.load_failures == 2
+
+
+def test_a_clean_tick_has_no_load_failures(store: AlertStore) -> None:
+    _healthy_rules(store)
+    result = evaluate_alerts(store, _FailingForOneSymbol(RuntimeError()), now=_NOW)
+    assert result.load_failures == 0
 
 
 def test_an_interrupt_in_the_loader_is_not_swallowed(store: AlertStore) -> None:
