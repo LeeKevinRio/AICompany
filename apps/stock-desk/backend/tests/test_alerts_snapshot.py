@@ -324,6 +324,20 @@ BETA_W2_REASON = (
     "此規則使用的 beta.value（相對指標的 beta），警示不提供作為條件。"
     "每次檢查都會略過此規則，不會觸發。可改用其他欄位的條件，或刪除此規則。"
 )
+#: S-B2-A, approved verbatim by risk-compliance-officer 2026-10-07: the unheld
+#: symbol on A′ leaves its sector, per-trade-loss and Kelly caps unevaluated
+#: while the other two pass, so its ``any`` rule is quiet with this reason --
+#: and nothing about the unusable close, the data layer or FX is appended.
+ANY_LIMIT_QUIET_REASON = (
+    "本次有 3 條上限未評估，未納入判定：單一產業佔比上限、單筆最大可承受虧損、"
+    "分數 Kelly 部位上限。其餘已評估的上限皆未違反。"
+)
+#: The same through the API harness, which has no net worth in settings, so
+#: the gross-exposure cap is unevaluated as well.
+ANY_LIMIT_QUIET_REASON_NO_NET_WORTH = (
+    "本次有 4 條上限未評估，未納入判定：單一產業佔比上限、總曝險上限、"
+    "單筆最大可承受虧損、分數 Kelly 部位上限。其餘已評估的上限皆未違反。"
+)
 
 
 def _bad_latest_bars(close: float) -> list[PriceBar]:
@@ -455,6 +469,7 @@ def test_an_unusable_latest_close_skips_that_symbol_and_spares_the_rest(
     assert per_trade.status == "skipped"
     assert (per_trade.reason or "").startswith("監看的上限（")
     assert outcomes[bad_ids["any_limit"]].status == "quiet"
+    assert outcomes[bad_ids["any_limit"]].reason == ANY_LIMIT_QUIET_REASON
     assert all(event.symbol != BAD for event in result.events)
 
     # The healthy symbol reads exactly as it does on a tick without the bad one.
@@ -549,6 +564,7 @@ def test_the_manual_tick_answers_200_on_an_unusable_latest_close(
     assert outcomes[bad_ids["beta"]]["reason"] == BETA_W2_REASON
     assert outcomes[bad_ids["per_trade_loss"]]["status"] == "skipped"
     assert outcomes[bad_ids["any_limit"]]["status"] == "quiet"
+    assert outcomes[bad_ids["any_limit"]]["reason"] == ANY_LIMIT_QUIET_REASON_NO_NET_WORTH
     assert outcomes[good_ids[0]]["status"] == "fired"
     events = client.get("/api/alerts/events").json()["items"]
     assert events and all(event["symbol"] == GOOD for event in events)

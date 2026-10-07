@@ -104,6 +104,9 @@ class RuleOutcome:
     #: but is inside its cooldown; ``quiet`` -- the line was not crossed;
     #: ``skipped`` -- the inputs were not available.
     status: str
+    #: Always set on ``skipped`` and ``suppressed``. On ``quiet`` it is ``None``
+    #: except for a risk-limit rule that left some caps unevaluated
+    #: (:data:`UNEVALUATED_LIMITS_NOTE`).
     reason: str | None = None
     event: AlertEvent | None = None
 
@@ -127,6 +130,32 @@ class EvaluationResult:
 #: fixed verbatim by risk-compliance-officer 2026-09-15 for those two rule
 #: types only; any change, or use on another type, goes back to them.
 BAR_AS_OF_NOTE = "上述數值之資料日為 {as_of}。"
+
+#: The ``reason`` on a quiet ``risk_limit_breach`` rule when some watched caps
+#: passed, none was violated and the rest could not be evaluated (S-B2). Only
+#: ``limit_id="any"`` can reach that mix. ``{n}`` is the count of unevaluated
+#: caps and ``{names}`` their ``LimitCheck.name`` in ``LIMIT_IDS`` order joined
+#: with "、". Approved verbatim by risk-compliance-officer 2026-10-07 (S-B2-A,
+#: `work/reviews/2026-10-07-S-B2-風險上限any規則-未評估揭露-字面-風控審查.md`);
+#: nothing may be appended to it, and any change goes back to them.
+UNEVALUATED_LIMITS_NOTE = "本次有 {n} 條上限未評估，未納入判定：{names}。其餘已評估的上限皆未違反。"
+
+
+@dataclass(frozen=True)
+class _QuietWithReason:
+    """A rule that did not cross its line but carries a disclosure on its outcome.
+
+    Only the risk-limit evaluator produces this, and only for the mixed case
+    behind :data:`UNEVALUATED_LIMITS_NOTE`. Its outcome stays ``quiet``: no
+    event is written and the cooldown is not consulted.
+    """
+
+    reason: str
+
+
+#: What a rule-type evaluator hands back: ``(crossed, message, observed)``, a
+#: skip reason string, or a quiet outcome that carries a reason.
+_Evaluated = tuple[bool, str, dict[str, float | str | None]] | str | _QuietWithReason
 
 
 def _fmt(value: float) -> str:
@@ -229,8 +258,8 @@ def _signal_outcome(
 
 def _limit_outcome(
     rule: AlertRule, snapshot: SymbolSnapshot, params: RiskLimitParams
-) -> tuple[bool, str, dict[str, float | str | None]] | str:
-    """``(crossed, message, observed)``, or a skip reason string."""
+) -> _Evaluated:
+    """``(crossed, message, observed)``, a skip reason string, or a quiet disclosure."""
     if not snapshot.limits:
         return "沒有可用的風險上限檢查結果（缺少組合估值）。"
     watched = [
@@ -254,6 +283,19 @@ def _limit_outcome(
             # the FX lookup added -- or nothing.
             cause = f" {snapshot.reason}" if snapshot.reason else ""
             return f"監看的上限（{names}）缺少輸入，無法判定是否違反。{cause}"
+        unevaluated = [check for check in watched if check.status == "not_evaluable"]
+        passed = [check for check in watched if check.status == "passed"]
+        if unevaluated and passed:
+            # Mixed: some caps passed, none was violated, the rest could not be
+            # evaluated. The rule stays quiet; its reason only discloses which
+            # caps were left out of the verdict, it is not a cause. So nothing
+            # else is appended: not ``snapshot.reason``, not any ``check.detail``,
+            # not a disclosure -- why a cap was unevaluable is not stated here.
+            return _QuietWithReason(
+                UNEVALUATED_LIMITS_NOTE.format(
+                    n=len(unevaluated), names="、".join(check.name for check in unevaluated)
+                )
+            )
         return False, "", {}
     names = "、".join(f"第 {check.index} 條（{check.name}）" for check in violated)
     details = " ".join(check.detail for check in violated)
@@ -322,6 +364,9 @@ def evaluate_alerts(
         evaluated = _evaluate_one(rule, snapshot)
         if isinstance(evaluated, str):
             outcomes.append(RuleOutcome(rule_id=rule.id, status="skipped", reason=evaluated))
+            continue
+        if isinstance(evaluated, _QuietWithReason):
+            outcomes.append(RuleOutcome(rule_id=rule.id, status="quiet", reason=evaluated.reason))
             continue
         crossed, message, observed = evaluated
         if not crossed:
@@ -394,9 +439,7 @@ def count_unevaluable_rules(rules: Sequence[AlertRule]) -> int:
     return sum(1 for rule in rules if unevaluable_alert_fields(rule.params))
 
 
-def _evaluate_one(
-    rule: AlertRule, snapshot: SymbolSnapshot
-) -> tuple[bool, str, dict[str, float | str | None]] | str:
+def _evaluate_one(rule: AlertRule, snapshot: SymbolSnapshot) -> _Evaluated:
     """Dispatch one rule to its type's evaluator, or return a skip reason."""
     params = rule.params
     if isinstance(params, PriceThresholdParams):

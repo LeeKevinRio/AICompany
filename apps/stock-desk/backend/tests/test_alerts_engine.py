@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from app.advice.book import FX_APPLIED_NOTE
+from app.advice.limits import LIMIT_IDS, LIMIT_NAMES, LimitCheck, LimitStatus
 from app.alerts import engine as engine_module
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.store import AlertStore
@@ -333,6 +335,250 @@ def test_no_limits_at_all_is_a_skip(store: AlertStore) -> None:
     result = evaluate_alerts(store, _loader(snapshot()), now=_NOW)
     assert _statuses(result) == ["skipped"]
     assert "缺少組合估值" in (result.outcomes[0].reason or "")
+
+
+# --- risk_limit "any": some caps unevaluated, none violated (S-B2) -------------
+
+# Expected strings are the risk-compliance-officer's own expansions (S-B2-A
+# (a)/(b)/(c), approved verbatim 2026-10-07), not rebuilt from the template.
+_S_B2_A = "本次有 1 條上限未評估，未納入判定：分數 Kelly 部位上限。其餘已評估的上限皆未違反。"
+_S_B2_B = (
+    "本次有 3 條上限未評估，未納入判定：單一產業佔比上限、總曝險上限、分數 Kelly 部位上限。"
+    "其餘已評估的上限皆未違反。"
+)
+_S_B2_C = (
+    "本次有 4 條上限未評估，未納入判定：單一標的佔比上限、單一產業佔比上限、"
+    "單筆最大可承受虧損、分數 Kelly 部位上限。其餘已評估的上限皆未違反。"
+)
+_S_B2_MARKER = "上限未評估，未納入判定"
+
+# Non-empty notes a mixed-quiet reason must never quote: the snapshot's own
+# reason (an applied-rate note, which says nothing about why a cap was left
+# out), every disclosure, and each cap's detail.
+_SENTINEL_REASON = FX_APPLIED_NOTE.format(
+    pair="USDTWD", rate="31.5", status="fresh", source="bank_of_taiwan", as_of="2026-07-24"
+)
+_SENTINEL_FX = "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；端點未經查證。"
+_SENTINEL_DATA = "資料來自 cached_stale 層（twse）。"
+
+
+def _detail(limit_id: str) -> str:
+    return f"細節哨兵：{limit_id} 的檢查細節句。"
+
+
+def _caps(statuses: dict[str, LimitStatus]) -> list[LimitCheck]:
+    """Every cap in ``LIMIT_IDS`` order, ``passed`` unless named, each with a detail."""
+    return [
+        LimitCheck(
+            index=index,
+            id=limit_id,
+            name=LIMIT_NAMES[limit_id],
+            status=statuses.get(limit_id, "passed"),
+            detail=_detail(limit_id),
+            observed=None,
+            threshold=None,
+        )
+        for index, limit_id in enumerate(LIMIT_IDS, start=1)
+    ]
+
+
+def _caps_snapshot(statuses: dict[str, LimitStatus]) -> SymbolSnapshot:
+    return replace(
+        snapshot(
+            reason=_SENTINEL_REASON,
+            fx_disclosure=_SENTINEL_FX,
+            data_disclosure=_SENTINEL_DATA,
+        ),
+        limits=_caps(statuses),
+    )
+
+
+def _listed_names(reason: str) -> list[str]:
+    return reason.split("：", 1)[1].split("。", 1)[0].split("、")
+
+
+@pytest.mark.parametrize(
+    ("unevaluated", "expected"),
+    [
+        pytest.param(("kelly_fraction",), _S_B2_A, id="a-one"),
+        pytest.param(("sector_weight", "gross_exposure", "kelly_fraction"), _S_B2_B, id="b-three"),
+        pytest.param(
+            ("single_position_weight", "sector_weight", "per_trade_loss", "kelly_fraction"),
+            _S_B2_C,
+            id="c-four",
+        ),
+    ],
+)
+def test_an_any_rule_with_unevaluated_caps_stays_quiet_and_names_them(
+    store: AlertStore, unevaluated: tuple[str, ...], expected: str
+) -> None:
+    add_rule(store, limit_rule(limit_id="any"))
+    snap = _caps_snapshot(dict.fromkeys(unevaluated, "not_evaluable"))
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+
+    assert _statuses(result) == ["quiet"]
+    reason = result.outcomes[0].reason
+    assert reason == expected
+    # The names: as many as ``{n}``, in ``LIMIT_IDS`` order, each a cap's own name.
+    assert reason == engine_module.UNEVALUATED_LIMITS_NOTE.format(
+        n=len(unevaluated), names="、".join(LIMIT_NAMES[i] for i in unevaluated)
+    )
+    names = _listed_names(reason)
+    assert len(names) == len(unevaluated)
+    assert f"本次有 {len(names)} 條上限未評估" in reason
+    assert names == [LIMIT_NAMES[i] for i in LIMIT_IDS if i in unevaluated]
+    # Quiet means no event, so nothing reaches the feed or the push channels.
+    assert result.events == []
+    assert store.list_events() == []
+
+
+@pytest.mark.parametrize(
+    "unevaluated",
+    [
+        pytest.param(("kelly_fraction",), id="one"),
+        pytest.param(("sector_weight", "gross_exposure", "kelly_fraction"), id="three"),
+        pytest.param(
+            ("single_position_weight", "sector_weight", "per_trade_loss", "kelly_fraction"),
+            id="four",
+        ),
+    ],
+)
+def test_the_unevaluated_caps_reason_quotes_no_cause_and_no_disclosure(
+    store: AlertStore, unevaluated: tuple[str, ...]
+) -> None:
+    """風控 R-S2-2 negative: the reason discloses *which* caps were left out, never
+    why -- so neither the snapshot's note, nor a cap's detail, nor any
+    disclosure may be appended to it, even when every one of them is set."""
+    add_rule(store, limit_rule(limit_id="any"))
+    snap = _caps_snapshot(dict.fromkeys(unevaluated, "not_evaluable"))
+    assert snap.reason and snap.as_of and all(check.detail for check in snap.limits)
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+
+    reason = result.outcomes[0].reason or ""
+    assert reason.endswith("其餘已評估的上限皆未違反。")
+    for unwanted in (_SENTINEL_REASON, _SENTINEL_FX, _SENTINEL_DATA):
+        assert unwanted not in reason
+    # Fragments too, so a partial quote cannot slip through.
+    for fragment in ("換算為台幣", "資料狀態", "USDTWD", "台灣銀行", "cached_stale", "資料日為"):
+        assert fragment not in reason
+    assert "細節哨兵" not in reason
+    for check in snap.limits:
+        assert check.detail not in reason
+
+
+def test_an_any_rule_over_the_real_caps_reads_the_approved_wording(store: AlertStore) -> None:
+    # Through ``evaluate_limits``: the compliant book has no sector, no net
+    # worth and no Kelly pair, so caps 2, 3 and 5 are unevaluated (example (b)).
+    add_rule(store, limit_rule(limit_id="any"))
+    result = evaluate_alerts(
+        store,
+        _loader(snapshot(context=compliant_context(), reason=_SENTINEL_REASON)),
+        now=_NOW,
+    )
+    assert _statuses(result) == ["quiet"]
+    assert result.outcomes[0].reason == _S_B2_B
+
+
+def test_an_any_rule_with_every_cap_passed_is_quiet_without_a_reason(store: AlertStore) -> None:
+    add_rule(store, limit_rule(limit_id="any"))
+    result = evaluate_alerts(store, _loader(_caps_snapshot({})), now=_NOW)
+    assert _statuses(result) == ["quiet"]
+    assert result.outcomes[0].reason is None
+
+
+@pytest.mark.parametrize("limit_id", LIMIT_IDS)
+def test_a_rule_on_one_named_cap_never_reads_the_unevaluated_caps_wording(
+    store: AlertStore, limit_id: str
+) -> None:
+    # The same mixed book as example (b); one watched cap is either passed
+    # (quiet, no reason) or unevaluated (the existing skip), never the mix.
+    add_rule(store, limit_rule(limit_id=limit_id))
+    unevaluated = ("sector_weight", "gross_exposure", "kelly_fraction")
+    snap = _caps_snapshot(dict.fromkeys(unevaluated, "not_evaluable"))
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+
+    [outcome] = result.outcomes
+    assert _S_B2_MARKER not in (outcome.reason or "")
+    if limit_id in unevaluated:
+        assert outcome.status == "skipped"
+        assert outcome.reason == (
+            f"監看的上限（{LIMIT_NAMES[limit_id]}）缺少輸入，無法判定是否違反。 {_SENTINEL_REASON}"
+        )
+    else:
+        assert outcome.status == "quiet"
+        assert outcome.reason is None
+
+
+def test_a_violated_cap_still_fires_with_the_existing_message(store: AlertStore) -> None:
+    # Mixed plus one violation: the fired message is unchanged by S-B2 and says
+    # nothing about the unevaluated caps.
+    add_rule(store, limit_rule(limit_id="any"))
+    snap = _caps_snapshot(
+        {
+            "single_position_weight": "violated",
+            "sector_weight": "not_evaluable",
+            "kelly_fraction": "not_evaluable",
+        }
+    )
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+
+    assert _statuses(result) == ["fired"]
+    assert result.outcomes[0].reason is None
+    assert result.events[0].message == (
+        "2330 觸發風險上限：第 1 條（單一標的佔比上限）。"
+        f"{_detail('single_position_weight')} {_SENTINEL_FX} {_SENTINEL_DATA}"
+    )
+
+
+def test_every_cap_unevaluated_is_still_the_existing_skip(store: AlertStore) -> None:
+    add_rule(store, limit_rule(limit_id="any"))
+    snap = _caps_snapshot(dict.fromkeys(LIMIT_IDS, "not_evaluable"))
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+
+    assert _statuses(result) == ["skipped"]
+    names = "、".join(LIMIT_NAMES[i] for i in LIMIT_IDS)
+    assert result.outcomes[0].reason == (
+        f"監看的上限（{names}）缺少輸入，無法判定是否違反。 {_SENTINEL_REASON}"
+    )
+
+
+def test_the_unevaluated_caps_reason_writes_no_event_and_ignores_the_cooldown(
+    store: AlertStore,
+) -> None:
+    rule = add_rule(store, limit_rule(limit_id="any"))
+    fired = evaluate_alerts(
+        store, _loader(_caps_snapshot({"single_position_weight": "violated"})), now=_NOW
+    )
+    assert _statuses(fired) == ["fired"]
+    last = store.last_triggered_at(rule.id)
+
+    mixed = _loader(_caps_snapshot({"kelly_fraction": "not_evaluable"}))
+    # Inside the cooldown window: a quiet rule is not "suppressed" -- it did not cross.
+    first = evaluate_alerts(store, mixed, cooldown_minutes=60, now=_NOW + timedelta(minutes=5))
+    second = evaluate_alerts(store, mixed, cooldown_minutes=60, now=_NOW + timedelta(minutes=10))
+    for result in (first, second):
+        assert [(o.status, o.reason) for o in result.outcomes] == [("quiet", _S_B2_A)]
+        assert result.events == []
+    assert len(store.list_events()) == 1
+    assert store.last_triggered_at(rule.id) == last
+
+
+def test_price_and_signal_rules_stay_quiet_without_a_reason(store: AlertStore) -> None:
+    add_rule(store, price_rule(above=True, threshold=200.0))
+    add_rule(store, signal_rule(field="rsi14.last", op="gt", value=70.0))
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(
+                close=120.0,
+                signals=uptrend_signals(rsi=40.0),
+                context=compliant_context(),
+                reason=_SENTINEL_REASON,
+            )
+        ),
+        now=_NOW,
+    )
+    assert [(o.status, o.reason) for o in result.outcomes] == [("quiet", None), ("quiet", None)]
 
 
 # --- Scheduling behaviour ----------------------------------------------------

@@ -352,3 +352,45 @@ def test_risk_limit_alert_fires_off_the_real_book(api_harness: ApiHarness) -> No
     assert result["fired"] == 1
     events = api_harness.client.get("/api/alerts/events").json()["items"]
     assert "單一標的佔比上限" in events[0]["message"]
+
+
+def _assert_tick_identities(result: dict[str, Any]) -> None:
+    """F-4: every evaluated rule has one outcome, and every fired one one event."""
+    assert len(result["outcomes"]) == result["evaluated"]
+    fired = [outcome for outcome in result["outcomes"] if outcome["status"] == "fired"]
+    assert len(fired) == len(result["events"]) == result["fired"]
+    assert sorted(event["rule_id"] for event in result["events"]) == sorted(
+        outcome["rule_id"] for outcome in fired
+    )
+
+
+def test_a_mixed_tick_keeps_outcomes_evaluated_and_events_in_step(
+    api_harness: ApiHarness,
+) -> None:
+    """風控 F-4 落地 required 4: the counts the UI derives from one response agree
+    with each other on a tick that has every outcome status at once."""
+    client = api_harness.client
+    _seed_market(api_harness)
+    client.put("/api/settings", json={"alerts": {"cooldown_minutes": 60}})
+    repeat = client.post("/api/alerts", json=price_rule(threshold=100.0)).json()["id"]
+    quiet = client.post("/api/alerts", json=price_rule(threshold=1_000_000.0)).json()["id"]
+    skipped = client.post("/api/alerts", json=price_rule(symbol="9999", threshold=1.0)).json()["id"]
+    client.post("/api/alerts", json=price_rule(threshold=1.0, enabled=False))
+
+    first = client.post("/api/alerts/evaluate").json()
+    _assert_tick_identities(first)
+    assert first["evaluated"] == 3
+
+    fresh = client.post("/api/alerts", json=price_rule(threshold=50.0)).json()["id"]
+    second = client.post("/api/alerts/evaluate").json()
+
+    _assert_tick_identities(second)
+    assert second["evaluated"] == 4
+    statuses = {outcome["rule_id"]: outcome["status"] for outcome in second["outcomes"]}
+    assert statuses == {
+        repeat: "suppressed",
+        quiet: "quiet",
+        skipped: "skipped",
+        fresh: "fired",
+    }
+    assert [event["rule_id"] for event in second["events"]] == [fresh]
