@@ -140,15 +140,16 @@ export function UnrenderedFieldErrors({ messages }: { messages: string[] }) {
 /**
  * Brings the first error box (`[role="alert"]`, in document order — the
  * `UnrenderedFieldErrors` block or the generic failure line) into view inside
- * the dialog's own scroll container (W-R8). `block: "nearest"` scrolls only as
- * far as needed and is a no-op when the box is already visible; no `smooth`
+ * the dialog's own scroll container (W-R8). `block: "center"` (W-R9) centres the box so the
+ * submit buttons next to it stay visible too, whether the box sits above or below
+ * them; no `smooth`
  * behavior is used, so `prefers-reduced-motion` is not affected. Takes the
  * minimal `querySelector` shape so it can be unit-tested without a DOM.
  */
 export function scrollFirstAlertIntoView(
   root: { querySelector(selectors: string): { scrollIntoView(arg?: ScrollIntoViewOptions): void } | null } | null,
 ): void {
-  root?.querySelector('[role="alert"]')?.scrollIntoView({ block: "nearest" });
+  root?.querySelector('[role="alert"]')?.scrollIntoView({ block: "center" });
 }
 
 /**

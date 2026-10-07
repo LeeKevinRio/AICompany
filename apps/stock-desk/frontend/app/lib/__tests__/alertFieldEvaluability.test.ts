@@ -429,14 +429,14 @@ describe("W-R8：送出 422 後錯誤框捲入對話框可視範圍", () => {
     return { querySelector };
   }
 
-  it("對第一個 [role=alert] 呼叫 scrollIntoView({ block: 'nearest' })（不用 smooth）", () => {
+  it("對第一個 [role=alert] 呼叫 scrollIntoView({ block: 'center' })（不用 smooth）", () => {
     const first = { scrollIntoView: vi.fn<(arg?: ScrollIntoViewOptions) => void>() };
     const second = { scrollIntoView: vi.fn<(arg?: ScrollIntoViewOptions) => void>() };
     const root = fakeRoot([first, second]);
     scrollFirstAlertIntoView(root);
     expect(root.querySelector).toHaveBeenCalledWith('[role="alert"]');
     expect(first.scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(first.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(first.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
     expect(second.scrollIntoView).not.toHaveBeenCalled();
   });
 

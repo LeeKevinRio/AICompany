@@ -14,7 +14,7 @@ import {
 import { ALERT_RULE_UNEVALUABLE_NOTICE, ruleUsesUnevaluableField } from "../lib/alertFields";
 import { EMPTY_ALERT_PARAM_FORM, buildAlertParams } from "../lib/alertRuleForm";
 import { useAlerts, useCreateAlert, useDeleteAlert, useEvaluateAlertsNow } from "../lib/queries";
-import type { AlertRule, AlertRuleInput, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
+import type { AlertEvaluationOutcome, AlertRule, AlertRuleInput, AlertType, ComparisonOp, LimitSelector, Market } from "../lib/types";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import { AlertParamFields } from "./AlertParamFields";
 import { EditAlertRuleModal } from "./EditAlertRuleModal";
@@ -172,6 +172,53 @@ export function AlertRulesTable({
   );
 }
 
+/** Counts derived only from `outcomes` (F-4 risk review): E + S always equals `outcomes.length`. */
+export interface EvaluationCounts {
+  evaluated: number; // {E}: status fired / quiet / suppressed
+  skipped: number; // {S}: skipped plus any unknown status (conservative)
+  fired: number; // {F}
+  suppressed: number; // {P}: condition met but inside cooldown
+}
+
+const EVALUATED_STATUSES: readonly string[] = ["fired", "quiet", "suppressed"];
+
+export function countEvaluationOutcomes(outcomes: readonly AlertEvaluationOutcome[]): EvaluationCounts {
+  const evaluated = outcomes.filter((o) => EVALUATED_STATUSES.includes(o.status)).length;
+  return {
+    evaluated,
+    skipped: outcomes.length - evaluated,
+    fired: outcomes.filter((o) => o.status === "fired").length,
+    suppressed: outcomes.filter((o) => o.status === "suppressed").length,
+  };
+}
+
+/** Approved wording T1 / T2 / T3 (work/reviews/2026-10-07-F-4-*.md); do not reword. */
+export function evaluationSummaryLine(counts: EvaluationCounts): string {
+  return `已評估 ${counts.evaluated} 條規則、略過 ${counts.skipped} 條，本次觸發 ${counts.fired} 筆事件。`;
+}
+
+export function evaluationCooldownLine(suppressed: number): string {
+  return `已評估的規則中，${suppressed} 條符合條件但在冷卻中，本次未觸發事件。`;
+}
+
+export const EVALUATION_NO_RULES_LINE = "目前沒有啟用中的規則，本次未評估任何規則。";
+
+export function AlertEvaluationFeedback({ outcomes }: { outcomes: readonly AlertEvaluationOutcome[] }) {
+  const counts = countEvaluationOutcomes(outcomes);
+  return (
+    <div role="status" className="mt-2 space-y-1 text-sm leading-relaxed text-neutral-300 break-words">
+      {outcomes.length === 0 ? (
+        <p>{EVALUATION_NO_RULES_LINE}</p>
+      ) : (
+        <>
+          <p>{evaluationSummaryLine(counts)}</p>
+          {counts.suppressed > 0 && <p>{evaluationCooldownLine(counts.suppressed)}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function AlertRulesSection() {
   const alerts = useAlerts(true);
   const createMutation = useCreateAlert();
@@ -213,11 +260,7 @@ export function AlertRulesSection() {
           {evaluateMutation.isPending ? "檢查中…" : "手動檢查一次"}
         </button>
       </div>
-      {evaluateMutation.isSuccess && (
-        <p role="status" className="mt-2 text-xs text-emerald-300">
-          已評估 {evaluateMutation.data.evaluated} 條規則，本次觸發 {evaluateMutation.data.fired} 筆事件。
-        </p>
-      )}
+      {evaluateMutation.isSuccess && <AlertEvaluationFeedback outcomes={evaluateMutation.data.outcomes} />}
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
