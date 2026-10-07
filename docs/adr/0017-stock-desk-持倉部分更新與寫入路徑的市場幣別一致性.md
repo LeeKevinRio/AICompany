@@ -87,6 +87,7 @@
 **好處：**
 - `sector` 回填與行內修正的競態在結構上消失：PATCH 不寫 `sector` 欄。
 - 估值不再被不一致的市場／幣別組合靜默算錯（寫入路徑擋下新的不一致資料）。
+  - 〔2026-10-07 加註（X-3）〕此句**只對 b7d67e1（約 2026-10-03）之後的新寫入成立**。規則前寫入的不符列仍可讀，且會以 1 倍或約 31 倍失真：A 型（美股記成 TWD）本標的風險低估、加碼股數高估約 31 倍，且卡上附不實的匯率來源揭露；B 型（台股記成 USD）其他標的比率被低估。後果見 X-3 任務單第二節，詳見下「2026-10-07 加註（X-3）」節。原文保留。
 
 **代價：**
 - 寫入有三個模型、四扇門：`PositionInput`（讀取與基底，不放新規則）、`PositionWriteInput`（POST、PUT、CSV 建構）、`PositionPatch`（PATCH），另加 CSV 逐列檢查須與 `PositionWriteInput` 同步（C9）。新增寫入規則時須同時改兩處並補測試，是持續的維護成本。
@@ -160,6 +161,27 @@
    ```
 
    有結果時，用進階修改彈窗（PUT）逐筆修正。
+
+   〔2026-10-07 加註（X-3）〕本點改由 **X-3a 唯讀統計腳本**（`work/research/X-3-持倉幣別市場不符查證-腳本/`，dev-lead 實作中）執行並附結果，腳本取代上列 SQL。腳本比 SQL 多了：方向分類（A 型 `US_stored_as_TWD`／B 型 `TW_stored_as_USD`）、`unreadable` 列分類（market 或 currency 不在 Literal 集合內者），以及逐列的 `symbol_has_mixed_currencies`。**截至 2026-10-07 尚無執行結果、本點未結案**；結案以腳本結果為依據。原文保留不刪。
+
+---
+
+## 2026-10-07 加註（X-3）
+
+〔本節為加註，不改上列任何決策原文；依 ADR-0001，生效後變更以修訂註記處理，不需新 ADR（X-3 任務單 D-X6）。〕
+
+來源（B 類轉錄）：`work/dispatch/2026-10-07-任務單-X-3-持倉幣別與市場不符的legacy列.md`（tech-architect 評估，HEAD d99e845 工作樹唯讀，coordinator 原文轉錄；決策 D-X1～D-X6 與第十節）。tech-architect 自述未執行任何測試或 git；b7d67e1 的日期「約 2026-10-03」由 reflog 時間戳換算；本機是否存在不符列無法確認。本節的 `檔案:行號`、commit 皆為其所述，tech-writer 未對 code 驗證。
+
+- **指向**：X-3 任務單（上列路徑）。該單指出 X-3 不是全新問題：本 ADR 要求的實機唯讀盤點至今未執行、未結案；X-3a 腳本取代該 SQL 並結案。
+- **D-X2（否決 DB 自動遷移）**：查到不符列時，CEO 以持倉頁「進階修改」（PUT）逐筆修正，**並同步修正平均成本的幣別**，修完重跑腳本至 0 列。與本 ADR D-3、D-4 一致（PATCH 不能改幣別，PUT 會驗證）。
+- **D-X3（X-3b）**：估值器對不符列記 WARNING（訊息開頭 `position currency does not match market:`，後接 `id= market= currency=`），並加寫入口守門測試；排下一個 release，無部署前置；log 一旦出現即升 high。
+- **D-X4（X-3c，讀取端撤下）**：估值器與 book 層遇不符列時撤下（新 token，字面待風控審）。優先序由 CEO 依腳本結果裁定（X-3c 狀態：spec，待風控字面審、CEO 排序）。**KX-A3 承諾 `Position`、`PositionInput`、`PositionWriteInput`、`PositionPatch`、`store.py` 零 diff，不違反本 ADR 的 C3、C4**；因此 X-3c 不需要新 ADR（只有實作時需動 `Position` 或 `PositionInput` 才要）。
+- **D-X5**：否決設定頁提示。
+- **失效條件**（X3-F 編號，tech-architect 建議；逐字）：
+  - **X3-F2**：新增任何不經 `PositionWriteInput` 或 CSV 逐列檢查、卻會寫入 `positions` 的入口（新端點、新匯入格式、券商同步、demo 規格變動、會改寫 market／currency 的遷移、還原工具）→ 重審。
+  - **X3-F3**：`MARKET_CURRENCY` 變動（新增市場或幣別，或允許美股以台幣交割記帳）→ X-3 規則、P2、PR0-F1 一起重審。
+  - **X3-F4**：CEO 從 b7d67e1 部署前的備份還原 DB，或用外部工具改 DB → 重跑腳本。
+  - X3-F1（腳本查到 ≥ 1 列升 high）、X3-F5（WARNING log 出現升 high）、X3-F6（X-3c 落地後估值或 book 路徑繞過 `currency_matches_market`）列於 X-3 任務單，此處不收。X3-F1～F6 是否核可：X-3 任務單「待風控裁定」第 3 點，截至轉錄時未見裁定。
 
 ---
 
