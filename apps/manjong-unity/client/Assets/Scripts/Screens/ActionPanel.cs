@@ -10,9 +10,12 @@ namespace Manjong.Screens
     /// <summary>
     /// Fixed action panel above the right part of my hand with six buttons in a fixed order:
     /// 吃 碰 槓 聽 胡 過. It pops in whenever I have a non-discard option (chi / pon / kan / ankan / kakan / ron /
-    /// tsumo / pass) or a discard that leaves me ready, and folds away otherwise. Available buttons are lit (colour +
+    /// tsumo / pass) or a "ting" option, and folds away otherwise. Available buttons are lit (colour +
     /// pulsing glow); the rest are greyed out and not clickable. Its rect never changes with the content.
-    /// 聽 is local only: it toggles the "show every ready discard" hint and never talks to the server.
+    /// 聽 (declare ready, 報聽) lights up when the server offers any "ting:&lt;tile&gt;" option. Pressing it only toggles the
+    /// table's tile picker (the owner sends the chosen "ting:&lt;tile&gt;"); pressing again leaves the picker.
+    /// 過 normally maps to the "pass" option. Once I have declared, the server offers [tsumo, discard:&lt;drawn tile&gt;]
+    /// on a self-draw win: then 過 maps to that single discard (decline the win and throw the drawn tile).
     /// Several chi / kan choices open a small menu with tile pictures above the panel.
     /// </summary>
     public class ActionPanel : MonoBehaviour
@@ -114,7 +117,7 @@ namespace Manjong.Screens
         /// <summary>
         /// Updates the panel from the current options. "canAct" false (playback, waiting, disconnected) folds it.
         /// </summary>
-        public void Apply(GameView v, bool canAct, bool tingIsOn)
+        public void Apply(GameView v, bool canAct, bool tingIsOn, bool declared)
         {
             chiOptions.Clear();
             kanOptions.Clear();
@@ -125,11 +128,15 @@ namespace Manjong.Screens
             tingOn = tingIsOn;
 
             var sig = new System.Text.StringBuilder();
+            OptionDto lastDiscard = null;
+            int discardCount = 0;
+            int nonNullCount = 0;
             OptionDto[] opts = canAct && v != null ? DtoUtil.Safe(v.options) : new OptionDto[0];
             for (int i = 0; i < opts.Length; i++)
             {
                 OptionDto o = opts[i];
                 if (o == null) continue;
+                nonNullCount++;
                 switch (o.type)
                 {
                     case "chi": chiOptions.Add(o); break;
@@ -140,13 +147,23 @@ namespace Manjong.Screens
                     case "ron":
                     case "tsumo": huOption = o; break;
                     case "pass": passOption = o; break;
+                    case "ting": tingAvailable = true; continue;
                     case "discard":
-                        if (DtoUtil.Safe(o.waits).Length > 0) tingAvailable = true;
+                        lastDiscard = o;
+                        discardCount++;
                         continue;
                     default:
                         continue; // "next" is handled by the result panel
                 }
                 sig.Append(o.id).Append(';');
+            }
+
+            // Declared and the only options are tsumo + one discard: 過 = decline the win, discard the drawn tile.
+            if (declared && passOption == null && huOption != null && huOption.type == "tsumo" &&
+                discardCount == 1 && nonNullCount == 2)
+            {
+                passOption = lastDiscard;
+                sig.Append(lastDiscard.id).Append(';');
             }
 
             lit[(int)Slot.Chi] = chiOptions.Count > 0;
@@ -180,7 +197,7 @@ namespace Manjong.Screens
             if (huOption != null && huOption.tai >= 0) subLabels[(int)Slot.Hu].text = huOption.tai + " 台";
             if (chiOptions.Count > 1) subLabels[(int)Slot.Chi].text = chiOptions.Count + " 種";
             if (kanOptions.Count > 1) subLabels[(int)Slot.Kan].text = kanOptions.Count + " 種";
-            if (tingAvailable) subLabels[(int)Slot.Ting].text = tingOn ? "顯示中" : "看聽牌";
+            if (tingAvailable) subLabels[(int)Slot.Ting].text = tingOn ? "選牌中" : "報聽";
 
             if (!gameObject.activeSelf)
             {
@@ -209,7 +226,7 @@ namespace Manjong.Screens
                 if (t >= 1f) popStartedAt = -1f;
             }
 
-            // Pulsing glow on lit buttons; 聽 holds a steady glow while its hint is switched on.
+            // Pulsing glow on lit buttons; 聽 holds a steady glow while its tile picker is on.
             float pulse = 0.45f + 0.55f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 6f));
             for (int i = 0; i < 6; i++)
             {

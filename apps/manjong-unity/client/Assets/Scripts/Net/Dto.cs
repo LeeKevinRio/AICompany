@@ -1,6 +1,7 @@
 using System;
 
-// DTOs mirror work/manjong-unity/api-contract.md v0.3.1 exactly (everything goes over the WebSocket).
+// DTOs mirror work/manjong-unity/api-contract.md v0.3.1 plus the v0.4 declare-ready (報聽) additions
+// (PlayerView.declared, option / event type "ting"); everything goes over the WebSocket.
 // JsonUtility rules: [Serializable] classes, public fields, camelCase names identical to the contract.
 namespace Manjong.Net
 {
@@ -71,7 +72,9 @@ namespace Manjong.Net
     [Serializable]
     public class EventDto
     {
-        // hand_start | draw | flower | discard | chi | pon | kan | ankan | kakan | win | exhaustive | game_end
+        // hand_start | draw | flower | discard | chi | pon | kan | ankan | kakan | ting | win | exhaustive | game_end
+        // (unknown types must be tolerated: the UI only reads the text of those it does not know)
+        // ting: tile = the tile discarded with the declaration, text e.g. "熊熊 聽牌".
         public string type;
         public int seat;
         public string tile;
@@ -125,18 +128,21 @@ namespace Manjong.Net
         public string[] flowers;
         public string[] discards;
         public int sessionDelta;
+        /// <summary>v0.4: this seat has declared ready (報聽); public information, the hand can no longer change.</summary>
+        public bool declared;
     }
 
     [Serializable]
     public class OptionDto
     {
         public string id;
-        // discard | tsumo | ron | pon | kan | chi | ankan | kakan | pass | next
+        // discard | ting | tsumo | ron | pon | kan | chi | ankan | kakan | pass | next
+        // ting (id "ting:<tile>"): discard `tile` and declare ready; `waits` = what I wait on afterwards.
         public string type;
         public string tile;
         public string[] tiles;
         public string label;
-        /// <summary>discard only: what I would be waiting on after discarding this tile (empty = not ready).</summary>
+        /// <summary>discard / ting: what I would be waiting on after discarding this tile (empty = not ready).</summary>
         public WaitDto[] waits;
         /// <summary>tsumo / ron only: tai of this win (without dealer tai); otherwise -1.</summary>
         public int tai;
@@ -239,6 +245,17 @@ namespace Manjong.Net
             for (int i = 0; i < v.options.Length; i++)
             {
                 if (v.options[i] != null && v.options[i].type == "discard") return true;
+            }
+            return false;
+        }
+
+        /// <summary>True when at least one option has this type (e.g. "ting").</summary>
+        public static bool HasOptionType(GameView v, string type)
+        {
+            if (v == null || v.options == null) return false;
+            for (int i = 0; i < v.options.Length; i++)
+            {
+                if (v.options[i] != null && v.options[i].type == type) return true;
             }
             return false;
         }

@@ -16,6 +16,8 @@ namespace Manjong.Screens
     /// input (when its options are non-empty). Sending start / action locks input until the next "state".
     /// Every render takes a whole GameView; each region keeps a signature string and is rebuilt only when its
     /// data changed. Relative seat = (seat - mySeat + 4) % 4: 0 me (bottom), 1 next (right), 2 opposite (top), 3 previous (left).
+    /// My hand: tiles can be selected at any time during a hand and dragged to reorder (see HandTileDrag); a player-made
+    /// order is kept until the next hand and reconciled against every new view. Declared-ready (報聽) hands only select.
     /// </summary>
     public class TableScreen : MonoBehaviour
     {
@@ -90,7 +92,7 @@ namespace Manjong.Screens
         Text myCoinsText;
 
         ActionPanel actionPanel;
-        /// <summary>聽 toggled on: mark every ready discard and list them all in the hint bar.</summary>
+        /// <summary>聽 pressed: the declare-ready tile picker is on (only tiles with a "ting:" option can be picked).</summary>
         bool tingOn;
 
         Image hintBar;
@@ -117,7 +119,22 @@ namespace Manjong.Screens
         /// <summary>Kind of the selected hand tile; every visible copy on the table is highlighted ("" = none).</summary>
         string highlightCode = "";
         string myHandContentSig;
+        string myTilesSig;
+        bool prevCanDiscard;
+        bool prevDeclared;
+        /// <summary>My hand as displayed, left to right; when drawnSeparate the last entry sits in the drawn slot.</summary>
         readonly List<string> handOrder = new List<string>();
+        bool drawnSeparate;
+
+        // Player-made hand order (tile codes, left to right). null = the server's sorting. Kept until the next hand
+        // (gameId / handNo change); every new view is reconciled against it (see Reconcile).
+        List<string> customOrder;
+        string orderKey = "";
+        /// <summary>The drawn tile the player dragged into the hand ("" = none); only valid while it is still the drawn tile.</summary>
+        string mergedDrawn = "";
+        readonly List<RectTransform> handSlots = new List<RectTransform>();
+        int dragIndex = -1;
+        float dragGrabX;
 
         // ---------- Build ----------
 
@@ -365,7 +382,16 @@ namespace Manjong.Screens
             fastForward = false;
             selectedIndex = -1;
             myHandContentSig = null;
+            myTilesSig = null;
+            prevCanDiscard = false;
+            prevDeclared = false;
             handOrder.Clear();
+            drawnSeparate = false;
+            customOrder = null;
+            orderKey = "";
+            mergedDrawn = "";
+            handSlots.Clear();
+            dragIndex = -1;
             events.Clear();
             RefreshEventLog();
             tingOn = false;
@@ -393,18 +419,36 @@ namespace Manjong.Screens
 
         void Update()
         {
-            // Tap / click anywhere fast-forwards the queued playback.
+            // Tap / click anywhere fast-forwards the queued playback, except on my hand tiles: selecting and
+            // dragging them while the others play must not speed the playback up.
 #if ENABLE_LEGACY_INPUT_MANAGER
             if (pumping && playing && !fastForward)
             {
-                bool tapped = Input.GetMouseButtonDown(0);
+                bool tapped = false;
+                if (Input.GetMouseButtonDown(0)) tapped = !IsOverMyHandTile(Input.mousePosition);
                 for (int i = 0; !tapped && i < Input.touchCount; i++)
                 {
-                    if (Input.GetTouch(i).phase == TouchPhase.Began) tapped = true;
+                    Touch touch = Input.GetTouch(i);
+                    if (touch.phase == TouchPhase.Began && !IsOverMyHandTile(touch.position)) tapped = true;
                 }
                 if (tapped) fastForward = true;
             }
 #endif
+        }
+
+        /// <summary>Screen point on one of my hand tiles (their slots and the lifted tiles inside). The canvas is screen-space overlay.</summary>
+        bool IsOverMyHandTile(Vector2 screenPoint)
+        {
+            if (view == null || view.phase != "playing") return false;
+            for (int i = 0; i < handSlots.Count; i++)
+            {
+                RectTransform slot = handSlots[i];
+                if (slot == null) continue;
+                if (RectTransformUtility.RectangleContainsScreenPoint(slot, screenPoint, null)) return true;
+                if (slot.childCount > 0 &&
+                    RectTransformUtility.RectangleContainsScreenPoint((RectTransform)slot.GetChild(0), screenPoint, null)) return true;
+            }
+            return false;
         }
 
         IEnumerator PumpRoutine()
@@ -508,6 +552,25 @@ namespace Manjong.Screens
             }
         }
 
+        /// <summary>I have declared ready (報聽): my hand is locked, tile clicks only select.</summary>
+        static bool IsDeclared(GameView v)
+        {
+            PlayerView p = DtoUtil.Player(v, v != null ? v.mySeat : 0);
+            return p != null && p.declared;
+        }
+
+        /// <summary>My turn to discard and clicking a tile may send "discard:" (never once declared).</summary>
+        bool CanDiscardByTile
+        {
+            get { return CanAct && DtoUtil.HasDiscardOption(view) && !IsDeclared(view); }
+        }
+
+        /// <summary>The declare-ready tile picker is on and still valid for the current options.</summary>
+        bool TingPicking
+        {
+            get { return tingOn && CanAct && DtoUtil.HasOptionType(view, "ting"); }
+        }
+
         bool CanAct
         {
             get
@@ -546,7 +609,7 @@ namespace Manjong.Screens
             RenderCenter(v);
             RenderHint(v);
             myCoinsText.text = "我的金幣 " + Format.Coins(v.myCoins);
-            actionPanel.Apply(v, isFinal && CanAct, tingOn);
+            actionPanel.Apply(v, isFinal && CanAct, tingOn, IsDeclared(v));
 
             bool showResult = isFinal && (v.hasResult || v.phase == "hand_end" || v.phase == "game_end");
             if (showResult) resultPanel.Show(v, OnNextHand, OnBackToLobby);
@@ -561,7 +624,8 @@ namespace Manjong.Screens
             string turn = "";
             if (v.phase == "playing")
             {
-                if (CanAct && DtoUtil.HasDiscardOption(v)) turn = "輪到你：點一張牌，再點一次打出";
+                if (TingPicking) turn = "報聽：點一張有「聽」的牌，再點一次";
+                else if (CanDiscardByTile) turn = "輪到你：點一張牌，再點一次打出";
                 else if (CanAct) turn = "請選擇動作";
                 else if (awaiting && !playing) turn = "等待伺服器…";
                 else if (v.turnSeat >= 0)
@@ -599,41 +663,6 @@ namespace Manjong.Screens
             return sb.ToString();
         }
 
-        /// <summary>"打 五萬：聽 三筒（剩 2）、六筒（剩 3）；打 七條：聽 …" for every ready discard.</summary>
-        /// <summary>Above this many tenpai discards the hint lists only the tiles to discard (it would not fit).</summary>
-        const int MaxDetailedReadyDiscards = 4;
-
-        static string AllReadyDiscards(GameView v)
-        {
-            var ready = new List<OptionDto>();
-            var seen = new HashSet<string>();
-            OptionDto[] opts = DtoUtil.Safe(v.options);
-            for (int i = 0; i < opts.Length; i++)
-            {
-                OptionDto o = opts[i];
-                if (o == null || o.type != "discard" || DtoUtil.Safe(o.waits).Length == 0 || !seen.Add(o.tile)) continue;
-                ready.Add(o);
-            }
-            var sb = new StringBuilder();
-            if (ready.Count > MaxDetailedReadyDiscards)
-            {
-                sb.Append("打出後會聽牌的有 ").Append(ready.Count).Append(" 張：");
-                for (int i = 0; i < ready.Count; i++)
-                {
-                    if (i > 0) sb.Append('、');
-                    sb.Append(TileFace.Name(ready[i].tile));
-                }
-                sb.Append("（點選該牌看聽哪些）");
-                return sb.ToString();
-            }
-            for (int i = 0; i < ready.Count; i++)
-            {
-                if (i > 0) sb.Append('；');
-                sb.Append("打 ").Append(TileFace.Name(ready[i].tile)).Append("：聽 ").Append(FormatWaits(ready[i].waits));
-            }
-            return sb.ToString();
-        }
-
         static bool AnyDiscardWaits(GameView v)
         {
             OptionDto[] opts = DtoUtil.Safe(v.options);
@@ -648,45 +677,67 @@ namespace Manjong.Screens
         {
             string text = "";
             bool listening = false;
-            bool canDiscard = CanAct && DtoUtil.HasDiscardOption(v);
+            bool twoLines = false;
+            bool canDiscard = CanDiscardByTile;
+            string sel = selectedIndex >= 0 && selectedIndex < handOrder.Count ? handOrder[selectedIndex] : "";
+            string stats = sel.Length > 0
+                ? TileFace.Name(sel) + "：場上已出現 " + CountOnTable(v, sel) + " 張，你手上 " + CountInHand(sel) + " 張"
+                : "";
 
-            if (canDiscard)
+            if (TingPicking)
             {
-                if (selectedIndex >= 0 && selectedIndex < handOrder.Count)
+                // Declare-ready picker: only tiles with a "ting:" option can be picked.
+                OptionDto ting = sel.Length > 0 ? DtoUtil.FindOption(v, "ting:" + sel) : null;
+                if (ting != null)
                 {
-                    string code = handOrder[selectedIndex];
-                    OptionDto opt = DtoUtil.FindOption(v, "discard:" + code);
+                    string list = FormatWaits(DtoUtil.Safe(ting.waits));
+                    text = (list.Length > 0 ? "報聽後聽：" + list : "報聽打出這張") + "\n" + stats;
+                    twoLines = true;
+                }
+                else
+                {
+                    text = "選一張打出並聽牌（再按聽取消）";
+                }
+                listening = true;
+            }
+            else if (canDiscard)
+            {
+                if (sel.Length > 0)
+                {
+                    OptionDto opt = DtoUtil.FindOption(v, "discard:" + sel);
                     WaitDto[] waits = opt != null ? DtoUtil.Safe(opt.waits) : new WaitDto[0];
                     string list = FormatWaits(waits);
-                    text = (list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌") + "\n" +
-                           TileFace.Name(code) + "：場上已出現 " + CountOnTable(v, code) + " 張，你手上 " + CountInHand(code) + " 張";
+                    text = (list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌") + "\n" + stats;
                     listening = list.Length > 0;
-                }
-                else if (tingOn && AnyDiscardWaits(v))
-                {
-                    text = AllReadyDiscards(v);
-                    listening = true;
+                    twoLines = true;
                 }
                 else if (AnyDiscardWaits(v))
                 {
-                    text = "有「聽」標記的牌，打出後就會聽牌（按「聽」全部顯示）";
+                    text = DtoUtil.HasOptionType(v, "ting")
+                        ? "有「聽」標記的牌，打出後就會聽牌（按「聽」報聽）"
+                        : "有「聽」標記的牌，打出後就會聽牌";
                 }
             }
             else if (v.phase == "playing")
             {
+                // Not choosing a discard (waiting, declared, someone else's turn): standing waits plus the selected tile's counts.
                 string list = FormatWaits(DtoUtil.Safe(v.myWaits));
                 if (list.Length > 0)
                 {
                     text = "聽牌中：" + list;
                     listening = true;
                 }
+                if (stats.Length > 0)
+                {
+                    text = text.Length > 0 ? text + "\n" + stats : stats;
+                    twoLines = list.Length > 0;
+                }
             }
 
             bool show = text.Length > 0;
             hintBar.gameObject.SetActive(show);
             if (!show) return;
-            // Two lines (taller bar, growing upward) only for the full 聽 list; it stays below the left seat panel.
-            bool twoLines = canDiscard && (selectedIndex >= 0 || tingOn);
+            // Two lines (taller bar, growing upward) only for the selected-tile detail; it stays below the left seat panel.
             hintBar.rectTransform.sizeDelta = new Vector2(HintW, twoLines ? HintTallH : HintH);
             hintText.text = text;
             hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
@@ -733,7 +784,7 @@ namespace Manjong.Screens
             SeatUi s = seats[rel];
             bool isDealer = p.seat == v.dealerSeat;
             bool isTurn = v.phase == "playing" && p.seat == v.turnSeat;
-            string sig = p.name + "|" + p.avatar + "|" + p.seatWind + "|" + isDealer + "|" + v.dealerStreak + "|" + p.sessionDelta + "|" + isTurn;
+            string sig = p.name + "|" + p.avatar + "|" + p.seatWind + "|" + isDealer + "|" + v.dealerStreak + "|" + p.sessionDelta + "|" + isTurn + "|" + p.declared;
             if (sig == s.infoSig) return;
             s.infoSig = sig;
             UiFactory.DestroyChildren(s.info);
@@ -762,6 +813,23 @@ namespace Manjong.Screens
             var delta = UiFactory.CreateLabel(card.transform, "Delta", "本場 " + Format.Signed(p.sessionDelta), 22, Palette.Ink, TextAnchor.MiddleLeft);
             delta.color = p.sessionDelta > 0 ? Palette.Gain : (p.sessionDelta < 0 ? Palette.Loss : Palette.InkSoft);
             UiFactory.Place(delta.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(100f, -78f), new Vector2(142f, 26f));
+
+            if (p.declared) DeclaredBadge(card.transform, rel == 0);
+        }
+
+        /// <summary>
+        /// Declared ready (報聽): a coral sticker over the avatar's lower edge. Me: the wide "聽牌中"; the others: a small "聽".
+        /// Both carry text plus an outline, so the state is not colour-only.
+        /// </summary>
+        static void DeclaredBadge(Transform card, bool mine)
+        {
+            float w = mine ? 96f : 44f;
+            var pill = UiFactory.CreatePanel(card, "DeclaredBadge", Palette.Coral, 14);
+            UiFactory.Place(pill.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(mine ? 4f : 56f, -77f), new Vector2(w, 30f));
+            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 14, 3, 0f);
+            var t = UiFactory.CreateLabel(pill.transform, "Text", mine ? "聽牌中" : "聽", 22, Palette.Ink, TextAnchor.MiddleCenter);
+            t.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
         }
 
         static float Badge(Transform parent, string text, Color bg, float x, float width)
@@ -902,7 +970,10 @@ namespace Manjong.Screens
             SeatUi s = seats[0];
             List<string> sorted = TileFace.Sorted(p.hand);
             string drawn = DtoUtil.Safe(p.drawnTile);
-            bool canDiscard = CanAct && DtoUtil.HasDiscardOption(v);
+            bool declared = p.declared;
+            bool canDiscard = CanAct && DtoUtil.HasDiscardOption(v) && !declared;
+            bool tingMode = tingOn && CanAct && DtoUtil.HasOptionType(v, "ting");
+            bool interactive = v.phase == "playing";
 
             // Hand end: if I won, take the winning tile out of the revealed hand and show it in the drawn slot.
             string winTile = "";
@@ -919,39 +990,81 @@ namespace Manjong.Screens
                 }
             }
 
-            var sb = new StringBuilder();
-            for (int i = 0; i < sorted.Count; i++) sb.Append(sorted[i]).Append(',');
-            sb.Append('|').Append(drawn).Append('|').Append(canDiscard).Append('|');
-            if (canDiscard)
+            // A new hand (gameId / handNo changed): forget the player's own order, back to the server's sorting.
+            string key = DtoUtil.Safe(v.gameId) + "|" + v.handNo;
+            if (key != orderKey)
             {
-                OptionDto[] opts = DtoUtil.Safe(v.options);
-                for (int i = 0; i < opts.Length; i++)
+                orderKey = key;
+                customOrder = null;
+                mergedDrawn = "";
+            }
+
+            // The drawn tile stays in its own slot unless the player dragged it into the hand.
+            var pool = new List<string>(sorted);
+            string separate = drawn;
+            if (drawn.Length > 0 && mergedDrawn == drawn)
+            {
+                pool.Add(drawn);
+                separate = "";
+            }
+            else
+            {
+                mergedDrawn = "";
+            }
+
+            List<string> ordered = pool;
+            if (customOrder != null)
+            {
+                ordered = Reconcile(customOrder, pool);
+                customOrder.Clear();
+                customOrder.AddRange(ordered);
+            }
+            handOrder.Clear();
+            handOrder.AddRange(ordered);
+            drawnSeparate = separate.Length > 0;
+            if (drawnSeparate) handOrder.Add(separate);
+
+            // The selection survives anything that leaves my tiles alone (e.g. other seats playing), but not a
+            // changed hand, or the turn switching between "only select" and "click again to discard".
+            var tb = new StringBuilder();
+            for (int i = 0; i < sorted.Count; i++) tb.Append(sorted[i]).Append(',');
+            tb.Append('|').Append(drawn).Append("|win:").Append(winTile);
+            string tilesSig = tb.ToString();
+            if (tilesSig != myTilesSig || canDiscard != prevCanDiscard || declared != prevDeclared || !interactive)
+            {
+                selectedIndex = -1;
+            }
+            myTilesSig = tilesSig;
+            prevCanDiscard = canDiscard;
+            prevDeclared = declared;
+
+            var sb = new StringBuilder(tilesSig);
+            sb.Append('|').Append(canDiscard).Append('|').Append(declared).Append('|');
+            OptionDto[] opts = DtoUtil.Safe(v.options);
+            for (int i = 0; i < opts.Length; i++)
+            {
+                if (opts[i] != null && (opts[i].type == "discard" || opts[i].type == "ting"))
                 {
-                    if (opts[i] != null && opts[i].type == "discard")
-                    {
-                        sb.Append(opts[i].id).Append('/').Append(DtoUtil.Safe(opts[i].waits).Length).Append(';');
-                    }
+                    sb.Append(opts[i].id).Append('/').Append(DtoUtil.Safe(opts[i].waits).Length).Append(';');
                 }
             }
-            sb.Append("|win:").Append(winTile);
             string contentSig = sb.ToString();
 
-            // Hand contents or playability changed: any previous selection is meaningless now.
+            // Options changed: the declare-ready picker from the previous options is meaningless now.
             if (contentSig != myHandContentSig)
             {
                 myHandContentSig = contentSig;
-                selectedIndex = -1;
                 tingOn = false;
+                tingMode = false;
             }
-            handOrder.Clear();
-            handOrder.AddRange(sorted);
-            if (drawn.Length > 0) handOrder.Add(drawn);
-            if (selectedIndex >= handOrder.Count || !canDiscard) selectedIndex = -1;
+            if (selectedIndex >= handOrder.Count) selectedIndex = -1;
             highlightCode = selectedIndex >= 0 ? handOrder[selectedIndex] : "";
 
-            string sig = contentSig + "#" + selectedIndex + "#" + tingOn;
+            string sig = contentSig + "#" + string.Join(",", handOrder) + "#" + selectedIndex + "#" + tingMode + "#" + interactive + "#" + drawnSeparate;
             if (sig == s.handSig) return;
             s.handSig = sig;
+            dragIndex = -1; // a drag in progress dies with its tile
+            handSlots.Clear();
             UiFactory.DestroyChildren(s.hand);
 
             TileSize size = TileSizes.Large;
@@ -960,38 +1073,41 @@ namespace Manjong.Screens
             for (int i = 0; i < n; i++)
             {
                 string code = handOrder[i];
-                bool isDrawn = drawn.Length > 0 && i == n - 1;
+                bool isDrawn = drawnSeparate && i == n - 1;
                 // Fixed slots from the left edge; the drawn tile always goes to the separate drawn slot.
                 float x = isDrawn ? DrawnSlotX : i * SlotStep;
 
                 var slot = UiFactory.CreateRect("Slot" + i, s.hand);
                 UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(x, 0f), size.Vector);
+                handSlots.Add(slot);
 
                 var tile = TileView.CreateFace(slot, code, size);
                 bool selected = i == selectedIndex;
                 UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, selected ? SelectLift : 0f), size.Vector);
 
-                OptionDto opt = canDiscard ? DtoUtil.FindOption(v, "discard:" + code) : null;
-                bool discardable = opt != null;
-                if (canDiscard && !discardable) TileView.AddVeil(tile, size);
+                OptionDto discardOpt = canDiscard ? DtoUtil.FindOption(v, "discard:" + code) : null;
+                OptionDto tingOpt = tingMode ? DtoUtil.FindOption(v, "ting:" + code) : null;
+                bool dimmed = tingMode ? tingOpt == null : canDiscard && discardOpt == null;
+                if (dimmed) TileView.AddVeil(tile, size);
                 if (selected) TileView.AddRing(tile, Palette.SelectRing, size, 4);
                 else if (highlightCode.Length > 0 && code == highlightCode) TileView.AddSameKindHighlight(tile, size);
-                bool readyDiscard = discardable && DtoUtil.Safe(opt.waits).Length > 0;
-                if (readyDiscard && tingOn) TileView.AddRing(tile, Palette.Coral, size, 5);
+                // Marker: tiles whose discard leaves me ready (normal turn), or the tiles the 聽 picker accepts.
+                bool ready = tingMode ? tingOpt != null : discardOpt != null && DtoUtil.Safe(discardOpt.waits).Length > 0;
+                if (tingMode && tingOpt != null) TileView.AddRing(tile, Palette.Coral, size, 5);
                 // Pokes 10 units above the tile top so a lifted tile's badge stays below my meld row.
-                if (readyDiscard) TileView.AddBadge(tile, "聽", Palette.Coral, 10f);
+                if (ready) TileView.AddBadge(tile, "聽", Palette.Coral, 10f);
 
-                if (discardable)
+                if (interactive)
                 {
                     var img = tile.GetComponent<Image>();
                     img.raycastTarget = true;
-                    var btn = tile.gameObject.AddComponent<Button>();
-                    btn.transition = Selectable.Transition.None;
-                    var nav = btn.navigation;
-                    nav.mode = Navigation.Mode.None;
-                    btn.navigation = nav;
-                    int index = i;
-                    btn.onClick.AddListener(() => OnTileClicked(index));
+                    var drag = tile.gameObject.AddComponent<HandTileDrag>();
+                    drag.Index = i;
+                    drag.Space = s.hand;
+                    drag.Clicked = OnTileClicked;
+                    drag.DragStarted = OnTileDragStarted;
+                    drag.Dragged = OnTileDragged;
+                    drag.DragEnded = OnTileDragEnded;
                 }
             }
 
@@ -1004,6 +1120,143 @@ namespace Manjong.Screens
                 TileView.AddRing(tile, Palette.LastDiscardRing, size, 5);
                 TileView.AddBadge(tile, winSelfDraw ? "自摸" : "胡", Palette.Coral, 10f);
             }
+        }
+
+        /// <summary>
+        /// Applies the player's own order to the tiles now in my hand (multiset match): tiles still held keep their
+        /// relative order, tiles that left (discarded, claimed by a meld) drop out, and tiles that arrived are appended
+        /// on the right in the server's sorted order.
+        /// </summary>
+        static List<string> Reconcile(List<string> order, List<string> pool)
+        {
+            var left = new Dictionary<string, int>();
+            for (int i = 0; i < pool.Count; i++)
+            {
+                int c;
+                left.TryGetValue(pool[i], out c);
+                left[pool[i]] = c + 1;
+            }
+            var result = new List<string>(pool.Count);
+            for (int i = 0; i < order.Count; i++)
+            {
+                int c;
+                if (left.TryGetValue(order[i], out c) && c > 0)
+                {
+                    result.Add(order[i]);
+                    left[order[i]] = c - 1;
+                }
+            }
+            for (int i = 0; i < pool.Count; i++)
+            {
+                int c;
+                if (left.TryGetValue(pool[i], out c) && c > 0)
+                {
+                    result.Add(pool[i]);
+                    left[pool[i]] = c - 1;
+                }
+            }
+            return result;
+        }
+
+        // ----- Hand drag (reorder) -----
+
+        /// <summary>Hand-area tiles other than the dragged one (the separate drawn tile never counts as hand area).</summary>
+        int DragOthersCount(bool fromDrawn)
+        {
+            int handArea = drawnSeparate ? handOrder.Count - 1 : handOrder.Count;
+            return fromDrawn ? handArea : handArea - 1;
+        }
+
+        bool DraggedFromDrawn
+        {
+            get { return drawnSeparate && dragIndex == handOrder.Count - 1; }
+        }
+
+        /// <summary>Insert position (0..others) for a dragged tile whose left edge is at tileLeft; the drawn tile can also stay put.</summary>
+        int DragTarget(float tileLeft, out bool backToDrawn)
+        {
+            bool fromDrawn = DraggedFromDrawn;
+            int others = DragOthersCount(fromDrawn);
+            float center = tileLeft + TileSizes.Large.width * 0.5f;
+            backToDrawn = fromDrawn && tileLeft >= (others * SlotStep + DrawnSlotX) * 0.5f;
+            return Mathf.Clamp(Mathf.FloorToInt(center / SlotStep), 0, Mathf.Max(0, others));
+        }
+
+        float DragLeft(Vector2 pointer)
+        {
+            return Mathf.Clamp(pointer.x + dragGrabX, -SlotStep * 0.5f, DrawnSlotX);
+        }
+
+        void OnTileDragStarted(int index, Vector2 pressPoint)
+        {
+            if (view == null || view.phase != "playing" || index < 0 || index >= handSlots.Count) return;
+            dragIndex = index;
+            RectTransform slot = handSlots[index];
+            dragGrabX = slot.anchoredPosition.x - pressPoint.x;
+            slot.SetAsLastSibling(); // on top of its neighbours
+            if (slot.childCount > 0)
+            {
+                // Picked up: lifted like a selected tile.
+                var tile = (RectTransform)slot.GetChild(0);
+                tile.anchoredPosition = new Vector2(0f, SelectLift);
+            }
+        }
+
+        /// <summary>The dragged tile follows the pointer horizontally; the others step aside so the gap is where it would land.</summary>
+        void OnTileDragged(int index, Vector2 pointer)
+        {
+            if (dragIndex != index || index >= handSlots.Count) return;
+            float left = DragLeft(pointer);
+            handSlots[index].anchoredPosition = new Vector2(left, 0f);
+
+            bool backToDrawn;
+            int target = DragTarget(left, out backToDrawn);
+            int k = 0;
+            for (int i = 0; i < handSlots.Count; i++)
+            {
+                if (i == index || (drawnSeparate && i == handOrder.Count - 1)) continue;
+                int slotIndex = !backToDrawn && k >= target ? k + 1 : k;
+                handSlots[i].anchoredPosition = new Vector2(slotIndex * SlotStep, 0f);
+                k++;
+            }
+        }
+
+        void OnTileDragEnded(int index, Vector2 pointer)
+        {
+            if (dragIndex != index || view == null) return;
+            bool backToDrawn;
+            int target = DragTarget(DragLeft(pointer), out backToDrawn);
+            bool fromDrawn = DraggedFromDrawn;
+            int drawnOld = drawnSeparate ? handOrder.Count - 1 : -1;
+            dragIndex = -1;
+
+            // New order as a permutation of the old indices.
+            var perm = new List<int>(handOrder.Count);
+            for (int i = 0; i < handOrder.Count; i++)
+            {
+                if (i != index && i != drawnOld) perm.Add(i);
+            }
+            bool merged = fromDrawn && !backToDrawn;
+            if (!fromDrawn || merged) perm.Insert(Mathf.Clamp(target, 0, perm.Count), index);
+            bool stillSeparate = drawnOld >= 0 && !merged;
+            if (stillSeparate) perm.Add(drawnOld);
+
+            bool changed = merged;
+            for (int i = 0; i < perm.Count && !changed; i++)
+            {
+                if (perm[i] != i) changed = true;
+            }
+            if (changed)
+            {
+                var codes = new List<string>(perm.Count);
+                for (int i = 0; i < perm.Count; i++) codes.Add(handOrder[perm[i]]);
+                if (merged) mergedDrawn = handOrder[index];
+                if (stillSeparate) codes.RemoveAt(codes.Count - 1); // the drawn slot is not part of the custom order
+                if (selectedIndex >= 0) selectedIndex = perm.IndexOf(selectedIndex); // the selection follows its tile
+                customOrder = codes;
+            }
+            seats[0].handSig = null; // rebuild: snaps every tile onto its slot (also when nothing changed)
+            Render(view, lastRenderFinal);
         }
 
         // ----- River -----
@@ -1035,20 +1288,41 @@ namespace Manjong.Screens
 
         // ---------- Input ----------
 
+        /// <summary>
+        /// Any time during a hand a click selects my tile (raised, same kind lit up everywhere) and a second click on
+        /// it deselects. Two cases need a second click to act: my turn to discard (discard) and the 聽 picker (declare).
+        /// A declared hand can only be selected.
+        /// </summary>
         void OnTileClicked(int index)
         {
-            if (!CanAct) return;
+            if (view == null || view.phase != "playing") return;
             if (index < 0 || index >= handOrder.Count) return;
             string code = handOrder[index];
-            OptionDto opt = DtoUtil.FindOption(view, "discard:" + code);
-            if (opt == null) return;
 
-            if (selectedIndex == index)
+            if (TingPicking)
             {
-                Send(opt.id);
+                OptionDto ting = DtoUtil.FindOption(view, "ting:" + code);
+                if (ting == null) return; // dimmed: not a tile the declaration can discard
+                if (selectedIndex == index)
+                {
+                    Send(ting.id);
+                    return;
+                }
+                selectedIndex = index;
+                Render(view, lastRenderFinal);
                 return;
             }
-            selectedIndex = index;
+
+            if (CanDiscardByTile && selectedIndex == index)
+            {
+                OptionDto opt = DtoUtil.FindOption(view, "discard:" + code);
+                if (opt != null)
+                {
+                    Send(opt.id);
+                    return;
+                }
+            }
+            selectedIndex = selectedIndex == index ? -1 : index;
             Render(view, lastRenderFinal); // regions are signature-gated: only the hand, the hint and matching areas rebuild
         }
 
@@ -1062,11 +1336,15 @@ namespace Manjong.Screens
 
         void OnToggleTing()
         {
-            if (!CanAct) return;
+            if (!CanAct || !DtoUtil.HasOptionType(view, "ting")) return;
             tingOn = !tingOn;
-            RenderMyHand(DtoUtil.Player(view, view.mySeat), view);
-            RenderHint(view);
-            actionPanel.Apply(view, CanAct, tingOn);
+            // A selected tile the picker would dim cannot stay selected.
+            if (tingOn && selectedIndex >= 0 && selectedIndex < handOrder.Count &&
+                DtoUtil.FindOption(view, "ting:" + handOrder[selectedIndex]) == null)
+            {
+                selectedIndex = -1;
+            }
+            Render(view, lastRenderFinal);
         }
 
         void OnOptionClicked(string actionId)
@@ -1081,6 +1359,7 @@ namespace Manjong.Screens
             if (!app.SendAction(actionId)) return;
             awaiting = true; // until the next "state"
             selectedIndex = -1;
+            tingOn = false;
             Render(view, true);
         }
 
