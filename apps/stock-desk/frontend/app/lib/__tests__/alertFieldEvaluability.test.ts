@@ -273,6 +273,8 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
       expect(tdClasses).toContain("hidden");
       expect(tdClasses).toContain("sm:table-cell");
       expect(tdClasses).toContain("whitespace-nowrap");
+      // D-14 B2: status td uses px-2 (narrower horizontal padding) at the sm breakpoint.
+      expect(tdClasses).toContain("px-2");
       // Header: still "狀態" at index 3, hidden below sm.
       const ths = [...html.matchAll(/<th([^>]*)>([\s\S]*?)<\/th>/g)].map((m) => ({ attrs: m[1] ?? "", inner: m[2] ?? "" }));
       expect(ths[3]?.inner).toBe("狀態");
@@ -280,6 +282,8 @@ describe("W-3：規則清單「條件」儲存格（逐字、集合決定）", (
       expect(thClasses).toContain("hidden");
       expect(thClasses).toContain("sm:table-cell");
       expect(thClasses).toContain("whitespace-nowrap");
+      // D-14 B2: status th uses px-2, matching the td.
+      expect(thClasses).toContain("px-2");
       // Same text rendered twice (mutually exclusive by breakpoint); keep both in sync.
       expect(occurrences(html, `>${status}<`)).toBe(2);
       expect(html).toContain("min-w-[620px]");
