@@ -21,9 +21,34 @@ classifies every row's ``close``:
 * ``nonfinite``   -- NaN / Infinity text;
 * ``unparseable`` -- anything else that is not a number.
 
-``nonpositive`` and ``null`` together decide the verdict. ``nonfinite`` and
-``unparseable`` rows are reported but do not, because the app's cache reader
-already drops them (``app/data/cache.py``), so they cannot reach the alert path.
+``nonpositive``, ``null`` and ``nonfinite`` together decide the verdict -- the
+same "usable close" definition as the app (``app.alerts.engine.usable_price``:
+present, finite and > 0). ``nonfinite`` must count: the app's cache reader
+(``app/data/cache.py``) only skips rows whose ``Decimal(...)`` raises, and
+``Decimal("NaN")`` / ``Decimal("Infinity")`` do not raise, so such a row does
+reach the alert and valuation paths. Only ``unparseable`` rows are reported
+without deciding the verdict: the cache reader skips them.
+
+"Latest bar" means the newest row the app's cache reader would actually keep:
+rows whose ``close`` is ``unparseable`` or whose date is not a valid ISO date
+are skipped by the reader, so they are left out when picking each series'
+newest date (otherwise a skipped row would hide a bad bar behind it).
+
+Every verdict row is then split two ways (risk-compliance F-1 required item):
+
+* by bar position -- ``latest_bar_bad`` (the row is its series' newest cached
+  bar, the one a fresh snapshot / valuation reads) vs ``older_bar_bad``;
+* by membership -- ``held`` (the series has any row in ``positions``),
+  ``watched`` (it has an *enabled* row in ``alert_rules``), ``held_and_watched``
+  (both; the intersection, also counted inside ``held`` and ``watched``) and
+  ``other`` (neither).
+
+The escalation rule: any ``latest_bar_bad`` row on a held or watched series
+makes the fix a deploy prerequisite for the CEO to rule on; older rows only, or
+``other`` series only, do not block deployment (next release).
+
+Membership is matched on ``(symbol, market)`` after ``strip().upper()`` on both
+sides, so a case difference can only add matches, never hide one.
 
 Tables (schemas copied from the app, not guessed):
 
@@ -33,6 +58,15 @@ Tables (schemas copied from the app, not guessed):
 * ``market_daily_bars`` (market DB, ``STOCK_DESK_MARKET_DB_PATH``, default
   ``./data/stock-desk-market.db``): ``symbol, session_date, market, ..., close
   TEXT``. Not on the alert path (ADR-0012 C-7); reported for reference only.
+* ``positions`` (``app/positions/store.py``: ``symbol, market, ...``) and
+  ``alert_rules`` (``app/alerts/store.py``: ``symbol, market, enabled, ...``)
+  live in the same main DB as ``price_bars_cache`` (all three resolve
+  ``STOCK_DESK_DB_PATH``), so they are read from ``--db`` as well. Only the
+  ``symbol``, ``market`` and ``enabled`` columns are read -- never quantities,
+  costs, rule parameters or notes.
+
+There is no local FX-rate cache to scan (ADR-0011; ``app/data/providers/fx.py``),
+so FX rates <= 0 (F-1b) are out of this script's reach and not reported.
 
 Hard guarantees
 ---------------
@@ -42,7 +76,9 @@ Hard guarantees
 * ``--db`` has no default on purpose. The output holds symbols, markets, dates
   and counts only -- no prices, quantities, costs, paths or credentials.
 
-Exit codes: 0 = nothing found, 1 = rows found (see the summary), 2 = error.
+Exit codes: 0 = nothing found, 1 = rows found (see the summary and
+``escalation``), 2 = error (including a main DB without ``positions`` or
+``alert_rules``, since held / watched could not be told apart).
 
 Run::
 
@@ -57,7 +93,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -69,8 +105,29 @@ KNOWN_TABLES: tuple[tuple[str, str, bool], ...] = (
 )
 
 #: Categories that decide the verdict, and the ones only reported.
-VERDICT_CATEGORIES = ("nonpositive", "null")
-REPORTED_CATEGORIES = ("nonfinite", "unparseable")
+VERDICT_CATEGORIES = ("nonpositive", "null", "nonfinite")
+REPORTED_CATEGORIES = ("unparseable",)
+#: Keys of the legacy ``other_unusable_rows`` field, kept for compatibility;
+#: ``nonfinite`` is also counted in ``bad_rows`` since it decides the verdict.
+LEGACY_OTHER_UNUSABLE = ("nonfinite", "unparseable")
+
+#: Membership tables and the columns read from them (schemas from the app).
+POSITIONS_TABLE = "positions"
+ALERT_RULES_TABLE = "alert_rules"
+MEMBERSHIP_COLUMNS: dict[str, tuple[str, ...]] = {
+    POSITIONS_TABLE: ("symbol", "market"),
+    ALERT_RULES_TABLE: ("symbol", "market", "enabled"),
+}
+
+#: Membership groups, in output order. ``held`` and ``watched`` overlap;
+#: ``held_and_watched`` is their intersection; ``other`` is neither.
+MEMBERSHIP_GROUPS = ("held", "watched", "held_and_watched", "other")
+
+#: ``escalation`` values.
+ESCALATE = "deploy_prerequisite"
+NOT_BLOCKING = "next_release"
+
+SeriesKey = tuple[str, str]
 
 
 def classify_close(value: object) -> str | None:
@@ -90,12 +147,82 @@ def classify_close(value: object) -> str | None:
     return None
 
 
+def series_key(symbol: object, market: object) -> SeriesKey:
+    """Normalised ``(symbol, market)`` used to match bars against membership."""
+    return (str(symbol).strip().upper(), str(market).strip().upper())
+
+
+def parse_day(value: object) -> date | None:
+    """The bar date as the app's cache reader parses it, or ``None`` if invalid."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class Membership:
+    """Series that are held (any position row) or watched (an enabled rule)."""
+
+    held: frozenset[SeriesKey]
+    watched: frozenset[SeriesKey]
+
+    def groups(self, key: SeriesKey) -> tuple[str, ...]:
+        """The MEMBERSHIP_GROUPS one series falls into."""
+        is_held = key in self.held
+        is_watched = key in self.watched
+        if is_held and is_watched:
+            return ("held", "watched", "held_and_watched")
+        if is_held:
+            return ("held",)
+        if is_watched:
+            return ("watched",)
+        return ("other",)
+
+
 @dataclass
 class SymbolTally:
     rows: int = 0
     first: str | None = None
     last: str | None = None
     latest_bar_bad: bool = False
+    older_rows: int = 0
+
+
+def _empty_split() -> dict[str, int]:
+    return {"symbols": 0, "rows": 0}
+
+
+def _bar_class_json(
+    per_symbol: dict[SeriesKey, SymbolTally],
+    membership: Membership | None,
+    *,
+    latest: bool,
+) -> dict[str, Any]:
+    """Symbol and row counts for one bar class, split by membership group.
+
+    The group counts are ``None`` when membership is unknown (the database has
+    no ``positions`` / ``alert_rules``), which only happens off the alert path.
+    """
+    total = _empty_split()
+    groups: dict[str, dict[str, int]] = {name: _empty_split() for name in MEMBERSHIP_GROUPS}
+    for (symbol, market), tally in per_symbol.items():
+        rows = (1 if tally.latest_bar_bad else 0) if latest else tally.older_rows
+        if rows == 0:
+            continue
+        total["symbols"] += 1
+        total["rows"] += rows
+        if membership is None:
+            continue
+        for name in membership.groups(series_key(symbol, market)):
+            groups[name]["symbols"] += 1
+            groups[name]["rows"] += rows
+    body: dict[str, Any] = dict(total)
+    for name in MEMBERSHIP_GROUPS:
+        body[name] = groups[name] if membership is not None else None
+    return body
 
 
 @dataclass
@@ -106,36 +233,55 @@ class TableReport:
     counts: dict[str, int] = field(default_factory=dict)
     first: str | None = None
     last: str | None = None
-    per_symbol: dict[tuple[str, str], SymbolTally] = field(default_factory=dict)
+    per_symbol: dict[SeriesKey, SymbolTally] = field(default_factory=dict)
 
     @property
     def verdict_rows(self) -> int:
         return sum(self.counts.get(name, 0) for name in VERDICT_CATEGORIES)
 
-    def as_json(self) -> dict[str, Any]:
-        affected = [
-            {
-                "symbol": symbol,
-                "market": market,
-                "rows": tally.rows,
-                "first_date": tally.first,
-                "last_date": tally.last,
-                "latest_cached_bar_is_bad": tally.latest_bar_bad,
-            }
-            for (symbol, market), tally in sorted(self.per_symbol.items())
-        ]
+    def held_or_watched_latest_bad(self, membership: Membership) -> int:
+        """Series whose bad latest bar belongs to a held or watched series."""
+        return sum(
+            1
+            for (symbol, market), tally in self.per_symbol.items()
+            if tally.latest_bar_bad and membership.groups(series_key(symbol, market)) != ("other",)
+        )
+
+    def as_json(self, membership: Membership | None) -> dict[str, Any]:
+        affected = []
+        for (symbol, market), tally in sorted(self.per_symbol.items()):
+            key = series_key(symbol, market)
+            affected.append(
+                {
+                    "symbol": symbol,
+                    "market": market,
+                    "rows": tally.rows,
+                    "first_date": tally.first,
+                    "last_date": tally.last,
+                    "latest_cached_bar_is_bad": tally.latest_bar_bad,
+                    "latest_is_bad": tally.latest_bar_bad,
+                    "older_bad_rows": tally.older_rows,
+                    "held": None if membership is None else key in membership.held,
+                    "watched": None if membership is None else key in membership.watched,
+                }
+            )
         return {
             "present": True,
             "on_alert_path": self.on_alert_path,
             "total_rows": self.total_rows,
             "bad_rows": {name: self.counts.get(name, 0) for name in VERDICT_CATEGORIES},
             "bad_rows_total": self.verdict_rows,
-            "other_unusable_rows": {name: self.counts.get(name, 0) for name in REPORTED_CATEGORIES},
+            "other_unusable_rows": {
+                name: self.counts.get(name, 0) for name in LEGACY_OTHER_UNUSABLE
+            },
             "affected_symbols": len(self.per_symbol),
             "date_range": {"first": self.first, "last": self.last},
             "symbols_whose_latest_cached_bar_is_bad": sum(
                 1 for tally in self.per_symbol.values() if tally.latest_bar_bad
             ),
+            "membership_known": membership is not None,
+            "latest_bar_bad": _bar_class_json(self.per_symbol, membership, latest=True),
+            "older_bar_bad": _bar_class_json(self.per_symbol, membership, latest=False),
             "affected": affected,
         }
 
@@ -162,13 +308,18 @@ def scan_table(
     report = TableReport(table=table, on_alert_path=on_alert_path)
     (report.total_rows,) = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
     # Latest date per series, to tell whether a bad row is the one a fresh
-    # snapshot would read as "the latest bar".
-    latest: dict[tuple[str, str], str] = {
-        (symbol, market): last
-        for symbol, market, last in conn.execute(
-            f"SELECT symbol, market, MAX({date_column}) FROM {table} GROUP BY symbol, market"
-        )
-    }
+    # snapshot would read as "the latest bar". Only rows the app's cache reader
+    # keeps are candidates (see the module docstring).
+    latest: dict[tuple[object, object], date] = {}
+    for symbol, market, day, close in conn.execute(
+        f"SELECT symbol, market, {date_column}, close FROM {table}"
+    ):
+        parsed = parse_day(day)
+        if parsed is None or classify_close(close) == "unparseable":
+            continue
+        key = (symbol, market)
+        if key not in latest or parsed > latest[key]:
+            latest[key] = parsed
     cursor = conn.execute(f"SELECT symbol, market, {date_column}, close FROM {table}")
     for symbol, market, day, close in cursor:
         category = classify_close(close)
@@ -184,9 +335,47 @@ def scan_table(
         tally.rows += 1
         tally.first = day_text if tally.first is None else min(tally.first, day_text)
         tally.last = day_text if tally.last is None else max(tally.last, day_text)
-        if latest.get((symbol, market)) == day:
+        parsed = parse_day(day)
+        if parsed is not None and latest.get((symbol, market)) == parsed:
             tally.latest_bar_bad = True
+        else:
+            tally.older_rows += 1
     return report
+
+
+def _missing_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    return [column for column in MEMBERSHIP_COLUMNS[table] if column not in present]
+
+
+def read_membership(conn: sqlite3.Connection) -> Membership | None:
+    """Held / watched series from ``--db``, or ``None`` if neither table is there.
+
+    Raises ``LookupError`` when only one of the two tables is present or a
+    required column is missing: a half-known membership would silently put
+    held or watched series into ``other``.
+    """
+    present = {table: _table_exists(conn, table) for table in MEMBERSHIP_COLUMNS}
+    if not any(present.values()):
+        return None
+    absent = [table for table, found in present.items() if not found]
+    if absent:
+        raise LookupError(f"table {', '.join(absent)} is not in this database")
+    for table in MEMBERSHIP_COLUMNS:
+        missing = _missing_columns(conn, table)
+        if missing:
+            raise LookupError(f"table {table} has no column {', '.join(missing)}")
+    held = frozenset(
+        series_key(symbol, market)
+        for symbol, market in conn.execute(f"SELECT symbol, market FROM {POSITIONS_TABLE}")
+    )
+    watched = frozenset(
+        series_key(symbol, market)
+        for symbol, market in conn.execute(
+            f"SELECT symbol, market FROM {ALERT_RULES_TABLE} WHERE enabled = 1"
+        )
+    )
+    return Membership(held=held, watched=watched)
 
 
 def build_summary(db_path: Path) -> dict[str, Any]:
@@ -195,31 +384,57 @@ def build_summary(db_path: Path) -> dict[str, Any]:
     reports: list[TableReport] = []
     with closing(open_read_only(db_path)) as conn:
         for table, date_column, on_alert_path in KNOWN_TABLES:
+            # Placeholder first so the output keeps KNOWN_TABLES order.
+            tables[table] = {"present": False, "on_alert_path": on_alert_path}
             if not _table_exists(conn, table):
-                tables[table] = {"present": False, "on_alert_path": on_alert_path}
                 continue
-            report = scan_table(conn, table, date_column, on_alert_path=on_alert_path)
-            reports.append(report)
-            tables[table] = report.as_json()
-    if not reports:
-        names = ", ".join(table for table, _, _ in KNOWN_TABLES)
-        raise LookupError(f"none of the known daily-bar tables ({names}) is in this database")
-    alert_path_rows = sum(report.verdict_rows for report in reports if report.on_alert_path)
-    alert_path_present = any(report.on_alert_path for report in reports)
-    if not alert_path_present:
+            reports.append(scan_table(conn, table, date_column, on_alert_path=on_alert_path))
+        if not reports:
+            names = ", ".join(table for table, _, _ in KNOWN_TABLES)
+            raise LookupError(f"none of the known daily-bar tables ({names}) is in this database")
+        membership = read_membership(conn)
+    alert_path = [report for report in reports if report.on_alert_path]
+    if alert_path and membership is None:
+        raise LookupError(
+            f"{alert_path[0].table} is here but {POSITIONS_TABLE} and {ALERT_RULES_TABLE} "
+            "are not, so held / watched symbols cannot be told apart"
+        )
+    for report in reports:
+        tables[report.table] = report.as_json(membership)
+    alert_path_rows = sum(report.verdict_rows for report in alert_path)
+    escalating: int | None = None
+    escalation: str | None = None
+    if not alert_path or membership is None:
         verdict = "alert_path_table_absent"
-    elif alert_path_rows:
-        verdict = "found"
     else:
-        verdict = "none_found"
+        verdict = "found" if alert_path_rows else "none_found"
+        escalating = sum(report.held_or_watched_latest_bad(membership) for report in alert_path)
+        escalation = ESCALATE if escalating else NOT_BLOCKING
     return {
         "check": "F-3 nonpositive close in cached daily bars",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         # The file name only: a full path can carry a user name.
         "db_file_name": db_path.name,
         "verdict": verdict,
+        "escalation": escalation,
+        "held_or_watched_symbols_whose_latest_bar_is_bad": escalating,
+        "membership": (
+            None
+            if membership is None
+            else {"held_symbols": len(membership.held), "watched_symbols": len(membership.watched)}
+        ),
         "tables": tables,
     }
+
+
+def _split_text(body: dict[str, Any]) -> str:
+    text = f"{body['symbols']} symbol(s) / {body['rows']} row(s)"
+    if body["held"] is None:
+        return text + " (held / watched unknown)"
+    parts = ", ".join(
+        f"{name}={body[name]['symbols']}/{body[name]['rows']}" for name in MEMBERSHIP_GROUPS
+    )
+    return f"{text} [{parts}]"
 
 
 def _console_lines(summary: dict[str, Any]) -> list[str]:
@@ -230,19 +445,35 @@ def _console_lines(summary: dict[str, Any]) -> list[str]:
             continue
         lines.append(
             f"  {table}: {body['bad_rows_total']} bad row(s) "
-            f"(nonpositive={body['bad_rows']['nonpositive']}, null={body['bad_rows']['null']}) "
+            f"(nonpositive={body['bad_rows']['nonpositive']}, null={body['bad_rows']['null']}, "
+            f"nonfinite={body['bad_rows']['nonfinite']}) "
             f"across {body['affected_symbols']} symbol(s), "
             f"{body['symbols_whose_latest_cached_bar_is_bad']} with a bad latest bar; "
             f"dates {body['date_range']['first']} .. {body['date_range']['last']}; "
-            f"other unusable: {body['other_unusable_rows']}; "
+            f"unparseable (skipped by the app): {body['other_unusable_rows']['unparseable']}; "
             f"{'on' if body['on_alert_path'] else 'not on'} the alert path"
+        )
+        lines.append(f"    latest bar bad: {_split_text(body['latest_bar_bad'])}")
+        lines.append(f"    older bar bad:  {_split_text(body['older_bar_bad'])}")
+    escalation = summary["escalation"]
+    if escalation == ESCALATE:
+        lines.append(
+            "F-3 escalation: deploy_prerequisite -- "
+            f"{summary['held_or_watched_symbols_whose_latest_bar_is_bad']} 檔持有或監看標的的"
+            "最新 bar 為壞列（≥ 1）→ 升級部署前置，交 CEO 裁決。"
+        )
+    elif escalation == NOT_BLOCKING:
+        lines.append(
+            "F-3 escalation: next_release -- 持有或監看標的的最新 bar 壞列為 0"
+            "（只有較舊列、只有 other，或查無）→ 不擋部署，排下一 release。"
         )
     return lines
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="F-3: count cached daily bars whose close is <= 0 or NULL (read-only)."
+        description="F-3: count cached daily bars whose close is <= 0, NULL, NaN or "
+        "Infinity (read-only)."
     )
     parser.add_argument("--db", required=True, type=Path, help="SQLite file to inspect")
     parser.add_argument("--out", type=Path, help="write the JSON summary here (UTF-8)")
