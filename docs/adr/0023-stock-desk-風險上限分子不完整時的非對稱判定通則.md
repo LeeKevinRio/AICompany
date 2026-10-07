@@ -34,6 +34,7 @@
   - 快照：分支 `product/stock-desk`，HEAD `331d42d73461c3584d62526fe248109500bfc714`（tech-writer 讀取 `.git/refs/heads/product/stock-desk`）；tech-architect 6-a／6-b 評估所用 HEAD 為 `d91fa8f`，兩者不同，此為快照。
   - 編號說明：落檔時 `docs/adr/` 最後一份為 ADR-0022；ADR-0023 係依 6-a 任務單「ADR 安排」新開。
   - 字面：本檔**不收錄 W-a1、W-a2、W-b1、D-a3 與 6-a 方向子句處置的字面**（核可字面以風控審查檔為準）。**唯一例外**：(A) own>0 加碼降級句，依 coordinator 指示逐字收錄於 Consequences 殘留 1（與風控審查檔不一致時以審查檔為準）。
+  - 補段來源（2026-10-07，第三次落檔）：風控對 ADR-0022 PR 衝突 1 的裁定，來源為風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`（注意：與下列「風控審查檔」`上限分子不完整-非對稱判定` 為不同檔）檔尾「`/limits` 方向子句優先序更正與 W-6u（2026-10-07）」段。影響本 ADR 三處：Decision 8-1 第 6 點 `/limits` 列順序（Y 未定義改為第 1 點）、KD-5 `/limits`「Y 未定義」一格拆為「無 unknown」「有 unknown」兩格（R-6，6-b 範圍）、失效條件 F-11／F-12 指標（屬 ADR-0022）。**依風控裁定直接落檔，tech-architect 未另出補段**（coordinator 定案，CEO 可推翻）。本 ADR 狀態維持 proposed。ADR-0022 PR 的新增合併前提（W-6u 核可並落地）見 ADR-0022 Decision 1 補充。
   - 補段來源（2026-10-07，第二次落檔）：
     - tech-architect 補段：`work/reviews/2026-10-07-tech-architect-D-a3資料流-M段最終版-ADR-0022-0023補段.md`（讀碼基準 `product/stock-desk` HEAD `f25c90d`；coordinator 原文轉錄）——第一段→Decision 8-1；第二段→Decision 1 最後一點；第三段→Consequences 3。
     - 風控審查檔：第一段（核可字面總表、逐條意見、R-1～R-11、F-1～F-7、剩餘前提）、第二段（A. own>0 加碼降級；B. `/limits` mixed 群組）、第三段（A-降級句核可、RA-1～RA-7、F-9、ADR 狀態）、第四段（D-a3 資料流兩點補裁：R-IN-1／R-IN-2、F-10、RF-1～RF-6；2026-10-07，HEAD d66183e，coordinator 轉錄）。
@@ -193,7 +194,9 @@
    - `/limits` 的 D-P 判定需要「回報產業 Y」，Y 要到 `_aggregate` 之後才知道，所以 ADR-0022 PR 本來就必須在評估後才組 `/limits` notes。架構要求 ADR-0022 PR 就建立上述 finalizer，並讓兩個範圍都經過它。6-b 只加 `gross_exposure_status` 參數與 D-a3 常數，並調整 `api/advice.py` 的組裝順序。
 6. **優先序（只在原選 D-a 處替換；D-P／D-d1／D-d2 不動）**：
    - 決策卡：(1) `own_lots > 0` → D-d1／D-d2（刪除版）；(2) X 為 None 且 own=0 → 第 3 條 violated 用 D-a3，否則 D-a；(3) same 或 unknown > 0 → D-P；(4) 其餘 → 第 3 條 violated 用 D-a3，否則 D-a。
-   - `/limits`：(1) 帳本有任何 unknown，或回報產業 Y 有 same（依 ADR-0022 M-3／M-5）→ D-P；(2) 第 2 條無任何可比較產業（Y 未定義）→ 第 3 條 violated 用 D-a3，否則 D-a；(3) 其餘 → 第 3 條 violated 用 D-a3，否則 D-a。
+   - `/limits`（**2026-10-07 風控更正順序**，來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u」段；取代原 tech-architect 補段的順序；第一個符合的就用）：(1) Y 未定義，即第 2 條 comparable 為空、`reported_sector is None` → 第 3 條 violated 用 D-a3，否則 D-a；(2) 帳本有任何 unknown，或 Y 有 same（依 ADR-0022 M-3／M-5，mixed 群組的 categories 含 Y 也算）→ D-P，target 為「已納入比較的產業」；(3) 其餘 → 第 3 條 violated 用 D-a3，否則 D-a。
+     - 更正註記（2026-10-07，風控）：原順序為「(1) 有 unknown 或 Y 有 same → D-P；(2) Y 未定義 → D-a／D-a3；(3) 其餘」。原第 (2) 點置於 D-P 之後為筆誤（死條款），風控定性為更正自身優先序的筆誤；詳見 ADR-0022 Decision 5。
+     - D-a3 仍只在「原選 D-a」處替換（第 1、3 點）；D-P 不動（第 2 點）。
    - D-P、D-d1、D-d2 不因第 3 條 status 改變。第 3 條 violated 時，W-b1 已在該條 detail 揭露方向。
 7. **禁止重算**：book.py 不得接收 `RiskBudget`、不得讀 `max_gross_exposure`、不得 import 或呼叫 `_breaches`／`_check_gross_exposure`，也不得用 `gross_exposure_twd`、`net_worth.amount_twd` 計算任何比率。
 8. **不變式**：帳本不完整時，第 3 條 status 只能是 violated 或 not_evaluable（`limits.py:957-963` 由 6-b 拆出 violated 分支）。`_book_level_notes` 不對 passed 做特別處理；一旦出現 passed，即觸發 F-4 重審。
@@ -212,7 +215,7 @@
 - KD-2：`app/` 內讀 `BookContext.notes` 的次數為 0；兩個回應組裝點都經過 finalizer，並明示 `gross_exposure_status`。insufficient 分支明寫 `gross_exposure_status=None`，`None` 只准用在該分支（風控 R-IN-1，2026-10-07）。
 - KD-3：book.py 不出現 `RiskBudget`、`max_gross_exposure`、`_breaches`、`_check_gross_exposure`。
 - KD-4：第 3 條 status 的查找不帶預設值（不得有 `next(..., None)` 這類寫法）。
-- KD-5：R-5 負向測試範圍＝兩個範圍 × live／cache_only × 兩則 note 並存 × 優先序各分支（決策卡 a0、a、b、c、d1、d2；`/limits` 的 Y 未定義、Y 有 same、有 unknown、其餘）× 第 3 條 status（violated、not_evaluable 的各成因）。只有「原選 D-a 且 violated」得到 D-a3；D-P／D-d1／D-d2 分支在 violated 時逐字不變。**另加一格「insufficient 分支」（風控 R-IN-2，2026-10-07）**：斷言 D-a 逐位元組相同、不含 D-a3、回應無 `advice`／`limits_check`。
+- KD-5：R-5 負向測試範圍＝兩個範圍 × live／cache_only × 兩則 note 並存 × 優先序各分支（決策卡 a0、a、b、c、d1、d2；`/limits` 的 Y 未定義、Y 有 same、有 unknown、其餘）× 第 3 條 status（violated、not_evaluable 的各成因）。**（2026-10-07 風控 R-6，required；來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u」段：`/limits`「Y 未定義」一格拆成「無 unknown」與「有 unknown」兩格；兩格都只在原本會選 D-a 的情況下才可能換成 D-a3。這是 6-b 的範圍，現在先寫進 ADR。）** 只有「原選 D-a 且 violated」得到 D-a3；D-P／D-d1／D-d2 分支在 violated 時逐字不變。**另加一格「insufficient 分支」（風控 R-IN-2，2026-10-07）**：斷言 D-a 逐位元組相同、不含 D-a3、回應無 `advice`／`limits_check`。
 - KD-6：參數化測試證明帳本不完整時第 3 條 status 只有 violated 或 not_evaluable（淨值 None／過期／新鮮 × A/N 高於、低於門檻）。
 
 ### 9. 排程
@@ -411,7 +414,7 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 - 6-a 的「D 方案」（第 4 條改用全部股數）暫不採；日後採用須另案評估。
 - 任何修改 FR-9 (a-附加) 的風控裁定，須回頭核對 Decision 7。
 
-**失效條件增補 F-1～F-10（風控審查檔失效條件編號，逐字轉錄）**
+**失效條件增補 F-1～F-10（風控審查檔失效條件編號，逐字轉錄；F-11、F-12 屬 ADR-0022，指標列於本節末）**
 
 說明：本節 F-n 是風控審查檔的失效條件編號，與 F-1 任務單（組合估值防護）、Consequences 3 (f) 與 ADR-0022 失效條件 7 提到的 F-4（「已評估 {E} 條規則」「查看略過原因」）屬不同編號，勿混淆。R-1～R-11 見「風控裁定轉錄」節。
 
@@ -427,6 +430,9 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 - **F-8**（風控審查檔第三段「四、失效條件增補」，2026-10-07；屬 ADR-0022，已收於其「重審與失效條件」第 8 項）：`categories(G)` 改為包含非使用者填寫值（如系統推斷）、None 被算成一個類別、產業別改自由文字、或 `TWSE_SECTORS` 名稱或順序變動 → 重審 W-6m「所填產業別為」與排序。
 - **F-9**（風控審查檔第三段「四、失效條件增補」，2026-10-07）：6-a 的 own>0 判斷式或 engine 降級、擋下順序改變 → 重審 A-降級句顯示條件。
 - **F-10**（風控審查檔第四段，2026-10-07；併入 S-2 同類條件，觸發一項即重審 D-a 在本分支的使用）：(a) 前端、推播、匯出或任何畫面開始在 insufficient 狀態顯示 `context_notes`；(b) insufficient 分支開始評估上限或回傳任何第 3 條比率或判定（此時必須改傳實際 status，不得再用 `None`）；(c) `None` 被用在 insufficient 分支以外。
+- **F-11、F-12**（2026-10-07，風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u」段「失效條件增補」；**屬 ADR-0022，已逐字收於其「重審與失效條件」第 9、10 項，本 ADR 只列指標、不重抄**）：
+  - **F-11**：重審 `/limits` 優先序第 1 點（Y 未定義 → D-a／D-a3，見 Decision 8-1 第 6 點）與 D-P 的 `/limits` target；觸發條件見 ADR-0022 失效條件 9。
+  - **F-12**：重審 W-6u 的顯示條件與 `SECTOR_UNVALUED_EXCLUSION_SUFFIX` 的適用範圍；觸發條件見 ADR-0022 失效條件 10。
 
 ## 交接
 
