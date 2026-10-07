@@ -46,7 +46,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -79,6 +79,15 @@ LIMIT_IDS: tuple[str, ...] = (
     "per_trade_loss",
     "kelly_fraction",
 )
+
+#: The caps that read the snapshot's price or ATR (``ctx.close`` / ``ctx.atr``),
+#: i.e. the only caps a missing FX conversion can leave ``not_evaluable``. The
+#: alert engine appends the FX failure sentence to an all-unevaluated skip only
+#: when one of these is among the watched caps, so the sentence is never given
+#: as the cause for a cap that does not use the price. Pinned against
+#: :func:`evaluate_limits` by ``tests/test_advice_limits.py``: dropping the
+#: price and ATR from a context may change the status of these caps only.
+PRICE_INPUT_LIMIT_IDS: Final[frozenset[str]] = frozenset({"per_trade_loss"})
 
 LIMIT_NAMES: dict[str, str] = {
     "single_position_weight": "單一標的佔比上限",

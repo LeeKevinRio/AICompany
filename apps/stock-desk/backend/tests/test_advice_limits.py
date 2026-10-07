@@ -6,7 +6,7 @@ import ast
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -29,6 +29,7 @@ from app.advice.limits import (
     NO_SECTOR_UNSUPPORTED_MARKET_CAUSE_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_DETAIL,
     NO_SECTOR_UNSUPPORTED_MARKET_RESIDUAL_RISK_DETAIL,
+    PRICE_INPUT_LIMIT_IDS,
     RANGE_ACTION_LABELS,
     SECTOR_MIXED_DETAIL,
     KellyInputs,
@@ -146,6 +147,61 @@ def test_every_limit_is_reported_once_in_order() -> None:
     assert [check.id for check in checks] == list(LIMIT_IDS)
     assert [check.index for check in checks] == [1, 2, 3, 4, 5]
     assert [check.name for check in checks] == [LIMIT_NAMES[i] for i in LIMIT_IDS]
+
+
+# The contexts the drift test below withdraws the price and ATR from: every cap
+# evaluable, the held-shares fallback through the price, a candidate, a breach,
+# and a foreign-currency rate.
+_PRICED_CONTEXTS = [
+    pytest.param({}, id="full"),
+    pytest.param(
+        {"kelly": kelly_inputs(), "sector": "半導體業", "sector_market_value_twd": 80_000.0},
+        id="kelly-and-sector",
+    ),
+    pytest.param({"quantity": None}, id="shares-from-market-value"),
+    pytest.param(
+        {"position_market_value_twd": 0.0, "position_cost_twd": 0.0, "quantity": 0.0},
+        id="candidate",
+    ),
+    pytest.param(
+        {
+            "position_market_value_twd": 300_000.0,
+            "quantity": 3_000.0,
+            "kelly": kelly_inputs(0.4, 1.0),
+            "sector": "半導體業",
+            "sector_market_value_twd": 400_000.0,
+        },
+        id="breaching",
+    ),
+    pytest.param({"fx_to_twd": 31.5, "close": 3.0, "atr": 0.1}, id="foreign-rate"),
+]
+
+
+def _price_dependent_ids(overrides: dict[str, Any], budget: RiskBudget) -> set[str]:
+    """Caps whose status changes when ``close`` and ``atr`` are withdrawn."""
+    priced = _ctx(**overrides)
+    unpriced = priced.model_copy(update={"close": None, "atr": None})
+    before = {check.id: check.status for check in evaluate_limits(budget, priced)}
+    after = {check.id: check.status for check in evaluate_limits(budget, unpriced)}
+    return {limit_id for limit_id in LIMIT_IDS if before[limit_id] != after[limit_id]}
+
+
+@pytest.mark.parametrize("budget", [BUDGET, RiskBudget(max_loss_per_trade=0.001)])
+@pytest.mark.parametrize("overrides", _PRICED_CONTEXTS)
+def test_only_the_price_input_caps_depend_on_the_price_or_atr(
+    overrides: dict[str, Any], budget: RiskBudget
+) -> None:
+    # The alert engine names a failed FX conversion as the cause of an
+    # unevaluable cap only for these ids; a cap that starts reading the price
+    # or ATR without joining the set would lose that sentence (task 2026-10-07 K-4).
+    assert _price_dependent_ids(overrides, budget) <= PRICE_INPUT_LIMIT_IDS
+
+
+def test_every_price_input_cap_does_depend_on_the_price_or_atr() -> None:
+    # The other direction, so the set cannot quietly grow past what reads a price.
+    overrides = [cast(dict[str, Any], param.values[0]) for param in _PRICED_CONTEXTS]
+    changed = set().union(*(_price_dependent_ids(each, BUDGET) for each in overrides))
+    assert changed == PRICE_INPUT_LIMIT_IDS
 
 
 # --- 1. Single position weight ----------------------------------------------

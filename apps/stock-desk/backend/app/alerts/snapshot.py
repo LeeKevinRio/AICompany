@@ -55,8 +55,11 @@ def build_snapshot(
     card's in the first place (ADR-0020).
 
     A missing market adapter, an unavailable provider or an empty bar list all
-    produce a thin snapshot with ``reason`` set, which the engine turns into a
-    *skipped* rule rather than a silent non-firing one.
+    produce a thin snapshot with ``reason`` set and no ``limits``, which the
+    engine turns into a *skipped* rule rather than a silent non-firing one:
+    ``reason`` is what a price or signal rule shows; a risk-limit rule has no
+    caps to read and shows its own fixed sentence. ``reason`` is never the tail
+    of a risk-limit skip (see ``price_cap_cause`` below).
 
     A latest bar whose close is unusable (zero, negative or non-finite -- the
     one definition is :func:`app.alerts.engine.usable_price`) produces an
@@ -71,8 +74,11 @@ def build_snapshot(
     ``fx_provider`` is what makes the price-based caps evaluable for a non-TWD
     holding. Without it (or without a usable rate) those caps stay
     ``not_evaluable``; a snapshot has no notes list, so the sentence naming the
-    missing conversion is appended to ``reason``, which the engine shows on the
-    resulting **skip**.
+    missing conversion travels on ``price_cap_cause`` -- that sentence alone,
+    never the data layer's note or an applied-rate note -- which the engine
+    appends to a risk-limit **skip** only when a watched cap that reads the
+    price or ATR is among the unevaluated ones and the close itself is usable.
+    ``reason`` still ends with the same sentence; its composition is unchanged.
 
     ``net_worth`` is what makes the gross-exposure cap evaluable at all, so a
     ``risk_limit_breach`` rule watching it can only fire once the user has
@@ -147,6 +153,9 @@ def build_snapshot(
         limits=evaluate_limits(budget, book.context),
         as_of=latest.date.isoformat(),
         reason=_joined_reason(data_reason, book.fx_note),
+        # Only a *failed* conversion is a cause: ``fx_note`` on an applied rate
+        # is the methodology sentence, and on a mixed-currency holding it is None.
+        price_cap_cause=book.fx_note if book.fx_rate is None else None,
         fx_disclosure=fx_disclosure,
         # Layer note included (風控 R4-a): a crossing judged on a cached bar must
         # say so where the user reads it, not only on the badge the push lacks.

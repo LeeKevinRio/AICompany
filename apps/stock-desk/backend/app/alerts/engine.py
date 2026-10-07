@@ -32,7 +32,7 @@ from typing import Any
 
 from app.advice.context import build_context, describe_field
 from app.advice.engine import COMPARISON_OPS
-from app.advice.limits import LimitCheck, PortfolioContext
+from app.advice.limits import PRICE_INPUT_LIMIT_IDS, LimitCheck, PortfolioContext
 from app.alerts.models import (
     AlertEvent,
     AlertRule,
@@ -75,9 +75,20 @@ class SymbolSnapshot:
     limits: Sequence[LimitCheck] = ()
     as_of: str | None = None
     #: Why the snapshot is thin, when it is (data status, missing adapter, ...).
-    #: Only ever read on a rule that is **skipped**; a fired rule's message does
-    #: not include it, which is why the disclosure below has its own field.
+    #: Only ever read on a price or signal rule that is **skipped**; a fired
+    #: rule's message does not include it, which is why the disclosure below has
+    #: its own field. A risk-limit skip does not read it either: it is a join of
+    #: unrelated notes (data layer, applied rate), most of which are not why a
+    #: cap was unevaluable -- that skip reads ``price_cap_cause`` instead.
     reason: str | None = None
+    #: The sentence naming a failed FX conversion -- no quote, no usable rate,
+    #: or a quote for the wrong pair -- and nothing else: ``None`` when the rate
+    #: was applied, when none was needed (TWD), or when the holding spans more
+    #: than one currency. A failed conversion withholds the price and the ATR
+    #: from the caps, so this is the cause of an unevaluable cap that reads them
+    #: (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`) and only of those; the
+    #: risk-limit skip appends it under exactly that condition.
+    price_cap_cause: str | None = None
     #: The FX source's standing disclosure (ADR-0005 F-4), set only when a rate
     #: was actually applied to build ``limits``. The risk-cap message quotes
     #: TWD-converted figures, so this sentence has to travel with the *fired*
@@ -275,13 +286,10 @@ def _limit_outcome(
         # is not_evaluable must not read as a passing cap.
         if all(check.status == "not_evaluable" for check in watched):
             names = "、".join(check.name for check in watched)
-            # ``reason`` usually says *why* the inputs are missing (no FX rate,
-            # a degraded data layer); "缺少輸入" alone would leave the reader to
-            # guess which of them it was. Not always: when the close is present
-            # but unusable (A′), the price and ATR were withheld for that, and
-            # ``reason`` only holds whatever unrelated note the data layer or
-            # the FX lookup added -- or nothing.
-            cause = f" {snapshot.reason}" if snapshot.reason else ""
+            # "缺少輸入" alone leaves the reader to guess between "no price" and
+            # "no FX conversion", so a failed conversion is named -- but only
+            # where it is the cause; see :func:`_limit_cause` for the two gates.
+            cause = _limit_cause(snapshot, watched)
             return f"監看的上限（{names}）缺少輸入，無法判定是否違反。{cause}"
         unevaluated = [check for check in watched if check.status == "not_evaluable"]
         passed = [check for check in watched if check.status == "passed"]
@@ -311,6 +319,31 @@ def _limit_outcome(
         "violated_count": float(len(violated)),
     }
     return True, message, observed
+
+
+def _limit_cause(snapshot: SymbolSnapshot, watched: Sequence[LimitCheck]) -> str:
+    """The tail of an all-unevaluated risk-limit skip: ``" " + cause`` or ``""``.
+
+    The only cause ever appended is a failed FX conversion
+    (``price_cap_cause``), and only past two gates:
+
+    * A′ -- the close is present but unusable (the same :func:`usable_close` the
+      price and signal paths use). The price and ATR were then withheld for the
+      close, not for the FX lookup, so no FX sentence may stand as the cause.
+    * Scope -- at least one watched, unevaluable cap reads the price or ATR
+      (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`). A missing conversion
+      is not why the other caps could not be evaluated.
+
+    ``snapshot.reason`` is never read here: the data layer's note and an
+    applied-rate note are not causes of an unevaluable cap.
+    """
+    if snapshot.close is not None and usable_close(snapshot) is None:
+        return ""
+    if not any(
+        check.status == "not_evaluable" and check.id in PRICE_INPUT_LIMIT_IDS for check in watched
+    ):
+        return ""
+    return f" {snapshot.price_cap_cause}" if snapshot.price_cap_cause else ""
 
 
 def _in_cooldown(

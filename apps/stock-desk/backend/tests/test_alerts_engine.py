@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -9,8 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from app.advice.book import FX_APPLIED_NOTE
-from app.advice.limits import LIMIT_IDS, LIMIT_NAMES, LimitCheck, LimitStatus
+from app.advice.book import FX_APPLIED_NOTE, FX_UNAVAILABLE_NOTE
+from app.advice.limits import (
+    LIMIT_IDS,
+    LIMIT_NAMES,
+    PRICE_INPUT_LIMIT_IDS,
+    LimitCheck,
+    LimitStatus,
+)
 from app.alerts import engine as engine_module
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.store import AlertStore
@@ -315,21 +322,6 @@ def test_the_fx_disclosure_does_not_introduce_action_wording(store: AlertStore) 
     assert not any(word in result.events[0].message for word in banned)
 
 
-def test_an_unevaluable_cap_says_why_the_inputs_were_missing(store: AlertStore) -> None:
-    # "缺少輸入" on its own leaves the reader guessing between "no price" and
-    # "no FX conversion"; the snapshot already knows which, so the skip says it.
-    add_rule(store, limit_rule(limit_id="gross_exposure"))
-    result = evaluate_alerts(
-        store,
-        _loader(snapshot(context=breaching_context(), reason="無法取得匯率換算（USDTWD）。")),
-        now=_NOW,
-    )
-    assert _statuses(result) == ["skipped"]
-    reason = result.outcomes[0].reason or ""
-    assert "無法判定是否違反" in reason
-    assert "無法取得匯率換算" in reason
-
-
 def test_no_limits_at_all_is_a_skip(store: AlertStore) -> None:
     add_rule(store, limit_rule())
     result = evaluate_alerts(store, _loader(snapshot()), now=_NOW)
@@ -501,9 +493,9 @@ def test_a_rule_on_one_named_cap_never_reads_the_unevaluated_caps_wording(
     assert _S_B2_MARKER not in (outcome.reason or "")
     if limit_id in unevaluated:
         assert outcome.status == "skipped"
-        assert outcome.reason == (
-            f"監看的上限（{LIMIT_NAMES[limit_id]}）缺少輸入，無法判定是否違反。 {_SENTINEL_REASON}"
-        )
+        # No tail: ``reason`` (an applied-rate sentinel here) is not a cause,
+        # and the snapshot carries no failed conversion.
+        assert outcome.reason == _unevaluable_skip(LIMIT_NAMES[limit_id])
     else:
         assert outcome.status == "quiet"
         assert outcome.reason is None
@@ -537,9 +529,13 @@ def test_every_cap_unevaluated_is_still_the_existing_skip(store: AlertStore) -> 
 
     assert _statuses(result) == ["skipped"]
     names = "、".join(LIMIT_NAMES[i] for i in LIMIT_IDS)
-    assert result.outcomes[0].reason == (
-        f"監看的上限（{names}）缺少輸入，無法判定是否違反。 {_SENTINEL_REASON}"
-    )
+    # The main sentence alone: the applied-rate ``reason`` is no longer appended.
+    assert result.outcomes[0].reason == _unevaluable_skip(names)
+
+    # With a failed conversion, ``any`` watches per_trade_loss, so it is named.
+    failed = replace(snap, price_cap_cause=_FX_FAILURE)
+    again = evaluate_alerts(store, _loader(failed), now=_NOW)
+    assert again.outcomes[0].reason == f"{_unevaluable_skip(names)} {_FX_FAILURE}"
 
 
 def test_the_unevaluated_caps_reason_writes_no_event_and_ignores_the_cooldown(
@@ -579,6 +575,113 @@ def test_price_and_signal_rules_stay_quiet_without_a_reason(store: AlertStore) -
         now=_NOW,
     )
     assert [(o.status, o.reason) for o in result.outcomes] == [("quiet", None), ("quiet", None)]
+
+
+# --- risk_limit, every watched cap unevaluated: which cause may follow ---------
+#
+# 2026-10-07 任務單「risk_limit 全部 not_evaluable 時 skipped 句尾只接匯率失敗成因」,
+# 方案 (A): the tail is ``price_cap_cause`` (a failed FX conversion) or nothing,
+# behind an A′ gate and a scope gate; ``snapshot.reason`` is never the tail.
+
+# A real failure sentence (the book's own constant), so nothing here is new wording.
+_FX_FAILURE = FX_UNAVAILABLE_NOTE.format(
+    currency="USD", pair="USDTWD", status="unavailable", source="fake_fx", as_of="未知"
+)
+
+
+def _unevaluable_skip(names: str) -> str:
+    """The existing main sentence of an all-unevaluated skip, verbatim."""
+    return f"監看的上限（{names}）缺少輸入，無法判定是否違反。"
+
+
+def test_an_unevaluable_price_cap_names_the_failed_conversion(store: AlertStore) -> None:
+    # "缺少輸入" on its own leaves the reader guessing between "no price" and
+    # "no FX conversion"; when the conversion failed and the cap reads the price
+    # or ATR, the skip says so -- and nothing from ``reason`` comes with it.
+    add_rule(store, limit_rule(limit_id="per_trade_loss"))
+    snap = snapshot(
+        context=breaching_context(),  # no ATR: per_trade_loss is not_evaluable
+        reason=f"{_SENTINEL_DATA} {_FX_FAILURE}",
+        price_cap_cause=_FX_FAILURE,
+    )
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == f"{_unevaluable_skip('單筆最大可承受虧損')} {_FX_FAILURE}"
+    assert _SENTINEL_DATA not in (result.outcomes[0].reason or "")
+
+
+@pytest.mark.parametrize(
+    "limit_id", [limit_id for limit_id in LIMIT_IDS if limit_id not in PRICE_INPUT_LIMIT_IDS]
+)
+def test_a_failed_conversion_is_not_given_as_the_cause_of_a_cap_without_a_price(
+    store: AlertStore, limit_id: str
+) -> None:
+    # Scope gate: a missing rate is not why these caps could not be evaluated.
+    add_rule(store, limit_rule(limit_id=limit_id))
+    snap = _caps_snapshot(dict.fromkeys(LIMIT_IDS, "not_evaluable"))
+    snap = replace(snap, price_cap_cause=_FX_FAILURE)
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == _unevaluable_skip(LIMIT_NAMES[limit_id])
+
+
+@pytest.mark.parametrize("close", [0.0, -1.0, float("nan")])
+@pytest.mark.parametrize("limit_id", ["per_trade_loss", "any"])
+def test_an_unusable_close_keeps_the_fx_sentence_off_a_risk_limit_skip(
+    store: AlertStore, close: float, limit_id: str
+) -> None:
+    # A′ gate (風控 R-B1): the price and ATR were withheld for the close, so a
+    # failed conversion on the same snapshot is not the cause.
+    add_rule(store, limit_rule(limit_id=limit_id))
+    snap = _caps_snapshot(dict.fromkeys(LIMIT_IDS, "not_evaluable"))
+    snap = replace(snap, close=close, price_cap_cause=_FX_FAILURE)
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    watched = [LIMIT_NAMES[i] for i in LIMIT_IDS if limit_id in ("any", i)]
+    assert _statuses(result) == ["skipped"]
+    assert result.outcomes[0].reason == _unevaluable_skip("、".join(watched))
+
+
+def test_a_missing_close_does_not_trip_the_unusable_close_gate(store: AlertStore) -> None:
+    # A′ is "present but unusable"; ``close=None`` is not A′, so the scope gate
+    # alone decides.
+    add_rule(store, limit_rule(limit_id="per_trade_loss"))
+    snap = replace(
+        _caps_snapshot(dict.fromkeys(LIMIT_IDS, "not_evaluable")),
+        close=None,
+        price_cap_cause=_FX_FAILURE,
+    )
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    assert result.outcomes[0].reason == f"{_unevaluable_skip('單筆最大可承受虧損')} {_FX_FAILURE}"
+
+
+def test_a_risk_limit_skip_does_not_quote_the_snapshots_reason(store: AlertStore) -> None:
+    # ``reason`` holds the data layer's note and, on an applied rate, the rate
+    # used -- neither is why a cap was unevaluable (both were once appended here).
+    add_rule(store, limit_rule(limit_id="per_trade_loss"))
+    snap = snapshot(context=breaching_context(), reason=f"{_SENTINEL_DATA} {_SENTINEL_REASON}")
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    assert result.outcomes[0].reason == _unevaluable_skip("單筆最大可承受虧損")
+
+
+def test_the_engine_names_no_cap_and_reads_no_book_note() -> None:
+    # K-4 / K-5: the scope comes from ``PRICE_INPUT_LIMIT_IDS`` and the cause
+    # from a field; the engine neither spells a cap id nor matches note text.
+    tree = ast.parse(Path(engine_module.__file__).read_text(encoding="utf-8"))
+    imported = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert not any(module.startswith("app.advice.book") for module in imported)
+    literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert not literals & set(LIMIT_IDS)
 
 
 # --- Scheduling behaviour ----------------------------------------------------

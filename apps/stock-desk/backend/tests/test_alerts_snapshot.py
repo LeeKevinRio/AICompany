@@ -2,10 +2,11 @@
 
 A snapshot has no notes list, so the question these tests pin down is whether a
 missing or degraded conversion still reaches the reader -- a missing one through
-``reason`` (which the engine shows on a skip), an applied one through
-``fx_disclosure`` (which the engine puts in the message a fired alert sends) --
-instead of quietly turning every price-based cap into ``not_evaluable``, or
-quoting a converted figure with no stated provenance.
+``price_cap_cause`` (which the engine appends to a risk-limit skip, and only
+where the conversion is the cause; ``reason`` still carries it as well), an
+applied one through ``fx_disclosure`` (which the engine puts in the message a
+fired alert sends) -- instead of quietly turning every price-based cap into
+``not_evaluable``, or quoting a converted figure with no stated provenance.
 
 The last two tests deliberately run the whole chain (snapshot -> engine ->
 ``AlertEvent.message``): a disclosure that stops anywhere short of the message
@@ -22,7 +23,13 @@ from typing import Any
 
 import pytest
 
-from app.advice.limits import RiskBudget, SelfReportedNetWorth
+from app.advice.book import (
+    FX_APPLIED_NOTE,
+    FX_PAIR_MISMATCH_NOTE,
+    FX_UNAVAILABLE_NOTE,
+    NO_FX_QUOTE_NOTE,
+)
+from app.advice.limits import LIMIT_IDS, LIMIT_NAMES, RiskBudget, SelfReportedNetWorth
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
 from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
@@ -389,7 +396,10 @@ def _good_symbol_rules() -> list[dict[str, Any]]:
 
 
 def _loader_for(
-    service: FakePriceService, positions: PositionStore
+    service: FakePriceService,
+    positions: PositionStore,
+    *,
+    fx_provider: FxRateProvider | None = None,
 ) -> Callable[[str, Market], SymbolSnapshot]:
     valuator = PositionValuator(
         market_services={"TW": service}, fx_provider=UnavailableFxProvider()
@@ -403,6 +413,7 @@ def _loader_for(
             store=positions,
             valuator=valuator,
             budget=RiskBudget(),
+            fx_provider=fx_provider,
             net_worth=reported_net_worth(10_000_000.0),
         )
 
@@ -590,3 +601,257 @@ def test_a_held_symbol_with_a_negative_close_is_caught_by_the_engine(
     assert outcomes[price.id].status == "skipped"
     assert outcomes[price.id].reason == NO_CLOSE_REASON
     assert outcomes[good.id].status == "fired"
+
+
+# --- risk_limit, every watched cap unevaluated: only a failed conversion follows
+#
+# 2026-10-07 任務單「risk_limit 全部 not_evaluable 時 skipped 句尾只接匯率失敗成因」,
+# 方案 (A). Through the real snapshot builder, because the defect was the join
+# ``build_snapshot`` makes: the skip used to end with all of ``reason`` (layer
+# note, data-layer sentence, applied-rate note), most of which is no cause.
+
+SPLICED = "這段日線資料由多個來源拼接（finmind、twse），每筆保留原本的來源；..."
+CACHED_LAYER_NOTE = "資料來自 cached_stale 層（finmind）。"
+
+#: The three failure sentences as ``build_book_context`` formats them for a USD
+#: holding in each set-up below: ``(bar currency, fx provider, sentence)``.
+FX_FAILURES = [
+    pytest.param(
+        "USD",
+        UnavailableFxProvider(),
+        FX_UNAVAILABLE_NOTE.format(
+            currency="USD",
+            pair="USDTWD",
+            status="unavailable",
+            source=UnavailableFxProvider.source_id,
+            as_of="未知",
+        ),
+        id="no-usable-rate",
+    ),
+    # Bars in TWD resolve no quote at all, but the holding needs USDTWD.
+    pytest.param("TWD", StubFxProvider(), NO_FX_QUOTE_NOTE.format(currency="USD"), id="no-quote"),
+    pytest.param(
+        "JPY",
+        StubFxProvider(),
+        FX_PAIR_MISMATCH_NOTE.format(currency="USD", expected="USDTWD", pair="JPYTWD"),
+        id="pair-mismatch",
+    ),
+]
+
+NON_PRICE_LIMIT_IDS = [
+    "kelly_fraction",
+    "sector_weight",
+    "gross_exposure",
+    "single_position_weight",
+]
+
+
+def _unevaluable_skip(limit_id: str) -> str:
+    """The existing main sentence of an all-unevaluated skip, verbatim."""
+    ids = LIMIT_IDS if limit_id == "any" else (limit_id,)
+    names = "、".join(LIMIT_NAMES[i] for i in ids)
+    return f"監看的上限（{names}）缺少輸入，無法判定是否違反。"
+
+
+def _degraded_service(bar_currency: str) -> FakePriceService:
+    """Usable bars served from a stale cache, with the data layer's own sentence."""
+    service = _price_service(bar_currency)
+    service.status = DataStatus.CACHED_STALE
+    service.source = "finmind"
+    service.reason = SPLICED
+    return service
+
+
+def _plain_loader(
+    service: FakePriceService, positions: PositionStore, fx_provider: FxRateProvider | None
+) -> Callable[[str, Market], SymbolSnapshot]:
+    """No net worth, no Kelly pair, and a valuator that cannot convert USD -- so
+    every cap of a USD holding is unevaluable whatever the snapshot's own rate."""
+    valuator = PositionValuator(
+        market_services={"TW": service}, fx_provider=UnavailableFxProvider()
+    )
+
+    def load(symbol: str, market: Market) -> SymbolSnapshot:
+        return build_snapshot(
+            symbol,
+            market,
+            resolver={"TW": service},
+            store=positions,
+            valuator=valuator,
+            budget=RiskBudget(),
+            fx_provider=fx_provider,
+        )
+
+    return load
+
+
+def _limit_reason(
+    alerts: AlertStore, load: Callable[[str, Market], SymbolSnapshot], limit_id: str
+) -> str | None:
+    rule = add_rule(alerts, limit_rule(limit_id=limit_id))
+    result = evaluate_alerts(alerts, load, now=datetime(2026, 10, 7, 6, 0, tzinfo=UTC))
+    [outcome] = [o for o in result.outcomes if o.rule_id == rule.id]
+    assert outcome.status == "skipped"
+    return outcome.reason
+
+
+@pytest.mark.parametrize("limit_id", ["per_trade_loss", "any"])
+@pytest.mark.parametrize(("bar_currency", "fx_provider", "failure"), FX_FAILURES)
+def test_a_failed_conversion_is_the_only_tail_of_a_price_cap_skip(
+    store: PositionStore,
+    tmp_path: Path,
+    bar_currency: str,
+    fx_provider: FxRateProvider,
+    failure: str,
+    limit_id: str,
+) -> None:
+    """驗收 1: the failure sentence verbatim, and nothing of the layer note or the
+    data layer's sentence that ``reason`` also carries."""
+    _hold(store, "USD")
+    load = _plain_loader(_degraded_service(bar_currency), store, fx_provider)
+    snap = load("2330", "TW")
+    # Preconditions: a usable close, every cap unevaluated, and the joined
+    # ``reason`` exactly as before (K-2) -- it still holds all three parts.
+    assert snap.close is not None and snap.close > 0
+    assert {check.status for check in snap.limits} == {"not_evaluable"}
+    assert snap.reason == f"{CACHED_LAYER_NOTE} {SPLICED} {failure}"
+    assert snap.price_cap_cause == failure
+
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+
+    assert reason == f"{_unevaluable_skip(limit_id)} {failure}"
+    assert "資料來自" not in (reason or "")
+    assert SPLICED not in (reason or "")
+
+
+@pytest.mark.parametrize("limit_id", ["per_trade_loss", "any"])
+def test_an_applied_rate_is_not_given_as_the_cause_of_a_skip(
+    store: PositionStore, tmp_path: Path, limit_id: str
+) -> None:
+    """驗收 2 (a): the snapshot's own rate was applied (the valuator's was not,
+    so the caps are still unevaluable); its sentence is no cause, nor the layer's."""
+    _hold(store, "USD")
+    load = _plain_loader(_degraded_service("USD"), store, StubFxProvider())
+    snap = load("2330", "TW")
+    assert {check.status for check in snap.limits} == {"not_evaluable"}
+    assert snap.price_cap_cause is None
+    applied_head = FX_APPLIED_NOTE.split("{", 1)[0]
+    assert applied_head in (snap.reason or "")  # precondition: there is one to leak
+
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+
+    assert reason == _unevaluable_skip(limit_id)
+    for unwanted in (applied_head, "換算為台幣", "資料來自", SPLICED):
+        assert unwanted not in (reason or "")
+
+
+@pytest.mark.parametrize(
+    "degrade",
+    [
+        pytest.param(_cached_layer, id="cached-layer"),
+        pytest.param(_data_layer_sentence, id="data-layer-sentence"),
+    ],
+)
+def test_a_twd_symbol_skip_quotes_no_data_layer_note(
+    store: PositionStore, tmp_path: Path, degrade: Callable[[FakePriceService], None]
+) -> None:
+    """驗收 2 (b): no holdings, so no equity and every cap is unevaluable; the
+    cache or splice sentence in ``reason`` is not why."""
+    service = _price_service("TWD")
+    degrade(service)
+    load = _plain_loader(service, store, None)
+    snap = load("2330", "TW")
+    assert {check.status for check in snap.limits} == {"not_evaluable"}
+    assert snap.reason and snap.price_cap_cause is None
+
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, "any")
+
+    assert reason == _unevaluable_skip("any")
+    assert "資料來自" not in (reason or "")
+    assert SPLICED not in (reason or "")
+
+
+@pytest.mark.parametrize("limit_id", NON_PRICE_LIMIT_IDS)
+@pytest.mark.parametrize(("bar_currency", "fx_provider", "failure"), FX_FAILURES)
+def test_a_failed_conversion_is_not_the_cause_of_a_cap_that_reads_no_price(
+    store: PositionStore,
+    tmp_path: Path,
+    bar_currency: str,
+    fx_provider: FxRateProvider,
+    failure: str,
+    limit_id: str,
+) -> None:
+    """驗收 2 (c): the scope gate -- these caps were not left out for the rate."""
+    _hold(store, "USD")
+    load = _plain_loader(_degraded_service(bar_currency), store, fx_provider)
+    assert load("2330", "TW").price_cap_cause == failure
+
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+
+    assert reason == _unevaluable_skip(limit_id)
+    for unwanted in ("無法取得匯率換算", "匯率", "資料來自", SPLICED):
+        assert unwanted not in (reason or "")
+
+
+def test_a_holding_in_two_currencies_has_no_price_cap_cause(store: PositionStore) -> None:
+    # K-1: no single rate applies, and ``book.fx_note`` is None for that case.
+    _hold(store, "USD")
+    _hold(store, "TWD")
+    snap = _snapshot(store, currency="USD", fx_provider=UnavailableFxProvider())
+    assert snap.price_cap_cause is None
+
+
+@pytest.mark.parametrize(
+    ("currency", "fx_provider"),
+    [
+        pytest.param("TWD", None, id="twd"),
+        pytest.param("TWD", StubFxProvider(), id="twd-with-provider"),
+        pytest.param("USD", StubFxProvider(), id="usd-applied"),
+    ],
+)
+def test_no_conversion_needed_or_one_applied_carries_no_price_cap_cause(
+    store: PositionStore, currency: str, fx_provider: FxRateProvider | None
+) -> None:
+    # K-1: only a *failed* conversion is a cause; FX_APPLIED_NOTE never is.
+    _hold(store, currency)
+    assert _snapshot(store, currency=currency, fx_provider=fx_provider).price_cap_cause is None
+
+
+def _fx_case(service: FakePriceService, fx: str) -> FxRateProvider | None:
+    """Re-seed the unusable symbol for one currency set-up; the provider to use."""
+    if fx == "twd":
+        return None
+    _foreign_currency(service)
+    return StubFxProvider() if fx == "applied" else None
+
+
+@pytest.mark.parametrize("fx", ["twd", "applied", "failed"])
+@pytest.mark.parametrize("cached", [False, True], ids=["fresh", "cached"])
+@pytest.mark.parametrize("bad_close", UNUSABLE_LATEST_CLOSES)
+def test_an_unusable_close_keeps_every_cause_off_a_risk_limit_skip(
+    store: PositionStore, tmp_path: Path, bad_close: float, cached: bool, fx: str
+) -> None:
+    """驗收 3: on A′ the price and ATR were withheld for the close, so neither a
+    failed conversion nor any other note follows the main sentence; the other
+    rule types and the S-B2 quiet read exactly as before."""
+    _hold_symbol(store, GOOD)
+    service = _two_symbol_service(bad_close)
+    if cached:
+        _cached_layer(service)
+    fx_provider = _fx_case(service, fx)
+    load = _loader_for(service, store, fx_provider=fx_provider)
+    snap = load(BAD, "TW")
+    assert snap.close == bad_close
+    # Preconditions: the failed case does carry a cause for the gate to hold back.
+    assert (snap.price_cap_cause is not None) == (fx == "failed")
+
+    alerts = AlertStore(db_path=tmp_path / "alerts.db")
+    ids = {name: add_rule(alerts, payload).id for name, payload in _bad_symbol_rules().items()}
+    result = evaluate_alerts(alerts, load, now=datetime(2026, 10, 7, 6, 0, tzinfo=UTC))
+    outcomes = {outcome.rule_id: (outcome.status, outcome.reason) for outcome in result.outcomes}
+
+    assert outcomes[ids["per_trade_loss"]] == ("skipped", _unevaluable_skip("per_trade_loss"))
+    assert outcomes[ids["price"]] == ("skipped", NO_CLOSE_REASON)
+    assert outcomes[ids["signal"]] == ("skipped", NO_SIGNALS_REASON)
+    assert outcomes[ids["any_limit"]] == ("quiet", ANY_LIMIT_QUIET_REASON)
+    assert result.events == []
