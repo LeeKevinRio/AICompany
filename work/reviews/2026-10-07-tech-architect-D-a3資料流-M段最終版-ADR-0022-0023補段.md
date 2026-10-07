@@ -2,7 +2,7 @@
 
 - 角色：tech-architect（唯讀）；讀碼基準 `product/stock-desk` HEAD f25c90d；coordinator 原文轉錄，未改內容。
 - 用途：tech-writer 落檔 ADR-0022／ADR-0023 的依據（第一段→ADR-0023 Decision 8-1；第二段→ADR-0023 Decision 1 改寫；第三段→ADR-0023 Consequences 3；第四段→ADR-0022 Decision 1 補充段）。
-- **注意**：第四段 M-4「固定排序（實作以 `sorted()` 對產業名稱字串排序）」已被風控同日第三段裁定取代：排序鍵為 `TWSE_SECTORS` 索引（不在表內者排最後再依字碼），W-6m 字面已核可修正版，「W-6m 字面未核可前不得合併」條件已滿足；tech-writer 落檔時以 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第三段為準。
+- **注意**：第四段 M-4「固定排序（實作以 `sorted()` 對產業名稱字串排序）」已被風控同日第三段裁定取代：排序鍵為 `TWSE_SECTORS` 索引（不在表內者排最後再依字碼），W-6m 字面已核可修正版，「W-6m 字面未核可前不得合併」條件已滿足，但合併仍需第三段第五節完整條件（RM-1～RM-5 落地、排序鍵寫入 ADR、B(1) required、qa 無 BLOCKING_ISSUES 含 Codex 註明、CI 綠燈）；「對實作的約束」第 4 點同此取代；tech-writer 落檔時以 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第三段為準。
 - 「建議送風控確認的兩點」（insufficient_data 分支維持 D-a；fixture 補 `book_fully_valued=True`）由 coordinator 另送風控，結果補在檔尾。
 
 ---
@@ -237,3 +237,8 @@ ADR-0022 不用補文。ADR-0023 Decision 1 的最後一點仍寫「待 tech-arc
   - /home/user/AICompany/apps/stock-desk/backend/tests/alerts_helpers.py
   - /home/user/AICompany/apps/stock-desk/backend/tests/test_alerts_engine.py
 - 補充：dispatch 單（`work/dispatch/2026-10-07-任務單-產業上限對同產業未估值持股的判定與揭露.md` L126-136）只轉錄了 M 段的摘要，沒有前次全文。第四段是依該摘要加上風控裁定重寫的完整版。
+
+---
+
+## 風控對「建議送風控確認的兩點」的裁定（2026-10-07，coordinator 補記）
+兩點皆 APPROVE 附條件：(1) insufficient_data 分支維持 D-a → accept，加 R-IN-1／R-IN-2 與失效條件 F-10；(2) alerts fixture 補 `book_fully_valued=True` → accept（屬 fixture 原意修正），須同時滿足 RF-1～RF-6，否則單項核對改判 VETO。全文見 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第四段。
