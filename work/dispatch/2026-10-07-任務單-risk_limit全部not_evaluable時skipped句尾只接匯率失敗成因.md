@@ -50,3 +50,11 @@ R-B1 原則（已知成因為他事時不讓 reason 句尾冒充成因、回既�
 3. 本單後 `FX_APPLIED_NOTE` 在 reason 幾乎無讀者且 A′ 時為不實陳述；可另案自 reason 移除（同步改 `test_alerts_snapshot.py:203-211`、送風控）。
 4. snapshot `fx_provider` 與 valuator 匯率來源是否同一來源（scheduler／API 接線），請 dev-lead 確認。
 5. F-4 若把 skipped 原因拉進 UI，本單字面隨失效條件重審。
+
+---
+
+## 進度（coordinator 轉錄）
+- **2026-10-07 落地 commit（本 commit 之後一筆）**：dev-lead 依 (A) 收斂版實作，K-1～K-8 自檢全符合；519 passed、全套 4496 passed、ruff／format／mypy 綠；四組突變皆被測試擋下。列管 4 已確認 snapshot 與 valuator 的 fx_provider 同為 `deps._default_fx_provider()` 單例。
+- **qa-reviewer PASS**（無 BLOCKING）。low：AST import 檢查漏 `from app.advice import book` 寫法（建議併入 alias）；AST 字面檢查為 best-effort；測試註解含中文編號引用（有先例，建議改英文）。
+- **風控單項核對 APPROVE**：落地符合方向；代價（valuator 匯率失敗使第 1 條 not_evaluable 時匯率提示消失）接受——原提示「價格與 ATR 相關的上限不計算」對第 1 條本是錯誤成因，主句仍誠實且 skipped 不被讀成 passed；API 可見字面變動放行（主句不變、句尾值域三個既有核可失敗句或空白）。suggested：per_trade_loss 且 valuator 亦失敗時匯率句非唯一成因（併 (D)）；`test_alerts_snapshot.py` docstring L11「last two tests」描述漂移順手修。失效條件錨點 7 項：`PRICE_INPUT_LIMIT_IDS` 變動或任何上限開始／停止讀價格（以 `test_advice_limits.py` L189-204 為錨）；`snapshot.py:158` 賦值條件改變或欄位可被設成三常數以外；三失敗常數字面變動（特別是拿掉自我限定範圍）；主句變動／重讀 reason／拿掉任一閘門／A′ 不用共用 usable_close；skipped reason 進 UI 或推播；(D) 落地取代；S-B2 quiet 被附加句尾。
+- 狀態：**done**（審查通過）。列管 1～5 照舊；(D) 併風控 S-B2 列管 2 與本次 suggested。
