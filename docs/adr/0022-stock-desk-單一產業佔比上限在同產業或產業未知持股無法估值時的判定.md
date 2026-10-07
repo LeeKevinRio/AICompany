@@ -7,6 +7,7 @@
   - 補段落檔（2026-10-07，第二次）：`/limits` 彙總對 mixed 群組的規則（原待補項）已由 tech-architect 寫明、風控裁定，收於 Decision 1 補充段（M-1～M-5）。**W-6m**（M-4 新增字面）已於 2026-10-07 經風控逐字核可修正版（風控審查檔 `work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md` 第三段，下稱「風控第三段」），並依 coordinator 指示收錄於 Decision 1 補充段的「W-6m 字面表」（W-6m 為本 ADR 不收錄字面原則的第二個例外；與風控審查檔不一致時以審查檔為準）。W-6m 的 PR 合併前提見 M-4。
   - 補段落檔（2026-10-07，第三次）：風控對 ADR-0022 PR 衝突 1 的裁定——`/limits` 方向子句優先序更正（Decision 5）、表二 g、M-4 第三點拆分與新字面 **W-6u**（Decision 1 補充）、失效條件 F-11／F-12、驗收摘要。來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「`/limits` 方向子句優先序更正與 W-6u（2026-10-07，風控對 ADR-0022 PR 衝突 1 的裁定，coordinator 轉錄）」段。**依風控裁定直接落檔，tech-architect 未另出補段**（coordinator 定案，CEO 可推翻；理由：裁定文本已逐條指明改法，且風控已讀碼確認「Y 有定義 ⇔ comparable 非空」）。W-6u 列入本 ADR 的 PR 合併前提（見 Decision 1 補充 M-4 與 W-6u 小節；字面核可狀態見下一行）。
   - **W-6u 已核可（2026-10-07）**：risk-compliance-officer 對 W-6u 逐字審，採替代案 W-6u-B（主案否決）；來源：風控審查檔 `work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md` 檔尾「W-6u 逐字審（2026-10-07，risk-compliance-officer 唯讀裁定，coordinator 轉錄）」段。核可字面收錄於 Decision 1 補充「W-6u」小節（W-6u 為本 ADR 不收錄字面原則的第三個例外，沿用 W-6m 先例；與風控審查檔不一致時以審查檔為準）。合併前提改為 **RU-1～RU-8 落地且 qa-reviewer 無 BLOCKING_ISSUES**。本 ADR 狀態維持 proposed。
+  - 2026-10-07 PR 實作完成待 commit；e2e 第二十五輪待排（**RM-5 為合併前提**，依風控審查檔第三段第五節；RU-9 的 W-6u 整句渲染為風控單項核對列的 qa-e2e 抽驗項，coordinator 先前誤稱合併前提，此處更正）。qa-reviewer 第一輪審查原文見 `work/reviews/2026-10-07-ADR-0022-PR-qa審查.md`。
 - 日期：2026-10-07（tech-architect 評估與風控路線裁定日；本次整理與補段落檔同日）
 - 決策者：tech-architect（路線 C′ 評估；6-c 評估）；risk-compliance-officer（路線裁定：APPROVE 附條件；W1～W7 逐字審；6-c 與 F-1b 裁定）；CEO 為最終負責人（若對裁定有異議）。
 - 適用範圍：僅 product/stock-desk 產品線。
@@ -113,6 +114,12 @@
    - `book.py` 仍為純函式（ADR-0005 決策五第 1 點、F-1 約束）。
    - 此欄位結構於本 ADR 的 PR 一次建好，ADR-0023 的 6-a 只讀不改 `build_book_context`。
 2. **新欄位退路（未設定時）：**`book_fully_valued is True` 視為無重疊；否則視為「**產業未知**」。**不猜「同產業」，也不猜「無重疊」**。（6-a 對第 1、4、5 條另有自己的退路，見 ADR-0023。）
+   - **2026-10-07 落地補充**（來源：任務單檔尾「ADR-0022 PR 實作進度與兩個衝突」段 dev-lead 自決點，與「ADR-0022 PR 風控落地單項核對」段風控追認；qa-reviewer 亦建議補註於本 Decision；以下為轉錄，tech-writer 未對 code 驗證）：
+     - `PortfolioContext.unvalued` 為 None 且 `book_fully_valued is not True` → 視為「產業未知」（fail-safe，即上述既有規定，無變更）。
+     - **`PortfolioContext.valued_unclassified_lots` 為 None → 視為「沒有已估值的未分類持股」（非保守方向）。**
+       - 理由：只有手刻 context 會為 None；若改採保守讀法，會改變既有 `test_advice_limits` 的 `notional_caps` 預期（任務單所述為該檔 L1386），違反 K-4「既有測試零修改」。正式路徑（決策卡、`/limits`、警示 snapshot）皆由 builder 設值，並以 spy 測試釘住（K-5；風控所述測試位置為 `tests/test_adr0022_sector_unvalued.py:881-942`）。
+       - 決議紀錄：dev-lead 自決、coordinator 接受、**風控追認附條件**（條件為失效條件 F-13，見「重審與失效條件」）。此為非保守退路，與上述 `unvalued` 的保守退路方向相反，兩者不可混讀。
+     - 未估值判準為 `valuation.status != "ok"`，與 notes 計數一致，四類加總不變式成立（Decision 1）。`_position_rollup` 另把「status 為 ok 但 `market_value_twd` 為 None」也算 skipped；兩者實務上相等但定義不同（qa low：summary 層應保證 status 為 ok 時 `market_value_twd` 不為 None；風控列為請 qa 以 diff 或實跑補驗項，所述位置為 `book.py:607-609` 與 `:678`，以原文定位）。
 3. **`_check_sector_weight` 分支：**
    - **X 為 None（sector_gap）**：`NO_SECTOR_DETAILS[gap]` 分支**排在 C′ 之前**；本標的自身批次**不得計入 same**（否則 `own_lots > 0` 會讓 C′ 把 `NO_SECTOR_DETAILS` 蓋成 W1）。來源：tech-architect 三問評估第 3 點；風控審查檔 d0。
    - same（`own_lots + same_sector_lots`）> 0：算出值 ≥ 上限 → **violated**，detail 附 W2；否則 → **not_evaluable**，detail 附 W1，`observed` 為 None，`threshold` 照舊。
@@ -453,6 +460,13 @@ K-1～K-10 來源為任務單「實作約束 1～10」，依序對應，風控 r
 
 QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375／1280）。
 
+**2026-10-07 PR 驗收結果與實作形狀（轉錄）**
+
+- qa-reviewer 2026-10-07：**PASS**，無 BLOCKING_ISSUES；Codex 第二意見**未執行**，環境不可用（來源：`work/reviews/2026-10-07-ADR-0022-PR-qa審查.md`）。
+- 風控單項核對 2026-10-07：**APPROVE 附條件**（HEAD 1265c28 工作樹＝staged），條件 RC-1（D-d1／D-d2 進三份禁詞掃描）、RC-2（D-d1／D-d2 渲染結果以審查檔字面獨立算 sha256 釘住）；兩項**已補**（RC-1／RC-2 已補一事來源為 coordinator 指示；風控審查段原文為「合併前補、qa 確認即可」，tech-writer 未核對測試碼）。追認 `valued_unclassified_lots is None` 的解讀，附失效條件 F-13。來源：任務單檔尾「ADR-0022 PR 風控落地單項核對」段。
+- finalizer 形狀：`book_notes(book, *, sector_comparison=None)`。**先不收 `gross_exposure_status`**，6-b 再加（`gross_exposure_status` 只加參數屬 ADR-0023 Decision 8-1 第 5 點「6-b 只加參數」；現在收卻只准 None 會違反 R-IN-1）。**R-IN-1 屬 6-b**。來源：任務單「ADR-0022 PR 實作進度與兩個衝突」段 dev-lead 回報；R-IN-1 的內容本檔未收錄，見 ADR-0023 與風控審查檔。
+- 仍待：qa-e2e 第二十五輪（RM-5：`/limits` 三產業 W-6m 排除理由於 375／1280 不得截斷；RU-9 為 W-6u 於 0050 情境的整句渲染）；風控列請 qa 以 diff 補驗之四項（舊 `UNVALUED_POSITIONS_NOTE` 的 sha256、既有測試未改、`alerts/engine.py`／frontend／`RiskBudget`／`LIMIT_NAMES` 不在 diff、summary 層 ok 時市值非 None）是否已完成，來源未載，待查證（向 qa-reviewer 要）。
+
 ---
 
 ## 重審與失效條件
@@ -477,6 +491,7 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
     - `NO_CANDIDATE_DETAIL` 字面改變。
     - （2026-10-07 增補，來源：風控審查檔「W-6u 逐字審」段「失效條件」，沿用 F-12 增補兩點，逐字）第 2 條在 compared 為空時改成會產生任何比率或判定，例如加上帳本層級的備援計算。這時「無法確認…是否超過上限」會變成假句。這點和 F-11 第一點同時觸發。
     - （同上，逐字）「產業別資料」的來源或 `sector_categories` 的定義改變。例如系統自動帶入交易所產業別、空白字串改算成有值，或 W-6u 被接到 `SYMBOL_UNVALUED_NOTE` 以外的 reason 後面（那時就不再有筆數陳述）。
+11. **F-13**（2026-10-07 增補；來源：任務單檔尾「ADR-0022 PR 風控落地單項核對」段「風控追認（附條件）」，風控追認 `valued_unclassified_lots is None` 視為「沒有已估值的未分類持股」所附條件，逐字）：任何會呈現給使用者或用於試算的路徑，產生 `valued_unclassified_lots is None` 的 context → 重審。（追認前提：正式路徑皆已被 K-5 測試釘住會設定此欄位。背景見 Decision 2 落地補充。）
 
 其他：
 
