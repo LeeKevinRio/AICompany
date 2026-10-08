@@ -71,6 +71,12 @@ ADR-0023 Decision 8-1 finalizer 原則延伸到匯率揭露尾段，加 ADR-0011
 - **須風控逐格確認的新組合**：(α) 卡片上 W 前面無任何匯率句（E1b 新輸出；W 以「此處」指涉後一句，無懸空上下方指涉）；(β) 候選或全未估值的卡上無匯率句（分母其他持倉換算屬 O-3 已接受殘留；原 R2-4 靠 (A′) 帶進的 V 在 S=F 時一併消失）；(γ) 一致帳本、只有第 1 條違反的推播多出 W（已核可形式 `{details} W {來源句}`，但頻率變高；第二十八輪 B-3 推播「一致帳本無 W」期望會變；卡片端在第 4 條有評估時不變）。
 - 同一標的卡片（S=T）與推播（S=F）可能附不同組合，各自對自己的數字屬實（比照 RK4-E1b-2）。
 
+> **〔2026-10-08 加註（tech-writer 轉錄；上列逐格表與各段原文不動）〕**（B 類，來源：風控 `work/reviews/2026-10-08-PR-RK4c清單外失敗裁定-RK4c-R13～R18-風控.md` RK4c-R15，commit cb453f4；tech-architect 勘誤見 RK-4 任務單 `work/dispatch/2026-10-08-任務單-RK-4-匯率已換算卻無來源句的缺漏型揭露.md` 檔尾「tech-architect 對 PR-RK4c 清單外失敗的確認與規格勘誤」段。tech-writer 未讀後端 code 驗證，commit 雜湊依任務指示、未以 git 驗證。）
+>
+> 1. **候選列更正（RK4c-R15）**：上表「候選（未持有）」列「正式路徑」欄原寫「可達（需 ATR 缺且無區間）」，更正為：「可達：空帳本或全未估值帳本的候選，不論 ATR 有無；帳本非空的候選需 ATR 缺且無區間（否則第 4 條以 0 股算出 passed，S=T）」。
+> 2. **S=F 成因完整列舉（tech-architect 勘誤 1）**：S=F ≡ 第 4 條 not_evaluable 且無建議股數區間；第 4 條 not_evaluable 的成因完整列舉為：(i) ATR 缺；(ii) 總資產為 None 或 ≤ 0（空帳本或帳本全未估值）；(iii) `held_shares` 為 None；(iv) ATR 為 0；(v) 自身有未估值批次使判定被扣住（ADR-0023 own-unvalued）。候選列正式路徑依上一點（風控 RK4c-R15）更正。
+> 3. **R4c-4 勘誤（tech-architect 勘誤 2）**：第三節 R4c-4 原寫「`with_disclosures` 用既有 if／elif 鏈零修改」，改為「**語意零修改**」——第三支改讀共用結果 `valuation_disclosures`（為滿足「(B) 只求值一次」），輸出完全等價；依據為 `_valuation_disclosures`、`_valued_rates`、`_converted_by_valuator`、`_valuation_converted` 皆純函式（無 log、無 I/O）；mutation 8 仍可偵測。原文兩條字面互相衝突，屬規格寫錯。
+
 ## 五、S-E1b
 
 修正後 AN 出現條件為 applied ∧ priced ∧ S。ATR 缺時只剩「有區間」卡片格出現 AN：「價格」屬實（區間經 `price_twd`），「ATR」不精確（同卡第 4 條明示「缺少 ATR(14)」），同格 BR「依序對應價格與 ATR 的換算」同。E1b 原格（hold、無區間）AN 不再出現。推播 AN 永不進 fired 訊息。建議 (s-i) 列 low 殘留接受；(s-ii) 要修須 AN 與 BR 各一個「不含 ATR」變體字面，creative-lead 起草、風控逐字審、重跑 RK2／W4 掃描。
