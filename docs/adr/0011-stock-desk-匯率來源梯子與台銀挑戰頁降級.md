@@ -117,6 +117,12 @@ CEO 本機於 2026-09-19 執行 `scripts/verify_market_data.py`，發現台灣�
   「匯率取自 Yahoo Finance 的每日收盤價（非台灣銀行官方牌告），為本次台灣銀行來源不可用時的備援；其口徑與台銀即期中價不同，換算結果可能與官方牌告有落差。該端點未公開文件化，幣別代號（如 TWD=X）與欄位格式均未經本環境線上查證（verified=false）。」
 - 挑戰頁 `reason` 固定文案 APPROVE。事實查核結果：`FxRateResult.reason` 目前**只到 `scripts/verify_market_data.py` 報表**，`resolve_fx_quote` 只取 `source_note`、`FxQuote` 無 `reason` 欄位；使用者可見的揭露因此只有上述定稿句（其「為本次台灣銀行來源不可用時的備援」半句承擔「不可用的是台銀、顯示的是備援」的銜接）。把 `reason` 串到 `FxQuote`／前端徽章列為列管（見下）。
 - 條件：(1) 備援生效不需新 UI 元件，但 `status=BACKUP` 徽章必現，且定稿句與台銀句同位置、同樣式、同字級，不得摺進 tooltip、不得只在部分端點出現；(2) 不得把 yfinance 匯率與台銀牌告並列比較或呈現「差異很小」等安撫語，除非落差量化觀測完成；(3) 長期停留備援時需定期回報台銀恢復狀態，不得讓臨時備援成為無人複核的常態；(4) `source="none"` 不得套 `GENERIC_SOURCE_NOTE`（已改為空字串）。
+  - 〔2026-10-08 交叉註記（F-1b，commit 7fc90b2）；上列條件 (4) 原文保留，不改動任何既有條文；本註記不改變本 ADR 狀態（仍為 proposed），且不構成新的決策條文；下文 ADR-0011 第 3 次修訂仍為提議、待 CEO 核可，與本註記無關〕（B 類轉錄，tech-writer）：
+    - **同向推廣**：F-1b（commit 7fc90b2）之後，估值器（`apps/stock-desk/backend/app/portfolio/valuation.py` 的 `_no_fx_rate`）產出的 `FxInfo` 只要 `data_status == UNAVAILABLE`，`source_note` 一律為空字串 `""`，**不論 `source` 是哪個 rung**。這是條件 (4)（`source="none"` 不得套 `GENERIC_SOURCE_NOTE`）的同向推廣：沒有被採用的匯率，就不附來源方法論句。依據為風控 F1b-R10。
+    - **`source` 仍保留真實 id**，供追溯；`reason` 照傳，`as_of=None`、`data_status=UNAVAILABLE` 不變。成功分支（匯率被採用）的 `source_note` 不變，仍依來源附方法論句。
+    - **涵蓋範圍**：`_no_fx_rate` 為估值器 `_lookup_fx` 唯一產生 UNAVAILABLE 的點，涵蓋 (a) provider 回 UNAVAILABLE、(b) 來源回傳的匯率日期全晚於查詢日、(c) 最新匯率非有限正值（`usable_rate` 不通過）三種情形。其中 (b) 為 F-1b 之前即存在的分支，過去徽章會顯示實際來源的方法論句，現在一併為空；(a) 在正式 ladder 下 `source == "none"`，行為逐位元組不變。
+    - **ADR 處置**：tech-architect 判定**不需修訂本 ADR 本文**，此為交叉註記。
+    - **來源與版本**：F-1b 任務單 `work/dispatch/2026-10-07-任務單-F-1b-匯率非正值的估值防護.md`「D3 修訂（2026-10-08，tech-architect 核可修訂）」與「F-1b 實作紀錄」（commit 7fc90b2，coordinator 2026-10-08）；風控短審 `work/reviews/2026-10-08-F-1b-短審-F1b-R10R11落地.md`（APPROVE WITH CONDITIONS，suggested 項請 tech-writer 於本處補交叉註記）。tech-writer 未讀後端 code 驗證，`_no_fx_rate`、`FxInfo` 的行為敘述為任務單與風控審查檔所述。
 
 ### 條件 (1) 在總覽頁的落實（qa 2026-09-19 blocking → 已補）
 
