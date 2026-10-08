@@ -125,6 +125,15 @@ qa 指出 `GET /api/portfolio/summary` 的估值（`PositionValuator._lookup_fx`
 - `PortfolioSummary.fx_disclosures: list[str]`：本次實際用到的匯率來源揭露句去重；
 - 前端：持倉表非 TWD 部位加匯率狀態徽章（沿用既有「備援源」字面），總覽卡「匯率貢獻」下常駐列出 `fx_disclosures`。
 
+〔2026-10-08 加註（RK-4）；上列原文保留。狀態：風控 2026-10-08 附條件 APPROVE，實作待 PR-RK4a／PR-RK4b 落地；本 ADR 狀態仍為 proposed，以下不構成已生效的條文〕
+
+- **事實更正（上列「常駐列出」一句）**：`fx_disclosures` 現況收在總覽「匯率貢獻」卡內的 `<details>`（摘要字面為「詳細說明與依據」，`apps/stock-desk/frontend/app/components/SummaryCards.tsx:124-133`；字面常數 `apps/stock-desk/frontend/app/lib/oneLinerWording.ts:12`；tech-writer 2026-10-08 讀過，快照為 2026-10-08 工作樹）。這是 CEO 2026-09-19 第二次裁定把揭露收進 `<details>` 的結果（`SummaryCards.tsx:45-49` 註解），需要點開才看得到。
+- **卡片與警示的揭露新條件（PR-RK4a，提議的第 2 次修訂，取代 RK-2 評估 R2-3 的「套用分支」閘門；內容的 ok 篩選與集合規則沿用 R2-4、RK2-R1）**：決策卡 `context_notes` 與警示 `fx_disclosure` 的匯率來源方法論句，改為在 (A′)（套用分支、note 非空、且 `context.close` 非 None）或 (B)（對應持倉至少一筆 ok 且 fx 非 None、非 UNAVAILABLE、note 非空）成立時出現；內容依序去重 [(A′) 句, 全帳 ok 同 pair 的 fx_now 句]。(A′) 不成立而 (B) 成立時，另附歸屬句 W-RK4-1（字面待 creative-lead 起草、風控逐字審，核可前不得出貨）。這補上原本「已換算卻無來源句」的缺漏（2a：估值器成功、報價失敗；混雜幣別格），並使「O-1 格」（收盤價不可用卻附報價來源句）結案。完整條文見 X-3 任務單 KX-10 段「精確條件第 2 次修訂」。
+- **`/limits`（PR-RK4b，(L-ii)）**：tech-architect 查證 `/limits` 原本完全沒有任何匯率來源句（`book_limits.py` 的 notes 只來自整本帳層級的 context，各標的 context 的揭露被丟掉；風控自行補讀確認），因此條件 (1)「不得只在部分端點出現」在 `/limits` 上原本不成立。提議的做法：來源集合分兩組、依序各自去重——第一組為實際進入比較的候選標的中 (A′) 成立的報價句，第二組為全帳 ok 持倉的 fx_now 句（總資產與總曝險乘了這些匯率）；銜接句與 W-RK4-1 的出現條件見 RK4-R5。純 TWD 帳本的回應逐位元組不變，前端零 diff。第一組有兩個以上不同來源的組態不得出貨，退回風控裁定。
+- **O-3 為明示接受的殘留**：TWD 計價標的的比率（第 1、3 條），分母（總資產）含 USD 換算，卡上與警示**不附來源句**，只能在總覽匯率貢獻卡的「詳細說明與依據」內找到；該處是另一次查詢的結果，不一定是該則推播或該張卡實際用的來源。這與 2026-09-19 風控條件 (1)「不得摺疊、不得只在部分端點出現」有張力：**風控對 2026-09-19 條件 (1)「不得摺疊」的異議紀錄保留**，風控以三點理由附條件接受（O-3 只影響分母；若改為整本帳任一外幣持倉就附句的 (ii-b) 風險更高，已 VETO；「備援匯率」徽章常駐）。**由 CEO 知悉 X-11 承擔**；X-11 措辭須寫明「收在總覽匯率貢獻卡的『詳細說明與依據』內、需要點開、而且是另一次查詢」（RK4-R6）。截至本加註，tech-writer 所讀檔案中尚無 CEO 對 X-11 的書面知悉紀錄（X-11 待 creative-lead 起草）。重審觸發：總覽的揭露或「備援匯率」徽章被移除、再降級，或改成 hover-only。
+- **`fx_disclosures` 新定義（RK-5，提議，待 RK-5 落地；PR-RK5a／5b 尚未合併）**：ok 持倉（估值狀態為 ok）的 [fx_now 句, fx_open 句] 依序去重；任一 ok 持倉的 fx_now 與 fx_open 的 source id 不同（混源）時，在最後附 W-RK5-1（字面待 creative-lead 起草、風控逐字審，核可前 PR-RK5b 不得出貨聯集）。現行定義（上列「本次實際用到的匯率來源揭露句去重」）在 PR-RK5a／5b 落地前以原文為準；PR-RK5a 先把未估值持倉排除（O-5），尚不聯集 fx_open。相關的 ADR-0015 加註見該檔 D-4、D-8、C-22、C-24、W-4 下的 2026-10-08（RK-4／RK-5）加註（均為提議，待 CEO 核可）。
+- 來源與版本：風控 2026-10-08 裁定（`work/reviews/2026-10-08-RK-4-RK-5-風控裁定附條件APPROVE與X-10核對.md`：RK4-R1、RK4-R4、RK4-R5、RK4-R6、RK5-R2、第 5、6 項）；tech-architect 2026-10-08 評估（`work/reviews/2026-10-08-tech-architect-RK-4-RK-5-缺漏型揭露與fx_open來源評估.md`：RK-4「決策草案」、RK-5「決策」與 R5-3、R5-8）；RK-4／RK-5 任務單。除第一點的前端行號為 tech-writer 親讀外，其餘為 B 類轉錄，tech-writer 未重新讀後端 code 驗證。
+
 ### 列管
 
 - `FxRateResult.reason` → `FxQuote.reason`／`FxInfo.reason` → 前端匯率徽章旁原因句（需前端型別與風控字面審）。

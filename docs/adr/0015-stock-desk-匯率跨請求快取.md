@@ -172,6 +172,11 @@
 
 - 舊值退回的選列規則：取區間內所有來源的列中日期最大者；同日以 origin=fresh 優先，再以 `fetched_at` 較新者優先。
 - `as_of` 是匯率資料實際取得的時間；`staleness_minutes` 由此計算。
+- 〔2026-10-08 加註（RK-5 N-3／R5-10／RK5-R5）：**提議（待 CEO 核可），尚未生效**；上列 D-4 條文在 CEO 核可前仍以原文為準〕提議在本節補一條：「快取命中」與「舊值退回」兩列，`FxRateResult.source` 應為**該列原本的 source id**，並以測試釘住。
+  - 缺口：本節原文只寫了 `status`、`is_within_ttl`、`origin_status`、`rates`、`reason`，沒有寫明這兩種情境下 `source` 的值（tech-architect 新發現 N-3）。
+  - 理由（風控引述）：source id 失真會讓 RK2-R2 的 72 字銜接句與 W-RK5-1 出現假的「混用」陳述，或讓 `GENERIC_SOURCE_NOTE` 歸錯來源。
+  - 風控預先否決紀錄（轉述大意，非逐字）：W11-5 若缺 N-3（本節未寫明 source 值），不論 CEO 是否核可 C-24 的 RK-5 前置條件，風控預先否決出貨。本加註自身在 CEO 核可前不是已生效的條文；風控的否決立場以其裁定檔為準。
+  - 來源與版本：tech-architect 2026-10-08 RK-4／RK-5 評估 N-3、R5-10（`work/reviews/2026-10-08-tech-architect-RK-4-RK-5-缺漏型揭露與fx_open來源評估.md`）；風控 2026-10-08 裁定 RK5-R5、「本次結論」RK-5 段與「否決理由」（`work/reviews/2026-10-08-RK-4-RK-5-風控裁定附條件APPROVE與X-10核對.md`）。tech-writer 未讀快取層 code（`app/data/fx_*.py` 依 RK-2 評估當時不存在）。
 
 **D-5 失敗冷卻**
 - `last_attempt_at > last_success_at`（或從未成功）且在 `FX_FAILURE_COOLDOWN` 內時，不打梯子，直接走舊值退回或回不可用。
@@ -197,6 +202,10 @@
 - `FxQuote`（advice／alerts）本 ADR 不擴欄位：ADR-0011 列管項維持。但 `FX_APPLIED_NOTE` 會出現
   「資料狀態 cached_stale」字面（book.py:197-200），列為風控審查點 W-6。
 - 〔2026-10-08 加註（RK-2）〕本節「共用同一個包了快取的 provider」不等於估值與風險卡（snapshot 報價）兩條路徑讀到同一個匯率，見附錄「與 ADR-0011 梯子的邊界」列下的同日加註。經查本節沒有出現「包在同一處才能維持兩條路徑讀到同一個匯率」這句，該句僅見於附錄該列；tech-architect 的加註草案把它歸在 D-8，此處以實際位置為準並在此留指引。（來源：`work/reviews/2026-10-08-tech-architect-RK-2-估值器與snapshot匯率來源一致性評估.md`「決策」段加註草案；風控重審 RK2-R9。）
+- 〔2026-10-08 加註（RK-5 R5-10）：**提議（待 CEO 核可），尚未生效**；上列 D-8 條文在 CEO 核可前仍以原文為準〕提議：本節「`_lookup_fx` 把 `is_within_ttl` 與 `origin_status` 傳進 `FxInfo`」的傳遞，同樣適用 RK-5 新增的 `Valuation.fx_open`。
+  - 背景：RK-5 採方案 (a)，`Valuation` 新增與 `fx` 並列的 `fx_open: FxInfo | None`，`FxInfo` 本身零 diff；fx_open 也由同一個 `_lookup_fx` 產生，所以 D-8 的 `origin_status`／`is_within_ttl` 會自動帶上；對應的 C-15 測試只需加一列 fx_open。RK-5 **不併入**本節的實作工作（併入會被 W-1～W-8 與 C-24 卡住），而是在 W11-5 之前獨立落地（PR-RK5a），資料形狀與本節對齊。
+  - 狀態：`fx_open` 尚未落地（PR-RK5a 未合併，屬 tech-architect 評估的計畫）。
+  - 來源與版本：tech-architect 2026-10-08 RK-5 評估「決策」、R5-1、R5-10、「與 ADR-0015 D-8 的關係與時機」；風控 2026-10-08 RK5-R9 要求 tech-writer 依 R5-10 加註。
 
 **D-9 前端**
 - `PositionFx` 型別加上 `origin_status`。
@@ -345,6 +354,12 @@
   - 判斷只讀 `data_status`、`is_within_ttl`、`origin_status`。前端原始碼不得出現 `"yfinance_fx"`、`"bank_of_taiwan"` 字面（grep），也不得用 `source` 推論。
   - `origin_status` 為 null 或 fresh 時，既有測試不改斷言就要通過（`fxStatusBadge.test.ts:58-60` 等）。唯一允許修改的是字彙 regex（`fxStatusBadge.test.ts:120-125`），改成容許兩個徽章並存，且須依 W-5 核可的呈現方式修改。W-5 核可前不得出貨並存呈現（比照 C-21）。
   - `valuation.py:162-166` 與 `FxStatusBadge.tsx:44-46` 兩段「FX 資料層沒有快取」的程式註解，接線後會變成不實，須同批改寫。
+  - 〔2026-10-08 加註（RK-5 N-1／N-2／R5-10／RK5-R3／RK5-R4）：**提議（待 CEO 核可），尚未生效**；上列 C-22 條文在 CEO 核可前仍以原文為準〕提議把 C-22 的範圍擴及首頁（總覽）「備援匯率」徽章的判斷 helper（RK-5 PR-RK5c 要把 `page.tsx:62-64` 的判斷抽成純函式）：
+    - helper 須加上 `origin_status === "backup"` 的分支（N-2），並**與 W11-5 放在同一個 PR**；表格驅動測試比照上表：總覽 helper 也要有「`cached_stale`／`is_within_ttl: true`／`origin_status: backup` → 有徽章」這一列（與 `FxStatusBadge` 相同）。
+    - 缺口（N-2，危險方向）：原判斷只比對 `data_status === "backup"`，接線後快取命中（`cached_stale` 加 origin backup）時徽章會**消失**，備援揭露會在使用者面前消失。C-22 原文只涵蓋 `FxStatusBadge`，沒有涵蓋這個總覽徽章。
+    - PR-RK5c 的徽章規則（RK5-R3，風控已核可語意變更，字面不變）：任一 **ok** 持倉的 `fx` 或 `fx_open` 是 backup，或（W11-5 時）`origin_status === "backup"`；語意從「任一部位」改成「任一已估值部位」。
+    - 風控預先否決紀錄（轉述大意，非逐字）：W11-5 若缺 N-2（快取命中徽章消失），不論 CEO 是否核可 C-24 的 RK-5 前置條件，風控預先否決出貨。本加註自身在 CEO 核可前不是已生效的條文。
+    - 來源與版本：tech-architect 2026-10-08 RK-4／RK-5 評估 N-1、N-2、R5-9、R5-10；風控 2026-10-08 裁定 RK5-R3、RK5-R4、「否決理由」。tech-writer 2026-10-08 親讀 `apps/stock-desk/frontend/app/page.tsx:62-64`：現況判斷為 `summary.data.positions.some((position) => position.valuation.fx?.data_status === "backup")`，只看 `fx.data_status`，不看 `origin_status`，也不看 `fx_open`（該欄位尚不存在）。
 - **C-23（D-10 觀測 log，pytest `caplog`）**：
   - `outcome` 的六種值（`ladder_ok`、`ladder_fail`、`follower_reread`、`follower_timeout`、`cooldown`、`stale_fallback`）各寫 1 筆 INFO record（英文），且 D-10 列的必要欄位齊全。
   - 跟隨者那筆是 `follower=True`，同時梯子呼叫數不變。
@@ -360,6 +375,15 @@
     - 風控等級裁定（引述）：「ADR-0015 W11-5 若在 PR-RK2 合併前接線，等級為 high，風控保留書面否決紀錄」。理由為情境 6 會讓 4b 型（附台銀方法論句、數字卻是 yfinance）整天持續。
     - 這會改動 accepted ADR 的出貨閘門，須由 CEO 核可並負最終責任。核可後由 tech-writer 把本段改為正式條文並註明核可日期；未核可前，請勿以本段作為已生效的閘門，也不得以此為由放行或阻擋 W11-5。
     - 依據檔案：`work/reviews/2026-10-08-RK-2-風控重審X3-F8-來源集合揭露附條件APPROVE.md`、`work/reviews/2026-10-08-tech-architect-RK-2-估值器與snapshot匯率來源一致性評估.md`、`work/dispatch/2026-10-08-任務單-RK-2-警示與決策卡匯率來源揭露與實際換算來源不一致.md`。
+  - 〔2026-10-08 加註（RK-5 RK5-R6；附議 tech-architect 建議）：**提議（待 CEO 核可），尚未生效**；上列 C-24 條文與上方 RK-2 加註在 CEO 核可前仍以原文為準〕提議在合併前須同時滿足的條件之外，再增加 RK-5 前置條件，完整寫法如下：
+    - PR-RK5a 已合併。
+    - PR-RK5b 已合併，**W-RK5-1 已經風控逐字核可**、守門測試綠。
+    - PR-RK5c 已合併：ok 篩選、`fx` 與 `fx_open` 兩個分支都在，vitest 綠，qa-e2e 通過。
+    - 再加上 RK5-R4（C-22 加註：總覽徽章 helper 的 `origin_status === "backup"` 分支與 W11-5 同一個 PR）、RK5-R5（D-4 加註：快取命中與舊值退回時 `source` 為該列原本的 source id，並以測試釘住）。
+    - **CEO 不核可時**：W11-5 出貨須附 CEO 書面知悉「**匯率貢獻可能長期混源，畫面無說明**」，風控等級 medium，風控保留紀錄；**RK5-R4、RK5-R5 仍然不能免**（風控預先否決紀錄：缺 N-2 或 N-3 的 W11-5，不論 CEO 是否核可本前置條件，風控都否決出貨）。
+    - 風控等級裁定（引述，RK5-R7）：現況 low；W11-5 先於 PR-RK5b 合併 → medium；在該狀態下台銀曾回應過 → high。背景（tech-architect 評估「決策」與風控 X-12 方向）：ADR-0015 接線後，台銀 fresh 的已結算值永久有效，買入日匯率與目前匯率的混源會長期存在，而畫面（總覽揭露只列目前匯率來源、「備援匯率」徽章不看買入日匯率）沒有任何說明。
+    - 這會改動 accepted ADR 的出貨閘門，須由 CEO 核可並負最終責任。核可後由 tech-writer 把本段改為正式條文並註明核可日期；未核可前，請勿以本段作為已生效的閘門，也不得以此為由放行或阻擋 W11-5。
+    - 來源與版本：tech-architect 2026-10-08 RK-5 評估「是否需要 ADR 或加註」與「與 ADR-0015 D-8 的關係與時機」；風控 2026-10-08 裁定 RK5-R6、RK5-R7（`work/reviews/2026-10-08-RK-4-RK-5-風控裁定附條件APPROVE與X-10核對.md`）；RK-5 任務單「風控裁定」段（`work/dispatch/2026-10-08-任務單-RK-5-fx_open來源未記錄與總覽匯率貢獻混源.md`）。
 - **C-25（cache_only 的寫入與 HTTP 計數，ADR-0010 R-1／R-2 的例外邊界）**：cache_only 估值器跑一輪：
   - 價格這一側，`put`、`record_fetch`、`record_attempt` 呼叫數都 = 0（ADR-0010 R-2 在價格路徑上仍成立）；
   - 快取 miss 時，有寫入的表只有 `fx_rate_cache`、`fx_lookup_log`；
@@ -372,7 +396,12 @@
 - **W-3**：冷卻期內、沒有快取時的原因句（比照 `COOLDOWN_NO_CACHE_REASON` 的寫法）。
 - **W-4**：yfinance 揭露句裡「本次」與「每日收盤價」在快取與盤中情境下是否仍然屬實。
   - 〔2026-10-08 加註（RK-2）：**提議納入 RK-2 銜接句（待 CEO 核可 C-24 一併生效）**〕風控 2026-10-08 重審指出：RK-2 的銜接句（RK2-R2；兩句來源方法論句不一致時加的那一句，字面待 creative-lead 起草、風控逐字核可，尚未定稿）要併入本項的重審範圍，理由是快取接線後「本次」的語意會再變。在 CEO 核可前，本項重審範圍仍以原文為準。來源：`work/reviews/2026-10-08-RK-2-風控重審X3-F8-來源集合揭露附條件APPROVE.md`「RK2-R2」段末與「逐條意見」第 4 項。
-- **W-5**：「備援源」與「資料較舊」兩個徽章同時出現時的呈現方式。
+  - 〔2026-10-08 加註（RK-4 RK4-R3／RK-5 RK5-R9）：**提議（待 CEO 核可 C-24 一併生效），尚未生效**；在 CEO 核可前，本項重審範圍仍以原文為準〕提議在上一條 RK-2 銜接句之外，再把下列三項併入本項的重審範圍：
+    - **W-RK4-1**（RK-4 歸屬句：(A′) 不成立、(B) 成立時，標明來源說明只對應持倉市值與總資產的換算，價格與 ATR 沒有用這個匯率換算）。字面由 creative-lead 起草、風控逐字審，尚未定稿；風控裁定檔 RK4-R3 列為「列入 ADR-0015 W-4 的重審範圍」。
+    - **W-RK5-1**（RK-5 總覽混源句：任一 ok 持倉的買入日匯率與目前匯率 source id 不同時，放在 `fx_disclosures` 最後）。字面由 creative-lead 起草、風控逐字審，尚未定稿；風控裁定檔 RK5-R9 要求加入本項的重審範圍。
+    - **fx_open 揭露**（RK-5：`fx_disclosures` 納入 fx_open 來源句）。來源檔只寫「加入 fx_open 揭露」，具體重審問句待 tech-architect／風控確認。
+    - 另依 RK4-R9／RK4-R10：W-RK4-1、W-RK5-1 納入 RK2-T6 失敗訊息的範圍；W-RK4-1 的組態比照 RK2-T9，推播在最壞情形下 ≤ 2000 字元。
+    - 來源與版本：風控 2026-10-08 裁定 RK4-R3、RK4-R9、RK4-R10、RK5-R9（`work/reviews/2026-10-08-RK-4-RK-5-風控裁定附條件APPROVE與X-10核對.md`）；tech-architect 2026-10-08 評估 R5-10 末項「W-4 的重審範圍加入 fx_open 揭露與 W-RK5-1」與 RK-4 評估「是否需要 ADR 或加註」。- **W-5**：「備援源」與「資料較舊」兩個徽章同時出現時的呈現方式。
 - **W-6**：建議卡 `FX_APPLIED_NOTE` 會顯示 raw 狀態值「cached_stale」。
 - **W-7**：冷卻中缺匯率的部位被歸進「有向來源查詢」那句 `UNVALUED_POSITIONS_NOTE`（`book.py:543-546`）是否可以接受。
 - **W-8**（2026-10-03 qa-reviewer 補列）：ADR-0010 風控逐字鎖定的 cache_only 兩組字面（`UNVALUED_POSITIONS_NOTE_CACHE_ONLY`、`CACHE_ONLY_BOOK_NOTE_*`，寫「本次未向來源查詢／更新」）在 F1 下對匯率是否仍屬實；ADR-0010 風控列管第 7 點已預告 FX 快取落地後須重審「或匯率」歸因。
