@@ -312,7 +312,7 @@
    - **(viii) 降級／擋下原因只在預設收合的卡內可見**（風控審查檔第一段五.4；第二段 A.2）：`downgrade_notices`／`blocked_notices` 只在 `AdviceCardView` 內，整張建議卡預設收合（`page.tsx:550`，CEO 2026-09-19 裁定），主視圖只見「續抱參考」不見原因。既有缺口不擋 (A)，**新列管 medium**（creative-lead／art-lead／frontend：操作摘要加一行「結論已調整」可見標記，新字面送審）；美股匯率失敗時 own>0 常見會放大缺口（以上為風控所述）。
 2. **F-1b（匯率 ≤ 0，medium，列入 CEO 知悉）**：`FxRate.rate` 無驗證器（`providers/fx.py:89`）、台銀解析取買賣中價無正值檢查（`:280-298`）、`valuation.py:393-417` 亦無（tech-architect 所述）；匯率＝0 時外幣持股以 ok 狀態市值 0 出現，總曝險與產業分子被低估而錯誤通過，與 F-1 D2 同型；匯率為負時 E 可能小於 A，破壞 ADR-0022 W1／D-d1「會偏低」前提（ADR-0022 失效條件 5）。**對本 ADR 的影響**：本 ADR 數學通則與 6-b 分子單調前提都依賴「市值非負」與「匯率 > 0 為經濟事實」，F-1b 使此前提在 code 上**沒有強制**。
    - 併入 F-1 的條件：dev-lead 尚未開工且只沿用既有 fx missing token 與字面；否則另開單排同一或下一 release。
-   - **required**：F-3 腳本一併掃本機快取匯率 ≤ 0，查到則比照 F-1 升級部署前置；qa 確認本標的匯率 ≤ 0 時 `PortfolioContext.fx_to_twd gt=0` 不會讓卡片或 `/limits` 回 500。
+   - **required**：F-3 腳本一併掃本機快取匯率 ≤ 0，查到則比照 F-1 升級部署前置〔**2026-10-08 加註（tech-writer，依風控 F1b-C4／F1b-C5；前半句原文保留，以本加註為準）**：F-3 腳本不掃匯率，F-3 的結果不構成 F-1b 的任何證據；升級觸發以 F-1b 任務單『部署前置』段的觸發 0、1、2（及選用的觸發 3）為準；F-1b 合併前唯一可執行的是觸發 0（可能多計；不涵蓋總覽路徑；log 未保存時為不可觀測，不得當成零）；依 (ii) 維持 medium，不得以『F-3 查無』降級或結案。來源：F-1b 任務單 `work/dispatch/2026-10-07-任務單-F-1b-匯率非正值的估值防護.md` 檔尾「2026-10-08 風控裁定 F-1b 升級觸發改寫」段（F1b-C1～C4）與 coordinator 轉達之 F1b-C5 指定字面；F-3 腳本不掃匯率見 `work/research/F-3-快取非正值收盤價查證-腳本/README.md`「匯率 ≤ 0（F-1b）」節。〕；qa 確認本標的匯率 ≤ 0 時 `PortfolioContext.fx_to_twd gt=0` 不會讓卡片或 `/limits` 回 500。
 3. **S-B2 條數變動**（依 `alerts/engine.py:271-322` `_limit_outcome` 讀碼，HEAD f25c90d；風控讀碼經 tech-architect 確認並增補；來源：tech-architect 補段第三段，2026-10-07；原「6-a 對條數的影響待查證」於此結案）
    - **6-b**：any 規則「已超標且帳本不完整」由 mixed quiet 改為 fired，**未評估條數少 1**（S-B2 只動條數、字面不變）。
    - **6-a（own>0）**：
@@ -628,7 +628,7 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 - 〔2026-10-07 追加〕實作順序、PR 切分、既有測試修改清單 M1～M4 與合併閘門見上「落地」節；ADR-0023 勘誤（P-6）已落於各處〔2026-10-07 勘誤〕標注。
 - 字面：creative-lead 起草 W-a1、W-a2、6-a 方向子句處置、W-b1、D-a3 → risk-compliance-officer 逐字審；全部核可且 CEO 未推翻後，本 ADR 才可改 accepted。（2026-10-07：字面已由風控逐字核可，見狀態欄更新與風控審查檔；CEO 未推翻仍待表態。）
 - 實作：dev-lead（F-1 之後、ADR-0022 PR 之後）→ qa-reviewer → 風控單項核對；qa-e2e 375／1280。
-- 另案：own>0 加碼降級（tech-architect）；F-1b（dev-lead／devops-sre；F-3 腳本掃匯率 ≤ 0）。
+- 另案：own>0 加碼降級（tech-architect）；F-1b（dev-lead／devops-sre；F-3 腳本掃匯率 ≤ 0）。〔**2026-10-08 加註（tech-writer，依風控 F1b-C4／F1b-C5；原文保留，以本加註為準）**：F-3 腳本不掃匯率，F-3 的結果不構成 F-1b 的任何證據；升級觸發以 F-1b 任務單『部署前置』段的觸發 0、1、2（及選用的觸發 3）為準；F-1b 合併前唯一可執行的是觸發 0（可能多計；不涵蓋總覽路徑；log 未保存時為不可觀測，不得當成零）；依 (ii) 維持 medium，不得以『F-3 查無』降級或結案。〕
 - 原「待查證」四項（D-5 分支判定內容；D-a3 在方向子句優先序的位置；6-a 對 S-B2 條數的影響；第 2 條只有 unknown 的 passed 是否屬本通則範圍）已於 2026-10-07 全數結案，見下「待確認／開放事項」。
 
 ## 待確認／開放事項

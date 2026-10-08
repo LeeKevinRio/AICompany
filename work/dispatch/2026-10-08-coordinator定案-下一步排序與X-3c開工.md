@@ -17,3 +17,8 @@
 - tech-writer 彙編 **R0-2 CEO 知悉包**（C-1～C-5、X-1～X-12 等，逐條注明更正與來源）〔2026-10-08 coordinator 更正：原寫「K-1～K-3」為 coordinator 筆誤，repo 內沒有這組 CEO 知悉項；tech-writer 查證後併入 X-11 與 D-1 說明〕，供 CEO 一次書面簽核。
 - creative-lead 起草 **發布說明（release note）**中面向使用者的字面：PR-RK2 銜接句說明（X10-8）、KX-10 對 X-2 的更正（RX-12）→ 送風控逐字審。
 - tech-architect 補 RK-4 的 (A′)／`/limits` predicate 與 RK4-R5 組態枚舉、RK5-R4／R5 併入 R5-10、查證 S-L3（`_resolve_fx` 擋不下 NaN 匯率）。
+
+## 定案四（2026-10-08 追加）：發布說明採 K-B 路徑
+- X-3c 預定隨本次發布，發布說明採 K-B 路徑（KX-10 段指向 X-3c 段），風控已附 RN-1～RN-9 核可（`work/reviews/2026-10-08-發布說明使用者字面-風控逐字審.md`）。放入條件（RN-8）：RX-9 實機通過、RX-3 審查通過、RN-6 已套用；缺一改走退路版（以 RN-3 重寫通過風控為前提）。
+- 發布說明讀者範圍：stock-desk 為 CEO 單人本機使用，讀者即 CEO，「先前說明」不另補背景（待風控確認）。
+- F-1b 觸發 0：以風控裁定為準保留（tech-architect 曾提撤回，風控不接受；若 tech-architect 仍主張撤回，交 CEO 裁決）。
