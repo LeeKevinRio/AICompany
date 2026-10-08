@@ -39,6 +39,12 @@ namespace Manjong.UI
         public static readonly TileSize Small = new TileSize(42f, 56f, 25, 16, 7, 3f);
         /// <summary>Opponent melds / flowers, result panel hands, choice menus. Fallback sub caption >= 13.</summary>
         public static readonly TileSize Mini = new TileSize(33f, 44f, 20, 13, 6, 3f);
+        /// <summary>Result stage: the winner's melds and hand.</summary>
+        public static readonly TileSize Stage = new TileSize(54f, 72f, 32, 20, 9, 4f);
+        /// <summary>Result stage: the winning tile (1.28x Stage).</summary>
+        public static readonly TileSize StageWin = new TileSize(69f, 92f, 41, 25, 11, 5f);
+        /// <summary>Result stage: the winner's flowers (one size below Stage).</summary>
+        public static readonly TileSize StageFlower = new TileSize(36f, 48f, 22, 14, 6, 3f);
         /// <summary>Opponent concealed hands (backs only).</summary>
         public static readonly TileSize Back = new TileSize(27f, 36f, 0, 0, 5, 3f);
     }
