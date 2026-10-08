@@ -7,8 +7,8 @@
   carry ``None``, and none of those asks the FX source anything new.
 * R5-2: the figures are untouched; the rate behind ``cost_twd`` is the one
   ``fx_open`` describes.
-* R5-3 (O-5): ``fx_disclosures`` counts ``ok`` positions only, and still lists
-  ``fx_now``'s sentence alone.
+* R5-3 (O-5): ``fx_disclosures`` counts ``ok`` positions only; since PR-RK5b
+  (R5-8) it lists both rates' sentences and closes with the mixed-source note.
 * R5-4: an ``ok`` position whose two rates come from two source ids logs one
   English WARNING per ``(pair, now source, open source)`` per ``build_summary``,
   naming the pair, both source ids and both rate dates -- nothing else.
@@ -32,7 +32,11 @@ from app.data.interface import DataStatus, Market
 from app.data.providers.fx import FxRate, FxRateLadder, FxRateProvider, FxRateResult
 from app.main import app
 from app.portfolio import valuation
-from app.portfolio.summary import build_summary, fx_disclosures_for
+from app.portfolio.summary import (
+    FX_OPEN_MIXED_SOURCES_NOTE,
+    build_summary,
+    fx_disclosures_for,
+)
 from app.portfolio.valuation import FxInfo, PositionValuator, Valuation
 from app.positions.models import Currency, PositionInput
 from app.positions.store import PositionStore
@@ -435,8 +439,13 @@ def test_r5_3_o5_a_pair_with_no_ok_position_discloses_nothing(tmp_path: Path) ->
     assert summary.fx_disclosures == []
 
 
-def test_r5_3_the_overview_still_lists_fx_now_only(tmp_path: Path) -> None:
-    """PR-RK5a adds no fx_open sentence; that union is PR-RK5b's (R5-8)."""
+def test_r5_3_the_overview_lists_fx_now_and_fx_open_with_the_mixed_note(tmp_path: Path) -> None:
+    """An ok row whose fx_now came from Yahoo and fx_open from Bank of Taiwan lists
+    both sentences, fx_now's first, then the mixed-source note.
+
+    Rewritten by PR-RK5b (R5-8); the PR-RK5a transitional pin is superseded --
+    coordinator ruling 2026-10-08.
+    """
     ladder = _Ladder()
     store = _store(tmp_path)
     _hold(store, opened_at=OPEN_BANK)
@@ -444,9 +453,15 @@ def test_r5_3_the_overview_still_lists_fx_now_only(tmp_path: Path) -> None:
     summary = build_summary(store, _valuator(ladder.provider))
 
     assert summary.positions[0].valuation.status == "ok"
-    assert summary.fx_disclosures == [SOURCE_NOTES[YAHOO]]
+    assert summary.fx_disclosures == [
+        SOURCE_NOTES[YAHOO],
+        SOURCE_NOTES[BANK],
+        FX_OPEN_MIXED_SOURCES_NOTE,
+    ]
     assert fx_disclosures_for([_row("ok", _fx_info(YAHOO), _fx_info(BANK))]) == [
-        SOURCE_NOTES[YAHOO]
+        SOURCE_NOTES[YAHOO],
+        SOURCE_NOTES[BANK],
+        FX_OPEN_MIXED_SOURCES_NOTE,
     ]
 
 

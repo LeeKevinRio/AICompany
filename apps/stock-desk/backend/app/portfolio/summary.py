@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -26,6 +26,20 @@ from app.positions.models import Currency, InstrumentType, Market, Position
 from app.positions.store import PositionStore
 
 logger = logging.getLogger(__name__)
+
+#: Closes ``fx_disclosures`` when at least one ``ok`` position's open-date rate
+#: (F0, behind the cost and the FX contribution) and current rate (F1) carry two
+#: different source ids (task RK-5, R5-8 / RK5-R2): the gap between the two
+#: sources' measures is then part of the FX contribution and of the unrealized
+#: P&L. Compared by id, not by sentence (S-1). Always the last item, at most once;
+#: never a source's standing disclosure (R5-11: not in ``fx_notes``), and never
+#: on the advice card or a push (W5-T7).
+#: 風控核可文案,修改須重新送審(2026-10-08)
+#: ``work/reviews/2026-10-08-W-RK4-1-W-RK5-1逐字審與X-11-X-12核對-風控審查.md`` (W-RK5-1)
+FX_OPEN_MIXED_SOURCES_NOTE: Final = (
+    "至少一筆持倉的買入日匯率與目前匯率來自不同來源，"
+    "兩個來源的口徑差會算進「匯率貢獻」，因此也會算進「未實現損益」。"
+)
 
 
 class Totals(BaseModel):
@@ -98,7 +112,9 @@ class PortfolioSummary(BaseModel):
     #: The standing disclosure of every FX source whose rate went into this
     #: book's TWD figures (ADR-0011; 風控 2026-09-19 條件 (1)): shown beside the
     #: converted totals, in first-seen order, each sentence once. Read from the
-    #: ``ok`` positions only (task RK-5, O-5); for now ``fx_now``'s source only.
+    #: ``ok`` positions only (task RK-5, O-5), both rates of each (R5-8), and
+    #: closed by :data:`FX_OPEN_MIXED_SOURCES_NOTE` when the two rates of one of
+    #: them come from two sources.
     fx_disclosures: list[str] = []
     #: Which change bases this book's rows may carry (ADR-0016 D-8), fixed by
     #: how the valuator was built. ``close_only`` guarantees no
@@ -109,21 +125,40 @@ class PortfolioSummary(BaseModel):
 def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
     """Unique ``source_note`` of every FX rate actually used, in first-seen order.
 
-    Only an ``ok`` valuation put its rate into a figure; an unvalued position's
-    rate was looked up but multiplied into nothing, so its source is not
-    described (task RK-5, O-5 / R5-3). Still ``fx_now``'s sentence alone: the
-    ``fx_open`` sentences and the mixed-source sentence are PR-RK5b's (R5-8).
+    Only an ``ok`` valuation put its rates into a figure; an unvalued position's
+    rates were looked up but multiplied into nothing, so their sources are not
+    described (task RK-5, O-5 / R5-3). Each ``ok`` position adds its ``fx_now``
+    sentence, then its ``fx_open`` sentence (R5-8), each sentence once. If any
+    of them took its two rates from two source ids, the list ends with
+    :data:`FX_OPEN_MIXED_SOURCES_NOTE`, once (RK5-R2).
     """
     seen: list[str] = []
+    mixed = False
     for valuation in valuations:
         if valuation.status != "ok":
             continue
-        info = valuation.fx
-        if info is None or info.data_status is DataStatus.UNAVAILABLE or not info.source_note:
-            continue
-        if info.source_note not in seen:
-            seen.append(info.source_note)
+        for info in (valuation.fx, valuation.fx_open):
+            if info is None or info.data_status is DataStatus.UNAVAILABLE or not info.source_note:
+                continue
+            if info.source_note not in seen:
+                seen.append(info.source_note)
+        mixed = mixed or _sources_differ(valuation)
+    if mixed:
+        seen.append(FX_OPEN_MIXED_SOURCES_NOTE)
     return seen
+
+
+def _sources_differ(valuation: Valuation) -> bool:
+    """Whether an ``ok`` valuation's two rates carry two source ids (RK5-R2, S-1).
+
+    The one definition of "mixed" behind both :data:`FX_OPEN_MIXED_SOURCES_NOTE`
+    and the R5-4 log line. A row that is not ``ok`` -- the X-3c mismatched row,
+    whose rates are both ``None``, included -- never counts.
+    """
+    now, open_ = valuation.fx, valuation.fx_open
+    if valuation.status != "ok" or now is None or open_ is None:
+        return False
+    return now.source != open_.source
 
 
 def _log_mixed_fx_sources(valuations: list[Valuation]) -> None:
@@ -137,11 +172,11 @@ def _log_mixed_fx_sources(valuations: list[Valuation]) -> None:
     """
     logged: set[tuple[str, str, str]] = set()
     for valuation in valuations:
+        if not _sources_differ(valuation):
+            continue
         now, open_ = valuation.fx, valuation.fx_open
-        if valuation.status != "ok" or now is None or open_ is None:
-            continue
-        if now.source == open_.source:
-            continue
+        # Both present once _sources_differ holds; guarded for the type checker.
+        assert now is not None and open_ is not None
         combination = (now.pair, now.source, open_.source)
         if combination in logged:
             continue
