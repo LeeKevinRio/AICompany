@@ -182,6 +182,11 @@ export interface PositionValuation {
   price: PositionPrice | null;
   //: `null` for a TWD position (no conversion, nothing to disclose).
   fx: PositionFx | null;
+  //: The FX rate at `opened_at` (the cost-basis side of the FX contribution),
+  //: same shape as `fx`. Always present in the payload (PR-RK5a, task RK-5);
+  //: `null` for a TWD position, a position without `opened_at`, or a row the
+  //: backend short-circuited before any FX lookup (currency/market mismatch).
+  fx_open: PositionFx | null;
   pnl_original: PnlOriginal | null;
   pnl_twd: string | null;
   asset_contribution_twd: string | null;

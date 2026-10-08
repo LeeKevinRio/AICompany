@@ -105,10 +105,12 @@ export const ALERTS_SCHEDULER_DISABLED = "排程目前未啟用，警示評估�
 export const ALERTS_LOAD_ERROR_PREFIX = "無法載入警示狀態：";
 
 /**
- * 第二波（派工單 §4.3，風控逐字審核可）：匯率貢獻卡標題旁的常駐徽章——任一
- * 部位 `valuation.fx?.data_status === "backup"` 即顯示，不設門檻、不得
- * hover-only。樣式沿用 `DataStatusBadge`／`FxStatusBadge` 的 backup 配色
- * （`bg-amber-900/40 text-amber-300`），`SummaryCards.tsx` 消費。
+ * 第二波（派工單 §4.3，風控逐字審核可）：standing badge beside the FX contribution
+ * card title. Shown when any ok (valued) position's `fx` or `fx_open` is
+ * backup-sourced (rule in `hasBackupFx`, `app/lib/fxBackupBadge.ts`); no
+ * threshold, never hover-only. Styling reuses the backup colors of
+ * `DataStatusBadge` / `FxStatusBadge` (`bg-amber-900/40 text-amber-300`);
+ * consumed by `SummaryCards.tsx`.
  */
 export const FX_BACKUP_BADGE = "備援匯率";
 

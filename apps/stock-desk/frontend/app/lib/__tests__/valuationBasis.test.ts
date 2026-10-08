@@ -46,6 +46,7 @@ function position(id: number, priceValue: PositionPrice | null): SummaryPosition
       missing: [],
       price: priceValue,
       fx: null,
+      fx_open: null,
       pnl_original: null,
       pnl_twd: null,
       asset_contribution_twd: null,

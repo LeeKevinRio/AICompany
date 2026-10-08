@@ -48,6 +48,7 @@ function row(symbol: string, valuation: ValuationOverride): SummaryPositionItem 
         reason: null,
       },
       fx: null,
+      fx_open: null,
       pnl_original: unvalued ? null : { value: "10000", currency: "TWD" },
       pnl_twd: unvalued ? null : "10000",
       asset_contribution_twd: unvalued ? null : "10000",

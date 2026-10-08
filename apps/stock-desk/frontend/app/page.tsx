@@ -1,6 +1,7 @@
 "use client";
 
 import { useHealth, usePortfolioSummary } from "./lib/queries";
+import { hasBackupFx } from "./lib/fxBackupBadge";
 import { BackendOfflineState } from "./components/BackendOfflineState";
 import { SummaryCards } from "./components/SummaryCards";
 import { SummaryCardsSkeleton, TableSkeleton } from "./components/SkeletonBlock";
@@ -57,11 +58,10 @@ export default function HomePage() {
             asOf={summary.data.as_of}
             positions={summary.data.positions}
             fxDisclosures={summary.data.fx_disclosures}
-            // 第二波（派工單 §4.3，風控逐字審核可）：任一部位匯率為備援源
-            // 即觸發常駐「備援匯率」徽章——不設門檻，故用 .some 而非計數。
-            fxBackupActive={summary.data.positions.some(
-              (position) => position.valuation.fx?.data_status === "backup",
-            )}
+            // PR-RK5c (RK5-R3): the standing backup-FX badge shows when any ok
+            // (valued) position's `fx` or `fx_open` is backup-sourced. The rule
+            // lives in hasBackupFx; no threshold, wording unchanged.
+            fxBackupActive={hasBackupFx(summary.data.positions)}
           />
         )}
       </div>

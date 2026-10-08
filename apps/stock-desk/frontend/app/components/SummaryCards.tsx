@@ -53,9 +53,9 @@ export function SummaryCards({
   //: 風控 2026-09-19 條件 (1) 的「同位置常駐、不得摺疊」要求：句子字面不改，
   //: 只改出現層級——本批純搬移進卡內的 `<details>`（wave2-B，鐵律 1/2）。
   fxDisclosures: string[];
-  //: 第二波（派工單 §4.3，風控逐字審核可）：true when *any* position's
-  //: `valuation.fx?.data_status === "backup"` (`page.tsx` derives this from
-  //: `summary.data.positions`). Drives the standing `FX_BACKUP_BADGE` badge
+  //: 第二波（派工單 §4.3，風控逐字審核可）：true when any ok (valued) position's
+  //: `fx` or `fx_open` is backup-sourced (`page.tsx` derives this from
+  //: `summary.data.positions` via `hasBackupFx`). Drives the standing `FX_BACKUP_BADGE` badge
   //: beside the 匯率貢獻 title — no threshold, never hover-only.
   fxBackupActive: boolean;
 }) {

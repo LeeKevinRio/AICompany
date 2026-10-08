@@ -88,6 +88,7 @@ function makePosition(
       missing: [],
       price: o.price === undefined ? defaultPrice : o.price,
       fx: null,
+      fx_open: null,
       pnl_original: { value: "10000", currency },
       pnl_twd: "10000",
       asset_contribution_twd: "10000",

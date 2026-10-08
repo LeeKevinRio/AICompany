@@ -75,6 +75,7 @@ function makePosition(
           ? { value: "110", as_of: "2026-10-02", source: "twse", price_kind: "daily_close", data_status: "fresh", is_within_ttl: null, reason: null }
           : overrides.price,
       fx: overrides.fx ?? null,
+      fx_open: null,
       pnl_original: { value: "10000", currency },
       pnl_twd: overrides.pnl_twd === undefined ? "10000" : overrides.pnl_twd,
       asset_contribution_twd: "10000",
