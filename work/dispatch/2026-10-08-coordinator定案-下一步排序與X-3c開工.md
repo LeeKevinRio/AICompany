@@ -14,6 +14,6 @@
 - **字面**：一律逐字取自 `work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md` 第二段核可表（(b) 為 75 字版）。
 
 ## 定案三：同時進行的文件工作
-- tech-writer 彙編 **R0-2 CEO 知悉包**（C-1～C-5、X-1～X-12、K-1～K-3 等，逐條注明更正與來源），供 CEO 一次書面簽核。
+- tech-writer 彙編 **R0-2 CEO 知悉包**（C-1～C-5、X-1～X-12 等，逐條注明更正與來源）〔2026-10-08 coordinator 更正：原寫「K-1～K-3」為 coordinator 筆誤，repo 內沒有這組 CEO 知悉項；tech-writer 查證後併入 X-11 與 D-1 說明〕，供 CEO 一次書面簽核。
 - creative-lead 起草 **發布說明（release note）**中面向使用者的字面：PR-RK2 銜接句說明（X10-8）、KX-10 對 X-2 的更正（RX-12）→ 送風控逐字審。
 - tech-architect 補 RK-4 的 (A′)／`/limits` predicate 與 RK4-R5 組態枚舉、RK5-R4／R5 併入 R5-10、查證 S-L3（`_resolve_fx` 擋不下 NaN 匯率）。
