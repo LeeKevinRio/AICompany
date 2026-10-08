@@ -842,16 +842,25 @@ def test_rk2_t7_the_two_non_violation_messages_carry_no_disclosure(tmp_path: Pat
         assert not any(sentence in reason for sentence in (*METHODOLOGY, APPROVED_BRIDGE))
 
 
-def test_rk2_t7_limits_and_overview_never_carry_the_bridge(api_harness: ApiHarness) -> None:
-    """S-3: ``/limits`` keeps only ``.context`` (no sentence at all), and the
-    overview's ``fx_disclosures`` is the summary's own list, not the book's."""
-    _serve(api_harness, FOUR_B)
+def test_rk2_t7_limits_states_e3_and_the_overview_never_carries_the_bridge(
+    api_harness: ApiHarness,
+) -> None:
+    """``/limits`` states its two sources and the bridge (task RK-4 R4-29, E3 of
+    R4-26: under 4b the quote landed on one source and the valuator's fx_now on
+    the other, derived from the recorded answers); the overview's
+    ``fx_disclosures`` is the summary's own list, not the book's (S-3)."""
+    ladder, today = _serve(api_harness, FOUR_B)
     _hold_usd(api_harness.positions)
 
     limits = api_harness.client.get("/api/portfolio/limits")
     assert limits.status_code == 200
-    assert APPROVED_BRIDGE not in limits.text
-    assert not any(sentence in limits.text for sentence in METHODOLOGY)
+    quote_note = source_note(ladder.source_on(today - timedelta(days=1)))
+    valuation_note = source_note(ladder.source_on(today))
+    assert quote_note != valuation_note  # not vacuous: the split happened
+    notes: list[str] = limits.json()["notes"]
+    assert notes[-3:] == [quote_note, valuation_note, APPROVED_BRIDGE]
+    for sentence in (quote_note, valuation_note, APPROVED_BRIDGE):
+        assert notes.count(sentence) == 1
 
     summary = api_harness.client.get("/api/portfolio/summary")
     assert summary.status_code == 200

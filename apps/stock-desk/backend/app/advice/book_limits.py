@@ -62,20 +62,22 @@ from pydantic import BaseModel, ConfigDict
 
 from app.advice.book import (
     SYMBOL_UNVALUED_NOTE,
+    BookContext,
     FxQuote,
     SectorComparison,
     book_notes,
     build_book_context,
     build_book_level_context,
+    limits_fx_disclosures,
     sector_categories,
 )
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
+    PRICE_INPUT_LIMIT_IDS,
     KellyInputs,
     LimitCheck,
     LimitStatus,
-    PortfolioContext,
     RiskBudget,
     SelfReportedNetWorth,
     evaluate_limits,
@@ -293,7 +295,8 @@ class BookLimits(BaseModel):
     #: The book-level notes :mod:`app.advice.book` states about this summary
     #: (equity basis, exposure denominator, unvalued positions, unclassified
     #: holdings), assembled by :func:`app.advice.book.book_notes` after every
-    #: verdict above exists.
+    #: verdict above exists, then the FX source sentences of
+    #: :func:`app.advice.book.limits_fx_disclosures` (task RK-4, R4-25).
     notes: list[str]
 
 
@@ -305,6 +308,8 @@ class _Candidate:
     market: Market
     checks: dict[str, LimitCheck]
     sector: str | None = None
+    #: The quote this holding's context applied under (A′), if any (R4-22).
+    disclosed_quote: FxQuote | None = None
 
 
 @dataclass(frozen=True)
@@ -398,7 +403,30 @@ def evaluate_book_limits(
     # industry cap 2 reported (ADR-0022 M-5), and they are assembled by the
     # one finalizer every response uses (ADR-0023 Decision 8-1).
     notes = book_notes(book, sector_comparison=SectorComparison(reported_sector=reported_sector))
+    # Then the FX source sentences (task RK-4, risk RK4-R5): this module only
+    # picks the quotes, the sentences are chosen by the book layer.
+    notes.extend(limits_fx_disclosures(book, _compared_quotes(candidates)))
     return BookLimits(limits=limits, notes=notes)
+
+
+def _compared_quotes(candidates: list[_Candidate]) -> list[FxQuote]:
+    """G1 of risk RK4-R5: the quotes that reached a figure the overview compares.
+
+    R4-23: a candidate (every lot ``ok``) whose quote was applied under (A′)
+    *and* that was compared on at least one cap reading the price or the ATR
+    (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`). The quote converts the
+    close and the ATR only, so a holding left out of those caps -- no ATR, say
+    -- had its quote multiplied into nothing shown. Book order.
+    """
+    return [
+        candidate.disclosed_quote
+        for candidate in candidates
+        if candidate.disclosed_quote is not None
+        and any(
+            candidate.checks[limit_id].status != "not_evaluable"
+            for limit_id in sorted(PRICE_INPUT_LIMIT_IDS)
+        )
+    ]
 
 
 def _book_level_check(index: int, check: LimitCheck, *, book_is_empty: bool) -> BookLimitCheck:
@@ -471,13 +499,14 @@ def _split_by_valuation(
                 )
             )
             continue
-        context = _symbol_context(summary, group, prices, kelly, net_worth)
+        book = _symbol_context(summary, group, prices, kelly, net_worth)
         candidates.append(
             _Candidate(
                 symbol=group.symbol,
                 market=group.market,
-                checks={check.id: check for check in evaluate_limits(budget, context)},
-                sector=context.sector,
+                checks={check.id: check for check in evaluate_limits(budget, book.context)},
+                sector=book.context.sector,
+                disclosed_quote=book.disclosed_quote,
             )
         )
     return candidates, unvalued
@@ -489,8 +518,12 @@ def _symbol_context(
     prices: Mapping[tuple[str, Market], SymbolMarketInput],
     kelly: Mapping[tuple[str, Market], KellyInputs],
     net_worth: SelfReportedNetWorth | None,
-) -> PortfolioContext:
-    """One holding's context, built by the same adapter the advice card uses."""
+) -> BookContext:
+    """One holding's context, built by the same adapter the advice card uses.
+
+    The whole :class:`app.advice.book.BookContext`, not only its ``.context``:
+    the quote it disclosed is one of the overview's FX sources (R4-22).
+    """
     key = (group.symbol.strip().upper(), group.market)
     data = prices.get(key, SymbolMarketInput())
     return build_book_context(
@@ -503,7 +536,7 @@ def _symbol_context(
         fx=data.fx,
         net_worth=net_worth,
         kelly=kelly.get(key),
-    ).context
+    )
 
 
 def _aggregate(

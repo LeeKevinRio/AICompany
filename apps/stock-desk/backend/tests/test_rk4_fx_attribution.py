@@ -54,9 +54,11 @@ from app.advice.book import (
     MIXED_CURRENCY_NOTE,
     NO_FX_QUOTE_NOTE,
     FxQuote,
+    SectorComparison,
     book_notes,
     build_book_context,
 )
+from app.advice.book_limits import SymbolMarketInput, evaluate_book_limits
 from app.advice.limits import LIMIT_IDS, PortfolioContext, RiskBudget, evaluate_limits
 from app.advice.loader import BANNED_PHRASES
 from app.alerts.engine import SymbolSnapshot, evaluate_alerts
@@ -90,6 +92,7 @@ from tests.test_rk2_fx_source_set_disclosure import (
     QUANTITY,
     RK2_FORBIDDEN,
     SYMBOL,
+    US_CLOSES,
     YAHOO,
     YAHOO_NOTE,
     Scenario,
@@ -999,3 +1002,468 @@ def test_rk4_c4_ladder_rates_never_come_from_none(
     else:
         assert answered is None
         assert result.source == "none"
+
+
+# === PR-RK4b: the overview ("/limits") states its FX sources ========================
+#
+# R4-22 to R4-29 of the tech-architect specification, risk RK4-R5 and RK4-C1 (a)
+# (b) / RK4-C2 of ``work/reviews/2026-10-08-RK-4規格四點確認-RK4-C1～C5-風控.md``.
+# G1 is the quotes applied under (A′) to the holdings compared on a cap reading
+# the price or the ATR; G2 the rates the valuator multiplied into the book's
+# total. Configurations E0 to E4 of R4-26; E4 is option (α): nothing at all,
+# plus one WARNING line.
+
+#: The fixed head of the E4 line (R4-26, RK4-C1 (b)).
+E4_WARNING_HEAD = "fx quote sources differ across compared holdings:"
+#: Every sentence the overview may append about FX, for "nothing at all" checks.
+FX_SENTENCES = (*METHODOLOGY, APPROVED_BRIDGE, W)
+
+
+def _level(*rows: SummaryPosition) -> book_module.BookContext:
+    return book_module.build_book_level_context(book_summary(*rows))
+
+
+def _limits_fx(rows: tuple[SummaryPosition, ...], quotes: tuple[FxQuote, ...]) -> tuple[str, ...]:
+    return book_module.limits_fx_disclosures(_level(*rows), quotes)
+
+
+def _e4_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in _book_records(caplog) if r.getMessage().startswith(E4_WARNING_HEAD)]
+
+
+TWD_ROW = book_position(9, "2330")
+
+
+class LimitsCell(typing.NamedTuple):
+    """One unit cell of R4-26: G2's rows, G1's quotes and the sentences expected."""
+
+    rows: tuple[SummaryPosition, ...]
+    quotes: tuple[FxQuote, ...]
+    expected: tuple[str, ...]
+
+
+#: E0 to E3: every configuration that states something or is a plain absence.
+LIMITS_CELLS = [
+    pytest.param(LimitsCell((TWD_ROW,), (), ()), id="e0-twd-book"),
+    pytest.param(
+        LimitsCell(
+            (
+                _usd(1, source=BANK, priced=False),
+                _usd(2, source=YAHOO, data_status=DataStatus.UNAVAILABLE),
+            ),
+            (),
+            (),
+        ),
+        id="e0-no-usd-row-is-converted",
+    ),
+    pytest.param(LimitsCell((TWD_ROW, _usd(1, source=BANK)), (), (W, BANK_NOTE)), id="e1"),
+    pytest.param(
+        LimitsCell((_usd(1, source=BANK),), (_quote(BANK),), (BANK_NOTE,)), id="e2-same-source"
+    ),
+    pytest.param(LimitsCell((TWD_ROW,), (_quote(YAHOO),), (YAHOO_NOTE,)), id="e2-no-g2"),
+    pytest.param(
+        # RK4-C2: one id is one source, whatever its sentence -- the G1 one stays.
+        LimitsCell(
+            (_usd(1, source=BANK, note="test-only sentence"),), (_quote(BANK),), (BANK_NOTE,)
+        ),
+        id="e2-same-id-different-sentence",
+    ),
+    pytest.param(
+        LimitsCell(
+            (_usd(1, source=YAHOO),),
+            (_quote(BANK), _quote(BANK)),
+            (BANK_NOTE, YAHOO_NOTE, APPROVED_BRIDGE),
+        ),
+        id="e3",
+    ),
+    pytest.param(
+        # RK4-C1 (e) / S-1: two unknown ids sharing GENERIC_SOURCE_NOTE are
+        # still two sources -- both sentences stay and the bridge follows.
+        LimitsCell(
+            (_usd(1, source="fx_other"),),
+            (_quote("fx_one"),),
+            (GENERIC_SOURCE_NOTE, GENERIC_SOURCE_NOTE, APPROVED_BRIDGE),
+        ),
+        id="e3-two-ids-sharing-the-generic-sentence",
+    ),
+]
+
+
+@pytest.mark.parametrize("cell", LIMITS_CELLS)
+def test_r4_26_limits_configurations_e0_to_e3(
+    cell: LimitsCell, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        got = _limits_fx(cell.rows, cell.quotes)
+    assert got == cell.expected
+    # RK4-C1 (b): the E4 line is never logged outside E4.
+    assert _e4_records(caplog) == []
+    # RK4-R2 carried to the overview: the scope sentence and the bridge never meet.
+    assert not (W in got and APPROVED_BRIDGE in got)
+    # RK4-C2: one sentence per id, never twice for one source.
+    if GENERIC_SOURCE_NOTE not in got:
+        assert len(got) == len(set(got))
+
+
+def test_rk4_c2_g1_comes_first_and_dedup_is_by_id_not_sentence() -> None:
+    """RK4-C2: E2 lists the G1 sentence once; the order is G1 then G2."""
+    got = _limits_fx((_usd(1, source=BANK),), (_quote(BANK),))
+    assert got.count(BANK_NOTE) == 1
+    # Same id, another sentence on the G2 side: dropped (id decides, not text).
+    got = _limits_fx((_usd(1, source=BANK, note=YAHOO_NOTE),), (_quote(BANK),))
+    assert got == (BANK_NOTE,)
+    # Another id with the G1 side's very sentence: kept (text does not decide).
+    got = _limits_fx((_usd(1, source=YAHOO, note=BANK_NOTE),), (_quote(BANK),))
+    assert got == (BANK_NOTE, BANK_NOTE, APPROVED_BRIDGE)
+    # G1 first, G2 second.
+    got = _limits_fx((_usd(1, source=BANK),), (_quote(YAHOO),))
+    assert got == (YAHOO_NOTE, BANK_NOTE, APPROVED_BRIDGE)
+
+
+E4_CELLS = [
+    pytest.param(
+        LimitsCell((_usd(1, source=YAHOO),), (_quote(BANK), _quote(YAHOO)), ()),
+        id="e4-two-quote-sources",
+    ),
+    pytest.param(
+        LimitsCell((TWD_ROW,), (_quote(YAHOO), _quote(BANK), _quote("fx_one")), ()),
+        id="e4-three-quote-sources-no-g2",
+    ),
+    pytest.param(
+        # S-1 in G1: two unknown ids sharing GENERIC_SOURCE_NOTE are two sources.
+        LimitsCell((TWD_ROW,), (_quote("fx_one"), _quote("fx_two")), ()),
+        id="e4-two-quote-ids-sharing-the-generic-sentence",
+    ),
+    pytest.param(
+        # Structurally unreachable (one pass, one memo: RK4-R9); defined anyway.
+        LimitsCell(
+            (_usd(1, source=BANK), _usd(2, source=YAHOO, symbol="MSFT")), (_quote(BANK),), ()
+        ),
+        id="e4-two-valuator-sources",
+    ),
+]
+
+
+@pytest.mark.parametrize("cell", E4_CELLS)
+def test_rk4_c1_e4_states_nothing_and_logs_one_line(
+    cell: LimitsCell, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RK4-C1 (a) all or nothing; (b) one WARNING with pair and sorted ids only."""
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        got = _limits_fx(cell.rows, cell.quotes)
+    assert got == ()
+    records = _book_records(caplog)
+    assert [record.levelno for record in records] == [logging.WARNING]
+    message = records[0].getMessage()
+    assert message.startswith(f"{E4_WARNING_HEAD} pair=USDTWD sources=")
+    ids = message.rsplit("sources=", 1)[1].split(",")
+    assert ids == sorted(ids) and len(ids) >= 2
+    for leaked in (SYMBOL, "MSFT", "2330", "31.5", "200", "150"):
+        assert leaked not in message
+
+
+def test_r4_25_the_function_is_stated_about_the_book_scope_only() -> None:
+    book, _ = _build(_cell(APPLIED, "a-prime-consistent"))
+    with pytest.raises(ValueError):
+        book_module.limits_fx_disclosures(book, ())
+
+
+# --- R4-22: the two new fields, set once each ---------------------------------------
+
+
+@pytest.mark.parametrize("cell", [*SCOPED, *SILENT, *APPLIED])
+def test_r4_22_disclosed_quote_is_the_applied_quote_under_a_prime_only(cell: Cell) -> None:
+    book, _ = _build(cell)
+    a_prime = cell.expected is not None and cell.expected[0] != W
+    assert book.disclosed_quote is (cell.quote if a_prime else None)
+    # The book scope's field is never set on a symbol context.
+    assert book.valued_fx_sources == ()
+
+
+def test_r4_24_valued_fx_sources_is_the_books_b_by_id_in_summary_order() -> None:
+    level = _level(
+        TWD_ROW,
+        _usd(1, source=YAHOO),
+        _usd(2, source=BANK, symbol="MSFT"),
+        _usd(3, source=YAHOO, symbol="NVDA", note="test-only sentence"),
+        _usd(4, source="fx_unvalued", priced=False),
+        _usd(5, source="fx_unavailable", data_status=DataStatus.UNAVAILABLE),
+        _usd(6, source="fx_silent", note=""),
+        # Only ``fx`` is read: the open-date rate's source contributes nothing.
+        _with_fx_open(_usd(7, source=BANK, symbol="TSLA"), "fx_open_only"),
+    )
+    assert level.valued_fx_sources == ((YAHOO, YAHOO_NOTE), (BANK, BANK_NOTE))
+    assert level.disclosed_quote is None
+
+
+# --- R4-23: G1 is picked from the holdings actually compared -------------------------
+
+
+def _usd_input(quote: FxQuote | None, *, atr: float | None = 4.0) -> SymbolMarketInput:
+    return SymbolMarketInput(close=200.0, currency="USD", atr=atr, fx=quote)
+
+
+def _book_limits(
+    rows: tuple[SummaryPosition, ...],
+    inputs: dict[str, SymbolMarketInput],
+) -> list[str]:
+    report = evaluate_book_limits(
+        book_summary(*rows),
+        RiskBudget(),
+        market_data={(symbol, "US"): data for symbol, data in inputs.items()},
+    )
+    return report.notes
+
+
+def _notes_before_fx(rows: tuple[SummaryPosition, ...]) -> list[str]:
+    """The notes the overview assembled before PR-RK4b (E0's composition)."""
+    level = book_module.build_book_level_context(book_summary(*rows))
+    return book_notes(level, sector_comparison=SectorComparison(reported_sector=None))
+
+
+def test_r4_23_a_compared_holdings_quote_is_in_g1() -> None:
+    rows = (_usd(1, source=YAHOO),)
+    notes = _book_limits(rows, {SYMBOL: _usd_input(_quote(BANK))})
+    assert notes == [*_notes_before_fx(rows), BANK_NOTE, YAHOO_NOTE, APPROVED_BRIDGE]
+
+
+@pytest.mark.parametrize(
+    ("rows", "data"),
+    [
+        pytest.param(
+            (_usd(1, source=YAHOO),), _usd_input(_quote(BANK), atr=None), id="no-atr-not-compared"
+        ),
+        pytest.param(
+            (_usd(1, source=YAHOO),),
+            SymbolMarketInput(close=None, currency="USD", atr=4.0, fx=_quote(BANK)),
+            id="o1-no-close",
+        ),
+        pytest.param(
+            (_usd(1, source=YAHOO),), _usd_input(_quote(BANK, rate=None)), id="2a-quote-failed"
+        ),
+        pytest.param(
+            # Rule 3: one unvalued lot withholds the holding from every
+            # comparison, but its valued lot is still in the total (RK4-R5).
+            (_usd(1, source=YAHOO), _usd(2, source=YAHOO, priced=False)),
+            _usd_input(_quote(BANK)),
+            id="excluded-holding-with-an-unvalued-lot",
+        ),
+    ],
+)
+def test_r4_23_a_quote_that_reached_no_compared_figure_is_not_in_g1(
+    rows: tuple[SummaryPosition, ...], data: SymbolMarketInput
+) -> None:
+    notes = _book_limits(rows, {SYMBOL: data})
+    assert notes == [*_notes_before_fx(rows), W, YAHOO_NOTE]  # E1
+    assert BANK_NOTE not in notes
+
+
+def test_rk4_c1_a_e4_overview_notes_are_e0s_composition(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """RK4-C1 (a): apart from the FX sentences, E4's notes are what the same
+    fixture gives in E0's composition -- here, byte for byte, nothing added."""
+    rows = (_usd(1, source=YAHOO), _usd(2, source=YAHOO, symbol="MSFT"))
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        notes = _book_limits(
+            rows, {SYMBOL: _usd_input(_quote(BANK)), "MSFT": _usd_input(_quote(YAHOO))}
+        )
+    assert notes == _notes_before_fx(rows)
+    assert not any(sentence in notes for sentence in FX_SENTENCES)
+    assert len(_e4_records(caplog)) == 1
+
+
+# --- W4-T7 / R4-28: "/limits" end to end, derived from the recorded answers ----------
+
+
+def _limits_body(api_harness: ApiHarness) -> dict[str, typing.Any]:
+    response = api_harness.client.get("/api/portfolio/limits")
+    assert response.status_code == 200
+    body: dict[str, typing.Any] = response.json()
+    return body
+
+
+def _overview_notes_before_fx(api_harness: ApiHarness) -> list[str]:
+    """E0's composition of the same book, from the overview's own summary."""
+    summary = PortfolioSummary.model_validate(
+        api_harness.client.get("/api/portfolio/summary").json()
+    )
+    level = book_module.build_book_level_context(summary)
+    return book_notes(level, sector_comparison=SectorComparison(reported_sector=None))
+
+
+def test_w4_t7_e1_the_quote_found_nothing(
+    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    scenario = Scenario(bank=lambda call, day, today: call < 3, yahoo=_never)
+    ladder, today = _serve(api_harness, scenario)
+    _hold_usd(api_harness.positions)
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        notes: list[str] = _limits_body(api_harness)["notes"]
+    valuation_source = ladder.source_on(today)
+    assert ladder.source_on(today - timedelta(days=1)) == "none"  # not vacuous
+    assert notes[-2:] == [W, source_note(valuation_source)]
+    assert notes.count(W) == 1
+    assert APPROVED_BRIDGE not in notes
+    assert _e4_records(caplog) == []
+
+
+def test_w4_t7_e2_one_source_for_both(
+    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    ladder, today = _serve(api_harness, Scenario(bank=_always))
+    _hold_usd(api_harness.positions)
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        notes: list[str] = _limits_body(api_harness)["notes"]
+    quote_source = ladder.source_on(today - timedelta(days=1))
+    assert quote_source == ladder.source_on(today)  # not vacuous
+    note = source_note(quote_source)
+    assert notes[-1] == note
+    assert notes.count(note) == 1
+    assert not any(sentence in notes for sentence in (W, APPROVED_BRIDGE))
+    assert _e4_records(caplog) == []
+
+
+def test_w4_t7_e3_two_sources_one_each(
+    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    ladder, today = _serve(api_harness, Scenario(bank=lambda call, day, today: call >= 2))
+    _hold_usd(api_harness.positions)
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        notes: list[str] = _limits_body(api_harness)["notes"]
+    quote_note = source_note(ladder.source_on(today - timedelta(days=1)))
+    valuation_note = source_note(ladder.source_on(today))
+    assert quote_note != valuation_note  # not vacuous
+    assert notes[-3:] == [quote_note, valuation_note, APPROVED_BRIDGE]
+    assert W not in notes
+    assert _e4_records(caplog) == []
+
+
+def test_w4_t7_e4_two_compared_holdings_on_two_quote_sources(
+    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Bank of Taiwan posts from yesterday on: the holding whose last bar is
+    yesterday gets its quote there, the one whose last bar is two days back
+    falls to Yahoo (each symbol's own ``latest.date``, ``api/portfolio.py``)."""
+    today = _today()
+    ladder = Scenario(bank=lambda call, day, today: day >= today - timedelta(days=1)).ladder(today)
+    us = FakePriceService()
+    for symbol, lag in ((SYMBOL, 1), ("MSFT", 2)):
+        us.seed(
+            symbol,
+            recent_bars(US_CLOSES, symbol=symbol, market="US", end=today - timedelta(days=lag)),
+        )
+    services: dict[Market, FakePriceService] = {"TW": api_harness.price_service, "US": us}
+    clock = _clock(today)
+    valuator = PositionValuator(market_services=services, fx_provider=ladder, clock=clock)
+    cached = PositionValuator(
+        market_services=services, fx_provider=ladder, clock=clock, price_mode="cache_only"
+    )
+    app.dependency_overrides[get_market_resolver] = lambda: services
+    app.dependency_overrides[get_valuator] = lambda: valuator
+    app.dependency_overrides[get_cached_valuator] = lambda: cached
+    app.dependency_overrides[get_fx_provider] = lambda: ladder
+    _hold_usd(api_harness.positions)
+    api_harness.positions.create(
+        PositionInput(
+            symbol="MSFT",
+            market="US",
+            quantity=QUANTITY,
+            avg_cost=Decimal(150),
+            currency="USD",
+            opened_at=OPENED,
+            instrument_type="stock",
+            note=None,
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        body = _limits_body(api_harness)
+    quote_sources = {
+        ladder.source_on(today - timedelta(days=1)),
+        ladder.source_on(today - timedelta(days=2)),
+    }
+    assert quote_sources == {BANK, YAHOO}  # not vacuous: E4 was reached
+    # Both holdings were really compared on the cap that reads the price.
+    per_trade = next(c for c in body["limits"] if c["limit_id"] == "per_trade_loss")
+    assert per_trade["evaluated_count"] == 2
+    notes: list[str] = body["notes"]
+    assert not any(sentence in note for note in notes for sentence in FX_SENTENCES)
+    assert notes == _overview_notes_before_fx(api_harness)
+    records = _e4_records(caplog)
+    assert [record.getMessage() for record in records] == [
+        f"{E4_WARNING_HEAD} pair=USDTWD sources={BANK},{YAHOO}"
+    ]
+
+
+def test_w4_t7_e0_a_twd_book_is_unchanged(
+    api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R4-27: a TWD book's notes are E0's composition, byte for byte."""
+    _serve(api_harness, Scenario(bank=_always))
+    api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
+    api_harness.positions.create(
+        PositionInput(
+            symbol="2330",
+            market="TW",
+            quantity=Decimal(1000),
+            avg_cost=Decimal(500),
+            currency="TWD",
+            opened_at=OPENED,
+            instrument_type="stock",
+            note=None,
+        )
+    )
+    with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
+        body = _limits_body(api_harness)
+    assert body["notes"] == _overview_notes_before_fx(api_harness)
+    assert not any(sentence in body["notes"] for sentence in FX_SENTENCES)
+    assert _book_records(caplog) == []
+
+
+# --- W4-T9, the "/limits" G2 half (RK4-C5 (a)): a mismatched row lends no source ----
+
+
+def test_w4_t9_limits_g2_never_carries_a_mismatched_rows_source(
+    api_harness: ApiHarness,
+) -> None:
+    """RK4-R12 (R12-a) on the real valuator path: an X-3 type-B row (TW market,
+    USD) held beside a TWD holding. Bank of Taiwan answers every window, so if
+    KX-A2 ever stopped short-circuiting the row it would be valued ``ok`` on
+    Bank of Taiwan and its sentence would reach G2 -- turning this red."""
+    today = _today()
+    ladder = Scenario(bank=_always).ladder(today)
+    tw = FakePriceService()
+    for symbol in ("2330", "2317"):
+        tw.seed(symbol, recent_bars(trending_closes(200, start=500.0), symbol=symbol))
+    services: dict[Market, FakePriceService] = {"TW": tw, "US": FakePriceService()}
+    clock = _clock(today)
+    valuator = PositionValuator(market_services=services, fx_provider=ladder, clock=clock)
+    cached = PositionValuator(
+        market_services=services, fx_provider=ladder, clock=clock, price_mode="cache_only"
+    )
+    app.dependency_overrides[get_market_resolver] = lambda: services
+    app.dependency_overrides[get_valuator] = lambda: valuator
+    app.dependency_overrides[get_cached_valuator] = lambda: cached
+    app.dependency_overrides[get_fx_provider] = lambda: ladder
+    for symbol, currency in (("2330", "USD"), ("2317", "TWD")):
+        api_harness.positions.create(
+            PositionInput(
+                symbol=symbol,
+                market="TW",
+                quantity=Decimal(100),
+                avg_cost=Decimal(15) if currency == "USD" else Decimal(500),
+                currency=typing.cast(Currency, currency),
+                opened_at=OPENED,
+                instrument_type="stock",
+                note=None,
+            )
+        )
+
+    notes: list[str] = _limits_body(api_harness)["notes"]
+    assert not any(sentence in note for note in notes for sentence in FX_SENTENCES)
+    summary = build_summary(api_harness.positions, valuator)
+    assert book_module.build_book_level_context(summary).valued_fx_sources == ()
+    # Not vacuous: the row really went through the valuator's mismatch path.
+    mismatched = next(p for p in summary.positions if p.symbol == "2330")
+    assert mismatched.valuation.missing == [CURRENCY_MARKET_MISMATCH]

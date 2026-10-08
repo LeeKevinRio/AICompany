@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -488,6 +489,18 @@ class BookContext:
     #: for a holding in more than one currency (K-1). The alert snapshot reads
     #: it as ``price_cap_cause`` and states no condition of its own (RX-6).
     price_withheld_note: str | None = None
+    #: The quote :attr:`fx_disclosure` was stated for under (A′), or ``None``
+    #: (task RK-4, R4-22). Set by :func:`build_book_context` only; the overview
+    #: (:mod:`app.advice.book_limits`) collects it from the holdings it compares
+    #: and hands it to :func:`limits_fx_disclosures`. Nothing else reads it.
+    disclosed_quote: FxQuote | None = None
+    #: ``(source, source_note)`` of every rate the valuator multiplied into the
+    #: book's total -- ``ok`` rows whose rate is neither ``None`` nor
+    #: ``UNAVAILABLE`` and carries a sentence -- one per source id, in summary
+    #: order (task RK-4, R4-22 / R4-24: the book scope's (B)). Set by
+    #: :func:`build_book_level_context` only, and read by
+    #: :func:`limits_fx_disclosures` only.
+    valued_fx_sources: tuple[tuple[str, str], ...] = ()
 
     @property
     def notes(self) -> list[str]:
@@ -1119,8 +1132,25 @@ def build_book_level_context(
         unvalued=_unvalued_composition(groups, [], None),
         valued_unclassified_lots=_valued_unclassified(groups)[0],
     )
+    # The book scope's (B) (risk RK4-R5, second group): the equity and the
+    # exposure every cap divides by were converted with these rates. The one
+    # judgement point RK4-R5 allows here; ``fx_open`` is never read (R4-24).
+    valued_fx_sources: list[tuple[str, str]] = []
+    for position in summary.positions:
+        info = position.valuation.fx
+        if (
+            _converted_by_valuator(position)
+            and info is not None
+            and all(info.source != seen for seen, _ in valued_fx_sources)
+        ):
+            valued_fx_sources.append((info.source, info.source_note))
     return BookContext(
-        context=context, held=False, summary=summary, scope="book", symbol_notes=tuple(notes)
+        context=context,
+        held=False,
+        summary=summary,
+        scope="book",
+        symbol_notes=tuple(notes),
+        valued_fx_sources=tuple(valued_fx_sources),
     )
 
 
@@ -1248,11 +1278,13 @@ def build_book_context(
     # (B): otherwise, this symbol's own valued lots were converted by the
     # valuator; its sentences are stated, scoped by FX_VALUATION_SCOPE_NOTE.
     disclosures: tuple[str, ...] = ()
+    disclosed_quote: FxQuote | None = None
     if mismatched_currency:
         # KX-A11: nothing was converted for these lots, and (B) is not asked.
         disclosures = ()
     elif applied is not None and priced and applied.source_note != "":
         disclosures = _fx_disclosures(applied, summary)
+        disclosed_quote = applied
     elif _valuation_converted(matched):
         disclosures = _valuation_disclosures(matched, summary)
     if applied is None and not mixed_currencies and not mismatched_currency:
@@ -1303,7 +1335,73 @@ def build_book_context(
         fx_note=fx_note,
         fx_disclosure=fx_disclosure,
         price_withheld_note=price_withheld_note,
+        disclosed_quote=disclosed_quote,
     )
+
+
+def limits_fx_disclosures(book_level: BookContext, quotes: Sequence[FxQuote]) -> tuple[str, ...]:
+    """The overview's FX source sentences, to follow its notes (task RK-4, R4-25).
+
+    Two groups, each deduplicated by **source id** (risk S-1), the first ahead
+    of the second (risk RK4-R5, RK4-C2):
+
+    * G1 -- ``quotes``: the quotes applied under (A′) to the holdings that were
+      actually compared on a cap reading the price or the ATR, in book order.
+      Picking them is the caller's job (R4-23); this function trusts the list.
+    * G2 -- ``book_level.valued_fx_sources``: every rate the valuator multiplied
+      into the book's total (R4-24).
+
+    A G2 source with the id of a G1 source is not repeated, whatever its
+    sentence (RK4-C2): one id is one source. With ``k1``/``k2`` the number of
+    distinct ids in G1/G2 (R4-26):
+
+    * E0 -- ``k1 == 0``, ``k2 == 0``: ``()``, so a TWD book is unchanged (R4-27).
+    * E1 -- ``k1 == 0``, ``k2 == 1``: :data:`FX_VALUATION_SCOPE_NOTE`, then
+      the G2 sentence.
+    * E2 -- ``k1 == 1``, G2 holds no other id: the G1 sentence alone.
+    * E3 -- ``k1 == 1``, ``k2 == 1``, different ids: the G1 sentence, the G2
+      sentence, then :data:`FX_MIXED_SOURCES_NOTE`.
+    * E4 -- ``k1 >= 2`` or ``k2 >= 2``: ``()`` plus one WARNING (below).
+
+    Quotes with no sentence are not counted, as in :func:`_fx_disclosures`; a
+    quote applied under (A′) always has one.
+    """
+    if book_level.scope != "book":
+        raise ValueError("the overview's FX sentences are stated about a book-scope context")
+    first: list[tuple[str, str]] = []
+    for quote in quotes:
+        if quote.source_note and all(quote.source != seen for seen, _ in first):
+            first.append((quote.source, quote.source_note))
+    second: list[tuple[str, str]] = []
+    for source, note in book_level.valued_fx_sources:
+        if note and all(source != seen for seen, _ in second):
+            second.append((source, note))
+    if len(first) >= 2 or len(second) >= 2:
+        # E4, option (α) (risk RK4-C1): all or nothing -- no G1 or G2 sentence,
+        # no scope sentence, no bridge -- and one line so the occurrence is
+        # seen (RK4-C1 (b)): pair and sorted source ids only, never a symbol,
+        # an amount or a rate. Only here; E0 to E3 log nothing.
+        # Re-review trigger (RK4-C1 (d)): back to risk-compliance once this
+        # line first shows up in a production log, or once Bank of Taiwan
+        # answers again (RK-2 condition (a)). Clause 3: also when ADR-0015 W11
+        # (the cross-request FX rate cache) is wired -- a cache hit reports the
+        # cached row's original source id, so rows written while Bank of Taiwan
+        # answered can make E4 reachable even while it is blocked.
+        offending = first if len(first) >= 2 else second
+        pairs = sorted({quote.pair.strip().upper() for quote in quotes if quote.source_note})
+        logger.warning(
+            "fx quote sources differ across compared holdings: pair=%s sources=%s",
+            ",".join(pairs) or "-",
+            ",".join(sorted(source for source, _ in offending)),
+        )
+        return ()
+    if not first:
+        if not second:
+            return ()
+        return (FX_VALUATION_SCOPE_NOTE, second[0][1])
+    if not second or second[0][0] == first[0][0]:
+        return (first[0][1],)
+    return (first[0][1], second[0][1], FX_MIXED_SOURCES_NOTE)
 
 
 def _valued_rates(summary: PortfolioSummary, pair: str) -> list[FxInfo]:
