@@ -46,9 +46,14 @@ also covers "a price was found, but its latest close is unusable", not only
 source either way.
 
 A position whose ``currency`` is not the one its ``market`` is quoted in (a
-legacy row stored before ADR-0017's write rule) is valued exactly as before,
-but each pass logs one warning per such row, naming only its id, market and
-currency (task X-3b, KX-6/KX-7). The judgement is
+legacy row stored before ADR-0017's write rule) is not valued at all (task
+X-3c, KX-A2): which of the two fields is wrong cannot be told from the row, so
+no currency is guessed and no price or FX source is asked. It reports
+``insufficient_data`` with ``missing == [CURRENCY_MARKET_MISMATCH]`` -- that
+token alone, never ``price``/``price_not_queried``/``fx_now``/``fx_open``,
+because nothing was looked up -- and every figure, ``price`` and ``fx`` left
+null. Each pass still logs one warning per such row, naming only its id,
+market and currency (task X-3b, KX-6/KX-7). The judgement is
 :func:`app.positions.models.currency_matches_market` itself; this module keeps
 no copy of the market -> currency table.
 """
@@ -112,6 +117,12 @@ PriceMode = Literal["live", "cache_only"]
 #: source was not asked this time, which is a different fact from "the source
 #: had nothing" (tech-architect R-5).
 PRICE_NOT_QUERIED = "price_not_queried"
+
+#: ``Valuation.missing`` token for a row whose currency is not its market's
+#: (task X-3c, KX-A2): the stored record itself is inconsistent, which is
+#: neither "the source had nothing" nor "the source was not asked". It is the
+#: only token such a row carries (risk X-3c second part RX-2).
+CURRENCY_MARKET_MISMATCH = "currency_market_mismatch"
 
 #: What kind of price ``PriceInfo.value`` is (ADR-0014 D-5). Only
 #: ``daily_close`` is ever produced until the intraday quote path lands (W15);
@@ -322,15 +333,15 @@ class PositionValuator:
         missing: list[str] = []
 
         if not currency_matches_market(position.market, position.currency):
-            # Observability only (X-3b): the figures below are unchanged. The
-            # message carries no quantity, cost or note -- id, market and
-            # currency are enough to find the row and correct it.
+            # X-3b: the message carries no quantity, cost or note -- id, market
+            # and currency are enough to find the row and correct it.
             logger.warning(
                 "position currency does not match market: id=%s market=%s currency=%s",
                 position.id,
                 position.market,
                 position.currency,
             )
+            return _currency_market_mismatch()
 
         price_info, price_now, price_missing, change_basis = self._resolve_price(position, today)
         if price_now is None:
@@ -508,3 +519,30 @@ class PositionValuator:
             reason=result.reason,
         )
         return latest.rate, info
+
+
+def _currency_market_mismatch() -> PositionValuation:
+    """The valuation of a row whose currency is not its market's (task X-3c, KX-A2).
+
+    Returned before any price or FX lookup, so neither source is asked about
+    the row and nothing it would answer can reach a figure, ``fx_disclosures``
+    or the change column. Every output is null: no price, no ``FxInfo`` (the
+    summary's FX badge has nothing to show), no P&L in either currency, no
+    cost or market value. When ``Valuation.fx_open`` lands (task RK-5,
+    PR-RK5a, R5-6) it is null here as well.
+    """
+    return PositionValuation(
+        valuation=Valuation(
+            status="insufficient_data",
+            missing=[CURRENCY_MARKET_MISMATCH],
+            price=None,
+            fx=None,
+            pnl_original=None,
+            pnl_twd=None,
+            asset_contribution_twd=None,
+            fx_contribution_twd=None,
+        ),
+        cost_twd=None,
+        market_value_twd=None,
+        change_basis=None,
+    )

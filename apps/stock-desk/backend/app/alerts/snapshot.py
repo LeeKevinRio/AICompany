@@ -75,7 +75,9 @@ def build_snapshot(
     holding. Without it (or without a usable rate) those caps stay
     ``not_evaluable``; a snapshot has no notes list, so the sentence naming the
     missing conversion travels on ``price_cap_cause`` -- that sentence alone,
-    never the data layer's note or an applied-rate note -- which the engine
+    never the data layer's note or an applied-rate note; for a holding whose
+    currency is not its market's, the book layer's sentence saying so (task
+    X-3c, ``BookContext.price_withheld_note``) -- which the engine
     appends to a risk-limit **skip** only when a watched cap that reads the
     price or ATR is among the unevaluated ones and the close itself is usable.
     ``reason`` still ends with the same sentence; its composition is unchanged.
@@ -155,9 +157,10 @@ def build_snapshot(
         limits=evaluate_limits(budget, book.context),
         as_of=latest.date.isoformat(),
         reason=_joined_reason(data_reason, book.fx_note),
-        # Only a *failed* conversion is a cause: ``fx_note`` on an applied rate
-        # is the methodology sentence, and on a mixed-currency holding it is None.
-        price_cap_cause=book.fx_note if book.fx_rate is None else None,
+        # Read, not judged (risk X-3c RX-6): a failed conversion, or lots whose
+        # currency is not their market's (task X-3 KX-A11), and nothing for an
+        # applied rate or a mixed-currency holding.
+        price_cap_cause=book.price_withheld_note,
         fx_disclosure=fx_disclosure,
         # Layer note included (風控 R4-a): a crossing judged on a cached bar must
         # say so where the user reads it, not only on the badge the push lacks.

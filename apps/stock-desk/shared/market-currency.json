@@ -1,0 +1,7 @@
+{
+  "_meta": "X-3c XC-N4 (work/reviews/2026-10-08-X-3c-第三段-首頁橫幅與關鍵價位錨點-風控裁定.md). Single source of truth for which currency a holding's cost must be stated in, per market. Mirrors backend apps/stock-desk/backend/app/positions/models.py MARKET_CURRENCY (used by currency_matches_market). The frontend keeps a typed copy in app/lib/currencyMarket.ts (the Docker build context is the frontend dir, so it cannot import this file) and frontend/app/lib/__tests__/marketCurrencyShared.test.ts fails if the two differ. The backend pins MARKET_CURRENCY and currency_matches_market to this file in apps/stock-desk/backend/tests/test_x3c_currency_market_mismatch.py (test_xcn4_the_backend_table_is_the_shared_table, test_xcn4_the_rule_matches_the_shared_table_for_every_pair).",
+  "market_currency": {
+    "TW": "TWD",
+    "US": "USD"
+  }
+}

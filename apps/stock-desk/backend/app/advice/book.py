@@ -98,8 +98,8 @@ from app.data.interface import DataStatus
 from app.data.price_guard import usable_price
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
-from app.portfolio.valuation import PRICE_NOT_QUERIED, FxInfo
-from app.positions.models import InstrumentType, Market
+from app.portfolio.valuation import CURRENCY_MARKET_MISMATCH, PRICE_NOT_QUERIED, FxInfo
+from app.positions.models import InstrumentType, Market, currency_matches_market
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,19 @@ UNVALUED_POSITIONS_CAUSE = "組合中有 {count} 筆部位無法估值（缺價�
 #: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (W5)
 UNVALUED_POSITIONS_CAUSE_CACHE_ONLY = (
     "組合中有 {count} 筆部位無法估值（本次未向來源查詢，本機尚無可用的價格或匯率），未計入總資產"
+)
+#: The third cause group (task X-3c, KX-A9): rows the valuator refused because
+#: their currency is not their market's (``Valuation.missing`` carries
+#: :data:`app.portfolio.valuation.CURRENCY_MARKET_MISMATCH`). Nothing was asked
+#: of any source for them, in either price mode, so the sentence is the same
+#: live and cache-only (RX-4); it is never folded into W4/W5's "缺價格或匯率"
+#: (KX-A10). Joined to the same direction clause as W4/W5, after them.
+#: 風控核可文案,修改須重新送審(2026-10-08)
+#: ``work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md`` (第二段 (b), 75 字版)
+#: ``work/dispatch/2026-10-07-任務單-X-3-持倉幣別與市場不符的legacy列.md`` (X-3c 第二段裁定)
+CURRENCY_MARKET_MISMATCH_CAUSE = (
+    "組合中有 {count} 筆部位因幣別與市場不符而無法估值（紀錄不一致，非價格或匯率中斷），"
+    "可於庫存頁的「更多」視窗更正幣別與平均成本；系統不猜幣別而未計入總資產"
 )
 #: "{成因}；{方向子句}" -- the one way a cause and its direction become one note.
 #: 風控核可文案,修改須重新送審(2026-10-07)
@@ -325,6 +338,18 @@ MIXED_CURRENCY_NOTE = (
     "此標的的持倉橫跨多種計價幣別，無法決定單一匯率，價格與 ATR 相關的上限不計算。"
 )
 
+#: This symbol's lots share one currency, but it is not the one their market is
+#: quoted in (task X-3c, KX-A4): no rate is looked up for them, the close and
+#: the ATR are withheld together, and no FX sentence or source methodology is
+#: stated, because nothing was converted. Same frame as
+#: :data:`MIXED_CURRENCY_NOTE` (R0-4), which takes precedence when the lots are
+#: in more than one currency. Also the alert snapshot's ``price_cap_cause``
+#: through :attr:`BookContext.price_withheld_note` (KX-A11, RX-6).
+#: 風控核可文案,修改須重新送審(2026-10-08)
+#: ``work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md`` (第二段 (c))
+#: ``work/dispatch/2026-10-07-任務單-X-3-持倉幣別與市場不符的legacy列.md`` (X-3c 第二段裁定)
+CURRENCY_MARKET_MISMATCH_NOTE = "此標的的持倉幣別與市場不符，價格與 ATR 相關的上限不計算。"
+
 #: The rate actually used, with the freshness the reader needs to judge it.
 FX_APPLIED_NOTE = (
     "價格與 ATR 以 {pair} 匯率 {rate} 換算為台幣"
@@ -435,6 +460,13 @@ class BookContext:
     #: the quote's, joined by single spaces (task RK-2). Judged here once: the
     #: alert snapshot reads this field and states no condition of its own.
     fx_disclosure: str | None = None
+    #: Why this layer withheld the close and the ATR, when it can name the
+    #: cause: a failed FX conversion (the same sentence as ``fx_note``) or lots
+    #: whose currency is not their market's (:data:`CURRENCY_MARKET_MISMATCH_NOTE`,
+    #: task X-3 KX-A11). ``None`` when the rate was applied or not needed, and
+    #: for a holding in more than one currency (K-1). The alert snapshot reads
+    #: it as ``price_cap_cause`` and states no condition of its own (RX-6).
+    price_withheld_note: str | None = None
 
     @property
     def notes(self) -> list[str]:
@@ -871,8 +903,8 @@ def _book_level_notes(
 
     ``direction`` is the clause that says which way the unvalued lots bend the
     ratios (ADR-0022 Decision 5), chosen once per response by the caller --
-    :func:`book_notes` -- from the rule for that response's scope. Both cause
-    sentences take the same clause.
+    :func:`book_notes` -- from the rule for that response's scope. Every cause
+    sentence takes the same clause.
     """
     notes = [EQUITY_BASIS_NOTE, _gross_exposure_note(net_worth)]
     _, valued_count, total_count = _book_equity(summary)
@@ -880,9 +912,19 @@ def _book_level_notes(
         # Counted by cause (風控 A-5): a cache-only book (ADR-0010 D-1) marks a
         # price it did not ask for with ``price_not_queried``, while a missing
         # FX rate was really asked for -- the two must not share one sentence.
+        # A row whose currency is not its market's is a third cause (task
+        # X-3c, KX-A9): counted first, so it lands in no other group, and
+        # stated last (W4 -> W5 -> (b)).
         unvalued = [item for item in summary.positions if item.valuation.status != "ok"]
-        not_queried = sum(PRICE_NOT_QUERIED in item.valuation.missing for item in unvalued)
-        asked = len(unvalued) - not_queried
+        mismatched = [
+            item for item in unvalued if CURRENCY_MARKET_MISMATCH in item.valuation.missing
+        ]
+        not_queried = sum(
+            PRICE_NOT_QUERIED in item.valuation.missing
+            for item in unvalued
+            if CURRENCY_MARKET_MISMATCH not in item.valuation.missing
+        )
+        asked = len(unvalued) - len(mismatched) - not_queried
         if asked:
             notes.append(
                 UNVALUED_NOTE_TEMPLATE.format(
@@ -893,6 +935,13 @@ def _book_level_notes(
             notes.append(
                 UNVALUED_NOTE_TEMPLATE.format(
                     cause=UNVALUED_POSITIONS_CAUSE_CACHE_ONLY.format(count=not_queried),
+                    direction=direction,
+                )
+            )
+        if mismatched:
+            notes.append(
+                UNVALUED_NOTE_TEMPLATE.format(
+                    cause=CURRENCY_MARKET_MISMATCH_CAUSE.format(count=len(mismatched)),
                     direction=direction,
                 )
             )
@@ -1139,17 +1188,34 @@ def build_book_context(
     currencies = sorted({position.currency for position in matched})
     holding_currency = currencies[0] if len(currencies) == 1 else None
     mixed_currencies = len(currencies) > 1
+    # Task X-3c (KX-A4): lots in one currency that is not their market's. The
+    # mixed case is judged first and keeps its own sentence (R0-4); the
+    # judgement is the write rule itself (KX-A1), never a second table.
+    mismatched_currency = not mixed_currencies and any(
+        not currency_matches_market(position.market, position.currency) for position in matched
+    )
     if mixed_currencies:
         notes.append(MIXED_CURRENCY_NOTE)
 
     effective_currency = holding_currency if matched else currency
     applied: FxQuote | None
+    price_withheld_note: str | None
     if mixed_currencies:
         # Which of the two rates would be the right one is undecidable, so the
         # question is refused rather than answered with one of them.
         rate, fx_note, applied = None, None, None
+        price_withheld_note = None
+    elif mismatched_currency:
+        # Which currency the close is really in cannot be told from the row,
+        # so no rate is resolved -- not the 1.0 of a TWD holding, not the
+        # quote the caller resolved for the bars (KX-A11): no FX sentence, no
+        # methodology, and the close and the ATR are withheld below.
+        rate, fx_note, applied = None, None, None
+        price_withheld_note = CURRENCY_MARKET_MISMATCH_NOTE
+        notes.append(CURRENCY_MARKET_MISMATCH_NOTE)
     else:
         rate, fx_note, applied = _resolve_fx(effective_currency, fx)
+        price_withheld_note = fx_note if rate is None else None
     # Methodology sentences only when a quote was applied (X3-R1): a
     # non-``None`` ``rate`` is not that signal, since a TWD holding gets 1.0
     # whatever quote the caller resolved for the bars. And only while the
@@ -1161,7 +1227,7 @@ def build_book_context(
     if applied is not None:
         if priced:
             disclosures = _fx_disclosures(applied, summary)
-    elif not mixed_currencies:
+    elif not mixed_currencies and not mismatched_currency:
         _log_unapplied_quote(effective_currency, fx, summary)
     fx_disclosure = " ".join(disclosures) if disclosures else None
     if fx_note is not None:
@@ -1184,7 +1250,9 @@ def build_book_context(
         close=close if priced and rate is not None else None,
         # ``close`` is ``None`` whenever ``rate`` is, so this 1.0 is never
         # applied to a foreign-currency amount; it only satisfies the field's
-        # "must be a positive float" contract.
+        # "must be a positive float" contract. Since X-3c a holding stored in a
+        # currency other than its market's has no rate either, so the TWD
+        # branch's 1.0 no longer meets a close quoted in another currency.
         fx_to_twd=rate if rate is not None else 1.0,
         atr=atr if priced and rate is not None else None,
         sector=sector,
@@ -1206,6 +1274,7 @@ def build_book_context(
         fx_rate=rate,
         fx_note=fx_note,
         fx_disclosure=fx_disclosure,
+        price_withheld_note=price_withheld_note,
     )
 
 

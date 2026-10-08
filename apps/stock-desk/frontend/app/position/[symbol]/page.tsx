@@ -29,8 +29,7 @@ import {
   buildAdviceHitCount,
   buildTechOneLiner,
 } from "../../lib/oneLinerWording";
-import type { AnchorSource } from "../../lib/keyLevels";
-import type { PositionsResponse } from "../../lib/types";
+import { resolveKeyLevelsAnchor } from "../../lib/keyLevelsAnchor";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
@@ -50,41 +49,6 @@ const TradingViewChartPanel = dynamic(
   () => import("./TradingViewChartPanel").then((mod) => mod.TradingViewChartPanel),
   { ssr: false, loading: () => <SkeletonBlock className="h-[480px] w-full" /> },
 );
-
-/**
- * 風控 R13/R14: the 關鍵價位 anchor cost comes straight from the stored
- * positions' native-currency `avg_cost` — never reconstructed by dividing
- * TWD book totals through `fx_to_twd` (that recovers P0×F0/F1, not the
- * average cost, and the backend's fx placeholder 1.0 is a contract value that
- * must never touch foreign amounts). Multiple lots of the same symbol are
- * combined as a quantity-weighted average in the lots' own (shared)
- * currency. Tri-state (風控 R10/R11): a confirmed cost, a CONFIRMED not-held
- * state, or "unknown" while the positions query is pending / a lot's cost is
- * unusable — the panel never claims 未持有 on "unknown". Shared by the panel
- * and the 頁尾揭露 builder so both see the same anchor.
- */
-function resolveKeyLevelsAnchor(
-  positions: PositionsResponse | undefined,
-  symbol: string,
-  market: Market,
-): { anchorSource: AnchorSource; avgCost: number | null } {
-  if (!positions) return { anchorSource: "close-unknown", avgCost: null };
-  const lots = positions.items.filter((p) => p.symbol === symbol && p.market === market);
-  if (lots.length === 0) return { anchorSource: "close-not-held", avgCost: null };
-  let qtySum = 0;
-  let costSum = 0;
-  for (const lot of lots) {
-    const qty = Number.parseFloat(lot.quantity);
-    const cost = Number.parseFloat(lot.avg_cost);
-    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
-      // Held, but a lot's cost is unusable — never claim 未持有.
-      return { anchorSource: "close-unknown", avgCost: null };
-    }
-    qtySum += qty;
-    costSum += cost * qty;
-  }
-  return { anchorSource: "cost", avgCost: costSum / qtySum };
-}
 
 function isMarket(value: string | null): value is Market {
   return value === "TW" || value === "US";

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { PositionPrice } from "../lib/types";
 import { formatTradingDateMonthDay } from "../lib/format";
 
@@ -26,6 +27,16 @@ const MUTED_BADGE_CLASS =
  */
 const UNAVAILABLE_BADGE_CLASS =
   "whitespace-nowrap rounded border border-neutral-500 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200";
+
+/**
+ * The one place the prominent bordered chip is rendered (art-lead 2026-10-08
+ * RX-3): "資料不足" below, and the currency/market-mismatch label (a) in
+ * `PositionsTable`, share this look so a later brightness change cannot miss one.
+ * It adds no wording of its own and no `title` / `aria-label`.
+ */
+export function UnavailableReasonBadge({ children }: { children: ReactNode }) {
+  return <span className={UNAVAILABLE_BADGE_CLASS}>{children}</span>;
+}
 
 /**
  * The price's trading date, always shown next to the price as "MM/DD 收盤".
@@ -65,7 +76,7 @@ function StatusLabel({ price }: { price: PositionPrice }) {
         </span>
       );
     case "unavailable":
-      return <span className={UNAVAILABLE_BADGE_CLASS}>資料不足</span>;
+      return <UnavailableReasonBadge>資料不足</UnavailableReasonBadge>;
     default:
       return assertNever(price.data_status);
   }
@@ -80,7 +91,7 @@ function StatusLabel({ price }: { price: PositionPrice }) {
  */
 export function DataStatusBadge({ price }: { price: PositionPrice | null }) {
   if (price === null) {
-    return <span className={UNAVAILABLE_BADGE_CLASS}>資料不足</span>;
+    return <UnavailableReasonBadge>資料不足</UnavailableReasonBadge>;
   }
   // The date label sits on its own line under the price (CEO 2026-10-03 首頁
   // 重排); badges share that line and wrap between tags, never inside one.

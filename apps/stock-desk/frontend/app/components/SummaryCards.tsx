@@ -1,7 +1,12 @@
 import type { PortfolioTotals, SummaryPositionItem } from "../lib/types";
 import { formatMoney, pnlColorClass } from "../lib/format";
 import { buildBasisSentence, buildBasisTooltip, deriveValuationBasis } from "../lib/valuationBasis";
-import { DETAILS_SUMMARY_GENERIC, FX_BACKUP_BADGE } from "../lib/oneLinerWording";
+import {
+  DETAILS_SUMMARY_GENERIC,
+  FX_BACKUP_BADGE,
+  SUMMARY_BANNER_NO_DATA,
+  SUMMARY_BANNER_PARTIAL,
+} from "../lib/oneLinerWording";
 
 function StatusBanner({ status }: { status: PortfolioTotals["status"] }) {
   if (status === "partial") {
@@ -10,7 +15,7 @@ function StatusBanner({ status }: { status: PortfolioTotals["status"] }) {
         role="status"
         className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-2 text-sm text-amber-300"
       >
-        部分標的資料不足，總計僅含可估值部位。
+        {SUMMARY_BANNER_PARTIAL}
       </p>
     );
   }
@@ -20,7 +25,7 @@ function StatusBanner({ status }: { status: PortfolioTotals["status"] }) {
         role="status"
         className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-2 text-sm text-amber-300"
       >
-        目前所有部位皆無可用估值資料，總計無法計算。
+        {SUMMARY_BANNER_NO_DATA}
       </p>
     );
   }

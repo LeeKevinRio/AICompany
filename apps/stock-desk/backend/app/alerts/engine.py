@@ -82,9 +82,10 @@ class SymbolSnapshot:
     #: cap was unevaluable -- that skip reads ``price_cap_cause`` instead.
     reason: str | None = None
     #: The sentence naming a failed FX conversion -- no quote, no usable rate,
-    #: or a quote for the wrong pair -- and nothing else: ``None`` when the rate
+    #: or a quote for the wrong pair -- or a holding whose currency is not its
+    #: market's (task X-3c), and nothing else: ``None`` when the rate
     #: was applied, when none was needed (TWD), or when the holding spans more
-    #: than one currency. A failed conversion withholds the price and the ATR
+    #: than one currency. Either cause withholds the price and the ATR
     #: from the caps, so this is the cause of an unevaluable cap that reads them
     #: (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`) and only of those; the
     #: risk-limit skip appends it under exactly that condition.
@@ -325,8 +326,9 @@ def _limit_outcome(
 def _limit_cause(snapshot: SymbolSnapshot, watched: Sequence[LimitCheck]) -> str:
     """The tail of an all-unevaluated risk-limit skip: ``" " + cause`` or ``""``.
 
-    The only cause ever appended is a failed FX conversion
-    (``price_cap_cause``), and only past two gates:
+    The only cause ever appended is ``price_cap_cause`` -- a failed FX
+    conversion, or a holding whose currency is not its market's (task X-3c) --
+    and only past two gates:
 
     * A′ -- the close is present but unusable (the same :func:`usable_close` the
       price and signal paths use). The price and ATR were then withheld for the

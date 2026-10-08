@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
-import { MISSING_LABELS, missingLabel, missingSummary } from "../valuationWording";
+import {
+  CURRENCY_MARKET_MISMATCH_TOKEN,
+  MISSING_LABELS,
+  isCurrencyMarketMismatch,
+  missingLabel,
+  missingSummary,
+} from "../valuationWording";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 /**
@@ -9,7 +15,13 @@ import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHel
  */
 describe("valuationWording — Valuation.missing token labels", () => {
   it("labels every token the backend can emit, each within eight characters", () => {
-    expect(Object.keys(MISSING_LABELS).sort()).toEqual(["fx_now", "fx_open", "price", "price_not_queried"]);
+    expect(Object.keys(MISSING_LABELS).sort()).toEqual([
+      "currency_market_mismatch",
+      "fx_now",
+      "fx_open",
+      "price",
+      "price_not_queried",
+    ]);
     for (const label of Object.values(MISSING_LABELS)) {
       expect(label.length).toBeLessThanOrEqual(8);
       expect(label).not.toMatch(/[A-Za-z_]/);
@@ -22,6 +34,24 @@ describe("valuationWording — Valuation.missing token labels", () => {
     expect(missingLabel("fx_open")).toMatch(/^查無/);
     expect(missingLabel("price_not_queried")).toMatch(/^本次未查/);
     expect(missingLabel("price_not_queried")).not.toMatch(/查無/);
+  });
+
+  it("labels the X-3c mismatch token with the risk-approved 7-character noun phrase, distinct from both query shapes (風控 2026-10-08 第二段 RX-2)", () => {
+    expect(missingLabel("currency_market_mismatch")).toBe("幣別與市場不符");
+    expect(missingLabel("currency_market_mismatch")).toHaveLength(7);
+    expect(missingLabel("currency_market_mismatch")).not.toBe("查無價格資料");
+    expect(missingLabel("currency_market_mismatch")).not.toMatch(/^查無/);
+    expect(missingLabel("currency_market_mismatch")).not.toMatch(/^本次未查/);
+    expect(missingLabel("currency_market_mismatch")).not.toContain("資料不足");
+    expect(CURRENCY_MARKET_MISMATCH_TOKEN).toBe("currency_market_mismatch");
+  });
+
+  it("treats a row as mismatch only when missing is exactly the one token (art-lead R-2)", () => {
+    expect(isCurrencyMarketMismatch(["currency_market_mismatch"])).toBe(true);
+    expect(isCurrencyMarketMismatch(["currency_market_mismatch", "price"])).toBe(false);
+    expect(isCurrencyMarketMismatch(["price", "currency_market_mismatch"])).toBe(false);
+    expect(isCurrencyMarketMismatch(["price"])).toBe(false);
+    expect(isCurrencyMarketMismatch([])).toBe(false);
   });
 
   it("carries no banned term and no bare realtime claim (qa 2026-09-18: the labels live here, not in the scanned .tsx)", () => {

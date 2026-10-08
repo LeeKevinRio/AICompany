@@ -111,3 +111,28 @@ export const ALERTS_LOAD_ERROR_PREFIX = "無法載入警示狀態：";
  * （`bg-amber-900/40 text-amber-300`），`SummaryCards.tsx` 消費。
  */
 export const FX_BACKUP_BADGE = "備援匯率";
+
+/**
+ * Home page totals banner (`SummaryCards.tsx` `StatusBanner`, `role="status"`,
+ * amber styling), shown when `totals.status === "partial"`.
+ *
+ * "無法估值" is this product's umbrella term for "a position has no valuation
+ * that can be counted in the totals". It does not name a cause: the cause may
+ * be a price or FX outage, or a currency that does not match the market (the
+ * per-row cause is in the positions table). Counts positions, not symbols.
+ *
+ * 風控核可文案,修改須重新送審(2026-10-08)
+ * `work/reviews/2026-10-08-X-3c-第三段-首頁橫幅與關鍵價位錨點-風控裁定.md`
+ * `work/dispatch/2026-10-07-任務單-X-3-持倉幣別與市場不符的legacy列.md` (section "XC-N2 字面核可")
+ */
+export const SUMMARY_BANNER_PARTIAL = "部分部位無法估值，總計僅含可估值部位。";
+/**
+ * Home page totals banner, shown when `totals.status === "no_data"`. Same
+ * banner, umbrella term and counting unit as {@link SUMMARY_BANNER_PARTIAL}:
+ * no cause is named, and it counts positions, not symbols.
+ *
+ * 風控核可文案,修改須重新送審(2026-10-08)
+ * `work/reviews/2026-10-08-X-3c-第三段-首頁橫幅與關鍵價位錨點-風控裁定.md`
+ * `work/dispatch/2026-10-07-任務單-X-3-持倉幣別與市場不符的legacy列.md` (section "XC-N2 字面核可")
+ */
+export const SUMMARY_BANNER_NO_DATA = "所有部位皆無法估值，總計無法計算。";

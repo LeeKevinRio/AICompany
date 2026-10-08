@@ -252,9 +252,18 @@ def test_the_check_changes_no_figure_of_any_row(
     """Byte-for-byte the same output whether or not the mismatch branch runs.
 
     X-3b only: X-3c (KX-A2) changes the mismatched rows' output on purpose,
-    and replaces this comparison for them with its own assertions.
+    and replaces this comparison for them with its own assertions
+    (``tests/test_x3c_currency_market_mismatch.py``). Since X-3c the comparison
+    therefore covers the matched rows of the same book: the branch taken for
+    their neighbours changes nothing about them.
     """
+    matched = [
+        index
+        for index, position in enumerate(mixed_book)
+        if models_module.currency_matches_market(position.market, position.currency)
+    ]
+    assert len(matched) == 2  # not vacuous: 2317 and MSFT
     with_check = _dump(valuator.value_all(mixed_book))
     monkeypatch.setattr(valuation_module, "currency_matches_market", lambda _m, _c: True)
     without_check = _dump(valuator.value_all(mixed_book))
-    assert with_check == without_check
+    assert [with_check[i] for i in matched] == [without_check[i] for i in matched]

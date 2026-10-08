@@ -35,8 +35,8 @@ import type { SortDirection, SortKey, SortState } from "../lib/positionsTableVie
 import { HOME_LINK_TO_INVENTORY } from "../lib/inventoryWording";
 import { positionAnchorId } from "../lib/inventoryEdit";
 import { useDirectoryNames } from "../lib/queries";
-import { missingSummary } from "../lib/valuationWording";
-import { DataStatusBadge, priceDateTooltip } from "./DataStatusBadge";
+import { isCurrencyMarketMismatch, missingSummary } from "../lib/valuationWording";
+import { DataStatusBadge, UnavailableReasonBadge, priceDateTooltip } from "./DataStatusBadge";
 import { FxStatusBadge } from "./FxStatusBadge";
 import { EmptyPositionsState } from "./EmptyPositionsState";
 
@@ -73,6 +73,21 @@ function PriceCell({ position }: { position: SummaryPositionItem }) {
   // bare "—": no "收盤" date label, no intraday label.
   if (isNonDailyClosePrice(position)) return <div>{PLACEHOLDER}</div>;
   if (valuation.status === "insufficient_data" || valuation.price === null) {
+    // 風控 2026-10-08 第二段 RX-3 (XC-N1) / art-lead: a row whose `missing` is exactly
+    // the mismatch token shows label (a) once, in the same prominent chip, in
+    // place of the "資料不足" badge and without the small cause line (that line
+    // would print (a) a second time). The chip text is the approved label from
+    // `MISSING_LABELS` via `missingSummary`; no literal is added here.
+    if (isCurrencyMarketMismatch(valuation.missing)) {
+      return (
+        <div>
+          {PLACEHOLDER}
+          <div className="mt-0.5">
+            <UnavailableReasonBadge>{missingSummary(valuation.missing)}</UnavailableReasonBadge>
+          </div>
+        </div>
+      );
+    }
     return (
       <div>
         {PLACEHOLDER}
@@ -189,7 +204,11 @@ function PnlTwdCell({ position }: { position: SummaryPositionItem }) {
         <MoneyOrDash value={position.valuation.pnl_twd} currency="TWD" decimals={0} />
       </p>
       <div className="mt-0.5">
-        <FxStatusBadge fx={position.valuation.fx} />
+        {/* A mismatch row is never converted (no rate is queried), so an FX status
+            badge there could only blame a rate outage that did not happen (art-lead R-1). */}
+        {!isCurrencyMarketMismatch(position.valuation.missing) && (
+          <FxStatusBadge fx={position.valuation.fx} />
+        )}
       </div>
     </div>
   );

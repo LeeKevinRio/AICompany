@@ -80,17 +80,42 @@ def store(tmp_path: Path) -> PositionStore:
     return PositionStore(db_path=tmp_path / "positions.db")
 
 
+#: Where a holding in each currency lives (task X-3 X3-R8). A USD holding is a
+#: US stock: these fixtures used to hold 2330 on TW in USD -- an X-3 type-B row,
+#: which X-3c withdraws on read -- while what they test is the FX path of a
+#: consistent foreign holding. The bar currency stays a separate parameter, so
+#: the failure branches (bars in TWD or JPY for a USD holding) are unchanged.
+_INSTRUMENTS: dict[str, tuple[str, Market]] = {"TWD": ("2330", "TW"), "USD": ("AAPL", "US")}
+USD_HELD = _INSTRUMENTS["USD"]
+
+
+def _instrument(currency: str) -> tuple[str, Market]:
+    return _INSTRUMENTS[currency]
+
+
 def _price_service(currency: str) -> FakePriceService:
+    """Bars in ``currency`` for both instruments; one fake serves both markets."""
     service = FakePriceService()
-    service.seed("2330", recent_bars(trending_closes(60), symbol="2330", currency=currency))
+    for symbol, market in _INSTRUMENTS.values():
+        service.seed(
+            symbol,
+            recent_bars(trending_closes(60), symbol=symbol, market=market, currency=currency),
+        )
     return service
 
 
-def _hold(store: PositionStore, currency: str) -> None:
+def _markets(service: FakePriceService) -> dict[Market, FakePriceService]:
+    return {"TW": service, "US": service}
+
+
+def _hold(
+    store: PositionStore, currency: str, *, instrument: tuple[str, Market] | None = None
+) -> None:
+    symbol, market = instrument or _instrument(currency)
     store.create(
         PositionInput(
-            symbol="2330",
-            market="TW",
+            symbol=symbol,
+            market=market,
             quantity=Decimal(1000),
             avg_cost=Decimal(600),
             currency=currency,  # type: ignore[arg-type]
@@ -110,12 +135,11 @@ def _snapshot(
 ) -> SymbolSnapshot:
     service = _price_service(currency)
     return build_snapshot(
-        "2330",
-        "TW",
-        resolver={"TW": service},
+        *_instrument(currency),
+        resolver=_markets(service),
         store=store,
         valuator=PositionValuator(
-            market_services={"TW": service}, fx_provider=fx_provider or UnavailableFxProvider()
+            market_services=_markets(service), fx_provider=fx_provider or UnavailableFxProvider()
         ),
         budget=RiskBudget(),
         fx_provider=fx_provider,
@@ -260,18 +284,19 @@ def _fire_limit_alert(
 ) -> EvaluationResult:
     """Run a real ``risk_limit_breach`` tick over the real snapshot builder."""
     service = _price_service(currency)
-    valuator = PositionValuator(market_services={"TW": service}, fx_provider=StubFxProvider())
+    valuator = PositionValuator(market_services=_markets(service), fx_provider=StubFxProvider())
     # A deliberately tight loss budget: the point of these two tests is the
     # wording of a *fired* message, and the cap has to breach for there to be
     # one. The default 1% happens not to be crossed by this fixture's ATR.
     budget = RiskBudget(max_loss_per_trade=0.001)
-    add_rule(alerts, limit_rule(limit_id=limit_id))
+    symbol, market = _instrument(currency)
+    add_rule(alerts, limit_rule(limit_id=limit_id, symbol=symbol, market=market))
 
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
             symbol,
             market,
-            resolver={"TW": service},
+            resolver=_markets(service),
             store=positions,
             valuator=valuator,
             budget=budget,
@@ -669,14 +694,14 @@ def _plain_loader(
     """No net worth, no Kelly pair, and a valuator that cannot convert USD -- so
     every cap of a USD holding is unevaluable whatever the snapshot's own rate."""
     valuator = PositionValuator(
-        market_services={"TW": service}, fx_provider=UnavailableFxProvider()
+        market_services=_markets(service), fx_provider=UnavailableFxProvider()
     )
 
     def load(symbol: str, market: Market) -> SymbolSnapshot:
         return build_snapshot(
             symbol,
             market,
-            resolver={"TW": service},
+            resolver=_markets(service),
             store=positions,
             valuator=valuator,
             budget=RiskBudget(),
@@ -687,9 +712,13 @@ def _plain_loader(
 
 
 def _limit_reason(
-    alerts: AlertStore, load: Callable[[str, Market], SymbolSnapshot], limit_id: str
+    alerts: AlertStore,
+    load: Callable[[str, Market], SymbolSnapshot],
+    limit_id: str,
+    instrument: tuple[str, Market] = ("2330", "TW"),
 ) -> str | None:
-    rule = add_rule(alerts, limit_rule(limit_id=limit_id))
+    symbol, market = instrument
+    rule = add_rule(alerts, limit_rule(limit_id=limit_id, symbol=symbol, market=market))
     result = evaluate_alerts(alerts, load, now=datetime(2026, 10, 7, 6, 0, tzinfo=UTC))
     [outcome] = [o for o in result.outcomes if o.rule_id == rule.id]
     assert outcome.status == "skipped"
@@ -710,7 +739,7 @@ def test_a_failed_conversion_is_the_only_tail_of_a_price_cap_skip(
     data layer's sentence that ``reason`` also carries."""
     _hold(store, "USD")
     load = _plain_loader(_degraded_service(bar_currency), store, fx_provider)
-    snap = load("2330", "TW")
+    snap = load(*USD_HELD)
     # Preconditions: a usable close, every cap unevaluated, and the joined
     # ``reason`` exactly as before (K-2) -- it still holds all three parts.
     assert snap.close is not None and snap.close > 0
@@ -718,7 +747,7 @@ def test_a_failed_conversion_is_the_only_tail_of_a_price_cap_skip(
     assert snap.reason == f"{CACHED_LAYER_NOTE} {SPLICED} {failure}"
     assert snap.price_cap_cause == failure
 
-    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id, USD_HELD)
 
     assert reason == f"{_unevaluable_skip(limit_id)} {failure}"
     assert "資料來自" not in (reason or "")
@@ -733,13 +762,13 @@ def test_an_applied_rate_is_not_given_as_the_cause_of_a_skip(
     so the caps are still unevaluable); its sentence is no cause, nor the layer's."""
     _hold(store, "USD")
     load = _plain_loader(_degraded_service("USD"), store, StubFxProvider())
-    snap = load("2330", "TW")
+    snap = load(*USD_HELD)
     assert {check.status for check in snap.limits} == {"not_evaluable"}
     assert snap.price_cap_cause is None
     applied_head = FX_APPLIED_NOTE.split("{", 1)[0]
     assert applied_head in (snap.reason or "")  # precondition: there is one to leak
 
-    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id, USD_HELD)
 
     assert reason == _unevaluable_skip(limit_id)
     for unwanted in (applied_head, "換算為台幣", "資料來自", SPLICED):
@@ -785,9 +814,9 @@ def test_a_failed_conversion_is_not_the_cause_of_a_cap_that_reads_no_price(
     """驗收 2 (c): the scope gate -- these caps were not left out for the rate."""
     _hold(store, "USD")
     load = _plain_loader(_degraded_service(bar_currency), store, fx_provider)
-    assert load("2330", "TW").price_cap_cause == failure
+    assert load(*USD_HELD).price_cap_cause == failure
 
-    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id)
+    reason = _limit_reason(AlertStore(db_path=tmp_path / "alerts.db"), load, limit_id, USD_HELD)
 
     assert reason == _unevaluable_skip(limit_id)
     for unwanted in ("無法取得匯率換算", "匯率", "資料來自", SPLICED):
@@ -796,8 +825,11 @@ def test_a_failed_conversion_is_not_the_cause_of_a_cap_that_reads_no_price(
 
 def test_a_holding_in_two_currencies_has_no_price_cap_cause(store: PositionStore) -> None:
     # K-1: no single rate applies, and ``book.fx_note`` is None for that case.
+    # Two currencies on one (symbol, market) always include an X-3 lot (here
+    # the TWD lot on US); the mixed case takes precedence over it (KX-A4), and
+    # only ``price_cap_cause`` is asserted, as KX-P1 did for PR-0 T1.
     _hold(store, "USD")
-    _hold(store, "TWD")
+    _hold(store, "TWD", instrument=USD_HELD)
     snap = _snapshot(store, currency="USD", fx_provider=UnavailableFxProvider())
     assert snap.price_cap_cause is None
 
