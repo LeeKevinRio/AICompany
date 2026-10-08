@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseAction, type Personality } from '../src/ai/ai.js';
+import { chooseAction, liveWaits, type Personality } from '../src/ai/ai.js';
 import {
   IllegalActionError,
   applyAction,
@@ -12,7 +12,7 @@ import {
   type GameState,
 } from '../src/engine/engine.js';
 import { RULES } from '../src/engine/rules.js';
-import { createRng } from '../src/engine/rng.js';
+import { createRng, type Rng } from '../src/engine/rng.js';
 import { sortTiles } from '../src/engine/tiles.js';
 import type { Meld } from '../src/engine/types.js';
 import { simulateGame } from '../src/game/simulate.js';
@@ -70,6 +70,9 @@ function setup(cfg: Setup): { game: GameState; events: GameEvent[]; emit: (e: Ga
 }
 
 const ids = (game: GameState, seat: number) => optionsFor(game, seat).map((o) => o.id);
+
+/** An rng whose every draw is `value` (pins the AI's probabilistic choices). */
+const fixedRng = (value: number): Rng => ({ next: () => value, int: (n) => Math.min(n - 1, Math.floor(value * n)) });
 
 // Seat 3 waits on 5m (單吊); seat 1 can chi 4m-6m; seat 2 can pon 5m.
 const CLAIM_HANDS = [
@@ -574,12 +577,69 @@ describe('報聽 (ting)', () => {
     expect(game.hand.players.map((p) => p.declared)).toEqual([false, false, false, false]);
   });
 
-  it('the AI never declares', () => {
-    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+  it('the AI declares (報聽) by personality: bear always with >= 2 live tiles, cat never on a 3-tile wait', () => {
+    // READY with the drawn N: ting:N waits on E, ting:E waits on N, 3 live tiles each.
+    const pick = (personality: Personality, rng: Rng = createRng(1)): string => {
       const { game } = setup({ hands: [READY, '', '', ''], front: '9s', turn: 0, drawn: 'N' });
-      const options = optionsFor(game, 0);
-      expect(options.some((o) => o.type === 'ting')).toBe(true);
-      expect(chooseAction(game, 0, options, personality, createRng(1))).toMatch(/^discard:/);
+      return chooseAction(game, 0, optionsFor(game, 0), personality, rng);
+    };
+    expect(pick('bear')).toMatch(/^ting:(E|N)$/);
+    expect(pick('cat', fixedRng(0))).toMatch(/^discard:(E|N)$/); // cat needs 4 live tiles
+    expect(pick('rabbit', fixedRng(0.1))).toMatch(/^ting:(E|N)$/); // 3 live tiles, chance 0.7
+    expect(pick('rabbit', fixedRng(0.9))).toMatch(/^discard:(E|N)$/);
+    // The same seed gives the same decision.
+    for (let seed = 1; seed <= 20; seed++) expect(pick('rabbit', createRng(seed))).toBe(pick('rabbit', createRng(seed)));
+  });
+
+  it('the AI does not declare on a nearly dead wait (fewer than 2 live tiles)', () => {
+    const { game } = setup({ hands: [READY, '', '', ''], front: '9s', turn: 0, drawn: 'N' });
+    game.hand.players[1]!.discards = ['E', 'E', 'N', 'N'];
+    const options = optionsFor(game, 0);
+    expect(options.filter((o) => o.type === 'ting').map(liveWaits)).toEqual([1, 1]);
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      expect(chooseAction(game, 0, options, personality, fixedRng(0))).toMatch(/^discard:(E|N)$/);
+    }
+  });
+
+  it('among several ways to declare the AI picks the widest wait', () => {
+    // Two E are visible: ting:N (waits E) has 1 live tile, ting:E (waits N) has 3.
+    const { game } = setup({ hands: [READY, '', '', ''], front: '9s', turn: 0, drawn: 'N' });
+    game.hand.players[2]!.discards = ['E', 'E'];
+    expect(chooseAction(game, 0, optionsFor(game, 0), 'bear', createRng(1))).toBe('ting:E');
+
+    // Two-sided 3p / 6p wait (7 live tiles) after letting N go: even the cautious cat may declare.
+    const wide = setup({ hands: ['123m 456m 789m 123p 45p 9s 9s N', '', '', ''], front: '9s', turn: 0, drawn: 'N' });
+    const options = optionsFor(wide.game, 0);
+    expect(liveWaits(options.find((o) => o.id === 'ting:N')!)).toBe(7);
+    expect(chooseAction(wide.game, 0, options, 'cat', fixedRng(0.4))).toBe('ting:N');
+    expect(chooseAction(wide.game, 0, options, 'cat', fixedRng(0.6))).toBe('discard:N');
+  });
+
+  it('a declared AI wins whenever it can, otherwise lets the drawn tile go', () => {
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      const tsumo = setup({
+        hands: ['123m 456m 789m 123p 456p E E', '', '', ''],
+        front: '9s 9s',
+        turn: 0,
+        drawn: 'E',
+        declared: [0],
+      });
+      expect(chooseAction(tsumo.game, 0, optionsFor(tsumo.game, 0), personality, createRng(1))).toBe('tsumo');
+
+      // Ankan / kakan would be open to an undeclared seat; the drawn E does not win.
+      const skip = setup({
+        hands: ['1s 1s 1s 1s 5m 123p 456p 9p 9p E', '', '', ''],
+        melds: [[meld('pon', '5m 5m 5m', 1)]],
+        front: '9m',
+        turn: 0,
+        drawn: 'E',
+        declared: [0],
+      });
+      expect(chooseAction(skip.game, 0, optionsFor(skip.game, 0), personality, createRng(1))).toBe('discard:E');
+
+      const ron = setup({ hands: CLAIM_HANDS, front: '9m 9m', turn: 0, declared: [3] });
+      applyAction(ron.game, 0, 'discard:5m', ron.emit);
+      expect(chooseAction(ron.game, 3, optionsFor(ron.game, 3), personality, createRng(1))).toBe('ron');
     }
   });
 

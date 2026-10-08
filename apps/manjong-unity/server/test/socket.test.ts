@@ -139,6 +139,15 @@ interface Coverage {
   autoDiscards: number;
   /** States shown to a declared player: a self-draw or a discard it could win on. */
   declaredWinOffers: number;
+  /** 報聽 by an AI seat (ting events with seat != mySeat). */
+  aiDeclared: number;
+  /** Discards by a declared AI seat (each must directly follow that seat's own draw). */
+  aiDeclaredDiscards: number;
+  /** Hands that ended (win or exhaustive). */
+  hands: number;
+  /** Hands won by an AI seat, and by an AI seat that had declared. */
+  aiWins: number;
+  aiDeclaredWins: number;
 }
 
 /** Verifies every option the server offers against an independent computation. */
@@ -281,6 +290,11 @@ describe('websocket game', () => {
       declared: 0,
       autoDiscards: 0,
       declaredWinOffers: 0,
+      aiDeclared: 0,
+      aiDeclaredDiscards: 0,
+      hands: 0,
+      aiWins: 0,
+      aiDeclaredWins: 0,
     };
     const declareChance = { n: 0 };
     // WS_GAMES=200 npm test -- socket  runs a long verification pass (used before releases).
@@ -292,6 +306,8 @@ describe('websocket game', () => {
       // The discard (or 報聽) I asked for; any other discard of mine was played by the server.
       let ownDiscard: string | null = null;
       let lastTing: Msg | null = null;
+      // The event just before the current one (a declared seat's discard must follow its own draw).
+      let prevEvent: Msg | null = null;
       for (let i = 0; i < 20000; i++) {
         const m = await client.next((x) => x.type === 'step' || x.type === 'state' || x.type === 'error');
         expect(m.type).not.toBe('error');
@@ -305,12 +321,48 @@ describe('websocket game', () => {
             lastTing = null;
           }
           if (event.type === 'ting') {
-            expect(event.seat).toBe(view.mySeat); // the AI never declares
-            expect(event.tile).toBe(ownDiscard);
-            expect(event.text).toContain('聽牌');
-            expect(view.players[view.mySeat].declared).toBe(true);
+            const who = view.players[event.seat];
+            expect(event.text).toBe(`${who.name} 聽牌`);
+            expect(who.declared).toBe(true);
+            if (event.seat === view.mySeat) {
+              expect(event.tile).toBe(ownDiscard);
+            } else {
+              // AI 報聽: announced on its own turn, right after its draw or a claim, or on the dealer's
+              // opening turn (which follows the deal without a draw event).
+              expect(who.isAi).toBe(true);
+              const ownTurn = ['draw', 'chi', 'pon'].includes(prevEvent?.type) && prevEvent.seat === event.seat;
+              const openingTurn = ['hand_start', 'flower'].includes(prevEvent?.type) && event.seat === view.dealerSeat;
+              expect(ownTurn || openingTurn).toBe(true);
+              cov.aiDeclared++;
+            }
             lastTing = event;
           }
+          if (event.seat >= 0 && event.seat !== view.mySeat && view.players[event.seat].declared && event.type !== 'ting') {
+            // A declared AI never calls or kongs again; it only lets its drawn tile go or wins.
+            expect(['draw', 'flower', 'discard', 'win']).toContain(event.type);
+            if (event.type === 'discard' && prevEvent?.type !== 'ting') {
+              // The discard is the tile it just drew: nothing happened between its draw and this discard.
+              expect(prevEvent).toMatchObject({ type: 'draw', seat: event.seat });
+              cov.aiDeclaredDiscards++;
+            }
+          }
+          if (event.type === 'win' || event.type === 'exhaustive') {
+            cov.hands++;
+            expect(view.hasResult).toBe(true);
+            const winner = view.result.winnerSeat;
+            if (winner >= 0 && winner !== view.mySeat) {
+              cov.aiWins++;
+              if (view.players[winner].declared) cov.aiDeclaredWins++;
+            }
+            // Hands are revealed at the end: a declared loser still holds the ready hand it declared with.
+            for (const p of view.players) {
+              if (!p.declared || p.seat === winner) continue;
+              const sets = 5 - p.melds.length;
+              expect(p.hand.length).toBe(sets * 3 + 1);
+              expect(bruteWaits(p.hand, sets).length).toBeGreaterThan(0);
+            }
+          }
+          prevEvent = event;
           if (event.type === 'discard' && event.seat === view.mySeat) {
             if (event.tile === ownDiscard) {
               ownDiscard = null;
@@ -377,6 +429,8 @@ describe('websocket game', () => {
       expect(cov.declared).toBeGreaterThan(0);
       expect(cov.autoDiscards).toBeGreaterThan(0);
       expect(cov.declaredWinOffers).toBeGreaterThan(0);
+      expect(cov.aiDeclared).toBeGreaterThan(0);
+      expect(cov.aiDeclaredDiscards).toBeGreaterThan(0);
     }
     // eslint-disable-next-line no-console
     console.log('coverage', cov);

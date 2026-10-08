@@ -12,6 +12,12 @@ export interface SimulationStats {
   exhaustive: number;
   taiHistogram: Record<number, number>;
   itemCounts: Record<string, number>;
+  /** Wins per seat (seat personalities: PERSONALITIES). */
+  seatWins: number[];
+  /** Hands in which each seat had declared ready (報聽) by the end of the hand. */
+  seatDeclared: number[];
+  /** Wins by a seat that had declared. */
+  declaredWins: number;
 }
 
 const PERSONALITIES: Personality[] = ['rabbit', 'bear', 'cat', 'rabbit'];
@@ -52,17 +58,25 @@ export function simulate(games: number, firstSeed = 1): SimulationStats {
     exhaustive: 0,
     taiHistogram: {},
     itemCounts: {},
+    seatWins: [0, 0, 0, 0],
+    seatDeclared: [0, 0, 0, 0],
+    declaredWins: 0,
   };
   for (let i = 0; i < games; i++) {
-    simulateGame(firstSeed + i, (r) => {
+    simulateGame(firstSeed + i, (r, game) => {
       stats.hands++;
       const sum = r.deltas.reduce((a, b) => a + b, 0);
       if (sum !== 0) throw new Error(`Non-zero-sum settlement (seed ${firstSeed + i})`);
+      game.hand.players.forEach((p, seat) => {
+        if (p.declared) stats.seatDeclared[seat]!++;
+      });
       if (r.kind === 'exhaustive') {
         stats.exhaustive++;
         return;
       }
       stats.wins++;
+      stats.seatWins[r.winnerSeat]!++;
+      if (game.hand.players[r.winnerSeat]!.declared) stats.declaredWins++;
       if (r.selfDraw) stats.selfDraws++;
       stats.taiHistogram[r.totalTai] = (stats.taiHistogram[r.totalTai] ?? 0) + 1;
       for (const it of r.items) {

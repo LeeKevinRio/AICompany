@@ -1,5 +1,5 @@
 // "Can play" AI: tile-efficiency play (shanten + effective tiles) using only public information.
-// Personalities differ only in how eagerly they claim discards. No defence yet.
+// Personalities differ in how eagerly they claim discards and declare ready (報聽). No defence yet.
 
 import { seatWind, roundWind, type GameOption, type GameState } from '../engine/engine.js';
 import { shanten } from '../engine/hand.js';
@@ -18,6 +18,22 @@ export const AI_PROFILES: AiProfile[] = [
   { name: '喵喵', avatar: 'cat' },
   { name: '兔兔', avatar: 'rabbit' },
 ];
+
+/**
+ * 報聽 appetite: declare only when the waits have at least `minLeft` live tiles (as far as this seat can
+ * see), and then with probability `chance`. Declaring scores nothing extra, it only gives up flexibility,
+ * so the cautious personalities want a wider wait before committing.
+ */
+export interface TingPolicy {
+  minLeft: number;
+  chance: number;
+}
+
+export const TING_POLICY: Record<Personality, TingPolicy> = {
+  bear: { minLeft: 2, chance: 1 }, // impulsive: declares whenever the wait is not (nearly) dead
+  rabbit: { minLeft: 3, chance: 0.7 }, // balanced
+  cat: { minLeft: 4, chance: 0.5 }, // closed-hand purist: keeps its options unless the wait is wide
+};
 
 /** Tiles this seat can see: own hand plus every discard, meld and nothing else. */
 function visibleCounts(game: GameState, seat: number): number[] {
@@ -106,6 +122,31 @@ function without(hand: Tile[], tiles: Tile[]): Tile[] {
   return rest;
 }
 
+/** Live winning tiles behind a discard / ting option. */
+export function liveWaits(option: GameOption): number {
+  return option.waits.reduce((sum, w) => sum + w.left, 0);
+}
+
+/**
+ * The 報聽 to play instead of the planned discard, or null to discard without declaring.
+ * Every ting option leaves the hand ready, which is already the lowest shanten a discard can reach,
+ * so among them the widest wait wins; ties keep the planned discard.
+ */
+function chooseTing(options: GameOption[], planned: Tile, personality: Personality, rng: Rng): GameOption | null {
+  let best: { option: GameOption; left: number } | null = null;
+  for (const o of options) {
+    if (o.type !== 'ting') continue;
+    const left = liveWaits(o);
+    if (!best || left > best.left || (left === best.left && o.tile === planned)) best = { option: o, left };
+  }
+  if (!best) return null;
+  const policy = TING_POLICY[personality];
+  if (best.left < policy.minLeft) return null;
+  // Draw from the rng only for a real choice, so the stream stays reproducible and minimal.
+  if (policy.chance < 1 && rng.next() >= policy.chance) return null;
+  return best.option;
+}
+
 function isValueHonor(game: GameState, seat: number, tile: Tile): boolean {
   const k = kindOf(tile);
   return isDragonKind(k) || k === windKind(seatWind(game, seat)) || k === windKind(roundWind(game));
@@ -127,8 +168,11 @@ export function chooseAction(
   const seen = visibleCounts(game, seat);
 
   if (byType('discard').length) {
-    // The AI never declares (報聽); should a seat ever be declared, play the one discard it is offered.
-    if (p.declared) return byType('discard')[0]!.id;
+    // Declared (報聽) and not winning: the engine only offers letting the drawn tile go.
+    if (p.declared) {
+      const discards = byType('discard');
+      return (discards.find((o) => o.tile === p.drawn) ?? discards[0]!).id;
+    }
     const discard = bestDiscard(p.hand, sets, seen, rng);
     for (const o of byType('ankan')) {
       const after = without(p.hand, [o.tile, o.tile, o.tile, o.tile]);
@@ -138,7 +182,8 @@ export function chooseAction(
       const after = without(p.hand, [o.tile]);
       if (shanten(toCounts(after), sets) <= discard.shanten) return o.id;
     }
-    return `discard:${discard.tile}`;
+    const ting = chooseTing(options, discard.tile, personality, rng);
+    return ting ? ting.id : `discard:${discard.tile}`;
   }
 
   // Claim window: compare the hand's shanten now against the best line after claiming.
