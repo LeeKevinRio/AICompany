@@ -368,6 +368,19 @@ FX_MIXED_SOURCES_NOTE = (
     "持倉市值與總資產；「本次台灣銀行來源不可用」僅適用於部分查詢。"
 )
 
+#: Precedes the valuator's source sentence(s) when no quote was applied to this
+#: context's figures but this symbol's own valued lots were converted (task
+#: RK-4, (B) without (A′)): it scopes the sentence(s) after it to the converted
+#: market value and total equity, so they are not read as covering the price
+#: and the ATR, which are withheld whenever it appears. Always the first item of
+#: the disclosure, immediately before the sentence(s) it scopes, and never next
+#: to :data:`FX_MIXED_SOURCES_NOTE` (RK4-R2).
+#: 風控核可文案,修改須重新送審(2026-10-08)
+#: ``work/reviews/2026-10-08-W-RK4-1-W-RK5-1逐字審與X-11-X-12核對-風控審查.md`` (W-RK4-1, 替代案 A)
+FX_VALUATION_SCOPE_NOTE = (
+    "此處來源說明所指的匯率，只對應持倉市值與總資產中經換算的部分，不含價格與 ATR。"
+)
+
 
 @dataclass(frozen=True)
 class FxQuote:
@@ -450,15 +463,23 @@ class BookContext:
     #: The single FX sentence from the notes, for callers whose output shape
     #: has no notes list of its own (the alert snapshot).
     fx_note: str | None = None
-    #: The FX sources' standing disclosures, present only when a quote was
-    #: applied to this context's figures (risk X3-R1, task X-3 KX-10) and the
-    #: close it converts was usable (risk RK4-R11 (b)); ``None`` for a TWD
-    #: holding, a mixed-currency one, an unusable close and every failed
-    #: conversion.
-    #: When the book's valued rows of the same pair were converted on another
-    #: source, that source's sentence and :data:`FX_MIXED_SOURCES_NOTE` follow
-    #: the quote's, joined by single spaces (task RK-2). Judged here once: the
-    #: alert snapshot reads this field and states no condition of its own.
+    #: The FX sources' standing disclosures, joined by single spaces, present
+    #: if and only if (risk RK4-R1, second revision of X3-R1):
+    #:
+    #: * (A′) a quote was applied to this context's figures, the close it
+    #:   converts was usable and the quote carries a sentence -- the quote's
+    #:   sentence first; when the book's valued rows of the same pair were
+    #:   converted on another source, that source's sentence and
+    #:   :data:`FX_MIXED_SOURCES_NOTE` follow (task RK-2); or
+    #: * (B) otherwise, at least one of this symbol's own lots is ``ok`` with a
+    #:   valuator rate that is not ``UNAVAILABLE`` and carries a sentence --
+    #:   :data:`FX_VALUATION_SCOPE_NOTE` first, then the valuator's sentences
+    #:   (task RK-4), never the quote's and never the bridge.
+    #:
+    #: ``None`` otherwise: a TWD symbol, a candidate, lots that are not valued
+    #: or whose rate failed, and lots whose currency is not their market's
+    #: (KX-A11). Judged here once: the alert snapshot reads this field and
+    #: states no condition of its own.
     fx_disclosure: str | None = None
     #: Why this layer withheld the close and the ATR, when it can name the
     #: cause: a failed FX conversion (the same sentence as ``fx_note``) or lots
@@ -1216,18 +1237,25 @@ def build_book_context(
     else:
         rate, fx_note, applied = _resolve_fx(effective_currency, fx)
         price_withheld_note = fx_note if rate is None else None
-    # Methodology sentences only when a quote was applied (X3-R1): a
-    # non-``None`` ``rate`` is not that signal, since a TWD holding gets 1.0
-    # whatever quote the caller resolved for the bars. And only while the
-    # close is usable (risk RK4-R11 (b)): an unusable close withholds the price
-    # and the ATR below, so the quote converts nothing, and the attribution in
-    # :data:`FX_MIXED_SOURCES_NOTE` ("價格與 ATR 的換算") would describe a
-    # conversion that did not happen.
+    # Methodology sentences if and only if (A′) or (B) (risk RK4-R1), in
+    # mutually exclusive branches so the bridge and the scope sentence can
+    # never meet (RK4-R2).
+    # (A′): the quote was applied -- a non-``None`` ``rate`` is not that
+    # signal, since a TWD holding gets 1.0 whatever quote the caller resolved
+    # for the bars (X3-R1) -- to a usable close (RK4-R11 (b): an unusable close
+    # withholds the price and the ATR below, so the quote converts nothing),
+    # and it has a sentence of its own.
+    # (B): otherwise, this symbol's own valued lots were converted by the
+    # valuator; its sentences are stated, scoped by FX_VALUATION_SCOPE_NOTE.
     disclosures: tuple[str, ...] = ()
-    if applied is not None:
-        if priced:
-            disclosures = _fx_disclosures(applied, summary)
-    elif not mixed_currencies and not mismatched_currency:
+    if mismatched_currency:
+        # KX-A11: nothing was converted for these lots, and (B) is not asked.
+        disclosures = ()
+    elif applied is not None and priced and applied.source_note != "":
+        disclosures = _fx_disclosures(applied, summary)
+    elif _valuation_converted(matched):
+        disclosures = _valuation_disclosures(matched, summary)
+    if applied is None and not mixed_currencies and not mismatched_currency:
         _log_unapplied_quote(effective_currency, fx, summary)
     fx_disclosure = " ".join(disclosures) if disclosures else None
     if fx_note is not None:
@@ -1311,6 +1339,12 @@ def _fx_disclosures(applied: FxQuote, summary: PortfolioSummary) -> tuple[str, .
     shown. :data:`FX_MIXED_SOURCES_NOTE` follows only when exactly two items
     from two different sources remain (RK2-T5): its wording says "兩項" and
     attributes them by position.
+
+    Precondition: ``applied.source_note`` is not empty -- the caller only
+    reaches here under (A′) (task RK-4, R4-11). ``shown[0][0] == applied.source``
+    below is kept as defence in depth (R4-20): without it, a quote with no
+    sentence would leave two valuator items and the bridge would attribute the
+    first of them to the price and the ATR.
     """
     sources: list[tuple[str, str, str | None]] = [
         (applied.source, applied.source_note, applied.as_of)
@@ -1338,6 +1372,63 @@ def _fx_disclosures(applied: FxQuote, summary: PortfolioSummary) -> tuple[str, .
     if len(shown) == 2 and shown[0][0] != shown[1][0] and shown[0][0] == applied.source:
         disclosures.append(FX_MIXED_SOURCES_NOTE)
     return tuple(disclosures)
+
+
+def _converted_by_valuator(position: SummaryPosition) -> bool:
+    """Whether the valuator multiplied a stated rate into this lot's market value.
+
+    Reads ``valuation.status`` and ``valuation.fx`` only -- never ``fx_open``
+    and never the lot's currency or market (task RK-4, R4-12): since X-3c a lot
+    whose currency is not its market's is ``insufficient_data`` with no
+    ``FxInfo`` (KX-A2), so it can never qualify (RK4-R12, (R12-a)).
+    """
+    return (
+        position.valuation.status == "ok"
+        and position.valuation.fx is not None
+        and position.valuation.fx.data_status is not DataStatus.UNAVAILABLE
+        and position.valuation.fx.source_note != ""
+    )
+
+
+def _valuation_converted(matched: list[SummaryPosition]) -> bool:
+    """(B) of task RK-4: at least one of this symbol's own lots was converted.
+
+    Empty for a symbol not held, so a candidate never satisfies it.
+    """
+    return any(_converted_by_valuator(position) for position in matched)
+
+
+def _valuation_disclosures(
+    matched: list[SummaryPosition], summary: PortfolioSummary
+) -> tuple[str, ...]:
+    """:data:`FX_VALUATION_SCOPE_NOTE`, then the valuator's sentences (task RK-4, (B)).
+
+    Takes no quote, by design (risk RK4-C3): nothing here can appear *because
+    of* the quote. A sentence that is also the quote's appears once, as the
+    valuator's, when both lookups landed on one source.
+
+    The pairs are those of the lots that satisfied (B), in their first-seen
+    order; for each, every ``ok`` row of the book with that pair contributes
+    (:func:`_valued_rates`, the RK-2 set: the equity every cap divides by was
+    converted with them too), deduplicated by **source id** (risk S-1) in
+    summary order, sources with no sentence left out.
+    :data:`FX_MIXED_SOURCES_NOTE` is never attached here (R4-13).
+    """
+    pairs: list[str] = []
+    for position in matched:
+        info = position.valuation.fx
+        if _converted_by_valuator(position) and info is not None:
+            pair = info.pair.strip().upper()
+            if pair not in pairs:
+                pairs.append(pair)
+    seen: set[str] = set()
+    sentences: list[str] = []
+    for pair in pairs:
+        for info in _valued_rates(summary, pair):
+            if info.source_note and info.source not in seen:
+                seen.add(info.source)
+                sentences.append(info.source_note)
+    return (FX_VALUATION_SCOPE_NOTE, *sentences)
 
 
 def _log_unapplied_quote(

@@ -95,11 +95,13 @@ def build_snapshot(
 
     The FX source's standing disclosure (ADR-0005 約束 F-4) travels on its own
     field instead, because it has the opposite destination: it qualifies a rate
-    that *was* applied, so it belongs to the risk-cap message a **fired** alert
-    sends -- and ``reason`` is read by no fired path. Putting it in ``reason``
-    would look like a disclosure while reaching nobody. Whether a rate was
-    applied is judged once, by the book layer (``BookContext.fx_disclosure``,
-    task X-3 KX-10); this module only carries the answer.
+    that *was* multiplied into a figure -- the quote applied to the close, or
+    the valuator's rate on this symbol's own valued lots (task RK-4) -- so it
+    belongs to the risk-cap message a **fired** alert sends, and ``reason`` is
+    read by no fired path. Putting it in ``reason`` would look like a
+    disclosure while reaching nobody. Whether a rate was multiplied in is
+    judged once, by the book layer (``BookContext.fx_disclosure``, task X-3
+    KX-10, risk RK4-R1); this module only carries the answer.
     """
     end = today if today is not None else date.today()
     loaded = load_bars(

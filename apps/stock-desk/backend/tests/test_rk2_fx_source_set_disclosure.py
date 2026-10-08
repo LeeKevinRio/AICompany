@@ -36,7 +36,13 @@ from typing import ClassVar
 import pytest
 
 from app.advice import book as book_module
-from app.advice.book import FX_APPLIED_NOTE, FxQuote, book_notes, build_book_context
+from app.advice.book import (
+    FX_APPLIED_NOTE,
+    MIXED_CURRENCY_NOTE,
+    FxQuote,
+    book_notes,
+    build_book_context,
+)
 from app.advice.limits import LIMIT_IDS, PortfolioContext, RiskBudget, evaluate_limits
 from app.advice.loader import BANNED_PHRASES
 from app.alerts.engine import UNEVALUATED_LIMITS_NOTE, SymbolSnapshot, evaluate_alerts
@@ -571,8 +577,12 @@ def test_rk2_t5_one_source_id_is_one_item_whatever_its_sentences() -> None:
 
 def test_rk2_t5_no_bridge_unless_exactly_two_items_remain() -> None:
     # A quote without a sentence of its own leaves one item: no "兩項" to point at.
+    # Test-only cell (risk RK4-C4): production never hands over a quote with a
+    # rate and an empty sentence -- ``source_note`` is empty for the ladder's
+    # ``"none"`` only, which never carries a rate. Such a quote fails (A′), so
+    # since PR-RK4a the cell takes the (B) branch: W-RK4-1, then Yahoo.
     disclosure, notes = _book(book_summary(_usd(1, source=YAHOO)), _quote(BANK, note=""))
-    assert disclosure == YAHOO_NOTE
+    assert disclosure == f"{book_module.FX_VALUATION_SCOPE_NOTE} {YAHOO_NOTE}"
     assert APPROVED_BRIDGE not in notes
     # Three distinct sources: the sentence says "兩個來源", so it is not attached.
     disclosure, notes = _book(
@@ -581,6 +591,21 @@ def test_rk2_t5_no_bridge_unless_exactly_two_items_remain() -> None:
     )
     assert disclosure == f"{BANK_NOTE} {YAHOO_NOTE} {GENERIC_SOURCE_NOTE}"
     assert APPROVED_BRIDGE not in notes
+
+
+def test_rk2_t5_the_bridge_needs_the_quote_as_its_first_item() -> None:
+    """R4-20 (qa low): ``shown[0][0] == applied.source`` is defence in depth.
+
+    Since PR-RK4a ``_fx_disclosures`` is only called under (A′), whose
+    precondition is a non-empty ``applied.source_note``; called directly with
+    an empty one, the two items left are both the valuator's, and the bridge's
+    positional attribution ("價格與 ATR 的換算" first) would be false.
+    """
+    disclosures = book_module._fx_disclosures(
+        _quote(BANK, note=""),
+        book_summary(_usd(1, source=YAHOO), _usd(2, source="fx_other", symbol="MSFT")),
+    )
+    assert disclosures == (YAHOO_NOTE, GENERIC_SOURCE_NOTE)
 
 
 # --- RK2-T7: where neither a second sentence nor the bridge may appear ------------
@@ -612,7 +637,10 @@ def test_rk2_t7_scenario_2b_and_foreign_pairs_contribute_no_sentence() -> None:
 
 
 def test_rk2_t7_unapplied_branches_stay_silent_whatever_the_book_used() -> None:
-    """R2-3: TWD, K-1 and 2a keep ``None`` even beside a valued foreign row."""
+    """RK4-R1 (B): TWD keeps ``None`` beside a valued foreign row; K-1 and 2a,
+    whose own USD lot was converted, carry W-RK4-1 and the valuator's sentence
+    only -- never the quote's, never the bridge (RK4-R2)."""
+    scope = book_module.FX_VALUATION_SCOPE_NOTE
     mixed_book = [_usd(1, source=BANK), _usd(2, source=YAHOO, symbol="MSFT")]
     twd = book_position(3, "2330")
     # A TWD symbol, in a book whose USD rows were converted (O-3: not this PR).
@@ -629,12 +657,18 @@ def test_rk2_t7_unapplied_branches_stay_silent_whatever_the_book_used() -> None:
     # K-1: the symbol's lots span two currencies.
     twd_lot = book_position(4, SYMBOL, market="US", currency="TWD", price="6000")
     disclosure, notes = _book(book_summary(_usd(1, source=BANK), twd_lot), _quote(YAHOO))
-    assert disclosure is None
-    assert not any(sentence in notes for sentence in (*METHODOLOGY, APPROVED_BRIDGE))
-    # 2a: the quote had no rate; the valuator's sentence is not added in its place.
+    assert disclosure == f"{scope} {BANK_NOTE}"
+    at = notes.index(MIXED_CURRENCY_NOTE)
+    assert notes[at : at + 3] == [MIXED_CURRENCY_NOTE, scope, BANK_NOTE]
+    assert YAHOO_NOTE not in notes
+    assert APPROVED_BRIDGE not in notes
+    # 2a: the quote had no rate; the valuator's sentence follows W-RK4-1.
     disclosure, notes = _book(book_summary(_usd(1, source=BANK)), _quote(YAHOO, rate=None))
-    assert disclosure is None
-    assert not any(sentence in notes for sentence in (*METHODOLOGY, APPROVED_BRIDGE))
+    assert disclosure == f"{scope} {BANK_NOTE}"
+    at = notes.index(scope)
+    assert "匯率報價沒有可用數值" in notes[at - 1]
+    assert notes[at : at + 2] == [scope, BANK_NOTE]
+    assert APPROVED_BRIDGE not in notes
 
 
 def test_rk2_t7_a_candidate_with_no_same_currency_holding_has_one_item() -> None:
@@ -661,17 +695,21 @@ def test_rk2_a_candidate_beside_a_usd_holding_discloses_the_denominator_source()
 def test_rk2_o1_cell_an_unusable_close_carries_no_source_sentence(
     caplog: pytest.LogCaptureFixture, valuation_source: str
 ) -> None:
-    """O-1 cell (risk RK4-R11 (b)): an unusable close carries no source sentence.
+    """O-1 cell (risk RK4-R11 (b), RK4-R1): an unusable close carries no
+    sentence for the quote.
 
     The close is unusable, so the price and ATR are withheld and the applied
     quote converts nothing. With split sources the quote's sentence plus the
     bridge would claim a "混用" and a "價格與 ATR 的換算" that did not happen,
-    so neither the quote's sentence, the valuator's nor the bridge is attached
-    -- in either the snapshot field or the card notes. The same holds when both
-    lookups landed on one source (risk RK4-R11-T). The applied-rate
-    sentence itself (``fx_note``, risk S-3) is out of this PR's scope and stays.
-    The (B) branch and W-RK4-1 are left to PR-RK4a.
+    so neither the quote's sentence nor the bridge is attached -- in either the
+    snapshot field or the card notes. The holding's own USD lot *was* converted
+    by the valuator, so (B) holds: W-RK4-1 and the valuator's sentence, which
+    with one source on both sides is that source's sentence once (risk
+    RK4-R11-T, RK4-C3). The applied-rate sentence itself (``fx_note``, risk
+    S-3) is out of scope and stays. Not holding the symbol leaves nothing.
     """
+    scope = book_module.FX_VALUATION_SCOPE_NOTE
+    expected = f"{scope} {source_note(valuation_source)}"
     summary = book_summary(_usd(1, source=valuation_source))
     # ``None`` is what production hands over: the snapshot screens the close
     # through ``usable_price`` first (risk RK2-L1).
@@ -689,10 +727,29 @@ def test_rk2_o1_cell_an_unusable_close_carries_no_source_sentence(
             )
         assert book.context.close is None
         assert book.context.atr is None
-        assert book.fx_disclosure is None
+        assert book.fx_disclosure == expected
         notes = book_notes(book)
-        assert not any(sentence in notes for sentence in (*METHODOLOGY, APPROVED_BRIDGE))
+        assert APPROVED_BRIDGE not in notes
+        if valuation_source != BANK:
+            assert BANK_NOTE not in notes
+        assert notes.count(source_note(valuation_source)) == 1
         assert book.fx_note is not None and book.fx_note in notes  # S-3: unchanged
+        at = notes.index(book.fx_note)
+        assert notes[at:] == [book.fx_note, scope, source_note(valuation_source)]
+        # The same cell without a holding of the symbol: nothing was converted.
+        unheld = build_book_context(
+            book_summary(_usd(1, source=valuation_source, symbol="MSFT")),
+            symbol=SYMBOL,
+            market="US",
+            close=close,
+            currency="USD",
+            atr=4.0,
+            fx=_quote(BANK),
+        )
+        assert unheld.fx_disclosure is None
+        assert not any(
+            sentence in book_notes(unheld) for sentence in (*METHODOLOGY, APPROVED_BRIDGE, scope)
+        )
     # Nothing was mixed into any figure, so no mixed-source line either.
     assert _book_records(caplog) == []
 
@@ -734,14 +791,17 @@ def test_rk2_t7_scenario_2a_end_to_end(
     tmp_path: Path, api_harness: ApiHarness, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The valuator converted on Bank of Taiwan; the quote found nothing at all.
-    No sentence is added in the quote's place (R2-3; RK-4 decides that), but
-    the occurrence is logged once (S-4)."""
+    The valuator's sentence follows W-RK4-1 (RK4-R1 (B), derived from the
+    recorded answer as RK2-T4 / W4-T6 ask), and the occurrence is still logged
+    once (S-4)."""
+    scope = book_module.FX_VALUATION_SCOPE_NOTE
     scenario = Scenario(bank=lambda call, day, today: call < 3, yahoo=_never)
     harness = _alerts(tmp_path, scenario)
     with caplog.at_level(logging.WARNING, logger=BOOK_LOGGER):
         snap = harness.snapshot()
-    assert harness.ladders[-1].source_on(harness.today) == BANK  # not vacuous
-    assert snap.fx_disclosure is None
+    valuation_source = harness.ladders[-1].source_on(harness.today)
+    assert valuation_source == BANK  # not vacuous
+    assert snap.fx_disclosure == f"{scope} {source_note(valuation_source)}"
     records = _book_records(caplog)
     assert [record.getMessage() for record in records] == [
         "fx quote unavailable while valued holdings used a rate: "
@@ -749,10 +809,13 @@ def test_rk2_t7_scenario_2a_end_to_end(
         f"valuation_as_of={harness.today.isoformat()}"
     ]
 
-    _serve(api_harness, scenario)
+    ladder, today = _serve(api_harness, scenario)
     _hold_usd(api_harness.positions)
     notes = _card(api_harness)["context_notes"]
-    assert not any(sentence in notes for sentence in (*METHODOLOGY, APPROVED_BRIDGE))
+    at = notes.index(scope)
+    assert "匯率報價沒有可用數值" in notes[at - 1]
+    assert notes[at:] == [scope, source_note(ladder.source_on(today))]
+    assert APPROVED_BRIDGE not in notes
 
 
 def test_rk2_t7_the_two_non_violation_messages_carry_no_disclosure(tmp_path: Path) -> None:

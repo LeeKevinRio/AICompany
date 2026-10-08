@@ -790,8 +790,10 @@ def test_rx6_the_skip_of_a_price_cap_ends_with_sentence_c(
 
 def test_rx6_a_mixed_holding_has_no_price_cap_cause(tmp_path: Path) -> None:
     snap, _, _ = _snapshot_for(tmp_path, "AAPL", "US", "USD", mixed=True)
+    # K-1 partly superseded (risk RK4-R1/RK4-R2): the USD lot's market value
+    # was converted, so (B) holds.
     assert snap.price_cap_cause is None
-    assert snap.fx_disclosure is None
+    assert snap.fx_disclosure == f"{book.FX_VALUATION_SCOPE_NOTE} {SOURCE_NOTES['bank_of_taiwan']}"
 
 
 def test_rx6_the_snapshot_reads_the_book_and_judges_nothing() -> None:

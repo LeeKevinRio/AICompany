@@ -34,7 +34,7 @@ from app.alerts.snapshot import build_snapshot
 from app.alerts.store import AlertStore
 from app.data.interface import DataStatus, Market
 from app.data.providers.fx import FxRate, FxRateProvider, FxRateResult
-from app.portfolio.valuation import PositionValuator
+from app.portfolio.valuation import FxInfo, PositionValuator
 from app.positions.models import PositionInput
 from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
@@ -335,6 +335,61 @@ def test_t10_4_the_applied_branch_hands_back_the_quote_it_applied() -> None:
     assert book.fx_disclosure == quote.source_note
     notes = book_notes(book)
     assert notes[notes.index(book.fx_note or "") + 1] == quote.source_note
+
+
+# --- T10-5: (ii-a), not (ii-b) -----------------------------------------------
+
+
+def test_t10_5_a_twd_stored_us_card_beside_a_valued_usd_holding_states_no_source() -> None:
+    """Task RK-4 R4-3 / RK4-R1: (B) reads this symbol's own lots only. Another
+    holding's converted value (O-3) puts no methodology on a type-A card -- the
+    whole-book reading (ii-b) was vetoed for exactly this card (RK4-R8)."""
+    other = _position(2, "MSFT", market="US", currency="USD", price="200", fx_to_twd="31.5")
+    other = other.model_copy(
+        update={
+            "valuation": other.valuation.model_copy(
+                update={
+                    "fx": FxInfo(
+                        pair="USDTWD",
+                        as_of="2026-07-24",
+                        source="bank_of_taiwan",
+                        data_status=DataStatus.FRESH,
+                        source_note=SOURCE_NOTES["bank_of_taiwan"],
+                    )
+                }
+            )
+        }
+    )
+    summary = _summary(_position(1, SYMBOL, market="US", currency="TWD", price="200"), other)
+    for quote in (_fx(), _fx(None, status=DataStatus.UNAVAILABLE, as_of=None)):
+        book = build_book_context(
+            summary, symbol=SYMBOL, market="US", close=200.0, currency="USD", atr=4.0, fx=quote
+        )
+        assert book.fx_disclosure is None
+        _assert_no_methodology(book_notes(book))
+
+
+def test_t10_5_the_card_of_a_twd_stored_us_holding_beside_a_valued_usd_one(
+    api_harness: ApiHarness,
+) -> None:
+    provider = AppliedFx()
+    serve_us_market(
+        tw_service=api_harness.price_service,
+        us_service=_us_service(SYMBOL, "MSFT"),
+        fx_provider=provider,
+    )
+    _hold(api_harness.positions, SYMBOL, "TWD")
+    _hold(api_harness.positions, "MSFT", "USD")
+
+    # Not vacuous: the other holding was valued and converted with a sentence.
+    rows = api_harness.client.get("/api/portfolio/summary").json()["positions"]
+    msft = next(row for row in rows if row["symbol"] == "MSFT")
+    assert msft["valuation"]["status"] == "ok"
+    assert msft["valuation"]["fx"]["source_note"] in METHODOLOGY
+
+    body = api_harness.client.get(f"/api/advice/{SYMBOL}", params={"market": "US"}).json()
+    assert body["status"] == "ok"
+    _assert_no_methodology(body["context_notes"])
 
 
 # --- XS-2: observation O-1 stays behind the engine's guards ------------------
