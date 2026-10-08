@@ -91,6 +91,7 @@ from app.advice.limits import (
     format_percent,
     format_reported_at,
     sector_numerator_gaps,
+    symbol_has_unvalued_lots,
 )
 from app.data.interface import DataStatus
 from app.data.price_guard import usable_price
@@ -241,24 +242,32 @@ _OWN_POSITION_LIMIT_NAMES = _OWN_POSITION_NAME_SEPARATOR.join(
 #: ``held_shares`` counts only the valued shares while the stop distance does
 #: not depend on valuation (risk-compliance D-d1 correction, tech-architect's proof). Card only.
 #: ``{names}`` is filled from :data:`LIMIT_NAMES` below.
-#: 風控核可文案,修改須重新送審(2026-10-07;D-d1 第二次核可（更正）2026-10-07)
+#:
+#: Deleted-clause version (ADR-0023 Decision 4, R-6): since 6-a none of caps
+#: 1, 4 and 5 can report ``passed`` while the symbol has unvalued lots of its
+#: own, so the former clause about a below-cap result had nothing left to
+#: qualify and was removed. If those caps can ever pass again in this state
+#: (ADR-0023 F-5), the wording goes back to review -- it is not restored from
+#: version control.
+#: 風控核可文案,修改須重新送審(2026-10-07;D-d1 第二次核可（更正）2026-10-07;刪除版核可 2026-10-07)
 #: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-d1 更正節)
+#: ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`` (D-d1 刪除版)
 UNVALUED_DIRECTION_OWN_ONLY_TEMPLATE = (
-    "因本標的自身的持倉無法估值，第 1、4、5 條上限（{names}）的比率會偏低，"
-    "其低於上限的結果也可能建立在偏低的比率上。"
+    "因本標的自身的持倉無法估值，第 1、4、5 條上限（{names}）的比率會偏低。"
 )
 UNVALUED_DIRECTION_OWN_ONLY = UNVALUED_DIRECTION_OWN_ONLY_TEMPLATE.format(
     names=_OWN_POSITION_LIMIT_NAMES
 )
 #: D-d2: this symbol's own lots *and* other holdings' lots are unvalued. The
 #: two push caps 1, 4 and 5 in opposite directions, so the direction is not
-#: known. Card only. This is the clause-carrying version; the version without
-#: the "低於上限的結果…" clause replaces both in 6-a (ADR-0023 Decision 4).
-#: 風控核可文案,修改須重新送審(2026-10-07)
+#: known. Card only. Deleted-clause version, for the same reason as D-d1 above
+#: (ADR-0023 Decision 4, R-6).
+#: 風控核可文案,修改須重新送審(2026-10-07;刪除版核可 2026-10-07)
 #: ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md`` (D-d2)
+#: ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`` (D-d2 刪除版)
 UNVALUED_DIRECTION_OWN_AND_OTHERS_TEMPLATE = (
     "因本標的自身與其他標的的持倉皆無法估值，第 1、4、5 條上限（{names}）的比率方向不定，"
-    "可能偏高也可能偏低，低於上限的結果也可能建立在偏低的比率上。"
+    "可能偏高也可能偏低。"
 )
 UNVALUED_DIRECTION_OWN_AND_OTHERS = UNVALUED_DIRECTION_OWN_AND_OTHERS_TEMPLATE.format(
     names=_OWN_POSITION_LIMIT_NAMES
@@ -870,11 +879,11 @@ def _symbol_direction(context: PortfolioContext) -> str:
 
     Order of the rules, first match wins:
 
-    1. This symbol has unvalued lots of its own (``own_lots > 0``) -> D-d1
-       when they are the book's only unvalued lots (the other three counts
-       are 0), else D-d2 -- ahead of every rule below and whatever X is.
-       TODO(6-a): the clause-carrying D-d1 / D-d2 are replaced there by the
-       approved deleted-clause versions (ADR-0023 Decision 4, R-6).
+    1. This symbol has unvalued lots of its own
+       (:func:`app.advice.limits.symbol_has_unvalued_lots`, the predicate caps
+       1, 4 and 5 read) -> D-d1 when they are the book's only unvalued lots
+       (the other three counts are 0), else D-d2 -- ahead of every rule below
+       and whatever X is.
     2. The card has no industry (X is ``None``) -> D-a.
     3. Some unvalued lot is, or may be, in X (same or unknown) -> D-P.
     4. Otherwise -> D-a.
@@ -886,7 +895,7 @@ def _symbol_direction(context: PortfolioContext) -> str:
     composition = context.unvalued
     if composition is None:
         raise ValueError("a symbol-scope context must carry its unvalued composition")
-    if composition.own_lots > 0:
+    if symbol_has_unvalued_lots(context):
         others = (
             composition.same_sector_lots
             + composition.unknown_sector_lots.total()

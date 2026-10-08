@@ -1732,6 +1732,7 @@ def _fractional_ctx() -> PortfolioContext:
         position_market_value_twd=50.0,
         quantity=0.5,
         close=100.0,
+        book_fully_valued=True,
     )
 
 

@@ -692,20 +692,20 @@ def test_the_own_lot_clauses_are_byte_identical_to_the_approved_wording() -> Non
     approved wording itself: ``hashlib.sha256(text.encode("utf-8")).hexdigest()``
     where ``text`` is
 
-    * D-d1 -- the "new wording" bullet of the D-d1 correction-note section of
-      ``docs/adr/0022-stock-desk-單一產業佔比上限在同產業或產業未知持股無法估值時的判定.md``
-      (87 characters);
-    * D-d2 -- the D-d2 row of the approved-wording table in
-      ``work/reviews/2026-10-07-產業上限-同產業未估值-揭露字面-風控審查.md``
-      (103 characters).
+    * D-d1 -- the D-d1 (deleted-clause version) row of the approved-wording
+      table in section 1 of
+      ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md``
+      (66 characters);
+    * D-d2 -- the D-d2 (deleted-clause version) row of the same table
+      (83 characters).
     """
     assert (
         hashlib.sha256(UNVALUED_DIRECTION_OWN_ONLY.encode("utf-8")).hexdigest()
-        == "687cd525400421dd7b331421656d8fdd96eeba0bea3a540817cc581f73f5b01a"
+        == "e573b7bf272ea5da94bcfac599c7e9b665d43fe0e45b1f55d2c25aa292e429b3"
     )
     assert (
         hashlib.sha256(UNVALUED_DIRECTION_OWN_AND_OTHERS.encode("utf-8")).hexdigest()
-        == "98c17acb5eb3dccca84a405bfd6162cb2b1937207e0552d5c705657d0fb74d6a"
+        == "cd3cd87fba4a39a35f58920f2e905c727d690b5a2e3455e3d2c4395a4ff357eb"
     )
 
 
@@ -1285,7 +1285,11 @@ def test_d_d1_is_chosen_exactly_when_the_symbol_holds_every_unvalued_lot(
 
 
 def test_cap_4_is_not_evaluable_when_the_symbols_lots_mix_currencies() -> None:
-    """D-d1's premise (tech-architect): no single price, so no cap 4 ratio."""
+    """Book-layer half of D-d1's premise; end-to-end in
+    ``test_pr0_cap4_atr_backfill.py::test_t1_legacy_lots_in_two_currencies_withhold_cap_4``.
+
+    No single price, so no cap 4 ratio (tech-architect).
+    """
     summary = book_summary(
         book_position(1, "AAPL", market="US", currency="USD", fx_to_twd="31.5"),
         book_position(2, "AAPL", market="US", currency="TWD"),

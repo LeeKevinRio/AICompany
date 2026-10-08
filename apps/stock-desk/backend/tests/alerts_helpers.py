@@ -133,18 +133,25 @@ class RecordingLoader:
 
 
 def breaching_context(symbol: str = "2330") -> PortfolioContext:
-    """A book whose single-position weight is over the 15% cap."""
+    """A book whose single-position weight is over the 15% cap.
+
+    A complete book: every position was valued, none is unvalued.
+    """
     return PortfolioContext(
         symbol=symbol,
         total_equity_twd=1_000_000.0,
         position_market_value_twd=300_000.0,
         quantity=3_000.0,
         close=100.0,
+        book_fully_valued=True,
     )
 
 
 def compliant_context(symbol: str = "2330") -> PortfolioContext:
-    """A book comfortably inside every evaluable cap."""
+    """A book comfortably inside every evaluable cap.
+
+    A complete book: every position was valued, none is unvalued.
+    """
     return PortfolioContext(
         symbol=symbol,
         total_equity_twd=1_000_000.0,
@@ -152,4 +159,5 @@ def compliant_context(symbol: str = "2330") -> PortfolioContext:
         quantity=500.0,
         close=100.0,
         atr=2.0,
+        book_fully_valued=True,
     )

@@ -359,6 +359,41 @@ SECTOR_UNVALUED_UNKNOWN_PASSED_DETAIL = (
     "上述低於上限的結果也可能建立在偏低的佔比上。"
 )
 
+#: Caps 1, 4 and 5 when this symbol has unvalued lots of its own (ADR-0023
+#: Decision 4, route C' extended). The symbol's own position -- market value
+#: and share count -- only covers its valued lots, so each of the three ratios
+#: is computed from a short numerator:
+#:
+#: * W-a1 -- the computed ratio is below the cap: a pass would be read off a
+#:   ratio that may be low, so the cap is withheld (``not_evaluable``,
+#:   ``observed`` ``None``, threshold unchanged). Only where the ratio *was*
+#:   computed; every pre-existing cause (no ATR, no equity, no weight, no
+#:   usable Kelly pair) keeps its own sentence (R-3).
+#: * W-a2 -- the computed ratio reaches the cap: the breach stays a breach
+#:   (only ``violated`` blocks an ``add``) and W-a2 is appended, with no
+#:   space, to the end of the existing ``violated`` sentence (after cap 5's
+#:   disclosures). ``observed`` stays the computed ratio, the figure that
+#:   sentence prints (risk-compliance P-3 correction). Never on D-5.
+#:
+#: Neither names a count (the card already carries ``SYMBOL_UNVALUED_NOTE``),
+#: and W-a2 claims no direction: it is used both when the ratio reads low and
+#: when it may read either way. ``{name}`` is filled from :data:`LIMIT_NAMES`.
+#:
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`` (W-a1)
+OWN_UNVALUED_NOT_EVALUABLE_DETAIL = (
+    "本標的有持倉無法估值，未計入部位市值與持股數，比率的分子不完整，"
+    "只以已估值持倉計算的比率可能偏低；因此{name}本次不計算，"
+    "回報 not_evaluable，無法判定是否違反。"
+)
+#: W-a2, appended after the existing ``violated`` sentence (see above).
+#: 風控核可文案,修改須重新送審(2026-10-07)
+#: ``work/reviews/2026-10-07-上限分子不完整-非對稱判定-揭露字面-風控審查.md`` (W-a2)
+OWN_UNVALUED_VIOLATED_DETAIL = (
+    "本標的另有持倉無法估值，{name}所用的比率只以已估值的持倉計算，"
+    "實際比率無法確認；{name}仍以已達上限處理。"
+)
+
 #: AC-9.2: what cap 3 said before FR-9 existed, kept verbatim as the opening
 #: sentence so a user who never entered a net worth sees no change at all, with
 #: the one input that would make the cap evaluable named after it.
@@ -961,14 +996,19 @@ def _check_single_position_weight(budget: RiskBudget, ctx: PortfolioContext) -> 
     weight = ctx.position_weight()
     if weight is None:
         return ("not_evaluable", "缺少總資產或部位市值，無法計算單一標的佔比。", None, threshold)
+    own_unvalued = symbol_has_unvalued_lots(ctx)
     if _breaches(weight, threshold):
-        return (
-            "violated",
+        violated = (
             f"{ctx.symbol} 佔總資產 {format_percent(weight)}，"
-            f"已達或超過上限 {format_percent(threshold)}。",
-            weight,
-            threshold,
+            f"已達或超過上限 {format_percent(threshold)}。"
         )
+        if own_unvalued:
+            # ADR-0023 Decision 4: a breach provable from the valued lots alone
+            # stays a breach; W-a2 says the ratio rests on those lots only.
+            violated += _own_unvalued_violated("single_position_weight")
+        return ("violated", violated, weight, threshold)
+    if own_unvalued:
+        return ("not_evaluable", _own_unvalued_withheld("single_position_weight"), None, threshold)
     return (
         "passed",
         f"{ctx.symbol} 佔總資產 {format_percent(weight)}，低於上限 {format_percent(threshold)}。",
@@ -1048,6 +1088,60 @@ def sector_numerator_gaps(ctx: PortfolioContext) -> SectorNumeratorGaps:
         unknown=unknown,
         valued_unclassified=unclassified is not None and unclassified.total() > 0,
     )
+
+
+def symbol_has_unvalued_lots(ctx: PortfolioContext) -> bool:
+    """Whether this symbol has unvalued lots of its own ("own > 0", ADR-0023).
+
+    The one place in the repo that reads :attr:`UnvaluedComposition.own_lots`
+    as a yes/no (KA-2, RA-2): caps 1, 4 and 5, their sizing gate
+    (:func:`numerator_complete`) and the card's direction clause all ask it
+    here, so they cannot disagree about whether the symbol's own numerator is
+    short.
+
+    A context that does not say where its unvalued lots sit (``unvalued`` is
+    ``None``, i.e. hand-assembled) is read as "none of its own" only when it
+    also says the book was fully valued; anything else is read as "has some"
+    (KC-5) -- the conservative branch, since a clean book is never guessed
+    from silence.
+    """
+    composition = ctx.unvalued
+    if composition is None:
+        return ctx.book_fully_valued is not True
+    return composition.own_lots > 0
+
+
+def numerator_complete(ctx: PortfolioContext, limit_id: str) -> bool:
+    """Whether cap ``limit_id``'s numerator is complete, i.e. it may be sized from.
+
+    The single "may this cap be used for sizing?" predicate over all five caps
+    (ADR-0023 Decision 2, KC-2): a cap whose numerator may be short stays out
+    of :func:`notional_caps` even when it is ``violated``, because the headroom
+    derived from a short numerator is overstated, and a sell-side range sized
+    from it would describe a trade that does not clear the cap. One branch per
+    cap, each reading the field its own verdict reads.
+    """
+    if limit_id == "single_position_weight":
+        return not symbol_has_unvalued_lots(ctx)
+    if limit_id == "sector_weight":
+        return sector_numerator_gaps(ctx).complete()
+    if limit_id == "gross_exposure":
+        return ctx.book_fully_valued is True
+    if limit_id == "per_trade_loss":
+        return not symbol_has_unvalued_lots(ctx)
+    if limit_id == "kelly_fraction":
+        return not symbol_has_unvalued_lots(ctx)
+    raise ValueError(f"unknown limit id: {limit_id!r}")
+
+
+def _own_unvalued_withheld(limit_id: str) -> str:
+    """W-a1 for one of caps 1, 4 and 5, named from :data:`LIMIT_NAMES`."""
+    return OWN_UNVALUED_NOT_EVALUABLE_DETAIL.format(name=LIMIT_NAMES[limit_id])
+
+
+def _own_unvalued_violated(limit_id: str) -> str:
+    """W-a2 for one of caps 1, 4 and 5, named from :data:`LIMIT_NAMES`."""
+    return OWN_UNVALUED_VIOLATED_DETAIL.format(name=LIMIT_NAMES[limit_id])
 
 
 def _check_sector_weight(budget: RiskBudget, ctx: PortfolioContext) -> CheckResult:
@@ -1187,14 +1281,19 @@ def _check_per_trade_loss(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
         return ("not_evaluable", "ATR(14) 為 0，停損距離無法定義。", None, threshold)
     loss_ratio = shares * stop_distance_twd / ctx.total_equity_twd
     basis = f"以 {budget.atr_stop_multiple:g}×ATR(14) 為停損距離"
+    # Only past every guard above: W-a1 / W-a2 qualify a ratio that was
+    # computed, never one of the four causes that leave none (R-3).
+    own_unvalued = symbol_has_unvalued_lots(ctx)
     if _breaches(loss_ratio, threshold):
-        return (
-            "violated",
+        violated = (
             f"{basis}，觸及停損時的損失約佔總資產 {format_percent(loss_ratio)}，"
-            f"已達或超過上限 {format_percent(threshold)}。",
-            loss_ratio,
-            threshold,
+            f"已達或超過上限 {format_percent(threshold)}。"
         )
+        if own_unvalued:
+            violated += _own_unvalued_violated("per_trade_loss")
+        return ("violated", violated, loss_ratio, threshold)
+    if own_unvalued:
+        return ("not_evaluable", _own_unvalued_withheld("per_trade_loss"), None, threshold)
     return (
         "passed",
         f"{basis}，觸及停損時的損失約佔總資產 {format_percent(loss_ratio)}，"
@@ -1317,13 +1416,15 @@ def _check_kelly_fraction(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     if allowed is None:  # pragma: no cover - kelly_usable already established it
         return ("not_evaluable", _kelly_not_evaluable_detail(kelly), None, None)
     weight = ctx.position_weight()
+    own_unvalued = symbol_has_unvalued_lots(ctx)
     if allowed <= 0.0:
         # D-5: a non-positive edge is ``violated`` with a sentence of its own.
         # It is decided before the weight is needed, because the finding does
         # not depend on one -- the allowance is 0 whatever the holding is -- and
         # because the general phrasing ("目前佔比 X 已達或超過該上限") reads as a
         # demand to sell down to 0 when the cap is 0. The reported observed value
-        # is still the weight, so the card has the same two numbers as elsewhere.
+        # is still the weight, so the card has the same two numbers as elsewhere
+        # -- except when that weight is short (see the return below).
         #
         # 條件 41: this sentence first, then (a-2) if the interval is flagged.
         # (e)/(e-manual) are *not* attached: they qualify a win rate that was
@@ -1331,7 +1432,12 @@ def _check_kelly_fraction(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
         detail = KELLY_NON_POSITIVE_FRACTION_DETAIL
         if kelly.ci_includes_no_edge:
             detail += KELLY_F_STAR_INTERVAL_FLAG_DISCLOSURE
-        return ("violated", detail, weight, allowed)
+        # ADR-0023 / risk-compliance 6-a ruling (3): with unvalued lots of the
+        # symbol's own, the weight covers the valued lots only, and nothing on
+        # this branch qualifies it (the sentence prints no weight and W-a2 is
+        # not attached here). So the weight is not reported; status, detail
+        # and threshold stay exactly as they are.
+        return ("violated", detail, None if own_unvalued else weight, allowed)
     if weight is None:
         return ("not_evaluable", "缺少總資產或部位市值，無法比較 Kelly 部位上限。", None, allowed)
     detail_head = (
@@ -1344,12 +1450,16 @@ def _check_kelly_fraction(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     # in front of it, and the disclosures belong to the win rate just printed.
     disclosures = _kelly_disclosures(kelly)
     if _breaches(weight, allowed):
-        return (
-            "violated",
-            f"{detail_head}，目前佔比 {format_percent(weight)} 已達或超過該上限。{disclosures}",
-            weight,
-            allowed,
+        violated = (
+            f"{detail_head}，目前佔比 {format_percent(weight)} 已達或超過該上限。{disclosures}"
         )
+        if own_unvalued:
+            # W-a2 goes after the disclosures, which qualify the win rate
+            # printed just before them (R-4).
+            violated += _own_unvalued_violated("kelly_fraction")
+        return ("violated", violated, weight, allowed)
+    if own_unvalued:
+        return ("not_evaluable", _own_unvalued_withheld("kelly_fraction"), None, allowed)
     return (
         "passed",
         f"{detail_head}，目前佔比 {format_percent(weight)} 低於該上限。{disclosures}",
@@ -1403,7 +1513,10 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
     """Per-cap TWD ceilings on *this symbol's* market value.
 
     Only the caps whose inputs are present appear in the result; the caller
-    takes the minimum of what is there and reports what was left out.
+    takes the minimum of what is there and reports what was left out. Every
+    cap is also gated on :func:`numerator_complete` (ADR-0023 Decision 2,
+    KC-2): a cap whose numerator may be short is left out even when it is
+    ``violated``, because the headroom it would yield is overstated.
     """
     caps: dict[str, float] = {}
     equity = ctx.total_equity_twd
@@ -1411,19 +1524,24 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
         return caps
     current = ctx.position_market_value_twd
 
-    caps["single_position_weight"] = budget.max_position_weight * equity
+    # Caps 1, 4 and 5 sit on this symbol's own position: with unvalued lots
+    # of its own, ``current`` is short and "cap - current" overstates the room
+    # left (ADR-0023 Decision 4; risk-compliance 6-a ruling (1)).
+    if numerator_complete(ctx, "single_position_weight"):
+        caps["single_position_weight"] = budget.max_position_weight * equity
 
     # Cap 2 is sized from only when its numerator is complete (ADR-0022
     # Decision 4): an unvalued lot that is or may be in this industry, or a
     # valued holding in no industry, leaves the headroom overstated -- and
     # that holds for a ``passed`` with W3 (unknown only) as much as for any
     # other branch. The condition is :func:`sector_numerator_gaps`, the one
-    # :func:`_check_sector_weight` reads.
+    # :func:`_check_sector_weight` reads, asked through
+    # :func:`numerator_complete`.
     if (
         ctx.sector is not None
         and ctx.sector_market_value_twd is not None
         and current is not None
-        and sector_numerator_gaps(ctx).complete()
+        and numerator_complete(ctx, "sector_weight")
     ):
         others = max(ctx.sector_market_value_twd - current, 0.0)
         caps["sector_weight"] = max(budget.max_sector_weight * equity - others, 0.0)
@@ -1431,9 +1549,13 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
     # Cap 3's headroom is measured against the *net worth*, never against
     # ``equity``. The gate is :func:`_check_gross_exposure` itself rather than a
     # copy of its conditions, so a sizing suggestion can never be derived from a
-    # cap the card reports as ``not_evaluable``.
+    # cap the card reports as ``not_evaluable``. :func:`numerator_complete` is
+    # added on top of that gate, not in place of it: an expired net worth is
+    # ``not_evaluable`` on a complete book too (ADR-0023 Decision 2 erratum).
     if ctx.net_worth is not None and ctx.gross_exposure_twd is not None and current is not None:
-        if _check_gross_exposure(budget, ctx)[0] != "not_evaluable":
+        if _check_gross_exposure(budget, ctx)[0] != "not_evaluable" and numerator_complete(
+            ctx, "gross_exposure"
+        ):
             others = max(ctx.gross_exposure_twd - current, 0.0)
             caps["gross_exposure"] = max(
                 budget.max_gross_exposure * ctx.net_worth.amount_twd - others, 0.0
@@ -1441,7 +1563,7 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
 
     max_shares = atr_max_shares(budget, ctx)
     price = ctx.price_twd()
-    if max_shares is not None and price is not None:
+    if max_shares is not None and price is not None and numerator_complete(ctx, "per_trade_loss"):
         caps["per_trade_loss"] = max_shares * price
 
     # D-5's exclusion rule. ``allowed`` is already ``None`` for a pair cap 5
@@ -1455,7 +1577,7 @@ def notional_caps(budget: RiskBudget, ctx: PortfolioContext) -> dict[str, float]
     # an estimate that says nothing more than "no edge was measured". Cap 5
     # still reports ``violated`` in that state; it just does not size anything.
     allowed = kelly_allowed_weight(budget, ctx)
-    if allowed is not None and allowed > 0.0:
+    if allowed is not None and allowed > 0.0 and numerator_complete(ctx, "kelly_fraction"):
         caps["kelly_fraction"] = allowed * equity
 
     return caps
