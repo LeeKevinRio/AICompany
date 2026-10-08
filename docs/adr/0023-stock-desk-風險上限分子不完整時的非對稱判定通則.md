@@ -150,6 +150,15 @@
 - W-a2 進推播（風控 required）：推播無 `SYMBOL_UNVALUED_NOTE`，W-a2 須自述「本標的有持倉無法估值、比率只用已估值部分、以已達上限處理」；同句用於 d1 與 d2，故**不得宣稱下限或「實際只會更高」**，無賣出指示或催促。
 - 既有 skipped 句（「缺少可用資料」）延用到「分子不完整而排除」，**字面不改**（風控 6-a 裁定 (4)）；卡片可能並列「第 1 條 violated」與「未參與計算」，qa-e2e 375 抽驗。〔2026-10-07 風控 P-5 更正（審查檔第五段）：**own>0 下此並列不可能出現**——`notional_caps` 必為空、`suggest_quantity_range` 回傳 None、skipped 句不會產生（前提：第 3 條閘門為「加上」，見 Decision 2 勘誤）；並列情境移到 6-b（own=0、帳本不完整、第 3 條 violated，見 R-11 勘誤的 R-P5-2）。原文保留不刪。〕
 - **required（6-a 同一包）**：own>0 時方向子句處置（ADR-0022 的 D-d1／D-d2 因第 1、4、5 條不再有 passed 而失去所指）由 creative-lead 提出，送風控逐字審。suggested：qa 確認警示 bare context 在 own>0 時不會走 `_inferred_sector_gap` 推成 no_position（`limits.py:871-873`）。
+- **〔2026-10-08 加註（tech-architect 可達性評估）；B 類轉錄，上列原文保留不刪〕W-a2（含第 4 條）在正式路徑可達。**
+  - 來源與版本：tech-architect 評估 `work/reviews/2026-10-08-tech-architect-第4條W-a2可達性與F-6修法評估.md`（問題 1，2026-10-08，唯讀、未跑測試、未跑 git；coordinator 轉錄；dev-lead 正在改工作樹，行號可能漂移）；風控裁定 `work/reviews/2026-10-08-風控小項裁定-X-5用語-數量區間文案-R0-7捲動-R-P3-3結案.md` 第 4 項（2026-10-08）。tech-writer 未重新對 code 驗證，其中 `檔案:行號`、函式名、測試名皆為 tech-architect／風控所述。
+  - **可達成因**：同一標的有一批 US／USD 持倉的建倉日期空白（`opened_at` 為 None）→ 該批 `fx_open` 缺、估值記為 `insufficient_data`（`missing` 為 `["fx_open"]`）；同標的另一批若有建倉日期且查得到匯率則為 ok。此時 book 層幣別單一、匯率可解析、close 與 ATR 保留、own=1，第 4 條比率算得出來，達上限即 violated 加 W-a2；同一路徑亦可使第 1、5 條出現 W-a2 與 D-5 own>0 分支。tech-architect 所述讀碼依據：`positions/models.py` `opened_at` 可為 None（約 L138-141）、`PositionWriteInput` 不擋（約 L208-226）、`portfolio/valuation.py` 約 L335-350、L438-446。另依 tech-architect 成因表，`fx_open` 缺亦包含「建倉日前 7 天內查不到匯率」。
+  - **成因表摘要（tech-architect 對「本標的有批次未估值」各成因能否到 W-a2 的判定）**：`fx_open` 缺 → **可達**；價格缺 → 同 (symbol, market) 批次共用同一次取價、一起失敗，已估值股數為 0，只到 W-a1；close 非正值（F-1）、`fx_now` 缺、幣別混雜、legacy A／B 型、X-3c 不符列 → 皆不可達（close 與 ATR 一併撤下，或整卡 insufficient_data，或不產生 own>0）。另有一項理論可達的退化情形（`max_loss_per_trade` 門檻 ≤ 1e-9），屬既有邊界問題、列管 low、非本案。
+  - **更正第二十六輪與測試註解**：第二十六輪 e2e 結論 2「W-a2、D-5 加 own>0 在正式 API 路徑不可達」，以及 `apps/stock-desk/backend/tests/test_adr0023_own_unvalued.py:814-815` 註解（「test client 建不出同標的一批已估值、一批未估值」）所稱「正式 API 建不出」**不精確**。風控已要求更正為「**本輪斷網沙箱不可達**」（風控 2026-10-08 裁定第 4 項）；讀碼推定正式 API 可達，已由 tech-architect 確認。tech-architect 建議註解改為「TW 建不出；US 的 opened_at 留空可以建出」，由 qa-automation 修改。
+  - **驗收前提**：(1) USDTWD 要解得出來——tech-architect 所述 FX 目前沒有快取層（`services/fx.py` 約 L313、L325），直寫 DB 補不了匯率，故 e2e 需對外網路，或 devops-sre 核可的 FX stub（不得以放寬唯讀邊界處理）；(2) 兩批持倉須經正式 POST 或 UI 建立；(3) advice 用 cache_only 估值，AAPL 類標的日線須先在 bar cache 內（tech-architect 所述）。
+  - **現況缺口**：目前**尚無**經正式路徑的第 4 條 W-a2 測試（既有單元測試用手組 context；既有 API 測試以 monkeypatch 換掉 `build_summary`，且該帳本的第 4 條斷言為 W-a1）。由 qa-automation 補 API 層測試（fixture 見 tech-architect 評估檔「交給 qa-automation 的最小 fixture」，本 ADR 不重抄）。coordinator 定案（CEO 可推翻）：先以 API 層正式路徑測試結案，e2e 實機補驗列為待辦，前提是 devops-sre 提供核可的 FX stub。風控將第 4 條 W-a2 未取證列管 low，不擋 PR-0、PR-1。
+  - **失效條件**：若日後改成「沒有建倉日就以 `fx_now` 代替 `fx_open`」，此路徑消失，須重新評估本加註與 W-a2（第 4 條）的驗收做法。
+  - **提醒**：此路徑**可達**，不得改寫為「不可達、保留為防禦」。
 
 ### 5. 6-b 適用：第 3 條（`book_fully_valued is not True`）
 
@@ -375,6 +384,7 @@
   - **(xii)** ADR-0023 Consequences 3(b) 的 S-B2 口徑有誤，一部分源自風控第一段第 7 點，是風控的疏失。對使用者的實際效果是：own>0 且沒有超標時，「任一上限」規則一律略過，理由句寫「缺少輸入」（實際原因是分子不完整，用語不精確，已列管）。不會出現「N 條上限未評估」的揭露句。不會產生錯誤放行。
   - **(xiii)** PR-1 必須在 PR-0 之後合併（R0-1）。如果順序顛倒，過渡期 own>0 的第 4 條會用回填的 ATR 和占位匯率算出 W-a1／W-a2：方向一致，但同卡 FX note 的矛盾仍在（PR-0 的 C-1）。
   - **(xiv)** 「同一標的部分估值」的端到端測試用了替身。正式可達路徑只有 legacy 雙幣別資料；「全部無法估值」是一般正式路徑，有無替身的測試。
+    - **〔2026-10-08 加註（tech-architect 可達性評估）；原文保留〕** 「正式可達路徑只有 legacy 雙幣別資料」不精確：tech-architect 評估另指出，同標的 US／USD 兩批、其一 `opened_at` 留空（`fx_open` 缺）也能經正式 POST 建出「一批已估值、一批未估值」（own>0）。詳見 Decision 4 末〔2026-10-08 加註〕。
   - 若 CEO 對以上裁定有異議，保留本書面紀錄，由 CEO 負最終責任。
 - 列管彙總：own>0 加碼降級（(A) 已採，字面風控核可 2026-10-07，待落地；medium，tech-architect）；「結論已調整」操作摘要標記（medium，creative-lead／art-lead／frontend，新字面送審）；F-1b（medium，dev-lead／devops-sre）；`SECTOR_UNCLASSIFIED_NOTE` 措辭（low，creative-lead，見 ADR-0022）。
 
@@ -593,7 +603,7 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
   - **C-3 ADR 更正**：tech-writer 更正本 ADR Consequences 3(b)(e)(f)(g) 與 RF-4、待確認表、Consequences 6 及風控裁定轉錄第 7 點（**已於 2026-10-07 落檔**，見各處〔2026-10-07 更正，風控第六段〕）。
   - **C-4 PR 說明更正**：6A-19 的 PR 說明要照更正後口徑改寫，不能再寫「any 規則未評估條數最多 +3」。
   - **C-5 RF-5 盤點**：qa 要逐處歸類，不能只看全套測試是否通過，結果寫進 RF-6 的 PR 說明。
-  - 另（風控第六段）：**RF-1 的英文等義句 docstring 可接受**；6A-14 的「同一標的部分估值」端到端替身接受，條件是 PR 說明寫明「部分估值」的正式可達路徑只有 legacy 雙幣別（列管可達），「全部未估值」才是一般正式路徑；`test_adr0022_sector_unvalued.py:1288` docstring 宣稱的 `test_api_advice` T1 須隨 PR-0 存在，不存在就先改掉該句。
+  - 另（風控第六段）：**RF-1 的英文等義句 docstring 可接受**；6A-14 的「同一標的部分估值」端到端替身接受，條件是 PR 說明寫明「部分估值」的正式可達路徑只有 legacy 雙幣別（列管可達），「全部未估值」才是一般正式路徑（〔2026-10-08 加註，tech-architect 可達性評估：「只有 legacy 雙幣別」不精確，另有 US／USD 同標的一批 `opened_at` 留空的正式路徑，見 Decision 4 末加註；原文保留〕）；`test_adr0022_sector_unvalued.py:1288` docstring 宣稱的 `test_api_advice` T1 須隨 PR-0 存在，不存在就先改掉該句。
 
 - **開工／合併共通**（PR-1、PR-3，tech-architect 所述）：第二十五輪 e2e 結束、ADR-0022 PR（66a88b3）視為可合併（KB-4；本 ADR §9）；F-1 已 release（且不與 F-1 同 PR，KC-6）；P-3（PR-1）／P-4（PR-3）風控已回覆。PR-1 分支從 `product/stock-desk`（含 66a88b3）開出。
 - **CEO 表態 ADR-0023 accepted 前提 4（見狀態欄：CEO 未推翻 2026-10-07 各裁定，並知悉 (vii) M-1 高估方向、(viii) 降級／擋下原因只在預設收合的卡內可見；風控第五段另增補 (ix)(x)(xi)，見「被此決策約束的事」）為 PR-1／PR-3 的合併閘門**。此為 **tech-architect 建議、coordinator 採納，CEO 可推翻**。理由（tech-architect 所述）：程式碼會把這些裁定固定下來；開發本身可照 ADR-0022 先例在 proposed 狀態下開工。
