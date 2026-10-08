@@ -95,7 +95,9 @@ def build_snapshot(
     field instead, because it has the opposite destination: it qualifies a rate
     that *was* applied, so it belongs to the risk-cap message a **fired** alert
     sends -- and ``reason`` is read by no fired path. Putting it in ``reason``
-    would look like a disclosure while reaching nobody.
+    would look like a disclosure while reaching nobody. Whether a rate was
+    applied is judged once, by the book layer (``BookContext.fx_disclosure``,
+    task X-3 KX-10); this module only carries the answer.
     """
     end = today if today is not None else date.today()
     loaded = load_bars(
@@ -139,11 +141,11 @@ def build_snapshot(
         else f"資料來自 {loaded.status.value} 層（{loaded.source}）。"
     )
     data_reason = _joined_reason(layer_note, loaded.reason)
-    # Disclosed on exactly the condition ``build_book_context`` uses: only a
-    # rate that was actually applied to a figure needs its methodology stated.
-    # A TWD holding resolves no quote at all, and a failed lookup has nothing to
-    # disclose because nothing was converted -- ``book.fx_note`` covers that.
-    fx_disclosure = fx.source_note if fx is not None and book.fx_rate is not None else None
+    # Only a rate that was actually applied to a figure needs its methodology
+    # stated, and the book layer is the one place that judges it (X3-R1): a
+    # second condition here is how a TWD holding priced off a USD series came
+    # to carry a disclosure for a rate nothing was converted with.
+    fx_disclosure = book.fx_disclosure
     return SymbolSnapshot(
         symbol=symbol,
         market=market,

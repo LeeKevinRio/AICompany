@@ -16,8 +16,16 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.api.deps import (
+    get_cached_valuator,
+    get_fx_provider,
+    get_market_resolver,
+    get_valuator,
+)
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.data.providers.fx import FxRateProvider, FxRateResult
+from app.main import app
+from app.portfolio.valuation import PositionValuator
 
 _AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
 
@@ -167,6 +175,32 @@ class UnavailableFxProvider(FxRateProvider):
         return FxRateResult(
             rates=[], status=DataStatus.UNAVAILABLE, as_of=_AS_OF, source=self.source_id
         )
+
+
+def serve_us_market(
+    *,
+    tw_service: FakePriceService,
+    us_service: FakePriceService,
+    fx_provider: FxRateProvider,
+) -> None:
+    """Let the ``api_harness`` quote and value US symbols (task X-3 KX-10).
+
+    The default harness has no US adapter on purpose -- ``test_api_advice``
+    pins the "no US source" card -- so a test that needs a US holding valued
+    and carded opts in here, inside a test that already holds the harness.
+    Overrides the market resolver, both valuators (live and cache-only, the
+    same pair the harness builds) and the FX provider; the harness fixture's
+    teardown clears every override.
+    """
+    services: dict[Market, FakePriceService] = {"TW": tw_service, "US": us_service}
+    valuator = PositionValuator(market_services=services, fx_provider=fx_provider)
+    cached_valuator = PositionValuator(
+        market_services=services, fx_provider=fx_provider, price_mode="cache_only"
+    )
+    app.dependency_overrides[get_market_resolver] = lambda: services
+    app.dependency_overrides[get_valuator] = lambda: valuator
+    app.dependency_overrides[get_cached_valuator] = lambda: cached_valuator
+    app.dependency_overrides[get_fx_provider] = lambda: fx_provider
 
 
 def position_payload(**overrides: object) -> dict[str, object]:

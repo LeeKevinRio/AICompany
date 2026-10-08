@@ -410,6 +410,12 @@ class BookContext:
     #: The single FX sentence from the notes, for callers whose output shape
     #: has no notes list of its own (the alert snapshot).
     fx_note: str | None = None
+    #: The FX source's standing disclosure, present only when the quote it
+    #: belongs to was applied to this context's figures (risk X3-R1, task X-3
+    #: KX-10); ``None`` for a TWD holding, a mixed-currency one and every
+    #: failed conversion. Judged here once: the alert snapshot reads this field
+    #: and states no condition of its own.
+    fx_disclosure: str | None = None
 
     @property
     def notes(self) -> list[str]:
@@ -1118,16 +1124,21 @@ def build_book_context(
         notes.append(MIXED_CURRENCY_NOTE)
 
     effective_currency = holding_currency if matched else currency
+    applied: FxQuote | None
     if mixed_currencies:
         # Which of the two rates would be the right one is undecidable, so the
         # question is refused rather than answered with one of them.
-        rate, fx_note = None, None
+        rate, fx_note, applied = None, None, None
     else:
-        rate, fx_note = _resolve_fx(effective_currency, fx)
+        rate, fx_note, applied = _resolve_fx(effective_currency, fx)
+    # A methodology sentence only for the quote that was applied (X3-R1): a
+    # non-``None`` ``rate`` is not that signal, since a TWD holding gets 1.0
+    # whatever quote the caller resolved for the bars.
+    fx_disclosure = applied.source_note if applied is not None and applied.source_note else None
     if fx_note is not None:
         notes.append(fx_note)
-    if rate is not None and fx is not None and fx.source_note:
-        notes.append(fx.source_note)
+    if fx_disclosure is not None:
+        notes.append(fx_disclosure)
 
     context = PortfolioContext(
         symbol=symbol,
@@ -1166,40 +1177,57 @@ def build_book_context(
         symbol_notes=tuple(notes),
         fx_rate=rate,
         fx_note=fx_note,
+        fx_disclosure=fx_disclosure,
     )
 
 
-def _resolve_fx(currency: str | None, fx: FxQuote | None) -> tuple[float | None, str | None]:
-    """Instrument currency -> ``(rate, note)``; ``rate`` is ``None`` if unusable.
+def _resolve_fx(
+    currency: str | None, fx: FxQuote | None
+) -> tuple[float | None, str | None, FxQuote | None]:
+    """Instrument currency -> ``(rate, note, applied)``; ``rate`` is ``None`` if unusable.
 
     A TWD instrument (or a candidate with no currency at all) is already in the
     reporting currency and needs no quote. For every other currency the quote
     has to exist, be for the right pair, and carry a positive rate; anything
     else returns ``None`` with a sentence naming *which* input was missing, so
     "no price" and "no FX conversion" never look the same downstream.
+
+    ``applied`` is ``fx`` itself on the one branch that converts with it and
+    ``None`` on every other, including the TWD branch's 1.0 (task X-3 KX-10):
+    it is what decides whether the quote's standing disclosure may be shown.
     """
     if currency is None or currency.strip().upper() == "TWD":
-        return 1.0, None
+        return 1.0, None, None
     if fx is None:
-        return None, NO_FX_QUOTE_NOTE.format(currency=currency)
+        return None, NO_FX_QUOTE_NOTE.format(currency=currency), None
 
     expected = f"{currency.strip().upper()}TWD"
     if fx.pair.strip().upper() != expected:
-        return None, FX_PAIR_MISMATCH_NOTE.format(
-            currency=currency, expected=expected, pair=fx.pair
+        return (
+            None,
+            FX_PAIR_MISMATCH_NOTE.format(currency=currency, expected=expected, pair=fx.pair),
+            None,
         )
     if fx.rate is None or fx.rate <= 0.0:
-        return None, FX_UNAVAILABLE_NOTE.format(
-            currency=currency,
+        return (
+            None,
+            FX_UNAVAILABLE_NOTE.format(
+                currency=currency,
+                pair=fx.pair,
+                status=fx.status.value,
+                source=fx.source,
+                as_of=fx.as_of or "未知",
+            ),
+            None,
+        )
+    return (
+        fx.rate,
+        FX_APPLIED_NOTE.format(
             pair=fx.pair,
+            rate=f"{fx.rate:g}",
             status=fx.status.value,
             source=fx.source,
             as_of=fx.as_of or "未知",
-        )
-    return fx.rate, FX_APPLIED_NOTE.format(
-        pair=fx.pair,
-        rate=f"{fx.rate:g}",
-        status=fx.status.value,
-        source=fx.source,
-        as_of=fx.as_of or "未知",
+        ),
+        fx,
     )

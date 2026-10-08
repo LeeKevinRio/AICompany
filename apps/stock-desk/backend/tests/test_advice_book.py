@@ -508,6 +508,9 @@ def test_a_twd_holding_needs_no_quote_and_gets_no_fx_note() -> None:
     assert book.context.fx_to_twd == 1.0
     assert book.fx_rate == 1.0
     assert book.fx_note is None
+    # KX-10: the quote was handed in but never applied, so no methodology.
+    assert "此匯率來源未經查證。" not in book.notes
+    assert book.fx_disclosure is None
 
 
 def test_a_symbol_held_in_two_currencies_drops_the_price() -> None:
