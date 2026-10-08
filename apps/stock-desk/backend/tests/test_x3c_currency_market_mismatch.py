@@ -279,6 +279,7 @@ def test_kxa2_a_mismatched_row_is_unvalued_without_any_lookup(
     assert PRICE_NOT_QUERIED not in result.missing
     assert result.price is None
     assert result.fx is None  # art-lead R-1: no "匯率 資料不足" badge to draw
+    assert result.fx_open is None  # RK-5 R5-10d: nor an open-date rate
     assert result.pnl_original is None
     assert result.pnl_twd is None
     assert result.asset_contribution_twd is None
@@ -345,6 +346,7 @@ def test_kxa2_the_summary_payload_carries_no_fx_for_a_mismatched_row(
     assert row["valuation"]["status"] == "insufficient_data"
     assert row["valuation"]["missing"] == [_token()]
     assert row["valuation"]["fx"] is None
+    assert row["valuation"]["fx_open"] is None
     assert row["valuation"]["price"] is None
     assert row["market_value_twd"] is None
     assert body["fx_disclosures"] == []

@@ -12,6 +12,7 @@ so a partial total is never silently presented as if it were the whole book.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
@@ -23,6 +24,8 @@ from app.portfolio.price_change import ChangeScreen, PriceChange
 from app.portfolio.valuation import ChangeMode, PositionValuator, Valuation
 from app.positions.models import Currency, InstrumentType, Market, Position
 from app.positions.store import PositionStore
+
+logger = logging.getLogger(__name__)
 
 
 class Totals(BaseModel):
@@ -94,7 +97,8 @@ class PortfolioSummary(BaseModel):
     positions: list[SummaryPosition]
     #: The standing disclosure of every FX source whose rate went into this
     #: book's TWD figures (ADR-0011; 風控 2026-09-19 條件 (1)): shown beside the
-    #: converted totals, in first-seen order, each sentence once.
+    #: converted totals, in first-seen order, each sentence once. Read from the
+    #: ``ok`` positions only (task RK-5, O-5); for now ``fx_now``'s source only.
     fx_disclosures: list[str] = []
     #: Which change bases this book's rows may carry (ADR-0016 D-8), fixed by
     #: how the valuator was built. ``close_only`` guarantees no
@@ -103,15 +107,54 @@ class PortfolioSummary(BaseModel):
 
 
 def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
-    """Unique ``source_note`` of every FX rate actually used, in first-seen order."""
+    """Unique ``source_note`` of every FX rate actually used, in first-seen order.
+
+    Only an ``ok`` valuation put its rate into a figure; an unvalued position's
+    rate was looked up but multiplied into nothing, so its source is not
+    described (task RK-5, O-5 / R5-3). Still ``fx_now``'s sentence alone: the
+    ``fx_open`` sentences and the mixed-source sentence are PR-RK5b's (R5-8).
+    """
     seen: list[str] = []
     for valuation in valuations:
+        if valuation.status != "ok":
+            continue
         info = valuation.fx
         if info is None or info.data_status is DataStatus.UNAVAILABLE or not info.source_note:
             continue
         if info.source_note not in seen:
             seen.append(info.source_note)
     return seen
+
+
+def _log_mixed_fx_sources(valuations: list[Valuation]) -> None:
+    """Log each ``ok`` position whose two rates come from two source ids (task RK-5, R5-4).
+
+    Observability only: the FX contribution of such a position also carries
+    the gap between the two sources' measures. One line per
+    ``(pair, now source, open source)`` per call, carrying the first such
+    position's rate dates; pair, source ids and dates only -- no symbol,
+    position id, amount, quantity or rate -- and never forwarded to a push.
+    """
+    logged: set[tuple[str, str, str]] = set()
+    for valuation in valuations:
+        now, open_ = valuation.fx, valuation.fx_open
+        if valuation.status != "ok" or now is None or open_ is None:
+            continue
+        if now.source == open_.source:
+            continue
+        combination = (now.pair, now.source, open_.source)
+        if combination in logged:
+            continue
+        logged.add(combination)
+        logger.warning(
+            "fx_now and fx_open sources differ within one book: pair=%s now_source=%s "
+            "now_as_of=%s open_source=%s open_as_of=%s",
+            now.pair,
+            now.source,
+            now.as_of,
+            open_.source,
+            open_.as_of,
+        )
 
 
 def build_summary(
@@ -167,11 +210,13 @@ def build_summary(
         fx_contribution_twd=fx,
         status=_totals_status(total=len(positions), ok=ok_count),
     )
+    valued_rows = [item.valuation for item in summary_positions]
+    _log_mixed_fx_sources(valued_rows)
     return PortfolioSummary(
         as_of=as_of,
         totals=totals,
         positions=summary_positions,
-        fx_disclosures=fx_disclosures_for([item.valuation for item in summary_positions]),
+        fx_disclosures=fx_disclosures_for(valued_rows),
         change_mode=valuator.change_mode,
     )
 

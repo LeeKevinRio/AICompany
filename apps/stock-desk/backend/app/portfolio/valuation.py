@@ -51,9 +51,9 @@ X-3c, KX-A2): which of the two fields is wrong cannot be told from the row, so
 no currency is guessed and no price or FX source is asked. It reports
 ``insufficient_data`` with ``missing == [CURRENCY_MARKET_MISMATCH]`` -- that
 token alone, never ``price``/``price_not_queried``/``fx_now``/``fx_open``,
-because nothing was looked up -- and every figure, ``price`` and ``fx`` left
-null. Each pass still logs one warning per such row, naming only its id,
-market and currency (task X-3b, KX-6/KX-7). The judgement is
+because nothing was looked up -- and every figure, ``price``, ``fx`` and
+``fx_open`` left null. Each pass still logs one warning per such row, naming
+only its id, market and currency (task X-3b, KX-6/KX-7). The judgement is
 :func:`app.positions.models.currency_matches_market` itself; this module keeps
 no copy of the market -> currency table.
 """
@@ -236,6 +236,14 @@ class Valuation(BaseModel):
     price: PriceInfo | None
     #: ``None`` for a TWD position (no conversion, nothing to disclose).
     fx: FxInfo | None = None
+    #: The rate behind F0 (``cost_twd`` and the FX contribution), with its own
+    #: provenance (task RK-5, R5-1): the whole ``FxInfo`` of the open-date
+    #: lookup, so a book whose two rates come from two sources can be told
+    #: apart row by row (ADR-0005 D-5). A lookup that found nothing is an
+    #: ``UNAVAILABLE`` ``FxInfo``, not ``None``. ``None`` only where nothing was
+    #: asked: a TWD position, a position with no open date, and a row whose
+    #: currency is not its market's (KX-A2).
+    fx_open: FxInfo | None = None
     pnl_original: PnlOriginal | None
     pnl_twd: Decimal | None
     asset_contribution_twd: Decimal | None
@@ -347,7 +355,7 @@ class PositionValuator:
         if price_now is None:
             missing.append(price_missing)
 
-        fx_open, fx_now, fx_info = self._resolve_fx(position, today, missing, fx_memo)
+        fx_open, fx_now, fx_info, fx_open_info = self._resolve_fx(position, today, missing, fx_memo)
 
         price_open = position.avg_cost
         quantity = position.quantity
@@ -368,6 +376,7 @@ class PositionValuator:
                     missing=missing,
                     price=price_info,
                     fx=fx_info,
+                    fx_open=fx_open_info,
                     pnl_original=pnl_original,
                     pnl_twd=None,
                     asset_contribution_twd=None,
@@ -391,6 +400,7 @@ class PositionValuator:
                 missing=[],
                 price=price_info,
                 fx=fx_info,
+                fx_open=fx_open_info,
                 pnl_original=pnl_original,
                 pnl_twd=parts.total_twd,
                 asset_contribution_twd=parts.asset_contribution_twd,
@@ -455,25 +465,30 @@ class PositionValuator:
         today: date,
         missing: list[str],
         fx_memo: FxMemo | None,
-    ) -> tuple[Decimal | None, Decimal | None, FxInfo | None]:
+    ) -> tuple[Decimal | None, Decimal | None, FxInfo | None, FxInfo | None]:
+        """``(fx_open, fx_now, fx_now_info, fx_open_info)``.
+
+        Each info comes out of the same lookup as its rate, so it describes the
+        rate actually used and costs no extra ask (task RK-5, R5-1).
+        """
         if position.currency == "TWD":
             # A TWD position is already in the reporting currency: F0 = F1 = 1
             # and the FX contribution is therefore identically zero.
-            return _TWD_RATE, _TWD_RATE, None
+            return _TWD_RATE, _TWD_RATE, None, None
         pair = f"{position.currency}TWD"
         fx_now, fx_info = self._latest_fx_on_or_before(pair, today, fx_memo)
         if fx_now is None:
             missing.append("fx_now")
         # Without an open date there is no date to price F0 at, and no rate is
-        # substituted for it: the position reports insufficient_data instead.
-        fx_open = (
-            None
-            if position.opened_at is None
-            else self._latest_fx_on_or_before(pair, position.opened_at, fx_memo)[0]
-        )
+        # substituted for it: the position reports insufficient_data instead,
+        # and with nothing asked there is no provenance to record either.
+        fx_open: Decimal | None = None
+        fx_open_info: FxInfo | None = None
+        if position.opened_at is not None:
+            fx_open, fx_open_info = self._latest_fx_on_or_before(pair, position.opened_at, fx_memo)
         if fx_open is None:
             missing.append("fx_open")
-        return fx_open, fx_now, fx_info
+        return fx_open, fx_now, fx_info, fx_open_info
 
     def _latest_fx_on_or_before(
         self,
@@ -526,10 +541,10 @@ def _currency_market_mismatch() -> PositionValuation:
 
     Returned before any price or FX lookup, so neither source is asked about
     the row and nothing it would answer can reach a figure, ``fx_disclosures``
-    or the change column. Every output is null: no price, no ``FxInfo`` (the
-    summary's FX badge has nothing to show), no P&L in either currency, no
-    cost or market value. When ``Valuation.fx_open`` lands (task RK-5,
-    PR-RK5a, R5-6) it is null here as well.
+    or the change column. Every output is null: no price, no ``FxInfo`` for
+    either rate (the summary's FX badge has nothing to show; ``fx_open`` is
+    spelled out as ``None`` here per task RK-5 R5-10d), no P&L in either
+    currency, no cost or market value.
     """
     return PositionValuation(
         valuation=Valuation(
@@ -537,6 +552,7 @@ def _currency_market_mismatch() -> PositionValuation:
             missing=[CURRENCY_MARKET_MISMATCH],
             price=None,
             fx=None,
+            fx_open=None,
             pnl_original=None,
             pnl_twd=None,
             asset_contribution_twd=None,
