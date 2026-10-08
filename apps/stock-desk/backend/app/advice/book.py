@@ -72,6 +72,7 @@ conversion", because they call for different things from the reader.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -97,8 +98,10 @@ from app.data.interface import DataStatus
 from app.data.price_guard import usable_price
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
-from app.portfolio.valuation import PRICE_NOT_QUERIED
+from app.portfolio.valuation import PRICE_NOT_QUERIED, FxInfo
 from app.positions.models import InstrumentType, Market
+
+logger = logging.getLogger(__name__)
 
 #: The markets whose holdings may carry an industry category at all. TWSE's
 #: taxonomy is TW-only by decision (AC-12.6, :mod:`app.positions.sectors`), and
@@ -328,6 +331,18 @@ FX_APPLIED_NOTE = (
     "（資料狀態 {status}、來源 {source}、匯率日期 {as_of}）。"
 )
 
+#: Follows the two source sentences when the applied quote and the valuator's
+#: rate came from two different sources (task RK-2, (d)): the figures then mix
+#: both, and the Yahoo sentence's "本次台灣銀行來源不可用" held for one of the two
+#: lookups only. The attribution is positional, so the order the sentences are
+#: appended in (quote first, valuator second) is part of this wording's meaning.
+#: 風控核可文案,修改須重新送審(2026-10-08)
+#: ``work/reviews/2026-10-08-RK-2-銜接句逐字審與X-10核對-風控審查.md`` (RK2-R2, RK2-R2a)
+FX_MIXED_SOURCES_NOTE = (
+    "此處數字混用兩個來源的匯率，緊接在前的兩項來源說明依序對應價格與 ATR 的換算、"
+    "持倉市值與總資產；「本次台灣銀行來源不可用」僅適用於部分查詢。"
+)
+
 
 @dataclass(frozen=True)
 class FxQuote:
@@ -410,11 +425,15 @@ class BookContext:
     #: The single FX sentence from the notes, for callers whose output shape
     #: has no notes list of its own (the alert snapshot).
     fx_note: str | None = None
-    #: The FX source's standing disclosure, present only when the quote it
-    #: belongs to was applied to this context's figures (risk X3-R1, task X-3
-    #: KX-10); ``None`` for a TWD holding, a mixed-currency one and every
-    #: failed conversion. Judged here once: the alert snapshot reads this field
-    #: and states no condition of its own.
+    #: The FX sources' standing disclosures, present only when a quote was
+    #: applied to this context's figures (risk X3-R1, task X-3 KX-10) and the
+    #: close it converts was usable (risk RK4-R11 (b)); ``None`` for a TWD
+    #: holding, a mixed-currency one, an unusable close and every failed
+    #: conversion.
+    #: When the book's valued rows of the same pair were converted on another
+    #: source, that source's sentence and :data:`FX_MIXED_SOURCES_NOTE` follow
+    #: the quote's, joined by single spaces (task RK-2). Judged here once: the
+    #: alert snapshot reads this field and states no condition of its own.
     fx_disclosure: str | None = None
 
     @property
@@ -1131,14 +1150,23 @@ def build_book_context(
         rate, fx_note, applied = None, None, None
     else:
         rate, fx_note, applied = _resolve_fx(effective_currency, fx)
-    # A methodology sentence only for the quote that was applied (X3-R1): a
+    # Methodology sentences only when a quote was applied (X3-R1): a
     # non-``None`` ``rate`` is not that signal, since a TWD holding gets 1.0
-    # whatever quote the caller resolved for the bars.
-    fx_disclosure = applied.source_note if applied is not None and applied.source_note else None
+    # whatever quote the caller resolved for the bars. And only while the
+    # close is usable (risk RK4-R11 (b)): an unusable close withholds the price
+    # and the ATR below, so the quote converts nothing, and the attribution in
+    # :data:`FX_MIXED_SOURCES_NOTE` ("價格與 ATR 的換算") would describe a
+    # conversion that did not happen.
+    disclosures: tuple[str, ...] = ()
+    if applied is not None:
+        if priced:
+            disclosures = _fx_disclosures(applied, summary)
+    elif not mixed_currencies:
+        _log_unapplied_quote(effective_currency, fx, summary)
+    fx_disclosure = " ".join(disclosures) if disclosures else None
     if fx_note is not None:
         notes.append(fx_note)
-    if fx_disclosure is not None:
-        notes.append(fx_disclosure)
+    notes.extend(disclosures)
 
     context = PortfolioContext(
         symbol=symbol,
@@ -1178,6 +1206,96 @@ def build_book_context(
         fx_rate=rate,
         fx_note=fx_note,
         fx_disclosure=fx_disclosure,
+    )
+
+
+def _valued_rates(summary: PortfolioSummary, pair: str) -> list[FxInfo]:
+    """The valuator's ``fx_now`` provenance on every row it multiplied into a figure.
+
+    Only ``ok`` rows count (risk RK2-R1): an unvalued row may still carry the
+    rate it looked up, but that rate reached no total, and a methodology
+    sentence for it would describe a number nobody was shown (scenario 9).
+    """
+    wanted = pair.strip().upper()
+    rates: list[FxInfo] = []
+    for position in summary.positions:
+        info = position.valuation.fx
+        if (
+            position.valuation.status == "ok"
+            and info is not None
+            and info.pair.strip().upper() == wanted
+            and info.data_status is not DataStatus.UNAVAILABLE
+        ):
+            rates.append(info)
+    return rates
+
+
+def _fx_disclosures(applied: FxQuote, summary: PortfolioSummary) -> tuple[str, ...]:
+    """Every source behind this context's converted figures, quote first (task RK-2).
+
+    The applied quote converts the price and the ATR; the valuator's rate
+    converts every holding's market value and so the equity every cap divides
+    by. The two are separate lookups and may land on different sources, so
+    both are disclosed: ``[quote, valuator]``, deduplicated by **source id**
+    rather than by sentence (risk S-1 -- two sources sharing
+    ``GENERIC_SOURCE_NOTE`` are still two). Sources with no sentence are not
+    shown. :data:`FX_MIXED_SOURCES_NOTE` follows only when exactly two items
+    from two different sources remain (RK2-T5): its wording says "兩項" and
+    attributes them by position.
+    """
+    sources: list[tuple[str, str, str | None]] = [
+        (applied.source, applied.source_note, applied.as_of)
+    ]
+    seen = {applied.source}
+    for info in _valued_rates(summary, applied.pair):
+        if info.source_note and info.source not in seen:
+            seen.add(info.source)
+            sources.append((info.source, info.source_note, info.as_of))
+    if len(sources) > 1:
+        # Observability only (risk RK2-R4): a mixed-source event, not a "Bank
+        # of Taiwan is back" signal. Pair, source ids and rate dates only -- no
+        # symbol, position, amount, quantity or rate.
+        logger.warning(
+            "fx sources differ within one context: pair=%s quote_source=%s quote_as_of=%s "
+            "valuation_source=%s valuation_as_of=%s",
+            applied.pair,
+            sources[0][0],
+            sources[0][2],
+            sources[1][0],
+            sources[1][2],
+        )
+    shown = [(source, note) for source, note, _ in sources if note]
+    disclosures = [note for _, note in shown]
+    if len(shown) == 2 and shown[0][0] != shown[1][0] and shown[0][0] == applied.source:
+        disclosures.append(FX_MIXED_SOURCES_NOTE)
+    return tuple(disclosures)
+
+
+def _log_unapplied_quote(
+    currency: str | None, fx: FxQuote | None, summary: PortfolioSummary
+) -> None:
+    """Log scenario 2a: the quote had no rate while valued rows did use one.
+
+    Nothing is disclosed for it here (R2-3: whether to is task RK-4's
+    question); the line exists so how often it happens can be counted (risk
+    S-4). Same content limits as the mixed-source line.
+    """
+    if fx is None or currency is None or currency.strip().upper() == "TWD":
+        return
+    if fx.pair.strip().upper() != f"{currency.strip().upper()}TWD":
+        return
+    if fx.rate is not None and fx.rate > 0.0:
+        return
+    rates = _valued_rates(summary, fx.pair)
+    if not rates:
+        return
+    logger.warning(
+        "fx quote unavailable while valued holdings used a rate: pair=%s quote_source=%s "
+        "valuation_source=%s valuation_as_of=%s",
+        fx.pair,
+        fx.source,
+        rates[0].source,
+        rates[0].as_of,
     )
 
 
