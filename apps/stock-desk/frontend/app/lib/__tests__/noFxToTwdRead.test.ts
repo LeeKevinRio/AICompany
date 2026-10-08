@@ -27,11 +27,31 @@
  *      (`interface P {`), after `=` (`type T = {`, object literal) or an
  *      object literal passed to a call is NOT a pattern.
  *
- * Known limits (heuristic, text based): a destructured parameter of an arrow
- * or method that also has a return-type annotation (`({ fx_to_twd }): T =>`)
- * is not detected; unbalanced brackets in JSX text can confuse the bracket
- * matching. A false positive fails loudly (red), a false negative is the risk,
- * so extend the self-check cases below when a new shape appears.
+ *   Assignment destructuring is covered too: a `{` / `[` whose matching closer
+ *   is followed by a plain `=` (not `==`, `=>`) and is not a `: Type`
+ *   annotation is a pattern (`({ fx_to_twd } = x)`, `[{ fx_to_twd }] = xs`).
+ *   A computed key `const { ["fx_to_twd"]: r } = x` is caught by the index
+ *   pattern in step 2 (which, conservatively, also flags `{ ["fx_to_twd"]: 1 }`).
+ *
+ * KNOWN LIMITS -- read before trusting this guard as "complete":
+ *   - Heuristic, text based, not a parser. Do not read a green run as proof of
+ *     "no read exists"; it proves "none of the shapes below the ceiling exist".
+ *   - Not detected: a destructured parameter of a class method or arrow that
+ *     also has a return-type annotation (`foo({ fx_to_twd }): T {`,
+ *     `({ fx_to_twd }): T =>`); it is indistinguishable from the ternary
+ *     `c ? f({ fx_to_twd }) : x` at text level.
+ *   - Comment stripping can over-strip: a `//` inside JSX text
+ *     (`<p>http://x</p>`) or inside a regex literal (`/https?:\/\//`) is taken
+ *     as a line comment, so the rest of that line is not scanned (a read later
+ *     on the same line would be missed).
+ *   - Unbalanced brackets in JSX text can confuse the bracket matching.
+ *   - Ceiling of any text match: reads whose key is not a literal
+ *     `fx_to_twd` token are invisible -- `row[KEY]` with a variable key,
+ *     string concatenation (`row["fx_" + "to_twd"]`), `Object.values(row)` /
+ *     `Object.entries(row)`, and `"fx_to_twd" in row` (that last one checks
+ *     presence only, but is listed so nobody assumes it is scanned).
+ * A false positive fails loudly (red); a false negative is the real risk, so
+ * extend the self-check cases below whenever a new shape appears.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -42,8 +62,9 @@ const APP_DIR = fileURLToPath(new URL("../../", import.meta.url));
 
 const FAILURE_HINT = "回風控重審 W-RK4-1（RK4c-R3：前端不得呈現乘過報價的數字）";
 
-const PROPERTY_READ = /\.fx_to_twd\b/;
-const INDEX_READ = /\[\s*["'`]fx_to_twd["'`]\s*\]/;
+const PROPERTY_READ = /\.fx_to_twd\b/g;
+// `\s` also matches newlines, so `[\n  "fx_to_twd"\n]` is covered.
+const INDEX_READ = /\[\s*["'`]fx_to_twd["'`]\s*\]/g;
 
 /** Remove `//` and block comments; keep everything else (strings included). */
 function stripComments(src: string, maskBrackets = false): string {
@@ -154,10 +175,29 @@ function isParamList(m: string, open: number): boolean {
   return /^\s*:/.test(after) && /\bfunction\b[^()]*$/.test(before);
 }
 
+/** Index of the bracket closing the one at `open`, or -1. */
+function matchingCloser(m: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < m.length; i += 1) {
+    if (OPEN.includes(m.charAt(i))) depth += 1;
+    else if (CLOSE.includes(m.charAt(i))) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Is the `{` / `[` / `(` at `open` a binding (destructuring) pattern? */
 function isPatternOpen(m: string, open: number): boolean {
   if (m[open] === "(") return isParamList(m, open);
   const before = m.slice(0, open).trimEnd();
+  // Assignment destructuring: `({ a } = x)`, `[{ a }] = xs`. A bracket closed by a
+  // plain `=` is a target, unless it is a `: Type` annotation (`const a: {…} = b`).
+  const closer = matchingCloser(m, open);
+  if (closer >= 0 && before.slice(-1) !== ":" && /^\s*=(?![=>])/.test(m.slice(closer + 1))) {
+    return true;
+  }
   if (/\b(?:const|let|var)$/.test(before)) return true;
   const last = before.slice(-1);
   const lastIdx = before.length - 1;
@@ -191,11 +231,14 @@ function findDestructuringReads(masked: string): number[] {
 /** 1-based line numbers of every `fx_to_twd` read in `src` (comments ignored). */
 function findFxToTwdReads(src: string): number[] {
   const hits = new Set<number>();
-  stripComments(src)
-    .split("\n")
-    .forEach((line, idx) => {
-      if (PROPERTY_READ.test(line) || INDEX_READ.test(line)) hits.add(idx + 1);
-    });
+  const stripped = stripComments(src);
+  for (const re of [PROPERTY_READ, INDEX_READ]) {
+    for (const hit of stripped.matchAll(re)) {
+      // Report the line of the `fx_to_twd` token itself (matters for multi-line indexes).
+      const at = hit.index + hit[0].indexOf("fx_to_twd");
+      hits.add(stripped.slice(0, at).split("\n").length);
+    }
+  }
   for (const line of findDestructuringReads(stripComments(src, true))) hits.add(line);
   return [...hits].sort((a, b) => a - b);
 }
@@ -245,6 +288,37 @@ describe("detector self-check (guard must not be vacuous)", () => {
     expect(findFxToTwdReads("const {\n  close,\n  fx_to_twd,\n} = x;")).toEqual([3]);
   });
 
+  it("flags assignment destructuring (no const/let/var)", () => {
+    expect(findFxToTwdReads("({ fx_to_twd } = x);")).toEqual([1]);
+    expect(findFxToTwdReads("({ fx_to_twd: rate } = x);")).toEqual([1]);
+    expect(findFxToTwdReads("[{ fx_to_twd }] = xs;")).toEqual([1]);
+    expect(findFxToTwdReads("[a, { fx_to_twd }] = xs;")).toEqual([1]);
+  });
+
+  it("flags a computed-key destructuring via the index pattern", () => {
+    expect(findFxToTwdReads('const { ["fx_to_twd"]: r } = x;')).toEqual([1]);
+  });
+
+  it("flags multi-line index reads and reports the token's line", () => {
+    expect(findFxToTwdReads('const v = x[\n  "fx_to_twd"\n];')).toEqual([2]);
+    expect(findFxToTwdReads("/* c\n c */\nconst v = x[\n  `fx_to_twd`\n];")).toEqual([4]);
+  });
+
+  it("is not confused by brackets inside strings (mask mode)", () => {
+    // Trailing / leading string brackets (cheap sanity cases).
+    expect(findFxToTwdReads('const { fx_to_twd } = x; const s = "}";')).toEqual([1]);
+    expect(findFxToTwdReads('const s = "{"; const { fx_to_twd } = x;')).toEqual([1]);
+    // A string bracket BETWEEN the opener and the key breaks the backward scan if unmasked.
+    expect(findFxToTwdReads('const { a = "}", fx_to_twd } = x;')).toEqual([1]);
+    expect(findFxToTwdReads('const f = ({ a = "(", fx_to_twd }) => 1;')).toEqual([1]);
+    expect(findFxToTwdReads("const { a = `)]`, fx_to_twd } = x;")).toEqual([1]);
+    // A string bracket inside the span after the key breaks the forward scans if unmasked.
+    expect(findFxToTwdReads('const f = ({ fx_to_twd }, s = ")") => 1;')).toEqual([1]);
+    expect(findFxToTwdReads('({ fx_to_twd, a = "}" } = x);')).toEqual([1]);
+    // A string brace must not turn a type annotation into a pattern either.
+    expect(findFxToTwdReads('const a: { fx_to_twd: number } = b; const s = "{";')).toEqual([]);
+  });
+
   it("flags destructured parameters of arrows and functions", () => {
     expect(findFxToTwdReads("const f = ({ fx_to_twd }) => 1;")).toEqual([1]);
     expect(findFxToTwdReads("const f = ({ fx_to_twd }: Row) => 1;")).toEqual([1]);
@@ -264,6 +338,13 @@ describe("detector self-check (guard must not be vacuous)", () => {
     expect(findFxToTwdReads("type P = { fx_to_twd: number; atr: number };")).toEqual([]);
     expect(findFxToTwdReads("type P = {\n  fx_to_twd: number,\n};")).toEqual([]);
     expect(findFxToTwdReads("type Q = Pick<{ fx_to_twd: number }, 'fx_to_twd'>;")).toEqual([]);
+  });
+
+  it("allows annotated assignment targets and comparisons", () => {
+    expect(findFxToTwdReads("const t: [{ fx_to_twd: number }] = b;")).toEqual([]);
+    expect(findFxToTwdReads("const f = (x: { fx_to_twd: number } = d) => 1;")).toEqual([]);
+    expect(findFxToTwdReads("if ({ fx_to_twd: 1 } == y) {}")).toEqual([]);
+    expect(findFxToTwdReads("const g = useState<{ fx_to_twd: number }>(d);")).toEqual([]);
   });
 
   it("allows writing / constructing the field (object literals are not reads)", () => {
