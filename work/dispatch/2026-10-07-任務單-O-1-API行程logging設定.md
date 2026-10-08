@@ -98,3 +98,12 @@ API 看 backend 視窗／`docker compose logs backend`／`logs\api.log`；schedu
 - /home/user/AICompany/apps/stock-desk/compose.yaml、/home/user/AICompany/apps/stock-desk/backend/Dockerfile、/home/user/AICompany/apps/stock-desk/dev-up.sh、/home/user/AICompany/.claude/skills/local-run/SKILL.md
 - /home/user/AICompany/work/stock-desk-警示評估載入失敗-檢查手冊-2026-10-07.md（L54 已揭露 API 無前綴）
 - /home/user/AICompany/work/dispatch/2026-10-07-任務單-F-1b-匯率非正值的估值防護.md（KF-11）
+
+---
+
+## 風控裁定（2026-10-08，X-3c 第二段附帶；coordinator 轉錄）
+- **接受，列 low；不屬 X3-F8 的觸發情形。**
+- 理由：reason 裡的 `FX_APPLIED_NOTE` 在此情境到不了使用者面前——price 規則有守門（`engine.py:482-485`）、signal 規則有守門（`:503-507`）、risk-limit 規則不讀 reason（`:338`）；fired 訊息附的來源句修飾的是估值器已用匯率換算過的第 1、2、3 條數字，確有套用匯率，與一致帳本現況相同。
+- **重審觸發**：若估值器與 snapshot 的 `fx_provider` 可能使用不同來源或日期，視為 X3-F8 情形。
+- suggested **XS-2**：在 T10-3 或 X-3c 測試追加斷言「所有 outcome 的 reason 都不含 `FX_APPLIED_NOTE` 前綴」，釘住引擎三道守門防退化。
+- 審查紀錄：`work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md` 第二段。
