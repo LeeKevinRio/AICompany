@@ -49,7 +49,7 @@ from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
 from app.settings.store import SettingsStore
-from app.signals.service import compute_signals
+from app.signals.service import atr_from_signals, compute_signals
 
 router = APIRouter(prefix="/api/advice", tags=["advice"])
 
@@ -191,6 +191,10 @@ def get_advice(
         market=market,
         close=float(latest.close) if latest is not None else None,
         currency=latest.currency if latest is not None else None,
+        # Passed here, as every other caller of the builder does, so the one
+        # judgement that withholds the close also withholds the ATR (PR-0,
+        # C-1): ``portfolio_context.atr`` is then the value cap 4 evaluates.
+        atr=atr_from_signals(signals),
         fx=fx,
         net_worth=net_worth,
         # Cap 5's stored pair for this holding. Absent means "never entered",

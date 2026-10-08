@@ -301,6 +301,18 @@ FX_PAIR_MISMATCH_NOTE = (
     "不以不相符的匯率換算，價格與 ATR 相關的上限不計算。"
 )
 
+#: One symbol's lots are held in more than one currency, so no single rate
+#: applies and the close and ATR are withheld together. Names the caps the way
+#: the three FX notes above do ("價格與 ATR 相關的上限"): the caps that read the
+#: price or the ATR (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`), not cap 1,
+#: which reads the valuator's market value and is still computed.
+#: 風控核可文案,修改須重新送審(2026-10-07;
+#: PR-0 ruling: minimal substitution reusing the FX-note phrase)
+#: ``work/dispatch/2026-10-07-任務單-PR-0-決策卡第4條ATR回填繞過book層撤下.md`` (風控裁定 R0-4)
+MIXED_CURRENCY_NOTE = (
+    "此標的的持倉橫跨多種計價幣別，無法決定單一匯率，價格與 ATR 相關的上限不計算。"
+)
+
 #: The rate actually used, with the freshness the reader needs to judge it.
 FX_APPLIED_NOTE = (
     "價格與 ATR 以 {pair} 匯率 {rate} 換算為台幣"
@@ -1094,7 +1106,7 @@ def build_book_context(
     holding_currency = currencies[0] if len(currencies) == 1 else None
     mixed_currencies = len(currencies) > 1
     if mixed_currencies:
-        notes.append("此標的的持倉橫跨多種計價幣別，無法決定單一匯率，價格類上限不計算。")
+        notes.append(MIXED_CURRENCY_NOTE)
 
     effective_currency = holding_currency if matched else currency
     if mixed_currencies:

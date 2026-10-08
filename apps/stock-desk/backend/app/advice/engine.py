@@ -317,9 +317,14 @@ def build_advice(
 
     # ATR drives the per-trade loss cap; take it from the signal layer when the
     # caller did not supply one, so the cap is evaluable without duplicated
-    # plumbing at the call site.
+    # plumbing at the call site. Never when the close is absent: the book layer
+    # withholds the close and the ATR *together* (no usable rate, or a holding
+    # spread over several currencies), and the context's ``fx_to_twd`` is then a
+    # placeholder that must not be applied to an ATR in the instrument's own
+    # currency (PR-0, C-2). The product's call site passes its ATR explicitly
+    # (C-1), so this fallback serves hand-built contexts only.
     context = build_context(signals, portfolio)
-    if portfolio.atr is None and context["atr14.last"] is not None:
+    if portfolio.atr is None and portfolio.close is not None and context["atr14.last"] is not None:
         portfolio = portfolio.model_copy(update={"atr": context["atr14.last"]})
 
     outcomes = [evaluate_rule(rule, context) for rule in rules.rules]

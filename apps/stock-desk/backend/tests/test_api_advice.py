@@ -536,6 +536,12 @@ def test_a_foreign_currency_holding_without_a_rate_says_which_input_is_missing(
         c for c in body["advice"]["limits_check"] if c["id"] == "single_position_weight"
     )
     assert weight_cap["status"] == "not_evaluable"
+    # PR-0 C-5: cap 4 is withheld with the close, not computed from the
+    # signals' ATR at a placeholder rate of 1.0.
+    assert body["portfolio_context"]["atr"] is None
+    loss_cap = next(c for c in body["advice"]["limits_check"] if c["id"] == "per_trade_loss")
+    assert loss_cap["status"] == "not_evaluable"
+    assert loss_cap["detail"].startswith("缺少 ATR(14)")
 
 
 def test_a_resolvable_rate_reaches_the_card_with_its_freshness(
