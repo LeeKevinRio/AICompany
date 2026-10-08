@@ -811,9 +811,11 @@ def _seed_2330(api_harness: ApiHarness) -> None:
 def _serve_summary(monkeypatch: pytest.MonkeyPatch, module: Any, summary: PortfolioSummary) -> None:
     """Stand in for the valuator's verdict on one lot (DB-direct in e2e round 25).
 
-    The API refuses a TW lot in USD, so one valued and one unvalued lot of the
-    same symbol is not something the test client can create; everything after
-    the summary -- the book context, the caps, the card -- is the real path.
+    The API refuses a TW lot in USD, so the test client cannot create one
+    valued and one unvalued lot of the same TW symbol. A US symbol can: leave
+    ``opened_at`` empty on one lot (see ``test_adr0023_w_a2_formal_path.py``).
+    Everything after the summary -- the book context, the caps, the card -- is
+    the real path.
     """
 
     def _summary(*_args: Any, **_kwargs: Any) -> PortfolioSummary:
