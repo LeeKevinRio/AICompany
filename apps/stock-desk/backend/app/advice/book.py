@@ -96,7 +96,7 @@ from app.advice.limits import (
     symbol_has_unvalued_lots,
 )
 from app.data.interface import DataStatus
-from app.data.price_guard import usable_price
+from app.data.price_guard import usable_price, usable_rate
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.portfolio.valuation import CURRENCY_MARKET_MISMATCH, PRICE_NOT_QUERIED, FxInfo
@@ -1606,7 +1606,10 @@ def _log_unapplied_quote(
         return
     if fx.pair.strip().upper() != f"{currency.strip().upper()}TWD":
         return
-    if fx.rate is not None and fx.rate > 0.0:
+    # Task F-1b KF-15: the one stated exception to this function's RK-4
+    # zero-modification constraint -- "had a rate" is the one definition's
+    # call, so a non-finite quote (e.g. +inf from a float overflow) is counted.
+    if usable_rate(fx.rate):
         return
     rates = _valued_rates(summary, fx.pair)
     if not rates:
@@ -1628,7 +1631,8 @@ def _resolve_fx(
 
     A TWD instrument (or a candidate with no currency at all) is already in the
     reporting currency and needs no quote. For every other currency the quote
-    has to exist, be for the right pair, and carry a positive rate; anything
+    has to exist, be for the right pair, and carry a usable rate (finite and
+    positive, :func:`app.data.price_guard.usable_rate`, task F-1b D5); anything
     else returns ``None`` with a sentence naming *which* input was missing, so
     "no price" and "no FX conversion" never look the same downstream.
 
@@ -1648,7 +1652,7 @@ def _resolve_fx(
             FX_PAIR_MISMATCH_NOTE.format(currency=currency, expected=expected, pair=fx.pair),
             None,
         )
-    if fx.rate is None or fx.rate <= 0.0:
+    if fx.rate is None or not usable_rate(fx.rate):
         return (
             None,
             FX_UNAVAILABLE_NOTE.format(

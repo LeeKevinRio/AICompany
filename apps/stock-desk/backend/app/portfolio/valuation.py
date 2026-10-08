@@ -29,8 +29,8 @@ FX on the price move and asset at original FX -- would also sum to total; we
 fix this one so the attribution is deterministic and testable.)
 
 Any missing input (no price adapter for the market, no cached/live price, a
-latest close that is unusable, no open date to price F0 at, no FX rate on or
-before the open date within the lookback window) yields
+latest close that is unusable, no open date to price F0 at, no usable latest FX
+rate on or before today or the open date within the lookback window) yields
 ``status = insufficient_data`` with the affected outputs left null. Nothing is
 ever interpolated or fabricated.
 
@@ -44,6 +44,20 @@ also covers "a price was found, but its latest close is unusable", not only
 "no price was found" (risk-compliance R-1); the cache-only token
 ``price_not_queried`` keeps its meaning, since a cache-only read never asked a
 source either way.
+
+An unusable FX rate -- zero, negative or not finite, as judged by
+:func:`app.data.price_guard.usable_rate` (task F-1b) -- is treated exactly like
+having no rate at all, for ``fx_now`` and ``fx_open`` alike: the same
+``UNAVAILABLE`` ``FxInfo`` the "no rate" branch builds (no ``as_of``, not the
+answer's status, and no source note, so the badge and ``fx_disclosures`` never
+present it as used) and the same missing token, ``fx_now`` or ``fx_open``; no
+new token. Those tokens therefore also cover "a rate was fetched, but it is
+unusable", not only "no rate was found". Only the latest rate in the window is
+judged: an earlier rate is **not** fallen back on when the latest is unusable,
+and an earlier unusable rate does not affect a usable latest one. The rate is
+dropped and a warning is logged so the bad row can be traced.
+``FX_BACKTRACK_DAYS`` keeps its meaning: days a rate was published, usable or
+not.
 
 A position whose ``currency`` is not the one its ``market`` is quoted in (a
 legacy row stored before ADR-0017's write rule) is not valued at all (task
@@ -70,8 +84,8 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
-from app.data.price_guard import usable_price
-from app.data.providers.fx import FxRateProvider
+from app.data.price_guard import usable_price, usable_rate
+from app.data.providers.fx import FxRateProvider, FxRateResult
 from app.positions.models import Currency, Position, currency_matches_market
 from app.services.fx_notes import source_note
 
@@ -195,7 +209,12 @@ class FxInfo(BaseModel):
     summary can disclose a backup-sourced rate (``data_status == BACKUP``)
     exactly where the converted figures are shown, and can say "no rate" when
     ``data_status == UNAVAILABLE``. ``source_note`` is the source's standing
-    disclosure (``app/services/fx.py``), fixed verbatim by risk-compliance.
+    disclosure (``app/services/fx_notes.py``), fixed verbatim by
+    risk-compliance. When ``data_status == UNAVAILABLE`` it is always empty:
+    no rate was applied, and a methodology statement about a rate that did not
+    supply the number would be a false disclosure (the
+    :func:`app.services.fx_notes.source_note` docstring; task F-1b, F1b-R10).
+    ``source`` still names the source that answered.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -499,7 +518,8 @@ class PositionValuator:
         """Return the FX rate on ``target`` (else the nearest earlier one) and its provenance.
 
         Looks back up to ``FX_BACKTRACK_DAYS`` days; the rate is ``None`` if
-        none is published in that window (never guesses a rate). ``fx_memo``
+        none is published in that window, or if the latest one published is
+        unusable (never guesses a rate, never falls back; task F-1b). ``fx_memo``
         (one per :meth:`value_all` pass) answers a repeated ``(pair, target)``
         without a second lookup.
         """
@@ -511,20 +531,30 @@ class PositionValuator:
         return answer
 
     def _lookup_fx(self, pair: str, target: date) -> tuple[Decimal | None, FxInfo]:
+        """The latest rate on or before ``target`` in the window, and its provenance.
+
+        A latest rate that is not usable returns exactly what "no rate"
+        returns, built by the same helper (task F-1b, D3); ``candidates`` is
+        deliberately not filtered, so an earlier rate is never substituted for
+        it (D4). See the module docstring.
+        """
         start = target - timedelta(days=FX_BACKTRACK_DAYS)
         result = self._fx_provider.get_daily_rates(pair, start, target)
         candidates = [rate for rate in result.rates if rate.date <= target]
         if result.status is DataStatus.UNAVAILABLE or not candidates:
-            info = FxInfo(
-                pair=pair,
-                as_of=None,
-                source=result.source,
-                data_status=DataStatus.UNAVAILABLE,
-                source_note=source_note(result.source),
-                reason=result.reason,
-            )
-            return None, info
+            return _no_fx_rate(pair, result)
         latest = max(candidates, key=lambda rate: rate.date)
+        if not usable_rate(latest.rate):
+            # F-1b R-3: the fixed head is the trigger-1 grep target. Pair, date,
+            # rate and source only -- never the reason or a response body.
+            logger.warning(
+                "unusable fx rate dropped from valuation: pair=%s date=%s rate=%s source=%s",
+                pair,
+                latest.date.isoformat(),
+                latest.rate,
+                result.source,
+            )
+            return _no_fx_rate(pair, result)
         info = FxInfo(
             pair=pair,
             as_of=latest.date.isoformat(),
@@ -534,6 +564,28 @@ class PositionValuator:
             reason=result.reason,
         )
         return latest.rate, info
+
+
+def _no_fx_rate(pair: str, result: FxRateResult) -> tuple[None, FxInfo]:
+    """The answer of a lookup that has no usable rate (task F-1b, D3).
+
+    Shared by "nothing published in the window" and "the latest published rate
+    is unusable", so the two can never drift apart: ``UNAVAILABLE``, no
+    ``as_of``, the answer's source and reason passed through.
+
+    An unused rate gets no methodology sentence, so ``source_note`` is always
+    empty here, whichever source answered (risk-compliance 2026-09-19
+    suggested 4; F1b-R10). The source and reason are still passed through.
+    """
+    info = FxInfo(
+        pair=pair,
+        as_of=None,
+        source=result.source,
+        data_status=DataStatus.UNAVAILABLE,
+        source_note="",
+        reason=result.reason,
+    )
+    return None, info
 
 
 def _currency_market_mismatch() -> PositionValuation:

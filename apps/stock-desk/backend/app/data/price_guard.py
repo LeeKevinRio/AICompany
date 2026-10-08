@@ -1,4 +1,4 @@
-"""The one definition of a usable latest close (task F-1, constraint 1).
+"""The one definition of a usable latest close and FX rate (tasks F-1 and F-1b).
 
 A data source can hand back a bar whose close is zero, negative or not a finite
 number: ``PriceBar.close`` rejects none of those, and neither does the cache. A
@@ -7,12 +7,19 @@ signal -- must treat it as *no price*, never as a price of 0 or -1. Every such
 consumer asks this module, so the portfolio valuator, the advice card and the
 alert engine can never disagree about which closes count.
 
+An FX rate is the price of a currency and gets the same judgement (task F-1b,
+risk (c)): ``FxRate.rate`` accepts zero and negative values, so a consumer that
+converts with a rate -- the portfolio valuator's ``fx_now`` / ``fx_open``, the
+advice card's quote -- must treat an unusable one as *no rate*, never as a
+rate of 0 or -1, and never fall back on an earlier one. The two judgements are
+one private rule behind two public names, so each stays greppable on its own.
+
 This is a leaf: it imports nothing from ``app`` so any layer may depend on it
 without creating a cycle (``app.portfolio`` in particular must not reach
 ``app.alerts`` or ``app.advice``, where the guard used to live).
 
-It only *judges* a value. Dropping or repairing bars is a data-layer policy
-that belongs to F-2, not here.
+It only *judges* a value. Dropping or repairing bars or rates is a data-layer
+policy that belongs to F-2, not here.
 """
 
 from __future__ import annotations
@@ -21,12 +28,8 @@ import math
 from decimal import Decimal
 
 
-def usable_price(value: float | Decimal | None) -> bool:
-    """Whether ``value`` may be used as a latest close.
-
-    ``None``, zero, negative and non-finite values (NaN, +/-Infinity, and the
-    ``Decimal`` equivalents including signalling NaN) are all "no price".
-    """
+def _positive_finite(value: float | Decimal | None) -> bool:
+    """Whether ``value`` is present, finite and strictly positive."""
     if value is None:
         return False
     if isinstance(value, Decimal):
@@ -34,3 +37,22 @@ def usable_price(value: float | Decimal | None) -> bool:
         # raises, and a quiet NaN compares unordered.
         return value.is_finite() and value > 0
     return math.isfinite(value) and value > 0
+
+
+def usable_price(value: float | Decimal | None) -> bool:
+    """Whether ``value`` may be used as a latest close.
+
+    ``None``, zero, negative and non-finite values (NaN, +/-Infinity, and the
+    ``Decimal`` equivalents including signalling NaN) are all "no price".
+    """
+    return _positive_finite(value)
+
+
+def usable_rate(value: float | Decimal | None) -> bool:
+    """Whether ``value`` may be used as an FX rate (task F-1b).
+
+    ``None``, zero, negative and non-finite values (NaN, +/-Infinity, and the
+    ``Decimal`` equivalents including signalling NaN) are all "no rate". No
+    plausibility range is applied: a finite positive rate passes (F-2, R4).
+    """
+    return _positive_finite(value)
