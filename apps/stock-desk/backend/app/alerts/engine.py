@@ -31,7 +31,12 @@ from typing import Any
 
 from app.advice.context import build_context, describe_field
 from app.advice.engine import COMPARISON_OPS
-from app.advice.limits import PRICE_INPUT_LIMIT_IDS, LimitCheck, PortfolioContext
+from app.advice.limits import (
+    PRICE_INPUT_LIMIT_IDS,
+    LimitCheck,
+    PortfolioContext,
+    shows_price_input_figure,
+)
 from app.alerts.models import (
     AlertEvent,
     AlertRule,
@@ -90,11 +95,18 @@ class SymbolSnapshot:
     #: (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`) and only of those; the
     #: risk-limit skip appends it under exactly that condition.
     price_cap_cause: str | None = None
-    #: The FX source's standing disclosure (ADR-0005 F-4), set only when a rate
-    #: was actually applied to build ``limits``. The risk-cap message quotes
-    #: TWD-converted figures, so this sentence has to travel with the *fired*
-    #: message -- all the way to Discord/Telegram -- not merely with a skip.
+    #: The FX source's standing disclosure (ADR-0005 F-4) for a fired message
+    #: that shows a figure the applied quote was multiplied into -- the version
+    #: *with* the quote (``BookContext.fx_disclosure``). The risk-cap message
+    #: quotes TWD-converted figures, so this sentence has to travel with the
+    #: *fired* message -- all the way to Discord/Telegram -- not merely with a
+    #: skip. Read by :func:`_limit_outcome` only, which picks it or the field
+    #: below per fired rule (PR-RK4c, R4c-8).
     fx_disclosure: str | None = None
+    #: The same disclosure for a fired message that shows no figure the quote
+    #: was multiplied into (``BookContext.fx_disclosure_without_quote``):
+    #: W-RK4-1 and the valuator's sentences, or ``None``.
+    fx_disclosure_without_quote: str | None = None
     #: The data layer's own sentence about the bars the rule was judged on
     #: (``ProviderResult.reason``: served from cache, spliced from more than one
     #: source -- ADR-0009 D-7 / ADR-0005 D-5). A threshold crossing can be made
@@ -310,12 +322,23 @@ def _limit_outcome(
     names = "、".join(f"第 {check.index} 條（{check.name}）" for check in violated)
     details = " ".join(check.detail for check in violated)
     message = f"{rule.symbol} 觸發風險上限：{names}。{details}"
-    # Every cap here is measured in TWD, so on a foreign-currency holding every
-    # figure in ``details`` passed through the FX rate. ADR-0005 F-4 requires
-    # the rate's provenance to be visible wherever it is used, and this message
-    # is what the user actually receives (feed, Discord, Telegram).
-    if snapshot.fx_disclosure:
-        message = f"{message} {snapshot.fx_disclosure}"
+    # Every cap here is measured in TWD, so on a foreign-currency holding the
+    # figures in ``details`` passed through an FX rate -- the valuator's for
+    # the market value and the equity, the applied quote only for a cap that
+    # reads the price or the ATR (risk RK4-E1b-1). ADR-0005 F-4 requires the
+    # rate's provenance to be visible wherever it is used, and this message is
+    # what the user actually receives (feed, Discord, Telegram). Which version
+    # is judged per rule (PR-RK4c, R4c-8) from ``violated`` -- the very list
+    # ``details`` was built from, so the judged caps are exactly the caps the
+    # message lists (risk RK4c-R1). If this message ever lists passed caps'
+    # details too, they have to be passed to the judgement as well.
+    disclosure = (
+        snapshot.fx_disclosure
+        if shows_price_input_figure(violated, sized=False)
+        else snapshot.fx_disclosure_without_quote
+    )
+    if disclosure:
+        message = f"{message} {disclosure}"
     observed: dict[str, float | str | None] = {
         "violated_limit_ids": "、".join(check.id for check in violated),
         "violated_count": float(len(violated)),

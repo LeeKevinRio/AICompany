@@ -44,7 +44,7 @@ database would be a risk cap whose verdict depends on when it was asked.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
@@ -871,6 +871,34 @@ class LimitCheck(BaseModel):
     detail: str
     observed: float | None
     threshold: float | None
+
+
+def shows_price_input_figure(shown: Iterable[LimitCheck], *, sized: bool) -> bool:
+    """Whether a response shows a figure the applied FX quote was multiplied into.
+
+    The one judgement (task RK-4, PR-RK4c, R4c-2; risk RK4-E1b-1 (a)) behind
+    the quote's source sentences: the book layer only says the quote *reached*
+    a context (:attr:`app.advice.book.BookContext.disclosed_quote`); whether
+    the quote's sentence, the bridge and the applied-rate sentence are stated
+    is decided by each response from what it actually shows. A "shown figure"
+    is one of:
+
+    * a verdict of a cap reading the price or the ATR
+      (:data:`PRICE_INPUT_LIMIT_IDS`) that was evaluated -- ``passed`` or
+      ``violated`` (``ATR x fx_to_twd``); a ``not_evaluable`` one shows none;
+    * a suggested share range (``sized``), which is priced through
+      :meth:`PortfolioContext.price_twd`;
+    * any future figure computed as ``close x fx`` or ``ATR x fx``, which has
+      to be added here (risk tripwire T-E1b-2) -- not judged anywhere else.
+
+    ``shown`` is the set of verdicts that response states: the advice card's
+    own ``limits_check``, a pushed message's listed caps, the overview's
+    compared holdings. The card, the push and ``/limits`` judge through this
+    function only.
+    """
+    return sized or any(
+        check.id in PRICE_INPUT_LIMIT_IDS and check.status != "not_evaluable" for check in shown
+    )
 
 
 class QuantityRange(BaseModel):

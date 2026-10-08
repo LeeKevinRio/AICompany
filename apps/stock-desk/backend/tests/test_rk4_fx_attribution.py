@@ -505,7 +505,12 @@ def test_w4_t4_scope_note_first_then_the_sentences_it_scopes(cell: Cell) -> None
     at = notes.index(W)
     assert notes[at:] == list(cell.expected)
     before = notes[at - 1]
-    if book.fx_note is not None:
+    if cell.close is None and (book.fx_note or "").startswith(APPLIED_HEAD):
+        # 風控 RK4c（2026-10-08）, cell O-1 (R4c-5 (b), R4c-13 item 6): the
+        # applied-rate sentence converts nothing here and is no longer stated,
+        # so it is not W-RK4-1's neighbour.
+        assert not before.startswith(APPLIED_HEAD)
+    elif book.fx_note is not None:
         assert before == book.fx_note
     else:
         assert before == MIXED_CURRENCY_NOTE
@@ -518,9 +523,8 @@ def test_w4_t4_scope_note_first_then_the_sentences_it_scopes(cell: Cell) -> None
         (_cell(SCOPED, "2c-no-quote"), NO_QUOTE_PHRASE),
         (_cell(SCOPED, "pair-mismatch"), PAIR_MISMATCH_PHRASE),
         (_cell(SCOPED, "mixed-currencies-usd-lot-ok"), MIXED_CURRENCY_NOTE),
-        (_cell(SCOPED, "o1-held-split-sources"), APPLIED_HEAD),
     ],
-    ids=["fx-unavailable", "no-fx-quote", "pair-mismatch", "mixed-currency", "o1-applied-note"],
+    ids=["fx-unavailable", "no-fx-quote", "pair-mismatch", "mixed-currency"],
 )
 def test_w4_t4_the_neighbour_is_the_failure_sentence_it_must_hold_beside(
     cell: Cell, phrase: str
@@ -529,6 +533,17 @@ def test_w4_t4_the_neighbour_is_the_failure_sentence_it_must_hold_beside(
     _, notes = _build(cell)
     at = notes.index(W)
     assert phrase in notes[at - 1]
+
+
+@pytest.mark.parametrize("wanted", ["o1-held-split-sources", "o1-held-same-source"])
+def test_w4_t4_o1_has_no_applied_rate_sentence_beside_the_scope_note(wanted: str) -> None:
+    """風控 RK4c（2026-10-08）, cell O-1 (R4c-5 (b), R4c-13 item 7): the
+    ``o1-applied-note`` neighbour is gone -- the applied-rate sentence is not
+    stated at all where the close it converts was unusable."""
+    book, notes = _build(_cell(SCOPED, wanted))
+    assert book.fx_note is not None and book.fx_note.startswith(APPLIED_HEAD)
+    assert not notes[notes.index(W) - 1].startswith(APPLIED_HEAD)
+    assert not any(note.startswith(APPLIED_HEAD) for note in notes)
 
 
 # --- W4-T6 / RK4-C3: the valuator's sentences only, never the quote's ----------------

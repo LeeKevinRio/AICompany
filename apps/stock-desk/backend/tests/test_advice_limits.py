@@ -152,6 +152,10 @@ def test_every_limit_is_reported_once_in_order() -> None:
 # The contexts the drift test below withdraws the price and ATR from: every cap
 # evaluable, the held-shares fallback through the price, a candidate, a breach,
 # and a foreign-currency rate.
+#: The failure message of every T-E1b-2 tripwire (risk RK4-E1b-1, T-E1b-2):
+#: W-RK4-1 on ``/limits`` rests on G1, which rests on this set.
+T_E1B_2_BACK_TO_RISK = "回風控重審 W-RK4-1（/limits G1 前提）"
+
 _PRICED_CONTEXTS = [
     pytest.param({}, id="full"),
     pytest.param(
@@ -194,14 +198,17 @@ def test_only_the_price_input_caps_depend_on_the_price_or_atr(
     # The alert engine names a failed FX conversion as the cause of an
     # unevaluable cap only for these ids; a cap that starts reading the price
     # or ATR without joining the set would lose that sentence (task 2026-10-07 K-4).
-    assert _price_dependent_ids(overrides, budget) <= PRICE_INPUT_LIMIT_IDS
+    # 風控 RK4c（2026-10-08）, T-E1b-2 tripwire (R4c-16 (1), R4c-13 item 11): the
+    # set also defines which verdicts are "shown figures" for the FX sentences.
+    assert _price_dependent_ids(overrides, budget) <= PRICE_INPUT_LIMIT_IDS, T_E1B_2_BACK_TO_RISK
 
 
 def test_every_price_input_cap_does_depend_on_the_price_or_atr() -> None:
     # The other direction, so the set cannot quietly grow past what reads a price.
     overrides = [cast(dict[str, Any], param.values[0]) for param in _PRICED_CONTEXTS]
     changed = set().union(*(_price_dependent_ids(each, BUDGET) for each in overrides))
-    assert changed == PRICE_INPUT_LIMIT_IDS
+    # 風控 RK4c（2026-10-08）, T-E1b-2 tripwire (R4c-16 (1), R4c-13 item 11).
+    assert changed == PRICE_INPUT_LIMIT_IDS, T_E1B_2_BACK_TO_RISK
 
 
 # --- 1. Single position weight ----------------------------------------------

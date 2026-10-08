@@ -74,13 +74,13 @@ from app.advice.book import (
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
-    PRICE_INPUT_LIMIT_IDS,
     KellyInputs,
     LimitCheck,
     LimitStatus,
     RiskBudget,
     SelfReportedNetWorth,
     evaluate_limits,
+    shows_price_input_figure,
 )
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
 from app.positions.models import Market
@@ -416,16 +416,15 @@ def _compared_quotes(candidates: list[_Candidate]) -> list[FxQuote]:
     *and* that was compared on at least one cap reading the price or the ATR
     (:data:`app.advice.limits.PRICE_INPUT_LIMIT_IDS`). The quote converts the
     close and the ATR only, so a holding left out of those caps -- no ATR, say
-    -- had its quote multiplied into nothing shown. Book order.
+    -- had its quote multiplied into nothing shown. Book order. Judged by the
+    one predicate the card and the push use (PR-RK4c, R4c-9); the overview
+    shows no share range, hence ``sized=False``.
     """
     return [
         candidate.disclosed_quote
         for candidate in candidates
         if candidate.disclosed_quote is not None
-        and any(
-            candidate.checks[limit_id].status != "not_evaluable"
-            for limit_id in sorted(PRICE_INPUT_LIMIT_IDS)
-        )
+        and shows_price_input_figure(candidate.checks.values(), sized=False)
     ]
 
 

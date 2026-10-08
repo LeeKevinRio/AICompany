@@ -100,6 +100,7 @@ def snapshot(
     budget: RiskBudget | None = None,
     reason: str | None = None,
     fx_disclosure: str | None = None,
+    fx_disclosure_without_quote: str | None = None,
     data_disclosure: str | None = None,
     price_cap_cause: str | None = None,
 ) -> SymbolSnapshot:
@@ -115,6 +116,7 @@ def snapshot(
         as_of="2026-07-25",
         reason=reason,
         fx_disclosure=fx_disclosure,
+        fx_disclosure_without_quote=fx_disclosure_without_quote,
         data_disclosure=data_disclosure,
         price_cap_cause=price_cap_cause,
     )

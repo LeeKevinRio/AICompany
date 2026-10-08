@@ -94,14 +94,18 @@ def build_snapshot(
     silently stop watching an input the user did enter.
 
     The FX source's standing disclosure (ADR-0005 約束 F-4) travels on its own
-    field instead, because it has the opposite destination: it qualifies a rate
-    that *was* multiplied into a figure -- the quote applied to the close, or
-    the valuator's rate on this symbol's own valued lots (task RK-4) -- so it
+    fields instead, because it has the opposite destination: it qualifies a
+    rate that *was* multiplied into a figure -- the quote applied to the close,
+    or the valuator's rate on this symbol's own valued lots (task RK-4) -- so it
     belongs to the risk-cap message a **fired** alert sends, and ``reason`` is
     read by no fired path. Putting it in ``reason`` would look like a
-    disclosure while reaching nobody. Whether a rate was multiplied in is
-    judged once, by the book layer (``BookContext.fx_disclosure``, task X-3
-    KX-10, risk RK4-R1); this module only carries the answer.
+    disclosure while reaching nobody. It travels in two versions, both prepared
+    by the book layer (task X-3 KX-10, risk RK4-R1, PR-RK4c R4c-8):
+    ``fx_disclosure`` for a message that shows a figure the quote was
+    multiplied into, ``fx_disclosure_without_quote`` for one that shows none.
+    Which one a message carries depends on the caps that message lists, so it
+    is judged per fired rule by the engine (``_limit_outcome``), not here; this
+    module only carries both.
     """
     end = today if today is not None else date.today()
     loaded = load_bars(
@@ -146,9 +150,10 @@ def build_snapshot(
     )
     data_reason = _joined_reason(layer_note, loaded.reason)
     # Only a rate that was actually applied to a figure needs its methodology
-    # stated, and the book layer is the one place that judges it (X3-R1): a
-    # second condition here is how a TWD holding priced off a USD series came
-    # to carry a disclosure for a rate nothing was converted with.
+    # stated: the book layer judges whether it reached this context (X3-R1)
+    # and the engine whether the fired message shows such a figure (PR-RK4c).
+    # A second condition here is how a TWD holding priced off a USD series
+    # came to carry a disclosure for a rate nothing was converted with.
     fx_disclosure = book.fx_disclosure
     return SymbolSnapshot(
         symbol=symbol,
@@ -164,6 +169,7 @@ def build_snapshot(
         # applied rate or a mixed-currency holding.
         price_cap_cause=book.price_withheld_note,
         fx_disclosure=fx_disclosure,
+        fx_disclosure_without_quote=book.fx_disclosure_without_quote,
         # Layer note included (風控 R4-a): a crossing judged on a cached bar must
         # say so where the user reads it, not only on the badge the push lacks.
         data_disclosure=data_reason,

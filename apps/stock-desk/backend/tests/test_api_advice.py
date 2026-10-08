@@ -548,15 +548,55 @@ def test_a_resolvable_rate_reaches_the_card_with_its_freshness(
     api_harness: ApiHarness,
 ) -> None:
     _seed_foreign_bars(api_harness)
+    # A valued TWD holding gives the book an equity, so cap 4 is evaluated with
+    # the applied rate (2330 itself stays a candidate).
+    _seed_bars(api_harness, symbol="1101")
+    api_harness.client.post(
+        "/api/positions", json=position_payload(symbol="1101", quantity="10000")
+    )
     app.dependency_overrides[get_fx_provider] = lambda: StubFxProvider(Decimal("31.5"))
     body = api_harness.client.get("/api/advice/2330").json()
     context = body["portfolio_context"]
     assert context["close"] is not None
     assert context["fx_to_twd"] == 31.5
+    # 風控 RK4c（2026-10-08）RK4c-R14: the quote's sentences travel only with a
+    # figure the quote was multiplied into; a valued book makes cap 4 evaluable.
+    assert body["status"] == "ok"
+    assert body["held"] is False
+    loss_cap = next(c for c in body["advice"]["limits_check"] if c["id"] == "per_trade_loss")
+    assert loss_cap["status"] in ("passed", "violated")
     notes = body["context_notes"]
     assert any("USDTWD" in note and "31.5" in note for note in notes)
     # AC-3.5: the source's standing disclosure travels with the number.
     assert any("未經本環境線上查證" in note for note in notes)
+
+
+def test_an_empty_book_candidate_card_states_no_quote_it_did_not_use(
+    api_harness: ApiHarness,
+) -> None:
+    _seed_foreign_bars(api_harness)
+    app.dependency_overrides[get_fx_provider] = lambda: StubFxProvider(Decimal("31.5"))
+    body = api_harness.client.get("/api/advice/2330").json()
+    # 風控 RK4c（2026-10-08）RK4c-R14, cell (β): empty book, ATR present, rate applied.
+    assert body["status"] == "ok"
+    assert body["held"] is False
+    assert body["position_ids"] == []
+    context = body["portfolio_context"]
+    assert context["fx_to_twd"] == 31.5
+    assert context["atr"] is not None
+    card = body["advice"]
+    loss_cap = next(c for c in card["limits_check"] if c["id"] == "per_trade_loss")
+    assert loss_cap["status"] == "not_evaluable"
+    assert loss_cap["detail"].startswith("缺少總資產")
+    assert card["quantity_range"] is None
+    notes = body["context_notes"]
+    for fragment in (
+        "USDTWD",
+        "未經本環境線上查證",
+        "此處來源說明所指的匯率",
+        "依序對應價格與 ATR",
+    ):
+        assert not any(fragment in note for note in notes), fragment
 
 
 # --- FR-12: the sector cap starts answering -----------------------------------

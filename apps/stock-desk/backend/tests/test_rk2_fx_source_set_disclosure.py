@@ -447,9 +447,21 @@ def test_rk2_t3_t4_t10_alert_snapshot_and_fired_message(tmp_path: Path, scenario
     )
     assert len(result.events) == 1
     message = result.events[0].message
-    assert message.endswith(f" {joined}")
-    for sentence in (quote_note, valuation_note, APPROVED_BRIDGE):
-        assert message.count(sentence) == 1  # RK2-T10
+    # 風控 RK4c（2026-10-08）, cell 混源（E1b）, push with cap 4 not in the
+    # message (RK4c-R4, R4c-13 item 1): only cap 1 is listed, so no figure in
+    # the message was multiplied by the quote -- W-RK4-1 and the valuator's
+    # sentence, never the quote's sentence, never the bridge.
+    # RK4c-R9 (1), the premise: cap 4 was evaluated and passed, and the message
+    # names neither it nor its detail.
+    per_trade = next(check for check in snap.limits if check.id == "per_trade_loss")
+    assert per_trade.status == "passed"
+    assert per_trade.name not in message
+    assert per_trade.detail not in message
+    scope = book_module.FX_VALUATION_SCOPE_NOTE
+    assert message.endswith(f" {scope} {valuation_note}")
+    assert message.count(valuation_note) == 1  # RK2-T10
+    for sentence in (quote_note, APPROVED_BRIDGE):
+        assert message.count(sentence) == 0
 
 
 @pytest.mark.parametrize("scenario", MIXED)
@@ -733,9 +745,13 @@ def test_rk2_o1_cell_an_unusable_close_carries_no_source_sentence(
         if valuation_source != BANK:
             assert BANK_NOTE not in notes
         assert notes.count(source_note(valuation_source)) == 1
-        assert book.fx_note is not None and book.fx_note in notes  # S-3: unchanged
-        at = notes.index(book.fx_note)
-        assert notes[at:] == [book.fx_note, scope, source_note(valuation_source)]
+        assert book.fx_note is not None  # S-3: unchanged
+        # 風控 RK4c（2026-10-08）, cell O-1 (R4c-5 (b), R4c-13 item 5): the
+        # applied-rate sentence converts nothing here, so it no longer stands
+        # next to W-RK4-1 in the book layer's default view either.
+        assert book.fx_note not in notes
+        at = notes.index(scope)
+        assert notes[at:] == [scope, source_note(valuation_source)]
         # The same cell without a holding of the symbol: nothing was converted.
         unheld = build_book_context(
             book_summary(_usd(1, source=valuation_source, symbol="MSFT")),
@@ -767,9 +783,13 @@ def test_rk2_t7_scenario_9_end_to_end(tmp_path: Path, api_harness: ApiHarness) -
 
     _serve(api_harness, scenario)
     _hold_usd(api_harness.positions, opened_at=None)
-    notes = _card(api_harness)["context_notes"]
-    assert _fx_tail(notes)[1:] == [YAHOO_NOTE]
-    assert APPROVED_BRIDGE not in notes
+    body = _card(api_harness)
+    _assert_card_shows_no_quote_figure(body)
+    notes = body["context_notes"]
+    # 風控 RK4c（2026-10-08）, cell 持有但全未估值（情境 9） (β; R4c-13 item 3):
+    # the card shows no figure the quote was multiplied into, and no lot of
+    # the symbol was converted, so no FX sentence at all.
+    _assert_no_fx_sentence(notes)
 
 
 def test_rk2_t7_scenario_2b_end_to_end(tmp_path: Path, api_harness: ApiHarness) -> None:
@@ -782,8 +802,28 @@ def test_rk2_t7_scenario_2b_end_to_end(tmp_path: Path, api_harness: ApiHarness) 
 
     _serve(api_harness, scenario)
     _hold_usd(api_harness.positions)
-    notes = _card(api_harness)["context_notes"]
-    assert _fx_tail(notes)[1:] == [YAHOO_NOTE]
+    body = _card(api_harness)
+    _assert_card_shows_no_quote_figure(body)
+    notes = body["context_notes"]
+    # 風控 RK4c（2026-10-08）, cell 持有但全未估值（情境 2b） (β; R4c-13 item 4):
+    # as scenario 9 -- no shown figure used the quote, no lot was converted.
+    _assert_no_fx_sentence(notes)
+
+
+def _assert_card_shows_no_quote_figure(body: dict[str, typing.Any]) -> None:
+    """RK4c-R9 (2), the premise of items 3 and 4: cap 4 is ``not_evaluable`` and
+    the card has no share range, so the card's ``quote_shown`` is ``False``."""
+    advice = body["advice"]
+    per_trade = [entry for entry in advice["limits_check"] if entry["id"] == "per_trade_loss"]
+    assert [entry["status"] for entry in per_trade] == ["not_evaluable"]
+    assert advice["quantity_range"] is None
+
+
+def _assert_no_fx_sentence(notes: list[str]) -> None:
+    """No applied-rate sentence, no methodology sentence, no W-RK4-1, no bridge."""
+    assert not any(note.startswith(APPLIED_HEAD) for note in notes)
+    assert not any(note in METHODOLOGY for note in notes)
+    assert book_module.FX_VALUATION_SCOPE_NOTE not in notes
     assert APPROVED_BRIDGE not in notes
 
 
@@ -870,11 +910,11 @@ def test_rk2_t7_limits_states_e3_and_the_overview_never_carries_the_bridge(
     assert APPROVED_BRIDGE not in summary.text
 
 
-# --- RK2-T11: a consistent book is byte-for-byte what it was ----------------------
+# --- RK2-T11: a consistent book: the card as it was, the push scoped ---------------
 
 
 @pytest.mark.parametrize("scenario", CONSISTENT)
-def test_rk2_t11_consistent_books_are_unchanged(
+def test_rk2_t11_consistent_books_card_unchanged_push_scoped(
     tmp_path: Path, api_harness: ApiHarness, scenario: Scenario
 ) -> None:
     harness = _alerts(tmp_path, scenario)
@@ -886,7 +926,17 @@ def test_rk2_t11_consistent_books_are_unchanged(
     )
     assert len(result.events) == 1
     message = result.events[0].message
-    assert message.endswith(f" {note}")
+    # 風控 RK4c（2026-10-08）, cell 一致帳本, push with cap 4 not in the message
+    # ((γ), RK4c-R7; R4c-13 item 2): W-RK4-1 now precedes the one sentence.
+    # RK4c-R9 (1), the premise: cap 4 was evaluated and passed, and the message
+    # names neither it nor its detail.
+    per_trade = next(check for check in snap.limits if check.id == "per_trade_loss")
+    assert per_trade.status == "passed"
+    assert per_trade.name not in message
+    assert per_trade.detail not in message
+    scope = book_module.FX_VALUATION_SCOPE_NOTE
+    assert message.endswith(f" {scope} {note}")
+    assert message.count(scope) == 1
     assert message.count(note) == 1
     assert APPROVED_BRIDGE not in message
 

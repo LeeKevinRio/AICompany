@@ -17,6 +17,7 @@ from app.advice.limits import (
     PRICE_INPUT_LIMIT_IDS,
     LimitCheck,
     LimitStatus,
+    PortfolioContext,
 )
 from app.alerts import engine as engine_module
 from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
@@ -277,22 +278,65 @@ def test_a_watched_cap_absent_from_the_results_is_a_skip(store: AlertStore) -> N
     assert "不在本次檢查結果中" in (result.outcomes[0].reason or "")
 
 
+def _cap_4_breaching_context() -> PortfolioContext:
+    """:func:`breaching_context` with an ATR: cap 4 is violated beside cap 1."""
+    return breaching_context().model_copy(update={"atr": 5.0})
+
+
 def test_a_fired_risk_limit_message_carries_the_fx_disclosure(store: AlertStore) -> None:
     # ADR-0005 F-4. Every cap in the message is denominated in TWD, so on a
-    # foreign-currency holding each figure quoted came through the FX rate. The
+    # foreign-currency holding each figure quoted came through an FX rate. The
     # message is what reaches the feed and the push channels, so the rate's
     # provenance has to be in the message itself.
+    # 風控 RK4c（2026-10-08）, cells 一致帳本／混源 push (R4c-8, R4c-13 item 8):
+    # which version depends on the caps the message lists. Only cap 1 here, so
+    # no listed figure used the quote: the version without it.
     add_rule(store, limit_rule(limit_id="any"))
     disclosure = "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；端點未經查證。"
+    with_quote = "報價版揭露（測試用）。"
     result = evaluate_alerts(
         store,
-        _loader(snapshot(context=breaching_context(), currency="USD", fx_disclosure=disclosure)),
+        _loader(
+            snapshot(
+                context=breaching_context(),
+                currency="USD",
+                fx_disclosure=with_quote,
+                fx_disclosure_without_quote=disclosure,
+            )
+        ),
         now=_NOW,
     )
     assert len(result.events) == 1
     message = result.events[0].message
     assert "觸發風險上限" in message
-    assert disclosure in message
+    assert "第 4 條" not in message  # not vacuous: cap 4 is not listed
+    assert message.endswith(f" {disclosure}")
+    assert with_quote not in message
+
+
+def test_a_fired_message_listing_cap_4_carries_the_quotes_disclosure(store: AlertStore) -> None:
+    # 風控 RK4c（2026-10-08）, push with cap 4 in the message (R4c-8, R4c-13
+    # item 8): its figure is ATR x the applied quote, so the version with it.
+    add_rule(store, limit_rule(limit_id="any"))
+    disclosure = "匯率為台灣銀行即期買賣中點的模型值，不是官方收盤匯率；端點未經查證。"
+    without_quote = "非報價版揭露（測試用）。"
+    result = evaluate_alerts(
+        store,
+        _loader(
+            snapshot(
+                context=_cap_4_breaching_context(),
+                currency="USD",
+                fx_disclosure=disclosure,
+                fx_disclosure_without_quote=without_quote,
+            )
+        ),
+        now=_NOW,
+    )
+    assert len(result.events) == 1
+    message = result.events[0].message
+    assert "第 4 條" in message  # not vacuous: cap 4 is listed
+    assert message.endswith(f" {disclosure}")
+    assert without_quote not in message
 
 
 def test_a_twd_holding_gets_no_fx_disclosure_it_did_not_use(store: AlertStore) -> None:
@@ -303,23 +347,34 @@ def test_a_twd_holding_gets_no_fx_disclosure_it_did_not_use(store: AlertStore) -
     assert "匯率" not in result.events[0].message
 
 
-def test_the_fx_disclosure_does_not_introduce_action_wording(store: AlertStore) -> None:
+@pytest.mark.parametrize(
+    ("field", "context"),
+    [
+        pytest.param("fx_disclosure", _cap_4_breaching_context(), id="with-quote-cap-4"),
+        pytest.param("fx_disclosure_without_quote", breaching_context(), id="without-quote-cap-1"),
+    ],
+)
+def test_the_fx_disclosure_does_not_introduce_action_wording(
+    store: AlertStore, field: str, context: PortfolioContext
+) -> None:
     # The disclosure is a statement of fact about a data source. It must not
     # drag the message across the line the alert layer keeps: measurement only.
+    # 風控 RK4c（2026-10-08）, both push versions (R4c-13 item 9, RK4c-R9 (3)):
+    # each is first shown to be in the message, so the scan cannot pass on a
+    # message that carries no disclosure.
     add_rule(store, limit_rule(limit_id="any"))
-    result = evaluate_alerts(
-        store,
-        _loader(
-            snapshot(
-                context=breaching_context(),
-                currency="USD",
-                fx_disclosure=source_note("bank_of_taiwan"),
-            )
-        ),
-        now=_NOW,
+    disclosure = source_note("bank_of_taiwan")
+    snap = snapshot(
+        context=context,
+        currency="USD",
+        fx_disclosure=disclosure if field == "fx_disclosure" else None,
+        fx_disclosure_without_quote=disclosure if field == "fx_disclosure_without_quote" else None,
     )
+    result = evaluate_alerts(store, _loader(snap), now=_NOW)
+    message = result.events[0].message
+    assert disclosure in message
     banned = ("買進", "賣出", "加碼", "減碼", "建議", "保證", "必漲", "穩賺")
-    assert not any(word in result.events[0].message for word in banned)
+    assert not any(word in message for word in banned)
 
 
 def test_no_limits_at_all_is_a_skip(store: AlertStore) -> None:
@@ -375,10 +430,16 @@ def _caps(statuses: dict[str, LimitStatus]) -> list[LimitCheck]:
 
 
 def _caps_snapshot(statuses: dict[str, LimitStatus]) -> SymbolSnapshot:
+    # 風控 RK4c（2026-10-08）RK4c-R13: both disclosure fields carry the same
+    # sentinel. These S-B2 tests do not judge which version a fired message
+    # picks (R4c-8 is pinned by tests/test_rk4c_quote_shown.py and by the
+    # ``without-quote-cap-1`` case above); both fields must hold a value so the
+    # quiet and skip scans below cover each of them.
     return replace(
         snapshot(
             reason=_SENTINEL_REASON,
             fx_disclosure=_SENTINEL_FX,
+            fx_disclosure_without_quote=_SENTINEL_FX,
             data_disclosure=_SENTINEL_DATA,
         ),
         limits=_caps(statuses),

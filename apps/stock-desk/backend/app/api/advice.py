@@ -26,6 +26,7 @@ from pydantic import ConfigDict
 
 from app.advice.book import book_notes, build_book_context, self_reported_net_worth
 from app.advice.engine import build_advice
+from app.advice.limits import LimitCheck, shows_price_input_figure
 from app.api.common import EnvelopeBase, data_meta, now_iso
 from app.api.deps import (
     get_cached_valuator,
@@ -219,8 +220,10 @@ def get_advice(
             position_ids=book.position_ids,
             portfolio_context=book.context.model_dump(),
             # No card, no caps: the freshness note has nothing to qualify here,
-            # and the page renders only the insufficient panel (風控 A-8).
-            context_notes=book_notes(book),
+            # and the page renders only the insufficient panel (風控 A-8). No
+            # verdict and no range is shown, so no figure the quote was
+            # multiplied into either (PR-RK4c, R4c-7).
+            context_notes=book_notes(book, quote_shown=False),
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
         )
@@ -231,9 +234,16 @@ def get_advice(
         portfolio=book.context,
         budget=budget,
     )
+    # Whether this card shows a figure the applied quote was multiplied into,
+    # judged on the card's own verdicts and range (PR-RK4c, R4c-7): they
+    # already carry the engine's ATR fallback, so the caps are not re-run.
+    quote_shown = shows_price_input_figure(
+        [LimitCheck.model_validate(entry) for entry in card["limits_check"]],
+        sized=card["quantity_range"] is not None,
+    )
     # Assembled after the caps were evaluated (ADR-0023 Decision 8-1): the
     # notes are built by the one finalizer, never read off the context.
-    notes = book_notes(book)
+    notes = book_notes(book, quote_shown=quote_shown)
     return AdviceResponse(
         symbol=symbol,
         market=market,

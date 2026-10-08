@@ -373,9 +373,13 @@ FX_MIXED_SOURCES_NOTE = (
 #: context's figures but this symbol's own valued lots were converted (task
 #: RK-4, (B) without (A′)): it scopes the sentence(s) after it to the converted
 #: market value and total equity, so they are not read as covering the price
-#: and the ATR, which are withheld whenever it appears. Always the first item of
-#: the disclosure, immediately before the sentence(s) it scopes, and never next
-#: to :data:`FX_MIXED_SOURCES_NOTE` (RK4-R2).
+#: and the ATR. Its premise (risk RK4-E1b-2) is that the surface it appears on
+#: shows no figure the applied quote was multiplied into: the card and the push
+#: state it only when they show none (PR-RK4c,
+#: :func:`app.advice.limits.shows_price_input_figure`), ``/limits`` only when
+#: its G1 is empty; the one exception is the test-only cell of risk RK4-C4.
+#: Always the first item of the disclosure, immediately before the sentence(s)
+#: it scopes, and never next to :data:`FX_MIXED_SOURCES_NOTE` (RK4-R2).
 #: 風控核可文案,修改須重新送審(2026-10-08)
 #: ``work/reviews/2026-10-08-W-RK4-1-W-RK5-1逐字審與X-11-X-12核對-風控審查.md`` (W-RK4-1, 替代案 A)
 FX_VALUATION_SCOPE_NOTE = (
@@ -457,21 +461,32 @@ class BookContext:
     #: Currency of the matched holding(s), or ``None`` for a candidate.
     currency: str | None = None
     #: The notes about this symbol (or, for the book scope, about the book's
-    #: classification) that follow the book-level ones, already final.
+    #: classification) that follow the book-level ones, already final. The
+    #: version for a response that shows a figure the applied quote was
+    #: multiplied into (PR-RK4c, R4c-5): its FX tail is :attr:`fx_note` -- the
+    #: applied-rate sentence only when the close was usable (R4c-5 (b)) -- then
+    #: the items of :attr:`fx_disclosure`.
     symbol_notes: tuple[str, ...] = ()
+    #: The same notes for a response that shows no such figure (R4c-5 (a)): the
+    #: applied-rate sentence is left out (a failed-conversion sentence stays),
+    #: and the FX tail is the items of :attr:`fx_disclosure_without_quote`.
+    #: Symbol scope only; :func:`book_notes` picks between the two.
+    symbol_notes_without_quote: tuple[str, ...] = ()
     #: The rate applied (``1.0`` for TWD), or ``None`` when none could be.
     fx_rate: float | None = None
     #: The single FX sentence from the notes, for callers whose output shape
     #: has no notes list of its own (the alert snapshot).
     fx_note: str | None = None
-    #: The FX sources' standing disclosures, joined by single spaces, present
-    #: if and only if (risk RK4-R1, second revision of X3-R1):
+    #: The FX sources' standing disclosures, joined by single spaces, for a
+    #: response that shows a figure the applied quote was multiplied into (the
+    #: version *with* the quote, PR-RK4c). Present if and only if (risk RK4-R1,
+    #: second revision of X3-R1):
     #:
-    #: * (A′) a quote was applied to this context's figures, the close it
-    #:   converts was usable and the quote carries a sentence -- the quote's
-    #:   sentence first; when the book's valued rows of the same pair were
-    #:   converted on another source, that source's sentence and
-    #:   :data:`FX_MIXED_SOURCES_NOTE` follow (task RK-2); or
+    #: * (A′) the quote reached this context -- applied, to a usable close, and
+    #:   carrying a sentence -- the quote's sentence first; when the book's
+    #:   valued rows of the same pair were converted on another source, that
+    #:   source's sentence and :data:`FX_MIXED_SOURCES_NOTE` follow (task RK-2);
+    #:   or
     #: * (B) otherwise, at least one of this symbol's own lots is ``ok`` with a
     #:   valuator rate that is not ``UNAVAILABLE`` and carries a sentence --
     #:   :data:`FX_VALUATION_SCOPE_NOTE` first, then the valuator's sentences
@@ -479,9 +494,16 @@ class BookContext:
     #:
     #: ``None`` otherwise: a TWD symbol, a candidate, lots that are not valued
     #: or whose rate failed, and lots whose currency is not their market's
-    #: (KX-A11). Judged here once: the alert snapshot reads this field and
-    #: states no condition of its own.
+    #: (KX-A11). (A′) is only a necessary condition for the quote's sentences
+    #: (risk RK4-E1b-1): the response picks this field or
+    #: :attr:`fx_disclosure_without_quote` with
+    #: :func:`app.advice.limits.shows_price_input_figure`, from what it shows.
     fx_disclosure: str | None = None
+    #: The same disclosure for a response that shows no figure the quote was
+    #: multiplied into (PR-RK4c, R4c-4): (B)'s content when (B) holds, else
+    #: ``None`` -- never the quote's sentence, never the bridge. Equal to
+    #: :attr:`fx_disclosure` whenever :attr:`disclosed_quote` is ``None``.
+    fx_disclosure_without_quote: str | None = None
     #: Why this layer withheld the close and the ATR, when it can name the
     #: cause: a failed FX conversion (the same sentence as ``fx_note``) or lots
     #: whose currency is not their market's (:data:`CURRENCY_MARKET_MISMATCH_NOTE`,
@@ -489,8 +511,10 @@ class BookContext:
     #: for a holding in more than one currency (K-1). The alert snapshot reads
     #: it as ``price_cap_cause`` and states no condition of its own (RX-6).
     price_withheld_note: str | None = None
-    #: The quote :attr:`fx_disclosure` was stated for under (A′), or ``None``
-    #: (task RK-4, R4-22). Set by :func:`build_book_context` only; the overview
+    #: The quote that reached this context under (A′), or ``None`` (task RK-4,
+    #: R4-22): whether it is disclosed is each response's call, through
+    #: :func:`app.advice.limits.shows_price_input_figure` (PR-RK4c, R4c-9).
+    #: Set by :func:`build_book_context` only; the overview
     #: (:mod:`app.advice.book_limits`) collects it from the holdings it compares
     #: and hands it to :func:`limits_fx_disclosures`. Nothing else reads it.
     disclosed_quote: FxQuote | None = None
@@ -1053,7 +1077,10 @@ def _book_direction(book: BookContext, comparison: SectorComparison) -> str:
 
 
 def book_notes(
-    book: BookContext, *, sector_comparison: SectorComparison | None = None
+    book: BookContext,
+    *,
+    sector_comparison: SectorComparison | None = None,
+    quote_shown: bool | None = None,
 ) -> list[str]:
     """Every note of one response, assembled once its verdicts are known.
 
@@ -1067,6 +1094,14 @@ def book_notes(
     the aggregate knows) and refused for a symbol-scope one (the card's rule
     does not read it). A later change adds cap 3's status the same way, as a
     keyword-only argument.
+
+    ``quote_shown`` is the response's own answer to
+    :func:`app.advice.limits.shows_price_input_figure` (PR-RK4c, R4c-6):
+    ``False`` picks :attr:`BookContext.symbol_notes_without_quote`, ``True``
+    or ``None`` (the compatibility view) :attr:`BookContext.symbol_notes`. It
+    is refused for a book-scope context, whose FX sentences are stated by
+    :func:`limits_fx_disclosures` instead. Every production symbol-scope call
+    passes it (``tests/test_rk4c_quote_shown.py``).
     """
     if book.scope == "symbol":
         if sector_comparison is not None:
@@ -1075,10 +1110,13 @@ def book_notes(
     else:
         if sector_comparison is None:
             raise ValueError("a book-scope context needs the aggregate's sector comparison")
+        if quote_shown is not None:
+            raise ValueError("a book-scope context takes no quote_shown")
         direction = _book_direction(book, sector_comparison)
+    symbol_notes = book.symbol_notes_without_quote if quote_shown is False else book.symbol_notes
     return [
         *_book_level_notes(book.summary, book.context.net_worth, direction=direction),
-        *book.symbol_notes,
+        *symbol_notes,
     ]
 
 
@@ -1270,13 +1308,22 @@ def build_book_context(
     # Methodology sentences if and only if (A′) or (B) (risk RK4-R1), in
     # mutually exclusive branches so the bridge and the scope sentence can
     # never meet (RK4-R2).
-    # (A′): the quote was applied -- a non-``None`` ``rate`` is not that
-    # signal, since a TWD holding gets 1.0 whatever quote the caller resolved
-    # for the bars (X3-R1) -- to a usable close (RK4-R11 (b): an unusable close
-    # withholds the price and the ATR below, so the quote converts nothing),
-    # and it has a sentence of its own.
+    # (A′): the quote reached this context -- a necessary condition only
+    # (PR-RK4c, R4c-3): whether a figure the response shows was multiplied by
+    # it is that response's call. Reached means: applied -- a non-``None``
+    # ``rate`` is not that signal, since a TWD holding gets 1.0 whatever quote
+    # the caller resolved for the bars (X3-R1) -- to a usable close (RK4-R11
+    # (b): an unusable close withholds the price and the ATR below, so the
+    # quote converts nothing), and with a sentence of its own.
     # (B): otherwise, this symbol's own valued lots were converted by the
     # valuator; its sentences are stated, scoped by FX_VALUATION_SCOPE_NOTE.
+    # (B) is judged once and shared by both versions (R4c-4); KX-A11 lots do
+    # not ask it.
+    valuation_disclosures: tuple[str, ...] = (
+        _valuation_disclosures(matched, summary)
+        if not mismatched_currency and _valuation_converted(matched)
+        else ()
+    )
     disclosures: tuple[str, ...] = ()
     disclosed_quote: FxQuote | None = None
     if mismatched_currency:
@@ -1285,14 +1332,29 @@ def build_book_context(
     elif applied is not None and priced and applied.source_note != "":
         disclosures = _fx_disclosures(applied, summary)
         disclosed_quote = applied
-    elif _valuation_converted(matched):
-        disclosures = _valuation_disclosures(matched, summary)
+    elif valuation_disclosures:
+        disclosures = valuation_disclosures
     if applied is None and not mixed_currencies and not mismatched_currency:
         _log_unapplied_quote(effective_currency, fx, summary)
     fx_disclosure = " ".join(disclosures) if disclosures else None
+    # The version for a response that shows no figure the quote was multiplied
+    # into (R4c-4): (B)'s content or nothing -- never the quote's sentence,
+    # never the bridge. This layer does not judge which version a response
+    # shows (R4c-3): the advice endpoint and the alert engine do.
+    without_disclosures = valuation_disclosures
+    fx_disclosure_without_quote = " ".join(without_disclosures) if without_disclosures else None
+    notes_without_quote = list(notes)
     if fx_note is not None:
-        notes.append(fx_note)
+        # R4c-5 (b): the applied-rate sentence only where the close it converts
+        # was usable -- an unusable close converts nothing (the O-1 cell).
+        if applied is None or priced:
+            notes.append(fx_note)
+        # R4c-5 (a): no applied-rate sentence without the quote's; a failed
+        # conversion's sentence stays.
+        if applied is None:
+            notes_without_quote.append(fx_note)
     notes.extend(disclosures)
+    notes_without_quote.extend(without_disclosures)
 
     context = PortfolioContext(
         symbol=symbol,
@@ -1331,9 +1393,11 @@ def build_book_context(
         position_ids=[position.id for position in matched],
         currency=effective_currency,
         symbol_notes=tuple(notes),
+        symbol_notes_without_quote=tuple(notes_without_quote),
         fx_rate=rate,
         fx_note=fx_note,
         fx_disclosure=fx_disclosure,
+        fx_disclosure_without_quote=fx_disclosure_without_quote,
         price_withheld_note=price_withheld_note,
         disclosed_quote=disclosed_quote,
     )
