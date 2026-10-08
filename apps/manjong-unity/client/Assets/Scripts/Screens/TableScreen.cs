@@ -18,6 +18,8 @@ namespace Manjong.Screens
     /// data changed. Relative seat = (seat - mySeat + 4) % 4: 0 me (bottom), 1 next (right), 2 opposite (top), 3 previous (left).
     /// My hand: tiles can be selected at any time during a hand and dragged to reorder (see HandTileDrag); a player-made
     /// order is kept until the next hand and reconciled against every new view. Declared-ready (報聽) hands only select.
+    /// Dragging a tile mostly upwards past 90 units and releasing plays it (discard, or ting in the picker); every move of
+    /// a tile on screen is a short UiTween (the slots themselves stay at their fixed coordinates).
     /// </summary>
     public class TableScreen : MonoBehaviour
     {
@@ -36,6 +38,13 @@ namespace Manjong.Screens
         const int RiverColsNarrow = 8;  // left / right rivers
         const float RiverGap = 2f;
         const float SelectLift = 20f;
+        // Swipe-up-to-play gesture (UI units of travel since the press). Armed above SwipeThreshold, disarmed again
+        // below SwipeRelease (hysteresis, so the cue does not flicker at the border).
+        const float SwipeThreshold = 90f;
+        const float SwipeRelease = 80f;
+        const float RubberFactor = 0.3f; // a tile that cannot be played only follows the finger this much ...
+        const float RubberMax = 28f;     // ... up to this far, then springs back on release
+        const float FlyDistance = 160f;
 
         // Fixed geometry of my hand (reference 1920x1080, bottom-left origin). Tiles never move when a tile is
         // drawn: slot i is at HandStartX + i * SlotStep, the drawn tile always sits in the separate drawn slot.
@@ -136,6 +145,26 @@ namespace Manjong.Screens
         int dragIndex = -1;
         float dragGrabX;
 
+        enum DragKind { Reorder, Swipe }
+        /// <summary>Locked when the drag starts: mostly upwards = swipe gesture, otherwise reorder.</summary>
+        DragKind dragKind;
+        Vector2 dragPress;
+        /// <summary>Action the swipe would send ("discard:x" / "ting:x"); null when this tile cannot be played now.</summary>
+        string swipeId;
+        bool swipeArmed;
+        UiTween swipeCue;
+
+        // Tile played by swipe: its slot stays empty until the server answers (see RenderMyHand).
+        int hiddenHandIndex = -1;
+        string hiddenSig = "";
+        /// <summary>Hand as built last time (codes, drawn-slot flag): lets a rebuild carry on-screen positions over.</summary>
+        readonly List<string> builtCodes = new List<string>();
+        bool builtDrawn;
+        /// <summary>Set around the rebuild after a reorder: new index -> old index (null = same index).</summary>
+        List<int> pendingCarry;
+        /// <summary>Top layer for tiles flying out of the hand; survives hand rebuilds.</summary>
+        RectTransform flyLayer;
+
         // ---------- Build ----------
 
         public void Init(AppController owner)
@@ -164,6 +193,9 @@ namespace Manjong.Screens
 
             resultPanel = new ResultPanel();
             resultPanel.Build(root);
+
+            flyLayer = UiFactory.CreateRect("FlyLayer", root);
+            UiFactory.Stretch(flyLayer);
         }
 
         static int RiverColsFor(int rel)
@@ -392,6 +424,12 @@ namespace Manjong.Screens
             mergedDrawn = "";
             handSlots.Clear();
             dragIndex = -1;
+            swipeCue = null;
+            hiddenHandIndex = -1;
+            builtCodes.Clear();
+            builtDrawn = false;
+            pendingCarry = null;
+            if (flyLayer != null) UiFactory.DestroyChildren(flyLayer);
             events.Clear();
             RefreshEventLog();
             tingOn = false;
@@ -1038,6 +1076,19 @@ namespace Manjong.Screens
             prevCanDiscard = canDiscard;
             prevDeclared = declared;
 
+            // A tile played by swipe stays hidden only while the server has not answered. If the answer left my tiles
+            // as they were (e.g. ILLEGAL_ACTION), the tile comes back (faded in) and the flying copy is dropped.
+            int restoreIndex = -1;
+            if (hiddenHandIndex >= 0 && (!awaiting || tilesSig != hiddenSig))
+            {
+                if (tilesSig == hiddenSig && hiddenHandIndex < handOrder.Count)
+                {
+                    restoreIndex = hiddenHandIndex;
+                    if (flyLayer != null) UiFactory.DestroyChildren(flyLayer);
+                }
+                hiddenHandIndex = -1;
+            }
+
             var sb = new StringBuilder(tilesSig);
             sb.Append('|').Append(canDiscard).Append('|').Append(declared).Append('|');
             OptionDto[] opts = DtoUtil.Safe(v.options);
@@ -1060,10 +1111,29 @@ namespace Manjong.Screens
             if (selectedIndex >= handOrder.Count) selectedIndex = -1;
             highlightCode = selectedIndex >= 0 ? handOrder[selectedIndex] : "";
 
-            string sig = contentSig + "#" + string.Join(",", handOrder) + "#" + selectedIndex + "#" + tingMode + "#" + interactive + "#" + drawnSeparate;
+            string sig = contentSig + "#" + string.Join(",", handOrder) + "#" + selectedIndex + "#" + tingMode + "#" + interactive + "#" + drawnSeparate + "#h" + hiddenHandIndex;
             if (sig == s.handSig) return;
             s.handSig = sig;
             dragIndex = -1; // a drag in progress dies with its tile
+            swipeCue = null;
+
+            // Where every old tile is on screen right now (also mid-glide): the rebuilt tiles start there and glide to
+            // their fixed slots, so a rebuild during an animation never jumps or flashes.
+            int oldCount = handSlots.Count;
+            var oldSlotPos = new Vector2[oldCount];
+            var oldTilePos = new Vector2[oldCount];
+            var oldHasTile = new bool[oldCount];
+            for (int k = 0; k < oldCount; k++)
+            {
+                RectTransform old = handSlots[k];
+                if (old == null) continue;
+                oldSlotPos[k] = old.anchoredPosition;
+                if (old.childCount > 0)
+                {
+                    oldTilePos[k] = ((RectTransform)old.GetChild(0)).anchoredPosition;
+                    oldHasTile[k] = true;
+                }
+            }
             handSlots.Clear();
             UiFactory.DestroyChildren(s.hand);
 
@@ -1077,13 +1147,32 @@ namespace Manjong.Screens
                 // Fixed slots from the left edge; the drawn tile always goes to the separate drawn slot.
                 float x = isDrawn ? DrawnSlotX : i * SlotStep;
 
+                // Same tile as before (reorder: via the permutation, otherwise same index) -> carry its position over.
+                int src = pendingCarry != null ? (i < pendingCarry.Count ? pendingCarry[i] : -1) : i;
+                bool carry = src >= 0 && src < oldCount && src < builtCodes.Count && builtCodes[src] == code &&
+                             (pendingCarry != null || (builtDrawn && src == builtCodes.Count - 1) == isDrawn);
+
+                Vector2 slotTarget = new Vector2(x, 0f);
                 var slot = UiFactory.CreateRect("Slot" + i, s.hand);
-                UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(x, 0f), size.Vector);
+                UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), carry ? oldSlotPos[src] : slotTarget, size.Vector);
                 handSlots.Add(slot);
+                var slotTween = slot.gameObject.AddComponent<UiTween>();
+                if (carry) slotTween.SlideTo(slotTarget, UiMotion.Settle);
+
+                if (i == hiddenHandIndex) continue; // played by swipe: the flying copy stands in until the server answers
 
                 var tile = TileView.CreateFace(slot, code, size);
                 bool selected = i == selectedIndex;
-                UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, selected ? SelectLift : 0f), size.Vector);
+                Vector2 tileTarget = new Vector2(0f, selected ? SelectLift : 0f);
+                bool carryTile = carry && oldHasTile[src];
+                UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), carryTile ? oldTilePos[src] : tileTarget, size.Vector);
+                var tileTween = tile.gameObject.AddComponent<UiTween>();
+                if (carryTile) tileTween.SlideTo(tileTarget, UiMotion.Settle);
+                if (i == restoreIndex)
+                {
+                    tileTween.SetAlpha(0f);
+                    tileTween.FadeTo(1f, UiMotion.Settle);
+                }
 
                 OptionDto discardOpt = canDiscard ? DtoUtil.FindOption(v, "discard:" + code) : null;
                 OptionDto tingOpt = tingMode ? DtoUtil.FindOption(v, "ting:" + code) : null;
@@ -1110,6 +1199,11 @@ namespace Manjong.Screens
                     drag.DragEnded = OnTileDragEnded;
                 }
             }
+
+            builtCodes.Clear();
+            builtCodes.AddRange(handOrder);
+            builtDrawn = drawnSeparate;
+            pendingCarry = null;
 
             if (winTile.Length > 0)
             {
@@ -1187,27 +1281,78 @@ namespace Manjong.Screens
             return Mathf.Clamp(pointer.x + dragGrabX, -SlotStep * 0.5f, DrawnSlotX);
         }
 
-        void OnTileDragStarted(int index, Vector2 pressPoint)
+        static UiTween TweenOf(RectTransform rt)
+        {
+            var t = rt.GetComponent<UiTween>();
+            return t != null ? t : rt.gameObject.AddComponent<UiTween>();
+        }
+
+        RectTransform TileOf(int index)
+        {
+            if (index < 0 || index >= handSlots.Count || handSlots[index] == null || handSlots[index].childCount == 0) return null;
+            return (RectTransform)handSlots[index].GetChild(0);
+        }
+
+        /// <summary>
+        /// Action a swipe up on this tile would send, or null when it cannot be played right now (not my turn, playing,
+        /// awaiting, declared, a tile the 聽 picker or the discard options dim).
+        /// </summary>
+        string SwipeActionId(int index)
+        {
+            if (view == null || view.phase != "playing" || index < 0 || index >= handOrder.Count) return null;
+            string code = handOrder[index];
+            OptionDto opt = null;
+            if (TingPicking) opt = DtoUtil.FindOption(view, "ting:" + code);
+            else if (CanDiscardByTile) opt = DtoUtil.FindOption(view, "discard:" + code);
+            return opt != null ? opt.id : null;
+        }
+
+        /// <summary>
+        /// A drag locks its meaning when it starts, from the first 12+ units of travel: mostly upwards = the swipe
+        /// gesture (play the tile), anything else = reorder. Once locked, a reorder never turns into a play (and a
+        /// swipe never reorders), so a drifting hand cannot play a tile by accident.
+        /// </summary>
+        void OnTileDragStarted(int index, Vector2 pressPoint, Vector2 current)
         {
             if (view == null || view.phase != "playing" || index < 0 || index >= handSlots.Count) return;
+            if (dragIndex >= 0) return; // one drag at a time: a second finger must not hijack the first
             dragIndex = index;
+            dragPress = pressPoint;
+            swipeArmed = false;
+            swipeCue = null;
+            swipeId = SwipeActionId(index);
             RectTransform slot = handSlots[index];
-            dragGrabX = slot.anchoredPosition.x - pressPoint.x;
+            dragGrabX = slot.anchoredPosition.x - pressPoint.x; // from where it is shown now (it may still be gliding)
             slot.SetAsLastSibling(); // on top of its neighbours
-            if (slot.childCount > 0)
+            RectTransform tile = TileOf(index);
+            Vector2 delta = current - pressPoint;
+            dragKind = delta.y > Mathf.Abs(delta.x) ? DragKind.Swipe : DragKind.Reorder;
+            if (tile == null) return;
+            if (dragKind == DragKind.Reorder)
             {
                 // Picked up: lifted like a selected tile.
-                var tile = (RectTransform)slot.GetChild(0);
-                tile.anchoredPosition = new Vector2(0f, SelectLift);
+                TweenOf(tile).SlideTo(new Vector2(0f, SelectLift), UiMotion.Quick);
+            }
+            else if (swipeId != null)
+            {
+                swipeCue = CreateSwipeCue(tile, TingPicking ? "放開報聽" : "放開出牌");
             }
         }
 
-        /// <summary>The dragged tile follows the pointer horizontally; the others step aside so the gap is where it would land.</summary>
+        /// <summary>
+        /// Reorder: the dragged tile follows the pointer horizontally (directly, no easing) while the others glide
+        /// aside (150 ms ease-out, retargeted from where they are whenever the gap moves). Swipe: see DragSwipe.
+        /// </summary>
         void OnTileDragged(int index, Vector2 pointer)
         {
             if (dragIndex != index || index >= handSlots.Count) return;
+            if (dragKind == DragKind.Swipe)
+            {
+                DragSwipe(index, pointer);
+                return;
+            }
             float left = DragLeft(pointer);
-            handSlots[index].anchoredPosition = new Vector2(left, 0f);
+            TweenOf(handSlots[index]).SetPosition(new Vector2(left, 0f));
 
             bool backToDrawn;
             int target = DragTarget(left, out backToDrawn);
@@ -1216,14 +1361,77 @@ namespace Manjong.Screens
             {
                 if (i == index || (drawnSeparate && i == handOrder.Count - 1)) continue;
                 int slotIndex = !backToDrawn && k >= target ? k + 1 : k;
-                handSlots[i].anchoredPosition = new Vector2(slotIndex * SlotStep, 0f);
+                TweenOf(handSlots[i]).SlideTo(new Vector2(slotIndex * SlotStep, 0f), UiMotion.Shift);
                 k++;
             }
+        }
+
+        /// <summary>Past the threshold, mostly upwards (with hysteresis once armed).</summary>
+        bool SwipeInRange(Vector2 delta)
+        {
+            float limit = swipeArmed ? SwipeRelease : SwipeThreshold;
+            return delta.y > limit && delta.y > Mathf.Abs(delta.x);
+        }
+
+        /// <summary>
+        /// The tile follows the finger. Playable: past 90 units (and more up than sideways) the cue (orange frame and
+        /// a "放開出牌" pill) fades in, back under 80 it fades out. Not playable: the tile only follows a third of the
+        /// way (max 28 units, rubber band) with no cue, and springs back on release.
+        /// </summary>
+        void DragSwipe(int index, Vector2 pointer)
+        {
+            RectTransform tile = TileOf(index);
+            if (tile == null) return;
+            Vector2 d = pointer - dragPress;
+            float baseY = selectedIndex == index ? SelectLift : 0f;
+            Vector2 offset;
+            if (swipeId != null)
+            {
+                offset = new Vector2(d.x, baseY + Mathf.Max(0f, d.y));
+            }
+            else
+            {
+                offset = new Vector2(Mathf.Clamp(d.x * RubberFactor, -RubberMax, RubberMax),
+                    baseY + Mathf.Clamp(d.y * RubberFactor, 0f, RubberMax));
+            }
+            TweenOf(tile).SetPosition(offset);
+
+            bool armed = swipeId != null && SwipeInRange(d);
+            if (armed != swipeArmed)
+            {
+                swipeArmed = armed;
+                if (swipeCue != null) swipeCue.FadeTo(armed ? 1f : 0f, UiMotion.Quick);
+            }
+        }
+
+        /// <summary>"Release to play" cue on a tile: orange frame plus a pill above it, hidden until armed.</summary>
+        static UiTween CreateSwipeCue(RectTransform tile, string label)
+        {
+            TileSize size = TileSizes.Large;
+            var box = UiFactory.CreateRect("SwipeCue", tile);
+            UiFactory.Stretch(box);
+            TileView.AddRing(box, Palette.LastDiscardRing, size, 5);
+            float w = 28f + 24f * label.Length;
+            var pill = UiFactory.CreatePanel(box, "Pill", Palette.Coral, 14);
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, 14f), new Vector2(w, 34f));
+            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 14, 2, 0f);
+            var text = UiFactory.CreateLabel(pill.transform, "Text", label, 24, Palette.Ink, TextAnchor.MiddleCenter);
+            text.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(text.rectTransform, 2f, 1f, 2f, 1f);
+            var tween = box.gameObject.AddComponent<UiTween>();
+            tween.PassThrough();
+            tween.SetAlpha(0f);
+            return tween;
         }
 
         void OnTileDragEnded(int index, Vector2 pointer)
         {
             if (dragIndex != index || view == null) return;
+            if (dragKind == DragKind.Swipe)
+            {
+                EndSwipe(index);
+                return;
+            }
             bool backToDrawn;
             int target = DragTarget(DragLeft(pointer), out backToDrawn);
             bool fromDrawn = DraggedFromDrawn;
@@ -1246,6 +1454,7 @@ namespace Manjong.Screens
             {
                 if (perm[i] != i) changed = true;
             }
+            int newIndex = index;
             if (changed)
             {
                 var codes = new List<string>(perm.Count);
@@ -1254,9 +1463,69 @@ namespace Manjong.Screens
                 if (stillSeparate) codes.RemoveAt(codes.Count - 1); // the drawn slot is not part of the custom order
                 if (selectedIndex >= 0) selectedIndex = perm.IndexOf(selectedIndex); // the selection follows its tile
                 customOrder = codes;
+                pendingCarry = perm;
+                newIndex = perm.IndexOf(index);
             }
-            seats[0].handSig = null; // rebuild: snaps every tile onto its slot (also when nothing changed)
+            // Rebuild every slot (also when nothing changed). Each new slot starts at the position its tile is shown at
+            // right now and glides home (180 ms ease-out), so the dropped tile slides into its slot instead of snapping.
+            seats[0].handSig = null;
             Render(view, lastRenderFinal);
+            pendingCarry = null;
+            if (newIndex >= 0 && newIndex < handSlots.Count) handSlots[newIndex].SetAsLastSibling(); // glides over its neighbours
+        }
+
+        /// <summary>
+        /// Release of a swipe. Armed (what the cue showed) and the tile still playable -> send the action; the tile leaves
+        /// as a copy flying up. Otherwise the tile glides back (180 ms ease-out) and nothing is sent.
+        /// </summary>
+        void EndSwipe(int index)
+        {
+            RectTransform tile = TileOf(index);
+            string code = index < handOrder.Count ? handOrder[index] : "";
+            string id = swipeArmed ? SwipeActionId(index) : null; // re-checked: the table may have moved on during the drag
+            bool fire = id != null && id == swipeId && tile != null;
+            dragIndex = -1;
+            if (fire)
+            {
+                Vector3 world = tile.position;
+                hiddenHandIndex = index;
+                hiddenSig = myTilesSig;
+                if (Send(id))
+                {
+                    SpawnFlyGhost(code, world);
+                    swipeCue = null;
+                    return;
+                }
+                hiddenHandIndex = -1; // not sent (connection gone): fall through to the glide back
+            }
+            if (tile != null) TweenOf(tile).SlideTo(new Vector2(0f, selectedIndex == index ? SelectLift : 0f), UiMotion.Settle);
+            if (swipeCue != null) swipeCue.FadeTo(0f, UiMotion.Quick);
+            swipeCue = null;
+            swipeArmed = false;
+        }
+
+        /// <summary>
+        /// A copy of the played tile that rises 160 units while fading out (220 ms, strong ease-out for the travel, ease
+        /// for the opacity). It lives on its own layer, so the hand rebuild that follows the send cannot touch it.
+        /// Reduced motion: no travel, just a 100 ms fade.
+        /// </summary>
+        void SpawnFlyGhost(string code, Vector3 world)
+        {
+            if (flyLayer == null) return;
+            TileSize size = TileSizes.Large;
+            var ghost = TileView.CreateFace(flyLayer, code, size);
+            UiFactory.Place(ghost, new Vector2(0f, 0f), new Vector2(0f, 0f), Vector2.zero, size.Vector);
+            ghost.position = world;
+            var tween = ghost.gameObject.AddComponent<UiTween>();
+            tween.PassThrough();
+            tween.DestroyWhenIdle();
+            if (UiMotion.Reduced)
+            {
+                tween.FadeTo(0f, UiMotion.Quick);
+                return;
+            }
+            tween.SlideTo(ghost.anchoredPosition + new Vector2(0f, FlyDistance), UiMotion.Exit);
+            tween.FadeTo(0f, UiMotion.Exit);
         }
 
         // ----- River -----
@@ -1354,13 +1623,15 @@ namespace Manjong.Screens
             Send(actionId);
         }
 
-        void Send(string actionId)
+        /// <summary>Sends the action and locks input until the next "state"; false when nothing was sent.</summary>
+        bool Send(string actionId)
         {
-            if (!app.SendAction(actionId)) return;
+            if (!app.SendAction(actionId)) return false;
             awaiting = true; // until the next "state"
             selectedIndex = -1;
             tingOn = false;
             Render(view, true);
+            return true;
         }
 
         void OnNextHand()
