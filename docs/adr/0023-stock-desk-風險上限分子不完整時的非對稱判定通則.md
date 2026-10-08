@@ -312,6 +312,17 @@
          - 原本 mixed：仍是 mixed，`{n}` 增加。
          - 第 2、3 條都不是 passed（例：未自報淨值或淨值過期使第 3 條 not_evaluable，且第 2 條 not_evaluable）：全部 not_evaluable，**由 quiet 變 skipped**（`:288-294`）。
          S-B2 的 `{n}` 範圍 1–4 仍成立，因為 mixed 必須有 passed ≥ 1。
+         - **〔2026-10-07 更正，風控第六段（C-3，PR-1 合併前；來源：風控審查檔第六段「ADR-0023 是否要 tech-writer 更正」）。上列 (b) 原文保留，以本更正為準〕**
+           - 改寫：own>0（production builder 建出的 context）且沒有 violated 時，any 規則**一律 skipped**。
+           - 原本是 mixed quiet 的（6-a 前第 1、4、5 條有 passed），轉為 skipped：S-B2 句消失，改用既有 skipped 句列出五條上限。
+           - 原本就是 skipped 的，維持不變。
+           - 「原本全部 passed → mixed quiet」和「原本 mixed 仍 mixed、`{n}` 增加」兩項**不可能發生**（原文兩條作廢）。理由：own>0 時第 3 條必定不是 passed；有產業時第 2 條也必定不是 passed。
+           - 「最多 +3」改為「**未評估條數最多 +3，但對 any 規則只表現為 quiet → skipped，不會表現為 `{n}` 變大**」。
+           - `{n}` 範圍 1–4 仍成立，但只出現在 own=0 的情境。
+           - 加註：只有手刻 context 的 None 退路下可達 mixed quiet，那不是 production 路徑，由 F-1 把關。
+           - **風控自承（來源說明）**：(b) 的錯誤口徑（「any 規則未評估條數增加，最多 +3」及三種轉變的展開）有一部分來自風控審查檔第一段「二、逐條」第 7 點的寫法；tech-architect 展開成三種轉變時，風控沒有發現 own>0 下第 2、3 條不可能 passed，**屬風控疏失**。風控審查檔第一段二.7（本 ADR「風控裁定轉錄」節第 7 點）的相同口徑一併以本更正為準。
+           - 依據（風控第六段逐點讀碼，風控所述）：own>0 時第 1、4、5 條沒有任何分支回傳 passed；第 2 條有產業時 `same = own_lots + same_sector_lots ≥ 1`，只會 violated 或 not_evaluable，沒有產業時一定 not_evaluable；第 3 條 passed 需要 `book_fully_valued is True`，builder 的 `_fully_valued` 與 own 計數用同一個「status != ok」，own>0 時必為 False；`_limit_outcome` 的 mixed 分支需要 passed ≥ 1。
+           - 對應的 C-4：6A-19 的 PR 說明要照此口徑改寫，不能再寫「any 規則未評估條數最多 +3」。
      (c) **只監看第 1、4、5 條其中一條的規則**：原本 passed（無聲 quiet）變成 skipped，句子是「監看的上限（{name}）缺少輸入，無法判定是否違反。」這是改善，不再把可能偏低的比率當成通過。`_limit_cause`（`:325-347`）的尾句只在 `price_cap_cause` 存在時附加，而 `price_cap_cause` 只在 `fx_rate is None` 時設定（`alerts/snapshot.py:158`）。此時第 4 條比率不會算出，走的是原有的 ATR／收盤價成因而不是 W-a1，所以 6-a 不會新增 FX 尾句的情境。
      (d) **不觸發 S-B2 失效條件 1～8**：
          - 1：不新增 quiet reason 的呈現。
@@ -322,24 +333,28 @@
          - 6：fired 訊息句構不變，也不對未觸發的上限下結論。
          - 8：skipped 字面不變。
      (e) **S-B2 列管 2 範圍加入「分子不完整」口徑**：own>0 時輸入其實都在，是因為分子不完整才不計算，「缺少輸入」並不精確。與 ADR-0022 Consequences 5 同類，併案處理。字面不改；日後改動須另案送審，並依 S-B2 失效條件 8 與「未評估」核對一致。
+         - 〔2026-10-07 更正，風控第六段〕「缺少輸入」用語不精確這個列管項，適用範圍擴大為「**所有 own>0 且沒有 violated 的 any 規則**」（依上 (b) 更正，這些規則一律 skipped）。字面不改，列管等級不變。
      (f) 觀察（不擋 6-a）：F-4「已評估 {E} 條規則」會把 mixed quiet 算成已評估（S-B2 列管觀察），6-a 會讓這類規則變多。依 S-B2 失效條件 1 重審時一併處理。
+         - 〔2026-10-07 更正，風控第六段〕「6-a 會讓這類規則變多」方向相反，改為「**6-a 讓 own>0 的 mixed quiet 減少（轉為 skipped）**」。
      (g) **測試面（required，qa 逐條）**：
          - `tests/alerts_helpers.py` 的 `compliant_context`／`breaching_context` 沒有設定 `book_fully_valued`（預設 `None`，`limits.py:644`〔2026-10-07 勘誤，tech-architect：舊 `:644` → 現 L751〕）。依 Decision 3 的退路，這會被視為 own>0：S-B2 例 (b)（`test_alerts_engine.py:462-471`）會從 quiet 變成 skipped，`breaching_context` 的 fired detail 也會多出 W-a2。
          - 處理方式：兩個 fixture 補 `book_fully_valued=True`（符合它們「完整帳本」的原意）。S-B2 (a)(b)(c) 與 fired／skipped 迴歸測試的**斷言零修改**；fixture 這項改動列入 PR 說明。
          - 另外新增 own>0 測試：any 規則轉 mixed quiet；any 規則轉 skipped；單條第 1 條轉 skipped 且不帶 FX 尾句；violated 時的 fired 條目與 own=0 對照組相同，且 detail 以 W-a2 結尾。
+         - 〔2026-10-07 更正，風控第六段〕**第 1 例（any 規則轉 mixed quiet）在 production builder 下不可達；2026-10-07 PR-1 單項核對裁定，改由不可達證據測試取代**（風控所述測試名 `test_any_rule_with_own_lots_cannot_turn_mixed_quiet_from_a_built_book`；C-2：須補「對照組非空洞」前提斷言——同一帳本去掉那筆未估值批次後，sector=SEMI 時第 2 條要 passed、net_worth 有值時第 3 條要 passed、第 1、4、5 條要 passed；cache_only 成因也要參數化跑一次；suggested：同測試內對這些 context 實際跑 any 規則，斷言結果 ∈ {skipped, fired}）。不採「直接刪掉」與「改成 own=0 mixed quiet → own>0 skipped」兩選項。原文保留。
      - **風控裁定（2026-10-07，風控審查檔第四段，HEAD d66183e）：accept，屬「fixture 原意就是完整帳本的修正」，不算「改測試讓它過」，附條件 RF-1～RF-6。** 理由（風控所述）：(1) 原意有證據：`alerts_helpers.py:136`「single-position weight is over the 15% cap」與 `:147`「comfortably inside every evaluable cap」都未模擬無法估值持倉；S-B2 例 (b) 註解（`test_alerts_engine.py:462-463`）寫明未評估只有第 2、3、5 條，前提即第 1、4 條 passed＝完整帳本。(2) 先例：advice 側手刻 fixture 已明設 True（`test_advice_engine.py:62`、`test_advice_limits.py:74`、`test_advice_selection.py:35`、`test_playbook_price_fields.py:47`、`test_advice_wording.py:81`）。(3) 判準：補一個測試主旨本來就依賴、只是沒寫出的輸入，被測行為不變 → 可；修改斷言或放寬退路 → 不可。(4) 讀碼確認：`compliant_context` 有 atr，第 1、4 條算得出且低於門檻；None 退路下兩條轉 not_evaluable，加第 2、3、5 條五條全 not_evaluable，故由 quiet 變 skipped。
      - **RF-1～RF-6（required，qa 逐條；任一未做到，單項核對改判 VETO）**：
        - **RF-1**：`alerts_helpers.py` diff 只能是兩個 fixture 各加 `book_fully_valued=True` 加一句 docstring「完整帳本、無無法估值持倉」，不改其他欄位；使用這兩個 fixture 的測試（`test_alerts_engine.py` L227、243、255、264、273、289、302、314、467、571、603、661、739、768）斷言零修改。
        - **RF-2**：禁止改預設值讓測試過：`PortfolioContext.book_fully_valued` 預設維持 `None`（`limits.py:644`〔2026-10-07 勘誤，tech-architect：舊 `:644` → 現 L751〕），6-a 退路維持「None 視為 own>0」。
        - **RF-3**：退路另外釘住：用原 fixture 輸入（不設 `book_fully_valued`）走 alerts 路徑新增對照測試：(i) any 規則 → skipped，既有 skipped 字面，不出現 S-B2 句；(ii) 違反帳本 → fired，`violated_limit_ids`／條目與 True 版相同，detail 以 W-a2 結尾。
        - **RF-4**：同時新增 own>0 對照測試（tech-architect 四例：any 轉 mixed quiet；any 轉 skipped；只監看第 1 條轉 skipped 且不帶 FX 尾句；violated 時 fired 條目與 own=0 相同且 detail 以 W-a2 結尾）；own>0 用 `build_book_context` 實際會設定的欄位構成，與 RF-3 的 None 退路分開，不得互相代替。
+         - 〔2026-10-07 更正，風控第六段（RF-4 第 1 例衝突裁定）〕上列四例的**第 1 例「any 轉 mixed quiet」在 production builder 下不可達；2026-10-07 PR-1 單項核對裁定，改由不可達證據測試取代**（C-2 補對照組前提，見 Consequences 3(g) 更正）。其餘三例照舊。另 RF-1 的 docstring 以英文等義句「A complete book: every position was valued, none is unvalued.」可接受（風控第六段：章程 §0.1 規定程式碼與註解一律英文；RF-1 要求的是把「完整帳本」「無無法估值持倉」兩件事寫明，不是指定語言）。
          - **〔2026-10-07 風控補，R-RF4（審查檔第五段）〕** own>0 的四個對照測試，除了 `UnvaluedComposition(own_lots≥1)` 和 `book_fully_valued=False`，凡是 production builder 會設定的欄位（例如 `valued_unclassified_lots`）都要明設，不得依賴任何其他 None 退路。建議至少一例直接經 `build_book_context` 建構。
        - **RF-5**：全面盤點：qa 列出測試中所有未設 `book_fully_valued` 又會走到 `evaluate_limits`／`build_advice`／`suggest_quantity_range` 的手刻 `PortfolioContext`；風控已找到 tech-architect 未列的 **`test_advice_limits.py:1729` `_fractional_ctx`**（docstring「the entire book」，完整帳本原意）；只走 `build_context` 的（`test_advice_engine.py:88/369/598`、`test_observation_window.py:181-182`、`test_drawdown_current_lookahead.py:109`、`test_adr0021_field_evaluability.py:201`）請 qa 確認不受影響〔2026-10-07 勘誤，tech-architect：上列 `test_advice_engine.py` L88／L369 其實**會**走 `build_advice`，不是只走 `build_context`；但兩者皆為 insufficient_data 且沒有總資產，W-a1 不觸發、(A) 不附加，結果不受影響。此勘誤未提及 L598，該處維持原歸類。〕。每處歸類：原意完整帳本 → 補 True 列入 PR；不是 → 屬行為變更，斷言修改逐條對照 6-a 裁定寫明理由；期望值改變卻不在清單上 → BLOCKING。
        - **RF-6**：PR 說明逐項列出 RF-1、RF-5 的 fixture 變更與理由。
        - 否決理由：無。若 RF-1～RF-6 任一未落實，第 2 點於單項核對改判 VETO（違反「絕不放行隱藏風險」：放寬退路或拿掉退路測試覆蓋，等於讓「無法確認帳本完整」被當成完整帳本）。
 4. **只監看 gross 規則由 skipped 變 fired**：只監看 gross_exposure 的規則在 6-b 條件下由 skipped 改 fired；W-b1 經 `alerts/engine.py:309-310` 進推播（組成 `{symbol} 觸發風險上限：{names}。{details}`，風控審查檔所述 `:310`）；風控接受，不觸發 S-B2 失效條件 6／8（6-b 裁定 (3)）。
 5. **W-a2／W-b1 進推播**：誠實度與無操作指示限制適用（見 Decision 4、5）。W-b1 進推播時 6-b GWT 要求 fired 含 W-b1。
-6. **卡片觀感**：violated 並列「未參與計算」於 375 寬是否讀得通，qa-e2e 抽驗。
+6. **卡片觀感**：violated 並列「未參與計算」於 375 寬是否讀得通，qa-e2e 抽驗。〔2026-10-07 加註（風控第六段；依第五段 R-P5-2）：own>0 下此並列不可能出現，並列情境**已移到 PR-3（6-b）**，見 R-11 勘誤。〕
 7. **ADR-0022 的 D-d1／D-d2 與 D-a**：6-a／6-b 落地會使 ADR-0022 的 D-d1／D-d2、D-a 失去所指或被涵蓋（失效條件 1、2），須先有 D-a3 與 6-a 方向子句處置的核可字面。
 8. **手刻 context 測試**預設 `book_fully_valued=None` 會走退路（tech-architect 所述）。
 
@@ -355,6 +370,11 @@
     - D-5 加 own>0 的卡，觀察值顯示「—」。
   - **(x)** P-4 白名單：相容屬性一律照「沒有第 3 條判定」組 notes，所以第 3 條 violated 時它可能組出 D-a，和 production 實際送出的 notes 不同。「不讓它進到使用者畫面」這件事目前靠 KD-2 測試把關，型別與執行層都沒有強制。
   - **(xi)** own>0 的持有卡**完全不提供數量區間**，連賣出方向也沒有。這不在 (iii) 的範圍內，(A) 落地後也不會消除。
+  - 若 CEO 對以上裁定有異議，保留本書面紀錄，由 CEO 負最終責任。
+- CEO 知悉增補（風控審查檔第六段，2026-10-07；逐字自第六段「CEO 知悉增補」）：
+  - **(xii)** ADR-0023 Consequences 3(b) 的 S-B2 口徑有誤，一部分源自風控第一段第 7 點，是風控的疏失。對使用者的實際效果是：own>0 且沒有超標時，「任一上限」規則一律略過，理由句寫「缺少輸入」（實際原因是分子不完整，用語不精確，已列管）。不會出現「N 條上限未評估」的揭露句。不會產生錯誤放行。
+  - **(xiii)** PR-1 必須在 PR-0 之後合併（R0-1）。如果順序顛倒，過渡期 own>0 的第 4 條會用回填的 ATR 和占位匯率算出 W-a1／W-a2：方向一致，但同卡 FX note 的矛盾仍在（PR-0 的 C-1）。
+  - **(xiv)** 「同一標的部分估值」的端到端測試用了替身。正式可達路徑只有 legacy 雙幣別資料；「全部無法估值」是一般正式路徑，有無替身的測試。
   - 若 CEO 對以上裁定有異議，保留本書面紀錄，由 CEO 負最終責任。
 - 列管彙總：own>0 加碼降級（(A) 已採，字面風控核可 2026-10-07，待落地；medium，tech-architect）；「結論已調整」操作摘要標記（medium，creative-lead／art-lead／frontend，新字面送審）；F-1b（medium，dev-lead／devops-sre）；`SECTOR_UNCLASSIFIED_NOTE` 措辭（low，creative-lead，見 ADR-0022）。
 
@@ -406,7 +426,7 @@
 4. D-a3 同意單一常數、短版；同意資料流耦合附條件：(a) 選句須讀**同一回應中第 3 條實際 CheckResult status**（決策卡讀 `evaluate_limits`，`/limits` 讀 baseline 經 `_book_level_check`），不得在 `book.py` 用淨值、門檻再算；(b) 不採「淨值新鮮＋帳本不完整就用 D-a3」；(c) tech-architect 於 ADR-0023 寫明組裝順序與 D-a3 在優先序位置（只在原選 D-a 處替換，D-P／D-d1／D-d2 不動）——accepted 前提之一。a0 時「第 2 條比率會因此偏高」講未印出的比率，為 D-a 既有語意，不為假。
 5. D-d1／D-d2 採刪除版（第二次改動，註解寫兩次核可日）；required：刪除版與 6-a C′ 判定**同一 PR**（ADR-0022 PR 先上帶分句版本，當時第 1、4、5 條仍可能 passed 分句仍成立）；不採 R（為例外負責且與 W-a1／W-a2 重複）。
 6. N1 直接核可照稿，**另開 PR** 不併 6-a／6-b；核可前現行 2026-08-09 句不動。
-7. ADR-0023 待確認：失效條件 2 改「第 1、4、5 條」（更正原審查檔）；失效條件 3「6-c 擴及」已被 C-1 涵蓋，分類變更段繼續有效並加 M-1／M-3 以外再變更；unknown-only 第 2 條 passed 附 W3 為非對稱通則**明列例外**（維持 passed），但**試算上屬分子不完整，依 KC-2 不得進 `notional_caps`**（required，與 C-1 一致，請 tech-architect 確認 ADR-0022 已規定否則補）；6-a 對 S-B2 條數（請 tech-architect 確認）：own>0 時第 1、4、5 條只有 passed 變 not_evaluable、violated 集合不變，any 規則未評估條數**增加**（最多 3 條，與 6-b 相反），只監看其一的規則由無聲 quiet 變 skipped（改善），不觸發 S-B2 失效條件 1～8，S-B2 列管 2 範圍加「分子不完整」口徑。
+7. ADR-0023 待確認：失效條件 2 改「第 1、4、5 條」（更正原審查檔）；失效條件 3「6-c 擴及」已被 C-1 涵蓋，分類變更段繼續有效並加 M-1／M-3 以外再變更；unknown-only 第 2 條 passed 附 W3 為非對稱通則**明列例外**（維持 passed），但**試算上屬分子不完整，依 KC-2 不得進 `notional_caps`**（required，與 C-1 一致，請 tech-architect 確認 ADR-0022 已規定否則補）；6-a 對 S-B2 條數（請 tech-architect 確認）：own>0 時第 1、4、5 條只有 passed 變 not_evaluable、violated 集合不變，any 規則未評估條數**增加**（最多 3 條，與 6-b 相反），只監看其一的規則由無聲 quiet 變 skipped（改善），不觸發 S-B2 失效條件 1～8，S-B2 列管 2 範圍加「分子不完整」口徑。〔2026-10-07 更正，風控第六段（C-3）：本點「any 規則未評估條數**增加**（最多 3 條，與 6-b 相反）」口徑有誤，是風控疏失；以 Consequences 3(b) 更正為準——own>0 且無 violated 時 any 規則一律 skipped，「最多 +3」只表現為 quiet → skipped。原文保留。〕
    - 落檔狀態（tech-writer，2026-10-07）：失效條件 2、3 已於「重審與失效條件」與 ADR-0022 失效條件修訂；unknown-only 見 Decision 1 最後一點；S-B2 條數見 Consequences 3；D-5 見 Decision 1。
 
 ### 第一段：三、落地 required（qa 逐條）
@@ -567,6 +587,14 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 
 ### 5. 合併閘門
 
+- **PR-1 合併條件 C-1～C-5（風控審查檔第六段，2026-10-07，APPROVE 附條件；C-1～C-5 完成即可合併、不必回風控；任一未完成或 PR-1 早於 PR-0 合併即 VETO）**：
+  - **C-1 合併順序**：依 R0-1，**PR-0 要先合併（或同一次合併）**；rebase 到 PR-0 之後，要拿掉 strict xfail 標記（`test_adr0023_own_unvalued.py` 內，風控所述 L420-434），讓測試正常通過，不得刪除或弱化。若 PR-1 帶著該標記合併，表示 PR-0 尚未合併，觸發 PR0-F6（回送風控，適用風控保留的書面否決紀錄）。suggested：xfail 加 `raises=AssertionError`。
+  - **C-2 RF-4 衝突**：第 1 例改用 dev-lead 的不可達證據測試，補「對照組非空洞」前提斷言（見 Consequences 3(g) 更正）。
+  - **C-3 ADR 更正**：tech-writer 更正本 ADR Consequences 3(b)(e)(f)(g) 與 RF-4、待確認表、Consequences 6 及風控裁定轉錄第 7 點（**已於 2026-10-07 落檔**，見各處〔2026-10-07 更正，風控第六段〕）。
+  - **C-4 PR 說明更正**：6A-19 的 PR 說明要照更正後口徑改寫，不能再寫「any 規則未評估條數最多 +3」。
+  - **C-5 RF-5 盤點**：qa 要逐處歸類，不能只看全套測試是否通過，結果寫進 RF-6 的 PR 說明。
+  - 另（風控第六段）：**RF-1 的英文等義句 docstring 可接受**；6A-14 的「同一標的部分估值」端到端替身接受，條件是 PR 說明寫明「部分估值」的正式可達路徑只有 legacy 雙幣別（列管可達），「全部未估值」才是一般正式路徑；`test_adr0022_sector_unvalued.py:1288` docstring 宣稱的 `test_api_advice` T1 須隨 PR-0 存在，不存在就先改掉該句。
+
 - **開工／合併共通**（PR-1、PR-3，tech-architect 所述）：第二十五輪 e2e 結束、ADR-0022 PR（66a88b3）視為可合併（KB-4；本 ADR §9）；F-1 已 release（且不與 F-1 同 PR，KC-6）；P-3（PR-1）／P-4（PR-3）風控已回覆。PR-1 分支從 `product/stock-desk`（含 66a88b3）開出。
 - **CEO 表態 ADR-0023 accepted 前提 4（見狀態欄：CEO 未推翻 2026-10-07 各裁定，並知悉 (vii) M-1 高估方向、(viii) 降級／擋下原因只在預設收合的卡內可見；風控第五段另增補 (ix)(x)(xi)，見「被此決策約束的事」）為 PR-1／PR-3 的合併閘門**。此為 **tech-architect 建議、coordinator 採納，CEO 可推翻**。理由（tech-architect 所述）：程式碼會把這些裁定固定下來；開發本身可照 ADR-0022 先例在 proposed 狀態下開工。
 - 每個 PR 走 qa-reviewer（含 Codex；環境不可用要註明）→ 風控單項核對（RF 任一項沒做到即 VETO）；PR 說明附本規格編號對照（6A-xx／A-xx／6B-xx）與 M1～M4。最後一個 PR 合併後跑 qa-e2e，涵蓋 R-11、RA-6、R-9。
@@ -594,7 +622,7 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 |---|---|---|
 | D-5 分支判定內容 | `allowed <= 0` → violated，detail 為 `KELLY_NON_POSITIVE_FRACTION_DETAIL`（`limits.py:1127-1141`）；W-a2 不附 | 風控審查檔第一段二.2（風控讀碼；tech-writer 未驗證） |
 | D-a3 在方向子句優先序的位置 | 只在原選 D-a 處替換；D-P／D-d1／D-d2 不動 | Decision 8-1 第 6 點（tech-architect 2026-10-07） |
-| 6-a 對 S-B2 條數的影響 | any 規則未評估條數增加（最多 +3）；只監看其一者由 quiet 變 skipped；不觸發 S-B2 失效條件 1～8 | Consequences 3（tech-architect 2026-10-07，風控讀碼經確認並增補） |
+| 6-a 對 S-B2 條數的影響 | any 規則未評估條數增加（最多 +3）；只監看其一者由 quiet 變 skipped；不觸發 S-B2 失效條件 1～8 | Consequences 3（tech-architect 2026-10-07，風控讀碼經確認並增補） 〔2026-10-07 更正，風控第六段：「any 規則未評估條數增加（最多 +3）」口徑有誤，以 Consequences 3(b) 更正為準——own>0 且無 violated 時 any 規則一律 skipped；RF-4 第 1 例在 production builder 下不可達，PR-1 單項核對裁定改由不可達證據測試取代〕 |
 | 第 2 條只有 unknown 的 passed 是否屬本通則範圍 | 是本通則明列例外：判定維持 passed，試算上屬分子不完整、依 KC-2 不得進 `notional_caps` | Decision 1 最後一點；ADR-0022 Decision 4 第一句（tech-architect 2026-10-07） |
 | (A) 降級句字面待審 | 已採，降級句字面風控核可 | 風控審查檔第三段（2026-10-07）；Consequences 殘留 1 |
 | 待風控確認 (1)：insufficient_data 分支維持 D-a（`gross_exposure_status=None`） | **accept**；required R-IN-1、R-IN-2；新失效條件 F-10 | 風控審查檔第四段（2026-10-07，HEAD d66183e）；Decision 8-1 第 3 點、KD-2、KD-5、重審與失效條件 |

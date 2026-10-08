@@ -177,11 +177,23 @@
 - **D-X3（X-3b）**：估值器對不符列記 WARNING（訊息開頭 `position currency does not match market:`，後接 `id= market= currency=`），並加寫入口守門測試；排下一個 release，無部署前置；log 一旦出現即升 high。
 - **D-X4（X-3c，讀取端撤下）**：估值器與 book 層遇不符列時撤下（新 token，字面待風控審）。優先序由 CEO 依腳本結果裁定（X-3c 狀態：spec，待風控字面審、CEO 排序）。**KX-A3 承諾 `Position`、`PositionInput`、`PositionWriteInput`、`PositionPatch`、`store.py` 零 diff，不違反本 ADR 的 C3、C4**；因此 X-3c 不需要新 ADR（只有實作時需動 `Position` 或 `PositionInput` 才要）。
 - **D-X5**：否決設定頁提示。
+- **（iv）據實記錄（風控 X3-R7）**：上列「需要 CEO 決定」第 2 點要求在**合併前**執行唯讀盤點，但 b7d67e1 合併時**未執行**。第三層保護從未生效，**不得淡化成「待辦」**。
+- **（v）後果更正（風控 X3-R7）**：上列 Consequences「好處」第 2 條（「估值不再被…靜默算錯」，原 L89）只對新寫入成立；舊列的後果（含不實揭露）見 X-3 任務單。
+- **風控裁定（2026-10-07，X-3 任務單檔尾「風控裁定全文」，APPROVE 附 X3-R1～X3-R8，coordinator 原文轉錄）**：同意本 ADR 依 D-X6 加註，內容附加 (iv)(v)（X3-R7）。
 - **失效條件**（X3-F 編號，tech-architect 建議；逐字）：
   - **X3-F2**：新增任何不經 `PositionWriteInput` 或 CSV 逐列檢查、卻會寫入 `positions` 的入口（新端點、新匯入格式、券商同步、demo 規格變動、會改寫 market／currency 的遷移、還原工具）→ 重審。
   - **X3-F3**：`MARKET_CURRENCY` 變動（新增市場或幣別，或允許美股以台幣交割記帳）→ X-3 規則、P2、PR0-F1 一起重審。
   - **X3-F4**：CEO 從 b7d67e1 部署前的備份還原 DB，或用外部工具改 DB → 重跑腳本。
   - X3-F1（腳本查到 ≥ 1 列升 high）、X3-F5（WARNING log 出現升 high）、X3-F6（X-3c 落地後估值或 book 路徑繞過 `currency_matches_market`）列於 X-3 任務單，此處不收。X3-F1～F6 是否核可：X-3 任務單「待風控裁定」第 3 點，截至轉錄時未見裁定。
+  - **〔2026-10-07 風控裁定（X-3 任務單檔尾「風控裁定全文」「失效條件」節）：X3-F1～F6 核可但附修改，另新增 X3-F7、X3-F8。以下為摘要，上列 tech-architect 版原文保留〕**
+    - **X3-F1**：腳本查到 mismatch ≥ 1 時升 high；修改：unreadable ≥ 1 也升 high，但另案處理。
+    - **X3-F2**：核可；修改：觸發清單再加「PATCH 擴及 market／currency（ADR-0017 D-2）」與「CSV 逐列檢查和 `PositionWriteInput` 不同步（違反 C9）」。
+    - **X3-F3**：核可；修改：連動對象改為修訂後的 PR0-F1、X3-N1，以及 D-a／D-P 的前提。
+    - **X3-F4**：核可；修改：觸發情形再加「從其他機器複製 DB 檔」。
+    - **X3-F5**：核可（WARNING log 出現升 high）。
+    - **X3-F6**：核可；修改：觸發情形再加「X-3c 的 token 標籤、成因句或 note 字面有任何變動，須重新送審」。
+    - **X3-F7（新增）**：X-3c 落地前，若 X-3a 結果非 0 或未執行，新增或改寫任何宣稱「偏高／保守」的方向子句（D-a、D-P、6-a 系列等）時，須把「已估值列幣別與市場一致」列為明文前提送審。
+    - **X3-F8（新增）**：X3-R1 落地後，若卡片、警示或推播在沒有實際套用匯率時又出現匯率來源方法論句，須重審 2026-09-19 標準。
 
 ---
 
