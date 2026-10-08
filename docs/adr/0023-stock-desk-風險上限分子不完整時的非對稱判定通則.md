@@ -600,6 +600,14 @@ B 的落檔處：ADR-0022 Decision 1 補充（M-1～M-5）、W-6m 字面表與 R
 - 每個 PR 走 qa-reviewer（含 Codex；環境不可用要註明）→ 風控單項核對（RF 任一項沒做到即 VETO）；PR 說明附本規格編號對照（6A-xx／A-xx／6B-xx）與 M1～M4。最後一個 PR 合併後跑 qa-e2e，涵蓋 R-11、RA-6、R-9。
 - **待 CEO 決定**（來源「需 CEO 決定」2、3；tech-architect 建議如括號）：(A) 與 6-a 的包裝（分 PR 同一 release；若 6-a 先發、(A) 晚一個 release，CEO 知悉 (iii) 延到 (A) 落地才關閉）；6-a、(A)、6-b 是否放同一個 release（建議同一個，可合用一輪 e2e 涵蓋 R-11、RA-6、R-9）。F-3 觸發部署前置升級時，升級資料須附上 6-b（本 ADR §9）。
 
+- **〔2026-10-08 落地加註（B 類轉錄；上列原文保留）〕PR-0／PR-1 結案狀態**：
+  - **PR-1（6-a）已以 commit `be64f49` 進 `product/stock-desk`**（已 push）。審查：qa-reviewer PASS、風控 APPROVE 附條件；**Codex 第二意見未執行，環境不可用**；RF-4 第 1 例不可達改證據測試已獲風控接受。
+  - **上線仍以 CEO 接受本 ADR 前提 4 為閘門（風控 RQ-1）**：commit 已進分支不等於可上線；CEO 若不接受前提 4，可單獨 revert `be64f49`，不影響 PR-0。
+  - **PR-0 以 `9f5166e` 先行**（符合 R0-1「PR-0 不晚於 PR-1」；風控 RQ-1：PR-0 不受前提 4 閘門約束，PR-1 受）。**兩者拆為獨立 commit，以便單獨 revert。**
+  - 其餘 PR 狀態：PR-2（(A) 降級句）、PR-3（6-b）依規格開工，仍受前提 4 閘門；PR-4（N1）本加註來源未載狀態，待查證（查法：看 `work/dispatch/2026-10-07-任務單-6-a-決策卡第1與第5條在本標的有未估值批次時偏低.md` 後續結案紀錄）。
+  - 來源：`work/dispatch/2026-10-07-任務單-6-a-決策卡第1與第5條在本標的有未估值批次時偏低.md` 檔尾「PR-1 結案紀錄（2026-10-08，coordinator）」；`work/dispatch/2026-10-07-任務單-PR-0-決策卡第4條ATR回填繞過book層撤下.md` 檔尾「結案紀錄（2026-10-08，coordinator）」。commit 雜湊為 coordinator 所述，tech-writer 未用 git 驗證（本次環境無法執行 git）。
+  - **RF-4 第 1 例不可達改證據測試**：Consequences 3(g) 已反映（「〔2026-10-07 更正，風控第六段〕**第 1 例……在 production builder 下不可達……改由不可達證據測試取代**」及 RF-4 之下同名更正；3(b) 之更正載明不可達的理由）。**不需再加註。**
+
 ### 6. 本節未轉錄的部分
 
 - PR-1 的逐項 required 表（6A-01～6A-21）、PR-2 表（A-01～A-07）與 PR-3 的 6B-xx 表，其內容在 6-a／6-b 任務單檔尾「tech-architect 實作規格」，**本 ADR 不重抄**，實作與 qa 以任務單為準；與本 ADR 衝突時依上述優先序（ADR-0023 為先）。
