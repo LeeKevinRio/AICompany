@@ -27,6 +27,7 @@ import {
   PAGE_FOOTER_DISCLOSURES_TITLE,
   buildFooterGuidance,
 } from "../../lib/footerDisclosureWording";
+import { PriceUnitBadge } from "./PriceUnitBadge";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
@@ -252,11 +253,14 @@ export function DecisionCardBody({
   bars,
   anchorSource,
   avgCost,
+  market,
 }: {
   response: AdviceResponse;
   bars: Bar[] | null;
   anchorSource: AnchorSource;
   avgCost: number | null;
+  /** Page market; the price-unit chip (F-7) prints only for a known market whose bars agree. Absent = no chip. */
+  market?: string;
 }) {
   const model = buildOperationSummary(response);
 
@@ -385,6 +389,8 @@ export function DecisionCardBody({
               {NOT_HELD_BADGE}
             </span>
           )}
+          {/* F-7 (P0): last badge; same gate as the prices below (`levels !== null`, closeText/stopText/targetText). */}
+          {levels !== null && <PriceUnitBadge market={market} bars={barsForLevels} />}
         </span>
       </div>
 
@@ -501,12 +507,15 @@ export function DecisionCard({
   bars,
   anchorSource,
   avgCost,
+  market,
 }: {
   advice: UseQueryResult<AdviceResponse, Error>;
   /** Only bars from an `ok` envelope — `null` means "not usable this render". */
   bars: Bar[] | null;
   anchorSource: AnchorSource;
   avgCost: number | null;
+  /** Required here (the only production caller is page.tsx) so a forgotten prop fails tsc, not silently drops the F-7 chip. */
+  market: string;
 }) {
   return (
     <section
@@ -523,6 +532,7 @@ export function DecisionCard({
           bars={bars}
           anchorSource={anchorSource}
           avgCost={avgCost}
+          market={market}
         />
       )}
     </section>

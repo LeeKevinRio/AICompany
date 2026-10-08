@@ -1,4 +1,6 @@
 import type { ConditionId, ConditionResult, EntryObservation } from "../../lib/entryObservation";
+import type { Bar } from "../../lib/types";
+import { PriceUnitBadge } from "./PriceUnitBadge";
 import {
   ENTRY_CONDITION_LABELS,
   ENTRY_CONDITION_THRESHOLDS,
@@ -73,6 +75,15 @@ function observedText(c: ConditionResult): string {
   }
 }
 
+/**
+ * Whether a row prints price values (F-7 P2 gate). Only the trend row does
+ * (`close vs MA60`), and exactly when `observedText` prints its numbers, i.e.
+ * the same `status !== "unavailable"` test.
+ */
+function printsPriceValues(c: ConditionResult): boolean {
+  return c.id === "trend" && c.status !== "unavailable";
+}
+
 function conditionLabel(id: ConditionId, rangeBarCount: number | null): string {
   if (id === "range") return buildRangeConditionLabel(rangeBarCount);
   return ENTRY_CONDITION_LABELS[id];
@@ -82,13 +93,20 @@ export function EntryObservationPanel({
   observation,
   rangeBarCount,
   dataAsOfDates,
+  market,
+  bars,
 }: {
   observation: EntryObservation;
   /** `KeyLevels.rangeBarCount` when bars are loaded (R-14: the row prints the real bar count). */
   rangeBarCount: number | null;
   /** E-4: each query's own `data.last_bar_date` (bars / signals / advice), null when not loaded. Passed through untouched; the wording layer validates and formats. */
   dataAsOfDates: { bars: string | null; signals: string | null; advice: string | null };
+  /** Page market for the F-7 price-unit chip; absent or unknown = no chip. */
+  market?: string;
+  /** The `ok` bars the trend row was computed from, or null; used only for the chip's currency check. */
+  bars: readonly Bar[] | null;
 }) {
+  const showPriceUnit = observation.conditions.some(printsPriceValues);
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -128,6 +146,8 @@ export function EntryObservationPanel({
           {DETAILS_SUMMARY_ENTRY}
         </summary>
         <div className="mt-3 space-y-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+          {/* F-7 (P2): first line inside the details body only; gate = the trend row prints its price values. */}
+          {showPriceUnit && <PriceUnitBadge market={market} bars={bars} block />}
           <p>{ENTRY_E1_QUALIFIER}</p>
           <ul className="divide-y divide-neutral-800/60 rounded-md border border-neutral-800 bg-neutral-900/40">
             {observation.conditions.map((c) => (

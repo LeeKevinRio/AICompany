@@ -400,6 +400,9 @@ const SCANNED_FILES = [
   // 卡與其專屬字面模組，先前都不在掃描清單內。
   "../../components/SectorMomentumCard.tsx",
   "../sectorMomentumWording.ts",
+  // F-7 價格單位標籤 (風控 F7-R1~R10, 2026-10-08): the two approved price-unit strings and the
+  // chip class live only in this component; pinned verbatim by priceUnitBadge.test.ts.
+  "../../position/[symbol]/PriceUnitBadge.tsx",
 ] as const;
 
 /**

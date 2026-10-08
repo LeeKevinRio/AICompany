@@ -38,6 +38,7 @@ import { LeverageChapterView } from "./LeverageChapterView";
 import { IndicatorOverviewChipsRow, TechnicalIndicatorsPanel, buildTechnicalFooterItems } from "./TechnicalIndicatorsPanel";
 import { OperationSummaryPanel } from "./OperationSummaryPanel";
 import { DecisionCard } from "./DecisionCard";
+import { PRICE_UNIT_MARKET_ONLY, PriceUnitBadge } from "./PriceUnitBadge";
 
 /**
  * CEO 派工單 2026-08-16 (TradingView 嵌入) 第 2 點: loaded via `next/dynamic`
@@ -216,6 +217,7 @@ export default function PositionDetailPage() {
         bars={bars.data && bars.data.status === "ok" ? bars.data.bars : null}
         anchorSource={keyLevelsAnchor.anchorSource}
         avgCost={keyLevelsAnchor.avgCost}
+        market={market}
       />
 
       {/*
@@ -233,7 +235,20 @@ export default function PositionDetailPage() {
       */}
       <section className="mt-6 rounded-lg border border-neutral-800 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
+          {/*
+            F-7 (P1): price-unit chip right after the h2 (outside it), outside any <details>.
+            Gate = the conditions that print this block's prices: bars ok (chart, one-liner;
+            every bar's currency is checked) or, when bars are not ok, signals ok with a
+            payload (indicator values in the details; market check only, F7-R3).
+          */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 className="text-lg font-semibold text-neutral-100">{TECHNICAL_ANALYSIS_TITLE}</h2>
+            {bars.isSuccess && bars.data.status === "ok" ? (
+              <PriceUnitBadge market={market} bars={bars.data.bars} />
+            ) : signals.isSuccess && signals.data.status === "ok" && signals.data.signals ? (
+              <PriceUnitBadge market={market} bars={PRICE_UNIT_MARKET_ONLY} />
+            ) : null}
+          </div>
           {/*
             CEO 第二次裁定 2026-09-19：主視圖只留徽章本體；「資料來源：…」
             前綴文字改印在下方「詳細」的第一行（L-10 已拿掉時間）。
@@ -466,6 +481,7 @@ export default function PositionDetailPage() {
           anchorSource={keyLevelsAnchor.anchorSource}
           avgCost={keyLevelsAnchor.avgCost}
           observationBand={entryObservation.observationBand}
+          market={market}
         />
       )}
 
@@ -483,6 +499,8 @@ export default function PositionDetailPage() {
           signals: signals.data?.data.last_bar_date ?? null,
           advice: advice.data?.data.last_bar_date ?? null,
         }}
+        market={market}
+        bars={bars.data && bars.data.status === "ok" ? bars.data.bars : null}
       />
 
       {/*

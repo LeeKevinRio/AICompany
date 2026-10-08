@@ -11,6 +11,7 @@ import type { EntryObservation } from "../../lib/entryObservation";
 import type { Bar } from "../../lib/types";
 import { KEY_LEVELS_LADDER_NOTE, PriceLadder } from "./PriceLadder";
 import { RangeGauge } from "./RangeGauge";
+import { PriceUnitBadge } from "./PriceUnitBadge";
 
 /**
  * 關鍵價位參考 (CEO 需求 2026-09-01；風控 2026-09-01 VETO R1–R12/S2–S5 後
@@ -366,12 +367,15 @@ export function KeyLevelsPanel({
   avgCost,
   anchorSource,
   observationBand = null,
+  market,
 }: {
   bars: Bar[];
   avgCost: number | null;
   anchorSource: AnchorSource;
   /** 六項觀察條件 R-18: MA20 ±3% band handed to the ladder; null marks nothing. */
   observationBand?: EntryObservation["observationBand"];
+  /** Page market for the F-7 price-unit chip; absent or unknown = no chip. */
+  market?: string;
 }) {
   const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
 
@@ -400,8 +404,12 @@ export function KeyLevelsPanel({
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-lg font-semibold text-neutral-100">{KEY_LEVELS_PANEL_TITLE}</h2>
-        <span className="text-sm text-neutral-400">{buildKeyLevelsCloseLine(fmt(levels.close), levels.closeDate)}</span>
+        {/* F-7 (P1): chip next to the h2 (never inside it). This branch is the `levels !== null` branch, the same gate as every price below. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h2 className="text-lg font-semibold text-neutral-100">{KEY_LEVELS_PANEL_TITLE}</h2>
+          <PriceUnitBadge market={market} bars={bars} />
+        </div>
+        <span className="ml-auto text-sm text-neutral-400">{buildKeyLevelsCloseLine(fmt(levels.close), levels.closeDate)}</span>
       </div>
 
       {/* 一眼一句 §2.4: 一句結論，取代舊版位階卡大字（該卡連同 RangeGauge 移入詳細）。 */}
