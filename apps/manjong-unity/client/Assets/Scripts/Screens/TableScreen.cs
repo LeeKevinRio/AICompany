@@ -45,6 +45,10 @@ namespace Manjong.Screens
         const float RubberFactor = 0.3f; // a tile that cannot be played only follows the finger this much ...
         const float RubberMax = 28f;     // ... up to this far, then springs back on release
         const float FlyDistance = 160f;
+        const float NewTileRise = 12f;    // a tile that arrives in the hand rises this far while fading in
+        const float LongTravel = 300f;    // above this horizontal glide distance a slot uses the long, in-out curve ...
+        const float LongTravelMax = 1300f; // ... and takes up to LongDuration
+        const float LongDuration = 0.30f;
 
         // Fixed geometry of my hand (reference 1920x1080, bottom-left origin). Tiles never move when a tile is
         // drawn: slot i is at HandStartX + i * SlotStep, the drawn tile always sits in the separate drawn slot.
@@ -160,7 +164,7 @@ namespace Manjong.Screens
         /// <summary>Hand as built last time (codes, drawn-slot flag): lets a rebuild carry on-screen positions over.</summary>
         readonly List<string> builtCodes = new List<string>();
         bool builtDrawn;
-        /// <summary>Set around the rebuild after a reorder: new index -> old index (null = same index).</summary>
+        /// <summary>Set around the rebuild after a reorder: new index -> old index, matched first (see MatchOldTiles).</summary>
         List<int> pendingCarry;
         /// <summary>Top layer for tiles flying out of the hand; survives hand rebuilds.</summary>
         RectTransform flyLayer;
@@ -1035,6 +1039,7 @@ namespace Manjong.Screens
                 orderKey = key;
                 customOrder = null;
                 mergedDrawn = "";
+                builtCodes.Clear(); // a new hand: none of the old tiles is the same tile, nothing glides over
             }
 
             // The drawn tile stays in its own slot unless the player dragged it into the hand.
@@ -1117,23 +1122,37 @@ namespace Manjong.Screens
             dragIndex = -1; // a drag in progress dies with its tile
             swipeCue = null;
 
-            // Where every old tile is on screen right now (also mid-glide): the rebuilt tiles start there and glide to
-            // their fixed slots, so a rebuild during an animation never jumps or flashes.
+            // Where every old tile is on screen right now (also mid-glide). A slot that is gone (destroyed) or empty (tile
+            // played, waiting for the server) is not a usable source.
             int oldCount = handSlots.Count;
             var oldSlotPos = new Vector2[oldCount];
             var oldTilePos = new Vector2[oldCount];
-            var oldHasTile = new bool[oldCount];
+            var oldUsable = new bool[oldCount];
+            int oldUsableCount = 0;
             for (int k = 0; k < oldCount; k++)
             {
                 RectTransform old = handSlots[k];
-                if (old == null) continue;
+                if (old == null) continue; // destroyed
                 oldSlotPos[k] = old.anchoredPosition;
-                if (old.childCount > 0)
-                {
-                    oldTilePos[k] = ((RectTransform)old.GetChild(0)).anchoredPosition;
-                    oldHasTile[k] = true;
-                }
+                if (old.childCount == 0) continue; // hidden (played) tile
+                oldTilePos[k] = ((RectTransform)old.GetChild(0)).anchoredPosition;
+                oldUsable[k] = true;
+                oldUsableCount++;
             }
+            // Pair every new tile with the old tile it is: the rebuilt tile starts at that tile's on-screen position and
+            // glides to its fixed slot (tiles closing ranks after a discard, a drawn tile sliding into the hand). Nothing
+            // is carried over in a new hand or when the hand is no longer playable (hand end).
+            List<int> hint = pendingCarry;
+            if (restoreIndex >= 0)
+            {
+                // The tile came back (ILLEGAL_ACTION): everything else stays exactly where it was.
+                hint = new List<int>(handOrder.Count);
+                for (int i = 0; i < handOrder.Count; i++) hint.Add(i == restoreIndex ? -1 : i);
+            }
+            int[] srcOf = interactive ? MatchOldTiles(handOrder, oldUsable, hint) : MatchOldTiles(new List<string>(), oldUsable, null);
+            // Tiles with no predecessor ease in instead of popping, but only within a hand: the deal (builtCodes was just
+            // cleared by a new hand) and the very first build show the whole hand at once.
+            bool fadeNew = interactive && oldUsableCount > 0 && builtCodes.Count > 0;
             handSlots.Clear();
             UiFactory.DestroyChildren(s.hand);
 
@@ -1147,31 +1166,36 @@ namespace Manjong.Screens
                 // Fixed slots from the left edge; the drawn tile always goes to the separate drawn slot.
                 float x = isDrawn ? DrawnSlotX : i * SlotStep;
 
-                // Same tile as before (reorder: via the permutation, otherwise same index) -> carry its position over.
-                int src = pendingCarry != null ? (i < pendingCarry.Count ? pendingCarry[i] : -1) : i;
-                bool carry = src >= 0 && src < oldCount && src < builtCodes.Count && builtCodes[src] == code &&
-                             (pendingCarry != null || (builtDrawn && src == builtCodes.Count - 1) == isDrawn);
+                int src = i < srcOf.Length ? srcOf[i] : -1;
+                bool carry = src >= 0 && oldUsable[src];
 
                 Vector2 slotTarget = new Vector2(x, 0f);
                 var slot = UiFactory.CreateRect("Slot" + i, s.hand);
                 UiFactory.Place(slot, new Vector2(0f, 0f), new Vector2(0f, 0f), carry ? oldSlotPos[src] : slotTarget, size.Vector);
                 handSlots.Add(slot);
                 var slotTween = slot.gameObject.AddComponent<UiTween>();
-                if (carry) slotTween.SlideTo(slotTarget, UiMotion.Settle);
+                if (carry) SlideSlot(slotTween, slotTarget);
 
-                if (i == hiddenHandIndex) continue; // played by swipe: the flying copy stands in until the server answers
+                if (i == hiddenHandIndex) continue; // played: the flying copy stands in until the server answers
 
                 var tile = TileView.CreateFace(slot, code, size);
                 bool selected = i == selectedIndex;
                 Vector2 tileTarget = new Vector2(0f, selected ? SelectLift : 0f);
-                bool carryTile = carry && oldHasTile[src];
-                UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), carryTile ? oldTilePos[src] : tileTarget, size.Vector);
+                UiFactory.Place(tile, new Vector2(0f, 0f), new Vector2(0f, 0f), carry ? oldTilePos[src] : tileTarget, size.Vector);
                 var tileTween = tile.gameObject.AddComponent<UiTween>();
-                if (carryTile) tileTween.SlideTo(tileTarget, UiMotion.Settle);
-                if (i == restoreIndex)
+                if (carry) tileTween.SlideTo(tileTarget, UiMotion.Settle);
+                if (!carry && i == restoreIndex)
                 {
                     tileTween.SetAlpha(0f);
                     tileTween.FadeTo(1f, UiMotion.Settle);
+                }
+                else if (!carry && fadeNew)
+                {
+                    // Arrives from slightly below while fading in (reduced motion: fade only).
+                    if (!UiMotion.Reduced) tileTween.SetPosition(tileTarget + new Vector2(0f, -NewTileRise));
+                    tileTween.SlideTo(tileTarget, UiMotion.Quick);
+                    tileTween.SetAlpha(0f);
+                    tileTween.FadeTo(1f, UiMotion.Quick);
                 }
 
                 OptionDto discardOpt = canDiscard ? DtoUtil.FindOption(v, "discard:" + code) : null;
@@ -1214,6 +1238,68 @@ namespace Manjong.Screens
                 TileView.AddRing(tile, Palette.LastDiscardRing, size, 5);
                 TileView.AddBadge(tile, winSelfDraw ? "自摸" : "胡", Palette.Coral, 10f);
             }
+        }
+
+        /// <summary>
+        /// Glides a rebuilt slot to its fixed position. Short moves (closing ranks, a dropped tile) use the usual 180 ms
+        /// ease-out; a long one (the drawn tile joining the hand) is scaled with the distance, 180 ms at 300 units up to
+        /// 300 ms at 1300, on the in-out curve so it reads as travelling across the hand rather than being flung.
+        /// </summary>
+        static void SlideSlot(UiTween tween, Vector2 target)
+        {
+            float travel = Mathf.Abs(((RectTransform)tween.transform).anchoredPosition.x - target.x);
+            if (travel <= LongTravel)
+            {
+                tween.SlideTo(target, UiMotion.Settle);
+                return;
+            }
+            float duration = Mathf.Lerp(UiMotion.Settle, LongDuration, Mathf.InverseLerp(LongTravel, LongTravelMax, travel));
+            tween.SlideTo(target, duration, UiCurve.InOutStrong);
+        }
+
+        /// <summary>
+        /// For every tile of the new hand, the index of the old tile it is (-1 = a new arrival). Identity is
+        /// (tile code, n-th copy of that code): `hint` (new index -> old index, from a reorder drop or a restored tile)
+        /// is honoured first where the codes agree; every remaining new tile takes the first unused old tile of the same
+        /// code, in left-to-right order. Only old tiles that were actually on screen (oldUsable) can be matched, so a
+        /// tile that was played and hidden never "moves". Works for the server's sorting and for a custom order alike.
+        /// </summary>
+        int[] MatchOldTiles(List<string> newCodes, bool[] oldUsable, List<int> hint)
+        {
+            var result = new int[newCodes.Count];
+            for (int i = 0; i < result.Length; i++) result[i] = -1;
+            var taken = new bool[oldUsable.Length];
+            if (hint != null)
+            {
+                for (int i = 0; i < result.Length && i < hint.Count; i++)
+                {
+                    int h = hint[i];
+                    if (h >= 0 && h < oldUsable.Length && h < builtCodes.Count && oldUsable[h] && !taken[h] && builtCodes[h] == newCodes[i])
+                    {
+                        result[i] = h;
+                        taken[h] = true;
+                    }
+                }
+            }
+            var free = new Dictionary<string, Queue<int>>();
+            for (int k = 0; k < oldUsable.Length && k < builtCodes.Count; k++)
+            {
+                if (!oldUsable[k] || taken[k]) continue;
+                Queue<int> q;
+                if (!free.TryGetValue(builtCodes[k], out q))
+                {
+                    q = new Queue<int>();
+                    free[builtCodes[k]] = q;
+                }
+                q.Enqueue(k);
+            }
+            for (int i = 0; i < result.Length; i++)
+            {
+                if (result[i] >= 0) continue;
+                Queue<int> q;
+                if (free.TryGetValue(newCodes[i], out q) && q.Count > 0) result[i] = q.Dequeue();
+            }
+            return result;
         }
 
         /// <summary>
@@ -1481,22 +1567,17 @@ namespace Manjong.Screens
         void EndSwipe(int index)
         {
             RectTransform tile = TileOf(index);
-            string code = index < handOrder.Count ? handOrder[index] : "";
             string id = swipeArmed ? SwipeActionId(index) : null; // re-checked: the table may have moved on during the drag
             bool fire = id != null && id == swipeId && tile != null;
             dragIndex = -1;
             if (fire)
             {
-                Vector3 world = tile.position;
-                hiddenHandIndex = index;
-                hiddenSig = myTilesSig;
-                if (Send(id))
+                if (SendTile(index, id))
                 {
-                    SpawnFlyGhost(code, world);
                     swipeCue = null;
                     return;
                 }
-                hiddenHandIndex = -1; // not sent (connection gone): fall through to the glide back
+                // not sent (connection gone): fall through to the glide back
             }
             if (tile != null) TweenOf(tile).SlideTo(new Vector2(0f, selectedIndex == index ? SelectLift : 0f), UiMotion.Settle);
             if (swipeCue != null) swipeCue.FadeTo(0f, UiMotion.Quick);
@@ -1505,8 +1586,30 @@ namespace Manjong.Screens
         }
 
         /// <summary>
-        /// A copy of the played tile that rises 160 units while fading out (220 ms, strong ease-out for the travel, ease
-        /// for the opacity). It lives on its own layer, so the hand rebuild that follows the send cannot touch it.
+        /// Plays hand tile `index` (swipe release, or the second click): sends the action, hides the tile's slot until
+        /// the server answers and lets a copy fly out from where the tile is shown right now (a selected tile is
+        /// lifted, a swiped one is wherever the finger let go). False when nothing was sent (the tile stays).
+        /// </summary>
+        bool SendTile(int index, string actionId)
+        {
+            RectTransform tile = TileOf(index);
+            if (tile == null || index >= handOrder.Count) return Send(actionId);
+            string code = handOrder[index];
+            Vector3 world = tile.position;
+            hiddenHandIndex = index;
+            hiddenSig = myTilesSig;
+            if (Send(actionId))
+            {
+                SpawnFlyGhost(code, world);
+                return true;
+            }
+            hiddenHandIndex = -1;
+            return false;
+        }
+
+        /// <summary>
+        /// A copy of the played tile that rises 160 units while fading out (220 ms, strong ease-out for travel and
+        /// opacity). It lives on its own layer, so the hand rebuild that follows the send cannot touch it.
         /// Reduced motion: no travel, just a 100 ms fade.
         /// </summary>
         void SpawnFlyGhost(string code, Vector3 world)
@@ -1574,7 +1677,7 @@ namespace Manjong.Screens
                 if (ting == null) return; // dimmed: not a tile the declaration can discard
                 if (selectedIndex == index)
                 {
-                    Send(ting.id);
+                    SendTile(index, ting.id);
                     return;
                 }
                 selectedIndex = index;
@@ -1587,7 +1690,7 @@ namespace Manjong.Screens
                 OptionDto opt = DtoUtil.FindOption(view, "discard:" + code);
                 if (opt != null)
                 {
-                    Send(opt.id);
+                    SendTile(index, opt.id);
                     return;
                 }
             }

@@ -118,6 +118,7 @@ Assets/
     ManjongBuild.cs          選單 Manjong/Build WebGL
     ManjongTileImporter.cs   Resources/Tiles 牌圖的匯入設定（AssetPostprocessor）
   Plugins/WebGL/
+    ManjongMotion.jslib      WebGL 專用：讀瀏覽器 prefers-reduced-motion（動效偏好）
     ManjongPrompt.jslib      WebGL 專用：用瀏覽器 prompt 輸入中文暱稱（見常見問題）
     ManjongSocket.jslib      WebGL 專用：瀏覽器 WebSocket 橋接（輪詢式）
   Resources/Fonts/huninn.ttf
@@ -153,8 +154,16 @@ async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，We
   按下「聽」進入報聽選牌模式後，往上滑一張可報聽的牌 = 送出 `ting:<牌>`（提示為「放開報聽」）；不可報聽（變暗）的牌、已報聽、不是你的回合、播放中、等伺服器回應時，
   往上滑無效：牌只會被橡皮筋式地拉起一小段（最多約 28 px），放開就彈回，不送任何東西。
   送出後沿用既有鎖定（等下一個 `state` 才解鎖）；伺服器若回 `ILLEGAL_ACTION`，下一個畫面會校正：被打出的牌會原位淡入恢復，飛出的拷貝同時清掉。
-  原本「點一下選取、再點同一張打出」保留。點選時牌浮起 / 放下現在也是約 0.18 秒的滑動。
-  動效偏好：`PlayerPrefs` 的 `manjong.reduceMotion` 設為 1 時（目前沒有設定畫面開關），位移一律直接到位、出牌改為只淡出（約 0.1 秒）。
+  原本「點一下選取、再點同一張打出」保留，**打出效果與上滑出牌相同**：點第二下時，那張牌從它目前（浮起）的位置變成拷貝往上飛出淡出，手牌那一格先空著，
+  伺服器拒絕（`ILLEGAL_ACTION`）時該牌原位淡入恢復。點選時牌浮起 / 放下也是約 0.18 秒的滑動。
+- **手牌變動一律滑動收攏**：打出、被吃碰用掉、報聽後伺服器代打、剛摸的牌併入手牌，剩下的牌都從目前畫面位置滑到新槽位（約 0.18 秒 ease-out），剛摸的牌從摸牌格滑進它的新位置。
+  對應規則是「牌的身分」＝（牌碼、同碼第幾張）：重建時舊 `handOrder` 與新 `handOrder` 依左到右順序，同碼的第 n 張配第 n 張（伺服器排序與自訂順序都適用）；
+  理牌放開時以拖曳的排列優先配對，其餘再依身分；只配畫面上真的有牌的舊格（已打出隱藏的格、已銷毀的格不算來源）。
+  移動距離短（讓位、一般收攏、放開歸位，水平 <= 300 px）用約 0.18 秒 strong ease-out；距離長（例如摸牌格併入手牌）時長隨距離拉長，300 px 起 0.18 秒、1300 px 達 0.30 秒，
+  並改用 strong ease-in-out（cubic-bezier(0.77, 0, 0.175, 1)），看起來是穿過手牌而不是被甩過去。
+  沒有舊位置的新牌（回合內新摸的牌、吃碰後拿到的牌）從下方約 12 px 處往上滑到定位並淡入（約 0.1 秒）；新的一局發牌、牌局結束（不能操作）時不承接、不滑動、不淡入。
+- 動效偏好（reduced motion）：WebGL 讀瀏覽器的 `prefers-reduced-motion: reduce`（`Plugins/WebGL/ManjongMotion.jslib`，開頁時讀一次）；
+  Editor / 桌面讀 `PlayerPrefs` 的 `manjong.reduceMotion`（1 = 開）。開啟時位移一律直接到位、出牌改為只淡出（約 0.1 秒），淡入淡出保留。
 - 對手的手牌、副露、花牌、牌河、資訊卡都在固定位置、固定格線；副露從固定起點往右延伸（側邊玩家排滿一列才換行）。
 - 副露一律直放、等寬排列，照伺服器給的 `tiles` 順序（吃牌時被吃的那張已在中間），不另加標記。暗槓外側兩張蓋牌。
 - **選牌時同種牌一起亮**：點選（浮起）手牌中的某張時，四家牌河、四家副露的亮牌（暗槓蓋著的兩張不算）、你的其他同種手牌都會加上琥珀色外框與淡黃底，

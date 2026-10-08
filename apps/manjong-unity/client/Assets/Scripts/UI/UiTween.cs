@@ -1,3 +1,6 @@
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Runtime.InteropServices;
+#endif
 using UnityEngine;
 
 namespace Manjong.UI
@@ -5,25 +8,39 @@ namespace Manjong.UI
     /// <summary>Easing curves (CSS cubic-bezier definitions) shared by every UI tween.</summary>
     public enum UiCurve
     {
-        /// <summary>cubic-bezier(0.23, 1, 0.32, 1): strong ease-out. Movement answering the player's input.</summary>
+        /// <summary>cubic-bezier(0.23, 1, 0.32, 1): strong ease-out. Every entrance, exit and move in the table UI.</summary>
         OutStrong,
-        /// <summary>cubic-bezier(0.25, 0.1, 0.25, 1): the CSS "ease". Opacity and colour.</summary>
-        Ease
+        /// <summary>cubic-bezier(0.77, 0, 0.175, 1): strong ease-in-out. Long on-screen travel (a drawn tile joining the hand).</summary>
+        InOutStrong
     }
 
     public static class UiMotion
     {
         const string ReduceKey = "manjong.reduceMotion";
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        [DllImport("__Internal")]
+        static extern int ManjongPrefersReducedMotion();
+#endif
+
         /// <summary>
-        /// Reduced motion (PlayerPrefs "manjong.reduceMotion" = 1): positional glides snap to their target and the
-        /// discard flight becomes a plain fade, but opacity changes stay (they carry the feedback).
+        /// Reduced motion: positional glides snap to their target and the discard flight becomes a plain fade, but
+        /// opacity changes stay (they carry the feedback). WebGL asks the browser
+        /// (matchMedia "(prefers-reduced-motion: reduce)", Plugins/WebGL/ManjongMotion.jslib); the Editor and desktop
+        /// builds read PlayerPrefs "manjong.reduceMotion" = 1. Read once per session, not per frame.
         /// </summary>
         public static bool Reduced
         {
             get
             {
-                if (reduced < 0) reduced = PlayerPrefs.GetInt(ReduceKey, 0) == 1 ? 1 : 0; // read once, not per frame
+                if (reduced < 0)
+                {
+#if UNITY_WEBGL && !UNITY_EDITOR
+                    reduced = ManjongPrefersReducedMotion() == 1 ? 1 : 0;
+#else
+                    reduced = PlayerPrefs.GetInt(ReduceKey, 0) == 1 ? 1 : 0;
+#endif
+                }
                 return reduced == 1;
             }
         }
@@ -81,7 +98,7 @@ namespace Manjong.UI
 
         public static float Evaluate(UiCurve curve, float x)
         {
-            return curve == UiCurve.OutStrong ? Bezier(0.23f, 1f, 0.32f, 1f, x) : Bezier(0.25f, 0.1f, 0.25f, 1f, x);
+            return curve == UiCurve.InOutStrong ? Bezier(0.77f, 0f, 0.175f, 1f, x) : Bezier(0.23f, 1f, 0.32f, 1f, x);
         }
     }
 
@@ -217,7 +234,7 @@ namespace Manjong.UI
             SlideTo(target, duration, UiCurve.OutStrong);
         }
 
-        /// <summary>Opacity is kept under reduced motion: it is the gentle replacement for movement.</summary>
+        /// <summary>Strong ease-out like the movement (entrances and exits). Kept under reduced motion: it is the gentle replacement for movement.</summary>
         public void FadeTo(float target, float duration)
         {
             if (alpha.Active && Mathf.Approximately(alpha.To.x, target)) return;
@@ -228,7 +245,7 @@ namespace Manjong.UI
                 Group.alpha = target;
                 return;
             }
-            alpha.Begin(new Vector2(current, 0f), new Vector2(target, 0f), duration, UiCurve.Ease);
+            alpha.Begin(new Vector2(current, 0f), new Vector2(target, 0f), duration, UiCurve.OutStrong);
         }
 
         public void SetAlpha(float value)
