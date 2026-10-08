@@ -44,6 +44,13 @@ also covers "a price was found, but its latest close is unusable", not only
 "no price was found" (risk-compliance R-1); the cache-only token
 ``price_not_queried`` keeps its meaning, since a cache-only read never asked a
 source either way.
+
+A position whose ``currency`` is not the one its ``market`` is quoted in (a
+legacy row stored before ADR-0017's write rule) is valued exactly as before,
+but each pass logs one warning per such row, naming only its id, market and
+currency (task X-3b, KX-6/KX-7). The judgement is
+:func:`app.positions.models.currency_matches_market` itself; this module keeps
+no copy of the market -> currency table.
 """
 
 from __future__ import annotations
@@ -60,7 +67,7 @@ from pydantic import BaseModel, ConfigDict
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.data.price_guard import usable_price
 from app.data.providers.fx import FxRateProvider
-from app.positions.models import Currency, Position
+from app.positions.models import Currency, Position, currency_matches_market
 from app.services.fx_notes import source_note
 
 logger = logging.getLogger(__name__)
@@ -313,6 +320,17 @@ class PositionValuator:
     ) -> PositionValuation:
         today = self._clock().date()
         missing: list[str] = []
+
+        if not currency_matches_market(position.market, position.currency):
+            # Observability only (X-3b): the figures below are unchanged. The
+            # message carries no quantity, cost or note -- id, market and
+            # currency are enough to find the row and correct it.
+            logger.warning(
+                "position currency does not match market: id=%s market=%s currency=%s",
+                position.id,
+                position.market,
+                position.currency,
+            )
 
         price_info, price_now, price_missing, change_basis = self._resolve_price(position, today)
         if price_now is None:
