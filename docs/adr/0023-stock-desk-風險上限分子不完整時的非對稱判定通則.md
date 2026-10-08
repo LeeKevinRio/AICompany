@@ -157,6 +157,7 @@
   - **更正第二十六輪與測試註解**：第二十六輪 e2e 結論 2「W-a2、D-5 加 own>0 在正式 API 路徑不可達」，以及 `apps/stock-desk/backend/tests/test_adr0023_own_unvalued.py:814-815` 註解（「test client 建不出同標的一批已估值、一批未估值」）所稱「正式 API 建不出」**不精確**。風控已要求更正為「**本輪斷網沙箱不可達**」（風控 2026-10-08 裁定第 4 項）；讀碼推定正式 API 可達，已由 tech-architect 確認。tech-architect 建議註解改為「TW 建不出；US 的 opened_at 留空可以建出」，由 qa-automation 修改。
   - **驗收前提**：(1) USDTWD 要解得出來——tech-architect 所述 FX 目前沒有快取層（`services/fx.py` 約 L313、L325），直寫 DB 補不了匯率，故 e2e 需對外網路，或 devops-sre 核可的 FX stub（不得以放寬唯讀邊界處理）；(2) 兩批持倉須經正式 POST 或 UI 建立；(3) advice 用 cache_only 估值，AAPL 類標的日線須先在 bar cache 內（tech-architect 所述）。
   - **現況缺口**：目前**尚無**經正式路徑的第 4 條 W-a2 測試（既有單元測試用手組 context；既有 API 測試以 monkeypatch 換掉 `build_summary`，且該帳本的第 4 條斷言為 W-a1）。由 qa-automation 補 API 層測試（fixture 見 tech-architect 評估檔「交給 qa-automation 的最小 fixture」，本 ADR 不重抄）。coordinator 定案（CEO 可推翻）：先以 API 層正式路徑測試結案，e2e 實機補驗列為待辦，前提是 devops-sre 提供核可的 FX stub。風控將第 4 條 W-a2 未取證列管 low，不擋 PR-0、PR-1。
+    - 〔2026-10-08 補註〕已由 `tests/test_adr0023_w_a2_formal_path.py`（7 則，qa-reviewer PASS）補上：兩批 AAPL 皆經正式 `POST /api/positions`（其一 `opened_at=None` → `fx_open` 缺），第 1、4、5 條 W-a2 與 D-5 own>0、警示 snapshot 第 4 條 W-a2 皆有正式路徑斷言；第 4 條前提以正式 `PUT /api/settings` 將 `max_loss_per_trade` 調為 0.002（`trending_closes(200)` 比率約 0.5% 低於預設 1%，測試另斷言預設下不 violated）。e2e 實機補驗仍待 FX stub。
   - **失效條件**：若日後改成「沒有建倉日就以 `fx_now` 代替 `fx_open`」，此路徑消失，須重新評估本加註與 W-a2（第 4 條）的驗收做法。
   - **提醒**：此路徑**可達**，不得改寫為「不可達、保留為防禦」。
 
