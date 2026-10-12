@@ -5,7 +5,6 @@ Pure functions only: nothing here reaches a read or fetch path (that is F-9b).
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
@@ -19,8 +18,9 @@ from app.data.admission import (
     AdmissionResult,
     admit_symbol,
 )
+from tests.import_graph import APP_ROOT, imported_modules
 
-APP_ROOT = Path(__file__).resolve().parents[1] / "app"
+ADMISSION_MODULE = "app.data.admission"
 
 # --- US: shape whitelist -------------------------------------------------------
 
@@ -128,17 +128,46 @@ def test_reason_codes_are_machine_readable() -> None:
         assert " " not in reason.value
 
 
+def _module_name(path: Path) -> str:
+    parts = path.relative_to(APP_ROOT).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(("app", *parts))
+
+
+def _imports_admission(path: Path) -> bool:
+    """Every spelling: ``import``, ``from ... import``, aliases and relative forms."""
+    return ADMISSION_MODULE in imported_modules(path, _module_name(path))
+
+
 def test_admission_is_not_wired_into_any_path_yet() -> None:
     """F-9a ships the rules only; the read and fetch paths stay as they were (F-9b wires them)."""
-    users: list[str] = []
-    for path in sorted(APP_ROOT.rglob("*.py")):
-        if path.name == "admission.py":
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "app.data.admission":
-                users.append(str(path.relative_to(APP_ROOT)))
+    users = [
+        str(path.relative_to(APP_ROOT))
+        for path in sorted(APP_ROOT.rglob("*.py"))
+        if path.name != "admission.py" and _imports_admission(path)
+    ]
     assert users == ["data/diagnose.py"]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from app.data.admission import admit_symbol",
+        "from app.data.admission import admit_symbol as admit",
+        "import app.data.admission",
+        "import app.data.admission as adm",
+        "from app.data import admission",
+        "from app.data import admission as adm",
+        "from . import admission",
+        "from .admission import admit_symbol",
+        "def f():\n    import app.data.admission\n",
+    ],
+)
+def test_the_wiring_guard_sees_every_import_spelling(tmp_path: Path, statement: str) -> None:
+    source = tmp_path / "service.py"
+    source.write_text(statement + "\n", encoding="utf-8")
+    assert ADMISSION_MODULE in imported_modules(source, "app.data.service")
 
 
 def test_module_holds_no_user_facing_wording() -> None:

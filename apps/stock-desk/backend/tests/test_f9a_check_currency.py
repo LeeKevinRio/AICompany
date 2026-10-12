@@ -8,7 +8,6 @@ that injecting ``MARKET_CURRENCY[market]`` makes the bar check say exactly what
 
 from __future__ import annotations
 
-import ast
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +18,7 @@ from app.data import quality
 from app.data.interface import Market, PriceBar
 from app.data.quality import QualityIssueType, check_currency, check_price_bars
 from app.positions.models import MARKET_CURRENCY, currency_matches_market
+from tests.import_graph import imported_modules
 
 DATA_ROOT = Path(__file__).resolve().parents[1] / "app" / "data"
 _AS_OF = datetime(2024, 1, 2, 14, 0, tzinfo=UTC)
@@ -97,18 +97,38 @@ def test_the_private_name_is_gone() -> None:
     assert not hasattr(quality, "_check_currency")
 
 
-def test_quality_and_service_do_not_import_positions() -> None:
-    """KX-A1 / C-5: the bar check and the service take the currency as a parameter."""
-    for name in ("quality.py", "service.py", "admission.py"):
-        tree = ast.parse((DATA_ROOT / name).read_text(encoding="utf-8"))
-        imported = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module is not None
-        } | {
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        }
-        assert not any(module.startswith("app.positions") for module in imported), name
+def _positions_imports(names: set[str]) -> set[str]:
+    return {name for name in names if name == "app.positions" or name.startswith("app.positions.")}
+
+
+@pytest.mark.parametrize("name", ["quality", "service", "admission"])
+def test_quality_and_service_do_not_import_positions(name: str) -> None:
+    """KX-A1 / C-5: the bar check and the service take the currency as a parameter.
+
+    Every spelling counts (``import``, ``from ... import``, aliases, relative
+    forms): :func:`tests.import_graph.imported_modules` records both the
+    module and ``module.name`` for each ``from`` import.
+    """
+    found = imported_modules(DATA_ROOT / f"{name}.py", f"app.data.{name}")
+    assert _positions_imports(found) == set()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from app.positions.models import MARKET_CURRENCY",
+        "from app.positions.models import MARKET_CURRENCY as TABLE",
+        "import app.positions",
+        "import app.positions.models",
+        "import app.positions.models as models",
+        "from app import positions",
+        "from app import positions as pos",
+        "from ..positions import models",
+        "from ..positions.models import MARKET_CURRENCY",
+        "def f():\n    from app import positions\n",
+    ],
+)
+def test_the_positions_guard_sees_every_import_spelling(tmp_path: Path, statement: str) -> None:
+    source = tmp_path / "service.py"
+    source.write_text(statement + "\n", encoding="utf-8")
+    assert _positions_imports(imported_modules(source, "app.data.service")) != set()

@@ -318,3 +318,14 @@ def test_review_alone_counts_as_a_finding(
     assert out.count("(none)") == 5
     for figure in (QUANTITY, AVG_COST):
         assert str(figure) not in out
+
+
+def test_help_discloses_the_side_files(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["currency-inventory", "--help"])
+    assert exit_info.value.code == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "mode=ro" in out
+    assert "0-byte -wal/-shm side files" in out
+    assert "status 2" in out
+    assert "snapshot" in out

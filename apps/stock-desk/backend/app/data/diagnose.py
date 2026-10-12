@@ -359,6 +359,12 @@ def open_read_only(db_path: Path) -> sqlite3.Connection:
     A missing file is an error, never created. No pragma that writes (WAL
     switch, schema creation) is issued -- unlike the stores, which all
     initialise their schema on construction and are therefore not used here.
+
+    Side files: reading a WAL database with ``mode=ro``, SQLite may create or
+    leave 0-byte ``-wal`` / ``-shm`` files next to it; the database file's
+    bytes and mtime stay unchanged. If the directory is read-only and no
+    ``-shm`` exists yet, the open fails and the CLI exits with status 2.
+    Reading while the app runs is safe; the result is a point-in-time snapshot.
     """
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     return sqlite3.connect(uri, uri=True)
@@ -568,7 +574,14 @@ def main(argv: list[str] | None = None) -> int:
         CURRENCY_INVENTORY_COMMAND,
         help=(
             "read-only: cached series whose currency differs from the market, symbols "
-            "refused by admission, and the sessions they supply (task F-9a)"
+            "refused by admission, and the sessions they supply (task F-9a); "
+            "mode=ro may leave 0-byte -wal/-shm side files, the database file is unchanged"
+        ),
+        description=(
+            "Opens the database with SQLite mode=ro. On a WAL database SQLite may create or "
+            "leave 0-byte -wal/-shm side files; the database file's bytes and mtime stay "
+            "unchanged. A read-only directory without an existing -shm file exits with "
+            "status 2. Safe to run while the app is running; the result is a snapshot."
         ),
     )
     inventory_parser.add_argument(
