@@ -22,6 +22,11 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 Market = Literal["TW", "US"]
 
+#: Why a daily-bar answer was refused outright (ADR-0024 D-7 (2)). Internal to
+#: the data layer and its two consumers (``load_bars`` and the valuator); it is
+#: never serialized into ``LoadedBars.meta()`` or any API response (C-18).
+Rejection = Literal["symbol_not_admitted", "unit_mismatch", "unit_missing", "cache_unit_rejected"]
+
 
 class DataStatus(StrEnum):
     """Where in the four-layer degradation ladder a response came from.
@@ -128,6 +133,13 @@ class ProviderResult(BaseModel):
     #: The service propagates it on the result it returns; surfacing it on the
     #: API's ``data`` block is a follow-up, not yet wired.
     complete: bool = True
+    #: Internal refusal category (ADR-0024 D-7 (2)); ``None`` on every answer
+    #: that was not refused by the admission or currency gate. A refused answer
+    #: is always ``UNAVAILABLE`` with no bars -- enforced below, so a value can
+    #: never ride along with prices. Only ``load_bars`` and the valuator read
+    #: it; it is never serialized to a reader (C-18). Nothing sets it yet: the
+    #: producers arrive with the gate itself (F-9b).
+    rejection: Rejection | None = None
 
     @field_validator("as_of")
     @classmethod
@@ -142,6 +154,19 @@ class ProviderResult(BaseModel):
         if value is not None and value < 0:
             raise ValueError("staleness_minutes must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def _rejection_only_on_an_empty_unavailable_answer(self) -> ProviderResult:
+        """ADR-0024 D-7 (2) invariant, C-34 (a): a rejection never comes with bars.
+
+        One direction only: ``rejection`` set implies ``UNAVAILABLE`` and no
+        bars. The converse does not hold -- an ordinary failure (every rung
+        declined, the cooldown with nothing cached) is also ``UNAVAILABLE``
+        with no bars and carries ``rejection=None`` (TA5 R-57).
+        """
+        if self.rejection is not None and (self.status is not DataStatus.UNAVAILABLE or self.bars):
+            raise ValueError("rejection is only allowed on an unavailable answer with no bars")
+        return self
 
 
 class MarketDataProvider(ABC):
