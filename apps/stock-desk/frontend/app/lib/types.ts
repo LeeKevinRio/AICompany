@@ -151,7 +151,9 @@ export interface PnlOriginal {
  * converted figures are shown, and can say "no rate" when
  * `data_status === "unavailable"`. `source_note` is the source's standing
  * disclosure sentence, fixed verbatim by risk-compliance — never
- * paraphrased client-side.
+ * paraphrased client-side. When `data_status === "unavailable"` the backend
+ * always sends it empty (F-1b F1b-R10) and the frontend does not read it
+ * either.
  */
 export interface PositionFx {
   pair: string;

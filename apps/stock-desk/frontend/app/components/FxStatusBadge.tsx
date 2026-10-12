@@ -55,8 +55,12 @@ function StatusLabel({ fx, prefix }: { fx: PositionFx; prefix: string }) {
         </span>
       );
     case "unavailable":
+      // Deliberately no `title`: when no rate was adopted, `source_note`
+      // (a methodology sentence about a rate that was not used) must never
+      // surface. The backend sends it empty here (F-1b F1b-R10); the
+      // frontend does not read it either (defence in depth).
       return (
-        <span className={MUTED_BADGE_CLASS} title={fx.source_note || undefined}>
+        <span className={MUTED_BADGE_CLASS}>
           {prefix}資料不足
         </span>
       );

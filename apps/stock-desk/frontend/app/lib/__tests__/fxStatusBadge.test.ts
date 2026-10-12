@@ -98,6 +98,37 @@ describe("FxStatusBadge — rate date and honest freshness label", () => {
     expect(render(value)).not.toContain("title=");
   });
 
+  it("unavailable never reads source_note: no title even when the note is non-empty (F-10)", () => {
+    for (const as_of of ["2026-10-02", null]) {
+      const value = fx({
+        data_status: "unavailable",
+        as_of,
+        source: "none",
+        source_note: "匯率取自 Yahoo Finance 的每日收盤價。",
+      });
+      const html = render(value);
+      expect(html).not.toContain("title=");
+      expect(html).not.toContain("Yahoo");
+      expect(html).toContain("資料不足");
+    }
+  });
+
+  it("the non-unavailable branches keep their title sources unchanged (F-10)", () => {
+    const note = "匯率取自 Yahoo Finance 的每日收盤價。";
+    // backup: source_note is the title.
+    expect(render(fx({ data_status: "backup", source_note: note }))).toContain(`title="${note}"`);
+    // backup with an empty note: no title attribute.
+    expect(render(fx({ data_status: "backup", source_note: "" }))).not.toContain("title=");
+    // cached_stale: reason (or the fallback) is the title, never source_note.
+    const stale = render(
+      fx({ data_status: "cached_stale", is_within_ttl: false, reason: "快取未含最近一個交易日。", source_note: note }),
+    );
+    expect(stale).toContain('title="快取未含最近一個交易日。"');
+    expect(stale).not.toContain(note);
+    // fresh never renders a title.
+    expect(render(fx({ data_status: "fresh", source_note: note }))).not.toContain("title=");
+  });
+
   it("the word 匯率 never appears twice", () => {
     for (const status of ["fresh", "backup", "cached_stale", "unavailable"] as const) {
       for (const as_of of ["2026-10-02", null]) {
