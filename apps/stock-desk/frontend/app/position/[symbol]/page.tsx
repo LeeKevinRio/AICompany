@@ -30,6 +30,7 @@ import {
   buildTechOneLiner,
 } from "../../lib/oneLinerWording";
 import { resolveKeyLevelsAnchor } from "../../lib/keyLevelsAnchor";
+import { isLeverageQueryEnabled } from "../../lib/leverageHolding";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { PriceChart } from "./PriceChart";
@@ -97,8 +98,12 @@ export default function PositionDetailPage() {
   const positions = usePositions(true);
   // The leverage chapter needs a stored position (opened_at) to build against;
   // a symbol with no matching holding is a real 404 (app/api/leverage.py,
-  // verified), rendered as its own quiet note rather than an alarming error.
-  const leverage = useLeverageChapter(symbol, market, true);
+  // verified). F-8: the query therefore only runs once positions show the
+  // symbol is held (or when the positions request itself failed, so the
+  // backend stays the source of truth). The 404 note below remains for that
+  // fallback path and for a position deleted mid-flight.
+  const leverageQueryEnabled = isLeverageQueryEnabled(positions, symbol, market);
+  const leverage = useLeverageChapter(symbol, market, leverageQueryEnabled);
   const leverageNotFound = leverage.isError && leverage.error instanceof ApiError && leverage.error.status === 404;
 
   // FR-6: company name from the security directory. `data` is `null` (not
@@ -176,7 +181,8 @@ export default function PositionDetailPage() {
       title: LEVERAGE_CHAPTER_TITLE,
       // Mirrors LeverageChapterView's own gate (it renders nothing for not_applicable).
       items:
-        leverage.data?.chapter && leverage.data.chapter.chapter_status !== "not_applicable"
+        // A disabled query still returns cached data, so gate on the same flag as the query (F-8 C-4).
+        leverageQueryEnabled && leverage.data?.chapter && leverage.data.chapter.chapter_status !== "not_applicable"
           ? [leverage.data.chapter.disclosure]
           : [],
     },
@@ -573,10 +579,10 @@ export default function PositionDetailPage() {
       </section>
 
       {/* --- Leverage chapter (conditional) ----------------------------- */}
-      {leverage.isSuccess && leverage.data.chapter && (
+      {leverageQueryEnabled && leverage.isSuccess && leverage.data.chapter && (
         <LeverageChapterView chapter={leverage.data.chapter} />
       )}
-      {leverage.isError && !leverageNotFound && (
+      {leverageQueryEnabled && leverage.isError && !leverageNotFound && (
         <div className="mt-8">
           <ErrorPanel label="無法載入槓桿專章" error={leverage.error} />
         </div>

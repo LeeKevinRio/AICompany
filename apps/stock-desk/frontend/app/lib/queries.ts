@@ -234,7 +234,9 @@ export function useLeverageChapter(symbol: string, market: Market, enabled: bool
     queryKey: ["leverage", symbol, market],
     queryFn: () => getLeverageChapter(symbol, market),
     enabled: enabled && symbol.length > 0,
-    retry: false, // a symbol with no matching position is an expected 404, not a transient fault
+    // A symbol with no matching position is an expected 404, not a transient fault. The stock page
+    // only enables this query for held symbols (F-8), so 404 is now the rare fallback-path case.
+    retry: false,
   });
 }
 
