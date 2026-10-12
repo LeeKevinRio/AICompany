@@ -418,6 +418,7 @@ d1 的第 1、4、5 條偏低是**確定**的下限（風控審查檔 D-d1 更�
 - **own>0 加碼降級**（medium，交 tech-architect）：own>0 且 action 為 add 時是否降為 hold 或 insufficient_data（新字面送風控）。見 ADR-0023。
 - **F-1b**（匯率 ≤ 0，medium，列入 CEO 知悉）：見 ADR-0023。對本 ADR 的影響：匯率為負時總資產 E 可能小於分子 A，破壞 W1／D-d1「會偏低」前提（即失效條件 5）。
   - 〔2026-10-12 加註（F-1b 合併後，commit 7fc90b2）；上列原文保留，不改動任何既有條文；本加註不改變本 ADR 狀態，且不構成新的決策條文〕（B 類轉錄，tech-writer）：F-1b 後，估值器與建議卡已以 `usable_rate`（有限正值）強制「匯率 > 0」，0、負值、NaN、±inf 的最新匯率一律使該筆為 insufficient_data、不計入市值、不退用較早匯率；**但殘留未清**——任務單 R1（台銀買賣價一側為 0，中價為真值一半，仍通過 `usable_rate`）、R4（無合理範圍檢查，極大有限值會通過）、`services/fx.py` 與 providers 未改（KF-8）。失效條件 5 是否因此解除，待 tech-architect／風控判定，本加註不判定；完整說明見下文「失效條件」第 5 點同日加註。tech-writer 未讀後端 code 驗證。：已由風控裁定採 C-1（見 Decision 4 與 Consequences 8、9），不再屬「另案」。
+- **6-c**：已由風控裁定採 C-1（見 Decision 4 與 Consequences 8、9），不再屬「另案」。
 
 ### 被此決策約束的事
 
