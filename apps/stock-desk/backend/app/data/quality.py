@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from datetime import date as date_type
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -132,6 +133,35 @@ def check_currency(bars: Sequence[PriceBar], expected_currency: str | None) -> l
                 )
             )
     return issues
+
+
+#: The three outcomes of :func:`classify_currency` (ADR-0024 D-5).
+CurrencyVerdict = Literal["ok", "mismatch", "missing"]
+
+
+def classify_currency(bars: Sequence[PriceBar], expected_currency: str) -> CurrencyVerdict:
+    """Classify a whole series against ``expected_currency`` (ADR-0024 D-2 (1), D-5).
+
+    Per bar: equal to ``expected_currency`` is fine; otherwise an empty or
+    whitespace-only declaration is ``missing`` (the source did not say) and
+    any other value is ``mismatch`` (the source said something else). The
+    comparison is exact, with no case folding or trimming, so ``usd`` is a
+    ``mismatch`` -- the same rule as :func:`check_currency` and
+    ``app.positions.models.currency_matches_market``. For the series,
+    ``mismatch`` wins over ``missing``: one bar declaring a different unit
+    outweighs any number of silent ones. An empty series is ``ok``.
+
+    The single source of the W-c / W-c' split; :func:`check_currency`'s
+    "differs" set is exactly the bars this calls ``mismatch`` or ``missing``.
+    """
+    missing = False
+    for bar in bars:
+        if bar.currency == expected_currency:
+            continue
+        if bar.currency.strip():
+            return "mismatch"
+        missing = True
+    return "missing" if missing else "ok"
 
 
 def _check_ohlc_consistency(bars: Sequence[PriceBar]) -> list[QualityIssue]:
