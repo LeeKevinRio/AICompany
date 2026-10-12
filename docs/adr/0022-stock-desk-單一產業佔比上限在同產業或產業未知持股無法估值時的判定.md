@@ -417,7 +417,7 @@ d1 的第 1、4、5 條偏低是**確定**的下限（風控審查檔 D-d1 更�
 - **6-b**（high，另開單，**不作 F-1 部署前置**）：第 3 條帳本不完整但已估值部分已超標時回 not_evaluable，不擋加碼。風控已修訂 FR-9 (a-附加)（見 ADR-0023）。CEO 知悉：F-1 會擴大 6-b 適用範圍；F-3 觸發升級時附上 6-b。**6-b 不得先於本 ADR 的 PR 落地**（風控 required）。
 - **own>0 加碼降級**（medium，交 tech-architect）：own>0 且 action 為 add 時是否降為 hold 或 insufficient_data（新字面送風控）。見 ADR-0023。
 - **F-1b**（匯率 ≤ 0，medium，列入 CEO 知悉）：見 ADR-0023。對本 ADR 的影響：匯率為負時總資產 E 可能小於分子 A，破壞 W1／D-d1「會偏低」前提（即失效條件 5）。
-- **6-c**：已由風控裁定採 C-1（見 Decision 4 與 Consequences 8、9），不再屬「另案」。
+  - 〔2026-10-12 加註（F-1b 合併後，commit 7fc90b2）；上列原文保留，不改動任何既有條文；本加註不改變本 ADR 狀態，且不構成新的決策條文〕（B 類轉錄，tech-writer）：F-1b 後，估值器與建議卡已以 `usable_rate`（有限正值）強制「匯率 > 0」，0、負值、NaN、±inf 的最新匯率一律使該筆為 insufficient_data、不計入市值、不退用較早匯率；**但殘留未清**——任務單 R1（台銀買賣價一側為 0，中價為真值一半，仍通過 `usable_rate`）、R4（無合理範圍檢查，極大有限值會通過）、`services/fx.py` 與 providers 未改（KF-8）。失效條件 5 是否因此解除，待 tech-architect／風控判定，本加註不判定；完整說明見下文「失效條件」第 5 點同日加註。tech-writer 未讀後端 code 驗證。：已由風控裁定採 C-1（見 Decision 4 與 Consequences 8、9），不再屬「另案」。
 
 ### 被此決策約束的事
 
@@ -498,6 +498,14 @@ QA／驗收補充：qa-e2e 抽驗決策卡第 2 條 not_evaluable 與 W3（375�
 3. 6-c 擴及 AC-12.5，或 same／unknown／other 分類變更（如 ETF 穿透）。任何讓 `notional_caps` 納入第 2 條的變更，須回頭核對 Decision 4。（2026-10-07 風控裁定，風控審查檔第一段二.7：「6-c 擴及」**已被 C-1 涵蓋**；分類變更段繼續有效，並加「M-1／M-3 以外的再變更」。原「待風控確認」已結案。）
 4. `_sector_rollup` 語意、`book_limits` 規則 3、`_one_per_sector` 變動，或上限編號／名稱／數量變動。（K-2 的以標的為單位改動即屬 `_sector_rollup` 變動，風控已同意。）
 5. 允許零或負市值（空頭），或總資產可能小於產業市值。（F-1b 匯率 ≤ 0 的影響見 ADR-0023。）
+   - 〔2026-10-12 加註（F-1b 合併後，commit 7fc90b2）；上列原文保留，不改動任何既有條文；本加註不改變本 ADR 狀態，且不構成新的決策條文〕（B 類轉錄，tech-writer）：
+     - **已強制的部分**：F-1b（commit 7fc90b2）之後，估值器與建議卡以單一定義 `usable_rate`（`apps/stock-desk/backend/app/data/price_guard.py`，判準為有限正值）判斷匯率。最新一筆匯率為 0、負值、NaN、±inf 者，一律使該筆列為 insufficient_data（以既有 `fx_now`／`fx_open` missing token 標示）、不計入市值，且**不退用較早的匯率**。因此就**估值層與建議卡層**而言，「匯率 > 0」已有 code 強制。
+     - **不得讀成前提已完全成立**，F-1b 後仍有下列殘留（任務單 R1、R4 為 tech-architect 2026-10-07 評估所列，風控同日裁定列管；KF-8 為任務單對實作的約束）：
+       - **R1**：台銀買賣價其中一側為 0 時，中價是真值的一半，仍通過 `usable_rate`，市值被低估；tech-architect 與風控皆述為目前因台銀被挑戰頁擋下而屬潛在風險。
+       - **R4**：匯率沒有合理範圍檢查，極大的有限值會通過 `usable_rate`。
+       - **provider 層未動（KF-8）**：`app/services/fx.py` 與 `app/data/providers/` 在 F-1b 為零 diff，`FxRate` 仍不加驗證器。
+     - **本條是否解除，待判定**：本條另含「允許零或負市值（空頭）」與「總資產可能小於產業市值」兩支，F-1b 並未處理這兩支的全部來源。**是否解除失效條件 5，待 tech-architect／風控判定，本加註不判定。** tech-architect 2026-10-07 評估（任務單第六點）曾擬一段註記字面，內容為資料面零／負匯率已在估值層排除，本條仍適用於允許空頭或任何繞過 `usable_price`／`usable_rate` 的估值路徑；該字面撰於實作前，亦未涵蓋上述 R1、R4 殘留，本處**未採用**，僅供判定者參考。
+     - **來源與版本**：F-1b 任務單 `work/dispatch/2026-10-07-任務單-F-1b-匯率非正值的估值防護.md`——tech-architect 評估（2026-10-07，HEAD d66183e）D1～D8、第六、七點；風控裁定（2026-10-07，HEAD af2fda6）第 5 點與 R-10；「F-1b 實作紀錄」（commit 7fc90b2，coordinator 2026-10-08）；風控 `work/reviews/2026-10-08-F-1b-單項核對與tooltip裁定-F1b-R10至R13.md`、`work/reviews/2026-10-08-F-1b-短審-F1b-R10R11落地.md`（皆 APPROVE WITH CONDITIONS）。**tech-writer 未讀後端 code 驗證**，上述行為敘述為任務單與風控審查檔所述。
 6. 推播組成改變，使 W2 不再緊接產業句。
 7. S-B2 失效條件 1 觸發（quiet reason 進 UI／推播／feed 或被 F-4「查看略過原因」納入）：併審 W3 的 quiet 殘留（見 Consequences 4）。ADR-0010 第 6 列管仍有效。
 8. **F-8**（2026-10-07 增補；來源：風控第三段「四、失效條件增補」。此處「F-8」為風控審查檔的失效條件編號，與本 ADR 關聯段的 F-1 任務單無關）：`categories(G)` 改為包含非使用者填寫值（如系統推斷）、None 被算成一個類別、產業別改自由文字，或 `TWSE_SECTORS` 名稱或順序變動 → 重審 W-6m「所填產業別為」與排序。
