@@ -16,8 +16,10 @@ import pytest
 
 from app.api import deps
 from app.data.cache import DEFAULT_DB_PATH
+from app.data.interface import Market
 from app.data.providers.alpha_vantage import AlphaVantageAdapter
 from app.data.providers.yfinance import YFinanceAdapter
+from app.positions.models import MARKET_CURRENCY
 from app.services.index import IndexProviderBridge, IndexSeriesService
 
 _CACHED = (
@@ -125,3 +127,27 @@ def test_every_ladder_shares_one_cache(isolated_deps: None) -> None:
     # object, so every bar a ladder serves is a session the calendar has seen
     # (L-10j, pinned end to end in ``tests/test_api_advice.py``).
     assert deps.get_price_bar_cache() is shared
+
+
+def test_every_ladder_is_given_the_currency_lookup_and_its_scope(isolated_deps: None) -> None:
+    """C-6 / TA5 R-56, R-60: TW and US are ``equity``, the index service is ``index``.
+
+    All three get the same per-market lookup (ADR-0024 D-5): the index service
+    answers for both markets, so its currency is never fixed at construction.
+    """
+    resolver = deps.get_market_resolver()
+    index_inner = deps.get_index_resolver()["TW"]._inner  # type: ignore[attr-defined]
+    built = {"TW": resolver["TW"], "US": resolver["US"], "index": index_inner}
+    scopes = {name: service._scope for name, service in built.items()}
+    assert scopes == {"TW": "equity", "US": "equity", "index": "index"}
+    for service in built.values():
+        assert service._currency_for_market is deps._market_currency
+
+
+@pytest.mark.parametrize("market", sorted(MARKET_CURRENCY))
+def test_the_injected_lookup_reads_market_currency(market: Market) -> None:
+    assert deps._market_currency(market) == MARKET_CURRENCY[market]
+
+
+def test_the_injected_lookup_has_no_currency_for_an_unlisted_market() -> None:
+    assert deps._market_currency("JP") is None  # type: ignore[arg-type]

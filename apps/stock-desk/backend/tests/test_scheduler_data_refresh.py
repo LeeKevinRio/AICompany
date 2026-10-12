@@ -36,10 +36,10 @@ from app import scheduler as scheduler_module
 from app.data.cache import PriceBarCache
 from app.data.freshness import TW_POLICY, US_POLICY
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
-from app.data.service import MarketDataService
 from app.positions.models import PositionInput
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
+from tests.market_service_helpers import equity_service
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 NEW_YORK = ZoneInfo("America/New_York")
@@ -398,7 +398,7 @@ def _wire(
 ) -> scheduler_module.DataRefreshRun:
     cache = PriceBarCache(tmp_path / "cache.db")
     resolver = {
-        market: MarketDataService(
+        market: equity_service(
             primary=chain[0], backups=chain[1:], cache=cache, clock=clock, cache_first=True
         )
         for market, chain in providers.items()

@@ -1,11 +1,19 @@
-"""F-9a: the service logs a WARNING for off-market bar currencies and changes nothing else.
+"""F-9a / F-9b0: the service logs off-market bar currencies and changes nothing else.
 
 Each scenario drives ``MarketDataService`` down one path that obtains bars
 (a live provider, the incremental read-back, layer 0, the degrade-to-cache
 rung, the cache-only read) and runs it twice on identical fresh databases --
-once with the market currency injected, once without. The returned result and
-every cache table must come out identical; only the log differs (F-9a: the
-fail-closed refusal is F-9b).
+once with the currency check live, once with the check neutralised (its
+verdict forced to ``ok`` at every checkpoint; F-9a ran this baseline with no
+currency injected, which F-9b0 no longer allows). The returned result, every
+cache table and every live call must come out identical; only the log differs
+(the fail-closed refusal is F-9b).
+
+F-9b0 (ADR-0024 TA5 R-60) extended the record with ``verdict`` and ``scope``
+and logs ``scope=index`` at ERROR. The matrix below is TA5 section 2 test 6 and
+the fixed-text test is test 1. Test 5 (the shipped index wiring logs nothing)
+replaced ``test_index_ladder_is_explicitly_not_checked`` and lives in
+``test_f9b0_index_currency_tripwire.py``.
 """
 
 from __future__ import annotations
@@ -23,10 +31,18 @@ from typing import Any
 import pytest
 
 from app.api import deps
+from app.data import service as service_module
 from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
-from app.data.service import CURRENCY_DIFFERS_LOG_PREFIX, MarketDataService
+from app.data.quality import CurrencyVerdict
+from app.data.service import (
+    CURRENCY_DIFFERS_LOG_PREFIX,
+    CurrencyLookup,
+    MarketDataService,
+    ServiceScope,
+)
 from app.positions.models import MARKET_CURRENCY
+from tests.market_service_helpers import build_service, market_currency
 
 SERVICE_LOGGER = "app.data.service"
 
@@ -47,6 +63,11 @@ def _bar(
         as_of=datetime.combine(day, datetime.min.time(), tzinfo=UTC),
         source=source,
     )
+
+
+def _blank_bar(day: date, currency: str) -> PriceBar:
+    """A bar declaring ``currency`` verbatim, blank included (``PriceBar`` refuses blanks today)."""
+    return _bar(day, "TWD", "twse").model_copy(update={"currency": currency})
 
 
 class _Provider(MarketDataProvider):
@@ -78,7 +99,7 @@ class Scenario:
     cache_first: bool
     clock: datetime
     call: Callable[[MarketDataService], ProviderResult]
-    #: Layers whose WARNING is expected when the currency is off-market.
+    #: Layers whose record is expected when the currency is off-market.
     layers: tuple[str, ...]
 
 
@@ -169,6 +190,21 @@ SCENARIOS = [
     ),
 ]
 
+#: The live path with a blank declaration beside a matching bar. Only the live
+#: rung can carry a blank before F-9c: the cache cannot read one back.
+BLANK_PROVIDER = Scenario(
+    name="blank_provider",
+    seed=_no_seed,
+    primary_bars=lambda c: [
+        _blank_bar(date(2024, 1, 2), c),
+        _bar(date(2024, 1, 3), "TWD", "twse"),
+    ],
+    cache_first=False,
+    clock=datetime(2024, 1, 3, 8, 0, tzinfo=UTC),
+    call=lambda s: s.get_daily_bars("2330", "TW", date(2024, 1, 1), date(2024, 1, 31)),
+    layers=("provider",),
+)
+
 
 def _dump(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     with closing(sqlite3.connect(db)) as conn:
@@ -182,8 +218,13 @@ def _dump(db: Path) -> dict[str, list[tuple[Any, ...]]]:
 class Run:
     result: ProviderResult
     tables: dict[str, list[tuple[Any, ...]]]
-    warnings: list[str]
+    #: Every record carrying the prefix, at any level: ``(levelno, message)``.
+    records: list[tuple[int, str]]
     primary_asked: list[tuple[str, date, date]]
+
+    @property
+    def warnings(self) -> list[str]:
+        return [message for _level, message in self.records]
 
 
 def _run(
@@ -192,82 +233,223 @@ def _run(
     scenario: Scenario,
     *,
     currency: str,
-    expected: str | None,
+    lookup: CurrencyLookup = market_currency,
+    scope: ServiceScope = "equity",
+    tag: str = "checked",
 ) -> Run:
-    db = tmp_path / f"{scenario.name}-{currency}-{expected}.db"
+    db = tmp_path / f"{scenario.name}-{currency.strip() or 'blank'}-{scope}-{tag}.db"
     cache = PriceBarCache(db_path=db)
     scenario.seed(cache, currency)
     primary = _Provider("twse", scenario.primary_bars(currency))
-    service = MarketDataService(
+    service = build_service(
         primary=primary,
         cache=cache,
         clock=lambda: scenario.clock,
         cache_first=scenario.cache_first,
-        expected_currency=expected,
+        currency_for_market=lookup,
+        scope=scope,
     )
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger=SERVICE_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=SERVICE_LOGGER):
         result = scenario.call(service)
-    warnings = [
-        record.getMessage()
+    records = [
+        (record.levelno, record.getMessage())
         for record in caplog.records
         if record.name == SERVICE_LOGGER
-        and record.levelno == logging.WARNING
         and record.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)
     ]
-    return Run(result, _dump(db), warnings, primary.asked)
+    return Run(result, _dump(db), records, primary.asked)
+
+
+def _neutral_run(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    *,
+    currency: str,
+    scope: ServiceScope = "equity",
+) -> Run:
+    """The baseline: the same service with the verdict forced to ``ok`` at every checkpoint."""
+    calls: list[str] = []
+
+    def always_ok(bars: object, expected: str) -> CurrencyVerdict:
+        calls.append(expected)
+        return "ok"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service_module, "classify_currency", always_ok)
+        run = _run(tmp_path, caplog, scenario, currency=currency, scope=scope, tag="neutral")
+    # Not vacuous: the neutralised check really stood at every checkpoint.
+    assert len(calls) == len(scenario.layers)
+    return run
+
+
+def _field(message: str, name: str) -> str:
+    return message.split(f" {name}=")[1].split(" ")[0]
 
 
 def _layer(message: str) -> str:
-    return message.split(" layer=")[1].split(" ")[0]
+    return _field(message, "layer")
+
+
+def _assert_unchanged(checked: Run, neutral: Run) -> None:
+    """Same answer, same rows in all three tables, same live calls; only the log differs."""
+    assert neutral.records == []
+    assert checked.result == neutral.result
+    assert checked.tables == neutral.tables
+    assert checked.primary_asked == neutral.primary_asked
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
 def test_off_market_currency_warns_on_each_path_and_changes_nothing(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, scenario: Scenario
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
 ) -> None:
-    checked = _run(tmp_path, caplog, scenario, currency="USD", expected="TWD")
-    unchecked = _run(tmp_path, caplog, scenario, currency="USD", expected=None)
+    """TA5 test 6: equity, one WARNING per refusing checkpoint, nothing else moves."""
+    checked = _run(tmp_path, caplog, scenario, currency="USD")
+    neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="USD")
 
     assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
-    assert unchecked.warnings == []
-    # Behaviour unchanged: same answer, same rows, same logs, same live calls.
-    assert checked.result == unchecked.result
-    assert checked.tables == unchecked.tables
-    assert checked.primary_asked == unchecked.primary_asked
-    # The off-market bar is still served (F-9b, not F-9a, refuses it).
+    assert [level for level, _ in checked.records] == [logging.WARNING] * len(scenario.layers)
+    assert {_field(m, "scope") for m in checked.warnings} == {"equity"}
+    assert {_field(m, "verdict") for m in checked.warnings} == {"mismatch"}
+    _assert_unchanged(checked, neutral)
+    # The off-market bar is still served (F-9b, not F-9b0, refuses it).
     assert "USD" in {bar.currency for bar in checked.result.bars}
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
-def test_market_currency_bars_log_nothing(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, scenario: Scenario
+def test_index_scope_logs_error_on_each_path_and_changes_nothing(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
 ) -> None:
-    clean = _run(tmp_path, caplog, scenario, currency="TWD", expected="TWD")
+    """TA5 R-60: the same checkpoints on ``scope=index`` log ERROR, still observation only."""
+    checked = _run(tmp_path, caplog, scenario, currency="USD", scope="index")
+    neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="USD", scope="index")
+
+    assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
+    assert [level for level, _ in checked.records] == [logging.ERROR] * len(scenario.layers)
+    assert {_field(m, "scope") for m in checked.warnings} == {"index"}
+    _assert_unchanged(checked, neutral)
+    assert "USD" in {bar.currency for bar in checked.result.bars}
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
+def test_a_market_without_a_currency_counts_as_mismatch_and_changes_nothing(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+) -> None:
+    """A lookup miss is logged as a mismatch of every bar; F-9b0 still refuses nothing."""
+    checked = _run(tmp_path, caplog, scenario, currency="TWD", lookup=lambda _market: None)
+    neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="TWD")
+
+    assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
+    for message in checked.warnings:
+        assert _field(message, "expected") == "<none>"
+        assert _field(message, "verdict") == "mismatch"
+        mismatched, total = _field(message, "mismatched").split("/")
+        assert mismatched == total
+    _assert_unchanged(checked, neutral)
+
+
+def test_a_blank_currency_logs_verdict_missing_and_changes_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``missing`` on the live path, the only one a blank value can reach before F-9c."""
+    checked = _run(tmp_path, caplog, BLANK_PROVIDER, currency="")
+    neutral = _neutral_run(tmp_path, caplog, monkeypatch, BLANK_PROVIDER, currency="")
+
+    assert [_field(m, "verdict") for m in checked.warnings] == ["missing"]
+    _assert_unchanged(checked, neutral)
+
+
+@pytest.mark.parametrize("scope", ["equity", "index"])
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
+def test_market_currency_bars_log_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, scenario: Scenario, scope: ServiceScope
+) -> None:
+    clean = _run(tmp_path, caplog, scenario, currency="TWD", scope=scope)
     assert clean.warnings == []
     assert clean.result.bars
 
 
 def test_warning_text_is_fixed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    provider = _run(tmp_path, caplog, SCENARIOS[0], currency="USD", expected="TWD")
-    assert provider.warnings == [
-        "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
-        "observed=USD mismatched=1/1 layer=provider source=twse"
+    """TA5 R-60 test 1: an equity WARNING, an index ERROR, a ``missing`` with ``<blank>``."""
+    equity = _run(tmp_path, caplog, SCENARIOS[0], currency="USD")
+    assert equity.records == [
+        (
+            logging.WARNING,
+            "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
+            "observed=USD mismatched=1/1 layer=provider source=twse "
+            "verdict=mismatch scope=equity",
+        )
     ]
-    incremental = _run(tmp_path, caplog, SCENARIOS[1], currency="USD", expected="TWD")
+    index = _run(tmp_path, caplog, SCENARIOS[0], currency="USD", scope="index")
+    assert index.records == [
+        (
+            logging.ERROR,
+            "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
+            "observed=USD mismatched=1/1 layer=provider source=twse "
+            "verdict=mismatch scope=index",
+        )
+    ]
+    blank = _run(tmp_path, caplog, BLANK_PROVIDER, currency="  ")
+    assert blank.records == [
+        (
+            logging.WARNING,
+            "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
+            "observed=<blank>,TWD mismatched=1/2 layer=provider source=twse "
+            "verdict=missing scope=equity",
+        )
+    ]
+    incremental = _run(tmp_path, caplog, SCENARIOS[1], currency="USD")
     assert incremental.warnings[1] == (
         "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
-        "observed=TWD,USD mismatched=2/3 layer=incremental_readback source=twse"
+        "observed=TWD,USD mismatched=2/3 layer=incremental_readback source=twse "
+        "verdict=mismatch scope=equity"
     )
 
 
-def test_warning_is_one_record_at_warning_level(
+def test_mismatch_wins_over_blank_in_the_record(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _run(tmp_path, caplog, SCENARIOS[0], currency="USD", expected="TWD")
+    """``verdict`` follows D-2 (1)'s order; ``observed`` keeps raw case, blanks as ``<blank>``."""
+    mixed = Scenario(
+        name="mixed",
+        seed=_no_seed,
+        primary_bars=lambda c: [
+            _blank_bar(date(2024, 1, 2), ""),
+            _blank_bar(date(2024, 1, 3), " "),
+            _bar(date(2024, 1, 4), "usd", "twse"),
+        ],
+        cache_first=False,
+        clock=datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
+        call=lambda s: s.get_daily_bars("2330", "TW", date(2024, 1, 1), date(2024, 1, 31)),
+        layers=("provider",),
+    )
+    run = _run(tmp_path, caplog, mixed, currency="mixed")
+    assert run.warnings == [
+        "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
+        "observed=<blank>,usd mismatched=3/3 layer=provider source=twse "
+        "verdict=mismatch scope=equity"
+    ]
+
+
+@pytest.mark.parametrize("scope", ["equity", "index"])
+def test_warning_is_one_record_at_warning_level(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, scope: ServiceScope
+) -> None:
+    _run(tmp_path, caplog, SCENARIOS[0], currency="USD", scope=scope)
     records = [r for r in caplog.records if r.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)]
     assert len(records) == 1
-    assert records[0].levelno == logging.WARNING
+    assert records[0].levelno == (logging.ERROR if scope == "index" else logging.WARNING)
     assert records[0].name == SERVICE_LOGGER
     assert records[0].exc_info is None
 
@@ -327,18 +509,38 @@ def test_equity_ladders_are_told_their_market_currency(
     resolver = deps._default_resolver.__wrapped__()  # bypass lru_cache
     with caplog.at_level(logging.WARNING, logger=SERVICE_LOGGER):
         resolver[market].get_daily_bars("2330", market, date(2024, 1, 1), date(2024, 1, 2))
-    messages = [r.getMessage() for r in caplog.records if r.name == SERVICE_LOGGER]
-    assert any(
-        message.startswith(CURRENCY_DIFFERS_LOG_PREFIX)
-        and f" expected={MARKET_CURRENCY[market]} " in message
-        for message in messages
-    )
+    records = [
+        r
+        for r in caplog.records
+        if r.name == SERVICE_LOGGER and r.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)
+    ]
+    assert any(f" expected={MARKET_CURRENCY[market]} " in r.getMessage() for r in records)
+    # F-9b0: the shipped equity ladders are ``scope=equity`` and log at WARNING.
+    assert {r.levelno for r in records} == {logging.WARNING}
+    assert all(r.getMessage().endswith(" scope=equity") for r in records)
 
 
 @pytest.mark.usefixtures("stub_wiring")
-def test_index_ladder_is_explicitly_not_checked(caplog: pytest.LogCaptureFixture) -> None:
+def test_index_ladder_is_checked_per_market_and_logs_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Replaces ``test_index_ladder_is_explicitly_not_checked`` (TA5 R-60, test 5).
+
+    The shipped index service is now checked, against the currency of the
+    market the caller names, at ERROR -- and, until F-9b, still serves the bars.
+    The negative half (the shipped configuration logs nothing for any index
+    the product asks for) is in ``test_f9b0_index_currency_tripwire.py``.
+    """
     resolver = deps._default_index_resolver.__wrapped__()  # bypass lru_cache
     with caplog.at_level(logging.WARNING, logger=SERVICE_LOGGER):
         result = resolver["US"].get_daily_bars("^GSPC", "US", date(2024, 1, 1), date(2024, 1, 2))
     assert [bar.currency for bar in result.bars] == ["GBP"]
-    assert not [r for r in caplog.records if r.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)]
+    records = [r for r in caplog.records if r.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)]
+    assert [(r.levelno, r.getMessage()) for r in records] == [
+        (
+            logging.ERROR,
+            "price bars currency differs from market: symbol=^GSPC market=US expected=USD "
+            "observed=GBP mismatched=1/1 layer=provider source=yfinance "
+            "verdict=mismatch scope=index",
+        )
+    ]

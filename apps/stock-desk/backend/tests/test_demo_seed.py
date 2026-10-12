@@ -116,14 +116,15 @@ class DemoHarness:
 
 @pytest.fixture
 def demo_harness(tmp_path: Path) -> Iterator[DemoHarness]:
-    from app.data.service import MarketDataService
+    from tests.market_service_helpers import equity_service
+    from tests.market_service_helpers import index_service as build_index_service
 
     db_path = tmp_path / "demo.db"
     cache = PriceBarCache(db_path)
     positions = PositionStore(db_path)
     alerts = AlertStore(db_path)
     settings = SettingsStore(db_path)
-    service = MarketDataService(primary=OfflineProvider(), cache=cache)
+    service = equity_service(primary=OfflineProvider(), cache=cache)
     valuator = PositionValuator(
         market_services={"TW": service}, fx_provider=UnavailableFxProvider()
     )
@@ -142,7 +143,7 @@ def demo_harness(tmp_path: Path) -> Iterator[DemoHarness]:
     # resolves a process-wide default, i.e. a real yfinance index adapter (network)
     # and the developer's ./data/stock-desk.db. The index series gets its own
     # offline service on its own cache, never the security bars' store.
-    index_service = MarketDataService(
+    index_service = build_index_service(
         primary=OfflineProvider(), cache=PriceBarCache(tmp_path / "index-bars.db")
     )
     cached_valuator = PositionValuator(

@@ -26,6 +26,7 @@ from app.data.interface import (
 from app.data.service import MarketDataService
 from app.services.market import load_bars
 from tests.api_helpers import recent_bars, trending_closes
+from tests.market_service_helpers import equity_service
 
 _END = date(2026, 7, 26)
 _START = _END - timedelta(days=100)
@@ -92,7 +93,7 @@ def _us_service(
     clock: datetime = _NOW,
 ) -> MarketDataService:
     """The US ladder exactly as ``app/api/deps.py`` composes it."""
-    return MarketDataService(
+    return equity_service(
         primary=primary,
         backups=[backup],
         cache=cache or PriceBarCache(db_path=tmp_path / "us.db"),
@@ -244,7 +245,7 @@ def test_an_old_cache_that_holds_the_latest_session_is_still_current(tmp_path: P
 def test_a_ladder_without_layer_zero_still_calls_its_provider_every_time(tmp_path: Path) -> None:
     """``cache_first=False`` keeps the pre-layer-0 ladder (no market uses it now)."""
     primary = FakeProvider("twse", bars=_us_bars())
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=PriceBarCache(db_path=tmp_path / "tw.db"),
         clock=lambda: _NOW,
@@ -259,7 +260,7 @@ def test_a_tw_ladder_calls_twse_once_per_published_session(tmp_path: Path) -> No
     """ADR-0009: the TW ladder runs layer 0 too -- the second click is local."""
     tw_bars = recent_bars(trending_closes(20), symbol="2330", market="TW", end=_END)
     primary = FakeProvider("twse", bars=tw_bars)
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=PriceBarCache(db_path=tmp_path / "tw.db"),
         clock=lambda: _NOW,

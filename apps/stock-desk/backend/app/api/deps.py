@@ -13,6 +13,7 @@ from functools import lru_cache
 
 from app.alerts.store import AlertStore
 from app.data.cache import PriceBarCache
+from app.data.interface import Market
 from app.data.providers.alpha_vantage import AlphaVantageAdapter
 from app.data.providers.finmind import FinMindAdapter
 from app.data.providers.fx import BankOfTaiwanFxAdapter, FxRateLadder, FxRateProvider
@@ -68,6 +69,17 @@ def _default_yfinance() -> YFinanceAdapter:
     return YFinanceAdapter()
 
 
+def _market_currency(market: Market) -> str | None:
+    """market -> its currency, the lookup every daily-bar service is built with.
+
+    ``MARKET_CURRENCY`` is the one table that defines it (task X-3 KX-A1); the
+    data layer never imports it and is handed this function instead (ADR-0024
+    D-5). ``None`` for a market the table does not list -- the service then
+    treats every bar as not matching.
+    """
+    return MARKET_CURRENCY.get(market)
+
+
 @lru_cache(maxsize=1)
 def _default_resolver() -> MarketDataResolver:
     """market -> price service, one degradation ladder per market.
@@ -93,9 +105,11 @@ def _default_resolver() -> MarketDataResolver:
     at a fabricated price. A market absent from this map has no adapter at all
     and surfaces as ``insufficient_data`` (see ``app/services/market.py``).
 
-    Each ladder is told its market's currency from the one table that defines
-    it (``MARKET_CURRENCY``, task X-3 KX-A1): in F-9a a bar carrying any other
-    currency is only logged as a WARNING, with the answer unchanged.
+    Each ladder is told the market currency through :func:`_market_currency`
+    (the one table that defines it, ``MARKET_CURRENCY``, task X-3 KX-A1) and
+    is built as ``scope="equity"`` (ADR-0024 TA5 R-60): until F-9b a bar
+    carrying any other currency is only logged as a WARNING, with the answer
+    unchanged.
     """
     cache = _default_cache()
     tw_service = MarketDataService(
@@ -103,14 +117,16 @@ def _default_resolver() -> MarketDataResolver:
         backups=[TpexAdapter(), FinMindAdapter()],
         cache=cache,
         cache_first=True,
-        expected_currency=MARKET_CURRENCY["TW"],
+        currency_for_market=_market_currency,
+        scope="equity",
     )
     us_service = MarketDataService(
         primary=AlphaVantageAdapter(),
         backups=[_default_yfinance()],
         cache=cache,
         cache_first=True,
-        expected_currency=MARKET_CURRENCY["US"],
+        currency_for_market=_market_currency,
+        scope="equity",
     )
     return {"TW": tw_service, "US": us_service}
 
@@ -135,17 +151,20 @@ def _default_index_resolver() -> IndexServiceResolver:
     cache-key dimension, and which one an index belongs to is the adapter's
     fact to state.
 
-    No currency is injected, on purpose (task F-9a): this one service answers
-    for both markets (``^TWII`` in TWD, ``^GSPC`` in USD), so a single expected
-    currency would flag every series of the other market. Checking the index
-    path needs a per-market expectation; that is F-9b's to design (ADR-0024
-    draft D-4: index series are checked for currency, never for shape).
+    The currency is looked up per call by the market the caller names
+    (:func:`_market_currency`; ADR-0024 D-5, TA1 M-6): this one service
+    answers for both markets (``^TWII`` in TWD, ``^GSPC`` in USD), so no
+    single expected currency fits it. Built as ``scope="index"`` (TA5 R-60):
+    index series are checked for currency, never for shape (ADR-0024 D-4),
+    and a differing currency logs at ERROR -- under the shipped configuration
+    it cannot happen (F9W-31 (a), R-61). Until F-9b the answer is unchanged.
     """
     service = MarketDataService(
         primary=IndexProviderBridge(_default_yfinance()),
         cache=_default_cache(),
         cache_first=True,
-        expected_currency=None,
+        currency_for_market=_market_currency,
+        scope="index",
     )
     disclosed = IndexSeriesService(service)
     return {"TW": disclosed, "US": disclosed}

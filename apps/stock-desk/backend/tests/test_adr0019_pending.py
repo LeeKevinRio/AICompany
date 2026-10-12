@@ -36,7 +36,7 @@ import pytest
 
 from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus, MarketDataProvider, PriceBar, ProviderResult
-from app.data.service import MarketDataService
+from tests.market_service_helpers import equity_service
 
 SYMBOL = "2330"
 
@@ -143,7 +143,7 @@ def test_t1_a_disjoint_historical_fetch_does_not_let_layer_zero_serve_a_holed_se
 
     clock = _Clock(datetime(2026, 10, 1, 8, 0, tzinfo=UTC))  # Thu 16:00 Taipei
     provider = _WeekdayProvider(clock)
-    service = MarketDataService(primary=provider, cache=cache, clock=clock, cache_first=True)
+    service = equity_service(primary=provider, cache=cache, clock=clock, cache_first=True)
 
     result = service.get_daily_bars(SYMBOL, "TW", date(2022, 6, 1), date(2026, 9, 30))
 
@@ -182,7 +182,7 @@ def test_t4_an_overlapping_historical_fetch_does_not_refresh_the_tail_fetch_time
     t0 = datetime(2026, 9, 30, 7, 30, tzinfo=UTC)  # Wed 15:30 Taipei, after the cutoff
     clock = _Clock(t0)
     provider = _WeekdayProvider(clock)
-    service = MarketDataService(primary=provider, cache=cache, clock=clock, cache_first=True)
+    service = equity_service(primary=provider, cache=cache, clock=clock, cache_first=True)
     page_start, page_end = date(2025, 4, 1), date(2026, 9, 30)
 
     # T0: the stock page fetches [A, latest] live -- the tail is obtained now.

@@ -33,6 +33,7 @@ from app.main import app
 from app.settings.models import NetWorthSettings
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
+from tests.market_service_helpers import equity_service
 
 
 class StubFxProvider(FxRateProvider):
@@ -450,7 +451,7 @@ def test_a_card_with_a_bar_date_always_carries_a_measured_session_gap(
         provider = never_called
     else:
         provider = _CannedProvider(bars, clock)
-    service = MarketDataService(
+    service = equity_service(
         primary=provider, cache=api_harness.bar_cache, clock=clock, cache_first=True
     )
     app.dependency_overrides[get_market_resolver] = lambda: {market: service}

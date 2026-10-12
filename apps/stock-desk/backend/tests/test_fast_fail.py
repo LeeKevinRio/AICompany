@@ -40,6 +40,7 @@ from app.data.providers.twse import TwseAdapter
 from app.data.providers.yfinance import YFinanceAdapter
 from app.data.quota import DAILY_LIMIT_ENV_VAR, SAFETY_MARGIN_ENV_VAR, QuotaLedger
 from app.data.service import MarketDataService
+from tests.market_service_helpers import equity_service
 
 START = date(2024, 1, 1)
 END = date(2024, 1, 31)
@@ -142,7 +143,7 @@ class TestTwLadderAllUnreachable:
             FinMindAdapter(client=_unreachable_client(clock)),
         ]
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
-        return MarketDataService(primary=primary, backups=backups, cache=cache)
+        return equity_service(primary=primary, backups=backups, cache=cache)
 
     def test_falls_through_to_unavailable_within_the_estimated_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -181,7 +182,7 @@ class TestTwLadderAllUnreachable:
             TpexAdapter(client=_unreachable_client(clock)),
             FinMindAdapter(client=_unreachable_client(clock)),
         ]
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             backups=backups,
             cache=cache,
@@ -215,7 +216,7 @@ class TestUsLadderAllUnreachable:
         )
         backup = YFinanceAdapter(client=_unreachable_client(clock))
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
-        return MarketDataService(primary=primary, backups=[backup], cache=cache, cache_first=True)
+        return equity_service(primary=primary, backups=[backup], cache=cache, cache_first=True)
 
     def test_falls_through_to_unavailable_within_the_estimated_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

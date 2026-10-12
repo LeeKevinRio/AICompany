@@ -24,6 +24,7 @@ from app.data.service import (
     RECENT_ATTEMPT_FAILED_REASON,
     MarketDataService,
 )
+from tests.market_service_helpers import equity_service
 
 START = date(2024, 1, 1)
 END = date(2024, 1, 31)
@@ -98,7 +99,7 @@ def _service(
     primary: MarketDataProvider, backups: list[MarketDataProvider], tmp_path: Path
 ) -> MarketDataService:
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
-    return MarketDataService(
+    return equity_service(
         primary=primary,
         backups=backups,
         cache=cache,
@@ -143,7 +144,7 @@ def test_all_providers_fail_falls_back_to_cache(tmp_path: Path) -> None:
 
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     backup = _StubProvider(source_id="finmind", status=DataStatus.UNAVAILABLE)
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         backups=[backup],
         cache=cache,
@@ -170,7 +171,7 @@ def test_all_providers_fail_and_no_cache_returns_unavailable(tmp_path: Path) -> 
 def test_successful_live_fetch_is_written_through_to_cache(tmp_path: Path) -> None:
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
     primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         backups=[],
         cache=cache,
@@ -242,7 +243,7 @@ def test_cache_fallback_is_never_called_current_when_a_session_is_missing(
     backup = _StubProvider(source_id="finmind", status=DataStatus.UNAVAILABLE)
     # Thursday 2024-01-04 08:00 UTC = 16:00 Taipei: the 01-03 and 01-04 closes
     # are published, the cache stops at 01-02, fetched 46 hours ago.
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         backups=[backup],
         cache=cache,
@@ -264,7 +265,7 @@ def test_cache_fallback_is_current_when_the_cache_holds_the_latest_session(
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     # 2024-01-03 02:00 UTC = 10:00 Taipei: the latest published session is
     # still 01-02, which the cache has.
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=cache,
         clock=lambda: datetime(2024, 1, 3, 2, 0, tzinfo=UTC),
@@ -288,7 +289,7 @@ def test_a_partial_answer_is_cached_but_its_range_is_not_recorded_as_covered(
             return result.model_copy(update={"complete": False})
 
     primary = _PartialProvider(source_id="twse", bars=[_bar("twse")])
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=cache,
         clock=lambda: datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
@@ -312,7 +313,7 @@ def test_while_sources_fail_the_ladder_runs_once_per_cooldown_not_per_click(
     )
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     now = {"at": datetime(2024, 1, 2, 15, 0, tzinfo=UTC)}
-    service = MarketDataService(
+    service = equity_service(
         primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     first = service.get_daily_bars("2330", "TW", START, END)  # ladder runs, fails
@@ -340,7 +341,7 @@ class TestCacheFirst:
     def test_default_is_disabled(self, tmp_path: Path) -> None:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         primary = _StubProvider(source_id="twse", bars=[])
-        service = MarketDataService(primary=primary, cache=cache)
+        service = equity_service(primary=primary, cache=cache)
         # No assertion needed beyond "constructs fine and behaves like before";
         # covered end-to-end by the rest of this module's TW-flavoured tests.
         assert service is not None
@@ -354,7 +355,7 @@ class TestCacheFirst:
         cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         backup = _StubProvider(source_id="yfinance", bars=[_us_bar("yfinance")])
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             backups=[backup],
             cache=cache,
@@ -379,7 +380,7 @@ class TestCacheFirst:
         cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
         cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             cache=cache,
             # Thursday 2024-01-04 01:00 UTC = Wednesday 20:00 New York: the
@@ -406,7 +407,7 @@ class TestCacheFirst:
             "2330", "US", start=START, end=END, fetched_at=datetime(2024, 1, 4, 0, 30, tzinfo=UTC)
         )
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             cache=cache,
             clock=lambda: datetime(2024, 1, 4, 1, 0, tzinfo=UTC),
@@ -427,7 +428,7 @@ class TestCacheFirst:
         cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
         cache.record_fetch("2330", "US", start=date(2024, 1, 2), end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             cache=cache,
             clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
@@ -445,7 +446,7 @@ class TestCacheFirst:
     def test_falls_through_to_providers_when_no_cache_entry_exists(self, tmp_path: Path) -> None:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
-        service = MarketDataService(primary=primary, cache=cache, cache_first=True)
+        service = equity_service(primary=primary, cache=cache, cache_first=True)
 
         result = service.get_daily_bars("2330", "US", START, END)
 
@@ -460,7 +461,7 @@ class TestCacheFirst:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         cache.put([_us_bar("demo_synthetic")], source="demo_synthetic")
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
-        service = MarketDataService(
+        service = equity_service(
             primary=primary,
             cache=cache,
             clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
@@ -478,7 +479,7 @@ def test_widening_the_range_right_after_a_successful_fetch_goes_live(tmp_path: P
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
     primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
     now = {"at": datetime(2024, 1, 2, 15, 0, tzinfo=UTC)}
-    service = MarketDataService(
+    service = equity_service(
         primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     service.get_daily_bars("2330", "TW", date(2024, 1, 2), END)
@@ -500,7 +501,7 @@ def test_a_historical_coverage_is_not_reused_for_a_request_that_runs_to_today(
     cache.record_fetch("2330", "TW", start=START, end=date(2024, 1, 2), fetched_at=checked)
     cache.record_attempt("2330", "TW", at=checked)
     primary = _StubProvider(source_id="twse", bars=[_bar("twse")])
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),  # Thu 16:00 Taipei
@@ -515,7 +516,7 @@ def test_the_service_propagates_a_partial_answer(tmp_path: Path) -> None:
         def get_daily_bars(self, symbol: str, start: date, end: date) -> ProviderResult:
             return super().get_daily_bars(symbol, start, end).model_copy(update={"complete": False})
 
-    service = MarketDataService(
+    service = equity_service(
         primary=_PartialProvider(source_id="twse", bars=[_bar("twse")]),
         cache=PriceBarCache(db_path=tmp_path / "cache.db"),
     )
@@ -539,7 +540,7 @@ def test_another_series_holding_the_next_session_means_the_close_is_out(tmp_path
     cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
     primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
     now = {"at": datetime(2024, 1, 3, 6, 30, tzinfo=UTC)}  # Wed 14:30 Taipei
-    service = MarketDataService(
+    service = equity_service(
         primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     first = service.get_daily_bars("2330", "TW", START, END)
@@ -557,7 +558,7 @@ def test_early_publication_evidence_never_suppresses_a_fetch(tmp_path: Path) -> 
     cache.put([_tw_bar("2330", date(2024, 1, 2))], source="twse", fetched_at=fetched)
     cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
     primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=cache,
         clock=lambda: datetime(2024, 1, 3, 6, 30, tzinfo=UTC),
@@ -586,7 +587,7 @@ def test_a_series_that_already_holds_the_next_session_is_not_refetched_on_eviden
     cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
     cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
     primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 3))])
-    service = MarketDataService(
+    service = equity_service(
         primary=primary,
         cache=cache,
         clock=lambda: datetime(2024, 1, 3, 6, 30, tzinfo=UTC),  # Wed 14:30 Taipei
@@ -606,7 +607,7 @@ def test_a_covered_series_whose_sources_are_failing_also_honours_the_cooldown(
     cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=success)
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     now = {"at": datetime(2024, 1, 3, 8, 0, tzinfo=UTC)}  # Wed 16:00 Taipei: 01-03 expected
-    service = MarketDataService(
+    service = equity_service(
         primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     first = service.get_daily_bars("2330", "TW", START, END)  # ladder runs, fails
@@ -649,7 +650,7 @@ def test_a_refetch_asks_only_from_the_last_cached_month_and_returns_the_whole_ra
     history = _daily("2330", [date(2023, 11, 1), date(2023, 12, 15), date(2024, 1, 2)])
     provider = _RangeRecorder(source_id="twse", bars=list(history))
     now = {"at": datetime(2024, 1, 2, 10, 0, tzinfo=UTC)}
-    service = MarketDataService(
+    service = equity_service(
         primary=provider, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     first = service.get_daily_bars("2330", "TW", date(2023, 11, 1), date(2024, 1, 31))
@@ -678,7 +679,7 @@ def test_without_coverage_or_when_reaching_earlier_the_whole_range_is_asked(
 ) -> None:
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
     provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 2)]))
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
@@ -702,7 +703,7 @@ def test_a_cached_tail_past_the_coverage_does_not_narrow_the_fetch(tmp_path: Pat
     cache.record_fetch("2330", "TW", start=START, end=date(2024, 1, 31), fetched_at=fetched)
     cache.put(_daily("2330", [date(2024, 3, 1)]), source="twse")  # from a partial answer
     provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 3, 4)]))
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 3, 5, 8, 0, tzinfo=UTC),
@@ -725,7 +726,7 @@ def test_a_spliced_series_names_both_sources(tmp_path: Path) -> None:
     cache.put(head, source="finmind", fetched_at=fetched)
     cache.record_fetch("2330", "TW", start=date(2023, 11, 1), end=END, fetched_at=fetched)
     provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
@@ -753,7 +754,7 @@ def test_a_spliced_cache_keeps_saying_so_on_every_later_answer(tmp_path: Path) -
     spliced = MIXED_SOURCES_REASON.format(sources="yfinance、alpha_vantage")
     provider = _RangeRecorder(source_id="twse", bars=[])
     now = {"at": datetime(2024, 1, 3, 10, 30, tzinfo=UTC)}  # Wed 18:30 Taipei: has 01-03
-    service = MarketDataService(
+    service = equity_service(
         primary=provider, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     served = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
@@ -799,7 +800,7 @@ def test_a_failed_read_back_degrades_and_claims_no_coverage(tmp_path: Path) -> N
     cache.fail_reads = False
     cache.record_fetch("2330", "TW", start=date(2023, 12, 1), end=END, fetched_at=fetched)
     provider = _RangeRecorder(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
@@ -823,7 +824,7 @@ def test_a_same_source_incremental_fetch_carries_no_reason(tmp_path: Path) -> No
     provider = _RangeRecorder(
         source_id="twse", bars=_daily("2330", [date(2024, 1, 2), date(2024, 1, 3)])
     )
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),
@@ -864,7 +865,7 @@ def test_a_cache_only_read_never_asks_a_source_and_writes_nothing(tmp_path: Path
     cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
     cache.writes = 0
     provider = _StubProvider(source_id="twse", bars=_daily("2330", [date(2024, 1, 3)]))
-    service = MarketDataService(
+    service = equity_service(
         primary=provider,
         cache=cache,
         clock=lambda: datetime(2024, 1, 4, 8, 0, tzinfo=UTC),  # a newer session exists
@@ -884,7 +885,7 @@ def test_a_cache_only_read_never_asks_a_source_and_writes_nothing(tmp_path: Path
 def test_a_cache_only_read_without_coverage_is_never_current(tmp_path: Path) -> None:
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
     cache.put(_daily("2330", [date(2024, 1, 3)]), source="twse")  # no fetch log at all
-    service = MarketDataService(
+    service = equity_service(
         primary=_StubProvider(source_id="twse"),
         cache=cache,
         clock=lambda: datetime(2024, 1, 3, 10, 0, tzinfo=UTC),  # cache has the latest session
@@ -902,7 +903,7 @@ def test_a_cache_only_read_still_discloses_a_spliced_series(tmp_path: Path) -> N
     ]
     cache.put(head, source="finmind")
     cache.put(_daily("2330", [date(2024, 1, 3)]), source="twse")
-    service = MarketDataService(
+    service = equity_service(
         primary=_StubProvider(source_id="twse"),
         cache=cache,
         clock=lambda: datetime(2024, 1, 3, 10, 0, tzinfo=UTC),
@@ -921,7 +922,7 @@ def test_a_never_fetched_series_whose_sources_fail_is_not_retried_inside_the_coo
     cache = PriceBarCache(db_path=tmp_path / "cache.db")
     primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
     now = {"at": datetime(2024, 1, 3, 8, 0, tzinfo=UTC)}
-    service = MarketDataService(
+    service = equity_service(
         primary=primary, cache=cache, clock=lambda: now["at"], cache_first=True
     )
     first = service.get_daily_bars("2330", "TW", START, END)  # the ladder runs and fails

@@ -11,21 +11,45 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
-from app.data.quality import check_currency
+from app.data.quality import check_currency, classify_currency
 
 logger = logging.getLogger(__name__)
 
-#: Fixed opening of the one WARNING the service logs when bars it obtained
-#: carry a currency other than the injected market currency (task F-9a). A
-#: log line for the operator, never shown to a reader; the fields that follow
-#: are ``symbol``, ``market``, ``expected``, ``observed`` (every currency on
-#: the bars, sorted), ``mismatched`` (count of differing bars / total),
-#: ``layer`` and ``source``. No response body is ever logged.
+#: Fixed opening of the one record the service logs at each checkpoint whose
+#: bars do not all carry the market's expected currency (task F-9a; format
+#: extended by ADR-0024 TA5 R-60). A log line for the operator only -- never
+#: shown to a reader, never carried by any response, ``meta()`` or API body
+#: (risk-compliance, R-60 suggested) -- so it holds no reader-facing wording
+#: and no response body. The fields that follow, in order, are ``symbol``, ``market``,
+#: ``expected`` (:data:`EXPECTED_UNKNOWN_LOG_VALUE` when the market has no
+#: entry), ``observed`` (every declared currency, deduplicated and sorted by
+#: raw value, blanks written :data:`BLANK_CURRENCY_LOG_VALUE`), ``mismatched``
+#: (differing bars / total), ``layer``, ``source``, ``verdict``
+#: (``mismatch`` or ``missing``, from :func:`app.data.quality.classify_currency`)
+#: and ``scope`` (``equity`` or ``index``). ``scope=equity`` logs at WARNING;
+#: ``scope=index`` at ERROR, because a currency event on the index path is
+#: unreachable under the shipped configuration (ADR-0024 D-4, F9W-31 (b)).
 CURRENCY_DIFFERS_LOG_PREFIX = "price bars currency differs from market:"
+#: How a blank (empty or whitespace-only) declared currency is written in the
+#: ``observed`` field of the record above (TA5 R-60).
+BLANK_CURRENCY_LOG_VALUE = "<blank>"
+#: How the ``expected`` field reads when the injected lookup has no currency
+#: for the market asked about; the checkpoint then counts as a mismatch.
+EXPECTED_UNKNOWN_LOG_VALUE = "<none>"
+
+#: Which product path a service answers for (ADR-0024 TA5 R-60, R-56): set
+#: explicitly by each construction site -- never defaulted, never inferred
+#: from a ``^`` prefix on the symbol.
+ServiceScope = Literal["equity", "index"]
+#: market -> the currency every bar of that market must carry, or ``None``
+#: when the table has no entry (ADR-0024 D-5, TA1 M-6). Asked on every call
+#: with that call's ``market``: the index service answers for both markets.
+CurrencyLookup = Callable[[Market], str | None]
 
 #: Joins several layers' reasons into the one ``reason`` slot a
 #: ``ProviderResult`` has, in ladder order. Each sentence keeps its own full
@@ -106,6 +130,15 @@ def mixed_sources_reason(bars: Sequence[PriceBar]) -> str | None:
     return MIXED_SOURCES_REASON.format(sources="、".join(sources))
 
 
+def _observed_currencies(bars: Sequence[PriceBar]) -> str:
+    """The ``observed`` log field: declared values, deduplicated, sorted raw, blanks marked."""
+    shown = (
+        value if value.strip() else BLANK_CURRENCY_LOG_VALUE
+        for value in sorted({bar.currency for bar in bars})
+    )
+    return ",".join(dict.fromkeys(shown))
+
+
 class MarketDataService:
     """Fetch daily bars for a symbol, degrading through providers then cache.
 
@@ -148,21 +181,22 @@ class MarketDataService:
     returns is spliced from more than one provider (ADR-0005 D-5 via ADR-0009
     D-7); otherwise there is nothing to explain.
 
-    ``expected_currency`` (task F-9a, observation only): the currency every
-    bar of this service's market must carry, injected by the assembly layer
-    (``app.api.deps``) from ``app.positions.models.MARKET_CURRENCY`` -- this
-    module does not import ``app.positions`` (KX-A1). When set, bars obtained
-    from a provider or read back from the cache that carry any other currency
-    produce one WARNING per layer that obtained them (an incremental fetch
-    logs both the live tail and the read-back series), starting with
-    :data:`CURRENCY_DIFFERS_LOG_PREFIX`; nothing else changes -- the same
-    bars are returned, written to the cache and recorded in the fetch and
-    attempt logs exactly as without it. ``None``
-    (the default) checks nothing. It is optional in F-9a only so the
-    constructor calls across the test suite need not change; F-9b turns the
-    mismatch into a fail-closed refusal and makes the parameter required
-    (ADR-0024 draft D-5). The index service is built without it: it is one
-    service shared by both markets, so no single currency fits it.
+    ``currency_for_market`` and ``scope`` (ADR-0024 D-5, TA5 R-60; F-9b0,
+    observation only) are required keyword-only arguments with no default:
+    the assembly layer (``app.api.deps``) passes a lookup over
+    ``app.positions.models.MARKET_CURRENCY`` -- this module does not import
+    ``app.positions`` (KX-A1) -- and says whether the service answers for
+    ``equity`` (TW, US) or ``index`` series. The lookup is asked with each
+    call's ``market``, never fixed at construction, because the one index
+    service answers for both markets. At every checkpoint that obtains bars
+    (a live provider, the incremental read-back, layer 0, the
+    degrade-to-cache rung, the cache-only read) bars that do not all carry
+    the expected currency -- or a market the lookup does not know, which
+    counts as a mismatch -- produce one record starting with
+    :data:`CURRENCY_DIFFERS_LOG_PREFIX`. Nothing else changes: the same bars
+    are returned, written to the cache and recorded in the fetch and attempt
+    logs exactly as when every bar matches. F-9b turns the record's verdict
+    into a fail-closed refusal (ADR-0024 D-2).
     """
 
     def __init__(
@@ -173,20 +207,24 @@ class MarketDataService:
         cache: PriceBarCache,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         cache_first: bool = False,
-        expected_currency: str | None = None,
+        currency_for_market: CurrencyLookup,
+        scope: ServiceScope,
     ) -> None:
+        if scope not in ("equity", "index"):
+            raise ValueError(f"unknown service scope: {scope!r}")
         self._primary = primary
         self._backups = tuple(backups)
         self._cache = cache
         self._clock = clock
         self._cache_first = cache_first
-        self._expected_currency = expected_currency
+        self._currency_for_market = currency_for_market
+        self._scope = scope
 
     def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         if self._cache_first:
             layer_zero = self._try_session_fresh_cache(symbol, market, start, end)
             if layer_zero is not None:
-                self._warn_on_currency(symbol, market, layer_zero, layer="layer0_cache")
+                self._log_currency(symbol, market, layer_zero, layer="layer0_cache")
                 return layer_zero
 
         providers: list[tuple[MarketDataProvider, DataStatus]] = [
@@ -206,7 +244,7 @@ class MarketDataService:
                 if reason is not None:
                     reasons.append(reason)
                 continue
-            self._warn_on_currency(symbol, market, result, layer="provider")
+            self._log_currency(symbol, market, result, layer="provider")
             fetched_at = self._clock()
             self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
             # ADR-0009: the attempt log feeds the cooldown, whatever happens next.
@@ -229,7 +267,7 @@ class MarketDataService:
                     )
                     reasons.append(MERGE_READBACK_FAILED_REASON)
                     continue
-                self._warn_bars_on_currency(
+                self._log_bars_currency(
                     symbol,
                     market,
                     merged.bars,
@@ -276,7 +314,7 @@ class MarketDataService:
         # to the *next* click even though nothing was fetched (ADR-0009 R-8).
         self._cache.record_attempt(symbol, market, at=self._clock())
         fallback = self._fall_back_to_cache(symbol, market, start, end, reasons)
-        self._warn_on_currency(symbol, market, fallback, layer="fallback_cache")
+        self._log_currency(symbol, market, fallback, layer="fallback_cache")
         return fallback
 
     def get_cached_bars(
@@ -319,16 +357,16 @@ class MarketDataService:
                 is Verdict.HAS_LATEST_SESSION
             )
         answer = self._cached_result(cached, checked_at=checked_at, now=now, current=current)
-        self._warn_on_currency(symbol, market, answer, layer="cache_only")
+        self._log_currency(symbol, market, answer, layer="cache_only")
         return answer
 
-    def _warn_on_currency(
+    def _log_currency(
         self, symbol: str, market: Market, result: ProviderResult, *, layer: str
     ) -> None:
         """Log :data:`CURRENCY_DIFFERS_LOG_PREFIX` for ``result``'s bars; never alters it."""
-        self._warn_bars_on_currency(symbol, market, result.bars, layer=layer, source=result.source)
+        self._log_bars_currency(symbol, market, result.bars, layer=layer, source=result.source)
 
-    def _warn_bars_on_currency(
+    def _log_bars_currency(
         self,
         symbol: str,
         market: Market,
@@ -337,29 +375,39 @@ class MarketDataService:
         layer: str,
         source: str,
     ) -> None:
-        """One WARNING when any of ``bars`` differs from the injected currency (F-9a).
+        """One record when ``bars`` would be refused by the currency gate (F-9b0, TA5 R-60).
 
         Observation only: reads ``bars`` and logs, nothing else. ``layer``
-        names where the bars came from (``provider``, ``incremental_readback``,
-        ``layer0_cache``, ``fallback_cache``, ``cache_only``).
+        names the checkpoint (``provider``, ``incremental_readback``,
+        ``layer0_cache``, ``fallback_cache``, ``cache_only``). An empty series
+        has nothing to judge and logs nothing.
         """
-        expected = self._expected_currency
+        if not bars:
+            return
+        expected = self._currency_for_market(market)
         if expected is None:
-            return
-        issues = check_currency(bars, expected)
-        if not issues:
-            return
-        logger.warning(
+            verdict = "mismatch"
+            mismatched = len(bars)
+        else:
+            verdict = classify_currency(bars, expected)
+            if verdict == "ok":
+                return
+            mismatched = len(check_currency(bars, expected))
+        logger.log(
+            logging.ERROR if self._scope == "index" else logging.WARNING,
             CURRENCY_DIFFERS_LOG_PREFIX
-            + " symbol=%s market=%s expected=%s observed=%s mismatched=%d/%d layer=%s source=%s",
+            + " symbol=%s market=%s expected=%s observed=%s mismatched=%d/%d layer=%s source=%s"
+            " verdict=%s scope=%s",
             symbol,
             market,
-            expected,
-            ",".join(sorted({bar.currency for bar in bars})),
-            len(issues),
+            EXPECTED_UNKNOWN_LOG_VALUE if expected is None else expected,
+            _observed_currencies(bars),
+            mismatched,
             len(bars),
             layer,
             source,
+            verdict,
+            self._scope,
         )
 
     def _incremental_start(self, symbol: str, market: Market, start: date, end: date) -> date:

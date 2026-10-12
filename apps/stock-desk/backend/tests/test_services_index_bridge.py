@@ -20,9 +20,9 @@ import pytest
 
 from app.data.cache import PriceBarCache
 from app.data.interface import DataStatus, PriceBar, ProviderResult
-from app.data.service import MarketDataService
 from app.services import index as I
 from tests.api_helpers import recent_bars, trending_closes
+from tests.market_service_helpers import index_service
 
 START = date(2024, 1, 1)
 END = date(2026, 7, 26)
@@ -186,7 +186,7 @@ def test_the_facade_preserves_everything_but_the_status() -> None:
 def _stack(adapter: FakeIndexAdapter, tmp_path: Path) -> I.IndexSeriesService:
     """Exactly the composition in ``app/api/deps.py``, on a temp database."""
     return I.IndexSeriesService(
-        MarketDataService(
+        index_service(
             primary=I.IndexProviderBridge(adapter),
             cache=PriceBarCache(db_path=tmp_path / "index.db"),
             cache_first=True,
