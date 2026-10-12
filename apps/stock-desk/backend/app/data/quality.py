@@ -56,7 +56,7 @@ def check_price_bars(
     issues: list[QualityIssue] = []
     issues.extend(_check_duplicates(bars))
     issues.extend(_check_future_dates(bars, reference_now))
-    issues.extend(_check_currency(bars, expected_currency))
+    issues.extend(check_currency(bars, expected_currency))
     issues.extend(_check_ohlc_consistency(bars))
     issues.extend(_check_missing_trading_days(bars, trading_calendar))
     return issues
@@ -103,7 +103,18 @@ def _check_future_dates(
     return issues
 
 
-def _check_currency(bars: Sequence[PriceBar], expected_currency: str | None) -> list[QualityIssue]:
+def check_currency(bars: Sequence[PriceBar], expected_currency: str | None) -> list[QualityIssue]:
+    """One ``CURRENCY_MISMATCH`` issue per bar whose ``currency`` is not ``expected_currency``.
+
+    Public since F-9a so the service layer and the inventory can share the
+    one comparison :func:`check_price_bars` already made. The expected
+    currency is always a parameter: the market -> currency table lives in
+    ``app.positions.models.MARKET_CURRENCY`` and the assembly layer
+    (``app.api.deps``) injects the value, so ``app.data`` never imports
+    ``app.positions`` for it (task X-3, KX-A1). ``None`` means "not checked"
+    and yields no issue; the comparison is exact (no case folding), the same
+    as ``app.positions.models.currency_matches_market``.
+    """
     if expected_currency is None:
         return []
     issues: list[QualityIssue] = []

@@ -3,6 +3,7 @@
     uv run python -m app.data.diagnose                 # 只看本機快取與冷卻狀態，不連線
     uv run python -m app.data.diagnose --probe         # 另外實際走一次資料梯子（會連線）
     uv run python -m app.data.diagnose --probe --clear-cooldown   # 先清掉冷卻再走梯子
+    uv run python -m app.data.diagnose currency-inventory [--db PATH]
 
 WHY
 ===
@@ -17,20 +18,30 @@ layer's own reason sentence.
 
 It never fabricates a verdict: a symbol with no bars is reported as ``無資料``
 with the reason the ladder gave, not as "probably fine".
+
+The ``currency-inventory`` subcommand (task F-9a) is a separate, strictly
+read-only report: see :func:`currency_inventory`.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
+import sqlite3
 import sys
+from collections.abc import Mapping
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Final
 
-from app.data.cache import PriceBarCache
+from app.data.admission import AdmissionReason, admit_symbol
+from app.data.cache import PriceBarCache, resolve_db_path
 from app.data.freshness import policy_for
 from app.data.interface import DataStatus
 from app.directory.store import SecurityDirectoryStore
-from app.positions.models import Market
+from app.positions.models import MARKET_CURRENCY, Market
 from app.positions.store import PositionStore
 from app.services.market import MarketDataResolver, load_bars, trading_days_behind_market
 
@@ -211,6 +222,332 @@ def render_report(rows: list[SymbolDiagnosis], *, probed: bool) -> str:
     return "\n".join(lines) + "\n\n" + summary
 
 
+#: Index series share the bars cache under a ``^`` key (ADR-0005 I-7). They are
+#: outside symbol admission by design (ADR-0024 draft D-4), so the inventory
+#: leaves them out of part (b); they still count as sessions in part (c).
+_INDEX_PREFIX: Final = "^"
+CURRENCY_INVENTORY_COMMAND: Final = "currency-inventory"
+
+
+@dataclass(frozen=True)
+class SuffixReviewHeuristic:
+    """Which admitted US single-letter suffixes the inventory asks a person to look at.
+
+    An inventory heuristic, **not** an admission rule (risk-compliance ruling
+    F9W-15, adopted by the coordinator): admission lets every ``ROOT.X`` /
+    ``ROOT-X`` through because a single-letter foreign exchange suffix
+    (``VOD.L``) has the very shape of a share class (``BRK.B``). Rows written
+    under such a symbol before F-9b are invisible to the currency gate (the
+    adapters stamp USD on them) and out of reach of the F-9e clean-up, so the
+    inventory lists every admitted US symbol whose suffix letter is *not* one
+    of ``common_class_letters``, for the CEO to confirm one by one. It decides
+    nothing and refuses nothing; the letter set is a judgement, unverified
+    against any exchange list.
+    """
+
+    common_class_letters: frozenset[str]
+    verified: bool
+    verified_on: str | None
+    note: str
+
+
+#: Class letters common enough among US share classes (``BRK.A``/``BRK.B``,
+#: ``BF.A``/``BF.B``, ``.C`` classes) not to need a second look. Heuristic only.
+US_SUFFIX_REVIEW_HEURISTIC: Final = SuffixReviewHeuristic(
+    common_class_letters=frozenset({"A", "B", "C"}),
+    verified=False,
+    verified_on=None,
+    note="Inventory heuristic, not an admission rule: other single letters go to manual review.",
+)
+
+_US_SINGLE_LETTER_SUFFIX: Final = re.compile(r"[A-Z]{1,5}[.\-]([A-Z])")
+
+
+def needs_suffix_review(symbol: str, market: str) -> bool:
+    """An admitted US symbol whose single-letter suffix is outside the common class letters."""
+    if market != "US" or not admit_symbol(symbol, market).admitted:
+        return False
+    match = _US_SINGLE_LETTER_SUFFIX.fullmatch(symbol)
+    return (
+        match is not None and match.group(1) not in US_SUFFIX_REVIEW_HEURISTIC.common_class_letters
+    )
+
+
+@dataclass(frozen=True)
+class CurrencyMismatchSeries:
+    """A cached series holding bars whose currency is not its market's."""
+
+    symbol: str
+    market: str
+    #: The market's currency, or ``None`` for a market the table does not know.
+    expected: str | None
+    mismatched_rows: int
+    #: Currencies of the mismatching rows, sorted.
+    observed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RefusedSymbol:
+    """A symbol admission refuses, with a count and nothing else.
+
+    ``count`` is cached rows for a cached series, position rows for a holding.
+    Quantities and costs are never read, so they cannot be reported.
+    """
+
+    symbol: str
+    market: str
+    reason: AdmissionReason
+    count: int
+
+
+@dataclass(frozen=True)
+class ReviewSymbol:
+    """An admitted symbol listed for manual review (:data:`US_SUFFIX_REVIEW_HEURISTIC`).
+
+    ``count`` is cached rows for a cached series, position rows for a holding.
+    """
+
+    symbol: str
+    market: str
+    count: int
+
+
+@dataclass(frozen=True)
+class CalendarContribution:
+    """How much of one market's observed calendar the flagged series supply (C4).
+
+    ``market_trading_days`` treats a date as a session because *any* series of
+    the market has a bar on it, so a foreign listing can add sessions the
+    market never held. ``only_flagged_dates`` is that estimate: dates on which
+    no unflagged series of the market has a bar.
+    """
+
+    market: str
+    flagged_series: int
+    flagged_dates: int
+    only_flagged_dates: int
+
+
+@dataclass(frozen=True)
+class CurrencyInventory:
+    """Everything :func:`currency_inventory` found; empty tuples mean clean."""
+
+    mismatched: tuple[CurrencyMismatchSeries, ...]
+    refused_cached: tuple[RefusedSymbol, ...]
+    refused_held: tuple[RefusedSymbol, ...]
+    calendar: tuple[CalendarContribution, ...]
+    #: Tables the database does not have (nothing to inspect there).
+    missing_tables: tuple[str, ...]
+    #: (d) admitted, but with an uncommon single-letter suffix (manual review).
+    review_cached: tuple[ReviewSymbol, ...] = ()
+    review_held: tuple[ReviewSymbol, ...] = ()
+
+    @property
+    def has_findings(self) -> bool:
+        return bool(
+            self.mismatched
+            or self.refused_cached
+            or self.refused_held
+            or self.review_cached
+            or self.review_held
+        )
+
+
+def open_read_only(db_path: Path) -> sqlite3.Connection:
+    """Open ``db_path`` with SQLite's ``mode=ro``: every write is refused by SQLite.
+
+    A missing file is an error, never created. No pragma that writes (WAL
+    switch, schema creation) is issued -- unlike the stores, which all
+    initialise their schema on construction and are therefore not used here.
+    """
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def _existing_tables(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    return {str(name) for (name,) in rows}
+
+
+def currency_inventory(db_path: Path, *, market_currency: Mapping[str, str]) -> CurrencyInventory:
+    """Inventory the bars cache and the book for F-9's three questions, read-only.
+
+    (a) cached series with bars whose ``currency`` differs from
+    ``market_currency[market]``; (b) cached series and held symbols that
+    :func:`app.data.admission.admit_symbol` refuses (held symbols are checked
+    as stored, not canonicalised); (c) per market, how many observed sessions
+    the series from (a) and (b) supply, and how many only they supply;
+    (d) cached series and held symbols that admission lets through with a
+    single-letter suffix outside :data:`US_SUFFIX_REVIEW_HEURISTIC`'s common
+    class letters, listed for manual review (not counted in (c)).
+
+    ``market_currency`` is injected (the CLI passes ``MARKET_CURRENCY``) so the
+    comparison has one source. The database is opened with ``mode=ro`` and
+    only ``SELECT`` is issued; the positions query names ``symbol`` and
+    ``market`` alone, so no quantity or cost is ever read.
+    """
+    with closing(open_read_only(db_path)) as conn:
+        tables = _existing_tables(conn)
+        missing = tuple(name for name in ("price_bars_cache", "positions") if name not in tables)
+
+        mismatch_rows: dict[tuple[str, str], list[tuple[str, int]]] = {}
+        refused_cached: list[RefusedSymbol] = []
+        review_cached: list[ReviewSymbol] = []
+        dates_by_series: dict[tuple[str, str], set[str]] = {}
+        if "price_bars_cache" in tables:
+            per_currency = conn.execute(
+                """
+                SELECT symbol, market, currency, COUNT(*)
+                FROM price_bars_cache
+                GROUP BY symbol, market, currency
+                ORDER BY market, symbol, currency
+                """
+            ).fetchall()
+            rows_by_series: dict[tuple[str, str], int] = {}
+            for symbol, market, currency, count in per_currency:
+                key = (str(symbol), str(market))
+                rows_by_series[key] = rows_by_series.get(key, 0) + int(count)
+                if market_currency.get(key[1]) != currency:
+                    mismatch_rows.setdefault(key, []).append((str(currency), int(count)))
+            for (symbol, market), count in rows_by_series.items():
+                if symbol.startswith(_INDEX_PREFIX):
+                    continue
+                verdict = admit_symbol(symbol, market)
+                if not verdict.admitted:
+                    refused_cached.append(RefusedSymbol(symbol, market, verdict.reason, count))
+                elif needs_suffix_review(symbol, market):
+                    review_cached.append(ReviewSymbol(symbol, market, count))
+            for symbol, market, trade_date in conn.execute(
+                "SELECT symbol, market, trade_date FROM price_bars_cache"
+            ):
+                dates_by_series.setdefault((str(symbol), str(market)), set()).add(str(trade_date))
+
+        refused_held: list[RefusedSymbol] = []
+        review_held: list[ReviewSymbol] = []
+        if "positions" in tables:
+            held = conn.execute(
+                """
+                SELECT symbol, market, COUNT(*)
+                FROM positions
+                GROUP BY symbol, market
+                ORDER BY market, symbol
+                """
+            ).fetchall()
+            for symbol, market, count in held:
+                verdict = admit_symbol(str(symbol), str(market))
+                if not verdict.admitted:
+                    refused_held.append(
+                        RefusedSymbol(str(symbol), str(market), verdict.reason, int(count))
+                    )
+                elif needs_suffix_review(str(symbol), str(market)):
+                    review_held.append(ReviewSymbol(str(symbol), str(market), int(count)))
+
+    mismatched = tuple(
+        CurrencyMismatchSeries(
+            symbol=symbol,
+            market=market,
+            expected=market_currency.get(market),
+            mismatched_rows=sum(count for _, count in found),
+            observed=tuple(sorted(currency for currency, _ in found)),
+        )
+        for (symbol, market), found in sorted(
+            mismatch_rows.items(), key=lambda item: (item[0][1], item[0][0])
+        )
+    )
+    flagged = set(mismatch_rows) | {(r.symbol, r.market) for r in refused_cached}
+    calendar: list[CalendarContribution] = []
+    for market in sorted({market for _, market in flagged}):
+        flagged_dates: set[str] = set()
+        other_dates: set[str] = set()
+        for (symbol, series_market), dates in dates_by_series.items():
+            if series_market != market:
+                continue
+            (flagged_dates if (symbol, market) in flagged else other_dates).update(dates)
+        calendar.append(
+            CalendarContribution(
+                market=market,
+                flagged_series=sum(1 for _, flagged_market in flagged if flagged_market == market),
+                flagged_dates=len(flagged_dates),
+                only_flagged_dates=len(flagged_dates - other_dates),
+            )
+        )
+    return CurrencyInventory(
+        mismatched=mismatched,
+        refused_cached=tuple(sorted(refused_cached, key=lambda r: (r.market, r.symbol))),
+        refused_held=tuple(refused_held),
+        calendar=tuple(calendar),
+        missing_tables=missing,
+        review_cached=tuple(sorted(review_cached, key=lambda r: (r.market, r.symbol))),
+        review_held=tuple(review_held),
+    )
+
+
+def render_currency_inventory(inventory: CurrencyInventory, *, db_path: Path) -> str:
+    """Plain Markdown, symbols and counts only (no quantity, no cost)."""
+
+    def table(header: list[str], rows: list[list[str]]) -> list[str]:
+        if not rows:
+            return ["(none)"]
+        out = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+        out += ["| " + " | ".join(cells) + " |" for cells in rows]
+        return out
+
+    lines = [f"currency inventory (read-only): {db_path}"]
+    if inventory.missing_tables:
+        lines.append("tables absent: " + ", ".join(inventory.missing_tables))
+    lines += ["", "(a) cached series whose bar currency differs from the market currency"]
+    lines += table(
+        ["symbol", "market", "expected", "observed", "rows"],
+        [
+            [s.symbol, s.market, s.expected or "-", ",".join(s.observed), str(s.mismatched_rows)]
+            for s in inventory.mismatched
+        ],
+    )
+    lines += ["", "(b) cached series refused by symbol admission"]
+    lines += table(
+        ["symbol", "market", "reason", "rows"],
+        [[r.symbol, r.market, r.reason.value, str(r.count)] for r in inventory.refused_cached],
+    )
+    lines += ["", "(b) held symbols refused by symbol admission"]
+    lines += table(
+        ["symbol", "market", "reason", "positions"],
+        [[r.symbol, r.market, r.reason.value, str(r.count)] for r in inventory.refused_held],
+    )
+    lines += ["", "(c) observed sessions supplied by the series flagged in (a) and (b)"]
+    lines += table(
+        ["market", "flagged_series", "dates", "only_from_flagged"],
+        [
+            [c.market, str(c.flagged_series), str(c.flagged_dates), str(c.only_flagged_dates)]
+            for c in inventory.calendar
+        ],
+    )
+    letters = ",".join(sorted(US_SUFFIX_REVIEW_HEURISTIC.common_class_letters))
+    for kind, rows, unit in (
+        ("cached series", inventory.review_cached, "rows"),
+        ("held symbols", inventory.review_held, "positions"),
+    ):
+        lines += [
+            "",
+            f"(d) {kind} admitted with a single-letter suffix other than {letters} (manual review)",
+        ]
+        lines += table(
+            ["symbol", "market", unit], [[r.symbol, r.market, str(r.count)] for r in rows]
+        )
+    return "\n".join(lines)
+
+
+def _run_currency_inventory(db: str | None) -> int:
+    """Exit status: 0 clean, 1 findings, 2 the file could not be read read-only."""
+    db_path = Path(db) if db is not None else resolve_db_path()
+    try:
+        inventory = currency_inventory(db_path, market_currency=MARKET_CURRENCY)
+    except sqlite3.Error as error:
+        print(f"cannot read {db_path} read-only: {error}", file=sys.stderr)
+        return 2
+    print(render_currency_inventory(inventory, db_path=db_path))
+    return 1 if inventory.has_findings else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.data.diagnose",
@@ -226,7 +563,26 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    commands = parser.add_subparsers(dest="command")
+    inventory_parser = commands.add_parser(
+        CURRENCY_INVENTORY_COMMAND,
+        help=(
+            "read-only: cached series whose currency differs from the market, symbols "
+            "refused by admission, and the sessions they supply (task F-9a)"
+        ),
+    )
+    inventory_parser.add_argument(
+        "--db",
+        default=None,
+        help="SQLite file to inspect (default: STOCK_DESK_DB_PATH, else ./data/stock-desk.db)",
+    )
     args = parser.parse_args(argv)
+    if args.command == CURRENCY_INVENTORY_COMMAND:
+        if args.probe or args.clear_cooldown:
+            parser.error(
+                f"{CURRENCY_INVENTORY_COMMAND} is read-only; drop --probe/--clear-cooldown"
+            )
+        return _run_currency_inventory(args.db)
 
     # Imported here so the CLI never builds live adapters unless asked to probe.
     from app.api.deps import (

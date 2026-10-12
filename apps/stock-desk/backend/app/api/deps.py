@@ -29,6 +29,7 @@ from app.kelly.store import KellyInputStore
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from app.portfolio.valuation import PositionValuator
+from app.positions.models import MARKET_CURRENCY
 from app.positions.store import PositionStore
 from app.services.index import (
     IndexProviderBridge,
@@ -91,6 +92,10 @@ def _default_resolver() -> MarketDataResolver:
     either, the ladder ends at ``unavailable`` carrying both reasons -- never
     at a fabricated price. A market absent from this map has no adapter at all
     and surfaces as ``insufficient_data`` (see ``app/services/market.py``).
+
+    Each ladder is told its market's currency from the one table that defines
+    it (``MARKET_CURRENCY``, task X-3 KX-A1): in F-9a a bar carrying any other
+    currency is only logged as a WARNING, with the answer unchanged.
     """
     cache = _default_cache()
     tw_service = MarketDataService(
@@ -98,12 +103,14 @@ def _default_resolver() -> MarketDataResolver:
         backups=[TpexAdapter(), FinMindAdapter()],
         cache=cache,
         cache_first=True,
+        expected_currency=MARKET_CURRENCY["TW"],
     )
     us_service = MarketDataService(
         primary=AlphaVantageAdapter(),
         backups=[_default_yfinance()],
         cache=cache,
         cache_first=True,
+        expected_currency=MARKET_CURRENCY["US"],
     )
     return {"TW": tw_service, "US": us_service}
 
@@ -127,11 +134,18 @@ def _default_index_resolver() -> IndexServiceResolver:
     user actually holds. Both markets share one service; the market is only a
     cache-key dimension, and which one an index belongs to is the adapter's
     fact to state.
+
+    No currency is injected, on purpose (task F-9a): this one service answers
+    for both markets (``^TWII`` in TWD, ``^GSPC`` in USD), so a single expected
+    currency would flag every series of the other market. Checking the index
+    path needs a per-market expectation; that is F-9b's to design (ADR-0024
+    draft D-4: index series are checked for currency, never for shape).
     """
     service = MarketDataService(
         primary=IndexProviderBridge(_default_yfinance()),
         cache=_default_cache(),
         cache_first=True,
+        expected_currency=None,
     )
     disclosed = IndexSeriesService(service)
     return {"TW": disclosed, "US": disclosed}

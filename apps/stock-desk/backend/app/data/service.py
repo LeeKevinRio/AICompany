@@ -15,8 +15,17 @@ from datetime import UTC, date, datetime, timedelta
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
+from app.data.quality import check_currency
 
 logger = logging.getLogger(__name__)
+
+#: Fixed opening of the one WARNING the service logs when bars it obtained
+#: carry a currency other than the injected market currency (task F-9a). A
+#: log line for the operator, never shown to a reader; the fields that follow
+#: are ``symbol``, ``market``, ``expected``, ``observed`` (every currency on
+#: the bars, sorted), ``mismatched`` (count of differing bars / total),
+#: ``layer`` and ``source``. No response body is ever logged.
+CURRENCY_DIFFERS_LOG_PREFIX = "price bars currency differs from market:"
 
 #: Joins several layers' reasons into the one ``reason`` slot a
 #: ``ProviderResult`` has, in ladder order. Each sentence keeps its own full
@@ -138,6 +147,22 @@ class MarketDataService:
     "no data". A successful fetch carries a reason only when the series it
     returns is spliced from more than one provider (ADR-0005 D-5 via ADR-0009
     D-7); otherwise there is nothing to explain.
+
+    ``expected_currency`` (task F-9a, observation only): the currency every
+    bar of this service's market must carry, injected by the assembly layer
+    (``app.api.deps``) from ``app.positions.models.MARKET_CURRENCY`` -- this
+    module does not import ``app.positions`` (KX-A1). When set, bars obtained
+    from a provider or read back from the cache that carry any other currency
+    produce one WARNING per layer that obtained them (an incremental fetch
+    logs both the live tail and the read-back series), starting with
+    :data:`CURRENCY_DIFFERS_LOG_PREFIX`; nothing else changes -- the same
+    bars are returned, written to the cache and recorded in the fetch and
+    attempt logs exactly as without it. ``None``
+    (the default) checks nothing. It is optional in F-9a only so the
+    constructor calls across the test suite need not change; F-9b turns the
+    mismatch into a fail-closed refusal and makes the parameter required
+    (ADR-0024 draft D-5). The index service is built without it: it is one
+    service shared by both markets, so no single currency fits it.
     """
 
     def __init__(
@@ -148,17 +173,20 @@ class MarketDataService:
         cache: PriceBarCache,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         cache_first: bool = False,
+        expected_currency: str | None = None,
     ) -> None:
         self._primary = primary
         self._backups = tuple(backups)
         self._cache = cache
         self._clock = clock
         self._cache_first = cache_first
+        self._expected_currency = expected_currency
 
     def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         if self._cache_first:
             layer_zero = self._try_session_fresh_cache(symbol, market, start, end)
             if layer_zero is not None:
+                self._warn_on_currency(symbol, market, layer_zero, layer="layer0_cache")
                 return layer_zero
 
         providers: list[tuple[MarketDataProvider, DataStatus]] = [
@@ -178,6 +206,7 @@ class MarketDataService:
                 if reason is not None:
                     reasons.append(reason)
                 continue
+            self._warn_on_currency(symbol, market, result, layer="provider")
             fetched_at = self._clock()
             self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
             # ADR-0009: the attempt log feeds the cooldown, whatever happens next.
@@ -200,6 +229,13 @@ class MarketDataService:
                     )
                     reasons.append(MERGE_READBACK_FAILED_REASON)
                     continue
+                self._warn_bars_on_currency(
+                    symbol,
+                    market,
+                    merged.bars,
+                    layer="incremental_readback",
+                    source=merged.source,
+                )
                 bars = merged.bars
                 logger.info(
                     "incremental fetch for %s: asked %s for %s..%s instead of %s..%s",
@@ -239,7 +275,9 @@ class MarketDataService:
         # Every live rung declined: remember the attempt so the cooldown applies
         # to the *next* click even though nothing was fetched (ADR-0009 R-8).
         self._cache.record_attempt(symbol, market, at=self._clock())
-        return self._fall_back_to_cache(symbol, market, start, end, reasons)
+        fallback = self._fall_back_to_cache(symbol, market, start, end, reasons)
+        self._warn_on_currency(symbol, market, fallback, layer="fallback_cache")
+        return fallback
 
     def get_cached_bars(
         self, symbol: str, market: Market, start: date, end: date
@@ -280,7 +318,49 @@ class MarketDataService:
                 )
                 is Verdict.HAS_LATEST_SESSION
             )
-        return self._cached_result(cached, checked_at=checked_at, now=now, current=current)
+        answer = self._cached_result(cached, checked_at=checked_at, now=now, current=current)
+        self._warn_on_currency(symbol, market, answer, layer="cache_only")
+        return answer
+
+    def _warn_on_currency(
+        self, symbol: str, market: Market, result: ProviderResult, *, layer: str
+    ) -> None:
+        """Log :data:`CURRENCY_DIFFERS_LOG_PREFIX` for ``result``'s bars; never alters it."""
+        self._warn_bars_on_currency(symbol, market, result.bars, layer=layer, source=result.source)
+
+    def _warn_bars_on_currency(
+        self,
+        symbol: str,
+        market: Market,
+        bars: Sequence[PriceBar],
+        *,
+        layer: str,
+        source: str,
+    ) -> None:
+        """One WARNING when any of ``bars`` differs from the injected currency (F-9a).
+
+        Observation only: reads ``bars`` and logs, nothing else. ``layer``
+        names where the bars came from (``provider``, ``incremental_readback``,
+        ``layer0_cache``, ``fallback_cache``, ``cache_only``).
+        """
+        expected = self._expected_currency
+        if expected is None:
+            return
+        issues = check_currency(bars, expected)
+        if not issues:
+            return
+        logger.warning(
+            CURRENCY_DIFFERS_LOG_PREFIX
+            + " symbol=%s market=%s expected=%s observed=%s mismatched=%d/%d layer=%s source=%s",
+            symbol,
+            market,
+            expected,
+            ",".join(sorted({bar.currency for bar in bars})),
+            len(issues),
+            len(bars),
+            layer,
+            source,
+        )
 
     def _incremental_start(self, symbol: str, market: Market, start: date, end: date) -> date:
         """Where a live fetch for ``[start, end]`` may begin without losing anything (D-7).
