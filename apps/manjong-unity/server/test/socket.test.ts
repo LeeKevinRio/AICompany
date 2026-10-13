@@ -91,6 +91,21 @@ async function login(token?: string): Promise<{ client: Client; token: string; p
 
 // ---- independent re-computation of what the server should tell the player ----
 
+/**
+ * 食替禁止 set for the turn after a chi / pon event, computed independently of the engine: the claimed
+ * tile, plus for a chi with the claimed tile at one end of the run the 筋 tile beyond the other end.
+ */
+function forbiddenAfterClaim(claim: Msg): string[] {
+  const out: string[] = [claim.tile];
+  if (claim.type !== 'chi') return out;
+  const [low, , high] = claim.tiles as string[];
+  const rank = Number(claim.tile[0]);
+  const suit = claim.tile.slice(1);
+  if (claim.tile === low && rank + 3 <= 9) out.push(`${rank + 3}${suit}`);
+  else if (claim.tile === high && rank - 3 >= 1) out.push(`${rank - 3}${suit}`);
+  return out;
+}
+
 function count(tiles: string[], t: string): number {
   return tiles.filter((x) => x === t).length;
 }
@@ -150,6 +165,12 @@ interface Coverage {
   aiDeclaredWins: number;
   /** Discards right after a chi / pon (any seat), each checked against 食替禁止. */
   claimDiscards: number;
+  /** Of those, discards right after a chi whose forbidden set includes a 筋 tile. */
+  sujiDiscards: number;
+  /** My own turns right after my chi / pon, whose discard options were checked against the forbidden set. */
+  myClaimTurns: number;
+  /** Of those, turns right after my chi whose forbidden set includes a 筋 tile. */
+  mySujiTurns: number;
 }
 
 /** Verifies every option the server offers against an independent computation. */
@@ -259,7 +280,8 @@ function choose(view: Msg, cov: Coverage, declareChance: { n: number }): Msg {
     cov.declared++;
     return ting.reduce((a, b) => (left(b) > left(a) ? b : a));
   }
-  if (find('pass')) return find('pon') ?? find('pass');
+  // Claim whenever possible so the turns right after my own chi / pon (食替禁止) get checked too.
+  if (find('pass')) return find('pon') ?? opts.find((o) => o.type === 'chi') ?? find('pass');
   // Play sensibly (lowest shanten) so the test regularly reaches tenpai and wins.
   const me = view.players[view.mySeat];
   const full: string[] = [...me.hand, ...(me.drawnTile ? [me.drawnTile] : [])];
@@ -298,6 +320,9 @@ describe('websocket game', () => {
       aiWins: 0,
       aiDeclaredWins: 0,
       claimDiscards: 0,
+      sujiDiscards: 0,
+      myClaimTurns: 0,
+      mySujiTurns: 0,
     };
     const declareChance = { n: 0 };
     // WS_GAMES=200 npm test -- socket  runs a long verification pass (used before releases).
@@ -353,10 +378,13 @@ describe('websocket game', () => {
           }
           if (event.type === 'chi' || event.type === 'pon') lastClaim = event;
           if (lastClaim && event.seat === lastClaim.seat && (event.type === 'discard' || event.type === 'ting')) {
-            // 食替禁止: the claimer's next discard (or 報聽) is never the tile it just claimed.
-            expect(event.tile).not.toBe(lastClaim.tile);
+            // 食替禁止: the claimer's next discard (or 報聽) is neither the tile it just claimed nor,
+            // after a chi, the 筋 tile at the far end of the run.
+            const forbidden = forbiddenAfterClaim(lastClaim);
+            expect(forbidden).not.toContain(event.tile);
             if (event.type === 'discard') {
               cov.claimDiscards++;
+              if (forbidden.length > 1) cov.sujiDiscards++;
               lastClaim = null;
             }
           }
@@ -414,6 +442,16 @@ describe('websocket game', () => {
         }
         if (view.phase === 'game_end') break;
         verifyState(view, cov);
+        if (lastClaim && lastClaim.seat === view.mySeat && view.options.some((o: Msg) => o.type === 'discard')) {
+          // My turn right after my chi / pon: exactly the tiles outside the forbidden set are discardable.
+          const forbidden = forbiddenAfterClaim(lastClaim);
+          const offered = view.options.filter((o: Msg) => o.type === 'discard').map((o: Msg) => o.tile);
+          const expected = [...new Set<string>(view.players[view.mySeat].hand)].filter((t) => !forbidden.includes(t));
+          expect([...offered].sort()).toEqual(expected.sort());
+          for (const o of view.options) if (o.type === 'ting') expect(forbidden).not.toContain(o.tile);
+          cov.myClaimTurns++;
+          if (forbidden.length > 1) cov.mySujiTurns++;
+        }
         const pick = choose(view, cov, declareChance);
         expect(pick).toBeDefined();
         ownDiscard = pick.type === 'discard' || pick.type === 'ting' ? pick.tile : null;
@@ -447,6 +485,9 @@ describe('websocket game', () => {
       expect(cov.aiDeclared).toBeGreaterThan(0);
       expect(cov.aiDeclaredDiscards).toBeGreaterThan(0);
       expect(cov.claimDiscards).toBeGreaterThan(0);
+      expect(cov.sujiDiscards).toBeGreaterThan(0);
+      expect(cov.myClaimTurns).toBeGreaterThan(0);
+      expect(cov.mySujiTurns).toBeGreaterThan(0);
     }
     // eslint-disable-next-line no-console
     console.log('coverage', cov);

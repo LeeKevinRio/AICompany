@@ -105,10 +105,11 @@ type Phase =
       seat: number;
       justDrew: boolean;
       /**
-       * 食替禁止: set on the turn right after a chi / pon to the claimed tile, which may not be
-       * discarded (nor declared on) this turn. Absent on every turn that starts with a draw.
+       * 食替禁止: set on the turn right after a chi / pon to the tiles that may not be discarded
+       * (nor declared on) this turn: the claimed tile, plus for a chi the 筋 tile at the far end of the
+       * run (see claimForbiddenDiscards). Absent on every turn that starts with a draw.
        */
-      forbiddenDiscard?: Tile;
+      forbiddenDiscards?: Tile[];
     }
   | {
       type: 'claim';
@@ -386,7 +387,7 @@ export function optionsFor(game: GameState, seat: number): GameOption[] {
   const phase = hand.phase;
   switch (phase.type) {
     case 'turn':
-      return phase.seat === seat ? turnOptions(game, seat, phase.justDrew, phase.forbiddenDiscard) : [];
+      return phase.seat === seat ? turnOptions(game, seat, phase.justDrew, phase.forbiddenDiscards ?? []) : [];
     case 'claim':
     case 'robKong':
       return phase.responses[seat] === null ? (phase.options[seat] ?? []) : [];
@@ -410,7 +411,7 @@ function discardOption(game: GameState, seat: number, tile: Tile): GameOption {
   return { ...opt(`discard:${tile}`, 'discard', label, tile), waits };
 }
 
-function turnOptions(game: GameState, seat: number, justDrew: boolean, forbidden?: Tile): GameOption[] {
+function turnOptions(game: GameState, seat: number, justDrew: boolean, forbidden: Tile[]): GameOption[] {
   const p = game.hand.players[seat]!;
   const options: GameOption[] = [];
   const canKong = liveWallCount(game.hand) > 0;
@@ -438,9 +439,9 @@ function turnOptions(game: GameState, seat: number, justDrew: boolean, forbidden
       }
     }
   }
-  // 食替禁止: after a chi / pon the claimed tile cannot go straight back out. claimOptions never
-  // offers a claim that would leave only that tile, so the filter cannot empty the list.
-  const discards = [...new Set(p.hand)].filter((t) => t !== forbidden).map((t) => discardOption(game, seat, t));
+  // 食替禁止: after a chi / pon the forbidden tiles cannot go straight back out. claimOptions never
+  // offers a claim that would leave only forbidden tiles, so the filter cannot empty the list.
+  const discards = [...new Set(p.hand)].filter((t) => !forbidden.includes(t)).map((t) => discardOption(game, seat, t));
   options.push(...discards);
   // 報聽: declaring is the same discard, offered only where it leaves the hand ready.
   for (const d of discards) {
@@ -452,13 +453,31 @@ function turnOptions(game: GameState, seat: number, justDrew: boolean, forbidden
 }
 
 /**
- * Whether claiming `tile` with `used` from the hand leaves something other than `tile` to discard
- * (食替禁止 would otherwise leave the seat without a legal discard).
+ * 食替禁止: the tiles that may not be discarded on the turn right after claiming `tile` into the meld
+ * `meldTiles` (sorted low to high). Always the claimed tile itself; for a chi where the claimed tile
+ * sits at one end of the run, also the 筋 tile just beyond the other end, when it exists:
+ * 56 + 4 forbids 4 and 7, 23 + 4 forbids 4 and 1, 46 + 5 (坎張) only 5, 12 + 3 only 3 (no 0).
  */
-function leavesLegalDiscard(hand: Tile[], used: Tile[], tile: Tile): boolean {
+export function claimForbiddenDiscards(meldTiles: Tile[], tile: Tile): Tile[] {
+  const forbidden = [tile];
+  const isRun = meldTiles.length === 3 && meldTiles[0] !== meldTiles[1];
+  if (!isRun) return forbidden;
+  const k = kindOf(tile);
+  const rank = k % 9;
+  if (tile === meldTiles[0] && rank + 3 <= 8) forbidden.push(codeOf(k + 3));
+  else if (tile === meldTiles[2] && rank - 3 >= 0) forbidden.push(codeOf(k - 3));
+  return forbidden;
+}
+
+/**
+ * Whether claiming `tile` with `used` from the hand into `meldTiles` leaves a tile outside the
+ * 食替禁止 set to discard (otherwise the seat would have no legal discard).
+ */
+function leavesLegalDiscard(hand: Tile[], used: Tile[], meldTiles: Tile[], tile: Tile): boolean {
+  const forbidden = claimForbiddenDiscards(meldTiles, tile);
   const rest = [...hand];
   removeTiles(rest, used);
-  return rest.some((t) => t !== tile);
+  return rest.some((t) => !forbidden.includes(t));
 }
 
 function claimOptions(game: GameState, seat: number, discarder: number, tile: Tile): GameOption[] {
@@ -470,7 +489,7 @@ function claimOptions(game: GameState, seat: number, discarder: number, tile: Ti
   }
   if (p.declared) return options.length > 0 ? [...options, opt('pass', 'pass', '過')] : [];
   const n = countOf(p.hand, tile);
-  if (n >= 2 && leavesLegalDiscard(p.hand, [tile, tile], tile)) {
+  if (n >= 2 && leavesLegalDiscard(p.hand, [tile, tile], [tile, tile, tile], tile)) {
     options.push(opt('pon', 'pon', `碰 ${tileName(tile)}`, tile));
   }
   if (n >= 3 && liveWallCount(game.hand) > 0) options.push(opt('kan', 'kan', `槓 ${tileName(tile)}`, tile));
@@ -483,7 +502,7 @@ function claimOptions(game: GameState, seat: number, discarder: number, tile: Ti
         if (lowRank < 0 || lowRank > 6) continue;
         const run = [low, low + 1, low + 2].map(codeOf);
         const need = run.filter((t) => t !== tile);
-        if (need.every((t) => p.hand.includes(t)) && leavesLegalDiscard(p.hand, need, tile)) {
+        if (need.every((t) => p.hand.includes(t)) && leavesLegalDiscard(p.hand, need, run, tile)) {
           options.push(opt(`chi:${run[0]}`, 'chi', `吃 ${runName(run)}`, tile, run));
         }
       }
@@ -597,7 +616,9 @@ function resolveClaim(game: GameState, emit: Emit): void {
     p.melds.push({ type: isKan ? 'kan' : 'pon', tiles, fromSeat: discarder, claimedTile: tile });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
-    if (!isKan) hand.phase = { type: 'turn', seat: ponSeat, justDrew: false, forbiddenDiscard: tile };
+    if (!isKan) {
+      hand.phase = { type: 'turn', seat: ponSeat, justDrew: false, forbiddenDiscards: claimForbiddenDiscards(tiles, tile) };
+    }
     emit({
       type: isKan ? 'kan' : 'pon',
       seat: ponSeat,
@@ -624,7 +645,12 @@ function resolveClaim(game: GameState, emit: Emit): void {
     p.melds.push({ type: 'chi', tiles: option.tiles, fromSeat: discarder, claimedTile: tile });
     hand.noCallsYet = false;
     hand.lastDiscard = null;
-    hand.phase = { type: 'turn', seat: chiSeat, justDrew: false, forbiddenDiscard: tile };
+    hand.phase = {
+      type: 'turn',
+      seat: chiSeat,
+      justDrew: false,
+      forbiddenDiscards: claimForbiddenDiscards(option.tiles, tile),
+    };
     emit({ type: 'chi', seat: chiSeat, tile, tiles: option.tiles, text: `${game.names[chiSeat]} 吃 ${runName(option.tiles)}` });
     return;
   }

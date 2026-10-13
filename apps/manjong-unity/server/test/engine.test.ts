@@ -3,6 +3,7 @@ import { chooseAction, liveWaits, type Personality } from '../src/ai/ai.js';
 import {
   IllegalActionError,
   applyAction,
+  claimForbiddenDiscards,
   createGame,
   nextHand,
   optionsFor,
@@ -109,7 +110,7 @@ describe('claims', () => {
     applyAction(game, 3, 'pass', emit);
     expect(game.hand.players[2]!.melds).toEqual([{ type: 'pon', tiles: ['5m', '5m', '5m'], fromSeat: 0, claimedTile: '5m' }]);
     expect(game.hand.players[0]!.discards).toEqual([]);
-    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscard: '5m' });
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscards: ['5m'] });
     // No draw, so no tsumo / kongs: only discards, plus 報聽 for the discards that leave the hand ready.
     expect(ids(game, 2).every((id) => id.startsWith('discard:') || id.startsWith('ting:'))).toBe(true);
     expect(ids(game, 2).filter((id) => id.startsWith('ting:')).sort()).toEqual(['ting:E', 'ting:N']);
@@ -167,7 +168,7 @@ describe('食替禁止 (no discarding the tile just claimed)', () => {
     expect(ids(game, 1)).toEqual(['chi:1p', 'pass']);
     applyAction(game, 1, 'chi:1p', emit);
     expect(game.hand.players[1]!.hand).toContain('1p');
-    expect(game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscard: '1p' });
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['1p', '4p'] });
     expect(claimed(game, 1)).toEqual([]);
     // Every other tile stays discardable; E still leaves the hand ready (on 1p).
     expect(ids(game, 1).filter((id) => id.startsWith('discard:')).sort()).toEqual(
@@ -184,7 +185,7 @@ describe('食替禁止 (no discarding the tile just claimed)', () => {
     expect(ids(game, 2)).toEqual(['pon', 'kan', 'pass']);
     applyAction(game, 2, 'pon', emit);
     expect(game.hand.players[2]!.hand).toContain('1p');
-    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscard: '1p' });
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscards: ['1p'] });
     expect(claimed(game, 2)).toEqual([]);
     expect(ids(game, 2)).toContain('discard:E');
     expect(() => applyAction(game, 2, 'discard:1p', emit)).toThrow(IllegalActionError);
@@ -274,6 +275,151 @@ describe('食替禁止 (no discarding the tile just claimed)', () => {
     expect(options.map((o) => o.id)).toEqual(['pon', 'pass']);
     for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
       expect(chooseAction(game, 2, options, personality, fixedRng(0))).toBe('pass');
+    }
+  });
+});
+
+// 筋食替 fixtures: seat 1 holds three honor pons and a 7-tile hand; seat 0 discards `tile` and only
+// seat 1 (its 下家) can chi it. Seats 2 and 3 hold nothing.
+// Built fresh per game: the engine pushes the chi onto the seat's meld array.
+const sujiMelds = (): Meld[][] => [[], [meld('pon', 'S S S'), meld('pon', 'W W W'), meld('pon', 'N N N')], [], []];
+
+function sujiSetup(hand: string, tile: string, melds: Meld[][] = sujiMelds()) {
+  const s = setup({ hands: [`${tile} 1s`, hand, '', ''], melds, front: '9m 9m', turn: 0 });
+  applyAction(s.game, 0, `discard:${tile}`, s.emit);
+  return s;
+}
+
+/** Chi with `chiId` (nobody else can claim), returning the seat's turn phase and option ids. */
+function chiThen(hand: string, tile: string, chiId: string) {
+  const s = sujiSetup(hand, tile);
+  applyAction(s.game, 1, chiId, s.emit);
+  return { ...s, phase: s.game.hand.phase, discards: ids(s.game, 1).filter((id) => id.startsWith('discard:')).sort() };
+}
+
+describe('筋食替 (no discarding the far end of the run just chi-ed)', () => {
+  it('claimForbiddenDiscards covers every position of the claimed tile in the run', () => {
+    expect(claimForbiddenDiscards(['4m', '5m', '6m'], '4m')).toEqual(['4m', '7m']);
+    expect(claimForbiddenDiscards(['2m', '3m', '4m'], '4m')).toEqual(['4m', '1m']);
+    expect(claimForbiddenDiscards(['4m', '5m', '6m'], '5m')).toEqual(['5m']);
+    expect(claimForbiddenDiscards(['1s', '2s', '3s'], '1s')).toEqual(['1s', '4s']);
+    expect(claimForbiddenDiscards(['7s', '8s', '9s'], '9s')).toEqual(['9s', '6s']);
+    // No tile beyond 1 or 9, and never a tile of another suit.
+    expect(claimForbiddenDiscards(['1p', '2p', '3p'], '3p')).toEqual(['3p']);
+    expect(claimForbiddenDiscards(['7p', '8p', '9p'], '7p')).toEqual(['7p']);
+    // Pon: only the claimed tile.
+    expect(claimForbiddenDiscards(['4m', '4m', '4m'], '4m')).toEqual(['4m']);
+  });
+
+  it('chi 4m with 5m 6m (claimed tile on the left end) forbids 4m and 7m', () => {
+    const { game, emit, phase, discards } = chiThen('5m 6m 4m 7m 1p 5p 9s', '4m', 'chi:4m');
+    expect(phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['4m', '7m'] });
+    expect(discards).toEqual(['discard:1p', 'discard:5p', 'discard:9s']);
+    expect(() => applyAction(game, 1, 'discard:4m', emit)).toThrow(IllegalActionError);
+    expect(() => applyAction(game, 1, 'discard:7m', emit)).toThrow(IllegalActionError);
+  });
+
+  it('chi 4m with 2m 3m (claimed tile on the right end) forbids 4m and 1m', () => {
+    const { game, emit, phase, discards } = chiThen('2m 3m 4m 1m 1p 5p 9s', '4m', 'chi:2m');
+    expect(phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['4m', '1m'] });
+    expect(discards).toEqual(['discard:1p', 'discard:5p', 'discard:9s']);
+    expect(() => applyAction(game, 1, 'discard:1m', emit)).toThrow(IllegalActionError);
+  });
+
+  it('chi 5m with 4m 6m (坎張) only forbids 5m; the same hand chi-ing 3m-5m or 5m-7m forbids a 筋 tile', () => {
+    const hand = '4m 6m 5m 3m 7m 1p 9s';
+    expect(ids(sujiSetup(hand, '5m').game, 1)).toEqual(['chi:3m', 'chi:4m', 'chi:5m', 'pass']);
+
+    const middle = chiThen(hand, '5m', 'chi:4m');
+    expect(middle.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['5m'] });
+    expect(middle.discards).toEqual(['discard:1p', 'discard:3m', 'discard:7m', 'discard:9s']);
+
+    const right = chiThen(hand, '5m', 'chi:3m');
+    expect(right.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['5m', '2m'] });
+    expect(right.discards).toEqual(['discard:1p', 'discard:6m', 'discard:7m', 'discard:9s']);
+
+    const left = chiThen(hand, '5m', 'chi:5m');
+    expect(left.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['5m', '8m'] });
+    expect(left.discards).toEqual(['discard:1p', 'discard:3m', 'discard:4m', 'discard:9s']);
+  });
+
+  it('edges: chi 1 into 123 forbids 4, chi 9 into 789 forbids 6', () => {
+    const low = chiThen('2m 3m 1m 4m 1p 5p 9s', '1m', 'chi:1m');
+    expect(low.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['1m', '4m'] });
+    expect(low.discards).toEqual(['discard:1p', 'discard:5p', 'discard:9s']);
+    expect(() => applyAction(low.game, 1, 'discard:4m', low.emit)).toThrow(IllegalActionError);
+
+    const high = chiThen('7m 8m 9m 6m 1p 5p 9s', '9m', 'chi:7m');
+    expect(high.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['9m', '6m'] });
+    expect(high.discards).toEqual(['discard:1p', 'discard:5p', 'discard:9s']);
+    expect(() => applyAction(high.game, 1, 'discard:6m', high.emit)).toThrow(IllegalActionError);
+  });
+
+  it('edges: chi 3 into 123 and chi 7 into 789 have no tile beyond the end, so only the claimed tile is forbidden', () => {
+    // Dots, so a wrong rank check would wrap into the neighbouring suit (9m below 1p, 1s above 9p).
+    const low = chiThen('1p 2p 3p 9m 1s 5s 9s', '3p', 'chi:1p');
+    expect(low.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['3p'] });
+    expect(low.discards).toEqual(['discard:1s', 'discard:5s', 'discard:9m', 'discard:9s']);
+
+    const high = chiThen('8p 9p 7p 2s 1m 5s 9s', '7p', 'chi:7p');
+    expect(high.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscards: ['7p'] });
+    expect(high.discards).toEqual(['discard:1m', 'discard:2s', 'discard:5s', 'discard:9s']);
+  });
+
+  it('no ting on a 筋 tile either', () => {
+    // After chi 4m (456m) discarding 7m would leave E E 9p 9p ready, but 7m is forbidden.
+    const { game, emit } = chiThen('5m 6m 7m E E 9p 9p', '4m', 'chi:4m');
+    expect(ids(game, 1).filter((id) => id.endsWith(':7m'))).toEqual([]);
+    expect(ids(game, 1).filter((id) => id.startsWith('ting:'))).toEqual([]);
+    expect(() => applyAction(game, 1, 'ting:7m', emit)).toThrow(IllegalActionError);
+  });
+
+  it('no chi when the hand would hold only forbidden tiles afterwards, 筋 tile included', () => {
+    // One set short. Each hand also wins on the discard (ron), which is not the point here.
+    const melds = [[], [meld('pon', 'S S S'), meld('pon', 'W W W'), meld('pon', 'N N N'), meld('pon', 'E E E')], [], []];
+    // 456m would leave 4m 7m: the claimed tile and its 筋.
+    expect(ids(sujiSetup('5m 6m 4m 7m', '4m', melds).game, 1)).toEqual(['ron', 'pass']);
+    // 456m would leave 7m 7m: only 筋 tiles.
+    expect(ids(sujiSetup('5m 6m 7m 7m', '4m', melds).game, 1)).toEqual(['ron', 'pass']);
+    // 234m would leave 1m 1m.
+    expect(ids(sujiSetup('2m 3m 1m 1m', '4m', melds).game, 1)).toEqual(['ron', 'pass']);
+    // 坎張 456m leaves 7m 7m (only 5m forbidden) and 567m leaves 4m 7m (5m 8m forbidden): both legal.
+    expect(ids(sujiSetup('4m 6m 7m 7m', '5m', melds).game, 1)).toEqual(['ron', 'chi:4m', 'chi:5m', 'pass']);
+  });
+
+  it('a pon still forbids only the claimed tile', () => {
+    const melds = [[], [], [meld('pon', 'S S S'), meld('pon', 'W W W'), meld('pon', 'N N N')], []];
+    const { game, emit } = setup({ hands: ['4m 1s', '', '4m 4m 1m 7m 1p 5p 9s', ''], melds, front: '9m 9m', turn: 0 });
+    applyAction(game, 0, 'discard:4m', emit);
+    expect(ids(game, 2)).toEqual(['pon', 'pass']);
+    applyAction(game, 2, 'pon', emit);
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscards: ['4m'] });
+    expect(ids(game, 2).filter((id) => id.startsWith('discard:')).sort()).toEqual(
+      ['discard:1m', 'discard:1p', 'discard:5p', 'discard:7m', 'discard:9s'],
+    );
+  });
+
+  it('the AI never plays the 筋 tile after a chi, even when it would be its best discard', () => {
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      const { game, emit } = chiThen('5m 6m 7m E E 9p 9p', '4m', 'chi:4m');
+      const options = optionsFor(game, 1);
+      for (const value of [0, 0.5, 0.99]) {
+        const pick = chooseAction(game, 1, options, personality, fixedRng(value));
+        expect(options.map((o) => o.id)).toContain(pick);
+        expect(pick).not.toMatch(/:(4m|7m)$/);
+      }
+      expect(() => applyAction(game, 1, chooseAction(game, 1, options, personality, fixedRng(0)), emit)).not.toThrow();
+    }
+  });
+
+  it('the AI values a chi by the discards it may actually make afterwards, 筋 tile excluded', () => {
+    // Ready before the claim (567m, E E, 9p 9p). After chi 4m (456m) only discarding the forbidden 7m
+    // would keep it ready, so the chi would set it back: every personality passes.
+    const { game } = sujiSetup('5m 6m 7m E E 9p 9p', '4m');
+    const options = optionsFor(game, 1);
+    expect(options.map((o) => o.id)).toEqual(['chi:4m', 'pass']);
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      expect(chooseAction(game, 1, options, personality, fixedRng(0))).toBe('pass');
     }
   });
 });

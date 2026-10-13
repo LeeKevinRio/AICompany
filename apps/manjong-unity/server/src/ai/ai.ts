@@ -1,7 +1,7 @@
 // "Can play" AI: tile-efficiency play (shanten + effective tiles) using only public information.
 // Personalities differ in how eagerly they claim discards and declare ready (報聽). No defence yet.
 
-import { seatWind, roundWind, type GameOption, type GameState } from '../engine/engine.js';
+import { claimForbiddenDiscards, seatWind, roundWind, type GameOption, type GameState } from '../engine/engine.js';
 import { shanten } from '../engine/hand.js';
 import type { Rng } from '../engine/rng.js';
 import { KIND_COUNT, isDragonKind, kindOf, toCounts, windKind, type Tile } from '../engine/tiles.js';
@@ -75,7 +75,10 @@ interface DiscardChoice {
   effective: number;
 }
 
-/** Best discard among `allowed` (the tiles the engine offers as discard options). */
+/**
+ * Best discard among `allowed` (the tiles the engine offers as discard options, so after a chi / pon
+ * the whole 食替禁止 set, claimed tile and 筋 tile alike, is already left out).
+ */
 function bestDiscard(hand: Tile[], sets: number, seen: number[], rng: Rng, allowed: Set<Tile>): DiscardChoice {
   const counts = toCounts(hand);
   let best: DiscardChoice | null = null;
@@ -104,14 +107,14 @@ function bestDiscard(hand: Tile[], sets: number, seen: number[], rng: Rng, allow
 
 /**
  * Lowest shanten reachable by discarding one tile (no effective-tile tie-break), never discarding
- * `forbidden` (食替禁止: the tile just claimed cannot be discarded on the same turn).
+ * one of `forbidden` (食替禁止: the claimed tile and, after a chi, its 筋 tile; see claimForbiddenDiscards).
  */
-function minShantenAfterDiscard(hand: Tile[], sets: number, forbidden: Tile): number {
+function minShantenAfterDiscard(hand: Tile[], sets: number, forbidden: Tile[]): number {
   const counts = toCounts(hand);
-  const skip = kindOf(forbidden);
+  const skip = new Set(forbidden.map(kindOf));
   let best = Infinity;
   for (let k = 0; k < KIND_COUNT; k++) {
-    if (counts[k] === 0 || k === skip) continue;
+    if (counts[k] === 0 || skip.has(k)) continue;
     counts[k]!--;
     best = Math.min(best, shanten(counts, sets));
     counts[k]!++;
@@ -199,21 +202,28 @@ export function chooseAction(
   let choice: { id: string; shanten: number; priority: number } | null = null;
   for (const o of options) {
     let used: Tile[];
+    let meld: Tile[];
     let priority: number;
     if (o.type === 'pon') {
       used = [o.tile, o.tile];
+      meld = [o.tile, o.tile, o.tile];
       priority = 2;
     } else if (o.type === 'chi') {
       used = without(o.tiles, [o.tile]);
+      meld = o.tiles;
       priority = 1;
     } else if (o.type === 'kan') {
       used = [o.tile, o.tile, o.tile];
+      meld = [];
       priority = 3;
     } else {
       continue;
     }
     const after = without(p.hand, used);
-    const s = o.type === 'kan' ? shanten(toCounts(after), sets - 1) : minShantenAfterDiscard(after, sets - 1, o.tile);
+    const s =
+      o.type === 'kan'
+        ? shanten(toCounts(after), sets - 1)
+        : minShantenAfterDiscard(after, sets - 1, claimForbiddenDiscards(meld, o.tile));
     const opened = p.melds.some((m) => m.type !== 'ankan');
     let want: boolean;
     switch (personality) {
