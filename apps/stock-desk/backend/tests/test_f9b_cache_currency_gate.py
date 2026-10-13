@@ -459,16 +459,19 @@ def test_f9w43_a_refused_read_back_then_a_refused_backup(
 
     # The valuator's own window would not reproduce the race, so it is handed
     # this very answer.
+    fx = _CountingFx()
     valuation = (
         PositionValuator(
             market_services={"US": CannedPriceService(result)},
-            fx_provider=_CountingFx(),  # type: ignore[arg-type]
+            fx_provider=fx,  # type: ignore[arg-type]
             clock=lambda: NOW,
         )
         .value_position(_position())
         .valuation
     )
     assert valuation.missing == [SYMBOL_OR_UNIT_REJECTED]
+    assert valuation.fx is None and valuation.fx_open is None
+    assert fx.calls == 0  # F9W-18: a refused answer never asks for a rate
 
 
 # --- Cache-only: D-2 (5)(c) ----------------------------------------------------------------

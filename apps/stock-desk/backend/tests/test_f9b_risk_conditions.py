@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -113,7 +114,7 @@ def test_f9w41_the_alert_push_carries_the_layer_note_then_the_w_c_prime_reason(
     assert snapshot.data_disclosure == expected
     assert snapshot.reason == expected
     w_c_prime = UNIT_MISSING_REASON_TW.format(provider="finmind")
-    assert w_c_prime.removesuffix("。") in expected  # whole, unaltered
+    assert expected.endswith(w_c_prime)  # whole, unaltered, its full stop included
     assert expected.count(w_c_prime.removesuffix("。")) == 1
 
     alerts = AlertStore(db_path=tmp_path / "alerts.db")
@@ -126,6 +127,21 @@ def test_f9w41_the_alert_push_carries_the_layer_note_then_the_w_c_prime_reason(
 # --- F9W-44 -------------------------------------------------------------------------------
 
 
+@pytest.fixture
+def isolated_yfinance() -> Iterator[None]:
+    """Keep ``deps._default_yfinance`` (an ``lru_cache``) out of other tests.
+
+    Building the resolver memoizes the one yfinance adapter for the process;
+    clear it before and after so this test neither reuses nor leaves one.
+    """
+    deps._default_yfinance.cache_clear()
+    yield
+    if deps._default_yfinance.cache_info().currsize:
+        deps._default_yfinance().close()
+    deps._default_yfinance.cache_clear()
+
+
+@pytest.mark.usefixtures("isolated_yfinance")
 def test_f9w44_every_equity_rung_deps_builds_has_a_source_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
