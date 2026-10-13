@@ -326,7 +326,8 @@ def test_while_sources_fail_the_ladder_runs_once_per_cooldown_not_per_click(
     assert second.is_within_ttl is False
     # The reader is told why the answer is the cache (ADR-0003 約束 7), and
     # the age is the rows' real fetch time, not the failed attempt's (R-10).
-    assert second.reason == RECENT_ATTEMPT_FAILED_REASON
+    # The first click (ladder ran) and the cooled second one say the same words.
+    assert first.reason == second.reason == RECENT_ATTEMPT_FAILED_REASON
     assert second.staleness_minutes is not None and second.staleness_minutes >= 20
 
 
@@ -804,9 +805,7 @@ def test_a_spliced_cache_keeps_saying_so_on_every_later_answer(tmp_path: Path) -
     assert degraded.reason == f"{RECENT_ATTEMPT_FAILED_REASON} {spliced}"
     now["at"] = datetime(2024, 1, 4, 8, 5, tzinfo=UTC)  # inside the attempt cooldown
     cooled = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
-    assert cooled.reason is not None
-    assert cooled.reason.startswith(RECENT_ATTEMPT_FAILED_REASON.rstrip("。"))
-    assert cooled.reason.endswith(spliced)
+    assert cooled.reason == f"{RECENT_ATTEMPT_FAILED_REASON} {spliced}"
 
 
 class _CacheThatCannotReadBack(PriceBarCache):
