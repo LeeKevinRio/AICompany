@@ -14,7 +14,7 @@ import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHel
  * 且「查了沒有」與「本次沒去查」必須一眼可分。字面為 creative-lead 草案，風控核可後逐字釘住。
  */
 describe("valuationWording — Valuation.missing token labels", () => {
-  it("labels every token the backend can emit, the five pre-F-9 ones each within eight characters", () => {
+  it("labels every token the backend can emit, each within eight characters unless listed as an exception", () => {
     expect(Object.keys(MISSING_LABELS).sort()).toEqual([
       "currency_market_mismatch",
       "fx_now",
@@ -28,18 +28,23 @@ describe("valuationWording — Valuation.missing token labels", () => {
     for (const label of Object.values(MISSING_LABELS)) {
       expect(label).not.toMatch(/[A-Za-z_]/);
     }
-    // The 8-character layout target (ADR-0010 揭露句文案 C 節) still binds these
-    // five, named one by one; T-12 is the one exception, pinned in its own test below.
-    for (const token of [
-      "price",
-      "price_not_queried",
+    // The 8-character layout target (ADR-0010 揭露句文案 C 節) binds every label by
+    // default, a future token included; exceptions are listed here one by one
+    // (風控 F9W-46 (b)). T-12 is the only one, pinned in its own test below, and
+    // sets no precedent for any other label.
+    const exceptions = ["symbol_or_unit_rejected"];
+    for (const [token, label] of Object.entries(MISSING_LABELS)) {
+      if (exceptions.includes(token)) continue;
+      expect(label.length, token).toBeLessThanOrEqual(8);
+    }
+    // Not vacuous: the five pre-F-9 labels are all still bound.
+    expect(Object.keys(MISSING_LABELS).filter((token) => !exceptions.includes(token)).sort()).toEqual([
+      "currency_market_mismatch",
       "fx_now",
       "fx_open",
-      "currency_market_mismatch",
-    ]) {
-      expect(MISSING_LABELS[token]).toBeDefined();
-      expect((MISSING_LABELS[token] as string).length).toBeLessThanOrEqual(8);
-    }
+      "price",
+      "price_not_queried",
+    ]);
   });
 
   it("labels the refused-answer token with T-12 verbatim, ten characters, neither query shape (風控 F9W-19)", () => {

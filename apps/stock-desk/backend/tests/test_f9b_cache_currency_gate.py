@@ -23,6 +23,7 @@ from app.data import gate_wording
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.gate_wording import (
     CACHE_UNIT_REJECTED_REASON,
+    UNIT_MISMATCH_REASON_US,
     UNIT_MISSING_REASON_US,
 )
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
@@ -44,7 +45,7 @@ from app.services.index import (
     load_market_benchmark,
 )
 from app.services.market import PROVIDER_REASON_PREFIX, load_bars
-from tests.f9b_helpers import AV_QUOTA_REASON
+from tests.f9b_helpers import AV_QUOTA_REASON, CannedPriceService
 from tests.market_service_helpers import build_service, equity_service, index_service
 
 SERVICE_LOGGER = "app.data.service"
@@ -423,6 +424,51 @@ def test_a_refused_read_back_then_a_whole_range_success_states_no_t15(tmp_path: 
     assert result.rejection is None
     assert CACHE_UNIT_REJECTED_REASON not in (result.reason or "")  # C-30, C-34 (c)
     assert valued.valuation.status == "ok"
+
+
+@pytest.mark.parametrize(
+    ("declared", "sentence", "category"),
+    [
+        pytest.param("GBp", UNIT_MISMATCH_REASON_US, "unit_mismatch", id="then-W-c"),
+        pytest.param("", UNIT_MISSING_REASON_US, "unit_missing", id="then-W-c'"),
+    ],
+)
+def test_f9w43_a_refused_read_back_then_a_refused_backup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, declared: str, sentence: str, category: str
+) -> None:
+    """風控 F9W-43: the cross-layer pairs "T-15。 W-c。" and "T-15。 W-c′。", exact.
+
+    D-7 (2) picks the category; the fallback does not read the cache again, so
+    no cached price stands beside the W-c (F9W-4) and T-15 is stated once.
+    """
+    backup_bars = [_bar(day, declared, source="yfinance") for day in DAYS]
+    cache, _primary, backup, service = _racing_service(tmp_path, backup_bars)
+
+    with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
+        result = service.get_daily_bars("AAPL", "US", START, END)
+
+    assert backup.asked == [("AAPL", START, END)]
+    assert result.reason == _combine_reasons(
+        [CACHE_UNIT_REJECTED_REASON, sentence.format(provider="yfinance")]
+    )
+    assert (result.reason or "").count(CACHE_UNIT_REJECTED_REASON) == 1
+    assert result.bars == []
+    assert result.rejection == category
+    assert cache.gets == 2  # layer 0 and the read-back; the fallback read nothing
+    assert _layers(caplog) == ["incremental_readback", "provider"]
+
+    # The valuator's own window would not reproduce the race, so it is handed
+    # this very answer.
+    valuation = (
+        PositionValuator(
+            market_services={"US": CannedPriceService(result)},
+            fx_provider=_CountingFx(),  # type: ignore[arg-type]
+            clock=lambda: NOW,
+        )
+        .value_position(_position())
+        .valuation
+    )
+    assert valuation.missing == [SYMBOL_OR_UNIT_REJECTED]
 
 
 # --- Cache-only: D-2 (5)(c) ----------------------------------------------------------------

@@ -56,12 +56,15 @@ from tests.test_rules_invalidation_wording import (
 SEMI = "半導體業"
 SHIPPING = "航運業"
 
-#: T-11 主案, copied verbatim from the ruling (F9W-17) as the expected value.
-T_11 = (
-    "組合中有 {count} 筆部位無法估值（代號形式不在本系統查詢的範圍內，"
-    "或日線標示的價格單位與市場所用的單位不同，或日線沒有標示價格單位），未計入總資產"
-)
 RULING = "work/reviews/2026-10-12-F-9-第二批字面逐字審-F9W-17至F9W-29-風控.md"
+#: T-11 主案, read from the ruling's own line (L26; F9W-17) as the expected
+#: value (風控 F9W-42 (c) suggested), never a copy kept here.
+T_11 = (
+    (Path(__file__).resolve().parents[4] / RULING)
+    .read_text(encoding="utf-8")
+    .splitlines()[25]
+    .removeprefix("> ")
+)
 
 
 def _with_missing(row: SummaryPosition, missing: list[str]) -> SummaryPosition:
