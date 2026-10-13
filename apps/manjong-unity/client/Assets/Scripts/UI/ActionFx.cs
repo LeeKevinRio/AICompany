@@ -111,20 +111,19 @@ namespace Manjong.UI
 
         /// <summary>
         /// Where the effect appears, as an offset from the canvas centre, per relative seat (0 me, 1 right, 2 opposite, 3 left).
-        /// The felt is full of tiles, so the effects sit in the cross around the console, each on its seat's side: 150 below /
-        /// above the table centre for me / the opposite seat, 305 right / left of it for the side seats (the table centre is
-        /// 129 above the canvas centre). That is where each seat's river ends, the rows filled last, so a plate covers the least
-        /// for its 0.7 s. A plate is at most 150 high with the name pill 19 below it.
+        /// The table is compact and full of tiles, so the plates stand beside it, in the empty margins between the stations
+        /// (info cards) of the corners: me and the left seat on the left (me lower), the right seat and the opposite seat on the
+        /// right (the opposite seat higher). They cover nothing; a plate is at most 264 wide and 150 high with the name pill 19
+        /// below it. The margin is at least 492 wide on each side of the 836 wide table in 16:10 (more in 16:9).
         /// </summary>
         public static Vector2 Anchor(int rel)
         {
-            const float tableCenterY = 129f;
             switch (rel)
             {
-                case 0: return new Vector2(0f, tableCenterY - 150f);
-                case 1: return new Vector2(305f, tableCenterY);
-                case 2: return new Vector2(0f, tableCenterY + 150f);
-                default: return new Vector2(-305f, tableCenterY);
+                case 0: return new Vector2(-560f, 49f);
+                case 1: return new Vector2(560f, 49f);
+                case 2: return new Vector2(560f, 209f);
+                default: return new Vector2(-560f, 209f);
             }
         }
 

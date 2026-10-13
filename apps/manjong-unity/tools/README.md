@@ -43,19 +43,19 @@ python render_tiles.py ../client/Assets/Resources/Tiles /tmp/tile_sheets
 | 檔案 | 尺寸 | 內容 |
 | --- | --- | --- |
 | `felt.png` | 256×256 | 無縫綠色絨布小塊（織紋 + 纖維雜訊 + 雲狀濃淡），uGUI 用 `Image.Type.Tiled` 平鋪 |
-| `felt_shade.png` | 770×369 | 暗角加中央柔光（RGBA 漸層），拉伸蓋在絨布上 |
-| `frame.png` | 1696×894 | 木桌框：胡桃木、四角斜接、木紋沿各邊方向、亮／暗斜邊、黃銅嵌線與銅釘；開口透明，外側落影與內側落影已燒進圖裡 |
-| `console.png` | 480×194 | 桌心控制台：深色外殼、黃銅細邊、四顆螺絲、三塊凹陷螢幕（羅盤 / 資訊 / 提示列） |
+| `felt_shade.png` | 388×369 | 暗角加中央柔光（RGBA 漸層），拉伸蓋在絨布上 |
+| `frame.png` | 932×894 | 木桌框：胡桃木、四角斜接、木紋沿各邊方向、亮／暗斜邊、黃銅嵌線與銅釘；開口透明，外側落影與內側落影已燒進圖裡 |
+| `console.png` | 248×210 | 桌心控制台（208×170，與一列牌河等寬）：深色外殼、黃銅細邊、三塊凹陷螢幕（資訊 / 羅盤 / 提示） |
 
 ```bash
 pip install pillow
 python render_table.py ../client/Assets/Resources/Table
-# 另外輸出 1920x1080 與 1821x1138（檔名加 _1610）的最壞情況示意圖（每家 17 暗牌、5 組槓、8 花、48 張牌河；牌圖讀自 --tiles；只用來檢查，不進專案）
-# 無論有沒有 --preview，每次都會逐張檢查四家最壞情況的版面有無重疊、超出絨布或蓋到控制台，並印出結果
+# 另外輸出一般中盤與最壞情況（一般中盤：10 張牌河、1 組碰、13 張暗牌；最壞：30 張牌河、5 組槓、8 花）的示意圖，16:9 與 16:10（檔名加 _1610）各一張：<png 不含副檔名>_mid.png / _worst.png
+# 無論有沒有 --preview，每次都會檢查每家 48 種狀態（牌河 18~31 張 × 0~5 組碰槓，牌列跟著牌河往外移）下、每一對座位有無牌重疊、超出絨布或蓋到控制台，並印出結果
 python render_table.py ../client/Assets/Resources/Table --preview /tmp/table_layout.png --tiles ../client/Assets/Resources/Tiles
 ```
 
-約 8 秒跑完；結果是決定性的（固定亂數種子），重跑會得到一樣的圖。幾何常數（框外尺寸 1600×798、木框寬 30、絨布可見區、控制台 440×154 與三塊螢幕的矩形）在腳本開頭，
+約 8 秒跑完；結果是決定性的（固定亂數種子），重跑會得到一樣的圖。幾何常數（框外尺寸 836×798、木框寬 30、絨布可見區、控制台 208×170 與三塊螢幕的矩形）在腳本開頭，
 **必須與 `Assets/Scripts/Screens/TableScreen.cs` 的 `Table*` / `Console*` 常數一致**；顏色集中在 `FELT_*`、`WALNUT_*`、`BRASS*`。
 絨布亮度刻意壓暗（最亮約 rgb(50,118,81)），讓牌河的高亮框（`Palette.FeltLastDiscardRing` / `FeltSameKindRing`）對它有 3:1 以上的對比；改絨布顏色時要重算。
 匯入設定由 `Assets/Editor/ManjongTileImporter.cs` 套用（`felt.png` Wrap = Repeat、全部不壓縮）。

@@ -48,9 +48,9 @@ namespace Manjong.UI
         /// <summary>Opponent concealed hands (backs only).</summary>
         public static readonly TileSize Back = new TileSize(27f, 36f, 0, 0, 5, 3f);
         /// <summary>Table: the other seats' concealed tiles standing along their table edge (backs only).</summary>
-        public static readonly TileSize SeatBack = new TileSize(30f, 40f, 0, 0, 5, 3f);
-        /// <summary>Table: the other seats' melds and flowers, and mine (on the felt in front of my hand).</summary>
-        public static readonly TileSize SeatMeld = new TileSize(34f, 45f, 21, 13, 6, 3f);
+        public static readonly TileSize SeatBack = new TileSize(26f, 35f, 0, 0, 5, 3f);
+        /// <summary>Table: the other seats' melds, my melds and every seat's flowers.</summary>
+        public static readonly TileSize SeatMeld = new TileSize(28f, 38f, 18, 12, 5, 3f);
     }
 
     /// <summary>
