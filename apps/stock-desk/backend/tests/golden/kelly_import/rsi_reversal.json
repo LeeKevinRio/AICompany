@@ -1,0 +1,54 @@
+{
+  "steps": [
+    {
+      "path_symbol": "2330",
+      "request": {
+        "symbol": "2330",
+        "market": "TW",
+        "strategy": "rsi_reversal",
+        "start": "2023-07-17",
+        "end": "2026-07-20",
+        "train_size": 120,
+        "test_size": 60
+      },
+      "status_code": 422,
+      "body": {
+        "detail": {
+          "reason_code": "low_round_trips",
+          "message": "樣本外完整回合數為 2 筆，未達門檻 20 筆，本次不寫入 Kelly 輸入。",
+          "frame": "多數標的、多數期間的完整進出次數都達不到本系統設定的門檻；未達門檻時，系統會拒絕寫入這筆 Kelly 輸入，這是常見情況，不是系統出錯，也不代表這支策略或這個標的『不好』。這次沒有寫入的原因與實際數字如下：",
+          "attempt_logged": "這次被拒絕寫入的嘗試，已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）。",
+          "selection_bias": "此標的目前記錄到 1 次回測帶入嘗試（K_observed，含被拒絕的嘗試、含所有策略、不限時間範圍）。這只代表你送出『帶入』的次數是 1 次，不代表你只檢視過 1 次回測結果——本系統無法得知你在畫面上比較過幾種設定、又只送出了其中一組。",
+          "k_observed": 1,
+          "k_distinct_specs": 1
+        }
+      }
+    }
+  ],
+  "kelly_inputs": [],
+  "kelly_import_attempts": [
+    {
+      "id": 1,
+      "symbol": "2330",
+      "market": "TW",
+      "strategy_id": "rsi_reversal",
+      "request_spec": "{\"adjust_dividends\":true,\"cost\":null,\"end\":\"2026-07-20\",\"initial_cash\":1000000.0,\"instrument_type\":\"stock\",\"market\":\"TW\",\"start\":\"2023-07-17\",\"strategy\":\"rsi_reversal\",\"symbol\":\"2330\",\"test_size\":60,\"train_size\":120}",
+      "spec_hash": "31031b687a2490b72ff23f6e4077939dfd7e384177a7f06b2b68eb73818ec6b9",
+      "outcome": "rejected",
+      "reason_code": "low_round_trips",
+      "win_rate": 0.5,
+      "payoff_ratio": 3.588274788807655,
+      "kelly_fraction": null,
+      "oos_round_trips": 2,
+      "oos_win_trips": 1,
+      "oos_loss_trips": 1,
+      "oos_excluded_boundary_trips": 0,
+      "oos_open_trip_at_end": 0,
+      "oos_start_date": "2023-11-14",
+      "oos_end_date": "2026-06-30",
+      "oos_observations": 960,
+      "f_star_ci_low": null,
+      "f_star_ci_high": null
+    }
+  ]
+}

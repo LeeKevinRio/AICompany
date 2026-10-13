@@ -1,0 +1,101 @@
+{
+  "steps": [
+    {
+      "path_symbol": "2330",
+      "request": {
+        "symbol": "2317",
+        "market": "TW",
+        "strategy": "breakout",
+        "start": "2023-07-17",
+        "end": "2026-07-20",
+        "train_size": 120,
+        "test_size": 60
+      },
+      "status_code": 422,
+      "body": {
+        "detail": {
+          "reason_code": "symbol_mismatch",
+          "message": "你操作的標的（2330，TW）與這次回測請求中的標的（2317，TW）不一致，本次不寫入。",
+          "frame": null,
+          "attempt_logged": "這次被拒絕寫入的嘗試，已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）。",
+          "selection_bias": "此標的目前記錄到 1 次回測帶入嘗試（K_observed，含被拒絕的嘗試、含所有策略、不限時間範圍）。這只代表你送出『帶入』的次數是 1 次，不代表你只檢視過 1 次回測結果——本系統無法得知你在畫面上比較過幾種設定、又只送出了其中一組。",
+          "k_observed": 1,
+          "k_distinct_specs": 1
+        }
+      }
+    },
+    {
+      "path_symbol": "2330",
+      "request": {
+        "symbol": "2330",
+        "market": "TW",
+        "strategy": "breakout",
+        "start": "2023-07-17",
+        "end": "2026-07-20",
+        "train_size": 120,
+        "test_size": 60
+      },
+      "status_code": 422,
+      "body": {
+        "detail": {
+          "reason_code": "insufficient_data",
+          "message": "這次回測沒有產出可用的結果，本次不寫入 Kelly 輸入（狀態代碼：insufficient_data）。",
+          "frame": null,
+          "attempt_logged": "這次被拒絕寫入的嘗試，已經被系統記錄下來，並計入 K_observed（詳見選擇偏誤揭露）。",
+          "selection_bias": "此標的已記錄 2 次回測帶入嘗試（K_observed）——這個數字含被系統拒絕（422）的嘗試、含你試過的所有策略、不限時間範圍；另有 2 組不同設定被嘗試過（K_distinct_specs，僅計相異參數組合）。這兩個數字都可能失真：K_observed 可能因重複送出同一組設定而偏高；K_distinct_specs 只算相異設定，即使只做過細微調整也會被算成新的一組。兩者也都無法涵蓋你在系統外或腦中比較過的設定，因此都可能低估你實際檢視過的可能性。已知的方向是：嘗試越多組設定、只把其中最好看的一次帶入，結果越容易被系統性地高估——問題出在『事後只挑最好的那一次』這個動作本身，不是任何一組設定本身有誤。本系統無法得知你實際嘗試過幾次，也不會、也無法事後校正這個高估；這裡呈現的只是系統看得到的下界。",
+          "k_observed": 2,
+          "k_distinct_specs": 2
+        }
+      }
+    }
+  ],
+  "kelly_inputs": [],
+  "kelly_import_attempts": [
+    {
+      "id": 1,
+      "symbol": "2330",
+      "market": "TW",
+      "strategy_id": "breakout",
+      "request_spec": "{\"adjust_dividends\":true,\"cost\":null,\"end\":\"2026-07-20\",\"initial_cash\":1000000.0,\"instrument_type\":\"stock\",\"market\":\"TW\",\"start\":\"2023-07-17\",\"strategy\":\"breakout\",\"symbol\":\"2317\",\"test_size\":60,\"train_size\":120}",
+      "spec_hash": "7942422a4796320eaae2e0d9bf515dee73d410aa5cd684ba351d24c5b5f4f34b",
+      "outcome": "rejected",
+      "reason_code": "symbol_mismatch",
+      "win_rate": null,
+      "payoff_ratio": null,
+      "kelly_fraction": null,
+      "oos_round_trips": null,
+      "oos_win_trips": null,
+      "oos_loss_trips": null,
+      "oos_excluded_boundary_trips": null,
+      "oos_open_trip_at_end": null,
+      "oos_start_date": null,
+      "oos_end_date": null,
+      "oos_observations": null,
+      "f_star_ci_low": null,
+      "f_star_ci_high": null
+    },
+    {
+      "id": 2,
+      "symbol": "2330",
+      "market": "TW",
+      "strategy_id": "breakout",
+      "request_spec": "{\"adjust_dividends\":true,\"cost\":null,\"end\":\"2026-07-20\",\"initial_cash\":1000000.0,\"instrument_type\":\"stock\",\"market\":\"TW\",\"start\":\"2023-07-17\",\"strategy\":\"breakout\",\"symbol\":\"2330\",\"test_size\":60,\"train_size\":120}",
+      "spec_hash": "aa94bade726250908bb87406797b6efa5b23927485615fab6fbdf3303308a896",
+      "outcome": "rejected",
+      "reason_code": "insufficient_data",
+      "win_rate": null,
+      "payoff_ratio": null,
+      "kelly_fraction": null,
+      "oos_round_trips": null,
+      "oos_win_trips": null,
+      "oos_loss_trips": null,
+      "oos_excluded_boundary_trips": null,
+      "oos_open_trip_at_end": null,
+      "oos_start_date": null,
+      "oos_end_date": null,
+      "oos_observations": null,
+      "f_star_ci_low": null,
+      "f_star_ci_high": null
+    }
+  ]
+}

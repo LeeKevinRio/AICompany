@@ -1,0 +1,182 @@
+{
+  "fields": [
+    "symbol",
+    "market",
+    "strategy",
+    "start",
+    "end",
+    "instrument_type",
+    "initial_cash",
+    "train_size",
+    "test_size",
+    "cost",
+    "adjust_dividends"
+  ],
+  "json_schema": {
+    "$defs": {
+      "CostModelSettings": {
+        "additionalProperties": false,
+        "description": "Editable transaction-cost rates; mirrors :class:`CostModel` with bounds.\n\nEvery rate is a fraction of traded notional and is capped at 10% -- far\nabove any real schedule, but low enough that a mistyped percentage (``3``\ninstead of ``0.003``) is rejected instead of quietly destroying a backtest.",
+        "properties": {
+          "tw_broker_fee_rate": {
+            "default": 0.001425,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Tw Broker Fee Rate",
+            "type": "number"
+          },
+          "tw_tax_rate_stock": {
+            "default": 0.003,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Tw Tax Rate Stock",
+            "type": "number"
+          },
+          "tw_tax_rate_etf": {
+            "default": 0.001,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Tw Tax Rate Etf",
+            "type": "number"
+          },
+          "us_broker_fee_rate": {
+            "default": 0.0,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Us Broker Fee Rate",
+            "type": "number"
+          },
+          "us_sell_regulatory_fee_rate": {
+            "default": 2.78e-05,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Us Sell Regulatory Fee Rate",
+            "type": "number"
+          },
+          "slippage_bps": {
+            "default": 0.0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Slippage Bps",
+            "type": "number"
+          },
+          "verified_on": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verified On"
+          }
+        },
+        "title": "CostModelSettings",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "``POST /api/backtest`` body.",
+    "properties": {
+      "symbol": {
+        "minLength": 1,
+        "title": "Symbol",
+        "type": "string"
+      },
+      "market": {
+        "default": "TW",
+        "enum": [
+          "TW",
+          "US"
+        ],
+        "title": "Market",
+        "type": "string"
+      },
+      "strategy": {
+        "default": "ma_cross",
+        "title": "Strategy",
+        "type": "string"
+      },
+      "start": {
+        "format": "date",
+        "title": "Start",
+        "type": "string"
+      },
+      "end": {
+        "format": "date",
+        "title": "End",
+        "type": "string"
+      },
+      "instrument_type": {
+        "default": "stock",
+        "enum": [
+          "stock",
+          "etf",
+          "leveraged_etf",
+          "futures_etf"
+        ],
+        "title": "Instrument Type",
+        "type": "string"
+      },
+      "initial_cash": {
+        "default": 1000000.0,
+        "exclusiveMinimum": 0.0,
+        "title": "Initial Cash",
+        "type": "number"
+      },
+      "train_size": {
+        "default": 252,
+        "maximum": 5000,
+        "minimum": 2,
+        "title": "Train Size",
+        "type": "integer"
+      },
+      "test_size": {
+        "default": 63,
+        "maximum": 5000,
+        "minimum": 1,
+        "title": "Test Size",
+        "type": "integer"
+      },
+      "cost": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CostModelSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "adjust_dividends": {
+        "default": true,
+        "title": "Adjust Dividends",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "symbol",
+      "start",
+      "end"
+    ],
+    "title": "BacktestRequest",
+    "type": "object"
+  },
+  "minimal_body_dump": {
+    "symbol": "2330",
+    "market": "TW",
+    "strategy": "ma_cross",
+    "start": "2024-01-01",
+    "end": "2024-12-31",
+    "instrument_type": "stock",
+    "initial_cash": 1000000.0,
+    "train_size": 252,
+    "test_size": 63,
+    "cost": null,
+    "adjust_dividends": true
+  }
+}

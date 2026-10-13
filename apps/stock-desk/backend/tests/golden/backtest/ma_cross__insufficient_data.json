@@ -1,0 +1,64 @@
+{
+  "request": {
+    "symbol": "2330",
+    "market": "TW",
+    "strategy": "ma_cross",
+    "start": "2025-02-16",
+    "end": "2026-07-20",
+    "train_size": 500,
+    "test_size": 60
+  },
+  "status_code": 200,
+  "body": {
+    "symbol": "2330",
+    "market": "TW",
+    "strategy": "ma_cross",
+    "status": "insufficient_data",
+    "reason": "區間內只有 520 根日線，walk-forward 至少需要 train_size 500 + test_size 60 = 560 根，不以單一切分代替。",
+    "report": null,
+    "curves": null,
+    "folds": [],
+    "cost_model": {
+      "tw_broker_fee_rate": 0.001425,
+      "tw_tax_rate_stock": 0.003,
+      "tw_tax_rate_etf": 0.001,
+      "us_broker_fee_rate": 0.0,
+      "us_sell_regulatory_fee_rate": 2.78e-05,
+      "slippage_bps": 0.0,
+      "verified_on": null
+    },
+    "rates_verified": false,
+    "dividend_adjustment": {
+      "requested": true,
+      "applied": false,
+      "reason_code": "not_run",
+      "note": null,
+      "events_applied": 0,
+      "events_skipped": 0,
+      "first_ex_date": null,
+      "last_ex_date": null,
+      "raw_return_understatement": null,
+      "last_synced_at": null
+    },
+    "notes": [
+      "Buy & Hold 為未計交易成本的被動價格基準，不是已計費的策略。",
+      "費率（手續費、證交稅、規費）尚未經主要來源查證（verified_on 為 null），本報告的成本相關數字應視為待查證狀態。"
+    ],
+    "data_warning": null,
+    "data": {
+      "status": "fresh",
+      "source": "fake",
+      "staleness_minutes": 0,
+      "is_within_ttl": null,
+      "bar_count": 520,
+      "first_bar_date": "2025-02-16",
+      "last_bar_date": "2026-07-20",
+      "trading_days_behind": null,
+      "reason": null
+    },
+    "metric_labels": {
+      "win_rate": "勝率（依完整回合計）",
+      "round_trips": "完整回合數"
+    }
+  }
+}
