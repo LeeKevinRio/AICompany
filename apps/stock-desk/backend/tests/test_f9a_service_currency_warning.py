@@ -15,10 +15,13 @@ replaced ``test_index_ladder_is_explicitly_not_checked`` and lives in
 ``test_f9b0_index_currency_tripwire.py``.
 
 F-9b commit 5 gates the live rung (ADR-0024 D-2): the ``provider`` checkpoint
-now refuses (its record unchanged), so the "changes nothing" tests cover the
-cache checkpoints only, and the incremental scenario's off-market bar sits in
-the cached head, where the read-back still only observes it. The refusal
-itself is pinned in ``test_f9b_live_currency_gate.py``.
+now refuses (its record unchanged), and the incremental scenario's off-market
+bar sits in the cached head, where only the read-back sees it. F-9b commit 6
+gates every cache checkpoint (D-2 (5)), so no checkpoint is "observation only"
+any more: each test below pins the record *and* the refusal, and the
+neutralised run is kept only to show that no cached row is deleted. The
+refusals themselves are pinned in ``test_f9b_live_currency_gate.py`` and
+``test_f9b_cache_currency_gate.py``.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ import pytest
 from app.api import deps
 from app.data import service as service_module
 from app.data.cache import PriceBarCache
+from app.data.gate_wording import CACHE_UNIT_REJECTED_REASON
 from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
 from app.data.quality import CurrencyVerdict
 from app.data.service import (
@@ -177,7 +181,7 @@ SCENARIOS = [
         clock=datetime(2024, 1, 3, 8, 0, tzinfo=UTC),
         call=lambda s: s.get_daily_bars("2330", "TW", date(2023, 11, 1), date(2024, 1, 31)),
         layers=("incremental_readback",),
-        checkpoints=2,
+        checkpoints=3,
     ),
     Scenario(
         name="layer0",
@@ -318,35 +322,60 @@ def _layer(message: str) -> str:
     return _field(message, "layer")
 
 
-def _assert_unchanged(checked: Run, neutral: Run) -> None:
-    """Same answer, same rows in all three tables, same live calls; only the log differs."""
-    assert neutral.records == []
-    assert checked.result == neutral.result
-    assert checked.tables == neutral.tables
-    assert checked.primary_asked == neutral.primary_asked
+#: The checkpoints each cache scenario's refusal is recorded at (F-9b commit 6).
+#: Layer 0 refused outside the R-8 cooldown runs the ladder, which fails here,
+#: so the degrade-to-cache rung judges the same rows again (TA5 section 2 test 2).
+#: In the incremental scenario layer 0 now judges the whole cached range first
+#: (D-2 (5)(a)), refuses the off-market head and asks the live rung for the
+#: whole range, which answers: the self-repair of ADR-0024 壞處 5, not a
+#: refusal. (The read-back refusal needs a write between the two reads; it is
+#: pinned in ``test_f9b_cache_currency_gate.py``.)
+REFUSED_LAYERS = {
+    "incremental": ("layer0_cache",),
+    "layer0": ("layer0_cache", "fallback_cache"),
+    "fallback": ("fallback_cache",),
+    "cache_only": ("cache_only",),
+}
+SELF_REPAIRED = {"incremental"}
 
 
 @pytest.mark.parametrize("scenario", CACHE_SCENARIOS, ids=lambda s: s.name)
-def test_off_market_currency_warns_on_each_path_and_changes_nothing(
+def test_off_market_currency_on_each_cache_path_is_refused_with_its_record(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     scenario: Scenario,
 ) -> None:
-    """TA5 test 6: equity, one WARNING per refusing checkpoint, nothing else moves.
+    """TA5 test 6: equity, one WARNING per refusing checkpoint; the refusal is T-15.
 
-    Cache checkpoints only since F-9b commit 5; the live one is pinned below.
+    Rewritten for F-9b commit 6 (was
+    ``test_off_market_currency_warns_on_each_path_and_changes_nothing``): the
+    cache checkpoints now refuse. No cached row is deleted (D-8): the
+    cache table equals the neutralised run's.
     """
     checked = _run(tmp_path, caplog, scenario, currency="USD")
     neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="USD")
 
-    assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
-    assert [level for level, _ in checked.records] == [logging.WARNING] * len(scenario.layers)
+    layers = REFUSED_LAYERS[scenario.name]
+    assert [_layer(message) for message in checked.warnings] == list(layers)
+    assert [level for level, _ in checked.records] == [logging.WARNING] * len(layers)
     assert {_field(m, "scope") for m in checked.warnings} == {"equity"}
     assert {_field(m, "verdict") for m in checked.warnings} == {"mismatch"}
-    _assert_unchanged(checked, neutral)
-    # The off-market bar is still served (F-9b commit 6, not 5, refuses it).
-    assert "USD" in {bar.currency for bar in checked.result.bars}
+    if scenario.name in SELF_REPAIRED:
+        _assert_self_repaired(checked, scenario)
+    else:
+        assert checked.result.bars == []
+        assert checked.result.status is DataStatus.UNAVAILABLE
+        assert checked.result.rejection == "cache_unit_rejected"
+        assert checked.result.reason == CACHE_UNIT_REJECTED_REASON
+        assert checked.tables["price_bars_cache"] == neutral.tables["price_bars_cache"]
+
+
+def _assert_self_repaired(checked: Run, scenario: Scenario) -> None:
+    """The live rung was asked for the whole range and only its own bars came back."""
+    assert checked.primary_asked == [("2330", date(2023, 11, 1), date(2024, 1, 31))]
+    assert checked.result.bars == scenario.primary_bars("USD")
+    assert checked.result.rejection is None
 
 
 @pytest.mark.parametrize("scope", ["equity", "index"])
@@ -368,21 +397,33 @@ def test_off_market_currency_on_the_live_rung_is_refused_with_the_same_record(
 
 
 @pytest.mark.parametrize("scenario", CACHE_SCENARIOS, ids=lambda s: s.name)
-def test_index_scope_logs_error_on_each_path_and_changes_nothing(
+def test_index_scope_logs_error_on_each_cache_path_and_refuses_without_wording(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     scenario: Scenario,
 ) -> None:
-    """TA5 R-60: the same checkpoints on ``scope=index`` log ERROR, still observation only."""
+    """TA5 R-60 / D-4: the same checkpoints on ``scope=index`` log ERROR and refuse.
+
+    Rewritten for F-9b commit 6 (was
+    ``test_index_scope_logs_error_on_each_path_and_changes_nothing``): the
+    index path adds no sentence of its own (D-4 (c)); these scenarios' rungs
+    state none either, so the reason is ``None``.
+    """
     checked = _run(tmp_path, caplog, scenario, currency="USD", scope="index")
     neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="USD", scope="index")
 
-    assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
-    assert [level for level, _ in checked.records] == [logging.ERROR] * len(scenario.layers)
+    layers = REFUSED_LAYERS[scenario.name]
+    assert [_layer(message) for message in checked.warnings] == list(layers)
+    assert [level for level, _ in checked.records] == [logging.ERROR] * len(layers)
     assert {_field(m, "scope") for m in checked.warnings} == {"index"}
-    _assert_unchanged(checked, neutral)
-    assert "USD" in {bar.currency for bar in checked.result.bars}
+    if scenario.name in SELF_REPAIRED:
+        _assert_self_repaired(checked, scenario)
+    else:
+        assert checked.result.bars == []
+        assert checked.result.rejection == "cache_unit_rejected"
+        assert checked.result.reason is None
+        assert checked.tables["price_bars_cache"] == neutral.tables["price_bars_cache"]
 
 
 class _ForgetfulLookup:
@@ -402,49 +443,17 @@ class _ForgetfulLookup:
         self.forget = True
 
 
-#: The scenarios whose first judging checkpoint is the gated live rung.
-RAISING_SCENARIOS = [s for s in SCENARIOS if s.name in {"provider", "incremental"}]
-#: The scenarios that only meet observed cache checkpoints.
-OBSERVED_ONLY_SCENARIOS = [s for s in SCENARIOS if s not in RAISING_SCENARIOS]
-
-
-@pytest.mark.parametrize("scenario", OBSERVED_ONLY_SCENARIOS, ids=lambda s: s.name)
-def test_a_market_without_a_currency_counts_as_mismatch_and_changes_nothing(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    scenario: Scenario,
-) -> None:
-    """At an observed checkpoint a lookup miss is still a logged mismatch of every bar.
-
-    Rewritten for C-35 (d): the lookup now answers at construction and forgets
-    afterwards; the gated live checkpoint raises instead (next test).
-    """
-    lookup = _ForgetfulLookup()
-    checked = _run(
-        tmp_path,
-        caplog,
-        scenario,
-        currency="TWD",
-        lookup=lookup,
-        after_build=lookup.forget_now,
-    )
-    neutral = _neutral_run(tmp_path, caplog, monkeypatch, scenario, currency="TWD")
-
-    assert [_layer(message) for message in checked.warnings] == list(scenario.layers)
-    for message in checked.warnings:
-        assert _field(message, "expected") == "<none>"
-        assert _field(message, "verdict") == "mismatch"
-        mismatched, total = _field(message, "mismatched").split("/")
-        assert mismatched == total
-    _assert_unchanged(checked, neutral)
-
-
-@pytest.mark.parametrize("scenario", RAISING_SCENARIOS, ids=lambda s: s.name)
-def test_a_market_without_a_currency_raises_at_the_live_checkpoint(
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
+def test_a_market_without_a_currency_raises_at_every_checkpoint(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, scenario: Scenario
 ) -> None:
-    """C-35 (c), 風控 F9W-39: raised after its record, nothing written, no refusal made up."""
+    """C-35 (c), 風控 F9W-39: raised after its record; no row and no coverage written.
+
+    Rewritten for C-35 (d) (was
+    ``test_a_market_without_a_currency_counts_as_mismatch_and_changes_nothing``,
+    split at commit 5): the lookup answers at construction and forgets
+    afterwards; every checkpoint now raises instead of logging and serving.
+    """
     lookup = _ForgetfulLookup()
     with pytest.raises(CurrencyLookupError):
         _run(
@@ -455,10 +464,19 @@ def test_a_market_without_a_currency_raises_at_the_live_checkpoint(
             lookup=lookup,
             after_build=lookup.forget_now,
         )
+    records = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith(CURRENCY_DIFFERS_LOG_PREFIX)
+    ]
+    assert len(records) == 1
+    assert _field(records[0], "expected") == "<none>"
     tables = _dump(tmp_path / f"{scenario.name}-TWD-equity-checked.db")
     fresh = PriceBarCache(db_path=tmp_path / "fresh.db")
     scenario.seed(fresh, "TWD")
-    assert tables == _dump(tmp_path / "fresh.db")
+    seeded = _dump(tmp_path / "fresh.db")
+    for table in ("price_bars_cache", "price_bars_fetch_log"):
+        assert tables[table] == seeded[table]
 
 
 def test_a_blank_currency_logs_verdict_missing_and_is_refused(
@@ -518,10 +536,11 @@ def test_warning_text_is_fixed(tmp_path: Path, caplog: pytest.LogCaptureFixture)
         )
     ]
     incremental = _run(tmp_path, caplog, SCENARIOS[1], currency="USD")
-    # F-9b commit 5: the live tail is TWD now, so only the cached head differs.
+    # F-9b commit 5: the live tail is TWD now, so only the cached head differs;
+    # F-9b commit 6: layer 0 judges that head first (D-2 (5)(a)).
     assert incremental.warnings == [
         "price bars currency differs from market: symbol=2330 market=TW expected=TWD "
-        "observed=TWD,USD mismatched=1/3 layer=incremental_readback source=twse "
+        "observed=TWD,USD mismatched=1/2 layer=layer0_cache source=twse "
         "verdict=mismatch scope=equity"
     ]
 

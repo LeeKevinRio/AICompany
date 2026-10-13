@@ -60,7 +60,11 @@ ServiceScope = Literal["equity", "index"]
 CurrencyLookup = Callable[[Market], str | None]
 
 #: Which refusal wins when one answer carries several (ADR-0024 D-7 (2)).
-_REJECTION_PRECEDENCE: tuple[Rejection, ...] = ("unit_mismatch", "unit_missing")
+_REJECTION_PRECEDENCE: tuple[Rejection, ...] = (
+    "unit_mismatch",
+    "unit_missing",
+    "cache_unit_rejected",
+)
 
 
 class CurrencyLookupError(LookupError):
@@ -225,8 +229,17 @@ class MarketDataService:
     equity ladder may still fall back to the cache, the index ladder may not
     (D-4). A lookup that cannot answer for a market is refused at construction
     and, should it change its mind later, raises :class:`CurrencyLookupError`
-    at the gated checkpoint (C-35). The cache checkpoints are still observed
-    only, as in F-9b0.
+    at the gated checkpoint (C-35).
+
+    Every cache read is gated too (D-2 (5)): layer 0 judges the whole cached
+    range before any of its branches, then the degrade-to-cache rung, the
+    cache-only read and the incremental read-back each judge what they read.
+    A refused cached series is never served and never deleted; the answer
+    states T-15 on the equity path (nothing on the index path) and carries
+    ``rejection="cache_unit_rejected"`` unless a live refusal outranks it.
+    Inside the R-8 cooldown layer 0 answers that way without asking a source;
+    outside it, the ladder runs for the whole range, so a source that answers
+    overwrites the refused rows.
     """
 
     def __init__(
@@ -260,10 +273,12 @@ class MarketDataService:
         self._wording: GateWording | None = EQUITY_GATE_WORDING if scope == "equity" else None
 
     def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
+        layer_zero_refused = False
         if self._cache_first:
-            layer_zero = self._try_session_fresh_cache(symbol, market, start, end)
+            layer_zero, layer_zero_refused = self._try_session_fresh_cache(
+                symbol, market, start, end
+            )
             if layer_zero is not None:
-                self._log_currency(symbol, market, layer_zero, layer="layer0_cache")
                 return layer_zero
 
         providers: list[tuple[MarketDataProvider, DataStatus]] = [
@@ -272,7 +287,16 @@ class MarketDataService:
         ]
         # ADR-0009 D-7 (方案 F): when the cache already holds a complete,
         # contiguous head of the range, ask the live source only for the tail.
-        fetch_start = self._incremental_start(symbol, market, start, end)
+        # Not when layer 0 refused the cached series (ADR-0024 D-2 (5)(a) step
+        # 4): the whole range is asked for, so a live answer overwrites the
+        # refused rows instead of being merged with them (``_incremental_start``
+        # itself is unchanged, ADR-0019 K-10).
+        fetch_start = (
+            start if layer_zero_refused else self._incremental_start(symbol, market, start, end)
+        )
+        #: The incremental read-back was refused this call (D-2 (5)(d)): T-15 is
+        #: already among the reasons and the cache is not read again.
+        readback_refused = False
 
         # Every rung that declined to answer states why; those sentences are
         # what the API layer shows when the whole ladder comes up empty.
@@ -286,7 +310,7 @@ class MarketDataService:
                     reasons.append(reason)
                 continue
             verdict = self._judge_bars(
-                symbol, market, result.bars, layer="provider", source=result.source, refuse=True
+                symbol, market, result.bars, layer="provider", source=result.source
             )
             if verdict != "ok":
                 # ADR-0024 D-2 (1), D-3: the whole series is this rung declining
@@ -323,13 +347,17 @@ class MarketDataService:
                     )
                     reasons.append(MERGE_READBACK_FAILED_REASON)
                     continue
-                self._log_bars_currency(
-                    symbol,
-                    market,
-                    merged.bars,
-                    layer="incremental_readback",
-                    source=merged.source,
-                )
+                if self._cache_refuses(
+                    symbol, market, merged.bars, layer="incremental_readback", source=merged.source
+                ):
+                    # ADR-0024 D-2 (5)(d): T-15 joins this ladder's reasons in
+                    # place of MERGE_READBACK_FAILED_REASON; later rungs are asked
+                    # for the whole range and the cache is not read again.
+                    if self._wording is not None:
+                        reasons.append(self._wording.cache_unit_rejected)
+                    readback_refused = True
+                    fetch_start = start
+                    continue
                 bars = merged.bars
                 logger.info(
                     "incremental fetch for %s: asked %s for %s..%s instead of %s..%s",
@@ -374,21 +402,14 @@ class MarketDataService:
             # this call means no cached price is served beside it. The index
             # path holds W-c' to the same rule (D-4: it has no sentence that
             # could disclose a cached answer).
-            now = self._clock()
-            return ProviderResult(
-                bars=[],
-                status=DataStatus.UNAVAILABLE,
-                as_of=now,
-                source="none",
-                staleness_minutes=None,
-                reason=_combine_reasons(reasons),
-                rejection=_strongest(refusals),
-            )
-        fallback = self._fall_back_to_cache(
+            return self._refused_answer(reasons, refusals)
+        if readback_refused:
+            # D-2 (5)(d): ``_fall_back_to_cache`` does not read the cache again,
+            # so T-15 is stated exactly once (C-30).
+            return self._refused_answer(reasons, [*refusals, "cache_unit_rejected"])
+        return self._fall_back_to_cache(
             symbol, market, start, end, reasons, refusal=_strongest(refusals)
         )
-        self._log_currency(symbol, market, fallback, layer="fallback_cache")
-        return fallback
 
     def get_cached_bars(
         self, symbol: str, market: Market, start: date, end: date
@@ -414,6 +435,12 @@ class MarketDataService:
                 staleness_minutes=None,
                 reason=CACHE_ONLY_MISS_REASON,
             )
+        if self._cache_refuses(
+            symbol, market, cached.bars, layer="cache_only", source=cached.source
+        ):
+            # ADR-0024 D-2 (5)(c): T-15 on the equity path, no sentence on the
+            # index path (D-4); nothing written either way (ADR-0010 R-2).
+            return self._refused_answer([], ["cache_unit_rejected"])
         coverage = self._cache.fetch_coverage(symbol, market)
         current = False
         checked_at = cached.fetched_at
@@ -429,17 +456,9 @@ class MarketDataService:
                 )
                 is Verdict.HAS_LATEST_SESSION
             )
-        answer = self._cached_result(cached, checked_at=checked_at, now=now, current=current)
-        self._log_currency(symbol, market, answer, layer="cache_only")
-        return answer
+        return self._cached_result(cached, checked_at=checked_at, now=now, current=current)
 
-    def _log_currency(
-        self, symbol: str, market: Market, result: ProviderResult, *, layer: str
-    ) -> None:
-        """Log :data:`CURRENCY_DIFFERS_LOG_PREFIX` for ``result``'s bars; never alters it."""
-        self._log_bars_currency(symbol, market, result.bars, layer=layer, source=result.source)
-
-    def _log_bars_currency(
+    def _cache_refuses(
         self,
         symbol: str,
         market: Market,
@@ -447,9 +466,41 @@ class MarketDataService:
         *,
         layer: str,
         source: str,
-    ) -> None:
-        """Observation only (F-9b0, TA5 R-60): log, never refuse and never raise."""
-        self._judge_bars(symbol, market, bars, layer=layer, source=source, refuse=False)
+    ) -> bool:
+        """The cache gate (ADR-0024 D-2 (5)): ``True`` when the series must not be served.
+
+        Any bar declaring a unit other than the market's, or none, refuses the
+        whole series; nothing is deleted (D-8). The record is written by
+        :meth:`_judge_bars`; a lookup that cannot answer raises (C-35 (c)).
+        """
+        return self._judge_bars(symbol, market, bars, layer=layer, source=source) != "ok"
+
+    def _refused_answer(
+        self, reasons: Sequence[str], refusals: Sequence[Rejection]
+    ) -> ProviderResult:
+        """``UNAVAILABLE``, no bars, the strongest category (D-7 (2)).
+
+        When the category is the cache gate's and the path speaks (equity), T-15
+        closes the reason -- unless it is already there (C-30); the index path
+        adds no sentence (D-4 (c)).
+        """
+        stated = list(reasons)
+        if (
+            "cache_unit_rejected" in refusals
+            and self._wording is not None
+            and self._wording.cache_unit_rejected not in stated
+        ):
+            stated.append(self._wording.cache_unit_rejected)
+        now = self._clock()
+        return ProviderResult(
+            bars=[],
+            status=DataStatus.UNAVAILABLE,
+            as_of=now,
+            source="none",
+            staleness_minutes=None,
+            reason=_combine_reasons(stated),
+            rejection=_strongest(refusals),
+        )
 
     def _judge_bars(
         self,
@@ -459,7 +510,6 @@ class MarketDataService:
         *,
         layer: str,
         source: str,
-        refuse: bool,
     ) -> CurrencyVerdict:
         """The currency gate at one checkpoint: the verdict, and one record when it is not ``ok``.
 
@@ -469,10 +519,8 @@ class MarketDataService:
         checkpoint that judges ``mismatch`` or ``missing``, whatever the answer
         then becomes (TA5 R-60, 風控 F9W-35 (c)).
 
-        With ``refuse`` (a checkpoint the gate guards), a market the lookup
-        cannot answer raises :class:`CurrencyLookupError` after its record
-        (C-35 (c)); without it (a checkpoint still observed only) it counts as
-        a mismatch of every bar and the caller ignores the verdict.
+        A market the lookup cannot answer raises :class:`CurrencyLookupError`
+        after its record (C-35 (c), 風控 F9W-39).
         """
         if not bars:
             return "ok"
@@ -497,7 +545,7 @@ class MarketDataService:
             source=source,
             verdict=verdict,
         )
-        if expected is None and refuse:
+        if expected is None:
             raise CurrencyLookupError(
                 f"no currency for market {market!r} at checkpoint {layer} ({symbol})"
             )
@@ -579,8 +627,55 @@ class MarketDataService:
 
     def _try_session_fresh_cache(
         self, symbol: str, market: Market, start: date, end: date
+    ) -> tuple[ProviderResult | None, bool]:
+        """Layer 0 behind the cache gate: ``(answer or None, whether the cache was refused)``.
+
+        ADR-0024 D-2 (5)(a), steps 4 and 5 (steps 1-3 read the D-9 marker and
+        belong to F-9b2, which inserts them before step 4). The whole cached
+        range is read once and judged before every branch below -- the R-8
+        cooldown branch included -- so a refused series is never served:
+
+        * step 4, refused and inside the ADR-0009 R-8 cooldown (the last ask is
+          newer than the last complete success and recent): ``UNAVAILABLE``
+          with T-15 alone (none on the index path), no source asked;
+        * step 4, refused otherwise: ``None`` -- run the ladder, asking for the
+          whole range (the caller disables the incremental start);
+        * step 5, not refused or nothing cached: the ADR-0009 branches as before.
+        """
+        now = self._clock()
+        cached = self._cache.get(symbol, market, start, end, now=now)
+        if cached is None or not self._cache_refuses(
+            symbol, market, cached.bars, layer="layer0_cache", source=cached.source
+        ):
+            return self._layer_zero_answer(
+                symbol, market, start, end, now=now, cached=cached
+            ), False
+        coverage = self._cache.fetch_coverage(symbol, market)
+        last_success = coverage.last_fetched_at if coverage is not None else None
+        attempted = self._cache.last_attempt_at(symbol, market)
+        if (
+            attempted is not None
+            and (last_success is None or attempted > last_success)
+            and policy_for(market).is_within_cooldown(now, attempted)
+        ):
+            # Cooldown facts stay out of the reason (TA4 R-47); nothing is
+            # recorded either (C-31: no new ``record_attempt`` call site).
+            return self._refused_answer([], ["cache_unit_rejected"]), True
+        return None, True
+
+    def _layer_zero_answer(
+        self,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
+        *,
+        now: datetime,
+        cached: CacheReadResult | None,
     ) -> ProviderResult | None:
         """``cache_first`` layer 0 (ADR-0009): serve the cache when no newer session can exist.
+
+        ``cached`` has already passed the cache gate (or is ``None``).
 
         Returns ``None`` (meaning "fall through to the normal ladder") when
         there is no cached data for this range, when no complete live fetch
@@ -588,8 +683,6 @@ class MarketDataService:
         the cooldown, or when the cache is short of the latest published
         session and nobody has asked a live source within the cooldown.
         """
-        now = self._clock()
-        cached = self._cache.get(symbol, market, start, end, now=now)
         policy = policy_for(market)
         coverage = self._cache.fetch_coverage(symbol, market)
         last_success = coverage.last_fetched_at if coverage is not None else None
@@ -807,6 +900,13 @@ class MarketDataService:
         combined = _combine_reasons(reasons)
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
+        if cached is not None and self._cache_refuses(
+            symbol, market, cached.bars, layer="fallback_cache", source=cached.source
+        ):
+            # ADR-0024 D-2 (5)(b): every rung's reason, then T-15 (equity only);
+            # a live W-c' outranks the cache gate's own category (D-7 (2)).
+            refusals: list[Rejection] = [] if refusal is None else [refusal]
+            return self._refused_answer(reasons, [*refusals, "cache_unit_rejected"])
         if cached is not None:
             # ADR-0009 R-1: the same session rule decides ``is_within_ttl`` on
             # this path too -- a cache that lacks a published session is never

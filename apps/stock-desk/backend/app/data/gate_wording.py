@@ -51,6 +51,17 @@ UNIT_MISSING_REASON_US: Final = (
 UNIT_MISSING_REASON_TW: Final = (
     "{provider} 這次回傳的日線沒有標示價格單位，無法確認是否為新台幣，整段都不採用。"
 )
+#: T-15: the cached rows of the series declare a unit that is not the market's,
+#: or none at all; the whole cached series is not used. One constant for all
+#: four cache paths -- layer 0, the degrade-to-cache rung, the cache-only read
+#: and the incremental read-back (F9W-22) -- and at most once in a reason (C-30).
+#: 風控核可文案,修改須重新送審(2026-10-12)
+#: ``work/reviews/2026-10-12-F-9-第二批字面逐字審-F9W-17至F9W-29-風控.md``
+#: (T-15 主案; F9W-22, F9W-27, F9W-29)
+CACHE_UNIT_REJECTED_REASON: Final = (
+    "本機快取中此標的的日線資料，標示的價格單位與市場所用的單位不同，或沒有標示價格單位，"
+    "整段都不採用。"
+)
 
 
 @dataclass(frozen=True)
@@ -64,10 +75,13 @@ class GateWording:
     unit_mismatch: Mapping[Market, str]
     #: W-c', by market; ``{provider}`` likewise.
     unit_missing: Mapping[Market, str]
+    #: T-15, the same for every market.
+    cache_unit_rejected: str
 
 
 #: The equity ladders' wording (TW and US).
 EQUITY_GATE_WORDING: Final = GateWording(
     unit_mismatch=MappingProxyType({"US": UNIT_MISMATCH_REASON_US, "TW": UNIT_MISMATCH_REASON_TW}),
     unit_missing=MappingProxyType({"US": UNIT_MISSING_REASON_US, "TW": UNIT_MISSING_REASON_TW}),
+    cache_unit_rejected=CACHE_UNIT_REJECTED_REASON,
 )

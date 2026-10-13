@@ -23,6 +23,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from app.data.gate_wording import (
+    CACHE_UNIT_REJECTED_REASON,
     UNIT_MISMATCH_REASON_TW,
     UNIT_MISMATCH_REASON_US,
     UNIT_MISSING_REASON_TW,
@@ -57,10 +58,9 @@ C_PRIME_COOLDOWN = (
     "已於約 {minutes} 分鐘前整段不採用；冷卻期為 {cooldown_hours} 小時，冷卻期內系統不會自動重試；"
     "冷卻期結束後的下一次查詢才會重新向來源取得。"
 )
-T_15 = (
-    "本機快取中此標的的日線資料，標示的價格單位與市場所用的單位不同，或沒有標示價格單位，"
-    "整段都不採用。"
-)
+# T-15 is the app's constant since F-9b commit 6 (verbatim against the ruling in
+# ``test_f9b_cache_currency_gate.py``).
+T_15 = CACHE_UNIT_REJECTED_REASON
 #: An Alpha Vantage sentence as it reaches ``_combine_reasons`` (C-13 (4), (8)).
 AV_QUOTA_REASON = "Alpha Vantage 今日查詢額度已用罄，本次不呼叫主來源，請由備援來源接手。"
 

@@ -469,6 +469,13 @@ class PositionValuator:
         A latest bar whose close is unusable returns exactly what "no bar"
         returns; an earlier bar is never substituted for it (see the module
         docstring).
+
+        An answer the data layer refused (``ProviderResult.rejection`` set,
+        ADR-0024 D-7 (3)) returns :data:`SYMBOL_OR_UNIT_REJECTED`, in either
+        price mode, decided by the category alone and never by "the bars are
+        empty" (D-7 (7)); the caller then asks no FX source (F9W-18). Every
+        other empty answer returns ``price`` (live) or ``price_not_queried``
+        (cache-only).
         """
         missing_token = PRICE_NOT_QUERIED if self._price_mode == "cache_only" else "price"
         service = self._market_services.get(position.market)

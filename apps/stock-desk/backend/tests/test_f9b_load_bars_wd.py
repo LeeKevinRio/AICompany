@@ -83,6 +83,9 @@ REFUSALS = [
         _combine_reasons([AV_QUOTA_REASON, "yfinance 連線逾時或發生錯誤，暫不可用。", T_15]),
         id="AV+yfinance+T-15",
     ),
+    # C-13 (9): a live W-c' and a refused cache. The category is the producer's:
+    # ``unit_missing`` outranks ``cache_unit_rejected`` (D-7 (2)); pinned against
+    # the real service in test_f9b_cache_currency_gate.py::test_c13_9_w_c_prime_and_a_refused_cache.
     pytest.param(
         "US",
         "unit_missing",

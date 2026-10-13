@@ -1,11 +1,12 @@
 /**
  * User-facing labels for `Valuation.missing` tokens (backend
- * `app/portfolio/valuation.py`). Three fixed shapes, on purpose: 「查無…」 means
+ * `app/portfolio/valuation.py`). Four fixed shapes, on purpose: 「查無…」 means
  * the system asked and there was nothing; 「本次未查…」 means no source was
  * asked this time (a cache-only read, ADR-0010 D-1); the third is a noun
  * phrase (「幣別與市場不符」) that states the stored record itself is
  * inconsistent -- nothing was queried and it is not a data outage (風控
- * 2026-10-08 第二段裁定第 6 項). Every token the backend
+ * 2026-10-08 第二段裁定第 6 項); the fourth (「代號或價格單位不採用」, T-12)
+ * says the price answer was not adopted, described below. Every token the backend
  * emits today is labelled here, and 「缺」 is gone: it mislabelled "not asked"
  * as "missing" (風控 2026-09-18 C-1). A token this map does not know is shown
  * as-is on purpose -- a visible failure that the label table lags the backend,
