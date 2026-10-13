@@ -16,7 +16,10 @@ What this module owns, and only this module:
 2. out-of-sample attribution (fully-contained only) plus the counts of what that
    attribution had to throw away;
 3. the p / b estimators over round-trip **returns**;
-4. the Wilson interval for p and the joint bootstrap interval for the fraction.
+4. the Wilson interval for p and the joint bootstrap interval for the fraction;
+5. the round-trip-level facts the backtest report's detail block shows (F-11):
+   holding bars, the per-side mean returns, the lowest-return round trips, the
+   longest losing streak, and the in-market interval count.
 
 What this module deliberately does **not** own: the Kelly fraction formula. It
 lives once, in ``app.advice.limits.kelly_fraction``, and reaches the bootstrap
@@ -289,6 +292,126 @@ def stats_from_returns(returns: Sequence[float]) -> RoundTripStats:
         round_trip_win_rate=win_rate,
         round_trip_payoff_ratio=payoff_ratio,
     )
+
+
+# --------------------------------------------------------------------------
+# F-11 round-trip detail (PRD D-4..D-12; tech-architect F11-A-5, A-12, A-17).
+#
+# Pure functions only: no dataclass, field or signature above changes, and none
+# of the functions below re-derives what ``stats_from_returns`` already owns.
+# Every win/loss/tie split here is the very same strict comparison against
+# ``0.0`` that ``stats_from_returns`` uses (D-5), so a round trip can never be a
+# win in one statistic and something else in another.
+# --------------------------------------------------------------------------
+
+
+def holding_bars(episode: Episode) -> int:
+    """Daily bars a round trip was exposed for: ``exit_idx - entry_idx`` (D-4).
+
+    The position decided at bar ``t``'s close earns the ``t -> t + 1`` move, so
+    a round trip opened at ``entry_idx`` and closed at ``exit_idx`` is exposed
+    over exactly this many return intervals -- the same unit
+    :func:`in_market_intervals` counts in. The unit is bars, not calendar days.
+    """
+    return episode.exit_idx - episode.entry_idx
+
+
+def mean_win_loss_returns(returns: Sequence[float]) -> tuple[float | None, float | None]:
+    """``(mean winning return, mean losing return)`` over round-trip returns (D-6).
+
+    Split and averaged exactly as :func:`stats_from_returns` does (``> 0.0`` /
+    ``< 0.0``, :func:`statistics.fmean`), so ``mean_win / -mean_loss`` is
+    bit-for-bit the ``round_trip_payoff_ratio`` of the same sample (F11-A-18).
+    The losing mean is negative. A side with no round trip is ``None`` --
+    undefined, never ``0.0``.
+    """
+    wins = [value for value in returns if value > 0.0]
+    losses = [value for value in returns if value < 0.0]
+    return (fmean(wins) if wins else None, fmean(losses) if losses else None)
+
+
+def lowest_return_episodes(episodes: Sequence[Episode], count: int) -> tuple[Episode, ...]:
+    """The ``count`` round trips with the lowest return, lowest first (D-10).
+
+    Ordered by ``return_on_entry_equity``; equal returns by ``entry_idx`` (the
+    bar index, never a date string). Never by currency P&L: a growing book
+    would push late round trips to the front for their size alone. Fewer than
+    ``count`` round trips are returned as they are -- nothing is padded.
+    """
+    if count < 0:
+        raise ValueError("count must be non-negative")
+    ranked = sorted(episodes, key=lambda e: (e.return_on_entry_equity, e.entry_idx))
+    return tuple(ranked[:count])
+
+
+def longest_losing_streak(episodes: Sequence[Episode]) -> tuple[Episode, ...] | None:
+    """The longest run of consecutive losing round trips, in ``entry_idx`` order (D-11).
+
+    A round trip returning exactly ``0.0`` is not a loss, so it breaks a streak
+    just as a win does. Among equally long streaks the earliest is returned.
+    ``None`` when there is no round trip at all (no streak is defined); an
+    empty tuple when there are round trips but none lost. The streak never
+    looks past ``episodes``: a caller passing one segment's attribution gets
+    that segment's streak only.
+    """
+    if not episodes:
+        return None
+    ordered = sorted(episodes, key=lambda e: e.entry_idx)
+    best: tuple[Episode, ...] = ()
+    current: list[Episode] = []
+    for episode in ordered:
+        if episode.return_on_entry_equity < 0.0:
+            current.append(episode)
+            # Strictly longer only: an equally long later streak never displaces
+            # the earliest one.
+            if len(current) > len(best):
+                best = tuple(current)
+        else:
+            current = []
+    return best
+
+
+def held_mask(extraction: EpisodeExtraction, bars: int) -> tuple[bool, ...]:
+    """Per bar, whether the book holds shares after that bar's close (D-12).
+
+    Derived from the round-trip spans themselves -- ``[entry_idx, exit_idx)``
+    for every closed round trip and ``[open_entry_idx, bars)`` for one still
+    open -- which is exactly "position above :data:`POSITION_EPSILON`", the
+    flat line :func:`extract_episodes` draws. One flat line, so the in-market
+    count and the holding bars reconcile by construction.
+    """
+    held = [False] * max(bars, 0)
+    for episode in extraction.episodes:
+        for index in range(max(episode.entry_idx, 0), min(episode.exit_idx, len(held))):
+            held[index] = True
+    if extraction.open_entry_idx is not None:
+        for index in range(max(extraction.open_entry_idx, 0), len(held)):
+            held[index] = True
+    return tuple(held)
+
+
+def in_market_intervals(held: Sequence[bool], *, start: int, stop: int) -> int:
+    """Return intervals of the segment ``[start, stop)`` the book was in for (D-12).
+
+    The segment's ``stop - start`` bars span ``stop - start - 1`` daily return
+    intervals; interval ``t -> t + 1`` is exposed when ``held[t]``. So the
+    count runs over ``[start, stop - 1)`` -- the last bar's own exposure earns
+    a move outside the segment.
+    """
+    return sum(1 for index in range(start, stop - 1) if 0 <= index < len(held) and held[index])
+
+
+def in_market_ratio(held: Sequence[bool], *, start: int, stop: int) -> float | None:
+    """Share of the segment's return intervals spent holding shares (D-12).
+
+    Denominator ``stop - start - 1``, the same intervals the segment's total
+    return compounds over. ``None`` when the segment has fewer than two bars
+    and therefore no return interval at all.
+    """
+    intervals = stop - start - 1
+    if intervals < 1:
+        return None
+    return in_market_intervals(held, start=start, stop=stop) / intervals
 
 
 def wilson_interval(
