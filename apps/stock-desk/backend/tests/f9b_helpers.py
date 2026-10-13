@@ -6,10 +6,11 @@ cause group) land before any producer writes ``ProviderResult.rejection``
 a canned service built with the ``ProviderResult`` constructor -- never
 ``model_copy(update=...)``, which would skip the invariant validator.
 
-The reason strings below are the risk-approved wording, copied verbatim as
-*test data* so the pass-through is checked against the real sentences
-(longest first: W-a alt-1). The ``app`` constants that own them arrive with
-the producers (F-9b commits 5-7) and carry the approval citations there:
+The reason strings below are the risk-approved wording, so the pass-through is
+checked against the real sentences (longest first: W-a alt-1). Each one is the
+``app`` constant that owns it once its producer has landed (F-9b commits 5-7,
+which carry the approval citations); until then it is copied verbatim as test
+data. C and C' stay test data (their producer is F-9b2). Sources:
 
 * W-a (alt-1), W-b (alt-2), W-c, W-c', C:
   ``work/reviews/2026-10-12-F-9-原因句逐字審-F9W-1至F9W-16-風控.md``
@@ -21,6 +22,12 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+from app.data.gate_wording import (
+    UNIT_MISMATCH_REASON_TW,
+    UNIT_MISMATCH_REASON_US,
+    UNIT_MISSING_REASON_TW,
+    UNIT_MISSING_REASON_US,
+)
 from app.data.interface import DataStatus, Market, PriceBar, ProviderResult, Rejection
 
 AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
@@ -34,12 +41,12 @@ W_B = (
     "此台股代號是「數字後接英文字母 K」的形式，本系統不處理這種形式，未向任何來源查詢。"
     "這類代號可能是以外幣計價的掛牌商品，價格單位未必是新台幣。"
 )
-W_C_US = "{provider} 這次回傳的日線，標示的價格單位不是美元（美股日線以美元為準），整段都不採用。"
-W_C_TW = (
-    "{provider} 這次回傳的日線，標示的價格單位不是新台幣（台股日線以新台幣為準），整段都不採用。"
-)
-W_C_PRIME_US = "{provider} 這次回傳的日線沒有標示價格單位，無法確認是否為美元，整段都不採用。"
-W_C_PRIME_TW = "{provider} 這次回傳的日線沒有標示價格單位，無法確認是否為新台幣，整段都不採用。"
+# W-c / W-c' are the app's own constants since F-9b commit 5 (verbatim against the
+# ruling in ``test_f9b_live_currency_gate.py``).
+W_C_US = UNIT_MISMATCH_REASON_US
+W_C_TW = UNIT_MISMATCH_REASON_TW
+W_C_PRIME_US = UNIT_MISSING_REASON_US
+W_C_PRIME_TW = UNIT_MISSING_REASON_TW
 C_COOLDOWN = (
     "本機尚無此標的可採用的日線資料。最近一次向來源取得的日線，標示的價格單位與市場所用的單位不同，"
     "已於約 {minutes} 分鐘前整段不採用；冷卻期為 {cooldown_hours} 小時，冷卻期內系統不會自動重試；"

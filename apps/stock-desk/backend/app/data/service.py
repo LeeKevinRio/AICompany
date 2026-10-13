@@ -11,12 +11,20 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal
+from typing import Literal, get_args
 
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
-from app.data.interface import DataStatus, Market, MarketDataProvider, PriceBar, ProviderResult
-from app.data.quality import check_currency, classify_currency
+from app.data.gate_wording import EQUITY_GATE_WORDING, GateWording
+from app.data.interface import (
+    DataStatus,
+    Market,
+    MarketDataProvider,
+    PriceBar,
+    ProviderResult,
+    Rejection,
+)
+from app.data.quality import CurrencyVerdict, check_currency, classify_currency
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +58,20 @@ ServiceScope = Literal["equity", "index"]
 #: when the table has no entry (ADR-0024 D-5, TA1 M-6). Asked on every call
 #: with that call's ``market``: the index service answers for both markets.
 CurrencyLookup = Callable[[Market], str | None]
+
+#: Which refusal wins when one answer carries several (ADR-0024 D-7 (2)).
+_REJECTION_PRECEDENCE: tuple[Rejection, ...] = ("unit_mismatch", "unit_missing")
+
+
+class CurrencyLookupError(LookupError):
+    """The injected lookup had no currency for a market at a gate checkpoint.
+
+    A configuration error, not a data event (ADR-0024 D-4 last point, C-35,
+    風控 F9W-39): there is no approved sentence that would be true here, so it
+    is raised -- never turned into ``UNAVAILABLE``, a ``rejection``, a missing
+    token or any reader-facing wording -- before anything is written.
+    """
+
 
 #: Joins several layers' reasons into the one ``reason`` slot a
 #: ``ProviderResult`` has, in ladder order. Each sentence keeps its own full
@@ -193,10 +215,18 @@ class MarketDataService:
     degrade-to-cache rung, the cache-only read) bars that do not all carry
     the expected currency -- or a market the lookup does not know, which
     counts as a mismatch -- produce one record starting with
-    :data:`CURRENCY_DIFFERS_LOG_PREFIX`. Nothing else changes: the same bars
-    are returned, written to the cache and recorded in the fetch and attempt
-    logs exactly as when every bar matches. F-9b turns the record's verdict
-    into a fail-closed refusal (ADR-0024 D-2).
+    :data:`CURRENCY_DIFFERS_LOG_PREFIX`.
+
+    The live rung is gated (ADR-0024 D-2, F-9b): a provider whose bars do not
+    all carry the expected currency has declined -- nothing is cached, no fetch
+    is recorded -- and states W-c (another unit declared) or W-c' (no unit
+    declared) on the equity path, nothing on the index path. After a W-c, no
+    cached price is served on the same call (風控 F9W-4 (a)); after a W-c' the
+    equity ladder may still fall back to the cache, the index ladder may not
+    (D-4). A lookup that cannot answer for a market is refused at construction
+    and, should it change its mind later, raises :class:`CurrencyLookupError`
+    at the gated checkpoint (C-35). The cache checkpoints are still observed
+    only, as in F-9b0.
     """
 
     def __init__(
@@ -212,6 +242,12 @@ class MarketDataService:
     ) -> None:
         if scope not in ("equity", "index"):
             raise ValueError(f"unknown service scope: {scope!r}")
+        # C-35 (b): a market the lookup cannot answer is a configuration error,
+        # caught here rather than at the first request for that market.
+        for known in get_args(Market):
+            currency = currency_for_market(known)
+            if currency is None or not currency.strip():
+                raise ValueError(f"currency_for_market has no currency for market {known!r}")
         self._primary = primary
         self._backups = tuple(backups)
         self._cache = cache
@@ -219,6 +255,9 @@ class MarketDataService:
         self._cache_first = cache_first
         self._currency_for_market = currency_for_market
         self._scope = scope
+        #: The sentences a refusal states: the equity ladders speak, the index
+        #: path never does (ADR-0024 D-4, 風控 F9W-9).
+        self._wording: GateWording | None = EQUITY_GATE_WORDING if scope == "equity" else None
 
     def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
         if self._cache_first:
@@ -238,13 +277,30 @@ class MarketDataService:
         # Every rung that declined to answer states why; those sentences are
         # what the API layer shows when the whole ladder comes up empty.
         reasons: list[str] = []
+        #: Every live rung the currency gate refused on this call (D-2 (1)).
+        refusals: list[Rejection] = []
         for provider, status in providers:
             result, reason = self._try_provider(provider, symbol, fetch_start, end)
             if result is None:
                 if reason is not None:
                     reasons.append(reason)
                 continue
-            self._log_currency(symbol, market, result, layer="provider")
+            verdict = self._judge_bars(
+                symbol, market, result.bars, layer="provider", source=result.source, refuse=True
+            )
+            if verdict != "ok":
+                # ADR-0024 D-2 (1), D-3: the whole series is this rung declining
+                # -- nothing is cached, no fetch is recorded, the attempt below
+                # is recorded as for any other declined rung (C-2, C-3).
+                refusals.append("unit_mismatch" if verdict == "mismatch" else "unit_missing")
+                sentence = self._refusal_sentence(provider, market, verdict)
+                if sentence is not None:
+                    reasons.append(sentence)
+                if verdict == "mismatch":
+                    # D-2 (2): a later rung is asked for the whole range, so no
+                    # cached head is ever read back beside a W-c this call.
+                    fetch_start = start
+                continue
             fetched_at = self._clock()
             self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
             # ADR-0009: the attempt log feeds the cooldown, whatever happens next.
@@ -313,7 +369,24 @@ class MarketDataService:
         # Every live rung declined: remember the attempt so the cooldown applies
         # to the *next* click even though nothing was fetched (ADR-0009 R-8).
         self._cache.record_attempt(symbol, market, at=self._clock())
-        fallback = self._fall_back_to_cache(symbol, market, start, end, reasons)
+        if "unit_mismatch" in refusals or (refusals and self._scope == "index"):
+            # 風控 F9W-4 (a), ADR-0024 D-2 (2): a rung that declared another unit
+            # this call means no cached price is served beside it. The index
+            # path holds W-c' to the same rule (D-4: it has no sentence that
+            # could disclose a cached answer).
+            now = self._clock()
+            return ProviderResult(
+                bars=[],
+                status=DataStatus.UNAVAILABLE,
+                as_of=now,
+                source="none",
+                staleness_minutes=None,
+                reason=_combine_reasons(reasons),
+                rejection=_strongest(refusals),
+            )
+        fallback = self._fall_back_to_cache(
+            symbol, market, start, end, reasons, refusal=_strongest(refusals)
+        )
         self._log_currency(symbol, market, fallback, layer="fallback_cache")
         return fallback
 
@@ -375,24 +448,74 @@ class MarketDataService:
         layer: str,
         source: str,
     ) -> None:
-        """One record when ``bars`` would be refused by the currency gate (F-9b0, TA5 R-60).
+        """Observation only (F-9b0, TA5 R-60): log, never refuse and never raise."""
+        self._judge_bars(symbol, market, bars, layer=layer, source=source, refuse=False)
 
-        Observation only: reads ``bars`` and logs, nothing else. ``layer``
-        names the checkpoint (``provider``, ``incremental_readback``,
+    def _judge_bars(
+        self,
+        symbol: str,
+        market: Market,
+        bars: Sequence[PriceBar],
+        *,
+        layer: str,
+        source: str,
+        refuse: bool,
+    ) -> CurrencyVerdict:
+        """The currency gate at one checkpoint: the verdict, and one record when it is not ``ok``.
+
+        ``layer`` names the checkpoint (``provider``, ``incremental_readback``,
         ``layer0_cache``, ``fallback_cache``, ``cache_only``). An empty series
-        has nothing to judge and logs nothing.
+        has nothing to judge: ``ok``, no record. The record is written for every
+        checkpoint that judges ``mismatch`` or ``missing``, whatever the answer
+        then becomes (TA5 R-60, 風控 F9W-35 (c)).
+
+        With ``refuse`` (a checkpoint the gate guards), a market the lookup
+        cannot answer raises :class:`CurrencyLookupError` after its record
+        (C-35 (c)); without it (a checkpoint still observed only) it counts as
+        a mismatch of every bar and the caller ignores the verdict.
         """
         if not bars:
-            return
+            return "ok"
         expected = self._currency_for_market(market)
-        if expected is None:
+        verdict: CurrencyVerdict
+        if expected is None or not expected.strip():
             verdict = "mismatch"
             mismatched = len(bars)
+            expected = None
         else:
             verdict = classify_currency(bars, expected)
             if verdict == "ok":
-                return
+                return verdict
             mismatched = len(check_currency(bars, expected))
+        self._write_record(
+            symbol,
+            market,
+            bars,
+            expected=expected,
+            mismatched=mismatched,
+            layer=layer,
+            source=source,
+            verdict=verdict,
+        )
+        if expected is None and refuse:
+            raise CurrencyLookupError(
+                f"no currency for market {market!r} at checkpoint {layer} ({symbol})"
+            )
+        return verdict
+
+    def _write_record(
+        self,
+        symbol: str,
+        market: Market,
+        bars: Sequence[PriceBar],
+        *,
+        expected: str | None,
+        mismatched: int,
+        layer: str,
+        source: str,
+        verdict: CurrencyVerdict,
+    ) -> None:
+        """The one operator record (:data:`CURRENCY_DIFFERS_LOG_PREFIX`); no reader wording."""
         logger.log(
             logging.ERROR if self._scope == "index" else logging.WARNING,
             CURRENCY_DIFFERS_LOG_PREFIX
@@ -409,6 +532,23 @@ class MarketDataService:
             verdict,
             self._scope,
         )
+
+    def _refusal_sentence(
+        self, provider: MarketDataProvider, market: Market, verdict: CurrencyVerdict
+    ) -> str | None:
+        """W-c or W-c' for a refused live rung, or ``None`` where no sentence applies.
+
+        The index path has none (D-4, F9W-9). ``{provider}`` is the adapter's
+        own ``source_id`` and nothing else; an adapter without one gets no
+        sentence rather than a guessed name (F9W-3, C-14).
+        """
+        if self._wording is None:
+            return None
+        source_id = getattr(provider, "source_id", None)
+        if not isinstance(source_id, str) or not source_id.strip():
+            return None
+        table = self._wording.unit_mismatch if verdict == "mismatch" else self._wording.unit_missing
+        return table[market].format(provider=source_id)
 
     def _incremental_start(self, symbol: str, market: Market, start: date, end: date) -> date:
         """Where a live fetch for ``[start, end]`` may begin without losing anything (D-7).
@@ -653,7 +793,17 @@ class MarketDataService:
         start: date,
         end: date,
         reasons: Sequence[str] = (),
+        *,
+        refusal: Rejection | None = None,
     ) -> ProviderResult:
+        """The last rung: whatever the cache holds, else ``UNAVAILABLE``.
+
+        ``refusal`` is the category of a live rung the gate refused this call
+        (only W-c' reaches here on the equity path, D-2 (4)). A cached answer
+        never carries it -- it has bars (D-7 (2)) -- while an empty answer does,
+        so ``load_bars`` states the refusal verbatim (W-d) and the valuator
+        gives the refused-answer token (C-13 (5), C-19).
+        """
         combined = _combine_reasons(reasons)
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
@@ -696,4 +846,13 @@ class MarketDataService:
             source="none",
             staleness_minutes=None,
             reason=combined,
+            rejection=refusal,
         )
+
+
+def _strongest(refusals: Sequence[Rejection]) -> Rejection | None:
+    """The one category an answer carries when several rungs were refused (D-7 (2))."""
+    for category in _REJECTION_PRECEDENCE:
+        if category in refusals:
+            return category
+    return None

@@ -107,9 +107,9 @@ def _default_resolver() -> MarketDataResolver:
 
     Each ladder is told the market currency through :func:`_market_currency`
     (the one table that defines it, ``MARKET_CURRENCY``, task X-3 KX-A1) and
-    is built as ``scope="equity"`` (ADR-0024 TA5 R-60): until F-9b a bar
-    carrying any other currency is only logged as a WARNING, with the answer
-    unchanged.
+    is built as ``scope="equity"`` (ADR-0024 TA5 R-60): a live answer whose
+    bars carry any other currency is logged as a WARNING and refused (W-c /
+    W-c', ADR-0024 D-2).
     """
     cache = _default_cache()
     tw_service = MarketDataService(
@@ -157,7 +157,8 @@ def _default_index_resolver() -> IndexServiceResolver:
     single expected currency fits it. Built as ``scope="index"`` (TA5 R-60):
     index series are checked for currency, never for shape (ADR-0024 D-4),
     and a differing currency logs at ERROR -- under the shipped configuration
-    it cannot happen (F9W-31 (a), R-61). Until F-9b the answer is unchanged.
+    it cannot happen (F9W-31 (a), R-61); such an answer is refused with no
+    sentence of the index path's own (D-4).
     """
     service = MarketDataService(
         primary=IndexProviderBridge(_default_yfinance()),
