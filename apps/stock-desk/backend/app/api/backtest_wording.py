@@ -238,6 +238,12 @@ def _text_after_value(template: str) -> str:
     return template[len(_VALUE_PLACEHOLDER) :]
 
 
+#: L-05c / L-05d with the value left out, cut once at import: a template that
+#: stops opening with ``{value}`` fails the module load, not a request.
+_MEAN_WINNING_RETURN_TAIL = _text_after_value(MEAN_WINNING_RETURN_CELL)
+_MEAN_LOSING_RETURN_TAIL = _text_after_value(MEAN_LOSING_RETURN_CELL)
+
+
 def _count(value: int) -> str:
     """An integer count, grouped the way the front end's locale formatter groups it."""
     return f"{value:,}"
@@ -339,10 +345,10 @@ def _segment_labels(
             k=_count(len(segment.lowest_return_round_trips)), n=n
         ),
         longest_losing_streak_value=_losing_streak_value(segment),
-        mean_winning_return_suffix=_text_after_value(MEAN_WINNING_RETURN_CELL).format(
+        mean_winning_return_suffix=_MEAN_WINNING_RETURN_TAIL.format(
             n_win=_count(segment.num_winning_round_trips)
         ),
-        mean_losing_return_suffix=_text_after_value(MEAN_LOSING_RETURN_CELL).format(
+        mean_losing_return_suffix=_MEAN_LOSING_RETURN_TAIL.format(
             n_loss=_count(segment.num_losing_round_trips)
         ),
         payoff_ratio_pointer=BACKTEST_PAYOFF_RATIO_POINTER.format(

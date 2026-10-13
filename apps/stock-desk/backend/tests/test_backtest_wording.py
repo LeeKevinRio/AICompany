@@ -792,3 +792,79 @@ def test_no_f11_name_appears_on_the_kelly_or_advice_side(name: str) -> None:
         if name in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# PX-2 (PRD C.4.2, AC-13): the global front-end list carries the eight phrases
+# --------------------------------------------------------------------------
+
+
+def test_the_front_end_banned_list_carries_every_px2_phrase() -> None:
+    """Read from ``adviceWording.ts`` itself, so the two lists cannot drift apart."""
+    assert len(PX2_PHRASES) == 8
+    missing = [phrase for phrase in PX2_PHRASES if phrase not in FRONTEND_FORBIDDEN_TERMS]
+    assert missing == [], f"FRONTEND_FORBIDDEN_TERMS 缺少 PX-2 措辭：{missing}"
+
+
+@pytest.mark.parametrize("phrase", PX2_PHRASES)
+def test_no_shipped_source_uses_a_px2_phrase(phrase: str) -> None:
+    """PX-2: scan terms only. The front-end list that bans them is the one exemption."""
+    banned_list = _FRONTEND_APP_ROOT / "lib" / "adviceWording.ts"
+    offenders = [
+        str(path.relative_to(_STOCK_DESK_ROOT))
+        for path in _shipped_sources()
+        if path != banned_list and phrase in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# Module-load template check and the no-bar date fallback (qa non-blocking)
+# --------------------------------------------------------------------------
+
+
+def test_the_mean_cell_tails_are_cut_once_at_import() -> None:
+    assert wording._MEAN_WINNING_RETURN_TAIL == "（{n_win} 筆獲利回合）"
+    assert wording._MEAN_LOSING_RETURN_TAIL == "（{n_loss} 筆虧損回合）"
+    with pytest.raises(ValueError):
+        wording._text_after_value("（{n_win} 筆獲利回合）")
+
+
+def test_a_cell_template_without_its_value_slot_fails_the_module_load() -> None:
+    """The check runs while the module executes, before any request can reach it."""
+    source = _WORDING_SOURCE.read_text(encoding="utf-8")
+    broken = source.replace(
+        'MEAN_WINNING_RETURN_CELL = "{value}（{n_win} 筆獲利回合）"',
+        'MEAN_WINNING_RETURN_CELL = "（{n_win} 筆獲利回合）{value}"',
+    )
+    assert broken != source
+    code = compile(broken, str(_WORDING_SOURCE), "exec")
+    with pytest.raises(ValueError, match="must open with"):
+        exec(code, {"__name__": "backtest_wording_broken_copy"})
+
+
+def test_a_run_without_bars_names_no_date_rather_than_inventing_one() -> None:
+    """Unreachable from the API (an ok run always has bars), pinned all the same."""
+    empty = BacktestResult(dates=[], equity_curve=[], close=[], weights=[], initial_cash=1e6)
+    folds = walk_forward_splits(360, train_size=252, test_size=63)
+    detail = walk_forward_round_trip_detail(empty, folds, warmup_bars=0)
+    assert detail.coverage.last_bar_date is None
+    labels = build_round_trip_labels(detail)
+    assert labels.excluded_open_trips == (
+        "被排除的未平倉回合數（本區段結束前已進場，到回測資料最後一根 — 仍未平倉）"
+    )
+    assert labels.unattributed_tail == APPROVED["L-18b"]
+    # The same fallback in the tail sentence, on a coverage built by hand.
+    with_tail = detail.model_copy(
+        update={
+            "coverage": detail.coverage.model_copy(
+                update={"unattributed_tail_bars": 3, "unattributed_tail_start_date": "2020-01-01"}
+            )
+        }
+    )
+    tail_labels = build_round_trip_labels(with_tail)
+    assert tail_labels.unattributed_tail == APPROVED["L-18a"].format(
+        tail_bars=3, tail_start_date="2020-01-01", tail_end_date="—"
+    )
+    for text in _strings(tail_labels.model_dump()):
+        assert "None" not in text
