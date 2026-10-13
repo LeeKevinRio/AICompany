@@ -29,7 +29,9 @@ import httpx
 import pytest
 
 from app.api import deps
+from app.data.admission import admit_equity_daily_bars
 from app.data.cache import PriceBarCache
+from app.data.gate_wording import EQUITY_GATE_WORDING
 from app.data.http import RateLimitedClient
 from app.data.interface import (
     DataStatus,
@@ -62,7 +64,11 @@ SERVICE_LOGGER = "app.data.service"
 # --- required, keyword-only, no default ------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["currency_for_market", "scope"])
+#: F-9b commit 7 extends the list with the admission and the wording (C-6).
+GATE_ARGUMENTS = ["currency_for_market", "scope", "admission", "wording"]
+
+
+@pytest.mark.parametrize("name", GATE_ARGUMENTS)
 def test_the_gate_arguments_are_keyword_only_and_have_no_default(name: str) -> None:
     parameter = inspect.signature(MarketDataService.__init__).parameters[name]
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
@@ -82,13 +88,15 @@ class _Nothing(MarketDataProvider):
         )
 
 
-@pytest.mark.parametrize("missing", ["currency_for_market", "scope"])
+@pytest.mark.parametrize("missing", GATE_ARGUMENTS)
 def test_omitting_either_gate_argument_fails_to_construct(missing: str, tmp_path: Path) -> None:
     arguments: dict[str, Any] = {
         "primary": _Nothing(),
         "cache": PriceBarCache(db_path=tmp_path / "c.db"),
         "currency_for_market": MARKET_CURRENCY.get,
         "scope": "equity",
+        "admission": admit_equity_daily_bars,
+        "wording": EQUITY_GATE_WORDING,
     }
     del arguments[missing]
     with pytest.raises(TypeError, match=missing):
@@ -102,6 +110,8 @@ def test_an_unknown_scope_is_refused(tmp_path: Path) -> None:
             cache=PriceBarCache(db_path=tmp_path / "c.db"),
             currency_for_market=MARKET_CURRENCY.get,
             scope="etf",  # type: ignore[arg-type]
+            admission=admit_equity_daily_bars,
+            wording=EQUITY_GATE_WORDING,
         )
 
 

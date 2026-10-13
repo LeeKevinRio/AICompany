@@ -7,10 +7,12 @@ names a security priced in another currency comes back with a foreign price
 labelled USD or TWD. Admission is the shape check that keeps such a ticker out
 before any source is asked.
 
-F-9a ships the rules as pure functions only. Nothing in the read or fetch
-paths calls them yet: wiring them in front of layer 0 (no cache read, no
-provider call, no quota, no attempt log for a refused symbol) is F-9b. Until
-then the only consumer is the read-only inventory in :mod:`app.data.diagnose`.
+F-9a shipped the rules as pure functions; F-9b wires them in front of layer 0
+of both service entries (:func:`admit_equity_daily_bars`, injected by the
+assembly layer; no cache read, no provider call, no quota, no attempt log for
+a refused symbol -- ADR-0024 D-4) and into the Alpha Vantage adapter before
+it reserves quota (defence in depth). The read-only inventory in
+:mod:`app.data.diagnose` still calls :func:`admit_symbol` directly.
 
 The result is structured -- admitted or not, plus a machine-readable reason
 code -- and carries no sentence of any kind: what a reader is told about a
@@ -48,9 +50,12 @@ records the evidence and the date.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
+
+from app.data.providers.us_symbols import InvalidUsSymbolError, canonical_us_symbol
 
 
 class AdmissionReason(StrEnum):
@@ -159,3 +164,35 @@ def admit_symbol(symbol: str, market: str) -> AdmissionResult:
     if rule is US_SYMBOL_RULE and _US_MULTI_CHAR_SUFFIX.fullmatch(symbol) is not None:
         reason = AdmissionReason.US_MULTI_CHAR_SUFFIX
     return AdmissionResult(admitted=False, reason=reason, rule_verified=rule.verified)
+
+
+#: How a daily-bar service decides whether a symbol may be asked about at all
+#: (ADR-0024 D-4): ``(symbol, market) -> admitted``. Injected by the assembly
+#: layer as a required argument; never defaulted.
+SymbolAdmission = Callable[[str, str], bool]
+
+
+def admit_equity_daily_bars(symbol: str, market: str) -> bool:
+    """The equity ladders' admission: :func:`admit_symbol` on the canonical form.
+
+    A US symbol is judged in its :func:`canonical_us_symbol` form (stripped,
+    upper-case, ``.US`` dropped) -- the form every source is asked with -- and
+    one that cannot be canonicalised is refused. The symbol handed on to the
+    sources is never rewritten here (ADR-0024 D-4, verification note).
+    """
+    candidate = symbol
+    if market == "US":
+        try:
+            candidate = canonical_us_symbol(symbol)
+        except InvalidUsSymbolError:
+            return False
+    return admit_symbol(candidate, market).admitted
+
+
+def admit_any_shape(symbol: str, market: str) -> bool:
+    """The index ladder's admission: no shape is checked, only the currency is (D-4).
+
+    Passed explicitly by the index construction point -- never a default -- and
+    never inferred from a ``^`` prefix (TA5 R-59).
+    """
+    return True

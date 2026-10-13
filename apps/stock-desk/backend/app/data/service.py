@@ -13,9 +13,10 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, get_args
 
+from app.data.admission import SymbolAdmission
 from app.data.cache import CacheReadResult, PriceBarCache
 from app.data.freshness import Verdict, expected_session, judge, next_weekday, policy_for
-from app.data.gate_wording import EQUITY_GATE_WORDING, GateWording
+from app.data.gate_wording import GateWording
 from app.data.interface import (
     DataStatus,
     Market,
@@ -240,6 +241,14 @@ class MarketDataService:
     Inside the R-8 cooldown layer 0 answers that way without asking a source;
     outside it, the ladder runs for the whole range, so a source that answers
     overwrites the refused rows.
+
+    Ahead of all of it, at both entries, the injected ``admission`` decides
+    whether the symbol may be asked about at all (D-4): a refused symbol reads
+    no cache, asks no source and writes nothing, and the equity path states
+    W-a (US) or W-b (TW) with ``rejection="symbol_not_admitted"``. ``admission``
+    and ``wording`` are required keyword-only arguments like the two above;
+    the index ladder is handed an admission that checks no shape and no
+    wording (C-6, 風控 F9W-9).
     """
 
     def __init__(
@@ -252,6 +261,8 @@ class MarketDataService:
         cache_first: bool = False,
         currency_for_market: CurrencyLookup,
         scope: ServiceScope,
+        admission: SymbolAdmission,
+        wording: GateWording | None,
     ) -> None:
         if scope not in ("equity", "index"):
             raise ValueError(f"unknown service scope: {scope!r}")
@@ -268,11 +279,18 @@ class MarketDataService:
         self._cache_first = cache_first
         self._currency_for_market = currency_for_market
         self._scope = scope
+        #: Which symbols may be asked about at all (D-4); the index ladder is
+        #: handed one that checks no shape.
+        self._admission = admission
         #: The sentences a refusal states: the equity ladders speak, the index
-        #: path never does (ADR-0024 D-4, 風控 F9W-9).
-        self._wording: GateWording | None = EQUITY_GATE_WORDING if scope == "equity" else None
+        #: path never does (ADR-0024 D-4, 風控 F9W-9). Both are injected by the
+        #: assembly layer, never derived from ``scope`` or a ``^`` prefix (C-6).
+        self._wording = wording
 
     def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
+        refused = self._refuse_unadmitted(symbol, market)
+        if refused is not None:
+            return refused
         layer_zero_refused = False
         if self._cache_first:
             layer_zero, layer_zero_refused = self._try_session_fresh_cache(
@@ -424,6 +442,9 @@ class MarketDataService:
         and writes neither log nor rows (R-2): the attempt log means "a source
         was asked", and nothing was.
         """
+        refused = self._refuse_unadmitted(symbol, market)
+        if refused is not None:
+            return refused
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
         if cached is None:
@@ -457,6 +478,28 @@ class MarketDataService:
                 is Verdict.HAS_LATEST_SESSION
             )
         return self._cached_result(cached, checked_at=checked_at, now=now, current=current)
+
+    def _refuse_unadmitted(self, symbol: str, market: Market) -> ProviderResult | None:
+        """The admission, ahead of every cache read and every source (ADR-0024 D-4).
+
+        A refused symbol reads no cache, asks no source, spends no quota and
+        writes no attempt log (C-4); no currency record is written either -- it
+        is not a currency event (TA5 R-60). The equity path states W-a (US) or
+        W-b (TW), the only place either is stated (F9W-7).
+        """
+        if self._admission(symbol, market):
+            return None
+        logger.info("symbol not admitted for %s daily bars: %s", market, symbol)
+        reason = None if self._wording is None else self._wording.symbol_not_admitted[market]
+        return ProviderResult(
+            bars=[],
+            status=DataStatus.UNAVAILABLE,
+            as_of=self._clock(),
+            source="none",
+            staleness_minutes=None,
+            reason=reason,
+            rejection="symbol_not_admitted",
+        )
 
     def _cache_refuses(
         self,

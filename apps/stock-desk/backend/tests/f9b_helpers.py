@@ -24,6 +24,8 @@ from datetime import UTC, date, datetime
 
 from app.data.gate_wording import (
     CACHE_UNIT_REJECTED_REASON,
+    SYMBOL_NOT_ADMITTED_REASON_TW,
+    SYMBOL_NOT_ADMITTED_REASON_US,
     UNIT_MISMATCH_REASON_TW,
     UNIT_MISMATCH_REASON_US,
     UNIT_MISSING_REASON_TW,
@@ -33,15 +35,10 @@ from app.data.interface import DataStatus, Market, PriceBar, ProviderResult, Rej
 
 AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
 
-W_A = (
-    "本系統只查詢這種形式的美股代號：1 至 5 個英文字母，可接單一字母的類別字尾（如 BRK.B）；"
-    "此代號不在其內，未向任何來源查詢。帶其他字尾的代號可能是外國交易所的掛牌（價格單位未必是美元），"
-    "也可能是特別股等美國商品，系統無法逐一分辨。"
-)
-W_B = (
-    "此台股代號是「數字後接英文字母 K」的形式，本系統不處理這種形式，未向任何來源查詢。"
-    "這類代號可能是以外幣計價的掛牌商品，價格單位未必是新台幣。"
-)
+# W-a / W-b are the app's own constants since F-9b commit 7 (verbatim against the
+# ruling in ``test_f9b_admission_gate.py``).
+W_A = SYMBOL_NOT_ADMITTED_REASON_US
+W_B = SYMBOL_NOT_ADMITTED_REASON_TW
 # W-c / W-c' are the app's own constants since F-9b commit 5 (verbatim against the
 # ruling in ``test_f9b_live_currency_gate.py``).
 W_C_US = UNIT_MISMATCH_REASON_US

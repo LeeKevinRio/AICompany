@@ -635,8 +635,11 @@ def test_equity_ladders_are_told_their_market_currency(
     caplog: pytest.LogCaptureFixture, market: Market
 ) -> None:
     resolver = deps._default_resolver.__wrapped__()  # bypass lru_cache
+    # F-9b commit 7: a symbol each ladder's admission asks about ("2330" is not
+    # a US shape, D-4).
+    symbol = "2330" if market == "TW" else "AAPL"
     with caplog.at_level(logging.WARNING, logger=SERVICE_LOGGER):
-        resolver[market].get_daily_bars("2330", market, date(2024, 1, 1), date(2024, 1, 2))
+        resolver[market].get_daily_bars(symbol, market, date(2024, 1, 1), date(2024, 1, 2))
     records = [
         r
         for r in caplog.records

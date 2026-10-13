@@ -47,9 +47,13 @@ def _bar(source: str) -> PriceBar:
 
 
 def _us_bar(source: str) -> PriceBar:
-    """Same shape as :func:`_bar` but tagged US/USD, for cache_first tests."""
+    """Same shape as :func:`_bar` but tagged US/USD, for cache_first tests.
+
+    A US symbol shape since F-9b commit 7: ``2330`` is not one the US
+    admission asks about (ADR-0024 D-4, TA1 M-12).
+    """
     return PriceBar(
-        symbol="2330",
+        symbol="AAPL",
         market="US",
         date=date(2024, 1, 2),
         open=Decimal("594.00"),
@@ -352,7 +356,7 @@ class TestCacheFirst:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
         cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
-        cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
+        cache.record_fetch("AAPL", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         backup = _StubProvider(source_id="yfinance", bars=[_us_bar("yfinance")])
         service = equity_service(
@@ -366,7 +370,7 @@ class TestCacheFirst:
             cache_first=True,
         )
 
-        result = service.get_daily_bars("2330", "US", START, END)
+        result = service.get_daily_bars("AAPL", "US", START, END)
 
         assert result.status is DataStatus.CACHED_STALE
         assert result.is_within_ttl is True
@@ -378,7 +382,7 @@ class TestCacheFirst:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
         cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
-        cache.record_fetch("2330", "US", start=START, end=END, fetched_at=fetched_at)
+        cache.record_fetch("AAPL", "US", start=START, end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = equity_service(
             primary=primary,
@@ -390,7 +394,7 @@ class TestCacheFirst:
             cache_first=True,
         )
 
-        result = service.get_daily_bars("2330", "US", START, END)
+        result = service.get_daily_bars("AAPL", "US", START, END)
 
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
@@ -404,7 +408,7 @@ class TestCacheFirst:
         )
         # A live source was asked at 00:30 UTC on 01-04 and had nothing newer.
         cache.record_fetch(
-            "2330", "US", start=START, end=END, fetched_at=datetime(2024, 1, 4, 0, 30, tzinfo=UTC)
+            "AAPL", "US", start=START, end=END, fetched_at=datetime(2024, 1, 4, 0, 30, tzinfo=UTC)
         )
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = equity_service(
@@ -414,7 +418,7 @@ class TestCacheFirst:
             cache_first=True,
         )
 
-        result = service.get_daily_bars("2330", "US", START, END)
+        result = service.get_daily_bars("AAPL", "US", START, END)
 
         assert result.status is DataStatus.CACHED_STALE
         assert result.is_within_ttl is False
@@ -426,7 +430,7 @@ class TestCacheFirst:
         cache = PriceBarCache(db_path=tmp_path / "cache.db")
         fetched_at = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
         cache.put([_us_bar("alpha_vantage")], source="alpha_vantage", fetched_at=fetched_at)
-        cache.record_fetch("2330", "US", start=date(2024, 1, 2), end=END, fetched_at=fetched_at)
+        cache.record_fetch("AAPL", "US", start=date(2024, 1, 2), end=END, fetched_at=fetched_at)
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = equity_service(
             primary=primary,
@@ -435,12 +439,12 @@ class TestCacheFirst:
             cache_first=True,
         )
 
-        result = service.get_daily_bars("2330", "US", START, END)  # START < 01-02
+        result = service.get_daily_bars("AAPL", "US", START, END)  # START < 01-02
 
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
         # ...and the widened range is now on record, so the next read is local.
-        again = service.get_daily_bars("2330", "US", START, END)
+        again = service.get_daily_bars("AAPL", "US", START, END)
         assert again.status is DataStatus.CACHED_STALE and primary.call_count == 1
 
     def test_falls_through_to_providers_when_no_cache_entry_exists(self, tmp_path: Path) -> None:
@@ -448,7 +452,7 @@ class TestCacheFirst:
         primary = _StubProvider(source_id="alpha_vantage", bars=[_us_bar("alpha_vantage")])
         service = equity_service(primary=primary, cache=cache, cache_first=True)
 
-        result = service.get_daily_bars("2330", "US", START, END)
+        result = service.get_daily_bars("AAPL", "US", START, END)
 
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
@@ -468,7 +472,7 @@ class TestCacheFirst:
             cache_first=True,
         )
 
-        result = service.get_daily_bars("2330", "US", START, END)
+        result = service.get_daily_bars("AAPL", "US", START, END)
 
         assert result.status is DataStatus.FRESH
         assert primary.call_count == 1
