@@ -164,7 +164,13 @@ describe("A-30 / F11-W-24: the page holds no F-11 sentence and assembles none", 
   it("the source/as-of text is one shared fragment, not a second copy", () => {
     expect(code.match(/資料截至/g) ?? []).toHaveLength(1);
     expect(code.match(/來源：/g) ?? []).toHaveLength(1);
-    expect(code.match(/<SourceAndAsOf\b/g) ?? []).toHaveLength(2);
+    expect(code.match(/<SourceAndAsOf\b/g) ?? []).toHaveLength(1);
+  });
+
+  it("the report header and the round-trip sub-block (rendered once per segment) use the one shared source line (F11-W-34)", () => {
+    expect(code.match(/<SourceLine\b/g) ?? []).toHaveLength(2);
+    expect(code.match(/<DataMetaStatusBadge\b/g) ?? []).toHaveLength(1);
+    expect(code).not.toMatch(/<DataMetaStatusBadge[^>]*\bcompact\b/);
   });
 
   it("no placeholder, no .format/.replace, and no template literal around a label", () => {

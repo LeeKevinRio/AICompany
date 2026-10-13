@@ -304,7 +304,7 @@ export function makeResponse(options: ResponseOptions = {}): BacktestResponse {
     notes: ["note-one"],
     data_warning: null,
     data: {
-      status: "live",
+      status: "fresh",
       source: "twse",
       staleness_minutes: 5,
       is_within_ttl: null,

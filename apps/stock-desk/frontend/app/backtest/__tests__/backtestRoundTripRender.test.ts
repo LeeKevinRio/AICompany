@@ -11,7 +11,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { BacktestResponse, RoundTripEmptyState } from "../../lib/types";
+import { cachedStaleLabel } from "../../components/DataMetaStatusBadge";
+import type { BacktestResponse, DataMeta, RoundTripEmptyState } from "../../lib/types";
 import { BacktestReportView, RoundTripFullListView } from "../BacktestReportView";
 import type { HtmlElement } from "./htmlTree";
 import {
@@ -806,4 +807,80 @@ describe("AC-19 / AC-26 (render side): nothing the page prints is a front-end se
       }
     }
   });
+});
+
+describe("F11-W-34: the sub-block source line carries the header's badge and standing reason", () => {
+  const REASON = "<backend-reason-sentence>";
+  const SUB_BLOCK_TITLES = [IN_SAMPLE_TITLE, OUT_OF_SAMPLE_TITLE];
+
+  interface Case {
+    name: string;
+    data: Partial<DataMeta>;
+    /** What the existing badge component must put on the line besides the source text. */
+    badgeText: string;
+  }
+
+  const CASES: Case[] = [
+    {
+      name: "cached_stale, isWithinTtl true",
+      data: { status: "cached_stale", is_within_ttl: true, staleness_minutes: 90, reason: REASON },
+      badgeText: cachedStaleLabel({ stalenessMinutes: 90, isWithinTtl: true, lastBarDate: LAST_BAR_DATE }),
+    },
+    {
+      name: "cached_stale, isWithinTtl false",
+      data: { status: "cached_stale", is_within_ttl: false, staleness_minutes: 90, reason: REASON },
+      badgeText: cachedStaleLabel({ stalenessMinutes: 90, isWithinTtl: false, lastBarDate: LAST_BAR_DATE }),
+    },
+    { name: "backup", data: { status: "backup", reason: REASON }, badgeText: "備援源" },
+    { name: "unavailable", data: { status: "unavailable", reason: REASON }, badgeText: "資料不足" },
+    { name: "fresh with a reason", data: { status: "fresh", reason: REASON }, badgeText: "" },
+  ];
+
+  function sourceLines(root: HtmlElement): { header: HtmlElement; subBlocks: HtmlElement[] } {
+    const blocks = SUB_BLOCK_TITLES.map((title) => subBlock(root, title));
+    const lines = findAll(root, (el) => el.tag === "p" && textOf(el).startsWith("來源："));
+    const header = lines.filter((line) => !ancestorsOf(line).some((ancestor) => blocks.includes(ancestor)));
+    if (header.length !== 1) throw new Error(`expected exactly one report-header source line, found ${header.length}`);
+    return {
+      header: header[0] as HtmlElement,
+      subBlocks: blocks.map((block) =>
+        findOne(block, (el) => el.tag === "p" && textOf(el).startsWith("來源："), "sub-block source line"),
+      ),
+    };
+  }
+
+  for (const testCase of CASES) {
+    describe(testCase.name, () => {
+      const report = makeResponse();
+      report.data = { ...report.data, ...testCase.data };
+      const { header, subBlocks } = sourceLines(treeOf(report));
+
+      it("the header line itself shows the badge text and the reason", () => {
+        expect(textOf(header)).toContain(`來源：twse｜資料截至 ${LAST_BAR_DATE}`);
+        expect(textOf(header)).toContain(testCase.badgeText);
+        expect(textOf(header)).toContain(REASON);
+      });
+
+      for (const [index, title] of SUB_BLOCK_TITLES.entries()) {
+        it(`${title}: the source line text equals the header line text, character for character`, () => {
+          const line = subBlocks[index] as HtmlElement;
+          expect(textOf(line)).toBe(textOf(header));
+        });
+
+        it(`${title}: the reason stands on the line itself at body size, outside any tooltip or collapsed region`, () => {
+          const line = subBlocks[index] as HtmlElement;
+          const reasonSpan = findOne(line, (el) => el.tag === "span" && textOf(el) === REASON, "reason span");
+          expect(classTokens(reasonSpan)).toContain("text-sm");
+          expect(classTokens(line)).toContain("text-sm");
+          expect(classTokens(line)).not.toContain("text-xs");
+          expect(reasonSpan.attrs.title).toBeUndefined();
+          for (const holder of [reasonSpan, ...ancestorsOf(reasonSpan)]) {
+            expect(["details", "summary"]).not.toContain(holder.tag);
+            expect(holder.attrs.hidden).toBeUndefined();
+            expect(holder.attrs.title).toBeUndefined();
+          }
+        });
+      }
+    });
+  }
 });

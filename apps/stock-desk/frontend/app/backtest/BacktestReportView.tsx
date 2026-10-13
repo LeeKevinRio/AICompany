@@ -347,6 +347,27 @@ function SourceAndAsOf({ data }: { data: DataMeta }) {
   );
 }
 
+/**
+ * The source line with its freshness badge and standing `reason`: one
+ * component for the report header and both round-trip sub-blocks, so the
+ * three lines are fed the same `DataMeta` fields and cannot drift apart
+ * (F11-W-34). Non-compact, body size, the reason never folded away.
+ */
+function SourceLine({ data, marginTop }: { data: DataMeta; marginTop: "mt-1" | "mt-2" }) {
+  return (
+    <p className={`${marginTop} flex flex-wrap items-center gap-2 text-sm text-neutral-400`}>
+      <SourceAndAsOf data={data} />
+      <DataMetaStatusBadge
+        status={data.status}
+        stalenessMinutes={data.staleness_minutes}
+        isWithinTtl={data.is_within_ttl}
+        lastBarDate={data.last_bar_date}
+        reason={data.reason}
+      />
+    </p>
+  );
+}
+
 /** One list of complete round trips: five facts per row, no colour carrying good or bad. */
 function RoundTripRowsTable({
   rows,
@@ -479,9 +500,8 @@ function RoundTripDetailBlock({
     <section className="mt-6">
       <h3 className="text-sm font-semibold text-neutral-200">{segmentLabels.detail_title}</h3>
       <p className="mt-2 text-sm text-neutral-300">{labels.detail_opening}</p>
-      <p className="mt-2 text-sm text-neutral-400">
-        <SourceAndAsOf data={data} />
-      </p>
+      {/* 風控 F11-W-34: the same source line, badge and standing reason as the report header. */}
+      <SourceLine data={data} marginTop="mt-2" />
       <p className="mt-2 text-sm text-neutral-300">{labels.cost_and_settings_note}</p>
       <div className="mt-3">
         <h4 className="text-sm font-semibold text-neutral-200">{labels.excluded_heading}</h4>
@@ -557,16 +577,7 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         <span className="text-xs text-neutral-500">產出時間：{formatDateTime(report.as_of)}</span>
       </div>
       {/* 風控 2026-09-12 REQ-W10: the report names its own bars' source and freshness (S-2: body size, like the event-study section's line). */}
-      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
-        <SourceAndAsOf data={report.data} />
-        <DataMetaStatusBadge
-          status={report.data.status}
-          stalenessMinutes={report.data.staleness_minutes}
-          isWithinTtl={report.data.is_within_ttl}
-          lastBarDate={report.data.last_bar_date}
-          reason={report.data.reason}
-        />
-      </p>
+      <SourceLine data={report.data} marginTop="mt-1" />
 
       {/*
         風控 2026-09-12 複審 R-2 (required): "every number on this page is
