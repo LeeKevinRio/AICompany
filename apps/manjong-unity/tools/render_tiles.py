@@ -405,186 +405,207 @@ def draw_honor(img, code):
 
 
 # ---------------------------------------------------------------- flowers (花牌)
-def plum_flower(d, cx, cy, r, color=RED):
-    """Five round petals with a stamen crown."""
-    for k in range(5):
-        a = math.radians(-90 + k * 72)
-        px, py = cx + math.cos(a) * r * 0.58, cy + math.sin(a) * r * 0.58
-        d.ellipse((px - r * 0.52, py - r * 0.52, px + r * 0.52, py + r * 0.52), fill=color, outline=PAPER, width=max(1, int(r * 0.07)))
-    dot(d, cx, cy, r * 0.30, PAPER)
-    dot(d, cx, cy, r * 0.20, mix(color, (0, 0, 0), 0.25))
-    for k in range(5):
-        a = math.radians(-54 + k * 72)
-        dot(d, cx + math.cos(a) * r * 0.36, cy + math.sin(a) * r * 0.36, r * 0.06, PAPER)
+# Line-art style: crimson outlined blossoms with a paper-white interior, thin green stems and leaves.
+LW = 3.4 * S  # outline width of blossoms (kept thick enough to survive a 44 px tall thumbnail)
+GW = 3.6 * S  # width of green lines
+
+
+def ocircle(d, cx, cy, r, color=RED, lw=LW, fill=PAPER):
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=fill, outline=color, width=max(1, int(lw)))
+
+
+def line(d, pts, w, color):
+    stroke(d, pts, w, w, color)
+
+
+def lens_pts(p0, p1, width, bend=0.0, steps=22):
+    vx, vy = p1[0] - p0[0], p1[1] - p0[1]
+    length = math.hypot(vx, vy) or 1.0
+    nx, ny = -vy / length, vx / length
+    left, right, axis = [], [], []
+    for i in range(steps + 1):
+        t = i / steps
+        off = bend * length * math.sin(math.pi * t)
+        cx, cy = p0[0] + vx * t + nx * off, p0[1] + vy * t + ny * off
+        half = width / 2 * math.sin(math.pi * t) ** 0.8
+        left.append((cx + nx * half, cy + ny * half))
+        right.append((cx - nx * half, cy - ny * half))
+        axis.append((cx, cy))
+    return left + right[::-1], axis
+
+
+def oleaf(d, p0, p1, width, color=GREEN, bend=0.0, lw=GW * 0.8, fill=PAPER, mid=True):
+    """Outlined leaf: coloured contour, paper interior, optional midrib."""
+    poly, axis = lens_pts(p0, p1, width, bend)
+    d.polygon(poly, fill=fill)
+    line(d, poly + [poly[0]], lw, color)
+    if mid:
+        line(d, axis[1:-1], lw * 0.7, color)
+
+
+def scallop_flower(d, cx, cy, r, count=8, color=RED, lw=LW):
+    """Blossom whose outline is a ring of lobes; interior stays paper-white."""
+    ring = r * 0.68
+    lobe = r * 0.36
+    for k in range(count):
+        a = k * 2 * math.pi / count
+        dot(d, cx + math.cos(a) * ring, cy + math.sin(a) * ring, lobe, color)
+    for k in range(count):
+        a = k * 2 * math.pi / count
+        dot(d, cx + math.cos(a) * ring, cy + math.sin(a) * ring, max(1, lobe - lw), PAPER)
+    dot(d, cx, cy, ring, PAPER)
 
 
 def draw_plum(d, P, sc):
-    stroke(d, bezier(P(0.04, 0.96), P(0.3, 0.9), P(0.45, 0.62), P(0.95, 0.12)), sc * 0.075, sc * 0.03, BROWN)
-    stroke(d, bezier(P(0.3, 0.84), P(0.32, 0.7), P(0.26, 0.5), P(0.2, 0.34)), sc * 0.04, sc * 0.02, BROWN)
-    stroke(d, bezier(P(0.56, 0.58), P(0.62, 0.6), P(0.72, 0.58), P(0.86, 0.6)), sc * 0.035, sc * 0.018, BROWN)
-    plum_flower(d, *P(0.4, 0.62), sc * 0.23)
-    plum_flower(d, *P(0.76, 0.34), sc * 0.17)
-    plum_flower(d, *P(0.2, 0.34), sc * 0.14)
-    for (u, v) in ((0.62, 0.8), (0.9, 0.5), (0.08, 0.6), (0.5, 0.2)):  # buds
-        dot(d, *P(u, v), sc * 0.05, RED)
-    leaf(d, P(0.34, 0.9), P(0.12, 0.84), sc * 0.1, GREEN, bend=0.1)
-    leaf(d, P(0.5, 0.4), P(0.56, 0.18), sc * 0.1, GREEN, bend=-0.1)
+    """梅: scalloped crimson blossom with a red heart, green twig with buds below."""
+    cx, cy = P(0.4, 0.32)
+    r = sc * 0.3
+    scallop_flower(d, cx, cy, r, 8)
+    ocircle(d, cx, cy, r * 0.36, RED, LW * 0.8)
+    dot(d, cx, cy, r * 0.16, RED)
+    # twig
+    line(d, bezier(P(0.06, 0.9), P(0.28, 0.82), P(0.5, 0.96), P(0.9, 0.7)), GW, GREEN)
+    line(d, bezier(P(0.7, 0.8), P(0.78, 0.62), P(0.84, 0.5), P(0.92, 0.46)), GW, GREEN)
+    line(d, bezier(P(0.46, 0.88), P(0.5, 0.72), P(0.56, 0.66), P(0.62, 0.62)), GW * 0.9, GREEN)
+    for (u, v, rr) in ((0.16, 0.86, 0.06), (0.3, 0.9, 0.05), (0.56, 0.92, 0.055), (0.92, 0.46, 0.05), (0.64, 0.6, 0.05)):
+        ocircle(d, *P(u, v), sc * rr, GREEN, GW * 0.8)
 
 
 def draw_orchid(d, P, sc):
-    base = P(0.5, 0.97)
-    ends = [(0.04, 0.38, -0.12), (0.16, 0.2, -0.1), (0.34, 0.06, -0.08), (0.7, 0.1, 0.08), (0.86, 0.26, 0.12), (0.97, 0.48, 0.12)]
-    for i, (u, v, bend) in enumerate(ends):
-        e = P(u, v)
-        mid1 = (lerp(base[0], e[0], 0.25), lerp(base[1], e[1], 0.6))
-        mid2 = (lerp(base[0], e[0], 0.75) + (e[0] - base[0]) * bend * 0.3, lerp(base[1], e[1], 0.85))
-        stroke(d, bezier(base, mid1, mid2, e), sc * 0.12, sc * 0.015, GREEN if i % 2 == 0 else GREEN_L)
-    # flower stalk with two orchid blossoms
-    stalk = bezier(P(0.5, 0.97), P(0.52, 0.7), P(0.47, 0.55), P(0.5, 0.38))
-    stroke(d, stalk, sc * 0.03, sc * 0.02, GREEN)
-    for (u, v, r, rot) in ((0.5, 0.4, 0.26, -90), (0.34, 0.66, 0.2, -140), (0.66, 0.62, 0.2, -40)):
-        cx, cy = P(u, v)
-        for k in range(5):
-            a = math.radians(rot + k * 72)
-            petal(d, cx, cy, a, 0, sc * r * (1.0 if k % 2 == 0 else 0.8), sc * r * 0.5, RED)
-        dot(d, cx, cy, sc * r * 0.22, PAPER)
-        dot(d, cx, cy, sc * r * 0.12, GREEN)
+    """蘭: long arching green leaves with a single crimson blossom."""
+    base = P(0.22, 0.98)
+    for tip, c1, c2, w0 in (
+        (P(0.1, 0.42), P(0.12, 0.8), P(0.04, 0.62), 0.11),
+        (P(0.52, 0.28), P(0.2, 0.78), P(0.3, 0.46), 0.1),
+        (P(0.72, 0.9), P(0.3, 0.6), P(0.62, 0.52), 0.09),
+        (P(0.46, 0.7), P(0.28, 0.95), P(0.4, 0.82), 0.07),
+    ):
+        stroke(d, bezier(base, c1, c2, tip), sc * w0, GW * 0.5, GREEN)
+    # blossom on a thin stalk
+    line(d, bezier(P(0.5, 0.5), P(0.56, 0.4), P(0.62, 0.3), P(0.68, 0.22)), GW * 0.8, GREEN)
+    cx, cy = P(0.7, 0.26)
+    for ang, ln in ((-50, 0.2), (30, 0.2), (-120, 0.17), (90, 0.17), (-170, 0.15)):
+        a = math.radians(ang)
+        tip = (cx + math.cos(a) * sc * ln * 1.35, cy + math.sin(a) * sc * ln * 1.35)
+        poly, _ = lens_pts((cx, cy), tip, sc * 0.18)
+        d.polygon(poly, fill=PAPER)
+        line(d, poly + [poly[0]], LW * 0.9, RED)
+    dot(d, cx, cy, sc * 0.05, RED)
 
 
 def draw_bamboo(d, P, sc):
-    culms = [(0.2, 0.97, 0.14, 0.2, 0.12), (0.5, 0.99, 0.5, 0.06, 0.13), (0.8, 0.97, 0.86, 0.2, 0.12)]
-    for (u0, v0, u1, v1, w) in culms:
-        x0, y0 = P(u0, v0)
-        x1, y1 = P(u1, v1)
-        seg = 4
-        for i in range(seg):
-            pts = [(lerp(x0, x1, (i + t / 6) / seg), lerp(y0, y1, (i + t / 6) / seg)) for t in range(7)]
-            stroke(d, pts, sc * w, sc * w, GREEN if i % 2 == 0 else GREEN_L)
-        for i in range(1, seg):
-            nx, ny = lerp(x0, x1, i / seg), lerp(y0, y1, i / seg)
-            d.ellipse((nx - sc * w * 0.62, ny - sc * 0.018, nx + sc * w * 0.62, ny + sc * 0.018), fill=PAPER)
-        # leaves at the top nodes
-        for k, a in enumerate((-160, -125, -55, -20)):
-            sx, sy = lerp(x0, x1, 0.78), lerp(y0, y1, 0.78)
-            ex = x1 + math.cos(math.radians(a)) * sc * 0.3
-            ey = y1 + math.sin(math.radians(a)) * sc * 0.26 + sc * 0.1
-            leaf(d, (sx, sy), (ex, ey), sc * 0.1, GREEN if k % 2 else GREEN_L, bend=0.06)
+    """竹: slim jointed culms with outlined leaf sprays and grass at the base."""
+    culms = ((0.3, 0.26, 0.05), (0.52, 0.04, 0.055), (0.74, 0.2, 0.05))
+    for (u, vtop, w) in culms:
+        x, ytop = P(u, vtop)
+        _, ybot = P(u, 0.97)
+        wpx = sc * w
+        d.rectangle((x - wpx / 2, ytop, x + wpx / 2, ybot), fill=GREEN)
+        n = 4
+        for i in range(1, n):
+            y = ytop + (ybot - ytop) * i / n
+            d.rectangle((x - wpx * 0.5, y - GW * 0.28, x + wpx * 0.5, y + GW * 0.28), fill=PAPER)
+    # leaf sprays hang from the upper nodes
+    for (u, v, ex, ey) in ((0.3, 0.36, 0.06, 0.5), (0.3, 0.5, 0.1, 0.72), (0.52, 0.16, 0.8, 0.24), (0.52, 0.3, 0.22, 0.38),
+                           (0.74, 0.32, 0.96, 0.44), (0.74, 0.48, 0.5, 0.6), (0.52, 0.5, 0.82, 0.62)):
+        oleaf(d, P(u, v), P(ex, ey), sc * 0.13, GREEN, bend=0.1)
+    for fx, dx in ((0.12, 0.05), (0.2, 0.08), (0.62, -0.06), (0.88, -0.05)):
+        line(d, bezier(P(fx, 0.98), P(fx, 0.9), P(fx + dx * 0.5, 0.86), P(fx + dx, 0.8)), GW * 0.9, GREEN)
 
 
 def draw_chrysanthemum(d, P, sc):
-    cx, cy = P(0.5, 0.4)
-    stroke(d, bezier(P(0.5, 0.98), P(0.44, 0.84), P(0.56, 0.7), P(0.5, 0.52)), sc * 0.05, sc * 0.035, GREEN)
-    leaf(d, P(0.48, 0.86), P(0.1, 0.62), sc * 0.17, GREEN, bend=-0.12, vein=GREEN_L)
-    leaf(d, P(0.52, 0.8), P(0.92, 0.56), sc * 0.17, GREEN_L, bend=0.12, vein=GREEN)
-    leaf(d, P(0.5, 0.94), P(0.22, 0.96), sc * 0.1, GREEN, bend=0.1)
-    leaf(d, P(0.5, 0.94), P(0.8, 0.97), sc * 0.1, GREEN_L, bend=-0.1)
-    R0 = sc * 0.42
-    for ring, (cnt, r1, wd, col, off) in enumerate(((16, R0, 0.15, RED, 0), (12, R0 * 0.76, 0.14, mix(RED, (255, 255, 255), 0.25), 0.5), (9, R0 * 0.5, 0.12, RED, 0))):
-        for k in range(cnt):
-            a = (k + off) * 2 * math.pi / cnt
-            petal(d, cx, cy, a, R0 * 0.1, r1, R0 * wd * 2.3, col)
-            # paper rim along each petal separates the layers when scaled down
-            petal(d, cx, cy, a, r1 * 0.7, r1 * 0.98, R0 * wd * 0.5, mix(col, (255, 255, 255), 0.55))
-    dot(d, cx, cy, R0 * 0.2, PAPER)
-    dot(d, cx, cy, R0 * 0.12, GREEN)
+    """菊: ring of small crimson circles around a centre circle, leafy green stem."""
+    cx, cy = P(0.5, 0.28)
+    R0 = sc * 0.3
+    for k in range(8):
+        a = k * 2 * math.pi / 8
+        ocircle(d, cx + math.cos(a) * R0 * 0.78, cy + math.sin(a) * R0 * 0.78, R0 * 0.34, RED, LW * 0.9)
+    ocircle(d, cx, cy, R0 * 0.5, RED, LW * 0.9)
+    dot(d, cx, cy, R0 * 0.16, RED)
+    # stem and leaves
+    line(d, bezier(P(0.5, 0.5), P(0.5, 0.62), P(0.42, 0.7), P(0.4, 0.82)), GW, GREEN)
+    line(d, bezier(P(0.12, 0.88), P(0.35, 0.82), P(0.65, 0.9), P(0.9, 0.8)), GW, GREEN)
+    oleaf(d, P(0.44, 0.7), P(0.12, 0.62), sc * 0.16, GREEN, bend=-0.1)
+    oleaf(d, P(0.44, 0.7), P(0.84, 0.6), sc * 0.17, GREEN, bend=0.1)
+    oleaf(d, P(0.3, 0.86), P(0.06, 0.96), sc * 0.12, GREEN, bend=0.12)
+    oleaf(d, P(0.7, 0.86), P(0.94, 0.96), sc * 0.12, GREEN, bend=-0.12)
 
 
 def draw_peony(d, P, sc):
-    """春: a layered round blossom with leaves and a bud."""
-    stroke(d, bezier(P(0.5, 0.98), P(0.48, 0.8), P(0.52, 0.7), P(0.5, 0.52)), sc * 0.045, sc * 0.035, GREEN)
-    leaf(d, P(0.5, 0.86), P(0.06, 0.7), sc * 0.18, GREEN, bend=-0.12, vein=GREEN_L)
-    leaf(d, P(0.5, 0.82), P(0.94, 0.66), sc * 0.18, GREEN_L, bend=0.12, vein=GREEN)
-    leaf(d, P(0.5, 0.96), P(0.16, 0.97), sc * 0.1, GREEN, bend=0.1)
-    cx, cy = P(0.5, 0.38)
-    R0 = sc * 0.38
-    for (cnt, rr, pw, off, col) in ((6, 1.0, 0.75, 0, RED), (6, 0.78, 0.65, 0.5, mix(RED, (255, 255, 255), 0.18)), (5, 0.52, 0.5, 0, RED)):
-        for k in range(cnt):
-            a = (k + off) * 2 * math.pi / cnt - math.pi / 2
-            px, py = cx + math.cos(a) * R0 * rr * 0.55, cy + math.sin(a) * R0 * rr * 0.55
-            r = R0 * rr * pw * 0.62
-            d.ellipse((px - r, py - r, px + r, py + r), fill=col, outline=PAPER, width=max(1, int(S * 1.2)))
-    dot(d, cx, cy, R0 * 0.2, PAPER)
-    dot(d, cx, cy, R0 * 0.12, GREEN)
-    dot(d, *P(0.86, 0.32), sc * 0.07, RED)
-    stroke(d, bezier(P(0.86, 0.4), P(0.84, 0.5), P(0.78, 0.6), P(0.62, 0.74)), sc * 0.025, sc * 0.02, GREEN)
+    """春: layered crimson outlined peony over crossing green leaves and a stem."""
+    cx, cy = P(0.5, 0.3)
+    R0 = sc * 0.37
+    for k in range(6):
+        a = math.radians(-90 + k * 60)
+        ocircle(d, cx + math.cos(a) * R0 * 0.62, cy + math.sin(a) * R0 * 0.62, R0 * 0.42, RED, LW)
+    for k in range(5):
+        a = math.radians(-72 + k * 72)
+        ocircle(d, cx + math.cos(a) * R0 * 0.34, cy + math.sin(a) * R0 * 0.34, R0 * 0.3, RED, LW * 0.9)
+    ocircle(d, cx, cy, R0 * 0.16, RED, LW * 0.8)
+    # stem (double line) running diagonally under the flower, leaves either side
+    line(d, [P(0.3, 0.9), P(0.5, 0.72), P(0.74, 0.62)], GW * 2.4, GREEN)
+    line(d, [P(0.3, 0.9), P(0.5, 0.72), P(0.74, 0.62)], GW * 0.9, PAPER)
+    oleaf(d, P(0.46, 0.74), P(0.06, 0.64), sc * 0.17, GREEN, bend=-0.12)
+    oleaf(d, P(0.42, 0.8), P(0.08, 0.92), sc * 0.15, GREEN, bend=0.12)
+    oleaf(d, P(0.74, 0.7), P(0.96, 0.84), sc * 0.14, GREEN, bend=0.1)
+    oleaf(d, P(0.78, 0.62), P(0.96, 0.5), sc * 0.12, GREEN, bend=-0.1)
 
 
 def draw_lotus(d, P, sc):
-    """夏: lotus blossom over a round leaf."""
-    # leaf pad (flattened ellipse) with veins
-    lx0, ly0 = P(0.04, 0.72)
-    lx1, ly1 = P(0.96, 0.98)
-    d.ellipse((lx0, ly0, lx1, ly1), fill=GREEN)
-    lcx, lcy = (lx0 + lx1) / 2, (ly0 + ly1) / 2
-    for k in range(9):
-        a = math.radians(180 + k * 22.5)
-        d.line([(lcx, lcy), (lcx + math.cos(a) * (lx1 - lx0) * 0.46, lcy + math.sin(a) * (ly1 - ly0) * 0.46)], fill=GREEN_L, width=int(S * 1.2))
-    stroke(d, bezier(P(0.5, 0.86), P(0.5, 0.74), P(0.5, 0.62), P(0.5, 0.52)), sc * 0.05, sc * 0.04, GREEN)
-    cx, cy = P(0.5, 0.52)
-    for ang, ln, wd in ((-150, 0.5, 0.2), (-30, 0.5, 0.2), (-122, 0.56, 0.2), (-58, 0.56, 0.2), (-90, 0.62, 0.22)):
+    """夏: crimson outlined lotus with layered pointed petals, grass strokes below."""
+    cx, cy = P(0.52, 0.4)
+    base = (cx, cy + sc * 0.22)
+    for ang, ln, wd in ((-155, 0.4, 0.26), (-25, 0.4, 0.26), (-118, 0.47, 0.28), (-62, 0.47, 0.28), (-90, 0.52, 0.28)):
         a = math.radians(ang)
-        tip = (cx + math.cos(a) * sc * ln, cy + math.sin(a) * sc * ln * 0.95)
-        leaf(d, (cx, cy), tip, sc * wd, RED if ang != -90 else mix(RED, (255, 255, 255), 0.2), vein=PAPER)
-    for ang in (-170, 10):
-        a = math.radians(ang)
-        tip = (cx + math.cos(a) * sc * 0.4, cy + math.sin(a) * sc * 0.18)
-        leaf(d, (cx, cy + sc * 0.02), tip, sc * 0.17, mix(RED, (255, 255, 255), 0.1))
-    dot(d, cx, cy, sc * 0.045, PAPER)
-
-
-def maple_leaf(d, cx, cy, r, angle_deg, color):
-    pts = []
-    base = math.radians(angle_deg)
-    lobes = 5
-    for i in range(lobes * 2):
-        a = base + i * math.pi / lobes
-        rr = r if i % 2 == 0 else r * 0.45
-        if i % 2 == 0 and i in (4, 6):
-            rr = r * 0.8
-        pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
-    d.polygon(pts, fill=color)
-    return pts
+        tip = (base[0] + math.cos(a) * sc * ln, base[1] + math.sin(a) * sc * ln)
+        poly, axis = lens_pts(base, tip, sc * wd)
+        d.polygon(poly, fill=PAPER)
+        line(d, poly + [poly[0]], LW, RED)
+    line(d, [base, (base[0], base[1] - sc * 0.34)], LW * 0.8, RED)
+    # grass
+    for fx, tx in ((0.12, 0.06), (0.24, 0.28), (0.36, 0.5), (0.48, 0.7), (0.6, 0.9)):
+        line(d, bezier(P(fx, 0.98), P(fx, 0.86), P(tx - 0.02, 0.82), P(tx, 0.74)), GW * 0.9, GREEN)
 
 
 def draw_maple(d, P, sc):
-    """秋: maple branch with three crimson leaves."""
-    stroke(d, bezier(P(0.06, 0.98), P(0.3, 0.8), P(0.6, 0.78), P(0.92, 0.5)), sc * 0.05, sc * 0.025, BROWN)
-    stroke(d, bezier(P(0.34, 0.8), P(0.3, 0.6), P(0.3, 0.5), P(0.28, 0.4)), sc * 0.035, sc * 0.02, BROWN)
-    stroke(d, bezier(P(0.62, 0.74), P(0.66, 0.6), P(0.68, 0.5), P(0.72, 0.36)), sc * 0.035, sc * 0.02, BROWN)
-    for (u, v, r, a, c) in ((0.28, 0.34, 0.3, -90, RED), (0.72, 0.3, 0.3, -90, mix(RED, (255, 255, 255), 0.12)), (0.5, 0.64, 0.24, -90, RED)):
-        cx, cy = P(u, v)
-        maple_leaf(d, cx, cy, sc * r, a + 18, c)
-        # veins
-        for k in range(5):
-            aa = math.radians(a + 18 + k * 72)
-            d.line([(cx, cy), (cx + math.cos(aa) * sc * r * 0.8, cy + math.sin(aa) * sc * r * 0.8)], fill=PAPER, width=max(1, int(S * 1.1)))
-    leaf(d, P(0.1, 0.94), P(0.04, 0.72), sc * 0.1, GREEN, bend=0.1)
-    leaf(d, P(0.78, 0.6), P(0.96, 0.78), sc * 0.1, GREEN, bend=0.1)
+    """秋: crimson circle-cluster blossom on green branches with outlined leaves."""
+    cx, cy = P(0.56, 0.36)
+    R0 = sc * 0.3
+    for k in range(9):
+        a = k * 2 * math.pi / 9 - math.pi / 2
+        ocircle(d, cx + math.cos(a) * R0 * 0.72, cy + math.sin(a) * R0 * 0.72, R0 * 0.27, RED, LW * 0.9)
+    ocircle(d, cx, cy, R0 * 0.3, RED, LW * 0.9)
+    dot(d, cx, cy, R0 * 0.11, RED)
+    # diagonal stem and branches
+    line(d, [P(0.34, 0.96), P(0.56, 0.78), P(0.8, 0.7)], GW * 2.2, GREEN)
+    line(d, [P(0.34, 0.96), P(0.56, 0.78), P(0.8, 0.7)], GW * 0.8, PAPER)
+    line(d, bezier(P(0.46, 0.7), P(0.3, 0.6), P(0.16, 0.5), P(0.14, 0.36)), GW, GREEN)
+    oleaf(d, P(0.2, 0.52), P(0.04, 0.22), sc * 0.13, GREEN, bend=0.12)
+    oleaf(d, P(0.16, 0.44), P(0.38, 0.1), sc * 0.13, GREEN, bend=-0.1)
+    oleaf(d, P(0.4, 0.84), P(0.08, 0.86), sc * 0.14, GREEN, bend=0.12)
+    oleaf(d, P(0.8, 0.7), P(0.96, 0.54), sc * 0.12, GREEN, bend=-0.1)
 
 
 def draw_pine(d, P, sc):
-    """冬: pine branch with needle fans and a crimson camellia bloom."""
-    stroke(d, bezier(P(0.04, 0.96), P(0.3, 0.86), P(0.5, 0.64), P(0.96, 0.5)), sc * 0.06, sc * 0.03, BROWN)
-    for (u, v, rot) in ((0.16, 0.9, -70), (0.36, 0.8, -85), (0.58, 0.68, -95), (0.82, 0.58, -105), (0.28, 0.86, 55), (0.5, 0.74, 50), (0.74, 0.64, 45)):
-        cx, cy = P(u, v)
-        for k in range(5):
-            a = math.radians(rot - 32 + k * 16)
-            ex, ey = cx + math.cos(a) * sc * 0.32, cy + math.sin(a) * sc * 0.32
-            leaf(d, (cx, cy), (ex, ey), sc * 0.05, GREEN if k % 2 == 0 else GREEN_L)
-    cx, cy = P(0.5, 0.3)
-    R0 = sc * 0.24
+    """冬: small crimson five-petal blossom above crossing green leaves."""
+    cx, cy = P(0.52, 0.27)
+    R0 = sc * 0.23
     for k in range(5):
         a = math.radians(-90 + k * 72)
-        px, py = cx + math.cos(a) * R0 * 0.6, cy + math.sin(a) * R0 * 0.6
-        d.ellipse((px - R0 * 0.6, py - R0 * 0.6, px + R0 * 0.6, py + R0 * 0.6), fill=RED, outline=PAPER, width=max(1, int(S * 1.2)))
-    dot(d, cx, cy, R0 * 0.4, PAPER)
-    dot(d, cx, cy, R0 * 0.26, mix(RED, (0, 0, 0), 0.25))
-    for (u, v) in ((0.88, 0.32), (0.14, 0.42)):
-        dot(d, *P(u, v), sc * 0.055, RED)
+        ocircle(d, cx + math.cos(a) * R0 * 0.72, cy + math.sin(a) * R0 * 0.72, R0 * 0.46, RED, LW * 0.9)
+    ocircle(d, cx, cy, R0 * 0.3, RED, LW * 0.7)
+    line(d, bezier(P(0.5, 0.42), P(0.5, 0.56), P(0.52, 0.64), P(0.5, 0.78)), GW, GREEN)
+    # crossing leaves
+    oleaf(d, P(0.5, 0.82), P(0.04, 0.5), sc * 0.17, GREEN, bend=-0.12)
+    oleaf(d, P(0.5, 0.82), P(0.96, 0.44), sc * 0.17, GREEN, bend=0.12)
+    oleaf(d, P(0.44, 0.9), P(0.8, 0.78), sc * 0.14, GREEN, bend=-0.12)
+    oleaf(d, P(0.56, 0.9), P(0.2, 0.8), sc * 0.14, GREEN, bend=0.12)
+    oleaf(d, P(0.5, 0.82), P(0.6, 0.52), sc * 0.12, GREEN, bend=0.1)
 
 
 FLOWER = {
-    # code: (character, number, season-style?, plant renderer)
+    # code: (character, corner number, season layout?, plant renderer). Numbers must match the server seat-flower
+    # rule (tiles.ts FLOWER_ZH: 竹 = 3, 菊 = 4), even though the reference photo shows 菊 3 / 竹 4.
     "F1": ("春", "1", True, draw_peony),
     "F2": ("夏", "2", True, draw_lotus),
     "F3": ("秋", "3", True, draw_maple),
@@ -601,14 +622,16 @@ def draw_flower(img, code):
     ch, num, season, painter = FLOWER[code]
     cw, chh = CX1 - CX0, CY1 - CY0
     head_h = chh * 0.24
-    # corner number and character: seasons put the number left, plants put it right
+    # seasons: black number top-left, red character top-right; plants: black character top-left, red number top-right
     char_size = int(head_h * 1.15)
     num_size = int(head_h * 0.95)
     margin = 4 * S
-    num_x = CX0 + margin + num_size * 0.3 if season else CX1 - margin - num_size * 0.3
-    char_x = CX1 - margin - char_size * 0.5 if season else CX0 + margin + char_size * 0.5
-    text_center(d, num_x, CY0 + head_h * 0.55, num, num_size, INK, bold=True)
-    text_center(d, char_x, CY0 + head_h * 0.52, ch, char_size, RED)
+    if season:
+        text_center(d, CX0 + margin + num_size * 0.3, CY0 + head_h * 0.55, num, num_size, INK, bold=True)
+        text_center(d, CX1 - margin - char_size * 0.5, CY0 + head_h * 0.52, ch, char_size, RED)
+    else:
+        text_center(d, CX0 + margin + char_size * 0.5, CY0 + head_h * 0.52, ch, char_size, INK)
+        text_center(d, CX1 - margin - num_size * 0.3, CY0 + head_h * 0.55, num, num_size, RED, bold=True)
     # plant picture in the lower part
     x0, y0 = CX0 + 3 * S, CY0 + chh * 0.27
     x1, y1 = CX1 - 3 * S, CY1 + 4 * S
