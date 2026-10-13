@@ -75,6 +75,12 @@ CEO 問「一天更新一次？還是真正有更新才更新？標準在哪？�
   （`MarketDataService.get_cached_bars()`）是第二個消費者，套用同一個 `judge()`，但只回
   `CACHED_STALE` 或 `UNAVAILABLE`，且**不寫** `price_bars_fetch_log`／`price_bars_attempt_log`
   兩張表、不 `put`——cache-only 只讀不記。
+  **〔2026-10-13 加註（F-6，依風控 F11-W-38）；B 類轉錄，tech-writer；上列原文一字未動；本加註不改變本 ADR 狀態（accepted）與任何決策，只記錄上文「附『最近一次向來源取得資料未成功，暫以本機快取回覆。』」這句的實際使用範圍〕**：
+  - 上文把此句描述為 layer 0 冷卻期分支所附。自 2026-10-13 起，使用範圍**擴及**「ladder 第一次請求就全部靜默失敗、改以快取回覆」的路徑：`_fall_back_to_cache` 有快取、且各層 provider 皆未回報原因（合併後的 reason 為 `None`，即 `combined is None`）時，`reason` 帶 `RECENT_ATTEMPT_FAILED_REASON`。修訂前，第一次請求這種情況 `reason` 為 `null`，要到冷卻期內的下一次請求才出現此句。
+  - 字面不變、不新增任何繁中字串：沿用風控 2026-09-13 第三輪核可的同一句；風控 F11-W-38(b) 核可把使用範圍從冷卻期分支擴大到第一次失敗後回覆快取的路徑，不必另交 creative-lead 起草。理由（風控、tech-architect 之判斷）：第一次失敗時「最近一次」就是剛剛那一次，句意成立，且此句只陳述服務層自己確知的事實（向來源取得未成功、以快取回覆），不推測原因；依據 ADR-0003 約束 7（快取命中須明示、不得讓讀者以為一切正常）。
+  - **不變項**：(1) provider 有回報原因（`combined` 非 `None`）時，輸出與修訂前相同，原文傳遞、不前置此句（風控 F11-W-38(a)；tech-architect F6-C3）；(2) 與 D-7 的拼接句並存時，順序維持失敗句在前、拼接句在後；(3) 無快取的路徑不帶此句，`reason` 仍為合併後的 provider 原因（可為 `None`），因為該路徑並非以快取回覆（tech-architect F-6 評估；風控 F11-W-38(e) 將該路徑補句列為 suggested、低優先、屬新字面，**本加註不涵蓋**）；(4) `as_of` 與 `staleness_minutes` 仍為資料實際取得的時間，不是失敗嘗試的時間（風控 R-10，與上文 D-5 一致）；(5) `is_within_ttl` 的判定不變；(6) cache-only 讀取（`get_cached_bars()`）未改動。
+  - **仍有的差異**：`combined` 非 `None` 時（例如美股各層帶有 reason），第一次與冷卻期內的後續請求仍是兩種不同的非 null 字面——tech-architect 刻意不擴張範圍，列管（若要前後字面完全一致，需在 attempt log 存最後一次失敗原因，屬 ADR-0009 修訂，不在本加註範圍）。
+  - 來源與版本：風控 F11-W-38，`work/reviews/2026-10-13-F-11-W34字級與reason-null另案-風控-F11-W37至W38.md`；tech-architect F-6 評估（採 (a)、指定於本 ADR D-3 加註、不需新 ADR），`work/reviews/2026-10-08-tech-architect-第4條W-a2可達性與F-6修法評估.md`；實作 commit 666843a（合併於 667f122，hash 取自任務單，tech-writer 未以 git 核對）。tech-writer 另讀 `apps/stock-desk/backend/app/data/service.py` 的 `RECENT_ATTEMPT_FAILED_REASON`、`_fall_back_to_cache`、`_cached_result` 確認上述行為與工作樹一致（快照為 product/stock-desk 工作樹，未 commit）。
 - **D-4（所有市場開啟）** TW 服務 `cache_first=True`，取代 ADR-0005 D-1。`cache_first=False` 仍存在
   （純降級鏈），但沒有市場使用。指數路徑依呼叫端指名的 market 取 policy（`^TWII` 走台北時鐘）。
 - **D-5（欄位與文案）** `is_within_ttl` 欄位名保留，語意改為「快取已含最近已公布交易日」，且**適用於每一條回傳
