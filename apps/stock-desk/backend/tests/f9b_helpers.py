@@ -1,0 +1,120 @@
+"""Shared fixtures for the F-9b consumer-side tests (ADR-0024 D-7 (7), D-7 (3)).
+
+The consumers (``load_bars``'s W-d branch, the valuator's new token, the book's
+cause group) land before any producer writes ``ProviderResult.rejection``
+(TA5 section 3: consumers first), so these tests feed a refused answer through
+a canned service built with the ``ProviderResult`` constructor -- never
+``model_copy(update=...)``, which would skip the invariant validator.
+
+The reason strings below are the risk-approved wording, copied verbatim as
+*test data* so the pass-through is checked against the real sentences
+(longest first: W-a alt-1). The ``app`` constants that own them arrive with
+the producers (F-9b commits 5-7) and carry the approval citations there:
+
+* W-a (alt-1), W-b (alt-2), W-c, W-c', C:
+  ``work/reviews/2026-10-12-F-9-原因句逐字審-F9W-1至F9W-16-風控.md``
+* T-13 (C'), T-15:
+  ``work/reviews/2026-10-12-F-9-第二批字面逐字審-F9W-17至F9W-29-風控.md``
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+
+from app.data.interface import DataStatus, Market, PriceBar, ProviderResult, Rejection
+
+AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
+
+W_A = (
+    "本系統只查詢這種形式的美股代號：1 至 5 個英文字母，可接單一字母的類別字尾（如 BRK.B）；"
+    "此代號不在其內，未向任何來源查詢。帶其他字尾的代號可能是外國交易所的掛牌（價格單位未必是美元），"
+    "也可能是特別股等美國商品，系統無法逐一分辨。"
+)
+W_B = (
+    "此台股代號是「數字後接英文字母 K」的形式，本系統不處理這種形式，未向任何來源查詢。"
+    "這類代號可能是以外幣計價的掛牌商品，價格單位未必是新台幣。"
+)
+W_C_US = "{provider} 這次回傳的日線，標示的價格單位不是美元（美股日線以美元為準），整段都不採用。"
+W_C_TW = (
+    "{provider} 這次回傳的日線，標示的價格單位不是新台幣（台股日線以新台幣為準），整段都不採用。"
+)
+W_C_PRIME_US = "{provider} 這次回傳的日線沒有標示價格單位，無法確認是否為美元，整段都不採用。"
+W_C_PRIME_TW = "{provider} 這次回傳的日線沒有標示價格單位，無法確認是否為新台幣，整段都不採用。"
+C_COOLDOWN = (
+    "本機尚無此標的可採用的日線資料。最近一次向來源取得的日線，標示的價格單位與市場所用的單位不同，"
+    "已於約 {minutes} 分鐘前整段不採用；冷卻期為 {cooldown_hours} 小時，冷卻期內系統不會自動重試；"
+    "冷卻期結束後的下一次查詢才會重新向來源取得。"
+)
+C_PRIME_COOLDOWN = (
+    "本機尚無此標的可採用的日線資料。最近一次向來源取得的日線沒有標示價格單位，"
+    "已於約 {minutes} 分鐘前整段不採用；冷卻期為 {cooldown_hours} 小時，冷卻期內系統不會自動重試；"
+    "冷卻期結束後的下一次查詢才會重新向來源取得。"
+)
+T_15 = (
+    "本機快取中此標的的日線資料，標示的價格單位與市場所用的單位不同，或沒有標示價格單位，"
+    "整段都不採用。"
+)
+#: An Alpha Vantage sentence as it reaches ``_combine_reasons`` (C-13 (4), (8)).
+AV_QUOTA_REASON = "Alpha Vantage 今日查詢額度已用罄，本次不呼叫主來源，請由備援來源接手。"
+
+
+def refused(rejection: Rejection, reason: str | None, *, source: str = "none") -> ProviderResult:
+    """A refused answer, built through the constructor so the invariant runs."""
+    return ProviderResult(
+        bars=[],
+        status=DataStatus.UNAVAILABLE,
+        as_of=AS_OF,
+        source=source,
+        staleness_minutes=None,
+        reason=reason,
+        rejection=rejection,
+    )
+
+
+def failed(reason: str | None) -> ProviderResult:
+    """An ordinary empty answer: ``UNAVAILABLE``, no bars, ``rejection=None`` (TA5 R-57)."""
+    return ProviderResult(
+        bars=[],
+        status=DataStatus.UNAVAILABLE,
+        as_of=AS_OF,
+        source="none",
+        staleness_minutes=None,
+        reason=reason,
+    )
+
+
+class CannedPriceService:
+    """A ``PriceService`` that answers every ask with one canned result.
+
+    ``live`` answers ``get_daily_bars`` and ``cached`` answers
+    ``get_cached_bars`` (defaulting to ``live``); each call is recorded so a
+    test can tell which path was taken.
+    """
+
+    def __init__(self, live: ProviderResult, *, cached: ProviderResult | None = None) -> None:
+        self.live = live
+        self.cached = live if cached is None else cached
+        self.calls: list[tuple[str, Market, date, date]] = []
+        self.cached_calls: list[tuple[str, Market, date, date]] = []
+
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
+        self.calls.append((symbol, market, start, end))
+        return self.live
+
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult:
+        self.cached_calls.append((symbol, market, start, end))
+        return self.cached
+
+
+def answered(bars: list[PriceBar], *, status: DataStatus, reason: str | None) -> ProviderResult:
+    """An answer with bars (``rejection`` is necessarily ``None``)."""
+    return ProviderResult(
+        bars=bars,
+        status=status,
+        as_of=AS_OF,
+        source=bars[0].source if bars else "none",
+        staleness_minutes=0,
+        reason=reason,
+    )

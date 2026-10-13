@@ -159,12 +159,34 @@ def load_bars(
     that does not publish a data-age judgement has nothing to gain from the
     extra lookup, and every caller that omits it gets ``trading_days_behind``
     as ``None`` -- unknown, which is what it is.
+
+    Three branches on the service's answer (ADR-0024 D-7 (7)): bars -> the
+    success path; no bars with a ``rejection`` -> W-d, the data layer's reason
+    verbatim; no bars without one -> ``NO_BARS_REASON`` plus the data layer's
+    reason via :func:`with_provider_reason`.
     """
     service = resolver.get(market)
     if service is None:
         return LoadedBars(reason=NO_ADAPTER_REASON.format(market=market))
     result = service.get_daily_bars(symbol, market, start, end)
     if result.status is DataStatus.UNAVAILABLE or not result.bars:
+        if result.rejection is not None:
+            # W-d (ADR-0024 D-7 (7) (ii); 風控 F9W-6, F9W-22): a refused answer's
+            # reason -- W-a, W-b, W-c, W-c', C, C', T-15, or the data layer's
+            # ``_combine_reasons`` of them with other rungs' sentences -- is
+            # already the whole sentence. It is passed through verbatim: no
+            # ``NO_BARS_REASON`` (it would claim nothing was there, F9W-11) and
+            # no ``PROVIDER_REASON_PREFIX``. The category itself stays here; it
+            # is never put on ``LoadedBars`` (C-18).
+            return LoadedBars(
+                status=result.status,
+                source=result.source,
+                staleness_minutes=result.staleness_minutes,
+                is_within_ttl=result.is_within_ttl,
+                reason=result.reason,
+            )
+        # D-7 (7) (iii): an ordinary empty answer (``rejection=None``, which
+        # includes the ADR-0009 D-8 cooldown with nothing cached, TA5 R-57).
         return LoadedBars(
             status=result.status,
             source=result.source,
@@ -174,6 +196,8 @@ def load_bars(
                 NO_BARS_REASON.format(market=market, symbol=symbol), result.reason
             ),
         )
+    # D-7 (7) (i): bars came back, so ``rejection`` is ``None`` by the
+    # ``ProviderResult`` invariant; the reason travels as-is.
     bars = list(result.bars)
     return LoadedBars(
         bars=bars,
