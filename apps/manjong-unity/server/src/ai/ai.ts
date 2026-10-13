@@ -75,11 +75,13 @@ interface DiscardChoice {
   effective: number;
 }
 
-function bestDiscard(hand: Tile[], sets: number, seen: number[], rng: Rng): DiscardChoice {
+/** Best discard among `allowed` (the tiles the engine offers as discard options). */
+function bestDiscard(hand: Tile[], sets: number, seen: number[], rng: Rng, allowed: Set<Tile>): DiscardChoice {
   const counts = toCounts(hand);
   let best: DiscardChoice | null = null;
   let ties = 0;
   for (const tile of new Set(hand)) {
+    if (!allowed.has(tile)) continue;
     const k = kindOf(tile);
     counts[k]!--;
     const s = shanten(counts, sets);
@@ -100,12 +102,16 @@ function bestDiscard(hand: Tile[], sets: number, seen: number[], rng: Rng): Disc
   return best;
 }
 
-/** Lowest shanten reachable by discarding one tile (no effective-tile tie-break). */
-function minShantenAfterDiscard(hand: Tile[], sets: number): number {
+/**
+ * Lowest shanten reachable by discarding one tile (no effective-tile tie-break), never discarding
+ * `forbidden` (食替禁止: the tile just claimed cannot be discarded on the same turn).
+ */
+function minShantenAfterDiscard(hand: Tile[], sets: number, forbidden: Tile): number {
   const counts = toCounts(hand);
+  const skip = kindOf(forbidden);
   let best = Infinity;
   for (let k = 0; k < KIND_COUNT; k++) {
-    if (counts[k] === 0) continue;
+    if (counts[k] === 0 || k === skip) continue;
     counts[k]!--;
     best = Math.min(best, shanten(counts, sets));
     counts[k]!++;
@@ -173,7 +179,9 @@ export function chooseAction(
       const discards = byType('discard');
       return (discards.find((o) => o.tile === p.drawn) ?? discards[0]!).id;
     }
-    const discard = bestDiscard(p.hand, sets, seen, rng);
+    // Only pick among the offered discards: after a chi / pon the claimed tile is not one of them.
+    const discardOptions = byType('discard');
+    const discard = bestDiscard(p.hand, sets, seen, rng, new Set(discardOptions.map((o) => o.tile)));
     for (const o of byType('ankan')) {
       const after = without(p.hand, [o.tile, o.tile, o.tile, o.tile]);
       if (shanten(toCounts(after), sets - 1) <= discard.shanten) return o.id;
@@ -183,7 +191,7 @@ export function chooseAction(
       if (shanten(toCounts(after), sets) <= discard.shanten) return o.id;
     }
     const ting = chooseTing(options, discard.tile, personality, rng);
-    return ting ? ting.id : `discard:${discard.tile}`;
+    return ting ? ting.id : discardOptions.find((o) => o.tile === discard.tile)!.id;
   }
 
   // Claim window: compare the hand's shanten now against the best line after claiming.
@@ -205,7 +213,7 @@ export function chooseAction(
       continue;
     }
     const after = without(p.hand, used);
-    const s = o.type === 'kan' ? shanten(toCounts(after), sets - 1) : minShantenAfterDiscard(after, sets - 1);
+    const s = o.type === 'kan' ? shanten(toCounts(after), sets - 1) : minShantenAfterDiscard(after, sets - 1, o.tile);
     const opened = p.melds.some((m) => m.type !== 'ankan');
     let want: boolean;
     switch (personality) {

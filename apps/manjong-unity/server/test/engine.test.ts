@@ -109,7 +109,7 @@ describe('claims', () => {
     applyAction(game, 3, 'pass', emit);
     expect(game.hand.players[2]!.melds).toEqual([{ type: 'pon', tiles: ['5m', '5m', '5m'], fromSeat: 0, claimedTile: '5m' }]);
     expect(game.hand.players[0]!.discards).toEqual([]);
-    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false });
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscard: '5m' });
     // No draw, so no tsumo / kongs: only discards, plus 報聽 for the discards that leave the hand ready.
     expect(ids(game, 2).every((id) => id.startsWith('discard:') || id.startsWith('ting:'))).toBe(true);
     expect(ids(game, 2).filter((id) => id.startsWith('ting:')).sort()).toEqual(['ting:E', 'ting:N']);
@@ -140,6 +140,141 @@ describe('claims', () => {
     const { game, emit } = setup({ hands: CLAIM_HANDS, front: '9m 9m', turn: 0 });
     expect(() => applyAction(game, 0, 'discard:9s', emit)).toThrow(IllegalActionError);
     expect(() => applyAction(game, 1, 'discard:4m', emit)).toThrow(IllegalActionError);
+  });
+});
+
+// 食替禁止 fixtures. Seat 2 holds 1p 1p 1p and can pon (or kan) the 1p seat 0 discards; seat 1 and
+// seat 3 cannot claim 1p nor the honors discarded later.
+const NO_SWAP_HANDS = [
+  '1p 2p 2p 5p 5p 8p 8p 1m 1m 7s 7s S S W W N N',
+  '3p 3p 6p 6p 9p 9p 2m 2m 8s 8s S W N 3m 7s 4p',
+  '111p 456m 789m 123s 456s E',
+  '4p 4p 7p 7p 3m 3m 9s 9s S W N 1m 2m 5p 6p 8p',
+];
+// Seat 1 variant that can chi 1p with 2p 3p and keeps its own 1p.
+const NO_SWAP_CHI = '1p 2p 3p 456m 789m 123s 456s E';
+
+describe('食替禁止 (no discarding the tile just claimed)', () => {
+  const claimed = (game: GameState, seat: number): string[] =>
+    ids(game, seat).filter((id) => id === 'discard:1p' || id === 'ting:1p');
+
+  it('after a chi the claimed tile cannot be discarded nor declared on, even with another copy in hand', () => {
+    const hands = [...NO_SWAP_HANDS];
+    hands[1] = NO_SWAP_CHI;
+    hands[2] = '5p 5p 6p 6p 9p 9p 2m 2m 8s 8s S W N 3m 7s 4p';
+    const { game, emit } = setup({ hands, front: '9m 9m', turn: 0 });
+    applyAction(game, 0, 'discard:1p', emit);
+    expect(ids(game, 1)).toEqual(['chi:1p', 'pass']);
+    applyAction(game, 1, 'chi:1p', emit);
+    expect(game.hand.players[1]!.hand).toContain('1p');
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 1, justDrew: false, forbiddenDiscard: '1p' });
+    expect(claimed(game, 1)).toEqual([]);
+    // Every other tile stays discardable; E still leaves the hand ready (on 1p).
+    expect(ids(game, 1).filter((id) => id.startsWith('discard:')).sort()).toEqual(
+      ['discard:1s', 'discard:2s', 'discard:3s', 'discard:4m', 'discard:4s', 'discard:5m', 'discard:5s', 'discard:6m', 'discard:6s', 'discard:7m', 'discard:8m', 'discard:9m', 'discard:E'].sort(),
+    );
+    expect(ids(game, 1).filter((id) => id.startsWith('ting:'))).toEqual(['ting:E']);
+    expect(() => applyAction(game, 1, 'discard:1p', emit)).toThrow(IllegalActionError);
+    expect(() => applyAction(game, 1, 'ting:1p', emit)).toThrow(IllegalActionError);
+  });
+
+  it('after a pon the claimed tile cannot be discarded; the next drawn turn is unrestricted', () => {
+    const { game, emit } = setup({ hands: NO_SWAP_HANDS, front: 'RD GD RD 9p 9m', turn: 0 });
+    applyAction(game, 0, 'discard:1p', emit);
+    expect(ids(game, 2)).toEqual(['pon', 'kan', 'pass']);
+    applyAction(game, 2, 'pon', emit);
+    expect(game.hand.players[2]!.hand).toContain('1p');
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: false, forbiddenDiscard: '1p' });
+    expect(claimed(game, 2)).toEqual([]);
+    expect(ids(game, 2)).toContain('discard:E');
+    expect(() => applyAction(game, 2, 'discard:1p', emit)).toThrow(IllegalActionError);
+
+    // Play around the table: seat 3, 0 and 1 each let their drawn honor go, then seat 2 draws 9p.
+    applyAction(game, 2, 'discard:E', emit);
+    applyAction(game, 3, 'discard:RD', emit);
+    applyAction(game, 0, 'discard:GD', emit);
+    applyAction(game, 1, 'discard:RD', emit);
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: true });
+    expect(game.hand.players[2]!.drawn).toBe('9p');
+    expect(ids(game, 2)).toContain('discard:1p');
+  });
+
+  it('a 明槓 is followed by a replacement draw, so nothing is forbidden', () => {
+    const { game, emit } = setup({ hands: NO_SWAP_HANDS, front: '9m 9m', back: '9s', turn: 0 });
+    applyAction(game, 0, 'discard:1p', emit);
+    applyAction(game, 2, 'kan', emit);
+    expect(game.hand.phase).toEqual({ type: 'turn', seat: 2, justDrew: true });
+  });
+
+  it('no chi when the hand would hold only copies of the claimed tile afterwards', () => {
+    // One set short: 4m 6m 5m 5m. Chi 5m (4m-6m) would leave 5m 5m with nothing legal to discard;
+    // pon leaves 4m 6m and stays on offer. (Such a hand always wins on the tile too, so ron is offered.)
+    const melds = [[], [meld('pon', '111s'), meld('pon', '222s'), meld('pon', '333s'), meld('pon', '444s')], [], []];
+    const { game, emit } = setup({ hands: ['5m 9p', '4m 6m 5m 5m', '', ''], melds, front: '9m 9m', turn: 0 });
+    applyAction(game, 0, 'discard:5m', emit);
+    expect(ids(game, 1)).toEqual(['ron', 'pon', 'pass']);
+
+    // 3m 4m 5m 5m: the 3m-5m chi would also leave 5m 5m.
+    const low = setup({ hands: ['5m 9p', '3m 4m 5m 5m', '', ''], melds, front: '9m 9m', turn: 0 });
+    applyAction(low.game, 0, 'discard:5m', low.emit);
+    expect(ids(low.game, 1)).toEqual(['ron', 'pon', 'pass']);
+
+    // With a different tile left over the chi is legal.
+    const ok = setup({ hands: ['5m 9p', '4m 6m 5m 9s', '', ''], melds, front: '9m 9m', turn: 0 });
+    applyAction(ok.game, 0, 'discard:5m', ok.emit);
+    expect(ids(ok.game, 1)).toEqual(['chi:4m', 'pass']);
+  });
+
+  it('no pon when the hand would hold only copies of the claimed tile afterwards', () => {
+    // A real hand never holds four copies of a tile someone else discards; this synthetic state only
+    // exercises the guard. Kan stays on offer because it draws a replacement (ron: 1p x5 is complete).
+    const melds = [[], [], [meld('pon', '111s'), meld('pon', '222s'), meld('pon', '333s'), meld('pon', '444s')], []];
+    const { game, emit } = setup({ hands: ['1p 9p', '', '1p 1p 1p 1p', ''], melds, front: '9m 9m', turn: 0 });
+    applyAction(game, 0, 'discard:1p', emit);
+    expect(ids(game, 2)).toEqual(['ron', 'kan', 'pass']);
+  });
+
+  it('the AI never plays the forbidden tile after a chi or a pon, even when it would be its best discard', () => {
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      // After the pon, discarding 1p (wait on E, 3 live) beats discarding E (wait on 1p, none live).
+      const pon = setup({ hands: NO_SWAP_HANDS, front: '9m 9m', turn: 0 });
+      applyAction(pon.game, 0, 'discard:1p', pon.emit);
+      applyAction(pon.game, 2, 'pon', pon.emit);
+      const ponOptions = optionsFor(pon.game, 2);
+      const ponPick = chooseAction(pon.game, 2, ponOptions, personality, fixedRng(0));
+      expect(ponOptions.map((o) => o.id)).toContain(ponPick);
+      expect(ponPick).not.toMatch(/:1p$/);
+      expect(() => applyAction(pon.game, 2, ponPick, pon.emit)).not.toThrow();
+
+      // After the chi, discarding 1p (wait on E, 3 live) beats discarding E (wait on 1p, 2 live).
+      const hands = [...NO_SWAP_HANDS];
+      hands[1] = NO_SWAP_CHI;
+      hands[2] = '5p 5p 6p 6p 9p 9p 2m 2m 8s 8s S W N 3m 7s 4p';
+      const chi = setup({ hands, front: '9m 9m', turn: 0 });
+      applyAction(chi.game, 0, 'discard:1p', chi.emit);
+      applyAction(chi.game, 1, 'chi:1p', chi.emit);
+      const chiOptions = optionsFor(chi.game, 1);
+      for (const value of [0, 0.5, 0.99]) {
+        const chiPick = chooseAction(chi.game, 1, chiOptions, personality, fixedRng(value));
+        expect(chiOptions.map((o) => o.id)).toContain(chiPick);
+        expect(chiPick).not.toMatch(/:1p$/);
+      }
+    }
+  });
+
+  it('the AI values a pon by the best discard it may actually make afterwards', () => {
+    // Ready before the claim (S S S, 123m 456m 789p, 99s pair, 45s waiting on 3s / 6s). After a pon of S
+    // the only discard that keeps it ready is the forbidden S, so the pon would set it back: pass.
+    const { game, emit } = setup({
+      hands: ['S 1p 9p', '2p 2p 5p 8p 1s 7s 7s W W N N GD GD 3p 3p 6p', 'S S S 123m 456m 789p 99s 45s', '7p 7p 4p 4p 1m 1m RD RD 5p 6p 2s 2s 8s 8s W N'],
+      turn: 0,
+    });
+    applyAction(game, 0, 'discard:S', emit);
+    const options = optionsFor(game, 2);
+    expect(options.map((o) => o.id)).toEqual(['pon', 'pass']);
+    for (const personality of ['bear', 'cat', 'rabbit'] as Personality[]) {
+      expect(chooseAction(game, 2, options, personality, fixedRng(0))).toBe('pass');
+    }
   });
 });
 

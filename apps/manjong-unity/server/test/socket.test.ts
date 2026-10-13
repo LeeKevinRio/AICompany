@@ -148,6 +148,8 @@ interface Coverage {
   /** Hands won by an AI seat, and by an AI seat that had declared. */
   aiWins: number;
   aiDeclaredWins: number;
+  /** Discards right after a chi / pon (any seat), each checked against 食替禁止. */
+  claimDiscards: number;
 }
 
 /** Verifies every option the server offers against an independent computation. */
@@ -295,6 +297,7 @@ describe('websocket game', () => {
       hands: 0,
       aiWins: 0,
       aiDeclaredWins: 0,
+      claimDiscards: 0,
     };
     const declareChance = { n: 0 };
     // WS_GAMES=200 npm test -- socket  runs a long verification pass (used before releases).
@@ -308,6 +311,8 @@ describe('websocket game', () => {
       let lastTing: Msg | null = null;
       // The event just before the current one (a declared seat's discard must follow its own draw).
       let prevEvent: Msg | null = null;
+      // The last chi / pon not yet followed by its claimer's discard (食替禁止 check).
+      let lastClaim: Msg | null = null;
       for (let i = 0; i < 20000; i++) {
         const m = await client.next((x) => x.type === 'step' || x.type === 'state' || x.type === 'error');
         expect(m.type).not.toBe('error');
@@ -346,7 +351,17 @@ describe('websocket game', () => {
               cov.aiDeclaredDiscards++;
             }
           }
+          if (event.type === 'chi' || event.type === 'pon') lastClaim = event;
+          if (lastClaim && event.seat === lastClaim.seat && (event.type === 'discard' || event.type === 'ting')) {
+            // 食替禁止: the claimer's next discard (or 報聽) is never the tile it just claimed.
+            expect(event.tile).not.toBe(lastClaim.tile);
+            if (event.type === 'discard') {
+              cov.claimDiscards++;
+              lastClaim = null;
+            }
+          }
           if (event.type === 'win' || event.type === 'exhaustive') {
+            lastClaim = null;
             cov.hands++;
             expect(view.hasResult).toBe(true);
             const winner = view.result.winnerSeat;
@@ -431,6 +446,7 @@ describe('websocket game', () => {
       expect(cov.declaredWinOffers).toBeGreaterThan(0);
       expect(cov.aiDeclared).toBeGreaterThan(0);
       expect(cov.aiDeclaredDiscards).toBeGreaterThan(0);
+      expect(cov.claimDiscards).toBeGreaterThan(0);
     }
     // eslint-disable-next-line no-console
     console.log('coverage', cov);
