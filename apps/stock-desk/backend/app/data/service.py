@@ -658,6 +658,15 @@ class MarketDataService:
         end: date,
         reasons: Sequence[str] = (),
     ) -> ProviderResult:
+        """Answer from the cache after the live ladder has been tried and failed.
+
+        The only caller is ``get_daily_bars``, after every rung of the ladder
+        has been attempted. ``reasons`` holds what those rungs said; when it
+        combines to ``None`` every rung declined silently, and the cached
+        answer then states the failed attempt itself (風控 F11-W-38). No other
+        caller may use this without running the ladder first -- an empty
+        ``reasons`` would otherwise claim a fetch failed that never happened.
+        """
         combined = _combine_reasons(reasons)
         now = self._clock()
         cached = self._cache.get(symbol, market, start, end, now=now)
