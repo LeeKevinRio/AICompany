@@ -130,11 +130,16 @@ def _count_pattern(template: str) -> re.Pattern[str]:
 
 
 def _cause_counts(notes: list[str]) -> dict[str, int]:
-    """The three cause groups' counts as the notes state them (KX-A9)."""
+    """The four cause groups' counts as the notes state them (KX-A9).
+
+    Extended from three to four by ADR-0024 D-7 (4) (壞處 10: extended, never
+    loosened): ``rejected`` is T-11's group (F-9b).
+    """
     patterns = {
         "asked": _count_pattern(book.UNVALUED_POSITIONS_CAUSE),
         "not_queried": _count_pattern(book.UNVALUED_POSITIONS_CAUSE_CACHE_ONLY),
         "mismatch": _count_pattern(book.CURRENCY_MARKET_MISMATCH_CAUSE),
+        "rejected": _count_pattern(book.SYMBOL_OR_UNIT_REJECTED_CAUSE),
     }
     counts = dict.fromkeys(patterns, 0)
     for note in notes:
@@ -526,10 +531,10 @@ def test_rx5_new_fragments_and_rendered_sentences_pass_every_wording_scan() -> N
         assert [term for term in NEW_FRAGMENT_ONLY_TERMS if term in text] == []
 
 
-# --- KX-A9 / KX-A10 / RX-4: three cause groups ------------------------------------
+# --- KX-A9 / KX-A10 / RX-4: four cause groups (three until ADR-0024 D-7 (4)) -------
 
 
-def test_kxa9_three_groups_are_disjoint_ordered_and_add_up() -> None:
+def test_kxa9_four_groups_are_disjoint_ordered_and_add_up() -> None:
     asked = _position(2, "2317", price=None)  # missing == ["price"]
     not_queried = _position(3, "2454", price=None)
     not_queried = not_queried.model_copy(
@@ -542,7 +547,16 @@ def test_kxa9_three_groups_are_disjoint_ordered_and_add_up() -> None:
         4, "AAPL", market="US", currency="TWD", missing=[_token(), PRICE_NOT_QUERIED]
     )
     b_row = _mismatched(5, "2603", market="TW", currency="USD", sector="航運業")
-    summary = _summary(_position(1, "2330"), asked, not_queried, both, b_row)
+    # ADR-0024 D-7 (4): a refused price answer is the fourth group, stated last.
+    rejected = _position(6, "00679K", price=None)
+    rejected = rejected.model_copy(
+        update={
+            "valuation": rejected.valuation.model_copy(
+                update={"missing": [valuation.SYMBOL_OR_UNIT_REJECTED]}
+            )
+        }
+    )
+    summary = _summary(_position(1, "2330"), asked, not_queried, both, b_row, rejected)
     context = book.build_book_context(
         summary, symbol="2330", market="TW", close=600.0, currency="TWD"
     )
@@ -552,13 +566,14 @@ def test_kxa9_three_groups_are_disjoint_ordered_and_add_up() -> None:
         _cause_note(book.UNVALUED_POSITIONS_CAUSE.format(count=1), direction),
         _cause_note(book.UNVALUED_POSITIONS_CAUSE_CACHE_ONLY.format(count=1), direction),
         _cause_note(_mismatch_cause(2), direction),
+        _cause_note(book.SYMBOL_OR_UNIT_REJECTED_CAUSE.format(count=1), direction),
     ]
     assert [note for note in notes if note in expected] == expected
-    assert _cause_counts(notes) == {"asked": 1, "not_queried": 1, "mismatch": 2}
+    assert _cause_counts(notes) == {"asked": 1, "not_queried": 1, "mismatch": 2, "rejected": 1}
     composition = context.context.unvalued
     assert composition is not None
     non_ok = sum(1 for row in summary.positions if row.valuation.status != "ok")
-    assert sum(_cause_counts(notes).values()) == composition.total() == non_ok == 4
+    assert sum(_cause_counts(notes).values()) == composition.total() == non_ok == 5
 
 
 def test_kxa10_a_mismatched_row_is_never_counted_as_missing_a_price_or_rate() -> None:
@@ -566,7 +581,7 @@ def test_kxa10_a_mismatched_row_is_never_counted_as_missing_a_price_or_rate() ->
     notes = book.book_notes(
         book.build_book_context(summary, symbol="2330", market="TW", close=600.0, currency="TWD")
     )
-    assert _cause_counts(notes) == {"asked": 0, "not_queried": 0, "mismatch": 1}
+    assert _cause_counts(notes) == {"asked": 0, "not_queried": 0, "mismatch": 1, "rejected": 0}
     assert not any(
         note.startswith(_head(book.UNVALUED_POSITIONS_CAUSE)) and "缺價格" in note for note in notes
     )

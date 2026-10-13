@@ -99,7 +99,12 @@ from app.data.interface import DataStatus
 from app.data.price_guard import usable_price, usable_rate
 from app.kelly.models import KellyInputRow, ageing_of
 from app.portfolio.summary import PortfolioSummary, SummaryPosition
-from app.portfolio.valuation import CURRENCY_MARKET_MISMATCH, PRICE_NOT_QUERIED, FxInfo
+from app.portfolio.valuation import (
+    CURRENCY_MARKET_MISMATCH,
+    PRICE_NOT_QUERIED,
+    SYMBOL_OR_UNIT_REJECTED,
+    FxInfo,
+)
 from app.positions.models import InstrumentType, Market, currency_matches_market
 
 logger = logging.getLogger(__name__)
@@ -210,6 +215,21 @@ UNVALUED_POSITIONS_CAUSE_CACHE_ONLY = (
 CURRENCY_MARKET_MISMATCH_CAUSE = (
     "組合中有 {count} 筆部位因幣別與市場不符而無法估值（紀錄不一致，非價格或匯率中斷），"
     "可於庫存頁的「更多」視窗更正幣別與平均成本；系統不猜幣別而未計入總資產"
+)
+#: The fourth cause group (ADR-0024 D-7 (3)(4), T-11): rows whose price answer
+#: the data layer refused (``Valuation.missing`` carries
+#: :data:`app.portfolio.valuation.SYMBOL_OR_UNIT_REJECTED`) -- a symbol form the
+#: system does not query, daily bars whose stated unit is not the market's, or
+#: bars with no unit stated. A cause of its own (風控 F9W-11), never folded into
+#: W4/W5's "缺價格或匯率" and never (b)'s constant (F9W-17); the same sentence
+#: live and cache-only (F9W-17). Counted after (b) and before W5/W4, stated
+#: last: W4 -> W5 -> (b) -> this group (T-18, F9W-25).
+#: 風控核可文案,修改須重新送審(2026-10-12)
+#: ``work/reviews/2026-10-12-F-9-第二批字面逐字審-F9W-17至F9W-29-風控.md``
+#: (T-11 主案; conditions F9W-17, F9W-18, F9W-25, F9W-29)
+SYMBOL_OR_UNIT_REJECTED_CAUSE = (
+    "組合中有 {count} 筆部位無法估值（代號形式不在本系統查詢的範圍內，"
+    "或日線標示的價格單位與市場所用的單位不同，或日線沒有標示價格單位），未計入總資產"
 )
 #: "{成因}；{方向子句}" -- the one way a cause and its direction become one note.
 #: 風控核可文案,修改須重新送審(2026-10-07)
@@ -972,17 +992,26 @@ def _book_level_notes(
         # FX rate was really asked for -- the two must not share one sentence.
         # A row whose currency is not its market's is a third cause (task
         # X-3c, KX-A9): counted first, so it lands in no other group, and
-        # stated last (W4 -> W5 -> (b)).
+        # stated after W4 and W5. A row whose price answer was refused
+        # (ADR-0024 D-7 (4)) is a fourth cause: counted next, so it lands in
+        # neither W5 nor W4, and stated last (W4 -> W5 -> (b) -> T-11, F9W-25).
         unvalued = [item for item in summary.positions if item.valuation.status != "ok"]
         mismatched = [
             item for item in unvalued if CURRENCY_MARKET_MISMATCH in item.valuation.missing
+        ]
+        rejected = [
+            item
+            for item in unvalued
+            if CURRENCY_MARKET_MISMATCH not in item.valuation.missing
+            and SYMBOL_OR_UNIT_REJECTED in item.valuation.missing
         ]
         not_queried = sum(
             PRICE_NOT_QUERIED in item.valuation.missing
             for item in unvalued
             if CURRENCY_MARKET_MISMATCH not in item.valuation.missing
+            and SYMBOL_OR_UNIT_REJECTED not in item.valuation.missing
         )
-        asked = len(unvalued) - len(mismatched) - not_queried
+        asked = len(unvalued) - len(mismatched) - len(rejected) - not_queried
         if asked:
             notes.append(
                 UNVALUED_NOTE_TEMPLATE.format(
@@ -1000,6 +1029,13 @@ def _book_level_notes(
             notes.append(
                 UNVALUED_NOTE_TEMPLATE.format(
                     cause=CURRENCY_MARKET_MISMATCH_CAUSE.format(count=len(mismatched)),
+                    direction=direction,
+                )
+            )
+        if rejected:
+            notes.append(
+                UNVALUED_NOTE_TEMPLATE.format(
+                    cause=SYMBOL_OR_UNIT_REJECTED_CAUSE.format(count=len(rejected)),
                     direction=direction,
                 )
             )
