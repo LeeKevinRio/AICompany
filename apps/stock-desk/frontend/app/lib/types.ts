@@ -935,10 +935,28 @@ export interface PerformanceMetrics {
   num_round_trips: number | null;
 }
 
+/**
+ * `PerformanceMetrics` plus the `round_trip_payoff_ratio` field the backend has
+ * always served (`PerformanceMetrics.round_trip_payoff_ratio`, app/backtest/
+ * report.py): Kelly's b, i.e. mean winning round-trip return over the absolute
+ * mean losing one, `null` when either side is empty and on the Buy & Hold peer.
+ *
+ * F11-A-46 asked for the field on `PerformanceMetrics` itself. It lives on this
+ * extension instead because `backtestRoundTripCountRender.test.ts` (C8-13, which
+ * may not be edited) builds a `PerformanceMetrics` literal without it: a
+ * required key on the base type would turn that suite red under `tsc`, and an
+ * optional one would let a mistyped key read as `undefined` and render a silent
+ * 「—」, which is exactly what A-46 exists to prevent. As a required key on a
+ * subtype, a wrong name here is a compile error.
+ */
+export interface PerformanceMetricsWithPayoff extends PerformanceMetrics {
+  round_trip_payoff_ratio: number | null;
+}
+
 /** Backend `SegmentReport` (app/backtest/report.py). */
 export interface SegmentReport {
-  strategy: PerformanceMetrics;
-  buy_and_hold: PerformanceMetrics;
+  strategy: PerformanceMetricsWithPayoff;
+  buy_and_hold: PerformanceMetricsWithPayoff;
 }
 
 /** Backend `WalkForwardReport` (app/backtest/report.py). */
@@ -1066,6 +1084,115 @@ export interface WalkForwardCurves {
   trades: CurveTrade[];
 }
 
+/* --- F-11 round-trip detail (backend/app/api/backtest.py `RoundTripDetail`,
+ * backtest/report.py `SegmentRoundTripDetail`, api/backtest_wording.py). ------
+ *
+ * Key names mirror the backend models one for one (pinned by
+ * `app/backtest/__tests__/backtestFrontendBoundary.test.ts` against the backend models' source).
+ * Every user-facing sentence arrives in `labels`, already filled in by the
+ * backend; this app renders it verbatim and holds no copy of its own. */
+
+/** One complete round trip as the detail list shows it: exactly five facts. */
+export interface RoundTripRow {
+  entry_date: string;
+  exit_date: string;
+  /** Daily bars, `exit_idx - entry_idx` (PRD D-4). */
+  holding_bars: number;
+  /** Realized P&L over the equity before entry (PRD D-3). */
+  return_on_entry_equity: number;
+  realized_pnl: number;
+}
+
+export interface LosingStreak {
+  length: number;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+/** Why a segment lists no round trip; decided by the backend from counts alone. */
+export type RoundTripEmptyState = "no_position" | "excluded_only";
+
+export interface SegmentRoundTripDetail {
+  num_round_trips: number;
+  num_winning_round_trips: number;
+  num_losing_round_trips: number;
+  round_trips: RoundTripRow[];
+  lowest_return_round_trips: RoundTripRow[];
+  mean_winning_return: number | null;
+  mean_losing_return: number | null;
+  longest_losing_streak: LosingStreak | null;
+  excluded_boundary_trips: number;
+  open_trip_at_end: number;
+  in_market_ratio: number | null;
+  /** 1.0 by definition (not a measurement), `null` when there is no such path. */
+  buy_and_hold_in_market_ratio: number | null;
+  warmup_flat_intervals: number;
+  /** Decided by the backend; this app never compares a count with a threshold. */
+  below_display_minimum: boolean;
+  /** `null` when the segment has a round trip to list. */
+  empty_state: RoundTripEmptyState | null;
+}
+
+export interface RoundTripCoverage {
+  last_bar_date: string | null;
+  unattributed_tail_bars: number;
+  unattributed_tail_start_date: string | null;
+}
+
+/** The copy of one segment, every placeholder already filled by the backend. */
+export interface SegmentRoundTripLabels {
+  detail_title: string;
+  lowest_returns_heading: string;
+  longest_losing_streak_value: string;
+  /** Rendered after `formatPercent(mean)`; the dash and the side count are in the text. */
+  mean_winning_return_suffix: string;
+  mean_losing_return_suffix: string;
+  payoff_ratio_pointer: string;
+  in_market_ratio_definition: string;
+  expand_control: string;
+  collapse_control: string;
+  expand_control_aria: string;
+  collapse_control_aria: string;
+}
+
+export interface RoundTripDetailLabels {
+  entry_date: string;
+  exit_date: string;
+  holding_bars: string;
+  return_on_entry_equity: string;
+  realized_pnl: string;
+  columns_note: string;
+  longest_losing_streak: string;
+  longest_losing_streak_definition: string;
+  mean_winning_return: string;
+  mean_losing_return: string;
+  payoff_ratio: string;
+  payoff_ratio_definition: string;
+  profit_factor_definition: string;
+  in_market_ratio: string;
+  sample_below_minimum: string;
+  sample_count_reminder: string;
+  excluded_heading: string;
+  excluded_closed_trips: string;
+  excluded_open_trips: string;
+  excluded_note: string;
+  cost_and_settings_note: string;
+  detail_opening: string;
+  empty_state_no_position: string;
+  empty_state_excluded_only: string;
+  unattributed_tail: string;
+  in_sample: SegmentRoundTripLabels;
+  out_of_sample: SegmentRoundTripLabels;
+}
+
+/** Exactly four keys (F11-A-38). */
+export interface RoundTripDetail {
+  in_sample: SegmentRoundTripDetail;
+  out_of_sample: SegmentRoundTripDetail;
+  coverage: RoundTripCoverage;
+  labels: RoundTripDetailLabels;
+}
+
 export interface BacktestResponse {
   symbol: string;
   market: string;
@@ -1074,6 +1201,8 @@ export interface BacktestResponse {
   reason: string | null;
   report: WalkForwardReport | null;
   curves: WalkForwardCurves | null;
+  /** F-11 round-trip detail of the same run; `null` exactly when `report` is. */
+  round_trip_detail: RoundTripDetail | null;
   folds: WalkForwardFoldInfo[];
   cost_model: CostModelSettings;
   rates_verified: boolean;
