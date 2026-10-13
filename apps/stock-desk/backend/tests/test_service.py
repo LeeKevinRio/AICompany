@@ -621,6 +621,40 @@ def test_a_covered_series_whose_sources_are_failing_also_honours_the_cooldown(
     assert primary.call_count == 2
 
 
+def test_a_silent_first_failure_on_a_current_cache_still_states_the_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    """風控 F11-W-38(a)/(c), ``is_within_ttl=True``: the badge then carries no "may lack"
+    caveat, so without the reason nothing on screen would show the live ask just failed.
+
+    Reached in production through S3-1: the cache holds Tuesday and would be current
+    before the cutoff, but another series already has Wednesday, so the ladder runs;
+    the source declines without a word, and the fallback's own session rule (which
+    knows nothing of S3-1) still calls Tuesday current.
+    """
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    fetched = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)  # Tuesday, well outside the cooldown
+    cache.put([_tw_bar("2330", date(2024, 1, 2))], source="twse", fetched_at=fetched)
+    cache.record_fetch("2330", "TW", start=START, end=END, fetched_at=fetched)
+    cache.put([_tw_bar("2317", date(2024, 1, 3))], source="twse")
+    primary = _StubProvider(source_id="twse", status=DataStatus.UNAVAILABLE)
+    backup = _StubProvider(source_id="finmind", status=DataStatus.UNAVAILABLE)
+    service = equity_service(
+        primary=primary,
+        backups=[backup],
+        cache=cache,
+        clock=lambda: datetime(2024, 1, 3, 6, 30, tzinfo=UTC),  # Wed 14:30 Taipei
+        cache_first=True,
+    )
+    result = service.get_daily_bars("2330", "TW", START, END)
+    assert primary.call_count == 1 and backup.call_count == 1
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is True
+    assert result.reason == RECENT_ATTEMPT_FAILED_REASON
+    # R-10: the age is the last complete fetch, never the failed attempt's time.
+    assert result.as_of == fetched and result.staleness_minutes == 20 * 60 + 30
+
+
 # --- ADR-0009 D-7 (方案 F): ask the live source only for the missing tail ------------
 
 
@@ -761,10 +795,13 @@ def test_a_spliced_cache_keeps_saying_so_on_every_later_answer(tmp_path: Path) -
     assert provider.ranges == [] and served.status is DataStatus.CACHED_STALE
     assert served.reason == spliced
     # Next session expected, source down: the failure reason and the splice both stand.
+    # The source declined silently, so the failure is the service's own sentence --
+    # already on this first click, not only inside the cooldown (風控 F11-W-38).
     now["at"] = datetime(2024, 1, 4, 8, 0, tzinfo=UTC)
     degraded = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
     assert provider.ranges == [(date(2024, 1, 1), END)]
-    assert degraded.status is DataStatus.CACHED_STALE and degraded.reason == spliced
+    assert degraded.status is DataStatus.CACHED_STALE
+    assert degraded.reason == f"{RECENT_ATTEMPT_FAILED_REASON} {spliced}"
     now["at"] = datetime(2024, 1, 4, 8, 5, tzinfo=UTC)  # inside the attempt cooldown
     cooled = service.get_daily_bars("2330", "TW", date(2023, 12, 1), END)
     assert cooled.reason is not None

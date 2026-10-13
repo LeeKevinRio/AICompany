@@ -58,11 +58,15 @@ CurrencyLookup = Callable[[Market], str | None]
 _REASON_SEPARATOR = "。 "
 
 UNEXPECTED_ERROR_REASON = "{provider} 發生非預期錯誤，已降級至下一層。"
-#: Carried by a cache answer served because the last live ask (inside the
-#: market's cooldown) failed or came back partial -- the reader must not be
-#: left thinking nothing was wrong (ADR-0003 約束 7). Wording approved by
-#: risk-compliance-officer 2026-09-13 (第三輪). Reaches the screen since
-#: 2026-09-15: ``load_bars`` forwards ``reason`` on a successful load and
+#: Carried by a cache answer served because the last live ask failed or came
+#: back partial -- the reader must not be left thinking nothing was wrong
+#: (ADR-0003 約束 7). Two paths carry it: a later click inside the market's
+#: cooldown, and -- since 風控 F11-W-38 (2026-10-13), which widened its scope
+#: -- the very click whose ladder just failed, when every rung declined
+#: without a word (otherwise the rungs' own reasons are what is said). It
+#: states only what the service itself knows, never a guessed cause. Wording
+#: approved by risk-compliance-officer 2026-09-13 (第三輪). Reaches the screen
+#: since 2026-09-15: ``load_bars`` forwards ``reason`` on a successful load and
 #: ``DataMetaStatusBadge`` shows ``DataMeta.reason`` standing beside the badge.
 RECENT_ATTEMPT_FAILED_REASON = "最近一次向來源取得資料未成功，暫以本機快取回覆。"
 #: ADR-0005 D-5 (跨來源不得靜默拼接), discharged through ``reason`` since
@@ -683,9 +687,17 @@ class MarketDataService:
             )
             # Why the live rungs were skipped travels with the cached answer
             # too: "served from cache" alone does not tell the reader whether
-            # the quota ran out or the vendor was down.
+            # the quota ran out or the vendor was down. When every rung
+            # declined silently there is no cause to repeat, but the failed
+            # attempt itself is still a fact the first click must state, not
+            # only the ones inside the cooldown (風控 F11-W-38). Stated reasons
+            # are passed on unchanged -- nothing is prepended to them.
             return self._cached_result(
-                cached, checked_at=checked_at, now=now, current=current, reason=combined
+                cached,
+                checked_at=checked_at,
+                now=now,
+                current=current,
+                reason=combined if combined is not None else RECENT_ATTEMPT_FAILED_REASON,
             )
 
         logger.error("no provider and no cache entry available for %s", symbol)

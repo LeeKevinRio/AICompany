@@ -23,7 +23,7 @@ from app.data.interface import (
     PriceBar,
     ProviderResult,
 )
-from app.data.service import MarketDataService
+from app.data.service import RECENT_ATTEMPT_FAILED_REASON, MarketDataService
 from app.services.market import load_bars
 from tests.api_helpers import recent_bars, trending_closes
 from tests.market_service_helpers import equity_service
@@ -149,6 +149,28 @@ def test_both_sources_down_falls_back_to_the_cache_with_the_reasons(
     assert YF_DOWN.rstrip("。") in result.reason
 
 
+def test_stated_reasons_on_a_cache_fallback_are_passed_on_verbatim(tmp_path: Path) -> None:
+    """風控 F11-W-38(a): when a rung said why, the cached answer says exactly that.
+
+    The failed-attempt sentence fills a silence only; it is never prepended to
+    reasons the providers gave (those combined strings are already approved).
+    """
+    cache = PriceBarCache(db_path=tmp_path / "us.db")
+    cache.put(_us_bars(), source="fake_us", fetched_at=_NOW - timedelta(days=3))
+    service = _us_service(
+        tmp_path,
+        primary=FakeProvider("alpha_vantage", reason=NO_API_KEY),
+        backup=FakeProvider("yfinance", reason=YF_DOWN),
+        cache=cache,
+    )
+    result = service.get_daily_bars("AAPL", "US", _START, _END)
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.reason == (
+        "Alpha Vantage API key 尚未設定，暫不可用。 yfinance 連線逾時或發生錯誤，暫不可用。"
+    )
+    assert RECENT_ATTEMPT_FAILED_REASON.rstrip("。") not in result.reason
+
+
 def test_nothing_anywhere_is_unavailable_carrying_every_reason(tmp_path: Path) -> None:
     service = _us_service(
         tmp_path,
@@ -187,6 +209,33 @@ def test_a_silent_provider_produces_no_invented_reason(tmp_path: Path) -> None:
         backup=FakeProvider("yfinance"),
     )
     assert service.get_daily_bars("AAPL", "US", _START, _END).reason is None
+
+
+def test_a_silent_ladder_falling_back_to_the_cache_states_the_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    """風控 F11-W-38(a)/(c): the first click after a silent failure says it failed.
+
+    No cause is invented -- the providers gave none -- but the service itself
+    knows the live ask just failed and the answer is the cache. Without this
+    only the *next* click (inside the cooldown) said so. The age is still the
+    rows' real fetch time, never the failed attempt's (風控 R-10).
+    """
+    fetched_at = _NOW - timedelta(days=3)
+    cache = PriceBarCache(db_path=tmp_path / "us.db")
+    cache.put(_us_bars(), source="fake_us", fetched_at=fetched_at)
+    service = _us_service(
+        tmp_path,
+        primary=FakeProvider("alpha_vantage"),
+        backup=FakeProvider("yfinance"),
+        cache=cache,
+    )
+    result = service.get_daily_bars("AAPL", "US", _START, _END)
+    assert result.status is DataStatus.CACHED_STALE
+    assert result.is_within_ttl is False
+    assert result.reason == RECENT_ATTEMPT_FAILED_REASON
+    assert result.as_of == fetched_at
+    assert result.staleness_minutes == 3 * 24 * 60
 
 
 # --- Layer 0, and the TW behaviour it must not touch -------------------------
