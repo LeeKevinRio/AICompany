@@ -39,6 +39,10 @@ namespace Manjong.UI
     {
         public const float ActionSeconds = 0.70f;
         public const float WinSeconds = 1.20f;
+        /// <summary>Pop-in plus settle of an action effect: once this has passed, a waiting state may cut the table's hold short.</summary>
+        public const float EnterSeconds = 0.26f;
+        /// <summary>Longest frame step an effect (and the table's hold for it) advances by, so both run on one clock.</summary>
+        public const float MaxStep = 0.05f;
 
         /// <summary>Which effect, if any, a played step calls for. A win with `result.selfDraw` (or "自摸" in the text) is Tsumo.</summary>
         public static FxKind KindOf(StepDto step)
@@ -106,18 +110,20 @@ namespace Manjong.UI
         }
 
         /// <summary>
-        /// Where the effect appears, as an offset from the canvas centre, per relative seat (0 me, 1 right, 2 opposite, 3 left):
-        /// me and the opposite seat above / below the middle, the side seats in the free upper corners of the felt (beside their
-        /// info cards, clear of the rivers).
+        /// Where the effect appears, as an offset from the canvas centre, per relative seat (0 me, 1 right, 2 opposite, 3 left).
+        /// The four corners of the felt are the only places the rivers never reach, so each seat gets the corner on its own side:
+        /// me bottom-right (next to my action panel), right seat top-right, opposite seat top-left, left seat bottom-left. A plate
+        /// (at most 150 high, name pill hanging 19 below it) stays clear of the rivers (side rivers end at +132 / -100, the middle
+        /// rivers are within +-219 of the centre x), inside the felt, above my action panel and clear of the seat info cards.
         /// </summary>
         public static Vector2 Anchor(int rel)
         {
             switch (rel)
             {
-                case 0: return new Vector2(0f, -255f);
-                case 1: return new Vector2(430f, 215f);
-                case 2: return new Vector2(0f, 255f);
-                default: return new Vector2(-430f, 215f);
+                case 0: return new Vector2(430f, -165f);
+                case 1: return new Vector2(430f, 235f);
+                case 2: return new Vector2(-430f, 235f);
+                default: return new Vector2(-430f, -165f);
             }
         }
 
@@ -126,9 +132,9 @@ namespace Manjong.UI
         {
             bool big = IsWin(kind);
             string word = Word(kind);
-            int font = big ? 116 : 104;
-            float h = big ? 164f : 150f;
-            float w = Mathf.Max(big ? 190f : 168f, word.Length * font + 64f);
+            int font = big ? 104 : 88;
+            float h = big ? 150f : 128f;
+            float w = Mathf.Max(big ? 176f : 144f, word.Length * font + 56f);
 
             var root = UiFactory.CreateRect("Fx_" + kind, layer);
             UiFactory.Place(root, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Anchor(rel), Vector2.zero);
@@ -140,7 +146,7 @@ namespace Manjong.UI
             if (big)
             {
                 var glow = UiFactory.CreateCircle(root, "Glow", Palette.ResultGlow);
-                UiFactory.Place(glow.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(340f, 340f));
+                UiFactory.Place(glow.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(300f, 300f));
                 rays = CreateRays(root);
             }
 
@@ -188,8 +194,8 @@ namespace Manjong.UI
                 UiFactory.Place(arm, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
                 arm.localRotation = Quaternion.Euler(0f, 0f, i * 30f);
                 var bar = UiFactory.CreatePanel(arm, "Bar", Palette.FxRay, 7);
-                UiFactory.Place(bar.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 105f),
-                    i % 2 == 0 ? new Vector2(16f, 80f) : new Vector2(11f, 48f));
+                UiFactory.Place(bar.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 95f),
+                    i % 2 == 0 ? new Vector2(14f, 70f) : new Vector2(10f, 43f));
             }
             return rays;
         }
@@ -221,7 +227,6 @@ namespace Manjong.UI
     /// <summary>Drives one action effect: scale and opacity on a fixed timeline (see ActionFx), unscaled time.</summary>
     public class ActionFxAnim : MonoBehaviour
     {
-        const float MaxStep = 0.05f;      // a long frame (WebGL hitch) must not skip the animation
         const float DismissSeconds = 0.10f;
 
         CanvasGroup group;
@@ -289,7 +294,7 @@ namespace Manjong.UI
 
         void Update()
         {
-            t += Mathf.Min(Time.unscaledDeltaTime, MaxStep);
+            t += Mathf.Min(Time.unscaledDeltaTime, ActionFx.MaxStep);
             if (t >= total)
             {
                 Destroy(gameObject);

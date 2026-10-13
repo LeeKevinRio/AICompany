@@ -13,7 +13,7 @@ namespace Manjong.UI
     public static class WaitChips
     {
         const float Gap = 9f;
-        const float PillW = 38f;
+        const float PillW = 36f;
         const float PillH = 20f;
         const float PillGap = 2f;
 

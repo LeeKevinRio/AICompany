@@ -80,7 +80,9 @@ namespace Manjong.Screens
         const float DrawnSlotX = MaxSlots * SlotStep - SlotGap + DrawnGap; // relative to HandStartX
         const float HandAreaW = DrawnSlotX + 75f;
         const float MyMeldsY = 152f;
-        // Waits hint bar (bottom-left, above my flowers, left of the bottom river, below the left seat panel).
+        // Waits hint bar (bottom-left, above my flowers and clear of my meld row, left of the bottom river). It grows upward:
+        // 50 (one text line), 79 / 88 (chips / two text lines), at most 105 (chips plus the detail line), still below the left
+        // seat's melds.
         const float HintY = 222f;
         const float HintW = 700f;
         const float HintH = 50f;
@@ -696,11 +698,19 @@ namespace Manjong.Screens
                     float elapsed = 0f;
                     while (elapsed < CurrentDelay(type, fx, mine))
                     {
-                        // My own chi / pon / kan / ting: the effect plays by itself, and the moment my next turn's state is
-                        // next in line it is applied at once (never wait for the effect to finish).
-                        if (mine && !ActionFx.IsWin(fx) && NextStateIsActionable()) break;
-                        elapsed += Time.unscaledDeltaTime;
+                        // The effect plays on its own layer, so a state that lets me act never waits for it to finish: my own
+                        // action's state is applied at once, another seat's once its pop-in is over. A win always holds in full.
+                        if (fx != FxKind.None && !ActionFx.IsWin(fx) && NextStateIsActionable() &&
+                            (mine || elapsed >= ActionFx.EnterSeconds)) break;
+                        // Same clock and same per-frame cap as the effect itself (ActionFxAnim), so they stay in step on slow frames.
+                        elapsed += Mathf.Min(Time.unscaledDeltaTime, ActionFx.MaxStep);
                         yield return null;
+                    }
+                    // A win's result panel must not cover its effect: wait until the effect is gone (a tap dismisses it in 0.1 s).
+                    if (ActionFx.IsWin(fx) && view != null)
+                    {
+                        int winRel = (step.@event.seat - view.mySeat + 4) % 4;
+                        while (activeFx[winRel] != null) yield return null;
                     }
                 }
             }
@@ -771,7 +781,7 @@ namespace Manjong.Screens
             int seat = step.@event.seat;
             int rel = (seat - v.mySeat + 4) % 4;
             PlayerView p = DtoUtil.Player(v, seat);
-            if (activeFx[rel] != null) Destroy(activeFx[rel].gameObject);
+            if (activeFx[rel] != null) activeFx[rel].Dismiss(); // the old one fades out (0.1 s) instead of being cut
             activeFx[rel] = ActionFx.Spawn(fxLayer, kind, rel, p != null ? DtoUtil.Safe(p.name) : "");
             if (!ActionFx.IsWin(kind) && kind != FxKind.Ting) FlashNewMeld(step.@event, p, rel);
             return kind;

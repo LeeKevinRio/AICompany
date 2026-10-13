@@ -524,12 +524,12 @@ def mock_ui(scene, tiles_dir):
                 a = t.getchannel("A").point(lambda v: int(v * 0.45))
                 t.putalpha(a)
             scene.alpha_composite(t, (x, y))
-        pill = (x - 2, y + 46, x + 36, y + 66)
+        pill = (x - 1, y + 46, x + 35, y + 66)
         d.rounded_rectangle(pill, radius=10, fill=GRAY if left == 0 else CORAL, outline=(107, 78, 61) if left == 0 else (217, 72, 15), width=2)
         d.text(((pill[0] + pill[2]) // 2, (pill[1] + pill[3]) // 2), f"剩 {left}", font=font(17), fill=INK, anchor="mm")
     d.text((bx + 18, by + 92), "五萬：場上已出現 3 張，你手上 1 張", font=font(22), fill=INK, anchor="lm")
 
-    # --- action effects: 碰 by the opposite seat, 自摸 by the left seat (rays + glow)
+    # --- action effects, one per felt corner: 碰 (opposite seat), 暗槓 (me), 自摸 (right seat, rays + glow)
     def plate(cx, cy, word, color, font_size, w, h, who):
         d.rounded_rectangle((cx - w // 2, cy - h // 2 + 6, cx + w // 2, cy + h // 2 + 6), radius=40, fill=(90, 70, 50, 70))
         d.rounded_rectangle((cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2), radius=40, fill=color, outline=INK, width=5)
@@ -538,21 +538,22 @@ def mock_ui(scene, tiles_dir):
         d.rounded_rectangle((cx - pw // 2, cy + h // 2 - 19, cx + pw // 2, cy + h // 2 + 19), radius=18, fill=CARD, outline=INK, width=3)
         d.text((cx, cy + h // 2), who, font=font(26), fill=INK, anchor="mm")
 
-    plate(CW // 2, CH // 2 - 255, "碰", SKY, 104, 168, 150, "熊熊")
-    cx, cy = CW // 2 - 430, CH // 2 - 215
+    plate(CW // 2 - 430, CH // 2 - 235, "碰", SKY, 88, 144, 128, "熊熊")        # opposite seat: top-left corner
+    plate(CW // 2 + 430, CH // 2 + 165, "暗槓", (226, 212, 245), 88, 232, 128, "你")   # me: bottom-right corner
+    cx, cy = CW // 2 + 430, CH // 2 - 235                                          # right seat: top-right corner
     glow = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse((cx - 170, cy - 170, cx + 170, cy + 170), fill=(255, 216, 77, 77))
+    gd.ellipse((cx - 150, cy - 150, cx + 150, cy + 150), fill=(255, 216, 77, 77))
     for i in range(12):
         ang = math.radians(i * 30 + 8)
-        r0, r1, wd = 105, 185 if i % 2 == 0 else 153, 8 if i % 2 == 0 else 5.5
+        r0, r1, wd = 95, 165 if i % 2 == 0 else 138, 7 if i % 2 == 0 else 5
         dx, dy = math.sin(ang), -math.cos(ang)
         px, py = -dy, dx
         gd.polygon([(cx + dx * r0 - px * wd, cy + dy * r0 - py * wd), (cx + dx * r0 + px * wd, cy + dy * r0 + py * wd),
                     (cx + dx * r1 + px * wd, cy + dy * r1 + py * wd), (cx + dx * r1 - px * wd, cy + dy * r1 - py * wd)], fill=(255, 216, 77, 140))
     scene.alpha_composite(glow)
     d = ImageDraw.Draw(scene)
-    plate(cx, cy, "自摸", GOLD, 116, 296, 164, "小兔")
+    plate(cx, cy, "自摸", GOLD, 104, 264, 150, "小兔")
 
 
 def main():
