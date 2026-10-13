@@ -2,7 +2,8 @@
 
 - 分支：`feat/stock-desk-f9b`（自 `origin/product/stock-desk` 839567f 長出；本地分支，未 push）
 - 撰寫：dev-lead；狀態：qa-reviewer 第一段、第二段 PASS（BLOCKING_ISSUES=false；Codex 第二意見未執行，環境不可用）
-- 合併前提：ADR-0024 經 CEO 核可（T-10，現為 proposed）、風控逐字審、qa-e2e（375／1280）
+- 風控 PR 層級逐字審：APPROVE WITH CONDITIONS（F9W-40～F9W-48，2026-10-13；無否決）
+- 合併前提：ADR-0024 經 CEO 核可（T-10，現為 proposed）；qa-reviewer 勾核 F9W-40～F9W-45；qa-e2e（375／1280，F9W-46 (a)、F9W-47）
 - 依據：`docs/adr/0024-stock-desk-日線價格幣別閘門與代號准入.md`；commit 切分與測試門檻依 TA5 第三節（`work/reviews/2026-10-12-tech-architect-ADR-0024第三次抽驗與F-9b切分R-57至R-69.md`）
 
 ## (a) commit 摘要與 TA5「對應」欄
@@ -19,6 +20,7 @@
 | 6 | 5eced07 | feat: 快取閘門與 T-15（layer 0 第 4、5 步、fallback、cache-only、合併讀回） | 四條快取路徑都過閘門；layer 0 在 R-8 之前檢查；T-15 恰一次；指數路徑無字面 | C-1、C-13 (7)(8)(9)、C-17、C-30、C-32、C-34、F9W-31 (b)(c)、F9W-33 (a)(b) |
 | 7 | a9fb896 | feat: 日線兩入口代號准入與 AV 縱深檢查 | 兩入口准入（W-a／W-b）；deps 顯式接准入與字面組；AV 在扣額度前再檢查 | C-4、C-6、C-7、C-13 (1)(2)、C-15、C-16、C-17（grep）、C-19（准入） |
 | +1 | fe91012 | fix: 指數路徑 W-c′ 後亦整段請求並補自行修復測試變體 | 依 D-4，指數 W-c′ 後的層也要整段；類別 docstring 去掉過時字句；補 TA6 R-75 suggested 兩項測試 | D-4、D-2 (2)、TA6 R-75 |
+| 補 | 63a9b7d | test: 補 F-9b 風控 PR 層級條件測試（F9W-41、F9W-43～F9W-46） | alerts C-34 (b) 完全相等；讀回被擋後 backup 回 W-c／W-c′；`source_id` 絆線；taiex 同進同出與 ERROR log；T-11 改讀裁定原行；≤8 字改為「預設全部、例外明列」。未新增 `except`、未改任何字面 | F9W-41、F9W-42 (c)、F9W-43～F9W-46 |
 
 **F-9b2 範圍（本 PR 不做）**：D-2 (5)(a) 第 1～3 步、D-9 標記、C-23～C-27、C-31 原式、C-17「預置 D-9 標記」。
 
@@ -66,8 +68,11 @@
 | 槓桿 `/api/leverage` | `app/api/leverage.py` L97-126 | chapter 無自有原因時 `loaded.reason` | 無；指數原因另走 `index.py` |
 | 回測 | `app/api/backtest.py` L449-488 | `unavailable(loaded.reason)` | 無 |
 | 事件研究 | `app/api/event_study.py` L154-163 | `loaded.reason`，空才用自有「區間內只有…」句 | 無 |
-| alerts snapshot | `app/alerts/snapshot.py` L111-151 | 無 bars 時 `SymbolSnapshot(reason=loaded.reason)` 原樣 | 無 bars：無。**有 bars（W-c′＋快取，C-34 (b)）時，前接既有核可的 layer note「資料來自 cached_stale 層（{source}）。」**（`_joined_reason`；風控 2026-09-15 R1-a 既有機制，不是新橋接句）→ 請風控依 F9W-33 (d) 知悉 |
-| playbook | `app/playbook/service.py` L221-235 | `result.reason` 帶入 snapshot／warnings | 未逐行追到最終字串，待 qa 核對 |
+| alerts snapshot | `app/alerts/snapshot.py` L111-151 | 無 bars 時 `SymbolSnapshot(reason=loaded.reason)` 原樣 | 無 bars：無。**有 bars（W-c′＋快取，C-34 (b)）時，前接既有核可的 layer note「資料來自 cached_stale 層（{source}）。」**，以 `_joined_reason` 的單一空格相接（風控 2026-09-15 R1-a／R4-a 既有機制，不是新橋接句）；風控 F9W-41 裁定可接受，並以 `test_f9b_risk_conditions.py::test_f9w41_…` 完全相等釘住。layer note 的組成或接法若有任何改動，須回風控 |
+| alerts 觸發訊息（feed、Discord、Telegram） | `app/alerts/engine.py` L444-445 | 拒收時沒有收盤價，規則不觸發（見下列 skip outcome） | C-34 (b) 有 bars 時，訊息尾端接 `data_disclosure`（＝layer note＋單一空格＋`loaded.reason`）；W-c′ 句完整、不改寫（F9W-41） |
+| `POST /api/alerts/evaluate` 的 skip outcome | `app/alerts/engine.py` L500-533 | 無 bars 時 snapshot 沒有收盤價：價格規則用 `snapshot.reason or "沒有可用的最新收盤價。"`，訊號規則用 `snapshot.reason or "沒有可用的訊號輸出。"`，即 W-a～T-15 原樣；風險上限規則用自己的固定句 | 無 |
+| playbook | `app/playbook/service.py` L221-235、L279-289、L360-361、L758-763、L784 | **無 bars 時**，reason 不進 settle、rebalance、evaluate 的 warnings：三處只用 `DATA_GAP_NOTE`、`SETTLEMENT_NO_OPEN_PRICE`、`REBALANCE_BLOCKED`，帶 status 與 source。唯一例外是 `emergency_exit`，把 `series.reason` 原樣放進 `Directive.data_reason`（L784）。**有 bars 時**，`MarketSnapshot.data_reason` → `Directive.data_reason` → 前端 `DirectiveLedger.tsx` L71-76 的 `DataMetaStatusBadge` 原樣呈現。指數 reason 經 `INDEX_DATA_REASON_NOTE` 呈現，指數路徑不帶閘門字面（D-4） | 無包裝、無改寫（風控逐行追到最終字串）。無 bars 時，W-b 等成因不出現在 settle／evaluate 警示，屬少揭露、不是不實，列 CEO 知悉 |
+| Kelly import | `app/api/kelly.py`、`app/kelly/sample_gate.py` L128-139 | 走自己的 `INSUFFICIENT_DATA_MESSAGE`，**不帶 `loaded.reason`** | 無 |
 | scheduler 資料刷新 | `app/scheduler.py` L295-299 | 只寫 INFO log | 不上畫面 |
 | diagnose CLI | `app/data/diagnose.py` L154-161 | 原樣印出（操作端） | 不上畫面 |
 | 指數路徑 | `app/services/index.py` L255-266、L377-388 | **不會出現上列任何句子**：指數無字面（D-4），沿用既有指數版 `NO_BARS_REASON`（風控 F9W-31、F9W-32 已接受的殘留） | 既有 |
@@ -91,20 +96,33 @@
 
 ## (d) C-35／F9W-39 呼叫端處理表（`CurrencyLookupError`）
 
-觸發條件：注入的查表在建構後才對某市場回 None 或空白。正式設定下 `MARKET_CURRENCY` 是模組常數，屬推論上不可達。
+觸發條件：注入的查表在建構後才對某市場回 None 或空白。正式設定下 `MARKET_CURRENCY` 是模組常數，C-35 (b) 的建構期檢查會在 CI 擋住，因此**不可達**。
 
-| 呼叫端 | 處理 | 是否產生資料語意字面 | 前端 500 呈現證據 |
+本 PR **沒有為這個例外新增任何 `except`**，表中的攔截都是既有程式（風控 F9W-40）。
+
+**前端 500 呈現（全表通用，不需實機驗）**
+- `frontend/app/lib/api.ts` L172-184：FastAPI 預設 500 沒有 JSON body，這段會轉成「請求失敗（HTTP 500）」的 `ApiError`，不會出現任何資料語意字面。
+- `missingSummary` 只在 `frontend/app/components/PositionsTable.tsx` L86、L100 對 **200 回應**的 `valuation.missing` 使用，500 路徑到不了。
+- 以上狀態在正式設定下不可達，因此不需要 qa-e2e 實機驗（F9W-40 (c)）。
+
+| 呼叫端 | 是否在傳播路徑上、處理方式 | 是否產生資料語意字面 | 前端 500 呈現證據 |
 |---|---|---|---|
-| `MarketDataService.get_daily_bars`／`get_cached_bars`（所有閘門檢查點） | 先寫一筆 `expected=<none>` 記錄，再 raise；不寫快取、不 `record_fetch` | 不產生資料語意字面 | — |
-| `MarketDataService._try_provider` | 例外不在其 `try` 範圍內，不會被吞成「非預期錯誤」降級 | 不產生資料語意字面 | — |
-| `app/services/market.py::load_bars` | 無 except，向外傳出 | 不產生資料語意字面 | 待 qa-e2e |
-| `app/portfolio/valuation.py::_resolve_price`／`value_position` | 無 except，向外傳出 | 不產生資料語意字面 | 待 qa-e2e |
-| `app/services/index.py` 指數與基準兩個出口、`IndexSeriesService` | 無 except，向外傳出 | 不產生資料語意字面 | 待 qa-e2e |
-| `/api/*` 端點（bars、signals、advice、portfolio、leverage、backtest、event_study） | 無 except，FastAPI 預設 500 | 不產生資料語意字面 | 待 qa-e2e |
-| `app/alerts/snapshot.py`、`app/playbook/service.py` | 無 except，向外傳出 | 不產生資料語意字面 | 待 qa-e2e |
-| `app/scheduler.py` 資料刷新（`DataRefreshRun.__call__`） | 記 ERROR（`outcome=error`）後 re-raise；`_guarded` 記 traceback，排程續存 | 不產生資料語意字面（只有 log） | 不上畫面 |
-| `app/scheduler.py::taiex_reference_return`（既有，L443-453） | `except Exception` → 記 ERROR log（`sector board: TAIEX reference unavailable`），回 None | 不產生資料語意字面；**靜默省略參考數字與揭露句、記 ERROR log**（`reference_taiex_return_L=None`，API `has_taiex_reference=false`） | 待 qa-e2e |
-| `app/data/diagnose.py` | 無 except，CLI 中止 | 不產生資料語意字面 | 不上畫面 |
+| `MarketDataService.get_daily_bars`／`get_cached_bars`（所有閘門檢查點） | 是（源頭）。先寫一筆 `expected=<none>` 記錄再 raise；不寫快取、不 `record_fetch` | 不產生資料語意字面 | 不適用 |
+| `MarketDataService._try_provider` | 否。例外不在其 `try` 範圍內，不會被吞成「非預期錯誤」降級 | 不產生資料語意字面 | 不適用 |
+| `app/services/market.py::load_bars` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
+| `app/portfolio/valuation.py::_resolve_price`／`value_position` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；`missingSummary` 只用於 200（`PositionsTable.tsx` L86、L100）；不可達、不需實機驗 |
+| `app/services/index.py` 指數與基準兩個出口、`IndexSeriesService` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
+| `/api/*` 端點（bars、signals、advice、portfolio、leverage、backtest、event_study） | 是。無 except，FastAPI 預設 500 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
+| `app/alerts/snapshot.py::build_snapshot` | 是。本身無 except，例外拋給它的 loader 呼叫端，由下一列的 `_load_isolated` 攔截（**更正：先前寫的「500」不正確**） | 不產生資料語意字面 | 見下一列 |
+| `app/alerts/engine.py::_load_isolated`（L470-490，既有） | 是，在此**攔截**。記 WARNING（市場、規則數、例外類別，附 `exc_info`），以空 snapshot 繼續該 tick。該 (symbol, market) 的價格規則與訊號規則以既有句「沒有可用的最新收盤價。」「沒有可用的訊號輸出。」略過，風險上限規則用自己的固定句。`POST /api/alerts/evaluate` 回 **200**、`status=skipped`；排程 tick 只留 log | **不產生新字面**：沿用既有 skip 句，狀態為 skipped 而不是 quiet（未改既有 skip 句） | 回 200，不適用 500 |
+| `app/playbook/service.py` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
+| `app/portfolio/price_change.py` L193-197（`ChangeScreen` 的 `except Exception`） | **否**。它拿到的是已完成的估值（`PositionValuation` 列），不會呼叫資料服務；例外早在估值時就已拋出，到不了這裡 | 不產生資料語意字面 | 不適用 |
+| `app/services/sector_board.py` L365、L371（`refresh_board`、`_maybe_evaluate` 的 `except Exception`） | **否**。sector board 只透過 `reference_taiex`（＝`scheduler.taiex_reference_return`）碰到資料服務，例外會先在那裡被攔下（見下列）；其餘讀的是市場面板 store，不經 `MarketDataService` | 不產生資料語意字面 | 不適用 |
+| `app/scheduler.py` L344（`DataRefreshRun.__call__`） | 是。記 ERROR（`outcome=error`）後 re-raise | 不產生資料語意字面（只有 log） | 不上畫面 |
+| `app/scheduler.py` L502（PIT capture 後 `refresh_sector_board()` 的 `except Exception`） | **否**。例外已在 `taiex_reference_return` 被攔下，傳不到這一層 | 不產生資料語意字面 | 不上畫面 |
+| `app/scheduler.py` L610（`_guarded`） | 是，作為排程最外層。資料刷新 re-raise 上來的例外在此記 traceback，排程續存 | 不產生資料語意字面（只有 log） | 不上畫面 |
+| `app/scheduler.py::taiex_reference_return`（既有，L443-453） | 是，在此**攔截**。`except Exception` → 記 ERROR log（`sector board: TAIEX reference unavailable`，附 traceback；**不降噪**），回 None | 不產生資料語意字面。**靜默省略參考數字與揭露句、記 ERROR log**。參考數字與 `TAIEX_REFERENCE` 揭露句**同進同出**：`api/sectors.py` L370 以 `has_taiex_reference=board.reference_taiex_return_L is not None` 傳入 `sectors_wording.py` L251 的 `standing_disclosures`；前端 `SectorMomentumCard.tsx` L336。以 `test_f9b_risk_conditions.py::test_f9w45_*` 兩則測試釘住（另有既有的 `test_api_sectors.py::test_standing_disclosures_when_the_card_is_ok`） | 不可達、不需實機驗 |
+| `app/data/diagnose.py` | 是。無 except，CLI 中止 | 不產生資料語意字面 | 不上畫面 |
 
 ## (e) 引用
 
@@ -122,24 +140,58 @@
 | `SYMBOL_OR_UNIT_REJECTED_CAUSE`（T-11） | F9W-17 |
 | 前端 `MISSING_LABELS.symbol_or_unit_rejected`（T-12） | F9W-19 |
 
-- 每個常數都有測試，直接讀裁定檔原行做逐字比對。
-- 改任何字、分流或先後順序，都要回風控重審（F9W-16、F9W-29）。
+**逐字比對測試的實際寫法**（風控 F9W-42 (c) 更正，原句「每個常數都讀裁定檔原行」不完全屬實）
+
+| 常數 | 比對方式 |
+|---|---|
+| W-a、W-b | `test_f9b_admission_gate.py` 讀裁定一 L20、L23 原行 |
+| W-c、W-c′ | `test_f9b_live_currency_gate.py` 讀裁定一 L26、L29、L32、L35 原行 |
+| T-15 | `test_f9b_cache_currency_gate.py` 讀裁定二 L40 原行 |
+| T-11 | 原為寫死字串；63a9b7d 起改讀裁定二 L26 原行（F9W-42 (c) suggested） |
+| T-12 | 前端 `valuationWording.test.ts` **仍是寫死字串**，與裁定二 L29 逐字相同（已人工核對，風控 F9W-42 亦確認相同）。前端測試不讀 repo 外的 `work/` 檔 |
+
+改任何字、分流或先後順序，都要回風控重審（F9W-16、F9W-29）。
+
+- 風控 PR 層級逐字審：`/home/user/AICompany/work/reviews/2026-10-13-F-9b-PR層級逐字審-F9W-40至F9W-48-風控.md`。F9W-40～F9W-45 已於 63a9b7d（測試）與本檔落實；F9W-46 (b) suggested 一併做了；F9W-46 (a)、F9W-47 屬 qa-e2e；F9W-48 屬合併後。
 
 ## (f) 殘留與知悉
 
-1. **「T-15。 W-c。」跨層組合（未審）**：合併讀回被擋（T-15 已併入累積原因）之後，若後續 live 層又判定 W-c，回覆 reason 會依 `_combine_reasons` 依序含 T-15 與 W-c。只有在「另一個程序於兩次讀取之間寫入壞列」的競態下才可能發生（layer 0 已先擋下快取壞列）。沒有另做處理，送風控知悉。
-2. **AV 縱深 reason=None**：`AlphaVantageAdapter` 在扣額度前判定准入不通過時，回 `UNAVAILABLE`、`reason=None`。依 F9W-7 不得出 W-a／W-b；adapter 內既有的「不是合法的美股個股代號格式…」句查無風控核可紀錄，所以不採用。正常路徑不可達，因為服務層准入會先擋。
-3. **指數路徑 reason 可為 None**：依 ADR-0024 D-4，指數拒收時不帶任何字面，reason 只含其他 live 層的既有原因；layer 0 冷卻期內被擋時為 None。經 `index.py` 呈現既有指數版 `NO_BARS_REASON`（F9W-31、F9W-32 殘留）。qa non-blocking (1)「reason 非空白」只套用股票路徑。另外，沒有 `source_id` 的 provider 判定 W-c 時依 C-14 不出句，股票路徑的 reason 也可能為 None（正式 adapter 都有 `source_id`）。
-4. **taiex 參考值殘留**：`scheduler.py::taiex_reference_return`（既有程式）以 catch-all 吞掉例外，查表落空時會靜默省略 TAIEX 參考數字與揭露句，只記 ERROR log。qa-reviewer 已接受，列 PR 層級條件。
+風控 F9W-40～F9W-48 裁定（2026-10-13）：以下五項殘留全部接受，其中三項附條件，條件均已落實。
+
+1. **「T-15。 W-c。」跨層組合**
+   - 情境：合併讀回被擋（T-15 已併入累積原因）之後，後續 live 層又判定 W-c 或 W-c′，回覆 reason 依 `_combine_reasons` 依序含 T-15 與該句。
+   - 只在「另一個程序於兩次讀取之間寫入壞列」的競態下才會發生，因為 layer 0 已先擋下快取壞列。
+   - 風控接受：兩句各自屬實，與 C-13 (9) 同類；讀回被擋後 fallback 不再讀快取，F9W-4 仍成立。
+   - **F9W-43 已以 `test_f9b_cache_currency_gate.py::test_f9w43_a_refused_read_back_then_a_refused_backup`（W-c、W-c′ 兩變體）完全相等釘住。**
+   - 這兩種以外的跨層新組合若出現，須回風控。
+2. **AV 縱深 reason=None**
+   - `AlphaVantageAdapter` 在扣額度前判定准入不通過時，回 `UNAVAILABLE`、`reason=None`。
+   - 依 F9W-7 不得出 W-a／W-b；adapter 內既有的「不是合法的美股個股代號格式…」句查無風控核可紀錄，所以不採用。
+   - 正常路徑不可達，因為服務層准入會先擋。風控接受。
+3. **指數路徑 reason 可為 None**
+   - 依 ADR-0024 D-4，指數拒收時不帶任何字面，reason 只含其他 live 層的既有原因；layer 0 冷卻期內被擋時為 None。
+   - 經 `index.py` 呈現既有指數版 `NO_BARS_REASON`（F9W-31、F9W-32 殘留）。風控接受。
+   - qa non-blocking (1)「reason 非空白」只套用股票路徑。
+   - **C-14 股票路徑 reason=None**：沒有 `source_id` 的 provider 判定 W-c 時依 C-14 不出句，此時消費端用各自的既有預設句。風控接受。
+   - **F9W-44 絆線**：`test_f9b_risk_conditions.py::test_f9w44_every_equity_rung_deps_builds_has_a_source_id`。轉紅時須連同此殘留回風控，不得只改期望值。
+4. **taiex 參考值殘留**
+   - `scheduler.py::taiex_reference_return`（既有程式）以 catch-all 吞掉例外。查表落空時會靜默省略 TAIEX 參考數字與揭露句，兩者同進同出，並記 ERROR log。
+   - 風控接受，附 F9W-45：不降噪；以 `test_f9b_risk_conditions.py::test_f9w45_*` 兩則測試釘住。
 5. **已以測試實證的原推論**
    - TA5 第二節測試 2 的 layer 序列；
    - R-63「孤兒壞列使每次點擊重跑梯子」；
    - F9W-38 的跨呼叫後果（冷卻期內第二次呼叫回 `RECENT_ATTEMPT_FAILED_REASON` 與快取列）。
-6. **仍待 PR 層級完成**
-   - 風控逐字審；
-   - qa-e2e 在 375／1280 驗庫存頁 T-12、整書四組並列、K 線區／操作摘要／首頁風險上限「詳細」三處的 T-15 與合併 reason、C-34 (b) 情境（F9W-34）；
-   - 前端 500 呈現證據；
-   - CEO 核可 ADR-0024。
+   - 合併後由 tech-writer 依 F9W-48 更新 ADR 的知悉句。
+6. **CEO 知悉**（風控 2026-10-13「需 CEO 知悉事項」）
+   - W-c′ 句在 C-34 (b) 情境會連同 layer note 出現在警示推播（F9W-41）。
+   - 組態錯誤時，該市場的警示規則每個 tick 都被略過、只留 WARNING log；正式設定下由 C-35 在 CI 擋住，不可達。
+   - playbook 在無 bars 時少揭露成因：屬少揭露、不是不實。
+   - F9W-14 殘留不變。
+7. **仍待 PR 層級完成**
+   - qa-reviewer 勾核 F9W-40～F9W-45；
+   - qa-e2e 執行 F9W-46 (a)、F9W-47 必驗清單（375／1280）；
+   - CEO 核可 ADR-0024（T-10）；
+   - Codex 第二意見未執行（環境不可用），由 CEO 決定。
 
 ## 驗證摘要
 
@@ -156,9 +208,13 @@
 | 6 | 6121 |
 | 7 | 6161 |
 | fe91012 | 6164 |
+| 63a9b7d | 6170 |
 
 （各列皆另有 2 xfailed。）
 
-**前端**（commit 4、6）：vitest 75 檔／2089 passed，`tsc --noEmit` 通過。
+**前端**（commit 4、6 與 63a9b7d）：vitest 75 檔／2089 passed，`tsc --noEmit` 通過。
 
-**mutation**：每個 commit 至少一種，總計 43 種（commit 1～7 依序 3／5／5／6／7／8／7 種，fe91012 2 種），全部被擋。
+**mutation**：每個 commit 至少一種，總計 50 種，全部被擋。
+- commit 1～7 依序 3／5／5／6／7／8／7 種；
+- fe91012 2 種；
+- 63a9b7d 7 種：後端 6、前端 1。
