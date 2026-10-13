@@ -470,6 +470,34 @@ def test_after_a_w_c_prime_the_next_rung_keeps_the_narrowed_range(tmp_path: Path
     assert result.rejection is None
 
 
+def test_on_the_index_path_a_w_c_prime_also_asks_the_next_rung_for_the_whole_range(
+    tmp_path: Path,
+) -> None:
+    """D-4: D-2 (2) holds for the index service, mismatch and missing alike."""
+    cache = _incremental_cache(tmp_path)
+    primary = _Rung("yfinance", [_tw("  ", day=date(2024, 1, 3))])
+    whole = [
+        _tw("TWD", source="yahoo", day=date(2023, 11, 30)),
+        _tw("TWD", source="yahoo", day=date(2024, 1, 3)),
+    ]
+    backup = _Rung("yahoo", whole)
+    service = build_service(
+        primary=primary,
+        backups=[backup],
+        cache=cache,
+        scope="index",
+        clock=lambda: NOW,
+        cache_first=True,
+    )
+
+    result = service.get_daily_bars("2330", "TW", date(2023, 11, 1), END)
+
+    assert primary.asked[0][1] > date(2023, 11, 1)  # the primary was narrowed
+    assert backup.asked == [("2330", date(2023, 11, 1), END)]
+    assert result.bars == whole  # the backup's own bars, no cached head read back
+    assert result.rejection is None
+
+
 # --- C-14: {provider} is source_id or nothing --------------------------------------------
 
 

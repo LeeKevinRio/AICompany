@@ -246,11 +246,16 @@ def test_layer0_refused_outside_the_cooldown_runs_the_whole_ladder_then_t15(
     assert cache.attempts == 1  # the ladder's own attempt, nothing more (C-31)
 
 
+@pytest.mark.parametrize("ladder", ["primary-answers", "backup-answers"])
 @pytest.mark.parametrize("orphan", [False, True], ids=["all-returned", "orphan-row"])
 def test_layer0_refused_outside_the_cooldown_self_repairs_from_the_live_rung(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, orphan: bool
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, orphan: bool, ladder: str
 ) -> None:
-    """C-32 (TA5 R-63, TA6 R-75): the reply is exactly what the source returned."""
+    """C-32 (TA5 R-63, TA6 R-75): the reply is exactly what the source returned.
+
+    TA6 R-75 suggested: also when the primary fails and the backup answers,
+    and the successful reply never carries T-15.
+    """
     cache = _Cache(tmp_path / "c.db")
     stale = _bad()
     if orphan:
@@ -259,14 +264,19 @@ def test_layer0_refused_outside_the_cooldown_self_repairs_from_the_live_rung(
     _seed(cache, stale)
     fresh = _good(source="yfinance", close="101")
     rung = _Rung("yfinance", fresh)
+    rungs = [rung]
+    if ladder == "backup-answers":
+        rungs = [_Rung("alpha_vantage", [], reason=AV_QUOTA_REASON), rung]
     clock = {"now": NOW}
-    service = _service(cache, [rung], clock=lambda: clock["now"])
+    service = _service(cache, rungs, clock=lambda: clock["now"])
 
     with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
         first = service.get_daily_bars("AAPL", "US", START, END)
 
-    assert rung.asked == [("AAPL", START, END)]
+    assert [r.asked for r in rungs] == [[("AAPL", START, END)]] * len(rungs)
+    assert first.status is (DataStatus.FRESH if len(rungs) == 1 else DataStatus.BACKUP)
     assert first.bars == fresh  # dates and values, bar for bar
+    assert CACHE_UNIT_REJECTED_REASON not in (first.reason or "")
     assert date(2023, 12, 27) not in {bar.date for bar in first.bars}
     assert first.rejection is None
     assert _layers(caplog) == ["layer0_cache"]

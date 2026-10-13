@@ -208,8 +208,8 @@ class MarketDataService:
     returns is spliced from more than one provider (ADR-0005 D-5 via ADR-0009
     D-7); otherwise there is nothing to explain.
 
-    ``currency_for_market`` and ``scope`` (ADR-0024 D-5, TA5 R-60; F-9b0,
-    observation only) are required keyword-only arguments with no default:
+    ``currency_for_market`` and ``scope`` (ADR-0024 D-5, TA5 R-60) are
+    required keyword-only arguments with no default:
     the assembly layer (``app.api.deps``) passes a lookup over
     ``app.positions.models.MARKET_CURRENCY`` -- this module does not import
     ``app.positions`` (KX-A1) -- and says whether the service answers for
@@ -338,9 +338,11 @@ class MarketDataService:
                 sentence = self._refusal_sentence(provider, market, verdict)
                 if sentence is not None:
                     reasons.append(sentence)
-                if verdict == "mismatch":
+                if verdict == "mismatch" or self._scope == "index":
                     # D-2 (2): a later rung is asked for the whole range, so no
-                    # cached head is ever read back beside a W-c this call.
+                    # cached head is ever read back beside a W-c this call. The
+                    # index path applies it to W-c' too (D-4: D-2 (2) holds for
+                    # the index service, mismatch and missing alike).
                     fetch_start = start
                 continue
             fetched_at = self._clock()
