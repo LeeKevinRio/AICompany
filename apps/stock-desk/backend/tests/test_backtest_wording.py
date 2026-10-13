@@ -806,13 +806,59 @@ def test_the_front_end_banned_list_carries_every_px2_phrase() -> None:
     assert missing == [], f"FRONTEND_FORBIDDEN_TERMS 缺少 PX-2 措辭：{missing}"
 
 
+#: F11-W-33(b): non-code text assets that ship from ``backend/app/**`` and
+#: ``frontend/app/**``. Binary assets are not listed; build output is skipped.
+_TEXT_ASSET_SUFFIXES = (
+    ".yaml",
+    ".yml",
+    ".json",
+    ".md",
+    ".txt",
+    ".css",
+    ".svg",
+    ".html",
+)
+_BUILD_OUTPUT_DIRS = ("node_modules", ".next", "__pycache__")
+
+
+def _shipped_text_assets() -> list[Path]:
+    """Every whitelisted text asset under the two app roots, test folders excluded."""
+    return sorted(
+        path
+        for root in (_APP_ROOT, _FRONTEND_APP_ROOT)
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in _TEXT_ASSET_SUFFIXES
+        and not any(
+            part in (*_BUILD_OUTPUT_DIRS, "__tests__") for part in path.relative_to(root).parts
+        )
+    )
+
+
+def _px2_scan_targets() -> list[Path]:
+    """PX-2 reads the program source plus the text assets (F11-W-33(b))."""
+    return [*_shipped_sources(), *_shipped_text_assets()]
+
+
+def test_the_px2_scan_reads_the_text_assets_it_claims_to() -> None:
+    """Guard against a glob that silently matches nothing and stays green."""
+    targets = {str(path.relative_to(_STOCK_DESK_ROOT)) for path in _px2_scan_targets()}
+    assert "backend/app/advice/rules/default.yaml" in targets
+    assert "frontend/app/globals.css" in targets
+    assert "backend/app/api/backtest_wording.py" in targets
+    assert "frontend/app/backtest/BacktestReportView.tsx" in targets
+    assets = _shipped_text_assets()
+    assert assets, "PX-2 掃描未讀到任何非程式文字資產"
+    assert not set(assets) & set(_shipped_sources())
+
+
 @pytest.mark.parametrize("phrase", PX2_PHRASES)
 def test_no_shipped_source_uses_a_px2_phrase(phrase: str) -> None:
     """PX-2: scan terms only. The front-end list that bans them is the one exemption."""
     banned_list = _FRONTEND_APP_ROOT / "lib" / "adviceWording.ts"
     offenders = [
         str(path.relative_to(_STOCK_DESK_ROOT))
-        for path in _shipped_sources()
+        for path in _px2_scan_targets()
         if path != banned_list and phrase in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
