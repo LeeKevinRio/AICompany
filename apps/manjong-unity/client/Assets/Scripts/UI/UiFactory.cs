@@ -108,6 +108,18 @@ namespace Manjong.UI
             return img;
         }
 
+        /// <summary>Plain painted sprite (no rounding); the caller places it. Not a raycast target.</summary>
+        public static Image CreateSpriteImage(Transform parent, string name, Sprite sprite, Image.Type type)
+        {
+            var rt = CreateRect(name, parent);
+            var img = rt.gameObject.AddComponent<Image>();
+            img.sprite = sprite;
+            img.type = type;
+            img.color = Color.white;
+            img.raycastTarget = false;
+            return img;
+        }
+
         public static void AddShadow(Graphic g, Color color, Vector2 distance)
         {
             var shadow = g.gameObject.AddComponent<Shadow>();

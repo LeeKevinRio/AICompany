@@ -206,9 +206,15 @@ namespace Manjong.UI
         /// </summary>
         public static void AddSameKindHighlight(RectTransform tile, TileSize size)
         {
+            AddSameKindHighlight(tile, size, Palette.SameKindRing);
+        }
+
+        /// <summary>Same highlight with another outline colour (the dark felt needs a bright one, see Palette.FeltSameKindRing).</summary>
+        public static void AddSameKindHighlight(RectTransform tile, TileSize size, Color ring)
+        {
             var wash = UiFactory.CreatePanel(tile, "SameKindWash", Palette.SameKindWash, size.radius);
             UiFactory.Stretch(wash.rectTransform);
-            AddRing(tile, Palette.SameKindRing, size, Mathf.Max(3, Mathf.RoundToInt(size.width / 14f)));
+            AddRing(tile, ring, size, Mathf.Max(3, Mathf.RoundToInt(size.width / 14f)));
         }
 
         /// <summary>Small pill sitting on a tile's top edge ("聽", "胡", "自摸"), poking "above" units over the top.</summary>

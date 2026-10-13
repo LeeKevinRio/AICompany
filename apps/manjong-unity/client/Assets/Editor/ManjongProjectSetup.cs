@@ -16,6 +16,7 @@ public static class ManjongProjectSetup
     public const string ScenePath = "Assets/Scenes/Main.unity";
     public const string ProductName = "manjong-unity";
     const string TileFolder = "Assets/Resources/Tiles";
+    const string TableFolder = "Assets/Resources/Table";
     const string CheckedThisSessionKey = "Manjong.ProjectSetupChecked";
 
     static ManjongProjectSetup()
@@ -69,11 +70,15 @@ public static class ManjongProjectSetup
 
         EnsureBuildSettings();
         ApplyPlayerSettings();
-        // On a fresh checkout the tile images can be imported before ManjongTileImporter compiles; force a
-        // reimport so they pick up the intended settings (mipmaps, uncompressed).
+        // On a fresh checkout the tile and table images can be imported before ManjongTileImporter compiles; force a
+        // reimport so they pick up the intended settings (mipmaps, uncompressed, felt repeating).
         if (AssetDatabase.IsValidFolder(TileFolder))
         {
             AssetDatabase.ImportAsset(TileFolder, ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceUpdate);
+        }
+        if (AssetDatabase.IsValidFolder(TableFolder))
+        {
+            AssetDatabase.ImportAsset(TableFolder, ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceUpdate);
         }
         WarnAboutInputHandling();
         AssetDatabase.SaveAssets();

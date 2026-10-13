@@ -1,17 +1,60 @@
 # tools
 
-## render_tiles.py — 傳統麻將牌面圖
+## render_tiles.py — 台灣麻將牌面圖（白色牌身）
 
 產生 `client/Assets/Resources/Tiles/<牌碼>.png`（150×200，含牌身、圓角、陰影）與 `back.png`。
-筒子、條子、1 條孔雀、白板框線都是程式繪製；萬子數字、字牌、花牌用 Noto Serif TC（SIL OFL 1.1）。
+牌碼：`1m–9m`、`1p–9p`、`1s–9s`、`E S W N`、`RD GD WD`、`F1–F8`（春夏秋冬梅蘭竹菊）。
 
+### 風格依據
+參考台灣機打麻將牌的常見樣式（只當風格參考，未裁切、未描圖，所有圖形皆由程式重新繪製）：
+
+- 牌身：白色瓷面 + 淡玉色牌厚，圓角。
+- 萬子：上方黑色國字數字（5 用「伍」），下方紅色「萬」。
+- 筒子：圓內有外圈與四瓣十字分格；配色 深綠 / 紅 / 近黑；1 筒為大圓（綠外圈、點狀花邊、紅色花心）。
+- 條子：竹節以「串珠」畫成；5 條中間紅、7 條上方紅、9 條中間一列紅；8 條維持 M 字（上 M 下倒 M）；1 條為紅色小鳥配綠色尾羽。
+- 字牌：中＝紅、發＝綠、東南西北＝黑；白板為黑色雙層裝飾框（框帶有梯狀鏤空）。
+- 花牌：角落數字 1–4（春夏秋冬在左上、梅蘭竹菊在右上）、紅色字，下方為程式繪製的植物插圖
+  （春＝牡丹、夏＝荷花、秋＝楓葉、冬＝松枝與山茶、梅＝梅枝五瓣花、蘭＝蘭葉與花、竹＝竹竿竹葉、菊＝多層菊花）。
+
+### 花牌插圖做法
+全部用 PIL 幾何繪製，沒有外部圖檔：`bezier()` 產生曲線、`stroke()` 畫漸細的枝幹、`leaf()` 畫透鏡形葉片、
+圓形花瓣疊層畫花。每個植物是 `draw_peony / draw_lotus / draw_maple / draw_pine / draw_plum / draw_orchid /
+draw_bamboo / draw_chrysanthemum`，座標用 0–1 的相對值，要調整構圖改這些函式即可。
+線條粗細以「縮到約 33×44 仍可辨識」為準；檢查請看 44 px 高的縮圖總覽。
+
+### 執行
 ```bash
 pip install pillow
-# 字型（不進 repo）：放在與腳本同一個資料夾
+# 字型（不進 repo；放在與腳本同一個資料夾，或用 TILE_FONT_DIR 指到別處）
 curl -LO https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/SubsetOTF/TC/NotoSerifTC-Black.otf
 curl -LO https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/SubsetOTF/TC/NotoSerifTC-Bold.otf
 python render_tiles.py ../client/Assets/Resources/Tiles
-rm ../client/Assets/Resources/Tiles/_sheet.png   # 檢查用的總覽圖，不需要進專案
+# 要看總覽圖：第二個參數指定輸出資料夾（原尺寸、92 px、44 px 高三張），不會寫進專案
+python render_tiles.py ../client/Assets/Resources/Tiles /tmp/tile_sheets
 ```
 
-配色與版面集中在腳本開頭的常數（RED / GREEN / BLUE / NAVY、各點數的 layouts）。
+配色與版面集中在腳本開頭的常數（RED / GREEN / INK）與各 `draw_*` 函式；
+字型為 Noto Serif TC（SIL OFL 1.1，授權檔在 `Resources/Tiles/LICENSE-NotoSerifTC.txt`）。
+
+## render_table.py — 牌桌貼圖（絨布、木桌框、控制台）
+
+產生 `client/Assets/Resources/Table/` 的四張貼圖，全部用 PIL 程式繪製，不用網路圖片、不需要額外字型：
+
+| 檔案 | 尺寸 | 內容 |
+| --- | --- | --- |
+| `felt.png` | 256×256 | 無縫綠色絨布小塊（織紋 + 纖維雜訊 + 雲狀濃淡），uGUI 用 `Image.Type.Tiled` 平鋪 |
+| `felt_shade.png` | 610×322 | 暗角加中央柔光（RGBA 漸層），拉伸蓋在絨布上 |
+| `frame.png` | 1376×800 | 木桌框：胡桃木、四角斜接、木紋沿各邊方向、亮／暗斜邊、黃銅嵌線與銅釘；開口透明，外側落影與內側落影已燒進圖裡 |
+| `console.png` | 480×194 | 桌心控制台：深色外殼、黃銅細邊、四顆螺絲、三塊凹陷螢幕（羅盤 / 資訊 / 提示列） |
+
+```bash
+pip install pillow
+python render_table.py ../client/Assets/Resources/Table
+# 另外輸出 1920x1080 的示意圖（牌河牌圖讀自 --tiles；只用來檢查長相，不進專案）
+python render_table.py ../client/Assets/Resources/Table --preview /tmp/table_preview.png --tiles ../client/Assets/Resources/Tiles
+```
+
+約 8 秒跑完；結果是決定性的（固定亂數種子），重跑會得到一樣的圖。幾何常數（框外尺寸 1280×704、木框寬 30、絨布可見區、控制台 440×154 與三塊螢幕的矩形）在腳本開頭，
+**必須與 `Assets/Scripts/Screens/TableScreen.cs` 的 `Table*` / `Console*` 常數一致**；顏色集中在 `FELT_*`、`WALNUT_*`、`BRASS*`。
+絨布亮度刻意壓暗（最亮約 rgb(50,118,81)），讓牌河的高亮框（`Palette.FeltLastDiscardRing` / `FeltSameKindRing`）對它有 3:1 以上的對比；改絨布顏色時要重算。
+匯入設定由 `Assets/Editor/ManjongTileImporter.cs` 套用（`felt.png` Wrap = Repeat、全部不壓縮）。

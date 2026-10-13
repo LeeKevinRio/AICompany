@@ -10,8 +10,11 @@
 - 字型：`Assets/Resources/Fonts/huninn.ttf`（jf open 粉圓子集，授權見同資料夾 `LICENSE-jf-openhuninn.txt`）。
 - 圖形：**牌面用傳統麻將牌的圖**（`Assets/Resources/Tiles/<牌碼>.png`，牌背 `back.png`，每張 150×200 px、圓角外透明）；
   找不到圖時自動退回程式畫的文字牌，並在 Console 警告一次。按鈕、面板、圓形頭像等可愛風 UI 仍在執行期用 `Texture2D` 產生。
-- 牌圖匯入設定由 `Assets/Editor/ManjongTileImporter.cs`（AssetPostprocessor）自動套用：產生 mipmap（Kaiser 濾鏡，避免小牌走樣）、不壓縮、Trilinear、alpha 為透明、不縮放成 2 的次方。
-  第一次開專案時 `Manjong/Setup Project` 會強制重新匯入牌圖，確保套到這組設定；若牌面仍偏糊，在 Project 視窗對 `Assets/Resources/Tiles` 按右鍵 → Reimport。
+- **牌桌貼圖**：`Assets/Resources/Table/{felt,felt_shade,frame,console}.png`，由 `tools/render_table.py` 用 PIL 程式產生（綠色絨布、暗角、木頭桌框、電動桌控制台），不使用網路圖片；找不到圖時退回舊的薄荷綠平面桌（Console 警告一次）。
+- 匯入設定由 `Assets/Editor/ManjongTileImporter.cs`（AssetPostprocessor）自動套用：
+  - `Tiles/`：產生 mipmap（Kaiser 濾鏡，避免小牌走樣）、不壓縮、Trilinear、alpha 為透明、不縮放成 2 的次方。
+  - `Table/`：不壓縮（壓縮會讓暗角漸層出現色帶）、不縮放成 2 的次方；`felt.png` 是無縫小塊（256×256，`Image.Type.Tiled` 重複貼滿），Wrap = Repeat；`frame.png`、`console.png` 單張 Clamp、產生 mipmap（小螢幕會縮小）；`felt_shade.png` 是拉伸的平滑漸層，Bilinear、不產生 mipmap。
+  第一次開專案時 `Manjong/Setup Project` 會強制重新匯入 `Tiles` 與 `Table`，確保套到這組設定；若牌面仍偏糊，在 Project 視窗對 `Assets/Resources/Tiles` 按右鍵 → Reimport。
 - API 契約：`work/manjong-unity/api-contract.md`（v0.3.1）；決策紀錄：`work/manjong-unity/adr/M002-牌局改用-WebSocket.md`。
 
 ## 1. 開啟專案
@@ -64,7 +67,7 @@ Editor 與桌面平台預設連 `http://127.0.0.1:7316`（集中在 `Assets/Scri
    用戶端據此把錯誤顯示在對的地方：改暱稱的錯誤在暱稱提示欄、救濟金用 toast、開始遊戲的錯誤在開始按鈕下方、牌局動作照牌桌流程處理。
    沒有回應的請求 15 秒後視為逾時；斷線時進行中的請求全部視為失敗並提示。「重新整理」會送 `me` 與 `leaderboard`。
 3. 伺服器即時推送 `step`（摸牌、打牌、吃碰槓…）與 `state`（輪到你時的權威快照）。用戶端把它們排進同一個佇列依序播放：
-   每步約 0.35 秒（開局 0.8 秒、胡牌 1.2 秒），佇列超過 6 步或點畫面任意處（自己的手牌除外，播放中也能自由選牌、拖牌）會快轉到每步約 0.08 秒；
+   每步約 0.35 秒（開局 0.8 秒、胡牌 1.2 秒；別家吃碰槓聽改停 0.7 秒，見第 6 節「動作特效」），佇列超過 6 步或點畫面任意處（自己的手牌除外，播放中也能自由選牌、拖牌）會快轉到每步約 0.08 秒（此時不播動作特效）；
    `state` 排到時才套用，此時若有 options 才解鎖操作。送出 `action` 後會鎖住，直到收到下一個 `state`。
 4. 連上後每 25 秒送 `ping`；超過 60 秒沒收到任何伺服器訊息（含 `pong`）就視為斷線。連線階段與登入階段各有約 10–12 秒的逾時。
 5. 斷線時自動重連（0.5、1、2、4、8 秒，上限 10 秒；連線穩定 30 秒後才把退避次數歸零），牌桌上方會出現「連線中斷，正在重新連線…」。
@@ -116,20 +119,22 @@ Assets/
   Editor/
     ManjongProjectSetup.cs   首次開啟建立 Main.unity、Build Settings、Player Settings；選單 Manjong/Setup Project
     ManjongBuild.cs          選單 Manjong/Build WebGL
-    ManjongTileImporter.cs   Resources/Tiles 牌圖的匯入設定（AssetPostprocessor）
+    ManjongTileImporter.cs   Resources/Tiles 牌圖與 Resources/Table 桌面貼圖的匯入設定（AssetPostprocessor）
   Plugins/WebGL/
     ManjongMotion.jslib      WebGL 專用：讀瀏覽器 prefers-reduced-motion（動效偏好）
     ManjongPrompt.jslib      WebGL 專用：用瀏覽器 prompt 輸入中文暱稱（見常見問題）
     ManjongSocket.jslib      WebGL 專用：瀏覽器 WebSocket 橋接（輪詢式）
   Resources/Fonts/huninn.ttf
   Resources/Tiles/*.png      牌面圖（1m…9m、1p…9p、1s…9s、E S W N、RD GD WD、F1…F8、back）
+  Resources/Table/*.png      牌桌貼圖（felt 絨布小塊、felt_shade 暗角、frame 木桌框、console 控制台；tools/render_table.py 產生）
   Scripts/
     Core/  Bootstrap（進入點）、AppController（畫面切換、requestId / replyTo 路由、牌局訊息與錯誤處理）、
            Economy（底 / 每台 / 門檻 / 救濟金，必須與 server/src/engine/rules.ts 的 ECONOMY 同步）
     Net/   ApiConfig（伺服器與 WebSocket 位址）、TokenStore（PlayerPrefs token）、Dto（契約 v0.3 DTO）、
            GameConnection（auth / ping / 重連）、SocketTransport（介面）、WebGLSocketTransport、NativeSocketTransport
     UI/    Palette（配色）、RoundedSprite（執行期圓角圖）、UiFactory（建 UI 的 helper）、
-           TileFace（牌碼→字/顏色/中文名）、TileView（牌圖載入與快取、文字牌 fallback、副露組）、HandTileDrag（手牌指標手勢）、UiTween（位置 / 透明度補間與曲線）、Format、WebPrompt
+           TileFace（牌碼→字/顏色/中文名）、TileView（牌圖載入與快取、文字牌 fallback、副露組）、HandTileDrag（手牌指標手勢）、UiTween（位置 / 透明度補間與曲線）、
+           TableArt（牌桌貼圖載入與快取）、WaitChips（聽牌的牌圖＋剩餘張數）、ActionFx（吃碰槓聽胡的動作字樣特效與新副露外框）、Format、WebPrompt
     Screens/ LobbyScreen（大廳）、TableScreen（牌桌）、ActionPanel（吃碰槓聽胡過面板）、ResultPanel（結算）、ResultLayout（結算畫面的純幾何計算）
 ```
 
@@ -173,6 +178,40 @@ async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，We
   八仙過海、七搶一胡的是花牌，改在花牌那一格標示。
 - **報聽（契約 v0.4）**：任何一家已報聽（`players[].declared`）時，資訊卡上會有珊瑚色貼紙——別家是小「聽」，我自己是較大的「聽牌中」；報聽是公開資訊。
 
+**牌桌外觀**（`TableScreen.BuildTable` / `BuildConsole`；貼圖由 `tools/render_table.py` 產生）：
+
+- 由下而上：奶油色背景 → 綠色絨布（256×256 無縫小塊，每個貼圖像素 = 一個畫布單位，`Image.Type.Tiled` 平鋪）→ 暗角與中央柔光（`felt_shade.png` 拉伸蓋在絨布上）→ 木桌框（`frame.png`，胡桃木、四角 45° 斜接、木紋沿各邊方向、亮／暗斜邊、黃銅細嵌線與四個銅釘，開口透明，外側柔和落影、內側落影都燒在圖裡）→ 中央控制台。
+- **桌框外尺寸 1280×704**（畫面中心上移 16），絨布可見區 1220×644（木框寬 30，絨布往框下多鋪 8 以免露縫）。四家牌河、副露、手牌的座標與先前完全相同：河座標以桌心為原點，最深的一排牌河離桌心 315、絨布半高 322，仍放得下；左右牌河最遠 581、絨布半寬 610。
+  16:9（畫布 1920×1080）桌框左右剛好貼著兩側座位面板（x = 320 ~ 1600）；16:10（畫布約 1821×1138）桌框比兩側面板多蓋約 40 單位，只蓋到框的木邊，面板畫在上層，牌河與副露不受影響。
+- **控制台**（440×154，桌心）：左側「羅盤」螢幕有四盞方燈，位置對應相對座位（下 = 我、右、上 = 對家、左）；**莊家那盞是金色並顯示「莊」**，其他盞顯示各自的門風字（暗綠底、淡字）；**輪到誰就在那盞外圍加亮環**（非莊家的那盞同時變薄荷色），所以狀態不只靠顏色。
+  右側螢幕顯示「東風圈·第 N 局」與金色「剩餘 N 張」（沿用原本的資料）；底下一條顯示提示列（「輪到你：點一張牌，再點一次打出」等）。
+- 牌河上的高亮在深色絨布上改用亮色外框（原本 `LastDiscardRing`、`SameKindRing` 是為薄荷色桌面選的，放到深綠上只有約 1.2:1）：最後一張打出的牌是亮橘框（`FeltLastDiscardRing`，對最亮的絨布 3.07:1），同種牌是亮黃框＋淡黃底（`FeltSameKindRing` 4.19:1）。對比值與配色都記在 `Palette.cs` 檔頭。
+
+**動作特效**（`UI/ActionFx.cs`，由 `TableScreen.PlayStepFx` 在播放 step 時觸發）：
+
+- 事件 `chi` / `pon` / `kan` / `ankan` / `kakan` / `ting` / `win` 會在**動作那家的座位附近**出現大字：「吃」「碰」「槓」「暗槓」「加槓」「聽」「胡」，自摸（`result.selfDraw`，沒有 result 時看事件文字有無「自摸」）是「自摸」。字下方掛一顆名字膠囊（誰做的）。
+  位置（相對畫布中心）：我 (0, -255)、對家 (0, +255)、右家 (+430, +215)、左家 (-430, +215)；兩側座位放在絨布上方的空角，避開牌河。
+  底板顏色：吃 = Butter、碰 = Sky、槓 / 暗槓 / 加槓 = Lavender（這三個與操作面板的按鈕同色）、聽 = Coral（同資訊卡上「聽牌中」貼紙）、胡 / 自摸 = ResultGold（同結算畫面的金色）；字是 Ink，描 Card 色邊，底板外圍 5 單位 Ink 外框（對奶油底 10.85:1，淡色底板單看只有 1.1 ~ 1.8:1，靠外框撐出邊界），並有陰影。**全部不接收點擊**，不會擋手牌或操作面板。
+- **時間軸**（只動 transform 與 opacity，不動版面屬性；曲線 = 既有的 strong ease-out `cubic-bezier(0.23, 1, 0.32, 1)`；用 unscaled time）：
+
+  | 項目 | 吃碰槓聽（0.70 秒） | 胡 / 自摸（1.20 秒） |
+  | --- | --- | --- |
+  | 彈入 | 0.16 秒，scale 0.90 → 1.06，opacity 0 → 1 | 0.18 秒，scale 0.90 → 1.12，opacity 0 → 1 |
+  | 回彈定位 | 0.10 秒，1.06 → 1.00 | 0.12 秒，1.12 → 1.00 |
+  | 停留 | 0.26 秒 | 0.65 秒 |
+  | 退場 | 0.18 秒，opacity 1 → 0、scale 1 → 0.96 | 0.25 秒，同左 |
+  | 額外 | 無 | 金色光暈圓、12 條放射線（scale 0.90 → 1.00 約 0.3 秒，之後每秒轉 12°） |
+
+  進場合計 0.26 秒（胡 / 自摸 0.30 秒），都在 300ms 內；胡 / 自摸屬罕見時刻，才給較大的彈入與光芒。同一座位連續兩個特效時，新的立刻取代舊的。
+- **播放停頓**：別家的吃碰槓聽事件停 **0.70 秒**（= 特效總長，一般步驟仍是 0.35 秒）；胡 / 自摸停 **1.2 秒**（結算面板在這之後才出現，所以特效不會被蓋住）。
+  **我自己的動作**也有特效，但只停 **0.12 秒**；而且只要佇列裡下一個項目就是輪到我、帶 options 的 `state`，就**立刻套用**，不等特效播完（特效在自己的圖層上獨立播完，不影響操作）。我自己胡牌仍停 1.2 秒。
+- **新副露高亮**：吃碰槓之後，剛成形的那組副露（加槓是升級後的那組）外圍出現橘色外框，淡入 0.1 秒、持續到 0.55 秒、淡出 0.3 秒後移除。
+- **快轉、斷線、重新同步**：
+  - 快轉（點畫面空白處，或佇列超過 6 步）：**不播**特效，每步停 0.08 秒；快轉當下畫面上還在播的特效會在 0.1 秒內淡出。
+  - 重連：`PrepareResync` 清空佇列、**清掉所有特效**，之後只套用伺服器給的最新 `state`，不會補播中斷期間錯過的事件；離開牌桌 / 開新局同樣清空。
+  - 斷線中已經在播的特效照常播完（它只是畫在牌桌上的圖層）。
+- **減少動態**（`UiMotion.Reduced`）：特效只做淡入淡出（淡入 0.12 秒、停留時間不變、淡出 0.18 秒），沒有縮放、沒有轉動的放射線（光芒靜止保留）；新副露外框本來就只有透明度變化。
+
 **操作面板**（我的手牌上方偏右，位置固定）：只要有吃、碰、槓、胡、過任一個選項，或有 `ting:*` 報聽選項，面板就會彈出，
 固定六顆按鈕依序是 **吃、碰、槓、聽、胡、過**。可以用的按鈕會亮起並有脈動光暈，不能用的變灰、按不了；沒有任何操作時面板收起。
 
@@ -202,8 +241,10 @@ async/await 只出現在 `NativeSocketTransport.cs`（Editor / 桌面專用，We
 ## 7. 畫面上的聽牌與台數資訊（全部由後端提供）
 
 - 輪到你打牌時，打出後會聽牌的牌，牌面上方有珊瑚色的「聽」標記（按「聽」進入報聽選牌模式後，只有可報聽的牌保持亮，並加珊瑚色外框）。
-- 點一下牌（浮起）時，畫面左下（手牌左側、花牌上方）的提示列會顯示「打出後聽：三筒（剩 2）、六筒（剩 3）」，不會聽牌則顯示「打出後未聽牌」。剩餘張數是後端只用你看得到的牌推算的。
-- 不是你的回合但已聽牌時，提示列常駐顯示「聽牌中：…」。
+- 點一下牌（浮起）時，畫面左下（手牌左側、花牌上方）的提示列會用**牌圖＋剩餘張數**顯示聽哪些牌：左邊標籤「打出後聽」（說明「數字為剩餘張數」），右邊每一種聽的牌是一個小牌圖（Mini 33×44），牌圖正下方一顆珊瑚色小膠囊「剩 2」；下一行是「五萬：場上已出現 N 張，你手上 M 張」。不會聽牌則顯示文字「打出後未聽牌」。剩餘張數是後端只用你看得到的牌推算的（`WaitDto.left`）。
+- **報聽選牌模式**（按「聽」之後）選到可報聽的牌，同一列顯示標籤「報聽後聽」＋牌圖；不是你的回合但已聽牌時，提示列常駐顯示標籤「聽牌中」＋牌圖（`view.myWaits`）。
+- **聽牌圖示的排版規則**（`UI/WaitChips.cs`）：單列、固定間距 42（牌寬 33 + 空隙 9），從標籤右側由左到右排，順序照後端；每一格大小固定，不因張數多寡縮放；一列容納 13 種（版面寬 700，扣掉標籤與邊距後 554），聽 8、9 種完全放得下；超過 13 種時最後一格改成「+N」膠囊。
+  **剩 0 張**的那一格：牌圖變淡（透明度 0.45 + 灰色罩）、膠囊改灰底並顯示「剩 0」，一眼看出已經沒有了。提示列只有沒有第二行時高 79、有第二行時高 105，往上長，不會往下位移。
 - 操作面板的「胡」按鈕會顯示「胡」或「自摸」，下面一行小字是這手的台數（後端的 `tai`）；槓有多種時（明槓／暗槓／加槓）會跳出選單。
 - 自己摸牌時，事件列會顯示「你 摸到 五萬」。
 

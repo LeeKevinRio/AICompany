@@ -16,6 +16,13 @@ namespace Manjong.UI
     ///   Gain/Loss on Cream 5.99/6.08, Ink on Coral 5.94 / DealerBadge 6.90 / Pink 7.82
     ///   Non-text: ResultGold vs ResultStage 8.54, Card vs ResultStage 11.63, ResultShooterRing vs Cream 3.94,
     ///   Loss vs Cream 6.08. Do NOT use Coral as an outline on Cream (1.83) nor LastDiscardRing on ResultStage (2.75).
+    /// Table (felt theme; the felt ranges from rgb(24,67,46) to rgb(50,118,81) after the vignette):
+    ///   FeltLastDiscardRing vs lightest felt 3.07, FeltSameKindRing 4.19 (LastDiscardRing / SameKindRing would be 1.2 / 1.0 there:
+    ///   they were chosen for the pale Mint table, so the river uses these two instead).
+    ///   Console: ConsoleText on ConsoleScreen 15.11, ConsoleTextDim 10.01, ConsoleGold 11.90, LampOffText on LampOff 5.26,
+    ///   Ink on ResultGold (dealer lamp) 8.55 / on Mint (turn lamp) 8.68, turn ring (ConsoleText) vs ConsoleScreen 15.11.
+    /// Action effects: Ink on FxChi (Butter) 9.68, FxPon (Sky) 8.43, FxKan (Lavender) 8.43, FxTing (Coral) 5.94, FxWin (ResultGold) 8.55;
+    ///   the 5 px Ink outline of the plate vs Cream 10.85 (the pale plates alone are 1.1-1.8 against Cream).
     /// </summary>
     public static class Palette
     {
@@ -70,6 +77,27 @@ namespace Manjong.UI
         public static readonly Color ResultShooterRing = Hex(0xD9, 0x48, 0x0F);
         /// <summary>Thin separators inside result rows / above the buttons (decorative).</summary>
         public static readonly Color ResultDivider = new Color(0.290f, 0.196f, 0.149f, 0.18f);
+
+        // Table: the river rings need to be bright on the dark felt (see the contrast notes above).
+        public static readonly Color FeltLastDiscardRing = Hex(0xFF, 0xB3, 0x47);
+        public static readonly Color FeltSameKindRing = Hex(0xFF, 0xE0, 0x66);
+
+        // Table console (electric-table control panel in the middle of the felt).
+        public static readonly Color ConsoleBezel = Hex(0x2A, 0x30, 0x2D);
+        public static readonly Color ConsoleScreen = Hex(0x14, 0x22, 0x1C);
+        public static readonly Color ConsoleText = Hex(0xFF, 0xF4, 0xE0);
+        public static readonly Color ConsoleTextDim = Hex(0xBC, 0xCE, 0xC4);
+        public static readonly Color ConsoleGold = Hex(0xFF, 0xD8, 0x4D);
+        public static readonly Color LampOff = Hex(0x2C, 0x3C, 0x34);
+        public static readonly Color LampOffText = Hex(0x9C, 0xB4, 0xA6);
+
+        // Action effects (chi / pon / kan / ting / win plates); same hues as the matching action buttons, 聽 = the declared sticker's coral.
+        public static readonly Color FxChi = Butter;
+        public static readonly Color FxPon = Sky;
+        public static readonly Color FxKan = Lavender;
+        public static readonly Color FxTing = Coral;
+        public static readonly Color FxWin = ResultGold;
+        public static readonly Color FxRay = new Color(1f, 0.847f, 0.302f, 0.55f);
 
         public static readonly Color Dim = new Color(0.20f, 0.13f, 0.09f, 0.55f);
         public static readonly Color Transparent = new Color(0f, 0f, 0f, 0f);

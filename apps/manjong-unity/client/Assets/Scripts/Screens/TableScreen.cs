@@ -20,15 +20,34 @@ namespace Manjong.Screens
     /// order is kept until the next hand and reconciled against every new view. Declared-ready (報聽) hands only select.
     /// Dragging a tile mostly upwards past 90 units and releasing plays it (discard, or ting in the picker); every move of
     /// a tile on screen is a short UiTween (the slots themselves stay at their fixed coordinates).
+    /// Table dressing: a green baize (tiled felt + vignette) inside a wooden frame, with an electric-table console in the
+    /// middle (round / hand number, wall count, dealer / turn lamps). Chi / pon / kan / ting / win steps play a big action
+    /// word next to the acting seat (ActionFx) and hold the playback for it; the new meld flashes briefly.
     /// </summary>
     public class TableScreen : MonoBehaviour
     {
         const int MaxEvents = 5;
         const float StepDelay = 0.35f;
         const float HandStartDelay = 0.8f;
-        const float WinDelay = 1.2f;
+        const float WinDelay = ActionFx.WinSeconds;
+        const float ActionDelay = ActionFx.ActionSeconds; // another seat's chi / pon / kan / ting: the effect's whole life
+        const float OwnActionDelay = 0.12f;               // my own: the effect plays on its own, my next state must not wait
         const float FastDelay = 0.08f;
         const int FastForwardQueueLength = 6;
+
+        // Table: outer size of the wooden frame (the images in Resources/Table are generated for exactly these numbers, see
+        // tools/render_table.py). Centre = screen centre + 16 up, so every river coordinate below is unchanged.
+        const float TableW = 1280f;
+        const float TableH = 704f;
+        const float TableWood = 30f;       // width of the wood rail
+        const float TableShadow = 48f;     // transparent margin of frame.png that holds its drop shadow
+        const float FeltBleed = 8f;        // the baize runs this far under the rail so no gap can show
+        // Console in the middle of the felt (top-left origin inside the console; the numbers match render_table.py).
+        const float ConsoleW = 440f;
+        const float ConsoleH = 154f;
+        const float ConsoleShadow = 20f;
+        const float LampSize = 28f;
+        const float LampDist = 31f;
 
         const float InfoW = 250f;
         const float InfoH = 110f;
@@ -65,7 +84,11 @@ namespace Manjong.Screens
         const float HintY = 222f;
         const float HintW = 700f;
         const float HintH = 50f;
-        const float HintTallH = 88f;
+        const float HintTallH = 88f;         // text mode, two lines
+        const float HintChipsH = 79f;        // chip mode, one row: 7 + 66 + 6
+        const float HintChipsTallH = 105f;   // chip mode with the detail line: 7 + 66 + 3 + 24 + 5
+        const float HintLabelW = 118f;
+        const float HintPad = 14f;
         const float MyMeldsW = 1000f;
         // Opposite seat: fixed left edge for its concealed row and melds (relative to the screen centre).
         const float TopRowX = -260f;
@@ -103,6 +126,10 @@ namespace Manjong.Screens
         Text centerWall;
         Text centerTurn;
         Text myCoinsText;
+        /// <summary>The felt / frame / console images were found (otherwise the old plain mint table is drawn).</summary>
+        bool textured;
+        RectTransform lampLayer;
+        string lampSig;
 
         ActionPanel actionPanel;
         /// <summary>聽 pressed: the declare-ready tile picker is on (only tiles with a "ting:" option can be picked).</summary>
@@ -110,7 +137,14 @@ namespace Manjong.Screens
 
         Image hintBar;
         Image hintRing;
+        /// <summary>Text mode: one or two lines filling the bar.</summary>
         Text hintText;
+        /// <summary>Chip mode (waits as tile pictures): label + caption on the left, the chip row, an optional detail line below.</summary>
+        Text hintLabel;
+        Text hintCaption;
+        RectTransform hintChips;
+        Text hintDetail;
+        string hintChipSig;
 
         GameObject connectionBanner;
         Text connectionText;
@@ -168,6 +202,9 @@ namespace Manjong.Screens
         List<int> pendingCarry;
         /// <summary>Top layer for tiles flying out of the hand; survives hand rebuilds.</summary>
         RectTransform flyLayer;
+        /// <summary>Action words (吃 碰 槓 聽 胡 ...): above the table, below the result panel; never takes clicks.</summary>
+        RectTransform fxLayer;
+        readonly ActionFxAnim[] activeFx = new ActionFxAnim[4];
 
         // ---------- Build ----------
 
@@ -195,6 +232,9 @@ namespace Manjong.Screens
 
             BuildConnectionBanner();
 
+            fxLayer = UiFactory.CreateRect("FxLayer", root);
+            UiFactory.Stretch(fxLayer);
+
             resultPanel = new ResultPanel();
             resultPanel.Build(root);
 
@@ -209,24 +249,38 @@ namespace Manjong.Screens
 
         void BuildTable()
         {
-            var table = UiFactory.CreatePanel(root, "Table", Palette.Mint, 48);
-            tableArea = table.rectTransform;
-            UiFactory.Place(tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 16f), new Vector2(1240f, 680f));
-            UiFactory.CreateRing(table.transform, "Edge", Palette.MintDeep, 48, 8, 0f);
+            Vector2 mid = new Vector2(0.5f, 0.5f);
+            tableArea = UiFactory.CreateRect("Table", root);
+            UiFactory.Place(tableArea, mid, mid, new Vector2(0f, 16f), new Vector2(TableW, TableH));
 
-            // Center info
-            var info = UiFactory.CreatePanel(tableArea, "CenterInfo", Palette.Card, 28);
-            UiFactory.Place(info.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(340f, 150f));
-            UiFactory.AddShadow(info, Palette.CardShadow, new Vector2(0f, -4f));
-            centerRound = UiFactory.CreateLabel(info.transform, "Round", "", 32, Palette.Ink, TextAnchor.MiddleCenter);
-            centerRound.fontStyle = FontStyle.Bold;
-            UiFactory.Place(centerRound.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -10f), new Vector2(316f, 44f));
-            centerWall = UiFactory.CreateLabel(info.transform, "Wall", "", 28, Palette.Ink, TextAnchor.MiddleCenter);
-            UiFactory.Place(centerWall.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -56f), new Vector2(316f, 40f));
-            centerTurn = UiFactory.CreateLabel(info.transform, "Turn", "", 24, Palette.InkSoft, TextAnchor.MiddleCenter);
-            UiFactory.Place(centerTurn.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -98f), new Vector2(326f, 42f));
+            Sprite felt = TableArt.Get("felt");
+            Sprite shade = TableArt.Get("felt_shade");
+            Sprite frame = TableArt.Get("frame");
+            Sprite consoleBody = TableArt.Get("console");
+            textured = felt != null && shade != null && frame != null;
+            if (textured)
+            {
+                // Baize (tiled, one texel per canvas unit) a little larger than the opening, its vignette over it, then
+                // the wooden frame on top (its own drop shadow and inner shadow are baked in; the opening is transparent).
+                float openW = TableW - 2f * TableWood;
+                float openH = TableH - 2f * TableWood;
+                var feltImg = UiFactory.CreateSpriteImage(tableArea, "Felt", felt, Image.Type.Tiled);
+                UiFactory.Place(feltImg.rectTransform, mid, mid, Vector2.zero, new Vector2(openW + 2f * FeltBleed, openH + 2f * FeltBleed));
+                var shadeImg = UiFactory.CreateSpriteImage(tableArea, "FeltShade", shade, Image.Type.Simple);
+                UiFactory.Place(shadeImg.rectTransform, mid, mid, Vector2.zero, new Vector2(openW, openH));
+                var frameImg = UiFactory.CreateSpriteImage(tableArea, "Frame", frame, Image.Type.Simple);
+                UiFactory.Place(frameImg.rectTransform, mid, mid, Vector2.zero, new Vector2(TableW + 2f * TableShadow, TableH + 2f * TableShadow));
+            }
+            else
+            {
+                var plain = UiFactory.CreatePanel(tableArea, "Plain", Palette.Mint, 48);
+                UiFactory.Stretch(plain.rectTransform);
+                UiFactory.CreateRing(plain.transform, "Edge", Palette.MintDeep, 48, 8, 0f);
+            }
 
-            // Rivers around the center info (table-local coordinates). Bottom/top: 10 columns, sides: 8 columns.
+            BuildConsole(consoleBody);
+
+            // Rivers around the console (table-local coordinates). Bottom/top: 10 columns, sides: 8 columns.
             float step = TileSizes.Small.width + RiverGap;
             float wideW = RiverColsWide * step - RiverGap;
             float narrowW = RiverColsNarrow * step - RiverGap;
@@ -236,6 +290,99 @@ namespace Manjong.Screens
             rivers[2] = MakeArea("River2", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 85f), new Vector2(wideW, riverH));
             rivers[1] = MakeArea("River1", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0f, 0.5f), new Vector2(sideX, 0f), new Vector2(narrowW, riverH));
             rivers[3] = MakeArea("River3", tableArea, new Vector2(0.5f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-sideX, 0f), new Vector2(narrowW, riverH));
+        }
+
+        /// <summary>Places a child by its top-left corner inside the console (x right, y down), like the picture was drawn.</summary>
+        static void PlaceInConsole(RectTransform rt, float x, float y, float w, float h)
+        {
+            UiFactory.Place(rt, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, -y), new Vector2(w, h));
+        }
+
+        /// <summary>
+        /// Electric-table console in the middle of the felt: a compass screen (one lamp per seat: gold "莊" = dealer, bright ring
+        /// = whose turn it is), an info screen (round and hand number, wall count) and a strip for the turn prompt.
+        /// The screens' rectangles are painted into console.png (tools/render_table.py SCREEN_*); without the image they are
+        /// drawn as dark rounded panels.
+        /// </summary>
+        void BuildConsole(Sprite body)
+        {
+            Vector2 mid = new Vector2(0.5f, 0.5f);
+            var console = UiFactory.CreateRect("Console", tableArea);
+            UiFactory.Place(console, mid, mid, Vector2.zero, new Vector2(ConsoleW, ConsoleH));
+            if (body != null)
+            {
+                var img = UiFactory.CreateSpriteImage(console, "Body", body, Image.Type.Simple);
+                UiFactory.Stretch(img.rectTransform, -ConsoleShadow, -ConsoleShadow, -ConsoleShadow, -ConsoleShadow);
+            }
+            else
+            {
+                var bezel = UiFactory.CreatePanel(console, "Body", Palette.ConsoleBezel, 24);
+                UiFactory.Stretch(bezel.rectTransform);
+                AddConsoleScreen(console, 14f, 12f, 96f, 96f, 14);
+                AddConsoleScreen(console, 124f, 12f, 302f, 96f, 14);
+                AddConsoleScreen(console, 14f, 114f, 412f, 28f, 10);
+            }
+
+            lampLayer = UiFactory.CreateRect("Lamps", console);
+            PlaceInConsole(lampLayer, 14f, 12f, 96f, 96f);
+
+            centerRound = UiFactory.CreateLabel(console, "Round", "", 30, Palette.ConsoleText, TextAnchor.MiddleLeft);
+            centerRound.fontStyle = FontStyle.Bold;
+            PlaceInConsole(centerRound.rectTransform, 140f, 18f, 274f, 36f);
+            centerWall = UiFactory.CreateLabel(console, "Wall", "", 30, Palette.ConsoleGold, TextAnchor.MiddleLeft);
+            PlaceInConsole(centerWall.rectTransform, 140f, 60f, 274f, 36f);
+            centerTurn = UiFactory.CreateLabel(console, "Turn", "", 22, Palette.ConsoleTextDim, TextAnchor.MiddleCenter);
+            PlaceInConsole(centerTurn.rectTransform, 22f, 114f, 396f, 28f);
+        }
+
+        static void AddConsoleScreen(RectTransform console, float x, float y, float w, float h, int radius)
+        {
+            var screen = UiFactory.CreatePanel(console, "Screen", Palette.ConsoleScreen, radius);
+            PlaceInConsole(screen.rectTransform, x, y, w, h);
+        }
+
+        /// <summary>
+        /// The four lamps on the compass screen, one per relative seat (0 me at the bottom, 1 right, 2 opposite at the top,
+        /// 3 left): the dealer's lamp is gold and reads "莊", the others show their seat wind; the lamp of the seat whose turn it
+        /// is gets a bright ring (and turns mint unless it is the dealer's). Unlit lamps are dark green with dim text, so the
+        /// state is never colour alone. Rebuilt only when something it shows changes.
+        /// </summary>
+        void RenderLamps(GameView v)
+        {
+            var sb = new StringBuilder();
+            sb.Append(v.mySeat).Append('|').Append(v.dealerSeat).Append('|').Append(v.phase == "playing" ? v.turnSeat : -1);
+            for (int seat = 0; seat < 4; seat++)
+            {
+                PlayerView p = DtoUtil.Player(v, seat);
+                sb.Append('|').Append(p != null ? p.seatWind : "");
+            }
+            string sig = sb.ToString();
+            if (sig == lampSig) return;
+            lampSig = sig;
+            UiFactory.DestroyChildren(lampLayer);
+
+            Vector2 mid = new Vector2(0.5f, 0.5f);
+            for (int seat = 0; seat < 4; seat++)
+            {
+                PlayerView p = DtoUtil.Player(v, seat);
+                if (p == null) continue;
+                int rel = (seat - v.mySeat + 4) % 4;
+                bool dealer = seat == v.dealerSeat;
+                bool turn = v.phase == "playing" && seat == v.turnSeat;
+                Vector2 offset = rel == 0 ? new Vector2(0f, -LampDist)
+                    : rel == 1 ? new Vector2(LampDist, 0f)
+                    : rel == 2 ? new Vector2(0f, LampDist)
+                    : new Vector2(-LampDist, 0f);
+
+                Color fill = dealer ? Palette.ConsoleGold : (turn ? Palette.Mint : Palette.LampOff);
+                var lamp = UiFactory.CreatePanel(lampLayer, "Lamp" + rel, fill, 8);
+                UiFactory.Place(lamp.rectTransform, mid, mid, offset, new Vector2(LampSize, LampSize));
+                if (turn) UiFactory.CreateRing(lamp.transform, "TurnRing", Palette.ConsoleText, 10, 3, 2f);
+                var t = UiFactory.CreateLabel(lamp.transform, "Text", dealer ? "莊" : TileFace.WindName(p.seatWind), 20,
+                    dealer || turn ? Palette.Ink : Palette.LampOffText, TextAnchor.MiddleCenter);
+                t.fontStyle = FontStyle.Bold;
+                UiFactory.Stretch(t.rectTransform, 1f, 1f, 1f, 1f);
+            }
         }
 
         static RectTransform MakeArea(string name, Transform parent, Vector2 anchor, Vector2 pivot, Vector2 pos, Vector2 size)
@@ -302,17 +449,31 @@ namespace Manjong.Screens
         }
 
         /// <summary>
-        /// Waits hint at the bottom-left, above my flowers and clear of my meld row (which can reach y = 212):
-        /// "打出後聽…" / "聽牌中…".
+        /// Waits hint at the bottom-left, above my flowers and clear of my meld row (which can reach y = 212). Two modes:
+        /// chips (what I wait on as tile pictures with "剩 N", under a label "打出後聽" / "報聽後聽" / "聽牌中", plus an optional
+        /// detail line for the selected tile) and plain text for everything else ("打出後未聽牌", the picker prompt ...).
         /// </summary>
         void BuildHintBar()
         {
+            Vector2 topLeft = new Vector2(0f, 1f);
             hintBar = UiFactory.CreatePanel(root, "WaitHint", Palette.Card, 20);
             UiFactory.Place(hintBar.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, HintY), new Vector2(HintW, HintH));
             UiFactory.AddShadow(hintBar, Palette.CardShadow, new Vector2(0f, -3f));
             hintRing = UiFactory.CreateRing(hintBar.transform, "Ring", Palette.Coral, 20, 3, 0f);
             hintText = UiFactory.CreateLabel(hintBar.transform, "Text", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
             UiFactory.Stretch(hintText.rectTransform, 18f, 4f, 14f, 4f);
+
+            hintLabel = UiFactory.CreateLabel(hintBar.transform, "Label", "", 24, Palette.Ink, TextAnchor.MiddleLeft);
+            hintLabel.fontStyle = FontStyle.Bold;
+            UiFactory.Place(hintLabel.rectTransform, topLeft, topLeft, new Vector2(HintPad, -14f), new Vector2(HintLabelW, 30f));
+            hintCaption = UiFactory.CreateLabel(hintBar.transform, "Caption", "數字為剩餘張數", 16, Palette.InkSoft, TextAnchor.MiddleLeft);
+            UiFactory.Place(hintCaption.rectTransform, topLeft, topLeft, new Vector2(HintPad, -46f), new Vector2(HintLabelW, 22f));
+            hintChips = UiFactory.CreateRect("Chips", hintBar.transform);
+            UiFactory.Place(hintChips, topLeft, topLeft, new Vector2(HintPad + HintLabelW, -7f),
+                new Vector2(HintW - 2f * HintPad - HintLabelW, WaitChips.Height));
+            hintDetail = UiFactory.CreateLabel(hintBar.transform, "Detail", "", 22, Palette.Ink, TextAnchor.MiddleLeft);
+            UiFactory.Place(hintDetail.rectTransform, topLeft, topLeft, new Vector2(HintPad + 4f, -(7f + WaitChips.Height + 3f)),
+                new Vector2(HintW - 2f * HintPad - 4f, 24f));
             hintBar.gameObject.SetActive(false);
         }
 
@@ -368,6 +529,7 @@ namespace Manjong.Screens
             fastForward = false;
             awaiting = true;
             selectedIndex = -1;
+            ClearFx(); // the snapshot that follows is authoritative; nothing that was queued is replayed
             if (view != null && !pumping) Render(view, lastRenderFinal);
         }
 
@@ -400,6 +562,7 @@ namespace Manjong.Screens
             awaiting = false;
             fastForward = false;
             queue.Clear();
+            ClearFx();
             if (resultPanel != null) resultPanel.Hide();
             if (actionPanel != null) actionPanel.Fold();
             gameObject.SetActive(false);
@@ -437,6 +600,9 @@ namespace Manjong.Screens
             events.Clear();
             RefreshEventLog();
             tingOn = false;
+            lampSig = null;
+            hintChipSig = null;
+            ClearFx();
             actionPanel.Fold();
             for (int i = 0; i < 4; i++)
             {
@@ -473,7 +639,11 @@ namespace Manjong.Screens
                     Touch touch = Input.GetTouch(i);
                     if (touch.phase == TouchPhase.Began && !IsOverMyHandTile(touch.position)) tapped = true;
                 }
-                if (tapped) fastForward = true;
+                if (tapped)
+                {
+                    fastForward = true;
+                    ActionFx.DismissAll(fxLayer);
+                }
             }
 #endif
         }
@@ -515,13 +685,20 @@ namespace Manjong.Screens
                     StepDto step = item.step;
                     playing = true;
                     resultPanel.Hide();
+                    bool fast = IsFastPlayback;
+                    if (fast) ActionFx.DismissAll(fxLayer);
                     if (step.view != null) Render(step.view, false);
                     PushEvent(EventText(step));
+                    FxKind fx = PlayStepFx(step, fast);
 
                     string type = step.@event != null ? step.@event.type : "";
+                    bool mine = fx != FxKind.None && view != null && step.@event.seat == view.mySeat;
                     float elapsed = 0f;
-                    while (elapsed < CurrentDelay(type))
+                    while (elapsed < CurrentDelay(type, fx, mine))
                     {
+                        // My own chi / pon / kan / ting: the effect plays by itself, and the moment my next turn's state is
+                        // next in line it is applied at once (never wait for the effect to finish).
+                        if (mine && !ActionFx.IsWin(fx) && NextStateIsActionable()) break;
                         elapsed += Time.unscaledDeltaTime;
                         yield return null;
                     }
@@ -550,12 +727,87 @@ namespace Manjong.Screens
             selectedIndex = -1;
         }
 
-        float CurrentDelay(string eventType)
+        /// <summary>Tap fast-forward, or so many steps queued up that the table must catch up: no effects, minimal holds.</summary>
+        bool IsFastPlayback
         {
-            if (fastForward || queue.Count > FastForwardQueueLength) return FastDelay;
+            get { return fastForward || queue.Count > FastForwardQueueLength; }
+        }
+
+        /// <summary>
+        /// How long the step stays on screen before the next queue item. Another seat's chi / pon / kan / ting holds for the whole
+        /// effect (0.70 s), a win for 1.2 s (the result panel only comes after it); my own action barely holds (0.12 s) because
+        /// the effect runs on its own layer and my next state must be able to unlock input at once. Fast playback: 0.08 s.
+        /// </summary>
+        float CurrentDelay(string eventType, FxKind fx, bool mine)
+        {
+            if (IsFastPlayback) return FastDelay;
             if (eventType == "hand_start") return HandStartDelay;
-            if (eventType == "win") return WinDelay;
+            if (eventType == "win" || ActionFx.IsWin(fx)) return WinDelay;
+            if (fx != FxKind.None) return mine ? OwnActionDelay : ActionDelay;
             return StepDelay;
+        }
+
+        /// <summary>The next queue item is the authoritative state of my own turn (it carries options): apply it right away.</summary>
+        bool NextStateIsActionable()
+        {
+            if (queue.Count == 0) return false;
+            GameView next = queue.Peek().state;
+            return next != null && next.phase == "playing" && DtoUtil.HasOptions(next);
+        }
+
+        // ---------- Action effects ----------
+
+        /// <summary>
+        /// Starts the action word for this step (and the new meld's outline) next to the acting seat. Skipped, but still reported
+        /// for the hold time, while playback is fast. One effect per seat at a time: a new one replaces the old at once.
+        /// </summary>
+        FxKind PlayStepFx(StepDto step, bool fast)
+        {
+            FxKind kind = ActionFx.KindOf(step);
+            if (kind == FxKind.None) return kind;
+            GameView v = step.view != null ? step.view : view;
+            if (v == null || fast || fxLayer == null || !gameObject.activeInHierarchy) return kind;
+
+            int seat = step.@event.seat;
+            int rel = (seat - v.mySeat + 4) % 4;
+            PlayerView p = DtoUtil.Player(v, seat);
+            if (activeFx[rel] != null) Destroy(activeFx[rel].gameObject);
+            activeFx[rel] = ActionFx.Spawn(fxLayer, kind, rel, p != null ? DtoUtil.Safe(p.name) : "");
+            if (!ActionFx.IsWin(kind) && kind != FxKind.Ting) FlashNewMeld(step.@event, p, rel);
+            return kind;
+        }
+
+        /// <summary>
+        /// Outlines the meld the event just made: the last meld of the seat (a kakan: the upgraded meld of that tile). The meld
+        /// boxes of the seat's area are in meld order and the freshly built ones are its last children (the old ones are only
+        /// destroyed at the end of the frame), so the box is found counting from the end.
+        /// </summary>
+        void FlashNewMeld(EventDto e, PlayerView p, int rel)
+        {
+            if (p == null) return;
+            MeldDto[] melds = DtoUtil.Safe(p.melds);
+            int valid = 0;
+            int target = -1;
+            for (int i = 0; i < melds.Length; i++)
+            {
+                MeldDto m = melds[i];
+                if (m == null || DtoUtil.Safe(m.tiles).Length == 0) continue;
+                bool match = e.type != "kakan" || (m.type == "kakan" && System.Array.IndexOf(DtoUtil.Safe(m.tiles), e.tile) >= 0);
+                if (match) target = valid;
+                valid++;
+            }
+            RectTransform area = seats[rel].melds;
+            if (target < 0 || area == null) return;
+            int index = area.childCount - valid + target;
+            if (index < 0 || index >= area.childCount) return;
+            var box = area.GetChild(index) as RectTransform;
+            if (box != null && box.name.StartsWith("Meld_")) ActionFx.FlashMeld(box);
+        }
+
+        void ClearFx()
+        {
+            if (fxLayer != null) UiFactory.DestroyChildren(fxLayer);
+            for (int i = 0; i < activeFx.Length; i++) activeFx[i] = null;
         }
 
         /// <summary>Server text, except my own draw whose text is empty by contract: "你 摸到 五萬".</summary>
@@ -679,31 +931,11 @@ namespace Manjong.Screens
             else if (v.phase == "hand_end") turn = "本局結束";
             else if (v.phase == "game_end") turn = "整場結束";
             centerTurn.text = turn;
-            centerTurn.color = CanAct ? Palette.Ink : Palette.InkSoft;
+            centerTurn.color = CanAct ? Palette.ConsoleText : Palette.ConsoleTextDim;
+            RenderLamps(v);
         }
 
         // ----- Waits hint -----
-
-        const int MaxWaitsShown = 4;
-
-        /// <summary>"三筒（剩 2）、六筒（剩 3）"; more than 4 waits are cut to "…等 N 張" so the bar stays one line.</summary>
-        static string FormatWaits(WaitDto[] waits)
-        {
-            var sb = new StringBuilder();
-            int total = 0;
-            int shown = 0;
-            for (int i = 0; i < waits.Length; i++)
-            {
-                if (waits[i] == null || string.IsNullOrEmpty(waits[i].tile)) continue;
-                total++;
-                if (shown >= MaxWaitsShown) continue;
-                if (sb.Length > 0) sb.Append('、');
-                sb.Append(TileFace.Name(waits[i].tile)).Append("（剩 ").Append(Mathf.Max(0, waits[i].left)).Append('）');
-                shown++;
-            }
-            if (total > shown) sb.Append("…等 ").Append(total).Append(" 張");
-            return sb.ToString();
-        }
 
         static bool AnyDiscardWaits(GameView v)
         {
@@ -717,9 +949,11 @@ namespace Manjong.Screens
 
         void RenderHint(GameView v)
         {
-            string text = "";
+            string text = "";          // text mode
+            string label = "";         // chip mode: label and the waits to draw
+            WaitDto[] chips = null;
+            string detail = "";        // second line: what the selected tile looks like on the table
             bool listening = false;
-            bool twoLines = false;
             bool canDiscard = CanDiscardByTile;
             string sel = selectedIndex >= 0 && selectedIndex < handOrder.Count ? handOrder[selectedIndex] : "";
             string stats = sel.Length > 0
@@ -732,9 +966,16 @@ namespace Manjong.Screens
                 OptionDto ting = sel.Length > 0 ? DtoUtil.FindOption(v, "ting:" + sel) : null;
                 if (ting != null)
                 {
-                    string list = FormatWaits(DtoUtil.Safe(ting.waits));
-                    text = (list.Length > 0 ? "報聽後聽：" + list : "報聽打出這張") + "\n" + stats;
-                    twoLines = true;
+                    if (WaitChips.Valid(ting.waits).Count > 0)
+                    {
+                        label = "報聽後聽";
+                        chips = DtoUtil.Safe(ting.waits);
+                    }
+                    else
+                    {
+                        text = "報聽打出這張";
+                    }
+                    detail = stats;
                 }
                 else
                 {
@@ -748,10 +989,17 @@ namespace Manjong.Screens
                 {
                     OptionDto opt = DtoUtil.FindOption(v, "discard:" + sel);
                     WaitDto[] waits = opt != null ? DtoUtil.Safe(opt.waits) : new WaitDto[0];
-                    string list = FormatWaits(waits);
-                    text = (list.Length > 0 ? "打出後聽：" + list : "打出後未聽牌") + "\n" + stats;
-                    listening = list.Length > 0;
-                    twoLines = true;
+                    if (WaitChips.Valid(waits).Count > 0)
+                    {
+                        label = "打出後聽";
+                        chips = waits;
+                        listening = true;
+                    }
+                    else
+                    {
+                        text = "打出後未聽牌";
+                    }
+                    detail = stats;
                 }
                 else if (AnyDiscardWaits(v))
                 {
@@ -763,27 +1011,54 @@ namespace Manjong.Screens
             else if (v.phase == "playing")
             {
                 // Not choosing a discard (waiting, declared, someone else's turn): standing waits plus the selected tile's counts.
-                string list = FormatWaits(DtoUtil.Safe(v.myWaits));
-                if (list.Length > 0)
+                if (WaitChips.Valid(v.myWaits).Count > 0)
                 {
-                    text = "聽牌中：" + list;
+                    label = "聽牌中";
+                    chips = DtoUtil.Safe(v.myWaits);
                     listening = true;
+                    detail = stats;
                 }
-                if (stats.Length > 0)
+                else
                 {
-                    text = text.Length > 0 ? text + "\n" + stats : stats;
-                    twoLines = list.Length > 0;
+                    text = stats;
                 }
             }
 
-            bool show = text.Length > 0;
+            bool chipMode = chips != null;
+            bool show = chipMode || text.Length > 0 || detail.Length > 0;
             hintBar.gameObject.SetActive(show);
             if (!show) return;
-            // Two lines (taller bar, growing upward) only for the selected-tile detail; it stays below the left seat panel.
-            hintBar.rectTransform.sizeDelta = new Vector2(HintW, twoLines ? HintTallH : HintH);
-            hintText.text = text;
-            hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
             hintRing.gameObject.SetActive(listening);
+
+            hintText.gameObject.SetActive(!chipMode);
+            hintLabel.gameObject.SetActive(chipMode);
+            hintCaption.gameObject.SetActive(chipMode);
+            hintChips.gameObject.SetActive(chipMode);
+            hintDetail.gameObject.SetActive(chipMode && detail.Length > 0);
+
+            float height;
+            if (chipMode)
+            {
+                // Chips are rebuilt only when what they show changed. Two rows (taller bar, growing upward) only for the detail line.
+                hintLabel.text = label;
+                string chipSig = label + "|" + WaitChips.Signature(chips);
+                if (chipSig != hintChipSig)
+                {
+                    hintChipSig = chipSig;
+                    WaitChips.Build(hintChips, chips);
+                }
+                hintDetail.text = detail;
+                height = detail.Length > 0 ? HintChipsTallH : HintChipsH;
+            }
+            else
+            {
+                hintChipSig = null;
+                bool twoLines = text.Length > 0 && detail.Length > 0;
+                hintText.text = twoLines ? text + "\n" + detail : (text.Length > 0 ? text : detail);
+                hintText.fontStyle = listening ? FontStyle.Bold : FontStyle.Normal;
+                height = twoLines ? HintTallH : HintH;
+            }
+            hintBar.rectTransform.sizeDelta = new Vector2(HintW, height);
         }
 
         /// <summary>
@@ -1653,8 +1928,8 @@ namespace Manjong.Screens
                 var t = TileView.CreateFace(area, discards[i], size);
                 UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f),
                     new Vector2(c * (size.width + RiverGap), -r * (size.height + RiverGap)), size.Vector);
-                if (discards[i] == highlightCode) TileView.AddSameKindHighlight(t, size);
-                if (highlightLast && i == discards.Length - 1) TileView.AddRing(t, Palette.LastDiscardRing, size, 4);
+                if (discards[i] == highlightCode) TileView.AddSameKindHighlight(t, size, textured ? Palette.FeltSameKindRing : Palette.SameKindRing);
+                if (highlightLast && i == discards.Length - 1) TileView.AddRing(t, textured ? Palette.FeltLastDiscardRing : Palette.LastDiscardRing, size, 4);
             }
         }
 
