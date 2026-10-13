@@ -37,14 +37,14 @@ function formatCount(value: number | null): string {
 }
 
 /**
- * A count the backend must always supply as a whole number (the two exclusion
+ * A count the backend must always supply as a non-negative whole number (the two exclusion
  * counts of the round-trip detail block). Unlike `formatCount` it has no dash
  * for "missing": a missing count there is a broken data contract (F11-W-25),
  * and a dash would let the page claim a disclosure it cannot make, so it throws.
  */
 function formatExactCount(value: number): string {
-  if (!Number.isInteger(value)) {
-    throw new Error(`round_trip_detail: expected a whole-number count, got ${String(value)}`);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`round_trip_detail: expected a non-negative whole-number count, got ${String(value)}`);
   }
   return value.toLocaleString("zh-Hant-TW");
 }
@@ -542,8 +542,9 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
   // without it is a broken API contract, and rendering the table without the
   // payoff ratio's definitions or the exclusion disclosure would be a quiet
   // downgrade of what F11-R-1 requires to ship together: fail loudly instead.
-  const detail: RoundTripDetail | null = report.round_trip_detail;
-  if (detail === null) {
+  // `== null` also catches a response that omits the key (undefined), not just an explicit null.
+  const detail: RoundTripDetail | null | undefined = report.round_trip_detail;
+  if (detail == null) {
     throw new Error("BacktestReportView: a successful report arrived without round_trip_detail");
   }
 

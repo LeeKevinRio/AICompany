@@ -367,6 +367,23 @@ describe("F11-W-25: L-06p and the L-11 block go in together, with whole-number c
     expect(() => markupOf(missing)).toThrow(/whole-number count/);
   });
 
+  it("a negative count is rejected too (W-25: non-negative whole numbers only)", () => {
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      const broken: BacktestResponse = JSON.parse(JSON.stringify(makeResponse()));
+      if (broken.round_trip_detail === null) throw new Error("fixture");
+      Object.assign(broken.round_trip_detail.out_of_sample, { open_trip_at_end: bad });
+      expect(() => markupOf(broken), String(bad)).toThrow(/non-negative whole-number count/);
+    }
+    const zero = makeResponse({ inSample: makeDetail({ excluded_boundary_trips: 0, open_trip_at_end: 0 }) });
+    expect(() => markupOf(zero)).not.toThrow();
+  });
+
+  it("a report whose round_trip_detail key is absent (undefined) fails with the same direct message as null", () => {
+    const absent: BacktestResponse = JSON.parse(JSON.stringify(makeResponse()));
+    Reflect.deleteProperty(absent, "round_trip_detail");
+    expect(() => markupOf(absent)).toThrow(/without round_trip_detail/);
+  });
+
   it("a successful report without round_trip_detail throws rather than rendering a table without its definitions", () => {
     const broken: BacktestResponse = { ...makeResponse(), round_trip_detail: null };
     expect(() => markupOf(broken)).toThrow(/round_trip_detail/);
@@ -407,7 +424,8 @@ describe("F11-W-26 / AC-16 (g): L-11h is in the sub-block, outside the collapsed
 
   it("L-11 is not inside either metric table", () => {
     for (const table of metricTables(root)) {
-      expect(textOf(table)).not.toContain(EXCLUDED_HEADING.concat("\u0000"));
+      // the heading text occurs once per table, inside the L-06p pointer that names it; no L-11 block of its own
+      expect(textOf(table).split(EXCLUDED_HEADING).length - 1).toBe(1);
       expect(findAll(table, (el) => el.tag === "h4")).toHaveLength(0);
       expect(findAll(table, (el) => el.tag === "dl")).toHaveLength(0);
     }
