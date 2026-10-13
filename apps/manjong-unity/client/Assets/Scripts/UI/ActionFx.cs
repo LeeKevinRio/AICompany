@@ -111,19 +111,20 @@ namespace Manjong.UI
 
         /// <summary>
         /// Where the effect appears, as an offset from the canvas centre, per relative seat (0 me, 1 right, 2 opposite, 3 left).
-        /// The four corners of the felt are the only places the rivers never reach, so each seat gets the corner on its own side:
-        /// me bottom-right (next to my action panel), right seat top-right, opposite seat top-left, left seat bottom-left. A plate
-        /// (at most 150 high, name pill hanging 19 below it) stays clear of the rivers (side rivers end at +132 / -100, the middle
-        /// rivers are within +-219 of the centre x), inside the felt, above my action panel and clear of the seat info cards.
+        /// The felt is full of tiles, so the effects sit in the cross around the console, each on its seat's side: 150 below /
+        /// above the table centre for me / the opposite seat, 305 right / left of it for the side seats (the table centre is
+        /// 129 above the canvas centre). That is where each seat's river ends, the rows filled last, so a plate covers the least
+        /// for its 0.7 s. A plate is at most 150 high with the name pill 19 below it.
         /// </summary>
         public static Vector2 Anchor(int rel)
         {
+            const float tableCenterY = 129f;
             switch (rel)
             {
-                case 0: return new Vector2(430f, -165f);
-                case 1: return new Vector2(430f, 235f);
-                case 2: return new Vector2(-430f, 235f);
-                default: return new Vector2(-430f, -165f);
+                case 0: return new Vector2(0f, tableCenterY - 150f);
+                case 1: return new Vector2(305f, tableCenterY);
+                case 2: return new Vector2(0f, tableCenterY + 150f);
+                default: return new Vector2(-305f, tableCenterY);
             }
         }
 

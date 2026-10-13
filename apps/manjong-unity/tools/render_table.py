@@ -4,16 +4,18 @@ Usage: python render_table.py <out-dir> [--preview <png>] [--tiles <tiles-dir>]
 
 Output in <out-dir> (the client keeps them in Assets/Resources/Table/):
   felt.png        256x256 seamless green baize tile (repeats; Image.Type.Tiled in uGUI)
-  felt_shade.png  610x322 vignette (dark corners) plus a soft light pool in the middle, stretched over the felt
-  frame.png       1376x800 wooden table frame: mitred walnut rails with grain, bevel, brass inlay, inner shadow
+  felt_shade.png  770x369 vignette (dark corners) plus a soft light pool in the middle, stretched over the felt
+  frame.png       1696x894 wooden table frame: mitred walnut rails with grain, bevel, brass inlay, inner shadow
                   on the felt and a soft drop shadow outside (the frame's hole is transparent)
   console.png     480x194 electric-table console: dark bezel with brass trim and three recessed screens
 
-With --preview a 1920x1080 mock-up of the table scene is written (felt, frame, console, a few river tiles read
-from --tiles); it is only for checking the look and never goes into the client.
+Every run also checks the worst-case seat layout (17 concealed tiles, 5 kongs, 8 flowers and a full river for each seat) for
+overlapping tiles, tiles outside the felt and tiles on the console, and prints the problems. With --preview a 1920x1080 mock-up
+of that worst case (plus a 1821x1138 one, <png> with _1610 appended) is written, using the tile images in --tiles; it is only
+for checking the look and never goes into the client.
 
-All geometry below is in canvas units (1 texel = 1 unit at the 1920x1080 reference) and must match the
-constants in Assets/Scripts/Screens/TableScreen.cs (TableFrame*, Console*).
+All geometry below is in canvas units (1 texel = 1 unit at the 1920x1080 reference) and must match the constants in
+Assets/Scripts/Screens/TableScreen.cs (Table*, Console*, the seat layout helpers).
 """
 import math
 import os
@@ -23,10 +25,10 @@ import sys
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 # ---------------------------------------------------------------- geometry (mirrors TableScreen.cs)
-FRAME_W, FRAME_H = 1280, 704           # outer size of the wooden frame
+FRAME_W, FRAME_H = 1600, 798           # outer size of the wooden frame
 FRAME_MARGIN = 48                      # transparent margin around the frame that holds its drop shadow
 WOOD = 30                              # width of the wood rail
-FELT_W, FELT_H = FRAME_W - 2 * WOOD, FRAME_H - 2 * WOOD   # 1220 x 644 visible felt
+FELT_W, FELT_H = FRAME_W - 2 * WOOD, FRAME_H - 2 * WOOD   # 1540 x 738 visible felt
 CONSOLE_W, CONSOLE_H = 440, 154        # console body
 CONSOLE_MARGIN = 20                    # shadow margin around the console
 # Recessed screens inside the console (x, y, w, h in console units, top-left origin).
@@ -419,141 +421,161 @@ def make_console():
     return dither(img, rng, 1.0)
 
 
-# ---------------------------------------------------------------- preview mock-up (not shipped)
+# ---------------------------------------------------------------- seat layout (mirrors TableScreen.cs, preview only)
+# Every seat is laid out in its own frame: u runs along the seat's table edge (the seat's left to right), v runs from that
+# edge toward the table centre. The right / left seats are the same frame turned by +90 / -90 degrees, so their tiles stand
+# rotated like on a real table; the opposite seat keeps its tiles upright (v points down the screen, no rotation).
+HW, HH = FELT_W // 2, FELT_H // 2                    # felt half extents: 770, 369
+BACK, BACK_PITCH = (30, 40), 31                      # concealed tiles
+MELD_T = (34, 45)                                    # melds and flowers
+RIVER_T, RIVER_PITCH = (42, 56), (44, 58)            # discards
+LEN = {0: FELT_W, 2: FELT_W, 1: FELT_H, 3: FELT_H}   # length of each seat's table edge
+RIVER_COLS = {0: 16, 2: 16, 1: 12, 3: 12}            # tiles per row (a row of the side seats runs along the screen's vertical)
+RIVER_ROWS = {0: 3, 2: 3, 1: 4, 3: 4}                # rows reserved (the capacity the layout is checked for)
+HAND_SLOTS, HAND_WIN_GAP = 17, 10
+HAND_W = HAND_SLOTS * BACK_PITCH + HAND_WIN_GAP + BACK[0]
+MELD_GAP = {0: 10, 2: 10, 1: 6, 3: 6}
+MELDS_U0, MELDS_W = {0: 160, 2: 160, 1: 6, 3: 6}, {0: 760, 2: 760, 1: 726, 3: 726}
+FLOWERS_U0 = {0: 940, 2: 940, 1: 6, 3: 6}
+V_HAND = 6
+V_MELDS = {0: 6, 2: 52, 1: 52, 3: 52}
+V_FLOWERS = {0: 6, 2: 52, 1: 103, 3: 103}            # the top / bottom seats keep flowers on the melds row
+V_RIVER = {0: 57, 2: 103, 1: 154, 3: 154}
+CONSOLE = (-220, -77, 220, 77)
+
+
+def seat_point(rel, u, v):
+    return {0: (-HW + u, -HH + v), 1: (HW - v, -HH + u), 2: (-HW + u, HH - v), 3: (-HW + v, HH - u)}[rel]
+
+
+def seat_rect(rel, u, v, w, h):
+    """Bounding box (x0, y0, x1, y1) in table coordinates of the local rectangle u..u+w, v..v+h of a seat."""
+    pts = [seat_point(rel, u, v), seat_point(rel, u + w, v + h)]
+    return (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))
+
+
+def seat_items(rel, melds=5, meld_len=4, flowers=8, river=48):
+    """Worst case content of one seat: [(kind, local u, local v, w, h, code)] in local frame coordinates."""
+    items = []
+    if rel != 0:
+        u_h = (LEN[rel] - HAND_W) // 2
+        for i in range(HAND_SLOTS):
+            items.append(("hand", u_h + i * BACK_PITCH, V_HAND, BACK[0], BACK[1], "back"))
+        items.append(("hand", u_h + HAND_SLOTS * BACK_PITCH + HAND_WIN_GAP, V_HAND, BACK[0], BACK[1], "back"))
+    u = MELDS_U0[rel]
+    for m in range(melds):
+        for k in range(meld_len):
+            items.append(("meld", u + k * (MELD_T[0] + 1), V_MELDS[rel], MELD_T[0], MELD_T[1], ["1m", "2m", "3m", "5p", "5p", "5p", "5p", "E"][(m + k) % 8]))
+        u += meld_len * (MELD_T[0] + 1) - 1 + MELD_GAP[rel]
+    for f in range(flowers):
+        items.append(("flower", FLOWERS_U0[rel] + f * MELD_T[0], V_FLOWERS[rel], MELD_T[0], MELD_T[1], "F%d" % (f + 1)))
+    cols = RIVER_COLS[rel]
+    u0 = (LEN[rel] - (cols * RIVER_PITCH[0] - 2)) // 2
+    for i in range(river):
+        items.append(("river", u0 + (i % cols) * RIVER_PITCH[0], V_RIVER[rel] + (i // cols) * RIVER_PITCH[1], RIVER_T[0], RIVER_T[1],
+                      ["1m", "9p", "E", "5s", "RD", "3m", "7p", "2s", "N", "6m", "8p", "GD", "4s", "W", "1p", "9s"][i % 16]))
+    return items
+
+
+def check_layout(river=48):
+    """Worst case of all four seats: no two tiles overlap, nothing leaves the felt or touches the console. Returns the problems."""
+    boxes = []
+    for rel in range(4):
+        for kind, u, v, w, h, code in seat_items(rel, river=river):
+            boxes.append((rel, kind, seat_rect(rel, u, v, w, h)))
+    problems = []
+    for i, (r1, k1, a) in enumerate(boxes):
+        if a[0] < -HW or a[2] > HW or a[1] < -HH or a[3] > HH:
+            problems.append("outside felt: seat %d %s %s" % (r1, k1, a))
+        if a[0] < CONSOLE[2] and a[2] > CONSOLE[0] and a[1] < CONSOLE[3] and a[3] > CONSOLE[1]:
+            problems.append("on the console: seat %d %s %s" % (r1, k1, a))
+        for r2, k2, b in boxes[i + 1:]:
+            if a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]:
+                problems.append("overlap: seat %d %s / seat %d %s" % (r1, k1, r2, k2))
+    return problems
+
+
 def font(size):
     return ImageFont.truetype(FONT_PATH, size)
 
 
-def preview(frame, felt, shade, console, tiles_dir, path):
-    CW, CH = 1920, 1080
+def preview(frame, felt, shade, console, tiles_dir, path, canvas=(1920, 1080), river=48):
+    """Worst-case mock-up of the whole table scene (every seat 17 concealed tiles, 5 kongs, 8 flowers, a full river)."""
+    CW, CH = canvas
     scene = Image.new("RGBA", (CW, CH), (0xFF, 0xF4, 0xE0, 255))
-    cx, cy = CW // 2, CH // 2 - 16                 # table centre (canvas y is up: +16 raised)
-    fx, fy = cx - FELT_W // 2, cy - FELT_H // 2
-
+    cx, cy = CW // 2, CH // 2 - 129                       # table centre on the canvas (image y grows downward)
+    fx, fy = cx - HW, cy - HH
     felt_area = Image.new("RGBA", (FELT_W + 20, FELT_H + 20))
     for ty in range(0, FELT_H + 20, felt.height):
         for tx in range(0, FELT_W + 20, felt.width):
             felt_area.paste(felt, (tx, ty))
-    felt_area = felt_area.crop((0, 0, FELT_W + 20, FELT_H + 20))
-    sh = shade.resize((FELT_W + 20, FELT_H + 20), Image.BILINEAR)
-    felt_area = Image.alpha_composite(felt_area, sh)
+    felt_area = Image.alpha_composite(felt_area.crop((0, 0, FELT_W + 20, FELT_H + 20)), shade.resize((FELT_W + 20, FELT_H + 20), Image.BILINEAR))
     scene.alpha_composite(felt_area, (fx - 10, fy - 10))
     scene.alpha_composite(frame, (cx - frame.width // 2, cy - frame.height // 2))
     scene.alpha_composite(console, (cx - console.width // 2, cy - console.height // 2))
-
     d = ImageDraw.Draw(scene)
-    ccx, ccy = cx - CONSOLE_W // 2, cy - CONSOLE_H // 2     # console top-left
-    # compass lamps (centre of the compass screen, one lamp per relative seat: 0 bottom, 1 right, 2 top, 3 left)
-    px = ccx + SCREEN_COMPASS[0] + SCREEN_COMPASS[2] // 2
-    py = ccy + SCREEN_COMPASS[1] + SCREEN_COMPASS[3] // 2
-    lamps = {2: (0, -31, "南", "unlit"), 1: (31, 0, "北", "unlit"), 0: (0, 31, "東", "dealer"), 3: (-31, 0, "西", "turn")}
-    for rel, (dx, dy, ch, state) in lamps.items():
-        lx, ly = px + dx, py + dy
-        fill = {"unlit": (44, 60, 52), "dealer": (255, 216, 77), "turn": (190, 230, 207)}[state]
-        txt = {"unlit": (150, 176, 162), "dealer": (74, 50, 38), "turn": (74, 50, 38)}[state]
-        if state == "turn":
-            d.ellipse((lx - 17, ly - 17, lx + 17, ly + 17), outline=(255, 244, 224), width=3)
-        d.rounded_rectangle((lx - 14, ly - 14, lx + 14, ly + 14), radius=8, fill=fill)
-        d.text((lx, ly), "莊" if state == "dealer" else ch, font=font(20), fill=txt, anchor="mm")
-    ix = ccx + SCREEN_INFO[0] + 16
-    iy = ccy + SCREEN_INFO[1]
-    d.text((ix, iy + 26), "東風圈·第 1 局", font=font(30), fill=(255, 244, 224), anchor="lm")
-    d.text((ix, iy + 68), "剩餘 55 張", font=font(30), fill=(255, 216, 77), anchor="lm")
-    tx = ccx + SCREEN_TURN[0] + SCREEN_TURN[2] // 2
-    ty = ccy + SCREEN_TURN[1] + SCREEN_TURN[3] // 2
-    d.text((tx, ty), "輪到你：點一張牌，再點一次打出", font=font(20), fill=(255, 244, 224), anchor="mm")
 
-    # rivers (tile images scaled to the Small size 42x56)
-    if tiles_dir and os.path.isdir(tiles_dir):
-        codes = ["1m", "9p", "E", "5s", "RD", "3m", "7p", "2s", "N", "6m", "8p", "GD", "4s", "W", "1p", "9s", "S", "5m", "WD", "3p", "2m"]
-        step_x, step_y = 44, 58
+    # console contents
+    ccx, ccy = cx - 220, cy - 77
+    px, py = ccx + SCREEN_COMPASS[0] + 48, ccy + SCREEN_COMPASS[1] + 48
+    for (dx, dy, ch, st) in ((0, -31, "南", "off"), (31, 0, "北", "off"), (0, 31, "東", "dealer"), (-31, 0, "西", "turn")):
+        fill = {"off": (44, 60, 52), "dealer": (255, 216, 77), "turn": (190, 230, 207)}[st]
+        txt = (150, 176, 162) if st == "off" else (74, 50, 38)
+        if st == "turn":
+            d.rounded_rectangle((px + dx - 16, py + dy - 16, px + dx + 16, py + dy + 16), radius=10, outline=(255, 244, 224), width=3)
+        d.rounded_rectangle((px + dx - 14, py + dy - 14, px + dx + 14, py + dy + 14), radius=8, fill=fill)
+        d.text((px + dx, py + dy), "莊" if st == "dealer" else ch, font=font(20), fill=txt, anchor="mm")
+    d.text((ccx + 140, ccy + 36), "東風圈·第 1 局", font=font(30), fill=(255, 244, 224), anchor="lm")
+    d.text((ccx + 140, ccy + 78), "剩餘 55 張", font=font(30), fill=(255, 216, 77), anchor="lm")
+    d.text((ccx + 220, ccy + 128), "輪到你：點一張牌，再點一次打出", font=font(20), fill=(255, 244, 224), anchor="mm")
 
-        def put(code, x, y):
-            p = os.path.join(tiles_dir, code + ".png")
-            if os.path.exists(p):
-                t = Image.open(p).convert("RGBA").resize((42, 56), Image.LANCZOS)
-                scene.alpha_composite(t, (int(x), int(y)))
+    def load(code, size):
+        p = os.path.join(tiles_dir or "", code + ".png")
+        if not os.path.exists(p):
+            return Image.new("RGBA", size, (240, 240, 240, 255))
+        return Image.open(p).convert("RGBA").resize(size, Image.LANCZOS)
 
-        wide, narrow = 10, 8
-        for i, c in enumerate(codes):              # bottom river (mine): top edge 85 below the centre
-            put(c, cx - (wide * step_x - 2) / 2 + (i % wide) * step_x, cy + 85 + (i // wide) * step_y)
-        for i, c in enumerate(codes[3:] + codes[:3]):  # top river: bottom edge 85 above the centre
-            col, row = i % wide, i // wide
-            put(c, cx - (wide * step_x - 2) / 2 + col * step_x, cy - 85 - 56 - row * step_y)
-        side_x = (wide * step_x - 2) / 2 + 12
-        for i, c in enumerate(codes[:16]):
-            put(c, cx + side_x + (i % narrow) * step_x, cy - 58 + (i // narrow) * step_y)
-            put(codes[(i + 5) % len(codes)], cx - side_x - (narrow * step_x - 2) + (i % narrow) * step_x, cy - 58 + (i // narrow) * step_y)
-        # my hand, 75x100 tiles, below the table
-        for i, c in enumerate(["1m", "2m", "3m", "5p", "5p", "6p", "7p", "2s", "3s", "4s", "E", "E", "RD"]):
-            p = os.path.join(tiles_dir, c + ".png")
-            if os.path.exists(p):
-                t = Image.open(p).convert("RGBA").resize((75, 100), Image.LANCZOS)
-                scene.alpha_composite(t, (296 + i * 79, CH - 20 - 100))
-    mock_ui(scene, tiles_dir)
+    for rel in range(4):
+        for kind, u, v, w, h, code in seat_items(rel, river=river):
+            im = load(code, (w, h))
+            if rel == 1:
+                im = im.rotate(90, expand=True)
+            elif rel == 3:
+                im = im.rotate(-90, expand=True)
+            x0, y0, x1, y1 = seat_rect(rel, u, v, w, h)
+            scene.alpha_composite(im, (int(cx + x0), int(cy - y1)))
+
+    # cards in the margins, my hand, the bottom strip (hint bar left, action panel right)
+    def card(x, y, w, h, label):
+        d.rounded_rectangle((x, y, x + w, y + h), radius=20, fill=(255, 253, 247), outline=(200, 185, 170), width=2)
+        d.text((x + w // 2, y + 20), label, font=font(22), fill=(74, 50, 38), anchor="mm")
+        d.ellipse((x + w // 2 - 26, y + 36, x + w // 2 + 26, y + 88), fill=(226, 212, 245))
+        d.rounded_rectangle((x + w // 2 - 28, y + 94, x + w // 2 + 28, y + 118), radius=12, fill=(181, 224, 247))
+        d.rounded_rectangle((x + w // 2 - 18, y + 124, x + w // 2 + 18, y + 148), radius=12, fill=(255, 179, 167))
+        d.text((x + w // 2, y + 176), "+1,200", font=font(24), fill=(35, 107, 48), anchor="mm")
+    mid = cy
+    card(6, mid - 98, 100, 196, "左家")
+    card(CW - 106, mid - 98, 100, 196, "右家")
+    card(CW - 106, 12, 100, 196, "對家")
+    d.rounded_rectangle((6, 6, 106, 62), radius=22, fill=(221, 213, 204))
+    d.text((56, 34), "離開", font=font(28), fill=(74, 50, 38), anchor="mm")
+    d.rounded_rectangle((24, CH - 134, 274, CH - 24), radius=24, fill=(255, 253, 247), outline=(200, 185, 170), width=2)
+    d.text((149, CH - 79), "我的資訊卡", font=font(24), fill=(74, 50, 38), anchor="mm")
+    d.rounded_rectangle((24, CH - 268, 724, CH - 164), radius=20, fill=(255, 253, 247), outline=(255, 158, 143), width=3)
+    d.text((374, CH - 216), "聽牌提示列（牌圖＋剩餘張數，最高 104）", font=font(24), fill=(74, 50, 38), anchor="mm")
+    d.rounded_rectangle((CW - 624, CH - 270, CW - 24, CH - 160), radius=28, fill=(255, 253, 247), outline=(200, 185, 170), width=2)
+    d.text((CW - 324, CH - 215), "操作面板 吃 碰 槓 聽 胡 過", font=font(26), fill=(74, 50, 38), anchor="mm")
+    for i in range(14):
+        im = load(["1m", "2m", "3m", "5p", "5p", "6p", "7p", "2s", "3s", "4s", "E", "E", "RD", "9s"][i], (75, 100))
+        scene.alpha_composite(im, (296 + i * 79, CH - 20 - 100))
+
+    # FX plates (four positions around the console) as outlines
+    for rel, (dx, dy) in ((0, (0, -150)), (1, (305, 0)), (2, (0, 150)), (3, (-305, 0))):
+        px_, py_ = cx + dx, cy - dy
+        d.rounded_rectangle((px_ - 116, py_ - 64, px_ + 116, py_ + 64), radius=34, outline=(217, 72, 15), width=3)
     scene.convert("RGB").save(path)
 
 
-def mock_ui(scene, tiles_dir):
-    """Rough picture of the waits hint bar and two action effects (what TableScreen / ActionFx draw); preview only."""
-    CW, CH = scene.size
-    INK, CARD, CORAL, GOLD, SKY, GRAY = (74, 50, 38), (255, 253, 247), (255, 158, 143), (255, 216, 77), (181, 224, 247), (221, 213, 204)
-    d = ImageDraw.Draw(scene)
-
-    def tile(code, x, y, w=33, h=44):
-        p = os.path.join(tiles_dir or "", code + ".png")
-        if os.path.exists(p):
-            t = Image.open(p).convert("RGBA").resize((w, h), Image.LANCZOS)
-            return t
-        return None
-
-    # --- waits hint bar (bottom-left origin y=222, 700 x 105 with the detail line)
-    bx, by, bw, bh = 24, CH - 222 - 105, 700, 105
-    d.rounded_rectangle((bx, by + 3, bx + bw, by + bh + 3), radius=20, fill=(120, 100, 80, 40))
-    d.rounded_rectangle((bx, by, bx + bw, by + bh), radius=20, fill=CARD, outline=(255, 158, 143), width=3)
-    d.text((bx + 14, by + 29), "打出後聽", font=font(24), fill=INK, anchor="lm")
-    d.text((bx + 14, by + 57), "數字為剩餘張數", font=font(16), fill=(107, 78, 61), anchor="lm")
-    waits = [("2p", 2), ("5p", 1), ("8p", 4), ("3s", 0), ("6s", 3), ("9s", 1), ("E", 2), ("RD", 3), ("1m", 0)]
-    for i, (code, left) in enumerate(waits):
-        x, y = bx + 14 + 118 + i * 42, by + 7
-        t = tile(code, x, y)
-        if t:
-            if left == 0:
-                veil = Image.new("RGBA", t.size, (140, 120, 102, 90))
-                t = Image.alpha_composite(t, veil)
-                a = t.getchannel("A").point(lambda v: int(v * 0.45))
-                t.putalpha(a)
-            scene.alpha_composite(t, (x, y))
-        pill = (x - 1, y + 46, x + 35, y + 66)
-        d.rounded_rectangle(pill, radius=10, fill=GRAY if left == 0 else CORAL, outline=(107, 78, 61) if left == 0 else (217, 72, 15), width=2)
-        d.text(((pill[0] + pill[2]) // 2, (pill[1] + pill[3]) // 2), f"剩 {left}", font=font(17), fill=INK, anchor="mm")
-    d.text((bx + 18, by + 92), "五萬：場上已出現 3 張，你手上 1 張", font=font(22), fill=INK, anchor="lm")
-
-    # --- action effects, one per felt corner: 碰 (opposite seat), 暗槓 (me), 自摸 (right seat, rays + glow)
-    def plate(cx, cy, word, color, font_size, w, h, who):
-        d.rounded_rectangle((cx - w // 2, cy - h // 2 + 6, cx + w // 2, cy + h // 2 + 6), radius=40, fill=(90, 70, 50, 70))
-        d.rounded_rectangle((cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2), radius=40, fill=color, outline=INK, width=5)
-        d.text((cx, cy - 4), word, font=font(font_size), fill=INK, anchor="mm", stroke_width=3, stroke_fill=CARD)
-        pw = max(84, min(260, 36 + 26 * len(who)))
-        d.rounded_rectangle((cx - pw // 2, cy + h // 2 - 19, cx + pw // 2, cy + h // 2 + 19), radius=18, fill=CARD, outline=INK, width=3)
-        d.text((cx, cy + h // 2), who, font=font(26), fill=INK, anchor="mm")
-
-    plate(CW // 2 - 430, CH // 2 - 235, "碰", SKY, 88, 144, 128, "熊熊")        # opposite seat: top-left corner
-    plate(CW // 2 + 430, CH // 2 + 165, "暗槓", (226, 212, 245), 88, 232, 128, "你")   # me: bottom-right corner
-    cx, cy = CW // 2 + 430, CH // 2 - 235                                          # right seat: top-right corner
-    glow = Image.new("RGBA", scene.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse((cx - 150, cy - 150, cx + 150, cy + 150), fill=(255, 216, 77, 77))
-    for i in range(12):
-        ang = math.radians(i * 30 + 8)
-        r0, r1, wd = 95, 165 if i % 2 == 0 else 138, 7 if i % 2 == 0 else 5
-        dx, dy = math.sin(ang), -math.cos(ang)
-        px, py = -dy, dx
-        gd.polygon([(cx + dx * r0 - px * wd, cy + dy * r0 - py * wd), (cx + dx * r0 + px * wd, cy + dy * r0 + py * wd),
-                    (cx + dx * r1 + px * wd, cy + dy * r1 + py * wd), (cx + dx * r1 - px * wd, cy + dy * r1 - py * wd)], fill=(255, 216, 77, 140))
-    scene.alpha_composite(glow)
-    d = ImageDraw.Draw(scene)
-    plate(cx, cy, "自摸", GOLD, 104, 264, 150, "小兔")
 
 
 def main():
@@ -573,8 +595,13 @@ def main():
     shade.save(os.path.join(out, "felt_shade.png"), optimize=True)
     frame.save(os.path.join(out, "frame.png"), optimize=True)
     console.save(os.path.join(out, "console.png"), optimize=True)
+    problems = check_layout()
+    for p in problems[:20]:
+        print("LAYOUT PROBLEM:", p)
+    print("layout check:", "OK (no overlaps)" if not problems else "%d problems" % len(problems))
     if prev:
         preview(frame, felt, shade, console, tiles, prev)
+        preview(frame, felt, shade, console, tiles, prev.replace(".png", "_1610.png"), canvas=(1821, 1138))
     print("rendered felt, felt_shade, frame, console")
 
 

@@ -26,7 +26,6 @@ namespace Manjong.Screens
     /// </summary>
     public class TableScreen : MonoBehaviour
     {
-        const int MaxEvents = 5;
         const float StepDelay = 0.35f;
         const float HandStartDelay = 0.8f;
         const float WinDelay = ActionFx.WinSeconds;
@@ -35,13 +34,18 @@ namespace Manjong.Screens
         const float FastDelay = 0.08f;
         const int FastForwardQueueLength = 6;
 
-        // Table: outer size of the wooden frame (the images in Resources/Table are generated for exactly these numbers, see
-        // tools/render_table.py). Centre = screen centre + 16 up, so every river coordinate below is unchanged.
-        const float TableW = 1280f;
-        const float TableH = 704f;
+        // ---------- Table and seat layout ----------
+        // Table: outer size of the wooden frame (the images in Resources/Table are generated for exactly these numbers and
+        // tools/render_table.py checks the worst-case seat layout below for overlaps). The frame's bottom edge is at y = 270,
+        // above the strip that holds the waits hint (left) and the action panel (right); my hand is below that strip.
+        const float TableW = 1600f;
+        const float TableH = 798f;
+        const float TableCenterY = 129f;   // table centre above the screen centre
         const float TableWood = 30f;       // width of the wood rail
         const float TableShadow = 48f;     // transparent margin of frame.png that holds its drop shadow
         const float FeltBleed = 8f;        // the baize runs this far under the rail so no gap can show
+        const float FeltHalfW = (TableW - 2f * TableWood) * 0.5f;   // 770
+        const float FeltHalfH = (TableH - 2f * TableWood) * 0.5f;   // 369
         // Console in the middle of the felt (top-left origin inside the console; the numbers match render_table.py).
         const float ConsoleW = 440f;
         const float ConsoleH = 154f;
@@ -49,13 +53,22 @@ namespace Manjong.Screens
         const float LampSize = 28f;
         const float LampDist = 31f;
 
-        const float InfoW = 250f;
-        const float InfoH = 110f;
-        const float SidePanelW = 300f;
-        const float SidePanelH = 540f;
-        const int RiverColsWide = 10;   // bottom / top rivers
-        const int RiverColsNarrow = 8;  // left / right rivers
+        // Every seat is laid out in its own frame: u runs along the seat's table edge (the seat's left to right), v from that
+        // edge toward the table centre. The frame's origin is the seat's left end of its edge. Right / left seats are the same
+        // frame turned +90 / -90 degrees (their tiles stand rotated, like on a real table); the opposite seat keeps its tiles
+        // upright, so its v is counted downward instead. Rows, from the edge: concealed tiles, melds, flowers, river.
+        // Only the seat's own flowers share the melds row of the top / bottom seats; the side seats have no room for that
+        // along their shorter edge and give them a lane of their own.
         const float RiverGap = 2f;
+        const float RiverStepX = 44f;     // TileSizes.Small.width + RiverGap
+        const float RiverStepY = 58f;     // TileSizes.Small.height + RiverGap
+        const float BackPitch = 31f;      // TileSizes.SeatBack.width + 1
+        const int OtherHandSlots = 17;
+        const float OtherHandWinGap = 10f; // the winning tile of a finished hand sits this far after slot 16
+        const float OtherHandW = OtherHandSlots * BackPitch + OtherHandWinGap + 30f;   // 567
+        const float VHand = 6f;
+        const float SeatCardW = 100f;      // compact info card of the other three seats, in the margin beside the table
+        const float SeatCardH = 196f;
         const float SelectLift = 20f;
         // Swipe-up-to-play gesture (UI units of travel since the press). Armed above SwipeThreshold, disarmed again
         // below SwipeRelease (hysteresis, so the cue does not flicker at the border).
@@ -79,22 +92,21 @@ namespace Manjong.Screens
         const float DrawnGap = 24f;
         const float DrawnSlotX = MaxSlots * SlotStep - SlotGap + DrawnGap; // relative to HandStartX
         const float HandAreaW = DrawnSlotX + 75f;
-        const float MyMeldsY = 152f;
-        // Waits hint bar (bottom-left, above my flowers and clear of my meld row, left of the bottom river). It grows upward:
-        // 50 (one text line), 79 / 88 (chips / two text lines), at most 105 (chips plus the detail line), still below the left
-        // seat's melds.
-        const float HintY = 222f;
+        // My info card (bottom-left, left of my hand) and my coins just above it.
+        const float MyInfoW = 250f;
+        const float MyInfoH = 110f;
+        // Waits hint bar: bottom-left strip between my hand and the table (y 164 .. 268, the table's frame starts at 270),
+        // left of the action panel. It grows upward: 50 (one text line), 79 / 88 (chips / two text lines), at most 104
+        // (chips plus the detail line).
+        const float HintY = 164f;
         const float HintW = 700f;
         const float HintH = 50f;
         const float HintTallH = 88f;         // text mode, two lines
         const float HintChipsH = 79f;        // chip mode, one row: 7 + 66 + 6
-        const float HintChipsTallH = 105f;   // chip mode with the detail line: 7 + 66 + 3 + 24 + 5
+        const float HintChipsTallH = 104f;   // chip mode with the detail line: 7 + 66 + 3 + 24 + 4
         const float HintLabelW = 118f;
         const float HintPad = 14f;
-        const float MyMeldsW = 1000f;
-        // Opposite seat: fixed left edge for its concealed row and melds (relative to the screen centre).
-        const float TopRowX = -260f;
-        // Action panel: bottom-right offset; above the hand's right part, right of my melds, below the right seat.
+        // Action panel: bottom-right offset; the strip above the hand's right part and below the table (y 160 .. 270).
         static readonly Vector2 ActionPanelOffset = new Vector2(-24f, 160f);
 
         class SeatUi
@@ -151,9 +163,6 @@ namespace Manjong.Screens
         GameObject connectionBanner;
         Text connectionText;
         ConnectionState connectionState = ConnectionState.Ready;
-
-        readonly Text[] eventLines = new Text[MaxEvents];
-        readonly List<string> events = new List<string>();
 
         ResultPanel resultPanel;
 
@@ -227,7 +236,6 @@ namespace Manjong.Screens
             BuildTable();
             for (int rel = 0; rel < 4; rel++) seats[rel] = BuildSeat(rel);
             BuildTopBar();
-            BuildEventLog();
             BuildHintBar();
 
             actionPanel = ActionPanel.Create(root, ActionPanelOffset, OnOptionClicked, OnToggleTing);
@@ -244,16 +252,11 @@ namespace Manjong.Screens
             UiFactory.Stretch(flyLayer);
         }
 
-        static int RiverColsFor(int rel)
-        {
-            return rel == 0 || rel == 2 ? RiverColsWide : RiverColsNarrow;
-        }
-
         void BuildTable()
         {
             Vector2 mid = new Vector2(0.5f, 0.5f);
             tableArea = UiFactory.CreateRect("Table", root);
-            UiFactory.Place(tableArea, mid, mid, new Vector2(0f, 16f), new Vector2(TableW, TableH));
+            UiFactory.Place(tableArea, mid, mid, new Vector2(0f, TableCenterY), new Vector2(TableW, TableH));
 
             Sprite felt = TableArt.Get("felt");
             Sprite shade = TableArt.Get("felt_shade");
@@ -281,17 +284,6 @@ namespace Manjong.Screens
             }
 
             BuildConsole(consoleBody);
-
-            // Rivers around the console (table-local coordinates). Bottom/top: 10 columns, sides: 8 columns.
-            float step = TileSizes.Small.width + RiverGap;
-            float wideW = RiverColsWide * step - RiverGap;
-            float narrowW = RiverColsNarrow * step - RiverGap;
-            float riverH = 4f * (TileSizes.Small.height + RiverGap);
-            float sideX = wideW * 0.5f + 12f;
-            rivers[0] = MakeArea("River0", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 1f), new Vector2(0f, -85f), new Vector2(wideW, riverH));
-            rivers[2] = MakeArea("River2", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), new Vector2(0f, 85f), new Vector2(wideW, riverH));
-            rivers[1] = MakeArea("River1", tableArea, new Vector2(0.5f, 0.5f), new Vector2(0f, 0.5f), new Vector2(sideX, 0f), new Vector2(narrowW, riverH));
-            rivers[3] = MakeArea("River3", tableArea, new Vector2(0.5f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-sideX, 0f), new Vector2(narrowW, riverH));
         }
 
         /// <summary>Places a child by its top-left corner inside the console (x right, y down), like the picture was drawn.</summary>
@@ -394,64 +386,113 @@ namespace Manjong.Screens
             return rt;
         }
 
+        // Seat geometry (u along the seat's edge, v from the edge toward the centre; see the constants' comment).
+        static float EdgeLength(int rel)
+        {
+            return rel == 0 || rel == 2 ? FeltHalfW * 2f : FeltHalfH * 2f;
+        }
+
+        static bool Wide(int rel)
+        {
+            return rel == 0 || rel == 2;
+        }
+
+        /// <summary>Tiles per river row (side seats: per vertical line) and the rows reserved for it.</summary>
+        static int RiverCols(int rel)
+        {
+            return Wide(rel) ? 16 : 12;
+        }
+
+        static int RiverRows(int rel)
+        {
+            return Wide(rel) ? 3 : 4;
+        }
+
+        static float MeldsU0(int rel) { return Wide(rel) ? 160f : 6f; }
+        static float MeldsW(int rel) { return Wide(rel) ? 760f : 726f; }
+        static float MeldGap(int rel) { return Wide(rel) ? 10f : 6f; }
+        static float FlowersU0(int rel) { return Wide(rel) ? 940f : 6f; }
+        static float VMelds(int rel) { return rel == 0 ? 6f : 52f; }
+        static float VFlowers(int rel) { return rel == 0 ? 6f : (rel == 2 ? 52f : 103f); }
+        static float VRiver(int rel) { return rel == 0 ? 57f : (rel == 2 ? 103f : 154f); }
+
+        /// <summary>
+        /// The rotated frame of one seat on the table: origin at the left end of the seat's edge, turned +90 (right seat) or
+        /// -90 degrees (left seat). Everything of the seat except its info card lives inside it.
+        /// </summary>
+        RectTransform CreateSeatFrame(int rel)
+        {
+            var frame = UiFactory.CreateRect("Seat" + rel + "Frame", tableArea);
+            Vector2 origin;
+            float angle = 0f;
+            switch (rel)
+            {
+                case 0: origin = new Vector2(-FeltHalfW, -FeltHalfH); break;
+                case 1: origin = new Vector2(FeltHalfW, -FeltHalfH); angle = 90f; break;
+                case 2: origin = new Vector2(-FeltHalfW, FeltHalfH); break;
+                default: origin = new Vector2(-FeltHalfW, FeltHalfH); angle = -90f; break;
+            }
+            UiFactory.Place(frame, new Vector2(0.5f, 0.5f), Vector2.zero, origin, Vector2.zero);
+            frame.localRotation = Quaternion.Euler(0f, 0f, angle);
+            return frame;
+        }
+
+        /// <summary>
+        /// An area u .. u + w, v .. v + h of a seat frame. Its children use top-left coordinates. The opposite seat counts v
+        /// downward from the felt's top edge, so its area's lower edge is at -(v + h).
+        /// </summary>
+        static RectTransform MakeSeatArea(RectTransform frame, int rel, string name, float u, float v, float w, float h)
+        {
+            var rt = UiFactory.CreateRect(name, frame);
+            UiFactory.Place(rt, Vector2.zero, Vector2.zero, new Vector2(u, rel == 2 ? -(v + h) : v), new Vector2(w, h));
+            return rt;
+        }
+
         SeatUi BuildSeat(int rel)
         {
             var s = new SeatUi();
-            switch (rel)
+            var frame = CreateSeatFrame(rel);
+            float edge = EdgeLength(rel);
+
+            int cols = RiverCols(rel);
+            float riverW = cols * RiverStepX - RiverGap;
+            float riverH = RiverRows(rel) * RiverStepY - RiverGap;
+            rivers[rel] = MakeSeatArea(frame, rel, "River", (edge - riverW) * 0.5f, VRiver(rel), riverW, riverH);
+            TileSize meld = TileSizes.SeatMeld;
+            s.melds = MakeSeatArea(frame, rel, "Melds", MeldsU0(rel), VMelds(rel), MeldsW(rel), meld.height);
+            s.flowers = MakeSeatArea(frame, rel, "Flowers", FlowersU0(rel), VFlowers(rel), 8f * meld.width, meld.height);
+
+            if (rel == 0)
             {
-                case 0: // me, bottom
-                    s.info = MakeArea("Seat0Info", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 24f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat0Flowers", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 140f), new Vector2(8f * TileSizes.Mini.width, TileSizes.Mini.height));
-                    s.melds = MakeArea("Seat0Melds", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(HandStartX, MyMeldsY), new Vector2(MyMeldsW, TileSizes.Small.height));
-                    s.hand = MakeArea("Seat0Hand", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(HandStartX, HandY), new Vector2(HandAreaW, TileSizes.Large.height + SelectLift));
-                    break;
-                case 2: // opposite, top
-                    s.info = MakeArea("Seat2Info", root, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-560f, -20f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Seat2Flowers", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(-560f - InfoW * 0.5f, -136f), new Vector2(8f * TileSizes.Mini.width, TileSizes.Mini.height));
-                    s.hand = MakeArea("Seat2Hand", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(TopRowX, -20f), new Vector2(MaxSlots * (TileSizes.Back.width + 1f), TileSizes.Back.height));
-                    s.melds = MakeArea("Seat2Melds", root, new Vector2(0.5f, 1f), new Vector2(0f, 1f), new Vector2(TopRowX, -64f), new Vector2(780f, TileSizes.Mini.height));
-                    break;
-                default: // sides: 1 right, 3 left
-                {
-                    bool right = rel == 1;
-                    var panel = MakeArea("Seat" + rel + "Panel", root,
-                        new Vector2(right ? 1f : 0f, 0.5f), new Vector2(right ? 1f : 0f, 0.5f),
-                        new Vector2(right ? -20f : 20f, 45f), new Vector2(SidePanelW, SidePanelH));
-                    float innerW = SidePanelW - 20f;
-                    s.info = MakeArea("Info", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, 0f), new Vector2(InfoW, InfoH));
-                    s.flowers = MakeArea("Flowers", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -118f), new Vector2(innerW, TileSizes.Mini.height));
-                    s.hand = MakeArea("Hand", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -170f), new Vector2(innerW, 3f * (TileSizes.Back.height + 2f)));
-                    s.melds = MakeArea("Melds", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -292f), new Vector2(innerW, 5f * (TileSizes.Mini.height + 4f)));
-                    break;
-                }
+                // Me: the hand stays below the table (fixed slots, see RenderMyHand), the info card at the bottom-left.
+                s.info = MakeArea("Seat0Info", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 24f), new Vector2(MyInfoW, MyInfoH));
+                s.hand = MakeArea("Seat0Hand", root, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(HandStartX, HandY), new Vector2(HandAreaW, TileSizes.Large.height + SelectLift));
+                return s;
             }
+
+            // The others: concealed tiles standing along their table edge, melds and flowers in front of them (toward the
+            // centre), the river nearest the console. The info card is small and sits in the margin beside the table.
+            s.hand = MakeSeatArea(frame, rel, "Hand", (edge - OtherHandW) * 0.5f, VHand, OtherHandW, TileSizes.SeatBack.height);
+            Vector2 size = new Vector2(SeatCardW, SeatCardH);
+            if (rel == 1) s.info = MakeArea("Seat1Info", root, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-6f, TableCenterY), size);
+            else if (rel == 3) s.info = MakeArea("Seat3Info", root, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(6f, TableCenterY), size);
+            else s.info = MakeArea("Seat2Info", root, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-6f, -12f), size);
             return s;
         }
 
         void BuildTopBar()
         {
-            var leave = UiFactory.CreateButton(root, "LeaveButton", "離開", Palette.Gray, 32, OnLeave);
-            UiFactory.Place((RectTransform)leave.transform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, -20f), new Vector2(150f, 70f));
+            // Small, so it fits the margin beside the table (the table leaves at least 110 units on each side).
+            var leave = UiFactory.CreateButton(root, "LeaveButton", "離開", Palette.Gray, 28, OnLeave);
+            UiFactory.Place((RectTransform)leave.transform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(6f, -6f), new Vector2(100f, 56f));
 
-            myCoinsText = UiFactory.CreateLabel(root, "MyCoins", "", 26, Palette.Ink, TextAnchor.MiddleLeft);
-            UiFactory.Place(myCoinsText.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(22f, -100f), new Vector2(200f, 40f));
-        }
-
-        void BuildEventLog()
-        {
-            var panel = UiFactory.CreatePanel(root, "EventLog", Palette.Card, 24);
-            UiFactory.Place(panel.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-20f, -20f), new Vector2(420f, 196f));
-            UiFactory.AddShadow(panel, Palette.CardShadow, new Vector2(0f, -4f));
-            for (int i = 0; i < MaxEvents; i++)
-            {
-                var t = UiFactory.CreateLabel(panel.transform, "Line" + i, "", 24, Palette.InkSoft, TextAnchor.MiddleLeft);
-                UiFactory.Place(t.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(18f, -12f - i * 34.5f), new Vector2(384f, 34f));
-                eventLines[i] = t;
-            }
+            // Just above my info card, below the waits hint.
+            myCoinsText = UiFactory.CreateLabel(root, "MyCoins", "", 24, Palette.Ink, TextAnchor.MiddleLeft);
+            UiFactory.Place(myCoinsText.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(26f, 24f + MyInfoH + 2f), new Vector2(MyInfoW - 4f, 28f));
         }
 
         /// <summary>
-        /// Waits hint at the bottom-left, above my flowers and clear of my meld row (which can reach y = 212). Two modes:
+        /// Waits hint at the bottom-left, in the band between the table frame and my hand. Two modes:
         /// chips (what I wait on as tile pictures with "剩 N", under a label "打出後聽" / "報聽後聽" / "聽牌中", plus an optional
         /// detail line for the selected tile) and plain text for everything else ("打出後未聽牌", the picker prompt ...).
         /// </summary>
@@ -599,8 +640,6 @@ namespace Manjong.Screens
             builtDrawn = false;
             pendingCarry = null;
             if (flyLayer != null) UiFactory.DestroyChildren(flyLayer);
-            events.Clear();
-            RefreshEventLog();
             tingOn = false;
             lampSig = null;
             hintChipSig = null;
@@ -690,7 +729,6 @@ namespace Manjong.Screens
                     bool fast = IsFastPlayback;
                     if (fast) ActionFx.DismissAll(fxLayer);
                     if (step.view != null) Render(step.view, false);
-                    PushEvent(EventText(step));
                     FxKind fx = PlayStepFx(step, fast);
 
                     string type = step.@event != null ? step.@event.type : "";
@@ -725,15 +763,13 @@ namespace Manjong.Screens
 
         /// <summary>
         /// A different gameId than the one on screen (e.g. the server restarted while we were reconnecting):
-        /// tell the player and start the event log afresh before applying it.
+        /// tell the player before applying it.
         /// </summary>
         void CheckGameChanged(GameView next)
         {
             if (next == null || view == null) return;
             if (string.IsNullOrEmpty(next.gameId) || string.IsNullOrEmpty(view.gameId) || next.gameId == view.gameId) return;
             app.ShowToast("牌局已重新開始");
-            events.Clear();
-            RefreshEventLog();
             selectedIndex = -1;
         }
 
@@ -818,42 +854,6 @@ namespace Manjong.Screens
         {
             if (fxLayer != null) UiFactory.DestroyChildren(fxLayer);
             for (int i = 0; i < activeFx.Length; i++) activeFx[i] = null;
-        }
-
-        /// <summary>Server text, except my own draw whose text is empty by contract: "你 摸到 五萬".</summary>
-        static string EventText(StepDto step)
-        {
-            EventDto e = step.@event;
-            if (e == null) return "";
-            string text = DtoUtil.Safe(e.text);
-            if (text.Length == 0 && e.type == "draw" && step.view != null && e.seat == step.view.mySeat && !string.IsNullOrEmpty(e.tile))
-            {
-                return "你 摸到 " + TileFace.Name(e.tile);
-            }
-            return text;
-        }
-
-        void PushEvent(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return;
-            events.Add(text);
-            while (events.Count > MaxEvents) events.RemoveAt(0);
-            RefreshEventLog();
-        }
-
-        void RefreshEventLog()
-        {
-            // Oldest at the top, newest at the bottom (bold, full-strength ink).
-            int offset = MaxEvents - events.Count;
-            for (int i = 0; i < MaxEvents; i++)
-            {
-                int idx = i - offset;
-                bool has = idx >= 0 && idx < events.Count;
-                eventLines[i].text = has ? events[idx] : "";
-                bool newest = has && idx == events.Count - 1;
-                eventLines[i].color = newest ? Palette.Ink : Palette.InkSoft;
-                eventLines[i].fontStyle = newest ? FontStyle.Bold : FontStyle.Normal;
-            }
         }
 
         /// <summary>I have declared ready (報聽): my hand is locked, tile clicks only select.</summary>
@@ -1120,6 +1120,11 @@ namespace Manjong.Screens
             UiFactory.Stretch(card.rectTransform);
             UiFactory.AddShadow(card, Palette.CardShadow, new Vector2(0f, -4f));
             if (isTurn) UiFactory.CreateRing(card.transform, "TurnRing", Palette.TurnRing, 26, 4, 3f);
+            if (rel != 0)
+            {
+                BuildCompactCard(card, p, v, isDealer);
+                return;
+            }
 
             var avatar = UiFactory.CreateAvatar(card.transform, p.avatar, 78f);
             UiFactory.Place(avatar, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f, 0f), new Vector2(78f, 78f));
@@ -1142,6 +1147,51 @@ namespace Manjong.Screens
             UiFactory.Place(delta.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(100f, -78f), new Vector2(142f, 26f));
 
             if (p.declared) DeclaredBadge(card.transform, rel == 0);
+        }
+
+        /// <summary>
+        /// Small info card of another seat (100 x 196, in the margin beside the table), top to bottom: avatar, name, seat wind,
+        /// dealer (with streak), the session result with a caption. Declared ready: the coral "聽" sticker over the avatar's
+        /// lower right. Rows are at fixed places whether or not the dealer row is filled.
+        /// </summary>
+        static void BuildCompactCard(Image card, PlayerView p, GameView v, bool isDealer)
+        {
+            Vector2 topCenter = new Vector2(0.5f, 1f);
+            var avatar = UiFactory.CreateAvatar(card.transform, p.avatar, 52f);
+            UiFactory.Place(avatar, topCenter, topCenter, new Vector2(0f, -8f), new Vector2(52f, 52f));
+
+            var name = UiFactory.CreateLabel(card.transform, "Name", p.name, 22, Palette.Ink, TextAnchor.MiddleCenter);
+            name.fontStyle = FontStyle.Bold;
+            UiFactory.Place(name.rectTransform, topCenter, topCenter, new Vector2(0f, -64f), new Vector2(92f, 28f));
+
+            CompactBadge(card.transform, TileFace.WindName(p.seatWind) + "家", Palette.Sky, -96f, 58f);
+            if (isDealer) CompactBadge(card.transform, v.dealerStreak > 0 ? "莊·連" + v.dealerStreak : "莊", Palette.DealerBadge, -124f, v.dealerStreak > 0 ? 84f : 40f);
+
+            var caption = UiFactory.CreateLabel(card.transform, "DeltaCaption", "本場", 16, Palette.InkSoft, TextAnchor.MiddleCenter);
+            UiFactory.Place(caption.rectTransform, topCenter, topCenter, new Vector2(0f, -152f), new Vector2(92f, 20f));
+            var delta = UiFactory.CreateLabel(card.transform, "Delta", Format.Signed(p.sessionDelta), 24, Palette.Ink, TextAnchor.MiddleCenter);
+            delta.fontStyle = FontStyle.Bold;
+            delta.color = p.sessionDelta > 0 ? Palette.Gain : (p.sessionDelta < 0 ? Palette.Loss : Palette.InkSoft);
+            UiFactory.Place(delta.rectTransform, topCenter, topCenter, new Vector2(0f, -170f), new Vector2(94f, 26f));
+
+            if (p.declared)
+            {
+                var pill = UiFactory.CreatePanel(card.transform, "DeclaredBadge", Palette.Coral, 13);
+                UiFactory.Place(pill.rectTransform, topCenter, topCenter, new Vector2(24f, -38f), new Vector2(40f, 26f));
+                UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 13, 3, 0f);
+                var t = UiFactory.CreateLabel(pill.transform, "Text", "聽", 20, Palette.Ink, TextAnchor.MiddleCenter);
+                t.fontStyle = FontStyle.Bold;
+                UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
+            }
+        }
+
+        /// <summary>Centred pill of the compact card at the given y (top of the card = 0).</summary>
+        static void CompactBadge(Transform card, string text, Color bg, float y, float width)
+        {
+            var pill = UiFactory.CreatePanel(card, "Badge", bg, 12);
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, y), new Vector2(width, 24f));
+            var t = UiFactory.CreateLabel(pill.transform, "Text", text, 20, Palette.Ink, TextAnchor.MiddleCenter);
+            UiFactory.Stretch(t.rectTransform, 3f, 1f, 3f, 1f);
         }
 
         /// <summary>
@@ -1182,7 +1232,7 @@ namespace Manjong.Screens
             s.flowerSig = sig;
             UiFactory.DestroyChildren(s.flowers);
 
-            TileSize size = TileSizes.Mini;
+            TileSize size = TileSizes.SeatMeld;
             for (int i = 0; i < flowers.Length; i++)
             {
                 var t = TileView.CreateFace(s.flowers, flowers[i], size);
@@ -1224,33 +1274,24 @@ namespace Manjong.Screens
             s.meldSig = sig;
             UiFactory.DestroyChildren(s.melds);
 
-            if (rel == 0) LayoutMelds(s.melds, melds, TileSizes.Small, 12f, highlightCode);
-            else if (rel == 2) LayoutMelds(s.melds, melds, TileSizes.Mini, 10f, highlightCode);
-            else LayoutMelds(s.melds, melds, TileSizes.Mini, 10f, highlightCode);
+            LayoutMelds(s.melds, melds, TileSizes.SeatMeld, MeldGap(rel), highlightCode);
         }
 
         /// <summary>
-        /// Lays melds out from the area's fixed top-left corner, left to right, wrapping to a new row only when the
-        /// next meld would cross the area's right edge. Earlier melds never move when a new one is added.
+        /// Lays the melds out in one row from the area's fixed start, left to right (in the seat's own frame, so a side seat's row
+        /// runs along its table edge). The area is wide enough for five melds of four tiles; earlier melds never move when a new
+        /// one is added.
         /// </summary>
         static void LayoutMelds(RectTransform area, MeldDto[] melds, TileSize size, float groupGap, string highlight)
         {
-            float areaW = area.sizeDelta.x;
             float x = 0f;
-            float y = 0f;
             for (int i = 0; i < melds.Length; i++)
             {
                 MeldDto m = melds[i];
                 if (m == null || DtoUtil.Safe(m.tiles).Length == 0) continue;
-                float w = TileView.MeldWidth(m, size);
-                if (x > 0f && x + w > areaW)
-                {
-                    x = 0f;
-                    y -= size.height + 4f;
-                }
                 RectTransform box = TileView.CreateMeld(area, m, size, highlight);
-                UiFactory.Place(box, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, y), box.sizeDelta);
-                x += w + groupGap;
+                UiFactory.Place(box, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(x, 0f), box.sizeDelta);
+                x += TileView.MeldWidth(m, size) + groupGap;
             }
         }
 
@@ -1267,29 +1308,21 @@ namespace Manjong.Screens
             s.handSig = sig;
             UiFactory.DestroyChildren(s.hand);
 
-            TileSize size = TileSizes.Back;
+            TileSize size = TileSizes.SeatBack;
             int count = revealed.Count > 0 ? split.Hand.Count : Mathf.Max(0, p.handCount);
+            count = Mathf.Min(count, OtherHandSlots);
             for (int i = 0; i < count; i++)
             {
                 RectTransform t = revealed.Count > 0 ? TileView.CreateFace(s.hand, split.Hand[i], size) : TileView.CreateBack(s.hand, size);
-                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), OtherHandCell(rel, i, size), size.Vector);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(i * BackPitch, 0f), size.Vector);
             }
             if (showWin)
             {
-                // Fixed cell well apart from the hand: after slot 17 on the top row, the last grid cell on the sides.
+                // Fixed cell after slot 16 with a gap, so it never moves a concealed tile.
                 var t = TileView.CreateFace(s.hand, split.WinningTile, size);
-                Vector2 pos = rel == 2 ? new Vector2(MaxSlots * (size.width + 1f) + size.width * 0.5f, 0f) : OtherHandCell(rel, 23, size);
-                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), pos, size.Vector);
-                MarkWinningTile(t, size, split.SelfDraw, rel == 2 ? 12f : 4f);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(OtherHandSlots * BackPitch + OtherHandWinGap, 0f), size.Vector);
+                MarkWinningTile(t, size, split.SelfDraw, 4f);
             }
-        }
-
-        /// <summary>Fixed cell positions: one row from a fixed left edge (top), or an 8-column grid (sides).</summary>
-        static Vector2 OtherHandCell(int rel, int i, TileSize size)
-        {
-            if (rel == 2) return new Vector2(i * (size.width + 1f), 0f);
-            const int cols = 8;
-            return new Vector2((i % cols) * (size.width + 2f), -(i / cols) * (size.height + 2f));
         }
 
         void RenderMyHand(PlayerView p, GameView v)
@@ -1930,14 +1963,17 @@ namespace Manjong.Screens
             RectTransform area = rivers[rel];
             UiFactory.DestroyChildren(area);
             TileSize size = TileSizes.Small;
-            int cols = RiverColsFor(rel);
+            int cols = RiverCols(rel);
+            float areaH = area.sizeDelta.y;
             for (int i = 0; i < discards.Length; i++)
             {
                 int c = i % cols;
                 int r = i / cols;
+                // Row 0 is the row nearest the seat; later rows grow toward the table centre. The opposite seat's frame counts
+                // downward from the top edge, so its rows go down the area; the others go up it.
+                float y = rel == 2 ? -r * RiverStepY : -(areaH - r * RiverStepY - size.height);
                 var t = TileView.CreateFace(area, discards[i], size);
-                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f),
-                    new Vector2(c * (size.width + RiverGap), -r * (size.height + RiverGap)), size.Vector);
+                UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(c * RiverStepX, y), size.Vector);
                 if (discards[i] == highlightCode) TileView.AddSameKindHighlight(t, size, textured ? Palette.FeltSameKindRing : Palette.SameKindRing);
                 if (highlightLast && i == discards.Length - 1) TileView.AddRing(t, textured ? Palette.FeltLastDiscardRing : Palette.LastDiscardRing, size, 4);
             }
