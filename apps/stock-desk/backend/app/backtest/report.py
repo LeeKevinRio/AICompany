@@ -48,12 +48,26 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
+from app.backtest.display_params import N_MIN_DISPLAY, N_WORST
 from app.backtest.engine import BacktestResult, Trade
-from app.backtest.episodes import RoundTripAttribution, attribute_round_trips
+from app.backtest.episodes import (
+    Episode,
+    RoundTripAttribution,
+    attribute_round_trips,
+    episode_returns,
+    extract_episodes,
+    held_mask,
+    holding_bars,
+    in_market_ratio,
+    longest_losing_streak,
+    lowest_return_episodes,
+    mean_win_loss_returns,
+)
 from app.backtest.splits import WalkForwardFold
 from app.signals.risk import drawdown_series, max_drawdown
 
@@ -515,3 +529,254 @@ def walk_forward_report(
         risk_free_rate=risk_free_rate,
     )
     return WalkForwardReport(in_sample=in_sample, out_of_sample=out_of_sample)
+
+
+# --------------------------------------------------------------------------
+# F-11: the round-trip detail block (PRD FR-1..FR-10, FR-17; tech-architect
+# F11-A-4, A-5, A-12, A-13, A-36, A-38, A-41..A-43, A-54).
+#
+# A sibling of :class:`WalkForwardReport`, never a field of it: the metric
+# models above are also read by the basket backtester and the research store
+# (F11-A-8), so nothing here widens them. Every round-trip fact comes from
+# :mod:`app.backtest.episodes`; this section only attributes by bar index over
+# the same ``_walk_forward_bounds``, looks dates up from ``result.dates`` and
+# makes the three disclosure decisions the front end must not make itself
+# (sample flag, empty-state code, Buy & Hold in-market value). It is
+# strategy-agnostic on purpose -- the warm-up length arrives as an argument,
+# because this module is shared with callers that have no strategy at all
+# (F11-A-41).
+# --------------------------------------------------------------------------
+
+#: Why a segment has no complete round trip to list, decided from counts alone.
+RoundTripEmptyState = Literal["no_position", "excluded_only"]
+
+
+class RoundTripRow(BaseModel):
+    """One complete round trip of a segment, as the detail list shows it.
+
+    Exactly five facts (F11-A-21): no price, no fill breakdown, no free text and
+    no index column. Both dates are looked up from the run's own bar index, and
+    every number is net of the run's cost model (PRD D-3).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    entry_date: str
+    exit_date: str
+    #: ``exit_idx - entry_idx``, in daily bars (PRD D-4).
+    holding_bars: int
+    #: Realized P&L over the equity of the bar before the entry (PRD D-3).
+    return_on_entry_equity: float
+    realized_pnl: float
+
+
+class LosingStreak(BaseModel):
+    """The longest run of consecutive losing round trips in one segment (D-11).
+
+    ``length == 0`` when the segment has round trips but none of them lost; the
+    two dates are then ``None``. The earliest streak is the one reported when
+    several are equally long.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    length: int
+    #: Entry date of the streak's first round trip.
+    start_date: str | None
+    #: Exit date of the streak's last round trip.
+    end_date: str | None
+
+
+class SegmentRoundTripDetail(BaseModel):
+    """Everything the detail block states about one segment.
+
+    The list, ``num_round_trips``, both side counts and both exclusion counts
+    are read off **one** :func:`~app.backtest.episodes.attribute_round_trips`
+    call over the segment's bounds (F11-A-42); the metric table's own
+    ``num_round_trips`` equals it because both attribute the same window.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: ``RoundTripStats.n`` of the segment -- the size of ``round_trips``.
+    num_round_trips: int
+    num_winning_round_trips: int
+    num_losing_round_trips: int
+    #: Every complete round trip of the segment, earliest entry first.
+    round_trips: list[RoundTripRow]
+    #: The ``N_WORST`` lowest-return round trips, lowest first (D-10).
+    lowest_return_round_trips: list[RoundTripRow]
+    #: Mean return of the winning / losing round trips; ``None`` when that side
+    #: is empty. ``mean_winning_return / -mean_losing_return`` is the report's
+    #: ``round_trip_payoff_ratio`` bit for bit.
+    mean_winning_return: float | None
+    mean_losing_return: float | None
+    #: ``None`` exactly when the segment has no complete round trip.
+    longest_losing_streak: LosingStreak | None
+    #: Closed round trips overlapping the segment without being contained by it.
+    excluded_boundary_trips: int
+    #: A round trip still open on the run's last bar that opened before the
+    #: segment's end (0 or 1).
+    open_trip_at_end: int
+    #: Share of the segment's return intervals spent holding shares (D-12).
+    in_market_ratio: float | None
+    #: The Buy & Hold peer's in-market share: ``1.0`` by definition (fully
+    #: invested from the segment's first close), ``None`` when that path is
+    #: undefined or the segment has no return interval. Not a measurement.
+    buy_and_hold_in_market_ratio: float | None
+    #: Return intervals of the segment inside the strategy's warm-up, where it
+    #: structurally holds nothing; 0 on the out-of-sample segment.
+    warmup_flat_intervals: int
+    #: ``num_round_trips < N_MIN_DISPLAY``. Disclosure only -- it enters no
+    #: computation and refuses nothing.
+    below_display_minimum: bool
+    #: ``None`` when the segment has a round trip to list.
+    empty_state: RoundTripEmptyState | None
+
+
+class RoundTripCoverage(BaseModel):
+    """Run-level geometry facts only: dates and bar counts (F11-A-36, A-38, A-48).
+
+    No round trip, P&L, ratio or trade count of the unattributed tail is
+    carried here: a figure for the tail would read as its performance.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: ``result.dates[-1]`` of the very run reported on; ``None`` only for a
+    #: run with no bar at all, which the API never reports on.
+    last_bar_date: str | None
+    #: Bars after the out-of-sample segment that belong to no segment (r).
+    unattributed_tail_bars: int
+    #: First of those bars; ``None`` exactly when there is none.
+    unattributed_tail_start_date: str | None
+
+
+class WalkForwardRoundTripDetail(BaseModel):
+    """The two reported segments' round-trip detail plus the run's coverage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    in_sample: SegmentRoundTripDetail
+    out_of_sample: SegmentRoundTripDetail
+    coverage: RoundTripCoverage
+
+
+def round_trip_empty_state(attribution: RoundTripAttribution) -> RoundTripEmptyState | None:
+    """Which empty-state sentence a segment shows, from its attribution counts alone.
+
+    Exhaustive and mutually exclusive (F11-A-54):
+
+    * a complete round trip exists (``n > 0``) -> ``None``;
+    * ``n == 0`` and nothing was excluded either -> ``"no_position"``;
+    * ``n == 0`` and at least one boundary or open round trip was excluded ->
+      ``"excluded_only"``.
+
+    The signature takes the attribution and nothing else, so neither the
+    in-market reading, the weights, the fills nor the coverage can leak into
+    the decision. It never raises.
+    """
+    if attribution.stats.n > 0:
+        return None
+    excluded = attribution.excluded_boundary_trips + attribution.open_trip_at_end
+    return "excluded_only" if excluded > 0 else "no_position"
+
+
+def _round_trip_row(result: BacktestResult, episode: Episode) -> RoundTripRow:
+    return RoundTripRow(
+        entry_date=result.dates[episode.entry_idx],
+        exit_date=result.dates[episode.exit_idx],
+        holding_bars=holding_bars(episode),
+        return_on_entry_equity=episode.return_on_entry_equity,
+        realized_pnl=episode.realized_pnl,
+    )
+
+
+def _warmup_flat_intervals(*, start: int, stop: int, warmup_bars: int) -> int:
+    """``|[start, stop - 1) ∩ [0, warmup_bars - 1)|``: intervals no position can exist in."""
+    return max(0, min(stop - 1, warmup_bars - 1) - max(start, 0))
+
+
+def _segment_round_trip_detail(
+    result: BacktestResult,
+    *,
+    start: int,
+    stop: int,
+    held: tuple[bool, ...],
+    warmup_bars: int,
+) -> SegmentRoundTripDetail:
+    # One attribution call feeds the list, n, both side counts and both
+    # exclusion counts (F11-A-42).
+    attribution = attribute_round_trips(result, start=start, stop=stop)
+    episodes = attribution.episodes
+    stats = attribution.stats
+    mean_win, mean_loss = mean_win_loss_returns(episode_returns(episodes))
+    streak = longest_losing_streak(episodes)
+    series = _segment_series(result, start=start, stop=stop)
+    has_interval = series.stop - start - 1 >= 1
+    return SegmentRoundTripDetail(
+        num_round_trips=stats.n,
+        num_winning_round_trips=stats.n_win,
+        num_losing_round_trips=stats.n_loss,
+        round_trips=[_round_trip_row(result, episode) for episode in episodes],
+        lowest_return_round_trips=[
+            _round_trip_row(result, episode)
+            for episode in lowest_return_episodes(episodes, N_WORST)
+        ],
+        mean_winning_return=mean_win,
+        mean_losing_return=mean_loss,
+        longest_losing_streak=(
+            None
+            if streak is None
+            else LosingStreak(
+                length=len(streak),
+                start_date=result.dates[streak[0].entry_idx] if streak else None,
+                end_date=result.dates[streak[-1].exit_idx] if streak else None,
+            )
+        ),
+        excluded_boundary_trips=attribution.excluded_boundary_trips,
+        open_trip_at_end=attribution.open_trip_at_end,
+        in_market_ratio=in_market_ratio(held, start=start, stop=series.stop),
+        # By definition, not measured (F11-A-13(b), A-41): the same path the
+        # report's Buy & Hold column is reduced from decides whether it exists.
+        buy_and_hold_in_market_ratio=(
+            1.0 if series.buy_and_hold.size > 0 and has_interval else None
+        ),
+        warmup_flat_intervals=_warmup_flat_intervals(
+            start=start, stop=series.stop, warmup_bars=warmup_bars
+        ),
+        below_display_minimum=stats.n < N_MIN_DISPLAY,
+        empty_state=round_trip_empty_state(attribution),
+    )
+
+
+def walk_forward_round_trip_detail(
+    result: BacktestResult, folds: list[WalkForwardFold], *, warmup_bars: int
+) -> WalkForwardRoundTripDetail:
+    """The round-trip detail of the two reported segments, plus the run's coverage.
+
+    Same segments as :func:`walk_forward_report` (``_walk_forward_bounds`` of the
+    same ``folds``), so every count here describes the window the metric table
+    beside it was measured on. ``warmup_bars`` is the strategy's warm-up length,
+    supplied by the caller. Total over every input :func:`walk_forward_report`
+    accepts (F11-A-43): it raises only where that function raises (no fold).
+    """
+    if not folds:
+        raise ValueError("walk_forward_round_trip_detail needs at least one fold")
+    (is_start, is_stop), (oos_start, oos_stop) = _walk_forward_bounds(folds)
+    bars = len(result.dates)
+    held = held_mask(extract_episodes(result), bars)
+    tail = max(bars - oos_stop, 0)
+    return WalkForwardRoundTripDetail(
+        in_sample=_segment_round_trip_detail(
+            result, start=is_start, stop=is_stop, held=held, warmup_bars=warmup_bars
+        ),
+        out_of_sample=_segment_round_trip_detail(
+            result, start=oos_start, stop=oos_stop, held=held, warmup_bars=warmup_bars
+        ),
+        coverage=RoundTripCoverage(
+            last_bar_date=result.dates[-1] if result.dates else None,
+            unattributed_tail_bars=tail,
+            unattributed_tail_start_date=result.dates[oos_stop] if tail > 0 else None,
+        ),
+    )

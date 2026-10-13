@@ -46,6 +46,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.api.backtest_wording import RoundTripDetailLabels, build_round_trip_labels
 from app.api.common import DataMeta, PayloadStatus, data_meta, now_iso
 from app.api.deps import get_dividend_store, get_market_resolver, get_settings_store
 from app.api.kelly_wording import (
@@ -56,9 +57,12 @@ from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.event_study import DEMO_DATA_WARNING
 from app.backtest.report import (
     TRADING_DAYS_PER_YEAR,
+    RoundTripCoverage,
+    SegmentRoundTripDetail,
     WalkForwardCurves,
     walk_forward_curves,
     walk_forward_report,
+    walk_forward_round_trip_detail,
 )
 from app.backtest.splits import WalkForwardFold, walk_forward_splits
 from app.backtest.strategies import STRATEGY_IDS, STRATEGY_WARMUP_BARS, build_strategy
@@ -356,6 +360,27 @@ class BacktestMetricLabels(BaseModel):
     round_trips: str = KELLY_DETAIL_ROUND_TRIPS_LABEL
 
 
+class RoundTripDetail(BaseModel):
+    """F-11's round-trip detail of one run, beside ``report`` rather than inside it.
+
+    Exactly four keys (F11-A-38): the two segments as
+    :func:`app.backtest.report.walk_forward_round_trip_detail` built them, the
+    run's tail geometry, and every F-11 sentence already filled in
+    (:mod:`app.api.backtest_wording`). It is a sibling of ``report`` so the
+    metric models -- shared with the basket backtester and the research store
+    -- stay untouched (F11-A-4, A-16), and it carries no blended "whole run"
+    statistic. Disclosure only: the Kelly import shares the pipeline that builds
+    it but reads none of it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    in_sample: SegmentRoundTripDetail
+    out_of_sample: SegmentRoundTripDetail
+    coverage: RoundTripCoverage
+    labels: RoundTripDetailLabels
+
+
 class BacktestResponse(BaseModel):
     """A walk-forward report plus everything needed to read it correctly."""
 
@@ -374,6 +399,9 @@ class BacktestResponse(BaseModel):
     #: the table beside it cannot state different numbers. ``None`` exactly when
     #: ``report`` is -- no run, nothing to draw.
     curves: WalkForwardCurves | None
+    #: F-11 round-trip detail of the same run and the same two segments
+    #: (:class:`RoundTripDetail`). ``None`` exactly when ``report`` is.
+    round_trip_detail: RoundTripDetail | None
     #: The fold geometry the report was built from.
     folds: list[dict[str, int]]
     #: The rates actually applied, with their verification flag.
@@ -463,6 +491,7 @@ def execute_backtest(
                 reason=reason,
                 report=None,
                 curves=None,
+                round_trip_detail=None,
                 folds=[],
                 cost_model=costs.model_dump(),
                 rates_verified=costs.rates_verified,
@@ -524,6 +553,9 @@ def execute_backtest(
         return unavailable("資料長度不足以切出任何 walk-forward fold。")
 
     report = walk_forward_report(result, folds, periods_per_year=TRADING_DAYS_PER_YEAR)
+    # Same run, same folds, same bounds as ``report``; the warm-up length comes
+    # from here so the report layer stays strategy-agnostic (F11-A-41).
+    detail = walk_forward_round_trip_detail(result, folds, warmup_bars=warmup)
     return BacktestRun(
         response=BacktestResponse(
             symbol=body.symbol,
@@ -533,6 +565,12 @@ def execute_backtest(
             reason=None,
             report=report.model_dump(),
             curves=walk_forward_curves(result, folds),
+            round_trip_detail=RoundTripDetail(
+                in_sample=detail.in_sample,
+                out_of_sample=detail.out_of_sample,
+                coverage=detail.coverage,
+                labels=build_round_trip_labels(detail),
+            ),
             folds=[
                 {
                     "fold": fold.fold,

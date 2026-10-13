@@ -464,6 +464,17 @@ export const FRONTEND_FORBIDDEN_TERMS: readonly string[] = [
   "躺著賺",
   "專業級判斷",
   "精準",
+  // 外部素材措辭 (PX-2, work/reviews/2026-10-13-外部交易提示詞七則-風控初審.md;
+  // F-11 PRD C.4.2 / AC-13). External prompt titles and phrasing that may never
+  // become product copy, feature names or marketing lines; scan terms only.
+  "真正有優勢",
+  "挖出交易機會",
+  "不會糊弄你",
+  "一則清晰的交易",
+  "在燒你錢",
+  "別客氣",
+  "別說軟話",
+  "能照做的清單",
   // 候選模式正面結論句 (§3.1)
   "可以進場",
   "適合進場",
