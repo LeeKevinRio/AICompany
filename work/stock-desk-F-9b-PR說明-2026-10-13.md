@@ -5,6 +5,7 @@
 - 風控 PR 層級逐字審：APPROVE WITH CONDITIONS（F9W-40～F9W-48，2026-10-13；無否決）
 - 合併前提：ADR-0024 經 CEO 核可（T-10，現為 proposed）；qa-reviewer 勾核 F9W-40～F9W-45；qa-e2e（375／1280，F9W-46 (a)、F9W-47）
 - 依據：`docs/adr/0024-stock-desk-日線價格幣別閘門與代號准入.md`；commit 切分與測試門檻依 TA5 第三節（`work/reviews/2026-10-12-tech-architect-ADR-0024第三次抽驗與F-9b切分R-57至R-69.md`）
+- 行號：文中所有程式行號（`L…`）為 d40e95e 快照；程式日後異動即可能過時，屆時以檔名與符號名為準
 
 ## (a) commit 摘要與 TA5「對應」欄
 
@@ -114,7 +115,7 @@
 | `app/services/index.py` 指數與基準兩個出口、`IndexSeriesService` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
 | `/api/*` 端點（bars、signals、advice、portfolio、leverage、backtest、event_study） | 是。無 except，FastAPI 預設 500 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
 | `app/alerts/snapshot.py::build_snapshot` | 是。本身無 except，例外拋給它的 loader 呼叫端，由下一列的 `_load_isolated` 攔截（**更正：先前寫的「500」不正確**） | 不產生資料語意字面 | 見下一列 |
-| `app/alerts/engine.py::_load_isolated`（L470-490，既有） | 是，在此**攔截**。記 WARNING（市場、規則數、例外類別，附 `exc_info`），以空 snapshot 繼續該 tick。該 (symbol, market) 的價格規則與訊號規則以既有句「沒有可用的最新收盤價。」「沒有可用的訊號輸出。」略過，風險上限規則用自己的固定句。`POST /api/alerts/evaluate` 回 **200**、`status=skipped`；排程 tick 只留 log | **不產生新字面**：沿用既有 skip 句，狀態為 skipped 而不是 quiet（未改既有 skip 句） | 回 200，不適用 500 |
+| `app/alerts/engine.py::_load_isolated`（L470-490，既有） | 是，在此**攔截**。記 WARNING（市場、規則數、例外類別，附 `exc_info`），以空 snapshot 繼續該 tick。該 (symbol, market) 的價格規則與訊號規則以既有句「沒有可用的最新收盤價。」「沒有可用的訊號輸出。」略過，風險上限規則用自己的固定句。`POST /api/alerts/evaluate` 回 **200**、`status=skipped`；排程 tick 只留 log。攔截時該 tick 的 `EvaluationResult.load_failures` 加 1（`engine.py` L418-420，按 (symbol, market) 計，不按規則計），排程摘要 log 因此由 INFO 升為 **WARNING**（`scheduler.py` L413-419）；此欄位只進 log，API 回應不帶 | **不產生新字面**：沿用既有 skip 句，狀態為 skipped 而不是 quiet（未改既有 skip 句） | 回 200，不適用 500 |
 | `app/playbook/service.py` | 是。無 except，向外傳出 | 不產生資料語意字面 | `api.ts` L172-184；不可達、不需實機驗 |
 | `app/portfolio/price_change.py` L193-197（`ChangeScreen` 的 `except Exception`） | **否**。它拿到的是已完成的估值（`PositionValuation` 列），不會呼叫資料服務；例外早在估值時就已拋出，到不了這裡 | 不產生資料語意字面 | 不適用 |
 | `app/services/sector_board.py` L365、L371（`refresh_board`、`_maybe_evaluate` 的 `except Exception`） | **否**。sector board 只透過 `reference_taiex`（＝`scheduler.taiex_reference_return`）碰到資料服務，例外會先在那裡被攔下（見下列）；其餘讀的是市場面板 store，不經 `MarketDataService` | 不產生資料語意字面 | 不適用 |
@@ -148,7 +149,7 @@
 | W-c、W-c′ | `test_f9b_live_currency_gate.py` 讀裁定一 L26、L29、L32、L35 原行 |
 | T-15 | `test_f9b_cache_currency_gate.py` 讀裁定二 L40 原行 |
 | T-11 | 原為寫死字串；63a9b7d 起改讀裁定二 L26 原行（F9W-42 (c) suggested） |
-| T-12 | 前端 `valuationWording.test.ts` **仍是寫死字串**，與裁定二 L29 逐字相同（已人工核對，風控 F9W-42 亦確認相同）。前端測試不讀 repo 外的 `work/` 檔 |
+| T-12 | 前端 `valuationWording.test.ts` **仍是寫死字串**，與裁定二 L29 逐字相同（已人工核對，風控 F9W-42 亦確認相同）。前端測試不讀 repo 外的 `work/` 檔。另由後端 `tests/test_f9b_t12_label_verbatim.py` 同時讀裁定二 L29 原行、`valuationWording.ts` 的 `symbol_or_unit_rejected` 字串與前端測試的寫死字串，機械比對三者逐字相同 |
 
 改任何字、分流或先後順序，都要回風控重審（F9W-16、F9W-29）。
 
