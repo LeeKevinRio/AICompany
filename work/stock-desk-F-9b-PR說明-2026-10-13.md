@@ -175,6 +175,7 @@
    - qa non-blocking (1)「reason 非空白」只套用股票路徑。
    - **C-14 股票路徑 reason=None**：沒有 `source_id` 的 provider 判定 W-c 時依 C-14 不出句，此時消費端用各自的既有預設句。風控接受。
    - **F9W-44 絆線**：`test_f9b_risk_conditions.py::test_f9w44_every_equity_rung_deps_builds_has_a_source_id`。轉紅時須連同此殘留回風控，不得只改期望值。
+   - **合併後追加（2026-10-14，qa-reviewer 對 merge 8e3bbac 的 non-blocking 1）**：W-c′ rung 若缺 `source_id` 且快取通過閘門，合併 F11-W-38 後 reason 為單獨 `RECENT_ATTEMPT_FAILED_REASON`；出貨設定下不可達，由 `test_f9b_risk_conditions.py` 的 F9W-44 tripwire 守住。來源：`work/reviews/2026-10-14-F-9b-合併衝突解決與交互審查-qa-reviewer.md` non-blocking 1。
 4. **taiex 參考值殘留**
    - `scheduler.py::taiex_reference_return`（既有程式）以 catch-all 吞掉例外。查表落空時會靜默省略 TAIEX 參考數字與揭露句，兩者同進同出，並記 ERROR log。
    - 風控接受，附 F9W-45：不降噪；以 `test_f9b_risk_conditions.py::test_f9w45_*` 兩則測試釘住。
