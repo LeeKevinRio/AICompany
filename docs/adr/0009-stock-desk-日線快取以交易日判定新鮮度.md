@@ -14,6 +14,7 @@
   - **2026-09-18 新增 D-8**（attempt-log 冷卻適用於快取無列）；D-3 增列 cache-only 讀取為 `judge()`
     第二個消費者且不寫兩張 log（ADR-0010 D-1）。
   - **2026-10-04 起（ADR-0019 accepted 後生效）**：D-3 的 layer 0 條件、以及 `last_fetched_at` 作為 `judge()` 冷卻基準與 staleness 基準的角色，由 ADR-0019 D-1／D-2 取代；其餘條文不變。
+  - **2026-10-14（ADR-0024 accepted，CEO 核可）**：被 **ADR-0024**（`0024-stock-desk-日線價格幣別閘門與代號准入.md`）**部分修訂**——D-3 的 `price_bars_attempt_log` 語意（另記該次提問的拒收類別與其時間，見 ADR-0024 D-9），以及 R-8／D-8 對「最近一次提問帶 W-c 標記」序列的行為（見 ADR-0024 D-2 (2)(3)）；其餘不變。D-9 與 layer 0 前置守門在 ADR-0024 的 F-9b2 實作，F-9b（2026-10-14 合併）不含；本 ADR 條文本身未改，細節以 ADR-0024 為準。
 
 ## Context（背景）
 

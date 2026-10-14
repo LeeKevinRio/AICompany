@@ -1,12 +1,13 @@
 # ADR-0024：stock-desk 日線價格幣別閘門與代號准入
 
-- 狀態：**proposed**
-  - **尚未經 CEO 核可，不得視為 accepted。** 本檔為 tech-architect 評估的落檔（2026-10-12 修訂版），不是核可紀錄。
+- 狀態：**accepted**
+  - 〔2026-10-14 CEO 核可（T-10）：CEO 書面指示『核可 ADR-0024，F-9b 合併』；依本 ADR 狀態段，CEO 同時知悉：本 ADR 對 ADR-0009 為部分修訂；X3-F7 前提在殘留 R-a～R-c 下不保證成立〕
+  - **尚未經 CEO 核可，不得視為 accepted。** 本檔為 tech-architect 評估的落檔（2026-10-12 修訂版），不是核可紀錄。〔2026-10-14 已核可，見上〕
   - **accepted 前提**〔TA2 R-1；F9W 第 6 題〕：T-5～T-9 的裁示結果須已納入本 ADR（本修訂納入 F9W-4、F9W-9、F9W-11、F9W-12、F9W-13、F9W-14）；T-1～T-4 的逐字字面（W-a～W-d 等）是 F-9b／F-9c 的**合併前提**，不是本 ADR 的核可前提。〔TA1 M-1 已被 TA2 R-1 取代〕
-  - 本修訂版已納入上列裁示；**仍待 CEO 核可**（T-10）。核可時須一併知悉：本 ADR 對 ADR-0009 為「部分修訂」，**須 CEO 核可**〔TA2 下一步 4〕；X3-F7 前提在殘留 R-a～R-c 下不保證成立，CEO 須知悉〔TA2 R-6、F9W-13〕。
+  - 本修訂版已納入上列裁示；**仍待 CEO 核可**（T-10）。核可時須一併知悉：本 ADR 對 ADR-0009 為「部分修訂」，**須 CEO 核可**〔TA2 下一步 4〕；X3-F7 前提在殘留 R-a～R-c 下不保證成立，CEO 須知悉〔TA2 R-6、F9W-13〕。〔2026-10-14 已核可，見上〕
   - 與字面相關的待決事項、各字面核可狀態見文末「待決事項」。
 - 日期：2026-10-12（tech-architect 評估日；落檔與本修訂版同日）
-- 決策者：tech-architect（評估）；CEO（核可，**尚未核可**）。
+- 決策者：tech-architect（評估）；CEO（核可，**尚未核可**）。〔2026-10-14 已核可，見上〕
 - 適用範圍：僅 product/stock-desk 產品線。
 - 標註約定：每處修訂內容以〔來源 編號〕標註。〔TA1 M-x〕＝tech-architect 第一次核對（落檔核對 M-1～M-15）；〔TA2 R-x〕＝tech-architect 第二次評估（風控裁定之工程影響，R-1～R-37）；〔TA3 R-x〕＝tech-architect 對 creative-lead 第二批四題的回覆（R-38～R-46）；〔TA4 R-x〕＝tech-architect 對本檔的抽驗與待確認項裁決（R-47～R-56；tech-architect 各次之間以後者為準（TA7 ＞ TA6 ＞ TA5 ＞ TA4 ＞ TA3 ＞ TA2 ＞ TA1）；風控裁定優先於全部 tech-architect 項〔TA5 R-69〕；TA4 送審項已由風控 F9W-30～F9W-34 裁示）；〔TA5 R-x〕＝tech-architect 對本檔的第三次抽驗、F9W-31 (b) 記錄方式指定與 F-9b 實作切分（R-57～R-69；其中 R-62 原為 TA5 送審待確認，風控已確認（F9W-35））；〔TA6 R-x〕＝tech-architect 對本檔的第四次抽驗（R-70～R-75，含風控附帶提醒的指數 D-2 (2) 定義）；〔TA7 R-x〕＝tech-architect 對 F-9b0 兩處偏離的確認與 ADR 修字（R-76～R-80）；〔F9W-x〕＝風控裁定（F9W-1～F9W-16 為第一批、F9W-17～F9W-29 為第二批、F9W-30～F9W-34 為對 TA4 送審項的裁示、F9W-35～F9W-37 為對 TA5 送審項的裁示、F9W-38 為對 TA6 送審項（R-72、R-73、R-75）的裁示、F9W-39 為對 TA7 R-78、R-76 的知悉與附帶條件）。**衝突時優先序：風控裁定 > TA7 R-76～R-80 > TA6 R-70～R-75 > TA5 R-57～R-69 > TA4 R-47～R-56 > TA3 R-38～R-46 > TA2 R-1～R-37 > TA1 M-1～M-15**〔TA5 R-69〕；R-45 已修正 M-8，M-1 已被 R-1 取代；M 清單中 R 清單未涵蓋者照原文併入。
 - 來源與版本（B 類轉錄）：
@@ -175,7 +176,7 @@ admission 由服務層注入、在 layer 0 之前執行。被拒代號：不讀�
   - **指數路徑**〔TA4 R-49〕：指數服務的閘門設定為「只檢查幣別、不檢查形狀、不帶任何使用者面字面、不讀也不寫 D-9 標記」，因此 W-a、W-b、W-c、W-c′、C、C′、T-14、T-15 皆不適用指數路徑。
   - 「不寫」指指數服務寫入 attempt log 時 `rejection` 一律為 NULL（與 D-9「其他提問一律寫 NULL」一致）；「不讀」指指數服務的 layer 0 與 `get_cached_bars` 不做 D-9 守門。讀寫與否由建構點顯式設定，不得以代號是否以 `^` 開頭推斷。〔TA5 R-59〕
   - 指數服務的快取閘門照常 fail-closed（D-1 所有出口皆過）。被擋時回 `UNAVAILABLE`、`bars=[]`、`rejection=cache_unit_rejected`，reason 只含各 live 層的既有原因（可為 None），不加任何字面；layer 0 冷卻期內被擋時 reason 為 None。〔TA4 R-49〕
-  - 指數服務的 live 層被幣別閘門拒收時（`classify_currency` 判為 mismatch 或 missing 皆同），同一次呼叫不以快取回價格：降級時不讀快取，直接回 `UNAVAILABLE`、`bars=[]`，`rejection` 依 D-7 (2) 的優先序取 `unit_mismatch` 或 `unit_missing`，reason 只含其他 live 層的既有原因（可為 None），不加任何字面；因指數服務不讀也不寫 D-9 標記，此處置不延續到下一次呼叫（D-2 (3) 不適用）。亦即 D-2 (2) 適用指數服務，且指數路徑不適用 D-2 (4) 的 W-c′ 例外（此處指數路徑較股票路徑嚴格，僅限同一次呼叫內成立，跨呼叫的後果見本點句尾）：股票路徑 W-c′ 可回通過閘門的快取，以風控核可的 W-c′ 句揭露為前提（F9W-33、F9W-34），指數路徑沒有字面可揭露。D-4 (b) 的記錄照記（`layer=provider`、`scope=index`）；此情境下 `index.py` 會接既有指數版 `NO_BARS_REASON`，與 F9W-31、F9W-32 的殘留同類，與 D-4 (c)「一律 `bars=[]`」一致，並適用失效條件 13；T-16 起草範圍須一併明列「指數 live 層被閘門拒收」。以測試釘住：假 provider 對 `^GSPC`／US 回 `currency="TWD"`、`currency=""` 各一測，快取放通過閘門、但不新鮮到使 layer 0 回 None 的列 → `bars=[]`、`rejection` 如上、快取列未進回覆、恰一筆 `layer=provider`、`scope=index` 的 ERROR、reason 不含 T-15 與任何股票路徑字面。〔TA6 R-72；回應 F9W-D 附帶提醒；送風控知悉〕冷卻期內下一次呼叫若快取通過閘門，依 D-2 (5)(a) 第 5 步經 R-8 回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`；畫面可能在空白與快取之間交替；屬推論，待 F-9b 測試實證。因此指數路徑「較股票路徑嚴格」只在同一次呼叫內成立；跨呼叫時，指數 mismatch 沒有 D-9 標記攔住，比股票路徑寬。風控接受此跨呼叫後果列為殘留，理由是 yfinance role 2 寫死幣別（D-6）；故 yfinance role 2 改為讀取來源宣告幣別（F-9c role 2）時，上述跨呼叫行為（D-2 (3) 是否適用指數路徑）須於合併前回風控重審。〔F9W-38 (a)〕上列測試另須擴充為 F9W-38 (b)（見 C-17）。〔F9W-38 (b)〕
+  - 指數服務的 live 層被幣別閘門拒收時（`classify_currency` 判為 mismatch 或 missing 皆同），同一次呼叫不以快取回價格：降級時不讀快取，直接回 `UNAVAILABLE`、`bars=[]`，`rejection` 依 D-7 (2) 的優先序取 `unit_mismatch` 或 `unit_missing`，reason 只含其他 live 層的既有原因（可為 None），不加任何字面；因指數服務不讀也不寫 D-9 標記，此處置不延續到下一次呼叫（D-2 (3) 不適用）。亦即 D-2 (2) 適用指數服務，且指數路徑不適用 D-2 (4) 的 W-c′ 例外（此處指數路徑較股票路徑嚴格，僅限同一次呼叫內成立，跨呼叫的後果見本點句尾）：股票路徑 W-c′ 可回通過閘門的快取，以風控核可的 W-c′ 句揭露為前提（F9W-33、F9W-34），指數路徑沒有字面可揭露。D-4 (b) 的記錄照記（`layer=provider`、`scope=index`）；此情境下 `index.py` 會接既有指數版 `NO_BARS_REASON`，與 F9W-31、F9W-32 的殘留同類，與 D-4 (c)「一律 `bars=[]`」一致，並適用失效條件 13；T-16 起草範圍須一併明列「指數 live 層被閘門拒收」。以測試釘住：假 provider 對 `^GSPC`／US 回 `currency="TWD"`、`currency=""` 各一測，快取放通過閘門、但不新鮮到使 layer 0 回 None 的列 → `bars=[]`、`rejection` 如上、快取列未進回覆、恰一筆 `layer=provider`、`scope=index` 的 ERROR、reason 不含 T-15 與任何股票路徑字面。〔TA6 R-72；回應 F9W-D 附帶提醒；送風控知悉〕冷卻期內下一次呼叫若快取通過閘門，依 D-2 (5)(a) 第 5 步經 R-8 回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`；畫面可能在空白與快取之間交替；屬推論，待 F-9b 測試實證〔2026-10-14：已由 F-9b 測試實證，見文末「合併後更新（2026-10-14）」〕。因此指數路徑「較股票路徑嚴格」只在同一次呼叫內成立；跨呼叫時，指數 mismatch 沒有 D-9 標記攔住，比股票路徑寬。風控接受此跨呼叫後果列為殘留，理由是 yfinance role 2 寫死幣別（D-6）；故 yfinance role 2 改為讀取來源宣告幣別（F-9c role 2）時，上述跨呼叫行為（D-2 (3) 是否適用指數路徑）須於合併前回風控重審。〔F9W-38 (a)〕上列測試另須擴充為 F9W-38 (b)（見 C-17）。〔F9W-38 (b)〕
   - 以測試釘住 `INDEX_SYMBOL_METADATA` 每一列的幣別都等於 `MARKET_CURRENCY[market]`，故正式設定下指數快取閘門不可觸發；只有手動改庫或 `MARKET_CURRENCY` 變動（失效條件 4）會觸發，一觸發即適用失效條件 13（T-16 須先核可）。〔TA4 R-49；「正式設定下不可達」為 TA4 依 `INDEX_SYMBOL_METADATA` 與 `MARKET_CURRENCY` 一致所推得，屬推論、尚未實證，須以上述測試釘住〕
   - **已裁示：附條件接受列為殘留（風控 F9W-31、F9W-32）**：上述非正式設定的觸發情境下，TA4 所述 `index.py` L265／L385 會接既有的指數版 `NO_BARS_REASON`「（來源與快取皆無）」；快取其實有列、只是被拒，「快取皆無」並不精確。風控判斷不精確的在原因、不在結論（「沒有可用的日線資料」屬實），被擋的快取列不上畫面；正式設定下不可達，接受列為殘留。〔TA4 R-49；F9W-31、F9W-32〕條件如下：
     - (a) 「`INDEX_SYMBOL_METADATA` 每一列的幣別等於 `MARKET_CURRENCY[market]`」測試是本殘留成立的前提，同時作為失效條件 4 的絆線：日後改 `MARKET_CURRENCY` 使測試轉紅，必須連同本殘留回風控，不得只改測試期望值。〔F9W-31 (a)，F-9b 合併前〕另以測試釘住：`INDEX_MAPPING` 中 `basis == "official_index"` 的每一列、`MARKET_BENCHMARK` 的每一項，其 `(series_symbol, market)` 皆滿足 `INDEX_SYMBOL_METADATA[series_symbol] == (market, MARKET_CURRENCY[market])`。理由：閘門依呼叫端傳入的 market 查預期幣別，不依 metadata；若某列把 `^NDX` 標為 TW，正式設定下 live 指數閘門即會觸發。〔TA5 R-61；強化 F9W-31 (a)，送風控知悉〕此新增測試與 F9W-31 (a) 承擔同一份絆線義務：轉紅時必須連同本殘留回風控，不得只改期望值；測試 docstring 要引用 F9W-31 (a)、F9W-36；測試要對整張表逐列參數化（執行時才展開），不得寫死成一份快照清單，日後新增列時自動納入檢查。〔F9W-36 (a)(b)，F-9b0 合併前〕
@@ -460,13 +461,13 @@ C-11～C-29 出處：TA2 R-25（原文照 TA2「對實作的約束」），各�
 | T-7 | 風控確認：X-3c 方向子句 | 風控 | 已更正（F9W-13；見「風險與相依」） |
 | T-8 | 風控確認：X3-F7 前提 | 風控 | 已同意，用詞「日線價格單位」（F9W-13） |
 | T-9 | 風控確認：F7-R12 (ii) 殘留 | 風控 | 部分關閉（F9W-14） |
-| T-10 | 本 ADR 核可（proposed → accepted），含 ADR-0009 部分修訂 | CEO | 待核可 |
+| T-10 | 本 ADR 核可（proposed → accepted），含 ADR-0009 部分修訂 | CEO | 待核可〔2026-10-14 已核可，見檔頭狀態段〕 |
 | T-11 | 整書成因句 | creative-lead → 風控 | 已核可（主案；F9W-17）；F9W-18 工程條件須於 F-9b 合併前落實 |
 | T-12 | 庫存頁新標籤 | 同上 | 已核可（主案；F9W-19） |
 | T-13 | C′ 版（W-c′ 冷卻） | 同上 | 已核可（主案；F9W-20；F-9b2 合併前提）；適用範圍依 F9W-23、F9W-30 擴及快取被擋 |
 | T-14 | C 版是否分市場兩句（suggested） | 實作端選用 | 已核可美／台兩句（F9W-21）；採用即全面使用、不得與 C 版混用；是否採用待實作端決定 |
 | T-15 | 快取舊列幣別不符 fail-closed 的原因句 | creative-lead → 風控 | 已核可（主案；F9W-22）；涵蓋四條路徑；F-9b 合併前提；併入 W-d。〔TA3 R-46 原狀態為「已起草，待風控」，風控已核可後更新〕 |
-| T-16 | 指數用字面 | creative-lead → 風控 | 待起草（role 2 合併前；不急）；起草範圍須明列「指數快取被閘門拒收」與「指數 live 層被閘門拒收」兩種情境，T-16 核可後此等情境不得再接「（來源與快取皆無）」（F9W-32 (b)；TA6 R-72，coordinator 同步）；起草範圍另納入 D-4 R-72 句尾 (a) 的第二次呼叫情境（冷卻期內下一次呼叫回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`），是否需指數專用句由 creative-lead 判斷（F9W-38 (c)） |
+| T-16 | 指數用字面 | creative-lead → 風控 | 待起草（role 2 合併前；不急）；起草範圍須明列「指數快取被閘門拒收」與「指數 live 層被閘門拒收」兩種情境，T-16 核可後此等情境不得再接「（來源與快取皆無）」（F9W-32 (b)；TA6 R-72，coordinator 同步）；起草範圍另納入 D-4 R-72 句尾 (a) 的第二次呼叫情境（冷卻期內下一次呼叫回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`），是否需指數專用句由 creative-lead 判斷（F9W-38 (c)）。〔2026-10-14 追加知悉：指數路徑靜默失敗＋快取通過時，首次點擊亦帶 `RECENT_ATTEMPT_FAILED_REASON`（源自 F11-W-38，2026-10-13；非 F-9b 合併引入），併入 T-16 指數字面起草範圍。來源：`work/reviews/2026-10-14-F-9b-合併衝突解決與交互審查-qa-reviewer.md` non-blocking 2〕 |
 | T-17 | W-c′ 有快取時沿用 `RECENT_ATTEMPT_FAILED_REASON` | 風控 | 已核可（F9W-24，條件：閘門檢查在 R-8 分支之前、該列照 F9W-18 正常估值） |
 | T-18 | 新組陳述順序 | 風控 | 已核可（W4 → W5 → (b) → 本組；F9W-25） |
 | —（F9W-23 衍生，來源未編號） | 有效 W-c′ 標記、冷卻期內、快取被擋：回 C′ 或只回 T-15 | tech-architect | 已擇定：C′（TA4 R-47）；以完全相等測試釘住（F9W-23；其他合併組合不得出現）。屬 F9W-23 授權範圍，擇定結果須轉知風控（只需知悉） |
@@ -475,7 +476,7 @@ C-11～C-29 出處：TA2 R-25（原文照 TA2「對實作的約束」），各�
 
 字面核可後如需收錄於本 ADR，比照 ADR-0022／0023 先例由 coordinator 指示（本檔現不收錄任何字面）。
 
-**給 CEO 的知悉事項**〔TA2「給其他部門」〕：本修訂把 ADR-0009 列為「部分修訂」，需要核可；X3-F7 前提在殘留 R-a～R-c 下不保證成立；W-c 標記不黏著；F-9c 有 6 項硬性前提；F-9a 盤點結果待本機執行後依單一字母字尾清單逐一確認。另，指數路徑殘留（非正式設定下指數快取閘門被觸發，或指數 live 層被閘門拒收時，reason 沿用既有指數版 `NO_BARS_REASON`「（來源與快取皆無）」；指數 live 層被拒收時另有跨呼叫後果：冷卻期內下一次呼叫若快取通過閘門，經 R-8 回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`，畫面可能在空白與快取之間交替，屬推論，待 F-9b 測試實證，且 yfinance role 2 改為讀取來源宣告幣別（F-9c role 2）時須於合併前回風控重審；風控附條件接受，見 D-4、失效條件 13）須於 T-10 核可時一併知悉。〔F9W-32 (d)；TA4 R-49；F9W-38 (d)〕另，孤兒壞列殘留（請求區間內的壞列落在來源不回傳的日期時，整段重抓成功也覆寫不到；之後每次點擊 layer 0 都會被擋並重跑梯子，美股每次耗一次 AV 額度，指數路徑只用 yfinance、不耗 AV 額度，直到 F-9e 清理；回覆與 beta 只用本次新抓的列，孤兒壞列不上畫面（目前依讀碼推得，待 F-9b 以 F9W-35 (a)、C-32／R-75 的測試實證），代價是額度與延遲，不是數字正確性；只在手動改庫或 `MARKET_CURRENCY` 變動後可能出現；「每次點擊重跑梯子」為推論，待 F-9b 測試實證；見壞處 5）須於 T-10 核可時一併知悉，並把 F-9e 排入可執行的時程，不無限期擱置。〔TA5 R-63；F9W-D R-63 知悉段與「下一步」5（風控 suggested）；coordinator 補列；F9W-38 (d)〕
+**給 CEO 的知悉事項**〔TA2「給其他部門」〕：本修訂把 ADR-0009 列為「部分修訂」，需要核可；X3-F7 前提在殘留 R-a～R-c 下不保證成立；W-c 標記不黏著；F-9c 有 6 項硬性前提；F-9a 盤點結果待本機執行後依單一字母字尾清單逐一確認。另，指數路徑殘留（非正式設定下指數快取閘門被觸發，或指數 live 層被閘門拒收時，reason 沿用既有指數版 `NO_BARS_REASON`「（來源與快取皆無）」；指數 live 層被拒收時另有跨呼叫後果：冷卻期內下一次呼叫若快取通過閘門，經 R-8 回快取、reason 為 `RECENT_ATTEMPT_FAILED_REASON`，畫面可能在空白與快取之間交替，原屬推論，已由 F-9b 測試實證（`test_index_live_refusal_and_the_next_call_inside_the_cooldown`，`apps/stock-desk/backend/tests/test_f9b_live_currency_gate.py`；F9W-48），且 yfinance role 2 改為讀取來源宣告幣別（F-9c role 2）時須於合併前回風控重審；風控附條件接受，見 D-4、失效條件 13）須於 T-10 核可時一併知悉。〔F9W-32 (d)；TA4 R-49；F9W-38 (d)〕另，孤兒壞列殘留（請求區間內的壞列落在來源不回傳的日期時，整段重抓成功也覆寫不到；之後每次點擊 layer 0 都會被擋並重跑梯子，美股每次耗一次 AV 額度，指數路徑只用 yfinance、不耗 AV 額度，直到 F-9e 清理；回覆與 beta 只用本次新抓的列，孤兒壞列不上畫面（原依讀碼推得，已由 F-9b 以 F9W-35 (a)、C-32／R-75 的測試實證：`test_layer0_refused_outside_the_cooldown_self_repairs_from_the_live_rung`〔股票路徑〕與 `test_index_test3_self_repair_serves_only_the_live_rows`〔指數路徑〕，兩者皆含 `orphan-row` 參數，位於 `apps/stock-desk/backend/tests/test_f9b_cache_currency_gate.py`；F9W-48），代價是額度與延遲，不是數字正確性；只在手動改庫或 `MARKET_CURRENCY` 變動後可能出現；「每次點擊重跑梯子」原為推論，已由 F-9b 測試實證（`test_layer0_refused_outside_the_cooldown_self_repairs_from_the_live_rung` 的 `orphan-row` 參數，第二次呼叫斷言 provider 再被呼叫；F9W-48）；見壞處 5）須於 T-10 核可時一併知悉，並把 F-9e 排入可執行的時程，不無限期擱置。〔TA5 R-63；F9W-D R-63 知悉段與「下一步」5（風控 suggested）；coordinator 補列；F9W-38 (d)〕
 
 ---
 
@@ -542,3 +543,23 @@ C-11～C-29 出處：TA2 R-25（原文照 TA2「對實作的約束」），各�
 **tech-writer 套用 TA4 時的對照限制**：TA4 的讀碼結論（含 `deps.py` L144-149、`index.py` L265／L385、`INDEX_SYMBOL_METADATA` 與 `MARKET_CURRENCY` 一致）皆為轉錄，tech-writer 未讀後端 code；TA4 自述「指數快取閘門正式設定下不可達」與「R-48 各情境的 reason 字串」屬推論、尚未實證。
 
 **tech-writer 套用 TA5 時的對照限制**：TA5 的讀碼結論（含 `service.py` L553 的合併拼接句、`index.py` L255／L377、`index_mapping.py` L168-295、`MARKET_BENCHMARK` 在 `index.py` L302-305、`cache.put` 為逐列 upsert 等）皆為轉錄，tech-writer 未讀後端 code。TA5 自述屬推論、尚未實證者：R-63「每次點擊重跑梯子」（依 upsert 語意與第 4 步 R-8 條件推得）、R-61（依呼叫端的 market 推得）、TA5 第二節測試 2 的 `layer` 序列 `["layer0_cache", "fallback_cache"]`（依 D-2 (5)(a)(b) 推得），均須由對應測試實證。R-62 原為 TA5 送審的待確認項，已由風控確認（F9W-35，附條件，條件已納入 D-4 (b)(c) 與 C-17）；R-60、R-61、R-63、R-64、R-66 為送風控知悉項，風控無異議（R-61、R-66 另立 F9W-36、F9W-37 條件，已納入 D-4 (a)、C-17、C-34 (b)）。F9W-D 的「附帶提醒」已由 TA6 R-72 補定義於 D-4 指數段（送風控知悉）。
+
+---
+
+## 合併後更新（2026-10-14）
+
+本節為追加（B 類轉錄）；以上各節除狀態行外未刪改既有文字，僅在原句後以〔〕註記。
+
+1. **狀態改 accepted**：CEO 2026-10-14 書面指示「核可 ADR-0024，F-9b 合併」（來源：`work/dispatch/2026-10-08-任務單-F-9-日線上游幣別未核對.md`「CEO 核可與合併（2026-10-14）」一點，coordinator 記載）。檔內各處「須 CEO 核可」「尚未核可」「待核可」（檔頭狀態段、決策者、關聯 ADR-0009 條、「與既有 ADR 的關係」表 ADR-0009 列、待決事項 T-10、「給 CEO 的知悉事項」首句）皆為核可前的敘述，原文保留，視為已滿足。檔頭狀態段只記錄 CEO 同時知悉兩項（ADR-0009 部分修訂；X3-F7 前提在殘留 R-a～R-c 下不保證成立）；「給 CEO 的知悉事項」其餘各項（指數路徑殘留、孤兒壞列殘留等）是否另經 CEO 逐項確認，來源未載，**待查證**（向 coordinator 確認）。
+2. **F-9b 已合併**：`feat/stock-desk-f9b`（818039f）併入 `product/stock-desk`，merge `8e3bbac`（parents `30c954d`／`818039f`）；合併後全套結果（pytest 6551 passed／2 xfailed 等）為任務單同一點所載、coordinator 提供，tech-writer 未執行測試。F-9b2、F-9c 尚未實作（任務單「合併後待辦」所列後續）。
+3. **F9W-48（風控 2026-10-13 PR 層級逐字審，suggested，F-9b 合併後）**：「給 CEO 的知悉事項」中三處「待 F-9b …測試實證」已改為「已由 F-9b 測試實證」並附測試名稱（風控依據：`work/reviews/2026-10-13-F-9b-PR層級逐字審-F9W-40至F9W-48-風控.md` F9W-48；三項已實證的清單來自 `work/stock-desk-F-9b-PR說明-2026-10-13.md`「(f) 殘留與知悉」第 5 點）。對應如下，測試名稱與參數 id 為 tech-writer 以 Grep 在 `apps/stock-desk/backend/tests/` 確認存在（見下佐證），**未執行測試**：
+   - 指數 live 層被拒收後、冷卻期內第二次呼叫回快取與 `RECENT_ATTEMPT_FAILED_REASON`（F9W-38 跨呼叫後果）→ `test_f9b_live_currency_gate.py::test_index_live_refusal_and_the_next_call_inside_the_cooldown`。
+   - 孤兒壞列不上畫面 → `test_f9b_cache_currency_gate.py::test_layer0_refused_outside_the_cooldown_self_repairs_from_the_live_rung`（股票路徑）、`::test_index_test3_self_repair_serves_only_the_live_rows`（指數路徑），皆含 `orphan-row` 參數。
+   - R-63「孤兒壞列使每次點擊重跑梯子」→ 同上第一個測試的 `orphan-row` 參數（第二次呼叫斷言 provider 再被呼叫一次）。
+   - TA5 第二節測試 2 的 `layer` 序列 `["layer0_cache", "fallback_cache"]`（佐證清單「TA5 套用」列與「對照限制」段所列推論）→ `test_f9b_cache_currency_gate.py::test_index_test2_the_ladder_fails_and_both_cache_reads_are_recorded`。
+   - 其他仍寫「待 F-9b 測試實證」之處（佐證清單 TA6 列、F9W-E 列與各「對照限制」段）指同上各項，已實證；原文為歷史紀錄，保留。
+4. **「庫存頁」用語**：本檔 D-7 (3)(6)、PR 拆分表 F-9b 列、待決事項 T-12 列所稱「庫存頁」（T-12 小字的顯示處），依風控 F9W-52 與 qa-e2e 判讀，指首頁持倉明細表（`PositionsTable`）；詳見 `work/reviews/2026-10-14-F-9-庫存頁用語勘誤-F9W-52.md`。原文保留。（本檔這幾處是沿用風控裁定的用語，故依 F9W-52 的更正作同解；此為 tech-writer 的轉用，tech-writer 未就本檔各處另行讀碼驗證，**待 coordinator／tech-architect 確認**。）
+5. **T-16**：指數路徑靜默失敗＋快取通過時首次點擊亦帶 `RECENT_ATTEMPT_FAILED_REASON` 的知悉，已追加於「待決事項」T-16 列。
+6. **ADR-0009 指標**：ADR-0009 檔頭「修訂」清單已追加一條指向本 ADR 的部分修訂註記。
+
+**佐證（本節）**：快照為分支 `product/stock-desk`，HEAD `d9c8fc1b32645dad7341ed293649a328b3934444`（tech-writer 讀取 `.git/refs/heads/product/stock-desk`，2026-10-14）。A 類宣稱：僅測試名稱存在，`apps/stock-desk/backend/tests/test_f9b_live_currency_gate.py` L659、`test_f9b_cache_currency_gate.py` L252（`orphan` 參數 L251）、L638、L658（`orphan` 參數 L657）；tech-writer 另讀了這些測試的斷言（live_gate L694-728；cache_gate L274-299、L638-654、L661-683）以確認其內容與上列對應一致。行號會漂移，抽驗請以測試名稱定位。B 類來源：CEO 核可與合併、merge 8e3bbac、合併後全套結果＝任務單「CEO 核可與合併（2026-10-14）」；F9W-48、F9W-52＝上列風控檔；T-16 追加＝`work/reviews/2026-10-14-F-9b-合併衝突解決與交互審查-qa-reviewer.md` non-blocking 2。
