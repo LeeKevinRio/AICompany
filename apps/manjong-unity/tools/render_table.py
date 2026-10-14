@@ -418,8 +418,8 @@ def make_console():
 # ---------------------------------------------------------------- seat layout (mirrors TableScreen.cs, preview only)
 # Compact ring, from the middle outward: console, the four rivers hugging it (6 tiles per row, row 0 touching the console and
 # later rows growing outward), then each seat's lane (concealed tiles from the seat's left, melds from its right end). The lane
-# follows the river: it sits 8 units outside the river's current outer row, but never closer than 3 rows, and it moves out one row
-# (46 units) when the river reaches its 4th / 5th row or when the lane's content needs more length than that ring has room for.
+# follows the river: it sits 8 units outside the river's current outer row, but never closer than 2 rows, and it moves out one row
+# (46 units) when the river reaches a new row (3rd, 4th, 5th) or when the lane's content needs more length than that ring has room for.
 # Info card + flowers of every seat stand outside the frame, next to its corners.
 # Every seat is laid out in its own frame: u runs along the seat's table edge (the seat's left to right), v from that edge
 # toward the centre. The right / left seats are the same frame turned by +90 / -90 degrees (their tiles stand rotated like on a
@@ -430,13 +430,16 @@ RIVER_T, RIVER_PITCH = (33, 44), (35, 46)            # discards
 RIVER_COLS, RIVER_ROWS = 6, 5
 RIVER_V_OUT = 52                                     # outer edge of the 5 row river block (distance from the felt edge)
 RIVER_V_IN = RIVER_V_OUT + RIVER_ROWS * RIVER_PITCH[1] - (RIVER_PITCH[1] - RIVER_T[1])   # 280: inner edge, touching the console
-BACK, BACK_PITCH = (26, 35), 27                      # concealed tiles
+BACK, BACK_PITCH = (25, 34), 25                      # concealed tiles (they stand touching, like a real hand)
 MELD_T = (28, 38)                                    # melds and flowers (tiles of a meld are 29 apart)
 MELD_GAP = 6
-LANE_H = 38                                          # lane thickness (the melds); backs are aligned to its outer edge
-LANE_GAP = 8                                         # between the river's outer row and the lane
 LEN = {0: FELT_W, 2: FELT_W, 1: FELT_H, 3: FELT_H}   # length of each seat's table edge
-LANE_HALF = {3: 248, 4: 294, 5: 340}                 # half length the lane may use at k river rows; no two lanes can cross for any pair of k
+# Length the lane may use at k river rows, measured from the middle of the seat's edge toward its left end (concealed tiles) and toward
+# its right end (melds). The four corners are a pinwheel: at each corner one seat's melds end meets the next seat's concealed end, so a
+# lane may run long at its melds end while the concealed end stays short, and no two lanes cross for any pair of k (checked below).
+LANE_BACK_HALF = {2: 183, 3: 183, 4: 183, 5: 340}
+LANE_MELD_HALF = {2: 321, 3: 321, 4: 321, 5: 340}
+LANE_MIN_ROWS = 2                                    # the lane never stands closer than behind this many river rows
 WIN_GAP = 10
 STATION_SIDE = {0: -1, 1: 1, 2: 1, 3: -1}            # which side of the frame (x sign) a seat's station stands on
 STATION_UP = {0: -1, 1: -1, 2: 1, 3: 1}              # and whether it is the upper (+1) or lower (-1) one
@@ -472,15 +475,15 @@ def lane_need(rel, melds):
 
 
 def lane_k(rel, river, melds):
-    """River rows the lane stands behind: at least 3, the river's own rows, more when the content needs a longer lane."""
-    k = max(3, river_rows(river))
-    while k < 5 and 2 * LANE_HALF[k] < lane_need(rel, melds):
+    """River rows the lane stands behind: at least 2, the river's own rows, more when the content needs a longer lane."""
+    k = max(LANE_MIN_ROWS, river_rows(river))
+    while k < 5 and LANE_BACK_HALF[k] + LANE_MELD_HALF[k] < lane_need(rel, melds):
         k += 1
     return k
 
 
 def lane_v(k):
-    return LANE_H * 0 + 6 + (RIVER_PITCH[1]) * (5 - k)    # outer edge of the lane at k rows: 6 at 5 rows, 52 at 4, 98 at 3
+    return 6 + RIVER_PITCH[1] * (RIVER_ROWS - k)         # outer edge of the lane at k rows: 6 at 5 rows, 52 at 4, 98 at 3, 144 at 2
 
 
 def station_rects(rel):
@@ -504,8 +507,7 @@ def seat_items(rel, river, melds, flowers, backs=None, win=True):
     items = []
     k = lane_k(rel, river, melds)
     v = lane_v(k)
-    half = LANE_HALF[k]
-    u_min, u_max = LEN[rel] // 2 - half, LEN[rel] // 2 + half
+    u_min, u_max = LEN[rel] // 2 - LANE_BACK_HALF[k], LEN[rel] // 2 + LANE_MELD_HALF[k]
     if backs is None:
         backs = max(2, 17 - 3 * len(melds))
     if rel != 0:
@@ -513,7 +515,7 @@ def seat_items(rel, river, melds, flowers, backs=None, win=True):
         for i in range(shown):
             items.append(("back", seat_rect(rel, u_min + i * BACK_PITCH, v, BACK[0], BACK[1]), "back"))
         if win:
-            items.append(("back", seat_rect(rel, u_min + shown * BACK_PITCH + WIN_GAP, v, BACK[0], BACK[1]), "back"))
+            items.append(("win", seat_rect(rel, u_min + shown * BACK_PITCH + WIN_GAP, v, BACK[0], BACK[1]), "back"))
     u = u_max
     for m, n in enumerate(melds):
         u -= meld_width(n)
@@ -553,10 +555,11 @@ def overlaps(a, b):
     return any(big.get(y, 0) & bits for y, bits in small.items())
 
 
-# Every state a seat can be in: the river after 3 / 4 / 5 full rows (fewer rows are subsets of 3), 31 tiles, 0 ~ 5 pons or kongs.
+# Every state a seat can be in: the river after 2 / 3 / 4 / 5 full rows and with 31 tiles (fewer rows are subsets of 2), 0 ~ 5 pons
+# or kongs (each lane position the river rows and the lane's length can lead to), 8 flowers.
 def seat_states():
     states = []
-    for river in (18, 24, 30, 31):
+    for river in (12, 18, 24, 30, 31):
         for n in (3, 4):
             for m in range(6):
                 states.append(dict(river=river, melds=[n] * m, flowers=8))
@@ -573,7 +576,7 @@ def check_layout():
     frame_half = (FRAME_W // 2, FRAME_H // 2)
     for rel in range(4):
         for st in states:
-            tiles = [b for kind, b, code in seat_items(rel, **st) if kind in ("back", "meld", "river")]
+            tiles = [b for kind, b, code in seat_items(rel, **st) if kind in ("back", "win", "meld", "river")]
             for b in tiles:
                 if b[0] < -HW or b[2] > HW or b[1] < -HH or b[3] > HH:
                     problems.append("outside felt: seat %d %s %s" % (rel, st, b))
@@ -646,7 +649,16 @@ def preview(frame, felt, shade, console, tiles_dir, path, canvas, case):
         return Image.open(p).convert("RGBA").resize(size, Image.LANCZOS)
 
     for rel in range(4):
-        for kind, (x0, y0, x1, y1), code in seat_items(rel, **case):
+        kwargs = dict(case)
+        if rel == WIN_REL:                                   # the right seat has won: its winning tile is shown face up with the badge
+            kwargs["win"] = True
+            if "backs" in kwargs:
+                kwargs["backs"] += 1
+        else:
+            kwargs["win"] = False if kwargs.get("win") is None else case.get("win")
+        for kind, (x0, y0, x1, y1), code in seat_items(rel, **kwargs):
+            if kind == "win" and rel != WIN_REL:
+                kind = "back"
             if kind == "card":
                 d.rounded_rectangle((cx + x0, cy - y1, cx + x1, cy - y0), radius=20, fill=(255, 253, 247), outline=(200, 185, 170), width=2)
                 mx = cx + (x0 + x1) // 2
@@ -659,6 +671,8 @@ def preview(frame, felt, shade, console, tiles_dir, path, canvas, case):
                 d.text((mx, top + 158), "+1,200", font=font(22), fill=(35, 107, 48), anchor="mm")
                 continue
             w, h = int(x1 - x0), int(y1 - y0)
+            if kind == "win":
+                code = "5p"
             im = load(code, (h, w) if rel in (1, 3) and kind != "flower" else (w, h))
             if kind != "flower":
                 if rel == 1:
@@ -666,6 +680,19 @@ def preview(frame, felt, shade, console, tiles_dir, path, canvas, case):
                 elif rel == 3:
                     im = im.rotate(-90, expand=True)
             scene.alpha_composite(im, (int(cx + x0), int(cy - y1)))
+            if kind == "win":
+                # ring + badge: just outside the tile on the side away from the table centre, upright on screen
+                d.rectangle((cx + x0 - 3, cy - y1 - 3, cx + x1 + 3, cy - y0 + 3), outline=(217, 72, 15), width=3)
+                bw = 40 if rel != 99 else 40
+                mx, my = cx + (x0 + x1) / 2, cy - (y0 + y1) / 2
+                if rel == 1:
+                    bx, by = cx + x1 + 5 + bw / 2, my
+                elif rel == 3:
+                    bx, by = cx + x0 - 5 - bw / 2, my
+                else:
+                    bx, by = mx, cy - y1 - 5 - 14
+                d.rounded_rectangle((bx - bw / 2, by - 14, bx + bw / 2, by + 14), radius=12, fill=(255, 158, 143), outline=(217, 72, 15), width=2)
+                d.text((bx, by), "胡", font=font(20), fill=(74, 50, 38), anchor="mm")
 
     # my hand, the strip below the table (waits hint left, action panel right), my coins, the leave button
     d.rounded_rectangle((6, 6, 106, 62), radius=22, fill=(221, 213, 204))
@@ -688,6 +715,7 @@ def preview(frame, felt, shade, console, tiles_dir, path, canvas, case):
 
 
 FX_POS = {0: (-560, 49), 1: (560, 49), 2: (560, 209), 3: (-560, 209)}   # offsets from the canvas centre (y up)
+WIN_REL = 1                                                  # the seat whose winning tile (and badge) the previews show
 MID_CASE = dict(river=10, melds=[3], flowers=2, backs=13, win=False)
 WORST_CASE = dict(river=30, melds=[4] * 5, flowers=8, win=True)
 

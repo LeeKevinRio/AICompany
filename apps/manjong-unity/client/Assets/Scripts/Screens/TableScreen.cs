@@ -62,9 +62,9 @@ namespace Manjong.Screens
         // turned +90 / -90 degrees (their tiles stand rotated, like on a real table). The opposite seat keeps its tiles upright:
         // its frame sits at the felt's top-right corner with u running toward the screen's left (its own right hand) and v down.
         // Rows, from the edge: lane (concealed tiles from the seat's left, melds from its right end), river. The lane follows the
-        // river: 8 units outside its outer row, never closer than 3 rows, one row (46) further out when the river reaches its 4th /
-        // 5th row or when the lane's content needs a longer lane than that ring has room for (so two lanes never cross). Within a
-        // hand it only moves out, so each seat's lane moves at most twice.
+        // river: 8 units outside its outer row, never closer than 2 rows, one row (46) further out whenever the river reaches a new row
+        // (3rd, 4th, 5th) or when the lane's content needs a longer lane than that ring has room for (so two lanes never cross).
+        // Within a hand it only moves out, so each seat's lane moves at most three times.
         const float RiverStepX = 35f;      // TileSizes.Mini.width + 2
         const float RiverStepY = 46f;      // TileSizes.Mini.height + 2
         const int RiverCols = 6;           // tiles per row, row 0 touches the console and later rows grow outward
@@ -74,11 +74,11 @@ namespace Manjong.Screens
         const float RiverVOut = 52f;       // outer edge of the river block, measured from the felt edge
         const float LaneV = 6f;            // outer edge of the lane when the river has all 5 rows (the lane's furthest-out place)
         const float LaneGap = 8f;
-        const int LaneMinRows = 3;         // the lane never stands closer than behind 3 river rows
-        const float BackPitch = 27f;       // TileSizes.SeatBack.width + 1
+        const int LaneMinRows = 2;         // the lane never stands closer than behind 2 river rows
+        const float BackPitch = 25f;       // TileSizes.SeatBack.width (the concealed tiles stand touching)
         const int OtherHandSlots = 17;
         const float OtherHandWinGap = 10f; // the winning tile of a finished hand sits this far after the last concealed tile
-        const float OtherHandW = OtherHandSlots * BackPitch + OtherHandWinGap + 26f;   // 495
+        const float OtherHandW = OtherHandSlots * BackPitch + OtherHandWinGap + 25f;   // 460
         const float MeldGroupGap = 6f;
         const float MeldsAreaW = 5f * (4f * 29f - 1f) + 4f * MeldGroupGap;               // five kongs: 599
         // Info card (100 x 172) and flowers (2 columns x 4 rows) of a seat stand outside the frame, next to its corner:
@@ -414,10 +414,17 @@ namespace Manjong.Screens
             return rel == 0 || rel == 2 ? FeltHalfW * 2f : FeltHalfH * 2f;
         }
 
-        /// <summary>Half the length a lane may use when it stands behind k river rows; no two lanes can cross for any pair of k.</summary>
-        static float LaneHalf(int k) { return k <= 3 ? 248f : (k == 4 ? 294f : 340f); }
+        /// <summary>
+        /// Length a lane may use when it stands behind k river rows, measured from the middle of the seat's edge toward its left end
+        /// (the concealed tiles) and toward its right end (the melds). The four corners are a pinwheel: at each corner one seat's melds
+        /// end meets the next seat's concealed end, so a lane may run long at its melds end (321) while its concealed end stays short
+        /// (183); at 5 rows it is the lane at the felt edge and may use 340 each way. No two lanes cross for any pair of k
+        /// (tools/render_table.py check_layout).
+        /// </summary>
+        static float LaneBackHalf(int k) { return k >= RiverRows ? 340f : 183f; }
+        static float LaneMeldHalf(int k) { return k >= RiverRows ? 340f : 321f; }
 
-        /// <summary>Distance of the lane's outer edge from the felt edge: 98 behind 3 rows, 52 behind 4, 6 behind 5.</summary>
+        /// <summary>Distance of the lane's outer edge from the felt edge: 144 behind 2 rows, 98 behind 3, 52 behind 4, 6 behind 5.</summary>
         static float LaneVAt(int k) { return LaneV + RiverStepY * (RiverRows - k); }
 
         static int RiverRowsUsed(int discards) { return Mathf.Min(RiverRows, (discards + RiverCols - 1) / RiverCols); }
@@ -449,7 +456,7 @@ namespace Manjong.Screens
         {
             int k = Mathf.Max(LaneMinRows, RiverRowsUsed(DtoUtil.Safe(p.discards).Length));
             float need = LaneNeed(rel, DtoUtil.Safe(p.melds));
-            while (k < RiverRows && 2f * LaneHalf(k) < need) k++;
+            while (k < RiverRows && LaneBackHalf(k) + LaneMeldHalf(k) < need) k++;
             return k;
         }
 
@@ -523,7 +530,7 @@ namespace Manjong.Screens
             rivers[rel] = MakeSeatArea(frame, rel, "River", edge * 0.5f - ConsoleW * 0.5f, RiverVOut, RiverW, RiverH);
             // Lane: melds from the seat's right end, the concealed tiles from its left end (my concealed tiles are my hand below the
             // table). Created at its outermost place; UpdateLane moves it behind the river as that grows.
-            float uMax = edge * 0.5f + LaneHalf(RiverRows);
+            float uMax = edge * 0.5f + LaneMeldHalf(RiverRows);
             s.melds = MakeSeatArea(frame, rel, "Melds", uMax - MeldsAreaW, LaneV, MeldsAreaW, TileSizes.SeatMeld.height);
             if (rel == 0)
             {
@@ -531,7 +538,7 @@ namespace Manjong.Screens
             }
             else
             {
-                s.hand = MakeSeatArea(frame, rel, "Hand", edge * 0.5f - LaneHalf(RiverRows), LaneV, OtherHandW, TileSizes.SeatBack.height);
+                s.hand = MakeSeatArea(frame, rel, "Hand", edge * 0.5f - LaneBackHalf(RiverRows), LaneV, OtherHandW, TileSizes.SeatBack.height);
             }
 
             // Station beside the frame: the info card on the outside, the flowers (2 x 4) on its inner side, top-aligned with the card.
@@ -640,6 +647,7 @@ namespace Manjong.Screens
             awaiting = true;
             selectedIndex = -1;
             ClearFx(); // the snapshot that follows is authoritative; nothing that was queued is replayed
+            laneHandKey = ""; // and the lanes jump to where it puts them instead of gliding
             if (view != null && !pumping) Render(view, lastRenderFinal);
         }
 
@@ -1188,7 +1196,7 @@ namespace Manjong.Screens
 
         /// <summary>
         /// Places the seat's lane (its melds and, for the others, its concealed tiles) behind its river: when the river reaches its
-        /// 4th / 5th row, or the content needs a longer lane, the lane glides one row further out (180 ms, strong ease-out; with
+        /// 3rd / 4th / 5th row, or the content needs a longer lane, the lane glides one row further out (180 ms, strong ease-out; with
         /// reduced motion it jumps). The first placement of a hand jumps. These are the other seats' tiles; my own hand never moves.
         /// </summary>
         void UpdateLane(int rel, PlayerView p)
@@ -1199,10 +1207,9 @@ namespace Manjong.Screens
             bool first = s.laneK == 0;
             s.laneK = k;
             float edge = EdgeLength(rel);
-            float half = LaneHalf(k);
             float v = LaneVAt(k);
-            MoveLaneArea(s.melds, SeatAreaPos(rel, edge * 0.5f + half - MeldsAreaW, v, MeldsAreaW, TileSizes.SeatMeld.height), first);
-            if (rel != 0) MoveLaneArea(s.hand, SeatAreaPos(rel, edge * 0.5f - half, v, OtherHandW, TileSizes.SeatBack.height), first);
+            MoveLaneArea(s.melds, SeatAreaPos(rel, edge * 0.5f + LaneMeldHalf(k) - MeldsAreaW, v, MeldsAreaW, TileSizes.SeatMeld.height), first);
+            if (rel != 0) MoveLaneArea(s.hand, SeatAreaPos(rel, edge * 0.5f - LaneBackHalf(k), v, OtherHandW, TileSizes.SeatBack.height), first);
         }
 
         static void MoveLaneArea(RectTransform area, Vector2 target, bool jump)
@@ -1312,8 +1319,22 @@ namespace Manjong.Screens
         /// <summary>Winning tile: thick coral outline plus a "胡" / "自摸" badge.</summary>
         static void MarkWinningTile(RectTransform tile, TileSize size, bool selfDraw, float badgeAbove)
         {
+            MarkWinningTile(tile, size, selfDraw, badgeAbove, -1);
+        }
+
+        /// <summary>
+        /// Winning tile in a seat's lane (rel 1 .. 3): the badge sits just outside the tile, on the side away from the table centre
+        /// (it never covers a neighbouring tile or the face), and is always upright on screen: the right / left seats' frames are
+        /// turned by +-90 degrees, so their badge is turned back. rel -1: flowers / my own tiles, the badge pokes over the tile's top.
+        /// </summary>
+        static void MarkWinningTile(RectTransform tile, TileSize size, bool selfDraw, float badgeAbove, int rel)
+        {
             TileView.AddRing(tile, Palette.LastDiscardRing, size, Mathf.Max(3, Mathf.RoundToInt(size.width / 15f)));
-            TileView.AddBadge(tile, selfDraw ? "自摸" : "胡", Palette.Coral, badgeAbove);
+            string text = selfDraw ? "自摸" : "胡";
+            if (rel == 1) TileView.AddBadgeBeside(tile, text, Palette.Coral, size, false, -90f);
+            else if (rel == 3) TileView.AddBadgeBeside(tile, text, Palette.Coral, size, false, 90f);
+            else if (rel == 2) TileView.AddBadgeBeside(tile, text, Palette.Coral, size, true, 0f);
+            else TileView.AddBadge(tile, text, Palette.Coral, badgeAbove);
         }
 
         // ----- Melds -----
@@ -1385,7 +1406,7 @@ namespace Manjong.Screens
                 var t = TileView.CreateFace(s.hand, split.WinningTile, size);
                 float x = count * BackPitch + OtherHandWinGap;
                 UiFactory.Place(t, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(AreaX(rel, OtherHandW, x, size.width), 0f), size.Vector);
-                MarkWinningTile(t, size, split.SelfDraw, 4f);
+                MarkWinningTile(t, size, split.SelfDraw, 4f, rel);
             }
         }
 

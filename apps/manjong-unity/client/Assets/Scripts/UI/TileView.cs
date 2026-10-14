@@ -48,7 +48,7 @@ namespace Manjong.UI
         /// <summary>Opponent concealed hands (backs only).</summary>
         public static readonly TileSize Back = new TileSize(27f, 36f, 0, 0, 5, 3f);
         /// <summary>Table: the other seats' concealed tiles standing along their table edge (backs only).</summary>
-        public static readonly TileSize SeatBack = new TileSize(26f, 35f, 0, 0, 5, 3f);
+        public static readonly TileSize SeatBack = new TileSize(25f, 34f, 0, 0, 5, 3f);
         /// <summary>Table: the other seats' melds, my melds and every seat's flowers.</summary>
         public static readonly TileSize SeatMeld = new TileSize(28f, 38f, 18, 12, 5, 3f);
     }
@@ -231,6 +231,31 @@ namespace Manjong.UI
             var t = UiFactory.CreateLabel(pill.transform, "Text", text, 20, Palette.Ink, TextAnchor.MiddleCenter);
             t.fontStyle = FontStyle.Bold;
             UiFactory.Stretch(t.rectTransform, 2f, 1f, 2f, 1f);
+        }
+
+        /// <summary>
+        /// Badge for a tile standing in a seat's frame, fully outside the tile on its outer side (away from the table centre), upright
+        /// on screen. `towardTop`: the outer side is the tile's local top (the opposite seat, whose tiles are not rotated); otherwise
+        /// it is the local bottom (the right / left seats, whose frame is turned: the tile's top points at the table centre).
+        /// `counterAngle` turns the badge against the frame's rotation (-90 for the right seat, +90 for the left) so its text reads
+        /// normally; the badge is centred on the tile's centre line.
+        /// </summary>
+        public static void AddBadgeBeside(RectTransform tile, string text, Color bg, TileSize size, bool towardTop, float counterAngle)
+        {
+            const float height = 28f;
+            const float gap = 2f;
+            float w = 18f + 22f * text.Length;
+            // Distance along the tile's local y: half the tile, then half the badge's extent along that axis (its height for the
+            // unrotated badge of the opposite seat, its width for the turned ones), plus a small gap.
+            float extent = towardTop ? height : w;
+            float offset = size.height * 0.5f + extent * 0.5f + gap;
+            var pill = UiFactory.CreatePanel(tile, "Badge_" + text, bg, 12);
+            UiFactory.Place(pill.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, towardTop ? offset : -offset), new Vector2(w, height));
+            pill.rectTransform.localRotation = Quaternion.Euler(0f, 0f, counterAngle);
+            UiFactory.CreateRing(pill.transform, "Ring", Palette.LastDiscardRing, 12, 2, 0f);
+            var label = UiFactory.CreateLabel(pill.transform, "Text", text, 20, Palette.Ink, TextAnchor.MiddleCenter);
+            label.fontStyle = FontStyle.Bold;
+            UiFactory.Stretch(label.rectTransform, 2f, 1f, 2f, 1f);
         }
 
         // ---------- Melds ----------

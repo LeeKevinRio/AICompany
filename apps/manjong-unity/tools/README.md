@@ -51,7 +51,7 @@ python render_tiles.py ../client/Assets/Resources/Tiles /tmp/tile_sheets
 pip install pillow
 python render_table.py ../client/Assets/Resources/Table
 # 另外輸出一般中盤與最壞情況（一般中盤：10 張牌河、1 組碰、13 張暗牌；最壞：30 張牌河、5 組槓、8 花）的示意圖，16:9 與 16:10（檔名加 _1610）各一張：<png 不含副檔名>_mid.png / _worst.png
-# 無論有沒有 --preview，每次都會檢查每家 48 種狀態（牌河 18~31 張 × 0~5 組碰槓，牌列跟著牌河往外移）下、每一對座位有無牌重疊、超出絨布或蓋到控制台，並印出結果
+# 無論有沒有 --preview，每次都會檢查每家 60 種狀態（牌河 12~31 張 × 0~5 組碰槓，牌列跟著牌河往外移）下、每一對座位有無牌重疊、超出絨布或蓋到控制台，並印出結果
 python render_table.py ../client/Assets/Resources/Table --preview /tmp/table_layout.png --tiles ../client/Assets/Resources/Tiles
 ```
 
