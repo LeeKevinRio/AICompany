@@ -70,6 +70,15 @@ because nothing was looked up -- and every figure, ``price``, ``fx`` and
 only its id, market and currency (task X-3b, KX-6/KX-7). The judgement is
 :func:`app.positions.models.currency_matches_market` itself; this module keeps
 no copy of the market -> currency table.
+
+A price answer the data layer refused outright -- ``ProviderResult.rejection``
+set by the admission or currency gate (ADR-0024 D-7) -- is not valued either,
+live or cache-only alike. It reports ``insufficient_data`` with
+``missing == [SYMBOL_OR_UNIT_REJECTED]`` -- that token alone, never
+``price``/``price_not_queried``/``fx_now``/``fx_open`` -- and no FX source is
+asked for it, so ``fx`` and ``fx_open`` are null (風控 F9W-18). Only the
+category decides: an empty answer with no ``rejection`` keeps the tokens
+above, and an answer with bars is valued as usual whatever its reason says.
 """
 
 from __future__ import annotations
@@ -137,6 +146,18 @@ PRICE_NOT_QUERIED = "price_not_queried"
 #: neither "the source had nothing" nor "the source was not asked". It is the
 #: only token such a row carries (risk X-3c second part RX-2).
 CURRENCY_MARKET_MISMATCH = "currency_market_mismatch"
+
+#: ``Valuation.missing`` token for a row whose price answer was refused by the
+#: data layer's admission or currency gate (ADR-0024 D-7 (3); 風控 F9W-11):
+#: the symbol's form is outside what the system queries, or the daily bars'
+#: stated unit differs from the market's or is not stated (live W-c/W-c',
+#: their cooldown answers, and a cache refused by the cache gate, T-15). Read
+#: off ``ProviderResult.rejection`` alone, never off "the bars are empty"
+#: (D-7 (7)). Same token live and cache-only; it is the only token such a row
+#: carries -- never beside ``price``/``price_not_queried``/``fx_now``/
+#: ``fx_open`` -- and no FX source is asked for it (F9W-18). Not user-facing:
+#: the front end labels it (T-12).
+SYMBOL_OR_UNIT_REJECTED = "symbol_or_unit_rejected"
 
 #: What kind of price ``PriceInfo.value`` is (ADR-0014 D-5). Only
 #: ``daily_close`` is ever produced until the intraday quote path lands (W15);
@@ -253,15 +274,17 @@ class Valuation(BaseModel):
     status: Literal["ok", "insufficient_data"]
     missing: list[str]
     price: PriceInfo | None
-    #: ``None`` for a TWD position (no conversion, nothing to disclose).
+    #: ``None`` for a TWD position (no conversion, nothing to disclose), and for
+    #: a row no FX source was asked about (KX-A2, :data:`SYMBOL_OR_UNIT_REJECTED`).
     fx: FxInfo | None = None
     #: The rate behind F0 (``cost_twd`` and the FX contribution), with its own
     #: provenance (task RK-5, R5-1): the whole ``FxInfo`` of the open-date
     #: lookup, so a book whose two rates come from two sources can be told
     #: apart row by row (ADR-0005 D-5). A lookup that found nothing is an
     #: ``UNAVAILABLE`` ``FxInfo``, not ``None``. ``None`` only where nothing was
-    #: asked: a TWD position, a position with no open date, and a row whose
-    #: currency is not its market's (KX-A2).
+    #: asked: a TWD position, a position with no open date, a row whose
+    #: currency is not its market's (KX-A2), and a row whose price answer was
+    #: refused (:data:`SYMBOL_OR_UNIT_REJECTED`, ADR-0024 D-7 (3), F9W-18).
     fx_open: FxInfo | None = None
     pnl_original: PnlOriginal | None
     pnl_twd: Decimal | None
@@ -371,6 +394,10 @@ class PositionValuator:
             return _currency_market_mismatch()
 
         price_info, price_now, price_missing, change_basis = self._resolve_price(position, today)
+        if price_missing == SYMBOL_OR_UNIT_REJECTED:
+            # F9W-18: a refused answer is not followed by an FX lookup; the
+            # token stands alone and every figure stays null.
+            return _symbol_or_unit_rejected()
         if price_now is None:
             missing.append(price_missing)
 
@@ -442,6 +469,13 @@ class PositionValuator:
         A latest bar whose close is unusable returns exactly what "no bar"
         returns; an earlier bar is never substituted for it (see the module
         docstring).
+
+        An answer the data layer refused (``ProviderResult.rejection`` set,
+        ADR-0024 D-7 (3)) returns :data:`SYMBOL_OR_UNIT_REJECTED`, in either
+        price mode, decided by the category alone and never by "the bars are
+        empty" (D-7 (7)); the caller then asks no FX source (F9W-18). Every
+        other empty answer returns ``price`` (live) or ``price_not_queried``
+        (cache-only).
         """
         missing_token = PRICE_NOT_QUERIED if self._price_mode == "cache_only" else "price"
         service = self._market_services.get(position.market)
@@ -452,6 +486,10 @@ class PositionValuator:
             result = service.get_cached_bars(position.symbol, position.market, start, today)
         else:
             result = service.get_daily_bars(position.symbol, position.market, start, today)
+        if result.rejection is not None:
+            # ADR-0024 D-7 (7): the category decides, in either price mode; the
+            # invariant guarantees there are no bars to fall back on.
+            return None, None, SYMBOL_OR_UNIT_REJECTED, None
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
             return None, None, missing_token, None
         latest = max(result.bars, key=lambda bar: bar.date)
@@ -602,6 +640,32 @@ def _currency_market_mismatch() -> PositionValuation:
         valuation=Valuation(
             status="insufficient_data",
             missing=[CURRENCY_MARKET_MISMATCH],
+            price=None,
+            fx=None,
+            fx_open=None,
+            pnl_original=None,
+            pnl_twd=None,
+            asset_contribution_twd=None,
+            fx_contribution_twd=None,
+        ),
+        cost_twd=None,
+        market_value_twd=None,
+        change_basis=None,
+    )
+
+
+def _symbol_or_unit_rejected() -> PositionValuation:
+    """The valuation of a row whose price answer was refused (ADR-0024 D-7 (3)).
+
+    The data layer refused the answer outright -- admission, or the currency
+    gate on live bars or on the cache -- so there is no price, and no FX source
+    is asked: ``missing == [SYMBOL_OR_UNIT_REJECTED]`` alone, ``fx`` and
+    ``fx_open`` ``None`` (F9W-18; TA4 R-52), every figure null.
+    """
+    return PositionValuation(
+        valuation=Valuation(
+            status="insufficient_data",
+            missing=[SYMBOL_OR_UNIT_REJECTED],
             price=None,
             fx=None,
             fx_open=None,

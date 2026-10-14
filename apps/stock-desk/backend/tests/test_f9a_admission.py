@@ -140,14 +140,26 @@ def _imports_admission(path: Path) -> bool:
     return ADMISSION_MODULE in imported_modules(path, _module_name(path))
 
 
-def test_admission_is_not_wired_into_any_path_yet() -> None:
-    """F-9a ships the rules only; the read and fetch paths stay as they were (F-9b wires them)."""
+def test_admission_is_wired_only_where_adr_0024_puts_it() -> None:
+    """F-9a shipped the rules only; F-9b commit 7 wires them, and nowhere else.
+
+    Rewritten for F-9b commit 7 (was ``test_admission_is_not_wired_into_any_path_yet``):
+    the assembly layer injects it (``api/deps.py``), the service applies it at
+    both entries (``data/service.py``), the Alpha Vantage adapter checks again
+    before reserving quota (``data/providers/alpha_vantage.py``, D-4 defence in
+    depth), and the inventory still reads it (``data/diagnose.py``).
+    """
     users = [
         str(path.relative_to(APP_ROOT))
         for path in sorted(APP_ROOT.rglob("*.py"))
         if path.name != "admission.py" and _imports_admission(path)
     ]
-    assert users == ["data/diagnose.py"]
+    assert users == [
+        "api/deps.py",
+        "data/diagnose.py",
+        "data/providers/alpha_vantage.py",
+        "data/service.py",
+    ]
 
 
 @pytest.mark.parametrize(

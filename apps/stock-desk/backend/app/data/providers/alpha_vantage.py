@@ -117,6 +117,7 @@ from typing import Any, ClassVar
 
 import httpx
 
+from app.data.admission import admit_symbol
 from app.data.http import RateLimitedClient
 from app.data.interface import DataStatus, MarketDataProvider, PriceBar, ProviderResult
 from app.data.providers.us_symbols import (
@@ -148,7 +149,7 @@ API_KEY_ENV_VAR = "ALPHA_VANTAGE_API_KEY"
 _SERIES_KEY = "Time Series (Daily)"
 
 
-def _unavailable(now: datetime, *, reason: str) -> ProviderResult:
+def _unavailable(now: datetime, *, reason: str | None) -> ProviderResult:
     return ProviderResult(
         bars=[],
         status=DataStatus.UNAVAILABLE,
@@ -241,6 +242,15 @@ class AlphaVantageAdapter(MarketDataProvider):
                 now,
                 reason=f"「{symbol}」不是合法的美股個股代號格式，可能誤用了指數或其他市場代號。",
             )
+
+        if not admit_symbol(canonical, "US").admitted:
+            # ADR-0024 D-4 / C-15: defence in depth behind the service's own
+            # admission, which refuses first -- normally unreachable. Checked
+            # before any quota is reserved. No sentence: W-a / W-b may only be
+            # stated by the service ("未向任何來源查詢" would not hold here,
+            # 風控 F9W-7), and no other approved sentence fits.
+            logger.warning("Alpha Vantage: symbol %r not admitted; no quota spent", canonical)
+            return _unavailable(now, reason=None)
 
         try:
             config = resolve_quota_config()

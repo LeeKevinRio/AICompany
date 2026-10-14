@@ -12,7 +12,9 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.alerts.store import AlertStore
+from app.data.admission import admit_any_shape, admit_equity_daily_bars
 from app.data.cache import PriceBarCache
+from app.data.gate_wording import EQUITY_GATE_WORDING
 from app.data.interface import Market
 from app.data.providers.alpha_vantage import AlphaVantageAdapter
 from app.data.providers.finmind import FinMindAdapter
@@ -107,9 +109,11 @@ def _default_resolver() -> MarketDataResolver:
 
     Each ladder is told the market currency through :func:`_market_currency`
     (the one table that defines it, ``MARKET_CURRENCY``, task X-3 KX-A1) and
-    is built as ``scope="equity"`` (ADR-0024 TA5 R-60): until F-9b a bar
-    carrying any other currency is only logged as a WARNING, with the answer
-    unchanged.
+    is built as ``scope="equity"`` (ADR-0024 TA5 R-60): a live answer whose
+    bars carry any other currency is logged as a WARNING and refused (W-c /
+    W-c', ADR-0024 D-2). Each is handed the symbol admission
+    (:func:`app.data.admission.admit_equity_daily_bars`, D-4) and the equity
+    wording (W-a, W-b, W-c, W-c', T-15) explicitly (C-6).
     """
     cache = _default_cache()
     tw_service = MarketDataService(
@@ -119,6 +123,8 @@ def _default_resolver() -> MarketDataResolver:
         cache_first=True,
         currency_for_market=_market_currency,
         scope="equity",
+        admission=admit_equity_daily_bars,
+        wording=EQUITY_GATE_WORDING,
     )
     us_service = MarketDataService(
         primary=AlphaVantageAdapter(),
@@ -127,6 +133,8 @@ def _default_resolver() -> MarketDataResolver:
         cache_first=True,
         currency_for_market=_market_currency,
         scope="equity",
+        admission=admit_equity_daily_bars,
+        wording=EQUITY_GATE_WORDING,
     )
     return {"TW": tw_service, "US": us_service}
 
@@ -157,7 +165,9 @@ def _default_index_resolver() -> IndexServiceResolver:
     single expected currency fits it. Built as ``scope="index"`` (TA5 R-60):
     index series are checked for currency, never for shape (ADR-0024 D-4),
     and a differing currency logs at ERROR -- under the shipped configuration
-    it cannot happen (F9W-31 (a), R-61). Until F-9b the answer is unchanged.
+    it cannot happen (F9W-31 (a), R-61); such an answer is refused with no
+    sentence of the index path's own (D-4). It is handed an admission that
+    checks no shape and no wording, both explicitly (C-6, F9W-9).
     """
     service = MarketDataService(
         primary=IndexProviderBridge(_default_yfinance()),
@@ -165,6 +175,9 @@ def _default_index_resolver() -> IndexServiceResolver:
         cache_first=True,
         currency_for_market=_market_currency,
         scope="index",
+        # D-4: currency only, never shape; no reader-facing wording (F9W-9).
+        admission=admit_any_shape,
+        wording=None,
     )
     disclosed = IndexSeriesService(service)
     return {"TW": disclosed, "US": disclosed}

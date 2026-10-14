@@ -1,11 +1,12 @@
 /**
  * User-facing labels for `Valuation.missing` tokens (backend
- * `app/portfolio/valuation.py`). Three fixed shapes, on purpose: 「查無…」 means
+ * `app/portfolio/valuation.py`). Four fixed shapes, on purpose: 「查無…」 means
  * the system asked and there was nothing; 「本次未查…」 means no source was
  * asked this time (a cache-only read, ADR-0010 D-1); the third is a noun
  * phrase (「幣別與市場不符」) that states the stored record itself is
  * inconsistent -- nothing was queried and it is not a data outage (風控
- * 2026-10-08 第二段裁定第 6 項). Every token the backend
+ * 2026-10-08 第二段裁定第 6 項); the fourth (「代號或價格單位不採用」, T-12)
+ * says the price answer was not adopted, described below. Every token the backend
  * emits today is labelled here, and 「缺」 is gone: it mislabelled "not asked"
  * as "missing" (風控 2026-09-18 C-1). A token this map does not know is shown
  * as-is on purpose -- a visible failure that the label table lags the backend,
@@ -13,6 +14,10 @@
  * (`work/stock-desk-ADR-0010-揭露句-文案.md`), fixed by risk-compliance-officer
  * 2026-09-18 (C 核可); third shape approved 2026-10-08
  * (`work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md`, 第二段).
+ * `symbol_or_unit_rejected` (ADR-0024 D-7 (3), T-12) is the row whose price
+ * answer the data layer refused -- the symbol's form, or the daily bars'
+ * price unit, was not adopted; no source price was used, and it is neither
+ * 「查無…」 nor 「本次未查…」 (風控 F9W-11, F9W-19).
  */
 export const MISSING_LABELS: Record<string, string> = {
   price: "查無價格資料",
@@ -22,6 +27,9 @@ export const MISSING_LABELS: Record<string, string> = {
   // 風控核可文案,修改須重新送審(2026-10-08)
   // work/reviews/2026-10-08-X-3c-幣別與市場不符-揭露字面-風控審查.md (第二段, label (a), 7 字)
   currency_market_mismatch: "幣別與市場不符",
+  // 風控核可文案,修改須重新送審(2026-10-12)
+  // work/reviews/2026-10-12-F-9-第二批字面逐字審-F9W-17至F9W-29-風控.md (T-12 主案, F9W-19, 10 字)
+  symbol_or_unit_rejected: "代號或價格單位不採用",
 };
 
 /**

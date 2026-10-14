@@ -137,8 +137,9 @@ class ProviderResult(BaseModel):
     #: that was not refused by the admission or currency gate. A refused answer
     #: is always ``UNAVAILABLE`` with no bars -- enforced below, so a value can
     #: never ride along with prices. Only ``load_bars`` and the valuator read
-    #: it; it is never serialized to a reader (C-18). Nothing sets it yet: the
-    #: producers arrive with the gate itself (F-9b).
+    #: it; it is never serialized to a reader (C-18). Only
+    #: ``app.data.service.MarketDataService`` sets it, and only through this
+    #: constructor -- ``model_copy(update=...)`` would skip the validator below.
     rejection: Rejection | None = None
 
     @field_validator("as_of")

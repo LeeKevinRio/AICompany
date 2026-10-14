@@ -148,6 +148,18 @@ def _producer_sites() -> list[str]:
     return found
 
 
-def test_nothing_produces_a_rejection_before_the_gate_lands() -> None:
-    """F-9b0 is behaviour-neutral: the producers are F-9b's (TA5 section 3, commit 0-1)."""
-    assert _producer_sites() == []
+def test_only_the_service_produces_a_rejection_and_only_through_the_constructor() -> None:
+    """F-9b0 shipped no producer (TA5 section 3, commit 0-1); F-9b adds them in one module.
+
+    Rewritten for F-9b commit 5 (was ``test_nothing_produces_a_rejection_before_the_gate_lands``):
+    every producer is a ``ProviderResult(...)`` call in ``data/service.py`` -- the
+    validator runs -- and no ``model_copy`` anywhere sets the field (F-9b0 record).
+    """
+    sites = _producer_sites()
+    assert sites  # the gate has landed
+    assert {site.split(":")[0] for site in sites} == {"data/service.py"}
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "model_copy":
+                assert "rejection" not in ast.unparse(node), path
