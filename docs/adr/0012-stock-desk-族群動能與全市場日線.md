@@ -74,6 +74,7 @@
     - 新增葉節點模組 `app.data.sqlite_util`（`enable_wal`：遇 `SQLITE_BUSY` 以退避重試 `PRAGMA journal_mode=WAL` 至該連線 `busy_timeout` 期限，並驗證回傳模式為 `wal`／`memory`）。起因：舊版 DB 於 rollback 模式下兩個程序同時切 WAL，輸家立即 `SQLITE_BUSY`；CEO 2026-09-26 裁定所有 store 改用此函式。
     - C-1：`app.sectors.store` 的例外加入 `app.data.sqlite_util`（只取 `enable_wal`）；純核心白名單不變。
     - D-1：註明 `data.sqlite_util` 為葉節點；`research.sector_biased` 追認依賴 `data.sqlite_util`。
+  - 後續（ADR-0025 部分修訂）：C-15 識別字白名單由 ADR-0025 加入 `app/forecast/scoring.py`，其餘不變；CEO 2026-10-16 核可（`docs/adr/0025-stock-desk-產品定位改為提供投資建議.md`；決策紀錄 `work/dispatch/2026-10-16-CEO決策-ADR-0025核可與五日方向.md`）；本檔原文不改。
 
 ## Context（背景）
 

@@ -5,6 +5,7 @@
 - 決策者：tech-architect（草案）；CEO 2026-09-13 核可
 - 適用範圍：僅 `product/stock-desk` 產品線（本 ADR 不存在於 main）
 - 相依：ADR-0002（技術棧 + 「建議引擎必須是 YAML 規則式」約束）、ADR-0003（資料源降級鏈、`as_of`/`source` 欄位約定）
+- 修訂：被 ADR-0025 部分修訂（§4「無目標價」縮窄為不輸出點位預測或估值價；`DISCLAIMER` 字面與 Decision §5 定位理由失效，新字面待風控重訂），CEO 2026-10-16 核可（`docs/adr/0025-stock-desk-產品定位改為提供投資建議.md`；決策紀錄 `work/dispatch/2026-10-16-CEO決策-ADR-0025核可與五日方向.md`）；本檔原文不改。
 
 ---
 

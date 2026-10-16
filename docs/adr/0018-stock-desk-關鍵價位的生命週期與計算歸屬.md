@@ -1,8 +1,10 @@
 # ADR-0018：stock-desk 關鍵價位的生命週期與計算歸屬
 
-- 狀態：proposed（待 CEO 對「需要 CEO 決定」兩項裁示後方可 accepted）
+- 狀態：**superseded by ADR-0025**
+  - 〔2026-10-16 CEO 知悉（書面核可 ADR-0025，決策紀錄 `work/dispatch/2026-10-16-CEO決策-ADR-0025核可與五日方向.md` 一之 #1「知悉 ADR-0018 被取代，其待決 #1、#2 隨之撤銷」）；原文末「需要 CEO 決定」#1、#2 隨之撤銷，不再需要裁示〕
+  - 原狀態文字（保留）：proposed（待 CEO 對「需要 CEO 決定」兩項裁示後方可 accepted）〔已被取代：2026-10-16 起狀態為 superseded by ADR-0025〕
 - 日期：2026-10-04
-- 決策者：tech-architect（草案）；待 CEO 核可（見「需要 CEO 決定」）
+- 決策者：tech-architect（草案）；待 CEO 核可（見「需要 CEO 決定」）〔2026-10-16 已被 ADR-0025 取代，該待決項撤銷〕
 - 適用範圍：僅 product/stock-desk 產品線
 - 與既有 ADR 的關係（不取代任何一則）：
   - ADR-0004 §4（accepted）：不衝突；於 ADR-0004「相關 ADR 與依賴」加交叉引用註記（D-9 文字）。
