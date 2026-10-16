@@ -1,0 +1,13 @@
+== class shares (bull/range/bear) and null baseline hit rates ==
+h=3 k=0.3  shares=[np.float64(0.399), np.float64(0.262), np.float64(0.339)] persist_hit=0.350 majority_hit=0.382 majority_pred_shares=[np.float64(0.741), np.float64(0.01), np.float64(0.249)]
+h=3 k=0.43 shares=[np.float64(0.344), np.float64(0.366), np.float64(0.289)] persist_hit=0.347 majority_hit=0.350 majority_pred_shares=[np.float64(0.358), np.float64(0.566), np.float64(0.076)]
+h=3 k=0.5  shares=[np.float64(0.317), np.float64(0.419), np.float64(0.264)] persist_hit=0.360 majority_hit=0.407 majority_pred_shares=[np.float64(0.09), np.float64(0.896), np.float64(0.014)]
+h=3 k=0.6  shares=[np.float64(0.279), np.float64(0.489), np.float64(0.232)] persist_hit=0.388 majority_hit=0.487 majority_pred_shares=[np.float64(0.007), np.float64(0.993), np.float64(0.0)]
+h=3 k=0.75 shares=[np.float64(0.229), np.float64(0.582), np.float64(0.189)] persist_hit=0.447 majority_hit=0.582 majority_pred_shares=[np.float64(0.0), np.float64(1.0), np.float64(0.0)]
+h=3 k=1.0  shares=[np.float64(0.162), np.float64(0.705), np.float64(0.133)] persist_hit=0.560 majority_hit=0.705 majority_pred_shares=[np.float64(0.0), np.float64(1.0), np.float64(0.0)]
+h=5 k=0.3  shares=[np.float64(0.407), np.float64(0.26), np.float64(0.333)] persist_hit=0.351 majority_hit=0.387 majority_pred_shares=[np.float64(0.729), np.float64(0.007), np.float64(0.264)]
+h=5 k=0.43 shares=[np.float64(0.354), np.float64(0.361), np.float64(0.285)] persist_hit=0.348 majority_hit=0.346 majority_pred_shares=[np.float64(0.428), np.float64(0.457), np.float64(0.116)]
+h=5 k=0.5  shares=[np.float64(0.326), np.float64(0.412), np.float64(0.262)] persist_hit=0.358 majority_hit=0.391 majority_pred_shares=[np.float64(0.17), np.float64(0.796), np.float64(0.034)]
+h=5 k=0.6  shares=[np.float64(0.289), np.float64(0.482), np.float64(0.229)] persist_hit=0.384 majority_hit=0.477 majority_pred_shares=[np.float64(0.02), np.float64(0.979), np.float64(0.001)]
+h=5 k=0.75 shares=[np.float64(0.238), np.float64(0.575), np.float64(0.186)] persist_hit=0.442 majority_hit=0.575 majority_pred_shares=[np.float64(0.0), np.float64(1.0), np.float64(0.0)]
+h=5 k=1.0  shares=[np.float64(0.169), np.float64(0.701), np.float64(0.131)] persist_hit=0.555 majority_hit=0.700 majority_pred_shares=[np.float64(0.0), np.float64(1.0), np.float64(0.0)]

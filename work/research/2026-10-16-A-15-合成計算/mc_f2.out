@@ -1,0 +1,6 @@
+h=3 w=0.0: P(withdraw | reading A)=1.000  P(withdraw | reading B)=0.846
+h=3 w=0.15: P(withdraw | reading A)=1.000  P(withdraw | reading B)=0.381
+h=3 w=0.25: P(withdraw | reading A)=0.999  P(withdraw | reading B)=0.113
+h=5 w=0.0: P(withdraw | reading A)=1.000  P(withdraw | reading B)=0.842
+h=5 w=0.15: P(withdraw | reading A)=1.000  P(withdraw | reading B)=0.366
+h=5 w=0.25: P(withdraw | reading A)=0.999  P(withdraw | reading B)=0.124
