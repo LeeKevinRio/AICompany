@@ -1188,7 +1188,7 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 | FT | 內容摘要 | 落地檔案 | 測試（暫定） | 批次 |
 |---|---|---|---|---|
 | FT-1 | `guarantee` 10 詞全部維持 | `shared/forbidden-terms.json` | 既有 `test_advice_wording.py` 參數化 | 不變 |
-| FT-2 | 新增 `negation_allowlist`：整句相等比對，不做子字串豁免；首批為 LM-07、`CONFIDENCE_MEANING`、`WEIGHT_MEANING`、產品說明 L-35 幾句、D 組定稿全文；不適用規則 YAML 與推播 | `shared/forbidden-terms.json`（新鍵）；後端與前端讀同一來源 | `forbiddenTerms.test.ts::allowlist entries match whole sentences only`；`test_advice_wording.py::allowlist not applied to rule yaml` | B1（隨 DF、DC、LM-07） |
+| FT-2 | 新增 `negation_allowlist`：整句相等比對，不做子字串豁免；首批為 LM-07、`CONFIDENCE_MEANING`、`WEIGHT_MEANING`、產品說明 L-35 幾句、D 組定稿全文；不適用規則 YAML 與推播 | `shared/forbidden-terms.json`（新鍵）；後端與前端讀同一來源 | `forbiddenTerms.test.ts::allowlist entries match whole sentences only`；`test_advice_wording.py::allowlist not applied to rule yaml` | B1（隨 DF、DC、LM-07） 〔第二批新增白名單整句：LM-29（DF1）、LM-30（DC1）、LM-58（產品說明 Disclaimer 表格列，須驗證掃描器能比對到表格欄位內的引號字串）；全文以風控附錄為準〕 |
 | FT-3 | `price_target` 全部維持；「目標價」否定句須字面送審後才進白名單 | 同上 | 既有測試 | 不變；L-06、L-33 改寫已在 2.19.9／B2 |
 | FT-4 | 「停利價」維持禁用，只豁免完整詞「分批停利價位」（先剔除再掃）；否決 `停利價(?!位)` | 掃描器實作 | `forbiddenTerms.test.ts::strips exempt phrase before scanning`；`::bare 停利價位 still blocked` | B2（隨 PV-23 價位名稱） |
 | FT-5 | 支撐位、壓力位、出場價、進場價、防守價、buy point、sell point 維持；新增「強支撐」「鐵底」 | `forbidden-terms.json`、`adviceWording.ts` `FRONTEND_FORBIDDEN_TERMS` | 同步測試 | B1 |
@@ -1216,7 +1216,7 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 |---|---|---|---|---|---|
 | R2-01 DISCLAIMER 頁尾版 | DF1 | `frontend/app/layout.tsx:19-21`（頁尾第二行） | `SITE_DISCLAIMER_FOOTER`（`siteWording.ts`） | `siteWording.test.ts::pins footer disclaimer`；`disclaimerSync.test.ts::footer and card constants both present` | B1（與 LM-02 同批） |
 | R2-02 DISCLAIMER 卡片版 | DC1 | `backend/app/advice/engine.py:60`（`DISCLAIMER`，每張卡 `disclaimer` 欄） | `DISCLAIMER`（沿用現名，值改變） | `test_advice_wording.py:132` 改釘；`test_api_advice.py`、`test_advice_engine.py` 自動跟隨；`operationSummary.test.ts:68,120,1061,1074`、`decisionCard.test.ts:81`、`ruleInvalidationDisclosure.test.ts:61`、`componentWordingScan.test.ts:2223` 改釘 | B1 |
-| R2-03 PL 連結句 | PL2-a | 展望區塊首層（頁尾常駐區） | `OUTLOOK_UNVERIFIED_POINTER` | `outlookWording.test.ts::pins pointer`；`::does not reference a verification page` | B2（展望出現時；驗證狀態頁上線前不得引用該頁） |
+| R2-03 PL 連結句 | PL2-a | 展望區塊首層（頁尾常駐區） | `OUTLOOK_UNVERIFIED_POINTER` | `outlookWording.test.ts::pins pointer`；`::does not reference a verification page` | B2（展望出現時；驗證狀態頁上線前不得引用該頁） 〔第二批審查更正：落地位置是**頁尾常駐行**，且只在 B2 出現（網站已有展望畫面時才渲染）；本列「展望區塊首層（頁尾常駐區）」有歧義，以頁尾為準。已核可為 LM-31，見 8.5〕 |
 | R2-04 數字行模板 | NL2-a | 驗證徽章元件 | `VALIDATION_NUMBERS_LINE_TEMPLATE` | `validationWording.test.ts::pins numbers line`；`::interval labelled 95% Wilson`；`::each baseline listed` | B2（`{基準清單}` 待 PA-1） |
 | R2-05 族群列表單元格 | KG-a | 族群列表元件（Phase 4） | `SECTOR_OUTLOOK_GATE_TEMPLATE` | `sectorWording.test.ts::pins gate cell`；`::pv10 status shown separately`；`::fixed sentence appended when n below 30` | B2（`{單位}` 待 quant） |
 | R2-06 族群列表常駐句 | KS-a | 同上 | `SECTOR_OUTLOOK_NO_SORT_NOTICE` | `sectorWording.test.ts::pins no-sort notice`；`::no temporal qualifier words` | B2 |
@@ -1233,7 +1233,101 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 | R2-17 L-06 | R06-a | `work/stock-desk-產品說明.md:3` | 無（文件） | `positioningConsistency.test.ts`（與 LM-02 同組） | B1 |
 | R2-18 L-07 | R07-a | `work/stock-desk-產品說明.md:71` | 無（文件） | 掃描器 FT-19 | B1 |
 | R2-19 L-08 | R08-a | `work/stock-desk-產品說明.md:531` | 無（文件） | 掃描器 FT-19 | B1 |
-| R2-20 過渡限定語 | TR-a | `KeyLevelsPanel.tsx` 面板頂部（與 R17 同一區） | `KEY_LEVELS_TRANSITION_NOTICE` | `componentWordingScan.test.ts::key levels panel carries transition notice while old formulas remain`；`::absent once Phase 4 panel replaces it` | B1（若新定位聲明早於 Phase 4）；Phase 4 隨面板移除 |
+| R2-20 過渡限定語 | TR-a | `KeyLevelsPanel.tsx` 面板頂部（與 R17 同一區） | `KEY_LEVELS_TRANSITION_NOTICE` | `componentWordingScan.test.ts::key levels panel carries transition notice while old formulas remain`；`::absent once Phase 4 panel replaces it` | B1（若新定位聲明早於 Phase 4）；Phase 4 隨面板移除 〔第二批審查更正：落地位置除面板頂部（TR-a，LM-60）外，**另加 `DecisionCard.tsx` 首層的停損參考／停利參考格旁**，緊鄰 TR-b（LM-61），同字級；舊公式存在期間必須有；CEO 若認為違反 09-19「主視圖不放限定句」，比照 X-1 書面裁示〕 |
 | L-05 追加 | R05-a | `README.md:33` | 無（文件） | 掃描器 FT-19 | B1 |
 
 **暫不重送（待 quant v0.2、PA-1）**：未優於基準（N 組）、G1、2.16(8)。核可後再補入第 8.3 節。
+
+### 8.4 第二批核可後的使用規則（2026-10-16 追加）
+
+1. **dev 一律從風控附錄複製字面，不得從 8.1 複製。** 8.1 是摘要，LM-01、LM-07 等用「…」節略，8.1 自己也聲明全文以風控附錄為準。LM-01～LM-28 的全文：`work/reviews/2026-10-16-新定位第一批字面逐字審-LM01至LM28-風控.md` 附錄；LM-29～LM-62 的全文：`work/reviews/2026-10-16-新定位第二批字面逐字審-LM29至LM62-風控.md` 附錄（本檔 8.5a 為逐字複製，仍以風控附錄為準）。
+2. 風控對 8.1 的核對結果：LM-01～LM-28 的全文與核可時逐字相同，8.1 沒有改動任何字面。
+3. LM-12 以「不加空格」排法定稿（`暫不顯示{h} 日方向`）。
+4. FT-2 白名單本批新增 LM-29、LM-30、LM-58（見 8.2 FT-2 列行尾加註）。
+5. 8.3 兩處更正已以行尾加註方式寫在 R2-03、R2-20 兩列：R2-03 落地位置是頁尾、只在 B2 出現；R2-20 落地位置加上 `DecisionCard.tsx` 停損／停利格（TR-b，LM-61）。
+6. 8.3 中風控未核可而退回的推薦（R2-05 KG-a、R2-17 R06-a），以 8.5 為準：R2-05 核可的是 KG-c（LM-34），R2-17 核可的是 R06-b（LM-57）。8.3 該兩列保留原樣不刪，僅供追溯。
+7. 條件核可項的前置：LM-30、LM-62 以 CEO 選 X-1 選項 A 為前提；LM-29、LM-30、LM-31、LM-62、LM-60、LM-61 的上線方式等 CEO 裁示 X-1、X-2（風控下一步第 3 點）；LM-37～LM-43、LM-46～LM-52 的列舉值與實作方式等 tech-architect 確認；LM-32／LM-33 二選一等 quant 確認計數方式；TV-c 隨 quant v0.2 重送。
+
+### 8.5 LM-29～LM-62（風控第二批已核可）
+
+#### 8.5a 風控附錄逐字複製（欄位與風控附錄相同；「【】」不適用，LM-57 的粗體為原文）
+
+| ID | 類別 | 節號／編號 | 核可全文（含標點） | 條件 |
+|---|---|---|---|---|
+| LM-29 | 頁尾免責 | 2.19.1 DF1 | 系統的建議供你本人使用，由固定規則依日線收盤資料產生，不保證報酬。本系統及其製作者未取得證券投資顧問事業許可，建議也未經持牌投資顧問人員審閱。系統不會自動下單，買賣由你自行決定，損益由你自行承擔。 | FT-2；常駐頁尾，緊接 LM-02，繼承 L0 |
+| LM-30 | 卡片免責 | 2.19.1 DC1 | 系統的建議不保證報酬。系統未取得證券投資顧問事業許可，買賣由你自行決定，損益由你自行承擔。 | FT-2；每張卡同區塊常駐；X-1 選 A 才上卡片 |
+| LM-31 | 展望未經驗證 | 2.19.2 PL2-a | 3 日、5 日展望未經充分驗證，是否優於基準以各展望旁的驗證徽章為準。 | 頁尾常駐行；網站有展望畫面時才渲染（B2） |
+| LM-32 | 數字行模板 | 2.19.3 NL2-a | 本展望：過去 {n} 次（不重疊計數）中符合 {k} 次；95% 信賴區間（Wilson）{lo}%～{hi}%；期間 {起}～{迄}。基準：{基準清單}。（{基準清單} 每項：{基準名} {k_i}／{n}，95% 信賴區間（Wilson）{lo_i}%～{hi_i}%；項間以「；」分隔） | n 為不重疊計數，與閘門同一種；n＝0 時不渲染；基準名稱另送審 |
+| LM-33 | 數字行備選 | 2.19.3 NL2-b | 本展望：過去 {n} 次判斷（每日發布、結果重疊，有效樣本數 {n_eff}）中符合 {k} 次；95% 信賴區間（Wilson）{lo}%～{hi}%；期間 {起}～{迄}。基準：{基準清單}。 | 條件核可：只在 quant 改採有效樣本數時使用；區間以 n_eff 計算；與 LM-32 二選一 |
+| LM-34 | 族群列表單元格 | 2.19.4 KG-c | 暫不顯示方向（{n}／150 {單位}） | 欄名「未來 5 個交易日展望」；每列連到詳細頁，詳細頁完整呈現 PV-10 狀態；{單位} 用字另送審 |
+| LM-35 | 族群列表常駐句 | 2.19.4 KS-a | 本列表不依展望排序或篩選。 | 列表下方常駐，永久規定 |
+| LM-36 | 族群閘門說明（選配） | 2.19.4 KW-a | 未來 5 個交易日展望的前瞻紀錄未滿 150 {單位}之前，不顯示偏多或偏空。 | 只能放在展開處 |
+| LM-37 | 逾時 | 2.19.5 TL-b | 依 {MM/DD} 收盤的 {h} 日展望未在 {截止時間} 前產生。這筆預測保留在紀錄中，標示「逾時」，不計入主統計。 | 條件核可：逾時不計入主統計待確認；{截止時間} 含日期，台北時間，待 PA-1 |
+| LM-38 | 作廢 | 2.19.5 TV-a | 依 {MM/DD} 收盤的 {h} 日展望已作廢：{作廢原因}。作廢的預測保留在紀錄中，不計入主統計，但計入最壞情境（全數視為不符）的並列結果。 | 條件核可：列舉值待確認；最壞情境結果必須真的渲染；放在紀錄區 |
+| LM-39 | 作廢原因 | 2.19.5 `missing_bar` A | 結算窗內缺少收盤資料（例如停牌） | 條件核可（列舉值）；「結算窗」要有定義 |
+| LM-40 | 作廢原因 | 2.19.5 `corporate_action` B | 結算窗內發生分割或減資，這筆預測不結算 | 條件核可；若列舉值涵蓋配股要重送 |
+| LM-41 | 缺日 | 2.19.5 TG-a | {MM/DD} 收盤後沒有產生 {h} 日展望，這一天沒有對應的預測紀錄。 | 條件核可：實作為無紀錄列時使用；與 LM-42 二選一 |
+| LM-42 | 缺日 | 2.19.5 TG-b | {MM/DD} 收盤後沒有產生 {h} 日展望，紀錄中標示為「缺日」。 | 條件核可：實作為有紀錄列時使用 |
+| LM-43 | 缺日統計 | 2.19.5 TG-c | 缺日 {c} 日（{日期清單}）：這些日子沒有 {h} 日展望，不在統計的計數內。 | 日期清單完整列出；截斷字面另送審 |
+| LM-44 | 原子句 | 2.19.6 LD-a | 跌停鎖死時，賣單仍可送出，但需要排隊，可能一直無法成交。 | `limit_down_locked`；id 由 tech-architect 定 |
+| LM-45 | 缺項片段一 | 2.19.7 MF1-a | {欄位中文名}（資料截至 {MM/DD}，該欄無資料） | 年份規則 |
+| LM-46 | 缺項片段二 | 2.19.7 `not_covered` A | {來源名稱}不涵蓋這檔標的 | 條件核可（列舉值） |
+| LM-47 | 缺項片段二 | 2.19.7 `fetch_failed` A | {來源名稱}取得失敗（{MM/DD HH:mm}） | 條件核可；時間是嘗試取得的時間，台北時間 |
+| LM-48 | 缺項片段二 | 2.19.7 `not_yet_published` B | {來源名稱}的資料最新只到 {MM/DD} | 條件核可；{MM/DD} 是可取得的最新日期 |
+| LM-49 | 缺項片段二 | 2.19.7 `failed_check` A | {來源名稱}的資料未通過檢查，未採用 | 條件核可 |
+| LM-50 | 缺項片段二 | 2.19.7 `not_configured` A | {來源名稱}未啟用 | 條件核可 |
+| LM-51 | 缺項片段二 | 2.19.7 `not_configured` B | {來源名稱}缺少必要設定 | 條件核可：只用在日後拆出的「缺少必要設定」列舉值 |
+| LM-52 | 缺項片段二 | 2.19.7 `unknown` B | {來源名稱}無資料，原因未判定 | 條件核可；保底字面，不得空白 |
+| LM-53 | 成本未取得 | 2.19.8 PLB-a | 相對成本損益：未取得持倉成本，無法計算 | 整串字面取代整列；B0；不得作為停損或減碼理由 |
+| LM-54 | L-17 替換 | 2.19.9 R17-a | 以下數字皆為本面板依固定算式計算之參考水位；每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。 | 只能與 LM-60 同時渲染 |
+| LM-55 | L-18 替換 | 2.19.9 R18-a | 計算樣本：{n} 根日線，最後一根 {d}。 | — |
+| LM-56 | L-24 替換 | 2.19.9 R24-a | 本輸出為歷史分布的描述性統計，只描述過去，不預測未來；任何一次結果都可能落在區間之外。 | 測試與 golden 同一個 commit 改，golden 變動經 qa 核對 |
+| LM-57 | L-06 替換 | 2.19.9 R06-b | **stock-desk 依日線收盤資料（非即時）與固定規則，為你的持股與自選股產生條件式建議。** 本工具不輸出單一預測價格。 | 粗體主句與 LM-02 逐字相同 |
+| LM-58 | L-07 替換 | 2.19.9 R07-a | `\| **Disclaimer** \| "系統的建議不保證報酬。系統未取得證券投資顧問事業許可，買賣由你自行決定，損益由你自行承擔。" \| 固定文案，隨每張卡片。 \|` | 與 LM-30 同步；FT-2 要能比對到表格欄位 |
+| LM-59 | L-08 替換 | 2.19.9 R08-a | 所有計算都公開透明、可追蹤來源；如有疑問或發現異常，請檢查資料層狀態、訊號欄位、規則檔案，必要時向開發團隊回報。 | — |
+| LM-60 | 過渡限定語 | 2.19.10 TR-a | 本面板的數字是固定算式的計算結果，不屬於本系統的條件式建議價位。 | 面板頂部首層，不得收合；Phase 4 隨面板移除 |
+| LM-61 | 過渡短標 | 2.19.10 TR-b | 固定算式結果，非本系統的條件式建議價位。 | 只用在決策卡首層的停損／停利格旁，同字級；舊公式存在期間必須有；CEO 若有異議，比照 X-1 處理 |
+| LM-62 | L-05 替換 | 2.19.9 R05-a | 每頁頁尾常駐免責聲明，每張建議卡另附同區塊短句。 | 條件核可：只有 CEO 選 X-1 選項 A 時才成立，否則重送 |
+
+#### 8.5b LM-29～LM-62 落地對應（檔案、常數名、釘字測試、批次；常數名與測試名皆暫定）
+
+| LM | 落地檔案 | 變數或常數名（暫定） | 釘字測試（暫定） | 批次與前置 |
+|---|---|---|---|---|
+| LM-29 | `frontend/app/layout.tsx:19-21` 常駐頁尾，緊接 LM-02；`siteWording.ts` | `SITE_DISCLAIMER_FOOTER` | `siteWording.test.ts::pins footer disclaimer`；`disclaimerSync.test.ts::footer and card constants both present`；FT-2 白名單含本句 | B1；等 X-2；不得收合、不低於 text-sm、不降對比 |
+| LM-30 | `backend/app/advice/engine.py:60` | `DISCLAIMER`（沿用現名，值改變） | `test_advice_wording.py:132` 改釘；`operationSummary.test.ts:68,120,1061,1074`、`decisionCard.test.ts:81`、`ruleInvalidationDisclosure.test.ts:61`、`componentWordingScan.test.ts:2223` 改釘；FT-2 白名單含本句 | B1；X-1 選 A 才上卡片 |
+| LM-31 | 頁尾常駐行（不是展望區塊） | `OUTLOOK_UNVERIFIED_POINTER` | `outlookWording.test.ts::pins LM-31`；`::rendered only when outlook shown`；`::does not reference a verification page` | B2 |
+| LM-32 | 驗證徽章元件 | `VALIDATION_NUMBERS_LINE_TEMPLATE` | `validationWording.test.ts::pins numbers line`；`::interval labelled 95% Wilson`；`::each baseline listed`；`::not rendered when n is 0` | B2；等 quant（n 計數）與 PA-1（基準名稱另送審） |
+| LM-33 | 同上 | `VALIDATION_NUMBERS_LINE_TEMPLATE_EFFECTIVE_N` | `validationWording.test.ts::only one of LM-32 and LM-33 is active`；`::interval computed from n_eff` | B2；僅 quant 改採有效樣本數時 |
+| LM-34 | 族群列表元件與族群詳細頁（兩者同批） | `SECTOR_OUTLOOK_GATE_TEMPLATE` | `sectorWording.test.ts::pins gate cell`；`::row links to detail page`；`::detail page shows pv10 status with plain sentence` | B2；{單位} 待 quant |
+| LM-35 | 族群列表下方常駐 | `SECTOR_OUTLOOK_NO_SORT_NOTICE` | `sectorWording.test.ts::pins no-sort notice`；`::no temporal qualifier words` | B2 |
+| LM-36 | 族群列表展開處 | `SECTOR_OUTLOOK_GATE_EXPLAINER` | `sectorWording.test.ts::explainer only inside details` | B2；不得改寫成帶時程的語句 |
+| LM-37 | 展望區塊、驗證區 | `OUTLOOK_LATE_TEMPLATE` | `outlookWording.test.ts::pins late`；`::anchors on data date not today` | B2；等 tech-architect（逾時不計主統計）與 PA-1（{截止時間}）；「主統計」須在驗證狀態頁定義 |
+| LM-38 | 紀錄清單或驗證區（作廢發生在結算時，不在當日展望位置） | `OUTLOOK_VOID_TEMPLATE` | `outlookWording.test.ts::pins void`；`::worst case row rendered whenever any void exists` | B2；等列舉值確認；「結算窗」須在「符合」定義處說明 |
+| LM-39 | 同上 | `VOID_REASON_FRAGMENTS["missing_bar"]` | `outlookWording.test.ts::reason fragment exists for each enum value` | B2 |
+| LM-40 | 同上 | `VOID_REASON_FRAGMENTS["corporate_action"]` | 同上 | B2；若列舉值涵蓋配股要重送 |
+| LM-41 | 驗證區 | `OUTLOOK_GAP_TEMPLATE_NO_ROW` | `outlookWording.test.ts::pins gap no-row`；`::only one of LM-41 and LM-42 is active` | B2；實作為無紀錄列時 |
+| LM-42 | 驗證區 | `OUTLOOK_GAP_TEMPLATE_WITH_ROW` | `outlookWording.test.ts::pins gap with-row` | B2；實作為有紀錄列時 |
+| LM-43 | 驗證區 | `OUTLOOK_GAP_STATS_TEMPLATE` | `outlookWording.test.ts::pins gap stats`；`::date list not truncated` | B2；截斷字面另送審 |
+| LM-44 | `backend/app/plan/caveats.py` | `CAVEATS["limit_down_locked"]` | `caveats.test.py::pins limit_down_locked` | B2；可與 LM-07 組合 |
+| LM-45 | 展望與行動計畫元件 | `MISSING_ITEM_FIELD_TEMPLATE` | `outlookWording.test.ts::pins missing field`；`::year appended when not current year` | B2 |
+| LM-46 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["not_covered"]` | `outlookWording.test.ts::every reason enum has a template` | B2；等列舉值 |
+| LM-47 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["fetch_failed"]` | 同上 | B2；時間為嘗試取得時間，台北時間 |
+| LM-48 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["not_yet_published"]` | 同上；`::date is latest available, not target date` | B2；dev 不得與「目標日期」混用 |
+| LM-49 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["failed_check"]` | 同上 | B2 |
+| LM-50 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["not_configured"]` | 同上 | B2 |
+| LM-51 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["missing_required_setting"]`（日後拆出的列舉值，名稱暫定） | 同上 | B2；現階段不啟用 |
+| LM-52 | 同上 | `MISSING_ITEM_SOURCE_TEMPLATES["unknown"]` | 同上；`::fallback never blank` | B2 |
+| LM-53 | `DecisionCard.tsx`；`decisionCardWording.ts` | `DECISION_CARD_COST_PNL_UNAVAILABLE` | `decisionCard.test.ts::held without cost renders unavailable row`；`::replaces whole row, no duplicate label` | B0 |
+| LM-54 | `frontend/app/position/[symbol]/KeyLevelsPanel.tsx:44-46` | `KEY_LEVELS_PANEL_DISCLAIMER`（值改變） | `componentWordingScan.test.ts:742-743` 改釘；`::renders together with transition notice` | B1；只能與 LM-60 同時渲染；Phase 4 面板消失則兩句皆不需要 |
+| LM-55 | `KeyLevelsPanel.tsx:273-275` | `buildFooterSample`（值改變） | `componentWordingScan.test.ts:777` 改釘 | B1 |
+| LM-56 | `backend/app/backtest/event_study.py:422-425` | `RESEARCH_USE_NOTICE`（值改變；暫定改名 `HISTORICAL_STATS_NOTICE`） | `test_event_study_wording.py:108`；`tests/golden/event_study/walk.json:40,112`；`walk__dividends_adjusted.json:42,114`；`eventStudy.test.ts:120` | B1；golden 變動經 qa 核對，不得只重新產生就提交 |
+| LM-57 | `work/stock-desk-產品說明.md:3` | 無（文件） | `positioningConsistency.test.ts`（只比對粗體主句與 LM-02 逐字相同） | B1 |
+| LM-58 | `work/stock-desk-產品說明.md:71` | 無（文件） | 掃描器 FT-19／FT-2：驗證白名單能比對到表格欄位內的引號字串（qa 驗證） | B1；與 LM-30 同步 |
+| LM-59 | `work/stock-desk-產品說明.md:531` | 無（文件） | 掃描器 FT-19 | B1 |
+| LM-60 | `KeyLevelsPanel.tsx` 面板頂部首層，不得放進 `<details>`，字級同面板頭部揭露 | `KEY_LEVELS_TRANSITION_NOTICE` | `componentWordingScan.test.ts::key levels panel carries transition notice while old formulas remain`；`::absent once Phase 4 panel replaces it` | B1（若新定位聲明早於 Phase 4）；Phase 4 隨面板移除 |
+| LM-61 | `DecisionCard.tsx` 首層停損參考／停利參考格旁，同字級 | `DECISION_CARD_TRANSITION_TAG` | `decisionCard.test.ts::stop and target cells carry transition tag while old formulas remain` | B1（舊公式存在期間必須有）；CEO 若認為違反 09-19 裁定，比照 X-1 書面裁示 |
+| LM-62 | `README.md:33` | 無（文件） | 掃描器 FT-19 | B1；條件核可：僅 CEO 選 X-1 選項 A；選 B 要重送。`apps/stock-desk/README.md:6` 照 LM-02 逐字，不另起草 |
+
+**dev-lead 排程提示（風控下一步第 3 點）**：B0 用 LM-16～20 與 LM-53；B1 要等 CEO 裁示 X-1、X-2 才能定 LM-29／30／31／62 與 LM-60、LM-61 的上線方式。
+
+**尚待重送**：TV-c（缺信賴區間、計數單位未定，隨 quant v0.2 與 2.16-B5）、N 組、G1、2.16(8)；{單位}、各基準名稱、{截止時間}、列舉值定案後送審。
