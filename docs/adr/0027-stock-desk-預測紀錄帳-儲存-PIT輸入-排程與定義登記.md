@@ -5,6 +5,7 @@
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：
   - ADR-0026 回報附件 B 的共同說明，以及下一步第 2 點〔事實：`work/reviews/2026-10-16-tech-architect-ADR-0026草案與R-106至R-116.md:55,589`〕；
   - coordinator 保留 0027 給本案〔事實：`work/reviews/2026-10-16-T1-01與T1-02-tech-architect評估.md:4`〕。
+- r1 修訂：2026-10-16，依 tech-architect 修訂提案 A-1～A-21
 - 適用範圍：僅 product/stock-desk 產品線。
 - 前提：純自用（ADR-0025 F-1）；單機、單一使用者（ADR-0026 F-1）。
 - 與既有 ADR 的關係：
@@ -223,6 +224,7 @@
 | `app/forecast/validation.py` | 驗證快照、四態、F-2 與 F-3 的顯示判定（只讀結算結果，不算報酬） |
 | `app/forecast/audit.py` | 缺日稽核 |
 | `app/forecast/display.py`（純函式） | 每個 claim 與 scope 的顯示決定（閘門、下架、暫停、逾時） |
+| `app/forecast/views.py`（r1，A-2） | 預測帳**唯一的對外讀取點**：讀 store 與 snapshot，呼叫 `display.py`，回傳 `OutlookView`。`app/api/forecast.py`、`app/api/outlook.py`、`app/api/advice.py`、`app/plan/**`、`app/alerts/**` 都只經過這裡讀 |
 | `app/outlook/inputs.py` | PIT 輸入：唯讀 `MarketPanelReader`；大盤擷取 |
 | `app/outlook/missing.py`（純函式） | `MissingItem`、`SourceStatus` |
 | `app/dividends/adjust.py::adjust_series_pit` | `AdjustedSeries`（R-108） |
@@ -261,8 +263,11 @@
 - `forecast_replay`：結構與 `forecast_record` 相同，另加 `freeze_commit`、`replay_session`。永遠不與前瞻紀錄合併。
 - `forecast_gaps(gap_id, session, claim_id, scope_key, reason, detected_at, run_id NULL, UNIQUE(session, claim_id, scope_key))`：`scope_key = '*'` 代表整個 claim。
 - `forecast_claim_registry`（D-10）、`forecast_validation_snapshot`（D-11）。
-- `forecast_ledger_events(event_id, kind ∈ {db_restored, f3_resume_approved}, payload_json, recorded_at)`。
+- `forecast_ledger_events(event_id, kind ∈ {db_restored, f3_resume_approved, pit_violation_confirmed}, payload_json, recorded_at)`：`pit_violation_confirmed` 的 payload 帶 `forecast_id` 與重算值（r1，A-8）。
 - `plan_record(plan_id, run_id, symbol, market, mode, position_action, reasons_json, levels_json, conditions_json, quantity_json, policy_version, created_at)`：含成本與股數，只存在本機。
+  - **新增欄位**（r1，A-12）：
+    - `outlook_display_state`（JSON，以 horizon 為鍵：`{claim_id, forecast_id|null, display_state, availability, unavailable_reason}`）；
+    - `outlook_condition_basis ∈ {evaluated, unavailable}`。
 - `plan_outcome`：表與只增不改的規則由本 ADR 固定；欄位定義另案處理（quant §6.5，見待決）。
 
 ### D-4 PIT 輸入（R-107）
@@ -276,7 +281,7 @@
 6. **ADR-0012 C-7 的解釋性註記**（CEO 知悉，不修訂）：
    - C-7 所說的「持倉資料鏈」，指請求觸發、逐代號的鏈：`load_bars → price_bars_cache → 估值`。
    - 展望鏈是另一條（排程，加上專用的 on-demand 端點），而且反向也不得讀 `price_bars_cache` 的個股 bars。
-   - `/api/advice` 只讀預測帳。
+   - `/api/advice` 與 plan 只經 `app.forecast.views` 讀取預測帳，不得 import `app.forecast.store`（r1，A-3）。
 
 ### D-5 還原序列與 ATR（R-108、R-109）
 1. `AdjustedSeries`（frozen，不是 `PriceBar` 的子類）只能由 `adjust_series_pit(bars, events, anchor=T)` 產生，只套用除權息日 ≤ T 的事件。
@@ -303,7 +308,7 @@
    - 平日 22:10 執行，23:10 重試，啟動時補跑（啟動後 3 分鐘）；
    - `max_instances=1`、`coalesce=True`、`misfire_grace_time` 30 分鐘；
    - trigger 明定 `timezone="Asia/Taipei"`（因為 scheduler 預設是 UTC，`scheduler.py:618`）。
-2. **執行順序**：記錄 → 結算 → 缺日稽核 → 驗證快照。
+2. **執行順序**：記錄 → 結算 → 缺日稽核 → 驗證快照 → plan（政策表）。T 的 plan 一律使用 `computed_for_session = T` 的 daily snapshot，也就是 T+1 開盤前畫面上用的同一份（r1，A-4）。
 3. **決策日 T**：市場 DB 中最新一個有 ok bars run 的 session，而且大盤 T 日 bar 已經存在。
 4. **逾時判定**：
    - `late_cutoff_at` ＝ `SessionCalendar.next_session(T)` 當日的 VS-6（08:30 Asia/Taipei），寫入時計算並存下，之後不重算。
@@ -320,6 +325,10 @@
 8. **on-demand**：
    - 個股在排程範圍內、而且 T 日排程紀錄已存在時，直接回傳既有紀錄，不寫入。
    - 否則寫一筆 `trigger=on_demand`，`late` 為 NULL，不計入主統計，畫面要標示「不計入主統計」（PA-4）。
+   - on-demand 紀錄使用者看得到，有兩個地方（r1，A-13）：
+     - `POST /api/outlook/symbols/{symbol}` 的回應（附 PA-4 標示）；
+     - `GET /api/forecast/records`（帶 `trigger=on_demand`）。
+   - 兩處都經過 D-11.4 第 5 點的閘門：所屬 claim 為 `withdrawn_f2`、`suspended_f3`、`gated` 時，不出現 label。
 9. 主機常駐由 devops-sre 負責；API 永遠不執行排程預測。
 
 ### D-8 缺日（R-112；字面用 TG-b）
@@ -349,7 +358,10 @@
 3. **結算窗**：觀察交易日 T+1～T+h 的日線，報酬自 T 收盤起算。作廢原因（`status_reason`）：
    - `missing_bar_after_wait`：T+h 無 bar，再等 5 個觀察日仍無 → `unresolvable_missing_data`
    - `basket_coverage_below_90`：族群籃子排除停牌或因子不可用的成員後，覆蓋 < 90% → `unresolvable_missing_data`
-   - `split_or_reduction_suspected`：窗內單日報酬超過漲跌幅限制加容差（推定，不是確認的事件） → `excluded_corporate_action`
+     - 覆蓋率以 T 日籃子的成員數計。因為 T 日等權建倉，這等同 T 日權重；不得用 T+h 漂移後的權重或市值權重（r1，A-11）。
+   - `split_or_reduction_suspected`：結算窗內任一日，以套用可用除權息因子後的序列計算，單日簡單報酬的絕對值大於 `SPLIT_SUSPECT_ABS_RETURN`（台股一般漲跌幅限制 10% 加容差 1%，凍結在 dirdef）（推定，不是確認的事件） → `excluded_corporate_action`（r1，A-11）
+     - 這是固定門檻，不看該標的當天實際有沒有漲跌幅限制。
+     - dirdef 自己持有這個常數，不 import `sectors.definition.UniverseRules`。
    - `dividend_factor_unusable`：窗內有除權息，但因子算不出來（**含配股**，`models.py:50-62`） → `excluded_corporate_action`
 4. **失效條件觸發不作廢**（PA-7）；只記 `invalidation_triggered`，照常結算、照常計分。
 5. **更正**：
@@ -375,24 +387,61 @@
 
 ### D-11 驗證狀態、主統計與顯示
 1. **主統計的資格集合 E**：
-   - `trigger=scheduled`、`late=0`、`supersedes_id IS NULL`、claim 為 forward、日期 ≥ D_v，而且不是已確認的 PIT 違規列。
+   - `trigger=scheduled`、`late=0`、`supersedes_id IS NULL`、claim 為 forward、日期 ≥ D_v，而且不是已確認的 PIT 違規列（各項的取列規則見下三點，r1，A-7）。
+   - E 的 `supersedes_id IS NULL` 指的是 `forecast_record`（預測端只用原始列）。
+   - 結算端取更正鏈的最後一筆，條件是 `NOT EXISTS (SELECT 1 FROM forecast_outcome o2 WHERE o2.supersedes_id = o.outcome_id)`，**不是** `forecast_outcome.supersedes_id IS NULL`。
+   - 「已確認的 PIT 違規列」是指在 `forecast_ledger_events` 有 `kind = pit_violation_confirmed` 事件的 `forecast_id`。
    - quant §4.1 的不重疊 n、重疊的次要統計、涵蓋率，**一律只在 E 上計算**。
    - 作廢列不計入 n，但計入最壞情境 W。
    - 逾時與 on-demand 的紀錄另外列出筆數。
 2. **`forecast_validation_snapshot`**：
-   - 欄位：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seed`、`code_commit`、`computed_at`；
+   - 欄位（r1，A-5）：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seeds_json`、`rng_name`、`numpy_version`、`display_reasons_json`、`withdrawn_at_n`、`code_commit`、`computed_at`；
    - `UNIQUE(claim_id, computed_for_session, eval_kind)`；
-   - `bootstrap_seed` 由 `(claim_id, session)` 確定性導出（風控第 3 項）。
+   - `bootstrap_seeds_json`：鍵為 `"{purpose}|{block_len}"`，值為 seed。
+   - **seed 導出式**：`int.from_bytes(sha256(f"{claim_id}|{eval_key}|{purpose}|{block_len}".encode("utf-8")).digest()[:8], "big")`。
+     - `claim_id` 取 registry 中的原字串；
+     - `eval_key` 前瞻用 ISO 日期 `YYYY-MM-DD`，重放用 `freeze_commit`；
+     - `block_len` 寫成十進位整數。
+   - **`eval_kind` 刻意不放進導出式**：同一個 session 的 daily 列與 checkpoint 列用同一組 seed，checkpoint 不能換一組亂數重抽。
+   - 來源資料更正後 supersede 的列，沿用原 seed。
+   - **`purpose` 為封閉列舉**，連同「purpose → 允許的 block_len」對照表凍結在 dirdef，屬於 `definition_logic_sha256` 的範圍。建議值如下，由 quant 在 v0.5 確認：
+     - `neff`：block_len ＝ h；
+     - `best_diff`、`paired_c`、`paired_c_w`：block_len ∈ {2, 4, 8}；
+     - 開盤基準若有用到 bootstrap，再加 `*_open`。
+   - snapshot 寫入時，鍵不在對照表內就拒絕寫入。
 3. **升降規則**：只有 `checkpoint` 列可以把狀態升為 `better_than_baseline`；`daily` 列只能維持或降級。
 4. **顯示閘門**（`display.py`）：
    - 族群 n<150 時，任何對外回應都不出現 bullish／bearish（PA-9、LG-15）；
    - 逾時紀錄不當作當日展望（PA-6）；
    - F-2 下架、F-3 暫停時同樣不出現；
    - CEO #10 的結果作為參數注入。
+   - 以下編號 5～12 接續上列原四點，為 r1 新增（A-6）：
+   - 5. **單一閘門**：任何顯示面、plan、policy、提醒要取得展望，都只能呼叫 `views.outlook_view(claim_id, scope_key, T, consumer)`，回傳 `OutlookView{forecast_id, display_state, availability ∈ {evaluated, unavailable}, unavailable_reason, label}`。`label` 非 None，若且唯若 `availability = evaluated`。
+   - 6. **`unavailable` 的原因**（封閉列舉，依下列優先序取第一個）：`suspended_f3` → `withdrawn_f2` → `gated` → `before_dv` → `no_scheduled_record` → `late` → `insufficient` → `voided`。
+     - 同一個 T 的 plan 讀不到 `voided`，這個值只是縱深防禦。
+     - policy 只吃 `trigger=scheduled`、`late=0`、同一個 T 的原始紀錄。on-demand 紀錄對 policy 一律是 `no_scheduled_record`（風控待確認）。
+   - 7. **不能顯示，就不能引用**（風控 §9.2 底線 1～5）：
+     - policy 遇到 `unavailable` 的處理，必須在 D_v 前登記進政策表 v0，使用 `Condition.status = "unavailable"`；
+     - 結果不得依賴底層標籤；
+     - `reasons` 只能寫狀態，不能寫方向；
+     - 下架或暫停時，`pending_triggers` 不得把展望條件列成「等待中」。
+   - 8. **引用範圍**：v0 只引用同一檔個股的 `symbol|h5` claim（對齊 v0.5 V5-08）。改用其他範圍要升 `policy_version`。
+   - 9. **依顯示面判定可用性**（v0.5 V5-09，待風控）：若採用，最嚴格的顯示面以常數登記在政策表，作為 `consumer` 參數傳入，由 `display.py` 判定，plan 端不得自行判斷。
+   - 10. `PositionPlan.outlook_refs` 只在 `evaluated` 時填 `forecast_id`，其餘情況為 None。
+   - 11. **`GET /api/forecast/records` 同樣經過本閘門**：
+     - `withdrawn_f2`、`suspended_f3` 期間，尚未結算的紀錄不出現 label；
+     - `gated` 的族群，不論是否已結算，都不出現 bullish／bearish（PA-9）；
+     - 這一點是我補的，風控待確認。
+   - 12. **display_state 單值優先序**：`suspended_f3` > `withdrawn_f2` > `gated` > `shown`。F-3 恢復後，若 F-2 仍在下架，就顯示下架（風控待確認）。
 5. **開盤基準 fail-closed**（風控第 4 項）：開盤基準算不出來，或開盤欄位口徑未查證時，顯示面預設附上隔夜跳空的直白句。
 6. **F-3**（M-11）：
-   - 上限依 quant 登記：逾時率 >10%、digest 不一致率 >2%、PIT 違規 ≥1 筆；
+   - 上限依 quant 登記：逾時率 >10%（定義見下一點，r1，A-8）、digest 不一致率 >2%、PIT 違規 ≥1 筆；
+   - **逾時率**（r1，A-8）＝每個 claim 在最近 60 個觀察交易日（D-8.1 的定義，含 `computed_for_session`）內，排程紀錄中 `late=1` 的比例。
+     - 缺日不進分母（缺日由失效條件 F-3 管）。
+     - 不足 60 日時怎麼算，由 quant 在 v0.5 登記。
    - digest 的分母是 min(250, 已結算筆數)；
+   - **PIT 違規的偵測**（r1，A-8）：結算時，或稽核作業依 `input_digest` 涵蓋的列重算 `inputs_max_recorded_at`。若結果大於 `cutoff(T)`，就寫一筆 `pit_violation_confirmed` 事件。
+   - **暫停原因**（r1，A-8；封閉列舉，可同時多值，固定排序）：`pit_violation`、`digest_mismatch`、`late_rate`，寫進 `display_reasons_json`。
    - 觸發後 `suspended_f3`；恢復顯示須有 quant 與 data-engineer 的根因文件，經 qa 審查，寫入 `f3_resume_approved` 事件；
    - PIT 違規列移出 E；這些列若曾參與「優於基準」的判定，該判定當日撤銷，到下一個檢查點重判；
    - 數值在 D_v 前凍結。
@@ -411,6 +460,15 @@
 - (v) 作廢率 >5% 時，判定取一般情境與 W 之中比較差的那個（底線 3）。
 - (vi) 不得用放寬 §4.3 或 α\* 的方式改變下架結果（底線 4；那屬於 C-3）。
 - (vii) C-8 必須在 D_v 前定案。之後只能往更嚴的方向改，而且要升版、留紀錄（底線 7）。
+
+**下架原因列舉值（r1 新增，A-9；接在共同部分之後）**
+- `withdraw_reason`（單值，封閉列舉，依優先序）：
+  - `f2_invalid_stop`：一般情境下條件一成立；
+  - `f2_deadline`：條件二成立；
+  - `f2_invalid_stop_worst_case`：條件一只在 W 情境下成立（作廢率 > 5%）。
+- 寫進 snapshot 的 `display_reasons_json`，並同時記錄 `withdrawn_at_n`。
+- 條件一必須讀兩個檢查點的 `eval_kind=checkpoint` 列在 `stats_json` 中的同一份計算（一般情境與 W 情境各存一份），不得另外計算一次。
+- CEO 若選 F2-A，列舉值在 C-8 決策時另外定，片段要重寫。
 
 **主方案 F2-B（B 型無效停止規則，風控建議，我同意）**
 - 下架條件一（無效停止）：自 N_MIN 起，**任兩個相鄰檢查點**（滾動計算：30 與 60、60 與 100……）的模型點估計，在共同子集上都 ≤ 任一必備基準，就下架（底線 1）。
@@ -479,13 +537,25 @@ class MissingItem(BaseModel):              # frozen
 - G-6：`app/forecast/**` 的 PR 通過 qa-reviewer 與 Codex。
 - G-7：on-demand 不受 G-6 以外的限制，但同樣不計入主統計。
 
-D_v ＝該 claim 第一筆 E 紀錄的 T。
+D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NULL`、kind＝forward 的 `forecast_record` 的 T（r1，A-10）。
+- 不排除 PIT 違規，也不看 label。
+- 用查詢導出，一經出現就不會移動：之後的 PIT 違規確認、更正、補跑都不改變 D_v；§4.1 的不重疊格點以它為第 0 相位。
+- 因為只增不改，而且 late=0 的紀錄必定早於下一個 session 的紀錄，所以這個最小值是穩定的〔推論〕。
 
 ### D-15 政策表與行動紀錄（風控第 12 項、R-6 第 3 點）
-- 政策表 v0（ADR-0025 D-4.3）的任何條件，都不得引用 `avg_cost`、`cost`、`cost_anchor`、`pnl_vs_cost`、`unrealized_pnl_pct`，由 loader 守門。
-- advice 規則中，方向為 reduce、stop_loss、take_profit 的規則，條件也不得引用 `position.unrealized_pnl_pct`。
-- 政策表以 `policy_version` v0 凍結；上線後揭露實際觸發頻率，沒有升版不得調整。
-- `plan_record` 每個 T 每檔一筆，由同一次排程寫入，只增不改。
+1. **成本禁用範圍**（r1，A-1；對齊事先宣告 v0.4 V4-03／LG-16）：以下兩類規則的任何條件樹，不論 action 為何，`field` 與 `ref` 都不得引用持倉成本，或由成本導出的欄位。
+   - (a) 經 `app/advice/loader.py::load_rules(path)` 載入的全部 advice 規則 YAML（任何路徑；之後新增的檔案自動納入）；
+   - (b) 政策表 v0（`app/plan/policy.yaml`）與之後的各版。
+2. **禁用集合只有一個來源**：
+   - `app/advice/context.py` 新增 `COST_DERIVED_FIELDS: frozenset[str]`，v1 內容為 `{"position.unrealized_pnl_pct"}`；
+   - 同一個檔再定義 `POLICY_FORBIDDEN_FIELDS = COST_DERIVED_FIELDS | {"avg_cost", "cost", "cost_anchor", "pnl_vs_cost"}`；
+   - ADR-0021 K-1 的 `ADVICE_RULE_FIELDS` 不修改，成本禁用是另一道獨立的檢查。
+3. **守門位置**：寫在 `RuleSet` 的 model validator，與 ADR-0021 K-3 的 `_fields_are_evaluable` 同一層。`load_rules(path)` 經 `RuleSet.model_validate` 必定會跑到它；直接呼叫 `model_validate` 也一樣被擋。錯誤訊息沿用 `<檔名>：規則 <id> 的 condition -- …`，並寫明依據 ADR-0027 D-15。政策表的 loader 用相同的形狀。
+4. `build_context` 若新增任何由成本導出的欄位，必須同時加入 `COST_DERIVED_FIELDS`（由 FL-41b 擋）。
+5. `app.outlook.*` 不可達 `app.positions.*`、`app.portfolio.*`、`app.advice.context`（展望規則在結構上就沒有成本可以讀）。
+6. 原第 3、4 點保留：
+   - 政策表以 `policy_version` v0 凍結；上線後揭露實際觸發頻率，沒有升版不得調整。
+   - `plan_record` 每個 T 每檔一筆，由同一次排程寫入，只增不改。
 
 ---
 
@@ -543,6 +613,7 @@ D_v ＝該 claim 第一筆 E 紀錄的 T。
 - **FL-22**：`status_reason` 屬於 D-9.3 的四值封閉列舉，而且與 `status` 的對應固定（表格驅動測試）。
 - **FL-23**：更正作業涵蓋所有結算窗與受影響日期有交集的列，不多不少。
 - **FL-24**：預測端計分永遠使用原始列。
+- **FL-50**（r1，A-11）：用表格驅動測試釘住 D-9.3 的兩點（`split_or_reduction_suspected` 的固定門檻、`basket_coverage_below_90` 以 T 日成員數計）。
 
 **銜接**
 - **FL-25**：plan 組合價位與估值時，市場 DB 的原始收盤[T] 必須等於估值所用的價格與日期；不一致時，價位缺席，附 `MissingItem(code="E-PRICE-UNUSABLE", source_status="failed_check")`。
@@ -552,6 +623,10 @@ D_v ＝該 claim 第一筆 E 紀錄的 T。
 - **FL-27**：寫入紀錄時，logic 雜湊必須等於所屬 claim 的雜湊。
 - **FL-28**：m 只增不減；`forecast_validation_snapshot.alpha_star` 等於 0.05÷(max(`m_at_eval`, 8)×K)。
 - **FL-29**：只有 `eval_kind=checkpoint` 的列可以使狀態升為 `better_than_baseline`。
+- **FL-47**（r1，A-5）：`bootstrap_seeds_json` 的鍵 ⊆ 對照表；每個值等於導出式的結果（即 LG-20）。
+- **FL-48**（r1，A-10）：補跑的 late 紀錄、首筆紀錄後來被確認為 PIT 違規，這兩種 fixture 下 D_v 都不變。
+- **FL-49**（r1，A-7）：用表格驅動測試釘住 E 的兩端各自的取列規則（預測端 `forecast_record`、結算端更正鏈的最後一筆）。
+- **FL-51**（r1，A-8）：E 排除有 `pit_violation_confirmed` 事件的 `forecast_id`；每個暫停原因都對應到已核可的片段（LM-77 重送後、LM-78、LM-83）。
 
 **F-2（對應 D-12；逐條對應風控底線）**
 - **FL-30**（底線 1）：下架條件的實作與「相鄰兩檢查點的點估計都 ≤ 任一必備基準」等價（表格驅動測試）；程式中不得出現以區間上緣判斷下架的路徑（code review 加測試）。
@@ -562,15 +637,27 @@ D_v ＝該 claim 第一筆 E 紀錄的 T。
 - **FL-35**（底線 6）：重新上架只發生在 `checkpoint` 列，而且 §4.3 全部成立。
 - **FL-36**（底線 4）：§4.3 與 α\* 的常數屬於 `definition_logic_sha256` 的範圍，任何修改都會產生新定義。
 - **FL-37**（底線 7）：C-8 的選擇以常數登記在 dirdef 內，D_v 之後只能往更嚴的方向改，而且要升版。
+- **FL-45**（r1，A-9）：每個下架原因都對應到已核可的片段：LM-75、LM-74，以及新片段（待起草）。
+- **FL-46**（r1，A-9）：只有一個函式讀 checkpoint 列來判定條件一（grep 加測試）。
 
 **閘門與缺項**
 - **FL-38**：recorder 在 G-3、G-4 不成立時拒絕寫入排程紀錄（單元測試）；G-1、G-2、G-5、G-6 由 qa 在 PR 描述中核對 CEO 決策紀錄與上線證據。
 - **FL-39**：`MissingItem` 的不變式以 model validator 強制；`SourceStatus` 的每個值都有字面（`outlookWording.test.ts::every reason enum has a template`）。
-- **FL-40**：政策表 loader 遇到引用 D-15 所列欄位的條件就拒絕（表格驅動測試）。
-- **FL-41**：advice 規則中 reduce、stop_loss、take_profit 方向的規則不引用 `unrealized_pnl_pct`（掃描 `default.yaml` 的測試）。
+- **FL-40**（r1 改，A-1）：政策表 loader 遇到 `POLICY_FORBIDDEN_FIELDS` 的任一欄位就拒絕（表格驅動：每個欄位 × 每個條件類別）。
+- **FL-41**（r1 改，A-1）：
+  - (a) 在暫存目錄放任意檔名的 YAML，經 `load_rules(path)` 載入時，五種 action × `COST_DERIVED_FIELDS` 的每個欄位，不論出現在 `field`、`ref` 或巢狀的 all／any 裡，都會被拒；
+  - (b) 直接呼叫 `RuleSet.model_validate`，同樣被拒；
+  - (c) 現行 `default.yaml` 可以通過。
+- **FL-41b**（r1 新，A-1）：成本不變性。同一組 bars 與部位，只改 `position_cost_twd`，`build_context` 輸出中有差異的鍵必須 ⊆ `COST_DERIVED_FIELDS`。
+- **FL-41c**（r1 新，A-1）：D-15 第 5 點的 import graph 檢查。
+- **FL-42**（r1 新，A-6）：
+  - `forecast_record.label` 這個欄位，只有 `app/forecast/{views, display, scoring, validation}.py` 會讀（AST 檢查）；
+  - `app.plan.*`、`app.advice.*`、`app.alerts.*`、`app.api.*` 在 `app.forecast` 底下只可達 `views` 與型別模組（import graph）。
+- **FL-43**（r1 新，A-6）：標籤不變性（即 LG-22）。在每一種 unavailable 原因下，於 store 層把標籤在 bullish、range、bearish 之間互換，以下輸出都必須逐位相同：`position_action`、`reasons`、`pending_triggers`、各項 conditions、「最需要處理」的排序、提醒 payload、`plan_record` 中會顯示的欄位，以及 API 回應。
+- **FL-44**（r1 新，A-6）：`plan_record.outlook_display_state` 一定非空；`availability = evaluated`，若且唯若 `display_state = shown`，而且那筆紀錄符合 D-11.4 第 6 點的條件。
 
 ## 測試要求
-- **FLT-1**：quant 附錄 C 的 LA-1～LA-7、LG-1～LG-15 全部採用。LG-8 的臨界點依 M-1。
+- **FLT-1**：quant 附錄 C 的 LA-1～LA-7、LG-1～LG-15 全部採用。LG-8 的臨界點依 M-1。另加 LG-16（新範圍）、LG-20、LG-22（r1，A-14）。
 - **FLT-2**：上述每一條 FL 至少有一個測試或 grep 檢查。
 - **FLT-3**：颱風假 fixture：
   - `late_cutoff_basis=weekday_assumed` 時，截止線提早，紀錄判為 late；
@@ -609,6 +696,11 @@ D_v ＝該 claim 第一筆 E 紀錄的 T。
 - 在凍結版 dirdef 中列出：文字欄位的排除清單、M-3 的常數、C-8 的選擇、F-3 上限。
 - 修正 v0.2 對解讀 A 的歸因（風控第 6 項第 1 點）。
 - `plan_outcome` 的欄位定義另案提出。
+- （r1 新增，A-15）：
+  - `purpose` 對照表；
+  - 逾時率不足 60 日時的算法；
+  - 族群成員疑似分割的處理（排除該成員，或整筆作廢；若選排除，LM-65 的括號要重送）；
+  - 作廢原因的判定順序（建議依序 `missing_bar_after_wait` → `dividend_factor_unusable` → `split_or_reduction_suspected` → `basket_coverage_below_90`）。
 
 **data-engineer**：VS-6；市場 DB 能否提供逐標的的取得失敗證據（`fetch_failed` 的判定依賴它）；分割、減資的事件來源。
 
@@ -621,3 +713,106 @@ D_v ＝該 claim 第一筆 E 紀錄的 T。
 - `panel.py`、`market_panel.py` 的可見性細節與大部分行號，轉引自 R-107，這次沒有重讀。
 - 08:30 盤前委託、SQLite 部分唯一索引的行為、每年 220 MB 的量級，都是推論。
 - 「在 n＝150 時多數 claim 會退出」是由 quant 的合成表換算，不代表台股的實際情況。
+
+---
+
+## 修訂紀錄
+
+> r1（2026-10-16）依 tech-architect 修訂提案 A-1～A-21 套用；本 ADR 適用 A-1～A-15，A-16～A-21 見 ADR-0028。
+> 提案來源：`work/reviews/2026-10-16-ADR-0027與0028修訂提案A1至A21-tech-architect.md` 附件 A。
+> 被改寫或取代的原文逐字保留於下；「新增」類條目沒有被取代的原文。引用區塊內的文字即 r1 之前的原文。
+> 原文中的「D-15」「FL-xx」等編號指 r1 之前的原條文。
+
+**A-1（D-15、FL-40、FL-41、FL-41b、FL-41c）**
+- r1（2026-10-16，tech-architect A-1）：D-15 原第 1 點——
+  > - 政策表 v0（ADR-0025 D-4.3）的任何條件，都不得引用 `avg_cost`、`cost`、`cost_anchor`、`pnl_vs_cost`、`unrealized_pnl_pct`，由 loader 守門。
+
+  改為見 §D-15 第 1～5 點。
+- r1（2026-10-16，tech-architect A-1）：D-15 原第 2 點——
+  > - advice 規則中，方向為 reduce、stop_loss、take_profit 的規則，條件也不得引用 `position.unrealized_pnl_pct`。
+
+  改為見 §D-15 第 1～3 點。原第 3、4 點保留，現為 §D-15 第 6 點。
+- r1（2026-10-16，tech-architect A-1）：FL-40 原文——
+  > - **FL-40**：政策表 loader 遇到引用 D-15 所列欄位的條件就拒絕（表格驅動測試）。
+
+  改為見 §對實作的約束 FL-40。
+- r1（2026-10-16，tech-architect A-1）：FL-41 原文——
+  > - **FL-41**：advice 規則中 reduce、stop_loss、take_profit 方向的規則不引用 `unrealized_pnl_pct`（掃描 `default.yaml` 的測試）。
+
+  改為見 §對實作的約束 FL-41（提案註明：原本「掃描 `default.yaml`」的寫法作廢）。
+- r1（2026-10-16，tech-architect A-1）：FL-41b、FL-41c 為新增，無被取代原文；見 §對實作的約束。
+
+**A-2（D-1 模組表）**
+- r1（2026-10-16，tech-architect A-2）：新增一列 `app/forecast/views.py`，無被取代原文；見 §D-1。
+
+**A-3（D-4.6 第三點）**
+- r1（2026-10-16，tech-architect A-3）：原文——
+  > - `/api/advice` 只讀預測帳。
+
+  改為見 §D-4 第 6 點第三個子項。
+
+**A-4（D-7.2）**
+- r1（2026-10-16，tech-architect A-4）：原文——
+  > 2. **執行順序**：記錄 → 結算 → 缺日稽核 → 驗證快照。
+
+  改為見 §D-7 第 2 點。
+
+**A-5（D-11.2、FL-47）**
+- r1（2026-10-16，tech-architect A-5）：D-11.2 原文（欄位與 seed 兩處）——
+  > - 欄位：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seed`、`code_commit`、`computed_at`；
+  > - `UNIQUE(claim_id, computed_for_session, eval_kind)`；
+  > - `bootstrap_seed` 由 `(claim_id, session)` 確定性導出（風控第 3 項）。
+
+  改為見 §D-11 第 2 點。
+- r1（2026-10-16，tech-architect A-5）：FL-47 為新增，無被取代原文；見 §對實作的約束。
+
+**A-6（D-11.4、FL-42～FL-44）**
+- r1（2026-10-16，tech-architect A-6）：D-11.4 原四點保留不變，第 5～12 點為新增，FL-42～FL-44 為新增，皆無被取代原文；見 §D-11 第 4 點。
+
+**A-7（D-11.1、FL-49）**
+- r1（2026-10-16，tech-architect A-7）：D-11.1 原文——
+  > - `trigger=scheduled`、`late=0`、`supersedes_id IS NULL`、claim 為 forward、日期 ≥ D_v，而且不是已確認的 PIT 違規列。
+
+  改為見 §D-11 第 1 點。
+- r1（2026-10-16，tech-architect A-7）：FL-49 為新增，無被取代原文；見 §對實作的約束。
+
+**A-8（D-11.6 F-3、D-3 `forecast_ledger_events`、FL-51）**
+- r1（2026-10-16，tech-architect A-8）：D-11.6 原文——
+  > - 上限依 quant 登記：逾時率 >10%、digest 不一致率 >2%、PIT 違規 ≥1 筆；
+
+  改為見 §D-11 第 6 點（逾時率時間窗、PIT 違規偵測、暫停原因為新增；digest 不一致率與恢復顯示條件維持原文）。
+- r1（2026-10-16，tech-architect A-8）：D-3 原文——
+  > - `forecast_ledger_events(event_id, kind ∈ {db_restored, f3_resume_approved}, payload_json, recorded_at)`。
+
+  改為見 §D-3 `forecast_ledger_events`。
+- r1（2026-10-16，tech-architect A-8）：FL-51 為新增，無被取代原文；見 §對實作的約束。
+
+**A-9（D-12 下架原因列舉值、FL-45、FL-46）**
+- r1（2026-10-16，tech-architect A-9）：新增一段，無被取代原文；見 §D-12「下架原因列舉值」。FL-45、FL-46 為新增。
+
+**A-10（D-14 末句、FL-48）**
+- r1（2026-10-16，tech-architect A-10）：原文（提案註記其為循環定義）——
+  > D_v ＝該 claim 第一筆 E 紀錄的 T。
+
+  改為見 §D-14 末句。
+- r1（2026-10-16，tech-architect A-10）：FL-48 為新增，無被取代原文；見 §對實作的約束。
+
+**A-11（D-9.3、FL-50）**
+- r1（2026-10-16，tech-architect A-11）：D-9.3 原文——
+  > - `split_or_reduction_suspected`：窗內單日報酬超過漲跌幅限制加容差（推定，不是確認的事件） → `excluded_corporate_action`
+
+  改為見 §D-9 第 3 點。
+- r1（2026-10-16，tech-architect A-11）：`basket_coverage_below_90` 補一句，無被取代原文；見 §D-9 第 3 點。
+- r1（2026-10-16，tech-architect A-11）：FL-50 為新增，無被取代原文；見 §對實作的約束。
+
+**A-12（D-3 `plan_record`）**
+- r1（2026-10-16，tech-architect A-12）：新增欄位，無被取代原文；見 §D-3 `plan_record`。
+
+**A-13（D-7.8 on-demand）**
+- r1（2026-10-16，tech-architect A-13）：補一句，無被取代原文；見 §D-7 第 8 點。
+
+**A-14（FLT-1）**
+- r1（2026-10-16，tech-architect A-14）：加上 LG-16（新範圍）、LG-20、LG-22，無被取代原文；見 §測試要求 FLT-1。
+
+**A-15（待決事項 quant 段）**
+- r1（2026-10-16，tech-architect A-15）：新增四項，無被取代原文；見 §待決事項 quant。

@@ -3,6 +3,7 @@
 - 狀態：proposed
 - 日期：2026-10-16
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：T1-01／T1-02 評估附件 B-8；coordinator 分配編號〔事實：`work/reviews/2026-10-16-T1-01與T1-02-tech-architect評估.md:4,320-335`〕。
+- r1 修訂：2026-10-16，依 tech-architect 修訂提案 A-1～A-21
 - 適用範圍：僅 product/stock-desk。
 - 與既有 ADR 的關係：
   - 不取代任何 ADR。
@@ -61,7 +62,7 @@
 | 方案 | 優點 | 缺點 | 風險 |
 |---|---|---|---|
 | O1 沿用 LM-24、LM-27，同區塊加 LM-26 | 不必新字面 | 平日若其實休市，「交易時段內」「今日收盤資料尚未取得」是錯的 | 事實不精確 |
-| **O2 新狀態字面「今日是否開市未能確認，顯示 {P} 收盤價」（意思；逐字由 creative-lead 起草）（建議）** | 不宣稱開市，也不宣稱休市 | 多一句字面；美股永遠走這條 | 低 |
+| **O2 新狀態字面「今日是否開市未能確認，顯示 {P} 收盤價」（意思；逐字由 creative-lead 起草）（建議）**<br>（r1，A-20）台股用 O2-b（LM-71）、美股用 O2-c（LM-72）；O1 不核可（風控第三批） | 不宣稱開市，也不宣稱休市 | 多一句字面；美股永遠走這條 | 低 |
 
 ## Decision（決策）
 
@@ -119,18 +120,27 @@
 - **book 層級**：`calendar_basis` 只要有一列不是 official，就標 observed。前端據此常駐 LM-26（AC-B5a-5）。
 - **推算模式下的平日**：`basis_for(D) == weekday_assumed` 時，`is_session(D)` 依週一至週五規則為真，所以平日永遠不會走到 R5。這就是風控的底線，以 CS-9 釘住。
 - **AC-B5a-6**：依 `change_mode == "close_only"` 決定是否顯示（沿用 B-5）。
+- **補充**（r1，A-19）：`date_anomaly` 與 `provisional_today` 不改變估值，也不改變總額（CS-2、CS-4）。
+  - `build_summary` 另外輸出 book 層的 `valuation_state_counts: dict[state, int]`，供總額區塊做同區塊揭露（PT-b 的條件；`date_anomaly` 的總額揭露字面由 PM 與 creative-lead 另案處理）。
 
 ### D-5 字面對應（前端對應表；字面一律由 creative-lead 起草、風控核可）
 
-| 狀態／條件 | 字面 |
-|---|---|
-| `close` | LM-23 |
-| `pre_open` | 建議沿用 LM-23「{MM/DD} 收盤價」，以 P 代入，待 PM Q-B1 與風控單項確認；否則另起草新字面。**不得用 LM-27** |
-| `prior_close_reference`／`in_session`，`basis = official` | LM-27 |
-| `prior_close_reference`／`after_close_pending`，`basis = official` | LM-24 |
-| R4b、R4c，`basis = weekday_assumed` | O1 或 O2（風控裁示；建議 O2） |
-| `market_closed` | LM-25；推算模式下同區塊加 LM-26 |
-| `lagging`、`provisional_today`、`date_anomaly` | 新字面（Q-B2）；`lagging` 不得用「前一收盤」 |
+（r1，A-16：整表取代）
+
+| 狀態／條件 | 市場 | 字面 |
+|---|---|---|
+| `close` | TW、US | LM-23 |
+| `pre_open` | TW、US | LM-23（日期代 P）＋LM-28；**不得用 LM-27** |
+| R4b `in_session`，basis＝official | TW | LM-27 |
+| R4c `after_close_pending`，basis＝official | TW | LM-24 |
+| R4b／R4c，basis＝weekday_assumed | TW | LM-71（O2-b），與 LM-26 同區塊 |
+| R4b／R4c，basis＝observed | TW | 暫時比照 LM-71＋LM-26，待風控單項確認。我的建議：observed 是正面證據，可以比照 official 用 LM-27／LM-24 |
+| R4b／R4c，任何 basis | US | LM-72（O2-c），與 LM-26 同區塊 |
+| `market_closed` | TW、US | LM-25；basis ≠ official 時，同區塊加 LM-26 |
+| `lagging` | TW、US | LM-67；k 為 null 時用 LM-68 |
+| `provisional_today` | TW、US | LM-69 |
+| `date_anomaly` | TW、US | LM-70，價格照常顯示（見 D-4 補充，r1 A-19） |
+| `not_applicable` | — | 不輸出估值狀態字面，現行顯示不變 |
 
 對應表必須窮舉。任何狀態組合沒有核可字面，T1-17 就不得合併。
 
@@ -140,6 +150,7 @@
 3. 官方日曆判定休市時，freshness 仍只看週一至週五，可能同時出現「休市」標籤與「可能未含最近交易日」徽章。不修訂 ADR-0009（Q-B6）。
 4. 台股是否有週六補行交易日，未查證〔推論〕。推算模式會把週六判為休市；若真有補行，隔天觀察到 bar 後會自動修正。
 5. 美股沒有官方休市日來源，永遠走推算模式（Q-B4）。
+6. （r1，A-21）美股的 D 是美國當地日期，所以美股字面一律不得含「今日」（LM-72 沒有含）。
 
 ### D-7 與 ADR-0027 的日曆分工
 
@@ -176,10 +187,12 @@
 - **CS-8**：`TradingCalendar` 的既有語意不變（playbook 的測試維持綠燈）。
 - **CS-9**：`basis_for(D) == weekday_assumed` 而且 D 是平日時，不得輸出 `market_closed`（性質測試）。
 - **CS-10**：`pre_open` 永遠不對應到 LM-27（前端對應表測試）。
-- **CS-11**：字面對應表窮舉所有（state, sub_reason, session_basis）組合（`every state has a template`）。
-- **CS-12**：`basis = weekday_assumed` 的 R4b、R4c，不渲染 LM-27、LM-24，除非風控書面核可 O1。
+- **CS-11**（r1 改，A-17）：字面對應表窮舉所有 (state, sub_reason, session_basis, market) 組合（`every state has a template`）。
+- **CS-12**（r1 改，A-17）：LM-24、LM-27 只在 `market=TW` 而且 `basis=official` 時渲染。日後美股若接上官方日曆，LM-24、LM-27 要先依時區重審，才能擴用到美股。
 - **CS-13**：字面、掃描器、測試在同一個 commit（PV-1）。
 - **CS-14**：ADR-0027 使用的逾時線只引用 VS-6（或 M-1 駁回時引用 VS-2），不得另寫一份時間常數（grep）。
+- **CS-15**（r1 新，A-18）：`market=US` 時永遠不渲染 LM-71；`market=TW` 時永遠不渲染 LM-72（前端對應表測試）。
+- **CS-16**（r1 新，A-19）：`valuation_state_counts` 只給前端的總額與估值元件讀；CS-4 的 grep 範圍擴到這個欄位。
 
 ## 測試要求
 - **CST-1**：表格驅動測試，涵蓋：
@@ -208,7 +221,10 @@
   - Q-B3：推算模式的讀法；
   - Q-B4：Phase 1 是否涵蓋 US；
   - Q-B5：AC-B5a-6 與 CEO 2026-10-03 裁定 5 的關係。
-- **風控**：O1 或 O2；`pre_open` 沿用 LM-23 的單項確認；新狀態的字面。
+- **風控**：
+  - 已裁示（r1，A-20）：O1 或 O2（台股用 O2-b（LM-71）、美股用 O2-c（LM-72）；O1 不核可，風控第三批）；`pre_open` 沿用 LM-23（字面見 D-5：LM-23 日期代 P ＋LM-28，不得用 LM-27）。
+  - 新增（r1，A-20）：`basis=observed` 的對應（見 D-5），待風控確認。
+  - 新狀態的字面。
 - **data-engineer**：
   - Q-B7：各日線來源在盤中或收盤剛結束時，會不會回傳當日、尚未定案的 bar；
   - VS-2～VS-6 的查證；
@@ -219,3 +235,51 @@
 ## 未查證事項
 - 所有 VS 的數值；08:30 盤前委託；週六補行交易日；US 的交易時段。
 - B-2 所引的 `valuation.py` 與 ADR-0019 行號，除了 343、382、223 以外，都轉引自 T1 評估。
+
+---
+
+## 修訂紀錄
+
+> r1（2026-10-16）依 tech-architect 修訂提案 A-1～A-21 套用；本 ADR 適用 A-16～A-21，A-1～A-15 見 ADR-0027。
+> 提案來源：`work/reviews/2026-10-16-ADR-0027與0028修訂提案A1至A21-tech-architect.md` 附件 A。
+> 被改寫或取代的原文逐字保留於下；「新增」類條目沒有被取代的原文。引用區塊內的文字即 r1 之前的原文。
+
+**A-16（D-5 字面對應表，整表取代）**
+- r1（2026-10-16，tech-architect A-16）：原整表——
+  > | 狀態／條件 | 字面 |
+  > |---|---|
+  > | `close` | LM-23 |
+  > | `pre_open` | 建議沿用 LM-23「{MM/DD} 收盤價」，以 P 代入，待 PM Q-B1 與風控單項確認；否則另起草新字面。**不得用 LM-27** |
+  > | `prior_close_reference`／`in_session`，`basis = official` | LM-27 |
+  > | `prior_close_reference`／`after_close_pending`，`basis = official` | LM-24 |
+  > | R4b、R4c，`basis = weekday_assumed` | O1 或 O2（風控裁示；建議 O2） |
+  > | `market_closed` | LM-25；推算模式下同區塊加 LM-26 |
+  > | `lagging`、`provisional_today`、`date_anomaly` | 新字面（Q-B2）；`lagging` 不得用「前一收盤」 |
+
+  改為見 §D-5。原表之後的「對應表必須窮舉。任何狀態組合沒有核可字面，T1-17 就不得合併。」保留不變。
+
+**A-17（CS-11、CS-12）**
+- r1（2026-10-16，tech-architect A-17）：CS-11 原文——
+  > - **CS-11**：字面對應表窮舉所有（state, sub_reason, session_basis）組合（`every state has a template`）。
+
+  改為見 §對實作的約束 CS-11。
+- r1（2026-10-16，tech-architect A-17）：CS-12 原文——
+  > - **CS-12**：`basis = weekday_assumed` 的 R4b、R4c，不渲染 LM-27、LM-24，除非風控書面核可 O1。
+
+  改為見 §對實作的約束 CS-12（提案註明：O1 已不核可，「除非風控書面核可 O1」刪除）。
+
+**A-18（CS-15）**
+- r1（2026-10-16，tech-architect A-18）：CS-15 為新增，無被取代原文；見 §對實作的約束。
+
+**A-19（D-4 補充、CS-16）**
+- r1（2026-10-16，tech-architect A-19）：D-4 補充與 CS-16 為新增，無被取代原文；見 §D-4 末段、§對實作的約束。
+
+**A-20（Options 第二表、待決事項）**
+- r1（2026-10-16，tech-architect A-20）：O2 列加註「台股用 O2-b（LM-71）、美股用 O2-c（LM-72）；O1 不核可（風控第三批）」，無被取代原文；見 §Options 推算模式呈現表。
+- r1（2026-10-16，tech-architect A-20）：待決事項風控項原文——
+  > - **風控**：O1 或 O2；`pre_open` 沿用 LM-23 的單項確認；新狀態的字面。
+
+  改為見 §待決事項 風控（「O1 或 O2」與「`pre_open` 沿用 LM-23」改為已裁示；新增「`basis=observed` 的對應」待風控確認；「新狀態的字面」維持）。
+
+**A-21（D-6 第 6 點）**
+- r1（2026-10-16，tech-architect A-21）：新增第 6 點，無被取代原文；見 §D-6。
