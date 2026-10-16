@@ -1250,6 +1250,119 @@ ADR-0027 D-11.1 另要求：「逾時與 on-demand 的紀錄另外列出筆數�
 
 ---
 
+### 2.21 第四批（2026-10-16，依風控第三批審查重送三項，並補起草「符合」定義句）
+
+**狀態**：草稿，待 risk-compliance-officer 逐字審。第 2.3～2.20 節與第 8 節既有文字保留不動；本節只新增。
+
+**依據**：`work/reviews/2026-10-16-新定位第三批字面逐字審-LM63至LM80-風控.md`（以下稱「第三批審查」）。所有字面以 ADR-0027／0028 經 CEO 核可為前提；列舉值、狀態機或資格集合 E 在核可時若有改動，對應字面要重送。**不得引用尚未存在的頁面**：凡提到「詳細頁」「驗證狀態頁」「主統計」的字面，只能與該頁同批上線，或在其上線之後使用。
+
+**本節 4 個送審單位**
+
+| 單位 | 項目 | 對應的風控意見 |
+|---|---|---|
+| R4-01 | R3-11 下架範本重送 | 第三批審查 R3-11：範本不得寫「不再」；要照實寫下架期間不顯示方向，之後只有在事先宣告的檢查點全部條件都通過才會重新上架 |
+| R4-02 | `pit_violation` 片段重送 | 第三批審查 R3-12：意思是「發現 {k} 筆預測使用了在規定時點之後才記錄的輸入資料」，不得淡化成流程瑕疵 |
+| R4-03 | R3-14 主統計定義句重送 | 第三批審查 R3-14：採 MS-b 逐項結構；第 5 條含起算日當日；第 6 條改為輸入資料沒有被確認違反時點規則；第 1 條拿掉「收盤後」 |
+| R4-04 | 「符合」定義句（首次起草） | LM-32 的條件：可點開處；LM-66 的前置 |
+
+視角標記同 2.19／2.20（O／Y／R）。已人工對照 `FRONTEND_FORBIDDEN_TERMS` 與 FT-15、FT-16（〔未驗證〕沒跑掃描器）。本批依指示為最後一批，在 tech-architect、quant 確認列舉值與 CEO 核可 ADR-0027／0028 之前，我不再起草新批次。
+
+---
+
+#### 2.21.1 R4-01：下架範本（`withdrawn_f2`；取代 WD-a／WD-b／WD-c）
+
+**否決理由與更正**：「不再顯示方向」說得像永久下架，與 ADR-0027 D-12(iii) 允許之後在事先宣告的檢查點、全部條件通過後重新上架互相矛盾；這是不實陳述，而且誇大了下架的嚴重性。
+
+**要求**
+
+1. 範本不得出現「不再」。要照實寫：下架期間不顯示方向；之後只有在事先宣告的檢查點全部條件都通過，才會重新上架。
+2. 「紀錄與統計可在詳細頁查看」只能在詳細頁存在時顯示；為避免範本整句被這個依賴綁住，我把它拆成**獨立的選配句**（見 WT-c）。
+3. 原因片段沿用已核可的 LM-74（條件二，`f2_deadline`）與 LM-75（條件一，`f2_invalid_stop`，條件核可），不重寫。
+4. 重新上架規則（D-12(iii)）在 F2-A、F2-B 兩案相同，所以範本不因 CEO 選 F2-A 或 F2-B 而改；只有原因片段會變。
+5. 句中的 `{X}` 為不重疊計數（承接 LM-32 的條件）。
+
+| 編號 | 視角 | 逐字 | 取捨與風險 | 定位 |
+|---|---|---|---|---|
+| WT-a | O | 本展望已於前瞻紀錄 n＝{X} 下架：{下架原因}。下架期間不顯示方向；之後只有在事先宣告的檢查點，全部條件都通過，才會重新上架。紀錄與統計可在詳細頁查看。 | 一段話交代「下架原因」「下架期間」「重新上架條件」「紀錄去處」。 | 最後一句綁定詳細頁；詳細頁未上線前整句不能用 |
+| WT-b | R | 本展望已於前瞻紀錄 n＝{X} 下架：{下架原因}。下架期間不顯示方向；要重新上架，須在事先宣告的檢查點通過全部條件。 | 不含任何頁面引用，隨時可用；「須在…通過全部條件」比「才會重新上架」更像條件而非預告。 | 少了紀錄去處，使用者不知道舊紀錄還看不看得到 |
+| WT-c | Y | 範本＝WT-b。另有獨立選配句：紀錄與統計可在詳細頁查看。（僅在詳細頁已上線時渲染） | 範本不受頁面依賴；選配句獨立釘字，頁面上線後才打開。 | **推薦**；兩個常數 |
+
+說明：WT-a 到 WT-c 的「重新上架」都不是承諾（只講條件）。`{下架原因}` 取 LM-74 或 LM-75；CEO 若選 F2-A，兩個片段要重寫（風控已說明）。
+
+---
+
+#### 2.21.2 R4-02：`pit_violation` 觸發片段（取代 R3-12 的 A／B）
+
+**否決理由與更正**：ADR-0027 的 PIT 違規，指的是**預測所用的輸入資料，在規定時點之後才被記錄**（D-4.3 的 `inputs_max_recorded_at > cutoff`，FL-7），等於有前視偏誤的風險。原兩個候選寫成「預測的寫入時間不符規定」，把對象搞錯，也低報了事件的性質。這個片段接在 LM-76（SF-a）的 `{觸發原因}` 位置。
+
+| 編號 | 視角 | 逐字 | 取捨與風險 | 定位 |
+|---|---|---|---|---|
+| PIT-a | R | 發現 {k} 筆預測使用了在規定時點之後才記錄的輸入資料 | 逐字貼近風控指定的意思；事實陳述，不加評價。 | 沒有說後果，使用者不知道為什麼這算嚴重 |
+| PIT-b | O | 發現 {k} 筆預測使用了在規定時點之後才記錄的輸入資料，有前視偏誤的風險 | 在事實之後點出性質（前視偏誤的風險），不淡化成流程瑕疵；與風控「等於有前視偏誤的風險」的說法一致。 | **推薦**；「前視偏誤」是術語，但這個產品的使用者已看過「前視」類字面（回測章節），可接受；風控若認為過重請退回 |
+| PIT-c | Y | 發現 {k} 筆預測的輸入資料，記錄時間晚於規定的截止時點 | 精確對應 `inputs_max_recorded_at > cutoff`。 | 「記錄時間晚於…截止時點」讀起來像單純的時間問題，容易被讀成流程瑕疵；沒有說「預測用了這筆資料」 |
+
+說明：`pit_violation` 列舉值是我提的案（條件核可，交 tech-architect 確認）。此片段套入 LM-76 後，整句是「本展望暫停顯示：預測紀錄的品質檢查未通過（發現 {k} 筆預測使用了在規定時點之後才記錄的輸入資料，有前視偏誤的風險）。查明原因並經審查之前，不顯示方向；紀錄仍可查看。」括號內較長，版面需要換行時由 qa-e2e 驗 375 寬度。
+
+---
+
+#### 2.21.3 R4-03：「主統計」定義句（取代 MS-a／MS-b／MS-c）
+
+**否決理由與更正**（逐條對照資格集合 E：ADR-0027 D-11.1＝`trigger=scheduled`、`late=0`、`supersedes_id IS NULL`、claim 為 forward、日期 ≥ D_v，且不是已確認的 PIT 違規列）
+
+1. 第 5 條原寫「{起算日} 之後」，但 E 是「日期 ≥ D_v」，含當日。D_v 本身就是第一筆 E 紀錄的日期，照字面讀會把第一筆排除。→ 改為「當日或之後」。
+2. 第 6 條原寫「寫入時點沒有被確認違規」，錯誤與 `pit_violation` 相同（對象是輸入資料的記錄時點，不是預測的寫入時點）。→ 改為「所用輸入資料沒有被確認違反時點規則」。
+3. 第 1 條原寫「在交易日收盤後」，不是 E 的條件。→ 拿掉，改用 E 的實際條件（`trigger=scheduled`）。
+4. MS-c 若當短標，要修同樣的錯誤，且只能和完整定義搭配出現。
+5. 「起算日」一詞要由 tech-architect 與 quant 確認符合 D-14 的 D_v 定義（該 claim 第一筆 E 紀錄的 T，即基準日）。
+
+**位置與前提**：驗證狀態頁（LM-14、LM-37、LM-38、LM-80 都依賴本句）。該頁上線前，這四句不得上畫面。
+
+| 編號 | 視角 | 逐字 | 取捨與風險 | 定位 |
+|---|---|---|---|---|
+| MS2-a | Y | 主統計計入的預測，必須同時符合：<br>1. 由排程產生（臨時查詢不計入）<br>2. 沒有逾時<br>3. 是原始紀錄，不是日後為更正而新增的列<br>4. 屬於前瞻預測，不是歷史重放<br>5. 預測基準日在 {起算日} 當日或之後<br>6. 所用輸入資料沒有被確認違反時點規則<br>作廢的預測不計入 n，但計入最壞情境的並列結果；逾時與臨時查詢的預測另外列出筆數。 | 逐項對應 E 的六個條件，風控與 qa 逐項核對最容易；第 1 條就是 `trigger=scheduled`；第 5 條含當日；第 6 條照風控給的意思。 | **推薦**；沿用 MS-b 結構 |
+| MS2-b | O | 同 MS2-a，另在第 5 條後加括號：5. 預測基準日在 {起算日}（這個展望第一筆主統計紀錄的基準日）當日或之後 | 把「起算日」的定義寫進句子，不依賴使用者去猜；D-14 的定義是「該 claim 第一筆 E 紀錄的 T」。 | 多一個括號；若 tech-architect／quant 把「起算日」改了用語，括號要同步改。第 5 條會變得循環（第一筆主統計紀錄的基準日，要等第 5 條成立才算主統計），使用者可能糊塗；風控若覺得循環，退回 |
+| MS2-c | R | 短標（只能與 MS2-a 完整定義同頁、緊鄰出現）：主統計：排程產生、沒有逾時、原始紀錄、前瞻預測、{起算日}當日或之後、輸入資料沒有被確認違反時點規則 | 一行摘要，可放在 LM-14、LM-37 旁，指向完整定義。 | 缺作廢與 PIT 例外的細節（那些在完整定義的末兩句）；單獨使用不完整，所以明文限定搭配 |
+
+說明：MS2-a 第 1 條括號「臨時查詢不計入」把 PA-4 的 on-demand 排除放進定義，使 LM-14 的「不計入主統計」有定義可查。「更正列」「原始紀錄」對應 `supersedes_id IS NULL`。作廢計入最壞情境與 LM-38 一致。第 6 條中「被確認違反」的判定對象是 PIT 違規列（ADR-0027 D-11.6，移出 E）。
+
+---
+
+#### 2.21.4 R4-04：「符合」定義句（首次起草；LM-32 的條件）
+
+**用途**：LM-32／LM-33 的「符合 {k} 次」、LM-38 的「結算窗」、基準的 k_i／n 都用到「符合」，風控 LM-32 的條件是必須有可點開的定義。LM-66 已定義結算窗；本句定義「什麼叫符合」。放在數字行旁可點開處，不得引用尚未存在的頁面。
+
+**依據與前提**
+
+- ADR-0027 M-3（以凍結的 `dirdef-v1.0` 為準）：對數報酬、σ60、K_3＝K_5＝0.43、嚴格不等式加 EPS、平手歸震盪；簡單報酬只存在 `realized_return` 作揭露。逐筆登記的門檻在 `band_def`／`threshold_snapshot`（含 `up_pct`、`down_pct`）。
+- ADR-0025 D-6.3／PV-7：個股與族群用還原價；大盤依 A-15 R-1 用加權指數（價格指數）點數、不還原。
+- 字面**不寫** K 值（0.43）、σ 窗長（60）與對數報酬等實作參數；它們屬於凍結的定義文件，字面若寫死，M-3 若變動（例如 CEO 不採對數報酬與 σ60）就會漂移。
+- 〔未驗證〕我假設 `up_pct`、`down_pct` 是已換算到「簡單漲跌幅」尺度的門檻，使用者用實際漲跌幅對照它們，與內部用對數報酬分類的結果一致。若不是，字面必須改寫成直接描述對數報酬。請 quant 與 tech-architect 確認。
+
+| 編號 | 視角 | 逐字 | 取捨與風險 | 定位 |
+|---|---|---|---|---|
+| SM-a | O | 符合：預測發布後第 {h} 個交易日收盤，相對 {基準日} 收盤的實際漲跌幅，依該筆預測發布時登記的門檻歸類（漲幅超過 {上門檻}% 為偏多，跌幅超過 {下門檻}% 為偏空，其餘含剛好等於門檻為震盪）；歸類結果與預測的類別相同，就算符合一次。門檻依發布當時的波動計算，每筆預測各自登記。個股與族群以還原價計算；大盤以加權指數（價格指數）點數計算，不還原。基準的符合次數用同一個標準計算。 | 一段話定義完整：類別判準、平手歸屬、門檻的來源、價格口徑、基準同標準。 | 很長，單一段落不易閱讀；{上門檻}／{下門檻} 因每筆預測不同，不能在通用定義處顯示具體數值，只能留作變數，需要與逐筆資料並列 |
+| SM-b | R | 符合：第 {h} 個交易日收盤的實際漲跌幅，依該筆預測登記的門檻歸類，類別與預測相同。 | 最短，作為點開前的摘要。 | 少了平手歸屬、價格口徑與基準同標準；單獨使用不完整 |
+| SM-c | Y | 摘要＝SM-b。展開三條：<br>1. 歸類：漲幅超過 {上門檻}% 為偏多，跌幅超過 {下門檻}% 為偏空，其餘含剛好等於門檻為震盪。<br>2. 門檻：依預測發布當時的波動計算，每筆預測各自登記。<br>3. 價格：個股與族群以還原價計算；大盤以加權指數（價格指數）點數計算，不還原。基準的符合次數用同一個標準計算。 | 摘要加展開，行動端清楚；每條各管一件事，各自釘字。 | **推薦**；常數多（摘要加三條），但風控逐條核可最容易 |
+
+說明：「{上門檻}、{下門檻}」在通用定義處無法代入，改在每筆預測的明細處顯示該筆登記的值（LM-11 震盪定義句已用 {X}% 顯示該筆門檻，兩者一致）。「基準的符合次數用同一個標準計算」承接 LM-32 的條件 3（各基準與本展望在同一組預測上評估）。
+
+---
+
+#### 2.21.5 第四批彙總
+
+| 單位 | 候選數 | 推薦 | 前置 |
+|---|---|---|---|
+| R4-01 下架範本 | 3 | WT-c（範本＝WT-b，加獨立選配句「紀錄與統計可在詳細頁查看。」） | 詳細頁上線後才打開選配句；CEO 選 F2-A 時原因片段重寫 |
+| R4-02 `pit_violation` 片段 | 3 | PIT-b | `pit_violation` 列舉值待 tech-architect 確認 |
+| R4-03 主統計定義句 | 3 | MS2-a（MS2-c 作短標，只能搭配） | 驗證狀態頁上線；「起算日」用語待 tech-architect 與 quant 確認 |
+| R4-04 「符合」定義句 | 3 | SM-c | `up_pct`／`down_pct` 的尺度待 quant 確認；M-3 若被 CEO 改動需重送 |
+
+合計 4 個送審單位，12 個候選。
+
+**停止起草的條件**：依指示，在 tech-architect、quant 確認列舉值，以及 CEO 核可 ADR-0027／0028 之前，我不再起草新批次。仍待重送的項目：TV-c（缺信賴區間、計數單位未定）、N 組、G1、2.16(8)，以及 {單位}、各基準名稱、{覆蓋門檻}（成員數或權重）、{上限} 與 {截止時間} 定案後的送審。
+
+---
+
 ---
 
 ## 3. `forbidden-terms.json` 與相關禁用清單的調整建議
@@ -1439,7 +1552,7 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 | LM-11 | 震盪 Z1：「【震盪】預測 {起}～{迄} 這 {h} 個交易日結束時，{對象}收盤相對 {基準日} 收盤的淨變動在 ±{X}% 以內。期間內仍可能大漲或大跌。」 | 展望元件 | `OUTLOOK_RANGE_DEFINITION_TEMPLATE` | `outlookWording.test.ts::pins LM-11`；`::threshold shown with stored precision`；`::market scope also renders LM-22` | B2（邊界須與 PA-1 一致後才定稿） |
 | LM-12 | 暫不顯示方向 H2（空格排法擇一，建議不加空格） | 展望元件（隱藏方案） | `OUTLOOK_HIDDEN_UNVERIFIED_TEMPLATE` | `outlookWording.test.ts::pins LM-12`；`::threshold from backend n_min` | B2 |
 | LM-13 | 合併紀錄 H4 | 個股展望徽章同區塊 | `STOCK_POOLED_RECORD_NOTICE` | `outlookWording.test.ts::pins LM-13`；`::only on stock outlook` | B2 |
-| LM-14 | 臨時查詢 H6 | 臨時查詢展望 | `ADHOC_EXCLUDED_NOTICE` | `outlookWording.test.ts::pins LM-14` | B2（驗證狀態頁需定義「主統計」） |
+| LM-14 | 臨時查詢 H6 | 臨時查詢展望 | `ADHOC_EXCLUDED_NOTICE` | `outlookWording.test.ts::pins LM-14` | B2（驗證狀態頁需定義「主統計」） 〔第三批審查加註：在主統計定義句核可、且驗證狀態頁上線之前，不得上畫面；見 8.6c〕 |
 | LM-15 | 未分級 F1 | 展望標籤同區塊 | `OUTLOOK_UNGRADED_NOTICE` | `outlookWording.test.ts::pins LM-15`；`::no weight or vote total rendered` | B2 |
 | LM-16 | R-6 基準句 C2（持有含成本與成本未取得兩分支共用） | `frontend/app/position/[symbol]/KeyLevelsPanel.tsx:107-109`（取代 `buildStopBasisHeldWithCost`）；`:115-117`（`buildStopBasisUnknown` 持有但成本未取得分支同改）；`DecisionCard.tsx` 使用處 | `buildStopBasisHeld`（取代前者） | `componentWordingScan.test.ts:721,758` 改釘；`keyLevelsAnchorMismatch.test.ts:148,210` 改釘；375／1280 寬度由 qa-e2e 驗「另列於下」 | B0 |
 | LM-17 | R-6 標籤 B1「基準價（最新收盤）」 | `KeyLevelsPanel.tsx:151`（持有分支改用）；`DecisionCard.tsx:326-330` | `KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD`（`:152` 的收盤版「基準價（最新收盤，試算）」保留給未持有） | `componentWordingScan.test.ts:1152` 改釘；`keyLevelsAnchorMismatch.test.ts:147,179,208-209` 改釘 | B0 |
@@ -1448,11 +1561,11 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 | LM-20 | 分隔句：「距離從最新收盤起算；相對成本損益另外計算，不影響停損與停利參考。」 | 同上（可選） | `DECISION_CARD_DISTANCE_COST_NOTE` | `decisionCard.test.ts::pins LM-20` | B0 |
 | LM-21 | 大盤指數說明 W1（backup 時渲染「{名稱}（非官方來源）」） | 大盤展望區塊 | `MARKET_INDEX_BASIS_NOTE` | `outlookWording.test.ts::pins LM-21`；`::backup source renders non-official suffix`；`::not used for sector or stock` | B2 |
 | LM-22 | 大盤短標 W3 | 首層、緊鄰大盤展望標籤 | `MARKET_INDEX_BASIS_TAG` | `outlookWording.test.ts::pins LM-22` | B2 |
-| LM-23 | 估值：收盤 A2 | `frontend/app/lib/valuationStatusWording.ts`（新）；估值顯示元件 | `VALUATION_CLOSE_LABEL` | `valuationStatusWording.test.ts::pins LM-23`；`::year appended when not current year` | T1-03（與 T1-17 同一 commit） |
-| LM-24 | 估值：盤後 B1 | 同上 | `VALUATION_AFTER_CLOSE_PENDING_LABEL` | `valuationStatusWording.test.ts::pins LM-24`；`::state computed at render in Taipei time` | T1-03 |
+| LM-23 | 估值：收盤 A2 | `frontend/app/lib/valuationStatusWording.ts`（新）；估值顯示元件 | `VALUATION_CLOSE_LABEL` | `valuationStatusWording.test.ts::pins LM-23`；`::year appended when not current year` | T1-03（與 T1-17 同一 commit） 〔第三批審查加註：條件擴用於 `pre_open`（日期代 P，即前一交易日；附 LM-28）。`pre_open` 永遠不對應 LM-27（CS-10）；`close` 與 `pre_open` 字面相同但狀態表分開，加測試。不另編號〕 |
+| LM-24 | 估值：盤後 B1 | 同上 | `VALUATION_AFTER_CLOSE_PENDING_LABEL` | `valuationStatusWording.test.ts::pins LM-24`；`::state computed at render in Taipei time` | T1-03 〔第三批審查加註：只在 `basis=official` 時使用（CS-12）；美股沒有官方日曆、永遠走 O2（LM-72），所以實際只用於台股；日後美股接上官方日曆，這句的「今日」要依時區重審〕 |
 | LM-25 | 估值：休市 C1 | 同上 | `VALUATION_HOLIDAY_LABEL` | `valuationStatusWording.test.ts::pins LM-25`；`::weekday never labelled holiday in inferred mode` | T1-03 |
 | LM-26 | 休市推算揭露 CI1 | 同上，與休市標籤同區塊常駐 | `VALUATION_HOLIDAY_INFERRED_NOTICE` | `valuationStatusWording.test.ts::pins LM-26` | T1-03 |
-| LM-27 | 估值：交易時段 D1 | 同上 | `VALUATION_SESSION_LABEL` | `valuationStatusWording.test.ts::pins LM-27`；`::not applied before open` | T1-03；盤中價接線即失效 |
+| LM-27 | 估值：交易時段 D1 | 同上 | `VALUATION_SESSION_LABEL` | `valuationStatusWording.test.ts::pins LM-27`；`::not applied before open` | T1-03；盤中價接線即失效 〔第三批審查加註：只在 `basis=official` 時使用（CS-12）；`pre_open` 永遠不對應本句（CS-10）；美股永遠不用本句〕 |
 | LM-28 | 日線依據揭露 Q1 | 同上，同區塊、不得收合 | `VALUATION_BASIS_NOTICE` | `valuationStatusWording.test.ts::pins LM-28`；`::notice not inside details` | T1-03；盤中價接線即失效 |
 
 ### 8.2 FT-1～FT-20（禁用詞裁定；依 AV-14，PR 描述必須引用這些編號）
@@ -1575,11 +1688,11 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 | LM-34 | 族群列表元件與族群詳細頁（兩者同批） | `SECTOR_OUTLOOK_GATE_TEMPLATE` | `sectorWording.test.ts::pins gate cell`；`::row links to detail page`；`::detail page shows pv10 status with plain sentence` | B2；{單位} 待 quant |
 | LM-35 | 族群列表下方常駐 | `SECTOR_OUTLOOK_NO_SORT_NOTICE` | `sectorWording.test.ts::pins no-sort notice`；`::no temporal qualifier words` | B2 |
 | LM-36 | 族群列表展開處 | `SECTOR_OUTLOOK_GATE_EXPLAINER` | `sectorWording.test.ts::explainer only inside details` | B2；不得改寫成帶時程的語句 |
-| LM-37 | 展望區塊、驗證區 | `OUTLOOK_LATE_TEMPLATE` | `outlookWording.test.ts::pins late`；`::anchors on data date not today` | B2；等 tech-architect（逾時不計主統計）與 PA-1（{截止時間}）；「主統計」須在驗證狀態頁定義 |
-| LM-38 | 紀錄清單或驗證區（作廢發生在結算時，不在當日展望位置） | `OUTLOOK_VOID_TEMPLATE` | `outlookWording.test.ts::pins void`；`::worst case row rendered whenever any void exists` | B2；等列舉值確認；「結算窗」須在「符合」定義處說明 |
-| LM-39 | 同上 | `VOID_REASON_FRAGMENTS["missing_bar"]` | `outlookWording.test.ts::reason fragment exists for each enum value` | B2 |
-| LM-40 | 同上 | `VOID_REASON_FRAGMENTS["corporate_action"]` | 同上 | B2；若列舉值涵蓋配股要重送 |
-| LM-41 | 驗證區 | `OUTLOOK_GAP_TEMPLATE_NO_ROW` | `outlookWording.test.ts::pins gap no-row`；`::only one of LM-41 and LM-42 is active` | B2；實作為無紀錄列時 |
+| LM-37 | 展望區塊、驗證區 | `OUTLOOK_LATE_TEMPLATE` | `outlookWording.test.ts::pins late`；`::anchors on data date not today` | B2；等 tech-architect（逾時不計主統計）與 PA-1（{截止時間}）；「主統計」須在驗證狀態頁定義 〔第三批審查加註：在主統計定義句核可、且驗證狀態頁上線之前，不得上畫面；見 8.6c〕 |
+| LM-38 | 紀錄清單或驗證區（作廢發生在結算時，不在當日展望位置） | `OUTLOOK_VOID_TEMPLATE` | `outlookWording.test.ts::pins void`；`::worst case row rendered whenever any void exists` | B2；等列舉值確認；「結算窗」須在「符合」定義處說明 〔第三批審查加註：在主統計定義句核可、且驗證狀態頁上線之前，不得上畫面；`{作廢原因}` 改用 LM-39、LM-63、LM-64、LM-65；見 8.6c〕 |
+| LM-39 | 同上 | `VOID_REASON_FRAGMENTS["missing_bar"]` | `outlookWording.test.ts::reason fragment exists for each enum value` | B2 〔第三批審查加註：API 鍵改為 `missing_bar_after_wait`，字面不變；條件「結算窗要有定義」由 LM-66 滿足〕 |
+| LM-40 | 同上 | `VOID_REASON_FRAGMENTS["corporate_action"]` | 同上 | B2；若列舉值涵蓋配股要重送 〔第三批審查加註：**LM-40 退役，由 LM-63、LM-64 取代**（`corporate_action` 拆成 `split_or_reduction_suspected`、`dividend_factor_unusable`），本列不再實作〕 |
+| LM-41 | 驗證區 | `OUTLOOK_GAP_TEMPLATE_NO_ROW` | `outlookWording.test.ts::pins gap no-row`；`::only one of LM-41 and LM-42 is active` | B2；實作為無紀錄列時 〔第三批審查加註：**LM-41 退役**——tech-architect 已確認缺日有紀錄列，缺日用 LM-42；逾時的日子顯示 LM-37，不顯示 LM-42；本列不再實作〕 |
 | LM-42 | 驗證區 | `OUTLOOK_GAP_TEMPLATE_WITH_ROW` | `outlookWording.test.ts::pins gap with-row` | B2；實作為有紀錄列時 |
 | LM-43 | 驗證區 | `OUTLOOK_GAP_STATS_TEMPLATE` | `outlookWording.test.ts::pins gap stats`；`::date list not truncated` | B2；截斷字面另送審 |
 | LM-44 | `backend/app/plan/caveats.py` | `CAVEATS["limit_down_locked"]` | `caveats.test.py::pins limit_down_locked` | B2；可與 LM-07 組合 |
@@ -1605,3 +1718,80 @@ ADR-0025 D-11：核可前現行字面不動，核可後字面與新功能同批�
 **dev-lead 排程提示（風控下一步第 3 點）**：B0 用 LM-16～20 與 LM-53；B1 要等 CEO 裁示 X-1、X-2 才能定 LM-29／30／31／62 與 LM-60、LM-61 的上線方式。
 
 **尚待重送**：TV-c（缺信賴區間、計數單位未定，隨 quant v0.2 與 2.16-B5）、N 組、G1、2.16(8)；{單位}、各基準名稱、{截止時間}、列舉值定案後送審。
+
+### 8.6 LM-63～LM-80（風控第三批已核可；全部以 ADR-0027／0028 經 CEO 核可為前提）
+
+**通用條件**（風控第三批審查）：ADR-0027、ADR-0028 都還是 proposed，CEO 核可前這批字面全部只是條件核可；核可時若改動列舉值、狀態機或資格集合 E，對應字面要重送。**不得引用尚未存在的頁面**：凡提到「詳細頁」（LM-79）、要放在驗證狀態頁的（LM-80 與日後的主統計定義句）、只能放在族群詳細頁的（LM-73），都要與該頁同批上線或之後。**dev 一律從風控附錄複製字面**（附錄：`work/reviews/2026-10-16-新定位第三批字面逐字審-LM63至LM80-風控.md`），不得從 8.6b 複製。
+
+#### 8.6a 風控附錄逐字複製
+
+| ID | 類別 | 節號／編號 | 核可全文（含標點） | 條件 |
+|---|---|---|---|---|
+| — | `pre_open` | 2.20.2 R3-09 PO-a | {MM/DD} 收盤價（即 LM-23，日期代 P） | LM-23 擴用，不另編號；附 LM-28；CS-10 |
+| LM-63 | 作廢原因 | 2.20.1 R3-01 SR-a | 結算窗內有單日價格變動超出一般漲跌幅限制，疑似發生分割或減資，這筆預測不結算 | 取代 LM-40；只適用有漲跌幅限制的標的；ADR 核可 |
+| LM-64 | 作廢原因 | 2.20.1 R3-02 DF-b | 結算窗內有除權息（含配股），但算不出還原價格所需的因子，這筆預測不結算 | ADR 核可 |
+| LM-65 | 作廢原因 | 2.20.1 R3-03 BC-b | 族群籃子中可結算的成員不到 {覆蓋門檻}%（被排除的原因可能是停牌，或還原因子無法使用），這筆預測不結算 | 覆蓋率以成員數計算（以權重計算則重送）；門檻用變數；ADR 核可 |
+| LM-66 | 結算窗定義 | 2.20.1 R3-04 SW-a | 結算窗：從 {MM/DD} 收盤起算，到之後第 {h} 個交易日收盤為止；交易日以實際觀察到的為準。 | 放在可點開的定義處；不得引用不存在的頁面 |
+| LM-67 | 估值：落後 | 2.20.2 R3-05 LG-b | {MM/DD} 收盤價｜資料落後 {k} 個交易日 | 不加句號；ADR 核可 |
+| LM-68 | 估值：落後（k 為 null） | 2.20.2 R3-05 LG-b 變體 | {MM/DD} 收盤價｜資料落後，落後幾個交易日未能判定 | 同上 |
+| LM-69 | 估值：暫定 | 2.20.2 R3-06 PT-b | {MM/DD} 當日暫定資料｜不是定案的收盤價，之後可能更動 | 用到暫定價的總額，同區塊要可見；ADR 核可 |
+| LM-70 | 估值：日期異常 | 2.20.2 R3-07 DA-b | {MM/DD} 價格｜資料日期異常，日期無法確認 | 只在異常時仍顯示價格才成立；ADR 核可 |
+| LM-71 | 估值：推算模式下的平日（台股） | 2.20.2 R3-08 O2-b | {MM/DD} 收盤價｜今日是否開市未能確認 | 只限台股、`weekday_assumed` 的 R4b／R4c；與 LM-26 同區塊；ADR 核可 |
+| LM-72 | 估值：推算模式下的平日（美股） | 2.20.2 R3-08 O2-c | 開市狀態未能確認｜{MM/DD} 收盤價 | 只限美股；與 LM-26 同區塊；ADR 核可 |
+| LM-73 | 族群詳細頁閘門 | 2.20.3 R3-10 GT-a | 未來 5 個交易日展望：暫不顯示方向（前瞻紀錄 {n}／150 {單位}） | 只能放在族群詳細頁，與該頁同批上線；{單位} 另送審；n 為不重疊計數 |
+| LM-74 | 下架原因（條件二） | 2.20.3 R3-11 `f2_deadline` 片段 | 到事先宣告的期限，仍未能證明優於基準 | 範本重送後才能使用；列舉值由 creative-lead 提案；以 F2-B 為前提 |
+| LM-75 | 下架原因（條件一） | 2.20.3 R3-11 `f2_invalid_stop` 片段 | 連續兩個檢查點（n＝{X0}、n＝{X}）的狀態都是「未優於基準」 | 條件核可：檢查點狀態與 F2-B 條件一須同一判準；範本重送後才能使用；以 F2-B 為前提 |
+| LM-76 | 暫停顯示 | 2.20.3 R3-12 SF-a | 本展望暫停顯示：預測紀錄的品質檢查未通過（{觸發原因}）。查明原因並經審查之前，不顯示方向；紀錄仍可查看。 | 列舉值由 creative-lead 提案；ADR 核可 |
+| LM-77 | 暫停原因 | 2.20.3 R3-12 `late_rate` A | 逾時的預測超過 {上限}% | 逾時率若以時間窗計算要重送；{上限} 在 D_v 前凍結 |
+| LM-78 | 暫停原因 | 2.20.3 R3-12 `digest_mismatch` A | 計分時發現輸入資料與寫入當時的紀錄不一致，比率超過 {上限}% | 分母為 min(250, 已結算筆數)；列舉值由 creative-lead 提案 |
+| LM-79 | 新版揭露前一版 | 2.20.3 R3-13 RV-a | 這是重新設計後的新版本，前瞻紀錄從 0 筆重新累積。前一版已於前瞻紀錄 n＝{X} 下架（{下架原因}），前一版的紀錄與統計可在詳細頁查看。 | 與詳細頁同批上線；{下架原因} 只用 LM-74、LM-75；F-3 暫停恢復時不適用 |
+| LM-80 | 驗證區計數行 | 2.20.5 R3-15 OD-b | 另列：逾時 {a} 筆、臨時查詢 {b} 筆；這兩類都不計入主統計。 | 只能放在驗證狀態頁，與該頁同批上線；主統計定義句核可後才能上線 |
+
+#### 8.6b LM-63～LM-80 落地對應（常數名與測試名皆暫定）
+
+| LM | 落地檔案 | 變數或常數名（暫定） | 釘字測試（暫定） | 批次與前置 |
+|---|---|---|---|---|
+| `pre_open`（LM-23 擴用） | `frontend/app/lib/valuationStatusWording.ts` 對應表 | 沿用 `VALUATION_CLOSE_LABEL`，狀態表另設 `pre_open` 鍵 | `valuationStatusWording.test.ts::pre_open maps to LM-23 text`；`::pre_open never maps to LM-27`（CS-10）；`::pre_open renders with LM-28` | T1-03（隨 T1-17） |
+| LM-63 | `outlookWording.ts` 作廢原因片段表 | `VOID_REASON_FRAGMENTS["split_or_reduction_suspected"]` | `outlookWording.test.ts::reason fragment exists for each enum value`；`::pins LM-63` | B2；等 tech-architect 確認無漲跌幅限制標的的處理 |
+| LM-64 | 同上 | `VOID_REASON_FRAGMENTS["dividend_factor_unusable"]` | 同上 | B2 |
+| LM-65 | 同上 | `VOID_REASON_FRAGMENTS["basket_coverage_below_90"]`；門檻 `{覆蓋門檻}` 由後端代入 | 同上；`::coverage threshold from backend variable` | B2；等確認以成員數或權重計算 |
+| LM-66 | 「符合」定義處（可點開） | `SETTLEMENT_WINDOW_DEFINITION` | `outlookWording.test.ts::pins LM-66`；`::definition not behind a nonexistent page link` | B2 |
+| LM-67 | `valuationStatusWording.ts` | `VALUATION_LAGGING_LABEL` | `valuationStatusWording.test.ts::pins LM-67`；`::no trailing period` | T1-03（隨 T1-17；D-5 對應表須窮舉） |
+| LM-68 | 同上 | `VALUATION_LAGGING_UNKNOWN_LABEL` | `valuationStatusWording.test.ts::pins LM-68`；`::k null uses LM-68` | T1-03 |
+| LM-69 | 同上 | `VALUATION_PROVISIONAL_LABEL` | `valuationStatusWording.test.ts::pins LM-69`；qa-e2e：用暫定價的總額同區塊可見 | T1-03 |
+| LM-70 | 同上 | `VALUATION_DATE_ANOMALY_LABEL` | `valuationStatusWording.test.ts::pins LM-70` | T1-03；只在異常時仍顯示價格才成立（待 tech-architect、PM） |
+| LM-71 | 同上 | `VALUATION_SESSION_UNCONFIRMED_TW_LABEL` | `valuationStatusWording.test.ts::pins LM-71`；`::only for tw market weekday_assumed`；`::rendered with LM-26` | T1-03 |
+| LM-72 | 同上 | `VALUATION_SESSION_UNCONFIRMED_US_LABEL` | `valuationStatusWording.test.ts::pins LM-72`；`::only for us market`；`::rendered with LM-26` | T1-03 |
+| LM-73 | 族群詳細頁（Phase 4） | `SECTOR_DETAIL_GATE_LABEL` | `sectorWording.test.ts::pins LM-73`；`::only on sector detail page` | B2；與詳細頁同批；{單位} 另送審 |
+| LM-74 | `outlookWording.ts` 下架原因片段表 | `WITHDRAW_REASON_FRAGMENTS["f2_deadline"]` | `outlookWording.test.ts::every withdraw reason has a fragment`；`::pins LM-74` | B2；範本（R4-01）核可後才能用；F2-B 前提 |
+| LM-75 | 同上 | `WITHDRAW_REASON_FRAGMENTS["f2_invalid_stop"]` | 同上；`::pins LM-75` | B2；等 tech-architect 確認檢查點狀態與 F2-B 條件一同一判準 |
+| LM-76 | 展望區塊 | `OUTLOOK_SUSPENDED_TEMPLATE` | `outlookWording.test.ts::pins LM-76` | B2；等列舉值確認 |
+| LM-77 | 同上 | `SUSPEND_REASON_FRAGMENTS["late_rate"]` | `outlookWording.test.ts::every suspend reason has a fragment`；`::pins LM-77` | B2；等 quant 確認逾時率是否有時間窗 |
+| LM-78 | 同上 | `SUSPEND_REASON_FRAGMENTS["digest_mismatch"]` | 同上；`::pins LM-78` | B2 |
+| LM-79 | 展望區塊（新版上架時） | `OUTLOOK_RELISTED_NOTICE` | `outlookWording.test.ts::pins LM-79`；`::reason from LM-74 or LM-75 only`；`::not shown after f3 resume` | B2；與詳細頁同批 |
+| LM-80 | 驗證狀態頁 | `VALIDATION_EXCLUDED_COUNTS_LINE` | `validationWording.test.ts::pins LM-80` | B2；與驗證狀態頁同批；主統計定義句核可後才能上線 |
+
+#### 8.6c 第三批審查對前兩批核可的新增限制（以下於 8.1／8.5b 相關列行尾已加註）
+
+| 對象 | 新限制 |
+|---|---|
+| LM-23 | 條件擴用於 `pre_open`（日期代 P，即前一交易日），附 LM-28；`pre_open` 永遠不對應 LM-27（CS-10）；不另編號 |
+| LM-40 | **退役**，由 LM-63、LM-64 取代 |
+| LM-41 | **退役**：tech-architect 已確認缺日有紀錄列，缺日用 LM-42；逾時的日子顯示 LM-37，不顯示 LM-42 |
+| LM-39 | 改掛新的鍵 `missing_bar_after_wait`，字面不變；條件「結算窗要有定義」由 LM-66 滿足 |
+| LM-14、LM-37、LM-38 | 都提到「主統計」，在主統計定義句核可、且驗證狀態頁上線之前，不得上畫面 |
+| LM-24、LM-27 | 只在 `basis = official` 時使用（CS-12）；美股沒有官方日曆，永遠走 O2（LM-72），所以實際上只用於台股；日後美股若接上官方日曆，這兩句的「今日」要依時區重審 |
+| O1／O2 | 採 O2，O1 不核可；台股 LM-71（O2-b），美股 LM-72（O2-c）；O2-a 退回 |
+| `pre_open` | 核可 PO-a；PO-b、PO-c（今日尚未開盤）退回 |
+| 受此批影響的前置 | 詳細頁與驗證狀態頁需排進同一批上線（LM-14、LM-37、LM-38、LM-73、LM-79、LM-80、主統計定義句都依賴）；T1-17 合併前 ADR-0028 D-5 對應表每個狀態都要有核可字面，本批核可後估值狀態只剩 O2 的市場分流要實作 |
+
+#### 8.6d 第四批待核可項（R4-01～R4-04；字面見 2.21）
+
+| 項 | 推薦 | 落地（暫定） | 前置 |
+|---|---|---|---|
+| R4-01 下架範本 | WT-c（範本＝WT-b；選配句「紀錄與統計可在詳細頁查看。」） | `OUTLOOK_WITHDRAWN_TEMPLATE`、`OUTLOOK_WITHDRAWN_RECORDS_POINTER`（`outlookWording.ts`） | 詳細頁上線後才打開選配句；LM-74、LM-75 才能使用 |
+| R4-02 `pit_violation` 片段 | PIT-b | `SUSPEND_REASON_FRAGMENTS["pit_violation"]` | 列舉值待 tech-architect 確認 |
+| R4-03 主統計定義句 | MS2-a（MS2-c 只作搭配短標） | `PRIMARY_STATS_DEFINITION`（`validationWording.ts`） | 驗證狀態頁上線；「起算日」待 tech-architect、quant 確認 |
+| R4-04 「符合」定義句 | SM-c（摘要＋三條展開） | `MATCH_DEFINITION_SUMMARY`、`MATCH_DEFINITION_ITEMS`（`validationWording.ts`） | `up_pct`／`down_pct` 尺度待 quant 確認 |
+
+**dev-lead 提示**：LM-63～LM-80 的條件核可項要等 CEO 核可 ADR-0027、ADR-0028，以及 tech-architect、quant 確認列舉值後才能進程式。目前可進入 build 的批次仍只有 B0（LM-16～20、LM-53）；T1-03 的估值狀態字面（LM-23～28、LM-67～LM-72）隨 T1-17，但要 ADR-0028 核可。
