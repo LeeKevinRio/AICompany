@@ -7,7 +7,13 @@ import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE,
   KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
+  KEY_LEVELS_STOP_CARD_TITLE,
+  KEY_LEVELS_TARGET_ANCHOR_CROSS_REF,
+  KEY_LEVELS_TARGET_CARD_TITLE,
+  KEY_LEVELS_TARGET_ROW_2R,
+  KEY_LEVELS_TARGET_ROW_FIXED_PCT,
   KeyLevelsPanel,
+  buildStopBasisConfirmedNotHeld,
   buildStopBasisHeld,
 } from "../../position/[symbol]/KeyLevelsPanel";
 import { DECISION_CARD_COST_PNL_UNAVAILABLE, buildCostPnlRow } from "../decisionCardWording";
@@ -136,48 +142,55 @@ function heldOnlyLiterals(bars: Bar[]): string[] {
 }
 
 describe("B0 required 1: holding status undetermined renders no held-only literal in the panel", () => {
-  // The positions hook exposes `data === undefined` for BOTH a pending query and a
-  // failed one; the page passes `positions.data` to the resolver, so one resolver
-  // input covers both (a) and (b). The page wiring is pinned by the source scan below.
-  const CASES = [
-    { name: "(a) positions query pending (no data yet)", positions: undefined },
-    { name: "(b) positions query failed (no data)", positions: undefined },
-  ];
-
-  for (const c of CASES) {
-    for (const [label, bars] of [
-      ["ATR available", BARS_ATR],
-      ["ATR unavailable", BARS_NO_ATR],
-    ] as const) {
-      it(`${c.name}, ${label}: no LM-16 / LM-17 / LM-53, anchor-derived numbers are "—"`, () => {
-        const anchor = resolveKeyLevelsAnchor(c.positions, "2330", "TW");
-        expect(anchor).toEqual({ anchorSource: "holding-unknown", avgCost: null });
-        const html = panelOf(bars, c.positions);
-        for (const literal of heldOnlyLiterals(bars)) {
-          expect(html, literal).not.toContain(literal);
-        }
-        // Partial-literal guards (no fragment of the held branch either).
-        expect(html).not.toContain("為基準計算；相對成本的損益另列於下。");
-        expect(html).not.toContain("基準價（最新收盤）");
-        expect(html).not.toContain("相對成本損益");
-        // Fail closed like the decision card: no anchor-derived number is shown, and not-held wording is not claimed either.
-        const levels = computeKeyLevels(bars);
-        expect(levels).not.toBeNull();
-        expect(html).toContain('<p class="mt-1 font-mono text-xl font-bold text-neutral-100">—</p>');
-        expect(html).not.toContain("未持有此標的");
-        expect(html).not.toContain("試算");
-        expect(html).not.toContain("價位階梯");
-        expect(html).not.toContain(KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE);
-        expect(html).not.toContain(KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE);
-        if (levels !== null) {
-          const fmt = (n: number): string =>
-            n.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-          expect(html).not.toContain(fmt(levels.stopSuggested));
-          expect(html).not.toContain(fmt(levels.target2R));
-          expect(html).not.toContain(fmt(levels.targetFixedPct));
-        }
-      });
-    }
+  // On the page, a pending query and a failed query are BOTH `positions.data === undefined`,
+  // and the page passes `positions.data` to the resolver. So there is exactly one resolver input
+  // for "loading" and "failed"; this test cannot (and does not claim to) tell them apart.
+  // It does not cover a refetch failure that keeps stale data (then `data` is defined and the
+  // normal held / not-held branches apply). No hook-level test is added here. The page wiring
+  // is pinned by the source scan below.
+  for (const [label, bars] of [
+    ["ATR available", BARS_ATR],
+    ["ATR unavailable", BARS_NO_ATR],
+  ] as const) {
+    it(`positions loading or failed (data undefined), ${label}: no LM-16 / LM-17 / LM-53, anchor-derived numbers are "—"`, () => {
+      const anchor = resolveKeyLevelsAnchor(undefined, "2330", "TW");
+      expect(anchor).toEqual({ anchorSource: "holding-unknown", avgCost: null });
+      const html = panelOf(bars, undefined);
+      for (const literal of heldOnlyLiterals(bars)) {
+        expect(html, literal).not.toContain(literal);
+      }
+      // Partial-literal guards (no fragment of the held branch either).
+      expect(html).not.toContain("為基準計算；相對成本的損益另列於下。");
+      expect(html).not.toContain("基準價（最新收盤）");
+      expect(html).not.toContain("相對成本損益");
+      // The anchor cross-reference sentence of the detail target card is hidden too (M3).
+      expect(html).not.toContain(KEY_LEVELS_TARGET_ANCHOR_CROSS_REF);
+      // Fail closed like the decision card: no anchor-derived number is shown, and not-held wording is not claimed either.
+      const levels = computeKeyLevels(bars);
+      expect(levels).not.toBeNull();
+      // L3: BOTH big numbers are "—" (each directly under its own card title), not just one of them.
+      const BIG_DASH = '<p class="mt-1 font-mono text-xl font-bold text-neutral-100">—</p>';
+      expect(html).toContain(`<p class="text-sm text-neutral-400">${KEY_LEVELS_STOP_CARD_TITLE}</p>${BIG_DASH}`);
+      expect(html).toContain(`<p class="text-sm text-neutral-400">${KEY_LEVELS_TARGET_CARD_TITLE}</p>${BIG_DASH}`);
+      expect(html.split(BIG_DASH).length - 1).toBe(2);
+      // L3: both detail rows of the target card are "—" as well.
+      const rowDash = (rowLabel: string): string =>
+        `<span class="text-sm text-neutral-400">${rowLabel}</span><span class="font-mono text-sm text-neutral-100">—</span>`;
+      expect(html).toContain(rowDash(KEY_LEVELS_TARGET_ROW_2R));
+      expect(html).toContain(rowDash(KEY_LEVELS_TARGET_ROW_FIXED_PCT));
+      expect(html).not.toContain("未持有此標的");
+      expect(html).not.toContain("試算");
+      expect(html).not.toContain("價位階梯");
+      expect(html).not.toContain(KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE);
+      expect(html).not.toContain(KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE);
+      if (levels !== null) {
+        const fmt = (n: number): string =>
+          n.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        expect(html).not.toContain(fmt(levels.stopSuggested));
+        expect(html).not.toContain(fmt(levels.target2R));
+        expect(html).not.toContain(fmt(levels.targetFixedPct));
+      }
+    });
   }
 
   it("the decision card is unchanged for a pending / failed positions query: stop / target stay '—', no anchor label", () => {
@@ -194,6 +207,18 @@ describe("B0 required 1: holding status undetermined renders no held-only litera
     expect(html).not.toContain("距最新收盤");
     expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD);
     expect(html).not.toContain("基準價");
+    // L4: on the decision card "holding-unknown" must behave exactly like "close-unknown" (whole-output equality).
+    const closeUnknown = resolveKeyLevelsAnchor(book(lot("0")), "2330", "TW");
+    expect(closeUnknown).toEqual({ anchorSource: "close-unknown", avgCost: null });
+    const htmlCloseUnknown = renderToStaticMarkup(
+      createElement(DecisionCardBody, {
+        response,
+        bars: BARS_ATR,
+        anchorSource: closeUnknown.anchorSource,
+        avgCost: closeUnknown.avgCost,
+      }),
+    );
+    expect(html).toBe(htmlCloseUnknown);
   });
 
   it("the page feeds the panel and the resolver from `positions.data` only (pending and failed both give undefined)", async () => {
@@ -218,6 +243,8 @@ describe("B0 required 1: a CONFIRMED holding with an unusable cost keeps LM-16 +
       }
       // LM-53 replaces the whole row: no P&L number.
       expect(html).not.toContain("相對成本損益 ");
+      // Control for the M3 assertion above: with a confirmed holding the cross-reference sentence IS rendered.
+      expect(html).toContain(KEY_LEVELS_TARGET_ANCHOR_CROSS_REF);
     });
   }
 });
@@ -253,11 +280,15 @@ describe("B0 required 2: DOM order (the 「大字為…」 line before LM-16; LM
     });
   }
 
-  it("confirmed not-held: the 「大字為…」 line also comes first, then the not-held basis sentence", () => {
+  it("confirmed not-held: the 「大字為…」 line comes first and is directly followed by the not-held basis sentence", () => {
     const html = panelOf(BARS_ATR, book());
+    const { x } = closeOf(BARS_ATR);
+    const basis = buildStopBasisConfirmedNotHeld(x);
     const iAtr = html.indexOf(KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE);
-    const iBasis = html.indexOf("未持有此標的，以最新收盤");
+    const iBasis = html.indexOf(basis);
     expect(iAtr).toBeGreaterThan(-1);
     expect(iBasis).toBeGreaterThan(iAtr);
+    // Adjacent siblings, nothing between them.
+    expect(html).toContain(`<p class="mt-1">${KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE}</p><p class="mt-1">${basis}</p>`);
   });
 });
