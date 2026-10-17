@@ -4,6 +4,7 @@
 - 日期：2026-10-16
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：T1-01／T1-02 評估附件 B-8；coordinator 分配編號〔事實：`work/reviews/2026-10-16-T1-01與T1-02-tech-architect評估.md:4,320-335`〕。
 - r1 修訂：2026-10-16，依 tech-architect 修訂提案 A-1～A-21
+- r2 修訂：2026-10-17，依 tech-architect 修訂提案 A-22～A-41
 - 適用範圍：僅 product/stock-desk。
 - 與既有 ADR 的關係：
   - 不取代任何 ADR。
@@ -134,13 +135,19 @@
 | R4b `in_session`，basis＝official | TW | LM-27 |
 | R4c `after_close_pending`，basis＝official | TW | LM-24 |
 | R4b／R4c，basis＝weekday_assumed | TW | LM-71（O2-b），與 LM-26 同區塊 |
-| R4b／R4c，basis＝observed | TW | 暫時比照 LM-71＋LM-26，待風控單項確認。我的建議：observed 是正面證據，可以比照 official 用 LM-27／LM-24 |
+| R4b `in_session`，basis＝observed（r2，A-38） | TW | LM-71＋LM-26 同區塊；不得用 LM-27；`build_summary` 記 WARNING |
+| R4c `after_close_pending`，basis＝observed（r2，A-38） | TW | 確認之前：LM-71＋LM-26；確認之後：LM-24 |
 | R4b／R4c，任何 basis | US | LM-72（O2-c），與 LM-26 同區塊 |
 | `market_closed` | TW、US | LM-25；basis ≠ official 時，同區塊加 LM-26 |
 | `lagging` | TW、US | LM-67；k 為 null 時用 LM-68 |
 | `provisional_today` | TW、US | LM-69 |
 | `date_anomaly` | TW、US | LM-70，價格照常顯示（見 D-4 補充，r1 A-19） |
 | `not_applicable` | — | 不輸出估值狀態字面，現行顯示不變 |
+
+（r2，A-38）observed 兩列的說明：
+- **R4b 這一列，以現行程式來說是到得了的**：`market_trading_days` 只做 `SELECT DISTINCT trade_date`，沒有排除未定案的 bar〔轉引 data-engineer 2026-10-17 回報 L12-23〕。WARNING 是出現非最終資料的訊號，不是「不可達」的斷言。
+- **R4c 的切換**：翻轉這一列的 PR 合併之前，data-engineer 的確認回報（觀察日集合只來自通過品質檢查的最終日線，不含盤中、暫定或占位列）**要先送風控單項確認**；只經 qa 審查不夠。
+- 觀察日集合的輸入來源還沒決定（附件 B'-3）。決定之前，R4c × observed 不會切換。
 
 對應表必須窮舉。任何狀態組合沒有核可字面，T1-17 就不得合併。
 
@@ -188,10 +195,17 @@
 - **CS-9**：`basis_for(D) == weekday_assumed` 而且 D 是平日時，不得輸出 `market_closed`（性質測試）。
 - **CS-10**：`pre_open` 永遠不對應到 LM-27（前端對應表測試）。
 - **CS-11**（r1 改，A-17）：字面對應表窮舉所有 (state, sub_reason, session_basis, market) 組合（`every state has a template`）。
-- **CS-12**（r1 改，A-17）：LM-24、LM-27 只在 `market=TW` 而且 `basis=official` 時渲染。日後美股若接上官方日曆，LM-24、LM-27 要先依時區重審，才能擴用到美股。
+  - （r2，A-39）R4b × observed 必須有對應（LM-71＋LM-26）。另加測試：這個組合出現時，`build_summary` 記 WARNING。`close_state.py` 維持純函式，不做 log。
+- **CS-12**（r1 改，A-17；r2 改，A-39）：
+  - LM-27 只在 `market=TW` 而且 `basis=official` 時渲染；
+  - LM-24 只在 `market=TW`，而且 `basis=official`，或 `basis=observed`、`sub_reason=after_close_pending` 時渲染；
+    - LM-24 在 `basis=observed`、`sub_reason=after_close_pending` 時渲染，要等翻轉 PR 合併後才生效。合併前，data-engineer 的確認回報要經過風控單項確認，並由 qa 審查。
+  - 正反兩個方向都要有測試。
+  - 日後美股若接上官方日曆，LM-24、LM-27 要先依時區重審，才能擴用到美股。
 - **CS-13**：字面、掃描器、測試在同一個 commit（PV-1）。
 - **CS-14**：ADR-0027 使用的逾時線只引用 VS-6（或 M-1 駁回時引用 VS-2），不得另寫一份時間常數（grep）。
 - **CS-15**（r1 新，A-18）：`market=US` 時永遠不渲染 LM-71；`market=TW` 時永遠不渲染 LM-72（前端對應表測試）。
+  - （r2，A-39）(b) `basis=official` 時永遠不渲染 LM-71。這是風控的 suggested，成本很低，我採用。
 - **CS-16**（r1 新，A-19）：`valuation_state_counts` 只給前端的總額與估值元件讀；CS-4 的 grep 範圍擴到這個欄位。
 
 ## 測試要求
@@ -223,12 +237,14 @@
   - Q-B5：AC-B5a-6 與 CEO 2026-10-03 裁定 5 的關係。
 - **風控**：
   - 已裁示（r1，A-20）：O1 或 O2（台股用 O2-b（LM-71）、美股用 O2-c（LM-72）；O1 不核可，風控第三批）；`pre_open` 沿用 LM-23（字面見 D-5：LM-23 日期代 P ＋LM-28，不得用 LM-27）。
-  - 新增（r1，A-20）：`basis=observed` 的對應（見 D-5），待風控確認。
+  - 已裁示（r2，A-40）：`basis=observed` 的對應（風控 v0.6 核對 A-16：R4c 有條件用 LM-24；R4b 維持 LM-71＋LM-26）。
+  - 新增（r2，A-40）：data-engineer 觀察日確認回報的單項確認。
   - 新狀態的字面。
 - **data-engineer**：
   - Q-B7：各日線來源在盤中或收盤剛結束時，會不會回傳當日、尚未定案的 bar；
   - VS-2～VS-6 的查證；
   - 週六補行交易日。
+  - 新增（r2，A-40）：觀察日集合來源的確認。
 - **CEO**：接受新狀態；#15 連網環境。
 - **tech-architect**：Q-B6（ADR-0009 是否吃官方假日表），在 T1-13 時另案處理。
 
@@ -283,3 +299,37 @@
 
 **A-21（D-6 第 6 點）**
 - r1（2026-10-16，tech-architect A-21）：新增第 6 點，無被取代原文；見 §D-6。
+
+---
+
+> r2（2026-10-17）依 tech-architect 修訂提案 A-22～A-41 套用；本 ADR 適用 A-38～A-41，A-22～A-37 見 ADR-0027。檔頭狀態維持 proposed。
+> 套用順序與提案來源（後者取代前者的對應條目）：
+> 1. r2：`work/reviews/2026-10-17-ADR-0027與0028修訂提案A22至A41-tech-architect.md` 附件 A（A-38～A-41）。
+> 2. r2'：`work/reviews/2026-10-17-ADR-0027與0028修訂提案r2prime-tech-architect.md` 附件 A。A-38 整條取代 r2 版；A-39 只改 CS-12 的 observed 一段，CS-11、CS-15 (b) 同 r2；A-40 加一點，其餘同 r2；A-41 未列，照 r2 原文。
+> 3. r2''（`work/reviews/2026-10-17-ADR-0027修訂提案r2雙撇A36增補-tech-architect.md`）不動 ADR-0028 的任何條目。
+> 風控確認依據：`work/reviews/2026-10-17-ADR-r2附件B單項確認-風控.md`、`work/reviews/2026-10-17-A-15-事先宣告v0.9核對與A36及B0單項確認-風控.md`。
+> 被改寫或取代的原文逐字保留於下；「新增」類條目沒有被取代的原文。引用區塊內的文字即 r2 之前的原文。
+> 原文與新文中的「附件 B'-x」，指提案檔內的編號，不是本 ADR 的章節。
+> 本次套用不含 ADR-0028 r3（觀察日來源，另案）。
+
+**A-38（D-5 字面對應表）**
+- r2（2026-10-17，tech-architect A-38，r2' 整條取代 r2 版）：D-5 表中 observed 一列原文——
+  > | R4b／R4c，basis＝observed | TW | 暫時比照 LM-71＋LM-26，待風控單項確認。我的建議：observed 是正面證據，可以比照 official 用 LM-27／LM-24 |
+
+  改為見 §D-5（拆成 R4b、R4c 兩列，表後加說明）。
+
+**A-39（CS-11、CS-12、CS-15）**
+- r2（2026-10-17，tech-architect A-39）：CS-11 補一句、CS-15 加 (b)，無被取代原文；見 §對實作的約束。
+- r2（2026-10-17，tech-architect A-39，r2' 只改 observed 一段）：CS-12 原文——
+  > - **CS-12**（r1 改，A-17）：LM-24、LM-27 只在 `market=TW` 而且 `basis=official` 時渲染。日後美股若接上官方日曆，LM-24、LM-27 要先依時區重審，才能擴用到美股。
+
+  改為見 §對實作的約束 CS-12（美股一句保留）。
+
+**A-40（待決事項）**
+- r2（2026-10-17，tech-architect A-40，r2' 加一點）：待決事項風控項原文——
+  > - 新增（r1，A-20）：`basis=observed` 的對應（見 D-5），待風控確認。
+
+  改為見 §待決事項 風控（已裁示）。另新增風控一項（觀察日確認回報的單項確認）與 data-engineer 一項（觀察日集合來源的確認），無被取代原文。
+
+**A-41（檔頭）**
+- r2（2026-10-17，tech-architect A-41）：檔頭新增「r2 修訂」一行，無被取代原文。
