@@ -136,7 +136,7 @@ export default function PositionDetailPage() {
   */
   const entryLevels =
     bars.data && bars.data.status === "ok"
-      ? computeKeyLevels(bars.data.bars, keyLevelsAnchor.anchorSource === "cost" ? keyLevelsAnchor.avgCost : null)
+      ? computeKeyLevels(bars.data.bars)
       : null;
   const entryObservation = evaluateEntryObservation(
     entryLevels,
@@ -168,7 +168,7 @@ export default function PositionDetailPage() {
       title: KEY_LEVELS_PANEL_TITLE,
       items:
         bars.data && bars.data.status === "ok"
-          ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
+          ? buildKeyLevelsFooterItems(bars.data.bars)
           : [],
     },
     // 風控 REQ-1: the six thresholds are static facts — this group exists whatever the queries do.

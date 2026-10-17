@@ -38,12 +38,12 @@ export interface KeyLevels {
   /** ATR(14), simple mean of true ranges; null with fewer than 15 bars. */
   atr14: number | null;
   /**
-   * Entry price the stop/target references are anchored on: the position's
-   * average cost when held, otherwise the latest close (a simulation the UI
-   * must label as such).
+   * Price the stop/target references are anchored on: ALWAYS the latest close,
+   * held or not (risk R-6 / PV-17: a sunk cost must never decide a stop or a
+   * take-profit distance). Equal to `close` by construction; kept as its own
+   * field so the ladder and the formulas keep naming the anchor explicitly.
    */
   anchorPrice: number;
-  anchoredOnCost: boolean;
   /** anchor − 2×ATR(14); null when atr14 is null. */
   stopAtr: number | null;
   /** anchor × 0.92 (this panel's fixed −8% stop parameter). */
@@ -96,7 +96,7 @@ function mean(values: number[]): number {
  * numbers are rejected up front (whole-series refusal beats silently
  * computing on partly-garbage data — same posture as the repository layer).
  */
-export function computeKeyLevels(bars: Bar[], avgCost: number | null): KeyLevels | null {
+export function computeKeyLevels(bars: Bar[]): KeyLevels | null {
   if (bars.length === 0) return null;
   const closes = bars.map((b) => toNum(b.close));
   const highs = bars.map((b) => toNum(b.high));
@@ -132,8 +132,10 @@ export function computeKeyLevels(bars: Bar[], avgCost: number | null): KeyLevels
     atr14 = mean(trs);
   }
 
-  const anchoredOnCost = avgCost !== null && Number.isFinite(avgCost) && avgCost > 0;
-  const anchorPrice = anchoredOnCost ? (avgCost as number) : close;
+  // R-6: the anchor is the latest close for every holding state. The average
+  // cost is deliberately NOT an input of this function, so no stop or
+  // take-profit reference can depend on it (PV-17).
+  const anchorPrice = close;
 
   const stopFixedPct = anchorPrice * FIXED_STOP_RATIO;
   const stopAtr = atr14 !== null ? anchorPrice - ATR_STOP_MULTIPLE * atr14 : null;
@@ -156,7 +158,6 @@ export function computeKeyLevels(bars: Bar[], avgCost: number | null): KeyLevels
     recentLow60,
     atr14,
     anchorPrice,
-    anchoredOnCost,
     stopAtr,
     stopFixedPct,
     stopSuggested,
@@ -169,13 +170,29 @@ export function computeKeyLevels(bars: Bar[], avgCost: number | null): KeyLevels
 }
 
 /**
- * The stop/target anchor's provenance, decided by the caller (risk R10/R11):
+ * The holding/cost status of the symbol, decided by the caller (risk R10/R11):
  * "cost" = held with a usable average cost; "close-not-held" = the position
  * query CONFIRMED the symbol is not held; "close-unknown" = holding status or
  * cost could not be determined (query pending/failed/fields missing) — the UI
  * must never claim "未持有" in that state.
+ *
+ * Since R-6 this no longer chooses the stop/target anchor (that is always the
+ * latest close); it only selects the wording and whether a cost P&L can be
+ * shown beside the levels.
  */
 export type AnchorSource = "cost" | "close-not-held" | "close-unknown";
+
+/**
+ * Profit/loss of the latest close relative to the average cost, in percent
+ * ((close / avgCost - 1) x 100). Display only (risk R-6, PV-29): nothing in
+ * the stop/take-profit chain may read this number. Null when the cost is not
+ * usable, so the caller renders the "unavailable" wording instead of a number.
+ */
+export function computeCostPnlPct(close: number, avgCost: number | null): number | null {
+  if (avgCost === null || !Number.isFinite(avgCost) || avgCost <= 0) return null;
+  if (!Number.isFinite(close)) return null;
+  return (close / avgCost - 1) * 100;
+}
 
 /** 位階三分類的門檻（≤30 低位、≥70 高位、其餘中位）。 */
 export type RangeZone = "low" | "mid" | "high";

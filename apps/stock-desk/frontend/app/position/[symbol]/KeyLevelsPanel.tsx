@@ -3,7 +3,8 @@
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { DETAILS_SUMMARY_KEY_LEVELS, buildKeyLevelsOneLiner } from "../../lib/oneLinerWording";
 import type { FooterItem } from "../../components/PageFooterDisclosures";
-import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
+import { buildCostPnlRow } from "../../lib/decisionCardWording";
+import { classifyRangeZone, computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
 import type { LadderGroup, LadderRung } from "../../lib/keyLevelsVisuals";
@@ -104,16 +105,17 @@ export const KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60 = "近 60 日低點";
 
 export const KEY_LEVELS_STOP_CARD_TITLE = "停損參考";
 
-export function buildStopBasisHeldWithCost(x: string): string {
-  return `本卡以你的持倉平均成本 ${x} 為基準計算。`;
+/**
+ * LM-16 (R-6, risk-approved verbatim): the basis sentence shared by the held
+ * branch with a known cost AND the held/unknown branch without one. The cost
+ * P&L is listed on the line directly below it ("另列於下"), at every width.
+ */
+export function buildStopBasisHeld(x: string, d: string): string {
+  return `停損參考與停利參考以最新收盤 ${x}（${d}）為基準計算；相對成本的損益另列於下。`;
 }
 
 export function buildStopBasisConfirmedNotHeld(x: string): string {
   return `未持有此標的，以最新收盤 ${x} 試算；此數字不是任何進場暗示。`;
-}
-
-export function buildStopBasisUnknown(x: string): string {
-  return `持倉成本尚未取得，暫以最新收盤 ${x} 試算。`;
 }
 
 export const KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE =
@@ -124,9 +126,6 @@ export const KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE =
 
 export const KEY_LEVELS_STOP_ROW_ATR = "2×ATR(14)";
 export const KEY_LEVELS_STOP_ROW_FIXED_PCT = "−8% 固定停損";
-
-export const KEY_LEVELS_STOP_S5_NEUTRAL_NOTE =
-  "停損參考水位與最新收盤的相對高低，因基準價與波動不同而不同，可能高於也可能低於最新收盤。";
 
 /* ---------- §5 停利參考卡 ---------- */
 
@@ -148,7 +147,8 @@ export const KEY_LEVELS_TARGET_ROW_TRAILING_NOTE =
 
 /* ---------- §5b 價位階梯的基準價／收盤列標籤（圖形化 item 2） ---------- */
 
-export const KEY_LEVELS_LADDER_RUNG_ANCHOR_COST = "基準價（持倉平均成本）";
+/** LM-17 (R-6, risk-approved verbatim): the anchor label of the held branch (cost known or not). */
+export const KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD = "基準價（最新收盤）";
 export const KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE = "基準價（最新收盤，試算）";
 export const KEY_LEVELS_LADDER_RUNG_CLOSE = "最新收盤";
 
@@ -245,11 +245,16 @@ export const KEY_LEVELS_BASIS_CLOSE_DISTANCE: BasisItem = {
     "距離為算式結果，不代表價格會依此幅度到達任一價位。",
 };
 
+/**
+ * LM-18 (R-6, risk-approved verbatim): replaces the two held-branch formula
+ * lines. The not-held line below it is untouched (it stays until B2).
+ */
+export const KEY_LEVELS_BASIS_ANCHOR_FORMULA = "基準價=最新收盤（持有與未持有相同；未持有時為試算）";
+
 export const KEY_LEVELS_BASIS_ANCHOR: BasisItem = {
   formula: [
     "基準價：",
-    "持有且成本可得→基準價=持倉平均成本",
-    "持有但成本未取得→基準價=最新收盤(試算)",
+    KEY_LEVELS_BASIS_ANCHOR_FORMULA,
     "未持有→基準價=最新收盤(試算)；此數字不是任何進場暗示。",
   ],
   qualifier: null,
@@ -314,9 +319,21 @@ function zoneSuffix(zone: RangeZone): string {
 
 function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
   const x = fmt(levels.anchorPrice);
-  if (source === "cost") return buildStopBasisHeldWithCost(x);
   if (source === "close-not-held") return buildStopBasisConfirmedNotHeld(x);
-  return buildStopBasisUnknown(x);
+  // R-6: cost known ("cost") and cost not obtained ("close-unknown") share LM-16.
+  return buildStopBasisHeld(x, levels.closeDate);
+}
+
+/**
+ * The cost P&L row listed directly under the basis sentence (LM-19, or LM-53
+ * in place of the whole row when no cost is available). Null for a CONFIRMED
+ * not-held symbol: there is no cost to compare with, and the not-held basis
+ * sentence does not promise a P&L "below". Display only (PV-29): this value
+ * feeds no stop/take-profit number.
+ */
+function costPnlRow(source: AnchorSource, levels: KeyLevels, avgCost: number | null): string | null {
+  if (source === "close-not-held") return null;
+  return buildCostPnlRow(source === "cost" ? computeCostPnlPct(levels.close, avgCost) : null);
 }
 
 /** Ladder rung → the panel's existing pinned row label (no new wording per rung). */
@@ -327,9 +344,8 @@ function ladderRungLabel(rung: LadderRung, anchorSource: AnchorSource): string {
     case "target-2r":
       return KEY_LEVELS_TARGET_ROW_2R;
     case "anchor":
-      return anchorSource === "cost" ? KEY_LEVELS_LADDER_RUNG_ANCHOR_COST : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE;
-    case "close":
-      return KEY_LEVELS_LADDER_RUNG_CLOSE;
+      // LM-17 for both held branches (cost known / not obtained); the trial label only for a confirmed not-held symbol.
+      return anchorSource === "close-not-held" ? KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD;
     case "ma20":
       return KEY_LEVELS_PULLBACK_ROW_MA20;
     case "ma60":
@@ -377,7 +393,7 @@ export function KeyLevelsPanel({
   /** Page market for the F-7 price-unit chip; absent or unknown = no chip. */
   market?: string;
 }) {
-  const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
+  const levels = computeKeyLevels(bars);
 
   if (levels === null) {
     return (
@@ -390,6 +406,7 @@ export function KeyLevelsPanel({
 
   const zone = rangeZoneOf(levels);
   const ladder = buildLadderViewModel(levels, anchorSource);
+  const pnlRow = costPnlRow(anchorSource, levels, avgCost);
 
   // 一眼一句 §2.4 `KEYLEVELS_ONE_LINER`／R7 fallback: the same three-way branch
   // the old position card used to decide its own headline (zone vs. the two
@@ -462,6 +479,8 @@ export function KeyLevelsPanel({
           <div>
             <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
             <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
+            {/* R-6 "另列於下": the cost P&L row sits directly under the LM-16 sentence (LM-19, or LM-53 replacing the whole row). */}
+            {pnlRow !== null && <p className="mt-1">{pnlRow}</p>}
             <p className="mt-1">
               {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
             </p>
@@ -532,7 +551,7 @@ export function KeyLevelsPanel({
           </div>
 
           {/*
-            計算依據十條、樣本句、S5 句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
+            計算依據十條、樣本句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
             （`buildKeyLevelsFooterItems` → `PageFooterDisclosures`），此處留指引句（風控 L5）。
           */}
           <p className="text-sm text-neutral-300">{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}</p>
@@ -547,14 +566,14 @@ export function KeyLevelsPanel({
 /**
  * The 關鍵價位參考 group of `PageFooterDisclosures`: every sentence the panel
  * no longer renders in place, verbatim and in the panel's original order —
- * 資料過舊自述句、S5 句、「計算依據（逐項揭露）」十條（with its XREF and the
+ * 資料過舊自述句、「計算依據（逐項揭露）」十條（with its XREF and the
  * title as a sub-heading, P2 formula/qualifier pairing intact) and the 樣本句.
  * Computes its own `KeyLevels` from the same inputs the panel uses, so the
  * numbers inside the formula lines (收盤 X、近 N 根) can never diverge from
  * the panel. Returns [] when the panel itself would show the no-data state.
  */
-export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, anchorSource: AnchorSource): FooterItem[] {
-  const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
+export function buildKeyLevelsFooterItems(bars: Bar[]): FooterItem[] {
+  const levels = computeKeyLevels(bars);
   if (levels === null) return [];
   // Order mirrors the panel's original top-to-bottom reading order (CEO 第二次裁定
   // 2026-09-06 added DISCLAIMER／DASH／位階≠估值／停利 standing notice／階梯註記).
@@ -564,7 +583,6 @@ export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, a
     KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
     KEY_LEVELS_HEADER_DASH_NOTICE,
     ...(zone !== null ? [buildRangeNotValuationNote(levels.rangeBarCount)] : []),
-    KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
     KEY_LEVELS_TARGET_STANDING_NOTICE,
     KEY_LEVELS_LADDER_NOTE,
     { heading: KEY_LEVELS_BASIS_SECTION_TITLE },

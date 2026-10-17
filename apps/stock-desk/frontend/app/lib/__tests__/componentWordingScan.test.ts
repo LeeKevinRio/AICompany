@@ -50,6 +50,7 @@ import {
 import { NON_REALTIME_NOTICE } from "../adviceWording";
 import {
   KEY_LEVELS_BASIS_ANCHOR,
+  KEY_LEVELS_BASIS_ANCHOR_FORMULA,
   KEY_LEVELS_BASIS_ATR,
   KEY_LEVELS_BASIS_CLOSE_DISTANCE,
   KEY_LEVELS_BASIS_MA,
@@ -77,7 +78,6 @@ import {
   KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
   KEY_LEVELS_STOP_ROW_ATR,
   KEY_LEVELS_STOP_ROW_FIXED_PCT,
-  KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
   KEY_LEVELS_TARGET_ANCHOR_CROSS_REF,
   KEY_LEVELS_TARGET_CARD_TITLE,
   KEY_LEVELS_TARGET_ROW_2R,
@@ -98,13 +98,12 @@ import {
   buildRangeLabel,
   buildRangeNotValuationNote,
   buildStopBasisConfirmedNotHeld,
-  buildStopBasisHeldWithCost,
-  buildStopBasisUnknown,
+  buildStopBasisHeld,
 } from "../../position/[symbol]/KeyLevelsPanel";
 import type { BasisItem } from "../../position/[symbol]/KeyLevelsPanel";
 import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
-  KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_LADDER_RUNG_CLOSE,
 } from "../../position/[symbol]/KeyLevelsPanel";
 import {
@@ -208,15 +207,15 @@ import { RiskGaugeView } from "../../components/RiskGauge";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../types";
 import {
   DECISION_CARD_ARIA_LABEL,
-  DECISION_CARD_CROSSED_DISCLOSURE,
-  DECISION_CARD_CROSSED_STOP_PREFIX,
-  DECISION_CARD_CROSSED_TARGET_PREFIX,
+  DECISION_CARD_COST_PNL_LABEL,
+  DECISION_CARD_COST_PNL_UNAVAILABLE,
   DECISION_CARD_DISTANCE_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
   buildDecisionCardDistance,
-  pickDecisionCardDistance,
+  buildCostPnlRow,
+  buildDecisionCardCostPnl,
 } from "../decisionCardWording";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
@@ -669,6 +668,7 @@ describe("DataSourcesSection.tsx — CONFIGURED_SOURCES rows (D5④/D5⑤ 字面
  * 漂移須重送風控。
  */
 describe("KeyLevelsPanel 定稿字面", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
   const STATIC_CONSTANTS: Record<string, string> = {
     KEY_LEVELS_PANEL_TITLE,
     KEY_LEVELS_PANEL_DISCLAIMER,
@@ -689,7 +689,6 @@ describe("KeyLevelsPanel 定稿字面", () => {
     KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
     KEY_LEVELS_STOP_ROW_ATR,
     KEY_LEVELS_STOP_ROW_FIXED_PCT,
-    KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
     KEY_LEVELS_TARGET_CARD_TITLE,
     KEY_LEVELS_TARGET_ANCHOR_CROSS_REF,
     KEY_LEVELS_TARGET_STANDING_NOTICE,
@@ -718,9 +717,10 @@ describe("KeyLevelsPanel 定稿字面", () => {
     buildRangeNotValuationNote: buildRangeNotValuationNote(252),
     buildRangeInsufficientReason: buildRangeInsufficientReason(42),
     buildRangeFlatReason: buildRangeFlatReason(300),
-    buildStopBasisHeldWithCost: buildStopBasisHeldWithCost("895.44"),
+    buildStopBasisHeld: buildStopBasisHeld("895.44", "2026-09-01"),
+    buildCostPnlRow: buildCostPnlRow(-12.34),
+    buildCostPnlRowUnavailable: buildCostPnlRow(null),
     buildStopBasisConfirmedNotHeld: buildStopBasisConfirmedNotHeld("918.66"),
-    buildStopBasisUnknown: buildStopBasisUnknown("918.66"),
     buildBasisClose: flatBasis(buildBasisClose("918.66", "2026-09-01")),
     buildBasisRange: flatBasis(buildBasisRange(252)),
     buildFooterSample: buildFooterSample(387, "2026-09-01"),
@@ -754,12 +754,56 @@ describe("KeyLevelsPanel 定稿字面", () => {
     );
   });
 
-  it("三態基準句逐字比對成稿（{X} 代入）", () => {
-    expect(buildStopBasisHeldWithCost("895.44")).toBe("本卡以你的持倉平均成本 895.44 為基準計算。");
+  it("基準句逐字比對成稿（{X} 代入）：持有（含成本已取得與成本未取得）共用 LM-16；未持有句不動（留到 B2）", () => {
+    // LM-16 (risk first-batch appendix, verbatim): {x} = latest close, {日期} = its trade date.
+    expect(buildStopBasisHeld("895.44", "2026-09-01")).toBe(
+      "停損參考與停利參考以最新收盤 895.44（2026-09-01）為基準計算；相對成本的損益另列於下。",
+    );
     expect(buildStopBasisConfirmedNotHeld("918.66")).toBe(
       "未持有此標的，以最新收盤 918.66 試算；此數字不是任何進場暗示。",
     );
-    expect(buildStopBasisUnknown("918.66")).toBe("持倉成本尚未取得，暫以最新收盤 918.66 試算。");
+    // Superseded 2026-10-04 / 2026-09-01 held-branch sentences must not exist anymore.
+    const panelSrc = read("../../position/[symbol]/KeyLevelsPanel.tsx");
+    for (const gone of [
+      "本卡以你的持倉平均成本",
+      "持倉成本尚未取得，暫以最新收盤",
+      "buildStopBasisHeldWithCost",
+      "buildStopBasisUnknown",
+      "KEY_LEVELS_LADDER_RUNG_ANCHOR_COST",
+      "基準價（持倉平均成本）",
+      "持有且成本可得→基準價=持倉平均成本",
+      "持有但成本未取得→基準價=最新收盤(試算)",
+    ]) {
+      expect(panelSrc, gone).not.toContain(gone);
+    }
+  });
+
+  it("B0 / R-6 相對成本損益 LM-19、LM-53 逐字比對成稿;LM-53 整串取代整列;無禁用詞、無裸即時宣稱", () => {
+    expect(DECISION_CARD_COST_PNL_LABEL).toBe("相對成本損益 ");
+    expect(buildDecisionCardCostPnl(12.34)).toBe("相對成本損益 +12.3%");
+    expect(buildDecisionCardCostPnl(-12.34)).toBe("相對成本損益 -12.3%");
+    expect(buildDecisionCardCostPnl(0)).toBe("相對成本損益 0.0%");
+    expect(DECISION_CARD_COST_PNL_UNAVAILABLE).toBe("相對成本損益：未取得持倉成本，無法計算");
+    expect(buildCostPnlRow(5)).toBe("相對成本損益 +5.0%");
+    expect(buildCostPnlRow(null)).toBe(DECISION_CARD_COST_PNL_UNAVAILABLE);
+    expect(buildCostPnlRow(Number.NaN)).toBe(DECISION_CARD_COST_PNL_UNAVAILABLE);
+    // LM-53 replaces the whole row: exactly one label, and none of the forbidden words (預告日後會有／暗示改用成本／試算).
+    expect(DECISION_CARD_COST_PNL_UNAVAILABLE.split("相對成本損益").length - 1).toBe(1);
+    for (const banned of ["尚未", "暫以", "試算", "—"]) expect(DECISION_CARD_COST_PNL_UNAVAILABLE).not.toContain(banned);
+    for (const text of [
+      DECISION_CARD_COST_PNL_LABEL,
+      buildDecisionCardCostPnl(-12.34),
+      DECISION_CARD_COST_PNL_UNAVAILABLE,
+      buildStopBasisHeld("895.44", "2026-09-01"),
+      KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
+      KEY_LEVELS_BASIS_ANCHOR_FORMULA,
+    ]) {
+      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
+      expect(findBareRealtimeClaims(text)).toEqual([]);
+    }
+    // Display only: decisionCardWording.ts must not hand the P&L to anything that could be read as a reason.
+    const src = read("../decisionCardWording.ts");
+    expect(src).not.toMatch(/function fmtSigned|toFixed/);
   });
 
   it("R5 停利常駐句與 R9 條件句逐字比對成稿", () => {
@@ -811,9 +855,9 @@ describe("KeyLevelsPanel 定稿字面", () => {
     expect(KEY_LEVELS_STOP_CARD_TITLE).toBe("停損參考");
     expect(KEY_LEVELS_STOP_ROW_ATR).toBe("2×ATR(14)");
     expect(KEY_LEVELS_STOP_ROW_FIXED_PCT).toBe("−8% 固定停損");
-    expect(KEY_LEVELS_STOP_S5_NEUTRAL_NOTE).toBe(
-      "停損參考水位與最新收盤的相對高低，因基準價與波動不同而不同，可能高於也可能低於最新收盤。",
-    );
+    // S5 sentence ("可能高於也可能低於最新收盤") deleted with B0: the stop is now always at or below the latest close.
+    expect(read("../../position/[symbol]/KeyLevelsPanel.tsx")).not.toContain("KEY_LEVELS_STOP_S5_NEUTRAL_NOTE");
+    expect(read("../../position/[symbol]/KeyLevelsPanel.tsx")).not.toContain("可能高於也可能低於最新收盤");
     expect(KEY_LEVELS_TARGET_CARD_TITLE).toBe("停利參考");
     expect(KEY_LEVELS_TARGET_ANCHOR_CROSS_REF).toBe("本卡數字所用之基準價，與「停損參考」卡片相同。");
     expect(KEY_LEVELS_TARGET_ROW_2R).toBe("2R（賺賠比 2:1）");
@@ -883,11 +927,12 @@ describe("KeyLevelsPanel 定稿字面", () => {
     expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).toContain("距離亦非持倉損益");
     // The superseded sentence must be gone.
     expect(flatBasis(KEY_LEVELS_BASIS_CLOSE_DISTANCE)).not.toContain("此處距離之分母為最新收盤，兩者基準不同");
+    // LM-18 (R-6, verbatim) replaces the two held-branch lines; the not-held line stays until B2.
+    expect(KEY_LEVELS_BASIS_ANCHOR_FORMULA).toBe("基準價=最新收盤（持有與未持有相同；未持有時為試算）");
     expect(KEY_LEVELS_BASIS_ANCHOR).toEqual({
       formula: [
         "基準價：",
-        "持有且成本可得→基準價=持倉平均成本",
-        "持有但成本未取得→基準價=最新收盤(試算)",
+        "基準價=最新收盤（持有與未持有相同；未持有時為試算）",
         "未持有→基準價=最新收盤(試算)；此數字不是任何進場暗示。",
       ],
       qualifier: null,
@@ -1112,7 +1157,7 @@ describe("圖形化 1–3 新字面與守門", () => {
     KEY_LEVELS_LADDER_HEADLINE_TAG,
     KEY_LEVELS_LADDER_DISTANCE_HEADER,
     KEY_LEVELS_LADDER_NOTE,
-    KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+    KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
     KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
     KEY_LEVELS_LADDER_RUNG_CLOSE,
     INDICATOR_OVERVIEW_TITLE,
@@ -1149,7 +1194,8 @@ describe("圖形化 1–3 新字面與守門", () => {
     expect(KEY_LEVELS_LADDER_HEADLINE_TAG).toBe("大字所示");
     expect(KEY_LEVELS_LADDER_DISTANCE_HEADER).toBe("相對基準價");
     expect(KEY_LEVELS_LADDER_NOTE).toBe("排序與距離皆為算式結果，不代表價格會依此順序或幅度到達任一價位。");
-    expect(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST).toBe("基準價（持倉平均成本）");
+    // LM-17 (R-6, verbatim): the held-branch anchor label replaces 「基準價（持倉平均成本）」.
+    expect(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD).toBe("基準價（最新收盤）");
     expect(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE).toBe("基準價（最新收盤，試算）");
     expect(KEY_LEVELS_LADDER_RUNG_CLOSE).toBe("最新收盤");
   });
@@ -1415,7 +1461,7 @@ describe("揭露下沉頁尾 守門", () => {
     for (const [title, needle] of [
       ["PAGE_LEVEL_DISCLOSURE_SECTION_TITLE", "items: [NON_REALTIME_NOTICE]"],
       ["OPERATION_SUMMARY_TITLE", "buildSummaryFooterItems(advice.data)"],
-      ["KEY_LEVELS_PANEL_TITLE", "buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)"],
+      ["KEY_LEVELS_PANEL_TITLE", "buildKeyLevelsFooterItems(bars.data.bars)"],
       ["TECHNICAL_ANALYSIS_TITLE", "buildTechnicalFooterItems(signals.data.signals)"],
       ["ADVICE_CARD_TITLE", "buildAdviceFooterItems(advice.data.advice)"],
       ["LEVERAGE_CHAPTER_TITLE", "[leverage.data.chapter.disclosure]"],
@@ -1504,7 +1550,6 @@ describe("揭露下沉頁尾 守門", () => {
     // 原區塊 JSX 不再渲染這些句子（builder 內以常數名出現屬允許，故只查 JSX 插值形式）。
     for (const needle of [
       "{KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE}",
-      "{KEY_LEVELS_STOP_S5_NEUTRAL_NOTE}",
       "{KEY_LEVELS_BASIS_SECTION_TITLE}",
       "{KEY_LEVELS_BASIS_UNADJUSTED_XREF}",
       "{buildFooterSample(",
@@ -1525,33 +1570,31 @@ describe("揭露下沉頁尾 守門", () => {
       open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
     });
     const bars = Array.from({ length: 80 }, (_, i) => bar(i));
-    const items = buildKeyLevelsFooterItems(bars, null, "close-not-held");
-    expect(items.slice(0, 8)).toEqual([
+    const items = buildKeyLevelsFooterItems(bars);
+    expect(items.slice(0, 7)).toEqual([
       KEY_LEVELS_PANEL_DISCLAIMER,
       KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
       KEY_LEVELS_HEADER_DASH_NOTICE,
       buildRangeNotValuationNote(80),
-      KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
       KEY_LEVELS_TARGET_STANDING_NOTICE,
       KEY_LEVELS_LADDER_NOTE,
       { heading: KEY_LEVELS_BASIS_SECTION_TITLE },
     ]);
-    expect(items[8]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
-    const basis = items.slice(9, 20);
+    expect(items[7]).toBe(KEY_LEVELS_BASIS_UNADJUSTED_XREF);
+    const basis = items.slice(8, 19);
     expect(basis).toHaveLength(11);
     expect(basis.map((b) => (typeof b === "string" || !("formula" in b) ? "?" : b.formula[0]?.slice(0, 4)))).toEqual([
       "收盤（本", "位階(近", "分類：位", "MA20", "近60日", "ATR(", "停損參考", "停利參考", "距最新收", "基準價：", "拉回觀察",
     ]);
-    expect(items[20]).toBe(buildFooterSample(80, bars[79]!.date));
+    expect(items[19]).toBe(buildFooterSample(80, bars[79]!.date));
     // 位階不可計算時（< 60 根）不含位階≠估值句，其餘順序不變。
-    const short = buildKeyLevelsFooterItems(bars.slice(0, 40), null, "close-not-held");
-    expect(short.slice(0, 4)).toEqual([
+    const short = buildKeyLevelsFooterItems(bars.slice(0, 40));
+    expect(short.slice(0, 3)).toEqual([
       KEY_LEVELS_PANEL_DISCLAIMER,
       KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
       KEY_LEVELS_HEADER_DASH_NOTICE,
-      KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
     ]);
-    expect(buildKeyLevelsFooterItems([], null, "close-not-held")).toEqual([]);
+    expect(buildKeyLevelsFooterItems([])).toEqual([]);
 
     // 操作摘要 builder：候選＝覆蓋度句（完整數字）＋規則版本句；no_price／no_action＝[]。
     const noPrice = { status: "insufficient_data", reason: "x", advice: null, held: false, position_ids: [], context_notes: [], data: { status: "fresh" }, as_of: null } as unknown as AdviceResponse;
@@ -1584,7 +1627,7 @@ describe("揭露下沉頁尾 守門", () => {
       date: `2026-0${1 + Math.floor(i / 28)}-${String(1 + (i % 28)).padStart(2, "0")}`,
       open: "100", high: "105", low: "95", close: String(100 + (i % 7)), volume: 1000, currency: "TWD", source: "demo",
     }));
-    const items = buildKeyLevelsFooterItems(bars, null, "close-not-held");
+    const items = buildKeyLevelsFooterItems(bars);
     expect(items.slice(9, 20)).toHaveLength(11);
     expect(items).toContain(KEY_LEVELS_BASIS_CLOSE_DISTANCE);
   });
@@ -2244,52 +2287,24 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
     }
   });
 
-  it("風控 2026-10-04 required 3：越過句兩個前綴與揭露行逐字釘住（含尾空白），無禁用詞、無裸即時宣稱", () => {
-    expect(DECISION_CARD_CROSSED_TARGET_PREFIX).toBe("最新收盤高於此參考水位 ");
-    expect(DECISION_CARD_CROSSED_STOP_PREFIX).toBe("最新收盤低於此參考水位 ");
-    expect(DECISION_CARD_CROSSED_DISCLOSURE).toBe("上方動作由規則判斷，規則未讀取停損參考與停利參考。");
-    const samples = [
-      DECISION_CARD_CROSSED_TARGET_PREFIX,
-      DECISION_CARD_CROSSED_STOP_PREFIX,
-      DECISION_CARD_CROSSED_DISCLOSURE,
-      pickDecisionCardDistance("target", 1305, 1191.62, true).text,
-      pickDecisionCardDistance("stop", 900, 945.08, true).text,
-    ];
-    for (const text of samples) {
-      assertNoForbiddenTerms(text, FRONTEND_FORBIDDEN_TERMS, text);
-      expect(findBareRealtimeClaims(text)).toEqual([]);
-      for (const banned of ["已高於", "已低於", "越過", "已達", "觸發", "跌破此", "此水位 "]) {
-        expect(text).not.toContain(banned);
-      }
+  it("B0（風控 R-6 required 4）：2026-10-04 的「越過」整組與其揭露行已刪除,原始碼與渲染輸出都不得再出現", () => {
+    const wording = read("../decisionCardWording.ts");
+    const card = read("../../position/[symbol]/DecisionCard.tsx");
+    for (const gone of [
+      "DECISION_CARD_CROSSED_TARGET_PREFIX",
+      "DECISION_CARD_CROSSED_STOP_PREFIX",
+      "DECISION_CARD_CROSSED_DISCLOSURE",
+      "pickDecisionCardDistance",
+      "最新收盤高於此參考水位",
+      "最新收盤低於此參考水位",
+      "上方動作由規則判斷，規則未讀取停損參考與停利參考。",
+    ]) {
+      expect(wording, gone).not.toContain(gone);
+      expect(card, gone).not.toContain(gone);
     }
-  });
-
-  it("風控 2026-10-04 required 1：pickDecisionCardDistance 逐字輸出；分母為該參考本身；原值嚴格比較；非 cost 一律不出越過句", () => {
-    expect(pickDecisionCardDistance("target", 1305, 1191.62, true)).toEqual({
-      text: "最新收盤高於此參考水位 +9.5%",
-      crossed: true,
-    });
-    expect(pickDecisionCardDistance("stop", 900, 945.08, true)).toEqual({
-      text: "最新收盤低於此參考水位 -4.8%",
-      crossed: true,
-    });
-    // Equality is the original branch; so is the non-crossing side of each level.
-    expect(pickDecisionCardDistance("target", 116, 116, true)).toEqual({ text: "距最新收盤 0.0%", crossed: false });
-    expect(pickDecisionCardDistance("stop", 92, 92, true)).toEqual({ text: "距最新收盤 0.0%", crossed: false });
-    expect(pickDecisionCardDistance("target", 100, 116, true).crossed).toBe(false);
-    expect(pickDecisionCardDistance("stop", 100, 92, true).crossed).toBe(false);
-    // Raw value above but rounds to zero: crossed sentence prints 0.0%.
-    expect(pickDecisionCardDistance("target", 116.01, 116, true).text).toBe("最新收盤高於此參考水位 0.0%");
-    expect(pickDecisionCardDistance("stop", 91.99, 92, true).text).toBe("最新收盤低於此參考水位 0.0%");
-    // allowCrossed=false (anchor is not the cost) never yields a crossed sentence.
-    expect(pickDecisionCardDistance("target", 1305, 1191.62, false)).toEqual({
-      text: buildDecisionCardDistance(((1191.62 - 1305) / 1305) * 100),
-      crossed: false,
-    });
-    expect(pickDecisionCardDistance("stop", 900, 945.08, false).crossed).toBe(false);
-    // Source: the percentage still comes from fmtSigned, never a second formatter.
-    const src = read("../decisionCardWording.ts");
-    expect(src).not.toMatch(/function fmtSigned|toFixed/);
+    // The distance prefix and its sign logic stay (LM-unaffected): only the latest close is the denominator.
+    expect(buildDecisionCardDistance(-8)).toBe("距最新收盤 -8.0%");
+    expect(buildDecisionCardDistance(16)).toBe("距最新收盤 +16.0%");
   });
 
   it("風控 2026-10-03 第 3 項：失效條件兩個前綴逐字比對（全形冒號），且無禁用詞、無裸即時宣稱", () => {
