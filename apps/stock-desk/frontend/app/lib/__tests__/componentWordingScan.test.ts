@@ -1783,9 +1783,11 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     }
     const mainRegion = keyLevelsSrc.slice(compStart, detailsIdx);
     expect(mainRegion).toContain("{KEY_LEVELS_STOP_CARD_TITLE}");
-    expect(mainRegion).toContain("{fmt(levels.stopSuggested)}");
+    // B0 required 1: the two big numbers are "—" while the holding status is undetermined, so the
+    // expression is `holdingKnown ? fmt(...) : "—"` rather than a bare `{fmt(...)}`.
+    expect(mainRegion).toContain("fmt(levels.stopSuggested)");
     expect(mainRegion).toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
-    expect(mainRegion).toContain("{fmt(levels.target2R)}");
+    expect(mainRegion).toContain("fmt(levels.target2R)");
   });
 
   it("六項觀察條件：E-1 與資料截至句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {

@@ -317,7 +317,7 @@ function zoneSuffix(zone: RangeZone): string {
   return ZONE_LABEL[zone].replace("區間", "");
 }
 
-function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
+function anchorBasisSentence(source: Exclude<AnchorSource, "holding-unknown">, levels: KeyLevels): string {
   const x = fmt(levels.anchorPrice);
   if (source === "close-not-held") return buildStopBasisConfirmedNotHeld(x);
   // R-6: cost known ("cost") and cost not obtained ("close-unknown") share LM-16.
@@ -331,13 +331,17 @@ function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
  * sentence does not promise a P&L "below". Display only (PV-29): this value
  * feeds no stop/take-profit number.
  */
-function costPnlRow(source: AnchorSource, levels: KeyLevels, avgCost: number | null): string | null {
+function costPnlRow(
+  source: Exclude<AnchorSource, "holding-unknown">,
+  levels: KeyLevels,
+  avgCost: number | null,
+): string | null {
   if (source === "close-not-held") return null;
   return buildCostPnlRow(source === "cost" ? computeCostPnlPct(levels.close, avgCost) : null);
 }
 
 /** Ladder rung → the panel's existing pinned row label (no new wording per rung). */
-function ladderRungLabel(rung: LadderRung, anchorSource: AnchorSource): string {
+function ladderRungLabel(rung: LadderRung, anchorSource: Exclude<AnchorSource, "holding-unknown">): string {
   switch (rung.id) {
     case "target-fixed":
       return KEY_LEVELS_TARGET_ROW_FIXED_PCT;
@@ -405,8 +409,15 @@ export function KeyLevelsPanel({
   }
 
   const zone = rangeZoneOf(levels);
-  const ladder = buildLadderViewModel(levels, anchorSource);
-  const pnlRow = costPnlRow(anchorSource, levels, avgCost);
+  // 風控 B0 required 1: while the holding status itself is undetermined (positions
+  // pending / failed) the held-only wording (LM-16 / LM-17 / LM-53) is never rendered.
+  // Like the decision card, the anchor-derived numbers fail closed to "—" and the
+  // anchored ladder is not drawn. No new wording is introduced.
+  // The held / not-held helpers only accept the narrowed union, so they cannot
+  // see "holding-unknown" at all.
+  const holdingKnown = anchorSource !== "holding-unknown";
+  const ladder = anchorSource !== "holding-unknown" ? buildLadderViewModel(levels, anchorSource) : null;
+  const pnlRow = anchorSource !== "holding-unknown" ? costPnlRow(anchorSource, levels, avgCost) : null;
 
   // 一眼一句 §2.4 `KEYLEVELS_ONE_LINER`／R7 fallback: the same three-way branch
   // the old position card used to decide its own headline (zone vs. the two
@@ -437,26 +448,28 @@ export function KeyLevelsPanel({
         level; 一眼一句 §2.4 keeps it as the panel's sole main-view graphic
         (RangeGauge moves into `<details>` with the rest of the position card).
       */}
-      <div className="mt-3">
-        <PriceLadder
-          model={ladder}
-          rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
-          groupLabel={ladderGroupLabel}
-          fmt={fmt}
-          observationBand={observationBand}
-        />
-      </div>
+      {ladder !== null && anchorSource !== "holding-unknown" && (
+        <div className="mt-3">
+          <PriceLadder
+            model={ladder}
+            rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
+            groupLabel={ladderGroupLabel}
+            fmt={fmt}
+            observationBand={observationBand}
+          />
+        </div>
+      )}
 
       {/* 兩個大字並排：停損／停利參考（無紅綠，風控 S1）。 */}
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.stopSuggested)}</p>
+          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.stopSuggested) : "—"}</p>
           {/* CEO 第二次裁定 2026-09-19: R6 兩句改收進 <details>（見下方）。 */}
         </div>
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.target2R)}</p>
+          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.target2R) : "—"}</p>
           {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
         </div>
       </div>
@@ -476,15 +489,22 @@ export function KeyLevelsPanel({
             R6（CEO 第二次裁定 2026-09-19 收進詳細，字面不動）：停損大字下的
             基準句與 ATR 條件句，原本緊接在主視圖的停損參考大字下方。
           */}
-          <div>
-            <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-            <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
-            {/* R-6 "另列於下": the cost P&L row sits directly under the LM-16 sentence (LM-19, or LM-53 replacing the whole row). */}
-            {pnlRow !== null && <p className="mt-1">{pnlRow}</p>}
-            <p className="mt-1">
-              {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
-            </p>
-          </div>
+          {anchorSource !== "holding-unknown" && (
+            <div>
+              <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
+              {/*
+                風控 B0 required 2: the 「大字為…（虧損較小）」 condition line comes BEFORE the
+                LM-16 sentence, so it is never directly under the cost P&L row (LM-19).
+                LM-16 -> LM-19 stay adjacent siblings ("另列於下").
+              */}
+              <p className="mt-1">
+                {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
+              </p>
+              <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
+              {/* R-6 "另列於下": the cost P&L row sits directly under the LM-16 sentence (LM-19, or LM-53 replacing the whole row). */}
+              {pnlRow !== null && <p className="mt-1">{pnlRow}</p>}
+            </div>
+          )}
 
           {/*
             圖形化 item 1 (CEO 2026-09-06): 位階卡（RangeGauge＋MA60 乖離列），
@@ -541,10 +561,10 @@ export function KeyLevelsPanel({
           {/* 停利參考卡（完整：本檔決定收進詳細的三列與 anchor cross ref、trailing note）。 */}
           <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
             <p className="text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-            <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>
+            {holdingKnown && <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>}
             <div className="mt-2 space-y-1">
-              <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={fmt(levels.target2R)} />
-              <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={fmt(levels.targetFixedPct)} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={holdingKnown ? fmt(levels.target2R) : "—"} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={holdingKnown ? fmt(levels.targetFixedPct) : "—"} />
               <LevelRow label={KEY_LEVELS_TARGET_ROW_TRAILING_LABEL} value={fmt(levels.ma20)} />
             </div>
             <p className="mt-1 text-neutral-400">{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}</p>

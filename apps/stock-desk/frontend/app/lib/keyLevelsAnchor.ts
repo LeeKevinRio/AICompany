@@ -9,9 +9,10 @@ import type { Market, PositionsResponse } from "./types";
  * average cost, and the backend's fx placeholder 1.0 is a contract value that
  * must never touch foreign amounts). Multiple lots of the same symbol are
  * combined as a quantity-weighted average in the lots' own (shared)
- * currency. Tri-state (風控 R10/R11): a confirmed cost, a CONFIRMED not-held
- * state, or "unknown" while the positions query is pending / a lot's cost is
- * unusable — the panel never claims 未持有 on "unknown". Shared by the panel
+ * currency. Tri-state plus (風控 R10/R11): a confirmed cost, a CONFIRMED not-held
+ * state, "close-unknown" (CONFIRMED held, a lot's cost unusable) or
+ * "holding-unknown" (positions query pending / failed) — the panel never claims
+ * 未持有 on either unknown, and renders no held-only wording on "holding-unknown". Shared by the panel
  * and the 頁尾揭露 builder so both see the same anchor.
  *
  * X-3c XC-N4 (風控 2026-10-08 第三段): if ANY lot's stored currency does not match
@@ -24,7 +25,9 @@ export function resolveKeyLevelsAnchor(
   symbol: string,
   market: Market,
 ): { anchorSource: AnchorSource; avgCost: number | null } {
-  if (!positions) return { anchorSource: "close-unknown", avgCost: null };
+  // Holding status itself undetermined (pending / failed): distinct from a CONFIRMED
+  // holding with an unusable cost, so held-only wording can fail closed (風控 B0 required 1).
+  if (!positions) return { anchorSource: "holding-unknown", avgCost: null };
   const lots = positions.items.filter((p) => p.symbol === symbol && p.market === market);
   if (lots.length === 0) return { anchorSource: "close-not-held", avgCost: null };
   if (lots.some((lot) => !currencyMatchesMarket(lot.market, lot.currency))) {

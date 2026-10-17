@@ -172,15 +172,17 @@ export function computeKeyLevels(bars: Bar[]): KeyLevels | null {
 /**
  * The holding/cost status of the symbol, decided by the caller (risk R10/R11):
  * "cost" = held with a usable average cost; "close-not-held" = the position
- * query CONFIRMED the symbol is not held; "close-unknown" = holding status or
- * cost could not be determined (query pending/failed/fields missing) — the UI
- * must never claim "未持有" in that state.
+ * query CONFIRMED the symbol is not held; "close-unknown" = the symbol is
+ * CONFIRMED held but its cost is unusable (fields missing / currency mismatch);
+ * "holding-unknown" = the holding status itself is not determined (positions
+ * query pending or failed) — the UI must never claim "未持有" in either state,
+ * and in "holding-unknown" must not render any held-only wording either.
  *
  * Since R-6 this no longer chooses the stop/target anchor (that is always the
  * latest close); it only selects the wording and whether a cost P&L can be
  * shown beside the levels.
  */
-export type AnchorSource = "cost" | "close-not-held" | "close-unknown";
+export type AnchorSource = "cost" | "close-not-held" | "close-unknown" | "holding-unknown";
 
 /**
  * Profit/loss of the latest close relative to the average cost, in percent

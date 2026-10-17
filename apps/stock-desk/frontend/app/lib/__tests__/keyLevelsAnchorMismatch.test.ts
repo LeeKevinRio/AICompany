@@ -231,8 +231,9 @@ describe("resolveKeyLevelsAnchor — currency/market mismatch (XC-N4)", () => {
     }
   });
 
-  it("existing non-mismatch fallbacks are unchanged: no positions -> unknown, no lots -> not held, unusable cost -> unknown", () => {
-    expect(resolveKeyLevelsAnchor(undefined, "2330", "TW")).toEqual({ anchorSource: "close-unknown", avgCost: null });
+  it("existing non-mismatch fallbacks are unchanged: no positions -> holding-unknown, no lots -> not held, unusable cost -> unknown", () => {
+    // Positions pending OR failed (no data): the holding status itself is undetermined (B0 required 1).
+    expect(resolveKeyLevelsAnchor(undefined, "2330", "TW")).toEqual({ anchorSource: "holding-unknown", avgCost: null });
     expect(resolveKeyLevelsAnchor(book(), "2330", "TW")).toEqual({ anchorSource: "close-not-held", avgCost: null });
     expect(resolveKeyLevelsAnchor(book(lot(1, "2330", "TW", "TWD", "0")), "2330", "TW")).toEqual({
       anchorSource: "close-unknown",

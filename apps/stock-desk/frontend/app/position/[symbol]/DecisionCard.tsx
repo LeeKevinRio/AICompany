@@ -271,8 +271,12 @@ export function DecisionCardBody({
     model.kind === "held" && anchorSource === "close-not-held";
   const inconsistentCandidate =
     model.kind === "candidate" && anchorSource === "cost";
+  // "holding-unknown" (positions pending / failed) behaves exactly like
+  // "close-unknown" on this card (unchanged: stop/target "—", no anchor label).
   const effectiveAnchorSource: AnchorSource =
-    inconsistentHeld || inconsistentCandidate ? "close-unknown" : anchorSource;
+    inconsistentHeld || inconsistentCandidate || anchorSource === "holding-unknown"
+      ? "close-unknown"
+      : anchorSource;
 
   // R-2-a (F-1 portfolio valuation guard): when the advice itself is no_price the
   // latest close is untrustworthy, so treat bars as unavailable and never derive
