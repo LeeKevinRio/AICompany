@@ -7,6 +7,7 @@
 - r2 修訂：2026-10-17，依 tech-architect 修訂提案 A-22～A-41
 - r3 修訂：2026-10-17，依 tech-architect 修訂提案 A-42～A-53（附件 B'-3：觀察交易日集合的輸入來源），含 r3′ 補正（風控 r3 單項確認 R-1～R-3、S-1～S-5）
 - r3″ 更正：2026-10-17，依 tech-architect r3″ 更正 A-87～A-95（r3 套用後的接合、參照與編修；A-87、A-91 為收緊，其餘方向不變）
+- A-96″／A-97′ 修訂：2026-10-17，依 tech-architect ADR-0028 A-96″（D-6 第 13 點、CS-4 補充、CS-26、CS-27、CST-10～CST-12；風控 2026-10-17 A-96′ 單項確認 K-1～K-16）。A-96″ 為不變＋收緊，A-97′ 為收緊。`/api/leverage` 歸類、K-14 (i) 觸發條件、CST-10 結構性質前提，經風控 2026-10-17 A-96″ 回送確認（K-17～K-33）。
 - 適用範圍：僅 product/stock-desk。
 - 與既有 ADR 的關係：
   - 不取代任何 ADR。
@@ -207,6 +208,28 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 10. （r3′）`check_price_bars` 只在讀取側用於日曆證據，不擋寫入；寫入側的品質閘門另案處理。「通過品質檢查」的範圍見 D-9 第 2 點。
 11. （r3′）R 內完全沒有任何列（包括示範列）的平日，會判為休市（observed）。P 會跳過那一天，`lag_sessions` 可能少算。現行 `market_trading_days` 口徑也一樣，不是退步。
 12. （r3′）`as_of` 是轉接器在呼叫開始時讀的時鐘。跨月份的抓取，`as_of` 早於實際取得當月資料的時間，所以 15:00 前開始、15:00 後才回來的抓取一律不算證據。方向保守。日線轉接器目前讀的是行內 `datetime.now(UTC)`，不是注入的時鐘，所以測試 fixture 要明確指定 `as_of`，不得依賴轉接器自己蓋的章。
+13. （A-96″）個股詳細頁有下列幾類數字和日期，都出自同一個 loader（`load_bars`）讀進的日線，而且都不讀 `valuation_state`：
+    - 前端以 `/api/bars` 的列計算或直接呈現的：
+      - 關鍵價位，以及關鍵價位面板的停損與目標參考；
+      - 六項觀察條件；
+      - 操作卡（`DecisionCard`）的收盤、停損、停利；
+      - K 線圖（`PriceChart`），會把每一列直接畫成 K 棒；
+      - 技術分析結論句（取最後一列收盤）；
+      - 頁尾「關鍵價位參考」與「六項觀察條件」兩組（收盤、日期、根數）。
+    - 後端以各端點自己載入的列計算的：
+      - 指標（`/api/signals`）；
+      - 操作摘要與建議卡（`/api/advice`），含頁尾「操作摘要」組的資料日期句（`asOfStatement`）；
+      - 槓桿專章的持有期間與報酬拆解（`/api/leverage`，只有持股才有）（風控 2026-10-17 A-96″ 回送確認）。
+    - 資料列有日期異常時，照樣進入這些計算。本 ADR 不改變計算，只要求揭露（CS-26）。
+    - 這同時適用於持股與「確認未持有」的標的。非持股沒有 `build_summary` 列；CS-26 第 1 點的逐列標記落地之前，非持股完全沒有日期異常的檢查。
+    - **涵蓋限制**：逐列標記只抓得到日曆判定為非交易日的列；observed／weekday_assumed basis 下的平日休市列不會被標記（同第 1 點）。
+    - **涵蓋限制（K-27）**：槓桿專章的指數列（`load_index_bars`，用於侵蝕情境與報酬拆解的指數側）不在逐列標記範圍內；指數列的日期異常揭露另案處理（CS-26 第 6 點）。
+    - **已知限制（K-32；dev-lead 2026-10-17 查證 B-3～B-5）**：
+      - **窗口**：各端點 `load_bars` 回看 540、1200 日，`/api/bars` 最多 2000 日；evidence 窗口下限是 D−400。窗口外的列落在 R 之外，依週一至週五規則判定，所以非 official basis 下，窗口外的平日休市列不會被標記，和第 1 點屬同一類涵蓋限制。端點的 `end` 仍是伺服器的 `date.today()`，不作為 D。不得用調整 `load_bars` 窗口的方式對齊，那會改變計算的輸入（CS-4、CS-26 第 4 點）。
+      - **市場鍵**：快取依 `bar.market` 寫入，ladder 沒有檢查 `bar.market` 是否等於請求的 market。目前各 adapter 都寫死市場，到不了；萬一發生，該列不在請求市場的 evidence 內，方向是多標（K-33 另案）。
+      - **並行刪除**：示範資料清除（`delete_by_source`）剛好和請求同時發生時，已回傳的示範列可能不在 evidence 內，方向是多標。
+      - 上述情形都不會讓異常列少標。
+    - 要不要在資料層剔除異常列，屬於第 10 點「寫入側品質閘門另案」，本點不處理。
 
 ### D-7 與 ADR-0027 的日曆分工
 
@@ -286,6 +309,24 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - **CS-2**：`valuation.py` 不出現 VS 常數，也不呼叫狀態判定；唯一呼叫點是 `build_summary`。
 - **CS-3**：一次 build 只讀一次時鐘；D 由 `now.astimezone(VS-1)` 取得（注入固定時鐘的測試，含台北 07:00 等於 UTC 前一天 23:00 的案例）。
 - **CS-4**：advice、alerts、kelly、playbook、signals、limits、outlook、plan、forecast 都不讀 `valuation_state`（grep）。
+  - （A-96″，澄清，方向不變）CS-4 只約束上列的後端計算模組。前端顯示層可以讀 `valuation_state`，以及 CS-26 的逐列 `date_anomaly` 標記與 envelope 的 `date_anomaly_rows`、`anomaly_valid_until`，但只能用來做同區塊揭露，不得改變任何計算或計算的輸入。
+    - 這句只是澄清現行範圍，不得被讀成禁止日後改採「附原因、不渲染」的 fail-closed 做法。那屬於顯示面變更，要另外送風控。
+  - （A-96″，收緊）**grep 範圍擴大**：
+    - 被檢查的字串：`row_date_anomaly`、`date_anomaly`、`date_anomaly_rows`、`anomaly_valid_until`、`last_bar_date_anomaly`。
+    - 禁止範圍是上列模組的**計算 package**，不得呼叫或讀取這些字串：
+      - 現存的是 `app/advice`、`app/alerts`、`app/kelly`、`app/playbook`、`app/signals`；
+      - limits、outlook、plan、forecast，以落地時的 package 路徑為準；
+      - 另加 `app/leverage`（風控 2026-10-17 A-96″ 回送確認）。
+    - 這是落實 CS-26 第 4 點「計算不變」。
+  - **envelope 組裝層例外（K-5）**：
+    - 除了 `close_state.py` 內 D-4 狀態機自己的呼叫之外，只有 `app/api/{bars,signals,advice,leverage}.py` 可以呼叫 `row_date_anomaly`。
+    - 呼叫時機只能在該端點的計算完成之後，用途只限附加標記。
+    - 其他 `app/api/*.py` 和任何計算 package 都不得呼叫（grep）。
+  - **「計算不變」性質測試**：適用 `/api/bars`、`/api/signals`、`/api/advice`，以及 `/api/leverage`（風控 2026-10-17 A-96″ 回送確認）。
+    - 同一份 `load_bars` 輸入跑兩次：(a) 正常組裝；(b) 用 stub 把 `row_date_anomaly` 換成永遠回 None。
+    - 除了 `date_anomaly`、`date_anomaly_rows`、`anomaly_valid_until`、`last_bar_date_anomaly` 四個欄位，兩次的回應 payload 必須逐位相同。
+    - 用 spy 斷言 `row_date_anomaly` 的第一次呼叫，晚於該端點的計算函式回傳；計算函式的簽章不接受任何異常標記參數。
+    - 兩次組裝注入同一個固定時鐘，`as_of`、`generated_at` 等時間欄位因此相同；排除欄位只限上列四個，不得再增列（K-20）。
 - **CS-5**：前端狀態元件不出現 `new Date(`、`Date.now`、時段常數，也不 import `tradingCalendar.ts`。重新取得只能放在資料取得層，依 `state_valid_until` 排程。
 - **CS-6**：不得移除既有的 `data_status`／`is_within_ttl` 徽章。
 - **CS-7**：`market_hours` 的每個 VS 都有 `verified_on` 與出處欄位（測試）。VS-4 必須引用 `publish_cutoff`，不得複製數值（grep）。
@@ -335,6 +376,138 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
   - D-9 的實作 PR 要把 `INDEX_SYMBOL_METADATA` 搬到不依賴 HTTP 的純常數模組（暫定 `app/data/index_registry.py`，名稱 dev-lead 可以改）。`app/data/providers/yfinance.py` 改成 import 它，不得留兩份。
   - `session_calendar.py` 不得 import `app.data.providers.*`（import graph）。
   - 測試要斷言兩件事：`app.services.index.MARKET_BENCHMARK` 的每個 `series_symbol`，以及 `app.leverage.index_mapping` 中所有非 None 的 `series_symbol`，都屬於 `INDEX_SERIES_SYMBOLS`；CS-1 的 import graph 測試維持綠燈。
+- **CS-26**（A-96″，收緊；風控 2026-10-17 A-96 條件、A-96′ 單項確認 K-1～K-16）：個股詳細頁中由日線列衍生的數字與日期，在所用日線含日期異常列時，要在同一區塊揭露。
+  - 持股價格區塊在 `valuation_state = date_anomaly` 時渲染 LM-70（PM AC-B5a-10），依 CS-27。
+  1. **觸發條件：逐列標記，涵蓋實際進入計算的日線。**
+     - **判定函式**：`close_state.py` 抽出純函式 `row_date_anomaly(trade_date, *, D, phase, calendar) -> sub_reason | None`。
+       - D、phase 依 D-4「先定義」；D 不是交易日時，phase 為 None。calendar 是同一個 `SessionCalendar`。
+       - D-4 的 R2、R2′、R2″、R2‴ 改成呼叫它，輸出不變（CST-2 維持綠燈）。
+     - **判定規則**：
+       - `trade_date > D` → `future_date`；
+       - `trade_date == D`、D 是交易日，而且在 `pre_open` → `before_open`；
+       - `trade_date == D`、D 不是交易日 → basis＝official 時為 `official_conflict`，否則為 `not_a_session`；
+       - `trade_date < D`，而且 `is_session(trade_date)` 為 False → `unconfirmed_session`。
+         - 這一項對 `P < trade_date < D` 的列就是 R2‴；對 `trade_date < P`（含 P 為 None）的歷史列是延伸。
+         - D-4 本身仍只在 `price_date > P` 時套用 R2‴；`price_date < P` 或 P 為 None 時仍走 R6，估值狀態不變。
+       - 其他情形 → None。`trade_date == P` 時必為 None。
+     - **`/api/bars/{symbol}` 的欄位**：
+       - 每一列帶 `date_anomaly: Literal["future_date","before_open","official_conflict","not_a_session","unconfirmed_session"] | None`，由後端逐列計算；
+       - envelope 帶 `date_anomaly_rows: int`，等於標記非 None 的列數；
+       - envelope 帶 `anomaly_valid_until`：語意同 D-4 的 `state_valid_until`，前端資料層依它重新取得。
+     - **其他端點（K-14）**：
+       - 凡是個股頁取用、而且由 `load_bars` 的列計算出來的端點，envelope 都帶 `date_anomaly_rows: int` 與 `anomaly_valid_until`。
+       - 計算用同一個 `row_date_anomaly` 和同一個 calendar 建構函式，作用在**該端點自己載入的列**上，不得沿用 `/api/bars` 的結果。
+       - v1 涵蓋 `/api/signals`、`/api/advice`。
+       - `/api/leverage` 納入（K-17）。只對 `load_bars` 載入的 ETF 列計算，不含 `load_index_bars` 的指數列；計數範圍是傳入 `build_leverage_chapter` 的全部 ETF 列，不得縮成 `opened_at` 之後或與指數 inner join 之後的列，縮小視為放寬，須送風控（K-18）。
+       - `/api/signals`、`/api/advice`、`/api/leverage` 的 envelope 另帶 `last_bar_date_anomaly: bool`（必填），由同一個 `row_date_anomaly` 對該端點自己載入、日期等於 `data.last_bar_date` 的那一列計算（K-26）。
+       - 上列各欄位都是必填：`/api/bars` 的逐列 `date_anomaly`（值可以是 null，但欄位必須存在）、`date_anomaly_rows`、`anomaly_valid_until`，以及其他端點的 `date_anomaly_rows`、`anomaly_valid_until`、`last_bar_date_anomaly`。前端型別不得標成 optional。
+     - **後端計算約束**（每個端點、每次請求）：
+       - 只讀一次時鐘，D 由 `now.astimezone(VS-1)` 取得（同 CS-3）。各端點現行的 `end = date.today()`（`bars.py:89`、`signals.py:94`、`advice.py:156`、`leverage.py:95`）不得當作 D；窗口本身不在本條範圍內。
+       - calendar 和 `build_summary` 用同一個建構函式（官方優先，退回 D-9 觀察日曆），不得另建。
+       - 最多一次 `market_session_evidence` 讀取，窗口依 D-9 第 6 點，用該端點所載各列日期的最小值代入。
+         - **讀取順序（K-29）**：evidence 讀取一律在該端點的 `load_bars` 回傳之後，以請求的 market 讀取。`load_bars` 的即時與增量路徑在回傳前已寫入 `price_bars_cache`（dev-lead 2026-10-17 查證 A 段），而 `PriceBarCache` 各方法不共用 transaction（B-1），所以順序是唯一的保證。
+         - **`/api/advice`（K-31）**：該端點在同一請求內另呼叫 `build_summary`（`advice.py:167`），後者依 CS-22 每次 build、每個市場最多讀一次 evidence。由 dev-lead 在 T1-17 實作時擇一，並在 PR 說明載明：
+           - (a) **重用**：同市場時重用 `build_summary` 那一次讀取與 calendar。前提是該次讀取的窗口依 D-9 第 6 點涵蓋兩者所需的日期，而且 `build_summary` 的輸出不變（CST-2 維持綠燈）。
+           - (b) **第二次讀取**：異常標記另讀一次。條件是在 `load_bars` 與 `build_summary` 都回傳之後讀取，只供 envelope 附加標記，不回饋 `build_summary`；CST-11 對 `/api/advice` 的計數明定為「`build_summary` 一次＋標記一次，至多兩次」。
+           - (a)(b) 以外的做法，依 K-16 回送風控。
+       - 只在 envelope 組裝層、計算完成之後附加（CS-4 例外）。
+     - **持股與非持股一體適用**：各端點都不讀 `valuation_state`，也不依是否持有分流。
+     - **回送條件（K-16）**：實作時出現以下任一情形，要回送風控，不得自行降級成只標 `> P`，也不得改由前端判定：
+       - 共用的 calendar 建構函式重用不了，要另建一份日曆；
+       - 每個請求的 evidence 讀取超過一次（`/api/advice` 依 K-31 除外，見本點第四款）；
+       - 會違反 CS-1 或 CS-19 的可達性。
+       - （風控 2026-10-17，依 dev-lead 查證裁定）dev-lead 查證列出的 B-1～B-6（`work/reviews/2026-10-17-load_bars與evidence一致性查證-dev-lead.md`），已分別由讀取順序（K-29）、CST-10 日層級前提（K-23）、CST-11 fixture 約束（K-30）與 D-6 第 13 點已知限制（K-32）處理，本身不觸發回送。下列情形仍須回送風控：(a) 任一端點每個請求的 evidence 讀取超過一次，`/api/advice` 依 K-31 的 (a)(b) 除外；(b) 把 `load_bars` 的列併入 evidence、calendar 輸入或分類結果；(c) evidence 讀取移到 `load_bars` 回傳之前；(d) K-33 的市場閘門落地之前，有 adapter 改由 provider 回應決定 market。
+     - **前端觸發（K-14 (i)）**：每個登記區塊依第 2 點表內登記的「觸發來源」觸發，不得只看 `/api/bars`。
+       - 來源 `bars`：傳入該區塊的 bars 陣列中，任一列 `date_anomaly != null`；
+       - 來源 `signals`、`advice`、`leverage`：該 envelope 的 `date_anomaly_rows > 0`。
+       - **前端不得另寫判定。**
+     - 前端揭露元件不得出現 `new Date(`、`Date.now`、時段常數，也不得 import `tradingCalendar.ts`（比照 CS-5）。
+  2. **揭露範圍與位置**
+     - **範圍**：以封閉清單 `BARS_DERIVED_BLOCKS: Readonly<Record<BlockId, readonly ("bars"|"signals"|"advice"|"leverage")[]>>` 登記，值是觸發來源：
+
+       | BlockId | 區塊 | 觸發來源 |
+       |---|---|---|
+       | `KeyLevelsPanel` | 關鍵價位，含停損與目標參考 | bars |
+       | `EntryObservationPanel` | 六項觀察條件 | bars、signals、advice |
+       | `DecisionCard` | 收盤、停損、停利格 | bars、advice、signals |
+       | `PriceChart` | K 線圖 | bars、signals（MA 疊圖） |
+       | `TechOneLiner` | 技術分析結論句（`buildTechOneLiner`） | bars |
+       | `KeyLevelsFooterGroup` | 頁尾「關鍵價位參考」（`buildKeyLevelsFooterItems`） | bars |
+       | `EntryFooterGroup` | 頁尾「六項觀察條件」（`buildEntryFooterItems`） | bars |
+       | `OperationSummaryFooterGroup` | 頁尾「操作摘要」（`buildSummaryFooterItems`） | advice |
+       | `IndicatorOverviewChipsRow` | 指標概覽 chips | signals |
+       | `TechnicalIndicatorsPanel` | 指標卡 | signals |
+       | `OperationSummaryPanel` | 操作摘要 | advice |
+       | `AdviceCardView` | 建議卡 | advice |
+       | `LeverageChapterView` | 槓桿專章（風控 2026-10-17 A-96″ 回送確認） | leverage |
+
+     - **觸發來源的完整性**：每個區塊登記的來源，必須 ⊇ 它在 `page.tsx` 實際取用的 envelope。
+       - 以 AST 收集該區塊 JSX props 與 builder 參數中引用的 `bars`、`signals`、`advice`、`leverage` query 物件；
+       - `entryLevels` 視為 bars，`entryObservation` 視為 bars＋signals＋advice。
+       - 判斷不了的一律登記全部四個來源。
+       - AST 另掃描每個登記區塊的元件模組，以及它在 `position/[symbol]/`、`app/lib/` 內 import 的模組：凡直接呼叫 `useBars`、`useSignals`、`useAdvice`、`useLeverageChapter` 或其他取用 `/api/*` 的 hook，該來源也必須在登記內，否則失敗（K-22）。
+       - 刪除任何區塊已登記的來源，或縮小技術分析區段的聯集，視為放寬，須送風控。AST 測試做不到時，改採整頁聯集（K-14 (ii)），不得刪除測試。
+     - **位置**：
+       - (a) 原則：每個區塊在同一區塊內渲染揭露，不收合、不放在 `<details>` 內，也不只用 hover 或 tooltip。
+       - (b) **技術分析區段**：`PriceChart`、`TechOneLiner`、`IndicatorOverviewChipsRow`、`TechnicalIndicatorsPanel` 共用一個主視圖揭露。
+         - 觸發來源是四者的聯集，也就是 bars ∪ signals；
+         - 位置在主視圖，緊鄰「資料截至 {MM-DD}」徽章，與圖、結論句同在一區，不在 `<details>` 內；
+         - `TechnicalIndicatorsPanel` 位在 `<details>` 內，它的揭露由這個主視圖揭露承擔，不必在 `<details>` 內重複。
+         - 顯示條件不綁 `PriceChart` 是否掛載：區段內任一成員讀取點有渲染（含 compact 徽章、`DataMetaStatusBadge` 的 `lastBarDate`、「共 N 根日線」），而且聯集來源有異常，就渲染（K-25）。重新啟用 TradingView 頁籤時，揭露位置與字面須送風控。
+       - (c) **`AdviceCardView`**：卡片本身收在 `<details>` 內（CEO 2026-09-19）。揭露放在 `<details>` 之前、同一個 `<section>` 內，收合時也看得到。
+       - (d) **頁尾三組**（`KeyLevelsFooterGroup`、`EntryFooterGroup`、`OperationSummaryFooterGroup`）：在各自組內帶揭露。頁尾區本身是 `<details>`，這是唯一允許揭露落在 `<details>` 內的地方，而且不取代 `KeyLevelsPanel`、`EntryObservationPanel`、`OperationSummaryPanel` 在主視圖的揭露。這個例外不得延伸到其他 `<details>`。
+       - (e) 其餘區塊依 (a)。
+       - (f) **`LeverageChapterView`**（K-19）：專章有渲染（`chapter_status ≠ not_applicable`），而且 leverage envelope 的 `date_anomaly_rows > 0` 時，不論 `chapter_status` 為何，都在專章容器內、標題列之下渲染揭露，不在 `AssumptionsList` 的 `<details>` 內。揭露字面不得暗示指數列（侵蝕情境、拆解的指數側）已經檢查。非持股回 404、不渲染專章時，也不渲染專章揭露。
+     - **讀取點列舉（K-2）**：
+       - 範圍：`position/[symbol]/` 底下每一個讀取點，包括 `page.tsx` 的行內運算式和 builder 函式的參數。讀取點指：
+         - `bars.data.bars`；
+         - `bars.data.data.last_bar_date`、`bars.data.data.first_bar_date`；
+         - 所有名為 `bars` 的 prop。
+       - 每個讀取點都要歸入 `BARS_DERIVED_BLOCKS` 的某一項，或歸入封閉豁免清單 `BARS_NON_NUMERIC_USES`。沒有歸類，測試就失敗（AST 契約測試）。
+       - 技術分析區段的 bars 日期呈現（徽章與「共 N 根日線」）歸入 `PriceChart`，因為它們描述的是 K 線圖所畫的那份序列。
+       - `BARS_NON_NUMERIC_USES` 在 v1 只有兩項：
+         - `PriceUnitBadge`：只檢查幣別；
+         - `tvExchangeHint`：只讀 `source`。
+       - 要增列豁免，須修訂本條並送風控。
+       - 讀取點另含 `bars.data.data.bar_count`、`bars.data.data.trading_days_behind`。`source`、`status`、`staleness_minutes`、`is_within_ttl`、`reason` 是取得來源與時效的 provenance，不由列日期衍生，不列入讀取點，也不新增豁免；`BARS_NON_NUMERIC_USES` 仍只有兩項（K-28）。
+       - **資料新舊判斷（K-28）**：某 envelope 的 `last_bar_date_anomaly` 為 True（`/api/bars` 則為最後一列 `date_anomaly != null`）時，前端顯示層一律把該 envelope 的 `trading_days_behind` 視同 null：不得據以省略「資料過舊」提示，改走既有「無法向交易日曆確認」路徑（`resolveAsOfStatement` 的 null 分支）。這屬於顯示層揭露，不改變任何計算或計算的輸入（CS-4 澄清）。
+     - **日期呈現（K-3）**：
+       - 頁面上每一處呈現 bars 日期的地方，該日期所對應的列（`bars` 陣列中 `date` 等於該值的列）如果 `date_anomaly != null`，就不得用正常資料日期的樣式呈現。
+         - 找不到對應列時，同樣不得用正常樣式（風控 2026-10-17 A-96″ 回送確認）。
+       - 涵蓋：
+         - compact 徽章；
+         - `DataMetaStatusBadge` 的 `lastBarDate`，主視圖與 `<details>` 內都算；
+         - 「共 N 根日線（first ~ last）」；
+         - `EntryObservationPanel` 的 `dataAsOfDates.bars`；
+         - 關鍵價位面板與頁尾的 `closeDate`。
+       - 「旁邊看得到同一揭露」以主視圖徽章為準。`<details>` 內的呈現不得用正常日期的樣式，但不必另外重複揭露。
+       - **其他 envelope 的資料日期（K-26）**：下列呈現在該 envelope 的 `last_bar_date_anomaly` 為 True 時，不得用正常資料日期的樣式：
+         - 指標的 compact 與完整 `DataMetaStatusBadge`（主視圖與「詳細」內）、`TechnicalIndicatorsPanel` 的 `lastBarDate`；
+         - `OperationSummaryPanel`、`DecisionCard`、`AdviceCardView` 的「資料截至」徽章與 `DataMetaStatusBadge`；
+         - `EntryObservationPanel` 的 `dataAsOfDates.signals`、`dataAsOfDates.advice`；
+         - 操作摘要的 `asOfStatement`（含頁尾）；
+         - 專章的 `holding.last_bar_date`、`drag.last_bar_date`。
+       - 呈現的日期不等於該 envelope 的 `data.last_bar_date`，又沒有逐日旗標時（例如專章的 `drag.window.end_date`），依「找不到對應列」規則：該 envelope 的 `date_anomaly_rows > 0` 時，不得用正常樣式。日後改成提供逐日旗標，才可以縮小。
+     - **不得反向保證（K-4）**：
+       - 沒有異常列時，不出現揭露；
+       - 也不得出現任何宣稱日期已經過檢查、或資料沒有問題的保證字面（例子見風控 2026-10-17 A-96′ 單項確認 K-4）。
+       - 理由：本條的檢查涵蓋不全（D-6 第 13 點涵蓋限制），這類保證不屬實。
+  3. **字面**：
+     - 交 creative-lead 起草、風控逐字審，不得有「仍可參考」之類的弱化語氣；
+     - `sub_reason` 不渲染成字面（同 D-4）；
+     - 字面核可之前，T1-17 不得合併（比照 D-5 末句）。
+  4. **計算不變**：揭露不改變任何計算，也不改變計算的輸入（CS-4 性質測試）。
+  5. **行動計畫鏈的前提**：本條的核可，以「ADR-0027 的行動計畫鏈不會吃進日期異常的價格」為前提〔推論〕。依據是 ADR-0027 FL-25 的 fixture，以及 A-75 (iv) 官方休市日的單一定義（ADR-0027 A-96″ 增補）。
+  6. **另案**（風控 2026-10-17 A-96″ 回送確認）：
+     - (a) 指數列標記（G-2）：tech-architect 在 T1-17 合併前，於 `work/` 開立任務單，評估以指數所屬市場的 calendar 對 `load_index_bars` 的列逐列標記，含 evidence 讀取次數（D-9 第 6 點以市場為單位）與 CS-19 可達性；提案於 T1-17 合併後 30 日內送風控。期間依 K-27 照實揭露涵蓋限制。
+     - (b) D-4 R6 對 `price_date < P` 週末列的處理（G-4）：下一次修訂 D-4，或 CS-26／CS-27 字面送風控逐字審時（以先到者為準），tech-architect 附評估。在此之前，持股價格區塊與 CS-26 揭露兩句並存，風控已確認兩句都屬實。
+     - (c) **市場閘門（B-4，K-33）**：dev-lead 在 T1-17 合併前於 `work/` 開立任務單，評估在 ladder 加「`bar.market` 不等於請求的 market 就拒絕」的閘門（收緊）。觸發條件：任何 adapter 改由 provider 回應決定 market，或新增 adapter 時，這個閘門必須先合併。在此之前依 K-32 列為已知限制。
+- **CS-27**（A-97′，收緊；風控 2026-10-17 A-97 條件）：個股詳細頁顯示的持股價格與估值狀態，取自 `build_summary` 同一列的輸出（`valuation_state`，以及同一個 `price_date`），用和庫存頁同一個前端狀態元件、同一張 D-5 對應表呈現。
+  - 個股頁不得另外計算狀態，也不得用 bars 的 `last_bar_date` 代替 `reference_date`。
+  - 前端契約測試：同一檔在兩頁的價格、日期、字面 ID 逐位相同（PV-52、AC-B5a-10）。
+  - 非持股（沒有 `build_summary` 列）不顯示估值狀態，維持現行徽章。**這類標的的日期異常由 CS-26 第 1 點的逐列標記涵蓋，不得有沒有檢查的情形。** 契約測試：非持股、bars 含異常列時，渲染 CS-26 的揭露（AC-B5a-13）。
+  - （採用風控 suggested）同一頁上有多顆日期徽章時，每顆都要標明它指的是什麼，例如「日線資料截至」「估值價格日期」，不得出現兩個沒有說明的日期。字面交 creative-lead 起草、風控審。
+- 排入 T1-17，由 dev-lead（`app/api/*`、`close_state.py`）與 frontend-engineer 承接，qa-e2e 驗收。
 
 ## 測試要求
 - **CST-1**：表格驅動測試，涵蓋：
@@ -376,6 +549,40 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
   - 兩者都是 15:00:00+08:00：R3（`close`）；
   - `acquired_at` 或 `bar_as_of` 為 None：R3′；
   - grep：`close_state.py` 不出現 `publish_cutoff`。
+- **CST-10**（K-7、K-8）：`row_date_anomaly` 的性質測試。
+  - **與 D-4 一致**：在 P 不為 None 而且 `price_date > P`，或 `price_date ≥ D` 的輸入上，結果和 D-4 R2～R2‴ 的 `sub_reason` 逐位相同（P 為 None 而且 `price_date < D` 時，D-4 走 R6，不在比較範圍）。
+  - **全定義域**：對任意 `trade_date < D`，結果是 `unconfirmed_session`，若且唯若 `is_session(trade_date)` 為 False；否則為 None。`trade_date == P` 時必為 None。
+  - **結構性質**（K-8、K-23）：`basis_for(trade_date) ≠ official`、`trade_date` 是平日，而且在同一次、依請求 market 讀取的 `market_session_evidence` 分類結果中，`trade_date` 屬於 confirmed 或 unconfirmed（同市場、該日至少有一列，任何 symbol、任何 source，不要求是同一列）時，`row_date_anomaly` 對該列必為 None。
+    - **餘集不得留白**：平日、R 內 absent（basis＝observed）→ `unconfirmed_session`；平日、在 R 之外 → None。兩者各一個 fixture。
+    - **不得自證**（K-24）：端點不得把自己載入的列併入 evidence、calendar 的輸入或分類結果，也不得以「該列不在 evidence 內」為由略過 `row_date_anomaly`，或覆寫它的結果。結果一律由同一個 calendar 判定；R 之外依週一至週五規則得到 None，屬於 D-9 第 5 點本身的結果，不算略過。違反任一項都是放寬，須送風控。
+  - 五個 `sub_reason` 各一個 fixture；歷史週末列（`< P`）→ `unconfirmed_session`。
+- **CST-11**（K-14、K-15）：每個端點的契約測試。
+  - `/api/bars`：
+    - 每一列都有 `date_anomaly` 欄；
+    - `date_anomaly_rows` 等於非 None 的列數；
+    - `anomaly_valid_until` 跨過 VS-2 時，`before_open` 消失。
+  - `/api/signals`、`/api/advice`：`date_anomaly_rows` 等於「對該端點自己載入的列逐列呼叫 `row_date_anomaly`」得到的非 None 列數。`last_bar_date_anomaly` 等於對 `data.last_bar_date` 那一列呼叫 `row_date_anomaly` 是否非 None（K-26）。
+  - 每個端點、每次請求都只讀一次時鐘，最多一次 evidence 讀取（計數）；`/api/advice` 的 evidence 讀取次數依 CS-26 第 1 點 K-31 所選方式計數，選 (b) 時至多兩次。
+    - 「只讀一次時鐘」與計數的對象，是 envelope 組裝層為 `row_date_anomaly`、`anomaly_valid_until` 取得 D 與 phase 的那一次讀取。各端點既有的 `date.today()`、`now_iso()`、`build_leverage_chapter` 的 `generated_at` 不在計數內，但 D 不得取自它們。不得因既有讀取而刪除或放寬本項計數（K-21）。
+  - 同一序列在持股與非持股時，結果相同。
+  - `/api/leverage`：計數含傳入 `build_leverage_chapter` 的全部 ETF 列（K-18），不含指數列；指數列有異常、ETF 列無異常時，`date_anomaly_rows == 0`（範圍界定，K-27）。非持股回 404，「持股與非持股相同」一格不適用，改以前端斷言非持股不渲染專章與其揭露。`last_bar_date_anomaly` 等於對 `data.last_bar_date` 那一列呼叫 `row_date_anomaly` 是否非 None（K-26）。
+  - （採用風控 suggested K-9）早於 D−400、落在證據窗口外的週末列，依週一至週五規則標成 `unconfirmed_session`。
+  - **呼叫順序**（K-29）：用 spy 斷言每個端點的 `market_session_evidence` 呼叫晚於 `load_bars` 回傳；`/api/advice` 依 K-31 所選方式計數。
+  - **fixture 約束**（K-30）：端點契約測試用 `MarketDataService`，接上與 evidence 讀取同一個 `tmp_path` 快取；改用 `FakePriceService` 等不寫快取的 `PriceService` 時，必須先把同一批列 seed 進該快取。另加一格刻意不 seed 的對照：R 內平日、快取中當日沒有任何列 → 該列為 `unconfirmed_session`（CST-10 餘集，端點層級）。
+- **CST-12**：前端契約與 e2e。
+  - `BARS_DERIVED_BLOCKS` 的鍵恰好等於 CS-26 第 2 點的表；`BARS_NON_NUMERIC_USES` 恰好是兩項；
+  - 讀取點 AST 列舉：沒有歸類就失敗；
+  - 觸發來源 ⊇ 實際取用的 envelope（AST）；
+  - 每個來源各一個 fixture：只有該來源有異常時，登記了它的區塊都揭露；
+  - 揭露 DOM 不在 `<details>` 內，只有頁尾三組（`KeyLevelsFooterGroup`、`EntryFooterGroup`、`OperationSummaryFooterGroup`）例外，這三組斷言揭露在組內；建議卡的揭露在 `<details>` 之外、同一 `<section>` 內；
+  - 主視圖徽章旁看得到揭露；K-3 列舉的每一處日期呈現，對應列異常時都不是正常樣式；
+  - 沒有異常時不出現揭露，全頁 DOM 也不含 K-4 所指的保證字面（掃描清單由 creative-lead 定稿後寫入測試）；
+  - 非持股含異常列時渲染揭露（CS-27）；
+  - 375 與 1280 寬度實機驗收（AC-B5a-13）。
+  - K-3「找不到對應列」各一個 fixture；K-26 列舉的每一處，在 `last_bar_date_anomaly` 為 True 時都不是正常樣式；
+  - K-28：`last_bar_date_anomaly` 為 True、`trading_days_behind` 為 0 時，`asOfStatement` 走 null 分支；
+  - 技術分析區段圖表未掛載時，徽章旁的揭露仍在（K-25）；
+  - 專章在 `chapter_status` 為 ok、partial、insufficient_data 時，只要 `date_anomaly_rows > 0` 都渲染揭露，而且不在 `<details>` 內（K-19）。
 - **qa-e2e**：375 與 1280 寬度實機驗收 AC-B5a-1～6，加上 `pre_open` 與推算模式。
 
 ## 失效條件
@@ -402,6 +609,7 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
   - 新增（r2，A-40）：data-engineer 觀察日確認回報的單項確認。
   - 已裁示（r3，A-52；r3″ 更新，A-93）：r3 設計的單項確認為 APPROVE WITH CONDITIONS，沒有 VETO（`work/reviews/2026-10-17-ADR-0028-r3單項確認-風控.md`）。R2″ 改寫、R2‴ 都對應 LM-70，風控認定屬實，不必另外起草。required R-1～R-3 已由 r3′ 寫入（SE-2 與 CST-5 的 R-1 fixture、CS-21 通則、D-5「observed 兩列的說明」第二點 (b) (i)～(iii)）。R-4 屬於 ADR-0027，不在本 ADR。
   - 新狀態的字面。
+  - （A-96″）個股頁異常揭露與多徽章指涉標籤的字面逐字審；G-2、G-4 另案（CS-26 第 6 點）。
 - **data-engineer**：
   - Q-B7：各日線來源在盤中或收盤剛結束時，會不會回傳當日、尚未定案的 bar；
   - VS-2～VS-6 的查證；
@@ -414,6 +622,8 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - **CEO**：接受新狀態；#15 連網環境。
   - 新增（r3，A-52）：知悉方案 C 被否決，因此 ADR-0027 和 ADR-0028 對「觀察日」各用不同定義。
 - **tech-architect**：Q-B6（ADR-0009 是否吃官方假日表），在 T1-13 時另案處理。
+- **creative-lead**：CS-26 各區塊的異常揭露字面、CS-27 多徽章的指涉標籤。不得有「仍可參考」，也不得有 K-4 所指的保證字面。
+- **dev-lead**：（A-96″）`load_bars` 與 evidence 的一致性已查證，依 K-29～K-33 處理。T1-17 實作時，依 CS-26 第 1 點 K-31 為 `/api/advice` 擇一，並在 PR 說明載明；B-4 任務單在 T1-17 合併前開立。
 
 ## 未查證事項
 - 所有 VS 的數值；08:30 盤前委託；週六補行交易日；US 的交易時段。
@@ -423,6 +633,7 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
   - 各來源在真實交易日時 volume 的語意〔未查證〕；
   - 所有日線轉接器都在送出請求前蓋 `as_of`〔已查 `twse.py:88`，其餘轉接器只 grep 了 `now = datetime.now(UTC)` 的位置，推論〕；
   - 快取路徑下 `acquired_at` 晚於當日列寫入時間的情境〔推論，CST-9 釘住〕。
+- （A-96″）「非 official basis 下的平日列一定是 session」是依 D-9 第 4、5 點所做的推論，以 CST-10 釘住。`load_bars` 回傳的列，在回傳當下都已寫入 `price_bars_cache`（同市場、同日期），已由 dev-lead 2026-10-17 查證（`work/reviews/2026-10-17-load_bars與evidence一致性查證-dev-lead.md`，探針 6 passed）。「一定落在同一次 evidence 讀取內」不成立（B-1～B-6），所以 CST-10 改用日層級前提，不依賴這一點。evidence 讀取尚未實作，實際讀取順序〔未查證〕，以 CST-11 的呼叫順序斷言釘住（K-29）。
 
 ---
 
@@ -634,3 +845,23 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 
 **A-95（檔頭、修訂紀錄）**
 - r3″：檔頭新增「r3″ 更正」一行，本區塊為新增，無被取代原文。
+
+---
+
+> A-96″／A-97′（2026-10-17）依 tech-architect「ADR-0028 A-96″」套用（`work/reviews/2026-10-17-ADR-0028-A96雙撇-tech-architect.md`；風控 `work/reviews/2026-10-17-ADR-0028-A96A97單項確認-風控.md` K-1～K-16）。A-96″ 為不變＋收緊，A-97′ 為收緊，沒有放寬。CS-4 原句、CST-2 原文不變。A-96、A-96′ 的建議版沒有落過檔，不進本紀錄。風控 2026-10-17 A-96″ 回送確認（K-17～K-28）：leverage 納入；觸發條件採 (i)；CST-10 結構性質前提不構成放寬（餘集另有斷言）；G-1、G-3 併入本次，G-2、G-4 另案。方向仍為不變＋收緊。依 dev-lead 2026-10-17 查證增補 K-29～K-33：evidence 讀取順序、CST-11 fixture 約束、`/api/advice` 讀取方式擇一、已知限制三項、市場閘門另案。方向：收緊加照實揭露。K-31 (b) 是 K-16 的明定例外，不減少揭露。
+> 套用順序與提案來源（後者取代前者的對應條目）：
+> 1. TA：`work/reviews/2026-10-17-ADR-0028-A96雙撇-tech-architect.md` 第二節（第三節 ADR-0027 A-96″ 增補另開 commit，本次不套用）。
+> 2. 風控回送確認：`work/reviews/2026-10-17-ADR-0028-A96雙撇回送項確認-風控.md` 第四節 T-1～T-16。
+> 3. 風控增補：`work/reviews/2026-10-17-ADR-0028-A96雙撇回送確認增補-dev-lead查證-風控.md` 第四節：T-1 修正（K-17～K-28 改為 K-17～K-33）、T-13′ 取代 T-13、T-14′ 取代 T-14、T-17～T-25。
+> 依據文件：風控原始條件 `work/reviews/2026-10-17-ADR-0028-A96A97單項確認-風控.md`（K-1～K-16）；dev-lead 查證 `work/reviews/2026-10-17-load_bars與evidence一致性查證-dev-lead.md`。
+> 被取代的 T-13、T-14，以及 TA 條文中帶有待確認標記的句子，都是尚未落檔的提案文字，不是現行 ADR 原文，所以不另外保留；標記依 T-2 一律改成「（風控 2026-10-17 A-96″ 回送確認）」。
+
+**A-96″（D-6 第 13 點）**：新增，無被取代原文；見 §D-6。
+
+**A-96″（CS-4）**：原句不變，新增子項，無被取代原文；見 §對實作的約束 CS-4。
+
+**A-96″（CS-26）／A-97′（CS-27）**：新增，無被取代原文。
+
+**A-96″（CST-10～CST-12）**：新增，無被取代原文。
+
+**A-96″（檔頭、待決事項、未查證事項）**：新增，無被取代原文。
