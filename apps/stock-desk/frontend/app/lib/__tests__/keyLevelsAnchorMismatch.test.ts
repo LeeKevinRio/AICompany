@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { resolveKeyLevelsAnchor } from "../keyLevelsAnchor";
+import { resolveKeyLevelsAnchor, type PositionsAnchorInput } from "../keyLevelsAnchor";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
   KEY_LEVELS_BASIS_ANCHOR,
@@ -165,10 +165,15 @@ const MISMATCH_FIXTURES = [
   },
 ];
 
+/** A successfully fetched positions query slice. */
+function ok(data: PositionsResponse): PositionsAnchorInput {
+  return { isSuccess: true, data };
+}
+
 describe("resolveKeyLevelsAnchor — currency/market mismatch (XC-N4)", () => {
   for (const f of MISMATCH_FIXTURES) {
     it(`${f.name}: close-unknown, no cost, on all three consumers no cost basis label and no crossed sentence`, () => {
-      const anchor = resolveKeyLevelsAnchor(f.book, f.symbol, f.market);
+      const anchor = resolveKeyLevelsAnchor(ok(f.book), f.symbol, f.market);
       expect(anchor).toEqual({ anchorSource: "close-unknown", avgCost: null });
       const s = surfaces(anchor, f.symbol, f.market);
       for (const marker of COST_MARKERS) {
@@ -194,14 +199,14 @@ describe("resolveKeyLevelsAnchor — currency/market mismatch (XC-N4)", () => {
 
   it("a mismatched lot of ANOTHER symbol does not affect this symbol", () => {
     const b = book(lot(1, "2330", "TW", "TWD", "100"), lot(2, "MSFT", "US", "TWD", "1000"));
-    const anchor = resolveKeyLevelsAnchor(b, "2330", "TW");
+    const anchor = resolveKeyLevelsAnchor(ok(b), "2330", "TW");
     expect(anchor.anchorSource).toBe("cost");
     expect(anchor.avgCost).toBe(100);
   });
 
   it("an unknown market never matches (fail closed, same as the backend)", () => {
     const odd = { ...lot(1, "ZZZ", "US", "USD", "50"), market: "JP" as unknown as "US" };
-    const anchor = resolveKeyLevelsAnchor(book(odd), "ZZZ", "JP" as unknown as "US");
+    const anchor = resolveKeyLevelsAnchor(ok(book(odd)), "ZZZ", "JP" as unknown as "US");
     expect(anchor).toEqual({ anchorSource: "close-unknown", avgCost: null });
   });
 
@@ -210,7 +215,7 @@ describe("resolveKeyLevelsAnchor — currency/market mismatch (XC-N4)", () => {
       ["2330", "TW", "TWD"],
       ["MSFT", "US", "USD"],
     ] as const) {
-      const anchor = resolveKeyLevelsAnchor(book(lot(1, symbol, market, currency, "100")), symbol, market);
+      const anchor = resolveKeyLevelsAnchor(ok(book(lot(1, symbol, market, currency, "100"))), symbol, market);
       expect(anchor).toEqual({ anchorSource: "cost", avgCost: 100 });
       const s = surfaces(anchor, symbol, market);
       // R-6: anchor = latest close (102.00 on 2026-03-24); cost 100 only shows up as a +2.0% P&L row.
@@ -232,10 +237,10 @@ describe("resolveKeyLevelsAnchor — currency/market mismatch (XC-N4)", () => {
   });
 
   it("existing non-mismatch fallbacks are unchanged: no positions -> holding-unknown, no lots -> not held, unusable cost -> unknown", () => {
-    // Positions pending OR failed (no data): the holding status itself is undetermined (B0 required 1).
-    expect(resolveKeyLevelsAnchor(undefined, "2330", "TW")).toEqual({ anchorSource: "holding-unknown", avgCost: null });
-    expect(resolveKeyLevelsAnchor(book(), "2330", "TW")).toEqual({ anchorSource: "close-not-held", avgCost: null });
-    expect(resolveKeyLevelsAnchor(book(lot(1, "2330", "TW", "TWD", "0")), "2330", "TW")).toEqual({
+    // Positions pending OR failed (not success, no data): the holding status itself is undetermined (B0 required 1).
+    expect(resolveKeyLevelsAnchor({ isSuccess: false, data: undefined }, "2330", "TW")).toEqual({ anchorSource: "holding-unknown", avgCost: null });
+    expect(resolveKeyLevelsAnchor(ok(book()), "2330", "TW")).toEqual({ anchorSource: "close-not-held", avgCost: null });
+    expect(resolveKeyLevelsAnchor(ok(book(lot(1, "2330", "TW", "TWD", "0"))), "2330", "TW")).toEqual({
       anchorSource: "close-unknown",
       avgCost: null,
     });

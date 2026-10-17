@@ -271,8 +271,9 @@ export function DecisionCardBody({
     model.kind === "held" && anchorSource === "close-not-held";
   const inconsistentCandidate =
     model.kind === "candidate" && anchorSource === "cost";
-  // "holding-unknown" (positions pending / failed) behaves exactly like
-  // "close-unknown" on this card (unchanged: stop/target "—", no anchor label).
+  // "holding-unknown" (positions query not in success: loading, or failed -- also a refetch
+  // failure that keeps older data; a refetch in progress keeps using the last successful data)
+  // behaves exactly like "close-unknown" on this card (unchanged: stop/target "—", no anchor label).
   const effectiveAnchorSource: AnchorSource =
     inconsistentHeld || inconsistentCandidate || anchorSource === "holding-unknown"
       ? "close-unknown"

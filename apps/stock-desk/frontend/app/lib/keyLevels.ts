@@ -175,7 +175,9 @@ export function computeKeyLevels(bars: Bar[]): KeyLevels | null {
  * query CONFIRMED the symbol is not held; "close-unknown" = the symbol is
  * CONFIRMED held but its cost is unusable (fields missing / currency mismatch);
  * "holding-unknown" = the holding status itself is not determined (positions
- * query pending or failed) — the UI must never claim "未持有" in either state,
+ * query not in the success state: loading, or failed -- including a refetch failure that still
+ * carries older data; a refetch merely in progress keeps using the last successful data) — the UI
+ * must never claim "未持有" in either state,
  * and in "holding-unknown" must not render any held-only wording either.
  *
  * Since R-6 this no longer chooses the stop/target anchor (that is always the

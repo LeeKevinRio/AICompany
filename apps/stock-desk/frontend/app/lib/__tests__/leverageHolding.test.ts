@@ -95,6 +95,12 @@ describe("isLeverageQueryEnabled — enabling rule (pending / error / success+he
     expect(enabled({ isError: true, isSuccess: false, data: undefined })).toBe(true);
   });
 
+  it("error that still carries older data: enabled whatever the stale book says (same rule as the anchor resolver: non-success data is not trusted)", () => {
+    expect(enabled({ isError: true, isSuccess: false, data: held })).toBe(true);
+    expect(enabled({ isError: true, isSuccess: false, data: notHeld })).toBe(true);
+    expect(enabled({ isError: true, isSuccess: false, data: empty })).toBe(true);
+  });
+
   it("success and held: enabled", () => {
     expect(enabled({ isError: false, isSuccess: true, data: held })).toBe(true);
   });

@@ -410,7 +410,8 @@ export function KeyLevelsPanel({
 
   const zone = rangeZoneOf(levels);
   // 風控 B0 required 1: while the holding status itself is undetermined (positions
-  // pending / failed) the held-only wording (LM-16 / LM-17 / LM-53) is never rendered.
+  // query not in success: loading, or failed -- including a refetch failure that keeps older data;
+  // a refetch merely in progress keeps using the last successful data) the held-only wording (LM-16 / LM-17 / LM-53) is never rendered.
   // Like the decision card, the anchor-derived numbers fail closed to "—" and the
   // anchored ladder is not drawn. No new wording is introduced.
   // The held / not-held helpers only accept the narrowed union, so they cannot

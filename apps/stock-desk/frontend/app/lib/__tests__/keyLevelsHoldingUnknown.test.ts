@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { resolveKeyLevelsAnchor } from "../keyLevelsAnchor";
+import { resolveKeyLevelsAnchor, type PositionsAnchorInput } from "../keyLevelsAnchor";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
@@ -119,7 +119,15 @@ function book(...items: Position[]): PositionsResponse {
 const BARS_ATR = makeBars(80); // atr14 available
 const BARS_NO_ATR = makeBars(10); // fewer than 15 bars: atr14 unavailable
 
-function panelOf(bars: Bar[], positions: PositionsResponse | undefined): string {
+/** A successfully fetched positions query slice. */
+function ok(data: PositionsResponse): PositionsAnchorInput {
+  return { isSuccess: true, data };
+}
+
+/** First load pending, or first load failed: not success and no data at all. */
+const NO_DATA: PositionsAnchorInput = { isSuccess: false, data: undefined };
+
+function panelOf(bars: Bar[], positions: PositionsAnchorInput): string {
   const anchor = resolveKeyLevelsAnchor(positions, "2330", "TW");
   return renderToStaticMarkup(
     createElement(KeyLevelsPanel, { bars, avgCost: anchor.avgCost, anchorSource: anchor.anchorSource }),
@@ -142,20 +150,17 @@ function heldOnlyLiterals(bars: Bar[]): string[] {
 }
 
 describe("B0 required 1: holding status undetermined renders no held-only literal in the panel", () => {
-  // On the page, a pending query and a failed query are BOTH `positions.data === undefined`,
-  // and the page passes `positions.data` to the resolver. So there is exactly one resolver input
-  // for "loading" and "failed"; this test cannot (and does not claim to) tell them apart.
-  // It does not cover a refetch failure that keeps stale data (then `data` is defined and the
-  // normal held / not-held branches apply). No hook-level test is added here. The page wiring
-  // is pinned by the source scan below.
+  // First load pending and first load failed are BOTH "not success, no data": one resolver input, so this
+  // case cannot tell them apart. A refetch failure that keeps older data is a different input (status
+  // "error" WITH data) and has its own cases below (風控 B0 R-1).
   for (const [label, bars] of [
     ["ATR available", BARS_ATR],
     ["ATR unavailable", BARS_NO_ATR],
   ] as const) {
     it(`positions loading or failed (data undefined), ${label}: no LM-16 / LM-17 / LM-53, anchor-derived numbers are "—"`, () => {
-      const anchor = resolveKeyLevelsAnchor(undefined, "2330", "TW");
+      const anchor = resolveKeyLevelsAnchor(NO_DATA, "2330", "TW");
       expect(anchor).toEqual({ anchorSource: "holding-unknown", avgCost: null });
-      const html = panelOf(bars, undefined);
+      const html = panelOf(bars, NO_DATA);
       for (const literal of heldOnlyLiterals(bars)) {
         expect(html, literal).not.toContain(literal);
       }
@@ -195,7 +200,7 @@ describe("B0 required 1: holding status undetermined renders no held-only litera
 
   it("the decision card is unchanged for a pending / failed positions query: stop / target stay '—', no anchor label", () => {
     const response = makeResponse();
-    const anchor = resolveKeyLevelsAnchor(undefined, "2330", "TW");
+    const anchor = resolveKeyLevelsAnchor(NO_DATA, "2330", "TW");
     const html = renderToStaticMarkup(
       createElement(DecisionCardBody, {
         response,
@@ -208,7 +213,7 @@ describe("B0 required 1: holding status undetermined renders no held-only litera
     expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD);
     expect(html).not.toContain("基準價");
     // L4: on the decision card "holding-unknown" must behave exactly like "close-unknown" (whole-output equality).
-    const closeUnknown = resolveKeyLevelsAnchor(book(lot("0")), "2330", "TW");
+    const closeUnknown = resolveKeyLevelsAnchor(ok(book(lot("0"))), "2330", "TW");
     expect(closeUnknown).toEqual({ anchorSource: "close-unknown", avgCost: null });
     const htmlCloseUnknown = renderToStaticMarkup(
       createElement(DecisionCardBody, {
@@ -221,11 +226,34 @@ describe("B0 required 1: holding status undetermined renders no held-only litera
     expect(html).toBe(htmlCloseUnknown);
   });
 
-  it("the page feeds the panel and the resolver from `positions.data` only (pending and failed both give undefined)", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readFileSync(join(__dirname, "../../position/[symbol]/page.tsx"), "utf8");
-    expect(src).toContain("resolveKeyLevelsAnchor(positions.data, symbol, market)");
+  // R-1 / R-2: the resolver itself decides from the query status, so a refetch FAILURE that still carries the
+  // last successful `data` (status "error") is undetermined too -- never the stale held / not-held branches.
+  // These cases go red if the page (or resolver) falls back to looking at `data` alone.
+  const STALE_BOOKS: ReadonlyArray<readonly [string, PositionsResponse]> = [
+    ["stale book still lists the holding", book(lot("100"))],
+    ["stale book is an empty list", book()],
+  ];
+  for (const [label, staleBook] of STALE_BOOKS) {
+    it(`refetch failed (status error) but older data kept, ${label}: holding-unknown, no held-only literal, no not-held claim`, () => {
+      const errorWithStale: PositionsAnchorInput = { isSuccess: false, data: staleBook };
+      expect(resolveKeyLevelsAnchor(errorWithStale, "2330", "TW")).toEqual({
+        anchorSource: "holding-unknown",
+        avgCost: null,
+      });
+      // Same result as the no-data input: the panel output is identical.
+      expect(panelOf(BARS_ATR, errorWithStale)).toBe(panelOf(BARS_ATR, NO_DATA));
+      const html = panelOf(BARS_ATR, errorWithStale);
+      for (const literal of heldOnlyLiterals(BARS_ATR)) {
+        expect(html, literal).not.toContain(literal);
+      }
+      expect(html).not.toContain("未持有此標的");
+      expect(html).not.toContain("相對成本損益");
+    });
+  }
+
+  it("a refetch merely in progress keeps status success and the last successful data (documented known limitation)", () => {
+    expect(resolveKeyLevelsAnchor(ok(book(lot("100"))), "2330", "TW")).toEqual({ anchorSource: "cost", avgCost: 100 });
+    expect(resolveKeyLevelsAnchor(ok(book()), "2330", "TW")).toEqual({ anchorSource: "close-not-held", avgCost: null });
   });
 });
 
@@ -235,9 +263,9 @@ describe("B0 required 1: a CONFIRMED holding with an unusable cost keeps LM-16 +
     ["ATR unavailable", BARS_NO_ATR],
   ] as const) {
     it(`(c) held, cost unusable (avg_cost 0), ${label}`, () => {
-      const anchor = resolveKeyLevelsAnchor(book(lot("0")), "2330", "TW");
+      const anchor = resolveKeyLevelsAnchor(ok(book(lot("0"))), "2330", "TW");
       expect(anchor).toEqual({ anchorSource: "close-unknown", avgCost: null });
-      const html = panelOf(bars, book(lot("0")));
+      const html = panelOf(bars, ok(book(lot("0"))));
       for (const literal of heldOnlyLiterals(bars)) {
         expect(html, literal).toContain(literal);
       }
@@ -256,7 +284,7 @@ describe("B0 required 2: DOM order (the 「大字為…」 line before LM-16; LM
   ] as const) {
     it(`(d) held with a loss, ${label}: ${atrLine.slice(0, 6)}… < LM-16, LM-16 and LM-19 are adjacent siblings`, () => {
       const { x, d } = closeOf(bars);
-      const html = panelOf(bars, book(lot("200"))); // close ~100..106 vs cost 200: a loss
+      const html = panelOf(bars, ok(book(lot("200")))); // close ~100..106 vs cost 200: a loss
       const lm16 = buildStopBasisHeld(x, d);
       const levels = computeKeyLevels(bars);
       if (levels === null) throw new Error("fixture");
@@ -281,7 +309,7 @@ describe("B0 required 2: DOM order (the 「大字為…」 line before LM-16; LM
   }
 
   it("confirmed not-held: the 「大字為…」 line comes first and is directly followed by the not-held basis sentence", () => {
-    const html = panelOf(BARS_ATR, book());
+    const html = panelOf(BARS_ATR, ok(book()));
     const { x } = closeOf(BARS_ATR);
     const basis = buildStopBasisConfirmedNotHeld(x);
     const iAtr = html.indexOf(KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE);
