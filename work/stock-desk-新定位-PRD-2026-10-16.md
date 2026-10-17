@@ -12,6 +12,7 @@
   - `work/research/2026-10-15-3日5日方向判斷-事先宣告草案.md`（下稱「quant 草案」；**未凍結**）
   - `work/reviews/2026-10-15-A-1-全缺價總額顯示-qa-reviewer.md`、`...-e2e驗收-qa-e2e.md`、`work/dispatch/2026-10-13-任務單-KT-1-Kelly未平倉跨界字面修正.md`、`work/dispatch/2026-10-08-任務單-F-9-日線上游幣別未核對.md`（只讀狀態與審查結論）
 - 標示慣例：〔事實：檔案〕＝我本次讀到的內容；〔引〕＝轉引他人文件、未重驗；〔推論〕＝我的判斷。紀律：未讀 `.env`，未碰 `apps/stock-desk/backend/data/*.db`。
+- 名詞定義（2026-10-17 新增；不全文替換，下文與視覺規範的「首層」仍依語境判讀，兩義衝突時以本條為準）：「首層」有兩種意思。(1) **`first_layer` 顯示面**：ADR 與政策表（`DisplaySurface`、`PLAN_OUTPUT_SURFACES`、`SURFACE_PERMISSIONS`）裡的列舉值，按**頁面或載體**判定，指「跨標的總覽類頁面」（市場總覽、族群列表、族群詳細頁）；個股詳細頁整頁屬 `symbol_detail`，即使頁內有展開區也不算 `first_layer`。(2) **頁面內的展開層級**：視覺規範與 PV-52 所說「首層可見、證據與公式在展開區」，指同一頁面中不必展開就看得到的那一層。涉及「個股展望不上首層」（R-5）時指 (1)；涉及「驗證狀態、資料日期須首層可見」（PV-52）時指 (2)。`first_layer` 的定義文字須由 tech-architect 在 ADR 同步。
 - 本文件章節對應 PM 固定格式：背景與目標（§1）、使用者與情境（§2）、範圍內／範圍外（§3）、功能需求與驗收條件（§5；因每條需求緊接其 Given/When/Then，兩章合併為逐期逐條）、風險與依賴（§7）、開放問題（§8）；另加待決事項（§4）與 Phase 1 派工（§6）。
 
 ---
@@ -628,7 +629,7 @@ ADR D-12 驗收：文件全部在 `work/` 或 `docs/adr/`，CEO 書面核可；q
 
 #### NP-A3 最需要處理（PM 提案排序，**需 quant 與風控審**）
 
-- 排序依據（由高到低）：(1) 資料缺口（缺價、來源失敗）；(2) 已越過失效價；(3) 任一風險上限 violated；(4) 已觸發的警示；(5) 持有模式下 5 日展望為偏空且驗證狀態非「未驗證」以外的正面主張〔此項是否該進清單屬風控範圍，PM 暫列為待審〕。每項附一行原因與連結。
+- 排序依據（由高到低）：(1) 資料缺口（缺價、來源失敗）；(2) 已越過失效價；(3) 任一風險上限 violated；(4) 已觸發的警示；(5) 〔取代：原寫「(5) 持有模式下 5 日展望為偏空且驗證狀態非「未驗證」以外的正面主張〔此項是否該進清單屬風控範圍，PM 暫列為待審〕。」〕〔2026-10-17 修訂：第 (5) 項移除，無替代項。清單成員只限上列 (1)～(4) 的事件類條件；清單的成員與排序一律不得引用個股展望標籤或其方向（D-19、D-20 ③、風控 R-5），見 AC-S-9。〕每項附一行原因與連結。
 - AC-A3-1：Given 3 檔持股，其中 1 檔缺價、1 檔觸發風險上限、1 檔正常；When 開啟總覽；Then 列出前兩項並各附原因與連結，正常者不列入；缺價者不被當成損益 0 排序。
 - AC-A3-2：Given 無待處理事項；When 開啟總覽；Then 顯示「目前沒有需要處理的事項」與判定時間。
 - AC-A3-3：Given 清單；When 檢視；Then 排序依據可見，且不使用「該先賣誰」類措辭。
@@ -643,6 +644,21 @@ ADR D-12 驗收：文件全部在 `work/` 或 `docs/adr/`，CEO 書面核可；q
 - AC-D4D-5：Given 輸入資料不足；When 查看；Then 顯示「證據不足」與缺項，不落入任何行動。
 - AC-D4D-6：Given 個股 3／5 日展望；When 查看；Then 只出現在個股詳細頁、並標驗證狀態與「庫存與自選股合併紀錄」說明；首層（總覽、列表）不出現個股展望，直到該展望達「優於基準」為止（風控 R-5、PV 第（四）節 2；不隨 #10 改變）。展望本身是否顯示仍受 #10 約束。
 - AC-D4D-7：Given 價位或條件；When 掃描前端程式碼；Then 不含價位、距離、門檻運算，舊的 `keyLevels.ts` 計算本體與 `entryObservation` 的固定百分比常數已刪除（AV-13）。
+
+#### 顯示面配置驗收條件 AC-S-1～AC-S-9（**草案，待風控單項確認（顯示面配置）**）
+
+- 狀態：2026-10-17 新增，依 `work/reviews/2026-10-17-PLAN_OUTPUT_SURFACES與頁面歸屬-product-manager.md`。以下為提案層條件：ADR-0027 本文目前尚無 `DisplaySurface`、`SURFACE_PERMISSIONS`、D-20，須待 ADR 修訂後才對應已生效條文。涉及使用者面字面者，引號內僅為示意，非定稿字面（走 creative-lead → 風控）。
+- AC-S-1【建議值，待風控與 CEO（#10、#16、方案 A／B）】：Given `PLAN_OUTPUT_SURFACES` 與 `SURFACE_PERMISSIONS` 已登記；When 檢查政策表 v0 與 ADR；Then 值與下列建議值一致，變更須升 `policy_version` 並送風控。建議值：
+  - `PLAN_OUTPUT_SURFACES` = {`first_layer`, `symbol_detail`, `api`}（方案 A；方案 B 為 {`symbol_detail`, `api`}，需 CEO 與風控裁決；備選維持五項，後果是個股展望永遠不可用）。適用欄位：`position_action`、`reasons`、`pending_triggers`、`add_conditions`、`entry_conditions`、`outlook_refs`。
+  - `SURFACE_PERMISSIONS` v1（fail-closed，沒列的格子不許可）：大盤與族群各開 `first_layer`、`api`；個股開 `symbol_detail`、`api`；個股 `first_layer` 為條件格（需「優於基準」且伴隨揭露全核可，再送審才生效，v1 不生效）；所有 scope 的 `alert`、`export` 在 v1 一律不許可。每一格登記 `required_disclosures`。
+- AC-S-2：Given 個股展望尚未「優於基準」；When 開啟個股詳細頁與任何會渲染 plan 的首層列；Then `reasons` 只寫「5 日展望目前不可用（原因），本判斷未納入」（示意），不含方向；首層列帶資料日期。
+- AC-S-3：Given #16 未回覆或為「不帶」；When 任何提醒或推播觸發；Then 內容不含 plan 與展望衍生欄位（含 `levels`、`risk_from_close`、`pnl_vs_cost`、`quantity_range`、`execution_caveats`），只有「有 N 則新評估」類。
+- AC-S-4：Given 任何 CSV 匯出；When 檢查檔案；Then 不含 plan 欄位與展望標籤。
+- AC-S-5：Given 全部對外 route；When 列舉；Then 含展望衍生欄位的 route 都有非空 `SERVES`，沒有登記者回 `surface_not_permitted`。
+- AC-S-6：Given `/positions`、`/playbook`、`/backtest`、`/settings`；When 掃描；Then 沒有展望標籤、天氣或 plan 結論。
+- AC-S-7：Given 族群詳細頁的成員列；When 檢視；Then 沒有個股展望標籤與 plan 結論。
+- AC-S-8：Given 個股的預測紀錄；When 檢視；Then 只出現在個股詳細頁，不出現在任何首層頁面。
+- AC-S-9：Given 「最需要處理」清單（NP-A3）；When 檢視成員與排序；Then 不引用個股 5 日展望標籤或其方向。
 
 #### NP-D7 事實／推論／未確認標籤
 
@@ -846,6 +862,7 @@ PM 對五種狀態的定義（ADR 待決 PM 4；字面與視覺待 creative-lead
 
 ### 9.3 變更紀錄
 
+- 2026-10-17（product-manager，經 coordinator 授權）：(a) NP-A3 排序依據第 (5) 項（持有時 5 日展望偏空進「最需要處理」）移除，舊文以〔取代〕保留；**原因**：與事先宣告 D-19（不能顯示就不能引用）、D-20 ③（個股展望在「優於基準」前對 plan 不可用）及風控 R-5（個股展望只放詳細頁）不一致；**方向：收緊**（清單只留事件類條件，無放寬項）。(b) 新增 AC-S-1～AC-S-9，標草案，待風控單項確認（顯示面配置）；AC-S-1 為建議值，待風控與 CEO（#10、#16、方案 A／B）。(c) 文件開頭新增「首層」名詞定義（`first_layer` 顯示面 vs 頁面內展開層級），不全文替換。未改任何既有驗收條件、視覺規範、ADR、事先宣告或使用者面字面。**應通知（由 coordinator 執行）**：qa-reviewer、qa-automation、qa-e2e、tech-architect、quant-researcher、risk-compliance-officer、creative-lead、art-lead、frontend-engineer。
 - 2026-10-16（同日第二次更新）：依 coordinator 轉達併入風控 A-15 裁定（R-5、PA-9、R-6、#10 建議、PA-1 等），變更內容見 §9.2 第 7 點；仍無下游已依本文件開工，故不另行通知，惟 §6.4a 的候選任務待 CEO 裁示 R-6 後才可派。
 - 2026-10-16：首版（product-manager）。尚無下游已依本文件開工；日後修改範圍、驗收條件或排序，須在此追加紀錄並通知全部下游（qa-reviewer、qa-automation、qa-e2e、tech-architect、quant-researcher、risk-compliance-officer、creative-lead、art-lead、dev-lead、frontend-engineer、data-engineer、devops-sre）。
 
