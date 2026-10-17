@@ -6,19 +6,19 @@
 - r1 修訂：2026-10-16，依 tech-architect 修訂提案 A-1～A-21
 - r2 修訂：2026-10-17，依 tech-architect 修訂提案 A-22～A-41
 - r3 修訂：2026-10-17，依 tech-architect 修訂提案 A-42～A-53（附件 B'-3：觀察交易日集合的輸入來源），含 r3′ 補正（風控 r3 單項確認 R-1～R-3、S-1～S-5）
+- r3″ 更正：2026-10-17，依 tech-architect r3″ 更正 A-87～A-95（r3 套用後的接合、參照與編修；A-87、A-91 為收緊，其餘方向不變）
 - 適用範圍：僅 product/stock-desk。
 - 與既有 ADR 的關係：
   - 不取代任何 ADR。
   - **ADR-0009**：引用 D-2 的 `publish_cutoff`，不修訂。
   - **ADR-0014**：遵守 D-7(d)、I-10、D-11。
-  - **ADR-0019**：與 D-4、D-5 的單一取得時間基準一致，不讀 `tail_fetched_at`。
   - **ADR-0016**：AC-B5a-6 依 D-8 的 `change_mode` 判斷。
   - **ADR-0025**：是 AV-1 的延伸，實作 D-9 休市日、F-6 與 D-12 Phase 1。
   - **ADR-0027（同批）**：本 ADR 提供 `SessionCalendar` 與 VS-6，由 ADR-0027 使用。
     - T1 評估 B-3 原本寫「AV-17 共用 VS-2」〔轉引 `:247`〕。ADR-0027 M-1 核可後改用 VS-6；M-1 駁回時仍用 VS-2。
   - **ADR-0012（accepted）**：遵守 C-7。`ObservedSessionCalendar` 不讀市場 DB（D-9 第 7 點）。
   - **ADR-0016、ADR-0009、ADR-0024**：`market_trading_days`、`market_has_session` 的語意與 SQL 不變（CS-18）。
-  - **ADR-0019**：D-9 讀列層的 `as_of` 與 `fetched_at`，R3 另外讀當日 bar 的 `PriceBar.as_of`。這些時間都只用來判斷「是否定案」，一律取較早者（CS-17）。它們不是序列的取得時間，不取代 `acquired_at`（ADR-0019 D-5），也不得顯示（K-13）。K-9 不受影響。
+  - **ADR-0019**（r3、r3′；r3″ 合併，A-88）：`acquired_at` 依 ADR-0019 D-4、D-5 的單一取得時間基準。本 ADR 的模組不讀 `tail_fetched_at` 欄（ADR-0019 K-3 的用途限制）；走快取路徑時，`acquired_at` 的值等於它，是經由 ADR-0019 D-5 的序列取得時間間接取得（見 Context「觀察日曆現況」）。D-9 讀列層的 `as_of` 與 `fetched_at`，R3 另外讀當日 bar 的 `PriceBar.as_of`。這些時間都只用來判斷「是否定案」，一律取較早者（CS-17）。它們不是序列的取得時間，不取代 `acquired_at`（ADR-0019 D-5），也不得顯示（K-13）。K-9 不受影響。
   - **ADR-0026**：本 ADR 不新增欄位、不改 DDL，不採用 `schema_migrations`。
 - 標註約定同 ADR-0027。
 
@@ -129,9 +129,9 @@
 |---|---|---|---|
 | R0 | `price_date is None` | 不輸出狀態 | — |
 | R1 | `price_kind != "daily_close"` | `not_applicable` | — |
-| R2 | `price_date > D` | `date_anomaly`，記 WARNING | price_date |
-| **R2′（新增）** | 交易日、開盤前，而且 `price_date == D` | `date_anomaly`（開盤前不可能有當日 bar） | price_date |
-| **R2″（新增；r3 改，A-47）** | D 不是交易日（任何 basis），而且 `price_date == D` | `date_anomaly`（官方日曆與資料衝突） | price_date |
+| R2（r3″ 補 sub_reason，A-90） | `price_date > D` | `date_anomaly`，`sub_reason = future_date`，記 WARNING | price_date |
+| **R2′（新增；r3″ 補 sub_reason，A-90）** | 交易日、開盤前，而且 `price_date == D` | `date_anomaly`，`sub_reason = before_open`（開盤前不可能有當日 bar） | price_date |
+| **R2″（新增；r3 改，A-47；r3″ 改狀態欄，A-89）** | D 不是交易日（任何 basis），而且 `price_date == D` | `date_anomaly`（D 依日曆不是交易日，卻有 D 日期的列；basis＝official 時即官方日曆與資料衝突。`sub_reason` 見表後） | price_date |
 | **R2‴（r3 新增）** | P 不為 None，而且 `P < price_date < D` | `date_anomaly`，`sub_reason = unconfirmed_session`，記 WARNING（列的日期落在日曆不認為是交易日的日子，例如週末，或 official basis 下的官方休市日） | price_date |
 | R3（r3′ 改，A-46′） | 交易日、`price_date == D`，而且 `is_final(market, D, acquired_at, bar_as_of)` | `close` | D |
 | R3′ | 交易日、`price_date == D`，但不滿足 R3 | `provisional_today` | D |
@@ -141,7 +141,7 @@
 | R5 | D 不是交易日，而且 `price_date == P` | `market_closed` | P |
 | R6 | `price_date < P`，或 P 為 None | `lagging`，附 `lag_sessions`（算不出來就給 null） | price_date |
 
-（r3，A-47）R2″ 的狀態仍是 `date_anomaly`，`sub_reason` 依 basis 分成 `official_conflict` 與 `not_a_session`。
+（r3，A-47；r3″ 補對應，A-90）R2″ 的狀態仍是 `date_anomaly`；basis＝official 時 `sub_reason = official_conflict`，其他 basis（observed、weekday_assumed）時為 `not_a_session`。
 
 `date_anomaly` 的 `sub_reason`（`future_date`／`before_open`／`official_conflict`／`not_a_session`／`unconfirmed_session`）只用於 log 和 CS-11 的窮舉；字面一律是 LM-70。
 
@@ -175,20 +175,20 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 | `date_anomaly` | TW、US | LM-70，價格照常顯示（見 D-4 補充，r1 A-19） |
 | `not_applicable` | — | 不輸出估值狀態字面，現行顯示不變 |
 
-（r2，A-38；r3 改，A-48）observed 兩列的說明：
+（r2，A-38；r3 改，A-48；r3″ 改，A-91、A-92）observed 兩列的說明：
 - R4b × observed：D-9 實作之前（現行 `market_trading_days` 口徑）是到得了的。
   - D-9 實作之後，SE-2 要求 `min(as_of, fetched_at) ≥ final_after(D)`、`max(as_of, fetched_at) ≤ now`，而 R4b 要求 now < VS-3 < VS-4，所以只有時鐘或參數出錯時才可能出現。
   - 這一列的 LM-71＋LM-26 與 WARNING 保留，當作縱深防禦；WARNING 代表異常。
   - 不得以「照建構走不到」為由，刪除或降級這一列的對應、WARNING 或 CS-11 的窮舉（含 CST-7 的性質測試）。
 - 翻轉 R4c × observed 為 LM-24 的 PR，要以下三點都成立才可以合併：
-  - (a) D-9 已經實作合併，CST-5～CST-8 綠燈；
+  - (a) D-9 已經實作合併，CST-5～CST-9 綠燈；
   - (b) data-engineer 的確認回報經風控單項確認。回報至少要含：
-    - Phase 1 探測 §6.3 至少三輪的結果，證明所用來源在 VS-4 之後回傳的當日 bar 都是定案值（F-2、F-3 沒有觸發）；
-    - §6.4 唯讀複本診斷 A～D 的數字；
+    - Phase 1 探測指令（`work/research/2026-10-16-Phase1資料源探測指令-CEO本機代跑.md`，下稱「探測指令」）§6.3 至少三輪的結果，證明所用來源在 VS-4 之後回傳的當日 bar 都是定案值（F-2、F-3 沒有觸發）；
+    - 探測指令 §6.4.3 唯讀複本診斷 A～D 的數字；
     - SE-4、SE-5 的確認；
-    - (i) §6.4 的試算必須用已合併版本的 `PriceBarCache.market_session_evidence` 讀唯讀複本，再交給已合併版本的 `classify_session_evidence` 分類。不得另寫 SQL，也不得重寫判準。回報要附所用 commit SHA 與呼叫方式。
-    - (ii) 列出樣本期（§6.4 唯讀複本涵蓋的全部日期）內被判成 confirmed、但其實是週末（依 VS-1 的當地日期）或 TWSE 官方休市日的台股日子。休市表要註明官方出處與查證日期。**台股這個數字必須為 0，否則不得翻轉。** 美股同時列出被判成 confirmed 的週末，應為 0；不為 0 時列入回報，但不屬於 R4c 翻轉條件。
-    - (iii) §6.3 判讀矩陣 F-7 那一欄的結果：逐來源、逐輪列出「VS-4 之後的當日 bar 是否已定案」。任何一格為否，F-7 即觸發，不得翻轉。
+    - (i) 探測指令 §6.4.4 的新口徑試算必須用已合併版本的 `PriceBarCache.market_session_evidence` 讀唯讀複本，再交給已合併版本的 `classify_session_evidence` 分類。不得另寫 SQL，也不得重寫判準。回報要附所用 commit SHA 與呼叫方式。
+    - (ii) 列出樣本期（探測指令 §6.4 所用唯讀複本涵蓋的全部日期）內被判成 confirmed、但其實是週末（依 VS-1 的當地日期）或 TWSE 官方休市日的台股日子。休市表要註明官方出處與查證日期。**台股這個數字必須為 0，否則不得翻轉。** 美股同時列出被判成 confirmed 的週末，應為 0；不為 0 時列入回報，但不屬於 R4c 翻轉條件。
+    - (iii) 探測指令 §6.3.3a（判讀矩陣的 F-7 補充欄）的結果：逐來源、逐輪列出「VS-4 之後的當日 bar 是否已定案」。任何一格為否，F-7 即觸發，不得翻轉。
   - (c) qa 審查。只經 qa 審查不夠。
 - 觀察日集合的輸入來源依 D-9（r3）。
 
@@ -221,7 +221,7 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - 本 ADR 的狀態只供顯示（CS-4），不得被 outlook、plan、forecast 讀取，兩者不應共用列舉；
 - 估值列缺價時顯示「—」（R0），沒有缺項清單。
 
-### D-9 觀察交易日集合的輸入（r3，附件 B'-3）
+### D-9 觀察交易日集合的輸入（r3）
 1. **唯一來源**：
    - `PriceBarCache` 新增唯讀方法 `market_session_evidence(market, start, end) -> tuple[SessionEvidenceRow, ...]`。它原樣回傳 `[start, end]` 內該市場每一列的 `(symbol, trade_date, open, high, low, close, volume, source, as_of, fetched_at)`，不做過濾也不做分類。
    - 分類由 `session_calendar.py` 的純函式 `classify_session_evidence(rows, *, market, now) -> SessionEvidence` 負責。`SessionEvidence = {confirmed: frozenset[date], unconfirmed: frozenset[date]}`。
@@ -294,10 +294,10 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - **CS-10**：`pre_open` 永遠不對應到 LM-27（前端對應表測試）。
 - **CS-11**（r1 改，A-17）：字面對應表窮舉所有 (state, sub_reason, session_basis, market) 組合（`every state has a template`）。
   - （r2，A-39）R4b × observed 必須有對應（LM-71＋LM-26）。另加測試：這個組合出現時，`build_summary` 記 WARNING。`close_state.py` 維持純函式，不做 log。
-- **CS-12**（r1 改，A-17；r2 改，A-39）：
+- **CS-12**（r1 改，A-17；r2 改，A-39；r3″ 改，A-87）：
   - LM-27 只在 `market=TW` 而且 `basis=official` 時渲染；
   - LM-24 只在 `market=TW`，而且 `basis=official`，或 `basis=observed`、`sub_reason=after_close_pending` 時渲染；
-    - LM-24 在 `basis=observed`、`sub_reason=after_close_pending` 時渲染，要等翻轉 PR 合併後才生效。合併前，data-engineer 的確認回報要經過風控單項確認，並由 qa 審查。
+    - LM-24 在 `basis=observed`、`sub_reason=after_close_pending` 時渲染，要等翻轉 PR 合併後才生效。合併前，D-9 要已經實作合併，而且 CST-5～CST-9 綠燈（D-5「observed 兩列的說明」第二點 (a)）；data-engineer 的確認回報要經過風控單項確認，並由 qa 審查。翻轉 PR 的完整合併條件以 D-5 該點 (a)～(c) 為準。
     - 這一列的翻轉只能以 PR 修改對應表與測試落地，不設執行期旗標，也不得用設定值切換。
   - 正反兩個方向都要有測試。
   - 日後美股若接上官方日曆，LM-24、LM-27 要先依時區重審，才能擴用到美股。
@@ -385,7 +385,7 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - **F-4**：交易所時段變更（例如延長交易、補行交易日）。
 - **F-5**：官方休市日來源持續不可得（ADR-0025 F-6）。
 - **F-6**：納入新的市場。
-- **F-7**（r3）：§6.3 發現某個所用來源在 VS-4 之後仍回傳未定案的 bar。走 F-3，把 VS-4 升級成 (market, source) 鍵；已翻轉的 R4c 退回 LM-71＋LM-26，直到重新確認。
+- **F-7**（r3；r3″ 補參照，A-92）：探測指令（`work/research/2026-10-16-Phase1資料源探測指令-CEO本機代跑.md`）§6.3 發現某個所用來源在 VS-4 之後仍回傳未定案的 bar。走 F-3，把 VS-4 升級成 (market, source) 鍵；已翻轉的 R4c 退回 LM-71＋LM-26，直到重新確認。
 - **F-8**（r3）：ADR-0012 C-7 被修訂、允許持倉鏈讀市場 DB 時，重新評估方案 C／D。
 - **F-9**（r3）：寫入側接上品質閘門時，重新檢查 SE-3、SE-4 是否變成重複，但不得因此刪除。
 
@@ -400,17 +400,17 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
   - 已裁示（r1，A-20）：O1 或 O2（台股用 O2-b（LM-71）、美股用 O2-c（LM-72）；O1 不核可，風控第三批）；`pre_open` 沿用 LM-23（字面見 D-5：LM-23 日期代 P ＋LM-28，不得用 LM-27）。
   - 已裁示（r2，A-40）：`basis=observed` 的對應（風控 v0.6 核對 A-16：R4c 有條件用 LM-24；R4b 維持 LM-71＋LM-26）。
   - 新增（r2，A-40）：data-engineer 觀察日確認回報的單項確認。
-  - 新增（r3，A-52）：r3 設計的單項確認（見第五節第 1 點）；R2″ 改寫、R2‴ 對應 LM-70 是否屬實。
+  - 已裁示（r3，A-52；r3″ 更新，A-93）：r3 設計的單項確認為 APPROVE WITH CONDITIONS，沒有 VETO（`work/reviews/2026-10-17-ADR-0028-r3單項確認-風控.md`）。R2″ 改寫、R2‴ 都對應 LM-70，風控認定屬實，不必另外起草。required R-1～R-3 已由 r3′ 寫入（SE-2 與 CST-5 的 R-1 fixture、CS-21 通則、D-5「observed 兩列的說明」第二點 (b) (i)～(iii)）。R-4 屬於 ADR-0027，不在本 ADR。
   - 新狀態的字面。
 - **data-engineer**：
   - Q-B7：各日線來源在盤中或收盤剛結束時，會不會回傳當日、尚未定案的 bar；
   - VS-2～VS-6 的查證；
   - 週六補行交易日。
   - 新增（r2，A-40）：觀察日集合來源的確認。
-  - 新增（r3，A-52）：SE-4、SE-5 的確認；R4c 翻轉前的確認回報內容（依 A-48）。
+  - 新增（r3，A-52）：SE-4、SE-5 的確認；R4c 翻轉前的確認回報內容（依 D-5「observed 兩列的說明」第二點 (b)）。
   - 新增（r3′，A-52′）：
-    - (f) 確認所有寫入 `price_bars_cache` 的轉接器，`PriceBar.as_of` 都不晚於第一個請求送出的時間；
-    - (g) A-48 (b) (i)～(iii) 的回報內容。
+    - 確認所有寫入 `price_bars_cache` 的轉接器，`PriceBar.as_of` 都不晚於第一個請求送出的時間；
+    - D-5「observed 兩列的說明」第二點 (b) (i)～(iii) 的回報內容。
 - **CEO**：接受新狀態；#15 連網環境。
   - 新增（r3，A-52）：知悉方案 C 被否決，因此 ADR-0027 和 ADR-0028 對「觀察日」各用不同定義。
 - **tech-architect**：Q-B6（ADR-0009 是否吃官方假日表），在 T1-13 時另案處理。
@@ -572,3 +572,65 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 
 **A-84（ADR-0027 r3 提案，CS-12）**
 - r3（2026-10-17，tech-architect A-84，載於 ADR-0027 r3 提案）：CS-12 observed 子項之後新增一句（不設執行期旗標），無被取代原文；見 §對實作的約束 CS-12。提案載明：這是恢復 r2 A-38「切換方式」的原意，r2' 整條取代時漏帶。
+
+---
+
+> r3″（2026-10-17）依 tech-architect「ADR-0028 r3″ 更正」A-87～A-95 套用（`work/reviews/2026-10-17-ADR-0028-r3雙撇更正A87至A95-tech-architect.md`）。只更正 r3 套用後的接合、參照與編修：A-87、A-91 為收緊，其餘方向不變，沒有放寬，依 CS-21 通則不必送風控。檔頭狀態維持 proposed。
+> 被改寫或取代的原文逐字保留於下；引用區塊內的文字即 r3″ 之前（commit 1d69acd）的原文。
+
+**A-87（CS-12）**
+- r3″：observed 子項原文——
+  > - LM-24 在 `basis=observed`、`sub_reason=after_close_pending` 時渲染，要等翻轉 PR 合併後才生效。合併前，data-engineer 的確認回報要經過風控單項確認，並由 qa 審查。
+
+  改為見 §對實作的約束 CS-12（補 D-9 前提，對應 r3 提案第四節第 1 點）。
+
+**A-88（與既有 ADR 的關係：ADR-0019）**
+- r3″：刪除的原點——
+  > - **ADR-0019**：與 D-4、D-5 的單一取得時間基準一致，不讀 `tail_fetched_at`。
+
+  併入 r3′ 的 ADR-0019 點，該點原文——
+  > - **ADR-0019**：D-9 讀列層的 `as_of` 與 `fetched_at`，R3 另外讀當日 bar 的 `PriceBar.as_of`。這些時間都只用來判斷「是否定案」，一律取較早者（CS-17）。它們不是序列的取得時間，不取代 `acquired_at`（ADR-0019 D-5），也不得顯示（K-13）。K-9 不受影響。
+
+  改為見檔頭。「D-4、D-5」讀作 ADR-0019 的條號；「不讀 `tail_fetched_at`」保留，補依據 K-3。
+
+**A-89、A-90（D-4 R2、R2′、R2″ 與表後第一句）**
+- r3″：三列原文——
+  > | R2 | `price_date > D` | `date_anomaly`，記 WARNING | price_date |
+  > | **R2′（新增）** | 交易日、開盤前，而且 `price_date == D` | `date_anomaly`（開盤前不可能有當日 bar） | price_date |
+  > | **R2″（新增；r3 改，A-47）** | D 不是交易日（任何 basis），而且 `price_date == D` | `date_anomaly`（官方日曆與資料衝突） | price_date |
+
+  表後第一句原文——
+  > （r3，A-47）R2″ 的狀態仍是 `date_anomaly`，`sub_reason` 依 basis 分成 `official_conflict` 與 `not_a_session`。
+
+  改為見 §D-4。條件欄與 LM-70 對應不變。
+
+**A-91（D-5 第二點 (a)）**
+- r3″：原文——
+  > - (a) D-9 已經實作合併，CST-5～CST-8 綠燈；
+
+  改為見 §D-5（納入 CST-9）。
+
+**A-92（外部參照自足化，比照 ADR-0027 A-85）**
+- r3″：替換的片段原文——
+  - D-5 第二點 (b)：「Phase 1 探測 §6.3 至少三輪的結果」「§6.4 唯讀複本診斷 A～D 的數字」「(i) §6.4 的試算必須用」「（§6.4 唯讀複本涵蓋的全部日期）」「(iii) §6.3 判讀矩陣 F-7 那一欄的結果」；
+  - F-7：「§6.3 發現某個所用來源」；
+  - D-9 標題：「（r3，附件 B'-3）」；
+  - 待決事項 data-engineer：「（依 A-48）」。
+
+  改為見各處。§6.x 指 `work/research/2026-10-16-Phase1資料源探測指令-CEO本機代跑.md` 的章節；F-7 補充欄實際是 §6.3.3a。
+
+**A-93（待決事項 風控）**
+- r3″：原文——
+  > - 新增（r3，A-52）：r3 設計的單項確認（見第五節第 1 點）；R2″ 改寫、R2‴ 對應 LM-70 是否屬實。
+
+  改為見 §待決事項 風控（已裁示：APPROVE WITH CONDITIONS）。
+
+**A-94（待決事項 data-engineer 標號）**
+- r3″：原文——
+  >     - (f) 確認所有寫入 `price_bars_cache` 的轉接器，`PriceBar.as_of` 都不晚於第一個請求送出的時間；
+  >     - (g) A-48 (b) (i)～(iii) 的回報內容。
+
+  改為見 §待決事項 data-engineer。(f)(g) 原本接續提案第五節第 2 點的 (a)～(e)，ADR 內沒有對應，所以拿掉標號。
+
+**A-95（檔頭、修訂紀錄）**
+- r3″：檔頭新增「r3″ 更正」一行，本區塊為新增，無被取代原文。
