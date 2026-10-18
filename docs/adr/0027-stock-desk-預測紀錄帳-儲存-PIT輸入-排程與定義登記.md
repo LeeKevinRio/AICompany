@@ -86,7 +86,7 @@
 - 第一筆前瞻紀錄被六道閘門（G-1～G-6；on-demand 依 G-7 同樣適用）延後。
 - B 型會讓尚未驗證的展望最長顯示到 n＝150（大盤 5 日約 3.1 年，見 quant §4.9），全程掛「驗證中」或「未驗證」。
 - 價位口徑若改成還原序列（M-9），畫面價位會和券商的未還原 K 線不一致，而且每次除權息都會整組平移。
-- 表數多（21 張），寫入規則有一部分在 trigger 裡。
+- 表數多（22 張），寫入規則有一部分在 trigger 裡。
 
 ---
 
@@ -199,7 +199,7 @@
 | **M-8** | D-1〔`:179`〕；D-2.2〔`:193-198`〕 | `outlook.features → data(load_bars／index)`；大盤輸入含廣度 | 接線改為 `outlook.features → outlook.inputs →`（個股、族群成員）`data.market_panel.MarketPanelReader` 唯讀，或（大盤）`services.index` 並擷取輸入；不得經過 `load_bars`／`price_bars_cache`。D-2.2 加解讀註記：所列輸入是允許的上限，v1 大盤只用指數日線；加入廣度要開新的 `rules_version`（新 claim，m＋1） | R-107 第 8 點；quant §10 D-14 |
 | **M-9** | D-5.7〔`:371`〕 | 價位用未還原收盤，跨除息日標 `spans_ex_date` | **可單獨核可**，見 D-6 | R-110 |
 | **M-10** | F-2〔`:580`〕 | 連續兩個評估期都是 `not_better_than_baseline` 就重新設計或下架 | 改寫，見 D-12（主方案 B 型，替代方案 A 型） | C-8；風控立場 |
-| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 16 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
+| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 17 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`；V15-04 加 `plan_coverage_log`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
 
 **M-4 細項**
 - (a) **基準採聯集**：
@@ -667,6 +667,47 @@
     - 加 `data_as_of`，以及 **`UNIQUE(symbol, market, data_as_of)`**，不含 `policy_version`。每個 (symbol, T) 只有一份 plan；升 `policy_version` 只對還沒有 plan 的 T 生效。
     - 加 **`in_holdings_or_watchlist_at_plan BOOLEAN NOT NULL`**：在同一次 run 計算 plan 時，讀庫存與自選的 store 取得。這是 LM-88 守門的唯一來源。
     - `outlook_display_state` 的 JSON 加兩個鍵 `consumer_surfaces`、`restricting_surfaces`。
+- **`plan_coverage_log`**（tech-architect 2026-10-18；事先宣告 §6.5 V15-04 第 3 項；風控 2026-10-18 v0.15 單項確認 B-4）：plan 作業「應有」集合與逐筆略過原因的耐久紀錄。只增不改（D-2 第 2 點）。
+  - **欄位**：
+    - `entry_id INTEGER PRIMARY KEY AUTOINCREMENT`；
+    - `entry_kind ∈ {step_start, target_skip, step_end}`；
+    - `step_id`：step_start 列為 null，其餘指向同表的 step_start；
+    - `run_id NULL`；
+    - `data_as_of`（T）；
+    - `recorded_at`（store 時鐘）。
+  - **step_start**：
+    - 在本次 plan 作業讀取任何 snapshot 的內容、計算或寫入任何 `plan_record` 之前寫入；snapshot 是否存在只以 `computed_for_session = T` 的唯讀查詢判定。本次作業計算 plan 的標的集合就是 `targets_json`，不得另讀 store。
+    - `targets_json` ＝ 本次讀取庫存與自選 store 得到的 `[{symbol, market, sources ⊆ {holding, watchlist}}]`，排序、不重複；另記 `targets_count`、`targets_sha256`；不含成本與股數（比照 `forecast_scope_snapshot`，AV-9）。
+    - `start_outcome ∈ {started, no_snapshot, deadline}`；
+    - `snapshot_id`：`computed_for_session = T` 的 daily snapshot，沒有時為 null。
+
+    讀取 store 失敗時，不寫 step_start，記 WARNING。
+  - **target_skip**：`symbol`、`market`、`skip_reason`、`detail_json`。
+    - `skip_reason` 是封閉列舉：`no_snapshot`、`compute_error`（`detail_json` 帶例外類別）、`write_rejected`（帶被違反的寫入驗證名稱）、`deadline`（D-7.7）；增列須修訂本點並送風控。
+    - `(symbol, market)` 必須在所屬 step_start 的 `targets_json`；`UNIQUE(step_id, symbol, market) WHERE entry_kind = 'target_skip'`。
+    - 該標的的 plan 交易 rollback 之後，以獨立交易寫入。
+  - **step_end**：`plans_written`、`already_existing`、`skipped_count`，只計 `targets_json` 內的標的；本作業寫入、不在 `targets_json` 的 plan，另記 `plans_written_outside_targets`。寫入驗證：
+    - 三者相加 ＝ `targets_count`；
+    - `targets_json` 的每個標的，恰好落在「本次寫入 `plan_record`」「已有同一 T 的 `plan_record`」「有 target_skip 列」之一。
+  - **寫入者**：只有 `app/plan/**` 中寫入 `plan_record` 的單一函式（AST 列舉呼叫點）。
+  - **歸屬**：每一筆 `plan_record` 都必須能機械歸屬到恰好一列同一 T 的 step_start。實作二擇一：`plan_record` 加 `coverage_step_id`（寫入驗證），或 `run_id` 與 step_start 一對一（寫入驗證）。不得以時間範圍推定。
+  - **衍生計數**（不另存欄位）：
+    - 有 step_start、沒有 step_end 的作業，`targets_json` 中沒有 plan、也沒有 target_skip 的標的，計為 `interrupted`；
+    - 計數用的 T 集合中，沒有任何 step_start 的 T，以 T 為單位計為「整個 T 沒有執行 plan 作業」。計數用的 T 集合 ＝ `forecast_gap_audit` 最新一列 `judged_through` 以前、已判定的觀察日；
+    - 同一 T 多次作業時（23:10 重試、啟動補跑），該 T 的應有集合 ＝ 全部 step_start 的 `targets_json` 的聯集；標的的最終狀態：任一次有 plan 即為有 plan，再依事先宣告 §6.5 V15-04「晚寫入的 plan 另列」分為準時與晚寫入，兩者分列、不合併；沒有 plan 時，取含該標的的最後一次作業的略過原因，或 `interrupted`。
+    - `step_start.targets_json` 與同一 run 的 `forecast_scope_snapshot`（`reason ∈ {holding, watchlist}`）不一致的標的數，在 §4.2 另列。
+    - 以 T 為單位計的日子，不得以其他 T 的 `targets_json` 或任何來源推估它的應有集合或標的數。
+  - **fail-closed**：`plan_outcome` 的任何統計函式，都必須先以本表驗證計數範圍內每個 T 的帳目。下列任一項不成立，或本表不存在時，拒絕計算，不輸出任何 `plan_outcome` 統計，也不輸出只含部分 T 的結果（風控 C44）：
+    - 每一列 step_end 重驗都通過上述寫入驗證；
+    - 每一列 target_skip 都指向同一 T 的 step_start，而且標的在其 `targets_json` 內；
+    - `targets_count`、`targets_sha256` 與 `targets_json` 重算相符；
+    - 計數範圍內每一筆 `plan_record`，都依「歸屬」對到恰好一列同一 T 的 step_start；
+    - 計數用的 T 集合可以導出（`forecast_gap_audit` 有列）。
+
+    `interrupted` 與以 T 為單位的「整個 T 沒有執行 plan 作業」是可以計數的狀態，不屬於不完整，照實列出。
+  - **不得**：以 `plan_record` 是否存在導出「應有」集合；以 `position_events` 或任何歷史重建 T 當下的庫存或自選（現況不能 PIT 還原：`app/positions/store.py:254-258,388` 原地更新與硬刪除；自選沒有儲存）。
+  - 計數起點由 quant 在 `plan_outcome` 另案登記，必須是能由本表機械決定的日期（例如第一列 step_start 的 T，或 D_v），而且在看到任何 `plan_outcome` 之前登記。
+  - **用途限制**：不屬於 `E_CHANGING_EVENTS`。只有 `validation.py` 的 `plan_outcome` 統計、§4.2 揭露與稽核工具可以讀它；`views`、API route、`app.alerts.*` 與匯出不得讀它（AST 列舉呼叫點）。
 - `plan_outcome`：表與只增不改的規則由本 ADR 固定；欄位定義另案處理（quant §6.5，見待決）。
 
 ### D-4 PIT 輸入（R-107）
@@ -741,7 +782,7 @@
    - （N-23）**前置條件**：
      - 缺日稽核與更正作業：不依賴前面任何一步是否成功。
      - 驗證快照：以下三項都成立才寫：本次執行的結算評估已 commit（寫入了 `forecast_settle_eval` 的一列）；本次缺日稽核已 commit；本次晚到掃描與更正作業已完成（沒有觸發因而不啟動，或已寫入 `forecast_correction_job_end`）。任一項不成立，本次不寫驗證快照，記 WARNING，也不寫任何 fail-closed 列。理由：snapshot 有 UNIQUE 而且不重算（D-11.2），寫入的落後或 gated 列，之後重試成功也蓋不掉；缺日稽核失敗時寫快照，缺日率（失效條件 F-3）與依缺日界定分母的統計會偏低；更正作業未完成時寫快照，會把已知待 supersede 的結算（例如收盤已確認有誤）計入 T 的驗證統計（風控 2026-10-18 C-22 確認）。
-     - plan：`computed_for_session = T` 的 daily snapshot 存在時才寫；不存在時本次不寫 plan，記 WARNING，不得改用較早的 snapshot。
+     - plan：`computed_for_session = T` 的 daily snapshot 存在時才寫；不存在時本次不寫 plan，記 WARNING，不得改用較早的 snapshot。不寫的情形同樣依 D-3 `plan_coverage_log` 寫 step_start（`no_snapshot`）與逐筆 target_skip，不得只留 WARNING（V15-04 第 3 項）。
      - 已有同一 T 的快照或 plan 列時，視為略過，不是錯誤。
      - 23:10 重試與啟動補跑依同樣的條件補寫。
    - （N-23）**持續失敗期間**：
@@ -2007,7 +2048,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - F2-B 下，尚未證明的展望最長會顯示約 3 年（大盤 5 日）。誠實度依賴「驗證中」直白句，以及風控的版面限制（不得用綠色、勾號、進度條）。
 - M-9 若採 P-1，價位與券商的未還原 K 線不一致，每次除權息都會整組平移；`plan_outcome` 要做換算。
 - **展望鏈與持倉鏈的資料源不同**：展望讀市場 DB，持倉讀 `price_bars_cache`。同一個 T 的原始收盤可能不同，plan 必須檢查一致性（FL-25）。
-- 21 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+- 22 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
 - 主 DB 每年約增加 220 MB〔推論〕。
 - 主機晚上不開機，樣本就不會增加（quant §4.9 的 g）。
 - 規則 YAML 必須把文字欄位與邏輯分開，否則 logic 雜湊無法定義。
@@ -2308,6 +2349,16 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (h) 登記檔的 `F` 不等於 `freeze_evidence.merged_at` 的 Asia/Taipei 日期，或 `base_ref` 不是事先宣告所載的分支 → 拒絕寫入 registration 列。
   - (i) 取數失敗 → 寫 `fetch_failed` 列，之後可以再取；已有 `stored` 列後再取數 → 拒絕；回應取得後到寫入之間不呼叫其他讀取（spy）。
   - (j) 同一個 `source_name` 由 `rolling` 改為固定日期 → 性質測試判為縮小，拒絕。
+- **FL-70**（`plan_coverage_log`）：
+  - 沒有 snapshot → step_start（`no_snapshot`）與每個標的一列 `no_snapshot`，沒有 `plan_record`；
+  - 單一標的拋例外 → 該標的 `compute_error`，其他標的照寫；
+  - 在 step_end 之前中斷 → 衍生 `interrupted`；
+  - 整晚停機 → 該 T 以 T 為單位計；
+  - step_end 帳目不符 → 拒絕；
+  - 帳目不完整時 `plan_outcome` 統計拒絕計算；
+  - AST：沒有任何程式以 `plan_record` 導出應有集合，也沒有讀 `position_events`；
+  - 23:10 重試補寫 → 最終狀態是有 plan，22:10 的略過列保留。
+  - `plan_record` 無法歸屬到 step_start → 統計拒絕；只有部分 T 帳目完整 → 不輸出任何結果（不得只算完整的 T）；22:10 略過、隔日開盤後補寫 → 計為晚寫入，不併入準時；兩次作業的 `targets_json` 不同 → 應有取聯集；應有集合以外的 plan → 不計入覆蓋率分子，另列；以 T 為單位的日子 → 不推估標的數；`targets_json` 不含成本與股數（schema）。
 - **FL-24**：預測端計分永遠使用原始列。
 - **FL-50**（r1，A-11）：用表格驅動測試釘住 D-9.3 的兩點（`split_or_reduction_suspected` 的固定門檻、`basket_coverage_below_90` 以 T 日成員數計）。
   - （N-12；對應 LG-28 (d)）加一格：T+h 缺 bar，窗內已有的 bar 中有一日超過 `SPLIT_SUSPECT_ABS_RETURN` → 判為 `split_or_reduction_suspected`。
@@ -2642,6 +2693,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 13. （C-22，知悉）M-11 的表數隨 `forecast_index_check` 由 12 張改為 13 張，全部表數由 17 張改為 18 張（風控 2026-10-18 C-22 確認：屬知悉，不需明示同意）。
 14. （N-24，知悉）M-11 的表數隨 `forecast_gap_audit` 由 13 張改為 14 張，全部表數由 18 張改為 19 張。
 15. （N-22c、v0.16，知悉）M-11 的表數隨 `forecast_replay_index_check`、`forecast_replay_outcome` 由 14 張改為 16 張，全部表數由 19 張改為 21 張。
+16. （V15-04，知悉）M-11 的表數隨 `plan_coverage_log` 由 16 張改為 17 張，全部表數由 21 張改為 22 張。
 
 **風控**：附件 C 的重送與確認項；FL-30～FL-37 是否完整對應七條底線，請單項核對。
 
@@ -4070,6 +4122,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 > - **N29-6 的方向為「補定義（兩面）」**，照風控字句（見下 N29-6 條目）。
 > - **表數不變**：本批只在既有兩張表（`forecast_correction_job`、`forecast_correction_job_end`）加欄位，不加表（TA 提案第一節「表數」）。
 > - **本批沒有套用的項目**：(1) plan 批（風控第 10～12 點：I3-1～I3-3，`plan_coverage_log`、FL-70），下一批另做；(2) N29-10（交 quant 的事先宣告字面、交 creative-lead 的 `RECORD_STATUS_RESETTLE_PENDING` 片段起草），不在本 ADR 內；(3) N29-11（`E_CHANGING_EVENTS` 加 `forecast_correction_job_end`）：原列於此處為「本批未套用」，現已套用（2026-10-18，tech-writer 後續一批）。風控字句要求的 snapshot 端讀取序號欄名，由 tech-architect 定為 `stats_json.e_read_job_end_seq`（`work/reviews/2026-10-18-N29-11第三序號與LM155三項確認-tech-architect.md` 第一節第 1 點），套用內容與被取代原文見下方 N29-11 條目，本處原文（被取代）亦錄存於該條目。原文所述「與本批同一個 commit」的要求（風控第四節 coordinator 核對第 22 點）仍由 coordinator 在 commit 時處理；tech-writer 本批未 commit。
+> - **（後註，2026-10-18，tech-writer，plan 批）上列「本批沒有套用的項目」(1)（plan 批：I3-1～I3-3，`plan_coverage_log`、FL-70）已於 plan 批套用**，見檔尾「plan 批（N-31；2026-10-18）」段；(1) 原文不改，本註為新增。
 > - **標點處理**：N29-8 風控要求在首句「值只能是待重算片段（……PA-8）」之後接「這是雙向規則：待重算片段也只能出現在本路徑。」；TA 原句以冒號接兩個條件子點，tech-writer 把冒號改為句號、再接該句，子點內容不動。請 coordinator 確認可接受。
 > - **TA 提案中未插入的一句**：TA 提案 N29-6 另有一句「(乙) 列的 `wait_sessions`、`wait_deadline_session` 照抄被 supersede 列，D-3 原規則不變；所用的期限可由本作業的 `observed_sessions_json` 重算得出。」，TA 沒有把它放進「新字」，風控第四節也沒有列為要寫入的字句，所以本批沒有寫入 ADR 本文（B 類轉錄不順手補字）。
 > - **定位與被取代原文**：定位一律用字串，從檔尾往前套（先套條文、後寫本段）。被取代的原文取自套用前的 ADR 檔現況（任務說明：HEAD 為 `bcc84db`，ADR 本身沒有未 commit 的修改）；tech-writer 沒有用 git 對該 commit 逐字核對（本任務沒有 git 工具），請 coordinator 對照核對。TA 提案所載行號因 v0.16 批而漂移，一律以字串為準。
@@ -4196,3 +4249,36 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - N32-6（D-3 `forecast_void_late_diag`「計數一致」一點句末接字；風控追加，採 quant 2026-10-18 連帶確認 Q-c 第 3 點 suggested 並改寫：不一致時並列兩個數字，不採「不輸出數字」）：無被取代原文。方向：收緊（揭露防護）。CEO：否。`validation.py` 的 (iv) 實作送 qa 之前必須補上；不擋 dirdef 凍結。
 - N32-7（對實作的約束 FL-68 (j) 一格補前提；風控 2026-10-18 N-32 補裁追加，問題來源為 tech-architect 2026-10-18 書面確認第二節 C 第 1 點）：方向：不變（一致性：使 (j) 與 N32-3 第三格、N32-4 第 3 子點、(l) 殘留防護一致；鏈尾未換時照舊拒絕寫入 job_end，沒有放寬）。CEO：否。被取代的原文——
   > 前一作業 `pending_json` 的某一項既沒有處理、也沒有帶入 → 拒絕寫入 job_end。
+
+---
+
+> plan 批（N-31；2026-10-18）套用（2026-10-18，tech-writer；風控單項確認：`work/reviews/2026-10-18-N29與plan略過紀錄單項確認-風控.md` 第四節「tech-writer 照改清單」plan 批第 10～12 點；tech-architect 提案：`work/reviews/2026-10-18-N29與重放存放及plan略過紀錄與v0.16定名提案-tech-architect.md` 第二節 D 段 I3-1～I3-3、G 段「第 3 項那一批：21 → 22」，風控沒有另給字句處照 TA 原字面）。
+> - **本批單獨成批**：不與 v0.16 批、N-29 批同批。風控要求 plan 批內部不得拆開，期限為任何 `app/plan` 寫入端與 `plan_outcome` 統計實作前（風控 2026-10-18 N-29 與 plan 單項確認第一節「同批與表數」、第四節 coordinator 機械核對第 24 點）。
+> - **與事先宣告 v0.20 同批**：本批與事先宣告 v0.20（quant 同時撰寫，加 §6.5 V15-04 第 3 項句末〔N-31 註〕）放在同一個 commit（coordinator 任務說明）。〔N-31 註〕的字句在事先宣告，不在本 ADR；本批不轉錄。
+> - **A 號**：本批來源（風控 plan 批段、TA 第二節 D 段與 G 段）均未指派 A 號，本批不新增 A 號，上方「第九、十批」段的方向統計不動（來源沒有明講，請 coordinator 確認）。
+> - **本批沒有任何一項需要 CEO 明示同意**（風控 2026-10-18 N-29 與 plan 單項確認第二節 A 的 CEO 欄）；表數 21→22 屬知悉，不是明示同意（同確認第一節「同批與表數」、第二節 A 的「表數 21→22」列：比照 G-5 的 18→19）。
+> - **表數寫法**：風控稱「v0.16 先落地時為 22／17」（機械核對第 15 點）。v0.16 重放存放批已先落地（現表數 21、M-11 新增 16），故採 TA G 段「第 3 項那一批：21 → 22」：兩處「21 張」改為「22 張」、「新增 16 張表」改為「新增 17 張表」、聯集句加「；V15-04 加 `plan_coverage_log`」、待決事項 CEO 段新增第 16 點。TA 替代寫法（第 3 項先落地：19→20、14→15）不適用。
+> - **風控「改七處」與清單列八處**：風控清單 I3-1 稱「照 TA 字面，改七處」，實際列出八項（(h) step_start 第一子點、`targets_json` 子點句末、step_end、歸屬、衍生計數第三子點、衍生計數末尾子點、fail-closed、用途限制）。本批八項全部照風控字句套用，沒有略過；七與八的差異請風控確認。
+> - **標點處理**：風控字句中，step_start 第一子點、衍生計數第三子點以句號收尾，而 TA 原稿同層子點以分號收尾；`targets_json` 子點句末加字，是接在 TA 原有的分號之後。tech-writer 逐字照風控字句，沒有調整前後子點的標點。請 coordinator 確認可接受。
+> - **TA 原稿與風控改字**：被風控改字的 TA 原稿字句（上列八項）從未寫入本 ADR，本段不重錄，TA 原稿見 TA 提案第二節 D 段 I3-1；本 ADR 只記風控的最終字句。
+> - **定位與被取代原文**：定位一律用字串，先套條文、後寫本段（避免被取代原文寫入本段後造成定位字串重複）。被取代的原文取自套用前的 ADR 檔現況（任務說明：commit 5b11a7f 狀態，無工作樹改動）；tech-writer 沒有用 git 對該 commit 逐字核對（本任務沒有 git 工具），請 coordinator 對照核對。
+> - **本段含被取代原文的逐字引用**，其中的定位字串（例如「表數多（21 張）」「新增 16 張表」）會在本段命中，屬歷史列，不是現行條文。
+
+**plan 批（N-31；2026-10-18）（D-3、D-7 前置條件、對實作的約束 FL-70、評估摘要、修訂清單 M-11、Consequences、待決事項；方向：逐項標示，見各項）**
+- I3-1（D-3 新增 `plan_coverage_log` 一點，插在 `plan_outcome` 一行之前；TA 提案 I3-1，風控改八處）：無被取代原文。方向：補定義（收緊）。風控 2026-10-18 N-29 與 plan 單項確認第二節 A 的 I3-1 列；CEO：否（表數知悉）。風控的八處改字：(1) step_start 第一子點改為「在本次 plan 作業讀取任何 snapshot 的內容、計算或寫入任何 `plan_record` 之前寫入；……」（含 `no_snapshot` 判定方式與「不得另讀 store」）；(2) `targets_json` 子點句末加「不含成本與股數（比照 `forecast_scope_snapshot`，AV-9）。」；(3) step_end 只計 `targets_json` 內的標的，另記 `plans_written_outside_targets`；(4)「寫入者」之後新增「歸屬」一點；(5)「衍生計數」第三子點改為聯集與準時、晚寫入分列；(6)「衍生計數」末尾加以 T 為單位的日子不推估一句；(7)「fail-closed」整點取代為列舉五項；(8) 最後一點之後新增「用途限制」。
+- I3-2（D-7 前置條件 plan 一點，句末接字；TA 提案 I3-2，照 TA 字面）：無被取代原文。方向：補定義（收緊）。風控 2026-10-18 N-29 與 plan 單項確認第二節 A 的 I3-2 列；CEO：否。
+- I3-3（對實作的約束，新增 FL-70，插在 FL-69 之後、FL-24 之前；TA 提案 I3-3，風控加一格）：無被取代原文。方向：收緊（測試）。風控 2026-10-18 N-29 與 plan 單項確認第二節 A 的 I3-3 FL-70 列；CEO：否。風控加的一格是 FL-70 最後一個子點（「`plan_record` 無法歸屬到 step_start → 統計拒絕；……」）。
+- 表數（21→22；評估摘要、Consequences、修訂清單 M-11、待決事項；TA 提案 G 段「第 3 項那一批：21 → 22」）：方向：知悉（風控 2026-10-18 N-29 與 plan 單項確認第一節「同批與表數」、第二節 A 的「表數 21→22」列：知悉，不需明示同意）。CEO：表數知悉。評估摘要「最大代價」該行整行，被取代的原文——
+  > - 表數多（21 張），寫入規則有一部分在 trigger 裡。
+
+  Consequences「代價與壞處」該行整行，被取代的原文——
+  > - 21 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+
+  M-11 列第四格（修訂清單表）兩處，被取代的原文——
+  > 新增 16 張表（第九、十批加
+
+  > ；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`）並取欄位聯集
+
+  改為：評估摘要與 Consequences 的「21 張」改為「22 張」；M-11 的「新增 16 張表」改為「新增 17 張表」；在 `forecast_replay_outcome` 之後加「；V15-04 加 `plan_coverage_log`」。待決事項 CEO 段新增第 16 點，無被取代原文。編輯註記：本段之前各批次條目引用的「13 張」「14 張」「16 張」「18 張」「19 張」「21 張」是當時的原文，不改。
+- 上方 N-29 批「本批沒有套用的項目」(1)（plan 批：I3-1～I3-3）的狀態：本批已套用。N-29 批該處原文不改，已在該處新增一行後註指向本段。
+- 後續仍待另批處理（不在本批 ADR 內）：後續追蹤清單 N-31 的狀態更新（風控機械核對第 27 點）、事先宣告 §6.5〔N-31 註〕（quant 清單第 5 點，v0.20 同批）、`plan_outcome` 另案對 `plan_coverage_log` 的引用（TA 提案第二節 I 段第 5 點），由 coordinator 與 quant 處理。
