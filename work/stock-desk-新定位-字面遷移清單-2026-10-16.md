@@ -1002,7 +1002,7 @@ PA-3：v1 展望不輸出信心等級或強弱；票數總和不得包裝成強�
 
 | `status` | `status_reason` | 意義 | 字面處置 |
 |---|---|---|---|
-| `unresolvable_missing_data` | `missing_bar_after_wait` | T+h 沒有 bar，再等 5 個觀察日仍沒有（例如停牌） | **沿用 LM-39**（見下方說明） |
+| `unresolvable_missing_data` | `missing_bar_after_wait` | 沒有可用於結算的 T+h 資料，至判定視圖中已觀察到 D_5 的評估仍無（v0.14，V14-01）（例如停牌） 〔v0.14 取代：原寫「T+h 沒有 bar，再等 5 個觀察日仍沒有（例如停牌）」〕 | **沿用 LM-39**（見下方說明） |
 | `unresolvable_missing_data` | `basket_coverage_below_90` | 族群籃子排除成員後覆蓋 < 90%；被排除的原因可能是停牌，也可能是因子不可用 | R3-03 新字面 〔v0.14 V14-03／V14-02：現行字面不屬實或不完整，待 creative-lead 重送、風控核可；核可前不得上線〕 |
 | `excluded_corporate_action` | `split_or_reduction_suspected` | 窗內單日報酬超過漲跌幅限制加容差，**推定**有分割或減資（不是確認的事件） | R3-01 **取代 LM-40**，必須重送 〔v0.14 V14-03／V14-02：現行字面不屬實或不完整，待 creative-lead 重送、風控核可；核可前不得上線〕 |
 | `excluded_corporate_action` | `dividend_factor_unusable` | 窗內有除權息，但因子算不出來，含配股 | R3-02 新字面 |
