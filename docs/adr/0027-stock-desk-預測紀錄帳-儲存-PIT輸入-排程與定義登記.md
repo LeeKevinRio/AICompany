@@ -351,7 +351,7 @@
       - 這個欄位和 `forecast_record.correction_reason` 無關，兩者不得互相引用或 join。
   - 唯一性：`UNIQUE(forecast_id) WHERE supersedes_id IS NULL`，以及 `UNIQUE(supersedes_id)`。
 - **新增 `forecast_correction_job` 與 `forecast_correction_job_end`**（第十批 R10-1；比照 `forecast_run`／`forecast_run_end`），兩張都只增不改：
-  - `forecast_correction_job(correction_job_id INTEGER PRIMARY KEY AUTOINCREMENT, triggers_json, recheck_range_json, market_scan_from INTEGER NOT NULL, market_scan_to INTEGER NOT NULL, market_scan_restore_suspected INTEGER NOT NULL CHECK (market_scan_restore_suspected IN (0,1)), ledger_event_from INTEGER NOT NULL, ledger_event_max INTEGER NOT NULL, index_check_from INTEGER NOT NULL, index_check_max INTEGER NOT NULL, index_series_sha256 NOT NULL, index_final_now NOT NULL, holiday_table_json, view_range_json, observed_sessions_json, started_at)`：作業開始時寫入。`triggers_json` 必須非空，每一項都帶來源參照（`event_id`、查證紀錄 ID、`run_id` 或因子修訂的參照）；沒有觸發就拒絕執行。
+  - `forecast_correction_job(correction_job_id INTEGER PRIMARY KEY AUTOINCREMENT, triggers_json, recheck_range_json, market_scan_from INTEGER NOT NULL, market_scan_to INTEGER NOT NULL, market_scan_restore_suspected INTEGER NOT NULL CHECK (market_scan_restore_suspected IN (0,1)), ledger_event_from INTEGER NOT NULL, ledger_event_max INTEGER NOT NULL, index_check_from INTEGER NOT NULL, index_check_max INTEGER NOT NULL, settle_eval_from INTEGER NOT NULL, settle_eval_max INTEGER NOT NULL, index_series_sha256 NOT NULL, index_final_now NOT NULL, holiday_table_json, view_range_json, observed_sessions_json, started_at)`：作業開始時寫入。`triggers_json` 必須非空，每一項都帶來源參照（`event_id`、查證紀錄 ID、`run_id` 或因子修訂的參照）；沒有觸發就拒絕執行。
     - （N-4；晚到資料的觸發第 2、5、8 點）`market_scan_from`、`market_scan_to`：本作業啟動時 `scan_late_market_bars()` 的掃描範圍 (`market_scan_from`, `market_scan_to`]，以市場 DB 的 `run_id` 表示。作業開始時與 `triggers_json` 在同一個交易內寫入，由寫入函式自行填入，不接受呼叫端傳入。
       - `market_scan_from` ＝ W，也就是 `correction_job_id` 最大、而且已有 `forecast_correction_job_end` 列的作業的 `market_scan_to`；沒有這樣的作業時為 0。
       - `market_scan_to` ＝ 該次掃描取得的 `run_max`；還原保護（第 8 點）成立時，`market_scan_to` ＝ `market_scan_from` ＝ W。
@@ -362,9 +362,24 @@
       - `ledger_event_from`、`index_check_from` ＝ `correction_job_id` 最大、而且已有 `forecast_correction_job_end` 列的作業的 `ledger_event_max`、`index_check_max`；沒有這樣的作業時為 0（比照 `market_scan_from`）。
       - `ledger_event_max`（E）、`index_check_max`（V）＝ 本作業在開始交易內完成未觀察平日登記之後，讀到的 `forecast_ledger_events` 的 `MAX(event_id)` 與 `forecast_index_check` 的 `MAX(check_id)`。
       - `index_series_sha256`、`index_final_now`、`holiday_table_json`、`view_range_json`、`observed_sessions_json`：與 `forecast_settle_eval` 的同名欄位同義，界定本作業的大盤快照、休市日表、範圍與觀察日。
+    - （N-29；tech-architect 2026-10-18）`settle_eval_from` ＝ `correction_job_id` 最大、而且已有 `forecast_correction_job_end` 列的作業的 `settle_eval_max`，沒有時為 0；`settle_eval_max` ＝ 本作業在開始交易內讀到的 `forecast_settle_eval` 的 `MAX(settle_eval_id)`，沒有列時為 0。D-9 第 5 點 ④ 的結算快照比對，以及 D-3「晚到資料的觸發」第 1 點的第四類觸發，都只取 `settle_eval_id ≤ settle_eval_max` 的列。寫入驗證與寫入 job_end 時的再驗證，比照上一子點的兩個 from。
       - **寫入驗證**：兩個 from 等於上述值；`from ≤ max`；`index_series_sha256` 指向 `series_kind = index_bars` 的既有列。寫入 job_end 時再驗證一次兩個 from 仍等於當下的值；不成立就拒絕寫入 job_end，記 WARNING（比照「晚到資料的觸發」第 5 點）。
-  - `forecast_correction_job_end(correction_job_id PK, rechecked_count, changed_count, rejected_count, void_late_data_count, ended_at)`：作業結束時寫入。沒有 end 列代表作業中斷；這時該作業的 `recheck_range_json` 由下一個作業完整重跑，qa 核對涵蓋率。`void_late_data_count` 是作廢之後才補到資料的筆數（見 D-11.4 第 11 點 (h)「作廢列不因之後補到的資料而 supersede」；事先宣告 v0.12 V12-20），不屬於 `rejected_count`。〔N-4：操作定義（補到資料、而且算得出診斷結果）與涵蓋邊界，見 D-3 `forecast_void_late_diag` 與「晚到資料的觸發」〕
+  - `forecast_correction_job_end(correction_job_id PK, rechecked_count, changed_count, rejected_count, rejected_json, pending_json, void_late_data_count, ended_at)`：作業結束時寫入。沒有 end 列代表作業中斷；這時該作業的 `recheck_range_json` 由下一個作業完整重跑，qa 核對涵蓋率。`void_late_data_count` 是作廢之後才補到資料的筆數（見 D-11.4 第 11 點 (h)「作廢列不因之後補到的資料而 supersede」；事先宣告 v0.12 V12-20），不屬於 `rejected_count`。〔N-4：操作定義（補到資料、而且算得出診斷結果）與涵蓋邊界，見 D-3 `forecast_void_late_diag` 與「晚到資料的觸發」〕
   - `rejected_count` ＞ 0 時記 WARNING，筆數在 §4.2 揭露。寫入函式拒絕的列不得靜默略過。
+  - （N-29；tech-architect 2026-10-18）**`rejected_json`、`pending_json`**：
+    - `rejected_json`：本作業拒絕寫入的每一筆，`[{forecast_id, tail_outcome_id, reason, failed_check, causes}]`，依 `forecast_id` 排序。`reason ∈ {shift_t_plus_h_unobserved, shift_t_plus_h_data_unavailable, shift_index_bar_unverified, write_validation_failed}`。`failed_check` 只在 `write_validation_failed` 時非 null，記被違反的寫入驗證名稱。`causes` ＝ 該筆在本作業歸屬的 `correction_causes`。`rejected_count` ＝ 陣列長度。
+    - `pending_json`：本作業結束時的待重算集合（D-9 第 5 點「待重算」，含 `write_validation_failed` 一種），依 `forecast_id` 排序。每項為 `{forecast_id, tail_outcome_id, scope_kind, scope_key, reason, shifted_t_plus_h, observed_through, market_scan_to, causes, since_job_id}`：
+      - `shifted_t_plus_h` 在 `shift_t_plus_h_unobserved` 時為 null；
+      - `observed_through` ＝ 本作業 `observed_sessions_json` 的最後一日；
+      - `market_scan_to` ＝ 本作業的值；
+      - `causes` ＝ 該筆在本作業歸屬的 `correction_causes`，必含 `x2_session_removed`；
+      - `since_job_id` ＝ 該 `forecast_id` 第一次列入的作業。
+    - 內容 ＝ 前一個已完成作業的 `pending_json`，扣掉本作業已為該 `forecast_id` 寫入 supersede 列的項，其餘原樣帶入；本作業新列入、或重查後仍待重算的項，以本作業的值取代（`since_job_id` 不變）。
+    - 寫入 job_end 時，在同一交易內驗證下列各項。任一項不成立，就拒絕寫入 job_end，記 WARNING，該作業視為中斷：
+      - `rejected_count` 等於 `rejected_json` 的長度；
+      - `rejected_json` 中 `causes` 含 `x2_session_removed` 的每一項，都在 `pending_json`；
+      - 前一個已完成作業 `pending_json` 的每一項，恰好落在下列之一：本作業為該 `forecast_id` 寫入 supersede 列；本作業重查後沒有任何欄位改變（§6.4 第 3 點，不寫列）；仍在本列 `pending_json`。
+    - §4.2 的計數單位：待重算與被拒絕的筆數，以不同的 `forecast_id` 計，依 `reason` 分列。同一筆在多次作業中重查而再被拒絕，不重複計；`rejected_count` 是作業層的計數。
   - 這兩張表落實事先宣告 §6.4 第 2 點；`forecast_outcome.correction_job_id` 必須指向 `forecast_correction_job`。
 - **`forecast_void_late_diag`**（N-4；R10-3、事先宣告 v0.12 V12-20）：記錄作廢之後才補到資料的診斷結果。只增不改（D-2 第 2 點的 trigger 照樣適用），不得寫入 `forecast_outcome`。
   - **欄位**：`diag_id INTEGER PRIMARY KEY AUTOINCREMENT`、`outcome_id`、`forecast_id`、`correction_job_id`、`supersedes_diag_id NULL`、`late_data_kinds`、`late_data_refs_json`、`diag_start_price_json`、`diag_end_price_json`、`diag_window_factors_json`、`diag_label`、`diag_hit`、`diag_baseline_hits_json`、`computed_at`（store 時鐘）。
@@ -391,11 +406,17 @@
     - 欄位名不得使用 forward return 類識別字（ADR-0012 C-15），計算只在 `scoring.py` 內。
     - 作廢列的 `status`、`status_reason` 不因本表而改變（V12-20）。
 - （N-4）**晚到資料的觸發**（讀端輪詢、寫端不動；data-engineer 2026-10-18 查證）：
-  1. **誰偵測**：每日結算排程在結算之後，以及每一次更正作業啟動時，呼叫單一函式 `scan_late_market_bars()`。它只經 `MarketPanelReader` 新增的唯讀方法 `ok_bars_runs_between(run_id_exclusive, run_id_inclusive)` 讀市場 DB（一條 SQL，回傳 `run_id`、`session_date`、`recorded_at`、`source`）。`pit_snapshot` 與 `MarketPanelStore` 不得寫主 DB，也不得呼叫更正作業。掃描有命中時，以命中項為觸發啟動更正作業。同一步另以唯讀查詢檢查兩件事，有任一項就同樣啟動（N-21）：
+  1. **誰偵測**：每日結算排程在結算之後，以及每一次更正作業啟動時，呼叫單一函式 `scan_late_market_bars()`。它只經 `MarketPanelReader` 新增的唯讀方法 `ok_bars_runs_between(run_id_exclusive, run_id_inclusive)` 讀市場 DB（一條 SQL，回傳 `run_id`、`session_date`、`recorded_at`、`source`）。`pit_snapshot` 與 `MarketPanelStore` 不得寫主 DB，也不得呼叫更正作業。掃描有命中時，以命中項為觸發啟動更正作業。同一步另以唯讀查詢檢查三件事，有任一項就同樣啟動（N-21；第三件為 N-29）：
      - (W_E, `MAX(event_id)`] 內有沒有 `x2_confirmed_non_session` 事件；
      - (W_V, `MAX(check_id)`] 內有沒有 `determination ∈ {close_erroneous, non_close_erroneous, correct_close_obtained}` 的確認判定列。
+     - （N-29）待重算：最近一個已有 `forecast_correction_job_end` 列的作業，其 `pending_json` 非空，而且 (W_S, `MAX(settle_eval_id)`] 內有一列 `forecast_settle_eval`，對其中某一項成立下列任一條件：
+       - `observed_sessions_json` 含晚於該項 `observed_through` 的日期；
+       - `scope_kind = market`，而且該列的大盤快照含該項 `shifted_t_plus_h` 的列 r，r 的數值（以 `checked_values_sha256` 的正規化規則比對，同 D-9 第 5 點 ④）與每一列 `settle_eval_id ≤` W_S 的 `forecast_settle_eval` 大盤快照中同一日的列都不同；那些快照都沒有同一日的列時，也算不同（tech-architect 2026-10-18；風控 2026-10-18 確認。理由：同一個數值已由先前的作業比對過，再出現只是重新讀取，不是新資料；23:10 重試與啟動補跑每次都會再寫一列 `forecast_settle_eval`）；
+       - `scope_kind ∈ {symbol, sector}`，而且市場 DB 在 (該項 `market_scan_to`, 該列 `market_run_max`] 內，有含該標的（族群為任一成員）在 `shifted_t_plus_h` 的 bar 的 ok 定案 run（經 `ok_bars_runs_between` 與 `is_final`）。
 
-     W_E、W_V 與 D-3 `forecast_correction_job` 的 `ledger_event_from`、`index_check_from` 同一定義，由同一個函式導出。三類都沒有時不啟動（D-3「`triggers_json` 必須非空」不變）。啟動與否只依本點三類觸發是否存在，不讀預測、label、`hit`、基準命中或任何驗證統計（AST）。不得提供以操作者指定的觸發、日期或預測啟動更正作業的 CLI、API 或工具（D-9 第 2 點「不由人工對個別預測觸發」；風控 2026-10-18 C-22 確認）。
+       觸發項為 `{kind: pending_resettle, forecast_id, since_job_id, settle_eval_id}`。本類只讀 `pending_json` 的上列欄位、`forecast_settle_eval` 與市場 DB 的 run，不讀 `forecast_record`、`forecast_outcome`。
+
+     W_E、W_V、W_S 與 D-3 `forecast_correction_job` 的 `ledger_event_from`、`index_check_from`、`settle_eval_from` 同一定義，由同一個函式導出。四類都沒有時不啟動（D-3「`triggers_json` 必須非空」不變）。啟動與否只依本點四類觸發是否存在（第四類只依新的觀察日、結算快照中新出現的大盤數值或新的定案 run 是否存在，不依時間經過，也不依結算評估的執行次數；沒有新資料時不啟動），不讀預測、label、`hit`、基準命中或任何驗證統計（AST）。不得提供以操作者指定的觸發、日期或預測啟動更正作業的 CLI、API 或工具（D-9 第 2 點「不由人工對個別預測觸發」；風控 2026-10-18 C-22 確認）。
   2. **掃描範圍**：先取一次 `run_max = MAX(run_id)`，範圍為 `(W, run_max]`。W 是最近一個已有 `forecast_correction_job_end` 列的作業記下的 `market_scan_to`，首次為 0。沒有 end 列的中斷作業依 D-3 由下一個作業完整重跑，W 不因它前進。只取 `kind='bars'`、`status='ok'`、`session_date IS NOT NULL` 的 run，每筆再經 `is_final(TW, session_date, recorded_at)`（ADR-0028 CS-17）過濾，不得自行比較時戳。
   3. **配對**（三項都成立才算觸發）：主 DB 有鏈尾列 `status ≠ resolved`，而且結算窗 [T, T+h] 含 `session_date`；該列的標的（個股，或族群成員）在該 run 有一列 `market_daily_bars (run_id, symbol)`；該 run 的 `run_id` 大於該鏈尾列的 `settle_source_run_max`（晚到的定義：結算當下市場 DB 還沒有這筆 run）。
   4. **`settle_source_run_max`**：`forecast_outcome` 新增欄位。每次結算評估由寫入端的單一函式讀一次市場 DB 的 `MAX(run_id)`＝R，以 R 界定該次評估的判定視圖（事先宣告 §6.3「觸發」，v0.14 V14-01），在同一個函式內完成該次評估全部預測的判定，並把同一個 R 寫入每一筆結算或作廢列；R 與判定視圖都不接受呼叫端傳入，也不接受呼叫端以其他視圖算出的判定結果。更正作業寫入的列，比照本點：以該作業 `forecast_correction_job` 的 `market_scan_to` 界定重算所用的市場 DB 視圖（只取 `run_id ≤ market_scan_to` 的列），並把同一個值寫入該作業寫入的每一列；不另讀 `MAX(run_id)`，不接受呼叫端傳入。還原保護（D-3「晚到資料的觸發」第 8 點）成立、`market_scan_restore_suspected = 1` 的作業，同節第 9 點「`run_id` ≤ `settle_source_run_max` 的 run 都在判定視圖內」對它寫入的列不保證成立，晚到判定只是下限，依同節第 8 點揭露（風控 2026-10-18 v0.14 單項確認）。大盤列為 null。比較只用序號，不用時鐘（比照 RC″-2）。〔v0.14 取代（V14-01；風控 2026-10-18 v0.14 審查 R14-4）：原寫「結算或作廢寫入當下，由寫入函式經 `MarketPanelReader` 自行取得市場 DB 的 `MAX(run_id)` 填入，不接受呼叫端傳入；大盤列為 null。比較只用序號，不用時鐘（比照 RC″-2）。」〕
@@ -428,7 +449,7 @@
     - 稽核與重算（FL-65）；
     - §4.2「等待後結算」③：每筆 daily snapshot 當下仍在等待中的預測，取該 snapshot 之前最近一列的 `waiting_json`；
     - 事先宣告 §6.3 X3 的跨擷取比對：每次評估各存一份大盤快照。
-  - **限制**：不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W 或任何狀態判定。只有 `validation.py` 的 §4.2 報表與稽核工具可以讀它；`views`、API route 與匯出不得讀它（AST 列舉呼叫點，比照 `forecast_void_late_diag`）。
+  - **限制**：不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W 或任何狀態判定。只有 `validation.py` 的 §4.2 報表、稽核工具、`settlement.py`（前一列的 `market_run_max` 與 `index_check_max`，D-9.2、D-3 `forecast_index_check`）、`correction.py`（D-9 第 5 點 ④ 所用的快照與 N-29 的比對），以及 D-3「晚到資料的觸發」第 1 點的啟動檢查（N-29 第四類）可以讀它；`views`、API route 與匯出不得讀它（AST 列舉呼叫點，比照 `forecast_void_late_diag`）。
 - **`forecast_index_check`**（C-22；tech-architect 2026-10-18，與 N-21 同批）：事先宣告 §6.3「大盤指數序列」的偵測紀錄、「查證程序」的查證紀錄，以及 X1、X3、X4 的確認判定紀錄，存在同一張表、共用一個序號。只增不改（D-2 第 2 點）。D-9.2 的 V（`forecast_settle_eval.index_check_max`）與 D-9 第 5 點的 `forecast_correction_job.index_check_max` 都是本表的 `MAX(check_id)`，沒有列時為 0。X2 的判定紀錄仍是 `x2_confirmed_non_session`（A-77 第 7 項），不寫入本表。
   - **共通欄位**：`check_id INTEGER PRIMARY KEY AUTOINCREMENT`；`entry_kind ∈ {detection, verification, determination}`；`detection_id`（detection 列為 null；其餘列必須指向同表 `entry_kind = detection` 的列）；`session_date`（受檢 bar 的交易日；非 detection 列必須等於所指 detection 列的值）；`written_by ∈ {recorder, settle_eval}`；`recorded_at`（store 時鐘）。以下各組欄位只在對應的 `entry_kind` 非 null，其餘列必須為 null：
     - **detection**：
@@ -1062,7 +1083,7 @@
    - `dividend_factor_unusable`：窗內有除權息，但因子算不出來（**含配股**，`models.py:50-62`） → `excluded_corporate_action`
    - （r3，疑義裁定第 15 項；風控 2026-10-17 疑義裁定回送確認 Q-1）`index_bar_confirmed_erroneous`：大盤 P(T) 或 P(T+h) 的收盤經事先宣告 §6.3『大盤指數序列』確認有誤（『確認有誤之後』，L1175–L1177；X2 確認不屬此值，依 A-77 順延），而且依 `missing_bar_after_wait` 的既有等待值（5 個觀察交易日）等待期間（v0.14：期限依 `missing_bar_after_wait` 的期限評估，以判定視圖判定），或之後的更正作業，都取不到正確值 → `unresolvable_missing_data`；`diag_last_close` 以最後一根未被確認有誤的收盤計算（事先宣告 v0.10 V10-03）。只適用 `scope_kind = market`。結算後才確認的路徑依 §6.4 supersede，並依 A-65 翻案伴隨句處理。
      - （N-27；tech-architect 2026-10-18）**結算後才確認，不另等待**：已結算列的 P(T) 或 P(T+h) 收盤，在更正作業的判定視圖（D-9 第 5 點 ④）中為「確認有誤、尚未取得正確值」時，該次更正作業就以本值改記作廢，supersede 前一列（事先宣告 §6.3「確認有誤之後」：「結算後才確認：……取得正確值就重算；取不到就改記 `unresolvable_missing_data`」）。不等待 5 個觀察交易日，不延到之後的作業，也不看 T+h 之後已有多少觀察日。上句「等待期間……，或之後的更正作業」依此讀：等待只屬於結算前確認（結算評估）；結算後才確認，只看該次更正作業的判定視圖。寫入驗證見 D-11.4 第 11 點 (h) R10-2「適用範圍」。
-       - 理由：(1) 事先宣告「結算後才確認」一支沒有等待；(2) 延後判定需要一個依時間經過的啟動條件，與 D-3「晚到資料的觸發」第 1 點「啟動與否只依本點三類觸發是否存在」不合；(3) 延後期間，已結算列會照原值呈現一個收盤已確認有誤的結果，不帶 LM-143（風控 2026-10-18 C-22 確認 B-1）。
+       - 理由：(1) 事先宣告「結算後才確認」一支沒有等待；(2) 延後判定需要一個依時間經過的啟動條件，與 D-3「晚到資料的觸發」第 1 點「啟動與否只依本點四類觸發是否存在」不合（N-29 加入的第四類同樣只依資料事件）；(3) 延後期間，已結算列會照原值呈現一個收盤已確認有誤的結果，不帶 LM-143（風控 2026-10-18 C-22 確認 B-1）。
        - 代價：作廢列依 R10-3 不再 supersede。之後才取得的正確值，只能依 D-3 `forecast_void_late_diag` 記診斷結果，不回到 `resolved`。同一情形若在結算前確認，D_5 之前取得正確值就會照常結算。兩條路徑的差別只取決於確認與結算的先後，不看預測內容或結果；只在獨立來源已接入、① 查詢失敗、而 D_5 之前的某次 ② 取得數值時才會出現【推論】。
        - `wait_sessions`、`wait_deadline_session` 照抄被 supersede 列（D-3，不變）；D-3「結算評估寫入的列中……⇒ `wait_sessions ≥ 5`」不適用於本路徑（不變）。
        - 這類作廢依事先宣告 §6.3「以上作廢一律計入作廢率與 W」照常計入。
@@ -1104,7 +1125,16 @@
        - X2 確認日與未觀察平日只取 `event_id ≤ ledger_event_max`；確認判定紀錄只取 `check_id ≤ index_check_max`；
        - `span_sessions` 使用 ② 的休市日表；
        - **已結算數值所用的大盤 bar**（風控 2026-10-18 C-22 確認）：日期 d 落在被重查列的更正鏈中任一列的結算窗 [T, 該列的 T+h] 內時，重算所用 d 的大盤 bar，一律取「更正鏈中最早一個結算窗涵蓋 d 的列」所用判定視圖的大盤快照中 d 的列，再依 D-3 `forecast_index_check`「判定時怎麼讀」套用 `check_id ≤ index_check_max` 的確認判定；不取本作業快照中 d 的列。所用的快照：結算評估寫入的列，取其 `settle_eval_id` 的 `index_series_sha256`；更正作業寫入的列，取其 `correction_job_id` 的 `index_series_sha256`。兩份快照中 d 的列數值不同時，記 WARNING（帶 `forecast_id`、d），不改變本規則。
-       - 更正鏈中沒有任何結算窗涵蓋的日期（例如 X2 順延後的新 T+h），取本作業快照的列。該列必須與某一列 `forecast_settle_eval` 大盤快照中 d 的列數值相同（以 `checked_values_sha256` 的正規化規則比對），也就是已經過 D-9.2 ③ 的偵測；不成立時，該筆不寫入，計入 `rejected_count`，記 WARNING。
+       - 更正鏈中沒有任何結算窗涵蓋的日期（例如 X2 順延後的新 T+h），取本作業快照的列。該列必須與某一列 `settle_eval_id ≤` 本作業 `settle_eval_max` 的 `forecast_settle_eval` 大盤快照中 d 的列數值相同（以 `checked_values_sha256` 的正規化規則比對），也就是已經過 D-9.2 ③ 的偵測。不成立時（本作業快照沒有 d 的列，或沒有數值相同的快照列），該筆不寫入，依下一子點列為待重算。
+       - （N-29；tech-architect 2026-10-18；風控 2026-10-18 v0.15 單項確認第二節 C、N-29 單項確認）**待重算**：重算含 `x2_session_removed`，而且依本作業的判定視圖有下列任一情形時，該筆不寫 supersede 列，也不改記作廢，計入 `rejected_count`，記 WARNING，列入 `forecast_correction_job_end.rejected_json` 與 `pending_json`：
+         - `shift_t_plus_h_unobserved`：`observed_sessions_json` 中 T 之後的觀察日不足 h 個，順延後的 T+h 還沒有觀察到；
+         - `shift_t_plus_h_data_unavailable`：順延後的 T+h 已觀察到，但沒有可用於結算的 T+h 資料。個股與族群依事先宣告 §6.3「觸發」，市場 DB 只取 `run_id ≤ market_scan_to`；大盤是本作業快照沒有 d 的 `is_final_bar` 列；
+         - `shift_index_bar_unverified`：大盤，本作業快照有 d 的列，但依上一子點找不到數值相同的結算快照列。
+
+         這三種情形下，事先宣告 §6.3「判定時點」的「等待期間不得先以其他原因寫入作廢列」同樣適用：不以結算窗延長後才成立的其他原因，先行改記作廢。待重算列依 D-3「晚到資料的觸發」第 1 點的第四類觸發重查，畫面依 D-11.4 第 11 點 (g)「待重算路徑的狀態片段」呈現。期限與到期時的處理依事先宣告登記（後續追蹤清單 N-29 (b)）；登記之前不改記作廢，持續待重算。
+         - 未通過上一子點比對的日期，在本作業的重算中一律視為沒有可用於結算的資料，任何欄位（含 `diag_*`、`mae`、`mfe`）都不得讀取它的列；期限到期時，`shift_index_bar_unverified` 依事先宣告 N-29 (b)，與 `shift_t_plus_h_data_unavailable` 同樣處理。
+         - 重算含 `x2_session_removed`、但寫入驗證拒絕寫入的列（`write_validation_failed`），同樣不寫列，列入 `rejected_json` 與 `pending_json`，畫面依同一路徑遮蔽。這一種不是資料尚未到齊，不適用事先宣告 N-29 (b) 的期限，不因到期改記作廢；處理路徑只有一條：查出根因，修正程式或本條，送風控。修正之後，由第四類觸發重查。待重算項的 `reason` 以最近一次重查該項的作業判定（D-3 `pending_json`「以本作業的值取代」；沒有重查的項原樣帶入，所以等於最近一個已有 `forecast_correction_job_end` 列的作業的 `pending_json` 中該項的 `reason`）。期限是否適用、是否已到期，由重查該項的作業，依本作業的判定視圖與本作業判定的 `reason` 決定。`write_validation_failed` 的項重查後成為前三種情形之一時，自該次作業起適用事先宣告 N-29 (b) 的期限；起算依 N-29 (b)，不因曾為 `write_validation_failed` 而重設、延後或扣除該段期間；該次重查時已到期者，依 D-11.4 第 11 點 (h)「適用範圍」的 (乙) 改記作廢。前三種情形的項重查後成為 `write_validation_failed` 時，自該次作業起不適用期限，依本子點查出根因、送風控；修正後重新適用期限時，同樣不重設起算（tech-architect 2026-10-18；風控 2026-10-18 確認）。
+         - 理由：延用前一列的結果，等於照順延前的結果呈現；直接採用本作業快照的列，等於讀未經偵測的 bar（風控 N21-3）。待重算同時避開這兩者，並留下逐筆紀錄。
        - 觀察日的 (ii) 仍取本作業快照。
        - 之後不再讀 `MAX(event_id)`、`MAX(check_id)`。
      - **理由**：
@@ -1173,7 +1203,7 @@
    - snapshot 不 supersede；來源資料更正只影響之後的 snapshot（A-77 第 11 項）。已寫入的 snapshot 不改、不重算。（第十批 R10-7）
    - 更正作業改變了曾參與 `better_than_baseline` 判定的列的 `status`、`realized_label`、`hit` 或 `baseline_hits_json` 任一項時，該判定在作業完成後的第一筆 daily snapshot 撤銷（降級），在下一個檢查點重判；比照事先宣告 v0.3 第 2 點（PIT 違規）。撤銷的日期、claim、`correction_job_id` 在 §4.2 揭露。daily 列仍不得升級（D-11.3）。（第十批 R10-7；觸發條件依風控 2026-10-18 v0.12 審查 Q12-2 擴為四項）
    - （N-5）**整檔還原不另設撤銷**：依 RC‴-1（還原以整個主 DB 檔為單位）與 ADR-0026 D-9.1、D-9.4（主 DB 與市場 DB 取自同一組 `Connection.backup`），留在還原後檔內的 snapshot，它讀到的 outcome 與事件都在它之前 commit，所以也都在檔內〔推論：SQLite 線上備份產生一致的時點快照〕。因此，還原後留存的 `better_than_baseline` 判定不會有參與列遺失；R10-7 不因 `db_restored` 觸發。
-   - （N-5）**前提被破壞時撤銷**（縱深防禦）：任何 snapshot 的 `e_read_event_seq` 或 `e_read_outcome_seq` 大於目前看得到的對應最大值時，除了 RC‴-1 已規定的「`e_changed_since` 為真、記 WARNING」，另外：
+   - （N-5）**前提被破壞時撤銷**（縱深防禦）：任何 snapshot 的 `e_read_event_seq`、`e_read_outcome_seq` 或 `e_read_job_end_seq` 大於目前看得到的對應最大值時，除了 RC‴-1 已規定的「`e_changed_since` 為真、記 WARNING」，另外：
      - 該 claim 的有效狀態若是 `better_than_baseline`，在下一筆 daily snapshot 撤銷（降級），到下一個檢查點重判，比照 R10-7；
      - 記 ERROR，交 devops-sre 依 ADR-0026 D-9.4 查還原程序；
      - `mark-restored` 在寫入 `db_restored` 的同一個交易內做這項掃描，結果寫入 payload：`seq_check ∈ {ok, failed}`，以及不成立的 snapshot 清單。掃描不成立仍照寫事件，因為缺日原因要留痕；
@@ -1194,7 +1224,7 @@
      - `best_diff`、`paired_c`、`paired_c_w`：block_len ∈ {2, 4, 8}；
      - 開盤基準若有用到 bootstrap，再加 `*_open`。
    - snapshot 寫入時，鍵不在對照表內就拒絕寫入。
-   - （r3，A-63；RC′-2、RC″-2、RC‴-1）`stats_json` 另登記 `e_read_event_seq`、`e_read_outcome_seq`（`pa9_holds` 的 `e_changed_since` 比較基準，見第 4 點第 11 項 (c)），以及 `e_read_at`（稽核用，不作比較基準；也不用 `computed_at`）。
+   - （r3，A-63；RC′-2、RC″-2、RC‴-1；N29-11）`stats_json` 另登記 `e_read_event_seq`、`e_read_outcome_seq`、`e_read_job_end_seq`（`pa9_holds` 的 `e_changed_since` 比較基準，見第 4 點第 11 項 (c)；第三個依風控 2026-10-18 N-29 單項確認 N29-11 加入），以及 `e_read_at`（稽核用，不作比較基準；也不用 `computed_at`）。
 3. **升降規則**：只有 `checkpoint` 列可以把狀態升為 `better_than_baseline`；`daily` 列只能維持或降級。
 4. **顯示閘門**（`display.py`）：
    - 族群 `pa9_holds` 為真，或 G_eff 非空時，任何對外回應都不出現 bullish／bearish（PA-9、LG-15）；
@@ -1328,6 +1358,8 @@
            - **事件封閉清單 `E_CHANGING_EVENTS`**：
              - `forecast_ledger_events.kind ∈ {pit_violation_confirmed, x2_confirmed_non_session, db_restored}`，依 `event_id`；
              - `forecast_outcome` 中 `supersedes_id IS NOT NULL` 的列，依 `outcome_id`；
+             - （N-29；風控 2026-10-18 N-29 單項確認）`forecast_correction_job_end` 的每一列，依 `correction_job_id`（待重算集合改變驗證統計的成員，事先宣告 N-29 (b) (i)）。（TA 補：snapshot 端對應的讀取序號為 `stats_json.e_read_job_end_seq`，見下文「比較基準」。）
+               - 依據與範圍（tech-architect 2026-10-18）：job_end 寫入時，「最近一個已完成作業」換成本作業，D-11.4 第 11 點 (g) 的 (a)、(b) 隨之改變。會使 n 改變、卻沒有其他 `E_CHANGING_EVENTS` 的，是某筆預測離開或進入待重算集合、而本作業沒有為它寫入 supersede 列：(b) 中順延後 T+h 不變的列（例如週末的 X2 確認）；前一作業的 pending 項重查後沒有任何欄位改變（D-3 job_end 驗證第 3 子點）；已寫入順延結果的列，經其他類觸發重查後被拒而新列入。是否屬於這幾種，不在序號比較中判斷；依「判斷不了的一律歸入 `E_CHANGING_EVENTS`」，每一列都計。代價：作業沒有改變集合時也會遮蔽，到下一筆 daily snapshot 為止。依 D-7.1 第 2 點的執行順序，作業在驗證快照之前完成，同一次執行的 snapshot 已涵蓋；遮蔽只發生在驗證快照之後才完成的作業。
              - 不按 claim 篩選：任一筆成立，所有族群 claim 的 `pa9_holds` 都適用；`n_disclosure_masked`（以及由它決定的 `ValidationBadgeMasked`、`validation_refresh_pending`）對大盤、族群、個股的所有 claim 都適用（C9-7 甲案）。
            - `forecast_ledger_events.kind` 的每個值都必須歸入 `E_CHANGING_EVENTS`，或歸入 `E_NEUTRAL_EVENTS` ＝ {`f3_resume_approved`, `replay_review_approved`, `session_calendar_conflict`, `unobserved_weekday`}（`unobserved_weekday` 依風控 2026-10-18 Q3-7 歸入）。新值沒有歸類時測試失敗；判斷不了的一律歸入 `E_CHANGING_EVENTS`。
            - `forecast_record` 的更正不改變 E 的成員，也不改變 n，所以不列入 `e_changed_since` 的判定，不另設序號（第九批，提案 4）。為使這一點成立，加四條約束：
@@ -1338,19 +1370,22 @@
            - **失效條件**：日後若要讓 `forecast_record` 的更正影響 E 或 n，須修訂 RC′-2，另設 `INTEGER PRIMARY KEY AUTOINCREMENT` 的更正序號，並納入 `e_changed_since`。
            - **比較基準：單調遞增序號，不用時間戳**（風控 2026-10-17 RC″-2，二選一採 (b)）：
              - `forecast_ledger_events.event_id` 與 `forecast_outcome.outcome_id` 都是 `INTEGER PRIMARY KEY AUTOINCREMENT`：單調遞增、永不重用。遷移與備份還原都不得重編（比照 ADR-0012 D-2 的 `run_id`）。
-             - snapshot 的計算在一個明確開啟的 read transaction 內讀 E，並在同一個 transaction 內讀出兩個值，寫入 `stats_json`：
+             - （N29-11；tech-architect 2026-10-18）`forecast_correction_job_end` 沒有自己的配號欄，以 `correction_job_id`（`forecast_correction_job` 的 `INTEGER PRIMARY KEY AUTOINCREMENT`，作業開始時配號）比較。作業開始的順序不等於 job_end 的 commit 順序，所以下文「依據」對這個序號不直接成立；改由 D-3「晚到資料的觸發」第 5 點「沒有 `correction_job_id` 大於本作業、已有 end 列的作業」的再驗證保證。這項驗證與 job_end 的 INSERT 在同一個寫入交易內完成，所以已寫入的 job_end 依 `correction_job_id` 遞增的順序 commit：read transaction 看得到的最大值是 S 時，之後才 commit 的 job_end 列，`correction_job_id` 都大於 S。移除或放寬這項再驗證時，須同時修訂本點。
+             - snapshot 的計算在一個明確開啟的 read transaction 內讀 E，並在同一個 transaction 內讀出三個值，寫入 `stats_json`：
                - `e_read_event_seq` ＝ 看得到的 `forecast_ledger_events.event_id` 最大值；
                - `e_read_outcome_seq` ＝ 看得到的 `supersedes_id IS NOT NULL` 列中，`outcome_id` 的最大值。
+               - `e_read_job_end_seq` ＝ 看得到的 `forecast_correction_job_end` 列中，`correction_job_id` 的最大值（N29-11；不論 `pending_json` 是否為空）；
                - 沒有列時記 0。
-             - `e_changed_since(snapshot)` 為真，若且唯若下列兩項任一成立：
+             - `e_changed_since(snapshot)` 為真，若且唯若下列三項任一成立：
                - 存在 `kind ∉ E_NEUTRAL_EVENTS`、而且 `event_id > e_read_event_seq` 的事件（含未歸類的值）；
                - 存在 `supersedes_id IS NOT NULL`、而且 `outcome_id > e_read_outcome_seq` 的列。
-               - 兩個欄位任一缺漏或不是整數，一律為真。
-             - 讀取順序（RC‴-1）：在同一個明確開啟（明確 `BEGIN`）的 read transaction 內，**先讀 `e_read_event_seq`、`e_read_outcome_seq`，再讀 E**。
+               - 存在 `correction_job_id > e_read_job_end_seq` 的 `forecast_correction_job_end` 列（N29-11）。
+               - 三個欄位任一缺漏或不是整數，一律為真。
+             - 讀取順序（RC‴-1）：在同一個明確開啟（明確 `BEGIN`）的 read transaction 內，**先讀 `e_read_event_seq`、`e_read_outcome_seq`、`e_read_job_end_seq`，再讀 E**（N29-11：這裡的 E 包括事先宣告 N-29 (b) (i) 的待重算集合，由 D-11.4 第 11 點 (g) 讀取兩個集合的那一個 `store.py` 函式讀取）。
              - 下列任一情形，`e_changed_since` 為真，並記 WARNING（RC‴-1）：序號欄位缺漏；不是非負整數（bool 不算）；大於目前看得到的對應最大值。
              - `e_changed_since` 比對的 snapshot 與事件最大值，要在同一個 read transaction 內、從同一個主 DB 檔讀出；不得跨請求或跨程序快取 snapshot 或序號。
              - 備份還原後，失落時間線的序號可能被重新配發，所以 DB 檔以外保存的 snapshot 或序號，不得用於任何判定。還原以整個主 DB 檔為單位。
-             - 寫入函式與 SQL 不得指定 `event_id`、`outcome_id`，由 SQLite 配號（比照 D-2 第 3 點）。
+             - 寫入函式與 SQL 不得指定 `event_id`、`outcome_id`，以及 `forecast_correction_job` 的 `correction_job_id`，由 SQLite 配號（比照 D-2 第 3 點）。
              - 依據：
                - SQLite 同一個資料庫同時只有一個寫入交易，不論 journal 模式；AUTOINCREMENT 在寫入交易內配號，所以序號順序就是 commit 順序。
                - 因此，read transaction 看得到的最大序號是 S 時，當時還沒 commit、或之後才 commit 的列，序號都大於 S。
@@ -1365,7 +1400,7 @@
          - **`n_disclosure_masked(claim, snapshot)`**（第九批，提案 2；C9-7 甲案）：放在 `views`，是唯一的判定函式。為真，若且唯若〔沒有 daily snapshot，或 `e_changed_since(snapshot)` 為真〕；沒有 scope 條件，任何 scope 都適用（風控 2026-10-18 C9-7 裁定擴及大盤、個股）。gate selector、驗證徽章，以及任何帶該 claim n 的片段，都呼叫這個函式。這個函式在內部自行呼叫 `e_changed_since(snapshot)`，不接受呼叫端傳入的 bool（風控第九批 S9-2，AST 測試）。`e_changed_since` 不按 claim 篩選，所以同一個回應裡的 claim 會一起遮蔽。
          - （N-6）**遮蔽期的計數來源**：
            - 不新增欄位。由 `views` 的單一函式 `mask_episodes(claim_id, *, as_of)` 從既有資料重建。它和 `e_changed_since` 放在同一個模組、共用同一個序號比較函式，不用時鐘。
-           - **變動項**：`kind ∉ E_NEUTRAL_EVENTS` 的 `forecast_ledger_events`（依 `event_id`），以及 `supersedes_id IS NOT NULL` 的 `forecast_outcome`（依 `outcome_id`）。
+           - **變動項**：`kind ∉ E_NEUTRAL_EVENTS` 的 `forecast_ledger_events`（依 `event_id`）、`supersedes_id IS NOT NULL` 的 `forecast_outcome`（依 `outcome_id`），以及 `forecast_correction_job_end`（依 `correction_job_id`；N29-11）。
            - 對 claim c 與變動項 x：
              - S_cover ＝ c 的 daily snapshot 中，對應讀取序號 ≥ x 的序號、`computed_for_session` 最早的一筆；
              - S_before ＝ c 的 daily snapshot 中，對應讀取序號 < x 的序號、`computed_for_session` 最晚的一筆；
@@ -1548,6 +1583,26 @@
            - `disclosure_fragment_ids` 不得含 LM-131、LM-132、LM-146、LM-92、LM-133、LM-143、LM-150。大盤列不得含 LM-22。
          - **全域不顯示**（LM-154 條件 ⑥）：這筆紀錄更正後的結果，不得出現在任何回應或匯出，包括驗證狀態頁的逐筆明細、匯出、展開處。所有含紀錄明細的 route 與 `EXPORT_MODULES`，都經過同一個 `record_status_fragment` 判定。
          - **§4.2 的計數來源**（LM-154 條件 ⑫，TA 這一側）：依 LM-154 不顯示結果、但仍計入主統計（鏈尾，D-11.1）的列數，依鏈尾的 `correction_causes` 分列（多原因另列一類）。由同一個判定逐列數出，不另存欄位。quant 在事先宣告 v0.12 §4.2 登記。
+         - （N-29；tech-architect 2026-10-18）**待重算路徑的狀態片段**：同時滿足以下兩點的列，以 `MaskedRecordView` 回傳，`status_fragment_id` 必填，值只能是待重算片段（暫定常數 `RECORD_STATUS_RESETTLE_PENDING`；逐字由 creative-lead 起草，送風控；PA-8）。這是雙向規則：待重算片段也只能出現在本路徑。
+           - 鏈尾是 `status = resolved` 的列；
+           - 符合下列任一項：
+             - (a) 鏈尾的 `outcome_id` 出現在最近一個已有 `forecast_correction_job_end` 列的作業的 `pending_json`；
+             - (b) 有一筆 `x2_confirmed_non_session` 事件，`event_id` 大於該作業的 `ledger_event_max`（沒有已完成作業時取 0），`session_date` 落在 (該筆的 T, 鏈尾 `end_price_json.session_date`]，而且不在鏈尾 `x2_shift_json.x2_event_ids`。這是已知要順延、但還沒經過更正作業處理的列。
+           - 判定只由 `display.py` 的 `record_status_fragment(row)` 產生；兩個集合由 `views.py` 經 `store.py` 的單一唯讀函式讀取（AST 列舉呼叫點），這是 `views` 讀取 `forecast_correction_job`、`forecast_correction_job_end` 的唯一呼叫點；唯一的例外是第 4 點第 11 項 (c) 的序號比較函式（`e_changed_since` 與 `mask_episodes` 共用）。它經 `store.py` 的另一個單一唯讀函式，只讀 `forecast_correction_job_end` 的 `correction_job_id`，不讀該表其他欄位，也不讀 `forecast_correction_job`；回傳值只用於序號比較，不得進入任何回應、匯出或 `record_status_fragment` 的判定。snapshot 寫入端讀 `e_read_job_end_seq` 也只經這個函式（N29-11；風控 2026-10-18 確認；AST 列舉呼叫點）。`validation.py` 依事先宣告 N-29 (b) 計算驗證統計時，呼叫讀取上述兩個集合的那一個 `store.py` 函式（AST 列舉呼叫點）。
+           - 優先序：本路徑先於 LM-150、LM-154、「診斷欄位更正的例外」與一般已結算列的呈現。最新 outcome 不是 `resolved` 時不適用，走 LM-143。與其他規則同時成立時（tech-architect 2026-10-18 補定義；風控 2026-10-18 確認）：
+             - A-27 (a)、(b)、(d)、(d′) 只適用於尚未結算的列，與本路徑（鏈尾 `resolved`）不會同時成立。
+             - 族群列不適用本路徑（LM-155 條件 ⑧）。A-27 (c) 成立時，依 (c) 與第 11 點選用 gate 片段；本路徑的禁止欄位與全域不顯示另外適用，所以 (c) 已結算列可加的 `settlement_date`、`outcome_status` 在這類列不得出現。(c) 不成立時，在族群已結算 label 核可、並經風控確認本路徑擴及族群之前，不顯示 label 與任何結算結果，FL-52 (d) 對該格失敗。
+             - `in_eligible_set = false` 的列（已確認的 PIT 違規，以及 `before_dv`、`late`、`on_demand`）：狀態行用本路徑的待重算片段；資格標示照 A-61，並列 LM-110 與全部原因片段（PIT 列含 LM-114，排第一），視覺區隔照舊。兩者分屬不同位置，不互相取代；LM-110、LM-114 不在本路徑的禁止清單內。片段中「計入作廢統計」指事先宣告 §4.2 作廢數 (7)：E 以外的列到期作廢時照樣逐筆計入 (7)，不計入作廢率與 W（事先宣告 V18-03、V18-04；quant 2026-10-18 書面確認）。這個前提改變時，E 以外的列不得用本路徑的片段，改為不顯示 label 與任何結算結果，FL-52 (d) 對該格失敗，回送風控。
+             - PV-45 是否附加，照 A-27 (e) 既有條件，本點不改。
+             - 本路徑與 LM-150、LM-154、「診斷欄位更正的例外」之間的優先序不變。
+           - 白名單比照 FAIL_CLOSED 列：
+             - 可帶 `settled = true`；
+             - 不帶 `settlement_date`、`outcome_status` 與 R10-6 的任何 D 欄位；
+             - 不得出現 A-64 (g) 的全部禁止欄位，以及 `label`、`realized_label`、`hit`、`realized_return`、`realized_z`、`realized_log_return`、`threshold_display`、`resolved_at`、`correction_causes`；
+             - `disclosure_fragment_ids` 不得含 LM-131、LM-132、LM-146、LM-92、LM-133、LM-143、LM-150、LM-151、LM-152、LM-154。大盤列不得含 LM-22。
+           - 全域不顯示比照 LM-154 條件 ⑥。
+           - 片段核可之前，FL-52 (d) 失敗（比照 A-36 第 2 點的效力鏈），不得以暫定字面、placeholder、skip 或 xfail 讓測試通過。
+           - (b) 會把順延後 T+h 不變的列（例如週末的 X2 確認）也暫時遮蔽，直到作業完成為止。方向保守；作業完成後改依 (a) 判定。
          - 驗證見 FL-59。
        - （r3，A-65）**(h)** 已結算、可以顯示 label 的排程列：label 只放在 `settled_record`（和 A-36 第 4 點共用 schema `SettledRecordView`），同一物件帶 `settlement_date` 與結算結果；頂層沒有 `label`；不得當作目前展望呈現。
          - 「已結算＋實際結果」片段的範圍擴及排程紀錄。核可之前不顯示 label，而且這個片段列入 FL-52 (d)。
@@ -1589,6 +1644,7 @@
                - `x2_confirmed_non_session` 事件取 `event_id` ∈ (`ledger_event_from`, `ledger_event_max`]；
                - 確認判定紀錄取 `forecast_index_check` 中 `check_id` ∈ (`index_check_from`, `index_check_max`]、`determination ∈ {close_erroneous, non_close_erroneous, correct_close_obtained}` 的列。對每一筆重查的 outcome 個別歸類：`determination ∈ {close_erroneous, correct_close_obtained}`、而且 `target_bar_json.session_date` 是該筆的 T 或 T+h → `settlement_close_corrected`；其餘（含 T、T+h 的 `non_close_erroneous`，以及窗內其他日的任何判定）→ `window_bar_corrected`；
                - 來源修訂依 D-3「晚到資料的觸發」。
+               - （N-29）待重算觸發（`pending_resettle`）：對該 `forecast_id`，以 `pending_json` 該項的 `causes` 計入（必含 `x2_session_removed`）；受影響日期為 [該筆的 T, 本作業 `observed_sessions_json` 的最後一日]。前一個已完成作業 `pending_json` 中的 `forecast_id`，本作業只要重查它（不論由哪一類觸發），都同樣併入該項的 `causes`，受影響日期同上。
 
                中斷作業不使 from 前進，它的觸發由下一個作業重新讀得。
              - 對每一筆重查的 outcome，`correction_causes` ＝ 受影響日期和該筆結算窗 [T, T+h] 有交集的所有觸發，所屬類別的集合。
@@ -1603,12 +1659,13 @@
                - `[dividend_factor_corrected]` ⇒ 兩個 `session_date` 都和前一列相同，`window_factors_json` 和前一列不同。
                - （N-27；tech-architect 2026-10-18）**適用範圍**：上三項只適用於新列 `status = resolved`。新列 `status ≠ resolved`（已結算列經更正後改記作廢）時，上三項不適用，改以下列各項驗證，任一項不成立就拒絕寫入：
                  - 前一列 `status = resolved`（作廢列不得被 supersede，R10-3 不變）；
-                 - `scope_kind = market`，`status_reason = index_bar_confirmed_erroneous`；
-                 - 以本作業的判定視圖（D-9 第 5 點 ④）、經 `scoring.py` 的同一個函式重算，P(T) 或 P(T+h) 至少一根的收盤是 D-3 `forecast_index_check`「判定時怎麼讀」所說的「確認有誤、尚未取得正確值」；
+                 - 屬於下列兩種之一：
+                   - **(甲)**（N-27）`scope_kind = market`，`status_reason = index_bar_confirmed_erroneous`；以本作業的判定視圖（D-9 第 5 點 ④）、經 `scoring.py` 的同一個函式重算，P(T) 或 P(T+h) 至少一根的收盤是 D-3 `forecast_index_check`「判定時怎麼讀」所說的「確認有誤、尚未取得正確值」；而且 `correction_causes` 至少含 `settlement_close_corrected` 或 `x2_session_removed` 之一（風控 2026-10-18 v0.15 單項確認 C 段 suggested；tech-architect 2026-10-18 採用）。
+                   - **(乙)**（N-29）`correction_causes` 含 `x2_session_removed`，不限 scope（仍受 D-3 `void_reasons_json` 依 scope 的允許集合限制）；以本作業的判定視圖、經 `scoring.py` 的同一套函式、以順延後的 T+h 重算（五值全部評估，D-9.3「判定順序」），得到的 `status`、`status_reason`、`void_reasons_json`、`basket_excluded_members_json`、`window_factors_json` 與新列逐位相同，而且 `status_reason ≠ index_bar_confirmed_erroneous`（那一支屬 (甲)）。`void_reasons_json` 含 `missing_bar_after_wait` 或 `basket_coverage_below_90` 時，另須事先宣告已依後續追蹤清單 N-29 (b) 登記期限，而且本作業的判定視圖已到期；登記之前，這兩種情形依 D-9 第 5 點「待重算」處理，不寫作廢列。
                  - `correction_causes` 不含 `x2_session_removed` 時：`x2_shift_json` 與前一列相同，而且以本作業觀察日導出的 T+h 等於前一列的 `end_price_json.session_date`。含 `x2_session_removed` 時：依上方「寫入時的一致性驗證」第一子點，而且 `x2_shift_json.shifted_t_plus_h` 等於以本作業觀察日導出的 T+h，並晚於前一列的 `end_price_json.session_date`；
-                 - `window_factors_json` 和前一列相同。
+                 - (甲)：`window_factors_json` 和前一列相同（(乙) 依該支的逐位相同驗證；窗延長後可能與前一列不同）。
 
-                 其他 scope、其他 `status_reason` 的改記作廢，不屬於本 ADR 已定義的 supersede，一律拒絕（fail-closed，計入 `rejected_count`，記 WARNING）。理由：作廢列依下方「選用規則」走 LM-143，不查 `CORRECTION_REASON_FRAGMENTS`，所以上三項「差異必須和 LM-151、LM-152 的陳述相符」的前提不存在；作廢列也沒有可比較的結算收盤。改以重算依據驗證，事先宣告 §6.3「確認有誤之後」的「結算後才確認：……取不到就改記 `unresolvable_missing_data`」才寫得進去（FL-22「market 結算後確認」一格）。
+                 (甲)、(乙) 以外的改記作廢，不屬於本 ADR 已定義的 supersede，一律拒絕（fail-closed，計入 `rejected_count`，記 WARNING）。理由：作廢列依下方「選用規則」走 LM-143，不查 `CORRECTION_REASON_FRAGMENTS`，所以上三項「差異必須和 LM-151、LM-152 的陳述相符」的前提不存在；作廢列也沒有可比較的結算收盤。改以重算依據驗證，事先宣告 §6.3「確認有誤之後」的「結算後才確認：……取不到就改記 `unresolvable_missing_data`」才寫得進去（FL-22「market 結算後確認」一格）。
                - 理由：LM-151、LM-152 陳述「哪一類資料被更正」，差異必須和陳述相符。
            - **`CORRECTION_REASON_FRAGMENTS`**：封閉對照表，放在 `display.py`，鍵恰好是 `OUTCOME_CORRECTION_CAUSES` 的全部值。
 
@@ -2068,6 +2125,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
       - `[settlement_close_corrected]` 而任一 `session_date` 改變、兩個收盤值都沒變、或 `window_factors_json` 改變 → 拒絕（各一個子例）；
       - `[dividend_factor_corrected]` 而任一 `session_date` 改變、或 `window_factors_json` 沒變 → 拒絕。
       - （N-27）改記作廢的 supersede：已結算列在結算之後，窗內一日經 X2 確認；順延後的新 T+h，在某一列 `forecast_settle_eval` 大盤快照中的 bar 觸發 X1 收盤本身不可用（`close_erroneous`、`direct`），沒有 `correct_close_obtained` → 更正作業寫入 `index_bar_confirmed_erroneous` 作廢列，`correction_causes` 含 `x2_session_removed`，不被 R10-2 拒絕，最新 outcome 走 LM-143；新 T+h 的列與快照列的比對以 `checked_values_sha256` 的正規化規則進行，NaN 收盤不因浮點比較而判為不同。同一 fixture 另做五個拒絕子例：`scope_kind ≠ market`；`status_reason ≠ index_bar_confirmed_erroneous`；前一列已作廢；`x2_shift_json.shifted_t_plus_h` 不等於以本作業觀察日導出的 T+h；重算後收盤並非「確認有誤、尚未取得正確值」。另一格（事先宣告 V15-03 適用單位）：結算所用的擷取 B1 本身沒有確認有誤，結算之後另一次擷取 B2 觸發 X1 收盤本身不可用，B1、B2 構成的 X3 在待查證集合 → 更正作業不寫新列，B1 照原值計分，計入事先宣告 §4.2 作廢數 (6)。
+      - （N-29）(乙)：個股結算後 X2 順延，延長後的窗含除權息、因子不可用 → 寫入 `dividend_factor_unusable` 作廢列，不被拒絕；重算結果與新列的 `void_reasons_json` 不同 → 拒絕。新 T+h 沒有資料、N-29 (b) 尚未登記 → 不寫 `missing_bar_after_wait`，列入待重算。(甲)：`correction_causes = [window_bar_corrected]` 的 `index_bar_confirmed_erroneous` 作廢 → 拒絕（S-1）。(乙) 列的 `window_factors_json` 與重算結果相同、與前一列不同 → 不被拒絕；(甲) 列的 `window_factors_json` 與前一列不同 → 拒絕。
     - (c) 「謂詞為真 × 最新 outcome 為 `resolved`」路徑中，`correction_causes` 的每一種情形（四個單值、一組雙值）各一格，逐格斷言全文：
       - LM-151、LM-152 兩格要等於 LM-150 代入後的全文，而且不含「沒有實際結果」、不含日期數字；
       - FAIL_CLOSED 的格（LM-154 條件 ③⑤⑩）：三格——除權息因子；兩個以上原因；未豁免的診斷更正。每格斷言：
@@ -2121,7 +2179,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
     - `market_scan_from` ≠ W → 拒絕寫入；
     - 同一個 `(run_id, recorded_at)` 出現在兩個已完成作業 → 拒絕；
     - 中斷作業（沒有 end 列）之後的下一個作業：`market_scan_from` 等於中斷作業之前那個已完成作業的 `market_scan_to`，重新掃得同一批觸發，可以寫入並寫完 job_end；
-    - 兩個作業交錯：`correction_job_id` 較大的作業先寫完 job_end，較小的作業再寫 job_end → 拒絕、記 WARNING；本作業開始之後 W 已改變 → 拒絕寫入 job_end、記 WARNING；兩種情形之後的下一個作業都可以寫入並寫完 job_end，其他觸發不被擋下；
+    - 兩個作業交錯：`correction_job_id` 較大的作業先寫完 job_end，較小的作業再寫 job_end → 拒絕、記 WARNING；本作業開始之後 W 已改變 → 拒絕寫入 job_end、記 WARNING；兩種情形之後的下一個作業都可以寫入並寫完 job_end，其他觸發不被擋下；被拒的較小 id 作業沒有 job_end 列；性質測試：任意交錯之下，已寫入 job_end 的 commit 順序與 `correction_job_id` 的順序相同（N29-11 比較基準）。
     - 性質測試：已完成的作業依 `correction_job_id` 排列，(`market_scan_from`, `market_scan_to`] 首尾相接、不重疊。
   - (f) 涵蓋邊界（第 6 點）：
     - 大盤作廢列，注入晚到的指數 T+h bar → 不產生 `source_revision` 觸發；
@@ -2219,9 +2277,10 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (d) 只有 X2 事件觸發（沒有市場 DB 命中）→ 作業啟動；只有確認判定列觸發 → 作業啟動；`no_error` 判定列 → 不啟動。
   - (e) 中斷作業之後的下一個作業，兩個 from 等於前一個已完成作業的 max，重新讀得同一批觸發；性質測試：已完成作業的 (from, max] 首尾相接、不重疊（三種序號各一）。
   - (f) 簽章沒有觸發、預測清單、重查範圍、視圖、E、V 參數（AST）；supersede 寫入只從 `run_correction_job()` 呼叫。
-  - (g)（風控 C-22 確認）結算之後改寫 `price_bars_cache` 中前一列結算窗內某日的值 → 重算取「更正鏈中最早涵蓋該日的列」的快照值，記 WARNING，結果與沒有改寫時逐位相同；X2 順延後的新 T+h bar 不在任何 `forecast_settle_eval` 快照中（或數值不同）→ 該筆不寫入，`rejected_count` 加 1。
+  - (g)（風控 C-22 確認）結算之後改寫 `price_bars_cache` 中前一列結算窗內某日的值 → 重算取「更正鏈中最早涵蓋該日的列」的快照值，記 WARNING，結果與沒有改寫時逐位相同；X2 順延後的新 T+h bar 不在任何 `settle_eval_id ≤ settle_eval_max` 的 `forecast_settle_eval` 快照中（或數值不同）→ 該筆不寫入，`rejected_count` 加 1，`rejected_json` 與 `pending_json` 各一項（`shift_index_bar_unverified`）。
   - (h) 啟動檢查不讀 label、`hit`、結果（AST 列舉 import）；更正作業沒有 CLI 或 API 入口（AST 列舉呼叫點）。
   - (i)（N-27）更正作業在被重查列的 D_5 之前啟動，判定視圖中 P(T+h) 收盤「確認有誤、尚未取得正確值」→ 當次寫入作廢列，不延後；`wait_sessions`、`wait_deadline_session` 等於被 supersede 列；之後的作業取得 `correct_close_obtained` → 不 supersede 該作廢列，只寫 `forecast_void_late_diag`。
+  - (j)（N-29）三種待重算各一格（尚未觀察到、沒有可用資料、大盤列未經偵測）→ 不寫 supersede 也不寫作廢，`rejected_json`、`pending_json` 各一項，紀錄清單回傳待重算片段，不含 label 與實際結果。下一次結算評估帶來新觀察日，或含 d、而且數值是新出現的快照列 → 第四類觸發啟動，寫入 supersede（`correction_causes` 含 `x2_session_removed`），該項離開 `pending_json`，畫面改為 LM-150＋LM-151。沒有任何新資料的評估 → 不啟動（spy）。（(γ)；風控 2026-10-18 確認）大盤項：23:10 重試與啟動補跑各再寫一列 `forecast_settle_eval`，d 的列與 W_S 以內某一列快照數值相同 → 不啟動（spy），沒有新的 job_end，`e_changed_since` 維持為假；d 的數值改變 → 啟動；各次執行的數值依序為 A、B、A → 只有 B 那一次啟動；W_S 以內的快照都沒有 d 的列 → 啟動；`write_validation_failed` 的大盤項在重試時不啟動，新觀察日照常啟動。（風控 2026-10-18 確認，(g)「優先序」與 D-9 第 5 點「待重算」）已確認 PIT 違規、鏈尾 `resolved`、在待重算集合 → 狀態行是待重算片段，資格標示並列 LM-110 與 LM-114（LM-114 排第一），回應不含 label 與順延前結果；`on_demand`、`late`、`before_dv` 各一格同理（分別並列 LM-113、LM-112、LM-111）；族群列且 A-27 (c) 成立 → 不回傳待重算片段，回應不含 `settlement_date`、`outcome_status` 與順延前結果；族群列且 (c) 不成立 → 不顯示 label 與任何結算結果；E 以外的列到期作廢 → §4.2 作廢數 (7) 計入、依 E 分列，作廢率與 W 不變。`write_validation_failed` 項修正後重查成為 `shift_t_plus_h_data_unavailable`：未到期 → 留在 `pending_json`、`reason` 改寫、`since_job_id` 不變；已到期（依 N-29 (b) 起算，不扣除被拒期間）→ 依 (乙) 改記作廢；等待資料項重查後成為 `write_validation_failed` → 到期不改記作廢。前一作業 `pending_json` 的某一項既沒有處理、也沒有帶入 → 拒絕寫入 job_end。X2 事件已寫入、作業尚未完成 → 該列回傳待重算片段。啟動檢查不讀時鐘差（AST）。重算含 `x2_session_removed` 而寫入驗證拒絕 → 列入 `pending_json`（`write_validation_failed`），回傳待重算片段，N-29 (b) 到期也不改記作廢。pending 項由其他類觸發重查 → `correction_causes` 含 `x2_session_removed`。前一作業的 pending 項本作業重算無任何欄位改變 → 不寫列、離開 `pending_json`，job_end 照寫。大盤 `shift_index_bar_unverified` 到期 → 視為沒有可用資料、改記作廢（成立集合含 `missing_bar_after_wait`），`diag_*` 不讀未通過比對的列（spy）。待重算片段不出現在本路徑以外；大盤待重算列不含 LM-22、`threshold_display`（schema 測試）。驗證統計不計入待重算集合；job_end 寫入後 `e_changed_since` 為真。（N29-11）週末 X2、順延後 T+h 不變：snapshot 在 (b) 期間寫入，之後作業不寫列、寫入 job_end → 到下一筆 snapshot 之前，`e_changed_since` 與 `n_disclosure_masked` 為真；下一筆 snapshot 的 n 含該列；`mask_episodes` 的變動項含該 job_end，日數為 1。對照格：同一次執行中，作業在驗證快照之前寫入 job_end → 該 snapshot 的 `e_read_job_end_seq` 涵蓋它，`e_changed_since` 為假。AST：`views` 讀 `forecast_correction_job_end` 的呼叫點恰好是 D-11.4 第 11 點 (g) 所列的兩個 `store.py` 函式。序號函式的 SQL 只選取 `correction_job_id`；其回傳值不出現在任何 response model 或匯出欄位（AST／schema 斷言）。
 - **FL-69**（`INDEX_VERIFICATION_SOURCE` 版本歷史；`forecast_replay_index_check`；`forecast_replay_outcome`）：
   - (a) 登記序列目前為空；性質測試：版本逐項加 1、跨 `source_name` 單調、已登記項不可變、同名時涵蓋只增不減；程式序列與 ADR 登記表逐欄相同。
   - (b) `coverage_end_at` 在 `rolling` 時只依日期與時鐘；涵蓋以外 → `outside_coverage`，不呼叫來源（spy）；涵蓋以外寫 `source_has_no_day` → 拒絕。
@@ -2487,6 +2546,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
         4. 寫入時指定 `event_id` → 拒絕寫入；
         5. snapshot 之後還原，並寫入 `db_restored` → 為真；
         6. `sqlite_master` 斷言兩欄都是 `INTEGER PRIMARY KEY AUTOINCREMENT`。
+      - （N29-11）RC‴-1 第 1、2、3、5 格對 `e_read_job_end_seq` 各加一格（第 3 格注入的是一筆 job_end commit；第 2 格另斷言依 N-5 撤銷 `better_than_baseline`）；寫入 `forecast_correction_job` 時指定 `correction_job_id` → 拒絕寫入；`sqlite_master` 斷言 `forecast_correction_job.correction_job_id` 是 `INTEGER PRIMARY KEY AUTOINCREMENT`。
       - （N-5）RC‴-1 六格之後加兩格：序號大於最大值時撤銷 `better_than_baseline`；還原後 `checkpoint_n ≤ N_R` 的檢查點正面結果不認列、負面結果照常生效。
         - 兩個原因同時成立的檢查點：`cause = suspended_f3`；有 withdraw 區塊時 `positive_suppressed_during_f3 = true`；§4.2「整檔還原」列含此檢查點。只有 `db_restored` 成立：`cause = db_restored`，`positive_suppressed_during_f3` 不為 true。
       - （N-5）N_R 邊界加一格：D_v 晚於 B_s。
@@ -3983,3 +4043,114 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   改為：評估摘要與 Consequences 的「19 張」改為「21 張」；M-11 的「新增 14 張表」改為「新增 16 張表」；在 `forecast_gap_audit` 之後加「；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`」。待決事項 CEO 段新增第 15 點，無被取代原文。編輯註記：本段之前各批次條目引用的「18 張」「19 張」「13 張」「14 張」是當時的原文，不改。CEO：表數知悉。
 - D-9 第 7 點「理由」第二子點的狀態註（coordinator 裁定，CEO 可推翻；方向：不變（狀態註））：tech-writer 回報該子點的「〔推論；重放期起訖日未登記，見後續追蹤清單 N-22c〕」在 V16-02 登記起訖日的決定規則之後已過時。coordinator 裁定原句保留，在該〔……〕之後插入〔v0.16 註：重放期起訖日的決定規則已由事先宣告 v0.16 V16-02 登記，實際值於 §4.7 執行閘門 (a) 登記；本點原文不改〕。無被取代原文。
 - 後續仍待另批處理（不在本批 ADR 內）：決策包二補遺第 20 項改寫、後續追蹤清單 N-22c／N-22d／N-28／S-2 的更新，由 coordinator 依風控 2026-10-18 v0.16 單項確認第四節處理。
+
+---
+
+> N-29 待重算（2026-10-18）套用（2026-10-18，tech-writer；風控單項確認：`work/reviews/2026-10-18-N29與plan略過紀錄單項確認-風控.md` 第四節「tech-writer 照改清單」N-29 批第 1～9 點；tech-architect 提案：`work/reviews/2026-10-18-N29與重放存放及plan略過紀錄與v0.16定名提案-tech-architect.md` 第二節 B 段 N29-1～N29-9，風控沒有另給字句處照 TA 原字面）。
+> - **本批單獨成批**：不與 v0.16 批（上一段）、plan 批（`plan_coverage_log`）同批。風控要求 N-29 批內部不得拆開，期限為 D-9 結算程式實作前（風控 2026-10-18 N-29 單項確認第一節「同批與表數」）。
+> - **事先宣告 N-29 (b) 另由 quant 在後續版次登記**，版次不早於本批，且必須在 dirdef 凍結前（風控 2026-10-18 N-29 單項確認第一節、第四節 quant 照改清單）。本批的 ADR 字面以「事先宣告 N-29 (b)」「後續追蹤清單 N-29 (b)」指向它，登記之前，到期處理不生效，依 D-9 第 5 點「待重算」持續待重算。
+> - **不新增 A 號**，累計方向統計維持 18／2／9／1／3（見上「第九、十批」段的方向表）。
+> - **本批沒有任何一項需要 CEO 明示同意**（風控 2026-10-18 N-29 單項確認第一節、第二節 A 的 CEO 欄）。
+> - **N29-6 的方向為「補定義（兩面）」**，照風控字句（見下 N29-6 條目）。
+> - **表數不變**：本批只在既有兩張表（`forecast_correction_job`、`forecast_correction_job_end`）加欄位，不加表（TA 提案第一節「表數」）。
+> - **本批沒有套用的項目**：(1) plan 批（風控第 10～12 點：I3-1～I3-3，`plan_coverage_log`、FL-70），下一批另做；(2) N29-10（交 quant 的事先宣告字面、交 creative-lead 的 `RECORD_STATUS_RESETTLE_PENDING` 片段起草），不在本 ADR 內；(3) N29-11（`E_CHANGING_EVENTS` 加 `forecast_correction_job_end`）：原列於此處為「本批未套用」，現已套用（2026-10-18，tech-writer 後續一批）。風控字句要求的 snapshot 端讀取序號欄名，由 tech-architect 定為 `stats_json.e_read_job_end_seq`（`work/reviews/2026-10-18-N29-11第三序號與LM155三項確認-tech-architect.md` 第一節第 1 點），套用內容與被取代原文見下方 N29-11 條目，本處原文（被取代）亦錄存於該條目。原文所述「與本批同一個 commit」的要求（風控第四節 coordinator 核對第 22 點）仍由 coordinator 在 commit 時處理；tech-writer 本批未 commit。
+> - **標點處理**：N29-8 風控要求在首句「值只能是待重算片段（……PA-8）」之後接「這是雙向規則：待重算片段也只能出現在本路徑。」；TA 原句以冒號接兩個條件子點，tech-writer 把冒號改為句號、再接該句，子點內容不動。請 coordinator 確認可接受。
+> - **TA 提案中未插入的一句**：TA 提案 N29-6 另有一句「(乙) 列的 `wait_sessions`、`wait_deadline_session` 照抄被 supersede 列，D-3 原規則不變；所用的期限可由本作業的 `observed_sessions_json` 重算得出。」，TA 沒有把它放進「新字」，風控第四節也沒有列為要寫入的字句，所以本批沒有寫入 ADR 本文（B 類轉錄不順手補字）。
+> - **定位與被取代原文**：定位一律用字串，從檔尾往前套（先套條文、後寫本段）。被取代的原文取自套用前的 ADR 檔現況（任務說明：HEAD 為 `bcc84db`，ADR 本身沒有未 commit 的修改）；tech-writer 沒有用 git 對該 commit 逐字核對（本任務沒有 git 工具），請 coordinator 對照核對。TA 提案所載行號因 v0.16 批而漂移，一律以字串為準。
+> - **本段含被取代原文的逐字引用**，其中的定位字串（例如「三類都沒有時不啟動」「其他 scope、其他 `status_reason` 的改記作廢」）會在本段命中，屬歷史列，不是現行條文。
+
+**N-29 待重算（2026-10-18）（D-3、D-9 第 5 點、D-11.4 第 11 點 (g)(h)、FL-22、FL-68；掛 A-65、A-77；方向：逐項標示，見各項）**
+- N29-1（D-3 `forecast_correction_job` 欄位清單，及其後「判定視圖欄位」子點之下新增一點；TA 提案 N29-1）：方向：補定義（收緊）。送風控：已核可，照 TA 字面（風控 2026-10-18 N-29 單項確認第二節 A）。CEO：否。欄位清單只換這一段，被取代的原文——
+  > index_check_max INTEGER NOT NULL, index_series_sha256 NOT NULL
+
+  另在「`index_series_sha256`、`index_final_now`、……與 `forecast_settle_eval` 的同名欄位同義」一行之後、同一層新增一點，無被取代原文。
+- N29-2（D-3 `forecast_correction_job_end` 欄位清單，及 `rejected_count` ＞ 0 一行之後新增一點；TA 提案 N29-2，風控三處改字）：方向：補定義（收緊）。風控改字：(1) `rejected_json` 的項加 `causes`；(2) `pending_json` 首句改為「本作業結束時的待重算集合（D-9 第 5 點「待重算」，含 `write_validation_failed` 一種）」；(3) 寫入 job_end 的驗證第 2、3 子點改字（第 2 子點以 `causes` 含 `x2_session_removed` 判定；第 3 子點加「本作業重查後沒有任何欄位改變（§6.4 第 3 點，不寫列）」一格）。TA 原稿的這幾處從未寫入本 ADR，本段不重錄，TA 原稿見 TA 提案第二節 B 段 N29-2。CEO：否。欄位清單只換這一段，被取代的原文——
+  > rejected_count, void_late_data_count, ended_at)
+- N29-3（D-9 第 5 點 ④「已結算數值所用的大盤 bar」第二子點，並在其後、同一層新增「待重算」一點；TA 提案 N29-3，風控改字）：方向：補定義（收緊）。風控改字：在「待重算」一點的「理由」子點之前、同一層插入兩個子點（未通過比對的日期視為沒有可用資料、任何欄位都不得讀取；`write_validation_failed` 同樣列入 `rejected_json` 與 `pending_json`、不適用 N-29 (b) 期限），並把首句出處括號改為「（N-29；tech-architect 2026-10-18；風控 2026-10-18 v0.15 單項確認第二節 C、N-29 單項確認）」（TA 原括號為「（N-29；tech-architect 2026-10-18；風控 2026-10-18 v0.15 單項確認第二節 C）」，從未寫入本 ADR）。CEO：否。第二子點整句取代，被取代的原文（取自 ADR 現況，含 v0.15 批加入的括號「（以 `checked_values_sha256` 的正規化規則比對）」；TA 提案所引原文沒有這個括號）——
+  > - 更正鏈中沒有任何結算窗涵蓋的日期（例如 X2 順延後的新 T+h），取本作業快照的列。該列必須與某一列 `forecast_settle_eval` 大盤快照中 d 的列數值相同（以 `checked_values_sha256` 的正規化規則比對），也就是已經過 D-9.2 ③ 的偵測；不成立時，該筆不寫入，計入 `rejected_count`，記 WARNING。
+- N29-4（D-3「晚到資料的觸發」第 1 點與 D-9 第 5 點「理由」引文；TA 提案 N29-4 (a)～(d)，風控核可照 TA 字面，同意改動風控 N21-4 的「三類」）：方向：(a)～(c) 補定義（收緊）；(d) 不變（引文同步）。CEO：否。
+  - (a) 被取代的原文——
+    > 同一步另以唯讀查詢檢查兩件事，有任一項就同樣啟動（N-21）：
+  - (b) 在 `(W_V, MAX(check_id)]` 那一行之後、同一層新增，無被取代原文。
+  - (c) 被取代的原文——
+    > W_E、W_V 與 D-3 `forecast_correction_job` 的 `ledger_event_from`、`index_check_from` 同一定義，由同一個函式導出。三類都沒有時不啟動（D-3「`triggers_json` 必須非空」不變）。啟動與否只依本點三類觸發是否存在，
+  - (d) 被取代的原文——
+    > 與 D-3「晚到資料的觸發」第 1 點「啟動與否只依本點三類觸發是否存在」不合
+- N29-5（D-11.4 第 11 點 (h)「原因怎麼歸屬」，「來源修訂依 D-3『晚到資料的觸發』。」一行之後、同一層新增一點；TA 提案 N29-5，風控句末加「前一個已完成作業 `pending_json` 中的 `forecast_id`，……受影響日期同上。」）：無被取代原文。方向：補定義（收緊：只會多記）。CEO：否。
+- N29-6（D-11.4 第 11 點 (h) R10-2「適用範圍」一點：把 N-27 的兩個子點改為 (甲)、(乙) 兩支，並調整其後兩處；併入 S-1；TA 提案 N29-6，風控改 (乙) 與 `window_factors_json` 一行）：方向：補定義（兩面）：放寬面是寫入驗證對 X2 順延後重算得出的作廢不限 scope 與原因；另一面是只有事先宣告 §6.3 L1328、L1330 已規定、逐位重算相同的作廢寫得進去，等待類原因須 N-29 (b) 登記且到期，作廢計入作廢率與 W，(甲) 加 S-1，其他一律拒絕。CEO：否（風控 2026-10-18 N-29 單項確認）。(甲) 照 TA 字面；(乙) 為風控改字版（`void_reasons_json` 依 scope 的允許集合限制；比對加 `window_factors_json`）。被取代的原文（兩個子點，整行）——
+  > - `scope_kind = market`，`status_reason = index_bar_confirmed_erroneous`；
+  > - 以本作業的判定視圖（D-9 第 5 點 ④）、經 `scoring.py` 的同一個函式重算，P(T) 或 P(T+h) 至少一根的收盤是 D-3 `forecast_index_check`「判定時怎麼讀」所說的「確認有誤、尚未取得正確值」；
+
+  「適用範圍」下的 `window_factors_json` 一行整行取代（風控字句），被取代的原文——
+  > - `window_factors_json` 和前一列相同。
+
+  「其他 scope、……一律拒絕」一句，只換前半，被取代的原文——
+  > 其他 scope、其他 `status_reason` 的改記作廢，不屬於本 ADR 已定義的 supersede，一律拒絕
+
+  該句其餘部分不動。
+- S-1（已併入 N29-6 的 (甲)：`correction_causes` 至少含 `settlement_close_corrected` 或 `x2_session_removed` 之一）：無被取代原文。方向：收緊（風控 2026-10-18 N-29 單項確認第二節 A 的 S-1 列：核可，已併入 (甲)）。CEO：否。
+- N29-7（D-3 `forecast_settle_eval` 的「限制」一點，更正讀取限制與 `settlement.py`、`correction.py` 實際讀取的既有不一致；TA 提案 N29-7）：方向：補定義（更正既有不一致；AST 允許清單形式上擴大，只限已核可條文本來就要求的讀取）（風控 2026-10-18 N-29 單項確認第二節 A）。CEO：否。只換這一段，被取代的原文——
+  > 只有 `validation.py` 的 §4.2 報表與稽核工具可以讀它；`views`、API route 與匯出不得讀它（AST 列舉呼叫點，比照 `forecast_void_late_diag`）。
+- N29-8（D-11.4 第 11 點 (g)，「§4.2 的計數來源」一行之後、與「FAIL_CLOSED 路徑的狀態片段」同一層新增「待重算路徑的狀態片段」一點；TA 提案 N29-8，風控改四處：雙向規則一句、`validation.py` 呼叫同一個 `store.py` 函式一句、「優先序」子點改字、白名單加 `threshold_display` 與 `disclosure_fragment_ids` 子點改字並加「大盤列不得含 LM-22」）：無被取代原文。方向：收緊（揭露）。CEO：否。片段逐字由 creative-lead 起草，送風控（PA-8），核可之前 FL-52 (d) 失敗。
+- N29-9（對實作的約束 FL-68 (g)、新增 (j)，FL-22 (b) 加一格；TA 提案 N29-9，風控在 (j) 與 FL-22 句末加字）：方向：收緊（測試）。CEO：否。FL-68 (j) 與 FL-22 新格無被取代原文。FL-68 (g) 只換這一段，被取代的原文——
+  > X2 順延後的新 T+h bar 不在任何 `forecast_settle_eval` 快照中（或數值不同）→ 該筆不寫入，`rejected_count` 加 1。
+- N29-11（`E_CHANGING_EVENTS` 加 `forecast_correction_job_end`，第三序號 `stats_json.e_read_job_end_seq`；tech-architect 2026-10-18 回報 `work/reviews/2026-10-18-N29-11第三序號與LM155三項確認-tech-architect.md` 第二節「決策：可直接貼入的字面」第一～五組；風控依據：2026-10-18 N-29 單項確認）：本條取代原「本批未套用」條目與上方「本批沒有套用的項目」(3)，兩處原文逐字錄存於本條末。風控方向：收緊；CEO：否。本條只記 tech-writer 這一批已套用的項目，字句逐字照 TA 的「可直接貼入的字面」，沒有另補技術細節。（coordinator 2026-10-18 補註：上句與「風控方向：收緊」只指 TA 第一～五組；T-1～T-8 的字句來源是風控 2026-10-18 單項確認的照改清單，方向逐項見下列兩點。）
+  - **已套用**：第一組 1-a～1-c、第二組 2-a～2-c、第三組 3-a～3-e 與 3-g、第四組 4-a、第五組 5-a～5-d。方向（依 TA 回報）：1-a、1-c、2-b、3-a、3-b、3-d、4-a 收緊；1-b 不變（編排）；3-c 補定義（收緊）；3-e 收緊（揭露）；3-g 補定義（不放寬：只多開一個只讀一欄的呼叫點）；5-a～5-c 收緊（測試）；2-a、2-c 隨 2-b 同步字數，TA 未另標方向；5-d 為本修訂紀錄的改寫。4-a 的第一句是風控原字（風控 2026-10-18 N-29 單項確認），一字不改。
+  - **風控 2026-10-18 修改後核可（T-1、T-2），方向：補定義（不放寬）；CEO：否**：3-g 改到的 D-11.4 第 11 點 (g)「判定只由 `display.py` 的 `record_status_fragment(row)` 產生……」一句，是風控已核可過的字句。本批原依 coordinator 指示先照 TA 字面套，coordinator 另送風控做單項確認；風控已於 2026-10-18 單項確認（`work/reviews/2026-10-18-N29-11與LM155追加及作廢統計單項確認-風控.md` 第四節 T-1、T-2），並要求照風控字句改寫：T-1 取代 3-g 的 TA 字面，T-2 取代 3-b 括號內的「同一個 `store.py` 函式」一句。被取代的原文見本條末「T-1～T-9 被取代的原文」。
+  - **原「本批未套用，須先送風控」一點，已依風控 2026-10-18 單項確認（同上檔第四節 T-3～T-8）改寫為已套用**，字句逐字照該檔。各項方向：
+    - (γ)（含 L419、FL-68 (j)）：補定義（兩面）；CEO：否。
+    - (2)：補定義（收緊）；CEO：否。
+    - (3)：補定義（收緊）；CEO：否。
+    - 測試格：收緊（測試）；CEO：否。
+  - **N29-11a 備案**：經風控 2026-10-18 否決，不寫入 ADR。
+  - 1-a（D-11 `forecast_validation_snapshot` 一點的 `stats_json` 登記）：被取代的原文——
+    > （r3，A-63；RC′-2、RC″-2、RC‴-1）`stats_json` 另登記 `e_read_event_seq`、`e_read_outcome_seq`（`pa9_holds` 的 `e_changed_since` 比較基準，見第 4 點第 11 項 (c)），以及 `e_read_at`（稽核用，不作比較基準；也不用 `computed_at`）。
+  - 1-b（D-11.4 第 11 點 (c)「比較基準」，「snapshot 的計算在一個明確開啟的 read transaction 內讀 E」一點）：只換「兩個值」為「三個值」，被取代的原文（整點）——
+    > snapshot 的計算在一個明確開啟的 read transaction 內讀 E，並在同一個 transaction 內讀出兩個值，寫入 `stats_json`：
+  - 1-c：在 `e_read_outcome_seq` 一行之後、「沒有列時記 0。」之前、同一層新增 `e_read_job_end_seq` 一行，無被取代原文。
+  - 2-a（`e_changed_since(snapshot)` 一點）：只換「兩項」為「三項」，被取代的原文（整點）——
+    > `e_changed_since(snapshot)` 為真，若且唯若下列兩項任一成立：
+  - 2-b：在「存在 `supersedes_id IS NOT NULL`、而且 `outcome_id > e_read_outcome_seq` 的列。」一行之後、同一層新增第三項比較，無被取代原文。
+  - 2-c：只換「兩個欄位」為「三個欄位」，被取代的原文（整行）——
+    > 兩個欄位任一缺漏或不是整數，一律為真。
+  - 3-a（D-11 `forecast_validation_snapshot`「前提被破壞時撤銷」一點）：只換序號清單，被取代的原文——
+    > 任何 snapshot 的 `e_read_event_seq` 或 `e_read_outcome_seq` 大於目前看得到的對應最大值時
+  - 3-b（D-11.4 第 11 點 (c)「讀取順序（RC‴-1）」一點）：只換粗體部分，被取代的原文——
+    > **先讀 `e_read_event_seq`、`e_read_outcome_seq`，再讀 E**
+  - 3-c：在 `event_id`、`outcome_id` 都是 `INTEGER PRIMARY KEY AUTOINCREMENT` 那一點之後、同一層新增一點，無被取代原文。
+  - 3-d（D-11.4 第 11 點 (c)「寫入函式與 SQL 不得指定」一點）：只換前半，被取代的原文——
+    > 寫入函式與 SQL 不得指定 `event_id`、`outcome_id`，由 SQLite 配號
+  - 3-e（D-11.4 第 11 點 (c) N-6「變動項」一點）：只換後半，被取代的原文——
+    > ，以及 `supersedes_id IS NOT NULL` 的 `forecast_outcome`（依 `outcome_id`）。
+  - 3-g（D-11.4 第 11 點 (g)，待重算路徑的「判定只由 `display.py` 的 `record_status_fragment(row)` 產生」一點）：只換前半句，被取代的原文——
+    > 這是 `views` 讀取 `forecast_correction_job`、`forecast_correction_job_end` 的唯一呼叫點。
+  - 4-a：在 `forecast_outcome` 中 `supersedes_id IS NOT NULL` 的列一行之後、同一層新增 `forecast_correction_job_end` 一項與其「依據與範圍」子點，無被取代原文。
+  - 5-a（FL-58 之下，RC‴-1 六格之後）：在「`sqlite_master` 斷言兩欄都是 `INTEGER PRIMARY KEY AUTOINCREMENT`。」一行之後、與「（N-5）RC‴-1 六格之後加兩格」同一層新增一點，無被取代原文。
+  - 5-b（FL-68 (j) 句尾）：在「驗證統計不計入待重算集合；job_end 寫入後 `e_changed_since` 為真。」之後接字，無被取代原文。
+  - 5-c（FL-64 (e) 句尾）：在「兩種情形之後的下一個作業都可以寫入並寫完 job_end，其他觸發不被擋下；」之後接字，無被取代原文。
+  - 5-d：改寫兩處「N29-11 本批未套用」。第一處是上方「本批沒有套用的項目」(3)，被取代的原文——
+    > (3) **N29-11（`E_CHANGING_EVENTS` 加 `forecast_correction_job_end`）本批未套用**：風控字句要求 snapshot 端的讀取序號欄名「由 TA 依 `e_changed_since` 的既有形狀補上」，但 `e_changed_since` 的既有形狀是 `stats_json` 的兩個讀取序號 `e_read_event_seq`、`e_read_outcome_seq`（D-11.4 第 11 點 (c)「比較基準」，並引用於 D-11 `forecast_validation_snapshot` 一點的 `stats_json` 登記與「前提被破壞時撤銷」），沒有任何既有欄位能記 `correction_job_id`，補上這一點必須新增 `stats_json` 欄位與 `e_changed_since` 的第三項比較，欄名無法由既有形狀推出，因此停下來回報 coordinator，由 tech-architect 定欄名後再補（不得由 tech-writer 自訂）。本批 FL-68 (j) 風控字句末句「job_end 寫入後 `e_changed_since` 為真」依賴 N29-11，在 N29-11 補上之前，這句與 `E_CHANGING_EVENTS` 的清單不一致；風控要求 N29-11 與本批同一個 commit（風控第四節 coordinator 核對第 22 點），請 coordinator 在 N29-11 補上之後再一起 commit。
+
+    第二處是本條自己的原文（整行），被取代的原文——
+    > - N29-11（`E_CHANGING_EVENTS` 加 `forecast_correction_job_end`）：**本批未套用**，見上方「本批沒有套用的項目」(3)。風控方向：收緊；CEO：否。
+  - T-1～T-9 被取代的原文（風控 2026-10-18 單項確認，`work/reviews/2026-10-18-N29-11與LM155追加及作廢統計單項確認-風控.md` 第四節「給 tech-writer 的照改清單」；新增字句逐字照該清單，被取代的原文逐字錄存於下）：
+    - T-1（D-11.4 第 11 點 (g) 待重算路徑「判定只由 `display.py` 的 `record_status_fragment(row)` 產生」一點，從「這是 `views` 讀取」到該點句尾「（AST 列舉呼叫點）。」整段取代；被取代的是 3-g 套用後的 TA 字面）——
+      > 這是 `views` 讀取 `forecast_correction_job`、`forecast_correction_job_end` 的唯一呼叫點；唯一的例外是第 4 點第 11 項 (c) 的序號比較函式（`e_changed_since` 與 `mask_episodes` 共用）。它經 `store.py` 的另一個單一唯讀函式讀取 `forecast_correction_job_end` 的 `correction_job_id`，不讀其他欄位；snapshot 寫入端讀 `e_read_job_end_seq` 也只經這個函式（N29-11；AST 列舉呼叫點）。`validation.py` 依事先宣告 N-29 (b) 計算驗證統計時，呼叫同一個 `store.py` 函式（AST 列舉呼叫點）。
+    - T-2（D-11.4 第 11 點 (c)「讀取順序（RC‴-1）」一點括號內，只換這一句）——
+      > 由 D-11.4 第 11 點 (g) 的同一個 `store.py` 函式讀取
+    - T-3（D-3「晚到資料的觸發」第 1 點，第四類觸發大盤子條件，整行取代）——
+      > - `scope_kind = market`，而且該列的大盤快照含該項 `shifted_t_plus_h` 的列；
+    - T-4（同一點之下「W_E、W_V、W_S ……」一段括號內，只換這一句）——
+      > 第四類只依新的觀察日、新的結算快照列或新的定案 run 是否存在，不依時間經過；沒有新資料時不啟動
+    - T-5（FL-68 (j)，兩處）：第一處只換這一句，被取代的原文——
+      > 下一次結算評估帶來新觀察日或含 d 的快照列 → 第四類觸發啟動
+
+      第二處是在「沒有任何新資料的評估 → 不啟動（spy）。」之後接字，無被取代原文。
+    - T-6（D-11.4 第 11 點 (h)，「修正之後，由第四類觸發重查。」句尾接字）：無被取代原文。
+    - T-7（D-11.4 第 11 點 (g) 待重算路徑「優先序」一點，從「優先序：」到「走 LM-143。」整點取代）——
+      > 優先序：本路徑先於 LM-150、LM-154、「診斷欄位更正的例外」與一般已結算列的呈現。與 PIT 違規列的標示（LM-110＋LM-114）或 A-27 (c) 同時成立時的取捨，由 tech-architect 在本點補定義，隨待重算片段送風控；補定義之前，同時成立的列不顯示 label 與任何結算結果。最新 outcome 不是 `resolved` 時不適用，走 LM-143。
+    - T-8（測試格，兩處）：FL-68 (j) 在 T-5 新加的 (γ) 格之後接字，以及 5-b 末句「所列的兩個 `store.py` 函式。」之後接字：無被取代原文。
+    - T-9（本修訂紀錄 N29-11 條目的兩點，整點取代）——
+      > - **3-g 待風控單項確認**：3-g 改到的 D-11.4 第 11 點 (g)「判定只由 `display.py` 的 `record_status_fragment(row)` 產生……」一句，是風控已核可過的字句。本批依 coordinator 指示先照 TA 字面套，coordinator 另送風控做單項確認；風控確認之前，本項狀態為「待風控單項確認」。
+
+      > - **本批未套用，須先送風控**（TA 回報「追加三點」與備案；本批沒有套用，也沒有改動對應條文）：(1) 的 (γ)（D-3 第四類觸發的大盤子條件，即 `scope_kind = market`，而且該列的大盤快照含該項 `shifted_t_plus_h` 的列 那一句）；(2) 的 D-11.4 第 11 點 (h) 待重算項 `reason` 明文（TA 回報定位為「修正之後，由第四類觸發重查。」句尾）；(3) 的 D-11.4 第 11 點 (g)「優先序」子點補定義；N29-11a 備案（只在 (γ) 被否決時才需要）。
