@@ -1146,7 +1146,7 @@
    - `forecast_replay` 的結算不呼叫 `run_settlement_evaluation()`、`run_correction_job()`、`observed_sessions(*, view)`、`span_sessions`、`unobserved_weekdays` 與 `ledger_registration_start()`；
    - 不讀也不寫 `forecast_settle_eval`、`forecast_correction_job`、`forecast_index_check`；
    - 重放的起訖日登記、快照、偵測、查證、判定、日曆查詢與閘門，寫入 D-3 `forecast_replay_index_check`；重放結果寫入 D-3 `forecast_replay_outcome`；快照存於 `forecast_input_series`（`series_kind = replay_index_bars`）。
-   - （N-22d）§4.7 的 126 日分段只由一個共用的純函式產生：從第一個 T 起，每 126 個觀察日一段，尾段照列並標明。不得直接以 `walk_forward_splits` 產生分段，因為它丟掉尾段，又要求 `train_size > 0`（`app/backtest/splits.py:70-71,84-85`）。可以把 `app/backtest/sector_eval.py:884-897` 的 `segment_bounds` 移到 `app/backtest/splits.py` 共用，`forecast` 不得 import `app.backtest.sector_eval`。尾段的報告定義依事先宣告登記（N-22d）；登記之前不得執行重放。
+   - （N-22d）§4.7 的 126 日分段只由一個共用的純函式產生：每個 h 分開，從該 h 的第一個 T 起，每 126 個觀察日一段，尾段照列並標明（單位、格點與報告定義依事先宣告 v0.18 V18-01、V18-02）。不得直接以 `walk_forward_splits` 產生分段，因為它丟掉尾段，又要求 `train_size > 0`（`app/backtest/splits.py:70-71,84-85`）。可以把 `app/backtest/sector_eval.py:884-897` 的 `segment_bounds` 移到 `app/backtest/splits.py` 共用，`forecast` 不得 import `app.backtest.sector_eval`。尾段的報告定義依事先宣告登記（N-22d）；登記之前不得執行重放。
    - 不寫 `forecast_ledger_events` 的 `x2_confirmed_non_session`、`unobserved_weekday`、`session_calendar_conflict`；
    - 不寫 `forecast_outcome`。
 
@@ -2281,6 +2281,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (h) 啟動檢查不讀 label、`hit`、結果（AST 列舉 import）；更正作業沒有 CLI 或 API 入口（AST 列舉呼叫點）。
   - (i)（N-27）更正作業在被重查列的 D_5 之前啟動，判定視圖中 P(T+h) 收盤「確認有誤、尚未取得正確值」→ 當次寫入作廢列，不延後；`wait_sessions`、`wait_deadline_session` 等於被 supersede 列；之後的作業取得 `correct_close_obtained` → 不 supersede 該作廢列，只寫 `forecast_void_late_diag`。
   - (j)（N-29）三種待重算各一格（尚未觀察到、沒有可用資料、大盤列未經偵測）→ 不寫 supersede 也不寫作廢，`rejected_json`、`pending_json` 各一項，紀錄清單回傳待重算片段，不含 label 與實際結果。下一次結算評估帶來新觀察日，或含 d、而且數值是新出現的快照列 → 第四類觸發啟動，寫入 supersede（`correction_causes` 含 `x2_session_removed`），該項離開 `pending_json`，畫面改為 LM-150＋LM-151。沒有任何新資料的評估 → 不啟動（spy）。（(γ)；風控 2026-10-18 確認）大盤項：23:10 重試與啟動補跑各再寫一列 `forecast_settle_eval`，d 的列與 W_S 以內某一列快照數值相同 → 不啟動（spy），沒有新的 job_end，`e_changed_since` 維持為假；d 的數值改變 → 啟動；各次執行的數值依序為 A、B、A → 只有 B 那一次啟動；W_S 以內的快照都沒有 d 的列 → 啟動；`write_validation_failed` 的大盤項在重試時不啟動，新觀察日照常啟動。（風控 2026-10-18 確認，(g)「優先序」與 D-9 第 5 點「待重算」）已確認 PIT 違規、鏈尾 `resolved`、在待重算集合 → 狀態行是待重算片段，資格標示並列 LM-110 與 LM-114（LM-114 排第一），回應不含 label 與順延前結果；`on_demand`、`late`、`before_dv` 各一格同理（分別並列 LM-113、LM-112、LM-111）；族群列且 A-27 (c) 成立 → 不回傳待重算片段，回應不含 `settlement_date`、`outcome_status` 與順延前結果；族群列且 (c) 不成立 → 不顯示 label 與任何結算結果；E 以外的列到期作廢 → §4.2 作廢數 (7) 計入、依 E 分列，作廢率與 W 不變。`write_validation_failed` 項修正後重查成為 `shift_t_plus_h_data_unavailable`：未到期 → 留在 `pending_json`、`reason` 改寫、`since_job_id` 不變；已到期（依 N-29 (b) 起算，不扣除被拒期間）→ 依 (乙) 改記作廢；等待資料項重查後成為 `write_validation_failed` → 到期不改記作廢。前一作業 `pending_json` 的某一項既沒有處理、也沒有帶入 → 拒絕寫入 job_end。X2 事件已寫入、作業尚未完成 → 該列回傳待重算片段。啟動檢查不讀時鐘差（AST）。重算含 `x2_session_removed` 而寫入驗證拒絕 → 列入 `pending_json`（`write_validation_failed`），回傳待重算片段，N-29 (b) 到期也不改記作廢。pending 項由其他類觸發重查 → `correction_causes` 含 `x2_session_removed`。前一作業的 pending 項本作業重算無任何欄位改變 → 不寫列、離開 `pending_json`，job_end 照寫。大盤 `shift_index_bar_unverified` 到期 → 視為沒有可用資料、改記作廢（成立集合含 `missing_bar_after_wait`），`diag_*` 不讀未通過比對的列（spy）。待重算片段不出現在本路徑以外；大盤待重算列不含 LM-22、`threshold_display`（schema 測試）。驗證統計不計入待重算集合；job_end 寫入後 `e_changed_since` 為真。（N29-11）週末 X2、順延後 T+h 不變：snapshot 在 (b) 期間寫入，之後作業不寫列、寫入 job_end → 到下一筆 snapshot 之前，`e_changed_since` 與 `n_disclosure_masked` 為真；下一筆 snapshot 的 n 含該列；`mask_episodes` 的變動項含該 job_end，日數為 1。對照格：同一次執行中，作業在驗證快照之前寫入 job_end → 該 snapshot 的 `e_read_job_end_seq` 涵蓋它，`e_changed_since` 為假。AST：`views` 讀 `forecast_correction_job_end` 的呼叫點恰好是 D-11.4 第 11 點 (g) 所列的兩個 `store.py` 函式。序號函式的 SQL 只選取 `correction_job_id`；其回傳值不出現在任何 response model 或匯出欄位（AST／schema 斷言）。
+  - (k)（T18-2；風控 2026-10-18 V18-01、V18-02 單項確認；事先宣告 §4.2 作廢數 (7) 的分組）待重算後到期 → 前者；從未待重算、直接作廢 → 後者；待重算 → resolved → 新順延 → 直接作廢 → 後者，並計入「另列」；(甲) 支同時含 `missing_bar_after_wait` → 不在本子項；作廢後 `pending_json` 殘留或防護路徑再出現 → 分組不變。
 - **FL-69**（`INDEX_VERIFICATION_SOURCE` 版本歷史；`forecast_replay_index_check`；`forecast_replay_outcome`）：
   - (a) 登記序列目前為空；性質測試：版本逐項加 1、跨 `source_name` 單調、已登記項不可變、同名時涵蓋只增不減；程式序列與 ADR 登記表逐欄相同。
   - (b) `coverage_end_at` 在 `rolling` 時只依日期與時鐘；涵蓋以外 → `outside_coverage`，不呼叫來源（spy）；涵蓋以外寫 `source_has_no_day` → 拒絕。
@@ -4154,3 +4155,13 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
       > - **3-g 待風控單項確認**：3-g 改到的 D-11.4 第 11 點 (g)「判定只由 `display.py` 的 `record_status_fragment(row)` 產生……」一句，是風控已核可過的字句。本批依 coordinator 指示先照 TA 字面套，coordinator 另送風控做單項確認；風控確認之前，本項狀態為「待風控單項確認」。
 
       > - **本批未套用，須先送風控**（TA 回報「追加三點」與備案；本批沒有套用，也沒有改動對應條文）：(1) 的 (γ)（D-3 第四類觸發的大盤子條件，即 `scope_kind = market`，而且該列的大盤快照含該項 `shifted_t_plus_h` 的列 那一句）；(2) 的 D-11.4 第 11 點 (h) 待重算項 `reason` 明文（TA 回報定位為「修正之後，由第四類觸發重查。」句尾）；(3) 的 D-11.4 第 11 點 (g)「優先序」子點補定義；N29-11a 備案（只在 (γ) 被否決時才需要）。
+
+---
+
+**事先宣告 v0.18 連帶（2026-10-18）（D-9 第 7 點 N-22d 一點、對實作的約束 FL-68 (k)；掛 N-22d、N-29；方向：逐項標示，見各項）**
+- 來源與套用範圍：風控 2026-10-18 單項確認（`work/reviews/2026-10-18-V18-01V18-02單項確認與V18-04分組裁定-風控.md` 第四節「給 tech-writer 的照改清單」T18-1、T18-2）。風控將兩項標為 suggested；coordinator 定案採用，CEO 可推翻。字句逐字照該清單。本批只改本 ADR 這兩處，不改其他檔案。
+- T18-1（D-9 第 7 點 N-22d 一點，「從第一個 T 起，每 126 個觀察日一段，尾段照列並標明。」一句整句取代；suggested，必須與事先宣告 v0.18 同一個 commit）：方向：補定義（收緊）（依風控 V18-01、V18-02 的方向標）。CEO：否。被取代的原文——
+  > 從第一個 T 起，每 126 個觀察日一段，尾段照列並標明。
+- T18-2（對實作的約束 FL-68，在 (j) 之後新增 (k) 一格，測事先宣告 §4.2 作廢數 (7) 的分組；suggested；不擋 dirdef 凍結，但 `validation.py` 的 (7) 實作送 qa 之前必須補上）：方向：收緊（測試）。CEO：否。無被取代原文。
+  - 位置與理由（tech-writer 選定，coordinator 與風控可推翻）：風控只指定「在 FL 加一格」，沒有指定編號。選接在 FL-68 (j) 之後，因為 (j) 是現有格中唯一同時涵蓋「待重算」、`pending_json` 與「E 以外的列到期作廢 → §4.2 作廢數 (7) 計入」的測試格，(k) 的前者／後者分組是同一條更正作業路徑的延伸。沒有新開 FL 編號，因為 FL-70 已被 plan 批（`plan_coverage_log`）保留（見上「N-29 待重算」段「本批沒有套用的項目」(1)）。FL-68 的標題括號沒有改動。
+- 編輯註記：T18-1 改過之後，同一點後半句「尾段的報告定義依事先宣告登記（N-22d）；登記之前不得執行重放。」風控清單沒有列入，原文不動。
