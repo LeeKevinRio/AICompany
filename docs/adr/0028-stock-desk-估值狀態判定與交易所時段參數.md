@@ -8,6 +8,7 @@
 - r3 修訂：2026-10-17，依 tech-architect 修訂提案 A-42～A-53（附件 B'-3：觀察交易日集合的輸入來源），含 r3′ 補正（風控 r3 單項確認 R-1～R-3、S-1～S-5）
 - r3″ 更正：2026-10-17，依 tech-architect r3″ 更正 A-87～A-95（r3 套用後的接合、參照與編修；A-87、A-91 為收緊，其餘方向不變）
 - A-96″／A-97′ 修訂：2026-10-17，依 tech-architect ADR-0028 A-96″（D-6 第 13 點、CS-4 補充、CS-26、CS-27、CST-10～CST-12；風控 2026-10-17 A-96′ 單項確認 K-1～K-16）。A-96″ 為不變＋收緊，A-97′ 為收緊。`/api/leverage` 歸類、K-14 (i) 觸發條件、CST-10 結構性質前提，經風控 2026-10-17 A-96″ 回送確認（K-17～K-33）。
+- CS-17 修訂：2026-10-18，依風控 2026-10-18 ADR-0027 C9-7、Q-3 與 CS-17 提案確認第二節第 3 項（`work/reviews/2026-10-18-ADR-0027-C9-7與Q-3及CS-17提案確認-風控.md`）。方向不變，條件是 AST 斷言；被取代的原文逐字保留於修訂紀錄末段。
 - 適用範圍：僅 product/stock-desk。
 - 與既有 ADR 的關係：
   - 不取代任何 ADR。
@@ -350,7 +351,12 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 - **CS-17**（r3′）：`final_after(market, trade_date)` 與 `is_final(market, trade_date, *stamps)` 各只有一個定義，都放在 `session_calendar.py`，引用 VS-1、VS-4。
   - `is_final` 的語意：stamps 至少一個，全部不為 None 而且帶時區，並且 `final_after ≤ min(stamps)`。不符合就回 False。
   - SE-2 呼叫 `is_final(m, d, as_of, fetched_at)`，R3 呼叫 `is_final(m, D, acquired_at, bar_as_of)`。
-  - 其他模組不得出現 `publish_cutoff` 與 `trade_date`、`acquired_at`、`as_of`、`fetched_at` 的行內比較。`final_after(` 只能在 `is_final` 內被呼叫（grep）。
+  - 其他模組不得出現 `publish_cutoff` 與 `trade_date`、`acquired_at`、`as_of`、`fetched_at` 的行內比較。
+  - `final_after(` 只能在 `session_calendar.py` 內被呼叫，恰好兩處：`is_final`，以及 `final_session_evidence`（grep 加 AST）。
+  - `final_session_evidence` 只把 `final_after` 的回傳值原樣放進它回傳的稽核 payload。這個值不得出現在任何比較、布林運算、條件式，或 `min`／`max`／`sorted` 的參數中，也不得傳給 payload 建構以外的任何呼叫（AST 斷言）。payload 中各 run 是否定案，一律在同一函式內呼叫 `is_final` 取得。
+  - `final_session_evidence` 的回傳值只能由 ADR-0027 A-77 第 7 項的 X2 寫入函式讀取，原樣寫入 `set_i_check`，不得作為任何判定的輸入（AST 列舉呼叫點）。X2 寫入函式判定「d ∉ (i)」只能經 `final_sessions()`（也就是 `is_final`），不得拿 `set_i_check.final_after` 比較時戳。
+  - `final_sessions` 與 `session_calendar.py` 內的其他函式，一律經 `is_final` 判定，不得呼叫 `final_after(`。
+  - 增列呼叫位置或放寬上述限制，依 CS-21 通則視為放寬，合併前送風控單項確認。
 - **CS-18**（r3）：`market_trading_days`、`market_has_session` 的 SQL 與 docstring 語意不變（`tests/test_market_calendar_staleness.py` 等既有測試不修改，而且要綠燈）。`session_calendar.py` 不得呼叫 `market_trading_days`（grep）。
 - **CS-19**（r3）：`ObservedSessionCalendar` 的唯一資料來源是 `market_session_evidence`，經 `classify_session_evidence` 分類。`session_calendar.py`、`close_state.py` 和 `app.portfolio.*` 不可達 `app.data.market_panel`（沿用 ADR-0012 T-3 的測試）。`session_calendar.py` 不讀兩張 log 表（grep）。
 - **CS-20**（r3）：`price_bars_cache` 的寫入者只有 `app/data/service.py` 和 `app/demo/seed.py`（AST／grep 列舉 `.put(` 的呼叫點）。新增寫入者要先修訂本 ADR，因為 SE-2 的前提是 `fetched_at` 就是寫入當下的時鐘。
@@ -865,3 +871,10 @@ R0～R6 對 `price_date` 相對於 (P, D) 的位置必須窮舉，由 CST-2 的�
 **A-96″（CST-10～CST-12）**：新增，無被取代原文。
 
 **A-96″（檔頭、待決事項、未查證事項）**：新增，無被取代原文。
+
+---
+
+> CS-17 修訂（2026-10-18）依風控 `work/reviews/2026-10-18-ADR-0027-C9-7與Q-3及CS-17提案確認-風控.md` 第二節第 3 項套用，逐字照寫，取代 CS-17 第 3 子點的末句，前兩子點不變。檔頭狀態維持 proposed。
+
+**CS-17（第 3 子點末句）**
+- 2026-10-18（風控 C9-7 與 Q-3 及 CS-17 提案確認，第二節第 3 項）：方向：不變。新增的呼叫位置只產生稽核值，不參與任何判定，由 AST 斷言保證；任何日子成為定案的條件不變。依 CS-21 通則，本條屬「方向判斷不了即視為放寬」的範圍，所以送風控單項確認（風控 2026-10-18）。被取代的原文「`final_after(` 只能在 `is_final` 內被呼叫（grep）。」逐字保留。
