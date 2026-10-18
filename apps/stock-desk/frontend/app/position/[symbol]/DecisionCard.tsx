@@ -69,8 +69,15 @@ import {
  *       （該三字專屬 held／candidate 且 `quantity_range === null` 的情境）。
  *   V1. `NumberCell` 的 `distance` 為 `undefined`（收盤／股數格，無距離概念）或
  *       `null`（水位缺席）時渲染不可見佔位（`aria-hidden`＋`&nbsp;`），不得印
- *       「—」——頁尾 `KEY_LEVELS_HEADER_DASH_NOTICE` 已把「—」定義為「日線根數
- *       不足」，用在「這格沒有距離」上會誤導。
+ *       "—" -- `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside
+ *       `KeyLevelsPanel` as "this item has no number to show" (causes: too few
+ *       daily bars, holding status undetermined, required inputs unavailable);
+ *       borrowing "—" for "this cell has no distance" would mislead. LM-116 is
+ *       scoped to the panel only ("面板中"): it does NOT explain any "—" on this
+ *       card (a cause sentence for the card is a separate item, tracked as S-1).
+ *       LM-117 (`KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE`) renders only in the
+ *       panel, only for `anchorSource === "holding-unknown"`, and must not be
+ *       moved onto this card without a new single-item risk confirmation.
  *   V2. （已被 V3 取代）四格 `value` 的 `<p>` 曾加 `whitespace-nowrap`。
  *   V3. qa-e2e 2026-10-03 第四輪：「3,168 ~ 5,000 股」這類長股數字串在 375px 使頁面
  *       橫向溢位、1280px 與左鄰數字貼合。移除 `whitespace-nowrap` 改 `break-words`
@@ -132,8 +139,11 @@ function fmt(n: number | null): string {
  * V1（dev-lead 視覺修正）：`distance` 只在停損／停利兩格有意義。`undefined`
  * （收盤／股數格，這兩格根本沒有距離概念）或 `null`（水位本身缺席，如
  * close-unknown／bars 不可用）一律渲染不可見佔位，保留行高，不得印「—」——
- * 頁尾 `KEY_LEVELS_HEADER_DASH_NOTICE` 已把「—」定義為「可用日線根數不足」，
- * 借來表示「這格沒有距離概念」會與該定義衝突、造成誤讀。
+ * `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside `KeyLevelsPanel`
+ * as "this item has no number to show" (causes: too few daily bars, holding
+ * status undetermined, required inputs unavailable). Borrowing "—" for "this
+ * cell has no distance" would clash with that definition and mislead. LM-116 is
+ * scoped to the panel ("面板中") and does not cover this card's "—" (S-1).
  */
 function NumberCell({
   label,

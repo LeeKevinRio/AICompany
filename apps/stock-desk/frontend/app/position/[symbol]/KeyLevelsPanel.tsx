@@ -52,8 +52,28 @@ export const KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE =
 export const KEY_LEVELS_HEADER_UNADJUSTED_NOTICE =
   "以下所有計算皆以未還原權值之原始收盤價進行；跨除權息日之區間、均線與 ATR(14) 可能因此失真。";
 
+/**
+ * LM-116 (risk 7th batch, DN-c with the risk fix): replaces the earlier wording.
+ * Footer item 3 of 「計算依據」, always shown for every `anchorSource`, including
+ * "holding-unknown", and always together with LM-117 when that applies (never
+ * replaced by it). Scope is `KeyLevelsPanel` only: the opening 「面板中」 must not be
+ * cited to explain a 「—」 on the decision card or any other block. The 「—」 is
+ * U+2014 and is pinned by `toBe` in componentWordingScan.test.ts.
+ */
 export const KEY_LEVELS_HEADER_DASH_NOTICE =
-  "面板中以「—」呈現的欄位，代表可用日線根數尚未達最低計算門檻，並非數值為零或計算結果為零。";
+  "面板中以「—」呈現的欄位，並非數值為零或計算結果為零，而是該項目沒有可顯示的數字。原因可能是：可用日線根數未達最低計算門檻、持倉狀態未能確定、計算所需的資料不可用。";
+
+/**
+ * LM-117 (risk 7th batch, HU-a): rendered only when `anchorSource === "holding-unknown"`
+ * (positions query not in success: loading, or failed); never for `cost`,
+ * `close-unknown` or `close-not-held` (for `close-unknown` the holding is already
+ * confirmed, so this sentence would be false). Placed once in the main view right
+ * below the two big numbers, outside `<details>`, at `text-sm` and not visually
+ * weakened. It must not be moved to the decision card or elsewhere without a new
+ * single-item risk confirmation.
+ */
+export const KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE =
+  "持倉狀態未能確定，因此依賴持倉狀態的欄位以「—」呈現，並非數值為零或計算結果為零。";
 
 /* ---------- §2 位階卡 ---------- */
 
@@ -474,6 +494,11 @@ export function KeyLevelsPanel({
           {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
         </div>
       </div>
+
+      {/* LM-117: only while the holding status is undetermined; one instance, main view, not inside <details>. */}
+      {anchorSource === "holding-unknown" && (
+        <p className="mt-3 text-sm text-neutral-300">{KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}</p>
+      )}
 
       <details className="group mt-3">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">

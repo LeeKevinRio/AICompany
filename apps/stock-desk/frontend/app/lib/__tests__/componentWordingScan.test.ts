@@ -62,6 +62,7 @@ import {
   KEY_LEVELS_BASIS_UNADJUSTED_XREF,
   KEY_LEVELS_BASIS_ZONE,
   KEY_LEVELS_HEADER_DASH_NOTICE,
+  KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE,
   KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
   KEY_LEVELS_HEADER_UNADJUSTED_NOTICE,
   KEY_LEVELS_MA60_DEVIATION_LABEL,
@@ -675,6 +676,7 @@ describe("KeyLevelsPanel 定稿字面", () => {
     KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
     KEY_LEVELS_HEADER_UNADJUSTED_NOTICE,
     KEY_LEVELS_HEADER_DASH_NOTICE,
+    KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE,
     KEY_LEVELS_ZONE_LABEL_LOW,
     KEY_LEVELS_ZONE_LABEL_MID,
     KEY_LEVELS_ZONE_LABEL_HIGH,
@@ -749,9 +751,17 @@ describe("KeyLevelsPanel 定稿字面", () => {
     expect(KEY_LEVELS_HEADER_UNADJUSTED_NOTICE).toBe(
       "以下所有計算皆以未還原權值之原始收盤價進行；跨除權息日之區間、均線與 ATR(14) 可能因此失真。",
     );
+    // LM-116 (risk 7th batch, DN-c with the risk fix): replaces the earlier wording; the "—" is U+2014.
     expect(KEY_LEVELS_HEADER_DASH_NOTICE).toBe(
-      "面板中以「—」呈現的欄位，代表可用日線根數尚未達最低計算門檻，並非數值為零或計算結果為零。",
+      "面板中以「—」呈現的欄位，並非數值為零或計算結果為零，而是該項目沒有可顯示的數字。原因可能是：可用日線根數未達最低計算門檻、持倉狀態未能確定、計算所需的資料不可用。",
     );
+    expect(KEY_LEVELS_HEADER_DASH_NOTICE.includes("\u2014")).toBe(true);
+    expect(KEY_LEVELS_HEADER_DASH_NOTICE).not.toContain("代表可用日線根數尚未達最低計算門檻");
+    // LM-117 (risk 7th batch, HU-a): holding-unknown only; render conditions are pinned in keyLevelsHoldingUnknown.test.ts.
+    expect(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE).toBe(
+      "持倉狀態未能確定，因此依賴持倉狀態的欄位以「—」呈現，並非數值為零或計算結果為零。",
+    );
+    expect(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE.includes("\u2014")).toBe(true);
   });
 
   it("基準句逐字比對成稿（{X} 代入）：持有（含成本已取得與成本未取得）共用 LM-16；未持有句不動（留到 B2）", () => {

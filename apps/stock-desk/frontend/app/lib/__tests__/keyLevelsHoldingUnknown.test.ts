@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { resolveKeyLevelsAnchor, type PositionsAnchorInput } from "../keyLevelsAnchor";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import {
+  KEY_LEVELS_HEADER_DASH_NOTICE,
+  KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE,
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE,
   KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE,
@@ -14,6 +18,7 @@ import {
   KEY_LEVELS_TARGET_ROW_FIXED_PCT,
   KeyLevelsPanel,
   buildStopBasisConfirmedNotHeld,
+  buildKeyLevelsFooterItems,
   buildStopBasisHeld,
 } from "../../position/[symbol]/KeyLevelsPanel";
 import { DECISION_CARD_COST_PNL_UNAVAILABLE, buildCostPnlRow } from "../decisionCardWording";
@@ -318,5 +323,95 @@ describe("B0 required 2: DOM order (the 「大字為…」 line before LM-16; LM
     expect(iBasis).toBeGreaterThan(iAtr);
     // Adjacent siblings, nothing between them.
     expect(html).toContain(`<p class="mt-1">${KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE}</p><p class="mt-1">${basis}</p>`);
+  });
+});
+
+/**
+ * LM-117 render conditions (risk 7th batch, HU-a conditions 1-5) and LM-116 placement (conditions 1, 2, 4, 5).
+ * The sentences themselves are pinned verbatim in componentWordingScan.test.ts.
+ */
+describe("LM-117: the holding-unknown dash notice renders exactly once, only for holding-unknown", () => {
+  const count = (html: string, needle: string): number => html.split(needle).length - 1;
+  const CASES: ReadonlyArray<readonly [string, PositionsAnchorInput, number]> = [
+    ["holding-unknown (positions loading or first load failed)", NO_DATA, 1],
+    ["holding-unknown (refetch failed, stale book still lists the holding)", { isSuccess: false, data: book(lot("100")) }, 1],
+    ["holding-unknown (refetch failed, stale book is empty)", { isSuccess: false, data: book() }, 1],
+    ["cost", ok(book(lot("100"))), 0],
+    ["close-unknown (holding confirmed, cost unusable)", ok(book(lot("0"))), 0],
+    ["close-not-held", ok(book()), 0],
+  ];
+  for (const bars of [BARS_ATR, BARS_NO_ATR]) {
+    for (const [label, positions, expected] of CASES) {
+      it(`${label}, ${bars.length} bars: LM-117 appears ${expected} time(s)`, () => {
+        const html = panelOf(bars, positions);
+        expect(count(html, KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE)).toBe(expected);
+        // Fragment guard: no part of the sentence leaks into the other anchor sources.
+        expect(count(html, "持倉狀態未能確定，因此")).toBe(expected);
+      });
+    }
+  }
+
+  it("anchor sources map as expected (guards the CASES table)", () => {
+    expect(resolveKeyLevelsAnchor(ok(book(lot("100"))), "2330", "TW").anchorSource).toBe("cost");
+    expect(resolveKeyLevelsAnchor(ok(book(lot("0"))), "2330", "TW").anchorSource).toBe("close-unknown");
+    expect(resolveKeyLevelsAnchor(ok(book()), "2330", "TW").anchorSource).toBe("close-not-held");
+    expect(resolveKeyLevelsAnchor(NO_DATA, "2330", "TW").anchorSource).toBe("holding-unknown");
+  });
+
+  it("placement: directly below the two big numbers' grid, main view, before <details>, text-sm and not dimmed below the label colour", () => {
+    const html = panelOf(BARS_ATR, NO_DATA);
+    const notice = `<p class="mt-3 text-sm text-neutral-300">${KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}</p>`;
+    expect(count(html, notice)).toBe(1);
+    // The grid closes right before the notice and <details> follows right after it.
+    expect(html).toContain(`</div></div>${notice}<details`);
+    const iNotice = html.indexOf(notice);
+    const iDetails = html.indexOf("<details");
+    expect(iNotice).toBeGreaterThan(-1);
+    expect(iNotice).toBeLessThan(iDetails);
+    // Nothing inside <details> carries it.
+    expect(html.slice(iDetails)).not.toContain(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE);
+    // Both big numbers stay "—" and come BEFORE the notice (the notice does not push them out of the first screen order).
+    const BIG_DASH = '<p class="mt-1 font-mono text-xl font-bold text-neutral-100">—</p>';
+    expect(html.lastIndexOf(BIG_DASH)).toBeLessThan(iNotice);
+    // Not smaller than the panel labels (text-sm) and not text-xs.
+    expect(notice).toContain("text-sm");
+    expect(notice).not.toContain("text-xs");
+  });
+
+  it("LM-116 stays in the footer for every anchor source (it is never replaced by LM-117) and is not rendered inside the panel", () => {
+    const footer = buildKeyLevelsFooterItems(BARS_ATR);
+    expect(footer.filter((item) => item === KEY_LEVELS_HEADER_DASH_NOTICE)).toHaveLength(1);
+    // The footer builder takes bars only, so its output cannot depend on the anchor source.
+    expect(footer).not.toContain(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE);
+    for (const [, positions] of CASES) {
+      const html = panelOf(BARS_ATR, positions);
+      expect(html).not.toContain(KEY_LEVELS_HEADER_DASH_NOTICE);
+      // The superseded wording never appears next to the new one.
+      expect(html).not.toContain("代表可用日線根數尚未達最低計算門檻");
+    }
+    expect(footer.join("\n")).not.toContain("代表可用日線根數尚未達最低計算門檻");
+  });
+
+  it("scope: the decision card renders neither LM-116 nor LM-117, and its source never references LM-117 in JSX", () => {
+    const response = makeResponse();
+    for (const [, positions] of CASES) {
+      const anchor = resolveKeyLevelsAnchor(positions, "2330", "TW");
+      const html = renderToStaticMarkup(
+        createElement(DecisionCardBody, {
+          response,
+          bars: BARS_ATR,
+          anchorSource: anchor.anchorSource,
+          avgCost: anchor.avgCost,
+        }),
+      );
+      expect(html).not.toContain(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE);
+      expect(html).not.toContain(KEY_LEVELS_HEADER_DASH_NOTICE);
+    }
+    const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+    expect(read("../../position/[symbol]/DecisionCard.tsx")).not.toContain("{KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}");
+    // The panel references the constant in exactly one JSX expression, guarded by the holding-unknown condition.
+    const panel = read("../../position/[symbol]/KeyLevelsPanel.tsx");
+    expect(count(panel, "{KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}")).toBe(1);
+    expect(panel).toContain('{anchorSource === "holding-unknown" && (\n        <p className="mt-3 text-sm text-neutral-300">{KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}</p>');
   });
 });
