@@ -15,6 +15,10 @@ the provider, a malformed URL -- is logged and reported as ``failed``: an alert
 that could not be delivered must never take down the tick that produced it, and
 must never be silently swallowed either. The event itself is already persisted
 before this module is called, so the record survives any delivery outcome.
+
+A failure is described by :func:`app.logging_setup.describe_failure` only
+(channel, exception class, HTTP status): the URLs here are secrets, so no log
+line or ``detail`` may carry an exception's message text or a request URL.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.alerts.models import AlertEvent
+from app.logging_setup import describe_failure
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +79,12 @@ def _deliver(
         _post(client, url, payload)
     except Exception as exc:
         # Any delivery problem is contained here; the event is already stored.
-        logger.warning("alert webhook delivery failed on %s: %s", channel, exc)
-        return DeliveryResult(channel=channel, status="failed", detail=str(exc))
+        # Only the class name and HTTP status leave this block: the exception's
+        # own text embeds the request URL (the Telegram token, the Discord
+        # webhook secret) for HTTPStatusError, and may for anything else.
+        detail = describe_failure(exc)
+        logger.warning("alert webhook delivery failed: channel=%s %s", channel, detail)
+        return DeliveryResult(channel=channel, status="failed", detail=detail)
     return DeliveryResult(channel=channel, status="sent")
 
 
