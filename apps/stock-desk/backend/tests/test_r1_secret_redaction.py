@@ -11,6 +11,7 @@ import ast
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -125,6 +126,13 @@ def _capture_raw_records(root: logging.Logger, caplog: pytest.LogCaptureFixture)
 
     root=INFO is the worst case the security grid asks for (the old scheduler
     ``basicConfig(level=INFO)``): any library logger left at NOTSET would leak.
+
+    Despite the name, caplog does not see the records as their emitter made
+    them. The redacting handler sits on root first, and its filter rewrites the
+    shared LogRecord in place, so caplog.handler (added after it) receives the
+    already-redacted record. Tests built on this helper therefore prove the
+    end-to-end output is clean, not that the emitting code never puts a secret
+    into a record.
     """
     root.setLevel(logging.INFO)
     root.addHandler(caplog.handler)
@@ -140,11 +148,16 @@ def _configure_both_channels(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(TELEGRAM_CHAT_ID_ENV, "42")
 
 
+#: A Discord webhook path whose token segment is anything but the redaction mark.
+_UNREDACTED_WEBHOOK = re.compile(r"/api/webhooks/[^/\s]+/(?!\*\*\*)")
+
+
 def _assert_no_secret(text: str) -> None:
     for secret in ALL_SECRETS:
         assert secret not in text
-    assert "api.telegram.org/bot1" not in text
-    assert "/api/webhooks/111122223333444455/FAKE" not in text
+    # D-1: no Telegram bot path at all, not even a redacted one.
+    assert "api.telegram.org/bot" not in text
+    assert _UNREDACTED_WEBHOOK.search(text) is None
     assert "token=FAKE" not in text
     assert "apikey=FAKE" not in text
 
@@ -417,6 +430,11 @@ def _transport_failure(hostile: bool) -> Handler:
     return handler
 
 
+# "hostile_transport" raises an exception whose text embeds the full request
+# URL, credential included. The providers still log that text verbatim (they
+# are outside R-1's scope), so the D-6 tests below pass because the root
+# handler's SecretRedactionFilter masks it: they verify the end-to-end log
+# output, not that the provider itself avoids leaking.
 DATA_SOURCE_CASES = {
     "success": None,
     "http_500": _respond(500),
