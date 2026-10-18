@@ -1,6 +1,6 @@
 # 任務單 O-1：API 行程 logging 設定（等級與時間前綴；httpx 保持 WARNING）
 
-- 日期：2026-10-07　狀態：**draft**（devops-sre 診斷已落檔，見下；待 CEO 排序）　等級：**medium**（可觀測性，不影響資料正確性；但是 F-1b 升級觸發 1 的前提）
+- 日期：2026-10-07　狀態：**已隨 R-1 落地（分支 `fix/stock-desk-r1-secret-redaction`／686c3bb，qa-reviewer PASS；待 CEO #23 合併）**〔2026-10-18 coordinator 更新；原狀態 draft；方案 A 照做，scheduler 一併改用 `configure_logging()`〕（devops-sre 診斷已落檔，見下；待 CEO 排序）　等級：**medium**（可觀測性，不影響資料正確性；但是 F-1b 升級觸發 1 的前提）
 - 來源：qa-e2e 第二十四輪觀察「後端 log 行無 level 前綴」；devops-sre 唯讀診斷（HEAD 470f079）。
 - 負責：dev-lead（動 `apps/stock-desk/backend/app/main.py`／新增 `app/logging_setup.py`）；qa-reviewer 審查（**審查項：httpx／httpcore 不得被調到 INFO**，並要求測試 `logging.getLogger("httpx").getEffectiveLevel() >= WARNING`）；devops-sre 驗證實際輸出格式與祕密不入 log；security-engineer 知會（順手關掉 2026-10-06「Telegram token 進 log 未重新確認」）。
 - 時序：排在 F-1b 之前或同一 release；**不得擋 F-1 部署**（方案 C 先頂著：發版檢查表 grep 訊息本文，不 grep `WARNING`）。不需 ADR。
