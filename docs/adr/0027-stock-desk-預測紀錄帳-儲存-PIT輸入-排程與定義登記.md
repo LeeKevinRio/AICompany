@@ -16,7 +16,8 @@
   5. RC‴：`2026-10-17-ADR-0027-RC雙撇增補回送項確認-風控.md` 第二節 RC‴-1～RC‴-4。
   - 不套用：`2026-10-17-ADR-0027修訂提案r3-A54至A79-tech-architect.md`（舊版）、`2026-10-17-ADR-0027-r3雙撇增補RC-tech-architect.md`（舊增補，origin 名稱錯誤）。
   - 沒有新增 A-87 以後的條號；方向統計見「修訂紀錄」。
-- 第九、十批衍生待決項套用（2026-10-18，與事先宣告 v0.12 同批）：來源 S1～S9（tech-architect 整合清單，`work/reviews/2026-10-18-ADR-0027-下一批整合與C9-7及Q-3提案-tech-architect.md` 6-1，commit f294cc9），加上風控 2026-10-18 兩份確認（C9-7、Q-3、CS-17 提案確認：commit b55e41f；事先宣告 v0.12 草稿審查：commit 97fbe50）。任何一份都不得單獨 commit；優先序與逐項改動見「修訂紀錄」最後一段。狀態維持 proposed。
+- 第九、十批衍生待決項套用（2026-10-18，與事先宣告 v0.12 同批）：來源 S1～S9（tech-architect 整合清單，`work/reviews/2026-10-18-ADR-0027-下一批整合與C9-7及Q-3提案-tech-architect.md` 6-1，commit f294cc9），加上風控 2026-10-18 兩份確認（C9-7、Q-3、CS-17 提案確認：commit b55e41f；事先宣告 v0.12 草稿審查：commit 97fbe50）。任何一份都不得單獨 commit；優先序與逐項改動見「修訂紀錄」第九、十批段。狀態維持 proposed。
+- A-96″ 增補：2026-10-17，依 ADR-0028 A-96″（FL-25 fixture；A-75 (iv) 官方休市日表的單一定義）。
 - 適用範圍：僅 product/stock-desk 產品線。
 - 前提：純自用（ADR-0025 F-1）；單機、單一使用者（ADR-0026 F-1）。
 - 與既有 ADR 的關係：
@@ -393,6 +394,12 @@
      - 記 WARNING，寫入 `session_calendar_conflict`（`origin = candidate_t`）；
      - 一併計入 A-77 第 5 項的揭露與根因查證。
    - (iv) 的「週末」部分受 A-77 第 9 項（F-8）約束：查證若發現週末交易日，(iv) 與 A-77 第 2 項的週末部分同一批修訂，並送風控。
+   - （A-96″，K-10，補定義（收緊））**官方休市日表的單一定義**：
+     - A-75 (iv) 與 A-77 第 2、4 項所稱的「已接入官方休市日表」，和 ADR-0028 `OfficialSessionCalendar`（T1-13）使用同一份來源、同一個函式定義，涵蓋年度也相同（ADR-0028 VS-5）。超出涵蓋年度時，兩邊同樣視為沒有官方休市日。
+     - 這個函式只定義一次，暫定為 `official_holidays(market, year) -> frozenset[date] | None`。None 表示該年不在涵蓋範圍內，或尚未接入。名稱與所在模組由 T1-13 決定，但要遵守 ADR-0028 CS-1、CS-19、CS-25 的 import 限制。
+     - A-75 (iv)、A-77、`OfficialSessionCalendar` 都只呼叫它；休市日清單不得出現第二份（grep／AST，比照 ADR-0028 CS-21、CS-25）。
+   - （K-11）本句只統一休市日清單。A-75 (iv) 的週末部分不受官方日曆影響，仍依 A-77 第 9 項（F-8）處理；不得讀成官方日曆認定的週六補行交易日可以成為候選 T。
+   - （K-12）休市日表的內容或涵蓋年度有任何改動，依 ADR-0028 CS-21 通則判斷方向，判斷不了的一律視為放寬。移除休市日或縮小涵蓋年度，必須送風控。
    - `app.services.index` 新增逐列回傳 `as_of`、`fetched_at`、`source` 的方法〔事實：`cache.py:109` 現行只帶最舊的 `fetched_at`〕。FL-5 不變。
    - `forecast_input_series.bars_json` 每一列都帶這三欄，並納入雜湊。
    - 驗證見 FL-61、FL-19 (e)。
@@ -1514,6 +1521,16 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 
 **銜接**
 - **FL-25**：plan 組合價位與估值時，市場 DB 的原始收盤[T] 必須等於估值所用的價格與日期；不一致時，價位缺席，附 `MissingItem(code="E-PRICE-UNUSABLE", source_status="failed_check")`。
+  - （A-96″；依 ADR-0028 A-96′／A-96″，風控 2026-10-17 A-96 CS-26 第 4 點、A-96′ 單項確認 K-13）**fixture**：
+    - **(a)～(e) 五格**：構造 `build_summary` 的輸入，讓 `date_anomaly` 的五個 `sub_reason`（`future_date`、`before_open`、`official_conflict`、`not_a_session`、`unconfirmed_session`）各出現一次。plan 組合價位時，五格都期望價位缺席，並附 `MissingItem(code="E-PRICE-UNUSABLE", source_status="failed_check")`。
+    - plan 端不得讀 `valuation_state`（ADR-0028 CS-4）。fixture 只構造輸入，只斷言 plan 的輸出。
+    - **(f)(g) 週末對抗格**：(f) `not_a_session`（D 是週末，`price_date == D`）；(g) `unconfirmed_session`（`P < price_date < D`，該日是週末）。
+      - 兩格都構造「市場 DB 在該日有定案後的 ok run（`recorded_at ≥ final_after(TW, 該日)`），而且收盤相同」。
+      - 期望：依 A-75 (iv)，該日不成為候選 T；記 `inputs_not_ready`；寫入 `session_calendar_conflict`（`evidence = weekend`、`origin = candidate_t`）；plan 的輸出中沒有任何價位取自該日。
+    - **(h)(i) 官方休市日對抗格（K-13）**：(h) `official_conflict`（D 是官方休市的平日，`price_date == D`）；(i) `unconfirmed_session`（`P < price_date < D`，該日是官方休市的平日）。
+      - 構造方式同 (f)(g)。
+      - 期望同上，但 `evidence = official_holiday`。
+      - 官方休市日一律取自 A-75 (iv) 的單一定義函式。官方表接入之前（T1-13 前），用注入該函式的測試替身構造，不得在測試內另寫一份休市日清單。
 
 **定義與 claim**
 - **FL-26**：loader 遇到 `rules_sha256` 不在 `PUBLISHED_RULESETS` 就拒絕載入。
@@ -2743,3 +2760,19 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 
   J-1：計數單位句的逗號改成冒號（與 v0.12 §4.2 的 E3-1 句逐字一致）；A-77 第 8 項另一處同類句本來就是冒號。J-3：風控 C7-2 照寫文逐字為「FL (a) 的「沒有 snapshot」格另外斷言」，已改回。
 - 說明：乙類各行為第一輪套用版被取代的整句或整行原文（部分行只引被改的那一句）。第二輪新增的 E8-1、E8-2、E8-3、`registered_unobserved_weekday`、第 12 項新句、第 14 項、第 16 項、附帶 A～D，沒有被取代的原文。
+
+---
+
+**A-96″（FL-25 等，另開 commit）**
+
+> A-96″ 增補（2026-10-17）依 ADR-0028 A-96′／A-96″；風控 2026-10-17 A-96′ 單項確認（K-10～K-13；`work/reviews/2026-10-17-ADR-0028-A96A97單項確認-風控.md`）。本 commit 和 r3″ 分開。
+
+**FL-25**：本文不變；新增 fixture (a)～(i)，無被取代原文；見 §對實作的約束 FL-25。方向：收緊。
+**A-75 (iv)**：新增 K-10～K-12 三句，無被取代原文；A-75、A-77 已定案的文字不改。方向：補定義（收緊）。這三句掛在既有的 A-75 底下，ADR-0027 的方向統計（33 條，19／2／9／1／2）不變。〔第九、十批更新：現行累計為 18／2／9／1／3（見上「第九、十批」段的累計方向統計），本段不新增 A 號，也不使任何一條換類別，統計不變。〕
+
+- 套用說明（2026-10-18，tech-writer；B 類轉錄）：
+  - 條文來源：tech-architect `work/reviews/2026-10-17-ADR-0028-A96雙撇-tech-architect.md` 第三節（以引用區塊內的條文為準，逐字套用；引用區塊之外的補註不寫入本 ADR）。
+  - 風控確認：`work/reviews/2026-10-17-ADR-0028-A96雙撇回送項確認-風控.md` 第一節末段（該節內容與 K-10～K-13 一致，沒有意見，可照 TA 原文套用）。
+  - ADR-0028 A-96″ 已於 commit c881380 落地；本 commit 的基準是 commit 871e602 的 ADR-0027。
+  - 狀態維持 proposed；沒有新增 A 號。
+- coordinator 補登（2026-10-18）：A-96″ 小段落地後，檔頭第九、十批那一行的「見『修訂紀錄』最後一段」會指錯，改為「見『修訂紀錄』第九、十批段」；方向不變。原句逐字：「第九、十批衍生待決項套用（2026-10-18，與事先宣告 v0.12 同批）：來源 S1～S9（tech-architect 整合清單，`work/reviews/2026-10-18-ADR-0027-下一批整合與C9-7及Q-3提案-tech-architect.md` 6-1，commit f294cc9），加上風控 2026-10-18 兩份確認（C9-7、Q-3、CS-17 提案確認：commit b55e41f；事先宣告 v0.12 草稿審查：commit 97fbe50）。任何一份都不得單獨 commit；優先序與逐項改動見「修訂紀錄」最後一段。狀態維持 proposed。」
