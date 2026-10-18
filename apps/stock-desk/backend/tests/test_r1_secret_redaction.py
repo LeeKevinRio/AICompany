@@ -10,6 +10,9 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -308,6 +311,68 @@ def test_an_already_configured_root_only_gets_the_httpx_floor() -> None:
     assert root.handlers == before
     assert logging.getLogger("httpx").level == logging.WARNING
     assert logging.getLogger("httpcore").level == logging.WARNING
+
+
+# ------------------------------- import-time guard: nobody pre-empts our handler
+
+# configure_logging() steps aside whenever root already has a handler, which
+# would silently drop the redaction filter. In a real process nothing may add a
+# root handler before the entry point calls it, so importing both entry modules
+# in a fresh interpreter must leave root bare. Run in a subprocess because the
+# pytest process itself always has capture handlers on root.
+_IMPORT_PROBE = """
+import json, logging, sys
+sys.path.insert(0, sys.argv[1])
+import app.main
+import app.scheduler
+from app.logging_setup import SecretRedactionFilter, configure_logging
+
+def describe():
+    return [
+        {
+            "type": type(handler).__name__,
+            "redacting": any(isinstance(f, SecretRedactionFilter) for f in handler.filters),
+        }
+        for handler in logging.getLogger().handlers
+    ]
+
+before = describe()
+configure_logging()
+print(json.dumps({"before": before, "after": describe()}))
+"""
+
+
+def _probe_root_handlers(tmp_path: Path) -> dict[str, list[dict[str, object]]]:
+    backend = Path(__file__).resolve().parents[1]
+    # A minimal environment: no inherited secrets, every database in tmp_path.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "STOCK_DESK_DB_PATH": str(tmp_path / "stock_desk.db"),
+        "STOCK_DESK_MARKET_DB_PATH": str(tmp_path / "market.db"),
+        "STOCK_DESK_RESEARCH_DB_PATH": str(tmp_path / "research.db"),
+    }
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", _IMPORT_PROBE, str(backend)],
+        cwd=backend,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result: dict[str, list[dict[str, object]]] = json.loads(completed.stdout.splitlines()[-1])
+    return result
+
+
+def test_importing_the_entry_modules_leaves_root_without_handlers(tmp_path: Path) -> None:
+    assert _probe_root_handlers(tmp_path)["before"] == []
+
+
+def test_configure_logging_in_a_fresh_process_installs_one_redacting_handler(
+    tmp_path: Path,
+) -> None:
+    assert _probe_root_handlers(tmp_path)["after"] == [{"type": "StreamHandler", "redacting": True}]
 
 
 # --------------------------------------------- D-6: FinMind and Alpha Vantage

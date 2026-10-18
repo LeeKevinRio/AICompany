@@ -106,6 +106,11 @@ def configure_logging() -> None:
 
     root = logging.getLogger()
     if root.handlers:
+        # Someone else owns logging; their handlers are deliberately left
+        # unfiltered (the filter rewrites msg/args in place, which would change
+        # what pytest's caplog sees). In production root must be bare here:
+        # tests/test_r1_secret_redaction.py guards that importing app.main and
+        # app.scheduler adds no root handler.
         return
 
     handler = logging.StreamHandler(sys.stderr)
