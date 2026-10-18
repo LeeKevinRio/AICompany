@@ -116,6 +116,7 @@ from app.data.providers.twse_snapshot import TwseSnapshotAdapter
 from app.dividends.providers import TWSE_OPENAPI_BASE_URL, DividendFetchResult, TwseDividendAdapter
 from app.dividends.store import DividendEventStore, SyncTrigger
 from app.dividends.sync import DividendFetcher, sync_dividends
+from app.logging_setup import configure_logging
 from app.positions.models import Market
 from app.services.index import load_market_benchmark
 from app.services.market import load_bars
@@ -778,8 +779,10 @@ def run(scheduler: BlockingScheduler | None = None) -> None:
     logger.info("scheduler stopped")
 
 
-def main() -> None:  # pragma: no cover - process entry point
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+def main() -> None:
+    # Shared with the API: keeps httpx/httpcore at WARNING (they log full,
+    # secret-bearing request URLs at INFO) and redacts what still gets through.
+    configure_logging()
     run()
 
 
