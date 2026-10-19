@@ -201,7 +201,7 @@
 | 事件 | 歸屬 | 觸發 | payload 欄位 |
 |---|---|---|---|
 | E-1 `forecast.unregistered_unobserved_weekday` | 必做 | 結算評估或更正作業拋出 `UnregisteredUnobservedWeekdayError`（ADR-0027 D-9.3「型別與欄位」） | `unregistered_session_dates`（升冪、不重複、非空）、`unregistered_count`、`affected_forecast_count`、`d_reg`（None 時寫 `none`）；`source = settlement`：`snapshot_from`、`snapshot_to`；`source = correction`：`recheck_from`、`recheck_to`、`market_scan_to`。不適用的欄位不出現 |
-| E-2 `forecast.market_run_regressed` | 必做；`source` 為 `settlement`／`audit`／`correction`；**吸收原 E-3a**（晚到掃描的 W 大於市場 DB `MAX(run_id)`，ADR-0027 D-3「晚到資料的觸發」第 8 點） | `MarketRunRegressedError`（結算，D-9.2 ①′），或共同守衛 `market_run_regression` 成立（缺日稽核、更正作業；ADR-0027 D-7 第 2 點 Q7） | `market_run_current`（R）、`reference_kind ∈ {settle_eval, correction_job}`、`reference_value`、`reference_id`（`settle_eval_id` 或 `correction_job_id`）、`reference_started_at`（UTC ISO8601）。`write_outcome`：結算 `not_written`、缺日稽核 `written_without_registration`、更正作業 `deferred` |
+| E-2 `forecast.market_run_regressed` | 必做；`source` 為 `settlement`／`audit`／`correction`；**吸收原 E-3a**（晚到掃描的 W 大於市場 DB `MAX(run_id)`，ADR-0027 D-3「晚到資料的觸發」第 8 點） | `MarketRunRegressedError`（結算，D-9.2 ①′），或共同守衛 `market_run_regression` 成立（缺日稽核、更正作業；ADR-0027 D-7 第 2 點 Q7） | `market_run_current`（R）、`regression_kind ∈ {run_regressed, reference_identity_mismatch}`、`reference_kind ∈ {settle_eval, correction_job, gap_audit}`、`reference_value`、`reference_id`（`settle_eval_id`、`correction_job_id` 或 `audit_id`）、`reference_started_at`（UTC ISO8601；`reference_kind = gap_audit` 時為 `audit_now`）、`reference_recorded_at`（參考 run 存下的 `recorded_at`）、`current_recorded_at`（市場 DB 中 `run_id = reference_value` 那一列的 `recorded_at`，不存在時為 None）。`write_outcome`：結算 `not_written`、缺日稽核 `written_without_registration`、更正作業 `deferred` |
 | E-3b `forecast.job.skipped` | 必做（屬 N-23 (1)；ADR-0027 D-7.1 已要求 listener） | D-6 的 listener；只對 `forecast_record` 推播 | `job_id`、`reason ∈ {max_instances, missed}`、`skipped_run_times`。`write_outcome = not_started` |
 | E-3c `forecast.settle.deadline_not_started` | 建議納入（ADR-0027 D-7.2 視同結算失敗） | D-7.7 期限已到，結算評估沒有啟動 | `deadline_at`。`write_outcome = not_started` |
 | E-3d `forecast.step.failed` | 建議納入；擴為「任一步失敗」，含 `step = orchestrator`（ADR-0027 D-7 第 2 點 Q8） | 任一步拋出 E-1／E-2 以外的 `Exception`，或該步回傳的型別化步驟結果（ADR-0027 D-7 第 2 點 Q8）標為失敗（這時 `exception_class` 為 None；前置條件不成立而略過、沒有觸發而不啟動、`inputs_not_ready`、E-2 守衛成立，都不屬於失敗）；或例外逃出編排函式本身（由 `scheduler.py` 的 job 包裝經同一個送出器發出，之後 `_guarded` 照舊記 ERROR） | `exception_class`（`type(exc).__name__`，不帶例外字串；失敗結果時為 None）。`step` 為共同欄位 |
@@ -211,13 +211,19 @@
 
 - **每一步失敗只發一則，取最具體的事件**：E-1、E-2 優先於 E-3c、E-3d。
 - 前置條件不成立而略過的步驟（例如結算失敗之後的驗證快照）不另發告警（ADR-0027 D-7.2 字面二）。
-- E-2 的 `reference_*` 讓操作者對照 ADR-0026 D-9 第 2 點（備份組）manifest 中的最新市場 DB `run_id`。
+- E-2 的 `reference_*` 讓操作者對照 ADR-0026 D-9 第 2-1 點（備份順序與 manifest 檢查）manifest 中的最新市場 DB `run_id`。
 - 推播量的調整只能是「同一次執行內的去重」。
 - **E-2 `source = correction` 的落檔前提**：本列（`write_outcome = deferred`）依附 ADR-0027 D-7 第 2 點 Q7 的「更正作業」子點，以及 D-3「晚到資料的觸發」第 8 點的改字，兩者都屬 ADR-0027 第二批，要等 CEO #42 明示同意後才落檔。第二批落檔之前，ADR-0027 現行字面是「其餘觸發照常」，更正作業照常啟動，不符 `deferred`，所以本列與 OA-10 的 `correction` 格在第二批落檔前不得實作（correction.py 本來就擋 D-9）。CEO 不同意時，本列與 OA-10 依 ADR-0027 屆時的字面修訂：本 ADR 仍為 proposed 時原地修訂，已 accepted 時開新 ADR；並送風控重審（同下一點）。
 - E-2 的 `source = correction`（`write_outcome = deferred`）以 ADR-0027 N-23 第二批（Q7 更正作業一面，待 CEO #42 明示同意）為前提。第二批落檔之前，ADR-0027 D-3「晚到資料的觸發」第 8 點照現行字面（其餘觸發照常），本列不得實作，推播不得以 `deferred` 陳述實際已啟動的更正作業；CEO 不同意時，本列與其 `write_outcome` 送風控重審。
 - 上兩點對「CEO 不同意時」的處理一致為送風控重審；「送風控知悉」等較寬讀法不適用（修訂紀錄「合併規則」）。
-- E-2 `source = audit`／`correction` 的欄位，取自 `market_run_regression()` 回傳的 `MarketRunRegression`，屬性 `market_run_current`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`，與 `MarketRunRegressedError` 的同名屬性逐字一致；`source` 由呼叫端決定。
-- 後續追蹤清單 N-20 若在 ADR-0027 增列 E-2 的屬性（tech-architect 2026-10-18 補充項回覆第 3 項：`regression_kind`、`reference_recorded_at`、`current_recorded_at`），屬於失效條件 5，與 N-20 同批送風控。
+- E-2 `source = audit`／`correction` 的欄位，取自 `market_run_regression()` 回傳的 `MarketRunRegression`，屬性 `market_run_current`、`regression_kind`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`、`reference_recorded_at`、`current_recorded_at`，與 `MarketRunRegressedError` 的同名屬性逐字一致；`source` 由呼叫端決定。
+- 後續追蹤清單 N-20 已在 ADR-0027 增列 E-2 的屬性 `regression_kind`、`reference_recorded_at`、`current_recorded_at`（tech-architect 2026-10-18 補充項回覆第 3 項；ADR-0027 N20-1、N20-2 的例外屬性，與本點同批落檔），本 ADR 已同步（見修訂紀錄「風控 2026-10-19 N-20 批裁定後修訂」）。依失效條件 5 已與 N-20 同批送風控，風控 2026-10-19 N-20 批已知悉確認（`work/reviews/2026-10-19-N20批裁定-風控.md`）。
+- **render 的三個新標籤：草稿，待風控逐字確認（R-12）；不是定稿，確認之前 render 不得實作這三個標籤**（失效條件 5；風控 R-12 要求逐字送審）。方向（風控 R-12）：`reference_identity_mismatch` 只陳述事實，不得寫成「已確認被還原」；`current_recorded_at` 的標籤要寫清楚是「市場 DB 中同號 run 的 recorded_at」，不是目前最大 run 的，None 時顯示「不存在」、不得省略該行；不得出現禁用詞清單 B 類的急迫用字。草稿如下：
+  - `regression_kind`：標籤「判定種類」；欄位值為列舉成員原樣（`run_regressed`、`reference_identity_mismatch`），符合 D-4 正面白名單第 4 項。備選：值改為固定常數「最新 run 編號小於參考 run」「參考 run 身分不符」，這要把這兩句也登記為固定標籤常數（D-4 第 3 項）。甲、乙擇一，請風控裁定。
+  - `reference_recorded_at`：標籤「參考 run 的 recorded_at」；值為存下的原字串。
+  - `current_recorded_at`：標籤「市場 DB 中同號 run 的 recorded_at」；值為原字串，None 時顯示固定常數「不存在」。
+  - 這三組標籤與「不存在」尚未跑 D-4 的禁用詞掃描（類別 A～D），也未經 tech-architect 對照 ADR-0027 FL-71 (f) 清單；以上都不是定稿。
+- **render 在「兩個 recorded_at 相等、但 kind 或 session_date 不同」時的處理（風控 suggested，待辦）**：E-2 目前只帶 `recorded_at`，這種情形下操作者會看到「值相同卻說不符」。處理方式二擇一，待 tech-architect 與風控決定：加一句固定常數說明差異在 kind 或 session_date，或 E-2 改帶完整身分（ADR-0027 N20-5 的 `reference_identity`、`current_identity`）。決定前不得實作 render 的這一格；新增的固定句比照 R-12 逐字送風控。
 
 ### D-8：不做「已恢復」通知，不存跨執行狀態
 
@@ -259,7 +265,7 @@ dead-man's switch（R-4）**不是**本閘門的項目，另案由 CEO 決定。
 **壞處與代價（誠實揭露）**
 
 - **沒有收到推播，不代表排程正常**：scheduler 停止、容器停止或 job 沒有註冊時，不會有任何事件（devops-sre R-4；外部監控另由 CEO 決定）。部署手冊 §5 也要寫同一句。本 ADR 沒有 dead-man's switch。
-- **E-2 停止出現，不代表已處理**：共同守衛不存跨執行狀態。市場 DB 被還原後，新寫入的 run 使 R 再度不小於參考值時，判定就不再成立，結算評估恢復執行；遺失的 run 不會回來，還原後的 `run_id` 也可能與遺失的時間線重號〔推論：還原後 `run_id` 由還原檔的序號接續，ADR-0027 D-3 標為推論〕。所以「直到處理」靠 E-2 推播與 ADR-0026 D-9.4 的操作程序維持，不是程式保證（後續追蹤清單 N-20）。這是 E-2 推播與部署手冊「立即停 scheduler」兩者缺一不可的原因。
+- **E-2 停止出現，不代表已處理**：共同守衛不存跨執行狀態。市場 DB 被還原後，新寫入的 run 不會使判定解除；只有參考 run 的身分相符（例如依 ADR-0026 D-9 第 4 點整組還原）時才解除（ADR-0027 N-20）；遺失的 run 不會回來，還原後的 `run_id` 也可能與遺失的時間線重號〔推論：還原後 `run_id` 由還原檔的序號接續，ADR-0027 D-3 標為推論〕。所以「直到處理」靠 E-2 推播與 ADR-0026 D-9.4 的操作程序維持，不是程式保證（後續追蹤清單 N-20）。這是 E-2 推播與部署手冊「立即停 scheduler」兩者缺一不可的原因。還原點不早於任何參考 run 時，守衛偵測不到，E-2 不會出現（ADR-0027 D-7 第 2 點殘餘）。
 - 持續失敗時每次執行每步至多一則。ADR-0027 D-7 第 2 點有六步加 `orchestrator`；每日兩次例行執行（22:10、23:10）加可能的一次啟動補跑。以 E-2 為例，三個 source 同時成立時每次執行 3 則、每日 6 則；最壞情形（每步各一則）每次執行不超過 7 則；E-3b 另計，每個被略過的觸發事件一則。若 CEO 認為太吵，唯一允許的調整是「同一次執行內的去重」，不得改成跨執行靜默。
 - 推播不帶「首次發生時間」或「第幾次」；操作者以 log 的 `execution_started_at` 與 `last_settle_eval_at` 判讀持續天數。
 - **同步送出的阻塞**：每次 `emit` 最壞 2 個通道 × 逾時（現為 5 秒）。在編排函式內，這會延後下一步；在 listener 內，會延後 scheduler 派送執行緒（其他 job 的觸發）。以 `forecast_record` 的 `misfire_grace_time=1800` 與其他 job 的間隔相比，我判斷可接受〔推論，未實測〕；若實測不可接受再另提（例如有界佇列），那會新增狀態，須重審本 ADR。
@@ -291,7 +297,7 @@ dead-man's switch（R-4）**不是**本閘門的項目，另案由 CEO 決定。
 | OA-7 | 禁止：跨執行去重或冷卻；「已恢復」通知；新增狀態表或狀態檔；以時鐘推算觸發點類別；告警送出失敗時中止後續步驟 | `app/ops_alert/**` 無 `sqlite3`、`open(`、`pathlib` 寫入、`datetime.now`（AST）；`cron_2210`、`retry_2310` 全 repo 0 筆（grep）；送出失敗時缺日稽核照常寫入 | TA-7；格 5、6、12、20 |
 | OA-8 | ADR-0027 FL-71 全部格通過；本表全部通過 | qa-reviewer 逐條 | TA-8 |
 | OA-9 | E-1：第一次發生就恰好 1 則推播加 1 行 `ops alert:` WARNING；欄位逐一斷言（含 `execution_started_at`、`step`、`d_reg = None` 的格）；`source = correction` 的格帶 `recheck_*`、`market_scan_to`，不帶 `snapshot_*` | 單元測試，fixture 的第一次執行即觸發 | 格 1、2、4 |
-| OA-10 | E-2：`settlement`、`audit`、`correction` 各一格；`reference_kind`／`reference_value`／`reference_id`／`reference_started_at` 與 `write_outcome` 逐欄斷言；參考值取自更正作業的一格；`source = settlement` 時 `forecast_settle_eval`、`forecast_outcome` 無新列 | 單元測試 | 格 3；ADR-0027 FL-71 (e)(l) |
+| OA-10 | E-2：`settlement`、`audit`、`correction` 各一格；`regression_kind`／`reference_kind`／`reference_value`／`reference_id`／`reference_started_at`／`reference_recorded_at`／`current_recorded_at` 與 `write_outcome` 逐欄斷言；參考值取自更正作業的一格；身分不符一格（`regression_kind = reference_identity_mismatch`、R 不小於參考值，`reference_recorded_at` 與 `current_recorded_at` 不同，或市場 DB 無該 run 而 `current_recorded_at` 為 None）；`source = settlement` 時 `forecast_settle_eval`、`forecast_outcome` 無新列 | 單元測試 | 格 3；ADR-0027 FL-71 (e)(l) |
 | OA-11 | 去重：同一次執行內同一鍵被接住兩次 → 推播 1 則、log 2 行；22:10、23:10、隔日各推 1 則；`settings.alerts.*`（`enabled`、`notify_webhooks`、`cooldown_minutes`）任何值都不改變推播數；同一次執行 E-1 的兩個 source、E-2 的三個 source 各別推播；E-3b 與 `step = orchestrator` 不去重：同一個事件物件呼叫兩次 → 推播 2 則；E-3b 發生在一次執行進行中 → 該執行其後的同鍵告警仍只推 1 則（鍵集合不被換掉） | 單元測試 | 格 5、6、7；FL-71 (f) |
 | OA-12 | 推播與 log 通過 D-4 的禁用詞掃描與正面白名單（每個事件、含 selftest；標籤常數本身也掃；類別 E 以哨兵值斷言）；掃描清單依 D-4「單一來源」一點，於測試執行時讀取，測試內不手抄；錨點找不到或任一類取出 0 筆即失敗 | 單元測試 | 格 8；ADR-0027 FL-71 (f) |
 | OA-13 | 截斷：超過 `OPS_ALERT_PUSH_MAX_LIST_ITEMS` 時，推播含 `unregistered_count`、最早一日、最晚一日與「另有 N 筆，完整清單見 scheduler log」，其餘欄位完整，log 行含完整清單；推播長度 ≤ `OPS_ALERT_PUSH_MAX_CHARS`，以最大寬度 fixture 斷言；`OPS_ALERT_PUSH_MAX_CHARS` 由兩個通道上限常數計算得出，且兩個通道上限的出處與查證日字串常數存在且非空（缺則測試失敗） | 單元測試；常數存在性測試 | 格 10；D-4 |
@@ -338,7 +344,7 @@ dead-man's switch（R-4）**不是**本閘門的項目，另案由 CEO 決定。
 1. **搜尋字串與處理指引**：固定搜尋字串 `ops alert: event=`；逐事件（E-1、E-2、E-3b～E-3d）列「是什麼、先查什麼」。§5 現行「持續出現才算告警」的口徑**不得**套用在這些事件：第一次出現就要處理。
 2. **收到 E-2 立即停 scheduler（R-Q7-6，擋 D_v）**：容器部署用 `docker compose stop scheduler`；主機部署的對應停止寫法，依手冊現行啟動寫法補，補稿時查證，不憑記憶。處理完 ADR-0026 D-9.4（確認備份 manifest 的最新市場 DB `run_id`，與 E-2 的 `reference_*` 對照；決定接受新基準或重建）才可以重啟。計畫性整檔還原本來就要先停 scheduler，還原與 `mark-restored`、X-3a 腳本完成後再啟動，所以不應出現預期內的 E-2；還原後仍出現 E-2 視為真實事件。
 3. **「沒有收到推播，不代表排程正常」**：與 Consequences 同一句；並列出人工檢查法：每個交易日 23:30 後看 `forecast record run:` INFO 行是否存在，以及 `last_settle_eval_at`（`GET /api/forecast/status`，尚未實作）是否前進。
-4. **E-2 停止出現不代表已處理**：說明守衛會自己解除，處理終點是 ADR-0026 D-9.4 而不是推播消失。
+4. **E-2 停止出現不代表已處理**：說明守衛只在參考 run 身分相符時解除，處理終點是 ADR-0026 D-9.4 而不是推播消失。
 5. **通道設定與自測**：只列三個環境變數的名稱（`ALERT_DISCORD_WEBHOOK_URL`、`ALERT_TELEGRAM_BOT_TOKEN`、`ALERT_TELEGRAM_CHAT_ID`）與設定位置，值由 CEO 自行設定；`python -m app.ops_alert.selftest` 的執行方式、結束碼與「CEO 在聊天室看到訊息」的確認步驟；通道變更後重跑。
 6. **恢復判準**：D-8 的事實檢查三條；說明沒有「已恢復」推播。
 7. **log 保存**：完整清單只在 scheduler log；容器 log 輪替與保存期間（`compose.yaml` 現無 logging 設定）、主機部署的 `logs\scheduler.log` 輪替。是否改 `compose.yaml` 屬設定變更，另送 qa-reviewer 審查。
@@ -533,3 +539,33 @@ dead-man's switch（R-4）**不是**本閘門的項目，另案由 CEO 決定。
 - **S-3｜修訂紀錄開頭。**
   > 舊字：（尚無。落檔後的修訂依 ADR-0001 慣例追記於此；通道上限查證結果亦記於此。）→ 拿掉「尚無。」。
 - 方向：R-1、R-3、R-5、R-6、S-3 為字句與位置調整，不變；R-4 使 D-7 兩點一致（收緊至風控重審，與先前依較嚴者的裁定相同）；S-2 為揭露。CEO：否。風控：R-4 與改寫後的風控需補 A 那一點送風控知悉（coordinator 處理）。
+
+---
+
+**風控 2026-10-19 N-20 批裁定後修訂（N20-9 與風控 suggested；`work/reviews/2026-10-19-N20批裁定-風控.md`、`work/reviews/2026-10-19-N38核對與checkpoint乙案改寫及N20改寫-tech-architect.md`；devops-sre 套用）**
+
+依據：tech-architect 2026-10-19 回報第二節 4-B 的 N20-9；風控 2026-10-19 N-20 批裁定（N20-9 知悉確認，失效條件 5；R-12；ADR-0029 其餘 suggested 三點，coordinator 定案一併採用）。本 ADR 狀態為 proposed，依 ADR-0001 原地修訂。
+
+- 方向：收緊。CEO：否。風控：N20-9 屬知悉級，已確認；三個 render 新標籤待風控逐字確認（R-12），確認前不得實作。
+- 與 ADR-0027 N-20 批（含風控 R-1、R-2）同批落檔。Consequences 的換句「只有參考 run 的身分相符才解除」，以 R-1、R-2 都已套用為前提；沒有套用時該句不屬實（風控）。
+- 逐項（被取代的舊字取自修訂前已 commit 的檔案現況，逐字；下列引文含定位字串，屬歷史列，不是現行條文）：
+  1. **D-7 事件目錄 E-2 的 payload 欄位。** 加 `regression_kind`、`reference_recorded_at`、`current_recorded_at`；`reference_kind` 加 `gap_audit`；`reference_id` 加 `audit_id`；`reference_started_at` 加 `audit_now`（N20-9）。`current_recorded_at` 的「不存在時為 None」依 ADR-0027 N20-1。舊字——
+     > `reference_kind ∈ {settle_eval, correction_job}`、`reference_value`、`reference_id`（`settle_eval_id` 或 `correction_job_id`）、`reference_started_at`（UTC ISO8601）。
+  2. **D-7 規則，ADR-0026 引用。** 「ADR-0026 D-9 第 2 點（備份組）」改指「第 2-1 點（備份順序與 manifest 檢查）」（風控 suggested）。舊字——
+     > - E-2 的 `reference_*` 讓操作者對照 ADR-0026 D-9 第 2 點（備份組）manifest 中的最新市場 DB `run_id`。
+  3. **D-7 規則，屬性清單（原 L219）同步。** 舊字——
+     > - E-2 `source = audit`／`correction` 的欄位，取自 `market_run_regression()` 回傳的 `MarketRunRegression`，屬性 `market_run_current`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`，與 `MarketRunRegressedError` 的同名屬性逐字一致；`source` 由呼叫端決定。
+  4. **D-7 規則，原 L220 換成已完成的敘述。** 舊字——
+     > - 後續追蹤清單 N-20 若在 ADR-0027 增列 E-2 的屬性（tech-architect 2026-10-18 補充項回覆第 3 項：`regression_kind`、`reference_recorded_at`、`current_recorded_at`），屬於失效條件 5，與 N-20 同批送風控。
+  5. **D-7 規則新增兩點：render 三個新標籤的草稿（標「待風控逐字確認（R-12）」），以及 render 在兩個 `recorded_at` 相等但 `kind` 或 `session_date` 不同時的處理（風控 suggested，待辦）。** 新增，無舊字。標籤草稿不是定稿。
+  6. **Consequences「E-2 停止出現，不代表已處理」。** 換句（N20-9），並於該點末尾接殘餘句（風控 suggested）：「還原點不早於任何參考 run 時，守衛偵測不到，E-2 不會出現（ADR-0027 D-7 第 2 點殘餘）。」換句的舊字——
+     > 新寫入的 run 使 R 再度不小於參考值時，判定就不再成立，結算評估恢復執行；
+     殘餘句為新增，無舊字。
+  7. **部署手冊 §5 待補項第 4 點。** 舊字——
+     > 4. **E-2 停止出現不代表已處理**：說明守衛會自己解除，處理終點是 ADR-0026 D-9.4 而不是推播消失。
+  8. **OA-10。** 加身分不符一格，並把逐欄斷言的屬性清單同步為 E-2 的八個屬性。舊字——
+     > E-2：`settlement`、`audit`、`correction` 各一格；`reference_kind`／`reference_value`／`reference_id`／`reference_started_at` 與 `write_outcome` 逐欄斷言；參考值取自更正作業的一格；
+- 待辦與殘餘（本節不改字）：
+  - render 的三個新標籤：草稿見 D-7 規則，待風控逐字確認（R-12）。確認前 E-2 的 `regression_kind`、`reference_recorded_at`、`current_recorded_at` 不得進入 render 實作；OA-12 的標籤常數掃描要連同這三個一起跑。
+  - render 在 `recorded_at` 相等但 `kind` 或 `session_date` 不同時的處理：見 D-7 規則，待 tech-architect 與風控決定。
+  - OA-10 沒有另加 `reference_kind = gap_audit` 的獨立格（`reference_id` 為 `audit_id`、`reference_started_at` 為 `audit_now`）；N20-9 只要求加身分不符一格，gap_audit 對應的來源格在 ADR-0027 FL-67 (n)。是否要在本 ADR 補一格，請 tech-architect 決定。

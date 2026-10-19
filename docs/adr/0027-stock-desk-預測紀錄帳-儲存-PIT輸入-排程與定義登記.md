@@ -358,6 +358,11 @@
       - `market_scan_from` ＝ W，也就是 `correction_job_id` 最大、而且已有 `forecast_correction_job_end` 列的作業的 `market_scan_to`；沒有這樣的作業時為 0。
       - `market_scan_to` ＝ 該次掃描取得的 `run_max`；還原保護（第 8 點）成立時，`market_scan_to` ＝ `market_scan_from` ＝ W。
       - 寫入驗證（不成立就拒絕寫入）：`market_scan_from` 等於上述 W；`market_scan_from ≤ market_scan_to`。
+      - （N-20）`market_scan_to_identity_json`：`market_scan_to` 那一列 run 的身分，作業開始時與 `triggers_json` 同一個交易寫入。
+        - `market_scan_to` 取自掃描的 `run_max` 時，身分取自同一次 `market_run_regression()` 回傳的 `market_run_current_identity`；
+        - 還原保護（第 8 點）成立、`market_scan_to` ＝ W 時，照抄前一個已完成作業的值；
+        - `market_scan_to` ＝ 0 時為 null。
+        - 寫入驗證：值 > 0 ⇒ 非 null；照抄的情形，與所抄的值逐位相同。
       - `market_scan_restore_suspected`：第 8 點成立時為 1，否則為 0，由寫入函式依同一次掃描自行填入，不接受呼叫端傳入。§4.2「可能不完整」的揭露，列出這一欄為 1 的每一個作業（`correction_job_id`、`started_at`、`market_scan_from`）。第 8 點成立、但沒有其他觸發因而沒有寫入作業的掃描，不留下任何列；市場 DB 還原後新寫入、`run_id` 不大於 W 的 run，之後也不會被掃到〔推論：還原後 `run_id` 由還原檔的序號接續〕。所以這些列只是下限，不代表完整的受影響期間；§4.2 照此註明，不得以「沒有這類作業」表示市場 DB 沒有被還原。偵測結果的持久記錄與受影響 run 範圍的界定，列後續追蹤清單 N-20。
       - 不放 `triggers_json`（它是觸發陣列，不是標頭），也不放 `forecast_correction_job_end`（第 5 點的驗證在作業開始時就要做）。
     - （N-21；tech-architect 2026-10-18）**判定視圖欄位**：作業開始時與 `triggers_json` 在同一個交易內寫入，由寫入函式自行填入，不接受呼叫端傳入；取得方式見 D-9 第 5 點「更正作業的判定視圖」。
@@ -423,18 +428,19 @@
        觸發項為 `{kind: pending_resettle, forecast_id, since_job_id, settle_eval_id}`。本類只讀 `pending_json` 的上列欄位、`forecast_settle_eval` 與市場 DB 的 run，不讀 `forecast_record`、`forecast_outcome`。
 
      W_E、W_V、W_S 與 D-3 `forecast_correction_job` 的 `ledger_event_from`、`index_check_from`、`settle_eval_from` 同一定義，由同一個函式導出。四類都沒有時不啟動（D-3「`triggers_json` 必須非空」不變）。啟動與否只依本點四類觸發是否存在（第四類只依新的觀察日、結算快照中新出現的大盤數值或新的定案 run 是否存在，不依時間經過，也不依結算評估的執行次數；沒有新資料時不啟動），不讀預測、label、`hit`、基準命中或任何驗證統計（AST）。不得提供以操作者指定的觸發、日期或預測啟動更正作業的 CLI、API 或工具（D-9 第 2 點「不由人工對個別預測觸發」；風控 2026-10-18 C-22 確認）。
-  2. **掃描範圍**：先取一次 `run_max = MAX(run_id)`，範圍為 `(W, run_max]`。W 是最近一個已有 `forecast_correction_job_end` 列的作業記下的 `market_scan_to`，首次為 0。沒有 end 列的中斷作業依 D-3 由下一個作業完整重跑，W 不因它前進。只取 `kind='bars'`、`status='ok'`、`session_date IS NOT NULL` 的 run，每筆再經 `is_final(TW, session_date, recorded_at)`（ADR-0028 CS-17）過濾，不得自行比較時戳。
+  2. **掃描範圍**：先經 D-7 第 2 點 `market_run_regression()` 取一次 `run_max`（＝ 回傳的 `market_run_current`）〔N-20 取代：原寫「先取一次 `run_max = MAX(run_id)`」〕，範圍為 `(W, run_max]`。W 是最近一個已有 `forecast_correction_job_end` 列的作業記下的 `market_scan_to`，首次為 0。沒有 end 列的中斷作業依 D-3 由下一個作業完整重跑，W 不因它前進。只取 `kind='bars'`、`status='ok'`、`session_date IS NOT NULL` 的 run，每筆再經 `is_final(TW, session_date, recorded_at)`（ADR-0028 CS-17）過濾，不得自行比較時戳。
   3. **配對**（三項都成立才算觸發）：主 DB 有鏈尾列 `status ≠ resolved`，而且結算窗 [T, T+h] 含 `session_date`；該列的標的（個股，或族群成員）在該 run 有一列 `market_daily_bars (run_id, symbol)`；該 run 的 `run_id` 大於該鏈尾列的 `settle_source_run_max`（晚到的定義：結算當下市場 DB 還沒有這筆 run）。
   4. **`settle_source_run_max`**：`forecast_outcome` 新增欄位。每次結算評估由寫入端的單一函式讀一次市場 DB 的 `MAX(run_id)`＝R，以 R 界定該次評估的判定視圖（事先宣告 §6.3「觸發」，v0.14 V14-01），在同一個函式內完成該次評估全部預測的判定，並把同一個 R 寫入每一筆結算或作廢列；R 與判定視圖都不接受呼叫端傳入，也不接受呼叫端以其他視圖算出的判定結果。更正作業寫入的列，比照本點：以該作業 `forecast_correction_job` 的 `market_scan_to` 界定重算所用的市場 DB 視圖（只取 `run_id ≤ market_scan_to` 的列），並把同一個值寫入該作業寫入的每一列；不另讀 `MAX(run_id)`，不接受呼叫端傳入。還原保護（D-3「晚到資料的觸發」第 8 點）成立、`market_scan_restore_suspected = 1` 的作業，同節第 9 點「`run_id` ≤ `settle_source_run_max` 的 run 都在判定視圖內」對它寫入的列不保證成立，晚到判定只是下限，依同節第 8 點揭露（風控 2026-10-18 v0.14 單項確認）。大盤列為 null。比較只用序號，不用時鐘（比照 RC″-2）。〔v0.14 取代（V14-01；風控 2026-10-18 v0.14 審查 R14-4）：原寫「結算或作廢寫入當下，由寫入函式經 `MarketPanelReader` 自行取得市場 DB 的 `MAX(run_id)` 填入，不接受呼叫端傳入；大盤列為 null。比較只用序號，不用時鐘（比照 RC″-2）。」〕
   5. **觸發項**：`{kind: source_revision, run_id, recorded_at, session_date}` 寫入 `triggers_json`。觸發身分以 `(run_id, recorded_at)` 成對為準。寫入函式驗證：新作業的 `market_scan_from` 等於前一個已完成作業的 `market_scan_to`；同一個 `(run_id, recorded_at)` 不得出現在兩個已有 `forecast_correction_job_end` 列的作業的 `triggers_json`：作業開始時對照已完成的作業驗證；寫入 job_end 時再驗證一次，同時驗證本作業的 `market_scan_from` 仍等於當下的 W，而且沒有 `correction_job_id` 大於本作業、已有 end 列的作業。任一項不成立就拒絕寫入 job_end，記 WARNING（該作業視為中斷，依 D-3 由下一個作業完整重跑）。沒有 end 列的中斷作業的觸發，由下一個作業依第 2 點重新掃得，不受此限。因此，已完成的作業依 `correction_job_id` 排列時，掃描範圍首尾相接、不重疊。
   6. **涵蓋邊界**：本觸發只涵蓋個股 claim 與族群成員的 bars。大盤的 T+h bar 與收盤不經市場 DB（M-8），不在本觸發內；除權息因子晚到應由「因子修訂」觸發涵蓋（D-11.4 第 11 點 (h)：`OUTCOME_CORRECTION_CAUSES` 第 4 類 `dividend_factor_corrected`，以及同點「原因怎麼歸屬」所列的因子修訂觸發；事件來源依 D-4 第 2 點，是市場 DB 的 `pit_dividend_announce_rows`，不是 ADR-0016 D-5.2 的主 DB 同步紀錄）。該觸發的偵測方式（誰偵測、讀哪種 run、怎麼配對、晚到怎麼判定）尚未定義（後續追蹤清單 N-17）；定義落地並經風控確認、修訂本點之前，`dividend_factor` 視為沒有觸發涵蓋。同一個缺口也使第 4 類 `dividend_factor_corrected` 沒有觸發來源，已結算列不會因除權息因子更正而 supersede；這一面是事先宣告 §6.4 既有規則的實作缺口，N-17 是 D-9 結算程式實作前的阻擋項，不得以本點的「未涵蓋，不計」揭露代替；`basket_member`（listing、classification 的 run）沒有任何觸發涵蓋。`VOID_LATE_DATA_KINDS` 中沒有觸發涵蓋的種類，在 §4.2 標「未涵蓋，不計」，不得以 0 呈現。
   7. **預期量**：現行管線不回填（ADR-0012 C-10），同一 session 有 ok run 之後即略過（`_already_ok_today`），所以 `void_late_data_count` 預期接近 0〔推論，data-engineer 2026-10-18〕。這是預期，不是驗收門檻，0 不得當成「沒有晚到資料」的證據。失效條件：新增任何回填路徑，或 N-16 改變冪等略過時，重查本點。
-  8. **還原保護**：W 大於目前市場 DB 的 `MAX(run_id)` 時，視為市場 DB 被還原：記 WARNING；本次不產生任何 `source_revision` 觸發，W 不前進，其餘觸發照常；§4.2 揭露該期間的作廢後補到資料筆數可能不完整，直到 devops-sre 依 ADR-0026 D-9.4 處理並修訂本點。不得靜默重掃。
+  8. **還原保護**：W 大於目前市場 DB 的 `MAX(run_id)`，或 D-7 第 2 點共同守衛成立（含 `regression_kind = reference_identity_mismatch`）時〔N-20 取代：原寫「W 大於目前市場 DB 的 `MAX(run_id)` 時」〕，視為市場 DB 被還原：記 WARNING；本次不產生任何 `source_revision` 觸發，W 不前進，其餘觸發照常；§4.2 揭露該期間的作廢後補到資料筆數可能不完整，直到 devops-sre 依 ADR-0026 D-9.4 處理並修訂本點。不得靜默重掃。
   9. 與 O-1 的關係（v0.14 V14-01 定案）：`run_id` ≤ 該列 `settle_source_run_max` 的 run 都在判定視圖內，判定時已經評估過，不屬於本點的晚到；`run_id` 大於者依第 3 子點判定。〔v0.14 取代（V14-01）：原寫「9. 與 O-1 的關係：等待期間才寫入、在作廢寫入前已存在的 run，不屬於本點的晚到；這類 bar 的歸屬依 O-1 定案（後續追蹤清單 N-13）。」〕
 - **`forecast_settle_eval`**（v0.14 V14-01；風控 2026-10-18 v0.14 審查 R14-5 ①）：每次結算評估一列，記下該次評估的判定視圖。只增不改（D-2 第 2 點）。由 `run_settlement_evaluation()` 在該次評估的主 DB 寫入交易內寫入（D-9.2 執行順序 ⑤）；欄位全部由該函式自行填入，不接受呼叫端傳入。
   - **欄位**：
     - `settle_eval_id INTEGER PRIMARY KEY AUTOINCREMENT`；
     - `market_run_max INTEGER NOT NULL`（R）；
+    - （N-20）`market_run_max_identity_json`：R 那一列 run 的身分（D-7 第 2 點），與 R 取自同一次 `market_run_regression()` 的回傳值。R ＝ 0 時為 null，R > 0 時必須非 null（寫入驗證）；
     - `ledger_event_max INTEGER NOT NULL`（E；沒有事件時為 0）；
     - `index_check_max INTEGER NOT NULL`（V；沒有紀錄時為 0）；
     - `index_series_sha256 NOT NULL`（大盤快照，指向 `forecast_input_series.content_sha256`）；
@@ -645,16 +651,17 @@
     - `judged_count INTEGER NOT NULL`、`unjudged_count INTEGER NOT NULL`：範圍內已判定、尚未判定的觀察日數；
     - `gaps_written INTEGER NOT NULL`：本次寫入的 `forecast_gaps` 列數；
     - （N-23 Q7；風控 R-Q7-3）`market_run_current INTEGER NOT NULL`：本次稽核讀到的市場 DB `MAX(run_id)`（沒有任何 run 時記 0，D-7 第 2 點），也就是傳給 D-7 第 2 點「還原疑似時的共同守衛」的 r_now；一次稽核只讀一次；
-    - （N-23 Q7；風控 R-Q7-3）`market_run_regression_json`：共同守衛不成立（含沒有參考值）時為 null；成立時為 `{reference_kind, reference_value, reference_id, reference_started_at}`，各鍵與 D-9.2「R 倒退」的例外屬性同義，取自同一次 `market_run_regression()` 的回傳值；
+    - （N-20）`market_run_current_identity_json`：`market_run_current` 那一列 run 的身分，取自同一次 `market_run_regression()` 的回傳值。`market_run_current` ＝ 0 時為 null，> 0 時必須非 null；
+    - （N-23 Q7；風控 R-Q7-3）`market_run_regression_json`：共同守衛不成立（含沒有參考值）時為 null；成立時為 `{regression_kind, reference_kind, reference_value, reference_id, reference_started_at, reference_identity, current_identity}`（`reference_identity` 是該候選存下的身分；`current_identity` 是市場 DB 中 `run_id = reference_value` 那一列的現行身分，不存在時為 null），`regression_kind`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at` 與 D-9.2「R 倒退」的例外屬性同義；`reference_identity`、`current_identity` 是完整身分，其中的 `recorded_at` 分別等於例外屬性 `reference_recorded_at`、`current_recorded_at`，取自同一次 `market_run_regression()` 的回傳值；〔N-20 取代：原寫「成立時為 `{reference_kind, reference_value, reference_id, reference_started_at}`，各鍵與 D-9.2「R 倒退」的例外屬性同義」〕
     - `recorded_at`（store 時鐘）。
-  - **寫入者與時機**：只有 `audit.py` 的缺日稽核函式（AST 列舉呼叫點）。與同一次稽核的 `forecast_gaps` 列、A-77 第 10 項的未觀察平日登記在同一個主 DB 寫入交易內，最後寫入、隨該交易 commit。稽核失敗、交易 rollback 時不留任何列，所以本表只記成功的稽核。（N-23 Q7）`market_run_current` 與 `market_run_regression_json` 由同一函式依同一次守衛判定自行填入，不接受呼叫端傳入；守衛成立時本列照常寫入（D-7 第 2 點 Q7），所以守衛期間每一次成功的稽核都留下一列。欄位全部由該函式自行填入，不接受呼叫端傳入（D-2 第 3 點）。
+  - **寫入者與時機**：只有 `audit.py` 的缺日稽核函式（AST 列舉呼叫點）。與同一次稽核的 `forecast_gaps` 列、A-77 第 10 項的未觀察平日登記在同一個主 DB 寫入交易內，最後寫入、隨該交易 commit。稽核失敗、交易 rollback 時不留任何列，所以本表只記成功的稽核。（N-23 Q7）`market_run_current` 與 `market_run_regression_json` 由同一函式依同一次守衛判定自行填入，不接受呼叫端傳入；守衛成立時本列照常寫入（D-7 第 2 點 Q7），所以守衛期間每一次成功的稽核都留下一列。`market_run_current_identity_json` 同。欄位全部由該函式自行填入，不接受呼叫端傳入（D-2 第 3 點）。
   - **寫入驗證**（任一項不成立，整個稽核交易都不寫入，記 WARNING）：
     - `range_json` 為 null ⇒ `judged_through` 為 null，兩個計數與 `gaps_written` 都是 0；
     - `judged_through` 為 null ⇔ `judged_count = 0`；
     - `judged_through` 非 null 時，它是本次稽核所讀觀察日集合中、範圍內的一日；而且已判定的日子，恰好是範圍內 ≤ `judged_through` 的全部觀察日：這些日子都有 `late_cutoff_at ≤ audit_now`，晚於它的每一日都有 `late_cutoff_at > audit_now`（`late_cutoff_at` 以 D-7.4 的同一個函式、取 T ＝ S 計算）；
     - `judged_count + unjudged_count` ＝ 範圍內的觀察日數；
     - `gaps_written` ＝ 本交易寫入的 `forecast_gaps` 列數，而且每一列的 `session` ≤ `judged_through`；
-    - （N-23 Q7）在本交易內依 D-9.2「R 倒退」的參考值定義重算一次：`market_run_regression_json` 非 null，若且唯若重算的參考值存在、而且 `market_run_current` 小於它；非 null 時各鍵等於重算的值；
+    - （N-23 Q7；N-20）在本交易內以一次主 DB 查詢重讀參考候選，連同本次 `market_run_regression()` 回傳的市場 DB 讀值（`market_run_current`、它的身分，以及各候選 run 的現行身分；由稽核函式持有，不接受呼叫端傳入），依 D-7 第 2 點的守衛定義重算一次：`market_run_regression_json` 非 null，若且唯若重算的守衛成立；非 null 時各鍵等於重算的值。所以 `market_run_current ≥ reference_value` 而 json 非 null 是合法的（`regression_kind = reference_identity_mismatch`）；〔N-20 取代：原寫「（N-23 Q7）在本交易內依 D-9.2「R 倒退」的參考值定義重算一次：`market_run_regression_json` 非 null，若且唯若重算的參考值存在、而且 `market_run_current` 小於它；非 null 時各鍵等於重算的值；」〕
     - （N-23 Q7）`market_run_regression_json` 非 null ⇒ 本交易沒有寫入 `kind = unobserved_weekday` 的事件；
     - `judged_through` 早於前一列的值時（例如觀察日集合因 X2 確認而回溯縮小，A-77 第 11 項），記 WARNING，照實寫入，不拒絕。
   - **讀取**（AST 列舉呼叫點；讀取一律經 `store.py`）：
@@ -794,7 +801,27 @@
 
        結算在期限前啟動、期限後才 commit 時，後續各步照本點與前置條件執行。plan 的 `deadline` 與 `no_snapshot` 同時成立時，記 `deadline`：期限在讀取任何 snapshot 之前判定，`snapshot_ids_json` 照實填入。
      - （N-23 Q8）**整次執行的結束**：編排函式在全部步驟結束後正常返回，不因任何一步失敗而再拋出。再拋出只會讓 `_guarded` 多記一筆 ERROR，APScheduler 也不會送出 `EVENT_JOB_ERROR`。每一步的結果彙總成型別化的步驟結果，結束時記一行 INFO `forecast record run:`（含每一步的 outcome）。告警只由編排函式依步驟結果、經注入的送出器發出（ADR-0029），不以 job 層事件為來源。例外逃出編排函式本身（步驟隔離以外）時，由 `scheduler.py` 的 job 包裝經同一個送出器發出 `forecast.step.failed`（`step = orchestrator`），之後照 `_guarded` 既有行為記 ERROR。
-   - （N-23 Q7）**還原疑似時的共同守衛**：`market_run_regression(r_now, *, store) -> MarketRunRegression | None`，是 `app/forecast/` 內的單一函式，名稱暫定。r_now 由呼叫端傳入它自己那一次讀到的市場 DB `MAX(run_id)`。（N-23 Q7；風控 2026-10-19）市場 DB 沒有任何 run（`MAX(run_id)` 為 null）時，r_now 以 0 計；參考值大於 0 時守衛因此成立，不得因 null 無法比較而略過判定（fail-closed）。參考值依 D-9.2「R 倒退」的定義，以一次主 DB 唯讀查詢取得。結算評估（D-9.2 ①′）、缺日稽核、晚到掃描（D-3「晚到資料的觸發」第 8 點）都只以這個函式判定。回傳的 `MarketRunRegression` 是 frozen 型別，屬性為 `market_run_current`（＝ r_now）、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`，名稱與 D-9.2「R 倒退」的例外屬性逐字一致；結算評估以它加上 `source = settlement` 建構 `MarketRunRegressedError`。缺日稽核與更正作業不拋例外，以型別化的步驟結果把它交給編排函式（本點 Q8），由編排函式發出 ADR-0029 E-2。
+   - （N-23 Q7）**還原疑似時的共同守衛**：`market_run_regression(*, store, market_reader) -> MarketRunCheck`，是 `app/forecast/` 內的單一函式，名稱暫定。它依序做兩次讀取，之後不再讀：
+     - (1) 以一次主 DB 唯讀查詢，取得參考候選（D-9.2「R 倒退」）與各候選存下的 run 身分；
+     - (2) 經 `MarketPanelReader.read_run_head(run_ids)`（`market_panel.py` 內的單一唯讀方法，名稱暫定），在同一個市場 DB 唯讀交易內，讀出 `MAX(run_id)`、該 run 的身分，以及各候選 `run_id` 在市場 DB 中的身分（不存在時為 None）。
+     - r_now ＝ 這一次讀到的 `MAX(run_id)`。呼叫端不傳入 r_now、參考值或身分。（N-23 Q7；風控 2026-10-19）市場 DB 沒有任何 run（`MAX(run_id)` 為 null）時，r_now 以 0 計，身分為 None；參考值大於 0 時守衛因此成立，不得因 null 無法比較而略過判定（fail-closed）。
+     - （N-20；data-engineer 2026-10-18 查證；風控 2026-10-19 R-Q7-5 丙案）**run 身分**：`{recorded_at, kind, session_date}`，取市場 DB `pit_snapshot_runs` 該列的原值。市場 DB 的 run 不改寫：靠 append-only trigger，屬自律層級，有檔案存取權的人可以 DROP trigger。`recorded_at` 不單調、也不唯一，所以身分只以原字串相等比對，不解析、不比較大小、不排序、不作為鍵；`session_date` 兩邊都是 null 時算相等，一邊是 null 時不相等；逐欄比對，`*_identity_json` 先解碼再比，不比對 JSON 字串本身；在 SQL 端比對時用 `IS`，不得用 `=`。
+     - **守衛成立**，若且唯若至少有一個參考候選 c（值為 v_c，存下的身分為 id_c）符合下列任一項：
+       - (a) r_now < v_c（`regression_kind = run_regressed`）；
+       - (b) v_c > 0、r_now ≥ v_c，而且市場 DB 中 `run_id = v_c` 的列不存在，或它的身分與 id_c 有任一欄不相等（`regression_kind = reference_identity_mismatch`）。
+
+       v_c ＝ 0 的候選沒有參考 run，不適用 (b)，不算不符。成立的候選有多個時，回報 v_c 最大的一個；同值時依 `settle_eval` → `correction_job` → `gap_audit` 取第一個；該候選 (a) 成立時記 `run_regressed`，否則記 `reference_identity_mismatch`。
+     - 本點與 D-3 的三個 `*_identity_json` 欄，必須在 D-9 程式（`forecast_settle_eval`、`forecast_correction_job`、`forecast_gap_audit` 的寫入）實作之前落檔，所以不存在值大於 0、身分卻為 null 的候選列；D-3 各欄的寫入驗證拒絕這種列。本點若晚於 D-9 程式落地，既有列如何遷移不在本點的核可範圍：不得預設以 null 遷移、只適用 (a)。遷移方式要先送風控（屬於放寬時，另需 CEO 明示同意）；核可之前，(b) 與該遷移都不得上線。
+     - **前提**（風控 2026-10-19）：身分比對以 ADR-0026 D-9 第 2-1 點（先主 DB、後市場 DB 的備份順序，以及 manifest 檢查）為前提；該點落檔之前不得實作 (b)。解除路徑只有一條：用 manifest 檢查通過的備份組整組重做（ADR-0026 D-9 第 4 點），或修訂本點。不得新增解除用的 CLI、狀態或旗標。
+     - **殘餘**〔推論〕：
+       - 兩條時間線的同號 run，身分三欄全部相同時會漏報。這要同一 kind、同一 `session_date`、同一微秒寫入，實務上只會出現在固定 clock 的測試環境。
+       - 還原時遺失、而且主 DB 從未引用過的 run，本守衛偵測不到。主 DB 沒有讀過它們，帳內也沒有依賴它們的列。
+     - 結算評估（D-9.2 ①′）、缺日稽核、晚到掃描（D-3「晚到資料的觸發」第 8 點）都只以這個函式判定。
+     - 回傳 `MarketRunCheck{market_run_current, market_run_current_identity, regression: MarketRunRegression | None}`（frozen）。
+       - `MarketRunRegression` 的屬性為：`market_run_current`（＝ r_now）、`regression_kind ∈ {run_regressed, reference_identity_mismatch}`、`reference_kind ∈ {settle_eval, correction_job, gap_audit}`、`reference_value`、`reference_id`、`reference_started_at`、`reference_recorded_at`、`current_recorded_at`。
+       - `current_recorded_at` 是市場 DB 中 `run_id = reference_value` 那一列的 `recorded_at`，不存在時為 None。
+       - 屬性名稱與 D-9.2「R 倒退」的例外屬性、ADR-0029 E-2 逐字一致。
+     - 結算評估以它加上 `source = settlement` 建構 `MarketRunRegressedError`。缺日稽核與更正作業不拋例外，以型別化的步驟結果把它交給編排函式（本點 Q8），由編排函式發出 ADR-0029 E-2。〔N-20 取代：原寫「`market_run_regression(r_now, *, store) -> MarketRunRegression | None`，是 `app/forecast/` 內的單一函式，名稱暫定。r_now 由呼叫端傳入它自己那一次讀到的市場 DB `MAX(run_id)`。（N-23 Q7；風控 2026-10-19）市場 DB 沒有任何 run（`MAX(run_id)` 為 null）時，r_now 以 0 計；參考值大於 0 時守衛因此成立，不得因 null 無法比較而略過判定（fail-closed）。參考值依 D-9.2「R 倒退」的定義，以一次主 DB 唯讀查詢取得。」；「回傳的 `MarketRunRegression` 是 frozen 型別，屬性為 `market_run_current`（＝ r_now）、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`，名稱與 D-9.2「R 倒退」的例外屬性逐字一致；」〕
      - 缺日稽核：守衛成立時照常判定，並寫入 `forecast_gaps` 與 `forecast_gap_audit`，但不做 A-77 第 10 項的登記，記 WARNING（ADR-0029 E-2，`source = audit`）。理由：還原後觀察日只會變少，缺日列只會少寫；登記卻是永久的固定排除。登記範圍每次都是完整的 [D_reg, 最新觀察日]（不存水位），所以還原處理完之後的第一次稽核會補上。
    - （N-23）**前置條件**：
      - 缺日稽核與更正作業：不依賴前面任何一步是否成功。
@@ -1091,7 +1118,7 @@
      - 快照範圍內的結果存入 `forecast_settle_eval.observed_sessions_json`。
      - T+h、D_5、`wait_sessions`、第 3 點的 g，一律由這份清單與 `event_id ≤ E` 的 `unobserved_weekday` 事件導出。
    - **執行順序**（同一個函式內依序執行，不得調換）：
-     ① 讀 R。之後不再讀市場 DB 的 `MAX(run_id)`。
+     ① 經 D-7 第 2 點 `market_run_regression()` 讀 R（R ＝ 回傳的 `market_run_current`；R 的身分寫入 `forecast_settle_eval.market_run_max_identity_json`）。之後不再讀市場 DB 的 `MAX(run_id)`。〔N-20 取代：原寫「① 讀 R。之後不再讀市場 DB 的 `MAX(run_id)`。」〕
      ①′（N-23）依本點「R 倒退」判定；成立時拋 `MarketRunRegressedError`，不執行 ②～⑦。
      ② 讀時鐘與大盤列，需要時強制重抓一次，建立大盤快照。之後不再讀大盤列。同一步讀取官方休市日表一次（`official_holiday_table_meta` 一次，`official_holidays` 每個涉及的年度各一次；未接入時為 null），之後本次評估不再讀；③ 的 X2 確認寫入（本身不登記未觀察平日，見 A-77 第 10 項「登記先於使用的適用範圍」；休市日表仍用這一份，因為 payload 的 `holiday_table` 與 `trigger = official_holiday` 要用到它）、④ 的登記、`span_sessions`，以及 `forecast_settle_eval.holiday_table_json`，都使用這一份（風控 2026-10-18 B-3 回送確認）。
      ③ 以 R 與快照執行事先宣告 §6.3「大盤指數序列」的偵測，以及「查證程序」①、②。查證紀錄與 X2 確認照既有規則寫入：每一筆查證紀錄與由它導出的確認判定或 X2 確認同一個交易；不同查證紀錄、直接確認的 X2，各自一個交易（D-3 `forecast_index_check`「寫入者與時機」）。寫入規則依 D-3 `forecast_index_check`：快照內每根 bar 的偵測與 ① 查證；獨立來源已接入時，對全部待查證列做 ②；來源版本第一次出現時，以 ③ 取代當次的 ②。
@@ -1101,13 +1128,19 @@
      ⑦ commit。任一步失敗，整個交易不寫入，記 WARNING，由下一次執行完整重跑。
    - **全量評估**：一次評估涵蓋全部未結算的預測，不逐筆挑選，也不由人工對個別預測觸發。`run_settlement_evaluation()` 的簽章不接受預測清單、R、E、V、視圖或判定結果（AST）。等待與否只依可用的 T+h 資料是否存在，不讀 label、`hit`、基準命中或任何驗證統計（AST 列舉 import，比照第 3 點「判定順序」）。
    - **不切分**：結算評估是一個主 DB 寫入交易，不依 D-7.7 在範圍之間切分。D-7.7 的期限已到時，本次不啟動評估，由下一次執行（23:10 重試、啟動補跑或次一交易日）完整執行。等待以觀察日計數，不以評估次數計，所以略過的評估不會讓任何預測少等。
-   - **R 倒退**（N-23；ADR-0029 E-2）：① 讀 R 之後、② 之前（記為 ①′），以 D-7 第 2 點「還原疑似時的共同守衛」判定。R 小於參考值時，視為市場 DB 被還原：拋 `MarketRunRegressedError`（`app/forecast/errors.py`），記 WARNING（D-7 第 2 點「步驟隔離」；ADR-0029 E-2），本次結算評估不寫入任何列（fail-closed）。
-     - 參考值 ＝ 最後一列 `forecast_settle_eval.market_run_max`，與最近一個已有 `forecast_correction_job_end` 的作業的 `market_scan_to`，兩者取大；沒有列的一方不計，兩方都沒有時不檢查。
+   - **R 倒退**（N-23；ADR-0029 E-2）：① 讀 R 之後、② 之前（記為 ①′），以 D-7 第 2 點「還原疑似時的共同守衛」判定。① 的回傳中守衛成立時（R 小於參考值，或參考 run 的身分不符，D-7 第 2 點），視為市場 DB 被還原：拋 `MarketRunRegressedError`（`app/forecast/errors.py`），記 WARNING（D-7 第 2 點「步驟隔離」；ADR-0029 E-2），本次結算評估不寫入任何列（fail-closed）。〔N-20 取代：原寫「R 小於參考值時，視為市場 DB 被還原」〕
+     - 參考候選（N-20）：(i) 最後一列 `forecast_settle_eval` 的 `market_run_max` 與 `market_run_max_identity_json`；(ii) 最近一個已有 `forecast_correction_job_end` 的作業的 `market_scan_to` 與 `market_scan_to_identity_json`；(iii) `forecast_gap_audit` 中 `market_run_regression_json` 為 null 的列裡，`market_run_current` 最大的一列（同值時取 `audit_id` 最大者）的 `market_run_current` 與 `market_run_current_identity_json`。守衛成立時寫入的稽核列（`market_run_regression_json` 非 null）不是參考候選：否則市場 DB 單獨還原後，新時間線的同號 run 會經由守衛期間的稽核列成為參考，使守衛自行解除。沒有列的一方不計；三方都沒有時，沒有參考值，不檢查。「參考值」指 D-7 第 2 點所回報的那一個候選的值。〔N-20 取代：原寫「參考值 ＝ 最後一列 `forecast_settle_eval.market_run_max`，與最近一個已有 `forecast_correction_job_end` 的作業的 `market_scan_to`，兩者取大；沒有列的一方不計，兩方都沒有時不檢查。」〕
      - ①′ 在 ② 的大盤讀取與強制重抓、③ 的查證紀錄與 X2 確認寫入、④ 的寫入交易之前，所以本次評估不留下任何列，也不觸發強制重抓。
-     - 參考值以一次主 DB 唯讀查詢取得，不讀市場 DB，所以不違反 ①「之後不再讀市場 DB 的 `MAX(run_id)`」。
+     - 參考候選以一次主 DB 唯讀查詢取得；R 與各候選的現行身分，在同一個市場 DB 唯讀交易內讀出（D-7 第 2 點），所以不違反 ①「之後不再讀市場 DB 的 `MAX(run_id)`」。〔N-20 取代：原寫「參考值以一次主 DB 唯讀查詢取得，不讀市場 DB，所以不違反 ①「之後不再讀市場 DB 的 `MAX(run_id)`」。」〕
      - D-3 `forecast_settle_eval` 的寫入驗證「`market_run_max` ≥ 前一列的值」保留為縱深防禦；不成立時拋同一型別，整個交易 rollback。
-     - 例外屬性（關鍵字必填）：`source`（恆為 `settlement`）、`market_run_current`（R）、`reference_kind ∈ {settle_eval, correction_job}`、`reference_value`、`reference_id`（`settle_eval_id` 或 `correction_job_id`）、`reference_started_at`（UTC ISO8601）。
-     - 處理終點不變：直到 devops-sre 依 ADR-0026 D-9.4 處理並修訂本點（比照 D-3「晚到資料的觸發」第 8 點）。本判定不存跨執行狀態：市場 DB 被還原後，新寫入的 run 使 R 再度不小於參考值時，本判定不再成立，結算評估恢復執行；被還原期間遺失的 run 不會因此回來，還原後的 `run_id` 也可能與遺失的時間線重號〔推論：還原後 `run_id` 由還原檔的序號接續〕。所以「直到處理」靠 ADR-0029 E-2 的告警與 ADR-0026 D-9.4 的操作程序維持，不是程式保證（後續追蹤清單 N-20）。
+     - 例外屬性（關鍵字必填）：`source`（恆為 `settlement`）、`market_run_current`（R）、`regression_kind`、`reference_kind ∈ {settle_eval, correction_job, gap_audit}`、`reference_value`、`reference_id`（`settle_eval_id` 或 `correction_job_id` 或 `audit_id`）、`reference_started_at`（UTC ISO8601）（gap_audit 時為 `audit_now`）、`reference_recorded_at`、`current_recorded_at`。〔N-20 取代：原寫「例外屬性（關鍵字必填）：`source`（恆為 `settlement`）、`market_run_current`（R）、`reference_kind ∈ {settle_eval, correction_job}`、`reference_value`、`reference_id`（`settle_eval_id` 或 `correction_job_id`）、`reference_started_at`（UTC ISO8601）。」〕
+     - 處理終點：直到 devops-sre 依 ADR-0026 D-9 第 4 點處理並修訂本點（比照 D-3「晚到資料的觸發」第 8 點）。本判定不存跨執行狀態，但不會因為新寫入的 run 而解除：（N-20）R 再度不小於參考值之後，參考 run 的身分仍要相符，本判定才不再成立。
+       - 市場 DB 單獨被還原到早於某個參考 run 的時點時，該 run 在還原後不是不存在，就是與重號的新 run 身分不同，所以本判定持續成立，結算評估持續不寫入（fail-closed）。還原點不早於任何參考 run 時，本判定不成立（D-7 第 2 點殘餘）。
+       - 依 ADR-0026 D-9 第 4 點、以 manifest 檢查通過的備份組整組還原時，主 DB 的參考值與身分一起回到備份，身分相符，本判定自行解除，不需要人工解除。〔推論：完整還原程序（含 WAL）未驗證，N-40〕
+       - 解除路徑只有這一條，或修訂本點；不得以手動改寫 DB、刪除參考列或關閉守衛代替（ADR-0026 D-9 第 4 點）。
+       - 被還原期間遺失的 run 不會因此回來〔推論〕；殘餘的漏報見 D-7 第 2 點。
+
+       〔N-20 取代：原寫「處理終點不變：直到 devops-sre 依 ADR-0026 D-9.4 處理並修訂本點（比照 D-3「晚到資料的觸發」第 8 點）。本判定不存跨執行狀態：市場 DB 被還原後，新寫入的 run 使 R 再度不小於參考值時，本判定不再成立，結算評估恢復執行；被還原期間遺失的 run 不會因此回來，還原後的 `run_id` 也可能與遺失的時間線重號〔推論：還原後 `run_id` 由還原檔的序號接續〕。所以「直到處理」靠 ADR-0029 E-2 的告警與 ADR-0026 D-9.4 的操作程序維持，不是程式保證（後續追蹤清單 N-20）。」〕
 
      〔N-23 取代：原寫「- **R 倒退**：R 小於前一筆 `forecast_settle_eval.market_run_max` 時，視為市場 DB 被還原：記 WARNING，本次不寫入（fail-closed），直到 devops-sre 依 ADR-0026 D-9.4 處理並修訂本點（比照 D-3「晚到資料的觸發」第 8 點）。」〕
    - **失效條件**（風控 R14-7）：新增任何回填路徑（含人工補跑擷取）之前，須經 tech-architect 出 ADR 並送風控；回填只能以 session 或全市場為單位，不得依預測或標的挑選。屆時重查本點與 §4.2「等待後結算」。
@@ -2290,6 +2323,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
     - 記 WARNING，不產生任何 `source_revision` 觸發；
     - 有其他觸發時作業照常啟動，而且 `market_scan_from = market_scan_to = W`；該作業 `market_scan_restore_suspected = 1`，第 8 點不成立的作業為 0；§4.2 報表列出這些作業，並帶「只是下限」的註明；
     - 下一次掃描的 W 不變；`ok_bars_runs_between` 不被以 0 或目前的 `MAX(run_id)` 為下界呼叫（不重掃）。
+    - （N-20）r_now ≥ W，而共同守衛以 `reference_identity_mismatch` 成立 → 比照第 8 點：不產生 `source_revision` 觸發，W 不前進；有其他觸發時作業的 `market_scan_to` ＝ W，`market_scan_to_identity_json` 與前一個已完成作業逐位相同。
   - (h)（v0.14 V14-01；第 9 點，風控 R14-4）與判定視圖的關係：
     - 等待期間寫入、`run_id ≤` 該列 `settle_source_run_max` 的 run（判定時已在視圖內）→ 不產生 `source_revision` 觸發（相等一格與 (c) 共用）；
     - 判定視圖內只有定案前 run 的 T+h bar，作廢之後才寫入定案 run（`run_id` 大於 `settle_source_run_max`）→ 依 (c) 產生觸發（風控 R14-3）；
@@ -2370,7 +2404,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (k) `views`、API route、匯出 import 或呼叫本表的讀取函式 → AST 失敗；C22-1 所列的讀取呼叫點各一格可以讀。
   - (l)（suggested (a)）查證列與導出的 X2 確認同一交易：在兩次插入之間注入例外 → 兩者都不存在；重算後 d ∈ D-8.1 (i) → 查證列存在、事件不存在、記 WARNING，detection 仍在待查證集合；從其他呼叫點以既有查證列的 `check_id` 寫入 `basis = verified` 的事件 → AST 失敗。
   - (m)（suggested (b)）`x2_pending`、`set_iii_only` 的 d 在偵測之後進入 D-8.1 (i)，之後的 ② 取得 d 的數值 → 寫入 `no_error`，detection 離開待查證集合；同一情形改為「來源沒有這一天」→ 依 (l) 不寫 X2 確認，detection 留在集合內。
-  - (n)（N-24 存放處）稽核成功 → `forecast_gap_audit` 恰好一列，與該次的 `forecast_gaps` 列同一交易；稽核在寫入前拋例外 → 兩者都沒有，`last_gap_audit_at`、`gap_judged_through` 不前進；status 回傳值等於最新一列的 `audit_now`、`judged_through`（AST：API route 不 import `late_cutoff_at` 的函式）；驗證快照的 `stats_json.gap_audit_id` 等於本次稽核的 `audit_id`；寫入驗證三種拒絕各一格：已判定的日子不是前綴、`gaps_written` 不符、缺日列的 `session` 晚於 `judged_through`。（N-23 Q7）`market_run_current` 等於該次稽核讀到的市場 DB `MAX(run_id)`（spy：一次稽核只讀一次），稽核函式簽章沒有這個參數（AST）；守衛不成立、沒有參考值 → `market_run_regression_json` 為 null；假市場 DB 的 `MAX(run_id)` 小於參考值 → 非 null，鍵恰為 `reference_kind`、`reference_value`、`reference_id`、`reference_started_at`，值等於 fixture；參考值取自 `forecast_settle_eval`、取自更正作業各一格；寫入驗證四種拒絕各一格：json 非 null 而本交易寫入了 `unobserved_weekday` 事件、json 非 null 而 `market_run_current ≥ reference_value`、json 各鍵與交易內重算不符、json 為 null 而 `market_run_current` 小於重算的參考值；§4.2「可能不完整」報表逐列列出非 null 的稽核列並帶「只是下限」的註明，沒有這類列時輸出 0 列並帶同一註明（不省略該項）；`GET /api/forecast/status` 的回傳不含這兩欄（schema 測試）。（風控 2026-10-19）市場 DB 沒有任何 run、參考值大於 0 → `market_run_current = 0`，`market_run_regression_json` 非 null，`forecast_ledger_events` 沒有新的 `unobserved_weekday` 列。
+  - (n)（N-24 存放處）稽核成功 → `forecast_gap_audit` 恰好一列，與該次的 `forecast_gaps` 列同一交易；稽核在寫入前拋例外 → 兩者都沒有，`last_gap_audit_at`、`gap_judged_through` 不前進；status 回傳值等於最新一列的 `audit_now`、`judged_through`（AST：API route 不 import `late_cutoff_at` 的函式）；驗證快照的 `stats_json.gap_audit_id` 等於本次稽核的 `audit_id`；寫入驗證三種拒絕各一格：已判定的日子不是前綴、`gaps_written` 不符、缺日列的 `session` 晚於 `judged_through`。（N-23 Q7）`market_run_current` 等於該次稽核讀到的市場 DB `MAX(run_id)`（spy：一次稽核只讀一次），稽核函式簽章沒有這個參數（AST）；守衛不成立、沒有參考值 → `market_run_regression_json` 為 null；假市場 DB 的 `MAX(run_id)` 小於參考值 → 非 null，鍵恰為 `regression_kind`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`、`reference_identity`、`current_identity`，值等於 fixture；參考值取自 `forecast_settle_eval`、取自更正作業各一格、取自 `forecast_gap_audit` 歷史最大值一格；寫入驗證四種拒絕各一格：json 非 null 而本交易寫入了 `unobserved_weekday` 事件、json 非 null 而交易內重算的守衛不成立、json 各鍵與交易內重算不符、json 為 null 而交易內重算的守衛成立；（N-20）身分格：(i) 參考 run 存在、`market_run_current ≥ reference_value`、`recorded_at` 原字串不同 → 非 null，`regression_kind = reference_identity_mismatch`，沒有新的 `unobserved_weekday` 列；(ii) `recorded_at` 相同而 `kind` 不同、`session_date` 不同，各一格 → 同上；(iii) 同一時刻的兩種字串形式（`…T14:10:00+00:00` 與 `…T14:10:00.000000+00:00`）→ 視為不同；(iv) 參考 run 不存在、而 r_now ≥ 參考值 → 成立，`current_identity` 為 null；(v) 兩個候選同值、只有一個身分不符 → 成立，回報依 D-7 第 2 點的取法；(vi) 參考值為 0 → 不比對身分；(vii) 還原後重號：用假 clock 與 scratch 空 DB（流程同 data-engineer 2026-10-18 的實測）。市場 DB 單獨換回備份、再寫 run 使 r_now ≥ 參考值 → 成立，之後再寫任意多個 run 仍成立；主 DB 也換回同一組備份 → 不成立；(viii) 備份順序顛倒的組（主 DB 引用了市場 DB 備份沒有的 run）→ 整組還原後守衛成立；(ix) `read_run_head` 在一個唯讀交易內完成（spy：開始一次、結束一次，中間沒有其他交易）；`market_run_regression` 的簽章沒有 r_now、參考值或身分參數（AST）。(x) 結算連日失敗、`forecast_gap_audit` 的歷史最大值是唯一高於還原點的候選：市場 DB 單獨換回備份，再寫 run 使 r_now 等於、再大於該值 → 守衛期間寫入的稽核列（含與參考值同值、`audit_id` 較大者）不成為候選，守衛持續成立；(xi) 兩邊 `session_date` 都是 null、其餘兩欄相同 → 相符，不成立；一邊是 null → 不符，成立；以 SQL 比對的實作用 `=` 時本格失敗（反例格）；(xii) 值最大的候選相符、值較小的候選身分不符 → 成立，回報該較小候選；(xiii) `*_identity_json` 的鍵順序或空白不同、三欄原值相同 → 相符。〔N-20 取代：原寫「鍵恰為 `reference_kind`、`reference_value`、`reference_id`、`reference_started_at`」；「寫入驗證四種拒絕各一格：json 非 null 而本交易寫入了 `unobserved_weekday` 事件、json 非 null 而 `market_run_current ≥ reference_value`、json 各鍵與交易內重算不符、json 為 null 而 `market_run_current` 小於重算的參考值；」〕§4.2「可能不完整」報表逐列列出非 null 的稽核列並帶「只是下限」的註明，沒有這類列時輸出 0 列並帶同一註明（不省略該項）；`GET /api/forecast/status` 的回傳不含這兩欄（schema 測試）。（風控 2026-10-19）市場 DB 沒有任何 run、參考值大於 0 → `market_run_current = 0`，`market_run_regression_json` 非 null，`forecast_ledger_events` 沒有新的 `unobserved_weekday` 列。
 - **FL-68**（N-21；D-9 第 5 點、D-3 `forecast_correction_job`）：
   - (a) 以存下的 `forecast_correction_job` 重算，supersede 列與 `forecast_void_late_diag` 列逐位相同；作業開始之後注入 `run_id > market_scan_to` 的 run、`event_id > ledger_event_max` 的事件、`check_id > index_check_max` 的判定列，或覆寫 `price_bars_cache` 的大盤列 → 結果不變。
   - (b) 一次作業中，`MAX(run_id)`、`MAX(event_id)`、`MAX(check_id)`、大盤列、`official_holiday_table_meta` 各恰好讀一次（spy）；不強制重抓。
@@ -2410,7 +2444,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (b) 步驟隔離：結算的四種失敗各一格：拋 `UnregisteredUnobservedWeekdayError`、拋 `MarketRunRegressedError`、拋其他 `Exception`、期限已到沒有啟動。每格都斷言：缺日稽核被呼叫，而且寫入一列 `forecast_gap_audit`；`last_gap_audit_at` 前進；`last_settle_eval_at` 不前進，而且等於最後一列 `forecast_settle_eval.started_at`。缺日稽核的簽章不含 R、判定視圖、休市日表物件、`waiting_json`（AST）。step runner 只接 `Exception`，沒有 `except BaseException` 或裸 `except:`（AST）；注入 `KeyboardInterrupt`、`SystemExit` 時會逃出編排函式。
   - (c) 例外接在哪裡：接住結算失敗的 `try/except` 只出現在 `recorder.py` 的編排函式，而且包住整個 `run_settlement_evaluation()` 呼叫（AST）。`settlement.py`、`scoring.py`、`correction.py` 內，凡是能接到 `SpanRegistrationGap` 或 `ForecastFailClosedError` 的 `except` 都會再拋出；轉換只在 D-9.3 B-3「型別與欄位」所列的唯一位置（AST）。例外逃出 `run_settlement_evaluation()`／`run_correction_job()` 時，連線的 `in_transaction` 為 False；`forecast_outcome`、`forecast_settle_eval`、`forecast_correction_job_end`、`forecast_void_late_diag` 的列數不變。編排層的 except 區塊與它之後的程式不呼叫這些表的寫入函式（AST）。
   - (d) B-3 欄位：兩種 source 各一格，逐欄斷言 D-9.3「型別與欄位」；清單升冪、不重複；fixture 有兩個未登記日、只有一個落在 `span_sessions` 的相鄰對內 → 清單兩筆；`str(exc)` 等於由屬性以固定格式產生的字串；缺任一個必填屬性 → 建構失敗。
-  - (e) R 倒退：fixture 的參考值大於 R → 在 ② 之前拋 `MarketRunRegressedError`；`app.services.index` 的讀取與強制重抓呼叫 0 次；`forecast_index_check`、`forecast_ledger_events` 沒有新列（spy）；屬性等於 fixture 值；參考值取自更正作業的一格；繞過 ①′、只靠 ⑤ 寫入驗證的一格 → 同型例外，整個交易 rollback；沒有參考值 → 不檢查。市場 DB 沒有任何 run、參考值大於 0 → 拋 `MarketRunRegressedError`，`market_run_current = 0`。
+  - (e) R 倒退：fixture 的參考值大於 R → 在 ② 之前拋 `MarketRunRegressedError`；`app.services.index` 的讀取與強制重抓呼叫 0 次；`forecast_index_check`、`forecast_ledger_events` 沒有新列（spy）；屬性等於 fixture 值；參考值取自更正作業的一格；繞過 ①′、只靠 ⑤ 寫入驗證的一格 → 同型例外，整個交易 rollback；沒有參考值 → 不檢查。市場 DB 沒有任何 run、參考值大於 0 → 拋 `MarketRunRegressedError`，`market_run_current = 0`。（N-20）參考 run 身分不符、R ≥ 參考值 → 同樣在 ② 之前拋出，`regression_kind = reference_identity_mismatch`。`forecast_settle_eval` 沒有新列（spy）。另一格：守衛不成立時寫入的 `forecast_settle_eval` 列，`market_run_max_identity_json` 等於同一次 `market_run_regression()` 讀到的 R 的身分。
   - (f) 告警與 import graph（ADR-0029）：E-1、E-2、E-3b～E-3d 各一格，第一次發生就恰好一則推播加一行 `ops alert:` WARNING；同一次執行內重複接住 → 推播 1 則、log 2 行；22:10、23:10、隔日各推 1 則；`settings.alerts.*` 任何值都不改變推播數；送出器拋例外或通道 4xx／5xx／逾時 → 缺日稽核照常寫入；推播在 rollback 之後才送出（spy：送出時沒有開啟中的寫入交易）；`app/` 內 `OpsAlertSink` 的實作恰好一個；D-7 第 2 點「步驟隔離」所列的 import 限制成立（import graph）；推播與 log 不含禁用詞：逐項斷言下方「推播禁用詞清單」。
     - **推播禁用詞清單**（風控 2026-10-18；單一來源：A、C～F 類與白名單例外只在此處維護，B 類只在所引用的兩個檔案維護；其他文件引用本點，不得另行手打。測試於執行時以「推播禁用詞清單」「白名單例外」兩個粗體標題為起訖錨點讀取本區塊（錨點即兩標題本身，本括號不重現其粗體字串）（ADR-0029 D-4「單一來源」；tech-architect 2026-10-18 裁定，可行性由 dev-lead 確認），不另建清單檔；錨點字串改動時須同批改測試）：
       - 適用範圍：每一個事件（E-1、E-2、E-3b～E-3d、selftest）渲染出的推播全文，以及 `ops alert:` log 行。
@@ -4508,3 +4542,32 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (1e)、(1f)：第二批，等 CEO #42。
   - checkpoint 批（(2a)～(2c)、L1309、L1811、L1812、D-11.2 seed 字面、Consequences 殘餘句）：等 tech-architect 依乙案改寫並經風控逐字確認；不得套 TA 原稿。FL-71 (i) 的 checkpoint 一句（(2c)）尚未接上；本批 5b 的一句已接在 FL-71 (i) 現有 Q3 句之後。
   - N-20：等 tech-architect 改寫，與 ADR-0026 備份順序與 manifest 檢查同批。
+
+---
+
+**N-20 批（2026-10-19）（D-3 `forecast_settle_eval`、`forecast_correction_job`、`forecast_gap_audit`、D-3「晚到資料的觸發」第 2、8 點、D-7 第 2 點、D-9.2「執行順序」①、「R 倒退」、對實作的約束 FL-64 (g)、FL-67 (n)、FL-71 (e)；方向：收緊，逐項標示，見各項）**
+- 來源與套用範圍（tech-writer 2026-10-19 套用）：
+  - tech-architect 2026-10-19 回覆：`work/reviews/2026-10-19-N38核對與checkpoint乙案改寫及N20改寫-tech-architect.md` 第二節 4-B 的 N20-1～N20-7。
+  - 風控 2026-10-19 裁定：`work/reviews/2026-10-19-N20批裁定-風控.md`，結論 APPROVE（修改後核可），沒有否決；套用第二節 R-1、R-2（第 8 點）、R-4（N20-1 身分子點）、R-5、R-6（處理終點）、R-7、R-8、R-9，以及第四節「tech-writer（ADR-0027）」第 1、3、4 點。風控改字之處以風控為準。
+  - 本批沒有任何一項需要 CEO 明示同意；風控裁定一覽中這幾項的 CEO 欄都是「否」。
+  - 與 ADR-0026、ADR-0029 同一批落檔（風控第四節 coordinator 同批規則 1）；那兩份由 devops-sre 修改，不在本段範圍。
+- N-20 批整體（N20-1～N20-7 的 ADR-0027 部分）：方向：收緊。CEO：否。風控：修改後核可。擋 D-9；N20-1 另擋 (b) 身分比對的實作（風控裁定一覽）。被取代的原文已逐字錄存於正文〔N-20 取代〕，本段不重錄。
+- R-1（D-9.2「R 倒退」參考候選 (iii)：守衛成立時寫入的稽核列不當參考候選；ADR-0026 2-1 (iii) 同步，由 devops-sre 修改）：方向：補漏洞（收緊）。CEO：否。風控：required。被取代的原文已錄存於正文〔N-20 取代〕（整句參考值定義）。
+- R-2（D-3「晚到資料的觸發」第 8 點：觸發條件加上「D-7 第 2 點共同守衛成立」）：方向：補漏洞（收緊）。CEO：否。風控：required，與 N-20 同批，不依賴 CEO #42。被取代的原文已錄存於正文〔N-20 取代〕。
+- R-4（D-7 第 2 點 run 身分子點：一邊是 null 時不相等、逐欄比對、SQL 用 `IS`）：方向：收緊。CEO：否。風控：required。擋 (b) 身分比對的實作。接字，無被取代原文。
+- R-5（D-7 第 2 點：身分欄必須在 D-9 程式實作之前落檔，改為有約束力的順序規定）：方向：收緊（撤掉預寫的放寬）。CEO：否；日後若真要以 null 遷移既有列，屬放寬，需先送風控並由 CEO 明示同意（風控裁定一覽）。風控：required，整句換掉 TA 字面的對應句。該 TA 字面未曾寫入本檔，所以沒有被取代的原文。擋 D-9 程式。
+- R-6（D-9.2「處理終點」第一子點換句、第二子點句末加〔推論〕）：方向：收緊。CEO：否。風控：required。被取代的原文已錄存於正文〔N-20 取代〕（整個子點）。
+- R-7（D-3 `forecast_gap_audit` (1a) 第二欄「同義」一句）：方向：收緊。CEO：否。風控：required。被取代的原文已錄存於正文〔N-20 取代〕。
+- R-8、R-9（FL-67 (n) 加 (x)～(xiii)；FL-64 (g) 加一格；FL-71 (e) 接句，第二句依風控改寫）：方向：收緊（測試）。CEO：否。風控：required。擋 D-9（驗收依據）。FL-67 (n) 被取代的原文已錄存於正文〔N-20 取代〕；(x)～(xiii)、FL-64 (g)、FL-71 (e) 為插入或接字，無被取代原文。
+  - 格式處理（tech-writer）：風控 R-8 寫「FL-64 (g) 句末接」，本檔 (g) 是帶三個子點的條目，所以接成 (g) 的第四個子點（另起一列），字句逐字照風控。
+- 無被取代原文的新增：D-3 `forecast_settle_eval.market_run_max_identity_json`、`forecast_correction_job.market_scan_to_identity_json`、`forecast_gap_audit.market_run_current_identity_json` 三個欄位，以及 `forecast_gap_audit` (1b) 句末接字。
+- 套用時的格式處理（tech-writer；字句未增減）：
+  - D-7 第 2 點「還原疑似時的共同守衛」原為單一長列，改為一個首句加多個子點；原文中間的「結算評估（D-9.2 ①′）、缺日稽核、晚到掃描…都只以這個函式判定。」與末尾的「結算評估以它加上 `source = settlement` 建構 `MarketRunRegressedError`。缺日稽核與更正作業不拋例外…」各自成為一個子點，字句不變。
+  - 該子點的第二段被取代原文（「回傳的 `MarketRunRegression` 是 frozen 型別，屬性為…」）的句首字串，在本修訂紀錄的 Q7 守衛定義句末補字一項（Q7 守衛定義句末補字）中也出現，所以不能單獨作定位字串，改以第一段被取代原文的起點整段定位。
+- 本批沒有套用：
+  - N20-8（(1e)）：第二批，依 CEO #42 的結果與 (1e) 的落檔順序擇一，兩種版本都要套風控 R-6 的範圍限定句（風控第四節 tech-writer 第 2 點）。
+  - tech-architect 回覆「對實作的約束」第 8、10 點與風控 R-4、R-10 對它們的改字：不在本次交辦的 ADR-0027 範圍，未套用。
+  - ADR-0026、ADR-0029 E-2（devops-sre）、後續追蹤清單 N-20 列的括號（coordinator，風控第四節 coordinator 第 4 點）、render 三個標籤（風控 R-12，逐字送風控）。
+  - 上一段「N-23 補充項第一批」的「本批未套用」所列的 N-20，至此套用 ADR-0027 部分；上一段原文不改。
+- 程式順序（風控第四節 coordinator 同批規則 3，轉記）：D-9 程式（三張表的寫入）不得早於本批落檔；(b) 身分比對不得早於本批落檔才能合併；(b) 部署上線不得早於 ADR-0026 的備份實作上線，而且上線時要已有一組通過檢查的組。
+- 殘餘揭露（風控第四節「CEO 知悉」，轉記）：N-20 守衛有已揭露的殘餘：還原點不早於任何參考 run 時偵測不到（D-7 第 2 點「殘餘」）。CEO #42 仍待回答。
