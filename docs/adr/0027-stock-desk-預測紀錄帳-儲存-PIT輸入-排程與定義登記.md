@@ -235,7 +235,8 @@
 | `app/forecast/definitions.py` | frozen 的 `DirectionDefinition`、`PUBLISHED_DIRECTION_DEFINITIONS`、`PUBLISHED_RULESETS` |
 | `app/forecast/claims.py` | claim 登記與 m 的計算 |
 | `app/forecast/recorder.py` | `forecast_record` 的單一編排函式（D-7 第 2 點「步驟隔離」）：依序呼叫記錄、結算、缺日稽核、晚到掃描與更正作業、驗證快照、plan；記錄一步的範圍快照、run 與 run_end、協作式期限、逾時判定；以注入的維運告警送出器發出告警（ADR-0029），本身不 import 推播實作 |
-| `app/forecast/errors.py`（N-23） | 預測帳的 fail-closed 例外型別：基底 `ForecastFailClosedError`，子類 `UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ValidationSnapshotPartialSetError`（N-23 Q3）；另有 `span_sessions` 內部用的 `SpanRegistrationGap`（不是基底的子類）。只 import 標準庫 |
+| `app/forecast/errors.py`（N-23） | 預測帳的 fail-closed 例外型別：基底 `ForecastFailClosedError`，子類 `UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ValidationSnapshotPartialSetError`（N-23 Q3）、`LabeledThresholdSnapshotIncompleteError`（N-46）；另有 `span_sessions` 內部用的 `SpanRegistrationGap`（不是基底的子類）。只 import 標準庫 |
+| `app/forecast/band.py`（N-41、N-46；純函式） | `threshold_inputs(band_def)` 與 `labeled_snapshot_violations(band_def, *, horizon, definition)` 的唯一定義（D-3 `forecast_record` 判定材料「適用範圍與缺項」）。只 import 標準庫與 dirdef 常數；不 import `scoring.py`、`app/outlook/volatility.py`，不讀 DB。`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 只經這兩個函式判定缺項（AST） |
 | `app/ops_alert/`（ADR-0029；不在 `app/forecast/` 底下） | 維運告警通道。`app.forecast.*` 只可以 import `app.ops_alert.model`；送出器實作由 `scheduler.py` 組裝時注入 |
 | `app/forecast/scoring.py` | 結算與基準命中（ADR-0012 C-15 白名單，唯一可以出現 forward return 類識別字的地方） |
 | `app/forecast/settlement.py`（v0.14，V14-01） | 結算評估唯一的寫入端：`run_settlement_evaluation(*, store, market_reader, index_service, clock)`。它讀一次 R、建立判定視圖（D-9.2），呼叫 `scoring.py` 的純函式判定全部未結算的預測，並在同一個主 DB 寫入交易內寫入 `forecast_settle_eval` 與該次評估的全部 `forecast_outcome` 列。簽章不接受 R、判定視圖或判定結果；`forecast_outcome` 的排程結算寫入只能從這個函式呼叫（AST 列舉呼叫點） |
@@ -290,6 +291,13 @@
       - `up_pct` > 0；
       - `up_pct` ≥ `down_pct`；
       - 以同一個函式，用同列的 {`K_h`, `sigma_d`, h} 重算，結果逐位相等。
+    - （N-41、N-46；事先宣告 v0.22 V22-07）**適用範圍與缺項**：
+      - 「缺項」與「完整」只由 `app/forecast/band.py` 的單一純函式 `threshold_inputs(band_def) -> ThresholdInputs | None` 判定：`K_h`、`EPS`、`sigma_d` 任一個鍵不存在或值為 null，或 `sigma_d` 不是正的有限值（`math.isfinite(sigma_d) and sigma_d > 0` 不成立）時，回傳 None，稱為缺項；否則回傳 `ThresholdInputs{K_h, EPS, sigma_d}`，稱為完整。這是事先宣告 §6.3 v0.22 註（V22-07）「缺 `K_h`、`EPS`、`sigma_d` 任一項，或 `sigma_d` 不是正的有限值」的唯一實作。
+      - 不論 label：`K_h`、`EPS` 非 null 時，必須與該列 `definition_version` 所登記 dirdef 的常數（該 h 的 K、`EPS`）逐位相等。
+      - `label ≠ insufficient`：`band.py` 的單一純函式 `labeled_snapshot_violations(band_def, *, horizon, definition)`（`definition` 是該列 `definition_version` 所登記的 dirdef）必須回傳空 tuple，上方五項也必須成立；不成立時拒絕寫入，拋 `LabeledThresholdSnapshotIncompleteError`（D-9 第 6 點 N-46 子點）。違規值是封閉列舉，依序為 `k_h_missing`、`k_h_mismatch`、`eps_missing`、`eps_mismatch`、`sigma_d_missing`、`sigma_d_not_positive_finite`、`sigma_d_below_floor`（`sigma_d` 小於該版 dirdef 的 `SIGMA_FLOOR`）、`valid_returns_below_min`（`valid_returns` 為 null，或小於該版 dirdef 的 `SIGMA_MIN_VALID`）；回傳值依此順序排列、不重複。有標籤的預測不得以缺項寫入，也不得改記 `insufficient` 或補值後寫入。
+      - `label = insufficient`、而且完整：上方五項照常適用。
+      - `label = insufficient`、而且缺項：上方五項不適用；`missing_json` 必須非空（D-13 不變式；事先宣告 §5.1 第 2 點），否則拒絕寫入；`up_pct`、`down_pct` 必須同為 null（事先宣告 §5.1 第 3 點：不得以替代估法補資料）；其餘鍵照預測端實際算得的值存，算不出的記 null。
+      - 理由：上方五項對缺 `sigma_d` 的列無法成立；照字面不分 label 適用，證據不足的預測會被拒寫，違反事先宣告 §5.1 第 4 點「證據不足的預測也寫入紀錄帳，並計入涵蓋率」，V22-07 也會落空。
   - PIT 證明：`inputs_max_recorded_at`、`source_run_min`、`source_run_max`、`input_digest`；
   - 時間：`valid_until_session`、`created_at`、`late`（排程紀錄為 0 或 1；on_demand 為 NULL）、`late_cutoff_at`、`late_cutoff_basis ∈ {official, weekday_assumed}`；
   - 更正與雜湊：`supersedes_id`、`correction_reason`、`content_hash`。
@@ -1205,7 +1213,7 @@
        - 理由：(1) 事先宣告「結算後才確認」一支沒有等待；(2) 延後判定需要一個依時間經過的啟動條件，與 D-3「晚到資料的觸發」第 1 點「啟動與否只依本點四類觸發是否存在」不合（N-29 加入的第四類同樣只依資料事件）；(3) 延後期間，已結算列會照原值呈現一個收盤已確認有誤的結果，不帶 LM-143（風控 2026-10-18 C-22 確認 B-1）。
        - 代價：作廢列依 R10-3 不再 supersede。之後才取得的正確值，只能依 D-3 `forecast_void_late_diag` 記診斷結果，不回到 `resolved`。同一情形若在結算前確認，D_5 之前取得正確值就會照常結算。兩條路徑的差別只取決於確認與結算的先後，不看預測內容或結果；只在獨立來源已接入、① 查詢失敗、而 D_5 之前的某次 ② 取得數值時才會出現【推論】。
        - `wait_sessions`、`wait_deadline_session` 照抄被 supersede 列（D-3，不變）；D-3「結算評估寫入的列中……⇒ `wait_sessions ≥ 5`」不適用於本路徑（不變）。
-       - 這類作廢依事先宣告 §6.3「以上作廢一律計入作廢率與 W」照常計入。
+       - 這類作廢依事先宣告 §6.3「確認有誤之後」末點（v0.21，V21-08）：依 §4.2 作廢數「範圍」句計入作廢率與 W（兩者只在 E 上計算，§4.3 (f)），與其他作廢合併揭露。〔N-50 取代：原寫「- 這類作廢依事先宣告 §6.3「以上作廢一律計入作廢率與 W」照常計入。」〕
      - 作廢原因的判定順序中，第五值的位置交 quant 在事先宣告登記（v0.12，凍結前）。〔已決：完整順序依事先宣告 v0.13 V13-01（第五值的位置依 V12-14），見本點下方「判定順序」（N-12）〕
    - （N-12；事先宣告 v0.13 V13-01）**判定順序**：`index_bar_confirmed_erroneous` → `dividend_factor_unusable` → `split_or_reduction_suspected` → `basket_coverage_below_90` → `missing_bar_after_wait`，第一個成立的就是 `status_reason`。
      - 順序常數 `VOID_REASON_ORDER` 凍結在 dirdef，屬於 `definition_logic_sha256` 的範圍，字面與 V13-01 逐字相同：`VOID_REASON_ORDER = ("index_bar_confirmed_erroneous", "dividend_factor_unusable", "split_or_reduction_suspected", "basket_coverage_below_90", "missing_bar_after_wait")`。FL-22 另加一格：dirdef 的常數等於此 tuple。
@@ -1271,6 +1279,32 @@
        - 範圍取 [D_reg, 作業開始當日]，與缺日稽核的登記範圍相同。
        - 不強制重抓：同一次執行的結算評估，已處理它自己快照範圍內的缺漏。前一列已用過的日期，依上文取當時的快照，不受 `price_bars_cache` 事後的改寫或缺漏影響。事先宣告 §6.3 要求結算所用的每一根大盤 bar 都經過偵測；結算之後的改寫沒有經過偵測，不得經更正作業默默改變已結算的數值（R10-5：P(T) 取 `start_price_json`）。
 6. 逾時與 on-demand 的紀錄也照常結算，供紀錄清單列示。
+   - （N-41；G-2；事先宣告 v0.22 V22-07）**證據不足的預測照常結算**：
+     - 證據不足（`label = insufficient`）的預測同樣結算：評估集合 U 不依 label 篩選（第 2 點 ②），結算、等待或作廢的判定不讀 label（第 2 點「全量評估」、第 3 點「判定順序」）。`status` 依一般規則記為 `resolved` 或作廢。
+     - `threshold_snapshot`（`band_def`）缺項時（`threshold_inputs()` 回傳 None，D-3 `forecast_record` 判定材料「適用範圍與缺項」），`realized_z`、`realized_label`，以及要用到這兩者或同一組門檻的欄位（`hit`、`baseline_hits_json`、`diag_open_based_json`、`diag_last_close`、`index_return_diag`、`diag_basket_with_excluded`）一律記 null；不用門檻的欄位（`realized_log_return`、`realized_return`、`mae`、`mfe` 等）依一般規則照常計算。
+     - 不得以結算時重算的 σ_d、其他預測的門檻或任何代入值補上（重算會用到 cutoff(T) 之後的資料，也違反事先宣告 §6.3「σ 用預測當時存下的 σ_d(T)，不重算」）；也不得因缺項而拋出例外或不寫入 outcome 列。結算評估與更正作業都不呼叫 `app/outlook/volatility.py` 的 `sigma_d()`（AST）。
+     - `threshold_snapshot` 完整的證據不足預測，照常以該列的 `threshold_snapshot` 計算 `realized_z`、`realized_label`；`hit` 依事先宣告 §6.3 `hit` 列記為 null。
+     - 本點不改任何判定。證據不足的預測不計入 n，只計入涵蓋率（事先宣告 §4.1 V9-06），所以這些欄位不是 n、命中率的輸入；除事先宣告 §4.3 (f) v0.23 的族群籃子標籤不一致判定（V23-02；D-12「逐檢查點判定」第 1 點 `fail_w(c)` 子點 (2)）外，也不是 §4.3 任何判定的輸入。W 對作廢列一律依規則記命中與否（事先宣告 §4.2），不讀這些欄位；W 只在上述族群籃子標籤不一致判定中讀 `realized_label` 與 `diag_basket_with_excluded`。
+     - 欄位怎麼填，由 `scoring.py` 建 outcome 列的單一函式依 `threshold_inputs()` 決定。在結算評估與更正作業中，label 只在這個函式（`hit` 與本點的 null 欄位）、本點的 `forecast_outcome` 寫入驗證與下一子點的守衛中讀取；第 2 點的等待判定與第 3 點的 `void_reasons()` 照舊不讀 label（AST）。
+     - **只適用於證據不足的預測**：有標籤的預測（`label ≠ insufficient`）不適用本點，不得比照本點記 null 照常寫入（事先宣告 §6.3 v0.22 註末句）；處理見下一子點。
+     - `forecast_outcome` 的寫入驗證（結算評估與更正作業的寫入函式都適用；任一項不成立就拒絕寫入）：
+       - `label = insufficient`、而且 `threshold_inputs()` 為 None ⇒ 上列八個欄位全部為 null；
+       - `label = insufficient` ⇒ `hit` 為 null；
+       - `label ≠ insufficient`、而且 `status = resolved` ⇒ `realized_z`、`realized_label`、`hit` 都非 null。
+   - （N-46；tech-architect 2026-10-19）**有標籤的預測，`threshold_snapshot` 缺項時**：
+     - **寫入端**：依 D-3 `forecast_record` 判定材料「適用範圍與缺項」，有標籤的預測不能以缺項寫入。記錄一步在該範圍的寫入交易內，由 store 的寫入驗證拋 `LabeledThresholdSnapshotIncompleteError`（`source = record`）。記錄一步只接住這個型別：該範圍 rollback、不寫入，其餘範圍照常（D-7.7 每個範圍各自一個交易）；全部範圍結束後，該步的型別化步驟結果標為失敗（D-7 第 2 點 Q8），由編排函式發 ADR-0029 E-3d（`step = record`，`exception_class` 為 None）。這是預測當下、結果未知時的拒寫，不依結果挑選；該範圍依 D-8 第 2 點成為缺日。
+     - **結算端與更正端的守衛**（防禦性斷言）：結算評估在 ⑥ 判定 U 的任何一筆之前，更正作業在第 5 點 ④ 重算之前，對 U（更正作業為被重查的列）中每一筆 `label ≠ insufficient` 的原始 `forecast_record`，以 `labeled_snapshot_violations()` 檢查；任一筆非空時，拋 `LabeledThresholdSnapshotIncompleteError`（`source` 為 `settlement` 或 `correction`）。結算評估整個交易不寫入（⑦）；更正作業不開啟 ⑤ 的交易，本作業視為中斷，由下一個作業完整重跑（第 5 點 ⑤）。
+     - 本例外是不變式的守衛，不是預期中的營運狀態：依 D-13 不變式、事先宣告 §5.2 `E-VOL-SHORT`／`E-VOL-DEGENERATE`、D-3「適用範圍與缺項」與 D-11 第 1 點「預測端一律取原始的 `forecast_record`」，通過寫入驗證的有標籤列在結算端不會缺項；本例外只在寫入驗證被繞過（程式缺陷、直接改 DB、從沒有本驗證的版本還原）時成立。
+     - **不得**：捕捉本例外後繼續寫入；把該筆改記 null、作廢（含新增 `status_reason`）、改 label 或補值；把該筆排除在 U 之外或延後判定，而讓其他預測照常結算。理由：逐筆跳過等於依程式缺陷挑選樣本；改記 null 會讓 null 路徑擴大，蓋掉寫入端的錯誤（風控 2026-10-19 checkpoint 批確認 (c)）。
+     - **型別與欄位**：`LabeledThresholdSnapshotIncompleteError`（`app/forecast/errors.py`，`ForecastFailClosedError` 的子類），關鍵字必填的結構化屬性：
+       - `source ∈ {record, settlement, correction}`；
+       - `violations`：受影響各列違規值的聯集，依 D-3 封閉列舉的順序排列、不重複、非空的 tuple；
+       - `affected_forecast_count`：≥ 1（`source = record` 時恆為 1）；
+       - `data_as_of_from`、`data_as_of_to`：受影響各列 `data_as_of` 的最小值與最大值（ISO 日期）。
+       例外訊息由這些屬性以固定格式產生，不含其他文字；不帶 `forecast_id`、`claim_id`、`scope_key`、代號或 label（FL-71 (f) 推播禁用詞清單 C、E 類）。受影響的列可以由只增不改的 `forecast_record` 以唯讀查詢重現，不需要帶識別資訊。
+     - **告警**：沿用 ADR-0029 E-3d `forecast.step.failed`（結算 `step = settlement`、更正 `step = late_scan_correction`，`exception_class = LabeledThresholdSnapshotIncompleteError`；記錄一步依上文）。不新增事件，推播的欄位集合、標籤與模板都不變（ADR-0029 失效條件 5 不觸發）。
+     - **使用者面**：不新增文案。結算評估不寫入時，依 D-7 第 2 點「持續失敗期間」與前置條件（驗證快照不寫，D-11.4 `snapshot_stale` 遮蔽）呈現；記錄一步拒寫的範圍，依 D-8 第 2 點與第 5 點以缺日呈現（TG-b）。
+     - **處理路徑只有一條**：查出根因，修正程式或本條，送風控。`forecast_record` 只增不改，不得以改寫、刪除或補寫該列代替。
 7. **重放不走本條的結算路徑**（N-22；tech-architect 2026-10-18 查證）：
    - `forecast_replay` 的結算不呼叫 `run_settlement_evaluation()`、`run_correction_job()`、`observed_sessions(*, view)`、`span_sessions`、`unobserved_weekdays` 與 `ledger_registration_start()`；
    - 不讀也不寫 `forecast_settle_eval`、`forecast_correction_job`、`forecast_index_check`；
@@ -1316,9 +1350,9 @@
      - 「更正後命中翻轉」（事先宣告 v0.11 L687、L1221）比較的是：更正鏈中第一筆 `resolved` 列，對上鏈尾。鏈尾不是 `resolved` 時，另外歸入「改為作廢」。已由 quant 登記（事先宣告 v0.12 V12-08）。
    - 「已確認的 PIT 違規列」是指在 `forecast_ledger_events` 有 `kind = pit_violation_confirmed` 事件的 `forecast_id`。
    - quant §4.1 的不重疊 n、重疊的次要統計、涵蓋率，**一律只在 E 上計算**。
-   - 作廢列不計入 n，但計入最壞情境 W。
+   - 作廢列不計入 n，但計入最壞情境 W。（事先宣告 §4.3 (f) v0.23，V23-01）作廢率的分子與分母、W 放回的列，一律依鏈尾的 `status` 判定，不讀預測端 label：E 內 `label = insufficient` 而後作廢的列，計入作廢率的分子與分母，並在 W 中放回（模型記未命中、各必備基準記命中）；`label = insufficient` 而 `resolved` 的列計入作廢率分母的「已結算列」，仍不計入 n（事先宣告 §4.3 (f) v0.23）。族群籃子標籤不一致的列，同樣不讀預測端 label，依 D-12「逐檢查點判定」第 1 點 `fail_w(c)` 子點（事先宣告 §4.3 (f) v0.23，V23-02）。範圍依 D-11 第 2 點 N-50 子點（`record_range`）。
    - 逾時與 on-demand 的紀錄另外列出筆數。
-   - **用詞定義**（r3，A-59）：「主統計」指 E 的成員資格；「n」指在 E 內、依 §4.1 不重疊規則計得的筆數。作廢列不計入 n，但計入 W。證據不足列依 §4.1 與 LM-91 第 5 條（quant 書面確認）。兩個詞不得混用。
+   - **用詞定義**（r3，A-59）：「主統計」指 E 的成員資格；「n」指在 E 內、依 §4.1 不重疊規則計得的筆數。作廢列不計入 n，但計入 W。證據不足列依 §4.1 與 LM-91 第 5 條（quant 書面確認）。作廢率與 W 不依 label 篩選（事先宣告 §4.3 (f) v0.23，V23-01、V23-02），見本點「作廢列不計入 n」一子點。兩個詞不得混用。
      - LM-14、LM-37、LM-80 與 D-7.6、D-7.8 的「不計入主統計」都屬實，不改；LM-38「不計入 n」版已於 2026-10-17 經風控單項確認核可（`work/reviews/2026-10-17-LM38與B16註記及B0頁尾單項確認-風控.md` 第 1 項）。LM-38 的適用範圍依 A-62 R2 第 3 點，只用於 E 內的作廢列。E 的定義不變。
 2. **`forecast_validation_snapshot`**：
    - 欄位（r1，A-5）：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seeds_json`、`rng_name`、`numpy_version`、`display_reasons_json`、`withdrawn_at_n`、`code_commit`、`computed_at`；
@@ -1337,7 +1371,13 @@
        - 兩者只由 `validation.py` 的單一函式 `checkpoints_due(claim_id, *, e_view) -> CheckpointsDue`（名稱暫定）計算。`e_view` 是本筆 snapshot 經 `store.py` 讀 E 的函式，在同一個 read transaction 內的回傳物件。
        - 回傳 `n_complete`、`unbounded_pending`，以及到期的 n_j，升冪。到期的 n_j 指：事先宣告 §4.5 的檢查點中 ≤ n_complete、而且本檔內還沒有同一 `checkpoint_n` 的 checkpoint 列者。
        - 簽章不接受 n、n_complete、檢查點清單、樣本或判定結果（AST）。
-       - checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只在 P_j 的紀錄上計算，各紀錄取同一 `e_view` 的鏈尾。P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得。
+       - （N-50；事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 1 點）checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只用 E 內 T ≤ T\*_j 的紀錄計算，各紀錄取同一 `e_view` 的鏈尾。其中：
+         - 以 n 計的指標（§4.3 (a)～(d)，以及 §4.2 以 n 為分母或以 n 樣本計算的各項）的樣本是 P_j；
+         - 其餘項目（§4.3 (e) 涵蓋率、§4.3 (f) 作廢率的分子與分母、W 放回的列、§4.2 作廢數與混淆矩陣「證據不足」列等以 E 內紀錄計的各項）取 E 內 T ≤ T\*_j 的全部紀錄，不限於 P_j。理由：作廢列與證據不足列不符合事先宣告 §4.1 的 n 條件，本來就不在 P_j 內；只在 P_j 上計算，作廢率恆為 0、W 不放回任何列、涵蓋率恆為 100%，等於默默放寬。 §4.2 的項目判斷不了屬於上兩類的哪一類時，由 quant 在事先宣告登記；登記之前，該項不得寫入 checkpoint 列。
+         - P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得；E 內 T ≤ T\*_j 的紀錄只由同一模組的單一函式 `record_range(claim_id, *, e_view, n_j)` 取得（daily 列以 `n_j = None` 呼叫，取同一 `e_view` 的 E 全部）。兩者的 T\*_j 由同一個模組內部函式導出；`record_range` 回傳物件帶 `prefix_last_session`，checkpoint 列寫入時驗證它等於 P_j 最後一個格點的決策日，不成立就依「寫入時點」的寫入驗證整個交易 rollback。
+         - `record_range` 逐列帶出鏈尾的 `status`、`status_reason`、`label`（取原始 `forecast_record`，D-11.1）、是否為第 0 相位格點、是否在待重算集合（含 `unbounded_pending`），以及族群列的 `basket_excluded_members_json`；它本身不做任何計數或判定。各指標取哪個相位、待重算列在作廢率分母中怎麼算，依事先宣告登記（後續追蹤清單 N-55、N-56；見本 ADR 修訂紀錄 N-50 段）；登記之前，D-12 的 `void_rate`、`fail_w` 與 checkpoint 列的 §4.3 (e)(f) 不得實作。
+         - 簽章不接受 T\*_j、n、樣本、紀錄清單或判定結果（AST）。
+         〔N-50 取代：原寫「- checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只在 P_j 的紀錄上計算，各紀錄取同一 `e_view` 的鏈尾。P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得。」〕
        - checkpoint 列的 `n` ＝ n_j。
      - **寫入時點**：
        - 驗證快照寫入 T 的 daily 列時，若 `checkpoints_due` 回傳的到期集合非空，就在同一個交易內，為其中最小的 n_j 寫一列 checkpoint 列（`checkpoint_n = n_j`，`computed_for_session = T`）。其餘到期的 n_j，依升冪由之後各筆寫入成功的 daily snapshot 判定。
@@ -2009,16 +2049,16 @@
   - （r2，A-23）`f2_invalid_stop_worst_case`：條件一成立，但上式不成立；
   - （r2，A-23）優先序：`f2_invalid_stop` > `f2_deadline` > `f2_invalid_stop_worst_case`。
 - 寫進 snapshot 的 `display_reasons_json`，並同時記錄 `withdrawn_at_n`。
-- 條件一必須讀兩個檢查點的 `eval_kind=checkpoint` 列在 `stats_json` 中的同一份計算（一般情境與 W 情境各存一份），不得另外計算一次。
+- 條件一必須讀兩個檢查點的 `eval_kind=checkpoint` 列在 `stats_json` 中的同一份計算（一般情境與 W 情境各存一份），不得另外計算一次。（事先宣告 v0.23 V23-01）事先宣告 §4.2 W 列 v0.23 另列的三項（證據不足而後作廢的筆數、證據不足而 `resolved` 的筆數、只計有標籤列的作廢率）存於同列 `stats_json.w_disclosure`，只作揭露；FL-46 所稱判定條件一的唯一函式，以及 `void_rate`、`worst_case_sample` 都不讀它（AST）。
 - CEO 若選 F2-A，列舉值在 C-8 決策時另外定，片段要重寫。
 
 **逐檢查點判定（r2，A-23；整條取代 r2 版；原因值與優先序併入上方列舉）**
 1. **逐檢查點判定**。相鄰兩個檢查點記為 (c₀, c₁)，對每個 c：
    - `fail_normal(c)`：一般情境下，模型點估計在共同子集上 ≤ 任一必備基準；
-   - `fail_w(c)`：W 情境下做同一個比較；
+   - `fail_w(c)`：W 情境下做同一個比較。W 的樣本只由 `validation.py` 的單一函式 `worst_case_sample(record_range, n_sample)` 組成：輸入只接受 `record_range()` 與 `checkpoint_sample()`（daily 列為該列的 n 樣本函式）的回傳物件，不接受紀錄清單或判定結果（AST）。W 樣本 ＝ n 樣本，加上依事先宣告 §4.2「作廢最壞情境 W」與 §4.3 (f) v0.23 放回的列：(1) 範圍內鏈尾為作廢的列，不論預測端 label；(2) 範圍內族群列中，鏈尾 `resolved`、`basket_excluded_members_json` 非空，而且主籃子標籤（`realized_label`）與診斷籃子標籤（`diag_basket_with_excluded`）不一致，或任一為 null 者，不論預測端 label；其中已在 n 樣本內的列改記（模型未命中、各必備基準命中），不重複計入；`basket_excluded_members_json` 為空陣列的列，兩個籃子相同，不屬於 (2)。(1)(2) 都依鏈尾與結算結果判定，不讀預測端 label（事先宣告 §4.3 (f) v0.23，V23-01、V23-02）；不在 n 樣本內的 (2) 列（`label = insufficient` 者）加入 W 樣本。每筆紀錄只計一次；
    - 兩者都讀該檢查點 `eval_kind=checkpoint` 列的 `stats_json`，不另外計算。
    - `fail(c) = fail_normal(c) OR (void_rate(c) > 5% AND fail_w(c))`；
-   - `void_rate(c)` 讀該檢查點 checkpoint 列的值，定義依事先宣告 §4.3 (f)（v0.8 L576）：作廢列 ÷（已結算列＋作廢列）；
+   - `void_rate(c)` 讀該檢查點 checkpoint 列的值，定義依事先宣告 §4.3 (f)：作廢列 ÷（已結算列＋作廢列）。寫入 checkpoint 列（daily 列同理）時，由 `validation.py` 的單一函式 `void_rate(record_range)` 計算，分子與分母只取 `record_range()` 回傳的紀錄（D-11 第 2 點 N-50 子點），依鏈尾 `status` 判定，不讀預測端 label（E 內 `label = insufficient` 而後作廢者計入分子與分母，`resolved` 者計入分母；事先宣告 §4.3 (f) v0.23，V23-01）；
    - 條件一成立，若且唯若 `fail(c₀) AND fail(c₁)`；不要求兩個檢查點的作廢率都 > 5%。
 2. **原因值與優先序**：見上方『下架原因列舉值』。
 3. **`display_reasons_json.withdraw`** 的結構：`{reason, conditions_met, pair: [{n, void_rate, fail_normal, fail_w}, …], positive_suppressed_during_f3: bool}`。最後一個欄位見 A-28。
@@ -2553,6 +2593,29 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (j) 雜項：`app/forecast/**` 沒有存放登記終點的欄位或檔案（grep／AST）；沒有任何以呼叫端指定日期或 payload 寫入 `unobserved_weekday` 的 CLI 或 API；recorder 與 X2 確認寫入函式不呼叫 `unobserved_weekdays`、`ledger_registration_start()`（AST）。
   - (k) 驗收依據：本條加上 FL-65 (n)、FL-66 (h)(j)、FL-67 (e)～(n)、FL-68、FL-70，涵蓋 review 檔中的 C1～C33（對照表見修訂紀錄本批段）。qa-reviewer 以 FL 為驗收依據，C 號不另外構成驗收依據。
   - (l) 還原疑似時的共同守衛（D-7 第 2 點 Q7）：`market_run_regression` 在 `app/forecast/` 內恰好一個定義，結算評估、缺日稽核、晚到掃描只經它判定（AST）。守衛成立時：缺日稽核寫入 `forecast_gaps` 與一列 `forecast_gap_audit`，`forecast_ledger_events` 沒有新的 `unobserved_weekday` 列；E-2 的 `source = audit` 一則推播。守衛成立時寫入的 `forecast_gap_audit` 列，`market_run_regression_json` 非 null（細格見 FL-67 (n)）。守衛不再成立之後的第一次缺日稽核，登記完整的 [D_reg, 最新觀察日]。
+- **FL-72**（N-41、N-46；D-9 第 6 點；D-3 `forecast_record` 判定材料「適用範圍與缺項」；對應事先宣告 LG-33 (21)）：fixture 用離線的假市場 DB、假主 DB 與假的 `app.services.index`。
+  - (a) 證據不足、`band_def` 缺 `sigma_d` 鍵的一筆，與一筆完整的有標籤預測，同在 U → 兩筆都寫 outcome 列，不拋例外，寫入 `forecast_settle_eval`；證據不足那一筆的 `realized_z`、`realized_label`、`hit`、`baseline_hits_json`、`diag_open_based_json`、`diag_last_close` 為 null，大盤 fixture 的 `index_return_diag`、族群 fixture 的 `diag_basket_with_excluded` 為 null；`realized_log_return`、`realized_return`、`mae`、`mfe` 等於 fixture 的期望值。有標籤那一筆照常算出。
+  - (b) 缺項的各種情形各一格，期望同 (a)：`sigma_d` 為 null、0、−0.01、NaN、+inf；`K_h` 鍵不存在；`EPS` 鍵不存在。
+  - (c) 證據不足而且缺項、T+h 一直沒有可用資料 → 判定視圖觀察到 D_5 的那次評估記 `missing_bar_after_wait`，`diag_last_close` 為 null，不拋例外。
+  - (d) 證據不足、但 `threshold_snapshot` 完整 → `realized_z`、`realized_label` 依該列門檻算出（非 null），`hit` 為 null。
+  - (e) 不得補值：同一 scope 另有一筆完整的預測，缺項那一筆仍為 null；結算評估與更正作業期間，`app/outlook/volatility.py` 的 `sigma_d()` 呼叫 0 次（spy）。
+  - (f) 判定不讀 label：同一份市場資料與 `band_def`（完整），label 分別為 `insufficient` 與 `bullish` 的兩個 fixture → `status`、`status_reason`、`void_reasons_json`、`settlement_date`、`wait_sessions`、`wait_deadline_session` 逐位相同，只有 `hit` 不同。
+  - (g) `forecast_record` 寫入：證據不足而且缺項 → 接受，`up_pct`、`down_pct` 為 null；證據不足而且缺項、`up_pct` 非 null → 拒絕；證據不足而且缺項、`missing_json` 為空陣列 → 拒絕；證據不足而且完整 → 原有五項照常驗證（`up_pct < down_pct` 的一格拒絕）；任一 label 的 `K_h` 或 `EPS` 與該列 `definition_version` 的 dirdef 常數不同 → 拒絕；兩個 `definition_version` 的 K 不同時，各依自己的版本比對。
+  - (h) 驗證統計（(a) 的大盤 fixture）：E 中加入 (a) 那一筆，n、命中率、各基準命中、§4.3 (a)～(d) 各值、W 放回的列數與 W 情境下的各值、`bootstrap_seeds_json` 逐位不變；§4.3 (e) 涵蓋率的分母加 1、分子不變；§4.3 (f) 作廢率的分母加 1、分子不變（事先宣告 §4.3 (f) v0.23，V23-01；同 FL-73 (e)）；§4.2 混淆矩陣「證據不足」列的「其中 `realized_label` 為 null 的筆數」加 1。族群 fixture 依 FL-73 (f)。
+  - (i) 寫入端（N-46）：label 為 `bullish`、`range`、`bearish` 各一格，每一種違規值至少一格 → 該範圍的 `forecast_record` 寫入拋 `LabeledThresholdSnapshotIncompleteError`（`source = record`、`affected_forecast_count = 1`、`violations` 等於 fixture 的期望值），該範圍沒有列，同一次執行的其他範圍照常寫入；記錄一步的步驟結果為失敗，E-3d 一則（`step = record`，`exception_class` 為 None）。
+  - (j) 結算端守衛：以測試專用的 SQL 繞過寫入驗證，在假主 DB 放一筆缺 `sigma_d` 的有標籤預測 → `run_settlement_evaluation()` 在寫入任何 outcome 之前拋 `LabeledThresholdSnapshotIncompleteError`（`source = settlement`），屬性等於 fixture 的值；例外逃出時 `in_transaction` 為 False，`forecast_outcome`、`forecast_settle_eval` 的列數不變；任何一列都沒有出現「`label ≠ insufficient` 而且 `realized_label` 為 null」；E-3d 一則（`step = settlement`，`exception_class = LabeledThresholdSnapshotIncompleteError`）；缺日稽核照常被呼叫（比照 FL-71 (b)）；下一次評估以同一份 fixture 再拋一次（不存跨執行狀態）。
+  - (k) 更正端守衛：被重查的列中有 (j) 那種列 → `run_correction_job()` 在 ④ 拋出（`source = correction`），⑤ 的交易沒有開啟，沒有 supersede 列、diag 列與 `forecast_correction_job_end`。
+  - (l) `forecast_outcome` 寫入驗證：有標籤、`status = resolved`、`realized_label` 為 null → 拒絕；證據不足而且缺項、`realized_label` 非 null → 拒絕；證據不足、`hit` 非 null → 拒絕。
+  - (m) 例外：`str(exc)` 等於由屬性以固定格式產生的字串；缺任一個必填屬性 → 建構失敗；`violations` 為空或未排序 → 建構失敗；fixture 的 `forecast_id`、`claim_id`、代號哨兵值與 label 字串不出現在例外訊息、`ops alert:` log 行與推播中（沿用 FL-71 (f) E 類）。
+  - (n) 單一定義：`threshold_inputs`、`labeled_snapshot_violations` 在 `app/` 內各恰好一個定義，都在 `band.py`；`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 都經這兩個函式判定（AST、spy）；`band.py` 不 import `scoring.py`、`app/outlook/volatility.py`（import graph）。
+- **FL-73**（N-50；D-11 第 2 點 `record_range`；D-12「逐檢查點判定」第 1 點；對應事先宣告 LG-34）：
+  - (a) checkpoint n_j＝30：P_j 為 30 個有標籤、`resolved` 的格點，另有 3 筆 T ≤ T\*_j 的有標籤作廢列 → `void_rate` ＝ 3/33（不是 0），W 放回 3 筆；T > T\*_j 的作廢列不計入。
+  - (b) 同一 fixture 另加 5 筆 T ≤ T\*_j 的證據不足列 → checkpoint 列的 §4.3 (e) 涵蓋率不是 100%，等於 fixture 的期望值。
+  - (c) `record_range` 回傳的 `prefix_last_session` 等於 `checkpoint_sample` 最後一個格點的決策日；以測試替身使兩者不等 → checkpoint 列寫入被拒，整個交易 rollback。`record_range`、`void_rate`、`worst_case_sample` 在 `app/` 內各恰好一個定義；簽章不接受 T\*_j、n、樣本、紀錄清單或判定結果（AST）；它們與 `checkpoint_sample` 都只經同一個內部函式取得 T\*_j（spy）。
+  - (d)（V23-01）label 不變性：固定 T\*_j，把範圍內任一筆的 label 在 {bullish, range, bearish, insufficient} 之間替換 → `void_rate` 與 W 放回的作廢列筆數逐位相同（LG-34 (c)）。
+  - (e)（V23-01）證據不足而後作廢 → 計入分子與分母，W 放回；證據不足而 `resolved`（含 `realized_label` 為 null）、非族群 → 只計入分母，不放回，n 不變（LG-34 (a)(b)）。
+  - (f) 族群：有標籤、`resolved`、排除成員非空、兩個籃子標籤不一致 → 在 n 樣本內改記，不重複計入；排除成員為空陣列、兩個標籤都是 null → 不屬於 (2)；排除成員非空、任一標籤為 null → 屬於 (2)。`label = insufficient`、`resolved`、排除成員非空、兩個籃子標籤不一致 → 加入 W 樣本，n 不變；`label = insufficient`、`resolved`、排除成員非空、任一標籤為 null → 屬於 (2)，加入 W 樣本；`label = insufficient`、`resolved`、排除成員為空陣列、兩個標籤都是 null → 不屬於 (2)，不放回（V23-02；對應事先宣告 LG-34 (f)）。
+  - (g) `stats_json.w_disclosure` 存在，FL-46 的唯一函式、`void_rate`、`worst_case_sample` 不讀它（AST）。
 - **FL-24**：預測端計分永遠使用原始列。
 - **FL-50**（r1，A-11）：用表格驅動測試釘住 D-9.3 的兩點（`split_or_reduction_suspected` 的固定門檻、`basket_coverage_below_90` 以 T 日成員數計）。
   - （N-12；對應 LG-28 (d)）加一格：T+h 缺 bar，窗內已有的 bar 中有一日超過 `SPLIT_SUSPECT_ABS_RETURN` → 判為 `split_or_reduction_suspected`。
@@ -2578,7 +2641,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - **FL-27**：寫入紀錄時，logic 雜湊必須等於所屬 claim 的雜湊。
 - **FL-28**：m 只增不減；`forecast_validation_snapshot.alpha_star` 等於 0.05÷(max(`m_at_eval`, 8)×K)。
 - **FL-29**：只有 `eval_kind=checkpoint` 的列可以使狀態升為 `better_than_baseline`。
-- **FL-47**（r1，A-5）：`bootstrap_seeds_json` 的鍵 ⊆ 對照表；每個值等於導出式的結果（即 LG-20）。
+- **FL-47**（r1，A-5；N-49）：`bootstrap_seeds_json` 的鍵 ⊆ 對照表；每個值等於 D-11 第 2 點「seed 導出式」以該列的 `claim_id` 與 `eval_key` 算出的結果：前瞻列的 `eval_key` 是 `n{n}`（daily 列取該列的 n，checkpoint 列取 n_j），重放用 `freeze_commit`。期望值在測試內以 fixture 的 `claim_id`、n、`purpose`、`block_len` 直接代入導出式計算，不得呼叫被測程式的 seed 函式取得。加兩格：同一 claim、同一 n、`computed_for_session` 不同的兩列 daily → seed 逐位相同；同一 `computed_for_session`、n 不同 → 以 fixture 值算出的 seed 不同。（對應 LG-20「seed 等於 §4.3 導出式的值」一句；LG-20 的「同一 n 的 daily 列與 checkpoint 列使用同一組 seed」「延後判定與準時判定的 checkpoint 列 seed 相同」由 FL-71 (i) 第 (1)、(12) 格涵蓋）〔N-49 取代：原寫「- **FL-47**（r1，A-5）：`bootstrap_seeds_json` 的鍵 ⊆ 對照表；每個值等於導出式的結果（即 LG-20）。」〕
 - **FL-48**（r1，A-10）：補跑的 late 紀錄、首筆紀錄後來被確認為 PIT 違規，這兩種 fixture 下 D_v 都不變。
   - （N-5）加一格：還原到 D_v 之前。
   - （起算日）加兩格：
@@ -2618,6 +2681,8 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   3. c₀ > 5% 且只靠 W 失敗，c₁ ≤ 5%、一般情境通過、W 失敗 → 不下架；
   4. 兩點一般情境都失敗，作廢率 > 5% → `f2_invalid_stop`；
   5. deadline 與 worst_case 同時成立 → `reason=f2_deadline`，`conditions_met` 含兩者。
+  6. （N-50；V23-01）只有計入 E 內 `label = insufficient` 而後作廢的列，作廢率才 > 5%，而且兩點都只靠 W 失敗 → worst_case；
+  7. （N-50；V23-01）只計有標籤列時作廢率 > 5%，計入 `label = insufficient` 而 `resolved` 的列後 ≤ 5% → 不套用 W，依一般情境判定；`stats_json.w_disclosure` 的「只計有標籤列的作廢率」照實記下 > 5% 的值。
 - **FL-46**（r1，A-9）：只有一個函式讀 checkpoint 列來判定條件一（grep 加測試）。
 
 **閘門與缺項**
@@ -4678,8 +4743,46 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - 本批沒有落檔：
   - TA 回覆 2-F（給 CEO 的成本句，不入 ADR；風控要求加一句因程式錯誤而沒有期限的待重算項的說明，由 coordinator 轉達 CEO）。
   - TA 回覆 2-H（甲案差異清單）：風控裁定不需要，不落檔；風控 2026-10-19 先前裁定中「改走甲案」的備援就此撤回（α 不被採用時，應該退回重新設計）。
-  - G-2 的 ADR 側落字（D-9：證據不足的預測照常結算；缺項時記 null、不拋例外；有標籤者不適用，並附 FL 格）：由 TA 起草送風控，擋 D-9，不擋本批。
-  - 有標籤的預測 `threshold_snapshot` 缺項的寫入端規則：TA 在 D-9 實作前定案、送風控。
-  - 證據不足而後作廢的列是否計入作廢率與 W（事先宣告 v0.22 §9.2「v0.22 仍需核對」末項）：定案前以字面讀法為準（計入）；由 quant 在 D_v 前具名登記，擋 D_v；D-12 `void_rate`／`fail_w` 的實作不得早於定案（風控 checkpoint 批確認第四節 coordinator 同批規則 4）。
+  - G-2 的 ADR 側落字（D-9：證據不足的預測照常結算；缺項時記 null、不拋例外；有標籤者不適用，並附 FL 格）：由 TA 起草送風控，擋 D-9，不擋本批。〔已決（風控 2026-10-19 N-41／N-46／N-50 批與事先宣告 v0.23 逐字確認，`work/reviews/2026-10-19-N41N46N50批與v0.23逐字確認-風控.md`）：已落檔於 D-9 第 6 點 N-41 子點、D-3 `forecast_record` 判定材料「適用範圍與缺項」與 FL-72，見本修訂紀錄最後一段（N-41、N-46、N-49、N-50 批）。本項原文不改〕
+  - 有標籤的預測 `threshold_snapshot` 缺項的寫入端規則：TA 在 D-9 實作前定案、送風控。〔已決（風控 2026-10-19 N-41／N-46／N-50 批與事先宣告 v0.23 逐字確認，`work/reviews/2026-10-19-N41N46N50批與v0.23逐字確認-風控.md`）：採方案 A，已落檔於 D-3「適用範圍與缺項」、D-9 第 6 點 N-46 子點與 FL-72，見本修訂紀錄最後一段。本項原文不改〕
+  - 證據不足而後作廢的列是否計入作廢率與 W（事先宣告 v0.22 §9.2「v0.22 仍需核對」末項）：定案前以字面讀法為準（計入）；由 quant 在 D_v 前具名登記，擋 D_v；D-12 `void_rate`／`fail_w` 的實作不得早於定案（風控 checkpoint 批確認第四節 coordinator 同批規則 4）。〔已決（風控 2026-10-19 N-41／N-46／N-50 批與事先宣告 v0.23 逐字確認，`work/reviews/2026-10-19-N41N46N50批與v0.23逐字確認-風控.md`；事先宣告 v0.23，V23-01）：照字面讀法計入，已同步於 D-11 第 1 點與 D-12，見本修訂紀錄最後一段。D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f) 的實作仍受新增待決事項 N-55、N-56、N-57 擋住。本項原文不改〕
   - 上一段「N-20 批」的「本批沒有套用」與更早「N-23 補充項第一批」的「本批未套用」所列的 checkpoint 批，至此套用；那兩段原文不改。
 - 程式順序與同批規則（風控 checkpoint 批確認第四節 coordinator，轉記）：本批與事先宣告 v0.22 同一個 commit；擋 D_v。
+
+---
+
+**N-41、N-46、N-49、N-50 批（D-1 表兩處、D-3 `forecast_record` 判定材料、D-9 第 6 點與 N-27 子點下的一點、D-11 第 1、2 點、D-12、FL-45b、FL-47、FL-72、FL-73；方向：逐項標示，見各項）**
+- 來源與套用範圍（tech-writer 2026-10-19 套用）：
+  - tech-architect 2026-10-19 第一份：`work/reviews/2026-10-19-N41-G2與N46落字起草-tech-architect.md` 第一～四節（1-A、1-B、1-C、2-A、2-B、FL-72、N-49 FL-47）。該檔第六節（另外發現）不落檔，由 coordinator 列入追蹤清單。
+  - tech-architect 2026-10-19 第二份：`work/reviews/2026-10-19-N50修補與D12同步-tech-architect.md` 第一～四節（1-A、1-C、2-A、2-B、3-A～3-D、FL-73）。1-B 是說明，不另入 D-1 表；第五節（W 的樣本母集合意見）不落檔。
+  - 風控 2026-10-19 逐字確認：`work/reviews/2026-10-19-N41N46N50批與v0.23逐字確認-風控.md`，結論 APPROVE WITH CONDITIONS（修改後核可），沒有否決；套用第四節「tech-writer（ADR-0027 照改清單）」TW-1～TW-14。風控改字之處以風控為準；風控沒有給字句之處照 TA 字面。
+  - 批 A（TA 第二份 1-A、1-C，加上 N-49 FL-47）與批 B 這次合併落檔，由 coordinator 定案；與事先宣告 v0.23 同一個 commit（風控同份確認 (g)：批 B 必須同一個 commit，不適用相鄰 commit 寬限）。v0.23 由 quant 修改，不在本段範圍。
+- 逐項（方向、CEO、擋什麼、風控結論；依風控同份確認第一節的逐項裁定一覽）：
+  - D-9 第 6 點 N-41 子點（TA 第一份 1-A；G-2）：修改後核可（R-A1、R-A2）。方向：補定義（不變：消除歧義）。CEO：否。擋 D-9。插入，無被取代原文。
+  - D-3 `forecast_record` 判定材料「適用範圍與缺項」（TA 第一份 1-B）：修改後核可（R-B1）。方向：補定義（兩面）。CEO：知悉。擋 D-9 與記錄一步的寫入驗證。插入，無被取代原文。放寬面（照實並陳，TA 第一份 1-B）：相對 D-3 現行字面，「證據不足而且缺項」的列原本會被拒寫，改為可以寫入，五項驗證不適用；被取代的讀法與事先宣告 §5.1 第 4 點、V22-07 衝突，也從未核可（風控同份確認 (a)）。R-B1 補上「`missing_json` 必須非空」，這條寫入路徑不只靠 label 開門。
+  - D-1 表 `app/forecast/band.py` 一列（TA 第一份 1-C）：核可。方向：補定義（模組邊界）。CEO：否。擋 D-9。插入，無被取代原文。
+  - `diag_basket_with_excluded` 列入 D-9 N-41 子點的 null 清單（風控同份確認 (b)）：方向：補定義（不變：消除歧義）。CEO：否。quant 在 v0.23 同批補 V22-07 的括號（V23-02）。
+  - D-9 第 6 點 N-46 子點（TA 第一份 2-A，方案 A）：核可。方向：收緊。CEO：知悉。擋 D-9。插入，無被取代原文。代價（風控同份確認 (c) 與轉達 CEO 第 3 點）：停擺沒有時間上限，F-2 的判定也會跟著延後。
+  - D-1 表 `errors.py` 一列（TA 第一份 2-B）：核可。方向：補定義。CEO：否。擋 D-9。被取代的原文（該列中的一句）——
+    > `ValidationSnapshotPartialSetError`（N-23 Q3）；另有
+  - FL-72（TA 第一份）：修改後核可（(g) 加一格，TW-5；(h) 依事先宣告 V23-01 改寫：TA 原稿寫「§4.3 各值逐位不變」，與 V23-01 證據不足而 `resolved` 者計入作廢率分母、§4.2 涵蓋率定義不合，風控 2026-10-19 v0.23 逐字確認時漏核，依風控 2026-10-19 v0.23 批偏離項裁定 A-4 改字（`work/reviews/2026-10-19-批B偏離項裁定-風控.md`））。方向：收緊（測試）。CEO：否。擋 D-9。插入，無被取代原文。
+  - FL-47（TA 第一份，N-49）：核可。方向：收緊（測試）。CEO：否。不擋。被取代的原文已逐字錄存於正文〔N-49 取代〕，本段不重錄。
+  - D-11 第 2 點 N-50 子點（TA 第二份 1-A）：修改後核可（R-C1～R-C3）。方向：相對本 ADR 現行字面是收緊；相對事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 1 點是補定義（不變：對齊）。CEO：否。擋 D-12 與 checkpoint 列的寫入。被取代的原文已逐字錄存於正文〔N-50 取代〕，本段不重錄。
+  - D-9 N-27 子點下「這類作廢……計入」一點（TA 第二份 1-C）：核可。方向：補定義（屬實性更正，同 V21-08）。CEO：否。不擋。被取代的原文已逐字錄存於正文〔N-50 取代〕。
+  - D-11 第 1 點兩處（TA 第二份 2-A、2-B；TW-4、TW-6）：修改後核可。方向：不變（確認字面讀法）。CEO：知悉。擋 D-12。句末接字，無被取代原文。
+  - D-12 `void_rate(c)` 子點（TA 第二份 3-A；TW-7）：修改後核可。方向：補定義（不變）。CEO：知悉。擋 D-12。被取代的原文為「定義依事先宣告 §4.3 (f)（v0.8 L576）：作廢列 ÷（已結算列＋作廢列）；」。括號內是對事先宣告 v0.8（`adca703`）的行號引用，在現行版本已不對應；新字句只引章節，不再引行號（TA 第二份 3-A）。
+  - D-12 `fail_w(c)` 子點（TA 第二份 3-B；TW-8）：修改後核可。方向：補定義（(1) 不變；(2) 收緊）。CEO：知悉。擋 D-12。被取代的原文為「`fail_w(c)`：W 情境下做同一個比較；」（句末的分號保留在新字句末尾）。
+  - D-12 `stats_json` 存放、FL-45b 加兩格（TA 第二份 3-C、3-D；TW-9、TW-10）：修改後核可。方向：收緊（揭露／測試）。CEO：否。擋 D-12。句末接字與插入，無被取代原文。
+  - FL-73（TA 第二份第四節；TW-11）：修改後核可。方向：收緊（測試）。CEO：否。擋 D-12。插入，無被取代原文。
+- N-54（W 的樣本母集合）：已決（風控同份確認 (f)；事先宣告 v0.23 V23-02）。族群籃子標籤不一致的列不讀預測端 label，採 TA 第二份第五節的兩個條件：(i) V22-07 的對應一句同批改字；(ii) 排除成員為空陣列時，診斷籃子就是主籃子，不因標籤為 null 而算不一致。V23-01 與 V23-02 拆開。D-9 N-41 子點的 W 一句，採 TA「若採 3」的版本，並依風控 R-A1、Q-5 整句改寫（TW-1）。
+- N-50 照實揭露（風控 R-C3，逐字）：
+  > 舊字「一律只在 P_j 的紀錄上計算」會使 checkpoint 列的作廢率恆為 0、W 不放回任何列、§4.3 (e) 涵蓋率恆為 100%，是兩個默默的放寬；從未核可，main 上沒有依舊字面的實作（產品分支未查證）。
+- 待決事項：
+  - 已決：本檔上一段「N-23 checkpoint 批」的「本批沒有落檔」所列三項（G-2 的 ADR 側落字、有標籤的預測 `threshold_snapshot` 缺項的寫入端規則、證據不足而後作廢的列是否計入作廢率與 W），已在原列句末加〔已決〕，指向風控 2026-10-19 逐字確認（`work/reviews/2026-10-19-N41N46N50批與v0.23逐字確認-風控.md`）。
+  - 新增，N-55、N-56、N-57：都擋 D_v，也擋 D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f) 的實作（風控同份確認 (h)）。三項都決定 F-2 的輸入，必須在看到任何資料之前登記；登記時凡是相對字面讀法比較寬的選項，都要 CEO 明確同意。內容（事先宣告 v0.23 草案 §9.2 發現 (1)～(3)，依風控同份確認第四節 Q-6）：
+    - N-55：作廢率、W 與涵蓋率的相位範圍。事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 1 點的「E 內 T ≤ T\*_j 的紀錄」含第 0 相位以外的列，W「放回樣本」的樣本是第 0 相位主樣本，是否只計第 0 相位格點上的列，事先宣告沒有寫明；daily 列與 V23-02 的族群列同樣要寫明。
+    - N-56：待重算的列是否計入作廢率分母的「已結算列」，事先宣告沒有寫明。
+    - N-57：多對象合併時，當日沒有任何對象符合事先宣告 §4.1 n 條件、但有作廢對象的決策日，是否在 W 中成為樣本日，事先宣告沒有寫明。風控同份確認 (h) 指出追蹤清單原先漏了這一項，由 coordinator 編號。
+  - 新增，N-51：擋記錄一步寫入驗證的實作，不擋本批字面（TA 第一份第六節第 1 點；風控同份確認第二節 B）。記錄一步拒寫所留下的缺日，D-8 第 2 點的 `reason` 沒有對應的值，由 TA 另案定、送風控。
+- 程式順序與同批規則（風控同份確認第四節 coordinator，轉記）：D-9 在本批落檔後解除；但記錄一步的寫入驗證（D-3 適用範圍與缺項、D-9 第 6 點 N-46 子點的寫入端）還要等 N-51 定案，並由 dev-lead 確認 N-52（記錄一步現行的逐範圍例外處理）。D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f)、D_v：等 N-55、N-56、N-57 登記並經風控確認。
+- 本批沒有落檔：TA 第一份第六節（另外發現；追蹤清單項）、TA 第二份第五節（意見，結論已併入上列 N-54 與 TW-1、TW-8）。
