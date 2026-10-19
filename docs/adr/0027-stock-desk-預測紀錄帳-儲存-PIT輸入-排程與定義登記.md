@@ -1323,12 +1323,71 @@
 2. **`forecast_validation_snapshot`**：
    - 欄位（r1，A-5）：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seeds_json`、`rng_name`、`numpy_version`、`display_reasons_json`、`withdrawn_at_n`、`code_commit`、`computed_at`；
    - `UNIQUE(claim_id, computed_for_session, eval_kind)`；
+   - （N-23 Q3；風控 R-Q3-3）另加 `UNIQUE(claim_id, checkpoint_n) WHERE eval_kind = 'checkpoint'`：同一檔內，每個 claim 的每個檢查點只判定一次。
+   - （N-23 Q3；風控 2026-10-19 乙案裁定；事先宣告 §4.5「檢查點的判定樣本、時點與 seed」v0.22，V22-01～V22-04）**checkpoint 列的判定樣本、時點與寫入**。統計面依事先宣告；本點只規定機械規則。
+     - **終局**：E 內的紀錄，在讀 E 的同一個 read transaction 內（RC‴-1）有 outcome 列、而且不在待重算集合（D-11.4 第 11 點 (g)「待重算路徑的狀態片段」的 (a)、(b) 兩個集合；事先宣告 N-29 (b) (i)）時，稱為終局。證據不足與作廢的紀錄，依 D-9 第 1、3 點與事先宣告 §6.3 v0.22 註（V22-07）寫入 outcome 列之後即為終局。作廢列依 R10-3 不再 supersede。resolved 列（含證據不足的 resolved 列）列入待重算的期間不是終局。
+     - **沒有期限的待重算項不讓閘門等待**：
+       - 最近一個已有 `forecast_correction_job_end` 列的作業，其 `pending_json` 中屬於該 claim 的 E、而且 `reason = write_validation_failed` 的項，不適用事先宣告 N-29 (b) 的期限（D-9 第 5 點「待重算」），沒有期限上限的終局。
+       - 計算下一子點的 U 時，這類紀錄視同終局；但不計入 n（比照 N-29 (b) (i)），也不屬於 P_j。它們列入 `checkpoint_timing.unbounded_pending`。
+       - `unbounded_pending` 中有 T ≤ T\*_j 的紀錄時，該 checkpoint 列的 `delay_kinds` 與 `prefix_change_kinds` 都含 `unbounded_pending`，依下文「延後判定規則」處理。只有 T > T\*_j 的紀錄時不含：這類紀錄不在 P_j 的日期範圍內，不影響 P_j；U > T\*_j 時 n_complete ≥ n_j，所以它們本來就不會使閘門等待（事先宣告 §4.5 v0.22 第 2 點，V22-06）。`unbounded_pending` 照列全部這類紀錄，不分 T。
+       - 這類項重查後成為 `shift_*` 時，自該次作業起照常列為非終局。
+     - **n_complete 與 P_j**：
+       - 令 U 為 E 內尚未終局的紀錄中最早的 T（沒有時 U ＝ +∞）。n_complete 是 T < U 的第 0 相位格點中，符合事先宣告 §4.1 n 條件的個數。
+       - P_j 是依決策日 T 升冪、前 n_j 個符合 §4.1 n 條件的第 0 相位格點；多對象合併時以決策日為單位。T\*_j 是其中最後一個格點的決策日。
+       - 兩者只由 `validation.py` 的單一函式 `checkpoints_due(claim_id, *, e_view) -> CheckpointsDue`（名稱暫定）計算。`e_view` 是本筆 snapshot 經 `store.py` 讀 E 的函式，在同一個 read transaction 內的回傳物件。
+       - 回傳 `n_complete`、`unbounded_pending`，以及到期的 n_j，升冪。到期的 n_j 指：事先宣告 §4.5 的檢查點中 ≤ n_complete、而且本檔內還沒有同一 `checkpoint_n` 的 checkpoint 列者。
+       - 簽章不接受 n、n_complete、檢查點清單、樣本或判定結果（AST）。
+       - checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只在 P_j 的紀錄上計算，各紀錄取同一 `e_view` 的鏈尾。P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得。
+       - checkpoint 列的 `n` ＝ n_j。
+     - **寫入時點**：
+       - 驗證快照寫入 T 的 daily 列時，若 `checkpoints_due` 回傳的到期集合非空，就在同一個交易內，為其中最小的 n_j 寫一列 checkpoint 列（`checkpoint_n = n_j`，`computed_for_session = T`）。其餘到期的 n_j，依升冪由之後各筆寫入成功的 daily snapshot 判定。
+       - 寫入驗證：本交易為每個 claim 寫入的 checkpoint 列，與上述規則恰好相符；不符就整個交易 rollback（D-7 第 2 點 Q3 全有或全無）。
+       - 所以檢查點只在「n_complete 達到 n_j、較小的檢查點都已判定、而且寫入成功的第一筆 daily snapshot」判定：不能提前，不能延到之後任何一筆，也不得補寫或重判。
+       - T 的快照沒有寫入時，T 不留任何 checkpoint 列，之後也不補寫 T 的列。
+     - **記錄欄位**（全部由寫入函式自行填入，不接受呼叫端傳入）：
+       - daily 列的 `stats_json` 另記：
+         - `n_complete`；
+         - `phase0_grid_sha256`：取寫入當下 `observed_sessions(as_of=None)` 導出的第 0 相位格點中、決策日 ≤ `computed_for_session` 者，依日期升冪，以 ISO 日期字串組成 JSON 陣列（`separators=(",", ":")`，UTF-8），再取 sha256。
+       - checkpoint 列的 `stats_json` 另記 `checkpoint_timing = {prev_daily_session, skipped_observed_sessions, n_at_eval, n_complete, prefix_last_session, delayed, delay_kinds, prefix_changed, prefix_change_kinds, unbounded_pending, n_first_reached_session, gate_delay_observed_sessions}`：
+         - `prev_daily_session`：該 claim 在本檔內、`computed_for_session` < T 的最新一筆 daily 列（下稱 prev）的 `computed_for_session`；沒有時為 null。
+         - `skipped_observed_sessions`：|寫入當下的 `observed_sessions(as_of=None)` ∩ (prev, T)|，不含兩端；prev 為 null 時為 null。
+         - `n_at_eval`：同一 T 的 daily 列的 n。
+         - `prefix_last_session`：T\*_j。
+         - `delay_kinds`：⊆ {`no_prev_daily`, `sessions_skipped`, `multi_due`, `unbounded_pending`}，固定排序。各值的成立條件：
+           - `no_prev_daily` ⇔ prev 為 null；
+           - `sessions_skipped` ⇔ `skipped_observed_sessions ≥ 1`；
+           - `multi_due` ⇔ prev 的 `stats_json.n_complete ≥ n_j`，或 prev 沒有記下 `n_complete`；
+           - `unbounded_pending` 依上文。
+         - `delayed` ⇔ `delay_kinds` 非空。
+         - `prefix_change_kinds`：⊆ {`no_prev_daily`, `outcome_superseded`, `e_event`, `pending_set_changed`, `grid_changed`, `unbounded_pending`, `undeterminable`}，固定排序。任一項成立就記入；`prefix_changed` ⇔ 非空。各值的成立條件：
+           - `no_prev_daily`：prev 為 null；
+           - `outcome_superseded`：存在 `outcome_id > ` prev 的 `e_read_outcome_seq`、`supersedes_id IS NOT NULL`、而且所屬紀錄的 T ≤ T\*_j 的 `forecast_outcome` 列；
+           - `e_event`：存在 `event_id > ` prev 的 `e_read_event_seq` 的 `forecast_ledger_events`，而且 (i) `kind ∈ {x2_confirmed_non_session, unobserved_weekday}`，或 (ii) `kind ∉ E_NEUTRAL_EVENTS`、而且 payload 指向 T ≤ T\*_j 的紀錄，或沒有可以歸屬到單一紀錄的 `forecast_id`；
+           - `pending_set_changed`：`correction_job_id` 落在 (prev 的 `e_read_job_end_seq`, 本筆的 `e_read_job_end_seq`] 內、而且已有 `forecast_correction_job_end` 的每一個作業，以其 `pending_json` 的 `forecast_id` 集合，與前一個已有 end 列的作業的集合（沒有時為空集合）比較；任一個對稱差中有 T ≤ T\*_j 的紀錄；
+           - `grid_changed`：用寫入當下的 `observed_sessions(as_of=None)` 重算第 0 相位格點，取決策日 ≤ `prev_daily_session` 者，依上述格式算出的 sha256，不等於 prev 的 `stats_json.phase0_grid_sha256`；
+           - `unbounded_pending`：`unbounded_pending` 中有 T ≤ T\*_j 的紀錄；
+           - `undeterminable`：prev 缺少上述任一比較基準（三個序號或 `phase0_grid_sha256`），或任一項判斷不了。
+         - 以上各項只由單一函式 `checkpoint_prefix_changed(...)` 判定（AST）。讀 `pending_json` 經 D-11.4 第 11 點 (g) 讀取待重算集合的同一個 `store.py` 函式，新增以 job_end 序號區間為參數的讀法（AST 列舉呼叫點）。
+         - `n_first_reached_session`：本檔內該 claim、`n ≥ n_j` 的最早一筆 daily 列的 `computed_for_session`。
+         - `gate_delay_observed_sessions`：|`observed_sessions(as_of=None)` ∩ (`n_first_reached_session`, T]|。
+     - **延後判定規則**（事先宣告 §4.5 v0.22 第 4 點）：
+       - `delayed` 與 `prefix_changed` 都為真的 checkpoint 列：正面結果（升為 `better_than_baseline`、重新上架）不認列；負面結果（降級、F-2 下架）照常生效。
+       - 記法比照 A-28 (ii)：`stats_json.raw_checkpoint_result` 照寫，`suppressed_positive.cause = checkpoint_delayed`。多個原因同時成立時，依 D-11.4 第 12 點 (ii) 的優先序取第一個。
+       - 比照 A-28 (iii)：在 n＝150（族群 250）時正面結果不認列，F-2 條件二成立，不得因此延後退出期限。
+       - `delayed` 為真、`prefix_changed` 為假的列，正面結果照常認列。理由：依事先宣告 §4.5 v0.22 第 1～3 點，它的樣本與 seed 與準時判定逐位相同。
+     - LM-74（「到事先宣告的期限，仍未能證明優於基準」）在 `cause = checkpoint_delayed` 的情形下同樣屬實：有效狀態不是 `better_than_baseline`，原始結果另記於 `stats_json.raw_checkpoint_result`，並在 §4.2「延後判定的檢查點」揭露。
+     - 不得提供以操作者指定的 claim、n_j 或日期，寫入、延後或重判 checkpoint 列的 CLI、API 或參數（grep／AST）。
+     - §4.2「延後判定的檢查點」（事先宣告 v0.22，V22-05）的資料來源是上述欄位：
+       - 列出 `delayed` 為真、`n_at_eval > checkpoint_n`，或 `gate_delay_observed_sessions ≥ 1` 的每一列 checkpoint 列，依 `delay_kinds` 分列；
+       - 每列附：claim、`checkpoint_n`、`n_at_eval`、`n_complete`、`prefix_last_session`、`computed_for_session`、`prev_daily_session`、`skipped_observed_sessions`、`prefix_changed` 與 `prefix_change_kinds`、`unbounded_pending`（逐項標明 T 是否 ≤ `prefix_last_session`）、`n_first_reached_session`、`gate_delay_observed_sessions`，以及正面結果是否不認列（含 `raw_checkpoint_result`）；
+       - 另列 `prefix_changed` 為真、而且 F-2 條件一不成立的檢查點。
+     - 本點與事先宣告 §4.5 v0.22 同批生效，不得單獨落檔。本點不改檢查點的值、退出期限與 5% 門檻。
    - `bootstrap_seeds_json`：鍵為 `"{purpose}|{block_len}"`，值為 seed。
    - **seed 導出式**：`int.from_bytes(sha256(f"{claim_id}|{eval_key}|{purpose}|{block_len}".encode("utf-8")).digest()[:8], "big")`。
      - `claim_id` 取 registry 中的原字串；
-     - `eval_key` 前瞻用 ISO 日期 `YYYY-MM-DD`，重放用 `freeze_commit`；
+     - `eval_key` 前瞻用該列的 `n`，寫成 `n{n}`（十進位、不補零，例如 `n30`；daily 列取 daily 列的 n，checkpoint 列取 n_j；事先宣告 §4.3 seed 規則第 1 點，v0.22），重放用 `freeze_commit`。同一 n 跨日共用 seed 是刻意的。〔N-23 Q3 取代（事先宣告 v0.22 V22-03）：原寫「`eval_key` 前瞻用 ISO 日期 `YYYY-MM-DD`，重放用 `freeze_commit`；」〕
      - `block_len` 寫成十進位整數。
-   - **`eval_kind` 刻意不放進導出式**：同一個 session 的 daily 列與 checkpoint 列用同一組 seed，checkpoint 不能換一組亂數重抽。
+   - **`eval_kind` 刻意不放進導出式**：同一 n 的 daily 列與 checkpoint 列用同一組 seed，延後與準時判定的 checkpoint 列 seed 相同。checkpoint 不能換一組亂數重抽，判定日也不能移動 seed。n(S) ＝ n_j 時，依本點「checkpoint 列的判定樣本、時點與寫入」，同一天的 daily 列與 checkpoint 列樣本相同、seed 相同，結果逐位相同。另一面（照實並陳）：同一 n 的期間（最長到 n 增加為止）不再每天換一組亂數，所以只因蒙地卡羅雜訊造成的降級會減少；檢查點當天的 bootstrap 結果若剛好偏有利，在 n 增加之前也不會被重抽挑戰。只因資料變動造成的降級不受影響（事先宣告 §4.5 v0.22 第 3 點）。〔N-23 Q3 取代（V22-03）：原寫「同一個 session 的 daily 列與 checkpoint 列用同一組 seed，checkpoint 不能換一組亂數重抽。」〕
    - snapshot 不 supersede；來源資料更正只影響之後的 snapshot（A-77 第 11 項）。已寫入的 snapshot 不改、不重算。（第十批 R10-7）
    - 更正作業改變了曾參與 `better_than_baseline` 判定的列的 `status`、`realized_label`、`hit` 或 `baseline_hits_json` 任一項時，該判定在作業完成後的第一筆 daily snapshot 撤銷（降級），在下一個檢查點重判；比照事先宣告 v0.3 第 2 點（PIT 違規）。撤銷的日期、claim、`correction_job_id` 在 §4.2 揭露。daily 列仍不得升級（D-11.3）。（第十批 R10-7；觸發條件依風控 2026-10-18 v0.12 審查 Q12-2 擴為四項）
    - （N-5）**整檔還原不另設撤銷**：依 RC‴-1（還原以整個主 DB 檔為單位）與 ADR-0026 D-9.1、D-9.4（主 DB 與市場 DB 取自同一組 `Connection.backup`），留在還原後檔內的 snapshot，它讀到的 outcome 與事件都在它之前 commit，所以也都在檔內〔推論：SQLite 線上備份產生一致的時點快照〕。因此，還原後留存的 `better_than_baseline` 判定不會有參與列遺失；R10-7 不因 `db_restored` 觸發。
@@ -1343,7 +1402,7 @@
      - N_R(claim) ＝〔還原後檔內，第 0 相位格點（事先宣告 §4.1）中 ≤ B_s 的個數；D_v 不存在或晚於 B_s 時為 0〕＋ ⌈ |`observed_sessions()` ∩ (B_s, R_s]| ÷ h ⌉。有多筆 `db_restored` 時各自計算，取最大值。〔推論：每個格點最多讓 n 加 1，所以 N_R 是失落時間線在還原當下可能達到的 n 的上限〕
      - `db_restored` 寫入之後才判定的檢查點，若 `checkpoint_n ≤ N_R`：
        - 正面結果（升為 `better_than_baseline`、重新上架）不認列；負面結果（降級、F-2 下架）照常生效。
-       - 記法比照 A-28 (ii)：`stats_json.raw_checkpoint_result` 照寫；`suppressed_positive` 加必填欄位 `cause ∈ {suspended_f3, db_restored}`。
+       - 記法比照 A-28 (ii)：`stats_json.raw_checkpoint_result` 照寫；`suppressed_positive` 加必填欄位 `cause ∈ {suspended_f3, db_restored, checkpoint_delayed}`（`checkpoint_delayed` 依本點 N-23 Q3）。
        - 比照 A-28 (iii)：在 n＝150（族群 250）時正面結果不認列，條件二就成立，不得因此延後退出期限。LM-74 在 `cause = db_restored` 的情形下仍然屬實：有效狀態不是 `better_than_baseline`，原始結果另記於 `stats_json.raw_checkpoint_result` 並在 §4.2 揭露。
      - N_R 只由單一函式 `restore_checkpoint_bound(claim)` 計算。它只讀主 DB 與觀察日函式，不讀 DB 檔以外的任何東西（RC‴-1）。
      - §4.2 揭露每一筆 `db_restored`：`backup_taken_at`、還原時點、遺失的觀察日數、各 claim 的 N_R，以及因本點而不認列的檢查點，以及可能遺失判定的檢查點（`checkpoint_n ≤ N_R`、而且還原後檔內在 `db_restored` 之前沒有該檢查點判定紀錄者），並註明失落時間線上的判定（含可能的升級與 F-2 下架）無法重現。
@@ -1354,7 +1413,7 @@
      - 開盤基準若有用到 bootstrap，再加 `*_open`。
    - snapshot 寫入時，鍵不在對照表內就拒絕寫入。
    - （r3，A-63；RC′-2、RC″-2、RC‴-1；N29-11）`stats_json` 另登記 `e_read_event_seq`、`e_read_outcome_seq`、`e_read_job_end_seq`（`pa9_holds` 的 `e_changed_since` 比較基準，見第 4 點第 11 項 (c)；第三個依風控 2026-10-18 N-29 單項確認 N29-11 加入），以及 `e_read_at`（稽核用，不作比較基準；也不用 `computed_at`）。
-3. **升降規則**：只有 `checkpoint` 列可以把狀態升為 `better_than_baseline`；`daily` 列只能維持或降級。
+3. **升降規則**：只有 `checkpoint` 列可以把狀態升為 `better_than_baseline`；`daily` 列只能維持或降級。（N-23 Q3；N-39）同一 claim、同一 T 有 checkpoint 列時，checkpoint 列先計算。同一 T 的 daily 列，以該 checkpoint 列寫入後的有效狀態與 `display_state`（含 `display_reasons_json.withdraw`）為「維持或降級」的起點，再以 daily 列自己的樣本，依事先宣告 §4.5「每天重算」判定當天是否降級；沒有 checkpoint 列時，以前一筆 daily 列為起點。所以檢查點的升級或下架在同一 T 的 daily 列生效；daily 列的樣本較大、沒有通過時，當天就降級。（事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 6 點，v0.22，V22-08；與 §4.5 狀態表「最近一個檢查點通過 §4.3，而且之後沒有觸發當日降級」一致）
 4. **顯示閘門**（`display.py`）：
    - 族群 `pa9_holds` 為真，或 G_eff 非空時，任何對外回應都不出現 bullish／bearish（PA-9、LG-15）；
    - 逾時紀錄不當作當日展望（PA-6）；
@@ -1448,7 +1507,11 @@
        - 市場總覽的天氣屬於 `first_layer`；
        - 第 1 點所列歸屬（`first_layer` 六項、`symbol_detail`）以外的頁面或元件，在清單修訂並送審之前，不得渲染展望 label、天氣、方向色，也不得渲染 A-68 的適用欄位。
      - 2b. **許可的前提是伴隨揭露**：
-       - 每一格都登記 `required_disclosures`：D-1／D-5 的驗證徽章與 PV-45 固定句；個股另加 PA-4；「優於基準」時另加 D-2 的開盤基準句，以及 D-4 的區間、n、期間。
+       - 每一格都登記 `required_disclosures`：D-1／D-5 的驗證徽章與 PV-45 固定句；個股另加 PA-4；「優於基準」時另加 D-2 的開盤基準句，以及 D-4 的區間、n、期間。（N-23 Q3；風控 2026-10-19 N-39）D-4 的區間、n、期間，與同一回應中的 `validation_status`、`display_state`，出自同一列 snapshot：該 claim `computed_for_session = T`、`eval_kind = 'daily'` 的那一列（下稱 T 日 snapshot）。
+         - 區間依事先宣告 §4.10 D-4 的定義，取該列 `stats_json` 所記的值；n 取該列的 `n` 欄位；期間取該列 `stats_json` 所記的樣本首末決策日（`sample_first_session`、`sample_last_session`，鍵名暫定，本批新增，由寫入函式自行填入）。
+         - 這三個值與狀態，由 `views.outlook_view` 的同一次 snapshot 讀取一起帶出（`OutlookView` 加 `validation_disclosure = {computed_for_session, interval, n, period_start, period_end}`，名稱暫定）。前端、API、plan、匯出不得另讀 snapshot，也不得以 checkpoint 列或其他日期的列的值代入或混用。
+         - checkpoint 列只供 D-12、§4.2、稽核與 quant 的檢查點檢討紀錄讀取，任何顯示面都不讀（AST 列舉呼叫點）。
+         - 延後判定時，檢查點當天 daily 列的 n 可能大於 `checkpoint_n`。這時畫面上的 n 是 daily 列的 n，不得改寫成 `checkpoint_n`。
        - 所列片段全部核可，這一格才生效；否則不許可。大盤與族群的 `alert`、`export` 也一樣。
        - 由 FL-54 (f) 釘住。
        - 初版的矩陣由 PM 與 `PLAN_OUTPUT_SURFACES` 一併確認；之後任何一格要開放，都要送風控。
@@ -1846,8 +1909,8 @@
      - (i) **`suspended_f3` 期間，負面結果照常生效**：檢查點照常計算；降級與 F-2 下架照常生效，`withdraw_reason`、`withdrawn_at_n` 照寫。
      - (ii) **正面結果不認列**：升為 `better_than_baseline`、重新上架，都不認列。
        - snapshot 的 `status` 記不認列之後的有效狀態；
-       - 計算出來的原始結果放在 `stats_json.raw_checkpoint_result`，另記 `stats_json.suppressed_positive = {checkpoint_n, kind ∈ {upgrade, relist}, cause ∈ {suspended_f3, db_restored}}`（`cause` 必填；`db_restored` 依 D-11 第 2 點 N-5 甲案）；
-       - （N-5 甲案；`cause` 的取值）同一個檢查點兩個原因同時成立時，`cause = suspended_f3`（與第 12 點的優先序一致）。`cause` 只供稽核與 quant 的檢查點檢討紀錄使用；§4.2「整檔還原」列的「因本點而不認列的檢查點」（D-11 第 2 點 N-5 甲案）依 `restore_checkpoint_bound` 判定，不依 `cause`。所以兩個原因同時成立的檢查點，§4.2「整檔還原」列與 quant 的 F-3 檢查點檢討紀錄兩邊都計入，不得因為 `cause` 只記一個值而只計一邊。下一點的 `positive_suppressed_during_f3` 只在 `suspended_f3` 成立時設定，不因 `db_restored` 而設定。
+       - 計算出來的原始結果放在 `stats_json.raw_checkpoint_result`，另記 `stats_json.suppressed_positive = {checkpoint_n, kind ∈ {upgrade, relist}, cause ∈ {suspended_f3, db_restored, checkpoint_delayed}}`（`cause` 必填；`db_restored` 依 D-11 第 2 點 N-5 甲案；`checkpoint_delayed` 依 D-11 第 2 點 N-23 Q3）；
+       - （N-5 甲案；`cause` 的取值）多個原因同時成立時，依 `suspended_f3` → `db_restored` → `checkpoint_delayed` 取第一個（`suspended_f3` 在前，與第 12 點的優先序一致）。`cause` 只供稽核與 quant 的檢查點檢討紀錄使用；§4.2「整檔還原」列的「因本點而不認列的檢查點」（D-11 第 2 點 N-5 甲案）依 `restore_checkpoint_bound` 判定，不依 `cause`。所以兩個原因同時成立的檢查點，§4.2「整檔還原」列與 quant 的 F-3 檢查點檢討紀錄兩邊都計入，不得因為 `cause` 只記一個值而只計一邊。（N-23 Q3）§4.2「延後判定的檢查點」列（事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 2、4 點，v0.22）同樣依 `checkpoint_timing`（`delayed`、`prefix_changed`、`n_at_eval`、`gate_delay_observed_sessions`）判定，不依 `cause`；兩個以上原因同時成立的檢查點，§4.2 各相關列與 quant 的檢查點檢討紀錄都計入。`positive_suppressed_during_f3` 不因 `checkpoint_delayed` 而設定。下一點的 `positive_suppressed_during_f3` 只在 `suspended_f3` 成立時設定，不因 `db_restored` 而設定。
        - 有 `withdraw` 區塊時，設 `positive_suppressed_during_f3 = true`；
        - quant 的檢查點檢討紀錄要揭露這件事。
      - (iii) **與 A-22 的交互作用**：暫停期間剛好碰到 n＝150（族群 250），原始結果是正面但不認列時，有效狀態不是 `better_than_baseline`，條件二成立，以 `f2_deadline` 下架。**不得因此延後退出期限。** LM-74 在這種情形下仍然屬實。
@@ -2156,6 +2219,8 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - （第九、十批，A-79；風控 2026-10-18 C7-8）**（C9-7 甲案）大盤與個股的 snapshot 落後時遮蔽**：任一筆 E 變動事件之後、下一筆涵蓋它的 daily snapshot 之前，所有 claim 的驗證徽章改為 LM-153，展望不顯示方向。另一面：這段期間，徽章原本的狀態（包括「未優於基準」等負面狀態）也不顯示；但方向同時不顯示、LM-31 常駐、下架與暫停告知（LM-76、LM-81）照常，所以不會造成過度信任。一筆事件會遮掉全部 claim；snapshot 作業失敗時，遮蔽會持續到下一筆 snapshot 成功為止。（N-23 Q2）另一個遮蔽來源是 `snapshot_stale`：T 的 `late_cutoff_at` 已過、仍沒有 T 的 snapshot 時（結算、缺日稽核、更正作業或驗證快照任一步失敗，都會使 T 的 snapshot 不寫），全部 claim 的徽章改為 LM-153、展望不顯示方向，直到下一筆 snapshot 寫入為止；持續失敗時遮蔽沒有上限。
 - （第九、十批，A-79）**（未觀察平日 A 案）未觀察平日固定排除**：登記之後即使補到資料也不回到觀察日。另一面：這一天若其實是交易日，跨越它的紀錄 T+h 會多跨一個實際交易日，偏差留在統計中，以 §4.2 的四項揭露與 data-engineer 根因查證緩解（Q3-5）。
 - （剩餘待決項，N-5 甲案）**甲案的殘餘**：失落時間線若已在 `checkpoint_n ≤ N_R` 的檢查點觸發 F-2 下架，新時間線重判時結果若不再是負面，claim 就不會下架；使用者曾看到的下架會消失。〔風控 2026-10-18 裁定：採甲案、駁回乙案（乙案使 LM-75／LM-87 不屬實）；殘餘風險以 §4.2「整檔還原」列揭露為條件書面接受，最終責任由 CEO 負〕
+- （N-23 Q3；事先宣告 v0.22 第 2、4 點）**延後判定的殘餘**：檢查點因快照略過、同時到期順延或沒有前一筆 daily 列而延後判定時，判定窗內的更正可能使 F-2 條件一由成立變為不成立，也就是準時判定會下架、延後判定不會；本規則只擋延後判定下的正面結果，不擋這一面（理由同 N-5 乙案被駁回：強制視為成立會使 LM-75、LM-87 不屬實）。完整前綴閘門也會使包括退出期限（n＝150，族群 250）在內的檢查點，在日曆上晚於 n 首次達到 n_j 的日子才判定，延後長度受既有的等待期限與待重算期限限制【推論，未量測】（`write_validation_failed` 的待重算項沒有期限，依 D-11 第 2 點不讓閘門等待；其中有 T ≤ T\*_j 者時，改使該檢查點的正面結果不認列）。兩者都在 §4.2「延後判定的檢查點」逐筆揭露。〔風控 2026-10-19 裁定：以揭露為條件書面接受，最終責任由 CEO 負〕
+- （N-23 Q3；N-38 G-1；事先宣告 v0.22 V22-06）**沒有期限的待重算項（補法 α）的另一面**：這類紀錄不屬於 P_j；它若是模型未命中，F-2 條件一的負面結果可能少一筆支持【推論】。這一筆在事先宣告 v0.21 同樣不計入 n（N-29 (b)），所以相對 v0.21，本規則只多擋正面結果。寫入驗證的程式錯誤若落在 n＝150（族群 250）的前綴內，正面結果不認列、F-2 條件二成立，好的模型也可能因程式錯誤下架；修正程式之後不重判該檢查點（D-11 第 2 點「不得補寫或重判」）。兩者都在 §4.2「延後判定的檢查點」逐筆揭露。〔風控 2026-10-19 checkpoint 批確認：知悉級，最終責任由 CEO 負〕
 
 **需 CEO 知悉事項（白話；r3，A-79，取自風控 r3 審查第三節並經 RC′-9、RC″-4 更新）**
 1. 第一版上線期間，個股的 5 日方向一律不拿來算行動建議。另外，因為個股沒有歷史回放報告，**個股詳細頁也不會顯示 5 日方向**，只會照實寫「5 日展望目前不可用（原因）」並附驗證狀態。要開放，得另外送審。
@@ -2484,7 +2549,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
       - 另外，標籤常數本身也要通過 A～D 的掃描。
   - (g) listener：以 APScheduler 的事件物件直接呼叫 listener。`EVENT_JOB_MAX_INSTANCES`、`EVENT_JOB_MISSED` 各一格 → WARNING 帶被略過的觸發時刻，推播一則；其他 job id → 不推播。
   - (h) 結束方式：任一步失敗時，編排函式正常返回，`_guarded` 不記 ERROR；例外逃出編排函式本身 → `forecast.step.failed`（`step = orchestrator`）一則，`_guarded` 照舊記 ERROR。
-  - (i) 前置條件：驗證快照的三項前置條件各一格（spy）；驗證快照全有或全無，以及 plan 依全部 claim 判定（D-7 第 2 點 Q3）各一格；沒有 T（D-7 第 2 點 Q4）→ 驗證快照與 plan 都不呼叫，`plan_coverage_log` 沒有新列。Q5：結算在期限前啟動、期限後 commit → 缺日稽核、晚到掃描與更正作業、驗證快照照常執行；驗證快照在期限後啟動 → 照常寫入；plan 在期限後啟動、而且有 claim 缺少 T 的快照 → `start_outcome = deadline`，`snapshot_ids_json` 照實填入。Q3：同一 T 應寫 checkpoint 列時，任一 claim 的 checkpoint 列寫入失敗 → 該 T 的 daily 與 checkpoint 列全部不寫。Q3 部分 claim：claim 在 22:10 快照寫入之後才登記、23:10 重試 → 不寫、WARNING、推播 0 則；缺少的 claim 早於既有快照登記 → `ValidationSnapshotPartialSetError`，E-3d 一則。
+  - (i) 前置條件：驗證快照的三項前置條件各一格（spy）；驗證快照全有或全無，以及 plan 依全部 claim 判定（D-7 第 2 點 Q3）各一格；沒有 T（D-7 第 2 點 Q4）→ 驗證快照與 plan 都不呼叫，`plan_coverage_log` 沒有新列。Q5：結算在期限前啟動、期限後 commit → 缺日稽核、晚到掃描與更正作業、驗證快照照常執行；驗證快照在期限後啟動 → 照常寫入；plan 在期限後啟動、而且有 claim 缺少 T 的快照 → `start_outcome = deadline`，`snapshot_ids_json` 照實填入。Q3：同一 T 應寫 checkpoint 列時，任一 claim 的 checkpoint 列寫入失敗 → 該 T 的 daily 與 checkpoint 列全部不寫。（N-23 Q3；事先宣告 v0.22 LG-33）checkpoint 列：(1) 同一份資料，T 略過與未略過兩個 fixture，窗內沒有更正 → 兩列的 `raw_checkpoint_result`、§4.3 各值與 `bootstrap_seeds_json` 逐位相同；略過者 `delay_kinds = ["sessions_skipped"]`、`prefix_changed` 為假，正面結果認列。 (2) 略過，而且 prev 之後有 T ≤ T\*_j 紀錄的 supersede 列 → `prefix_change_kinds` 含 `outcome_superseded`；正面結果不認列、`cause = checkpoint_delayed`；負面結果生效。 (3) supersede 只涉及 T > T\*_j 的紀錄 → 正面結果認列。 (4) 較早的格點仍在等待、n(S) ≥ 30 而 n_complete < 30 → 不寫 checkpoint 列。該格點終局之後的第一筆才寫，樣本恰為前 30 個格點（spy `checkpoint_sample`），`gate_delay_observed_sessions` 等於 fixture 值。 (5) 證據不足的格點寫入 outcome 列之後，閘門打開；作廢的格點也一樣。 (6) 30 與 60 同時到期 → 只寫 30，下一筆寫 60，60 那一列的 `delay_kinds` 含 `multi_due`。 (7) prev 之後有 `x2_confirmed_non_session` 或 `unobserved_weekday` 事件 → `prefix_change_kinds` 含 `e_event`。沒有任何事件、但觀察日集合使 prev 的第 0 相位格點改變 → 含 `grid_changed`。 (8) prev 之後，某作業的 `pending_json` 加入或移除一筆 T ≤ T\*_j 的紀錄，而且沒有 supersede 列 → 含 `pending_set_changed`。 (9) n＝150 延後判定、前綴有變動、原始結果是正面 → 有效狀態不是 `better_than_baseline`，`withdraw_reason = f2_deadline`，`cause = checkpoint_delayed`。 (10) 與 `db_restored` 同時成立 → `cause = db_restored`，§4.2「整檔還原」與「延後判定的檢查點」兩列都計入。與 `suspended_f3` 同時成立 → `cause = suspended_f3`；`positive_suppressed_during_f3` 不因 `checkpoint_delayed` 而設定。 (11) prev 沒有 `n_complete` → `delay_kinds` 含 `multi_due`。prev 缺少 `phase0_grid_sha256` → `prefix_change_kinds` 含 `undeterminable`。 (12) 同一 n 的 daily 列與 checkpoint 列，以及延後與準時的 checkpoint 列，`bootstrap_seeds_json` 都相同；`eval_key` 為 `n{n}`。 (13) T ≤ T\*_j 的一筆待重算項 `reason = write_validation_failed` → 閘門不等它，checkpoint 列照寫；`unbounded_pending` 含該 `forecast_id`，該筆不在 P_j；`delay_kinds`、`prefix_change_kinds` 都含 `unbounded_pending`；正面結果不認列，負面結果生效；同一情形放在 n＝150 → `withdraw_reason = f2_deadline`，`cause = checkpoint_delayed`。該項重查後成為 `shift_*` → 自該作業起照常擋住閘門。這類項只有 T > T\*_j 者 → `unbounded_pending` 照列，但 `delay_kinds`、`prefix_change_kinds` 都不含 `unbounded_pending`，正面結果依其他各項判定。另一個 claim 的這類項 → 本 claim 的 `unbounded_pending` 不含它。 (14) 同一 claim 第二列 `checkpoint_n = 30` → UNIQUE 拒絕。`checkpoints_due`、`checkpoint_sample`、`checkpoint_prefix_changed` 在 `app/` 內各恰好一個定義；簽章不接受 n、n_complete、檢查點清單、樣本或判定結果（AST）。`app/` 與事先宣告內沒有 `snapshot_skipped`（grep）。 (15) 單一對象與多對象各一組。Q3 部分 claim：claim 在 22:10 快照寫入之後才登記、23:10 重試 → 不寫、WARNING、推播 0 則；缺少的 claim 早於既有快照登記 → `ValidationSnapshotPartialSetError`，E-3d 一則。
   - (j) 雜項：`app/forecast/**` 沒有存放登記終點的欄位或檔案（grep／AST）；沒有任何以呼叫端指定日期或 payload 寫入 `unobserved_weekday` 的 CLI 或 API；recorder 與 X2 確認寫入函式不呼叫 `unobserved_weekdays`、`ledger_registration_start()`（AST）。
   - (k) 驗收依據：本條加上 FL-65 (n)、FL-66 (h)(j)、FL-67 (e)～(n)、FL-68、FL-70，涵蓋 review 檔中的 C1～C33（對照表見修訂紀錄本批段）。qa-reviewer 以 FL 為驗收依據，C 號不另外構成驗收依據。
   - (l) 還原疑似時的共同守衛（D-7 第 2 點 Q7）：`market_run_regression` 在 `app/forecast/` 內恰好一個定義，結算評估、缺日稽核、晚到掃描只經它判定（AST）。守衛成立時：缺日稽核寫入 `forecast_gaps` 與一列 `forecast_gap_audit`，`forecast_ledger_events` 沒有新的 `unobserved_weekday` 列；E-2 的 `source = audit` 一則推播。守衛成立時寫入的 `forecast_gap_audit` 列，`market_run_regression_json` 非 null（細格見 FL-67 (n)）。守衛不再成立之後的第一次缺日稽核，登記完整的 [D_reg, 最新觀察日]。
@@ -2698,7 +2763,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (d) `SURFACE_PERMISSIONS` 未列入的鍵一律不許可；
     - （r3，A-67）另加兩項斷言：鍵的集合和六格逐項相同；格子的值不得是 callable。
   - (e) LG-22 (a) 情境：個股 `under_validation`、`shown` → `surface_not_permitted`，互換標籤後各項輸出逐位相同。
-    - 加一個 fixture：T+1 的 snapshot 升級了，T 的 plan 仍然讀 T 的 snapshot，而且驗證狀態與 `display_state` 出自同一列（`outlook_view` 只讀一次 snapshot 列）；
+    - 加一個 fixture：T+1 的 snapshot 升級了，T 的 plan 仍然讀 T 的 snapshot，而且驗證狀態與 `display_state` 出自同一列（`outlook_view` 只讀一次 snapshot 列）；（N-39）同一 T 有 checkpoint 列（n＝30、升級）與 daily 列（n＝35）→ 回應的 `validation_status`、`display_state`、區間、n＝35、期間都等於 daily 列，checkpoint 列被讀 0 次（spy）。daily 列在 n＝35 的樣本上沒有通過 → 當天顯示降級後的狀態，不出現「優於基準」。`views`、`app/plan/**`、`app/api/**` 讀 checkpoint 列的地方是 0 處（AST）。
     - （r3″，S″-3）另加一格封閉 schema 斷言：任何回應 schema 都不得同時帶 snapshot 原始的 `display_state` 與調整後的值。
   - (f) 對每個許可的格子，該顯示面的回應都帶齊 `required_disclosures`；揭露片段還沒核可的格子，判定為不許可；
   - (g) route 列舉測試：每個回應中含 `OutlookView` 衍生欄位的 route，都在 `ENDPOINT_SURFACES` 登記了非空的 `SERVES`；另驗證沒有登記時，結果為 `surface_not_permitted`。
@@ -4571,3 +4636,50 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - 上一段「N-23 補充項第一批」的「本批未套用」所列的 N-20，至此套用 ADR-0027 部分；上一段原文不改。
 - 程式順序（風控第四節 coordinator 同批規則 3，轉記）：D-9 程式（三張表的寫入）不得早於本批落檔；(b) 身分比對不得早於本批落檔才能合併；(b) 部署上線不得早於 ADR-0026 的備份實作上線，而且上線時要已有一組通過檢查的組。
 - 殘餘揭露（風控第四節「CEO 知悉」，轉記）：N-20 守衛有已揭露的殘餘：還原點不早於任何參考 run 時偵測不到（D-7 第 2 點「殘餘」）。CEO #42 仍待回答。
+
+---
+
+**N-23 checkpoint 批（乙案；D-11 第 2、3 點、D-11.4 第 2b 點與第 12 點 (ii)、Consequences、FL-71 (i)、FL-54 (e)；方向：補定義（兩面））**
+- 來源與套用範圍（tech-writer 2026-10-19 套用）：
+  - tech-architect 2026-10-19 回覆：`work/reviews/2026-10-19-N38核對與checkpoint乙案改寫及N20改寫-tech-architect.md` 第二節 2-A～2-E、2-G，以及第三節 N39-1～N39-3。
+  - 風控 2026-10-19 逐字確認：`work/reviews/2026-10-19-checkpoint批與v0.22逐字確認-風控.md`，結論 APPROVE（修改後核可），沒有否決；套用第四節「tech-writer（ADR-0027 checkpoint 批照改清單）」的 T-1～T-6、2-A 其餘、2-B、2-C 第 (13) 格、2-D、2-E（兩段插入）、N39-1～N39-3（N39-2 句末括號換字）與 2-G 另補 (i)(ii)。風控改字之處以風控為準；風控沒有給字句之處照 TA 字面。偏離項已重送風控並經裁定核可（風控 2026-10-19 checkpoint 批偏離項裁定，`work/reviews/2026-10-19-checkpoint批偏離項裁定-風控.md`）。
+  - 風控 2026-10-19 先前裁定：`work/reviews/2026-10-19-N23補充項與checkpoint乙案裁定-風控.md` 第四節「tech-writer（ADR-0027）」第 2 點（第 12 點 (ii) 子點首句與 LM-74 一句）與第 3 點（Consequences 殘餘句）；採乙案的理由見該檔第二節 B。
+  - 與事先宣告 v0.22 同一個 commit 落檔，任一邊不得單獨落檔（風控 checkpoint 批確認第四節 coordinator 同批規則 1）；v0.22 由 quant 修改，不在本段範圍。
+  - 本批的前提查證（N-38 核對）：風控接受 TA 的結論，N-38 的疑慮不成立，唯一缺口是 G-1（沒有期限的待重算項），以補法 α 修補，並以 G-2 的「不拋例外」落地為條件（風控 checkpoint 批確認第一節）。
+- 整批方向：補定義（兩面）。不得只標收緊；放寬面原文附在下方（風控 2026-10-19 乙案裁定第二節 B，逐字）：
+  - Q-a（樣本與閘門）：「放寬面（照實並陳）：閘門會讓檢查點判定在日曆上晚於 n(S) 首次達到 n_j 的日子，包括 n＝150（族群 250）的退出期限。」
+  - Q-c（`eval_key = n{n}`）：「放寬面：同一 n 的期間不再每天重抽，所以只因 MC 雜訊造成的降級會減少；檢查點當天如果剛好抽到偏有利的 bootstrap 結果，在 n 增加之前不會再被重抽挑戰。」
+  - Q-d（延後判定的殘餘）：「判定窗內的更正可能讓條件一由成立變成不成立，也就是準時判定會下架、延後判定不會。」
+- 2-A（D-11 第 2 點新增兩點：每個檢查點只判定一次的 UNIQUE；checkpoint 列的判定樣本、時點與寫入）：無被取代原文。方向：補定義（兩面）。CEO：知悉。風控：修改後核可（T-1～T-5）。擋 D_v。
+  - 補法 α 子點（「沒有期限的待重算項不讓閘門等待」，對應事先宣告 v0.22 V22-06）：方向：補定義（兩面；相對事先宣告 v0.21 收緊）。CEO：知悉。風控：修改後核可；觸發範圍採 T ≤ T\*_j，並限該 claim 的 E。α 的另一面原文（Consequences 對應一點，風控 2026-10-19 checkpoint 批確認第四節 tech-writer 2-E）：「這類紀錄不屬於 P_j；它若是模型未命中，F-2 條件一的負面結果可能少一筆支持【推論】。這一筆在事先宣告 v0.21 同樣不計入 n（N-29 (b)），所以相對 v0.21，本規則只多擋正面結果。寫入驗證的程式錯誤若落在 n＝150（族群 250）的前綴內，正面結果不認列、F-2 條件二成立，好的模型也可能因程式錯誤下架；修正程式之後不重判該檢查點（D-11 第 2 點「不得補寫或重判」）。兩者都在 §4.2「延後判定的檢查點」逐筆揭露。」
+  - 錄存 (i)：α 的觸發範圍依本確認限「該 claim 的 E 內、T ≤ T\*_j」；TA 2026-10-19 原稿的「非空」從未寫入本檔。
+  - T-1（α 第一子點）：加上「屬於該 claim 的 E」的限定。T-2（α 第三子點）：整句換成以 T ≤ T\*_j 判斷、並說明 T > T\*_j 者不影響 P_j。T-3（`prefix_change_kinds` 的 `unbounded_pending` 條件）：改為有 T ≤ T\*_j 的紀錄。T-4（§4.2 資料來源「每列附」）：`unbounded_pending` 逐項標明 T 是否 ≤ `prefix_last_session`。T-5（「終局」子點）：加引事先宣告 §6.3 v0.22 註（V22-07）。以上五處在 TA 原稿的對應字句（含 α 標記）從未寫入本檔，所以沒有被取代的原文。
+  - TA 2026-10-18 原稿（`work/reviews/2026-10-18-N23風控補充項回覆-tech-architect.md` 第二節 2）從未寫入本 ADR，依風控 2026-10-19 裁定不落檔。
+  - 延後種類的名稱不沿用 TA 2026-10-18 原稿所用的舊名（TA 2026-10-19 回覆 2-A 錄存）。
+  - 格式處理（tech-writer；字句未增減）：TA 稿的縮排層級對應本檔 D-11 第 2 點既有層級；插在 `bootstrap_seeds_json` 子點之前、同一層（TA 指定的定位）。
+- 2-B（`cause` 列舉，三處）：方向：補定義（收緊）。CEO：否。風控：核可；第 12 點 (ii) 子點的第二句依風控 T-6 改字（§4.2「延後判定的檢查點」列依 `checkpoint_timing`，不依 `cause`）。擋 D_v。被取代的原文如下（正文不加〔取代〕）：
+  - D-11 第 2 點 N-5 甲案「失落時間線的檢查點不得重抽」子點之下的整個子項——
+    > 記法比照 A-28 (ii)：`stats_json.raw_checkpoint_result` 照寫；`suppressed_positive` 加必填欄位 `cause ∈ {suspended_f3, db_restored}`。
+  - D-11.4 第 12 點 (ii) 的 `stats_json.suppressed_positive` 子項（整個子項）——
+    > 計算出來的原始結果放在 `stats_json.raw_checkpoint_result`，另記 `stats_json.suppressed_positive = {checkpoint_n, kind ∈ {upgrade, relist}, cause ∈ {suspended_f3, db_restored}}`（`cause` 必填；`db_restored` 依 D-11 第 2 點 N-5 甲案）；
+  - D-11.4 第 12 點 (ii)「（N-5 甲案；`cause` 的取值）」子項的首句：與本檔上方修訂紀錄「N-5」段所引同一子項的首句逐字相同，已存於該處，本段不重錄（依 coordinator 機械核對規則，該句只保留一處引文）。第二句（T-6）為插入，無被取代原文。LM-74 一句見 2-A。
+  - 第 12 點 (ii) 子項首句改為「多個原因同時成立時，依 `suspended_f3` → `db_restored` → `checkpoint_delayed` 取第一個」，照風控 2026-10-19 乙案裁定第四節 tech-writer 第 2 點原字。
+- 2-C（對實作的約束 FL-71 (i)，接上 checkpoint 列 15 格）：無被取代原文。方向：收緊（測試）。CEO：否。風控：修改後核可（只有第 (13) 格整格換成風控字句，其餘照 TA）。擋 D_v（驗收依據）。
+  - 格式處理（tech-writer；字句未增減）：FL-71 (i) 在本檔是單一長列，(1)～(15) 順接在原句之後、「Q3 部分 claim」那一句之前，不另起列。
+- 2-D（D-11 第 2 點 seed 的 `eval_key` 與 `eval_kind` 兩處）：方向：補定義（兩面）。CEO：知悉。風控：核可。擋 D_v。被取代的原文已逐字錄存於正文〔N-23 Q3 取代〕，本段不重錄。
+- 2-E（Consequences 兩點，接在「甲案的殘餘」之後、同一層）：方向：收緊（揭露）。CEO：知悉（殘餘由 CEO 負最終責任）。風控：修改後核可，另加一點。無被取代原文。
+  - 第一點為風控 2026-10-19 乙案裁定第四節 tech-writer 第 3 點全文，並依風控 2026-10-19 checkpoint 批確認第四節「2-E」，在「【推論，未量測】」之後插入該節給的一句括號（字句見該點正文）。
+  - 第二點為補法 α 的另一面（字句見上「2-A」補法 α 子點）。
+- N39-1（D-11.4 第 2b 點：「優於基準」附的區間、n、期間，出自同一列 snapshot）：無被取代原文。方向：補定義（收緊）。CEO：否。風控：核可，照 TA。擋 D_v。
+  - 格式處理（tech-writer；字句未增減）：TA 稿首段接在原句句末，其後五個子點為該子點的下一層。
+- N39-2（D-11 第 3 點：同一 T 的 daily 列以 checkpoint 列寫入後的狀態為起點）：無被取代原文。方向：補定義（收緊）。CEO：否。風控：修改後核可（句末括號換字）。擋 D_v。TA 稿句末的〔推論〕括號從未寫入本檔，已換成風控字句。
+- N39-3（FL-54 (e)）：無被取代原文。方向：收緊（測試）。CEO：否。風控：核可，照 TA。擋 D_v。
+- 2-G 錄存 (ii)：本段整批方向欄寫「補定義（兩面）」並附 α 的另一面原文（見上）；風控出處指向 `work/reviews/2026-10-19-checkpoint批與v0.22逐字確認-風控.md`。
+- 本批沒有落檔：
+  - TA 回覆 2-F（給 CEO 的成本句，不入 ADR；風控要求加一句因程式錯誤而沒有期限的待重算項的說明，由 coordinator 轉達 CEO）。
+  - TA 回覆 2-H（甲案差異清單）：風控裁定不需要，不落檔；風控 2026-10-19 先前裁定中「改走甲案」的備援就此撤回（α 不被採用時，應該退回重新設計）。
+  - G-2 的 ADR 側落字（D-9：證據不足的預測照常結算；缺項時記 null、不拋例外；有標籤者不適用，並附 FL 格）：由 TA 起草送風控，擋 D-9，不擋本批。
+  - 有標籤的預測 `threshold_snapshot` 缺項的寫入端規則：TA 在 D-9 實作前定案、送風控。
+  - 證據不足而後作廢的列是否計入作廢率與 W（事先宣告 v0.22 §9.2「v0.22 仍需核對」末項）：定案前以字面讀法為準（計入）；由 quant 在 D_v 前具名登記，擋 D_v；D-12 `void_rate`／`fail_w` 的實作不得早於定案（風控 checkpoint 批確認第四節 coordinator 同批規則 4）。
+  - 上一段「N-20 批」的「本批沒有套用」與更早「N-23 補充項第一批」的「本批未套用」所列的 checkpoint 批，至此套用；那兩段原文不改。
+- 程式順序與同批規則（風控 checkpoint 批確認第四節 coordinator，轉記）：本批與事先宣告 v0.22 同一個 commit；擋 D_v。
