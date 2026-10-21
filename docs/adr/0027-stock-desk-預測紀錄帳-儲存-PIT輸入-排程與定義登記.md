@@ -1349,10 +1349,10 @@
      - 列表上的紀錄（A-61「最新 outcome」）與 LM-131 也用同一個鏈尾，兩者由同一個函式產生（FL-49）。
      - 「更正後命中翻轉」（事先宣告 v0.11 L687、L1221）比較的是：更正鏈中第一筆 `resolved` 列，對上鏈尾。鏈尾不是 `resolved` 時，另外歸入「改為作廢」。已由 quant 登記（事先宣告 v0.12 V12-08）。
    - 「已確認的 PIT 違規列」是指在 `forecast_ledger_events` 有 `kind = pit_violation_confirmed` 事件的 `forecast_id`。
-   - quant §4.1 的不重疊 n、重疊的次要統計、涵蓋率，**一律只在 E 上計算**。
-   - 作廢列不計入 n，但計入最壞情境 W。（事先宣告 §4.3 (f) v0.23，V23-01）作廢率的分子與分母、W 放回的列，一律依鏈尾的 `status` 判定，不讀預測端 label：E 內 `label = insufficient` 而後作廢的列，計入作廢率的分子與分母，並在 W 中放回（模型記未命中、各必備基準記命中）；`label = insufficient` 而 `resolved` 的列計入作廢率分母的「已結算列」，仍不計入 n（事先宣告 §4.3 (f) v0.23）。族群籃子標籤不一致的列，同樣不讀預測端 label，依 D-12「逐檢查點判定」第 1 點 `fail_w(c)` 子點（事先宣告 §4.3 (f) v0.23，V23-02）。範圍依 D-11 第 2 點 N-50 子點（`record_range`）。
+   - quant §4.1 的不重疊 n、重疊的次要統計、涵蓋率，**一律只在 E 上計算**。（V24-01）§4.3 (e) 判定用的涵蓋率只計 E 內第 0 相位格點上的紀錄，其餘相位只作揭露。（V24-02）待重算集合中的紀錄不計入 §4.3 (e) 涵蓋率的分子與分母，不論其 label。涵蓋率由 `validation.py` 的單一函式 `compute_coverage(record_range, n_sample)` 計算，範圍取法與 D-12 `compute_void_rate` 相同，只讀 `record_range` 的逐列欄位；作廢列依預測端 label 計入，不讀鏈尾 `status`（事先宣告 §4.2 涵蓋率列的字面讀法；風控 2026-10-21 事先宣告 v0.24 逐字確認 (c)；事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1、2 點；D-11 第 2 點 N-50 子點）。E 的定義不變，不分相位。
+   - 作廢列不計入 n，但計入最壞情境 W。（事先宣告 §4.3 (f) v0.23，V23-01）作廢率的分子與分母、W 放回的列，一律依鏈尾的 `status` 判定，不讀預測端 label：E 內 `label = insufficient` 而後作廢的列，計入作廢率的分子與分母，並在 W 中放回（模型記未命中、各必備基準記命中）；`label = insufficient` 而 `resolved` 的列計入作廢率分母的「已結算列」，仍不計入 n（事先宣告 §4.3 (f) v0.23）。族群籃子標籤不一致的列，同樣不讀預測端 label，依 D-12「逐檢查點判定」第 1 點 `fail_w(c)` 子點（事先宣告 §4.3 (f) v0.23，V23-02）。範圍依 D-11 第 2 點 N-50 子點（`record_range`）。（V24-01）作廢率與 W 放回的列只計第 0 相位格點上的列（多對象合併時為第 0 相位決策日上的對象列），其餘相位只作揭露。（V24-02）待重算集合中的列不計入作廢率的分子與分母，也不在 W 中放回，不論 label。（V24-03）多對象合併時，放回範圍內有放回列、但沒有任何對象符合 n 條件的決策日，在 W 中是一個樣本日，不計入 n。（事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1～3 點）本 ADR 其他各處所稱作廢列計入作廢率、W 者，都依本子點限定。
    - 逾時與 on-demand 的紀錄另外列出筆數。
-   - **用詞定義**（r3，A-59）：「主統計」指 E 的成員資格；「n」指在 E 內、依 §4.1 不重疊規則計得的筆數。作廢列不計入 n，但計入 W。證據不足列依 §4.1 與 LM-91 第 5 條（quant 書面確認）。作廢率與 W 不依 label 篩選（事先宣告 §4.3 (f) v0.23，V23-01、V23-02），見本點「作廢列不計入 n」一子點。兩個詞不得混用。
+   - **用詞定義**（r3，A-59）：「主統計」指 E 的成員資格；「n」指在 E 內、依 §4.1 不重疊規則計得的筆數。作廢列不計入 n，但計入 W（範圍見本點「作廢列不計入 n」一子點；事先宣告 §4.3 v0.24，V24-01、V24-02）。證據不足列依 §4.1 與 LM-91 第 5 條（quant 書面確認）。作廢率與 W 不依 label 篩選（事先宣告 §4.3 (f) v0.23，V23-01、V23-02），見本點「作廢列不計入 n」一子點。兩個詞不得混用。
      - LM-14、LM-37、LM-80 與 D-7.6、D-7.8 的「不計入主統計」都屬實，不改；LM-38「不計入 n」版已於 2026-10-17 經風控單項確認核可（`work/reviews/2026-10-17-LM38與B16註記及B0頁尾單項確認-風控.md` 第 1 項）。LM-38 的適用範圍依 A-62 R2 第 3 點，只用於 E 內的作廢列。E 的定義不變。
 2. **`forecast_validation_snapshot`**：
    - 欄位（r1，A-5）：`claim_id`、`computed_for_session`、`eval_kind ∈ {daily, checkpoint}`、`checkpoint_n`、`n`、`m_at_eval`、`m_eff`、`K`、`alpha_star`、`status`（四態）、`display_state ∈ {gated, shown, suspended_f3, withdrawn_f2}`、`void_rate`、`stats_json`、`bootstrap_seeds_json`、`rng_name`、`numpy_version`、`display_reasons_json`、`withdrawn_at_n`、`code_commit`、`computed_at`；
@@ -1373,9 +1373,9 @@
        - 簽章不接受 n、n_complete、檢查點清單、樣本或判定結果（AST）。
        - （N-50；事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 1 點）checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只用 E 內 T ≤ T\*_j 的紀錄計算，各紀錄取同一 `e_view` 的鏈尾。其中：
          - 以 n 計的指標（§4.3 (a)～(d)，以及 §4.2 以 n 為分母或以 n 樣本計算的各項）的樣本是 P_j；
-         - 其餘項目（§4.3 (e) 涵蓋率、§4.3 (f) 作廢率的分子與分母、W 放回的列、§4.2 作廢數與混淆矩陣「證據不足」列等以 E 內紀錄計的各項）取 E 內 T ≤ T\*_j 的全部紀錄，不限於 P_j。理由：作廢列與證據不足列不符合事先宣告 §4.1 的 n 條件，本來就不在 P_j 內；只在 P_j 上計算，作廢率恆為 0、W 不放回任何列、涵蓋率恆為 100%，等於默默放寬。 §4.2 的項目判斷不了屬於上兩類的哪一類時，由 quant 在事先宣告登記；登記之前，該項不得寫入 checkpoint 列。
+         - 其餘項目（§4.3 (e) 涵蓋率、§4.3 (f) 作廢率的分子與分母、W 放回的列、§4.2 作廢數與混淆矩陣「證據不足」列等以 E 內紀錄計的各項）取 E 內 T ≤ T\*_j 的全部紀錄，不限於 P_j。理由：作廢列與證據不足列不符合事先宣告 §4.1 的 n 條件，本來就不在 P_j 內；只在 P_j 上計算，作廢率恆為 0、W 不放回任何列、涵蓋率恆為 100%，等於默默放寬。 §4.2 的項目判斷不了屬於上兩類的哪一類時，由 quant 在事先宣告登記；登記之前，該項不得寫入 checkpoint 列。（事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1 點，V24-01）其中 §4.3 (e) 涵蓋率、§4.3 (f) 作廢率的分子與分母、W 放回的列與 W 的樣本日，在這個範圍內只計第 0 相位格點上的紀錄（多對象合併時，為第 0 相位決策日上的全部對象列）；其餘 h−1 個相位各以同一套定義計算，只作揭露（D-12「下架原因列舉值」`stats_json.phase_disclosure` 一句）；daily 列（`n_j = None`）同一規則。（同段第 2 點，V24-02）上述各項再排除待重算集合中的紀錄（D-11.4 第 11 點 (g) 的 (a)、(b) 兩個集合，含 `unbounded_pending`），不論其 label；重算完成或到期改記作廢之後，依新的鏈尾照常計入。§4.2 作廢數不受本子點 v0.24 各句限定，範圍照本子點上文，另依事先宣告 §4.2 作廢數「範圍」句。§4.2 混淆矩陣「證據不足」列的相位範圍，事先宣告沒有寫明（風控 2026-10-21 事先宣告 v0.24 逐字確認 (d)，TA F-2；後續追蹤清單）；登記並經風控確認之前，該列不得寫入 checkpoint 列與 daily 列。
          - P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得；E 內 T ≤ T\*_j 的紀錄只由同一模組的單一函式 `record_range(claim_id, *, e_view, n_j)` 取得（daily 列以 `n_j = None` 呼叫，取同一 `e_view` 的 E 全部）。兩者的 T\*_j 由同一個模組內部函式導出；`record_range` 回傳物件帶 `prefix_last_session`，checkpoint 列寫入時驗證它等於 P_j 最後一個格點的決策日，不成立就依「寫入時點」的寫入驗證整個交易 rollback。
-         - `record_range` 逐列帶出鏈尾的 `status`、`status_reason`、`label`（取原始 `forecast_record`，D-11.1）、是否為第 0 相位格點、是否在待重算集合（含 `unbounded_pending`），以及族群列的 `basket_excluded_members_json`；它本身不做任何計數或判定。各指標取哪個相位、待重算列在作廢率分母中怎麼算，依事先宣告登記（後續追蹤清單 N-55、N-56；見本 ADR 修訂紀錄 N-50 段）；登記之前，D-12 的 `void_rate`、`fail_w` 與 checkpoint 列的 §4.3 (e)(f) 不得實作。
+         - `record_range` 逐列帶出鏈尾的 `status`、`status_reason`、`label`（取原始 `forecast_record`，D-11.1）、`forecast_id`、決策日 T（`data_as_of`）、`scope_key`、相位編號 `phase`（0～h−1，由與 n、P_j 相同的格點導出；T 不是寫入當下的觀察日時為 null；V24-01）、是否在待重算集合（含 `unbounded_pending`）、鏈尾的 `realized_label`，以及族群列的 `basket_excluded_members_json` 與 `diag_basket_with_excluded`；E 內尚無 outcome 列的紀錄照樣回傳，鏈尾各欄為 null，不得因取列方式而省略；這類紀錄不是作廢率的分子或分母，也不在 W 中放回；是否計入 daily 列 §4.3 (e) 涵蓋率，依事先宣告 §9.2「v0.24 仍需核對」發現 (2) 的登記。它本身不做任何計數或判定。〔v0.24 取代：原寫「`label`（取原始 `forecast_record`，D-11.1）、是否為第 0 相位格點、是否在待重算集合（含 `unbounded_pending`），以及族群列的 `basket_excluded_members_json`；它本身不做任何計數或判定。」〕各指標的相位範圍、待重算列，以及多對象合併時沒有合格對象的決策日，依事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1～3 點（V24-01～V24-03；後續追蹤清單 N-55～N-57）；`compute_void_rate`、`compute_coverage`、`worst_case_sample` 只讀本點的逐列欄位與 n 樣本物件，不另讀 E。「是否在待重算集合」只取自 D-11.4 第 11 點 (g) 讀取 (a)、(b) 兩個集合的那一個 `store.py` 函式（AST 列舉呼叫點；事先宣告 LG-36 (e)）。D-12 的 `void_rate(c)`、`fail_w(c)` 與 checkpoint 列的 §4.3 (e)(f)，在事先宣告 v0.24 與本 ADR 同步字面同一個 commit 落檔之後才可以實作。daily 列的 §4.3 (e) 是否計入尚無 outcome 列的紀錄，事先宣告沒有寫明（事先宣告 §9.2「v0.24 仍需核對」發現 (2)）；登記並經風控確認之前，daily 列的 §4.3 (e)（含 `stats_json.phase_disclosure` 中各相位的涵蓋率）不得實作。〔v0.24 取代：原寫「各指標取哪個相位、待重算列在作廢率分母中怎麼算，依事先宣告登記（後續追蹤清單 N-55、N-56；見本 ADR 修訂紀錄 N-50 段）；登記之前，D-12 的 `void_rate`、`fail_w` 與 checkpoint 列的 §4.3 (e)(f) 不得實作。」〕
          - 簽章不接受 T\*_j、n、樣本、紀錄清單或判定結果（AST）。
          〔N-50 取代：原寫「- checkpoint 列上的 §4.3 (a)～(f)、§4.2 各項指標、作廢率與 W，以及 D-12 的 `fail_normal`、`fail_w`、`void_rate`，一律只在 P_j 的紀錄上計算，各紀錄取同一 `e_view` 的鏈尾。P_j 只由同一模組的單一函式 `checkpoint_sample(claim_id, n_j, *, e_view)` 取得。」〕
        - checkpoint 列的 `n` ＝ n_j。
@@ -2049,22 +2049,22 @@
   - （r2，A-23）`f2_invalid_stop_worst_case`：條件一成立，但上式不成立；
   - （r2，A-23）優先序：`f2_invalid_stop` > `f2_deadline` > `f2_invalid_stop_worst_case`。
 - 寫進 snapshot 的 `display_reasons_json`，並同時記錄 `withdrawn_at_n`。
-- 條件一必須讀兩個檢查點的 `eval_kind=checkpoint` 列在 `stats_json` 中的同一份計算（一般情境與 W 情境各存一份），不得另外計算一次。（事先宣告 v0.23 V23-01）事先宣告 §4.2 W 列 v0.23 另列的三項（證據不足而後作廢的筆數、證據不足而 `resolved` 的筆數、只計有標籤列的作廢率）存於同列 `stats_json.w_disclosure`，只作揭露；FL-46 所稱判定條件一的唯一函式，以及 `void_rate`、`worst_case_sample` 都不讀它（AST）。
+- 條件一必須讀兩個檢查點的 `eval_kind=checkpoint` 列在 `stats_json` 中的同一份計算（一般情境與 W 情境各存一份），不得另外計算一次。（事先宣告 v0.23 V23-01）事先宣告 §4.2 W 列 v0.23 另列的三項（證據不足而後作廢的筆數、證據不足而 `resolved` 的筆數、只計有標籤列的作廢率）存於同列 `stats_json.w_disclosure`，只作揭露；FL-46 所稱判定條件一的唯一函式，以及 `compute_void_rate`、`worst_case_sample` 都不讀它（AST）。三項的範圍同 `compute_void_rate`（V24-01、V24-02；事先宣告 §4.2 W 列 v0.24）。（V24-01；事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1 點）其餘 h−1 個相位的涵蓋率、作廢率與 W（含 W 下的 §4.3 (b)(c)(d)），存於同列 `stats_json.phase_disclosure`，依相位編號 1～h−1 各一項，全部列出，另列 `record_range` 中 `phase` 為 null 的列數。各相位的 n 樣本只由 `validation.py` 的單一函式 `phase_sample(claim_id, phase, *, e_view, n_j)` 取得：範圍與 `record_range` 相同（daily 列以 `n_j = None` 呼叫），T\*_j 經同一個內部函式導出；`phase` 只接受 1～h−1，傳入 0 即拋例外，第 0 相位的樣本仍只由 `checkpoint_sample` 與 daily 列的 n 樣本函式取得。各相位以同一個 `compute_coverage`、`compute_void_rate`、`worst_case_sample` 計算。`stats_json.phase_disclosure` 只作揭露：FL-46 所稱判定條件一的唯一函式、`fail_normal`、`fail_w`、§4.3 各項的判定、gate 與徽章都不讀它（AST）。
 - CEO 若選 F2-A，列舉值在 C-8 決策時另外定，片段要重寫。
 
 **逐檢查點判定（r2，A-23；整條取代 r2 版；原因值與優先序併入上方列舉）**
 1. **逐檢查點判定**。相鄰兩個檢查點記為 (c₀, c₁)，對每個 c：
    - `fail_normal(c)`：一般情境下，模型點估計在共同子集上 ≤ 任一必備基準；
-   - `fail_w(c)`：W 情境下做同一個比較。W 的樣本只由 `validation.py` 的單一函式 `worst_case_sample(record_range, n_sample)` 組成：輸入只接受 `record_range()` 與 `checkpoint_sample()`（daily 列為該列的 n 樣本函式）的回傳物件，不接受紀錄清單或判定結果（AST）。W 樣本 ＝ n 樣本，加上依事先宣告 §4.2「作廢最壞情境 W」與 §4.3 (f) v0.23 放回的列：(1) 範圍內鏈尾為作廢的列，不論預測端 label；(2) 範圍內族群列中，鏈尾 `resolved`、`basket_excluded_members_json` 非空，而且主籃子標籤（`realized_label`）與診斷籃子標籤（`diag_basket_with_excluded`）不一致，或任一為 null 者，不論預測端 label；其中已在 n 樣本內的列改記（模型未命中、各必備基準命中），不重複計入；`basket_excluded_members_json` 為空陣列的列，兩個籃子相同，不屬於 (2)。(1)(2) 都依鏈尾與結算結果判定，不讀預測端 label（事先宣告 §4.3 (f) v0.23，V23-01、V23-02）；不在 n 樣本內的 (2) 列（`label = insufficient` 者）加入 W 樣本。每筆紀錄只計一次；
+   - `fail_w(c)`：W 情境下做同一個比較。W 的樣本只由 `validation.py` 的單一函式 `worst_case_sample(record_range, n_sample)` 組成：輸入只接受 `record_range()` 與 `checkpoint_sample()`（daily 列為該列的 n 樣本函式）的回傳物件，以及只供 `stats_json.phase_disclosure` 使用的 `phase_sample()` 回傳物件（V24-01；條件一段），不接受紀錄清單或判定結果（AST）；`fail_w` 所讀的 W 樣本只由前兩者組成（FL-73 (c)）。W 樣本 ＝ n 樣本，加上依事先宣告 §4.2「作廢最壞情境 W」與 §4.3 (f) v0.23 放回的列：放回範圍是 `record_range()` 回傳的紀錄中，`phase` 等於 n 樣本的相位（判定用的 n 樣本為 0；V24-01）而且不在待重算集合（V24-02）者（事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1、2 點）：(1) 放回範圍內鏈尾為作廢的列，不論預測端 label；(2) 放回範圍內族群列中，鏈尾 `resolved`、`basket_excluded_members_json` 非空，而且主籃子標籤（`realized_label`）與診斷籃子標籤（`diag_basket_with_excluded`）不一致，或任一為 null 者，不論預測端 label；其中已在 n 樣本內的列改記（模型未命中、各必備基準命中），不重複計入；`basket_excluded_members_json` 為空陣列的列，兩個籃子相同，不屬於 (2)。(1)(2) 都依鏈尾與結算結果判定，不讀預測端 label（事先宣告 §4.3 (f) v0.23，V23-01、V23-02）；不在 n 樣本內的 (2) 列（`label = insufficient` 者）加入 W 樣本。（V24-03；同段第 3 點）多對象合併時，放回範圍內有 (1)(2) 列、但沒有任何對象在 n 樣本內的決策日，是 W 的一個樣本日：當日分母為該日 (1)(2) 列的對象數，模型當日命中比例為 0，各必備基準為 1，依 T 排在其他樣本日之間；§4.3 (a) 仍以 n 判定，不以 W 的樣本日數判定。n 樣本物件帶出各樣本日的決策日與對象列的 `forecast_id`，本函式以它與 `record_range` 的 `forecast_id`、決策日比對，不另讀 E。每筆紀錄只計一次；
    - 兩者都讀該檢查點 `eval_kind=checkpoint` 列的 `stats_json`，不另外計算。
    - `fail(c) = fail_normal(c) OR (void_rate(c) > 5% AND fail_w(c))`；
-   - `void_rate(c)` 讀該檢查點 checkpoint 列的值，定義依事先宣告 §4.3 (f)：作廢列 ÷（已結算列＋作廢列）。寫入 checkpoint 列（daily 列同理）時，由 `validation.py` 的單一函式 `void_rate(record_range)` 計算，分子與分母只取 `record_range()` 回傳的紀錄（D-11 第 2 點 N-50 子點），依鏈尾 `status` 判定，不讀預測端 label（E 內 `label = insufficient` 而後作廢者計入分子與分母，`resolved` 者計入分母；事先宣告 §4.3 (f) v0.23，V23-01）；
+   - `void_rate(c)` 讀該檢查點 checkpoint 列的值，定義依事先宣告 §4.3 (f)：作廢列 ÷（已結算列＋作廢列）。寫入 checkpoint 列（daily 列同理）時，由 `validation.py` 的單一函式 `compute_void_rate(record_range, n_sample)` 計算（N-59 改名），分子與分母只取 `record_range()` 回傳的紀錄中，`phase` 等於 `n_sample` 的相位（判定用的 n 樣本為 0；V24-01）而且不在待重算集合（V24-02）者（D-11 第 2 點 N-50 子點；事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」第 1、2 點），依鏈尾 `status` 判定，不讀預測端 label（E 內 `label = insufficient` 而後作廢者計入分子與分母，`resolved` 者計入分母；事先宣告 §4.3 (f) v0.23，V23-01）；
    - 條件一成立，若且唯若 `fail(c₀) AND fail(c₁)`；不要求兩個檢查點的作廢率都 > 5%。
 2. **原因值與優先序**：見上方『下架原因列舉值』。
 3. **`display_reasons_json.withdraw`** 的結構：`{reason, conditions_met, pair: [{n, void_rate, fail_normal, fail_w}, …], positive_suppressed_during_f3: bool}`。最後一個欄位見 A-28。
 4. **片段**：
    - `f2_invalid_stop_worst_case` 在 LM-81 中用 LM-87（WC-a，第五批條件核可），要完整渲染，不得截斷。
-   - LM-87「連續兩個檢查點（n＝{X0}、n＝{X}）的結果都不高於基準；其中作廢比例超過 5% 的檢查點，依最不利情境（作廢的預測全數視為不符）計算」由第 1 點的逐檢查點規則保證屬實，滿足 LM-87 的核可條件，不必重送。
+   - LM-87「連續兩個檢查點（n＝{X0}、n＝{X}）的結果都不高於基準；其中作廢比例超過 5% 的檢查點，依最不利情境（作廢的預測全數視為不符）計算」由第 1 點的逐檢查點規則保證屬實，滿足 LM-87 的核可條件，不必重送。〔v0.24 註（V24-01）：LM-87 的「作廢比例」與「作廢的預測」，都指同一個以 n＝{X} 計的檢查點範圍（第 0 相位格點上、不在待重算集合；第 1 點 `void_rate(c)`、`fail_w(c)` 子點）；風控 2026-10-21 事先宣告 v0.24 逐字確認 (b) 裁定仍屬實，使用者面不改字，不必重送。本點原文不改〕
 5. **兩張對照表**：
    - `LM81_WITHDRAW_REASON_FRAGMENTS` ＝ {`f2_invalid_stop`: LM-75, `f2_deadline`: LM-74, `f2_invalid_stop_worst_case`: LM-87}；
    - （r3，A-58）`LM79_WITHDRAW_REASON_RENDER: Mapping[withdraw_reason, (template_id, reason_fragment_id | None)]`：
@@ -2522,7 +2522,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (i)（N-27）更正作業在被重查列的 D_5 之前啟動，判定視圖中 P(T+h) 收盤「確認有誤、尚未取得正確值」→ 當次寫入作廢列，不延後；`wait_sessions`、`wait_deadline_session` 等於被 supersede 列；之後的作業取得 `correct_close_obtained` → 不 supersede 該作廢列，只寫 `forecast_void_late_diag`。
   - (j)（N-29）三種待重算各一格（尚未觀察到、沒有可用資料、大盤列未經偵測）→ 不寫 supersede 也不寫作廢，`rejected_json`、`pending_json` 各一項，紀錄清單回傳待重算片段，不含 label 與實際結果。下一次結算評估帶來新觀察日，或含 d、而且數值是新出現的快照列 → 第四類觸發啟動，寫入 supersede（`correction_causes` 含 `x2_session_removed`），該項離開 `pending_json`，畫面改為 LM-150＋LM-151。沒有任何新資料的評估 → 不啟動（spy）。（(γ)；風控 2026-10-18 確認）大盤項：23:10 重試與啟動補跑各再寫一列 `forecast_settle_eval`，d 的列與 W_S 以內某一列快照數值相同 → 不啟動（spy），沒有新的 job_end，`e_changed_since` 維持為假；d 的數值改變 → 啟動；各次執行的數值依序為 A、B、A → 只有 B 那一次啟動；W_S 以內的快照都沒有 d 的列 → 啟動；`write_validation_failed` 的大盤項在重試時不啟動，新觀察日照常啟動。（風控 2026-10-18 確認，(g)「優先序」與 D-9 第 5 點「待重算」）已確認 PIT 違規、鏈尾 `resolved`、在待重算集合 → 狀態行是待重算片段，資格標示並列 LM-110 與 LM-114（LM-114 排第一），回應不含 label 與順延前結果；`on_demand`、`late`、`before_dv` 各一格同理（分別並列 LM-113、LM-112、LM-111）；族群列且 A-27 (c) 成立 → 不回傳待重算片段，回應不含 `settlement_date`、`outcome_status` 與順延前結果；族群列且 (c) 不成立 → 不顯示 label 與任何結算結果；E 以外的列到期作廢 → §4.2 作廢數 (7) 計入、依 E 分列，作廢率與 W 不變。`write_validation_failed` 項修正後重查成為 `shift_t_plus_h_data_unavailable`：未到期 → 留在 `pending_json`、`reason` 改寫、`since_job_id` 不變；已到期（依 N-29 (b) 起算，不扣除被拒期間）→ 依 (乙) 改記作廢；等待資料項重查後成為 `write_validation_failed` → 到期不改記作廢。前一作業 `pending_json` 的某一項既沒有處理、也沒有帶入，而且該 `forecast_id` 的鏈尾仍是該項的 `tail_outcome_id` → 拒絕寫入 job_end（N-32；鏈尾已換時依 (l) 殘留防護，扣除並記 WARNING，job_end 照寫）。X2 事件已寫入、作業尚未完成 → 該列回傳待重算片段。啟動檢查不讀時鐘差（AST）。重算含 `x2_session_removed` 而寫入驗證拒絕 → 列入 `pending_json`（`write_validation_failed`），回傳待重算片段，N-29 (b) 到期也不改記作廢。pending 項由其他類觸發重查 → `correction_causes` 含 `x2_session_removed`。前一作業的 pending 項本作業重算無任何欄位改變 → 不寫列、離開 `pending_json`，job_end 照寫。大盤 `shift_index_bar_unverified` 到期 → 視為沒有可用資料、改記作廢（成立集合含 `missing_bar_after_wait`），`diag_*` 不讀未通過比對的列（spy）。待重算片段不出現在本路徑以外；大盤待重算列不含 LM-22、`threshold_display`（schema 測試）。驗證統計不計入待重算集合；job_end 寫入後 `e_changed_since` 為真。（N29-11）週末 X2、順延後 T+h 不變：snapshot 在 (b) 期間寫入，之後作業不寫列、寫入 job_end → 到下一筆 snapshot 之前，`e_changed_since` 與 `n_disclosure_masked` 為真；下一筆 snapshot 的 n 含該列；`mask_episodes` 的變動項含該 job_end，日數為 1。對照格：同一次執行中，作業在驗證快照之前寫入 job_end → 該 snapshot 的 `e_read_job_end_seq` 涵蓋它，`e_changed_since` 為假。AST：`views` 讀 `forecast_correction_job_end` 的呼叫點恰好是 D-11.4 第 11 點 (g) 所列的兩個 `store.py` 函式。序號函式的 SQL 只選取 `correction_job_id`；其回傳值不出現在任何 response model 或匯出欄位（AST／schema 斷言）。
   - (k)（T18-2；風控 2026-10-18 V18-01、V18-02 單項確認；事先宣告 §4.2 作廢數 (7) 的分組）待重算後到期 → 前者；從未待重算、直接作廢 → 後者；待重算 → resolved → 新順延 → 直接作廢 → 後者，並計入「另列」；(甲) 支同時含 `missing_bar_after_wait` → 不在本子項；作廢後 `pending_json` 殘留或防護路徑再出現 → 分組不變。
-  - (l)（N-32；tech-architect 2026-10-18；風控 2026-10-18 N-32 裁定）交易邊界與中斷復原：在 ⑤ 的交易內、已寫入若干 supersede 列與 diag 列、尚未寫入 job_end 時注入例外 → 本作業在 `forecast_outcome`、`forecast_void_late_diag`、`forecast_correction_job_end` 都沒有列，supersede 列的 `outcome_id` 最大值不變；下一個作業完整重跑，寫入的列與沒有中斷時逐位相同（`outcome_id`、`diag_id`、`correction_job_id`、`computed_at` 除外）。寫入 job_end 的驗證不成立（D-3「晚到資料的觸發」第 2 點的 W 已改變、交錯完成各一格）→ 三表同樣都沒有本作業的列。單列被寫入函式拒絕 → 只有該列不寫、列入 `rejected_json`（含 `x2_session_removed` 時同時列入 `pending_json`），其他列與 job_end 照寫。④ 期間沒有開啟任何主 DB 寫入交易（spy）；⑤ 的交易內，`run_correction_job()` 不直接呼叫重算函式與判定視圖的讀取函式（spy）。寫入函式的驗證在 ⑤ 內照常執行：D-11.4 第 11 點 (h)「適用範圍」(甲)、(乙) 的作廢 supersede 列各一格，寫入函式在 ⑤ 內以本作業的判定視圖、經 `scoring.py` 的同一套函式重算比對（spy）；比對不符 → 該列被拒絕，其他列與 job_end 照寫；以呼叫端傳入的判定結果取代重算比對、或省略重算比對的實作 → 測試失敗。（風控 2026-10-18 N-32 補裁）⑤ 內的讀取與順序（D-9 第 5 點 ⑤ 同名子點）：寫入函式在 ⑤ 內的主 DB 讀寫都經開啟本交易的同一條連線，寫入函式內沒有 `BEGIN`、`COMMIT`、`ROLLBACK`（spy）；每一列的寫入驗證（含重算比對）都在該列 insert 之前完成（spy 呼叫順序），重算比對讀到的更正鏈不含本作業在本交易內寫入的列，先 insert 再驗證的實作 → 測試失敗；⑤ 內不呼叫 `official_holiday_table_meta`、`official_holidays`、`unobserved_weekdays` 與 `ledger_registration_start()`（spy；(b) 的恰好一次不變）；以接入休市日表的 fixture 跑 (乙) 一格，⑤ 的重算所用休市日表是 ② 讀到的同一份，結果與 ④ 逐位相同；交給寫入函式的休市日表 meta 與本作業 `holiday_table_json` 不同 → 整個交易回滾，三表都沒有本作業的列。性質測試：任意中斷點之下，`correction_job_id` 非 null 的每一列 `forecast_outcome` 與每一列 `forecast_void_late_diag`，所指作業都有 `forecast_correction_job_end` 列。殘留防護：前一個已完成作業的 `pending_json` 只有一項 X，fixture 直接插入一列作廢列，supersede X 的 `tail_outcome_id`，其 `correction_job_id` 指向沒有 end 列的作業（模擬 ⑤ 以外的寫入）；分兩格：下一個作業沒有重查 X；下一個作業因新觀察日的 `pending_resettle` 觸發而重查 X（鏈尾是作廢列，依 R10-3 不重算，只算診斷）。兩格都是 → X 不在本列 `pending_json`，記 WARNING，job_end 照寫；再下一個作業照常寫入 job_end，不被拒絕；把 X 原樣帶入的實作 → 拒絕寫入 job_end；之後新觀察日的結算評估不再產生 `pending_resettle` 觸發（spy）。同一 fixture 在下一個 job_end 之前寫 snapshot：X 的作廢列屬於 E 時，計入作廢率與 W，不因 X 仍在最近一列 `pending_json` 而被排除。本列 `pending_json` 某一項的 `tail_outcome_id` 不等於目前鏈尾 → 拒絕寫入 job_end。（N32-6）兩項斷言都成立 → (iv) 照常輸出；fixture 使合計與 `forecast_void_late_diag` 列數不等，或插入一列 `correction_job_id` 指向沒有 end 列作業的 diag 列 → 記 WARNING，(iv) 並列兩個數字並標明不一致與不成立的項，不只列其一；插入一列 `correction_job_id` 指向沒有 end 列作業的 `forecast_outcome` 列 → 記 WARNING。
+  - (l)（N-32；tech-architect 2026-10-18；風控 2026-10-18 N-32 裁定）交易邊界與中斷復原：在 ⑤ 的交易內、已寫入若干 supersede 列與 diag 列、尚未寫入 job_end 時注入例外 → 本作業在 `forecast_outcome`、`forecast_void_late_diag`、`forecast_correction_job_end` 都沒有列，supersede 列的 `outcome_id` 最大值不變；下一個作業完整重跑，寫入的列與沒有中斷時逐位相同（`outcome_id`、`diag_id`、`correction_job_id`、`computed_at` 除外）。寫入 job_end 的驗證不成立（D-3「晚到資料的觸發」第 2 點的 W 已改變、交錯完成各一格）→ 三表同樣都沒有本作業的列。單列被寫入函式拒絕 → 只有該列不寫、列入 `rejected_json`（含 `x2_session_removed` 時同時列入 `pending_json`），其他列與 job_end 照寫。④ 期間沒有開啟任何主 DB 寫入交易（spy）；⑤ 的交易內，`run_correction_job()` 不直接呼叫重算函式與判定視圖的讀取函式（spy）。寫入函式的驗證在 ⑤ 內照常執行：D-11.4 第 11 點 (h)「適用範圍」(甲)、(乙) 的作廢 supersede 列各一格，寫入函式在 ⑤ 內以本作業的判定視圖、經 `scoring.py` 的同一套函式重算比對（spy）；比對不符 → 該列被拒絕，其他列與 job_end 照寫；以呼叫端傳入的判定結果取代重算比對、或省略重算比對的實作 → 測試失敗。（風控 2026-10-18 N-32 補裁）⑤ 內的讀取與順序（D-9 第 5 點 ⑤ 同名子點）：寫入函式在 ⑤ 內的主 DB 讀寫都經開啟本交易的同一條連線，寫入函式內沒有 `BEGIN`、`COMMIT`、`ROLLBACK`（spy）；每一列的寫入驗證（含重算比對）都在該列 insert 之前完成（spy 呼叫順序），重算比對讀到的更正鏈不含本作業在本交易內寫入的列，先 insert 再驗證的實作 → 測試失敗；⑤ 內不呼叫 `official_holiday_table_meta`、`official_holidays`、`unobserved_weekdays` 與 `ledger_registration_start()`（spy；(b) 的恰好一次不變）；以接入休市日表的 fixture 跑 (乙) 一格，⑤ 的重算所用休市日表是 ② 讀到的同一份，結果與 ④ 逐位相同；交給寫入函式的休市日表 meta 與本作業 `holiday_table_json` 不同 → 整個交易回滾，三表都沒有本作業的列。性質測試：任意中斷點之下，`correction_job_id` 非 null 的每一列 `forecast_outcome` 與每一列 `forecast_void_late_diag`，所指作業都有 `forecast_correction_job_end` 列。殘留防護：前一個已完成作業的 `pending_json` 只有一項 X，fixture 直接插入一列作廢列，supersede X 的 `tail_outcome_id`，其 `correction_job_id` 指向沒有 end 列的作業（模擬 ⑤ 以外的寫入）；分兩格：下一個作業沒有重查 X；下一個作業因新觀察日的 `pending_resettle` 觸發而重查 X（鏈尾是作廢列，依 R10-3 不重算，只算診斷）。兩格都是 → X 不在本列 `pending_json`，記 WARNING，job_end 照寫；再下一個作業照常寫入 job_end，不被拒絕；把 X 原樣帶入的實作 → 拒絕寫入 job_end；之後新觀察日的結算評估不再產生 `pending_resettle` 觸發（spy）。同一 fixture 在下一個 job_end 之前寫 snapshot：X 的作廢列屬於 E、而且在第 0 相位格點上時（事先宣告 §4.3 v0.24，V24-01），計入作廢率與 W，不因 X 仍在最近一列 `pending_json` 而被排除（鏈尾不是 `resolved`，不屬於 D-11.4 第 11 點 (g) 的待重算集合，V24-02 不適用）。本列 `pending_json` 某一項的 `tail_outcome_id` 不等於目前鏈尾 → 拒絕寫入 job_end。（N32-6）兩項斷言都成立 → (iv) 照常輸出；fixture 使合計與 `forecast_void_late_diag` 列數不等，或插入一列 `correction_job_id` 指向沒有 end 列作業的 diag 列 → 記 WARNING，(iv) 並列兩個數字並標明不一致與不成立的項，不只列其一；插入一列 `correction_job_id` 指向沒有 end 列作業的 `forecast_outcome` 列 → 記 WARNING。
 - **FL-69**（`INDEX_VERIFICATION_SOURCE` 版本歷史；`forecast_replay_index_check`；`forecast_replay_outcome`）：
   - (a) 登記序列目前為空；性質測試：版本逐項加 1、跨 `source_name` 單調、已登記項不可變、同名時涵蓋只增不減；程式序列與 ADR 登記表逐欄相同。
   - (b) `coverage_end_at` 在 `rolling` 時只依日期與時鐘；涵蓋以外 → `outside_coverage`，不呼叫來源（spy）；涵蓋以外寫 `source_has_no_day` → 拒絕。
@@ -2601,21 +2601,26 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (e) 不得補值：同一 scope 另有一筆完整的預測，缺項那一筆仍為 null；結算評估與更正作業期間，`app/outlook/volatility.py` 的 `sigma_d()` 呼叫 0 次（spy）。
   - (f) 判定不讀 label：同一份市場資料與 `band_def`（完整），label 分別為 `insufficient` 與 `bullish` 的兩個 fixture → `status`、`status_reason`、`void_reasons_json`、`settlement_date`、`wait_sessions`、`wait_deadline_session` 逐位相同，只有 `hit` 不同。
   - (g) `forecast_record` 寫入：證據不足而且缺項 → 接受，`up_pct`、`down_pct` 為 null；證據不足而且缺項、`up_pct` 非 null → 拒絕；證據不足而且缺項、`missing_json` 為空陣列 → 拒絕；證據不足而且完整 → 原有五項照常驗證（`up_pct < down_pct` 的一格拒絕）；任一 label 的 `K_h` 或 `EPS` 與該列 `definition_version` 的 dirdef 常數不同 → 拒絕；兩個 `definition_version` 的 K 不同時，各依自己的版本比對。
-  - (h) 驗證統計（(a) 的大盤 fixture）：E 中加入 (a) 那一筆，n、命中率、各基準命中、§4.3 (a)～(d) 各值、W 放回的列數與 W 情境下的各值、`bootstrap_seeds_json` 逐位不變；§4.3 (e) 涵蓋率的分母加 1、分子不變；§4.3 (f) 作廢率的分母加 1、分子不變（事先宣告 §4.3 (f) v0.23，V23-01；同 FL-73 (e)）；§4.2 混淆矩陣「證據不足」列的「其中 `realized_label` 為 null 的筆數」加 1。族群 fixture 依 FL-73 (f)。
+  - (h) 驗證統計（(a) 的大盤 fixture）：E 中加入 (a) 那一筆（在第 0 相位格點上、不在待重算集合；事先宣告 §4.3 v0.24，V24-01、V24-02），n、命中率、各基準命中、§4.3 (a)～(d) 各值、W 放回的列數與 W 情境下的各值、`bootstrap_seeds_json` 逐位不變；§4.3 (e) 涵蓋率的分母加 1、分子不變；§4.3 (f) 作廢率的分母加 1、分子不變（事先宣告 §4.3 (f) v0.23，V23-01；同 FL-73 (e)）；§4.2 混淆矩陣「證據不足」列的「其中 `realized_label` 為 null 的筆數」加 1。族群 fixture 依 FL-73 (f)。
   - (i) 寫入端（N-46）：label 為 `bullish`、`range`、`bearish` 各一格，每一種違規值至少一格 → 該範圍的 `forecast_record` 寫入拋 `LabeledThresholdSnapshotIncompleteError`（`source = record`、`affected_forecast_count = 1`、`violations` 等於 fixture 的期望值），該範圍沒有列，同一次執行的其他範圍照常寫入；記錄一步的步驟結果為失敗，E-3d 一則（`step = record`，`exception_class` 為 None）。
   - (j) 結算端守衛：以測試專用的 SQL 繞過寫入驗證，在假主 DB 放一筆缺 `sigma_d` 的有標籤預測 → `run_settlement_evaluation()` 在寫入任何 outcome 之前拋 `LabeledThresholdSnapshotIncompleteError`（`source = settlement`），屬性等於 fixture 的值；例外逃出時 `in_transaction` 為 False，`forecast_outcome`、`forecast_settle_eval` 的列數不變；任何一列都沒有出現「`label ≠ insufficient` 而且 `realized_label` 為 null」；E-3d 一則（`step = settlement`，`exception_class = LabeledThresholdSnapshotIncompleteError`）；缺日稽核照常被呼叫（比照 FL-71 (b)）；下一次評估以同一份 fixture 再拋一次（不存跨執行狀態）。
   - (k) 更正端守衛：被重查的列中有 (j) 那種列 → `run_correction_job()` 在 ④ 拋出（`source = correction`），⑤ 的交易沒有開啟，沒有 supersede 列、diag 列與 `forecast_correction_job_end`。
   - (l) `forecast_outcome` 寫入驗證：有標籤、`status = resolved`、`realized_label` 為 null → 拒絕；證據不足而且缺項、`realized_label` 非 null → 拒絕；證據不足、`hit` 非 null → 拒絕。
   - (m) 例外：`str(exc)` 等於由屬性以固定格式產生的字串；缺任一個必填屬性 → 建構失敗；`violations` 為空或未排序 → 建構失敗；fixture 的 `forecast_id`、`claim_id`、代號哨兵值與 label 字串不出現在例外訊息、`ops alert:` log 行與推播中（沿用 FL-71 (f) E 類）。
   - (n) 單一定義：`threshold_inputs`、`labeled_snapshot_violations` 在 `app/` 內各恰好一個定義，都在 `band.py`；`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 都經這兩個函式判定（AST、spy）；`band.py` 不 import `scoring.py`、`app/outlook/volatility.py`（import graph）。
-- **FL-73**（N-50；D-11 第 2 點 `record_range`；D-12「逐檢查點判定」第 1 點；對應事先宣告 LG-34）：
+- **FL-73**（N-50；D-11 第 2 點 `record_range`；D-12「逐檢查點判定」第 1 點；事先宣告 §4.3 v0.24「(e)(f) 與 W 的計算範圍」；對應事先宣告 LG-34～LG-37）：
+  - 共通條件（V24-01、V24-02）：除 (h)～(j) 另有指定者外，各格 fixture 的紀錄都在第 0 相位格點上（多對象合併時為第 0 相位決策日），都不在待重算集合。
   - (a) checkpoint n_j＝30：P_j 為 30 個有標籤、`resolved` 的格點，另有 3 筆 T ≤ T\*_j 的有標籤作廢列 → `void_rate` ＝ 3/33（不是 0），W 放回 3 筆；T > T\*_j 的作廢列不計入。
   - (b) 同一 fixture 另加 5 筆 T ≤ T\*_j 的證據不足列 → checkpoint 列的 §4.3 (e) 涵蓋率不是 100%，等於 fixture 的期望值。
-  - (c) `record_range` 回傳的 `prefix_last_session` 等於 `checkpoint_sample` 最後一個格點的決策日；以測試替身使兩者不等 → checkpoint 列寫入被拒，整個交易 rollback。`record_range`、`void_rate`、`worst_case_sample` 在 `app/` 內各恰好一個定義；簽章不接受 T\*_j、n、樣本、紀錄清單或判定結果（AST）；它們與 `checkpoint_sample` 都只經同一個內部函式取得 T\*_j（spy）。
-  - (d)（V23-01）label 不變性：固定 T\*_j，把範圍內任一筆的 label 在 {bullish, range, bearish, insufficient} 之間替換 → `void_rate` 與 W 放回的作廢列筆數逐位相同（LG-34 (c)）。
+  - (c) `record_range` 回傳的 `prefix_last_session` 等於 `checkpoint_sample` 最後一個格點的決策日；以測試替身使兩者不等 → checkpoint 列寫入被拒，整個交易 rollback。`record_range`、`compute_void_rate`、`compute_coverage`、`worst_case_sample`、`phase_sample` 在 `app/` 內各恰好一個定義，`app/` 內沒有名為 `void_rate` 的函式或方法定義（N-59）；五者的簽章都不接受 T\*_j、n、紀錄清單或判定結果；`record_range`、`phase_sample` 不接受樣本，`compute_void_rate`、`compute_coverage`、`worst_case_sample` 的樣本參數只接受 `checkpoint_sample`、daily 列的 n 樣本函式與 `phase_sample` 的回傳物件（AST）；FL-46 所稱判定條件一的唯一函式、`fail_normal`、`fail_w`、§4.3 各項的判定，以及寫入 snapshot `void_rate` 欄位的路徑，所用的樣本只來自 `checkpoint_sample` 與 daily 列的 n 樣本函式，`phase_sample` 的回傳物件只流向 `stats_json.phase_disclosure`（AST 列舉呼叫點）。它們與 `checkpoint_sample` 都只經同一個內部函式取得 T\*_j；`record_range` 的 `phase` 與 `checkpoint_sample`、`phase_sample` 所用的第 0 相位格點，也只經同一個內部函式導出（spy）。
+  - (d)（V23-01）label 不變性：固定 T\*_j，把範圍內任一筆的 label 在 {bullish, range, bearish, insufficient} 之間替換 → `void_rate` 與 W 放回的作廢列筆數逐位相同（LG-34 (c)）。（V24-03）多對象合併時，固定作廢對象，只改同一決策日其他對象的 label，使該日進出 n 樣本 → W 放回的列數逐位相同（LG-37 (b)）。
   - (e)（V23-01）證據不足而後作廢 → 計入分子與分母，W 放回；證據不足而 `resolved`（含 `realized_label` 為 null）、非族群 → 只計入分母，不放回，n 不變（LG-34 (a)(b)）。
   - (f) 族群：有標籤、`resolved`、排除成員非空、兩個籃子標籤不一致 → 在 n 樣本內改記，不重複計入；排除成員為空陣列、兩個標籤都是 null → 不屬於 (2)；排除成員非空、任一標籤為 null → 屬於 (2)。`label = insufficient`、`resolved`、排除成員非空、兩個籃子標籤不一致 → 加入 W 樣本，n 不變；`label = insufficient`、`resolved`、排除成員非空、任一標籤為 null → 屬於 (2)，加入 W 樣本；`label = insufficient`、`resolved`、排除成員為空陣列、兩個標籤都是 null → 不屬於 (2)，不放回（V23-02；對應事先宣告 LG-34 (f)）。
-  - (g) `stats_json.w_disclosure` 存在，FL-46 的唯一函式、`void_rate`、`worst_case_sample` 不讀它（AST）。
+  - (g) `stats_json.w_disclosure` 存在，FL-46 的唯一函式、`compute_void_rate`、`worst_case_sample` 不讀它（AST）。
+  - (h)（V24-01；對應事先宣告 LG-35 (a)～(e)、(h)，LG-37 (d)）相位：單一對象 checkpoint n_j＝30、h＝5，範圍內第 0 相位格點 33 個，其中 30 個屬於 P_j、2 個有標籤而作廢、1 個證據不足而 `resolved`（非族群）；第 1～4 相位另有 9 筆作廢、4 筆證據不足 → `compute_void_rate` ＝ 2/33，`worst_case_sample` 放回 2 筆，§4.3 (e) 涵蓋率 ＝ 32/33；只改第 1～4 相位的列（增減筆數、改變 `status` 或 label）→ 三者逐位相同；把一筆第 0 相位作廢列的 T 改為第 1 相位的日子 → 1/32、放回 1 筆、31/32。多對象：第 1 相位決策日上的作廢對象不放回，該日全部作廢也不是 W 樣本日。族群：第 0 相位決策日上一筆證據不足而 `resolved`、排除成員非空、兩個籃子標籤不一致的對象列 → 放回；同一列在第 1 相位決策日上 → 不放回，只計入 `stats_json.phase_disclosure` 的第 1 相位。`stats_json.phase_disclosure` 有第 1～4 相位各一項；`phase_sample` 傳入 0 → 拋例外；FL-46 的唯一函式、`fail_normal`、`fail_w` 不讀 `stats_json.phase_disclosure`（AST）。涵蓋率的期望值依字面讀法（作廢列依預測端 label 計入；風控 2026-10-21 事先宣告 v0.24 逐字確認 (c)）。
+  - (i)（V24-02；對應 LG-36 (a)～(f)）待重算：checkpoint n_j＝30，P_j 30 格、範圍內 2 筆有標籤作廢，另有 1 筆 T ≤ T\*_j、`reason = write_validation_failed`、鏈尾 `resolved` 的待重算項 → `compute_void_rate` ＝ 2/32，放回 2 筆，該筆不計入涵蓋率的分子與分母；把該筆 label 改為 `insufficient` → 三者逐位相同。daily 列：待重算集合 (a)、(b) 各一筆 → 都不計入作廢率的分子與分母，不放回，不計入涵蓋率；其中 (a) 那一筆其後重算為 `resolved`、不再待重算 → 下一筆 daily 列計入作廢率分母；改為到期作廢 → 下一筆 daily 列計入分子與分母並放回。`record_range` 的「是否在待重算集合」與 D-11.4 第 11 點 (g) 由同一個 `store.py` 函式取得（AST 列舉呼叫點）。族群：待重算、鏈尾 `resolved`、排除成員非空、兩個籃子標籤不一致的列，不論 label → 不計入作廢率分母，不放回，不計入涵蓋率。 daily 列（不依附 V24；第 2 點 2-①）：E 內尚無 outcome 列的紀錄 → `record_range` 照樣回傳、鏈尾各欄為 null，不計入作廢率的分子與分母，不放回。
+  - (j)（V24-03；對應 LG-37 (a)(b)(e)～(h)）沒有合格對象的決策日：第 0 相位決策日 d₁ 三個對象全部作廢 → d₁ 不在 n 樣本；W 含 d₁，當日分母 3，模型當日比例 0，各必備基準 1。d₂ 有一個證據不足而 `resolved` 的對象（非族群不一致）與一個作廢對象 → W 含 d₂、當日分母 1；把該證據不足對象改為有標籤、`resolved`、合格 → d₂ 在 n 樣本，W 當日分母 2；兩種情形 `worst_case_sample` 放回的列數都是 1。d₅ 只有一個待重算對象與一個作廢對象 → W 含 d₅、當日分母 1（V24-02）。族群：d₆ 只有一個證據不足而 `resolved`、排除成員非空、兩個籃子標籤不一致的對象 → W 含 d₆、當日分母 1。W 的樣本日數大於 n 時，§4.3 (a) 以 n 判定。單一對象：第 0 相位格點上的作廢列 → W 中一個樣本點。
+  - (k)（事先宣告 §9.2「v0.24 仍需核對」發現 (3)；風控 2026-10-21 事先宣告 v0.24 逐字確認 (c) 裁定字面讀法）涵蓋率不讀結算結果：固定 label 與範圍，把範圍內任一筆的鏈尾在 `resolved` 與作廢之間替換 → `compute_coverage` 逐位相同。
 - **FL-24**：預測端計分永遠使用原始列。
 - **FL-50**（r1，A-11）：用表格驅動測試釘住 D-9.3 的兩點（`split_or_reduction_suspected` 的固定門檻、`basket_coverage_below_90` 以 T 日成員數計）。
   - （N-12；對應 LG-28 (d)）加一格：T+h 缺 bar，窗內已有的 bar 中有一日超過 `SPLIT_SUSPECT_ABS_RETURN` → 判為 `split_or_reduction_suspected`。
@@ -2682,7 +2687,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   4. 兩點一般情境都失敗，作廢率 > 5% → `f2_invalid_stop`；
   5. deadline 與 worst_case 同時成立 → `reason=f2_deadline`，`conditions_met` 含兩者。
   6. （N-50；V23-01）只有計入 E 內 `label = insufficient` 而後作廢的列，作廢率才 > 5%，而且兩點都只靠 W 失敗 → worst_case；
-  7. （N-50；V23-01）只計有標籤列時作廢率 > 5%，計入 `label = insufficient` 而 `resolved` 的列後 ≤ 5% → 不套用 W，依一般情境判定；`stats_json.w_disclosure` 的「只計有標籤列的作廢率」照實記下 > 5% 的值。
+  7. （N-50；V23-01）只計有標籤列時作廢率 > 5%，計入 `label = insufficient` 而 `resolved` 的列後 ≤ 5% → 不套用 W，依一般情境判定；`stats_json.w_disclosure` 的「只計有標籤列的作廢率」照實記下 > 5% 的值。6、7 兩格的 fixture 紀錄都在第 0 相位格點上、不在待重算集合（V24-01、V24-02）。
 - **FL-46**（r1，A-9）：只有一個函式讀 checkpoint 列來判定條件一（grep 加測試）。
 
 **閘門與缺項**
@@ -4782,7 +4787,76 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - 新增，N-55、N-56、N-57：都擋 D_v，也擋 D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f) 的實作（風控同份確認 (h)）。三項都決定 F-2 的輸入，必須在看到任何資料之前登記；登記時凡是相對字面讀法比較寬的選項，都要 CEO 明確同意。內容（事先宣告 v0.23 草案 §9.2 發現 (1)～(3)，依風控同份確認第四節 Q-6）：
     - N-55：作廢率、W 與涵蓋率的相位範圍。事先宣告 §4.5「檢查點的判定樣本、時點與 seed」第 1 點的「E 內 T ≤ T\*_j 的紀錄」含第 0 相位以外的列，W「放回樣本」的樣本是第 0 相位主樣本，是否只計第 0 相位格點上的列，事先宣告沒有寫明；daily 列與 V23-02 的族群列同樣要寫明。
     - N-56：待重算的列是否計入作廢率分母的「已結算列」，事先宣告沒有寫明。
-    - N-57：多對象合併時，當日沒有任何對象符合事先宣告 §4.1 n 條件、但有作廢對象的決策日，是否在 W 中成為樣本日，事先宣告沒有寫明。風控同份確認 (h) 指出追蹤清單原先漏了這一項，由 coordinator 編號。
+    - N-57：多對象合併時，當日沒有任何對象符合事先宣告 §4.1 n 條件、但有作廢對象的決策日，是否在 W 中成為樣本日，事先宣告沒有寫明。風控同份確認 (h) 指出追蹤清單原先漏了這一項，由 coordinator 編號。〔已登記（事先宣告 v0.24，V24-01～V24-03；風控 2026-10-21 事先宣告 v0.24 逐字確認，`work/reviews/2026-10-21-v0.24與ADR同步逐字確認-風控.md`；V24-01 經 CEO 明確同意，決策包 #47，2026-10-21）：已同步於 D-11.1、D-11 第 2 點 N-50 子點、D-12、FL-45b、FL-68、FL-72 與 FL-73，見本修訂紀錄最後一段。本項原文不改〕
   - 新增，N-51：擋記錄一步寫入驗證的實作，不擋本批字面（TA 第一份第六節第 1 點；風控同份確認第二節 B）。記錄一步拒寫所留下的缺日，D-8 第 2 點的 `reason` 沒有對應的值，由 TA 另案定、送風控。
-- 程式順序與同批規則（風控同份確認第四節 coordinator，轉記）：D-9 在本批落檔後解除；但記錄一步的寫入驗證（D-3 適用範圍與缺項、D-9 第 6 點 N-46 子點的寫入端）還要等 N-51 定案，並由 dev-lead 確認 N-52（記錄一步現行的逐範圍例外處理）。D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f)、D_v：等 N-55、N-56、N-57 登記並經風控確認。
+- 程式順序與同批規則（風控同份確認第四節 coordinator，轉記）：D-9 在本批落檔後解除；但記錄一步的寫入驗證（D-3 適用範圍與缺項、D-9 第 6 點 N-46 子點的寫入端）還要等 N-51 定案，並由 dev-lead 確認 N-52（記錄一步現行的逐範圍例外處理）。D-12 `void_rate`／`fail_w` 與 checkpoint 列 §4.3 (e)(f)、D_v：等 N-55、N-56、N-57 登記並經風控確認。〔已決（同上）：本修訂紀錄最後一段落檔後解除；daily 列 §4.3 (e) 另等事先宣告 §9.2「v0.24 仍需核對」發現 (2) 登記。D_v 不再受 N-55～N-57 擋住，改受發現 (2)(3) 的明文登記，以及 §4.2 混淆矩陣「證據不足」列相位範圍的登記擋住（風控 2026-10-21 事先宣告 v0.24 逐字確認 (c)(d)）；其他擋 D_v 的事項不變。本項原文不改〕
 - 本批沒有落檔：TA 第一份第六節（另外發現；追蹤清單項）、TA 第二份第五節（意見，結論已併入上列 N-54 與 TW-1、TW-8）。
+
+---
+
+**N-55、N-56、N-57 同步批（事先宣告 v0.24 V24-01～V24-03；D-11.1、D-11 第 2 點 N-50 子點、D-12、FL-45b、FL-68、FL-72、FL-73；N-59 改名；方向：逐項標示，見各項）**
+- 來源與套用範圍（tech-writer 2026-10-21 套用）：
+  - tech-architect 2026-10-19 起草：`work/reviews/2026-10-19-v0.24之ADR同步起草-tech-architect.md` 第一節第 1～12 點、第二節 G-1～G-5 與 R-1（N-59）。該檔第三節（撤回對照）不落檔，V24-01 已經 CEO 明確同意；第四、五節（意見）不落檔。
+  - quant 事先宣告 v0.24 單項草案：`work/reviews/2026-10-19-v0.24單項草案-quant.md`（TA 起草稿所稱「quant 第 3 節 A～D」12 點的出處）。
+  - 風控 2026-10-21 逐字確認：`work/reviews/2026-10-21-v0.24與ADR同步逐字確認-風控.md`，結論 APPROVE WITH CONDITIONS（修改後核可），沒有否決；套用第四節「tech-writer（ADR-0027 照改清單）」RT-1～RT-13。風控改字之處以風控為準；風控沒有給字句之處照 TA 字面。
+  - CEO：決策包 #47（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`），V24-01 明確同意，2026-10-21。
+  - 與事先宣告 v0.24 同一個 commit（風控同份確認 (f)：不適用相鄰 commit 寬限）。事先宣告 v0.24 由 quant 修改，不在本段範圍。
+- 逐項（方向、CEO：TA 起草稿逐點標示；被取代的原文：依風控 RT-13，並依風控 2026-10-21 v0.24 落檔偏離項裁定 D-1（`work/reviews/2026-10-21-v0.24同步批偏離項裁定-風控.md`）更正：句中插入或改字、使原句不再完整出現於正文者，逐字錄存原插入點字串；在兩句之間插入或句末接字者，無被取代原文）：
+  - D-11 第 2 點 N-50 子點第二子點句末（TA 第 1 點；S1-a、S1-b、S1-c）：S1-a 依附 V24-01，方向：補定義（兩面；對齊 V24-01），CEO：依附 V24-01 的明確同意。S1-b 依附 V24-02，方向：不變（確認 N-29 (b) (i) 的字面讀法），CEO：知悉。S1-c 依風控 RT-1 換字：作廢數一句，方向：補定義（不變：消除歧義），CEO：否；混淆矩陣「證據不足」列一句，方向：收緊（實作順序：登記並經風控確認之前不得寫入），CEO：否，該列的相位範圍本身待登記（F-2，見下方逐項裁定一覽）。插入，無被取代原文。
+  - D-11 第 2 點 N-50 子點 `record_range` 子點（TA 第 2 點，2-①、2-②；風控 RT-2、RT-3）：方向：補定義（不變：補上現行字面已經要用、卻沒列出的欄位）；2-② 的解除阻擋屬補定義（不變），daily 列 §4.3 (e) 的阻擋屬收緊（實作順序）。CEO：否。被取代的原文已在原處以〔v0.24 取代〕逐字錄存，本段不重錄。
+  - D-12 `void_rate(c)` 子點（TA 第 3 點；N-59）：方向：補定義（對齊 V24-01、V24-02）。CEO：知悉；V24-01 那部分依附明確同意。被取代的原文（逐字）——
+    > 由 `validation.py` 的單一函式 `void_rate(record_range)` 計算，分子與分母只取 `record_range()` 回傳的紀錄（D-11 第 2 點 N-50 子點）
+  - D-12 `fail_w(c)` 子點（TA 第 4 點）：方向：補定義（對齊）。CEO：知悉；V24-01 部分依附明確同意。4-② 在兩句之間插入，無被取代原文；4-① 被取代的原文（逐字）——
+    > (1) 範圍內鏈尾為作廢的列，不論預測端 label；(2) 範圍內族群列中
+  - D-12 `stats_json.w_disclosure` 一句（TA 第 5 點；N-59；G-5）：方向：收緊（揭露）＋補定義（模組邊界）。CEO：否；V24-01 段依附明確同意。鍵名 `phase_disclosure` 由 TA 定。被取代的原文（逐字）——
+    > FL-46 所稱判定條件一的唯一函式，以及 `void_rate`、`worst_case_sample` 都不讀它（AST）。
+  - D-12 第 4 點 LM-87（TA 第 6 點；風控 RT-4）：採甲版（風控同份確認 (b)：屬實，使用者面不改字）；乙版不用。方向：不變（屬實性確認）。CEO：否。依附 V24-01。無被取代原文。
+  - FL-73 標題（TA 第 7 點）：方向：收緊（測試）。CEO：否。依附 V24-01～V24-03 共同。被取代的原文（逐字）——
+    > D-12「逐檢查點判定」第 1 點；對應事先宣告 LG-34）：
+  - FL-73 共通條件一列（TA 第 8 點）：方向：補定義（測試）。CEO：否。無被取代原文。
+  - FL-73 (c)（TA 9-①，風控 RT-5 取代 TA 原稿；G-1）：方向：收緊（測試）。CEO：否。現行 (c) 寫「簽章不接受……樣本」，與 D-12 `worst_case_sample(record_range, n_sample)` 接收 n 樣本物件互相矛盾，一併修正，不依附 V24（TA G-1）。被取代的原文（逐字）——
+    > `record_range`、`void_rate`、`worst_case_sample` 在 `app/` 內各恰好一個定義；簽章不接受 T\*_j、n、樣本、紀錄清單或判定結果（AST）；它們與 `checkpoint_sample` 都只經同一個內部函式取得 T\*_j（spy）。
+  - FL-73 (d)（TA 9-②，V24-03）：方向：收緊（測試）。CEO：否。句末接字，無被取代原文。
+  - FL-73 (g)（TA 9-③）：`void_rate` 改為 `compute_void_rate`（N-59）。方向：收緊（測試）。CEO：否。被取代的原文（逐字）——
+    > FL-46 的唯一函式、`void_rate`、`worst_case_sample` 不讀它（AST）。
+  - FL-73 (h)～(k) 四格（TA 9-③；風控 RT-7、RT-8、RT-9）：方向：收緊（測試）。CEO：否。(i) 句末的 daily 列一句依 RT-8 加入；(k) 依 RT-9 加入，風控同份確認 (c) 裁定字面讀法。插入，無被取代原文。
+  - D-11.1 涵蓋率（TA 第 10 點；風控 RT-10）：方向：補定義（對齊）。CEO：知悉；V24-01 句依附明確同意。無被取代原文。
+  - D-11.1 作廢列子點與用詞定義（TA 第 11 點，11-①、11-②）：方向：補定義（對齊；11-① 最後那句是總括式的屬實性更正，TA 起草稿 F-5）。CEO：知悉；V24-01 句依附明確同意。11-① 句末接字，無被取代原文；11-② 被取代的原文（逐字）——
+    > 作廢列不計入 n，但計入 W。證據不足列依
+  - 修訂紀錄 N-50 段（TA 第 12 點，12-①、12-②；風控 RT-11、RT-12）：在句末加〔已登記〕與〔已決〕，原文不改（比照既有慣例）。12-③ 即本段。無被取代原文。
+  - FL-72 (h)（TA G-2）：方向：補定義（測試條件）。CEO：否。被取代的原文（逐字）——
+    > （(a) 的大盤 fixture）：E 中加入 (a) 那一筆，
+  - FL-68 (l)（TA G-3）：方向：補定義（測試條件）。CEO：否。被取代的原文（逐字）——
+    > X 的作廢列屬於 E 時，計入作廢率與 W，不因 X 仍在最近一列 `pending_json` 而被排除。
+  - FL-45b 第 7 格（TA G-4）：方向：補定義（測試條件）。CEO：否。句末接字，無被取代原文。
+  - D-12 `worst_case_sample` 輸入白名單（風控同份確認 (e) 新缺口 G-6；RT-6）：原句只列 `record_range()` 與 `checkpoint_sample()` 的回傳物件，與 TA 第 5 點讓它也處理 `phase_sample()` 回傳物件的設計字面衝突。被取代的原文（逐字）——
+    > 輸入只接受 `record_range()` 與 `checkpoint_sample()`（daily 列為該列的 n 樣本函式）的回傳物件，不接受紀錄清單或判定結果（AST）。
+  - N-59：`validation.py` 的 `void_rate(record_range)` 改名為 `compute_void_rate`；記號 `void_rate(c)`、snapshot 欄位 `void_rate`、`pair[].void_rate` 不改。方向：不變（命名）。CEO：否。風控：不必重送。不依附任何 V24 編號。
+- 風控 2026-10-21 逐項裁定一覽（風控同份確認第一節；方向、CEO、擋什麼）：
+  - V24-01 相位：APPROVE WITH CONDITIONS（RQ-3、RQ-4、RQ-5、RQ-8）。方向：補定義（兩面）。CEO：明確同意（#47）。擋 commit、D_v、D-12。
+  - V24-02 待重算列：APPROVE。方向：不變（確認字面讀法）。CEO：知悉。擋 commit、D_v、D-12。
+  - V24-03 沒有合格對象的決策日：APPROVE WITH CONDITIONS（依附 V24-01；F-1）。方向：補定義（收緊）。CEO：知悉。擋 commit、D_v、D-12。
+  - V24-04 §9.2：APPROVE WITH CONDITIONS（RQ-8、RQ-10）。方向：不變（揭露）。CEO：否。
+  - V24-05 固定項：APPROVE WITH CONDITIONS（RQ-9）。方向：不變（文字）。CEO：否。
+  - LM-87：甲：屬實（RT-4、RQ-5）。方向：不變（屬實性確認）。CEO：否。
+  - 發現 (1)：照現行字面。放寬須明確同意。不擋 D_v。
+  - 發現 (2)：不計入等待中的紀錄。方向：不變（字面：N-29 (b) (i)）。CEO：知悉。擋 D_v、daily 列 §4.3 (e) 的實作。
+  - 發現 (3)：計入作廢列（依預測端 label）。方向：不變（確認字面讀法）。CEO：知悉。擋 D_v（等明文登記），不擋 checkpoint 列 (e) 的實作。
+  - F-1：required（RQ-7、RQ-8）。擋 commit。
+  - F-2：追蹤；併入發現 (2)(3) 同版登記（RT-1）。方向：待登記。CEO：待定。擋 D_v、該列寫入。
+  - F-3：追蹤；TA 的 `phase = null` 加列數揭露先接住。方向：待查證。CEO：待定。不擋。
+  - F-4：追蹤。不擋；D_v 後照現行規則。
+  - F-5：required（RQ-4；ADR 11-① 照原稿）。方向：補定義（屬實性更正）。CEO：否。擋 commit。
+  - F-6：required（併入 RQ-8）。方向：不變（揭露）。CEO：否。擋 commit。
+  - `phase_sample`、`compute_coverage`、`compute_void_rate` 的新簽章與 `stats_json.phase_disclosure`：APPROVE WITH CONDITIONS（RT-2、RT-5、RT-6）。方向：補定義（模組邊界）＋收緊（揭露）。CEO：否；依附 V24-01 的部分跟著 #47。擋 D-12。
+  - N-59 改名併入本批：APPROVE。方向：不變（命名）。
+- 照實並陳（風控同份確認第二節 A、C）：
+  - V24-01 相對字面讀法（事先宣告 §4.5 第 1 點，不分相位）是放寬面：W 放回的列約少 h 倍，`fail_w` 比較難成立。殘餘風險以揭露為條件接受：其他相位全部列出（`stats_json.phase_disclosure`），格點改變時依 `grid_changed` 處理。
+  - V24-03 依附 V24-01：D_v 之前撤回 V24-01 時，V24-03 要一起改寫並重送；改採不分相位時，每個有作廢對象、但不在 n 樣本內的決策日都成為 W 的樣本日，W 的樣本日數最多約增為 h 倍【推論】，效果變嚴。
+  - 發現 (2) 的另一面：最近 h 個觀察日左右的證據不足，要等結算後才進涵蓋率，降級可能晚幾天，恢復也一樣晚【推論】。
+- 待決事項與同批規則（風控同份確認第四節 coordinator，轉記）：
+  - 整批須等決策包 #47（V24-01 已於 2026-10-21 經 CEO 明確同意）；V24-02、V24-03、N-59 都不先行。與事先宣告 v0.24 同一個 commit。
+  - 落檔後的閘門：D-12 的 `compute_void_rate`、`fail_w` 與 checkpoint 列 §4.3 (e)(f) 解除阻擋；daily 列的 (e) 等發現 (2) 登記；混淆矩陣「證據不足」列等 F-2 登記；D_v 等發現 (2)(3) 與 F-2 的登記，加上其他既有的阻擋事項。
+  - 追蹤清單：N-55、N-56、N-57 改為「已登記，事先宣告 v0.24（V24-01～V24-03）」；N-59 已併入本批；新增且擋 D_v 的是發現 (2)(3) 與 F-2，由 quant 在 v0.25 同一版登記；新增且不擋的是 F-3（quant 查證）與 F-4；新增且可選的是發現 (1) 的放寬選項，只能在 D_v 之前提出。
+  - suggested（交 creative-lead、frontend-engineer，不擋）：日後畫面若在 LM-87 旁邊呈現作廢筆數，要標明它是以哪一組樣本計的，避免使用者拿全部相位的作廢數去對照 5%。
+  - 待查證：F-3 所說的那種列（決策日 T 事後不是觀察日、在格點上沒有相位）是否真的存在，由 quant 查證；產品分支是否已有 `void_rate` 的實作，風控同份確認未查證。
