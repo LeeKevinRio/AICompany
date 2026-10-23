@@ -86,7 +86,7 @@
 - 第一筆前瞻紀錄被六道閘門（G-1～G-6；on-demand 依 G-7 同樣適用）延後。
 - B 型會讓尚未驗證的展望最長顯示到 n＝150（大盤 5 日約 3.1 年，見 quant §4.9），全程掛「驗證中」或「未驗證」。
 - 價位口徑若改成還原序列（M-9），畫面價位會和券商的未還原 K 線不一致，而且每次除權息都會整組平移。
-- 表數多（22 張），寫入規則有一部分在 trigger 裡。
+- 表數多（23 張），寫入規則有一部分在 trigger 裡。
 
 ---
 
@@ -199,7 +199,7 @@
 | **M-8** | D-1〔`:179`〕；D-2.2〔`:193-198`〕 | `outlook.features → data(load_bars／index)`；大盤輸入含廣度 | 接線改為 `outlook.features → outlook.inputs →`（個股、族群成員）`data.market_panel.MarketPanelReader` 唯讀，或（大盤）`services.index` 並擷取輸入；不得經過 `load_bars`／`price_bars_cache`。D-2.2 加解讀註記：所列輸入是允許的上限，v1 大盤只用指數日線；加入廣度要開新的 `rules_version`（新 claim，m＋1） | R-107 第 8 點；quant §10 D-14 |
 | **M-9** | D-5.7〔`:371`〕 | 價位用未還原收盤，跨除息日標 `spans_ex_date` | **可單獨核可**，見 D-6 | R-110 |
 | **M-10** | F-2〔`:580`〕 | 連續兩個評估期都是 `not_better_than_baseline` 就重新設計或下架 | 改寫，見 D-12（主方案 B 型，替代方案 A 型） | C-8；風控立場 |
-| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 17 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`；V15-04 加 `plan_coverage_log`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
+| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 18 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`；V15-04 加 `plan_coverage_log`；V26-04 加 `forecast_replay_execution_log`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
 
 **M-4 細項**
 - (a) **基準採聯集**：
@@ -235,7 +235,7 @@
 | `app/forecast/definitions.py` | frozen 的 `DirectionDefinition`、`PUBLISHED_DIRECTION_DEFINITIONS`、`PUBLISHED_RULESETS` |
 | `app/forecast/claims.py` | claim 登記與 m 的計算 |
 | `app/forecast/recorder.py` | `forecast_record` 的單一編排函式（D-7 第 2 點「步驟隔離」）：依序呼叫記錄、結算、缺日稽核、晚到掃描與更正作業、驗證快照、plan；記錄一步的範圍快照、run 與 run_end、協作式期限、逾時判定；以注入的維運告警送出器發出告警（ADR-0029），本身不 import 推播實作 |
-| `app/forecast/errors.py`（N-23） | 預測帳的 fail-closed 例外型別：基底 `ForecastFailClosedError`，子類 `UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ValidationSnapshotPartialSetError`（N-23 Q3）、`LabeledThresholdSnapshotIncompleteError`（N-46）；另有 `span_sessions` 內部用的 `SpanRegistrationGap`（不是基底的子類）。只 import 標準庫 |
+| `app/forecast/errors.py`（N-23） | 預測帳的 fail-closed 例外型別：基底 `ForecastFailClosedError`，子類 `UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ValidationSnapshotPartialSetError`（N-23 Q3）、`LabeledThresholdSnapshotIncompleteError`（N-46）；另有 `span_sessions` 內部用的 `SpanRegistrationGap`（不是基底的子類）。只 import 標準庫；（v0.26，V26-01、V26-04）另有基底的子類 `ReplayPitProofViolationError`、`ReplayExecutionRefusedError`、`ReplayAbortedError`（D-9 第 7 點 V26-01、V26-04 子點） |
 | `app/forecast/band.py`（N-41、N-46；純函式） | `threshold_inputs(band_def)` 與 `labeled_snapshot_violations(band_def, *, horizon, definition)` 的唯一定義（D-3 `forecast_record` 判定材料「適用範圍與缺項」）。只 import 標準庫與 dirdef 常數；不 import `scoring.py`、`app/outlook/volatility.py`，不讀 DB。`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 只經這兩個函式判定缺項（AST）；（N-53）重放執行函式的預驗證與建結果列的函式同樣只經這兩個函式判定缺項（AST；D-9 第 7 點 N-53 子點） |
 | `app/ops_alert/`（ADR-0029；不在 `app/forecast/` 底下） | 維運告警通道。`app.forecast.*` 只可以 import `app.ops_alert.model`；送出器實作由 `scheduler.py` 組裝時注入 |
 | `app/forecast/scoring.py` | 結算與基準命中（ADR-0012 C-15 白名單，唯一可以出現 forward return 類識別字的地方） |
@@ -288,7 +288,13 @@
 
     `checked_values_sha256` 與 `target_values_sha256` ＝ 以 `canonical_bar_values` 輸出、序列化為 JSON 陣列（`separators=(",", ":")`，UTF-8）後的 sha256。這是既有「正規化」的明文，NaN 依此比較，不做浮點比較（風控 C43）。
 
-    `replay_index_bars` 快照的 `content_sha256` 計算方式：每列取 `canonical_bar_values` 再接 `as_of`、`fetched_at`（ISO8601 原樣字串），各列以其序列化字串排序，整體序列化成 JSON 陣列後取 sha256。每個 registration 只有一份快照，見 `forecast_replay_index_check`。
+    `replay_index_bars` 快照的 `content_sha256` 計算方式（v0.26，V26-01）：每列取 `canonical_bar_values`，再接 `as_of`、`fetched_at`（ISO8601 原樣字串）、`raw_timestamp` 與 `response_seq`（下一子點），各列以其序列化字串排序成 JSON 陣列；`response_meta_json` 依 `response_seq` 排序；兩者組成 `{"responses": …, "rows": …}`，以 `sort_keys=True`、`separators=(",", ":")`、UTF-8 序列化後取 sha256。〔v0.26 取代（V26-01）：原寫「`replay_index_bars` 快照的 `content_sha256` 計算方式：每列取 `canonical_bar_values` 再接 `as_of`、`fetched_at`（ISO8601 原樣字串），各列以其序列化字串排序，整體序列化成 JSON 陣列後取 sha256。」〕每個 registration 只有一份快照，見 `forecast_replay_index_check`。
+  - （v0.26，V26-01；事先宣告 §4.7「單一快照」v0.26 註、執行閘門 (c) 第 (5) 項；後續追蹤清單 N-81；tech-architect 2026-10-23）**重放快照保留的原始欄位**（只限 `series_kind = replay_index_bars`）：
+    - 每列另存 `raw_timestamp`：該 bar 在來源回應 `timestamp` 陣列中的原值（整數照存；不是整數時照原樣存，缺漏為 null），以及 `response_seq`：該列所屬回應的序號（同一份快照自 1 起）。
+    - `forecast_input_series` 另加欄位 `response_meta_json`：只在 `replay_index_bars` 列非 null，為 JSON 陣列，每一項恰為 `{response_seq, exchange_timezone_name, gmtoffset}`，分別取該回應 `meta.exchangeTimezoneName`、`meta.gmtoffset` 的原值；欄位缺漏時為 null，不拒絕寫入，由閘門 (c) 第 (5) 項判定。其他 `series_kind` 的列為 null（寫入驗證）。
+    - `canonical_bar_values` 不變：它也是 `checked_values_sha256`、`target_values_sha256` 的輸入，原始欄位不進入這兩個雜湊。
+    - bar 的 `session_date` 照取得當下的推導存入；存入之後不依 `raw_timestamp` 或 `response_meta_json` 重算或改寫（事先宣告同點）。
+    - 這些欄位只供閘門 (c) 第 (5) 項的檢查（D-3 `forecast_replay_index_check` gate 的 (5)）與 §4.7 揭露讀取；預測端、結算端與 `replay_input_digest` 都不讀（AST）。
 - `forecast_record`：
   - 識別：`forecast_id`（ULID）、`run_id`、`claim_id`、`scope_kind`、`scope_key`、`scope_reason`、`horizon`、`data_as_of`；
   - 結論：`label`、`range_basis`、`missing_json`（MissingItem 陣列）、`definition_version`、`rules_version`；
@@ -569,6 +575,17 @@
   - **重放**：不寫本表（D-9 第 7 點）。
 - `forecast_replay`：結構與 `forecast_record` 相同，另加 `freeze_commit`、`replay_session`、`replay_gate_check_id`（指向 `forecast_replay_index_check` 中 `gate_passed = 1` 的 gate 列；寫入驗證見該表）。永遠不與前瞻紀錄合併。
   - （N-53；事先宣告 v0.25 V25-01、V25-06；tech-architect 2026-10-21）**判定材料的寫入驗證同樣適用**：上句的「結構與 `forecast_record` 相同」包含判定材料的寫入驗證。D-3 `forecast_record` 判定材料 `band_def` 的五項寫入驗證、「適用範圍與缺項」各子點（含 N-63 子點「σ_d 的回傳契約與證據不足時的存值」），以及 D-13 的缺項不變式，對 `forecast_replay` 一律適用，dirdef 取該列 `definition_version` 所登記者。有標籤而缺項的列拒絕寫入，拋 `LabeledThresholdSnapshotIncompleteError`（`source = replay`；D-9 第 7 點 N-53 子點）。
+  - （v0.26，V26-01；事先宣告 §4.7「重放中的 PIT 證明」；後續追蹤清單 N-62；tech-architect 2026-10-23）**重放中的 PIT 證明欄位**：
+    - **取得時間欄位只記事實**：`inputs_max_recorded_at` ＝ 所用快照那一列（`forecast_replay_index_check`，`entry_kind = snapshot`、`fetch_outcome = stored`）的 `recorded_at`；`source_run_min`、`source_run_max` 為 null（重放不讀市場 DB 的 run，D-9 第 7 點）。這三欄在重放中不是 PIT 證明，也不是任何判定的輸入。D-4 第 3 點、FL-7 與 D-11 第 6 點「PIT 違規的偵測」（r1，A-8）都不適用 `forecast_replay`；重放不寫 `pit_violation_confirmed`（AST：以取得時間判定 PIT 的函式不接收 `forecast_replay` 列）。
+    - **新增欄位**：`input_bar_date_min`、`input_bar_date_max`（ISO 日期，NOT NULL）：預測端實際讀取的快照 bar 的最早與最晚 `session_date`。
+    - **重放的 `input_digest`**：由單一純函式 `replay_input_digest(rows)` 計算：取 gate 所指快照中 `session_date` 在 [`input_bar_date_min`, `input_bar_date_max`] 內、而且在 O（`replay_observed_sessions(registration_id)`）內的全部列，每列取 `canonical_bar_values`，各列以其序列化字串排序，整體序列化成 JSON 陣列（`separators=(",", ":")`，UTF-8）後取 sha256。每列的正規化與快照的 `content_sha256` 相同（`canonical_bar_values`），但不接 `as_of`、`fetched_at`、`raw_timestamp`、`response_seq`，也不含 `response_meta_json`（D-3「重放快照與 bar 值的正規化」「重放快照保留的原始欄位」）。
+    - **寫入驗證**（任一項不成立就拒絕寫入；D-9 第 7 點 V26-01 子點的預驗證以同一組函式先行）：
+      - `input_bar_date_min` ≤ `input_bar_date_max` ≤ `data_as_of`；
+      - `input_digest` 等於以 `replay_input_digest` 重算的值；
+      - 所用快照的 sha256 等於 gate 列的 `snapshot_sha256`（同 `forecast_replay_index_check`「與重放結果的關係」）；
+      - `inputs_max_recorded_at` 等於上述快照列的 `recorded_at`，`source_run_min`、`source_run_max` 為 null；
+      - `missing_json` 不含 `E-PIT-UNVERIFIED`。
+  - （v0.26，V26-04；事先宣告 §4.7「已重放的界定與中止的執行」第 5 點；tech-architect 2026-10-23）另加 `replay_execution_seq`：本列所屬嘗試的序號（D-3 `forecast_replay_execution_log` 的 `execution_seq`）。寫入驗證：同一 registration（經 `replay_gate_check_id`）在 `forecast_replay_execution_log` 有這個序號的開始紀錄、沒有它的結束紀錄，而且它是該 registration 最大的開始序號；`replay_gate_check_id` 等於該開始紀錄的 `gate_check_id`；同一 registration 的 `forecast_replay` 列都帶同一個值。所以開始紀錄沒有寫入時，(d) 寫不進任何一列（事先宣告同點「開始紀錄寫不進去時，不得執行 (d)」）。
 - **`INDEX_VERIFICATION_SOURCE` 的版本歷史**（tech-architect 2026-10-18；風控 2026-10-18 v0.15 單項確認第四節 ADR 端第 5 項；事先宣告 §4.7 執行閘門 (1)、§4.7「重放期的起訖日」V16-02）：
   - **形狀**：dirdef 外的 ADR 常數，放在 `app/forecast/index_verification.py`（暫定名）。
     - 每一項為 `IndexVerificationSource = {source_name, version, coverage_start, coverage_end}`（frozen）。`version` 是正整數；`coverage_start` 是日期；`coverage_end` 是日期，或 `rolling`。
@@ -603,7 +620,7 @@
     - 後續追蹤清單 N-28 的第一項（d ∈ D-8.1 (i)、獨立來源在涵蓋範圍內沒有 d）；
     - X1「收盤本身不可用」在接入後是否查證（風控 2026-10-18 v0.15 單項確認 B-3 suggested）。
     - `coverage_end = rolling` 時，data-engineer 對來源公布時點的查證：`is_final(TW, d, t)` 為真時，來源已公布 d 的指數日資料。查證不成立時，只能登記固定的 `coverage_end`，或另定較晚的上界並送風控；
-    - 若同批採用上一項（X1「收盤本身不可用」接入後也查證），重放端（事先宣告 V16-04 不補值）是否對齊，同批由 quant 具名提出；不對齊時，重放與前瞻在這一點的差異照實揭露。
+    - 若同批採用上一項（X1「收盤本身不可用」接入後也查證），重放端（事先宣告 V16-04 不補值）是否對齊，同批由 quant 具名提出；不對齊時，重放與前瞻在這一點的差異照實揭露。（v0.26）同批要重新具名登記的重放端條文，除 V16-04 外並列事先宣告 V26-02「T 日收盤本身不可用的重放列」（該點的「失效條件」）；登記之前照 V26-02。
 
     在此之前，FL-69 斷言本序列為空。
 - **重放登記檔**（tech-architect 2026-10-18；事先宣告 §4.7 執行閘門 (a)、§4.7「重放期的起訖日」V16-02）：
@@ -629,7 +646,7 @@
     - `freeze_commit` 必須是 `registration_commit` 的祖先，`registration_commit` 必須是重放執行時 `code_commit` 的祖先；`forecast_replay.freeze_commit` 必須等於本列的 `freeze_commit`（核對方式同「重放登記檔」，執行／判斷分離）。
   - **snapshot**：`fetch_outcome ∈ {stored, fetch_failed}`。`stored` 列帶 `snapshot_sha256`（指向 `forecast_input_series`，`series_kind = replay_index_bars`）、`snapshot_range_json = {start: S, end: E}`、`bar_count`；`fetch_failed` 列的 `snapshot_sha256` 為 null，`detail_json` 帶例外類別。
     - `UNIQUE(registration_id) WHERE entry_kind = 'snapshot' AND fetch_outcome = 'stored'`：只有一份，存入後不得重新下載（事先宣告 V16-03）。
-    - 取數函式取得回應後，在同一個呼叫內寫入 `forecast_input_series` 與 `stored` 列，中間不得有其他讀取或判斷，也不得先檢視內容再決定是否寫入。取數或寫入失敗時寫 `fetch_failed` 列，之後可以再取。取數嘗試次數列入事先宣告 §4.7 揭露。
+    - 取數函式取得回應後，在同一個呼叫內寫入 `forecast_input_series` 與 `stored` 列，中間不得有其他讀取或判斷，也不得先檢視內容再決定是否寫入。（v0.26，V26-01）取數函式在同一個呼叫內取得每根 bar 的原始時間戳記與每份回應的 `meta.exchangeTimezoneName`、`meta.gmtoffset`，照原值存入（D-3「重放快照保留的原始欄位」）；快照只取自來源的即時回應，不取自 `price_bars_cache` 或任何快取（本快照不在 D-4 第 8 點 `CACHE_BAR_CONSUMERS` 內）。現行 `PriceBar` 與 `ProviderResult` 不帶這些欄位，取數路徑另案定案（後續追蹤清單 N-82）；定案並實作之前，不得進行執行閘門 (b)。Yahoo 對 `^TWII` 實際時間戳記慣例的實測（決策包 #49，後續追蹤清單 N-83）完成之前，同樣不得進行 (b)（事先宣告 §4.7「單一快照」v0.26 註）。取數或寫入失敗時寫 `fetch_failed` 列，之後可以再取。取數嘗試次數列入事先宣告 §4.7 揭露。
     - 快照只含日期在 [S, E] 內的列。
   - **detection**：
     - `session_date`；
@@ -646,26 +663,35 @@
     - `correct_close_obtained` 的 `basis_check_id`，必須是本 registration 閘門所用 `source_name`、`source_version` 的查證列（事先宣告 V16-04）。
   - **gate**：
     - `gate_passed ∈ {0,1}`；
-    - `gate_json`：所用的 `source_name`、`source_version` 與該版本的涵蓋範圍；`snapshot_sha256`；[S, E]；待查證觸發數；查證列與日曆查詢列依 `result`、依輪次分列的筆數；不成立的條件；
+    - `gate_json`：所用的 `source_name`、`source_version` 與該版本的涵蓋範圍；`snapshot_sha256`；[S, E]；待查證觸發數；查證列與日曆查詢列依 `result`、依輪次分列的筆數；不成立的條件；（v0.26，V26-01）(5) 的檢查值：台北時刻的相異值（依字串排序）、`exchange_timezone_name` 與 `gmtoffset` 的相異值、`session_date` 與台北日期不符的列數、週日的列數、(5e) 的三個日期數，以及不成立的款（(5a)～(5e)）；不含任何 bar 的數值；
     - `check_max` ＝ 寫入當下同一 registration 最大的 `check_id`。
   - **寫入規則**：
     - 只有 `app/forecast/replay_checks.py`（D-1）可以寫入本表（AST）。
     - 重查：查詢失敗時，對最新一輪仍為 `query_failed` 的全部列（detection 與日曆日分別計）以同一程序重查；版本在首輪之後改變時，全部重查一輪；X2 查證與日曆查詢不一致時，依事先宣告 V16-05 閘門 (3) 全部重查一輪。同一輪不得只查部分；某一輪不完整時，gate 函式拒絕寫入。
     - gate 列只由單一函式 `check_replay_gate(registration_id)` 寫入。它只讀本表、`INDEX_VERIFICATION_SOURCE_REGISTRY` 與 `forecast_input_series`，不呼叫來源查詢，也不讀任何報酬、標籤或結果（AST）。
-    - `gate_passed = 1`，若且唯若事先宣告 §4.7 閘門 (1)～(4) 全部成立：
+    - `gate_passed = 1`，若且唯若事先宣告 §4.7 閘門 (1)～(5) 全部成立（(5)：v0.26，V26-01）：〔v0.26 取代（V26-01）：原寫「`gate_passed = 1`，若且唯若事先宣告 §4.7 閘門 (1)～(4) 全部成立：」〕
       - (1) [S, E] ⊆ [`coverage_start`, `coverage_end_at(v, 最新一輪最早的 queried_at)`]；
       - (2) 每一筆待查證 detection 在最新一輪都有查證列，同一 `source_name`、`source_version`，結果都是 `value_obtained` 或 `source_has_no_day`；
       - (3) 日曆查詢完整、版本一致，而且與 X2 查證一致；
       - (4) 依「與重放結果的關係」的寫入驗證。
+      - （v0.26，V26-01；事先宣告 §4.7 執行閘門 (c) 第 (5) 項；後續追蹤清單 N-81；tech-architect 2026-10-23）(5) 快照的日期標示：以 gate 所用的 `stored` 快照（`forecast_input_series` 的列與 `response_meta_json`）與本 registration 最新一輪 `calendar_query` 判定，(5a)～(5e) 都成立：
+        - (5a) 每一列 `raw_timestamp` 都是整數，換算到 `Asia/Taipei` 的時刻全部相同，而且不早於下界、早於上界；
+        - (5b) 每一列的 `session_date` 等於它的 `raw_timestamp` 在 `Asia/Taipei` 的日期；
+        - (5c) `response_meta_json` 的每一項，`exchange_timezone_name` 等於 `"Asia/Taipei"`，`gmtoffset` 等於登記值（整數比較；字串或其他型別視同不成立）；任一項缺漏或為 null 視同不成立；
+        - (5d) 沒有 `session_date` 是週日的列；
+        - (5e) 令 B 為快照全部列的 `session_date` 集合、C 為最新一輪 `calendar_query` 中 `result = value_obtained` 的 `session_date` 集合（與 `replay_observed_sessions` 同一個來源與輪次）：|B ∩ C| 大於 |(B＋1 日) ∩ C|，也大於 |(B－1 日) ∩ C|，平移以日曆日計。
+        - 固定值（時刻下界 08:00、上界 18:00（不含）、`gmtoffset` 28800）凍結在該 registration `definition_version` 的 dirdef，常數名稱由 quant 在凍結版 dirdef 列出；本 ADR 只引用，程式不得另設字面值（AST）。
+        - 檢查函式只有一個，由 `check_replay_gate` 呼叫（名稱暫定 `replay_snapshot_date_labels_ok`）：時刻與日期一律以 `zoneinfo.ZoneInfo("Asia/Taipei")` 換算，不以 `gmtoffset` 換算（`gmtoffset` 只與登記值比較）；輸入只有 `session_date`、`raw_timestamp`、`response_meta_json` 與 C，不讀任何 bar 的 `open`、`high`、`low`、`close`、`volume`，也不讀偵測、查證、確認判定、報酬或標籤（AST、spy）。
+        - 不成立時照實寫 gate 列（`gate_passed = 0`），不改起訖日，不重新取數（快照存入後不得重新下載，本表 snapshot）；處理方式依事先宣告另行具名登記、送風控，不得在看過快照之後就地改動 (5) 的條件或固定值。
     - 閘門不成立時照實寫列，不改起訖日。
   - **與重放結果的關係**：`forecast_replay` 與 `forecast_replay_outcome` 的每一列都指向同一列 `gate_passed = 1` 的 gate。寫入驗證：該 gate 列的 `check_max` 等於寫入當下同一 registration 最大的 `check_id`（gate 之後沒有新的偵測或查證）；所用快照的 sha256 等於 gate 的 `snapshot_sha256`（閘門 (4)）。
   - **用途限制**：不屬於 `E_CHANGING_EVENTS`。`views`、API route 與匯出不得讀它；只有 `replay_checks.py`、重放執行函式、`validation.py` 的 §4.7 揭露與稽核工具可以讀（AST）。重放執行之後，不再寫入本 registration 的列。
-- **`forecast_replay_outcome`**（tech-architect 2026-10-18；事先宣告 §6.3「重放中確認有誤之後」V16-04）：每筆 `forecast_replay` 恰好一列，與該列在同一個交易內，由重放執行函式寫入。只增不改。
+- **`forecast_replay_outcome`**（tech-architect 2026-10-18；事先宣告 §6.3「重放中確認有誤之後」V16-04）：每筆 `forecast_replay` 恰好一列，與同一份重放登記（一個 replay claim）的全部 `forecast_replay`、`forecast_replay_outcome` 列在同一個寫入交易內（v0.26，V26-04；D-9 第 7 點 V26-04 子點），由重放執行函式寫入。〔v0.26 取代（V26-04）：原寫「每筆 `forecast_replay` 恰好一列，與該列在同一個交易內，由重放執行函式寫入。」〕只增不改。
   - **欄位**：
     - `replay_outcome_id INTEGER PRIMARY KEY AUTOINCREMENT`；
     - `replay_forecast_id`（UNIQUE，指向 `forecast_replay`）、`registration_id`、`gate_check_id`、`snapshot_sha256`；
     - `settlement_date`（O 中 T 之後第 h 個觀察日）；
-    - `start_price_json`、`end_price_json`：每個都是 `{session_date, close, close_source ∈ {snapshot, independent_source}, bar_values_sha256, detection_ids, determination_check_id, verification_check_id}`。T+h 沒有 bar 時為 `{session_date, close: null, close_source: null, bar_missing: true}`；
+    - `start_price_json`、`end_price_json`：每個都是 `{session_date, close, close_source ∈ {snapshot, independent_source}, bar_values_sha256, detection_ids, determination_check_id, verification_check_id}`。T+h 沒有 bar 時為 `{session_date, close: null, close_source: null, bar_missing: true}`；（v0.26，V26-02；tech-architect 2026-10-23）該日 bar 的收盤經 X1 確認本身不可用（`x1_close_unusable` 的 `close_erroneous`，`basis = direct`），而且沒有 `correct_close_obtained` 時，P(T) 的 `start_price_json` 與 P(T+h) 的 `end_price_json` 為 `{session_date, close: null, close_source: null, close_unusable: true, bar_values_sha256, detection_ids, determination_check_id, verification_check_id: null}`（下稱「`close_unusable` 形狀」）：`bar_values_sha256` 等於所指 determination 的 `target_values_sha256`，`detection_ids` 是該 bar 的 `x1_close_unusable` detection，`determination_check_id` 指向該 `close_erroneous`。`bar_missing` 與 `close_unusable` 不同時出現；
     - `realized_log_return`、`realized_z`、`realized_label`、`realized_return`、`hit`、`baseline_hits_json`；
     - `diag_open_based_json`、`diag_last_close`、`index_return_diag`、`diag_unavailable_json`（因非收盤欄位有誤而不可用的診斷欄位）、`window_missing_dates_json`；
     - `mae`、`mfe`、`invalidation_triggered`、`invalidation_first_hit`；
@@ -675,12 +701,13 @@
   - **寫入驗證**（任一項不成立就拒絕寫入）：
     - `close_source = independent_source` ⇔ `determination_check_id` 指向同一 bar（同一 `target_values_sha256`）的 `correct_close_obtained`，而且 `verification_check_id` 等於它的 `basis_check_id`；
     - `close_source = snapshot` ⇒ 該 bar 沒有 `close_erroneous`；
-    - `status_reason = index_bar_confirmed_erroneous` ⇒ P(T+h) 的 bar 有 `x1_close_unusable` 的 `close_erroneous`（`direct`），而且沒有 `correct_close_obtained`；
+    - `status_reason = index_bar_confirmed_erroneous` ⇒ P(T) 或 P(T+h) 的 bar 有 `x1_close_unusable` 的 `close_erroneous`（`direct`），而且沒有 `correct_close_obtained`；該 bar 是 P(T) 時 `start_price_json`、是 P(T+h) 時 `end_price_json` 為 `close_unusable` 形狀（v0.26，V26-02）；〔v0.26 取代（V26-02）：原寫「`status_reason = index_bar_confirmed_erroneous` ⇒ P(T+h) 的 bar 有 `x1_close_unusable` 的 `close_erroneous`（`direct`），而且沒有 `correct_close_obtained`；」〕
     - `status_reason = missing_bar_after_wait` ⇔ 快照沒有 `settlement_date` 的 bar；
-    - （N-53；事先宣告 v0.25 V25-01；tech-architect 2026-10-21）`diag_last_close` 只有三種情形（事先宣告 §6.3「重放中確認有誤之後」的「證據不足的重放預測」(i)～(iii)），`band_def` 取所指 `forecast_replay` 列：
+    - （N-53；事先宣告 v0.25 V25-01；tech-architect 2026-10-21）`diag_last_close` 只有四種情形（事先宣告 §6.3「重放中確認有誤之後」的「證據不足的重放預測」(i)～(iii)，以及「T 日收盤本身不可用的重放列」的 (iv)；v0.26，V26-02），`band_def` 取所指 `forecast_replay` 列：〔v0.26 取代（V26-02）：原寫「`diag_last_close` 只有三種情形（事先宣告 §6.3「重放中確認有誤之後」的「證據不足的重放預測」(i)～(iii)）」〕
       - `status = resolved` ⇒ `diag_last_close` 為 null；
-      - `status ≠ resolved`，而且 `threshold_inputs(band_def)` 非 None ⇒ `diag_last_close` 非 null；
+      - `status ≠ resolved`、`start_price_json` 不是 `close_unusable` 形狀（P(T) 收盤可用），而且 `threshold_inputs(band_def)` 非 None ⇒ `diag_last_close` 非 null；〔v0.26 取代（V26-02）：原寫「`status ≠ resolved`，而且 `threshold_inputs(band_def)` 非 None ⇒ `diag_last_close` 非 null；」〕
       - `status ≠ resolved`，而且 `threshold_inputs(band_def)` 為 None ⇒ `diag_last_close` 為 null。這種列只會是 `label = insufficient`：有標籤而缺項的重放預測不會寫入 `forecast_replay`（D-3 `forecast_replay` N-53 子點；D-9 第 7 點 N-53 子點的預驗證）。
+      - （v0.26，V26-02）`start_price_json` 是 `close_unusable` 形狀（P(T) 收盤本身不可用）⇒ `diag_last_close` 為 null，不論 `threshold_inputs(band_def)` 是否為 None；這種列一定作廢（本表 V26-02 一項）。事先宣告的 (iii) 只含 P(T) 收盤可用的列，所以四種情形互斥而且窮盡；上一項對 (iv) 中缺項的列同樣成立（兩者都要求 null），不另改字。
       〔v0.25 取代（N-53）：原寫「`diag_last_close` 非 null ⇔ `status ≠ resolved`；」〕
     - 正確值不得取自其他查證列、日曆查詢列或其他版本（事先宣告 V16-04）。
     - （N-53；事先宣告 v0.25 V25-01；比照 D-9 第 6 點 N-41 子點的 `forecast_outcome` 寫入驗證）證據不足的重放預測，label 取所指 `forecast_replay` 列：
@@ -689,7 +716,30 @@
       - `label ≠ insufficient`，而且 `status = resolved` ⇒ `realized_z`、`realized_label`、`hit` 都非 null；
       - 因 `threshold_inputs()` 為 None 而記 null 的欄位，不列入 `diag_unavailable_json`（該欄位只記因非收盤欄位有誤而不可用的診斷欄位）。
       不用門檻的欄位（`realized_log_return`、`realized_return`、`mae`、`mfe` 等）依一般規則計算。欄位怎麼填，由重放執行函式建結果列的單一函式依 `threshold_inputs()` 決定；label 只在這個函式（`hit` 與上列 null 欄位）、本表的寫入驗證與 D-9 第 7 點 N-53 子點的預驗證中讀取。判定 `status`、`status_reason`、`void_reasons_json`、`settlement_date` 的函式不讀 label（AST）。
+    - （v0.26，V26-02；事先宣告 §6.3「T 日收盤本身不可用的重放列」）`start_price_json` 是 `close_unusable` 形狀時：`status = unresolvable_missing_data`、`status_reason = index_bar_confirmed_erroneous`；以 P(T) 收盤為輸入的欄位 `realized_log_return`、`realized_return`、`realized_z`、`realized_label`、`hit`、`baseline_hits_json`、`mae`、`mfe`、`diag_last_close` 全部為 null，不論 label 與 `threshold_inputs(band_def)`；條件以 P(T) 收盤為輸入的 `invalidation_triggered` 也為 null（`invalidation_first_hit` 隨之為 null）。不得以前一個觀察日或最後一根未被確認有誤的收盤、該日 X2 查證列或日曆查詢列的 `source_values_json`、相鄰 bar 或內插代替 P(T)，也不得改以 T 的前一個觀察日為起點（建結果列的函式在這種列不讀查證列與日曆查詢列的值；AST、spy）。不以 P(T) 收盤為輸入的欄位依一般規則計算；哪些失效條件以 P(T) 收盤為輸入，依凍結的規則判定。
   - **用途限制**：不寫 `forecast_outcome`。只有 `validation.py` 的 §4.7 報告與稽核工具可以讀；`views` 經 §4.7 報告呈現，不得直接讀（AST）。
+- **`forecast_replay_execution_log`**（v0.26，V26-04；事先宣告 §4.7「已重放的界定與中止的執行」第 5 點；後續追蹤清單 N-74，含原 N-75；tech-architect 2026-10-23）：重放執行 (d) 的嘗試紀錄（含原 N-75 預驗證不成立的紀錄）。每一次執行寫一列開始紀錄、一列結束紀錄，都只增不改（D-2 第 2 點；FL-1 的 trigger 同樣適用），都在 (d) 的寫入交易之外、各自以單一短交易寫入（D-9 第 7 點 V26-04 子點 ②⑥ 與「中止」）。
+  - **欄位**：
+    - `log_row_id INTEGER PRIMARY KEY AUTOINCREMENT`；
+    - `entry_kind ∈ {start, end}`；
+    - `registration_id`（指向 `forecast_replay_index_check` 的 registration 列）、`replay_claim_id`；
+    - `execution_seq INTEGER NOT NULL`：同一 registration 自 1 起，每一列開始紀錄加 1；
+    - `code_commit`；
+    - `gate_check_id`：只在開始紀錄非 null，指向該 registration `gate_passed = 1` 的 gate 列；
+    - `recorded_at`（store 時鐘）：開始紀錄的是開始時間，結束紀錄的是結束時間；
+    - 只在結束紀錄非 null：`result ∈ {commit, pre_validation_abort, result_abort}`，依序對應事先宣告的 commit、(甲)、(乙)；
+    - 只在中止的結束紀錄非 null：`exception_class`（`type(exc).__name__`，規則同 D-3 `forecast_run_end.error_class`）；
+    - `exception_attrs_json`：例外是 `LabeledThresholdSnapshotIncompleteError` 或 `ReplayPitProofViolationError` 時，為它的結構化屬性原值（`source`（只限前者）、`violations`、`affected_forecast_count`、`data_as_of_from`、`data_as_of_to`）；其他情形為 null。不存例外訊息與 traceback；
+    - 只在 `result = result_abort` 時非 null：`computed_outcome_count`（中止前已建好的結果列數，≥ 0）與 `computed_outcome_sha256`。
+  - **(乙) 的雜湊**：結果列依 T（`data_as_of`）由早到晚建立（AST：只由單一迴圈依這個順序建立）。`computed_outcome_sha256` ＝ 已建好的各列依這個順序，經單一純函式 `canonical_replay_outcome(row)` 正規化後，序列化為 JSON 陣列（`separators=(",", ":")`，UTF-8）的 sha256。正規化取 `forecast_replay_outcome` 的全部欄位，但不含 `replay_outcome_id`、`replay_forecast_id`、`recorded_at`，另加所指預測的 `data_as_of`；鍵依字母排序，數值依 D-3「重放快照與 bar 值的正規化」的規則。§4.7 揭露以 commit 的列依同一順序、取前 `computed_outcome_count` 列、以同一個函式重算比較（`validation.py`）。
+  - **寫入驗證**（任一項不成立就拒絕寫入）：
+    - 開始紀錄：該 registration 沒有任何 `forecast_replay` 列，所指 claim 的 `first_record_at` 為 NULL；`gate_check_id` 指向同一 registration `gate_passed = 1` 的 gate 列，而且與該 registration 既有開始紀錄的 `gate_check_id` 相同（再執行沿用同一個 gate 列，事先宣告同點第 3 點）；`execution_seq` ＝ 同一 registration 既有開始紀錄的最大序號加 1，沒有時為 1。
+    - 結束紀錄：同一 (`registration_id`, `execution_seq`) 恰有一列開始紀錄、還沒有結束紀錄，`code_commit` 相同；同一 registration 已有更大序號的開始紀錄時拒絕。`result = commit` ⇔ 該 registration 有 `forecast_replay` 列，而且都帶這個 `execution_seq`。`result = pre_validation_abort` ⇒ `computed_outcome_count`、`computed_outcome_sha256` 為 null；`result = result_abort` ⇒ 兩者非 null。`result ≠ commit` ⇔ `exception_class` 非 null。
+    - `UNIQUE(registration_id, execution_seq, entry_kind)`。
+  - **結果以 DB 狀態為準**：一次嘗試是不是 commit，只依 `forecast_replay.replay_execution_seq` 判定。沒有結束紀錄的嘗試，有該序號的 `forecast_replay` 列時算 commit；沒有時以 (乙) 論（事先宣告同點第 3 點末句）。結束紀錄只由寫入開始紀錄的同一次呼叫寫入（AST：寫結束紀錄的函式只在重放執行函式的最外層處理與 ⑥ 中呼叫）。
+  - **與 gate 的關係**：本表不是 `forecast_replay_index_check`，寫入不改變該表的任何 `check_id`，不影響 gate 列的 `check_max` 判定（`forecast_replay_index_check`「與重放結果的關係」）。該表「重放執行之後，不再寫入本 registration 的列」一句只指該表，本表不受限。
+  - **存放處的選擇**：不寫 `forecast_replay_index_check`：新增列會改變同一 registration 最大的 `check_id`，使 gate 的 `check_max` 驗證不成立；改 `check_max` 的定義則是改閘門 (4) 的判定。不寫 `forecast_ledger_events`：重放的紀錄不寫該表（D-3 `forecast_replay_index_check` 首段、D-9 第 7 點），也避免進入 `E_CHANGING_EVENTS` 的讀取範圍。不寫 `forecast_run_end`：只有記錄一步可以寫入。所以另立一表，表數見 M-11。
+  - **用途限制**：不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W、m 或任何判定。只有重放執行函式（經 `store.py`）可以寫入；只有 `validation.py` 的 §4.7 揭露（事先宣告同點第 6 點；該登記有過嘗試而始終沒有 commit 時同樣列出，事先宣告同點第 4 點）與稽核工具可以讀；`views`、API route 與匯出不讀（AST）。本表不得有任何結果欄位或預測端欄位（schema 測試：欄位集合恰為上列）。
 - `forecast_gaps(gap_id, session, claim_id, scope_key, reason, detected_at, run_id NULL, UNIQUE(session, claim_id, scope_key))`：`scope_key = '*'` 代表整個 claim。
 - **`forecast_gap_audit`**（N-24；tech-architect 2026-10-18；落實風控 2026-10-18 C-22 確認 N24-1「揭露判定進度」）：每次成功的缺日稽核（D-8 第 2 點）一列，記下該次稽核的判定上界。只增不改（D-2 第 2 點）。
   - **欄位**：
@@ -780,7 +830,7 @@
      - **根本修法**屬於 ADR-0012 修訂，要 CEO 核可；data-engineer 先查證。
    - 新增以代號為範圍的唯讀方法，並補上等價測試。
 2. **還原用的除權息事件**：取 `pit_dividend_announce_rows` 的 PIT 視圖，不讀主 DB 的 `dividend_events`（upsert）。
-3. **PIT 證明**：`inputs_max_recorded_at`，以及 `source_run_min`、`source_run_max`。超過 cutoff 就輸出 insufficient，缺項代碼為 `E-PIT-UNVERIFIED`。
+3. **PIT 證明**：`inputs_max_recorded_at`，以及 `source_run_min`、`source_run_max`。超過 cutoff 就輸出 insufficient，缺項代碼為 `E-PIT-UNVERIFIED`。（v0.26，V26-01）本點只適用 `forecast_record`。`forecast_replay` 不依取得時間判定 PIT，改依事先宣告 §4.7「重放中的 PIT 證明」與 D-3 `forecast_replay` 的 V26-01 子點；重放預測的 `missing_json` 不含 `E-PIT-UNVERIFIED`。
 4. **上櫃、ETF、美股**：一律 insufficient（`E-SCOPE-OTC`、`E-SCOPE-TYPE`）。
 5. **大盤**：把實際用到的 bars 寫進 `forecast_input_series`，並揭露 `index_source_status=backup`。
 6. **ADR-0012 C-7 的解釋性註記**（CEO 知悉，不修訂）：
@@ -1374,17 +1424,58 @@
    - 不讀也不寫 `forecast_settle_eval`、`forecast_correction_job`、`forecast_index_check`；
    - 重放的起訖日登記、快照、偵測、查證、判定、日曆查詢與閘門，寫入 D-3 `forecast_replay_index_check`；重放結果寫入 D-3 `forecast_replay_outcome`；快照存於 `forecast_input_series`（`series_kind = replay_index_bars`）。
    - （N-22d）§4.7 的 126 日分段只由一個共用的純函式產生：每個 h 分開，從該 h 的第一個 T 起，每 126 個觀察日一段，尾段照列並標明（單位、格點與報告定義依事先宣告 v0.18 V18-01、V18-02）。不得直接以 `walk_forward_splits` 產生分段，因為它丟掉尾段，又要求 `train_size > 0`（`app/backtest/splits.py:70-71,84-85`）。可以把 `app/backtest/sector_eval.py:884-897` 的 `segment_bounds` 移到 `app/backtest/splits.py` 共用，`forecast` 不得 import `app.backtest.sector_eval`。尾段的報告定義依事先宣告登記（N-22d）；登記之前不得執行重放。
+   - （v0.26，V26-03；事先宣告 §6.3「重放中確認有誤之後」的「重放的 W 的範圍」；後續追蹤清單 N-73；tech-architect 2026-10-23）**重放的 W**：由 `validation.py` 的 §4.7 報告以單一函式 `compute_replay_w`（名稱暫定）計算，每個 h 分開，只算全期：
+     - 第 0 相位：樣本是重放主樣本第 0 相位格點上的 n 樣本，加上同一組格點上的作廢列（`status ≠ resolved`），含證據不足而後作廢的列與 D-3 `forecast_replay_outcome` V26-02 的列；模型在放回的列記未命中，各必備基準記命中。證據不足而 `resolved` 的列不放回。
+     - 其餘 h−1 個相位：各以同一個函式、該相位的格點計算，依相位序號全部列出，只作揭露，不得省略、依結果排序、標示或摘要。
+     - 格點與 n 取同一個格點函式（事先宣告 §4.7「重放的主樣本」；spy），判定時不讀 label 或結果；放回與否只讀 `status`，不讀 label（AST）。失去的格點沒有紀錄，不放回。
+     - 不逐段：N-22d 分段的各段報告不含 W（AST：產生分段報告的函式不呼叫 `compute_replay_w`）。D-11 第 1 點的待重算與多對象合併兩項（V24-02、V24-03）在重放中不適用。
+     - 不是任何判定的輸入：`compute_replay_w` 的輸出只進 §4.7 報告；驗證狀態、gate、徽章、`fail_w`、`compute_void_rate` 與任何判定都不讀它（AST、呼叫圖）。重放結果不使用「優於基準」字樣（事先宣告 §4.7「呈現」）。
    - 不寫 `forecast_ledger_events` 的 `x2_confirmed_non_session`、`unobserved_weekday`、`session_calendar_conflict`；
    - 不寫 `forecast_outcome`。
    - （N-53；事先宣告 v0.25 V25-01；tech-architect 2026-10-21）**證據不足的重放預測與預驗證**：
      - 證據不足（`label = insufficient`）的重放預測同樣產生 `forecast_replay_outcome` 列。`resolved` 或作廢只依事先宣告 §6.3「重放中確認有誤之後」各點判定，不讀 label。`band_def` 缺項時，欄位依 D-3 `forecast_replay_outcome` 寫入驗證的 N-53 各項記 null；不得以重算的 σ_d、其他預測的門檻或任何代入值補上，也不得因缺項而不寫結果列、拋出例外或剔除該筆。
-     - **預驗證**：重放執行函式先完成全部重放預測的預測端計算；在計算任何結果欄位、開啟任何寫入交易之前，對其中每一筆 `label ≠ insufficient` 者呼叫 `labeled_snapshot_violations()`（`definition` 取該筆 `definition_version` 所登記的 dirdef）。任一筆非空時，拋 `LabeledThresholdSnapshotIncompleteError`（`source = replay`；`affected_forecast_count` 為非空的筆數；其餘屬性依 D-9 第 6 點 N-46 子點「型別與欄位」），整次重放不執行：`forecast_replay`、`forecast_replay_outcome` 都沒有新列。同一個預驗證也對每一筆執行判定材料（`band_def`、`missing_json`）的其餘寫入驗證（D-3 `forecast_replay` N-53 子點），任一筆不成立時同樣整次不執行，拋該驗證原有的例外。預驗證與 `forecast_replay` 的寫入驗證呼叫同一組驗證函式，不另寫一份（AST）。預驗證不呼叫計算結果欄位的函式（spy），也不讀任何 T 之後的 bar、報酬或結果（AST：預驗證函式的輸入只有重放預測的預測端欄位）。
-     - **不得**：捕捉本例外後繼續執行；把該筆改記 `insufficient`、補值，或略過該筆而執行其餘各筆（事先宣告 §4.7 閘門「不得……剔除個別日期」）。重放執行函式內沒有接住本例外的 except（AST）。處理路徑同 D-9 第 6 點 N-46 子點「處理路徑只有一條」：查出根因、修正程式後，依同一登記執行；要改的若是事先宣告的規則，依事先宣告的規則變更流程處理。
+     - **預驗證**：重放執行函式先完成全部重放預測的預測端計算；在計算任何結果欄位、開啟任何寫入交易之前，對其中每一筆 `label ≠ insufficient` 者呼叫 `labeled_snapshot_violations()`（`definition` 取該筆 `definition_version` 所登記的 dirdef）。任一筆非空時，拋 `LabeledThresholdSnapshotIncompleteError`（`source = replay`；`affected_forecast_count` 為非空的筆數；其餘屬性依 D-9 第 6 點 N-46 子點「型別與欄位」），整次重放不執行：`forecast_replay`、`forecast_replay_outcome` 都沒有新列。同一個預驗證也對每一筆執行判定材料（`band_def`、`missing_json`）的其餘寫入驗證（D-3 `forecast_replay` N-53 子點），任一筆不成立時同樣整次不執行，拋該驗證原有的例外。預驗證與 `forecast_replay` 的寫入驗證呼叫同一組驗證函式，不另寫一份（AST）。預驗證不呼叫計算結果欄位的函式（spy），也不讀任何 T 之後的 bar、報酬或結果（AST：預驗證函式的輸入只有重放預測的預測端欄位）。〔v0.26 註（V26-01）：同一步的 PIT 檢查（本點 V26-01 子點）另讀 gate 列的 `snapshot_sha256`、快照中日期不晚於各筆 T 的列，以及 O 中不晚於 T 的日期；仍不讀 T 之後的任何 bar、報酬或結果。本句原文不改〕
+     - **不得**：捕捉本例外後繼續執行；把該筆改記 `insufficient`、補值，或略過該筆而執行其餘各筆（事先宣告 §4.7 閘門「不得……剔除個別日期」）。重放執行函式內沒有接住本例外的 except（AST）。〔v0.26 註（V26-04）：本句指本點 V26-04 子點「最外層處理」那一處以外，沒有任何 except；那一處一定再拋出，不構成捕捉後繼續執行。本句原文不改〕處理路徑同 D-9 第 6 點 N-46 子點「處理路徑只有一條」：查出根因、修正程式後，依同一登記執行；要改的若是事先宣告的規則，依事先宣告的規則變更流程處理。
      - **與記錄一步的拒寫路徑分開**：`source = replay` 是整次不執行，不是逐範圍拒寫。重放執行函式不在 `recorder.py` 之內，也不由記錄一步呼叫；D-7 第 7 點 N-52 子點逐範圍的 try 不包住重放，`RECORD_SCOPE_REFUSAL_TYPES` 不因本點增列或改變，記錄一步接住的本型別 `source` 恆為 `record`（AST 列舉呼叫點）。重放不是 D-7 的排程步驟：不新增 ADR-0029 事件，推播的欄位集合、標籤與模板都不變（ADR-0029 失效條件 5 不觸發）；例外照常拋給執行者。
-     - **寫入端**：預驗證被繞過（程式缺陷）時，`forecast_replay` 的寫入驗證（D-3 `forecast_replay` N-53 子點）拒絕有標籤而缺項的列，拋同一型別（`source = replay`）。執行中途被拒寫時已寫入的列怎麼處理，屬後續追蹤清單 N-74「重放全有或全無」另案；N-74 定案、送風控並同步本 ADR 之前，不得執行重放（事先宣告 §4.7 執行閘門 (d)）。在此之前，預驗證是有標籤而缺項唯一允許的處理位置。
+     - **寫入端**：預驗證被繞過（程式缺陷）時，`forecast_replay` 的寫入驗證（D-3 `forecast_replay` N-53 子點）拒絕有標籤而缺項的列，拋同一型別（`source = replay`）。執行中途被拒寫時已寫入的列怎麼處理，屬後續追蹤清單 N-74「重放全有或全無」另案；N-74 定案、送風控並同步本 ADR 之前，不得執行重放（事先宣告 §4.7 執行閘門 (d)）。在此之前，預驗證是有標籤而缺項唯一允許的處理位置。〔v0.26 已決（V26-04）：N-74（含原 N-75）已由事先宣告 v0.26 §4.7「已重放的界定與中止的執行」登記，本 ADR 對應字面見本點 V26-04 子點、D-3 `forecast_replay_execution_log` 與 D-10 第 3 點。寫入端拒寫發生在 (d) 的寫入交易內：整個交易回滾，兩表都沒有新列，嘗試紀錄記 (乙)。與事先宣告 v0.26 同一個 commit 落檔後，本句的阻擋解除；「預驗證是有標籤而缺項唯一允許的處理位置」仍然適用。本句原文不改〕
      - **重放結算不呼叫 σ_d**：產生 `forecast_replay_outcome` 結果欄位的函式不呼叫 `app/outlook/volatility.py` 的 `sigma_d()`，σ 一律取該筆 `forecast_replay` 存下的 `band_def`（AST、spy；事先宣告 §6.3「σ 用預測當時存下的 σ_d(T)，不重算」）。重放的預測端照常經 `sigma_d()` 計算（D-1 `volatility.py` 一列）。
-     - T 日 bar 收盤本身不可用的重放列不在本點範圍；處理方式在重放執行前由 quant 具名登記、送風控（後續追蹤清單 N-61），登記並同步本 ADR 之前不得執行重放。
+     - T 日 bar 收盤本身不可用的重放列不在本點範圍；處理方式在重放執行前由 quant 具名登記、送風控（後續追蹤清單 N-61），登記並同步本 ADR 之前不得執行重放。〔v0.26 已決（V26-02）：已由事先宣告 v0.26 §6.3「重放中確認有誤之後」的「T 日收盤本身不可用的重放列」登記；本 ADR 對應字面見 D-3 `forecast_replay_outcome` 的 `start_price_json` 與寫入驗證 V26-02 各項、FL-69 (m)。與事先宣告 v0.26 同一個 commit 落檔後，本句不再擋重放執行。本句原文不改〕
      - 理由：與前瞻一致（D-9 第 6 點 N-41 子點、FL-72 (c)）；作廢只依 T+h 的 bar 決定，依它拒寫等於依結算端的資料挑選樣本。預驗證放在任何結果算出之前，所以重放不執行時沒有任何結果被算出或看過，修正後依同一登記執行（事先宣告 V25-01）。
+   - （v0.26，V26-01；事先宣告 §4.7「重放中的 PIT 證明」；後續追蹤清單 N-62；tech-architect 2026-10-23）**重放中的 PIT 檢查**：
+     - **同一步**：PIT 檢查屬於 N-53 子點的預驗證：在同一步、計算任何結果欄位與開啟 (d) 的寫入交易之前，對全部重放預測（不論 label）執行 D-3 `forecast_replay` V26-01 子點的寫入驗證；預驗證與寫入驗證用同一組函式，不另寫一份（AST）。先執行 PIT 檢查，再執行 `labeled_snapshot_violations()` 與判定材料的其餘驗證。
+     - **不成立時**：拋 `ReplayPitProofViolationError`，整次重放不執行，`forecast_replay`、`forecast_replay_outcome` 都沒有新列，嘗試紀錄記 (甲)（本點 V26-04 子點）。不得捕捉後繼續執行；不得把該筆改記 `insufficient`、補值、輸出 `E-PIT-UNVERIFIED`，或略過該筆而執行其餘各筆（事先宣告 §4.7 閘門「不得……剔除個別日期」）。處理路徑同 N-53 子點「不得」一項。
+     - **型別與欄位**：`ReplayPitProofViolationError`（`app/forecast/errors.py`，`ForecastFailClosedError` 的子類），關鍵字必填的結構化屬性：
+       - `violations`：封閉列舉 `("input_bar_after_t", "input_digest_mismatch", "snapshot_sha256_mismatch")` 中成立者，依此順序排列、不重複、非空的 tuple；
+       - `affected_forecast_count`：≥ 1；
+       - `data_as_of_from`、`data_as_of_to`：受影響各筆 `data_as_of` 的最小值與最大值（ISO 日期）。
+       例外訊息由這些屬性以固定格式產生，不含其他文字；不帶 bar 值、雜湊值、label、預測端數值或識別資訊（比照 D-9 第 6 點 N-46 子點「型別與欄位」）。本型別不加入 `RECORD_SCOPE_REFUSAL_TYPES`；記錄一步不呼叫重放，不會遇到它。
+     - **預測端只接收截至 T 的序列**（事先宣告同點第 1、4 點；AST）：計算預測端欄位（特徵、σ_d(T) 與 `threshold_snapshot`、label、`missing`、各基準在 T 的預測）的函式，參數只有截至 T 的 bar 序列、O 中不晚於 T 的日期、登記的官方休市日表版本與凍結的常數與規則；不 import 快照的讀取函式，也不接收整份快照、gate 列或 `forecast_replay_index_check` 的列。「截至 T」由重放執行函式內的單一函式截取（名稱由 dev-lead 定）；`input_bar_date_min`、`input_bar_date_max` 與 `input_digest` 由同一個函式的輸出計算。凍結的規則需要這四樣以外的輸入時，依事先宣告同點第 1 點末句不得進行執行閘門 (a)，本 ADR 不另設例外路徑。
+     - **與閘門 (c) 第 (5) 項的關係**（事先宣告同點「與閘門及主樣本的關係」v0.26）：(5) 不屬於本子點與 N-53 子點的預驗證，由 `check_replay_gate` 在閘門 (c) 判定（D-3 `forecast_replay_index_check` gate 的 (5)）。不成立時沒有 `gate_passed = 1` 的 gate 列，重放執行函式在本點 V26-04 子點 ① 拒絕：不寫嘗試紀錄，不計算任何欄位，也不構成 (甲) 或 (乙)。理由：(5) 只由快照決定，再執行不會改變結果；放進預驗證會讓每次執行都以 (甲) 中止、無限累積嘗試紀錄（事先宣告同點）。
+     - 理由：重放的快照在 F 之後一次取得，`recorded_at` 對每一個 T 都一樣晚，不帶 PIT 資訊；以取得時間判定會讓每一筆都證據不足（事先宣告同點）。日期界限、雜湊與截斷不變性都能機械檢查，檢查只讀預測端欄位與不晚於 T 的快照列，在任何結果算出之前完成。
+   - （v0.26，V26-04；事先宣告 §4.7「已重放的界定與中止的執行」；後續追蹤清單 N-74，含原 N-75；tech-architect 2026-10-23）**重放的執行：全有或全無、嘗試紀錄與不外流**：
+     - **呼叫方式**：重放執行函式只由手動執行的 CLI 呼叫（模組與名稱由 dev-lead 定），每次處理一份重放登記（一個 replay claim）；scheduler、API route 與記錄一步都不呼叫它（AST 列舉呼叫點）。
+     - **執行順序**：
+       ① 讀一次 store 時鐘。時刻落在下文的排程窗內、該登記沒有 `gate_passed = 1` 的 gate 列（含閘門 (c) 第 (5) 項不成立），或該登記已重放（已有 `forecast_replay` 列，或所指 claim 的 `first_record_at` 非 NULL）時，拋 `ReplayExecutionRefusedError`（`reason` 為 `schedule_window`、`gate_not_passed` 或 `already_committed`），不寫任何列，也不計算任何欄位。
+       ② 以單一短交易寫入 `forecast_replay_execution_log` 的開始紀錄，commit。寫不進去時例外照常拋出，不執行之後各步。
+       ③ 預測端計算與預驗證（N-53 子點「預驗證」與本點 V26-01 子點）。
+       ④ 依 T 由早到晚建全部結果列，只在記憶體內，不寫主 DB。
+       ⑤ 再讀一次 store 時鐘；落在排程窗內時拋 `ReplayExecutionRefusedError`（`schedule_window`），不開啟交易。否則開啟 (d) 的寫入交易（`BEGIN IMMEDIATE`），在同一個交易內依序：再確認該登記沒有 `forecast_replay` 列、claim 的 `first_record_at` 為 NULL，不成立時拋 `ReplayExecutionRefusedError`（`already_committed`）；寫入全部 `forecast_replay` 與 `forecast_replay_outcome` 列，每一列先通過該表的全部寫入驗證；依 D-10 第 3 點轉值 claim 的 `first_record_at`、`counts_toward_m`；commit。
+       ⑥ 以單一短交易寫入結束紀錄（`result = commit`）。
+     - **單一交易**：③④ 不寫主 DB。⑤ 的交易內不重算，只把 ④ 的結果交給寫入函式；寫入函式照舊在交易內執行本 ADR 既有的寫入驗證（含 gate 的 `check_max`、快照 sha256、判定材料、本點 V26-01 子點與 D-3 `forecast_replay_outcome` 的 V26-02 各項），不得因本點移出交易，或改由呼叫端傳入判定結果（比照 D-9 第 5 點 ⑤）。交易的開啟、commit 與回滾只由重放執行函式執行；寫入函式以同一條連線寫入，不另開連線，也不自行 `BEGIN`、commit、rollback 或 SAVEPOINT（AST）。不得逐筆或分批 commit。
+     - **中止**：② 之後任何一步拋出例外（含寫入驗證拒寫、store 錯誤、`BEGIN IMMEDIATE` 或 commit 等不到鎖、commit 本身拋例外），開啟中的交易一律回滾（commit 拋例外時明確執行 rollback）：兩表都沒有新列，claim 的兩欄不轉值。之後以單一短交易寫入結束紀錄。例外發生在 ④ 開始之前，`result = pre_validation_abort`（甲）；之後，`result = result_abort`（乙）。歸類只依重放執行函式內單一的階段旗標，不依例外型別；旗標在呼叫第一個計算結果欄位的函式之前設定（AST）。(乙) 另記 `computed_outcome_count` 與 `computed_outcome_sha256`（D-3 `forecast_replay_execution_log`）。結束紀錄寫不進去時，依 D-3 `forecast_replay_execution_log`「結果以 DB 狀態為準」論。
+     - **最外層處理**：重放執行函式內，接住例外的 except 只有最外層一處。它回滾、寫結束紀錄，然後再拋出：`ForecastFailClosedError` 的子類（訊息依固定格式產生）以裸 `raise` 原樣再拋出；其他例外改拋 `ReplayAbortedError`（`ForecastFailClosedError` 的子類；結構化屬性只有 `registration_id`、`execution_seq`、`result`、`exception_class`，訊息依固定格式產生），以 `raise … from None` 拋出，並使 `__context__` 也為 None（例如在 except 區塊之外才拋出），原例外物件不得經 `__cause__`、`__context__` 或任何屬性取得；原例外的訊息與 traceback 不寫入 log，也不印出。這一處不 return、不 continue、不 pass，也不呼叫寫入 `forecast_replay`、`forecast_replay_outcome` 的函式（AST）。
+     - **commit 之前不外流**（事先宣告同點第 4 點）：(d) commit 之前，重放執行函式與它呼叫的函式：
+       - log、告警、`print` 與例外訊息的引數，只取嘗試紀錄的固定欄位（`registration_id`、`replay_claim_id`、`execution_seq`、`code_commit`、`result`、`exception_class`、`computed_outcome_count`）與開始、結束時間；不取 `forecast_replay`、`forecast_replay_outcome` 的任何欄位，或由它們導出的計數、比例、摘要（AST：logger 呼叫與 raise 的引數只能是這些名稱或字面常數，f-string、`%` 與 `format` 不得引用其他名稱）；
+       - 不寫暫存檔、匯出檔或交易以外的任何持久處；回傳值只有嘗試紀錄的固定欄位，不回傳重放列；
+       - 重放 CLI 不啟用會列印區域變數的 traceback 格式化或除錯 hook（AST）。
+       commit 之後，結果只經 `validation.py` 的 §4.7 報告呈現（D-3 `forecast_replay_outcome`「用途限制」）。
+     - **寫鎖與排程窗**：
+       - 排程窗：Asia/Taipei 每日 21:30 至翌日 01:00，ADR 常數 `REPLAY_BLOCKED_WINDOW`（不屬於 dirdef，不影響任何結果）。它涵蓋 D-7 第 1 點的 22:10 執行、23:10 重試，以及其後的結算、缺日稽核、更正作業與驗證快照。① 與 ⑤ 各讀一次 store 時鐘判定。
+       - 持鎖時間只涵蓋 ⑤ 的寫入與驗證，不含 ③④ 的計算（比照 D-9 第 5 點 ⑤）。重放連線的 `busy_timeout` 與預測帳其他寫入者相同（值依既有設定，不另定）；等不到鎖時拋例外，依「中止」記 (乙)。
+       - 排程窗不涵蓋啟動補跑（D-7 第 1 點，啟動後 3 分鐘）與 on-demand 寫入（Consequences：預測帳有兩個寫入者）：重放的交易期間，它們可能等到 `busy_timeout` 而失敗。執行重放前確認 scheduler 不在啟動補跑期間，是作業程序，不是程式保證〔推論〕。主 DB 的 journal mode〔未查證〕：不是 WAL 時，commit 期間讀者也會被擋。
+     - **告警（ADR-0029）**：重放（含嘗試紀錄、中止與 commit）不是 D-7 的排程步驟，不發 ADR-0029 的任何事件；推播的欄位集合、標籤與模板都不變，ADR-0029 失效條件 5 不觸發。重放執行函式所在的模組不 import `app.ops_alert.*`（AST）。例外只拋給 CLI 的執行者。
+     - 理由：任何失敗都留下 0 列，所以中止不會留下部分結果，也不會落入「看過結果後修改」（事先宣告同點理由）。只有 ⑤ 的 commit 同時寫入結果與 claim 轉值，「已重放」、`counts_toward_m` 由 0 變 1 與 commit 是同一件事。嘗試紀錄在交易外寫入，中止之後仍然留下；它存在另一張表，不改變 gate 的 `check_max`。
+     - 另一面（照實並陳）：① commit 之前，④ 的結果在記憶體內，以除錯工具讀取擋不住〔推論〕；在重放執行函式之外以快照自行計算結果，程式同樣擋不住，這在 v0.26 之前就存在〔推論〕；② 排程窗只保護 D-7 的固定觸發點；③ 一個交易寫入的列數取決於 [S, E] 與 h，S、E 尚未登記〔未查證〕；SQLite 在這個量級的單一交易沒有已知的限制〔推論〕；④ 階段旗標依程式順序歸類，例外發生在旗標設定前後的界線上時，依旗標論。
 
    理由：
    - v1 重放只限大盤（事先宣告 §4.7）；`split_or_reduction_suspected` 不套用於大盤指數序列（第 3 點；事先宣告 §4.7 B-6），g 沒有用途。
@@ -1403,7 +1494,7 @@
 3. **`forecast_claim_registry`**：
    - 欄位：`claim_id`、`scope_kind`、`horizon`、`kind ∈ {forward, replay}`、`rules_logic_sha256`、`definition_logic_sha256`、`rules_sha256`、`frozen_commit`、`prereg_doc_path`、`prereg_doc_blob`、`review_refs`（風控與 qa 審查紀錄的路徑）、`predecessor_claim_id`、`predecessor_withdrawn_at_n`、`registered_at`、`first_record_at`、`counts_toward_m`。
    - `UNIQUE(scope_kind, horizon, kind, rules_logic_sha256, definition_logic_sha256)`，所以純字面變更無法登記新 claim。
-   - guard trigger：只允許 `first_record_at` 由 NULL 變成值，同時 `counts_toward_m` 由 0 變 1，各一次；其餘欄位不得變動，也不得刪除。
+   - guard trigger：只允許 `first_record_at` 由 NULL 變成值，同時 `counts_toward_m` 由 0 變 1，各一次；其餘欄位不得變動，也不得刪除。（v0.26，V26-04；事先宣告 §12 第 7、8 列「重放第一次寫入 `forecast_replay`」與 §4.7「已重放的界定與中止的執行」第 2 點）`kind = replay` 的 claim，兩欄的轉值只在 D-9 第 7 點 V26-04 子點 ⑤ 的 (d) 寫入交易內、寫入該登記的全部列之後、commit 之前，以一句 UPDATE 執行（`WHERE first_record_at IS NULL`，影響列數必須恰為 1，否則拋例外、整個交易回滾）；不得在 (d) 的交易之外、在嘗試紀錄的交易中或以 autocommit 執行（AST 列舉呼叫點）。交易回滾時，這次轉值一併撤銷，兩欄回到 NULL 與 0，下一次執行仍可轉值一次；回滾不是 UPDATE，不經過 guard trigger〔推論，依 SQLite 的交易語意；未實測，FL-69 (o) 以真實的交易驗證〕。所以 commit、`counts_toward_m` 由 0 變 1 與「已重放」是同一件事；中止的執行不計入 m。前瞻 claim 的轉值不變。
 4. **m 與 α\***：m＝`counts_toward_m=1` 的列數；v1 起始 6，大盤重放執行後為 8；m_eff＝max(m, 8)。
 5. 族群動能的 `sector_method_registry` 不合併計算 m，附風控第 11 項的條件：若展望特徵是看過動能研究結果之後才選的，就要合併。
 
@@ -2303,7 +2394,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - F2-B 下，尚未證明的展望最長會顯示約 3 年（大盤 5 日）。誠實度依賴「驗證中」直白句，以及風控的版面限制（不得用綠色、勾號、進度條）。
 - M-9 若採 P-1，價位與券商的未還原 K 線不一致，每次除權息都會整組平移；`plan_outcome` 要做換算。
 - **展望鏈與持倉鏈的資料源不同**：展望讀市場 DB，持倉讀 `price_bars_cache`。同一個 T 的原始收盤可能不同，plan 必須檢查一致性（FL-25）。
-- 22 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+- 23 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
 - 主 DB 每年約增加 220 MB〔推論〕。
 - 主機晚上不開機，樣本就不會增加（quant §4.9 的 g）。
 - 規則 YAML 必須把文字欄位與邏輯分開，否則 logic 雜湊無法定義。
@@ -2358,7 +2449,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 **PIT 與還原**
 - **FL-5**：`app/outlook/**`、`app/forecast/**` 不得出現 `price_bars_cache`、`dividend_events`、`_hindsight_view`（grep）。
 - **FL-6**：`app.api.advice` 不可達 `app.data.market_panel`、`app.outlook.inputs`、`app.forecast.recorder`（import graph）。
-- **FL-7**：`inputs_max_recorded_at > cutoff(T)` 的紀錄，label 必為 insufficient，而且含 `E-PIT-UNVERIFIED`。
+- **FL-7**：`inputs_max_recorded_at > cutoff(T)` 的紀錄，label 必為 insufficient，而且含 `E-PIT-UNVERIFIED`。（v0.26，V26-01）本格的範圍是 `forecast_record`。重放的對應斷言見 FL-69 (l)：`forecast_replay` 的 `missing_json` 一律不含本代碼。
 - **FL-8**：`AdjustedSeries` 不是 `PriceBar` 的子類；outlook 與 keylevels 的特徵函式在執行期以 `isinstance` 檢查。
 - **FL-9**：`AdjustedSeries.close[anchor] == 原始收盤[T]`，精確相等。
 - **FL-10**：`technical.atr` 與重構前逐位相同（golden 測試）；`wilder_atr` 在 `app/` 只有一個定義（grep）。
@@ -2612,7 +2703,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (a) 登記序列目前為空；性質測試：版本逐項加 1、跨 `source_name` 單調、已登記項不可變、同名時涵蓋只增不減；程式序列與 ADR 登記表逐欄相同。
   - (b) `coverage_end_at` 在 `rolling` 時只依日期與時鐘；涵蓋以外 → `outside_coverage`，不呼叫來源（spy）；涵蓋以外寫 `source_has_no_day` → 拒絕。
   - (c) registration 之前寫 detection、snapshot 或 calendar_query → 拒絕；同一 claim 第二列 registration → 拒絕；第二份 snapshot → 拒絕；登記檔的 S、E、N_req 與重算結果不同 → 拒絕。
-  - (d) 閘門 (1)～(4) 各一格不成立 → `gate_passed = 0`，`forecast_replay` 寫入被拒；gate 之後再寫 detection → 引用該 gate 的結果列被拒；重查只涵蓋部分失敗列 → gate 函式拒絕；`check_replay_gate` 不 import 報酬或標籤的模組，也不呼叫來源（AST、spy）。
+  - (d) 閘門 (1)～(5) 各一格不成立（(5) 的各款見 (l10)～(l17)）→ `gate_passed = 0`，`forecast_replay` 寫入被拒；gate 之後再寫 detection → 引用該 gate 的結果列被拒；重查只涵蓋部分失敗列 → gate 函式拒絕；`check_replay_gate` 不 import 報酬或標籤的模組，也不呼叫來源（AST、spy）。〔v0.26 取代（V26-01）：原寫「(d) 閘門 (1)～(4) 各一格不成立 → `gate_passed = 0`」〕
   - (e) 重放路徑不寫 `forecast_index_check`、`forecast_ledger_events`、`forecast_outcome`（AST）。
   - (f) 結果列：`independent_source` 對應的查證列不是 `basis_check_id` → 拒絕；含 `wait_sessions` 等禁欄 → schema 失敗；X1 收盤本身不可用的 P(T+h) → `index_bar_confirmed_erroneous`，不讀同日 X2 查證列或日曆查詢列的值（spy）。
   - (g) `checked_values_sha256` 對 NaN 收盤的兩列相同；快照 sha256 重算逐位相同。
@@ -2624,13 +2715,64 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
     - (k2)（LG-38 (c)）同 (k1) 第一格，但 `band_def` 完整 → `diag_last_close` 非 null，等於以最後可得收盤與該筆門檻算出的 fixture 期望值。
     - (k3)（LG-38 (d)）證據不足、缺項、`resolved` → 七個欄位為 null，`realized_log_return`、`realized_return` 等於 fixture 期望值。
     - (k4)（LG-38 (e)）缺項的各種情形各一格（`sigma_d` 為 null、0、NaN；`K_h` 鍵不存在；`EPS` 鍵不存在）→ 期望同 (k1)。
-    - (k5)（LG-38 (f)）一筆有標籤而缺 `sigma_d` 的重放預測混在 fixture 中 → 拋 `LabeledThresholdSnapshotIncompleteError`（`source = replay`、`affected_forecast_count = 1`、`violations` 等於 fixture 的期望值）；`forecast_replay`、`forecast_replay_outcome` 都是 0 列，沒有開啟寫入交易，計算結果欄位的函式呼叫 0 次（spy）；兩筆時 `affected_forecast_count = 2`。一筆證據不足、缺項而 `up_pct` 非 null 的列混在 fixture 中 → 同樣整次不執行，兩表都是 0 列。重放執行函式內沒有接住本例外的 except（AST）。
+    - (k5)（LG-38 (f)）一筆有標籤而缺 `sigma_d` 的重放預測混在 fixture 中 → 拋 `LabeledThresholdSnapshotIncompleteError`（`source = replay`、`affected_forecast_count = 1`、`violations` 等於 fixture 的期望值）；`forecast_replay`、`forecast_replay_outcome` 都是 0 列，沒有開啟寫入交易，計算結果欄位的函式呼叫 0 次（spy）；兩筆時 `affected_forecast_count = 2`。一筆證據不足、缺項而 `up_pct` 非 null 的列混在 fixture 中 → 同樣整次不執行，兩表都是 0 列。重放執行函式內沒有接住本例外的 except（AST）。〔v0.26 註（V26-04）：本句指 D-9 第 7 點 V26-04 子點「最外層處理」那一處以外沒有任何 except；那一處一定再拋出，見 (o12)。本格原文不改〕
     - (k6)（LG-38 (g)）判定不讀 label：同一份快照與完整的 `band_def`，label 為 `insufficient` 與 `bullish` 的兩個 fixture → `status`、`status_reason`、`void_reasons_json`、`settlement_date` 逐位相同，只有 `hit` 不同。
-    - (k7)（LG-38 (h)）性質測試：任意 fixture 的結果列，`diag_last_close` 都落在 D-3 `forecast_replay_outcome` N-53 的三種情形之一。寫入驗證各一格違反 → 拒絕：`resolved` 而 `diag_last_close` 非 null；作廢、完整而 null；作廢、缺項而非 null；證據不足、`hit` 非 null；有標籤、`resolved`、`realized_label` 為 null；`diag_unavailable_json` 含因缺項而記 null 的欄位。
+    - (k7)（LG-38 (h)）性質測試：任意 fixture 的結果列，`diag_last_close` 都落在 D-3 `forecast_replay_outcome` N-53 的三種情形之一。寫入驗證各一格違反 → 拒絕：`resolved` 而 `diag_last_close` 非 null；作廢、完整而 null；作廢、缺項而非 null；證據不足、`hit` 非 null；有標籤、`resolved`、`realized_label` 為 null；`diag_unavailable_json` 含因缺項而記 null 的欄位。〔v0.26 註（V26-02）：重放結果列的 `diag_last_close` 改為四種情形（D-3 `forecast_replay_outcome` V26-02），性質測試與違反各格見 (m8)。本格原文不改〕
     - (k8)（LG-38 (i)）重放結算期間，`sigma_d()` 呼叫 0 次（spy）；產生結果欄位的函式不 import `app/outlook/volatility.py`（import graph）。
     - (k9)（LG-41 (h)）大盤 `E-VOL-SHORT` 的重放預測 → `forecast_replay.band_def.sigma_d` 為 null、`valid_returns` 照實記錄；結算列依 (k1)，七個欄位為 null。
     - (k10) `forecast_replay` 寫入驗證：以測試替身繞過預驗證，寫入有標籤而缺項的列 → 拒絕，拋 `source = replay`；證據不足而缺項、`up_pct` 非 null → 拒絕；含 `E-VOL-SHORT` 而 `sigma_d` 非 null → 拒絕。
     - (k11) 呼叫圖：重放執行函式不在 `recorder.py`，也不由記錄一步呼叫；記錄一步範圍 try 內的呼叫圖不含重放執行函式與 `forecast_replay` 的寫入函式；`RECORD_SCOPE_REFUSAL_TYPES` 仍恰好等於 `(LabeledThresholdSnapshotIncompleteError,)`（AST）。預驗證與 `forecast_replay` 的寫入驗證呼叫同一組驗證函式（AST）。
+  - (l)（v0.26，V26-01；D-3 `forecast_replay` 與 D-9 第 7 點的 V26-01 子點；對應事先宣告 LG-42 (a)～(p)）重放中的 PIT 證明與閘門 (c) 第 (5) 項：fixture 都是大盤重放；(l1)～(l9) 閘門成立，(l10)～(l17) 依該格所列。
+    - (l1)（LG-42 (a)）快照的 `recorded_at` 晚於全部 T 的 cutoff(T)，其餘輸入正常 → 預測端照常輸出有標籤或證據不足，`missing_json` 不含 `E-PIT-UNVERIFIED`；`inputs_max_recorded_at` 等於快照列的 `recorded_at`，`source_run_min`、`source_run_max` 為 null；有標籤而符合事先宣告 §4.1 條件者計入 n。
+    - (l2)（LG-42 (b)）移除或改動快照中日期晚於 T 的任何 bar、查證結果或 determination → T 的預測端欄位、`input_digest`、`input_bar_date_min`、`input_bar_date_max` 逐位不變（與 LA-9 (a) 並用）。
+    - (l3)（LG-42 (c)）測試替身讓一筆重放預測讀到 T 之後的 bar → 拋 `ReplayPitProofViolationError`（`violations` 含 `input_bar_after_t`，`affected_forecast_count = 1`）；兩表都是 0 列，沒有開啟 (d) 的寫入交易，計算結果欄位的函式呼叫 0 次（spy）；嘗試紀錄記 `pre_validation_abort`。
+    - (l4)（LG-42 (d)）一筆的 `input_digest` 與重算值不符 → 同 (l3)，`violations` 含 `input_digest_mismatch`。
+    - (l5)（LG-42 (e)）所用快照的 sha256 與 gate 列不符 → 同 (l3)，`violations` 含 `snapshot_sha256_mismatch`。
+    - (l6)（LG-42 (f)）(l3)～(l5) 都不把該筆改記證據不足，也不輸出 `E-PIT-UNVERIFIED`；以帶哨兵值的 fixture 斷言例外訊息與屬性不含 bar 值、雜湊值與 label。
+    - (l7)（LG-42 (g)）預測端函式的參數只有截至 T 的序列、O 中不晚於 T 的日期、登記的官方休市日表版本與凍結的常數；不 import 快照讀取函式，也不接收整份快照（AST）。
+    - (l8)（LG-42 (h)）前瞻 fixture：`inputs_max_recorded_at` 晚於 cutoff(T) → 照舊輸出 `E-PIT-UNVERIFIED`（FL-7 不變）。
+    - (l9) 寫入驗證：以測試替身繞過預驗證，各一格違反 D-3 `forecast_replay` V26-01 子點 → 拒絕：`input_bar_date_max` 晚於 `data_as_of`；`input_digest` 不符；快照 sha256 不符；`inputs_max_recorded_at` 不等於快照列；`source_run_min` 非 null；`missing_json` 含 `E-PIT-UNVERIFIED`。
+    - (l10)～(l17)（LG-42 (i)～(p)）閘門 (c) 第 (5) 項：除所列一項外閘門都成立；「不執行」指 gate 列 `gate_passed = 0` 並在 `gate_json` 記下不成立的款、重放執行函式在 ① 拒絕（`gate_not_passed`）、計算預測端與結果欄位的函式呼叫 0 次（spy）、兩表都是 0 列、`forecast_replay_execution_log` 0 列：
+      - (l10)（LG-42 (i)）全部 bar 的台北時刻 09:00、`meta` 時區欄位正確、日期集合與日曆查詢相符 → (5) 成立，`gate_passed = 1`，照常執行 (d)；
+      - (l11)（LG-42 (j)）一根 bar 的台北時刻 13:30、其餘 09:00 → (5a) 不成立，不執行；
+      - (l12)（LG-42 (k)）全部 bar 的台北時刻 00:00（另各一格：07:59、18:00、前一日 23:00），`session_date` 依時間戳記的台北日期構造 → (5a) 不成立，不執行；
+      - (l13)（LG-42 (l)）`exchange_timezone_name` 是 `Asia/Shanghai`（另各一格：`UTC`、缺漏），或 `gmtoffset` 是 0（另各一格：缺漏、字串 `"28800"`）→ (5c) 不成立，不執行；
+      - (l14)（LG-42 (m)）一根 bar 的 `session_date` 比它時間戳記的台北日期早一天 → (5b) 不成立，不執行；
+      - (l15)（LG-42 (n)）一根 `session_date` 是週日的 bar，X2 查證與日曆查詢都是「來源沒有這一天」、閘門 (3) 成立 → (5d) 不成立，不執行；
+      - (l16)（LG-42 (o)）全部 bar 的日期與時間戳記一起往後移一個日曆日（(5a)～(5d) 都成立）→ (5e) 不成立，不執行；
+      - (l17)（LG-42 (p)）改動全部 bar 的 OHLCV → (5) 的判定與 `gate_json` 的 (5) 檢查值逐位不變；(5) 的檢查函式不讀 bar 的數值（spy、AST），以 `ZoneInfo("Asia/Taipei")` 換算、不以 `gmtoffset` 換算（AST）。
+    - (l18) 快照保留欄位：`content_sha256` 隨 `raw_timestamp`、`response_seq` 或 `response_meta_json` 任一值改變而改變；`checked_values_sha256`、`target_values_sha256` 與 `replay_input_digest` 不變；`response_meta_json` 缺 `gmtoffset` 的回應 → 照常寫入（null），由 (l13) 判定；其他 `series_kind` 的列 `response_meta_json` 非 null → 拒絕。
+    - (l19) 取數：快照的取數函式不讀 `price_bars_cache` 與任何快取（spy）；取得回應與寫入在同一個呼叫內（同 (i)）。
+  - (m)（v0.26，V26-02；D-3 `forecast_replay_outcome` 的 `close_unusable` 形狀與寫入驗證 V26-02 各項；對應事先宣告 LG-43 (a)～(i)）T 日收盤本身不可用的重放列：fixture 都是大盤重放、閘門成立。
+    - (m1)（LG-43 (a)）T 日 bar 的收盤為 NaN（另各一格：≤ 0；同一日兩列、收盤不同），T+h 正常 → T 是決策日，預測端 `E-PRICE-UNUSABLE`；結果列寫入，不拋例外、不被拒寫：`status = unresolvable_missing_data`、`status_reason = index_bar_confirmed_erroneous`、`void_reasons_json` ＝ [`index_bar_confirmed_erroneous`]，`start_price_json` 為 `close_unusable` 形狀，`realized_log_return`、`realized_return`、`realized_z`、`realized_label`、`hit`、`baseline_hits_json`、`mae`、`mfe`、`diag_last_close` 為 null。
+    - (m2)（LG-43 (b)(c)）同 (m1)，`threshold_snapshot` 完整 → `diag_last_close` 仍為 null（情形 (iv)）；缺項 → 同樣為 null，(k1) 的七個欄位也為 null。
+    - (m3)（LG-43 (d)）同 (m1)，T+h 是有觀察日、沒有 bar 的日期 → `void_reasons_json` ＝ [`index_bar_confirmed_erroneous`, `missing_bar_after_wait`]，`status_reason = index_bar_confirmed_erroneous`，`end_price_json` 帶 `bar_missing: true`。
+    - (m4)（LG-43 (e)）同 (m1)，該日 X2 查證與日曆查詢的 `source_values_json` 帶有收盤值 → 不被讀取（spy），結果同 (m1)。
+    - (m5)（LG-43 (f)）該列在第 0 相位格點上 → 在重放的 W 中放回（模型未命中、各必備基準命中），不計入 n。
+    - (m6)（LG-43 (g)）判定不讀 label：比照 (k6)，label 換成 `bullish` 的測試替身 → `status`、`status_reason`、`void_reasons_json` 逐位相同。
+    - (m7)（LG-43 (h)）揭露的三類（只有 P(T)、只有 P(T+h)、兩者都是）各一個 fixture → 各計 1；P(T+h) 有誤的兩格，`end_price_json` 為 `close_unusable` 形狀。
+    - (m8)（LG-43 (i)）性質測試：任意 fixture 的結果列，`diag_last_close` 都落在 D-3 `forecast_replay_outcome` 的四種情形之一。寫入驗證各一格違反 → 拒絕：`close_unusable` 形狀而 `diag_last_close` 非 null；`close_unusable` 形狀而 `realized_log_return` 非 null；`close_unusable` 形狀而 `status = resolved`；`close_unusable` 與 `bar_missing` 同時出現；`determination_check_id` 不指向該 bar 的 `close_erroneous`；P(T) 收盤可用、作廢、完整而 `diag_last_close` 為 null。
+  - (n)（v0.26，V26-03；D-9 第 7 點 V26-03 子點；對應事先宣告 LG-44 (a)～(g)）重放的 W：fixture 都是大盤重放、閘門成立，h＝5。
+    - (n1)（LG-44 (a)）第 0 相位格點 20 個：17 個有標籤、`resolved`、全部必備基準可用（n＝17），2 個作廢（其中 1 個證據不足而後作廢），1 個證據不足而 `resolved`；第 1～4 相位另有 6 筆作廢 → 第 0 相位的 W 放回 2 筆（W 樣本 19），證據不足而 `resolved` 那 1 筆不放回。
+    - (n2)（LG-44 (b)）只改第 1～4 相位的列（增減作廢、改變 `status` 或 label）→ 第 0 相位的 W 逐位相同。
+    - (n3)（LG-44 (c)）第 1～4 相位各自的 W 都算出，依相位序號全部列出（4 列），各自只放回該相位格點上的作廢列。
+    - (n4)（LG-44 (d)）一個格點日不是決策日 → 該格點沒有紀錄，不放回，計入失去的格點數。
+    - (n5)（LG-44 (e)）各段的報告不含 W（AST：產生分段報告的函式不呼叫 `compute_replay_w`）。
+    - (n6)（LG-44 (f)）(m) 的 P(T) 收盤本身不可用列在第 0 相位格點上 → 放回；在第 2 相位格點上 → 只在第 2 相位的 W 中放回。
+    - (n7)（LG-44 (g)）`compute_replay_w` 的輸出不被驗證狀態、gate、徽章、`fail_w`、`compute_void_rate` 或任何判定讀取（AST、呼叫圖）；格點與 n 共用同一個格點函式（spy）；把放回列的 label 互換 → 逐位相同。
+  - (o)（v0.26，V26-04；D-3 `forecast_replay_execution_log`、`forecast_replay` 的 V26-04 一項、`forecast_replay_outcome` 首句；D-9 第 7 點 V26-04 子點；D-10 第 3 點；對應事先宣告 LG-45 (a)～(j)）重放的執行：fixture 都是大盤重放、閘門成立；主 DB 用暫存檔，不用 in-memory，以真實的 SQLite 交易驗證回滾。
+    - (o1)（LG-45 (a)）測試替身讓第 k 筆結果列的寫入驗證失敗 → 兩表都是 0 列；claim 的 `first_record_at` 為 NULL、`counts_toward_m = 0`；嘗試紀錄有開始與結束各一列，`result = result_abort`，`exception_class` 為該驗證的例外類別，`computed_outcome_count` 等於全部列數，`computed_outcome_sha256` 等於 fixture 期望值。
+    - (o2)（LG-45 (b)）(o1) 之後以同一個 `code_commit` 再執行並 commit → 兩表的列與一次就 commit 的對照 fixture 逐欄相同（序號與時鐘欄位除外），`replay_execution_seq = 2`；claim 兩欄轉值一次；(o1) 的雜湊與 commit 列前 `computed_outcome_count` 列重算的雜湊相同；揭露 (乙) 1 次。
+    - (o3)（LG-45 (c)）store 在 commit 時拋例外（測試替身）→ 已執行 rollback，0 列，claim 兩欄不轉值，記 `result_abort`。
+    - (o4)（LG-45 (d)）預驗證不成立（(k5)、(l3)）→ 記 `pre_validation_abort`，`computed_outcome_count`、`computed_outcome_sha256` 為 null，`exception_attrs_json` 等於例外的結構化屬性。
+    - (o5)（LG-45 (e)）commit 之後再呼叫 → `ReplayExecutionRefusedError`（`already_committed`），不寫入任何列（含嘗試紀錄），計算任何欄位的函式呼叫 0 次（spy）；直接寫開始紀錄 → 拒絕；以另一個 gate 列寫開始紀錄 → 拒絕。
+    - (o6)（LG-45 (f)）開始紀錄寫不進去（測試替身）→ 不執行，計算任何欄位的函式呼叫 0 次（spy）；繞過開始紀錄直接寫 `forecast_replay` → 拒絕。
+    - (o7)（LG-45 (g)）只有開始紀錄、沒有結束紀錄、也沒有該序號 `forecast_replay` 列的嘗試 → 揭露以 (乙) 計；有該序號的 `forecast_replay` 列而沒有結束紀錄 → 以 commit 計；較小序號的結束紀錄在較大序號開始之後寫入 → 拒絕。
+    - (o8)（LG-45 (h)）commit 之前不外流：AST 依 D-9 第 7 點 V26-04 子點「commit 之前不外流」；帶哨兵值的 fixture（結果欄位與預測端欄位各一個哨兵值），在 (o1)、(o3)、(o4) 與一格「`ValueError` 訊息含哨兵值」的測試替身下，log（caplog）、stderr、例外訊息與例外鏈、嘗試紀錄中都沒有哨兵值；後一格拋出的是 `ReplayAbortedError`，`__cause__` 與 `__context__` 都是 None；沿 `__cause__`、`__context__` 走訪整條例外鏈都找不到哨兵值。
+    - (o9)（LG-45 (i)）嘗試紀錄的寫入不改變 `forecast_replay_index_check` 的任何列與最大 `check_id`；(o1) 之後 gate 照常成立，(o2) 的寫入驗證通過。
+    - (o10)（LG-45 (j)）嘗試次數依 `result` 分列揭露，0 次照列：沒有中止的 fixture → commit 1、(甲) 0、(乙) 0。
+    - (o11) 排程窗：① 的假時鐘在窗內 → `ReplayExecutionRefusedError`（`schedule_window`），不寫任何列；① 在窗外、⑤ 在窗內 → 不開啟交易，記 `result_abort`。
+    - (o12) 結構（AST）：重放執行函式內只有最外層一處 except，而且一定再拋出；寫入函式不自行 `BEGIN`、commit、rollback 或 SAVEPOINT；重放執行函式只由 CLI 呼叫，所在模組不 import `app.ops_alert.*`；D-10 第 3 點的 replay 轉值只在 ⑤ 的交易內呼叫；`forecast_replay_execution_log` 的欄位集合恰為 D-3 所列（schema）。
 - **FL-70**（`plan_coverage_log`）：
   - 沒有 snapshot → step_start（`no_snapshot`）與每個標的一列 `no_snapshot`，沒有 `plan_record`；
   - 單一標的拋例外 → 該標的 `compute_error`，其他標的照寫；
@@ -3069,6 +3211,8 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 15. （N-22c、v0.16，知悉）M-11 的表數隨 `forecast_replay_index_check`、`forecast_replay_outcome` 由 14 張改為 16 張，全部表數由 19 張改為 21 張。
 16. （V15-04，知悉）M-11 的表數隨 `plan_coverage_log` 由 16 張改為 17 張，全部表數由 21 張改為 22 張。
 17. （v0.25，N-53、N-63；事先宣告 V25-01、V25-06）**明確同意**：兩者都有放寬面，而且改動本 ADR D-3 的字面。V25-01：重放中「證據不足、缺項而且作廢」的列，原本依 D-3 `forecast_replay_outcome` 的寫入驗證會被拒寫，改為記 null 寫入（D-3 `forecast_replay_outcome` N-53 各項、D-9 第 7 點 N-53 子點）。V25-06：σ_d 有效數不足或退化時一律記 null，原本可能因存入殘差級 σ 而被拒寫的退化列改為寫入，作廢率可能因此下降（D-3「適用範圍與缺項」N-63 子點）。CEO 已明確同意（決策包 #48，2026-10-22）；同意之前本批不落檔（風控 2026-10-21 v0.25 逐字確認 (g)）。V25-02～V25-04（N-68）知悉（見修訂紀錄 v0.25 同步批）。
+18. （v0.26，N-61、N-62、N-73、N-74；事先宣告 V26-01～V26-04）**明確同意**：V26-01、V26-03、V26-04 都有放寬面，而且改動本 ADR 的字面。V26-01：重放不以取得時間判定 PIT，改以資料日期界限、快照雜湊與未來函數檢查證明；相對「每一筆重放預測都證據不足、n 恆為 0」的字面，重放預測可以有標籤、計入 n（D-3 `forecast_replay` 與 D-9 第 7 點的 V26-01 子點、D-4 第 3 點）。V26-01 另含執行閘門 (c) 第 (5) 項：資料的日期標示有整段錯一天的跡象（例如時間戳記的時刻不一致，或出現星期日的資料）時不執行重放，另行登記處理；這一部分只讓重放更難執行，是收緊（D-3 `forecast_replay_index_check` gate 的 (5)、`forecast_input_series` 的快照保留欄位）。V26-03：重放的 W 只放回第 0 相位格點上的作廢列，其餘相位只作揭露；相對「不分相位、全部作廢列都放回」的讀法，W 較不嚴（D-9 第 7 點 V26-03 子點）。V26-04：重放的寫入改為全有或全無，只有 commit 成功的那一次算已重放；(乙) 類結果中止不消耗唯一的一次重放（D-9 第 7 點 V26-04 子點、D-3 `forecast_replay_execution_log`、D-10 第 3 點）。CEO 已明確同意（決策包 #50，2026-10-23）；同意之前本批不落檔（風控 2026-10-23 v0.26 逐字確認 (h)）。V26-02（N-61）知悉：P(T) 收盤本身不可用的重放列記作廢，與前瞻對齊（D-3 `forecast_replay_outcome` 的 V26-02 各項）。
+19. （V26-04，知悉）M-11 的表數隨 `forecast_replay_execution_log` 由 17 張改為 18 張，全部表數由 22 張改為 23 張。
 
 **風控**：附件 C 的重送與確認項；FL-30～FL-37 是否完整對應七條底線，請單項核對。
 
@@ -4992,7 +5136,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
     - D-9 第 7 點 N-53 子點（N53-4b）：方向：補定義（兩面；收緊面：預驗證、整次不執行、與記錄一步拒寫路徑分開、T 日收盤不可用的列登記前不得執行重放）。插入，無被取代原文。
     - FL-69 (k)（N53-5）：方向：收緊（測試）。CEO：否。插入，無被取代原文。
     - 待決事項 CEO 第 17 項（N53-6）：方向：不變（揭露）。插入，無被取代原文。
-    - 全有或全無的單一交易（quant N-53 提案第六節第 7 點；後續追蹤清單 N-74）：本批不落字，另案送風控；定案前不得執行重放（見下方待決事項）。
+    - 全有或全無的單一交易（quant N-53 提案第六節第 7 點；後續追蹤清單 N-74）：本批不落字，另案送風控；定案前不得執行重放（見下方待決事項）。〔已決（V26-04）：事先宣告 v0.26 V26-04 登記，本 ADR 同步見修訂紀錄 v0.26 同步批。本項原文不改〕
   - N-68（V25-02～V25-04；CEO：知悉，另標者除外）：
     - D-11 第 2 點 N-50 子點混淆矩陣「證據不足」列一句（N68-a；V25-04）：方向：補定義（收緊：揭露）；解除寫入禁令屬補定義（不變）。採「另寫一句、不併入同子點 v0.24 的相位清單」（理由見 TA 同步起草 N68-a）。被取代的原文已在原處以〔v0.25 取代〕逐字錄存。
     - 同子點 `record_range` 一句（N68-b；V25-02）：方向：不變（確認字面讀法：N-29 (b) (i)）。被取代的原文已在原處以〔v0.25 取代〕逐字錄存。
@@ -5018,5 +5162,56 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - N-52 A 案：單一範圍的程式缺陷會使同一次執行的其餘範圍全部成為缺日，而且每次執行重演，停擺沒有時間上限，可能觸發 F-3。
 - 待決事項與同批規則：
   - 整批須等決策包 #48（V25-01、V25-06 已於 2026-10-22 經 CEO 明確同意；待決事項 CEO 第 17 項）；V25-02～V25-05、N-68 各項與記錄一步批都不先行。與事先宣告 v0.25 同一個 commit，不適用相鄰 commit 寬限。
-  - 落檔後的閘門：daily 列的 §4.3 (e) 與混淆矩陣「證據不足」列解除阻擋；D_v 不再受發現 (2)(3) 與 F-2 擋住，其他擋 D_v 的事項不變。記錄一步、`audit.py` 的 `reason` 判定與 `volatility.py` 依本批字面實作；`audit.py` 遇到同一觀察日有多個 run 時的 `reason` 判定，等 tech-architect 2026-10-21 記錄一步批落字起草第六節第 1 點定案。重放執行閘門 (d) 仍受後續追蹤清單 N-61、N-62、N-74 與「重放 W 的相位範圍」擋住。
-  - 另案（不在本批）：重放執行是否改為全有或全無的單一交易，以及預驗證不成立時的紀錄與揭露（後續追蹤清單 N-74；quant N-53 提案第六節第 7 點；TA 表態見 TA v0.25 同步起草第二節第六點、第七點第 1 項），定案、送風控並同步本 ADR 之前不得執行重放。
+  - 落檔後的閘門：daily 列的 §4.3 (e) 與混淆矩陣「證據不足」列解除阻擋；D_v 不再受發現 (2)(3) 與 F-2 擋住，其他擋 D_v 的事項不變。記錄一步、`audit.py` 的 `reason` 判定與 `volatility.py` 依本批字面實作；`audit.py` 遇到同一觀察日有多個 run 時的 `reason` 判定，等 tech-architect 2026-10-21 記錄一步批落字起草第六節第 1 點定案。重放執行閘門 (d) 仍受後續追蹤清單 N-61、N-62、N-74 與「重放 W 的相位範圍」擋住。〔已決（V26-01～V26-04）：與事先宣告 v0.26 同批落檔後，N-61、N-62、N-74 與重放 W 的相位範圍（N-73）不再擋重放執行閘門 (d)；見修訂紀錄 v0.26 同步批。本項原文不改〕
+  - 另案（不在本批）：重放執行是否改為全有或全無的單一交易，以及預驗證不成立時的紀錄與揭露（後續追蹤清單 N-74；quant N-53 提案第六節第 7 點；TA 表態見 TA v0.25 同步起草第二節第六點、第七點第 1 項），定案、送風控並同步本 ADR 之前不得執行重放。〔已決（V26-04）：見修訂紀錄 v0.26 同步批。本項原文不改〕
+
+---
+
+**v0.26 同步批（事先宣告 v0.26 V26-01～V26-04；後續追蹤清單 N-61、N-62、N-73、N-74，含原 N-75；評估摘要、M-11、D-1 表一列、D-3、D-4 第 3 點、D-9 第 7 點、D-10 第 3 點、Consequences、FL-7、FL-69、待決事項；方向：逐項標示，見各項）**
+- 來源與套用範圍：
+  - quant：事先宣告 v0.26 單項草案「重放執行閘門批」`work/reviews/2026-10-23-v0.26重放執行閘門批草案-quant.md` 第二節 B（事先宣告字面）與第二節 D 第 1～22 點（本批清單）；同日 V26-01 補字：`work/reviews/2026-10-23-V26-01快照時間戳記檢查補字-quant.md` 第二節 B、C（事先宣告字面）與 F（ADR 清單 5a～5f）。
+  - tech-architect 2026-10-23 v0.26 同步起草：`work/reviews/2026-10-23-v0.26之ADR同步起草-tech-architect.md` 第二節 S-1～S-22，同檔 N-80 一段不在本批；同日追加：`work/reviews/2026-10-23-v0.26之ADR同步追加5a至5f-tech-architect.md` 第二節 A（S-5a～S-5f）與 C（R-1～R-5），同檔第二節 B 的取數路徑比較不在本批。
+  - 風控逐字確認：`work/reviews/2026-10-23-v0.26重放執行閘門批逐字確認-風控.md`（下稱「風控 2026-10-23 v0.26 逐字確認」），照改清單 T26-1～T26-18。風控改字之處以風控為準。
+  - CEO：決策包 #50，V26-01、V26-03、V26-04 明確同意，2026-10-23（待決事項 CEO 第 18 項）；V26-02 與表數（第 19 項）知悉；其餘否。
+  - 與事先宣告 v0.26（V26-01～V26-06）同一個 commit，不適用相鄰 commit 寬限。
+- 逐項（被取代的原文：判準同 v0.25 同步批段；本段凡已在原處以〔v0.26 取代〕逐字錄存者，不重錄）：
+  - V26-01（CEO：依附 V26-01 的明確同意，另標者除外）：
+    - S-1 D-4 第 3 點：方向：補定義（兩面）。句末接字，無被取代原文。
+    - S-2 FL-7：方向：補定義（兩面）：本格不再適用 `forecast_replay`（放寬面，與 S-1 同），重放的對應斷言改由 FL-69 (l) 承擔（收緊面）。CEO：依附 V26-01 的明確同意。句末接字，無被取代原文。
+    - S-3 D-3 `forecast_replay` V26-01 子點：方向：補定義（兩面）：放寬面是重放預測不再因取得時間而一律證據不足；收緊面是新增欄位與寫入驗證。插入，無被取代原文。
+    - S-4 D-9 第 7 點 V26-01 子點、N-53 子點「預驗證」句末〔v0.26 註〕、D-1 表 `errors.py` 一列句末：方向：補定義（兩面）：收緊面是預驗證範圍、型別與 AST；放寬面是〔v0.26 註〕使預驗證函式的輸入多了快照中不晚於 T 的列（仍不讀 T 之後的任何 bar、報酬或結果）。CEO：依附 V26-01 的明確同意。插入與句末接字，無被取代原文。
+    - S-5 FL-69 (l)：方向：收緊（測試）。CEO：否。插入，無被取代原文。
+    - S-5a D-3 `forecast_input_series` 快照保留欄位與 `content_sha256`：方向：補定義（收緊：保留原始欄位）。`content_sha256` 計算式被取代的原文已在原處以〔v0.26 取代〕逐字錄存；保留欄位一項是插入，無被取代原文。
+    - S-5b D-3 `forecast_replay_index_check` snapshot 的取數一句：方向：補定義（收緊：閘門 (b) 的前提）。兩句之間插入，無被取代原文。取數路徑另案（N-82）。
+    - S-5c gate 的 (5)、`gate_json`：方向：收緊（執行閘門）；單獨看 CEO：否，併在 V26-01 的明確同意內。「(1)～(4)」一句被取代的原文已在原處以〔v0.26 取代〕逐字錄存；(5) 與 `gate_json` 一句是插入與句末接字，無被取代原文。
+    - S-5e D-9 第 7 點 V26-01 子點「與閘門 (c) 第 (5) 項的關係」：方向：不變（明寫位置）。插入，無被取代原文。
+    - S-5f FL-69 (d) 與 (l10)～(l19)：方向：收緊（測試）。CEO：否。(d) 被取代的原文已在原處以〔v0.26 取代〕逐字錄存；其餘插入。
+  - V26-02（CEO：知悉，另標者除外）：
+    - S-6 `close_unusable` 形狀：方向：補定義（收緊）。P(T+h) 一格是 tech-architect 補上既有路徑（FL-69 (f)）原本沒有的合法寫法，方向：補定義（不變）。句末接字，無被取代原文。
+    - S-7 寫入驗證 `index_bar_confirmed_erroneous` 一項：方向：補定義（收緊）。被取代的原文已在原處以〔v0.26 取代〕逐字錄存。
+    - S-8 `diag_last_close` 四種情形與 P(T) 收盤不可用時的 null 驗證：方向：補定義（收緊）。首行與 (ii) 被取代的原文已在原處以〔v0.26 取代〕逐字錄存；(iv) 與新驗證是插入，無被取代原文。
+    - S-9 D-9 第 7 點 N-61 擋點〔v0.26 已決〕、S-10 D-3 首次登記的同批條件：方向：不變（揭露）。CEO：否。句末接字，無被取代原文。
+    - S-11 FL-69 (m) 與 (k7)〔v0.26 註〕：方向：收緊（測試）。CEO：否。插入與句末接字，無被取代原文。
+  - V26-03（CEO：依附 V26-03 的明確同意）：
+    - S-12 D-9 第 7 點 V26-03 子點：方向：補定義（兩面）。FL-69 (n)：收緊（測試），CEO：否。插入，無被取代原文。
+  - V26-04（CEO：依附 V26-04 的明確同意，另標者除外）：
+    - S-13 D-3 `forecast_replay_outcome` 首句：方向：補定義（收緊）。被取代的原文已在原處以〔v0.26 取代〕逐字錄存。
+    - S-14 D-9 第 7 點 V26-04 子點（含 S-17 不外流、S-18 寫鎖與排程窗、S-20 ADR-0029）、N-53 子點「寫入端」句末〔v0.26 已決〕與「不得」一項句間〔v0.26 註〕：方向：補定義（兩面）。插入、句末與句間接字，無被取代原文。
+    - S-15 D-3 `forecast_replay_execution_log` 新表與 `forecast_replay` 的 `replay_execution_seq`：方向：補定義（收緊：新增持久化與寫入驗證）。CEO：表數知悉（第 19 項）。插入，無被取代原文。表數三處的被取代原文——
+      > - 表數多（22 張），寫入規則有一部分在 trigger 裡。
+      > - 22 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+      > 新增 17 張表（第九、十批加
+      改為：評估摘要與 Consequences 的「22 張」改為「23 張」；M-11 的「新增 17 張表」改為「新增 18 張表」；在 `plan_coverage_log` 之後加「；V26-04 加 `forecast_replay_execution_log`」。編輯註記：本段之前各批次條目引用的表數是當時的原文，不改。
+    - S-16 D-10 第 3 點：方向：補定義（收緊：轉值的位置）。句末接字，無被取代原文。
+    - S-19 FL-69 (o)：方向：收緊（測試）。CEO：否。(k5)〔v0.26 註〕：方向：補定義（兩面）：字面的「沒有接住本例外的 except」改讀為「只有最外層一處，而且一定再拋出」（放寬面），(o12) 以 AST 檢查這一處（收緊面）；CEO：依附 V26-04 的明確同意。插入與句末接字，無被取代原文。
+  - 共同：S-21 待決事項 CEO 第 18、19 項：方向：不變（揭露）。插入，無被取代原文。S-22 本段；v0.25 同步批段三處句末加〔已決〕，原文不改，無被取代原文。
+- 照實並陳：
+  - V26-01：重放預測端讀到的數值可能含快照的事後修訂，方向不定〔推論〕；重放的 `inputs_max_recorded_at` 記快照的取得時間，晚於 cutoff(T)，只是事實紀錄。
+  - V26-01 第 (5) 項：Yahoo 對 `^TWII` 的實際時間戳記慣例〔未查證〕（決策包 #49）；慣例不合時重放延後到另行登記為止；(5) 擋不住局部平移與數值錯置〔推論〕。
+  - V26-02：這類列沒有 `diag_last_close`；重放只有一份快照，同一根 bar 在重放中一定作廢，作廢數可能比前瞻多〔推論〕。
+  - V26-03：第 0 相位的 W 放回的列約少 h 倍，比「全部作廢列都放回」的讀法不嚴（放寬面）。
+  - V26-04：(乙) 類中止不消耗唯一的一次重放（放寬面）；commit 之前以除錯工具讀取記憶體，或在重放執行函式之外以快照自行計算，都擋不住〔推論〕；排程窗不涵蓋啟動補跑與 on-demand 寫入；主 DB 的 journal mode〔未查證〕。
+- 待決事項與同批規則：
+  - 整批須等決策包 #50（V26-01、V26-03、V26-04 已於 2026-10-23 經 CEO 明確同意；待決事項 CEO 第 18 項）；V26-02 與其餘各項都不先行。與事先宣告 v0.26 同一個 commit，不適用相鄰 commit 寬限。
+  - 落檔後的閘門：後續追蹤清單 N-61、N-62、N-73、N-74（含原 N-75）不再擋重放執行閘門 (d)；(d) 仍以事先宣告 §4.7 閘門 (1)～(5) 成立為前提；閘門 (b) 另以 N-82 取數路徑定案與實作、決策包 #49 實測完成為前提（D-3 snapshot V26-01 一句），其他擋 (d) 的事項不變。
+  - 不在本批：前瞻 P(T) 收盤確認有誤而作廢的列，`diag_last_close` 的起點（後續追蹤清單 N-80；tech-architect 同步起草 N-80 段）；Yahoo 對 `^TWII` 實際時間戳記慣例的實測（決策包 #49，後續追蹤清單 N-83）、重放快照取數路徑的方案與落實（N-82；coordinator 2026-10-23 暫定方案 A，CEO 可推翻），以及方案 A 所需的 ADR-0005 I-3 解釋性註記（tech-architect 起草、送風控，CEO 知悉）；前兩者擋執行閘門 (b)，採方案 A 時該註記也要在 (b) 之前落檔。
