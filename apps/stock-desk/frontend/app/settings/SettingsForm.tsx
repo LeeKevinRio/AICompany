@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ApiError } from "../lib/api";
+import { parseRequiredNumbers, unplacedFieldErrors } from "../lib/formErrors";
 import { useUpdateSettings } from "../lib/queries";
 import { capWidening, resolveWideningSubmitForFields, type CapWidening } from "../lib/riskWidening";
 import type { AlertSettings, CostModelSettings, RiskBudgetSettings, SettingsResponse } from "../lib/types";
@@ -187,6 +188,11 @@ const ALERT_SETTINGS_FIELDS: FieldSpec<Omit<AlertSettings, "enabled" | "notify_w
 
 type FormValues = Record<string, string>;
 
+/** Bare field names the backend's 422 `loc` can name and this form renders. */
+const PLACED_ERROR_KEYS = [...RISK_BUDGET_FIELDS, ...COST_FIELDS, ...ALERT_SETTINGS_FIELDS].map((field) =>
+  String(field.key),
+);
+
 function toFormValues(
   riskBudget: RiskBudgetSettings,
   costModel: CostModelSettings,
@@ -274,6 +280,14 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
   const [pendingWidenings, setPendingWidenings] = useState<Partial<Record<string, CapWidening>>>({});
   const mutation = useUpdateSettings();
   const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
+  const unplaced = unplacedFieldErrors(fieldErrors, PLACED_ERROR_KEYS);
+  /** Blank or non-numeric entries caught before submit, keyed like `values`. */
+  const [inputErrors, setInputErrors] = useState<Partial<Record<string, string>>>({});
+
+  function updateValue(key: string, value: string) {
+    setValues((prev) => ({ ...prev, [key]: value }));
+    setInputErrors((prev) => ({ ...prev, [key]: undefined }));
+  }
 
   /** The raise `field`'s current form value would write, or `null` for none. */
   function fieldWidening(field: keyof RiskBudgetSettings): CapWidening | null {
@@ -282,6 +296,22 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // A cleared field must not be sent as `Number("")`'s 0: a zero fee, tax or
+    // cooldown is a legal value the backend would accept and report as saved.
+    const parsed = parseRequiredNumbers(values);
+    if (Object.keys(parsed.errors).length > 0) {
+      setInputErrors(parsed.errors);
+      setPendingWidenings({});
+      // The previous save's outcome belongs to a request this submit replaced.
+      mutation.reset();
+      return;
+    }
+    const number = (key: string): number => {
+      const value = parsed.values[key];
+      // Every key of `values` was parsed above; a miss is a wiring bug.
+      if (value === undefined) throw new Error(`settings field ${key} was not parsed`);
+      return value;
+    };
     // Re-derived here, at submit time, per field, and compared with whatever
     // that field's confirmation panel is showing: editing a cap after
     // confirming it must re-open that field's confirmation with the new
@@ -300,11 +330,11 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
     setPendingWidenings({});
     const riskBudget = {} as RiskBudgetSettings;
     for (const field of RISK_BUDGET_FIELDS) {
-      riskBudget[field.key] = Number(values[`risk_budget.${String(field.key)}`]);
+      riskBudget[field.key] = number(`risk_budget.${String(field.key)}`);
     }
     const costModelPartial = {} as Omit<CostModelSettings, "verified_on">;
     for (const field of COST_FIELDS) {
-      costModelPartial[field.key] = Number(values[`cost_model.${String(field.key)}`]);
+      costModelPartial[field.key] = number(`cost_model.${String(field.key)}`);
     }
     const costModel: CostModelSettings = {
       ...costModelPartial,
@@ -312,7 +342,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
     };
     const alertsPartial = {} as Omit<AlertSettings, "enabled" | "notify_webhooks">;
     for (const field of ALERT_SETTINGS_FIELDS) {
-      alertsPartial[field.key] = Number(values[`alerts.${String(field.key)}`]);
+      alertsPartial[field.key] = number(`alerts.${String(field.key)}`);
     }
     const alerts: AlertSettings = {
       ...alertsPartial,
@@ -338,8 +368,8 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
                 id={key}
                 spec={field as FieldSpec<never>}
                 value={values[key] ?? ""}
-                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
-                error={fieldErrors[String(field.key)]}
+                onChange={(v) => updateValue(key, v)}
+                error={inputErrors[key] ?? fieldErrors[String(field.key)]}
               />
             );
           })}
@@ -370,8 +400,8 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
                 id={key}
                 spec={field as FieldSpec<never>}
                 value={values[key] ?? ""}
-                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
-                error={fieldErrors[String(field.key)]}
+                onChange={(v) => updateValue(key, v)}
+                error={inputErrors[key] ?? fieldErrors[String(field.key)]}
               />
             );
           })}
@@ -389,8 +419,8 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
                 id={key}
                 spec={field as FieldSpec<never>}
                 value={values[key] ?? ""}
-                onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
-                error={fieldErrors[String(field.key)]}
+                onChange={(v) => updateValue(key, v)}
+                error={inputErrors[key] ?? fieldErrors[String(field.key)]}
               />
             );
           })}
@@ -455,9 +485,19 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
               ? "我了解，仍要放寬並儲存"
               : "儲存設定"}
         </button>
-        {mutation.isError && Object.keys(fieldErrors).length === 0 && (
+        {Object.values(inputErrors).some(Boolean) && (
           <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-            儲存失敗：{mutation.error instanceof ApiError ? mutation.error.message : "未知錯誤"}
+            尚未儲存：有欄位空白或不是數字，請依欄位下方提示修正。
+          </p>
+        )}
+        {mutation.isError && (Object.keys(fieldErrors).length === 0 || unplaced.length > 0) && (
+          <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+            儲存失敗：
+            {unplaced.length > 0
+              ? unplaced.join(" ")
+              : mutation.error instanceof ApiError
+                ? mutation.error.message
+                : "未知錯誤"}
           </p>
         )}
         {mutation.isSuccess && (
