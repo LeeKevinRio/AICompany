@@ -436,7 +436,8 @@ class TestCacheFirst:
         service = equity_service(
             primary=primary,
             cache=cache,
-            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
+            # 17:00 New York: the 01-02 session has closed, so its bar is final.
+            clock=lambda: datetime(2024, 1, 2, 22, 0, tzinfo=UTC),
             cache_first=True,
         )
 
@@ -469,7 +470,8 @@ class TestCacheFirst:
         service = equity_service(
             primary=primary,
             cache=cache,
-            clock=lambda: datetime(2024, 1, 2, 12, 0, tzinfo=UTC),
+            # 17:00 New York: the 01-02 session has closed, so its bar is final.
+            clock=lambda: datetime(2024, 1, 2, 22, 0, tzinfo=UTC),
             cache_first=True,
         )
 
@@ -975,3 +977,55 @@ def test_a_never_fetched_series_whose_sources_fail_is_not_retried_inside_the_coo
     now["at"] = datetime(2024, 1, 3, 9, 30, tzinfo=UTC)  # cooldown over: try again
     service.get_daily_bars("2330", "TW", START, END)
     assert primary.call_count == 2
+
+
+# --- an unfinished session's bar is never cached ---------------------------------
+
+
+def test_a_bar_for_a_session_still_trading_is_dropped_and_not_cached(tmp_path: Path) -> None:
+    """Tue 10:00 Taipei: a source that answers mid-session (yfinance) hands back a
+    bar for today whose close is the 10:00 price. It must not reach the cache, or
+    it is served as Tuesday's close once the publish cutoff passes."""
+    cache = PriceBarCache(db_path=tmp_path / "cache.db")
+    monday, tuesday = date(2024, 1, 1), date(2024, 1, 2)
+    primary = _StubProvider(
+        source_id="twse", bars=[_tw_bar("2330", monday), _tw_bar("2330", tuesday)]
+    )
+    service = equity_service(
+        primary=primary, cache=cache, clock=lambda: datetime(2024, 1, 2, 2, 0, tzinfo=UTC)
+    )
+
+    result = service.get_daily_bars("2330", "TW", START, END)
+
+    assert [bar.date for bar in result.bars] == [monday]
+    cached = cache.get("2330", "TW", START, END, now=datetime(2024, 1, 2, 2, 0, tzinfo=UTC))
+    assert cached is not None and [bar.date for bar in cached.bars] == [monday]
+
+
+def test_a_bar_for_a_closed_session_is_kept_before_the_publish_cutoff(tmp_path: Path) -> None:
+    # Tue 14:00 Taipei: the session closed at 13:30, so an early-published
+    # close is final even though the 15:00 cutoff has not passed.
+    primary = _StubProvider(source_id="twse", bars=[_tw_bar("2330", date(2024, 1, 2))])
+    service = equity_service(
+        primary=primary,
+        cache=PriceBarCache(db_path=tmp_path / "cache.db"),
+        clock=lambda: datetime(2024, 1, 2, 6, 0, tzinfo=UTC),
+    )
+
+    result = service.get_daily_bars("2330", "TW", START, END)
+
+    assert [bar.date for bar in result.bars] == [date(2024, 1, 2)]
+
+
+def test_a_rung_left_with_only_an_unfinished_bar_declines(tmp_path: Path) -> None:
+    primary = _StubProvider(source_id="yfinance", bars=[_tw_bar("2330", date(2024, 1, 2))])
+    service = equity_service(
+        primary=primary,
+        cache=PriceBarCache(db_path=tmp_path / "cache.db"),
+        clock=lambda: datetime(2024, 1, 2, 2, 0, tzinfo=UTC),
+    )
+
+    result = service.get_daily_bars("2330", "TW", START, END)
+
+    assert result.bars == []
+    assert result.status is DataStatus.UNAVAILABLE
