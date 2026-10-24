@@ -326,7 +326,7 @@ class MarketDataService:
         #: Every live rung the currency gate refused on this call (D-2 (1)).
         refusals: list[Rejection] = []
         for provider, status in providers:
-            result, reason = self._try_provider(provider, symbol, fetch_start, end)
+            result, reason = self._try_provider(provider, symbol, market, fetch_start, end)
             if result is None:
                 if reason is not None:
                     reasons.append(reason)
@@ -884,7 +884,7 @@ class MarketDataService:
         )
 
     def _try_provider(
-        self, provider: MarketDataProvider, symbol: str, start: date, end: date
+        self, provider: MarketDataProvider, symbol: str, market: Market, start: date, end: date
     ) -> tuple[ProviderResult | None, str | None]:
         """Call one provider, returning ``(usable result, degradation reason)``.
 
@@ -907,6 +907,15 @@ class MarketDataService:
             "unexpected provider error" tag (higher signal than the INFO line
             above), while still degrading to the next layer rather than taking
             the whole service down.
+
+        Bars dated after the market's latest *closed* session are dropped
+        before anything else sees them. A source queried while the session is
+        still trading (yfinance does this) returns a bar for today whose
+        "close" is the latest trade; cached, it would be served as that day's
+        close once the publish cutoff passes, and nothing would ever replace
+        it before the next session. The test is the session close, not the
+        publish cutoff, so a final close published early is kept. A result
+        left with no bars is a declined rung like any other empty answer.
         """
         provider_label = getattr(provider, "source_id", provider.__class__.__name__)
         try:
@@ -918,6 +927,7 @@ class MarketDataService:
                 symbol,
             )
             return None, UNEXPECTED_ERROR_REASON.format(provider=provider_label)
+        result = self._without_unfinished_session(result, market, provider_label)
         if result.status is DataStatus.UNAVAILABLE or not result.bars:
             logger.info(
                 "provider %s returned no usable data (status=%s) for %s; degrading to next layer",
@@ -927,6 +937,24 @@ class MarketDataService:
             )
             return None, result.reason
         return result, None
+
+    def _without_unfinished_session(
+        self, result: ProviderResult, market: Market, provider_label: str
+    ) -> ProviderResult:
+        """``result`` minus any bar dated after the latest closed session."""
+        latest = policy_for(market).latest_closed_session(self._clock())
+        kept = [bar for bar in result.bars if bar.date <= latest]
+        if len(kept) == len(result.bars):
+            return result
+        logger.info(
+            "provider %s returned %d bar(s) after the latest closed session %s for %s; "
+            "dropped as unfinished",
+            provider_label,
+            len(result.bars) - len(kept),
+            latest,
+            market,
+        )
+        return result.model_copy(update={"bars": kept})
 
     def _fall_back_to_cache(
         self,

@@ -59,6 +59,20 @@ def test_the_cutoff_is_read_on_the_exchange_clock_not_utc() -> None:
     assert US_POLICY.latest_completed_session(moment) == date(2026, 9, 7)  # Monday
 
 
+def test_a_session_counts_as_closed_from_the_close_not_the_publish_cutoff() -> None:
+    # Tuesday 2026-09-08: still trading at 13:29, closed at 13:30 -- earlier
+    # than the 15:00 publish cutoff, so an early-published close is kept.
+    assert TW_POLICY.latest_closed_session(_taipei(2026, 9, 8, 13, 29)) == date(2026, 9, 7)
+    assert TW_POLICY.latest_closed_session(_taipei(2026, 9, 8, 13, 30)) == date(2026, 9, 8)
+    assert TW_POLICY.latest_closed_session(_taipei(2026, 9, 12, 10)) == date(2026, 9, 11)
+    assert US_POLICY.latest_closed_session(datetime(2026, 9, 8, 15, 59, tzinfo=_NY)) == date(
+        2026, 9, 7
+    )
+    assert US_POLICY.latest_closed_session(datetime(2026, 9, 8, 16, 0, tzinfo=_NY)) == date(
+        2026, 9, 8
+    )
+
+
 def test_policies_per_market() -> None:
     assert policy_for("TW") is TW_POLICY and policy_for("US") is US_POLICY
     # The US cooldown is a full day on purpose (Alpha Vantage 25 req/day).
@@ -70,7 +84,10 @@ def test_policies_per_market() -> None:
 
 
 _POLICY = SessionFreshnessPolicy(
-    timezone="Asia/Taipei", publish_cutoff=time(15, 0), recheck_cooldown=timedelta(hours=1)
+    timezone="Asia/Taipei",
+    publish_cutoff=time(15, 0),
+    recheck_cooldown=timedelta(hours=1),
+    session_close=time(13, 30),
 )
 
 

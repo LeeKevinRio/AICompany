@@ -70,6 +70,11 @@ class SessionFreshnessPolicy:
     publish_cutoff: time
     #: Minimum gap between two live checks that both find nothing newer.
     recheck_cooldown: timedelta
+    #: Local wall time the regular session ends. Before it, a bar dated today
+    #: is still trading and its "close" is only the latest trade
+    #: (:meth:`latest_closed_session`). Exchange trading hours, not a measured
+    #: parameter.
+    session_close: time
 
     def is_within_cooldown(self, now: datetime, at: datetime) -> bool:
         """``True`` while ``at`` is in the past and less than ``recheck_cooldown`` ago.
@@ -85,6 +90,21 @@ class SessionFreshnessPolicy:
         local = now.astimezone(ZoneInfo(self.timezone))
         day = local.date()
         if local.time() < self.publish_cutoff:
+            day -= timedelta(days=1)
+        return _previous_weekday_or_same(day)
+
+    def latest_closed_session(self, now: datetime) -> date:
+        """The most recent weekday whose regular session has ended.
+
+        Earlier than :meth:`latest_completed_session` on purpose: between the
+        session close and the (assumed, conservatively late) publish cutoff a
+        bar dated today may already be the final close, as an early TWSE
+        publication shows (ADR-0009 修訂 2026-09-15). Only a bar dated after
+        this day is certainly unfinished.
+        """
+        local = now.astimezone(ZoneInfo(self.timezone))
+        day = local.date()
+        if local.time() < self.session_close:
             day -= timedelta(days=1)
         return _previous_weekday_or_same(day)
 
@@ -107,7 +127,10 @@ def _previous_weekday_or_same(day: date) -> date:
 #: time is not verified here (no egress), 15:00 is the safe-side assumption.
 #: No quota pressure on TW (ADR-0005), so a short cooldown is affordable.
 TW_POLICY = SessionFreshnessPolicy(
-    timezone="Asia/Taipei", publish_cutoff=time(15, 0), recheck_cooldown=timedelta(hours=1)
+    timezone="Asia/Taipei",
+    publish_cutoff=time(15, 0),
+    recheck_cooldown=timedelta(hours=1),
+    session_close=time(13, 30),
 )
 
 #: US close is 16:00 New York; end-of-day data is usually complete by the
@@ -118,6 +141,7 @@ US_POLICY = SessionFreshnessPolicy(
     timezone="America/New_York",
     publish_cutoff=time(18, 0),
     recheck_cooldown=timedelta(hours=24),
+    session_close=time(16, 0),
 )
 
 _BY_MARKET: dict[Market, SessionFreshnessPolicy] = {"TW": TW_POLICY, "US": US_POLICY}

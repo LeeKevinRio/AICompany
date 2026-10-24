@@ -413,7 +413,13 @@ def test_a_card_with_a_bar_date_always_carries_a_measured_session_gap(
     the endpoint's ``date.today()`` and the service's clock, so layer 0's
     session judgement and the request window agree).
     """
-    clock_now = datetime(today.year, today.month, today.day, 12, tzinfo=UTC)
+    # After each market's own close: 12:00 UTC is 20:00 Taipei but only 08:00
+    # New York, where a bar dated ``today`` would be an unfinished session the
+    # service drops before caching (High-5). 23:00 UTC is 19:00 New York in
+    # summer and 18:00 in winter -- past the close and the publish cutoff both.
+    clock_now = datetime(
+        today.year, today.month, today.day, 12 if market == "TW" else 23, tzinfo=UTC
+    )
 
     def clock() -> datetime:
         return clock_now
@@ -486,6 +492,45 @@ def test_a_card_with_a_bar_date_always_carries_a_measured_session_gap(
     if today.weekday() >= 5 and lag_days == 0:
         # A weekend has no session of its own: the Friday bar is not behind.
         assert gap == 0
+
+
+def test_a_card_whose_unfinished_bar_was_dropped_still_carries_a_measured_session_gap(
+    api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L-10j on the path High-5 added (風控 2026-10-24 required): pre-open, a live
+    source hands back a bar for a session that has not traded yet; the service
+    drops it, and the card falls back to the previous session's bar. That card is
+    still dated, so its gap must still be measured, never ``null``. **If this
+    goes red, take it back to risk-compliance rather than adjusting the
+    assertion.**"""
+    today = date(2026, 10, 7)  # Wednesday
+    clock_now = datetime(2026, 10, 7, 12, tzinfo=UTC)  # 08:00 New York, pre-open
+
+    def clock() -> datetime:
+        return clock_now
+
+    monkeypatch.setattr(advice_module, "date", _fixed_date(today))
+    bars = [
+        bar
+        for bar in recent_bars(trending_closes(200), symbol="AAPL", market="US", end=today)
+        if bar.date.weekday() < 5
+    ]
+    assert bars[-1].date == today  # the source does hand back the unfinished bar
+    service = equity_service(
+        primary=_CannedProvider(bars, clock),
+        cache=api_harness.bar_cache,
+        clock=clock,
+        cache_first=True,
+    )
+    app.dependency_overrides[get_market_resolver] = lambda: {"US": service}
+
+    body = api_harness.client.get("/api/advice/AAPL", params={"market": "US"}).json()
+
+    assert body["advice"] is not None
+    assert body["data"]["last_bar_date"] == "2026-10-06"  # Tuesday, the last closed session
+    gap = body["data"]["trading_days_behind"]
+    assert isinstance(gap, int) and not isinstance(gap, bool)
+    assert gap >= 0
 
 
 def test_advice_uses_the_stored_risk_budget(api_harness: ApiHarness) -> None:
