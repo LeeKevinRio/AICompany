@@ -298,10 +298,18 @@
 
     `checked_values_sha256` 與 `target_values_sha256` ＝ 以 `canonical_bar_values` 輸出、序列化為 JSON 陣列（`separators=(",", ":")`，UTF-8）後的 sha256。這是既有「正規化」的明文，NaN 依此比較，不做浮點比較（風控 C43）。
 
-    `replay_index_bars` 快照的 `content_sha256` 計算方式（v0.26，V26-01）：每列取 `canonical_bar_values`，再接 `as_of`、`fetched_at`（ISO8601 原樣字串）、`raw_timestamp` 與 `response_seq`（下一子點），各列以其序列化字串排序成 JSON 陣列；`response_meta_json` 依 `response_seq` 排序；兩者組成 `{"responses": …, "rows": …}`，以 `sort_keys=True`、`separators=(",", ":")`、UTF-8 序列化後取 sha256。〔v0.26 取代（V26-01）：原寫「`replay_index_bars` 快照的 `content_sha256` 計算方式：每列取 `canonical_bar_values` 再接 `as_of`、`fetched_at`（ISO8601 原樣字串），各列以其序列化字串排序，整體序列化成 JSON 陣列後取 sha256。」〕每個 registration 只有一份快照，見 `forecast_replay_index_check`。
+    `replay_index_bars` 快照的 `content_sha256` 計算方式（v0.26，V26-01）：每列取 `canonical_bar_values`，再接 `as_of`、`fetched_at`（ISO8601 原樣字串）、`raw_timestamp` 與 `response_seq`（下一子點），各列以其序列化字串排序成 JSON 陣列；`response_meta_json` 依 `response_seq` 排序；兩者組成 `{"responses": …, "rows": …}`，以 `sort_keys=True`、`separators=(",", ":")`、UTF-8 序列化後取 sha256。〔v0.26 取代（V26-01）：原寫「`replay_index_bars` 快照的 `content_sha256` 計算方式：每列取 `canonical_bar_values` 再接 `as_of`、`fetched_at`（ISO8601 原樣字串），各列以其序列化字串排序，整體序列化成 JSON 陣列後取 sha256。」〕（N-97）`raw_timestamp` 依 D-3「重放快照保留的原始欄位」的「型別保留」序列化；`response_meta_json` 每一項的 `null_gap_rows` 隨該項納入 `responses`，項內各元素以其序列化字串排序。每個 registration 只有一份快照，見 `forecast_replay_index_check`。
   - （v0.26，V26-01；事先宣告 §4.7「單一快照」v0.26 註、執行閘門 (c) 第 (5) 項；後續追蹤清單 N-81；tech-architect 2026-10-23）**重放快照保留的原始欄位**（只限 `series_kind = replay_index_bars`）：
-    - 每列另存 `raw_timestamp`：該 bar 在來源回應 `timestamp` 陣列中的原值（整數照存；不是整數時照原樣存，缺漏為 null），以及 `response_seq`：該列所屬回應的序號（同一份快照自 1 起）。
-    - `forecast_input_series` 另加欄位 `response_meta_json`：只在 `replay_index_bars` 列非 null，為 JSON 陣列，每一項恰為 `{response_seq, exchange_timezone_name, gmtoffset}`，分別取該回應 `meta.exchangeTimezoneName`、`meta.gmtoffset` 的原值；欄位缺漏時為 null，不拒絕寫入，由閘門 (c) 第 (5) 項判定。其他 `series_kind` 的列為 null（寫入驗證）。
+    - 每列另存 `raw_timestamp`：該 bar 在來源回應 `timestamp` 陣列中的原值（整數照存；不是整數時照原樣存，缺漏為 null；〔N-97 註：取數路徑對時間戳記缺漏或無法換算為日期的位置整次失敗（下文「取數的位置分類」），所以本路徑寫入的列不會是 null；本句原文不改〕），以及 `response_seq`：該列所屬回應的序號（同一份快照自 1 起）。
+    - `forecast_input_series` 另加欄位 `response_meta_json`：只在 `replay_index_bars` 列非 null，為 JSON 陣列，每一項恰為 `{response_seq, exchange_timezone_name, gmtoffset, null_gap_rows}`〔N-97 取代：原寫「每一項恰為 `{response_seq, exchange_timezone_name, gmtoffset}`」；`null_gap_rows` 見下「取數的位置分類」〕，分別取該回應 `meta.exchangeTimezoneName`、`meta.gmtoffset` 的原值；欄位缺漏時為 null，不拒絕寫入，由閘門 (c) 第 (5) 項判定。其他 `series_kind` 的列為 null（寫入驗證）。
+    - （N-97；後續追蹤清單 N-97；ADR-0005 I-3 解釋性註記「失敗時 fail-closed」「adapter 一側」；tech-architect 2026-10-24）**取數的位置分類**：來源回應 `timestamp` 陣列的每一個位置分成三類，只在 adapter 一處判定：
+      - 畸形：`timestamp` 與 open、high、low、close、volume 五個陣列長度不一致（陣列缺漏或為 null 視同長度 0）；時間戳記為 null 或布林；時間戳記無法轉成整數（以 Python `int()` 判定：JSON 數字 `1704157200.5` 讀成十進位數後截斷可轉，不是畸形，照原值保留、由 gate (5a) 判定；字串 `"1704157200.5"` 不可轉，是畸形），或無法換算為日期；非 null 的價量值無法轉成數值（open、high、low、close 以十進位型別轉換，`NaN`、`Infinity` 可轉、不是畸形，依 `canonical_bar_values` 與事先宣告 §6.3 X1 處理；volume 以整數轉換，非有限值不可轉，是畸形）。任一位置畸形，整次取數失敗（ADR-0005 I-3 解釋性註記的「回應無法解析」），不論該位置的日期是否在 [S, E] 內；依 D-3 `forecast_replay_index_check` snapshot 寫 `fetch_failed` 列，可以再取。
+      - 缺口：時間戳記可換算為日期、日期在 [S, E] 內，而且五個價量值至少一個是 null。缺口不是快照的列，記入該回應的 `null_gap_rows`：JSON 陣列，每一項恰為 `{raw_timestamp, session_date, null_fields}`；`raw_timestamp` 為原值，`session_date` 由與列相同的單一推導取得，`null_fields` 為值是 null 的欄位名稱，依 open、high、low、close、volume 的順序。沒有缺口時為空陣列，不是 null（寫入驗證）。
+      - 列：其餘日期在 [S, E] 內的位置。日期在 [S, E] 外的位置，除了畸形之外都不存。
+      - 缺口數列入事先宣告 §4.7 揭露；揭露項由 quant 列入事先宣告，使用者面文案逐字交 creative-lead 起草、送風控。
+    - （N-97）**單一請求**：每次取數只發一個請求，`response_seq` 恆為 1；請求區間為 [S − 1 日, E + 1 日]（日曆日），列與缺口只依推導的 `session_date` 留下 [S, E] 內者。`RateLimitedClient` 內建的傳輸層重試屬於同一個請求。改為多個請求或改變請求區間的規則，須修訂本點，並在閘門 (b) 之前落檔；`response_seq` 與 `response_meta_json` 的陣列形狀不變。
+    - （N-97）**型別保留**：`raw_timestamp`（列與 `null_gap_rows` 皆同）與 `gmtoffset` 寫入時保留來源 JSON 的型別：JSON 整數字面存成 JSON 整數；帶小數點或指數的數字字面，以原字面存成 JSON 數字；字串存成 JSON 字串。讀取時，帶小數點或指數的數字字面以十進位型別解析，不得轉成整數或二進位浮點數。同一位置分別為 `1704182400`、`1704182400.0`、`"1704182400"` 時，`content_sha256` 兩兩不同。
+    - （N-97）**`as_of` 與 `fetched_at`**：每列的 `as_of` 取取數函式回傳的 `as_of`（呼叫開始時的 UTC 時刻）；`fetched_at` 取該列所屬回應的 `received_at`（該回應成功返回後立即讀取的 UTC 時刻）。寫入驗證：每列 `as_of` ≤ `fetched_at` ≤ 同一個呼叫寫入的 snapshot 列的 `recorded_at`（以時刻比較）。兩欄在重放中只記事實，不是 PIT 證明（D-3 `forecast_replay`「取得時間欄位只記事實」）。
     - `canonical_bar_values` 不變：它也是 `checked_values_sha256`、`target_values_sha256` 的輸入，原始欄位不進入這兩個雜湊。
     - bar 的 `session_date` 照取得當下的推導存入；存入之後不依 `raw_timestamp` 或 `response_meta_json` 重算或改寫（事先宣告同點）。
     - 這些欄位只供閘門 (c) 第 (5) 項的檢查（D-3 `forecast_replay_index_check` gate 的 (5)）與 §4.7 揭露讀取；預測端、結算端與 `replay_input_digest` 都不讀（AST）。
@@ -657,7 +665,7 @@
   - **snapshot**：`fetch_outcome ∈ {stored, fetch_failed}`。`stored` 列帶 `snapshot_sha256`（指向 `forecast_input_series`，`series_kind = replay_index_bars`）、`snapshot_range_json = {start: S, end: E}`、`bar_count`；`fetch_failed` 列的 `snapshot_sha256` 為 null，`detail_json` 帶例外類別。
     - `UNIQUE(registration_id) WHERE entry_kind = 'snapshot' AND fetch_outcome = 'stored'`：只有一份，存入後不得重新下載（事先宣告 V16-03）。
     - 取數函式取得回應後，在同一個呼叫內寫入 `forecast_input_series` 與 `stored` 列，中間不得有其他讀取或判斷，也不得先檢視內容再決定是否寫入。（v0.26，V26-01）取數函式在同一個呼叫內取得每根 bar 的原始時間戳記與每份回應的 `meta.exchangeTimezoneName`、`meta.gmtoffset`，照原值存入（D-3「重放快照保留的原始欄位」）；快照只取自來源的即時回應，不取自 `price_bars_cache` 或任何快取（本快照不在 D-4 第 8 點 `CACHE_BAR_CONSUMERS` 內）。現行 `PriceBar` 與 `ProviderResult` 不帶這些欄位，取數路徑另案定案（後續追蹤清單 N-82）；定案並實作之前，不得進行執行閘門 (b)。Yahoo 對 `^TWII` 實際時間戳記慣例的實測（決策包 #49，後續追蹤清單 N-83）完成之前，同樣不得進行 (b)（事先宣告 §4.7「單一快照」v0.26 註）。取數或寫入失敗時寫 `fetch_failed` 列，之後可以再取。取數嘗試次數列入事先宣告 §4.7 揭露。
-    - 快照只含日期在 [S, E] 內的列。
+    - 快照只含日期在 [S, E] 內的列。（N-97）缺口不是列，記在 `response_meta_json` 的 `null_gap_rows`（D-3「重放快照保留的原始欄位」的「取數的位置分類」）；`bar_count` 只計列。D-3「取數的位置分類」的畸形整次失敗，是上文「不得先檢視內容再決定是否寫入」唯一的例外：只依結構，在任何快照之前登記，不讀任何價量值的大小；屬放寬面，CEO 明確同意（待決事項 CEO 第 21 項）。
   - **detection**：
     - `session_date`；
     - `check_item ∈ {x1_close_unusable, x1_close_involved, x1_non_close, x2_pending, x4}`（X3 不適用）；
@@ -685,13 +693,13 @@
       - (3) 日曆查詢完整、版本一致，而且與 X2 查證一致；
       - (4) 依「與重放結果的關係」的寫入驗證。
       - （v0.26，V26-01；事先宣告 §4.7 執行閘門 (c) 第 (5) 項；後續追蹤清單 N-81；tech-architect 2026-10-23）(5) 快照的日期標示：以 gate 所用的 `stored` 快照（`forecast_input_series` 的列與 `response_meta_json`）與本 registration 最新一輪 `calendar_query` 判定，(5a)～(5e) 都成立：
-        - (5a) 每一列 `raw_timestamp` 都是整數，換算到 `Asia/Taipei` 的時刻全部相同，而且不早於下界、早於上界；
+        - (5a) 每一列 `raw_timestamp` 都是整數（N-97：指存成 JSON 整數者；布林、字串、帶小數點或指數的數字都不是；D-3「型別保留」），換算到 `Asia/Taipei` 的時刻全部相同，而且不早於下界、早於上界；
         - (5b) 每一列的 `session_date` 等於它的 `raw_timestamp` 在 `Asia/Taipei` 的日期；
-        - (5c) `response_meta_json` 的每一項，`exchange_timezone_name` 等於 `"Asia/Taipei"`，`gmtoffset` 等於登記值（整數比較；字串或其他型別視同不成立）；任一項缺漏或為 null 視同不成立；
+        - (5c) `response_meta_json` 的每一項，`exchange_timezone_name` 等於 `"Asia/Taipei"`，`gmtoffset` 等於登記值（整數比較；字串或其他型別視同不成立；N-97：「整數」的定義同 (5a)，`28800.0` 這類帶小數點或指數的數字與布林都不是整數；D-3「型別保留」）；任一項缺漏或為 null 視同不成立；
         - (5d) 沒有 `session_date` 是週日的列；
         - (5e) 令 B 為快照全部列的 `session_date` 集合、C 為最新一輪 `calendar_query` 中 `result = value_obtained` 的 `session_date` 集合（與 `replay_observed_sessions` 同一個來源與輪次）：|B ∩ C| 大於 |(B＋1 日) ∩ C|，也大於 |(B－1 日) ∩ C|，平移以日曆日計。
         - 固定值（時刻下界 08:00、上界 18:00（不含）、`gmtoffset` 28800）凍結在該 registration `definition_version` 的 dirdef，常數名稱由 quant 在凍結版 dirdef 列出；本 ADR 只引用，程式不得另設字面值（AST）。
-        - 檢查函式只有一個，由 `check_replay_gate` 呼叫（名稱暫定 `replay_snapshot_date_labels_ok`）：時刻與日期一律以 `zoneinfo.ZoneInfo("Asia/Taipei")` 換算，不以 `gmtoffset` 換算（`gmtoffset` 只與登記值比較）；輸入只有 `session_date`、`raw_timestamp`、`response_meta_json` 與 C，不讀任何 bar 的 `open`、`high`、`low`、`close`、`volume`，也不讀偵測、查證、確認判定、報酬或標籤（AST、spy）。
+        - 檢查函式只有一個，由 `check_replay_gate` 呼叫（名稱暫定 `replay_snapshot_date_labels_ok`）：時刻與日期一律以 `zoneinfo.ZoneInfo("Asia/Taipei")` 換算，不以 `gmtoffset` 換算（`gmtoffset` 只與登記值比較）；輸入只有 `session_date`、`raw_timestamp`、`response_meta_json` 與 C，不讀任何 bar 的 `open`、`high`、`low`、`close`、`volume`，也不讀偵測、查證、確認判定、報酬或標籤（AST、spy）。（N-97）`response_meta_json` 中只讀 `response_seq`、`exchange_timezone_name` 與 `gmtoffset`，不讀 `null_gap_rows`（AST、spy）。
         - 不成立時照實寫 gate 列（`gate_passed = 0`），不改起訖日，不重新取數（快照存入後不得重新下載，本表 snapshot）；處理方式依事先宣告另行具名登記、送風控，不得在看過快照之後就地改動 (5) 的條件或固定值。
     - 閘門不成立時照實寫列，不改起訖日。
   - **與重放結果的關係**：`forecast_replay` 與 `forecast_replay_outcome` 的每一列都指向同一列 `gate_passed = 1` 的 gate。寫入驗證：該 gate 列的 `check_max` 等於寫入當下同一 registration 最大的 `check_id`（gate 之後沒有新的偵測或查證）；所用快照的 sha256 等於 gate 的 `snapshot_sha256`（閘門 (4)）。
@@ -2801,6 +2809,13 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
       - (l17)（LG-42 (p)）改動全部 bar 的 OHLCV → (5) 的判定與 `gate_json` 的 (5) 檢查值逐位不變；(5) 的檢查函式不讀 bar 的數值（spy、AST），以 `ZoneInfo("Asia/Taipei")` 換算、不以 `gmtoffset` 換算（AST）。
     - (l18) 快照保留欄位：`content_sha256` 隨 `raw_timestamp`、`response_seq` 或 `response_meta_json` 任一值改變而改變；`checked_values_sha256`、`target_values_sha256` 與 `replay_input_digest` 不變；`response_meta_json` 缺 `gmtoffset` 的回應 → 照常寫入（null），由 (l13) 判定；其他 `series_kind` 的列 `response_meta_json` 非 null → 拒絕。
     - (l19) 取數：快照的取數函式不讀 `price_bars_cache` 與任何快取（spy）；取得回應與寫入在同一個呼叫內（同 (i)）。
+    - (l20)（N-97；D-3「取數的位置分類」「單一請求」「型別保留」「`as_of` 與 `fetched_at`」）：
+      - 畸形各一格：毫秒級時間戳記；`10**30`；close 陣列比 `timestamp` 短 1；缺 volume 陣列；close 為字串 `"abc"`；volume 為 `NaN`；時間戳記為字串 `"1704157200.5"`；時間戳記為 null；時間戳記為 `true`；畸形位置的日期在 [S, E] 外；缺口位置的時間戳記為毫秒級 → 寫 `fetch_failed`，不寫 `forecast_input_series`；
+      - [S, E] 內一個全 null 的位置、一個只有 volume 為 null 的位置 → `stored`；兩者都不是列，`bar_count` 不計；`null_gap_rows` 各一項，`null_fields` 分別為五個欄位名稱與 `["volume"]`；推導日期為 S − 1 的缺口不記；沒有缺口的回應 → 空陣列，null → 拒絕；一根 bar 的 close 為 `NaN`（另一格 `Infinity`）、一根 bar 的時間戳記為 JSON 數字 `1704157200.5` → `stored`，都是列，後者的 `raw_timestamp` 讀回為原值、(5a) 不成立；
+      - 改動 `null_gap_rows` 任一值 → `content_sha256` 改變；`replay_input_digest`、`checked_values_sha256`、`target_values_sha256` 與 (5) 的判定、`gate_json` 的 (5) 檢查值都不變；
+      - 二十年的 [S, E] → 恰一個請求，`response_seq` 為 1，請求區間為 [S − 1 日, E + 1 日]；
+      - `raw_timestamp` 分別為 `1704182400`、`1704182400.0`、`"1704182400"`（列一組、缺口一組）→ 寫入後讀回型別不變，`content_sha256` 兩兩不同；列組的後兩格，以及以 fixture 直接構造的布林一格，(5a) 不成立；
+      - `fetched_at` 早於 `as_of`，或晚於 snapshot 列的 `recorded_at` → 拒絕寫入。
   - (m)（v0.26，V26-02；D-3 `forecast_replay_outcome` 的 `close_unusable` 形狀與寫入驗證 V26-02 各項；對應事先宣告 LG-43 (a)～(i)）T 日收盤本身不可用的重放列：fixture 都是大盤重放、閘門成立。
     - (m1)（LG-43 (a)）T 日 bar 的收盤為 NaN（另各一格：≤ 0；同一日兩列、收盤不同），T+h 正常 → T 是決策日，預測端 `E-PRICE-UNUSABLE`；結果列寫入，不拋例外、不被拒寫：`status = unresolvable_missing_data`、`status_reason = index_bar_confirmed_erroneous`、`void_reasons_json` ＝ [`index_bar_confirmed_erroneous`]，`start_price_json` 為 `close_unusable` 形狀，`realized_log_return`、`realized_return`、`realized_z`、`realized_label`、`hit`、`baseline_hits_json`、`mae`、`mfe`、`diag_last_close` 為 null。
     - (m2)（LG-43 (b)(c)）同 (m1)，`threshold_snapshot` 完整 → `diag_last_close` 仍為 null（情形 (iv)）；缺項 → 同樣為 null，(k1) 的七個欄位也為 null。
@@ -3272,6 +3287,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 18. （v0.26，N-61、N-62、N-73、N-74；事先宣告 V26-01～V26-04）**明確同意**：V26-01、V26-03、V26-04 都有放寬面，而且改動本 ADR 的字面。V26-01：重放不以取得時間判定 PIT，改以資料日期界限、快照雜湊與未來函數檢查證明；相對「每一筆重放預測都證據不足、n 恆為 0」的字面，重放預測可以有標籤、計入 n（D-3 `forecast_replay` 與 D-9 第 7 點的 V26-01 子點、D-4 第 3 點）。V26-01 另含執行閘門 (c) 第 (5) 項：資料的日期標示有整段錯一天的跡象（例如時間戳記的時刻不一致，或出現星期日的資料）時不執行重放，另行登記處理；這一部分只讓重放更難執行，是收緊（D-3 `forecast_replay_index_check` gate 的 (5)、`forecast_input_series` 的快照保留欄位）。V26-03：重放的 W 只放回第 0 相位格點上的作廢列，其餘相位只作揭露；相對「不分相位、全部作廢列都放回」的讀法，W 較不嚴（D-9 第 7 點 V26-03 子點）。V26-04：重放的寫入改為全有或全無，只有 commit 成功的那一次算已重放；(乙) 類結果中止不消耗唯一的一次重放（D-9 第 7 點 V26-04 子點、D-3 `forecast_replay_execution_log`、D-10 第 3 點）。CEO 已明確同意（決策包 #50，2026-10-23）；同意之前本批不落檔（風控 2026-10-23 v0.26 逐字確認 (h)）。V26-02（N-61）知悉：P(T) 收盤本身不可用的重放列記作廢，與前瞻對齊（D-3 `forecast_replay_outcome` 的 V26-02 各項）。
 19. （V26-04，知悉）M-11 的表數隨 `forecast_replay_execution_log` 由 17 張改為 18 張，全部表數由 22 張改為 23 張。
 20. （N-64、N-66，知悉）M-11 的表數隨 `forecast_record_attempt`、`forecast_record_attempt_end` 由 18 張改為 20 張，全部表數由 23 張改為 25 張。另請知悉兩項停擺與殘餘：N-64 帳目矛盾時缺日稽核整次不寫、驗證快照停寫，直到查明（比照 N-46）；N-66 的開始列寫不進去時，該次執行仍記 `scheduler_down`。
+21. （N-97；事先宣告 V28-01）**明確同意**：重放快照的取數改依 D-3「取數的位置分類」，有兩個放寬面，而且改動本 ADR D-3 的字面。① 回應中任一位置畸形（時間戳記缺漏、為布林、無法轉成整數或無法換算為日期，陣列長度不一致，或非 null 的價量值無法轉成數值）時，相對事先宣告「照實存成缺漏、由第 (5) 項判定」的字面讀法（存入後 (5a) 必然不成立、不得重新下載），改為整次取數失敗、可以再取；判定只依結構，在任何快照之前登記，是 D-3 snapshot「不得先檢視內容再決定是否寫入」唯一的例外。② 價量有 null 的位置是缺口、不是列：相對「價量有 null 的位置仍是列」的讀法，收盤為 null 的候選 T 不再產生作廢或證據不足的重放結果列，這類筆數可能較少。另一面：來源若持續回傳畸形位置，閘門 (b) 無法完成，重放延後；只有 volume 為 null 的位置也是缺口而不是列，依決策包 #52 第 2 項（CEO 在執行決策包 #49 之前裁定）。CEO 已明確同意（決策包 #52 第 1 項，2026-10-24）；同意之前本批不落檔（風控 2026-10-24 N-97 與 v0.28 批逐字確認）。
 
 **風控**：附件 C 的重送與確認項；FL-30～FL-37 是否完整對應七條底線，請單項核對。
 
@@ -5311,3 +5327,37 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - 本批內部不拆開；A-2 與 B-1～B-5 不得單獨先落檔。
   - 落檔後的閘門：`audit.py` 的多 run `reason` 判定、`record_start_failed`、記錄一步的開始列與 end 列，依本批字面實作；dev-lead 查證（後續追蹤清單 N-86）回覆 tech-architect 之前不實作。
   - 不在本批：新登記 claim 的缺日義務從哪一日開始（後續追蹤清單 N-84；在已有 `forecast_run` 的觀察日登記新的前瞻 claim 之前必須定案）；失效條件 F-3 缺日率的計數單位（N-85）。
+
+---
+
+**N-97 重放快照取數的位置分類批（後續追蹤清單 N-97、N-98；D-3、FL-69、待決事項；方向：逐項標示，見各項）**
+- 來源與套用範圍：
+  - tech-architect 2026-10-24 裁定：`work/reviews/2026-10-24-N82設計裁量點裁定-tech-architect.md` 第 1、2、3、5 點；同日修訂起草：`work/reviews/2026-10-24-N97重放快照位置分類ADR修訂起草-tech-architect.md` 第二節。
+  - 依據：ADR-0005 I-3 解釋性註記「失敗時 fail-closed」「adapter 一側」；qa-reviewer `work/reviews/2026-10-24-N82方案A程式審查-qa-reviewer.md` M-1、M-2；後續追蹤清單 N-98（qa-reviewer `work/reviews/2026-10-24-N82修改後複審-qa-reviewer.md` N-1、N-3 與「與 N97 起草的字面一致性」），併入 N97-1、N97-3、N97-10。
+  - 風控逐字確認：`work/reviews/2026-10-24-N97與v0.28批逐字確認-風控.md`。風控改字之處以風控為準。
+  - CEO：N97-1 明確同意（決策包 #52 第 1 項，2026-10-24；待決事項 CEO 第 21 項；風控認定放寬面 ①② 需明確同意）；只有 volume 為 null 的位置維持是缺口，依決策包 #52 第 2 項的裁定（在決策包 #49 執行之前）；同意之前本批不落檔；其餘否。
+  - 與事先宣告同步改字（quant 具名）同一個 commit，不適用相鄰 commit 寬限。
+- 逐項（被取代的原文：判準同 v0.25 同步批段；凡已在原處逐字錄存者，不重錄）：
+  - N97-1 D-3「取數的位置分類」：方向：補定義（兩面）：收緊面是畸形位置整次失敗、缺口不再靜默略過而留存並揭露；放寬面 ①：相對於事先宣告「照實存成缺漏、由第 (5) 項判定」的字面讀法（照該讀法，沒有日期的位置要另開一種列型存入，(5a) 必然不成立，存入之後不得重新下載），時間戳記缺漏或無法換算的位置改為取數失敗、可以再取；② 相對於「價量有 null 的位置仍是列」的讀法（`canonical_bar_values` 的缺值為 null），收盤為 null 的候選 T 不再產生作廢或證據不足的重放結果列（事先宣告 V28-01 方向欄 ②）。CEO：明確同意（第 21 項；決策包 #52 第 1 項）。插入，無被取代原文。
+  - N97-2 D-3「單一請求」：方向：補定義（收緊：固定取數程序）。CEO：否。插入，無被取代原文。
+  - N97-3 D-3「型別保留」與 gate (5a)、(5c) 的整數定義（(5c) 依風控 2026-10-24 N-97 與 v0.28 批逐字確認補）：方向：補定義（收緊：嚴格讀法）。CEO：否。插入與句中接字，無被取代原文。
+  - N97-4 D-3「`as_of` 與 `fetched_at`」：方向：補定義（收緊：新增寫入驗證）。CEO：否。插入，無被取代原文。
+  - N97-5 D-3 `replay_index_bars` 快照的 `content_sha256` 一段：方向：補定義（收緊：缺口納入雜湊）。CEO：否。句間插入，無被取代原文。
+  - N97-6 D-3 `response_meta_json` 每一項的鍵：方向：補定義（收緊）。CEO：否。被取代的原文已在原處逐字錄存。
+  - N97-7 D-3 `raw_timestamp`「缺漏為 null」句中註記：方向：不變（照實並陳）。CEO：否。句中接字，無被取代原文。
+  - N97-8 D-3 snapshot「快照只含日期在 [S, E] 內的列」句末：方向：不變（明寫列與 `bar_count` 的範圍；另明寫畸形整次失敗是「不得先檢視內容再決定是否寫入」唯一的例外，例外本身的方向見 N97-1）。CEO：否。句末接字，無被取代原文。
+  - N97-9 gate (5) 檢查函式的輸入句末：方向：不變（明寫：不讀缺口；甲案）。CEO：否。句末接字，無被取代原文。
+  - N97-10 FL-69 (l20)：方向：收緊（測試）。CEO：否。插入，無被取代原文。
+  - N97-11 待決事項 CEO 第 21 項：方向：不變（揭露）。插入，無被取代原文。
+  - N97-12 本段。
+- 照實並陳：
+  - 來源若持續回傳畸形位置，取數一直失敗，閘門 (b) 無法完成，重放延後〔推論〕；每次嘗試都留 `fetch_failed` 列，列入事先宣告 §4.7 揭露。
+  - 畸形整次失敗之後可以再取，等於允許以「能否解析」為條件重新下載。這個條件只依結構，在任何快照之前登記，不讀任何價量值；但重取會取得較晚的來源版本〔推論〕。
+  - 只有 volume 為 null、OHLC 完整的位置也不進入快照的列，預測端與結算端在該日看到的是「有觀察日、沒有 bar」〔推論〕。這是 CEO 在執行決策包 #49 之前的裁定（決策包 #52 第 2 項），不依 #49 的結果決定；#49 執行之後要改，視同看過資料後改規則，依事先宣告文首「規則變更流程」、送風控並經 CEO 明確同意，改動晚於 #49 照實揭露。
+  - 單一請求擋不住 Yahoo 對長區間的截斷或降頻〔未查證，決策包 #49 第一題〕；不成立時依 N97-2 修訂，在閘門 (b) 之前完成。
+  - (5) 不讀缺口（甲案）：缺口的時間戳記若時刻不同，(5) 看不到〔推論〕；由事先宣告 V28-04 (iv) 另以揭露補上，揭露的計算不在 (5) 的檢查函式內。
+  - 「無法轉成整數」以 Python `int()` 判定：JSON 數字 `1704157200.5` 可轉、成為列而由 (5a) 擋下（不得重新下載），字串 `"1704157200.5"` 不可轉、整次失敗而可以再取；兩者結果不同，依結構事先登記〔推論〕。收盤為 `NaN` 的位置是列（X1 處理），收盤為 null 的位置是缺口（不產生紀錄），兩者處理也不同。
+- 待決事項與同批規則：
+  - 本批內部不拆開；與事先宣告同步改字同一個 commit。
+  - 落檔後的閘門：`replay_checks.py` 的快照寫入依本批字面實作，本批落檔前不得實作。閘門 (b) 仍以後續追蹤清單 N-82 其餘各項與決策包 #49 實測完成為前提，本批不放寬。
+  - 不在本批：N-82 其餘各項（台北日期推導、去重、擋盤中半成品 bar）；(5) 是否納入缺口的乙案（風控裁定；採乙案時 N97-9 改用乙案字面，quant 同步 (5)）。
