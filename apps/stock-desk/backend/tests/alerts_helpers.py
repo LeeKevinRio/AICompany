@@ -103,6 +103,7 @@ def snapshot(
     fx_disclosure_without_quote: str | None = None,
     data_disclosure: str | None = None,
     price_cap_cause: str | None = None,
+    as_of: str = "2026-07-25",
 ) -> SymbolSnapshot:
     """A snapshot with only the parts a test needs; the rest stays empty."""
     limits = evaluate_limits(budget or RiskBudget(), context) if context is not None else ()
@@ -113,7 +114,7 @@ def snapshot(
         currency=currency,
         signals=signals or {},
         limits=limits,
-        as_of="2026-07-25",
+        as_of=as_of,
         reason=reason,
         fx_disclosure=fx_disclosure,
         fx_disclosure_without_quote=fx_disclosure_without_quote,

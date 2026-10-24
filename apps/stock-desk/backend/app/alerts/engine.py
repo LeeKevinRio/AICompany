@@ -164,6 +164,13 @@ BAR_AS_OF_NOTE = "上述數值之資料日為 {as_of}。"
 #: nothing may be appended to it, and any change goes back to them.
 UNEVALUATED_LIMITS_NOTE = "本次有 {n} 條上限未評估，未納入判定：{names}。其餘已評估的上限皆未違反。"
 
+#: The ``reason`` on a ``suppressed`` outcome whose observation (same bar date,
+#: same figures) already produced this rule's latest event. It opens by saying
+#: the condition still holds, so "suppressed" is not read as "the risk has
+#: cleared". Wording fixed verbatim by risk-compliance-officer 2026-10-24
+#: (High-4 B-1); any change goes back to them.
+ALREADY_REPORTED_REASON = "此條件仍成立；同一個資料日、同一組數值已發出過警示，本次不重複發出。"
+
 
 @dataclass(frozen=True)
 class _QuietWithReason:
@@ -443,6 +450,16 @@ def evaluate_alerts(
             message = f"{message} {BAR_AS_OF_NOTE.format(as_of=snapshot.as_of)}"
         if snapshot.data_disclosure:
             message = f"{message} {snapshot.data_disclosure}"
+        # Rules are level-triggered and evaluated around the clock on daily
+        # bars, so a condition that holds on Friday's close would otherwise be
+        # re-raised every tick all weekend: the cooldown alone cannot stop it,
+        # because a tick lands just past the cooldown whenever the two are set
+        # to the same length (the defaults). One event per observation.
+        if store.repeats_latest_event(rule.id, bar_as_of=snapshot.as_of, observed=observed):
+            outcomes.append(
+                RuleOutcome(rule_id=rule.id, status="suppressed", reason=ALREADY_REPORTED_REASON)
+            )
+            continue
         if _in_cooldown(store, rule, now=moment, cooldown_minutes=cooldown_minutes):
             outcomes.append(
                 RuleOutcome(
@@ -453,7 +470,11 @@ def evaluate_alerts(
             )
             continue
         event = store.append_event(
-            rule=rule, message=message, observed=observed, triggered_at=moment
+            rule=rule,
+            message=message,
+            observed=observed,
+            triggered_at=moment,
+            bar_as_of=snapshot.as_of,
         )
         events.append(event)
         outcomes.append(RuleOutcome(rule_id=rule.id, status="fired", event=event))
