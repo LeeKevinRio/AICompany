@@ -54,6 +54,12 @@ CREATE TABLE IF NOT EXISTS alert_events (
 )
 """
 
+#: Date of the latest bar the event was evaluated on. Internal: it only lets the
+#: engine tell "the same observation again" from a new one, so it is not part
+#: of :class:`AlertEvent`. Added after the table shipped, hence nullable and
+#: migrated in place (:meth:`AlertStore._migrate_add_bar_as_of_column`).
+_BAR_AS_OF_COLUMN = "bar_as_of"
+
 _CREATE_EVENT_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_alert_events_rule_time
 ON alert_events (rule_id, triggered_at DESC)
@@ -110,7 +116,20 @@ class AlertStore:
             enable_wal(conn)
             conn.execute(_CREATE_RULES_SQL)
             conn.execute(_CREATE_EVENTS_SQL)
+            self._migrate_add_bar_as_of_column(conn)
             conn.execute(_CREATE_EVENT_INDEX_SQL)
+
+    def _migrate_add_bar_as_of_column(self, conn: sqlite3.Connection) -> None:
+        """Add ``bar_as_of`` in place for an ``alert_events`` table created before it.
+
+        ``PRAGMA table_info`` first, since ``ALTER TABLE ... ADD COLUMN`` errors
+        on a column that is already there. Rows written before the column
+        existed keep ``NULL``, which never matches a real bar date, so the first
+        evaluation after an upgrade is not mistaken for a repeat.
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(alert_events)")}
+        if _BAR_AS_OF_COLUMN not in columns:
+            conn.execute(f"ALTER TABLE alert_events ADD COLUMN {_BAR_AS_OF_COLUMN} TEXT")
 
     # --- Rules ---------------------------------------------------------------
 
@@ -205,16 +224,17 @@ class AlertStore:
         message: str,
         observed: dict[str, float | str | None],
         triggered_at: datetime | None = None,
+        bar_as_of: str | None = None,
     ) -> AlertEvent:
-        """Record one firing of ``rule``."""
+        """Record one firing of ``rule``, evaluated on the bar dated ``bar_as_of``."""
         moment = (triggered_at if triggered_at is not None else datetime.now(UTC)).isoformat()
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO alert_events
                     (rule_id, rule_type, symbol, market, message, observed,
-                     triggered_at, acknowledged, acknowledged_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)
+                     triggered_at, acknowledged, acknowledged_at, bar_as_of)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)
                 """,
                 (
                     rule.id,
@@ -224,6 +244,7 @@ class AlertStore:
                     message,
                     json.dumps(observed, ensure_ascii=False),
                     moment,
+                    bar_as_of,
                 ),
             )
             new_id = int(cursor.lastrowid or 0)
@@ -264,6 +285,30 @@ class AlertStore:
         if row is None or row[0] is None:
             return None
         return datetime.fromisoformat(str(row[0]))
+
+    def repeats_latest_event(
+        self, rule_id: int, *, bar_as_of: str | None, observed: dict[str, float | str | None]
+    ) -> bool:
+        """Whether ``rule_id``'s latest event was raised on this bar with these figures.
+
+        ``observed`` is compared in its stored JSON form, so the comparison is
+        exactly "would this event be a copy of the last one". A pre-migration
+        row (``bar_as_of`` NULL) only matches an evaluation that also has no
+        bar date.
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                f"SELECT {_BAR_AS_OF_COLUMN}, observed FROM alert_events WHERE rule_id = ? "
+                "ORDER BY triggered_at DESC, id DESC LIMIT 1",
+                (rule_id,),
+            ).fetchone()
+        if row is None:
+            return False
+        stored_bar_as_of, stored_observed = row
+        return bool(
+            stored_bar_as_of == bar_as_of
+            and stored_observed == json.dumps(observed, ensure_ascii=False)
+        )
 
     def acknowledge(self, event_id: int, *, now: datetime | None = None) -> AlertEvent | None:
         """Mark one event acknowledged; ``None`` if it does not exist."""

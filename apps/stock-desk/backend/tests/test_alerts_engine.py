@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import logging
+import sqlite3
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +22,12 @@ from app.advice.limits import (
     PortfolioContext,
 )
 from app.alerts import engine as engine_module
-from app.alerts.engine import EvaluationResult, SymbolSnapshot, evaluate_alerts
+from app.alerts.engine import (
+    ALREADY_REPORTED_REASON,
+    EvaluationResult,
+    SymbolSnapshot,
+    evaluate_alerts,
+)
 from app.alerts.store import AlertStore
 from app.positions.models import Market
 from app.services.fx import source_note
@@ -38,6 +45,7 @@ from tests.alerts_helpers import (
 )
 
 _NOW = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
+_NEXT_BAR = "2026-07-28"
 
 
 @pytest.fixture
@@ -80,8 +88,12 @@ def test_a_fired_message_carries_the_data_layers_own_sentence(store: AlertStore)
     assert result.events[0].message.endswith(spliced)
     # 風控 R4-a: the bar date comes right before it, so "最新收盤價" is dated.
     assert "上述數值之資料日為 2026-07-25。 " + spliced in result.events[0].message
-    # Fires again after the cooldown, on a snapshot without a sentence: nothing is invented.
-    later = evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW + timedelta(hours=2))
+    # Fires again on the next bar, on a snapshot without a sentence: nothing is invented.
+    later = evaluate_alerts(
+        store,
+        _loader(snapshot(close=120.0, as_of=_NEXT_BAR)),
+        now=_NOW + timedelta(days=1),
+    )
     assert spliced not in later.events[0].message
 
 
@@ -768,18 +780,95 @@ def test_cooldown_suppresses_a_repeat_within_the_window(store: AlertStore) -> No
 
 def test_cooldown_expires_and_the_rule_fires_again(store: AlertStore) -> None:
     add_rule(store, price_rule(threshold=100.0))
-    loader = _loader(snapshot(close=120.0))
-    evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW)
-    later = evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW + timedelta(minutes=90))
+    evaluate_alerts(store, _loader(snapshot(close=120.0)), cooldown_minutes=60, now=_NOW)
+    later = evaluate_alerts(
+        store,
+        _loader(snapshot(close=120.0, as_of=_NEXT_BAR)),
+        cooldown_minutes=60,
+        now=_NOW + timedelta(minutes=90),
+    )
     assert len(later.events) == 1
 
 
 def test_zero_cooldown_disables_suppression(store: AlertStore) -> None:
     add_rule(store, price_rule(threshold=100.0))
-    loader = _loader(snapshot(close=120.0))
-    evaluate_alerts(store, loader, cooldown_minutes=0, now=_NOW)
-    again = evaluate_alerts(store, loader, cooldown_minutes=0, now=_NOW + timedelta(seconds=1))
+    evaluate_alerts(store, _loader(snapshot(close=120.0)), cooldown_minutes=0, now=_NOW)
+    again = evaluate_alerts(
+        store,
+        _loader(snapshot(close=121.0)),
+        cooldown_minutes=0,
+        now=_NOW + timedelta(seconds=1),
+    )
     assert len(again.events) == 1
+
+
+def test_the_same_bar_is_not_reported_again_however_long_it_stays_latest(
+    store: AlertStore,
+) -> None:
+    # Friday's close crosses the threshold and stays the latest bar all weekend.
+    # With the default 60-minute interval and cooldown, every tick lands just
+    # past the cooldown; only one event may come of it.
+    add_rule(store, price_rule(threshold=100.0))
+    loader = _loader(snapshot(close=120.0))
+    first = evaluate_alerts(store, loader, cooldown_minutes=60, now=_NOW)
+    assert len(first.events) == 1
+    for hours in range(1, 61):
+        tick = evaluate_alerts(
+            store, loader, cooldown_minutes=60, now=_NOW + timedelta(hours=hours, seconds=1)
+        )
+        assert tick.events == []
+        assert _statuses(tick) == ["suppressed"]
+        assert tick.outcomes[0].reason == ALREADY_REPORTED_REASON
+    assert len(store.list_events()) == 1
+
+
+def test_a_new_bar_still_crossing_is_reported_once_more(store: AlertStore) -> None:
+    add_rule(store, price_rule(threshold=100.0))
+    evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW)
+    next_day = evaluate_alerts(
+        store, _loader(snapshot(close=120.0, as_of=_NEXT_BAR)), now=_NOW + timedelta(days=1)
+    )
+    assert len(next_day.events) == 1
+
+
+def test_changed_figures_on_the_same_bar_are_reported(store: AlertStore) -> None:
+    # A cached bar replaced by the final one (or an edited threshold) is a new
+    # observation, not a repeat.
+    add_rule(store, price_rule(threshold=100.0))
+    evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW)
+    revised = evaluate_alerts(store, _loader(snapshot(close=125.0)), now=_NOW + timedelta(hours=2))
+    assert len(revised.events) == 1
+
+
+def test_an_event_table_from_before_the_bar_date_column_is_migrated(tmp_path: Path) -> None:
+    db = tmp_path / "old.db"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(
+            """
+            CREATE TABLE alert_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER NOT NULL,
+                rule_type TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                message TEXT NOT NULL,
+                observed TEXT NOT NULL,
+                triggered_at TEXT NOT NULL,
+                acknowledged INTEGER NOT NULL DEFAULT 0,
+                acknowledged_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO alert_events (rule_id, rule_type, symbol, market, message, observed,"
+            " triggered_at) VALUES (1, 'price_above', '2330', 'TW', 'm', '{}', ?)",
+            (_NOW.isoformat(),),
+        )
+    store = AlertStore(db_path=db)
+    add_rule(store, price_rule(threshold=100.0))
+    # The pre-migration row has no bar date, so it is not taken for a repeat.
+    result = evaluate_alerts(store, _loader(snapshot(close=120.0)), now=_NOW + timedelta(hours=2))
+    assert len(result.events) == 1
 
 
 def test_one_snapshot_is_loaded_per_symbol_however_many_rules_watch_it(
