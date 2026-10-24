@@ -86,7 +86,7 @@
 - 第一筆前瞻紀錄被六道閘門（G-1～G-6；on-demand 依 G-7 同樣適用）延後。
 - B 型會讓尚未驗證的展望最長顯示到 n＝150（大盤 5 日約 3.1 年，見 quant §4.9），全程掛「驗證中」或「未驗證」。
 - 價位口徑若改成還原序列（M-9），畫面價位會和券商的未還原 K 線不一致，而且每次除權息都會整組平移。
-- 表數多（23 張），寫入規則有一部分在 trigger 裡。
+- 表數多（25 張），寫入規則有一部分在 trigger 裡。
 
 ---
 
@@ -199,7 +199,7 @@
 | **M-8** | D-1〔`:179`〕；D-2.2〔`:193-198`〕 | `outlook.features → data(load_bars／index)`；大盤輸入含廣度 | 接線改為 `outlook.features → outlook.inputs →`（個股、族群成員）`data.market_panel.MarketPanelReader` 唯讀，或（大盤）`services.index` 並擷取輸入；不得經過 `load_bars`／`price_bars_cache`。D-2.2 加解讀註記：所列輸入是允許的上限，v1 大盤只用指數日線；加入廣度要開新的 `rules_version`（新 claim，m＋1） | R-107 第 8 點；quant §10 D-14 |
 | **M-9** | D-5.7〔`:371`〕 | 價位用未還原收盤，跨除息日標 `spans_ex_date` | **可單獨核可**，見 D-6 | R-110 |
 | **M-10** | F-2〔`:580`〕 | 連續兩個評估期都是 `not_better_than_baseline` 就重新設計或下架 | 改寫，見 D-12（主方案 B 型，替代方案 A 型） | C-8；風控立場 |
-| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 18 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`；V15-04 加 `plan_coverage_log`；V26-04 加 `forecast_replay_execution_log`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
+| **M-11** | D-6.1 表清單〔`:376-381`〕；F-3〔`:581`〕 | 五張表；F-3 只寫「暫停顯示，查明」 | 新增 20 張表（第九、十批加 `forecast_correction_job`、`forecast_correction_job_end`；剩餘待決項 N-4 加 `forecast_void_late_diag`；v0.14 V14-01 加 `forecast_settle_eval`；C-22 加 `forecast_index_check`；N-24 加 `forecast_gap_audit`；N-22c 加 `forecast_replay_index_check`、`forecast_replay_outcome`；V15-04 加 `plan_coverage_log`；V26-04 加 `forecast_replay_execution_log`；N-66 加 `forecast_record_attempt`、`forecast_record_attempt_end`）並取欄位聯集（D-3）；`forecast_outcome.status` 三值不變，另加 `status_reason`；F-3 補上分母、恢復條件與 PIT 違規處理（D-11.6） | R-106、R-112、R-113；風控第 9 項 |
 
 **M-4 細項**
 - (a) **基準採聯集**：
@@ -280,6 +280,16 @@
   - 不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W 或任何判定。`refused_scopes_json`、`error_class` 只有 `audit.py`（D-8 第 2 點）與稽核工具可以讀；`views`、API route 與匯出不讀（AST）。
 - `forecast_scope_snapshot(run_id, scope_kind, scope_key, market, reason ∈ {market, sector, holding, watchlist, queried})`：**不含成本與股數**（AV-9）。
   - （r2，A-29）`forecast_run` 與 `forecast_scope_snapshot`：在同一個交易內寫入（A-25）。
+- （N-66；tech-architect 2026-10-23）`forecast_record_attempt(attempt_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at)` 與 `forecast_record_attempt_end(attempt_id PK, outcome ∈ {run_written, inputs_not_ready, error_before_run}, candidate_t NULL, run_id NULL, error_class NULL, ended_at)`：排程記錄一步每一次執行的開始與結束（下稱「記錄一步嘗試」），比照 `forecast_run`／`forecast_run_end`。兩張都只增不改（D-2 第 2 點）。沒有 end 列就代表記錄一步在寫入 `forecast_run` 之前中斷。
+  - **開始列**：排程記錄一步的第一個寫入，以獨立交易寫入，在讀取市場 DB 與判定候選 T 之前。每一次排程記錄一步恰好一列；on-demand（D-7 第 8 點）不寫。`started_at` 由 store 時鐘填入（D-2 第 3 點）。開始列寫入失敗時，例外往外拋，記錄一步依 D-7 第 2 點標為失敗，不寫 end。
+  - **end 列**，依 `outcome`：
+    - `run_written`：與 A-25 的 `forecast_run`、`forecast_scope_snapshot` 在同一個交易內寫入；`run_id` 為該 run，`candidate_t` ＝ 該 run 的 `data_as_of`，`error_class` 為 null。每一個 `trigger = scheduled` 的 `forecast_run` 恰好對到一列 `run_written`。
+    - `inputs_not_ready`：候選 T 依 D-7 第 3 點記為 `inputs_not_ready` 時，以獨立交易寫入；`candidate_t` 為該候選 T，`run_id`、`error_class` 為 null。這是「記 `inputs_not_ready`」唯一的持久化處（D-8 第 2 點）。寫入失敗時，例外往外拋，記錄一步依 D-7 第 2 點標為失敗。
+    - `error_before_run`：開始列之後、A-25 交易 commit 之前拋出 `Exception` 時，依 D-7 第 7 點 N-66 子點以獨立交易盡力寫入；`candidate_t` 為已判定的候選 T，尚未判定時為 null；`run_id` 為 null；`error_class` 的規則同 `forecast_run_end.error_class`。
+  - **寫入者**：只有 `recorder.py` 的記錄一步（AST 列舉呼叫點）。
+  - **寫入驗證**（任一項不成立就拒絕寫入）：end 的 `attempt_id` 指向已存在的開始列；`outcome = run_written` ⇔ `run_id` 非 null，而且該 run 的 `trigger = scheduled`、`data_as_of = candidate_t`；`outcome = inputs_not_ready` ⇒ `candidate_t` 非 null；`error_class` 非 null ⇔ `outcome = error_before_run`。`forecast_run` 的寫入另加驗證：`trigger = scheduled` ⇒ 同一交易內恰好寫入一列指向它的 `run_written`。
+  - **用途限制**：不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W 或任何判定，只用於 D-8 第 2 點的 `reason`。只有 `audit.py` 與稽核工具可以讀；`views`、API route、匯出、`app.ops_alert.*` 與編排函式不讀（AST）。告警不以這兩張表為來源，也不據以做跨執行的判斷（ADR-0029 失效條件 1）。
+  - **與重放的區分**（v0.26）：重放執行函式不寫也不讀這兩張表；重放 (d) 的嘗試紀錄只在 D-3 `forecast_replay_execution_log`，這兩張表也不記重放。「記錄一步嘗試」只指這兩張表的列，與 D-9 第 7 點 V26-04 子點的「嘗試紀錄」不同指。
 - `forecast_input_series(series_id, content_sha256 UNIQUE, source, source_status, bars_json, captured_at)`：用於大盤與結算路徑，以內容雜湊去重。
   - （r2，A-29）`forecast_input_series`：加 `series_kind ∈ {index_bars, basket_log_returns, replay_index_bars}`（A-34；`replay_index_bars` 依事先宣告 V16-03，只由 `replay_checks.py` 寫入，前瞻路徑不得讀它）。
   - （tech-architect 2026-10-18；事先宣告 V16-03）**重放快照與 bar 值的正規化**：單一純函式 `canonical_bar_values(row)` 定義如下：
@@ -741,6 +751,15 @@
   - **存放處的選擇**：不寫 `forecast_replay_index_check`：新增列會改變同一 registration 最大的 `check_id`，使 gate 的 `check_max` 驗證不成立；改 `check_max` 的定義則是改閘門 (4) 的判定。不寫 `forecast_ledger_events`：重放的紀錄不寫該表（D-3 `forecast_replay_index_check` 首段、D-9 第 7 點），也避免進入 `E_CHANGING_EVENTS` 的讀取範圍。不寫 `forecast_run_end`：只有記錄一步可以寫入。所以另立一表，表數見 M-11。
   - **用途限制**：不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W、m 或任何判定。只有重放執行函式（經 `store.py`）可以寫入；只有 `validation.py` 的 §4.7 揭露（事先宣告同點第 6 點；該登記有過嘗試而始終沒有 commit 時同樣列出，事先宣告同點第 4 點）與稽核工具可以讀；`views`、API route 與匯出不讀（AST）。本表不得有任何結果欄位或預測端欄位（schema 測試：欄位集合恰為上列）。
 - `forecast_gaps(gap_id, session, claim_id, scope_key, reason, detected_at, run_id NULL, UNIQUE(session, claim_id, scope_key))`：`scope_key = '*'` 代表整個 claim。
+  - （N-64、N-66；tech-architect 2026-10-23）**新增欄位**：
+    - `attempt_id NULL`：D-8 第 2 點 N-64、N-66 子點第 4 項的決定嘗試（D-3 `forecast_record_attempt`）；其餘為 null。
+    - `basis_json NOT NULL`：該列也適用、但不是決定者的其他 S 的 run 與記錄一步嘗試（定義同 D-8 第 2 點 N-64、N-66 子點）。JSON 陣列，每一項恰為 `{kind, id, reason_alone}`：`kind ∈ {run, attempt}`；`id` 是 `run_id` 或 `attempt_id`；`reason_alone` 是只看該項、依同子點第 3 項或第 4 項會得的值。依 (`kind`, `id`) 排序、不重複；沒有時為 `[]`。已為該範圍寫入紀錄（含 `late=1`）的 run 不列入。`kind = attempt` 的項對 S 的每一列都適用，含逐範圍的列；`kind = run` 的項只對範圍快照含該範圍的列適用。非決定者的 run 符合第 3 項帳目矛盾的條件時，同樣依第 3 項處理。第 1、2 項成立的列，列出全部適用的 run 與記錄一步嘗試。
+  - **寫入者**：只有 `audit.py` 的缺日稽核函式（AST 列舉呼叫點），`reason`、`run_id`、`attempt_id`、`basis_json` 由同一次判定自行填入，不接受呼叫端傳入。
+  - **寫入驗證**（任一項不成立，整個稽核交易都不寫入，記 WARNING；比照 `forecast_gap_audit`）：
+    - `run_id` 非 null ⇔ `reason ∈ {job_error, write_rejected, record_error, timeout}`；`attempt_id` 非 null ⇔ `reason ∈ {inputs_not_ready, record_start_failed}`；
+    - `scope_key = '*'` ⇔ 該 `session` 沒有任何 S 的 run；
+    - 在本交易內依 D-8 第 2 點 N-64、N-66 子點重算一次：`reason`、`run_id`、`attempt_id`、`basis_json` 都等於重算的值。
+  - **用途限制**：`attempt_id`、`basis_json` 不屬於 `E_CHANGING_EVENTS`，不影響 E、n、W 或任何判定。只有 `audit.py`、`validation.py` 的缺日揭露（事先宣告 §6.3「缺日」）與稽核工具可以讀；`views`、API route、匯出與 `app.ops_alert.*` 不讀（AST）。
 - **`forecast_gap_audit`**（N-24；tech-architect 2026-10-18；落實風控 2026-10-18 C-22 確認 N24-1「揭露判定進度」）：每次成功的缺日稽核（D-8 第 2 點）一列，記下該次稽核的判定上界。只增不改（D-2 第 2 點）。
   - **欄位**：
     - `audit_id INTEGER PRIMARY KEY AUTOINCREMENT`；
@@ -1016,6 +1035,11 @@
        - `refused_violations`：各拒寫範圍 `violations` 的聯集，依 D-3 封閉列舉的順序排列、不重複；
        - `failed`：`scopes_refused > 0` 或 `run_outcome = timeout` 時為真，其餘為假。`inputs_not_ready` 不算失敗（ADR-0029 E-3d）。
        `failed` 為真時，編排函式發 E-3d 一則（`step = record`，`exception_class` 為 None），不論拒寫幾個範圍。`forecast record run:` INFO 行的記錄一步部分，帶 `run_outcome`、三個計數與 `refused_violations`，不帶 `scope_key`、代號或 label；範圍明細只在 `refused_scopes_json`。
+   - （N-66；tech-architect 2026-10-23）**記錄一步的前置段**（寫入 D-3 `forecast_record_attempt` 開始列之後、A-25 交易 commit 之前，含判定候選 T 與第 3 點的重抓）：
+     - 前置段拋出 `Exception` 時：以獨立交易盡力寫入 `forecast_record_attempt_end`（`outcome = error_before_run`）；再以不帶參數的 `raise` 拋出原例外，由編排函式依第 2 點「步驟隔離」接住，發 ADR-0029 E-3d（`step = record`，`exception_class = type(exc).__name__`），與現行相同，只發這一則。end 寫入本身失敗時，記一行 WARNING，只含兩個例外的類別名稱，仍拋出原例外；該嘗試沒有 end，依 D-8 第 2 點記 `record_start_failed`。`KeyboardInterrupt`、`SystemExit` 等不是 `Exception` 的例外不接（比照 FL-71 (b)）。
+     - 前置段的 `except Exception` 放在與範圍迴圈不同的函式內；本點 N-52 子點與 FL-74 (b)「同一函式恰好一個 `except Exception`」不變。
+     - 候選 T 記為 `inputs_not_ready` 時，寫入 `outcome = inputs_not_ready` 的 end 之後正常返回；`RecordStepResult` 與 ADR-0029 E-3d 的處理不變（`inputs_not_ready` 不算失敗）。
+     - 理由：D-8 第 2 點原本只能以「沒有任何 run」判定，記錄一步在寫入 `forecast_run` 之前失敗或中斷時會被記成 `scheduler_down`；`inputs_not_ready` 也沒有存放處。另一面（照實並陳）：開始列本身寫不進去時（例如主 DB 無法寫入），該次執行仍記 `scheduler_down`，只能由 E-3d 與 log 察覺。
 8. **on-demand**：
    - 個股在排程範圍內、而且 T 日排程紀錄已存在時，直接回傳既有紀錄，不寫入。
    - 否則寫一筆 `trigger=on_demand`，`late` 為 NULL，不計入主統計，畫面要標示「不計入主統計」（PA-4）。
@@ -1193,16 +1217,31 @@
      - **揭露判定進度**：`GET /api/forecast/status` 另回傳 `gap_judged_through`，也就是最近一次成功的缺日稽核已判定的觀察日中最晚的一日；沒有時為 null。由寫入端記錄（存放處由 tech-architect 定），不得由前端或 API 以 `last_gap_audit_at` 推算。`last_gap_audit_at` 不再代表「稽核當日已判定」。TG-b、TG-c 或任何缺日計數若在畫面上呈現，都要讓使用者看得出統計只到 `gap_judged_through`，文案另經 creative-lead 起草、風控審查。〔已決：存放於 D-3 `forecast_gap_audit`（N-24；tech-architect 2026-10-18）〕
      - 殘餘情形：官方日曆在稽核判定之後變動、使 S 的截止線延後時，依 K-12 送風控。
    - `reason` 的判定：
-     - 該日沒有任何 run：`scheduler_down`
+     - 該日沒有任何 run，也沒有該日的記錄一步嘗試（N-66；判定見本點 N-64、N-66 子點）：`scheduler_down`
      - 有 run、沒有 end：`job_error`
      - 只有 late 紀錄：`late_only`
      - 期限到時尚未執行的範圍：`timeout`
-     - 輸入未就緒：`inputs_not_ready`
+     - 輸入未就緒：`inputs_not_ready`（N-66：只依 D-3 `forecast_record_attempt_end` 判定，見本點 N-64、N-66 子點第 4 項）
      - 落在 `forecast_ledger_events.kind=db_restored` 標記的區間：`db_restored`
      - （N-51、N-52；tech-architect 2026-10-21；事先宣告 §6.3「缺日」第 1 點 v0.25 列舉，V25-05）有 run、有 end，而且該範圍列在該 end 的 `refused_scopes_json`：`write_rejected`
      - （N-52；tech-architect 2026-10-21；V25-05）有 run、有 end 而 `outcome = error`，該範圍沒有寫入、也不在 `refused_scopes_json`：`record_error`
-     - （N-51、N-52；V25-05）同一個 run 內，`write_rejected` 先於 `timeout`、`record_error` 判定：逾時或中止的 run 裡，先前被拒寫的範圍記 `write_rejected`，其餘沒有寫入的範圍依 `outcome` 記 `timeout` 或 `record_error`。這兩個值的缺日列，`run_id` 填該 run；一個範圍被拒寫或中止時，該範圍的每一個 claim 都記同一個 `reason`。拒寫的事實只依 `forecast_run_end.refused_scopes_json` 判定，不得以 log、告警或 `forecast_record` 是否存在推定；end 沒有寫入時依「有 run、沒有 end」記 `job_error`。`reason` 的封閉列舉因此共八值，與事先宣告 §6.3「缺日」第 1 點 v0.25 列舉相同：`scheduler_down`、`inputs_not_ready`、`timeout`、`job_error`、`late_only`、`db_restored`、`write_rejected`、`record_error`。
-   - 有範圍快照時，逐 scope 寫列；沒有快照（例如 scheduler 停機）時，寫 `scope_key='*'`。
+     - （N-51、N-52；V25-05）同一個 run 內，`write_rejected` 先於 `timeout`、`record_error` 判定：逾時或中止的 run 裡，先前被拒寫的範圍記 `write_rejected`，其餘沒有寫入的範圍依 `outcome` 記 `timeout` 或 `record_error`。這兩個值的缺日列，`run_id` 填該 run；一個範圍被拒寫或中止時，該範圍的每一個 claim 都記同一個 `reason`。拒寫的事實只依 `forecast_run_end.refused_scopes_json` 判定，不得以 log、告警或 `forecast_record` 是否存在推定；end 沒有寫入時依「有 run、沒有 end」記 `job_error`。`reason` 的封閉列舉因此共九值，與事先宣告 §6.3「缺日」第 1 點（N-66 同批修訂後）列舉相同：`scheduler_down`、`inputs_not_ready`、`timeout`、`job_error`、`late_only`、`db_restored`、`write_rejected`、`record_error`、`record_start_failed`（N-66；各值的判定順序見下方 N-64、N-66 子點）。
+     - （N-64、N-66；tech-architect 2026-10-23）**同一觀察日有多個 run 或記錄一步嘗試時的判定**（本子點優先於上方各項的排列順序；上方各項只描述單一 run 或單一嘗試的狀態）：
+       - **S 的 run**：`trigger = scheduled`、`data_as_of = S` 的 `forecast_run`，取稽核交易內讀到的全部列；22:10、23:10 重試與啟動補跑寫入的都算，不論是否逾時。on-demand 的 run 不算。
+       - **S 的記錄一步嘗試**：D-3 `forecast_record_attempt` 中符合下列任一項的列：(a) 它的 `forecast_record_attempt_end` 為 `outcome ∈ {inputs_not_ready, error_before_run}`，而且 `candidate_t = S`；(b) 沒有 end，或 end 為 `outcome = error_before_run` 而 `candidate_t` 為 null，而且 `started_at` ∈ [P 的 `late_cutoff_at`, S 的 `late_cutoff_at`)。P 是稽核所讀觀察日集合中早於 S 的最晚一日，不存在時不設下界；`late_cutoff_at` 以 D-7.4 的同一個函式計算。end 為 `outcome = run_written` 的嘗試不是記錄一步嘗試，依它寫入的 run 判定。
+       - **缺日列存不存在不受本子點影響**：只依本點首句（沒有 `late=0` 的排程紀錄）；任一 run 已為該範圍寫入 `late=0` 紀錄，該範圍就沒有缺日列。列的集合依本點「有範圍快照時」一項的 N-64 句末。
+       - **`reason` 依下列順序取第一個成立者**：
+         1. S 落在 `db_restored` 標記的區間：`db_restored`；
+         2. 該範圍只有 `late=1` 的排程紀錄：`late_only`；
+         3. 有 S 的 run，其範圍快照含該範圍：取其中 `run_id` 最大的一個（決定 run），只依決定 run 判定：沒有 end → `job_error`；該範圍列在其 end 的 `refused_scopes_json` → `write_rejected`；其 end 的 `outcome = error` → `record_error`；`outcome = timeout` → `timeout`。決定 run 的 end 為 `ok` 或 `partial`、而該範圍不在 `refused_scopes_json` 時，屬帳目矛盾：稽核拋 `GapAuditRunInconsistencyError`（`app/forecast/errors.py`），整個稽核交易 rollback，不寫任何缺日列與 `forecast_gap_audit` 列，依 D-7 第 2 點記 WARNING，發 ADR-0029 E-3d（`step = gap_audit`）；不得改記其他值。claim 的 `registered_at` 晚於決定 run 的 `recorded_at` 時同樣適用本項；缺日義務從哪一日開始另案（後續追蹤清單 N-84）；
+         4. 沒有 S 的 run，而有 S 的記錄一步嘗試：取其中 `attempt_id` 最大的一個（決定嘗試）：end 為 `outcome = inputs_not_ready` → `inputs_not_ready`；沒有 end，或 `outcome = error_before_run` → `record_start_failed`；
+         5. 以上都不成立：`scheduler_down`。
+       - 同一個 run 內 `write_rejected` 先於 `timeout`、`record_error`（上方 N-51、N-52 一項）照舊，是第 3 項在決定 run 內的判定。
+       - **只依持久化的紀錄判定**：`inputs_not_ready`、`record_start_failed` 只依 D-3 `forecast_record_attempt` 與 `forecast_record_attempt_end`；第 3 項只依 `forecast_run`、`forecast_scope_snapshot`、`forecast_run_end`。以上各值不得以 log、告警、`forecast_ledger_events`、`plan_coverage_log`、`forecast_replay_execution_log` 或 job 層事件推定；第 1 項只依本點 `forecast_ledger_events.kind=db_restored` 標記的區間，第 2 項只依排程紀錄的 `late`。
+       - **`forecast_gaps` 的參照欄**：第 3 項的列，`run_id` 填決定 run；第 4 項的列，`attempt_id` 填決定嘗試；其餘為 null。`basis_json` 依 D-3 `forecast_gaps` N-64 子點，列出該列也適用、但不是決定者的其他 S 的 run 與記錄一步嘗試。
+       - 理由：取最後一個，使 `reason` 描述該範圍最後一次嘗試的結果，與 D-3 `plan_coverage_log`「衍生計數」中同一 T 多次作業的取法一致（應有集合取聯集；略過原因取含該標的的最後一次作業）。只在範圍快照含該範圍的 run 中取，之後一次不含該範圍的 run 就蓋不掉它的原因。`db_restored`、`late_only` 是區間與紀錄的事實，不依 run 判定，所以放在前面；`late_only` 先於 run 的原因，與 D-8 第 5 點的渲染及 FL-67 (h)「只有逾時紀錄 → `late_only`」一致。
+       - 另一面（照實並陳）：之後的 run 可以改變一列的 `reason`（例如重開機觸發啟動補跑後再中止，使 `write_rejected` 變成 `record_error` 或 `job_error`），但改變不了列數；被蓋過的原因留在 `basis_json`，依事先宣告 §6.3「缺日」揭露。帳目矛盾時缺日稽核整次不寫，`gap_judged_through` 停止前進，驗證快照依 D-7 第 2 點的前置條件不寫，直到查明（比照 N-46 的停擺代價）。
+   - 有範圍快照時，逐 scope 寫列；沒有快照（例如 scheduler 停機）時，寫 `scope_key='*'`。（N-64；tech-architect 2026-10-23）同一觀察日 S 有多個 S 的 run（定義見上方 N-64、N-66 子點）時，「範圍快照」指全部 S 的 run 的範圍快照的聯集，聯集中每一個沒有 `late=0` 排程紀錄的範圍各寫一列；不得只取最後一個 run 的快照，也不得因之後的 run 不含某個範圍而不寫該範圍的列。沒有任何 S 的 run 時（含只有記錄一步嘗試），寫 `scope_key='*'`。
 3. **`db_restored` 的標記**：整檔還原後，由操作者執行 `python -m app.forecast.ledger_events mark-restored --manifest <path>` 寫入，納入 ADR-0026 D-9.4 的程序（devops-sre）。
 4. **不補造**。缺日不計入 n，但要揭露。
 5. **渲染**：
@@ -2394,7 +2433,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - F2-B 下，尚未證明的展望最長會顯示約 3 年（大盤 5 日）。誠實度依賴「驗證中」直白句，以及風控的版面限制（不得用綠色、勾號、進度條）。
 - M-9 若採 P-1，價位與券商的未還原 K 線不一致，每次除權息都會整組平移；`plan_outcome` 要做換算。
 - **展望鏈與持倉鏈的資料源不同**：展望讀市場 DB，持倉讀 `price_bars_cache`。同一個 T 的原始收盤可能不同，plan 必須檢查一致性（FL-25）。
-- 23 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+- 25 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
 - 主 DB 每年約增加 220 MB〔推論〕。
 - 主機晚上不開機，樣本就不會增加（quant §4.9 的 g）。
 - 規則 YAML 必須把文字欄位與邏輯分開，否則 logic 雜湊無法定義。
@@ -2464,7 +2503,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - **FL-16**（r3，A-74）：`late=1` 與 on-demand 紀錄，永遠不會出現在 `current_outlook`、`plan` 兩類端點；`outlook_refs` 不得指向它們。`record_list` 依 D-11.4 第 11 點；`on_demand` 依 D-7.8 第 8 點與 A-36。
   - `ENDPOINT_SURFACES` 每一項加 `kind ∈ {current_outlook, plan, record_list, on_demand}`，沒有預設值；沒有登記 kind 的 route，測試失敗。
 - **FL-17**：前端非測試檔不得出現 `08:30`、`09:00` 或截止時間的推算（grep）；`{截止時間}` 用 Asia/Taipei 格式化。
-- **FL-18**：每個 run 不是有 `forecast_run_end` 列，就是被稽核成 `job_error`。
+- **FL-18**：每個 run 不是有 `forecast_run_end` 列，就是被稽核成 `job_error`。（N-64）「被稽核成 `job_error`」指：該 run 是某缺日列的決定 run 時，該列記 `job_error`；不是決定 run 時，該 run 出現在該列的 `basis_json`（`reason_alone = job_error`）；該 run 的範圍都已由它或其他 run 寫入、沒有缺日列可記時，不記（D-8 第 2 點 N-64、N-66 子點）。
 - **FL-74**（N-51、N-52；D-7 第 7 點 N-52 子點；D-3 `forecast_run_end`；D-8 第 2 點；ADR-0029 E-3d）：fixture 用離線的假市場 DB、假主 DB 與假的 `app.services.index`；範圍快照有 A、B、C 三個範圍，各有 h＝3、h＝5 兩個 claim。
   - (a) 封閉清單：`recorder.py` 的 `RECORD_SCOPE_REFUSAL_TYPES` 恰好等於 `(LabeledThresholdSnapshotIncompleteError,)`。
   - (b) 例外接在哪裡（AST）：逐範圍的 try 只出現在 `recorder.py` 記錄一步的單一函式內；範圍迴圈內的 except 只指名 `RECORD_SCOPE_REFUSAL_TYPES` 或其成員，沒有 `except Exception`、`except BaseException`、裸 `except:`、`except ForecastFailClosedError`；同一函式恰好一個 `except Exception`，包住整個範圍迴圈、不包住正常路徑的 run_end 寫入，區塊內只呼叫中止用的 run_end 寫入函式，並以不帶參數的 `raise` 結束；中止用的 run_end 寫入函式只有一個 `except Exception`，區塊只記 WARNING、不 `raise`、不呼叫 `str(exc)`／`repr(exc)`；`store.py` 沒有指名 `LabeledThresholdSnapshotIncompleteError` 或 `ForecastFailClosedError` 的 except。
@@ -2477,6 +2516,25 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - (i) 範圍內注入 `KeyboardInterrupt` → 不被記錄一步接住，不寫中止用的 run_end。
   - (j) `forecast_run_end` 寫入驗證：D-3 所列每一項各一格違反 → 拒絕。
   - (k) 全部寫入 → `outcome = ok`，`failed` 為假，E-3d 0 則；`forecast record run:` INFO 行帶記錄一步的 `run_outcome`、三個計數與 `refused_violations`，不含 fixture 的代號、`scope_key` 與 label 哨兵值。
+- **FL-76**（N-64、N-66；D-8 第 2 點 N-64、N-66 子點；D-3 `forecast_gaps` N-64 子點與 `forecast_record_attempt`；D-7 第 7 點 N-66 子點；ADR-0029 E-3d）：fixture 用 FL-74 的離線假市場 DB、假主 DB 與假的 `app.services.index`；各格的範圍快照只含該格列出的範圍，每個範圍各有 h＝3、h＝5 兩個 claim；以假 store 時鐘控制 22:10、23:10 與啟動補跑的時刻；稽核都在 S 的 `late_cutoff_at` 之後執行。各格的 run 都只含尚未寫入的範圍（重試遇到已寫入範圍的處理不在本格範圍）。
+  - (a) 22:10 拒寫、23:10 中止：兩次的範圍快照都只有 B；22:10 B 拋 `LabeledThresholdSnapshotIncompleteError`；23:10 B 拋 `sqlite3.OperationalError` → B 的兩個 claim 各一列 `reason = record_error`，`run_id` 為 23:10 的 run，`basis_json` 恰為一項 `{kind: run, id: 22:10 的 run_id, reason_alone: write_rejected}`。
+  - (b) 之後的 run 不含該範圍：22:10 的範圍快照只有 B，B 被拒寫；23:10 之前把 B 移出自選、加入 A，23:10 的範圍快照只有 A，寫入，`outcome = ok` → B 仍各一列 `reason = write_rejected`，`run_id` 為 22:10 的 run，`basis_json = []`；A 沒有缺日列；缺日列數與沒有 23:10 時相同。
+  - (c) 22:10 沒有 end、23:10 逾時：兩次的範圍快照都是 B、C；22:10 在寫入任何範圍之前程序終止（沒有 end）；23:10 寫入 B 後期限已到 → C 各一列 `reason = timeout`，`run_id` 為 23:10 的 run，`basis_json` 恰為 22:10 的 run 一項（`reason_alone = job_error`）；B 沒有缺日列；FL-18 依其 N-64 句末成立。
+  - (d) 逾時之後只有晚到紀錄：22:10 的範圍快照是 B、C，寫入 B 後期限已到；S 的 `late_cutoff_at` 之後，啟動補跑的範圍快照只有 C，寫入 C（`late=1`）→ C 各一列 `reason = late_only`，`run_id` 為 null，`basis_json` 恰為 22:10 的 run 一項（`reason_alone = timeout`），不含補跑的 run。
+  - (e) 沒有 run、兩次嘗試：22:10 在判定候選 T 之前拋 `sqlite3.OperationalError`；23:10 候選 T ＝ S，依 D-7 第 3 點記 `inputs_not_ready` → 每個 claim 一列 `scope_key = '*'`、`reason = inputs_not_ready`，`attempt_id` 為 23:10 的嘗試，`basis_json` 恰為 22:10 的嘗試一項（`reason_alone = record_start_failed`）；22:10 的 end 為 `outcome = error_before_run`、`error_class = OperationalError`、`candidate_t` 為 null；E-3d 只有 22:10 的一則（`exception_class = OperationalError`）。
+  - (f) 嘗試沒有 end：唯一一次嘗試在寫入開始列之後、判定候選 T 之前注入 `KeyboardInterrupt` → 不被記錄一步接住，沒有 end；稽核 → `record_start_failed`，`attempt_id` 為該次嘗試。
+  - (g) 歸屬窗：沒有 end 的嘗試，`started_at` 早於 P 的 `late_cutoff_at` → 不是 S 的記錄一步嘗試；S 沒有其他 run 或嘗試 → `scheduler_down`，`attempt_id` 為 null，`basis_json = []`。`started_at` 恰等於 S 的 `late_cutoff_at` → 同樣不是 S 的記錄一步嘗試；早 1 微秒 → 是，記 `record_start_failed`。
+  - (h) 沒有任何 run 與嘗試 → `scheduler_down`，`run_id`、`attempt_id` 為 null。
+  - (i) 開始列寫不進去：讓開始列的寫入拋例外 → 沒有任何 `forecast_record_attempt` 列；例外到達編排函式，E-3d 一則（`step = record`）；稽核 → `scheduler_down`。
+  - (j) end 寫不進去：(e) 的 22:10 再讓 `error_before_run` 的 end 寫入拋例外 → E-3d 的 `exception_class` 仍為 `OperationalError`；WARNING 一行，只含兩個例外的類別名稱，fixture 例外訊息的哨兵字串不出現；該嘗試沒有 end，`basis_json` 中該項的 `reason_alone` 仍為 `record_start_failed`。單獨一次嘗試、`inputs_not_ready` 的 end 寫入拋例外 → 例外往外拋，E-3d 一則；稽核 → `record_start_failed`。
+  - (k) 帳目矛盾：以直接 SQL 插入（繞過 store 的寫入驗證）造出 end 為 `ok`、範圍快照含 C、而 C 沒有紀錄的 run → `GapAuditRunInconsistencyError`；沒有新的 `forecast_gaps` 與 `forecast_gap_audit` 列，`gap_judged_through` 不前進；E-3d 一則（`step = gap_audit`）。
+  - (l) `db_restored` 優先：S 落在 `db_restored` 標記的區間，22:10 的範圍快照是 B、C，寫入 B 後期限已到 → C 各一列 `reason = db_restored`，`run_id` 為 null，`basis_json` 恰為 22:10 的 run 一項（`reason_alone = timeout`）。
+  - (m) FL-63 的「交易日 10:00 啟動」fixture，之後沒有其他 run 與嘗試 → D 的每個 claim 一列 `scope_key = '*'`、`reason = inputs_not_ready`，`attempt_id` 為該次嘗試；該嘗試的 end 為 `outcome = inputs_not_ready`、`candidate_t = D`；E-3d 0 則。
+  - (n) `run_written`：每一個 `trigger = scheduled` 的 `forecast_run` 恰好對到一列 `outcome = run_written` 的 end，兩者在同一個交易內寫入（spy）；`forecast_run` 寫入成功而 end 的寫入被注入失敗 → 兩者都不留；on-demand 的 POST 不寫 `forecast_record_attempt`。
+  - (o) 寫入驗證：D-3 `forecast_gaps` N-64 子點與 `forecast_record_attempt` 所列每一項各一格違反 → 拒絕。
+  - (p) AST：`forecast_record_attempt`、`forecast_record_attempt_end` 只有 `recorder.py` 的記錄一步寫入，只有 `audit.py` 與稽核工具讀取；`views.py`、API route、匯出、`app/ops_alert/**` 與重放執行函式不讀，重放執行函式也不寫。`forecast_gaps` 的 `attempt_id`、`basis_json` 只有 `audit.py`、`validation.py` 與稽核工具讀取。記錄一步前置段的 `except Exception` 與範圍迴圈的 `except Exception` 不在同一個函式內；FL-74 (b) 照舊成立。
+  - (q) 嘗試與 run 並存：22:10 在判定候選 T 之前拋 `sqlite3.OperationalError`；23:10 的範圍快照只有 B，B 被拒寫 → B 各一列 `reason = write_rejected`，`run_id` 為 23:10 的 run，`basis_json` 恰為 22:10 的嘗試一項（`reason_alone = record_start_failed`）。
+  - (r) 非決定 run 的帳目矛盾：同 (a)，但以直接 SQL 插入（繞過 store 的寫入驗證）把 22:10 的 end 造成 `ok` → 結果同 (k)。
 - **FL-61**（r3 新，A-75）：
   - (a) **定案邊界**：TW 的 `final_after(T)` 是 15:00:00（ADR-0028 VS-4，CS-17）。
     - `as_of` 14:59:58、`fetched_at` 15:00:01 → `is_final_bar` 為 False（取兩者中較早的）；
@@ -3213,6 +3271,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 17. （v0.25，N-53、N-63；事先宣告 V25-01、V25-06）**明確同意**：兩者都有放寬面，而且改動本 ADR D-3 的字面。V25-01：重放中「證據不足、缺項而且作廢」的列，原本依 D-3 `forecast_replay_outcome` 的寫入驗證會被拒寫，改為記 null 寫入（D-3 `forecast_replay_outcome` N-53 各項、D-9 第 7 點 N-53 子點）。V25-06：σ_d 有效數不足或退化時一律記 null，原本可能因存入殘差級 σ 而被拒寫的退化列改為寫入，作廢率可能因此下降（D-3「適用範圍與缺項」N-63 子點）。CEO 已明確同意（決策包 #48，2026-10-22）；同意之前本批不落檔（風控 2026-10-21 v0.25 逐字確認 (g)）。V25-02～V25-04（N-68）知悉（見修訂紀錄 v0.25 同步批）。
 18. （v0.26，N-61、N-62、N-73、N-74；事先宣告 V26-01～V26-04）**明確同意**：V26-01、V26-03、V26-04 都有放寬面，而且改動本 ADR 的字面。V26-01：重放不以取得時間判定 PIT，改以資料日期界限、快照雜湊與未來函數檢查證明；相對「每一筆重放預測都證據不足、n 恆為 0」的字面，重放預測可以有標籤、計入 n（D-3 `forecast_replay` 與 D-9 第 7 點的 V26-01 子點、D-4 第 3 點）。V26-01 另含執行閘門 (c) 第 (5) 項：資料的日期標示有整段錯一天的跡象（例如時間戳記的時刻不一致，或出現星期日的資料）時不執行重放，另行登記處理；這一部分只讓重放更難執行，是收緊（D-3 `forecast_replay_index_check` gate 的 (5)、`forecast_input_series` 的快照保留欄位）。V26-03：重放的 W 只放回第 0 相位格點上的作廢列，其餘相位只作揭露；相對「不分相位、全部作廢列都放回」的讀法，W 較不嚴（D-9 第 7 點 V26-03 子點）。V26-04：重放的寫入改為全有或全無，只有 commit 成功的那一次算已重放；(乙) 類結果中止不消耗唯一的一次重放（D-9 第 7 點 V26-04 子點、D-3 `forecast_replay_execution_log`、D-10 第 3 點）。CEO 已明確同意（決策包 #50，2026-10-23）；同意之前本批不落檔（風控 2026-10-23 v0.26 逐字確認 (h)）。V26-02（N-61）知悉：P(T) 收盤本身不可用的重放列記作廢，與前瞻對齊（D-3 `forecast_replay_outcome` 的 V26-02 各項）。
 19. （V26-04，知悉）M-11 的表數隨 `forecast_replay_execution_log` 由 17 張改為 18 張，全部表數由 22 張改為 23 張。
+20. （N-64、N-66，知悉）M-11 的表數隨 `forecast_record_attempt`、`forecast_record_attempt_end` 由 18 張改為 20 張，全部表數由 23 張改為 25 張。另請知悉兩項停擺與殘餘：N-64 帳目矛盾時缺日稽核整次不寫、驗證快照停寫，直到查明（比照 N-46）；N-66 的開始列寫不進去時，該次執行仍記 `scheduler_down`。
 
 **風控**：附件 C 的重送與確認項；FL-30～FL-37 是否完整對應七條底線，請單項核對。
 
@@ -5162,7 +5221,7 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - N-52 A 案：單一範圍的程式缺陷會使同一次執行的其餘範圍全部成為缺日，而且每次執行重演，停擺沒有時間上限，可能觸發 F-3。
 - 待決事項與同批規則：
   - 整批須等決策包 #48（V25-01、V25-06 已於 2026-10-22 經 CEO 明確同意；待決事項 CEO 第 17 項）；V25-02～V25-05、N-68 各項與記錄一步批都不先行。與事先宣告 v0.25 同一個 commit，不適用相鄰 commit 寬限。
-  - 落檔後的閘門：daily 列的 §4.3 (e) 與混淆矩陣「證據不足」列解除阻擋；D_v 不再受發現 (2)(3) 與 F-2 擋住，其他擋 D_v 的事項不變。記錄一步、`audit.py` 的 `reason` 判定與 `volatility.py` 依本批字面實作；`audit.py` 遇到同一觀察日有多個 run 時的 `reason` 判定，等 tech-architect 2026-10-21 記錄一步批落字起草第六節第 1 點定案。重放執行閘門 (d) 仍受後續追蹤清單 N-61、N-62、N-74 與「重放 W 的相位範圍」擋住。〔已決（V26-01～V26-04）：與事先宣告 v0.26 同批落檔後，N-61、N-62、N-74 與重放 W 的相位範圍（N-73）不再擋重放執行閘門 (d)；見修訂紀錄 v0.26 同步批。本項原文不改〕
+  - 落檔後的閘門：daily 列的 §4.3 (e) 與混淆矩陣「證據不足」列解除阻擋；D_v 不再受發現 (2)(3) 與 F-2 擋住，其他擋 D_v 的事項不變。記錄一步、`audit.py` 的 `reason` 判定與 `volatility.py` 依本批字面實作；`audit.py` 遇到同一觀察日有多個 run 時的 `reason` 判定，等 tech-architect 2026-10-21 記錄一步批落字起草第六節第 1 點定案。重放執行閘門 (d) 仍受後續追蹤清單 N-61、N-62、N-74 與「重放 W 的相位範圍」擋住。〔已決（V26-01～V26-04）：與事先宣告 v0.26 同批落檔後，N-61、N-62、N-74 與重放 W 的相位範圍（N-73）不再擋重放執行閘門 (d)；見修訂紀錄 v0.26 同步批。本項原文不改〕〔已決（N-64）：多個 run 時的 `reason` 判定見 D-8 第 2 點 N-64、N-66 子點；見修訂紀錄 N-64、N-66 缺日原因批。本項原文不改〕
   - 另案（不在本批）：重放執行是否改為全有或全無的單一交易，以及預驗證不成立時的紀錄與揭露（後續追蹤清單 N-74；quant N-53 提案第六節第 7 點；TA 表態見 TA v0.25 同步起草第二節第六點、第七點第 1 項），定案、送風控並同步本 ADR 之前不得執行重放。〔已決（V26-04）：見修訂紀錄 v0.26 同步批。本項原文不改〕
 
 ---
@@ -5215,3 +5274,40 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
   - 整批須等決策包 #50（V26-01、V26-03、V26-04 已於 2026-10-23 經 CEO 明確同意；待決事項 CEO 第 18 項）；V26-02 與其餘各項都不先行。與事先宣告 v0.26 同一個 commit，不適用相鄰 commit 寬限。
   - 落檔後的閘門：後續追蹤清單 N-61、N-62、N-73、N-74（含原 N-75）不再擋重放執行閘門 (d)；(d) 仍以事先宣告 §4.7 閘門 (1)～(5) 成立為前提；閘門 (b) 另以 N-82 取數路徑定案與實作、決策包 #49 實測完成為前提（D-3 snapshot V26-01 一句），其他擋 (d) 的事項不變。
   - 不在本批：前瞻 P(T) 收盤確認有誤而作廢的列，`diag_last_close` 的起點（後續追蹤清單 N-80；tech-architect 同步起草 N-80 段）；Yahoo 對 `^TWII` 實際時間戳記慣例的實測（決策包 #49，後續追蹤清單 N-83）、重放快照取數路徑的方案與落實（N-82；coordinator 2026-10-23 暫定方案 A，CEO 可推翻），以及方案 A 所需的 ADR-0005 I-3 解釋性註記（tech-architect 起草、送風控，CEO 知悉）；前兩者擋執行閘門 (b)，採方案 A 時該註記也要在 (b) 之前落檔。
+
+---
+
+**N-64、N-66 缺日原因批（後續追蹤清單 N-64、N-66；評估摘要、M-11、D-3、D-7 第 7 點、D-8 第 2 點、Consequences、FL-18、FL-76、待決事項；方向：逐項標示，見各項）**
+- 來源與套用範圍：
+  - tech-architect 2026-10-23 起草：`work/reviews/2026-10-23-N64N66缺日原因判定起草-tech-architect.md`；表數與待決事項依同日協調改採該檔第三節寫法乙，字面以 2026-10-24 寫法乙落字稿為準：`work/reviews/2026-10-24-N64N66缺日原因寫法乙落字稿-tech-architect.md`。
+  - 風控逐字確認：`work/reviews/2026-10-24-v0.27與N64N66批逐字確認-風控.md`。風控改字之處以風控為準。
+  - CEO：表數與停擺代價知悉（待決事項 CEO 第 20 項）；其餘否。
+  - 與事先宣告 v0.27 的 `reason` 九值與多 run 判定同步同一個 commit，不適用相鄰 commit 寬限。
+- 逐項（被取代的原文：判準同 v0.25 同步批段）：
+  - A-1 D-8 第 2 點「有範圍快照時」一項的 N-64 句末：方向：補定義（收緊：列集合取聯集，列數不會少於只取最後一個 run 快照的讀法）。CEO：否。句末接字，無被取代原文。
+  - A-2 D-8 第 2 點 N-64、N-66 子點：方向：補定義（兩面）：收緊面是原因分辨得出來、帳目矛盾時 fail-closed、`db_restored` 先於 `late_only`；第 2 項 `late_only` 先於 run 的原因判為不變（與 D-8 第 5 點、FL-67 (h) 一致）。CEO：知悉（停擺代價，第 20 項）。插入，無被取代原文。
+  - A-3 D-3 `forecast_gaps` 新增欄位 `attempt_id`、`basis_json` 與寫入驗證：方向：補定義（收緊：新增持久化與寫入驗證）。CEO：否。插入，無被取代原文。
+  - A-4 FL-18 句末：方向：補定義（照實並陳：縮窄原句的字面讀法）。CEO：否。句末接字，無被取代原文。
+  - A-5 FL-76：方向：收緊（測試）。CEO：否。插入，無被取代原文。
+  - B-1 D-8 第 2 點「該日沒有任何 run」一項：方向：補定義（收緊：原因分辨得出來；列數不變）。CEO：否。被取代的原文——
+    > - 該日沒有任何 run：`scheduler_down`
+  - B-2 D-8 第 2 點「輸入未就緒」一項句末：方向：補定義（不變：指明存放處）。CEO：否。句末接字，無被取代原文。
+  - B-3 D-8 第 2 點 `reason` 列舉計數：方向：補定義（列舉加值 `record_start_failed`，與事先宣告同步）。CEO：否。被取代的原文——
+    > `reason` 的封閉列舉因此共八值，與事先宣告 §6.3「缺日」第 1 點 v0.25 列舉相同：`scheduler_down`、`inputs_not_ready`、`timeout`、`job_error`、`late_only`、`db_restored`、`write_rejected`、`record_error`。
+  - B-4 D-3 新表 `forecast_record_attempt`／`forecast_record_attempt_end`：方向：補定義（收緊：新增持久化與寫入驗證）。CEO：表數知悉（第 20 項）。插入，無被取代原文。
+  - B-5 D-7 第 7 點 N-66 子點：方向：補定義（收緊）；E-3d 的次數與欄位不變。CEO：否。插入，無被取代原文。
+  - C-1～C-3 表數三處（評估摘要、M-11、Consequences）：方向：不變（計數）。CEO：知悉（第 20 項）。被取代的原文——
+    > - 表數多（23 張），寫入規則有一部分在 trigger 裡。
+    > - 23 張表，加上 trigger 與部分唯一索引，遷移與測試成本高。
+    > 新增 18 張表（第九、十批加
+    改為：評估摘要與 Consequences 的「23 張」改為「25 張」；M-11 的「新增 18 張表」改為「新增 20 張表」；在 `forecast_replay_execution_log` 之後加「；N-66 加 `forecast_record_attempt`、`forecast_record_attempt_end`」。編輯註記：本段之前各批次條目引用的表數是當時的原文，不改。
+  - C-4 待決事項 CEO 第 20 項：方向：不變（揭露）。插入，無被取代原文。
+  - D-1 v0.25 同步批段「落檔後的閘門」一項：句末加〔已決（N-64）〕，原文不改，無被取代原文。
+- 照實並陳：
+  - N-64：之後的 run 可以改變一列的 `reason`，改變不了列數；被蓋過的原因留在 `basis_json`。帳目矛盾時缺日稽核整次不寫、`gap_judged_through` 停止前進、驗證快照停寫，直到查明（比照 N-46）。
+  - N-64：列集合取聯集，失效條件 F-3 的缺日率若以列計，比只取最後一個 run 快照的讀法偏嚴〔推論；計數單位見後續追蹤清單 N-85〕。
+  - N-66：開始列本身寫不進去時，該次執行仍記 `scheduler_down`，只能由 E-3d 與 log 察覺。
+- 待決事項與同批規則：
+  - 本批內部不拆開；A-2 與 B-1～B-5 不得單獨先落檔。
+  - 落檔後的閘門：`audit.py` 的多 run `reason` 判定、`record_start_failed`、記錄一步的開始列與 end 列，依本批字面實作；dev-lead 查證（後續追蹤清單 N-86）回覆 tech-architect 之前不實作。
+  - 不在本批：新登記 claim 的缺日義務從哪一日開始（後續追蹤清單 N-84；在已有 `forecast_run` 的觀察日登記新的前瞻 claim 之前必須定案）；失效條件 F-3 缺日率的計數單位（N-85）。
