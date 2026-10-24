@@ -18,6 +18,7 @@ import sys
 
 SERVICES = ("backend", "scheduler")
 ENV_KEY = "STOCK_DESK_DB_PATH"
+LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 
 
 def fail(message: str) -> None:
@@ -88,9 +89,21 @@ def main() -> None:
             f"「{backend_mount[1]}」之內——資料庫沒有真正落在持久化區。"
         )
 
+    # The API has no authentication, so every published port must stay on the
+    # loopback interface; an empty host_ip means "all interfaces".
+    for name, svc in services.items():
+        for port in svc.get("ports", []) or []:
+            host_ip = port.get("host_ip", "")
+            if host_ip not in LOOPBACK_HOSTS:
+                fail(
+                    f"service「{name}」的 port {port.get('published')} 綁在「{host_ip or '所有介面'}」"
+                    "——API 沒有身分驗證,只能綁 127.0.0.1,否則區網內任何人都能讀寫持倉。"
+                )
+
     print(
         f"[compose-guard] 通過:backend 與 scheduler 共用 volume「{backend_mount[0]}」"
-        f"掛載於「{backend_mount[1]}」,且 {ENV_KEY}=「{db_paths['backend']}」一致。"
+        f"掛載於「{backend_mount[1]}」,且 {ENV_KEY}=「{db_paths['backend']}」一致;"
+        "所有對外 port 皆只綁本機迴環介面。"
     )
 
 
