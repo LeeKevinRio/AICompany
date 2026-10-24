@@ -12,6 +12,7 @@
   唯一一處**修訂**：ADR-0003 約束 1 的降級鏈由四層改為五層（新增 layer 0「TTL 內快取先行」，僅對有額度上限的來源啟用），理由見決策四。ADR-0003 其餘內容維持 accepted。
   2026-09-13 修訂（ADR-0009）：決策四第 1～4 點與約束 D-1（「TTL 24h」、「TW 不開 layer 0」、`cached_stale` 核可字面）被 ADR-0009 取代——layer 0 改以「交易日」判定新鮮度，所有市場一律開啟；`is_within_ttl` 欄位名保留，語意改為「快取已含最近已公布交易日」，且此語意適用於每一條回傳 `cached_stale` 的路徑；第 3 點改寫為「不得為了節省額度而延長指數路徑的 `recheck_cooldown`」。
   2026-08-03 修訂：I-3 與決策一第 3 點的措辭原寫為「恆為 `BACKUP`」，範圍過寬且與 `DataStatus.BACKUP` 的定義及本 ADR 決策四第 4 點／D-2 衝突，經 tech-architect 裁決收窄為「不得標為 `FRESH`、且不得將快取結果升級為 `BACKUP`」。本次僅修訂措辭，決策實質與實作均未改變。
+  2026-10-24 解釋性註記（後續追蹤清單 N-88）：I-3 末句「呼叫端必須經由 `IndexSeriesService` 取得結果」對重放快照取數函式的適用範圍，記在 I-3 之下；不修訂 I-3 與決策三第 5 點，CEO 知悉。
 
 ---
 
@@ -251,6 +252,25 @@ WHERE used < limit_value;
 - I-1　`app/leverage/*` **不得** import `app/data/providers/*`，也不得執行任何 I/O；接合點只有 `app/services/index.py` 一處。
 - I-2　`INDEX_MAPPING` 中不得存在 `basis="proxy_etf"` 的列（測試強制）。
 - I-3　指數序列（含槓桿 ETF 的標的指數與市場比較基準）**不得**以 `DataStatus.FRESH` 呈現。任何下層回報 `FRESH` 的指數結果，在離開 `app/services/index.py` 之前必須降級為 `BACKUP`。降級**只能往悲觀方向**進行：`CACHED_STALE` 與 `UNAVAILABLE` 一律原樣保留，**不得**為了讓狀態字面統一為 `BACKUP` 而把快取結果「升級」掉。理由：`BACKUP` 的定義是「即時取自備援來源」，把一筆未呼叫任何來源、從本機快取取得的資料標為 `BACKUP` 是不實陳述，並會使 `is_within_ttl`（決策四第 4 點、D-2）在指數路徑上永久失去意義。「本序列取自非官方來源」這個事實由常駐的來源揭露 `notes`（每一條成功與失敗路徑皆須掛入）承擔，不由 `status` 單一欄位承擔。本約束適用於讀取指數序列的**每一層**：`MarketDataService` 會把主來源成功一律標為 `FRESH`，因此呼叫端必須經由 `IndexSeriesService` 取得結果，不得直接持有底層 service。
+  - **I-3 解釋性註記：重放快照取數函式**（tech-architect 2026-10-24；後續追蹤清單 N-88、N-82；依風控 2026-10-23 v0.26 逐字確認 (i)；CEO 知悉，不修訂）。本註記只說明 I-3 末句「呼叫端必須經由 `IndexSeriesService` 取得結果，不得直接持有底層 service」與決策三第 5 點「指數序列走獨立的 `IndexSeriesService`」的適用範圍。I-3 的決定（指數序列不以 `FRESH` 呈現、降級只往悲觀方向、`BACKUP` 專指即時取自備援來源、「本序列取自非官方來源」的常駐揭露）一字不改，全部適用於下述函式；來源揭露的落點見下「輸出去向」。
+    - **為什麼是解釋、不是修訂**：末句的理由寫在句中：`MarketDataService` 會把主來源成功一律標為 `FRESH`，所以凡經它取得的指數結果，都要經 `IndexSeriesService` 降回 `BACKUP`。末句的「底層 service」指包住 `IndexProviderBridge` 的 `MarketDataService`。下述函式不經也不持有 `MarketDataService`，沒有會把結果標成 `FRESH` 的中間層，而是在 `app/services/index.py` 內直接標 `BACKUP`，I-3 要防的結果不會出現。決策三第 5 點的要旨是指數路徑與個股路徑分離、代號不經 `canonical_us_symbol`；下述函式同樣在 `app/services/index.py`，代號同樣不經它，所以同樣適用。
+    - **適用範圍（只限一處）**：`app/services/index.py` 裡唯一的重放快照取數函式（名稱暫定 `fetch_replay_index_snapshot`；ADR-0027 D-3 `forecast_replay_index_check` snapshot 的 v0.26 一句）。它只取 `MARKET_BENCHMARK["TW"]` 的 `^TWII`，唯一的呼叫端是 `app/forecast/replay_checks.py`（ADR-0027 D-1）。其他函式、其他呼叫端、其他代號都不適用本註記，照 I-3 末句的字面經 `IndexSeriesService` 取得。
+    - **狀態**：成功為 `DataStatus.BACKUP`（即時取自非官方來源，合於 `BACKUP` 的定義），失敗為 `DataStatus.UNAVAILABLE`。不得出現 `FRESH`；不讀快取，所以也不會出現 `CACHED_STALE`。
+    - **快取：不讀也不寫。** 不讀寫 `price_bars_cache` 及其取數與嘗試紀錄（`record_fetch`、`record_attempt`），不經 layer 0，不呼叫 `get_cached_bars`。所以它不改變使用者面 `^TWII` 的新鮮度判定與冷卻（決策四、ADR-0009），也碰不到 I-7 的 symbol key。重放快照本來就不在 ADR-0027 D-4 第 8 點 `CACHE_BAR_CONSUMERS` 內。
+    - **輸出去向：只進重放快照。** 回傳值只交給 `replay_checks.py`，在同一個呼叫內寫入 `forecast_input_series`（`series_kind = replay_index_bars`；ADR-0027 D-3）。回傳值不得交給 `app.forecast.views`、`app/api/**` 或任何使用者可見面，也不得交給前瞻路徑、估值、訊號或槓桿專章。回傳型別不得是 `ProviderResult`、`LoadedIndexBars` 或 `LoadedBenchmark`，不設 `meta()`，也不設 `notes` 欄位。快照存入之後誰可以讀、由快照算出的重放結果怎麼揭露，依 ADR-0027 與事先宣告 §4.7，本註記不改。I-3 要求的來源揭露（「本序列取自非官方來源」，每一條成功與失敗路徑皆須掛入）落在使用者看得到指數的地方；本函式沒有這種地方，但這項義務不因此免除，改由事先宣告 §4.7「歷史方向回顧（重放，非前瞻紀錄）」區塊承擔（逐字由 creative-lead 起草、送風控）：該區塊列出重放結果或快照的取數嘗試時（含只有失敗、沒有任何結果的情形），都要常駐寫明重放所用的 `^TWII` 快照取自非官方來源、來源名稱與狀態 `backup`，不得寫 `fresh`，也不得因版面而隱藏（事先宣告 §1.1「來源」）。
+    - **與美股額度管理的交互：沒有。** Alpha Vantage 不在這條路徑上（決策一第 1 點）；不讀也不寫 `QuotaLedger` 與 `provider_quota_usage`，不消耗美股額度，`GET /api/settings` 的額度數字不受影響。yfinance 在本系統沒有額度帳，沿用 adapter 既有的 `RateLimitedClient` 節流，不另設、不繞過。
+    - **失敗時 fail-closed**：連線錯誤、非預期的 HTTP 狀態、回應無法解析、`chart.error`、沒有結果區塊、區間內沒有 bar，或多份回應中任一份失敗，都是整次失敗：不回傳任何 bar，也不回傳部分回應，並附中文原因。不退回快取，不改經 `IndexSeriesService`，不換來源或代號。`RateLimitedClient` 內建的傳輸層重試屬於同一次請求，不算退回。之後由 `replay_checks.py` 依 ADR-0027 寫 `fetch_failed` 列，可以再取。
+    - **adapter 一側**：yfinance adapter 新增的原始回應方法，帶出每份回應的 `meta.exchangeTimezoneName`、`meta.gmtoffset` 原值，以及每根 bar 的原始 timestamp、推導日期與 OHLCV。它和 `get_index_daily_bars` 一樣不加進 `MarketDataProvider` ABC，也不經 `IndexProviderBridge` 包進 `MarketDataService`；代號只收 `INDEX_SYMBOL_METADATA` 內的值；檔頭的未查證聲明要涵蓋這個方法（本 ADR 約束 D-3）。`app/services/index.py` 照舊不 import 任何具體 adapter，以 Protocol 接受注入。`PriceBar`、`ProviderResult` 與快取 schema 都不動。
+    - **與 ADR-0024 的關係**：本函式不經 `MarketDataService`，所以也不經 ADR-0024 D-1 的幣別閘門，觸及 ADR-0024 失效條件 7。這一點由 ADR-0024 自己的重審處理（後續追蹤清單 N-93），本註記不代為解釋 ADR-0024。
+    - **超出本註記的情形**：本註記「適用範圍」到「adapter 一側」各子項所列的任一條件不再成立，就不是解釋，而是修訂 I-3，要另立修訂、送風控，並經 CEO 裁決。例如：重放取數要讀或寫快取、要標 `FRESH`、輸出要交給「輸出去向」所列以外的地方、失敗時要退回快取或改換來源或代號、要改用 yfinance 以外的來源，或要開放給第二個呼叫端或第二個代號。
+    - **驗收**（qa-reviewer 逐條可查）：
+      - (a) 呼叫點封閉（AST，掃 `app/**`）：重放取數函式的名稱只出現在 `app/services/index.py`（定義）與 `app/forecast/replay_checks.py`；adapter 原始回應方法的名稱只出現在 `app/data/providers/yfinance.py`（定義）與 `app/services/index.py`；回傳型別的名稱只出現在前兩個檔。
+      - (b) 不碰快取、服務層與額度（AST）：函式本體不引用 `MarketDataService`、`IndexSeriesService`、`IndexProviderBridge`、`PriceService`、`PriceBarCache`、`get_cached_bars`、`get_daily_bars`、`record_fetch`、`record_attempt`、`QuotaLedger`、`canonical_us_symbol`；`app/services/index.py` 不 import `app.data.cache`、`app.data.quota` 與 `app.data.providers` 底下任何模組。
+      - (c) 狀態（AST 與執行期）：函式中出現的 `DataStatus` 成員只有 `BACKUP` 與 `UNAVAILABLE`；以假 adapter 回成功時為 `BACKUP`。
+      - (d) 快取與額度 spy（執行期）：暫存 DB 預先放入 `^TWII` 的快取列與嘗試紀錄；成功與失敗各跑一次，`PriceBarCache` 與 `QuotaLedger` 每個公開方法的呼叫次數都是 0，快取列、嘗試紀錄與 `provider_quota_usage` 的列數不變。
+      - (e) fail-closed（執行期）：上列每一種失敗各一格，都回 `UNAVAILABLE`、零 bar、零回應、原因非空；快取有 `^TWII` 列時同樣零 bar；兩份回應中第二份失敗時零 bar；除了注入的 adapter，沒有其他來源被呼叫。
+      - (f) 代號（執行期）：`^GSPC`、`^NDX`、`^SOX` 回 `UNAVAILABLE`，transport spy 0 次。
+      - (g) 既有路徑不變：`IndexSeriesService`、`IndexProviderBridge`、`load_index_series`、`load_market_benchmark` 與 `deps` 組裝的既有測試不改而通過；`PriceBar`、`ProviderResult` 的欄位集合與 `MarketDataProvider` 的抽象方法集合不變（以集合相等斷言）。
 - I-4　`decompose_drag` 新增 `index_basis` 與 `index_return_basis` 參數，於輸出回顯，並在 `basis != official_index` 或 `return_basis == "unknown"` 時追加對應的 `assumptions` 句子。
 - I-5　`basis="unmapped"` 時，drag 與 erosion 皆回 `insufficient_data`，`reason` 使用該列的 `note`；文案不得暗示暫時性技術故障。
 - I-6　殘差跳閘（`RESIDUAL_ALERT_ABS`，預設 0.10）觸發時必須追加 `notes`；常數 docstring 必須寫明「人工設定的提醒門檻，非統計檢定」。

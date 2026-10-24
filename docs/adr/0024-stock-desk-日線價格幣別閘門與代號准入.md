@@ -326,7 +326,7 @@ C-11～C-29 出處：TA2 R-25（原文照 TA2「對實作的約束」），各�
 
 ### 被此決策約束的事
 
-- 日後新增 `load_bars` 以外直接取日線的程式路徑，須經 `MarketDataService`（D-1），不得自行繞過。
+- 日後新增 `load_bars` 以外直接取日線的程式路徑，須經 `MarketDataService`（D-1），不得自行繞過。〔tech-architect 2026-10-24 依失效條件 7 重審 D-1（後續追蹤清單 N-93）：D-1 不變；唯一的例外是 ADR-0005 I-3 解釋性註記所述的重放快照取數函式（`app/services/index.py`，只取 `^TWII`，唯一呼叫端 `app/forecast/replay_checks.py`），它不經 `MarketDataService`，所以不經幣別閘門。理由：它的輸出只進重放快照，不用於估值或幣別換算；快照本身不進任何使用者可見面，由快照算出的重放結果只依 ADR-0027 與事先宣告 §4.7 揭露；yfinance 指數路徑的幣別本來就取自 `INDEX_SYMBOL_METADATA`，不讀上游宣告（D-6 role 2 排除），正式設定下經服務層也不會觸發閘門（D-4）。role 2 改讀上游 `meta.currency`（D-6、F-9c）、`MARKET_CURRENCY` 變動（失效條件 4），或 ADR-0005 該註記的範圍有任何修訂時，本例外一併重審。本例外放寬了本節「不得自行繞過」的字面，經 CEO 明確同意（決策包 #51，2026-10-24）。〕
 - 新增 adapter 不得寫死幣別後直接宣稱為上游宣告值；缺值不補（D-6）。
 - 新使用者面字面須經 creative-lead 起草、風控逐字審後才可上線（CLAUDE.md 風險閘門）。
 - 新增任何可能以快取回價格的讀取路徑，須先檢查 D-9 標記；新增的 adapter 須有 `source_id`（W-c／W-c′ 的 `{provider}` 只取它）。〔TA2 R-32；F9W-3、F9W-4〕
