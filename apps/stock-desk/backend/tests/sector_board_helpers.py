@@ -44,6 +44,7 @@ from app.sectors.store import (
     StoredExcludedSector,
     StoredRankedSector,
 )
+from tests.api_helpers import CLIENT_HEADERS
 from tests.sector_eval_helpers import SyntheticMarket
 from tests.source_helpers import DEFAULT_FINGERPRINT
 
@@ -371,7 +372,7 @@ def card_client(
     }
     app.dependency_overrides.update(overrides)
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=CLIENT_HEADERS) as client:
             yield client
     finally:
         for key in overrides:

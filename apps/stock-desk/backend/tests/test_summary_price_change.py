@@ -35,7 +35,7 @@ from app.portfolio.summary import PortfolioSummary, build_summary
 from app.portfolio.valuation import PositionValuator, PriceMode
 from app.positions.models import Currency, PositionInput
 from app.positions.store import PositionStore
-from tests.api_helpers import FakePriceService, UnavailableFxProvider
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, UnavailableFxProvider
 from tests.conftest import ApiHarness
 
 NOW = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)  # Monday
@@ -135,7 +135,7 @@ def client(book: Book) -> Iterator[TestClient]:
     app.dependency_overrides[get_valuator] = lambda: book.valuator()
     app.dependency_overrides[get_dividend_store] = lambda: book.dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: book.bar_cache
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

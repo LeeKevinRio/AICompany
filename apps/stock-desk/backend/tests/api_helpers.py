@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.api.client_header import CLIENT_HEADER
 from app.api.deps import (
     get_cached_valuator,
     get_fx_provider,
@@ -28,6 +29,10 @@ from app.main import app
 from app.portfolio.valuation import PositionValuator
 
 _AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
+
+#: Default headers for every API test client, as the frontend sends them: the
+#: write guard (:mod:`app.api.client_header`) rejects unsafe requests without it.
+CLIENT_HEADERS = {CLIENT_HEADER: "1"}
 
 
 def recent_bars(

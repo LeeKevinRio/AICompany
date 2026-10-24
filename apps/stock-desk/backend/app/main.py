@@ -21,6 +21,7 @@ from app.api import (
     settings,
     signals,
 )
+from app.api.client_header import RequireClientHeaderMiddleware
 from app.services.sector_runtime import process_gate_runtime
 
 SERVICE_NAME = "backend"
@@ -30,6 +31,10 @@ FRONTEND_DEV_ORIGIN = "http://localhost:3000"
 
 app = FastAPI(title="Stock Desk Backend", version="0.1.0")
 
+# Added before CORS so CORS stays the outer layer: a preflight is answered
+# before this guard sees it, and a 403 from the guard still carries the CORS
+# headers the frontend needs to read it.
+app.add_middleware(RequireClientHeaderMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_DEV_ORIGIN],

@@ -31,6 +31,7 @@ from app.main import app
 from app.portfolio.valuation import PositionValuator, PriceInfo, PriceService
 from app.positions.models import Position, PositionInput
 from app.positions.store import PositionStore
+from tests.api_helpers import CLIENT_HEADERS
 
 NOW = datetime(2026, 10, 2, 6, 0, tzinfo=UTC)
 BAR_DATE = date(2026, 9, 30)
@@ -193,7 +194,7 @@ def wire(store: PositionStore) -> Iterator[Wire]:
         app.dependency_overrides[get_price_bar_cache] = lambda: PriceBarCache(
             db_path=store.db_path.parent / "bars.db"
         )
-        return TestClient(app)
+        return TestClient(app, headers=CLIENT_HEADERS)
 
     yield _wire
     app.dependency_overrides.clear()

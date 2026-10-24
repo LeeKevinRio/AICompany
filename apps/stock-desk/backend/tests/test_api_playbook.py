@@ -22,7 +22,7 @@ from app.main import app
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
-from tests.api_helpers import FakePriceService, recent_bars
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
 from tests.playbook_helpers import RULE_SET_DATE, confirm_rule_set
 from tests.playbook_helpers import batch as make_batch
 
@@ -52,7 +52,7 @@ def harness(tmp_path: Path) -> Iterator[PlaybookHarness]:
         index_resolver={"TW": index, "US": index},
     )
     app.dependency_overrides[get_playbook_service] = lambda: service
-    with TestClient(app) as client:
+    with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield PlaybookHarness(client=client, store=store, prices=prices, index=index)
     app.dependency_overrides.clear()
 

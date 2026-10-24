@@ -32,7 +32,7 @@ from app.main import app
 from app.playbook import wording
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
-from tests.api_helpers import FakePriceService, recent_bars
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
 
 HISTORY = 40
 
@@ -60,7 +60,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
         index_resolver={"TW": index, "US": index},
     )
     app.dependency_overrides[get_playbook_service] = lambda: service
-    with TestClient(app) as client:
+    with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield Harness(client=client, store=store, index=index)
     app.dependency_overrides.clear()
 

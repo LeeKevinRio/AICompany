@@ -5,8 +5,9 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from app.main import app
+from tests.api_helpers import CLIENT_HEADERS
 
-client = TestClient(app)
+client = TestClient(app, headers=CLIENT_HEADERS)
 
 
 def test_health_returns_200() -> None:

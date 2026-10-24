@@ -34,7 +34,12 @@ from app.portfolio.valuation import PositionValuator
 from app.positions.models import QUANTITY_NOT_POSITIVE_MESSAGE, QUANTITY_REQUIRED_MESSAGE
 from app.positions.store import PositionStore
 from tests.alerts_helpers import price_rule
-from tests.api_helpers import FakePriceService, UnavailableFxProvider, position_payload
+from tests.api_helpers import (
+    CLIENT_HEADERS,
+    FakePriceService,
+    UnavailableFxProvider,
+    position_payload,
+)
 
 
 @dataclass
@@ -56,7 +61,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     app.dependency_overrides[get_valuator] = lambda: valuator
     app.dependency_overrides[get_dividend_store] = lambda: dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: bars
-    with TestClient(app) as client:
+    with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield Harness(client=client, store=store)
     app.dependency_overrides.clear()
 

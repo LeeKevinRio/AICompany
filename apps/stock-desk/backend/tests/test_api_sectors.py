@@ -41,6 +41,7 @@ from app.sectors.store import (
     StoredBoard,
 )
 from app.services.market import trading_days_behind_market
+from tests.api_helpers import CLIENT_HEADERS
 from tests.published_helpers import published
 from tests.sector_board_helpers import (
     card_client,
@@ -267,7 +268,7 @@ def test_only_tw_is_served(tmp_path: Path) -> None:
 
 
 def test_the_openapi_schema_has_no_forbidden_field_names() -> None:
-    schema = TestClient(app).get("/openapi.json").json()
+    schema = TestClient(app, headers=CLIENT_HEADERS).get("/openapi.json").json()
     components = schema["components"]["schemas"]
     names = {
         name

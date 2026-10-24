@@ -15,6 +15,7 @@ from app.directory.models import DirectoryEntry, DirectorySectorAssignment
 from app.directory.store import SecurityDirectoryStore
 from app.main import app
 from app.positions.sectors import TWSE_SECTORS
+from tests.api_helpers import CLIENT_HEADERS
 
 AS_OF = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 SECTOR_AS_OF = datetime(2026, 8, 16, 3, 0, tzinfo=UTC)
@@ -28,7 +29,7 @@ def store(tmp_path: Path) -> SecurityDirectoryStore:
 @pytest.fixture
 def client(store: SecurityDirectoryStore) -> Iterator[TestClient]:
     app.dependency_overrides[get_directory_store] = lambda: store
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
@@ -111,7 +112,7 @@ def test_resolve_store_failure_is_still_a_server_error(tmp_path: Path) -> None:
     broken = _BrokenStore(db_path=tmp_path / "broken.db")
     app.dependency_overrides[get_directory_store] = lambda: broken
     try:
-        with TestClient(app, raise_server_exceptions=False) as test_client:
+        with TestClient(app, headers=CLIENT_HEADERS, raise_server_exceptions=False) as test_client:
             response = test_client.get("/api/directory/resolve/2330")
     finally:
         app.dependency_overrides.clear()
