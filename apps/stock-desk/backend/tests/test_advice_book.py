@@ -434,8 +434,11 @@ def test_the_share_suggestion_for_a_foreign_holding_stays_in_one_currency() -> N
     assert suggest_quantity_range(budget, book.context, action="add") is None
     trim = suggest_quantity_range(budget, book.context, action="reduce")
     assert trim is not None
-    # 0.15 x 6.9M = NT$1,035,000 of headroom, NT$6,300 a share.
-    assert trim.min_shares == 836
+    # NT$6,300 a share, and the book shrinks by what is sold (it has no cash
+    # leg): 984 shares leave 100,800 / 700,800 = 14.38% < 15%, while 983 leave
+    # 107,100 / 707,100 = 15.15%. Holding the book at 6.9M would have said 836,
+    # which leaves 1,033,200 / 1,633,200 = 63% -- still far over the cap.
+    assert trim.min_shares == 984
     assert trim.max_shares == 1000  # never more than the holding
     assert trim.restores_compliance is True
 

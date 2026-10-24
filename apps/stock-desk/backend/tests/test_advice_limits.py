@@ -1401,11 +1401,12 @@ def test_notional_caps_include_sector_and_kelly_when_available() -> None:
 def test_add_range_is_derived_from_the_tightest_cap() -> None:
     quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
     assert quantity is not None
-    # Binding cap 150,000 less 50,000 held = 100,000 / 100 TWD = 1,000 shares --
-    # but 1,000 lands exactly on the cap, which counts as breached, so the
-    # suggestion stops one share short.
-    assert quantity.max_shares == 999
-    assert quantity.min_shares == 499
+    # The book grows by what is bought (it has no cash leg), so the 15% cap
+    # grows with it: (50,000 + 100x) / (1,000,000 + 100x) < 15% gives
+    # x < 1,176.47. 1,176 shares sit at 14.996%; 1,177 reach 15.004%, which
+    # counts as breached.
+    assert quantity.max_shares == 1_176
+    assert quantity.min_shares == 588
     assert "單一標的佔比上限" in quantity.basis
     assert "未參與這個區間的計算" in quantity.basis
 
@@ -1428,9 +1429,11 @@ def test_reduce_range_covers_the_excess_up_to_the_whole_holding() -> None:
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
     quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
     assert quantity is not None
-    # 200,000 held vs a 150,000 cap: 500 shares above the cap, plus one more so
-    # the remaining position sits strictly inside the cap rather than on it.
-    assert quantity.min_shares == 501
+    # The book shrinks by what is sold: (200,000 - 100x) / (1,000,000 - 100x)
+    # < 15% gives x > 588.24. 589 shares leave 14.993%; 588 leave 15.002%.
+    # Holding the book at 1,000,000 would have said 501, which leaves
+    # 149,900 / 949,900 = 15.78% -- still over the cap.
+    assert quantity.min_shares == 589
     assert quantity.max_shares == 2_000
     assert "單一標的佔比上限" in quantity.basis
 
@@ -1470,10 +1473,44 @@ def test_add_sizing_respects_a_binding_per_trade_loss_cap() -> None:
     ctx = _ctx(atr=8.0, position_market_value_twd=0.0, quantity=0.0)
     quantity = suggest_quantity_range(BUDGET, ctx, action="add")
     assert quantity is not None
-    assert quantity.max_shares == 624
+    # The 1% loss budget is measured on the book after the purchase:
+    # 16x / (1,000,000 + 100x) < 1% gives x < 666.67.
+    assert quantity.max_shares == 666
     after = project_position(ctx, share_delta=float(quantity.max_shares))
     assert _status(after, "per_trade_loss") == "passed"
-    assert _status(project_position(ctx, share_delta=625.0), "per_trade_loss") == "violated"
+    assert _status(project_position(ctx, share_delta=667.0), "per_trade_loss") == "violated"
+
+
+def test_the_add_range_is_verified_against_every_cap_not_only_the_tightest_one() -> None:
+    # Risk-compliance 2026-10-24 (A-1) counterexample. Before the trade cap 1
+    # (150,000) is tighter than cap 3 (1.11M net worth less 950,000 elsewhere
+    # = 160,000), but cap 1 grows with the book and cap 3 does not: sized off
+    # cap 1 alone, 1,176 shares would put gross exposure at 1,117,600 /
+    # 1,110,000 -- over cap 3. Cap 3 binds after the trade: < 1,100 shares.
+    ctx = _ctx(gross_exposure_twd=1_000_000.0, net_worth=reported_net_worth(1_110_000.0))
+    quantity = suggest_quantity_range(BUDGET, ctx, action="add")
+    assert quantity is not None
+    assert quantity.max_shares == 1_099
+    assert "總曝險上限" in quantity.basis
+    after = project_position(ctx, share_delta=float(quantity.max_shares))
+    assert not [check for check in evaluate_limits(BUDGET, after) if check.status == "violated"]
+
+
+def test_the_sell_range_clears_every_cap_that_took_part() -> None:
+    # 200,000 held: cap 1 needs 589 shares sold. The sector (cap 2, 30%) holds
+    # 450,000 in all, so it needs (450,000 - 300,000) / (0.7 x 100) > 2,142.9
+    # -- more than the 2,000 held, so it binds and the sale cannot clear it.
+    ctx = _ctx(
+        position_market_value_twd=200_000.0,
+        quantity=2_000.0,
+        sector="半導體業",
+        sector_market_value_twd=450_000.0,
+    )
+    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    assert quantity is not None
+    assert quantity.min_shares == 2_000
+    assert quantity.restores_compliance is False
+    assert "單一產業佔比上限" in quantity.basis
 
 
 def test_limit_status_after_projects_the_whole_book() -> None:
@@ -1483,12 +1520,20 @@ def test_limit_status_after_projects_the_whole_book() -> None:
     assert after.quantity == pytest.approx(1_500.0)
     assert after.gross_exposure_twd == pytest.approx(600_000.0)
     assert after.sector_market_value_twd == pytest.approx(300_000.0)
-    # Equity is untouched: a market-price trade swaps cash for shares.
-    assert after.total_equity_twd == ctx.total_equity_twd
+    # Equity is the valued book, which has no cash leg: it grows by exactly
+    # what the purchase adds (150,000 / 1,100,000 = 13.6%, inside the cap).
+    assert after.total_equity_twd == pytest.approx(1_100_000.0)
     assert (
         limit_status_after(BUDGET, ctx, limit_id="single_position_weight", share_delta=1_000.0)
+        == "passed"
+    )
+    assert (
+        limit_status_after(BUDGET, ctx, limit_id="single_position_weight", share_delta=1_177.0)
         == "violated"
     )
+    # A sale shrinks the book by what it removes.
+    sold = project_position(ctx, share_delta=-500.0)
+    assert sold.total_equity_twd == pytest.approx(950_000.0)
 
 
 def test_selling_everything_is_the_floor_when_nothing_else_clears_the_cap() -> None:
@@ -1577,10 +1622,10 @@ def test_add_basis_is_the_approved_copy_verbatim() -> None:
     quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
     assert quantity is not None
     assert quantity.basis == (
-        "規則評估:加碼參考,區間為再買進 499 ~ 999 股。"
+        "規則評估:加碼參考,區間為再買進 588 ~ 1,176 股。"
         "目前有納入計算的上限中,額度最緊的是「單一標的佔比上限」;"
-        "以它換算,買進後這條上限仍為通過的最大股數是 999 股,也就是區間上緣。"
-        "下緣 499 股取上緣的一半,用意是給出一個範圍而不是單一數字,"
+        "以它換算,買進後這條上限仍為通過的最大股數是 1,176 股,也就是區間上緣。"
+        "下緣 588 股取上緣的一半,用意是給出一個範圍而不是單一數字,"
         "不是「最少要買」的數量。" + SKIPPED_NOTE
     )
 
@@ -1590,9 +1635,9 @@ def test_sell_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_cap()
     quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
     assert quantity is not None
     assert quantity.basis == (
-        "規則評估:減碼參考,區間為賣出 501 ~ 2,000 股。"
+        "規則評估:減碼參考,區間為賣出 589 ~ 2,000 股。"
         "目前部位已超出「單一標的佔比上限」這條上限,"
-        "賣出 501 股後可回到這條上限的範圍內;"
+        "賣出 589 股後可回到這條上限的範圍內;"
         "區間上緣 2,000 股是目前持股全數,是這個區間的上界,"
         "不是這條上限要求賣到的數量。" + SKIPPED_NOTE
     )
@@ -1605,9 +1650,9 @@ def test_stop_loss_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_
     quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
     assert quantity is not None
     assert quantity.basis == (
-        "規則評估:停損型減碼參考,區間為賣出 501 ~ 2,000 股。"
+        "規則評估:停損型減碼參考,區間為賣出 589 ~ 2,000 股。"
         "目前部位已超出「單一標的佔比上限」這條上限,"
-        "賣出 501 股後可回到這條上限的範圍內;"
+        "賣出 589 股後可回到這條上限的範圍內;"
         "區間上緣 2,000 股是目前持股全數,是這個區間的上界,"
         "不是這條上限要求賣到的數量。" + SKIPPED_NOTE
     )
@@ -1632,7 +1677,7 @@ def test_every_sell_action_reuses_the_same_approved_template() -> None:
         quantity = suggest_quantity_range(BUDGET, ctx, action=action)
         assert quantity is not None
         assert quantity.basis.startswith(f"規則評估:{RANGE_ACTION_LABELS[action]},")
-        assert "區間為賣出 501 ~ 2,000 股。" in quantity.basis
+        assert "區間為賣出 589 ~ 2,000 股。" in quantity.basis
 
 
 def test_the_skipped_note_is_absent_when_every_cap_was_evaluated() -> None:
@@ -1795,7 +1840,7 @@ def test_sizing_requires_an_explicit_pass_not_merely_a_non_violation() -> None:
     # ``not_evaluable`` means "we could not check", which must never be counted
     # as "inside the budget" when sizing a suggested quantity.
     ctx = _ctx()
-    assert limits._passes(BUDGET, ctx, binding_id="single_position_weight", share_delta=1.0)
+    assert limits._passes(BUDGET, ctx, cap_ids=["single_position_weight"], share_delta=1.0)
     # Remove the equity input: the same cap becomes not_evaluable, and the
     # helper must report that as "not a pass".
     blind = ctx.model_copy(update={"total_equity_twd": None})
@@ -1803,7 +1848,7 @@ def test_sizing_requires_an_explicit_pass_not_merely_a_non_violation() -> None:
         limits.limit_status_after(BUDGET, blind, limit_id="single_position_weight", share_delta=1.0)
         == "not_evaluable"
     )
-    assert not limits._passes(BUDGET, blind, binding_id="single_position_weight", share_delta=1.0)
+    assert not limits._passes(BUDGET, blind, cap_ids=["single_position_weight"], share_delta=1.0)
 
 
 def test_reduce_range_is_none_for_a_compliant_position() -> None:
@@ -1821,7 +1866,7 @@ def test_stop_loss_and_take_profit_share_the_reduce_sizing() -> None:
     for action in ("stop_loss", "take_profit"):
         quantity = suggest_quantity_range(BUDGET, ctx, action=action)
         assert quantity is not None
-        assert quantity.min_shares == 501
+        assert quantity.min_shares == 589
 
 
 # --- Context helpers ---------------------------------------------------------

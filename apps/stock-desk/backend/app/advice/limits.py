@@ -44,7 +44,7 @@ database would be a risk cap whose verdict depends on when it was asked.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
@@ -1615,11 +1615,15 @@ def project_position(ctx: PortfolioContext, *, share_delta: float) -> PortfolioC
     """The same book after buying (``+``) or selling (``-``) ``share_delta`` shares.
 
     Used to *verify* a suggested quantity against the caps instead of trusting
-    the arithmetic that produced it. Only the amounts a trade in this symbol
-    actually moves are adjusted: the position, the gross exposure and the
-    symbol's sector bucket. Equity is untouched -- a trade at market price
-    swaps cash for shares and does not change the book's value -- and so is the
-    self-reported net worth, for exactly the same reason.
+    the arithmetic that produced it. Every amount a trade in this symbol moves
+    is adjusted: the position, the gross exposure, the symbol's sector bucket
+    and the equity. Equity moves too because it is the *valued book*, which has
+    no cash leg (:mod:`app.advice.book`): selling shares takes their value out
+    of the book rather than swapping it for cash inside it, so a sale shrinks
+    the denominator of caps 1, 2, 4 and 5 by exactly what it removes from the
+    numerator. Holding equity fixed would report a sale as clearing a cap that
+    the book it leaves behind still breaches. The self-reported net worth is
+    left alone: it includes cash, so a trade at market price does not move it.
     """
     price = ctx.price_twd()
     if price is None:  # pragma: no cover - callers check the price first
@@ -1628,6 +1632,8 @@ def project_position(ctx: PortfolioContext, *, share_delta: float) -> PortfolioC
     updates: dict[str, float] = {
         "position_market_value_twd": max((ctx.position_market_value_twd or 0.0) + delta_value, 0.0)
     }
+    if ctx.total_equity_twd is not None:
+        updates["total_equity_twd"] = max(ctx.total_equity_twd + delta_value, 0.0)
     held = ctx.held_shares()
     if held is not None:
         updates["quantity"] = max(held + share_delta, 0.0)
@@ -1684,7 +1690,25 @@ def suggest_quantity_range(
     caps = notional_caps(budget, ctx)
     if not caps:
         return None
-    binding_id, binding_value = min(caps.items(), key=lambda item: item[1])
+    current = ctx.position_market_value_twd or 0.0
+    # Each cap's ceiling moves at its own rate as the book moves (cap 3 not at
+    # all, cap 1 by its weight, ...), so the cap that is tightest before the
+    # trade need not be the one that binds after it. The binding cap is the one
+    # whose *post-trade* edge comes first: the smallest room to buy, or -- the
+    # same minimum, now negative -- the largest sale required. Every returned
+    # quantity is then verified against all of ``caps``, not only this one.
+    edges = {
+        cap_id: _edge_shares(
+            current=current,
+            binding_value=value,
+            fraction=_book_fraction(budget, ctx, cap_id=cap_id, cap_value=value),
+            price=price,
+        )
+        for cap_id, value in caps.items()
+    }
+    binding_id = min(edges, key=lambda cap_id: edges[cap_id])
+    edge = edges[binding_id]
+    cap_ids = tuple(caps)
     # 條件 35: cap 5 dropped out for a non-positive edge is **not** a cap that
     # lacked usable data, and the standing sentence below says exactly that. It
     # had its pair, computed with it, and arrived at a definite zero. So it is
@@ -1720,12 +1744,9 @@ def suggest_quantity_range(
     # conditioned on one, which would leave it silently absent if that changed.
     zero_allowance_note = KELLY_ZERO_ALLOWANCE_RANGE_NOTE if zero_allowance else ""
     trailing_note = f"{skipped_note}{zero_allowance_note}"
-    current = ctx.position_market_value_twd or 0.0
 
     if action == "add":
-        upper = _largest_compliant_buy(
-            budget, ctx, binding_id=binding_id, start=math.floor((binding_value - current) / price)
-        )
+        upper = _largest_compliant_buy(budget, ctx, cap_ids=cap_ids, start=math.floor(edge))
         if upper is None:
             return None
         lower = max(1, math.floor(upper * RANGE_LOWER_RATIO))
@@ -1748,7 +1769,8 @@ def suggest_quantity_range(
         )
 
     if action in {"reduce", "stop_loss", "take_profit"}:
-        if current - binding_value <= 0.0:
+        if edge >= 0.0:
+            # No cap needs a sale: nothing here is above its limit.
             return None
         held = ctx.held_shares()
         sellable = math.floor(held) if held is not None else None
@@ -1762,8 +1784,8 @@ def suggest_quantity_range(
         result = _smallest_compliant_sell(
             budget,
             ctx,
-            binding_id=binding_id,
-            start=max(1, math.ceil((current - binding_value) / price)),
+            cap_ids=cap_ids,
+            start=max(1, math.ceil(-edge)),
             sellable=sellable,
         )
         if result is None:
@@ -1811,27 +1833,75 @@ def suggest_quantity_range(
     return None
 
 
-def _passes(
-    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, share_delta: float
-) -> bool:
-    """Whether the binding cap explicitly **passes** after a hypothetical trade.
+def _book_fraction(
+    budget: RiskBudget, ctx: PortfolioContext, *, cap_id: str, cap_value: float
+) -> float:
+    """Fraction of the valued book cap ``cap_id`` grows by per TWD of trade.
 
-    ``passed`` only -- ``not_evaluable`` is not treated as a pass. A cap whose
+    A trade moves the book by what it moves the position (see
+    :func:`project_position`), so a cap written as ``k × equity`` keeps moving
+    while the position does. Caps 1, 4 and 5 are exactly ``k × equity`` in
+    :func:`notional_caps` (``k`` is the weight cap, ``loss cap × price / stop``
+    and the Kelly allowance), so ``k`` is recovered as their value over equity.
+    Cap 2 subtracts the rest of the sector, so its ``k`` is the sector weight
+    cap itself. Cap 3 is measured against the net worth, which a trade does not
+    move, so it is ``0``.
+    """
+    if cap_id == "gross_exposure":
+        return 0.0
+    if cap_id == "sector_weight":
+        return budget.max_sector_weight
+    equity = ctx.total_equity_twd
+    if equity is None or not equity > 0.0:  # pragma: no cover - notional_caps is empty then
+        return 0.0
+    return cap_value / equity
+
+
+def _edge_shares(*, current: float, binding_value: float, fraction: float, price: float) -> float:
+    """Signed trade size, in shares, at which the binding cap is reached.
+
+    Solves ``current + d = binding + k·d`` for the trade value ``d`` (the cap's
+    own ceiling rises by ``k`` per TWD the book gains), i.e.
+    ``d = (binding - current) / (1 - k)``. Positive means room left to buy,
+    negative means shares to sell. It is only the starting point of the walk in
+    :func:`_largest_compliant_buy` / :func:`_smallest_compliant_sell`, which
+    verify every returned quantity against the projected book. With ``k >= 1``
+    the equation has no finite edge (the position can never outgrow a cap that
+    is at least the whole book), so the book-fixed estimate is used and the walk
+    does the rest.
+    """
+    if fraction >= 1.0:
+        return (binding_value - current) / price
+    return (binding_value - current) / ((1.0 - fraction) * price)
+
+
+def _passes(
+    budget: RiskBudget, ctx: PortfolioContext, *, cap_ids: Sequence[str], share_delta: float
+) -> bool:
+    """Whether every cap in ``cap_ids`` explicitly **passes** after a hypothetical trade.
+
+    All of them, not only the binding one: caps move at different rates as the
+    book moves, so a quantity sized off one cap can still breach another that
+    took part in the arithmetic (risk-compliance 2026-10-24, A-1). ``passed``
+    only -- ``not_evaluable`` is not treated as a pass. A cap whose
     inputs went missing tells us nothing about whether the trade is inside the
     budget, and sizing a suggestion off "we could not check" would put the
     engine's name to a quantity it never verified.
     """
-    return limit_status_after(budget, ctx, limit_id=binding_id, share_delta=share_delta) == "passed"
+    return all(
+        limit_status_after(budget, ctx, limit_id=cap_id, share_delta=share_delta) == "passed"
+        for cap_id in cap_ids
+    )
 
 
 def _largest_compliant_buy(
-    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, start: int
+    budget: RiskBudget, ctx: PortfolioContext, *, cap_ids: Sequence[str], start: int
 ) -> int | None:
-    """Largest buy at or below ``start`` that leaves the binding cap passing.
+    """Largest buy at or below ``start`` that leaves every cap in ``cap_ids`` passing.
 
     Falls through to ``None`` ("no suggestion") only if the loop bound is
     exhausted. That cannot happen with the shipped budget -- the arithmetic
-    edge from :func:`notional_caps` is already within one share of the answer,
+    edge from :func:`_edge_shares` is already within one share of the answer,
     so at most one step back is ever needed -- and the bound is a safety valve
     against an inconsistent budget rather than a live code path. The fall-through
     is pinned by a white-box test that shrinks
@@ -1841,16 +1911,21 @@ def _largest_compliant_buy(
     for _ in range(MAX_SIZING_ADJUSTMENTS):
         if shares < 1:
             return None
-        if _passes(budget, ctx, binding_id=binding_id, share_delta=float(shares)):
+        if _passes(budget, ctx, cap_ids=cap_ids, share_delta=float(shares)):
             return shares
         shares -= 1
     return None
 
 
 def _smallest_compliant_sell(
-    budget: RiskBudget, ctx: PortfolioContext, *, binding_id: str, start: int, sellable: int
+    budget: RiskBudget,
+    ctx: PortfolioContext,
+    *,
+    cap_ids: Sequence[str],
+    start: int,
+    sellable: int,
 ) -> tuple[int, bool] | None:
-    """Smallest sale from ``start`` up that leaves the binding cap passing.
+    """Smallest sale from ``start`` up that leaves every cap in ``cap_ids`` passing.
 
     ``sellable`` is the whole holding rounded down to shares, and is at least 1
     (the caller rejects a smaller holding outright). Returns
@@ -1873,10 +1948,8 @@ def _smallest_compliant_sell(
     shares = start
     for _ in range(MAX_SIZING_ADJUSTMENTS):
         if shares >= sellable:
-            return sellable, _passes(
-                budget, ctx, binding_id=binding_id, share_delta=-float(sellable)
-            )
-        if _passes(budget, ctx, binding_id=binding_id, share_delta=-float(shares)):
+            return sellable, _passes(budget, ctx, cap_ids=cap_ids, share_delta=-float(sellable))
+        if _passes(budget, ctx, cap_ids=cap_ids, share_delta=-float(shares)):
             return shares, True
         shares += 1
     return None
