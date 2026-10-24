@@ -339,6 +339,19 @@ def _classify_raw_rows(
 
     A null-gap row whose derived date is outside ``[start, end]`` is dropped
     like an out-of-range bar.
+
+    Edge conventions (pinned by tests; risk review N-97):
+
+    * "A timestamp that cannot become a date" is decided by Python ``int()``
+      followed by the date derivation: a JSON number such as ``1704157200.5``
+      (parsed as ``Decimal``) converts and is a bar; the string
+      ``"1704157200.5"`` does not and is malformed. The raw value is kept as
+      received either way.
+    * A non-finite **price** (``NaN`` / ``Infinity`` JSON literals) is not
+      malformed: it converts to a non-finite ``Decimal`` and the row is a bar,
+      left for the replay gate's value checks (treated like any other value).
+    * A non-finite **volume** is malformed: ``int()`` of a non-finite
+      ``Decimal`` raises, so the whole fetch fails.
     """
     timestamps, opens, highs, lows, closes, volumes = columns
     arrays = (opens, highs, lows, closes, volumes)

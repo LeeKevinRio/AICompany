@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import closing
@@ -761,6 +762,139 @@ class TestNullGapRows:
             (_ts(JAN_DAYS[3]), JAN_DAYS[3], ALL_FIELDS),
         ]
         assert snapshot.bar_count == 2
+
+
+# --------------------------------------------------------------------------- #
+# N-98 (risk review N-97): non-finite values and non-integer timestamps
+# --------------------------------------------------------------------------- #
+
+
+def _json_literal_step(payload: dict[str, Any]) -> Step:
+    """A scripted Yahoo body written with Python's ``json`` so NaN/Infinity stay literals."""
+    body = json.dumps(payload).encode("utf-8")
+    return lambda _request: httpx.Response(200, content=body)
+
+
+def _body_with_first_timestamp(
+    literal: str, null_cells: dict[int, tuple[str, ...]] | None = None
+) -> bytes:
+    """A January body whose first timestamp is written as the raw JSON ``literal``."""
+    sentinel = 999_999_999
+    payload = _payload([sentinel, *_jan_stamps()[1:]], null_cells=null_cells)
+    text = json.dumps(payload)
+    assert text.count(str(sentinel)) == 1
+    return text.replace(str(sentinel), literal).encode("utf-8")
+
+
+class TestNonFiniteValuesAndNonIntegerTimestamps:
+    def test_non_finite_close_is_a_bar_not_malformed(self) -> None:  # N-98 (1)
+        closes = [float("nan"), float("inf"), 3.0, 4.0]
+        step = _json_literal_step(_payload(_jan_stamps(), closes=closes))
+        result = Wire(step).adapter().get_index_raw_responses(TWII, START, END)
+        assert result.reason is None
+        bars = result.responses[0].bars
+        assert [bar.session_date for bar in bars] == JAN_DAYS  # positions kept, none dropped
+        assert bars[0].close.is_nan()
+        assert bars[1].close.is_infinite()
+        assert bars[2].close == Decimal("3.0")
+        assert result.responses[0].null_gap_rows == ()
+
+    def test_non_finite_close_reaches_the_snapshot_as_backup(self) -> None:  # N-98 (1)
+        closes = [float("nan"), float("inf"), 3.0, 4.0]
+        snapshot = _fetch(Wire(_json_literal_step(_payload(_jan_stamps(), closes=closes))))
+        assert snapshot.status is DataStatus.BACKUP
+        assert snapshot.bar_count == 4
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    def test_non_finite_volume_is_malformed_with_the_common_reason(self, bad: float) -> None:
+        payload = _jan_payload()
+        _quote_block(payload)["volume"][1] = bad  # N-98 (2)
+        reason = (
+            Wire(_json_literal_step(payload))
+            .adapter()
+            .get_index_raw_responses(TWII, START, END)
+            .reason
+        )
+        reference = (
+            Wire(MALFORMED_PAYLOADS["close_value_abc"]())
+            .adapter()
+            .get_index_raw_responses(TWII, START, END)
+            .reason
+        )
+        assert reason == reference
+        assert MALFORMED_KEYWORD in (reason or "")
+
+    def test_non_finite_volume_fails_the_service_call_too(self) -> None:  # N-98 (2)
+        payload = _jan_payload()
+        _quote_block(payload)["volume"][0] = float("nan")
+        snapshot = _fetch(Wire(_json_literal_step(payload)))
+        _assert_failed_closed(snapshot)
+        assert MALFORMED_KEYWORD in (snapshot.reason or "")
+
+    def test_non_finite_volume_on_a_null_gap_row_is_malformed(self) -> None:
+        payload = _payload(_jan_stamps(), null_cells={1: ("close",)})
+        _quote_block(payload)["volume"][1] = float("nan")
+        result = (
+            Wire(_json_literal_step(payload)).adapter().get_index_raw_responses(TWII, START, END)
+        )
+        assert result.responses == ()
+        assert MALFORMED_KEYWORD in (result.reason or "")
+
+    def test_fractional_json_number_timestamp_is_a_bar_with_decimal_raw(self) -> None:  # N-98 (3)
+        body = _body_with_first_timestamp("1704157200.5")
+        wire = Wire(lambda _request: httpx.Response(200, content=body))
+        response = wire.adapter().get_index_raw_responses(TWII, START, END).responses[0]
+        first = response.bars[0]
+        assert first.raw_timestamp == Decimal("1704157200.5")
+        assert type(first.raw_timestamp) is Decimal
+        assert first.session_date == date(2024, 1, 2)
+
+    def test_fractional_string_timestamp_is_malformed(self) -> None:  # N-98 (3)
+        stamps = _jan_stamps()
+        stamps[0] = "1704157200.5"
+        result = Wire(_payload(stamps)).adapter().get_index_raw_responses(TWII, START, END)
+        assert result.responses == ()
+        assert MALFORMED_KEYWORD in (result.reason or "")
+
+    def test_integer_string_timestamp_is_still_kept_as_a_string(self) -> None:
+        stamps = _jan_stamps()
+        stamps[0] = "1704157200"
+        bar = Wire(_payload(stamps)).adapter().get_index_raw_responses(TWII, START, END)
+        first = bar.responses[0].bars[0]
+        assert first.raw_timestamp == "1704157200"
+        assert type(first.raw_timestamp) is str
+
+    def test_gap_row_keeps_decimal_timestamp_type_through_the_service(self) -> None:  # N-98 (4)
+        body = _body_with_first_timestamp("1704182400.0", null_cells={0: ALL_FIELDS})
+        snapshot = _fetch(Wire(lambda _request: httpx.Response(200, content=body)))
+        (gap,) = snapshot.responses[0].null_gap_rows
+        assert gap.raw_timestamp == Decimal("1704182400.0")
+        assert type(gap.raw_timestamp) is Decimal
+        assert str(gap.raw_timestamp) == "1704182400.0"  # the literal's scale is kept
+        assert gap.session_date == date(2024, 1, 2)
+
+    def test_gap_row_keeps_string_timestamp_type_through_the_service(self) -> None:  # N-98 (4)
+        stamps = _jan_stamps()
+        stamps[0] = "1704182400"
+        snapshot = _fetch(Wire(_payload(stamps, null_cells={0: ALL_FIELDS})))
+        (gap,) = snapshot.responses[0].null_gap_rows
+        assert gap.raw_timestamp == "1704182400"
+        assert type(gap.raw_timestamp) is str
+
+    def test_service_hands_over_gap_timestamp_types_unchanged(self) -> None:  # N-98 (4)
+        gaps = (
+            RawNullGapRow(Decimal("1704182400.0"), JAN_DAYS[0], ("volume",)),
+            RawNullGapRow("1704182400", JAN_DAYS[0], ("volume",)),
+            RawNullGapRow(1704182400, JAN_DAYS[0], ("volume",)),
+        )
+        fetch = dataclasses.replace(
+            _good_fetch(), responses=(_raw_response(1, null_gap_rows=gaps),)
+        )
+        snapshot = fetch_replay_index_snapshot(
+            FakeReplayProvider(fetch), index_symbol=TWII, start=START, end=END
+        )
+        handed = [type(g.raw_timestamp) for g in snapshot.responses[0].null_gap_rows]
+        assert handed == [Decimal, str, int]
 
 
 # --------------------------------------------------------------------------- #
