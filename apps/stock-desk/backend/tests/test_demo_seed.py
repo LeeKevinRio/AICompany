@@ -58,7 +58,7 @@ from app.portfolio.valuation import PositionValuator
 from app.positions.models import MARKET_CURRENCY, PositionInput, PositionWriteInput
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
-from tests.api_helpers import UnavailableFxProvider
+from tests.api_helpers import CLIENT_HEADERS, UnavailableFxProvider
 
 _AS_OF = datetime(2026, 7, 25, 6, 0, tzinfo=UTC)
 
@@ -160,7 +160,7 @@ def demo_harness(tmp_path: Path) -> Iterator[DemoHarness]:
     app.dependency_overrides[get_fx_provider] = lambda: UnavailableFxProvider()
     app.dependency_overrides[get_kelly_input_store] = lambda: kelly_inputs
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield DemoHarness(
             client=client,
             db_path=db_path,

@@ -30,7 +30,7 @@ from app.positions.models import (
 )
 from app.positions.sectors import SECTOR_REJECTED_MESSAGE, SECTOR_US_REJECTED_MESSAGE
 from app.positions.store import PositionStore
-from tests.api_helpers import position_payload
+from tests.api_helpers import CLIENT_HEADERS, position_payload
 
 _HEADER = "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,sector,note"
 
@@ -39,7 +39,7 @@ _HEADER = "symbol,market,quantity,avg_cost,currency,opened_at,instrument_type,se
 def client(tmp_path: Path) -> Iterator[TestClient]:
     store = PositionStore(db_path=tmp_path / "positions.db")
     app.dependency_overrides[get_position_store] = lambda: store
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

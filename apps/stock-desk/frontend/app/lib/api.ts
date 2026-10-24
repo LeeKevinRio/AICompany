@@ -155,13 +155,24 @@ function parseValidationErrors(body: unknown): Record<string, string> {
   return result;
 }
 
+/**
+ * Header the backend requires on every state-changing request
+ * (backend `app/api/client_header.py`): a cross-site form post cannot set it,
+ * so another page cannot trigger writes on the user's behalf. Safe methods skip
+ * it to avoid a CORS preflight on every read.
+ */
+export const CLIENT_HEADER = "X-Stock-Desk-Client";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
       headers: {
         Accept: "application/json",
+        ...(SAFE_METHODS.has(method) ? {} : { [CLIENT_HEADER]: "1" }),
         ...init?.headers,
       },
     });

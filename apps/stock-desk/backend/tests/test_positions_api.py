@@ -11,13 +11,14 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_position_store
 from app.main import app
 from app.positions.store import PositionStore
+from tests.api_helpers import CLIENT_HEADERS
 
 
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
     store = PositionStore(db_path=tmp_path / "positions.db")
     app.dependency_overrides[get_position_store] = lambda: store
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

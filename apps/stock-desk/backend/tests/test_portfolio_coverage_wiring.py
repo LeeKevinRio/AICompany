@@ -45,7 +45,7 @@ from app.portfolio.summary import PortfolioSummary, build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.models import PositionInput
 from app.positions.store import PositionStore
-from tests.api_helpers import FakePriceService, UnavailableFxProvider
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, UnavailableFxProvider
 from tests.import_graph import APP_ROOT
 
 NOW = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)  # Monday
@@ -228,7 +228,7 @@ def _serving(desk: Desk) -> Iterator[TestClient]:
     app.dependency_overrides[get_dividend_store] = lambda: desk.dividends
     app.dependency_overrides[get_price_bar_cache] = lambda: desk.bar_cache
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=CLIENT_HEADERS) as client:
             yield client
     finally:
         app.dependency_overrides.clear()
@@ -452,7 +452,7 @@ def test_production_wiring_proves_coverage_from_the_main_db(
     try:
         with (
             caplog.at_level(logging.DEBUG, logger=_SCREEN_LOGGER),
-            TestClient(app) as client,
+            TestClient(app, headers=CLIENT_HEADERS) as client,
         ):
             response = client.get("/api/portfolio/summary")
     finally:

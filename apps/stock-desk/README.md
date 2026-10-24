@@ -32,6 +32,20 @@ docker compose up --build
 > `directory_synced: false`,不會把「還沒同步」誤顯示成「查無結果」
 > (`backend/app/api/directory.py:93-102`)。
 
+## 網路暴露
+
+後端 API **沒有任何身分驗證**,所以只開在本機迴環介面:
+
+- `compose.yaml` 的 port 寫成 `127.0.0.1:8000:8000`、`127.0.0.1:3000:3000`,
+  同一個區網的其他裝置連不到。容器內的 `--host 0.0.0.0` 是容器網路必需,
+  實際對外範圍由這裡的 host 端綁定決定。CI 的 compose 檢查會擋下沒綁 `127.0.0.1` 的 port。
+- 所有會改資料的請求(POST／PUT／PATCH／DELETE)都必須帶 `X-Stock-Desk-Client` header,
+  否則回 403。瀏覽器不會替跨站表單或圖片連結加上自訂 header,這樣其他網頁就無法
+  在你不知情時觸發緊急清倉、確認警示或匯入持倉。前端 `lib/api.ts` 已自動帶上。
+- 若要用 curl 手動呼叫寫入型 API,記得加 `-H "X-Stock-Desk-Client: 1"`。
+- **已知限制**:這個 header 擋得住跨站表單與圖片連結,擋不住 DNS rebinding(攻擊網域 rebind 到
+  127.0.0.1 後即與本機同源,可以自己帶 header)。要防這一層需另加 Host 白名單,目前尚未實作。
+
 ## 資料存放與備份
 
 `backend` 與 `scheduler` 兩個 service 共用同一個具名 volume `stock-desk-data`,

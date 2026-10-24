@@ -46,7 +46,7 @@ from app.main import app
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.settings.store import SettingsStore
-from tests.api_helpers import FakePriceService, UnavailableFxProvider
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, UnavailableFxProvider
 from tests.isolation_helpers import NetworkBlockedError, is_blocked_address
 
 
@@ -154,7 +154,7 @@ def api_harness(
     app.dependency_overrides[get_kelly_input_store] = lambda: kelly_inputs
     app.dependency_overrides[get_kelly_attempt_store] = lambda: kelly_attempts
 
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield ApiHarness(
             client=test_client,
             price_service=price_service,
