@@ -18,9 +18,29 @@
        數). Any other index symbol is an explicit ``insufficient_data``-style
        ``unavailable``, never a guessed proxy.
 
-Both roles share the same unofficial "chart" endpoint and parsing logic
-below; only the request symbol (and, for the per-security role, canonical
-validation) differs.
+3. **Raw-response access for the replay snapshot**
+   (:meth:`YFinanceAdapter.get_index_raw_responses`, ADR-0005 I-3 解釋性註記
+   "adapter 一側"; follow-up N-82). It hands back, per response, the raw
+   ``meta.exchangeTimezoneName`` / ``meta.gmtoffset`` values, the time the
+   response was received, and, per bar, the raw timestamp, the derived session
+   date and the OHLCV values. Rows whose OHLCV has a ``null`` but whose date is
+   derivable and in range are not bars; they are handed back one by one as
+   ``null_gap_rows`` so the snapshot never silently loses a row. Like
+   ``get_index_daily_bars`` it is deliberately *not* part of the
+   ``MarketDataProvider`` ABC and is never wrapped by ``IndexProviderBridge``;
+   it accepts only :data:`INDEX_SYMBOL_METADATA` keys. It always issues exactly
+   one request, for ``[start - 1 day, end + 1 day]``, and keeps rows by their
+   derived ``session_date`` in ``[start, end]``. It is fail-closed: any failed
+   request, unparseable response or **malformed row** fails the whole call (no
+   bars, no partial responses). Its only consumer is the single replay fetch
+   function in ``app/services/index.py``. Design rulings:
+   ``work/reviews/2026-10-24-N82設計裁量點裁定-tech-architect.md``.
+
+All roles share the same unofficial "chart" endpoint and parsing logic below
+(the per-row parse exists once, in :func:`_parse_chart_row`, and the
+timestamp-to-date derivation exists exactly once, in
+:func:`_derive_session_date`); only the request symbol (and, for the per-security
+role, canonical validation) differs.
 
 Data source: Yahoo Finance's undocumented "chart" JSON endpoint -- the same
 one the real ``yfinance`` PyPI package calls internally. There is no official
@@ -42,7 +62,13 @@ exercised in that run** -- the verification tool only probes the index
 symbol for this adapter; no live call was made against, e.g., ``AAPL``
 through the ``get_daily_bars`` method. That role remains unverified against
 a live response until it is (there are currently no US-market holdings to
-have forced the question, per the same work-log entry).
+have forced the question, per the same work-log entry). **Role 3 (the raw-
+response method, :meth:`YFinanceAdapter.get_index_raw_responses`) is likewise
+NOT verified against a live response**: it reuses role 2's endpoint, request
+shape and parsing, but no live call has been made through it. In particular the
+real ``^TWII`` timestamp time-of-day, ``meta.exchangeTimezoneName`` and
+``meta.gmtoffset`` values are unverified (follow-up N-81 / 決策包 #49); handing
+them back unmodified is what lets the replay gate inspect them.
 
 Endpoint::
 
@@ -90,7 +116,8 @@ practice.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar, Final
 from urllib.parse import quote
@@ -124,6 +151,238 @@ INDEX_SYMBOL_METADATA: Final[dict[str, tuple[Market, str]]] = {
     "^GSPC": ("US", "USD"),
     "^TWII": ("TW", "TWD"),
 }
+
+
+_VALUE_FIELDS: Final = ("open", "high", "low", "close", "volume")
+
+#: The one reason given for every malformed-row failure of the raw path.
+_MALFORMED_ROW_REASON: Final = "yfinance 回應含無法解析的列，暫不可用。"
+
+
+@dataclass(frozen=True)
+class RawChartBar:
+    """One bar exactly as one row of a chart response, plus its derived date.
+
+    ``raw_timestamp`` is the element of the response's ``timestamp`` array
+    verbatim (the JSON is parsed with ``parse_float=Decimal``, so a fractional
+    value arrives as ``Decimal``; a string stays a string). It is deliberately
+    **not** rejected for being a non-integer: ADR-0027 D-3 stores it as
+    received and the replay gate judges it. Downstream obligations for storing
+    it (type-preserving serialization, strict ``type(x) is int`` reading) are in
+    ``work/reviews/2026-10-24-N82設計裁量點裁定-tech-architect.md`` point 3.
+    ``session_date`` is the single date derivation in this module
+    (:func:`_derive_session_date`). The OHLCV values are converted the same way
+    ``PriceBar``'s are.
+    """
+
+    raw_timestamp: object
+    session_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+@dataclass(frozen=True)
+class RawNullGapRow:
+    """An in-range row that has a derivable date but a ``null`` OHLCV field.
+
+    Not a bar and never filled in; reported so the snapshot's row set is
+    explainable. ``null_fields`` lists the null fields in the order open, high,
+    low, close, volume.
+    """
+
+    raw_timestamp: object
+    session_date: date
+    null_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RawChartResponse:
+    """One chart response: raw ``meta`` values, in-range bars and null-gap rows.
+
+    ``exchange_timezone_name`` / ``gmtoffset`` are ``meta.exchangeTimezoneName``
+    / ``meta.gmtoffset`` untouched -- any type, ``None`` when absent. Judging
+    them is the replay gate's job, never this adapter's. ``received_at`` is
+    taken right after the request returned successfully.
+    """
+
+    response_seq: int
+    exchange_timezone_name: object
+    gmtoffset: object
+    bars: tuple[RawChartBar, ...]
+    received_at: datetime
+    null_gap_rows: tuple[RawNullGapRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class RawChartFetch:
+    """Result of :meth:`YFinanceAdapter.get_index_raw_responses`.
+
+    All-or-nothing: either ``reason is None`` and ``responses`` holds every
+    response (each with at least one bar), or ``reason`` is set and
+    ``responses`` is empty. There is no partial result.
+    """
+
+    index_symbol: str
+    as_of: datetime
+    source: str
+    responses: tuple[RawChartResponse, ...] = ()
+    reason: str | None = None
+
+
+class _MalformedRowError(Exception):
+    """A row of a raw response that cannot be parsed; fails the whole raw fetch."""
+
+
+def _raw_failure(index_symbol: str, now: datetime, *, reason: str) -> RawChartFetch:
+    return RawChartFetch(
+        index_symbol=index_symbol,
+        as_of=now,
+        source=YFinanceAdapter.source_id,
+        responses=(),
+        reason=reason,
+    )
+
+
+def _chart_columns(
+    result: Any,
+) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]] | None:
+    """``(timestamps, opens, highs, lows, closes, volumes)`` of a result block, or ``None``."""
+    if not isinstance(result, dict):
+        return None
+    timestamps = result.get("timestamp")
+    indicators = result.get("indicators")
+    if not isinstance(timestamps, list) or not isinstance(indicators, dict):
+        return None
+    quotes = indicators.get("quote")
+    if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], dict):
+        return None
+    quote_data = quotes[0]
+    return (
+        timestamps,
+        quote_data.get("open") or [],
+        quote_data.get("high") or [],
+        quote_data.get("low") or [],
+        quote_data.get("close") or [],
+        quote_data.get("volume") or [],
+    )
+
+
+def _derive_session_date(ts: Any) -> date:
+    """The only place a timestamp becomes a date (UTC calendar date of the instant).
+
+    A test asserts ``fromtimestamp`` appears exactly once in this module, here,
+    and that only :func:`_parse_chart_row` and :func:`_classify_raw_rows` call
+    this function -- so no role can grow a second, divergent date derivation.
+    """
+    return datetime.fromtimestamp(int(ts), tz=UTC).date()
+
+
+def _to_price(value: Any) -> Decimal:
+    return Decimal(str(value))
+
+
+def _to_volume(value: Any) -> int:
+    return int(Decimal(str(value)))
+
+
+def _parse_chart_row(
+    ts: Any,
+    opens: list[Any],
+    highs: list[Any],
+    lows: list[Any],
+    closes: list[Any],
+    volumes: list[Any],
+    idx: int,
+) -> RawChartBar | None:
+    """The one per-row parse for bars, shared by every role (bars and raw responses alike)."""
+    if ts is None:
+        return None
+    raw_values = (opens[idx], highs[idx], lows[idx], closes[idx], volumes[idx])
+    if any(value is None for value in raw_values):
+        # A non-trading day / data gap for this index in the parallel
+        # arrays -- skipped, never interpolated or carried forward.
+        return None
+    session_date = _derive_session_date(ts)
+    open_price, high_price, low_price, close_price, volume_raw = raw_values
+    return RawChartBar(
+        raw_timestamp=ts,
+        session_date=session_date,
+        open=_to_price(open_price),
+        high=_to_price(high_price),
+        low=_to_price(low_price),
+        close=_to_price(close_price),
+        volume=_to_volume(volume_raw),
+    )
+
+
+def _classify_raw_rows(
+    columns: tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]],
+    start: date,
+    end: date,
+) -> tuple[list[RawChartBar], list[RawNullGapRow]]:
+    """Split one raw response into bars and null-gap rows, or raise on a malformed row.
+
+    Every row is exactly one of:
+
+    * **malformed** -- parallel arrays of different length (an absent array
+      counts as empty), a timestamp that is ``None`` or a ``bool``, a timestamp
+      that cannot become a date, or a non-null value that cannot be converted.
+      Raises :class:`_MalformedRowError` whether or not the row would fall in
+      range: a malformed row's date cannot be trusted either way;
+    * a **null gap** -- a derivable, in-range date with at least one ``null``
+      OHLCV field: reported in the second list, never a bar;
+    * a **bar** -- built by :func:`_parse_chart_row`, kept only when its derived
+      date is in ``[start, end]``. Source order is kept, nothing is de-duplicated.
+
+    A null-gap row whose derived date is outside ``[start, end]`` is dropped
+    like an out-of-range bar.
+    """
+    timestamps, opens, highs, lows, closes, volumes = columns
+    arrays = (opens, highs, lows, closes, volumes)
+    if any(not isinstance(a, list) or len(a) != len(timestamps) for a in arrays):
+        raise _MalformedRowError("timestamp and OHLCV arrays differ in length")
+    bars: list[RawChartBar] = []
+    gaps: list[RawNullGapRow] = []
+    for idx, ts in enumerate(timestamps):
+        if ts is None or isinstance(ts, bool):
+            raise _MalformedRowError(f"row #{idx}: unusable timestamp {ts!r}")
+        try:
+            session_date = _derive_session_date(ts)
+            values = tuple(array[idx] for array in arrays)
+            null_fields = tuple(
+                name for name, value in zip(_VALUE_FIELDS, values, strict=True) if value is None
+            )
+            if null_fields:
+                for name, value in zip(_VALUE_FIELDS, values, strict=True):
+                    if value is None:
+                        continue
+                    # Validate the non-null values; a bad one makes the row malformed.
+                    if name == "volume":
+                        _to_volume(value)
+                    else:
+                        _to_price(value)
+                if start <= session_date <= end:
+                    gaps.append(RawNullGapRow(ts, session_date, null_fields))
+                continue
+            bar = _parse_chart_row(ts, opens, highs, lows, closes, volumes, idx)
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            InvalidOperation,
+            IndexError,
+            OverflowError,
+            OSError,
+        ) as exc:
+            raise _MalformedRowError(f"row #{idx}: {exc}") from exc
+        if bar is None:  # unreachable: no null field and a non-None timestamp
+            raise _MalformedRowError(f"row #{idx}: unparseable")
+        if start <= bar.session_date <= end:
+            bars.append(bar)
+    return bars, gaps
 
 
 def _unavailable(now: datetime, *, reason: str) -> ProviderResult:
@@ -264,6 +523,91 @@ class YFinanceAdapter(MarketDataProvider):
         now = datetime.now(UTC)
         return self._fetch(request_symbol, request_symbol, "TW", "TWD", start, end, now)
 
+    def get_index_raw_responses(self, index_symbol: str, start: date, end: date) -> RawChartFetch:
+        """Raw chart responses for one index, for the replay snapshot (ADR-0005 I-3 註記).
+
+        Not part of the ``MarketDataProvider`` ABC and never reached through
+        ``IndexProviderBridge``. ``index_symbol`` must be a key of
+        :data:`INDEX_SYMBOL_METADATA` verbatim; anything else fails with **zero**
+        requests. Always exactly one request, for ``[start - 1 day, end + 1
+        day]`` (so the request window does not depend on how a timestamp is
+        turned into a date); rows are then kept by their derived
+        ``session_date`` in ``[start, end]``. The single response carries its
+        ``meta.exchangeTimezoneName`` / ``meta.gmtoffset`` untouched, its
+        ``received_at``, its bars (raw timestamp, derived ``session_date``,
+        OHLCV) and its ``null_gap_rows``. Bars are kept in source order -- no
+        sorting, no de-duplication, no interpolation.
+
+        Fail-closed: a transport error, non-200 status, unparseable body,
+        ``chart.error``, missing or malformed result block, **any malformed row**
+        (see :func:`_classify_raw_rows`), or a response with no in-range bar
+        fails the **whole** call -- ``responses`` is empty and ``reason`` says
+        why. It never serves a cache or retries on a different symbol. The
+        client's own transport-level retry (``RateLimitedClient``) is part of the
+        same request and is the only retry.
+        """
+        now = datetime.now(UTC)
+        if index_symbol not in INDEX_SYMBOL_METADATA:
+            logger.info(
+                "yfinance: raw-response request for %r is outside the supported range %s",
+                index_symbol,
+                sorted(INDEX_SYMBOL_METADATA),
+            )
+            return _raw_failure(
+                index_symbol,
+                now,
+                reason=(
+                    f"「{index_symbol}」目前不在本工具支援的指數範圍內"
+                    f"（僅支援 {', '.join(sorted(INDEX_SYMBOL_METADATA))}），"
+                    "本次不以其他指數或代理 ETF 替代。"
+                ),
+            )
+        if end < start:
+            return _raw_failure(
+                index_symbol, now, reason="取數區間不合法（結束日早於起始日），本次不發出請求。"
+            )
+
+        result, error_reason = self._request_chart_result(
+            index_symbol, start - timedelta(days=1), end + timedelta(days=1)
+        )
+        received_at = datetime.now(UTC)
+        if error_reason is not None:
+            return _raw_failure(index_symbol, now, reason=error_reason)
+        columns = _chart_columns(result)
+        if columns is None:
+            return _raw_failure(
+                index_symbol, now, reason="yfinance 回應的結果區塊格式無法解析，暫不可用。"
+            )
+        try:
+            bars, gaps = _classify_raw_rows(columns, start, end)
+        except _MalformedRowError as exc:
+            logger.warning("yfinance returned a malformed row for %s: %s", index_symbol, exc)
+            return _raw_failure(index_symbol, now, reason=_MALFORMED_ROW_REASON)
+        if not bars:
+            return _raw_failure(
+                index_symbol,
+                now,
+                reason=f"yfinance 查無「{index_symbol}」在指定區間的指數日線資料。",
+            )
+        # `result` is a dict here: _chart_columns() returned columns for it.
+        meta = result.get("meta") if isinstance(result, dict) else None
+        meta_dict = meta if isinstance(meta, dict) else {}
+        response = RawChartResponse(
+            response_seq=1,
+            exchange_timezone_name=meta_dict.get("exchangeTimezoneName"),
+            gmtoffset=meta_dict.get("gmtoffset"),
+            bars=tuple(bars),
+            received_at=received_at,
+            null_gap_rows=tuple(gaps),
+        )
+        return RawChartFetch(
+            index_symbol=index_symbol,
+            as_of=now,
+            source=self.source_id,
+            responses=(response,),
+            reason=None,
+        )
+
     def _fetch(
         self,
         request_symbol: str,
@@ -275,6 +619,16 @@ class YFinanceAdapter(MarketDataProvider):
         now: datetime,
     ) -> tuple[list[PriceBar], str | None]:
         """Shared HTTP + parsing for both roles. Returns ``(bars, error_reason)``."""
+        result, error_reason = self._request_chart_result(request_symbol, start, end)
+        if error_reason is not None:
+            return [], error_reason
+        bars = self._parse_result(result, bar_symbol, market, currency, start, end, now)
+        return bars, None
+
+    def _request_chart_result(
+        self, request_symbol: str, start: date, end: date
+    ) -> tuple[Any, str | None]:
+        """One chart request. Returns ``(first result block, None)`` or ``(None, reason)``."""
         period1 = int(datetime.combine(start, datetime.min.time(), tzinfo=UTC).timestamp())
         # period2 is exclusive-ish in practice for this endpoint, so push one
         # day past `end` to make sure `end` itself is included.
@@ -290,35 +644,33 @@ class YFinanceAdapter(MarketDataProvider):
             )
         except httpx.TransportError as exc:
             logger.warning("yfinance request failed for %s: %s", request_symbol, exc)
-            return [], "yfinance 連線逾時或發生錯誤，暫不可用。"
+            return None, "yfinance 連線逾時或發生錯誤，暫不可用。"
 
         if response.status_code != httpx.codes.OK:
             logger.warning("yfinance returned HTTP %d for %s", response.status_code, request_symbol)
-            return [], "yfinance 回應非預期的 HTTP 狀態，暫不可用。"
+            return None, "yfinance 回應非預期的 HTTP 狀態，暫不可用。"
 
         try:
             payload = response.json(parse_float=Decimal)
         except ValueError:
             logger.warning("yfinance returned non-JSON body for %s", request_symbol)
-            return [], "yfinance 回應格式無法解析，暫不可用。"
+            return None, "yfinance 回應格式無法解析，暫不可用。"
 
         chart = payload.get("chart") if isinstance(payload, dict) else None
         if not isinstance(chart, dict):
-            return [], "yfinance 回應缺少預期的 chart 區塊，暫不可用。"
+            return None, "yfinance 回應缺少預期的 chart 區塊，暫不可用。"
 
         error = chart.get("error")
         if error:
             description = error.get("description") if isinstance(error, dict) else str(error)
-            return [], (
+            return None, (
                 f"yfinance 回報錯誤：{description}；無法確定是代號不存在、已下市，或暫時無資料。"
             )
 
         results = chart.get("result")
         if not isinstance(results, list) or not results:
-            return [], f"yfinance 對「{request_symbol}」未回傳任何結果區塊。"
-
-        bars = self._parse_result(results[0], bar_symbol, market, currency, start, end, now)
-        return bars, None
+            return None, f"yfinance 對「{request_symbol}」未回傳任何結果區塊。"
+        return results[0], None
 
     def _parse_result(
         self,
@@ -330,21 +682,10 @@ class YFinanceAdapter(MarketDataProvider):
         end: date,
         now: datetime,
     ) -> list[PriceBar]:
-        if not isinstance(result, dict):
+        columns = _chart_columns(result)
+        if columns is None:
             return []
-        timestamps = result.get("timestamp")
-        indicators = result.get("indicators")
-        if not isinstance(timestamps, list) or not isinstance(indicators, dict):
-            return []
-        quotes = indicators.get("quote")
-        if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], dict):
-            return []
-        quote_data = quotes[0]
-        opens = quote_data.get("open") or []
-        highs = quote_data.get("high") or []
-        lows = quote_data.get("low") or []
-        closes = quote_data.get("close") or []
-        volumes = quote_data.get("volume") or []
+        timestamps, opens, highs, lows, closes, volumes = columns
 
         bars: list[PriceBar] = []
         for idx, ts in enumerate(timestamps):
@@ -375,24 +716,18 @@ class YFinanceAdapter(MarketDataProvider):
         currency: str,
         now: datetime,
     ) -> PriceBar | None:
-        if ts is None:
+        raw_bar = _parse_chart_row(ts, opens, highs, lows, closes, volumes, idx)
+        if raw_bar is None:
             return None
-        raw_values = (opens[idx], highs[idx], lows[idx], closes[idx], volumes[idx])
-        if any(value is None for value in raw_values):
-            # A non-trading day / data gap for this index in the parallel
-            # arrays -- skipped, never interpolated or carried forward.
-            return None
-        trade_date = datetime.fromtimestamp(int(ts), tz=UTC).date()
-        open_price, high_price, low_price, close_price, volume_raw = raw_values
         return PriceBar(
             symbol=bar_symbol,
             market=market,
-            date=trade_date,
-            open=Decimal(str(open_price)),
-            high=Decimal(str(high_price)),
-            low=Decimal(str(low_price)),
-            close=Decimal(str(close_price)),
-            volume=int(Decimal(str(volume_raw))),
+            date=raw_bar.session_date,
+            open=raw_bar.open,
+            high=raw_bar.high,
+            low=raw_bar.low,
+            close=raw_bar.close,
+            volume=raw_bar.volume,
             currency=currency,
             as_of=now,
             source=self.source_id,

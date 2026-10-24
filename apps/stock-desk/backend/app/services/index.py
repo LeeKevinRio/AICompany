@@ -29,13 +29,20 @@ Two rules this module exists to enforce:
    result is disclosed as ``backup``. A ``cached_stale`` result is *not*
    upgraded to ``backup``: hiding staleness to satisfy a label would be the
    opposite of the point.
+
+One deliberate exception to "callers go through ``IndexSeriesService``": the
+replay snapshot fetch at the bottom of this module
+(:func:`fetch_replay_index_snapshot`, ADR-0005 I-3 解釋性註記, follow-up N-82).
+It reads no cache, writes no cache, touches no quota, labels its result
+``backup`` / ``unavailable`` itself and fails closed; see its docstring.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import ClassVar, Protocol
 
 from app.data.interface import (
@@ -397,4 +404,290 @@ def load_market_benchmark(
         # Forwarded, never dropped (風控 2026-09-15 R1-b) -- see load_index_series.
         reason=result.reason,
         notes=notes,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Replay snapshot fetch (ADR-0005 I-3 解釋性註記; ADR-0027 D-3; follow-up N-82)
+# --------------------------------------------------------------------------- #
+#
+# Everything below is the ONE place a replay snapshot of ``^TWII`` is fetched.
+# It is deliberately not an ``IndexSeriesService`` / ``MarketDataService`` path:
+# those layers read the cache and would re-label a primary-source success
+# ``FRESH``, and the replay snapshot needs the raw response fields (timestamp,
+# ``meta.exchangeTimezoneName``, ``meta.gmtoffset``) that ``PriceBar`` does not
+# carry. The sole caller is ``app/forecast/replay_checks.py``; nothing here may
+# be handed to views, the API, valuation, signals or the leverage chapter.
+
+REPLAY_UNSUPPORTED_SYMBOL_REASON = (
+    "重放快照只取 {target}，不接受「{requested}」；本次不發出請求，也不以其他指數替代。"
+)
+
+REPLAY_FETCH_FAILED_REASON = (
+    "重放快照取數失敗（{series_symbol}）：{detail}本次整次作廢，不回傳任何 bar，"
+    "不改用快取或其他來源。"
+)
+
+REPLAY_MALFORMED_RESPONSE_REASON = (
+    "重放快照取數失敗（{series_symbol}）：來源回傳的回應不完整或序號不連續，"
+    "本次整次作廢，不回傳任何 bar。"
+)
+
+
+class ReplayChartBarLike(Protocol):
+    """One raw bar as the replay adapter hands it over (structural; read-only)."""
+
+    @property
+    def raw_timestamp(self) -> object: ...
+    @property
+    def session_date(self) -> date: ...
+    @property
+    def open(self) -> Decimal: ...
+    @property
+    def high(self) -> Decimal: ...
+    @property
+    def low(self) -> Decimal: ...
+    @property
+    def close(self) -> Decimal: ...
+    @property
+    def volume(self) -> int: ...
+
+
+class ReplayNullGapRowLike(Protocol):
+    """An in-range row with a derivable date but a null OHLCV field (not a bar)."""
+
+    @property
+    def raw_timestamp(self) -> object: ...
+    @property
+    def session_date(self) -> date: ...
+    @property
+    def null_fields(self) -> tuple[str, ...]: ...
+
+
+class ReplayChartResponseLike(Protocol):
+    """One raw chart response: its ``meta`` values verbatim, its bars and null gaps."""
+
+    @property
+    def response_seq(self) -> int: ...
+    @property
+    def exchange_timezone_name(self) -> object: ...
+    @property
+    def gmtoffset(self) -> object: ...
+    @property
+    def bars(self) -> Sequence[ReplayChartBarLike]: ...
+    @property
+    def received_at(self) -> datetime: ...
+    @property
+    def null_gap_rows(self) -> Sequence[ReplayNullGapRowLike]: ...
+
+
+class ReplayChartFetchLike(Protocol):
+    """The adapter's all-or-nothing answer: ``reason`` set <=> no responses."""
+
+    @property
+    def index_symbol(self) -> str: ...
+    @property
+    def as_of(self) -> datetime: ...
+    @property
+    def source(self) -> str: ...
+    @property
+    def responses(self) -> Sequence[ReplayChartResponseLike]: ...
+    @property
+    def reason(self) -> str | None: ...
+
+
+class ReplayIndexChartProvider(Protocol):
+    """The slice of an index adapter the replay fetch needs.
+
+    Structural, like :class:`IndexBarsProvider`: ``app/services/index.py``
+    imports no concrete adapter. The raw-response method is *not* on the
+    ``MarketDataProvider`` ABC, which is why the shape is declared here.
+    """
+
+    def get_index_raw_responses(
+        self, index_symbol: str, start: date, end: date
+    ) -> ReplayChartFetchLike: ...
+
+
+@dataclass(frozen=True)
+class ReplayIndexBar:
+    """One snapshot bar: raw timestamp, the date derived from it, and OHLCV."""
+
+    raw_timestamp: object
+    session_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+@dataclass(frozen=True)
+class ReplayIndexNullGapRow:
+    """An in-range row the source reported with a null OHLCV field; never a bar."""
+
+    raw_timestamp: object
+    session_date: date
+    null_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReplayIndexResponse:
+    """One response of the snapshot; ``meta`` values are the source's, untouched.
+
+    ``received_at`` is when the response was received (the row-level
+    ``fetched_at`` of ADR-0027); ``null_gap_rows`` are handed over as the
+    adapter reported them.
+    """
+
+    response_seq: int
+    exchange_timezone_name: object
+    gmtoffset: object
+    bars: tuple[ReplayIndexBar, ...]
+    received_at: datetime
+    null_gap_rows: tuple[ReplayIndexNullGapRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReplayIndexSnapshot:
+    """What :func:`fetch_replay_index_snapshot` returns -- for the replay snapshot only.
+
+    Deliberately **not** a ``ProviderResult`` / ``LoadedIndexBars`` /
+    ``LoadedBenchmark``, and it has no ``meta()`` and no ``notes``: the
+    "backup, from a non-official source" disclosure obligation is carried by the
+    replay-result disclosure (事先宣告 §4.7), not by this object (ADR-0005 I-3
+    解釋性註記, 輸出去向). ``status`` is ``BACKUP`` or ``UNAVAILABLE`` and
+    nothing else. On ``UNAVAILABLE`` there are no responses (and so no bars)
+    and ``reason`` is non-empty.
+
+    ``source`` is the source name the provider reported, or ``None`` when no
+    source was contacted at all (the unsupported-symbol refusal). ``None`` is
+    not a source name: ``replay_checks`` must not write it as one.
+    """
+
+    index_symbol: str
+    status: DataStatus
+    as_of: datetime
+    source: str | None
+    responses: tuple[ReplayIndexResponse, ...] = ()
+    reason: str | None = None
+
+    @property
+    def bar_count(self) -> int:
+        """Total bars over all responses."""
+        return sum(len(response.bars) for response in self.responses)
+
+
+def _replay_unavailable(
+    index_symbol: str, as_of: datetime, source: str | None, reason: str
+) -> ReplayIndexSnapshot:
+    return ReplayIndexSnapshot(
+        index_symbol=index_symbol,
+        status=DataStatus.UNAVAILABLE,
+        as_of=as_of,
+        source=source,
+        responses=(),
+        reason=reason,
+    )
+
+
+def fetch_replay_index_snapshot(
+    provider: ReplayIndexChartProvider,
+    *,
+    index_symbol: str,
+    start: date,
+    end: date,
+) -> ReplayIndexSnapshot:
+    """Fetch the ``^TWII`` replay snapshot live, or fail closed (ADR-0005 I-3 註記).
+
+    * **One symbol.** Only ``MARKET_BENCHMARK["TW"]`` is accepted; any other
+      ``index_symbol`` is ``UNAVAILABLE`` and the provider is not called.
+    * **Live only.** No cache read or write, no fetch/attempt bookkeeping, no
+      quota ledger, no ``MarketDataService`` / ``IndexSeriesService`` layer; the
+      only thing called is the injected ``provider``.
+    * **Status** is ``BACKUP`` on success (live from a non-official source) and
+      ``UNAVAILABLE`` on failure -- never ``FRESH``, never ``CACHED_STALE``.
+    * **Fail-closed.** Any provider-reported failure, a result with no
+      response, a response without bars, or inconsistent response numbering
+      makes the whole call ``UNAVAILABLE`` with no responses and a Traditional
+      Chinese reason. Nothing falls back to a cache, another source or another
+      symbol.
+    * **Exceptions raised by the provider are not swallowed**, so a program
+      error is not mixed up with a source failure. ``replay_checks`` must catch
+      them, write a ``fetch_failed`` row carrying the exception class and a
+      Chinese reason, and not retry within the same call; obligations (4-a) and
+      (4-b) in ``work/reviews/2026-10-24-N82設計裁量點裁定-tech-architect.md``.
+
+    The result is for ``app/forecast/replay_checks.py`` to store in the replay
+    snapshot within the same call; it must not reach any user-visible surface.
+    """
+    target = MARKET_BENCHMARK["TW"].series_symbol
+    if index_symbol != target:
+        return _replay_unavailable(
+            index_symbol,
+            datetime.now(UTC),
+            None,
+            REPLAY_UNSUPPORTED_SYMBOL_REASON.format(target=target, requested=index_symbol),
+        )
+
+    fetched = provider.get_index_raw_responses(target, start, end)
+    if fetched.reason is not None:
+        detail = fetched.reason if fetched.reason.endswith("。") else fetched.reason + "。"
+        return _replay_unavailable(
+            target,
+            fetched.as_of,
+            fetched.source,
+            REPLAY_FETCH_FAILED_REASON.format(series_symbol=target, detail=detail),
+        )
+
+    responses = tuple(fetched.responses)
+    well_formed = (
+        fetched.index_symbol == target
+        and bool(responses)
+        and [response.response_seq for response in responses] == list(range(1, len(responses) + 1))
+        and all(response.bars for response in responses)
+    )
+    if not well_formed:
+        return _replay_unavailable(
+            target,
+            fetched.as_of,
+            fetched.source,
+            REPLAY_MALFORMED_RESPONSE_REASON.format(series_symbol=target),
+        )
+
+    return ReplayIndexSnapshot(
+        index_symbol=target,
+        status=DataStatus.BACKUP,
+        as_of=fetched.as_of,
+        source=fetched.source,
+        responses=tuple(
+            ReplayIndexResponse(
+                response_seq=response.response_seq,
+                exchange_timezone_name=response.exchange_timezone_name,
+                gmtoffset=response.gmtoffset,
+                bars=tuple(
+                    ReplayIndexBar(
+                        raw_timestamp=bar.raw_timestamp,
+                        session_date=bar.session_date,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                    )
+                    for bar in response.bars
+                ),
+                received_at=response.received_at,
+                null_gap_rows=tuple(
+                    ReplayIndexNullGapRow(
+                        raw_timestamp=gap.raw_timestamp,
+                        session_date=gap.session_date,
+                        null_fields=tuple(gap.null_fields),
+                    )
+                    for gap in response.null_gap_rows
+                ),
+            )
+            for response in responses
+        ),
+        reason=None,
     )
