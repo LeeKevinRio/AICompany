@@ -21,6 +21,8 @@
  * BLOCKING/Major follow-up: this was a manual-review `it.todo` before).
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 import {
@@ -114,6 +116,42 @@ describe("adviceWording.ts — §1.3 banned-term scan (rendered output)", () => 
 
   it("assertNoForbiddenTerms helper agrees with the it.each scan above (belt and suspenders)", () => {
     assertNoForbiddenTerms(joined, FRONTEND_FORBIDDEN_TERMS, "adviceWording.ts rendered surface");
+  });
+});
+
+/**
+ * N-99（風控 2026-10-24，`work/reviews/2026-10-24-N96命中率用語方案審查-風控.md`
+ * §二-3）：五個「機率洗白」同義詞必須同時存在於本檔的 `FRONTEND_FORBIDDEN_TERMS`
+ * 與後端鏡像 `backend/tests/test_event_study_wording.py::_FRONTEND_TERMS`。
+ * The backend mirror is read as raw text (same approach as
+ * `sharedForbiddenTerms.test.ts`) rather than imported across the package
+ * boundary; only the `_FRONTEND_TERMS = ( ... )` tuple is searched so a stray
+ * mention elsewhere in that file cannot satisfy the assertion.
+ */
+const N99_TERMS = ["符合率", "吻合率", "猜對", "正確率", "準確度"] as const;
+
+const BACKEND_MIRROR_PATH = fileURLToPath(
+  new URL("../../../../backend/tests/test_event_study_wording.py", import.meta.url),
+);
+
+function backendFrontendTermsBlock(): string {
+  const source = readFileSync(BACKEND_MIRROR_PATH, "utf-8");
+  const start = source.indexOf("_FRONTEND_TERMS = (");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf("\n)\n", start);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+describe("N-99 — 五詞存在於前端禁字表與後端鏡像", () => {
+  const backendBlock = backendFrontendTermsBlock();
+
+  it.each(N99_TERMS)("FRONTEND_FORBIDDEN_TERMS contains %j", (term) => {
+    expect(FRONTEND_FORBIDDEN_TERMS).toContain(term);
+  });
+
+  it.each(N99_TERMS)("backend _FRONTEND_TERMS mirror contains %j", (term) => {
+    expect(backendBlock).toContain(`"${term}",`);
   });
 });
 

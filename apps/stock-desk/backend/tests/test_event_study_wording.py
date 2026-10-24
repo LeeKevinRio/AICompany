@@ -31,6 +31,9 @@ from tests.test_backtest_strategies import _FIVE_CLOSES, _FIVE_VOLUMES
 _SHARED_FORBIDDEN_TERMS_PATH = (
     Path(__file__).resolve().parents[2] / "shared" / "forbidden-terms.json"
 )
+_FRONTEND_ADVICE_WORDING_PATH = (
+    Path(__file__).resolve().parents[2] / "frontend" / "app" / "lib" / "adviceWording.ts"
+)
 
 #: The frontend-only terms that matter for text the API hands the browser
 #: verbatim (`adviceWording.ts::FRONTEND_FORBIDDEN_TERMS`, the subset a
@@ -49,6 +52,12 @@ _FRONTEND_TERMS = (
     "命中率",
     "準確率",
     "高機率",
+    # N-99 (風控 2026-10-24): mirrors the same five in FRONTEND_FORBIDDEN_TERMS.
+    "符合率",
+    "吻合率",
+    "猜對",
+    "正確率",
+    "準確度",
     "即將",
     "有望",
     "可期",
@@ -66,9 +75,23 @@ _FRONTEND_TERMS = (
 )
 
 
+#: N-99 (風控 2026-10-24, `work/reviews/2026-10-24-N96命中率用語方案審查-風控.md`
+#: §二-3): the five probability-laundering synonyms that must be present in both
+#: `_FRONTEND_TERMS` here and `adviceWording.ts::FRONTEND_FORBIDDEN_TERMS`.
+_N99_TERMS = ("符合率", "吻合率", "猜對", "正確率", "準確度")
+
+
 def _shared_terms() -> tuple[str, ...]:
     payload = json.loads(_SHARED_FORBIDDEN_TERMS_PATH.read_text(encoding="utf-8"))
     return tuple(payload["guarantee"]) + tuple(payload["price_target"])
+
+
+def _frontend_forbidden_terms_block() -> str:
+    """Raw text of the `FRONTEND_FORBIDDEN_TERMS = [ ... ];` array (no TS parsing)."""
+    source = _FRONTEND_ADVICE_WORDING_PATH.read_text(encoding="utf-8")
+    start = source.index("export const FRONTEND_FORBIDDEN_TERMS")
+    end = source.index("\n];\n", start)
+    return source[start:end]
 
 
 def _demo_report_text() -> str:
@@ -160,3 +183,16 @@ def test_no_directive_wording_in_either_surface() -> None:
             preceding = text[max(0, index - 8) : index]
             is_module_name = text[index : index + 4] == "建議引擎"
             assert "不是" in preceding or "不構成" in preceding or is_module_name, preceding
+
+
+# --- N-99 presence (風控 2026-10-24) --------------------------------------------
+
+
+@pytest.mark.parametrize("term", _N99_TERMS)
+def test_n99_term_is_in_backend_frontend_terms_mirror(term: str) -> None:
+    assert term in _FRONTEND_TERMS
+
+
+@pytest.mark.parametrize("term", _N99_TERMS)
+def test_n99_term_is_in_frontend_forbidden_terms(term: str) -> None:
+    assert f'"{term}",' in _frontend_forbidden_terms_block()

@@ -433,6 +433,15 @@ export const FRONTEND_FORBIDDEN_TERMS: readonly string[] = [
   "命中率",
   "準確率",
   "高機率",
+  // N-99 (風控 2026-10-24, `work/reviews/2026-10-24-N96命中率用語方案審查-風控.md`
+  // §二-3): synonyms that would launder a historical k/n into an accuracy claim.
+  // Mirrored in `backend/tests/test_event_study_wording.py::_FRONTEND_TERMS`;
+  // deliberately not in `shared/forbidden-terms.json` (guarantee/price_target only).
+  "符合率",
+  "吻合率",
+  "猜對",
+  "正確率",
+  "準確度",
   // 即時性 (real-time itself is checked separately — see the guard test's
   // own logic, since this module legitimately contains "即時" used to deny
   // it, e.g. "非即時報價"; "real-time" as a bare English claim is still
