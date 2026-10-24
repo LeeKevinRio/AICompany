@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { INSTRUMENT_TYPE_OPTIONS, MARKET_OPTIONS, STRATEGY_OPTIONS } from "../lib/format";
+import { parseRequiredNumbers, unplacedFieldErrors } from "../lib/formErrors";
 import { useRunBacktest, useSettings } from "../lib/queries";
 import type { FormSnapshot } from "../lib/eventStudy";
 import type {
@@ -27,6 +28,11 @@ interface FormState {
   override_slippage: boolean;
   slippage_bps: string;
 }
+
+type NumericKey = "initial_cash" | "train_size" | "test_size" | "slippage_bps";
+
+/** Bare field names the backend's 422 `loc` can name and this form renders. */
+const PLACED_ERROR_KEYS = ["symbol", "start", "end", "initial_cash", "train_size", "test_size", "slippage_bps"];
 
 const EMPTY_FORM: FormState = {
   symbol: "",
@@ -66,20 +72,39 @@ export function BacktestForm({
   // model has no "just this one field" patch for the per-run `cost` override —
   // see app/api/backtest.py `BacktestRequest.cost: CostModelSettings | None`).
   const settings = useSettings(form.override_slippage);
-  const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
+  const serverFieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
+  /** Blank or non-numeric entries caught before submit; cleared as the field is edited. */
+  const [inputErrors, setInputErrors] = useState<Partial<Record<NumericKey, string>>>({});
+  const fieldErrors: Partial<Record<string, string>> = { ...serverFieldErrors, ...inputErrors };
+  const unplaced = unplacedFieldErrors(serverFieldErrors, PLACED_ERROR_KEYS);
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+    // Unticking the override hides the slippage field, so its error goes too.
+    const cleared = key === "override_slippage" ? "slippage_bps" : key;
+    setInputErrors((prev) => ({ ...prev, [cleared]: undefined }));
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // `Number("")` is 0 and `Number("1,000,000")` is NaN (sent as null): both
+    // used to come back as a 422 on a field with no message slot, so nothing
+    // was shown and the previous report stayed on screen as if it were new.
+    const parsed = parseRequiredNumbers({
+      initial_cash: form.initial_cash,
+      train_size: form.train_size,
+      test_size: form.test_size,
+      ...(form.override_slippage ? { slippage_bps: form.slippage_bps } : {}),
+    } as Record<NumericKey, string>);
+    if (Object.keys(parsed.errors).length > 0) {
+      setInputErrors(parsed.errors);
+      // The previous run's error belongs to a request this submit replaced.
+      mutation.reset();
+      return;
+    }
     let cost: CostModelSettings | undefined;
     if (form.override_slippage && settings.data) {
-      const slippage = Number(form.slippage_bps);
-      if (Number.isFinite(slippage)) {
-        cost = { ...settings.data.settings.cost_model, slippage_bps: slippage };
-      }
+      cost = { ...settings.data.settings.cost_model, slippage_bps: parsed.values.slippage_bps };
     }
     const payload: BacktestRequest = {
       symbol: form.symbol.trim(),
@@ -88,9 +113,9 @@ export function BacktestForm({
       start: form.start,
       end: form.end,
       instrument_type: form.instrument_type,
-      initial_cash: Number(form.initial_cash),
-      train_size: Number(form.train_size),
-      test_size: Number(form.test_size),
+      initial_cash: parsed.values.initial_cash,
+      train_size: parsed.values.train_size,
+      test_size: parsed.values.test_size,
       cost,
     };
     mutation.mutate(payload, {
@@ -212,6 +237,7 @@ export function BacktestForm({
             onChange={(e) => updateField("initial_cash", e.target.value)}
             className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
           />
+          {fieldErrors.initial_cash && <p className="mt-1 text-xs text-red-400">{fieldErrors.initial_cash}</p>}
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -265,6 +291,7 @@ export function BacktestForm({
                 onChange={(e) => updateField("slippage_bps", e.target.value)}
                 className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
               />
+              {fieldErrors.slippage_bps && <p className="mt-1 text-xs text-red-400">{fieldErrors.slippage_bps}</p>}
               {settings.isPending && <p className="mt-1 text-xs text-neutral-500">載入目前費率中…</p>}
             </div>
           )}
@@ -281,9 +308,19 @@ export function BacktestForm({
         </div>
       </form>
 
-      {mutation.isError && Object.keys(fieldErrors).length === 0 && (
+      {Object.values(inputErrors).some(Boolean) && (
         <p role="alert" className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          回測失敗：{mutation.error instanceof ApiError ? mutation.error.message : "未知錯誤"}
+          尚未執行回測：有欄位空白或不是數字，請依欄位下方提示修正。
+        </p>
+      )}
+      {mutation.isError && (Object.keys(serverFieldErrors).length === 0 || unplaced.length > 0) && (
+        <p role="alert" className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+          回測失敗：
+          {unplaced.length > 0
+            ? unplaced.join(" ")
+            : mutation.error instanceof ApiError
+              ? mutation.error.message
+              : "未知錯誤"}
         </p>
       )}
     </section>
