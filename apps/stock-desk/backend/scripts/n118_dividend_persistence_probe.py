@@ -3,9 +3,11 @@
 Run from ``apps/stock-desk/backend`` on the machine that holds the market DB::
 
     uv run python scripts/n118_dividend_persistence_probe.py --db-path ./data/stock-desk-market.db
-    # optional, only when section (c) shows vanished_* > 0 (at most 30 events, no names/prices):
+    # optional, only when section (c) shows vanished_* > 0; use a --detail value not smaller
+    # than the total number of vanished events (closed + open) so that all are listed for the
+    # TWSE-announcement cross-check (symbol, ex-date, run ids; no names, no prices):
     uv run python scripts/n118_dividend_persistence_probe.py \\
-        --db-path ./data/stock-desk-market.db --detail 30
+        --db-path ./data/stock-desk-market.db --detail 200
 
 It answers the two open questions behind ADR-0027 D-3 "late-data trigger" item 10
 (10) (c) and (e):
@@ -59,8 +61,17 @@ What the numbers mean (and do not)
   cannot be seen; the run-gap counters only hint at them.
 * Only the first ok run of a session is kept (``pit_snapshot.py``), so within-session
   revisions are invisible.
-* The thresholds printed at the end are PROPOSED, pending quant and risk-control
-  confirmation. The script does not judge: it never prints "holds" or "does not hold".
+* The reading rule printed at the end is REGISTERED by risk control on 2026-10-25
+  (``work/reviews/2026-10-25-N118判讀門檻確認-風控.md``) and frozen before the CEO run.
+  The script prints each condition as met / not met next to its numbers and never prints
+  the final conclusion: it never prints "holds" or "does not hold". The conclusion is
+  made by risk control from the printed numbers.
+* ``early disappearance`` (the registered measure of an incomplete batch): for adjacent
+  usable ok runs p, q, the keys of p whose ex-date is later than q's ``session_date`` are
+  *pending*; the pending keys q does not list are the early disappearances.
+* The tail gap of an event is its ex-date minus the ``session_date`` of the last usable
+  ok run before the ex-date, in calendar days. There is no trading calendar, so an event
+  around a long holiday is left out of M (fail-closed).
 """
 
 from __future__ import annotations
@@ -75,24 +86,39 @@ from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
+from fractions import Fraction
 from pathlib import Path
 
 DEFAULT_DB_PATH = "./data/stock-desk-market.db"
 DB_PATH_ENV_VAR = "STOCK_DESK_MARKET_DB_PATH"
 
-#: Two consecutive usable ok runs further apart than this many days hint at missed sessions.
-RUN_GAP_DAYS = 4
-#: A persistent closed event whose last run before the ex-date is further than this many
-#: days away was only observed up to a point well before its ex-date.
-TAIL_GAP_DAYS = 7
 #: How many run ids are listed for mismatches and anomalies.
 MAX_LISTED_RUN_IDS = 20
 
-#: PROPOSED reading thresholds, pending quant and risk-control confirmation.
-PROPOSED_MIN_TESTABLE_CLOSED = 30
-PROPOSED_MIN_USABLE_RUNS = 20
-PROPOSED_MIN_BATCH_DROP = 3
-PROPOSED_MIN_DROP_SHARE = 0.10
+# Reading-rule constants. REGISTERED 2026-10-25, risk control (values verbatim from
+# work/reviews/2026-10-25-N118判讀門檻確認-風控.md section 2).
+# Frozen: do not change after the CEO run.
+#: Tail gap (calendar days, ex-date minus last usable ok run before it) up to which a
+#: testable closed event counts toward M.
+TAIL_GAP_DAYS = 3
+#: Minimum number of distinct ``session_date`` among usable ok runs (S).
+MIN_DISTINCT_SESSIONS = 60
+#: Minimum M: closed testable events whose tail gap is <= TAIL_GAP_DAYS.
+MIN_TESTABLE_CLOSED_TAIL_COMPLETE = 60
+#: An adjacent pair is informative (counts toward N_pair) when the earlier run has at least
+#: this many pending keys.
+MIN_INFORMATIVE_PENDING = 30
+#: Minimum N_pair.
+MIN_INFORMATIVE_PAIRS = 60
+#: A batch-drop pair has at least this many early disappearances ...
+MIN_BATCH_DROP = 3
+#: ... and at least this share of the earlier run's pending keys.
+MIN_DROP_SHARE = 0.10
+#: Descriptive only, not a reading threshold: consecutive usable ok runs further apart than
+#: this many days hint at missed sessions.
+RUN_GAP_DAYS = 4
+
+_SHARE = Fraction(str(MIN_DROP_SHARE))
 
 CLASS_NAMES = (
     "persistent",
@@ -103,6 +129,7 @@ CLASS_NAMES = (
 )
 GONE_SPLIT_NAMES = ("reschedule_candidate", "symbol_relisted_existing", "symbol_gone")
 TESTABLE_CLASSES = ("persistent", "vanished_gone", "vanished_returned")
+UNEXPLAINED_SPLITS = ("symbol_gone", "symbol_relisted_existing")
 
 CONCLUSION_SENTENCE = "樣本不足或未完成一律視為不成立；成立與否須送風控確認。"
 CONCLUSION_SENTENCE_EN = (
@@ -117,6 +144,11 @@ _RUNS_SQL = """
     ORDER BY run_id
 """
 _ROWS_SQL = "SELECT content_hash, key, symbol, ex_date FROM pit_dividend_announce_rows"
+
+
+def share_at_least(part: int, whole: int) -> bool:
+    """``part / whole >= MIN_DROP_SHARE`` in exact integer arithmetic (``10 * part >= whole``)."""
+    return whole > 0 and part * _SHARE.denominator >= whole * _SHARE.numerator
 
 
 @dataclass(frozen=True)
@@ -172,14 +204,19 @@ class Report:
     unparsed_keys: int
     class_counts: dict[tuple[str, bool], int]  # (class, closed) -> n
     split_counts: dict[tuple[str, bool], int]
-    tail_gap_events: int
+    tail_complete_closed: int  # M
+    tail_long_closed: int  # testable closed events with a tail gap > TAIL_GAP_DAYS
+    adjacent_pairs: int
+    informative_pairs: int  # N_pair
     drop_episodes: int
     largest_drop: int
     largest_drop_share: float
+    drop_pairs_over_both: int
     row_count_deltas: tuple[int, ...]
     row_drop_largest: int
     row_drop_largest_share: float | None
     row_drop_pairs_over_share: int
+    row_drop_pairs_over_both: int
     vanished: tuple[VanishedEvent, ...]
     ok_runs: int
     ok_unusable: int
@@ -196,6 +233,25 @@ class Report:
     anomaly_run_ids: tuple[int, ...]
 
     @property
+    def returned_total(self) -> int:
+        return sum(self.class_counts.get(("vanished_returned", c), 0) for c in (True, False))
+
+    @property
+    def unexplained_vanished(self) -> int:
+        return sum(self.split_counts.get((name, True), 0) for name in UNEXPLAINED_SPLITS)
+
+    @property
+    def integrity_counts(self) -> tuple[tuple[str, int], ...]:
+        return (
+            ("stored > row_count", self.rc_greater),
+            ("stored == 0 with a hash", self.rc_zero_stored),
+            ("ok but content_hash NULL", self.rc_no_hash),
+            ("ok but row_count <= 0", self.rc_nonpositive),
+            ("ok but not usable", self.ok_unusable),
+            ("sessions holding more than one ok run", self.multi_run_sessions),
+        )
+
+    @property
     def testable_closed(self) -> int:
         return sum(self.class_counts.get((name, True), 0) for name in TESTABLE_CLASSES)
 
@@ -208,7 +264,11 @@ def open_read_only(path: Path) -> sqlite3.Connection:
     if not path.is_file():
         raise FileNotFoundError(f"market DB not found: {path}")
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
-    conn.execute("PRAGMA query_only=ON")
+    try:
+        conn.execute("PRAGMA query_only=ON")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -250,11 +310,15 @@ def percentile(sorted_values: Sequence[int], pct: int) -> int:
 
 def _row_count_change(
     usable: Sequence[RunRecord],
-) -> tuple[tuple[int, ...], int, float | None, int]:
-    """Deltas of ``row_count`` between consecutive usable ok runs and the drop summary."""
+) -> tuple[tuple[int, ...], int, float | None, int, int]:
+    """Deltas of ``row_count`` between consecutive usable ok runs and the drop summary.
+
+    Returns ``(deltas, largest drop rows, share of that largest-by-rows drop, pairs with share
+    >= MIN_DROP_SHARE, pairs with both >= MIN_BATCH_DROP rows and that share)``. Descriptive only.
+    """
     deltas: list[int] = []
-    best: tuple[int, float] | None = None  # (drop rows, share) of the largest drop
-    over_share = 0
+    best: tuple[int, float] | None = None  # (drop rows, share) of the largest-by-rows drop
+    over_share = over_both = 0
     for previous, current in zip(usable, usable[1:], strict=False):
         delta = current.row_count - previous.row_count
         deltas.append(delta)
@@ -262,13 +326,15 @@ def _row_count_change(
             continue
         drop = -delta
         share = drop / previous.row_count if previous.row_count > 0 else None
-        if share is not None and share >= PROPOSED_MIN_DROP_SHARE:
+        if share_at_least(drop, previous.row_count):
             over_share += 1
+            if drop >= MIN_BATCH_DROP:
+                over_both += 1
         if best is None or (drop, share or 0.0) > best:
             best = (drop, share or 0.0)
     if best is None:
-        return tuple(deltas), 0, None, over_share
-    return tuple(deltas), best[0], best[1], over_share
+        return tuple(deltas), 0, None, over_share, over_both
+    return tuple(deltas), best[0], best[1], over_share, over_both
 
 
 def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Report:
@@ -291,7 +357,8 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
     class_counts: Counter[tuple[str, bool]] = Counter()
     split_counts: Counter[tuple[str, bool]] = Counter()
     vanished: list[VanishedEvent] = []
-    events = events_closed = censored = unparsed_keys = tail_gap_events = 0
+    events = events_closed = censored = unparsed_keys = 0
+    tail_ok = tail_long = 0
     for key, indexes in presence.items():
         symbol, ex_date = info[key]
         if ex_date is None:
@@ -310,12 +377,15 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
         if len(window) < 2:
             class_counts[("single_observation", closed)] += 1
             continue
+        if closed:  # every class from here on is testable (>= 2 runs before the ex-date)
+            if (ex_date - sessions[last_before]).days <= TAIL_GAP_DAYS:
+                tail_ok += 1
+            else:
+                tail_long += 1
         present = set(indexes)
         missing = [i for i in window if i not in present]
         if not missing:
             class_counts[("persistent", closed)] += 1
-            if closed and (ex_date - sessions[last_before]).days > TAIL_GAP_DAYS:
-                tail_gap_events += 1
             continue
         gap = missing[0]
         returned = any(i in present for i in window if i > gap)
@@ -348,16 +418,20 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
     vanished.sort(key=lambda v: (v.ex_date, v.symbol, v.key))
 
     # Run-to-run drops: events still in the future that the previous run listed and this one lost.
-    drop_episodes = largest_drop = 0
+    drop_episodes = largest_drop = drop_pairs_over_both = informative_pairs = 0
     largest_share = 0.0
     for i in range(1, n):
         pending = [k for k, (_, e) in listed[i - 1].items() if e is not None and e > sessions[i]]
         lost = sum(1 for k in pending if k not in listed[i])
         drop_episodes += lost
+        if len(pending) >= MIN_INFORMATIVE_PENDING:
+            informative_pairs += 1
+        if lost >= MIN_BATCH_DROP and share_at_least(lost, len(pending)):
+            drop_pairs_over_both += 1
         if lost and (lost, lost / len(pending)) > (largest_drop, largest_share):
             largest_drop, largest_share = lost, lost / len(pending)
 
-    deltas, row_drop, row_share, row_over = _row_count_change(usable)
+    deltas, row_drop, row_share, row_over, row_both = _row_count_change(usable)
 
     # (e) row_count versus rows actually stored, over all ok runs.
     ok = [run for run in runs if run.status == "ok"]
@@ -397,6 +471,7 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
 
     statuses = Counter(run.status for run in runs if run.status != "ok")
     session_counts = Counter(sessions)
+    ok_session_counts = Counter(run.session_date for run in ok if run.session_date is not None)
     return Report(
         runs_total=len(runs),
         status_counts=tuple(sorted(statuses.items())),
@@ -404,7 +479,7 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
         distinct_hashes=len({run.content_hash for run in usable}),
         first_session=sessions[0] if n else None,
         last_session=sessions[-1] if n else None,
-        multi_run_sessions=sum(1 for count in session_counts.values() if count > 1),
+        multi_run_sessions=sum(1 for count in ok_session_counts.values() if count > 1),
         distant_run_pairs=sum(
             1 for a, b in zip(sessions, sessions[1:], strict=False) if (b - a).days > RUN_GAP_DAYS
         ),
@@ -415,14 +490,19 @@ def analyze(runs: Sequence[RunRecord], contents: Mapping[str, Content]) -> Repor
         unparsed_keys=unparsed_keys,
         class_counts=dict(class_counts),
         split_counts=dict(split_counts),
-        tail_gap_events=tail_gap_events,
+        tail_complete_closed=tail_ok,
+        tail_long_closed=tail_long,
+        adjacent_pairs=max(0, n - 1),
+        informative_pairs=informative_pairs,
         drop_episodes=drop_episodes,
         largest_drop=largest_drop,
         largest_drop_share=largest_share,
+        drop_pairs_over_both=drop_pairs_over_both,
         row_count_deltas=deltas,
         row_drop_largest=row_drop,
         row_drop_largest_share=row_share,
         row_drop_pairs_over_share=row_over,
+        row_drop_pairs_over_both=row_both,
         vanished=tuple(vanished),
         ok_runs=len(ok),
         ok_unusable=sum(1 for run in ok if not run.usable),
@@ -491,18 +571,47 @@ def render(report: Report, *, today: date, detail: int = 0) -> str:
     for name in GONE_SPLIT_NAMES:
         add(f"  {name:<25}: {pair(report.split_counts, name)}")
     add("")
-    add("-- (c) Run-to-run drops (events still in the future that a run lost) --")
-    add(_line("drop episodes (event, pair)", report.drop_episodes))
-    add(_line("largest drop in one pair", report.largest_drop))
-    add(_line("largest drop share of that pair's pending", f"{report.largest_drop_share:.3f}"))
+    add("-- (c) Early disappearance between adjacent usable ok runs (registered measure) --")
+    add(_line("adjacent usable ok run pairs", report.adjacent_pairs))
     add(
         _line(
-            f"persistent closed, last run >{TAIL_GAP_DAYS} days before ex",
-            report.tail_gap_events,
+            f"informative pairs N_pair (pending keys >= {MIN_INFORMATIVE_PENDING})",
+            report.informative_pairs,
         )
     )
+    add(_line("early disappearances (event, pair)", report.drop_episodes))
+    add(_line("largest early disappearance in one pair", report.largest_drop))
+    add(
+        _line(
+            "share of the largest-by-rows drop (of its pending)",
+            f"{report.largest_drop_share:.3f}",
+        )
+    )
+    add(
+        _line(
+            f"batch-drop pairs (>= {MIN_BATCH_DROP} and >= {MIN_DROP_SHARE:.2f} x pending)",
+            report.drop_pairs_over_both,
+        )
+    )
+    add(
+        _line(
+            f"M: closed testable, tail gap <= {TAIL_GAP_DAYS} days",
+            report.tail_complete_closed,
+        )
+    )
+    add(
+        _line(
+            f"closed testable, tail gap > {TAIL_GAP_DAYS} days (left out of M)",
+            report.tail_long_closed,
+        )
+    )
+    add(
+        "(tail gap = ex_date minus the session_date of the last usable ok run before it, in "
+        "calendar days;"
+    )
+    add(" testable = persistent, vanished_gone or vanished_returned; there is no trading calendar)")
     add("")
-    add("-- (c) row_count change between consecutive usable ok runs (incomplete-batch estimate) --")
+    add("-- (c) row_count change between consecutive usable ok runs (descriptive) --")
     deltas = sorted(report.row_count_deltas)
     add(_line("consecutive pairs", len(deltas)))
     if deltas:
@@ -521,18 +630,26 @@ def render(report: Report, *, today: date, detail: int = 0) -> str:
         share = report.row_drop_largest_share
         add(
             _line(
-                "largest drop share of previous row_count",
+                "share of the largest-by-rows drop (of previous row_count)",
                 f"{share:.3f}" if share is not None else "n/a",
             )
         )
         add(
             _line(
-                f"pairs with drop share >= {PROPOSED_MIN_DROP_SHARE:.2f} (PROPOSED)",
+                f"pairs with drop share >= {MIN_DROP_SHARE:.2f} (descriptive)",
                 report.row_drop_pairs_over_share,
+            )
+        )
+        add(
+            _line(
+                f"pairs with drop >= {MIN_BATCH_DROP} rows and share "
+                f">= {MIN_DROP_SHARE:.2f} (descriptive)",
+                report.row_drop_pairs_over_both,
             )
         )
     else:
         add("fewer than 2 usable ok runs: no change to report")
+    add("Descriptive only, no reading threshold: the registered measure is the section above.")
     add("row_count also moves for legitimate reasons (events pass their ex-date, new events")
     add("appear): this is a reference for how often a batch may be incomplete, not a verdict.")
     add("")
@@ -566,22 +683,71 @@ def render(report: Report, *, today: date, detail: int = 0) -> str:
                 f"last_listed_run={event.last_listed_run_id}"
             )
     add("")
+    add("-- Registered reading rule (risk control 2026-10-25) --")
+    add("REGISTERED 2026-10-25, risk control; frozen before the CEO run.")
+    add("Steps apply in order and the first step whose condition is met decides. This script")
+    add("prints each condition as met / not met next to its numbers and never prints the")
+    add("conclusion: that is made by risk control from the numbers below. Full history only.")
+    integrity_all = ", ".join(f"{name}={count}" for name, count in report.integrity_counts)
+    integrity_hit = any(count > 0 for _, count in report.integrity_counts)
+    returned = report.returned_total
+    s_ok = report.distinct_sessions >= MIN_DISTINCT_SESSIONS
+    n_ok = report.informative_pairs >= MIN_INFORMATIVE_PAIRS
+    m_ok = report.tail_complete_closed >= MIN_TESTABLE_CLOSED_TAIL_COMPLETE
+
+    def flag(condition: bool) -> str:
+        return "met" if condition else "not met"
+
+    add(f"  1 input integrity : {flag(integrity_hit)} (any count > 0: {integrity_all})")
     add(
-        "-- Suggested reading thresholds (PROPOSED, pending quant and risk-control confirmation) --"
+        f"  2 counter-evidence: {flag(returned >= 1 or report.drop_pairs_over_both >= 1)} "
+        f"(vanished_returned closed+open = {returned}; "
+        f"batch-drop pairs = {report.drop_pairs_over_both}; either >= 1)"
     )
-    add("This script does not judge. Suggested values, not approved rules:")
-    add(f"  sample adequacy   : testable closed events >= {PROPOSED_MIN_TESTABLE_CLOSED}")
-    add(f"                      and usable ok runs >= {PROPOSED_MIN_USABLE_RUNS}")
-    add("  counter-example   : any vanished_returned closed event")
     add(
-        f"  whole-batch drop  : largest drop in one pair >= {PROPOSED_MIN_BATCH_DROP} "
-        f"and share >= {PROPOSED_MIN_DROP_SHARE:.2f}"
+        f"  3 sample insufficient: {flag(not (s_ok and n_ok and m_ok))} "
+        f"(S = {report.distinct_sessions} vs {MIN_DISTINCT_SESSIONS}; "
+        f"N_pair = {report.informative_pairs} vs {MIN_INFORMATIVE_PAIRS}; "
+        f"M = {report.tail_complete_closed} vs {MIN_TESTABLE_CLOSED_TAIL_COMPLETE}; "
+        "met = insufficient, i.e. any is below)"
     )
+    add(
+        f"  4 unexplained     : {flag(report.unexplained_vanished >= 1)} "
+        f"(closed vanished_gone as symbol_gone + symbol_relisted_existing = "
+        f"{report.unexplained_vanished}; >= 1)"
+    )
+    add("  5 otherwise       : decided by risk control from the numbers above")
+    add("Definitions: pending key = key of the earlier run with ex_date after the later run's")
+    add("session_date; early disappearance = pending key the later run does not list;")
+    add(f"informative pair = pending keys >= {MIN_INFORMATIVE_PENDING}; batch-drop pair = early")
+    add(f"disappearances >= {MIN_BATCH_DROP} and >= {MIN_DROP_SHARE:.2f} x pending (all pairs).")
     add("")
     add("-- Conclusion-format fields (for the risk-control confirmation) --")
+    if report.first_session is not None and report.last_session is not None:
+        period = f"{report.first_session} .. {report.last_session}"
+    else:
+        period = "n/a"
     add(_line("usable ok runs the reading rests on", report.usable_runs))
-    add(_line("distinct session_date among them", report.distinct_sessions))
+    add(_line("S: distinct session_date among them", report.distinct_sessions))
+    add(_line("session_date period", period))
+    add(_line("N_pair: informative adjacent pairs", report.informative_pairs))
+    add(_line("adjacent usable ok run pairs in total", report.adjacent_pairs))
+    add(_line(f"M: closed testable, tail gap <= {TAIL_GAP_DAYS} days", report.tail_complete_closed))
     add(_line("closed testable events (>=2 runs)", report.testable_closed))
+    add(_line("closed events in total (last run on/after ex_date)", report.events_closed))
+    add(_line("vanished_returned (closed + open)", returned))
+    add(_line("batch-drop pairs", report.drop_pairs_over_both))
+    add(_line("unexplained vanished (closed)", report.unexplained_vanished))
+    add(
+        _line(
+            "reschedule_candidate (closed)",
+            report.split_counts.get(("reschedule_candidate", True), 0),
+        )
+    )
+    bound_pair = f"{3 / report.informative_pairs:.4f}" if report.informative_pairs else "n/a"
+    bound_event = f"{3 / report.tail_complete_closed:.4f}" if report.tail_complete_closed else "n/a"
+    add(_line("3 / N_pair (zero counter-examples only)", bound_pair))
+    add(_line("3 / M (zero counter-examples only)", bound_event))
     add(_line("run date (date.today() on the executing machine)", today.isoformat()))
     add(CONCLUSION_SENTENCE)
     add(CONCLUSION_SENTENCE_EN)
