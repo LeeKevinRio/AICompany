@@ -154,7 +154,8 @@ def test_reappearance_is_vanished_returned_and_counts_the_gap(tmp_path: Path) ->
     assert _count(report, "vanished_gone") == 0
     assert report.vanished[0].split is None
     # Run 2 lost 2330 (pending, 1 of 1 pending): one drop episode, share 1.0.
-    assert report.drop_episodes >= 1 and report.largest_drop == 1
+    assert report.drop_episodes == 1 and report.largest_drop == 1
+    assert report.largest_drop_share == 1.0
 
 
 def test_reschedule_old_key_gone_new_key_added_is_candidate(tmp_path: Path) -> None:
@@ -376,7 +377,7 @@ def test_fewer_than_two_runs_gives_an_empty_change_section(tmp_path: Path) -> No
     assert report.usable_runs == 1 and report.events == 1
 
 
-def test_conclusion_fields_proposed_thresholds_and_the_fixed_sentence(tmp_path: Path) -> None:
+def test_conclusion_fields_registered_rule_and_the_fixed_sentence(tmp_path: Path) -> None:
     capture = _Capture(tmp_path / "market.db")
     e = _d(9, 10)
     capture.run(_d(9, 1), [("2330", e)])
@@ -393,11 +394,25 @@ def test_conclusion_fields_proposed_thresholds_and_the_fixed_sentence(tmp_path: 
     assert (
         text.rstrip().splitlines()[-2] == "樣本不足或未完成一律視為不成立；成立與否須送風控確認。"
     )
-    assert "PROPOSED, pending quant and risk-control confirmation" in text
-    assert "This script does not judge" in text
-    assert "testable closed events >= 30" in text and "usable ok runs >= 20" in text
-    assert "largest drop in one pair >= 3 and share >= 0.10" in text
+    assert "-- Registered reading rule (risk control 2026-10-25) --" in text
+    assert "REGISTERED 2026-10-25, risk control" in text
+    assert "PROPOSED" not in text and "Suggested" not in text
+    assert re.search(r"S: distinct session_date among them\s*: 3\b", text)
+    for label in (
+        "N_pair: informative adjacent pairs",
+        "M: closed testable, tail gap <= 3 days",
+        "vanished_returned (closed + open)",
+        "batch-drop pairs",
+        "unexplained vanished (closed)",
+        "reschedule_candidate (closed)",
+        "3 / N_pair (zero counter-examples only)",
+        "3 / M (zero counter-examples only)",
+        "session_date period",
+    ):
+        assert label in text
     lowered = text.lower()
+    assert not re.search(r"\bholds\b|does not hold", lowered)  # the docstring's promise
+    assert re.search(r"closed events in total \(last run on/after ex_date\)\s*: 1\b", text)
     assert "verdict" not in lowered.replace("not a verdict", "") and "refuted" not in lowered
     assert "sessions holding more than one ok run" in text
 
@@ -503,3 +518,220 @@ def test_the_script_uses_only_the_standard_library() -> None:
     }
     assert "app" not in imported
     assert imported <= set(sys.stdlib_module_names) | {"__future__"}
+
+
+@pytest.mark.parametrize(("last_day", "expected_m", "expected_long"), [(22, 3, 0), (21, 0, 3)])
+def test_tail_gap_of_three_days_counts_toward_m_and_four_does_not(
+    tmp_path: Path, last_day: int, expected_m: int, expected_long: int
+) -> None:
+    """Ex-date 09-25; the last run before it is 09-22 (gap 3) or 09-21 (gap 4); all 3 classes."""
+    capture = _Capture(tmp_path / "market.db")
+    ex, later = _d(9, 25), _d(10, 30)
+    capture.run(_d(9, 1), [("P", ex), ("G", ex), ("R", ex)])
+    capture.run(_d(9, 10), [("P", ex), ("G", ex), ("Y", later)])  # R missing
+    capture.run(_d(9, last_day), [("P", ex), ("R", ex), ("Y", later)])  # G gone, R returned
+    capture.run(ex, [("Y", later)])  # the sample reaches the ex-date: closed
+    report = _analyze(capture.path)
+    assert _count(report, "persistent") == 1
+    assert _count(report, "vanished_gone") == 1 and _count(report, "vanished_returned") == 1
+    assert report.tail_complete_closed == expected_m
+    assert report.tail_long_closed == expected_long
+    text = probe.render(report, today=TODAY)
+    assert re.search(rf"M: closed testable, tail gap <= 3 days\s*: {expected_m}\b", text)
+    assert re.search(rf"left out of M\)\s*: {expected_long}\b", text)
+
+
+def _pair_runs(pending: int, lost: int) -> tuple[list[Any], dict[str, Any]]:
+    """Two usable runs: ``pending`` future keys, then the same minus the first ``lost``."""
+    future = _d(12, 31)
+    first = {f"k{i}": (f"S{i}", future) for i in range(pending)}
+    second = {key: value for key, value in list(first.items())[lost:]}
+    runs = [
+        probe.RunRecord(1, "ok", _d(9, 1), "h1", pending),
+        probe.RunRecord(2, "ok", _d(9, 2), "h2", pending - lost),
+    ]
+    return runs, {"h1": first, "h2": second}
+
+
+@pytest.mark.parametrize(("pending", "expected"), [(29, 0), (30, 1), (31, 1)])
+def test_informative_pairs_need_at_least_thirty_pending_keys(pending: int, expected: int) -> None:
+    runs, contents = _pair_runs(pending, 0)
+    report = probe.analyze(runs, contents)
+    assert report.adjacent_pairs == 1 and report.informative_pairs == expected
+
+
+@pytest.mark.parametrize(
+    ("pending", "lost", "expected"),
+    [(30, 3, 1), (30, 2, 0), (31, 3, 0), (29, 3, 1), (20, 2, 0), (20, 3, 1)],
+)
+def test_batch_drop_pair_needs_three_events_and_a_tenth_of_pending_exactly(
+    pending: int, lost: int, expected: int
+) -> None:
+    runs, contents = _pair_runs(pending, lost)
+    report = probe.analyze(runs, contents)
+    assert report.drop_pairs_over_both == expected
+    assert report.drop_episodes == lost  # all pairs count, informative or not
+    assert probe.share_at_least(lost, pending) is (10 * lost >= pending)
+
+
+def test_an_open_vanished_returned_is_counted_as_counter_evidence(tmp_path: Path) -> None:
+    capture = _Capture(tmp_path / "market.db")
+    e = _d(12, 20)  # far beyond the sample: the event is open
+    capture.run(_d(9, 1), [("2330", e)])
+    capture.run(_d(9, 2), [("1101", _d(12, 21))])  # 2330 missing
+    capture.run(_d(9, 3), [("2330", e), ("1101", _d(12, 21))])  # back
+    report = _analyze(capture.path)
+    assert _count(report, "vanished_returned", closed=False) == 1
+    assert _count(report, "vanished_returned", closed=True) == 0
+    assert report.returned_total == 1
+    text = probe.render(report, today=TODAY)
+    assert "2 counter-evidence: met (vanished_returned closed+open = 1;" in text
+    assert re.search(r"vanished_returned \(closed \+ open\)\s*: 1\b", text)
+
+
+def test_input_integrity_conditions_and_unexplained_vanished_are_reported(tmp_path: Path) -> None:
+    capture = _Capture(tmp_path / "market.db")
+    e = _d(9, 20)
+    capture.run(_d(9, 1), [("2330", e), ("1101", _d(10, 1))])
+    capture.run(_d(9, 1), [("1101", _d(10, 1))])  # a second ok run in the same session
+    capture.run(_d(9, 2), [], row_count=2)  # ok but no hash: not usable
+    capture.run(_d(9, 21), [("1101", _d(10, 1))])
+    report = _analyze(capture.path)
+    counts = dict(report.integrity_counts)
+    assert counts["sessions holding more than one ok run"] == 1
+    assert counts["ok but not usable"] == 1 and counts["ok but content_hash NULL"] == 1
+    assert report.unexplained_vanished == 1  # 2330 is gone and nothing explains it
+    text = probe.render(report, today=TODAY)
+    assert "1 input integrity : met" in text
+    assert "4 unexplained     : met" in text
+
+
+def test_registered_constants_are_verbatim_and_no_conclusion_is_printed(tmp_path: Path) -> None:
+    assert probe.TAIL_GAP_DAYS == 3
+    assert probe.MIN_DISTINCT_SESSIONS == 60
+    assert probe.MIN_TESTABLE_CLOSED_TAIL_COMPLETE == 60
+    assert probe.MIN_INFORMATIVE_PENDING == 30
+    assert probe.MIN_INFORMATIVE_PAIRS == 60
+    assert probe.MIN_BATCH_DROP == 3
+    assert probe.MIN_DROP_SHARE == 0.10
+    assert probe.RUN_GAP_DAYS == 4
+
+    capture = _Capture(tmp_path / "market.db")
+    capture.run(_d(9, 1), [("2330", _d(10, 1))])
+    capture.run(_d(9, 2), [("2330", _d(10, 1))])
+    text = probe.render(_analyze(capture.path), today=TODAY, detail=5)
+    assert not re.search(r"\bholds\b|does not hold", text.lower())
+    assert "5 otherwise       : decided by risk control" in text
+    assert "成立" not in text.replace(probe.CONCLUSION_SENTENCE, "")
+
+
+def test_the_rule_of_three_bounds_are_printed_from_the_counts() -> None:
+    # 61 runs, each with 30 pending keys that stay listed: S = 61, N_pair = 60, no event closed.
+    future = _d(12, 31)
+    content = {f"k{i}": (f"S{i}", future) for i in range(30)}
+    runs = [
+        probe.RunRecord(i, "ok", date.fromordinal(date(2026, 8, 1).toordinal() + i), "h", 30)
+        for i in range(1, 62)
+    ]
+    report = probe.analyze(runs, {"h": content})
+    assert report.distinct_sessions == 61 and report.informative_pairs == 60
+    text = probe.render(report, today=TODAY)
+    assert re.search(r"3 / N_pair \(zero counter-examples only\)\s*: 0\.0500", text)
+    assert re.search(r"3 / M \(zero counter-examples only\)\s*: n/a", text)
+    assert "3 sample size     : not met" not in text  # M = 0 < 60 keeps this condition met
+    assert "3 sample size     : met" in text
+
+
+def test_unparsed_ex_dates_are_counted_and_not_turned_into_events(tmp_path: Path) -> None:
+    capture = _Capture(tmp_path / "market.db")
+    capture.run(_d(9, 1), [("2330", None), ("1101", _d(10, 1))])
+    capture.run(_d(9, 2), [("1101", _d(10, 1))])  # the garbled row vanishing is not an event
+    report = _analyze(capture.path)
+    assert report.unparsed_keys == 1
+    assert report.events == 1 and not report.vanished
+    assert re.search(
+        r"keys with unparsed ex_date \(not tested\)\s*: 1\b", probe.render(report, today=TODAY)
+    )
+    assert probe._parse_day("not-a-date") is None
+    assert probe._parse_day(None) is None
+
+
+def test_run_gaps_events_censored_and_pair_counts_have_numeric_assertions(
+    tmp_path: Path,
+) -> None:
+    capture = _Capture(tmp_path / "market.db")
+    e = _d(10, 30)
+    capture.run(_d(9, 1), [("2330", e), ("1101", e)])
+    capture.run(_d(9, 5), [("2330", e), ("1101", e)])  # 4 days: not "more than 4"
+    capture.run(_d(9, 10), [("2330", e), ("1101", e), ("2317", e)])  # 5 days: counted
+    capture.run(_d(9, 20), [("2317", e)])  # 10 days: counted; 2330 and 1101 lost (2 of 3)
+    report = _analyze(capture.path)
+    assert report.distant_run_pairs == 2
+    assert report.events == 3 and report.events_censored == 2  # 2317 appeared inside the sample
+    assert report.drop_episodes == 2 and report.largest_drop == 2
+    assert report.largest_drop_share == pytest.approx(2 / 3)
+    assert report.drop_pairs_over_both == 0  # 2 events < the registered 3
+    text = probe.render(report, today=TODAY)
+    assert re.search(r"more than 4 days apart\s*: 2\b", text)
+    assert re.search(r"already listed in the first usable run\s*: 2\b", text)
+
+
+def test_event_drop_pairs_need_both_the_count_and_the_share(tmp_path: Path) -> None:
+    capture = _Capture(tmp_path / "market.db")
+    e = _d(10, 30)
+    three = [("2330", e), ("1101", e), ("2317", e)]
+    capture.run(_d(9, 1), three)
+    capture.run(_d(9, 2), [("2412", e)])  # all 3 lost: 3 events, share 1.0
+    report = _analyze(capture.path)
+    assert report.largest_drop == 3 and report.drop_pairs_over_both == 1
+    text = probe.render(report, today=TODAY)
+    assert re.search(r"batch-drop pairs \(>= 3 and >= 0.10 x pending\)\s*: 1\b", text)
+    assert "share of the largest-by-rows drop (of its pending)" in text
+
+
+def test_largest_by_rows_drop_is_not_mistaken_for_the_largest_share() -> None:
+    def usable(run_id: int, row_count: int) -> Any:
+        return probe.RunRecord(run_id, "ok", _d(9, run_id), f"h{run_id}", row_count)
+
+    # 20 -> 15 (drop 5, share 0.25) then 15 -> 500 then 500 -> 462 (drop 38, share 0.076).
+    runs = [usable(i + 1, rc) for i, rc in enumerate((20, 15, 500, 462))]
+    report = probe.analyze(runs, {})
+    assert report.row_drop_largest == 38 and report.row_drop_largest_share == pytest.approx(0.076)
+    assert report.row_drop_pairs_over_share == 1  # only 20 -> 15; 500 -> 462 is below 0.10
+    text = probe.render(report, today=TODAY)
+    assert "share of the largest-by-rows drop (of previous row_count)" in text
+    assert re.search(r"pairs with drop >= 3 rows and share >= 0.10 \(descriptive\)\s*: 1\b", text)
+    assert report.row_drop_pairs_over_both == 1
+    assert not re.search(r"\bholds\b|does not hold", text.lower())
+
+
+def test_run_id_lists_are_capped_with_a_plus_n_more_note() -> None:
+    day = _d(10, 30)
+    runs = [probe.RunRecord(i, "ok", _d(9, 1), f"h{i}", 3) for i in range(1, 26)]
+    contents = {f"h{i}": {"k": ("2330", day)} for i in range(1, 26)}  # 1 stored < 3 each
+    report = probe.analyze(runs, contents)
+    assert len(report.mismatch_run_ids) == 25 and report.rc_less == 25
+    line = next(
+        row for row in probe.render(report, today=TODAY).splitlines() if row.startswith("mismatch")
+    )
+    assert line.endswith("20] (+5 more)") and "21" not in line
+
+
+def test_open_read_only_closes_the_connection_when_the_pragma_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Broken:
+        closed = False
+
+        def execute(self, *_args: object) -> None:
+            raise sqlite3.OperationalError("boom")
+
+        def close(self) -> None:
+            _Broken.closed = True
+
+    path = tmp_path / "x.db"
+    path.write_bytes(b"")
+    monkeypatch.setattr(probe.sqlite3, "connect", lambda *_a, **_k: _Broken())
+    with pytest.raises(sqlite3.OperationalError, match="boom"):
+        probe.open_read_only(path)
+    assert _Broken.closed is True
