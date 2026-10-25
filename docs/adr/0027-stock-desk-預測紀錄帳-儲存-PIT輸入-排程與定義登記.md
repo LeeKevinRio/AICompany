@@ -237,7 +237,7 @@
 | `app/forecast/claims.py` | claim 登記與 m 的計算 |
 | `app/forecast/recorder.py` | `forecast_record` 的單一編排函式（D-7 第 2 點「步驟隔離」）：依序呼叫記錄、結算、缺日稽核、晚到掃描與更正作業、驗證快照、plan；記錄一步的範圍快照、run 與 run_end、協作式期限、逾時判定；以注入的維運告警送出器發出告警（ADR-0029），本身不 import 推播實作 |
 | `app/forecast/errors.py`（N-23） | 預測帳的 fail-closed 例外型別：基底 `ForecastFailClosedError`，子類 `UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ValidationSnapshotPartialSetError`（N-23 Q3）、`LabeledThresholdSnapshotIncompleteError`（N-46）、`GapAuditRunInconsistencyError`（N-64；D-8 第 2 點）、`NoCandidateSessionError`（N-86；D-7 第 3 點）、`WriteGateClosedError`（N-86；D-7 第 7 點 N-86 子點）；另有 `span_sessions` 內部用的 `SpanRegistrationGap`（不是基底的子類）。只 import 標準庫；（v0.26，V26-01、V26-04）另有基底的子類 `ReplayPitProofViolationError`、`ReplayExecutionRefusedError`、`ReplayAbortedError`（D-9 第 7 點 V26-01、V26-04 子點）。（N-115 #11）**屬性規格**：例外一律以關鍵字參數建構，建構時驗證屬性，不合法即拋 `ValueError`；`str(exc)` 只由屬性以固定格式產生，不含 `scope_key`、代號、label、成本、股數或任何其他例外的訊息。D-3、D-7 第 2 點、D-9 已定屬性者照原文（`LabeledThresholdSnapshotIncompleteError`、`UnregisteredUnobservedWeekdayError`、`MarketRunRegressedError`、`ReplayPitProofViolationError`；`ReplayExecutionRefusedError(*, reason)` 的 `reason` ∈ {`schedule_window`, `gate_not_passed`, `already_committed`}；`ReplayAbortedError(*, registration_id, execution_seq, result, exception_class)`，`result` ∈ {`pre_validation_abort`, `result_abort`}，`exception_class` 依本列 `exception_class_name()`）。其餘四個：`ValidationSnapshotPartialSetError(*, computed_for_session: date, present_claim_count: int, missing_claim_count: int)`，兩個計數都 ≥ 1；`GapAuditRunInconsistencyError(*, session: date, run_id: int, run_outcome: Literal["ok", "partial"], run_role: Literal["decisive", "basis"])`（`run_role` 為決定 run 或列於 `basis_json` 的 run，D-8 第 2 點第 3 項；不帶 `scope_key`）；`NoCandidateSessionError()` 沒有屬性；`WriteGateClosedError(*, failed_gates: tuple[Literal["G-3", "G-4", "dirdef_fields"], ...])`，非空、依這個順序排列、不重複。**例外類別名稱的清洗**（N-115 #13）：本模組另定 `exception_class_name(exc) -> str` 與常數 `EXCEPTION_CLASS_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"`、`EXCEPTION_CLASS_MAX_CHARS = 128`、`INVALID_EXCEPTION_CLASS = "invalid_exception_class"`（名稱暫定）：取 `type(exc).__name__`，不符格式或超過長度時回傳 `INVALID_EXCEPTION_CLASS`。`app/forecast/**` 凡填 `error_class`、`exception_class` 的地方（D-3 `forecast_run_end`、`forecast_record_attempt_end`、`forecast_replay_execution_log`，`ReplayAbortedError`，以及 recorder 建構 `OpsAlert` 時）都只經這個函式，`store.py` 的寫入驗證以同兩個常數檢查。`app.ops_alert.model` 依 ADR-0029 D-1 只 import 標準庫，保留它自己的同一規則（ADR-0029 D-2 規則 1、D-3 第 10 點）；`app/` 內這條規則恰好這兩份，一致性由 FL-79 (d) 釘住 |
-| `app/forecast/band.py`（N-41、N-46；純函式） | `threshold_inputs(band_def)` 與 `labeled_snapshot_violations(band_def, *, horizon, definition)` 的唯一定義（D-3 `forecast_record` 判定材料「適用範圍與缺項」）。只 import 標準庫與 `app.dirdef` 的型別（N-113；定義物件由呼叫端傳入，不讀登記表；只 import 標準庫、以本模組自己的 Protocol 描述定義亦可）；不 import `scoring.py`、`app/outlook/volatility.py`，不讀 DB。`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 只經這兩個函式判定缺項（AST）；（N-53）重放執行函式的預驗證與建結果列的函式同樣只經這兩個函式判定缺項（AST；D-9 第 7 點 N-53 子點） |
+| `app/forecast/band.py`（N-41、N-46；純函式） | `threshold_inputs(band_def)` 與 `labeled_snapshot_violations(band_def, *, horizon, definition)` 的唯一定義（D-3 `forecast_record` 判定材料「適用範圍與缺項」）。只 import 標準庫與 `app.dirdef` 的型別（N-113；定義物件由呼叫端傳入，不讀登記表；只 import 標準庫、以本模組自己的 Protocol 描述定義亦可）；不 import `scoring.py`、`app/outlook/volatility.py`，不讀 DB。（N-115）上述 import 範圍的唯一例外：另 import `app.forecast.errors` 的 `ThresholdViolation`、`THRESHOLD_VIOLATION_ORDER`，不 import 該模組的其他名稱；違規值的封閉列舉在 `app/` 內恰有這一個定義（AST、grep）。`store.py` 的寫入驗證、`scoring.py`、`settlement.py`、`correction.py` 只經這兩個函式判定缺項（AST）；（N-53）重放執行函式的預驗證與建結果列的函式同樣只經這兩個函式判定缺項（AST；D-9 第 7 點 N-53 子點） |
 | `app/ops_alert/`（ADR-0029；不在 `app/forecast/` 底下） | 維運告警通道。`app.forecast.*` 只可以 import `app.ops_alert.model`；送出器實作由 `scheduler.py` 組裝時注入 |
 | `app/forecast/scoring.py` | 結算與基準命中（ADR-0012 C-15 白名單，唯一可以出現 forward return 類識別字的地方） |
 | `app/forecast/settlement.py`（v0.14，V14-01） | 結算評估唯一的寫入端：`run_settlement_evaluation(*, store, market_reader, index_service, clock)`。它讀一次 R、建立判定視圖（D-9.2），呼叫 `scoring.py` 的純函式判定全部未結算的預測，並在同一個主 DB 寫入交易內寫入 `forecast_settle_eval` 與該次評估的全部 `forecast_outcome` 列。簽章不接受 R、判定視圖或判定結果；`forecast_outcome` 的排程結算寫入只能從這個函式呼叫（AST 列舉呼叫點） |
@@ -349,7 +349,7 @@
     - （N-41、N-46；事先宣告 v0.22 V22-07）**適用範圍與缺項**：
       - 「缺項」與「完整」只由 `app/forecast/band.py` 的單一純函式 `threshold_inputs(band_def) -> ThresholdInputs | None` 判定：`K_h`、`EPS`、`sigma_d` 任一個鍵不存在或值為 null，或 `sigma_d` 不是正的有限值（`math.isfinite(sigma_d) and sigma_d > 0` 不成立）時，回傳 None，稱為缺項；否則回傳 `ThresholdInputs{K_h, EPS, sigma_d}`，稱為完整。這是事先宣告 §6.3 v0.22 註（V22-07）「缺 `K_h`、`EPS`、`sigma_d` 任一項，或 `sigma_d` 不是正的有限值」的唯一實作。（N-115 #16）三個值都必須是數值，判準為 `isinstance(v, (int, float)) and not isinstance(v, bool)`；不是數值的值（含 `bool`、字串、list、dict）與 null 同樣算缺項，`threshold_inputs()` 不拋例外，只對數值呼叫 `math.isfinite`。`labeled_snapshot_violations()` 對這種值記 `k_h_missing`、`eps_missing` 或 `sigma_d_missing`，不新增列舉值。`store.py` 的寫入驗證另外拒絕 `band_def` 中 `K_h`、`EPS`、`sigma_d`、`up_pct`、`down_pct` 任一鍵的值非 null 而不是數值，或 `valid_returns` 非 null 而不是 `int`（`bool` 不算）的列；所以這種值只可能出現在繞過 store 寫入的列，讀到時依本句前段判定。
       - 不論 label：`K_h`、`EPS` 非 null 時，必須與該列 `definition_version` 所登記 dirdef 的常數（該 h 的 K、`EPS`）逐位相等。
-      - `label ≠ insufficient`：`band.py` 的單一純函式 `labeled_snapshot_violations(band_def, *, horizon, definition)`（`definition` 是該列 `definition_version` 所登記的 dirdef）必須回傳空 tuple，上方五項也必須成立；不成立時拒絕寫入，拋 `LabeledThresholdSnapshotIncompleteError`（D-9 第 6 點 N-46 子點）。違規值是封閉列舉，依序為 `k_h_missing`、`k_h_mismatch`、`eps_missing`、`eps_mismatch`、`sigma_d_missing`、`sigma_d_not_positive_finite`、`sigma_d_below_floor`（`sigma_d` 小於該版 dirdef 的 `SIGMA_FLOOR`）、`valid_returns_below_min`（`valid_returns` 為 null，或小於該版 dirdef 的 `SIGMA_MIN_VALID`）；回傳值依此順序排列、不重複。有標籤的預測不得以缺項寫入，也不得改記 `insufficient` 或補值後寫入。
+      - `label ≠ insufficient`：`band.py` 的單一純函式 `labeled_snapshot_violations(band_def, *, horizon, definition)`（`definition` 是該列 `definition_version` 所登記的 dirdef）必須回傳空 tuple，上方五項也必須成立；不成立時拒絕寫入，拋 `LabeledThresholdSnapshotIncompleteError`（D-9 第 6 點 N-46 子點）。違規值是封閉列舉，依序為 `k_h_missing`、`k_h_mismatch`、`eps_missing`、`eps_mismatch`、`sigma_d_missing`、`sigma_d_not_positive_finite`、`sigma_d_below_floor`（`sigma_d` 小於該版 dirdef 的 `SIGMA_FLOOR`）、`valid_returns_below_min`（`valid_returns` 為 null，或小於該版 dirdef 的 `SIGMA_MIN_VALID`）；回傳值依此順序排列、不重複。（N-115）各違規值依括號內的條件各自判定，同一列可以同時記多項：`sigma_d` 為 0、負值或 −inf 時，同時記 `sigma_d_not_positive_finite` 與 `sigma_d_below_floor`；NaN 與 +inf 只記 `sigma_d_not_positive_finite`（NaN 與任何值比較都不成立，+inf 不小於 `SIGMA_FLOOR`）。`valid_returns` 為 `bool`，或不是 `int`（含 `30.0` 這類 `float`）時，與 null 同樣處理，記 `valid_returns_below_min`。超出 IEEE 754 double 範圍的 `int`（`float()` 會拋 `OverflowError` 者）依符號視為 ±inf，不拋例外，`threshold_inputs()` 與本函式都以這個值判定。本列舉（`ThresholdViolation`、`THRESHOLD_VIOLATION_ORDER`）在 `app/` 內只定義在 `app/forecast/errors.py`，`band.py` 與 `LabeledThresholdSnapshotIncompleteError` 的屬性驗證共用這一份（D-1 `band.py` 列）。有標籤的預測不得以缺項寫入，也不得改記 `insufficient` 或補值後寫入。
       - `label = insufficient`、而且完整：上方五項照常適用。
       - `label = insufficient`、而且缺項：上方五項不適用；`missing_json` 必須非空（D-13 不變式；事先宣告 §5.1 第 2 點），否則拒絕寫入；`up_pct`、`down_pct` 必須同為 null（事先宣告 §5.1 第 3 點：不得以替代估法補資料）；其餘鍵照預測端實際算得的值存，算不出的記 null。
       - 理由：上方五項對缺 `sigma_d` 的列無法成立；照字面不分 label 適用，證據不足的預測會被拒寫，違反事先宣告 §5.1 第 4 點「證據不足的預測也寫入紀錄帳，並計入涵蓋率」，V22-07 也會落空。
@@ -2379,8 +2379,9 @@ class MissingItem(BaseModel):              # frozen
 - **不變式**：
   - `label == "insufficient"` 若且唯若 `missing` 非空；
   - `source_status` 非 None 若且唯若 `source` 非 None；
-  - `fetch_failed` 必有 `attempted_at`；
-  - `not_yet_published` 必有 `latest_available`。
+  - `attempted_at` 非 None 若且唯若 `source_status` 為 `fetch_failed`（N-115：本節欄位註解「fetch_failed only」的明文化，反向同樣強制）；
+  - `latest_available` 非 None 若且唯若 `source_status` 為 `not_yet_published`（同上，「not_yet_published only」）。
+  - （N-115）後三項由 `app/outlook/missing.py` 的 model validator 強制（FL-39），第一項是整筆紀錄的不變式，不在本型別內判定。`MissingItem` 為 frozen、`extra="forbid"`，每個欄位都沒有預設值；讀回既有的 `missing_json` 時，含未宣告的鍵或違反上列不變式的項目同樣不能載入，不略過、不補值。
 - **判定順序**（第一個成立的就採用，每一項都要有正面證據，不得由「沒有資料」反推）：`not_configured` → `not_covered` → `fetch_failed` → `failed_check` → `not_yet_published` → `unknown`。
 - 只有可歸因到某個資料源的缺項才填 `source_status`。例如 `E-SCOPE-TYPE` 是定義範圍外，填 None。
 - **封閉列舉**：新增值（例如日後從 `not_configured` 拆出 `missing_setting`，對應 LM-51）須修訂本節，並同步送字面審。
@@ -5584,3 +5585,25 @@ D_v ＝該 claim 第一筆 `trigger=scheduled`、`late=0`、`supersedes_id IS NU
 - 待決事項與同批規則：
   - N113-1～N113-5 必須同一個 commit；N115-1 與 N115-2、N117-1 與 N117-2、N117-4～N117-8 各自必須同一個 commit。全批可以只用一個 commit。N113-1～N113-5 不得早於 N115-3 落檔（FL-78 (m) 引用 N115-3 的登記 CLI）。修訂紀錄（本段）最後落檔。N115-9 與 N115-5、N113-1 必須同一個 commit。
   - 落檔後的閘門：葉套件與 `app/forecast/definitions.py`、`volatility.py`（B2）、中止用 run_end 寫入函式、`forecast_record` 的寫入路徑、on-demand 寫入與 claim 登記 CLI，依本批的字面實作；本批落檔前，這幾處不實作。
+
+---
+
+**N-115 第一批補遺（後續追蹤清單 N-115；D-1 `band.py` 列、D-3「適用範圍與缺項」、D-13 不變式；方向：逐項標示，見各項）**
+- 來源與套用範圍：
+  - 本段是上一段「N-113、N-115、N-117 批」的補遺，在該批 commit 之後單獨落檔；上一段原文不改，該段「逐項」與「照實並陳」不含 N115-10、N115-11。
+  - dev-lead B1 實作交件的 provisional 1～5：`work/reviews/2026-10-24-ADR0027-B1實作-dev-lead.md`。
+  - tech-architect 2026-10-24 裁定與起草：`work/reviews/2026-10-24-B1暫定語意裁定-tech-architect.md`「決策（ADR 草案：補進 N-115 第一批）」。
+  - CEO：否。風控：輕量確認 `work/reviews/2026-10-24-N115-10與N115-11輕量確認-風控.md`：N115-10a、N115-10b、N115-11 本文核可；本段 N115-10 方向、照實並陳 N115-10 與 N115-11、待決閘門修改後核可，已依該檔改字（方向補列超大 `int` 視為 ±inf 的判定；照實並陳寫明繞過 store 寫入、`label = insufficient` 的列仍會把非有限的 `K_h`、`EPS` 判為完整，並引後續追蹤清單 N-123；讀回失敗的停擺代價）。各項都是收緊或不變，沒有放寬任何寫入驗證、揭露或統計。
+  - 事先宣告不改字。本段可以單獨 commit。
+- 逐項（被取代的原文：判準同 v0.25 同步批段）：
+  - N115-10 D-1 `band.py` 列的 import 例外與 D-3 違規值的判定細則（B1 provisional 1～4，tech-architect 2026-10-24 裁定）：方向：補定義（不變：違規值的封閉列舉與順序不變，只定唯一定義處；各違規值獨立判定是 D-3 `label ≠ insufficient` 一項括號條件的字面；超大 `int` 依符號視為 ±inf 是補原文未定義之處，判定結果仍是 fail-closed（`sigma_d` 走缺項或記違規，有標籤的列 `K_h`、`EPS` 記不相符），讀端的既有缺口見本段照實並陳；收緊：`valid_returns` 的非整數算 null）。CEO：否。句末接字，無被取代原文。
+  - N115-11 D-13 反向不變式與 `extra="forbid"`（B1 provisional 5）：方向：補定義（收緊：欄位註解「only」改為若且唯若；不接受未宣告的鍵）。CEO：否。被取代的原文——
+    > `fetch_failed` 必有 `attempted_at`；
+    > `not_yet_published` 必有 `latest_available`。
+  - 本段。
+- 照實並陳：
+  - N115-10：`threshold_inputs()` 對 `K_h`、`EPS` 只判斷「有沒有、是不是數值」，所以 ±inf、NaN（含由超大 `int` 換算出的 ±inf）的 `K_h`、`EPS` 會被判為完整；上一段照實並陳 N115-6「非數值不會被當成完整的門檻材料使用」只涵蓋非數值，不涵蓋非有限的數值。這是既有缺口（風控 2026-10-24 對 N115-6 的 suggested），不是本項造成的。經 store 寫入的列，由 D-3「適用範圍與缺項」「不論 label」一項的逐位相等擋下；有標籤的列由 `labeled_snapshot_violations()` 記 `k_h_mismatch`、`eps_mismatch`，fail-closed。剩下的情形是繞過 store 寫入、`label = insufficient` 的列：非有限的 `K_h`、`EPS` 仍判為完整，會被當成門檻材料使用〔推論〕。改這一點等於改事先宣告 V22-07 唯一實作的判準，列後續追蹤清單 N-123（tech-architect 起草、quant 同步事先宣告、送風控），本段不定義；定案之前的閘門見本段「待決事項」。
+  - N115-11：`extra="forbid"` 使 D-13 日後刪除或改名欄位時，既有 `missing_json` 讀不回來，必須搭配遷移；D-13 的欄位變動本來就要修訂本節。讀回失敗時拋例外，讀該列的作業依各自的失敗出口中止（fail-closed），不略過該列、不以空的缺項代替；修正或遷移之前，每次讀取都重演〔推論〕。
+- 待決事項與同批規則：
+  - N115-10a 與 N115-10b 必須同一個 commit；全段可以只用一個 commit。修訂紀錄（本段）最後落檔。
+  - 落檔後的閘門：後續追蹤清單 N-123 定案並經風控確認之前，`scoring.py`、`settlement.py`、`correction.py` 與重放執行函式中經 `threshold_inputs()` 判定缺項的路徑不實作（阻擋；風控 2026-10-24）。`store.py` 的寫入驗證不受此限。
