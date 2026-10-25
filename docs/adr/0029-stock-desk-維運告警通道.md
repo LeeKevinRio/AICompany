@@ -89,7 +89,7 @@
 規則：
 
 1. **只收結構化屬性**：`OpsAlert` 的任何欄位不接受「例外原文」。例外類別名稱只放 `exception_class`（E-3d），並以 `^[A-Za-z_][A-Za-z0-9_]*$` 驗證（取 `type(exc).__name__`，見 D-3 第 10 點）。
-2. 日期欄位是 ISO8601 字串（日期或 UTC 時間），整數欄位是 `int`，列舉欄位是列舉成員；model 建構時驗證型別，不合法即拋 `ValueError`（建構失敗）。
+2. 日期欄位是 ISO8601 字串（日期或 UTC 時間），整數欄位是 `int`，列舉欄位是列舉成員；model 建構時驗證型別，不合法即拋 `ValueError`（建構失敗）。（N-132；tech-architect 2026-10-25）判定方式：日期欄位必須是標準寫法 `YYYY-MM-DD`，即 `date.fromisoformat(s).isoformat() == s`（`20261001` 這類其他 ISO8601 寫法拒絕）；UTC 時間欄位以 `datetime.fromisoformat(s)` 解析，必須帶時區而且 `utcoffset() == timedelta(0)`（`Z` 與 `+00:00` 都接受；沒有時區或位移不為零時拒絕），不要求標準寫法。
 3. render 不得以 `vars()`、`__dict__`、`dataclasses.asdict` 迭代任意屬性（AST）。每個 payload 欄位在 `render` 都必須有一個登記的標籤常數；測試逐一列舉 dataclass 欄位，缺標籤即失敗（對應 D-4 的正面白名單）。
 4. **適用對照**（tech-architect 2026-10-18 確認）。表外的組合在 model 建構時拒絕（OA-23）：
 
@@ -191,7 +191,7 @@
 
 - `scheduler.py` 組裝時註冊一個 listener，mask 為 `EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED`，送出器在註冊時注入。
 - 只處理 `job_id == "forecast_record"`；其他 job id 不推播、也不寫 `ops alert:` 行（它們現行的行為不變）。
-- 事件屬性（3.11.3，已於 Context 驗證）：`EVENT_JOB_MAX_INSTANCES` 取 `scheduled_run_times`（list）、`EVENT_JOB_MISSED` 取 `scheduled_run_time`；統一轉成 UTC ISO8601 升冪的 tuple，放進 E-3b 的 `skipped_run_times`。
+- 事件屬性（3.11.3，已於 Context 驗證）：`EVENT_JOB_MAX_INSTANCES` 取 `scheduled_run_times`（list）、`EVENT_JOB_MISSED` 取 `scheduled_run_time`；統一轉成 UTC ISO8601 升冪的 tuple，放進 E-3b 的 `skipped_run_times`。（N-132）這裡的升冪是非遞減：相同時刻可以並存，listener 不去重，payload 建構也不因此拒絕（與 E-1 `unregistered_session_dates` 的「升冪、不重複」不同）。理由：建構失敗時這則 E-3b 只剩一行 `ops alert build failed`、沒有推播（D-3 第 10 點），重複的觸發時刻不影響判讀。
 - 以 APScheduler 的事件物件直接呼叫 listener 測試，不實際排程。
 - listener 在 scheduler 的派送執行緒上同步執行；D-3 第 9 點的阻塞上限適用。送出器不拋例外，所以 scheduler 的 `Error notifying listener` 路徑不應被走到；若走到，該筆 traceback 經 R-1 的 handler filter 遮蔽。
 - 不以 `EVENT_JOB_ERROR` 為來源（`_guarded` 吞掉例外，永不送出）。
@@ -216,7 +216,7 @@
 - **E-2 `source = correction` 的落檔前提**：本列（`write_outcome = deferred`）依附 ADR-0027 D-7 第 2 點 Q7 的「更正作業」子點，以及 D-3「晚到資料的觸發」第 8 點的改字，兩者都屬 ADR-0027 第二批，要等 CEO #42 明示同意後才落檔。第二批落檔之前，ADR-0027 現行字面是「其餘觸發照常」，更正作業照常啟動，不符 `deferred`，所以本列與 OA-10 的 `correction` 格在第二批落檔前不得實作（correction.py 本來就擋 D-9）。CEO 不同意時，本列與 OA-10 依 ADR-0027 屆時的字面修訂：本 ADR 仍為 proposed 時原地修訂，已 accepted 時開新 ADR；並送風控重審（同下一點）。
 - E-2 的 `source = correction`（`write_outcome = deferred`）以 ADR-0027 N-23 第二批（Q7 更正作業一面，待 CEO #42 明示同意）為前提。第二批落檔之前，ADR-0027 D-3「晚到資料的觸發」第 8 點照現行字面（其餘觸發照常），本列不得實作，推播不得以 `deferred` 陳述實際已啟動的更正作業；CEO 不同意時，本列與其 `write_outcome` 送風控重審。
 - 上兩點對「CEO 不同意時」的處理一致為送風控重審；「送風控知悉」等較寬讀法不適用（修訂紀錄「合併規則」）。
-- E-2 `source = audit`／`correction` 的欄位，取自 `market_run_regression()` 回傳的 `MarketRunRegression`，屬性 `market_run_current`、`regression_kind`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`、`reference_recorded_at`、`current_recorded_at`，與 `MarketRunRegressedError` 的同名屬性逐字一致；`source` 由呼叫端決定。
+- E-2 `source = audit`／`correction` 的欄位，取自 `market_run_regression()` 回傳的 `MarketRunRegression`，屬性 `market_run_current`、`regression_kind`、`reference_kind`、`reference_value`、`reference_id`、`reference_started_at`、`reference_recorded_at`、`current_recorded_at`，與 `MarketRunRegressedError` 的同名屬性逐字一致；`source` 由呼叫端決定。（N-132）整數欄位的值域與 ADR-0027 D-9.2「R 倒退」的例外屬性相同：`market_run_current ≥ 0`、`reference_value ≥ 1`、`reference_id ≥ 1`；不在值域內時 payload 建構失敗（D-2 規則 2、D-3 第 10 點）。
 - 後續追蹤清單 N-20 已在 ADR-0027 增列 E-2 的屬性 `regression_kind`、`reference_recorded_at`、`current_recorded_at`（tech-architect 2026-10-18 補充項回覆第 3 項；ADR-0027 N20-1、N20-2 的例外屬性，與本點同批落檔），本 ADR 已同步（見修訂紀錄「風控 2026-10-19 N-20 批裁定後修訂」）。依失效條件 5 已與 N-20 同批送風控，風控 2026-10-19 N-20 批已知悉確認（`work/reviews/2026-10-19-N20批裁定-風控.md`）。
 - **render 的三個新標籤：草稿，待風控逐字確認（R-12）；不是定稿，確認之前 render 不得實作這三個標籤**（失效條件 5；風控 R-12 要求逐字送審）。方向（風控 R-12）：`reference_identity_mismatch` 只陳述事實，不得寫成「已確認被還原」；`current_recorded_at` 的標籤要寫清楚是「市場 DB 中同號 run 的 recorded_at」，不是目前最大 run 的，None 時顯示「不存在」、不得省略該行；不得出現禁用詞清單 B 類的急迫用字。草稿如下：
   - `regression_kind`：標籤「判定種類」；欄位值為列舉成員原樣（`run_regressed`、`reference_identity_mismatch`），符合 D-4 正面白名單第 4 項。備選：值改為固定常數「最新 run 編號小於參考 run」「參考 run 身分不符」，這要把這兩句也登記為固定標籤常數（D-4 第 3 項）。甲、乙擇一，請風控裁定。
@@ -569,3 +569,19 @@ dead-man's switch（R-4）**不是**本閘門的項目，另案由 CEO 決定。
   - render 的三個新標籤：草稿見 D-7 規則，待風控逐字確認（R-12）。確認前 E-2 的 `regression_kind`、`reference_recorded_at`、`current_recorded_at` 不得進入 render 實作；OA-12 的標籤常數掃描要連同這三個一起跑。
   - render 在 `recorded_at` 相等但 `kind` 或 `session_date` 不同時的處理：見 D-7 規則，待 tech-architect 與風控決定。
   - OA-10 沒有另加 `reference_kind = gap_audit` 的獨立格（`reference_id` 為 `audit_id`、`reference_started_at` 為 `audit_now`）；N20-9 只要求加身分不符一格，gap_audit 對應的來源格在 ADR-0027 FL-67 (n)。是否要在本 ADR 補一格，請 tech-architect 決定。
+
+---
+
+**N-132 B1 自決細節裁定後修訂（ADR-0027 後續追蹤清單 N-132；D-2 規則 2、D-6、D-7 規則；tech-writer 套用）**
+
+依據：dev-lead 2026-10-25 `work/reviews/2026-10-25-ADR0027-B1註記更新-dev-lead.md` 第二節「自行決定的 7 點」第 1、2、3、5 項；qa-reviewer 2026-10-25 `work/reviews/2026-10-25-ADR0027-B1審查-qa-reviewer.md`「dev-lead 自決 7 點逐點判斷」；tech-architect 2026-10-25 裁定（coordinator 轉存 `work/reviews/2026-10-25-N128N131N132補字與B2範圍-tech-architect.md`）。本 ADR 狀態為 proposed，依 ADR-0001 原地修訂。與 ADR-0027 修訂紀錄「N-128、N-131、N-132 小補字批」同一個 commit。
+
+- 方向：逐項標示，見下；沒有放寬任何寫入驗證、揭露或統計。CEO：否。風控：輕量確認 `work/reviews/2026-10-25-N128N131N132輕量確認-風控.md`（正文三項核可；照實並陳的 E-2 建構失敗一句修改後核可，已依該檔改字）；推播的欄位集合、標籤與模板都不變，不屬於「失效條件」第 5 點。
+- 逐項（都是句末接字，無被取代的舊字）：
+  1. **D-2 規則 2 的判定方式**（dev-lead 第 2、3 項）。日期欄位：收緊（只收 `YYYY-MM-DD`）。UTC 時間欄位：補定義（不變：判定方式明文化；`Z` 本是 ISO8601 的 UTC 標記）。
+  2. **D-6 `skipped_run_times` 的升冪**（dev-lead 第 1 項）：補定義（消除歧義：非遞減）。相對「嚴格升冪」的讀法，唯一差異是含重複時刻的 E-3b 可以建構並推播，不影響任何寫入或判定。
+  3. **D-7 規則 E-2 整數欄位的值域**（dev-lead 第 5 項）：補定義（不變：`market_run_current ≥ 0`；推論明文化：`reference_value ≥ 1`；收緊：`reference_id ≥ 1`，依 AUTOINCREMENT 配號）。與 ADR-0027 D-9.2「R 倒退」N-132 句同值域。
+- 照實並陳：
+  - 檢查越嚴，建構失敗的機會越大；建構失敗時依 D-3 第 10 點只記一行 `ops alert build failed`，沒有推播。正常路徑下日期寫法與三個值域都必然成立〔推論：日期字串由 `date` 物件以 `isoformat()` 產生；`reference_id` 來自 AUTOINCREMENT 配號〕，只有程式缺陷或繞過 store 的寫入會觸發。其中 E-2 `source = audit` 的建構失敗發生時，缺日稽核已 commit，操作者只能從 log 得知；`source = correction`（`write_outcome = deferred`）同理，更正作業已延後，卻沒有推播告知。是否改為建構失敗時改發 E-3d（或其他會推播的處置），另列後續追蹤 N-135，兩個 source 都在範圍內，本段不改。N-135 裁定並落檔之前，`recorder.py` 中 E-2 `source = audit`、`source = correction` 的建構點不得實作（`correction` 另受 D-7 規則所列第二批前提）。
+  - UTC 時間欄位不要求標準寫法：去重鍵的 `execution_started_at` 以字串相等比較，同一次執行的值出自同一次 store 時鐘讀值，寫法一致〔推論〕。
+  - dev-lead 第 4、6、7 項已有字面依據，不改字。
