@@ -403,6 +403,8 @@ const SCANNED_FILES = [
   // F-7 價格單位標籤 (風控 F7-R1~R10, 2026-10-08): the two approved price-unit strings and the
   // chip class live only in this component; pinned verbatim by priceUnitBadge.test.ts.
   "../../position/[symbol]/PriceUnitBadge.tsx",
+  // 股數成因（風控 2026-10-26 定稿 Q-a／Q-b／D-a／D-b）：新字面模組，逐字釘住於 quantityAbsenceCause.test.ts。
+  "../quantityAbsenceWording.ts",
 ] as const;
 
 /**
