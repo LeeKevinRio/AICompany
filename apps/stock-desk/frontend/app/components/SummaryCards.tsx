@@ -74,20 +74,28 @@ export function SummaryCards({
   fxBackupActive: boolean;
 }) {
   const basis = deriveValuationBasis(positions);
-  // `no_data` totals are the backend's sum over zero valued positions, i.e. a
-  // literal 0 that is not an amount anyone holds (no positions, or none could
-  // be valued). Shown as 「—」 — the app-wide "no number to show" mark,
-  // `formatMoney(null)` — never as NT$0, which reads as a real zero.
-  const amount = (value: string): string | null => (totals.status === "no_data" ? null : value);
+  // A-1 (NP-B4): when nothing could be valued the book has no total, so the
+  // four amounts must read "—" (and stay neutral-coloured), never NT$0. Since
+  // T1-12 the API already sends null for them under `no_data`; the mask stays
+  // as defence in depth and keys on `status`, not on the values, so a payload
+  // that still carries numbers under `no_data` reads "—" too. `partial` /
+  // `complete` pass through unchanged, so a real zero there still reads NT$0.
+  // An empty book (no positions) is also `no_data`, so it gets the same mask;
+  // only its banner differs (`StatusBanner` `empty`: 「尚無持倉」, neutral).
+  const noData = totals.status === "no_data";
+  const marketValue = noData ? null : totals.market_value_twd;
+  const unrealizedPnl = noData ? null : totals.unrealized_pnl_twd;
+  const assetContribution = noData ? null : totals.asset_contribution_twd;
+  const fxContribution = noData ? null : totals.fx_contribution_twd;
   return (
     <div className="space-y-3">
-      <StatusBanner status={totals.status} empty={totals.status === "no_data" && positions.length === 0} />
+      <StatusBanner status={totals.status} empty={noData && positions.length === 0} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="rounded-lg border border-neutral-800 p-5">
           <p className="text-sm text-neutral-400">總資產（市值）</p>
           <p className="mt-1 text-3xl font-bold text-neutral-100">
-            {formatMoney(amount(totals.market_value_twd), "TWD", 0)}
+            {formatMoney(marketValue, "TWD", 0)}
           </p>
           {/* C3-3 valuation-basis sentence. CEO 2026-10-03 ruling: moved into
               the card's <details> (overrides the risk-compliance "always in the
@@ -110,9 +118,9 @@ export function SummaryCards({
         <div className="rounded-lg border border-neutral-800 p-5">
           <p className="text-sm text-neutral-400">未實現損益</p>
           <p
-            className={`mt-1 text-3xl font-bold ${pnlColorClass(amount(totals.unrealized_pnl_twd))}`}
+            className={`mt-1 text-3xl font-bold ${pnlColorClass(unrealizedPnl)}`}
           >
-            {formatMoney(amount(totals.unrealized_pnl_twd), "TWD", 0)}
+            {formatMoney(unrealizedPnl, "TWD", 0)}
           </p>
           {/* 「資料時間」原本兩卡各印一次，字面完全重複；本批只留總資產卡一處
               （wave2-B 純搬移，句子本身不改字）。 */}
@@ -123,9 +131,9 @@ export function SummaryCards({
         <div className="rounded-lg border border-neutral-800 p-4">
           <p className="text-sm text-neutral-400">標的貢獻</p>
           <p
-            className={`mt-1 text-xl font-semibold ${pnlColorClass(amount(totals.asset_contribution_twd))}`}
+            className={`mt-1 text-xl font-semibold ${pnlColorClass(assetContribution)}`}
           >
-            {formatMoney(amount(totals.asset_contribution_twd), "TWD", 0)}
+            {formatMoney(assetContribution, "TWD", 0)}
           </p>
         </div>
         <div className="rounded-lg border border-neutral-800 p-4">
@@ -141,9 +149,9 @@ export function SummaryCards({
             )}
           </p>
           <p
-            className={`mt-1 text-xl font-semibold ${pnlColorClass(amount(totals.fx_contribution_twd))}`}
+            className={`mt-1 text-xl font-semibold ${pnlColorClass(fxContribution)}`}
           >
-            {formatMoney(amount(totals.fx_contribution_twd), "TWD", 0)}
+            {formatMoney(fxContribution, "TWD", 0)}
           </p>
           {fxDisclosures.length > 0 && (
             <details className="group mt-2 text-xs text-neutral-400">
