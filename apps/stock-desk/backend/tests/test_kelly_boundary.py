@@ -44,6 +44,8 @@ GUARDED_MODULES = (
     "app.kelly.store",
     "app.kelly.sample_gate",
     "app.kelly.attempts",
+    # Plan D (CEO #62, 2026-10-26): the freeze switch, pure constants.
+    "app.kelly.freeze",
 )
 
 #: Every module of the risk layer, as the roots of the inbound scan. The whole
