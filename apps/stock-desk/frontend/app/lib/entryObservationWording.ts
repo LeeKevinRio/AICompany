@@ -59,7 +59,8 @@ export function buildDefensiveHitsText(count: number): string {
 export const ENTRY_E1_QUALIFIER =
   "以上六條門檻皆為本面板自訂之固定值；成立數僅為符合門檻的條數，不代表機率、達成率或任何買賣判斷。";
 
-export const ENTRY_E2_XREF = "本面板不是操作摘要結論的一部分；結論、信心等級與免責事項見上方操作摘要。";
+// 風控 2026-10-26 定稿；失效條件 T2（連動 xref 1：「信心等級」已隨信心 chip 下架而移除）
+export const ENTRY_E2_XREF = "本面板不是操作摘要結論的一部分；結論與免責事項見上方操作摘要。";
 
 export const ENTRY_E3_DASH_NOTE = "「—」代表無法判定，不代表數值為零，也不代表未成立。";
 

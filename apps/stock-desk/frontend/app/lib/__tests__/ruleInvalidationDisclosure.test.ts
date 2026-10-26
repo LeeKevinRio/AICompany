@@ -58,7 +58,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
     rules_version: "1.1.0",
     as_of: "2026-09-18T09:00:00+08:00",
     observation_window: { start: "2025-05-01", end: "2026-09-18", bars: 300 },
-    disclaimer: "本工具為研究與教育用途，非投資建議",
+    disclaimer: "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。",
     limits_check: [],
     action_weights: [],
     direction_weights: [],
@@ -205,7 +205,11 @@ describe("DecisionCardBody — 揭露句緊接失效條件行（位置 B）", ()
 
   it("揭露句不在 <details> 內", () => {
     const html = renderDecisionCard(makeCard());
-    expect(html).not.toContain("<details");
+    // 字面更新 (2026-10-26): the card now carries click-to-open <details> of its own (1-X, 4-E), so the
+    // old "no <details> anywhere" statement became the equivalent: the sentence sits outside every one.
+    const detailsBlocks = html.match(/<details[\s\S]*?<\/details>/g) ?? [];
+    expect(html).toContain(D_PROTECTION);
+    for (const block of detailsBlocks) expect(block).not.toContain(D_PROTECTION);
   });
 
   it("無該規則時零次：其他規則的失效條件、無命中規則、失效條件為空", () => {

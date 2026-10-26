@@ -29,6 +29,7 @@ import {
   QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
 } from "../adviceWording";
+import { UNVALIDATED_EXPLANATION, UNVALIDATED_LABEL } from "../riskRemediationWording";
 
 function makeBars(
   n: number,
@@ -74,7 +75,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
     rules_version: "1.0.2",
     as_of: "2026-09-18T09:00:00+08:00",
     observation_window: { start: "2025-05-01", end: "2026-09-18", bars: 300 },
-    disclaimer: "本工具為研究與教育用途，非投資建議",
+    disclaimer: "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。",
     limits_check: [],
     action_weights: [],
     direction_weights: [],
@@ -167,7 +168,9 @@ describe("DecisionCardBody — held（R-6：以最新收盤為基準）", () => 
     expect(html).toContain("200 ~ 200 股");
   });
 
-  it("符號由算式動態決定（風控 required 條件 2）：R-6 後錨點恆為最新收盤，即使 avgCost 遠高於收盤，停損距離仍為負號、停利距離為正號", () => {
+  // 字面更新（風控 2026-10-26 定稿 C-11）：停利格已移出決策卡，原「停利距離為正號」斷言換成
+  // 「卡內不再有任何正號距離」（停損距離仍為負號）。
+  it("符號由算式動態決定（風控 required 條件 2）：R-6 後錨點恆為最新收盤，即使 avgCost 遠高於收盤，停損距離仍為負號；停利格已移出，卡內沒有正號距離", () => {
     // close 落在 100~106 之間（見 makeBars 預設）；舊制以成本為錨時停損會高於收盤（距離為正），
     // 現在停損 <= 收盤 <= 停利，與 avgCost 無關。
     const bars = makeBars(80);
@@ -178,7 +181,7 @@ describe("DecisionCardBody — held（R-6：以最新收盤為基準）", () => 
       avgCost: 100000,
     });
     expect(html).toMatch(/距最新收盤 -\d+(\.\d)?%/);
-    expect(html).toMatch(/距最新收盤 \+\d+(\.\d)?%/);
+    expect(html).not.toMatch(/距最新收盤 \+/);
   });
 });
 
@@ -389,7 +392,7 @@ describe("DecisionCardBody — no_price（連收盤價都沒有）", () => {
 });
 
 describe("DecisionCardBody — bars 為 null（日線不可用，與 advice 狀態無關）", () => {
-  it("收盤／停損／停利三格印「—」，不畫距離", () => {
+  it("收盤／停損兩格印「—」，不畫距離；停利格已移出（C-11）", () => {
     const html = renderCard({
       response: makeResponse(),
       bars: null,
@@ -397,27 +400,27 @@ describe("DecisionCardBody — bars 為 null（日線不可用，與 advice 狀�
       avgCost: 120,
     });
     expect(html).not.toContain("距最新收盤");
-    // 四格數字骨架仍完整掛載（B.7.5：缺席態不拿掉整卡骨架），三格數值印「—」。
+    // 三格數字骨架仍完整掛載（B.7.5：缺席態不拿掉整卡骨架），收盤、停損兩格數值印「—」。
     expect(html).toContain("最新收盤");
     expect(html).toContain("停損參考");
-    expect(html).toContain("停利參考");
+    expect(html).not.toContain("停利參考");
     const dashCount = html.split(">—<").length - 1;
-    expect(dashCount).toBeGreaterThanOrEqual(3);
+    expect(dashCount).toBeGreaterThanOrEqual(2);
   });
 
-  it("V1／風控 S-新1：距離槽在水位缺席時為不可見佔位（aria-hidden 的 &nbsp;），全卡「—」恰為三個數值格，距離槽不印「—」", () => {
+  it("V1／風控 S-新1：距離槽在水位缺席時為不可見佔位（aria-hidden 的 &nbsp;），全卡「—」恰為兩個數值格（收盤、停損），距離槽不印「—」", () => {
     const html = renderCard({
       response: makeResponse(),
       bars: null,
       anchorSource: "cost",
       avgCost: 120,
     });
-    // 收盤／停損／停利三格數值「—」；股數格有值（makeResponse 的 quantity_range）→ 恰三個。
-    expect(html.split(">—<").length - 1).toBe(3);
-    // 四個距離槽全部是 aria-hidden 佔位（收盤、股數無距離概念；停損、停利水位缺席）。
+    // 收盤／停損兩格數值「—」；股數格有值（makeResponse 的 quantity_range）→ 恰兩個。
+    expect(html.split(">—<").length - 1).toBe(2);
+    // 三個距離槽全部是 aria-hidden 佔位（收盤、股數無距離概念；停損水位缺席）。
     // renderToStaticMarkup 會把 &nbsp; 輸出成 U+00A0 或實體，兩種都接受。
     const placeholders = html.match(/<p class="[^"]*" aria-hidden="true">(?:&nbsp;|\u00a0)<\/p>/g) ?? [];
-    expect(placeholders).toHaveLength(4);
+    expect(placeholders).toHaveLength(3);
   });
 });
 
@@ -465,7 +468,8 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
     });
   }
 
-  it("四格容器有 gap（欄距 gap-x 與列距 gap-y），相鄰數字不貼合；<md 為 2×2、md+ 為四欄", () => {
+  // 字面更新（風控 2026-10-26 定稿 C-11）：停利格移出後四格變三格，lg 欄數 4 -> 3。
+  it("三格容器有 gap（欄距 gap-x 與列距 gap-y），相鄰數字不貼合；<md 為 2 欄、md+ 為 2 欄、lg 為三欄", () => {
     const html = renderLong(3168, 5000);
     const m = html.match(/<div class="(grid [^"]*)">/);
     expect(m).not.toBeNull();
@@ -474,8 +478,8 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
     expect(cls).toMatch(/\bgap-y-\d+\b/);
     expect(cls).toMatch(/\bgrid-cols-2\b/);
     expect(cls).toMatch(/\bmd:grid-cols-2\b/);
-    expect(cls).toMatch(/\blg:grid-cols-4\b/);
-    expect(cls).not.toMatch(/\bmd:grid-cols-4\b/);
+    expect(cls).toMatch(/\blg:grid-cols-3\b/);
+    expect(cls).not.toMatch(/\b(md|lg):grid-cols-4\b/);
   });
 
   it("格子本身 min-w-0（讓長字串能在 grid 欄內折行而非撐出頁面）", () => {
@@ -621,32 +625,41 @@ function invalidationParagraph(html: string): string | null {
 
 const CONFIDENCE_RE = new RegExp(`${CONFIDENCE_PREFIX}(?:<!-- -->)?中`);
 
-describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
-  it("held 且 action === aggregated_action：信心在 MainSlot 同一列、緊接 RULE_SOURCE_CHIP 之後，class 為 text-sm text-neutral-400", () => {
+// 字面更新（風控 2026-10-26 定稿 1-L／1-X，C-4）：信心 chip 下架，改為常駐「未經歷史驗證」。
+// 保護的字面：UNVALIDATED_LABEL（1-L）、UNVALIDATED_EXPLANATION（1-X）。
+describe("DecisionCardBody — 未經歷史驗證標示取代信心行（1-L／1-X；原 BLOCKING 2／3；K2）", () => {
+  it("held 且 action === aggregated_action：標示在 MainSlot 同一列、緊接 RULE_SOURCE_CHIP 之後；信心行不再出現", () => {
     const html = renderHeld(counterExampleCard());
     const slot = mainSlot(html);
     expect(slot).toContain(RULE_SOURCE_CHIP);
     const chipEnd = slot.indexOf(RULE_SOURCE_CHIP) + RULE_SOURCE_CHIP.length;
-    const conf = slot.search(CONFIDENCE_RE);
-    expect(conf).toBeGreaterThan(chipEnd);
-    // Nothing but the chip's closing tag and the confidence span's opening tag in between.
-    expect(slot.slice(chipEnd, conf)).toBe('</span><span class="text-sm text-neutral-400">');
-    // Not in the footer / elsewhere: exactly one confidence line on the whole card.
-    expect(html.match(new RegExp(CONFIDENCE_RE, "g"))).toHaveLength(1);
+    const label = slot.indexOf(UNVALIDATED_LABEL);
+    expect(label).toBeGreaterThan(chipEnd);
+    // Exactly one standing label on the whole card (the 3-S disclaimer also contains the words
+    // 「未經歷史驗證」 inside a longer sentence, so count the label as a <summary>); the chip is gone.
+    expect(html.split(`${UNVALIDATED_LABEL}</summary>`)).toHaveLength(2);
+    expect(html).not.toMatch(CONFIDENCE_RE);
+    expect(html).not.toContain(CONFIDENCE_PREFIX);
   });
 
-  it("信心 class 與 OperationSummaryPanel 的信心 chip 完全相同，不上色、無 hover-only／title／tooltip", () => {
+  it("標示用 <details>（可聚焦、不靠 hover）；summary 為 text-sm text-neutral-400，說明 1-X 逐字、同為 text-sm text-neutral-400（C-4：不弱於被取代的 chip）", () => {
     const html = renderHeld(counterExampleCard());
-    const m = html.match(/<span class="([^"]*)">信心 /);
-    expect(m?.[1]).toBe("text-sm text-neutral-400");
-    const tag = html.match(/<span[^>]*>信心 /)![0];
-    expect(tag).not.toMatch(/title=|hidden|group-hover|hover:|opacity|sr-only/);
+    const m = html.match(/<details class="group"><summary class="([^"]*)">([\s\S]*?)<\/summary><p class="([^"]*)">([^<]*)<\/p><\/details>/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toContain("text-sm text-neutral-400");
+    expect(m![2]).toContain(UNVALIDATED_LABEL);
+    expect(m![3]).toContain("text-sm text-neutral-400");
+    expect(m![4]).toBe(UNVALIDATED_EXPLANATION);
+    // `[&::-webkit-details-marker]:hidden` only hides the native triangle (the shared <details> idiom).
+    const tag = html.match(/<summary[^>]*>/)![0].replace("[&amp;::-webkit-details-marker]:hidden", "");
+    expect(tag).not.toMatch(/title=|hidden|sr-only|opacity/);
   });
 
-  it("action !== aggregated_action（降級或被上限擋下）：信心與失效條件兩行都不渲染", () => {
+  it("action !== aggregated_action（降級或被上限擋下）：標示仍恆顯示（不綁規則一致性）；信心與失效條件兩行不渲染", () => {
     const html = renderHeld(
       counterExampleCard({ action: "hold", aggregated_action: "reduce" }),
     );
+    expect(html).toContain(UNVALIDATED_LABEL);
     expect(html).not.toMatch(CONFIDENCE_RE);
     expect(html).not.toContain(CONFIDENCE_PREFIX);
     expect(html).not.toContain("失效條件");
@@ -654,13 +667,14 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     expect(html).toContain(RULE_SOURCE_CHIP);
   });
 
-  it("aggregated_action 為 null 時（action !== aggregated_action）兩行都不渲染", () => {
+  it("aggregated_action 為 null 時（action !== aggregated_action）：標示仍顯示，信心與失效條件不渲染", () => {
     const html = renderHeld(counterExampleCard({ aggregated_action: null }));
+    expect(html).toContain(UNVALIDATED_LABEL);
     expect(html).not.toContain(CONFIDENCE_PREFIX);
     expect(html).not.toContain("失效條件");
   });
 
-  it("K2：候選模式（支持與未支持）都不渲染信心行，也不出現 K1 句", () => {
+  it("候選模式（支持與未支持）：不渲染信心行也不出現 K1 句；恆顯示「未經歷史驗證」（C-4）", () => {
     const supportive = renderHeld(
       makeCard({
         action: "add",
@@ -679,10 +693,12 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     for (const html of [supportive, notSupportive]) {
       expect(html).not.toContain(CONFIDENCE_PREFIX);
       expect(html).not.toContain(CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE);
+      expect(html).toContain(UNVALIDATED_LABEL);
+      expect(html).toContain(UNVALIDATED_EXPLANATION);
     }
   });
 
-  it("no_action／no_price 不渲染信心行", () => {
+  it("no_action／no_price：不渲染信心行，也不渲染「未經歷史驗證」（沒有結論可標）", () => {
     const noAction = renderHeld(
       counterExampleCard({ action: "insufficient_data", aggregated_action: "insufficient_data", quantity_range: null }),
     );
@@ -694,6 +710,7 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     });
     for (const html of [noAction, noPrice]) {
       expect(html).not.toContain(CONFIDENCE_PREFIX);
+      expect(html).not.toContain(`${UNVALIDATED_LABEL}</summary>`);
       expect(html).not.toContain("失效條件");
     }
   });
@@ -728,8 +745,13 @@ describe("DecisionCardBody — 失效條件行（BLOCKING 1／3／5）", () => {
     expect(p).not.toMatch(
       /truncate|line-clamp|max-h|overflow|nowrap|italic|neutral-500|neutral-600|opacity|hidden|hover:|title=|sr-only/,
     );
-    // Whole-card: no <details> anywhere (the card never folds), no tooltip attribute on the line.
-    expect(html).not.toContain("<details");
+    // Whole-card (字面更新, 2026-10-26: the card now carries two click-to-open <details>, 1-X and
+    // 4-E, so "no <details> anywhere" became the equivalent, stricter statement): the invalidation
+    // line sits outside every <details> element, and carries no tooltip attribute.
+    const detailsBlocks = html.match(/<details[\s\S]*?<\/details>/g) ?? [];
+    expect(detailsBlocks.length).toBeGreaterThan(0);
+    for (const block of detailsBlocks) expect(block).not.toContain(p);
+    expect(html).toContain(p);
   });
 
   it("內文前後不拼接任何祈使或動作語：<p> 內容恰為 前綴＋原文", () => {
@@ -869,14 +891,15 @@ describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () =>
     expect(infoLines(renderCost(100, 100))).toContain("相對成本損益 0.0%");
   });
 
-  it("停損／停利以最新收盤為錨:成本遠高於或遠低於收盤,兩格數字與距離都不變", () => {
+  it("停損以最新收盤為錨:成本遠高於或遠低於收盤,數字與距離都不變（停利格已移出決策卡）", () => {
     // Close 1305 with avgCost 1027.25 used to anchor on the cost (stop 945.07, target 1191.61).
-    const expected = ["距最新收盤 -8.0%", "距最新收盤 +16.0%"];
+    // 字面更新（C-11）：停利格已移出決策卡，只剩停損距離。
+    const expected = ["距最新收盤 -8.0%"];
     for (const avgCost of [1027.25, 100000, 1, 1305]) {
       const html = renderCost(1305, avgCost);
       expect(distances(html), `avgCost ${avgCost}`).toEqual(expected);
       expect(html).toContain("1,200.60"); // 1305 x 0.92
-      expect(html).toContain("1,513.80"); // 1305 x 1.16
+      expect(html).not.toContain("1,513.80"); // 1305 x 1.16: the take-profit figure is no longer on the card
     }
     // The two cells (and everything but the P&L line) are byte-identical for any cost.
     const strip = (h: string): string => h.replace(/相對成本損益 [+-]?\d+\.\d%/, "PNL");
@@ -907,10 +930,10 @@ describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () =>
       expect(html).not.toContain(OLD_COST_BASIS);
       expect(html).not.toContain("此參考水位");
       expect(html).not.toContain(OLD_CROSSED_DISCLOSURE);
-      // The stop is never above and the target never below the latest close.
+      // The stop is never above the latest close (the take-profit cell is gone, C-11).
       const [stop, target] = distances(html);
       expect(stop).toMatch(/^距最新收盤 -/);
-      expect(target).toMatch(/^距最新收盤 \+/);
+      expect(target).toBeUndefined();
     }
   });
 
@@ -1032,9 +1055,10 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
           expect(html).not.toContain(text);
         }
 
-        // 5. Four dash cells and four invisible distance placeholders.
-        expect(html.split(">—<").length - 1).toBe(4);
-        expect(html.split('aria-hidden="true"> <').length - 1).toBe(4);
+        // 5. Three dash cells (close, stop, quantity) and three invisible distance placeholders
+        //    (字面更新: the take-profit cell left the card, 4 -> 3; risk remediation C-11).
+        expect(html.split(">—<").length - 1).toBe(3);
+        expect(html.split('aria-hidden="true"> <').length - 1).toBe(3);
 
         // 6. Equivalence with bars === null for the same props.
         expect(html).toBe(renderCard({ ...props, bars: null }));

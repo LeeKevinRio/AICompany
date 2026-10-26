@@ -13,6 +13,8 @@ import type { Bar } from "../../lib/types";
 import { KEY_LEVELS_LADDER_NOTE, PriceLadder } from "./PriceLadder";
 import { RangeGauge } from "./RangeGauge";
 import { PriceUnitBadge } from "./PriceUnitBadge";
+import { StopQualifier } from "./StopQualifier";
+import { TARGET_FORMULA_TAG, TARGET_LADDER_GROUP_TITLE } from "../../lib/riskRemediationWording";
 
 /**
  * 關鍵價位參考 (CEO 需求 2026-09-01；風控 2026-09-01 VETO R1–R12/S2–S5 後
@@ -42,8 +44,11 @@ export function buildKeyLevelsCloseLine(x: string, d: string): string {
 
 /* ---------- §1 頭部揭露段（四句常駐，順序固定） ---------- */
 
+// 風控 2026-10-26 定稿 K-1（照 creative-lead K-1 原字面）；失效條件 T3、T8。
+// 子句「僅供研究與教育用途，非投資建議」已被「並非分析結果，也未經歷史驗證」取代；
+// 「亦非任何買賣指示」保留（它否定的是指令，不是建議）。
 export const KEY_LEVELS_PANEL_DISCLAIMER =
-  "以下數字皆為本面板依固定算式計算之參考水位，僅供研究與教育用途，非投資建議，亦非任何買賣指示；" +
+  "以下數字皆為本面板依固定算式計算之參考水位，並非分析結果，也未經歷史驗證，亦非任何買賣指示；" +
   "每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。";
 
 export const KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE =
@@ -295,8 +300,9 @@ export const KEY_LEVELS_NO_DATA_STATEMENT =
 
 /* ---------- §8 頁尾樣本句 ---------- */
 
+// 風控 2026-10-26 定稿 K-2；失效條件 T8。第二句「本面板僅供研究與教育用途，不構成投資建議。」已刪除。
 export function buildFooterSample(n: number, d: string): string {
-  return `計算樣本：${n} 根日線，最後一根 ${d}。本面板僅供研究與教育用途，不構成投資建議。`;
+  return `計算樣本：${n} 根日線，最後一根 ${d}。`;
 }
 
 /* ---------- 呈現 ---------- */
@@ -392,7 +398,8 @@ function ladderRungLabel(rung: LadderRung, anchorSource: Exclude<AnchorSource, "
 function ladderGroupLabel(group: LadderGroup): string | null {
   switch (group) {
     case "target":
-      return KEY_LEVELS_TARGET_CARD_TITLE;
+      // Risk remediation 4-T (風控 2026-10-26 定稿；失效條件 T4): the group title carries the formula tag.
+      return TARGET_LADDER_GROUP_TITLE;
     case "pullback":
       return KEY_LEVELS_PULLBACK_CARD_TITLE;
     case "stop":
@@ -481,18 +488,16 @@ export function KeyLevelsPanel({
         </div>
       )}
 
-      {/* 兩個大字並排：停損／停利參考（無紅綠，風控 S1）。 */}
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.stopSuggested) : "—"}</p>
-          {/* CEO 第二次裁定 2026-09-19: R6 兩句改收進 <details>（見下方）。 */}
-        </div>
-        <div>
-          <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.target2R) : "—"}</p>
-          {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
-        </div>
+      {/*
+        停損參考大字（無紅綠，風控 S1）。風控 2026-10-26 定稿 C-11：停利大字已移出主視圖，
+        停利數字只留在下方「詳細」內的停利參考卡與價位階梯的停利組。
+        4-Q／4-E（C-10）：停損數字不是「—」時，大字下方顯示限定語，點擊展開說明。
+      */}
+      <div className="mt-4">
+        <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
+        <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.stopSuggested) : "—"}</p>
+        {holdingKnown && <StopQualifier atr14Available={levels.atr14 !== null} />}
+        {/* CEO 第二次裁定 2026-09-19: R6 兩句改收進 <details>（見下方）。 */}
       </div>
 
       {/* LM-117: only while the holding status is undetermined; one instance, main view, not inside <details>. */}
@@ -587,6 +592,8 @@ export function KeyLevelsPanel({
           {/* 停利參考卡（完整：本檔決定收進詳細的三列與 anchor cross ref、trailing note）。 */}
           <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
             <p className="text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
+            {/* Risk remediation 4-T (C-11): formula tag directly under the card title. 風控 2026-10-26 定稿；失效條件 T4. */}
+            <p className="mt-1 text-neutral-400">{TARGET_FORMULA_TAG}</p>
             {holdingKnown && <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>}
             <div className="mt-2 space-y-1">
               <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={holdingKnown ? fmt(levels.target2R) : "—"} />

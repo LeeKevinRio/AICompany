@@ -7,13 +7,16 @@ request at all.
 
 from __future__ import annotations
 
+import ast
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
 
 from app.alerts.models import AlertEvent
 from app.alerts.notify import (
+    ALERT_DISCLAIMER_LINE,
     DISCORD_WEBHOOK_ENV,
     TELEGRAM_CHAT_ID_ENV,
     TELEGRAM_TOKEN_ENV,
@@ -51,7 +54,51 @@ def test_message_states_the_observation_and_the_disclaimer() -> None:
     text = format_message(_EVENT)
     assert "2330" in text
     assert _EVENT.message in text
-    assert "非投資建議" in text
+    # 字面更新 (風控 2026-10-26 定稿 3-N): the old closing line
+    # "本工具為研究與教育用途，非投資建議。" is gone; the new one is the last line, verbatim.
+    assert text.splitlines()[-1] == (
+        "本警示依你設定的條件與日線收盤資料產生，非即時；"
+        "條件與規則未經歷史驗證，可能有誤，是否採取行動由你自行決定。"
+    )
+    assert ALERT_DISCLAIMER_LINE == text.splitlines()[-1]
+    for phrase in ("研究與教育用途", "非投資建議", "不是建議", "僅供參考"):
+        assert phrase not in text
+
+
+def test_the_alert_pipeline_only_reads_daily_closing_bars() -> None:
+    """Protects the 3-N closing line (風控 2026-10-26, failure condition T7).
+
+    The line says the alert was produced from "日線收盤資料，非即時". That stays
+    true only while nothing under ``app/alerts`` reaches the intraday quote path
+    (ADR-0014): no import of the quote modules, no use of the quote provider API.
+    If this test has to change, ``ALERT_DISCLAIMER_LINE`` must be rewritten in
+    the same PR and sent back to risk review.
+    """
+    forbidden_modules = {
+        "app.data.quote_params",
+        "app.data.quote_quality",
+        "app.data.intraday_session",
+    }
+    forbidden_names = {"QuoteProvider", "QuoteBatch", "Quote", "get_quotes"}
+    alerts_dir = Path(__file__).resolve().parents[1] / "app" / "alerts"
+    sources = sorted(alerts_dir.glob("*.py"))
+    assert {path.name for path in sources} >= {"snapshot.py", "engine.py", "notify.py"}
+    for path in sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.module not in forbidden_modules, f"{path.name} imports {node.module}"
+                for alias in node.names:
+                    assert alias.name not in forbidden_names, f"{path.name} imports {alias.name}"
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name not in forbidden_modules, f"{path.name} imports {alias.name}"
+            elif isinstance(node, ast.Attribute):
+                assert node.attr not in forbidden_names, f"{path.name} uses {node.attr}"
+    # And the one place the price comes from is the daily-bar loader.
+    snapshot = (alerts_dir / "snapshot.py").read_text(encoding="utf-8")
+    assert "load_bars(" in snapshot
+    assert "latest.close" in snapshot
 
 
 def test_both_channels_are_skipped_without_configuration() -> None:

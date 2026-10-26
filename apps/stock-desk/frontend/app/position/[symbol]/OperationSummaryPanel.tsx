@@ -6,13 +6,11 @@ import type { AdviceResponse, MatchedRule } from "../../lib/types";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import {
   CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY,
-  CONFIDENCE_PREFIX,
   HELD_ACTION_LABELS_LEGACY,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
   RULE_BASIS_PREFIX,
   RULE_SOURCE_CHIP,
-  summaryConfidenceLabel,
 } from "../../lib/adviceWording";
 import { invalidationDisclosureForCondition } from "../../lib/ruleSelection";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
@@ -23,6 +21,15 @@ import { buildFooterGuidance, buildFooterGuidanceForDataSource } from "../../lib
 import { OPERATION_SUMMARY_TITLE } from "../../lib/sectionTitles";
 import { PAGE_LEVEL_DISCLOSURE_SECTION_TITLE } from "../../lib/sectionTaglines";
 import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLinerWording";
+import { UnvalidatedNotice } from "./UnvalidatedNotice";
+import { DRAWDOWN_UNADJUSTED_NOTICE } from "../../lib/riskRemediationWording";
+
+/**
+ * Risk remediation 4-appendix (C-12): the unadjusted-price notice stands on the 依據 line only when the
+ * top matched rule is a drawdown rule, matched by rule id (never by wording). Rule ids are the ones in
+ * `RULE_INVALIDATION_DISCLOSURES` (`adviceWording.ts`). 風控 2026-10-26 定稿；失效條件 T3.
+ */
+const DRAWDOWN_RULE_IDS: readonly string[] = ["drawdown_protection", "deep_drawdown_stop"];
 
 /**
  * 一眼一句實作規格 §2.3（`work/stock-desk-一眼一句-實作規格.md`）＋ CEO 第二次
@@ -192,12 +199,8 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           ) : (
             <span className="text-xs text-neutral-400">{model.required.candidateEvidenceNotice}</span>
           )}
-          {model.showConfidence && (
-            <span className="text-sm text-neutral-400">
-              {CONFIDENCE_PREFIX}
-              {summaryConfidenceLabel(model.required.confidence)}
-            </span>
-          )}
+          {/* Risk remediation 1-L (C-4): replaces the confidence chip; always shown for candidate. 風控 2026-10-26 定稿；失效條件 T2. */}
+          <UnvalidatedNotice />
         </div>
 
         {model.supportive ? (
@@ -225,7 +228,7 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
             <DataMetaPrefixLine response={response} />
             {/* CEO 第二次裁定 2026-09-19：disclaimer／confidenceMeaning 收進詳細。 */}
             <InlineDisclaimer text={model.required.disclaimer} />
-            <p>{model.required.confidenceMeaning}</p>
+            {/* Risk remediation (連動 confidenceMeaning): the confidence sentence is no longer rendered, the chip it described is gone; the API field stays. */}
             {/*
               wave3（派工單 §4.3 第 2 點）：`CANDIDATE_EVIDENCE_NOTICE` 常駐收進
               詳細（`showBadge` 為 true 時徽章頂替它站在主視圖，這裡永遠完整
@@ -281,12 +284,8 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <span className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-400">
           {RULE_SOURCE_CHIP}
         </span>
-        {model.showConfidence && (
-          <span className="text-sm text-neutral-400">
-            {CONFIDENCE_PREFIX}
-            {summaryConfidenceLabel(model.required.confidence)}
-          </span>
-        )}
+        {/* Risk remediation 1-L (C-4): replaces the confidence chip; always shown for held. 風控 2026-10-26 定稿；失效條件 T2. */}
+        <UnvalidatedNotice />
       </div>
 
       {/*
@@ -300,6 +299,11 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <p className="text-sm text-neutral-300">
           <span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>
           {model.topMatchedRule.name}
+          {model.topMatchedRuleId !== null && DRAWDOWN_RULE_IDS.includes(model.topMatchedRuleId) && (
+            // Full-width parentheses (風控 2026-10-26 裁定 R-3) mark the boundary between the rule name and the
+            // notice; one template string keeps them in the same text node and the same span.
+            <span className="text-neutral-400">{`（${DRAWDOWN_UNADJUSTED_NOTICE}）`}</span>
+          )}
         </p>
       )}
 
@@ -316,7 +320,7 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           <DataMetaPrefixLine response={response} />
           {/* CEO 第二次裁定 2026-09-19：disclaimer／confidenceMeaning 收進詳細。 */}
           <InlineDisclaimer text={model.required.disclaimer} />
-          <p>{model.required.confidenceMeaning}</p>
+          {/* Risk remediation (連動 confidenceMeaning): the confidence sentence is no longer rendered, the chip it described is gone; the API field stays. */}
           {/* L-11 (d): the legacy attributed headline line is intentionally not rendered here for any held action (risk ruling 2026-10-04); the action name lives in the main-view headline and provenance in the chip. */}
           {model.topMatchedRule && <p>——{model.topMatchedRule.explanation}</p>}
           {!basisIsAlert && model.required.quantityRangeBasis && <p>{model.required.quantityRangeBasis}</p>}

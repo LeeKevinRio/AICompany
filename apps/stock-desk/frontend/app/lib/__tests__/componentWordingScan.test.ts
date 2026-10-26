@@ -403,6 +403,12 @@ const SCANNED_FILES = [
   // F-7 價格單位標籤 (風控 F7-R1~R10, 2026-10-08): the two approved price-unit strings and the
   // chip class live only in this component; pinned verbatim by priceUnitBadge.test.ts.
   "../../position/[symbol]/PriceUnitBadge.tsx",
+  // 風控五項整改（CEO #59；風控 2026-10-26 逐字定稿）：新字面模組與渲染它們的元件，
+  // 逐字釘住見 riskRemediationWording.test.ts。
+  "../riskRemediationWording.ts",
+  "../limitNotices.ts",
+  "../../position/[symbol]/UnvalidatedNotice.tsx",
+  "../../position/[symbol]/StopQualifier.tsx",
   // 股數成因（風控 2026-10-26 定稿 Q-a／Q-b／D-a／D-b）：新字面模組，逐字釘住於 quantityAbsenceCause.test.ts。
   "../quantityAbsenceWording.ts",
 ] as const;
@@ -744,7 +750,8 @@ describe("KeyLevelsPanel 定稿字面", () => {
 
   it("頭部揭露段逐字比對成稿", () => {
     expect(KEY_LEVELS_PANEL_DISCLAIMER).toBe(
-      "以下數字皆為本面板依固定算式計算之參考水位，僅供研究與教育用途，非投資建議，亦非任何買賣指示；" +
+      // 字面更新（風控 2026-10-26 定稿 K-1）：子句「僅供研究與教育用途，非投資建議」換成「並非分析結果，也未經歷史驗證」。
+      "以下數字皆為本面板依固定算式計算之參考水位，並非分析結果，也未經歷史驗證，亦非任何買賣指示；" +
         "每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。",
     );
     expect(KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE).toBe(
@@ -829,8 +836,9 @@ describe("KeyLevelsPanel 定稿字面", () => {
 
   it("無資料狀態句與頁尾樣本句逐字比對成稿（R4 無未來式承諾）", () => {
     expect(KEY_LEVELS_NO_DATA_STATEMENT).toBe("目前沒有可用的日線資料，本面板無法計算任何關鍵價位。");
+    // 字面更新（風控 2026-10-26 定稿 K-2）：刪掉第二句「本面板僅供研究與教育用途，不構成投資建議。」
     expect(buildFooterSample(387, "2026-09-01")).toBe(
-      "計算樣本：387 根日線，最後一根 2026-09-01。本面板僅供研究與教育用途，不構成投資建議。",
+      "計算樣本：387 根日線，最後一根 2026-09-01。",
     );
   });
 
@@ -1019,7 +1027,7 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
 
   it("建議卡銜接句逐字比對定稿（含 C7 的「非結論」否定式限定）", () => {
     expect(ADVICE_CARD_XREF_TO_SUMMARY).toBe(
-      "結論、信心等級、免責事項、反面論點、失效條件與建議數量區間，已完整列於上方操作摘要；" +
+      "結論、免責事項、反面論點、失效條件與建議數量區間，已完整列於上方操作摘要；" +
         "本卡以下僅列命中規則、風險上限檢查與資料完整度等規則明細；規則明細本身不是結論。",
     );
     expect(ADVICE_CARD_XREF_TO_SUMMARY).toContain("規則明細本身不是結論");
@@ -1391,7 +1399,8 @@ describe("揭露下沉頁尾 守門", () => {
 
   it("L0（風控 F-7，2026-09-19）：app/layout.tsx 全站免責句自頁尾收成 details 起為全頁唯一常駐免責——不得移除、摺疊、下調字級或對比、不得移出頁面最後節點", () => {
     const layoutSrc = read("../../layout.tsx");
-    const sentence = "本工具為研究與教育用途，非投資建議";
+    // 字面更新（風控 2026-10-26 定稿 3-F）：頁尾改渲染 SITE_FOOTER_DISCLAIMER（字面逐字釘在 riskRemediationWording.test.ts）。
+    const sentence = "{SITE_FOOTER_DISCLAIMER}";
     const idx = layoutSrc.indexOf(sentence);
     expect(idx).toBeGreaterThan(-1);
     expect(layoutSrc).not.toMatch(/<details|<summary|line-clamp|truncate|sr-only|\bhidden\b/);
@@ -1402,7 +1411,7 @@ describe("揭露下沉頁尾 守門", () => {
     expect(footerTag).not.toMatch(/text-xs|text-neutral-(5|6|7)00/);
     // 頁面最後節點：<footer> 之後直到 </Providers> 只剩 </footer>。
     const afterSentence = layoutSrc.slice(idx + sentence.length, layoutSrc.indexOf("</Providers>"));
-    expect(afterSentence.replace(/\s/g, "")).toBe("</footer>");
+    expect(afterSentence.replace(/\s/g, "")).toBe("</p></footer>");
   });
 
   it("F-3（風控 2026-09-19 放行條件）：頁尾 <details> 掛 print-expand，globals.css 於 @media print 強制展開", () => {
@@ -1499,9 +1508,9 @@ describe("揭露下沉頁尾 守門", () => {
       ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
       ["../../position/[symbol]/TechnicalIndicatorsPanel.tsx", "{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}"],
       ["../../position/[symbol]/AdviceCardView.tsx", "{buildFooterGuidance(ADVICE_CARD_TITLE)}"],
-      // R3（決策卡第二輪修正，風控複審 APPROVE_WITH_CONDITIONS）：本卡不設
-      // `<details>`，指引句常駐卡片底部，指向頁尾揭露區本身（非某一組）。
-      ["../../position/[symbol]/DecisionCard.tsx", "{buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)}"],
+      // 字面更新（風控 2026-10-26 定稿 3-S／C-7）：R3 指引句已撤銷，這個位置改由 3-S 過渡免責句
+      // 取代，字級與顏色的底線不變（至少 text-sm、不淡於 neutral-300）。
+      ["../../position/[symbol]/DecisionCard.tsx", "{OPERATION_REFERENCE_DISCLAIMER}"],
     ];
     for (const [rel, needle] of wiring) {
       const src = read(rel);
@@ -1678,13 +1687,17 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(detailsIdx).toBeGreaterThan(-1);
     for (const needle of [
       "<InlineDisclaimer text={model.required.disclaimer} />",
-      "{model.required.confidenceMeaning}",
       "反面論點",
       "<DataMetaPrefixLine response={response} />",
     ]) {
       const idx = region.indexOf(needle);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
     }
+    // 風控 2026-10-26 定稿（連動 confidenceMeaning）：不再渲染（API 欄位保留）；
+    // 原「只出現在 <details> 內」斷言改為「整個區段都不渲染」，並新增 1-L 標示在主視圖的斷言。
+    expect(region).not.toContain("{model.required.confidenceMeaning}");
+    expect(region.slice(0, detailsIdx)).toContain("<UnvalidatedNotice />");
+    expect(region).not.toContain("{CONFIDENCE_PREFIX}");
     // wave3：CANDIDATE_EVIDENCE_NOTICE 這句字面在檔案中出現兩處——一處是
     // `showBadge ? 徽章 : 原句` 三元運算式的 else 分支（防呆用，主視圖區塊內，
     // 但 `showBadge` 恆為 true 所以永遠不會實際渲染到），另一處才是真正常駐
@@ -1712,7 +1725,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).not.toContain("QuantitySection");
   });
 
-  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴只出現在 <details> 之後；整個 held 區段（含 <details>）不再渲染舊「規則評估：{動作}」行（L-11 (d)，風控 2026-10-04 裁示，不含 buildLegacyAttributedHeadline 與全形「規則評估：」）；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴只出現在 <details> 之後；整個 held 區段（含 <details>）不再渲染舊「規則評估：{動作}」行（L-11 (d)，風控 2026-10-04 裁示，不含 buildLegacyAttributedHeadline 與全形「規則評估：」）；主視圖保留結論大字、RULE_SOURCE_CHIP、1-L「未經歷史驗證」標示（取代信心 chip）、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
     const start = summarySrc.indexOf('// model.kind === "held"');
     const end = summarySrc.indexOf("function DataMetaPrefixLine");
     expect(start).toBeGreaterThan(-1);
@@ -1722,7 +1735,6 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(detailsIdx).toBeGreaterThan(-1);
     for (const needle of [
       "<InlineDisclaimer text={model.required.disclaimer} />",
-      "{model.required.confidenceMeaning}",
       "反面論點",
       "——{model.topMatchedRule.explanation}",
       "<DataMetaPrefixLine response={response} />",
@@ -1730,11 +1742,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
       const idx = region.indexOf(needle);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
     }
+    // 風控 2026-10-26 定稿（連動 confidenceMeaning）：不再渲染；信心 chip 換成 1-L 標示。
+    expect(region).not.toContain("{model.required.confidenceMeaning}");
     const mainRegion = region.slice(0, detailsIdx);
     expect(mainRegion).toContain("{model.attributedHeadline}");
     expect(mainRegion).toContain("{RULE_SOURCE_CHIP}");
-    expect(mainRegion).toContain("{CONFIDENCE_PREFIX}");
-    expect(mainRegion).toContain("{summaryConfidenceLabel(model.required.confidence)}");
+    expect(mainRegion).toContain("<UnvalidatedNotice />");
+    expect(region).not.toContain("{CONFIDENCE_PREFIX}");
+    expect(region).not.toContain("summaryConfidenceLabel");
     expect(mainRegion).toContain("{RULE_BASIS_PREFIX}");
     expect(mainRegion).toContain("{model.topMatchedRule.name}");
     expect(mainRegion).not.toContain("{model.topMatchedRule.explanation}");
@@ -1778,7 +1793,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(legacyIdx).toBeGreaterThan(detailsIdx);
   });
 
-  it("關鍵價位參考：R7 未還原權值句與 R6 停損兩句只出現在 <details> 之後，主視圖仍留兩個大字", () => {
+  it("關鍵價位參考：R7 未還原權值句與 R6 停損兩句只出現在 <details> 之後，主視圖只留停損大字（停利大字已移出，風控 2026-10-26 定稿 C-11）", () => {
     const compStart = keyLevelsSrc.indexOf("export function KeyLevelsPanel(");
     expect(compStart).toBeGreaterThan(-1);
     // 用實際 JSX 標籤（含 className）比對，避免比對到上方 doc comment 裡提到的
@@ -1798,8 +1813,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     // B0 required 1: the two big numbers are "—" while the holding status is undetermined, so the
     // expression is `holdingKnown ? fmt(...) : "—"` rather than a bare `{fmt(...)}`.
     expect(mainRegion).toContain('{holdingKnown ? fmt(levels.stopSuggested) : "—"}');
-    expect(mainRegion).toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
-    expect(mainRegion).toContain('{holdingKnown ? fmt(levels.target2R) : "—"}');
+    // 字面更新（C-11）：主視圖不再有停利大字；停利數字只留在 <details> 內的停利參考卡（帶 4-T）。
+    expect(mainRegion).not.toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
+    expect(mainRegion).not.toContain("target2R");
+    // 行為新增（C-10）：停損大字下方渲染 4-Q／4-E，依 atr14 是否為 null 二選一。
+    expect(mainRegion).toContain("<StopQualifier atr14Available={levels.atr14 !== null} />");
+    const detailsRegion = keyLevelsSrc.slice(detailsIdx);
+    expect(detailsRegion).toContain("{TARGET_FORMULA_TAG}");
+    expect(detailsRegion).toContain('holdingKnown ? fmt(levels.target2R) : "—"');
   });
 
   it("六項觀察條件：E-1 與資料截至句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {
@@ -1963,7 +1984,7 @@ describe("六項觀察條件 守門（T1～T14）", () => {
       "以上六條門檻皆為本面板自訂之固定值；成立數僅為符合門檻的條數，不代表機率、達成率或任何買賣判斷。",
     );
     for (const q of ["自訂之固定值", "僅為符合門檻的條數", "不代表機率、達成率或任何買賣判斷"]) expect(ENTRY_E1_QUALIFIER).toContain(q);
-    expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論、信心等級與免責事項見上方操作摘要。");
+    expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論與免責事項見上方操作摘要。");
     expect(ENTRY_E3_DASH_NOTE).toBe("「—」代表無法判定，不代表數值為零，也不代表未成立。");
     expect(ENTRY_NO_DATA_STATEMENT).toBe("目前資料不足，六條條件均無法判定。");
     expect(LADDER_BAND_TAG).toBe("MA20 ±3%");
@@ -2277,7 +2298,7 @@ describe("決策卡（DecisionCard.tsx）新字面逐字釘住與位置守門", 
       rules_version: "1.0.2",
       as_of: "2026-09-18T09:00:00+08:00",
       observation_window: { start: "2025-05-01", end: "2026-09-18", bars: 300 },
-      disclaimer: "本工具為研究與教育用途，非投資建議",
+      disclaimer: "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。",
       limits_check: [],
       action_weights: [],
       direction_weights: [],

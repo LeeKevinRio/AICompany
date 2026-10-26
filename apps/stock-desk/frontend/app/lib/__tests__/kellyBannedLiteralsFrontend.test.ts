@@ -70,14 +70,45 @@ function listProductionSourceFiles(dir: string): string[] {
 //: `KellyDisclosuresView`), never composed here.
 const BANNED_LITERALS = ["帶入回測結果", "最近一次"] as const;
 
+//: 風控 2026-10-26 定稿 3-F（全站頁尾）逐字含「不反映最近一次收盤之後的價格變動」。這裡的
+//: 「最近一次」指「最近一次收盤」，與 Kelly 條件 77/89 所禁的「最近一次回測／帶入」是兩件事。
+//: 例外只開這一個檔、這一句整句，且必須真的存在於該檔（過期或多餘的條目會讓下方斷言轉紅）；
+//: 該字面本身仍受 riskRemediationWording.test.ts 逐字釘住。其餘任何檔案出現「最近一次」照舊紅燈。
+const ALLOWED_CONTEXTS: ReadonlyArray<{ literal: string; file: string; context: string }> = [
+  {
+    literal: "最近一次",
+    file: join("lib", "riskRemediationWording.ts"),
+    context: "不反映最近一次收盤之後的價格變動",
+  },
+];
+
+/** Production source with the allowed contexts for `literal` masked out (same-length padding). */
+function scannableSource(file: string, literal: string): string {
+  let source = readFileSync(file, "utf-8");
+  for (const allowed of ALLOWED_CONTEXTS) {
+    if (allowed.literal !== literal || !file.endsWith(allowed.file)) continue;
+    source = source.split(allowed.context).join("\u0000".repeat(allowed.context.length));
+  }
+  return source;
+}
+
 describe("Kelly 前端禁字反向斷言 (qa 轉發, 補後端條件 104 的 .py-only 掃描面缺口)", () => {
   const files = listProductionSourceFiles(APP_ROOT);
 
   it.each(BANNED_LITERALS)(
     "zero occurrences of the literal (%s) across production app/**/*.{ts,tsx} (excluding __tests__)",
     (literal) => {
-      const offenders = files.filter((file) => readFileSync(file, "utf-8").includes(literal));
+      const offenders = files.filter((file) => scannableSource(file, literal).includes(literal));
       expect(offenders).toEqual([]);
     },
   );
+
+  it("每個例外條目都真的存在於指定檔案、且含被禁字面（過期或多餘的例外不得留著）", () => {
+    for (const allowed of ALLOWED_CONTEXTS) {
+      expect(allowed.context, "例外語境必須含被禁字面，否則是多餘條目").toContain(allowed.literal);
+      const file = files.find((f) => f.endsWith(allowed.file));
+      expect(file, `${allowed.file} 應存在於 production 掃描範圍`).toBeDefined();
+      expect(readFileSync(file!, "utf-8")).toContain(allowed.context);
+    }
+  });
 });

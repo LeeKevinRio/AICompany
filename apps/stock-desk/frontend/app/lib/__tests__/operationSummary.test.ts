@@ -36,6 +36,14 @@ import {
   RULE_BASIS_PREFIX,
   RULE_SOURCE_CHIP,
 } from "../adviceWording";
+import { UNVALIDATED_EXPLANATION, UNVALIDATED_LABEL } from "../riskRemediationWording";
+
+/**
+ * The opening tag of the operation summary's own click-to-open details block. The standing
+ * 「未經歷史驗證」 label (1-L / 1-X) is also a `<details>` and sits in the main view, so the
+ * main/details boundary is this tag, not the first `<details` in the markup.
+ */
+const OP_DETAILS = '<details class="group mt-1">';
 
 function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
   return {
@@ -65,7 +73,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
     rules_version: "1.0.2",
     as_of: "2026-08-04T09:00:00+08:00",
     observation_window: { start: "2025-05-01", end: "2026-08-04", bars: 300 },
-    disclaimer: "本工具為研究與教育用途，非投資建議",
+    disclaimer: "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。",
     limits_check: [],
     action_weights: [{ action: "add", weight: 0.5, rule_ids: ["uptrend_ma_stack"] }],
     direction_weights: [{ direction: "constructive", weight: 0.5, actions: ["add"] }],
@@ -117,7 +125,7 @@ describe("buildOperationSummary — held mode", () => {
     if (model.kind !== "held") throw new Error("unreachable");
 
     // 1. fixed disclaimer
-    expect(model.required.disclaimer).toBe("本工具為研究與教育用途，非投資建議");
+    expect(model.required.disclaimer).toBe("依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。");
     // 2. confidence + its meaning, same frame
     expect(model.required.confidence).toBe("medium");
     expect(model.required.confidenceMeaning).toContain("非勝率或機率");
@@ -816,16 +824,20 @@ describe(
   },
 );
 
-describe("信心 chip 閘門（風控 2026-10-03 暫行處置：action !== aggregated_action 時不渲染）", () => {
+// 字面更新（風控 2026-10-26 定稿 1-L，C-4）：信心 chip 已下架，主視圖改為常駐「未經歷史驗證」。
+// 原「信心 chip 閘門」斷言（降級時不渲染信心）以「任何情況都不渲染信心」承接，並新增「標示恆顯示」斷言。
+// 保護的字面：UNVALIDATED_LABEL（1-L）、UNVALIDATED_EXPLANATION（1-X）。
+// 註：model.showConfidence 欄位仍由 buildOperationSummary 回傳（API 欄位語意不動），只是畫面不再用它。
+describe("未經歷史驗證標示取代信心 chip（風控 2026-10-26 定稿 1-L；原 2026-10-03 信心 chip 閘門）", () => {
   const chipRe = new RegExp(`${CONFIDENCE_PREFIX}(?:<!-- -->)?中`);
-  const mainOf = (html: string): string => html.slice(0, html.indexOf("<details"));
+  const mainOf = (html: string): string => html.slice(0, html.indexOf(OP_DETAILS));
   const render = (response: AdviceResponse): string =>
     mainOf(renderToStaticMarkup(createElement(SummaryBody, { response })));
 
   for (const held of [true, false]) {
     const branch = held ? "held" : "candidate";
 
-    it(`${branch}：結論被降級（action !== aggregated_action）時 showConfidence 為 false，主視圖不渲染信心 chip`, () => {
+    it(`${branch}：結論被降級（action !== aggregated_action）時 showConfidence 為 false；主視圖無信心 chip，但「未經歷史驗證」恆顯示`, () => {
       const response = makeResponse({
         held,
         advice: makeCard({
@@ -840,9 +852,10 @@ describe("信心 chip 閘門（風控 2026-10-03 暫行處置：action !== aggre
       const main = render(response);
       expect(main).not.toContain(CONFIDENCE_PREFIX);
       expect(main).not.toMatch(chipRe);
+      expect(main).toContain(UNVALIDATED_LABEL);
     });
 
-    it(`${branch}：aggregated_action 為 null 時 showConfidence 為 false，主視圖不渲染信心 chip`, () => {
+    it(`${branch}：aggregated_action 為 null 時 showConfidence 為 false；主視圖無信心 chip，但「未經歷史驗證」恆顯示`, () => {
       const response = makeResponse({
         held,
         advice: makeCard({ action: "hold", aggregated_action: null }),
@@ -851,16 +864,31 @@ describe("信心 chip 閘門（風控 2026-10-03 暫行處置：action !== aggre
       if (model.kind !== branch) throw new Error("unreachable");
       expect(model.showConfidence).toBe(false);
       expect(render(response)).not.toContain(CONFIDENCE_PREFIX);
+      expect(render(response)).toContain(UNVALIDATED_LABEL);
     });
 
-    it(`${branch}：結論來自規則（action === aggregated_action）時 showConfidence 為 true，信心 chip 照常渲染`, () => {
+    it(`${branch}：結論來自規則（action === aggregated_action）時 showConfidence 為 true，但畫面已不渲染信心 chip，改渲染「未經歷史驗證」＋1-X 說明`, () => {
       const response = makeResponse({ held }) as AdviceResponse;
       const model = buildOperationSummary(response);
       if (model.kind !== branch) throw new Error("unreachable");
       expect(model.showConfidence).toBe(true);
-      expect(render(response)).toMatch(chipRe);
+      const main = render(response);
+      expect(main).not.toMatch(chipRe);
+      expect(main).not.toContain(CONFIDENCE_PREFIX);
+      expect(main).toContain(UNVALIDATED_LABEL);
+      expect(main).toContain(UNVALIDATED_EXPLANATION);
     });
   }
+
+  it("no_action／no_price 分支不渲染「未經歷史驗證」（沒有結論可標）", () => {
+    const noAction = makeResponse({
+      advice: makeCard({ action: "insufficient_data", aggregated_action: "insufficient_data", quantity_range: null }),
+    }) as AdviceResponse;
+    const noPrice = makeResponse({ status: "insufficient_data", reason: "資料不足，無法計算。", advice: null }) as AdviceResponse;
+    for (const response of [noAction, noPrice]) {
+      expect(renderToStaticMarkup(createElement(SummaryBody, { response }))).not.toContain(UNVALIDATED_LABEL);
+    }
+  });
 });
 
 describe("buildOperationSummary — candidate mode (FR-C7)", () => {
@@ -1023,7 +1051,7 @@ describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境�
     expect(cardHtml).toContain('role="alert"');
     expect(countOccurrences(cardHtml, BASIS_ALERT)).toBe(1);
     // 操作摘要主視圖（<details> 之前）不得再重複渲染同一段 basis。
-    const summaryMain = summaryHtml.slice(0, summaryHtml.indexOf("<details"));
+    const summaryMain = summaryHtml.slice(0, summaryHtml.indexOf(OP_DETAILS));
     expect(summaryMain).not.toContain(BASIS_ALERT);
     expect(summaryMain).not.toContain('role="alert"');
     // 全頁（決策卡＋操作摘要，含操作摘要的 <details>）合計仍只出現一次。
@@ -1049,36 +1077,36 @@ describe("basis 全頁只渲染一次（DOM，兩種 restores_compliance 情境�
  */
 describe("disclaimer／confidenceMeaning 只在 <details> 內渲染（DOM，CEO 第二次裁定 2026-09-19）", () => {
   function detailsSlice(html: string): string {
-    const start = html.indexOf("<details");
+    const start = html.indexOf(OP_DETAILS);
     expect(start, "html 應含 <details>").toBeGreaterThan(-1);
     return html.slice(start);
   }
 
-  it("held 分支：disclaimer／confidenceMeaning 只出現在 <details> 片段內", () => {
+  // 行為變更（風控 2026-10-26 定稿，連動 confidenceMeaning）：confidenceMeaning 不再渲染（API 欄位保留）；
+  // disclaimer 仍只出現在 <details> 內，改為新的 DISCLAIMER 字面。
+  it("held 分支：disclaimer 只出現在 <details> 片段內；confidenceMeaning 不渲染", () => {
     const response = makeResponse() as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
     const details = detailsSlice(html);
-    const disclaimer = "本工具為研究與教育用途，非投資建議";
+    const disclaimer = "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。";
     const meaning = "信心等級反映規則一致性與資料完整度，非勝率或機率";
     expect(details).toContain(disclaimer);
-    expect(details).toContain(meaning);
-    // 主視圖（<details> 之前）不得含這兩句。
-    const main = html.slice(0, html.indexOf("<details"));
+    expect(html).not.toContain(meaning);
+    // 主視圖（<details> 之前）不得含 disclaimer。
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
     expect(main).not.toContain(disclaimer);
-    expect(main).not.toContain(meaning);
   });
 
-  it("candidate 分支：disclaimer／confidenceMeaning 只出現在 <details> 片段內", () => {
+  it("candidate 分支：disclaimer 只出現在 <details> 片段內；confidenceMeaning 不渲染", () => {
     const response = makeResponse({ held: false }) as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    const disclaimer = "本工具為研究與教育用途，非投資建議";
+    const disclaimer = "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。";
     const meaning = "信心等級反映規則一致性與資料完整度，非勝率或機率";
-    const main = html.slice(0, html.indexOf("<details"));
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
     const details = detailsSlice(html);
     expect(main).not.toContain(disclaimer);
-    expect(main).not.toContain(meaning);
+    expect(html).not.toContain(meaning);
     expect(details).toContain(disclaimer);
-    expect(details).toContain(meaning);
   });
 });
 
@@ -1091,20 +1119,23 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
   it("held 分支：主視圖含 RULE_SOURCE_CHIP、CONFIDENCE_PREFIX+信心字、RULE_BASIS_PREFIX+規則名，不含舊「規則評估：」複合詞；詳細內也不再渲染該行（L-11 (d)）", () => {
     const response = makeResponse() as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    const main = html.slice(0, html.indexOf("<details"));
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
     expect(main).toContain(RULE_SOURCE_CHIP);
-    expect(main).toContain(`${CONFIDENCE_PREFIX}中`);
+    // 字面更新（2026-10-26 1-L）：信心 chip 換成常駐「未經歷史驗證」。
+    expect(main).toContain(UNVALIDATED_LABEL);
+    expect(main).not.toContain(CONFIDENCE_PREFIX);
     // 「依據：」自成一個 <span>，其後緊接規則名的文字節點——分開比對而非找連續子字串。
     expect(main).toContain(RULE_BASIS_PREFIX);
     expect(main).toContain("均線多頭排列");
     expect(main.indexOf(RULE_BASIS_PREFIX)).toBeLessThan(main.indexOf("均線多頭排列"));
     expect(main).not.toContain("規則評估：");
     expect(main).not.toContain("信心等級：");
-    const details = html.slice(html.indexOf("<details"));
+    const details = html.slice(html.indexOf(OP_DETAILS));
     // L-11 (d) (risk-compliance ruling 2026-10-04): the legacy attributed
     // headline line is no longer rendered inside the details block.
     expect(details).toContain("<details");
-    expect(details).toContain(makeCard().confidence_meaning);
+    // 連動 confidenceMeaning（2026-10-26）：不再渲染。
+    expect(details).not.toContain(makeCard().confidence_meaning);
     expect(details).not.toContain("規則評估：");
   });
 
@@ -1132,12 +1163,13 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
       });
       const response = makeResponse({ advice: card }) as AdviceResponse;
       const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-      const detailsIdx = html.indexOf("<details");
+      const detailsIdx = html.indexOf(OP_DETAILS);
       expect(detailsIdx).toBeGreaterThan(-1);
       const details = html.slice(detailsIdx);
       // Non-vacuous: the details block is rendered and still carries the
-      // disclosures that remain (confidenceMeaning, counterarguments).
-      expect(details).toContain(card.confidence_meaning);
+      // disclosures that remain (counterarguments; confidenceMeaning is no
+      // longer rendered since the 2026-10-26 risk remediation).
+      expect(details).not.toContain(card.confidence_meaning);
       expect(details).toContain(card.counterarguments[0]);
       for (const banned of ["停損評估", "分批獲利了結參考", "續抱/維持現狀", "規則評估："]) {
         expect(details, `${action} 詳細內不得含「${banned}」`).not.toContain(banned);
@@ -1153,8 +1185,8 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
       createElement(DecisionCardBody, { response, bars: null, anchorSource: "close-unknown", avgCost: null }),
     );
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    const main = html.slice(0, html.indexOf("<details"));
-    const details = html.slice(html.indexOf("<details"));
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
+    const details = html.slice(html.indexOf(OP_DETAILS));
     expect(cardHtml).toContain(QUANTITY_RANGE_ABSENT_SHORT);
     expect(main).not.toContain(QUANTITY_RANGE_ABSENT_SHORT);
     expect(main).not.toContain(QUANTITY_RANGE_ABSENCE_TEXT);
@@ -1167,8 +1199,8 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
       advice: makeCard({ action: "hold", matched_rules: [], counterarguments: [], invalidation_conditions: [] }),
     }) as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    const main = html.slice(0, html.indexOf("<details"));
-    const details = html.slice(html.indexOf("<details"));
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
+    const details = html.slice(html.indexOf(OP_DETAILS));
     expect(main).toContain(NOT_HELD_BADGE);
     expect(main).toContain(CANDIDATE_NOT_SUPPORTIVE_TEXT);
     expect(main).not.toContain(CANDIDATE_NOT_SUPPORTIVE_TEXT_LEGACY);
@@ -1178,8 +1210,8 @@ describe("wave3 新字面 DOM 驗證（RULE_SOURCE_CHIP／CONFIDENCE_PREFIX／RU
   it("no_action 分支：主視圖大字為 HELD_ACTION_LABELS.insufficient_data（「資料不足」）＋常駐 INSUFFICIENT_DATA_NO_EVALUATION，不含 RULE_SOURCE_CHIP；舊字面只在 <details>", () => {
     const response = makeResponse({ advice: makeCard({ action: "insufficient_data", quantity_range: null }) }) as AdviceResponse;
     const html = renderToStaticMarkup(createElement(SummaryBody, { response }));
-    const main = html.slice(0, html.indexOf("<details"));
-    const details = html.slice(html.indexOf("<details"));
+    const main = html.slice(0, html.indexOf(OP_DETAILS));
+    const details = html.slice(html.indexOf(OP_DETAILS));
     expect(main).toContain(HELD_ACTION_LABELS.insufficient_data);
     expect(main).toContain(INSUFFICIENT_DATA_NO_EVALUATION);
     expect(main).not.toContain(RULE_SOURCE_CHIP);

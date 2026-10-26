@@ -23,6 +23,7 @@ import {
 } from "../../position/[symbol]/KeyLevelsPanel";
 import { DECISION_CARD_COST_PNL_UNAVAILABLE, buildCostPnlRow } from "../decisionCardWording";
 import { computeKeyLevels } from "../keyLevels";
+import { STOP_QUALIFIER } from "../riskRemediationWording";
 import type { AdviceCard, AdviceResponse, Bar, Position, PositionsResponse } from "../types";
 
 /**
@@ -178,11 +179,14 @@ describe("B0 required 1: holding status undetermined renders no held-only litera
       // Fail closed like the decision card: no anchor-derived number is shown, and not-held wording is not claimed either.
       const levels = computeKeyLevels(bars);
       expect(levels).not.toBeNull();
-      // L3: BOTH big numbers are "—" (each directly under its own card title), not just one of them.
+      // L3: the big number is "—" directly under its card title. 字面更新（風控 2026-10-26 定稿 C-11）：
+      // 停利大字已移出主視圖，所以主視圖只剩停損這一個大字；停利標題不再作為大字標題出現。
       const BIG_DASH = '<p class="mt-1 font-mono text-xl font-bold text-neutral-100">—</p>';
       expect(html).toContain(`<p class="text-sm text-neutral-400">${KEY_LEVELS_STOP_CARD_TITLE}</p>${BIG_DASH}`);
-      expect(html).toContain(`<p class="text-sm text-neutral-400">${KEY_LEVELS_TARGET_CARD_TITLE}</p>${BIG_DASH}`);
-      expect(html.split(BIG_DASH).length - 1).toBe(2);
+      expect(html).not.toContain(`<p class="text-sm text-neutral-400">${KEY_LEVELS_TARGET_CARD_TITLE}</p>`);
+      expect(html.split(BIG_DASH).length - 1).toBe(1);
+      // 4-Q／4-E（C-10）：停損數字是「—」時不顯示限定語。
+      expect(html).not.toContain(STOP_QUALIFIER);
       // L3: both detail rows of the target card are "—" as well.
       const rowDash = (rowLabel: string): string =>
         `<span class="text-sm text-neutral-400">${rowLabel}</span><span class="font-mono text-sm text-neutral-100">—</span>`;
@@ -358,19 +362,20 @@ describe("LM-117: the holding-unknown dash notice renders exactly once, only for
     expect(resolveKeyLevelsAnchor(NO_DATA, "2330", "TW").anchorSource).toBe("holding-unknown");
   });
 
-  it("placement: directly below the two big numbers' grid, main view, before <details>, text-sm and not dimmed below the label colour", () => {
+  it("placement: directly below the stop big number, main view, before <details>, text-sm and not dimmed below the label colour", () => {
     const html = panelOf(BARS_ATR, NO_DATA);
     const notice = `<p class="mt-3 text-sm text-neutral-300">${KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}</p>`;
     expect(count(html, notice)).toBe(1);
-    // The grid closes right before the notice and <details> follows right after it.
-    expect(html).toContain(`</div></div>${notice}<details`);
+    // The stop block closes right before the notice and <details> follows right after it.
+    // (字面更新, C-11: the two-column big-number grid became a single stop block.)
+    expect(html).toContain(`</div>${notice}<details`);
     const iNotice = html.indexOf(notice);
     const iDetails = html.indexOf("<details");
     expect(iNotice).toBeGreaterThan(-1);
     expect(iNotice).toBeLessThan(iDetails);
     // Nothing inside <details> carries it.
     expect(html.slice(iDetails)).not.toContain(KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE);
-    // Both big numbers stay "—" and come BEFORE the notice (the notice does not push them out of the first screen order).
+    // The big number stays "—" and comes BEFORE the notice (the notice does not push it out of the first screen order).
     const BIG_DASH = '<p class="mt-1 font-mono text-xl font-bold text-neutral-100">—</p>';
     expect(html.lastIndexOf(BIG_DASH)).toBeLessThan(iNotice);
     // Not smaller than the panel labels (text-sm) and not text-xs.

@@ -232,6 +232,13 @@ export const RULE_BASIS_PREFIX = "依據：";
  * chip stands next to a headline — shorter, same meaning; `confidenceMeaning`
  * (the longer decoding sentence) already moved into `<details>` in the
  * previous batch.
+ *
+ * Orphaned since the risk remediation (CEO #59, 風控 2026-10-26 定稿 1-L): both
+ * confidence chips were removed from the screen and replaced by the standing
+ * 「未經歷史驗證」 label (`riskRemediationWording.ts`). Nothing renders this
+ * constant any more; it stays only so `adviceWording.test.ts` keeps pinning the
+ * old literal, and a test asserts no component imports it again (failure
+ * condition T2: confidence returning to the screen).
  */
 export const CONFIDENCE_PREFIX = "信心 ";
 

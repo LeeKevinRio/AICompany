@@ -14,6 +14,11 @@ import type {
 } from "../lib/types";
 import { formatDateTime, formatMoneyNumber, formatNumber, formatPercent, marketCurrency } from "../lib/format";
 import type { Market } from "../lib/types";
+import {
+  BACKTEST_SAME_CLOSE_FILL_POINT,
+  buildBacktestAssumptionsHeading,
+  buildBacktestSlippagePoint,
+} from "../lib/riskRemediationWording";
 import { DataMetaStatusBadge } from "../components/DataMetaStatusBadge";
 import { EquityCurveChart } from "./EquityCurveChart";
 
@@ -593,6 +598,23 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
           {report.data_warning}
         </p>
       )}
+
+      {/*
+        Risk remediation 5-BT (CEO #59; 風控 2026-10-26 定稿, constraint C-13; 失效條件 T5): the fill and
+        slippage assumptions stand here, after `data_warning` and before the report-level disclaimer below,
+        so they are read before `EquityCurveChart`. Always visible (no <details>), `text-sm`. The heading and
+        the second point follow the configured slippage (`cost_model.slippage_bps === 0` or not). The
+        proposed third point (fee rates not verified) is not used: the `rates_verified` alert below says it.
+      */}
+      <div className="mt-3 rounded-md border border-neutral-700 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-300">
+        <p className="font-semibold text-neutral-200">
+          {buildBacktestAssumptionsHeading(report.cost_model.slippage_bps === 0)}
+        </p>
+        <ol className="mt-1 list-decimal space-y-1 pl-5">
+          <li>{BACKTEST_SAME_CLOSE_FILL_POINT}</li>
+          <li>{buildBacktestSlippagePoint(report.cost_model.slippage_bps)}</li>
+        </ol>
+      </div>
 
       {/*
         D2 item 4 (限制清單 #10 / 機會清單 D2): a standing disclosure, not
