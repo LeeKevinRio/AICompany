@@ -1,5 +1,6 @@
 """FastAPI application entrypoint for the Stock Desk backend."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -24,10 +25,13 @@ from app.api import (
     signals,
 )
 from app.api.client_header import RequireClientHeaderMiddleware
+from app.env_status import log_env_status
 from app.logging_setup import configure_logging
 from app.services.sector_runtime import process_gate_runtime
 
 SERVICE_NAME = "backend"
+
+logger = logging.getLogger(__name__)
 
 #: Frontend dev server origin allowed to call this API during development.
 FRONTEND_DEV_ORIGIN = "http://localhost:3000"
@@ -38,9 +42,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Process start-up: logging is configured here, never at import time.
 
     Shared with the scheduler; it keeps httpx/httpcore at WARNING because they
-    log full, secret-bearing request URLs at INFO.
+    log full, secret-bearing request URLs at INFO. Right after, one line says
+    which optional secrets are present (set / unset only, never a value).
     """
     configure_logging()
+    log_env_status(logger, SERVICE_NAME)
     yield
 
 
