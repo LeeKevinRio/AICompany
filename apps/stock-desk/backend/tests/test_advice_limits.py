@@ -55,6 +55,15 @@ from tests.advice_helpers import kelly_inputs, reported_net_worth
 
 BUDGET = RiskBudget()
 
+#: Cap 1 at the pre-2026-10-26 default. The tests that use it were written
+#: around 15% -- their fixtures and expected share counts (1,176 / 588 / 589,
+#: "150,000 is exactly the cap") are arithmetic on that number -- so they now
+#: pass it explicitly instead of inheriting it from the default, which is 10%
+#: since CEO #61 (quant constraint 6; ADR-0023 risk criterion (3)). What they
+#: assert is unchanged. The 10% default has its own edge cases in
+#: ``tests/test_cap1_default.py``.
+CAP1_AT_15 = RiskBudget(max_position_weight=0.15)
+
 
 def _ctx(**overrides: Any) -> PortfolioContext:
     """A fully populated context; override one field per test.
@@ -93,7 +102,7 @@ def _status(ctx: PortfolioContext, limit_id: str, budget: RiskBudget = BUDGET) -
 
 
 def test_default_budget_is_conservative() -> None:
-    assert BUDGET.max_position_weight == 0.15
+    assert BUDGET.max_position_weight == 0.10
     assert BUDGET.max_sector_weight == 0.30
     assert BUDGET.max_gross_exposure == 1.00
     assert BUDGET.max_loss_per_trade == 0.01
@@ -220,7 +229,9 @@ def test_single_position_weight_passed() -> None:
 
 def test_single_position_weight_violated_at_the_cap() -> None:
     # Exactly at 15%: the budget is spent, so there is no room left to add.
-    check = _check(_ctx(position_market_value_twd=150_000.0), "single_position_weight")
+    check = _check(
+        _ctx(position_market_value_twd=150_000.0), "single_position_weight", CAP1_AT_15
+    )
     assert check.status == "violated"
     assert check.observed == pytest.approx(0.15)
     assert check.threshold == 0.15
@@ -1343,7 +1354,7 @@ def test_a_positive_edge_carries_no_zero_allowance_sentence() -> None:
 
 
 def test_notional_caps_skip_the_caps_they_cannot_evaluate() -> None:
-    caps = notional_caps(BUDGET, _ctx())
+    caps = notional_caps(CAP1_AT_15, _ctx())
     assert set(caps) == {"single_position_weight", "gross_exposure", "per_trade_loss"}
     assert caps["single_position_weight"] == pytest.approx(150_000.0)
     # Gross: 1,000,000 cap less the other 450,000 already invested.
@@ -1399,7 +1410,7 @@ def test_notional_caps_include_sector_and_kelly_when_available() -> None:
 
 
 def test_add_range_is_derived_from_the_tightest_cap() -> None:
-    quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
+    quantity = suggest_quantity_range(CAP1_AT_15, _ctx(), action="add")
     assert quantity is not None
     # The book grows by what is bought (it has no cash leg), so the 15% cap
     # grows with it: (50,000 + 100x) / (1,000,000 + 100x) < 15% gives
@@ -1427,7 +1438,7 @@ def test_add_range_is_none_without_any_evaluable_cap() -> None:
 
 def test_reduce_range_covers_the_excess_up_to_the_whole_holding() -> None:
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
-    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    quantity = suggest_quantity_range(CAP1_AT_15, ctx, action="reduce")
     assert quantity is not None
     # The book shrinks by what is sold: (200,000 - 100x) / (1,000,000 - 100x)
     # < 15% gives x > 588.24. 589 shares leave 14.993%; 588 leave 15.002%.
@@ -1488,12 +1499,12 @@ def test_the_add_range_is_verified_against_every_cap_not_only_the_tightest_one()
     # cap 1 alone, 1,176 shares would put gross exposure at 1,117,600 /
     # 1,110,000 -- over cap 3. Cap 3 binds after the trade: < 1,100 shares.
     ctx = _ctx(gross_exposure_twd=1_000_000.0, net_worth=reported_net_worth(1_110_000.0))
-    quantity = suggest_quantity_range(BUDGET, ctx, action="add")
+    quantity = suggest_quantity_range(CAP1_AT_15, ctx, action="add")
     assert quantity is not None
     assert quantity.max_shares == 1_099
     assert "總曝險上限" in quantity.basis
     after = project_position(ctx, share_delta=float(quantity.max_shares))
-    assert not [check for check in evaluate_limits(BUDGET, after) if check.status == "violated"]
+    assert not [check for check in evaluate_limits(CAP1_AT_15, after) if check.status == "violated"]
 
 
 def test_the_sell_range_clears_every_cap_that_took_part() -> None:
@@ -1524,11 +1535,11 @@ def test_limit_status_after_projects_the_whole_book() -> None:
     # what the purchase adds (150,000 / 1,100,000 = 13.6%, inside the cap).
     assert after.total_equity_twd == pytest.approx(1_100_000.0)
     assert (
-        limit_status_after(BUDGET, ctx, limit_id="single_position_weight", share_delta=1_000.0)
+        limit_status_after(CAP1_AT_15, ctx, limit_id="single_position_weight", share_delta=1_000.0)
         == "passed"
     )
     assert (
-        limit_status_after(BUDGET, ctx, limit_id="single_position_weight", share_delta=1_177.0)
+        limit_status_after(CAP1_AT_15, ctx, limit_id="single_position_weight", share_delta=1_177.0)
         == "violated"
     )
     # A sale shrinks the book by what it removes.
@@ -1619,7 +1630,7 @@ def test_range_action_labels_match_the_front_end_whitelist() -> None:
 
 
 def test_add_basis_is_the_approved_copy_verbatim() -> None:
-    quantity = suggest_quantity_range(BUDGET, _ctx(), action="add")
+    quantity = suggest_quantity_range(CAP1_AT_15, _ctx(), action="add")
     assert quantity is not None
     assert quantity.basis == (
         "規則評估:加碼參考,區間為再買進 588 ~ 1,176 股。"
@@ -1632,7 +1643,7 @@ def test_add_basis_is_the_approved_copy_verbatim() -> None:
 
 def test_sell_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_cap() -> None:
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
-    quantity = suggest_quantity_range(BUDGET, ctx, action="reduce")
+    quantity = suggest_quantity_range(CAP1_AT_15, ctx, action="reduce")
     assert quantity is not None
     assert quantity.basis == (
         "規則評估:減碼參考,區間為賣出 589 ~ 2,000 股。"
@@ -1647,7 +1658,7 @@ def test_stop_loss_basis_is_the_approved_copy_verbatim_when_the_sale_clears_the_
     # S-5a in work/reviews/2026-10-04-決策卡-停損標籤與目前回撤列-風控審查.md:
     # the compliant sell branch with the 2026-10-04 stop_loss label in the slot.
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
-    quantity = suggest_quantity_range(BUDGET, ctx, action="stop_loss")
+    quantity = suggest_quantity_range(CAP1_AT_15, ctx, action="stop_loss")
     assert quantity is not None
     assert quantity.basis == (
         "規則評估:停損型減碼參考,區間為賣出 589 ~ 2,000 股。"
@@ -1674,7 +1685,7 @@ def test_every_sell_action_reuses_the_same_approved_template() -> None:
     # the name the sentence opens with.
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
     for action in ("reduce", "stop_loss", "take_profit"):
-        quantity = suggest_quantity_range(BUDGET, ctx, action=action)
+        quantity = suggest_quantity_range(CAP1_AT_15, ctx, action=action)
         assert quantity is not None
         assert quantity.basis.startswith(f"規則評估:{RANGE_ACTION_LABELS[action]},")
         assert "區間為賣出 589 ~ 2,000 股。" in quantity.basis
@@ -1864,7 +1875,7 @@ def test_hold_and_unknown_actions_get_no_range() -> None:
 def test_stop_loss_and_take_profit_share_the_reduce_sizing() -> None:
     ctx = _ctx(position_market_value_twd=200_000.0, quantity=2_000.0)
     for action in ("stop_loss", "take_profit"):
-        quantity = suggest_quantity_range(BUDGET, ctx, action=action)
+        quantity = suggest_quantity_range(CAP1_AT_15, ctx, action=action)
         assert quantity is not None
         assert quantity.min_shares == 589
 

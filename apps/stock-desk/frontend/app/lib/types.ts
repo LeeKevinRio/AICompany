@@ -730,6 +730,11 @@ export interface PortfolioLimitsResponse {
   limits: BookLimitCheck[];
   notes: string[];
   sources: SymbolDataMeta[];
+  /**
+   * The S2 notice for the gauge's cap-1 row (CEO #63), chosen by the backend;
+   * `null` when there is nothing to show. Rendered verbatim on that row.
+   */
+  cap1_migration_notice: string | null;
   as_of: string;
 }
 
@@ -1335,11 +1340,33 @@ export interface AppSettings {
 }
 
 /** Backend `SettingsResponse` (app/api/settings.py, verified). */
+/** Backend `Cap1MigrationStatus` (app/settings/migrations.py). */
+export type Cap1MigrationStatus = "migrated" | "not_applicable" | "skipped";
+
+/**
+ * Backend `Cap1MigrationView` (app/api/settings.py): the S2 record of the
+ * cap-1 default migration (CEO #63). Read-only — it lives in its own table and
+ * is never part of the `PUT` body. `notice` is the sentence the settings page
+ * shows beside the cap-1 field, already chosen by the backend (`null` = none);
+ * this app renders it verbatim and composes nothing around it.
+ */
+export interface Cap1MigrationView {
+  status: Cap1MigrationStatus;
+  previous_value: number | null;
+  new_value: number | null;
+  failed_sections: string[];
+  basis: string;
+  /** ISO 8601 UTC. */
+  recorded_at: string;
+  notice: string | null;
+}
+
 export interface SettingsResponse {
   settings: AppSettings;
   rates_verified: boolean;
   notes: string[];
   net_worth: NetWorthView;
+  cap1_migration: Cap1MigrationView | null;
   as_of: string;
 }
 

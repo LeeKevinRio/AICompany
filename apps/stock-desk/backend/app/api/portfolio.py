@@ -100,6 +100,12 @@ class PortfolioLimitsResponse(BaseModel):
     notes: list[str]
     #: One entry per holding whose bars were loaded, in book order.
     sources: list[SymbolDataMeta]
+    #: The S2 notice the gauge shows on its cap-1 row (CEO #63), already
+    #: chosen; ``None`` when there is nothing to show. A migrated value is
+    #: announced for as long as it is still the stored one; once the user sets
+    #: another, the change is theirs and only the settings page keeps the
+    #: record (:meth:`app.settings.migrations.Cap1MigrationRecord.notice`).
+    cap1_migration_notice: str | None
     as_of: str
 
 
@@ -187,8 +193,20 @@ def portfolio_limits(
         # user entered, and cap 5 must not report it as never entered (D-7).
         kelly_inputs=kelly_inputs_by_symbol(kelly_store),
     )
+    migration = settings_store.cap1_migration()
     return PortfolioLimitsResponse(
-        limits=report.limits, notes=report.notes, sources=sources, as_of=now_iso()
+        limits=report.limits,
+        notes=report.notes,
+        sources=sources,
+        cap1_migration_notice=(
+            None
+            if migration is None
+            else migration.notice(
+                current_max_position_weight=settings.risk_budget.max_position_weight,
+                surface="risk_gauge",
+            )
+        ),
+        as_of=now_iso(),
     )
 
 

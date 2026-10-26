@@ -147,7 +147,7 @@ function SourcesList({ sources }: { sources: SymbolDataMeta[] }) {
  * qa 追加（2026-09-19）：名稱不再 `truncate`（會用刪節號吃掉看不完的字）——
  * 容器已是 `flex-wrap`，改成讓名稱在窄螢幕自然換行，確保完整字面永遠可讀。
  */
-function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
+function LimitGaugeRow({ check, migrationNotice }: { check: BookLimitCheck; migrationNotice: string | null }) {
   const hasExcluded = check.excluded.length > 0;
   return (
     <li className="border-t border-neutral-800 py-2 text-sm first:border-t-0">
@@ -181,6 +181,10 @@ function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
       {check.worst_symbol !== null && (
         <p className="mt-1 text-xs text-neutral-400">觀測值最高：{check.worst_symbol}</p>
       )}
+      {/* S2 (CEO #63): the cap-1 migration notice stands on this row, in the
+          main view — never a toast, never inside the details (risk review
+          2026-10-26, S2 告知要點 8). Text is the backend's, verbatim. */}
+      {migrationNotice !== null && <p className="mt-1 text-xs text-amber-300">{migrationNotice}</p>}
     </li>
   );
 }
@@ -195,7 +199,13 @@ export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
     <>
       <ul className="mt-3">
         {data.limits.map((check) => (
-          <LimitGaugeRow key={check.limit_id} check={check} />
+          <LimitGaugeRow
+            key={check.limit_id}
+            check={check}
+            migrationNotice={
+              check.limit_id === "single_position_weight" ? (data.cap1_migration_notice ?? null) : null
+            }
+          />
         ))}
       </ul>
 

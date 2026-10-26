@@ -77,12 +77,15 @@ function buildWideningBody(label: string, limitIndex: number, before: number, af
  * `CANDIDATE_QUANTITY_BASIS_NOTE` 同步改寫,避免與 `max_gross_exposure` 描述
  * 句用的「帳戶總淨值」分母混淆。
  */
-const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
+export const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
     label: "單一標的佔比上限",
     description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.15 代表 15%）。",
-    defaultValue: 0.15,
+    // #61 (2026-10-26): mirrors `DEFAULT_MAX_POSITION_WEIGHT` in
+    // `app/advice/limits.py`; pinned equal by `cap1Default.test.ts` here and by
+    // `tests/test_cap1_default.py` on the backend.
+    defaultValue: 0.1,
     // 波次1文案裁決.md 複審 suggested:此 reason 原本只寫「總資產」,與同一欄位
     // description 已補全的分母不一致,讀者可能誤以為含現金;補上同一組限定語。
     hardCeiling: {
@@ -188,6 +191,15 @@ const ALERT_SETTINGS_FIELDS: FieldSpec<Omit<AlertSettings, "enabled" | "notify_w
 
 type FormValues = Record<string, string>;
 
+/**
+ * The S2 notice (CEO #63) belongs beside cap 1's field and no other; its text
+ * is the backend's (`SettingsResponse.cap1_migration.notice`), verbatim.
+ */
+export function cap1MigrationNoticeFor(key: keyof RiskBudgetSettings, settings: SettingsResponse): string | null {
+  if (key !== "max_position_weight") return null;
+  return settings.cap1_migration?.notice ?? null;
+}
+
 /** Bare field names the backend's 422 `loc` can name and this form renders. */
 const PLACED_ERROR_KEYS = [...RISK_BUDGET_FIELDS, ...COST_FIELDS, ...ALERT_SETTINGS_FIELDS].map((field) =>
   String(field.key),
@@ -222,12 +234,20 @@ function NumberField({
   value,
   onChange,
   error,
+  notice = null,
 }: {
   id: string;
   spec: FieldSpec<never>;
   value: string;
   onChange: (value: string) => void;
   error: string | undefined;
+  /**
+   * A standing, backend-chosen notice about this field's stored value — today
+   * only the S2 cap-1 migration record (`SettingsResponse.cap1_migration
+   * .notice`, CEO #63). Rendered verbatim under the field, never as a toast or
+   * a tooltip (risk review 2026-10-26, S2 告知要點 8).
+   */
+  notice?: string | null;
 }) {
   return (
     <div>
@@ -257,6 +277,7 @@ function NumberField({
           {HARD_CEILING_NOTE}
         </p>
       )}
+      {notice !== null && <p className="mt-1 text-xs text-amber-300">{notice}</p>}
       <FieldError message={error} />
     </div>
   );
@@ -370,6 +391,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
                 value={values[key] ?? ""}
                 onChange={(v) => updateValue(key, v)}
                 error={inputErrors[key] ?? fieldErrors[String(field.key)]}
+                notice={cap1MigrationNoticeFor(field.key, settings)}
               />
             );
           })}

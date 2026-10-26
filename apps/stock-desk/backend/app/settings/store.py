@@ -12,6 +12,13 @@ removed) falls back to that section's **defaults** and logs a warning, rather
 than taking the API down: settings are preferences, and refusing to serve a
 risk budget because one stored key drifted would be worse than serving the
 conservative default and saying so in the log.
+
+Writes are not the only thing that changes a stored section: constructing the
+store runs the S2 migration (:mod:`app.settings.migrations`, CEO #63), which
+rewrites a stored cap-1 ``max_position_weight`` of 0.15 to 0.10 once and keeps
+a record of it in its own table. It works on the raw stored JSON, never through
+:meth:`SettingsStore.load` and :meth:`SettingsStore.save`, for the reason given
+there.
 """
 
 from __future__ import annotations
@@ -29,6 +36,12 @@ from pydantic import BaseModel, ValidationError
 from app.advice.limits import RiskBudget
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.sqlite_util import enable_wal
+from app.settings.migrations import (
+    Cap1MigrationRecord,
+    init_migrations_table,
+    migrate_cap1_default,
+    read_cap1_migration,
+)
 from app.settings.models import (
     AlertSettings,
     AppSettings,
@@ -61,11 +74,16 @@ _SECTIONS: dict[str, type[BaseModel]] = {
 class SettingsStore:
     """Load and persist the settings document, section by section."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
+    def __init__(self, db_path: str | Path | None = None, *, now: datetime | None = None) -> None:
+        """Open (creating if needed) the settings tables, then run the S2 migration.
+
+        ``now`` fixes the migration record's timestamp for tests; it is still the
+        server's clock either way.
+        """
         self._db_path = Path(db_path) if db_path is not None else resolve_db_path()
         if str(self._db_path) != ":memory:":
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        self._init_schema(now=now)
 
     @property
     def db_path(self) -> Path:
@@ -75,10 +93,25 @@ class SettingsStore:
         # Callers wrap this in contextlib.closing; see app/positions/store.py.
         return sqlite3.connect(self._db_path, timeout=BUSY_TIMEOUT_MS / 1000)
 
-    def _init_schema(self) -> None:
+    def _init_schema(self, *, now: datetime | None = None) -> None:
+        # One connection for the DDL and the migration: an in-memory database
+        # exists only for the connection that created it.
         with closing(self._connect()) as conn, conn:
             enable_wal(conn)
             conn.execute(_CREATE_TABLE_SQL)
+            init_migrations_table(conn)
+            # Every construction is a "start" for the S2 migration (CEO #63):
+            # it is idempotent, and terminal once it has migrated or found
+            # nothing to migrate (app/settings/migrations.py).
+            migrate_cap1_default(
+                conn, _SECTIONS, now=now if now is not None else datetime.now(UTC)
+            )
+
+    def cap1_migration(self) -> Cap1MigrationRecord | None:
+        """The S2 cap-1 migration record, or ``None`` if none was ever written."""
+        with closing(self._connect()) as conn:
+            init_migrations_table(conn)
+            return read_cap1_migration(conn)
 
     def load(self) -> AppSettings:
         """Return the stored settings, falling back to defaults per section."""
