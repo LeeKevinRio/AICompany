@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}{{ watch.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ watch.name }} <span class="badge status-{{ watch.status }}">{{ watch.status_label }}</span></h1>
+  <div class="actions">
+    <a class="button" href="/watches/{{ watch.id }}/edit">修改</a>
+    {% if watch.status != "expired" %}
+      {% if watch.enabled %}
+      <button type="button" data-action="scan-now" data-watch-id="{{ watch.id }}" data-busy-label="查價中…">立即查價</button>
+      <button type="button" data-action="set-enabled" data-watch-id="{{ watch.id }}" data-enabled="false">停用</button>
+      {% else %}
+      <button type="button" data-action="set-enabled" data-watch-id="{{ watch.id }}" data-enabled="true">啟用</button>
+      {% endif %}
+    {% endif %}
+    <button type="button" class="danger" data-action="delete-watch" data-watch-id="{{ watch.id }}" data-watch-name="{{ watch.name }}" data-redirect="/">刪除</button>
+  </div>
+</div>
+
+<section class="card">
+  <h2>監看設定</h2>
+  <dl class="facts">
+    <dt>路線</dt><dd>{{ watch.route }}（{{ watch.trip }}）</dd>
+    <dt>日期模式</dt><dd>{{ watch.date_mode }}</dd>
+    {% if watch.depart_date %}<dt>出發日</dt><dd>{{ watch.depart_date }}</dd>{% endif %}
+    {% if watch.return_date %}<dt>回程日</dt><dd>{{ watch.return_date }}</dd>{% endif %}
+    {% if watch.window_start %}<dt>最早出發日</dt><dd>{{ watch.window_start }}</dd>{% endif %}
+    {% if watch.window_end %}<dt>{% if watch.trip == "來回" %}最晚回程日{% else %}最晚出發日{% endif %}</dt><dd>{{ watch.window_end }}</dd>{% endif %}
+    {% if watch.min_trip_days %}<dt>旅程天數</dt><dd>{{ watch.min_trip_days }}–{{ watch.max_trip_days }} 天</dd>{% endif %}
+    <dt>預算門檻</dt><dd>{{ watch.budget }}</dd>
+    <dt>轉機</dt><dd>{{ watch.max_stops }}</dd>
+    <dt>艙等／人數</dt><dd>{{ watch.cabin }}・{{ watch.adults }} 位成人</dd>
+    <dt>此監看紀錄新低通知</dt><dd>{% if watch.notify_on_new_low %}開啟{% else %}關閉{% endif %}</dd>
+    <dt>設定版本</dt><dd>第 {{ watch.revision }} 版</dd>
+    <dt>上次查價</dt><dd>{{ watch.last_scanned or "尚未查價" }}</dd>
+    {% if watch.consecutive_failed_scans %}<dt>連續查價失敗</dt><dd>{{ watch.consecutive_failed_scans }} 次</dd>{% endif %}
+  </dl>
+  {% if watch.link %}
+  <p><a href="{{ watch.link }}" target="_blank" rel="noopener noreferrer">到 Google Flights 人工查價</a>
+    <span class="muted">（開啟搜尋頁，帶入路線與第一組日期）</span></p>
+  {% endif %}
+</section>
+
+{% if not has_prices %}
+<section class="card empty">
+  <h2>價格</h2>
+  <p>尚未查到價格。</p>
+  <p class="muted">排程會依掃描週期自動查價，也可以按「立即查價」。若一直沒有資料，請到「設定與健康」頁確認資料源狀態。</p>
+</section>
+{% else %}
+<section class="card">
+  <h2>最便宜的日期組合（前 {{ top|length }} 筆）</h2>
+  <p class="disclaimer">{{ disclaimer }}</p>
+  <p class="muted">{{ sampled_only_note }}</p>
+  <p class="muted">每個日期組合取最近一次查到的價格，依價格由低到高排列。超過 {{ stale_hours }} 小時未更新的價格標示「可能已過期」。</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜日期組合（可橫向捲動）">
+  <table class="data">
+    <thead><tr><th>日期</th><th>出發星期</th><th>價格</th><th>航空公司</th><th>轉機</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
+    <tbody>
+    {% for p in top %}
+      <tr>
+        <td>{{ p.dates }}</td>
+        <td>{{ p.weekday }}</td>
+        <td class="num">查到 {{ p.amount_text }}{% if p.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</td>
+        <td>{{ p.carrier }}</td>
+        <td>{{ p.stops }}</td>
+        <td>{{ p.fetched_text }}{% if p.stale %} <span class="badge warn">可能已過期</span>{% endif %}</td>
+        <td>{{ p.source }}（{{ p.kind }}{% if p.data_time_unknown %}，資料時間未知{% endif %}）</td>
+        <td><a href="{{ p.link }}" target="_blank" rel="noopener noreferrer">查票</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>最低價趨勢</h2>
+  {% if trend.svg_points %}
+  <figure class="chart">
+    <svg viewBox="0 0 {{ trend.width }} {{ trend.height }}" role="img" aria-label="每次掃描的最低價趨勢">
+      <rect class="chart-bg" x="0" y="0" width="{{ trend.width }}" height="{{ trend.height }}"></rect>
+      <polyline class="chart-line" points="{{ trend.svg_points }}"></polyline>
+    </svg>
+    <figcaption class="muted">最高 {{ trend.high_text }}・最低 {{ trend.low_text }}（目前設定版本，每點為一次掃描的最低價）</figcaption>
+  </figure>
+  {% endif %}
+  <details {% if not trend.svg_points %}open{% endif %}>
+    <summary>趨勢明細（{{ trend.rows|length }} 次掃描）</summary>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="趨勢明細（可橫向捲動）">
+    <table class="data compact">
+      <thead><tr><th>掃描時間</th><th>該次最低價</th></tr></thead>
+      <tbody>
+      {% for r in trend.rows %}<tr><td>{{ r.at }}</td><td class="num">{{ r.amount_text }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+</section>
+
+<section class="card">
+  <h2>依出發日的價格分布</h2>
+  <p class="muted">只涵蓋已取樣過的日期；未取樣的日期不代表沒有更便宜的價格。顏色：綠＝較便宜三分之一、紅＝較貴三分之一。</p>
+  <div class="heat-grid">
+    {% for d in distribution %}
+    <div class="heat heat-{{ d.level }}" title="{{ d.depart }} {{ d.weekday }} {{ d.amount_text }}">
+      <div class="heat-date">{{ d.depart[5:] }} {{ d.weekday }}</div>
+      <div class="heat-price">{{ d.amount_text }}</div>
+      <span class="sr-only">{% if d.level == "cheap" %}（較便宜三分之一）{% elif d.level == "pricey" %}（較貴三分之一）{% else %}（中段）{% endif %}</span>
+      {% if d.return %}<div class="muted">回 {{ d.return[5:] }}</div>{% endif %}
+      {% if d.stale %}<div class="badge warn">可能已過期</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% if weekdays %}
+  <h3>依出發星期</h3>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="依出發星期（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>星期</th><th>已取樣最低價</th><th>出發日數</th></tr></thead>
+    <tbody>
+    {% for w in weekdays %}<tr><td>{{ w.weekday }}</td><td class="num">{{ w.min_text }}</td><td class="num">{{ w.count }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>最近價格紀錄</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>日期</th><th>價格</th><th>航空公司</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
+    <tbody>
+    {% for p in recent_prices %}
+      <tr>
+        <td>{{ p.dates }}</td>
+        <td class="num">查到 {{ p.amount_text }}</td>
+        <td>{{ p.carrier }}</td>
+        <td>{{ p.fetched_text }}{% if p.stale %} <span class="badge warn">可能已過期</span>{% endif %}</td>
+        <td>{{ p.source }}（{{ p.kind }}）</td>
+        <td><a href="{{ p.link }}" target="_blank" rel="noopener noreferrer">查票</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>本次取樣的日期組合</h2>
+  {% if last_run %}
+  <p>
+    {{ last_run.started }}（{{ last_run.trigger }}）・{{ last_run.status }}・
+    取樣 {{ last_run.sampled }} / 共 {{ last_run.total_pairs }} 組・對外查詢 {{ last_run.queries_used }} 次
+  </p>
+  {% if last_run.limit_reached %}
+  <p class="notice">日期組合超過每輪查詢上限（達上限），本輪以等距取樣查詢，下一輪會輪換到其他日期。</p>
+  {% endif %}
+  {% if last_run.global_limit_reached %}
+  <p class="notice">已達全域每小時查詢上限，本輪有部分日期未查。</p>
+  {% endif %}
+  {% if last_run.error %}<p class="notice">{{ last_run.error }}</p>{% endif %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="本次取樣的日期組合（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>日期</th><th>結果</th><th>價格</th><th>來源</th><th>說明</th></tr></thead>
+    <tbody>
+    {% for p in last_run.pairs %}
+      <tr>
+        <td>{{ p.dates }}</td>
+        <td><span class="badge q-{{ p.status_key }}">{{ p.status }}</span>{% if p.from_cache %} <span class="muted">（快取）</span>{% endif %}</td>
+        <td class="num">{{ p.amount_text or "—" }}</td>
+        <td>{{ p.source }}</td>
+        <td class="muted">{{ p.reason or p.error or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">尚未執行過掃描。</p>
+  {% endif %}
+</section>
+
+{% if runs %}
+<section class="card">
+  <h2>最近掃描</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最近掃描（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>開始</th><th>結束</th><th>觸發</th><th>結果</th><th>查詢次數</th><th>取樣</th><th>備註</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.started }}{% if r.revision != watch.revision %} <span class="badge">舊設定</span>{% endif %}</td>
+        <td>{{ r.finished }}</td>
+        <td>{{ r.trigger }}</td>
+        <td><span class="badge run-{{ r.status_key }}">{{ r.status }}</span></td>
+        <td class="num">{{ r.queries_used }}</td>
+        <td class="num">{{ r.sampled }}/{{ r.total_pairs }}{% if r.limit_reached %}（達上限）{% endif %}</td>
+        <td class="muted">{{ r.error or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+{% if old_prices %}
+<section class="card">
+  <h2>舊設定的價格紀錄</h2>
+  <p class="disclaimer">{{ disclaimer }}</p>
+  <p class="muted">以下價格屬於修改前的設定（路線或日期不同），僅供查閱，不參與目前的通知比較。{{ sampled_only_note }}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="舊設定的價格紀錄（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>版本</th><th>日期</th><th>價格</th><th>航空公司</th><th>查到時間</th></tr></thead>
+    <tbody>
+    {% for p in old_prices %}
+      <tr>
+        <td><span class="badge">舊設定</span> 第 {{ p.revision }} 版</td>
+        <td>{{ p.dates }}</td>
+        <td class="num">查到 {{ p.amount_text }}</td>
+        <td>{{ p.carrier }}</td>
+        <td>{{ p.fetched_text }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}

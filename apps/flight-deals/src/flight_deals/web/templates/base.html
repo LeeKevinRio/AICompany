@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}flight-deals{% endblock %} · 機票低價監看</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要內容</a>
+  <header class="site-header">
+    <a class="brand" href="/">flight-deals</a>
+    <nav class="site-nav" aria-label="主選單">
+      <a href="/" {% if nav == "index.html" %}aria-current="page"{% endif %}>監看列表</a>
+      <a href="/watches/new" {% if nav == "watch_form.html" %}aria-current="page"{% endif %}>新增監看</a>
+      <a href="/notifications" {% if nav == "notifications.html" %}aria-current="page"{% endif %}>通知紀錄</a>
+      <a href="/settings" {% if nav == "settings.html" %}aria-current="page"{% endif %}>設定與健康</a>
+    </nav>
+  </header>
+  <div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="notice">此頁的新增、修改、停用、刪除與儲存功能需要啟用 JavaScript。</p></noscript>
+  <main id="main" class="container" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p>{{ disclaimer }}資料源為非官方介面，可能隨時失效。</p>
+  </footer>
+</body>
+</html>

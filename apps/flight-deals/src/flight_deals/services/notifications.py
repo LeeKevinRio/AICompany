@@ -1,0 +1,200 @@
+"""Notification flow: persist first, then deliver; retries are bounded (FR-C7)."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Sequence
+
+from flight_deals.domain.messages import (
+    ops_failure_message,
+    price_alert_message,
+    telegram_test_message,
+)
+from flight_deals.domain.models import PriceKind, Watch
+from flight_deals.domain.rules import (
+    TriggeredItem,
+    ops_failure_key,
+    price_message_key,
+    primary_reason,
+    telegram_test_key,
+)
+from flight_deals.ports import Clock, Notifier, Redactor, SendResult
+from flight_deals.storage.repository import (
+    AlertStateRecord,
+    NotificationItemRecord,
+    NotificationRecord,
+    Repository,
+)
+
+log = logging.getLogger(__name__)
+
+NOT_CONFIGURED = "Telegram 未設定，訊息未送出"
+
+
+class NotificationService:
+    def __init__(
+        self,
+        repo: Repository,
+        notifier: Notifier,
+        *,
+        max_attempts: int,
+        clock: Clock,
+        redactor: Redactor,
+    ) -> None:
+        self._repo = repo
+        self._notifier = notifier
+        self._max_attempts = max_attempts
+        self._clock = clock
+        self._redact = redactor
+
+    @property
+    def configured(self) -> bool:
+        return self._notifier.is_configured()
+
+    @property
+    def max_attempts(self) -> int:
+        return self._max_attempts
+
+    def send_price_alert(
+        self, watch: Watch, price_kind: PriceKind, items: Sequence[TriggeredItem]
+    ) -> int | None:
+        """Create and deliver one merged alert; returns the notification id (None = dedupe)."""
+        if not items:
+            return None
+        spec = watch.spec
+        text = price_alert_message(
+            watch_name=spec.name,
+            origin=spec.origin,
+            destination=spec.destination,
+            trip_type=spec.trip_type,
+            items=items,
+        )
+        notification_id = self._repo.insert_notification(
+            watch_id=watch.id,
+            kind="price_alert",
+            rule=primary_reason(items[0]),
+            price_kind=price_kind,
+            observation_id=items[0].candidate.observation_id,
+            channel=self._notifier.channel,
+            dedupe_key=price_message_key(watch.id, price_kind, items),
+            message_text=text,
+            created_at=self._clock(),
+            items=[
+                NotificationItemRecord(
+                    item_key=i.item_key,
+                    depart_date=i.candidate.depart_date,
+                    return_date=i.candidate.return_date,
+                    amount_minor=i.candidate.amount_minor,
+                    currency=i.candidate.currency,
+                    reasons=i.reasons,
+                    carrier=i.candidate.carrier,
+                    fetched_at=i.candidate.fetched_at,
+                )
+                for i in items
+            ],
+        )
+        if notification_id is None:
+            return None
+        self._deliver(notification_id, 0, text)
+        return notification_id
+
+    def send_ops_failure(self, source: str, error: str | None) -> int | None:
+        now = self._clock()
+        text = ops_failure_message(source=source, error=error, now=now)
+        notification_id = self._repo.insert_notification(
+            watch_id=None,
+            kind="ops_source_failure",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=ops_failure_key(source, now),
+            message_text=self._redact(text),
+            created_at=now,
+        )
+        if notification_id is None:
+            log.info("ops alert for %s already recorded today; not repeating", source)
+            return None
+        self._deliver(notification_id, 0, self._redact(text))
+        return notification_id
+
+    def send_test(self) -> SendResult:
+        now = self._clock()
+        text = telegram_test_message(now)
+        notification_id = self._repo.insert_notification(
+            watch_id=None,
+            kind="test",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=telegram_test_key(now),
+            message_text=text,
+            created_at=now,
+        )
+        result = self._notifier.send(text)
+        error = self._redact(result.error) if result.error else None
+        if notification_id is not None:
+            self._repo.update_notification(
+                notification_id,
+                status="sent" if result.ok else "failed",
+                attempts=1,
+                sent_at=self._clock() if result.ok else None,
+                last_error=error,
+            )
+        return SendResult(ok=result.ok, error=error)
+
+    def retry_pending(self) -> int:
+        """Re-send failed/pending alerts still under the attempt cap; returns sent count."""
+        sent = 0
+        for record in self._repo.retryable_notifications(self._max_attempts):
+            if self._deliver(record.id, record.attempts, record.message_text):
+                sent += 1
+        return sent
+
+    def _deliver(self, notification_id: int, previous_attempts: int, text: str) -> bool:
+        if not self._notifier.is_configured():
+            self._repo.update_notification(
+                notification_id,
+                status="suppressed",
+                attempts=previous_attempts,
+                sent_at=None,
+                last_error=NOT_CONFIGURED,
+            )
+            return False
+        result = self._notifier.send(text)
+        attempts = previous_attempts + 1
+        if result.ok:
+            now = self._clock()
+            self._repo.update_notification(
+                notification_id, status="sent", attempts=attempts, sent_at=now, last_error=None
+            )
+            record = self._repo.get_notification(notification_id)
+            if record is not None:
+                self._after_sent(record)
+            return True
+        error = self._redact(result.error or "unknown error")[:500]
+        log.warning("notification %s failed (attempt %d): %s", notification_id, attempts, error)
+        self._repo.update_notification(
+            notification_id, status="failed", attempts=attempts, sent_at=None, last_error=error
+        )
+        return False
+
+    def _after_sent(self, record: NotificationRecord) -> None:
+        """Only a delivered alert moves the alert baseline (never a failed one)."""
+        if record.kind != "price_alert" or record.watch_id is None or not record.price_kind:
+            return
+        items = self._repo.notification_items(record.id)
+        if not items:
+            return
+        state = self._repo.get_alert_state(record.watch_id, record.price_kind)
+        below_budget = any("below_budget" in i.reasons for i in items)
+        self._repo.save_alert_state(
+            record.watch_id,
+            record.price_kind,
+            AlertStateRecord(
+                last_notified_amount_minor=min(i.amount_minor for i in items),
+                last_notified_at=record.sent_at or self._clock(),
+                armed=False if below_budget else state.armed,
+            ),
+        )

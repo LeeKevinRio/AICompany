@@ -1,0 +1,11 @@
+# Local environment and runtime state (never commit)
+.venv/
+data/
+*.db
+*.db-*
+*.sqlite*
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env

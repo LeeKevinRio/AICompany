@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == "edit" %}修改監看{% else %}新增監看{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{% if mode == "edit" %}修改監看{% else %}新增監看{% endif %}</h1>
+  {% if mode == "edit" %}<a class="button" href="/watches/{{ watch_id }}">返回詳情</a>{% endif %}
+</div>
+{% if mode == "edit" %}
+<p class="muted">修改路線、日期、行程型態或轉機條件後，舊價格紀錄會保留並標示為「舊設定」，通知比較只看新設定的價格。</p>
+{% endif %}
+<form id="watch-form" class="form" novalidate
+      data-mode="{{ mode }}"
+      data-url="{% if mode == 'edit' %}/api/watches/{{ watch_id }}{% else %}/api/watches{% endif %}">
+  <p class="form-error" data-error-for="_" role="alert"></p>
+
+  <fieldset>
+    <legend>路線</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="f-origin">出發地</label>
+        <input id="f-origin" name="origin" value="{{ values.origin }}" maxlength="3" autocomplete="off" required aria-describedby="h-origin err-origin">
+        <small id="h-origin" class="hint">3 碼代碼，例如 TPE</small>
+        <span id="err-origin" class="field-error" data-error-for="origin"></span>
+      </div>
+      <div class="field">
+        <label for="f-destination">目的地</label>
+        <input id="f-destination" name="destination" value="{{ values.destination }}" maxlength="3" autocomplete="off" required placeholder="例如 NRT" aria-describedby="err-destination">
+        <span id="err-destination" class="field-error" data-error-for="destination"></span>
+      </div>
+      <div class="field">
+        <label for="f-name">名稱（可留空）</label>
+        <input id="f-name" name="name" value="{{ values.name }}" maxlength="80" placeholder="預設為 出發地→目的地" aria-describedby="err-name">
+        <span id="err-name" class="field-error" data-error-for="name"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>行程</legend>
+    <fieldset class="group">
+      <legend>行程型態</legend>
+      <div class="choice-row">
+        <label class="inline"><input type="radio" name="trip_type" value="round_trip" {% if values.trip_type == "round_trip" %}checked{% endif %}> 來回</label>
+        <label class="inline"><input type="radio" name="trip_type" value="one_way" {% if values.trip_type == "one_way" %}checked{% endif %}> 單程</label>
+      </div>
+      <span class="field-error" data-error-for="trip_type"></span>
+    </fieldset>
+    <fieldset class="group">
+      <legend>日期模式</legend>
+      <div class="choice-row">
+        <label class="inline"><input type="radio" name="date_mode" value="fixed" {% if values.date_mode == "fixed" %}checked{% endif %}> 固定日期</label>
+        <label class="inline"><input type="radio" name="date_mode" value="flexible" {% if values.date_mode == "flexible" %}checked{% endif %}> 彈性窗</label>
+      </div>
+      <span class="field-error" data-error-for="date_mode"></span>
+    </fieldset>
+
+    <div class="grid" data-show-when="date_mode=fixed">
+      <div class="field">
+        <label for="f-depart_date">出發日</label>
+        <input id="f-depart_date" type="date" name="depart_date" min="{{ today }}" value="{{ values.depart_date }}" aria-describedby="err-depart_date">
+        <span id="err-depart_date" class="field-error" data-error-for="depart_date"></span>
+      </div>
+      <div class="field" data-show-when="trip_type=round_trip">
+        <label for="f-return_date">回程日</label>
+        <input id="f-return_date" type="date" name="return_date" min="{{ today }}" value="{{ values.return_date }}" aria-describedby="err-return_date">
+        <span id="err-return_date" class="field-error" data-error-for="return_date"></span>
+      </div>
+    </div>
+
+    <div class="grid" data-show-when="date_mode=flexible">
+      <div class="field">
+        <label for="f-window_start">最早出發日</label>
+        <input id="f-window_start" type="date" name="window_start" min="{{ today }}" value="{{ values.window_start }}" aria-describedby="err-window_start">
+        <span id="err-window_start" class="field-error" data-error-for="window_start"></span>
+      </div>
+      <div class="field">
+        <label for="f-window_end"><span data-label-round="最晚回程日" data-label-oneway="最晚出發日" class="js-window-end-label">最晚回程日</span></label>
+        <input id="f-window_end" type="date" name="window_end" min="{{ today }}" value="{{ values.window_end }}" aria-describedby="err-window_end">
+        <span id="err-window_end" class="field-error" data-error-for="window_end"></span>
+      </div>
+      <div class="field" data-show-when="trip_type=round_trip">
+        <label for="f-min_trip_days">旅程天數下限</label>
+        <input id="f-min_trip_days" type="number" name="min_trip_days" value="{{ values.min_trip_days }}" min="1" max="60" inputmode="numeric" aria-describedby="err-min_trip_days">
+        <span id="err-min_trip_days" class="field-error" data-error-for="min_trip_days"></span>
+      </div>
+      <div class="field" data-show-when="trip_type=round_trip">
+        <label for="f-max_trip_days">旅程天數上限</label>
+        <input id="f-max_trip_days" type="number" name="max_trip_days" value="{{ values.max_trip_days }}" min="1" max="60" inputmode="numeric" aria-describedby="err-max_trip_days">
+        <span id="err-max_trip_days" class="field-error" data-error-for="max_trip_days"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>條件</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="f-budget">預算門檻（TWD）</label>
+        <input id="f-budget" type="number" name="budget" value="{{ values.budget }}" min="1" step="1" inputmode="numeric" required aria-describedby="err-budget">
+        <span id="err-budget" class="field-error" data-error-for="budget"></span>
+      </div>
+      <div class="field">
+        <label for="f-max_stops">轉機次數上限</label>
+        <select id="f-max_stops" name="max_stops" aria-describedby="err-max_stops">
+          <option value="" {% if values.max_stops == "" %}selected{% endif %}>不限</option>
+          <option value="0" {% if values.max_stops == "0" %}selected{% endif %}>僅直飛</option>
+          <option value="1" {% if values.max_stops == "1" %}selected{% endif %}>最多 1 次</option>
+          <option value="2" {% if values.max_stops == "2" %}selected{% endif %}>最多 2 次</option>
+        </select>
+        <span id="err-max_stops" class="field-error" data-error-for="max_stops"></span>
+      </div>
+      <div class="static-field">
+        <span class="label">艙等／人數</span>
+        <span class="value">經濟艙・1 位成人</span>
+      </div>
+    </div>
+    <label class="inline"><input type="checkbox" name="notify_on_new_low" {% if values.notify_on_new_low %}checked{% endif %}> 查到此監看紀錄新低時也通知</label>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="primary" data-busy-label="儲存中…">{% if mode == "edit" %}儲存修改{% else %}建立監看{% endif %}</button>
+    <a class="button" href="{% if mode == 'edit' %}/watches/{{ watch_id }}{% else %}/{% endif %}">取消</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}設定與健康{% endblock %}
+{% block content %}
+<div class="page-head"><h1>設定與健康狀態</h1></div>
+
+<section class="card">
+  <h2>資料源狀態</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="資料源狀態（可橫向捲動）">
+  <table class="data">
+    <thead><tr><th>資料源</th><th>狀態</th><th>斷路器</th><th>連續失敗</th><th>最近成功</th><th>最近失敗</th><th>最近失敗原因</th></tr></thead>
+    <tbody>
+    {% for h in health %}
+      <tr>
+        <td>{{ h.name }}</td>
+        <td><span class="badge health-{{ h.state_key }}">{{ h.state }}</span></td>
+        <td>{{ h.breaker }}{% if h.open_until %}<div class="muted">暫停至 {{ h.open_until }}</div>{% endif %}</td>
+        <td class="num">{{ h.failures }}（門檻 {{ h.threshold }}）</td>
+        <td>{{ h.last_success or "—" }}</td>
+        <td>{{ h.last_failure or "—" }}</td>
+        <td class="muted error-text">{{ h.last_error or "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>排程</h2>
+  <dl class="facts">
+    <dt>排程器</dt><dd>{% if scheduler_running %}執行中{% else %}未執行{% endif %}</dd>
+    {% if last_scan %}
+    <dt>上次掃描</dt><dd>{{ last_scan.watch }}・開始 {{ last_scan.started }}・結束 {{ last_scan.finished }}・{{ last_scan.status }}</dd>
+    {% else %}
+    <dt>上次掃描</dt><dd>尚未掃描</dd>
+    {% endif %}
+    <dt>下次預計掃描</dt><dd>{{ next_run or "無（沒有啟用中的監看或排程器未執行）" }}</dd>
+    <dt>最近一小時查詢</dt><dd>{{ hourly_used }} / {{ hourly_limit }} 次</dd>
+  </dl>
+  {% if events %}
+  <details>
+    <summary>排程事件（略過、錯誤）</summary>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="排程事件（可橫向捲動）">
+    <table class="data compact">
+      <thead><tr><th>時間</th><th>事件</th><th>說明</th></tr></thead>
+      <tbody>{% for e in events %}<tr><td>{{ e.at }}</td><td>{{ e.kind }}</td><td>{{ e.detail or "" }}</td></tr>{% endfor %}</tbody>
+    </table>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>最近一輪各監看查詢次數</h2>
+  {% if usage %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="各監看查詢次數（可橫向捲動）">
+  <table class="data compact">
+    <thead><tr><th>監看</th><th>掃描時間</th><th>對外查詢次數</th><th>取樣／總組合</th><th>結果</th></tr></thead>
+    <tbody>
+    {% for u in usage %}
+      <tr>
+        <td><a href="/watches/{{ u.watch_id }}">{{ u.watch }}</a></td>
+        <td>{{ u.started }}</td>
+        <td class="num">{{ u.queries_used }}</td>
+        <td class="num">{{ u.sampled }}/{{ u.total_pairs }}{% if u.limit_reached %}（達上限）{% endif %}{% if u.global_limit_reached %}（達全域上限）{% endif %}</td>
+        <td>{{ u.status }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">尚無掃描紀錄。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Telegram 通知</h2>
+  {% if telegram_configured %}
+  <p><span class="badge health-ok">已設定</span> bot token 與 chat id 已由環境變數載入（頁面不顯示其內容）。</p>
+  <button type="button" data-action="telegram-test" data-busy-label="發送中…">發送測試訊息</button>
+  <span id="telegram-test-result" class="inline-result" role="status" aria-live="polite"></span>
+  {% else %}
+  <p><span class="badge health-unknown">未設定</span> 目前不會送出任何通知（通知紀錄仍會保存）。</p>
+  <ol class="steps">
+    <li>在 Telegram 找 <strong>@BotFather</strong>，輸入 <code>/newbot</code> 建立 bot，取得 bot token。</li>
+    <li>先對你的 bot 傳一則訊息，再用瀏覽器開啟 <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code>，從回應中的 <code>chat.id</code> 取得 chat id。</li>
+    <li>在 <code>apps/flight-deals/.env</code>（不進 git）或環境變數設定 <code>FLIGHT_DEALS_TELEGRAM_BOT_TOKEN</code> 與 <code>FLIGHT_DEALS_TELEGRAM_CHAT_ID</code>，然後重新啟動服務。</li>
+  </ol>
+  <button type="button" data-action="telegram-test" data-busy-label="發送中…">發送測試訊息</button>
+  <span id="telegram-test-result" class="inline-result" role="status" aria-live="polite"></span>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>全域設定</h2>
+  <form id="settings-form" class="form" novalidate>
+    <p class="form-error" data-error-for="_" role="alert"></p>
+    <div class="grid">
+    {% for s in settings %}
+      <div class="field">
+        <label for="f-{{ s.key }}">{{ s.label }}</label>
+        <input id="f-{{ s.key }}" type="number" name="{{ s.key }}" value="{{ s.value }}" min="{{ s.min }}" max="{{ s.max }}" step="1" inputmode="numeric" required aria-describedby="h-{{ s.key }} err-{{ s.key }}">
+        <small id="h-{{ s.key }}" class="hint">範圍 {{ s.min }}–{{ s.max }}，預設 {{ s.default }}{% if s.key == "drop_threshold_bp" %}（100 bp = 1%）{% endif %}</small>
+        <span id="err-{{ s.key }}" class="field-error" data-error-for="{{ s.key }}"></span>
+      </div>
+    {% endfor %}
+    </div>
+    <p class="muted">修改後從下一輪掃描起生效；掃描週期變更會立即重新排程。</p>
+    <div class="form-actions"><button type="submit" class="primary" data-busy-label="儲存中…">儲存設定</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>存取範圍</h2>
+  <p class="muted">服務只綁定 127.0.0.1，且只接受 Host 為 127.0.0.1 或 localhost 的請求；沒有登入機制，請勿對外開放。</p>
+</section>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}通知紀錄{% endblock %}
+{% block content %}
+<div class="page-head"><h1>通知紀錄</h1></div>
+{% if not notifications %}
+<div class="empty"><p>尚無通知紀錄。</p><p class="muted">符合通知條件的價格、資料源異常告警與測試訊息都會記錄在這裡。</p></div>
+{% else %}
+<div class="table-wrap" tabindex="0" role="region" aria-label="通知紀錄（可橫向捲動）">
+<table class="data">
+  <thead>
+    <tr><th>建立時間</th><th>監看</th><th>類型</th><th>觸發原因</th><th>價格</th><th>結果</th><th>嘗試</th><th>內容</th></tr>
+  </thead>
+  <tbody>
+  {% for n in notifications %}
+    <tr>
+      <td>{{ n.created }}{% if n.sent %}<div class="muted">送出 {{ n.sent }}</div>{% endif %}</td>
+      <td>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
+      <td>{{ n.kind }}</td>
+      <td>{{ n.reasons }}</td>
+      <td class="num">{{ n.price }}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
+      <td><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
+      <td class="num">{{ n.attempts }}/{{ n.max_attempts }}</td>
+      <td><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

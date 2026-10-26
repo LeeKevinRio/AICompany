@@ -1,0 +1,921 @@
+{
+ "query": "TPE-NRT 2026-12-10/2026-12-15 round-trip economy 1 adult TWD zh-TW",
+ "fetched_at": "2026-10-25T22:45:35",
+ "elapsed_s": 0.9539427757263184,
+ "flights": [
+  {
+   "type": "TR",
+   "price": 10088,
+   "airlines": [
+    "酷航"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       6,
+       50
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       10,
+       55
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Boeing 787"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 135000
+   }
+  },
+  {
+   "type": "GK",
+   "price": 11062,
+   "airlines": [
+    "捷星日本航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "關西國際機場",
+      "code": "KIX"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       18,
+       15
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       21,
+       45
+      ]
+     },
+     "duration": 150,
+     "plane_type": "Airbus A320"
+    },
+    {
+     "from_airport": {
+      "name": "關西國際機場",
+      "code": "KIX"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       11
+      ],
+      "time": [
+       7,
+       25
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       11
+      ],
+      "time": [
+       8,
+       50
+      ]
+     },
+     "duration": 85,
+     "plane_type": "Airbus A320"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 222000
+   }
+  },
+  {
+   "type": "IT",
+   "price": 11136,
+   "airlines": [
+    "台灣虎航"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       6,
+       35
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       10,
+       35
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Airbus A320"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 182000
+   }
+  },
+  {
+   "type": "GK",
+   "price": 11310,
+   "airlines": [
+    "捷星日本航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       50
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       16,
+       55
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Airbus A321neo"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 143000
+   }
+  },
+  {
+   "type": "MM",
+   "price": 11567,
+   "airlines": [
+    "樂桃航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       10,
+       40
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       14,
+       55
+      ]
+     },
+     "duration": 195,
+     "plane_type": "Airbus A320neo"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 151000
+   }
+  },
+  {
+   "type": "MM",
+   "price": 12367,
+   "airlines": [
+    "樂桃航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       2,
+       25
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       6,
+       30
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Airbus A320neo"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 151000
+   }
+  },
+  {
+   "type": "CI",
+   "price": 12633,
+   "airlines": [
+    "中華航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       16,
+       25
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       20,
+       30
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Airbus A321neo"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 203000
+   }
+  },
+  {
+   "type": "BR",
+   "price": 12780,
+   "airlines": [
+    "長榮航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       15,
+       20
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       19,
+       20
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Boeing 787-10"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 141000
+   }
+  },
+  {
+   "type": "CI",
+   "price": 13423,
+   "airlines": [
+    "中華航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       35
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       16,
+       35
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Airbus A350"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 178000
+   }
+  },
+  {
+   "type": "LJ",
+   "price": 14203,
+   "airlines": [
+    "真航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "釜山/金海國際機場",
+      "code": "PUS"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       2,
+       40
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       6,
+       10
+      ]
+     },
+     "duration": 150,
+     "plane_type": "Boeing 737"
+    },
+    {
+     "from_airport": {
+      "name": "釜山/金海國際機場",
+      "code": "PUS"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       9,
+       30
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       0
+      ]
+     },
+     "duration": 150,
+     "plane_type": "Boeing 737"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 230000
+   }
+  },
+  {
+   "type": "CI",
+   "price": 14359,
+   "airlines": [
+    "中華航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       14,
+       25
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       18,
+       30
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Airbus A321neo"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 203000
+   }
+  },
+  {
+   "type": "CX",
+   "price": 14663,
+   "airlines": [
+    "國泰航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       50
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       16,
+       50
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Boeing 777"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 143000
+   }
+  },
+  {
+   "type": "JL",
+   "price": 15829,
+   "airlines": [
+    "日本航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       10,
+       40
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       14,
+       40
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Boeing 737"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 241000
+   }
+  },
+  {
+   "type": "JX",
+   "price": 15982,
+   "airlines": [
+    "星宇航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       8,
+       25
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       35
+      ]
+     },
+     "duration": 190,
+     "plane_type": "Airbus A350"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 155000
+   }
+  },
+  {
+   "type": "JX",
+   "price": 15982,
+   "airlines": [
+    "星宇航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       10,
+       10
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       14,
+       20
+      ]
+     },
+     "duration": 190,
+     "plane_type": "Airbus A350"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 155000
+   }
+  },
+  {
+   "type": "CI",
+   "price": 16356,
+   "airlines": [
+    "中華航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       9,
+       30
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       13,
+       30
+      ]
+     },
+     "duration": 180,
+     "plane_type": "Airbus A350"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 184000
+   }
+  },
+  {
+   "type": "BR",
+   "price": 19546,
+   "airlines": [
+    "長榮航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       7,
+       55
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       0
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Boeing 787-10"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 141000
+   }
+  },
+  {
+   "type": "BR",
+   "price": 20807,
+   "airlines": [
+    "長榮航空"
+   ],
+   "flights": [
+    {
+     "from_airport": {
+      "name": "臺灣桃園國際機場",
+      "code": "TPE"
+     },
+     "to_airport": {
+      "name": "成田國際機場",
+      "code": "NRT"
+     },
+     "departure": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       8,
+       50
+      ]
+     },
+     "arrival": {
+      "date": [
+       2026,
+       12,
+       10
+      ],
+      "time": [
+       12,
+       55
+      ]
+     },
+     "duration": 185,
+     "plane_type": "Boeing 787-10"
+    }
+   ],
+   "carbon": {
+    "typical_on_route": 163000,
+    "emission": 141000
+   }
+  }
+ ]
+}

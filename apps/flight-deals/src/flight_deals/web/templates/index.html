@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}監看列表{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>監看列表</h1>
+  <a class="button primary" href="/watches/new">新增監看</a>
+</div>
+{% if not watches %}
+<div class="empty">
+  <p>還沒有任何監看。</p>
+  <p>建立一個監看後，系統會依排程查價並保存價格紀錄。</p>
+  <a class="button primary" href="/watches/new">建立第一個監看</a>
+</div>
+{% else %}
+<p class="disclaimer">{{ disclaimer }}</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="監看列表（可橫向捲動）">
+<table class="data">
+  <thead>
+    <tr>
+      <th>名稱／路線</th>
+      <th>日期設定</th>
+      <th>預算</th>
+      <th>狀態</th>
+      <th>已查到最低價</th>
+      <th>上次查價</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for w in watches %}
+    <tr data-watch-id="{{ w.id }}">
+      <td>
+        <a href="/watches/{{ w.id }}"><strong>{{ w.name }}</strong></a>
+        <div class="muted">{{ w.route }}・{{ w.trip }}</div>
+      </td>
+      <td>{{ w.dates }}</td>
+      <td class="num">{{ w.budget }}</td>
+      <td><span class="badge status-{{ w.status }}">{{ w.status_label }}</span></td>
+      <td class="num">
+        {% if w.min_price %}
+          {{ w.min_price }}<div class="muted">{{ w.min_price_dates }}</div>
+        {% else %}
+          <span class="muted">尚未查價</span>
+        {% endif %}
+      </td>
+      <td>{% if w.last_scanned %}{{ w.last_scanned }}{% else %}<span class="muted">尚未查價</span>{% endif %}</td>
+      <td><div class="actions">
+        <a class="button small" href="/watches/{{ w.id }}">詳情</a>
+        <a class="button small" href="/watches/{{ w.id }}/edit">修改</a>
+        {% if not w.expired %}
+          {% if w.enabled %}
+          <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="false">停用</button>
+          <button type="button" class="small" data-action="scan-now" data-watch-id="{{ w.id }}" data-busy-label="查價中…">立即查價</button>
+          {% else %}
+          <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="true">啟用</button>
+          {% endif %}
+        {% endif %}
+        <button type="button" class="small danger" data-action="delete-watch" data-watch-id="{{ w.id }}" data-watch-name="{{ w.name }}">刪除</button>
+      </div></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
