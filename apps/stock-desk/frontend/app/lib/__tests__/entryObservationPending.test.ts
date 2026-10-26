@@ -223,6 +223,27 @@ describe("page.tsx wiring", () => {
     expect(pageSrc).toContain("pending={entryObservationPending}");
     expect(pageSrc).toContain("movingAveragesPending={signals.isPending}");
   });
+
+  // 風控 2026-10-26 結案確認 R4（重開條件絆線）：此測試一旦要改，即觸發風控 2026-10-26
+  // 第 1 點的重開條件，須送回風控重審。A disabled query with no data stays
+  // `isPending` forever (E-4 would vanish for good), and placeholder / initial /
+  // previous data would print a count from another symbol's payload.
+  it("R4: the three queries are always enabled and never seeded with placeholder / initial / previous data", () => {
+    for (const call of ["useSignals(symbol, market, true)", "useBars(symbol, market, true)", "useAdvice(symbol, market, true)"]) {
+      expect(pageSrc).toContain(call);
+    }
+    const queriesSrc = readFileSync(fileURLToPath(new URL("../queries.ts", import.meta.url)), "utf8");
+    for (const hook of ["useSignals", "useBars", "useAdvice"]) {
+      const start = queriesSrc.indexOf(`export function ${hook}(`);
+      expect(start, hook).toBeGreaterThan(-1);
+      const body = queriesSrc.slice(start, queriesSrc.indexOf("\n}\n", start));
+      expect(body, hook).toContain("enabled: enabled && symbol.length > 0,");
+      for (const banned of ["placeholderData", "keepPreviousData", "initialData"]) expect(body, `${hook} ${banned}`).not.toContain(banned);
+    }
+    const providersSrc = readFileSync(fileURLToPath(new URL("../../providers.tsx", import.meta.url)), "utf8");
+    expect(providersSrc).toContain("new QueryClient()");
+    expect(providersSrc).not.toContain("defaultOptions");
+  });
 });
 
 /* ------------------------------------------------------------ whole page */
