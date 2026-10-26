@@ -23,8 +23,12 @@ import type { AdviceCard, CardAction, LimitCheck } from "./types";
 /** The limit id that C-5 keeps out of the violation / not-evaluable lists. 風控 2026-10-26 定稿；失效條件 T1 */
 const EXCLUDED_LIMIT_ID = "kelly_fraction";
 
-/** Held actions on which the 2-R sentence may appear (C-6); `add` and `insufficient_data` never do. 風控 2026-10-26 定稿；失效條件 T1、T9 */
-const NOTICE_ACTIONS: readonly CardAction[] = ["hold", "reduce", "take_profit", "stop_loss"];
+/**
+ * Held actions on which the 2-R sentence may appear: `hold` only. add, reduce, take_profit, stop_loss and
+ * insufficient_data never show it (on the sell side the sentence is empty or clashes with the quantity range).
+ * 風控 2026-10-26 裁定修訂 C-6；失效條件 T1、T9
+ */
+const NOTICE_ACTIONS: readonly CardAction[] = ["hold"];
 
 export interface LimitNotices {
   /** 2-M title; null when there are 0 or 1 violated limits (1 uses 2-V, which has no title). */

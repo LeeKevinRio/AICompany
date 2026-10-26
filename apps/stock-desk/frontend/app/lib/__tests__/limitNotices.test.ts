@@ -237,12 +237,13 @@ describe("buildLimitNotices — 顯示條件（C-5、C-6）", () => {
     expect(buildLimitNotices(makeCard({ limits_check: [] }), "held").hasAny).toBe(false);
   });
 
-  // 2-R 只限 held，且動作屬於 hold／reduce／take_profit／stop_loss（C-6）；{動作} 取 HELD_ACTION_LABELS[action]。
+  // 行為變更（風控修訂 C-6，2026-10-26 裁定）：2-R 只限 held 且 action 為 hold；
+  // reduce／take_profit／stop_loss 原本顯示，現改為不顯示。{動作} 仍取 HELD_ACTION_LABELS[action]。
   const ACTIONS: ReadonlyArray<{ action: CardAction; shown: boolean }> = [
     { action: "hold", shown: true },
-    { action: "reduce", shown: true },
-    { action: "take_profit", shown: true },
-    { action: "stop_loss", shown: true },
+    { action: "reduce", shown: false },
+    { action: "take_profit", shown: false },
+    { action: "stop_loss", shown: false },
     { action: "add", shown: false },
     { action: "insufficient_data", shown: false },
   ];
@@ -252,6 +253,24 @@ describe("buildLimitNotices — 顯示條件（C-5、C-6）", () => {
       expect(n.actionNotice).toBe(shown ? buildLimitsDoNotChangeActionNotice(HELD_ACTION_LABELS[action]) : null);
     });
   }
+
+  // 行為新增（風控修訂 C-6）：00631L 型 fixture——reduce 加上第 1、4 條違反——沒有 2-R，
+  // 但 2-M、2-O 照常顯示（保護 2-R 的顯示動作集合只含 hold）。
+  it("2-R：reduce 加第 1、4 條違反（00631L 型）→ actionNotice 為 null，2-M 與 2-O 照常顯示", () => {
+    const n = buildLimitNotices(
+      makeCard({
+        action: "reduce",
+        aggregated_action: "reduce",
+        limits_check: [CAP1_VIOLATED, CAP2_NOT_EVALUABLE, CAP4_VIOLATED, CAP5_NOT_EVALUABLE],
+      }),
+      "held",
+    );
+    expect(n.actionNotice).toBeNull();
+    expect(n.violationTitle).toBe("已違反 2 條上限：");
+    expect(n.violationLines).toHaveLength(2);
+    expect(n.notEvaluableNotice).toBe("另有 1 條上限無法評估，不代表已通過；見下方建議卡。");
+    expect(n.hasAny).toBe(true);
+  });
 
   it("2-R：沒有任何違反（只有 not_evaluable）不顯示", () => {
     expect(buildLimitNotices(makeCard({ limits_check: [CAP2_NOT_EVALUABLE] }), "held").actionNotice).toBeNull();
@@ -341,6 +360,21 @@ describe("DecisionCardBody — 上限區塊的位置與呈現（C-5、C-6）", (
     expect(m).not.toBeNull();
     expect(m![1]).toContain("text-sm");
     expect(m![1]).not.toMatch(/text-xs|truncate|line-clamp|hidden/);
+  });
+
+  // 行為新增（風控修訂 C-6）：渲染層也確認 reduce 的 00631L 型卡片沒有 2-R，其餘上限句與 3-S 都在。
+  it("held reduce（00631L 型）：看不到 2-R，但 2-M、2-O 與 3-S 都在", () => {
+    const html = render(
+      makeCard({
+        action: "reduce",
+        aggregated_action: "reduce",
+        limits_check: [CAP1_VIOLATED, CAP2_NOT_EVALUABLE, CAP4_VIOLATED, CAP5_NOT_EVALUABLE],
+      }),
+    );
+    expect(html).not.toContain("不代表你的部位在上限內");
+    expect(html).toContain("已違反 2 條上限：");
+    expect(html).toContain("另有 1 條上限無法評估，不代表已通過；見下方建議卡。");
+    expect(html).toContain("依固定規則產生的操作參考");
   });
 
   it("candidate：看得到違反與無法評估句，看不到 2-R 與被擋句", () => {
