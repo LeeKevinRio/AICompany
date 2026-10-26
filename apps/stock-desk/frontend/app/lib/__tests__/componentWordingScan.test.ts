@@ -406,6 +406,7 @@ const SCANNED_FILES = [
   // 風控五項整改（CEO #59；風控 2026-10-26 逐字定稿）：新字面模組與渲染它們的元件，
   // 逐字釘住見 riskRemediationWording.test.ts。
   "../riskRemediationWording.ts",
+  "../limitNotices.ts",
   "../../position/[symbol]/UnvalidatedNotice.tsx",
 ] as const;
 

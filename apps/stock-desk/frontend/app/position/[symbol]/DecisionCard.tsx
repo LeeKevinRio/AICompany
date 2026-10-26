@@ -13,6 +13,8 @@ import {
   RULE_SOURCE_CHIP,
 } from "../../lib/adviceWording";
 import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/ruleSelection";
+import { buildLimitNotices } from "../../lib/limitNotices";
+import type { LimitNotices } from "../../lib/limitNotices";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import {
   DECISION_CARD_ARIA_LABEL,
@@ -241,6 +243,48 @@ function MainSlot({ model }: { model: OperationSummaryModel }) {
 }
 
 /**
+ * The limit block on the main screen (risk remediation 2-V / 2-M, the lifted
+ * blocked-add sentence, 2-R, 2-O; constraints C-5 and C-6). Always in the main
+ * view, never inside a `<details>`, `text-sm` at the smallest. The sentences
+ * and their display conditions come from `buildLimitNotices`; this component
+ * only lays them out. 風控 2026-10-26 定稿；失效條件 T1、T9.
+ */
+function LimitNoticeBlock({ notices }: { notices: LimitNotices }) {
+  const hasViolation = notices.violationLines.length > 0;
+  return (
+    <div className="mt-3 space-y-2">
+      {hasViolation && (
+        <div className="rounded-md border border-rose-800 bg-rose-950/50 px-4 py-3 text-sm text-rose-300">
+          {notices.violationTitle !== null ? (
+            <>
+              <p className="font-semibold">{notices.violationTitle}</p>
+              <ul className="mt-1 space-y-1">
+                {notices.violationLines.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="font-semibold">{notices.violationLines[0]}</p>
+          )}
+        </div>
+      )}
+      {notices.blockedNotices.map((notice, i) => (
+        <p key={i} className="text-sm text-neutral-200">
+          {notice}
+        </p>
+      ))}
+      {notices.actionNotice !== null && (
+        <p className="text-sm text-neutral-200">{notices.actionNotice}</p>
+      )}
+      {notices.notEvaluableNotice !== null && (
+        <p className="text-sm text-neutral-200">{notices.notEvaluableNotice}</p>
+      )}
+    </div>
+  );
+}
+
+/**
  * Exported (only) so `decisionCard.test.ts` can render it directly via
  * `renderToStaticMarkup`, mirroring `OperationSummaryPanel.tsx`'s own
  * `SummaryBody` export for the same reason — every other caller goes through
@@ -364,6 +408,11 @@ export function DecisionCardBody({
       ? pickRuleForAction(card.matched_rules, card.action)
       : null;
   const invalidationBody = invalidationRule?.invalidation ?? null;
+  // Risk remediation item 2 (C-5 / C-6): held and candidate only; no_action / no_price have no limit block.
+  const limitNotices =
+    card !== null && (model.kind === "held" || model.kind === "candidate")
+      ? buildLimitNotices(card, model.kind)
+      : null;
   // Risk review 2026-10-04 R1 (position B): keyed by the picked rule's id.
   const invalidationDisclosure = invalidationDisclosureForRule(invalidationRule);
   const invalidationPrefix =
@@ -437,6 +486,8 @@ export function DecisionCardBody({
           />
         </div>
       </div>
+
+      {limitNotices !== null && limitNotices.hasAny && <LimitNoticeBlock notices={limitNotices} />}
 
       {/*
         Risk review 2026-10-03 item 4: prefix and body share one <p> at the
