@@ -588,8 +588,9 @@ def _book_equity(summary: PortfolioSummary) -> tuple[float, int, int]:
 def _fully_valued(summary: PortfolioSummary) -> bool:
     """Whether every stored position could be valued.
 
-    An empty book is ``True``: nothing failed to value, and an exposure of zero
-    against a reported net worth is a fact, not a gap.
+    An empty book is ``True``: nothing failed to value. That alone does not
+    make its exposure a 0% pass -- cap 3 withholds itself on an empty book
+    through ``book_holding_count`` (B-16), not through this flag.
     """
     return all(position.valuation.status == "ok" for position in summary.positions)
 
@@ -1201,6 +1202,8 @@ def build_book_level_context(
         gross_exposure_twd=equity if net_worth is not None else None,
         net_worth=net_worth,
         book_fully_valued=_fully_valued(summary),
+        # Per ``(symbol, market)``, the overview's grouping (B-16).
+        book_holding_count=len(groups),
         # Classified like any other context, with no symbol of its own and no
         # industry: so no path that is shown to a user ever reaches the
         # "caller did not say" fallback (ADR-0023 R-10), and the overview's
@@ -1406,6 +1409,8 @@ def build_book_context(
         gross_exposure_twd=equity if net_worth is not None else None,
         net_worth=net_worth,
         book_fully_valued=fully_valued,
+        # Per ``(symbol, market)``, the overview's grouping (B-16).
+        book_holding_count=len(groups),
         quantity=quantity,
         close=close if priced and rate is not None else None,
         # ``close`` is ``None`` whenever ``rate`` is, so this 1.0 is never

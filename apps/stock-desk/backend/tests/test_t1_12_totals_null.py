@@ -24,7 +24,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.advice.book import _book_equity, self_reported_net_worth
-from app.advice.limits import GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL, RiskBudget
+from app.advice.limits import (
+    EMPTY_BOOK_DETAIL,
+    GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL,
+    LIMIT_NAMES,
+    RiskBudget,
+)
 from app.alerts.snapshot import build_snapshot
 from app.data.cache import PriceBarCache
 from app.data.interface import Market, PriceBar
@@ -284,11 +289,12 @@ def test_t4a_an_unpriced_book_withholds_gross_exposure_on_both_surfaces(
             assert caps[limit_id]["status"] == "not_evaluable", limit_id
 
 
-def test_t4b_an_empty_book_with_a_net_worth_is_pinned_as_it_stands(
+def test_t4b_an_empty_book_with_a_net_worth_is_withheld_on_both_surfaces(
     api_harness: ApiHarness,
 ) -> None:
-    # Pinned, not judged (A-5 T4 (b)): the overview withholds cap 3 for an empty
-    # book while the card still computes 0% against the reported net worth.
+    # Flipped by B-16 (tech-architect B-16 item 5; 風控 2026-10-16 B-16): the
+    # card no longer computes 0% against the reported net worth on an empty
+    # book; both surfaces report cap 3 not_evaluable with the approved sentence.
     _report_net_worth(api_harness)
     api_harness.price_service.seed("2330", recent_bars(trending_closes(200), symbol="2330"))
     overview = _overview_caps(api_harness)["gross_exposure"]
@@ -296,8 +302,10 @@ def test_t4b_an_empty_book_with_a_net_worth_is_pinned_as_it_stands(
     assert overview["observed"] is None
     assert "帳本內沒有任何持倉" in overview["detail"]
     card = _card_caps(api_harness, "2330")["gross_exposure"]
-    assert card["status"] == "passed"
-    assert card["observed"] == 0.0
+    assert card["status"] == "not_evaluable"
+    assert card["observed"] is None
+    assert card["detail"] == EMPTY_BOOK_DETAIL.format(name=LIMIT_NAMES["gross_exposure"])
+    assert overview["detail"] == card["detail"]
 
 
 def test_t4c_reporting_a_net_worth_on_an_unpriced_book_stores_no_yardstick(
