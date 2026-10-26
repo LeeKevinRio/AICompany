@@ -403,6 +403,10 @@ const SCANNED_FILES = [
   // F-7 價格單位標籤 (風控 F7-R1~R10, 2026-10-08): the two approved price-unit strings and the
   // chip class live only in this component; pinned verbatim by priceUnitBadge.test.ts.
   "../../position/[symbol]/PriceUnitBadge.tsx",
+  // 風控五項整改（CEO #59；風控 2026-10-26 逐字定稿）：新字面模組與渲染它們的元件，
+  // 逐字釘住見 riskRemediationWording.test.ts。
+  "../riskRemediationWording.ts",
+  "../../position/[symbol]/UnvalidatedNotice.tsx",
 ] as const;
 
 /**
@@ -1017,7 +1021,7 @@ describe("個股頁減負 新字面與頁級揭露區守門", () => {
 
   it("建議卡銜接句逐字比對定稿（含 C7 的「非結論」否定式限定）", () => {
     expect(ADVICE_CARD_XREF_TO_SUMMARY).toBe(
-      "結論、信心等級、免責事項、反面論點、失效條件與建議數量區間，已完整列於上方操作摘要；" +
+      "結論、免責事項、反面論點、失效條件與建議數量區間，已完整列於上方操作摘要；" +
         "本卡以下僅列命中規則、風險上限檢查與資料完整度等規則明細；規則明細本身不是結論。",
     );
     expect(ADVICE_CARD_XREF_TO_SUMMARY).toContain("規則明細本身不是結論");
@@ -1676,13 +1680,17 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(detailsIdx).toBeGreaterThan(-1);
     for (const needle of [
       "<InlineDisclaimer text={model.required.disclaimer} />",
-      "{model.required.confidenceMeaning}",
       "反面論點",
       "<DataMetaPrefixLine response={response} />",
     ]) {
       const idx = region.indexOf(needle);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
     }
+    // 風控 2026-10-26 定稿（連動 confidenceMeaning）：不再渲染（API 欄位保留）；
+    // 原「只出現在 <details> 內」斷言改為「整個區段都不渲染」，並新增 1-L 標示在主視圖的斷言。
+    expect(region).not.toContain("{model.required.confidenceMeaning}");
+    expect(region.slice(0, detailsIdx)).toContain("<UnvalidatedNotice />");
+    expect(region).not.toContain("{CONFIDENCE_PREFIX}");
     // wave3：CANDIDATE_EVIDENCE_NOTICE 這句字面在檔案中出現兩處——一處是
     // `showBadge ? 徽章 : 原句` 三元運算式的 else 分支（防呆用，主視圖區塊內，
     // 但 `showBadge` 恆為 true 所以永遠不會實際渲染到），另一處才是真正常駐
@@ -1710,7 +1718,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(mainRegion).not.toContain("QuantitySection");
   });
 
-  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴只出現在 <details> 之後；整個 held 區段（含 <details>）不再渲染舊「規則評估：{動作}」行（L-11 (d)，風控 2026-10-04 裁示，不含 buildLegacyAttributedHeadline 與全形「規則評估：」）；主視圖保留結論大字、RULE_SOURCE_CHIP、CONFIDENCE_PREFIX 信心 chip、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
+  it("操作摘要 held 分支（wave3，派工單 §4.3 第 1／3／6 點；決策卡 required 條件 9 落地後更新）：disclaimer／confidenceMeaning／反面論點／explanation 半句／資料來源前綴只出現在 <details> 之後；整個 held 區段（含 <details>）不再渲染舊「規則評估：{動作}」行（L-11 (d)，風控 2026-10-04 裁示，不含 buildLegacyAttributedHeadline 與全形「規則評估：」）；主視圖保留結論大字、RULE_SOURCE_CHIP、1-L「未經歷史驗證」標示（取代信心 chip）、依據規則名、StaleDataAlert；role=alert 的 restoresComplianceWarning 已移至 DecisionCard.tsx，本檔主視圖不再渲染", () => {
     const start = summarySrc.indexOf('// model.kind === "held"');
     const end = summarySrc.indexOf("function DataMetaPrefixLine");
     expect(start).toBeGreaterThan(-1);
@@ -1720,7 +1728,6 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(detailsIdx).toBeGreaterThan(-1);
     for (const needle of [
       "<InlineDisclaimer text={model.required.disclaimer} />",
-      "{model.required.confidenceMeaning}",
       "反面論點",
       "——{model.topMatchedRule.explanation}",
       "<DataMetaPrefixLine response={response} />",
@@ -1728,11 +1735,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
       const idx = region.indexOf(needle);
       expect(idx, `${needle} 應出現、且只出現在 <details> 內`).toBeGreaterThan(detailsIdx);
     }
+    // 風控 2026-10-26 定稿（連動 confidenceMeaning）：不再渲染；信心 chip 換成 1-L 標示。
+    expect(region).not.toContain("{model.required.confidenceMeaning}");
     const mainRegion = region.slice(0, detailsIdx);
     expect(mainRegion).toContain("{model.attributedHeadline}");
     expect(mainRegion).toContain("{RULE_SOURCE_CHIP}");
-    expect(mainRegion).toContain("{CONFIDENCE_PREFIX}");
-    expect(mainRegion).toContain("{summaryConfidenceLabel(model.required.confidence)}");
+    expect(mainRegion).toContain("<UnvalidatedNotice />");
+    expect(region).not.toContain("{CONFIDENCE_PREFIX}");
+    expect(region).not.toContain("summaryConfidenceLabel");
     expect(mainRegion).toContain("{RULE_BASIS_PREFIX}");
     expect(mainRegion).toContain("{model.topMatchedRule.name}");
     expect(mainRegion).not.toContain("{model.topMatchedRule.explanation}");
@@ -1961,7 +1971,7 @@ describe("六項觀察條件 守門（T1～T14）", () => {
       "以上六條門檻皆為本面板自訂之固定值；成立數僅為符合門檻的條數，不代表機率、達成率或任何買賣判斷。",
     );
     for (const q of ["自訂之固定值", "僅為符合門檻的條數", "不代表機率、達成率或任何買賣判斷"]) expect(ENTRY_E1_QUALIFIER).toContain(q);
-    expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論、信心等級與免責事項見上方操作摘要。");
+    expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論與免責事項見上方操作摘要。");
     expect(ENTRY_E3_DASH_NOTE).toBe("「—」代表無法判定，不代表數值為零，也不代表未成立。");
     expect(ENTRY_NO_DATA_STATEMENT).toBe("目前資料不足，六條條件均無法判定。");
     expect(LADDER_BAND_TAG).toBe("MA20 ±3%");

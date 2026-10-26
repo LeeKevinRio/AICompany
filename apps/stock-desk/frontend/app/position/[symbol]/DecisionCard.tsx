@@ -7,12 +7,10 @@ import { computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import type { OperationSummaryModel } from "../../lib/operationSummary";
 import {
-  CONFIDENCE_PREFIX,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
   QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
-  summaryConfidenceLabel,
 } from "../../lib/adviceWording";
 import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/ruleSelection";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
@@ -29,6 +27,7 @@ import {
   buildFooterGuidance,
 } from "../../lib/footerDisclosureWording";
 import { PriceUnitBadge } from "./PriceUnitBadge";
+import { UnvalidatedNotice } from "./UnvalidatedNotice";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
@@ -178,13 +177,7 @@ function NumberCell({
  * `compositionText`／`supportiveDisclaimer`／`notSupportiveText`；no_action：
  * `INSUFFICIENT_DATA_NO_EVALUATION`；no_price：`InsufficientPanel`）。
  */
-function MainSlot({
-  model,
-  showConfidence,
-}: {
-  model: OperationSummaryModel;
-  showConfidence: boolean;
-}) {
+function MainSlot({ model }: { model: OperationSummaryModel }) {
   if (model.kind === "no_price") {
     return <InsufficientPanel reason={model.reason} />;
   }
@@ -221,6 +214,8 @@ function MainSlot({
             {model.notSupportiveText}
           </span>
         )}
+        {/* Risk remediation 1-L (C-4): always shown for candidate, not gated on the action matching the rules. */}
+        <UnvalidatedNotice />
       </>
     );
   }
@@ -235,18 +230,12 @@ function MainSlot({
         {RULE_SOURCE_CHIP}
       </span>
       {/*
-        風控 2026-10-03 BLOCKING 2／3：信心與結論大字同一列、緊接 RULE_SOURCE_CHIP，
-        class 與 OperationSummaryPanel 的信心 chip 完全相同（text-sm text-neutral-400），
-        No colour, never hover-only. Rendered only when the conclusion comes
-        from the rules (action === aggregated_action, `showConfidence`); the
-        candidate mode hides confidence per the CEO's choice of option K2.
+        Risk remediation 1-L (CEO #59, C-4): the old 「信心 {低/中/高}」 chip is
+        gone. The standing 「未經歷史驗證」 label takes its slot on the same row,
+        always for held (never gated on `action === aggregated_action`), with the
+        click-to-open 1-X explanation. 風控 2026-10-26 定稿；失效條件 T2.
       */}
-      {showConfidence && (
-        <span className="text-sm text-neutral-400">
-          {CONFIDENCE_PREFIX}
-          {summaryConfidenceLabel(model.required.confidence)}
-        </span>
-      )}
+      <UnvalidatedNotice />
     </>
   );
 }
@@ -354,13 +343,13 @@ export function DecisionCardBody({
     model.kind === "held" ? model.restoresComplianceWarning : null;
 
   // Risk review 2026-10-03 BLOCKING 3: when the conclusion was downgraded or
-  // capped (action !== aggregated_action) neither the confidence nor the
-  // invalidation line renders -- the conclusion no longer comes from the rules
-  // and the confidence was computed for the pre-override direction.
+  // capped (action !== aggregated_action) the invalidation line does not
+  // render -- the conclusion no longer comes from the rules. (The confidence
+  // chip that used to share this gate was replaced by the 「未經歷史驗證」
+  // label, which is always shown; risk remediation 1-L.)
   const card = response.advice;
   const conclusionFromRules =
     card !== null && card.action === card.aggregated_action;
-  const showConfidence = model.kind === "held" && conclusionFromRules;
 
   // 失效條件行：只在 held，或候選且「支持進場」（action === "add"）時渲染；
   // A candidate that is not supported for entry renders nothing (BLOCKING 5).
@@ -427,7 +416,7 @@ export function DecisionCardBody({
 
       <div className="mt-3 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex min-h-[3.5rem] flex-wrap items-center gap-3">
-          <MainSlot model={model} showConfidence={showConfidence} />
+          <MainSlot model={model} />
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-4">

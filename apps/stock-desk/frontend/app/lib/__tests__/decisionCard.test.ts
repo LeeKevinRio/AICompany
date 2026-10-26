@@ -29,6 +29,7 @@ import {
   QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
 } from "../adviceWording";
+import { UNVALIDATED_EXPLANATION, UNVALIDATED_LABEL } from "../riskRemediationWording";
 
 function makeBars(
   n: number,
@@ -74,7 +75,7 @@ function makeCard(overrides: Partial<AdviceCard> = {}): AdviceCard {
     rules_version: "1.0.2",
     as_of: "2026-09-18T09:00:00+08:00",
     observation_window: { start: "2025-05-01", end: "2026-09-18", bars: 300 },
-    disclaimer: "本工具為研究與教育用途，非投資建議",
+    disclaimer: "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。",
     limits_check: [],
     action_weights: [],
     direction_weights: [],
@@ -621,32 +622,40 @@ function invalidationParagraph(html: string): string | null {
 
 const CONFIDENCE_RE = new RegExp(`${CONFIDENCE_PREFIX}(?:<!-- -->)?中`);
 
-describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
-  it("held 且 action === aggregated_action：信心在 MainSlot 同一列、緊接 RULE_SOURCE_CHIP 之後，class 為 text-sm text-neutral-400", () => {
+// 字面更新（風控 2026-10-26 定稿 1-L／1-X，C-4）：信心 chip 下架，改為常駐「未經歷史驗證」。
+// 保護的字面：UNVALIDATED_LABEL（1-L）、UNVALIDATED_EXPLANATION（1-X）。
+describe("DecisionCardBody — 未經歷史驗證標示取代信心行（1-L／1-X；原 BLOCKING 2／3；K2）", () => {
+  it("held 且 action === aggregated_action：標示在 MainSlot 同一列、緊接 RULE_SOURCE_CHIP 之後；信心行不再出現", () => {
     const html = renderHeld(counterExampleCard());
     const slot = mainSlot(html);
     expect(slot).toContain(RULE_SOURCE_CHIP);
     const chipEnd = slot.indexOf(RULE_SOURCE_CHIP) + RULE_SOURCE_CHIP.length;
-    const conf = slot.search(CONFIDENCE_RE);
-    expect(conf).toBeGreaterThan(chipEnd);
-    // Nothing but the chip's closing tag and the confidence span's opening tag in between.
-    expect(slot.slice(chipEnd, conf)).toBe('</span><span class="text-sm text-neutral-400">');
-    // Not in the footer / elsewhere: exactly one confidence line on the whole card.
-    expect(html.match(new RegExp(CONFIDENCE_RE, "g"))).toHaveLength(1);
+    const label = slot.indexOf(UNVALIDATED_LABEL);
+    expect(label).toBeGreaterThan(chipEnd);
+    // Exactly one standing label on the whole card; the confidence chip is gone.
+    expect(html.split(UNVALIDATED_LABEL)).toHaveLength(2);
+    expect(html).not.toMatch(CONFIDENCE_RE);
+    expect(html).not.toContain(CONFIDENCE_PREFIX);
   });
 
-  it("信心 class 與 OperationSummaryPanel 的信心 chip 完全相同，不上色、無 hover-only／title／tooltip", () => {
+  it("標示用 <details>（可聚焦、不靠 hover）；summary 為 text-sm text-neutral-400，說明 1-X 逐字、同為 text-sm text-neutral-400（C-4：不弱於被取代的 chip）", () => {
     const html = renderHeld(counterExampleCard());
-    const m = html.match(/<span class="([^"]*)">信心 /);
-    expect(m?.[1]).toBe("text-sm text-neutral-400");
-    const tag = html.match(/<span[^>]*>信心 /)![0];
-    expect(tag).not.toMatch(/title=|hidden|group-hover|hover:|opacity|sr-only/);
+    const m = html.match(/<details class="group"><summary class="([^"]*)">([\s\S]*?)<\/summary><p class="([^"]*)">([^<]*)<\/p><\/details>/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toContain("text-sm text-neutral-400");
+    expect(m![2]).toContain(UNVALIDATED_LABEL);
+    expect(m![3]).toContain("text-sm text-neutral-400");
+    expect(m![4]).toBe(UNVALIDATED_EXPLANATION);
+    // `[&::-webkit-details-marker]:hidden` only hides the native triangle (the shared <details> idiom).
+    const tag = html.match(/<summary[^>]*>/)![0].replace("[&amp;::-webkit-details-marker]:hidden", "");
+    expect(tag).not.toMatch(/title=|hidden|sr-only|opacity/);
   });
 
-  it("action !== aggregated_action（降級或被上限擋下）：信心與失效條件兩行都不渲染", () => {
+  it("action !== aggregated_action（降級或被上限擋下）：標示仍恆顯示（不綁規則一致性）；信心與失效條件兩行不渲染", () => {
     const html = renderHeld(
       counterExampleCard({ action: "hold", aggregated_action: "reduce" }),
     );
+    expect(html).toContain(UNVALIDATED_LABEL);
     expect(html).not.toMatch(CONFIDENCE_RE);
     expect(html).not.toContain(CONFIDENCE_PREFIX);
     expect(html).not.toContain("失效條件");
@@ -654,13 +663,14 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     expect(html).toContain(RULE_SOURCE_CHIP);
   });
 
-  it("aggregated_action 為 null 時（action !== aggregated_action）兩行都不渲染", () => {
+  it("aggregated_action 為 null 時（action !== aggregated_action）：標示仍顯示，信心與失效條件不渲染", () => {
     const html = renderHeld(counterExampleCard({ aggregated_action: null }));
+    expect(html).toContain(UNVALIDATED_LABEL);
     expect(html).not.toContain(CONFIDENCE_PREFIX);
     expect(html).not.toContain("失效條件");
   });
 
-  it("K2：候選模式（支持與未支持）都不渲染信心行，也不出現 K1 句", () => {
+  it("候選模式（支持與未支持）：不渲染信心行也不出現 K1 句；恆顯示「未經歷史驗證」（C-4）", () => {
     const supportive = renderHeld(
       makeCard({
         action: "add",
@@ -679,10 +689,12 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     for (const html of [supportive, notSupportive]) {
       expect(html).not.toContain(CONFIDENCE_PREFIX);
       expect(html).not.toContain(CANDIDATE_CONFIDENCE_NOT_COMPARABLE_NOTE);
+      expect(html).toContain(UNVALIDATED_LABEL);
+      expect(html).toContain(UNVALIDATED_EXPLANATION);
     }
   });
 
-  it("no_action／no_price 不渲染信心行", () => {
+  it("no_action／no_price：不渲染信心行，也不渲染「未經歷史驗證」（沒有結論可標）", () => {
     const noAction = renderHeld(
       counterExampleCard({ action: "insufficient_data", aggregated_action: "insufficient_data", quantity_range: null }),
     );
@@ -694,6 +706,7 @@ describe("DecisionCardBody — 信心行（BLOCKING 2／3；K2）", () => {
     });
     for (const html of [noAction, noPrice]) {
       expect(html).not.toContain(CONFIDENCE_PREFIX);
+      expect(html).not.toContain(UNVALIDATED_LABEL);
       expect(html).not.toContain("失效條件");
     }
   });
@@ -728,8 +741,13 @@ describe("DecisionCardBody — 失效條件行（BLOCKING 1／3／5）", () => {
     expect(p).not.toMatch(
       /truncate|line-clamp|max-h|overflow|nowrap|italic|neutral-500|neutral-600|opacity|hidden|hover:|title=|sr-only/,
     );
-    // Whole-card: no <details> anywhere (the card never folds), no tooltip attribute on the line.
-    expect(html).not.toContain("<details");
+    // Whole-card (字面更新, 2026-10-26: the card now carries two click-to-open <details>, 1-X and
+    // 4-E, so "no <details> anywhere" became the equivalent, stricter statement): the invalidation
+    // line sits outside every <details> element, and carries no tooltip attribute.
+    const detailsBlocks = html.match(/<details[\s\S]*?<\/details>/g) ?? [];
+    expect(detailsBlocks.length).toBeGreaterThan(0);
+    for (const block of detailsBlocks) expect(block).not.toContain(p);
+    expect(html).toContain(p);
   });
 
   it("內文前後不拼接任何祈使或動作語：<p> 內容恰為 前綴＋原文", () => {
