@@ -60,7 +60,7 @@ from app.data.quota import (
     current_quota_date,
     resolve_quota_config,
 )
-from app.portfolio.summary import build_summary
+from app.portfolio.summary import build_summary, valued_market_value_twd
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
 from app.settings.models import AppSettings, AppSettingsPatch
@@ -349,7 +349,7 @@ def _review_reported_net_worth(
     """
     summary = build_summary(positions, valuator)
     valued = [position for position in summary.positions if position.valuation.status == "ok"]
-    market_value = float(summary.totals.market_value_twd)
+    market_value = float(valued_market_value_twd(summary.positions))
     review = review_net_worth(
         amount_twd,
         valued_market_value_twd=market_value,

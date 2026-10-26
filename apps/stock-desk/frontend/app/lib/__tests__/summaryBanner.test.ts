@@ -17,6 +17,17 @@ import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHel
  */
 
 function totals(status: PortfolioTotals["status"]): PortfolioTotals {
+  // T1-12: the real contract sends null amounts under no_data.
+  if (status === "no_data") {
+    return {
+      cost_twd: null,
+      market_value_twd: null,
+      unrealized_pnl_twd: null,
+      asset_contribution_twd: null,
+      fx_contribution_twd: null,
+      status,
+    };
+  }
   return {
     cost_twd: "100000",
     market_value_twd: "105000",

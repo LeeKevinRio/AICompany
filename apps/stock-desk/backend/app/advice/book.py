@@ -98,7 +98,7 @@ from app.advice.limits import (
 from app.data.interface import DataStatus
 from app.data.price_guard import usable_price, usable_rate
 from app.kelly.models import KellyInputRow, ageing_of
-from app.portfolio.summary import PortfolioSummary, SummaryPosition
+from app.portfolio.summary import PortfolioSummary, SummaryPosition, valued_market_value_twd
 from app.portfolio.valuation import (
     CURRENCY_MARKET_MISMATCH,
     PRICE_NOT_QUERIED,
@@ -575,12 +575,14 @@ def _matching(
 def _book_equity(summary: PortfolioSummary) -> tuple[float, int, int]:
     """Return ``(valued market value, valued count, total count)``.
 
-    The market value comes from ``totals``, which the summary layer already
-    restricts to the ``ok`` valuations.
+    The market value is summed from the ``ok`` positions by
+    :func:`valued_market_value_twd` -- not read from ``totals``, which is
+    ``None`` when nothing could be valued (T1-12). An empty sum is ``0.0``;
+    whether the book is complete travels separately on the two counts.
     """
     total = len(summary.positions)
     valued = sum(1 for position in summary.positions if position.valuation.status == "ok")
-    return float(summary.totals.market_value_twd), valued, total
+    return float(valued_market_value_twd(summary.positions)), valued, total
 
 
 def _fully_valued(summary: PortfolioSummary) -> bool:

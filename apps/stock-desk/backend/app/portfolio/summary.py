@@ -8,16 +8,24 @@ Aggregation rule: ``totals`` sums only positions whose valuation is ``ok``
     no_data  -- nothing could be valued (or there are no positions)
 
 so a partial total is never silently presented as if it were the whole book.
+
+When ``status`` is ``no_data`` the five amounts are ``None`` (JSON ``null``),
+the empty book included: nothing was valued, so there is no total to state
+and a zero would read as one (ADR-0025 D-12, AV-16; T1-12). ``status`` keeps
+its coverage meaning; the null is derived from it, not a new state. Internal
+consumers that need the valued book's market value read
+:func:`valued_market_value_twd` instead of ``totals``.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Final, Literal
+from typing import Final, Literal, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.data.interface import DataStatus
 from app.portfolio.price_change import ChangeScreen, PriceChange
@@ -50,16 +58,43 @@ class Totals(BaseModel):
     (ADR-0010 D-1) is still ``complete``. How new the prices are travels on
     each position's ``valuation.price.data_status`` and, on the advice card,
     on the standing cache-only note (風控 2026-09-18 D-2).
+
+    The five amounts are ``None`` exactly when ``status`` is ``no_data`` (the
+    empty book included) and never otherwise -- enforced below in both
+    directions. A ``None`` means "no total exists", never "zero"; nothing may
+    read it as ``0`` (AC-B4b-3). Internal denominators use
+    :func:`valued_market_value_twd`, not these display figures.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    cost_twd: Decimal
-    market_value_twd: Decimal
-    unrealized_pnl_twd: Decimal
-    asset_contribution_twd: Decimal
-    fx_contribution_twd: Decimal
+    cost_twd: Decimal | None
+    market_value_twd: Decimal | None
+    unrealized_pnl_twd: Decimal | None
+    asset_contribution_twd: Decimal | None
+    fx_contribution_twd: Decimal | None
     status: Literal["complete", "partial", "no_data"]
+
+    @model_validator(mode="after")
+    def _null_iff_no_data(self) -> Self:
+        amounts = {
+            "cost_twd": self.cost_twd,
+            "market_value_twd": self.market_value_twd,
+            "unrealized_pnl_twd": self.unrealized_pnl_twd,
+            "asset_contribution_twd": self.asset_contribution_twd,
+            "fx_contribution_twd": self.fx_contribution_twd,
+        }
+        if self.status == "no_data":
+            present = [name for name, value in amounts.items() if value is not None]
+            if present:
+                raise ValueError(f"no_data totals must have every amount None; got {present}")
+        else:
+            missing = [name for name, value in amounts.items() if value is None]
+            if missing:
+                raise ValueError(
+                    f"{self.status} totals must have every amount set; got None for {missing}"
+                )
+        return self
 
 
 class SummaryPosition(BaseModel):
@@ -120,6 +155,24 @@ class PortfolioSummary(BaseModel):
     #: how the valuator was built. ``close_only`` guarantees no
     #: ``intraday_quote`` price and no ``intraday`` change basis in the payload.
     change_mode: ChangeMode = "close_only"
+
+
+def valued_market_value_twd(positions: Sequence[SummaryPosition]) -> Decimal:
+    """Sum of the TWD market value of the ``ok`` positions; ``Decimal(0)`` for none.
+
+    An internal denominator, not the display total: unlike
+    ``Totals.market_value_twd`` it is never ``None``, because the sum of an
+    empty set of valued positions is zero. Completeness is the caller's to
+    judge separately (valued vs total count, ``book_fully_valued``); this
+    figure alone says nothing about whether the book was fully valued. Summed
+    over the same rows in the same order as ``build_summary``, so on a
+    ``partial`` or ``complete`` book it equals ``totals.market_value_twd``.
+    """
+    total = Decimal(0)
+    for position in positions:
+        if position.valuation.status == "ok" and position.market_value_twd is not None:
+            total += position.market_value_twd
+    return total
 
 
 def fx_disclosures_for(valuations: list[Valuation]) -> list[str]:
@@ -237,14 +290,26 @@ def build_summary(
             asset += valued.valuation.asset_contribution_twd
             fx += valued.valuation.fx_contribution_twd
 
-    totals = Totals(
-        cost_twd=cost,
-        market_value_twd=market_value,
-        unrealized_pnl_twd=market_value - cost,
-        asset_contribution_twd=asset,
-        fx_contribution_twd=fx,
-        status=_totals_status(total=len(positions), ok=ok_count),
-    )
+    status = _totals_status(total=len(positions), ok=ok_count)
+    if ok_count == 0:
+        # T1-12: nothing valued (the empty book included) -- no total exists.
+        totals = Totals(
+            cost_twd=None,
+            market_value_twd=None,
+            unrealized_pnl_twd=None,
+            asset_contribution_twd=None,
+            fx_contribution_twd=None,
+            status=status,
+        )
+    else:
+        totals = Totals(
+            cost_twd=cost,
+            market_value_twd=market_value,
+            unrealized_pnl_twd=market_value - cost,
+            asset_contribution_twd=asset,
+            fx_contribution_twd=fx,
+            status=status,
+        )
     valued_rows = [item.valuation for item in summary_positions]
     _log_mixed_fx_sources(valued_rows)
     return PortfolioSummary(

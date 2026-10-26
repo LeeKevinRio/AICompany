@@ -355,7 +355,7 @@ def test_kxa2_the_summary_payload_carries_no_fx_for_a_mismatched_row(
     assert row["valuation"]["price"] is None
     assert row["market_value_twd"] is None
     assert body["fx_disclosures"] == []
-    assert Decimal(body["totals"]["market_value_twd"]) == 0
+    assert body["totals"]["market_value_twd"] is None
 
 
 def test_kxa2_the_x3b_warning_still_names_the_row(

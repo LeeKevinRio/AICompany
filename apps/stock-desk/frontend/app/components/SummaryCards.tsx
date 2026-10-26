@@ -61,10 +61,11 @@ export function SummaryCards({
 }) {
   const basis = deriveValuationBasis(positions);
   // A-1 (NP-B4): when nothing could be valued the book has no total, so the
-  // four amounts must read "—" (and stay neutral-coloured), never NT$0. The
-  // mask keys on `status`, not on the values: a `no_data` payload's amounts
-  // carry no meaning whatever they are. `partial` / `complete` pass through
-  // unchanged, so a real zero there still reads NT$0.
+  // four amounts must read "—" (and stay neutral-coloured), never NT$0. Since
+  // T1-12 the API already sends null for them under `no_data`; the mask stays
+  // as defence in depth and keys on `status`, not on the values, so a payload
+  // that still carries numbers under `no_data` reads "—" too. `partial` /
+  // `complete` pass through unchanged, so a real zero there still reads NT$0.
   const noData = totals.status === "no_data";
   const marketValue = noData ? null : totals.market_value_twd;
   const unrealizedPnl = noData ? null : totals.unrealized_pnl_twd;
