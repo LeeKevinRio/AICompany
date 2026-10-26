@@ -144,7 +144,7 @@ def test_summary_no_positions_is_no_data(store: PositionStore) -> None:
         _teardown()
     assert body["totals"]["status"] == "no_data"
     assert body["positions"] == []
-    assert body["totals"]["cost_twd"] == "0"
+    assert body["totals"]["cost_twd"] is None
 
 
 def test_summary_complete_when_all_positions_valued(store: PositionStore) -> None:

@@ -10,13 +10,13 @@ import type { OperationSummaryModel } from "../../lib/operationSummary";
 import {
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
-  QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
 } from "../../lib/adviceWording";
 import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/ruleSelection";
 import { buildLimitNotices } from "../../lib/limitNotices";
 import type { LimitNotices } from "../../lib/limitNotices";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
+import { QUANTITY_ABSENT_SHORT_BY_CAUSE } from "../../lib/quantityAbsenceWording";
 import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_COST_PNL_UNAVAILABLE,
@@ -65,7 +65,8 @@ import {
  *       （`effectiveAnchorSource === "close-not-held"`），不得只看 `levels !== null`
  *       ——`levels === null` 時全句仍常駐，價格代入 `fmt(null)`（即「—」）。
  *   Q2. `no_price`／`no_action` 的股數格印「—」，不印 `QUANTITY_RANGE_ABSENT_SHORT`
- *       （該三字專屬 held／candidate 且 `quantity_range === null` 的情境）。
+ *       （該五字只用於 held／candidate 且 `quantity_range === null` 的 C-0 情境；
+ *       held 的續抱成因改用 Q-a／Q-b，見 `quantityAbsenceWording.ts`）。
  *   V1. `NumberCell` 的 `distance` 為 `undefined`（收盤／股數格，無距離概念）或
  *       `null`（水位缺席）時渲染不可見佔位（`aria-hidden`＋`&nbsp;`），不得印
  *       "—" -- `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside
@@ -105,8 +106,9 @@ import {
  *      本檔原樣渲染，不重新拼字）；不支持時 `model.notSupportiveText`
  *      （＝`CANDIDATE_NOT_SUPPORTIVE_TEXT`）。主字 `model.headingLabel`
  *      （＝`CANDIDATE_HEADING_LABEL`「進場評估」）。
- *   9. 第四格股數：`model.required.quantityRangeShares` 或
- *      `QUANTITY_RANGE_ABSENT_SHORT`；`restoresComplianceWarning` 非 null 時卡內
+ *   9. 第四格股數：`model.required.quantityRangeShares`，或依
+ *      `model.required.quantityAbsenceCause` 取 `QUANTITY_ABSENT_SHORT_BY_CAUSE`
+ *      （風控 2026-10-26 股數成因 Q-a／Q-b／C-0）；`restoresComplianceWarning` 非 null 時卡內
  *      同層 `role="alert"`（沿用 `OperationSummaryPanel.tsx` 既有 alert 樣式，
  *      import 自該檔的 `StaleDataAlert` 同款作法，非另寫一份）。全頁「股數＋
  *      warning」恰一次：`OperationSummaryPanel.tsx` 的對應主視圖渲染已移除
@@ -374,12 +376,17 @@ export function DecisionCardBody({
       ? DECISION_CARD_COST_PNL_UNAVAILABLE
       : null;
 
-  // Q2（qa medium）："未提供股數" 專屬 held／candidate 且 quantity_range 為
-  // null 的情境；no_price／no_action 這兩種 kind 根本沒有 quantity_range 這個
-  // 欄位可言，股數格改印「—」（與其他缺席數字同一慣例），不得借用該三字。
+  // Q2（qa medium）：the no-range text is only for held／candidate cards whose
+  // quantity_range is null; no_price／no_action have no quantity_range at all,
+  // so the cell prints 「—」（the same convention as every other absent number）
+  // and never borrows the five-character 「未提供股數」 or any cause sentence.
+  // 風控 2026-10-26 股數成因 J-3: only this cell's text changes by cause
+  // (Q-a／Q-b for a held card, C-0 「未提供股數」 otherwise, candidate included);
+  // no new element, no `distance` sub-line.
   const quantityText =
     model.kind === "held" || model.kind === "candidate"
-      ? (model.required.quantityRangeShares ?? QUANTITY_RANGE_ABSENT_SHORT)
+      ? (model.required.quantityRangeShares ??
+        QUANTITY_ABSENT_SHORT_BY_CAUSE[model.required.quantityAbsenceCause ?? "unspecified"])
       : "—";
   const restoresWarning =
     model.kind === "held" ? model.restoresComplianceWarning : null;

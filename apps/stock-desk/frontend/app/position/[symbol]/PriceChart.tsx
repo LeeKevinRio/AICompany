@@ -39,9 +39,17 @@ function toNumber(value: string): number | null {
 export function PriceChart({
   bars,
   movingAverages,
+  movingAveragesPending = false,
 }: {
   bars: Bar[];
   movingAverages: IndicatorResult | undefined;
+  /**
+   * True while the signals query that carries the MA series is still on its
+   * first load. The overlay is simply not drawn yet; the "均線資料不足" note is
+   * withheld because "not arrived yet" is not "insufficient" — printing it
+   * here made the first load of a page claim the opposite of the reload.
+   */
+  movingAveragesPending?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -125,7 +133,7 @@ export function PriceChart({
   return (
     <div>
       <div ref={containerRef} className="h-[360px] w-full" role="img" aria-label="日K線與均線圖" />
-      {(!movingAverages || movingAverages.status !== "ok") && (
+      {!movingAveragesPending && (!movingAverages || movingAverages.status !== "ok") && (
         <p className="mt-2 text-xs text-amber-300">均線資料不足，未繪製 MA5/20/60 疊圖。</p>
       )}
     </div>

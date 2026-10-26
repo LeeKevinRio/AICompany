@@ -409,6 +409,8 @@ const SCANNED_FILES = [
   "../limitNotices.ts",
   "../../position/[symbol]/UnvalidatedNotice.tsx",
   "../../position/[symbol]/StopQualifier.tsx",
+  // 股數成因（風控 2026-10-26 定稿 Q-a／Q-b／D-a／D-b）：新字面模組，逐字釘住於 quantityAbsenceCause.test.ts。
+  "../quantityAbsenceWording.ts",
 ] as const;
 
 /**

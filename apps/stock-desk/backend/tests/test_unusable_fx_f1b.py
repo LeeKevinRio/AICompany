@@ -842,7 +842,7 @@ def test_the_summary_under_the_snapshot_leaves_the_row_unvalued(
     )
     summary = build_summary(_alert_store(tmp_path), valuator)
     assert summary.totals.status == "no_data"
-    assert summary.totals.market_value_twd == 0
+    assert summary.totals.market_value_twd is None
     assert summary.fx_disclosures == []
 
 

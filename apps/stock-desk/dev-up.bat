@@ -6,6 +6,8 @@ REM One-click launcher for stock-desk on Windows: git pull + backend + scheduler
 REM Double-click it or run it from any directory; all paths derive from %~dp0.
 REM Backend and scheduler MUST start from the backend directory so SQLite resolves to the same ./data/stock-desk.db.
 REM Order: backend, then wait for /health, then scheduler, then frontend, then status lines.
+REM Secrets: apps\stock-desk\.env (git-ignored, optional) is loaded for the backend and the scheduler via UV_ENV_FILE.
+REM Variables already set in Windows win over the file. No .env file is fine: the stack starts without those settings.
 
 set "TARGET_BRANCH=product/stock-desk"
 set "BACKEND_DIR=%~dp0backend"
@@ -69,6 +71,22 @@ if not "!CUR_BRANCH!"=="%TARGET_BRANCH%" (
   )
 )
 
+REM ---- 2b. optional .env for the backend and the scheduler ----
+REM uv reads UV_ENV_FILE (the same option as "uv run --env-file"); the start commands below inherit it.
+REM uv fails on a missing file, so point it at the file only when it exists. Only the path is echoed, never the contents.
+set "ENV_FILE=%~dp0.env"
+if exist "%ENV_FILE%" (
+  set "UV_ENV_FILE=!ENV_FILE!"
+  echo.
+  echo [ENV] Loading settings from !ENV_FILE!
+  echo       The backend and scheduler windows print which settings they found, set or not set only.
+) else (
+  set "UV_ENV_FILE="
+  echo.
+  echo [ENV] No .env file at !ENV_FILE! - starting without it, so FinMind and push alerts stay off.
+  echo       To turn them on: copy .env.example to .env in that folder and fill in your values.
+)
+
 REM ---- 3. pull latest code ----
 echo.
 echo [1/4] Updating code (git pull)
@@ -127,7 +145,7 @@ goto wait_backend
 
 :backend_ok
 echo Backend is healthy. Starting scheduler and frontend.
-REM Same directory as the backend, so both use the same SQLite file. Env vars (STOCK_DESK_DB_PATH, FINMIND_API_TOKEN) are inherited.
+REM Same directory as the backend, so both use the same SQLite file. Env vars (STOCK_DESK_DB_PATH, UV_ENV_FILE for .env, ...) are inherited.
 start "stock-desk scheduler" cmd /k "cd /d "%BACKEND_DIR%" && uv run python -m app.scheduler"
 start "stock-desk frontend" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
 
