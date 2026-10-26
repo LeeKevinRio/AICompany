@@ -747,7 +747,8 @@ describe("KeyLevelsPanel 定稿字面", () => {
 
   it("頭部揭露段逐字比對成稿", () => {
     expect(KEY_LEVELS_PANEL_DISCLAIMER).toBe(
-      "以下數字皆為本面板依固定算式計算之參考水位，僅供研究與教育用途，非投資建議，亦非任何買賣指示；" +
+      // 字面更新（風控 2026-10-26 定稿 K-1）：子句「僅供研究與教育用途，非投資建議」換成「並非分析結果，也未經歷史驗證」。
+      "以下數字皆為本面板依固定算式計算之參考水位，並非分析結果，也未經歷史驗證，亦非任何買賣指示；" +
         "每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。",
     );
     expect(KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE).toBe(
@@ -832,8 +833,9 @@ describe("KeyLevelsPanel 定稿字面", () => {
 
   it("無資料狀態句與頁尾樣本句逐字比對成稿（R4 無未來式承諾）", () => {
     expect(KEY_LEVELS_NO_DATA_STATEMENT).toBe("目前沒有可用的日線資料，本面板無法計算任何關鍵價位。");
+    // 字面更新（風控 2026-10-26 定稿 K-2）：刪掉第二句「本面板僅供研究與教育用途，不構成投資建議。」
     expect(buildFooterSample(387, "2026-09-01")).toBe(
-      "計算樣本：387 根日線，最後一根 2026-09-01。本面板僅供研究與教育用途，不構成投資建議。",
+      "計算樣本：387 根日線，最後一根 2026-09-01。",
     );
   });
 
@@ -1394,7 +1396,8 @@ describe("揭露下沉頁尾 守門", () => {
 
   it("L0（風控 F-7，2026-09-19）：app/layout.tsx 全站免責句自頁尾收成 details 起為全頁唯一常駐免責——不得移除、摺疊、下調字級或對比、不得移出頁面最後節點", () => {
     const layoutSrc = read("../../layout.tsx");
-    const sentence = "本工具為研究與教育用途，非投資建議";
+    // 字面更新（風控 2026-10-26 定稿 3-F）：頁尾改渲染 SITE_FOOTER_DISCLAIMER（字面逐字釘在 riskRemediationWording.test.ts）。
+    const sentence = "{SITE_FOOTER_DISCLAIMER}";
     const idx = layoutSrc.indexOf(sentence);
     expect(idx).toBeGreaterThan(-1);
     expect(layoutSrc).not.toMatch(/<details|<summary|line-clamp|truncate|sr-only|\bhidden\b/);
@@ -1405,7 +1408,7 @@ describe("揭露下沉頁尾 守門", () => {
     expect(footerTag).not.toMatch(/text-xs|text-neutral-(5|6|7)00/);
     // 頁面最後節點：<footer> 之後直到 </Providers> 只剩 </footer>。
     const afterSentence = layoutSrc.slice(idx + sentence.length, layoutSrc.indexOf("</Providers>"));
-    expect(afterSentence.replace(/\s/g, "")).toBe("</footer>");
+    expect(afterSentence.replace(/\s/g, "")).toBe("</p></footer>");
   });
 
   it("F-3（風控 2026-09-19 放行條件）：頁尾 <details> 掛 print-expand，globals.css 於 @media print 強制展開", () => {
@@ -1502,9 +1505,9 @@ describe("揭露下沉頁尾 守門", () => {
       ["../../position/[symbol]/LeverageChapterView.tsx", "{buildFooterGuidance(LEVERAGE_CHAPTER_TITLE)}"],
       ["../../position/[symbol]/TechnicalIndicatorsPanel.tsx", "{buildFooterGuidance(TECHNICAL_ANALYSIS_TITLE)}"],
       ["../../position/[symbol]/AdviceCardView.tsx", "{buildFooterGuidance(ADVICE_CARD_TITLE)}"],
-      // R3（決策卡第二輪修正，風控複審 APPROVE_WITH_CONDITIONS）：本卡不設
-      // `<details>`，指引句常駐卡片底部，指向頁尾揭露區本身（非某一組）。
-      ["../../position/[symbol]/DecisionCard.tsx", "{buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)}"],
+      // 字面更新（風控 2026-10-26 定稿 3-S／C-7）：R3 指引句已撤銷，這個位置改由 3-S 過渡免責句
+      // 取代，字級與顏色的底線不變（至少 text-sm、不淡於 neutral-300）。
+      ["../../position/[symbol]/DecisionCard.tsx", "{OPERATION_REFERENCE_DISCLAIMER}"],
     ];
     for (const [rel, needle] of wiring) {
       const src = read(rel);

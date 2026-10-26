@@ -42,8 +42,11 @@ export function buildKeyLevelsCloseLine(x: string, d: string): string {
 
 /* ---------- §1 頭部揭露段（四句常駐，順序固定） ---------- */
 
+// 風控 2026-10-26 定稿 K-1（照 creative-lead K-1 原字面）；失效條件 T3、T8。
+// 子句「僅供研究與教育用途，非投資建議」已被「並非分析結果，也未經歷史驗證」取代；
+// 「亦非任何買賣指示」保留（它否定的是指令，不是建議）。
 export const KEY_LEVELS_PANEL_DISCLAIMER =
-  "以下數字皆為本面板依固定算式計算之參考水位，僅供研究與教育用途，非投資建議，亦非任何買賣指示；" +
+  "以下數字皆為本面板依固定算式計算之參考水位，並非分析結果，也未經歷史驗證，亦非任何買賣指示；" +
   "每個數字的計算方式，包括收盤資料的來源，皆在「計算依據」中逐項揭露。";
 
 export const KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE =
@@ -295,8 +298,9 @@ export const KEY_LEVELS_NO_DATA_STATEMENT =
 
 /* ---------- §8 頁尾樣本句 ---------- */
 
+// 風控 2026-10-26 定稿 K-2；失效條件 T8。第二句「本面板僅供研究與教育用途，不構成投資建議。」已刪除。
 export function buildFooterSample(n: number, d: string): string {
-  return `計算樣本：${n} 根日線，最後一根 ${d}。本面板僅供研究與教育用途，不構成投資建議。`;
+  return `計算樣本：${n} 根日線，最後一根 ${d}。`;
 }
 
 /* ---------- 呈現 ---------- */

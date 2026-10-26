@@ -632,8 +632,9 @@ describe("DecisionCardBody — 未經歷史驗證標示取代信心行（1-L／1
     const chipEnd = slot.indexOf(RULE_SOURCE_CHIP) + RULE_SOURCE_CHIP.length;
     const label = slot.indexOf(UNVALIDATED_LABEL);
     expect(label).toBeGreaterThan(chipEnd);
-    // Exactly one standing label on the whole card; the confidence chip is gone.
-    expect(html.split(UNVALIDATED_LABEL)).toHaveLength(2);
+    // Exactly one standing label on the whole card (the 3-S disclaimer also contains the words
+    // 「未經歷史驗證」 inside a longer sentence, so count the label as a <summary>); the chip is gone.
+    expect(html.split(`${UNVALIDATED_LABEL}</summary>`)).toHaveLength(2);
     expect(html).not.toMatch(CONFIDENCE_RE);
     expect(html).not.toContain(CONFIDENCE_PREFIX);
   });
@@ -706,7 +707,7 @@ describe("DecisionCardBody — 未經歷史驗證標示取代信心行（1-L／1
     });
     for (const html of [noAction, noPrice]) {
       expect(html).not.toContain(CONFIDENCE_PREFIX);
-      expect(html).not.toContain(UNVALIDATED_LABEL);
+      expect(html).not.toContain(`${UNVALIDATED_LABEL}</summary>`);
       expect(html).not.toContain("失效條件");
     }
   });

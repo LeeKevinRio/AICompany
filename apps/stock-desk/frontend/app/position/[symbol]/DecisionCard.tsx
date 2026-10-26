@@ -24,10 +24,7 @@ import {
   buildDecisionCardDistance,
   pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
-import {
-  PAGE_FOOTER_DISCLOSURES_TITLE,
-  buildFooterGuidance,
-} from "../../lib/footerDisclosureWording";
+import { OPERATION_REFERENCE_DISCLAIMER } from "../../lib/riskRemediationWording";
 import { PriceUnitBadge } from "./PriceUnitBadge";
 import { UnvalidatedNotice } from "./UnvalidatedNotice";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
@@ -490,6 +487,15 @@ export function DecisionCardBody({
       {limitNotices !== null && limitNotices.hasAny && <LimitNoticeBlock notices={limitNotices} />}
 
       {/*
+        Risk remediation 3-S (C-7): the transitional disclaimer, every kind (held, candidate,
+        no_action, no_price). After the limit block and before the invalidation line; at least
+        text-sm and never lighter than neutral-300; never inside a <details>, no truncate /
+        line-clamp / tooltip. Character-identical to the backend DISCLAIMER (parity tests).
+        風控 2026-10-26 定稿；失效條件 T2、T7、T8.
+      */}
+      <p className="mt-3 text-sm text-neutral-300">{OPERATION_REFERENCE_DISCLAIMER}</p>
+
+      {/*
         Risk review 2026-10-03 item 4: prefix and body share one <p> at the
         same size and grey (text-xs text-neutral-400 is the floor: nothing
         fainter, smaller or italic); wrapping allowed, no truncate / line-clamp /
@@ -549,12 +555,10 @@ export function DecisionCardBody({
       )}
 
       {/*
-        R3（決策卡第二輪修正）：卡片底部常駐指引句，指向頁尾揭露區——本卡不設
-        `<details>`，這句本來就不在任何摺疊內。
+        The R3 guidance sentence that pointed at the page footer used to close the card here.
+        Removed by risk-compliance on 2026-10-26: the 3-S disclaimer above replaces it
+        (R3 revoked); where a figure comes from is now carried by the 4-E explanation.
       */}
-      <p className="mt-3 text-sm text-neutral-300">
-        {buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)}
-      </p>
     </>
   );
 }

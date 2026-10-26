@@ -9,6 +9,7 @@ cards across the states the engine can reach.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -129,9 +130,43 @@ def test_cards_never_mention_a_price_objective(term: str) -> None:
 
 
 def test_every_card_carries_the_fixed_disclaimer() -> None:
-    assert DISCLAIMER == "本工具為研究與教育用途，非投資建議"
+    # 字面更新 (風控 2026-10-26 定稿 3-S, risk remediation): the old sentence
+    # "本工具為研究與教育用途，非投資建議" was replaced because it was no longer true.
+    assert DISCLAIMER == (
+        "依固定規則產生的操作參考，規則與價位未經歷史驗證；"
+        "可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。"
+    )
     for card in _cards():
         assert card["disclaimer"] == DISCLAIMER
+
+
+def test_the_disclaimer_no_longer_denies_the_advice_nature_of_the_output() -> None:
+    # 行為新增 (風控 2026-10-26 定稿 review condition 2): no new sentence may contain a
+    # denial of the advisory nature, and the old two phrases are gone from the card.
+    for phrase in ("研究與教育用途", "非投資建議", "不構成投資建議", "不是建議", "僅供參考"):
+        assert phrase not in DISCLAIMER
+    # "即時" may only appear as the denial "非即時" (findBareRealtimeClaims rule).
+    assert DISCLAIMER.count("即時") == DISCLAIMER.count("非即時") == 1
+
+
+_FRONTEND_WORDING_PATH = (
+    Path(__file__).resolve().parents[2] / "frontend" / "app" / "lib" / "riskRemediationWording.ts"
+)
+
+
+def _frontend_string_constant(name: str) -> str:
+    """The value of ``export const <name> = "a" + "b";`` in the frontend wording module."""
+    source = _FRONTEND_WORDING_PATH.read_text(encoding="utf-8")
+    match = re.search(rf"export const {name} =\s*((?:\"[^\"]*\"\s*\+?\s*)+);", source)
+    assert match is not None, f"{name} not found in riskRemediationWording.ts"
+    return "".join(re.findall(r'"([^"]*)"', match.group(1)))
+
+
+def test_the_disclaimer_is_character_identical_to_the_frontend_constant() -> None:
+    # 行為新增 (constraint C-7): the decision card renders the frontend constant, the
+    # operation summary renders the API field. They are one sentence; the frontend
+    # test `riskRemediationParity.test.ts` reads this file from the other side.
+    assert DISCLAIMER == _frontend_string_constant("OPERATION_REFERENCE_DISCLAIMER")
 
 
 def test_every_card_states_its_rules_version_and_limit_verdicts() -> None:

@@ -85,3 +85,23 @@ export function buildNotEvaluableLimitsNotice(count: number, withViolation: bool
   const lead = withViolation ? "另有" : "有";
   return `${lead} ${count} 條上限無法評估，不代表已通過；見下方建議卡。`;
 }
+
+/* ---------- Item 3: transitional disclaimers ---------- */
+
+/**
+ * 3-S, the decision card's short disclaimer. MUST stay character-identical to the
+ * backend `DISCLAIMER` in `backend/app/advice/engine.py` (parity test:
+ * `__tests__/riskRemediationParity.test.ts` and backend `test_advice_wording.py`).
+ * 風控 2026-10-26 定稿；失效條件 T2、T7、T8
+ */
+export const OPERATION_REFERENCE_DISCLAIMER =
+  "依固定規則產生的操作參考，規則與價位未經歷史驗證；可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。";
+
+/**
+ * 3-F, the site-wide footer (also mirrored in `apps/stock-desk/README.md`).
+ * 風控 2026-10-26 定稿；失效條件 T2、T7、T8
+ */
+export const SITE_FOOTER_DISCLAIMER =
+  "本工具提供的動作、股數與價位，是依固定規則與固定算式產生的操作參考。" +
+  "規則與價位都還沒用歷史資料驗證過，可能錯誤，照做也可能造成虧損，是否採用由你自行決定。" +
+  "這些參考只用日線收盤資料計算，非即時，不反映最近一次收盤之後的價格變動。";

@@ -57,7 +57,16 @@ CardAction = Literal["add", "hold", "reduce", "stop_loss", "take_profit", "insuf
 Confidence = Literal["low", "medium", "high"]
 
 #: Fixed Traditional Chinese disclaimer carried by every card.
-DISCLAIMER: Final = "本工具為研究與教育用途，非投資建議"
+#:
+#: 風控 2026-10-26 定稿 3-S; 失效條件 T2, T7, T8. Character-identical to the
+#: frontend ``OPERATION_REFERENCE_DISCLAIMER`` in
+#: ``frontend/app/lib/riskRemediationWording.ts`` (parity tests on both sides);
+#: any change goes back to risk review. The old "研究與教育用途" sentence is
+#: gone on purpose: the rules were never validated, so it was no longer true.
+DISCLAIMER: Final = (
+    "依固定規則產生的操作參考，規則與價位未經歷史驗證；"
+    "可能有誤，照做也可能虧損，是否採用由你決定。日線收盤資料，非即時。"
+)
 
 #: What ``confidence`` is and is not. Travels *with* the card (the
 #: ``NATURE``/``assumptions`` idiom of ``app/leverage/erosion.py``) so a
