@@ -329,6 +329,22 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
   4. 每個監看與每筆價格都有「人工查價連結」，CEO 點了自己去看。這只是產生網址給人點，不是抓取。
   - 交付不了的部分：即時、全覆蓋的自動低價偵測。這是產品的核心價值，主源壞掉期間就是降級營運。
 
+## 實作期偏離紀錄（2026-10-25 第一批，dev-lead 回報、qa-reviewer 評估「全部可接受」，CEO 核可本 ADR 時一併確認）
+
+| 項目 | ADR 原文 | 實作 | 理由 |
+| --- | --- | --- | --- |
+| 掃描間隔 | D-3 每個監看各自 `scan_interval_minutes` | 改為全域設定（`app_setting`），`watch` 表無此欄 | 單一使用者，逐監看設定是過度設計；**這是 D-3 字面變更，CEO 須知情** |
+| schema 增補 | — | `watch.consecutive_failed_scans`；`scan_run.trigger / total_pairs / limit_reached / global_limit_reached / queries_used`；`notification.price_kind`；新表 `notification_item`（合併通知內每組日期與價格，供 FR-C3 同組合同價去重）、`scheduler_event`（記錄被略過的重疊掃描） | FR-B3／B7／C3／E5 需要這些欄位 |
+| 金額 | D-6 整數 `amount_minor` | TWD 依 ISO 4217 取 2 位小數，`amount_minor = TWD × 100` | 幣別小數位只在 `domain/currency.py` 定義 |
+| 觀測筆數 | — | 每輪每組日期只存最便宜一筆報價 | 控制資料量；詳情頁只需最低價 |
+| 推播重試 | D-4 下次掃描重送 | 在下一輪掃描**開頭**重試，不在同一輪結尾 | 避免同一輪重複觸發 |
+| Telegram 未設定 | — | 通知標為 `suppressed`：不重試、不佔去重額度 | 日後設定好也不補發，README 載明 |
+| 首次掃描 | D-3 只補跑逾期 | 新增監看後 10 秒排第一次掃描 | 讓使用者建立後很快看到結果；仍受全域每小時上限 |
+| 立即查價 | — | 經 scheduler 非同步執行，API 回 202 | 不阻塞請求 |
+| 預設 port | — | 8795（原 8765 被 CEO 本機另一專案占用） | 2026-10-26 實機驗收時發現 |
+
+qa-reviewer 列為第二批前必修（加 Travelpayouts 之前）：多來源時第一個來源失敗後備援成功仍記 `partial`；`no_data` 與幣別不符會直接 return 不試備援；`item_key`／`dedupe_key` 不含 `watch_revision`。
+
 ## 需要 CEO 決定的事項
 
 1. **要不要註冊 Travelpayouts 帳號取 token？** 建議要，它是唯一合規又免費的備援。有 token 後由 data-engineer 用 CEO 最常看的 3～5 條航線做一次覆蓋率探測，再決定值不值得依賴。
