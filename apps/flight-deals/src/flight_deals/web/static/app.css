@@ -14,6 +14,7 @@
   --space-6: 32px;
   --space-7: 48px;
   --control-height: 40px;
+  --combo-max-height: 280px;
   --control-height-small: 32px;
   --radius: 8px;
   --radius-small: 4px;
@@ -42,6 +43,7 @@
   --color-heat-pricey: #f8d6d3;
   --color-chart-bg: #f2f5fa;
   --color-chart-line: #1f5fbf;
+  --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -69,6 +71,7 @@
     --color-heat-pricey: #4a2522;
     --color-chart-bg: #1a1f27;
     --color-chart-line: #6ea0f0;
+    --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6);
   }
 }
 
@@ -325,6 +328,41 @@ input[type="radio"], input[type="checkbox"] {
   flex: none;
   accent-color: var(--color-accent);
 }
+/* Airport combobox: listbox anchored under the input, never wider than the field. */
+.combo-box { position: relative; }
+.combo-list {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: var(--combo-max-height);
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-small);
+  box-shadow: var(--shadow-popover);
+}
+.combo-option {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+.combo-option:hover { background: var(--color-neutral-bg); }
+.combo-option[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
 .hint { color: var(--color-muted); font-size: 13px; }
 /* Reserve one line so an error appearing does not push the page down. */
 .field-error, .form-error { color: var(--color-danger); font-size: 13px; }

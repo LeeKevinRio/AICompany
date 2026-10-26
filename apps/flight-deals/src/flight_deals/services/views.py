@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from flight_deals.domain.airports import place_label, route_label
 from flight_deals.domain.currency import format_money, minor_to_major_int
 from flight_deals.domain.dates import first_pair
 from flight_deals.domain.links import google_flights_url
@@ -198,7 +199,7 @@ class ViewService:
                 {
                     "id": watch.id,
                     "name": spec.name,
-                    "route": f"{spec.origin}→{spec.destination}",
+                    "route": route_label(spec.origin, spec.destination),
                     "trip": TRIP_TYPE_LABELS[spec.trip_type],
                     "dates": dates_text(spec),
                     "budget": (
@@ -228,7 +229,9 @@ class ViewService:
         if watch_id is None:
             return {
                 "origin": "TPE",
+                "origin_label": place_label("TPE"),
                 "destination": "",
+                "destination_label": "",
                 "trip_type": "round_trip",
                 "date_mode": "fixed",
                 "depart_date": "",
@@ -255,7 +258,9 @@ class ViewService:
 
         return {
             "origin": spec.origin,
+            "origin_label": place_label(spec.origin),
             "destination": spec.destination,
+            "destination_label": place_label(spec.destination),
             "trip_type": spec.trip_type,
             "date_mode": spec.date_mode,
             "depart_date": d(spec.depart_date),
@@ -301,7 +306,7 @@ class ViewService:
             "watch": {
                 "id": watch.id,
                 "name": spec.name,
-                "route": f"{spec.origin}→{spec.destination}",
+                "route": route_label(spec.origin, spec.destination),
                 "trip": TRIP_TYPE_LABELS[spec.trip_type],
                 "date_mode": "固定日期" if spec.date_mode == "fixed" else "彈性窗",
                 "dates": dates_text(spec),

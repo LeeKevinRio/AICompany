@@ -16,15 +16,24 @@
   <fieldset>
     <legend>路線</legend>
     <div class="grid">
-      <div class="field">
+      <div class="field" data-combo="origin">
         <label for="f-origin">出發地</label>
-        <input id="f-origin" name="origin" value="{{ values.origin }}" maxlength="3" autocomplete="off" required aria-describedby="h-origin err-origin">
-        <small id="h-origin" class="hint">3 碼代碼，例如 TPE</small>
+        <div class="combo-box">
+          <input id="f-origin" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-origin" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="origin" data-code="{{ values.origin }}" value="{{ values.origin_label }}" aria-describedby="h-origin st-origin err-origin">
+          <ul id="lb-origin" class="combo-list" role="listbox" aria-label="出發地選項" hidden></ul>
+        </div>
+        <small id="h-origin" class="hint">輸入中文、英文或 3 碼代碼，例如 台北、TPE</small>
+        <span id="st-origin" class="sr-only combo-status" aria-live="polite"></span>
         <span id="err-origin" class="field-error" data-error-for="origin"></span>
       </div>
-      <div class="field">
+      <div class="field" data-combo="destination">
         <label for="f-destination">目的地</label>
-        <input id="f-destination" name="destination" value="{{ values.destination }}" maxlength="3" autocomplete="off" required placeholder="例如 NRT" aria-describedby="err-destination">
+        <div class="combo-box">
+          <input id="f-destination" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-destination" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="destination" data-code="{{ values.destination }}" value="{{ values.destination_label }}" aria-describedby="h-destination st-destination err-destination">
+          <ul id="lb-destination" class="combo-list" role="listbox" aria-label="目的地選項" hidden></ul>
+        </div>
+        <small id="h-destination" class="hint">輸入中文、英文或 3 碼代碼，例如 東京、NRT</small>
+        <span id="st-destination" class="sr-only combo-status" aria-live="polite"></span>
         <span id="err-destination" class="field-error" data-error-for="destination"></span>
       </div>
       <div class="field">

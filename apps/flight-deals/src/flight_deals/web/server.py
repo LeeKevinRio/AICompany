@@ -19,6 +19,7 @@ from jinja2 import Environment, FileSystemLoader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from flight_deals.services import Services
+from flight_deals.services import airports as airport_lookup
 
 WEB_DIR = Path(__file__).resolve().parent
 CLIENT_HEADER = "X-Flight-Deals-Client"
@@ -35,6 +36,7 @@ SECURITY_HEADERS = {
 }
 
 JsonBody = Annotated[dict[str, Any], Body()]
+AIRPORTS_CACHE_CONTROL = "private, max-age=300"
 Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
@@ -123,6 +125,22 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request) -> Response:
         return page(request, "settings.html", services.views.settings_page())
+
+    # ---- JSON read API -----------------------------------------------------------
+
+    @app.get("/api/airports")
+    def api_airports(q: str = "") -> JSONResponse:
+        # C-20: bounded input, at most MAX_RESULTS items, cacheable (static table).
+        query = q.strip()
+        if len(query) > airport_lookup.MAX_QUERY_LENGTH:
+            return errors_response(
+                {"q": f"搜尋文字最多 {airport_lookup.MAX_QUERY_LENGTH} 字"}, status=422
+            )
+        items = airport_lookup.suggest(query) if query else []
+        return JSONResponse(
+            {"items": items[: airport_lookup.MAX_RESULTS]},
+            headers={"Cache-Control": AIRPORTS_CACHE_CONTROL},
+        )
 
     # ---- JSON write API ----------------------------------------------------------
 

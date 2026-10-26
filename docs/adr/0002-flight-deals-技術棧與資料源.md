@@ -365,3 +365,24 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - 實測：TPE→NRT 單程 0.9 秒 18 筆；來回 1.0 秒 18 筆；TPE→BKK 連續 5 天 5 次查詢各 0.6 秒、皆成功，未見封鎖。
 - 錯誤行為：過去日期拋 `fast_flights.FlightsNotFound`（訊息 `no flights found; received error`）；不存在的機場代碼拋 `IndexError`（套件內部解析失敗）。adapter 必須攔截廣義例外並依 D-2 分類為 `no_data` / `blocked` / `error`。
 - 實測錄下的來回程 fixture 存在總經理暫存區，交由 dev-lead 複製進 `tests/fixtures/`。
+
+## FD-2 增補：機場中文名稱自動完成（2026-10-26，tech-architect 評估；不另開 ADR；總經理落檔）
+
+範圍：出發地／目的地欄位的中英文與代碼自動完成，列表、詳情、推播改顯示「中文短名 代碼」。屬 D-1 範圍：不新增依賴，模組邊界、資料源、schema 都不變。
+
+決策：
+- 對照表為 `domain/airports.py` 內的 frozen dataclass 常數（否決 JSON 資料檔：domain 維持沒有 I/O，型別交給 mypy 檢查）。欄位：`code`、`kind`（airport|city）、`city_code`、`zh_name`、`display_name`、`en_name`、`country_zh`、`aliases`、`city_query_verified`、`verified_note`。代碼全表唯一；IATA 城市碼與機場碼撞碼時只保留機場列。
+- 搜尋與排序是 domain 純函式；端點 `GET /api/airports?q=` 經 `services/airports.py` 轉呼叫（`web` 依 `test_architecture.py` 不得直接 import `domain`）。排序：代碼完全命中 > 中文前綴 > 英文前綴 > 包含，同層依表內順序，最多 10 筆。否決「整表送前端由 JS 排序」，因為規則會有兩份實作。
+- 城市代碼只有經實測可查價者（`city_query_verified=True`）可選。2026-10-26 fast-flights 3.1.0 實測：TYO、OSA 成功；LON 失敗（套件內部 IndexError），不開放。其他城市由 dev-lead 批次實測後逐筆開放，每筆附 `verified_note`。
+- 顯示名稱在讀取時由 `route_label` 推導，不寫進 DB；表外代碼回退成只顯示代碼。修改監看時，舊代碼沒改動可豁免對照表檢查；掃描不受影響。
+- 推播只加事實性地名，C-17 判定不重新送審；新字串納入 BANNED_PHRASES 測試。
+- 總經理裁決（PM 開放問題，CEO 可翻案）：空欄位不列常用項；同城市群組互飛拒絕；舊監看修改時，未改動的舊代碼可豁免對照表檢查（依 C-21；改成別的代碼就必須在表內）；TPE 短名「台北桃園」、TSA「台北松山」；收錄範圍 100～150 筆（台灣、日、韓、港澳、東南亞、中國主要城市、歐美大洋洲主要城市）。
+
+新增約束：
+- **C-19** 對照表每筆 `code` 符合 `^[A-Z]{3}$` 且全表唯一；`city_code` 只出現在機場且指向 `kind=city`；`city_query_verified=True` 必附 `verified_note`；`display_name` 不超過 8 字。有測試。
+- **C-20** `GET /api/airports` 任何輸入都不回傳超過 10 筆；`q` 超過 32 字元回 422；回應帶 `Cache-Control`。有測試。
+- **C-21** 出發地／目的地必須在對照表內且可選（未驗證的城市不可選）；同城市群組不可互飛；只有修改時沿用的舊代碼可豁免。有測試。
+- **C-22** 排序與筆數上限只在 `domain/airports.py` 定義；`web/static/app.js` 不含比對或排序邏輯，不使用 `innerHTML`。
+- **C-23** 對照表檔頭載明出處、查證日期、查證人；每筆代碼對照 IATA 官方查詢頁，不得憑記憶填寫；qa-reviewer 抽查至少 15 筆或 10%（取較多者），結果記在任務單。
+- **C-24** FD-2 不新增 migration、不新增執行期依賴；`domain/links.py` 查票連結維持用代碼。
+- **C-25** 推播訊息在 5 筆、最長 `display_name` 的情況下長度小於 `notify/telegram.py` 的 `MAX_MESSAGE_LENGTH`。有測試。

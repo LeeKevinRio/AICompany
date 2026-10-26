@@ -2,7 +2,7 @@
 
     uv run pytest -q -m live tests/test_live_smoke.py
 
-It sends exactly one query to Google Flights through fast_flights (no retries).
+Each test sends exactly one query to Google Flights through fast_flights (no retries).
 """
 
 from __future__ import annotations
@@ -38,3 +38,21 @@ def test_google_flights_one_real_query() -> None:
     print(f"cheapest={cheapest.amount_minor} {cheapest.currency} carrier={cheapest.carrier}")
     assert cheapest.currency == "TWD" and cheapest.amount_minor > 0
     assert cheapest.source == "google_flights" and cheapest.price_kind == "live"
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("city", ["TYO", "OSA"])
+def test_google_flights_city_code_query(city: str) -> None:  # FD-2 FR-D3: city codes
+    depart = (datetime.now(UTC) + timedelta(days=45)).date()
+    source = GoogleFlightsSource(
+        timeout_seconds=30.0,
+        max_attempts=1,
+        backoff_base_seconds=0.0,
+        throttle=Throttle(2.0),
+        cache=TTLCache(0.0),
+    )
+    result = source.search(
+        FlightSearch(origin="TPE", destination=city, pair=DatePair(depart), max_stops=1)
+    )
+    print(f"{city}: status={result.status} quotes={len(result.quotes)} error={result.error}")
+    assert result.status == "ok", result.error

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, datetime
 
+from flight_deals.domain.airports import route_label
 from flight_deals.domain.currency import format_money
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.rules import TriggeredItem
@@ -95,14 +96,14 @@ def price_alert_message(
 ) -> str:
     """One merged message for all triggered items of a watch in a single scan."""
     trip = TRIP_TYPE_LABELS.get(trip_type, trip_type)
+    route = route_label(origin, destination)
     lines = [f"[flight-deals] 監看「{watch_name}」查到 {len(items)} 筆符合條件的價格（{trip}）"]
     for index, item in enumerate(items, start=1):
         cand = item.candidate
         dates = date_range_text(cand.depart_date, cand.return_date)
         lines.append("")
         lines.append(
-            f"{index}. 查到 {origin}→{destination} {dates} "
-            f"{format_money(cand.amount_minor, cand.currency)}"
+            f"{index}. 查到 {route} {dates} {format_money(cand.amount_minor, cand.currency)}"
         )
         lines.append(f"   觸發原因：{item_reasons_text(item)}")
         lines.append(f"   航空公司：{cand.carrier or '未提供'}")

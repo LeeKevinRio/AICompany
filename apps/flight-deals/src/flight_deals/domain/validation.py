@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import cast
 
+from flight_deals.domain.airports import is_selectable, lookup, same_city_group
 from flight_deals.domain.currency import DEFAULT_CURRENCY, major_to_minor
 from flight_deals.domain.models import DateMode, TripType, WatchSpec
 
-_AIRPORT = re.compile(r"^[A-Z]{3}$")
 _INTEGER = re.compile(r"^-?\d+$")
 MAX_TRIP_DAYS = 60
 MAX_STOPS_LIMIT = 2
@@ -24,6 +24,10 @@ MAX_WINDOW_DAYS = 366
 MAX_INT_DIGITS = 12
 TOO_LARGE = "數值過大"
 _FALSY = {"false", "0", "off", "no", ""}
+UNKNOWN_PLACE = "找不到此機場或城市，請從下拉選取"
+ORIGIN_REQUIRED = "請從下拉選取出發地"
+UNVERIFIED_CITY = "此城市代碼尚未確認可查價，請改選個別機場"
+SAME_CITY = "出發地與目的地不可為同一城市"
 
 
 @dataclass(frozen=True)
@@ -83,20 +87,41 @@ def validate_watch_input(
     """Validate raw form values. ``today`` is the Asia/Taipei calendar date.
 
     On edit (``existing`` given), date fields left unchanged are not rejected for being
-    in the past, so a running flexible window can still have its budget edited.
+    in the past, so a running flexible window can still have its budget edited. Likewise
+    an origin / destination code kept unchanged skips the airport table check (FR-C1).
     """
     errors: dict[str, str] = {}
 
-    origin = (_text(raw, "origin") or "TPE").upper()
+    # Default TPE only when the key is absent; an explicit blank must not become TPE.
+    origin = _text(raw, "origin").upper() if "origin" in raw else "TPE"
     destination = _text(raw, "destination").upper()
-    if not _AIRPORT.match(origin):
-        errors["origin"] = "出發地須為 3 碼英文機場或城市代碼"
+    prev_origin = existing.origin if existing else None
+    prev_destination = existing.destination if existing else None
+
+    def check_place(key: str, code: str, previous: str | None) -> None:
+        # C-21: only a code kept unchanged on edit may bypass the table check (FR-C1).
+        if existing is not None and code == previous:
+            return
+        place = lookup(code)
+        if place is None:
+            errors[key] = UNKNOWN_PLACE
+        elif not is_selectable(place):
+            errors[key] = UNVERIFIED_CITY
+
+    if not origin:
+        errors["origin"] = ORIGIN_REQUIRED
+    else:
+        check_place("origin", origin, prev_origin)
     if not destination:
         errors["destination"] = "請填寫目的地"
-    elif not _AIRPORT.match(destination):
-        errors["destination"] = "目的地須為 3 碼英文機場或城市代碼"
-    if "origin" not in errors and "destination" not in errors and origin == destination:
-        errors["destination"] = "出發地與目的地不可相同"
+    else:
+        check_place("destination", destination, prev_destination)
+    if "origin" not in errors and "destination" not in errors:
+        unchanged = origin == prev_origin and destination == prev_destination
+        if origin == destination:
+            errors["destination"] = "出發地與目的地不可相同"
+        elif not unchanged and same_city_group(origin, destination):
+            errors["destination"] = SAME_CITY
 
     trip_type_text = _text(raw, "trip_type") or "round_trip"
     if trip_type_text not in ("round_trip", "one_way"):

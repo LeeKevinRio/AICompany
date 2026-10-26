@@ -367,7 +367,7 @@ def test_price_alert_contains_required_fields() -> None:  # AC-C5
         watch_name="東京", origin="TPE", destination="NRT", trip_type="round_trip", items=items
     )
     for needle in (
-        "TPE→NRT",
+        "台北桃園 TPE → 東京成田 NRT",
         "12/10–12/15",
         "TWD 9,500",
         "航空公司：X",
@@ -411,7 +411,12 @@ def wording_surfaces() -> dict[str, str]:
     for template in sorted((SRC / "web" / "templates").glob("*.html")):
         surfaces[f"web/templates/{template.name}"] = template.read_text(encoding="utf-8")
     surfaces["web/static/app.js"] = (SRC / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    for module in ("services/views.py", "domain/messages.py"):
+    for module in (
+        "services/views.py",
+        "domain/messages.py",
+        "domain/airports.py",
+        "domain/validation.py",
+    ):
         constants = _string_constants(SRC / module)
         if module == "domain/messages.py":
             # The banned list itself is the only place these phrases may appear.
