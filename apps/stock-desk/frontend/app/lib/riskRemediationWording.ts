@@ -136,3 +136,29 @@ export const TARGET_LADDER_GROUP_TITLE = "停利參考（固定算式，非分�
 
 /** 4-appendix, next to the basis rule when it is a drawdown rule; 風控 2026-10-26 定稿；失效條件 T3 */
 export const DRAWDOWN_UNADJUSTED_NOTICE = "以未還原價計算，回撤可能含除權息缺口";
+
+/* ---------- Item 5-BT: backtest standing disclosure ---------- */
+
+/**
+ * 5-BT heading, picked by whether the configured slippage is zero.
+ * 風控 2026-10-26 定稿；失效條件 T5
+ */
+export function buildBacktestAssumptionsHeading(slippageIsZero: boolean): string {
+  return slippageIsZero
+    ? "先看以下假設：前兩項可能讓結果偏樂觀"
+    : "先看以下假設：第一項可能讓結果偏樂觀";
+}
+
+/** 5-BT point 1; 風控 2026-10-26 定稿；失效條件 T5 */
+export const BACKTEST_SAME_CLOSE_FILL_POINT =
+  "訊號與成交用同一根收盤價：收盤價要到收盤才知道，實際下單做不到這樣成交。";
+
+/**
+ * 5-BT point 2, picked by the configured slippage (`bps`).
+ * 風控 2026-10-26 定稿；失效條件 T5
+ */
+export function buildBacktestSlippagePoint(bps: number): string {
+  return bps === 0
+    ? "滑價設為 0 bps：滑價是實際成交價與預期價的差距，這裡沒有計入。"
+    : `滑價假設 ${bps} bps：滑價是實際成交價與預期價的差距，實際可能較大或較小。`;
+}

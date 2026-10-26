@@ -35,6 +35,7 @@ describe("backtestCurveWording — 逐字釘住", () => {
     expect(W.EQUITY_CURVE_EMPTY_STATEMENT).toBe("本次回測樣本內外皆無足夠的每日權益資料，故無法繪製曲線圖。");
     expect(W.EQUITY_CURVE_ARIA_LABEL).toBe("策略與 Buy & Hold 權益曲線，含樣本內外分隔與策略回撤面積圖");
     expect(W.EQUITY_CURVE_ARIA_LABEL_SINGLE_SEGMENT).toBe("策略與 Buy & Hold 權益曲線，含策略回撤面積圖");
-    expect(W.EQUITY_CURVE_GUIDANCE).toBe("本圖同上方提醒：僅為歷史統計描述，不代表未來會重演。");
+    // 字面更新（風控 2026-10-26 定稿 5-BT 圖說）
+    expect(W.EQUITY_CURVE_GUIDANCE).toBe("本圖同上方提醒：僅為歷史統計描述，不代表未來會重演；成交與滑價假設見上方。");
   });
 });
