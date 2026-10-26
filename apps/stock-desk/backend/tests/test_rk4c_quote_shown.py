@@ -877,6 +877,10 @@ def test_r4c_16_limits_shows_no_share_range() -> None:
         "detail",
         "worst_symbol",
         "evaluated_count",
+        # 2026-10-26 (#61 batch one): cap 1's ledger summary count (#4a/#4b,
+        # 實作約束 8). A count of holdings, no figure priced through a quote;
+        # the word scan below still holds. Reported for W-RK4-1 recheck.
+        "violated_count",
         "excluded",
     }, T_E1B_2_BACK_TO_RISK
     assert set(ExcludedSymbol.model_fields) == {"symbol", "market", "reason"}, T_E1B_2_BACK_TO_RISK

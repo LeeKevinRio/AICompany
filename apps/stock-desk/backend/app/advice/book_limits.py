@@ -283,6 +283,13 @@ class BookLimitCheck(BaseModel):
     #: How many holdings -- or, for cap 2, how many industries -- were actually
     #: compared. ``0`` for the two book-level caps, which compare nothing.
     evaluated_count: int
+    #: How many of the ``evaluated_count`` compared items had their own verdict
+    #: ``violated`` -- read off the same per-holding checks ``worst_symbol``
+    #: was chosen from, never recounted. For cap 1 this is the ``{n}`` of the
+    #: ledger-level summary the gauge shows on that row (風控 2026-10-26
+    #: 第1條下修告知逐字審 #4a/#4b, 實作約束 8). ``0`` when nothing was compared
+    #: and for the two book-level caps.
+    violated_count: int
     excluded: list[ExcludedSymbol]
 
 
@@ -453,6 +460,7 @@ def _book_level_check(index: int, check: LimitCheck, *, book_is_empty: bool) -> 
         detail=EMPTY_BOOK_DETAIL.format(name=check.name) if nothing_to_measure else check.detail,
         worst_symbol=None,
         evaluated_count=0,
+        violated_count=0,
         excluded=[],
     )
 
@@ -611,6 +619,7 @@ def _aggregate(
                 detail=detail,
                 worst_symbol=None,
                 evaluated_count=0,
+                violated_count=0,
                 excluded=excluded,
             )
         )
@@ -636,6 +645,9 @@ def _aggregate(
             # so naming the holding it was read from would misattribute it.
             worst_symbol=None if by_sector else worst.symbol,
             evaluated_count=len(comparable),
+            violated_count=sum(
+                1 for candidate in comparable if candidate.checks[limit_id].status == "violated"
+            ),
             excluded=excluded,
         ),
         reported_sector=worst.sector if by_sector else None,
