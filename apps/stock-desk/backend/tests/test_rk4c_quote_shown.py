@@ -885,6 +885,9 @@ def test_r4c_16_limits_shows_no_share_range() -> None:
         "limits",
         "notes",
         "sources",
+        # 2026-10-26 (CEO #63): the S2 sentence for the cap-1 row (#2, S1/S1').
+        # Copy only, no priced figure; reported for W-RK4-1 recheck.
+        "cap1_migration_notice",
         "as_of",
     }, T_E1B_2_BACK_TO_RISK
     names = set(_field_names(PortfolioLimitsResponse, set()))

@@ -63,6 +63,7 @@ from app.data.quota import (
 from app.portfolio.summary import build_summary
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
+from app.settings.migrations import Cap1MigrationRecord, Cap1MigrationStatus
 from app.settings.models import AppSettings, AppSettingsPatch
 from app.settings.net_worth import (
     NetWorthReview,
@@ -187,6 +188,49 @@ class NetWorthView(BaseModel):
     warnings: list[str]
 
 
+class Cap1NoticeItemView(BaseModel):
+    """One「標籤｜正文」item of the settings-page S2 notice, already filled."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    body: str
+
+
+class Cap1SettingsNoticeView(BaseModel):
+    """The settings-page S2 notice: a title over ordered items (I-1)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    items: list[Cap1NoticeItemView]
+
+
+class Cap1MigrationView(BaseModel):
+    """The S2 record of the cap-1 default migration (CEO #63), read-only.
+
+    Served on every read so the settings page can keep it standing beside the
+    cap-1 field: the record is the audit trail (what was stored, what was
+    written, when, on what basis), and ``notice`` is what that page has to show
+    for it, every branch chosen and every slot filled here (``None`` when there
+    is none). The record lives in its own table, never in ``risk_budget``, so
+    no ``PUT`` body can carry or edit it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Cap1MigrationStatus
+    previous_value: float | None
+    new_value: float | None
+    failed_sections: list[str]
+    basis: str
+    #: ISO 8601 UTC; for ``skipped``, the latest attempt.
+    recorded_at: str
+    #: ``migrated`` only: a save has since written another cap-1 value.
+    changed_by_user: bool
+    notice: Cap1SettingsNoticeView | None
+
+
 class SettingsResponse(BaseModel):
     """The settings document plus its data-source block and ``as_of`` stamp."""
 
@@ -197,6 +241,9 @@ class SettingsResponse(BaseModel):
     notes: list[str]
     data_sources: DataSourcesView
     net_worth: NetWorthView
+    #: ``None`` only when no record exists, which a store that has run its
+    #: start-up migration never leaves behind.
+    cap1_migration: Cap1MigrationView | None
     as_of: str
 
 
@@ -314,9 +361,37 @@ def _net_worth_view(settings: AppSettings) -> NetWorthView:
     )
 
 
+def _cap1_migration_view(
+    record: Cap1MigrationRecord | None, settings: AppSettings
+) -> Cap1MigrationView | None:
+    if record is None:
+        return None
+    notice = record.settings_notice(
+        current_max_position_weight=settings.risk_budget.max_position_weight
+    )
+    return Cap1MigrationView(
+        status=record.status,
+        previous_value=record.previous_value,
+        new_value=record.new_value,
+        failed_sections=list(record.failed_sections),
+        basis=record.basis,
+        recorded_at=record.recorded_at,
+        changed_by_user=record.changed_by_user,
+        notice=(
+            None
+            if notice is None
+            else Cap1SettingsNoticeView(
+                title=notice.title,
+                items=[Cap1NoticeItemView(label=label, body=body) for label, body in notice.items],
+            )
+        ),
+    )
+
+
 def _response(
     settings: AppSettings,
     ledger: QuotaLedger,
+    store: SettingsStore,
     *,
     net_worth_notes: list[str] | None = None,
 ) -> SettingsResponse:
@@ -330,6 +405,7 @@ def _response(
         notes=[] if verified else [RATE_PROVENANCE_NOTE],
         data_sources=DataSourcesView(quotas=[_alpha_vantage_quota(ledger)]),
         net_worth=view,
+        cap1_migration=_cap1_migration_view(store.cap1_migration(), settings),
         as_of=now_iso(),
     )
 
@@ -361,7 +437,7 @@ def _review_reported_net_worth(
 
 @router.get("", response_model=SettingsResponse)
 def read_settings(store: SettingsDep, ledger: QuotaDep) -> SettingsResponse:
-    return _response(store.load(), ledger)
+    return _response(store.load(), ledger, store)
 
 
 @router.put("", response_model=SettingsResponse)
@@ -374,7 +450,7 @@ def write_settings(
 ) -> SettingsResponse:
     current = store.load()
     if body.net_worth is None:
-        return _response(store.save(body.apply_to(current)), ledger)
+        return _response(store.save(body.apply_to(current)), ledger, store)
 
     amount = body.net_worth.total_net_worth_twd
     review, valued_book = _review_reported_net_worth(amount, positions, valuator)
@@ -400,4 +476,4 @@ def write_settings(
     # ``review.warnings`` is not passed on: the response's warning is rebuilt
     # from what was just stored, so the sentence the user sees now is the same
     # one they will keep seeing on every later read.
-    return _response(saved, ledger, net_worth_notes=review.notes)
+    return _response(saved, ledger, store, net_worth_notes=review.notes)
