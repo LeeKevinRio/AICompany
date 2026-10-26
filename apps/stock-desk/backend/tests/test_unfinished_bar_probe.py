@@ -16,7 +16,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, get_args
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -197,7 +198,8 @@ def test_fetched_at_with_a_non_utc_offset_is_compared_as_an_instant(tmp_path: Pa
 
 
 def test_probe_rule_constants_match_the_data_service_session_policy() -> None:
-    markets: tuple[Market, ...] = ("TW", "US")
+    markets: tuple[Market, ...] = get_args(Market)
+    assert set(probe.MARKET_RULES) == set(markets)
     for market in markets:
         policy = policy_for(market)
         assert probe.MARKET_RULES[market].timezone == policy.timezone
@@ -291,9 +293,11 @@ def test_output_lists_every_requested_field_and_states_no_conclusion(
     assert "run_at_utc: 2026-10-26T12:00:00+00:00" in out
     assert "TW: 13:30 Asia/Taipei" in out
     assert "US: 16:00 America/New_York" in out
-    lowered = out.lower()
+    # The db_path line holds pytest's tmp_path (named after this test), so it is left out.
+    body = "\n".join(line for line in out.splitlines() if not line.startswith("db_path:"))
+    lowered = body.lower()
     for word in ("recommend", "should", "suggest", "conclusion", "residue", "clean up", "delete"):
-        assert word not in lowered.replace("could not be judged", ""), word
+        assert word not in lowered, word
 
 
 def test_empty_table_prints_zero_counts_and_exits_zero(
@@ -412,21 +416,72 @@ def _all_rows(path: Path) -> list[tuple[object, ...]]:
         return conn.execute("SELECT * FROM price_bars_cache ORDER BY 1, 2, 3").fetchall()
 
 
-def test_the_only_sql_issued_is_one_select_and_the_query_only_pragma(
+def test_the_only_sql_issued_is_the_query_only_pragma_and_one_select(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path, cache = _db(tmp_path)
     _put(cache, "2330", "TW", date(2026, 10, 20), _utc(2026, 10, 20, 3, 0))
     statements: list[str] = []
-    real_open = probe.open_read_only
+    uris: list[str] = []
+    real_connect = sqlite3.connect
 
-    def traced(db: Path) -> sqlite3.Connection:
-        conn: sqlite3.Connection = real_open(db)
+    def traced(database: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        # Installed before the connection exists, so the opening phase is traced as well.
+        uris.append(database)
+        conn: sqlite3.Connection = real_connect(database, *args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
 
-    monkeypatch.setattr(probe, "open_read_only", traced)
+    monkeypatch.setattr(probe.sqlite3, "connect", traced)
     _run(path, capsys)
 
-    assert statements == [probe.SCAN_SQL]
+    assert statements == ["PRAGMA query_only=ON", probe.SCAN_SQL]
+    assert len(uris) == 1 and uris[0].endswith("?mode=ro")
     assert probe.SCAN_SQL.lstrip().upper().startswith("SELECT ")
+
+
+# ---------------------------------------------------------------- awkward paths and environments
+
+
+def test_a_directory_name_with_space_hash_and_percent_opens_read_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    awkward = tmp_path / "my dir #1 %20"
+    awkward.mkdir()
+    path, cache = _db(awkward)
+    _put(cache, "2330", "TW", date(2026, 10, 20), _utc(2026, 10, 20, 3, 0))
+
+    with closing(probe.open_read_only(path)) as conn:
+        assert conn.execute("PRAGMA query_only").fetchone() == (1,)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("DELETE FROM price_bars_cache")
+    out = _run(path, capsys)
+    assert "price_bars_cache rows scanned: 1" in out
+    assert "fetched_before_close=1" in out
+
+
+def test_a_missing_time_zone_database_exits_two_with_a_clear_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, _ = _db(tmp_path)
+
+    def no_tzdata(key: str) -> ZoneInfo:
+        raise ZoneInfoNotFoundError(f"No time zone found with key {key}")
+
+    monkeypatch.setattr(probe, "ZoneInfo", no_tzdata)
+
+    assert probe.main(["--db-path", str(path)], now_utc=RUN_AT) == 2
+    captured = capsys.readouterr()
+    assert "tzdata" in captured.err
+    assert "Asia/Taipei" in captured.err
+    assert captured.out == ""
+
+
+def test_unknown_market_values_are_counted_in_the_counts_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, _ = _db(tmp_path)
+    _insert_raw(path, ("AAA", "JP", "2026-10-20", "2026-10-20T00:00:00+00:00"))
+    _insert_raw(path, ("BBB", "JP", "2026-10-21", "2026-10-21T00:00:00+00:00"))
+    out = _run(path, capsys)
+    assert "'JP' (market value without a close rule): rows=2" in out
