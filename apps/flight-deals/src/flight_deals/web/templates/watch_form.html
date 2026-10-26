@@ -66,12 +66,14 @@
     <div class="grid" data-show-when="date_mode=fixed">
       <div class="field">
         <label for="f-depart_date">出發日</label>
-        <input id="f-depart_date" type="date" name="depart_date" min="{{ today }}" value="{{ values.depart_date }}" aria-describedby="err-depart_date">
+        <input id="f-depart_date" type="date" name="depart_date" min="{{ today }}" value="{{ values.depart_date }}" aria-describedby="h-depart_date err-depart_date">
+        <small id="h-depart_date" class="hint"></small>
         <span id="err-depart_date" class="field-error" data-error-for="depart_date"></span>
       </div>
       <div class="field" data-show-when="trip_type=round_trip">
         <label for="f-return_date">回程日</label>
-        <input id="f-return_date" type="date" name="return_date" min="{{ today }}" value="{{ values.return_date }}" aria-describedby="err-return_date">
+        <input id="f-return_date" type="date" name="return_date" min="{{ today }}" value="{{ values.return_date }}" aria-describedby="h-return_date err-return_date">
+        <small id="h-return_date" class="hint"></small>
         <span id="err-return_date" class="field-error" data-error-for="return_date"></span>
       </div>
     </div>
@@ -79,12 +81,14 @@
     <div class="grid" data-show-when="date_mode=flexible">
       <div class="field">
         <label for="f-window_start">最早出發日</label>
-        <input id="f-window_start" type="date" name="window_start" min="{{ today }}" value="{{ values.window_start }}" aria-describedby="err-window_start">
+        <input id="f-window_start" type="date" name="window_start" min="{{ today }}" value="{{ values.window_start }}" aria-describedby="h-window_start err-window_start">
+        <small id="h-window_start" class="hint"></small>
         <span id="err-window_start" class="field-error" data-error-for="window_start"></span>
       </div>
       <div class="field">
         <label for="f-window_end"><span data-label-round="最晚回程日" data-label-oneway="最晚出發日" class="js-window-end-label">最晚回程日</span></label>
-        <input id="f-window_end" type="date" name="window_end" min="{{ today }}" value="{{ values.window_end }}" aria-describedby="err-window_end">
+        <input id="f-window_end" type="date" name="window_end" min="{{ today }}" value="{{ values.window_end }}" aria-describedby="h-window_end err-window_end">
+        <small id="h-window_end" class="hint"></small>
         <span id="err-window_end" class="field-error" data-error-for="window_end"></span>
       </div>
       <div class="field" data-show-when="trip_type=round_trip">

@@ -305,12 +305,20 @@ class ScanService:
             result = self._safe_search(source, search)
             outcome.queries += result.attempts
             self._spent += result.attempts
-            try_info = {
+            try_info: dict[str, Any] = {
                 "source": source.name,
                 "status": result.status,
                 "error": result.error,
                 "from_cache": result.from_cache,
             }
+            stats = result.parse_stats
+            if stats is not None:
+                # Integer counts only; display text is composed by services/views.py.
+                try_info.update(
+                    itineraries=stats.itineraries,
+                    unpriced=stats.unpriced,
+                    malformed=stats.malformed,
+                )
             entry["tries"].append(try_info)
             entry.update(source=source.name, status=result.status, from_cache=result.from_cache)
             if not result.from_cache:
@@ -333,6 +341,11 @@ class ScanService:
                     scan_run_id=run_id, watch_id=watch.id, revision=watch.revision, quote=cheapest
                 )
                 entry.update(amount_minor=cheapest.amount_minor, currency=cheapest.currency)
+                if stats is not None and stats.malformed > 0:
+                    # Unpriced itineraries are expected and stay out of error_summary;
+                    # unrecognised ones are kept visible as a sign of format drift.
+                    note = f"{source.name} 回應中有 {stats.malformed} 筆格式無法辨識"
+                    outcome.error = f"{outcome.error}；{note}" if outcome.error else note
                 outcome.success = True
                 outcome.candidate = Candidate(
                     observation_id=obs_id,

@@ -1,4 +1,4 @@
-"""Structural constraints from ADR-0002 (C-1, C-2, C-3, C-14, C-16, C-18) and bind host."""
+"""Structural constraints from ADR-0002 (C-1..C-3, C-14, C-16, C-18, C-26, C-28, C-29, C-31)."""
 
 from __future__ import annotations
 
@@ -125,9 +125,60 @@ def test_no_third_party_fetch_modes() -> None:
     )
     calls = [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.Call)]
     for call in calls:
-        assert all(kw.arg not in {"integration", "proxy"} for kw in call.keywords)
+        assert all(
+            kw.arg not in {"integration", "fetch_integration", "proxy"} for kw in call.keywords
+        )
     for banned in ("bright_data", "BrightData", "searchapi", "SearchAPI", "integrations"):
         assert banned not in code_only
+
+
+def _assert_stdlib_only(path: Path) -> None:
+    import sys
+
+    stdlib = set(sys.stdlib_module_names) | {"__future__"}
+    for name in imports_of(path):
+        root = name.split(".")[0]
+        assert root in stdlib or root == PACKAGE, (path, name)
+
+
+def test_google_payload_parser_is_stdlib_only_and_independent() -> None:  # C-26
+    path = SRC / "sources" / "google_payload.py"
+    _assert_stdlib_only(path)
+    assert "fast_flights" not in path.read_text(encoding="utf-8")
+
+
+def test_google_adapter_uses_only_query_builder_and_html_fetcher() -> None:  # C-26
+    tree = ast.parse((SRC / "sources" / "google_flights.py").read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("fast_flights")
+        for alias in node.names
+    }
+    assert imported == {"FlightQuery", "Passengers", "create_query", "fetch_flights_html"}
+
+
+def test_scheduler_lock_is_stdlib_only_and_never_deletes_or_kills() -> None:  # C-28
+    path = SRC / "scheduler" / "lock.py"
+    _assert_stdlib_only(path)
+    code = path.read_text(encoding="utf-8")
+    for banned in ("os.kill", "unlink", "os.remove", "rmtree", "O_EXCL"):
+        assert banned not in code, banned
+
+
+def test_security_headers_middleware_is_added_last() -> None:  # C-29
+    tree = ast.parse((SRC / "web" / "server.py").read_text(encoding="utf-8"))
+    added = [
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_middleware"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+    ]
+    assert added == ["BaseHTTPMiddleware", "TrustedHostMiddleware", "SecurityHeadersMiddleware"]
+    assert "@app.middleware" not in (SRC / "web" / "server.py").read_text(encoding="utf-8")
 
 
 def test_no_node_toolchain() -> None:  # C-1
@@ -158,7 +209,7 @@ def test_js_only_in_static() -> None:  # C-14
 
 def test_gitignore_covers_local_state() -> None:  # C-16
     lines = (APP_DIR / ".gitignore").read_text(encoding="utf-8").splitlines()
-    for entry in (".venv/", "data/", "*.db", "*.sqlite*", "__pycache__/", ".env"):
+    for entry in (".venv/", "data/", "*.db", "*.db.lock", "*.sqlite*", "__pycache__/", ".env"):
         assert entry in lines
 
 

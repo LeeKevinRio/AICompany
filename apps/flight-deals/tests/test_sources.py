@@ -1,29 +1,39 @@
-"""Adapter contract tests (C-4, C-6) using the recorded Google Flights fixture."""
+"""Adapter contract tests (C-4, C-6, C-26, C-27, C-31) on recorded Google payloads."""
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
+import re
 import threading
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
-from fast_flights import FlightsNotFound
-from fast_flights.model import (
-    Airport,
-    CarbonEmission,
-    Flights,
-    SimpleDatetime,
-    SingleFlight,
-)
 
 from flight_deals.domain.models import DatePair, FlightSearch
-from flight_deals.ports import SourceResult
+from flight_deals.ports import ParseStats, SourceResult
+from flight_deals.sources import google_flights, google_payload
 from flight_deals.sources._support import Throttle, TTLCache, backoff_delay, call_with_timeout
 from flight_deals.sources.fixture import FixtureSource
-from flight_deals.sources.google_flights import GoogleFlightsSource, build_query
-from tests.conftest import ROUNDTRIP_FIXTURE, FakeClock
+from flight_deals.sources.google_flights import (
+    VERIFIED_FAST_FLIGHTS_VERSION,
+    GoogleFlightsSource,
+    build_query,
+)
+from flight_deals.sources.google_payload import (
+    PayloadErrorStatus,
+    PayloadFormatError,
+    classify_itinerary,
+    extract_payload,
+    parse_payload,
+)
+from tests.conftest import FIXTURES, ROUNDTRIP_FIXTURE, FakeClock
+
+APP_DIR = Path(__file__).resolve().parents[1]
+SHA_PAYLOAD_FIXTURE = FIXTURES / "payload_TPE_SHA.json"
 
 SEARCH = FlightSearch(
     origin="TPE",
@@ -31,38 +41,36 @@ SEARCH = FlightSearch(
     pair=DatePair(date(2026, 12, 10), date(2026, 12, 15)),
     max_stops=1,
 )
+SHA_SEARCH = FlightSearch(
+    origin="TPE", destination="SHA", pair=DatePair(date(2026, 12, 10)), max_stops=None
+)
 
 
-def fixture_flights() -> list[Flights]:
-    """Rebuild real fast_flights dataclasses from the recorded asdict() payload."""
-    payload = json.loads(ROUNDTRIP_FIXTURE.read_text(encoding="utf-8"))
-    flights: list[Flights] = []
-    for record in payload["flights"]:
-        segments = [
-            SingleFlight(
-                from_airport=Airport(**seg["from_airport"]),
-                to_airport=Airport(**seg["to_airport"]),
-                departure=SimpleDatetime(
-                    date=tuple(seg["departure"]["date"]), time=tuple(seg["departure"]["time"])
-                ),
-                arrival=SimpleDatetime(
-                    date=tuple(seg["arrival"]["date"]), time=tuple(seg["arrival"]["time"])
-                ),
-                duration=seg["duration"],
-                plane_type=seg["plane_type"],
-            )
-            for seg in record["flights"]
-        ]
-        flights.append(
-            Flights(
-                type=record["type"],
-                price=record["price"],
-                airlines=record["airlines"],
-                flights=segments,
-                carbon=CarbonEmission(**record["carbon"]),
-            )
-        )
-    return flights
+def sha_payload() -> Any:
+    """Raw ds:1 payload recorded live for TPE->SHA (4 itineraries, 2 without a price)."""
+    return json.loads(SHA_PAYLOAD_FIXTURE.read_text(encoding="utf-8"))
+
+
+def page_html(payload: Any, *, script_class: str = "ds:1") -> str:
+    """Wrap a payload the way the results page embeds it."""
+    data = json.dumps(payload, ensure_ascii=False)
+    script = f"AF_initDataCallback({{key: 'ds:1', hash: '2', data:{data}, sideChannel: {{}}}});"
+    return (
+        "<!doctype html><html><head><script nonce=\"n\">var x = '<div>';</script></head>"
+        f'<body><div>header</div><script class="{script_class}" nonce="n">{script}</script>'
+        "<script class=\"ds:2\">AF_initDataCallback({key: 'ds:2', data:[1], sideChannel: {}});"
+        "</script></body></html>"
+    )
+
+
+def itineraries(payload: Any) -> list[Any]:
+    result: list[Any] = payload[3][0]
+    return result
+
+
+def unpriced_only(payload: Any) -> Any:
+    payload[3][0] = [k for k in itineraries(payload) if k[1][0] == []]
+    return payload
 
 
 class Recorder:
@@ -110,15 +118,21 @@ def assert_contract(result: SourceResult, source_name: str) -> None:
         assert quote.return_date == date(2026, 12, 15)
 
 
-def test_google_flights_contract_on_recorded_fixture(clock: FakeClock) -> None:
-    source, _ = make_source(Recorder(fixture_flights()), clock)
-    result = source.search(SEARCH)
-    assert_contract(result, "google_flights")
+def test_google_flights_contract_on_recorded_sha_payload(clock: FakeClock) -> None:  # C-26
+    source, _ = make_source(Recorder(page_html(sha_payload())), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "ok" and result.error is None
+    assert result.parse_stats == ParseStats(itineraries=4, priced=2, unpriced=2, malformed=0)
+    assert sorted(q.amount_minor for q in result.quotes) == [1265500, 1476300]
+    for quote in result.quotes:
+        assert quote.source == "google_flights" and quote.price_kind == "live"
+        assert isinstance(quote.amount_minor, int) and not isinstance(quote.amount_minor, bool)
+        assert quote.currency == "TWD" and quote.as_of_basis == "fetch_time"
+        assert quote.as_of.tzinfo is not None and quote.fetched_at.tzinfo is not None
+        assert quote.depart_date == date(2026, 12, 10) and quote.return_date is None
+        assert quote.stops == 1 and quote.carrier
     cheapest = min(result.quotes, key=lambda q: q.amount_minor)
-    assert cheapest.amount_minor == 1008800 and cheapest.carrier == "酷航"
-    assert cheapest.stops == 0 and cheapest.duration_minutes == 185
-    multi = [q for q in result.quotes if q.stops and q.stops > 0]
-    assert multi, "fixture includes connecting itineraries"
+    assert cheapest.duration_minutes == 145 + 140
 
 
 def test_build_query_is_round_trip_with_two_legs_and_no_integration() -> None:
@@ -128,28 +142,173 @@ def test_build_query_is_round_trip_with_two_legs_and_no_integration() -> None:
     assert query.currency == "TWD" and query.language == "zh-TW"
 
 
-def test_flights_not_found_is_no_data(clock: FakeClock) -> None:
-    source, _ = make_source(Recorder(FlightsNotFound("no flights found")), clock)
-    result = source.search(SEARCH)
+def test_parse_payload_counts_on_recorded_fixture() -> None:  # C-26
+    page = parse_payload(sha_payload())
+    assert page.stats == ParseStats(itineraries=4, priced=2, unpriced=2, malformed=0)
+    assert [r["price"] for r in page.records] == [12655, 14763]
+    assert all(r["type"] == "multi" and len(r["airlines"]) == 2 for r in page.records)
+    assert not page.no_results
+
+
+def test_variant_all_unpriced_is_no_data(clock: FakeClock) -> None:  # C-26, AC-T3
+    source, _ = make_source(Recorder(page_html(unpriced_only(sha_payload()))), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "no_data" and result.quotes == () and result.error is None
+    assert result.parse_stats == ParseStats(itineraries=2, priced=0, unpriced=2, malformed=0)
+
+
+@pytest.mark.parametrize("bad_price", ["12,655", 12655.0, True, 0, -5, None])
+def test_variant_non_int_price_is_malformed(bad_price: Any) -> None:  # C-26
+    payload = sha_payload()
+    itineraries(payload)[0][1][0][1] = bad_price
+    page = parse_payload(payload)
+    assert page.stats == ParseStats(itineraries=4, priced=1, unpriced=2, malformed=1)
+    assert [r["price"] for r in page.records] == [14763]
+
+
+def test_variant_malformed_only_is_blocked(clock: FakeClock) -> None:  # C-27, AC-T4b
+    payload = unpriced_only(sha_payload())
+    itineraries(payload)[0][1] = "unexpected"
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "blocked" and not result.quotes
+    assert result.parse_stats == ParseStats(itineraries=2, priced=0, unpriced=1, malformed=1)
+
+
+def test_variant_priced_plus_malformed_is_ok_with_count(clock: FakeClock) -> None:  # C-27
+    payload = sha_payload()
+    itineraries(payload)[2][1] = [[None, "n/a"], "token"]
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "ok" and len(result.quotes) == 2
+    assert result.parse_stats == ParseStats(itineraries=4, priced=2, unpriced=1, malformed=1)
+
+
+def test_variant_results_none_is_no_data(clock: FakeClock) -> None:  # C-26, C-27
+    payload = sha_payload()
+    payload[3][0] = None
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
     assert result.status == "no_data" and not result.quotes
+    assert result.parse_stats == ParseStats(0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"not": "a list"},
+        [1, 2, 3],
+        [None, None, None, "results"],
+        [None, None, None, []],
+        [None, None, None, [{"a": 1}]],
+        [None, None, None, [[]]],
+    ],
+    ids=["dict", "too-short", "results-str", "results-empty", "itins-dict", "itins-empty"],
+)
+def test_variant_bad_top_level_shape_is_blocked(clock: FakeClock, payload: Any) -> None:
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "blocked" and not result.quotes
+    assert result.parse_stats is not None
+
+
+def test_optional_fields_fall_back_to_none(clock: FakeClock) -> None:  # Decision 1
+    payload = sha_payload()
+    itineraries(payload)[0][0] = "flight info changed"
+    page = parse_payload(payload)
+    assert page.stats.priced == 2
+    assert page.records[0] == {"type": None, "price": 12655, "airlines": [], "flights": []}
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    quote = min(source.search(SHA_SEARCH).quotes, key=lambda q: q.amount_minor)
+    assert quote.amount_minor == 1265500
+    assert quote.carrier is None and quote.stops is None and quote.duration_minutes is None
+
+
+def test_classify_itinerary_shapes() -> None:  # Decision 1: only k[1][0] == [] is unpriced
+    assert classify_itinerary([[], [[None, 100], "t"]]) == "priced"
+    assert classify_itinerary([[], [[], "t"]]) == "unpriced"
+    assert classify_itinerary([[], [None, "t"]]) == "malformed"
+    assert classify_itinerary([[], [[None], "t"]]) == "malformed"
+    assert classify_itinerary([[], []]) == "malformed"
+    assert classify_itinerary([[]]) == "malformed"
+    assert classify_itinerary("x") == "malformed"
+
+
+# ---- extract_payload: HTML cases (C-26) -------------------------------------------------
+
+ERROR_STATUS_HTML = (
+    "<script class=\"ds:1\">AF_initDataCallback({key: 'ds:1', hash: '1', data:null, "
+    "errorHasStatus: true, sideChannel: {}});</script>"
+)
+
+
+def test_extract_payload_reads_ds1_script() -> None:
+    assert extract_payload(page_html(sha_payload())) == sha_payload()
+
+
+def test_extract_payload_accepts_extra_classes() -> None:
+    assert extract_payload(page_html([1, 2], script_class="xx ds:1 yy")) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "",
+        "   ",
+        "<html><body>captcha</body></html>",
+        page_html([1], script_class="ds:10"),
+        "<script class=\"ds:1\">AF_initDataCallback({key: 'ds:1'});</script>",
+        '<script class="ds:1">AF_initDataCallback({data:[1, 2, oops], sideChannel: {}});</script>',
+    ],
+    ids=["empty", "blank", "no-script", "other-class", "no-data-field", "bad-json"],
+)
+def test_extract_payload_rejects_pages_without_usable_data(html: str) -> None:
+    with pytest.raises(PayloadFormatError):
+        extract_payload(html)
+
+
+def test_extract_payload_error_status() -> None:
+    with pytest.raises(PayloadErrorStatus):
+        extract_payload(ERROR_STATUS_HTML)
+
+
+def test_extract_payload_handles_large_pages_quickly() -> None:
+    filler = "".join(f'<div class="c{i}"><span>x</span></div>' for i in range(60_000))
+    html = page_html(sha_payload()).replace("<div>header</div>", filler)
+    assert len(html) > 2_000_000
+    started = time.perf_counter()
+    assert parse_payload(extract_payload(html)).stats.priced == 2
+    assert time.perf_counter() - started < 1.0
+
+
+# ---- status table through the adapter (C-27) ---------------------------------------------
+
+
+def test_error_status_page_is_no_data(clock: FakeClock) -> None:
+    source, _ = make_source(Recorder(ERROR_STATUS_HTML), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "no_data" and not result.quotes
+    assert result.parse_stats == ParseStats(0, 0, 0, 0)
 
 
 @pytest.mark.parametrize(
     "response",
-    [[], IndexError("list index out of range"), AttributeError("'NoneType' has no 'text'")],
+    ["", "<html><body>unusual traffic</body></html>", None, ["not", "html"]],
+    ids=["empty", "no-script", "none", "not-a-string"],
 )
 def test_blank_or_unparseable_is_blocked_not_no_data(clock: FakeClock, response: Any) -> None:
     fetch = Recorder(response)
     source, _ = make_source(fetch, clock)
     result = source.search(SEARCH)
     assert result.status == "blocked"
-    assert not result.quotes
+    assert not result.quotes and result.parse_stats == ParseStats(0, 0, 0, 0)
     assert fetch.calls == 1, "blocked responses are not hammered with retries"
 
 
-def test_shape_change_in_records_is_blocked(clock: FakeClock) -> None:
-    source, _ = make_source(Recorder([{"price": "12,000", "flights": []}]), clock)
-    assert source.search(SEARCH).status == "blocked"
+def test_fetch_exception_is_error_without_stats(clock: FakeClock) -> None:
+    source, _ = make_source(Recorder(IndexError("inside the fetcher")), clock, attempts=1)
+    result = source.search(SEARCH)
+    assert result.status == "error" and result.parse_stats is None
 
 
 def test_network_error_retries_with_exponential_backoff(clock: FakeClock) -> None:
@@ -162,9 +321,9 @@ def test_network_error_retries_with_exponential_backoff(clock: FakeClock) -> Non
 
 
 def test_error_then_success_recovers(clock: FakeClock) -> None:
-    fetch = Recorder(ConnectionError("reset"), fixture_flights())
+    fetch = Recorder(ConnectionError("reset"), page_html(sha_payload()))
     source, _ = make_source(fetch, clock, attempts=2)
-    result = source.search(SEARCH)
+    result = source.search(SHA_SEARCH)
     assert result.status == "ok" and result.attempts == 2
 
 
@@ -173,7 +332,7 @@ def test_hard_timeout(clock: FakeClock) -> None:
 
     def slow(_search: FlightSearch) -> Any:
         release.wait(2)
-        return fixture_flights()
+        return page_html(sha_payload())
 
     source, _ = make_source(slow, clock, attempts=1, timeout=0.05)
     started = time.monotonic()
@@ -183,13 +342,55 @@ def test_hard_timeout(clock: FakeClock) -> None:
     assert time.monotonic() - started < 1.5
 
 
+def test_parsing_runs_outside_the_timeout(
+    clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:  # C-26
+    real_parse = google_payload.parse_payload
+
+    def slow_parse(payload: Any) -> Any:
+        time.sleep(0.3)
+        return real_parse(payload)
+
+    monkeypatch.setattr(google_flights, "parse_payload", slow_parse)
+    source, _ = make_source(Recorder(page_html(sha_payload())), clock, attempts=1, timeout=0.1)
+    assert source.search(SHA_SEARCH).status == "ok"
+
+
+def test_every_non_error_result_has_parse_stats(clock: FakeClock) -> None:  # C-27
+    responses = [
+        page_html(sha_payload()),
+        page_html(unpriced_only(sha_payload())),
+        ERROR_STATUS_HTML,
+        "",
+        page_html({"x": 1}),
+    ]
+    for response in responses:
+        source, _ = make_source(Recorder(response), clock, attempts=1)
+        result = source.search(SHA_SEARCH)
+        assert result.status != "error" and result.parse_stats is not None, response[:60]
+        assert all(q.amount_minor > 0 for q in result.quotes)
+
+
 def test_ttl_cache_serves_repeat_queries_without_outbound_call(clock: FakeClock) -> None:
-    fetch = Recorder(fixture_flights())
+    fetch = Recorder(page_html(sha_payload()))
     source, _ = make_source(fetch, clock)
-    first = source.search(SEARCH)
-    second = source.search(SEARCH)
+    first = source.search(SHA_SEARCH)
+    second = source.search(SHA_SEARCH)
     assert fetch.calls == 1
     assert second.from_cache and second.attempts == 0 and second.quotes == first.quotes
+    assert second.parse_stats == first.parse_stats
+
+
+# ---- upstream version tripwire (C-31) ----------------------------------------------------
+
+
+def test_verified_version_matches_installed_and_locked() -> None:
+    assert importlib.metadata.version("fast-flights") == VERIFIED_FAST_FLIGHTS_VERSION
+    lock = (APP_DIR / "uv.lock").read_text(encoding="utf-8")
+    match = re.search(r'name = "fast-flights"\nversion = "([^"]+)"', lock)
+    assert match and match.group(1) == VERIFIED_FAST_FLIGHTS_VERSION
+    pyproject = (APP_DIR / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"fast-flights>=3.1.0,<4"' in pyproject
 
 
 def test_ttl_cache_expires() -> None:

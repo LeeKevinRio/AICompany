@@ -1,24 +1,25 @@
 """Google Flights adapter built on the unofficial ``fast_flights`` package.
 
-This is the only module allowed to import ``fast_flights``. Third-party fetch modes
-(``integration=``, proxies, Bright Data, SearchApi, remote browsers) are never used.
-Results are classified as ok / no_data / blocked / error; an empty or unparseable
-answer is ``blocked``, never "no flights".
+This is the only module allowed to import ``fast_flights``, and only its query builder
+and HTML fetcher are used; the page is parsed by ``sources.google_payload`` so that one
+unpriced itinerary no longer discards the whole answer (ADR-0002 FD-3 Decision 1).
+Third-party fetch modes (``integration=``, ``fetch_integration=``, proxies, Bright Data,
+SearchApi, remote browsers) are never used. Results are classified as ok / no_data /
+blocked / error; an empty or unparseable answer is ``blocked``, never "no flights".
 """
 
 from __future__ import annotations
 
-import dataclasses
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
-from fast_flights import FlightQuery, FlightsNotFound, Passengers, create_query, get_flights
+from fast_flights import FlightQuery, Passengers, create_query, fetch_flights_html
 
-from flight_deals.domain.models import FlightSearch, PriceKind
+from flight_deals.domain.models import FlightSearch, PriceKind, PriceQuote, QueryStatus
 from flight_deals.domain.timeutil import utc_now
-from flight_deals.ports import Clock, SourceResult
+from flight_deals.ports import Clock, ParseStats, SourceResult
 from flight_deals.redact import redact_truncate
 from flight_deals.sources._records import RecordFormatError, quotes_from_records
 from flight_deals.sources._support import (
@@ -29,21 +30,23 @@ from flight_deals.sources._support import (
     backoff_delay,
     call_with_timeout,
 )
+from flight_deals.sources.google_payload import (
+    PayloadErrorStatus,
+    PayloadFormatError,
+    extract_payload,
+    parse_payload,
+)
 
 SOURCE_NAME = "google_flights"
 LANGUAGE = "zh-TW"
+# The payload layout in sources/google_payload.py was verified against this release.
+# Tests compare it with the installed version; on upgrade, rerun the live smoke test
+# and re-record tests/fixtures/payload_TPE_SHA.json before changing it.
+VERIFIED_FAST_FLIGHTS_VERSION = "3.1.0"
 
-FetchFn = Callable[[FlightSearch], Sequence[Any]]
+FetchFn = Callable[[FlightSearch], str]
 
-# Exceptions that mean "the page did not have the shape we expected".
-_PARSE_ERRORS: tuple[type[BaseException], ...] = (
-    AttributeError,
-    IndexError,
-    KeyError,
-    TypeError,
-    ValueError,
-    RecordFormatError,
-)
+NO_STATS = ParseStats(itineraries=0, priced=0, unpriced=0, malformed=0)
 
 
 def build_query(search: FlightSearch) -> Any:
@@ -74,22 +77,10 @@ def build_query(search: FlightSearch) -> Any:
     )
 
 
-def fetch_live(search: FlightSearch) -> Sequence[Any]:
+def fetch_live(search: FlightSearch) -> str:
     """Real network call through fast_flights' own fetcher (no integration, no proxy)."""
-    result: Sequence[Any] = get_flights(build_query(search))
-    return result
-
-
-def to_records(raw: Sequence[Any]) -> list[Mapping[str, Any]]:
-    records: list[Mapping[str, Any]] = []
-    for item in raw:
-        if dataclasses.is_dataclass(item) and not isinstance(item, type):
-            records.append(dataclasses.asdict(item))
-        elif isinstance(item, Mapping):
-            records.append(item)
-        else:
-            raise RecordFormatError(f"unexpected result item type {type(item).__name__}")
-    return records
+    html: str = fetch_flights_html(build_query(search))
+    return html
 
 
 class GoogleFlightsSource:
@@ -148,37 +139,67 @@ class GoogleFlightsSource:
     def _attempt(self, query: FlightSearch, attempts: int) -> SourceResult:
         fetched_at = self._clock()
 
-        def failed(status: str, message: str) -> SourceResult:
+        def result(
+            status: QueryStatus,
+            message: str | None,
+            stats: ParseStats,
+            quotes: tuple[PriceQuote, ...] = (),
+        ) -> SourceResult:
             return SourceResult(
                 source=SOURCE_NAME,
-                status="blocked" if status == "blocked" else "error",
+                status=status,
+                fetched_at=fetched_at,
+                quotes=quotes,
+                error=redact_truncate(message) if message else None,
+                attempts=attempts,
+                parse_stats=stats,
+            )
+
+        def error(message: str) -> SourceResult:
+            return SourceResult(
+                source=SOURCE_NAME,
+                status="error",
                 fetched_at=fetched_at,
                 error=redact_truncate(message),
                 attempts=attempts,
             )
 
+        # Only the network call runs under the hard timeout; parsing happens below.
         try:
-            raw = call_with_timeout(lambda: self._fetch(query), self._timeout, self._runner)
-        except FlightsNotFound as exc:
-            return SourceResult(
-                source=SOURCE_NAME,
-                status="no_data",
-                fetched_at=fetched_at,
-                error=redact_truncate(f"no flights found: {exc}"),
-                attempts=attempts,
-            )
+            html = call_with_timeout(lambda: self._fetch(query), self._timeout, self._runner)
         except WorkersExhaustedError as exc:
-            return failed("error", str(exc))
+            return error(str(exc))
         except TimeoutError as exc:
-            return failed("error", f"timeout: {exc}")
-        except _PARSE_ERRORS as exc:
-            return failed("blocked", f"unparseable response ({type(exc).__name__}): {exc}")
-        except Exception as exc:  # any other library/network failure is an error
-            return failed("error", f"{type(exc).__name__}: {exc}")
+            return error(f"timeout: {exc}")
+        except Exception as exc:  # any library/network failure while fetching is an error
+            return error(f"{type(exc).__name__}: {exc}")
+
+        # Status table: ADR-0002 FD-3 Decision 2.
+        try:
+            page = parse_payload(extract_payload(html))
+        except PayloadErrorStatus:
+            return result("no_data", "no flights found (error status page)", NO_STATS)
+        except PayloadFormatError as exc:
+            return result("blocked", f"unparseable response: {exc}", NO_STATS)
+        stats = page.stats
+        if page.no_results:
+            return result("no_data", "no flights found (empty result list)", stats)
+        if stats.priced == 0:
+            if stats.malformed > 0:
+                return result(
+                    "blocked",
+                    f"no priced itineraries; {stats.malformed} of {stats.itineraries}"
+                    " have an unrecognised format",
+                    stats,
+                )
+            if stats.itineraries == 0:
+                return result("blocked", "empty itinerary list (blank or changed page)", stats)
+            # all_unpriced: listed flights exist but none has a price. Not a failure.
+            return result("no_data", None, stats)
 
         try:
             quotes = quotes_from_records(
-                to_records(raw),
+                page.records,
                 source=SOURCE_NAME,
                 price_kind="live",
                 currency=query.currency,
@@ -186,14 +207,8 @@ class GoogleFlightsSource:
                 return_date=query.pair.return_date,
                 fetched_at=fetched_at,
             )
-        except _PARSE_ERRORS as exc:
-            return failed("blocked", f"unexpected result format ({type(exc).__name__}): {exc}")
+        except RecordFormatError as exc:
+            return result("blocked", f"unexpected result format: {exc}", stats)
         if not quotes:
-            return failed("blocked", "empty result (blank page or no priced itineraries)")
-        return SourceResult(
-            source=SOURCE_NAME,
-            status="ok",
-            fetched_at=fetched_at,
-            quotes=tuple(quotes),
-            attempts=attempts,
-        )
+            return result("blocked", "no priced itineraries after conversion", stats)
+        return result("ok", None, stats, tuple(quotes))

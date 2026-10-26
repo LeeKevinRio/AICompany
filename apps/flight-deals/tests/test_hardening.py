@@ -221,7 +221,7 @@ def test_adapter_reports_workers_exhausted(clock: FakeClock) -> None:
         backoff_base_seconds=0.0,
         throttle=Throttle(0.0),
         cache=TTLCache(0.0),
-        fetch=lambda _q: [] if release.wait(5) else [],
+        fetch=lambda _q: "" if release.wait(5) else "",
         clock=clock,
         runner=TimeoutRunner(max_in_flight=1),
     )

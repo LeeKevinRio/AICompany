@@ -1,7 +1,8 @@
 """APScheduler 3.x wiring (in-memory jobstore; the ``watch`` table is the source of truth).
 
 One worker thread runs every scan serially; jobs use ``coalesce=True`` and
-``max_instances=1``. Startup only catches up overdue watches, staggered.
+``max_instances=1``. Startup only catches up overdue watches, staggered. Starting
+requires a held cross-process ``SchedulerLock`` (one scheduler per database).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from flight_deals.scheduler.lock import SchedulerLock
 from flight_deals.services import Clock, Services, Watch
 from flight_deals.services.settings import EffectiveSettings
 
@@ -36,6 +38,10 @@ _active: ScanScheduler | None = None
 
 class SchedulerAlreadyRunningError(RuntimeError):
     pass
+
+
+class SchedulerLockNotHeldError(RuntimeError):
+    """``start`` was called without holding the database's scheduler lock."""
 
 
 def build_background_scheduler() -> BackgroundScheduler:
@@ -72,9 +78,15 @@ class ScanScheduler:
 
     # ---- lifecycle -----------------------------------------------------------
 
-    def start(self) -> None:
-        """Start once per process; a second start raises instead of double-scheduling."""
+    def start(self, lock: SchedulerLock) -> None:
+        """Start once per process, only while holding the database's scheduler lock.
+
+        A second start in the same process raises instead of double-scheduling; other
+        processes are kept out by ``lock`` (the caller acquires and releases it).
+        """
         global _active
+        if not lock.held:
+            raise SchedulerLockNotHeldError("scheduler lock must be held before starting")
         with _guard:
             if _active is not None:
                 raise SchedulerAlreadyRunningError("a scan scheduler is already running")

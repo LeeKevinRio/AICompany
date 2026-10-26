@@ -405,6 +405,15 @@ class Repository:
             ).fetchall()
         return {r["watch_id"]: _scan_run(r) for r in rows}
 
+    def latest_scan_run_for_watch(self, watch_id: int) -> ScanRunRecord | None:
+        """Most recently created scan run of one watch (running or finished)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM scan_run WHERE watch_id = ? ORDER BY id DESC LIMIT 1",
+                (watch_id,),
+            ).fetchone()
+        return _scan_run(row) if row else None
+
     def latest_scan_run(self) -> ScanRunRecord | None:
         with self.db.connect() as conn:
             row = conn.execute(

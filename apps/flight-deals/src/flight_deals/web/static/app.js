@@ -198,6 +198,14 @@
       seq += 1;
     }
 
+    function announce(text) {
+      // Clear first so a repeated message is announced again by screen readers.
+      status.textContent = "";
+      setTimeout(function () {
+        status.textContent = text;
+      }, 50);
+    }
+
     function clearFieldError() {
       input.removeAttribute("aria-invalid");
       const slot = root.querySelector("[data-error-for]");
@@ -332,7 +340,17 @@
       } else if (event.key === "Enter") {
         if (!open) return;
         event.preventDefault();
-        if (active >= 0) select(active);
+        if (active >= 0) {
+          select(active);
+        } else if (
+          items.length === 1 ||
+          items[0].code.toLowerCase() === input.value.trim().toLowerCase()
+        ) {
+          // Selection conditions only: single result, or first code equals the typed text.
+          select(0);
+        } else {
+          announce("請用上下鍵選取");
+        }
       } else if (event.key === "Escape") {
         if (open) {
           event.preventDefault();
@@ -363,10 +381,33 @@
     form.querySelectorAll("[data-combo]").forEach(initCombobox);
   }
 
+  // ---- expired date hints --------------------------------------------------
+  // A date earlier than the field min is a hint, not an error; the server rules
+  // are unchanged (unchanged old dates may still be saved).
+
+  const EXPIRED_TEXT = "此日期已過，請更新";
+
+  function initExpiredHints(form) {
+    ["depart_date", "return_date", "window_start", "window_end"].forEach(function (name) {
+      const input = form.querySelector('[name="' + name + '"]');
+      const slot = document.getElementById("h-" + name);
+      if (!input || !slot) return;
+      const check = function () {
+        const min = input.getAttribute("min");
+        const expired = Boolean(input.value) && Boolean(min) && input.value < min;
+        slot.textContent = expired ? EXPIRED_TEXT : "";
+      };
+      input.addEventListener("input", check);
+      input.addEventListener("change", check);
+      check();
+    });
+  }
+
   function initWatchForm() {
     const form = document.getElementById("watch-form");
     if (!form) return;
     initComboboxes(form);
+    initExpiredHints(form);
     form.addEventListener("change", function () {
       syncWatchForm(form);
     });
@@ -413,6 +454,80 @@
 
   // ---- action buttons ------------------------------------------------------
 
+  // ---- scan now with polling ----------------------------------------------
+
+  const POLL_INTERVAL_MS = 2000; // must not go below 2 seconds
+  const POLL_LIMIT_MS = 90000;
+  // Bumped on every pagehide/pageshow so a poll loop started before a bfcache
+  // restore stops, and a new click always gets its own live token.
+  let pollGeneration = 0;
+  window.addEventListener("pagehide", function () {
+    pollGeneration += 1;
+  });
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) {
+      pollGeneration += 1;
+      document.querySelectorAll('[data-action="scan-now"]').forEach(function (b) {
+        setBusy(b, false);
+      });
+    }
+  });
+
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function readScanStatus(id) {
+    const result = await api("GET", "/api/watches/" + id + "/scan-status");
+    if (!result.ok || !result.data) return null;
+    return result.data;
+  }
+
+  async function scanNow(button, id) {
+    const token = ++pollGeneration;
+    setBusy(button, true);
+    const base = await readScanStatus(id);
+    if (token !== pollGeneration) return;
+    const baseRunId = base ? base.scan_run_id : null;
+    const baseRunning = Boolean(base) && base.status === "running";
+    const result = await api("POST", "/api/watches/" + id + "/scan");
+    if (token !== pollGeneration) return;
+    if (!result.ok) {
+      // 409 means disabled or expired; show the server message, do not poll.
+      setBusy(button, false);
+      flash(firstError(result.data), "error");
+      return;
+    }
+    if (baseRunning) flash("已有查價進行中", "info");
+    else flash(result.data.message || "已排入立即查價", "ok");
+    const startedAt = Date.now();
+    let sawRunning = baseRunning;
+    while (Date.now() - startedAt + POLL_INTERVAL_MS <= POLL_LIMIT_MS) {
+      await sleep(POLL_INTERVAL_MS);
+      if (token !== pollGeneration) return;
+      const current = await readScanStatus(id);
+      if (token !== pollGeneration) return;
+      if (!current) continue;
+      if (current.status === "running") sawRunning = true;
+      const finished = current.status !== "running";
+      const isNewRun = current.scan_run_id !== baseRunId;
+      // A run already running at baseline completes with the same run id.
+      if (finished && (isNewRun || baseRunning)) {
+        window.location.reload();
+        return;
+      }
+    }
+    setBusy(button, false);
+    flash(
+      sawRunning
+        ? "仍在查價中，完成後請重新整理"
+        : "尚未偵測到新的查價結果，請稍後重新整理",
+      "info"
+    );
+  }
+
   async function onAction(button) {
     const action = button.getAttribute("data-action");
     const id = button.getAttribute("data-watch-id");
@@ -442,13 +557,8 @@
       }
       setBusy(button, false);
     } else if (action === "scan-now") {
-      setBusy(button, true);
-      result = await api("POST", "/api/watches/" + id + "/scan");
-      setBusy(button, false);
-      if (result.ok) {
-        flash(result.data.message || "已排入立即查價", "ok");
-        return;
-      }
+      await scanNow(button, id);
+      return;
     } else if (action === "telegram-test") {
       const out = document.getElementById("telegram-test-result");
       setBusy(button, true);

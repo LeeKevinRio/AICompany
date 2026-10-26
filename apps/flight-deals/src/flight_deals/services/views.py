@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -23,7 +23,7 @@ from flight_deals.domain.messages import (
     source_label,
 )
 from flight_deals.domain.models import DatePair, Watch, WatchSpec
-from flight_deals.domain.timeutil import format_taipei, taipei_date, weekday_label
+from flight_deals.domain.timeutil import format_taipei, taipei_date, to_utc_iso, weekday_label
 from flight_deals.ports import Clock
 from flight_deals.services.health import HealthService
 from flight_deals.services.settings import SETTING_KEYS, SettingsService
@@ -76,6 +76,30 @@ BREAKER_LABELS = {
 class ViewHooks:
     next_run_time: Callable[[], datetime | None] = lambda: None
     scheduler_running: Callable[[], bool] = lambda: False
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def parse_notes(try_info: Mapping[str, Any]) -> list[str]:
+    """Explain skipped itineraries from the integer counts stored on a query try."""
+    notes = []
+    unpriced = _count(try_info.get("unpriced"))
+    malformed = _count(try_info.get("malformed"))
+    if unpriced:
+        notes.append(f"略過 {unpriced} 筆無價格航班")
+    if malformed:
+        notes.append(f"回應中有 {malformed} 筆格式無法辨識")
+    return notes
+
+
+def try_note(try_info: Mapping[str, Any]) -> str | None:
+    """Explanation column for one query try: adapter error plus skipped-itinerary notes."""
+    error = try_info.get("error")
+    parts = [str(error)] if error else []
+    parts.extend(parse_notes(try_info))
+    return "；".join(parts) or None
 
 
 def dates_text(spec: WatchSpec) -> str:
@@ -488,11 +512,24 @@ class ViewService:
                         if isinstance(amount, int) and currency
                         else None
                     ),
-                    "error": (result.get("tries") or [{}])[-1].get("error") if result else None,
+                    "error": try_note((result.get("tries") or [{}])[-1]) if result else None,
                 }
             )
         view["pairs"] = pairs
         return view
+
+    def scan_status(self, watch_id: int) -> dict[str, Any] | None:
+        """Latest scan run of a watch for the "scan now" poller (fixed field whitelist)."""
+        if self._repo.get_watch(watch_id) is None:
+            return None
+        run = self._repo.latest_scan_run_for_watch(watch_id)
+        return {
+            "watch_id": watch_id,
+            "scan_run_id": run.id if run else None,
+            "status": run.status if run else None,
+            "started_at": to_utc_iso(run.started_at) if run else None,
+            "finished_at": to_utc_iso(run.finished_at) if run and run.finished_at else None,
+        }
 
     def notifications_page(self) -> dict[str, Any]:
         rows = []

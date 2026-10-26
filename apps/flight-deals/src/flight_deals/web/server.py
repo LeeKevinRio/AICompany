@@ -2,6 +2,8 @@
 
 Every state-changing request must come from ``fetch()`` with the custom
 ``X-Flight-Deals-Client`` header (403 otherwise); Host is restricted to loopback names.
+Security headers are added by an outermost pure ASGI middleware, so early 400/403
+answers carry them too (500 pages from ``ServerErrorMiddleware`` are out of reach).
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from flight_deals.services import Services
 from flight_deals.services import airports as airport_lookup
@@ -37,7 +42,42 @@ SECURITY_HEADERS = {
 
 JsonBody = Annotated[dict[str, Any], Body()]
 AIRPORTS_CACHE_CONTROL = "private, max-age=300"
+NO_STORE = {"Cache-Control": "no-store"}
 Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
+
+
+class SecurityHeadersMiddleware:
+    """Pure ASGI: add any missing security header to every HTTP response start."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS.items():
+                    headers.setdefault(name, value)  # a route's own value wins
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+async def require_client_header(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """403 for state-changing requests that did not come from the page script."""
+    if request.method not in SAFE_METHODS and not request.headers.get(CLIENT_HEADER):
+        return JSONResponse(
+            {"error": f"寫入請求必須由頁面腳本送出（缺少 {CLIENT_HEADER} header）"},
+            status_code=403,
+        )
+    return await call_next(request)
 
 
 def build_templates() -> Jinja2Templates:
@@ -60,22 +100,11 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
     )
     templates = build_templates()
 
-    @app.middleware("http")
-    async def require_client_header(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        if request.method not in SAFE_METHODS and not request.headers.get(CLIENT_HEADER):
-            return JSONResponse(
-                {"error": f"寫入請求必須由頁面腳本送出（缺少 {CLIENT_HEADER} header）"},
-                status_code=403,
-            )
-        response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(name, value)
-        return response
-
-    # Added last so it runs first: reject unexpected Host headers (DNS rebinding).
+    # The last middleware added runs first. Request order, outermost first:
+    # SecurityHeaders -> TrustedHost (400, DNS rebinding) -> client header (403) -> router.
+    app.add_middleware(BaseHTTPMiddleware, dispatch=require_client_header)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
     def page(request: Request, name: str, context: dict[str, Any], status: int = 200) -> Response:
@@ -141,6 +170,16 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
             {"items": items[: airport_lookup.MAX_RESULTS]},
             headers={"Cache-Control": AIRPORTS_CACHE_CONTROL},
         )
+
+    @app.get("/api/watches/{watch_id}/scan-status")
+    def api_scan_status(watch_id: int) -> JSONResponse:
+        # C-30: read-only, whitelisted fields, never cached; polled by the detail page.
+        status = services.views.scan_status(watch_id)
+        if status is None:
+            return JSONResponse(
+                {"ok": False, "errors": {"_": "找不到此監看"}}, status_code=404, headers=NO_STORE
+            )
+        return JSONResponse(status, headers=NO_STORE)
 
     # ---- JSON write API ----------------------------------------------------------
 

@@ -15,7 +15,12 @@ from flight_deals.domain.timeutil import utc_now
 from flight_deals.notify.telegram import TelegramNotifier
 from flight_deals.ports import Clock, FlightPriceSource, Notifier
 from flight_deals.redact import redact, register_secret
-from flight_deals.scheduler import ScanScheduler
+from flight_deals.scheduler import (
+    FileSchedulerLock,
+    ScanScheduler,
+    SchedulerLock,
+    SchedulerLockHeldError,
+)
 from flight_deals.services import (
     HealthService,
     NotificationService,
@@ -34,6 +39,15 @@ from flight_deals.storage.repository import Repository
 from flight_deals.web import create_web_app
 
 log = logging.getLogger(__name__)
+
+__all__ = [
+    "Assembly",
+    "SchedulerLockHeldError",
+    "acquire_scheduler_lock",
+    "assemble",
+    "create_app",
+    "scheduler_lock_path",
+]
 
 DEFAULT_FIXTURE_PATH = PROJECT_DIR / "tests" / "fixtures" / "fixture_roundtrip_TPE_NRT.json"
 
@@ -161,6 +175,19 @@ def assemble(
     return Assembly(services, database, scheduler)
 
 
+def scheduler_lock_path(config: Config) -> Path:
+    """One scheduler per database: the lock file sits next to it as ``<db>.lock``."""
+    db_path = config.db_path
+    return db_path.with_name(db_path.name + ".lock")
+
+
+def acquire_scheduler_lock(config: Config) -> FileSchedulerLock:
+    """Take the database's scheduler lock or raise ``SchedulerLockHeldError``."""
+    lock = FileSchedulerLock(scheduler_lock_path(config))
+    lock.acquire()
+    return lock
+
+
 def create_app(
     config: Config,
     *,
@@ -168,21 +195,39 @@ def create_app(
     notifier: Notifier | None = None,
     clock: Clock = utc_now,
     start_scheduler: bool = True,
+    scheduler_lock: SchedulerLock | None = None,
 ) -> FastAPI:
-    assembly = assemble(config, sources=sources, notifier=notifier, clock=clock)
+    """Build the app. With ``start_scheduler`` the scheduler lock is held from here on.
+
+    The lock is taken now (unless the caller already holds it) so a second instance on
+    the same database fails before touching it; it is released when the lifespan ends.
+    """
+    lock: SchedulerLock | None = None
+    if start_scheduler:
+        lock = scheduler_lock or FileSchedulerLock(scheduler_lock_path(config))
+        if not lock.held:
+            lock.acquire()  # raises SchedulerLockHeldError
+    try:
+        assembly = assemble(config, sources=sources, notifier=notifier, clock=clock)
+    except BaseException:
+        if lock is not None:
+            lock.release()
+        raise
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        if start_scheduler:
-            assembly.scheduler.start()
-            log.info("scheduler started")
         try:
+            if lock is not None:
+                assembly.scheduler.start(lock)
+                log.info("scheduler started")
             yield
         finally:
-            if start_scheduler:
+            if lock is not None:
                 assembly.scheduler.shutdown()
+                lock.release()
                 log.info("scheduler stopped")
 
     app = create_web_app(assembly.services, lifespan=lifespan)
     app.state.assembly = assembly
+    app.state.scheduler_lock = lock
     return app

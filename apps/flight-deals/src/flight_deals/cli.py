@@ -9,7 +9,7 @@ from typing import Any
 
 import uvicorn
 
-from flight_deals.app import create_app
+from flight_deals.app import SchedulerLockHeldError, acquire_scheduler_lock, create_app
 from flight_deals.config import BIND_HOST, ConfigError, load_config
 from flight_deals.logging_setup import setup_logging
 
@@ -41,9 +41,18 @@ def main(argv: list[str] | None = None) -> int:
         log.error("configuration error: %s", exc)
         return 2
     port = args.port or config.port
-    app = create_app(config)
-    log.info("flight-deals listening on http://%s:%d", BIND_HOST, port)
-    uvicorn.run(app, **build_uvicorn_kwargs(port))
+    # Before building the app (and migrating the DB): one scheduler per database.
+    try:
+        lock = acquire_scheduler_lock(config)
+    except SchedulerLockHeldError as exc:
+        log.error("refusing to start: %s", exc)
+        return 2
+    try:
+        app = create_app(config, scheduler_lock=lock)
+        log.info("flight-deals listening on http://%s:%d", BIND_HOST, port)
+        uvicorn.run(app, **build_uvicorn_kwargs(port))
+    finally:
+        lock.release()
     return 0
 
 

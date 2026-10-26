@@ -18,6 +18,7 @@ from flight_deals.domain.currency import major_to_minor
 from flight_deals.domain.models import FlightSearch, PriceKind, PriceQuote, QueryStatus
 from flight_deals.ports import SendResult, SourceResult
 from flight_deals.redact import clear_secrets
+from flight_deals.scheduler import SchedulerLockHeldError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ROUNDTRIP_FIXTURE = FIXTURES / "fixture_roundtrip_TPE_NRT.json"
@@ -113,6 +114,26 @@ class FakeNotifier:
 @pytest.fixture
 def notifier() -> FakeNotifier:
     return FakeNotifier()
+
+
+class FakeLock:
+    """In-memory ``SchedulerLock``; ``available=False`` behaves like a lock held elsewhere."""
+
+    def __init__(self, *, held: bool = False, available: bool = True) -> None:
+        self.held = held
+        self.available = available
+        self.acquire_calls = 0
+        self.release_calls = 0
+
+    def acquire(self) -> None:
+        self.acquire_calls += 1
+        if not self.available:
+            raise SchedulerLockHeldError("此資料庫已有另一個實例在執行排程（fake）")
+        self.held = True
+
+    def release(self) -> None:
+        self.release_calls += 1
+        self.held = False
 
 
 Handler = Callable[[FlightSearch], "SourceResult"]

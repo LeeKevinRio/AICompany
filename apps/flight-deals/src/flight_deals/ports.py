@@ -14,6 +14,20 @@ Clock = Callable[[], datetime]
 
 
 @dataclass(frozen=True)
+class ParseStats:
+    """Per-response itinerary counts from a payload parser (all non-negative ints).
+
+    ``unpriced`` itineraries carry no price at all and are skipped silently;
+    ``malformed`` ones had a shape the parser did not recognise.
+    """
+
+    itineraries: int
+    priced: int
+    unpriced: int
+    malformed: int
+
+
+@dataclass(frozen=True)
 class SourceResult:
     """Outcome of one search against one source.
 
@@ -30,6 +44,7 @@ class SourceResult:
     attempts: int = 1
     from_cache: bool = False
     extra: dict[str, str] = field(default_factory=dict)
+    parse_stats: ParseStats | None = None
 
     @property
     def is_failure(self) -> bool:

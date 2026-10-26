@@ -386,3 +386,34 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-23** 對照表檔頭載明出處、查證日期、查證人；每筆代碼對照 IATA 官方查詢頁，不得憑記憶填寫；qa-reviewer 抽查至少 15 筆或 10%（取較多者），結果記在任務單。
 - **C-24** FD-2 不新增 migration、不新增執行期依賴；`domain/links.py` 查票連結維持用代碼。
 - **C-25** 推播訊息在 5 筆、最長 `display_name` 的情況下長度小於 `notify/telegram.py` 的 `MAX_MESSAGE_LENGTH`。有測試。
+
+## FD-3 增補：查價穩定性與體驗修補（2026-10-26，tech-architect 評估；不另開 ADR；總經理落檔）
+
+範圍：fast-flights 部分結果無價格時整批失敗、同一 DB 重複啟動排程、立即查價後需手動重新整理、403／400 回應缺安全標頭。屬 D-2、D-3、D-5 範圍內的修補：不新增依賴、不新增 migration、不改模組 import 方向。
+
+### Context
+- 2026-10-26 實測（fast-flights 3.1.0）：上游 `parse_js` 對每筆結果讀 `k[1][0][1]` 當價格；TPE→SHA 4 筆中有 2 筆（廈門航空經 XMN）的 `k[1]` 是 `[[], "<token>"]`，拋 `IndexError`，整批被判為 `blocked`，有價格的 2 筆（TWD 12,655、14,763）一併遺失。原始 payload 錄為 `tests/fixtures/payload_TPE_SHA.json`。
+- 排程防重複啟動目前只在單一 process 內有效；同一 DB 開兩個實例會雙重掃描。
+- 立即查價回 202 後頁面不會更新。
+- TrustedHost 的 400 與缺 header 的 403 都沒有安全標頭。
+
+### Decision
+1. **容錯解析（方案 A）。** `sources/google_flights.py` 改呼叫公開 API `fetch_flights_html` 取得 HTML，解析交給純函式模組 `sources/google_payload.py`（stdlib only、無 I/O，輸出沿用 `_records.py` 的 record 形狀）。只解析價格（必要）與航空公司、轉機數、時長（選用，取不到填 None）。逐筆分 priced／unpriced（只認實測形狀 `k[1][0] == []`）／malformed。否決「先 `get_flights` 失敗再 fallback」與「只等上游」（另行向上游回報）。C-2 不變；解析在 `call_with_timeout` 之外。
+2. **狀態判定細化（D-2 第 2 點與 C-6 的解讀）。** 找不到 `script.ds:1`、JSON 失敗或頂層形狀不符 → `blocked`；`errorHasStatus` 或 `payload[3][0] is None` → `no_data`；有 itinerary 但 0 筆有價格且無 malformed → `no_data`（`all_unpriced`）；0 筆有價格且有 malformed → `blocked`；≥1 筆有價格 → `ok` 附計數。`no_data` 不計入斷路器失敗。實作補充（dev-lead 2026-10-26，qa-reviewer 同意）：抓取階段（`fetch_flights_html` 本身）拋出的例外一律判 `error`（可重試、計入斷路器）；`payload[3][0] == []`（空清單）判 `blocked`，只有 `None` 才是 `no_data`。
+3. **計數可見。** `ports.ParseStats(itineraries, priced, unpriced, malformed)` 掛在 `SourceResult.parse_stats`；`scan_run.query_results` 的 try 存整數計數，說明文字由 `services/views.py` 讀取時組成；只有 unpriced 時不寫 `error_summary`。
+4. **版本絆線。** pyproject 維持 `<4`；`google_flights.py` 的 `VERIFIED_FAST_FLIGHTS_VERSION` 必須等於安裝版本（測試以 `importlib.metadata` 比對），升級時重跑 live smoke 並重錄 fixture。fetch 模式禁令擴及 `fetch_integration` 參數。
+5. **跨 process 排程鎖（D-3 擴充）。** 鎖檔 `<db_path>.lock`，Windows `msvcrt.locking`（非阻塞、位移放檔頭之後），其他平台 `fcntl.flock`；process 結束 OS 自動釋放，殘留鎖檔無害、永不刪除。否決 `O_EXCL`+PID（PID 重用；Windows `os.kill(pid,0)` 會終止對方）。實作在 `scheduler/lock.py`（stdlib），路徑由 `app.py` 推導並注入；`cli.main` 在建 app 與 migrate 之前取鎖，失敗印原因並 exit 2。否決「第二實例只開網頁」（記憶體 jobstore 不跨 process 同步，CRUD 與立即查價會無聲失效）。
+6. **立即查價自動更新。** 新增 `GET /api/watches/{id}/scan-status`（白名單欄位 `watch_id`、`scan_run_id`、`status`、`started_at`、`finished_at`；`Cache-Control: no-store`；不需 client header；404 於監看不存在）。前端先取基準 id 再 POST，每 2 秒輪詢、上限 90 秒，id 變化且非 running 就 reload；逾時提示不暗示失敗。
+7. **安全標頭（D-5 補強）。** 純 ASGI `SecurityHeadersMiddleware` 放使用者 middleware 最外層，順序由外到內：SecurityHeaders → TrustedHost → ClientHeader(403) → router；只補缺少的標頭。500 由 `ServerErrorMiddleware` 產生、包不到，明文排除。
+
+### Consequences
+- 好處：部分無價格航線恢復可用且略過筆數可見；同一 DB 不可能雙重排程；立即查價結果自動呈現；非 500 回應都帶安全標頭。
+- 代價：Google payload 格式改由我們維護（靠 fixture 契約測試、malformed 計數、live smoke 發現漂移）；`no_data` 盲點（軟性封鎖看不出）；malformed 被略過時最低價可能偏高（只會漏報不會誤報）；鎖不支援網路磁碟；慢查價超過 90 秒仍要手動重新整理；500 頁無安全標頭。
+
+### 新增約束
+- **C-26** `sources/google_payload.py` 只 import stdlib、全文無 `fast_flights` 字串；`google_flights.py` 不再 import `get_flights`；以 `payload_TPE_SHA.json` 契約測試（itineraries=4、priced=2、unpriced=2、malformed=0、金額 1265500／1476300）；至少四種變體（全無價格、價格非 int、`payload[3][0]=None`、頂層形狀錯）與 `extract_payload` 五種 HTML 案例；解析在 timeout 之外。
+- **C-27** 狀態判定逐列有測試；`no_data` 不增加 `consecutive_failures`；google source 每個非 error 結果都有 `parse_stats`；`query_results` 只存整數計數、說明文字由 views 組成；只有 unpriced 時 `error_summary` 為 NULL；不得寫出 0 元或虛構價格。
+- **C-28** 鎖在 `scheduler/lock.py`（stdlib）；`scheduler/` 不 import `storage`；路徑在 `app.py` 推導；`cli.main` 在 `create_app` 前取鎖、失敗 return 2；無「啟動排程但未持鎖」路徑；不刪鎖檔、不用 `os.kill`；測試涵蓋假鎖、同 process 互斥、子程序持鎖互斥、子程序 `os._exit` 後可取得；`.gitignore` 含 `*.db.lock`。
+- **C-29** 安全標頭由純 ASGI middleware 加上、為最後一個 `add_middleware`；400（Host）、403、404、422、`/static/` 都帶齊四個標頭且各有測試；route 自設同名標頭不被覆蓋；500 排除。
+- **C-30** scan-status 端點只回五個白名單欄位、`no-store`、404、不需 header、無寫入，各有測試；前端輪詢 ≥2 秒、≤90 秒、完成 reload、逾時提示無「失敗」字樣、無 `innerHTML`。
+- **C-31** `VERIFIED_FAST_FLIGHTS_VERSION` 存在且測試比對安裝版本；`test_no_third_party_fetch_modes` 加 `fetch_integration`；pyproject 維持 `<4`。
