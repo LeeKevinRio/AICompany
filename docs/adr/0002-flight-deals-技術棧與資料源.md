@@ -1,8 +1,8 @@
 # ADR-0002：flight-deals 技術棧與資料源
 
-- 狀態：proposed
+- 狀態：accepted（CEO 2026-10-26 核可）
 - 日期：2026-10-25
-- 決策者：tech-architect（草案）、CEO（待核可）
+- 決策者：tech-architect（草案）、CEO（2026-10-26 核可，連同「總經理對 PRD 的收斂裁決」照現狀核可）
 - 適用範圍：僅 `product/flight-deals` 產品線（`apps/flight-deals/`）；不約束員工線 main 與其他產品線
 - 編號附註：本產品線自 origin/main `e1349aa` 長出，當時 main 的 `docs/adr/` 只有 0001 與 0007，0002 未被占用（總經理 2026-10-25 以 `git ls-tree` 確認）。其他產品線另有各自的 0002，跨線引用時請加產品名。
 - 落檔者：總經理（依 tech-architect 草案落檔，並附「總經理對 PRD 的收斂裁決」與「本機實測附錄」兩節）
@@ -118,7 +118,7 @@ CEO 要一個個人用的機票低價監看器：在網頁後台設定監看條�
 - 金額存整數 `amount_minor` 加 ISO 4217 幣別碼。各幣別的小數位數只能在單一 `currency` 模組定義。
 - **MVP 不做匯率換算。** 觀測值幣別和監看幣別不一致時，照樣記錄，但不參與通知判斷，並當成資料品質問題顯示在 UI 上。
 
-## 總經理對 PRD 的收斂裁決（2026-10-25，CEO 可翻案）
+## 總經理對 PRD 的收斂裁決（2026-10-25；CEO 2026-10-26 照現狀核可）
 
 tech-architect 草案寫於 PRD 落地前，以下是兩者對齊後的裁決：
 
@@ -346,6 +346,8 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
 qa-reviewer 列為第二批前必修（加 Travelpayouts 之前）：多來源時第一個來源失敗後備援成功仍記 `partial`；`no_data` 與幣別不符會直接 return 不試備援；`item_key`／`dedupe_key` 不含 `watch_revision`。
 
 ## 需要 CEO 決定的事項
+
+CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 1～4 項未另行指示，依本 ADR 預設執行：不註冊 Travelpayouts、不引入無頭瀏覽器、不設登入自動啟動；fast-flights 的使用限制以 README「使用限制（必讀）」為準。任一項日後可翻案，翻案時更新本節。
 
 1. **要不要註冊 Travelpayouts 帳號取 token？** 建議要，它是唯一合規又免費的備援。有 token 後由 data-engineer 用 CEO 最常看的 3～5 條航線做一次覆蓋率探測，再決定值不值得依賴。
 2. **要不要書面確認接受 fast-flights 的條款灰色風險？** 這包含接受「只限個人本機、不得公開或散布」的限制。

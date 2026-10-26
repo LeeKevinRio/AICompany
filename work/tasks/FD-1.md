@@ -3,7 +3,7 @@
 - 狀態：done（待 CEO 驗收）
 - 發起人：CEO
 - 目前負責：CEO
-- 相關文件：`work/flight-deals-PRD.md`、`docs/adr/0002-flight-deals-技術棧與資料源.md`（proposed）
+- 相關文件：`work/flight-deals-PRD.md`、`docs/adr/0002-flight-deals-技術棧與資料源.md`（accepted，CEO 2026-10-26 核可）
 
 ## 目標
 
