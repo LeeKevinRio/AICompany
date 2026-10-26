@@ -36,8 +36,9 @@ Read-only by construction: the file is opened with SQLite's ``mode=ro`` URI plus
 ``PRAGMA query_only=ON``, it is never created, and nothing is written -- not to the DB and
 not to disk (output goes to stdout only). One SELECT is issued, on ``price_bars_cache``
 (symbol, market, trade_date, source, fetched_at); no price columns are read. One caveat that is
-SQLite's, not the script's: reading a WAL-mode database can leave SQLite's own ``-wal`` /
-``-shm`` sidecar files next to it; the database file itself is byte-identical afterwards.
+SQLite's, not the script's: when it reads a WAL-mode database, SQLite's own ``-wal`` /
+``-shm`` sidecar files may appear next to it; the database file itself is byte-identical
+afterwards.
 Standard library only: no ``app`` import.
 """
 
@@ -53,7 +54,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_DB_PATH = "./data/stock-desk.db"
 DB_PATH_ENV_VAR = "STOCK_DESK_DB_PATH"
@@ -259,6 +260,9 @@ def render(report: Report, *, db_path: Path, now_utc: datetime) -> str:
             f"fetched_before_close={len(listed)} "
             f"is_latest_bar={latest} not_latest_bar={len(listed) - latest}"
         )
+    other_markets = {m: n for m, n in report.rows_by_market.items() if m not in MARKET_RULES}
+    for market in sorted(other_markets):
+        out(f"{market!r} (market value without a close rule): rows={other_markets[market]}")
     out(f"rows that could not be judged: {len(report.not_judged)}")
     reasons = Counter(n.reason for n in report.not_judged)
     for reason in sorted(reasons):
@@ -293,6 +297,20 @@ def render(report: Report, *, db_path: Path, now_utc: datetime) -> str:
 # ---------------------------------------------------------------- CLI
 
 
+def missing_timezone() -> str | None:
+    """The first rule time zone the IANA database cannot supply, or ``None`` when all load.
+
+    ``ZoneInfoNotFoundError`` is a ``KeyError``, so it must be checked up front: raised in the
+    middle of a scan it would end as a traceback with exit status 1.
+    """
+    for rule in MARKET_RULES.values():
+        try:
+            ZoneInfo(rule.timezone)
+        except ZoneInfoNotFoundError:
+            return rule.timezone
+    return None
+
+
 def main(
     argv: Sequence[str] | None = None,
     env: Mapping[str, str] | None = None,
@@ -308,6 +326,15 @@ def main(
         help=f"price DB file; default ${DB_PATH_ENV_VAR} or {DEFAULT_DB_PATH}",
     )
     args = parser.parse_args(argv)
+    absent = missing_timezone()
+    if absent is not None:
+        print(
+            f"cannot load time zone {absent!r}: the IANA time zone database is missing. "
+            "On Windows run inside the project environment (uv run --frozen), which installs "
+            "the 'tzdata' package; do not use the system Python or --no-project.",
+            file=sys.stderr,
+        )
+        return 2
     environment = os.environ if env is None else env
     path = Path(args.db_path or environment.get(DB_PATH_ENV_VAR, DEFAULT_DB_PATH))
     try:
