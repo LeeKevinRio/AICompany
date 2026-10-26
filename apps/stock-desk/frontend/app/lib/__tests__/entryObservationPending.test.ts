@@ -381,3 +381,148 @@ describe("whole page (seeded query cache) — first load vs reload of the same d
     expect(printedCounts(html)).toEqual([buildConditionCount(partial.metCount, partial.unavailableCount)]);
   });
 });
+
+/* ------------------------------------------------------ 風控 2026-10-26 R1 */
+
+/**
+ * 風控 2026-10-26 裁定第 1 點 R1（required）: E-4 is withheld only while the
+ * three queries are on their first load, and only together with the count.
+ * Once `pending` is false, E-4's full sentence renders in every case —
+ * including settled-without-data cases where 「日期不明」 is the truth.
+ * (The file-level half of R1 lives in `entryObservationE4Guard.test.ts`.)
+ */
+const E4_PREFIX = "資料截至：日線 ";
+const THIS_YEAR = new Date().getFullYear();
+const D1002 = `${THIS_YEAR}-10-02`;
+const D1001 = `${THIS_YEAR}-10-01`;
+
+type Settled = "pending" | "ok" | "failed";
+type QueryStates = { bars: Settled; signals: Settled; advice: Settled };
+
+/** The panel as `page.tsx` wires it: payloads only from `ok` queries, `isPending` only from `pending` ones. */
+function renderSettlement(state: QueryStates, dates: { bars: string | null; signals: string | null; advice: string | null }): string {
+  const observation = evaluateEntryObservation(
+    state.bars === "ok" ? levels() : null,
+    state.signals === "ok" ? signals() : null,
+    state.advice === "ok" ? advice() : null,
+    state.advice === "ok" ? true : null,
+  );
+  return renderToStaticMarkup(
+    createElement(EntryObservationPanel, {
+      observation,
+      rangeBarCount: state.bars === "ok" ? 252 : null,
+      dataAsOfDates: dates,
+      market: "TW",
+      bars: null,
+      pending: isEntryObservationPending([
+        { isPending: state.bars === "pending" },
+        { isPending: state.signals === "pending" },
+        { isPending: state.advice === "pending" },
+      ]),
+    }),
+  );
+}
+
+describe("風控 R1：pending=false 時 E-4 整句一定渲染", () => {
+  const cases: [string, QueryStates, { bars: string | null; signals: string | null; advice: string | null }, string][] = [
+    [
+      "三份皆 ok",
+      { bars: "ok", signals: "ok", advice: "ok" },
+      { bars: D1002, signals: D1001, advice: D1002 },
+      "資料截至：日線 10-02｜指標 10-01｜規則評估 10-02",
+    ],
+    [
+      "signals 為 error（查詢失敗，沒有 data）",
+      { bars: "ok", signals: "failed", advice: "ok" },
+      { bars: D1002, signals: null, advice: D1002 },
+      "資料截至：日線 10-02｜指標 日期不明｜規則評估 10-02",
+    ],
+    [
+      "signals 為 insufficient（回應已到，帶 data meta 日期）",
+      { bars: "ok", signals: "failed", advice: "ok" },
+      { bars: D1002, signals: D1002, advice: D1002 },
+      "資料截至：日線 10-02｜指標 10-02｜規則評估 10-02",
+    ],
+    [
+      "三份日期皆 null（三份皆 ok）",
+      { bars: "ok", signals: "ok", advice: "ok" },
+      { bars: null, signals: null, advice: null },
+      "資料截至：日線 日期不明｜指標 日期不明｜規則評估 日期不明",
+    ],
+    [
+      "三份日期皆 null（三份皆失敗，六條全無法判定、計數不出）",
+      { bars: "failed", signals: "failed", advice: "failed" },
+      { bars: null, signals: null, advice: null },
+      "資料截至：日線 日期不明｜指標 日期不明｜規則評估 日期不明",
+    ],
+    [
+      "bars 與 advice 為 error",
+      { bars: "failed", signals: "ok", advice: "failed" },
+      { bars: null, signals: D1002, advice: null },
+      "資料截至：日線 日期不明｜指標 10-02｜規則評估 日期不明",
+    ],
+  ];
+
+  for (const [label, state, dates, sentence] of cases) {
+    it(label, () => {
+      const html = renderSettlement(state, dates);
+      expect(html).not.toContain('aria-busy="true"');
+      expect(html).toContain(`<p>${sentence}</p>`);
+    });
+  }
+
+  it("whole page, signals ok: E-4 full sentence from the three queries' data.last_bar_date", () => {
+    const d = THIS_YEAR === 2026 ? "04-12" : "2026-04-12";
+    expect(renderPage({ signals: SIGNALS })).toContain(`<p>資料截至：日線 ${d}｜指標 ${d}｜規則評估 ${d}</p>`);
+  });
+
+  it("whole page, signals insufficient: E-4 full sentence is still rendered", () => {
+    const d = THIS_YEAR === 2026 ? "04-12" : "2026-04-12";
+    expect(renderPage({ signals: SIGNALS_INSUFFICIENT })).toContain(`<p>資料截至：日線 ${d}｜指標 ${d}｜規則評估 ${d}</p>`);
+  });
+
+  it("whole page, signals not arrived yet: neither E-4 nor the count", () => {
+    const html = renderPage({});
+    expect(html).not.toContain(E4_PREFIX);
+    expect(printedCounts(html)).toEqual([]);
+  });
+});
+
+describe("風控 R1：計數句與 E-4 同進同出", () => {
+  const settlements: Settled[] = ["pending", "ok", "failed"];
+  const allStates: QueryStates[] = settlements.flatMap((b) =>
+    settlements.flatMap((s) => settlements.map((a) => ({ bars: b, signals: s, advice: a }))),
+  );
+  const dateSets = [
+    { bars: D1002, signals: D1001, advice: D1002 },
+    { bars: null, signals: null, advice: null },
+  ];
+
+  it("every one of the 27 query states × 2 date sets: count ⇒ E-4; pending ⇒ neither; settled ⇒ E-4", () => {
+    let withCount = 0;
+    let pendingStates = 0;
+    for (const state of allStates) {
+      const pending = Object.values(state).includes("pending");
+      for (const dates of dateSets) {
+        const html = renderSettlement(state, dates);
+        const hasCount = printedCounts(html).length > 0;
+        const hasE4 = html.includes(E4_PREFIX);
+        const where = `${JSON.stringify(state)} ${JSON.stringify(dates)}`;
+        if (hasCount) {
+          withCount += 1;
+          expect(hasE4, `count without E-4: ${where}`).toBe(true);
+        }
+        if (pending) {
+          pendingStates += 1;
+          expect(hasCount, `count while pending: ${where}`).toBe(false);
+          expect(hasE4, `E-4 while pending: ${where}`).toBe(false);
+        } else {
+          expect(hasE4, `E-4 missing once settled: ${where}`).toBe(true);
+        }
+      }
+    }
+    // Non-vacuous: both sides of the implication were exercised.
+    expect(withCount).toBeGreaterThan(0);
+    expect(pendingStates).toBe((27 - 8) * 2);
+  });
+});
