@@ -125,7 +125,7 @@ export default function PositionDetailPage() {
   // with the right prefix once the data chain answers.
   const tvExchangeHint = inferTradingViewExchange(bars.data?.data.source, directory.data?.source);
 
-  const keyLevelsAnchor = resolveKeyLevelsAnchor(positions.data, symbol, market);
+  const keyLevelsAnchor = resolveKeyLevelsAnchor(positions, symbol, market);
 
   /*
     --- 六項觀察條件 (CEO 2026-09-06; PRD §4b) ---------------------------------
@@ -136,7 +136,7 @@ export default function PositionDetailPage() {
   */
   const entryLevels =
     bars.data && bars.data.status === "ok"
-      ? computeKeyLevels(bars.data.bars, keyLevelsAnchor.anchorSource === "cost" ? keyLevelsAnchor.avgCost : null)
+      ? computeKeyLevels(bars.data.bars)
       : null;
   const entryObservation = evaluateEntryObservation(
     entryLevels,
@@ -168,7 +168,7 @@ export default function PositionDetailPage() {
       title: KEY_LEVELS_PANEL_TITLE,
       items:
         bars.data && bars.data.status === "ok"
-          ? buildKeyLevelsFooterItems(bars.data.bars, keyLevelsAnchor.avgCost, keyLevelsAnchor.anchorSource)
+          ? buildKeyLevelsFooterItems(bars.data.bars)
           : [],
     },
     // 風控 REQ-1: the six thresholds are static facts — this group exists whatever the queries do.
@@ -478,7 +478,9 @@ export default function PositionDetailPage() {
         anchor is a tri-state (risk R10/R11): a confirmed average cost taken
         from the stored positions' native-currency `avg_cost` (risk R13/R14),
         a CONFIRMED not-held state, or "unknown" while the positions query is
-        pending or a lot's cost is unusable — the panel words each state
+        not in the success state (loading, or failed -- including a refetch failure
+        that still carries older data; a refetch merely in progress keeps using the
+        last successfully fetched data) or a lot's cost is unusable — the panel words each state
         differently and never claims 未持有 on "unknown".
       */}
       {bars.data && bars.data.status === "ok" && (

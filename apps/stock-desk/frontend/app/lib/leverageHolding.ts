@@ -34,7 +34,9 @@ export interface PositionsQueryState {
  * Whether the leverage chapter query should run:
  * - positions pending: no (we do not know yet; avoids a speculative 404);
  * - positions failed: yes (fall back to asking the backend, which stays the
- *   source of truth; its quiet-404 handling on the page still applies);
+ *   source of truth; its quiet-404 handling on the page still applies). This also
+ *   holds when the failure is a refetch that still carries older `data`: that data is
+ *   not trusted, matching the key-levels anchor, which reports "holding-unknown" in that state;
  * - positions loaded: only when the symbol is held.
  */
 export function isLeverageQueryEnabled(positions: PositionsQueryState, symbol: string, market: Market): boolean {

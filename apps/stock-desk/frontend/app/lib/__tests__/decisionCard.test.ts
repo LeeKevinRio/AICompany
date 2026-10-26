@@ -13,13 +13,9 @@ import { describe, expect, it } from "vitest";
 import type { AdviceCard, AdviceResponse, Bar } from "../types";
 import { DecisionCardBody } from "../../position/[symbol]/DecisionCard";
 import { computeKeyLevels } from "../keyLevels";
-import {
-  KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
-  KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
-} from "../../position/[symbol]/KeyLevelsPanel";
+import { KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE } from "../../position/[symbol]/KeyLevelsPanel";
 import {
   DECISION_CARD_ARIA_LABEL,
-  DECISION_CARD_CROSSED_DISCLOSURE,
   DECISION_CARD_INVALIDATION_PREFIX,
   DECISION_CARD_INVALIDATION_PREFIX_ONE_OF,
   DECISION_CARD_QUANTITY_LABEL,
@@ -129,7 +125,7 @@ function renderCard(props: Parameters<typeof DecisionCardBody>[0]): string {
   return renderToStaticMarkup(createElement(DecisionCardBody, props));
 }
 
-describe("DecisionCardBody — held（持倉平均成本為基準）", () => {
+describe("DecisionCardBody — held（R-6：以最新收盤為基準）", () => {
   it("動作大字＋RULE_SOURCE_CHIP、四格數字（含距離前綴「距最新收盤 」）、股數、aria-label 皆存在；無「距現價」", () => {
     const bars = makeBars(80);
     const html = renderCard({
@@ -171,9 +167,9 @@ describe("DecisionCardBody — held（持倉平均成本為基準）", () => {
     expect(html).toContain("200 ~ 200 股");
   });
 
-  it("符號由算式動態決定（風控 required 條件 2）：avgCost 遠高於收盤，stopSuggested > close，停損距離必為正號", () => {
-    // close 落在 100~106 之間（見 makeBars 預設），avgCost 遠高於此，
-    // stopFixedPct=avgCost*0.92 仍遠大於 close，distance=(stop-close)/close×100 > 0。
+  it("符號由算式動態決定（風控 required 條件 2）：R-6 後錨點恆為最新收盤，即使 avgCost 遠高於收盤，停損距離仍為負號、停利距離為正號", () => {
+    // close 落在 100~106 之間（見 makeBars 預設）；舊制以成本為錨時停損會高於收盤（距離為正），
+    // 現在停損 <= 收盤 <= 停利，與 avgCost 無關。
     const bars = makeBars(80);
     const html = renderCard({
       response: makeResponse(),
@@ -181,8 +177,8 @@ describe("DecisionCardBody — held（持倉平均成本為基準）", () => {
       anchorSource: "cost",
       avgCost: 100000,
     });
+    expect(html).toMatch(/距最新收盤 -\d+(\.\d)?%/);
     expect(html).toMatch(/距最新收盤 \+\d+(\.\d)?%/);
-    expect(html).not.toContain("距最新收盤 -");
   });
 });
 
@@ -491,16 +487,23 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
 
 describe("DecisionCardBody — 0.0% 邊界與 aria-label", () => {
   it("停損距離四捨五入為 0 時印 0.0%，不得印 -0.0%", () => {
-    // anchorPrice = avgCost；ATR 不可得時 stopFixedPct = anchorPrice*0.92。
-    // 讓 close 恰等於 stopFixedPct（=avgCost*0.92）使距離為 0。
-    const avgCost = 100;
-    const closeValue = avgCost * 0.92;
-    const bars = makeBars(10, () => closeValue); // < 15 根，ATR 不可得。
+    // anchorPrice = 最新收盤。全平序列（high=low=close）ATR(14)=0，stopAtr = close，
+    // 建議停損恰等於收盤，距離為 0（相等不印負號）。
+    const flat: Bar[] = Array.from({ length: 30 }, (_, i) => ({
+      date: `2026-02-${String(1 + i).padStart(2, "0")}`,
+      open: "100",
+      high: "100",
+      low: "100",
+      close: "100",
+      volume: 1000,
+      currency: "TWD",
+      source: "demo",
+    }));
     const html = renderCard({
       response: makeResponse(),
-      bars,
+      bars: flat,
       anchorSource: "cost",
-      avgCost,
+      avgCost: 100,
     });
     expect(html).toContain("距最新收盤 0.0%");
     expect(html).not.toContain("-0.0%");
@@ -804,14 +807,17 @@ describe("DecisionCardBody — 失效條件行（BLOCKING 1／3／5）", () => {
 });
 
 /**
- * Risk review 2026-10-04 (`work/reviews/2026-10-04-決策卡-已越過水位-風控審查.md`)
- * required 2: crossed-level small print and the conditional disclosure line.
+ * B0 / R-6 (risk A-15 R-6 and first-batch wording review 2.14): in the held
+ * branch the stop / take-profit anchor is the LATEST CLOSE (same formula as
+ * not held) and the cost P&L is listed separately below the basis sentence.
+ * The 2026-10-04 "crossed" sentences and their disclosure line are gone.
  * A single bar (< 15 bars, so no ATR) makes the references deterministic:
- * stop = avgCost x 0.92, target = avgCost + 2 x (avgCost - stop) = avgCost x 1.16.
+ * stop = close x 0.92, target = close + 2 x (close - stop) = close x 1.16.
  */
-describe("DecisionCardBody — crossed reference levels (risk review 2026-10-04)", () => {
-  const DISCLOSURE_P = `<p class="mt-2 text-xs text-neutral-400">${DECISION_CARD_CROSSED_DISCLOSURE}</p>`;
-  const BANNED = ["已高於", "已低於", "越過", "已達", "觸發", "跌破此", "此水位 "];
+describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () => {
+  const OLD_CROSSED_DISCLOSURE = "上方動作由規則判斷，規則未讀取停損參考與停利參考。";
+  const OLD_COST_LABEL = "基準價（持倉平均成本）";
+  const OLD_COST_BASIS = "本卡以你的持倉平均成本";
 
   /** Small-print texts of the stop and target cells, in DOM order. */
   function distances(html: string): string[] {
@@ -820,123 +826,133 @@ describe("DecisionCardBody — crossed reference levels (risk review 2026-10-04)
     ].map((m) => m[1]!);
   }
 
-  function renderCost(close: number, avgCost: number): string {
+  /** The two standing lines under the numbers, in DOM order. */
+  function infoLines(html: string): string[] {
+    return [...html.matchAll(/<p class="mt-[12] text-xs text-neutral-400">([^<]*)<\/p>/g)].map((m) => m[1]!);
+  }
+
+  function renderCost(close: number, avgCost: number | null, anchorSource: "cost" | "close-unknown" = "cost"): string {
     return renderCard({
       response: makeResponse(),
       bars: makeBars(1, () => close),
-      anchorSource: "cost",
+      anchorSource,
       avgCost,
     });
   }
 
-  function expectNoBanned(html: string): void {
-    for (const banned of BANNED) expect(html).not.toContain(banned);
-  }
-
-  it("1305 vs target 1191.62: target cell prints 最新收盤高於此參考水位 +9.5% (denominator = target); stop cell keeps 距最新收盤", () => {
-    // avgCost 1027.25 -> stop 945.07, target 1191.61.
-    const html = renderCost(1305, 1027.25);
-    expect(distances(html)).toEqual([
-      "距最新收盤 -27.6%",
-      "最新收盤高於此參考水位 +9.5%",
-    ]);
-    expect(html).toContain(DISCLOSURE_P);
-    expectNoBanned(html);
-  });
-
-  it("900 vs stop 945.08: stop cell prints 最新收盤低於此參考水位 -4.8% (denominator = stop); target cell keeps 距最新收盤", () => {
-    const html = renderCost(900, 1027.25);
-    expect(distances(html)).toEqual([
-      "最新收盤低於此參考水位 -4.8%",
-      "距最新收盤 +32.4%",
-    ]);
-    expect(html).toContain(DISCLOSURE_P);
-    expectNoBanned(html);
-  });
-
-  it("equality uses the original branch: 距最新收盤 0.0%, no crossed sentence, no disclosure line", () => {
-    const levels = computeKeyLevels(makeBars(1, () => 100), 100)!;
-    const atTarget = renderCost(levels.target2R, 100);
-    expect(distances(atTarget)[1]).toBe("距最新收盤 0.0%");
-    expect(atTarget).not.toContain("此參考水位");
-    expect(atTarget).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
-    const atStop = renderCost(levels.stopSuggested, 100);
-    expect(distances(atStop)[0]).toBe("距最新收盤 0.0%");
-    expect(atStop).not.toContain("此參考水位");
-    expect(atStop).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
-  });
-
-  it("raw value above the level but rounded to 0: 最新收盤高於此參考水位 0.0% (and the stop mirror), strict comparison on raw values", () => {
-    const levels = computeKeyLevels(makeBars(1, () => 100), 100)!;
-    const above = renderCost(levels.target2R + 0.01, 100);
-    expect(distances(above)[1]).toBe("最新收盤高於此參考水位 0.0%");
-    expect(above).not.toContain("-0.0%");
-    const below = renderCost(levels.stopSuggested - 0.01, 100);
-    expect(distances(below)[0]).toBe("最新收盤低於此參考水位 0.0%");
-    expect(below).not.toContain("-0.0%");
-  });
-
-  it("not crossed (stop < close < target): both cells keep 距最新收盤; disclosure line renders 0 times", () => {
-    const html = renderCost(100, 100);
-    expect(distances(html)).toEqual(["距最新收盤 -8.0%", "距最新收盤 +16.0%"]);
-    expect(html).not.toContain("此參考水位");
-    expect(html.split(DECISION_CARD_CROSSED_DISCLOSURE).length - 1).toBe(0);
-  });
-
-  it("disclosure line renders exactly once with a fixed class, and once even when both cells could cross", () => {
-    const html = renderCost(1305, 1027.25);
-    expect(html.split(DECISION_CARD_CROSSED_DISCLOSURE).length - 1).toBe(1);
-    expect(html).toContain(DISCLOSURE_P);
-    // Exact element string already rules out title / hover / opacity / sr-only / colour on the <p> itself.
-    for (const extra of ["title=", "opacity", "sr-only", "<details", "truncate", "line-clamp", "overflow-hidden", "whitespace-nowrap"]) {
-      expect(DISCLOSURE_P).not.toContain(extra);
+  it("LM-16 / LM-17 / LM-19 逐字出現,且順序為 基準價標籤 → 基準句 → 相對成本損益(另列於下,各自獨立的區塊列)", () => {
+    // 80 bars: last close 102.00 on 2026-03-24; avgCost 120 -> -15.0%.
+    const html = renderCard({ response: makeResponse(), bars: makeBars(80), anchorSource: "cost", avgCost: 120 });
+    const lines = infoLines(html);
+    const labelIdx = lines.indexOf("基準價（最新收盤）");
+    expect(labelIdx).toBeGreaterThan(-1);
+    expect(lines[labelIdx + 1]).toBe(
+      "停損參考與停利參考以最新收盤 102.00（2026-03-24）為基準計算；相對成本的損益另列於下。",
+    );
+    expect(lines[labelIdx + 2]).toBe("相對成本損益 -15.0%");
+    // Each is its own <p>, directly adjacent: "另列於下" does not depend on the viewport width.
+    expect(html).toContain(
+      '<p class="mt-1 text-xs text-neutral-400">停損參考與停利參考以最新收盤 102.00（2026-03-24）為基準計算；相對成本的損益另列於下。</p>' +
+        '<p class="mt-1 text-xs text-neutral-400">相對成本損益 -15.0%</p>',
+    );
+    // No responsive display switch on these two lines, and none of the shapes that hide or inline text.
+    for (const line of ["基準價（最新收盤）", lines[labelIdx + 1]!, lines[labelIdx + 2]!]) {
+      const m = html.match(new RegExp(`<p class="([^"]*)">${line.replace(/[()]/g, "\\$&")}</p>`));
+      expect(m, line).not.toBeNull();
+      expect(m![1]).not.toMatch(/\b(hidden|sr-only|inline|float|truncate|line-clamp|opacity|(sm|md|lg|xl):)/);
     }
   });
 
-  it("disclosure line sits after the anchor label paragraph", () => {
-    const html = renderCost(1305, 1027.25);
-    const anchorIdx = html.indexOf("基準價");
-    expect(anchorIdx).toBeGreaterThan(-1);
-    expect(html.indexOf(DECISION_CARD_CROSSED_DISCLOSURE)).toBeGreaterThan(anchorIdx);
+  it("成本損益符號明示;0 印 0.0%(沿用 fmtSigned)", () => {
+    expect(infoLines(renderCost(100, 80))).toContain("相對成本損益 +25.0%");
+    expect(infoLines(renderCost(100, 125))).toContain("相對成本損益 -20.0%");
+    expect(infoLines(renderCost(100, 100))).toContain("相對成本損益 0.0%");
   });
 
-  it("crossed sentence and number share one <p>, with no nowrap / truncate / line-clamp / max-h / overflow-hidden / title", () => {
-    for (const html of [renderCost(1305, 1027.25), renderCost(900, 1027.25)]) {
-      const crossed = [
-        ...html.matchAll(/<p class="[^"]*">最新收盤[高低]於此參考水位 [+-]?\d+\.\d%<\/p>/g),
-      ].map((m) => m[0]);
-      expect(crossed).toHaveLength(1);
-      expect(crossed[0]).toMatch(/^<p class="mt-0\.5 text-xs text-neutral-400">/);
-      expect(crossed[0]).not.toMatch(/nowrap|truncate|line-clamp|max-h-|overflow|title=|opacity|sr-only/);
+  it("停損／停利以最新收盤為錨:成本遠高於或遠低於收盤,兩格數字與距離都不變", () => {
+    // Close 1305 with avgCost 1027.25 used to anchor on the cost (stop 945.07, target 1191.61).
+    const expected = ["距最新收盤 -8.0%", "距最新收盤 +16.0%"];
+    for (const avgCost of [1027.25, 100000, 1, 1305]) {
+      const html = renderCost(1305, avgCost);
+      expect(distances(html), `avgCost ${avgCost}`).toEqual(expected);
+      expect(html).toContain("1,200.60"); // 1305 x 0.92
+      expect(html).toContain("1,513.80"); // 1305 x 1.16
     }
+    // The two cells (and everything but the P&L line) are byte-identical for any cost.
+    const strip = (h: string): string => h.replace(/相對成本損益 [+-]?\d+\.\d%/, "PNL");
+    expect(strip(renderCost(1305, 1027.25))).toBe(strip(renderCost(1305, 100000)));
   });
 
-  it("no crossed sentence or disclosure for close-not-held, close-unknown and the R2 downgrades, even if the numbers would cross", () => {
-    const bars = makeBars(1, () => 1305);
-    const cases: Array<Parameters<typeof DecisionCardBody>[0]> = [
-      // close-not-held: anchor is the close itself.
-      { response: makeResponse({ held: false, advice: makeCard({ action: "hold" }) }), bars, anchorSource: "close-not-held", avgCost: 1027.25 },
-      // close-unknown: levels suppressed entirely.
-      { response: makeResponse(), bars, anchorSource: "close-unknown", avgCost: 1027.25 },
-      // R2: held advice but close-not-held source.
-      { response: makeResponse(), bars, anchorSource: "close-not-held", avgCost: 1027.25 },
-      // R2: candidate advice but cost source.
-      { response: makeResponse({ held: false, advice: makeCard({ action: "add" }) }), bars, anchorSource: "cost", avgCost: 1027.25 },
-    ];
-    for (const props of cases) {
-      const html = renderCard(props);
+  it("相對成本損益只顯示、不當停損或減碼理由:LM-19 列文字不含任何動作字眼,且改變成本不影響動作大字與股數", () => {
+    const a = renderCost(100, 50);
+    const b = renderCost(100, 500);
+    for (const html of [a, b]) {
+      const pnl = infoLines(html).find((l) => l.startsWith("相對成本損益"));
+      expect(pnl).toMatch(/^相對成本損益 [+-]?\d+\.\d%$/);
+      for (const banned of ["停損", "減碼", "賣出", "出場", "回本", "停利", "應", "建議"]) {
+        expect(pnl).not.toContain(banned);
+      }
+    }
+    const withoutPnl = (h: string): string => h.replace(/<p class="mt-1 text-xs text-neutral-400">相對成本損益 [^<]*<\/p>/, "");
+    expect(withoutPnl(a)).toBe(withoutPnl(b));
+  });
+
+  it("舊字面全數消失:持倉平均成本標籤與基準句、越過句型與其揭露行,即使收盤遠離成本", () => {
+    for (const [close, avgCost] of [
+      [1305, 1027.25],
+      [900, 1027.25],
+    ] as const) {
+      const html = renderCost(close, avgCost);
+      expect(html).not.toContain(OLD_COST_LABEL);
+      expect(html).not.toContain(OLD_COST_BASIS);
       expect(html).not.toContain("此參考水位");
-      expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
-      expectNoBanned(html);
+      expect(html).not.toContain(OLD_CROSSED_DISCLOSURE);
+      // The stop is never above and the target never below the latest close.
+      const [stop, target] = distances(html);
+      expect(stop).toMatch(/^距最新收盤 -/);
+      expect(target).toMatch(/^距最新收盤 \+/);
     }
   });
 
-  it("bars unavailable (null): no crossed sentence or disclosure line", () => {
-    const html = renderCard({ response: makeResponse(), bars: null, anchorSource: "cost", avgCost: 1027.25 });
-    expect(html).not.toContain("此參考水位");
-    expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
+  it("持有但成本未取得(建議持有、持倉查詢為 close-unknown):LM-53 取代整列,只出現一次,不印停損停利數字與 LM-16", () => {
+    const html = renderCost(100, null, "close-unknown");
+    expect(infoLines(html)).toContain("相對成本損益：未取得持倉成本，無法計算");
+    expect(html.split("相對成本損益").length - 1).toBe(1);
+    expect(html).not.toContain("相對成本損益 ");
+    expect(html).not.toContain("另列於下");
+    expect(html).not.toContain("基準價（");
+  });
+
+  it("R2 降級(建議持有、持倉查詢說未持有)同為成本未取得:LM-53 一列,不顯示未持有徽章", () => {
+    const html = renderCard({ response: makeResponse(), bars: makeBars(80), anchorSource: "close-not-held", avgCost: null });
+    expect(infoLines(html)).toContain("相對成本損益：未取得持倉成本，無法計算");
+    expect(html).not.toContain(NOT_HELD_BADGE);
+  });
+
+  it("未持有、候選模式、bars 不可用:沒有 LM-16、沒有相對成本損益列", () => {
+    const notHeld = renderCard({
+      response: makeResponse({ held: false, advice: makeCard({ action: "hold" }) }),
+      bars: makeBars(80),
+      anchorSource: "close-not-held",
+      avgCost: null,
+    });
+    expect(notHeld).not.toContain("相對成本損益");
+    expect(notHeld).not.toContain("另列於下");
+    expect(notHeld).toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE);
+    const candidateCost = renderCard({
+      response: makeResponse({ held: false, advice: makeCard({ action: "add" }) }),
+      bars: makeBars(80),
+      anchorSource: "cost",
+      avgCost: 120,
+    });
+    expect(candidateCost).not.toContain("相對成本損益");
+    const noBars = renderCard({ response: makeResponse(), bars: null, anchorSource: "cost", avgCost: 120 });
+    // Cost known but no close to compare with: neither a made-up number nor LM-53 ("cost not obtained" would be false).
+    expect(noBars).not.toContain("相對成本損益");
+    expect(noBars).not.toContain("另列於下");
   });
 });
+
 
 describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars 推導值", () => {
   // R-2-a (F-1 portfolio valuation guard): when advice is no_price the card must
@@ -983,7 +999,7 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
         // 1. Witness: the unguarded computation really yields the bad value, so
         // this test proves the guard (if F-2 starts rejecting <= 0 closes, F-2
         // rewrites this witness).
-        const witness = computeKeyLevels(bars, s.avgCost);
+        const witness = computeKeyLevels(bars);
         expect(witness).not.toBeNull();
         expect(witness!.close).toBe(c.value);
 
@@ -998,11 +1014,8 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
         expect(html).toContain(NO_DATA_TEXT);
 
         // 3. No crossed disclosure, distance sentences, anchor labels or percentages.
-        expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
-        expect(html).not.toContain("最新收盤低於此參考水位");
-        expect(html).not.toContain("最新收盤高於此參考水位");
+        expect(html).not.toContain("此參考水位");
         expect(html).not.toContain("距最新收盤");
-        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST);
         expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE);
         expect(html).not.toContain("%");
 
@@ -1048,11 +1061,8 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
         };
         const html = renderCard({ ...props, bars });
         expect(html).toContain(NO_DATA_TEXT);
-        expect(html).not.toContain(DECISION_CARD_CROSSED_DISCLOSURE);
-        expect(html).not.toContain("最新收盤低於此參考水位");
-        expect(html).not.toContain("最新收盤高於此參考水位");
+        expect(html).not.toContain("此參考水位");
         expect(html).not.toContain("距最新收盤");
-        expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_COST);
         expect(html).not.toContain(KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE);
         expect(html).not.toContain("%");
         expect(html).toBe(renderCard({ ...props, bars: null }));

@@ -3,7 +3,8 @@
 import { buildFooterGuidance } from "../../lib/footerDisclosureWording";
 import { DETAILS_SUMMARY_KEY_LEVELS, buildKeyLevelsOneLiner } from "../../lib/oneLinerWording";
 import type { FooterItem } from "../../components/PageFooterDisclosures";
-import { classifyRangeZone, computeKeyLevels } from "../../lib/keyLevels";
+import { buildCostPnlRow } from "../../lib/decisionCardWording";
+import { classifyRangeZone, computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import type { AnchorSource, KeyLevels, RangeZone } from "../../lib/keyLevels";
 import { buildLadderViewModel } from "../../lib/keyLevelsVisuals";
 import type { LadderGroup, LadderRung } from "../../lib/keyLevelsVisuals";
@@ -51,8 +52,28 @@ export const KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE =
 export const KEY_LEVELS_HEADER_UNADJUSTED_NOTICE =
   "以下所有計算皆以未還原權值之原始收盤價進行；跨除權息日之區間、均線與 ATR(14) 可能因此失真。";
 
+/**
+ * LM-116 (risk 7th batch, DN-c with the risk fix): replaces the earlier wording.
+ * Footer item 3 of 「計算依據」, always shown for every `anchorSource`, including
+ * "holding-unknown", and always together with LM-117 when that applies (never
+ * replaced by it). Scope is `KeyLevelsPanel` only: the opening 「面板中」 must not be
+ * cited to explain a 「—」 on the decision card or any other block. The 「—」 is
+ * U+2014 and is pinned by `toBe` in componentWordingScan.test.ts.
+ */
 export const KEY_LEVELS_HEADER_DASH_NOTICE =
-  "面板中以「—」呈現的欄位，代表可用日線根數尚未達最低計算門檻，並非數值為零或計算結果為零。";
+  "面板中以「—」呈現的欄位，並非數值為零或計算結果為零，而是該項目沒有可顯示的數字。原因可能是：可用日線根數未達最低計算門檻、持倉狀態未能確定、計算所需的資料不可用。";
+
+/**
+ * LM-117 (risk 7th batch, HU-a): rendered only when `anchorSource === "holding-unknown"`
+ * (positions query not in success: loading, or failed); never for `cost`,
+ * `close-unknown` or `close-not-held` (for `close-unknown` the holding is already
+ * confirmed, so this sentence would be false). Placed once in the main view right
+ * below the two big numbers, outside `<details>`, at `text-sm` and not visually
+ * weakened. It must not be moved to the decision card or elsewhere without a new
+ * single-item risk confirmation.
+ */
+export const KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE =
+  "持倉狀態未能確定，因此依賴持倉狀態的欄位以「—」呈現，並非數值為零或計算結果為零。";
 
 /* ---------- §2 位階卡 ---------- */
 
@@ -104,16 +125,17 @@ export const KEY_LEVELS_PULLBACK_ROW_RECENT_LOW60 = "近 60 日低點";
 
 export const KEY_LEVELS_STOP_CARD_TITLE = "停損參考";
 
-export function buildStopBasisHeldWithCost(x: string): string {
-  return `本卡以你的持倉平均成本 ${x} 為基準計算。`;
+/**
+ * LM-16 (R-6, risk-approved verbatim): the basis sentence shared by the held
+ * branch with a known cost AND the held/unknown branch without one. The cost
+ * P&L is listed on the line directly below it ("另列於下"), at every width.
+ */
+export function buildStopBasisHeld(x: string, d: string): string {
+  return `停損參考與停利參考以最新收盤 ${x}（${d}）為基準計算；相對成本的損益另列於下。`;
 }
 
 export function buildStopBasisConfirmedNotHeld(x: string): string {
   return `未持有此標的，以最新收盤 ${x} 試算；此數字不是任何進場暗示。`;
-}
-
-export function buildStopBasisUnknown(x: string): string {
-  return `持倉成本尚未取得，暫以最新收盤 ${x} 試算。`;
 }
 
 export const KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE =
@@ -124,9 +146,6 @@ export const KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE =
 
 export const KEY_LEVELS_STOP_ROW_ATR = "2×ATR(14)";
 export const KEY_LEVELS_STOP_ROW_FIXED_PCT = "−8% 固定停損";
-
-export const KEY_LEVELS_STOP_S5_NEUTRAL_NOTE =
-  "停損參考水位與最新收盤的相對高低，因基準價與波動不同而不同，可能高於也可能低於最新收盤。";
 
 /* ---------- §5 停利參考卡 ---------- */
 
@@ -148,7 +167,8 @@ export const KEY_LEVELS_TARGET_ROW_TRAILING_NOTE =
 
 /* ---------- §5b 價位階梯的基準價／收盤列標籤（圖形化 item 2） ---------- */
 
-export const KEY_LEVELS_LADDER_RUNG_ANCHOR_COST = "基準價（持倉平均成本）";
+/** LM-17 (R-6, risk-approved verbatim): the anchor label of the held branch (cost known or not). */
+export const KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD = "基準價（最新收盤）";
 export const KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE = "基準價（最新收盤，試算）";
 export const KEY_LEVELS_LADDER_RUNG_CLOSE = "最新收盤";
 
@@ -245,11 +265,16 @@ export const KEY_LEVELS_BASIS_CLOSE_DISTANCE: BasisItem = {
     "距離為算式結果，不代表價格會依此幅度到達任一價位。",
 };
 
+/**
+ * LM-18 (R-6, risk-approved verbatim): replaces the two held-branch formula
+ * lines. The not-held line below it is untouched (it stays until B2).
+ */
+export const KEY_LEVELS_BASIS_ANCHOR_FORMULA = "基準價=最新收盤（持有與未持有相同；未持有時為試算）";
+
 export const KEY_LEVELS_BASIS_ANCHOR: BasisItem = {
   formula: [
     "基準價：",
-    "持有且成本可得→基準價=持倉平均成本",
-    "持有但成本未取得→基準價=最新收盤(試算)",
+    KEY_LEVELS_BASIS_ANCHOR_FORMULA,
     "未持有→基準價=最新收盤(試算)；此數字不是任何進場暗示。",
   ],
   qualifier: null,
@@ -312,24 +337,39 @@ function zoneSuffix(zone: RangeZone): string {
   return ZONE_LABEL[zone].replace("區間", "");
 }
 
-function anchorBasisSentence(source: AnchorSource, levels: KeyLevels): string {
+function anchorBasisSentence(source: Exclude<AnchorSource, "holding-unknown">, levels: KeyLevels): string {
   const x = fmt(levels.anchorPrice);
-  if (source === "cost") return buildStopBasisHeldWithCost(x);
   if (source === "close-not-held") return buildStopBasisConfirmedNotHeld(x);
-  return buildStopBasisUnknown(x);
+  // R-6: cost known ("cost") and cost not obtained ("close-unknown") share LM-16.
+  return buildStopBasisHeld(x, levels.closeDate);
+}
+
+/**
+ * The cost P&L row listed directly under the basis sentence (LM-19, or LM-53
+ * in place of the whole row when no cost is available). Null for a CONFIRMED
+ * not-held symbol: there is no cost to compare with, and the not-held basis
+ * sentence does not promise a P&L "below". Display only (PV-29): this value
+ * feeds no stop/take-profit number.
+ */
+function costPnlRow(
+  source: Exclude<AnchorSource, "holding-unknown">,
+  levels: KeyLevels,
+  avgCost: number | null,
+): string | null {
+  if (source === "close-not-held") return null;
+  return buildCostPnlRow(source === "cost" ? computeCostPnlPct(levels.close, avgCost) : null);
 }
 
 /** Ladder rung → the panel's existing pinned row label (no new wording per rung). */
-function ladderRungLabel(rung: LadderRung, anchorSource: AnchorSource): string {
+function ladderRungLabel(rung: LadderRung, anchorSource: Exclude<AnchorSource, "holding-unknown">): string {
   switch (rung.id) {
     case "target-fixed":
       return KEY_LEVELS_TARGET_ROW_FIXED_PCT;
     case "target-2r":
       return KEY_LEVELS_TARGET_ROW_2R;
     case "anchor":
-      return anchorSource === "cost" ? KEY_LEVELS_LADDER_RUNG_ANCHOR_COST : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE;
-    case "close":
-      return KEY_LEVELS_LADDER_RUNG_CLOSE;
+      // LM-17 for both held branches (cost known / not obtained); the trial label only for a confirmed not-held symbol.
+      return anchorSource === "close-not-held" ? KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD;
     case "ma20":
       return KEY_LEVELS_PULLBACK_ROW_MA20;
     case "ma60":
@@ -377,7 +417,7 @@ export function KeyLevelsPanel({
   /** Page market for the F-7 price-unit chip; absent or unknown = no chip. */
   market?: string;
 }) {
-  const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
+  const levels = computeKeyLevels(bars);
 
   if (levels === null) {
     return (
@@ -389,7 +429,16 @@ export function KeyLevelsPanel({
   }
 
   const zone = rangeZoneOf(levels);
-  const ladder = buildLadderViewModel(levels, anchorSource);
+  // 風控 B0 required 1: while the holding status itself is undetermined (positions
+  // query not in success: loading, or failed -- including a refetch failure that keeps older data;
+  // a refetch merely in progress keeps using the last successful data) the held-only wording (LM-16 / LM-17 / LM-53) is never rendered.
+  // Like the decision card, the anchor-derived numbers fail closed to "—" and the
+  // anchored ladder is not drawn. No new wording is introduced.
+  // The held / not-held helpers only accept the narrowed union, so they cannot
+  // see "holding-unknown" at all.
+  const holdingKnown = anchorSource !== "holding-unknown";
+  const ladder = anchorSource !== "holding-unknown" ? buildLadderViewModel(levels, anchorSource) : null;
+  const pnlRow = anchorSource !== "holding-unknown" ? costPnlRow(anchorSource, levels, avgCost) : null;
 
   // 一眼一句 §2.4 `KEYLEVELS_ONE_LINER`／R7 fallback: the same three-way branch
   // the old position card used to decide its own headline (zone vs. the two
@@ -420,29 +469,36 @@ export function KeyLevelsPanel({
         level; 一眼一句 §2.4 keeps it as the panel's sole main-view graphic
         (RangeGauge moves into `<details>` with the rest of the position card).
       */}
-      <div className="mt-3">
-        <PriceLadder
-          model={ladder}
-          rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
-          groupLabel={ladderGroupLabel}
-          fmt={fmt}
-          observationBand={observationBand}
-        />
-      </div>
+      {ladder !== null && anchorSource !== "holding-unknown" && (
+        <div className="mt-3">
+          <PriceLadder
+            model={ladder}
+            rungLabel={(rung) => ladderRungLabel(rung, anchorSource)}
+            groupLabel={ladderGroupLabel}
+            fmt={fmt}
+            observationBand={observationBand}
+          />
+        </div>
+      )}
 
       {/* 兩個大字並排：停損／停利參考（無紅綠，風控 S1）。 */}
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.stopSuggested)}</p>
+          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.stopSuggested) : "—"}</p>
           {/* CEO 第二次裁定 2026-09-19: R6 兩句改收進 <details>（見下方）。 */}
         </div>
         <div>
           <p className="text-sm text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{fmt(levels.target2R)}</p>
+          <p className="mt-1 font-mono text-xl font-bold text-neutral-100">{holdingKnown ? fmt(levels.target2R) : "—"}</p>
           {/* KEY_LEVELS_TARGET_ANCHOR_CROSS_REF: 本檔決定收進詳細（一眼一句 §2.4）。 */}
         </div>
       </div>
+
+      {/* LM-117: only while the holding status is undetermined; one instance, main view, not inside <details>. */}
+      {anchorSource === "holding-unknown" && (
+        <p className="mt-3 text-sm text-neutral-300">{KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE}</p>
+      )}
 
       <details className="group mt-3">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-300 [&::-webkit-details-marker]:hidden">
@@ -459,13 +515,22 @@ export function KeyLevelsPanel({
             R6（CEO 第二次裁定 2026-09-19 收進詳細，字面不動）：停損大字下的
             基準句與 ATR 條件句，原本緊接在主視圖的停損參考大字下方。
           */}
-          <div>
-            <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
-            <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
-            <p className="mt-1">
-              {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
-            </p>
-          </div>
+          {anchorSource !== "holding-unknown" && (
+            <div>
+              <p className="text-neutral-400">{KEY_LEVELS_STOP_CARD_TITLE}</p>
+              {/*
+                風控 B0 required 2: the 「大字為…（虧損較小）」 condition line comes BEFORE the
+                LM-16 sentence, so it is never directly under the cost P&L row (LM-19).
+                LM-16 -> LM-19 stay adjacent siblings ("另列於下").
+              */}
+              <p className="mt-1">
+                {levels.atr14 !== null ? KEY_LEVELS_STOP_CONDITION_ATR_AVAILABLE : KEY_LEVELS_STOP_CONDITION_ATR_UNAVAILABLE}
+              </p>
+              <p className="mt-1">{anchorBasisSentence(anchorSource, levels)}</p>
+              {/* R-6 "另列於下": the cost P&L row sits directly under the LM-16 sentence (LM-19, or LM-53 replacing the whole row). */}
+              {pnlRow !== null && <p className="mt-1">{pnlRow}</p>}
+            </div>
+          )}
 
           {/*
             圖形化 item 1 (CEO 2026-09-06): 位階卡（RangeGauge＋MA60 乖離列），
@@ -522,17 +587,17 @@ export function KeyLevelsPanel({
           {/* 停利參考卡（完整：本檔決定收進詳細的三列與 anchor cross ref、trailing note）。 */}
           <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-3">
             <p className="text-neutral-400">{KEY_LEVELS_TARGET_CARD_TITLE}</p>
-            <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>
+            {holdingKnown && <p className="mt-1 text-neutral-300">{KEY_LEVELS_TARGET_ANCHOR_CROSS_REF}</p>}
             <div className="mt-2 space-y-1">
-              <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={fmt(levels.target2R)} />
-              <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={fmt(levels.targetFixedPct)} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_2R} value={holdingKnown ? fmt(levels.target2R) : "—"} />
+              <LevelRow label={KEY_LEVELS_TARGET_ROW_FIXED_PCT} value={holdingKnown ? fmt(levels.targetFixedPct) : "—"} />
               <LevelRow label={KEY_LEVELS_TARGET_ROW_TRAILING_LABEL} value={fmt(levels.ma20)} />
             </div>
             <p className="mt-1 text-neutral-400">{KEY_LEVELS_TARGET_ROW_TRAILING_NOTE}</p>
           </div>
 
           {/*
-            計算依據十條、樣本句、S5 句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
+            計算依據十條、樣本句、資料過舊自述句：依 CEO 裁定 2026-09-06 下沉至頁尾
             （`buildKeyLevelsFooterItems` → `PageFooterDisclosures`），此處留指引句（風控 L5）。
           */}
           <p className="text-sm text-neutral-300">{buildFooterGuidance(KEY_LEVELS_PANEL_TITLE)}</p>
@@ -547,14 +612,14 @@ export function KeyLevelsPanel({
 /**
  * The 關鍵價位參考 group of `PageFooterDisclosures`: every sentence the panel
  * no longer renders in place, verbatim and in the panel's original order —
- * 資料過舊自述句、S5 句、「計算依據（逐項揭露）」十條（with its XREF and the
+ * 資料過舊自述句、「計算依據（逐項揭露）」十條（with its XREF and the
  * title as a sub-heading, P2 formula/qualifier pairing intact) and the 樣本句.
  * Computes its own `KeyLevels` from the same inputs the panel uses, so the
  * numbers inside the formula lines (收盤 X、近 N 根) can never diverge from
  * the panel. Returns [] when the panel itself would show the no-data state.
  */
-export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, anchorSource: AnchorSource): FooterItem[] {
-  const levels = computeKeyLevels(bars, anchorSource === "cost" ? avgCost : null);
+export function buildKeyLevelsFooterItems(bars: Bar[]): FooterItem[] {
+  const levels = computeKeyLevels(bars);
   if (levels === null) return [];
   // Order mirrors the panel's original top-to-bottom reading order (CEO 第二次裁定
   // 2026-09-06 added DISCLAIMER／DASH／位階≠估值／停利 standing notice／階梯註記).
@@ -564,7 +629,6 @@ export function buildKeyLevelsFooterItems(bars: Bar[], avgCost: number | null, a
     KEY_LEVELS_HEADER_STALENESS_SELF_NOTICE,
     KEY_LEVELS_HEADER_DASH_NOTICE,
     ...(zone !== null ? [buildRangeNotValuationNote(levels.rangeBarCount)] : []),
-    KEY_LEVELS_STOP_S5_NEUTRAL_NOTE,
     KEY_LEVELS_TARGET_STANDING_NOTICE,
     KEY_LEVELS_LADDER_NOTE,
     { heading: KEY_LEVELS_BASIS_SECTION_TITLE },

@@ -41,83 +41,47 @@ export const DECISION_CARD_QUANTITY_LABEL = "股數參考";
  * 「距最新收盤 」並呼叫既有 `fmtSigned` 決定符號與四捨五入——不得在此重新實作
  * 正負號或無條件捨去邏輯。
  *
- * Denominator: this is the NOT-crossed branch only, where `pct` is
- * (level - latest close) / latest close x 100, i.e. the latest close is the
- * denominator. When the latest close has crossed a reference level
- * (see `pickDecisionCardDistance`) the card uses the crossed sentence instead,
- * and the denominator becomes the reference level itself. So the latest close
- * is no longer the only denominator on the card.
+ * Denominator: always the latest close, `pct` = (level - latest close) /
+ * latest close x 100. Since R-6 (risk A-15 R-6, 2026-10-16) the stop and
+ * take-profit references are anchored on the latest close in every holding
+ * state, so the stop is never above and the target never below the latest
+ * close; the "crossed" sentences risk approved on 2026-10-04 (reference level
+ * as denominator) can no longer occur and were removed together with their
+ * conditional disclosure line (risk B0 required item 4).
  */
 export function buildDecisionCardDistance(pct: number): string {
   return `${DECISION_CARD_DISTANCE_PREFIX}${fmtSigned(pct)}`;
 }
 
 /**
- * Crossed-level sentences (risk review 2026-10-04,
- * `work/reviews/2026-10-04-決策卡-已越過水位-風控審查.md`, wording approved
- * verbatim; case A, display only). Prefixes include the trailing space; the
- * percentage comes from the existing `fmtSigned`, denominator is the reference
- * level itself. No "已", no bare "水位" (always "參考水位"), no colour, no chip.
- * Pinned verbatim by `componentWordingScan.test.ts`; any change is wording
- * drift and must go back to risk review.
+ * R-6 / PV-29: cost P&L, listed beside (never inside) the stop and
+ * take-profit references. LM-19, risk-approved verbatim
+ * (`work/reviews/2026-10-16-新定位第一批字面逐字審-LM01至LM28-風控.md`
+ * appendix): "相對成本損益 {±q}%". The label includes the trailing space; the
+ * signed percentage comes from the existing `fmtSigned`. Display only: it must
+ * never be used as a reason for a stop or a reduction.
  */
-export const DECISION_CARD_CROSSED_TARGET_PREFIX = "最新收盤高於此參考水位 ";
-export const DECISION_CARD_CROSSED_STOP_PREFIX = "最新收盤低於此參考水位 ";
+export const DECISION_CARD_COST_PNL_LABEL = "相對成本損益 ";
 
-/**
- * Conditional disclosure line: rendered (once, standing, not collapsed, no
- * tooltip) only when at least one of the two cells shows a crossed sentence,
- * because the action label next to it is decided by rules that do not read
- * these two reference levels (risk review 2026-10-04, required item 4).
- */
-export const DECISION_CARD_CROSSED_DISCLOSURE =
-  "上方動作由規則判斷，規則未讀取停損參考與停利參考。";
-
-export interface DecisionCardDistance {
-  /** The small-print text for the cell. */
-  text: string;
-  /** True when the crossed sentence is used (drives the disclosure line). */
-  crossed: boolean;
+/** LM-19 with the signed percentage filled in. */
+export function buildDecisionCardCostPnl(pct: number): string {
+  return `${DECISION_CARD_COST_PNL_LABEL}${fmtSigned(pct)}`;
 }
 
 /**
- * Picks the distance small-print for the stop or target cell.
- *
- * - Crossed (strict comparison on the UNROUNDED raw values, never on rounded
- *   figures): target cell when `close > level`, stop cell when `close < level`.
- *   Text = crossed prefix + `fmtSigned((close - level) / level x 100)`, so the
- *   denominator is the reference level itself.
- * - Otherwise (including equality) the original branch applies:
- *   `buildDecisionCardDistance((level - close) / close x 100)`.
- *
- * The caller must only pass `allowCrossed = true` when the effective anchor
- * source is `"cost"`; for close-not-held / close-unknown / R2 downgrade the
- * crossed sentence must never appear.
+ * LM-53 (risk second batch, R2-13 PLB-a, verbatim): the WHOLE string replaces
+ * the whole row when the cost is not available, so no second "相對成本損益"
+ * label may be added next to it. Never a reason for a stop or a reduction.
  */
-export function pickDecisionCardDistance(
-  kind: "stop" | "target",
-  close: number,
-  level: number,
-  allowCrossed: boolean,
-): DecisionCardDistance {
-  if (allowCrossed) {
-    if (kind === "target" && close > level) {
-      return {
-        text: `${DECISION_CARD_CROSSED_TARGET_PREFIX}${fmtSigned(((close - level) / level) * 100)}`,
-        crossed: true,
-      };
-    }
-    if (kind === "stop" && close < level) {
-      return {
-        text: `${DECISION_CARD_CROSSED_STOP_PREFIX}${fmtSigned(((close - level) / level) * 100)}`,
-        crossed: true,
-      };
-    }
-  }
-  return {
-    text: buildDecisionCardDistance(((level - close) / close) * 100),
-    crossed: false,
-  };
+export const DECISION_CARD_COST_PNL_UNAVAILABLE = "相對成本損益：未取得持倉成本，無法計算";
+
+/**
+ * The single cost P&L row shared by the decision card and the 關鍵價位參考
+ * details: LM-19 with a usable percentage, otherwise LM-53 in place of the
+ * whole row.
+ */
+export function buildCostPnlRow(pct: number | null): string {
+  return pct !== null && Number.isFinite(pct) ? buildDecisionCardCostPnl(pct) : DECISION_CARD_COST_PNL_UNAVAILABLE;
 }
 
 /**

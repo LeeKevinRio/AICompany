@@ -20,7 +20,6 @@ function levels(overrides: Partial<KeyLevels> = {}): KeyLevels {
     recentLow60: 85,
     atr14: 3,
     anchorPrice: 100,
-    anchoredOnCost: false,
     stopAtr: 94,
     stopFixedPct: 92,
     stopSuggested: 94,
@@ -74,12 +73,13 @@ describe("ladder", () => {
     expect(vm.maxAbsDistancePct).toBeCloseTo(20);
   });
 
-  it("drops the close rung when the anchor IS the close, keeps it when anchored on cost", () => {
-    expect(buildLadderViewModel(levels(), "close-unknown").rungs.some((r) => r.id === "close")).toBe(false);
-    const held = buildLadderViewModel(levels({ anchorPrice: 90, anchoredOnCost: true }), "cost");
-    const close = held.rungs.find((r) => r.id === "close");
-    expect(close).toBeDefined();
-    expect(close!.distancePct).toBeCloseTo((100 / 90 - 1) * 100);
+  it("R-6: the anchor IS the latest close in every holding state, so no separate close rung exists (held included)", () => {
+    for (const source of ["cost", "close-not-held", "close-unknown"] as const) {
+      const vm = buildLadderViewModel(levels(), source);
+      expect(vm.rungs.some((r) => (r.id as string) === "close"), source).toBe(false);
+      expect(vm.rungs.filter((r) => r.id === "anchor"), source).toHaveLength(1);
+      expect(vm.anchorPrice).toBe(100);
+    }
   });
 
   it("never invents a rung for a null level, and moves the headline tag to the fixed stop without ATR", () => {

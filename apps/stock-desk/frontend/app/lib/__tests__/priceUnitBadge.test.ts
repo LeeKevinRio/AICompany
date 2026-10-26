@@ -206,7 +206,7 @@ function renderKeyLevels(bars: Bar[], market: string | undefined): string {
 }
 
 function renderEntry(bars: Bar[] | null, market: string | undefined): string {
-  const levels = bars === null ? null : computeKeyLevels(bars, null);
+  const levels = bars === null ? null : computeKeyLevels(bars);
   return renderToStaticMarkup(
     createElement(EntryObservationPanel, {
       observation: evaluateEntryObservation(levels, null, null, null),
@@ -778,7 +778,7 @@ describe("F7-R5 — 'every printed price has a unit' with its exceptions spelled
 
   it("footer-buildBasisClose exception is real: the footer prints the close and carries no chip; the block chips are the four counted above", () => {
     const html = renderPage({ market: "US", bars: barsResponse(makeBars(100)), advice: makeAdvice(), signals: SIGNALS_OK });
-    const close = computeKeyLevels(makeBars(100), null)?.close;
+    const close = computeKeyLevels(makeBars(100))?.close;
     expect(close).toBeDefined();
     const footerStart = html.lastIndexOf("<footer");
     expect(footerStart).toBeGreaterThan(-1);

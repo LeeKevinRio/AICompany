@@ -47,7 +47,7 @@ export function gaugeMarkerLeftPct(rangePositionPct: number): number {
 /* ---------- 價位階梯 ---------- */
 
 /** Which reference family a rung belongs to; drives the rung's tag label. */
-export type LadderGroup = "target" | "anchor" | "close" | "pullback" | "stop";
+export type LadderGroup = "target" | "anchor" | "pullback" | "stop";
 
 export interface LadderRung {
   /** Stable id for React keys and tests. */
@@ -55,7 +55,6 @@ export interface LadderRung {
     | "target-fixed"
     | "target-2r"
     | "anchor"
-    | "close"
     | "ma20"
     | "ma60"
     | "recent-low60"
@@ -91,9 +90,9 @@ export interface LadderViewModel {
  * absent — the ladder never invents a rung, and the panel's own 「—」 notice
  * plus the 計算依據 list already explain the gaps.
  *
- * `close` is always a rung: when the anchor IS the close (not held / cost
- * unknown) the close rung is dropped rather than duplicated at 0% — the
- * anchor rung's label already says the anchor is the latest close.
+ * Since R-6 the anchor IS the latest close in every holding state, so there is
+ * no separate close rung (it would duplicate the anchor at 0%) — the anchor
+ * rung's label already says the anchor is the latest close.
  */
 export function buildLadderViewModel(levels: KeyLevels, anchorSource: AnchorSource): LadderViewModel {
   const anchor = levels.anchorPrice;
@@ -103,7 +102,6 @@ export function buildLadderViewModel(levels: KeyLevels, anchorSource: AnchorSour
     { id: "target-fixed", group: "target", price: levels.targetFixedPct, isHeadline: false },
     { id: "target-2r", group: "target", price: levels.target2R, isHeadline: true },
     { id: "anchor", group: "anchor", price: anchor, isHeadline: false },
-    anchorSource === "cost" ? { id: "close", group: "close", price: levels.close, isHeadline: false } : null,
     levels.ma20 !== null ? { id: "ma20", group: "pullback", price: levels.ma20, isHeadline: false } : null,
     levels.ma60 !== null ? { id: "ma60", group: "pullback", price: levels.ma60, isHeadline: false } : null,
     levels.recentLow60 !== null

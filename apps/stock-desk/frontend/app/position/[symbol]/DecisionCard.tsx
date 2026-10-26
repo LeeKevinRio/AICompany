@@ -3,7 +3,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse, Bar } from "../../lib/types";
 import type { AnchorSource } from "../../lib/keyLevels";
-import { computeKeyLevels } from "../../lib/keyLevels";
+import { computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import type { OperationSummaryModel } from "../../lib/operationSummary";
 import {
@@ -18,9 +18,10 @@ import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/rule
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
 import {
   DECISION_CARD_ARIA_LABEL,
+  DECISION_CARD_COST_PNL_UNAVAILABLE,
   DECISION_CARD_QUANTITY_LABEL,
-  DECISION_CARD_CROSSED_DISCLOSURE,
-  pickDecisionCardDistance,
+  buildCostPnlRow,
+  buildDecisionCardDistance,
   pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
 import {
@@ -35,11 +36,12 @@ import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { StaleDataAlert } from "./OperationSummaryPanel";
 import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
-  KEY_LEVELS_LADDER_RUNG_ANCHOR_COST,
+  KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_LADDER_RUNG_CLOSE,
   KEY_LEVELS_STOP_CARD_TITLE,
   KEY_LEVELS_TARGET_CARD_TITLE,
   buildStopBasisConfirmedNotHeld,
+  buildStopBasisHeld,
 } from "./KeyLevelsPanel";
 
 /**
@@ -67,8 +69,15 @@ import {
  *       （該三字專屬 held／candidate 且 `quantity_range === null` 的情境）。
  *   V1. `NumberCell` 的 `distance` 為 `undefined`（收盤／股數格，無距離概念）或
  *       `null`（水位缺席）時渲染不可見佔位（`aria-hidden`＋`&nbsp;`），不得印
- *       「—」——頁尾 `KEY_LEVELS_HEADER_DASH_NOTICE` 已把「—」定義為「日線根數
- *       不足」，用在「這格沒有距離」上會誤導。
+ *       "—" -- `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside
+ *       `KeyLevelsPanel` as "this item has no number to show" (causes: too few
+ *       daily bars, holding status undetermined, required inputs unavailable);
+ *       borrowing "—" for "this cell has no distance" would mislead. LM-116 is
+ *       scoped to the panel only ("面板中"): it does NOT explain any "—" on this
+ *       card (a cause sentence for the card is a separate item, tracked as S-1).
+ *       LM-117 (`KEY_LEVELS_HOLDING_UNKNOWN_DASH_NOTICE`) renders only in the
+ *       panel, only for `anchorSource === "holding-unknown"`, and must not be
+ *       moved onto this card without a new single-item risk confirmation.
  *   V2. （已被 V3 取代）四格 `value` 的 `<p>` 曾加 `whitespace-nowrap`。
  *   V3. qa-e2e 2026-10-03 第四輪：「3,168 ~ 5,000 股」這類長股數字串在 375px 使頁面
  *       橫向溢位、1280px 與左鄰數字貼合。移除 `whitespace-nowrap` 改 `break-words`
@@ -79,18 +88,15 @@ import {
  * 風控 2026-09-19 預審 APPROVE_WITH_CONDITIONS（逐條對應本檔）：
  *   1/2. 距離小字固定前綴「距最新收盤 」（`buildDecisionCardDistance`），符號由
  *        (水位－最新收盤)/最新收盤×100 算出，一律複用 `PriceLadder.tsx` 的
- *        `fmtSigned`（同一份實作，未另寫）。唯一分母為最新收盤的說法已不成立：
- *        風控 2026-10-04 核可「越過」句型——`effectiveAnchorSource === "cost"` 且
- *        最新收盤（原值、嚴格比較）高於停利參考／低於停損參考時，該格改印
- *        「最新收盤高於／低於此參考水位 」＋`fmtSigned`，分母為該參考水位本身
- *        （`pickDecisionCardDistance`）；相等與其餘情況維持「距最新收盤 」，分母為
- *        最新收盤。任一格出現越過句時另常駐一行揭露
- *        （`DECISION_CARD_CROSSED_DISCLOSURE`，`anchorLabel` 段落之後）。
+ *        `fmtSigned`（同一份實作，未另寫）。R-6（風控 A-15，2026-10-16）後停損／
+ *        停利一律以最新收盤為錨，唯一分母恆為最新收盤；2026-10-04 核可的「越過」
+ *        句型與其揭露行已隨 B0 整組移除（見 `decisionCardWording.ts`）。
  *   3. 頁尾「關鍵價位參考」組新增的 `KEY_LEVELS_BASIS_CLOSE_DISTANCE` 算式行見
  *      `KeyLevelsPanel.tsx`／`buildKeyLevelsFooterItems`。
  *   4. 本卡不設可見標題；`<section aria-label={DECISION_CARD_ARIA_LABEL}>`。
- *   5. 基準來源標籤（`KEY_LEVELS_LADDER_RUNG_ANCHOR_COST`／`_CLOSE`）與停損／
- *      停利同層常駐一次（`anchorLabel` 段落）。
+ *   5. 基準來源標籤（持有：`KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD`（LM-17）；
+ *      未持有：`_CLOSE`）與停損／停利同層常駐一次（`anchorLabel` 段落）。持有時其下
+ *      接 LM-16 基準句與一列相對成本損益（LM-19，成本未取得時以 LM-53 取代整列）。
  *   6. 未持有（`close-not-held`）：`NOT_HELD_BADGE` 徽章＋
  *      `buildStopBasisConfirmedNotHeld` 全句同時常駐。
  *   7. 持倉狀態未知（`close-unknown`）：不顯示「未持有」、停損／停利兩格「—」、
@@ -133,8 +139,11 @@ function fmt(n: number | null): string {
  * V1（dev-lead 視覺修正）：`distance` 只在停損／停利兩格有意義。`undefined`
  * （收盤／股數格，這兩格根本沒有距離概念）或 `null`（水位本身缺席，如
  * close-unknown／bars 不可用）一律渲染不可見佔位，保留行高，不得印「—」——
- * 頁尾 `KEY_LEVELS_HEADER_DASH_NOTICE` 已把「—」定義為「可用日線根數不足」，
- * 借來表示「這格沒有距離概念」會與該定義衝突、造成誤讀。
+ * `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside `KeyLevelsPanel`
+ * as "this item has no number to show" (causes: too few daily bars, holding
+ * status undetermined, required inputs unavailable). Borrowing "—" for "this
+ * cell has no distance" would clash with that definition and mislead. LM-116 is
+ * scoped to the panel ("面板中") and does not cover this card's "—" (S-1).
  */
 function NumberCell({
   label,
@@ -272,8 +281,13 @@ export function DecisionCardBody({
     model.kind === "held" && anchorSource === "close-not-held";
   const inconsistentCandidate =
     model.kind === "candidate" && anchorSource === "cost";
+  // "holding-unknown" (positions query not in success: loading, or failed -- also a refetch
+  // failure that keeps older data; a refetch in progress keeps using the last successful data)
+  // behaves exactly like "close-unknown" on this card (unchanged: stop/target "—", no anchor label).
   const effectiveAnchorSource: AnchorSource =
-    inconsistentHeld || inconsistentCandidate ? "close-unknown" : anchorSource;
+    inconsistentHeld || inconsistentCandidate || anchorSource === "holding-unknown"
+      ? "close-unknown"
+      : anchorSource;
 
   // R-2-a (F-1 portfolio valuation guard): when the advice itself is no_price the
   // latest close is untrustworthy, so treat bars as unavailable and never derive
@@ -281,13 +295,10 @@ export function DecisionCardBody({
   // model.kind; no bar-content threshold and no separate read of response.status.
   const barsForLevels: Bar[] | null = model.kind === "no_price" ? null : bars;
 
+  // R-6: the stop/target anchor is the latest close in every holding state;
+  // the average cost is not an input here (it only feeds the cost P&L row).
   const levels =
-    barsForLevels !== null
-      ? computeKeyLevels(
-          barsForLevels,
-          effectiveAnchorSource === "cost" ? avgCost : null,
-        )
-      : null;
+    barsForLevels !== null ? computeKeyLevels(barsForLevels) : null;
   // 風控 required 條件 7：持倉狀態未知時，停損／停利兩格「—」、不畫距離、不印
   // 基準標籤——即使 bars 足夠算出試算值，也不得暗示任何一種持有狀態。
   const suppressAnchor = effectiveAnchorSource === "close-unknown";
@@ -298,36 +309,38 @@ export function DecisionCardBody({
     levels !== null && !suppressAnchor ? fmt(levels.stopSuggested) : "—";
   const targetText =
     levels !== null && !suppressAnchor ? fmt(levels.target2R) : "—";
-  // Crossed sentences only exist for the cost anchor (risk review 2026-10-04,
-  // required item 1); close-not-held / close-unknown / R2 downgrade never get one.
-  const allowCrossed = effectiveAnchorSource === "cost";
-  const stopPick =
+  // The anchor is the latest close, so the latest close is always the
+  // denominator and the stop is never above / the target never below it.
+  const stopDistance =
     levels !== null && !suppressAnchor
-      ? pickDecisionCardDistance(
-          "stop",
-          levels.close,
-          levels.stopSuggested,
-          allowCrossed,
+      ? buildDecisionCardDistance(
+          ((levels.stopSuggested - levels.close) / levels.close) * 100,
         )
       : null;
-  const targetPick =
+  const targetDistance =
     levels !== null && !suppressAnchor
-      ? pickDecisionCardDistance(
-          "target",
-          levels.close,
-          levels.target2R,
-          allowCrossed,
+      ? buildDecisionCardDistance(
+          ((levels.target2R - levels.close) / levels.close) * 100,
         )
       : null;
-  const stopDistance = stopPick !== null ? stopPick.text : null;
-  const targetDistance = targetPick !== null ? targetPick.text : null;
-  const showCrossedDisclosure =
-    (stopPick?.crossed ?? false) || (targetPick?.crossed ?? false);
+  // Held branch (cost known): LM-17 label, then the LM-16 basis sentence, then
+  // the cost P&L row (LM-19) directly below it. Not held: the existing trial label.
+  const heldWithCost = levels !== null && effectiveAnchorSource === "cost";
   const anchorLabel =
     levels !== null && !suppressAnchor
       ? effectiveAnchorSource === "cost"
-        ? KEY_LEVELS_LADDER_RUNG_ANCHOR_COST
+        ? KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD
         : KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE
+      : null;
+  // Cost P&L row. Display only (PV-29): it feeds no stop/take-profit number.
+  //  - cost known and the latest close available: LM-19.
+  //  - advice says held but the cost is not obtained (including the R2
+  //    downgrade): LM-53 replaces the whole row. The stop/target cells stay
+  //    suppressed in that state, so no LM-16 sentence is printed.
+  const costPnlRow = heldWithCost
+    ? buildCostPnlRow(computeCostPnlPct(levels.close, avgCost))
+    : model.kind === "held" && effectiveAnchorSource === "close-unknown"
+      ? DECISION_CARD_COST_PNL_UNAVAILABLE
       : null;
 
   // Q2（qa medium）："未提供股數" 專屬 held／candidate 且 quantity_range 為
@@ -470,15 +483,19 @@ export function DecisionCardBody({
       )}
 
       {/*
-        Risk review 2026-10-04 required item 4: conditional disclosure, standing
-        while any cell shows a crossed sentence, absent otherwise. Same size and
-        grey as the neighbouring lines; no colour, no <details>, no title, no
-        tooltip, no opacity / sr-only.
+        R-6 (risk A-15 R-6, B0): held branch with a known cost. LM-16 states the
+        basis; the cost P&L row (LM-19) is its own block-level line directly
+        below it, so "另列於下" holds at every width (375 and 1280). Same size
+        and grey as the neighbouring lines; no colour (no red/green), no
+        <details>, no title, no tooltip, no opacity / sr-only.
       */}
-      {showCrossedDisclosure && (
-        <p className="mt-2 text-xs text-neutral-400">
-          {DECISION_CARD_CROSSED_DISCLOSURE}
+      {heldWithCost && (
+        <p className="mt-1 text-xs text-neutral-400">
+          {buildStopBasisHeld(fmt(levels.close), levels.closeDate)}
         </p>
+      )}
+      {costPnlRow !== null && (
+        <p className="mt-1 text-xs text-neutral-400">{costPnlRow}</p>
       )}
 
       {/* 風控 required 條件 9：restoresComplianceWarning 與股數同層，全頁唯一渲染處。 */}
