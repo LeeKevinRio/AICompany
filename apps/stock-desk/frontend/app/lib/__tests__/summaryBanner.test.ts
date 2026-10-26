@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { SummaryCards } from "../../components/SummaryCards";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
 import { SUMMARY_BANNER_NO_DATA, SUMMARY_BANNER_PARTIAL } from "../oneLinerWording";
-import type { PortfolioTotals } from "../types";
+import type { PortfolioTotals, SummaryPositionItem } from "../types";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 /**
@@ -27,12 +27,42 @@ function totals(status: PortfolioTotals["status"]): PortfolioTotals {
   };
 }
 
+/** One stored position that could not be valued: `no_data` with a non-empty book. */
+const UNVALUED: SummaryPositionItem = {
+  id: 1,
+  symbol: "2330",
+  market: "TW",
+  quantity: "1000",
+  avg_cost: "895.44",
+  currency: "TWD",
+  instrument_type: "stock",
+  opened_at: null,
+  sector: null,
+  note: null,
+  valuation: {
+    status: "insufficient_data",
+    missing: ["price"],
+    price: null,
+    fx: null,
+    fx_open: null,
+    pnl_original: null,
+    pnl_twd: null,
+    asset_contribution_twd: null,
+    fx_contribution_twd: null,
+  },
+  market_value_twd: null,
+  cost_twd: null,
+  change: null,
+};
+
 function render(status: PortfolioTotals["status"]): string {
   return renderToStaticMarkup(
     createElement(SummaryCards, {
       totals: totals(status),
       asOf: "2026-10-08T00:00:00Z",
-      positions: [],
+      // `no_data` here means "positions exist but none could be valued"; the
+      // empty book (no positions at all) is covered by summaryCardsEmptyBook.test.ts.
+      positions: status === "no_data" ? [UNVALUED] : [],
       fxDisclosures: [],
       fxBackupActive: false,
     }),
