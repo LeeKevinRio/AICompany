@@ -20,10 +20,10 @@ import type { AdviceCard, CardAction, LimitCheck } from "./types";
  * disablement itself (5-K) is a separate change and is not part of this one.
  */
 
-/** The limit id that C-5 keeps out of the violation / not-evaluable lists. */
+/** The limit id that C-5 keeps out of the violation / not-evaluable lists. 風控 2026-10-26 定稿；失效條件 T1 */
 const EXCLUDED_LIMIT_ID = "kelly_fraction";
 
-/** Held actions on which the 2-R sentence may appear (C-6); `add` and `insufficient_data` never do. */
+/** Held actions on which the 2-R sentence may appear (C-6); `add` and `insufficient_data` never do. 風控 2026-10-26 定稿；失效條件 T1、T9 */
 const NOTICE_ACTIONS: readonly CardAction[] = ["hold", "reduce", "take_profit", "stop_loss"];
 
 export interface LimitNotices {
