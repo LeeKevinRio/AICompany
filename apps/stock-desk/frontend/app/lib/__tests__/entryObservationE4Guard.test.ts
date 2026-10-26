@@ -69,8 +69,9 @@ function blankCommentsAndStrings(src: string): string {
 function matchingClose(clean: string, open: number): number {
   const stack: string[] = [];
   for (let i = open; i < clean.length; i += 1) {
-    const ch = clean[i];
-    if (ch in OPENERS) stack.push(OPENERS[ch]);
+    const ch = clean.charAt(i);
+    const closer = OPENERS[ch];
+    if (closer !== undefined) stack.push(closer);
     else if (CLOSERS.has(ch)) {
       if (stack.pop() !== ch) return -1;
       if (stack.length === 0) return i;
@@ -128,7 +129,8 @@ function e4GuardViolations(src: string): string[] {
     for (const forbidden of ["buildConditionCount(", E4_CALL, "ENTRY_E1_QUALIFIER", "STATUS_GLYPH"]) {
       if (block.includes(forbidden)) violations.push(`the pending block must not render \`${forbidden}\``);
     }
-    if (returns.length === 2 && !(returns[0] > blockOpen && returns[0] < blockClose && returns[1] > blockClose)) {
+    const [first, second] = returns;
+    if (returns.length === 2 && first !== undefined && second !== undefined && !(first > blockOpen && first < blockClose && second > blockClose)) {
       violations.push("the first `return` must be inside the pending block and the second after it");
     }
   }
@@ -150,7 +152,7 @@ function e4GuardViolations(src: string): string[] {
   const tags: string[] = [];
   let i = returnParen + 1;
   while (i < e4Container) {
-    const ch = clean[i];
+    const ch = clean.charAt(i);
     if (ch in OPENERS) {
       brackets.push(i);
       i += 1;
