@@ -1,5 +1,7 @@
 """FastAPI application entrypoint for the Stock Desk backend."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
@@ -22,6 +24,7 @@ from app.api import (
     signals,
 )
 from app.api.client_header import RequireClientHeaderMiddleware
+from app.logging_setup import configure_logging
 from app.services.sector_runtime import process_gate_runtime
 
 SERVICE_NAME = "backend"
@@ -29,7 +32,19 @@ SERVICE_NAME = "backend"
 #: Frontend dev server origin allowed to call this API during development.
 FRONTEND_DEV_ORIGIN = "http://localhost:3000"
 
-app = FastAPI(title="Stock Desk Backend", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Process start-up: logging is configured here, never at import time.
+
+    Shared with the scheduler; it keeps httpx/httpcore at WARNING because they
+    log full, secret-bearing request URLs at INFO.
+    """
+    configure_logging()
+    yield
+
+
+app = FastAPI(title="Stock Desk Backend", version="0.1.0", lifespan=lifespan)
 
 # Added before CORS so CORS stays the outer layer: a preflight is answered
 # before this guard sees it, and a 403 from the guard still carries the CORS
