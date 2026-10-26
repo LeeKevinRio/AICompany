@@ -13,11 +13,13 @@ from flight_deals.domain.messages import (
 from flight_deals.domain.models import PriceKind, Watch
 from flight_deals.domain.rules import (
     TriggeredItem,
+    digest_key,
     ops_failure_key,
     price_message_key,
     primary_reason,
     telegram_test_key,
 )
+from flight_deals.domain.timeutil import taipei_date
 from flight_deals.ports import Clock, Notifier, Redactor, SendResult
 from flight_deals.storage.repository import (
     AlertStateRecord,
@@ -144,13 +146,48 @@ class NotificationService:
             )
         return SendResult(ok=result.ok, error=error)
 
+    def send_daily_digest(self, key: str, text: str) -> int | None:
+        """Record and deliver today's digest; None when ``key`` already exists (C-32).
+
+        Not configured -> ``suppressed`` (handled for the day, never retried).
+        """
+        notification_id = self._repo.insert_notification(
+            watch_id=None,
+            kind="daily_digest",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=key,
+            message_text=text,
+            created_at=self._clock(),
+        )
+        if notification_id is None:
+            return None
+        self._deliver(notification_id, 0, text)
+        return notification_id
+
+    def retry_record(self, record: NotificationRecord) -> bool:
+        """Re-send one pending/failed notification if it is still eligible."""
+        if not self._retry_allowed(record):
+            return False
+        return self._deliver(record.id, record.attempts, record.message_text)
+
     def retry_pending(self) -> int:
         """Re-send failed/pending alerts still under the attempt cap; returns sent count."""
         sent = 0
         for record in self._repo.retryable_notifications(self._max_attempts):
-            if self._deliver(record.id, record.attempts, record.message_text):
+            if self.retry_record(record):
                 sent += 1
         return sent
+
+    def _retry_allowed(self, record: NotificationRecord) -> bool:
+        if record.status not in ("pending", "failed") or record.attempts >= self._max_attempts:
+            return False
+        if record.kind == "daily_digest":
+            # A digest is only worth sending on its own Asia/Taipei day (Decision 3).
+            return record.dedupe_key == digest_key(taipei_date(self._clock()))
+        return True
 
     def _deliver(self, notification_id: int, previous_attempts: int, text: str) -> bool:
         if not self._notifier.is_configured():

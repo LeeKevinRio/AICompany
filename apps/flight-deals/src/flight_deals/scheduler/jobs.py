@@ -3,6 +3,11 @@
 One worker thread runs every scan serially; jobs use ``coalesce=True`` and
 ``max_instances=1``. Startup only catches up overdue watches, staggered. Starting
 requires a held cross-process ``SchedulerLock`` (one scheduler per database).
+
+Daily digest jobs (ADR-0002 FD-4 Decision 1) only call ``DigestService.send_if_due``,
+which is idempotent: a cron job at the configured Asia/Taipei time, a one-off catch-up
+queued after the startup scans, an hourly check (sleep / wake), and a one-off check after
+the digest settings change. They run on the same single worker as the scans.
 """
 
 from __future__ import annotations
@@ -16,10 +21,11 @@ from zoneinfo import ZoneInfo
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MAX_INSTANCES
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from flight_deals.scheduler.lock import SchedulerLock
-from flight_deals.services import Clock, Services, Watch
+from flight_deals.services import DIGEST_ZONE, Clock, Services, Watch
 from flight_deals.services.settings import EffectiveSettings
 
 log = logging.getLogger(__name__)
@@ -29,6 +35,15 @@ WATCH_PREFIX = "watch:"
 STARTUP_PREFIX = "startup:"
 MANUAL_PREFIX = "manual:"
 SWEEP_JOB_ID = "expire-sweep"
+DIGEST_JOB_ID = "daily-digest"
+DIGEST_CATCHUP_JOB_ID = "digest-catchup"
+DIGEST_CHECK_JOB_ID = "digest-check"
+DIGEST_RECHECK_JOB_ID = "digest-recheck"
+DIGEST_JOB_IDS = frozenset(
+    {DIGEST_JOB_ID, DIGEST_CATCHUP_JOB_ID, DIGEST_CHECK_JOB_ID, DIGEST_RECHECK_JOB_ID}
+)
+# Jobs that are not watch scans; the health page's "next scan" ignores them.
+NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | {SWEEP_JOB_ID}
 JOB_DEFAULTS: dict[str, Any] = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600}
 WORKER_THREADS = 1
 
@@ -50,6 +65,14 @@ def build_background_scheduler() -> BackgroundScheduler:
         job_defaults=dict(JOB_DEFAULTS),
         timezone=UTC_ZONE,
     )
+
+
+def _job_time(job: Any) -> datetime | None:
+    """Next run of a job; pending jobs (scheduler not started yet) have no attribute."""
+    when = getattr(job, "next_run_time", None)
+    if when is None and not hasattr(job, "next_run_time"):
+        when = getattr(job.trigger, "run_date", None)
+    return when if isinstance(when, datetime) else None
 
 
 class ScanScheduler:
@@ -103,6 +126,7 @@ class ScanScheduler:
                 id=SWEEP_JOB_ID,
                 replace_existing=True,
             )
+            self.schedule_digest(startup=True)
         except BaseException:
             self.shutdown()
             raise
@@ -184,8 +208,46 @@ class ScanScheduler:
         self._remove_watch_jobs(watch_id, include_manual=True)
 
     def on_settings_changed(self, before: EffectiveSettings, after: EffectiveSettings) -> None:
+        """Runs on a web request thread: only (re)schedules jobs, never sends (C-32)."""
         if before.scan_interval_minutes != after.scan_interval_minutes:
             self.sync_all()
+        if (before.digest_enabled, before.digest_time) != (after.digest_enabled, after.digest_time):
+            self.schedule_digest(startup=False)
+
+    # ---- daily digest --------------------------------------------------------
+
+    def schedule_digest(self, *, startup: bool) -> None:
+        """(Re)build the digest cron job and queue one idempotent catch-up check."""
+        settings = self._settings()
+        hour, minute = settings.digest_hour_minute
+        self._scheduler.add_job(
+            self._digest,
+            trigger=CronTrigger(hour=hour, minute=minute, timezone=DIGEST_ZONE),
+            id=DIGEST_JOB_ID,
+            replace_existing=True,
+        )
+        now = self._clock()
+        if startup:
+            self._scheduler.add_job(
+                self._digest,
+                trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
+                id=DIGEST_CHECK_JOB_ID,
+                replace_existing=True,
+            )
+            # Queued after the startup scans so the catch-up digest sees fresh prices.
+            startup_runs = [
+                when
+                for job in self._scheduler.get_jobs()
+                if job.id.startswith(STARTUP_PREFIX) and (when := _job_time(job)) is not None
+            ]
+            run_at = max(startup_runs, default=now) + timedelta(seconds=1)
+            job_id = DIGEST_CATCHUP_JOB_ID
+        else:
+            run_at = now
+            job_id = DIGEST_RECHECK_JOB_ID
+        self._scheduler.add_job(
+            self._digest, trigger="date", run_date=run_at, id=job_id, replace_existing=True
+        )
 
     def trigger_now(self, watch_id: int) -> None:
         self._scheduler.add_job(
@@ -199,9 +261,9 @@ class ScanScheduler:
 
     def next_run_time(self) -> datetime | None:
         times = [
-            job.next_run_time
+            when
             for job in self._scheduler.get_jobs()
-            if job.next_run_time is not None and not job.id.startswith(SWEEP_JOB_ID)
+            if job.id not in NON_SCAN_JOB_IDS and (when := _job_time(job)) is not None
         ]
         return min(times) if times else None
 
@@ -209,6 +271,10 @@ class ScanScheduler:
 
     def _run(self, watch_id: int, trigger: str) -> None:
         self._services.scan.scan_watch(watch_id, trigger)
+
+    def _digest(self) -> None:
+        outcome = self._services.digest.send_if_due(self._clock())
+        log.debug("digest check: %s", outcome)
 
     def _on_event(self, event: Any) -> None:
         if event.code == EVENT_JOB_MAX_INSTANCES:

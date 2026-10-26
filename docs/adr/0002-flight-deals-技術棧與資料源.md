@@ -255,7 +255,7 @@ CREATE TABLE alert_state (
 CREATE TABLE notification (
   id INTEGER PRIMARY KEY,
   watch_id INTEGER REFERENCES watch(id) ON DELETE CASCADE,  -- NULL for ops / test
-  kind TEXT NOT NULL CHECK (kind IN ('price_alert','ops_source_failure','test')),
+  kind TEXT NOT NULL CHECK (kind IN ('price_alert','ops_source_failure','test','daily_digest')),  -- daily_digest 由 migration 0002 加入
   rule TEXT CHECK (rule IN ('below_budget','drop_pct','new_low')),
   observation_id INTEGER REFERENCES price_observation(id) ON DELETE SET NULL,
   channel TEXT NOT NULL DEFAULT 'telegram',
@@ -417,3 +417,37 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-29** 安全標頭由純 ASGI middleware 加上、為最後一個 `add_middleware`；400（Host）、403、404、422、`/static/` 都帶齊四個標頭且各有測試；route 自設同名標頭不被覆蓋；500 排除。
 - **C-30** scan-status 端點只回五個白名單欄位、`no-store`、404、不需 header、無寫入，各有測試；前端輪詢 ≥2 秒、≤90 秒、完成 reload、逾時提示無「失敗」字樣、無 `innerHTML`。
 - **C-31** `VERIFIED_FAST_FLIGHTS_VERSION` 存在且測試比對安裝版本；`test_no_third_party_fetch_modes` 加 `fetch_integration`；pyproject 維持 `<4`。
+
+## FD-4 增補：通知與維運體驗（2026-10-26，tech-architect 評估；不另開 ADR；總經理落檔）
+
+範圍：每日摘要推播、`telegram-setup` CLI、Windows 登入自動啟動、列表漲跌。屬 D-3、D-4、D-5 範圍。不新增執行期依賴；新增 migration 0002；新增頂層 stdlib 模組 `autostart.py`。
+**翻案：**「需要 CEO 決定的事項」第 4 項（不設登入自動啟動）改為「提供安裝腳本，使用者自行安裝」；CEO 2026-10-26 指示「下一批開始開發」時已知此方向。
+
+### Context
+- `notification.kind` 的 CHECK 不含 `daily_digest`；SQLite 無法修改 CHECK，只能重建表。
+- 現行 migration runner 用 `foreign_keys=ON` 的連線並把整段 SQL 包在 `BEGIN` 內（`storage/db.py:36,72`）。此狀態下 `DROP TABLE notification` 會經 CASCADE 刪光 `notification_item`；`ALTER TABLE RENAME` 會改寫子表 FK；transaction 內設 `PRAGMA foreign_keys` 不生效。
+- 列表最低價是「目前 revision、即時價、監看幣別、各日期對最新一筆」再取最低（簡稱快照）。彈性窗每輪輪換取樣，所以「每輪最低價」不能拿來比漲跌。
+- 記憶體 jobstore 啟動時從「現在」重算下次執行時間，關機期間錯過的 cron 不算 misfire。
+- 本機實測（總經理 2026-10-26）：uv 建的 `.venv\Scripts\pythonw.exe` 存在；APScheduler 3.11.3 的 `CronTrigger` 接受 `timezone=`。schtasks 的 ONLOGON 權限與預設電源／72 小時條件依記憶未查證，且偵測需跑子程序，故不採。
+
+### Decision
+1. **每日摘要排程。** 唯一送出入口是 `services/digest.py` 的 `DigestService.send_if_due(now)`（冪等）：摘要已啟用、台北時間已過今天的摘要時間、`digest:<Asia/Taipei 日期>` key 尚不存在，三者成立才送；只補當天、不補前一天。呼叫時機：cron job `daily-digest`（`CronTrigger(hour, minute, timezone=Asia/Taipei)`）、啟動時一次性 `digest-catchup`（排在補跑掃描之後）、每小時 `digest-check`（處理睡眠喚醒）、設定變更時排一次性 job。所有送出在 scheduler 單一 worker 上執行，web request thread 不得送摘要，設定 listener 只排 job。`next_run_time()`（健康頁下次掃描）排除摘要 job。時區常數由 `services` 轉出給 `scheduler`。
+2. **摘要設定。** `app_setting` 新增 `digest_enabled`（`"0"/"1"`）、`digest_time`（`"HH:MM"`）；預設放 `config.Tunables`（啟用、`08:00`）。驗證在 `domain/validation.py`：時間 `^([01]\d|2[0-3]):[0-5]\d$`；開關只接受 bool 或 `"0"/"1"/"true"/"false"`；DB 值不合法回預設。整數設定與摘要設定的 key 清單分開。沿用 `on_settings_changed` 重建 `daily-digest` 並排一次補推檢查。
+3. **去重、狀態與重送。** dedupe key `digest:<YYYY-MM-DD>`（Asia/Taipei，`domain/rules.py::digest_key`）。Telegram 未設定記 `suppressed`、視為今日已處理。失敗由 `retry_pending` 重送，條件為嘗試次數未達上限且 key 日期等於今天；跨日不再送。摘要的 `watch_id`、`rule`、`price_kind`、`observation_id` 皆 NULL。
+4. **Migration 0002（重建 `notification`）。** 依 SQLite 官方 12 步：建 `notification_new`（kind CHECK 加 `daily_digest`，其餘相同）→ 複製 → 刪舊表 → 改名 → 重建索引。runner 擴充：migration 檔首行 `-- flight-deals: foreign_keys=off` 時在 `BEGIN` 前設 `PRAGMA foreign_keys=OFF`；COMMIT 前執行 `PRAGMA foreign_key_check`，有列就 ROLLBACK 拋出；寫入 `schema_version` 後 COMMIT；關閉連線。既有 DB（版本 ≥1）套用前先以 `Connection.backup()` 備份為 `<stem>.pre-v<N>.db`。應用層以 `Literal` 收斂 kind。
+5. **快照與漲跌（列表、摘要共用）。** 快照抽成 `services/price_snapshot.py`（純 Python，輸入已載入的觀測）：只取目前 revision、`live`、監看幣別、`depart_date ≥ 今日（Asia/Taipei）`，各日期對最新一筆。**列表最低價一併改成排除已出發日期**（行為變更）。列表「較前一輪」：R 為符合條件觀測的最大 `scan_run_id`，拿全部快照最低價減 `scan_run_id < R` 的快照最低價；無前一輪「—」。摘要「較前一日」：目前快照最低價減 `fetched_at` 早於今日台北 00:00 的快照最低價。只輸出整數 `delta_minor` 與方向（up/down/flat），不做 float 百分比。不新增逐監看查詢。
+6. **摘要組字。** 純函式 `domain/messages.py::daily_digest_message`，輸入 domain frozen dataclass（`DigestRow`、`DigestSourceRow`）。每個啟用中監看（`active`、`stale`）一行（名稱 >20 字截斷、路線、快照最低價與日期、漲跌、資料過舊標記、stale 標記；無價格寫「尚無價格」）。表頭／表尾：資料源狀態標籤（不放 `last_error`）、上次掃描台北時間、24 小時內 `failed` 的 `scan_run` 筆數（單一 COUNT）、漲跌定義、`DISCLAIMER`、`SAMPLED_ONLY_NOTE`。無監看送短訊。最多 `DIGEST_MAX_WATCH_LINES=20` 行，超過加「另有 N 個監看未列出」；整則 > `DIGEST_MAX_CHARS=3800` 從尾端刪監看行並更新 N；表尾永遠保留。摘要文字不經 `redact`。新模板依 C-17 送 risk-compliance-officer。
+7. **`flight-deals telegram-setup`。** `notify/telegram.py` 新增 `TelegramSetupClient`（`get_updates(offset, long_poll_seconds)` 永不拋出、回候選聊天與遮蔽錯誤；`send_test(chat_id)`；timeout 大於 long-poll；401／409 各有說明）。`app.py` 匯出 `build_telegram_setup_client(token, *, transport=None)`，先 `register_secret(token)`。`cli.py` 改 subparsers（無子命令照舊啟動）。token 先讀 env／`.env`，沒有就 `getpass`；不接受 argv。輪詢最多 60 秒（`monotonic`、`sleep` 可注入）；多個聊天列出讓使用者選；`print` 輸出 `FLIGHT_DEALS_TELEGRAM_CHAT_ID=<id>`；`input` 詢問是否送測試。結束碼 0／1／2。不寫檔、不取鎖、不建 app、不開 DB。
+8. **登入自動啟動。** 新增頂層 stdlib 模組 `autostart.py`（`expected_command(project_dir)` 回 `"<project>\.venv\Scripts\pythonw.exe" -m flight_deals.cli --background`；`install`／`uninstall`／`status` 只操作 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `flight-deals` 值；registry 介面可注入）。`ports.py` 新增 `AutostartProbe` Protocol 與 `AutostartStatus(registered, points_here)`；`app.py` 注入 `ViewService`；非 Windows 或例外回 None，頁面不顯示。CLI 子命令 `autostart install|uninstall|status`；`install-autostart.bat`／`uninstall-autostart.bat` 只呼叫 `uv run --project "%~dp0." flight-deals autostart ...`；install 前確認 `pythonw.exe` 存在。`--background` 模式：log 寫 DB 同目錄 `flight-deals.log`（RotatingFileHandler，掛 `RedactingFilter` 與 `RedactingFormatter`），不用 stdout／stderr；鎖被佔用時寫 log 並 exit 2。`load_config` 遇相對 `FLIGHT_DEALS_DB_PATH` 以 `PROJECT_DIR` 為基準。`dev-up.bat` 的程序偵測要實測涵蓋 pythonw 背景實例。
+
+### Consequences
+- 好處：機器開著就會每天固定時間收到摘要，關機或睡眠錯過的當天補上；Telegram 設定不必翻 API；登入後背景啟動、不提權、無視窗；列表漲跌與顯示價格語意一致。
+- 代價：migration runner 變複雜、首次升級多一個備份檔；改摘要時間後可能立刻補推；摘要用快照最低價可能含久未重查的日期對（靠「資料已過舊」標記）；列表最低價改排除已出發日期；自動啟動偵測不到「在工作管理員被停用」；背景實例只能看 log 檔；`.venv` 被刪會無聲失敗；睡眠時仍不掃描。
+- 被約束的事：改用 schtasks、VBScript、或讓伺服器執行期跑子程序，都要回到本節重評。
+
+### 新增約束
+- **C-32 摘要排程、設定、去重**：`send_if_due` 是唯一送出入口且冪等，假時鐘測試涵蓋準點、關機補推、睡眠喚醒補推、同日第二次不送、跨日不補、停用不送、改時間重排、suppressed 視為已處理、失敗只在同日重送；dedupe key `digest:<日期>` 有 UNIQUE 測試；設定 listener 不直接送（測試斷言無 notifier 呼叫）；`next_run_time()` 排除摘要 job；`digest_time` 拒絕 `8:00`、`24:00`、`08:00:00`、空字串，`digest_enabled` 拒絕 `"yes"`，DB 值不合法回預設；`scheduler/` 仍只 import `services`。
+- **C-33 Migration 0002**：測試在已有資料的 v1 DB（≥1 筆 notification、2 筆 notification_item）上遷移後筆數不變、`daily_digest` 可寫、不合法 kind 仍拒；`notification_item` 插入不存在的 id 失敗（FK 仍有效）；`foreign_key_check` 為空；索引存在；備份檔在 DB 同目錄且符合 `*.db` gitignore；新 DB 不產生備份；不得在 `foreign_keys=ON` 下 DROP／RENAME `notification`。
+- **C-34 快照、漲跌與摘要組字**：快照只在 `services/price_snapshot.py`（`latest_per_pair` 定義只能一處）；已出發日期排除有測試；漲跌只用整數；`list_page` SQL 次數不比 FD-3 多（計數 fake repository）；`daily_digest_message` 在 domain、無 I/O；200 監看／80 字名稱／最長 display_name 下長度 < `MAX_MESSAGE_LENGTH`、含 `DISCLAIMER` 與「另有」、≤20 行；無監看短訊有測試；新字串納入 `all_static_texts()` 通過 BANNED_PHRASES；摘要不含 `last_error`；通知紀錄頁 kind 標籤「每日摘要」；風控結論記任務單。
+- **C-35 telegram-setup**：`cli` 的 ALLOWED 只多 `autostart`，不含 `notify`、`redact`、`domain`；`getUpdates` 只在 `notify/telegram.py`；token 不從 argv；MockTransport 測成功、多候選、60 秒逾時（假 monotonic）、401、409、httpx 例外，每種情況 stdout／stderr／caplog 不含 token；monkeypatch `input`、`getpass`；子命令不呼叫 `acquire_scheduler_lock`、`create_app`、`Database`（monkeypatch 一呼叫就失敗）；不寫檔。
+- **C-36 自動啟動**：只寫 `HKCU\...\Run` 的 `flight-deals` 值，`autostart.py`、`web/`、`services/` 無 schtasks、reg.exe、`.vbs`、`subprocess`（grep）；`autostart.py` stdlib only、列入 `STDLIB_ONLY`、ALLOWED 空集合；測試用假 registry 不碰真實 HKCU；probe 非 Windows 或例外回 None；兩支 bat 無祕密、無 `runas`；`--background` 的 file handler 掛遮蔽 filter 與 formatter、有 token 不進 log 的測試；相對 DB 路徑以 `PROJECT_DIR` 解析有測試；`.gitignore` 加 `*.log`。

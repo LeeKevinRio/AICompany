@@ -70,6 +70,14 @@ def ops_failure_key(source: str, now: datetime) -> str:
     return f"ops:{source}:{taipei_date(now).isoformat()}"
 
 
+DIGEST_KEY_PREFIX = "digest:"
+
+
+def digest_key(day: date) -> str:
+    """At most one daily digest per Asia/Taipei calendar day (FR-DG9)."""
+    return f"{DIGEST_KEY_PREFIX}{day.isoformat()}"
+
+
 def telegram_test_key(now: datetime) -> str:
     return "test:" + now.astimezone(TAIPEI).isoformat(timespec="microseconds")
 

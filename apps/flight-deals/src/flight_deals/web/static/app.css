@@ -250,7 +250,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   background: var(--color-bad-bg);
   color: var(--color-bad-text);
 }
-.status-paused, .status-expired, .health-unknown, .notif-suppressed, .run-running,
+.status-paused, .status-expired, .health-unknown, .notif-suppressed, .notif-daily_digest, .run-running,
 .q-no_data, .q-skipped {
   background: var(--color-neutral-bg);
   color: var(--color-neutral-text);
@@ -432,3 +432,9 @@ details > summary { cursor: pointer; padding: var(--space-1) 0; }
 @media (prefers-reduced-motion: reduce) {
   .button, button, input, select { transition: none; }
 }
+
+.delta { font-weight: 600; white-space: nowrap; }
+.delta-down { color: var(--color-ok-text); }
+.delta-up { color: var(--color-bad-text); }
+.delta-flat { color: var(--color-neutral-text); }
+.check-label { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; }

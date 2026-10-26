@@ -7,6 +7,7 @@ whether to buy. Templates here are the single source for notification text.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from flight_deals.domain.airports import route_label
@@ -140,6 +141,135 @@ def telegram_test_message(now: datetime) -> str:
     )
 
 
+# ---- daily digest (ADR-0002 FD-4 Decision 6, C-34) ----------------------------------
+
+DIGEST_MAX_WATCH_LINES = 20
+DIGEST_MAX_CHARS = 3800  # below Telegram's 4096-character limit
+DIGEST_NAME_MAX = 20
+DIGEST_TITLE = "[flight-deals] 每日摘要"
+DIGEST_NO_WATCHES = "目前沒有啟用中的監看。"
+DIGEST_NO_PRICE = "尚無價格"
+DIGEST_WATCH_STALE = "連續查價失敗"
+DIGEST_FLAT = "持平"
+DIGEST_NONE = "—"
+DIGEST_DELTA_NOTE = (
+    "漲跌為目前最低價與前一日（台北時間）結束時最低價的差額；"
+    "只計目前設定的即時價，不含已出發的日期。"
+    "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
+)
+NO_PRICE_ALERT_NOTE = "沒有收到價格通知不代表沒有低價。"
+_BREAKER_NOTES = {"open": "（斷路器開啟，暫停查詢）", "half_open": "（斷路器半開，試查中）"}
+
+
+@dataclass(frozen=True)
+class DigestRow:
+    """One enabled watch in the digest. Amounts are integer minor units."""
+
+    name: str
+    origin: str
+    destination: str
+    currency: str
+    amount_minor: int | None
+    depart_date: date | None
+    return_date: date | None
+    delta_minor: int | None
+    data_stale: bool
+    watch_stale: bool
+
+
+@dataclass(frozen=True)
+class DigestSourceRow:
+    """Data source state, worded like the health page (never the raw last error)."""
+
+    source: str
+    state_label: str
+    breaker_state: str
+
+
+def digest_hidden_note(count: int) -> str:
+    return f"另有 {count} 個監看未列出，完整列表請見網頁。"
+
+
+def _digest_delta_text(row: DigestRow) -> str:
+    if row.amount_minor is None or row.delta_minor is None:
+        return DIGEST_NONE
+    if row.delta_minor == 0:
+        return DIGEST_FLAT
+    sign = "+" if row.delta_minor > 0 else "-"
+    return sign + format_money(abs(row.delta_minor), row.currency)
+
+
+def digest_stale_label(stale_after_hours: int) -> str:
+    """Marker for a lowest price not re-fetched within the stale threshold (hours)."""
+    return f"此價格逾 {stale_after_hours} 小時未重查"
+
+
+def _digest_line(row: DigestRow, stale_after_hours: int) -> str:
+    name = row.name if len(row.name) <= DIGEST_NAME_MAX else row.name[:DIGEST_NAME_MAX] + "…"
+    parts = [f"• {name}", route_label(row.origin, row.destination)]
+    if row.amount_minor is None or row.depart_date is None:
+        parts.append(DIGEST_NO_PRICE)
+    else:
+        dates = date_range_text(row.depart_date, row.return_date)
+        parts.append(f"{format_money(row.amount_minor, row.currency)}（{dates}）")
+    parts.append(f"較前一日 {_digest_delta_text(row)}")
+    if row.amount_minor is not None and row.data_stale:
+        parts.append(digest_stale_label(stale_after_hours))
+    if row.watch_stale:
+        parts.append(DIGEST_WATCH_STALE)
+    return "｜".join(parts)
+
+
+def _digest_sources_text(sources: Sequence[DigestSourceRow]) -> str:
+    if not sources:
+        return DIGEST_NONE
+    return "；".join(
+        f"{source_label(s.source)} {s.state_label}{_BREAKER_NOTES.get(s.breaker_state, '')}"
+        for s in sources
+    )
+
+
+def daily_digest_message(
+    *,
+    day: date,
+    sources: Sequence[DigestSourceRow],
+    last_scan_at: datetime | None,
+    failed_scans_24h: int,
+    rows: Sequence[DigestRow],
+    stale_after_hours: int,
+) -> str:
+    """Daily status digest: facts only, footer always kept, at most DIGEST_MAX_CHARS.
+
+    ``stale_after_hours`` is the price-staleness setting; it is stated in the marker.
+    """
+    header = [
+        f"{DIGEST_TITLE}｜{day.isoformat()}（台北時間）",
+        f"資料源：{_digest_sources_text(sources)}",
+        "上次掃描："
+        + (f"{format_taipei(last_scan_at)}（台北時間）" if last_scan_at else DIGEST_NONE),
+        f"過去 24 小時查價失敗的掃描：{failed_scans_24h} 次",
+    ]
+    if not rows:
+        return "\n".join(
+            [header[0], DIGEST_NO_WATCHES, *header[1:], "", DISCLAIMER, NO_PRICE_ALERT_NOTE]
+        )
+    footer = ["", DIGEST_DELTA_NOTE, SAMPLED_ONLY_NOTE, DISCLAIMER, NO_PRICE_ALERT_NOTE]
+    lines = [_digest_line(r, stale_after_hours) for r in rows]
+    shown = min(len(lines), DIGEST_MAX_WATCH_LINES)
+
+    def render(count: int) -> str:
+        body = [f"啟用中的監看：{len(rows)} 個", *lines[:count]]
+        if count < len(lines):
+            body.append(digest_hidden_note(len(lines) - count))
+        return "\n".join([*header, "", *body, *footer])
+
+    text = render(shown)
+    while len(text) > DIGEST_MAX_CHARS and shown > 0:
+        shown -= 1
+        text = render(shown)
+    return text
+
+
 def all_static_texts() -> list[str]:
     """Static wording used in templates (for wording-policy tests)."""
     return [
@@ -152,4 +282,18 @@ def all_static_texts() -> list[str]:
         reason_label("below_budget"),
         reason_label("drop_pct", 6),
         reason_label("new_low"),
+        DIGEST_TITLE,
+        DIGEST_NO_WATCHES,
+        DIGEST_NO_PRICE,
+        digest_stale_label(24),
+        DIGEST_WATCH_STALE,
+        DIGEST_FLAT,
+        DIGEST_DELTA_NOTE,
+        NO_PRICE_ALERT_NOTE,
+        digest_hidden_note(3),
+        *_BREAKER_NOTES.values(),
+        "啟用中的監看：2 個",
+        "過去 24 小時查價失敗的掃描：0 次",
+        "較前一日",
+        "每日摘要",
     ]

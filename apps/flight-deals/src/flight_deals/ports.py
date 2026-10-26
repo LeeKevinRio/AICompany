@@ -74,3 +74,17 @@ class Notifier(Protocol):
     def is_configured(self) -> bool: ...
 
     def send(self, text: str) -> SendResult: ...
+
+
+@dataclass(frozen=True)
+class AutostartStatus:
+    """Login autostart entry: present at all, and pointing at this checkout."""
+
+    registered: bool
+    points_here: bool
+
+
+class AutostartProbe(Protocol):
+    def status(self) -> AutostartStatus | None:
+        """None when the state cannot be determined (not Windows, access error)."""
+        ...

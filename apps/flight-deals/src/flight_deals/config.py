@@ -39,6 +39,8 @@ class Tunables:
     drop_threshold_bp: int = 500
     stale_after_hours: int = 24
     global_hourly_query_limit: int = 60
+    digest_enabled: bool = True
+    digest_time: str = "08:00"  # HH:MM, Asia/Taipei
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,17 @@ def parse_sources(raw: str | None) -> tuple[str, ...]:
     return names
 
 
+def resolve_db_path(raw: str | None) -> Path:
+    """A relative ``FLIGHT_DEALS_DB_PATH`` is taken from ``PROJECT_DIR``, never the cwd.
+
+    A login-started background instance runs with an arbitrary working directory.
+    """
+    if not raw:
+        return DEFAULT_DB_PATH
+    path = Path(raw)
+    return path if path.is_absolute() else PROJECT_DIR / path
+
+
 def load_config(
     env: Mapping[str, str] | None = None,
     *,
@@ -147,7 +160,7 @@ def load_config(
         raise ConfigError(f"{ENV_PORT} out of range")
     db_raw = _optional(merged, ENV_DB_PATH)
     return Config(
-        db_path=Path(db_raw) if db_raw else DEFAULT_DB_PATH,
+        db_path=resolve_db_path(db_raw),
         sources=sources,
         port=port,
         telegram_bot_token=_optional(merged, ENV_TELEGRAM_TOKEN),

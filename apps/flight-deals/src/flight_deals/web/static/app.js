@@ -438,7 +438,7 @@
       clearErrors(form);
       const payload = {};
       form.querySelectorAll("input[name]").forEach(function (input) {
-        payload[input.name] = input.value.trim();
+        payload[input.name] = input.type === "checkbox" ? input.checked : input.value.trim();
       });
       const submit = form.querySelector('button[type="submit"]');
       setBusy(submit, true);

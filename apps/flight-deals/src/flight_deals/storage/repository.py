@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from flight_deals.domain.models import (
     DatePair,
+    NotificationKind,
     PriceKind,
     PriceQuote,
     Watch,
@@ -385,6 +386,15 @@ class Repository:
             ).fetchone()
         return int(row["n"])
 
+    def count_failed_scan_runs_since(self, since: datetime) -> int:
+        """Scan runs that ended ``failed`` and started at or after ``since`` (one COUNT)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM scan_run WHERE status = 'failed' AND started_at >= ?",
+                (to_utc_iso(since),),
+            ).fetchone()
+        return int(row["n"])
+
     def scan_runs_for_watch(self, watch_id: int, limit: int = 20) -> list[ScanRunRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
@@ -551,7 +561,7 @@ class Repository:
         self,
         *,
         watch_id: int | None,
-        kind: str,
+        kind: NotificationKind,
         rule: str | None,
         price_kind: str | None,
         observation_id: int | None,
@@ -631,6 +641,13 @@ class Repository:
             ).fetchone()
         return _notification(row) if row else None
 
+    def get_notification_by_key(self, dedupe_key: str) -> NotificationRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM notification WHERE dedupe_key = ?", (dedupe_key,)
+            ).fetchone()
+        return _notification(row) if row else None
+
     def notified_item_keys(self, watch_id: int, price_kind: str) -> set[str]:
         """Item keys already sent or still in flight (pending/failed) for this watch."""
         with self.db.connect() as conn:
@@ -668,7 +685,7 @@ class Repository:
             rows = conn.execute(
                 "SELECT n.*, w.name AS watch_name FROM notification n"
                 " LEFT JOIN watch w ON w.id = n.watch_id"
-                " WHERE n.kind IN ('price_alert', 'ops_source_failure')"
+                " WHERE n.kind IN ('price_alert', 'ops_source_failure', 'daily_digest')"
                 " AND n.status IN ('pending', 'failed') AND n.attempts < ?"
                 " ORDER BY n.id",
                 (max_attempts,),

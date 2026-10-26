@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -10,10 +11,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+import flight_deals.autostart as autostart
 from flight_deals.config import PROJECT_DIR, Config, ConfigError
 from flight_deals.domain.timeutil import utc_now
-from flight_deals.notify.telegram import TelegramNotifier
-from flight_deals.ports import Clock, FlightPriceSource, Notifier
+from flight_deals.notify.telegram import TelegramNotifier, TelegramSetupClient, Transport
+from flight_deals.ports import AutostartProbe, AutostartStatus, Clock, FlightPriceSource, Notifier
 from flight_deals.redact import redact, register_secret
 from flight_deals.scheduler import (
     FileSchedulerLock,
@@ -22,6 +24,7 @@ from flight_deals.scheduler import (
     SchedulerLockHeldError,
 )
 from flight_deals.services import (
+    DigestService,
     HealthService,
     NotificationService,
     ScanService,
@@ -42,10 +45,14 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "Assembly",
+    "RegistryAutostartProbe",
     "SchedulerLockHeldError",
     "acquire_scheduler_lock",
     "assemble",
+    "build_autostart_probe",
+    "build_telegram_setup_client",
     "create_app",
+    "protect_secret",
     "scheduler_lock_path",
 ]
 
@@ -75,6 +82,43 @@ def build_sources(
     return sources
 
 
+class RegistryAutostartProbe:
+    """Reads the login autostart entry; any failure means "unknown" (None)."""
+
+    def __init__(self, project_dir: Path, registry: autostart.Registry) -> None:
+        self._project_dir = project_dir
+        self._registry = registry
+
+    def status(self) -> AutostartStatus | None:
+        try:
+            state = autostart.status(self._project_dir, self._registry)
+        except Exception:
+            log.debug("autostart state unavailable", exc_info=True)
+            return None
+        return AutostartStatus(registered=state.registered, points_here=state.points_here)
+
+
+def build_autostart_probe(project_dir: Path = PROJECT_DIR) -> AutostartProbe | None:
+    """Real HKCU probe on Windows only; elsewhere the health page hides the row."""
+    if sys.platform != "win32":
+        return None
+    return RegistryAutostartProbe(project_dir, autostart.WindowsRegistry())
+
+
+def protect_secret(value: str) -> None:
+    """Register a secret for redaction (for callers that may not import ``redact``)."""
+    register_secret(value)
+
+
+def build_telegram_setup_client(
+    token: str, *, transport: Transport | None = None
+) -> TelegramSetupClient:
+    """Factory for ``flight-deals telegram-setup``: the token is registered for redaction
+    before any request can produce an error string."""
+    register_secret(token)
+    return TelegramSetupClient(token, transport=transport)
+
+
 @dataclass
 class Assembly:
     services: Services
@@ -88,6 +132,7 @@ def assemble(
     sources: Sequence[FlightPriceSource] | None = None,
     notifier: Notifier | None = None,
     clock: Clock = utc_now,
+    autostart_probe: AutostartProbe | None = None,
 ) -> Assembly:
     for secret in config.secrets():
         register_secret(secret)
@@ -111,6 +156,8 @@ def assemble(
             drop_threshold_bp=tunables.drop_threshold_bp,
             stale_after_hours=tunables.stale_after_hours,
             global_hourly_query_limit=tunables.global_hourly_query_limit,
+            digest_enabled=tunables.digest_enabled,
+            digest_time=tunables.digest_time,
         ),
         min_scan_interval_minutes=limits.min_scan_interval_minutes,
         clock=clock,
@@ -151,6 +198,15 @@ def assemble(
         notification_max_attempts=limits.notification_max_attempts,
         breaker_threshold=limits.breaker_failure_threshold,
         clock=clock,
+        autostart=autostart_probe,
+    )
+    digest = DigestService(
+        repo,
+        settings,
+        health,
+        notifications,
+        source_names=[s.name for s in active_sources],
+        clock=clock,
     )
     services = Services(
         watches=watches,
@@ -159,6 +215,7 @@ def assemble(
         notifications=notifications,
         scan=scan,
         health=health,
+        digest=digest,
     )
     scheduler = ScanScheduler(
         services,
@@ -196,6 +253,7 @@ def create_app(
     clock: Clock = utc_now,
     start_scheduler: bool = True,
     scheduler_lock: SchedulerLock | None = None,
+    autostart_probe: AutostartProbe | None = None,
 ) -> FastAPI:
     """Build the app. With ``start_scheduler`` the scheduler lock is held from here on.
 
@@ -208,7 +266,13 @@ def create_app(
         if not lock.held:
             lock.acquire()  # raises SchedulerLockHeldError
     try:
-        assembly = assemble(config, sources=sources, notifier=notifier, clock=clock)
+        assembly = assemble(
+            config,
+            sources=sources,
+            notifier=notifier,
+            clock=clock,
+            autostart_probe=autostart_probe,
+        )
     except BaseException:
         if lock is not None:
             lock.release()

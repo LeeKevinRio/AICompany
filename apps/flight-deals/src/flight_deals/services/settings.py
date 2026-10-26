@@ -1,11 +1,25 @@
-"""Global runtime settings: config defaults overridden by ``app_setting`` rows (FR-E4)."""
+"""Global runtime settings: config defaults overridden by ``app_setting`` rows (FR-E4).
+
+Integer settings and the daily digest settings use separate key lists (ADR-0002 FD-4
+Decision 2). A stored value that no longer validates falls back to the default.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
-from flight_deals.domain.validation import SettingRule, setting_rules, validate_settings
+from flight_deals.domain.validation import (
+    DIGEST_ENABLED_KEY,
+    DIGEST_SETTING_KEYS,
+    DIGEST_TIME_KEY,
+    SettingRule,
+    parse_digest_enabled,
+    parse_digest_time,
+    setting_rules,
+    validate_digest_settings,
+    validate_settings,
+)
 from flight_deals.ports import Clock
 from flight_deals.storage.repository import Repository
 
@@ -17,9 +31,24 @@ class EffectiveSettings:
     drop_threshold_bp: int
     stale_after_hours: int
     global_hourly_query_limit: int
+    digest_enabled: bool = True
+    digest_time: str = "08:00"
+
+    @property
+    def digest_hour_minute(self) -> tuple[int, int]:
+        hour, minute = self.digest_time.split(":")
+        return int(hour), int(minute)
 
 
-SETTING_KEYS = tuple(f.name for f in fields(EffectiveSettings))
+# Integer settings shown as numeric rows on the settings page.
+SETTING_KEYS = (
+    "scan_interval_minutes",
+    "max_pairs_per_scan",
+    "drop_threshold_bp",
+    "stale_after_hours",
+    "global_hourly_query_limit",
+)
+__all__ = ["DIGEST_SETTING_KEYS", "SETTING_KEYS", "EffectiveSettings", "SettingsService"]
 
 
 class SettingsService:
@@ -57,16 +86,30 @@ class SettingsService:
                 value = default
             rule = self._rules[key]
             values[key] = value if rule.minimum <= value <= rule.maximum else default
-        return EffectiveSettings(**values)
+        enabled = parse_digest_enabled(stored.get(DIGEST_ENABLED_KEY))
+        digest_time = parse_digest_time(stored.get(DIGEST_TIME_KEY))
+        return EffectiveSettings(
+            **values,
+            digest_enabled=self._defaults.digest_enabled if enabled is None else enabled,
+            digest_time=digest_time or self._defaults.digest_time,
+        )
 
     def update(self, raw: Mapping[str, object]) -> dict[str, str]:
-        """Validate and persist; returns field errors (empty dict on success)."""
+        """Validate and persist; returns field errors (empty dict on success).
+
+        Listeners run on the caller's thread (a web request); they may only schedule work.
+        """
         values, errors = validate_settings(raw, self._rules)
+        digest_values, digest_errors = validate_digest_settings(
+            {k: v for k, v in raw.items() if k in DIGEST_SETTING_KEYS}
+        )
+        errors.update(digest_errors)
         if errors:
             return errors
         before = self.current()
-        if values:
-            self._repo.save_settings({k: str(v) for k, v in values.items()}, self._clock())
+        stored = {k: str(v) for k, v in values.items()} | digest_values
+        if stored:
+            self._repo.save_settings(stored, self._clock())
         after = self.current()
         if after != before:
             for listener in self.listeners:

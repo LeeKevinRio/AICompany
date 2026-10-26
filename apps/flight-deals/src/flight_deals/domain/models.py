@@ -13,6 +13,7 @@ PriceKind = Literal["live", "cached"]
 AsOfBasis = Literal["source_reported", "fetch_time"]
 QueryStatus = Literal["ok", "no_data", "blocked", "error"]
 AlertReason = Literal["below_budget", "drop_pct", "new_low"]
+NotificationKind = Literal["price_alert", "ops_source_failure", "test", "daily_digest"]
 
 SCANNABLE_STATUSES: frozenset[str] = frozenset({"active", "stale"})
 

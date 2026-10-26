@@ -1,4 +1,5 @@
-"""Structural constraints from ADR-0002 (C-1..C-3, C-14, C-16, C-18, C-26, C-28, C-29, C-31)."""
+"""Structural constraints from ADR-0002 (C-1..C-3, C-14, C-16, C-18, C-26, C-28, C-29, C-31,
+C-34..C-36)."""
 
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ ALLOWED: dict[str, set[str]] = {
     "logging_setup": {"redact"},
     "redact": set(),
     "app": {"*"},
-    "cli": {"app", "config", "logging_setup"},
+    "autostart": set(),
+    "cli": {"app", "config", "logging_setup", "autostart"},
     "__init__": set(),
 }
 THIRD_PARTY_LIMITS: dict[str, set[str]] = {
@@ -39,7 +41,7 @@ THIRD_PARTY_LIMITS: dict[str, set[str]] = {
     "jinja2": {"web"},
     "uvicorn": {"cli"},
 }
-STDLIB_ONLY = {"domain", "config", "logging_setup", "redact"}
+STDLIB_ONLY = {"domain", "config", "logging_setup", "redact", "autostart"}
 
 
 def module_name(path: Path) -> str:
@@ -209,7 +211,8 @@ def test_js_only_in_static() -> None:  # C-14
 
 def test_gitignore_covers_local_state() -> None:  # C-16
     lines = (APP_DIR / ".gitignore").read_text(encoding="utf-8").splitlines()
-    for entry in (".venv/", "data/", "*.db", "*.db.lock", "*.sqlite*", "__pycache__/", ".env"):
+    entries = (".venv/", "data/", "*.db", "*.db.lock", "*.sqlite*", "__pycache__/", ".env")
+    for entry in (*entries, "*.log"):  # *.log: background-mode log file (C-36)
         assert entry in lines
 
 
@@ -232,3 +235,58 @@ def test_server_binds_loopback_single_worker() -> None:  # C-12, C-7
     kwargs = build_uvicorn_kwargs(8795)
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["workers"] == 1 and kwargs["reload"] is False
+
+
+def test_autostart_has_no_process_or_task_scheduler_tricks() -> None:  # C-36
+    banned = ("schtasks", "reg.exe", ".vbs", "subprocess")
+    paths = [SRC / "autostart.py", *(SRC / "web").rglob("*"), *(SRC / "services").rglob("*")]
+    hits = [
+        f"{p.relative_to(SRC).as_posix()}: {word}"
+        for p in paths
+        if p.is_file() and p.suffix in {".py", ".html", ".js"}
+        for word in banned
+        if word in p.read_text(encoding="utf-8").lower()
+    ]
+    assert hits == []
+
+
+def test_get_updates_only_in_telegram_adapter() -> None:  # C-35
+    hits = [
+        p.relative_to(SRC).as_posix()
+        for p in python_files()
+        if "getUpdates" in p.read_text(encoding="utf-8")
+        and p.relative_to(SRC).as_posix() != "notify/telegram.py"
+    ]
+    # cli.py may name the API in user-facing text, but never builds the request.
+    assert [h for h in hits if h != "cli.py"] == []
+    assert "api.telegram.org" not in (SRC / "cli.py").read_text(encoding="utf-8")
+
+
+def test_cli_does_not_import_notify_redact_or_domain() -> None:  # C-35
+    names = imports_of(SRC / "cli.py")
+    assert not [n for n in names if re.match(r"flight_deals\.(notify|redact|domain)", n)]
+
+
+def test_latest_per_pair_defined_once() -> None:  # C-34
+    owners = [
+        p.relative_to(SRC).as_posix()
+        for p in python_files()
+        if re.search(r"^def latest_per_pair\(", p.read_text(encoding="utf-8"), re.MULTILINE)
+    ]
+    assert owners == ["services/price_snapshot.py"]
+
+
+def test_scheduler_imports_only_services() -> None:  # C-32
+    for path in (SRC / "scheduler").rglob("*.py"):
+        for name in imports_of(path):
+            if name.startswith("flight_deals."):
+                assert name.split(".")[1] in {"services", "scheduler"}, (path, name)
+
+
+def test_marked_migrations_only_rebuild_with_foreign_keys_off() -> None:  # C-33
+    from flight_deals.storage.db import available_migrations, needs_foreign_keys_off
+
+    for version, sql in available_migrations():
+        upper = sql.upper()
+        if "DROP TABLE" in upper or "RENAME TO" in upper:
+            assert needs_foreign_keys_off(sql), version

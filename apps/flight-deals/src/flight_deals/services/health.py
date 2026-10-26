@@ -14,6 +14,17 @@ log = logging.getLogger(__name__)
 ERROR_LIMIT = 500
 
 
+def describe_source(record: SourceHealthRecord | None) -> tuple[str, str]:
+    """(label, key) of a source's state; shared by the health page and the digest."""
+    if record is None or (record.last_success_at is None and record.last_failure_at is None):
+        return "未知（尚未查詢）", "unknown"
+    if record.breaker_state != "closed":
+        return "異常", "down"
+    if record.consecutive_failures > 0:
+        return f"正常（最近連續失敗 {record.consecutive_failures} 次）", "warn"
+    return "正常", "ok"
+
+
 class HealthService:
     def __init__(
         self,

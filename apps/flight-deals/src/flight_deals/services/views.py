@@ -24,8 +24,9 @@ from flight_deals.domain.messages import (
 )
 from flight_deals.domain.models import DatePair, Watch, WatchSpec
 from flight_deals.domain.timeutil import format_taipei, taipei_date, to_utc_iso, weekday_label
-from flight_deals.ports import Clock
-from flight_deals.services.health import HealthService
+from flight_deals.ports import AutostartProbe, Clock
+from flight_deals.services.health import HealthService, describe_source
+from flight_deals.services.price_snapshot import PriceDelta, Snapshot, latest_per_pair
 from flight_deals.services.settings import SETTING_KEYS, SettingsService
 from flight_deals.storage.repository import ObservationRecord, Repository, ScanRunRecord
 
@@ -64,6 +65,7 @@ NOTIFICATION_KIND_LABELS = {
     "price_alert": "價格通知",
     "ops_source_failure": "資料源異常告警",
     "test": "測試訊息",
+    "daily_digest": "每日摘要",
 }
 BREAKER_LABELS = {
     "closed": "關閉（正常查詢）",
@@ -116,18 +118,14 @@ def dates_text(spec: WatchSpec) -> str:
     return f"彈性出發 {start} ～ {end}"
 
 
-def _pair_key(o: ObservationRecord) -> DatePair:
-    return DatePair(o.depart_date, o.return_date)
-
-
-def latest_per_pair(observations: Sequence[ObservationRecord]) -> dict[DatePair, ObservationRecord]:
-    latest: dict[DatePair, ObservationRecord] = {}
-    for obs in observations:
-        key = _pair_key(obs)
-        current = latest.get(key)
-        if current is None or (obs.fetched_at, obs.id) > (current.fetched_at, current.id):
-            latest[key] = obs
-    return latest
+def delta_view(delta: PriceDelta | None) -> dict[str, str] | None:
+    """List-page change: direction plus an unsigned amount label (C-34)."""
+    if delta is None:
+        return None
+    return {
+        "direction": delta.direction,
+        "amount_label": format_money(abs(delta.delta_minor), delta.currency),
+    }
 
 
 class ViewService:
@@ -142,8 +140,10 @@ class ViewService:
         notification_max_attempts: int,
         breaker_threshold: int,
         clock: Clock,
+        autostart: AutostartProbe | None = None,
     ) -> None:
         self._repo = repo
+        self._autostart = autostart
         self._settings = settings
         self._health = health
         self._source_names = list(source_names)
@@ -193,11 +193,6 @@ class ViewService:
             "revision": obs.watch_revision,
         }
 
-    def _current_latest(self, watch: Watch) -> dict[DatePair, ObservationRecord]:
-        observations = self._repo.observations_for_watch(watch.id, revision=watch.revision)
-        live = [o for o in observations if o.price_kind == "live"]
-        return latest_per_pair(live)
-
     def watch_link(self, watch: Watch) -> str | None:
         spec = watch.spec
         # Constant time: never expand the whole window just to build one link.
@@ -214,11 +209,17 @@ class ViewService:
 
     def list_page(self) -> dict[str, Any]:
         rows = []
+        today = taipei_date(self._clock())
         for watch in self._repo.list_watches():
             spec = watch.spec
-            latest = self._current_latest(watch)
-            matching = [o for o in latest.values() if o.currency == spec.currency]
-            cheapest = min(matching, key=lambda o: o.amount_minor, default=None)
+            # One observation query per watch, as before FD-4 (C-34).
+            snapshot = Snapshot.build(
+                self._repo.observations_for_watch(watch.id, revision=watch.revision),
+                revision=watch.revision,
+                currency=spec.currency,
+                today=today,
+            )
+            cheapest = snapshot.cheapest
             rows.append(
                 {
                     "id": watch.id,
@@ -243,6 +244,7 @@ class ViewService:
                         if cheapest
                         else None
                     ),
+                    "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
                     "link": self.watch_link(watch),
                 }
@@ -586,16 +588,7 @@ class ViewService:
         known = {r.source: r for r in self._health.records()}
         for name in self._source_names:
             record = known.get(name)
-            if record is None or (
-                record.last_success_at is None and record.last_failure_at is None
-            ):
-                state, state_key = "未知（尚未查詢）", "unknown"
-            elif record.breaker_state != "closed":
-                state, state_key = "異常", "down"
-            elif record.consecutive_failures > 0:
-                state, state_key = f"正常（最近連續失敗 {record.consecutive_failures} 次）", "warn"
-            else:
-                state, state_key = "正常", "ok"
+            state, state_key = describe_source(record)
             health_rows.append(
                 {
                     "name": source_label(name),
@@ -664,8 +657,24 @@ class ViewService:
                 for e in self._repo.recent_events(10)
             ],
             "telegram_configured": self._telegram_configured,
+            "autostart": self._autostart_view(),
             "settings": settings_rows,
+            "digest_enabled": current.digest_enabled,
+            "digest_time": current.digest_time,
+            "digest_default_time": defaults.digest_time,
             "usage": usage,
             "hourly_used": self._repo.queries_used_since(now - timedelta(hours=1)),
             "hourly_limit": current.global_hourly_query_limit,
         }
+
+    def _autostart_view(self) -> dict[str, bool] | None:
+        """None hides the row: not Windows, no probe, or the state could not be read."""
+        if self._autostart is None:
+            return None
+        try:
+            status = self._autostart.status()
+        except Exception:
+            return None
+        if status is None:
+            return None
+        return {"registered": status.registered, "points_here": status.points_here}

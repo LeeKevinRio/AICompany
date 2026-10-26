@@ -36,6 +36,9 @@
     {% endif %}
     <dt>下次預計掃描</dt><dd>{{ next_run or "無（沒有啟用中的監看或排程器未執行）" }}</dd>
     <dt>最近一小時查詢</dt><dd>{{ hourly_used }} / {{ hourly_limit }} 次</dd>
+    {% if autostart %}
+    <dt>自動啟動</dt><dd>{% if autostart.registered and autostart.points_here %}已安裝（登入時背景啟動）{% elif autostart.registered %}已安裝但指向其他位置，請重新執行 install-autostart.bat{% else %}未安裝（可執行 apps\flight-deals\install-autostart.bat）{% endif %}</dd>
+    {% endif %}
   </dl>
   {% if events %}
   <details>
@@ -92,10 +95,30 @@
   {% endif %}
 </section>
 
+<form id="settings-form" class="form" novalidate>
+<p class="form-error" data-error-for="_" role="alert"></p>
+
+<section class="card">
+  <h2>每日摘要</h2>
+  <div class="grid">
+    <div class="field">
+      <label class="check-label" for="f-digest_enabled">
+        <input id="f-digest_enabled" type="checkbox" name="digest_enabled"{% if digest_enabled %} checked{% endif %} aria-describedby="err-digest_enabled">
+        每天推播摘要
+      </label>
+      <span id="err-digest_enabled" class="field-error" data-error-for="digest_enabled"></span>
+    </div>
+    <div class="field">
+      <label for="f-digest_time">推播時間（台北時間）</label>
+      <input id="f-digest_time" type="time" name="digest_time" value="{{ digest_time or "08:00" }}" required aria-describedby="h-digest_time err-digest_time">
+      <small id="h-digest_time" class="hint">預設 08:00；若關機或睡眠而未能準時推播，當天稍後啟動會補推一次</small>
+      <span id="err-digest_time" class="field-error" data-error-for="digest_time"></span>
+    </div>
+  </div>
+</section>
+
 <section class="card">
   <h2>全域設定</h2>
-  <form id="settings-form" class="form" novalidate>
-    <p class="form-error" data-error-for="_" role="alert"></p>
     <div class="grid">
     {% for s in settings %}
       <div class="field">
@@ -108,8 +131,8 @@
     </div>
     <p class="muted">修改後從下一輪掃描起生效；掃描週期變更會立即重新排程。</p>
     <div class="form-actions"><button type="submit" class="primary" data-busy-label="儲存中…">儲存設定</button></div>
-  </form>
 </section>
+</form>
 
 <section class="card">
   <h2>存取範圍</h2>

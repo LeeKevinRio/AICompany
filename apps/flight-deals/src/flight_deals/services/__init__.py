@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from flight_deals.domain.models import Watch
 from flight_deals.ports import Clock
+from flight_deals.services.digest import DIGEST_ZONE, DigestService
 from flight_deals.services.health import HealthService
 from flight_deals.services.notifications import NotificationService
 from flight_deals.services.scan import ScanService
@@ -24,10 +25,13 @@ class Services:
     notifications: NotificationService
     scan: ScanService
     health: HealthService
+    digest: DigestService
 
 
 __all__ = [
     "Clock",
+    "DIGEST_ZONE",
+    "DigestService",
     "Watch",
     "HealthService",
     "NotificationService",

@@ -22,6 +22,7 @@
       <th>預算</th>
       <th>狀態</th>
       <th>已查到最低價</th>
+      <th>較前一輪</th>
       <th>上次查價</th>
       <th>操作</th>
     </tr>
@@ -43,6 +44,17 @@
           <span class="muted">尚未查價</span>
         {% endif %}
       </td>
+      <td class="num">
+        {% if w.delta and w.delta.direction == "down" %}
+          <span class="delta delta-down" aria-hidden="true">↓ {{ w.delta.amount_label }}</span><span class="sr-only">較前一輪下跌 {{ w.delta.amount_label }}</span>
+        {% elif w.delta and w.delta.direction == "up" %}
+          <span class="delta delta-up" aria-hidden="true">↑ {{ w.delta.amount_label }}</span><span class="sr-only">較前一輪上漲 {{ w.delta.amount_label }}</span>
+        {% elif w.delta and w.delta.direction == "flat" %}
+          <span class="delta delta-flat" aria-hidden="true">＝</span><span class="sr-only">較前一輪持平</span>
+        {% else %}
+          <span class="muted" aria-hidden="true">—</span><span class="sr-only">無前一輪可比較</span>
+        {% endif %}
+      </td>
       <td>{% if w.last_scanned %}{{ w.last_scanned }}{% else %}<span class="muted">尚未查價</span>{% endif %}</td>
       <td><div class="actions">
         <a class="button small" href="/watches/{{ w.id }}">詳情</a>
@@ -62,5 +74,6 @@
   </tbody>
 </table>
 </div>
+<p class="note hint">較前一輪：目前最低價與上一輪掃描結束時最低價的差額，只計目前設定的即時價、不含已出發的日期；兩個最低價可能是不同日期。</p>
 {% endif %}
 {% endblock %}

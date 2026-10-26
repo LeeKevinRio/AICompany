@@ -279,14 +279,67 @@ def setting_rules(min_scan_interval_minutes: int) -> dict[str, SettingRule]:
     }
 
 
+# Daily digest settings (ADR-0002 FD-4 Decision 2): kept apart from the integer rules.
+DIGEST_ENABLED_KEY = "digest_enabled"
+DIGEST_TIME_KEY = "digest_time"
+DIGEST_SETTING_KEYS = (DIGEST_ENABLED_KEY, DIGEST_TIME_KEY)
+DIGEST_TIME_PATTERN = re.compile(r"([01]\d|2[0-3]):[0-5]\d", re.ASCII)
+_DIGEST_FLAG_TEXT = {"1": True, "true": True, "0": False, "false": False}
+DIGEST_ENABLED_ERROR = "每日摘要開關只能是開啟或關閉"
+DIGEST_TIME_REQUIRED = "請填寫推播時間"
+DIGEST_TIME_ERROR = "推播時間格式須為 HH:MM（24 小時制，00:00 到 23:59）"
+
+
+def parse_digest_enabled(value: object) -> bool | None:
+    """Strict flag: a bool or the text "0" / "1" / "true" / "false"; anything else is None."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _DIGEST_FLAG_TEXT.get(value.strip().lower())
+    return None
+
+
+def parse_digest_time(value: object) -> str | None:
+    """Strict ``HH:MM`` (00:00-23:59); returns the text unchanged or None."""
+    if isinstance(value, str) and DIGEST_TIME_PATTERN.fullmatch(value):
+        return value
+    return None
+
+
+def validate_digest_settings(raw: Mapping[str, object]) -> tuple[dict[str, str], dict[str, str]]:
+    """Validate digest keys present in ``raw``; values come back in their stored form."""
+    values: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    if DIGEST_ENABLED_KEY in raw:
+        enabled = parse_digest_enabled(raw[DIGEST_ENABLED_KEY])
+        if enabled is None:
+            errors[DIGEST_ENABLED_KEY] = DIGEST_ENABLED_ERROR
+        else:
+            values[DIGEST_ENABLED_KEY] = "1" if enabled else "0"
+    if DIGEST_TIME_KEY in raw:
+        value = raw[DIGEST_TIME_KEY]
+        parsed = parse_digest_time(value)
+        if parsed is not None:
+            values[DIGEST_TIME_KEY] = parsed
+        elif value is None or (isinstance(value, str) and not value.strip()):
+            errors[DIGEST_TIME_KEY] = DIGEST_TIME_REQUIRED
+        else:
+            errors[DIGEST_TIME_KEY] = DIGEST_TIME_ERROR
+    return values, errors
+
+
 def validate_settings(
     raw: Mapping[str, object], rules: Mapping[str, SettingRule]
 ) -> tuple[dict[str, int], dict[str, str]]:
-    """Validate a partial settings update. Unknown keys are rejected."""
+    """Validate a partial integer-settings update. Unknown keys are rejected.
+
+    Digest keys are not integer settings; they are accepted here (not flagged as
+    unknown) and validated by ``validate_digest_settings``.
+    """
     values: dict[str, int] = {}
     errors: dict[str, str] = {}
     for key in raw:
-        if key not in rules:
+        if key not in rules and key not in DIGEST_SETTING_KEYS:
             errors[key] = "不支援的設定項目"
     for key, rule in rules.items():
         if key not in raw:

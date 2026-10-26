@@ -38,6 +38,64 @@ uv run flight-deals --port 8800 --debug
 服務是單一 process：網頁、排程（APScheduler，單一 worker thread）與 SQLite 都在裡面。
 不要用多 worker 或 `--reload` 啟動，否則會出現兩份排程。
 
+### 登入自動啟動（Windows）
+
+讓服務在你登入 Windows 時自動在背景啟動（沒有視窗、不需要系統管理員權限）。做法是在目前使用者的
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 寫入一個名為 `flight-deals` 的值，
+指令是 `.venv\Scripts\pythonw.exe -m flight_deals.cli --background`，不含任何祕密
+（token、chat id 仍只來自 `.env`）。
+
+- **安裝**：先跑過一次 `dev-up.bat`（它會建立 `.venv`），再雙擊 `apps\flight-deals\install-autostart.bat`。
+  重複執行不會產生第二筆，只會覆寫或告知已安裝。專案搬位置後請重新執行一次。
+- **移除**：雙擊 `apps\flight-deals\uninstall-autostart.bat`。尚未安裝時只會說明，不算錯誤；
+  目前已在跑的服務不受影響。
+- **確認**：「設定與健康」頁的「自動啟動」列（已安裝／未安裝；偵測不到時整列不顯示），或執行
+  `uv run flight-deals autostart status`。
+- **停止背景實例**：背景實例沒有視窗，到工作管理員結束 `pythonw.exe`；或直接執行 `dev-up.bat`，
+  它會偵測舊的 flight-deals 程序並詢問是否結束。
+- **紀錄檔**：背景實例不輸出到畫面，只寫 `data\flight-deals.log`（與資料庫同目錄，輪替保留，已被 `.gitignore`，
+  token 會被遮蔽）。啟動失敗或被擋下時原因也在這裡。
+- **與其他啟動方式共存**：同一個資料庫只允許一份排程。自動啟動的實例已在跑時，再用 `dev-up.bat` 或手動啟動，
+  後啟動者會拒絕並說明原因（背景模式則寫進 log 後以結束碼 2 結束）。
+- **限制**：機器沒開或睡眠時仍不會掃描（見下方「已知限制」）；在工作管理員「啟動」分頁被停用的狀態偵測不到；
+  若刪掉 `.venv`，登入時會無聲失敗，需重跑 `dev-up.bat` 與 `install-autostart.bat`。
+
+### Telegram 設定精靈
+
+不想手動翻 `getUpdates` 時，可用精靈找出 chat id：
+
+```bash
+cd apps/flight-deals
+uv run flight-deals telegram-setup
+```
+
+流程：
+
+1. 從環境變數或 `.env` 讀 bot token；沒有的話先印出 BotFather 建立步驟，再提示輸入 token
+   （輸入時不顯示，token 不接受用命令列參數傳入）。
+2. 請你對自己的 bot 傳一則任意訊息，最多等 60 秒。
+3. 收到後印出 chat id 與一行 `FLIGHT_DEALS_TELEGRAM_CHAT_ID=<id>`（群組會是負數）；
+   有多個聊天時列出供選擇，預設最新一筆。
+4. 詢問是否發送測試訊息（預設不發送，輸入 `y` 才發）。
+
+精靈不會修改 `.env` 或任何檔案，請自己把印出的那行貼進 `.env` 後重新啟動服務。
+它不啟動服務、不取排程鎖，所以服務正在執行時也能使用。
+
+結束碼：`0` 成功（含選擇不發測試訊息）；`1` 失敗（沒有 token、逾時沒收到訊息、token 無效、
+bot 設有 webhook、測試訊息送失敗、使用者取消）；`2` 設定檔有誤。
+
+### 每日摘要
+
+服務會在每天固定時間用 Telegram 推一則摘要：每個啟用中監看的目前最低價與日期、較前一日的漲跌、
+資料源狀態、上次掃描時間、24 小時內查價失敗的掃描次數，結尾附價格免責說明。
+
+- 預設每天 08:00（台北時間）推播，到「設定與健康」頁可改時間或關閉；時間格式為 `HH:MM`（24 小時制）。
+- **補推規則**：當天的摘要只會推一次。準點時機器沒開或在睡眠，之後當天內啟動或喚醒時會補推一次；
+  隔天不會補前一天的。改摘要時間後，若今天已過新時間且還沒推過，會立刻補推。
+- **未設定 Telegram 時不推**：「通知紀錄」會記成「未送出（未設定）」，日後設定好也不補發當天的。
+- 推送失敗時只在當天內重試，超過次數即停止；通知紀錄頁可看到類型為「每日摘要」的全文與狀態。
+- 摘要最多列 20 個監看，其餘寫「另有 N 個監看未列出」。
+
 ## 環境變數
 
 可以寫在 `apps/flight-deals/.env`（已被 `.gitignore`），格式參考 `.env.example`。
@@ -60,8 +118,9 @@ uv run flight-deals --port 8800 --debug
 
 1. 在 Telegram 搜尋 **@BotFather**，傳送 `/newbot`，依指示取名，取得 bot token。
 2. 先在 Telegram 對你的新 bot 傳一則任意訊息。
-3. 用瀏覽器開啟 `https://api.telegram.org/bot<你的 token>/getUpdates`，
-   在回應 JSON 的 `message.chat.id` 找到 chat id。
+3. 取得 chat id：執行 `uv run flight-deals telegram-setup`（見上方「Telegram 設定精靈」），
+   或自行用瀏覽器開啟 `https://api.telegram.org/bot<你的 token>/getUpdates`，
+   在回應 JSON 的 `message.chat.id` 找到。
 4. 把 token 與 chat id 寫進 `.env` 或環境變數，重新啟動服務。
 5. 到「設定與健康」頁按「發送測試訊息」確認。
 
@@ -83,7 +142,7 @@ uv run pytest -q -m live tests/test_live_smoke.py  # 手動執行：真的打一
 
 ## 已知限制
 
-- **機器沒開就不會掃描。** 排程跑在服務 process 內，筆電睡眠或關機期間不會查價；
+- **機器沒開就不會掃描。** 排程跑在服務 process 內，筆電睡眠或關機期間不會查價（登入自動啟動也一樣）；
   重新啟動後只補跑已逾期的監看（逐一錯開），補不回當時的價格。
 - **fast-flights 是非官方介面，隨時可能壞。** 它反向工程 Google Flights，Google 改版、
   回傳空白頁或封鎖時，查價結果會標成「被擋或格式改變」，連續失敗會觸發斷路器、
