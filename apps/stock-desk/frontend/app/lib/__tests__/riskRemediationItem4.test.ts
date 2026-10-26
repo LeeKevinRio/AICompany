@@ -340,6 +340,33 @@ describe("操作摘要：4-附（C-12）", () => {
     expect(html.slice(mainEnd)).not.toContain(DRAWDOWN_UNADJUSTED_NOTICE);
   });
 
+  // 行為新增（風控 2026-10-26 裁定 R-3）：4-附 用全形括號與規則名稱分隔，括號與文字在同一個 span 內；
+  // 常數 DRAWDOWN_UNADJUSTED_NOTICE 不變，括號在渲染處加。
+  it.each([
+    ["drawdown_protection", "目前回撤深於兩成"],
+    ["deep_drawdown_stop", "目前回撤深於三成"],
+  ])("%s：依據行 innerText 逐字為「依據：%s（以未還原價計算，回撤可能含除權息缺口）」", (id, name) => {
+    const html = renderToStaticMarkup(
+      createElement(SummaryBody, {
+        response: makeResponse(
+          makeCard({
+            action: "reduce",
+            aggregated_action: "reduce",
+            matched_rules: [{ ...rule(id, "reduce"), name }],
+          }),
+        ),
+      }),
+    );
+    const line = html.match(/<p class="text-sm text-neutral-300">[\s\S]*?<\/p>/)![0];
+    // innerText of the line: strip tags and React's text-node separators.
+    const text = line.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, "");
+    expect(text).toBe(`依據：${name}（以未還原價計算，回撤可能含除權息缺口）`);
+    // Parentheses and notice share one span, and nothing sits between the rule name and the opening bracket.
+    expect(line).toContain(
+      `${name}<span class="text-neutral-400">（以未還原價計算，回撤可能含除權息缺口）</span>`,
+    );
+  });
+
   it("其他規則：不顯示 4-附", () => {
     expect(render("rsi_overbought")).not.toContain(DRAWDOWN_UNADJUSTED_NOTICE);
   });

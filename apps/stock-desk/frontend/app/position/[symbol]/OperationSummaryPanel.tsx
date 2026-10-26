@@ -300,7 +300,9 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
           <span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>
           {model.topMatchedRule.name}
           {model.topMatchedRuleId !== null && DRAWDOWN_RULE_IDS.includes(model.topMatchedRuleId) && (
-            <span className="ml-2 text-neutral-400">{DRAWDOWN_UNADJUSTED_NOTICE}</span>
+            // Full-width parentheses (風控 2026-10-26 裁定 R-3) mark the boundary between the rule name and the
+            // notice; one template string keeps them in the same text node and the same span.
+            <span className="text-neutral-400">{`（${DRAWDOWN_UNADJUSTED_NOTICE}）`}</span>
           )}
         </p>
       )}
