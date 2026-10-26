@@ -71,6 +71,7 @@ from app.advice.book import (
     limits_fx_disclosures,
     sector_categories,
 )
+from app.advice.limits import EMPTY_BOOK_DETAIL as EMPTY_BOOK_DETAIL
 from app.advice.limits import (
     LIMIT_IDS,
     LIMIT_NAMES,
@@ -185,11 +186,9 @@ SECTOR_UNVALUED_UNKNOWN_OUTSIDE_COMPARISON_SUFFIX = (
 #: The joiner of :func:`format_sector_list`: every name, no "等", no truncation.
 SECTOR_LIST_SEPARATOR = "、"
 
-#: Nothing is held at all: there is no holding to compare, which is a different
-#: statement from "the holdings could not be judged" below. Also used by cap 3,
-#: whose exposure ratio has no numerator on an empty book.
-#: 風控核可文案,修改須重新送審(2026-08-09);空帳本第 3 條採路線(a)已核可
-EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部位，本次不計算，回報 not_evaluable。"
+#: :data:`EMPTY_BOOK_DETAIL` (re-exported above) now lives in
+#: :mod:`app.advice.limits` with its approval note, so cap 3 can use it on every
+#: surface without the risk layer importing the overview (B-16).
 
 #: Holdings exist but not one of them could be judged against this cap. The
 #: sentence states only that the cap has nothing to compare: naming a cause here
@@ -216,13 +215,6 @@ NO_CANDIDATE_DETAILS: dict[str, str] = {
     limit_id: NO_CANDIDATE_DETAIL.format(name=LIMIT_NAMES[limit_id], unit=unit)
     for limit_id, unit in _COMPARED_UNITS.items()
 }
-
-#: The book-level caps that still have nothing to compute on an empty book: an
-#: exposure ratio with no position in the numerator is not a 0% exposure that
-#: passed, it is a ratio with nothing to measure. Only cap 3 is judged at book
-#: level at all now (C5 moved cap 5 to the per-symbol path, D-7), and the
-#: per-symbol caps get rule 4's treatment from :func:`_aggregate` instead.
-EMPTY_BOOK_UNCOMPUTABLE_IDS: frozenset[str] = frozenset({"gross_exposure"})
 
 #: Worst-first ordering over statuses. ``not_evaluable`` never appears in a
 #: comparison (rule 1), so it is not ranked here.
@@ -386,7 +378,7 @@ def evaluate_book_limits(
     reported_sector: str | None = None
     for index, limit_id in enumerate(LIMIT_IDS, start=1):
         if limit_id not in PER_SYMBOL_LIMIT_IDS:
-            limits.append(_book_level_check(index, baseline[limit_id], book_is_empty=not groups))
+            limits.append(_book_level_check(index, baseline[limit_id]))
             continue
         aggregate = _aggregate(
             limit_id,
@@ -428,29 +420,23 @@ def _compared_quotes(candidates: list[_Candidate]) -> list[FxQuote]:
     ]
 
 
-def _book_level_check(index: int, check: LimitCheck, *, book_is_empty: bool) -> BookLimitCheck:
+def _book_level_check(index: int, check: LimitCheck) -> BookLimitCheck:
     """A cap whose question is about the book: its verdict travels unchanged.
 
-    The one exception is rule 4: on an empty book a cap in
-    :data:`EMPTY_BOOK_UNCOMPUTABLE_IDS` has nothing to measure, and the context
-    would otherwise hand back a 0% that reads as a pass. A cap that is already
-    ``not_evaluable`` keeps its own reason -- it established a cause of its own
-    (an absent or stale net worth), and restating it as "no holdings" would
-    describe one gap with another's cause.
+    Rule 4 for cap 3 is no longer applied here: since B-16 the cap itself
+    reports ``not_evaluable`` with :data:`EMPTY_BOOK_DETAIL` on an empty book
+    (``PortfolioContext.book_holding_count == 0``), after the net-worth checks,
+    so an absent or stale net worth still keeps its own reason -- and the
+    advice card, which reads the same check, gives the same answer.
     """
-    nothing_to_measure = (
-        book_is_empty
-        and check.id in EMPTY_BOOK_UNCOMPUTABLE_IDS
-        and check.status != "not_evaluable"
-    )
     return BookLimitCheck(
         index=index,
         limit_id=check.id,
         name=check.name,
-        status="not_evaluable" if nothing_to_measure else check.status,
-        observed=None if nothing_to_measure else check.observed,
+        status=check.status,
+        observed=check.observed,
         threshold=check.threshold,
-        detail=EMPTY_BOOK_DETAIL.format(name=check.name) if nothing_to_measure else check.detail,
+        detail=check.detail,
         worst_symbol=None,
         evaluated_count=0,
         excluded=[],

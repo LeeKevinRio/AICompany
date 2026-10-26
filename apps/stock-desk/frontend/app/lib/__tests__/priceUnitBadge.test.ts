@@ -692,8 +692,20 @@ describe("whole page (seeded query cache)", () => {
   });
 
   it("gates are independent: no advice -> no decision-card chip but the other three stay; bars gone -> only data-less blocks are bare", () => {
-    const noAdvice = renderPage({ market: "US", bars: usBars });
+    // "No advice" = the advice query settled without a card (signals settled too).
+    // A query that has not answered yet is a different state: the six conditions
+    // then wait (skeleton, no rows, so no entry chip) instead of counting the
+    // missing card as undecidable — 2026-10-26 trust fix, see
+    // entryObservationPending.test.ts.
+    const noAdvice = renderPage({
+      market: "US",
+      bars: usBars,
+      advice: makeAdvice({ status: "insufficient_data", reason: "not enough", advice: null }),
+      signals: SIGNALS_OK,
+    });
     expect(owners(noAdvice, PRICE_UNIT_LABEL_USD)).toEqual(["technical", "key-levels", "entry"]);
+    const adviceNotArrived = renderPage({ market: "US", bars: usBars, signals: SIGNALS_OK });
+    expect(owners(adviceNotArrived, PRICE_UNIT_LABEL_USD)).toEqual(["technical", "key-levels"]);
   });
 
   it("technical gate, bars not ok + signals ok (F7-R3): the chip is printed on the market check alone, once, and no other block prints one", () => {

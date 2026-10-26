@@ -13,7 +13,7 @@ import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
 import { KEY_LEVELS_PANEL_TITLE, KeyLevelsPanel, buildKeyLevelsFooterItems } from "./KeyLevelsPanel";
 import { EntryObservationPanel } from "./EntryObservationPanel";
-import { evaluateEntryObservation } from "../../lib/entryObservation";
+import { evaluateEntryObservation, isEntryObservationPending } from "../../lib/entryObservation";
 import { computeKeyLevels } from "../../lib/keyLevels";
 import { ENTRY_PANEL_TITLE, buildEntryFooterItems } from "../../lib/entryObservationWording";
 import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
@@ -144,6 +144,11 @@ export default function PositionDetailPage() {
     advice.data?.status === "ok" ? advice.data.advice : null,
     advice.data?.status === "ok" ? advice.data.held : null,
   );
+  // Trust fix (2026-10-26 product review, issue 4): the count is withheld until
+  // all three payloads have settled, so the same data always yields the same
+  // count no matter which query lands first. React Query re-renders once the
+  // last one arrives, which is when the conditions are evaluated for real.
+  const entryObservationPending = isEntryObservationPending([bars, signals, advice]);
 
   /*
     --- 頁尾揭露區（CEO 裁定 2026-09-06 揭露句下沉頁尾；風控 ACCEPT_WITH_CONDITIONS）---
@@ -379,6 +384,7 @@ export default function PositionDetailPage() {
                   <PriceChart
                     bars={bars.data.bars}
                     movingAverages={signals.data?.signals?.technical?.moving_averages}
+                    movingAveragesPending={signals.isPending}
                   />
                 </div>
                 {/* R-A1（風控逐字審 R5 破線修正）: signals 的 Error／Insufficient 移回主視圖（chips 列位置），不得收進 <details>。 */}
@@ -509,6 +515,7 @@ export default function PositionDetailPage() {
         }}
         market={market}
         bars={bars.data && bars.data.status === "ok" ? bars.data.bars : null}
+        pending={entryObservationPending}
       />
 
       {/*

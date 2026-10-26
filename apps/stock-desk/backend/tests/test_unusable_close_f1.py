@@ -283,15 +283,15 @@ def test_a_usable_newest_close_is_unchanged(
 
 
 def _empty_summary() -> PortfolioSummary:
-    zero = Decimal(0)
+    # T1-12: an empty book has no total -- every amount is None under no_data.
     return PortfolioSummary(
         as_of="2026-10-07T00:00:00+00:00",
         totals=Totals(
-            cost_twd=zero,
-            market_value_twd=zero,
-            unrealized_pnl_twd=zero,
-            asset_contribution_twd=zero,
-            fx_contribution_twd=zero,
+            cost_twd=None,
+            market_value_twd=None,
+            unrealized_pnl_twd=None,
+            asset_contribution_twd=None,
+            fx_contribution_twd=None,
             status="no_data",
         ),
         positions=[],
