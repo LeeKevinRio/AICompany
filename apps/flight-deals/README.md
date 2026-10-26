@@ -20,6 +20,21 @@ uv run flight-deals --port 8800 --debug
 從 repo 根目錄也可以用 `uv run --project apps/flight-deals flight-deals`
 （`.claude/launch.json` 的 `flight-deals` 設定就是這個指令）。
 
+### Windows：一鍵啟動
+
+雙擊 `apps\flight-deals\dev-up.bat`（或在任何目錄執行它）。它會依序：
+
+1. 檢查 git、uv 是否已安裝；`.env` 不存在時提示 Telegram 通知會維持關閉（仍會繼續）。
+2. 確認沒有未提交的已追蹤檔案變更；若不在 `product/flight-deals` 分支會詢問是否切換；然後 `git pull --ff-only`；
+   遠端還沒有這條分支或離線時印 `[SKIP]`，沿用本機程式碼。
+3. 若 port 8795 被占用，或已有舊的 flight-deals 程序，列出 PID 並詢問是否結束（避免兩份排程重複掃描）。
+4. `uv sync --locked` 安裝依賴，在獨立視窗 `flight-deals` 啟動 `uv run flight-deals`。
+5. 最多等 60 秒到首頁回應，印出 `[OK]` 或 `[FAIL]`，成功後自動開啟瀏覽器 `http://127.0.0.1:8795`；逾時則不開瀏覽器，視窗停住讓你看錯誤。
+
+腳本固定用 8795，並以 `--port 8795` 啟動；要改 port 請自行用 `uv run flight-deals --port <port>` 啟動。
+
+停止方式：關閉標題為 `flight-deals` 的視窗。啟動失敗時該視窗不會自動關閉，可直接看錯誤訊息。
+
 服務是單一 process：網頁、排程（APScheduler，單一 worker thread）與 SQLite 都在裡面。
 不要用多 worker 或 `--reload` 啟動，否則會出現兩份排程。
 

@@ -46,3 +46,4 @@ tech-architect 評估關卡需回覆：
 - 早退 403／400 回應補安全標頭；`chat_id` 是否仍登記為遮蔽祕密。
 - 「立即查價」完成後頁面自動刷新；修改監看時舊日期早於 `min` 的顯示處理。
 - 真實 Telegram 送達驗收（AC-C5／C7／E3）待 CEO 設定 bot 後進行。
+- 2026-10-26 devops-sre → 總經理：新增 `apps/flight-deals/dev-up.bat`（同 stock-desk 款：pull → 舊程序偵測 → `uv sync --locked` → 開視窗以 `--port 8795` 啟動 → 等首頁 200 → 開瀏覽器）；qa-reviewer PASS（M1 偵測條件縮窄、M2 port 一致性已修）；總經理實機跑兩次（正常啟動 HTTP 200；port 被占時列 PID 並取消）。
