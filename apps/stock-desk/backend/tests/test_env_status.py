@@ -19,6 +19,7 @@ from app.alerts.notify import DISCORD_WEBHOOK_ENV, TELEGRAM_CHAT_ID_ENV, TELEGRA
 from app.data.providers.alpha_vantage import API_KEY_ENV_VAR
 from app.data.providers.finmind import TOKEN_ENV_VAR
 from app.env_status import SET_LABEL, UNSET_LABEL, describe_env_status
+from app.logging_setup import INFO_NAMESPACES, QUIET_NAMESPACES
 from app.main import app
 
 # Distinctive fakes: any fragment of these showing up in output is a leak.
@@ -30,6 +31,20 @@ FAKE_VALUES = {
     TELEGRAM_CHAT_ID_ENV: "zzchatvalue4417",
 }
 ALL_ENV_NAMES = tuple(FAKE_VALUES)
+
+
+@pytest.fixture(autouse=True)
+def _restore_logger_levels() -> Iterator[None]:
+    """configure_logging() mutates global loggers; put every one back afterwards.
+
+    Without this, the ``app`` logger would stay at INFO for later tests and
+    swallow their DEBUG records even under ``caplog.at_level(DEBUG)``.
+    """
+    names = (*INFO_NAMESPACES, *QUIET_NAMESPACES)
+    saved = {name: logging.getLogger(name).level for name in names}
+    yield
+    for name, level in saved.items():
+        logging.getLogger(name).setLevel(level)
 
 
 @contextmanager
