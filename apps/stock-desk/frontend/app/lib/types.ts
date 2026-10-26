@@ -2074,6 +2074,13 @@ export interface KellyDeleteNoticeView {
  */
 export interface KellyDisclosuresView {
   import_trigger_label: string;
+  /**
+   * Plan D (CEO #62, 2026-10-26): while new Kelly input is frozen, the label
+   * both write controls show instead (import trigger, manual submit), each
+   * disabled; `null` when writes are open. The refusal itself is the
+   * server's (409 on `PUT` and `import-backtest`).
+   */
+  writes_paused_label: string | null;
   freshness_badge_label: string;
   source_statement: string | null;
   source_label: string | null;

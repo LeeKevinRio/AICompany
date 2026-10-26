@@ -84,6 +84,7 @@ export function KellyManualInputForm({
   symbol,
   market,
   current,
+  writesPausedLabel = null,
 }: {
   symbol: string;
   market: Market;
@@ -91,6 +92,10 @@ export function KellyManualInputForm({
   //: renders (a first write is exactly how a `manual` row is created), just
   //: with both fields blank.
   current: KellyInputRow | null;
+  //: Plan D (CEO #62): `disclosures.writes_paused_label`, verbatim. Non-null
+  //: while new input is frozen: the submit shows it and is disabled, and no
+  //: request is sent (the server would answer 409 anyway).
+  writesPausedLabel?: string | null;
 }) {
   const [winRate, setWinRate] = useState(current !== null ? String(current.win_rate) : "");
   const [payoffRatio, setPayoffRatio] = useState(
@@ -125,6 +130,7 @@ export function KellyManualInputForm({
     // `Number("abc")`. Whatever *is* sent still goes exactly as typed, like
     // `NetWorthSection` — a silently corrected number is one the user would
     // later believe they had entered.
+    if (writesPausedLabel !== null) return;
     if (!isSubmittableManualInput(winRate, payoffRatio)) return;
     updateMutation.mutate({
       symbol,
@@ -169,10 +175,10 @@ export function KellyManualInputForm({
         <div className="flex items-center gap-3 sm:col-span-2">
           <button
             type="submit"
-            disabled={updateMutation.isPending}
+            disabled={updateMutation.isPending || writesPausedLabel !== null}
             className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {updateMutation.isPending ? "儲存中…" : "儲存"}
+            {writesPausedLabel ?? (updateMutation.isPending ? "儲存中…" : "儲存")}
           </button>
         </div>
       </form>

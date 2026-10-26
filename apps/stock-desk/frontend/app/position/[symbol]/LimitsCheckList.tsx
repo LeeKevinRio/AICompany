@@ -1,6 +1,7 @@
 import type { LimitCheck } from "../../lib/types";
 import { formatPercent, limitStatusLabel } from "../../lib/format";
 import { riskGaugeChipClass } from "../../lib/riskGauge";
+import { CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../../lib/cap1SunsetWording";
 
 /**
  * Renders every risk-budget cap (`app.advice.limits.LimitCheck`, verified
@@ -39,6 +40,10 @@ export function LimitsCheckList({
             </span>
           </div>
           <p className="mt-1 text-neutral-400">{limit.detail}</p>
+          {/* Plan D sunset (日落期間字面表, required): after cap 5's detail. */}
+          {showsCap5SunsetNote(limit.id, limit.status) && (
+            <p className="mt-1 text-neutral-400">{CAP5_SUNSET_UNRELIABLE_NOTE}</p>
+          )}
           <p className="mt-1 text-xs text-neutral-400">
             觀察值：{formatPercent(limit.observed)}　上限：{formatPercent(limit.threshold)}
           </p>

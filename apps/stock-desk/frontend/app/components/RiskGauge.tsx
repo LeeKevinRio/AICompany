@@ -14,7 +14,7 @@ import {
   riskGaugeChipClass,
 } from "../lib/riskGauge";
 import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
-import { buildCap1LedgerSummary } from "../lib/cap1SunsetWording";
+import { buildCap1LedgerSummary, CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../lib/cap1SunsetWording";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
 import { ErrorPanel } from "./ErrorPanel";
@@ -96,6 +96,11 @@ function LimitDetailItem({ check }: { check: BookLimitCheck }) {
         第 {check.index} 條・{check.name}
       </p>
       <p className="mt-1 text-neutral-400">{check.detail}</p>
+      {/* Plan D sunset (日落期間字面表, required): its own sentence after cap 5's
+          detail, only while cap 5 is passed or violated. */}
+      {showsCap5SunsetNote(check.limit_id, check.status) && (
+        <p className="mt-1 text-neutral-400">{CAP5_SUNSET_UNRELIABLE_NOTE}</p>
+      )}
       {/* 風控退修:沿用後端 WORST_SYMBOL_PREFIX(book_limits.py)「觀測值最高」
           這個限定語,不能只寫「最高」——這是逐檔比較裡「觀測值」最高的那一檔,
           不是隨便一種「最高」。 */}

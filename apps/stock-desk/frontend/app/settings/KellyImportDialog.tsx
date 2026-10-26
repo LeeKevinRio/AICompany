@@ -194,7 +194,10 @@ export function KellyImportDialog({
   const mutation = useImportKellyBacktest();
 
   // 條件 102/103: always populated, all four source cells.
-  const triggerLabel = disclosures.import_trigger_label;
+  // Plan D (CEO #62): while new input is frozen the trigger shows the backend's
+  // paused label instead, verbatim and as its `aria-label`, and is disabled.
+  const writesPaused = disclosures.writes_paused_label !== null;
+  const triggerLabel = disclosures.writes_paused_label ?? disclosures.import_trigger_label;
 
   function updateSpec<K extends keyof SpecFormState>(key: K, value: SpecFormState[K]) {
     setSpec((prev) => ({ ...prev, [key]: value }));
@@ -342,7 +345,7 @@ export function KellyImportDialog({
         type="button"
         aria-label={triggerLabel}
         onClick={() => void handleTriggerClick()}
-        disabled={mutation.isPending || spec.start === "" || spec.end === ""}
+        disabled={writesPaused || mutation.isPending || spec.start === "" || spec.end === ""}
         className="mt-3 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
       >
         {triggerLabel}

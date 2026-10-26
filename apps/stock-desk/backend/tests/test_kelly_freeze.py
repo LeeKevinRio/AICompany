@@ -10,18 +10,25 @@ already stored keep feeding cap 5, and the process-wide store refuses
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
+from app.advice import limits
 from app.api import deps
 from app.api.kelly_wording import KELLY_IMPORT_PAUSED_DETAIL, KELLY_WRITES_PAUSED_LABEL
+from app.kelly import models
 from app.kelly.freeze import KELLY_INPUT_WRITES_FROZEN, KellyInputWritesFrozenError
 from app.kelly.models import KellyInputRecord
 from app.kelly.store import KellyInputStore
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
+
+_SUNSET_WORDING = (
+    Path(__file__).resolve().parents[2] / "frontend" / "app" / "lib" / "cap1SunsetWording.ts"
+)
 
 
 def _seed_pair(harness: ApiHarness, symbol: str = "2330") -> None:
@@ -161,3 +168,11 @@ def test_the_process_wide_store_refuses_upsert(
             )
     finally:
         deps._default_kelly_input_store.cache_clear()
+
+
+def test_the_sunset_lead_interpolates_the_same_staleness_window() -> None:
+    """#3 interpolates ``KELLY_STALE_AFTER_DAYS``; the front end mirrors it."""
+    source = _SUNSET_WORDING.read_text(encoding="utf-8")
+    match = re.search(r"export const KELLY_STALE_AFTER_DAYS = (\d+);", source)
+    assert match is not None
+    assert int(match.group(1)) == models.KELLY_STALE_AFTER_DAYS == limits.KELLY_STALE_AFTER_DAYS
