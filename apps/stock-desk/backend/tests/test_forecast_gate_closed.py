@@ -1,10 +1,10 @@
-"""The forecast write gate stays closed while only B1 exists (ADR-0027 D-14).
+"""The forecast write gate stays closed while only B1 and B2 exist (ADR-0027 D-14).
 
-B1 adds pure leaf modules and wires none of them: the scheduler registers no
+B1 and B2 add pure modules and wire none of them: the scheduler registers no
 ``forecast_record`` job (nor any ``forecast*`` job), ``app.main`` mounts no
 ``/api/forecast`` or ``/api/outlook`` route, and neither ``app.main`` nor
-``app.scheduler`` reaches ``app.forecast``, ``app.outlook`` or ``app.ops_alert``
-through imports. Each scan has a teeth test.
+``app.scheduler`` reaches ``app.forecast``, ``app.outlook``, ``app.ops_alert`` or
+``app.dirdef`` through imports. Each scan has a teeth test.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.main import app
 from app.settings.store import SettingsStore
 from tests.import_graph import offenders, reachable_app_modules
 
-NEW_PACKAGES = ("app.forecast", "app.outlook", "app.ops_alert")
+NEW_PACKAGES = ("app.forecast", "app.outlook", "app.ops_alert", "app.dirdef")
 ENTRY_POINTS = ("app.main", "app.scheduler")
 CLOSED_PREFIXES = ("/api/forecast", "/api/outlook")
 
