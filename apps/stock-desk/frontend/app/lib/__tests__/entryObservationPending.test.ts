@@ -526,3 +526,72 @@ describe("風控 R1：計數句與 E-4 同進同出", () => {
     expect(pendingStates).toBe((27 - 8) * 2);
   });
 });
+
+/**
+ * 風控 2026-10-26 裁定第 1 點 R2（required）: pending has one source only —
+ * React Query `isPending`. Never `isFetching` / `isRefetching` / `isError`,
+ * never a data value or a date comparison (that would be the L-10b collapse).
+ * `page.tsx`'s wiring is pinned in "page.tsx wiring" above.
+ */
+describe("風控 R2：isEntryObservationPending 只讀 isPending", () => {
+  /** A query-like object that records every property read on it. */
+  function recorded(fields: Record<string, unknown>, reads: Set<PropertyKey>): { readonly isPending: boolean } {
+    return new Proxy(fields, {
+      get(target, key, receiver) {
+        reads.add(key);
+        return Reflect.get(target, key, receiver);
+      },
+    }) as unknown as { readonly isPending: boolean };
+  }
+
+  const fullResult = (isPending: boolean) => ({
+    isPending,
+    isFetching: true,
+    isRefetching: true,
+    isError: true,
+    isLoading: true,
+    isSuccess: true,
+    isPaused: true,
+    status: "error",
+    fetchStatus: "fetching",
+    data: { status: "ok", data: { last_bar_date: D1002 } },
+    error: new Error("x"),
+  });
+
+  it("reads no property other than isPending on any query", () => {
+    for (const flags of [
+      [false, false, false],
+      [true, false, false],
+      [false, true, false],
+      [false, false, true],
+      [true, true, true],
+    ]) {
+      const reads = new Set<PropertyKey>();
+      isEntryObservationPending(flags.map((p) => recorded(fullResult(p), reads)));
+      expect([...reads].filter((k) => k !== "isPending"), `flags ${flags.join(",")}`).toEqual([]);
+    }
+  });
+
+  it("isFetching / isRefetching / isError / isPaused / data / dates never make it pending", () => {
+    const notPending = [fullResult(false), fullResult(false), fullResult(false)];
+    expect(isEntryObservationPending(notPending)).toBe(false);
+    const noData = [{ isPending: false, data: undefined }, { isPending: false, data: undefined }, { isPending: false, data: undefined }];
+    expect(isEntryObservationPending(noData)).toBe(false);
+  });
+
+  it("isPending alone makes it pending, whatever the other fields say", () => {
+    const quiet = { isPending: true, isFetching: false, isRefetching: false, isError: false, data: { status: "ok" } };
+    expect(isEntryObservationPending([fullResult(false), quiet, fullResult(false)])).toBe(true);
+  });
+
+  it("source: the helper's input type exposes only isPending and its body reads only isPending", () => {
+    const src = readFileSync(fileURLToPath(new URL("../entryObservation.ts", import.meta.url)), "utf8");
+    const start = src.indexOf("export function isEntryObservationPending(");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("\n}\n", start);
+    const fn = src.slice(start, end + 2).replace(/\s+/g, " ");
+    expect(fn).toBe(
+      "export function isEntryObservationPending( queries: readonly { readonly isPending: boolean }[], ): boolean { return queries.some((query) => query.isPending); }",
+    );
+  });
+});
