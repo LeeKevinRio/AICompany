@@ -841,6 +841,7 @@ def _limits(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 @pytest.mark.parametrize("cause", CAUSES)
 @pytest.mark.parametrize("all_unvalued", [False, True], ids=["one-unvalued", "all-unvalued"])
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_api_advice_own_unvalued_lots_withhold_caps_1_4_5(
     api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch, cause: str, all_unvalued: bool
 ) -> None:
@@ -873,6 +874,7 @@ def test_api_advice_own_unvalued_lots_withhold_caps_1_4_5(
 
 
 @pytest.mark.parametrize("cause", CAUSES)
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_api_advice_own_unvalued_lots_keep_a_breach_with_w_a2(
     api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch, cause: str
 ) -> None:
@@ -893,6 +895,7 @@ def test_api_advice_own_unvalued_lots_keep_a_breach_with_w_a2(
     assert "仍然超標" not in json.dumps(body, ensure_ascii=False)
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_api_advice_reaches_own_lots_through_the_cache_only_valuator(
     api_harness: ApiHarness,
 ) -> None:

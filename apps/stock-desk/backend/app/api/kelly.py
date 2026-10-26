@@ -94,6 +94,7 @@ from app.api.deps import (
     get_dividend_store,
     get_kelly_attempt_store,
     get_kelly_input_store,
+    get_kelly_input_writes_frozen,
     get_market_resolver,
     get_settings_store,
 )
@@ -119,6 +120,7 @@ from app.api.kelly_wording import (
     KELLY_FRESHNESS_BADGE_EXPIRED,
     KELLY_FRESHNESS_BADGE_FRESH,
     KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
+    KELLY_IMPORT_PAUSED_DETAIL,
     KELLY_MANUAL_INPUT_DISCLOSURE,
     KELLY_MANUAL_INPUT_TOOLTIP,
     KELLY_MANUAL_WIN_RATE_IS_NOT_PROBABILITY,
@@ -143,6 +145,7 @@ from app.api.kelly_wording import (
     KELLY_WALK_FORWARD_SCOPE,
     KELLY_WIN_RATE_IS_NOT_PROBABILITY,
     KELLY_WIN_RATE_ROUND_TRIP_QUALIFIER,
+    KELLY_WRITES_PAUSED_LABEL,
     kelly_delete_notice,
     kelly_dividend_note,
     kelly_overwrite_notice,
@@ -191,6 +194,8 @@ ResolverDep = Annotated[MarketDataResolver, Depends(get_market_resolver)]
 SettingsDep = Annotated[SettingsStore, Depends(get_settings_store)]
 DividendStoreDep = Annotated[DividendEventStore, Depends(get_dividend_store)]
 MarketQuery = Annotated[Market, Query(description="市場別")]
+#: Plan D (CEO #62): whether new input is refused (app/kelly/freeze.py).
+WritesFrozenDep = Annotated[bool, Depends(get_kelly_input_writes_frozen)]
 
 KELLY_INPUT_NOT_FOUND_MESSAGE = "找不到 {symbol}（{market}）的 Kelly 輸入。"
 
@@ -574,6 +579,12 @@ class KellyDisclosuresView(BaseModel):
     #: ``overwrite_notice``, which two of the four do not have. 條件 103 makes the
     #: front end render it verbatim and use it as the control's ``aria-label``.
     import_trigger_label: str
+    #: Plan D (CEO #62, 2026-10-26): while new input is frozen, the label both
+    #: write controls show instead -- the import trigger and the manual form's
+    #: submit -- each rendered disabled; ``None`` when writes are open. The
+    #: refusal itself is the server's (``PUT`` and ``import-backtest`` answer
+    #: 409); this only keeps the controls from offering what will be refused.
+    writes_paused_label: str | None
     #: (任務 5) Always present: an absent input is its own badge state. 條件 97:
     #: this response does **not** carry (g) -- cap 5 owns those five sentences
     #: and ships them in its own detail -- so a surface may only render the
@@ -927,6 +938,7 @@ def _disclosures(
     budget: RiskBudget,
     k_observed: int,
     k_distinct_specs: int,
+    writes_frozen: bool,
 ) -> KellyDisclosuresView:
     """Choose every sentence one Kelly screen shows, from the row and the counts.
 
@@ -950,6 +962,7 @@ def _disclosures(
         # and (b) still stands -- refused imports leave a K behind and no row.
         return KellyDisclosuresView(
             import_trigger_label=KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
+            writes_paused_label=KELLY_WRITES_PAUSED_LABEL if writes_frozen else None,
             freshness_badge_label=KELLY_FRESHNESS_BADGE_ABSENT,
             source_statement=None,
             source_label=None,
@@ -996,6 +1009,7 @@ def _disclosures(
     source_statement, source_label = _SOURCE_STATEMENTS[row.source]
     return KellyDisclosuresView(
         import_trigger_label=KELLY_IMPORT_BACKTEST_TRIGGER_LABEL,
+        writes_paused_label=KELLY_WRITES_PAUSED_LABEL if writes_frozen else None,
         freshness_badge_label=_FRESHNESS_BADGES[ageing_of(row).freshness],
         source_statement=source_statement,
         source_label=source_label,
@@ -1120,6 +1134,7 @@ def read_kelly_disclosures(
     store: KellyStoreDep,
     attempts: KellyAttemptsDep,
     settings_store: SettingsDep,
+    writes_frozen: WritesFrozenDep,
     market: MarketQuery = "TW",
 ) -> KellyInputDisclosuresView:
     """One instrument's Kelly screen, with every sentence already chosen.
@@ -1170,6 +1185,7 @@ def read_kelly_disclosures(
             budget=settings_store.load().risk_budget,
             k_observed=k_observed,
             k_distinct_specs=attempts.k_distinct_specs(stored_symbol, market),
+            writes_frozen=writes_frozen,
         ),
         as_of=now_iso(),
     )
@@ -1177,7 +1193,11 @@ def read_kelly_disclosures(
 
 @router.put("/{symbol}", response_model=KellyInputView)
 def write_kelly_input(
-    symbol: str, body: KellyManualInput, store: KellyStoreDep, market: MarketQuery = "TW"
+    symbol: str,
+    body: KellyManualInput,
+    store: KellyStoreDep,
+    writes_frozen: WritesFrozenDep,
+    market: MarketQuery = "TW",
 ) -> KellyInputView:
     """Store a hand-entered pair for one instrument.
 
@@ -1189,7 +1209,12 @@ def write_kelly_input(
     Range violations never reach this function: they are refused by
     :class:`KellyManualInput` as a 422 naming the field and its bound, and
     nothing is written, so the previously stored pair still stands.
+
+    While plan D freezes new input (CEO #62) this is a 409 and nothing is
+    written; the stored pair keeps feeding cap 5 until it expires.
     """
+    if writes_frozen:
+        raise _writes_frozen(KELLY_WRITES_PAUSED_LABEL)
     current = store.get(symbol, market)
     if current is None or current.source == "manual":
         record = KellyInputRecord.manual(
@@ -1215,6 +1240,11 @@ def write_kelly_input(
         None if current is None else current.source,
     )
     return _view(saved)
+
+
+def _writes_frozen(detail: str) -> HTTPException:
+    """Plan D's refusal: 409, a plain-string ``detail`` the client shows as is."""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
 @router.delete("/{symbol}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1352,6 +1382,7 @@ def import_kelly_input_from_backtest(
     resolver: ResolverDep,
     settings_store: SettingsDep,
     dividend_store: DividendStoreDep,
+    writes_frozen: WritesFrozenDep,
     market: MarketQuery = "TW",
 ) -> KellyInputView:
     """Re-run a backtest here and store the p/b **this server** computed (D-3).
@@ -1381,6 +1412,10 @@ def import_kelly_input_from_backtest(
     ``PUT``; re-importing is the user replacing the whole row with a fresh
     measurement, so the previous hand edit does not survive it.
     """
+    # Plan D (CEO #62): refused before anything else, the attempt log included,
+    # so the import-attempt count stops growing while input is frozen.
+    if writes_frozen:
+        raise _writes_frozen(KELLY_IMPORT_PAUSED_DETAIL)
     stored_symbol = normalize_symbol(symbol)
     request_spec, spec_hash = _canonical_spec(body)
 

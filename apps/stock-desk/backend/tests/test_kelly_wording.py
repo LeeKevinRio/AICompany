@@ -348,6 +348,9 @@ CONFIRMED_VERBATIM: dict[str, str] = {
     "delete-cancel": "取消",
     "original-entry": "查看原始回測值",
     "original-back": "返回",
+    # 風控 2026-10-26 日落期間字面表 (plan D, CEO #62): the two sunset strings.
+    "sunset-paused": "已暫停",
+    "sunset-import-detail": "暫停從回測帶入。",
 }
 
 #: Where each id is shipped from. Three modules: the refusal messages belong
@@ -430,7 +433,8 @@ def test_the_batch_is_every_sentence_the_review_has_closed_on() -> None:
     Three of the ids ship from ``app/kelly/sample_gate.py`` and one is the 500
     body, counted here and defined elsewhere.
     """
-    assert len(CONFIRMED_VERBATIM) == 82
+    # 84 since plan D (CEO #62, 2026-10-26): the sunset table's two strings.
+    assert len(CONFIRMED_VERBATIM) == 84
     assert set(SHIPPED) == set(CONFIRMED_VERBATIM)
 
 
@@ -1762,6 +1766,8 @@ EXPECTED_PLACEHOLDERS: dict[str, set[str]] = {
     "delete-cancel": set(),
     "original-entry": set(),
     "original-back": set(),
+    "sunset-paused": set(),
+    "sunset-import-detail": set(),
 }
 
 #: The (g) sentences that name an anchor date and an elapsed count. All three
