@@ -115,8 +115,13 @@ def test_the_worst_holding_drives_the_single_position_cap() -> None:
 
 
 def test_a_book_inside_the_cap_reports_the_highest_weight_as_passed() -> None:
+    # Ten equal holdings are 10% each: inside the 15% cap this test was written
+    # around, so it now passes that cap explicitly (quant constraint 6, #61).
+    # Under the 10% default the same book is ``violated`` -- equal to the cap
+    # counts as reached (``tests/test_cap1_default.py``).
     checks = _report(
-        book_summary(*(book_position(i, f"000{i}", quantity="100") for i in range(1, 11)))
+        book_summary(*(book_position(i, f"000{i}", quantity="100") for i in range(1, 11))),
+        budget=RiskBudget(max_position_weight=0.15),
     )
     cap = checks["single_position_weight"]
     assert cap.status == "passed"

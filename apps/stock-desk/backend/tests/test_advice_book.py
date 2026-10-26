@@ -430,7 +430,9 @@ def test_the_share_suggestion_for_a_foreign_holding_stays_in_one_currency() -> N
     book = build_book_context(
         _us_book(), symbol="AAPL", market="US", close=200.0, currency="USD", fx=_fx()
     )
-    budget = RiskBudget()
+    # The arithmetic below is on the 15% cap this test was written around, so
+    # it passes that cap explicitly (quant constraint 6, #61: default 10%).
+    budget = RiskBudget(max_position_weight=0.15)
     assert suggest_quantity_range(budget, book.context, action="add") is None
     trim = suggest_quantity_range(budget, book.context, action="reduce")
     assert trim is not None

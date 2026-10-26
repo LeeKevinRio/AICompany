@@ -77,12 +77,15 @@ function buildWideningBody(label: string, limitIndex: number, before: number, af
  * `CANDIDATE_QUANTITY_BASIS_NOTE` 同步改寫,避免與 `max_gross_exposure` 描述
  * 句用的「帳戶總淨值」分母混淆。
  */
-const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
+export const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
     label: "單一標的佔比上限",
     description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.15 代表 15%）。",
-    defaultValue: 0.15,
+    // #61 (2026-10-26): mirrors `DEFAULT_MAX_POSITION_WEIGHT` in
+    // `app/advice/limits.py`; pinned equal by `cap1Default.test.ts` here and by
+    // `tests/test_cap1_default.py` on the backend.
+    defaultValue: 0.1,
     // 波次1文案裁決.md 複審 suggested:此 reason 原本只寫「總資產」,與同一欄位
     // description 已補全的分母不一致,讀者可能誤以為含現金;補上同一組限定語。
     hardCeiling: {

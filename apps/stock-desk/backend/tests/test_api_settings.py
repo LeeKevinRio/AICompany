@@ -30,7 +30,7 @@ from tests.conftest import ApiHarness
 def test_get_returns_every_section_with_defaults(api_harness: ApiHarness) -> None:
     body = api_harness.client.get("/api/settings").json()
     assert set(body["settings"]) == {"risk_budget", "cost_model", "alerts", "net_worth"}
-    assert body["settings"]["risk_budget"]["max_position_weight"] == 0.15
+    assert body["settings"]["risk_budget"]["max_position_weight"] == 0.10
     assert body["settings"]["alerts"]["evaluation_interval_minutes"] == 60
     assert body["settings"]["net_worth"] == {
         "total_net_worth_twd": None,
@@ -129,7 +129,7 @@ def test_out_of_range_values_are_422_not_clamped(api_harness: ApiHarness) -> Non
     )
     assert response.status_code == 422
     stored = api_harness.client.get("/api/settings").json()["settings"]
-    assert stored["risk_budget"]["max_position_weight"] == 0.15
+    assert stored["risk_budget"]["max_position_weight"] == 0.10
 
 
 def test_unknown_field_is_rejected_rather_than_ignored(api_harness: ApiHarness) -> None:
@@ -516,7 +516,7 @@ def test_quota_block_survives_an_unreadable_ledger(
     assert block["remaining"] is None
     assert QUOTA_UNREADABLE_NOTE in block["notes"]
     # The rest of the document is unaffected.
-    assert response.json()["settings"]["risk_budget"]["max_position_weight"] == 0.15
+    assert response.json()["settings"]["risk_budget"]["max_position_weight"] == 0.10
 
 
 def test_reading_settings_never_spends_a_quota_slot(
@@ -557,7 +557,7 @@ def test_store_falls_back_to_defaults_for_a_corrupt_section(tmp_path: Path) -> N
             "UPDATE app_settings SET payload = ? WHERE section = 'risk_budget'",
             ('{"max_position_weight": "nonsense"}',),
         )
-    assert store.load().risk_budget.max_position_weight == 0.15
+    assert store.load().risk_budget.max_position_weight == 0.10
 
 
 def test_a_stored_budget_above_a_ceiling_falls_back_to_defaults(tmp_path: Path) -> None:
@@ -574,7 +574,7 @@ def test_a_stored_budget_above_a_ceiling_falls_back_to_defaults(tmp_path: Path) 
             "UPDATE app_settings SET payload = ? WHERE section = 'risk_budget'",
             ('{"max_position_weight": 0.99}',),
         )
-    assert store.load().risk_budget.max_position_weight == 0.15
+    assert store.load().risk_budget.max_position_weight == 0.10
 
 
 def test_cost_model_settings_convert_to_the_backtest_dataclass() -> None:
