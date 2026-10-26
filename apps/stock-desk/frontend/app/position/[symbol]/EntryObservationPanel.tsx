@@ -1,6 +1,7 @@
 import type { ConditionId, ConditionResult, EntryObservation } from "../../lib/entryObservation";
 import type { Bar } from "../../lib/types";
 import { PriceUnitBadge } from "./PriceUnitBadge";
+import { SkeletonBlock } from "../../components/SkeletonBlock";
 import {
   ENTRY_CONDITION_LABELS,
   ENTRY_CONDITION_THRESHOLDS,
@@ -95,6 +96,7 @@ export function EntryObservationPanel({
   dataAsOfDates,
   market,
   bars,
+  pending = false,
 }: {
   observation: EntryObservation;
   /** `KeyLevels.rangeBarCount` when bars are loaded (R-14: the row prints the real bar count). */
@@ -105,7 +107,23 @@ export function EntryObservationPanel({
   market?: string;
   /** The `ok` bars the trend row was computed from, or null; used only for the chip's currency check. */
   bars: readonly Bar[] | null;
+  /**
+   * True while any of the three source queries is still on its first load
+   * (`isEntryObservationPending`). The panel then shows its title and a
+   * skeleton only — no count, no dots, no per-row verdict — because a
+   * condition whose payload has not arrived yet is not undecidable, it is
+   * unanswered. Same pending convention as the advice card section.
+   */
+  pending?: boolean;
 }) {
+  if (pending) {
+    return (
+      <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE} aria-busy="true">
+        <h2 className="text-lg font-semibold text-neutral-100">{ENTRY_PANEL_TITLE}</h2>
+        <div className="mt-3"><SkeletonBlock className="h-16 w-full" /></div>
+      </section>
+    );
+  }
   const showPriceUnit = observation.conditions.some(printsPriceValues);
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE}>
