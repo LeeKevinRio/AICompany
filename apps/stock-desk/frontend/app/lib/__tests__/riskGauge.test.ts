@@ -39,6 +39,7 @@ function makeCheck(overrides: Partial<BookLimitCheck>): BookLimitCheck {
     detail: "detail",
     worst_symbol: "2330",
     evaluated_count: 3,
+    violated_count: 0,
     excluded: [],
     ...overrides,
   };
@@ -193,6 +194,7 @@ function makeFullCheck(overrides: Partial<BookLimitCheck>): BookLimitCheck {
     detail: "detail sentence",
     worst_symbol: null,
     evaluated_count: 3,
+    violated_count: 0,
     excluded: [],
     ...overrides,
   };
@@ -267,6 +269,7 @@ const FAKE_LIMITS: PortfolioLimitsResponse = {
       },
     },
   ],
+  cap1_migration_notice: null,
   as_of: "2026-09-19T00:00:00Z",
 };
 

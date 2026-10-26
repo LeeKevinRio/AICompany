@@ -159,6 +159,7 @@ function makeAdvice(overrides: Partial<AdviceResponse> = {}): AdviceResponse {
       payoff_ratio: null,
     },
     context_notes: [],
+    cap1_migration_notice: null,
     advice: makeCard(),
     data: META,
     ...overrides,

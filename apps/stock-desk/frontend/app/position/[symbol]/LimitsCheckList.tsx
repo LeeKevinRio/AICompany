@@ -9,7 +9,18 @@ import { riskGaugeChipClass } from "../../lib/riskGauge";
  * reason — this list must never collapse to "全部通過" when some caps
  * could not actually be checked (risk-compliance requirement).
  */
-export function LimitsCheckList({ limits }: { limits: LimitCheck[] }) {
+export function LimitsCheckList({
+  limits,
+  cap1MigrationNotice = null,
+}: {
+  limits: LimitCheck[];
+  /**
+   * The S2 sentence (CEO #63) for cap 1, the backend's verbatim
+   * (`AdviceResponse.cap1_migration_notice`) — the same one the risk gauge's
+   * cap-1 row shows (#2', S1/S1', I-2). `null` = none.
+   */
+  cap1MigrationNotice?: string | null;
+}) {
   return (
     <ul className="space-y-2">
       {limits.map((limit) => (
@@ -31,6 +42,10 @@ export function LimitsCheckList({ limits }: { limits: LimitCheck[] }) {
           <p className="mt-1 text-xs text-neutral-400">
             觀察值：{formatPercent(limit.observed)}　上限：{formatPercent(limit.threshold)}
           </p>
+          {/* #2' / S1, S1' (I-2): under the 觀察值／上限 line, cap 1 only. */}
+          {limit.index === 1 && cap1MigrationNotice !== null && (
+            <p className="mt-1 text-xs text-amber-300">{cap1MigrationNotice}</p>
+          )}
         </li>
       ))}
     </ul>

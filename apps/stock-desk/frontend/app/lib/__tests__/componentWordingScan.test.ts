@@ -234,6 +234,9 @@ function flatBasis(item: BasisItem): string {
 }
 
 const SCANNED_FILES = [
+  // #61 batch one (風控 2026-10-26 第1條下修告知逐字審 實作約束 6): the Kelly
+  // sunset lead, cap 5's sunset line and the cap-1 ledger summary.
+  "../cap1SunsetWording.ts",
   "../positionsTableView.ts",
   "../../position/[symbol]/OperationSummaryPanel.tsx",
   "../../position/[symbol]/page.tsx",
@@ -2167,6 +2170,7 @@ describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測�
       detail: "detail",
       worst_symbol: null,
       evaluated_count: 3,
+      violated_count: 0,
       excluded: [],
       ...overrides,
     };
@@ -2660,7 +2664,11 @@ describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
 
   it("page.tsx 傳 lastBarDate={advice.data.data.last_bar_date}（與決策卡、面板同源的 /api/advice DataMeta）", () => {
     expect(pageSrc).toContain("lastBarDate={advice.data.data.last_bar_date}");
-    expect(pageSrc).toContain("<AdviceCardView advice={advice.data.advice} lastBarDate={advice.data.data.last_bar_date} />");
+    // #61 batch one (CEO #63) added a third prop on its own line; the two this
+    // guard is about are still passed from the same `/api/advice` response.
+    expect(pageSrc).toMatch(
+      /<AdviceCardView\s+advice=\{advice\.data\.advice\}\s+lastBarDate=\{advice\.data\.data\.last_bar_date\}\s+cap1MigrationNotice=\{advice\.data\.cap1_migration_notice\}\s*\/>/,
+    );
   });
 
   it("AdviceCardView 以 buildDataAsOfBadge(lastBarDate) 組此行，不另寫字串常數", () => {

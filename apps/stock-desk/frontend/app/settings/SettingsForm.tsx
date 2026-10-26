@@ -1,11 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { ApiError } from "../lib/api";
 import { parseRequiredNumbers, unplacedFieldErrors } from "../lib/formErrors";
 import { useUpdateSettings } from "../lib/queries";
 import { capWidening, resolveWideningSubmitForFields, type CapWidening } from "../lib/riskWidening";
-import type { AlertSettings, CostModelSettings, RiskBudgetSettings, SettingsResponse } from "../lib/types";
+import type {
+  AlertSettings,
+  Cap1SettingsNotice,
+  CostModelSettings,
+  RiskBudgetSettings,
+  SettingsResponse,
+} from "../lib/types";
 
 /**
  * S4 fix (risk-final-review.md 列管項): the one-time widening confirmation
@@ -191,6 +197,31 @@ const ALERT_SETTINGS_FIELDS: FieldSpec<Omit<AlertSettings, "enabled" | "notify_w
 
 type FormValues = Record<string, string>;
 
+/**
+ * The S2 notice (CEO #63) beside cap 1's field: `migrated` (第1條下修告知逐字審
+ * #1) or `skipped` (遷移未執行逐字審 U0–U5). Title and every「標籤｜正文」item
+ * come from the backend (`SettingsResponse.cap1_migration.notice`), branch
+ * chosen and slots filled there; this renders them in order and composes
+ * nothing (I-1). Standing and expanded: not a toast, tooltip, `<details>`,
+ * `role="status"` or `aria-live` region (實作約束 3, I-8). It spans the grid's
+ * full width directly under the field, at the description's size and no
+ * lighter.
+ */
+export function Cap1MigrationNoticeBlock({ notice }: { notice: Cap1SettingsNotice }) {
+  return (
+    <div className="rounded-md border border-amber-900/40 bg-amber-950/10 p-3 text-xs text-amber-300 sm:col-span-2">
+      <p className="font-semibold">{notice.title}</p>
+      <ol className="mt-2 space-y-1">
+        {notice.items.map((item, i) => (
+          <li key={i}>
+            <span className="font-semibold">{item.label}</span>｜{item.body}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 /** Bare field names the backend's 422 `loc` can name and this form renders. */
 const PLACED_ERROR_KEYS = [...RISK_BUDGET_FIELDS, ...COST_FIELDS, ...ALERT_SETTINGS_FIELDS].map((field) =>
   String(field.key),
@@ -362,18 +393,25 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
         <p className="mt-1 text-xs text-neutral-500">
           每一項數字都是分數（例如 0.15 = 15%），與後端 `app/advice/limits.py` 的 RiskBudget 欄位一一對應。
         </p>
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {/* `grid-flow-row-dense`: the S2 block spans both columns under cap 1's
+            field; dense placement lets the next field take the cell beside
+            cap 1 instead of leaving it empty. Order is unchanged otherwise. */}
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-flow-row-dense sm:grid-cols-2">
           {RISK_BUDGET_FIELDS.map((field) => {
             const key = `risk_budget.${String(field.key)}`;
+            const migrationNotice =
+              field.key === "max_position_weight" ? (settings.cap1_migration?.notice ?? null) : null;
             return (
-              <NumberField
-                key={key}
-                id={key}
-                spec={field as FieldSpec<never>}
-                value={values[key] ?? ""}
-                onChange={(v) => updateValue(key, v)}
-                error={inputErrors[key] ?? fieldErrors[String(field.key)]}
-              />
+              <Fragment key={key}>
+                <NumberField
+                  id={key}
+                  spec={field as FieldSpec<never>}
+                  value={values[key] ?? ""}
+                  onChange={(v) => updateValue(key, v)}
+                  error={inputErrors[key] ?? fieldErrors[String(field.key)]}
+                />
+                {migrationNotice !== null && <Cap1MigrationNoticeBlock notice={migrationNotice} />}
+              </Fragment>
             );
           })}
         </div>

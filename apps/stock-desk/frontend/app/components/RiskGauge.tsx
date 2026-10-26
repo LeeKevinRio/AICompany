@@ -14,6 +14,7 @@ import {
   riskGaugeChipClass,
 } from "../lib/riskGauge";
 import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
+import { buildCap1LedgerSummary } from "../lib/cap1SunsetWording";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
 import { ErrorPanel } from "./ErrorPanel";
@@ -147,8 +148,9 @@ function SourcesList({ sources }: { sources: SymbolDataMeta[] }) {
  * qa 追加（2026-09-19）：名稱不再 `truncate`（會用刪節號吃掉看不完的字）——
  * 容器已是 `flex-wrap`，改成讓名稱在窄螢幕自然換行，確保完整字面永遠可讀。
  */
-function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
+function LimitGaugeRow({ check, migrationNotice }: { check: BookLimitCheck; migrationNotice: string | null }) {
   const hasExcluded = check.excluded.length > 0;
+  const ledgerSummary = buildCap1LedgerSummary(check);
   return (
     <li className="border-t border-neutral-800 py-2 text-sm first:border-t-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -181,6 +183,12 @@ function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
       {check.worst_symbol !== null && (
         <p className="mt-1 text-xs text-neutral-400">觀測值最高：{check.worst_symbol}</p>
       )}
+      {/* #61 batch one, cap-1 row only, in this order (第1條下修告知逐字審 #2):
+          「觀測值最高」→ ledger summary (#4a/#4b) → the S2 sentence. Both stand
+          in the main view: no toast, no tooltip, no `<details>`, no truncation
+          (實作約束 3/4, I-8). The S2 sentence is the backend's, verbatim. */}
+      {ledgerSummary !== null && <p className="mt-1 text-xs text-neutral-400">{ledgerSummary}</p>}
+      {migrationNotice !== null && <p className="mt-1 text-xs text-amber-300">{migrationNotice}</p>}
     </li>
   );
 }
@@ -195,7 +203,11 @@ export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
     <>
       <ul className="mt-3">
         {data.limits.map((check) => (
-          <LimitGaugeRow key={check.limit_id} check={check} />
+          <LimitGaugeRow
+            key={check.limit_id}
+            check={check}
+            migrationNotice={check.index === 1 ? data.cap1_migration_notice : null}
+          />
         ))}
       </ul>
 
