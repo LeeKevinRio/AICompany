@@ -423,7 +423,8 @@ GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL = (
 #: by cap 3 on every surface, whose exposure ratio has no numerator on an empty
 #: book (B-16). Lives here so the risk layer does not depend on the overview.
 #: 風控核可文案,修改須重新送審(2026-08-09);空帳本第 3 條採路線(a)已核可
-#: 卡片與提醒沿用此句：風控 2026-10-16 B-16 單項確認（逐字沿用，{name} 只取 LIMIT_NAMES）
+#: Reused on the advice card and in alerts per the risk sign-off on B-16
+#: (2026-10-16): verbatim, with ``{name}`` taken from ``LIMIT_NAMES`` only.
 EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部位，本次不計算，回報 not_evaluable。"
 
 #: FR-9 (a-附加) required disclosure, attached to every gross-exposure verdict
