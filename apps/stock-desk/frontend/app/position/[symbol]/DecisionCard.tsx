@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse, Bar } from "../../lib/types";
 import type { AnchorSource } from "../../lib/keyLevels";
@@ -27,6 +28,7 @@ import {
 import { OPERATION_REFERENCE_DISCLAIMER } from "../../lib/riskRemediationWording";
 import { PriceUnitBadge } from "./PriceUnitBadge";
 import { UnvalidatedNotice } from "./UnvalidatedNotice";
+import { StopQualifier } from "./StopQualifier";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
@@ -37,7 +39,6 @@ import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_LADDER_RUNG_CLOSE,
   KEY_LEVELS_STOP_CARD_TITLE,
-  KEY_LEVELS_TARGET_CARD_TITLE,
   buildStopBasisConfirmedNotHeld,
   buildStopBasisHeld,
 } from "./KeyLevelsPanel";
@@ -147,13 +148,20 @@ function NumberCell({
   label,
   value,
   distance,
+  note,
+  className = "",
 }: {
   label: string;
   value: string;
   distance?: string | null;
+  /** Extra block under the distance line (the stop cell's 4-Q qualifier and its 4-E explanation). */
+  note?: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="flex min-h-[4.5rem] min-w-0 flex-col items-start text-left md:items-end md:text-right">
+    <div
+      className={`flex min-h-[4.5rem] min-w-0 flex-col items-start text-left md:items-end md:text-right ${className}`.trimEnd()}
+    >
       <p className="text-sm text-neutral-400">{label}</p>
       <p className="mt-1 break-words font-mono text-xl font-bold text-neutral-100">
         {value}
@@ -165,6 +173,7 @@ function NumberCell({
           &nbsp;
         </p>
       )}
+      {note}
     </div>
   );
 }
@@ -337,20 +346,12 @@ export function DecisionCardBody({
   const closeText = levels !== null ? fmt(levels.close) : "—";
   const stopText =
     levels !== null && !suppressAnchor ? fmt(levels.stopSuggested) : "—";
-  const targetText =
-    levels !== null && !suppressAnchor ? fmt(levels.target2R) : "—";
   // The anchor is the latest close, so the latest close is always the
   // denominator and the stop is never above / the target never below it.
   const stopDistance =
     levels !== null && !suppressAnchor
       ? buildDecisionCardDistance(
           ((levels.stopSuggested - levels.close) / levels.close) * 100,
-        )
-      : null;
-  const targetDistance =
-    levels !== null && !suppressAnchor
-      ? buildDecisionCardDistance(
-          ((levels.target2R - levels.close) / levels.close) * 100,
         )
       : null;
   // Held branch (cost known): LM-17 label, then the LM-16 basis sentence, then
@@ -465,17 +466,24 @@ export function DecisionCardBody({
           <MainSlot model={model} />
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-4">
+        {/*
+          Risk remediation C-11: the take-profit cell and its distance line are gone from the
+          main view (4 cells -> 3). The stop cell carries the 4-Q qualifier and the 4-E
+          explanation only when the stop figure is a number (C-10); when opened it takes the
+          whole grid row so the long sentence does not squeeze into one narrow cell.
+        */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-3">
           <NumberCell label={KEY_LEVELS_LADDER_RUNG_CLOSE} value={closeText} />
           <NumberCell
             label={KEY_LEVELS_STOP_CARD_TITLE}
             value={stopText}
             distance={stopDistance}
-          />
-          <NumberCell
-            label={KEY_LEVELS_TARGET_CARD_TITLE}
-            value={targetText}
-            distance={targetDistance}
+            className="has-open:col-span-full"
+            note={
+              levels !== null && stopText !== "—" ? (
+                <StopQualifier atr14Available={levels.atr14 !== null} />
+              ) : null
+            }
           />
           <NumberCell
             label={DECISION_CARD_QUANTITY_LABEL}

@@ -102,6 +102,11 @@ export interface HeldSummary {
    */
   topMatchedRule: { name: string; explanation: string } | null;
   /**
+   * The `id` of `topMatchedRule` (`null` exactly when `topMatchedRule` is). Kept as its own field so the
+   * drawdown notice (risk remediation 4-appendix, C-12) can match by rule id, never by wording.
+   */
+  topMatchedRuleId: string | null;
+  /**
    * Whether the summary's confidence chip renders. `false` when the conclusion
    * was downgraded or capped (action !== aggregated_action, including a null
    * aggregated_action): the confidence was computed for the pre-override
@@ -191,6 +196,13 @@ export function isConclusionFromRules(card: AdviceCard): boolean {
  * below) or when no matched rule proposes the card's action: no basis is
  * quoted rather than one pointing the other way.
  */
+function pickTopMatchedRuleId(card: AdviceCard): string | null {
+  if (!isConclusionFromRules(card)) {
+    return null;
+  }
+  return pickRuleForAction(card.matched_rules, card.action)?.id ?? null;
+}
+
 function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: string } | null {
   // Risk review 2026-10-03 (limited re-review): when the conclusion was
   // downgraded or capped (action !== aggregated_action, including a null
@@ -380,6 +392,7 @@ export function buildOperationSummary(
     attributedHeadline: buildAttributedHeadline(card.action),
     action: card.action,
     topMatchedRule: pickTopMatchedRule(card),
+    topMatchedRuleId: pickTopMatchedRuleId(card),
     showConfidence: isConclusionFromRules(card),
     restoresComplianceWarning,
     staleDataNotice,

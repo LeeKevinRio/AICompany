@@ -22,6 +22,14 @@ import { OPERATION_SUMMARY_TITLE } from "../../lib/sectionTitles";
 import { PAGE_LEVEL_DISCLOSURE_SECTION_TITLE } from "../../lib/sectionTaglines";
 import { buildDataAsOfBadge, DETAILS_SUMMARY_OPERATION } from "../../lib/oneLinerWording";
 import { UnvalidatedNotice } from "./UnvalidatedNotice";
+import { DRAWDOWN_UNADJUSTED_NOTICE } from "../../lib/riskRemediationWording";
+
+/**
+ * Risk remediation 4-appendix (C-12): the unadjusted-price notice stands on the 依據 line only when the
+ * top matched rule is a drawdown rule, matched by rule id (never by wording). Rule ids are the ones in
+ * `RULE_INVALIDATION_DISCLOSURES` (`adviceWording.ts`). 風控 2026-10-26 定稿；失效條件 T3.
+ */
+const DRAWDOWN_RULE_IDS: readonly string[] = ["drawdown_protection", "deep_drawdown_stop"];
 
 /**
  * 一眼一句實作規格 §2.3（`work/stock-desk-一眼一句-實作規格.md`）＋ CEO 第二次
@@ -291,6 +299,9 @@ export function SummaryBody({ response }: { response: AdviceResponse }) {
         <p className="text-sm text-neutral-300">
           <span className="text-neutral-400">{RULE_BASIS_PREFIX}</span>
           {model.topMatchedRule.name}
+          {model.topMatchedRuleId !== null && DRAWDOWN_RULE_IDS.includes(model.topMatchedRuleId) && (
+            <span className="ml-2 text-neutral-400">{DRAWDOWN_UNADJUSTED_NOTICE}</span>
+          )}
         </p>
       )}
 

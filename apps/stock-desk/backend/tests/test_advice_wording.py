@@ -165,7 +165,7 @@ def _frontend_string_constant(name: str) -> str:
 def test_the_disclaimer_is_character_identical_to_the_frontend_constant() -> None:
     # 行為新增 (constraint C-7): the decision card renders the frontend constant, the
     # operation summary renders the API field. They are one sentence; the frontend
-    # test `riskRemediationParity.test.ts` reads this file from the other side.
+    # test `riskRemediationWording.test.ts` reads this file from the other side.
     assert DISCLAIMER == _frontend_string_constant("OPERATION_REFERENCE_DISCLAIMER")
 
 

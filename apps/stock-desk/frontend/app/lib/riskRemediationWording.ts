@@ -91,7 +91,7 @@ export function buildNotEvaluableLimitsNotice(count: number, withViolation: bool
 /**
  * 3-S, the decision card's short disclaimer. MUST stay character-identical to the
  * backend `DISCLAIMER` in `backend/app/advice/engine.py` (parity test:
- * `__tests__/riskRemediationParity.test.ts` and backend `test_advice_wording.py`).
+ * `__tests__/riskRemediationWording.test.ts` and backend `test_advice_wording.py`).
  * 風控 2026-10-26 定稿；失效條件 T2、T7、T8
  */
 export const OPERATION_REFERENCE_DISCLAIMER =
@@ -105,3 +105,34 @@ export const SITE_FOOTER_DISCLAIMER =
   "本工具提供的動作、股數與價位，是依固定規則與固定算式產生的操作參考。" +
   "規則與價位都還沒用歷史資料驗證過，可能錯誤，照做也可能造成虧損，是否採用由你自行決定。" +
   "這些參考只用日線收盤資料計算，非即時，不反映最近一次收盤之後的價格變動。";
+
+/* ---------- Item 4: stop-loss qualifiers, take-profit label ---------- */
+
+/** 4-Q; 風控 2026-10-26 定稿；失效條件 T3 */
+export const STOP_QUALIFIER = "固定算式・未還原價・可能無法依此價成交";
+
+/** 4-E, shared tail of both versions; 風控 2026-10-26 定稿；失效條件 T3 */
+const STOP_EXPLANATION_TAIL =
+  "用的是未還原價，沒有把配息、除權調整進去，跨除權息日可能失真。" +
+  "實際賣出時，跳空、跌停或成交量不足都可能讓成交價與此價位差很多，甚至無法成交。";
+
+/** 4-E with ATR; 風控 2026-10-26 定稿；失效條件 T3 */
+export const STOP_EXPLANATION_WITH_ATR =
+  "停損參考由固定公式算出，不是分析結果：以最新收盤為基準，" +
+  "取「收盤減 2 倍 ATR（近 14 個交易日的平均波動幅度）」與「收盤的 92%」兩者中較高的一個。" +
+  STOP_EXPLANATION_TAIL;
+
+/** 4-E without ATR (`atr14 === null`); 風控 2026-10-26 定稿；失效條件 T3 */
+export const STOP_EXPLANATION_WITHOUT_ATR =
+  "停損參考由固定公式算出，不是分析結果：以最新收盤為基準，" +
+  "因近期日線不足、無法計算 ATR，只取「收盤的 92%」。" +
+  STOP_EXPLANATION_TAIL;
+
+/** 4-T, under the take-profit card title in the details; 風控 2026-10-26 定稿；失效條件 T4 */
+export const TARGET_FORMULA_TAG = "固定算式，非分析結果";
+
+/** 4-T, the ladder group title for the take-profit group; 風控 2026-10-26 定稿；失效條件 T4 */
+export const TARGET_LADDER_GROUP_TITLE = "停利參考（固定算式，非分析結果）";
+
+/** 4-appendix, next to the basis rule when it is a drawdown rule; 風控 2026-10-26 定稿；失效條件 T3 */
+export const DRAWDOWN_UNADJUSTED_NOTICE = "以未還原價計算，回撤可能含除權息缺口";

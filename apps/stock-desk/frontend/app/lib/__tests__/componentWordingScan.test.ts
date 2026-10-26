@@ -408,6 +408,7 @@ const SCANNED_FILES = [
   "../riskRemediationWording.ts",
   "../limitNotices.ts",
   "../../position/[symbol]/UnvalidatedNotice.tsx",
+  "../../position/[symbol]/StopQualifier.tsx",
 ] as const;
 
 /**
@@ -1790,7 +1791,7 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     expect(legacyIdx).toBeGreaterThan(detailsIdx);
   });
 
-  it("關鍵價位參考：R7 未還原權值句與 R6 停損兩句只出現在 <details> 之後，主視圖仍留兩個大字", () => {
+  it("關鍵價位參考：R7 未還原權值句與 R6 停損兩句只出現在 <details> 之後，主視圖只留停損大字（停利大字已移出，風控 2026-10-26 定稿 C-11）", () => {
     const compStart = keyLevelsSrc.indexOf("export function KeyLevelsPanel(");
     expect(compStart).toBeGreaterThan(-1);
     // 用實際 JSX 標籤（含 className）比對，避免比對到上方 doc comment 裡提到的
@@ -1810,8 +1811,14 @@ describe("CEO 第二次裁定 wave2（2026-09-19 深夜）：主視圖收斂進 
     // B0 required 1: the two big numbers are "—" while the holding status is undetermined, so the
     // expression is `holdingKnown ? fmt(...) : "—"` rather than a bare `{fmt(...)}`.
     expect(mainRegion).toContain('{holdingKnown ? fmt(levels.stopSuggested) : "—"}');
-    expect(mainRegion).toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
-    expect(mainRegion).toContain('{holdingKnown ? fmt(levels.target2R) : "—"}');
+    // 字面更新（C-11）：主視圖不再有停利大字；停利數字只留在 <details> 內的停利參考卡（帶 4-T）。
+    expect(mainRegion).not.toContain("{KEY_LEVELS_TARGET_CARD_TITLE}");
+    expect(mainRegion).not.toContain("target2R");
+    // 行為新增（C-10）：停損大字下方渲染 4-Q／4-E，依 atr14 是否為 null 二選一。
+    expect(mainRegion).toContain("<StopQualifier atr14Available={levels.atr14 !== null} />");
+    const detailsRegion = keyLevelsSrc.slice(detailsIdx);
+    expect(detailsRegion).toContain("{TARGET_FORMULA_TAG}");
+    expect(detailsRegion).toContain('holdingKnown ? fmt(levels.target2R) : "—"');
   });
 
   it("六項觀察條件：E-1 與資料截至句只出現在 <details> 之後，主視圖只留 h2＋計數句＋六圓點", () => {

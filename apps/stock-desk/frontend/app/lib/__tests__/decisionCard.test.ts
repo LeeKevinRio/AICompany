@@ -168,7 +168,9 @@ describe("DecisionCardBody — held（R-6：以最新收盤為基準）", () => 
     expect(html).toContain("200 ~ 200 股");
   });
 
-  it("符號由算式動態決定（風控 required 條件 2）：R-6 後錨點恆為最新收盤，即使 avgCost 遠高於收盤，停損距離仍為負號、停利距離為正號", () => {
+  // 字面更新（風控 2026-10-26 定稿 C-11）：停利格已移出決策卡，原「停利距離為正號」斷言換成
+  // 「卡內不再有任何正號距離」（停損距離仍為負號）。
+  it("符號由算式動態決定（風控 required 條件 2）：R-6 後錨點恆為最新收盤，即使 avgCost 遠高於收盤，停損距離仍為負號；停利格已移出，卡內沒有正號距離", () => {
     // close 落在 100~106 之間（見 makeBars 預設）；舊制以成本為錨時停損會高於收盤（距離為正），
     // 現在停損 <= 收盤 <= 停利，與 avgCost 無關。
     const bars = makeBars(80);
@@ -179,7 +181,7 @@ describe("DecisionCardBody — held（R-6：以最新收盤為基準）", () => 
       avgCost: 100000,
     });
     expect(html).toMatch(/距最新收盤 -\d+(\.\d)?%/);
-    expect(html).toMatch(/距最新收盤 \+\d+(\.\d)?%/);
+    expect(html).not.toMatch(/距最新收盤 \+/);
   });
 });
 
@@ -390,7 +392,7 @@ describe("DecisionCardBody — no_price（連收盤價都沒有）", () => {
 });
 
 describe("DecisionCardBody — bars 為 null（日線不可用，與 advice 狀態無關）", () => {
-  it("收盤／停損／停利三格印「—」，不畫距離", () => {
+  it("收盤／停損兩格印「—」，不畫距離；停利格已移出（C-11）", () => {
     const html = renderCard({
       response: makeResponse(),
       bars: null,
@@ -398,27 +400,27 @@ describe("DecisionCardBody — bars 為 null（日線不可用，與 advice 狀�
       avgCost: 120,
     });
     expect(html).not.toContain("距最新收盤");
-    // 四格數字骨架仍完整掛載（B.7.5：缺席態不拿掉整卡骨架），三格數值印「—」。
+    // 三格數字骨架仍完整掛載（B.7.5：缺席態不拿掉整卡骨架），收盤、停損兩格數值印「—」。
     expect(html).toContain("最新收盤");
     expect(html).toContain("停損參考");
-    expect(html).toContain("停利參考");
+    expect(html).not.toContain("停利參考");
     const dashCount = html.split(">—<").length - 1;
-    expect(dashCount).toBeGreaterThanOrEqual(3);
+    expect(dashCount).toBeGreaterThanOrEqual(2);
   });
 
-  it("V1／風控 S-新1：距離槽在水位缺席時為不可見佔位（aria-hidden 的 &nbsp;），全卡「—」恰為三個數值格，距離槽不印「—」", () => {
+  it("V1／風控 S-新1：距離槽在水位缺席時為不可見佔位（aria-hidden 的 &nbsp;），全卡「—」恰為兩個數值格（收盤、停損），距離槽不印「—」", () => {
     const html = renderCard({
       response: makeResponse(),
       bars: null,
       anchorSource: "cost",
       avgCost: 120,
     });
-    // 收盤／停損／停利三格數值「—」；股數格有值（makeResponse 的 quantity_range）→ 恰三個。
-    expect(html.split(">—<").length - 1).toBe(3);
-    // 四個距離槽全部是 aria-hidden 佔位（收盤、股數無距離概念；停損、停利水位缺席）。
+    // 收盤／停損兩格數值「—」；股數格有值（makeResponse 的 quantity_range）→ 恰兩個。
+    expect(html.split(">—<").length - 1).toBe(2);
+    // 三個距離槽全部是 aria-hidden 佔位（收盤、股數無距離概念；停損水位缺席）。
     // renderToStaticMarkup 會把 &nbsp; 輸出成 U+00A0 或實體，兩種都接受。
     const placeholders = html.match(/<p class="[^"]*" aria-hidden="true">(?:&nbsp;|\u00a0)<\/p>/g) ?? [];
-    expect(placeholders).toHaveLength(4);
+    expect(placeholders).toHaveLength(3);
   });
 });
 
@@ -466,7 +468,8 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
     });
   }
 
-  it("四格容器有 gap（欄距 gap-x 與列距 gap-y），相鄰數字不貼合；<md 為 2×2、md+ 為四欄", () => {
+  // 字面更新（風控 2026-10-26 定稿 C-11）：停利格移出後四格變三格，lg 欄數 4 -> 3。
+  it("三格容器有 gap（欄距 gap-x 與列距 gap-y），相鄰數字不貼合；<md 為 2 欄、md+ 為 2 欄、lg 為三欄", () => {
     const html = renderLong(3168, 5000);
     const m = html.match(/<div class="(grid [^"]*)">/);
     expect(m).not.toBeNull();
@@ -475,8 +478,8 @@ describe("DecisionCardBody — 股數格版面（qa-e2e 第四輪：長字串溢
     expect(cls).toMatch(/\bgap-y-\d+\b/);
     expect(cls).toMatch(/\bgrid-cols-2\b/);
     expect(cls).toMatch(/\bmd:grid-cols-2\b/);
-    expect(cls).toMatch(/\blg:grid-cols-4\b/);
-    expect(cls).not.toMatch(/\bmd:grid-cols-4\b/);
+    expect(cls).toMatch(/\blg:grid-cols-3\b/);
+    expect(cls).not.toMatch(/\b(md|lg):grid-cols-4\b/);
   });
 
   it("格子本身 min-w-0（讓長字串能在 grid 欄內折行而非撐出頁面）", () => {
@@ -888,14 +891,15 @@ describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () =>
     expect(infoLines(renderCost(100, 100))).toContain("相對成本損益 0.0%");
   });
 
-  it("停損／停利以最新收盤為錨:成本遠高於或遠低於收盤,兩格數字與距離都不變", () => {
+  it("停損以最新收盤為錨:成本遠高於或遠低於收盤,數字與距離都不變（停利格已移出決策卡）", () => {
     // Close 1305 with avgCost 1027.25 used to anchor on the cost (stop 945.07, target 1191.61).
-    const expected = ["距最新收盤 -8.0%", "距最新收盤 +16.0%"];
+    // 字面更新（C-11）：停利格已移出決策卡，只剩停損距離。
+    const expected = ["距最新收盤 -8.0%"];
     for (const avgCost of [1027.25, 100000, 1, 1305]) {
       const html = renderCost(1305, avgCost);
       expect(distances(html), `avgCost ${avgCost}`).toEqual(expected);
       expect(html).toContain("1,200.60"); // 1305 x 0.92
-      expect(html).toContain("1,513.80"); // 1305 x 1.16
+      expect(html).not.toContain("1,513.80"); // 1305 x 1.16: the take-profit figure is no longer on the card
     }
     // The two cells (and everything but the P&L line) are byte-identical for any cost.
     const strip = (h: string): string => h.replace(/相對成本損益 [+-]?\d+\.\d%/, "PNL");
@@ -926,10 +930,10 @@ describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () =>
       expect(html).not.toContain(OLD_COST_BASIS);
       expect(html).not.toContain("此參考水位");
       expect(html).not.toContain(OLD_CROSSED_DISCLOSURE);
-      // The stop is never above and the target never below the latest close.
+      // The stop is never above the latest close (the take-profit cell is gone, C-11).
       const [stop, target] = distances(html);
       expect(stop).toMatch(/^距最新收盤 -/);
-      expect(target).toMatch(/^距最新收盤 \+/);
+      expect(target).toBeUndefined();
     }
   });
 
@@ -1051,9 +1055,10 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
           expect(html).not.toContain(text);
         }
 
-        // 5. Four dash cells and four invisible distance placeholders.
-        expect(html.split(">—<").length - 1).toBe(4);
-        expect(html.split('aria-hidden="true"> <').length - 1).toBe(4);
+        // 5. Three dash cells (close, stop, quantity) and three invisible distance placeholders
+        //    (字面更新: the take-profit cell left the card, 4 -> 3; risk remediation C-11).
+        expect(html.split(">—<").length - 1).toBe(3);
+        expect(html.split('aria-hidden="true"> <').length - 1).toBe(3);
 
         // 6. Equivalence with bars === null for the same props.
         expect(html).toBe(renderCard({ ...props, bars: null }));
