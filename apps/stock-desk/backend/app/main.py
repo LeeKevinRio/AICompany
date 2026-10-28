@@ -25,6 +25,7 @@ from app.api import (
     signals,
 )
 from app.api.client_header import RequireClientHeaderMiddleware
+from app.api.server_error import CorsVisibleServerErrorMiddleware
 from app.env_status import log_env_status
 from app.logging_setup import configure_logging
 from app.services.sector_runtime import process_gate_runtime
@@ -52,6 +53,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Stock Desk Backend", version="0.1.0", lifespan=lifespan)
 
+# Innermost of the three, so CORS decorates the 500 it sends for an unhandled
+# exception; Starlette's own 500 comes from outside CORS and the browser would
+# report it as a CORS failure instead (see app/api/server_error.py).
+app.add_middleware(CorsVisibleServerErrorMiddleware)
 # Added before CORS so CORS stays the outer layer: a preflight is answered
 # before this guard sees it, and a 403 from the guard still carries the CORS
 # headers the frontend needs to read it.

@@ -47,7 +47,7 @@ from typing import Any, NamedTuple
 
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.calendar import TradingCalendar
-from app.data.sqlite_util import enable_wal
+from app.data.sqlite_util import add_missing_columns, enable_wal
 from app.playbook.models import (
     BatchState,
     Directive,
@@ -155,8 +155,9 @@ _SCHEMA = (
 
 #: Columns added after the first release. Every playbook table is created by
 #: ``CREATE TABLE IF NOT EXISTS``, so an existing database file keeps its old
-#: shape until these run; ``PRAGMA table_info`` decides, following
-#: ``app/positions/store.py``.
+#: shape until these run. :func:`add_missing_columns` adds whichever a table
+#: lacks, under the write lock, so the backend and the scheduler process can
+#: open the same legacy file at once (N-154).
 _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("playbook_batches", "missed_count", "INTEGER NOT NULL DEFAULT 0"),
     ("playbook_directives", "limit_note", "TEXT NOT NULL DEFAULT ''"),
@@ -298,10 +299,16 @@ class PlaybookStore:
             enable_wal(conn)
             for statement in _SCHEMA:
                 conn.execute(statement)
-            for table, column, definition in _MIGRATIONS:
-                existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-                if column not in existing:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            for table in dict.fromkeys(table for table, _, _ in _MIGRATIONS):
+                add_missing_columns(
+                    conn,
+                    table,
+                    {
+                        column: definition
+                        for name, column, definition in _MIGRATIONS
+                        if name == table
+                    },
+                )
 
     # --- batches ---------------------------------------------------------
 
