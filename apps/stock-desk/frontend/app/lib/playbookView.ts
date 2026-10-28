@@ -322,6 +322,27 @@ export function shouldRenderRuleSetConfirm(mode: PlaybookMode): boolean {
   return mode === "unconfirmed";
 }
 
+/**
+ * Which screen position carries the 排程台 x 第 1 條 disclosure (風控 2026-10-28
+ * #68 裁決補充 section 3): exactly one per screen.
+ *
+ * - `rule_set_panel`: the 待確認規則集 state. The block sits inside
+ *   `RuleSetConfirmPanel` (after 規則參數, before the ⑥ sentences) and takes its
+ *   data from `/rule-set`; the today page must not render a second copy of the
+ *   `/today` one.
+ * - `today_page`: every other mode. The block sits on the today page, after
+ *   the warnings and above the ledger.
+ *
+ * This chooses a *place*, never *whether*: both branches render the block
+ * whenever the backend sent one, so the disclosure never depends on a mode or
+ * on any value inside it (F-4).
+ */
+export type Cap1DisclosureHost = "rule_set_panel" | "today_page";
+
+export function cap1DisclosureHost(mode: PlaybookMode): Cap1DisclosureHost {
+  return shouldRenderRuleSetConfirm(mode) ? "rule_set_panel" : "today_page";
+}
+
 /** Digits with at most one decimal point — no sign, no exponent, no separator. */
 const CAPITAL_PATTERN = /^\d+(\.\d+)?$/;
 
