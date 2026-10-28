@@ -131,3 +131,260 @@ def test_the_scan_has_teeth_on_a_module_that_does_import_advice() -> None:
     """``app.api.advice`` legitimately imports the package -- the scan sees it."""
     reachable = reachable_app_modules(("app.api.advice",))
     assert offenders(reachable, FORBIDDEN_PACKAGE) != []
+
+
+# --- 排程台 × 第 1 條 disclosure (N-155, ADR-0031 C-6/C-7, 風控 #68 裁決補充 R4) -----
+#
+# 修訂 D-2 (2) (CEO #68/#70): no risk cap constrains the 排程台, and nothing under
+# app/playbook/ may read one. The single exception is the router, which may read
+# cap 1's current value only to compose the disclosure. The guards below pin
+# both halves: the package never gets near the settings, and the router uses the
+# value in exactly two places.
+
+#: The zero-dependency module holding the disclosure sentences.
+DISCLOSURE_WORDING = "app.api.playbook_cap1_wording"
+
+#: T-2: every ``app.*`` module the router may import directly. Adding one means
+#: editing this guard, which is what puts the change in front of a reviewer.
+ROUTER_ALLOWED_IMPORTS = frozenset(
+    {
+        "app.api.common",
+        "app.api.deps",
+        "app.playbook",
+        "app.playbook.wording",
+        "app.playbook.models",
+        "app.playbook.service",
+        DISCLOSURE_WORDING,
+    }
+)
+
+#: T-4 / PD-3: names that would mean the playbook package touches a risk cap,
+#: the cap-1 dependency, or the disclosure built from it.
+RISK_CAP_IDENTIFIERS = (
+    "max_position_weight",
+    "RiskBudget",
+    "risk_budget",
+    "cap1_weight",
+    "get_cap1_weight",
+    "playbook_cap1_wording",
+)
+
+#: T-5: packages the playbook may not reach even transitively, with the reason
+#: each one is out of bounds.
+PLAYBOOK_FORBIDDEN_PACKAGES = {
+    "app.settings": (
+        "修訂 D-2 (2)：排程台模組不得讀取設定頁的任何上限值；第 1 條只能經 "
+        "app.api.deps.get_cap1_weight 由 router 取得，且只用於組成揭露（ADR-0031）。"
+    ),
+    "app.api": (
+        "ADR-0031 C-1/C-6：揭露在 API 層組成；app.playbook 回頭 import app.api "
+        "等於讓排程台碰到第 1 條的值與揭露字面（R4）。"
+    ),
+}
+
+#: The name of the cap-1 value inside the router (R4-1).
+CAP1_NAME = "cap1_weight"
+#: The ``Annotated`` alias the router declares the dependency with.
+CAP1_DEP_ALIAS = "Cap1WeightDep"
+#: The three endpoints that carry the disclosure (C-5).
+DISCLOSURE_ENDPOINTS = frozenset({"today", "rule_set", "confirm_rules"})
+
+
+def test_the_router_does_not_import_the_settings_package() -> None:
+    """T-1 (C-6): the cap-1 value reaches the router through ``deps`` only."""
+    path = module_path(GUARDED_ROUTER)
+    assert path is not None
+    found = offenders(imported_modules(path, GUARDED_ROUTER), "app.settings")
+    assert found == [], f"{GUARDED_ROUTER} imports {found}; ADR-0031 C-6"
+
+
+def test_the_router_imports_only_the_whitelisted_app_modules() -> None:
+    """T-2: the router's direct ``app.*`` imports are a fixed whitelist.
+
+    ``from m import name`` records both ``m`` and ``m.name``; a name that is not
+    itself a module is judged by the module it was imported from.
+    """
+    path = module_path(GUARDED_ROUTER)
+    assert path is not None
+    unexpected = set()
+    for name in imported_modules(path, GUARDED_ROUTER):
+        module = name if module_path(name) is not None else name.rsplit(".", 1)[0]
+        if module not in ROUTER_ALLOWED_IMPORTS:
+            unexpected.add(name)
+    assert unexpected == set(), sorted(unexpected)
+    # Not vacuous: the disclosure module is among the imports actually made.
+    assert DISCLOSURE_WORDING in imported_modules(path, GUARDED_ROUTER)
+
+
+def test_the_disclosure_wording_imports_nothing_from_app() -> None:
+    """T-3 (C-1, PD-1): the wording module is text and arithmetic, nothing else."""
+    path = module_path(DISCLOSURE_WORDING)
+    assert path is not None
+    assert imported_modules(path, DISCLOSURE_WORDING) == set()
+
+
+def test_no_risk_cap_identifier_is_used_in_the_playbook_source() -> None:
+    """T-4 (PD-3): not a name, attribute, keyword or string key of a risk cap."""
+    for path in sorted(Path(APP_ROOT / "playbook").glob("*.py")):
+        used = _identifiers(path)
+        for name in RISK_CAP_IDENTIFIERS:
+            assert name not in used, f"{path.name} uses {name}; 修訂 D-2 (2)／R4"
+
+
+def test_the_playbook_never_reaches_the_settings_or_the_api_package() -> None:
+    """T-5: two more forbidden destinations for the transitive scan."""
+    reachable = reachable_app_modules(GUARDED_MODULES)
+    for package, reason in PLAYBOOK_FORBIDDEN_PACKAGES.items():
+        found = offenders(reachable, package)
+        assert found == [], f"{package} is reachable from the playbook via {found}; {reason}"
+
+
+def test_the_settings_and_api_scans_have_teeth() -> None:
+    """The T-5 scan does see both packages from a module that imports them."""
+    reachable = reachable_app_modules(("app.api.advice",))
+    assert offenders(reachable, "app.settings") != []
+    assert offenders(reachable, "app.api") != []
+
+
+def _parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def _is_compose_call(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "compose"
+    )
+
+
+def _is_cap1_depends(node: ast.AST) -> bool:
+    """``Annotated[Decimal | None, Depends(get_cap1_weight)]``, and nothing looser."""
+    if not (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "Annotated"
+        and isinstance(node.slice, ast.Tuple)
+        and len(node.slice.elts) == 2
+    ):
+        return False
+    depends = node.slice.elts[1]
+    return (
+        isinstance(depends, ast.Call)
+        and isinstance(depends.func, ast.Name)
+        and depends.func.id == "Depends"
+        and len(depends.args) == 1
+        and not depends.keywords
+        and isinstance(depends.args[0], ast.Name)
+        and depends.args[0].id == "get_cap1_weight"
+    )
+
+
+def _cap1_uses(tree: ast.Module) -> tuple[set[str], int, list[str]]:
+    """Classify every occurrence of the cap-1 name in ``tree``.
+
+    Returns the functions that take it as a parameter declared through the
+    alias, the number of bare ``cap1_weight=cap1_weight`` arguments to a
+    ``compose(...)`` call, and every other occurrence -- an ``if``, a
+    comparison, arithmetic, a log call, another field, an attribute or a
+    string all land there.
+    """
+    parents = _parents(tree)
+    receivers: set[str] = set()
+    compose_arguments = 0
+    other: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.arg == CAP1_NAME:
+            function = parents[parents[node]]
+            annotated = (
+                isinstance(node.annotation, ast.Name) and node.annotation.id == CAP1_DEP_ALIAS
+            )
+            if annotated and isinstance(function, ast.FunctionDef):
+                receivers.add(function.name)
+            else:
+                other.append(f"parameter at line {node.lineno}")
+        elif isinstance(node, ast.keyword) and node.arg == CAP1_NAME:
+            bare = isinstance(node.value, ast.Name) and node.value.id == CAP1_NAME
+            if bare and _is_compose_call(parents[node]):
+                compose_arguments += 1
+            else:
+                other.append(f"keyword at line {node.value.lineno}")
+        elif isinstance(node, ast.Name) and node.id == CAP1_NAME:
+            parent = parents[node]
+            passed = (
+                isinstance(parent, ast.keyword)
+                and parent.arg == CAP1_NAME
+                and _is_compose_call(parents[parent])
+            )
+            if not passed:
+                other.append(f"name at line {node.lineno}")
+        elif isinstance(node, ast.Attribute) and node.attr == CAP1_NAME:
+            other.append(f"attribute at line {node.lineno}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if CAP1_NAME in node.value:
+                other.append(f"string at line {node.lineno}")
+    return receivers, compose_arguments, other
+
+
+def test_the_cap1_value_is_only_received_and_passed_to_compose() -> None:
+    """R4-1: in the router the value appears in ``Depends`` and as ``compose``'s argument.
+
+    修訂 D-2 (2) lets the router read cap 1 only to compose the disclosure; it
+    may not enter any branch, comparison, arithmetic, log, state or record.
+    """
+    path = module_path(GUARDED_ROUTER)
+    assert path is not None
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    receivers, compose_arguments, other = _cap1_uses(tree)
+    assert other == [], other
+    assert receivers == DISCLOSURE_ENDPOINTS
+    assert compose_arguments == len(DISCLOSURE_ENDPOINTS)
+
+    # The alias is declared once, as exactly the cap-1 dependency, and used for
+    # those parameters only; the dependency is named in the alias and the import.
+    alias_values = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == CAP1_DEP_ALIAS for t in node.targets)
+    ]
+    assert len(alias_values) == 1 and _is_cap1_depends(alias_values[0])
+    alias_loads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id == CAP1_DEP_ALIAS
+        and isinstance(node.ctx, ast.Load)
+    ]
+    assert len(alias_loads) == len(DISCLOSURE_ENDPOINTS)
+    dependency_names = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == "get_cap1_weight"
+    ]
+    assert len(dependency_names) == 1
+    assert "get_cap1_weight" in _identifiers(path)
+
+
+def test_the_cap1_guard_has_teeth() -> None:
+    """The classifier flags a branch, arithmetic, a log call and a second field."""
+    snippet = ast.parse(
+        "def today(service: ServiceDep, cap1_weight: Cap1WeightDep) -> None:\n"
+        "    if cap1_weight is not None:\n"
+        "        logger.info('%s', cap1_weight)\n"
+        "    compose(cap1_weight=cap1_weight)\n"
+        "    compose(cap1_weight=cap1_weight * 2)\n"
+        "    return Response(cap1_weight=cap1_weight)\n"
+    )
+    receivers, compose_arguments, other = _cap1_uses(snippet)
+    assert receivers == {"today"}
+    assert compose_arguments == 1
+    assert sorted(other) == sorted(
+        [
+            "name at line 2",
+            "name at line 3",
+            "keyword at line 5",
+            "name at line 5",
+            "keyword at line 6",
+            "name at line 6",
+        ]
+    )
