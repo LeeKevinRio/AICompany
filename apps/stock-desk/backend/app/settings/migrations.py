@@ -167,9 +167,19 @@ CAP1_MIGRATION_NOTICES: Final[Mapping[tuple[str, str], SettingsNoticeCopy | Shor
                         "可能開始收到推播。",
                         shown="unchanged_by_user",
                     ),
+                    # 1-4: 風控 2026-10-26「第1條下修第一批四項裁定」第二節逐字定稿, which
+                    # replaced the earlier text claiming advice cards keep the old
+                    # cap (they are never stored). No placeholder on purpose: older
+                    # alerts may carry other caps, and the current setting may no
+                    # longer be the migrated one (F1).
+                    # F-g (rewritten by that ruling): withdraw 1-4 or send it back
+                    # to risk-compliance if (a) advice cards ever get a store,
+                    # snapshot or history, or (b) ``alert_events.message`` is ever
+                    # recomputed or rewritten on read or acknowledgement.
                     NoticeItem(
                         "過去的紀錄",
-                        "舊的警示和卡片保留當時的 {old_pct}，不回頭改寫。",
+                        "已觸發的警示保留觸發當時的文字（含當時的上限），不回頭改寫。"
+                        "建議卡沒有存檔，每次載入都依目前的設定重新計算，所以查不到調整前的建議卡。",
                     ),
                     NoticeItem(
                         "可以改回",

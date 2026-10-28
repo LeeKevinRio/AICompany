@@ -11,6 +11,7 @@ reviews of 2026-10-26: 第1條下修告知逐字審 (#1/#2/#2', 實作約束 2/6
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import sqlite3
@@ -82,7 +83,11 @@ MIGRATED_SETTINGS_ITEMS = (
         "會改為續抱參考；減碼的股數區間可能變大，加碼區間可能變小或消失，候選標的的試算股數"
         "可能變少；若設了上限警示，可能開始收到推播。",
     ),
-    ("過去的紀錄", "舊的警示和卡片保留當時的 {old_pct}，不回頭改寫。"),
+    (
+        "過去的紀錄",
+        "已觸發的警示保留觸發當時的文字（含當時的上限），不回頭改寫。建議卡沒有存檔，"
+        "每次載入都依目前的設定重新計算，所以查不到調整前的建議卡。",
+    ),
     (
         "可以改回",
         "在本欄位自行修改即可，包括改回 {old_value}。改高等於放寬上限，儲存前會先要求你確認。",
@@ -867,3 +872,18 @@ def test_a_store_without_a_record_serves_none(tmp_path: Path) -> None:
         conn.execute("DELETE FROM settings_migrations")
     conn.close()
     assert store.cap1_migration() is None
+
+
+def test_item_1_4_has_no_placeholder_and_renders_as_written(tmp_path: Path) -> None:
+    """風控 2026-10-26 四項裁定 第二節: 1-4 carries no ``{...}`` and renders verbatim."""
+    copy = CAP1_MIGRATION_NOTICES[("migrated", "settings")]
+    assert isinstance(copy, SettingsNoticeCopy)
+    (item,) = [i for i in copy.items if i.label == "過去的紀錄"]
+    assert re.search(r"\{[^}]*\}", item.body) is None
+    assert item.shown == "always"
+    record = _record(_migrated_store(tmp_path))
+    for changed in (False, True):
+        variant = dataclasses.replace(record, changed_by_user=changed)
+        notice = variant.settings_notice(current_max_position_weight=0.12)
+        assert notice is not None
+        assert ("過去的紀錄", item.body) in notice.items
