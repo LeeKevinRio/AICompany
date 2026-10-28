@@ -508,6 +508,61 @@ def test_a_violated_cap_does_not_rewrite_a_defensive_action() -> None:
     assert card["blocked_notices"] == []
 
 
+# Behaviour pin (風控 2026-10-26 constraint C-3, item 2-R). The frontend sentence
+# 「{動作}」不代表你的部位在上限內；目前超過上限只會把加碼參考改為續抱參考，不會改成減碼參考。
+# is true only while these three facts hold; if any of them changes, that sentence (and
+# 2-O / 2-V / 2-M beside it) must be rewritten in the same PR (failure condition T1):
+#   1. a violated cap turns ``add`` into ``hold`` and nothing else;
+#   2. hold / reduce / stop_loss / take_profit are left exactly as the rules produced them;
+#   3. a ``not_evaluable`` cap never blocks an ``add``.
+_OVER_THE_CAP = {"position_market_value_twd": 200_000.0, "quantity": 1_818.0}
+
+
+def _single_rule_card(tmp_path: Path, action: str, portfolio: PortfolioContext) -> dict[str, Any]:
+    payload = minimal_ruleset(
+        minimal_rule(
+            id=f"only_{action}",
+            action=action,
+            weight=0.5,
+            condition={"field": "rsi14.last", "op": "lt", "value": 90},
+        )
+    )
+    ruleset = load_rules(write_rule_file(tmp_path, payload))
+    return _card(uptrend_signals(), portfolio, ruleset=ruleset)
+
+
+@pytest.mark.parametrize("action", ["hold", "reduce", "stop_loss", "take_profit"])
+def test_a_violated_cap_leaves_every_non_add_action_unchanged(tmp_path: Path, action: str) -> None:
+    clean = _single_rule_card(tmp_path, action, _portfolio())
+    over = _single_rule_card(tmp_path, action, _portfolio(**_OVER_THE_CAP))
+    assert [c["status"] for c in over["limits_check"]][0] == "violated"
+    assert [c["status"] for c in clean["limits_check"]][0] != "violated"
+    assert clean["action"] == action
+    assert over["action"] == action
+    assert over["blocked_action"] is None
+    assert over["blocked_notices"] == []
+
+
+def test_a_violated_cap_turns_only_add_into_hold(tmp_path: Path) -> None:
+    clean = _single_rule_card(tmp_path, "add", _portfolio())
+    over = _single_rule_card(tmp_path, "add", _portfolio(**_OVER_THE_CAP))
+    assert clean["action"] == "add"
+    assert over["action"] == "hold"
+    assert over["blocked_action"] == "add"
+    assert over["aggregated_action"] == "add"
+    assert over["blocked_notices"] == ["加碼建議被第 1 條上限（單一標的佔比上限）擋下。"]
+
+
+def test_a_not_evaluable_cap_never_blocks_an_add() -> None:
+    card = _card(uptrend_signals(atr=None), _portfolio())
+    statuses = {check["id"]: check["status"] for check in card["limits_check"]}
+    assert statuses["per_trade_loss"] == "not_evaluable"
+    assert "violated" not in statuses.values()
+    assert card["action"] == "add"
+    assert card["blocked_action"] is None
+    assert card["blocked_notices"] == []
+
+
 def test_add_keeps_its_quantity_range_when_every_cap_passes() -> None:
     card = _card(uptrend_signals(), _portfolio())
     assert card["action"] == "add"

@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 
@@ -55,13 +56,24 @@ class DeliveryResult:
     detail: str | None = None
 
 
+#: Last line of every pushed alert. 風控 2026-10-26 定稿 3-N; 失效條件 T2, T7.
+#: True only while alerts read daily closing bars and nothing else for the price
+#: (``app/alerts/snapshot.py`` loads ``get_daily_bars`` and takes ``latest.close``);
+#: the moment an alert reads an intraday price or a non-daily series, this line
+#: must be rewritten in the same PR. Any change goes back to risk review.
+ALERT_DISCLAIMER_LINE: Final = (
+    "本警示依你設定的條件與日線收盤資料產生，非即時；"
+    "條件與規則未經歷史驗證，可能有誤，是否採取行動由你自行決定。"
+)
+
+
 def format_message(event: AlertEvent) -> str:
     """Render an event as the plain text pushed to a webhook."""
     return (
         f"[stock-desk 警示] {event.symbol}（{event.market}）\n"
         f"{event.message}\n"
         f"觸發時間：{event.triggered_at.isoformat()}\n"
-        "本工具為研究與教育用途，非投資建議。"
+        f"{ALERT_DISCLAIMER_LINE}"
     )
 
 

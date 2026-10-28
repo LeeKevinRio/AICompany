@@ -7,6 +7,7 @@ import { SummaryCards } from "../../components/SummaryCards";
 import { FRONTEND_FORBIDDEN_TERMS } from "../adviceWording";
 import { SUMMARY_BANNER_NO_DATA, SUMMARY_BANNER_PARTIAL } from "../oneLinerWording";
 import type { PortfolioTotals } from "../types";
+import { UNVALUED_POSITION } from "./summaryCardsFixtures";
 import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHelpers";
 
 /**
@@ -17,6 +18,17 @@ import { assertNoForbiddenTerms, findBareRealtimeClaims } from "./wordingScanHel
  */
 
 function totals(status: PortfolioTotals["status"]): PortfolioTotals {
+  // T1-12: the real contract sends null amounts under no_data.
+  if (status === "no_data") {
+    return {
+      cost_twd: null,
+      market_value_twd: null,
+      unrealized_pnl_twd: null,
+      asset_contribution_twd: null,
+      fx_contribution_twd: null,
+      status,
+    };
+  }
   return {
     cost_twd: "100000",
     market_value_twd: "105000",
@@ -27,12 +39,17 @@ function totals(status: PortfolioTotals["status"]): PortfolioTotals {
   };
 }
 
+/** One stored position that could not be valued: `no_data` with a non-empty book. */
+const UNVALUED = UNVALUED_POSITION;
+
 function render(status: PortfolioTotals["status"]): string {
   return renderToStaticMarkup(
     createElement(SummaryCards, {
       totals: totals(status),
       asOf: "2026-10-08T00:00:00Z",
-      positions: [],
+      // `no_data` here means "positions exist but none could be valued"; the
+      // empty book (no positions at all) is covered by summaryCardsEmptyBook.test.ts.
+      positions: status === "no_data" ? [UNVALUED] : [],
       fxDisclosures: [],
       fxBackupActive: false,
     }),

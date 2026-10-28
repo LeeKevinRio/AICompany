@@ -100,7 +100,9 @@ export function buildLadderViewModel(levels: KeyLevels, anchorSource: AnchorSour
 
   const candidates: Array<Omit<LadderRung, "distancePct"> | null> = [
     { id: "target-fixed", group: "target", price: levels.targetFixedPct, isHeadline: false },
-    { id: "target-2r", group: "target", price: levels.target2R, isHeadline: true },
+    // Risk remediation C-11 (風控 2026-10-26 定稿；失效條件 T4): the take-profit headline figure left the
+    // main view, so there is no big number above for this rung to correspond to.
+    { id: "target-2r", group: "target", price: levels.target2R, isHeadline: false },
     { id: "anchor", group: "anchor", price: anchor, isHeadline: false },
     levels.ma20 !== null ? { id: "ma20", group: "pullback", price: levels.ma20, isHeadline: false } : null,
     levels.ma60 !== null ? { id: "ma60", group: "pullback", price: levels.ma60, isHeadline: false } : null,

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse, Bar } from "../../lib/types";
 import type { AnchorSource } from "../../lib/keyLevels";
@@ -7,15 +8,15 @@ import { computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import type { OperationSummaryModel } from "../../lib/operationSummary";
 import {
-  CONFIDENCE_PREFIX,
   INSUFFICIENT_DATA_NO_EVALUATION,
   NOT_HELD_BADGE,
-  QUANTITY_RANGE_ABSENT_SHORT,
   RULE_SOURCE_CHIP,
-  summaryConfidenceLabel,
 } from "../../lib/adviceWording";
 import { invalidationDisclosureForRule, pickRuleForAction } from "../../lib/ruleSelection";
+import { buildLimitNotices } from "../../lib/limitNotices";
+import type { LimitNotices } from "../../lib/limitNotices";
 import { buildDataAsOfBadge } from "../../lib/oneLinerWording";
+import { QUANTITY_ABSENT_SHORT_BY_CAUSE } from "../../lib/quantityAbsenceWording";
 import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_COST_PNL_UNAVAILABLE,
@@ -24,11 +25,10 @@ import {
   buildDecisionCardDistance,
   pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
-import {
-  PAGE_FOOTER_DISCLOSURES_TITLE,
-  buildFooterGuidance,
-} from "../../lib/footerDisclosureWording";
+import { OPERATION_REFERENCE_DISCLAIMER } from "../../lib/riskRemediationWording";
 import { PriceUnitBadge } from "./PriceUnitBadge";
+import { UnvalidatedNotice } from "./UnvalidatedNotice";
+import { StopQualifier } from "./StopQualifier";
 import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
@@ -39,7 +39,6 @@ import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE_HELD,
   KEY_LEVELS_LADDER_RUNG_CLOSE,
   KEY_LEVELS_STOP_CARD_TITLE,
-  KEY_LEVELS_TARGET_CARD_TITLE,
   buildStopBasisConfirmedNotHeld,
   buildStopBasisHeld,
 } from "./KeyLevelsPanel";
@@ -66,7 +65,8 @@ import {
  *       （`effectiveAnchorSource === "close-not-held"`），不得只看 `levels !== null`
  *       ——`levels === null` 時全句仍常駐，價格代入 `fmt(null)`（即「—」）。
  *   Q2. `no_price`／`no_action` 的股數格印「—」，不印 `QUANTITY_RANGE_ABSENT_SHORT`
- *       （該三字專屬 held／candidate 且 `quantity_range === null` 的情境）。
+ *       （該五字只用於 held／candidate 且 `quantity_range === null` 的 C-0 情境；
+ *       held 的續抱成因改用 Q-a／Q-b，見 `quantityAbsenceWording.ts`）。
  *   V1. `NumberCell` 的 `distance` 為 `undefined`（收盤／股數格，無距離概念）或
  *       `null`（水位缺席）時渲染不可見佔位（`aria-hidden`＋`&nbsp;`），不得印
  *       "—" -- `KEY_LEVELS_HEADER_DASH_NOTICE` (LM-116) defines the "—" inside
@@ -106,8 +106,9 @@ import {
  *      本檔原樣渲染，不重新拼字）；不支持時 `model.notSupportiveText`
  *      （＝`CANDIDATE_NOT_SUPPORTIVE_TEXT`）。主字 `model.headingLabel`
  *      （＝`CANDIDATE_HEADING_LABEL`「進場評估」）。
- *   9. 第四格股數：`model.required.quantityRangeShares` 或
- *      `QUANTITY_RANGE_ABSENT_SHORT`；`restoresComplianceWarning` 非 null 時卡內
+ *   9. 第四格股數：`model.required.quantityRangeShares`，或依
+ *      `model.required.quantityAbsenceCause` 取 `QUANTITY_ABSENT_SHORT_BY_CAUSE`
+ *      （風控 2026-10-26 股數成因 Q-a／Q-b／C-0）；`restoresComplianceWarning` 非 null 時卡內
  *      同層 `role="alert"`（沿用 `OperationSummaryPanel.tsx` 既有 alert 樣式，
  *      import 自該檔的 `StaleDataAlert` 同款作法，非另寫一份）。全頁「股數＋
  *      warning」恰一次：`OperationSummaryPanel.tsx` 的對應主視圖渲染已移除
@@ -149,13 +150,20 @@ function NumberCell({
   label,
   value,
   distance,
+  note,
+  className = "",
 }: {
   label: string;
   value: string;
   distance?: string | null;
+  /** Extra block under the distance line (the stop cell's 4-Q qualifier and its 4-E explanation). */
+  note?: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="flex min-h-[4.5rem] min-w-0 flex-col items-start text-left md:items-end md:text-right">
+    <div
+      className={`flex min-h-[4.5rem] min-w-0 flex-col items-start text-left md:items-end md:text-right ${className}`.trimEnd()}
+    >
       <p className="text-sm text-neutral-400">{label}</p>
       <p className="mt-1 break-words font-mono text-xl font-bold text-neutral-100">
         {value}
@@ -167,6 +175,7 @@ function NumberCell({
           &nbsp;
         </p>
       )}
+      {note}
     </div>
   );
 }
@@ -178,13 +187,7 @@ function NumberCell({
  * `compositionText`／`supportiveDisclaimer`／`notSupportiveText`；no_action：
  * `INSUFFICIENT_DATA_NO_EVALUATION`；no_price：`InsufficientPanel`）。
  */
-function MainSlot({
-  model,
-  showConfidence,
-}: {
-  model: OperationSummaryModel;
-  showConfidence: boolean;
-}) {
+function MainSlot({ model }: { model: OperationSummaryModel }) {
   if (model.kind === "no_price") {
     return <InsufficientPanel reason={model.reason} />;
   }
@@ -221,6 +224,8 @@ function MainSlot({
             {model.notSupportiveText}
           </span>
         )}
+        {/* Risk remediation 1-L (C-4): always shown for candidate, not gated on the action matching the rules. */}
+        <UnvalidatedNotice />
       </>
     );
   }
@@ -235,19 +240,55 @@ function MainSlot({
         {RULE_SOURCE_CHIP}
       </span>
       {/*
-        風控 2026-10-03 BLOCKING 2／3：信心與結論大字同一列、緊接 RULE_SOURCE_CHIP，
-        class 與 OperationSummaryPanel 的信心 chip 完全相同（text-sm text-neutral-400），
-        No colour, never hover-only. Rendered only when the conclusion comes
-        from the rules (action === aggregated_action, `showConfidence`); the
-        candidate mode hides confidence per the CEO's choice of option K2.
+        Risk remediation 1-L (CEO #59, C-4): the old 「信心 {低/中/高}」 chip is
+        gone. The standing 「未經歷史驗證」 label takes its slot on the same row,
+        always for held (never gated on `action === aggregated_action`), with the
+        click-to-open 1-X explanation. 風控 2026-10-26 定稿；失效條件 T2.
       */}
-      {showConfidence && (
-        <span className="text-sm text-neutral-400">
-          {CONFIDENCE_PREFIX}
-          {summaryConfidenceLabel(model.required.confidence)}
-        </span>
-      )}
+      <UnvalidatedNotice />
     </>
+  );
+}
+
+/**
+ * The limit block on the main screen (risk remediation 2-V / 2-M, the lifted
+ * blocked-add sentence, 2-R, 2-O; constraints C-5 and C-6). Always in the main
+ * view, never inside a `<details>`, `text-sm` at the smallest. The sentences
+ * and their display conditions come from `buildLimitNotices`; this component
+ * only lays them out. 風控 2026-10-26 定稿；失效條件 T1、T9.
+ */
+function LimitNoticeBlock({ notices }: { notices: LimitNotices }) {
+  const hasViolation = notices.violationLines.length > 0;
+  return (
+    <div className="mt-3 space-y-2">
+      {hasViolation && (
+        <div className="rounded-md border border-rose-800 bg-rose-950/50 px-4 py-3 text-sm text-rose-300">
+          {notices.violationTitle !== null ? (
+            <>
+              <p className="font-semibold">{notices.violationTitle}</p>
+              <ul className="mt-1 space-y-1">
+                {notices.violationLines.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="font-semibold">{notices.violationLines[0]}</p>
+          )}
+        </div>
+      )}
+      {notices.blockedNotices.map((notice, i) => (
+        <p key={i} className="text-sm text-neutral-200">
+          {notice}
+        </p>
+      ))}
+      {notices.actionNotice !== null && (
+        <p className="text-sm text-neutral-200">{notices.actionNotice}</p>
+      )}
+      {notices.notEvaluableNotice !== null && (
+        <p className="text-sm text-neutral-200">{notices.notEvaluableNotice}</p>
+      )}
+    </div>
   );
 }
 
@@ -307,20 +348,12 @@ export function DecisionCardBody({
   const closeText = levels !== null ? fmt(levels.close) : "—";
   const stopText =
     levels !== null && !suppressAnchor ? fmt(levels.stopSuggested) : "—";
-  const targetText =
-    levels !== null && !suppressAnchor ? fmt(levels.target2R) : "—";
   // The anchor is the latest close, so the latest close is always the
   // denominator and the stop is never above / the target never below it.
   const stopDistance =
     levels !== null && !suppressAnchor
       ? buildDecisionCardDistance(
           ((levels.stopSuggested - levels.close) / levels.close) * 100,
-        )
-      : null;
-  const targetDistance =
-    levels !== null && !suppressAnchor
-      ? buildDecisionCardDistance(
-          ((levels.target2R - levels.close) / levels.close) * 100,
         )
       : null;
   // Held branch (cost known): LM-17 label, then the LM-16 basis sentence, then
@@ -343,24 +376,29 @@ export function DecisionCardBody({
       ? DECISION_CARD_COST_PNL_UNAVAILABLE
       : null;
 
-  // Q2（qa medium）："未提供股數" 專屬 held／candidate 且 quantity_range 為
-  // null 的情境；no_price／no_action 這兩種 kind 根本沒有 quantity_range 這個
-  // 欄位可言，股數格改印「—」（與其他缺席數字同一慣例），不得借用該三字。
+  // Q2（qa medium）：the no-range text is only for held／candidate cards whose
+  // quantity_range is null; no_price／no_action have no quantity_range at all,
+  // so the cell prints 「—」（the same convention as every other absent number）
+  // and never borrows the five-character 「未提供股數」 or any cause sentence.
+  // 風控 2026-10-26 股數成因 J-3: only this cell's text changes by cause
+  // (Q-a／Q-b for a held card, C-0 「未提供股數」 otherwise, candidate included);
+  // no new element, no `distance` sub-line.
   const quantityText =
     model.kind === "held" || model.kind === "candidate"
-      ? (model.required.quantityRangeShares ?? QUANTITY_RANGE_ABSENT_SHORT)
+      ? (model.required.quantityRangeShares ??
+        QUANTITY_ABSENT_SHORT_BY_CAUSE[model.required.quantityAbsenceCause ?? "unspecified"])
       : "—";
   const restoresWarning =
     model.kind === "held" ? model.restoresComplianceWarning : null;
 
   // Risk review 2026-10-03 BLOCKING 3: when the conclusion was downgraded or
-  // capped (action !== aggregated_action) neither the confidence nor the
-  // invalidation line renders -- the conclusion no longer comes from the rules
-  // and the confidence was computed for the pre-override direction.
+  // capped (action !== aggregated_action) the invalidation line does not
+  // render -- the conclusion no longer comes from the rules. (The confidence
+  // chip that used to share this gate was replaced by the 「未經歷史驗證」
+  // label, which is always shown; risk remediation 1-L.)
   const card = response.advice;
   const conclusionFromRules =
     card !== null && card.action === card.aggregated_action;
-  const showConfidence = model.kind === "held" && conclusionFromRules;
 
   // 失效條件行：只在 held，或候選且「支持進場」（action === "add"）時渲染；
   // A candidate that is not supported for entry renders nothing (BLOCKING 5).
@@ -375,6 +413,11 @@ export function DecisionCardBody({
       ? pickRuleForAction(card.matched_rules, card.action)
       : null;
   const invalidationBody = invalidationRule?.invalidation ?? null;
+  // Risk remediation item 2 (C-5 / C-6): held and candidate only; no_action / no_price have no limit block.
+  const limitNotices =
+    card !== null && (model.kind === "held" || model.kind === "candidate")
+      ? buildLimitNotices(card, model.kind)
+      : null;
   // Risk review 2026-10-04 R1 (position B): keyed by the picked rule's id.
   const invalidationDisclosure = invalidationDisclosureForRule(invalidationRule);
   const invalidationPrefix =
@@ -427,20 +470,27 @@ export function DecisionCardBody({
 
       <div className="mt-3 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex min-h-[3.5rem] flex-wrap items-center gap-3">
-          <MainSlot model={model} showConfidence={showConfidence} />
+          <MainSlot model={model} />
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-4">
+        {/*
+          Risk remediation C-11: the take-profit cell and its distance line are gone from the
+          main view (4 cells -> 3). The stop cell carries the 4-Q qualifier and the 4-E
+          explanation only when the stop figure is a number (C-10); when opened it takes the
+          whole grid row so the long sentence does not squeeze into one narrow cell.
+        */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-2 md:gap-x-6 lg:grid-cols-3">
           <NumberCell label={KEY_LEVELS_LADDER_RUNG_CLOSE} value={closeText} />
           <NumberCell
             label={KEY_LEVELS_STOP_CARD_TITLE}
             value={stopText}
             distance={stopDistance}
-          />
-          <NumberCell
-            label={KEY_LEVELS_TARGET_CARD_TITLE}
-            value={targetText}
-            distance={targetDistance}
+            className="has-open:col-span-full"
+            note={
+              levels !== null && stopText !== "—" ? (
+                <StopQualifier atr14Available={levels.atr14 !== null} />
+              ) : null
+            }
           />
           <NumberCell
             label={DECISION_CARD_QUANTITY_LABEL}
@@ -448,6 +498,17 @@ export function DecisionCardBody({
           />
         </div>
       </div>
+
+      {limitNotices !== null && limitNotices.hasAny && <LimitNoticeBlock notices={limitNotices} />}
+
+      {/*
+        Risk remediation 3-S (C-7): the transitional disclaimer, every kind (held, candidate,
+        no_action, no_price). After the limit block and before the invalidation line; at least
+        text-sm and never lighter than neutral-300; never inside a <details>, no truncate /
+        line-clamp / tooltip. Character-identical to the backend DISCLAIMER (parity tests).
+        風控 2026-10-26 定稿；失效條件 T2、T7、T8.
+      */}
+      <p className="mt-3 text-sm text-neutral-300">{OPERATION_REFERENCE_DISCLAIMER}</p>
 
       {/*
         Risk review 2026-10-03 item 4: prefix and body share one <p> at the
@@ -509,12 +570,10 @@ export function DecisionCardBody({
       )}
 
       {/*
-        R3（決策卡第二輪修正）：卡片底部常駐指引句，指向頁尾揭露區——本卡不設
-        `<details>`，這句本來就不在任何摺疊內。
+        The R3 guidance sentence that pointed at the page footer used to close the card here.
+        Removed by risk-compliance on 2026-10-26: the 3-S disclaimer above replaces it
+        (R3 revoked); where a figure comes from is now carried by the 4-E explanation.
       */}
-      <p className="mt-3 text-sm text-neutral-300">
-        {buildFooterGuidance(PAGE_FOOTER_DISCLOSURES_TITLE)}
-      </p>
     </>
   );
 }

@@ -4,12 +4,16 @@
 # Backend and scheduler MUST be started from the backend directory so the default
 # SQLite path (./data/stock-desk.db) resolves to the same database file for both.
 # Order: pull -> backend -> wait for /health -> scheduler -> frontend -> status lines.
+# Secrets: apps/stock-desk/.env (git-ignored) is loaded for the backend and the scheduler
+# through uv's UV_ENV_FILE (same as `uv run --env-file`). Variables already set in your shell win
+# over the file. If the file is missing the stack still starts, just without those settings.
 set -euo pipefail
 
 TARGET_BRANCH="product/stock-desk"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/apps/stock-desk/backend"
 FRONTEND_DIR="$REPO_ROOT/apps/stock-desk/frontend"
+ENV_FILE="$REPO_ROOT/apps/stock-desk/.env"
 
 BACKEND_PID=""
 SCHEDULER_PID=""
@@ -58,6 +62,18 @@ wait_for() {
     sleep 2
   done
 }
+
+# ---- 0. optional .env (never printed, only its path) ----
+# `uv run --env-file` fails hard on a missing file, so only point uv at the file when it exists.
+# The variable is exported, so the backend and the scheduler children below both inherit it.
+if [ -f "$ENV_FILE" ]; then
+  export UV_ENV_FILE="$ENV_FILE"
+  echo "==> [env] Loading settings from $ENV_FILE (backend and scheduler print set/unset status at start-up)"
+else
+  unset UV_ENV_FILE
+  echo "==> [env] No .env file at $ENV_FILE - starting without it (FinMind / push alerts stay off)."
+  echo "          To enable them: copy .env.example to .env in that folder and fill in your values."
+fi
 
 # ---- 1. pull latest code (never fatal: dirty tree / wrong branch / offline just skip) ----
 echo "==> [1/4] Updating code (git pull)"

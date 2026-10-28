@@ -9,6 +9,7 @@
 - 適用範圍：僅 product/stock-desk 產品線（本 ADR 不存在於 main）。
 - 前提：使用範圍為 B1（b-1）純自用（CEO 決策紀錄第 33 行，coordinator 定案，CEO 可推翻）。前提改變即觸發失效條件 F-1。
 - 修訂（提案中）：ADR-0027（proposed）提案部分修訂 D-1 接線、D-2.2 解讀、D-3 missing_inputs 型別、D-5.7 價位口徑、D-6.1～D-6.5、AV-17、AT-6、AT-7、F-2、F-3 與 D-12 Phase 3 驗收欄位名（M-1～M-11，見 docs/adr/0027-stock-desk-預測紀錄帳-儲存-PIT輸入-排程與定義登記.md）；各項須 CEO 核可，核可前本檔為準；本檔原文不改。
+- 修訂（已核可）：ADR-0030（accepted，CEO 2026-10-26，決策包二補遺 #64）部分修訂 D-6.1、D-6.2、D-6.3、D-6.5 驗證狀態、F-2 評估時點、AV-17、AT-6、AT-7、F-3 與 D-12 Phase 3 驗收欄位名（C-M1～C-M4，見 docs/adr/0030-stock-desk-預測紀錄帳核心-最小記錄器.md）；ADR-0027 的 M-1～M-11 隨其凍結暫停；C-M1～C-M4 已經 CEO 核可，衝突處以 ADR-0030 為準；本檔原文不改。
 - 與既有 ADR 的關係（細節見 Context §4）：
   - **部分修訂 ADR-0004（accepted）**：§4「無目標價」縮窄（見 D-5.1）；`DISCLAIMER` 常數字面與 Decision §5「研究與教育工具」的定位理由失效，改由風控重訂；§1～§3、§5 規則版本化、`ACTION_DIRECTION`、保守閘門全部維持。比照 ADR-0024 對 ADR-0009 的做法，只在 ADR-0004 檔頭「修訂」清單加一行指標，不原地改寫。**須 CEO 核可。**
   - **取代 ADR-0018（proposed）**：計算歸屬（D-1 後端唯一來源、D-2 `AdviceResponse` 同層欄位、D-5 基準價與 fail-closed）以及 K-1～K-16、T-1～T-7 的守門精神，由本 ADR D-5 吸收沿用。固定比率公式（D-3 的 0.92A、1.2A、2R）與「需要 CEO 決定」#1、#2 不再適用於畫面；舊公式「搬遷＋golden parity」那一期不執行（理由見 D-5.6）。ADR-0018 狀態改為 `superseded by ADR-0025`。

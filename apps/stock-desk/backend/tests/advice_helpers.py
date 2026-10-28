@@ -284,12 +284,25 @@ def book_position(
 def book_summary(*positions: SummaryPosition) -> PortfolioSummary:
     """A summary whose ``totals`` are summed from its own ``ok`` rows.
 
-    The book-level caps read ``totals.market_value_twd`` as total equity, so a
-    fixture with hand-written totals would test the caps against a book that
-    does not exist. Here the totals are always the sum of the rows above them,
-    exactly as :func:`app.portfolio.summary.build_summary` produces them.
+    A fixture with hand-written totals would describe a book that does not
+    exist. Here the totals are always the sum of the rows above them, exactly
+    as :func:`app.portfolio.summary.build_summary` produces them -- including
+    every amount being ``None`` when no row is valued (T1-12).
     """
     valued = [p for p in positions if p.valuation.status == "ok"]
+    if not valued:
+        return PortfolioSummary(
+            as_of="2026-07-25T00:00:00+00:00",
+            totals=Totals(
+                cost_twd=None,
+                market_value_twd=None,
+                unrealized_pnl_twd=None,
+                asset_contribution_twd=None,
+                fx_contribution_twd=None,
+                status="no_data",
+            ),
+            positions=list(positions),
+        )
     market_value = sum((p.market_value_twd or Decimal(0) for p in valued), Decimal(0))
     cost = sum((p.cost_twd or Decimal(0) for p in valued), Decimal(0))
     return PortfolioSummary(
@@ -300,13 +313,7 @@ def book_summary(*positions: SummaryPosition) -> PortfolioSummary:
             unrealized_pnl_twd=market_value - cost,
             asset_contribution_twd=Decimal(0),
             fx_contribution_twd=Decimal(0),
-            status=(
-                "no_data"
-                if not valued
-                else "complete"
-                if len(valued) == len(positions)
-                else "partial"
-            ),
+            status="complete" if len(valued) == len(positions) else "partial",
         ),
         positions=list(positions),
     )

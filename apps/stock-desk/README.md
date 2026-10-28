@@ -3,21 +3,27 @@
 本機執行的**決策輔助儀表板**:把實際部位、市場訊號、風險上限放在同一畫面,
 輸出可解釋、可反駁、附失效條件的行動選項。**非自動下單系統、非預言機**。
 
-> 本工具為研究與教育用途,非投資建議。
+> 本工具提供的動作、股數與價位，是依固定規則與固定算式產生的操作參考。規則與價位都還沒用歷史資料驗證過，可能錯誤，照做也可能造成虧損，是否採用由你自行決定。這些參考只用日線收盤資料計算，非即時，不反映最近一次收盤之後的價格變動。
 
 技術棧決策與取捨見 [docs/adr/0002](../../docs/adr/0002-stock-desk-tech-stack.md)。
 
-## 快速啟動(Docker,建議)
+## 快速啟動(CEO 日常:原生一鍵腳本)
 
-```bash
-cd apps/stock-desk
-cp .env.example .env        # Phase 1 可不填任何真值
-docker compose up --build
-```
+CEO 日常用的是原生路徑:**Windows 雙擊 `apps\stock-desk\dev-up.bat`**(macOS／Linux 用
+`bash apps/stock-desk/dev-up.sh`)。腳本會依序更新 code、起後端(:8000)、等 `/health` 通過、
+起 scheduler、起前端(:3000),最後印出三行狀態。詳細流程與手動指令見
+`.claude/skills/local-run/SKILL.md`。
 
 - 前端:http://localhost:3000
 - 後端 API:http://localhost:8000(健康檢查 `GET /health`)
-- 排程:`scheduler` service(APScheduler:每日資料更新 + 警示評估)
+- 排程:scheduler 是另一個程序(APScheduler:每日資料更新 + 警示評估),**關掉它的視窗就停止**。
+- 資料存在 `apps/stock-desk/backend/data/`(多顆 SQLite,見下方「資料存放與備份」)。
+- **祕密設定(選用)**:`cp apps/stock-desk/.env.example apps/stock-desk/.env` 後填值。
+  bat／sh 從本次起會在啟動後端與 scheduler 時讀取這個檔(`apps/stock-desk/.env`,已被 `.gitignore`);
+  沒有這個檔也照常啟動,只是 FinMind 備援與推播不會啟用,腳本會印一行提示。
+  後端與 scheduler 啟動時各印一行「FINMIND token／Alpha Vantage key／Discord webhook／Telegram:已設定或未設定」,
+  **只印狀態,不印值**。看到「未設定」但你明明填了,先檢查檔案位置與變數名稱。
+  已在 Windows 系統環境變數(或 sh 的 shell)設過的同名變數優先於 `.env`。
 
 > **選用步驟**:若要使用代號／公司名稱搜尋功能(前端 combobox),需先在**有網路的機器**
 > 執行一次性目錄同步:
@@ -31,6 +37,20 @@ docker compose up --build
 > (`backend/app/directory/sync.py:6-27`)。未同步前搜尋 API 會誠實回報
 > `directory_synced: false`,不會把「還沒同步」誤顯示成「查無結果」
 > (`backend/app/api/directory.py:93-102`)。
+
+## 選用:Docker 啟動
+
+不想裝 Python／Node、或想要開機自動重啟時才需要(`restart: unless-stopped`):
+
+```bash
+cd apps/stock-desk
+cp .env.example .env        # Phase 1 可不填任何真值
+docker compose up --build
+```
+
+網址與原生路徑相同(前端 :3000、後端 :8000)。`scheduler` 是獨立的 compose service。
+Docker 與原生各有自己的資料(Docker 在具名 volume,原生在 `backend/data/`),兩邊**不會**共用,
+切換前請先備份(見下方)。
 
 ## 網路暴露
 
@@ -48,22 +68,72 @@ docker compose up --build
 
 ## 資料存放與備份
 
-`backend` 與 `scheduler` 兩個 service 共用同一個具名 volume `stock-desk-data`,
-掛載在兩邊容器的 `/app/data`,並各自把 `STOCK_DESK_DB_PATH` 顯式指到
-`/app/data/stock-desk.db`(見 `compose.yaml`)。這一顆 SQLite 檔案(WAL 模式)
-裝了持倉、風險設定、警示規則/事件與價格快取——**全部使用者資料都在這裡**。
+**不是一顆 DB,而是多顆 SQLite 檔**(皆為 WAL 模式,執行中旁邊會有 `*.db-wal`、`*.db-shm`)。
+以下是實際 grep 程式碼確認的清單,預設都在後端工作目錄的 `./data/` 底下:
 
-- 兩個 service 指向同一路徑是刻意的:排程寫入的每日資料更新、警示評估結果,
-  一定要跟 API 服務讀寫同一份 DB,否則排程形同空跑(見本次修復的部署缺陷)。
-- **備份**:直接備份整個 volume,不需要停機(SQLite WAL 支援線上備份):
-  ```bash
-  docker run --rm -v stock-desk-data:/data -v "$PWD":/backup alpine \
-    tar czf /backup/stock-desk-data-$(date +%Y%m%d).tar.gz -C /data .
-  ```
-  還原時反向操作(`tar xzf ... -C /data`)。
+| 檔案 | 內容 | 位置(程式碼) | 路徑環境變數 |
+| --- | --- | --- | --- |
+| `stock-desk.db` 主 DB | 持倉、風險設定、警示規則／事件、價格快取、證券目錄、除權息、Kelly 輸入與嘗試紀錄、API 額度帳本等 | `backend/app/data/cache.py:28` | `STOCK_DESK_DB_PATH` |
+| `stock-desk-market.db` 市場 DB | 全市場日線與 point-in-time 快照(族群動能用,只增不改) | `backend/app/data/market_panel.py:95` | `STOCK_DESK_MARKET_DB_PATH` |
+| `stock-desk-research.db` 研究 DB | 研究用回填資料與研究結果,可重建;API 程序不開這顆(`backend/app/research/sector_biased/store.py:3-4`) | `backend/app/research/sector_biased/store.py:45` | `STOCK_DESK_RESEARCH_DB_PATH` |
+
+- 持倉、設定、警示等**使用者資料在主 DB**。市場 DB 的 point-in-time 快照依設計只能往前累積,
+  遺失的歷史無法事後補(〔未查證:各表能否由資料源完全重建,以 ADR-0012 為準〕)。
+  備份時**三顆一起備份**最單純。研究 DB 是否存在取決於有沒有跑過研究 CLI〔未查證〕。
+- 主 DB 的 `STOCK_DESK_DB_PATH` 在 Docker 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`;
+  市場 DB／研究 DB 在 compose 裡沒有另外設路徑,按預設解析成容器工作目錄 `/app` 下的
+  `./data/…`,即同一個 volume `stock-desk-data` 內(依 `backend/Dockerfile` 的 `WORKDIR /app` 推論,
+  〔未在實際容器內查證〕)。
+- `backend` 與 `scheduler` 兩邊指向同一路徑是刻意的:排程寫入的每日資料更新、警示評估結果,
+  一定要跟 API 服務讀寫同一份 DB,否則排程形同空跑。
+
+### 原生路徑(dev-up.bat／dev-up.sh)的備份與還原
+
+資料在 `apps/stock-desk/backend/data/`(必須從 `backend/` 目錄啟動才會是這裡,見 `local-run`)。
+
+**備份**:
+
+1. **先停掉三個程序**(關掉 stock-desk backend／scheduler／frontend 三個視窗,或在 sh 按 `Ctrl+C`)。
+   不停機直接複製,WAL 內尚未寫回的資料可能沒跟上,多顆檔案之間也不是同一時間點。
+2. 把 `backend/data/` 內**所有** `*.db`、`*.db-wal`、`*.db-shm` 一起複製到帶日期的資料夾,例如
+   `backup-2026-10-26\`。三種副檔名要成套複製,不要只複製 `.db`。
+   (程序正常關閉後 SQLite 通常會清掉 `-wal`／`-shm`,沒有就不用管;有就一起帶。)
+
+**還原**:
+
+1. 先停掉三個程序。
+2. 刪掉(或先另存)`backend/data/` 內現有的 `*.db`、`*.db-wal`、`*.db-shm`,
+   **不要讓舊的 `-wal` 留在原地**,否則它可能被套用到剛還原的 `.db` 上。
+3. 把備份資料夾內的同一套檔案複製回 `backend/data/`,再重新啟動 `dev-up.bat`。
+
+〔原生路徑的備份／還原步驟為依 SQLite WAL 行為與本專案檔案配置寫成,尚未在 CEO 的 Windows 機器上演練。〕
+
+### Docker 路徑的備份與還原
+
+- `backend` 與 `scheduler` 共用具名 volume `stock-desk-data`,掛在兩邊容器的 `/app/data`。
+- **直接 `tar` 一個執行中的 WAL 資料庫,不保證是一致的快照**:tar 逐檔讀取的過程中,
+  後端或 scheduler 仍可能寫入,`.db` 與 `-wal` 可能來自不同時間點。因此二擇一:
+  1. **先停機再備份(建議)**:
+
+     ```bash
+     docker compose stop            # 在 apps/stock-desk;只停,不要 down -v
+     docker run --rm -v stock-desk-data:/data -v "$PWD":/backup alpine \
+       tar czf /backup/stock-desk-data-$(date +%Y%m%d).tar.gz -C /data .
+     docker compose start
+     ```
+
+  2. **不停機,用 SQLite 的線上備份**(`sqlite3 <db> ".backup <file>"`),每顆 DB 各做一次。
+     〔未查證:`python:3.12-slim` 映像內是否有 `sqlite3` 命令列工具,此處未實際進容器確認。〕
+     沒有 CLI 時,可改用 Python 標準庫的 `sqlite3.Connection.backup()`(此 API 已在本機對 WAL 檔實測可備份,
+     但「在容器內對 `/app/data` 下的檔案執行」這個組合未實測)。
+- 還原:`docker compose stop` 後,用同樣的 `alpine` 容器把 tar 解回 volume(`tar xzf … -C /data`),
+  並先清掉 volume 內舊的 `*.db-wal`／`*.db-shm`,理由同原生路徑;再 `docker compose start`。
+  〔還原步驟未在實際 volume 上演練〕
 - **危險操作警告**:`docker compose down -v` 或手動 `docker volume rm stock-desk-data`
   會**永久刪除**這顆 volume,連同全部持倉、設定、警示規則與快取。一般重啟/重建
   請只用 `docker compose down`(不帶 `-v`)或 `docker compose restart`。
+- 原生路徑與 Docker 路徑的資料互相獨立。要把原生的資料搬進 Docker(或反過來),
+  需把整套 `*.db` 檔放進對應位置;此搬移流程〔未查證、未演練〕。
 
 ## 本機開發(不用 Docker)
 
@@ -72,8 +142,12 @@ docker compose up --build
 ```bash
 cd apps/stock-desk/backend
 uv sync
-uv run uvicorn app.main:app --reload --port 8000
+uv run --env-file ../.env uvicorn app.main:app --reload --port 8000   # 沒有 .env 時拿掉 --env-file ../.env
 ```
+
+手動啟動 scheduler 同理(`uv run --env-file ../.env python -m app.scheduler`)。
+`uv run --env-file` 對**不存在的檔案會直接報錯**(實測 uv 0.11.32:`error: No environment file found`),
+所以 `dev-up.bat`／`dev-up.sh` 會先判斷檔案是否存在,再決定要不要帶(它們用等效的 `UV_ENV_FILE` 環境變數)。
 
 前端(Node 22 + npm):
 
@@ -114,7 +188,8 @@ npm run typecheck && npm run build
 
 ```
 apps/stock-desk/
-├── compose.yaml              # Docker Compose 設定；三個 service: backend / scheduler / frontend
+├── dev-up.bat / dev-up.sh    # 原生一鍵啟動（CEO 日常用；會讀 .env）
+├── compose.yaml              # Docker Compose 設定（選用）；三個 service: backend / scheduler / frontend
 ├── .env.example              # 環境變數範本（只放假值；實際祕密不進版管）
 ├── backend/                  # FastAPI 後端（Python 3.12 + uv）
 │   ├── app/
@@ -184,6 +259,8 @@ apps/stock-desk/
 | 變數 | 用途 | 預設 | 是否必須 |
 | --- | --- | --- | --- |
 | `STOCK_DESK_DB_PATH` | SQLite 資料庫檔路徑 | `./data/stock-desk.db`(本機直跑);Docker 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`(掛在 `stock-desk-data` volume) | 選用,但 Docker 部署下 backend / scheduler 兩邊務必指向同一路徑,見上方「資料存放與備份」 |
+| `STOCK_DESK_MARKET_DB_PATH` | 市場 DB(族群動能、PIT 快照)檔路徑 | `./data/stock-desk-market.db` | 選用 |
+| `STOCK_DESK_RESEARCH_DB_PATH` | 研究 DB 檔路徑 | `./data/stock-desk-research.db` | 選用 |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token | 無 | 選用（未設定時 FinMind adapter 回 unavailable） |
 | `ALERT_DISCORD_WEBHOOK_URL` | Discord 推播 webhook | 無 | 選用 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | Telegram bot token | 無 | 選用（需搭配 CHAT_ID） |
@@ -191,7 +268,17 @@ apps/stock-desk/
 | `SCHEDULER_DATA_INTERVAL_MINUTES` | 資料預熱改用固定間隔（分鐘）。未設定時預熱於啟動即跑一次，之後平日收盤公布後依 cron 觸發（台股 15:10／16:30／18:30 台北時間；美股紐約時間 18:30 起至 23:30 每 30 分）；值不合法時記一行 warning 並維持 cron | 無（cron） | 選用 |
 | `SCHEDULER_ALERT_INTERVAL_MINUTES` | 警示評估間隔 | 60 | 選用 |
 
-所有祕密（token、webhook）**絕不進版管**；僅透過環境變數或 `.env` 檔（已被 `.gitignore`）讀取。
+所有祕密（token、webhook）**絕不進版管**；僅透過環境變數或 `apps/stock-desk/.env`（已被 `.gitignore`）讀取。
+`.env` 實際被讀到的路徑有兩條,其餘情況(例如手動 `uv run uvicorn ...` 不帶 `--env-file`)**讀不到**:
+
+| 啟動方式 | 是否讀 `.env` | 怎麼讀 |
+| --- | --- | --- |
+| `dev-up.bat`／`dev-up.sh` | 是(本次起;檔案存在才讀,不存在照常啟動並印提示) | 設定 `UV_ENV_FILE`,後端與 scheduler 的 `uv run` 讀取;frontend 不讀 |
+| `docker compose` | 是 | `compose.yaml` 的 `env_file`(`required: false`) |
+| 手動 `uv run ...` | 只有加 `--env-file ../.env` 才讀 | 見上方「本機開發」 |
+
+應用程式本身不含任何 dotenv 載入程式碼;同名變數若已存在於系統環境,系統環境優先。
+啟動時各程序會印一行已設定／未設定狀態(不含值,`backend/app/env_status.py`)。
 
 ## 離線示範模式（`app/demo/seed.py`）
 

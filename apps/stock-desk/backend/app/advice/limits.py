@@ -442,6 +442,16 @@ GROSS_EXPOSURE_INCOMPLETE_BOOK_DETAIL = (
     "因此這條上限不計算，而不是以偏低的比率回報通過。"
 )
 
+#: Nothing is held at all: there is no holding to compare, which is a different
+#: statement from "the holdings could not be judged". Used by the per-symbol
+#: caps of the overview (:mod:`app.advice.book_limits`, which re-exports it) and
+#: by cap 3 on every surface, whose exposure ratio has no numerator on an empty
+#: book (B-16). Lives here so the risk layer does not depend on the overview.
+#: 風控核可文案,修改須重新送審(2026-08-09);空帳本第 3 條採路線(a)已核可
+#: Reused on the advice card and in alerts per the risk sign-off on B-16
+#: (2026-10-16): verbatim, with ``{name}`` taken from ``LIMIT_NAMES`` only.
+EMPTY_BOOK_DETAIL = "帳本內沒有任何持倉，{name}沒有可評估的部位，本次不計算，回報 not_evaluable。"
+
 #: FR-9 (a-附加) required disclosure, attached to every gross-exposure verdict
 #: computed from a self-reported net worth. The three sentences cover the three
 #: ways this particular ratio can mislead: its two halves come from different
@@ -810,6 +820,13 @@ class PortfolioContext(BaseModel):
     #: explicit ``True``: unknown coverage is not evidence of a complete book,
     #: and an incomplete numerator understates exposure (FR-9 (a-附加)).
     book_fully_valued: bool | None = None
+    #: How many holdings the book has, counted per ``(symbol, market)`` like the
+    #: overview's grouping. Set by both builders in :mod:`app.advice.book`;
+    #: ``0`` is the empty book, on which cap 3 has nothing in its numerator and
+    #: reports ``not_evaluable`` rather than a 0% pass (B-16). ``None`` means the
+    #: caller did not say -- a hand-assembled context -- and cap 3 then behaves
+    #: exactly as it did before the field existed.
+    book_holding_count: int | None = Field(default=None, ge=0)
     quantity: float | None = Field(default=None, ge=0.0)
     #: Latest close in the instrument's own currency (what the rules compare).
     close: float | None = Field(default=None, gt=0.0)
@@ -1272,9 +1289,11 @@ def _check_gross_exposure(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
     """Cap 3: the valued book against the net worth the user reported.
 
     The order of the guards is the order of the questions a reader would ask --
-    is there a net worth at all, is it recent enough to mean anything, is the
-    numerator complete -- and each one that fails says which input is missing
-    instead of falling through to a number. ``total_equity_twd`` is deliberately
+    is there a net worth at all, is it recent enough to mean anything, is there
+    any holding to measure, is the numerator complete -- and each one that
+    fails says which input is missing instead of falling through to a number.
+    The empty-book guard comes after the two net-worth guards so an absent or
+    expired figure keeps its own reason (B-16). ``total_equity_twd`` is deliberately
     absent from this function: FR-9 option B keeps the valued book out of cap
     3's denominator, and cap 3 out of caps 1 and 4.
     """
@@ -1290,6 +1309,15 @@ def _check_gross_exposure(budget: RiskBudget, ctx: PortfolioContext) -> CheckRes
                 reported_at=format_reported_at(net_worth.reported_at),
                 age_days=net_worth.age_days,
             ),
+            None,
+            threshold,
+        )
+    if ctx.book_holding_count == 0:
+        # B-16: no holding, so no exposure to measure -- not a 0% pass. The
+        # approved sentence alone, with the cap's own name (風控 2026-10-16).
+        return (
+            "not_evaluable",
+            EMPTY_BOOK_DETAIL.format(name=LIMIT_NAMES["gross_exposure"]),
             None,
             threshold,
         )
@@ -1650,6 +1678,9 @@ def project_position(ctx: PortfolioContext, *, share_delta: float) -> PortfolioC
     numerator. Holding equity fixed would report a sale as clearing a cap that
     the book it leaves behind still breaches. The self-reported net worth is
     left alone: it includes cash, so a trade at market price does not move it.
+    The holding count (``book_holding_count``) is not updated by the
+    projection either; an empty-book projection stays ``not_evaluable`` on
+    cap 3, so it is never treated as passed.
     """
     price = ctx.price_twd()
     if price is None:  # pragma: no cover - callers check the price first

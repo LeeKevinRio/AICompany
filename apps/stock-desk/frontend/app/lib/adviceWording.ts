@@ -200,19 +200,23 @@ export function buildCandidateCoverageStatement(
 export const CANDIDATE_QUANTITY_BASIS_NOTE = "以你目前的總資產(已估值部位市值,不含現金)與上限推導。";
 
 /**
- * FR-2 / Phase 6 放行條件 (b): the existing generic "no quantity range"
- * copy, reused verbatim everywhere `quantity_range` is absent. Do NOT
- * rewrite this to name a specific cause until risk-compliance-officer signs
- * off on the per-cause copy (AC-2.2) — see `AdviceCardView.tsx`'s identical
- * inline string, which this constant mirrors on purpose.
+ * FR-2 / Phase 6 放行條件 (b): the generic "no quantity range" details
+ * sentence. Since the risk-compliance ruling of 2026-10-26
+ * (`work/reviews/2026-10-26-遷移未執行與股數成因字面逐字審-風控.md`, 第 2 組) it is
+ * C-0: still used verbatim for every no-range card except a held plain hold
+ * (D-a) and a held add blocked by a risk cap (D-b), whose per-cause sentences
+ * live in `quantityAbsenceWording.ts`. This string itself must not change
+ * (J-4); the other causes (AC-2.1 cause field, candidate included) need their
+ * own copy drafted and sent back to risk-compliance-officer (Q-11).
  */
 export const QUANTITY_RANGE_ABSENCE_TEXT = "此建議未附帶數量區間（無法從風險上限推導）。";
 
 /**
  * wave3: the main-view short form when a card has no quantity range at all —
  * `QUANTITY_RANGE_ABSENCE_TEXT` above (the full cause sentence) moves into
- * `<details>`; this three-word short form is what stands in the main view's
- * "建議股數區間" slot instead.
+ * `<details>`; this five-character short form is what stands in the main
+ * view's 「股數參考」 cell instead. C-0 of the 2026-10-26 risk ruling: a held
+ * plain hold / blocked add prints Q-a／Q-b (`quantityAbsenceWording.ts`).
  */
 export const QUANTITY_RANGE_ABSENT_SHORT = "未提供股數";
 
@@ -228,6 +232,13 @@ export const RULE_BASIS_PREFIX = "依據：";
  * chip stands next to a headline — shorter, same meaning; `confidenceMeaning`
  * (the longer decoding sentence) already moved into `<details>` in the
  * previous batch.
+ *
+ * Orphaned since the risk remediation (CEO #59, 風控 2026-10-26 定稿 1-L): both
+ * confidence chips were removed from the screen and replaced by the standing
+ * 「未經歷史驗證」 label (`riskRemediationWording.ts`). Nothing renders this
+ * constant any more; it stays only so `adviceWording.test.ts` keeps pinning the
+ * old literal, and a test asserts no component imports it again (failure
+ * condition T2: confidence returning to the screen).
  */
 export const CONFIDENCE_PREFIX = "信心 ";
 

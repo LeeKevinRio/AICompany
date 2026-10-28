@@ -1,6 +1,7 @@
 import type { ConditionId, ConditionResult, EntryObservation } from "../../lib/entryObservation";
 import type { Bar } from "../../lib/types";
 import { PriceUnitBadge } from "./PriceUnitBadge";
+import { SkeletonBlock } from "../../components/SkeletonBlock";
 import {
   ENTRY_CONDITION_LABELS,
   ENTRY_CONDITION_THRESHOLDS,
@@ -31,8 +32,14 @@ import { DETAILS_SUMMARY_ENTRY } from "../../lib/oneLinerWording";
  *   rulings); CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
  *   §4）moved all four into `<details>` — the main view keeps only the h2, the
  *   count sentence and the six dots. E-4 is the 「資料截至：日線｜指標｜規則評估」
- *   line (風控 L-10b): always rendered, always three separate dates, no
- *   equality / collapse logic anywhere (equal dates do not mean equal data).
+ *   line (風控 L-10b): always three separate dates, no equality / collapse
+ *   logic anywhere (equal dates do not mean equal data), and never hidden on
+ *   any data value. Its single exception:
+ *   「只在三份查詢第一次載入的 pending 期間與計數一起暫不渲染（風控 2026-10-26 裁示）」
+ *   — i.e. only while
+ *   `pending` (from `isEntryObservationPending`, React Query `isPending` of the
+ *   bars / signals / advice queries) is true, E-4 is withheld together with the
+ *   count; once `pending` is false it renders unconditionally.
  * - R-15: nothing from the advice headline / confidence / disclaimer is imported.
  * Every user-facing string is a pinned constant in `entryObservationWording.ts`.
  */
@@ -95,6 +102,7 @@ export function EntryObservationPanel({
   dataAsOfDates,
   market,
   bars,
+  pending = false,
 }: {
   observation: EntryObservation;
   /** `KeyLevels.rangeBarCount` when bars are loaded (R-14: the row prints the real bar count). */
@@ -105,7 +113,24 @@ export function EntryObservationPanel({
   market?: string;
   /** The `ok` bars the trend row was computed from, or null; used only for the chip's currency check. */
   bars: readonly Bar[] | null;
+  /**
+   * True while any of the three source queries is still on its first load
+   * (`isEntryObservationPending`). The panel then shows its title and a
+   * skeleton only — no count, no dots, no per-row verdict, and no E-1 / E-4
+   * (風控 2026-10-26 裁示: E-4 is withheld together with the count) — because a
+   * condition whose payload has not arrived yet is not undecidable, it is
+   * unanswered. Same pending convention as the advice card section.
+   */
+  pending?: boolean;
 }) {
+  if (pending) {
+    return (
+      <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE} aria-busy="true">
+        <h2 className="text-lg font-semibold text-neutral-100">{ENTRY_PANEL_TITLE}</h2>
+        <div className="mt-3"><SkeletonBlock className="h-16 w-full" /></div>
+      </section>
+    );
+  }
   const showPriceUnit = observation.conditions.some(printsPriceValues);
   return (
     <section className="mt-6 rounded-lg border border-neutral-800 p-4" aria-label={ENTRY_PANEL_TITLE}>
@@ -135,7 +160,10 @@ export function EntryObservationPanel({
       {/*
         CEO 第二次裁定 2026-09-19（`work/stock-desk-一眼一句簡化-派工單.md`
         §4）：E-1 與資料截至句（E-4）一律收進 `<details>`，字面不動——主視圖只留
-        h2＋計數句＋六圓點。E-4 不得被任何條件包住（風控 L-10b）。
+        h2＋計數句＋六圓點。E-4 is not wrapped in any condition here (風控 L-10b):
+        「只在三份查詢第一次載入的 pending 期間與計數一起暫不渲染（風控 2026-10-26 裁示）」
+        — the `if (pending)` early return above is the only branch that
+        withholds it, and it withholds the count with it.
       */}
 
       <details className="group mt-3">

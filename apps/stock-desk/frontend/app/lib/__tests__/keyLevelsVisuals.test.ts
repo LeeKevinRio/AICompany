@@ -63,7 +63,8 @@ describe("ladder", () => {
       "recent-low60",
     ]);
     const byId = Object.fromEntries(vm.rungs.map((r) => [r.id, r]));
-    expect(byId["target-2r"]!.isHeadline).toBe(true);
+    // 字面更新（風控 2026-10-26 定稿 C-11）：停利大字已移出主視圖，target-2r 不再對應任何大字。
+    expect(byId["target-2r"]!.isHeadline).toBe(false);
     expect(byId["target-fixed"]!.isHeadline).toBe(false);
     expect(byId["stop-atr"]!.isHeadline).toBe(true);
     expect(byId["stop-fixed"]!.isHeadline).toBe(false);

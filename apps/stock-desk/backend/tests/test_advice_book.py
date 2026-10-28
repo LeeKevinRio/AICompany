@@ -565,10 +565,12 @@ def test_unclassified_holdings_are_disclosed_as_a_possible_understatement() -> N
     note = next(note for note in book.notes if "未填產業別" in note)
     # The count alone hides the size of the hole, so the risk-approved sentence
     # carries the market value and its share of equity as well (50,000 of the
-    # 600,000 book -- ``_summary`` fixes the total at 600,000).
+    # 650,000 book). Equity is summed from the valued rows (T1-12), not read
+    # from ``_summary``'s hand-written 600,000 total, so the share is the one a
+    # real book -- whose total always equals that sum -- would show.
     assert "1 筆" in note
     assert "50,000 元" in note
-    assert "8.33%" in note
+    assert "7.69%" in note
     # And it says what an understated ratio does to a ``passed`` verdict.
     assert "通過判定" in note
 
@@ -576,10 +578,14 @@ def test_unclassified_holdings_are_disclosed_as_a_possible_understatement() -> N
 def test_the_understatement_disclosure_is_dropped_without_a_denominator() -> None:
     # A share of nothing is not a number. Unreachable in practice (an
     # unclassified valued row is itself part of equity), and the equity-based
-    # caps report ``not_evaluable`` here anyway.
+    # caps report ``not_evaluable`` here anyway. Equity is the sum of the
+    # valued rows (T1-12), so the zero denominator comes from zero-quantity
+    # rows: the unclassified row is still counted, its share has no base.
+    # ``market_value="0"`` only keeps the fixture's hand-written total in step;
+    # it no longer drives the denominator.
     summary = _summary(
-        _position(1, "2330", sector="半導體業"),
-        _position(2, "2317", quantity="500", price="100"),
+        _position(1, "2330", sector="半導體業", quantity="0"),
+        _position(2, "2317", quantity="0", price="100"),
         market_value="0",
     )
     book = build_book_context(summary, symbol="2330", close=600.0, currency="TWD")

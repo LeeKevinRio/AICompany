@@ -52,5 +52,10 @@ export const EQUITY_CURVE_ARIA_LABEL_SINGLE_SEGMENT = "策略與 Buy & Hold 權�
 /** 風控 REQ-5: states the checked fact (neither segment has both series >= 2 bars) without naming a culprit series. */
 export const EQUITY_CURVE_EMPTY_STATEMENT = "本次回測樣本內外皆無足夠的每日權益資料，故無法繪製曲線圖。";
 
-/** Restates the report-level standing disclaimer that sits directly above the chart. */
-export const EQUITY_CURVE_GUIDANCE = "本圖同上方提醒：僅為歷史統計描述，不代表未來會重演。";
+/**
+ * Restates the report-level standing disclaimer that sits directly above the chart.
+ * 風控 2026-10-26 定稿 5-BT 圖說（舊句「本圖同上方提醒：僅為歷史統計描述，不代表未來會重演。」
+ * 補上成交與滑價假設）；失效條件 T5，須與 `riskRemediationWording.ts` 的 5-BT 標題與各點同批改寫。
+ */
+export const EQUITY_CURVE_GUIDANCE =
+  "本圖同上方提醒：僅為歷史統計描述，不代表未來會重演；成交與滑價假設見上方。";

@@ -156,6 +156,30 @@ export function evaluateEntryObservation(
   };
 }
 
+/**
+ * Whether the six conditions must wait instead of being counted.
+ *
+ * The three payloads (bars, signals, advice) are separate queries that land at
+ * different times — on a cold backend `/api/signals` also fetches the benchmark
+ * index and routinely arrives seconds after `/api/bars`. A query still on its
+ * first load has no `data`, so `evaluateEntryObservation` would read it as
+ * "unavailable" and the panel would print a count ("6 條中成立 3 條，其中 2 條
+ * 無法判定") that is not a property of the data at all but of the arrival
+ * order, and that flips once the slow query lands. Undecidable must mean "the
+ * data cannot answer", never "the answer has not arrived yet".
+ *
+ * `isPending` is React Query's "no data yet" state, which also covers the
+ * retry window of a first load. A settled query (success, or error after its
+ * retries) is not pending: its data is final for this page view and a
+ * condition it cannot answer is genuinely undecidable. A background refetch
+ * of already-loaded data is not pending either, so the count never blinks.
+ */
+export function isEntryObservationPending(
+  queries: readonly { readonly isPending: boolean }[],
+): boolean {
+  return queries.some((query) => query.isPending);
+}
+
 /** Whether a price sits inside the MA20 ±3% band (used by the ladder's 觀察區 marking). */
 export function isInObservationBand(price: number, band: EntryObservation["observationBand"]): boolean {
   return band !== null && price >= band.low && price <= band.high;

@@ -254,13 +254,17 @@ export type ChangeMode = "close_only" | "may_include_intraday";
 
 export type SummaryStatus = "complete" | "partial" | "no_data";
 
-/** Backend `Totals`. */
+/**
+ * Backend `Totals`. The five amounts are null iff status is `no_data` (the
+ * empty book included): no total exists, and null is never to be read as 0
+ * (T1-12, ADR-0025 D-12).
+ */
 export interface PortfolioTotals {
-  cost_twd: string;
-  market_value_twd: string;
-  unrealized_pnl_twd: string;
-  asset_contribution_twd: string;
-  fx_contribution_twd: string;
+  cost_twd: string | null;
+  market_value_twd: string | null;
+  unrealized_pnl_twd: string | null;
+  asset_contribution_twd: string | null;
+  fx_contribution_twd: string | null;
   status: SummaryStatus;
 }
 

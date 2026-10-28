@@ -37,9 +37,10 @@ import {
   CANDIDATE_SUPPORTIVE_DISCLAIMER,
   HELD_ACTION_LABELS,
   NON_REALTIME_NOTICE,
-  QUANTITY_RANGE_ABSENCE_TEXT,
 } from "./adviceWording";
 import { isDataStaleByTradingDays } from "./tradingCalendar";
+import { QUANTITY_ABSENCE_TEXT_BY_CAUSE, resolveQuantityAbsenceCause } from "./quantityAbsenceWording";
+import type { QuantityAbsenceCause } from "./quantityAbsenceWording";
 
 /**
  * The eight elements §2 of the wording brief requires on every rendered
@@ -69,7 +70,22 @@ export interface RequiredElements {
   rulesStatement: string;
   /** §2.7 — exactly one of the two is non-null */
   quantityRangeText: string | null;
+  /**
+   * The details sentence when there is no quantity range, chosen by
+   * `quantityAbsenceCause` (風控 2026-10-26 股數成因 D-a／D-b／C-0).
+   */
   quantityAbsenceReason: string | null;
+  /**
+   * 風控 2026-10-26 股數成因 J-2: the card's `blocked_action`, passed through
+   * untouched. Together with `action` it is the only input of the cause.
+   */
+  blockedAction: string | null;
+  /**
+   * `resolveQuantityAbsenceCause(kind, quantity_range, action, blocked_action)`;
+   * null exactly when the card has a quantity range. Drives both the decision
+   * card's 「股數參考」 cell text and `quantityAbsenceReason`.
+   */
+  quantityAbsenceCause: QuantityAbsenceCause | null;
   /**
    * 個股頁減負批次 4 (`work/stock-desk-一眼一句-實作規格.md` §2.3 第 4 點):
    * `quantityRangeText` above bundles "{min} ~ {max} 股" together with the
@@ -101,6 +117,11 @@ export interface HeldSummary {
    * came from no rule at all (risk review 2026-10-03).
    */
   topMatchedRule: { name: string; explanation: string } | null;
+  /**
+   * The `id` of `topMatchedRule` (`null` exactly when `topMatchedRule` is). Kept as its own field so the
+   * drawdown notice (risk remediation 4-appendix, C-12) can match by rule id, never by wording.
+   */
+  topMatchedRuleId: string | null;
   /**
    * Whether the summary's confidence chip renders. `false` when the conclusion
    * was downgraded or capped (action !== aggregated_action, including a null
@@ -191,6 +212,13 @@ export function isConclusionFromRules(card: AdviceCard): boolean {
  * below) or when no matched rule proposes the card's action: no basis is
  * quoted rather than one pointing the other way.
  */
+function pickTopMatchedRuleId(card: AdviceCard): string | null {
+  if (!isConclusionFromRules(card)) {
+    return null;
+  }
+  return pickRuleForAction(card.matched_rules, card.action)?.id ?? null;
+}
+
 function pickTopMatchedRule(card: AdviceCard): { name: string; explanation: string } | null {
   // Risk review 2026-10-03 (limited re-review): when the conclusion was
   // downgraded or capped (action !== aggregated_action, including a null
@@ -259,6 +287,12 @@ function buildRequiredElements(
         `${card.quantity_range.max_shares.toLocaleString("zh-Hant-TW")} 股`;
   const quantityRangeText =
     card.quantity_range === null ? null : `${quantityRangeShares}。${card.quantity_range.basis}`;
+  const quantityAbsenceCause = resolveQuantityAbsenceCause(
+    candidate ? "candidate" : "held",
+    card.quantity_range,
+    card.action,
+    card.blocked_action,
+  );
 
   return {
     disclaimer: card.disclaimer,
@@ -284,7 +318,9 @@ function buildRequiredElements(
     invalidationConditions: card.invalidation_conditions,
     rulesStatement: buildRulesStatement(card.rules_version),
     quantityRangeText,
-    quantityAbsenceReason: quantityRangeText === null ? QUANTITY_RANGE_ABSENCE_TEXT : null,
+    quantityAbsenceReason: quantityAbsenceCause === null ? null : QUANTITY_ABSENCE_TEXT_BY_CAUSE[quantityAbsenceCause],
+    blockedAction: card.blocked_action,
+    quantityAbsenceCause,
     quantityRangeShares,
     quantityRangeBasis: card.quantity_range === null ? null : card.quantity_range.basis,
     candidateEvidenceNotice: candidate ? CANDIDATE_EVIDENCE_NOTICE : null,
@@ -380,6 +416,7 @@ export function buildOperationSummary(
     attributedHeadline: buildAttributedHeadline(card.action),
     action: card.action,
     topMatchedRule: pickTopMatchedRule(card),
+    topMatchedRuleId: pickTopMatchedRuleId(card),
     showConfidence: isConclusionFromRules(card),
     restoresComplianceWarning,
     staleDataNotice,
