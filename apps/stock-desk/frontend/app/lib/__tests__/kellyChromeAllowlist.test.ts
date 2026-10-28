@@ -17,6 +17,13 @@
  * the build — a chrome exemption can never again slip in silently the way
  * `KellyImportDialog.tsx`'s own `"未知錯誤"` fallback did before this round
  * named it (條件 106's explicit instruction: "chrome 豁免不得默默例外").
+ *
+ * N-151 discipline (風控 2026-10-26 `第1條下修第一批四項裁定` 第一節): adding,
+ * widening or rewriting any entry below needs risk-compliance's prior
+ * authorisation. Entries are matched by content, never by line number. The
+ * pre-sunset Kelly lead was removed under that ruling's one-off authorisation;
+ * the sunset lead (#3) is not chrome and must not be added — it lives in
+ * `lib/cap1SunsetWording.ts` and is pinned by `kellyGuidanceSentencePairing.test.ts`.
  */
 
 import { readFileSync } from "node:fs";
@@ -34,34 +41,31 @@ const ALLOWLIST: Record<string, readonly string[]> = {
   "../../settings/KellyInputsSection.tsx": [
     // Longer/more specific contexts listed *before* shorter ones they
     // overlap with ("Kelly 輸入" is a substring of both the heading and the
-    // L118 error label below) — `chineseLiteralsOutsideAllowlist` masks in
+    // ErrorPanel label below) — `chineseLiteralsOutsideAllowlist` masks in
     // array order, so the specific match must be consumed first or the
     // shorter entry would eat it and break the longer entry's own lookup.
     //
-    // L118 — ErrorPanel label prop, 逐字同構 the "無法載入 X" pattern already
+    // The `ErrorPanel` label prop, 逐字同構 the "無法載入 X" pattern already
     // shipped across this app's other `ErrorPanel`/`isError` call sites
     // (e.g. settings/page.tsx's own "無法載入設定").
     'label="無法載入 Kelly 輸入"',
-    // L73 — 條件 107's own guidance sentence (see the dedicated pairing test
-    // below); listed here too so this file's overall scan has no gap.
-    "第 5 條「分數 Kelly 部位上限」使用的 win_rate／payoff_ratio 輸入：手動輸入，或從一次回測帶入。",
-    // L71 — section heading, same register as every other settings section's
+    // The section's `<h2>`, same register as every other settings section's
     // own <h2> (NetWorthSection.tsx "帳戶總淨值" etc.), 條件 106 准.
     "Kelly 輸入",
-    // L79/L92 — field labels, 逐字同構 ManualAddForm.tsx's own FIELD_LABELS
+    // The symbol/market field labels, 逐字同構 ManualAddForm.tsx's own FIELD_LABELS
     // ("股票代號"/"市場" for the same symbol/market picker fields).
     "股票代號",
     "市場",
-    // L87 — SymbolCombobox placeholder, 逐字同構 every other symbol picker in
+    // The `SymbolCombobox` placeholder, 逐字同構 every other symbol picker in
     // this app (ManualAddForm.tsx, BacktestForm.tsx: `placeholder="例如 2330"`).
     'placeholder="例如 2330"',
-    // L111 — submit-a-lookup button, no prior "查詢" button exists verbatim
+    // The submit-a-lookup button, no prior "查詢" button exists verbatim
     // elsewhere in this app but the word carries no methodology/advice
     // content (chrome 判準 (ii)) and 條件 106 准 this字面 explicitly.
     "查詢",
   ],
   "../../settings/KellyManualInputForm.tsx": [
-    // L149 — submit button, 逐字同構 every other settings-page submit button's
+    // The submit button, 逐字同構 every other settings-page submit button's
     // pending/idle pair (NetWorthSection.tsx "更新中…"/"更新帳戶總淨值" shape;
     // subject-only difference per chrome 判準 (i)).
     'updateMutation.isPending ? "儲存中…" : "儲存"',

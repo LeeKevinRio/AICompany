@@ -637,6 +637,12 @@ REJECTED_LITERALS: tuple[tuple[str, str, str], ...] = (
     # comments and test assertion strings alike. Only ``work/reviews/`` may keep
     # the historical quotation, and it is outside every scan in this file.
     ("(任務 6 前端半邊) C8 撤銷", "勝率（依結算筆數計）", "shipped"),
+    # 風控 2026-10-26「第1條下修第一批四項裁定」第一節 3(b): two former 定稿 that
+    # are now untrue, revoked into the zero-occurrence guard like 任務 8 and C8.
+    # The 條件 107 lead's second half is false while plan D freezes new input;
+    # the old 1-4 claimed advice cards keep the old cap, and they are not stored.
+    ("(條件 107) 2026-10-26 方案 D 撤換", "手動輸入，或從一次回測帶入", "shipped"),
+    ("(第1條下修 1-4) 2026-10-26 撤銷", "警示和卡片保留當時的", "shipped"),
 )
 
 #: 第八輪 條件 61, six literals banned from the 欄位 11 block.
@@ -701,6 +707,10 @@ KELLY_SURFACE = (
     "frontend/app/settings/KellyDeleteDialog.tsx",
     "frontend/app/settings/KellyManualInputForm.tsx",
     "frontend/app/lib/kellyFieldError.ts",
+    # 風控 2026-10-26 四項裁定 第一節 3(a): the sunset lead (#3) moved into this
+    # module, and the S2 notice's 1-2 names cap 5 in full.
+    "frontend/app/lib/cap1SunsetWording.ts",
+    "backend/app/settings/migrations.py",
 )
 
 
@@ -907,7 +917,8 @@ def test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to() -> No
     # static, so a renamed component would otherwise drop out of the scan in
     # silence and take its scope's guards with it.
     front_end = tuple(entry for entry in KELLY_SURFACE if entry.startswith("frontend/"))
-    assert len(front_end) == 7
+    # 8 since 風控 2026-10-26 四項裁定 3(a) added ``lib/cap1SunsetWording.ts``.
+    assert len(front_end) == 8
     for entry in front_end:
         assert (_STOCK_DESK_ROOT / entry).is_file(), entry
         assert entry in surface, entry
