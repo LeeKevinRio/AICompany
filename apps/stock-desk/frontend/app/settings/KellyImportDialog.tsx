@@ -346,7 +346,7 @@ export function KellyImportDialog({
         aria-label={triggerLabel}
         onClick={() => void handleTriggerClick()}
         disabled={writesPaused || mutation.isPending || spec.start === "" || spec.end === ""}
-        className="mt-3 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-3 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-100"
       >
         {triggerLabel}
       </button>

@@ -1699,6 +1699,9 @@ def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> Non
         (name, literal) for name, literal, kind, _ in KELLY_LABEL_ALLOWLIST if kind == "embedded"
     }
     assert embedded == set(KELLY_LABEL_EMBEDDING_ANCHORS), embedded
+    # Exactly one anchor today; adding another needs N-151 prior authorisation
+    # from risk-compliance (新增須 N-151 事前授權).
+    assert len(KELLY_LABEL_EMBEDDING_ANCHORS) == 1
     for name, literal, kind, _ in KELLY_LABEL_ALLOWLIST:
         assert kind in _LABEL_ALLOWLIST_KINDS, (name, literal, kind)
         text = (_STOCK_DESK_ROOT / name).read_text(encoding="utf-8")

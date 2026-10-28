@@ -19,7 +19,8 @@ import type { BookLimitCheck, LimitStatus } from "./types";
 
 /**
  * Mirrors `KELLY_STALE_AFTER_DAYS` in `app/kelly/models.py` and
- * `app/advice/limits.py`; `tests/test_cap1_sunset_frontend.py` on the backend
+ * `app/advice/limits.py`; the backend test
+ * `tests/test_kelly_freeze.py::test_the_sunset_lead_interpolates_the_same_staleness_window`
  * reads this file and fails if the three drift apart. Interpolated into the
  * lead, never written into it (實作約束 1).
  */

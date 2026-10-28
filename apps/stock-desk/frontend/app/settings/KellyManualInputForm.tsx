@@ -176,7 +176,7 @@ export function KellyManualInputForm({
           <button
             type="submit"
             disabled={updateMutation.isPending || writesPausedLabel !== null}
-            className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-100"
           >
             {writesPausedLabel ?? (updateMutation.isPending ? "儲存中…" : "儲存")}
           </button>
