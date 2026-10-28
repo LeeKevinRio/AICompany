@@ -693,6 +693,16 @@ FIELD_11_CASES: tuple[tuple[str, str], ...] = (
 #: ``LimitsCheckList.tsx`` is here because cap 5's details land there.
 #:
 #: The rule for adding one: any file that renders, forwards or holds Kelly copy.
+#: Before authorising an addition (anyone, risk-compliance included), check it
+#: against every user of :func:`_kelly_surface_sources`, not only the first one
+#: (風控 2026-10-28 N-151 標籤掃描授權與 #70 D-2 改寫, 第一項第 5 點):
+#: ``test_a_rejected_draft_survives_nowhere_in_the_shipped_source`` (the
+#: ``kelly``-scoped rejected literals),
+#: ``test_the_refused_trigger_label_survives_only_at_its_one_approved_source``
+#: (.py files only), ``test_every_allowlisted_line_still_exists`` (the delete
+#: wording allowlist must stay outside the surface) and
+#: ``test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface`` (the
+#: short-label scan).
 #: ``test_the_rejected_literal_scan_actually_reads_the_files_it_claims_to``
 #: asserts the front-end members resolve, so a rename cannot silently empty this
 #: list.
@@ -1597,13 +1607,22 @@ def test_no_approved_kelly_sentence_has_been_copied_into_the_front_end() -> None
         assert offenders == [], f"({item}) 的字面出現在前端 {offenders}"
 
 
-#: The one collateral hit of the short-label scan below, listed the way every
-#: other narrowing in this file is (檔案+來源行+出處). 「策略」 is FR-5 欄位 1's
-#: label *and* the ordinary word for the field a user picks a strategy in; the
-#: occurrence below is the second, on the import spec form, whose chrome the
-#: fourteenth round cleared as 同構 with the existing register and carrying no
-#: methodological claim. A second occurrence, or one in any other file, is a red
-#: light -- that would be the detail table's label being rebuilt in the client.
+#: The collateral hits of the short-label scan below, listed the way every other
+#: narrowing in this file is (檔案+字面+kind+出處). Each entry is one of a closed
+#: set of kinds, and the loop at the end of the scan verifies each kind's own
+#: criterion:
+#:
+#: * ``chrome`` -- 「策略」 is FR-5 欄位 1's label *and* the ordinary word for the
+#:   field a user picks a strategy in; the occurrence is on the import spec
+#:   form, whose chrome the fourteenth round cleared as 同構 with the existing
+#:   register and carrying no methodological claim.
+#: * ``commentary`` -- the literal sits in a doc comment, never in rendered copy.
+#: * ``embedded`` -- the literal occurs only inside a longer risk-finalised
+#:   sentence pinned verbatim elsewhere (see
+#:   :data:`KELLY_LABEL_EMBEDDING_ANCHORS`).
+#:
+#: A second occurrence, an unknown kind, or an occurrence in any other file is a
+#: red light -- that would be a backend label being rebuilt in the client.
 KELLY_LABEL_ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     (
         "frontend/app/settings/KellyImportDialog.tsx",
@@ -1618,7 +1637,31 @@ KELLY_LABEL_ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "收官合審 non-blocking 1：doc comment 引用該鍵字面，說明 window.confirm "
         "為何無法渲染核可按鈕（條件 112）；非渲染字面",
     ),
+    (
+        "frontend/app/lib/cap1SunsetWording.ts",
+        "已暫停",
+        "embedded",
+        "風控 2026-10-28 N-151 授權：#3 日落導語「新增與修改已暫停」中的謂語，"
+        "非控制項標籤；兩顆暫停控制項的標籤仍由後端 writes_paused_label 逐字下發；"
+        "5-K 依 R-2 撤換導語時，本條目與其錨點須同 PR 刪除",
+    ),
 )
+
+#: kind ``"embedded"`` (風控 2026-10-28 N-151 授權): the label's characters occur
+#: only inside a longer risk-finalised sentence the front end holds verbatim,
+#: never as a string of their own. Each entry names an anchor -- a substring of
+#: that sentence, at least ``_LABEL_LENGTH`` long, carrying the literal exactly
+#: once and at neither end -- and the test file that pins the whole sentence
+#: verbatim. The exemption lasts exactly as long as both stay true.
+KELLY_LABEL_EMBEDDING_ANCHORS: dict[tuple[str, str], tuple[str, str]] = {
+    ("frontend/app/lib/cap1SunsetWording.ts", "已暫停"): (
+        "新增與修改已暫停（手填與從回測帶入皆同）；刪除仍可使用。",
+        "frontend/app/lib/__tests__/kellyGuidanceSentencePairing.test.ts",
+    ),
+}
+
+#: The closed set of kinds the loop below knows how to verify.
+_LABEL_ALLOWLIST_KINDS = frozenset({"chrome", "commentary", "embedded"})
 
 
 def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> None:
@@ -1652,14 +1695,29 @@ def test_no_approved_kelly_label_has_been_copied_onto_the_kelly_surface() -> Non
     # exemption nobody needs. Each entry also has to still be the *kind* of
     # occurrence it was granted for -- a doc comment that turned into rendered
     # copy would otherwise keep its exemption.
+    embedded = {
+        (name, literal) for name, literal, kind, _ in KELLY_LABEL_ALLOWLIST if kind == "embedded"
+    }
+    assert embedded == set(KELLY_LABEL_EMBEDDING_ANCHORS), embedded
     for name, literal, kind, _ in KELLY_LABEL_ALLOWLIST:
+        assert kind in _LABEL_ALLOWLIST_KINDS, (name, literal, kind)
         text = (_STOCK_DESK_ROOT / name).read_text(encoding="utf-8")
         assert text.count(literal) == 1, (name, literal)
         (line,) = [row.strip() for row in text.splitlines() if literal in row]
         if kind == "commentary":
             assert line.startswith(("*", "//", "/*")), (name, line)
-        else:
+        elif kind == "chrome":
             assert 'htmlFor="kelly-import-strategy"' in text
+        else:
+            anchor, pin = KELLY_LABEL_EMBEDDING_ANCHORS[(name, literal)]
+            assert len(anchor) >= _LABEL_LENGTH, anchor
+            assert anchor.count(literal) == 1, anchor
+            assert not anchor.startswith(literal) and not anchor.endswith(literal), anchor
+            assert anchor in line and text.count(anchor) == 1, (name, anchor)
+            assert not line.startswith(("*", "//", "/*")), (name, line)
+            assert "/__tests__/" in pin, pin
+            pinned = (_STOCK_DESK_ROOT / pin).read_text(encoding="utf-8")
+            assert pinned.count(anchor) == 1, (pin, anchor)
 
 
 def test_the_shared_forbidden_term_list_was_not_touched() -> None:
