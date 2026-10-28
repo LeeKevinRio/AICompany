@@ -44,7 +44,7 @@ from typing import Final, Literal
 
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.interface import DividendAnnounceObservation
-from app.data.sqlite_util import enable_wal
+from app.data.sqlite_util import add_missing_columns, enable_wal
 from app.dividends.models import DividendEvent
 from app.positions.models import Market
 
@@ -189,15 +189,12 @@ class DividendEventStore:
     def _migrate_add_stock_dividend_ratio_column(self, conn: sqlite3.Connection) -> None:
         """Add ``stock_dividend_ratio`` in place for a table created before it existed.
 
-        ``PRAGMA table_info`` first, since ``ALTER TABLE ... ADD COLUMN``
-        errors on a column that is already there (which it always is for a
-        table this ``__init__`` just created via ``_CREATE_TABLE_SQL``).
+        A no-op for a table this ``__init__`` just created via
+        ``_CREATE_TABLE_SQL``, which already declares it. Goes through
+        :func:`add_missing_columns` so the backend and the sync running in the
+        scheduler process can open the same legacy file at once (N-154).
         """
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}
-        if _STOCK_DIVIDEND_RATIO_COLUMN not in columns:
-            conn.execute(
-                f"ALTER TABLE dividend_events ADD COLUMN {_STOCK_DIVIDEND_RATIO_COLUMN} TEXT"
-            )
+        add_missing_columns(conn, "dividend_events", {_STOCK_DIVIDEND_RATIO_COLUMN: "TEXT"})
 
     def upsert(
         self,

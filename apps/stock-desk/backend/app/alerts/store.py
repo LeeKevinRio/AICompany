@@ -23,7 +23,7 @@ from typing import Any
 
 from app.alerts.models import AlertEvent, AlertRule, AlertRuleInput
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
-from app.data.sqlite_util import enable_wal
+from app.data.sqlite_util import add_missing_columns, enable_wal
 
 _CREATE_RULES_SQL = """
 CREATE TABLE IF NOT EXISTS alert_rules (
@@ -50,14 +50,17 @@ CREATE TABLE IF NOT EXISTS alert_events (
     observed TEXT NOT NULL,
     triggered_at TEXT NOT NULL,
     acknowledged INTEGER NOT NULL DEFAULT 0,
-    acknowledged_at TEXT
+    acknowledged_at TEXT,
+    bar_as_of TEXT
 )
 """
 
 #: Date of the latest bar the event was evaluated on. Internal: it only lets the
 #: engine tell "the same observation again" from a new one, so it is not part
 #: of :class:`AlertEvent`. Added after the table shipped, hence nullable and
-#: migrated in place (:meth:`AlertStore._migrate_add_bar_as_of_column`).
+#: migrated in place (:meth:`AlertStore._migrate_add_bar_as_of_column`); also
+#: declared last in ``_CREATE_EVENTS_SQL``, where the migration would have put
+#: it, so a fresh database needs no ``ALTER`` at all.
 _BAR_AS_OF_COLUMN = "bar_as_of"
 
 _CREATE_EVENT_INDEX_SQL = """
@@ -122,14 +125,15 @@ class AlertStore:
     def _migrate_add_bar_as_of_column(self, conn: sqlite3.Connection) -> None:
         """Add ``bar_as_of`` in place for an ``alert_events`` table created before it.
 
-        ``PRAGMA table_info`` first, since ``ALTER TABLE ... ADD COLUMN`` errors
-        on a column that is already there. Rows written before the column
-        existed keep ``NULL``, which never matches a real bar date, so the first
-        evaluation after an upgrade is not mistaken for a repeat.
+        Rows written before the column existed keep ``NULL``, which never
+        matches a real bar date, so the first evaluation after an upgrade is
+        not mistaken for a repeat. Goes through :func:`add_missing_columns`:
+        the first page load builds this store from several request threads at
+        once (and the scheduler process opens the same file), and a bare
+        ``PRAGMA``-then-``ALTER`` let the loser fail with ``duplicate column
+        name`` (N-154).
         """
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(alert_events)")}
-        if _BAR_AS_OF_COLUMN not in columns:
-            conn.execute(f"ALTER TABLE alert_events ADD COLUMN {_BAR_AS_OF_COLUMN} TEXT")
+        add_missing_columns(conn, "alert_events", {_BAR_AS_OF_COLUMN: "TEXT"})
 
     # --- Rules ---------------------------------------------------------------
 

@@ -345,21 +345,44 @@ class RunIdVerifier(SourceTallyReader, Protocol):
 LEGACY_SOURCE_COLUMN: Final = "source_run_ids"
 
 
+def _has_legacy_stats_table(conn: sqlite3.Connection) -> bool:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
+    return LEGACY_SOURCE_COLUMN in columns
+
+
 def _legacy_stats_rows(conn: sqlite3.Connection) -> int | None:
     """Rows of a pre-v9 ``sector_rank_stats``; an empty one is dropped for a rebuild.
 
     ``None`` when the table is absent, current, or was empty and dropped. With
     rows it is left untouched: C-50 forbids an automatic migration.
+
+    The count and the drop run inside one ``BEGIN IMMEDIATE`` with the check
+    repeated under the write lock, like
+    :func:`app.data.sqlite_util.add_missing_columns`: two connections opening
+    the same legacy file at once (the backend and the scheduler process) could
+    otherwise both decide "empty, drop it", and the loser's ``COUNT`` / ``DROP``
+    then hit "no such table" -- or, worse, dropped the table the winner had
+    just recreated (N-154). Must be called outside any open transaction; a
+    current database costs one ``PRAGMA`` and no lock.
     """
-    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(sector_rank_stats)")}
-    if LEGACY_SOURCE_COLUMN not in columns:
+    if not _has_legacy_stats_table(conn):
         return None
-    (count,) = conn.execute("SELECT COUNT(*) FROM sector_rank_stats").fetchone()
-    if int(count) == 0:
-        # Its index and triggers go with it; _SCHEMA / _TRIGGERS recreate all three.
-        conn.execute("DROP TABLE sector_rank_stats")
-        return None
-    return int(count)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows: int | None = None
+        if _has_legacy_stats_table(conn):  # another connection may have dropped it
+            (count,) = conn.execute("SELECT COUNT(*) FROM sector_rank_stats").fetchone()
+            if int(count) == 0:
+                # Its index and triggers go with it; _SCHEMA / _TRIGGERS recreate all three.
+                conn.execute("DROP TABLE sector_rank_stats")
+            else:
+                rows = int(count)
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    return rows
 
 
 def _legacy_message(rows: int) -> str:

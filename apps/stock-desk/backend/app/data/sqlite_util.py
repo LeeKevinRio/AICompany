@@ -4,12 +4,14 @@ A leaf module (ADR-0012 v10): it imports only the standard library -- no
 ``app.*`` module, no environment or configuration -- so any store may take
 :func:`enable_wal` from here without reaching another store's database path or
 tables. Each database keeps its own ``busy_timeout`` policy; this module sets
-none and opens no connection.
+none and opens no connection. :func:`add_missing_columns` is the shared
+in-place column migration, safe against every other connection on the file.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from time import monotonic, sleep
 from typing import Final
 
@@ -71,3 +73,57 @@ def enable_wal(conn: sqlite3.Connection) -> None:
         raise sqlite3.OperationalError(
             f"could not switch the database to WAL journal mode; it stayed in {mode!r}"
         )
+
+
+def _missing_columns(conn: sqlite3.Connection, table: str, columns: Mapping[str, str]) -> list[str]:
+    """Names in ``columns`` the live ``table`` does not have, in ``columns`` order."""
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    return [column for column in columns if column not in existing]
+
+
+def add_missing_columns(conn: sqlite3.Connection, table: str, columns: Mapping[str, str]) -> None:
+    """``ALTER TABLE table ADD COLUMN`` each of ``columns`` (name -> definition) it lacks.
+
+    For a table created by ``CREATE TABLE IF NOT EXISTS`` before some columns
+    were declared: the statement leaves an existing table as it is, so the
+    columns are added in place, which SQLite can do for a nullable column or
+    one with a constant default.
+
+    Safe when several connections -- threads of one process, or the backend
+    and the scheduler as two processes -- construct a store on the same file
+    at once, which a bare ``PRAGMA``-then-``ALTER`` is not: SQLite runs DDL
+    outside the implicit transaction Python's sqlite3 opens for DML, so two
+    of them could both read "column missing" and the loser's ``ALTER`` failed
+    with ``duplicate column name`` (N-154). So the work runs inside one
+    ``BEGIN IMMEDIATE``: the write lock is taken up front (waiting out the
+    connection's ``busy_timeout``), the schema is re-read *under* it, and the
+    loser of a race finds nothing left to add. The columns are also added
+    atomically -- a failure part-way rolls every one of them back.
+
+    A table that already has every column costs one ``PRAGMA`` and no lock, so
+    this is cheap on every store construction. Every error is raised: a
+    missing table, a lock still held past ``busy_timeout``, an invalid
+    definition -- a migration that silently did nothing would be worse than a
+    loud failure.
+
+    ``table`` and the column names and definitions are interpolated into SQL,
+    so they must be the caller's own constants, never user input. Must be
+    called outside any open transaction (true in a store's schema set-up,
+    where everything before it is a PRAGMA or DDL).
+    """
+    if not _missing_columns(conn, table, columns):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Empty when another connection finished while this one waited at
+        # BEGIN; COMMIT anyway so the write lock is released here, not at
+        # whatever later point the caller ends its work.
+        for column in _missing_columns(conn, table, columns):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {columns[column]}")
+        conn.execute("COMMIT")
+    except BaseException:
+        # SQLite may already have rolled back on its own (a full disk, say);
+        # a second ROLLBACK would then replace the real error with its own.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
