@@ -3,12 +3,15 @@
 D-1 asks for a two-way recomputation -- a shrinking book lowers TOTAL_DEPLOY,
 not only a growing one raises it -- and for an overshoot to be stated instead of
 absorbed. D-2 asks the locked value to carry a timestamp and the source that
-wrote it, and adds a guard that a playbook line can never size a position past
-the caps in ``app/advice/limits.py``.
+wrote it.
 
-The last test is deliberately cross-package: the two engines share no code, but
-they do share one user, and a 14% batch that the advice side would refuse at 15%
-would be a policy contradiction on the same screen.
+D-2 as revised by CEO #68 (風控 2026-10-28 #68 裁決（D-2 修訂／N-155 揭露規格）)
+no longer asks that a playbook line stay inside cap 1 of
+``app/advice/limits.py``: cap 1 does not constrain the 排程台, whose share
+counts come only from the rule-set parameters the user confirmed, and the
+conflict is disclosed instead (N-155). The last tests here pin the per-target
+size formula the disclosure states; the invariance of the lines under any cap-1
+setting is pinned in ``tests/test_playbook_cap1_d2.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-from app.advice.limits import RiskBudget
 from app.playbook.engine import planned_batch_shares
 from app.playbook.models import BatchState, RuleParams
 from app.playbook.service import REBALANCE_SOURCE, PlaybookService
@@ -159,19 +161,29 @@ def test_the_locked_value_records_when_and_from_where(harness: Harness) -> None:
     assert state.total_deploy_set_at.tzinfo is not None
 
 
-def test_a_playbook_batch_never_sizes_past_the_advice_position_cap() -> None:
-    """D-2 附帶測試：playbook 指令不產生違反 limits.py 上限的部位.
+@pytest.mark.parametrize(
+    ("n_targets", "expected"),
+    [(5, Decimal("0.14")), (7, Decimal("0.10"))],
+)
+def test_each_target_is_sized_at_deploy_ratio_over_n_targets_of_total_assets(
+    n_targets: int, expected: Decimal
+) -> None:
+    """修訂 D-2 (5) 測試 ①: per-target size = deploy_ratio / n_targets, exactly.
 
-    One symbol gets TOTAL_DEPLOY / 5 = 14% of the deployed capital, and
-    TOTAL_DEPLOY is itself 70% of total assets, so the heaviest position the
-    rule set can build is 9.8% of total assets -- inside the 15% single-position
-    cap the advice side enforces. The arithmetic is asserted on the real sizing
-    function so a future change to ``n_targets`` cannot break the promise
-    quietly.
+    Revised D-2 (CEO #68, 風控 2026-10-28 #68 裁決（D-2 修訂／N-155 揭露規格）):
+    with the default rule set one symbol gets TOTAL_DEPLOY / 5, which is 20% of
+    the deployed capital and, TOTAL_DEPLOY being 70% of total assets, 14% of
+    total assets (cash included). Cap 1 measures something else -- the
+    holding's share of the valued book, cash excluded -- and does not constrain
+    these lines; that is disclosed rather than enforced, so this test pins the
+    formula with ``==`` and compares it with no cap. ``n_targets=7`` lands
+    exactly on 10%, the cap-1 default, to pin that boundary case as well.
+
+    Run on the real sizing function, with a total and a close that divide
+    exactly, so the equality is the formula's and not a rounding accident.
     """
-    budget = RiskBudget()
-    params = RuleParams(effective_date=date(2026, 1, 1))
-    total_assets = Decimal("1000000")
+    params = RuleParams(effective_date=date(2026, 1, 1), n_targets=n_targets)
+    total_assets = Decimal("2100000")
     total_deploy = total_assets * params.deploy_ratio
     close = Decimal("100")
 
@@ -190,7 +202,7 @@ def test_a_playbook_batch_never_sizes_past_the_advice_position_cap() -> None:
         for batch in batches
     )
 
-    weight = Decimal(shares) * close / total_assets
-    assert weight <= Decimal(str(budget.max_position_weight))
+    assert Decimal(shares) * close / total_assets == params.deploy_ratio / params.n_targets
+    assert params.deploy_ratio / params.n_targets == expected
     # And the whole book stays under the cash floor's mirror image.
     assert params.deploy_ratio + params.cash_floor_ratio == Decimal("1")
