@@ -3,9 +3,20 @@
 風控 2026-10-28 #68 裁決（D-2 修訂／N-155 揭露規格）, 第 2.4 節, and its follow-up
 (``2026-10-28-#68裁決補充-R4解讀與出貨方式-風控.md`` 第 4、5 節):
 
+Rewritten the same day by CEO #70 (風控 2026-10-28 N-151 標籤掃描授權與 #70 D-2
+改寫, 第二項): revised D-2 (2) now says caps 1-5 alike do not constrain the
+排程台's share counts, and no ``app/playbook/`` module may read RiskBudget or any
+settings-page cap (the one exception, per ADR-0031, is the router reading cap 1
+as a parameter of the (3) disclosure only); (5) ② asks that the lines stay the
+same both when only cap 1 changes and when every RiskBudget field moves from
+tightest to loosest at once; (6) extends cap 1's treatment to caps 2-5 and
+forbids claiming, or asserting in a test, that the 排程台 complies with any of
+caps 1-5.
+
 * 測試 ② -- the directives ``evaluate_today`` produces are identical whatever
-  cap 1 is set to (0.05 or 0.50). Revised D-2 (2) is in force from batch one,
-  so it needs a test now; a clamp added later turns this red.
+  cap 1 is set to (0.05 or 0.50), and whatever every risk cap is set to
+  (``TIGHT`` against ``LOOSE``). Revised D-2 (2) is in force from batch one, so
+  it needs tests now; a clamp or a settings read added later turns them red.
 * 測試 ③ -- the conflict disclosure (N-155) is present, verbatim, in the
   ``/today`` and ``/rule-set`` responses. It lands on
   ``fix/stock-desk-playbook-cap1-disclosure``; until then this is a strict
@@ -71,8 +82,10 @@ def _seed_playbook(db: Path) -> PlaybookService:
     )
 
 
-def _lines_with_cap1(root: Path, cap1: float, monkeypatch: pytest.MonkeyPatch) -> list[Line]:
-    """Evaluate the fixed book with cap 1 stored at ``cap1``, where production reads it.
+def _lines_with_budget(
+    root: Path, budget: RiskBudget, monkeypatch: pytest.MonkeyPatch
+) -> list[Line]:
+    """Evaluate the fixed book with ``budget`` stored, where production reads it.
 
     The settings are written into the same database file the playbook uses, and
     ``STOCK_DESK_DB_PATH`` points there, so a playbook path that started reading
@@ -83,8 +96,8 @@ def _lines_with_cap1(root: Path, cap1: float, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("STOCK_DESK_DB_PATH", str(db))
     deps._default_settings_store.cache_clear()
     try:
-        SettingsStore(db).save(AppSettings(risk_budget=RiskBudget(max_position_weight=cap1)))
-        assert deps.get_settings_store().load().risk_budget.max_position_weight == cap1
+        SettingsStore(db).save(AppSettings(risk_budget=budget))
+        assert deps.get_settings_store().load().risk_budget == budget
         evaluation = _seed_playbook(db).evaluate_today(today=EVALUATION_DAY)
     finally:
         deps._default_settings_store.cache_clear()
@@ -95,12 +108,63 @@ def test_the_directives_do_not_depend_on_the_cap_1_setting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """修訂 D-2 (5) 測試 ②: cap 1 at 0.05 and at 0.50 yields the same lines."""
-    tight = _lines_with_cap1(tmp_path / "cap-005", 0.05, monkeypatch)
-    loose = _lines_with_cap1(tmp_path / "cap-050", 0.50, monkeypatch)
+    tight = _lines_with_budget(
+        tmp_path / "cap-005", RiskBudget(max_position_weight=0.05), monkeypatch
+    )
+    loose = _lines_with_budget(
+        tmp_path / "cap-050", RiskBudget(max_position_weight=0.50), monkeypatch
+    )
 
     assert tight == loose
     # Not vacuous: buys sized by the rule set, sells, and a deferral, each
     # carrying a share count the comparison covers.
+    actions = {action for _, _, action, _ in tight}
+    assert {"buy", "sell"} <= actions
+    assert any(shares > 0 for _, _, action, shares in tight if action == "buy")
+
+
+#: Every RiskBudget field at its tightest and at its loosest, all inside the
+#: validators (``limits.py`` ceilings and ``Field`` bounds). ``max_position_weight``
+#: never takes 0.15, so the S2 migration cannot touch either budget.
+TIGHT = RiskBudget(
+    max_position_weight=0.05,
+    max_sector_weight=0.05,
+    max_gross_exposure=0.10,
+    max_loss_per_trade=0.001,
+    atr_stop_multiple=0.5,
+    kelly_fraction_cap=0.01,
+    kelly_position_cap=0.01,
+)
+LOOSE = RiskBudget(
+    max_position_weight=0.50,
+    max_sector_weight=1.0,
+    max_gross_exposure=1.50,
+    max_loss_per_trade=0.1,
+    atr_stop_multiple=10.0,
+    kelly_fraction_cap=0.25,
+    kelly_position_cap=0.10,
+)
+
+
+def test_the_directives_do_not_depend_on_any_risk_cap_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """修訂 D-2 (5) 測試 ② (CEO #70): caps 1-5 all tightest vs all loosest, same lines.
+
+    This is what holds up the disclosure's ④ 「其他任何一條」: the import-graph
+    guard cannot see a store reading the settings table by SQL, nor a router
+    widening what it reads.
+    """
+    # Exhaustive: a RiskBudget field added later must be added to both budgets.
+    assert {f for f in RiskBudget.model_fields if getattr(TIGHT, f) != getattr(LOOSE, f)} == set(
+        RiskBudget.model_fields
+    )
+    assert 0.15 not in (TIGHT.max_position_weight, LOOSE.max_position_weight)
+
+    tight = _lines_with_budget(tmp_path / "tight", TIGHT, monkeypatch)
+    loose = _lines_with_budget(tmp_path / "loose", LOOSE, monkeypatch)
+
+    assert tight == loose
     actions = {action for _, _, action, _ in tight}
     assert {"buy", "sell"} <= actions
     assert any(shares > 0 for _, _, action, shares in tight if action == "buy")
