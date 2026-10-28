@@ -15,6 +15,10 @@
  * here verbatim instead, so the departure is exactly the approved one and no
  * more. The opening pair and the reverse rule (the name never without its
  * ordinal) still hold and are still asserted.
+ *
+ * This test is under N-151 discipline: any rewrite of it needs risk-compliance's
+ * prior authorisation (風控 2026-10-28 條件 107 配對測試改寫追認, which ratified
+ * the rewrite above and authorised the two import-scope assertions below).
  */
 
 import { readFileSync } from "node:fs";
@@ -76,6 +80,23 @@ describe("KellyInputsSection.tsx — 條件 107 (條號＋官方上限名同句�
     }
     expect(KELLY_SUNSET_LEAD.split("可靠").length - 1).toBe(1);
     expect(KELLY_SUNSET_LEAD).toContain("算出的數字不可靠");
+  });
+
+  it("the section takes nothing but KELLY_SUNSET_LEAD from the sunset module, and renders it once", () => {
+    // 風控 2026-10-28 條件 107 配對測試改寫追認 第 2 點: a second constant
+    // imported from `cap1SunsetWording` would reach the screen past the source
+    // scan above, which only sees `{CONST}`.
+    const raw = readFileSync(
+      fileURLToPath(new URL("../../settings/KellyInputsSection.tsx", import.meta.url)),
+      "utf-8",
+    );
+    const imports = [...raw.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']\.\.\/lib\/cap1SunsetWording["']/g)];
+    const names = imports.flatMap((match) =>
+      match[1]!.split(",").map((name) => name.trim()).filter((name) => name.length > 0),
+    );
+    expect(names).toEqual(["KELLY_SUNSET_LEAD"]);
+    expect(raw).not.toMatch(/import\s+\*\s+as\s+\w+\s+from\s+["']\.\.\/lib\/cap1SunsetWording["']/);
+    expect(kellyInputsSectionSource().split("{KELLY_SUNSET_LEAD}").length - 1).toBe(1);
   });
 
   it("interpolates the staleness window rather than writing it", () => {
