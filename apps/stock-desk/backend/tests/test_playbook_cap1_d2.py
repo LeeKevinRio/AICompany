@@ -7,10 +7,11 @@
   cap 1 is set to (0.05 or 0.50). Revised D-2 (2) is in force from batch one,
   so it needs a test now; a clamp added later turns this red.
 * 測試 ③ -- the conflict disclosure (N-155) is present, verbatim, in the
-  ``/today`` and ``/rule-set`` responses. It lands on
-  ``fix/stock-desk-playbook-cap1-disclosure``; until then this is a strict
-  xfail, and that branch must remove the marker in the same PR (B-2 takes
-  over). Deadline: before #62 batch two (5-K) merges.
+  ``cap1_disclosure`` field of the ``/today`` and ``/rule-set`` responses.
+  Landed on ``fix/stock-desk-playbook-cap1-disclosure`` (ADR-0031, CEO #69),
+  which removed the strict-xfail placeholder in the same PR as the ruling
+  required; the full matrix (B-2: every mode, every endpoint, n_targets 11 / 7
+  / 5 against cap 1 at 10% and 25%) is ``tests/test_api_playbook_cap1_disclosure.py``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from app.advice.limits import RiskBudget
 from app.api import deps
-from app.api.deps import get_playbook_service, get_settings_store
+from app.api.deps import get_playbook_service
 from app.main import app
 from app.playbook.models import RuleParams
 from app.playbook.service import PlaybookService
@@ -106,7 +107,7 @@ def test_the_directives_do_not_depend_on_the_cap_1_setting(
     assert any(shares > 0 for _, _, action, shares in tight if action == "buy")
 
 
-# --- 測試 ③: the disclosure is present (strict xfail until N-155 lands) ------------
+# --- 測試 ③: the disclosure is present, verbatim, in its own field ------------------
 
 #: The stored cap-1 value: not the 10% default, so a disclosure that read the
 #: default instead of the store would not match.
@@ -137,7 +138,9 @@ class _Client:
 
 
 @pytest.fixture
-def disclosure_client(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[_Client]:
+def disclosure_client(
+    tmp_path: Path, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[_Client]:
     confirmed: bool = request.param
     store = PlaybookStore(db_path=tmp_path / "playbook.db")
     if confirmed:
@@ -151,7 +154,9 @@ def disclosure_client(tmp_path: Path, request: pytest.FixtureRequest) -> Iterato
     settings = SettingsStore(tmp_path / "settings.db")
     settings.save(AppSettings(risk_budget=RiskBudget(max_position_weight=STORED_CAP1)))
     app.dependency_overrides[get_playbook_service] = lambda: service
-    app.dependency_overrides[get_settings_store] = lambda: settings
+    # The real ``deps.get_cap1_weight`` reads the process-wide store; point that
+    # store at this test's settings rather than overriding the dependency.
+    monkeypatch.setattr(deps, "_default_settings_store", lambda: settings)
     with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield _Client(client=client)
     app.dependency_overrides.clear()
@@ -166,14 +171,6 @@ def test_the_expected_disclosure_uses_the_default_rule_set() -> None:
     assert Decimal(1) / params.n_targets == Decimal("0.2")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=(AssertionError, KeyError),
-    reason=(
-        "CEO #68／N-155：揭露於 fix/stock-desk-playbook-cap1-disclosure 落地"
-        "（風控 2026-10-28 #68 裁決）；落地即 XPASS，須同 PR 移除並由 B-2 接手"
-    ),
-)
 @pytest.mark.parametrize(
     ("disclosure_client", "path"),
     [(True, "/api/playbook/today"), (False, "/api/playbook/rule-set")],
@@ -181,10 +178,15 @@ def test_the_expected_disclosure_uses_the_default_rule_set() -> None:
     ids=["today-confirmed", "rule-set-unconfirmed"],
 )
 def test_the_conflict_disclosure_is_served_verbatim(disclosure_client: _Client, path: str) -> None:
-    """修訂 D-2 (5) 測試 ③: title and ①～④, verbatim, not yet bound to a field name."""
+    """修訂 D-2 (5) 測試 ③: title and ①～④, verbatim, in ``cap1_disclosure``."""
     response = disclosure_client.client.get(path)
     assert response.status_code == 200
-    text = json.dumps(response.json(), ensure_ascii=False)
-    assert DISCLOSURE_TITLE in text
-    for line in DISCLOSURE_LINES:
-        assert line in text
+    body = response.json()
+    disclosure = body["cap1_disclosure"]
+    assert disclosure["title"] == DISCLOSURE_TITLE
+    assert disclosure["lines"] == list(DISCLOSURE_LINES)
+    assert (disclosure["per_target_pct"], disclosure["cap1_pct"]) == ("14%", "12%")
+    assert disclosure["per_target_book_pct"] == "20%"
+    # In its own field only: not folded into the §6 sentences or the warnings.
+    rest = {key: value for key, value in body.items() if key != "cap1_disclosure"}
+    assert DISCLOSURE_TITLE not in json.dumps(rest, ensure_ascii=False)
