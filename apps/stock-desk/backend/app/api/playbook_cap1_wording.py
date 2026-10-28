@@ -3,10 +3,11 @@
 CEO #68 (2026-10-28) ruled that cap 1 (單一標的佔比上限) does not constrain the
 排程台: its share counts come from the user's rule set alone, and the conflict is
 disclosed instead of reconciled. This module holds that disclosure -- the title,
-sentences ① to ④ and the three 讀取失敗 replacements -- exactly as
-「風控 2026-10-28 #68 裁決（D-2 修訂／N-155 揭露規格）」 and its follow-up
-(``2026-10-28-#68裁決補充-R4解讀與出貨方式-風控.md`` 第 4 節) fixed them, and the
-one function that fills them in. ADR-0031 (CEO #69) is the architecture.
+sentences ① to ④ and the five 讀取失敗／無法算出 replacements (①-缺, ①-缺b,
+①-缺nb, ②-缺, ③-缺) -- exactly as 「風控 2026-10-28 #68 裁決（D-2 修訂／N-155
+揭露規格）」, its follow-up (``2026-10-28-#68裁決補充-R4解讀與出貨方式-風控.md``
+第 4 節) and 「風控 2026-10-28 #68 裁決補充二（N-155 交件已知限制 2～5）」 fixed them,
+and the one function that fills them in. ADR-0031 (CEO #69) is the architecture.
 
 **Why this module sits in ``app/api`` and imports nothing from ``app``**
 (ADR-0031 C-1, PD-1): the disclosure states a cap-1 value, and the settings
@@ -31,8 +32,9 @@ House rules, all of them non-negotiable:
   is shown unconditionally (補充裁定 第 2 節).
 * **A missing value is described, never replaced.** No default (10% or any
   other) stands in for a cap-1 value that could not be read, no raw
-  ``n_targets`` of zero or below is written into a sentence, and every pct
-  field is ``None`` rather than ``0`` when it cannot be computed (AV-16).
+  ``n_targets`` or ``batches_per_target`` of zero or below is written into a
+  sentence, and every pct field is ``None`` rather than ``0`` when it cannot be
+  computed or is not stated (AV-16).
 * **Rendered on demand, stored nowhere** (AV-11, H2): no table, no directive
   log, no ``RuleParams`` field.
 """
@@ -59,6 +61,19 @@ LINE_PER_TARGET: Final = (
 #: ①-缺: ``n_targets`` is not a positive integer, so no share can be computed.
 LINE_PER_TARGET_UNAVAILABLE: Final = (
     "此規則集的每檔規模無法由目前參數算出（標的檔數 n_targets 不是正整數），本區塊不陳述每檔佔比。"
+)
+
+#: ①-缺b: only ``batches_per_target`` is not a positive integer. No batch would
+#: be created (``PlaybookStore.ensure_batches``), so neither the per-target
+#: amount nor its share is stated (補充裁定二 第 1 項).
+LINE_PER_TARGET_NO_BATCHES: Final = (
+    "此規則集的每檔批數 batches_per_target 不是正整數，本區塊不陳述每檔規模與每檔佔比。"
+)
+
+#: ①-缺nb: neither ``n_targets`` nor ``batches_per_target`` is a positive integer.
+LINE_PER_TARGET_UNAVAILABLE_NO_BATCHES: Final = (
+    "此規則集的每檔規模無法由目前參數算出（標的檔數 n_targets 與每檔批數 batches_per_target "
+    "都不是正整數），本區塊不陳述每檔佔比。"
 )
 
 #: ② 第 1 條目前設定值與其分母.
@@ -113,9 +128,14 @@ class PlaybookCap1Disclosure(BaseModel):
     lines: list[str] = Field(min_length=1)
     #: ``RuleParams.version`` of the parameter set the numbers came from, for
     #: reconciliation against the same response only (B-3). Not for display.
+    #: On 待確認規則集 this is the version in force (the set a confirmation
+    #: would adopt), while ``/today``'s top-level ``rules_version`` is ``0``
+    #: ("no user rule was evaluated today"): the two mean different things and
+    #: must never be reconciled against each other (補充裁定二 第 4 項).
     rules_version: int
-    #: deploy_ratio ÷ n_targets as a percentage (``"14%"``); ``None`` when
-    #: ``n_targets`` is not positive.
+    #: deploy_ratio ÷ n_targets as a percentage (``"14%"``); ``None`` whenever
+    #: sentence ① is any of its 缺 variants (n_targets or batches_per_target not
+    #: positive), so the field never states what the sentence does not.
     per_target_pct: str | None
     #: The cap-1 setting as a percentage (``"10%"``); ``None`` when unreadable.
     cap1_pct: str | None
@@ -153,25 +173,37 @@ def compose(
     setting, or ``None`` when it could not be read.
 
     The cap-1 value is only formatted into sentence ②. Nothing here compares it
-    with anything, and the two missing-value branches are independent: each
-    replaces only its own sentences, and ④ is never replaced.
+    with anything, and the missing-value branches are independent: sentence ①
+    depends on both ``n_targets`` and ``batches_per_target`` (補充裁定二 第 1 項:
+    four cases, one sentence each), sentence ③ on ``n_targets`` alone, ② on the
+    cap-1 value alone, and ④ is never replaced.
     """
-    if n_targets > 0:
-        per_target_pct: str | None = format_pct(deploy_ratio / n_targets)
-        per_target_book_pct: str | None = format_pct(Decimal(1) / n_targets)
+    targets_ok = n_targets > 0
+    batches_ok = batches_per_target > 0
+
+    per_target_pct: str | None = None
+    if targets_ok and batches_ok:
+        per_target_pct = format_pct(deploy_ratio / n_targets)
         line_per_target = LINE_PER_TARGET.format(
             deploy_ratio_pct=deploy_ratio_pct,
             n_targets=n_targets,
             batches_per_target=batches_per_target,
             per_target_pct=per_target_pct,
         )
+    elif batches_ok:
+        line_per_target = LINE_PER_TARGET_UNAVAILABLE
+    elif targets_ok:
+        line_per_target = LINE_PER_TARGET_NO_BATCHES
+    else:
+        line_per_target = LINE_PER_TARGET_UNAVAILABLE_NO_BATCHES
+
+    per_target_book_pct: str | None = None
+    if targets_ok:
+        per_target_book_pct = format_pct(Decimal(1) / n_targets)
         line_book = LINE_BOOK_EXAMPLE.format(
             n_targets=n_targets, per_target_book_pct=per_target_book_pct
         )
     else:
-        per_target_pct = None
-        per_target_book_pct = None
-        line_per_target = LINE_PER_TARGET_UNAVAILABLE
         line_book = LINE_BOOK_EXAMPLE_UNAVAILABLE
 
     if cap1_weight is None:

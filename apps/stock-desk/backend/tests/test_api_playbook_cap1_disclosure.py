@@ -20,7 +20,9 @@ is the behaviour:
   response, alerts output, ``page_summary`` or directive log.
 * **缺值** and **R4-4** -- each missing value swaps in only its own sentence, the
   pct fields go ``null`` (never ``0``), no 10% stands in, and a settings failure
-  of any kind still answers 200 with the same directives.
+  of any kind still answers 200 with the same directives. A non-positive
+  ``batches_per_target`` takes ①-缺b / ①-缺nb (「風控 2026-10-28 #68 裁決補充二
+  （N-155 交件已知限制 2～5）」 第 1 項, four-case table).
 * **R4-6** -- the advice, settings and portfolio responses do not change.
 
 The sentences are retyped here, character by character, rather than imported:
@@ -100,6 +102,14 @@ LINE_2_MISSING = (
 )
 LINE_1_MISSING = (
     "此規則集的每檔規模無法由目前參數算出（標的檔數 n_targets 不是正整數），本區塊不陳述每檔佔比。"
+)
+#: ①-缺b / ①-缺nb (補充裁定二 第 1 項), retyped.
+LINE_1_MISSING_B = (
+    "此規則集的每檔批數 batches_per_target 不是正整數，本區塊不陳述每檔規模與每檔佔比。"
+)
+LINE_1_MISSING_NB = (
+    "此規則集的每檔規模無法由目前參數算出（標的檔數 n_targets 與每檔批數 batches_per_target "
+    "都不是正整數），本區塊不陳述每檔佔比。"
 )
 LINE_3_MISSING = (
     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比；達到或超過第 1 條"
@@ -349,11 +359,24 @@ def test_every_sentence_in_the_module_is_the_approved_one() -> None:
     assert cap1_wording.LINE_CAP1_UNREADABLE == LINE_2_MISSING
     assert cap1_wording.LINE_PER_TARGET_UNAVAILABLE == LINE_1_MISSING
     assert cap1_wording.LINE_BOOK_EXAMPLE_UNAVAILABLE == LINE_3_MISSING
+    assert cap1_wording.LINE_PER_TARGET_NO_BATCHES == LINE_1_MISSING_B
+    assert cap1_wording.LINE_PER_TARGET_UNAVAILABLE_NO_BATCHES == LINE_1_MISSING_NB
 
 
 def test_no_sentence_carries_the_word_for_advice() -> None:
     """排程台用語紀律: the block never says 建議 (原裁決 2.3)."""
-    for sentence in (TITLE, LINE_1, LINE_2, LINE_3, LINE_4, LINE_1_MISSING, LINE_2_MISSING):
+    for sentence in (
+        TITLE,
+        LINE_1,
+        LINE_2,
+        LINE_3,
+        LINE_4,
+        LINE_1_MISSING,
+        LINE_1_MISSING_B,
+        LINE_1_MISSING_NB,
+        LINE_2_MISSING,
+        LINE_3_MISSING,
+    ):
         assert "建議" not in sentence
 
 
@@ -476,6 +499,96 @@ def test_both_missing_values_replace_their_own_sentences_and_4_stays() -> None:
     )
     assert disclosure.title == TITLE
     assert disclosure.rules_version == 7
+
+
+#: 補充裁定二 第 1 項 four-case table, for a non-positive batch count: (n_targets,
+#: batches_per_target) -> the ① sentence, whether ③ keeps its example, and the
+#: book pct that goes with it. The (> 0, > 0) and (≤ 0, > 0) rows are the cases
+#: above.
+BATCH_CASES = [
+    (5, 0, LINE_1_MISSING_B, "20%"),
+    (5, -1, LINE_1_MISSING_B, "20%"),
+    (7, 0, LINE_1_MISSING_B, "14.3%"),
+    (0, 0, LINE_1_MISSING_NB, None),
+    (0, -1, LINE_1_MISSING_NB, None),
+    (-3, -1, LINE_1_MISSING_NB, None),
+]
+
+
+def _compose_batches(n_targets: int, batches: int, cap1: Decimal | None) -> Any:
+    return compose(
+        rules_version=7,
+        deploy_ratio=Decimal("0.70"),
+        n_targets=n_targets,
+        batches_per_target=batches,
+        deploy_ratio_pct="70%",
+        cap1_weight=cap1,
+    )
+
+
+@pytest.mark.parametrize("cap1", [Decimal("0.10"), None], ids=["cap1-read", "cap1-missing"])
+@pytest.mark.parametrize(
+    ("n_targets", "batches", "first", "book_pct"),
+    BATCH_CASES,
+    ids=[f"n{n}-b{b}" for n, b, _, _ in BATCH_CASES],
+)
+def test_a_non_positive_batch_count_takes_its_own_sentence_1(
+    n_targets: int, batches: int, first: str, book_pct: str | None, cap1: Decimal | None
+) -> None:
+    """①-缺b / ①-缺nb: ① replaced, ③ follows n_targets alone, ② and ④ independent.
+
+    The raw batch count is never written out, and ``per_target_pct`` is ``None``
+    because ① no longer states a share (AV-16).
+    """
+    disclosure = _compose_batches(n_targets, batches, cap1)
+
+    second = LINE_2_MISSING if cap1 is None else LINE_2.format(cap1_pct="10%")
+    third = (
+        LINE_3_MISSING
+        if book_pct is None
+        else LINE_3.format(n_targets=n_targets, per_target_book_pct=book_pct)
+    )
+    assert disclosure.lines == [first, second, third, LINE_4]
+    assert len(disclosure.lines) == 4
+    assert disclosure.lines[3] == LINE_4
+    assert disclosure.per_target_pct is None
+    assert disclosure.per_target_book_pct == book_pct
+    assert disclosure.cap1_pct == (None if cap1 is None else "10%")
+    text = "".join(disclosure.lines)
+    assert "分 0 批" not in text and "分 -1 批" not in text
+    assert f"分 {batches}" not in text and f"{batches} 批" not in text
+    assert "÷ 0" not in text
+
+
+def test_a_stored_non_positive_batch_count_gets_its_sentence_through_the_endpoints(
+    open_book: Callable[..., Book],
+) -> None:
+    """①-缺b end to end: stored 4 targets with 0 batches, stored cap 1 = 0.12."""
+    book = open_book(
+        "bad-batches",
+        holdings=False,
+        rule_set={
+            "version": 2,
+            "deploy_ratio": Decimal("0.70"),
+            "n_targets": 4,
+            "batches_per_target": 0,
+        },
+    )
+    for response in (
+        book.client.get("/api/playbook/rule-set"),
+        book.client.post("/api/playbook/confirm-rules", json={"capital": "1000000"}),
+        book.client.get("/api/playbook/today"),
+    ):
+        assert response.status_code == 200
+        disclosure = response.json()["cap1_disclosure"]
+        assert disclosure["lines"] == [
+            LINE_1_MISSING_B,
+            LINE_2.format(cap1_pct="12%"),
+            LINE_3.format(n_targets=4, per_target_book_pct="25%"),
+            LINE_4,
+        ]
+        assert disclosure["per_target_pct"] is None
+        assert disclosure["per_target_book_pct"] == "25%"
 
 
 def test_missing_pct_fields_serialise_as_null_not_zero() -> None:
