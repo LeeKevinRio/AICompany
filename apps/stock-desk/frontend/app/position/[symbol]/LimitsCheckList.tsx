@@ -47,7 +47,14 @@ export function LimitsCheckList({
           <p className="mt-1 text-xs text-neutral-400">
             觀察值：{formatPercent(limit.observed)}　上限：{formatPercent(limit.threshold)}
           </p>
-          {/* #2' / S1, S1' (I-2): under the 觀察值／上限 line, cap 1 only. */}
+          {/* #2' / S1, S1' (I-2): under the 觀察值／上限 line, cap 1 only.
+              同位原則：隨第 1 條狀態走 — it stays in the same <li> as cap 1's
+              status chip, never in a nested <details>, no truncation
+              (風控 2026-10-26 四項裁定 第三節).
+              F-i: if cap 1's status chip, its blocked notice or any cap-1
+              「已違反」 reaches the position page's main view, or the advice
+              card stops being collapsed, this sentence moves with cap 1's
+              status and goes back to risk-compliance. */}
           {limit.index === 1 && cap1MigrationNotice !== null && (
             <p className="mt-1 text-xs text-amber-300">{cap1MigrationNotice}</p>
           )}
