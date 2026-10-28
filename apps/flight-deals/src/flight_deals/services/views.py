@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from flight_deals.domain.airlines import AIRLINES, lookup_airline
 from flight_deals.domain.airports import place_label, route_label
 from flight_deals.domain.currency import format_money, minor_to_major_int
 from flight_deals.domain.dates import first_pair
@@ -22,10 +24,21 @@ from flight_deals.domain.messages import (
     reason_label,
     source_label,
 )
-from flight_deals.domain.models import DatePair, Watch, WatchSpec
+from flight_deals.domain.models import CABINS, DatePair, Watch, WatchSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, to_utc_iso, weekday_label
-from flight_deals.ports import AutostartProbe, Clock
+from flight_deals.domain.trip_labels import (
+    BOOKING_FALLBACK_NOTE,
+    airlines_text,
+    cabin_label,
+    conditions_label,
+    dep_window_label,
+    pax_full_label,
+    total_price_note,
+    total_price_short,
+)
+from flight_deals.ports import AutostartProbe, BookingLinkBuilder, Clock
 from flight_deals.services.health import HealthService, describe_source
+from flight_deals.services.notifications import safe_booking_url
 from flight_deals.services.price_snapshot import PriceDelta, Snapshot, latest_per_pair
 from flight_deals.services.settings import SETTING_KEYS, SettingsService
 from flight_deals.storage.repository import ObservationRecord, Repository, ScanRunRecord
@@ -67,6 +80,27 @@ NOTIFICATION_KIND_LABELS = {
     "test": "測試訊息",
     "daily_digest": "每日摘要",
 }
+# New-watch form defaults come from the domain model, never from literals here (C-40).
+_SPEC_DEFAULTS: dict[str, Any] = {
+    f.name: f.default for f in fields(WatchSpec) if f.default is not MISSING
+}
+# FR-A10: with an airline / time filter, "no data" means nothing matched the filter.
+NO_MATCH_LABEL = "依目前航空／時段條件沒有符合的班次"
+# no_data sub-reason from the source: nothing embedded in the page (ADR FD-5 status row).
+NO_EMBEDDED_REASON = "no_embedded_results"
+NO_EMBEDDED_LABEL = (
+    "Google 未在頁面內嵌此查詢的結果（多為來回＋商務艙＋多人），無法自動查價；請用查票連結人工查看"
+)
+
+
+def no_embedded_note(query_results: Sequence[Mapping[str, Any]]) -> str | None:
+    """List / detail note when the latest run hit pages without embedded results."""
+    if any(r.get("reason") == NO_EMBEDDED_REASON for r in query_results):
+        return NO_EMBEDDED_LABEL
+    return None
+
+
+_ITEM_KEY_REVISION = re.compile(r"^price:\d+:r(\d+):")
 BREAKER_LABELS = {
     "closed": "關閉（正常查詢）",
     "open": "開啟（暫停查詢）",
@@ -118,6 +152,31 @@ def dates_text(spec: WatchSpec) -> str:
     return f"彈性出發 {start} ～ {end}"
 
 
+def has_filters(spec: WatchSpec) -> bool:
+    return bool(spec.airlines) or spec.dep_hour_from is not None
+
+
+def trip_view(spec: WatchSpec) -> dict[str, Any]:
+    """Passenger / cabin / filter labels shared by list, detail and notifications."""
+    return {
+        "adults": spec.adults,
+        "children": spec.children,
+        "cabin": spec.cabin,
+        "pax_note": total_price_note(spec.adults, spec.children),
+        "pax_short": total_price_short(spec.adults, spec.children),
+        "pax_full_label": pax_full_label(spec.adults, spec.children),
+        "cabin_label": cabin_label(spec.cabin),
+        "airlines_label": airlines_text(spec.airlines),
+        "dep_window_label": dep_window_label(spec.dep_hour_from, spec.dep_hour_to),
+        "conditions_label": conditions_label(spec.airlines, spec.dep_hour_from, spec.dep_hour_to),
+    }
+
+
+def item_key_revision(item_key: str) -> int | None:
+    match = _ITEM_KEY_REVISION.match(item_key)
+    return int(match.group(1)) if match else None
+
+
 def delta_view(delta: PriceDelta | None) -> dict[str, str] | None:
     """List-page change: direction plus an unsigned amount label (C-34)."""
     if delta is None:
@@ -141,9 +200,11 @@ class ViewService:
         breaker_threshold: int,
         clock: Clock,
         autostart: AutostartProbe | None = None,
+        link_builder: BookingLinkBuilder | None = None,
     ) -> None:
         self._repo = repo
         self._autostart = autostart
+        self._links = link_builder
         self._settings = settings
         self._health = health
         self._source_names = list(source_names)
@@ -190,27 +251,55 @@ class ViewService:
             "link": google_flights_url(
                 spec.origin, spec.destination, obs.depart_date, obs.return_date
             ),
+            **self._booking(watch, DatePair(obs.depart_date, obs.return_date), obs.watch_revision),
+            "depart_time": obs.depart_time,
             "revision": obs.watch_revision,
         }
 
-    def watch_link(self, watch: Watch) -> str | None:
+    def _booking(self, watch: Watch, pair: DatePair, revision: int) -> dict[str, str | None]:
+        """Exact link for the current settings; old revisions and failures fall back."""
         spec = watch.spec
+        url = None
+        if revision == watch.revision:
+            url = safe_booking_url(self._links, search_for(spec, pair, spec.currency))
+        if url:
+            return {"booking_url": url, "booking_note": None}
+        return {
+            "booking_url": google_flights_url(
+                spec.origin, spec.destination, pair.depart, pair.return_date
+            ),
+            "booking_note": BOOKING_FALLBACK_NOTE,
+        }
+
+    def _link_pair(self, spec: WatchSpec) -> DatePair | None:
         # Constant time: never expand the whole window just to build one link.
         first = first_pair(spec, taipei_date(self._clock()))
         if first is None and spec.depart_date:
             first = DatePair(spec.depart_date, spec.return_date)
         elif first is None and spec.window_start:
             first = DatePair(spec.window_start, None)
+        return first
+
+    def watch_link(self, watch: Watch) -> str | None:
+        spec = watch.spec
+        first = self._link_pair(spec)
         if first is None:
             return None
         return google_flights_url(spec.origin, spec.destination, first.depart, first.return_date)
+
+    def watch_booking(self, watch: Watch) -> dict[str, str | None]:
+        first = self._link_pair(watch.spec)
+        if first is None:
+            return {"booking_url": None, "booking_note": None}
+        return self._booking(watch, first, watch.revision)
 
     # ---- pages ---------------------------------------------------------------
 
     def list_page(self) -> dict[str, Any]:
         rows = []
         today = taipei_date(self._clock())
-        for watch in self._repo.list_watches():
+        # Watches carry their latest run's results in the same single query (C-34).
+        for watch, last_results in self._repo.list_watches_with_last_results():
             spec = watch.spec
             # One observation query per watch, as before FD-4 (C-34).
             snapshot = Snapshot.build(
@@ -247,6 +336,8 @@ class ViewService:
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
                     "link": self.watch_link(watch),
+                    "no_embedded_note": no_embedded_note(last_results),
+                    **trip_view(spec),
                 }
             )
         return {"watches": rows, "disclaimer": DISCLAIMER}
@@ -270,6 +361,12 @@ class ViewService:
                 "budget": "",
                 "name": "",
                 "notify_on_new_low": True,
+                "adults": _SPEC_DEFAULTS["adults"],
+                "children": _SPEC_DEFAULTS["children"],
+                "cabin": _SPEC_DEFAULTS["cabin"],
+                "airlines": list(_SPEC_DEFAULTS["airlines"]),
+                "dep_hour_from": _SPEC_DEFAULTS["dep_hour_from"],
+                "dep_hour_to": _SPEC_DEFAULTS["dep_hour_to"],
             }
         watch = self._repo.get_watch(watch_id)
         if watch is None:
@@ -303,6 +400,31 @@ class ViewService:
             ),
             "name": spec.name,
             "notify_on_new_low": spec.notify_on_new_low,
+            "adults": spec.adults,
+            "children": spec.children,
+            "cabin": spec.cabin,
+            "airlines": list(spec.airlines),
+            "dep_hour_from": spec.dep_hour_from,
+            "dep_hour_to": spec.dep_hour_to,
+        }
+
+    @staticmethod
+    def form_options(values: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Choices for the form: airline checkboxes in table order, cabins in order.
+
+        A stored code that is no longer in the table is still listed (checked) so an
+        edit keeps it unless the user unticks it (Decision 6 exemption).
+        """
+        options = [
+            {"code": a.code, "zh_name": a.zh_name, "display_name": a.display_name} for a in AIRLINES
+        ]
+        stored = values.get("airlines", []) if values else []
+        for code in stored:
+            if lookup_airline(code) is None:
+                options.append({"code": code, "zh_name": code, "display_name": code})
+        return {
+            "airline_options": options,
+            "cabin_options": [{"value": c, "label": cabin_label(c)} for c in CABINS],
         }
 
     def detail_page(self, watch_id: int) -> dict[str, Any] | None:
@@ -350,8 +472,8 @@ class ViewService:
                     if spec.budget_amount_minor
                     else "未設定"
                 ),
-                "cabin": "經濟艙",
-                "adults": 1,
+                **trip_view(spec),
+                **self.watch_booking(watch),
                 "notify_on_new_low": spec.notify_on_new_low,
                 "status": watch.status,
                 "status_label": STATUS_LABELS[watch.status],
@@ -368,7 +490,7 @@ class ViewService:
             "weekdays": weekdays,
             "recent_prices": recent_prices,
             "old_prices": old,
-            "last_run": self._run_view(last_run) if last_run else None,
+            "last_run": self._run_view(last_run, has_filters(spec)) if last_run else None,
             "runs": [self._run_summary(r) for r in runs[:10]],
             "stale_hours": stale_hours,
             "disclaimer": DISCLAIMER,
@@ -489,7 +611,7 @@ class ViewService:
             "revision": run.watch_revision,
         }
 
-    def _run_view(self, run: ScanRunRecord) -> dict[str, Any]:
+    def _run_view(self, run: ScanRunRecord, filtered: bool = False) -> dict[str, Any]:
         view = self._run_summary(run)
         by_pair = {(r.get("depart"), r.get("return")): r for r in run.query_results}
         pairs = []
@@ -504,7 +626,13 @@ class ViewService:
                     "dates": date_range_text(pair.depart, pair.return_date),
                     "depart": depart,
                     "return": ret,
-                    "status": QUERY_STATUS_LABELS.get(status, status),
+                    "status": (
+                        NO_EMBEDDED_LABEL
+                        if status == "no_data" and result.get("reason") == NO_EMBEDDED_REASON
+                        else NO_MATCH_LABEL
+                        if filtered and status == "no_data"
+                        else QUERY_STATUS_LABELS.get(status, status)
+                    ),
                     "status_key": status,
                     "reason": SKIP_REASON_LABELS.get(str(result.get("reason")), None),
                     "from_cache": bool(result.get("from_cache")),
@@ -518,6 +646,7 @@ class ViewService:
                 }
             )
         view["pairs"] = pairs
+        view["no_embedded_note"] = no_embedded_note(run.query_results)
         return view
 
     def scan_status(self, watch_id: int) -> dict[str, Any] | None:
@@ -535,6 +664,7 @@ class ViewService:
 
     def notifications_page(self) -> dict[str, Any]:
         rows = []
+        watches = {w.id: w for w in self._repo.list_watches()}
         for record in self._repo.list_notifications():
             items = self._repo.notification_items(record.id) if record.kind == "price_alert" else []
             reasons: list[str] = []
@@ -546,6 +676,12 @@ class ViewService:
             if not reasons and record.rule:
                 reasons.append(reason_label(record.rule, None))
             cheapest = items[0] if items else None
+            pax_note = None
+            watch = watches.get(record.watch_id) if record.watch_id is not None else None
+            if cheapest is not None and watch is not None:
+                # Only the current revision's party is known; older alerts keep their text.
+                if item_key_revision(cheapest.item_key) == watch.revision:
+                    pax_note = total_price_note(watch.spec.adults, watch.spec.children)
             rows.append(
                 {
                     "created": format_taipei(record.created_at),
@@ -557,6 +693,7 @@ class ViewService:
                     "price": (
                         format_money(cheapest.amount_minor, cheapest.currency) if cheapest else "—"
                     ),
+                    "pax_note": pax_note,
                     "item_count": len(items),
                     "status": NOTIFICATION_STATUS_LABELS.get(record.status, record.status),
                     "status_key": record.status,

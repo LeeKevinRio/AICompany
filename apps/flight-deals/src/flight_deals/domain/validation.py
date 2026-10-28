@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import cast
 
+from flight_deals.domain.airlines import MAX_AIRLINES, lookup_airline
 from flight_deals.domain.airports import is_selectable, lookup, same_city_group
 from flight_deals.domain.currency import DEFAULT_CURRENCY, major_to_minor
-from flight_deals.domain.models import DateMode, TripType, WatchSpec
+from flight_deals.domain.models import CABINS, Cabin, DateMode, TripType, WatchSpec
 
 _INTEGER = re.compile(r"^-?\d+$")
 MAX_TRIP_DAYS = 60
@@ -28,6 +29,49 @@ UNKNOWN_PLACE = "找不到此機場或城市，請從下拉選取"
 ORIGIN_REQUIRED = "請從下拉選取出發地"
 UNVERIFIED_CITY = "此城市代碼尚未確認可查價，請改選個別機場"
 SAME_CITY = "出發地與目的地不可為同一城市"
+
+# Trip options (ADR-0002 FD-5 Decisions 1 and 9). The total cap of 9 is our own rule.
+MAX_ADULTS = 9
+MAX_CHILDREN = 8
+MAX_PASSENGERS = 9
+ADULTS_REQUIRED = "請填寫成人人數"
+ADULTS_NOT_INT = "成人人數必須是整數"
+ADULTS_RANGE = f"成人人數須介於 1 到 {MAX_ADULTS}"
+CHILDREN_REQUIRED = "請填寫兒童人數（沒有兒童請填 0）"
+CHILDREN_NOT_INT = "兒童人數必須是整數"
+CHILDREN_RANGE = f"兒童人數須介於 0 到 {MAX_CHILDREN}"
+PASSENGERS_TOTAL = f"成人與兒童合計不可超過 {MAX_PASSENGERS} 人"
+CABIN_INVALID = "艙等不正確，請從選單選取"
+AIRLINES_INVALID = "航空公司格式不正確，請從清單選取"
+AIRLINES_TOO_MANY = f"航空公司最多選擇 {MAX_AIRLINES} 家"
+DEP_HOUR_NOT_INT = "出發時刻必須是 0 到 23 的整數"
+DEP_HOUR_RANGE = "出發時刻須介於 0 到 23"
+DEP_HOUR_PAIR = "最早與最晚出發時刻需同時選擇或同時不限"
+DEP_HOUR_ORDER = "最晚出發時刻須晚於最早出發時刻"
+_AIRLINE_CODE = re.compile(r"[A-Z0-9]{2}", re.ASCII)
+_AIRLINE_SPLIT = re.compile(r"[\s,，、]+")
+
+
+# Placeholder whose trip-option fields are the model defaults (used on create).
+_DEFAULT_TRIP = WatchSpec(
+    name="",
+    origin="TPE",
+    destination="TPE",
+    trip_type="one_way",
+    date_mode="fixed",
+    depart_date=None,
+    return_date=None,
+    window_start=None,
+    window_end=None,
+    min_trip_days=None,
+    max_trip_days=None,
+    max_stops=None,
+    budget_amount_minor=None,
+)
+
+
+def unknown_airline(code: str) -> str:
+    return f"找不到航空公司代碼 {code}，請從清單選取"
 
 
 @dataclass(frozen=True)
@@ -79,6 +123,135 @@ def _parse_bool(value: object, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() not in _FALSY
+
+
+def _parse_count(
+    raw: Mapping[str, object],
+    key: str,
+    default: int,
+    errors: dict[str, str],
+    *,
+    required: str,
+    not_int: str,
+) -> int:
+    """Passenger count: absent key -> default; explicit blank or non-integer -> error."""
+    if key not in raw:
+        return default
+    value = _parse_int(raw, key, errors)
+    if key in errors:
+        errors[key] = TOO_LARGE if errors[key] == TOO_LARGE else not_int
+        return default
+    if value is None:
+        errors[key] = required
+        return default
+    return value
+
+
+def _airline_items(value: object) -> list[str] | None:
+    """Codes from a JSON list or a typed comma-separated string; None = bad shape."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part for part in _AIRLINE_SPLIT.split(value) if part]
+    if isinstance(value, list | tuple):
+        items: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                return None
+            items.extend(part for part in _AIRLINE_SPLIT.split(item) if part)
+        return items
+    return None
+
+
+def _parse_airlines(
+    raw: Mapping[str, object], errors: dict[str, str], previous: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Upper-case, de-duplicated, sorted codes (Decision 6).
+
+    Only a code already stored on the watch being edited may bypass the table check.
+    A missing key keeps the stored codes (partial update).
+    """
+    if "airlines" not in raw:
+        return previous
+    items = _airline_items(raw.get("airlines"))
+    if items is None:
+        errors["airlines"] = AIRLINES_INVALID
+        return ()
+    codes: list[str] = []
+    for item in items:
+        code = item.strip().upper()
+        if code in codes:
+            continue
+        if not _AIRLINE_CODE.fullmatch(code):
+            errors["airlines"] = AIRLINES_INVALID
+            return ()
+        if code not in previous and lookup_airline(code) is None:
+            errors["airlines"] = unknown_airline(code)
+            return ()
+        codes.append(code)
+    if len(codes) > MAX_AIRLINES:
+        errors["airlines"] = AIRLINES_TOO_MANY
+        return ()
+    return tuple(sorted(codes))
+
+
+def _parse_hour(
+    raw: Mapping[str, object], key: str, errors: dict[str, str], previous: int | None
+) -> int | None:
+    if key not in raw:
+        return previous  # partial update keeps the stored hour (None on create)
+    value = _parse_int(raw, key, errors)
+    if key in errors:
+        errors[key] = DEP_HOUR_NOT_INT
+        return None
+    if value is not None and not 0 <= value <= 23:
+        errors[key] = DEP_HOUR_RANGE
+        return None
+    return value
+
+
+def _parse_trip_options(
+    raw: Mapping[str, object], errors: dict[str, str], existing: WatchSpec | None
+) -> tuple[int, int, Cabin, tuple[str, ...], int | None, int | None]:
+    """Trip options. A key missing from an edit keeps the stored value, so a partial
+    update never silently resets a party to 1 adult (and bumps the revision)."""
+    base = existing or _DEFAULT_TRIP
+    adults = _parse_count(
+        raw, "adults", base.adults, errors, required=ADULTS_REQUIRED, not_int=ADULTS_NOT_INT
+    )
+    if "adults" not in errors and not 1 <= adults <= MAX_ADULTS:
+        errors["adults"] = ADULTS_RANGE
+    children = _parse_count(
+        raw,
+        "children",
+        base.children,
+        errors,
+        required=CHILDREN_REQUIRED,
+        not_int=CHILDREN_NOT_INT,
+    )
+    if "children" not in errors and not 0 <= children <= MAX_CHILDREN:
+        errors["children"] = CHILDREN_RANGE
+    if "adults" not in errors and "children" not in errors and adults + children > MAX_PASSENGERS:
+        errors["children"] = PASSENGERS_TOTAL
+
+    cabin_text = _text(raw, "cabin") if "cabin" in raw else base.cabin
+    cabin: Cabin = base.cabin
+    if cabin_text in CABINS:
+        cabin = cabin_text
+    else:
+        errors["cabin"] = CABIN_INVALID
+
+    airlines = _parse_airlines(raw, errors, base.airlines)
+
+    hour_from = _parse_hour(raw, "dep_hour_from", errors, base.dep_hour_from)
+    hour_to = _parse_hour(raw, "dep_hour_to", errors, base.dep_hour_to)
+    if "dep_hour_from" not in errors and "dep_hour_to" not in errors:
+        if (hour_from is None) != (hour_to is None):
+            missing = "dep_hour_from" if hour_from is None else "dep_hour_to"
+            errors[missing] = DEP_HOUR_PAIR
+        elif hour_from is not None and hour_to is not None and hour_from >= hour_to:
+            errors["dep_hour_to"] = DEP_HOUR_ORDER
+    return adults, children, cabin, airlines, hour_from, hour_to
 
 
 def validate_watch_input(
@@ -234,6 +407,9 @@ def validate_watch_input(
         errors["budget"] = "預算門檻過大"
 
     notify_on_new_low = _parse_bool(raw.get("notify_on_new_low"), True)
+    adults, children, cabin, airlines, hour_from, hour_to = _parse_trip_options(
+        raw, errors, existing
+    )
 
     name = _text(raw, "name")
     if len(name) > MAX_NAME_LENGTH:
@@ -258,6 +434,12 @@ def validate_watch_input(
         budget_amount_minor=major_to_minor(budget_major, DEFAULT_CURRENCY),
         currency=DEFAULT_CURRENCY,
         notify_on_new_low=notify_on_new_low,
+        adults=adults,
+        children=children,
+        cabin=cabin,
+        airlines=airlines,
+        dep_hour_from=hour_from,
+        dep_hour_to=hour_to,
     )
     return ValidationOutcome(spec, {})
 

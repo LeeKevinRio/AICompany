@@ -29,15 +29,18 @@
     {% if watch.min_trip_days %}<dt>旅程天數</dt><dd>{{ watch.min_trip_days }}–{{ watch.max_trip_days }} 天</dd>{% endif %}
     <dt>預算門檻</dt><dd>{{ watch.budget }}</dd>
     <dt>轉機</dt><dd>{{ watch.max_stops }}</dd>
-    <dt>艙等／人數</dt><dd>{{ watch.cabin }}・{{ watch.adults }} 位成人</dd>
+    <dt>人數</dt><dd>{{ watch.pax_full_label or "—" }}</dd>
+    <dt>艙等</dt><dd>{{ watch.cabin_label or watch.cabin }}</dd>
+    <dt>航空公司</dt><dd>{{ watch.airlines_label or "不限" }}</dd>
+    <dt>去程出發時段</dt><dd>{{ watch.dep_window_label or "不限" }}</dd>
     <dt>此監看紀錄新低通知</dt><dd>{% if watch.notify_on_new_low %}開啟{% else %}關閉{% endif %}</dd>
     <dt>設定版本</dt><dd>第 {{ watch.revision }} 版</dd>
     <dt>上次查價</dt><dd>{{ watch.last_scanned or "尚未查價" }}</dd>
     {% if watch.consecutive_failed_scans %}<dt>連續查價失敗</dt><dd>{{ watch.consecutive_failed_scans }} 次</dd>{% endif %}
   </dl>
-  {% if watch.link %}
-  <p><a href="{{ watch.link }}" target="_blank" rel="noopener noreferrer">到 Google Flights 人工查價</a>
-    <span class="muted">（開啟搜尋頁，帶入路線與第一組日期）</span></p>
+  {% if watch.booking_url or watch.link %}
+  <p><a href="{{ watch.booking_url or watch.link }}" target="_blank" rel="noopener noreferrer">到 Google Flights 人工查價</a>
+    {% if watch.booking_note %}<small class="hint">{{ watch.booking_note }}</small>{% else %}<span class="muted">（開啟搜尋頁，帶入第一組日期）</span>{% endif %}</p>
   {% endif %}
 </section>
 
@@ -55,18 +58,19 @@
   <p class="muted">每個日期組合取最近一次查到的價格，依價格由低到高排列。超過 {{ stale_hours }} 小時未更新的價格標示「可能已過期」。</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜日期組合（可橫向捲動）">
   <table class="data">
-    <thead><tr><th>日期</th><th>出發星期</th><th>價格</th><th>航空公司</th><th>轉機</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
+    <thead><tr><th>日期</th><th>出發星期</th><th>價格</th><th>航空公司</th><th>出發時刻</th><th>轉機</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
     <tbody>
     {% for p in top %}
       <tr>
         <td>{{ p.dates }}</td>
         <td>{{ p.weekday }}</td>
-        <td class="num">查到 {{ p.amount_text }}{% if p.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</td>
+        <td class="num">查到 {{ p.amount_text }}{% if watch.pax_note %}<div class="muted">{{ watch.pax_note }}</div>{% endif %}{% if p.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</td>
         <td>{{ p.carrier }}</td>
+        <td>{{ p.depart_time or "—" }}</td>
         <td>{{ p.stops }}</td>
         <td>{{ p.fetched_text }}{% if p.stale %} <span class="badge warn">可能已過期</span>{% endif %}</td>
         <td>{{ p.source }}（{{ p.kind }}{% if p.data_time_unknown %}，資料時間未知{% endif %}）</td>
-        <td><a href="{{ p.link }}" target="_blank" rel="noopener noreferrer">查票</a></td>
+        <td><a href="{{ p.booking_url or p.link }}" target="_blank" rel="noopener noreferrer">查票</a>{% if p.booking_note %}<div class="hint">{{ p.booking_note }}</div>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -129,16 +133,17 @@
   <h2>最近價格紀錄</h2>
   <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄（可橫向捲動）">
   <table class="data compact">
-    <thead><tr><th>日期</th><th>價格</th><th>航空公司</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
+    <thead><tr><th>日期</th><th>價格</th><th>航空公司</th><th>出發時刻</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>
     <tbody>
     {% for p in recent_prices %}
       <tr>
         <td>{{ p.dates }}</td>
-        <td class="num">查到 {{ p.amount_text }}</td>
+        <td class="num">查到 {{ p.amount_text }}{% if watch.pax_note %}<div class="muted">{{ watch.pax_note }}</div>{% endif %}</td>
         <td>{{ p.carrier }}</td>
+        <td>{{ p.depart_time or "—" }}</td>
         <td>{{ p.fetched_text }}{% if p.stale %} <span class="badge warn">可能已過期</span>{% endif %}</td>
         <td>{{ p.source }}（{{ p.kind }}）</td>
-        <td><a href="{{ p.link }}" target="_blank" rel="noopener noreferrer">查票</a></td>
+        <td><a href="{{ p.booking_url or p.link }}" target="_blank" rel="noopener noreferrer">查票</a>{% if p.booking_note %}<div class="hint">{{ p.booking_note }}</div>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

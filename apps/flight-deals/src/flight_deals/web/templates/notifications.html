@@ -17,7 +17,7 @@
       <td>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
       <td>{{ n.kind }}</td>
       <td>{{ n.reasons }}</td>
-      <td class="num">{{ n.price }}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
+      <td class="num">{{ n.price }}{% if n.pax_note %}<div class="muted">{{ n.pax_note }}</div>{% endif %}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
       <td><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
       <td class="num">{{ n.attempts }}/{{ n.max_attempts }}</td>
       <td><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>

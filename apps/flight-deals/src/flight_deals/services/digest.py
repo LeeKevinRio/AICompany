@@ -122,6 +122,9 @@ class DigestService:
                     delta_minor=delta.delta_minor if delta else None,
                     data_stale=bool(cheapest and now - cheapest.fetched_at > stale_after),
                     watch_stale=watch.status == "stale",
+                    adults=spec.adults,
+                    children=spec.children,
+                    cabin=spec.cabin,
                 )
             )
         known = {r.source: r for r in self._health.records()}

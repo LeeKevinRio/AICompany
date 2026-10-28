@@ -15,7 +15,14 @@ import flight_deals.autostart as autostart
 from flight_deals.config import PROJECT_DIR, Config, ConfigError
 from flight_deals.domain.timeutil import utc_now
 from flight_deals.notify.telegram import TelegramNotifier, TelegramSetupClient, Transport
-from flight_deals.ports import AutostartProbe, AutostartStatus, Clock, FlightPriceSource, Notifier
+from flight_deals.ports import (
+    AutostartProbe,
+    AutostartStatus,
+    BookingLinkBuilder,
+    Clock,
+    FlightPriceSource,
+    Notifier,
+)
 from flight_deals.redact import redact, register_secret
 from flight_deals.scheduler import (
     FileSchedulerLock,
@@ -36,7 +43,7 @@ from flight_deals.services import (
 from flight_deals.services.settings import EffectiveSettings
 from flight_deals.sources._support import Throttle, TTLCache
 from flight_deals.sources.fixture import FixtureSource
-from flight_deals.sources.google_flights import GoogleFlightsSource
+from flight_deals.sources.google_flights import GoogleFlightsLinkBuilder, GoogleFlightsSource
 from flight_deals.storage.db import Database
 from flight_deals.storage.repository import Repository
 from flight_deals.web import create_web_app
@@ -133,6 +140,7 @@ def assemble(
     notifier: Notifier | None = None,
     clock: Clock = utc_now,
     autostart_probe: AutostartProbe | None = None,
+    link_builder: BookingLinkBuilder | None = None,
 ) -> Assembly:
     for secret in config.secrets():
         register_secret(secret)
@@ -141,6 +149,8 @@ def assemble(
     repo = Repository(database)
     limits = config.limits
     tunables = config.tunables
+    # Exact Google Flights links (pure tfs encoding, no network; FD-5 Decision 7).
+    links = link_builder or GoogleFlightsLinkBuilder()
 
     active_sources = list(sources) if sources is not None else build_sources(config)
     channel = notifier or TelegramNotifier(
@@ -176,6 +186,7 @@ def assemble(
         max_attempts=limits.notification_max_attempts,
         clock=clock,
         redactor=redact,
+        link_builder=links,
     )
     scan = ScanService(
         repo,
@@ -199,6 +210,7 @@ def assemble(
         breaker_threshold=limits.breaker_failure_threshold,
         clock=clock,
         autostart=autostart_probe,
+        link_builder=links,
     )
     digest = DigestService(
         repo,
@@ -254,6 +266,7 @@ def create_app(
     start_scheduler: bool = True,
     scheduler_lock: SchedulerLock | None = None,
     autostart_probe: AutostartProbe | None = None,
+    link_builder: BookingLinkBuilder | None = None,
 ) -> FastAPI:
     """Build the app. With ``start_scheduler`` the scheduler lock is held from here on.
 
@@ -272,6 +285,7 @@ def create_app(
             notifier=notifier,
             clock=clock,
             autostart_probe=autostart_probe,
+            link_builder=link_builder,
         )
     except BaseException:
         if lock is not None:

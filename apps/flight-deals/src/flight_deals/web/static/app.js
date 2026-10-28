@@ -128,6 +128,32 @@
     });
   }
 
+  // Whole numbers become ints; anything else is passed through as the raw
+  // string so the server can reject it with a clear message.
+  function toInt(text) {
+    return /^-?\d+$/.test(text) ? parseInt(text, 10) : text;
+  }
+
+  function hourOrNull(text) {
+    return text === "" ? null : toInt(text);
+  }
+
+  // Disable the unchecked airline boxes once the cap is reached.
+  function initAirlinePicker() {
+    const list = document.getElementById("airline-list");
+    if (!list) return;
+    const max = parseInt(list.getAttribute("data-max"), 10) || 5;
+    const boxes = list.querySelectorAll('input[type="checkbox"]');
+    const sync = function () {
+      const checked = list.querySelectorAll("input:checked").length;
+      boxes.forEach(function (box) {
+        box.disabled = checked >= max && !box.checked;
+      });
+    };
+    list.addEventListener("change", sync);
+    sync();
+  }
+
   function collectWatch(form) {
     const value = function (name) {
       const el = form.querySelector('[name="' + name + '"]');
@@ -153,6 +179,17 @@
       budget: value("budget"),
       notify_on_new_low: form.querySelector('[name="notify_on_new_low"]').checked,
     };
+    payload.adults = toInt(value("adults"));
+    payload.children = toInt(value("children"));
+    payload.cabin = value("cabin");
+    payload.airlines = Array.prototype.map.call(
+      form.querySelectorAll('input[name="airlines"]:checked'),
+      function (el) {
+        return el.value;
+      }
+    );
+    payload.dep_hour_from = hourOrNull(value("dep_hour_from"));
+    payload.dep_hour_to = hourOrNull(value("dep_hour_to"));
     if (dateMode === "fixed") {
       payload.depart_date = value("depart_date");
       if (tripType === "round_trip") payload.return_date = value("return_date");
@@ -591,6 +628,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initWatchForm();
+    initAirlinePicker();
     initSettingsForm();
     initActions();
   });

@@ -45,7 +45,7 @@ def test_create_minimal_watch_and_list(harness: Harness) -> None:  # AC-A1
     page = harness.client.get("/").text
     assert "TPE→NRT" in page and "尚未查價" in page and "啟用中" in page
     detail = harness.client.get(f"/watches/{watch.id}").text
-    assert "經濟艙・1 位成人" in detail
+    assert "1 位成人" in detail and "經濟艙" in detail
 
 
 def test_flexible_settings_shown_on_detail(harness: Harness) -> None:  # AC-A2
@@ -169,7 +169,8 @@ def test_detail_sections(harness: Harness) -> None:  # AC-D1..D5, AC-B3
     assert prices == sorted(prices)
     assert "依出發日的價格分布" in page and "heat-cheap" in page
     assert "本次取樣的日期組合" in page and "達上限" in page
-    assert "https://www.google.com/travel/flights?hl=zh-TW" in page
+    # Current-revision rows link the exact tfs search (FD-5 Decision 7).
+    assert "https://www.google.com/travel/flights/search?tfs=" in page
     assert 'badge warn">可能已過期' not in page
     harness.clock.advance(hours=30)
     stale_page = harness.client.get(f"/watches/{watch_id}").text

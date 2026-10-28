@@ -349,6 +349,7 @@ def test_alert_length_with_longest_names() -> None:  # C-25, AC-S2
         destination=other.code,
         trip_type="round_trip",
         items=_items(5),
+        links=[None] * 5,
     )
     assert len(text) < MAX_MESSAGE_LENGTH
     assert route_label(longest.code, other.code) in text
@@ -359,7 +360,12 @@ def test_alert_length_with_longest_names() -> None:  # C-25, AC-S2
 def test_alert_route_growth_is_small() -> None:  # AC-S2: growth is per item route line only
     items = _items(1)
     new = price_alert_message(
-        watch_name="w", origin="TPE", destination="NRT", trip_type="round_trip", items=items
+        watch_name="w",
+        origin="TPE",
+        destination="NRT",
+        trip_type="round_trip",
+        items=items,
+        links=[None],
     )
     old_route, new_route = "TPE→NRT", route_label("TPE", "NRT")
     assert new_route in new

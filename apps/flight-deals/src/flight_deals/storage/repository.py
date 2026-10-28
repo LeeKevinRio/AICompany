@@ -42,6 +42,20 @@ def _req_ts(value: str) -> datetime:
     return parse_utc_iso(value)
 
 
+# watch.airlines is the only list-valued column: upper-case codes, sorted, comma
+# separated, NULL for "any airline" (ADR-0002 FD-5 Decision 1). These two functions are
+# the single place that format is written and read.
+def airlines_to_db(codes: Sequence[str]) -> str | None:
+    unique = sorted({c.strip().upper() for c in codes if c.strip()})
+    return ",".join(unique) if unique else None
+
+
+def airlines_from_db(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(sorted({c for c in value.split(",") if c}))
+
+
 @dataclass(frozen=True)
 class ObservationRecord:
     id: int
@@ -60,6 +74,7 @@ class ObservationRecord:
     carrier: str | None
     stops: int | None
     duration_minutes: int | None
+    depart_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +167,12 @@ def _watch(row: sqlite3.Row) -> Watch:
         budget_amount_minor=row["budget_amount_minor"],
         currency=row["currency"],
         notify_on_new_low=bool(row["notify_on_new_low"]),
+        adults=row["adults"],
+        children=row["children"],
+        cabin=row["cabin"],
+        airlines=airlines_from_db(row["airlines"]),
+        dep_hour_from=row["dep_hour_from"],
+        dep_hour_to=row["dep_hour_to"],
     )
     return Watch(
         id=row["id"],
@@ -184,6 +205,7 @@ def _observation(row: sqlite3.Row) -> ObservationRecord:
         carrier=row["carrier"],
         stops=row["stops"],
         duration_minutes=row["duration_minutes"],
+        depart_time=row["depart_time"],
     )
 
 
@@ -242,6 +264,12 @@ def _spec_values(spec: WatchSpec) -> dict[str, Any]:
         "budget_amount_minor": spec.budget_amount_minor,
         "currency": spec.currency,
         "notify_on_new_low": int(spec.notify_on_new_low),
+        "adults": spec.adults,
+        "children": spec.children,
+        "cabin": spec.cabin,
+        "airlines": airlines_to_db(spec.airlines),
+        "dep_hour_from": spec.dep_hour_from,
+        "dep_hour_to": spec.dep_hour_to,
     }
 
 
@@ -282,6 +310,20 @@ class Repository:
         with self.db.connect() as conn:
             row = conn.execute("SELECT * FROM watch WHERE id = ?", (watch_id,)).fetchone()
         return _watch(row) if row else None
+
+    def list_watches_with_last_results(self) -> list[tuple[Watch, list[dict[str, Any]]]]:
+        """Every watch with its latest finished scan run's per-pair results (one query)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT w.*, (SELECT s.query_results FROM scan_run s"
+                "  WHERE s.watch_id = w.id AND s.finished_at IS NOT NULL"
+                "  ORDER BY s.id DESC LIMIT 1) AS last_query_results"
+                " FROM watch w ORDER BY w.id"
+            ).fetchall()
+        return [
+            (_watch(r), json.loads(r["last_query_results"]) if r["last_query_results"] else [])
+            for r in rows
+        ]
 
     def list_watches(self) -> list[Watch]:
         with self.db.connect() as conn:
@@ -440,8 +482,8 @@ class Repository:
             cur = conn.execute(
                 "INSERT INTO price_observation (scan_run_id, watch_id, watch_revision, source,"
                 " price_kind, depart_date, return_date, amount_minor, currency, as_of,"
-                " as_of_basis, fetched_at, carrier, stops, duration_minutes)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " as_of_basis, fetched_at, carrier, stops, duration_minutes, depart_time)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     scan_run_id,
                     watch_id,
@@ -458,6 +500,7 @@ class Repository:
                     quote.carrier,
                     quote.stops,
                     quote.duration_minutes,
+                    quote.depart_time,
                 ),
             )
             return int(cast(int, cur.lastrowid))

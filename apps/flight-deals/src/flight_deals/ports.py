@@ -18,13 +18,17 @@ class ParseStats:
     """Per-response itinerary counts from a payload parser (all non-negative ints).
 
     ``unpriced`` itineraries carry no price at all and are skipped silently;
-    ``malformed`` ones had a shape the parser did not recognise.
+    ``malformed`` ones had a shape the parser did not recognise. ``itineraries`` counts
+    the merged list after de-duplication; ``best`` / ``other`` are the raw lengths of
+    the two result sections before merging.
     """
 
     itineraries: int
     priced: int
     unpriced: int
     malformed: int
+    best: int = 0
+    other: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,3 +92,13 @@ class AutostartProbe(Protocol):
     def status(self) -> AutostartStatus | None:
         """None when the state cannot be determined (not Windows, access error)."""
         ...
+
+
+class BookingLinkBuilder(Protocol):
+    """Exact booking-search URL for one query (ADR-0002 FD-5 Decision 7).
+
+    Implementations must not fetch anything. None (or an exception, which callers
+    contain) means the caller falls back to the route-and-date search link.
+    """
+
+    def url(self, search: FlightSearch) -> str | None: ...

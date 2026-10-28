@@ -248,6 +248,7 @@ def evaluate(
     return evaluate_price_alerts(
         candidates,
         watch_id=1,
+        revision=1,
         price_kind=kind,  # type: ignore[arg-type]
         currency="TWD",
         budget_amount_minor=major_to_minor(budget, "TWD") if budget else None,
@@ -281,7 +282,7 @@ def test_new_low_triggers() -> None:  # AC-C3
 
 def test_same_pair_same_price_not_repeated() -> None:  # AC-C4
     c = cand(9500)
-    key = price_item_key(1, "live", c.depart_date, c.return_date, c.amount_minor)
+    key = price_item_key(1, 1, "live", c.depart_date, c.return_date, c.amount_minor)
     assert evaluate([c], keys={key}) == []
     assert evaluate([cand(9400)], keys={key})  # price changed -> may trigger again
 
@@ -364,7 +365,12 @@ def test_google_flights_link_contains_route_and_dates() -> None:  # FR-D5
 def test_price_alert_contains_required_fields() -> None:  # AC-C5
     items = evaluate([cand(9500)])
     text = price_alert_message(
-        watch_name="東京", origin="TPE", destination="NRT", trip_type="round_trip", items=items
+        watch_name="東京",
+        origin="TPE",
+        destination="NRT",
+        trip_type="round_trip",
+        items=items,
+        links=[None],
     )
     for needle in (
         "台北桃園 TPE → 東京成田 NRT",
@@ -385,7 +391,18 @@ def test_no_advisory_wording_anywhere() -> None:  # AC-C6 / C-17
     items = evaluate([cand(9400, day=1), cand(8000, day=2)], budget=9000, last=10000, low=8500)
     texts = [
         price_alert_message(
-            watch_name="w", origin="TPE", destination="NRT", trip_type="round_trip", items=items
+            watch_name="w",
+            origin="TPE",
+            destination="NRT",
+            trip_type="round_trip",
+            items=items,
+            links=[None] * len(items),
+            adults=2,
+            children=1,
+            cabin="business",
+            airlines=("BR", "CI"),
+            dep_hour_from=6,
+            dep_hour_to=12,
         ),
         ops_failure_message(source="google_flights", error="blocked", now=NOW),
         telegram_test_message(NOW),
@@ -416,6 +433,8 @@ def wording_surfaces() -> dict[str, str]:
         "domain/messages.py",
         "domain/airports.py",
         "domain/validation.py",
+        "domain/airlines.py",
+        "domain/trip_labels.py",
     ):
         constants = _string_constants(SRC / module)
         if module == "domain/messages.py":

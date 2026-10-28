@@ -14,10 +14,11 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlencode
 
 from fast_flights import FlightQuery, Passengers, create_query, fetch_flights_html
 
-from flight_deals.domain.models import FlightSearch, PriceKind, PriceQuote, QueryStatus
+from flight_deals.domain.models import Cabin, FlightSearch, PriceKind, PriceQuote, QueryStatus
 from flight_deals.domain.timeutil import utc_now
 from flight_deals.ports import Clock, ParseStats, SourceResult
 from flight_deals.redact import redact_truncate
@@ -47,34 +48,81 @@ VERIFIED_FAST_FLIGHTS_VERSION = "3.1.0"
 FetchFn = Callable[[FlightSearch], str]
 
 NO_STATS = ParseStats(itineraries=0, priced=0, unpriced=0, malformed=0)
+# Sub-reason of ``no_data`` when neither result section is embedded in the page. Seen
+# live 2026-10-28 for round trip + business + several passengers: the browser loads
+# the results later, the server-rendered page carries none. Not a source failure.
+NO_EMBEDDED_RESULTS = "no_embedded_results"
+
+
+# Domain cabin names -> fast_flights seat strings (the only place this mapping lives).
+SEAT_BY_CABIN: dict[Cabin, str] = {
+    "economy": "economy",
+    "premium_economy": "premium-economy",
+    "business": "business",
+    "first": "first",
+}
+# Browser search page for a ``?tfs=`` query (same base fast_flights' Query.url() uses).
+BOOKING_BASE_URL = "https://www.google.com/travel/flights/search"
+
+
+def _leg(search: FlightSearch, date: str, origin: str, destination: str, *, outbound: bool) -> Any:
+    # Airlines and max stops apply to both legs; the departure window only to the
+    # outbound leg (ADR-0002 FD-5 Decision 3). An empty airline list is never sent.
+    return FlightQuery(
+        date=date,
+        from_airport=origin,
+        to_airport=destination,
+        max_stops=search.max_stops,
+        airlines=list(search.airlines) if search.airlines else None,
+        earliest_departure_hour=search.dep_hour_from if outbound else None,
+        latest_departure_hour=search.dep_hour_to if outbound else None,
+    )
 
 
 def build_query(search: FlightSearch) -> Any:
     legs = [
-        FlightQuery(
-            date=search.pair.depart.isoformat(),
-            from_airport=search.origin,
-            to_airport=search.destination,
-            max_stops=search.max_stops,
+        _leg(
+            search,
+            search.pair.depart.isoformat(),
+            search.origin,
+            search.destination,
+            outbound=True,
         )
     ]
     if search.pair.return_date is not None:
         legs.append(
-            FlightQuery(
-                date=search.pair.return_date.isoformat(),
-                from_airport=search.destination,
-                to_airport=search.origin,
-                max_stops=search.max_stops,
+            _leg(
+                search,
+                search.pair.return_date.isoformat(),
+                search.destination,
+                search.origin,
+                outbound=False,
             )
         )
     return create_query(
         flights=legs,
-        seat="economy",
+        seat=SEAT_BY_CABIN[search.cabin],  # type: ignore[arg-type]
         trip="round-trip" if search.pair.return_date is not None else "one-way",
-        passengers=Passengers(adults=search.adults),
+        passengers=Passengers(adults=search.adults, children=search.children),
         language=LANGUAGE,
         currency=search.currency,
     )
+
+
+class GoogleFlightsLinkBuilder:
+    """``ports.BookingLinkBuilder``: exact Google Flights URL from the query's ``tfs``.
+
+    Pure encoding through fast_flights' query builder; nothing is fetched. The URL is
+    tied to ``VERIFIED_FAST_FLIGHTS_VERSION`` (golden test) and never stored.
+    """
+
+    def url(self, search: FlightSearch) -> str | None:
+        params = build_query(search).params()
+        return (
+            BOOKING_BASE_URL
+            + "?"
+            + urlencode({"tfs": params["tfs"], "hl": params["hl"], "curr": params["curr"]})
+        )
 
 
 def fetch_live(search: FlightSearch) -> str:
@@ -144,6 +192,7 @@ class GoogleFlightsSource:
             message: str | None,
             stats: ParseStats,
             quotes: tuple[PriceQuote, ...] = (),
+            reason: str | None = None,
         ) -> SourceResult:
             return SourceResult(
                 source=SOURCE_NAME,
@@ -152,6 +201,7 @@ class GoogleFlightsSource:
                 quotes=quotes,
                 error=redact_truncate(message) if message else None,
                 attempts=attempts,
+                extra={"reason": reason} if reason else {},
                 parse_stats=stats,
             )
 
@@ -183,7 +233,12 @@ class GoogleFlightsSource:
             return result("blocked", f"unparseable response: {exc}", NO_STATS)
         stats = page.stats
         if page.no_results:
-            return result("no_data", "no flights found (empty result list)", stats)
+            return result(
+                "no_data",
+                "no result section embedded in the page",
+                stats,
+                reason=NO_EMBEDDED_RESULTS,
+            )
         if stats.priced == 0:
             if stats.malformed > 0:
                 return result(

@@ -33,13 +33,16 @@
       <td>
         <a href="/watches/{{ w.id }}"><strong>{{ w.name }}</strong></a>
         <div class="muted">{{ w.route }}・{{ w.trip }}</div>
+        <div class="muted">{{ w.cabin_label }}・{{ w.pax_short }}</div>
+        <div class="muted">條件：{{ w.conditions_label }}</div>
+        {% if w.no_embedded_note %}<div class="hint">{{ w.no_embedded_note }}</div>{% endif %}
       </td>
       <td>{{ w.dates }}</td>
       <td class="num">{{ w.budget }}</td>
       <td><span class="badge status-{{ w.status }}">{{ w.status_label }}</span></td>
       <td class="num">
         {% if w.min_price %}
-          {{ w.min_price }}<div class="muted">{{ w.min_price_dates }}</div>
+          {{ w.min_price }}{% if w.pax_note %}<div class="muted">{{ w.pax_note }}</div>{% endif %}<div class="muted">{{ w.min_price_dates }}</div>
         {% else %}
           <span class="muted">尚未查價</span>
         {% endif %}

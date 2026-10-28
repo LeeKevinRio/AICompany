@@ -2,16 +2,19 @@
 
 The results page embeds its data in ``<script class="ds:1">`` as
 ``AF_initDataCallback({key: 'ds:1', hash: '..', data:[...], sideChannel: {}});``.
-The upstream parser reads every itinerary's price as ``k[1][0][1]`` and aborts the
-whole page when one itinerary has no price; this module classifies each itinerary on
-its own instead:
+Itineraries come in two sections with the same shape: ``payload[2][0]`` ("best
+flights", often the cheapest) and ``payload[3][0]`` ("other flights"). The upstream
+parser reads only the second one and aborts the whole page when one itinerary has no
+price; this module reads both, drops exact duplicates, and classifies each itinerary on
+its own:
 
 * priced    -- ``k[1][0]`` is ``[_, <positive int>]``
 * unpriced  -- ``k[1][0] == []`` (the only "no price" shape observed live)
 * malformed -- anything else
 
-Only the price is required. Carrier, stop count and duration are optional and fall
-back to ``None``. Records use the shape expected by ``sources._records``.
+Only the price is required. Carrier, stop count, duration and the first segment's
+departure time are optional and fall back to ``None``. Records use the shape expected
+by ``sources._records``.
 """
 
 from __future__ import annotations
@@ -27,12 +30,16 @@ SCRIPT_CLASS = "ds:1"
 ERROR_STATUS_MARKER = "errorHasStatus: true"
 
 # Positions inside the payload, mirroring the upstream parser.
-RESULTS_INDEX = 3  # payload[3][0] is the itinerary list (None when there are none)
+BEST_INDEX = 2  # payload[2][0]: "best flights" itinerary list (None / missing when absent)
+RESULTS_INDEX = 3  # payload[3][0]: "other flights" itinerary list (None when absent)
 ITINERARY_INFO = 0  # k[0]: flight info
 ITINERARY_PRICE = 1  # k[1]: [[None, price], token] or [[], token]
 INFO_CARRIER_CODE = 0  # k[0][0]: airline code or "multi"
 INFO_CARRIER_NAMES = 1  # k[0][1]: list of airline names
 INFO_SEGMENTS = 2  # k[0][2]: list of segments
+SEGMENT_FROM = 3  # segment[3]: departure airport code
+SEGMENT_TO = 6  # segment[6]: arrival airport code
+SEGMENT_DEPART_TIME = 8  # segment[8]: local departure time, [h, m] or [h]
 SEGMENT_DURATION = 11  # segment[11]: minutes
 
 
@@ -48,7 +55,9 @@ class PayloadErrorStatus(Exception):
 class ParsedPage:
     records: tuple[dict[str, Any], ...]
     stats: ParseStats
-    # True when payload[3][0] is None: Google listed no itineraries at all.
+    # True when neither section carries an itinerary list. Seen live both for routes
+    # with no flights and for queries whose results Google loads later in the browser
+    # instead of embedding them in the page (``no_embedded_results``).
     no_results: bool = False
 
 
@@ -131,6 +140,24 @@ def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def depart_time_text(value: Any) -> str | None:
+    """``[h, m]`` -> "HH:MM", ``[h]`` -> "HH:00"; any other shape -> None.
+
+    Local time at the departure airport, never converted (ADR-0002 FD-5 Decision 4).
+    """
+    if not isinstance(value, list) or not 1 <= len(value) <= 2:
+        return None
+    hour = value[0]
+    minute = value[1] if len(value) == 2 else 0
+    if not (_is_int(hour) and _is_int(minute)) or not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
 def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     info = _at(itinerary, ITINERARY_INFO)
     names = _at(info, INFO_CARRIER_NAMES)
@@ -139,15 +166,19 @@ def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     )
     segments = _at(info, INFO_SEGMENTS)
     flights: list[dict[str, Any]] = []
+    depart_time: str | None = None
     if isinstance(segments, list) and all(isinstance(s, list) for s in segments):
         for segment in segments:
             duration = _at(segment, SEGMENT_DURATION)
             flights.append({"duration": duration if _is_positive_int(duration) else None})
+        if segments:
+            depart_time = depart_time_text(_at(segments[0], SEGMENT_DEPART_TIME))
     return {
         "type": _optional_str(_at(info, INFO_CARRIER_CODE)),
         "price": price,
         "airlines": airlines,
         "flights": flights,
+        "depart_time": depart_time,
     }
 
 
@@ -164,25 +195,85 @@ def classify_itinerary(itinerary: Any) -> str:
     return "malformed"
 
 
+def _section(payload: list[Any], index: int, *, strict: bool) -> list[Any] | None:
+    """Itinerary list of one section; None when the section is absent.
+
+    ``strict`` ("other flights", payload[3]): absent only when the whole section is
+    ``None`` (the shape recorded live for pages without embedded results) or, as in
+    FD-3, when its list slot ``payload[3][0]`` is ``None``. Any other shape -- ``[]``,
+    a dict, a string, a number, or a non-list ``payload[3][0]`` -- is a format change
+    and raises ``PayloadFormatError`` (``blocked``); ``[]`` is never "absent".
+
+    Not strict ("best flights", payload[2]): optional, so anything that is not
+    ``[<list>, ...]`` counts as absent.
+    """
+    block = payload[index]
+    if block is None:
+        return None
+    if not isinstance(block, list) or not block:
+        if strict:
+            raise PayloadFormatError("results section is not a non-empty list")
+        return None
+    itineraries = block[0]
+    if itineraries is None:
+        return None
+    if not isinstance(itineraries, list):
+        if strict:
+            raise PayloadFormatError("itinerary list has an unexpected type")
+        return None
+    return itineraries
+
+
+def itinerary_key(itinerary: Any) -> str | None:
+    """Identity for de-duplication across sections: carrier code, every segment's
+    departure / arrival airport and departure time, and the price block. None when the
+    itinerary is too malformed to identify (it is then never merged away)."""
+    info = _at(itinerary, ITINERARY_INFO)
+    segments = _at(info, INFO_SEGMENTS)
+    if not isinstance(segments, list):
+        return None
+    # Departure times are normalised ([8] and [8, 0] are both "08:00").
+    legs = [
+        [
+            _at(seg, SEGMENT_FROM),
+            _at(seg, SEGMENT_TO),
+            depart_time_text(_at(seg, SEGMENT_DEPART_TIME)),
+        ]
+        for seg in segments
+    ]
+    price = _at(itinerary, ITINERARY_PRICE, 0)
+    try:
+        return json.dumps([_at(info, INFO_CARRIER_CODE), legs, price], sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_payload(payload: Any) -> ParsedPage:
     """Split a decoded payload into priced records plus per-itinerary counts.
 
+    Both sections are read and merged ("best" first); exact duplicates are dropped.
     Raises ``PayloadFormatError`` when the top-level shape is not recognised.
     """
     if not isinstance(payload, list) or len(payload) <= RESULTS_INDEX:
         raise PayloadFormatError("payload is not a list with a results section")
-    results = payload[RESULTS_INDEX]
-    if not isinstance(results, list) or not results:
-        raise PayloadFormatError("results section is not a non-empty list")
-    itineraries = results[0]
-    if itineraries is None:
+    best = _section(payload, BEST_INDEX, strict=False)
+    other = _section(payload, RESULTS_INDEX, strict=True)
+    if best is None and other is None:
         return ParsedPage(records=(), stats=ParseStats(0, 0, 0, 0), no_results=True)
-    if not isinstance(itineraries, list):
-        raise PayloadFormatError("itinerary list has an unexpected type")
+
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for itinerary in [*(best or []), *(other or [])]:
+        key = itinerary_key(itinerary)
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        merged.append(itinerary)
 
     records: list[dict[str, Any]] = []
     unpriced = malformed = 0
-    for itinerary in itineraries:
+    for itinerary in merged:
         kind = classify_itinerary(itinerary)
         if kind == "priced":
             records.append(_record(itinerary, itinerary[ITINERARY_PRICE][0][1]))
@@ -191,10 +282,12 @@ def parse_payload(payload: Any) -> ParsedPage:
         else:
             malformed += 1
     stats = ParseStats(
-        itineraries=len(itineraries),
+        itineraries=len(merged),
         priced=len(records),
         unpriced=unpriced,
         malformed=malformed,
+        best=len(best or []),
+        other=len(other or []),
     )
     return ParsedPage(records=tuple(records), stats=stats)
 

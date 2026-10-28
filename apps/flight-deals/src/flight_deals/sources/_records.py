@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
@@ -12,6 +13,15 @@ from flight_deals.domain.models import PriceKind, PriceQuote
 
 class RecordFormatError(ValueError):
     """A record does not have the expected shape (treated as ``blocked``)."""
+
+
+_HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d", re.ASCII)
+
+
+def _depart_time(record: Mapping[str, Any]) -> str | None:
+    """Optional "HH:MM" set by the payload parser; anything else is dropped."""
+    value = record.get("depart_time")
+    return value if isinstance(value, str) and _HHMM.fullmatch(value) else None
 
 
 def _carrier(record: Mapping[str, Any]) -> str | None:
@@ -73,6 +83,7 @@ def quotes_from_records(
                 carrier=_carrier(record),
                 stops=len(segs) - 1 if segs else None,
                 duration_minutes=duration,
+                depart_time=_depart_time(record),
             )
         )
     return quotes

@@ -10,7 +10,7 @@ from flight_deals.services.views import parse_notes, try_note
 from flight_deals.sources._support import Throttle, TTLCache
 from flight_deals.sources.google_flights import GoogleFlightsSource
 from tests.conftest import Harness
-from tests.test_sources import itineraries, page_html, sha_payload, unpriced_only
+from tests.test_sources import itineraries, other_only, page_html, sha_payload, unpriced_only
 
 SKIP_NOTE = "略過 2 筆無價格航班"
 ONE_WAY_SHA = {
@@ -47,7 +47,7 @@ def use_pages(h: Harness, *pages: str) -> list[str]:
 
 
 def all_priced() -> Any:
-    payload = sha_payload()
+    payload = other_only(sha_payload())
     payload[3][0] = [k for k in itineraries(payload) if k[1][0] != []]
     return payload
 
@@ -77,12 +77,13 @@ def test_mixed_list_records_priced_flights_only(harness: Harness) -> None:  # AC
     outcome = harness.scan(watch_id)
     assert outcome.status == "ok"
     [obs] = harness.repo.observations_for_watch(watch_id)
-    assert obs.amount_minor == 1265500 and obs.source == "google_flights"
+    # The cheapest fare sits in the "best flights" section (FD-5 batch 2).
+    assert obs.amount_minor == 463300 and obs.source == "google_flights"
     run = harness.repo.scan_runs_for_watch(watch_id)[0]
     assert run.status == "ok" and run.error_summary is None  # C-27: unpriced only -> NULL
     assert run.query_results[0]["status"] == "ok"
     tried = last_try(harness, watch_id)
-    assert (tried["itineraries"], tried["unpriced"], tried["malformed"]) == (4, 2, 0)
+    assert (tried["itineraries"], tried["unpriced"], tried["malformed"]) == (9, 2, 0)
     assert all(isinstance(tried[k], int) for k in ("itineraries", "unpriced", "malformed"))
     assert sampled_note(harness, watch_id) == SKIP_NOTE
     assert SKIP_NOTE in harness.client.get(f"/watches/{watch_id}").text
@@ -139,7 +140,7 @@ def test_skips_do_not_count_as_source_failures(harness: Harness) -> None:  # AC-
 
 
 def test_malformed_items_beside_prices_are_reported(harness: Harness) -> None:
-    payload = sha_payload()
+    payload = other_only(sha_payload())
     itineraries(payload)[3][1] = [[None, "?"], "token"]
     use_pages(harness, page_html(payload))
     watch_id = harness.create_watch(**ONE_WAY_SHA)

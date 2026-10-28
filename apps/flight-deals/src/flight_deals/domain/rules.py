@@ -49,20 +49,32 @@ class TriggeredItem:
 
 
 def price_item_key(
-    watch_id: int, price_kind: str, depart: date, return_date: date | None, amount_minor: int
+    watch_id: int,
+    revision: int,
+    price_kind: str,
+    depart: date,
+    return_date: date | None,
+    amount_minor: int,
 ) -> str:
+    """Per date pair and price, scoped to one revision (ADR-0002 FD-5 Decision 8).
+
+    Without the revision, switching back to earlier settings would silently swallow an
+    alert for the same pair and price. Migration 0003 rewrites older keys to this shape.
+    """
     ret = return_date.isoformat() if return_date else "-"
-    return f"price:{watch_id}:{price_kind}:{depart.isoformat()}:{ret}:{amount_minor}"
+    return f"price:{watch_id}:r{revision}:{price_kind}:{depart.isoformat()}:{ret}:{amount_minor}"
 
 
-def price_message_key(watch_id: int, price_kind: str, items: Iterable[TriggeredItem]) -> str:
+def price_message_key(
+    watch_id: int, revision: int, price_kind: str, items: Iterable[TriggeredItem]
+) -> str:
     parts = sorted(
         f"{i.candidate.depart_date.isoformat()}:"
         f"{i.candidate.return_date.isoformat() if i.candidate.return_date else '-'}:"
         f"{i.candidate.amount_minor}"
         for i in items
     )
-    return f"price:{watch_id}:{price_kind}:" + "|".join(parts)
+    return f"price:{watch_id}:r{revision}:{price_kind}:" + "|".join(parts)
 
 
 def ops_failure_key(source: str, now: datetime) -> str:
@@ -97,6 +109,7 @@ def evaluate_price_alerts(
     candidates: Iterable[Candidate],
     *,
     watch_id: int,
+    revision: int,
     price_kind: PriceKind,
     currency: str,
     budget_amount_minor: int | None,
@@ -112,7 +125,7 @@ def evaluate_price_alerts(
         if cand.price_kind != price_kind or cand.currency != currency:
             continue
         key = price_item_key(
-            watch_id, price_kind, cand.depart_date, cand.return_date, cand.amount_minor
+            watch_id, revision, price_kind, cand.depart_date, cand.return_date, cand.amount_minor
         )
         if key in already_notified_keys:
             continue

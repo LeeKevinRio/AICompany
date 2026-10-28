@@ -19,6 +19,8 @@ from flight_deals.storage.db import (
 )
 
 ORIGINAL_MIGRATIONS: Callable[[], list[tuple[int, str]]] = available_migrations
+# Later migrations (0003+) also run; these tests only check what 0002 guarantees.
+LATEST = max(version for version, _ in available_migrations())
 
 
 def only_up_to(version: int) -> Callable[[], list[tuple[int, str]]]:
@@ -85,7 +87,7 @@ def test_v1_data_survives_and_daily_digest_is_writable(
 ) -> None:
     database = build_v1_db(tmp_path / "fd.db", monkeypatch)
     assert counts(database) == (2, 2)
-    assert database.migrate() == 2
+    assert database.migrate() == LATEST
     assert counts(database) == (2, 2)
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM notification WHERE id = 7").fetchone()
@@ -150,7 +152,7 @@ def test_existing_db_is_backed_up_next_to_it(
 
 def test_new_db_gets_no_backup(tmp_path: Path) -> None:
     database = Database(tmp_path / "fresh.db")
-    assert database.migrate() == 2
+    assert database.migrate() == LATEST
     assert sorted(p.name for p in tmp_path.glob("*.db")) == ["fresh.db"]
 
 
@@ -183,7 +185,7 @@ def test_violation_rolls_back_and_raises(tmp_path: Path, monkeypatch: pytest.Mon
     )
     with pytest.raises(MigrationError):
         database.migrate()
-    assert database.schema_version() == 2
+    assert database.schema_version() == LATEST
     assert counts(database) == (0, 0)
 
 
@@ -221,7 +223,7 @@ def test_failed_backup_leaves_no_partial_file(
     monkeypatch.setattr(Database, "_open", real_open)
     assert sorted(p.name for p in tmp_path.iterdir() if "pre-v2" in p.name) == []
     assert database.schema_version() == 1
-    assert database.migrate() == 2  # a later start backs up and migrates normally
+    assert database.migrate() == LATEST  # a later start backs up and migrates normally
     assert Database(backup_path(database.path, 2)).schema_version() == 1
 
 

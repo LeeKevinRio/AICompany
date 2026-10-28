@@ -14,6 +14,10 @@ AsOfBasis = Literal["source_reported", "fetch_time"]
 QueryStatus = Literal["ok", "no_data", "blocked", "error"]
 AlertReason = Literal["below_budget", "drop_pct", "new_low"]
 NotificationKind = Literal["price_alert", "ops_source_failure", "test", "daily_digest"]
+# Cabin values are snake_case in the domain; only sources/google_flights.py maps them to
+# the price source's own strings (ADR-0002 FD-5 Decision 3).
+Cabin = Literal["economy", "premium_economy", "business", "first"]
+CABINS: tuple[Cabin, ...] = ("economy", "premium_economy", "business", "first")
 
 SCANNABLE_STATUSES: frozenset[str] = frozenset({"active", "stale"})
 
@@ -56,9 +60,22 @@ class WatchSpec:
     budget_amount_minor: int | None
     currency: str = "TWD"
     notify_on_new_low: bool = True
+    # Trip options (FD-5). Defaults are what every pre-FD-5 watch means.
+    adults: int = 1
+    children: int = 0
+    cabin: Cabin = "economy"
+    # Upper-case IATA codes, sorted and de-duplicated; empty = any airline.
+    airlines: tuple[str, ...] = ()
+    # Outbound departure window in whole hours (both set or both None, from < to).
+    dep_hour_from: int | None = None
+    dep_hour_to: int | None = None
 
     def search_shape(self) -> tuple[object, ...]:
-        """Fields whose change makes old price history incomparable (bumps revision)."""
+        """Fields whose change makes old price history incomparable (bumps revision).
+
+        Name, budget and notification switches are deliberately left out; airlines are
+        compared as a set so the order they were ticked in never matters.
+        """
         return (
             self.origin,
             self.destination,
@@ -72,6 +89,12 @@ class WatchSpec:
             self.max_trip_days,
             self.max_stops,
             self.currency,
+            self.adults,
+            self.children,
+            self.cabin,
+            tuple(sorted(set(self.airlines))),
+            self.dep_hour_from,
+            self.dep_hour_to,
         )
 
 
@@ -90,13 +113,19 @@ class Watch:
 
 @dataclass(frozen=True)
 class FlightSearch:
+    """One outbound query. Build it with ``search_for`` (the single construction point)."""
+
     origin: str
     destination: str
     pair: DatePair
     max_stops: int | None
     currency: str = "TWD"
     adults: int = 1
-    cabin: str = "economy"
+    children: int = 0
+    cabin: Cabin = "economy"
+    airlines: tuple[str, ...] = ()
+    dep_hour_from: int | None = None
+    dep_hour_to: int | None = None
 
     @property
     def trip_type(self) -> TripType:
@@ -110,8 +139,29 @@ class FlightSearch:
             self.max_stops,
             self.currency,
             self.adults,
+            self.children,
             self.cabin,
+            self.airlines,
+            self.dep_hour_from,
+            self.dep_hour_to,
         )
+
+
+def search_for(spec: WatchSpec, pair: DatePair, currency: str) -> FlightSearch:
+    """The only place a ``FlightSearch`` is built from a watch (scan and booking links)."""
+    return FlightSearch(
+        origin=spec.origin,
+        destination=spec.destination,
+        pair=pair,
+        max_stops=spec.max_stops,
+        currency=currency,
+        adults=spec.adults,
+        children=spec.children,
+        cabin=spec.cabin,
+        airlines=tuple(sorted(set(spec.airlines))),
+        dep_hour_from=spec.dep_hour_from,
+        dep_hour_to=spec.dep_hour_to,
+    )
 
 
 @dataclass(frozen=True)
@@ -128,3 +178,5 @@ class PriceQuote:
     carrier: str | None
     stops: int | None
     duration_minutes: int | None
+    # Local departure time "HH:MM" of the first segment; optional (FD-5 Decision 4).
+    depart_time: str | None = None

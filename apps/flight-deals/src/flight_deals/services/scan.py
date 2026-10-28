@@ -17,6 +17,7 @@ from flight_deals.domain.models import (
     PriceKind,
     Watch,
     WatchStatus,
+    search_for,
 )
 from flight_deals.domain.rules import (
     AlertBaseline,
@@ -289,13 +290,7 @@ class ScanService:
             "tries": [],
         }
         outcome = _PairOutcome(entry)
-        search = FlightSearch(
-            origin=watch.spec.origin,
-            destination=watch.spec.destination,
-            pair=pair,
-            max_stops=watch.spec.max_stops,
-            currency=watch.spec.currency,
-        )
+        search = search_for(watch.spec, pair, watch.spec.currency)
         for source in self._sources:
             if not self._health.allow(source.name):
                 entry["tries"].append({"source": source.name, "status": "skipped_breaker_open"})
@@ -360,6 +355,11 @@ class ScanService:
                 )
                 return outcome
             if result.status == "no_data":
+                # A sub-reason (e.g. results not embedded) is shown, never counted as failure.
+                reason = result.extra.get("reason")
+                if reason:
+                    entry["reason"] = reason
+                    try_info["reason"] = reason
                 outcome.success = True
                 return outcome
             outcome.failure = True
@@ -414,6 +414,7 @@ class ScanService:
             items = evaluate_price_alerts(
                 same,
                 watch_id=watch.id,
+                revision=watch.revision,
                 price_kind=kind,
                 currency=spec.currency,
                 budget_amount_minor=spec.budget_amount_minor,

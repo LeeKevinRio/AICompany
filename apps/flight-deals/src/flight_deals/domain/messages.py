@@ -15,6 +15,14 @@ from flight_deals.domain.currency import format_money
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.rules import TriggeredItem
 from flight_deals.domain.timeutil import format_taipei, format_travel_date
+from flight_deals.domain.trip_labels import (
+    BOOKING_FALLBACK_NOTE,
+    cabin_label,
+    filter_line,
+    pax_label,
+    total_price_note,
+)
+from flight_deals.domain.trip_labels import static_texts as trip_static_texts
 
 DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票網站為準。"
 SAMPLED_ONLY_NOTE = "只涵蓋已取樣的日期；未取樣的日期不代表沒有更便宜的價格。"
@@ -94,17 +102,35 @@ def price_alert_message(
     destination: str,
     trip_type: str,
     items: Sequence[TriggeredItem],
+    links: Sequence[str | None],
+    adults: int = 1,
+    children: int = 0,
+    cabin: str = "economy",
+    airlines: Sequence[str] = (),
+    dep_hour_from: int | None = None,
+    dep_hour_to: int | None = None,
 ) -> str:
-    """One merged message for all triggered items of a watch in a single scan."""
+    """One merged message for all triggered items of a watch in a single scan.
+
+    ``links[i]`` is the exact booking link for ``items[i]`` (None when it could not be
+    built); missing links fall back to the route-and-date search plus a note
+    (ADR-0002 FD-5 Decision 7). Prices are totals for the whole party.
+    """
     trip = TRIP_TYPE_LABELS.get(trip_type, trip_type)
     route = route_label(origin, destination)
-    lines = [f"[flight-deals] 監看「{watch_name}」查到 {len(items)} 筆符合條件的價格（{trip}）"]
+    note = total_price_note(adults, children)
+    header = f"{trip}・{pax_label(adults, children)}・{cabin_label(cabin)}"
+    lines = [f"[flight-deals] 監看「{watch_name}」查到 {len(items)} 筆符合條件的價格（{header}）"]
+    filters = filter_line(airlines, dep_hour_from, dep_hour_to)
+    if filters:
+        lines.append(filters)
     for index, item in enumerate(items, start=1):
         cand = item.candidate
         dates = date_range_text(cand.depart_date, cand.return_date)
+        link = links[index - 1] if index - 1 < len(links) else None
         lines.append("")
         lines.append(
-            f"{index}. 查到 {route} {dates} {format_money(cand.amount_minor, cand.currency)}"
+            f"{index}. 查到 {route} {dates} {format_money(cand.amount_minor, cand.currency)}{note}"
         )
         lines.append(f"   觸發原因：{item_reasons_text(item)}")
         lines.append(f"   航空公司：{cand.carrier or '未提供'}")
@@ -113,10 +139,14 @@ def price_alert_message(
             f"｜來源：{source_label(cand.source)}"
             f"（{PRICE_KIND_LABELS.get(cand.price_kind, cand.price_kind)}）"
         )
-        lines.append(
-            "   查票連結："
-            + google_flights_url(origin, destination, cand.depart_date, cand.return_date)
-        )
+        if link:
+            lines.append("   查票連結：" + link)
+        else:
+            lines.append(
+                "   查票連結："
+                + google_flights_url(origin, destination, cand.depart_date, cand.return_date)
+            )
+            lines.append(f"   （{BOOKING_FALLBACK_NOTE}）")
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
@@ -153,7 +183,7 @@ DIGEST_WATCH_STALE = "連續查價失敗"
 DIGEST_FLAT = "持平"
 DIGEST_NONE = "—"
 DIGEST_DELTA_NOTE = (
-    "漲跌為目前最低價與前一日（台北時間）結束時最低價的差額；"
+    "漲跌為目前最低總價與前一日（台北時間）結束時最低總價的差額；"
     "只計目前設定的即時價，不含已出發的日期。"
     "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
 )
@@ -175,6 +205,9 @@ class DigestRow:
     delta_minor: int | None
     data_stale: bool
     watch_stale: bool
+    adults: int = 1
+    children: int = 0
+    cabin: str = "economy"
 
 
 @dataclass(frozen=True)
@@ -206,12 +239,13 @@ def digest_stale_label(stale_after_hours: int) -> str:
 
 def _digest_line(row: DigestRow, stale_after_hours: int) -> str:
     name = row.name if len(row.name) <= DIGEST_NAME_MAX else row.name[:DIGEST_NAME_MAX] + "…"
-    parts = [f"• {name}", route_label(row.origin, row.destination)]
+    parts = [f"• {name}", route_label(row.origin, row.destination), cabin_label(row.cabin)]
     if row.amount_minor is None or row.depart_date is None:
-        parts.append(DIGEST_NO_PRICE)
+        parts.append(f"{DIGEST_NO_PRICE}（{pax_label(row.adults, row.children)}）")
     else:
         dates = date_range_text(row.depart_date, row.return_date)
-        parts.append(f"{format_money(row.amount_minor, row.currency)}（{dates}）")
+        money = format_money(row.amount_minor, row.currency)
+        parts.append(f"{money}{total_price_note(row.adults, row.children)}（{dates}）")
     parts.append(f"較前一日 {_digest_delta_text(row)}")
     if row.amount_minor is not None and row.data_stale:
         parts.append(digest_stale_label(stale_after_hours))
@@ -296,4 +330,5 @@ def all_static_texts() -> list[str]:
         "過去 24 小時查價失敗的掃描：0 次",
         "較前一日",
         "每日摘要",
+        *trip_static_texts(),
     ]

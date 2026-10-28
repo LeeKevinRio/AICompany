@@ -108,8 +108,9 @@
     <legend>條件</legend>
     <div class="grid">
       <div class="field">
-        <label for="f-budget">預算門檻（TWD）</label>
-        <input id="f-budget" type="number" name="budget" value="{{ values.budget }}" min="1" step="1" inputmode="numeric" required aria-describedby="err-budget">
+        <label for="f-budget">預算門檻（TWD，整組總價）</label>
+        <input id="f-budget" type="number" name="budget" value="{{ values.budget }}" min="1" step="1" inputmode="numeric" required aria-describedby="h-budget err-budget">
+        <small id="h-budget" class="hint">預算為整組乘客的總價</small>
         <span id="err-budget" class="field-error" data-error-for="budget"></span>
       </div>
       <div class="field">
@@ -122,11 +123,58 @@
         </select>
         <span id="err-max_stops" class="field-error" data-error-for="max_stops"></span>
       </div>
-      <div class="static-field">
-        <span class="label">艙等／人數</span>
-        <span class="value">經濟艙・1 位成人</span>
+      <div class="field">
+        <label for="f-adults">成人</label>
+        <input id="f-adults" type="number" name="adults" value="{{ values.adults if values.adults is not none else 1 }}" min="1" max="9" step="1" inputmode="numeric" aria-describedby="h-pax err-adults">
+        <span id="err-adults" class="field-error" data-error-for="adults"></span>
+      </div>
+      <div class="field">
+        <label for="f-children">兒童（2～11 歲）</label>
+        <input id="f-children" type="number" name="children" value="{{ values.children if values.children is not none else 0 }}" min="0" max="8" step="1" inputmode="numeric" aria-describedby="h-pax err-children">
+        <small id="h-pax" class="hint">成人與兒童合計最多 9 人</small>
+        <span id="err-children" class="field-error" data-error-for="children"></span>
+      </div>
+      <div class="field">
+        <label for="f-cabin">艙等</label>
+        <select id="f-cabin" name="cabin" aria-describedby="err-cabin">
+          {% for c in cabin_options %}
+          <option value="{{ c.value }}" {% if (values.cabin or "economy") == c.value %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+        <span id="err-cabin" class="field-error" data-error-for="cabin"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_from">去程最早出發</label>
+        <select id="f-dep_hour_from" name="dep_hour_from" aria-describedby="h-dep_hour err-dep_hour_from">
+          <option value="" {% if values.dep_hour_from is none %}selected{% endif %}>不限</option>
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if values.dep_hour_from == h %}selected{% endif %}>{{ "%02d" % h }}:00</option>
+          {% endfor %}
+        </select>
+        <span id="err-dep_hour_from" class="field-error" data-error-for="dep_hour_from"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_to">去程最晚出發</label>
+        <select id="f-dep_hour_to" name="dep_hour_to" aria-describedby="h-dep_hour err-dep_hour_to">
+          <option value="" {% if values.dep_hour_to is none %}selected{% endif %}>不限</option>
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if values.dep_hour_to == h %}selected{% endif %}>{{ "%02d" % h }}:00</option>
+          {% endfor %}
+        </select>
+        <small id="h-dep_hour" class="hint">兩者需同時選擇或同時不限；以 Google Flights 時段篩選為準</small>
+        <span id="err-dep_hour_to" class="field-error" data-error-for="dep_hour_to"></span>
       </div>
     </div>
+    <details class="airline-picker">
+      <summary>只看這些航空公司（最多 5 家）</summary>
+      <p id="h-airlines" class="hint">由 Google Flights 套用篩選；全部不勾選代表不限航空。</p>
+      <div class="airline-list" id="airline-list" data-max="5">
+        {% for a in (airline_options or []) %}
+        <label class="inline"><input type="checkbox" name="airlines" value="{{ a.code }}" {% if a.code in (values.airlines or []) %}checked{% endif %} aria-describedby="h-airlines err-airlines"> {{ a.zh_name or a.display_name }}（{{ a.code }}）</label>
+        {% endfor %}
+      </div>
+    </details>
+    <span id="err-airlines" class="field-error" data-error-for="airlines"></span>
     <label class="inline"><input type="checkbox" name="notify_on_new_low" {% if values.notify_on_new_low %}checked{% endif %}> 查到此監看紀錄新低時也通知</label>
   </fieldset>
 

@@ -114,6 +114,16 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
     def not_found(request: Request, message: str) -> Response:
         return page(request, "not_found.html", {"message": message}, status=404)
 
+    def form_context(
+        mode: str, watch_id: int | None, values: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return {
+            "mode": mode,
+            "watch_id": watch_id,
+            "values": values,
+            **services.views.form_options(values),
+        }
+
     def errors_response(errors: dict[str, str], status: int = 422) -> JSONResponse:
         return JSONResponse({"ok": False, "errors": errors}, status_code=status)
 
@@ -128,7 +138,7 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
         return page(
             request,
             "watch_form.html",
-            {"mode": "create", "watch_id": None, "values": services.views.form_values(None)},
+            form_context("create", None, services.views.form_values(None)),
         )
 
     @app.get("/watches/{watch_id}", response_class=HTMLResponse)
@@ -143,9 +153,7 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
         values = services.views.form_values(watch_id)
         if values is None:
             return not_found(request, "找不到此監看，可能已被刪除。")
-        return page(
-            request, "watch_form.html", {"mode": "edit", "watch_id": watch_id, "values": values}
-        )
+        return page(request, "watch_form.html", form_context("edit", watch_id, values))
 
     @app.get("/notifications", response_class=HTMLResponse)
     def notifications(request: Request) -> Response:

@@ -10,7 +10,7 @@ from flight_deals.domain.messages import (
     price_alert_message,
     telegram_test_message,
 )
-from flight_deals.domain.models import PriceKind, Watch
+from flight_deals.domain.models import DatePair, FlightSearch, PriceKind, Watch, search_for
 from flight_deals.domain.rules import (
     TriggeredItem,
     digest_key,
@@ -20,7 +20,7 @@ from flight_deals.domain.rules import (
     telegram_test_key,
 )
 from flight_deals.domain.timeutil import taipei_date
-from flight_deals.ports import Clock, Notifier, Redactor, SendResult
+from flight_deals.ports import BookingLinkBuilder, Clock, Notifier, Redactor, SendResult
 from flight_deals.storage.repository import (
     AlertStateRecord,
     NotificationItemRecord,
@@ -33,6 +33,17 @@ log = logging.getLogger(__name__)
 NOT_CONFIGURED = "Telegram 未設定，訊息未送出"
 
 
+def safe_booking_url(builder: BookingLinkBuilder | None, search: FlightSearch) -> str | None:
+    """Exact booking link, or None so callers fall back to the text search (Decision 7)."""
+    if builder is None:
+        return None
+    try:
+        return builder.url(search)
+    except Exception:
+        log.warning("booking link could not be built; using the text search link")
+        return None
+
+
 class NotificationService:
     def __init__(
         self,
@@ -42,12 +53,14 @@ class NotificationService:
         max_attempts: int,
         clock: Clock,
         redactor: Redactor,
+        link_builder: BookingLinkBuilder | None = None,
     ) -> None:
         self._repo = repo
         self._notifier = notifier
         self._max_attempts = max_attempts
         self._clock = clock
         self._redact = redactor
+        self._links = link_builder
 
     @property
     def configured(self) -> bool:
@@ -64,12 +77,30 @@ class NotificationService:
         if not items:
             return None
         spec = watch.spec
+        links = [
+            safe_booking_url(
+                self._links,
+                search_for(
+                    spec,
+                    DatePair(i.candidate.depart_date, i.candidate.return_date),
+                    i.candidate.currency,
+                ),
+            )
+            for i in items
+        ]
         text = price_alert_message(
             watch_name=spec.name,
             origin=spec.origin,
             destination=spec.destination,
             trip_type=spec.trip_type,
             items=items,
+            links=links,
+            adults=spec.adults,
+            children=spec.children,
+            cabin=spec.cabin,
+            airlines=spec.airlines,
+            dep_hour_from=spec.dep_hour_from,
+            dep_hour_to=spec.dep_hour_to,
         )
         notification_id = self._repo.insert_notification(
             watch_id=watch.id,
@@ -78,7 +109,7 @@ class NotificationService:
             price_kind=price_kind,
             observation_id=items[0].candidate.observation_id,
             channel=self._notifier.channel,
-            dedupe_key=price_message_key(watch.id, price_kind, items),
+            dedupe_key=price_message_key(watch.id, watch.revision, price_kind, items),
             message_text=text,
             created_at=self._clock(),
             items=[

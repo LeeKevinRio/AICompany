@@ -313,8 +313,8 @@ def test_digest_content_change_and_no_price(harness: Harness) -> None:  # AC-DG7
     lines = text.splitlines()
     tokyo = next(line for line in lines if line.startswith("• 東京"))
     osaka = next(line for line in lines if line.startswith("• 大阪"))
-    assert "TWD 9,400（12/10–12/15）" in tokyo and "較前一日 -TWD 600" in tokyo
-    assert "尚無價格" in osaka and "較前一日 —" in osaka and "TWD 0" not in osaka
+    assert "經濟艙｜TWD 9,400（1 人總價）（12/10–12/15）" in tokyo and "較前一日 -TWD 600" in tokyo
+    assert "尚無價格（1 人）" in osaka and "較前一日 —" in osaka and "TWD 0" not in osaka
     assert "啟用中的監看：2 個" in text
     assert text.rstrip().endswith(NO_PRICE_ALERT_NOTE)
     assert DISCLAIMER in text and SAMPLED_ONLY_NOTE in text

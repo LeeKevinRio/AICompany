@@ -64,11 +64,25 @@ def page_html(payload: Any, *, script_class: str = "ds:1") -> str:
 
 
 def itineraries(payload: Any) -> list[Any]:
+    """The "other flights" section, payload[3][0]."""
     result: list[Any] = payload[3][0]
     return result
 
 
+def best_itineraries(payload: Any) -> list[Any]:
+    """The "best flights" section, payload[2][0]."""
+    result: list[Any] = payload[2][0]
+    return result
+
+
+def other_only(payload: Any) -> Any:
+    """Drop the "best flights" section so a variant exercises one list only."""
+    payload[2] = None
+    return payload
+
+
 def unpriced_only(payload: Any) -> Any:
+    other_only(payload)
     payload[3][0] = [k for k in itineraries(payload) if k[1][0] == []]
     return payload
 
@@ -122,8 +136,13 @@ def test_google_flights_contract_on_recorded_sha_payload(clock: FakeClock) -> No
     source, _ = make_source(Recorder(page_html(sha_payload())), clock)
     result = source.search(SHA_SEARCH)
     assert result.status == "ok" and result.error is None
-    assert result.parse_stats == ParseStats(itineraries=4, priced=2, unpriced=2, malformed=0)
-    assert sorted(q.amount_minor for q in result.quotes) == [1265500, 1476300]
+    # Both sections: 5 "best" + 4 "other" itineraries, no duplicates (FD-5 batch 2).
+    assert result.parse_stats == ParseStats(
+        itineraries=9, priced=7, unpriced=2, malformed=0, best=5, other=4
+    )
+    assert sorted(q.amount_minor for q in result.quotes) == [
+        463300, 463300, 622100, 783300, 882100, 1265500, 1476300,
+    ]  # fmt: skip
     for quote in result.quotes:
         assert quote.source == "google_flights" and quote.price_kind == "live"
         assert isinstance(quote.amount_minor, int) and not isinstance(quote.amount_minor, bool)
@@ -132,7 +151,10 @@ def test_google_flights_contract_on_recorded_sha_payload(clock: FakeClock) -> No
         assert quote.depart_date == date(2026, 12, 10) and quote.return_date is None
         assert quote.stops == 1 and quote.carrier
     cheapest = min(result.quotes, key=lambda q: q.amount_minor)
-    assert cheapest.duration_minutes == 145 + 140
+    assert cheapest.amount_minor == 463300 and cheapest.carrier == "中國南方航空"
+    assert cheapest.duration_minutes == 130 + 135
+    other = [q for q in result.quotes if q.amount_minor == 1265500]
+    assert other[0].duration_minutes == 145 + 140
 
 
 def test_build_query_is_round_trip_with_two_legs_and_no_integration() -> None:
@@ -144,25 +166,33 @@ def test_build_query_is_round_trip_with_two_legs_and_no_integration() -> None:
 
 def test_parse_payload_counts_on_recorded_fixture() -> None:  # C-26
     page = parse_payload(sha_payload())
-    assert page.stats == ParseStats(itineraries=4, priced=2, unpriced=2, malformed=0)
-    assert [r["price"] for r in page.records] == [12655, 14763]
-    assert all(r["type"] == "multi" and len(r["airlines"]) == 2 for r in page.records)
+    assert page.stats == ParseStats(
+        itineraries=9, priced=7, unpriced=2, malformed=0, best=5, other=4
+    )
+    assert [r["price"] for r in page.records] == [4633, 4633, 6221, 7833, 8821, 12655, 14763]
+    assert [r["type"] for r in page.records] == ["CZ", "CZ", "CX", "ZH", "CX", "multi", "multi"]
+    assert all(len(r["airlines"]) == 2 for r in page.records[-2:])
     assert not page.no_results
+    other = parse_payload(other_only(sha_payload()))  # the FD-3 view: "other" only
+    assert other.stats == ParseStats(itineraries=4, priced=2, unpriced=2, malformed=0, other=4)
+    assert [r["price"] for r in other.records] == [12655, 14763]
 
 
 def test_variant_all_unpriced_is_no_data(clock: FakeClock) -> None:  # C-26, AC-T3
     source, _ = make_source(Recorder(page_html(unpriced_only(sha_payload()))), clock)
     result = source.search(SHA_SEARCH)
     assert result.status == "no_data" and result.quotes == () and result.error is None
-    assert result.parse_stats == ParseStats(itineraries=2, priced=0, unpriced=2, malformed=0)
+    assert result.parse_stats == ParseStats(
+        itineraries=2, priced=0, unpriced=2, malformed=0, other=2
+    )
 
 
 @pytest.mark.parametrize("bad_price", ["12,655", 12655.0, True, 0, -5, None])
 def test_variant_non_int_price_is_malformed(bad_price: Any) -> None:  # C-26
-    payload = sha_payload()
+    payload = other_only(sha_payload())
     itineraries(payload)[0][1][0][1] = bad_price
     page = parse_payload(payload)
-    assert page.stats == ParseStats(itineraries=4, priced=1, unpriced=2, malformed=1)
+    assert page.stats == ParseStats(itineraries=4, priced=1, unpriced=2, malformed=1, other=4)
     assert [r["price"] for r in page.records] == [14763]
 
 
@@ -172,25 +202,134 @@ def test_variant_malformed_only_is_blocked(clock: FakeClock) -> None:  # C-27, A
     source, _ = make_source(Recorder(page_html(payload)), clock)
     result = source.search(SHA_SEARCH)
     assert result.status == "blocked" and not result.quotes
-    assert result.parse_stats == ParseStats(itineraries=2, priced=0, unpriced=1, malformed=1)
+    assert result.parse_stats == ParseStats(
+        itineraries=2, priced=0, unpriced=1, malformed=1, other=2
+    )
 
 
 def test_variant_priced_plus_malformed_is_ok_with_count(clock: FakeClock) -> None:  # C-27
-    payload = sha_payload()
+    payload = other_only(sha_payload())
     itineraries(payload)[2][1] = [[None, "n/a"], "token"]
     source, _ = make_source(Recorder(page_html(payload)), clock)
     result = source.search(SHA_SEARCH)
     assert result.status == "ok" and len(result.quotes) == 2
-    assert result.parse_stats == ParseStats(itineraries=4, priced=2, unpriced=1, malformed=1)
+    assert result.parse_stats == ParseStats(
+        itineraries=4, priced=2, unpriced=1, malformed=1, other=4
+    )
 
 
-def test_variant_results_none_is_no_data(clock: FakeClock) -> None:  # C-26, C-27
+@pytest.mark.parametrize(
+    "absent",
+    [
+        lambda p: p.__setitem__(3, None),  # whole section None (seen live)
+        lambda p: p[3].__setitem__(0, None),  # section present, list None
+    ],
+    ids=["section-none", "list-none"],
+)
+def test_variant_both_sections_absent_is_no_embedded_results(
+    clock: FakeClock, absent: Any
+) -> None:  # C-26, C-27, FD-5 batch 2
+    payload = other_only(sha_payload())
+    absent(payload)
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "no_data" and not result.quotes and not result.is_failure
+    assert result.extra == {"reason": "no_embedded_results"}
+    assert result.parse_stats == ParseStats(0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [{"a": 1}, "results", 42, [], [{"a": 1}], ["x"]],
+    ids=["dict", "str", "int", "empty-list", "list-dict", "list-str"],
+)
+def test_other_section_bad_shape_is_blocked_even_with_best(
+    clock: FakeClock, other: Any
+) -> None:  # only a whole-None payload[3] counts as absent
+    payload = sha_payload()  # "best" present and priced
+    payload[3] = other
+    source, _ = make_source(Recorder(page_html(payload)), clock)
+    result = source.search(SHA_SEARCH)
+    assert result.status == "blocked" and not result.quotes
+    with pytest.raises(PayloadFormatError):
+        parse_payload(payload)
+
+
+def test_other_none_with_best_none_is_no_embedded_results(clock: FakeClock) -> None:
+    payload = sha_payload()
+    payload[2] = None
+    payload[3] = None
+    result = make_source(Recorder(page_html(payload)), clock)[0].search(SHA_SEARCH)
+    assert result.status == "no_data" and result.extra == {"reason": "no_embedded_results"}
+
+
+def test_other_none_with_best_data_is_ok(clock: FakeClock) -> None:
+    payload = sha_payload()
+    payload[3] = None
+    result = make_source(Recorder(page_html(payload)), clock)[0].search(SHA_SEARCH)
+    assert result.status == "ok" and result.extra == {}
+    assert result.parse_stats == ParseStats(
+        itineraries=5, priced=5, unpriced=0, malformed=0, best=5
+    )
+
+
+def test_duplicate_key_normalises_departure_time() -> None:
+    payload = sha_payload()
+    twin = json.loads(json.dumps(itineraries(payload)[0]))
+    first = itineraries(payload)[0][0][2][0]
+    first[8] = [17]  # 17:00 written as [17] in one section...
+    twin[0][2][0][8] = [17, 0]  # ...and as [17, 0] in the other
+    best_itineraries(payload).append(twin)
+    page = parse_payload(payload)
+    assert page.stats.best == 6 and page.stats.itineraries == 9  # merged as one
+    assert [r["price"] for r in page.records].count(12655) == 1
+
+
+def test_same_price_and_carrier_but_other_airport_is_not_merged() -> None:
+    payload = sha_payload()
+    twin = json.loads(json.dumps(itineraries(payload)[0]))
+    twin[0][2][0][3] = "TSA"  # departs from another airport, all else equal
+    best_itineraries(payload).append(twin)
+    page = parse_payload(payload)
+    assert page.stats.itineraries == 10
+    assert [r["price"] for r in page.records].count(12655) == 2
+
+
+def test_variant_only_best_section_is_ok(clock: FakeClock) -> None:  # one section None
     payload = sha_payload()
     payload[3][0] = None
     source, _ = make_source(Recorder(page_html(payload)), clock)
     result = source.search(SHA_SEARCH)
-    assert result.status == "no_data" and not result.quotes
-    assert result.parse_stats == ParseStats(0, 0, 0, 0)
+    assert result.status == "ok" and result.extra == {}
+    assert result.parse_stats == ParseStats(
+        itineraries=5, priced=5, unpriced=0, malformed=0, best=5
+    )
+    assert min(q.amount_minor for q in result.quotes) == 463300
+
+
+def test_variant_only_other_section_is_ok(clock: FakeClock) -> None:
+    payload = sha_payload()
+    payload[2] = "not a section"  # the optional section is lenient
+    result = make_source(Recorder(page_html(payload)), clock)[0].search(SHA_SEARCH)
+    assert result.status == "ok"
+    assert sorted(q.amount_minor for q in result.quotes) == [1265500, 1476300]
+
+
+def test_duplicates_across_sections_are_merged() -> None:
+    payload = sha_payload()
+    best_itineraries(payload).append(itineraries(payload)[0])  # same itinerary twice
+    page = parse_payload(payload)
+    assert page.stats == ParseStats(
+        itineraries=9, priced=7, unpriced=2, malformed=0, best=6, other=4
+    )
+    assert [r["price"] for r in page.records].count(12655) == 1
+    # Same carrier and times but a different price is a different itinerary.
+    copy = json.loads(json.dumps(itineraries(payload)[0]))
+    copy[1][0][1] = 12000
+    best_itineraries(payload).append(copy)
+    assert parse_payload(payload).stats.priced == 8
+    # Same price and carrier, different routing (the two CZ 4,633 fares) stay apart.
+    assert [r["price"] for r in page.records].count(4633) == 2
 
 
 @pytest.mark.parametrize(
@@ -213,11 +352,17 @@ def test_variant_bad_top_level_shape_is_blocked(clock: FakeClock, payload: Any) 
 
 
 def test_optional_fields_fall_back_to_none(clock: FakeClock) -> None:  # Decision 1
-    payload = sha_payload()
+    payload = other_only(sha_payload())
     itineraries(payload)[0][0] = "flight info changed"
     page = parse_payload(payload)
     assert page.stats.priced == 2
-    assert page.records[0] == {"type": None, "price": 12655, "airlines": [], "flights": []}
+    assert page.records[0] == {
+        "type": None,
+        "price": 12655,
+        "airlines": [],
+        "flights": [],
+        "depart_time": None,
+    }
     source, _ = make_source(Recorder(page_html(payload)), clock)
     quote = min(source.search(SHA_SEARCH).quotes, key=lambda q: q.amount_minor)
     assert quote.amount_minor == 1265500
@@ -277,7 +422,7 @@ def test_extract_payload_handles_large_pages_quickly() -> None:
     html = page_html(sha_payload()).replace("<div>header</div>", filler)
     assert len(html) > 2_000_000
     started = time.perf_counter()
-    assert parse_payload(extract_payload(html)).stats.priced == 2
+    assert parse_payload(extract_payload(html)).stats.priced == 7
     assert time.perf_counter() - started < 1.0
 
 

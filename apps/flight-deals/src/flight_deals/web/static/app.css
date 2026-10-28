@@ -292,6 +292,9 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   min-height: var(--control-height);
   font-weight: 400;
 }
+.airline-picker { margin: var(--space-2) 0; }
+.airline-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 0 var(--space-4); }
+.airline-list input:disabled + * { opacity: 0.6; }
 .choice-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; }
 .static-field { display: flex; flex-direction: column; gap: var(--space-1); }
 .static-field .label { font-weight: 500; }
