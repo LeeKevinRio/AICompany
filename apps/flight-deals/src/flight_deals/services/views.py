@@ -7,7 +7,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 from flight_deals.domain.airlines import AIRLINES, lookup_airline
 from flight_deals.domain.airports import place_label, route_label
@@ -21,6 +21,7 @@ from flight_deals.domain.messages import (
     STATUS_LABELS,
     TRIP_TYPE_LABELS,
     date_range_text,
+    no_embedded_streak_label,
     reason_label,
     source_label,
 )
@@ -37,7 +38,7 @@ from flight_deals.domain.trip_labels import (
     total_price_short,
 )
 from flight_deals.ports import AutostartProbe, BookingLinkBuilder, Clock
-from flight_deals.services.health import HealthService, describe_source
+from flight_deals.services.health import HealthService, describe_source, no_embedded_streak
 from flight_deals.services.notifications import safe_booking_url
 from flight_deals.services.price_snapshot import PriceDelta, Snapshot, latest_per_pair
 from flight_deals.services.settings import SETTING_KEYS, SettingsService
@@ -98,6 +99,33 @@ def no_embedded_note(query_results: Sequence[Mapping[str, Any]]) -> str | None:
     if any(r.get("reason") == NO_EMBEDDED_REASON for r in query_results):
         return NO_EMBEDDED_LABEL
     return None
+
+
+PriceLevel = Literal["cheap", "mid", "pricey"]
+K = TypeVar("K")
+
+
+def price_levels(items: Sequence[tuple[K, int]]) -> dict[K, PriceLevel]:
+    """Thirds of the given prices: cheapest third, priciest third (3+ items), the rest
+    mid. Ties keep the input order (stable sort). Shared by the watch detail page and
+    the exploration calendar (ADR-0002 FD-6 Decision 7)."""
+    if not items:
+        return {}
+    ordered = sorted(items, key=lambda item: item[1])
+    third = max(len(ordered) // 3, 1)
+    cheap = {key for key, _ in ordered[:third]}
+    pricey = {key for key, _ in ordered[-third:]} if len(ordered) >= 3 else set()
+    return {
+        key: "cheap" if key in cheap else ("pricey" if key in pricey else "mid") for key, _ in items
+    }
+
+
+def active_exploration_view(repo: Repository) -> dict[str, int] | None:
+    """The queued / running exploration for the health and explore pages."""
+    record = repo.active_exploration()
+    if record is None:
+        return None
+    return {"id": record.id, "done": record.done, "total": record.total}
 
 
 _ITEM_KEY_REVISION = re.compile(r"^price:\d+:r(\d+):")
@@ -201,8 +229,10 @@ class ViewService:
         clock: Clock,
         autostart: AutostartProbe | None = None,
         link_builder: BookingLinkBuilder | None = None,
+        no_embedded_streak_rounds: int = 3,
     ) -> None:
         self._repo = repo
+        self._streak_rounds = no_embedded_streak_rounds
         self._autostart = autostart
         self._links = link_builder
         self._settings = settings
@@ -299,7 +329,8 @@ class ViewService:
         rows = []
         today = taipei_date(self._clock())
         # Watches carry their latest run's results in the same single query (C-34).
-        for watch, last_results in self._repo.list_watches_with_last_results():
+        for item in self._repo.list_watches_with_last_results(self._streak_rounds):
+            watch, last_results = item.watch, item.last_results
             spec = watch.spec
             # One observation query per watch, as before FD-4 (C-34).
             snapshot = Snapshot.build(
@@ -337,10 +368,17 @@ class ViewService:
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
                     "link": self.watch_link(watch),
                     "no_embedded_note": no_embedded_note(last_results),
+                    "no_embedded_streak": no_embedded_streak(
+                        item.recent_rounds, self._streak_rounds
+                    ),
                     **trip_view(spec),
                 }
             )
-        return {"watches": rows, "disclaimer": DISCLAIMER}
+        return {
+            "watches": rows,
+            "disclaimer": DISCLAIMER,
+            "no_embedded_streak_label": no_embedded_streak_label(self._streak_rounds),
+        }
 
     def form_values(self, watch_id: int | None) -> dict[str, Any] | None:
         if watch_id is None:
@@ -561,14 +599,11 @@ class ViewService:
                 by_day[obs.depart_date] = obs
         if not by_day:
             return [], []
-        ordered = sorted(by_day.values(), key=lambda o: o.amount_minor)
-        third = max(len(ordered) // 3, 1)
-        cheap = {o.depart_date for o in ordered[:third]}
-        pricey = {o.depart_date for o in ordered[-third:]} if len(ordered) >= 3 else set()
+        levels = price_levels([(o.depart_date, o.amount_minor) for o in by_day.values()])
         rows = []
         for day in sorted(by_day):
             obs = by_day[day]
-            level = "cheap" if day in cheap else ("pricey" if day in pricey else "mid")
+            level = levels[day]
             rows.append(
                 {
                     "depart": day.isoformat(),
@@ -802,6 +837,8 @@ class ViewService:
             "usage": usage,
             "hourly_used": self._repo.queries_used_since(now - timedelta(hours=1)),
             "hourly_limit": current.global_hourly_query_limit,
+            "no_embedded_summary": self._health.no_embedded_summary(now),
+            "active_exploration": active_exploration_view(self._repo),
         }
 
     def _autostart_view(self) -> dict[str, bool] | None:

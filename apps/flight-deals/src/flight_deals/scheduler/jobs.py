@@ -8,6 +8,11 @@ Daily digest jobs (ADR-0002 FD-4 Decision 1) only call ``DigestService.send_if_d
 which is idempotent: a cron job at the configured Asia/Taipei time, a one-off catch-up
 queued after the startup scans, an hourly check (sleep / wake), and a one-off check after
 the digest settings change. They run on the same single worker as the scans.
+
+Explorations (ADR-0002 FD-6 Decision 3) run as one-off ``explore:<id>`` date jobs on
+that same worker, so scans and "scan now" requests due meanwhile wait in the executor
+queue and run afterwards (deferred, never dropped). Explorations cut off by a stop are
+marked interrupted at start, before any job is queued; an hourly job purges old ones.
 """
 
 from __future__ import annotations
@@ -39,11 +44,13 @@ DIGEST_JOB_ID = "daily-digest"
 DIGEST_CATCHUP_JOB_ID = "digest-catchup"
 DIGEST_CHECK_JOB_ID = "digest-check"
 DIGEST_RECHECK_JOB_ID = "digest-recheck"
+EXPLORE_PREFIX = "explore:"
+PURGE_JOB_ID = "exploration-purge"
 DIGEST_JOB_IDS = frozenset(
     {DIGEST_JOB_ID, DIGEST_CATCHUP_JOB_ID, DIGEST_CHECK_JOB_ID, DIGEST_RECHECK_JOB_ID}
 )
 # Jobs that are not watch scans; the health page's "next scan" ignores them.
-NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | {SWEEP_JOB_ID}
+NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | {SWEEP_JOB_ID, PURGE_JOB_ID}
 JOB_DEFAULTS: dict[str, Any] = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600}
 WORKER_THREADS = 1
 
@@ -115,6 +122,8 @@ class ScanScheduler:
                 raise SchedulerAlreadyRunningError("a scan scheduler is already running")
             _active = self
         try:
+            # Before any job is queued: a stop or crash never resumes an exploration.
+            self._services.exploration.recover_interrupted()
             self._scheduler.add_listener(self._on_event, EVENT_JOB_MAX_INSTANCES | EVENT_JOB_ERROR)
             self._scheduler.start()
             self._started = True
@@ -124,6 +133,12 @@ class ScanScheduler:
                 self._services.scan.expire_sweep,
                 trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
                 id=SWEEP_JOB_ID,
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                self._services.exploration.purge_expired,
+                trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
+                id=PURGE_JOB_ID,
                 replace_existing=True,
             )
             self.schedule_digest(startup=True)
@@ -259,11 +274,26 @@ class ScanScheduler:
             replace_existing=True,
         )
 
+    def schedule_exploration(self, exploration_id: int) -> None:
+        """Queue one exploration now; it never misfires, whatever the delay."""
+        self._scheduler.add_job(
+            self._explore,
+            trigger="date",
+            run_date=self._clock(),
+            args=[exploration_id],
+            id=f"{EXPLORE_PREFIX}{exploration_id}",
+            replace_existing=True,
+            misfire_grace_time=None,
+            max_instances=1,
+        )
+
     def next_run_time(self) -> datetime | None:
         times = [
             when
             for job in self._scheduler.get_jobs()
-            if job.id not in NON_SCAN_JOB_IDS and (when := _job_time(job)) is not None
+            if job.id not in NON_SCAN_JOB_IDS
+            and not job.id.startswith(EXPLORE_PREFIX)
+            and (when := _job_time(job)) is not None
         ]
         return min(times) if times else None
 
@@ -271,6 +301,10 @@ class ScanScheduler:
 
     def _run(self, watch_id: int, trigger: str) -> None:
         self._services.scan.scan_watch(watch_id, trigger)
+
+    def _explore(self, exploration_id: int) -> None:
+        outcome = self._services.exploration.run(exploration_id)
+        log.info("exploration %s: %s", exploration_id, outcome)
 
     def _digest(self) -> None:
         outcome = self._services.digest.send_if_due(self._clock())

@@ -41,6 +41,8 @@ class Tunables:
     global_hourly_query_limit: int = 60
     digest_enabled: bool = True
     digest_time: str = "08:00"  # HH:MM, Asia/Taipei
+    # Hourly queries an exploration must leave for scans (ADR-0002 FD-6 Decision 3).
+    exploration_reserve_for_scans: int = 12
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,14 @@ class Limits:
     startup_stagger_seconds: int = 20
     new_watch_delay_seconds: int = 10
     telegram_timeout_seconds: float = 5.0
+    # Exploration mode (ADR-0002 FD-6 Decisions 1 and 3).
+    exploration_max_cells: int = 31
+    exploration_reuse_hours: int = 24
+    exploration_retention_days: int = 7
+    # "Results not embedded" hints (ADR-0002 FD-6 Decision 8).
+    no_embedded_streak_rounds: int = 3
+    no_embedded_min_queries: int = 10
+    no_embedded_min_ratio_pct: int = 50
 
 
 @dataclass(frozen=True)

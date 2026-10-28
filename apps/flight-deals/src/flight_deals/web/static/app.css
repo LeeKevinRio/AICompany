@@ -441,3 +441,29 @@ details > summary { cursor: pointer; padding: var(--space-1) 0; }
 .delta-up { color: var(--color-bad-text); }
 .delta-flat { color: var(--color-neutral-text); }
 .check-label { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; }
+
+/* Exploration: progress bar, estimate line and price calendar. */
+progress {
+  width: 100%;
+  max-width: 480px;
+  height: var(--space-4);
+  accent-color: var(--color-accent);
+}
+.estimate { font-weight: 600; margin: var(--space-3) 0; }
+.table-wrap > table.calendar { min-width: 760px; table-layout: fixed; }
+table.calendar th { text-align: center; }
+table.calendar td.cal-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+table.calendar td.cal-cell.heat-cheap { background: var(--color-heat-cheap); }
+table.calendar td.cal-cell.heat-mid { background: var(--color-heat-mid); }
+table.calendar td.cal-cell.heat-pricey { background: var(--color-heat-pricey); }
+table.calendar td.cal-cell .muted,
+table.calendar td.cal-cell .hint { color: var(--color-text); }
+table.calendar td.cal-empty { background: var(--color-bg); border: 1px solid var(--color-border); }
+.cal-status { font-weight: 600; }

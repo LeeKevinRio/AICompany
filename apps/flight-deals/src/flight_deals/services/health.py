@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Any
 
 from flight_deals.ports import Clock, Redactor
 from flight_deals.storage.repository import Repository, SourceHealthRecord
@@ -12,6 +14,61 @@ from flight_deals.storage.repository import Repository, SourceHealthRecord
 log = logging.getLogger(__name__)
 
 ERROR_LIMIT = 500
+NO_EMBEDDED_REASON = "no_embedded_results"
+NO_EMBEDDED_WINDOW = timedelta(hours=24)
+
+
+def no_embedded_counts(
+    scan_results: Iterable[Sequence[Mapping[str, Any]]],
+    exploration_counts: Iterable[tuple[str, int, int]] = (),
+) -> dict[str, tuple[int, int]]:
+    """Per source: (no_embedded_results queries, real queries). Skipped, pending and
+    cache-served entries are left out of both numbers (FD-6 Decision 8)."""
+    counts: dict[str, list[int]] = {}
+    for results in scan_results:
+        for entry in results:
+            source = entry.get("source")
+            status = entry.get("status")
+            if not source or status in ("skipped", "pending") or entry.get("from_cache"):
+                continue
+            bucket = counts.setdefault(str(source), [0, 0])
+            bucket[1] += 1
+            if status == "no_data" and entry.get("reason") == NO_EMBEDDED_REASON:
+                bucket[0] += 1
+    for source, total, hits in exploration_counts:
+        bucket = counts.setdefault(source, [0, 0])
+        bucket[0] += hits
+        bucket[1] += total
+    return {source: (hits, total) for source, (hits, total) in counts.items()}
+
+
+def no_embedded_hint(
+    counts: Mapping[str, tuple[int, int]], *, min_queries: int, min_ratio_pct: int
+) -> dict[str, int] | None:
+    """Health-page hint when a source has >= ``min_queries`` queries of which at least
+    ``min_ratio_pct`` percent were not embedded; the highest ratio wins. Pure."""
+    best: dict[str, int] | None = None
+    for hits, total in counts.values():
+        if total < min_queries or hits * 100 < min_ratio_pct * total:
+            continue
+        ratio = hits * 100 // total
+        if best is None or ratio > best["ratio_pct"]:
+            best = {"ratio_pct": ratio, "count": hits, "total": total}
+    return best
+
+
+def round_not_embedded(results: Sequence[Mapping[str, Any]]) -> bool:
+    """One finished round "hits" when it has at least one non-skipped pair and every
+    non-skipped pair is ``no_embedded_results``."""
+    queried = [r for r in results if r.get("status") != "skipped"]
+    return bool(queried) and all(
+        r.get("status") == "no_data" and r.get("reason") == NO_EMBEDDED_REASON for r in queried
+    )
+
+
+def no_embedded_streak(rounds: Sequence[Sequence[Mapping[str, Any]]], need: int) -> bool:
+    """True when the latest ``need`` rounds (newest first, current revision) all hit."""
+    return len(rounds) >= need and all(round_not_embedded(r) for r in rounds[:need])
 
 
 def describe_source(record: SourceHealthRecord | None) -> tuple[str, str]:
@@ -34,8 +91,12 @@ class HealthService:
         cooldown_minutes: int,
         clock: Clock,
         redactor: Redactor,
+        no_embedded_min_queries: int = 10,
+        no_embedded_min_ratio_pct: int = 50,
     ) -> None:
         self._repo = repo
+        self._no_embedded_min_queries = no_embedded_min_queries
+        self._no_embedded_min_ratio_pct = no_embedded_min_ratio_pct
         self._threshold = failure_threshold
         self._cooldown = timedelta(minutes=cooldown_minutes)
         self._clock = clock
@@ -117,3 +178,17 @@ class HealthService:
 
     def record_scheduler_event(self, kind: str, detail: str | None) -> None:
         self._repo.insert_event(self._clock(), kind, self._redact(detail) if detail else None)
+
+    def no_embedded_summary(self, now: datetime) -> dict[str, int] | None:
+        """24-hour "results not embedded" ratio hint: one scan_run SELECT plus one
+        exploration_cell count. Display only: no alert, no breaker effect (FR-H3)."""
+        since = now - NO_EMBEDDED_WINDOW
+        counts = no_embedded_counts(
+            self._repo.scan_query_results_since(since),
+            self._repo.exploration_cell_counts_since(since),
+        )
+        return no_embedded_hint(
+            counts,
+            min_queries=self._no_embedded_min_queries,
+            min_ratio_pct=self._no_embedded_min_ratio_pct,
+        )

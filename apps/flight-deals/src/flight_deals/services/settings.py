@@ -33,6 +33,7 @@ class EffectiveSettings:
     global_hourly_query_limit: int
     digest_enabled: bool = True
     digest_time: str = "08:00"
+    exploration_reserve_for_scans: int = 12
 
     @property
     def digest_hour_minute(self) -> tuple[int, int]:
@@ -47,6 +48,7 @@ SETTING_KEYS = (
     "drop_threshold_bp",
     "stale_after_hours",
     "global_hourly_query_limit",
+    "exploration_reserve_for_scans",
 )
 __all__ = ["DIGEST_SETTING_KEYS", "SETTING_KEYS", "EffectiveSettings", "SettingsService"]
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Protocol
 
 TripType = Literal["round_trip", "one_way"]
 DateMode = Literal["fixed", "flexible"]
@@ -147,8 +147,93 @@ class FlightSearch:
         )
 
 
-def search_for(spec: WatchSpec, pair: DatePair, currency: str) -> FlightSearch:
-    """The only place a ``FlightSearch`` is built from a watch (scan and booking links)."""
+class SearchConditions(Protocol):
+    """Query conditions shared by a watch and an exploration (ADR-0002 FD-6 Decision 2)."""
+
+    @property
+    def origin(self) -> str: ...
+
+    @property
+    def destination(self) -> str: ...
+
+    @property
+    def max_stops(self) -> int | None: ...
+
+    @property
+    def adults(self) -> int: ...
+
+    @property
+    def children(self) -> int: ...
+
+    @property
+    def cabin(self) -> Cabin: ...
+
+    @property
+    def airlines(self) -> tuple[str, ...]: ...
+
+    @property
+    def dep_hour_from(self) -> int | None: ...
+
+    @property
+    def dep_hour_to(self) -> int | None: ...
+
+
+@dataclass(frozen=True)
+class ExplorationSpec:
+    """One month explored day by day (already validated; FD-6 Decision 2).
+
+    ``trip_days`` is set for round trips only: each return is departure + trip_days.
+    """
+
+    origin: str
+    destination: str
+    trip_type: TripType
+    year: int
+    month: int
+    trip_days: int | None
+    max_stops: int | None
+    adults: int = 1
+    children: int = 0
+    cabin: Cabin = "economy"
+    airlines: tuple[str, ...] = ()
+    dep_hour_from: int | None = None
+    dep_hour_to: int | None = None
+    currency: str = "TWD"
+
+    @property
+    def month_text(self) -> str:
+        return f"{self.year:04d}-{self.month:02d}"
+
+    def condition_key(self) -> str:
+        """Equality key for reuse: airlines as a set, unset values written as "-"."""
+
+        def part(value: int | None) -> str:
+            return "-" if value is None else str(value)
+
+        airlines = ",".join(sorted(set(self.airlines))) or "-"
+        return "|".join(
+            [
+                "v1",
+                self.origin,
+                self.destination,
+                self.trip_type,
+                self.month_text,
+                part(self.trip_days),
+                part(self.max_stops),
+                str(self.adults),
+                str(self.children),
+                self.cabin,
+                airlines,
+                part(self.dep_hour_from),
+                part(self.dep_hour_to),
+                self.currency,
+            ]
+        )
+
+
+def search_for(cond: SearchConditions, pair: DatePair, currency: str) -> FlightSearch:
+    """The only place a ``FlightSearch`` is built (scans, explorations, booking links)."""
+    spec = cond
     return FlightSearch(
         origin=spec.origin,
         destination=spec.destination,

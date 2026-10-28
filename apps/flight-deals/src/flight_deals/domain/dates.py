@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import calendar
 import math
 from datetime import date, timedelta
 
-from flight_deals.domain.models import DatePair, WatchSpec
+from flight_deals.domain.models import DatePair, ExplorationSpec, WatchSpec
+from flight_deals.domain.validation import MAX_DAYS_AHEAD
 
 # Defensive cap for specs that bypassed validation (validation allows at most 366 days).
 MAX_EXPAND_SPAN_DAYS = 366
@@ -84,3 +86,41 @@ def sample_pairs(
     shift = offset % step
     indices = sorted({((i * total) // limit + shift) % total for i in range(limit)})
     return [pairs[i] for i in indices], (shift + 1) % step, True
+
+
+# ---- exploration months (ADR-0002 FD-6 Decision 2) ---------------------------------
+
+MAX_MONTH_CELLS = 31
+
+
+def month_days(year: int, month: int) -> list[date]:
+    last = calendar.monthrange(year, month)[1]
+    return [date(year, month, day) for day in range(1, last + 1)]
+
+
+def month_pairs(spec: ExplorationSpec, today: date) -> list[DatePair]:
+    """One pair per departure day of the month that can still be queried.
+
+    Days before ``today`` (Asia/Taipei) are skipped; a round trip returns on
+    departure + ``trip_days`` (may fall in the next month). Departures or returns past
+    the query horizon (today + MAX_DAYS_AHEAD) are skipped as well.
+    """
+    horizon = today + timedelta(days=MAX_DAYS_AHEAD)
+    pairs: list[DatePair] = []
+    for day in month_days(spec.year, spec.month):
+        if day < today or day > horizon:
+            continue
+        if spec.trip_type == "round_trip":
+            ret = day + timedelta(days=spec.trip_days or 0)
+            if ret > horizon:
+                continue
+            pairs.append(DatePair(day, ret))
+        else:
+            pairs.append(DatePair(day))
+    return pairs[:MAX_MONTH_CELLS]
+
+
+def month_weeks(year: int, month: int) -> list[list[date | None]]:
+    """Calendar rows starting on Monday; days outside the month are None."""
+    weeks = calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)
+    return [[day if day.month == month else None for day in week] for week in weeks]

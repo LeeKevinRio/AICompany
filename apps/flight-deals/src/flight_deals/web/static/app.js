@@ -565,6 +565,181 @@
     );
   }
 
+  // ---- unembedded-results hint (round trip + business/first + 2+ pax) -----
+
+  function initUnembeddedHint() {
+    document.querySelectorAll("[data-unembedded-hint]").forEach(function (hint) {
+      const form = hint.closest("form");
+      if (!form) return;
+      const count = function (name) {
+        const el = form.querySelector('[name="' + name + '"]');
+        const n = el ? parseInt(el.value, 10) : 0;
+        return Number.isNaN(n) ? 0 : n;
+      };
+      const cabinEl = form.querySelector('[name="cabin"]');
+      const sync = function () {
+        const cabin = cabinEl ? cabinEl.value : "";
+        hint.hidden = !(
+          radioValue(form, "trip_type") === "round_trip" &&
+          (cabin === "business" || cabin === "first") &&
+          count("adults") + count("children") >= 2
+        );
+      };
+      form.addEventListener("change", sync);
+      form.addEventListener("input", sync);
+      sync();
+    });
+  }
+
+  // ---- explore form ----------------------------------------------------------
+
+  // Rough count of departure days from today to the end of the month. The
+  // server decides the real number; this is only a preview.
+  function estimateCells(box, month) {
+    const maxCells = parseInt(box.getAttribute("data-max-cells"), 10) || 31;
+    const match = /^(\d{4})-(\d{2})$/.exec(month);
+    if (!match) return maxCells;
+    const year = parseInt(match[1], 10);
+    const mon = parseInt(match[2], 10);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    const todayText =
+      box.getAttribute("data-today") ||
+      new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
+    const prefix = year + "-" + String(mon).padStart(2, "0");
+    let days = daysInMonth;
+    if (todayText.slice(0, 7) === prefix) {
+      days = daysInMonth - parseInt(todayText.slice(8, 10), 10) + 1;
+    } else if (todayText.slice(0, 7) > prefix) {
+      days = 0;
+    }
+    return Math.max(0, Math.min(days, maxCells));
+  }
+
+  function collectExplore(form) {
+    const value = function (name) {
+      const el = form.querySelector('[name="' + name + '"]');
+      return el ? el.value.trim() : "";
+    };
+    const airport = function (name) {
+      const code = value(name);
+      if (code) return code.toUpperCase();
+      const visible = form.querySelector('[data-combo-for="' + name + '"]');
+      return visible ? visible.value.trim().toUpperCase() : "";
+    };
+    const tripType = radioValue(form, "trip_type");
+    return {
+      origin: airport("origin"),
+      destination: airport("destination"),
+      trip_type: tripType,
+      month: value("month"),
+      trip_days: tripType === "round_trip" ? toInt(value("trip_days")) : null,
+      max_stops: value("max_stops"),
+      adults: toInt(value("adults")),
+      children: toInt(value("children")),
+      cabin: value("cabin"),
+      airlines: Array.prototype.map.call(
+        form.querySelectorAll('input[name="airlines"]:checked'),
+        function (el) {
+          return el.value;
+        }
+      ),
+      dep_hour_from: hourOrNull(value("dep_hour_from")),
+      dep_hour_to: hourOrNull(value("dep_hour_to")),
+    };
+  }
+
+  function initExploreForm() {
+    const form = document.getElementById("explore-form");
+    if (!form) return;
+    initComboboxes(form);
+    const box = document.getElementById("explore-estimate");
+    const monthEl = form.querySelector('[name="month"]');
+    const syncAll = function () {
+      syncWatchForm(form);
+      if (!box || !monthEl) return;
+      const cells = estimateCells(box, monthEl.value);
+      const left = box.getAttribute("data-hourly-left");
+      const reserve = box.getAttribute("data-reserve");
+      let text = "預計查詢約 " + cells + " 次";
+      if (left !== null && left !== "") {
+        text += "／本小時剩餘 " + left + " 次";
+        if (reserve !== null && reserve !== "") text += "（保留 " + reserve + " 次給排程）";
+      }
+      box.textContent = text;
+    };
+    form.addEventListener("change", syncAll);
+    syncAll();
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      clearErrors(form);
+      const submit = form.querySelector('button[type="submit"]');
+      setBusy(submit, true);
+      const result = await api("POST", form.getAttribute("data-url"), collectExplore(form));
+      setBusy(submit, false);
+      if (result.ok && result.data.id) {
+        window.location.href = "/explorations/" + result.data.id;
+        return;
+      }
+      if (result.status === 409) {
+        showErrors(form, { _: result.data.message || "目前無法開始探索，請稍後再試" });
+        return;
+      }
+      showErrors(form, result.data.errors || { _: result.data.message || "無法開始探索，請檢查輸入" });
+    });
+  }
+
+  // ---- exploration progress polling -----------------------------------------
+
+  const EXPLORE_NO_PROGRESS_MS = 120000;
+
+  async function pollExploration(root) {
+    const match = /^\/explorations\/(\d+)\/?$/.exec(window.location.pathname);
+    if (!match) return;
+    const id = match[1];
+    const total = parseInt(root.getAttribute("data-total"), 10) || 31;
+    let lastDone = parseInt(root.getAttribute("data-done"), 10) || 0;
+    const text = document.getElementById("progress-text");
+    const bar = document.getElementById("progress-bar");
+    const note = document.getElementById("progress-note");
+    const token = ++pollGeneration;
+    const startedAt = Date.now();
+    let lastProgressAt = startedAt;
+    const hardLimitMs = (total * 30 + 60) * 1000;
+    while (true) {
+      await sleep(POLL_INTERVAL_MS);
+      if (token !== pollGeneration) return;
+      const now = Date.now();
+      if (now - lastProgressAt >= EXPLORE_NO_PROGRESS_MS || now - startedAt >= hardLimitMs) {
+        if (note) note.hidden = false;
+        return;
+      }
+      const result = await api("GET", "/api/explorations/" + id + "/status");
+      if (token !== pollGeneration) return;
+      if (!result.ok || !result.data) continue;
+      const data = result.data;
+      if (data.status === "done" || data.status === "failed") {
+        window.location.reload();
+        return;
+      }
+      if (typeof data.done === "number") {
+        if (data.done > lastDone) {
+          lastDone = data.done;
+          lastProgressAt = Date.now();
+        }
+        if (text) text.textContent = "已查 " + data.done + "／共 " + data.total;
+        if (bar) {
+          bar.max = data.total;
+          bar.value = data.done;
+        }
+      }
+    }
+  }
+
+  function initExplorationPage() {
+    const root = document.getElementById("exploration-progress");
+    if (root) pollExploration(root);
+  }
+
   async function onAction(button) {
     const action = button.getAttribute("data-action");
     const id = button.getAttribute("data-watch-id");
@@ -629,6 +804,9 @@
   document.addEventListener("DOMContentLoaded", function () {
     initWatchForm();
     initAirlinePicker();
+    initUnembeddedHint();
+    initExploreForm();
+    initExplorationPage();
     initSettingsForm();
     initActions();
   });

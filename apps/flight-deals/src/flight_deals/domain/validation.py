@@ -11,7 +11,14 @@ from typing import cast
 from flight_deals.domain.airlines import MAX_AIRLINES, lookup_airline
 from flight_deals.domain.airports import is_selectable, lookup, same_city_group
 from flight_deals.domain.currency import DEFAULT_CURRENCY, major_to_minor
-from flight_deals.domain.models import CABINS, Cabin, DateMode, TripType, WatchSpec
+from flight_deals.domain.models import (
+    CABINS,
+    Cabin,
+    DateMode,
+    ExplorationSpec,
+    TripType,
+    WatchSpec,
+)
 
 _INTEGER = re.compile(r"^-?\d+$")
 MAX_TRIP_DAYS = 60
@@ -254,17 +261,10 @@ def _parse_trip_options(
     return adults, children, cabin, airlines, hour_from, hour_to
 
 
-def validate_watch_input(
-    raw: Mapping[str, object], today: date, existing: WatchSpec | None = None
-) -> ValidationOutcome:
-    """Validate raw form values. ``today`` is the Asia/Taipei calendar date.
-
-    On edit (``existing`` given), date fields left unchanged are not rejected for being
-    in the past, so a running flexible window can still have its budget edited. Likewise
-    an origin / destination code kept unchanged skips the airport table check (FR-C1).
-    """
-    errors: dict[str, str] = {}
-
+def _parse_route(
+    raw: Mapping[str, object], errors: dict[str, str], existing: WatchSpec | None
+) -> tuple[str, str]:
+    """Origin and destination codes, checked against the airport table (C-21)."""
     # Default TPE only when the key is absent; an explicit blank must not become TPE.
     origin = _text(raw, "origin").upper() if "origin" in raw else "TPE"
     destination = _text(raw, "destination").upper()
@@ -295,6 +295,27 @@ def validate_watch_input(
             errors["destination"] = "出發地與目的地不可相同"
         elif not unchanged and same_city_group(origin, destination):
             errors["destination"] = SAME_CITY
+    return origin, destination
+
+
+def _parse_max_stops(raw: Mapping[str, object], errors: dict[str, str]) -> int | None:
+    max_stops = _parse_int(raw, "max_stops", errors)
+    if max_stops is not None and not 0 <= max_stops <= MAX_STOPS_LIMIT:
+        errors["max_stops"] = f"轉機次數上限須介於 0 到 {MAX_STOPS_LIMIT}，或留空表示不限"
+    return max_stops
+
+
+def validate_watch_input(
+    raw: Mapping[str, object], today: date, existing: WatchSpec | None = None
+) -> ValidationOutcome:
+    """Validate raw form values. ``today`` is the Asia/Taipei calendar date.
+
+    On edit (``existing`` given), date fields left unchanged are not rejected for being
+    in the past, so a running flexible window can still have its budget edited. Likewise
+    an origin / destination code kept unchanged skips the airport table check (FR-C1).
+    """
+    errors: dict[str, str] = {}
+    origin, destination = _parse_route(raw, errors, existing)
 
     trip_type_text = _text(raw, "trip_type") or "round_trip"
     if trip_type_text not in ("round_trip", "one_way"):
@@ -392,9 +413,7 @@ def validate_watch_input(
             ):
                 errors["window_end"] = "彈性窗長度短於旅程天數下限"
 
-    max_stops = _parse_int(raw, "max_stops", errors)
-    if max_stops is not None and not 0 <= max_stops <= MAX_STOPS_LIMIT:
-        errors["max_stops"] = f"轉機次數上限須介於 0 到 {MAX_STOPS_LIMIT}，或留空表示不限"
+    max_stops = _parse_max_stops(raw, errors)
 
     budget_major = _parse_int(raw, "budget", errors)
     if "budget" in errors:
@@ -444,6 +463,96 @@ def validate_watch_input(
     return ValidationOutcome(spec, {})
 
 
+# ---- exploration (ADR-0002 FD-6 Decision 2) -----------------------------------------
+
+EXPLORATION_MONTHS = 12  # the current month plus the next 11
+MIN_EXPLORATION_TRIP_DAYS = 1
+MAX_EXPLORATION_TRIP_DAYS = 30
+_MONTH_TEXT = re.compile(r"(\d{4})-(\d{2})", re.ASCII)
+MONTH_INVALID = "月份格式錯誤（應為 YYYY-MM）"
+TRIP_DAYS_REQUIRED = "來回行程請填寫旅程天數"
+TRIP_DAYS_NOT_INT = "旅程天數必須是整數"
+TRIP_DAYS_RANGE = f"旅程天數須介於 {MIN_EXPLORATION_TRIP_DAYS} 到 {MAX_EXPLORATION_TRIP_DAYS}"
+
+
+def month_index(year: int, month: int) -> int:
+    return year * 12 + (month - 1)
+
+
+def exploration_months(today: date) -> list[tuple[int, int]]:
+    """(year, month) choices: the current Asia/Taipei month and the next 11."""
+    first = month_index(today.year, today.month)
+    return [(i // 12, i % 12 + 1) for i in range(first, first + EXPLORATION_MONTHS)]
+
+
+def month_range_error(today: date) -> str:
+    months = exploration_months(today)
+    (y1, m1), (y2, m2) = months[0], months[-1]
+    return f"月份須介於 {y1:04d}-{m1:02d} 到 {y2:04d}-{m2:02d}"
+
+
+@dataclass(frozen=True)
+class ExplorationOutcome:
+    spec: ExplorationSpec | None
+    errors: dict[str, str]
+
+
+def validate_exploration(raw: Mapping[str, object], today: date) -> ExplorationOutcome:
+    """Validate exploration input; route and trip options reuse the watch rules."""
+    errors: dict[str, str] = {}
+    origin, destination = _parse_route(raw, errors, None)
+
+    trip_type_text = _text(raw, "trip_type") or "round_trip"
+    if trip_type_text not in ("round_trip", "one_way"):
+        errors["trip_type"] = "行程型態不正確"
+        trip_type_text = "round_trip"
+    trip_type = cast(TripType, trip_type_text)
+
+    year = month = 0
+    match = _MONTH_TEXT.fullmatch(_text(raw, "month"))
+    if match is None or not 1 <= int(match.group(2)) <= 12:
+        errors["month"] = MONTH_INVALID
+    else:
+        year, month = int(match.group(1)), int(match.group(2))
+        first = month_index(today.year, today.month)
+        if not first <= month_index(year, month) < first + EXPLORATION_MONTHS:
+            errors["month"] = month_range_error(today)
+
+    trip_days: int | None = None
+    if trip_type == "round_trip":
+        trip_days = _parse_int(raw, "trip_days", errors)
+        if "trip_days" in errors:
+            too_large = errors["trip_days"] == TOO_LARGE
+            errors["trip_days"] = TOO_LARGE if too_large else TRIP_DAYS_NOT_INT
+        elif trip_days is None:
+            errors["trip_days"] = TRIP_DAYS_REQUIRED
+        elif not MIN_EXPLORATION_TRIP_DAYS <= trip_days <= MAX_EXPLORATION_TRIP_DAYS:
+            errors["trip_days"] = TRIP_DAYS_RANGE
+    # One-way: trip_days is not accepted and silently treated as unset (FR-I4).
+
+    max_stops = _parse_max_stops(raw, errors)
+    adults, children, cabin, airlines, hour_from, hour_to = _parse_trip_options(raw, errors, None)
+    if errors:
+        return ExplorationOutcome(None, errors)
+    spec = ExplorationSpec(
+        origin=origin,
+        destination=destination,
+        trip_type=trip_type,
+        year=year,
+        month=month,
+        trip_days=trip_days if trip_type == "round_trip" else None,
+        max_stops=max_stops,
+        adults=adults,
+        children=children,
+        cabin=cabin,
+        airlines=airlines,
+        dep_hour_from=hour_from,
+        dep_hour_to=hour_to,
+        currency=DEFAULT_CURRENCY,
+    )
+    return ExplorationOutcome(spec, {})
+
+
 @dataclass(frozen=True)
 class SettingRule:
     label: str
@@ -458,6 +567,7 @@ def setting_rules(min_scan_interval_minutes: int) -> dict[str, SettingRule]:
         "drop_threshold_bp": SettingRule("下跌比例門檻（bp）", 1, 9999),
         "stale_after_hours": SettingRule("價格過期標示（小時）", 1, 720),
         "global_hourly_query_limit": SettingRule("全域每小時查詢上限", 1, 1000),
+        "exploration_reserve_for_scans": SettingRule("探索須保留給掃描的每小時額度", 0, 1000),
     }
 
 

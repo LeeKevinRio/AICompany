@@ -304,6 +304,103 @@ def daily_digest_message(
     return text
 
 
+# ---- exploration mode (ADR-0002 FD-6 Decisions 3, 5-7) ------------------------------
+
+EXPLORATION_STATUS_LABELS: dict[str, str] = {
+    "queued": "排隊中",
+    "running": "進行中",
+    "done": "已完成",
+    "failed": "已中斷",
+}
+EXPLORATION_DONE_WITH_GAPS = "已完成（部分日期未查）"
+EXPLORATION_CELL_LABELS: dict[str, str] = {
+    "ok": "查到價格",
+    "pending": "查詢中",
+    "no_data": "無資料",
+    "no_embedded_results": "未內嵌結果",
+    "blocked": "被擋",
+    "error": "錯誤",
+    "currency_mismatch": "幣別不符，未列入排名",
+    "global_hourly_limit": "額度不足略過",
+    "breaker_open": "資料源暫停略過",
+    "interrupted": "中斷未查",
+    "past": "未查詢（已過去的日期）",
+    "out_of_range": "未查詢（超出可查日期範圍）",
+}
+EXPLORATION_REFERENCE_NOTE = "探索結果為查詢當下參考值，不會寫入任何監看的價格紀錄，也不會推播。"
+EXPLORATION_BUSY = "已有探索進行中，同一時間只能進行一個探索"
+EXPLORATION_SCHEDULER_OFF = "排程器未執行，無法在背景探索；請以一般方式啟動服務後再試"
+EXPLORATION_NO_DATES = "此月份沒有可查詢的出發日（已過去或超出可查日期範圍）"
+EXPLORATION_NOT_FOUND = "探索已過期或不存在（探索結果保留 7 天）。"
+EXPLORATION_HOURLY_LIMIT = "已達全域每小時查詢上限"
+EXPLORATION_BREAKER_OPEN = "資料源異常（斷路器開啟）"
+EXPLORATION_RESTARTED = "服務重啟，探索中斷；未查的日期不會自動補查"
+EXPLORATION_PREFILL_OK = "已從探索帶入條件，請填預算與名稱"
+EXPLORATION_PREFILL_MISSING = "找不到對應的探索結果，請手動填寫"
+
+
+def no_embedded_streak_label(rounds: int) -> str:
+    """List-row hint; the round count comes from config (Limits.no_embedded_streak_rounds)."""
+    return f"連續 {rounds} 輪 Google 未內嵌結果，請用查票連結確認"
+
+
+def exploration_quota_message(hourly_left: int, needed: int, reserve: int) -> str:
+    text = f"本小時剩餘額度 {hourly_left} 次"
+    if reserve > 0:
+        text += f"（需保留 {reserve} 次給排程掃描）"
+    return f"{text}，本次需要 {needed} 次，不足以探索整月，請稍後再試"
+
+
+def exploration_skipped_note(reason: str, count: int) -> str:
+    return f"{reason}，{count} 天未查"
+
+
+def exploration_unfinished_note(done: int, total: int, reason: str) -> str:
+    return f"探索未完成（已查 {done}／共 {total}），原因：{reason}"
+
+
+def exploration_age_note(hours: int) -> str:
+    return f"價格為 {hours} 小時前查到，可能已變動"
+
+
+def exploration_reused_note(hours: int) -> str:
+    return f"顯示 {hours} 小時前的探索結果"
+
+
+def exploration_sampled_note(max_pairs: int) -> str:
+    return f"以整月建立的彈性窗監看每輪最多查 {max_pairs} 組日期，輪換取樣"
+
+
+def month_label(year: int, month: int) -> str:
+    return f"{year} 年 {month} 月"
+
+
+def exploration_static_texts() -> list[str]:
+    return [
+        *EXPLORATION_STATUS_LABELS.values(),
+        EXPLORATION_DONE_WITH_GAPS,
+        *EXPLORATION_CELL_LABELS.values(),
+        EXPLORATION_REFERENCE_NOTE,
+        EXPLORATION_BUSY,
+        EXPLORATION_SCHEDULER_OFF,
+        EXPLORATION_NO_DATES,
+        EXPLORATION_NOT_FOUND,
+        EXPLORATION_HOURLY_LIMIT,
+        EXPLORATION_BREAKER_OPEN,
+        EXPLORATION_RESTARTED,
+        EXPLORATION_PREFILL_OK,
+        EXPLORATION_PREFILL_MISSING,
+        no_embedded_streak_label(3),
+        exploration_quota_message(20, 31, 12),
+        exploration_skipped_note(EXPLORATION_HOURLY_LIMIT, 3),
+        exploration_unfinished_note(12, 31, EXPLORATION_BREAKER_OPEN),
+        exploration_age_note(25),
+        exploration_reused_note(3),
+        exploration_sampled_note(12),
+        month_label(2026, 12),
+    ]
+
+
 def all_static_texts() -> list[str]:
     """Static wording used in templates (for wording-policy tests)."""
     return [
@@ -331,4 +428,5 @@ def all_static_texts() -> list[str]:
         "較前一日",
         "每日摘要",
         *trip_static_texts(),
+        *exploration_static_texts(),
     ]

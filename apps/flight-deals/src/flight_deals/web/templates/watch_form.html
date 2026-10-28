@@ -8,6 +8,8 @@
 {% if mode == "edit" %}
 <p class="muted">修改路線、日期、行程型態或轉機條件後，舊價格紀錄會保留並標示為「舊設定」，通知比較只看新設定的價格。</p>
 {% endif %}
+{% if prefill_note %}<p class="flash-info notice" role="status">{{ prefill_note }}</p>{% endif %}
+{% if prefill_sampled_note %}<p class="note muted">{{ prefill_sampled_note }}</p>{% endif %}
 <form id="watch-form" class="form" novalidate
       data-mode="{{ mode }}"
       data-url="{% if mode == 'edit' %}/api/watches/{{ watch_id }}{% else %}/api/watches{% endif %}">
@@ -177,6 +179,9 @@
     <span id="err-airlines" class="field-error" data-error-for="airlines"></span>
     <label class="inline"><input type="checkbox" name="notify_on_new_low" {% if values.notify_on_new_low %}checked{% endif %}> 查到此監看紀錄新低時也通知</label>
   </fieldset>
+
+  {% set _pax = ((values.adults or 1)|int) + ((values.children or 0)|int) %}
+  <p class="notice" data-unembedded-hint role="status" {% if not (values.trip_type == "round_trip" and values.cabin in ("business", "first") and _pax >= 2) %}hidden{% endif %}>依實測，此組合 Google 常未內嵌結果，可能無法自動查價，可用查票連結人工查看。</p>
 
   <div class="form-actions">
     <button type="submit" class="primary" data-busy-label="儲存中…">{% if mode == "edit" %}儲存修改{% else %}建立監看{% endif %}</button>

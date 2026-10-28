@@ -23,6 +23,9 @@
     </tbody>
   </table>
   </div>
+  {% if no_embedded_summary %}
+  <p class="notice">過去 24 小時有 {{ no_embedded_summary.ratio_pct }}%（{{ no_embedded_summary.count }}/{{ no_embedded_summary.total }}）查詢未內嵌結果，可能是 Google 非同步載入或封鎖，請用查票連結確認。</p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -33,6 +36,9 @@
     <dt>上次掃描</dt><dd>{{ last_scan.watch }}・開始 {{ last_scan.started }}・結束 {{ last_scan.finished }}・{{ last_scan.status }}</dd>
     {% else %}
     <dt>上次掃描</dt><dd>尚未掃描</dd>
+    {% endif %}
+    {% if active_exploration %}
+    <dt>探索</dt><dd><a href="/explorations/{{ active_exploration.id }}">探索進行中（{{ active_exploration.done }}/{{ active_exploration.total }}）</a>，排程掃描會在探索完成後依序執行</dd>
     {% endif %}
     <dt>下次預計掃描</dt><dd>{{ next_run or "無（沒有啟用中的監看或排程器未執行）" }}</dd>
     <dt>最近一小時查詢</dt><dd>{{ hourly_used }} / {{ hourly_limit }} 次</dd>

@@ -23,7 +23,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from flight_deals.services import Services
+from flight_deals.services import EXPLORATION_NOT_FOUND, Services
 from flight_deals.services import airports as airport_lookup
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -134,12 +134,37 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
         return page(request, "index.html", services.views.list_page())
 
     @app.get("/watches/new", response_class=HTMLResponse)
-    def new_watch(request: Request) -> Response:
+    def new_watch(
+        request: Request,
+        from_exploration: str | None = None,
+        depart: str | None = None,
+        mode: str | None = None,
+    ) -> Response:
+        values = services.views.form_values(None)
+        extra: dict[str, Any] = {}
+        if from_exploration is not None:
+            # Prefill only: nothing is written, the user still submits (FD-6 Decision 6).
+            assert values is not None
+            values, note, sampled = services.exploration_views.watch_prefill(
+                values, from_exploration, depart, mode
+            )
+            extra = {"prefill_note": note, "prefill_sampled_note": sampled}
         return page(
             request,
             "watch_form.html",
-            form_context("create", None, services.views.form_values(None)),
+            {**form_context("create", None, values), **extra},
         )
+
+    @app.get("/explore", response_class=HTMLResponse)
+    def explore(request: Request) -> Response:
+        return page(request, "explore.html", services.exploration_views.explore_page())
+
+    @app.get("/explorations/{exploration_id}", response_class=HTMLResponse)
+    def exploration_detail(request: Request, exploration_id: int) -> Response:
+        data = services.exploration_views.exploration_page(exploration_id)
+        if data is None:
+            return not_found(request, EXPLORATION_NOT_FOUND)
+        return page(request, "exploration.html", data)
 
     @app.get("/watches/{watch_id}", response_class=HTMLResponse)
     def watch_detail(request: Request, watch_id: int) -> Response:
@@ -189,7 +214,36 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
             )
         return JSONResponse(status, headers=NO_STORE)
 
+    @app.get("/api/explorations/{exploration_id}/status")
+    def api_exploration_status(exploration_id: int) -> JSONResponse:
+        # C-46: read-only, four whitelisted fields, never cached, no header needed.
+        status = services.exploration.status(exploration_id)
+        if status is None:
+            return JSONResponse(
+                {"ok": False, "errors": {"_": EXPLORATION_NOT_FOUND}},
+                status_code=404,
+                headers=NO_STORE,
+            )
+        return JSONResponse(status, headers=NO_STORE)
+
     # ---- JSON write API ----------------------------------------------------------
+
+    @app.post("/api/explorations")
+    def api_create_exploration(payload: JsonBody) -> JSONResponse:
+        result = services.exploration.create(payload)
+        if result.status == "invalid":
+            return errors_response(result.errors)
+        if result.ok:
+            return JSONResponse(
+                {"ok": True, "id": result.exploration_id, "reused": result.status == "reused"},
+                status_code=202 if result.status == "created" else 200,
+            )
+        body: dict[str, Any] = {"ok": False, "code": result.status, "message": result.message}
+        if result.status == "quota":
+            body.update(hourly_left=result.hourly_left, needed=result.needed)
+        if result.exploration_id is not None:
+            body["id"] = result.exploration_id
+        return JSONResponse(body, status_code=409)
 
     @app.post("/api/watches")
     def api_create_watch(payload: JsonBody) -> JSONResponse:

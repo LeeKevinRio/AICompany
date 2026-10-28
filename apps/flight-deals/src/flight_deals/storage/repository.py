@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from flight_deals.domain.models import (
     DatePair,
+    ExplorationSpec,
     NotificationKind,
     PriceKind,
     PriceQuote,
@@ -148,6 +149,134 @@ class SchedulerEventRecord:
     at: datetime
     kind: str
     detail: str | None
+
+
+@dataclass(frozen=True)
+class WatchListRow:
+    """A watch, its latest finished run's results, and the per-pair results of up to
+    the latest ``rounds`` finished runs of its current revision (newest first)."""
+
+    watch: Watch
+    last_results: list[dict[str, Any]]
+    recent_rounds: list[list[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class ExplorationRecord:
+    id: int
+    spec: ExplorationSpec
+    condition_key: str
+    status: str
+    total: int
+    done: int
+    queries_used: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_summary: str | None
+    # Lowest priced cell (status ok, same currency); only list queries fill it.
+    min_amount_minor: int | None = None
+
+
+@dataclass(frozen=True)
+class ExplorationCellRecord:
+    exploration_id: int
+    depart_date: date
+    return_date: date | None
+    status: str
+    reason: str | None
+    source: str | None
+    price_kind: str | None
+    from_cache: bool
+    attempts: int
+    amount_minor: int | None
+    currency: str | None
+    carrier: str | None
+    stops: int | None
+    duration_minutes: int | None
+    depart_time: str | None
+    as_of: datetime | None
+    fetched_at: datetime | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class CellUpdate:
+    """Outcome of one exploration query, written together with the progress counters."""
+
+    status: str
+    reason: str | None = None
+    source: str | None = None
+    price_kind: str | None = None
+    from_cache: bool = False
+    attempts: int = 0
+    amount_minor: int | None = None
+    currency: str | None = None
+    carrier: str | None = None
+    stops: int | None = None
+    duration_minutes: int | None = None
+    depart_time: str | None = None
+    as_of: datetime | None = None
+    fetched_at: datetime | None = None
+    error: str | None = None
+
+
+def _exploration(row: sqlite3.Row) -> ExplorationRecord:
+    year, month = (int(part) for part in row["month"].split("-"))
+    spec = ExplorationSpec(
+        origin=row["origin"],
+        destination=row["destination"],
+        trip_type=row["trip_type"],
+        year=year,
+        month=month,
+        trip_days=row["trip_days"],
+        max_stops=row["max_stops"],
+        adults=row["adults"],
+        children=row["children"],
+        cabin=row["cabin"],
+        airlines=airlines_from_db(row["airlines"]),
+        dep_hour_from=row["dep_hour_from"],
+        dep_hour_to=row["dep_hour_to"],
+        currency=row["currency"],
+    )
+    keys = row.keys()
+    return ExplorationRecord(
+        id=row["id"],
+        spec=spec,
+        condition_key=row["condition_key"],
+        status=row["status"],
+        total=row["total"],
+        done=row["done"],
+        queries_used=row["queries_used"],
+        created_at=_req_ts(row["created_at"]),
+        started_at=_pts(row["started_at"]),
+        finished_at=_pts(row["finished_at"]),
+        error_summary=row["error_summary"],
+        min_amount_minor=row["min_amount_minor"] if "min_amount_minor" in keys else None,
+    )
+
+
+def _cell(row: sqlite3.Row) -> ExplorationCellRecord:
+    return ExplorationCellRecord(
+        exploration_id=row["exploration_id"],
+        depart_date=date.fromisoformat(row["depart_date"]),
+        return_date=_pd(row["return_date"]),
+        status=row["status"],
+        reason=row["reason"],
+        source=row["source"],
+        price_kind=row["price_kind"],
+        from_cache=bool(row["from_cache"]),
+        attempts=row["attempts"],
+        amount_minor=row["amount_minor"],
+        currency=row["currency"],
+        carrier=row["carrier"],
+        stops=row["stops"],
+        duration_minutes=row["duration_minutes"],
+        depart_time=row["depart_time"],
+        as_of=_pts(row["as_of"]),
+        fetched_at=_pts(row["fetched_at"]),
+        error=row["error"],
+    )
 
 
 def _watch(row: sqlite3.Row) -> Watch:
@@ -311,19 +440,47 @@ class Repository:
             row = conn.execute("SELECT * FROM watch WHERE id = ?", (watch_id,)).fetchone()
         return _watch(row) if row else None
 
-    def list_watches_with_last_results(self) -> list[tuple[Watch, list[dict[str, Any]]]]:
-        """Every watch with its latest finished scan run's per-pair results (one query)."""
+    def list_watches_with_last_results(self, rounds: int = 3) -> list[WatchListRow]:
+        """Every watch with its latest finished run and the latest ``rounds`` finished
+        runs of its current revision, in a single query (C-34; window functions).
+
+        The window ranks only narrow columns (id, watch_id, revision); the large
+        ``query_results`` text is read just for the few ranked rows kept."""
         with self.db.connect() as conn:
             rows = conn.execute(
-                "SELECT w.*, (SELECT s.query_results FROM scan_run s"
-                "  WHERE s.watch_id = w.id AND s.finished_at IS NOT NULL"
-                "  ORDER BY s.id DESC LIMIT 1) AS last_query_results"
-                " FROM watch w ORDER BY w.id"
+                "SELECT w.*, s2.query_results AS run_results, r.watch_revision AS run_revision,"
+                " r.rn_all AS rn_all, r.rn_rev AS rn_rev"
+                " FROM watch w LEFT JOIN ("
+                "  SELECT s.id, s.watch_id, s.watch_revision,"
+                "   ROW_NUMBER() OVER (PARTITION BY s.watch_id ORDER BY s.id DESC) AS rn_all,"
+                "   ROW_NUMBER() OVER (PARTITION BY s.watch_id, s.watch_revision"
+                "    ORDER BY s.id DESC) AS rn_rev"
+                "  FROM scan_run s WHERE s.finished_at IS NOT NULL"
+                " ) r ON r.watch_id = w.id"
+                "  AND (r.rn_all = 1 OR (r.watch_revision = w.revision AND r.rn_rev <= ?))"
+                " LEFT JOIN scan_run s2 ON s2.id = r.id"
+                " ORDER BY w.id, r.rn_all",
+                (rounds,),
             ).fetchall()
-        return [
-            (_watch(r), json.loads(r["last_query_results"]) if r["last_query_results"] else [])
-            for r in rows
-        ]
+        result: list[WatchListRow] = []
+        current: Watch | None = None
+        last: list[dict[str, Any]] = []
+        recent: list[list[dict[str, Any]]] = []
+        for row in rows:
+            if current is None or row["id"] != current.id:
+                if current is not None:
+                    result.append(WatchListRow(current, last, recent))
+                current, last, recent = _watch(row), [], []
+            if row["run_results"] is None:
+                continue
+            results = json.loads(row["run_results"])
+            if row["rn_all"] == 1:
+                last = results
+            if row["run_revision"] == current.revision and row["rn_rev"] <= rounds:
+                recent.append(results)
+        if current is not None:
+            result.append(WatchListRow(current, last, recent))
+        return result
 
     def list_watches(self) -> list[Watch]:
         with self.db.connect() as conn:
@@ -421,12 +578,27 @@ class Repository:
             )
 
     def queries_used_since(self, since: datetime) -> int:
+        """Outbound queries of scans and explorations started at or after ``since``."""
+        stamp = to_utc_iso(since)
         with self.db.connect() as conn:
             row = conn.execute(
-                "SELECT COALESCE(SUM(queries_used), 0) AS n FROM scan_run WHERE started_at >= ?",
-                (to_utc_iso(since),),
+                "SELECT (SELECT COALESCE(SUM(queries_used), 0) FROM scan_run"
+                "  WHERE started_at >= ?)"
+                " + (SELECT COALESCE(SUM(queries_used), 0) FROM exploration"
+                "  WHERE COALESCE(started_at, created_at) >= ?) AS n",
+                (stamp, stamp),
             ).fetchone()
         return int(row["n"])
+
+    def scan_query_results_since(self, since: datetime) -> list[list[dict[str, Any]]]:
+        """Per-pair results of every finished scan run started at or after ``since``."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT query_results FROM scan_run"
+                " WHERE started_at >= ? AND finished_at IS NOT NULL",
+                (to_utc_iso(since),),
+            ).fetchall()
+        return [json.loads(r["query_results"]) for r in rows]
 
     def count_failed_scan_runs_since(self, since: datetime) -> int:
         """Scan runs that ended ``failed`` and started at or after ``since`` (one COUNT)."""
@@ -472,6 +644,222 @@ class Repository:
                 "SELECT * FROM scan_run ORDER BY started_at DESC, id DESC LIMIT 1"
             ).fetchone()
         return _scan_run(row) if row else None
+
+    # ---- explorations ----------------------------------------------------------
+
+    def insert_exploration(
+        self, spec: ExplorationSpec, pairs: Sequence[DatePair], now: datetime
+    ) -> int:
+        """The exploration row and every ``pending`` cell, in one transaction."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO exploration (condition_key, origin, destination, trip_type, month,"
+                " trip_days, max_stops, cabin, adults, children, airlines, dep_hour_from,"
+                " dep_hour_to, currency, status, total, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                (
+                    spec.condition_key(),
+                    spec.origin,
+                    spec.destination,
+                    spec.trip_type,
+                    spec.month_text,
+                    spec.trip_days,
+                    spec.max_stops,
+                    spec.cabin,
+                    spec.adults,
+                    spec.children,
+                    airlines_to_db(spec.airlines),
+                    spec.dep_hour_from,
+                    spec.dep_hour_to,
+                    spec.currency,
+                    len(pairs),
+                    to_utc_iso(now),
+                ),
+            )
+            exploration_id = int(cast(int, cur.lastrowid))
+            conn.executemany(
+                "INSERT INTO exploration_cell (exploration_id, depart_date, return_date)"
+                " VALUES (?, ?, ?)",
+                [(exploration_id, p.depart.isoformat(), _d(p.return_date)) for p in pairs],
+            )
+        return exploration_id
+
+    def get_exploration(self, exploration_id: int) -> ExplorationRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM exploration WHERE id = ?", (exploration_id,)
+            ).fetchone()
+        return _exploration(row) if row else None
+
+    def active_exploration(self) -> ExplorationRecord | None:
+        """The queued or running exploration, if any (at most one by design)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM exploration WHERE status IN ('queued', 'running')"
+                " ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return _exploration(row) if row else None
+
+    def reusable_exploration(self, condition_key: str, since: datetime) -> ExplorationRecord | None:
+        """Latest ``done`` exploration of this key created since ``since`` with no skipped
+        cell (an exploration with gaps is never reused; FD-6 Decision 10)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM exploration e WHERE e.condition_key = ? AND e.created_at >= ?"
+                " AND e.status = 'done' AND NOT EXISTS (SELECT 1 FROM exploration_cell c"
+                "  WHERE c.exploration_id = e.id AND c.status IN ('skipped', 'pending'))"
+                " ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
+                (condition_key, to_utc_iso(since)),
+            ).fetchone()
+        return _exploration(row) if row else None
+
+    def list_explorations_since(self, since: datetime) -> list[ExplorationRecord]:
+        """Explorations created since ``since``, newest first, with their lowest price."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT e.*, (SELECT MIN(c.amount_minor) FROM exploration_cell c"
+                "  WHERE c.exploration_id = e.id AND c.status = 'ok'"
+                "  AND c.currency = e.currency) AS min_amount_minor"
+                " FROM exploration e WHERE e.created_at >= ?"
+                " ORDER BY e.created_at DESC, e.id DESC",
+                (to_utc_iso(since),),
+            ).fetchall()
+        return [_exploration(r) for r in rows]
+
+    def exploration_cells(self, exploration_id: int) -> list[ExplorationCellRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM exploration_cell WHERE exploration_id = ? ORDER BY depart_date",
+                (exploration_id,),
+            ).fetchall()
+        return [_cell(r) for r in rows]
+
+    def start_exploration(self, exploration_id: int, now: datetime) -> bool:
+        """queued -> running; False if it is no longer queued (e.g. interrupted)."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE exploration SET status = 'running', started_at = ?"
+                " WHERE id = ? AND status = 'queued'",
+                (to_utc_iso(now), exploration_id),
+            )
+            return cur.rowcount == 1
+
+    def record_exploration_cell(
+        self, exploration_id: int, depart: date, update: CellUpdate
+    ) -> None:
+        """Write one cell and bump ``done`` / ``queries_used`` in the same transaction."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE exploration_cell SET status = ?, reason = ?, source = ?,"
+                " price_kind = ?, from_cache = ?, attempts = ?, amount_minor = ?,"
+                " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
+                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?"
+                " WHERE exploration_id = ? AND depart_date = ? AND status = 'pending'",
+                (
+                    update.status,
+                    update.reason,
+                    update.source,
+                    update.price_kind,
+                    int(update.from_cache),
+                    update.attempts,
+                    update.amount_minor,
+                    update.currency,
+                    update.carrier,
+                    update.stops,
+                    update.duration_minutes,
+                    update.depart_time,
+                    _ts(update.as_of),
+                    _ts(update.fetched_at),
+                    update.error,
+                    exploration_id,
+                    depart.isoformat(),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"exploration {exploration_id} cell {depart} is not pending")
+            conn.execute(
+                "UPDATE exploration SET done = done + 1, queries_used = queries_used + ?"
+                " WHERE id = ?",
+                (update.attempts, exploration_id),
+            )
+
+    def finish_exploration(
+        self,
+        exploration_id: int,
+        *,
+        status: str,
+        finished_at: datetime,
+        skip_reason: str,
+        error_summary: str | None,
+    ) -> int:
+        """Mark every still-pending cell skipped and close the exploration (one
+        transaction). Returns how many cells were skipped here."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE exploration_cell SET status = 'skipped', reason = ?"
+                " WHERE exploration_id = ? AND status = 'pending'",
+                (skip_reason, exploration_id),
+            )
+            conn.execute(
+                "UPDATE exploration SET status = ?, finished_at = ?, error_summary = ?"
+                " WHERE id = ?",
+                (status, to_utc_iso(finished_at), error_summary, exploration_id),
+            )
+            return cur.rowcount
+
+    def set_exploration_summary(self, exploration_id: int, summary: str | None) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE exploration SET error_summary = ? WHERE id = ?",
+                (summary, exploration_id),
+            )
+
+    def interrupt_active_explorations(self, now: datetime, summary: str) -> list[int]:
+        """Queued / running explorations become ``failed``; pending cells are skipped."""
+        with self.db.connect() as conn:
+            ids = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM exploration WHERE status IN ('queued', 'running')"
+                ).fetchall()
+            ]
+            for exploration_id in ids:
+                conn.execute(
+                    "UPDATE exploration_cell SET status = 'skipped', reason = 'interrupted'"
+                    " WHERE exploration_id = ? AND status = 'pending'",
+                    (exploration_id,),
+                )
+                conn.execute(
+                    "UPDATE exploration SET status = 'failed', finished_at = ?,"
+                    " error_summary = ? WHERE id = ?",
+                    (to_utc_iso(now), summary, exploration_id),
+                )
+        return ids
+
+    def delete_explorations_created_before(self, cutoff: datetime) -> int:
+        """Retention purge; queued / running explorations are never deleted."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM exploration WHERE created_at < ?"
+                " AND status NOT IN ('queued', 'running')",
+                (to_utc_iso(cutoff),),
+            )
+            return cur.rowcount
+
+    def exploration_cell_counts_since(self, since: datetime) -> list[tuple[str, int, int]]:
+        """(source, real queries, no_embedded_results) of cells fetched since ``since``;
+        skipped, pending and cache-served cells are not counted."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) AS total,"
+                " SUM(CASE WHEN status = 'no_data' AND reason = 'no_embedded_results'"
+                "  THEN 1 ELSE 0 END) AS hits"
+                " FROM exploration_cell WHERE fetched_at >= ? AND from_cache = 0"
+                " AND status NOT IN ('skipped', 'pending') AND source IS NOT NULL"
+                " GROUP BY source",
+                (to_utc_iso(since),),
+            ).fetchall()
+        return [(r["source"], int(r["total"]), int(r["hits"])) for r in rows]
 
     # ---- observations --------------------------------------------------------
 

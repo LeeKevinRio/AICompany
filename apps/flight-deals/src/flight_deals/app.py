@@ -32,6 +32,8 @@ from flight_deals.scheduler import (
 )
 from flight_deals.services import (
     DigestService,
+    ExplorationService,
+    ExplorationViewService,
     HealthService,
     NotificationService,
     ScanService,
@@ -168,6 +170,7 @@ def assemble(
             global_hourly_query_limit=tunables.global_hourly_query_limit,
             digest_enabled=tunables.digest_enabled,
             digest_time=tunables.digest_time,
+            exploration_reserve_for_scans=tunables.exploration_reserve_for_scans,
         ),
         min_scan_interval_minutes=limits.min_scan_interval_minutes,
         clock=clock,
@@ -178,6 +181,8 @@ def assemble(
         cooldown_minutes=limits.breaker_cooldown_minutes,
         clock=clock,
         redactor=redact,
+        no_embedded_min_queries=limits.no_embedded_min_queries,
+        no_embedded_min_ratio_pct=limits.no_embedded_min_ratio_pct,
     )
     health.ensure_sources([s.name for s in active_sources])
     notifications = NotificationService(
@@ -211,6 +216,7 @@ def assemble(
         clock=clock,
         autostart=autostart_probe,
         link_builder=links,
+        no_embedded_streak_rounds=limits.no_embedded_streak_rounds,
     )
     digest = DigestService(
         repo,
@@ -220,6 +226,23 @@ def assemble(
         source_names=[s.name for s in active_sources],
         clock=clock,
     )
+    # Same source objects (cache, throttle) and scan lock as the scans (FD-6 Decision 3).
+    exploration = ExplorationService(
+        repo,
+        scan.sources,
+        health,
+        notifications,
+        settings,
+        scan_lock=scan.lock,
+        max_cells=limits.exploration_max_cells,
+        reuse_hours=limits.exploration_reuse_hours,
+        retention_days=limits.exploration_retention_days,
+        clock=clock,
+        redactor=redact,
+    )
+    exploration_views = ExplorationViewService(
+        repo, settings, exploration, clock=clock, link_builder=links
+    )
     services = Services(
         watches=watches,
         views=views,
@@ -228,6 +251,8 @@ def assemble(
         scan=scan,
         health=health,
         digest=digest,
+        exploration=exploration,
+        exploration_views=exploration_views,
     )
     scheduler = ScanScheduler(
         services,
@@ -241,6 +266,8 @@ def assemble(
     settings.listeners.append(scheduler.on_settings_changed)
     views.hooks.next_run_time = scheduler.next_run_time
     views.hooks.scheduler_running = lambda: scheduler.running
+    exploration.hooks.schedule = scheduler.schedule_exploration
+    exploration.hooks.scheduler_running = lambda: scheduler.running
     return Assembly(services, database, scheduler)
 
 

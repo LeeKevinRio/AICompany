@@ -20,6 +20,7 @@ from flight_deals.storage.db import (
 )
 
 ORIGINAL_MIGRATIONS: Callable[[], list[tuple[int, str]]] = available_migrations
+LATEST = max(v for v, _ in available_migrations())
 TS = "2026-10-25T04:00:00+00:00"
 TABLES = (
     "watch",
@@ -214,7 +215,7 @@ def test_v2_data_survives_column_by_column(tmp_path: Path, monkeypatch: pytest.M
         "notification": 2,
         "notification_item": 3,
     }
-    assert database.migrate() == 3
+    assert database.migrate() == LATEST
     assert counts(database) == before_counts
     after = watch_rows(database)
     for old, new in zip(before, after, strict=True):
@@ -295,32 +296,41 @@ def test_old_item_keys_gain_revision(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert dedupe == "price:2:live:2026-12-10:-:950000"  # message keys are not rewritten
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        {"adults": 0},
-        {"adults": 10},
-        {"children": 9},
-        {"adults": 5, "children": 5},
-        {"cabin": "luxury"},
-        {"airlines": "br"},
-        {"airlines": "BR,"},
-        {"airlines": ""},
-        {"airlines": "BR,CI,JX,IT,JL,NH"},
-        {"airlines": "12"},
-        {"dep_hour_from": 6, "dep_hour_to": 24},
-        {"dep_hour_from": 6},
-        {"dep_hour_to": 12},
-        {"dep_hour_from": 6, "dep_hour_to": 6},
-        {"dep_hour_from": 12, "dep_hour_to": 6},
-        {"dep_hour_from": -1, "dep_hour_to": 6},
-        # INTEGER affinity keeps 1.5 as a real; typeof() checks reject it (qa B1).
-        {"adults": 1.5},
-        {"children": 0.5},
-        {"dep_hour_from": 6.5, "dep_hour_to": 12},
-        {"dep_hour_from": 6, "dep_hour_to": 12.5},
-    ],
-)
+# Trip-option CHECK cases; migration 0004 reuses them verbatim (C-43).
+TRIP_OPTION_REJECTS: list[dict[str, Any]] = [
+    {"adults": 0},
+    {"adults": 10},
+    {"children": 9},
+    {"adults": 5, "children": 5},
+    {"cabin": "luxury"},
+    {"airlines": "br"},
+    {"airlines": "BR,"},
+    {"airlines": ""},
+    {"airlines": "BR,CI,JX,IT,JL,NH"},
+    {"airlines": "12"},
+    {"dep_hour_from": 6, "dep_hour_to": 24},
+    {"dep_hour_from": 6},
+    {"dep_hour_to": 12},
+    {"dep_hour_from": 6, "dep_hour_to": 6},
+    {"dep_hour_from": 12, "dep_hour_to": 6},
+    {"dep_hour_from": -1, "dep_hour_to": 6},
+    # INTEGER affinity keeps 1.5 as a real; typeof() checks reject it (qa B1).
+    {"adults": 1.5},
+    {"children": 0.5},
+    {"dep_hour_from": 6.5, "dep_hour_to": 12},
+    {"dep_hour_from": 6, "dep_hour_to": 12.5},
+]
+TRIP_OPTION_ACCEPTS: list[dict[str, Any]] = [
+    {"cabin": "premium_economy"},
+    {"cabin": "first", "adults": 9},
+    {"adults": 1, "children": 8},
+    {"airlines": "BR,CI"},
+    {"airlines": "5J,7C,BR,CI,JX"},
+    {"dep_hour_from": 0, "dep_hour_to": 23},
+]
+
+
+@pytest.mark.parametrize("values", TRIP_OPTION_REJECTS)
 def test_check_constraints_reject(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, values: dict[str, Any]
 ) -> None:
@@ -330,17 +340,7 @@ def test_check_constraints_reject(
         insert_watch(conn, **values)
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        {"cabin": "premium_economy"},
-        {"cabin": "first", "adults": 9},
-        {"adults": 1, "children": 8},
-        {"airlines": "BR,CI"},
-        {"airlines": "5J,7C,BR,CI,JX"},
-        {"dep_hour_from": 0, "dep_hour_to": 23},
-    ],
-)
+@pytest.mark.parametrize("values", TRIP_OPTION_ACCEPTS)
 def test_check_constraints_accept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, values: dict[str, Any]
 ) -> None:
@@ -399,7 +399,7 @@ def test_existing_db_is_backed_up_as_pre_v3(
 
 def test_new_db_gets_no_backup(tmp_path: Path) -> None:
     database = Database(tmp_path / "fresh.db")
-    assert database.migrate() == 3
+    assert database.migrate() == LATEST
     assert sorted(p.name for p in tmp_path.glob("*.db")) == ["fresh.db"]
 
 
@@ -419,5 +419,5 @@ def test_failure_mid_migration_leaves_v2_intact(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(price_observation)")}
     assert "watch_new" not in tables and "depart_time" not in cols
     monkeypatch.setattr(db_module, "available_migrations", ORIGINAL_MIGRATIONS)
-    assert database.migrate() == 3  # the next start upgrades normally
+    assert database.migrate() == LATEST  # the next start upgrades normally
     assert counts(database)["notification_item"] == 3

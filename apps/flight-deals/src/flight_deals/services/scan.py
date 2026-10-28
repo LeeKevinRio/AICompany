@@ -13,7 +13,6 @@ from flight_deals.domain.dates import expand_pairs, is_expired, sample_pairs
 from flight_deals.domain.models import (
     SCANNABLE_STATUSES,
     DatePair,
-    FlightSearch,
     PriceKind,
     Watch,
     WatchStatus,
@@ -26,15 +25,16 @@ from flight_deals.domain.rules import (
     should_rearm,
 )
 from flight_deals.domain.timeutil import taipei_date
-from flight_deals.ports import Clock, FlightPriceSource, Redactor, SourceResult
+from flight_deals.ports import Clock, FlightPriceSource, Redactor
 from flight_deals.services.health import HealthService
 from flight_deals.services.notifications import NotificationService
 from flight_deals.services.settings import SettingsService
+from flight_deals.services.source_query import ERROR_SUMMARY_LIMIT, SourceQuery, skipped_entry
 from flight_deals.storage.repository import AlertStateRecord, Repository
 
 log = logging.getLogger(__name__)
 
-ERROR_SUMMARY_LIMIT = 500
+__all__ = ["ERROR_SUMMARY_LIMIT", "ScanOutcome", "ScanService"]
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class ScanService:
     ) -> None:
         self._repo = repo
         self._sources = list(sources)
+        self._query = SourceQuery(self._sources, health, clock=clock, redactor=redactor)
         self._health = health
         self._notifications = notifications
         self._settings = settings
@@ -87,6 +88,10 @@ class ScanService:
     @property
     def source_names(self) -> list[str]:
         return [s.name for s in self._sources]
+
+    @property
+    def sources(self) -> list[FlightPriceSource]:
+        return list(self._sources)
 
     @property
     def lock(self) -> threading.Lock:
@@ -266,116 +271,39 @@ class ScanService:
 
     @staticmethod
     def _skipped_entry(pair: DatePair, reason: str) -> dict[str, Any]:
-        depart, ret = pair.as_json()
-        return {
-            "depart": depart,
-            "return": ret,
-            "status": "skipped",
-            "reason": reason,
-            "source": None,
-            "tries": [],
-        }
+        return skipped_entry(pair, reason)
 
     def _query_pair(self, watch: Watch, pair: DatePair, run_id: int) -> _PairOutcome:
-        depart, ret = pair.as_json()
-        entry: dict[str, Any] = {
-            "depart": depart,
-            "return": ret,
-            "status": "skipped",
-            "reason": None,
-            "source": None,
-            "from_cache": False,
-            "amount_minor": None,
-            "currency": None,
-            "tries": [],
-        }
-        outcome = _PairOutcome(entry)
         search = search_for(watch.spec, pair, watch.spec.currency)
-        for source in self._sources:
-            if not self._health.allow(source.name):
-                entry["tries"].append({"source": source.name, "status": "skipped_breaker_open"})
-                entry["reason"] = "breaker_open"
-                outcome.error = f"{source.name} 斷路器開啟中，暫停查詢"
-                continue
-            result = self._safe_search(source, search)
-            outcome.queries += result.attempts
-            self._spent += result.attempts
-            try_info: dict[str, Any] = {
-                "source": source.name,
-                "status": result.status,
-                "error": result.error,
-                "from_cache": result.from_cache,
-            }
-            stats = result.parse_stats
-            if stats is not None:
-                # Integer counts only; display text is composed by services/views.py.
-                try_info.update(
-                    itineraries=stats.itineraries,
-                    unpriced=stats.unpriced,
-                    malformed=stats.malformed,
-                )
-            entry["tries"].append(try_info)
-            entry.update(source=source.name, status=result.status, from_cache=result.from_cache)
-            if not result.from_cache:
-                if result.status in ("ok", "no_data"):
-                    self._health.record_success(source.name)
-                else:
-                    if self._health.record_failure(source.name, result.error):
-                        self._opened_sources.append((source.name, result.error))
-            if result.status == "ok":
-                cheapest = min(
-                    (q for q in result.quotes if q.currency == watch.spec.currency),
-                    key=lambda q: q.amount_minor,
-                    default=None,
-                )
-                if cheapest is None:
-                    entry["status"] = "currency_mismatch"
-                    outcome.error = "來源回傳幣別與監看幣別不一致，未納入通知判斷"
-                    cheapest = min(result.quotes, key=lambda q: q.amount_minor)
-                obs_id = self._repo.insert_observation(
-                    scan_run_id=run_id, watch_id=watch.id, revision=watch.revision, quote=cheapest
-                )
-                entry.update(amount_minor=cheapest.amount_minor, currency=cheapest.currency)
-                if stats is not None and stats.malformed > 0:
-                    # Unpriced itineraries are expected and stay out of error_summary;
-                    # unrecognised ones are kept visible as a sign of format drift.
-                    note = f"{source.name} 回應中有 {stats.malformed} 筆格式無法辨識"
-                    outcome.error = f"{outcome.error}；{note}" if outcome.error else note
-                outcome.success = True
-                outcome.candidate = Candidate(
-                    observation_id=obs_id,
-                    depart_date=cheapest.depart_date,
-                    return_date=cheapest.return_date,
-                    amount_minor=cheapest.amount_minor,
-                    currency=cheapest.currency,
-                    price_kind=cheapest.price_kind,
-                    source=cheapest.source,
-                    carrier=cheapest.carrier,
-                    fetched_at=cheapest.fetched_at,
-                )
-                return outcome
-            if result.status == "no_data":
-                # A sub-reason (e.g. results not embedded) is shown, never counted as failure.
-                reason = result.extra.get("reason")
-                if reason:
-                    entry["reason"] = reason
-                    try_info["reason"] = reason
-                outcome.success = True
-                return outcome
-            outcome.failure = True
-            outcome.error = f"{source.name} {result.status}: {result.error or ''}".strip()
+        query = self._query.query(search, watch.spec.currency, on_spent=self._add_spent)
+        self._opened_sources.extend(query.opened)
+        outcome = _PairOutcome(
+            query.entry,
+            queries=query.queries,
+            success=query.success,
+            failure=query.failure,
+            error=query.error,
+        )
+        cheapest = query.cheapest
+        if cheapest is not None:
+            obs_id = self._repo.insert_observation(
+                scan_run_id=run_id, watch_id=watch.id, revision=watch.revision, quote=cheapest
+            )
+            outcome.candidate = Candidate(
+                observation_id=obs_id,
+                depart_date=cheapest.depart_date,
+                return_date=cheapest.return_date,
+                amount_minor=cheapest.amount_minor,
+                currency=cheapest.currency,
+                price_kind=cheapest.price_kind,
+                source=cheapest.source,
+                carrier=cheapest.carrier,
+                fetched_at=cheapest.fetched_at,
+            )
         return outcome
 
-    def _safe_search(self, source: FlightPriceSource, search: FlightSearch) -> SourceResult:
-        try:
-            return source.search(search)
-        except Exception as exc:  # adapters should not raise; contain it if they do
-            return SourceResult(
-                source=source.name,
-                status="error",
-                fetched_at=self._clock(),
-                error=self._redact(f"{type(exc).__name__}: {exc}")[:ERROR_SUMMARY_LIMIT],
-            )
+    def _add_spent(self, attempts: int) -> None:
+        self._spent += attempts
 
     def _evaluate_alerts(
         self, watch: Watch, run_id: int, candidates: list[Candidate]

@@ -35,6 +35,7 @@
         <div class="muted">{{ w.route }}・{{ w.trip }}</div>
         <div class="muted">{{ w.cabin_label }}・{{ w.pax_short }}</div>
         <div class="muted">條件：{{ w.conditions_label }}</div>
+        {% if w.no_embedded_streak %}<div><span class="badge warn">{{ no_embedded_streak_label }}</span></div>{% endif %}
         {% if w.no_embedded_note %}<div class="hint">{{ w.no_embedded_note }}</div>{% endif %}
       </td>
       <td>{{ w.dates }}</td>

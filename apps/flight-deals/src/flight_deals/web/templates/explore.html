@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}探索{% endblock %}
+{% block content %}
+{% set v = values or {} %}
+<div class="page-head">
+  <h1>探索一個月內的價格</h1>
+</div>
+<p>對所選月份每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最低價前 5 個日期呈現。</p>
+{% if active %}
+<p class="notice"><a href="/explorations/{{ active.id }}">探索進行中（{{ active.done }}/{{ active.total }}）</a>，同一時間只能進行一個探索；排程掃描會在探索完成後依序執行。</p>
+{% endif %}
+
+<form id="explore-form" class="form" novalidate data-url="/api/explorations">
+  <p class="form-error" data-error-for="_" role="alert"></p>
+
+  <fieldset>
+    <legend>路線</legend>
+    <div class="grid">
+      <div class="field" data-combo="origin">
+        <label for="f-origin">出發地</label>
+        <div class="combo-box">
+          <input id="f-origin" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-origin" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="origin" data-code="{{ v.origin }}" value="{{ v.origin_label }}" aria-describedby="h-origin st-origin err-origin">
+          <ul id="lb-origin" class="combo-list" role="listbox" aria-label="出發地選項" hidden></ul>
+        </div>
+        <small id="h-origin" class="hint">輸入中文、英文或 3 碼代碼，例如 台北、TPE</small>
+        <span id="st-origin" class="sr-only combo-status" aria-live="polite"></span>
+        <span id="err-origin" class="field-error" data-error-for="origin"></span>
+      </div>
+      <div class="field" data-combo="destination">
+        <label for="f-destination">目的地</label>
+        <div class="combo-box">
+          <input id="f-destination" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-destination" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="destination" data-code="{{ v.destination }}" value="{{ v.destination_label }}" aria-describedby="h-destination st-destination err-destination">
+          <ul id="lb-destination" class="combo-list" role="listbox" aria-label="目的地選項" hidden></ul>
+        </div>
+        <small id="h-destination" class="hint">輸入中文、英文或 3 碼代碼，例如 東京、NRT</small>
+        <span id="st-destination" class="sr-only combo-status" aria-live="polite"></span>
+        <span id="err-destination" class="field-error" data-error-for="destination"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>行程</legend>
+    <fieldset class="group">
+      <legend>行程型態</legend>
+      <div class="choice-row">
+        <label class="inline"><input type="radio" name="trip_type" value="round_trip" {% if (v.trip_type or "round_trip") == "round_trip" %}checked{% endif %}> 來回</label>
+        <label class="inline"><input type="radio" name="trip_type" value="one_way" {% if v.trip_type == "one_way" %}checked{% endif %}> 單程</label>
+      </div>
+      <span class="field-error" data-error-for="trip_type"></span>
+    </fieldset>
+    <div class="grid">
+      <div class="field">
+        <label for="f-month">月份</label>
+        <select id="f-month" name="month" aria-describedby="err-month">
+          {% for m in (month_options or []) %}
+          <option value="{{ m.value }}" {% if v.month == m.value %}selected{% endif %}>{{ m.label }}</option>
+          {% endfor %}
+        </select>
+        <span id="err-month" class="field-error" data-error-for="month"></span>
+      </div>
+      <div class="field" data-show-when="trip_type=round_trip">
+        <label for="f-trip_days">旅程天數</label>
+        <input id="f-trip_days" type="number" name="trip_days" value="{{ v.trip_days if v.trip_days is not none and v.trip_days != "" else 5 }}" min="1" max="30" step="1" inputmode="numeric" aria-describedby="h-trip_days err-trip_days">
+        <small id="h-trip_days" class="hint">1 至 30 天；回程日為出發日加上旅程天數</small>
+        <span id="err-trip_days" class="field-error" data-error-for="trip_days"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>條件</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="f-max_stops">轉機次數上限</label>
+        <select id="f-max_stops" name="max_stops" aria-describedby="err-max_stops">
+          <option value="" {% if v.max_stops is none or v.max_stops == "" %}selected{% endif %}>不限</option>
+          <option value="0" {% if v.max_stops is not none and v.max_stops|string == "0" %}selected{% endif %}>僅直飛</option>
+          <option value="1" {% if v.max_stops is not none and v.max_stops|string == "1" %}selected{% endif %}>最多 1 次</option>
+          <option value="2" {% if v.max_stops is not none and v.max_stops|string == "2" %}selected{% endif %}>最多 2 次</option>
+        </select>
+        <span id="err-max_stops" class="field-error" data-error-for="max_stops"></span>
+      </div>
+      <div class="field">
+        <label for="f-adults">成人</label>
+        <input id="f-adults" type="number" name="adults" value="{{ v.adults if v.adults is not none and v.adults != "" else 1 }}" min="1" max="9" step="1" inputmode="numeric" aria-describedby="h-pax err-adults">
+        <span id="err-adults" class="field-error" data-error-for="adults"></span>
+      </div>
+      <div class="field">
+        <label for="f-children">兒童（2～11 歲）</label>
+        <input id="f-children" type="number" name="children" value="{{ v.children if v.children is not none and v.children != "" else 0 }}" min="0" max="8" step="1" inputmode="numeric" aria-describedby="h-pax err-children">
+        <small id="h-pax" class="hint">成人與兒童合計最多 9 人</small>
+        <span id="err-children" class="field-error" data-error-for="children"></span>
+      </div>
+      <div class="field">
+        <label for="f-cabin">艙等</label>
+        <select id="f-cabin" name="cabin" aria-describedby="err-cabin">
+          {% for c in (cabin_options or []) %}
+          <option value="{{ c.value }}" {% if (v.cabin or "economy") == c.value %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+        <span id="err-cabin" class="field-error" data-error-for="cabin"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_from">去程最早出發</label>
+        <select id="f-dep_hour_from" name="dep_hour_from" aria-describedby="h-dep_hour err-dep_hour_from">
+          <option value="" {% if v.dep_hour_from is none %}selected{% endif %}>不限</option>
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if v.dep_hour_from == h %}selected{% endif %}>{{ "%02d" % h }}:00</option>
+          {% endfor %}
+        </select>
+        <span id="err-dep_hour_from" class="field-error" data-error-for="dep_hour_from"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_to">去程最晚出發</label>
+        <select id="f-dep_hour_to" name="dep_hour_to" aria-describedby="h-dep_hour err-dep_hour_to">
+          <option value="" {% if v.dep_hour_to is none %}selected{% endif %}>不限</option>
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if v.dep_hour_to == h %}selected{% endif %}>{{ "%02d" % h }}:00</option>
+          {% endfor %}
+        </select>
+        <small id="h-dep_hour" class="hint">兩者需同時選擇或同時不限；以 Google Flights 時段篩選為準</small>
+        <span id="err-dep_hour_to" class="field-error" data-error-for="dep_hour_to"></span>
+      </div>
+    </div>
+    <details class="airline-picker">
+      <summary>只看這些航空公司（最多 5 家）</summary>
+      <p id="h-airlines" class="hint">由 Google Flights 套用篩選；全部不勾選代表不限航空。</p>
+      <div class="airline-list" id="airline-list" data-max="5">
+        {% for a in (airline_options or []) %}
+        <label class="inline"><input type="checkbox" name="airlines" value="{{ a.code }}" {% if a.code in (v.airlines or []) %}checked{% endif %} aria-describedby="h-airlines err-airlines"> {{ a.zh_name or a.display_name }}（{{ a.code }}）</label>
+        {% endfor %}
+      </div>
+    </details>
+    <span id="err-airlines" class="field-error" data-error-for="airlines"></span>
+  </fieldset>
+
+  {% set _pax = ((v.adults or 1)|int) + ((v.children or 0)|int) %}
+  <p class="notice" data-unembedded-hint role="status" {% if not ((v.trip_type or "round_trip") == "round_trip" and v.cabin in ("business", "first") and _pax >= 2) %}hidden{% endif %}>依實測，此組合 Google 常未內嵌結果，可能無法自動查價，可用查票連結人工查看。</p>
+
+  {% set q = quota or {} %}
+  <p id="explore-estimate" class="estimate" role="status"
+     data-hourly-left="{{ q.hourly_left if q.hourly_left is not none else "" }}"
+     data-reserve="{{ q.reserve if q.reserve is not none else "" }}"
+     data-max-cells="{{ q.max_cells if q.max_cells is not none else 31 }}"
+     data-today="{{ today or "" }}">預計查詢最多 {{ q.max_cells if q.max_cells is not none else 31 }} 次{% if q.hourly_left is not none %}／本小時剩餘 {{ q.hourly_left }} 次{% if q.reserve is not none %}（保留 {{ q.reserve }} 次給排程）{% endif %}{% endif %}</p>
+
+  <div class="form-actions">
+    <button type="submit" class="primary" data-busy-label="送出中…">開始探索</button>
+  </div>
+</form>
+
+<section class="card">
+  <h2>最近的探索</h2>
+  {% if recent %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最近的探索（可橫向捲動）">
+  <table class="data">
+    <caption class="sr-only">保留期內的探索紀錄</caption>
+    <thead>
+      <tr><th scope="col">路線</th><th scope="col">月份</th><th scope="col">條件</th><th scope="col">狀態</th><th scope="col">進度</th><th scope="col">建立時間</th><th scope="col">查到最低價</th></tr>
+    </thead>
+    <tbody>
+    {% for r in recent %}
+      <tr>
+        <td><a href="/explorations/{{ r.id }}">{{ r.route_label }}</a></td>
+        <td>{{ r.month }}</td>
+        <td>{{ r.trip_type_label }}・{{ r.conditions_label }}</td>
+        <td><span class="badge">{{ r.status_label }}</span></td>
+        <td class="num">{{ r.done }}/{{ r.total }}</td>
+        <td>{{ r.created_at_label }}</td>
+        <td class="num">{% if r.cheapest_label %}{{ r.cheapest_label }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="note hint">探索結果保留 7 天，之後自動清除。</p>
+  {% else %}
+  <p class="muted">最近 7 天沒有探索紀錄。</p>
+  {% endif %}
+</section>
+<p class="disclaimer">{{ disclaimer }}</p>
+{% endblock %}
