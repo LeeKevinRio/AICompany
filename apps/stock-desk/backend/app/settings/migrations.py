@@ -458,23 +458,37 @@ def migrate_cap1_default(
     """Run the cap-1 migration once; return the record in force afterwards.
 
     ``sections`` is the store's section -> model map, so "every section
-    validates" means exactly what ``load`` means by it. Runs inside one
-    ``BEGIN IMMEDIATE`` (the device ``app.kelly.store`` uses for its own
-    migration): the backend and the scheduler may start against the same file
-    at once, and the loser must find the winner's record, not repeat the work.
+    validates" means exactly what ``load`` means by it.
+
+    The same contract as N-154's ``app.data.sqlite_util.add_missing_columns``:
+    a file whose record is already terminal (``migrated`` / ``not_applicable``)
+    costs one unlocked ``SELECT`` and takes no write lock, so the steady-state
+    start of every process is cheap. Only when there is work -- no record yet,
+    or a ``skipped`` one, which is retried on every start by design (U5) --
+    does it take ``BEGIN IMMEDIATE``, and it re-reads the record *under* the
+    lock: the backend and the scheduler may start against the same file at
+    once, and the loser must find the winner's record, not repeat the work.
     Must be called outside any open transaction.
     """
+    existing = read_cap1_migration(conn)
+    if existing is not None and existing.status in _TERMINAL:
+        return existing
     conn.execute("BEGIN IMMEDIATE")
     try:
         existing = read_cap1_migration(conn)
         if existing is not None and existing.status in _TERMINAL:
+            # Another connection finished while this one waited at BEGIN;
+            # COMMIT so the write lock is released here.
             conn.execute("COMMIT")
             return existing
         record = _decide_and_apply(conn, sections, now=now)
         _write_record(conn, record)
         conn.execute("COMMIT")
     except BaseException:
-        conn.execute("ROLLBACK")
+        # SQLite may already have rolled back on its own (a full disk, say);
+        # a second ROLLBACK would then replace the real error with its own.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     _log(record)
     return record

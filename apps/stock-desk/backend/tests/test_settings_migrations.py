@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import multiprocessing
 import re
 import sqlite3
+import threading
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -32,11 +35,14 @@ from app.main import app
 from app.settings import store as store_module
 from app.settings.migrations import (
     CAP1_MIGRATION_BASIS,
+    CAP1_MIGRATION_ID,
     CAP1_MIGRATION_NOTICES,
     CAP1_SECTION_NAMES,
     Cap1MigrationRecord,
     SettingsNoticeCopy,
     ShortNoticeCopy,
+    init_migrations_table,
+    migrate_cap1_default,
 )
 from app.settings.models import AlertSettings, AppSettings, CostModelSettings
 from app.settings.store import SettingsStore
@@ -887,3 +893,242 @@ def test_item_1_4_has_no_placeholder_and_renders_as_written(tmp_path: Path) -> N
         notice = variant.settings_notice(current_max_position_weight=0.12)
         assert notice is not None
         assert ("過去的紀錄", item.body) in notice.items
+
+
+# --- Concurrency and locking (qa-reviewer 2026-10-28 M1-M3) ---------------------
+#
+# The same contract N-154 pinned for ``add_missing_columns``: a file that is
+# already migrated is opened without the write lock, the real work runs under
+# ``BEGIN IMMEDIATE`` with the record re-read inside it, and many constructors
+# racing on one legacy file -- threads of the backend, the backend and the
+# scheduler as two processes -- leave exactly one record and one rewrite.
+
+#: Enough concurrent constructors to hit the check-then-lock window reliably,
+#: few enough to keep the spawn cost small (as in tests/test_schema_migration_race.py).
+_PROCESSES = 6
+_THREADS = 8
+_JOIN_TIMEOUT_S = 120
+
+
+def _legacy_db(db: Path) -> Path:
+    """A file an earlier build left behind: every section saved, cap 1 at 0.15."""
+    _seed(db, _full_document(0.15))
+    return db
+
+
+def _migration_rows(db: Path) -> list[tuple[Any, ...]]:
+    with closing(sqlite3.connect(db)) as conn:
+        return conn.execute(
+            "SELECT migration_id, status, changed_by_user FROM settings_migrations"
+        ).fetchall()
+
+
+def _stored_cap1(db: Path) -> float:
+    with closing(sqlite3.connect(db)) as conn:
+        (payload,) = conn.execute(
+            "SELECT payload FROM app_settings WHERE section = 'risk_budget'"
+        ).fetchone()
+    value = json.loads(payload)["max_position_weight"]
+    assert isinstance(value, float)
+    return value
+
+
+def _assert_migrated_exactly_once(db: Path) -> None:
+    (row,) = _migration_rows(db)
+    assert row[1] == "migrated"
+    assert row[2] == 0
+    assert _stored_cap1(db) == 0.10
+
+
+def _build_store_in_child(db_path: str, barrier: Any, error_path: str) -> None:
+    """Spawned-process target (module level, so spawn can import it)."""
+    try:
+        barrier.wait(timeout=60)
+        SettingsStore(Path(db_path))
+    except BaseException as error:  # noqa: BLE001 - reported to the parent
+        Path(error_path).write_text(f"{type(error).__name__}: {error}", encoding="utf-8")
+        raise SystemExit(1) from None
+
+
+def test_threads_constructing_the_store_on_a_legacy_file_migrate_it_once(
+    tmp_path: Path,
+) -> None:
+    db = _legacy_db(tmp_path / "legacy.db")
+    barrier = threading.Barrier(_THREADS)
+    failures: list[BaseException] = []
+
+    def build() -> None:
+        try:
+            barrier.wait(timeout=30)
+            SettingsStore(db)
+        except BaseException as error:  # noqa: BLE001 - collected for the assertion
+            failures.append(error)
+
+    threads = [threading.Thread(target=build) for _ in range(_THREADS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=_JOIN_TIMEOUT_S)
+
+    assert failures == []
+    assert not any(thread.is_alive() for thread in threads)
+    _assert_migrated_exactly_once(db)
+
+
+def test_processes_constructing_the_store_on_a_legacy_file_migrate_it_once(
+    tmp_path: Path,
+) -> None:
+    db = _legacy_db(tmp_path / "legacy.db")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    # spawn, not fork: forking a process that already runs threads is unsafe.
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(_PROCESSES)
+    processes = [
+        context.Process(
+            target=_build_store_in_child,
+            args=(str(db), barrier, str(reports / f"{index}.err")),
+        )
+        for index in range(_PROCESSES)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=_JOIN_TIMEOUT_S)
+    failures = [path.read_text(encoding="utf-8") for path in sorted(reports.glob("*.err"))]
+    for process in processes:
+        if process.is_alive():
+            process.kill()
+            failures.append(f"pid {process.pid} did not finish")
+        elif process.exitcode != 0 and not failures:
+            failures.append(f"pid {process.pid} exited {process.exitcode}")
+
+    assert failures == []
+    _assert_migrated_exactly_once(db)
+
+
+def test_reopening_a_migrated_file_takes_no_write_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M1: the steady-state start costs one unlocked read, no BEGIN IMMEDIATE, no write."""
+    db = _legacy_db(tmp_path / "legacy.db")
+    SettingsStore(db, now=MIGRATED_AT)  # the first open migrates
+    rows_before = _rows(db)
+    record_before = _migration_rows(db)
+
+    traced: list[str] = []
+    real_connect = sqlite3.connect
+
+    def tracing_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
+        conn.set_trace_callback(traced.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", tracing_connect)
+    SettingsStore(db, now=LATER)
+    monkeypatch.undo()
+
+    assert traced, "the trace callback saw nothing; the test would be vacuous"
+    assert not any("BEGIN IMMEDIATE" in sql.upper() for sql in traced)
+    assert not any(
+        sql.upper().lstrip().startswith(("INSERT", "UPDATE", "DELETE")) for sql in traced
+    )
+    assert _rows(db) == rows_before
+    assert _migration_rows(db) == record_before
+
+
+def test_a_skipped_record_is_still_retried_under_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``skipped`` is not terminal (U5): every start takes the lock and looks again."""
+    store = _skipped_store(tmp_path, "cost_model")
+    assert _record(store).status == "skipped"
+
+    traced: list[str] = []
+    real_connect = sqlite3.connect
+
+    def tracing_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
+        conn.set_trace_callback(traced.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", tracing_connect)
+    retried = SettingsStore(store.db_path, now=LATER)
+    monkeypatch.undo()
+
+    assert any("BEGIN IMMEDIATE" in sql.upper() for sql in traced)
+    record = _record(retried)
+    assert record.status == "skipped"
+    assert record.recorded_at == LATER.isoformat()
+
+
+class _StaleFirstRecordRead:
+    """A connection whose first record read answers from before the migration.
+
+    What the loser of the race sees: its unlocked read found no record, and by
+    the time it holds the write lock the winner has written one. Everything
+    else goes to the real connection.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._stale = True
+        self.executed: list[str] = []
+
+    def execute(self, sql: str, parameters: Any = ()) -> Any:
+        self.executed.append(sql.strip())
+        if self._stale and "FROM settings_migrations" in sql:
+            self._stale = False
+            return self._conn.execute("SELECT 1 WHERE 0")
+        return self._conn.execute(sql, parameters)
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._conn.in_transaction
+
+
+def test_the_loser_rereads_under_the_lock_and_writes_nothing(tmp_path: Path) -> None:
+    db = _legacy_db(tmp_path / "legacy.db")
+    winner = _record(SettingsStore(db, now=MIGRATED_AT))
+    rows_before = _rows(db)
+
+    with closing(sqlite3.connect(db)) as conn:
+        stale = _StaleFirstRecordRead(conn)
+        result = migrate_cap1_default(
+            cast(sqlite3.Connection, stale), store_module._SECTIONS, now=LATER
+        )
+        assert not conn.in_transaction
+
+    assert result == winner
+    assert "BEGIN IMMEDIATE" in stale.executed
+    assert "COMMIT" in stale.executed
+    assert not any(sql.upper().startswith(("INSERT", "UPDATE", "DELETE")) for sql in stale.executed)
+    assert _rows(db) == rows_before
+    assert _migration_rows(db) == [(CAP1_MIGRATION_ID, "migrated", 0)]
+
+
+class _FailingApply(_StaleFirstRecordRead):
+    """Fails the first write under the lock, after SQLite has rolled back itself."""
+
+    def execute(self, sql: str, parameters: Any = ()) -> Any:
+        if sql.lstrip().upper().startswith("UPDATE APP_SETTINGS"):
+            self._conn.execute("ROLLBACK")
+            raise sqlite3.OperationalError("disk I/O error (simulated)")
+        return self._conn.execute(sql, parameters)
+
+
+def test_a_failure_after_sqlite_rolled_back_keeps_the_original_error(tmp_path: Path) -> None:
+    """M2: no second ROLLBACK replaces the real error when no transaction is left."""
+    db = _legacy_db(tmp_path / "legacy.db")
+    rows_before = _rows(db)
+
+    with closing(sqlite3.connect(db)) as conn:
+        init_migrations_table(conn)
+        failing = _FailingApply(conn)
+        with pytest.raises(sqlite3.OperationalError, match="simulated"):
+            migrate_cap1_default(
+                cast(sqlite3.Connection, failing), store_module._SECTIONS, now=LATER
+            )
+        assert not conn.in_transaction
+
+    assert _rows(db) == rows_before
