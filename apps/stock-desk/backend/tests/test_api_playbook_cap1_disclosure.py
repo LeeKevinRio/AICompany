@@ -62,6 +62,11 @@ from tests.playbook_helpers import batch as make_batch
 from tests.playbook_helpers import confirm_rule_set
 from tests.playbook_helpers import params as make_params
 
+# 修訂 D-2 (5) ② as rewritten under CEO #70 (風控 N-151 與 #70 D-2 改寫 第二項第 3
+# 點): every risk-budget field at its tightest and at its loosest. One copy, kept
+# with the 測試 ② that first needed it, so the two matrices cannot drift apart.
+from tests.test_playbook_cap1_d2 import LOOSE, TIGHT
+
 #: A Thursday: a 排程日, so the fixed book issues entries as well as exits.
 EVALUATION_DAY = date(2026, 8, 13)
 HISTORY = 40
@@ -156,27 +161,6 @@ DEFAULT_LINES = expected_lines(
     per_target_pct="14%",
     cap1_pct="12%",
     per_target_book_pct="20%",
-)
-
-#: 修訂 D-2 (5) ② as rewritten under CEO #70: every risk-budget field moved at
-#: once, from the tightest to the loosest the validators accept.
-TIGHT = RiskBudget(
-    max_position_weight=0.05,
-    max_sector_weight=0.05,
-    max_gross_exposure=0.10,
-    max_loss_per_trade=0.001,
-    atr_stop_multiple=0.5,
-    kelly_fraction_cap=0.01,
-    kelly_position_cap=0.01,
-)
-LOOSE = RiskBudget(
-    max_position_weight=0.50,
-    max_sector_weight=1.0,
-    max_gross_exposure=1.50,
-    max_loss_per_trade=0.1,
-    atr_stop_multiple=10.0,
-    kelly_fraction_cap=0.25,
-    kelly_position_cap=0.10,
 )
 
 #: B-1 / R4-2: cap 1 alone at 0.05, 0.10, 0.50 and unreadable, plus TIGHT and LOOSE.
