@@ -9,6 +9,8 @@ or touch the network.
 
 from __future__ import annotations
 
+import logging
+from decimal import Decimal
 from functools import lru_cache
 
 from app.alerts.store import AlertStore
@@ -42,6 +44,8 @@ from app.services.index import (
 )
 from app.services.market import MarketDataResolver
 from app.settings.store import SettingsStore
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -377,6 +381,35 @@ def get_index_resolver() -> IndexServiceResolver:
 def get_settings_store() -> SettingsStore:
     """Return the process-wide settings store."""
     return _default_settings_store()
+
+
+def get_cap1_weight() -> Decimal | None:
+    """The stored cap-1 setting (單一標的佔比上限), for the 排程台 disclosure only.
+
+    ADR-0031 C-4 (CEO #69): the one way the cap-1 value reaches
+    ``app/api/playbook.py``, which may pass it to
+    :func:`app.api.playbook_cap1_wording.compose` and nowhere else (修訂 D-2 (2),
+    風控 2026-10-28 #68 裁決補充 R4-1). Read from the same process-wide store and
+    the same field the advice card reads (``api/advice.py``), so the disclosure
+    states the value the advice side is applying -- never a default constant.
+
+    R4-4: **any** failure -- building the store (which runs the S2 migration),
+    reading it, or a value that is not a finite number -- answers ``None``, and
+    the disclosure says the setting could not be read. A broken settings page
+    may never fail or hold back ``/today``: that would hide the stop-loss lines
+    along with it. Only the exception type is logged, never a value.
+
+    The store is the memoized :func:`_default_settings_store`, so a request does
+    not construct a ``SettingsStore`` (and re-run its migration) of its own.
+    """
+    try:
+        weight = Decimal(str(_default_settings_store().load().risk_budget.max_position_weight))
+    except Exception as exc:  # R4-4: every failure means "unreadable", never a 500
+        logger.warning(
+            "cap-1 setting unreadable for the playbook disclosure: %s", type(exc).__name__
+        )
+        return None
+    return weight if weight.is_finite() else None
 
 
 def get_alert_store() -> AlertStore:
