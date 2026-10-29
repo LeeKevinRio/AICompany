@@ -24,7 +24,12 @@ quant proposal's constraint 4:
   schema (or is not JSON), nothing is rewritten. A ``skipped`` record naming
   the failed sections is kept and served, so the state is visible rather than
   only logged. A skip is not final: the next construction of the store looks
-  again, so a repaired document is migrated then.
+  again, so a repaired document is migrated then. A value written while the
+  record is ``skipped`` -- by a plain save or a W-2 overwrite -- is judged by
+  the same rule at the next start: a stored 0.15 is migrated even if the user
+  has just confirmed it (TA reply to risk N-156 to-do 14, accepted by design).
+  The way out is writing 0.15 again after the migration, which sets
+  ``changed_by_user`` on a terminal record.
 * **Only the old default moves.** A stored value equal to 0.15 (within
   :data:`app.advice.limits.EPSILON`) is rewritten; any other value -- 0.12,
   0.10, 0.20 -- is the user's and is left exactly as stored.

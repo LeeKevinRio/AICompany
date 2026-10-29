@@ -20,7 +20,7 @@ import re
 import sqlite3
 import threading
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -545,6 +545,197 @@ def test_a_put_leaves_a_skipped_record_and_its_notices_in_place(
     assert view["notice"]["title"] == SKIPPED_SETTINGS_TITLE
     gauge = api_harness.client.get("/api/portfolio/limits").json()
     assert gauge["cap1_migration_notice"] == SKIPPED_S1.format(**FIELDS, current_pct="12.00%")
+
+
+# A value written during a skip is judged at the next start like any other
+# (TA reply 2026-10-29 to risk N-156 to-do 14 / qa NB-7: accepted by design).
+
+#: The sentence every test below carries, verbatim from the TA reply's C-4.
+_ACCEPTED_BY_DESIGN = (
+    "accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it requires "
+    "risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63"
+)
+
+
+def _budget_skipped_store(tmp_path: Path) -> SettingsStore:
+    """Cap 1 stored at 0.12 elsewhere, but the risk budget row itself fails validation."""
+    db = tmp_path / _S2_DB
+    document = _full_document(0.12)
+    document["risk_budget"] = '{"not": "valid"}'
+    _seed(db, document)
+    store = SettingsStore(db, now=MIGRATED_AT)
+    record = _record(store)
+    assert record.status == "skipped"
+    assert record.failed_sections == ("risk_budget",)
+    return store
+
+
+def _overwrite_cap1(store: SettingsStore, value: float) -> None:
+    """The W-2 overwrite of the fallback risk budget, as a confirmed PUT makes it."""
+    store.write(
+        {"risk_budget": RiskBudget(max_position_weight=value)},
+        overwrite_fallback_sections=("risk_budget",),
+    )
+
+
+def _raw_budget(db: Path) -> dict[str, Any]:
+    (row,) = [row for row in _rows(db) if row[0] == "risk_budget"]
+    payload: dict[str, Any] = json.loads(row[1])
+    return payload
+
+
+def test_a_w2_overwrite_to_the_old_default_during_a_skip_is_migrated_on_the_next_start(
+    tmp_path: Path,
+) -> None:
+    """T-1: the confirmed 0.15 is migrated at the next start, and 0.15 again sticks.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    db = store.db_path
+    before = _record(store)
+
+    _overwrite_cap1(store, 0.15)
+
+    # Same process, no restart: the record does not move on a write (I-6).
+    assert _record(store) == before
+    loaded = store.load_with_status()
+    assert loaded.fallback_sections == ()
+    assert loaded.settings.risk_budget.max_position_weight == 0.15
+    notice = before.settings_notice(current_max_position_weight=0.15, risk_budget_fallback=False)
+    assert notice is not None
+    extra = {"current_pct": "15.00%", "section_names": "風險預算"}
+    assert notice.items == tuple(
+        _filled(item, **extra) for item in (SKIPPED_U1, SKIPPED_U2, SKIPPED_U4, SKIPPED_U5)
+    )
+    assert "（已存值等於 15.00% 時改為 10.00%）" in notice.items[0][1]
+    snapshot = _rows(db)
+
+    restarted = SettingsStore(db, now=LATER)
+
+    assert restarted.load().risk_budget.max_position_weight == 0.10
+    record = _record(restarted)
+    assert (record.status, record.previous_value, record.new_value) == ("migrated", 0.15, 0.10)
+    assert record.recorded_at == LATER.isoformat()
+    assert record.failed_sections == ()
+    assert record.changed_by_user is False
+    later = {**FIELDS, "migrated_at": LATER_TEXT, "attempted_at": LATER_TEXT}
+    assert record.short_notice(current_max_position_weight=0.10) == MIGRATED_SHORT.format(**later)
+    migrated = record.settings_notice(current_max_position_weight=0.10, risk_budget_fallback=False)
+    assert migrated is not None
+    assert "會看到的變化" in [label for label, _ in migrated.items]  # 1-3
+    # Only that one key moved, and no other row was written.
+    assert _raw_budget(db) == {
+        **RiskBudget(max_position_weight=0.15).model_dump(),
+        "max_position_weight": 0.10,
+    }
+    after = _rows(db)
+    assert [row for row in after if row[0] != "risk_budget"] == [
+        row for row in snapshot if row[0] != "risk_budget"
+    ]
+
+    # The way out: 0.15 written again after the migration stays.
+    _put_cap1(restarted, 0.15)
+    again = SettingsStore(db, now=LATER + timedelta(days=1))
+    assert again.load().risk_budget.max_position_weight == 0.15
+    final = _record(again)
+    assert final.status == "migrated"
+    assert final.recorded_at == LATER.isoformat()
+    assert final.changed_by_user is True
+
+
+def test_a_plain_save_of_the_old_default_during_a_skip_is_migrated_the_same_way(
+    tmp_path: Path,
+) -> None:
+    """T-2: not a W-2 special case -- an ordinary save of 0.15 meets the same rule.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _skipped_store(tmp_path, "cost_model", max_position_weight=0.12)
+    db = store.db_path
+    _put_cap1(store, 0.15)
+    rows_before = _rows(db)
+
+    # cost_model still broken: skipped again, nothing touched (「所有區段都通過驗證時才會執行」).
+    still = SettingsStore(db, now=LATER)
+    record = _record(still)
+    assert record.status == "skipped"
+    assert record.recorded_at == LATER.isoformat()
+    assert still.load().risk_budget.max_position_weight == 0.15
+    assert _rows(db) == rows_before
+
+    # Repaired: the next start migrates the 0.15.
+    _seed(db, {"cost_model": json.dumps(CostModelSettings(slippage_bps=7.5).model_dump())})
+    repaired = SettingsStore(db, now=LATER + timedelta(days=1))
+    record = _record(repaired)
+    assert record.status == "migrated"
+    assert record.previous_value == 0.15
+    assert repaired.load().risk_budget.max_position_weight == 0.10
+
+
+@pytest.mark.parametrize("value", [0.12, 0.10])
+def test_a_w2_overwrite_during_a_skip_with_another_value_is_kept(
+    tmp_path: Path, value: float
+) -> None:
+    """T-3: only the old default moves; any other confirmed value is the user's.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    _overwrite_cap1(store, value)
+
+    restarted = SettingsStore(store.db_path, now=LATER)
+
+    record = _record(restarted)
+    assert record.status == "not_applicable"
+    assert restarted.load().risk_budget.max_position_weight == value
+    assert (
+        record.settings_notice(current_max_position_weight=value, risk_budget_fallback=False)
+        is None
+    )
+    assert record.short_notice(current_max_position_weight=value) is None
+
+
+def test_a_confirmed_put_of_the_old_default_during_a_skip_is_migrated_after_a_restart(
+    api_harness: ApiHarness, tmp_path: Path
+) -> None:
+    """T-4: the same path through ``PUT /api/settings`` and a rebuilt store.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    app.dependency_overrides[get_settings_store] = lambda: store
+
+    response = api_harness.client.put(
+        "/api/settings",
+        json={
+            "risk_budget": {"max_position_weight": 0.15},
+            "overwrite_fallback_sections": ["risk_budget"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["cap1_migration"]["status"] == "skipped"
+
+    restarted = SettingsStore(store.db_path, now=LATER)
+    app.dependency_overrides[get_settings_store] = lambda: restarted
+    body = api_harness.client.get("/api/settings").json()
+    assert body["cap1_migration"]["status"] == "migrated"
+    assert body["settings"]["risk_budget"]["max_position_weight"] == 0.10
+
+
+def test_each_skip_overwrite_test_says_why_it_must_not_be_fixed() -> None:
+    """C-4: the reason travels with every pin, so nobody "fixes" it as a bug."""
+    for test in (
+        test_a_w2_overwrite_to_the_old_default_during_a_skip_is_migrated_on_the_next_start,
+        test_a_plain_save_of_the_old_default_during_a_skip_is_migrated_the_same_way,
+        test_a_w2_overwrite_during_a_skip_with_another_value_is_kept,
+        test_a_confirmed_put_of_the_old_default_during_a_skip_is_migrated_after_a_restart,
+    ):
+        assert _ACCEPTED_BY_DESIGN in " ".join((test.__doc__ or "").split()), test.__name__
 
 
 # --- The copy itself: verbatim, every branch -------------------------------------
