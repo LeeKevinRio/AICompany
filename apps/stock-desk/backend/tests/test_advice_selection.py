@@ -72,7 +72,10 @@ def _overbought_uptrend_signals() -> dict[str, Any]:
 def test_every_matched_rule_carries_its_own_invalidation_text() -> None:
     texts = {rule.id: rule.invalidation for rule in load_default_rules().rules}
     card = build_advice(
-        symbol="2330", signals=_overbought_uptrend_signals(), portfolio=_portfolio()
+        budget_from_default=False,
+        symbol="2330",
+        signals=_overbought_uptrend_signals(),
+        portfolio=_portfolio(),
     )
     assert card["matched_rules"]
     for rule in card["matched_rules"]:
@@ -91,6 +94,7 @@ def test_per_rule_invalidation_survives_the_card_level_de_duplication(tmp_path: 
     )
     ruleset = load_rules(write_rule_file(tmp_path, payload))
     card = build_advice(
+        budget_from_default=False,
         symbol="2330",
         signals=uptrend_signals(rsi=75.0),
         portfolio=_portfolio(),
@@ -112,7 +116,10 @@ def test_per_rule_invalidation_survives_the_card_level_de_duplication(tmp_path: 
 
 def test_review_counter_example_picks_the_heaviest_rule_of_the_aggregated_action() -> None:
     card = build_advice(
-        symbol="2330", signals=_overbought_uptrend_signals(), portfolio=_portfolio()
+        budget_from_default=False,
+        symbol="2330",
+        signals=_overbought_uptrend_signals(),
+        portfolio=_portfolio(),
     )
     assert [rule["id"] for rule in card["matched_rules"]] == [
         "uptrend_ma_stack",
@@ -202,7 +209,9 @@ def test_aggregated_action_always_has_a_rule_on_real_cards() -> None:
             volume_z=3.0,
         ),
     ):
-        card = build_advice(symbol="2330", signals=signals, portfolio=_portfolio())
+        card = build_advice(
+            budget_from_default=False, symbol="2330", signals=signals, portfolio=_portfolio()
+        )
         aggregated = card["aggregated_action"]
         if aggregated is None:
             continue

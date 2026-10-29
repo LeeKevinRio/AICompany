@@ -87,16 +87,32 @@ def _cards() -> list[dict[str, Any]]:
         update={"position_market_value_twd": 150_000.0, "quantity": 1_363.0}
     )
     return [
-        build_advice(symbol="2330", signals=uptrend_signals(), portfolio=portfolio),
-        build_advice(symbol="2330", signals=uptrend_signals(), portfolio=at_the_cap),
         build_advice(
+            budget_from_default=False, symbol="2330", signals=uptrend_signals(), portfolio=portfolio
+        ),
+        build_advice(
+            budget_from_default=False,
+            symbol="2330",
+            signals=uptrend_signals(),
+            portfolio=at_the_cap,
+        ),
+        build_advice(
+            budget_from_default=False,
             symbol="2330",
             signals=uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35),
             portfolio=portfolio,
         ),
-        build_advice(symbol="2330", signals=uptrend_signals(rsi=78.0), portfolio=portfolio),
-        build_advice(symbol="2330", signals=make_signals(), portfolio=portfolio),
         build_advice(
+            budget_from_default=False,
+            symbol="2330",
+            signals=uptrend_signals(rsi=78.0),
+            portfolio=portfolio,
+        ),
+        build_advice(
+            budget_from_default=False, symbol="2330", signals=make_signals(), portfolio=portfolio
+        ),
+        build_advice(
+            budget_from_default=False,
             symbol="2330",
             signals=uptrend_signals(),
             portfolio=portfolio,

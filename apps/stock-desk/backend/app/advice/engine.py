@@ -19,7 +19,12 @@ The pipeline is deliberately boring and inspectable:
      ``insufficient_data``;
    * an ``add`` alongside *any* matched defensive rule becomes ``hold``;
    * **a violated risk cap can never leave the action as ``add``** -- it
-     becomes ``hold`` and the card names the numbered cap that blocked it.
+     becomes ``hold`` and the card names the numbered cap that blocked it;
+   * while the stored risk budget failed validation and its defaults stand in
+     (``budget_from_default``, ADR-0032 E2, CEO #72), an ``add`` still left
+     after the two gates above becomes ``hold`` with no buy range, and the card
+     says why (:data:`BUDGET_FROM_DEFAULT_NOTICE`). No cap blocked it, so it is
+     a downgrade, never a block.
 5. Size an indicative share range from the binding cap (never from a price
    target -- this module emits no target price of any kind).
 
@@ -92,6 +97,16 @@ ACTION_DIRECTION: dict[str, str] = {
 
 #: Direction tie-break order, most defensive first.
 DIRECTION_PRECEDENCE: tuple[str, ...] = ("defensive", "neutral", "constructive")
+
+#: E2 (CEO #72), verbatim from 「風控 2026-10-29 N-156 字面定稿與表態」 第 3 項:
+#: why an ``add`` became ``hold`` while the risk budget is on its defaults. It
+#: goes into ``downgrade_notices`` -- never ``blocked_notices`` -- and leaves
+#: ``blocked_action`` at ``None``: no cap blocked anything, and the front end
+#: reads ``blocked_action == "add"`` as「被風險上限擋下」(第 3 項 閘門規則).
+BUDGET_FROM_DEFAULT_NOTICE: Final = (
+    "風險預算目前使用預設值（原本存的內容沒有通過驗證），加碼建議改為觀望，不提供買進股數；"
+    "在設定頁確認覆寫風險預算後，恢復依規則判定。"
+)
 
 #: Below this share of the rule set being evaluable, the engine will not put its
 #: name to an ``add`` or to an evidence-free ``hold`` -- it says so instead.
@@ -313,6 +328,7 @@ def build_advice(
     signals: Mapping[str, Any],
     portfolio: PortfolioContext,
     budget: RiskBudget | None = None,
+    budget_from_default: bool,
     ruleset: RuleSet | None = None,
 ) -> dict[str, Any]:
     """Produce the machine-readable advice card for one symbol.
@@ -320,6 +336,11 @@ def build_advice(
     ``signals`` is a :func:`app.signals.service.compute_signals` output;
     ``portfolio`` describes the holding and the book around it. Neither is
     mutated. Every key of the returned dict is always present.
+
+    ``budget_from_default`` is whether ``budget`` is the defaults standing in
+    for a stored risk budget that failed validation -- ``"risk_budget" in
+    fallback_sections`` of the same read ``budget`` came from (ADR-0032 K-13,
+    K-5). Keyword-only with no default, so every caller has to say.
     """
     rules = ruleset if ruleset is not None else load_default_rules()
     risk_budget = budget if budget is not None else RiskBudget()
@@ -375,6 +396,14 @@ def build_advice(
         blocked_notices = [
             f"加碼建議被第 {check.index} 條上限（{check.name}）擋下。" for check in violated
         ]
+
+    # E2 (CEO #72): after both gates above, and only on an ``add`` they left
+    # standing. A downgrade, not a block (風控 2026-10-29 第 3 項): every cap
+    # judged on defaults could be looser than the user's own, so no buy range
+    # is offered; reduce and stop-loss go through untouched.
+    if budget_from_default and action == "add":
+        action = "hold"
+        downgrade_notices.append(BUDGET_FROM_DEFAULT_NOTICE)
 
     quantity = suggest_quantity_range(risk_budget, portfolio, action=action)
     directions = _direction_weights(weights)
@@ -466,6 +495,7 @@ def _limit_entry(check: LimitCheck) -> dict[str, Any]:
 
 __all__ = [
     "ACTION_PRECEDENCE",
+    "BUDGET_FROM_DEFAULT_NOTICE",
     "COMPARISON_OPS",
     "DISCLAIMER",
     "CardAction",

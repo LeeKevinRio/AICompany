@@ -262,6 +262,9 @@ def get_advice(
         signals=signals,
         portfolio=book.context,
         budget=budget,
+        # E2 (ADR-0032 K-13): from the same read as ``budget`` (K-5). Only the
+        # risk budget triggers it; a fallback ``net_worth`` does not (CEO #72).
+        budget_from_default="risk_budget" in loaded_settings.fallback_sections,
     )
     # Whether this card shows a figure the applied quote was multiplied into,
     # judged on the card's own verdicts and range (PR-RK4c, R4c-7): they

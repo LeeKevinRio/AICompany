@@ -68,6 +68,7 @@ def _portfolio(**overrides: Any) -> PortfolioContext:
 
 
 def _card(signals: dict[str, Any], portfolio: PortfolioContext, **kwargs: Any) -> dict[str, Any]:
+    kwargs.setdefault("budget_from_default", False)
     return build_advice(symbol="2330", signals=signals, portfolio=portfolio, **kwargs)
 
 
@@ -135,7 +136,10 @@ def test_observation_window_survives_a_malformed_indicator_block() -> None:
 def test_observation_window_follows_real_bars() -> None:
     bars = bars_from_closes([100.0 + i * 0.5 for i in range(90)])
     card = build_advice(
-        symbol="2330", signals=compute_signals("2330", bars), portfolio=_portfolio(close=144.5)
+        budget_from_default=False,
+        symbol="2330",
+        signals=compute_signals("2330", bars),
+        portfolio=_portfolio(close=144.5),
     )
     window = card["observation_window"]
     assert window["bars"] == 90
@@ -675,7 +679,9 @@ def test_build_context_reads_the_real_signal_output() -> None:
 def test_end_to_end_over_real_bars_produces_a_complete_card() -> None:
     bars = bars_from_closes([100.0 + i * 0.5 for i in range(90)])
     signals = compute_signals("2330", bars)
-    card = build_advice(symbol="2330", signals=signals, portfolio=_portfolio(close=144.5))
+    card = build_advice(
+        budget_from_default=False, symbol="2330", signals=signals, portfolio=_portfolio(close=144.5)
+    )
     assert REQUIRED_CARD_FIELDS <= set(card)
     assert card["action"] in {
         "add",
