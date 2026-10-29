@@ -136,6 +136,10 @@ describe("EmergencyExitControl focus management, Esc and focus trap (N-159 a11y)
     expect(body).toContain("cancelRef.current()");
     expect(body).not.toContain("mutate");
     expect(body).not.toContain("submit");
+    // The listener is only registered while the dialog is open, and re-bound
+    // when the step or the pending state changes.
+    expect(control).toMatch(/if \(step === "idle"\) return;/);
+    expect(control).toMatch(/\[step, mutation\.isPending\]/);
     expect(control).toContain("cancelRef.current = cancel;");
     expect(control).toContain('document.addEventListener("keydown", handleKeyDown)');
     expect(control).toContain('document.removeEventListener("keydown", handleKeyDown)');
