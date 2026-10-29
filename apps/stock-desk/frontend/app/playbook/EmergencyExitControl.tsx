@@ -84,11 +84,21 @@ export function EmergencyExitControl({
   }
 
   function cancel() {
+    // Defence in depth for the aria-disabled 取消 button (still focusable and
+    // clickable while the submission is in flight): never close mid-submit.
+    if (mutation.isPending) return;
     setStep("idle");
     setChecks(initialExitChecks(checkTexts.length));
   }
 
-  function submit() {
+  function submit(event: React.MouseEvent<HTMLButtonElement>) {
+    // N-163: the button stays `aria-disabled` (not `disabled`) while pending, so
+    // it keeps focus; a second activation (Enter / Space / click) must not
+    // fire a second irreversible POST.
+    if (mutation.isPending) return;
+    // Safari / Firefox-on-macOS do not focus a button on click; make it explicit
+    // so focus is on a dialog control before the pending state begins.
+    event.currentTarget.focus();
     mutation.mutate(undefined, {
       onSuccess: () => setStep("idle"),
     });
@@ -116,7 +126,7 @@ export function EmergencyExitControl({
   }, [step]);
 
   // Esc == 取消: closes the dialog and never submits. Locked while the
-  // submission is in flight, same as the (disabled) 取消 button and as
+  // submission is in flight, same as the (aria-disabled) 取消 button and as
   // `EditPositionModal`.
   useEffect(() => {
     if (step === "idle") return;
@@ -245,19 +255,29 @@ export function EmergencyExitControl({
                   </div>
                 )}
                 <div className="mt-5 flex justify-end gap-2">
+                  {/*
+                    N-163: 送出中 these two buttons use `aria-disabled`, not the
+                    native `disabled`. A focused button that becomes `disabled`
+                    drops focus to <body>, and the next Tab then leaves the dialog
+                    for the page header link behind the overlay (Enter on it
+                    navigates away mid-submit, hiding the outcome of an
+                    irreversible action). `aria-disabled` keeps the focused button
+                    focused, still announces it as unavailable, and the click
+                    handlers above refuse to act while pending.
+                  */}
                   <button
                     type="button"
                     onClick={cancel}
-                    disabled={mutation.isPending}
-                    className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                    aria-disabled={mutation.isPending}
+                    className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
                   >
                     取消
                   </button>
                   <button
                     type="button"
                     onClick={submit}
-                    disabled={mutation.isPending}
-                    className="rounded-md border border-neutral-500 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-100 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-disabled={mutation.isPending}
+                    className="rounded-md border border-neutral-500 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-100 hover:bg-neutral-700 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-neutral-800"
                   >
                     {mutation.isPending ? "送出中…" : "確認送出全部出清"}
                   </button>

@@ -154,3 +154,77 @@ describe("EmergencyExitControl focus management, Esc and focus trap (N-159 a11y)
     expect(portal.indexOf("ref={dialogRef}")).toBeLessThan(portal.indexOf('role="dialog"'));
   });
 });
+
+/** Body of `function <name>(...) { ... }` (brace-balanced), comments already stripped. */
+function functionBody(name: string): string {
+  const start = control.indexOf(`function ${name}(`);
+  expect(start).toBeGreaterThan(-1);
+  const open = control.indexOf("{", control.indexOf(")", start));
+  let depth = 0;
+  for (let i = open; i < control.length; i += 1) {
+    if (control[i] === "{") depth += 1;
+    if (control[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return control.slice(open, i + 1);
+    }
+  }
+  throw new Error("unbalanced braces");
+}
+
+/** The Step 3 (`final`) subtree: from its heading to the end of the portal call. */
+function finalStepSource(): string {
+  const portal = portalCall();
+  const start = portal.indexOf('step === "final"');
+  expect(start).toBeGreaterThan(-1);
+  return portal.slice(start);
+}
+
+describe("EmergencyExitControl keeps focus inside the dialog while submitting (N-163)", () => {
+  it("Step 3 buttons use aria-disabled while pending, never the native disabled attribute", () => {
+    const finalStep = finalStepSource();
+    // Native `disabled` on the focused button drops focus to <body>; the next
+    // Tab then leaves the dialog for the page header link behind the overlay.
+    expect(finalStep).not.toMatch(/(?<![-\w])disabled=\{/);
+    expect(finalStep).not.toMatch(/(?<![-\w:])disabled(?![-\w])(?=[\s>/])/);
+    expect(control).not.toMatch(/(?<![-\w])disabled=\{mutation\.isPending\}/);
+    // Both 取消 and 確認送出 carry aria-disabled bound to the pending state.
+    expect(finalStep.match(/aria-disabled=\{mutation\.isPending\}/g)).toHaveLength(2);
+  });
+
+  it("styles the aria-disabled state (cursor, opacity, no hover highlight) on both buttons", () => {
+    const finalStep = finalStepSource();
+    expect(finalStep.match(/aria-disabled:cursor-not-allowed/g)).toHaveLength(2);
+    expect(finalStep.match(/aria-disabled:opacity-50/g)).toHaveLength(2);
+    expect(finalStep.match(/aria-disabled:hover:bg-/g)).toHaveLength(2);
+    // The old `disabled:` variants would silently stop applying; none may remain here.
+    expect(finalStep).not.toMatch(/(?<![-\w])disabled:/);
+  });
+
+  it("refuses to submit again while pending (a focused aria-disabled button can still be activated)", () => {
+    const body = functionBody("submit");
+    expect(body.indexOf("if (mutation.isPending) return;")).toBeGreaterThan(-1);
+    expect(body.indexOf("if (mutation.isPending) return;")).toBeLessThan(body.indexOf("mutation.mutate("));
+  });
+
+  it("refuses to cancel while pending, whatever triggers it", () => {
+    const body = functionBody("cancel");
+    expect(body.indexOf("if (mutation.isPending) return;")).toBeGreaterThan(-1);
+    expect(body.indexOf("if (mutation.isPending) return;")).toBeLessThan(body.indexOf('setStep("idle")'));
+    // Esc stays locked on its own as well (asserted in the Esc test above).
+  });
+
+  it("focuses the clicked submit button before the request starts (browsers that do not focus on click)", () => {
+    const body = functionBody("submit");
+    expect(body).toContain("event.currentTarget.focus()");
+    expect(body.indexOf("event.currentTarget.focus()")).toBeLessThan(body.indexOf("mutation.mutate("));
+    expect(control).toMatch(/onClick=\{submit\}/);
+  });
+
+  it("does not move or drop focus when the pending state flips (failure keeps focus on 確認送出)", () => {
+    // The focus effect is keyed on `step` only; pending / error never re-run it,
+    // and nothing in the file blurs or re-targets focus on those transitions.
+    expect(control).toMatch(/\}, \[step\]\);/);
+    expect(control).not.toContain(".blur(");
+    expect(control.match(/\.focus\(\)/g)).toHaveLength(4);
+  });
+});
