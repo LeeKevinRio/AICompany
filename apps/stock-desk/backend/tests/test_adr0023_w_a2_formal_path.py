@@ -267,6 +267,7 @@ def test_cap_1_keeps_a_breach_with_w_a2_on_the_formal_path(book: _Book) -> None:
     assert format_percent(1.0) in _limit(full, WEIGHT)["detail"]
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_cap_5_keeps_a_breach_with_w_a2_on_the_formal_path(book: _Book) -> None:
     """R-P3-1 / R-P3-2 for cap 5 with a positive edge (win rate 0.6, payoff 2.0)."""
     _put_kelly(book, 0.6, 2.0)
@@ -275,6 +276,7 @@ def test_cap_5_keeps_a_breach_with_w_a2_on_the_formal_path(book: _Book) -> None:
     _assert_w_a2(full, reference, KELLY)
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_d5_with_own_lots_reports_no_observed_and_no_w_a2(book: _Book) -> None:
     """R-P3-1 / R-P3-2 second half: a non-positive edge on a short numerator.
 

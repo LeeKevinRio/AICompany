@@ -401,6 +401,7 @@ _EXPECTED_MIXED_OUTCOMES = {
 
 
 @pytest.mark.parametrize("strategy_id", STRATEGY_IDS)
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_kelly_import_matches_golden_for_every_strategy(
     strategy_id: str, api_harness: ApiHarness
 ) -> None:
@@ -416,6 +417,7 @@ def test_kelly_import_matches_golden_for_every_strategy(
     _assert_matches_golden(f"kelly_import/{strategy_id}", golden)
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_kelly_import_matches_golden_across_a_refusal_and_two_overwrites(
     api_harness: ApiHarness,
 ) -> None:
@@ -435,6 +437,7 @@ def test_kelly_import_matches_golden_across_a_refusal_and_two_overwrites(
     _assert_matches_golden("kelly_import/breakout__sequence", golden)
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_kelly_import_matches_golden_for_the_two_runless_refusals(
     api_harness: ApiHarness,
 ) -> None:
@@ -592,6 +595,7 @@ def test_one_backtest_request_reads_daily_bars_once_and_never_an_index(
     assert api_harness.index_service.cached_calls == []
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_one_kelly_import_reads_daily_bars_once_and_never_an_index(
     api_harness: ApiHarness,
 ) -> None:

@@ -93,6 +93,7 @@ function makeResponse(card: AdviceCard, held: boolean): AdviceResponse {
     position_ids: [1],
     portfolio_context: {} as unknown as AdviceResponse["portfolio_context"],
     context_notes: [],
+    cap1_migration_notice: null,
     advice: card,
     data: {
       status: "fresh",
@@ -200,16 +201,28 @@ describe("buildLimitNotices — 顯示條件（C-5、C-6）", () => {
     expect(n.violationLines.join("")).not.toMatch(/—|null/);
   });
 
-  it("兩者都排除第 5 條：只有第 5 條違反時不顯示 2-V／2-M，也不顯示 2-R", () => {
+  // 風控 2026-10-26 D-4 修訂 C-5（方案 D 日落期間）：2-V／2-M／2-R 以第 5 條「狀態」排除，
+  // 不以條號排除。日落期間第 5 條仍可能 violated 並擋下加碼，所以照常列入；
+  // 5-K 之後它回報 disabled，自然不進入只收 violated 的清單。
+  it("D-4：只有第 5 條違反時，照常顯示 2-V 與 2-R（不再以條號排除）", () => {
     const n = buildLimitNotices(makeCard({ limits_check: [CAP3_PASSED, CAP5_VIOLATED] }), "held");
-    expect(n.violationLines).toEqual([]);
-    expect(n.actionNotice).toBeNull();
+    expect(n.violationLines).toEqual(["已違反第 5 條上限：分數 Kelly 部位 20.00%（上限 10.00%）"]);
+    expect(n.actionNotice).not.toBeNull();
   });
 
-  it("第 5 條不計入條數：第 1、5 條違反時是 2-V（1 條），不是 2-M", () => {
+  it("D-4：第 5 條計入條數：第 1、5 條違反時是 2-M（2 條）", () => {
     const n = buildLimitNotices(makeCard({ limits_check: [CAP1_VIOLATED, CAP5_VIOLATED] }), "held");
-    expect(n.violationTitle).toBeNull();
-    expect(n.violationLines).toHaveLength(1);
+    expect(n.violationTitle).not.toBeNull();
+    expect(n.violationLines).toHaveLength(2);
+    expect(n.violationLines[1]).toContain("第 5 條・分數 Kelly 部位");
+  });
+
+  it("D-4：清單只收 violated，非 violated 狀態的第 5 條一律不進 2-V／2-M／2-R", () => {
+    for (const cap5 of [CAP5_NOT_EVALUABLE, limit(5, "kelly_fraction", "分數 Kelly 部位上限", "passed", 0.05, 0.1)]) {
+      const n = buildLimitNotices(makeCard({ limits_check: [CAP3_PASSED, cap5] }), "held");
+      expect(n.violationLines).toEqual([]);
+      expect(n.actionNotice).toBeNull();
+    }
   });
 
   it("2-O 不計第 5 條；有違反用「另有」，無違反用「有」，有幾條 not_evaluable 就寫幾", () => {

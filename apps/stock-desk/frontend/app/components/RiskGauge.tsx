@@ -14,6 +14,7 @@ import {
   riskGaugeChipClass,
 } from "../lib/riskGauge";
 import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
+import { buildCap1LedgerSummary, CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../lib/cap1SunsetWording";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
 import { ErrorPanel } from "./ErrorPanel";
@@ -95,6 +96,11 @@ function LimitDetailItem({ check }: { check: BookLimitCheck }) {
         第 {check.index} 條・{check.name}
       </p>
       <p className="mt-1 text-neutral-400">{check.detail}</p>
+      {/* Plan D sunset (日落期間字面表, required): its own sentence after cap 5's
+          detail, only while cap 5 is passed or violated. */}
+      {showsCap5SunsetNote(check.limit_id, check.status) && (
+        <p className="mt-1 text-neutral-400">{CAP5_SUNSET_UNRELIABLE_NOTE}</p>
+      )}
       {/* 風控退修:沿用後端 WORST_SYMBOL_PREFIX(book_limits.py)「觀測值最高」
           這個限定語,不能只寫「最高」——這是逐檔比較裡「觀測值」最高的那一檔,
           不是隨便一種「最高」。 */}
@@ -147,8 +153,9 @@ function SourcesList({ sources }: { sources: SymbolDataMeta[] }) {
  * qa 追加（2026-09-19）：名稱不再 `truncate`（會用刪節號吃掉看不完的字）——
  * 容器已是 `flex-wrap`，改成讓名稱在窄螢幕自然換行，確保完整字面永遠可讀。
  */
-function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
+function LimitGaugeRow({ check, migrationNotice }: { check: BookLimitCheck; migrationNotice: string | null }) {
   const hasExcluded = check.excluded.length > 0;
+  const ledgerSummary = buildCap1LedgerSummary(check);
   return (
     <li className="border-t border-neutral-800 py-2 text-sm first:border-t-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -181,6 +188,12 @@ function LimitGaugeRow({ check }: { check: BookLimitCheck }) {
       {check.worst_symbol !== null && (
         <p className="mt-1 text-xs text-neutral-400">觀測值最高：{check.worst_symbol}</p>
       )}
+      {/* #61 batch one, cap-1 row only, in this order (第1條下修告知逐字審 #2):
+          「觀測值最高」→ ledger summary (#4a/#4b) → the S2 sentence. Both stand
+          in the main view: no toast, no tooltip, no `<details>`, no truncation
+          (實作約束 3/4, I-8). The S2 sentence is the backend's, verbatim. */}
+      {ledgerSummary !== null && <p className="mt-1 text-xs text-neutral-400">{ledgerSummary}</p>}
+      {migrationNotice !== null && <p className="mt-1 text-xs text-amber-300">{migrationNotice}</p>}
     </li>
   );
 }
@@ -195,7 +208,11 @@ export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
     <>
       <ul className="mt-3">
         {data.limits.map((check) => (
-          <LimitGaugeRow key={check.limit_id} check={check} />
+          <LimitGaugeRow
+            key={check.limit_id}
+            check={check}
+            migrationNotice={check.index === 1 ? data.cap1_migration_notice : null}
+          />
         ))}
       </ul>
 

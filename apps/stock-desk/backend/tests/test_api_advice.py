@@ -758,6 +758,7 @@ def test_cap_5_is_not_evaluable_until_a_pair_is_entered(api_harness: ApiHarness)
     assert check["detail"] == KELLY_NOT_EVALUABLE_NO_INPUT
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_a_stored_pair_makes_cap_5_evaluable_through_the_endpoint(
     api_harness: ApiHarness,
 ) -> None:
@@ -782,6 +783,7 @@ def test_a_stored_pair_makes_cap_5_evaluable_through_the_endpoint(
     assert KELLY_WIN_RATE_IS_NOT_PROBABILITY not in check["detail"]
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_an_expired_pair_reaches_the_card_as_expired_not_as_absent(
     api_harness: ApiHarness,
 ) -> None:
@@ -803,6 +805,7 @@ def test_an_expired_pair_reaches_the_card_as_expired_not_as_absent(
     assert check["detail"] != KELLY_NOT_EVALUABLE_NO_INPUT
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_a_non_positive_edge_reaches_the_card_as_its_own_sentence(
     api_harness: ApiHarness,
 ) -> None:

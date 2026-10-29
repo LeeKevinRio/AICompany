@@ -336,6 +336,7 @@ const ADVICE: AdviceResponse = {
     payoff_ratio: null,
   },
   context_notes: [],
+  cap1_migration_notice: null,
   advice: {
     symbol: "2330",
     action: "hold",

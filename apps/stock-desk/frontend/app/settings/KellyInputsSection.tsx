@@ -22,6 +22,7 @@ import { useState } from "react";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import { SymbolCombobox } from "../components/SymbolCombobox";
+import { KELLY_SUNSET_LEAD } from "../lib/cap1SunsetWording";
 import { applyDirectorySelection } from "../lib/directorySearch";
 import { MARKET_OPTIONS } from "../lib/format";
 import { useKellyDisclosures } from "../lib/queries";
@@ -68,9 +69,10 @@ export function KellyInputsSection() {
         choice `KellyManualInputForm.tsx`'s field labels make.
       */}
       <h2 className="text-lg font-semibold text-neutral-100">Kelly 輸入</h2>
-      <p className="mt-1 text-xs text-neutral-500">
-        第 5 條「分數 Kelly 部位上限」使用的 win_rate／payoff_ratio 輸入：手動輸入，或從一次回測帶入。
-      </p>
+      {/* Plan D sunset lead (第1條下修告知逐字審 #3, 實作約束 5): replaces the old
+          line in the same `<p>` and class, for the whole section — never hidden
+          by which symbol is picked. Withdrawn by 5-K (R-2). */}
+      <p className="mt-1 text-xs text-neutral-500">{KELLY_SUNSET_LEAD}</p>
 
       <form onSubmit={handleSubmit} className="mt-4 flex flex-wrap items-end gap-3">
         <div>

@@ -52,6 +52,10 @@ from app.kelly.sample_gate import (
 from tests.api_helpers import recent_bars
 from tests.conftest import ApiHarness
 
+#: Every test here drives the import path behind plan D's freeze (CEO #62);
+#: see ``kelly_writes_open`` in ``tests/conftest.py``.
+pytestmark = pytest.mark.usefixtures("kelly_writes_open")
+
 _END = date(2026, 7, 20)
 _BARS = 1100
 _START = _END - timedelta(days=_BARS - 1)

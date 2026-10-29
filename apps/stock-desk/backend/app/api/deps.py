@@ -28,6 +28,7 @@ from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
 from app.dividends.store import DividendEventStore
 from app.kelly.attempts import KellyAttemptStore
+from app.kelly.freeze import KELLY_INPUT_WRITES_FROZEN
 from app.kelly.store import KellyInputStore
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
@@ -273,7 +274,9 @@ def _default_kelly_input_store() -> KellyInputStore:
     enters or imports a pair, which leaves risk cap 5 ``not_evaluable`` exactly
     as it was before C5 -- the absence of a row is a state, not a fault.
     """
-    return KellyInputStore()
+    # Plan D (CEO #62): refuses ``upsert`` while new input is frozen, a second
+    # layer behind the routes' own refusal (app/kelly/freeze.py).
+    return KellyInputStore(accept_writes=not KELLY_INPUT_WRITES_FROZEN)
 
 
 @lru_cache(maxsize=1)
@@ -384,6 +387,16 @@ def get_alert_store() -> AlertStore:
 def get_kelly_input_store() -> KellyInputStore:
     """Return the process-wide Kelly input store."""
     return _default_kelly_input_store()
+
+
+def get_kelly_input_writes_frozen() -> bool:
+    """Whether new Kelly input is refused (plan D, :mod:`app.kelly.freeze`).
+
+    A dependency rather than a bare import so the routes' refusal and the
+    disclosures' paused labels read one switch, and a test of the write path
+    behind the freeze can open it for its own app instance only.
+    """
+    return KELLY_INPUT_WRITES_FROZEN
 
 
 def get_kelly_attempt_store() -> KellyAttemptStore:

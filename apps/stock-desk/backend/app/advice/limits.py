@@ -149,6 +149,31 @@ MAX_SIZING_ADJUSTMENTS = 8
 MAX_POSITION_WEIGHT_CEILING = 0.50
 MAX_POSITION_WEIGHT_REASON = "單一標的超過總資產的一半時，分散化已無實質意義。"
 
+#: Default of ``RiskBudget.max_position_weight`` (cap 1), lowered from 0.15 to
+#: 0.10 on 2026-10-26 by CEO decisions #61/#62/#63 (plan A):
+#: ``work/reviews/2026-10-26-第1條上限下修提案-quant-researcher.md`` and
+#: ``work/reviews/2026-10-26-第1條上限下修審查-風控.md``.
+#:
+#: Why this number: cap 5 bounds any holding with a usable Kelly pair by
+#: ``kelly_position_cap``, whose own ceiling is 0.10, so 0.10 is the largest
+#: single cap-1 default that leaves none of those holdings wider once cap 5 is
+#: retired. It is a **policy parameter** -- it was not fitted, backtested or
+#: validated on any history, it is not claimed to be optimal, and it is not
+#: taken from any regulation. ``MAX_POSITION_WEIGHT_CEILING`` is unchanged.
+#: ``rules_version`` is deliberately not bumped: it versions the rule YAML, not
+#: the risk budget.
+#:
+#: Stored settings are not clamped to this value at evaluation time (no
+#: ``min(stored, default)`` anywhere, see the RiskBudget docstring). A stored
+#: value equal to :data:`PREVIOUS_DEFAULT_MAX_POSITION_WEIGHT` is instead
+#: rewritten once, with a record, by :mod:`app.settings.migrations` (S2).
+DEFAULT_MAX_POSITION_WEIGHT = 0.10
+
+#: The cap-1 default every build before 2026-10-26 shipped. Only the S2
+#: migration reads it: a stored value equal to it (within :data:`EPSILON`) is
+#: the one value that migration rewrites.
+PREVIOUS_DEFAULT_MAX_POSITION_WEIGHT = 0.15
+
 #: Hard ceiling on ``RiskBudget.max_gross_exposure``. Moderate leverage is a
 #: legitimate preference; 2x is a different risk profile than the quantities
 #: this engine sizes.
@@ -542,9 +567,10 @@ class RiskBudget(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    #: Bounded by :data:`MAX_POSITION_WEIGHT_CEILING`, not by 1.0.
+    #: Bounded by :data:`MAX_POSITION_WEIGHT_CEILING`, not by 1.0. The default
+    #: is :data:`DEFAULT_MAX_POSITION_WEIGHT` (0.10 since 2026-10-26, #61).
     max_position_weight: float = Field(
-        default=0.15,
+        default=DEFAULT_MAX_POSITION_WEIGHT,
         gt=0.0,
         description=_ceiling_description(
             "單一標的佔總資產的",

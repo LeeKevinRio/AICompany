@@ -89,6 +89,7 @@ function makeResponse(card: AdviceCard, held = true): AdviceResponse {
     position_ids: held ? [1] : [],
     portfolio_context: {} as unknown as AdviceResponse["portfolio_context"],
     context_notes: [],
+    cap1_migration_notice: null,
     advice: card,
     data: {
       status: "fresh",

@@ -27,6 +27,7 @@ from app.api.deps import (
     get_index_resolver,
     get_kelly_attempt_store,
     get_kelly_input_store,
+    get_kelly_input_writes_frozen,
     get_market_resolver,
     get_position_store,
     get_price_bar_cache,
@@ -170,6 +171,22 @@ def api_harness(
             kelly_attempts=kelly_attempts,
         )
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def kelly_writes_open(api_harness: ApiHarness) -> ApiHarness:
+    """The harness with plan D's freeze lifted for this app instance only.
+
+    Since 2026-10-26 (CEO #62) every build refuses new Kelly input, and the
+    default harness serves exactly that. The write paths behind the freeze --
+    manual ``PUT`` and ``import-backtest`` -- are still the code a later
+    decision may reopen (F-d), so the modules that test what those paths do
+    opt into this fixture and keep every assertion they had. The freeze itself
+    is pinned by ``tests/test_kelly_freeze.py`` against the default harness.
+    Cleared with every other override when the harness tears down.
+    """
+    app.dependency_overrides[get_kelly_input_writes_frozen] = lambda: False
+    return api_harness
 
 
 @pytest.fixture

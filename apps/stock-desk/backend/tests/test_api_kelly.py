@@ -45,6 +45,7 @@ def _put(client: TestClient, symbol: str = "2330", **body: float) -> dict[str, A
     return data
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_a_manual_pair_is_stored_and_read_back(api_harness: ApiHarness) -> None:
     written = _put(api_harness.client, win_rate=0.6, payoff_ratio=2.5)
 
@@ -58,6 +59,7 @@ def test_a_manual_pair_is_stored_and_read_back(api_harness: ApiHarness) -> None:
     assert written["item"] == item
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_a_fresh_input_reports_its_age_and_anchor(api_harness: ApiHarness) -> None:
     body = _put(api_harness.client)
 
@@ -120,6 +122,7 @@ def test_a_non_positive_payoff_ratio_is_a_422(api_harness: ApiHarness, payoff_ra
     assert api_harness.kelly_inputs.get("2330", "TW") is None
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_a_refused_write_leaves_the_stored_pair_standing(api_harness: ApiHarness) -> None:
     """約束 6: refused, not clamped -- and the previous value is not disturbed."""
     _put(api_harness.client, win_rate=0.55, payoff_ratio=1.8)
@@ -150,6 +153,7 @@ def test_reading_an_input_that_was_never_entered_is_a_404(api_harness: ApiHarnes
     assert "2330" in response.json()["detail"]
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_market_is_part_of_the_key(api_harness: ApiHarness) -> None:
     api_harness.client.put(
         "/api/kelly-inputs/AAPL?market=US", json={"win_rate": 0.6, "payoff_ratio": 2.0}
@@ -159,6 +163,7 @@ def test_the_market_is_part_of_the_key(api_harness: ApiHarness) -> None:
     assert api_harness.client.get("/api/kelly-inputs/AAPL").status_code == 404
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_symbol_is_normalised_on_the_way_in(api_harness: ApiHarness) -> None:
     body = _put(api_harness.client, symbol="aapl")
 
@@ -166,6 +171,7 @@ def test_the_symbol_is_normalised_on_the_way_in(api_harness: ApiHarness) -> None
     assert api_harness.client.get("/api/kelly-inputs/AAPL").status_code == 200
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_editing_an_imported_pair_keeps_the_import(api_harness: ApiHarness) -> None:
     """約束 4: the source becomes ``backtest_overridden``, the numbers survive."""
     api_harness.kelly_inputs.upsert(
@@ -288,6 +294,7 @@ def test_an_expired_input_is_still_returned(api_harness: ApiHarness) -> None:
     assert response.json()["item"]["win_rate"] == 0.55
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_delete_clears_the_input_and_then_reports_it_gone(api_harness: ApiHarness) -> None:
     _put(api_harness.client)
 
@@ -299,6 +306,7 @@ def test_delete_clears_the_input_and_then_reports_it_gone(api_harness: ApiHarnes
     assert api_harness.client.get("/api/kelly-inputs/2330").status_code == 404
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_delete_leaves_the_import_attempt_log_alone(api_harness: ApiHarness) -> None:
     """約束 35 / 約束 26 (7): clearing an input must not lower ``K_observed``."""
     for spec in ("a" * 64, "b" * 64):

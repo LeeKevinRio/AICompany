@@ -877,6 +877,11 @@ def test_r4c_16_limits_shows_no_share_range() -> None:
         "detail",
         "worst_symbol",
         "evaluated_count",
+        # 2026-10-26 (#61 batch one): cap 1's ledger summary count (#4a/#4b,
+        # 實作約束 8). A count of holdings, no figure priced through a quote;
+        # the word scan below still holds. 風控 2026-10-26 複核核可
+        # (第1條下修第一批四項裁定 第四節).
+        "violated_count",
         "excluded",
     }, T_E1B_2_BACK_TO_RISK
     assert set(ExcludedSymbol.model_fields) == {"symbol", "market", "reason"}, T_E1B_2_BACK_TO_RISK
@@ -885,6 +890,10 @@ def test_r4c_16_limits_shows_no_share_range() -> None:
         "limits",
         "notes",
         "sources",
+        # 2026-10-26 (CEO #63): the S2 sentence for the cap-1 row (#2, S1/S1').
+        # Copy only, no priced figure. 風控 2026-10-26 複核核可
+        # (第1條下修第一批四項裁定 第四節).
+        "cap1_migration_notice",
         "as_of",
     }, T_E1B_2_BACK_TO_RISK
     names = set(_field_names(PortfolioLimitsResponse, set()))

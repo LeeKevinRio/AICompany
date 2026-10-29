@@ -6,6 +6,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.api import kelly_wording as wording
 from app.api.backtest import (
     BUY_AND_HOLD_NOTE,
@@ -478,6 +480,7 @@ def test_every_shipped_strategy_produces_the_same_curve_shape(
         assert curves["split_date"] == baseline["split_date"], strategy_id
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_kelly_import_surface_does_not_carry_backtest_curves(
     api_harness: ApiHarness,
 ) -> None:

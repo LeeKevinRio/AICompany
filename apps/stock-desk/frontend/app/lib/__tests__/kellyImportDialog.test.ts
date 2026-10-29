@@ -59,6 +59,7 @@ function freshView(overwriteNotice: KellyOverwriteNoticeView | null): KellyInput
     as_of: "2026-08-22T00:00:00+00:00",
     disclosures: {
       import_trigger_label: "TEST_TRIGGER",
+      writes_paused_label: null,
       freshness_badge_label: "TEST_BADGE",
       source_statement: null,
       source_label: null,

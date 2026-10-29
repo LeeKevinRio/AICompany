@@ -1115,6 +1115,20 @@ KELLY_ORIGINAL_VALUES_ENTRY_LABEL = "查看原始回測值"
 KELLY_ORIGINAL_VALUES_BACK_LABEL = "返回"
 
 
+# ---------------------------------------------------------------------------
+# Plan D sunset: new Kelly input is paused (CEO #62, 2026-10-26)
+# ---------------------------------------------------------------------------
+
+#: 風控 2026-10-26 ``work/reviews/2026-10-26-第1條上限下修審查-風控.md`` 日落期間
+#: 字面表: the 5-K import-button wording, put on line early. It labels both
+#: paused controls (the import trigger and the manual form's submit, each
+#: disabled) and is the ``PUT`` refusal's ``detail``. Withdrawn with the
+#: freeze (F-d); 5-K keeps it for the import button.
+KELLY_WRITES_PAUSED_LABEL = "已暫停"
+#: Same table: the ``import-backtest`` refusal's ``detail``, cut down from the
+#: 5-K lead. Withdrawn with the freeze (F-d).
+KELLY_IMPORT_PAUSED_DETAIL = "暫停從回測帶入。"
+
 #: The approved inventory, keyed by the review's own item ids. A sentence that is
 #: not in here is a sentence risk-compliance never saw:
 #: ``tests/test_kelly_wording.py`` asserts this mapping and the module's public
@@ -1212,6 +1226,9 @@ RISK_CONFIRMED_WORDING: Final[dict[str, str]] = {
     # 第十五輪 條件 116: the original-values view's entry and exit controls.
     "original-entry": KELLY_ORIGINAL_VALUES_ENTRY_LABEL,
     "original-back": KELLY_ORIGINAL_VALUES_BACK_LABEL,
+    # 風控 2026-10-26 日落期間字面表 (plan D, CEO #62).
+    "sunset-paused": KELLY_WRITES_PAUSED_LABEL,
+    "sunset-import-detail": KELLY_IMPORT_PAUSED_DETAIL,
 }
 
 #: The item ids whose sentence is assembled somewhere other than this package,

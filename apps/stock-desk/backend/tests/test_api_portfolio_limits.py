@@ -84,6 +84,8 @@ def test_limits_reports_the_five_caps_in_order(api_harness: ApiHarness) -> None:
             "detail",
             "worst_symbol",
             "evaluated_count",
+            # #61 batch one: cap 1's ledger summary count (#4a/#4b).
+            "violated_count",
             "excluded",
         }
     assert body["notes"]
