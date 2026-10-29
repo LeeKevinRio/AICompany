@@ -43,6 +43,12 @@ class Tunables:
     digest_time: str = "08:00"  # HH:MM, Asia/Taipei
     # Hourly queries an exploration must leave for scans (ADR-0002 FD-6 Decision 3).
     exploration_reserve_for_scans: int = 12
+    # Retention and Telegram commands (ADR-0002 FD-7 Decisions 7, 8, 10).
+    retention_days: int = 180
+    notification_retention_days: int = 365
+    retention_keep_runs: int = 10
+    telegram_commands_enabled: bool = True
+    vacuum_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,15 @@ class Limits:
     no_embedded_streak_rounds: int = 3
     no_embedded_min_queries: int = 10
     no_embedded_min_ratio_pct: int = 50
+    # Daily retention purge and weekly VACUUM (ADR-0002 FD-7 Decisions 7, 8).
+    retention_backups_keep: int = 7
+    retention_delay_minutes: int = 30  # after the daily digest time
+    retention_batch_size: int = 500
+    vacuum_interval_days: int = 7
+    stats_cache_seconds: int = 300
+    # Telegram command poller (Decisions 1, 2).
+    command_long_poll_seconds: int = 25
+    command_backlog_minutes: int = 10
 
 
 @dataclass(frozen=True)

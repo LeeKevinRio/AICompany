@@ -22,6 +22,28 @@ from flight_deals.domain.models import (
 from flight_deals.domain.timeutil import parse_utc_iso, to_utc_iso
 from flight_deals.storage.db import Database
 
+# ``app_setting`` keys holding runtime state (offsets, maintenance results); never shown
+# or accepted as user settings.
+STATE_PREFIX = "state."
+
+
+# List page (C-34, FD-7 Decision 9): no window function over scan_run; each watch looks
+# up its own latest finished run and its current revision's latest ``?`` finished runs.
+LIST_WATCHES_SQL = (
+    "SELECT w.*, s.id AS run_id, s.query_results AS run_results,"
+    " s.watch_revision AS run_revision"
+    " FROM watch w LEFT JOIN scan_run s ON s.id IN ("
+    "  SELECT id FROM (SELECT l.id FROM scan_run l"
+    "   WHERE l.watch_id = w.id AND l.finished_at IS NOT NULL"
+    "   ORDER BY l.id DESC LIMIT 1)"
+    "  UNION"
+    "  SELECT id FROM (SELECT r.id FROM scan_run r"
+    "   WHERE r.watch_id = w.id AND r.watch_revision = w.revision"
+    "   AND r.finished_at IS NOT NULL ORDER BY r.id DESC LIMIT ?)"
+    " )"
+    " ORDER BY w.id, s.id DESC"
+)
+
 
 def _d(value: date | None) -> str | None:
     return value.isoformat() if value else None
@@ -442,41 +464,30 @@ class Repository:
 
     def list_watches_with_last_results(self, rounds: int = 3) -> list[WatchListRow]:
         """Every watch with its latest finished run and the latest ``rounds`` finished
-        runs of its current revision, in a single query (C-34; window functions).
+        runs of its current revision, in a single query (C-34).
 
-        The window ranks only narrow columns (id, watch_id, revision); the large
-        ``query_results`` text is read just for the few ranked rows kept."""
+        Per watch, two correlated ``ORDER BY id DESC LIMIT`` lookups walk the
+        ``(watch_id, id)`` / ``(watch_id, watch_revision, id)`` indexes backwards, so the
+        cost follows the number of watches, not the size of ``scan_run`` (FD-7 Decision 9).
+        Rows come newest first per watch: the first one is the latest finished run."""
         with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT w.*, s2.query_results AS run_results, r.watch_revision AS run_revision,"
-                " r.rn_all AS rn_all, r.rn_rev AS rn_rev"
-                " FROM watch w LEFT JOIN ("
-                "  SELECT s.id, s.watch_id, s.watch_revision,"
-                "   ROW_NUMBER() OVER (PARTITION BY s.watch_id ORDER BY s.id DESC) AS rn_all,"
-                "   ROW_NUMBER() OVER (PARTITION BY s.watch_id, s.watch_revision"
-                "    ORDER BY s.id DESC) AS rn_rev"
-                "  FROM scan_run s WHERE s.finished_at IS NOT NULL"
-                " ) r ON r.watch_id = w.id"
-                "  AND (r.rn_all = 1 OR (r.watch_revision = w.revision AND r.rn_rev <= ?))"
-                " LEFT JOIN scan_run s2 ON s2.id = r.id"
-                " ORDER BY w.id, r.rn_all",
-                (rounds,),
-            ).fetchall()
+            rows = conn.execute(LIST_WATCHES_SQL, (rounds,)).fetchall()
         result: list[WatchListRow] = []
         current: Watch | None = None
         last: list[dict[str, Any]] = []
         recent: list[list[dict[str, Any]]] = []
+        seen_run = False
         for row in rows:
             if current is None or row["id"] != current.id:
                 if current is not None:
                     result.append(WatchListRow(current, last, recent))
-                current, last, recent = _watch(row), [], []
-            if row["run_results"] is None:
+                current, last, recent, seen_run = _watch(row), [], [], False
+            if row["run_id"] is None:
                 continue
             results = json.loads(row["run_results"])
-            if row["rn_all"] == 1:
-                last = results
-            if row["run_revision"] == current.revision and row["rn_rev"] <= rounds:
+            if not seen_run:
+                last, seen_run = results, True
+            if row["run_revision"] == current.revision and len(recent) < rounds:
                 recent.append(results)
         if current is not None:
             result.append(WatchListRow(current, last, recent))
@@ -628,6 +639,21 @@ class Repository:
                 ") m ON s.id = m.max_id"
             ).fetchall()
         return {r["watch_id"]: _scan_run(r) for r in rows}
+
+    def get_scan_run(self, scan_run_id: int) -> ScanRunRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT * FROM scan_run WHERE id = ?", (scan_run_id,)).fetchone()
+        return _scan_run(row) if row else None
+
+    def latest_finished_scan_run(self, watch_id: int) -> ScanRunRecord | None:
+        """Most recent finished scan run of one watch (any revision)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM scan_run WHERE watch_id = ? AND finished_at IS NOT NULL"
+                " ORDER BY id DESC LIMIT 1",
+                (watch_id,),
+            ).fetchone()
+        return _scan_run(row) if row else None
 
     def latest_scan_run_for_watch(self, watch_id: int) -> ScanRunRecord | None:
         """Most recently created scan run of one watch (running or finished)."""
@@ -1063,6 +1089,13 @@ class Repository:
                 (status, attempts, _ts(sent_at), last_error, notification_id),
             )
 
+    def update_notification_text(self, notification_id: int, message_text: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE notification SET message_text = ? WHERE id = ?",
+                (message_text, notification_id),
+            )
+
     def get_notification(self, notification_id: int) -> NotificationRecord | None:
         with self.db.connect() as conn:
             row = conn.execute(
@@ -1112,6 +1145,8 @@ class Repository:
         ]
 
     def retryable_notifications(self, max_attempts: int) -> list[NotificationRecord]:
+        """Failed / pending rows of the retried kinds only: ``command`` and
+        ``manual_digest`` are sent once and never retried (ADR-0002 FD-7 Decision 6)."""
         with self.db.connect() as conn:
             rows = conn.execute(
                 "SELECT n.*, w.name AS watch_name FROM notification n"
@@ -1197,6 +1232,22 @@ class Repository:
                 [(k, v, to_utc_iso(now)) for k, v in values.items()],
             )
 
+    def get_state(self, keys: Sequence[str]) -> dict[str, str]:
+        """``state.*`` rows of ``app_setting`` (runtime bookkeeping, never user settings)."""
+        if not keys:
+            return {}
+        marks = ", ".join("?" for _ in keys)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT key, value FROM app_setting WHERE key IN ({marks})", list(keys)
+            ).fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+    def save_state(self, values: dict[str, str], now: datetime) -> None:
+        if any(not key.startswith(STATE_PREFIX) for key in values):
+            raise ValueError("state keys must start with 'state.'")
+        self.save_settings(values, now)
+
     # ---- scheduler events ----------------------------------------------------
 
     def insert_event(self, at: datetime, kind: str, detail: str | None) -> None:
@@ -1206,9 +1257,138 @@ class Repository:
                 (to_utc_iso(at), kind, detail),
             )
 
+    def count_events_before(self, cutoff: datetime) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM scheduler_event WHERE at < ?", (to_utc_iso(cutoff),)
+            ).fetchone()
+        return int(row["n"])
+
     def recent_events(self, limit: int = 20) -> list[SchedulerEventRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM scheduler_event ORDER BY at DESC, id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [SchedulerEventRecord(_req_ts(r["at"]), r["kind"], r["detail"]) for r in rows]
+
+    # ---- retention purge (ADR-0002 FD-7 Decision 7, C-53) ------------------------
+    # Every DELETE of the purge is here. Each batch is one transaction, and a scan run
+    # goes together with its observations, so a crash never leaves orphans.
+
+    def retention_keep_recent_runs(self, keep: int) -> set[int]:
+        """The latest ``keep`` finished runs of every watch, whatever their age."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+                "  PARTITION BY watch_id ORDER BY id DESC) AS rn"
+                "  FROM scan_run WHERE finished_at IS NOT NULL) WHERE rn <= ?",
+                (keep,),
+            ).fetchall()
+        return {int(r["id"]) for r in rows}
+
+    def retention_snapshot_runs(self, *, today: date, midnight: datetime) -> set[int]:
+        """Runs holding observations the list, digest, ``/list`` or alert rules read.
+
+        Current revision only. Per (pair, price kind, currency) with a departure from
+        ``today`` on: the newest two observations (snapshot and "previous run") and the
+        newest one fetched before ``midnight`` (digest "previous day"). Per (price kind,
+        currency), any departure: the lowest price, lowest id first (``min_amount``).
+        """
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "WITH cur AS ("
+                "  SELECT o.id, o.scan_run_id, o.watch_id, o.depart_date, o.return_date,"
+                "   o.price_kind, o.currency, o.fetched_at, o.amount_minor"
+                "  FROM price_observation o JOIN watch w"
+                "   ON w.id = o.watch_id AND o.watch_revision = w.revision"
+                "), ranked AS ("
+                "  SELECT scan_run_id, depart_date,"
+                "   ROW_NUMBER() OVER (PARTITION BY watch_id, depart_date, return_date,"
+                "    price_kind, currency ORDER BY fetched_at DESC, id DESC) AS rn_pair,"
+                "   ROW_NUMBER() OVER (PARTITION BY watch_id, price_kind, currency"
+                "    ORDER BY amount_minor, id) AS rn_min"
+                "  FROM cur"
+                "), before_midnight AS ("
+                "  SELECT scan_run_id, ROW_NUMBER() OVER (PARTITION BY watch_id, depart_date,"
+                "    return_date, price_kind, currency ORDER BY fetched_at DESC, id DESC) AS rn"
+                "  FROM cur WHERE fetched_at < :midnight AND depart_date >= :today"
+                ")"
+                " SELECT scan_run_id FROM ranked"
+                "  WHERE (rn_pair <= 2 AND depart_date >= :today) OR rn_min = 1"
+                " UNION SELECT scan_run_id FROM before_midnight WHERE rn = 1",
+                {"today": today.isoformat(), "midnight": to_utc_iso(midnight)},
+            ).fetchall()
+        return {int(r["scan_run_id"]) for r in rows}
+
+    def retention_run_candidates(self, cutoff: datetime) -> list[int]:
+        """Finished runs that ended before ``cutoff`` (running runs never qualify)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM scan_run WHERE finished_at IS NOT NULL AND finished_at < ?"
+                " ORDER BY id",
+                (to_utc_iso(cutoff),),
+            ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def delete_scan_runs(self, ids: Sequence[int]) -> tuple[int, int]:
+        """One batch: observations first, then their runs. Returns (runs, observations)."""
+        if not ids:
+            return 0, 0
+        marks = ", ".join("?" for _ in ids)
+        params = list(ids)
+        with self.db.connect() as conn:
+            observations = conn.execute(
+                f"DELETE FROM price_observation WHERE scan_run_id IN ({marks})", params
+            ).rowcount
+            runs = conn.execute(
+                f"DELETE FROM scan_run WHERE id IN ({marks}) AND finished_at IS NOT NULL",
+                params,
+            ).rowcount
+        return runs, observations
+
+    def retention_notification_candidates(self, cutoff: datetime, today: date) -> list[int]:
+        """Notifications created before ``cutoff``, except price alerts of an existing
+        watch with an item departing from ``today`` on (they keep dedupe working)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT n.id FROM notification n WHERE n.created_at < ?"
+                " AND NOT (n.kind = 'price_alert' AND n.watch_id IS NOT NULL AND EXISTS ("
+                "  SELECT 1 FROM notification_item i"
+                "  WHERE i.notification_id = n.id AND i.depart_date >= ?))"
+                " ORDER BY n.id",
+                (to_utc_iso(cutoff), today.isoformat()),
+            ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def delete_notifications(self, ids: Sequence[int]) -> int:
+        """One batch; ``notification_item`` rows go with them (ON DELETE CASCADE)."""
+        if not ids:
+            return 0
+        marks = ", ".join("?" for _ in ids)
+        with self.db.connect() as conn:
+            return int(
+                conn.execute(f"DELETE FROM notification WHERE id IN ({marks})", list(ids)).rowcount
+            )
+
+    def delete_events_before(self, cutoff: datetime, limit: int) -> int:
+        """One batch of at most ``limit`` scheduler events older than ``cutoff``."""
+        with self.db.connect() as conn:
+            return int(
+                conn.execute(
+                    "DELETE FROM scheduler_event WHERE id IN ("
+                    " SELECT id FROM scheduler_event WHERE at < ? ORDER BY id LIMIT ?)",
+                    (to_utc_iso(cutoff), limit),
+                ).rowcount
+            )
+
+    def table_counts(self) -> list[tuple[str, int]]:
+        """Row counts of the main tables in one statement (fixed table names)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT 'watch' AS t, COUNT(*) AS n FROM watch"
+                " UNION ALL SELECT 'scan_run', COUNT(*) FROM scan_run"
+                " UNION ALL SELECT 'price_observation', COUNT(*) FROM price_observation"
+                " UNION ALL SELECT 'notification', COUNT(*) FROM notification"
+                " UNION ALL SELECT 'exploration', COUNT(*) FROM exploration"
+            ).fetchall()
+        return [(str(r["t"]), int(r["n"])) for r in rows]

@@ -7,6 +7,7 @@ import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,7 +15,12 @@ from fastapi import FastAPI
 import flight_deals.autostart as autostart
 from flight_deals.config import PROJECT_DIR, Config, ConfigError
 from flight_deals.domain.timeutil import utc_now
-from flight_deals.notify.telegram import TelegramNotifier, TelegramSetupClient, Transport
+from flight_deals.notify.telegram import (
+    TelegramCommandClient,
+    TelegramNotifier,
+    TelegramSetupClient,
+    Transport,
+)
 from flight_deals.ports import (
     AutostartProbe,
     AutostartStatus,
@@ -22,6 +28,7 @@ from flight_deals.ports import (
     Clock,
     FlightPriceSource,
     Notifier,
+    TelegramInbox,
 )
 from flight_deals.redact import redact, register_secret
 from flight_deals.scheduler import (
@@ -31,16 +38,25 @@ from flight_deals.scheduler import (
     SchedulerLockHeldError,
 )
 from flight_deals.services import (
+    CommandService,
     DigestService,
     ExplorationService,
     ExplorationViewService,
     HealthService,
     NotificationService,
+    RetentionService,
     ScanService,
     Services,
     SettingsService,
     ViewService,
     WatchService,
+)
+from flight_deals.services.commands import (
+    CommandPoller,
+    CommandRuntime,
+    PollerTiming,
+    bot_id_of,
+    parse_chat_id,
 )
 from flight_deals.services.settings import EffectiveSettings
 from flight_deals.sources._support import Throttle, TTLCache
@@ -133,6 +149,44 @@ class Assembly:
     services: Services
     database: Database
     scheduler: ScanScheduler
+    commands: CommandRuntime
+
+
+def build_command_runtime(
+    config: Config,
+    *,
+    inbox: TelegramInbox | None,
+    service: CommandService,
+    notifications: NotificationService,
+    repo: Repository,
+    settings: SettingsService,
+    clock: Clock,
+) -> CommandRuntime:
+    """A poller only with a bot token and a private (positive integer) chat id."""
+    token = config.telegram_bot_token
+    chat_id, unavailable = parse_chat_id(config.telegram_chat_id)
+    if not token:
+        unavailable = "unconfigured"
+    if unavailable is not None or chat_id is None or not token:
+        return CommandRuntime(None, unavailable or "unconfigured")
+    register_secret(token)  # before any request can produce an error string
+    limits = config.limits
+    poller = CommandPoller(
+        inbox or TelegramCommandClient(token),
+        service,
+        notifications,
+        repo,
+        settings,
+        bot_id=bot_id_of(token),
+        chat_id=chat_id,
+        clock=clock,
+        redactor=redact,
+        timing=PollerTiming(
+            long_poll_seconds=limits.command_long_poll_seconds,
+            backlog=timedelta(minutes=limits.command_backlog_minutes),
+        ),
+    )
+    return CommandRuntime(poller)
 
 
 def assemble(
@@ -143,6 +197,7 @@ def assemble(
     clock: Clock = utc_now,
     autostart_probe: AutostartProbe | None = None,
     link_builder: BookingLinkBuilder | None = None,
+    inbox: TelegramInbox | None = None,
 ) -> Assembly:
     for secret in config.secrets():
         register_secret(secret)
@@ -171,6 +226,11 @@ def assemble(
             digest_enabled=tunables.digest_enabled,
             digest_time=tunables.digest_time,
             exploration_reserve_for_scans=tunables.exploration_reserve_for_scans,
+            retention_days=tunables.retention_days,
+            notification_retention_days=tunables.notification_retention_days,
+            retention_keep_runs=tunables.retention_keep_runs,
+            telegram_commands_enabled=tunables.telegram_commands_enabled,
+            vacuum_enabled=tunables.vacuum_enabled,
         ),
         min_scan_interval_minutes=limits.min_scan_interval_minutes,
         clock=clock,
@@ -243,6 +303,37 @@ def assemble(
     exploration_views = ExplorationViewService(
         repo, settings, exploration, clock=clock, link_builder=links
     )
+    commands = CommandService(
+        repo,
+        watches,
+        settings,
+        health,
+        notifications,
+        source_names=[s.name for s in active_sources],
+        clock=clock,
+        link_builder=links,
+    )
+    command_runtime = build_command_runtime(
+        config,
+        inbox=inbox,
+        service=commands,
+        notifications=notifications,
+        repo=repo,
+        settings=settings,
+        clock=clock,
+    )
+    retention = RetentionService(
+        repo,
+        settings,
+        scan_lock=scan.lock,
+        clock=clock,
+        redactor=redact,
+        backups_keep=limits.retention_backups_keep,
+        delay_minutes=limits.retention_delay_minutes,
+        batch_size=limits.retention_batch_size,
+        vacuum_interval_days=limits.vacuum_interval_days,
+        stats_cache_seconds=limits.stats_cache_seconds,
+    )
     services = Services(
         watches=watches,
         views=views,
@@ -253,6 +344,8 @@ def assemble(
         digest=digest,
         exploration=exploration,
         exploration_views=exploration_views,
+        commands=commands,
+        retention=retention,
     )
     scheduler = ScanScheduler(
         services,
@@ -268,7 +361,22 @@ def assemble(
     views.hooks.scheduler_running = lambda: scheduler.running
     exploration.hooks.schedule = scheduler.schedule_exploration
     exploration.hooks.scheduler_running = lambda: scheduler.running
-    return Assembly(services, database, scheduler)
+    commands.hooks.schedule_scan = scheduler.trigger_command_scan
+    commands.hooks.scan_pending = scheduler.scan_pending
+    commands.hooks.schedule_manual_digest = scheduler.schedule_manual_digest
+    commands.hooks.next_run_time = scheduler.next_run_time
+    commands.hooks.scheduler_running = lambda: scheduler.running
+    views.hooks.command_status = command_runtime.status
+    views.retention = retention
+    poller = command_runtime.poller
+    if poller is not None:
+
+        def wake_poller(before: EffectiveSettings, after: EffectiveSettings) -> None:
+            if before.telegram_commands_enabled != after.telegram_commands_enabled:
+                poller.wake()
+
+        settings.listeners.append(wake_poller)
+    return Assembly(services, database, scheduler, command_runtime)
 
 
 def scheduler_lock_path(config: Config) -> Path:
@@ -294,6 +402,7 @@ def create_app(
     scheduler_lock: SchedulerLock | None = None,
     autostart_probe: AutostartProbe | None = None,
     link_builder: BookingLinkBuilder | None = None,
+    inbox: TelegramInbox | None = None,
 ) -> FastAPI:
     """Build the app. With ``start_scheduler`` the scheduler lock is held from here on.
 
@@ -313,6 +422,7 @@ def create_app(
             clock=clock,
             autostart_probe=autostart_probe,
             link_builder=link_builder,
+            inbox=inbox,
         )
     except BaseException:
         if lock is not None:
@@ -321,13 +431,20 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        poller = assembly.commands.poller
         try:
             if lock is not None:
                 assembly.scheduler.start(lock)
                 log.info("scheduler started")
+                # Only the lock holder polls Telegram (FD-7 Decision 1).
+                if poller is not None:
+                    poller.start()
+                    log.info("telegram command polling started")
             yield
         finally:
             if lock is not None:
+                if poller is not None and poller.started:
+                    poller.stop()
                 assembly.scheduler.shutdown()
                 lock.release()
                 log.info("scheduler stopped")

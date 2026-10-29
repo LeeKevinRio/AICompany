@@ -250,7 +250,8 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   background: var(--color-bad-bg);
   color: var(--color-bad-text);
 }
-.status-paused, .status-expired, .health-unknown, .notif-suppressed, .notif-daily_digest, .run-running,
+.status-paused, .status-expired, .health-unknown, .notif-suppressed, .notif-daily_digest,
+.notif-command, .notif-manual_digest, .run-running,
 .q-no_data, .q-skipped {
   background: var(--color-neutral-bg);
   color: var(--color-neutral-text);

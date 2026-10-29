@@ -6,8 +6,8 @@ whether to buy. Templates here are the single source for notification text.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 from flight_deals.domain.airports import route_label
@@ -401,6 +401,683 @@ def exploration_static_texts() -> list[str]:
     ]
 
 
+# ---- Telegram commands (ADR-0002 FD-7 Decisions 2-5, C-51) --------------------------
+
+COMMAND_REPLY_MAX_CHARS = 3800  # below Telegram's 4096-character limit
+COMMAND_LIST_MAX_LINES = 30
+COMMAND_NAME_MAX = 20
+COMMAND_TOP_N = 3
+COMMAND_PREFIX = "[flight-deals]"
+COMMAND_HELP = "\n".join(
+    [
+        f"{COMMAND_PREFIX} 可用指令",
+        "/list：列出啟用中的監看與目前最低價",
+        "/watch <編號>：查看單一監看的條件與已查到價格中最便宜的 3 組日期",
+        "/scan <編號>：立即查價，完成後另外回覆結果",
+        "/digest：立即送出一則摘要",
+        "/status：資料源、查詢額度與下次掃描時間",
+        "/pause <編號>：停用監看",
+        "/resume <編號>：啟用監看",
+        "/help：顯示這份說明",
+        "編號為網頁監看列表上的編號；新增與修改監看請至網頁。",
+    ]
+)
+COMMAND_HELP_HINT = "可用 /help 查看可用指令。"
+COMMAND_UNKNOWN = f"無法辨識的指令。\n{COMMAND_HELP_HINT}"
+COMMAND_NOT_TEXT = f"只接受文字指令。\n{COMMAND_HELP_HINT}"
+COMMAND_TOO_LONG = f"指令過長（最多 64 字）。\n{COMMAND_HELP_HINT}"
+COMMAND_FAILED = "指令執行時發生錯誤，結果可能未完成；可用 /list 或 /watch 確認目前狀態。"
+COMMAND_NO_ACTIVE = "目前沒有啟用中的監看。"
+COMMAND_NO_PRICE = "尚未查到價格"
+COMMAND_NONE = "—"
+COMMAND_FLAT = "＝"
+COMMAND_TIME_NOTE = "時間為台北時間。"
+COMMAND_DELTA_NOTE = (
+    "較前一輪為目前最低總價與上一輪查價前最低總價的差額；"
+    "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
+)
+COMMAND_SCHEDULER_OFF = "排程未執行，無法排入；請以一般方式啟動服務後再試。"
+COMMAND_SCAN_PAUSED = "該監看已停用，不會查價。"
+COMMAND_SCAN_EXPIRED = "該監看日期已全部過期，不會查價。"
+COMMAND_SCAN_PENDING = "該監看已在查價中，不重複排入。"
+COMMAND_SCAN_DEFERRED = "探索進行中，將於探索結束後執行。"
+COMMAND_SCAN_FOLLOW_UP = "查價完成後會另外回覆結果（服務重啟時可能不會回覆，可用 /watch 查看）。"
+COMMAND_DIGEST_QUEUED = "已排入一則手動摘要，稍後送出；不影響每日排程摘要。"
+COMMAND_NO_EXPLORATION = "目前沒有進行中的探索"
+COMMAND_NEXT_SCAN_NONE = "目前沒有排定的掃描"
+COMMAND_NEXT_SCAN_DEFERRED = "探索進行中，排程掃描順延至探索結束後"
+COMMAND_NEXT_SCAN_MAYBE_DEFERRED = "探索進行中，可能順延"
+COMMAND_SCHEDULER_STOPPED = "排程未執行"
+COMMAND_NEVER_SCANNED = "上次掃描：尚未掃描"
+COMMAND_TOP_TITLE = "已查到價格中最便宜的"
+COMMAND_CARRIED_OVER = "此價格為先前掃描查到，本輪未更新"
+COMMAND_STATUS_LABELS: dict[str, str] = {
+    "active": "啟用中",
+    "paused": "已停用",
+    "stale": "啟用中（連續查價失敗）",
+    "expired": "已過期",
+}
+SCAN_RESULT_LABELS: dict[str, str] = {
+    "ok": "成功",
+    "partial": "部分成功",
+    "failed": "失敗",
+}
+SCAN_FAILURE_REASONS: dict[str, str] = {
+    "global_hourly_limit": "已達全域每小時查詢上限",
+    "breaker_open": "資料源斷路器開啟中，暫停查詢",
+    "blocked": "資料源被擋或格式改變",
+    "error": "資料源錯誤",
+    "no_data": "查無航班",
+    "no_embedded_results": "Google 未在頁面內嵌結果",
+    "currency_mismatch": "來源回傳幣別與監看不一致",
+    "not_found": "監看已不存在",
+    "not_scannable": "監看已停用或不在可查價狀態",
+    "expired": "監看日期已全部過期",
+    "skipped_running": "另一個掃描仍在執行，本次未查價",
+    "crashed": "查價執行時發生錯誤",
+}
+SCAN_FAILURE_FALLBACK = "沒有可用的價格"
+
+
+def command_usage(name: str) -> str:
+    if name in ("watch", "scan", "pause", "resume"):
+        return f"用法：/{name} <編號>（編號可用 /list 查看）"
+    return f"用法：/{name}（不需要參數）"
+
+
+def command_not_found(watch_id: int) -> str:
+    return f"找不到編號 {watch_id} 的監看，可用 /list 查看編號。"
+
+
+def command_backlog(count: int, minutes: int = 10) -> str:
+    return (
+        f"有 {count} 則指令超過 {minutes} 分鐘才收到（可能因服務停機、網路中斷或指令功能關閉），"
+        "已略過、未執行，請重新傳送。"
+    )
+
+
+def command_quota_exhausted(used: int, limit: int) -> str:
+    return f"本小時查詢額度已用完（已用 {used}／上限 {limit}），本次未排入，請稍後再試。"
+
+
+def _short_name(name: str) -> str:
+    return name if len(name) <= COMMAND_NAME_MAX else name[:COMMAND_NAME_MAX] + "…"
+
+
+def command_scan_queued(watch_id: int, name: str) -> str:
+    return f"已排入查價：#{watch_id}「{_short_name(name)}」。"
+
+
+def command_paused(watch_id: int, route: str) -> str:
+    return f"已停用監看 #{watch_id}（{route}），排程不再查價。"
+
+
+def command_resumed(watch_id: int, route: str) -> str:
+    return f"已啟用監看 #{watch_id}（{route}），將依排程查價。"
+
+
+def command_already_paused(watch_id: int) -> str:
+    return f"該監看已是停用（#{watch_id}）。"
+
+
+def command_already_active(watch_id: int) -> str:
+    return f"該監看已是啟用（#{watch_id}）。"
+
+
+def command_resume_expired(watch_id: int) -> str:
+    return f"監看 #{watch_id} 的日期已全部過期，無法啟用；請至網頁修改日期。"
+
+
+def command_pause_expired(watch_id: int) -> str:
+    return f"監看 #{watch_id} 的日期已全部過期，不會查價，不需要停用。"
+
+
+def command_hidden_note(count: int) -> str:
+    return f"另有 {count} 個未列出，完整列表請見網頁。"
+
+
+def command_list_title(count: int) -> str:
+    return f"{COMMAND_PREFIX} 啟用中的監看：{count} 個"
+
+
+def _short_time(moment: datetime | None) -> str:
+    return format_taipei(moment)[5:] if moment else COMMAND_NONE
+
+
+def command_delta_text(direction: str | None, delta_minor: int | None, currency: str) -> str:
+    """List-page trend wording: "↓ TWD 500", "↑ TWD 500", "＝" or "—"."""
+    if direction is None or delta_minor is None:
+        return COMMAND_NONE
+    if direction == "flat":
+        return COMMAND_FLAT
+    arrow = "↓" if direction == "down" else "↑"
+    return f"{arrow} {format_money(abs(delta_minor), currency)}"
+
+
+def _money_with_note(amount_minor: int, currency: str, adults: int, children: int) -> str:
+    return f"{format_money(amount_minor, currency)}{total_price_note(adults, children)}"
+
+
+def fit_reply(
+    head: Sequence[str],
+    items: Sequence[str],
+    footer: Sequence[str],
+    *,
+    max_items: int | None = None,
+    hidden_note: Callable[[int], str] = command_hidden_note,
+    limit: int = COMMAND_REPLY_MAX_CHARS,
+) -> str:
+    """Join head, as many items as fit and footer; never cut silently.
+
+    Dropped items are announced with ``hidden_note``; the footer (disclaimer, total-price
+    note) is always kept, and an over-long head is cut last, from its end.
+    """
+    shown = len(items) if max_items is None else min(len(items), max_items)
+
+    def render(count: int) -> str:
+        body = list(items[:count])
+        if count < len(items):
+            body.append(hidden_note(len(items) - count))
+        return "\n".join([*head, *body, *footer])
+
+    text = render(shown)
+    while len(text) > limit and shown > 0:
+        shown -= 1
+        text = render(shown)
+    if len(text) > limit:
+        tail = "\n".join(["…", *footer])
+        text = text[: max(limit - len(tail) - 1, 0)] + "\n" + tail
+    return text
+
+
+@dataclass(frozen=True)
+class CommandWatchLine:
+    """One watch of ``/list`` (amounts are integer minor units, totals for the party)."""
+
+    watch_id: int
+    name: str
+    origin: str
+    destination: str
+    currency: str
+    adults: int
+    children: int
+    cabin: str
+    amount_minor: int | None
+    depart_date: date | None
+    return_date: date | None
+    delta_direction: str | None
+    delta_minor: int | None
+    last_scanned_at: datetime | None
+    # The lowest price was not re-fetched within ``stale_after_hours``; the watch itself
+    # has had several failed scans in a row (status ``stale``). Same marks as the digest.
+    data_stale: bool = False
+    watch_stale: bool = False
+
+
+def command_list_line(row: CommandWatchLine, stale_after_hours: int = 24) -> str:
+    parts = [
+        f"#{row.watch_id} {_short_name(row.name)}",
+        route_label(row.origin, row.destination),
+        f"{pax_label(row.adults, row.children)}・{cabin_label(row.cabin)}",
+    ]
+    if row.amount_minor is None or row.depart_date is None:
+        parts.append(COMMAND_NO_PRICE)
+        parts.append(f"較前一輪 {COMMAND_NONE}")
+    else:
+        dates = date_range_text(row.depart_date, row.return_date)
+        money = _money_with_note(row.amount_minor, row.currency, row.adults, row.children)
+        parts.append(f"{money} {dates}")
+        if row.data_stale:
+            parts.append(digest_stale_label(stale_after_hours))
+        delta = command_delta_text(row.delta_direction, row.delta_minor, row.currency)
+        parts.append(f"較前一輪 {delta}")
+    parts.append(f"上次查價 {_short_time(row.last_scanned_at)}")
+    if row.watch_stale:
+        parts.append(DIGEST_WATCH_STALE)
+    return "｜".join(parts)
+
+
+def command_list_message(
+    rows: Sequence[CommandWatchLine],
+    paused_ids: Sequence[int],
+    expired_ids: Sequence[int],
+    stale_after_hours: int = 24,
+) -> str:
+    extra = []
+    if paused_ids:
+        extra.append("停用中：" + "、".join(f"#{i}" for i in paused_ids))
+    if expired_ids:
+        extra.append("已過期：" + "、".join(f"#{i}" for i in expired_ids))
+    if not rows:
+        return "\n".join([f"{COMMAND_PREFIX} {COMMAND_NO_ACTIVE}", *extra])
+    footer = [*extra, "", COMMAND_DELTA_NOTE, SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
+    return fit_reply(
+        [command_list_title(len(rows))],
+        [command_list_line(r, stale_after_hours) for r in rows],
+        footer,
+        max_items=COMMAND_LIST_MAX_LINES,
+    )
+
+
+@dataclass(frozen=True)
+class CommandPriceRow:
+    """One of the cheapest date pairs of ``/watch``."""
+
+    depart_date: date
+    return_date: date | None
+    amount_minor: int
+    currency: str
+    carrier: str | None
+    stops: int | None
+    booking_url: str
+    booking_note: str | None
+    fetched_at: datetime | None = None
+    data_stale: bool = False
+
+
+@dataclass(frozen=True)
+class CommandRunSummary:
+    """The latest finished scan run, as counts and labels (no raw error text)."""
+
+    finished_at: datetime | None
+    status: str
+    sampled: int
+    queries_used: int
+    skip_notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CommandWatchDetail:
+    watch_id: int
+    name: str
+    status: str
+    origin: str
+    destination: str
+    trip_type: str
+    dates: str
+    adults: int
+    children: int
+    cabin: str
+    airlines: str
+    dep_window: str
+    max_stops: str
+    budget: str
+    prices: tuple[CommandPriceRow, ...]
+    last_run: CommandRunSummary | None
+    stale_after_hours: int = 24
+
+
+def stops_text(stops: int | None) -> str:
+    if stops == 0:
+        return "直飛"
+    return f"轉機 {stops} 次" if stops else "轉機資訊未提供"
+
+
+def _run_lines(run: CommandRunSummary | None) -> list[str]:
+    if run is None:
+        return [COMMAND_NEVER_SCANNED]
+    when = f"{format_taipei(run.finished_at)}（台北時間）" if run.finished_at else "執行中"
+    label = SCAN_RESULT_LABELS.get(run.status, run.status)
+    lines = [
+        f"上次掃描：{when}｜{label}｜取樣 {run.sampled} 組日期，對外查詢 {run.queries_used} 次"
+    ]
+    if run.skip_notes:
+        lines.append("略過：" + "；".join(run.skip_notes))
+    return lines
+
+
+def command_watch_message(detail: CommandWatchDetail) -> str:
+    trip = TRIP_TYPE_LABELS.get(detail.trip_type, detail.trip_type)
+    status = COMMAND_STATUS_LABELS.get(detail.status, detail.status)
+    head = [
+        f"{COMMAND_PREFIX} 監看 #{detail.watch_id}「{_short_name(detail.name)}」（{status}）",
+        f"路線：{route_label(detail.origin, detail.destination)}｜{trip}",
+        f"日期：{detail.dates}",
+        f"人數：{pax_label(detail.adults, detail.children)}｜艙等：{cabin_label(detail.cabin)}"
+        f"｜航空：{detail.airlines}｜時段：{detail.dep_window}｜轉機：{detail.max_stops}",
+        f"預算門檻：{detail.budget}",
+    ]
+    items: list[str] = []
+    if not detail.prices:
+        head.append(f"{COMMAND_TOP_TITLE}日期：{COMMAND_NO_PRICE}")
+    else:
+        head.append(f"{COMMAND_TOP_TITLE} {len(detail.prices)} 組日期：")
+        for index, row in enumerate(detail.prices, start=1):
+            dates = date_range_text(row.depart_date, row.return_date)
+            money = _money_with_note(row.amount_minor, row.currency, detail.adults, detail.children)
+            entry = (
+                f"{index}. {dates} {money}｜{row.carrier or '航空公司未提供'}"
+                f"｜{stops_text(row.stops)}｜查到 {_short_time(row.fetched_at)}"
+            )
+            if row.data_stale:
+                entry += f"｜{digest_stale_label(detail.stale_after_hours)}"
+            entry += f"\n   查票連結：{row.booking_url}"
+            if row.booking_note:
+                entry += f"\n   （{row.booking_note}）"
+            items.append(entry)
+    footer = ["", *_run_lines(detail.last_run), SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
+    return fit_reply(head, items, footer)
+
+
+@dataclass(frozen=True)
+class CommandScanResult:
+    """``/scan`` follow-up: this run plus the watch's snapshot after it.
+
+    ``run_status`` is None when no run happened (``failure_reason`` says why).
+    """
+
+    watch_id: int
+    name: str
+    currency: str
+    adults: int
+    children: int
+    run_status: str | None
+    failure_reason: str | None
+    amount_minor: int | None
+    depart_date: date | None
+    return_date: date | None
+    delta_direction: str | None
+    delta_minor: int | None
+    sampled: int
+    queries_used: int
+    skip_notes: tuple[str, ...]
+    fetched_at: datetime | None = None
+    data_stale: bool = False
+    # The lowest price was not found by this run (failed / partial run or no run).
+    carried_over: bool = False
+    stale_after_hours: int = 24
+
+
+def command_scan_result_message(result: CommandScanResult) -> str:
+    title = f"{COMMAND_PREFIX} /scan #{result.watch_id}「{_short_name(result.name)}」"
+    lines: list[str] = []
+    if result.run_status is None:
+        lines.append(f"{title} 未查價：{result.failure_reason or SCAN_FAILURE_FALLBACK}")
+    else:
+        label = SCAN_RESULT_LABELS.get(result.run_status, result.run_status)
+        lines.append(f"{title} 查價完成（{label}）")
+        if result.failure_reason:
+            lines.append(f"本輪未查到價格：{result.failure_reason}")
+        lines.append(f"本輪取樣 {result.sampled} 組日期，對外查詢 {result.queries_used} 次")
+        if result.skip_notes:
+            lines.append("略過：" + "；".join(result.skip_notes))
+    if result.amount_minor is not None and result.depart_date is not None:
+        dates = date_range_text(result.depart_date, result.return_date)
+        money = _money_with_note(
+            result.amount_minor, result.currency, result.adults, result.children
+        )
+        delta = command_delta_text(result.delta_direction, result.delta_minor, result.currency)
+        lines.append(f"目前最低價：{money} {dates}（查到 {_short_time(result.fetched_at)}）")
+        if result.carried_over:
+            lines.append(COMMAND_CARRIED_OVER)
+        if result.data_stale:
+            lines.append(digest_stale_label(result.stale_after_hours))
+        lines.append(f"較前一輪：{delta}")
+    else:
+        pax = pax_label(result.adults, result.children)
+        lines.append(f"目前最低價：{COMMAND_NO_PRICE}（{pax}）")
+    return fit_reply(
+        lines, [], ["", COMMAND_DELTA_NOTE, SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
+    )
+
+
+@dataclass(frozen=True)
+class CommandSourceStatus:
+    source: str
+    state_label: str
+    breaker_label: str
+    last_failure_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CommandExplorationStatus:
+    origin: str
+    destination: str
+    trip_type: str
+    year: int
+    month: int
+    trip_days: int | None
+    done: int
+    total: int
+
+
+@dataclass(frozen=True)
+class CommandStatus:
+    now: datetime
+    sources: tuple[CommandSourceStatus, ...]
+    hourly_used: int
+    hourly_limit: int
+    scheduler_running: bool
+    next_scan_at: datetime | None
+    exploration: CommandExplorationStatus | None
+
+
+def _next_scan_text(status: CommandStatus) -> str:
+    if not status.scheduler_running:
+        return COMMAND_SCHEDULER_STOPPED
+    if status.next_scan_at is None:
+        return COMMAND_NEXT_SCAN_NONE
+    when = format_taipei(status.next_scan_at)
+    if status.exploration is not None:
+        if status.next_scan_at <= status.now:
+            return COMMAND_NEXT_SCAN_DEFERRED
+        return f"{when}（台北時間；{COMMAND_NEXT_SCAN_MAYBE_DEFERRED}）"
+    return f"{when}（台北時間）"
+
+
+def _exploration_text(item: CommandExplorationStatus | None) -> str:
+    if item is None:
+        return COMMAND_NO_EXPLORATION
+    trip = TRIP_TYPE_LABELS.get(item.trip_type, item.trip_type)
+    if item.trip_days:
+        trip += f" {item.trip_days} 天"
+    return (
+        f"{route_label(item.origin, item.destination)} {month_label(item.year, item.month)}"
+        f" {trip}，已查 {item.done}／共 {item.total}"
+    )
+
+
+def command_status_message(status: CommandStatus) -> str:
+    lines = [f"{COMMAND_PREFIX} 服務狀態（{format_taipei(status.now)} 台北時間）"]
+    if not status.sources:
+        lines.append(f"資料源：{COMMAND_NONE}")
+    for item in status.sources:
+        text = (
+            f"資料源：{source_label(item.source)} {item.state_label}｜斷路器：{item.breaker_label}"
+        )
+        if item.last_failure_at is not None:
+            text += f"｜最近失敗 {_short_time(item.last_failure_at)}"
+        lines.append(text)
+    lines.append(f"本小時查詢額度：已用 {status.hourly_used}／上限 {status.hourly_limit}")
+    lines.append(f"下次掃描：{_next_scan_text(status)}")
+    lines.append(f"探索：{_exploration_text(status.exploration)}")
+    return fit_reply(lines, [], [])
+
+
+def command_record_text(command_text: str, reply: str) -> str:
+    """``message_text`` of a ``command`` notification row: "指令 → 回覆"."""
+    return f"{command_text} → {reply}"
+
+
+def command_static_texts() -> list[str]:
+    """Wording added by FD-7 commands, for the banned-phrase test."""
+    sample_line = CommandWatchLine(
+        3,
+        "東京",
+        "TPE",
+        "NRT",
+        "TWD",
+        2,
+        1,
+        "business",
+        1_000_000,
+        date(2026, 12, 10),
+        date(2026, 12, 15),
+        "down",
+        50_000,
+        None,
+    )
+    return [
+        COMMAND_HELP,
+        COMMAND_UNKNOWN,
+        COMMAND_NOT_TEXT,
+        COMMAND_TOO_LONG,
+        COMMAND_FAILED,
+        COMMAND_NO_ACTIVE,
+        COMMAND_NO_PRICE,
+        COMMAND_TIME_NOTE,
+        COMMAND_DELTA_NOTE,
+        COMMAND_SCHEDULER_OFF,
+        COMMAND_SCAN_PAUSED,
+        COMMAND_SCAN_EXPIRED,
+        COMMAND_SCAN_PENDING,
+        COMMAND_SCAN_DEFERRED,
+        COMMAND_SCAN_FOLLOW_UP,
+        COMMAND_DIGEST_QUEUED,
+        COMMAND_NO_EXPLORATION,
+        COMMAND_NEXT_SCAN_NONE,
+        COMMAND_NEXT_SCAN_DEFERRED,
+        COMMAND_NEXT_SCAN_MAYBE_DEFERRED,
+        COMMAND_SCHEDULER_STOPPED,
+        COMMAND_NEVER_SCANNED,
+        COMMAND_TOP_TITLE,
+        COMMAND_CARRIED_OVER,
+        *COMMAND_STATUS_LABELS.values(),
+        *SCAN_RESULT_LABELS.values(),
+        *SCAN_FAILURE_REASONS.values(),
+        SCAN_FAILURE_FALLBACK,
+        command_usage("watch"),
+        command_usage("list"),
+        command_not_found(99),
+        command_backlog(2),
+        command_quota_exhausted(60, 60),
+        command_scan_queued(3, "東京"),
+        command_paused(3, "台北 → 東京"),
+        command_resumed(3, "台北 → 東京"),
+        command_already_paused(3),
+        command_already_active(3),
+        command_resume_expired(3),
+        command_pause_expired(3),
+        command_hidden_note(5),
+        command_list_title(2),
+        command_list_line(sample_line),
+        command_list_line(replace(sample_line, data_stale=True, watch_stale=True), 24),
+        stops_text(0),
+        stops_text(1),
+        stops_text(None),
+    ]
+
+
+# ---- data retention and VACUUM (ADR-0002 FD-7 Decisions 7, 8, 10) -------------------
+
+MAINTENANCE_NEVER = "尚未執行"
+MAINTENANCE_TABLE_LABELS: dict[str, str] = {
+    "watch": "監看",
+    "scan_run": "掃描輪",
+    "price_observation": "價格觀測",
+    "notification": "通知",
+    "exploration": "探索",
+}
+MAINTENANCE_RUNNING_DEFERRED = "掃描或探索進行中，清除順延"
+VACUUM_DISABLED = "已關閉每週壓縮"
+
+
+def size_label(size_bytes: int) -> str:
+    """Whole-number friendly size: "512 KB", "12.3 MB", "1.2 GB" (integer math)."""
+    if size_bytes < 1024 * 1024:
+        return f"{(size_bytes + 1023) // 1024} KB"
+    if size_bytes < 1024 * 1024 * 1024:
+        tenths = size_bytes * 10 // (1024 * 1024)
+        return f"{tenths // 10}.{tenths % 10} MB"
+    tenths = size_bytes * 10 // (1024 * 1024 * 1024)
+    return f"{tenths // 10}.{tenths % 10} GB"
+
+
+def retention_note(days: int) -> str:
+    """Detail page: price history only covers the retention period (FR-R7)."""
+    return f"價格紀錄保留最近 {days} 天"
+
+
+def retention_lowered_notice(days: int) -> str:
+    return f"下次清除將刪除超過 {days} 天的資料"
+
+
+def notification_retention_lowered_notice(days: int) -> str:
+    return f"下次清除將刪除超過 {days} 天的通知紀錄"
+
+
+def stats_time_note(at: str) -> str:
+    """Bare time of the cached counts; the page supplies its own label and refresh note."""
+    return f"{at}（台北時間）"
+
+
+def duration_text(milliseconds: int) -> str:
+    tenths = max(milliseconds, 0) // 100
+    return f"{tenths // 10}.{tenths % 10} 秒"
+
+
+def retention_summary(
+    *,
+    runs: int,
+    observations: int,
+    notifications: int,
+    other: int,
+    backup_created: bool,
+    duration_ms: int,
+) -> str:
+    backup = "已先建立備份" if backup_created else "未建立新備份（沒有可刪資料或今日已備份）"
+    return (
+        f"刪除掃描輪 {runs:,}、價格觀測 {observations:,}、通知 {notifications:,}、"
+        f"其他 {other:,}；{backup}；耗時 {duration_text(duration_ms)}"
+    )
+
+
+def retention_backup_failed(reason: str) -> str:
+    return f"備份失敗，本次沒有刪除任何資料，下次清除會重試：{reason}"
+
+
+def retention_failed(reason: str) -> str:
+    return f"清除未完成，下次清除會接續：{reason}"
+
+
+def vacuum_result_text(before: str, after: str) -> str:
+    return f"{before} → {after}"
+
+
+def vacuum_skipped_disk(need: str, free: str) -> str:
+    return f"磁碟可用空間不足，略過壓縮（需要約 {need}，可用 {free}）"
+
+
+def vacuum_failed(reason: str) -> str:
+    return f"壓縮失敗，資料未受影響：{reason}"
+
+
+def retention_static_texts() -> list[str]:
+    """Wording added by FD-7 retention, for the banned-phrase test."""
+    return [
+        MAINTENANCE_NEVER,
+        *MAINTENANCE_TABLE_LABELS.values(),
+        MAINTENANCE_RUNNING_DEFERRED,
+        VACUUM_DISABLED,
+        size_label(12_900_000),
+        retention_note(180),
+        retention_lowered_notice(60),
+        notification_retention_lowered_notice(60),
+        stats_time_note("2026-10-29 12:00"),
+        retention_summary(
+            runs=1, observations=12, notifications=1, other=2, backup_created=True, duration_ms=1234
+        ),
+        retention_summary(
+            runs=0, observations=0, notifications=0, other=0, backup_created=False, duration_ms=5
+        ),
+        retention_backup_failed("OSError"),
+        retention_failed("OperationalError"),
+        vacuum_result_text("12.0 MB", "8.0 MB"),
+        vacuum_skipped_disk("24.0 MB", "10.0 MB"),
+        vacuum_failed("OperationalError"),
+    ]
+
+
 def all_static_texts() -> list[str]:
     """Static wording used in templates (for wording-policy tests)."""
     return [
@@ -429,4 +1106,6 @@ def all_static_texts() -> list[str]:
         "每日摘要",
         *trip_static_texts(),
         *exploration_static_texts(),
+        *command_static_texts(),
+        *retention_static_texts(),
     ]

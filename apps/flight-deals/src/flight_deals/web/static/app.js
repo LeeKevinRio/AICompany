@@ -467,14 +467,32 @@
 
   // ---- settings form -------------------------------------------------------
 
+  function initRetentionHints(form) {
+    form.querySelectorAll("input[data-retention-warn]").forEach(function (input) {
+      const hint = document.getElementById(input.getAttribute("data-retention-warn"));
+      if (!hint) return;
+      const original = Number(input.defaultValue);
+      input.addEventListener("input", function () {
+        const next = Number(input.value);
+        if (input.value.trim() !== "" && Number.isFinite(next) && next > 0 && next < original) {
+          hint.textContent = "下次清除將刪除超過 " + next + " 天的資料";
+        } else {
+          hint.textContent = "";
+        }
+      });
+    });
+  }
+
   function initSettingsForm() {
     const form = document.getElementById("settings-form");
     if (!form) return;
+    initRetentionHints(form);
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
       clearErrors(form);
       const payload = {};
-      form.querySelectorAll("input[name]").forEach(function (input) {
+      Array.prototype.forEach.call(form.elements, function (input) {
+        if (input.tagName !== "INPUT" || !input.name) return;
         payload[input.name] = input.type === "checkbox" ? input.checked : input.value.trim();
       });
       const submit = form.querySelector('button[type="submit"]');
@@ -482,7 +500,8 @@
       const result = await api("POST", "/api/settings", payload);
       setBusy(submit, false);
       if (result.ok) {
-        flash("設定已儲存，下一輪掃描起生效", "ok");
+        const notice = result.data && result.data.notice;
+        flash(notice ? "設定已儲存。" + notice : "設定已儲存，下一輪掃描起生效", "ok");
         return;
       }
       showErrors(form, result.data.errors || { _: firstError(result.data) });

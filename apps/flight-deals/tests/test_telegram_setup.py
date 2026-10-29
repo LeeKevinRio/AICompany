@@ -431,3 +431,35 @@ def test_token_registered_before_client_is_built(
     )
     assert seen and FAKE_TOKEN not in seen[0]
     assert_no_token(console, capsys, caplog)
+
+
+def test_wizard_never_confirms_updates(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:  # ADR-0002 FD-7 Decision 11, C-54
+    console = Console()
+    seen: list[httpx.Request] = []
+    bodies = [
+        {"ok": True, "result": [{"update_id": 17, "callback_query": {"id": "x"}}]},
+        updates((18, 556677, "private", "Kevin")),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=bodies.pop(0))
+
+    assert run(console, FakeTelegram(handler)) == 0
+    assert len(seen) == 2 and all("offset" not in r.url.params for r in seen)
+    assert console.slept >= cli.SETUP_NONEMPTY_GAP_SECONDS
+    assert_no_token(console, capsys, caplog)
+
+
+def test_conflict_names_the_command_poller(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:  # FR-P8, AC-P8, C-54
+    console = Console()
+    telegram = FakeTelegram(lambda r: httpx.Response(409, json={"ok": False}))
+    assert run(console, telegram) != 0
+    assert any(
+        "指令輪詢運作中，請先在設定頁關閉指令功能或停止服務再執行" in line for line in console.err
+    )
+    assert_no_token(console, capsys, caplog)

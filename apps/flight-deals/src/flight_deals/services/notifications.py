@@ -6,11 +6,19 @@ import logging
 from collections.abc import Sequence
 
 from flight_deals.domain.messages import (
+    command_record_text,
     ops_failure_message,
     price_alert_message,
     telegram_test_message,
 )
-from flight_deals.domain.models import DatePair, FlightSearch, PriceKind, Watch, search_for
+from flight_deals.domain.models import (
+    SEND_ONCE_KINDS,
+    DatePair,
+    FlightSearch,
+    PriceKind,
+    Watch,
+    search_for,
+)
 from flight_deals.domain.rules import (
     TriggeredItem,
     digest_key,
@@ -198,6 +206,71 @@ class NotificationService:
         self._deliver(notification_id, 0, text)
         return notification_id
 
+    def send_manual_digest(self, key: str, text: str) -> int | None:
+        """``/digest``: kind ``manual_digest``, delivered once, never retried; it never
+        touches the ``digest:<date>`` key of the scheduled digest (FD-7 Decision 5)."""
+        notification_id = self._repo.insert_notification(
+            watch_id=None,
+            kind="manual_digest",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=key,
+            message_text=text,
+            created_at=self._clock(),
+        )
+        if notification_id is None:
+            return None
+        self._deliver(notification_id, 0, text)
+        return notification_id
+
+    # ---- Telegram commands (FD-7 Decision 2: claim, execute, reply once) ----------
+
+    def claim_command(self, key: str, command_text: str, watch_id: int | None = None) -> int | None:
+        """Record a command before it runs; None means this update was already handled."""
+        return self._repo.insert_notification(
+            watch_id=watch_id,
+            kind="command",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=key,
+            message_text=self._redact(command_text),
+            created_at=self._clock(),
+        )
+
+    def finish_command(self, notification_id: int, command_text: str, reply: str) -> bool:
+        """Store "command -> reply" and send the reply once (a failure is only recorded)."""
+        text = self._redact(reply)
+        self._repo.update_notification_text(
+            notification_id, command_record_text(self._redact(command_text), text)
+        )
+        return self._deliver(notification_id, 0, text)
+
+    def send_command_message(
+        self, key: str, label: str, text: str, watch_id: int | None = None
+    ) -> int | None:
+        """A bot message not answering one update directly (backlog note, ``/scan``
+        result); ``label`` says what it relates to. None when ``key`` already exists."""
+        reply = self._redact(text)
+        notification_id = self._repo.insert_notification(
+            watch_id=watch_id,
+            kind="command",
+            rule=None,
+            price_kind=None,
+            observation_id=None,
+            channel=self._notifier.channel,
+            dedupe_key=key,
+            message_text=command_record_text(self._redact(label), reply),
+            created_at=self._clock(),
+        )
+        if notification_id is None:
+            return None
+        self._deliver(notification_id, 0, reply)
+        return notification_id
+
     def retry_record(self, record: NotificationRecord) -> bool:
         """Re-send one pending/failed notification if it is still eligible."""
         if not self._retry_allowed(record):
@@ -214,6 +287,8 @@ class NotificationService:
 
     def _retry_allowed(self, record: NotificationRecord) -> bool:
         if record.status not in ("pending", "failed") or record.attempts >= self._max_attempts:
+            return False
+        if record.kind in SEND_ONCE_KINDS:
             return False
         if record.kind == "daily_digest":
             # A digest is only worth sending on its own Asia/Taipei day (Decision 3).

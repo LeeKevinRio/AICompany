@@ -13,11 +13,15 @@ from flight_deals.domain.validation import (
     DIGEST_ENABLED_KEY,
     DIGEST_SETTING_KEYS,
     DIGEST_TIME_KEY,
+    FLAG_SETTING_KEYS,
+    TELEGRAM_COMMANDS_KEY,
+    VACUUM_ENABLED_KEY,
     SettingRule,
     parse_digest_enabled,
     parse_digest_time,
     setting_rules,
     validate_digest_settings,
+    validate_flag_settings,
     validate_settings,
 )
 from flight_deals.ports import Clock
@@ -34,6 +38,12 @@ class EffectiveSettings:
     digest_enabled: bool = True
     digest_time: str = "08:00"
     exploration_reserve_for_scans: int = 12
+    # Retention and Telegram commands (ADR-0002 FD-7 Decisions 7, 8, 10).
+    retention_days: int = 180
+    notification_retention_days: int = 365
+    retention_keep_runs: int = 10
+    telegram_commands_enabled: bool = True
+    vacuum_enabled: bool = True
 
     @property
     def digest_hour_minute(self) -> tuple[int, int]:
@@ -49,8 +59,17 @@ SETTING_KEYS = (
     "stale_after_hours",
     "global_hourly_query_limit",
     "exploration_reserve_for_scans",
+    "retention_days",
+    "notification_retention_days",
+    "retention_keep_runs",
 )
-__all__ = ["DIGEST_SETTING_KEYS", "SETTING_KEYS", "EffectiveSettings", "SettingsService"]
+__all__ = [
+    "DIGEST_SETTING_KEYS",
+    "FLAG_SETTING_KEYS",
+    "SETTING_KEYS",
+    "EffectiveSettings",
+    "SettingsService",
+]
 
 
 class SettingsService:
@@ -90,10 +109,17 @@ class SettingsService:
             values[key] = value if rule.minimum <= value <= rule.maximum else default
         enabled = parse_digest_enabled(stored.get(DIGEST_ENABLED_KEY))
         digest_time = parse_digest_time(stored.get(DIGEST_TIME_KEY))
+        commands = parse_digest_enabled(stored.get(TELEGRAM_COMMANDS_KEY))
+        vacuum = parse_digest_enabled(stored.get(VACUUM_ENABLED_KEY))
+        defaults = self._defaults
         return EffectiveSettings(
             **values,
-            digest_enabled=self._defaults.digest_enabled if enabled is None else enabled,
-            digest_time=digest_time or self._defaults.digest_time,
+            digest_enabled=defaults.digest_enabled if enabled is None else enabled,
+            digest_time=digest_time or defaults.digest_time,
+            telegram_commands_enabled=(
+                defaults.telegram_commands_enabled if commands is None else commands
+            ),
+            vacuum_enabled=defaults.vacuum_enabled if vacuum is None else vacuum,
         )
 
     def update(self, raw: Mapping[str, object]) -> dict[str, str]:
@@ -106,10 +132,14 @@ class SettingsService:
             {k: v for k, v in raw.items() if k in DIGEST_SETTING_KEYS}
         )
         errors.update(digest_errors)
+        flag_values, flag_errors = validate_flag_settings(
+            {k: v for k, v in raw.items() if k in FLAG_SETTING_KEYS}
+        )
+        errors.update(flag_errors)
         if errors:
             return errors
         before = self.current()
-        stored = {k: str(v) for k, v in values.items()} | digest_values
+        stored = {k: str(v) for k, v in values.items()} | digest_values | flag_values
         if stored:
             self._repo.save_settings(stored, self._clock())
         after = self.current()

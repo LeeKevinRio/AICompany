@@ -13,6 +13,13 @@ Explorations (ADR-0002 FD-6 Decision 3) run as one-off ``explore:<id>`` date job
 that same worker, so scans and "scan now" requests due meanwhile wait in the executor
 queue and run afterwards (deferred, never dropped). Explorations cut off by a stop are
 marked interrupted at start, before any job is queued; an hourly job purges old ones.
+
+Telegram commands (ADR-0002 FD-7 Decisions 4, 5) add one-off ``cmdscan:<id>`` jobs (a
+manual scan followed by the command's result reply) and ``manual-digest:<update_id>``
+jobs; both run on the same single worker. The poller itself is a separate thread owned
+by ``services.commands`` and is never a job. The daily retention purge (Decision 7) is
+called like the digest: a cron job ``maintenance``, an hourly ``maintenance-check`` and a
+startup ``maintenance-catchup`` queued after the digest catch-up; it is idempotent.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from flight_deals.scheduler.lock import SchedulerLock
 from flight_deals.services import DIGEST_ZONE, Clock, Services, Watch
+from flight_deals.services.scan import ScanOutcome
 from flight_deals.services.settings import EffectiveSettings
 
 log = logging.getLogger(__name__)
@@ -46,11 +54,19 @@ DIGEST_CHECK_JOB_ID = "digest-check"
 DIGEST_RECHECK_JOB_ID = "digest-recheck"
 EXPLORE_PREFIX = "explore:"
 PURGE_JOB_ID = "exploration-purge"
+CMDSCAN_PREFIX = "cmdscan:"
+MANUAL_DIGEST_PREFIX = "manual-digest:"
+MAINTENANCE_JOB_ID = "maintenance"
+MAINTENANCE_CHECK_JOB_ID = "maintenance-check"
+MAINTENANCE_CATCHUP_JOB_ID = "maintenance-catchup"
+MAINTENANCE_JOB_IDS = frozenset(
+    {MAINTENANCE_JOB_ID, MAINTENANCE_CHECK_JOB_ID, MAINTENANCE_CATCHUP_JOB_ID}
+)
 DIGEST_JOB_IDS = frozenset(
     {DIGEST_JOB_ID, DIGEST_CATCHUP_JOB_ID, DIGEST_CHECK_JOB_ID, DIGEST_RECHECK_JOB_ID}
 )
 # Jobs that are not watch scans; the health page's "next scan" ignores them.
-NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | {SWEEP_JOB_ID, PURGE_JOB_ID}
+NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | MAINTENANCE_JOB_IDS | {SWEEP_JOB_ID, PURGE_JOB_ID}
 JOB_DEFAULTS: dict[str, Any] = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600}
 WORKER_THREADS = 1
 
@@ -142,6 +158,7 @@ class ScanScheduler:
                 replace_existing=True,
             )
             self.schedule_digest(startup=True)
+            self.schedule_maintenance(startup=True)
         except BaseException:
             self.shutdown()
             raise
@@ -161,7 +178,9 @@ class ScanScheduler:
         return self._services.settings.current()
 
     def _remove_watch_jobs(self, watch_id: int, *, include_manual: bool = False) -> None:
-        prefixes = [WATCH_PREFIX, STARTUP_PREFIX] + ([MANUAL_PREFIX] if include_manual else [])
+        prefixes = [WATCH_PREFIX, STARTUP_PREFIX]
+        if include_manual:
+            prefixes += [MANUAL_PREFIX, CMDSCAN_PREFIX]
         for prefix in prefixes:
             job = self._scheduler.get_job(f"{prefix}{watch_id}")
             if job is not None:
@@ -221,6 +240,8 @@ class ScanScheduler:
 
     def on_watch_deleted(self, watch_id: int) -> None:
         self._remove_watch_jobs(watch_id, include_manual=True)
+        if self._services.commands is not None:
+            self._services.commands.forget_scan(watch_id)
 
     def on_settings_changed(self, before: EffectiveSettings, after: EffectiveSettings) -> None:
         """Runs on a web request thread: only (re)schedules jobs, never sends (C-32)."""
@@ -228,6 +249,8 @@ class ScanScheduler:
             self.sync_all()
         if (before.digest_enabled, before.digest_time) != (after.digest_enabled, after.digest_time):
             self.schedule_digest(startup=False)
+        if before.digest_time != after.digest_time:
+            self.schedule_maintenance(startup=False)
 
     # ---- daily digest --------------------------------------------------------
 
@@ -264,6 +287,40 @@ class ScanScheduler:
             self._digest, trigger="date", run_date=run_at, id=job_id, replace_existing=True
         )
 
+    # ---- retention purge (FD-7 Decision 7) ------------------------------------
+
+    def schedule_maintenance(self, *, startup: bool) -> None:
+        """(Re)build the daily purge cron job; at startup also the hourly check and one
+        catch-up queued right after the digest catch-up."""
+        retention = self._services.retention
+        if retention is None:
+            return
+        hour, minute = retention.daily_time(self._settings())
+        self._scheduler.add_job(
+            self._maintenance,
+            trigger=CronTrigger(hour=hour, minute=minute, timezone=DIGEST_ZONE),
+            id=MAINTENANCE_JOB_ID,
+            replace_existing=True,
+        )
+        if not startup:
+            return
+        self._scheduler.add_job(
+            self._maintenance,
+            trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
+            id=MAINTENANCE_CHECK_JOB_ID,
+            replace_existing=True,
+        )
+        catchup = self._scheduler.get_job(DIGEST_CATCHUP_JOB_ID)
+        after = _job_time(catchup) if catchup is not None else None
+        run_at = (after or self._clock()) + timedelta(seconds=1)
+        self._scheduler.add_job(
+            self._maintenance,
+            trigger="date",
+            run_date=run_at,
+            id=MAINTENANCE_CATCHUP_JOB_ID,
+            replace_existing=True,
+        )
+
     def trigger_now(self, watch_id: int) -> None:
         self._scheduler.add_job(
             self._run,
@@ -271,6 +328,35 @@ class ScanScheduler:
             run_date=self._clock(),
             args=[watch_id, "manual"],
             id=f"{MANUAL_PREFIX}{watch_id}",
+            replace_existing=True,
+        )
+
+    def trigger_command_scan(self, watch_id: int) -> None:
+        """``/scan``: one manual scan, then its result reply (FD-7 Decision 4)."""
+        self._scheduler.add_job(
+            self._command_scan,
+            trigger="date",
+            run_date=self._clock(),
+            args=[watch_id],
+            id=f"{CMDSCAN_PREFIX}{watch_id}",
+            replace_existing=True,
+        )
+
+    def scan_pending(self, watch_id: int) -> bool:
+        """A "scan now" (web) or ``/scan`` job of this watch is still queued."""
+        return any(
+            self._scheduler.get_job(f"{prefix}{watch_id}") is not None
+            for prefix in (MANUAL_PREFIX, CMDSCAN_PREFIX)
+        )
+
+    def schedule_manual_digest(self, update_id: int, key: str) -> None:
+        """``/digest``: one digest under ``key`` on the worker (FD-7 Decision 5)."""
+        self._scheduler.add_job(
+            self._manual_digest,
+            trigger="date",
+            run_date=self._clock(),
+            args=[key],
+            id=f"{MANUAL_DIGEST_PREFIX}{update_id}",
             replace_existing=True,
         )
 
@@ -292,7 +378,7 @@ class ScanScheduler:
             when
             for job in self._scheduler.get_jobs()
             if job.id not in NON_SCAN_JOB_IDS
-            and not job.id.startswith(EXPLORE_PREFIX)
+            and not job.id.startswith((EXPLORE_PREFIX, MANUAL_DIGEST_PREFIX))
             and (when := _job_time(job)) is not None
         ]
         return min(times) if times else None
@@ -301,6 +387,27 @@ class ScanScheduler:
 
     def _run(self, watch_id: int, trigger: str) -> None:
         self._services.scan.scan_watch(watch_id, trigger)
+
+    def _command_scan(self, watch_id: int) -> None:
+        # Stored as a manual scan: scan_run.trigger keeps its three values (Decision 4).
+        # Even if the scan raises, the pending /scan is cleared and answered (finally).
+        outcome = ScanOutcome(watch_id, "crashed")
+        try:
+            outcome = self._services.scan.scan_watch(watch_id, "manual")
+        finally:
+            if self._services.commands is not None:
+                self._services.commands.on_scan_finished(watch_id, outcome)
+
+    def _manual_digest(self, key: str) -> None:
+        outcome = self._services.digest.send_manual(self._clock(), key)
+        log.info("manual digest: %s", outcome)
+
+    def _maintenance(self) -> None:
+        retention = self._services.retention
+        if retention is None:
+            return
+        outcome = retention.maintain(self._clock())
+        log.debug("maintenance check: %s", outcome)
 
     def _explore(self, exploration_id: int) -> None:
         outcome = self._services.exploration.run(exploration_id)

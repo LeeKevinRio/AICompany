@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 from flight_deals.domain.models import FlightSearch, PriceKind, PriceQuote, QueryStatus
 
@@ -102,3 +102,43 @@ class BookingLinkBuilder(Protocol):
     """
 
     def url(self, search: FlightSearch) -> str | None: ...
+
+
+# ---- Telegram command inbox (ADR-0002 FD-7 Decision 1) -------------------------------
+
+InboundKind = Literal["message", "edited_message", "other"]
+InboxErrorKind = Literal[
+    "unauthorized", "conflict", "rate_limited", "network", "http", "invalid_response"
+]
+
+
+@dataclass(frozen=True)
+class InboundUpdate:
+    """One inbound bot update, reduced to what command handling needs.
+
+    ``text`` is None for non-text messages (stickers, photos, ...); ``chat_id`` and
+    ``chat_type`` are None when the update carries no chat; ``sent_at`` is the message
+    date (UTC) when Telegram supplied one.
+    """
+
+    update_id: int
+    kind: InboundKind
+    chat_id: int | None
+    chat_type: str | None
+    text: str | None
+    sent_at: datetime | None
+
+
+@dataclass(frozen=True)
+class InboxResult:
+    ok: bool
+    updates: tuple[InboundUpdate, ...] = ()
+    error: str | None = None
+    error_kind: InboxErrorKind | None = None
+    retry_after_seconds: int | None = None
+
+
+class TelegramInbox(Protocol):
+    """Long-poll reader of the bot's messages. Never raises; errors are redacted."""
+
+    def get_updates(self, offset: int | None, long_poll_seconds: int) -> InboxResult: ...

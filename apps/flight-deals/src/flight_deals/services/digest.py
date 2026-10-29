@@ -1,8 +1,9 @@
 """Daily digest (ADR-0002 FD-4 Decisions 1, 3, 5, 6; C-32, C-34).
 
-``DigestService.send_if_due`` is the only entry point that sends a digest. It is
-idempotent and is called from scheduler jobs only (cron, startup catch-up, hourly check,
-one-off after a settings change); web request threads never call it.
+``DigestService.send_if_due`` is the only entry point that sends the daily digest. It
+is idempotent and is called from scheduler jobs only (cron, startup catch-up, hourly
+check, one-off after a settings change); web request threads never call it. The
+``/digest`` command uses ``send_manual`` from its own one-off job (FD-7 Decision 5).
 """
 
 from __future__ import annotations
@@ -88,6 +89,20 @@ class DigestService:
         record = self._repo.get_notification(notification_id)
         status = record.status if record else "failed"
         log.info("daily digest %s: %s", key, status)
+        if status == "sent":
+            return "sent"
+        return "suppressed" if status == "suppressed" else "failed"
+
+    def send_manual(self, now: datetime, key: str) -> DigestOutcome:
+        """``/digest`` (FD-7 Decision 5): same text as the daily digest, recorded as
+        ``manual_digest`` under ``key``; no daily limit, no retry, and the scheduled
+        ``digest:<date>`` record is never read or written here."""
+        text = self.compose(now)
+        notification_id = self._notifications.send_manual_digest(key, text)
+        if notification_id is None:
+            return "handled"
+        record = self._repo.get_notification(notification_id)
+        status = record.status if record else "failed"
         if status == "sent":
             return "sent"
         return "suppressed" if status == "suppressed" else "failed"

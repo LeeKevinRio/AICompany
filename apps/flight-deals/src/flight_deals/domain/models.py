@@ -13,7 +13,11 @@ PriceKind = Literal["live", "cached"]
 AsOfBasis = Literal["source_reported", "fetch_time"]
 QueryStatus = Literal["ok", "no_data", "blocked", "error"]
 AlertReason = Literal["below_budget", "drop_pct", "new_low"]
-NotificationKind = Literal["price_alert", "ops_source_failure", "test", "daily_digest"]
+NotificationKind = Literal[
+    "price_alert", "ops_source_failure", "test", "daily_digest", "command", "manual_digest"
+]
+# Kinds that are delivered once and never retried (ADR-0002 FD-7 Decisions 5 and 6).
+SEND_ONCE_KINDS: frozenset[str] = frozenset({"command", "manual_digest"})
 # Cabin values are snake_case in the domain; only sources/google_flights.py maps them to
 # the price source's own strings (ADR-0002 FD-5 Decision 3).
 Cabin = Literal["economy", "premium_economy", "business", "first"]

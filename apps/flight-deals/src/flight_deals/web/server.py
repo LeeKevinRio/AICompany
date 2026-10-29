@@ -23,7 +23,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from flight_deals.services import EXPLORATION_NOT_FOUND, Services
+from flight_deals.services import EXPLORATION_NOT_FOUND, Services, retention_notice
 from flight_deals.services import airports as airport_lookup
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -290,10 +290,16 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.post("/api/settings")
     def api_update_settings(payload: JsonBody) -> JSONResponse:
+        before = services.settings.current()
         errors = services.settings.update(payload)
         if errors:
             return errors_response(errors)
-        return JSONResponse({"ok": True})
+        body: dict[str, Any] = {"ok": True}
+        # Lowering a retention period deletes nothing now; say what the next purge does.
+        notice = retention_notice(before, services.settings.current())
+        if notice:
+            body["notice"] = notice
+        return JSONResponse(body)
 
     @app.post("/api/telegram/test")
     def api_telegram_test() -> JSONResponse:

@@ -568,6 +568,10 @@ def setting_rules(min_scan_interval_minutes: int) -> dict[str, SettingRule]:
         "stale_after_hours": SettingRule("價格過期標示（小時）", 1, 720),
         "global_hourly_query_limit": SettingRule("全域每小時查詢上限", 1, 1000),
         "exploration_reserve_for_scans": SettingRule("探索須保留給掃描的每小時額度", 0, 1000),
+        # Retention (ADR-0002 FD-7 Decision 7).
+        "retention_days": SettingRule("價格與掃描紀錄保留天數", 30, 3650),
+        "notification_retention_days": SettingRule("通知紀錄保留天數", 30, 3650),
+        "retention_keep_runs": SettingRule("每個監看至少保留的最近掃描輪數", 3, 100),
     }
 
 
@@ -620,18 +624,45 @@ def validate_digest_settings(raw: Mapping[str, object]) -> tuple[dict[str, str],
     return values, errors
 
 
+# On/off switches added by FD-7 (Decisions 7, 8, 10): same strict flag rules as
+# ``digest_enabled``; an invalid stored value falls back to the default.
+TELEGRAM_COMMANDS_KEY = "telegram_commands_enabled"
+VACUUM_ENABLED_KEY = "vacuum_enabled"
+FLAG_SETTING_LABELS: dict[str, str] = {
+    TELEGRAM_COMMANDS_KEY: "Telegram 指令功能開關",
+    VACUUM_ENABLED_KEY: "每週壓縮資料庫開關",
+}
+FLAG_SETTING_KEYS = tuple(FLAG_SETTING_LABELS)
+
+
+def validate_flag_settings(raw: Mapping[str, object]) -> tuple[dict[str, str], dict[str, str]]:
+    """Validate the on/off keys present in ``raw``; stored form is "1" / "0"."""
+    values: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    for key, label in FLAG_SETTING_LABELS.items():
+        if key not in raw:
+            continue
+        parsed = parse_digest_enabled(raw[key])
+        if parsed is None:
+            errors[key] = f"{label}只能是開啟或關閉"
+        else:
+            values[key] = "1" if parsed else "0"
+    return values, errors
+
+
 def validate_settings(
     raw: Mapping[str, object], rules: Mapping[str, SettingRule]
 ) -> tuple[dict[str, int], dict[str, str]]:
     """Validate a partial integer-settings update. Unknown keys are rejected.
 
-    Digest keys are not integer settings; they are accepted here (not flagged as
-    unknown) and validated by ``validate_digest_settings``.
+    Digest keys and on/off keys are not integer settings; they are accepted here (not
+    flagged as unknown) and validated by ``validate_digest_settings`` /
+    ``validate_flag_settings``.
     """
     values: dict[str, int] = {}
     errors: dict[str, str] = {}
     for key in raw:
-        if key not in rules and key not in DIGEST_SETTING_KEYS:
+        if key not in rules and key not in DIGEST_SETTING_KEYS and key not in FLAG_SETTING_KEYS:
             errors[key] = "不支援的設定項目"
     for key, rule in rules.items():
         if key not in raw:

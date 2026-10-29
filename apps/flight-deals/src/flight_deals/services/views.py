@@ -16,6 +16,8 @@ from flight_deals.domain.dates import first_pair
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
     DISCLAIMER,
+    MAINTENANCE_NEVER,
+    MAINTENANCE_TABLE_LABELS,
     PRICE_KIND_LABELS,
     SAMPLED_ONLY_NOTE,
     STATUS_LABELS,
@@ -23,7 +25,16 @@ from flight_deals.domain.messages import (
     date_range_text,
     no_embedded_streak_label,
     reason_label,
+    retention_backup_failed,
+    retention_failed,
+    retention_note,
+    retention_summary,
+    size_label,
     source_label,
+    stats_time_note,
+    vacuum_failed,
+    vacuum_result_text,
+    vacuum_skipped_disk,
 )
 from flight_deals.domain.models import CABINS, DatePair, Watch, WatchSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, to_utc_iso, weekday_label
@@ -40,7 +51,13 @@ from flight_deals.domain.trip_labels import (
 from flight_deals.ports import AutostartProbe, BookingLinkBuilder, Clock
 from flight_deals.services.health import HealthService, describe_source, no_embedded_streak
 from flight_deals.services.notifications import safe_booking_url
-from flight_deals.services.price_snapshot import PriceDelta, Snapshot, latest_per_pair
+from flight_deals.services.price_snapshot import (
+    PriceDelta,
+    Snapshot,
+    cheapest_pairs,
+    latest_per_pair,
+)
+from flight_deals.services.retention import RetentionService
 from flight_deals.services.settings import SETTING_KEYS, SettingsService
 from flight_deals.storage.repository import ObservationRecord, Repository, ScanRunRecord
 
@@ -80,6 +97,30 @@ NOTIFICATION_KIND_LABELS = {
     "ops_source_failure": "資料源異常告警",
     "test": "測試訊息",
     "daily_digest": "每日摘要",
+    "command": "指令",
+    "manual_digest": "手動摘要",
+}
+# Badge colour of each command poller state key (health-* classes in app.css).
+COMMAND_STATE_TONES = {
+    "unconfigured": "unknown",
+    "group_chat": "unknown",
+    "invalid_chat": "unknown",
+    "unauthorized": "down",
+    "not_started": "unknown",
+    "disabled": "unknown",
+    "running": "ok",
+    "running_failing": "warn",
+}
+# Command poller row of the health page (FD-7 Decision 10).
+COMMAND_STATE_LABELS = {
+    "unconfigured": "未設定 Telegram",
+    "group_chat": "不支援群組：指令只接受與 bot 的一對一私訊（chat id 為負數）",
+    "invalid_chat": "chat id 格式不正確，指令功能無作用",
+    "unauthorized": "已停止（bot token 無效，更新 token 後請重新啟動服務）",
+    "not_started": "未執行（此實例沒有持有排程鎖）",
+    "disabled": "已關閉",
+    "running": "運作中",
+    "running_failing": "運作中（最近連線失敗，重試中）",
 }
 # New-watch form defaults come from the domain model, never from literals here (C-40).
 _SPEC_DEFAULTS: dict[str, Any] = {
@@ -140,6 +181,8 @@ BREAKER_LABELS = {
 class ViewHooks:
     next_run_time: Callable[[], datetime | None] = lambda: None
     scheduler_running: Callable[[], bool] = lambda: False
+    # Telegram command poller state (FD-7 Decision 10); None hides the row.
+    command_status: Callable[[], Any] = lambda: None
 
 
 def _count(value: Any) -> int:
@@ -243,6 +286,8 @@ class ViewService:
         self._breaker_threshold = breaker_threshold
         self._clock = clock
         self.hooks = ViewHooks()
+        # Set by app.py; None leaves the health page's data maintenance block out.
+        self.retention: RetentionService | None = None
 
     # ---- shared page context -------------------------------------------------
 
@@ -476,7 +521,10 @@ class ViewService:
 
         current_obs = self._repo.observations_for_watch(watch.id, revision=watch.revision)
         latest = latest_per_pair(current_obs)
-        priced = sorted(latest.values(), key=lambda o: (o.amount_minor, o.depart_date))
+        # Live, watch currency, not departed: the same ranking as /watch (FD-7 R1).
+        priced = cheapest_pairs(
+            current_obs, revision=watch.revision, currency=spec.currency, today=taipei_date(now)
+        )
         top = [self._price_row(watch, o, now, stale_hours) for o in priced[:TOP_N]]
 
         runs = self._repo.scan_runs_for_watch(watch.id, limit=TREND_POINTS)
@@ -532,6 +580,7 @@ class ViewService:
             "runs": [self._run_summary(r) for r in runs[:10]],
             "stale_hours": stale_hours,
             "disclaimer": DISCLAIMER,
+            "retention_note": retention_note(settings.retention_days),
         }
 
     def _trend(
@@ -839,6 +888,111 @@ class ViewService:
             "hourly_limit": current.global_hourly_query_limit,
             "no_embedded_summary": self._health.no_embedded_summary(now),
             "active_exploration": active_exploration_view(self._repo),
+            "telegram_commands_enabled": current.telegram_commands_enabled,
+            "vacuum_enabled": current.vacuum_enabled,
+            "command_status": self.command_status_view(current.telegram_commands_enabled),
+            "maintenance": self.maintenance_view(now),
+        }
+
+    def maintenance_view(self, now: datetime) -> dict[str, Any] | None:
+        """Health-page data maintenance block (FR-H4); counts are cached (FR-H6)."""
+        retention = self.retention
+        if retention is None:
+            return None
+        settings = self._settings.current()
+        stats = retention.stats(now)
+        last = retention.last_results()
+        result = last["result"] or {}
+        summary = None
+        status = result.get("status")
+        if status == "done":
+            summary = retention_summary(
+                runs=int(result.get("runs", 0)),
+                observations=int(result.get("observations", 0)),
+                notifications=int(result.get("notifications", 0)),
+                other=int(result.get("other", 0)),
+                backup_created=bool(result.get("backup_created")),
+                duration_ms=int(result.get("duration_ms", 0)),
+            )
+        elif status == "backup_failed":
+            summary = retention_backup_failed(str(result.get("error") or "未知錯誤"))
+        elif status == "failed":
+            summary = retention_failed(str(result.get("error") or "未知錯誤"))
+        backup_label = MAINTENANCE_NEVER
+        if last["backup"]:
+            when = format_taipei(last["backup_at"]) if last["backup_at"] else ""
+            backup_label = f"{when}（{last['backup']}）".strip()
+        return {
+            "db_size_label": size_label(stats.sizes.main_bytes),
+            "wal_size_label": size_label(stats.sizes.wal_bytes),
+            "total_size_label": size_label(stats.sizes.total_bytes),
+            "table_counts": [
+                {"table": MAINTENANCE_TABLE_LABELS.get(name, name), "count": count}
+                for name, count in stats.counts
+            ],
+            "stats_at_label": stats_time_note(format_taipei(stats.at)),
+            "last_run_label": format_taipei(last["run_at"])
+            if last["run_at"]
+            else MAINTENANCE_NEVER,
+            "last_run_summary": summary,
+            "last_backup_label": backup_label,
+            "last_vacuum_label": self._vacuum_label(last),
+            "retention_days": settings.retention_days,
+            "notification_retention_days": settings.notification_retention_days,
+            "keep_runs": settings.retention_keep_runs,
+        }
+
+    @staticmethod
+    def _vacuum_label(last: Mapping[str, Any]) -> str:
+        vacuum = last.get("vacuum") or {}
+        done_at = last.get("vacuum_at")
+        label = MAINTENANCE_NEVER
+        if done_at is not None:
+            label = format_taipei(done_at)
+            if vacuum.get("status") == "done":
+                sizes = vacuum_result_text(
+                    size_label(int(vacuum.get("before", 0))),
+                    size_label(int(vacuum.get("after", 0))),
+                )
+                label = f"{label}（{sizes}）"
+        status = vacuum.get("status")
+        if status == "skipped":
+            note = vacuum_skipped_disk(
+                size_label(int(vacuum.get("need", 0))), size_label(int(vacuum.get("free", 0)))
+            )
+            label = f"{label}；最近一次：{note}"
+        elif status == "failed":
+            label = f"{label}；最近一次：{vacuum_failed(str(vacuum.get('error') or '未知錯誤'))}"
+        return label
+
+    def command_status_view(self, commands_enabled: bool) -> dict[str, Any] | None:
+        """Health-page row of the Telegram command poller; None hides it."""
+        status = self.hooks.command_status()
+        if status is None:
+            return None
+        if status.unavailable is not None:
+            state, key = "unconfigured", status.unavailable
+        elif status.unauthorized:
+            state, key = "stopped", "unauthorized"
+        elif not status.started:
+            state, key = "stopped", "not_started"
+        elif not commands_enabled:
+            state, key = "disabled", "disabled"
+        else:
+            state, key = "running", "running_failing" if status.failing else "running"
+        error_label = None
+        if status.last_error_at is not None:
+            error_label = (
+                f"{format_taipei(status.last_error_at)}：{status.last_error or '未知錯誤'}"
+            )
+        return {
+            "state": state,
+            "state_key": key,
+            "tone": COMMAND_STATE_TONES[key],
+            "label": COMMAND_STATE_LABELS[key],
+            "last_command_at_label": format_taipei(status.last_command_at) or None,
+            "last_error_label": error_label,
+            "ignored_count": status.ignored_count,
         }
 
     def _autostart_view(self) -> dict[str, bool] | None:

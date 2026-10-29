@@ -50,6 +50,8 @@ EXIT_CONFIG = 2
 SETUP_WAIT_SECONDS = 60.0
 SETUP_LONG_POLL_SECONDS = 10
 SETUP_MIN_POLL_GAP_SECONDS = 1.0
+# Unconfirmed updates come back at once on every call (offset is never sent).
+SETUP_NONEMPTY_GAP_SECONDS = 2.0
 
 
 def build_uvicorn_kwargs(port: int) -> dict[str, Any]:
@@ -289,23 +291,26 @@ def _telegram_setup(
 
 
 def _poll_for_chats(io: WizardIO, client: Any) -> list[Any] | None:
-    """Candidates newest first; [] on timeout; None after an API error (printed)."""
+    """Candidates newest first; [] on timeout; None after an API error (printed).
+
+    The wizard never confirms updates (offset is always None, ADR-0002 FD-7 Decision 11),
+    so commands the service has not handled yet are not swallowed.
+    """
     deadline = io.monotonic() + SETUP_WAIT_SECONDS
-    offset: int | None = None
     while True:
         remaining = deadline - io.monotonic()
         if remaining < 1:
             return []
         started = io.monotonic()
-        result = client.get_updates(offset, int(min(remaining, SETUP_LONG_POLL_SECONDS)))
+        result = client.get_updates(None, int(min(remaining, SETUP_LONG_POLL_SECONDS)))
         if not result.ok:
             io.err(result.error or "Telegram 回應錯誤")
             return None
         if result.chats:
             return sorted(result.chats, key=lambda c: c.update_id, reverse=True)
         if result.next_offset is not None:
-            offset = result.next_offset
-        if io.monotonic() - started < SETUP_MIN_POLL_GAP_SECONDS:
+            io.sleep(SETUP_NONEMPTY_GAP_SECONDS)
+        elif io.monotonic() - started < SETUP_MIN_POLL_GAP_SECONDS:
             io.sleep(SETUP_MIN_POLL_GAP_SECONDS)
 
 

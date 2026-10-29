@@ -63,6 +63,22 @@ def snapshot_min(observations: Iterable[ObservationRecord]) -> ObservationRecord
     )
 
 
+def cheapest_pairs(
+    observations: Iterable[ObservationRecord], *, revision: int, currency: str, today: date
+) -> list[ObservationRecord]:
+    """Newest observation per pair among the snapshot-eligible ones, cheapest first.
+
+    The detail page's top list and ``/watch`` both use this, so neither ever shows a
+    departed date, a cached price or another currency (FD-7 risk review R1).
+    """
+    usable = eligible(observations, revision=revision, currency=currency, today=today)
+    # Same tie-break order as ``snapshot_min`` so both agree on the cheapest pair.
+    return sorted(
+        latest_per_pair(usable).values(),
+        key=lambda o: (o.amount_minor, o.depart_date, o.return_date or o.depart_date),
+    )
+
+
 def _delta(
     current: ObservationRecord | None, baseline: ObservationRecord | None
 ) -> PriceDelta | None:

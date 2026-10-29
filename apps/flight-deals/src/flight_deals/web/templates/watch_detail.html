@@ -48,6 +48,7 @@
 <section class="card empty">
   <h2>價格</h2>
   <p>尚未查到價格。</p>
+  {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
   <p class="muted">排程會依掃描週期自動查價，也可以按「立即查價」。若一直沒有資料，請到「設定與健康」頁確認資料源狀態。</p>
 </section>
 {% else %}
@@ -55,6 +56,7 @@
   <h2>最便宜的日期組合（前 {{ top|length }} 筆）</h2>
   <p class="disclaimer">{{ disclaimer }}</p>
   <p class="muted">{{ sampled_only_note }}</p>
+  {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
   <p class="muted">每個日期組合取最近一次查到的價格，依價格由低到高排列。超過 {{ stale_hours }} 小時未更新的價格標示「可能已過期」。</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜日期組合（可橫向捲動）">
   <table class="data">
@@ -131,6 +133,7 @@
 
 <section class="card">
   <h2>最近價格紀錄</h2>
+  {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄（可橫向捲動）">
   <table class="data compact">
     <thead><tr><th>日期</th><th>價格</th><th>航空公司</th><th>出發時刻</th><th>查到時間</th><th>來源</th><th>查票</th></tr></thead>

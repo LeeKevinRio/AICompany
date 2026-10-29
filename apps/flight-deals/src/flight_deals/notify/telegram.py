@@ -2,20 +2,23 @@
 
 Never raises on delivery failure; errors are redacted because httpx messages embed the
 request URL, which contains the bot token. ``TelegramSetupClient`` backs the
-``flight-deals telegram-setup`` wizard and is the only place that calls ``getUpdates``.
+``flight-deals telegram-setup`` wizard and ``TelegramCommandClient`` the service's command
+poller (ADR-0002 FD-7 Decision 1); this module is the only place that calls ``getUpdates``.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
 
 from flight_deals.domain.messages import telegram_test_message
 from flight_deals.domain.timeutil import utc_now
-from flight_deals.ports import SendResult
+from flight_deals.ports import InboundKind, InboundUpdate, InboxResult, SendResult
 from flight_deals.redact import redact_truncate
 
 API_BASE = "https://api.telegram.org"
@@ -93,9 +96,10 @@ UNAUTHORIZED_TEXT = (
     "請到 @BotFather 確認 token（/token 可重新產生），"
     "再更新 FLIGHT_DEALS_TELEGRAM_BOT_TOKEN。"
 )
+# The service's command poller is the usual other reader (ADR-0002 FD-7 Decision 11).
 CONFLICT_TEXT = (
-    "Telegram 回應 409 Conflict：這個 bot 設有 webhook，或有另一個程式正在讀取它的訊息，"
-    "因此無法用 getUpdates 取得聊天 ID。請先移除 webhook 或停止另一個讀取程式後再試。"
+    "Telegram 回應 409 Conflict：指令輪詢運作中，請先在設定頁關閉指令功能或停止服務再執行。"
+    "若服務沒有在執行，請確認這個 bot 沒有設定 webhook。"
 )
 NETWORK_TEXT = "無法連線到 Telegram，請確認這台電腦可以上網"
 _UPDATE_KINDS = ("message", "edited_message", "channel_post", "edited_channel_post")
@@ -237,3 +241,127 @@ class TelegramSetupClient:
         if error.startswith("HTTP 401"):
             error = UNAUTHORIZED_TEXT
         return SendResult(ok=False, error=redact_truncate(error, 300))
+
+
+# ---- command poller client (ADR-0002 FD-7 Decision 1, C-49) ---------------------------
+
+COMMAND_TIMEOUT_MARGIN_SECONDS = 10.0
+COMMAND_BATCH_LIMIT = 20
+# Only message-type updates are requested; edited messages arrive so they can be ignored.
+COMMAND_ALLOWED_UPDATES = json.dumps(["message", "edited_message"])
+_COMMAND_UPDATE_KINDS: tuple[InboundKind, ...] = ("message", "edited_message")
+
+
+def _as_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def parse_inbound(update: object) -> InboundUpdate | None:
+    """One ``getUpdates`` entry as an ``InboundUpdate``; None without a usable id."""
+    if not isinstance(update, dict):
+        return None
+    update_id = _as_int(update.get("update_id"))
+    if update_id is None:
+        return None
+    for kind in _COMMAND_UPDATE_KINDS:
+        payload = update.get(kind)
+        if not isinstance(payload, dict):
+            continue
+        chat = payload.get("chat")
+        chat_id = _as_int(chat.get("id")) if isinstance(chat, dict) else None
+        chat_type = chat.get("type") if isinstance(chat, dict) else None
+        text = payload.get("text")
+        date_value = _as_int(payload.get("date"))
+        sent_at = datetime.fromtimestamp(date_value, UTC) if date_value is not None else None
+        return InboundUpdate(
+            update_id=update_id,
+            kind=kind,
+            chat_id=chat_id,
+            chat_type=chat_type if isinstance(chat_type, str) else None,
+            text=text if isinstance(text, str) else None,
+            sent_at=sent_at,
+        )
+    return InboundUpdate(update_id, "other", None, None, None, None)
+
+
+def _retry_after(response: httpx.Response) -> int | None:
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    parameters = data.get("parameters")
+    value = parameters.get("retry_after") if isinstance(parameters, dict) else None
+    seconds = _as_int(value)
+    return seconds if seconds is not None and seconds >= 0 else None
+
+
+class TelegramCommandClient:
+    """``getUpdates`` long polling for the command poller. Never raises; every error
+    string is redacted (the request URL embeds the token)."""
+
+    def __init__(self, token: str, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._token = token
+        self._transport = transport
+
+    def get_updates(self, offset: int | None, long_poll_seconds: int) -> InboxResult:
+        poll = max(int(long_poll_seconds), 0)
+        params: dict[str, str | int] = {
+            "timeout": poll,
+            "limit": COMMAND_BATCH_LIMIT,
+            "allowed_updates": COMMAND_ALLOWED_UPDATES,
+        }
+        if offset is not None:
+            params["offset"] = offset
+        url = f"{API_BASE}/bot{self._token}/getUpdates"
+        try:
+            timeout = poll + COMMAND_TIMEOUT_MARGIN_SECONDS
+            with httpx.Client(timeout=timeout, transport=self._transport) as client:
+                response = client.get(url, params=params)
+        except httpx.HTTPError as exc:
+            detail = redact_truncate(f"{type(exc).__name__}: {exc}", 200)
+            return InboxResult(False, error=f"{NETWORK_TEXT}（{detail}）", error_kind="network")
+        except Exception as exc:  # defensive: the poller thread must never die on this
+            detail = redact_truncate(type(exc).__name__, 200)
+            return InboxResult(False, error=f"{NETWORK_TEXT}（{detail}）", error_kind="network")
+        status = response.status_code
+        if status == 401:
+            return InboxResult(
+                False,
+                error="Telegram 回應 401：bot token 無效或已被撤銷",
+                error_kind="unauthorized",
+            )
+        if status == 409:
+            return InboxResult(
+                False,
+                error="Telegram 回應 409：另有程式正在讀取這個 bot 的訊息（或設有 webhook）",
+                error_kind="conflict",
+            )
+        if status == 429:
+            return InboxResult(
+                False,
+                error="Telegram 回應 429：請求過於頻繁，稍後重試",
+                error_kind="rate_limited",
+                retry_after_seconds=_retry_after(response),
+            )
+        if status != 200:
+            description = redact_truncate(_api_description(response), 200)
+            message = f"Telegram 回應 HTTP {status}：{description}".rstrip("：")
+            return InboxResult(False, error=message, error_kind="http")
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or body.get("ok") is not True:
+            return InboxResult(
+                False, error="Telegram 回應格式無法辨識", error_kind="invalid_response"
+            )
+        raw = body.get("result")
+        if not isinstance(raw, list):
+            return InboxResult(
+                False, error="Telegram 回應格式無法辨識", error_kind="invalid_response"
+            )
+        updates = [u for u in (parse_inbound(item) for item in raw) if u is not None]
+        updates.sort(key=lambda u: u.update_id)
+        return InboxResult(True, tuple(updates))
