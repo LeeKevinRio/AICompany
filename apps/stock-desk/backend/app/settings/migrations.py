@@ -444,9 +444,12 @@ def read_cap1_migration(conn: sqlite3.Connection) -> Cap1MigrationRecord | None:
 def note_cap1_write(conn: sqlite3.Connection, written_max_position_weight: float) -> None:
     """Flag a ``migrated`` record once a save writes another cap-1 value.
 
-    Called by :meth:`app.settings.store.SettingsStore.save` inside its own
-    transaction. Only ``changed_by_user`` of a ``migrated`` record can change
-    here; status, timestamps and every other record leave this untouched (I-6).
+    Called by :meth:`app.settings.store.SettingsStore.write` (which
+    :meth:`~app.settings.store.SettingsStore.save` goes through) inside its own
+    ``BEGIN IMMEDIATE`` transaction, and only when ``risk_budget`` is actually
+    written (ADR-0032 K-10). Only ``changed_by_user`` of a ``migrated`` record
+    can change here; status, timestamps and every other record leave this
+    untouched (I-6).
     """
     record = read_cap1_migration(conn)
     if record is None or record.status != "migrated" or record.changed_by_user:

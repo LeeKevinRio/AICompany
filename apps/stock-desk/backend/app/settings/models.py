@@ -206,8 +206,27 @@ class AppSettingsPatch(BaseModel):
     ) -> dict[str, BaseModel]:
         """The sections this body carries, as they would be stored.
 
-        ``net_worth`` is stamped with ``now`` and the yardstick, as in
-        :meth:`apply_to`; an omitted section is not in the result at all.
+        Replacement is per *section*, not per field: a section is validated as a
+        whole, so a partially-specified section falls back to that model's
+        defaults rather than to the stored values. This keeps every stored
+        section a document that was validated in one piece. An omitted section
+        is not in the result at all, and is never merged with values read
+        earlier: :meth:`app.settings.store.SettingsStore.write` fills it in under
+        its own lock, which is what keeps a fallback section's stored payload
+        out of reach (ADR-0032 W-1). There is deliberately no "merge into a
+        loaded document" helper: a loaded document holds defaults wherever a
+        section fell back, and writing it back is the failure W-1/W-2 close.
+
+        ``net_worth`` is stamped with ``now`` whenever it is present, including
+        when the amount is unchanged: re-submitting the same figure is the user
+        confirming it still holds, which is exactly what the freshness rule
+        asks of them. The section is therefore only sent when the user acts on
+        that field -- the rest of the settings form leaves it out, so saving a
+        fee rate cannot refresh a net worth nobody looked at.
+
+        ``valued_book_twd`` is the yardstick the caller measured the figure
+        against, stored alongside it so later reads can restate the comparison
+        without repeating the valuation.
         """
         carried: dict[str, BaseModel] = {}
         if self.risk_budget is not None:
@@ -224,31 +243,3 @@ class AppSettingsPatch(BaseModel):
                 valued_book_twd_at_report=valued_book_twd,
             )
         return carried
-
-    def apply_to(
-        self,
-        current: AppSettings,
-        *,
-        now: datetime | None = None,
-        valued_book_twd: float | None = None,
-    ) -> AppSettings:
-        """Return ``current`` with the supplied sections replaced.
-
-        Replacement is per *section*, not per field: a section is validated as a
-        whole, so a partially-specified section falls back to that model's
-        defaults rather than to the stored values. This keeps every stored
-        section a document that was validated in one piece.
-
-        ``net_worth`` is stamped with ``now`` whenever it is present, including
-        when the amount is unchanged: re-submitting the same figure is the user
-        confirming it still holds, which is exactly what the freshness rule
-        asks of them. The section is therefore only sent when the user acts on
-        that field -- the rest of the settings form leaves it out, so saving a
-        fee rate cannot refresh a net worth nobody looked at.
-
-        ``valued_book_twd`` is the yardstick the caller measured the figure
-        against, stored alongside it so later reads can restate the comparison
-        without repeating the valuation.
-        """
-        carried = self.carried_sections(now=now, valued_book_twd=valued_book_twd)
-        return current.model_copy(update=carried)

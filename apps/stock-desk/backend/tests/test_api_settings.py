@@ -537,9 +537,9 @@ def test_reading_settings_never_spends_a_quota_slot(
 
 def test_store_round_trips_every_section(tmp_path: Path) -> None:
     store = SettingsStore(db_path=tmp_path / "settings.db")
-    saved = store.save(
-        AppSettingsPatch(cost_model=CostModelSettings(slippage_bps=7.5)).apply_to(store.load())
-    )
+    saved = store.write(
+        AppSettingsPatch(cost_model=CostModelSettings(slippage_bps=7.5)).carried_sections()
+    ).loaded.settings
     assert store.load() == saved
     assert store.load().cost_model.slippage_bps == 7.5
 
