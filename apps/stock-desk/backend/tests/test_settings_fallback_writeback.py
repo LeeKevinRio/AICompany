@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -304,14 +306,14 @@ def _traced_write(
         conn.set_trace_callback(traced.append)
         return conn
 
-    monkeypatch.setattr(sqlite3, "connect", tracing_connect)
     error: BaseException | None = None
-    try:
-        store.write(**kwargs)
-    except FallbackOverwriteRequired as refused:
-        error = refused
-    finally:
-        monkeypatch.undo()
+    # A scoped patch: ``undo()`` would also revert every earlier patch of the test.
+    with monkeypatch.context() as patched:
+        patched.setattr(sqlite3, "connect", tracing_connect)
+        try:
+            store.write(**kwargs)
+        except FallbackOverwriteRequired as refused:
+            error = refused
     return [sql.strip().upper() for sql in traced], error
 
 
@@ -367,6 +369,130 @@ def test_a_section_broken_after_the_page_was_read_is_judged_at_write_time(
 
     assert response.status_code == 409
     assert raw_rows(api_harness.settings) == before
+
+
+# --- NB-6: a second writer waits for the first, and never half-writes -----------------------
+
+#: How long the holder keeps the write lock while the writer is made to wait.
+_HOLD_S = 0.4
+
+
+class _Writer(threading.Thread):
+    """Runs one ``store.write`` and keeps whatever it returned or raised."""
+
+    def __init__(self, store: SettingsStore, sections: dict[str, Any]) -> None:
+        super().__init__(daemon=True)
+        self._store = store
+        self._sections = sections
+        self.result: SaveResult | None = None
+        self.error: BaseException | None = None
+        self.elapsed = 0.0
+
+    def run(self) -> None:
+        began = time.monotonic()
+        try:
+            self.result = self._store.write(self._sections)
+        except BaseException as error:  # noqa: BLE001 - asserted by the test
+            self.error = error
+        self.elapsed = time.monotonic() - began
+
+
+def _holder(store: SettingsStore) -> sqlite3.Connection:
+    """A second connection holding ``BEGIN IMMEDIATE`` on the same file."""
+    conn = sqlite3.connect(store.db_path, isolation_level=None)
+    conn.execute("BEGIN IMMEDIATE")
+    return conn
+
+
+def test_a_second_writer_waits_and_judges_what_the_first_committed(tmp_path: Path) -> None:
+    """The holder breaks risk_budget and commits; the waiting write must see that.
+
+    It waits at ``BEGIN IMMEDIATE`` rather than deciding on what it could read
+    before, then re-reads under the lock: the risk budget it carries is now a
+    fallback it was not told to overwrite, so it refuses and writes nothing.
+    """
+    store = SettingsStore(tmp_path / "settings.db")
+    store.save(STORED)
+    holder = _holder(store)
+    try:
+        holder.execute(
+            "UPDATE app_settings SET payload = ? WHERE section = 'risk_budget'",
+            (SCHEMA_MISMATCH,),
+        )
+        writer = _Writer(store, {"risk_budget": RiskBudget(max_position_weight=0.08)})
+        writer.start()
+        time.sleep(_HOLD_S)
+        assert writer.is_alive(), "the second writer did not wait for the lock"
+        holder.execute("COMMIT")
+        committed = raw_rows(store)
+    finally:
+        if holder.in_transaction:
+            holder.execute("ROLLBACK")
+        holder.close()
+    writer.join(timeout=10)
+
+    assert not writer.is_alive()
+    assert writer.elapsed >= _HOLD_S
+    assert isinstance(writer.error, FallbackOverwriteRequired)
+    assert writer.error.sections == ("risk_budget",)
+    assert raw_rows(store) == committed
+
+
+def test_a_second_writer_proceeds_once_the_first_rolls_back(tmp_path: Path) -> None:
+    store = SettingsStore(tmp_path / "settings.db")
+    store.save(STORED)
+    holder = _holder(store)
+    try:
+        holder.execute(
+            "UPDATE app_settings SET payload = ? WHERE section = 'risk_budget'",
+            (SCHEMA_MISMATCH,),
+        )
+        writer = _Writer(store, {"alerts": AlertSettings(cooldown_minutes=45)})
+        writer.start()
+        time.sleep(_HOLD_S)
+        assert writer.is_alive(), "the second writer did not wait for the lock"
+        holder.execute("ROLLBACK")
+    finally:
+        holder.close()
+    writer.join(timeout=10)
+
+    assert writer.error is None and writer.result is not None
+    loaded = store.load_with_status()
+    assert loaded.fallback_sections == ()  # the holder's change never landed
+    assert loaded.settings.alerts.cooldown_minutes == 45
+    assert loaded.settings.risk_budget == STORED.risk_budget
+
+
+def test_a_writer_that_times_out_leaves_no_partial_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the busy timeout the write fails as "locked" -- and nothing of it is stored."""
+    store = SettingsStore(tmp_path / "settings.db")
+    store.save(STORED)
+    before = raw_rows(store)
+    migration_before = _migration_rows(store)
+    holder = _holder(store)
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(store_module, "BUSY_TIMEOUT_MS", 150)
+            began = time.monotonic()
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                store.write(
+                    {
+                        "risk_budget": RiskBudget(max_position_weight=0.08),
+                        "alerts": AlertSettings(cooldown_minutes=45),
+                    }
+                )
+            assert time.monotonic() - began >= 0.1
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+    assert raw_rows(store) == before
+    assert _migration_rows(store) == migration_before
+    # Usable again at once: the failed write left no transaction open.
+    store.write({"alerts": AlertSettings(cooldown_minutes=45)})
+    assert store.load().alerts.cooldown_minutes == 45
 
 
 # --- K-10: note_cap1_write only when risk_budget is written ---------------------------------

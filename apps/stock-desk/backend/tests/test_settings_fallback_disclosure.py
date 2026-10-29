@@ -249,6 +249,22 @@ def test_alert_defaults_are_evaluate_and_push() -> None:
 STORED_COST_MODEL_READERS = frozenset({"app.api.backtest", "app.api.settings"})
 
 
+#: Where a settings store can be had without importing ``app.settings``: the
+#: dependency module's providers (qa NB-1 -- a module that only calls
+#: ``get_settings_store()`` imported nothing from ``app.settings``).
+_STORE_PROVIDERS = frozenset(
+    {"app.api.deps.get_settings_store", "app.api.deps._default_settings_store"}
+)
+
+#: The calls that hand back the stored document (or a read of it).
+_SETTINGS_READS = frozenset({"load", "load_with_status"})
+
+
+def _module_name(path: Path) -> str:
+    relative = path.relative_to(APP_ROOT.parent)
+    return ".".join(relative.with_suffix("").parts).removesuffix(".__init__")
+
+
 def _reads_cost_model_attribute(path: Path) -> bool:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     return any(
@@ -256,16 +272,68 @@ def _reads_cost_model_attribute(path: Path) -> bool:
     )
 
 
+def _cost_model_off_a_settings_read(path: Path) -> bool:
+    """``….load().cost_model`` or ``….load_with_status().settings.cost_model``, anywhere."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Attribute) and node.attr == "cost_model"):
+            continue
+        value = node.value
+        if isinstance(value, ast.Attribute) and value.attr == "settings":
+            value = value.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr in _SETTINGS_READS
+        ):
+            return True
+    return False
+
+
+def _can_reach_a_settings_store(path: Path, module: str) -> bool:
+    imported = imported_modules(path, module)
+    return any(name.startswith("app.settings") for name in imported) or bool(
+        imported & _STORE_PROVIDERS
+    )
+
+
 def test_only_the_backtest_reads_the_stored_cost_model() -> None:
-    readers = set()
+    """DL-9, two nets (qa NB-1).
+
+    1. Every ``app`` module that can reach a settings store -- by importing
+       ``app.settings`` *or* a store provider of ``app.api.deps`` (as
+       ``app.scheduler`` does) -- and touches a ``.cost_model`` attribute.
+    2. Every ``app`` module at all that takes ``.cost_model`` straight off a
+       settings read, however it got hold of the store.
+    """
+    reachable: set[str] = set()
+    direct: set[str] = set()
     for path in sorted(APP_ROOT.rglob("*.py")):
-        relative = path.relative_to(APP_ROOT.parent)
-        module = ".".join(relative.with_suffix("").parts).removesuffix(".__init__")
+        module = _module_name(path)
         if module.startswith("app.settings"):
             continue
-        imports_settings = any(
-            name.startswith("app.settings") for name in imported_modules(path, module)
-        )
-        if imports_settings and _reads_cost_model_attribute(path):
-            readers.add(module)
-    assert readers == STORED_COST_MODEL_READERS
+        if _can_reach_a_settings_store(path, module) and _reads_cost_model_attribute(path):
+            reachable.add(module)
+        if _cost_model_off_a_settings_read(path):
+            direct.add(module)
+    assert reachable == STORED_COST_MODEL_READERS
+    assert direct <= STORED_COST_MODEL_READERS
+    assert "app.api.backtest" in direct  # not vacuous: the one real reader is seen
+
+
+def test_the_cost_model_nets_have_teeth(tmp_path: Path) -> None:
+    """The scheduler reaches a store through ``deps`` alone, and both nets see a reader."""
+    scheduler = APP_ROOT / "scheduler.py"
+    assert _can_reach_a_settings_store(scheduler, "app.scheduler")
+    assert not any(
+        name.startswith("app.settings") for name in imported_modules(scheduler, "app.scheduler")
+    )
+    for source in (
+        "costs = get_settings_store().load().cost_model\n",
+        "costs = store.load_with_status().settings.cost_model\n",
+    ):
+        probe = tmp_path / "probe.py"
+        probe.write_text(source, encoding="utf-8")
+        assert _cost_model_off_a_settings_read(probe), source
+    probe.write_text("costs = self.cost_model\n", encoding="utf-8")
+    assert not _cost_model_off_a_settings_read(probe)

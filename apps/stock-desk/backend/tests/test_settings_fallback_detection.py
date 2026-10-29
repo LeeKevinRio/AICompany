@@ -175,9 +175,10 @@ def test_reading_takes_no_lock_and_writes_nothing(
         conn.set_trace_callback(traced.append)
         return conn
 
-    monkeypatch.setattr(sqlite3, "connect", tracing_connect)
-    getattr(store, method)()
-    monkeypatch.undo()
+    # A scoped patch: ``undo()`` would also revert every earlier patch of the test.
+    with monkeypatch.context() as patched:
+        patched.setattr(sqlite3, "connect", tracing_connect)
+        getattr(store, method)()
 
     assert traced, "the trace callback saw nothing; the test would be vacuous"
     upper = [sql.upper().lstrip() for sql in traced]
