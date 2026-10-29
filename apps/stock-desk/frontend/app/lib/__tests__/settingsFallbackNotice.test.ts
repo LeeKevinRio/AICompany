@@ -75,6 +75,10 @@ describe("SettingsFallbackNoticeLine", () => {
     expect(renderToStaticMarkup(createElement(SettingsFallbackNoticeLine, { text: null }))).toBe("");
   });
 
+  it("空字串與 null 一樣不渲染，不會留下空框（NB-7）", () => {
+    expect(renderToStaticMarkup(createElement(SettingsFallbackNoticeLine, { text: "" }))).toBe("");
+  });
+
   it("至少 text-sm、琥珀 200（比 neutral-300 亮），不收合", () => {
     const html = renderToStaticMarkup(createElement(SettingsFallbackNoticeLine, { text: NOTICE }));
     expectStanding(html);

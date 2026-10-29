@@ -353,9 +353,15 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
     runSave(confirmedSections);
   }
 
+  /**
+   * Ends the overwrite flow (cancel, parse error, any failed write, success).
+   * The ticks go with it: the panel must open unticked every time (DL-6), so a
+   * tick given for an earlier attempt is never carried into the next one.
+   */
   function closeOverwriteFlow() {
     setPanelOpen(false);
     setConfirmedSections(null);
+    setOverwriteChecked(new Set());
   }
 
   function confirmOverwritePanel() {
@@ -440,10 +446,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
     mutation.mutate(
       buildFormPatch({ risk_budget: riskBudget, cost_model: costModel, alerts }, step.carried, step.overwrite),
       {
-        onSuccess: () => {
-          closeOverwriteFlow();
-          setOverwriteChecked(new Set());
-        },
+        onSuccess: closeOverwriteFlow,
         // A refused or failed write ends this confirmation: the next attempt
         // asks again rather than reusing an answer given for another request.
         onError: closeOverwriteFlow,

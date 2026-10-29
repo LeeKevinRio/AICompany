@@ -619,6 +619,90 @@ describe("NetWorthSection — net_worth 回落時三處改動，判斷依 settin
   });
 });
 
+/* --- Ticks never outlive an overwrite attempt (DL-6, NB-1) --------------------- */
+
+describe("取消或出錯之後，下一次開啟面板時勾選集合是空的（預設不勾選）", () => {
+  const source = stripComments(sourceOf("../SettingsForm.tsx"));
+  const closeBody = (() => {
+    const start = source.indexOf("function closeOverwriteFlow()");
+    const end = source.indexOf("\n  }", start);
+    return source.slice(start, end);
+  })();
+
+  it("closeOverwriteFlow 同時關面板、清確認狀態、清空勾選", () => {
+    expect(closeBody).toContain("setPanelOpen(false)");
+    expect(closeBody).toContain("setConfirmedSections(null)");
+    expect(closeBody).toContain("setOverwriteChecked(new Set())");
+  });
+
+  it("面板只經 closeOverwriteFlow 關閉：取消、放寬取消、解析錯誤、寫入成功、寫入失敗（含 409）全走它", () => {
+    // `setPanelOpen(false)` appears twice: inside closeOverwriteFlow, and in
+    // confirmOverwritePanel, which hides the panel while the answer it just
+    // gave is still in use; that attempt then ends through onSuccess/onError.
+    expect(source.match(/setPanelOpen\(false\)/g) ?? []).toHaveLength(2);
+    const confirmStart = source.indexOf("function confirmOverwritePanel()");
+    const confirmBody = source.slice(confirmStart, source.indexOf("\n  }", confirmStart));
+    expect(confirmBody).toContain("setPanelOpen(false)");
+    expect(source).toContain("onSuccess: closeOverwriteFlow");
+    expect(source).toContain("onError: closeOverwriteFlow");
+    // cancel in the panel, cancel in the widening alert, and the parse-error exit.
+    expect((source.match(/closeOverwriteFlow\(\);/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("勾選集合只有兩處會被設值：使用者勾選，與 closeOverwriteFlow 的清空", () => {
+    const writes = source.match(/setOverwriteChecked\(/g) ?? [];
+    expect(writes).toHaveLength(2);
+    expect(source).toContain("useState<ReadonlySet<string>>(() => new Set())");
+  });
+});
+
+/* --- net_worth badge: fallback wins over the payload (NB-3) --------------------- */
+
+describe("NetWorthSection — 回落時徽章配色與後綴不受矛盾 payload 影響", () => {
+  const contradictory = settingsResponse({
+    settings_fallback: fallbackView(["net_worth"]),
+    net_worth: {
+      total_net_worth_twd: 5_000_000,
+      updated_at: "2026-09-01T00:00:00+00:00",
+      age_days: 58,
+      freshness: "expired",
+      notes: [],
+      warnings: [],
+    },
+  });
+  const root = parseHtml(render(NetWorthSection, { settings: contradictory }));
+  const h2 = findOne(root, (el) => el.tag === "h2", "h2");
+  const badge = h2.parent && findAll(h2.parent, (el) => el.tag === "span")[0];
+
+  it("徽章只寫「使用預設值」，沒有「（已 N 天未更新）」", () => {
+    expect(badge && textOf(badge)).toBe("使用預設值");
+  });
+
+  it("配色是回落的琥珀色，不是 expired 的玫瑰色（也不是 fresh 的綠色）", () => {
+    expect(badge?.attrs.class).toContain("text-amber-300");
+    expect(badge?.attrs.class).not.toMatch(/rose-|emerald-/);
+  });
+});
+
+/* --- Query invalidation after a settings write (NB-5) --------------------------- */
+
+describe("useUpdateSettings 成功後重新抓取依設定判定的畫面", () => {
+  const queries = stripComments(sourceOf("../../lib/queries.ts"));
+  const start = queries.indexOf("export function useUpdateSettings()");
+  const body = queries.slice(start, queries.indexOf("\nexport function", start + 1));
+
+  it("使 advice、kelly-disclosures 失效（覆寫之後不能繼續寫著「使用預設值」）", () => {
+    expect(body).toContain('invalidateQueries({ queryKey: ["advice"] })');
+    expect(body).toContain('invalidateQueries({ queryKey: ["kelly-disclosures"] })');
+  });
+
+  it("原有的 portfolio-limits、portfolio-summary 失效仍在", () => {
+    expect(body).toContain('invalidateQueries({ queryKey: ["portfolio-limits"] })');
+    expect(body).toContain('invalidateQueries({ queryKey: ["portfolio-summary"] })');
+    expect(body).toContain('setQueryData(["settings"], data)');
+  });
+});
+
 /* --- Source-level K-6 guard --------------------------------------------------- */
 
 describe("前端不自撰回落字面（K-6）", () => {

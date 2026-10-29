@@ -119,10 +119,11 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold text-neutral-100">帳戶總淨值</h2>
         <span
-          className={`rounded border px-2 py-0.5 text-xs ${freshnessClass(block.freshness)}`}
+          className={`rounded border px-2 py-0.5 text-xs ${freshnessClass(fellBack ? "fallback" : block.freshness)}`}
         >
           {fellBack ? NET_WORTH_FALLBACK_BADGE_LABEL : FRESHNESS_LABELS[block.freshness]}
-          {block.age_days !== null && `（已 ${block.age_days} 天未更新）`}
+          {/* A fallback section holds no figure to age, whatever the payload says. */}
+          {!fellBack && block.age_days !== null && `（已 ${block.age_days} 天未更新）`}
         </span>
       </div>
       <SectionFallbackMarker text={sectionMarkerOf(settings, "net_worth")} />
