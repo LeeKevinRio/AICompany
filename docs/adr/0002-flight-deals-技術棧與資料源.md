@@ -559,3 +559,50 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-52 Migration 0005 與效能**：FK-off 標記；`CREATE TABLE` 只有 `notification_new`；全檔不含 `scan_run`／`price_observation` 的 CREATE TABLE、DROP、RENAME；v4 DB 遷移後筆數不變、`foreign_key_check` 空、`*.pre-v5.db` 存在、新 DB 不備份、兩 kind 可寫、不合法 kind 仍拒、item 指向不存在 id 失敗、六個索引存在（重建的 `ix_notification_created` 加五個新索引）；列表 SQL `EXPLAIN QUERY PLAN` 無 `SCAN scan_run`、不含 `OVER (`；SQL 次數不變；FD-6 bench <100 ms；寫入 ≤120%；健康頁 <300 ms（原始輸出記任務單）。
 - **C-53 清除與備份**：假時鐘測未到時間不跑、同日第二次不跑、啟動補跑、持有 `ScanService.lock`；181／179 天 run 依規則刪或留；最近 N 輪保留、只有 6 輪全留、`keep_runs=2` 回 422；**FR-R6**：彈性窗某組日期最新觀測落在 N 輪之前時，清除前後 `list_page`、`DigestService.compose`、`/list` 輸出字串完全相同且 `min_amount` 不變；366／364 天通知四種 kind 前刪後留、含未出發 item 的舊 price_alert 保留、清除後同價不再推；watch／alert_state／exploration／使用者設定／running run 逐筆不變；每批 ≤500、第 k 批後拋例外無孤兒且可續跑；備份：有候選且今日未備份才先備份（可開啟、筆數一致）、無候選不備份、同日不重複、備份失敗刪除 0 筆且健康頁顯示原因、第 8 份出現刪最舊、`pre-v*` 不動；`VACUUM`、備份 unlink 只在 `storage/db.py`。
 - **C-54 VACUUM、健康頁、設定與架構測試**：VACUUM 三條件各有測試（磁碟空間 monkeypatch）、執行後筆數不變、`integrity_check` ok、記錄前後大小；五個新設定界線 422 原值不變、兩開關不合法回預設、缺 header 403；健康頁四種輪詢狀態斷言、統計時間、`stats()` 5 分鐘內不重查；`next_run_time()` 排除 `maintenance*`、`manual-digest:`，包含 `cmdscan:`；精靈 offset 永遠 None、409 文案含「指令輪詢」、結束碼非零；`scheduler/` 仍只 import services；新文案通過 BANNED_PHRASES；UI 需 e2e；真實 Telegram 收發由 CEO 或總經理手動驗收。`tests/test_architecture.py` 的 ALLOWED 不變，新增上述 grep 測試。
+
+## FD-8 增補：180 天穩態列表效能（快照讀取改用保護集合）（2026-10-29，tech-architect 評估；不另開 ADR；總經理落檔）
+
+範圍：列表、每日／手動摘要、`/list`、`/watch`、`/scan` 結果回覆的快照讀取改成 SQL 端前置篩選；`retention_snapshot_runs` 改成和讀取共用同一個 SQL 片段；新增 migration `0006_snapshot_index.sql`（只新增一個索引）。屬 D-3、D-4、D-5 範圍：不新增執行期依賴、不改 import 方向表、不改 `services/price_snapshot.py` 的任何函式簽章與語意。
+**修訂既有條文**：C-34「`latest_per_pair` 定義只能一處」改為「快照語意的權威定義只在 `services/price_snapshot.py`；SQL 端的前置篩選只在 `storage/repository.py::_snapshot_keep_select` 一處」；C-52「列表 SQL 不含 `OVER (`」限縮為 `LIST_WATCHES_SQL`（`list_watches_with_last_results`），單一監看範圍內的快照 window 不受此限；FD-7 Decision 9「180 天穩態 >300 ms 開後續」由本節結案。
+**總經理裁決（代 CEO 回覆 PRD 開放問題 8）**：以 <300 ms 為通過門檻、<100 ms 為目標；不為了達到 100 ms 增加複雜度。
+
+### Context
+- FD-7 實測：180 天穩態（20 監看 × 每天 4 輪 × 180 天 = 14,400 輪、172,800 筆觀測）列表中位數 1,165 ms，FD-6 基準庫 23 ms，掃描寫入 121.9 ms。原因是 list_page、摘要、`/list`、`/watch`、`/scan` 結果都用 `observations_for_watch(watch_id, revision=...)` 讀出目前 revision 全部觀測（每監看約 8,640 筆），再在 Python 建 `Snapshot`。
+- `Snapshot` 的四個輸出（`cheapest`、`delta_since_previous_run`、`delta_since(midnight)`、`cheapest_pairs`）只依賴每組日期（live、監看幣別、未出發）的最新 2 筆和台北零時前最新 1 筆。FD-7 保護集合正是這個規則（外加 retention 專用的最低價那一筆），FR-R6 已證明清除後輸出不變。
+- 現有索引 `ix_obs_watch_pair(watch_id, price_kind, depart_date, return_date, fetched_at)` 沒有 `watch_revision`、`currency`、`id`，window 一定要回表和排序；retention 規劃在穩態庫要 644 ms。
+- 詳情頁的 trend（最近 `TREND_POINTS` 輪每輪最低價）、distribution（跨 kind 每組最新、含已出發日期）、recent（前 30 筆）、`has_prices` 都要完整的目前 revision 觀測，不在保護集合語意內。
+
+### 方案比較
+| 方案 | 優點 | 缺點 | 結論 |
+|---|---|---|---|
+| A. 一監看一查詢 `snapshot_observations_for_watch` | SQL 次數與 FD-3 相同（C-34）；四個呼叫端只換一行；成本只看單一監看的索引範圍 | 20 監看仍 20 次 round-trip（每次 <5 ms 即達標） | **採用** |
+| B. 整批一查詢 | 列表只要 2 次 SQL | 回傳形狀改變、scope 跨監看、window 成本隨總觀測數成長（等於 FD-7 Decision 9 否決的全表 window） | 否決 |
+| C. 每組日期相關子查詢 `LIMIT 2` | 讀取量和組數成正比 | 與 retention 的 window 是兩套語法，會漂移 | 否決 |
+| D. Python 端快取 Snapshot | 不改 SQL | 失效時機散在各處 | 否決 |
+
+### Decision
+1. **讀取介面**：新增 `Repository.snapshot_observations_for_watch(watch_id, *, revision, currency, today, midnight) -> list[ObservationRecord]`。回傳該監看該 revision、`price_kind='live'`、`currency` 相符、`depart_date >= today` 的觀測中，每組 (depart_date, return_date) 依 `fetched_at DESC, id DESC` 的前 2 筆，加上 `fetched_at < midnight` 中最新的 1 筆，去重後依 `fetched_at DESC, id DESC` 排序。`views.list_page`、`DigestService.compose`、`CommandService._snapshot`、`CommandService.top_prices` 改用它，一監看一次 SQL；`Snapshot.build`、`cheapest_pairs`、`eligible`、`latest_per_pair`、`snapshot_min` 簽章與實作不變。列表與 `/list` 也傳 `taipei_midnight(now)`，多一筆零時前資料不影響輸出（見 3）。否決整批一查詢。
+2. **單一定義**：`storage/repository.py` 定義唯一的片段產生函式 `_snapshot_keep_select(scope_sql: str) -> str`，產生 `SELECT id, scan_run_id FROM (...)`，內含唯一的具名視窗 `WINDOW snap AS (PARTITION BY watch_id, price_kind, currency, depart_date, return_date ORDER BY fetched_at DESC, id DESC)`，保留條件 `depart_date >= :today AND (rn <= 2 OR (fetched_at < :midnight AND (newer_fetched_at IS NULL OR newer_fetched_at >= :midnight)))`，其中 `rn = ROW_NUMBER() OVER snap`、`newer_fetched_at = LAG(fetched_at) OVER snap`。`scope_sql` 只能是 repository 模組層級常數（不得含使用者輸入；參數一律綁定）。讀取端 scope＝單一監看、單一 revision、live、指定幣別、`depart_date >= :today`；retention scope＝`price_observation JOIN watch` 目前 revision（全部監看、全部 kind／currency、不限出發日）。`retention_snapshot_runs` 改為「`_snapshot_keep_select(RETENTION_SCOPE)` 的 scan_run_id」UNION「原有 `rn_min = 1` 分支」，`rn_min` 分支只屬於 retention。
+3. **等價性論證**：E＝`eligible(observations_for_watch(...))`，S＝新讀取結果，S ⊆ E。對每組日期 p，把 E 中 p 的觀測依 (fetched_at, id) 由新到舊排成 o1、o2、…。S 包含每組的 o1、o2，以及零時前最新那筆 m_p。
+   - `cheapest`／`cheapest_pairs`：只用每組 o1，o1 ∈ S。
+   - `delta_since(midnight)`：基準是每組 m_p，m_p ∈ S（不需任何前提；`fetched_at` 為固定寬度秒級 ISO 字串，midnight 為整秒，SQL 字串比較與 Python datetime 比較一致）。
+   - `delta_since_previous_run`：L＝max(scan_run_id)。**A1**（同一輪對同一組日期最多寫一筆；`ScanService._query_pair` 每組只寫 cheapest 一筆）成立時，p 在第 L 輪最多一筆，排除後最新的是 o1 或 o2，皆在 S。**A2**（同一監看內 (fetched_at, id) 順序和 scan_run_id 順序一致；同監看掃描由 `ScanService.lock` 序列化、id 自增、fetched_at 取自掃描時鐘）成立時，E 中 scan_run_id 最大的那筆是所在組的 o1，所以 L(S)=L(E)。
+   - S 非空若且唯若 E 非空。引理：任何滿足「每組 o1、o2、m_p ⊆ S ⊆ E」的 S 都產生相同輸出，所以多出來的零時前資料不影響。
+   - 讀取端不包含 retention 的最低價那筆，因為快照四個輸出都不讀第 3 新以後的觀測；`min_amount`（創新低基準）仍是獨立的 `MIN()` 查詢。
+4. **索引**：migration `0006_snapshot_index.sql` 只有 `CREATE INDEX ix_obs_snapshot ON price_observation(watch_id, watch_revision, price_kind, currency, depart_date, return_date, fetched_at DESC, id DESC, scan_run_id);`。不需要 FK-off 標記，不 CREATE／DROP／RENAME 任何表，不刪既有索引（`ix_obs_watch_pair` 是否冗餘另案評估）。
+5. **詳情頁不變**：`views.detail_page` 繼續用 `observations_for_watch(watch.id, revision=watch.revision)`。在 steady180 量測並記入任務單，>300 ms 另開後續任務。
+6. **效能門檻**（暖機 1 次後 10 次中位數，原始輸出記任務單）：steady180 的 `list_page` <300 ms（目標 <100 ms）、`DigestService.compose` <300 ms、`/list` <300 ms、單監看 `snapshot_observations_for_watch` <10 ms；FD-6 基準庫 `list_page` <100 ms；一輪掃描寫入（steady180、12 組）≤ 146 ms（121.9 ms × 120%）；`retention_snapshot_runs` 在 steady180 不超過 644 ms；詳情頁與 migration 0006 耗時只記錄。基準庫重用 FD-7 的 `steady180.db` 與 `base50k.db`（先複製再遷移，原檔不動）。
+7. **SQLite 版本**：`WINDOW` 子句與 `LAG` 需 SQLite ≥ 3.25；由實作者於測試斷言 `sqlite3.sqlite_version_info >= (3, 25, 0)` 並記錄本機版本。
+
+### Consequences
+- 好處：列表、摘要、`/list`、`/watch`、`/scan` 回覆讀進 Python 的列數變成和「未出發組數」成正比（steady180 每監看 168 列 vs 8,640 列）；**實測更正（2026-10-29 總經理落檔）**：SQL 端的 window 仍要走完該監看未出發範圍的覆蓋索引，耗時仍與每監看觀測數線性相關，只是常數縮小約 6 倍（單監看 50.6 → 8.3 ms；列表 1,165 → 184.8 ms），尚未真正「脫鉤」；若日後要達 <100 ms 目標，需回到本節重評（例如每組日期有界子查詢，即方案 C，或維護快照物化表）；retention 規劃也受惠於同一索引；讀取與清除共用一個 SQL 定義，FR-R6 的「清除不改輸出」從測試保證變成結構保證。
+- 代價：快照語意有 Python（權威）和 SQL（前置篩選）兩處表述，靠引理和等價性測試維繫，改一邊必須同步改另一邊並重跑等價測試；多一個 9 欄索引，每筆觀測寫入多維護一個索引；`delta_since_previous_run` 的等價依賴 A2，系統時鐘倒退超過同一監看兩輪間隔時新舊讀取可能不同（FR-R6 早已依賴同一前提，已知且接受）；詳情頁在穩態仍是全量讀取。
+- 被約束的事：快照新增任何需要「第 3 新以後」觀測的輸出、`Snapshot` 改讀非 live 或其他幣別、改 `latest_per_pair` 的排序鍵、讓同一輪對同一組寫多筆，都必須回到本節重評，並同步修改 `_snapshot_keep_select`。
+
+### 新增約束
+- **C-55 讀取介面與呼叫端**：`Repository.snapshot_observations_for_watch(watch_id, *, revision, currency, today, midnight) -> list[ObservationRecord]` 存在且只執行 1 次 SQL；`views.list_page`、`DigestService.compose`、`CommandService._snapshot`、`CommandService.top_prices` 改呼叫它；`grep observations_for_watch src/` 的呼叫端只剩 `views.detail_page`（以及 repository 定義本身）；`services/price_snapshot.py` 的 diff 為空；`list_page` SQL 次數和 FD-7 相同（計數 fake repository，20 監看＝1＋20），摘要與 `/list` 也是一監看一次；`/watch` 前 3 名等於詳情頁 `top[:3]`（C-51）仍有測試且通過。
+- **C-56 單一定義**：`storage/repository.py` 只有一個 `_snapshot_keep_select`；`WINDOW snap AS` 在 `src/` 全域只出現 1 次（grep 測試）；`snapshot_observations_for_watch` 和 `retention_snapshot_runs` 的 SQL 都由它組成；`scope_sql` 引數只是模組層級常數（grep 或 AST 測試：呼叫端不得傳 f-string 或變數拼接）；`rn_min` 分支只在 `retention_snapshot_runs`；`OVER (`、`OVER snap` 只出現在 `storage/repository.py`（grep 測試）。
+- **C-57 等價性測試**：真實 SQLite 加隨機資料（多組日期、live 與 cached、兩種幣別、兩個 revision、已出發與未出發、單程 `return_date` 為 NULL、同秒多筆；生成時遵守 A1、A2），多個種子下比對 `Snapshot.build(observations_for_watch 全量)` 和 `Snapshot.build(snapshot_observations_for_watch)` 的 `cheapest`、`delta_since_previous_run()`、`delta_since(midnight)`，以及 `cheapest_pairs` 的完整清單，全部相等。具名案例各一個測試：(a) 同一組連續兩輪都有取樣（基準＝第 2 新）；(b) 某組最新一輪沒取樣（基準＝該組最新）；(c) `fetched_at` 相同、id 不同（含跨輪），以 id 決勝；(d) 最新一輪只寫 cached 或他幣（L 取自 eligible）；(e) `fetched_at` 正好等於 midnight（不算零時前）和前 1 秒（算）；(f) 某組只有零時後的觀測（delta 為 None）；(g) 已出發與舊 revision 不回傳；(h) 無觀測（cheapest 與兩種 delta 都是 None）；(i) 同一組有 ≥5 筆時回傳筆數 ≤3。A1 守護測試：`ScanService.scan_watch` 在同一輪對同一組日期最多寫入 1 筆觀測（取樣含重複組時也一樣）。retention 等價：測試內保留 FD-7 版 `retention_snapshot_runs` SQL 原文當對照，隨機資料下新舊回傳的 run 集合相同；FR-R6 與 C-53 全部測試原樣通過。
+- **C-58 Migration 0006 與查詢計畫**：`0006_snapshot_index.sql` 只含 1 行 `CREATE INDEX ix_obs_snapshot`（欄位順序如 Decision 4），全檔沒有 CREATE TABLE、DROP、RENAME、FK-off 標記；v5 DB 遷移後各表筆數不變、`foreign_key_check` 為空、`integrity_check` 為 ok、索引存在且欄位順序正確（`PRAGMA index_xinfo` 斷言，含 `fetched_at`、`id` 為 desc）。`EXPLAIN QUERY PLAN` 斷言：(1) 單獨 EXPLAIN 讀取 scope 下的 `_snapshot_keep_select`，必須含 `ix_obs_snapshot` 和 `COVERING INDEX`，不得含 `SCAN price_observation` 和 `USE TEMP B-TREE`；(2) 完整讀取 SQL 不得含 `SCAN price_observation`、`SCAN watch`（最外層取整列只能是 rowid 查找，最外層 ORDER BY 允許一個 temp b-tree）；(3) 若 (1) 的「無 TEMP B-TREE」做不到，回報原始 plan 給 tech-architect 裁決，不得自行放寬。原始 plan 輸出記任務單。
+- **C-59 效能與紀錄**：依 Decision 6 逐項量測，原始輸出和步驟（DB 複本路徑、遷移耗時、暖機與次數）記在 `work/tasks/FD-8.md`；任一門檻未過，不得標 done。
+- **C-60 模組邊界**：`tests/test_architecture.py` 的 ALLOWED 不變；`services/retention.py` 的 diff 只能是零或僅呼叫端參數調整，且不含 SQL 字串；services 的非 docstring 字串常值不出現整字 `price_observation`、`OVER`、`WINDOW`（AST 整字比對；既有識別字 `FAILED_SCAN_WINDOW`、`NO_EMBEDDED_WINDOW` 與 docstring 不在此限，2026-10-29 總經理裁定）；新的 repository 方法沒有網頁或排程的 import。

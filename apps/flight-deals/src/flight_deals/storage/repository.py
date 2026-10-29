@@ -45,6 +45,49 @@ LIST_WATCHES_SQL = (
 )
 
 
+# Snapshot pre-filter (ADR-0002 FD-8 Decision 2, C-56). The authoritative snapshot
+# semantics live in ``services/price_snapshot.py``; this is the only SQL form of the rule
+# "per pair: newest two, plus the newest fetched before midnight". ``scope_sql`` must be
+# one of the module constants below (never user input; every value is a bound parameter).
+_SNAPSHOT_COLUMNS = (
+    "id, scan_run_id, watch_id, price_kind, currency, depart_date, return_date, fetched_at"
+)
+
+
+def _snapshot_keep_select(scope_sql: str) -> str:
+    """The only SQL form of the snapshot rule (ADR-0002 FD-8 Decision 2)."""
+    return (
+        "SELECT id, scan_run_id FROM ("
+        " SELECT id, scan_run_id, depart_date, fetched_at,"
+        "  ROW_NUMBER() OVER snap AS rn, LAG(fetched_at) OVER snap AS newer_fetched_at"
+        f" FROM ({scope_sql})"
+        " WINDOW snap AS (PARTITION BY watch_id, price_kind, currency, depart_date, return_date"
+        "  ORDER BY fetched_at DESC, id DESC))"
+        " WHERE depart_date >= :today AND (rn <= 2 OR (fetched_at < :midnight"
+        "  AND (newer_fetched_at IS NULL OR newer_fetched_at >= :midnight)))"
+    )
+
+
+# Read side: one watch, its current revision, live prices in the watch currency, not
+# departed (the rows ``Snapshot.build`` would keep).
+_SNAPSHOT_SCOPE_WATCH = (
+    f"SELECT {_SNAPSHOT_COLUMNS} FROM price_observation"
+    " WHERE watch_id = :watch_id AND watch_revision = :revision"
+    " AND price_kind = 'live' AND currency = :currency AND depart_date >= :today"
+)
+# Retention side: every watch's current revision, every kind and currency, any departure.
+_SNAPSHOT_SCOPE_RETENTION = (
+    "SELECT o.id, o.scan_run_id, o.watch_id, o.price_kind, o.currency,"
+    " o.depart_date, o.return_date, o.fetched_at FROM price_observation o JOIN watch w"
+    " ON w.id = o.watch_id AND o.watch_revision = w.revision"
+)
+SNAPSHOT_OBSERVATIONS_SQL = (
+    "SELECT o.* FROM price_observation o WHERE o.id IN (SELECT id FROM ("
+    + _snapshot_keep_select(_SNAPSHOT_SCOPE_WATCH)
+    + ")) ORDER BY o.fetched_at DESC, o.id DESC"
+)
+
+
 def _d(value: date | None) -> str | None:
     return value.isoformat() if value else None
 
@@ -956,6 +999,34 @@ class Repository:
             rows = conn.execute(sql, params).fetchall()
         return [_observation(r) for r in rows]
 
+    def snapshot_observations_for_watch(
+        self,
+        watch_id: int,
+        *,
+        revision: int,
+        currency: str,
+        today: date,
+        midnight: datetime,
+    ) -> list[ObservationRecord]:
+        """Only what a snapshot reads (ADR-0002 FD-8 Decision 1), newest first.
+
+        Current revision, live, ``currency``, departing from ``today`` on; per date pair
+        the newest two plus the newest fetched before ``midnight``. ``Snapshot`` over this
+        equals ``Snapshot`` over :meth:`observations_for_watch` (Decision 3).
+        """
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                SNAPSHOT_OBSERVATIONS_SQL,
+                {
+                    "watch_id": watch_id,
+                    "revision": revision,
+                    "currency": currency,
+                    "today": today.isoformat(),
+                    "midnight": to_utc_iso(midnight),
+                },
+            ).fetchall()
+        return [_observation(r) for r in rows]
+
     def old_revision_observations(
         self, watch_id: int, current_revision: int, limit: int = 50
     ) -> list[ObservationRecord]:
@@ -1296,26 +1367,14 @@ class Repository:
         """
         with self.db.connect() as conn:
             rows = conn.execute(
-                "WITH cur AS ("
-                "  SELECT o.id, o.scan_run_id, o.watch_id, o.depart_date, o.return_date,"
-                "   o.price_kind, o.currency, o.fetched_at, o.amount_minor"
+                "SELECT scan_run_id FROM ("
+                + _snapshot_keep_select(_SNAPSHOT_SCOPE_RETENTION)
+                + ") UNION SELECT scan_run_id FROM ("
+                "  SELECT o.scan_run_id, ROW_NUMBER() OVER (PARTITION BY o.watch_id,"
+                "   o.price_kind, o.currency ORDER BY o.amount_minor, o.id) AS rn_min"
                 "  FROM price_observation o JOIN watch w"
                 "   ON w.id = o.watch_id AND o.watch_revision = w.revision"
-                "), ranked AS ("
-                "  SELECT scan_run_id, depart_date,"
-                "   ROW_NUMBER() OVER (PARTITION BY watch_id, depart_date, return_date,"
-                "    price_kind, currency ORDER BY fetched_at DESC, id DESC) AS rn_pair,"
-                "   ROW_NUMBER() OVER (PARTITION BY watch_id, price_kind, currency"
-                "    ORDER BY amount_minor, id) AS rn_min"
-                "  FROM cur"
-                "), before_midnight AS ("
-                "  SELECT scan_run_id, ROW_NUMBER() OVER (PARTITION BY watch_id, depart_date,"
-                "    return_date, price_kind, currency ORDER BY fetched_at DESC, id DESC) AS rn"
-                "  FROM cur WHERE fetched_at < :midnight AND depart_date >= :today"
-                ")"
-                " SELECT scan_run_id FROM ranked"
-                "  WHERE (rn_pair <= 2 AND depart_date >= :today) OR rn_min = 1"
-                " UNION SELECT scan_run_id FROM before_midnight WHERE rn = 1",
+                " ) WHERE rn_min = 1",
                 {"today": today.isoformat(), "midnight": to_utc_iso(midnight)},
             ).fetchall()
         return {int(r["scan_run_id"]) for r in rows}

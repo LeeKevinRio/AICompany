@@ -118,7 +118,13 @@ class DigestService:
                 continue
             spec = watch.spec
             snapshot = Snapshot.build(
-                self._repo.observations_for_watch(watch.id, revision=watch.revision),
+                self._repo.snapshot_observations_for_watch(
+                    watch.id,
+                    revision=watch.revision,
+                    currency=spec.currency,
+                    today=today,
+                    midnight=midnight,
+                ),
                 revision=watch.revision,
                 currency=spec.currency,
                 today=today,

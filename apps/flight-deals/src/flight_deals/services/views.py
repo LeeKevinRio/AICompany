@@ -49,6 +49,7 @@ from flight_deals.domain.trip_labels import (
     total_price_short,
 )
 from flight_deals.ports import AutostartProbe, BookingLinkBuilder, Clock
+from flight_deals.services.digest import taipei_midnight
 from flight_deals.services.health import HealthService, describe_source, no_embedded_streak
 from flight_deals.services.notifications import safe_booking_url
 from flight_deals.services.price_snapshot import (
@@ -372,14 +373,23 @@ class ViewService:
 
     def list_page(self) -> dict[str, Any]:
         rows = []
-        today = taipei_date(self._clock())
+        now = self._clock()
+        today = taipei_date(now)
+        midnight = taipei_midnight(now)
         # Watches carry their latest run's results in the same single query (C-34).
         for item in self._repo.list_watches_with_last_results(self._streak_rounds):
             watch, last_results = item.watch, item.last_results
             spec = watch.spec
-            # One observation query per watch, as before FD-4 (C-34).
+            # One observation query per watch, as before FD-4 (C-34); only the rows a
+            # snapshot reads (ADR-0002 FD-8 Decision 1).
             snapshot = Snapshot.build(
-                self._repo.observations_for_watch(watch.id, revision=watch.revision),
+                self._repo.snapshot_observations_for_watch(
+                    watch.id,
+                    revision=watch.revision,
+                    currency=spec.currency,
+                    today=today,
+                    midnight=midnight,
+                ),
                 revision=watch.revision,
                 currency=spec.currency,
                 today=today,

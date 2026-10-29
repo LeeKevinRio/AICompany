@@ -78,6 +78,7 @@ from flight_deals.domain.trip_labels import (
     dep_window_label,
 )
 from flight_deals.ports import BookingLinkBuilder, Clock, InboundUpdate, Redactor, TelegramInbox
+from flight_deals.services.digest import taipei_midnight
 from flight_deals.services.health import HealthService, describe_source
 from flight_deals.services.notifications import NotificationService, safe_booking_url
 from flight_deals.services.price_snapshot import Snapshot, cheapest_pairs
@@ -85,7 +86,7 @@ from flight_deals.services.scan import ScanOutcome
 from flight_deals.services.settings import SettingsService
 from flight_deals.services.views import BREAKER_LABELS, SKIP_REASON_LABELS, dates_text
 from flight_deals.services.watches import WatchService
-from flight_deals.storage.repository import Repository, ScanRunRecord
+from flight_deals.storage.repository import ObservationRecord, Repository, ScanRunRecord
 
 log = logging.getLogger(__name__)
 
@@ -283,9 +284,19 @@ class CommandService:
 
     # ---- read models -------------------------------------------------------------
 
+    def _current_snapshot_rows(self, watch: Watch, now: datetime) -> list[ObservationRecord]:
+        """Only the rows a snapshot reads (ADR-0002 FD-8 Decision 1); one SQL query."""
+        return self._repo.snapshot_observations_for_watch(
+            watch.id,
+            revision=watch.revision,
+            currency=watch.spec.currency,
+            today=taipei_date(now),
+            midnight=taipei_midnight(now),
+        )
+
     def _snapshot(self, watch: Watch, now: datetime) -> Snapshot:
         return Snapshot.build(
-            self._repo.observations_for_watch(watch.id, revision=watch.revision),
+            self._current_snapshot_rows(watch, now),
             revision=watch.revision,
             currency=watch.spec.currency,
             today=taipei_date(now),
@@ -345,7 +356,7 @@ class CommandService:
     def top_prices(self, watch: Watch, now: datetime) -> list[CommandPriceRow]:
         """The detail page's ``top`` ranking (``cheapest_pairs``: live, watch currency,
         not departed, newest per pair, cheapest first), first three."""
-        current = self._repo.observations_for_watch(watch.id, revision=watch.revision)
+        current = self._current_snapshot_rows(watch, now)
         ranked = cheapest_pairs(
             current, revision=watch.revision, currency=watch.spec.currency, today=taipei_date(now)
         )
