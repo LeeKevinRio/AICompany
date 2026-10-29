@@ -188,7 +188,9 @@ describe("EmergencyExitControl keeps focus inside the dialog while submitting (N
     expect(finalStep).not.toMatch(/(?<![-\w:])disabled(?![-\w])(?=[\s>/])/);
     expect(control).not.toMatch(/(?<![-\w])disabled=\{mutation\.isPending\}/);
     // Both 取消 and 確認送出 carry aria-disabled bound to the pending state.
-    expect(finalStep.match(/aria-disabled=\{mutation\.isPending\}/g)).toHaveLength(2);
+    // `|| undefined` omits the attribute when idle, so only "true" is ever
+    // rendered and the `aria-disabled:` variants (`[aria-disabled=true]`) match.
+    expect(finalStep.match(/aria-disabled=\{mutation\.isPending \|\| undefined\}/g)).toHaveLength(2);
   });
 
   it("styles the aria-disabled state (cursor, opacity, no hover highlight) on both buttons", () => {
@@ -200,17 +202,39 @@ describe("EmergencyExitControl keeps focus inside the dialog while submitting (N
     expect(finalStep).not.toMatch(/(?<![-\w])disabled:/);
   });
 
-  it("refuses to submit again while pending (a focused aria-disabled button can still be activated)", () => {
+  it("refuses to submit again while pending or locked (a focused aria-disabled button can still be activated)", () => {
     const body = functionBody("submit");
-    expect(body.indexOf("if (mutation.isPending) return;")).toBeGreaterThan(-1);
-    expect(body.indexOf("if (mutation.isPending) return;")).toBeLessThan(body.indexOf("mutation.mutate("));
+    const guard = "if (submittingRef.current || mutation.isPending) return;";
+    expect(body.indexOf(guard)).toBeGreaterThan(-1);
+    expect(body.indexOf(guard)).toBeLessThan(body.indexOf("mutation.mutate("));
   });
 
-  it("refuses to cancel while pending, whatever triggers it", () => {
+  it("refuses to cancel while pending or locked, whatever triggers it", () => {
     const body = functionBody("cancel");
-    expect(body.indexOf("if (mutation.isPending) return;")).toBeGreaterThan(-1);
-    expect(body.indexOf("if (mutation.isPending) return;")).toBeLessThan(body.indexOf('setStep("idle")'));
+    const guard = "if (submittingRef.current || mutation.isPending) return;";
+    expect(body.indexOf(guard)).toBeGreaterThan(-1);
+    expect(body.indexOf(guard)).toBeLessThan(body.indexOf('setStep("idle")'));
     // Esc stays locked on its own as well (asserted in the Esc test above).
+  });
+
+  it("holds a synchronous ref lock across the mutate call and releases it on success and failure", () => {
+    // `isPending` only flips after a render, so a second activation in the same
+    // tick would otherwise fire a second irreversible POST.
+    expect(control).toContain("const submittingRef = useRef(false);");
+    const body = functionBody("submit");
+    const mutate = body.indexOf("mutation.mutate(");
+    expect(mutate).toBeGreaterThan(-1);
+    const check = body.indexOf("submittingRef.current ||");
+    const acquire = body.indexOf("submittingRef.current = true;");
+    expect(check).toBeGreaterThan(-1);
+    expect(acquire).toBeGreaterThan(check);
+    expect(acquire).toBeLessThan(mutate);
+    // Released in onSettled (runs for success and failure), never only in onSuccess,
+    // so a failed submit can be retried.
+    const options = body.slice(mutate);
+    expect(options).toMatch(/onSettled:\s*\(\)\s*=>\s*\{\s*submittingRef\.current = false;\s*\}/);
+    expect(control.match(/submittingRef\.current = false/g)).toHaveLength(1);
+    expect(control.match(/submittingRef\.current = true/g)).toHaveLength(1);
   });
 
   it("focuses the clicked submit button before the request starts (browsers that do not focus on click)", () => {

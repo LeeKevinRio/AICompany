@@ -68,6 +68,10 @@ export function EmergencyExitControl({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousStepRef = useRef<ExitStep>("idle");
   const cancelRef = useRef<() => void>(() => {});
+  // Synchronous submit lock. `mutation.isPending` only flips after a render, so
+  // two activations inside the same tick would both see `false` and fire two
+  // irreversible POSTs; a ref is updated immediately.
+  const submittingRef = useRef(false);
 
   // The checklist length only changes when a refetch swaps the degraded
   // fallback for the real block (3 checks <-> 4). Re-seeding keeps a tick
@@ -84,9 +88,9 @@ export function EmergencyExitControl({
   }
 
   function cancel() {
-    // Defence in depth for the aria-disabled 取消 button (still focusable and
+    // Defence in depth for the aria-disabled cancel button (still focusable and
     // clickable while the submission is in flight): never close mid-submit.
-    if (mutation.isPending) return;
+    if (submittingRef.current || mutation.isPending) return;
     setStep("idle");
     setChecks(initialExitChecks(checkTexts.length));
   }
@@ -94,13 +98,20 @@ export function EmergencyExitControl({
   function submit(event: React.MouseEvent<HTMLButtonElement>) {
     // N-163: the button stays `aria-disabled` (not `disabled`) while pending, so
     // it keeps focus; a second activation (Enter / Space / click) must not
-    // fire a second irreversible POST.
-    if (mutation.isPending) return;
+    // fire a second irreversible POST. The ref covers the window before
+    // `isPending` is rendered; `isPending` covers a lock that was never set.
+    if (submittingRef.current || mutation.isPending) return;
+    submittingRef.current = true;
     // Safari / Firefox-on-macOS do not focus a button on click; make it explicit
     // so focus is on a dialog control before the pending state begins.
     event.currentTarget.focus();
     mutation.mutate(undefined, {
       onSuccess: () => setStep("idle"),
+      // Release the lock on success and failure alike so a failed submit can
+      // be retried.
+      onSettled: () => {
+        submittingRef.current = false;
+      },
     });
   }
 
@@ -126,7 +137,7 @@ export function EmergencyExitControl({
   }, [step]);
 
   // Esc == 取消: closes the dialog and never submits. Locked while the
-  // submission is in flight, same as the (aria-disabled) 取消 button and as
+  // submission is in flight, same as the (aria-disabled) cancel button and as
   // `EditPositionModal`.
   useEffect(() => {
     if (step === "idle") return;
@@ -256,19 +267,22 @@ export function EmergencyExitControl({
                 )}
                 <div className="mt-5 flex justify-end gap-2">
                   {/*
-                    N-163: 送出中 these two buttons use `aria-disabled`, not the
-                    native `disabled`. A focused button that becomes `disabled`
-                    drops focus to <body>, and the next Tab then leaves the dialog
-                    for the page header link behind the overlay (Enter on it
-                    navigates away mid-submit, hiding the outcome of an
-                    irreversible action). `aria-disabled` keeps the focused button
-                    focused, still announces it as unavailable, and the click
-                    handlers above refuse to act while pending.
+                    N-163: while the submission is pending these two buttons use
+                    `aria-disabled`, not the native `disabled`. A focused button
+                    that becomes `disabled` drops focus to <body>, and the next
+                    Tab then leaves the dialog for the page header link behind the
+                    overlay (Enter on it navigates away mid-submit, hiding the
+                    outcome of an irreversible action). `aria-disabled` keeps the
+                    focused button focused and still announces it as unavailable;
+                    `submit` / `cancel` refuse to act while the submit lock is
+                    held or the mutation is pending. The attribute is omitted
+                    (undefined) when idle, so only the "true" state matches the
+                    `aria-disabled:` variants.
                   */}
                   <button
                     type="button"
                     onClick={cancel}
-                    aria-disabled={mutation.isPending}
+                    aria-disabled={mutation.isPending || undefined}
                     className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
                   >
                     取消
@@ -276,7 +290,7 @@ export function EmergencyExitControl({
                   <button
                     type="button"
                     onClick={submit}
-                    aria-disabled={mutation.isPending}
+                    aria-disabled={mutation.isPending || undefined}
                     className="rounded-md border border-neutral-500 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-100 hover:bg-neutral-700 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-neutral-800"
                   >
                     {mutation.isPending ? "送出中…" : "確認送出全部出清"}
