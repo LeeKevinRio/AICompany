@@ -343,6 +343,11 @@ const SCANNED_FILES = [
   // exists to reach. Their approved *wording* is pinned separately, against the
   // rendered output, by `app/playbook/__tests__/RuleSetConfirmPanel.test.ts`.
   "../../playbook/RuleSetConfirmPanel.tsx",
+  // N-155 排程台 x 第 1 條揭露區塊 (風控 2026-10-28 #68 裁決): the component holds no
+  // wording of its own (title and lines come from the backend), but it is a new
+  // JSX surface for user-facing copy, so it joins the scan. Its sentinel and
+  // static-scan guards live in `app/playbook/__tests__/Cap1DisclosureBlock.test.ts`.
+  "../../playbook/Cap1DisclosureBlock.tsx",
   // D4 定稿(work/stock-desk-D4-資料來源措辭.md,含 R-D4-1,risk-compliance
   // -officer APPROVE):美股揭露句是這批新加的硬編碼 JSX 文案，該檔先前完全
   // 不在掃描清單內。

@@ -3,6 +3,7 @@
 import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import {
+  cap1DisclosureHost,
   fastMarketAdjacentNote,
   noDirectiveNote,
   shouldRenderAttribution,
@@ -11,6 +12,7 @@ import {
   visibleWarnings,
 } from "../lib/playbookView";
 import { usePlaybookToday } from "../lib/queries";
+import { Cap1DisclosureBlock } from "./Cap1DisclosureBlock";
 import { DirectiveLedger } from "./DirectiveLedger";
 import { ModeStatusBar } from "./ModeStatusBar";
 import { PositionSnapshotTable } from "./PositionSnapshotTable";
@@ -97,6 +99,16 @@ export default function PlaybookPage() {
                   </p>
                 ))}
               </div>
+            )}
+
+            {/*
+              排程台 x 第 1 條揭露（N-155，風控 2026-10-28 #68 裁決補充 3）：每個畫面
+              恰好一次。待確認規則集時改由 `RuleSetConfirmPanel` 內（資料取自
+              `/rule-set`）渲染，這裡不放 `/today` 的那一份；其他模式放在 warnings
+              之後、帳冊之前。位置由 `cap1DisclosureHost` 決定，是否顯示不看任何值。
+            */}
+            {cap1DisclosureHost(data.mode) === "today_page" && (
+              <Cap1DisclosureBlock disclosure={data.cap1_disclosure} headingLevel={2} />
             )}
 
             {/*

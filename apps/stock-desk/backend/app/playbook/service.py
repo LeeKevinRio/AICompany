@@ -442,6 +442,7 @@ class PlaybookService:
                         reason=None,
                     ),
                     rules_version=params.version,
+                    params=params,
                     directives=directives,
                     effects=[],
                     warnings=warnings,
@@ -571,6 +572,11 @@ class PlaybookService:
             }
         )
         warnings = [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="、".join(held))] if held else []
+        # The version in force -- what ``rule_set_status`` states and a
+        # confirmation would adopt. Nothing is evaluated with it here; it is
+        # carried for the figures a response restates (ADR-0031 C-5) and read
+        # once for both that and the exit confirmation.
+        params = self._store.active_params(as_of)
         return PlaybookEvaluation(
             data_date=as_of,
             execution_date=as_of,
@@ -582,6 +588,7 @@ class PlaybookService:
                 active=False, annualized_vol_20d=None, large_move_days=0, reason=None
             ),
             rules_version=0,
+            params=params,
             directives=[],
             effects=[],
             warnings=warnings,
@@ -598,7 +605,7 @@ class PlaybookService:
                 user_authored=False,
             ),
             exit_confirm=build_exit_confirm(
-                params=self._store.active_params(as_of),
+                params=params,
                 calendar=TradingCalendar(()),
                 as_of=as_of,
             ),
@@ -852,6 +859,7 @@ class PlaybookService:
                     reason=None,
                 ),
                 rules_version=params.version,
+                params=params,
                 directives=directives,
                 effects=[],
                 warnings=warnings,

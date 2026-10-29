@@ -521,6 +521,12 @@ class PlaybookEvaluation(BaseModel):
     is_schedule_day: bool
     fast_market: FastMarketState
     rules_version: int
+    #: The parameter version this evaluation actually ran with -- the one the
+    #: engine was handed, or on the 待確認規則集 path the version in force that
+    #: a confirmation would adopt. Carried out so a response that restates any of
+    #: its figures (ADR-0031 C-5) reads them from here instead of from a second
+    #: store read that could answer with another version.
+    params: RuleParams
     #: ``effective_date`` of the :class:`RuleParams` row actually in force, or
     #: ``None`` when no stored row answers (§6 ② branch (b)). Filled by the
     #: service from the store; the engine is handed parameters, not their
