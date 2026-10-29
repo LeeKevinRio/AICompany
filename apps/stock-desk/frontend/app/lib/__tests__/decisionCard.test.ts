@@ -106,6 +106,7 @@ function makeResponse(overrides: Partial<AdviceResponse> = {}): AdviceResponse {
     position_ids: [1],
     portfolio_context: {} as unknown as AdviceResponse["portfolio_context"],
     context_notes: [],
+    cap1_migration_notice: null,
     advice: makeCard(),
     data: {
       status: "fresh",

@@ -334,6 +334,7 @@ def test_the_anchor_date_is_the_page_s_data_date_on_every_dividend_branch(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_kelly_import_surface_carries_no_round_trip_detail(api_harness: ApiHarness) -> None:
     _seed(api_harness)
     response = api_harness.client.post(

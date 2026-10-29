@@ -115,13 +115,52 @@ def test_the_worst_holding_drives_the_single_position_cap() -> None:
 
 
 def test_a_book_inside_the_cap_reports_the_highest_weight_as_passed() -> None:
+    # Ten equal holdings are 10% each: inside the 15% cap this test was written
+    # around, so it now passes that cap explicitly (quant constraint 6, #61).
+    # Under the 10% default the same book is ``violated`` -- equal to the cap
+    # counts as reached (``tests/test_cap1_default.py``).
     checks = _report(
-        book_summary(*(book_position(i, f"000{i}", quantity="100") for i in range(1, 11)))
+        book_summary(*(book_position(i, f"000{i}", quantity="100") for i in range(1, 11))),
+        budget=RiskBudget(max_position_weight=0.15),
     )
     cap = checks["single_position_weight"]
     assert cap.status == "passed"
     assert cap.observed is not None and abs(cap.observed - 0.1) < 1e-9
     assert cap.evaluated_count == 10
+
+
+def test_violated_count_is_the_number_of_holdings_whose_own_cap_1_is_violated() -> None:
+    """#4a/#4b {n} (風控 2026-10-26 實作約束 8): read off the same per-holding checks.
+
+    Quantities 100/100/300/500 at the same price: 10%, 10%, 30%, 50% of the
+    book. At the 10% default all four reach the cap (equal counts as reached);
+    at 15% only the two heavy ones do.
+    """
+    summary = book_summary(
+        book_position(1, "2330", quantity="100"),
+        book_position(2, "2454", quantity="100"),
+        book_position(3, "2317", quantity="300"),
+        book_position(4, "2412", quantity="500"),
+    )
+    assert _report(summary)["single_position_weight"].violated_count == 4
+    cap = _report(summary, budget=RiskBudget(max_position_weight=0.15))["single_position_weight"]
+    assert cap.violated_count == 2
+    assert cap.status == "violated" and cap.evaluated_count == 4
+    # The two book-level caps compare nothing, so they count nothing.
+    checks = _report(summary)
+    assert checks["gross_exposure"].violated_count == 0
+    assert checks["kelly_fraction"].violated_count == 0
+
+
+def test_violated_count_is_zero_when_every_holding_passes_or_none_is_compared() -> None:
+    passing = _report(
+        book_summary(*(book_position(i, f"000{i}", quantity="100") for i in range(1, 12)))
+    )
+    assert passing["single_position_weight"].status == "passed"
+    assert passing["single_position_weight"].violated_count == 0
+    unvalued = _report(book_summary(book_position(1, "2330", price=None)))
+    assert unvalued["single_position_weight"].evaluated_count == 0
+    assert unvalued["single_position_weight"].violated_count == 0
 
 
 def test_a_violated_holding_outranks_a_passing_one() -> None:

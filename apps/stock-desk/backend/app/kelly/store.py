@@ -35,6 +35,7 @@ from typing import Any
 
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.sqlite_util import enable_wal
+from app.kelly.freeze import KellyInputWritesFrozenError
 from app.kelly.models import KellyInputRecord, KellyInputRow, normalize_symbol
 from app.positions.models import Market
 
@@ -189,7 +190,14 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
 class KellyInputStore:
     """CRUD for ``kelly_inputs``: one effective row per ``(symbol, market)``."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
+    def __init__(self, db_path: str | Path | None = None, *, accept_writes: bool = True) -> None:
+        """``accept_writes=False`` makes :meth:`upsert` refuse (plan D, D-1).
+
+        The process-wide store (``app.api.deps``) is built that way while
+        :data:`app.kelly.freeze.KELLY_INPUT_WRITES_FROZEN` holds; :meth:`delete`
+        and every read are unaffected.
+        """
+        self._accept_writes = accept_writes
         self._db_path = Path(db_path) if db_path is not None else resolve_db_path()
         if str(self._db_path) != ":memory:":
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,6 +248,10 @@ class KellyInputStore:
         user restating a figure is them confirming it still holds, which is
         precisely what the freshness rule asks of them.
         """
+        if not self._accept_writes:
+            raise KellyInputWritesFrozenError(
+                f"kelly input writes are frozen (plan D): {record.symbol} {record.market}"
+            )
         moment = (now if now is not None else datetime.now(UTC)).isoformat()
         values = [getattr(record, name) for name in KellyInputRecord.model_fields]
         values.append(moment)

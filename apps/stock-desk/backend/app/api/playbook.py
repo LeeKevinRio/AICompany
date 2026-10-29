@@ -30,6 +30,18 @@ is part of the same response rather than a surprise the next day.
 
 Neither endpoint places an order anywhere: this product does not connect to a
 broker (風控 R10, R15).
+
+``/today``, ``/rule-set`` and ``/confirm-rules`` also carry ``cap1_disclosure``,
+the 排程台 × 第 1 條 disclosure (N-155, ADR-0031 accepted by CEO #69). This module
+is the one place it is assembled, and the only exception to 修訂 D-2 (2) (CEO
+#68/#70): it receives the stored cap-1 value through ``Depends`` and hands it to
+:func:`app.api.playbook_cap1_wording.compose` unchanged. The value enters no
+branch, comparison, arithmetic, log, share count, state or stored record here
+(風控 2026-10-28 #68 裁決補充 R4-1), and no other risk cap is read at all;
+``tests/test_playbook_boundary.py`` pins both the imports and every use of the
+name. The rule-set figures in the disclosure come from the ``RuleParams`` the
+same response used. Settings are never imported here (C-6) -- the value only
+arrives through the cap-1 dependency in :mod:`app.api.deps`.
 """
 
 from __future__ import annotations
@@ -41,7 +53,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.common import now_iso
-from app.api.deps import get_playbook_service
+from app.api.deps import get_cap1_weight, get_playbook_service
+from app.api.playbook_cap1_wording import PlaybookCap1Disclosure, compose
 from app.playbook import wording
 from app.playbook.models import (
     BatchSnapshot,
@@ -58,6 +71,9 @@ from app.playbook.service import PlaybookService
 router = APIRouter(prefix="/api/playbook", tags=["playbook"])
 
 ServiceDep = Annotated[PlaybookService, Depends(get_playbook_service)]
+#: The stored cap-1 setting, ``None`` when unreadable (ADR-0031 C-4, R4-4). Only
+#: ever passed straight to :func:`compose` (R4-1).
+Cap1WeightDep = Annotated[Decimal | None, Depends(get_cap1_weight)]
 
 
 class DirectiveLine(BaseModel):
@@ -174,6 +190,8 @@ class RuleSetResponse(BaseModel):
     #: rendered here so the confirmation screen substitutes one backend string
     #: and never scales a ratio or appends a unit of its own (五輪定稿 ④).
     deploy_ratio_pct: str
+    #: 排程台 × 第 1 條 disclosure (N-155), from ``params`` of this same version.
+    cap1_disclosure: PlaybookCap1Disclosure
     #: The recorded capital and its provenance (CEO 裁決 D-2).
     cash: str
     total_deploy: str
@@ -235,6 +253,10 @@ class TodayResponse(BaseModel):
     #: Filled on every service path, including 待確認規則集 (EX-2 出口零摩擦);
     #: ``None`` only on the pure-engine path, which no response reads.
     exit_confirm: ExitConfirm | None
+    #: 排程台 × 第 1 條 disclosure (N-155), from the ``RuleParams`` this
+    #: evaluation ran with (:attr:`PlaybookEvaluation.params`). Its own field,
+    #: never part of ``page_summary`` or ``warnings`` (風控 #68 裁決 2.2).
+    cap1_disclosure: PlaybookCap1Disclosure
     as_of: str
 
 
@@ -307,7 +329,14 @@ def _rule_param_items(params: RuleParams) -> list[RuleParamItem]:
     ]
 
 
-def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
+def _deploy_ratio_pct(params: RuleParams) -> str:
+    """``deploy_ratio`` written with its ``%`` sign (``"70%"``), as 五輪定稿 ④ shows it."""
+    return wording.ratio_pct(params.deploy_ratio) + "%"
+
+
+def _rule_set_response(
+    status: RuleSetStatus, *, cap1_disclosure: PlaybookCap1Disclosure
+) -> RuleSetResponse:
     authorship = status.authorship
     portfolio = status.portfolio
     return RuleSetResponse(
@@ -322,7 +351,8 @@ def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
             for rule_id in wording.RULE_TEXT
         ],
         params=_rule_param_items(status.params),
-        deploy_ratio_pct=wording.ratio_pct(status.params.deploy_ratio) + "%",
+        deploy_ratio_pct=_deploy_ratio_pct(status.params),
+        cap1_disclosure=cap1_disclosure,
         cash=str(portfolio.cash),
         total_deploy=str(portfolio.total_deploy),
         total_deploy_set_at=(
@@ -335,7 +365,9 @@ def _rule_set_response(status: RuleSetStatus) -> RuleSetResponse:
     )
 
 
-def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
+def _to_response(
+    evaluation: PlaybookEvaluation, *, cap1_disclosure: PlaybookCap1Disclosure
+) -> TodayResponse:
     return TodayResponse(
         data_date=evaluation.data_date.isoformat(),
         execution_date=evaluation.execution_date.isoformat(),
@@ -365,12 +397,13 @@ def _to_response(evaluation: PlaybookEvaluation) -> TodayResponse:
             None if evaluation.settlement is None else _settlement_response(evaluation.settlement)
         ),
         exit_confirm=evaluation.exit_confirm,
+        cap1_disclosure=cap1_disclosure,
         as_of=now_iso(),
     )
 
 
 @router.get("/today", response_model=TodayResponse)
-def today(service: ServiceDep) -> TodayResponse:
+def today(service: ServiceDep, cap1_weight: Cap1WeightDep) -> TodayResponse:
     """Evaluate the latest closing data and return today's directive table.
 
     Settles yesterday's due lines first (idempotently), so the book the table is
@@ -382,8 +415,23 @@ def today(service: ServiceDep) -> TodayResponse:
     exit, which is one step too late for a confirmation screen, and because a
     client that mirrors the freeze length states a number that a dated rule
     change has already moved.
+
+    ``cap1_disclosure`` is filled from the parameters the evaluation itself ran
+    with, not from a second read of the rule set (ADR-0031 C-5).
     """
-    return _to_response(service.evaluate_today())
+    evaluation = service.evaluate_today()
+    params = evaluation.params
+    return _to_response(
+        evaluation,
+        cap1_disclosure=compose(
+            rules_version=params.version,
+            deploy_ratio=params.deploy_ratio,
+            n_targets=params.n_targets,
+            batches_per_target=params.batches_per_target,
+            deploy_ratio_pct=_deploy_ratio_pct(params),
+            cap1_weight=cap1_weight,
+        ),
+    )
 
 
 @router.post("/settle", response_model=SettlementResponse)
@@ -398,18 +446,32 @@ def settle(service: ServiceDep) -> SettlementResponse:
 
 
 @router.get("/rule-set", response_model=RuleSetResponse)
-def rule_set(service: ServiceDep) -> RuleSetResponse:
+def rule_set(service: ServiceDep, cap1_weight: Cap1WeightDep) -> RuleSetResponse:
     """The rule set in force, its thresholds and whether the user adopted it.
 
     Read-only: reading the rules is not adopting them (風控 R2). This is what a
     confirmation screen renders *before* it asks, so the thresholds on screen are
     the ones ``GET /today`` would evaluate rather than a client-side copy.
     """
-    return _rule_set_response(service.rule_set_status())
+    status = service.rule_set_status()
+    params = status.params
+    return _rule_set_response(
+        status,
+        cap1_disclosure=compose(
+            rules_version=params.version,
+            deploy_ratio=params.deploy_ratio,
+            n_targets=params.n_targets,
+            batches_per_target=params.batches_per_target,
+            deploy_ratio_pct=_deploy_ratio_pct(params),
+            cap1_weight=cap1_weight,
+        ),
+    )
 
 
 @router.post("/confirm-rules", response_model=RuleSetResponse)
-def confirm_rules(payload: ConfirmRulesRequest, service: ServiceDep) -> RuleSetResponse:
+def confirm_rules(
+    payload: ConfirmRulesRequest, service: ServiceDep, cap1_weight: Cap1WeightDep
+) -> RuleSetResponse:
     """Adopt the rule set in force as the user's own and record the capital.
 
     The one action that lifts the 歸屬語情境 1 block: until it runs, ``GET
@@ -425,8 +487,24 @@ def confirm_rules(payload: ConfirmRulesRequest, service: ServiceDep) -> RuleSetR
     Confirms thresholds, never changes them: the body carries a capital figure
     only, so 鐵律④ (a rule change takes effect on the next trading day) cannot be
     routed around by re-confirming with different numbers.
+
+    The confirmation runs before the disclosure is composed and never sees the
+    cap-1 value, so that value can neither refuse a confirmation nor alter what
+    it writes (R4-5).
     """
-    return _rule_set_response(service.confirm_rules(capital=payload.capital))
+    status = service.confirm_rules(capital=payload.capital)
+    params = status.params
+    return _rule_set_response(
+        status,
+        cap1_disclosure=compose(
+            rules_version=params.version,
+            deploy_ratio=params.deploy_ratio,
+            n_targets=params.n_targets,
+            batches_per_target=params.batches_per_target,
+            deploy_ratio_pct=_deploy_ratio_pct(params),
+            cap1_weight=cap1_weight,
+        ),
+    )
 
 
 @router.post("/rebalance", response_model=RebalanceResponse)

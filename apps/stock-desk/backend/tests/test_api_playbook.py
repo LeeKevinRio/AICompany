@@ -16,8 +16,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_playbook_service
+from app.api.deps import get_cap1_weight, get_playbook_service
 from app.api.playbook import _to_response
+from app.api.playbook_cap1_wording import compose
 from app.main import app
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
@@ -25,6 +26,7 @@ from app.playbook.store import PlaybookStore
 from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
 from tests.playbook_helpers import RULE_SET_DATE, confirm_rule_set
 from tests.playbook_helpers import batch as make_batch
+from tests.playbook_helpers import params as make_params
 
 #: Enough history for MA25, the 20-day monthly line and the 20-day volatility.
 HISTORY = 40
@@ -52,6 +54,10 @@ def harness(tmp_path: Path) -> Iterator[PlaybookHarness]:
         index_resolver={"TW": index, "US": index},
     )
     app.dependency_overrides[get_playbook_service] = lambda: service
+    # The 排程台 × 第 1 條 disclosure reads the settings store; this suite
+    # does not, so it hands the endpoint a fixed value instead
+    # (``tests/test_api_playbook_cap1_disclosure.py`` covers the real read).
+    app.dependency_overrides[get_cap1_weight] = lambda: Decimal("0.10")
     with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield PlaybookHarness(client=client, store=store, prices=prices, index=index)
     app.dependency_overrides.clear()
@@ -98,6 +104,7 @@ def _evaluation(**overrides: object) -> PlaybookEvaluation:
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
         ),
         "rules_version": 1,
+        "params": make_params(),
         "directives": [],
         "effects": [],
         "warnings": [],
@@ -105,6 +112,18 @@ def _evaluation(**overrides: object) -> PlaybookEvaluation:
     }
     base.update(overrides)
     return PlaybookEvaluation(**base)  # type: ignore[arg-type]
+
+
+#: Any disclosure will do for the response-mapper tests below; its contents
+#: are pinned in ``tests/test_api_playbook_cap1_disclosure.py``.
+_DISCLOSURE = compose(
+    rules_version=1,
+    deploy_ratio=Decimal("0.70"),
+    n_targets=5,
+    batches_per_target=3,
+    deploy_ratio_pct="70%",
+    cap1_weight=Decimal("0.10"),
+)
 
 
 def test_today_returns_an_empty_table_when_nothing_is_held(
@@ -143,18 +162,18 @@ def test_the_no_hit_sentence_is_only_sent_on_a_fully_evaluated_empty_day() -> No
     evaluated = _evaluation(directives=[], rules_fully_evaluated=True)
     not_evaluated = _evaluation(directives=[], rules_fully_evaluated=False)
 
-    assert _to_response(evaluated).no_directive_note == (
+    assert _to_response(evaluated, cap1_disclosure=_DISCLOSURE).no_directive_note == (
         "今日規則已全數評估，無任何規則命中，未產生指令。"
     )
-    assert _to_response(evaluated).rules_fully_evaluated is True
-    assert _to_response(not_evaluated).no_directive_note is None
+    assert _to_response(evaluated, cap1_disclosure=_DISCLOSURE).rules_fully_evaluated is True
+    assert _to_response(not_evaluated, cap1_disclosure=_DISCLOSURE).no_directive_note is None
 
 
 def test_the_no_hit_sentence_is_not_sent_when_the_ledger_has_lines() -> None:
     """有指令的一天沒有「未產生指令」這回事."""
     with_lines = _evaluation(directives=[_directive()], rules_fully_evaluated=True)
 
-    assert _to_response(with_lines).no_directive_note is None
+    assert _to_response(with_lines, cap1_disclosure=_DISCLOSURE).no_directive_note is None
 
 
 def test_today_reports_the_stop_loss_line_with_its_provenance(
@@ -310,6 +329,7 @@ def _log_a_pending_entry(
                 active=False, annualized_vol_20d=None, large_move_days=0, reason=None
             ),
             rules_version=1,
+            params=make_params(),
             directives=[
                 Directive(
                     symbol="2330",

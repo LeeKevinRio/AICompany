@@ -100,6 +100,10 @@ class PortfolioLimitsResponse(BaseModel):
     notes: list[str]
     #: One entry per holding whose bars were loaded, in book order.
     sources: list[SymbolDataMeta]
+    #: The S2 sentence the gauge shows on its cap-1 row (CEO #63), branch
+    #: chosen and slots filled here; ``None`` when there is nothing to show
+    #: (:meth:`app.settings.migrations.Cap1MigrationRecord.short_notice`).
+    cap1_migration_notice: str | None
     as_of: str
 
 
@@ -187,8 +191,19 @@ def portfolio_limits(
         # user entered, and cap 5 must not report it as never entered (D-7).
         kelly_inputs=kelly_inputs_by_symbol(kelly_store),
     )
+    migration = settings_store.cap1_migration()
     return PortfolioLimitsResponse(
-        limits=report.limits, notes=report.notes, sources=sources, as_of=now_iso()
+        limits=report.limits,
+        notes=report.notes,
+        sources=sources,
+        cap1_migration_notice=(
+            None
+            if migration is None
+            else migration.short_notice(
+                current_max_position_weight=settings.risk_budget.max_position_weight
+            )
+        ),
+        as_of=now_iso(),
     )
 
 

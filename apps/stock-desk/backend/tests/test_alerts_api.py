@@ -237,6 +237,7 @@ def test_evaluate_fires_and_the_event_appears_in_the_feed(api_harness: ApiHarnes
     assert events[0]["symbol"] == "2330"
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_manual_tick_hands_cap_5_the_stored_pair(
     api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:

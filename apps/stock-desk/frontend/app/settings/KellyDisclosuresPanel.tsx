@@ -263,7 +263,12 @@ export function KellyDisclosuresPanel({
           */}
           {shouldRenderManualInputForm(showOriginal, original) && (
             <>
-              <KellyManualInputForm symbol={symbol} market={market} current={current} />
+              <KellyManualInputForm
+                symbol={symbol}
+                market={market}
+                current={current}
+                writesPausedLabel={disclosures.writes_paused_label}
+              />
               <KellyDeleteDialog symbol={symbol} market={market} hasRow={current !== null} />
             </>
           )}

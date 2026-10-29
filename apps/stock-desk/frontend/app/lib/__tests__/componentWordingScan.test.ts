@@ -234,6 +234,9 @@ function flatBasis(item: BasisItem): string {
 }
 
 const SCANNED_FILES = [
+  // #61 batch one (風控 2026-10-26 第1條下修告知逐字審 實作約束 6): the Kelly
+  // sunset lead, cap 5's sunset line and the cap-1 ledger summary.
+  "../cap1SunsetWording.ts",
   "../positionsTableView.ts",
   "../../position/[symbol]/OperationSummaryPanel.tsx",
   "../../position/[symbol]/page.tsx",
@@ -340,6 +343,11 @@ const SCANNED_FILES = [
   // exists to reach. Their approved *wording* is pinned separately, against the
   // rendered output, by `app/playbook/__tests__/RuleSetConfirmPanel.test.ts`.
   "../../playbook/RuleSetConfirmPanel.tsx",
+  // N-155 排程台 x 第 1 條揭露區塊 (風控 2026-10-28 #68 裁決): the component holds no
+  // wording of its own (title and lines come from the backend), but it is a new
+  // JSX surface for user-facing copy, so it joins the scan. Its sentinel and
+  // static-scan guards live in `app/playbook/__tests__/Cap1DisclosureBlock.test.ts`.
+  "../../playbook/Cap1DisclosureBlock.tsx",
   // D4 定稿(work/stock-desk-D4-資料來源措辭.md,含 R-D4-1,risk-compliance
   // -officer APPROVE):美股揭露句是這批新加的硬編碼 JSX 文案，該檔先前完全
   // 不在掃描清單內。
@@ -2190,6 +2198,7 @@ describe("RiskGauge.tsx H4／H5 逐字釘住（風控逐字審 R-A2；只加測�
       detail: "detail",
       worst_symbol: null,
       evaluated_count: 3,
+      violated_count: 0,
       excluded: [],
       ...overrides,
     };
@@ -2683,7 +2692,11 @@ describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
 
   it("page.tsx 傳 lastBarDate={advice.data.data.last_bar_date}（與決策卡、面板同源的 /api/advice DataMeta）", () => {
     expect(pageSrc).toContain("lastBarDate={advice.data.data.last_bar_date}");
-    expect(pageSrc).toContain("<AdviceCardView advice={advice.data.advice} lastBarDate={advice.data.data.last_bar_date} />");
+    // #61 batch one (CEO #63) added a third prop on its own line; the two this
+    // guard is about are still passed from the same `/api/advice` response.
+    expect(pageSrc).toMatch(
+      /<AdviceCardView\s+advice=\{advice\.data\.advice\}\s+lastBarDate=\{advice\.data\.data\.last_bar_date\}\s+cap1MigrationNotice=\{advice\.data\.cap1_migration_notice\}\s*\/>/,
+    );
   });
 
   it("AdviceCardView 以 buildDataAsOfBadge(lastBarDate) 組此行，不另寫字串常數", () => {

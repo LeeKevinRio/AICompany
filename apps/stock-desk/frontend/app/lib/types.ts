@@ -679,6 +679,13 @@ export interface AdviceResponse extends EnvelopeBase {
   position_ids: number[];
   portfolio_context: PortfolioContextOut;
   context_notes: string[];
+  /**
+   * The S2 sentence (CEO #63) `LimitsCheckList` shows under cap 1 — the same
+   * one the risk gauge's cap-1 row shows — branch chosen and slots filled by
+   * the backend (`Cap1MigrationRecord.short_notice`); `null` = none. Rendered
+   * verbatim; this app composes nothing around it.
+   */
+  cap1_migration_notice: string | null;
 }
 
 /* ============================================================================
@@ -719,6 +726,12 @@ export interface BookLimitCheck {
   /** The holding `observed` came from; `null` for cap 2 and the two book-level caps. */
   worst_symbol: string | null;
   evaluated_count: number;
+  /**
+   * How many compared holdings (cap 2: industries) had their own verdict
+   * `violated`, counted by the backend off the same checks `worst_symbol` came
+   * from — never recounted here. Cap 1 uses it for the ledger summary line.
+   */
+  violated_count: number;
   excluded: ExcludedSymbol[];
 }
 
@@ -734,6 +747,11 @@ export interface PortfolioLimitsResponse {
   limits: BookLimitCheck[];
   notes: string[];
   sources: SymbolDataMeta[];
+  /**
+   * The S2 sentence (CEO #63) for the gauge's cap-1 row, branch chosen and
+   * slots filled by the backend; `null` = none. Rendered verbatim.
+   */
+  cap1_migration_notice: string | null;
   as_of: string;
 }
 
@@ -1338,12 +1356,41 @@ export interface AppSettings {
   net_worth: NetWorthSettings;
 }
 
+/** Backend `Cap1MigrationStatus` (app/settings/migrations.py). */
+export type Cap1MigrationStatus = "migrated" | "not_applicable" | "skipped";
+
+/** Backend `Cap1SettingsNoticeView` (app/api/settings.py): title over ordered「標籤｜正文」items. */
+export interface Cap1SettingsNotice {
+  title: string;
+  items: { label: string; body: string }[];
+}
+
+/**
+ * Backend `Cap1MigrationView` (app/api/settings.py): the S2 record of the
+ * cap-1 default migration (CEO #63). Read-only — it lives in its own table and
+ * is never part of the `PUT` body. `notice` is what the settings page shows
+ * beside the cap-1 field, every branch chosen and every slot filled by the
+ * backend (`null` = none); this app renders it and composes nothing.
+ */
+export interface Cap1MigrationView {
+  status: Cap1MigrationStatus;
+  previous_value: number | null;
+  new_value: number | null;
+  failed_sections: string[];
+  basis: string;
+  /** ISO 8601 UTC; for `skipped`, the latest attempt. */
+  recorded_at: string;
+  changed_by_user: boolean;
+  notice: Cap1SettingsNotice | null;
+}
+
 /** Backend `SettingsResponse` (app/api/settings.py, verified). */
 export interface SettingsResponse {
   settings: AppSettings;
   rates_verified: boolean;
   notes: string[];
   net_worth: NetWorthView;
+  cap1_migration: Cap1MigrationView | null;
   as_of: string;
 }
 
@@ -1694,6 +1741,36 @@ export interface PlaybookExitConfirm {
   checks: string[];
 }
 
+/**
+ * Backend `PlaybookCap1Disclosure` (app/api/playbook_cap1_wording.py) — the
+ * 排程台 × 第 1 條 disclosure (N-155, ADR-0031), carried by `/today`,
+ * `/rule-set` and `/confirm-rules`. Every string arrives fully rendered:
+ * `title` and `lines` are rendered verbatim and in order, never re-composed,
+ * re-computed, compared or wrapped in a sentence of the client's own (AV-13).
+ * Whether it is shown never depends on `mode` or on any of these values; there
+ * is deliberately no comparison or status field to branch on.
+ *
+ * The backend also sends `rules_version` (an integer kept for backend-side
+ * reconciliation only, never displayed); it is left out of this type so the
+ * disclosure carries nothing but strings (F-3).
+ */
+export interface PlaybookCap1Disclosure {
+  //: 區塊標題, sent by the backend so no heading is hard-coded client-side.
+  title: string;
+  //: Sentences ① to ④ with every number already filled in; a missing value
+  //: already has its 讀取失敗 sentence swapped in. Never empty.
+  lines: string[];
+  //: The per-target share as rendered into ① (e.g. `"14%"`); `null` when it
+  //: cannot be computed. Already inside `lines` — not for separate display.
+  per_target_pct: string | null;
+  //: The cap-1 setting as rendered into ② (e.g. `"10%"`); `null` when the
+  //: setting could not be read. Already inside `lines`.
+  cap1_pct: string | null;
+  //: 1 ÷ n_targets as rendered into ③ (e.g. `"20%"`); `null` when it cannot
+  //: be computed. Already inside `lines`.
+  per_target_book_pct: string | null;
+}
+
 /** Backend `TodayResponse` (app/api/playbook.py) — `GET /api/playbook/today`. */
 export interface PlaybookTodayResponse {
   data_date: string;
@@ -1735,6 +1812,10 @@ export interface PlaybookTodayResponse {
   //: service path (including 待確認規則集), so `null` means the response itself
   //: was degraded — see `EXIT_CONFIRM_FALLBACK_CHECKS` for what renders then.
   exit_confirm: PlaybookExitConfirm | null;
+  //: 排程台 × 第 1 條 disclosure, from the rule parameters this evaluation ran
+  //: with. Optional only because an older backend does not send it — then
+  //: nothing is rendered and nothing is written in its place.
+  cap1_disclosure?: PlaybookCap1Disclosure;
   as_of: string;
 }
 
@@ -1800,6 +1881,10 @@ export interface PlaybookRuleSetResponse {
   //: (`"70%"`). Substituted as it stands — the client never multiplies by 100
   //: and never appends a `%` of its own (五輪定稿 ④).
   deploy_ratio_pct: string;
+  //: 排程台 × 第 1 條 disclosure, from the same parameter version as `params`.
+  //: Optional only because an older backend does not send it — then nothing
+  //: is rendered and nothing is written in its place.
+  cap1_disclosure?: PlaybookCap1Disclosure;
   //: The recorded capital and its provenance (CEO 裁決 D-2) — stringified
   //: `Decimal`s, same convention as every other money field here.
   cash: string;
@@ -2031,6 +2116,13 @@ export interface KellyDeleteNoticeView {
  */
 export interface KellyDisclosuresView {
   import_trigger_label: string;
+  /**
+   * Plan D (CEO #62, 2026-10-26): while new Kelly input is frozen, the label
+   * both write controls show instead (import trigger, manual submit), each
+   * disabled; `null` when writes are open. The refusal itself is the
+   * server's (409 on `PUT` and `import-backtest`).
+   */
+  writes_paused_label: string | null;
   freshness_badge_label: string;
   source_statement: string | null;
   source_label: string | null;

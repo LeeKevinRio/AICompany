@@ -156,6 +156,7 @@ class _KellySpy:
         return build_book_context(*args, **kwargs)
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_advice_endpoint_hands_cap_5_the_pair_it_has_stored(
     api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -182,6 +183,7 @@ def test_the_advice_endpoint_hands_cap_5_the_pair_it_has_stored(
         assert pair.win_rate == 0.6
 
 
+@pytest.mark.usefixtures("kelly_writes_open")
 def test_the_portfolio_limits_endpoint_hands_each_holding_its_own_pair(
     api_harness: ApiHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:

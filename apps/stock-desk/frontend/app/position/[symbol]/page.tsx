@@ -581,7 +581,11 @@ export default function PositionDetailPage() {
                   </ul>
                 </div>
               )}
-              <AdviceCardView advice={advice.data.advice} lastBarDate={advice.data.data.last_bar_date} />
+              <AdviceCardView
+                advice={advice.data.advice}
+                lastBarDate={advice.data.data.last_bar_date}
+                cap1MigrationNotice={advice.data.cap1_migration_notice}
+              />
             </div>
           </details>
         )}

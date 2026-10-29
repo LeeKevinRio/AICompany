@@ -108,7 +108,16 @@ export function hasOpposingDirections(advice: AdviceCard): boolean {
   return directions.has("defensive") && directions.has("constructive");
 }
 
-export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; lastBarDate: string | null }) {
+export function AdviceCardView({
+  advice,
+  lastBarDate,
+  cap1MigrationNotice = null,
+}: {
+  advice: AdviceCard;
+  lastBarDate: string | null;
+  /** `AdviceResponse.cap1_migration_notice`, passed through to `LimitsCheckList`. */
+  cap1MigrationNotice?: string | null;
+}) {
   const hasBlockedNotices = advice.blocked_notices.length > 0;
   // 風控 D-1 裁示 (b) 2026-10-04: same badge text as DecisionCard / OperationSummaryPanel, from the
   // same `/api/advice` DataMeta.last_bar_date; never `as_of` or `observation_window.end`.
@@ -232,7 +241,7 @@ export function AdviceCardView({ advice, lastBarDate }: { advice: AdviceCard; la
       )}
 
       <Section title="風險上限檢查">
-        <LimitsCheckList limits={advice.limits_check} />
+        <LimitsCheckList limits={advice.limits_check} cap1MigrationNotice={cap1MigrationNotice} />
       </Section>
 
       <Section title="資料完整度">

@@ -9,6 +9,8 @@ or touch the network.
 
 from __future__ import annotations
 
+import logging
+from decimal import Decimal
 from functools import lru_cache
 
 from app.alerts.store import AlertStore
@@ -28,6 +30,7 @@ from app.data.service import MarketDataService
 from app.directory.store import SecurityDirectoryStore
 from app.dividends.store import DividendEventStore
 from app.kelly.attempts import KellyAttemptStore
+from app.kelly.freeze import KELLY_INPUT_WRITES_FROZEN
 from app.kelly.store import KellyInputStore
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
@@ -41,6 +44,8 @@ from app.services.index import (
 )
 from app.services.market import MarketDataResolver
 from app.settings.store import SettingsStore
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -273,7 +278,9 @@ def _default_kelly_input_store() -> KellyInputStore:
     enters or imports a pair, which leaves risk cap 5 ``not_evaluable`` exactly
     as it was before C5 -- the absence of a row is a state, not a fault.
     """
-    return KellyInputStore()
+    # Plan D (CEO #62): refuses ``upsert`` while new input is frozen, a second
+    # layer behind the routes' own refusal (app/kelly/freeze.py).
+    return KellyInputStore(accept_writes=not KELLY_INPUT_WRITES_FROZEN)
 
 
 @lru_cache(maxsize=1)
@@ -376,6 +383,35 @@ def get_settings_store() -> SettingsStore:
     return _default_settings_store()
 
 
+def get_cap1_weight() -> Decimal | None:
+    """The stored cap-1 setting (單一標的佔比上限), for the 排程台 disclosure only.
+
+    ADR-0031 C-4 (CEO #69): the one way the cap-1 value reaches
+    ``app/api/playbook.py``, which may pass it to
+    :func:`app.api.playbook_cap1_wording.compose` and nowhere else (修訂 D-2 (2),
+    風控 2026-10-28 #68 裁決補充 R4-1). Read from the same process-wide store and
+    the same field the advice card reads (``api/advice.py``), so the disclosure
+    states the value the advice side is applying -- never a default constant.
+
+    R4-4: **any** failure -- building the store (which runs the S2 migration),
+    reading it, or a value that is not a finite number -- answers ``None``, and
+    the disclosure says the setting could not be read. A broken settings page
+    may never fail or hold back ``/today``: that would hide the stop-loss lines
+    along with it. Only the exception type is logged, never a value.
+
+    The store is the memoized :func:`_default_settings_store`, so a request does
+    not construct a ``SettingsStore`` (and re-run its migration) of its own.
+    """
+    try:
+        weight = Decimal(str(_default_settings_store().load().risk_budget.max_position_weight))
+    except Exception as exc:  # R4-4: every failure means "unreadable", never a 500
+        logger.warning(
+            "cap-1 setting unreadable for the playbook disclosure: %s", type(exc).__name__
+        )
+        return None
+    return weight if weight.is_finite() else None
+
+
 def get_alert_store() -> AlertStore:
     """Return the process-wide alert store."""
     return _default_alert_store()
@@ -384,6 +420,16 @@ def get_alert_store() -> AlertStore:
 def get_kelly_input_store() -> KellyInputStore:
     """Return the process-wide Kelly input store."""
     return _default_kelly_input_store()
+
+
+def get_kelly_input_writes_frozen() -> bool:
+    """Whether new Kelly input is refused (plan D, :mod:`app.kelly.freeze`).
+
+    A dependency rather than a bare import so the routes' refusal and the
+    disclosures' paused labels read one switch, and a test of the write path
+    behind the freeze can open it for its own app instance only.
+    """
+    return KELLY_INPUT_WRITES_FROZEN
 
 
 def get_kelly_attempt_store() -> KellyAttemptStore:

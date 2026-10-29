@@ -5,6 +5,7 @@ import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
 import { normalizeCapitalInput } from "../lib/playbookView";
 import { useConfirmPlaybookRules, usePlaybookRuleSet } from "../lib/queries";
+import { Cap1DisclosureBlock } from "./Cap1DisclosureBlock";
 
 /**
  * 確認規則集 + 資本設定入口, rendered under the 待確認規則集 blocking state
@@ -114,6 +115,14 @@ export function RuleSetConfirmPanel() {
               </div>
             ))}
           </dl>
+
+          {/*
+            排程台 x 第 1 條揭露（N-155，風控 2026-10-28 #68 裁決補充 3）：確認前
+            使用者必須先知情，所以放在規則參數之後、⑥ 同意句之前；資料取自同一份
+            `/rule-set` 回應。此時今日頁不再放 `/today` 的那一份。欄位缺（舊版後端）
+            就不渲染、不自撰。
+          */}
+          <Cap1DisclosureBlock disclosure={ruleSet.data.cap1_disclosure} headingLevel={3} />
 
           {/*
             ⑥ 同意句（五輪定稿逐字）：在資本欄與按鈕之前，常駐、不摺疊、不 tooltip。

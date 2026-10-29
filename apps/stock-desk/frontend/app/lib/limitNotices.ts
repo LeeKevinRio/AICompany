@@ -16,12 +16,20 @@ import type { AdviceCard, CardAction, LimitCheck } from "./types";
  * Pure: no React, no side effects, so every display condition is unit-tested
  * without a DOM. 風控 2026-10-26 定稿；失效條件 T1、T9.
  *
- * Cap 5 (`kelly_fraction`) is excluded from every list here (C-5). The Kelly
- * disablement itself (5-K) is a separate change and is not part of this one.
+ * Cap 5 (`kelly_fraction`) and these lists — 風控 2026-10-26
+ * `第1條上限下修審查` D-4, which revises C-5 for the Kelly sunset (plan D):
+ * - 2-V / 2-M / 2-R exclude cap 5 **by its status**, never by its id. During
+ *   the sunset cap 5 can still be `violated` and still blocks an add
+ *   (`engine.py`'s blocked notice names it), so it is listed like any other
+ *   cap; once 5-K reports it as `disabled`, it drops out on its own because
+ *   only `violated` checks enter these lists. Batch two must keep it that way
+ *   and not reintroduce an id filter here.
+ * - 2-O keeps excluding cap 5 by id in both periods: its inputs are frozen, so
+ *   「無法評估」 there leaves the user nothing to act on.
  */
 
-/** The limit id that C-5 keeps out of the violation / not-evaluable lists. 風控 2026-10-26 定稿；失效條件 T1 */
-const EXCLUDED_LIMIT_ID = "kelly_fraction";
+/** The limit id 2-O keeps out of its count (C-5, D-4). 風控 2026-10-26 定稿；失效條件 T1 */
+const NOT_EVALUABLE_EXCLUDED_LIMIT_ID = "kelly_fraction";
 
 /**
  * Held actions on which the 2-R sentence may appear: `hold` only. add, reduce, take_profit, stop_loss and
@@ -39,7 +47,7 @@ export interface LimitNotices {
   blockedNotices: string[];
   /** 2-R; null unless every C-6 condition holds. */
   actionNotice: string | null;
-  /** 2-O; null when no (non-excluded) limit is not_evaluable. */
+  /** 2-O; null when no limit other than cap 5 is not_evaluable. */
   notEvaluableNotice: string | null;
   /** True when anything above is non-empty (the caller renders nothing otherwise). */
   hasAny: boolean;
@@ -69,9 +77,11 @@ export function buildLimitNotices(
   card: AdviceCard,
   kind: "held" | "candidate",
 ): LimitNotices {
-  const considered = card.limits_check.filter((limit) => limit.id !== EXCLUDED_LIMIT_ID);
-  const violated = considered.filter((limit) => limit.status === "violated");
-  const notEvaluable = considered.filter((limit) => limit.status === "not_evaluable");
+  // D-4: by status only; a disabled cap (5-K) is never `violated`.
+  const violated = card.limits_check.filter((limit) => limit.status === "violated");
+  const notEvaluable = card.limits_check.filter(
+    (limit) => limit.id !== NOT_EVALUABLE_EXCLUDED_LIMIT_ID && limit.status === "not_evaluable",
+  );
 
   let violationTitle: string | null = null;
   let violationLines: string[] = [];

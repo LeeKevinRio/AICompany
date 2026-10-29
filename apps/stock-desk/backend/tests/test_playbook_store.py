@@ -56,6 +56,7 @@ def _evaluation(*directives: Directive) -> PlaybookEvaluation:
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
         ),
         rules_version=1,
+        params=helper.params(),
         directives=list(directives),
         effects=[],
         warnings=[],

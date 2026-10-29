@@ -80,6 +80,13 @@ class AdviceResponse(EnvelopeBase):
     portfolio_context: dict[str, Any]
     #: What had to be assumed, or was deliberately left out, and why.
     context_notes: list[str]
+    #: The S2 sentence (CEO #63) this page's ``LimitsCheckList`` shows under
+    #: cap 1, the same one the risk gauge's cap-1 row shows (#2', S1/S1'),
+    #: branch chosen and slots filled here
+    #: (:meth:`app.settings.migrations.Cap1MigrationRecord.short_notice`).
+    #: ``None`` when there is nothing to show, and always on an
+    #: ``insufficient_data`` response, which renders no cap list.
+    cap1_migration_notice: str | None
 
 
 #: ADR-0010 D-1 standing disclosure, first in ``context_notes`` (風控 A-6): the
@@ -139,6 +146,13 @@ def _book_freshness_notes(summary: PortfolioSummary) -> list[str]:
     if dates[0] == dates[-1]:
         return [CACHE_ONLY_BOOK_NOTE_SINGLE_DAY.format(date=dates[0])]
     return [CACHE_ONLY_BOOK_NOTE.format(earliest=dates[0], latest=dates[-1])]
+
+
+def _cap1_migration_notice(store: SettingsStore, current_max_position_weight: float) -> str | None:
+    migration = store.cap1_migration()
+    if migration is None:
+        return None
+    return migration.short_notice(current_max_position_weight=current_max_position_weight)
 
 
 @router.get("/{symbol}", response_model=AdviceResponse)
@@ -224,6 +238,7 @@ def get_advice(
             # verdict and no range is shown, so no figure the quote was
             # multiplied into either (PR-RK4c, R4c-7).
             context_notes=book_notes(book, quote_shown=False),
+            cap1_migration_notice=None,
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
         )
@@ -256,6 +271,7 @@ def get_advice(
         # First, not last (風控 A-6): this sentence qualifies every figure the
         # notes after it are about.
         context_notes=[*_book_freshness_notes(summary), *notes],
+        cap1_migration_notice=_cap1_migration_notice(settings_store, budget.max_position_weight),
         data=data_meta(loaded.meta()),
         as_of=now_iso(),
     )

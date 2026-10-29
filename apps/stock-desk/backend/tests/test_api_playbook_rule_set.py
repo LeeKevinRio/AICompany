@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_playbook_service
+from app.api.deps import get_cap1_weight, get_playbook_service
 from app.main import app
 from app.playbook import wording
 from app.playbook.service import PlaybookService
@@ -60,6 +60,10 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
         index_resolver={"TW": index, "US": index},
     )
     app.dependency_overrides[get_playbook_service] = lambda: service
+    # The 排程台 × 第 1 條 disclosure reads the settings store; this suite
+    # does not, so it hands the endpoints a fixed value instead
+    # (``tests/test_api_playbook_cap1_disclosure.py`` covers the real read).
+    app.dependency_overrides[get_cap1_weight] = lambda: Decimal("0.10")
     with TestClient(app, headers=CLIENT_HEADERS) as client:
         yield Harness(client=client, store=store, index=index)
     app.dependency_overrides.clear()

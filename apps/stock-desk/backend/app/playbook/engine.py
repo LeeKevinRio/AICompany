@@ -1296,6 +1296,7 @@ def evaluate(
         is_schedule_day=is_schedule_day,
         fast_market=fast_market,
         rules_version=params.version,
+        params=params,
         rules_fully_evaluated=rules_fully_evaluated,
         directives=[*out.directives, *entry_directives],
         effects=[*effects, *out.effects, *entry_effects],
