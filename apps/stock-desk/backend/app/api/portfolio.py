@@ -39,6 +39,7 @@ from app.positions.models import Market
 from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
+from app.settings.fallback_wording import risk_notice
 from app.settings.store import SettingsStore
 from app.signals.service import (
     SignalConfig,
@@ -104,6 +105,10 @@ class PortfolioLimitsResponse(BaseModel):
     #: chosen and slots filled here; ``None`` when there is nothing to show
     #: (:meth:`app.settings.migrations.Cap1MigrationRecord.short_notice`).
     cap1_migration_notice: str | None
+    #: N-156 (ADR-0032 Decision 2): N-1 / N-2 / N-3 when ``risk_budget`` or
+    #: ``net_worth`` is on its defaults in the read these caps ran on; the
+    #: gauge renders it above all five rows. ``None`` when neither fell back.
+    settings_fallback_notice: str | None
     as_of: str
 
 
@@ -152,7 +157,8 @@ def portfolio_limits(
     cap's comparison and listed in ``excluded`` with the reason.
     """
     summary = build_summary(store, valuator)
-    settings = settings_store.load()
+    loaded_settings = settings_store.load_with_status()
+    settings = loaded_settings.settings
     net_worth = self_reported_net_worth(
         settings.net_worth.total_net_worth_twd, settings.net_worth.updated_at
     )
@@ -203,6 +209,7 @@ def portfolio_limits(
                 current_max_position_weight=settings.risk_budget.max_position_weight
             )
         ),
+        settings_fallback_notice=risk_notice(loaded_settings.fallback_sections),
         as_of=now_iso(),
     )
 

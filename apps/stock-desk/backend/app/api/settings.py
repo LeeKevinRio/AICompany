@@ -25,6 +25,14 @@ against (``valued_book_twd_at_report``). The freshness block therefore restates
 both the age of the figure and the "this is many times your book" warning from
 stored values and the clock, with no provider call anywhere on the read path.
 
+A stored section that failed validation is served with its defaults and
+disclosed as such (N-156, ADR-0032): ``settings_fallback`` carries the
+header block, the marker under each such section's heading and the overwrite
+confirmation panels, every sentence chosen and filled by
+:mod:`app.settings.fallback_wording` from the same read the values came from.
+A fallback ``net_worth`` is never presented as "not entered yet": the
+freshness block says ``fallback`` and drops the not-entered note.
+
 The risk-budget bounds are the ones declared on
 :class:`app.advice.limits.RiskBudget` and are reused unchanged, whatever the
 settings page asks for: a single name stays at most 50% of equity, gross
@@ -63,6 +71,7 @@ from app.data.quota import (
 from app.portfolio.summary import build_summary, valued_market_value_twd
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
+from app.settings.fallback_wording import SettingsFallbackView, settings_fallback
 from app.settings.migrations import Cap1MigrationRecord, Cap1MigrationStatus
 from app.settings.models import AppSettings, AppSettingsPatch
 from app.settings.net_worth import (
@@ -71,7 +80,7 @@ from app.settings.net_worth import (
     review_net_worth,
     standing_far_above_note,
 )
-from app.settings.store import SettingsStore
+from app.settings.store import LoadedSettings, SettingsStore
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +129,8 @@ NET_WORTH_CURRENCY_NOTE = (
 )
 
 #: The state the product shipped in for months, and still the default one.
+#: Never shown for a ``fallback`` net worth: the user may well have entered one
+#: (風控 2026-10-29 N-156 第 1 項).
 NET_WORTH_ABSENT_NOTE = "尚未輸入帳戶總淨值，第 3 條總曝險上限維持 not_evaluable（無法評估）。"
 
 NET_WORTH_AGEING_NOTE = "帳戶總淨值已 {age_days} 天未更新，滿 {days} 天後第 3 條上限將停止計算。"
@@ -130,8 +141,11 @@ NET_WORTH_EXPIRED_NOTE = (
 )
 
 #: ``absent`` -- never entered; ``fresh`` / ``ageing`` -- usable, the second one
-#: with a reminder; ``expired`` -- past the freshness rule, cap 3 is off again.
-NetWorthFreshness = Literal["absent", "fresh", "ageing", "expired"]
+#: with a reminder; ``expired`` -- past the freshness rule, cap 3 is off again;
+#: ``fallback`` -- a figure was stored but failed validation, so nothing about
+#: it can be shown and cap 3 is not evaluable (ADR-0032). ``fallback`` is set
+#: exactly when ``"net_worth" in settings_fallback.sections`` -- the same read.
+NetWorthFreshness = Literal["absent", "fresh", "ageing", "expired", "fallback"]
 
 
 class QuotaUsageView(BaseModel):
@@ -244,6 +258,9 @@ class SettingsResponse(BaseModel):
     #: ``None`` only when no record exists, which a store that has run its
     #: start-up migration never leaves behind.
     cap1_migration: Cap1MigrationView | None
+    #: N-156: the sections served with their defaults and everything the page
+    #: says about them; ``None`` when no section fell back.
+    settings_fallback: SettingsFallbackView | None
     as_of: str
 
 
@@ -303,8 +320,13 @@ def _alpha_vantage_quota(ledger: QuotaLedger) -> QuotaUsageView:
     )
 
 
-def _net_worth_view(settings: AppSettings) -> NetWorthView:
+def _net_worth_view(settings: AppSettings, *, fallback: bool) -> NetWorthView:
     """The freshness block, from the clock and the stored figures only.
+
+    ``fallback`` -- ``net_worth`` is a fallback section in the same read -- is
+    its own state: the defaults hold no figure, but that is not the user never
+    having entered one, so neither ``absent`` nor its note is used
+    (風控 2026-10-29 N-156 第 1 項). Only the currency reminder stays.
 
     Nothing here prices a position: the freshness rule needs the clock, and the
     "far above your book" disclosure is restated from the yardstick that was
@@ -315,6 +337,15 @@ def _net_worth_view(settings: AppSettings) -> NetWorthView:
     survive the tab being closed.
     """
     stored = settings.net_worth
+    if fallback:
+        return NetWorthView(
+            total_net_worth_twd=None,
+            updated_at=None,
+            age_days=None,
+            freshness="fallback",
+            notes=[NET_WORTH_CURRENCY_NOTE],
+            warnings=[],
+        )
     reported = self_reported_net_worth(stored.total_net_worth_twd, stored.updated_at)
     if reported is None:
         return NetWorthView(
@@ -362,12 +393,14 @@ def _net_worth_view(settings: AppSettings) -> NetWorthView:
 
 
 def _cap1_migration_view(
-    record: Cap1MigrationRecord | None, settings: AppSettings
+    record: Cap1MigrationRecord | None, loaded: LoadedSettings
 ) -> Cap1MigrationView | None:
     if record is None:
         return None
     notice = record.settings_notice(
-        current_max_position_weight=settings.risk_budget.max_position_weight
+        current_max_position_weight=loaded.settings.risk_budget.max_position_weight,
+        # R-2: the live state of this read, not ``record.failed_sections``.
+        risk_budget_fallback="risk_budget" in loaded.fallback_sections,
     )
     return Cap1MigrationView(
         status=record.status,
@@ -389,14 +422,15 @@ def _cap1_migration_view(
 
 
 def _response(
-    settings: AppSettings,
+    loaded: LoadedSettings,
     ledger: QuotaLedger,
     store: SettingsStore,
     *,
     net_worth_notes: list[str] | None = None,
 ) -> SettingsResponse:
+    settings = loaded.settings
     verified = settings.cost_model.rates_verified
-    view = _net_worth_view(settings)
+    view = _net_worth_view(settings, fallback="net_worth" in loaded.fallback_sections)
     if net_worth_notes:
         view = view.model_copy(update={"notes": [*view.notes, *net_worth_notes]})
     return SettingsResponse(
@@ -405,7 +439,8 @@ def _response(
         notes=[] if verified else [RATE_PROVENANCE_NOTE],
         data_sources=DataSourcesView(quotas=[_alpha_vantage_quota(ledger)]),
         net_worth=view,
-        cap1_migration=_cap1_migration_view(store.cap1_migration(), settings),
+        cap1_migration=_cap1_migration_view(store.cap1_migration(), loaded),
+        settings_fallback=settings_fallback(loaded.fallback_sections),
         as_of=now_iso(),
     )
 
@@ -437,7 +472,7 @@ def _review_reported_net_worth(
 
 @router.get("", response_model=SettingsResponse)
 def read_settings(store: SettingsDep, ledger: QuotaDep) -> SettingsResponse:
-    return _response(store.load(), ledger, store)
+    return _response(store.load_with_status(), ledger, store)
 
 
 @router.put("", response_model=SettingsResponse)
@@ -450,7 +485,9 @@ def write_settings(
 ) -> SettingsResponse:
     current = store.load()
     if body.net_worth is None:
-        return _response(store.save(body.apply_to(current)), ledger, store)
+        # A full write leaves no section on its defaults.
+        saved = store.save(body.apply_to(current))
+        return _response(LoadedSettings(saved, ()), ledger, store)
 
     amount = body.net_worth.total_net_worth_twd
     review, valued_book = _review_reported_net_worth(amount, positions, valuator)
@@ -476,4 +513,4 @@ def write_settings(
     # ``review.warnings`` is not passed on: the response's warning is rebuilt
     # from what was just stored, so the sentence the user sees now is the same
     # one they will keep seeing on every later read.
-    return _response(saved, ledger, store, net_worth_notes=review.notes)
+    return _response(LoadedSettings(saved, ()), ledger, store, net_worth_notes=review.notes)

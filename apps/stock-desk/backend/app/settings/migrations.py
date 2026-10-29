@@ -4,9 +4,10 @@ There is exactly one migration today: cap 1's stored ``max_position_weight``
 equal to the old default 0.15 becomes the new default 0.10
 (:data:`app.advice.limits.DEFAULT_MAX_POSITION_WEIGHT`). Changing the default
 alone would not reach any installation that had ever saved its settings,
-because :meth:`app.settings.store.SettingsStore.save` writes every section in
-full -- a stored 0.15 is usually the old default frozen in place, not a choice
-(quant proposal 2026-10-26, conclusion 2).
+because :meth:`app.settings.store.SettingsStore.save` wrote every section in
+full at the time -- a stored 0.15 is usually the old default frozen in place,
+not a choice (quant proposal 2026-10-26, conclusion 2). Since ADR-0032 W-1 a
+save no longer writes a fallback section it was not asked to overwrite.
 
 The rules, each from the risk review of 2026-10-26
 (``work/reviews/2026-10-26-第1條上限下修審查-風控.md`` S2 附加實作約束) and the
@@ -46,8 +47,17 @@ quant proposal's constraint 4:
 The user-facing copy is :data:`CAP1_MIGRATION_NOTICES`, verbatim from the two
 risk-compliance verbatim reviews of 2026-10-26
 (``第1條下修告知字面逐字審-風控.md`` #1/#2/#2', ``遷移未執行與股數成因字面逐字審-風控.md``
-U0-U5/S1/S1'). The backend fills every slot and chooses every branch; the
-front end renders what it is given and composes nothing (I-1, I-5).
+U0-U5/S1), as amended by 「風控 2026-10-29 N-156 字面定稿與表態」 第 7 項
+(ADR-0032 Decision 8): U3 is deleted, U2' is rewritten, S1' is retired (a
+``skipped`` short notice is always S1), and U2 / U2' branch on whether
+``risk_budget`` is a fallback section **in the same read** the caller
+evaluated with (R-2) -- never on ``failed_sections``, which is a snapshot of
+the last start. Whether a section is *currently* on its defaults, how the page
+relates to the stored data and how to recover are stated only by the live
+``settings_fallback`` disclosure (:mod:`app.settings.fallback_wording`, R-1);
+the ``skipped`` notice states the migration event itself (R-3). The backend
+fills every slot and chooses every branch; the front end renders what it is
+given and composes nothing (I-1, I-5).
 """
 
 from __future__ import annotations
@@ -95,7 +105,7 @@ _TERMINAL: Final[frozenset[str]] = frozenset({"migrated", "not_applicable"})
 
 #: Where a notice is rendered. ``settings`` is the full version beside the
 #: cap-1 field; ``short`` is the one sentence the risk gauge's cap-1 row and
-#: the position page's ``LimitsCheckList`` cap-1 item share (#2/#2', S1/S1').
+#: the position page's ``LimitsCheckList`` cap-1 item share (#2/#2', S1).
 NoticeSurface = Literal["settings", "short"]
 
 #: When an item of a settings notice is part of it.
@@ -103,9 +113,10 @@ NoticeSurface = Literal["settings", "short"]
 #: * ``always``;
 #: * ``unchanged_by_user`` -- only while the user has not written another cap-1
 #:   value since the migration (1-3; F1/F8);
-#: * ``risk_budget_valid`` / ``risk_budget_failed`` -- whether ``risk_budget``
-#:   is among the sections that failed validation (U2 / U2').
-ItemCondition = Literal["always", "unchanged_by_user", "risk_budget_valid", "risk_budget_failed"]
+#: * ``risk_budget_stored`` / ``risk_budget_fallback`` -- whether ``risk_budget``
+#:   is a fallback section in the caller's own read (U2 / U2'; R-2), not in
+#:   the record's start-up snapshot.
+ItemCondition = Literal["always", "unchanged_by_user", "risk_budget_stored", "risk_budget_fallback"]
 
 
 @dataclass(frozen=True)
@@ -128,12 +139,15 @@ class SettingsNoticeCopy:
 
 @dataclass(frozen=True)
 class ShortNoticeCopy:
-    """The one-sentence version, with the ``risk_budget``-failed branch (S1')."""
+    """The one-sentence version: one template per status, no branches.
+
+    The ``risk_budget``-failed variant S1' was retired by 「風控 2026-10-29
+    N-156 字面定稿與表態」 第 7 項: its「在設定頁儲存之前」no longer holds once a
+    save leaves a fallback section alone (W-1). That a section is currently on
+    its defaults is said by the list-level ``settings_fallback_notice``.
+    """
 
     text: str
-    #: Used instead of ``text`` when ``risk_budget`` itself failed validation;
-    #: ``None`` when the status has no such branch.
-    text_if_risk_budget_failed: str | None = None
 
 
 #: Every user-facing sentence of the S2 notices, keyed by (status, surface)
@@ -197,7 +211,10 @@ CAP1_MIGRATION_NOTICES: Final[Mapping[tuple[str, str], SettingsNoticeCopy | Shor
                     "完整紀錄在設定頁。"
                 ),
             ),
-            # 遷移未執行與股數成因字面逐字審 第 1 組 U0 ~ U5.
+            # 遷移未執行與股數成因字面逐字審 第 1 組 U0 ~ U5, as amended by
+            # 「風控 2026-10-29 N-156 字面定稿與表態」 第 7 項: U3 (頁面與存檔) is
+            # deleted on every branch, U2' is rewritten, and U2 / U2' follow the
+            # live fallback state (R-2).
             ("skipped", "settings"): SettingsNoticeCopy(
                 title="第 1 條上限自動調整未執行",
                 items=(
@@ -210,19 +227,14 @@ CAP1_MIGRATION_NOTICES: Final[Mapping[tuple[str, str], SettingsNoticeCopy | Shor
                     NoticeItem(
                         "目前使用的值",
                         "第 1 條上限目前使用 {current_pct}，取自已存設定。",
-                        shown="risk_budget_valid",
+                        shown="risk_budget_stored",
                     ),
+                    # U2', rewritten by the 2026-10-29 ruling 第 7 項.
                     NoticeItem(
                         "目前使用的值",
-                        "第 1 條上限目前使用 {current_pct}。因為風險預算沒有通過驗證，在本頁按儲存"
-                        "之前，系統用的是預設值 {default_pct}，不是原本存的內容。",
-                        shown="risk_budget_failed",
-                    ),
-                    NoticeItem(
-                        "頁面與存檔",
-                        "在本頁按儲存之前，{section_names}在本頁顯示的是預設值，不是原本存的內容。"
-                        "本頁任何一個儲存按鈕都會把所有區段整份寫入，包括{section_names}；"
-                        "原本存的內容會被取代，系統內不會保留。",
+                        "第 1 條上限目前使用 {current_pct}，這是預設值，不是原本存的內容；"
+                        "原因與影響見本頁頁首的說明。",
+                        shown="risk_budget_fallback",
                     ),
                     NoticeItem(
                         "可用的操作",
@@ -235,16 +247,12 @@ CAP1_MIGRATION_NOTICES: Final[Mapping[tuple[str, str], SettingsNoticeCopy | Shor
                     ),
                 ),
             ),
-            # 遷移未執行與股數成因字面逐字審 第 1 組 S1 / S1'.
+            # 遷移未執行與股數成因字面逐字審 第 1 組 S1. S1' is retired (2026-10-29
+            # ruling 第 7 項): every ``skipped`` short notice is S1.
             ("skipped", "short"): ShortNoticeCopy(
                 text=(
                     "第 1 條上限的自動調整於 {attempted_at}未執行，原因是已存設定有區段未通過驗證；"
                     "目前使用的上限是 {current_pct}。詳見設定頁。"
-                ),
-                text_if_risk_budget_failed=(
-                    "第 1 條上限的自動調整於 {attempted_at}未執行，原因是已存設定有區段未通過驗證，"
-                    "包括風險預算；目前使用的上限是 {current_pct}，在設定頁儲存之前用的是預設值 "
-                    "{default_pct}，不是原本存的內容。詳見設定頁。"
                 ),
             ),
         }
@@ -326,12 +334,16 @@ class Cap1MigrationRecord:
     #: ``new_value``. Cleared only by a new migration.
     changed_by_user: bool = False
 
-    @property
-    def risk_budget_failed(self) -> bool:
-        return "risk_budget" in self.failed_sections
+    def settings_notice(
+        self, *, current_max_position_weight: float, risk_budget_fallback: bool
+    ) -> SettingsNotice | None:
+        """The settings-page notice for this record, or ``None`` (I-5).
 
-    def settings_notice(self, *, current_max_position_weight: float) -> SettingsNotice | None:
-        """The settings-page notice for this record, or ``None`` (I-5)."""
+        ``risk_budget_fallback`` is whether ``risk_budget`` is a fallback
+        section in the same read ``current_max_position_weight`` came from
+        (R-2). Keyword-only with no default, so no caller can fall back on the
+        record's start-up snapshot without saying so.
+        """
         copy = CAP1_MIGRATION_NOTICES.get((self.status, "settings"))
         if copy is None:
             return None
@@ -342,7 +354,7 @@ class Cap1MigrationRecord:
             items=tuple(
                 (item.label, item.body.format(**fields))
                 for item in copy.items
-                if self._shows(item.shown)
+                if self._shows(item.shown, risk_budget_fallback=risk_budget_fallback)
             ),
         )
 
@@ -358,22 +370,17 @@ class Cap1MigrationRecord:
         assert isinstance(copy, ShortNoticeCopy)
         if self.status == "migrated" and self.changed_by_user:
             return None
-        template = (
-            copy.text_if_risk_budget_failed
-            if self.risk_budget_failed and copy.text_if_risk_budget_failed is not None
-            else copy.text
-        )
-        return template.format(
+        return copy.text.format(
             **self.notice_fields(current_max_position_weight=current_max_position_weight)
         )
 
-    def _shows(self, condition: ItemCondition) -> bool:
+    def _shows(self, condition: ItemCondition, *, risk_budget_fallback: bool) -> bool:
         if condition == "unchanged_by_user":
             return not self.changed_by_user
-        if condition == "risk_budget_valid":
-            return not self.risk_budget_failed
-        if condition == "risk_budget_failed":
-            return self.risk_budget_failed
+        if condition == "risk_budget_stored":
+            return not risk_budget_fallback
+        if condition == "risk_budget_fallback":
+            return risk_budget_fallback
         return True
 
     def notice_fields(self, *, current_max_position_weight: float) -> dict[str, str]:

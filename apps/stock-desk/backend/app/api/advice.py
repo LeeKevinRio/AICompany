@@ -14,6 +14,11 @@ A symbol the user does not hold still gets a card: the context is then a
 rules that read position weight or unrealized P&L are skipped with their
 missing fields named rather than evaluated against a fabricated position.
 Whatever had to be assumed or left out is listed in ``context_notes``.
+
+The settings are read once, with their fallback state (ADR-0032 K-5): when
+``risk_budget`` or ``net_worth`` was stored but failed validation, the caps ran
+on defaults and ``settings_fallback_notice`` says so, chosen from that same
+read by :func:`app.settings.fallback_wording.risk_notice`.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ from app.positions.models import Market
 from app.positions.store import PositionStore
 from app.services.fx import resolve_fx_quote
 from app.services.market import MarketDataResolver, load_bars
+from app.settings.fallback_wording import risk_notice
 from app.settings.store import SettingsStore
 from app.signals.service import atr_from_signals, compute_signals
 
@@ -87,6 +93,12 @@ class AdviceResponse(EnvelopeBase):
     #: ``None`` when there is nothing to show, and always on an
     #: ``insufficient_data`` response, which renders no cap list.
     cap1_migration_notice: str | None
+    #: N-156 (ADR-0032 Decision 2): N-1 / N-2 / N-3 when ``risk_budget`` or
+    #: ``net_worth`` is on its defaults in the read this card was built from.
+    #: Rendered above every cap of ``LimitsCheckList`` and once more on the
+    #: position page outside any ``<details>``, held and candidate alike.
+    #: ``None`` when neither fell back, and always on ``insufficient_data``.
+    settings_fallback_notice: str | None
 
 
 #: ADR-0010 D-1 standing disclosure, first in ``context_notes`` (風控 A-6): the
@@ -179,7 +191,8 @@ def get_advice(
         calendar_source=calendar_source,
     )
     summary = build_summary(store, valuator)
-    settings = settings_store.load()
+    loaded_settings = settings_store.load_with_status()
+    settings = loaded_settings.settings
     budget = settings.risk_budget
     # The gross-exposure cap's denominator, or ``None`` while the user has not
     # reported one -- in which case that cap stays ``not_evaluable`` as before.
@@ -239,6 +252,7 @@ def get_advice(
             # multiplied into either (PR-RK4c, R4c-7).
             context_notes=book_notes(book, quote_shown=False),
             cap1_migration_notice=None,
+            settings_fallback_notice=None,
             data=data_meta(loaded.meta()),
             as_of=now_iso(),
         )
@@ -272,6 +286,7 @@ def get_advice(
         # notes after it are about.
         context_notes=[*_book_freshness_notes(summary), *notes],
         cap1_migration_notice=_cap1_migration_notice(settings_store, budget.max_position_weight),
+        settings_fallback_notice=risk_notice(loaded_settings.fallback_sections),
         data=data_meta(loaded.meta()),
         as_of=now_iso(),
     )

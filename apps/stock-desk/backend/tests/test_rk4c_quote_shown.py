@@ -894,6 +894,10 @@ def test_r4c_16_limits_shows_no_share_range() -> None:
         # Copy only, no priced figure. 風控 2026-10-26 複核核可
         # (第1條下修第一批四項裁定 第四節).
         "cap1_migration_notice",
+        # 2026-10-29 (N-156, ADR-0032 Decision 2): N-1 / N-2 / N-3 above the
+        # gauge's rows. Copy only, no priced figure. 風控 2026-10-29 N-156 字面
+        # 定稿與表態 第 2 項 (字面) and 第 8 項 (N-156 may change this response).
+        "settings_fallback_notice",
         "as_of",
     }, T_E1B_2_BACK_TO_RISK
     names = set(_field_names(PortfolioLimitsResponse, set()))
