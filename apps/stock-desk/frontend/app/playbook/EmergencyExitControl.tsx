@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { useEmergencyExit } from "../lib/queries";
 import {
@@ -13,6 +14,23 @@ import {
 import type { PlaybookExitConfirm } from "../lib/types";
 
 type ExitStep = "idle" | "confirm" | "final";
+
+function subscribeNoop(): () => void {
+  return () => {};
+}
+
+/**
+ * False during SSR and the hydration pass, true once mounted on the client, so
+ * the portal below only touches `document.body` after hydration (no mismatch,
+ * no `document` access on the server).
+ */
+function useIsClientMounted(): boolean {
+  return useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  );
+}
 
 /**
  * EMERGENCY_EXIT control (視覺規範 §4). Button styling is deliberately
@@ -43,6 +61,7 @@ export function EmergencyExitControl({
   const [step, setStep] = useState<ExitStep>("idle");
   const [checks, setChecks] = useState<boolean[]>(() => initialExitChecks(checkTexts.length));
   const mutation = useEmergencyExit();
+  const isClientMounted = useIsClientMounted();
 
   // The checklist length only changes when a refetch swaps the degraded
   // fallback for the real block (3 checks <-> 4). Re-seeding keeps a tick
@@ -79,14 +98,26 @@ export function EmergencyExitControl({
         全部出清
       </button>
 
-      {step !== "idle" && (
+      {/*
+        N-159: the overlay is portalled to `document.body`. This control is
+        rendered inside `ModeStatusBar`, a `sticky ... backdrop-blur` strip; an
+        ancestor with `backdrop-filter` becomes the containing block of
+        `position: fixed` descendants, which clipped the overlay to the strip's
+        height (~86px), pushed the panel above the viewport and left the rest of
+        the page undimmed. Outside the strip, `fixed inset-0` is viewport-relative
+        again. The panel itself scrolls when the viewport is shorter than its
+        content (`max-h` + `overflow-y-auto`).
+      */}
+      {step !== "idle" &&
+        isClientMounted &&
+        createPortal(
         <div
           role="dialog"
           aria-modal="true"
           aria-label="全部出清確認"
-          className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
         >
-          <div className="w-full max-w-lg rounded-md border border-neutral-700 bg-neutral-950 p-5">
+          <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-neutral-700 bg-neutral-950 p-5">
             {step === "confirm" && (
               <>
                 {/* 視覺規範 §4.3 逐字引用（Step 2 標頭）。 */}
@@ -165,7 +196,8 @@ export function EmergencyExitControl({
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/*
