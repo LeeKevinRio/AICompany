@@ -16,6 +16,13 @@ built refusing ``upsert`` as well.
 Lifting the freeze is not a one-line change of :data:`KELLY_INPUT_WRITES_FROZEN`:
 the user-facing sunset copy (``KellyInputsSection`` lead, the「已暫停」buttons,
 cap 5's「計算方式有誤」line) states it and has to change with it (F-d).
+
+A second precondition (「風控 2026-10-29 N-156 K-15 正式核對與裁示」 二-2, tracked
+as N-167): before this flag may become ``False``, ``import-backtest`` must
+**refuse** (fail closed) while the stored ``cost_model`` is a fallback section
+(ADR-0032), and the refusal sentence must go to risk-compliance first. A
+disclosure alone is not enough: a p/b computed on the default rates would be
+stored, outlive the repair, and carry no trace of where it came from.
 """
 
 from __future__ import annotations
