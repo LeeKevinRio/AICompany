@@ -585,6 +585,7 @@ export default function PositionDetailPage() {
                 advice={advice.data.advice}
                 lastBarDate={advice.data.data.last_bar_date}
                 cap1MigrationNotice={advice.data.cap1_migration_notice}
+                settingsFallbackNotice={advice.data.settings_fallback_notice}
               />
             </div>
           </details>

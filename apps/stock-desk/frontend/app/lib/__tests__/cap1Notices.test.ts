@@ -49,6 +49,7 @@ function gauge(limits: BookLimitCheck[], notice: string | null): string {
     notes: [],
     sources: [],
     cap1_migration_notice: notice,
+    settings_fallback_notice: null,
     as_of: "2026-10-27T00:00:00Z",
   };
   return renderToStaticMarkup(createElement(RiskGaugeView, { data }));

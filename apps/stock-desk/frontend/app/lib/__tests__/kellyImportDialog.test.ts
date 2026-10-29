@@ -70,6 +70,7 @@ function freshView(overwriteNotice: KellyOverwriteNoticeView | null): KellyInput
       walk_forward: null,
       f_star_interval: null,
       effective_cap: null,
+      settings_fallback_notice: null,
       boundary_exclusion: null,
       sample_detail: null,
       original_values: null,

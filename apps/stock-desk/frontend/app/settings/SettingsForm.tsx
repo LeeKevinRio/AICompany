@@ -4,7 +4,15 @@ import { Fragment, useState } from "react";
 import { ApiError } from "../lib/api";
 import { parseRequiredNumbers, unplacedFieldErrors } from "../lib/formErrors";
 import { useUpdateSettings } from "../lib/queries";
-import { capWidening, resolveWideningSubmitForFields, type CapWidening } from "../lib/riskWidening";
+import { capWidening, type CapWidening } from "../lib/riskWidening";
+import {
+  buildFormPatch,
+  formFallbackSections,
+  resolveFormSaveStep,
+  sectionMarkerOf,
+} from "../lib/settingsFallback";
+import { OverwritePanel } from "./OverwritePanel";
+import { SectionFallbackMarker } from "./SettingsFallbackNotice";
 import type {
   AlertSettings,
   Cap1SettingsNotice,
@@ -312,6 +320,18 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
    * confirmation of that exact pair of numbers.
    */
   const [pendingWidenings, setPendingWidenings] = useState<Partial<Record<string, CapWidening>>>({});
+  /**
+   * W-2 (ADR-0032): the overwrite panel for sections that fell back. Which
+   * sections fell back is read from `settings.settings_fallback.sections` only
+   * (K-6). `overwriteChecked` starts empty: nothing is overwritten unless the
+   * user ticks it. `confirmedSections` is `null` until the panel is answered;
+   * the widening confirmation above runs only after that (DL-6).
+   */
+  const fallbackSections = formFallbackSections(settings);
+  const overwritePanel = settings.settings_fallback?.form_overwrite_panel ?? null;
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [overwriteChecked, setOverwriteChecked] = useState<ReadonlySet<string>>(() => new Set());
+  const [confirmedSections, setConfirmedSections] = useState<ReadonlySet<string> | null>(null);
   const mutation = useUpdateSettings();
   const fieldErrors = mutation.error instanceof ApiError ? mutation.error.fieldErrors : {};
   const unplaced = unplacedFieldErrors(fieldErrors, PLACED_ERROR_KEYS);
@@ -330,12 +350,29 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    runSave(confirmedSections);
+  }
+
+  function closeOverwriteFlow() {
+    setPanelOpen(false);
+    setConfirmedSections(null);
+  }
+
+  function confirmOverwritePanel() {
+    const confirmed = new Set([...overwriteChecked].filter((section) => fallbackSections.some((s) => s === section)));
+    setConfirmedSections(confirmed);
+    setPanelOpen(false);
+    runSave(confirmed);
+  }
+
+  function runSave(answered: ReadonlySet<string> | null) {
     // A cleared field must not be sent as `Number("")`'s 0: a zero fee, tax or
     // cooldown is a legal value the backend would accept and report as saved.
     const parsed = parseRequiredNumbers(values);
     if (Object.keys(parsed.errors).length > 0) {
       setInputErrors(parsed.errors);
       setPendingWidenings({});
+      closeOverwriteFlow();
       // The previous save's outcome belongs to a request this submit replaced.
       mutation.reset();
       return;
@@ -350,15 +387,32 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
     // that field's confirmation panel is showing: editing a cap after
     // confirming it must re-open that field's confirmation with the new
     // number rather than write a number nobody agreed to. Decision logic
-    // lives in `resolveWideningSubmitForFields` (pure, unit-tested) so it is
-    // provably right the same way the single-field version was.
+    // lives in `resolveFormSaveStep` / `resolveWideningSubmitForFields` (pure,
+    // unit-tested) so it is provably right the same way the single-field
+    // version was. The overwrite panel comes first; a fallback risk budget the
+    // user did not confirm is not written, so it is not widening-checked.
     const current: Record<string, CapWidening | null> = {};
     for (const widened of WIDENING_FIELDS) {
       current[String(widened.key)] = fieldWidening(widened.key);
     }
-    const decision = resolveWideningSubmitForFields(current, pendingWidenings);
-    if (decision.action === "confirm") {
-      setPendingWidenings(decision.pending);
+    // No panel from the backend although a section fell back: nothing can be
+    // confirmed, so no fallback section is carried (the safe reading).
+    const effectiveAnswer =
+      fallbackSections.length > 0 && overwritePanel === null ? new Set<string>() : answered;
+    const step = resolveFormSaveStep({
+      fallback: fallbackSections,
+      confirmed: effectiveAnswer,
+      widenings: current,
+      shown: pendingWidenings,
+    });
+    if (step.action === "open_overwrite_panel") {
+      setPendingWidenings({});
+      setPanelOpen(true);
+      mutation.reset();
+      return;
+    }
+    if (step.action === "confirm_widening") {
+      setPendingWidenings(step.pending);
       return;
     }
     setPendingWidenings({});
@@ -383,13 +437,25 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
       enabled: alertsEnabled,
       notify_webhooks: notifyWebhooks,
     };
-    mutation.mutate({ risk_budget: riskBudget, cost_model: costModel, alerts });
+    mutation.mutate(
+      buildFormPatch({ risk_budget: riskBudget, cost_model: costModel, alerts }, step.carried, step.overwrite),
+      {
+        onSuccess: () => {
+          closeOverwriteFlow();
+          setOverwriteChecked(new Set());
+        },
+        // A refused or failed write ends this confirmation: the next attempt
+        // asks again rather than reusing an answer given for another request.
+        onError: closeOverwriteFlow,
+      },
+    );
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
       <section className="rounded-lg border border-neutral-800 p-5">
         <h2 className="text-lg font-semibold text-neutral-100">風險預算（RiskBudget）</h2>
+        <SectionFallbackMarker text={sectionMarkerOf(settings, "risk_budget")} />
         <p className="mt-1 text-xs text-neutral-500">
           每一項數字都是分數（例如 0.15 = 15%），與後端 `app/advice/limits.py` 的 RiskBudget 欄位一一對應。
         </p>
@@ -427,6 +493,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
               : "尚未查證"}
           </span>
         </div>
+        <SectionFallbackMarker text={sectionMarkerOf(settings, "cost_model")} />
         {settings.settings.cost_model.verified_on === null && (
           <p className="mt-2 text-xs text-amber-300">
             這些費率來自模型訓練知識，尚未對照主要來源（TWSE/FSC、SEC/FINRA）查證，回測結果應視為待查證狀態。
@@ -451,6 +518,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
 
       <section className="rounded-lg border border-neutral-800 p-5">
         <h2 className="text-lg font-semibold text-neutral-100">警示排程</h2>
+        <SectionFallbackMarker text={sectionMarkerOf(settings, "alerts")} />
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {ALERT_SETTINGS_FIELDS.map((field) => {
             const key = `alerts.${String(field.key)}`;
@@ -491,6 +559,26 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
       </section>
 
       <div>
+        {panelOpen && overwritePanel !== null && (
+          <OverwritePanel
+            panel={overwritePanel}
+            checked={overwriteChecked}
+            onToggle={(section, value) =>
+              setOverwriteChecked((prev) => {
+                const next = new Set(prev);
+                if (value) next.add(section);
+                else next.delete(section);
+                return next;
+              })
+            }
+            onConfirm={confirmOverwritePanel}
+            onCancel={() => {
+              closeOverwriteFlow();
+              setPendingWidenings({});
+            }}
+            disabled={mutation.isPending}
+          />
+        )}
         {Object.keys(pendingWidenings).length > 0 && (
           <div
             role="alert"
@@ -508,7 +596,10 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
             })}
             <button
               type="button"
-              onClick={() => setPendingWidenings({})}
+              onClick={() => {
+                setPendingWidenings({});
+                closeOverwriteFlow();
+              }}
               className="mt-2 rounded-md border border-amber-700 px-3 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
             >
               取消，維持原設定
@@ -517,7 +608,7 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
         )}
         <button
           type="submit"
-          disabled={mutation.isPending}
+          disabled={mutation.isPending || panelOpen}
           className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {mutation.isPending
@@ -531,7 +622,16 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
             尚未儲存：有欄位空白或不是數字，請依欄位下方提示修正。
           </p>
         )}
-        {mutation.isError && (Object.keys(fieldErrors).length === 0 || unplaced.length > 0) && (
+        {/* 409 (ADR-0032 W-2): nothing was written; the backend's `detail` is one
+            whole sentence and is shown exactly as sent, without a prefix. */}
+        {mutation.error instanceof ApiError && mutation.error.status === 409 && (
+          <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+            {mutation.error.message}
+          </p>
+        )}
+        {mutation.isError &&
+          !(mutation.error instanceof ApiError && mutation.error.status === 409) &&
+          (Object.keys(fieldErrors).length === 0 || unplaced.length > 0) && (
           <p role="alert" className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
             儲存失敗：
             {unplaced.length > 0
@@ -543,7 +643,8 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
         )}
         {mutation.isSuccess && (
           <p role="status" className="mt-3 rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
-            設定已儲存。
+            {/* A save that left fallback sections unwritten says so instead (the backend's sentence). */}
+            {mutation.data.partial_save_notice ?? "設定已儲存。"}
           </p>
         )}
       </div>

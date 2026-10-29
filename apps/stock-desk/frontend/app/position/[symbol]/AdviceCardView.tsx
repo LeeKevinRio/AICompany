@@ -112,9 +112,12 @@ export function AdviceCardView({
   advice,
   lastBarDate,
   cap1MigrationNotice = null,
+  settingsFallbackNotice = null,
 }: {
   advice: AdviceCard;
   lastBarDate: string | null;
+  /** `AdviceResponse.settings_fallback_notice`, passed through to `LimitsCheckList` (list level). */
+  settingsFallbackNotice?: string | null;
   /** `AdviceResponse.cap1_migration_notice`, passed through to `LimitsCheckList`. */
   cap1MigrationNotice?: string | null;
 }) {
@@ -241,7 +244,11 @@ export function AdviceCardView({
       )}
 
       <Section title="風險上限檢查">
-        <LimitsCheckList limits={advice.limits_check} cap1MigrationNotice={cap1MigrationNotice} />
+        <LimitsCheckList
+          limits={advice.limits_check}
+          cap1MigrationNotice={cap1MigrationNotice}
+          settingsFallbackNotice={settingsFallbackNotice}
+        />
       </Section>
 
       <Section title="資料完整度">

@@ -17,6 +17,7 @@ import { DETAILS_SUMMARY_RISK_GAUGE } from "../lib/oneLinerWording";
 import { buildCap1LedgerSummary, CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../lib/cap1SunsetWording";
 import type { BookLimitCheck, PortfolioLimitsResponse, SymbolDataMeta } from "../lib/types";
 import { DataMetaStatusBadge } from "./DataMetaStatusBadge";
+import { SettingsFallbackNoticeLine } from "./SettingsFallbackNoticeLine";
 import { ErrorPanel } from "./ErrorPanel";
 import { SkeletonBlock } from "./SkeletonBlock";
 
@@ -206,6 +207,9 @@ export function RiskGaugeView({ data }: { data: PortfolioLimitsResponse }) {
   const sourcesSummary = buildSourcesSummaryViewModel(data.sources);
   return (
     <>
+      {/* ADR-0032 (N-156): list level, above every cap row and outside the
+          shared `<details>`; the backend's sentence, verbatim. */}
+      <SettingsFallbackNoticeLine text={data.settings_fallback_notice} className="mt-3" />
       <ul className="mt-3">
         {data.limits.map((check) => (
           <LimitGaugeRow

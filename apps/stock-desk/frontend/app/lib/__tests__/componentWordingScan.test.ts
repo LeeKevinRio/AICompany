@@ -419,6 +419,12 @@ const SCANNED_FILES = [
   "../../position/[symbol]/StopQualifier.tsx",
   // 股數成因（風控 2026-10-26 定稿 Q-a／Q-b／D-a／D-b）：新字面模組，逐字釘住於 quantityAbsenceCause.test.ts。
   "../quantityAbsenceWording.ts",
+  // N-156 設定段回落（ADR-0032；風控 2026-10-29 N-156 字面定稿）：新元件與字面模組。字面由後端下發，
+  // 前端只持有風控第 1 項表格固定的兩個詞；掃描涵蓋全部新檔，逐字與哨兵守門見 settingsFallback*.test.ts。
+  "../settingsFallback.ts",
+  "../../components/SettingsFallbackNoticeLine.tsx",
+  "../../settings/SettingsFallbackNotice.tsx",
+  "../../settings/OverwritePanel.tsx",
 ] as const;
 
 /**
@@ -2694,8 +2700,10 @@ describe("AdviceCardView 資料截至行（D-1 (b)）原始碼守門", () => {
     expect(pageSrc).toContain("lastBarDate={advice.data.data.last_bar_date}");
     // #61 batch one (CEO #63) added a third prop on its own line; the two this
     // guard is about are still passed from the same `/api/advice` response.
+    // N-156 (ADR-0032) adds a fourth, the list-level settings-fallback sentence,
+    // from the same response; all four are pinned, in order.
     expect(pageSrc).toMatch(
-      /<AdviceCardView\s+advice=\{advice\.data\.advice\}\s+lastBarDate=\{advice\.data\.data\.last_bar_date\}\s+cap1MigrationNotice=\{advice\.data\.cap1_migration_notice\}\s*\/>/,
+      /<AdviceCardView\s+advice=\{advice\.data\.advice\}\s+lastBarDate=\{advice\.data\.data\.last_bar_date\}\s+cap1MigrationNotice=\{advice\.data\.cap1_migration_notice\}\s+settingsFallbackNotice=\{advice\.data\.settings_fallback_notice\}\s*\/>/,
     );
   });
 

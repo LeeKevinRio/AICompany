@@ -270,6 +270,7 @@ const FAKE_LIMITS: PortfolioLimitsResponse = {
     },
   ],
   cap1_migration_notice: null,
+  settings_fallback_notice: null,
   as_of: "2026-09-19T00:00:00Z",
 };
 

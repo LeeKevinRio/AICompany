@@ -2,6 +2,7 @@ import type { LimitCheck } from "../../lib/types";
 import { formatPercent, limitStatusLabel } from "../../lib/format";
 import { riskGaugeChipClass } from "../../lib/riskGauge";
 import { CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../../lib/cap1SunsetWording";
+import { SettingsFallbackNoticeLine } from "../../components/SettingsFallbackNoticeLine";
 
 /**
  * Renders every risk-budget cap (`app.advice.limits.LimitCheck`, verified
@@ -13,8 +14,14 @@ import { CAP5_SUNSET_UNRELIABLE_NOTE, showsCap5SunsetNote } from "../../lib/cap1
 export function LimitsCheckList({
   limits,
   cap1MigrationNotice = null,
+  settingsFallbackNotice = null,
 }: {
   limits: LimitCheck[];
+  /**
+   * `AdviceResponse.settings_fallback_notice` (ADR-0032 N-1／N-2／N-3), the
+   * backend's verbatim: list level, above every cap. `null` = none.
+   */
+  settingsFallbackNotice?: string | null;
   /**
    * The S2 sentence (CEO #63) for cap 1, the backend's verbatim
    * (`AdviceResponse.cap1_migration_notice`) — the same one the risk gauge's
@@ -23,6 +30,8 @@ export function LimitsCheckList({
   cap1MigrationNotice?: string | null;
 }) {
   return (
+    <>
+    <SettingsFallbackNoticeLine text={settingsFallbackNotice} className="mb-2" />
     <ul className="space-y-2">
       {limits.map((limit) => (
         <li
@@ -61,5 +70,6 @@ export function LimitsCheckList({
         </li>
       ))}
     </ul>
+    </>
   );
 }

@@ -26,7 +26,16 @@ import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { formatDateTime, formatMoneyNumber } from "../lib/format";
 import { useUpdateSettings } from "../lib/queries";
+import {
+  buildNetWorthPatch,
+  isFallbackSection,
+  NET_WORTH_FALLBACK_BADGE_LABEL,
+  NET_WORTH_FALLBACK_VALUE_LABEL,
+  sectionMarkerOf,
+} from "../lib/settingsFallback";
 import type { NetWorthFreshness, SettingsResponse } from "../lib/types";
+import { OverwritePanel } from "./OverwritePanel";
+import { SectionFallbackMarker } from "./SettingsFallbackNotice";
 
 /** FR-9 (f): the exact label the risk decision fixed. */
 const NET_WORTH_LABEL = "帳戶總淨值（新台幣）";
@@ -36,7 +45,11 @@ const FRESHNESS_LABELS: Record<NetWorthFreshness, string> = {
   fresh: "已更新",
   ageing: "建議更新",
   expired: "已過期",
+  fallback: NET_WORTH_FALLBACK_BADGE_LABEL,
 };
+
+/** The net-worth panel has no checkbox: its confirm button is the confirmation. */
+const NO_CHECKED_SECTIONS: ReadonlySet<string> = new Set();
 
 function freshnessClass(freshness: NetWorthFreshness): string {
   switch (freshness) {
@@ -46,6 +59,8 @@ function freshnessClass(freshness: NetWorthFreshness): string {
       return "border-amber-800 bg-amber-950/40 text-amber-300";
     case "expired":
       return "border-rose-800 bg-rose-950/40 text-rose-300";
+    case "fallback":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
     case "absent":
     default:
       return "border-neutral-700 bg-neutral-900 text-neutral-300";
@@ -54,6 +69,11 @@ function freshnessClass(freshness: NetWorthFreshness): string {
 
 export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
   const block = settings.net_worth;
+  // ADR-0032 (K-6): whether this section fell back is decided by the backend's
+  // `settings_fallback.sections`, never inferred from the figure being absent.
+  const fellBack = isFallbackSection(settings, "net_worth");
+  const overwritePanel = settings.settings_fallback?.net_worth_overwrite_panel ?? null;
+  const [panelOpen, setPanelOpen] = useState(false);
   const [value, setValue] = useState<string>(
     block.total_net_worth_twd === null ? "" : String(block.total_net_worth_twd),
   );
@@ -76,7 +96,22 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
     // Sent exactly as typed. `Number("")` is 0, which the backend refuses with
     // its own message — deliberately not pre-empted here, so there is one
     // authority on what this field accepts.
-    mutation.mutate({ net_worth: { total_net_worth_twd: Number(value) } });
+    // A fallback section needs the overwrite confirmed first (W-2): the first
+    // submit only opens the panel, and nothing is sent until it is confirmed.
+    // With no panel from the backend the request goes out unconfirmed and the
+    // backend's 409 (which writes nothing) is shown as sent.
+    if (fellBack && overwritePanel !== null) {
+      mutation.reset();
+      setPanelOpen(true);
+      return;
+    }
+    send(false);
+  }
+
+  function send(overwrite: boolean) {
+    mutation.mutate(buildNetWorthPatch(Number(value), overwrite), {
+      onSettled: () => setPanelOpen(false),
+    });
   }
 
   return (
@@ -86,10 +121,11 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
         <span
           className={`rounded border px-2 py-0.5 text-xs ${freshnessClass(block.freshness)}`}
         >
-          {FRESHNESS_LABELS[block.freshness]}
+          {fellBack ? NET_WORTH_FALLBACK_BADGE_LABEL : FRESHNESS_LABELS[block.freshness]}
           {block.age_days !== null && `（已 ${block.age_days} 天未更新）`}
         </span>
       </div>
+      <SectionFallbackMarker text={sectionMarkerOf(settings, "net_worth")} />
       <p className="mt-1 text-xs text-neutral-500">
         這個數字只用在「總曝險上限」（第 3 條）的分母：曝險比率 = 系統已估值的部位市值合計 ÷ 你自報的帳戶總淨值。
         分子由系統計算、分母由你自行輸入，兩者來源不同；系統不會查核這個數字。
@@ -137,9 +173,11 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
           <div className="flex gap-2">
             <dt>目前儲存的數值：</dt>
             <dd className="text-neutral-200">
-              {block.total_net_worth_twd === null
-                ? "尚未輸入"
-                : formatMoneyNumber(block.total_net_worth_twd, "TWD", 0)}
+              {fellBack
+                ? NET_WORTH_FALLBACK_VALUE_LABEL
+                : block.total_net_worth_twd === null
+                  ? "尚未輸入"
+                  : formatMoneyNumber(block.total_net_worth_twd, "TWD", 0)}
             </dd>
           </div>
           <div className="flex gap-2">
@@ -161,9 +199,20 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
           </p>
         ))}
 
+        {panelOpen && overwritePanel !== null && (
+          <OverwritePanel
+            panel={overwritePanel}
+            checked={NO_CHECKED_SECTIONS}
+            onToggle={() => undefined}
+            onConfirm={() => send(true)}
+            onCancel={() => setPanelOpen(false)}
+            disabled={mutation.isPending}
+          />
+        )}
+
         <button
           type="submit"
-          disabled={mutation.isPending}
+          disabled={mutation.isPending || panelOpen}
           className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {mutation.isPending ? "儲存中…" : "更新帳戶總淨值"}
@@ -183,6 +232,15 @@ export function NetWorthSection({ settings }: { settings: SettingsResponse }) {
             className="rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300"
           >
             帳戶總淨值已更新，更新時間以本次儲存為準。
+          </p>
+        )}
+        {/* Other sections still on their defaults after this save: the backend's sentence, as sent. */}
+        {mutation.isSuccess && mutation.data.partial_save_notice !== null && (
+          <p
+            role="status"
+            className="rounded-md border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-200"
+          >
+            {mutation.data.partial_save_notice}
           </p>
         )}
       </form>
