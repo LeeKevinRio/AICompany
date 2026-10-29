@@ -26,13 +26,14 @@ import pytest
 
 from app.advice.limits import RiskBudget
 from app.api.settings import NET_WORTH_ABSENT_NOTE, NET_WORTH_CURRENCY_NOTE
+from app.kelly.models import KELLY_STALE_AFTER_DAYS
 from app.settings import fallback_wording as wording
 from app.settings.models import AlertSettings, AppSettings, CostModelSettings, NetWorthSettings
 from tests.api_helpers import position_payload, recent_bars, trending_closes
 from tests.conftest import ApiHarness
 from tests.import_graph import APP_ROOT, imported_modules
 from tests.settings_fallback_helpers import SECTIONS, break_sections
-from tests.test_api_kelly_disclosures import _attempt, _imported
+from tests.test_api_kelly_disclosures import _attempt, _imported, _manual, _overridden, _recent
 from tests.test_settings_fallback_wording import KELLY, N1, N2, N3
 
 COMBOS: list[tuple[str, ...]] = [
@@ -229,6 +230,46 @@ def test_the_kelly_line_needs_a_value_to_stand_beside(api_harness: ApiHarness) -
     block = api_harness.client.get("/api/kelly-inputs/2330/disclosures").json()["disclosures"]
     assert block["effective_cap"] is None
     assert block["settings_fallback_notice"] is None
+
+
+#: Every row shape the Kelly screen can hold, with and without an effective value.
+_KELLY_ROWS = {
+    "none": None,
+    "imported-fresh": "fresh",
+    "imported-expired": "expired",
+    "manual": "manual",
+    "overridden": "overridden",
+}
+
+
+@pytest.mark.parametrize("broken", [(), ("risk_budget",), ("net_worth",)], ids=_combo_id)
+@pytest.mark.parametrize("row", list(_KELLY_ROWS), ids=str)
+def test_the_value_and_its_line_never_appear_apart(
+    api_harness: ApiHarness, row: str, broken: tuple[str, ...]
+) -> None:
+    """K-15 裁示 二-5: interval and cap come as a pair; no cap, no 「此數值」 line."""
+    _seed(api_harness, broken)
+    _attempt(api_harness)
+    shape = _KELLY_ROWS[row]
+    if shape == "fresh":
+        api_harness.kelly_inputs.upsert(_imported())
+    elif shape == "expired":
+        api_harness.kelly_inputs.upsert(_imported(oos_end_date=_recent(KELLY_STALE_AFTER_DAYS)))
+    elif shape == "manual":
+        api_harness.kelly_inputs.upsert(_manual())
+    elif shape == "overridden":
+        api_harness.kelly_inputs.upsert(_overridden())
+
+    block = api_harness.client.get("/api/kelly-inputs/2330/disclosures").json()["disclosures"]
+
+    assert (block["f_star_interval"] is None) == (block["effective_cap"] is None)
+    if block["effective_cap"] is None:
+        assert block["settings_fallback_notice"] is None
+    else:
+        expected = KELLY if "risk_budget" in broken else None
+        assert block["settings_fallback_notice"] == expected
+    # Not vacuous: the fresh import is the one shape that shows a value.
+    assert (block["effective_cap"] is not None) == (shape == "fresh")
 
 
 # --- DL-8: the defaults F-4 and the alerts marker rest on ---------------------------------
