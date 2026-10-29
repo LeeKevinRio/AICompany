@@ -14,6 +14,7 @@ from decimal import Decimal
 from functools import lru_cache
 
 from app.alerts.store import AlertStore
+from app.api.playbook_cap1_wording import Cap1Reading
 from app.data.admission import admit_any_shape, admit_equity_daily_bars
 from app.data.cache import PriceBarCache
 from app.data.gate_wording import EQUITY_GATE_WORDING
@@ -383,33 +384,42 @@ def get_settings_store() -> SettingsStore:
     return _default_settings_store()
 
 
-def get_cap1_weight() -> Decimal | None:
-    """The stored cap-1 setting (單一標的佔比上限), for the 排程台 disclosure only.
+def get_cap1_reading() -> Cap1Reading:
+    """The cap-1 setting (單一標的佔比上限) in force, for the 排程台 disclosure only.
 
-    ADR-0031 C-4 (CEO #69): the one way the cap-1 value reaches
-    ``app/api/playbook.py``, which may pass it to
+    ADR-0031 C-4 (CEO #69) as amended by ADR-0032 K-9 (CEO #74): the one way the
+    cap-1 value reaches ``app/api/playbook.py``, which may pass it to
     :func:`app.api.playbook_cap1_wording.compose` and nowhere else (修訂 D-2 (2),
-    風控 2026-10-28 #68 裁決補充 R4-1). Read from the same process-wide store and
-    the same field the advice card reads (``api/advice.py``), so the disclosure
-    states the value the advice side is applying -- never a default constant.
+    風控 2026-10-28 #68 裁決補充 R4-1, extended to ``from_default``). Read with
+    **one** ``load_with_status()`` on the same process-wide store the advice
+    card reads, so the disclosure states the value the advice side is applying
+    -- never a default constant -- and whether that value is the default
+    because the stored risk budget failed validation. That judgement is the
+    settings layer's own; nothing here reads a raw payload (延伸 4).
 
     R4-4: **any** failure -- building the store (which runs the S2 migration),
-    reading it, or a value that is not a finite number -- answers ``None``, and
-    the disclosure says the setting could not be read. A broken settings page
-    may never fail or hold back ``/today``: that would hide the stop-loss lines
-    along with it. Only the exception type is logged, never a value.
+    reading it, or a value that is not a finite number -- answers
+    ``Cap1Reading(None, False)``: the disclosure says the setting could not be
+    read, and a failed read is never reported as a fallback (延伸 7). A broken
+    settings page may never fail or hold back ``/today``: that would hide the
+    stop-loss lines along with it. Only the exception type is logged, never a
+    value. Read once, no retry, no sleep (延伸 5).
 
     The store is the memoized :func:`_default_settings_store`, so a request does
     not construct a ``SettingsStore`` (and re-run its migration) of its own.
     """
     try:
-        weight = Decimal(str(_default_settings_store().load().risk_budget.max_position_weight))
+        loaded = _default_settings_store().load_with_status()
+        weight = Decimal(str(loaded.settings.risk_budget.max_position_weight))
+        from_default = "risk_budget" in loaded.fallback_sections
     except Exception as exc:  # R4-4: every failure means "unreadable", never a 500
         logger.warning(
             "cap-1 setting unreadable for the playbook disclosure: %s", type(exc).__name__
         )
-        return None
-    return weight if weight.is_finite() else None
+        return Cap1Reading(weight=None, from_default=False)
+    if not weight.is_finite():
+        return Cap1Reading(weight=None, from_default=False)
+    return Cap1Reading(weight=weight, from_default=from_default)
 
 
 def get_alert_store() -> AlertStore:

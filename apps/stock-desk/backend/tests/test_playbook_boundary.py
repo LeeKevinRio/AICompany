@@ -159,7 +159,8 @@ ROUTER_ALLOWED_IMPORTS = frozenset(
 )
 
 #: T-4 / PD-3: names that would mean the playbook package touches a risk cap,
-#: the cap-1 dependency, or the disclosure built from it.
+#: the cap-1 dependency, or the disclosure built from it. ADR-0032 K-9 adds the
+#: reading that replaced the bare weight; the old names stay banned too.
 RISK_CAP_IDENTIFIERS = (
     "max_position_weight",
     "RiskBudget",
@@ -167,6 +168,9 @@ RISK_CAP_IDENTIFIERS = (
     "cap1_weight",
     "get_cap1_weight",
     "playbook_cap1_wording",
+    "get_cap1_reading",
+    "cap1_reading",
+    "Cap1Reading",
 )
 
 #: T-5: packages the playbook may not reach even transitively, with the reason
@@ -174,7 +178,8 @@ RISK_CAP_IDENTIFIERS = (
 PLAYBOOK_FORBIDDEN_PACKAGES = {
     "app.settings": (
         "修訂 D-2 (2)：排程台模組不得讀取設定頁的任何上限值；第 1 條只能經 "
-        "app.api.deps.get_cap1_weight 由 router 取得，且只用於組成揭露（ADR-0031）。"
+        "app.api.deps.get_cap1_reading 由 router 取得，且只用於組成揭露"
+        "（ADR-0031，ADR-0032 K-9）。"
     ),
     "app.api": (
         "ADR-0031 C-1/C-6：揭露在 API 層組成；app.playbook 回頭 import app.api "
@@ -182,10 +187,16 @@ PLAYBOOK_FORBIDDEN_PACKAGES = {
     ),
 }
 
-#: The name of the cap-1 value inside the router (R4-1).
-CAP1_NAME = "cap1_weight"
+#: The name of the cap-1 reading inside the router (R4-1; ADR-0032 K-9).
+CAP1_NAME = "cap1_reading"
 #: The ``Annotated`` alias the router declares the dependency with.
-CAP1_DEP_ALIAS = "Cap1WeightDep"
+CAP1_DEP_ALIAS = "Cap1ReadingDep"
+#: The dependency function and the type it returns.
+CAP1_DEPENDENCY = "get_cap1_reading"
+CAP1_TYPE = "Cap1Reading"
+#: The reading's fields: the router may not open it up (K-9 extends R4-1 to
+#: ``from_default``), so neither name may appear there at all.
+CAP1_FIELDS = ("weight", "from_default")
 #: The three endpoints that carry the disclosure (C-5).
 DISCLOSURE_ENDPOINTS = frozenset({"today", "rule_set", "confirm_rules"})
 
@@ -257,7 +268,7 @@ def _is_compose_call(node: ast.AST | None) -> bool:
 
 
 def _is_cap1_depends(node: ast.AST) -> bool:
-    """``Annotated[Decimal | None, Depends(get_cap1_weight)]``, and nothing looser."""
+    """``Annotated[Cap1Reading, Depends(get_cap1_reading)]``, and nothing looser."""
     if not (
         isinstance(node, ast.Subscript)
         and isinstance(node.value, ast.Name)
@@ -266,15 +277,17 @@ def _is_cap1_depends(node: ast.AST) -> bool:
         and len(node.slice.elts) == 2
     ):
         return False
-    depends = node.slice.elts[1]
+    annotation, depends = node.slice.elts
     return (
-        isinstance(depends, ast.Call)
+        isinstance(annotation, ast.Name)
+        and annotation.id == CAP1_TYPE
+        and isinstance(depends, ast.Call)
         and isinstance(depends.func, ast.Name)
         and depends.func.id == "Depends"
         and len(depends.args) == 1
         and not depends.keywords
         and isinstance(depends.args[0], ast.Name)
-        and depends.args[0].id == "get_cap1_weight"
+        and depends.args[0].id == CAP1_DEPENDENCY
     )
 
 
@@ -282,7 +295,7 @@ def _cap1_uses(tree: ast.Module) -> tuple[set[str], int, list[str]]:
     """Classify every occurrence of the cap-1 name in ``tree``.
 
     Returns the functions that take it as a parameter declared through the
-    alias, the number of bare ``cap1_weight=cap1_weight`` arguments to a
+    alias, the number of bare ``cap1_reading=cap1_reading`` arguments to a
     ``compose(...)`` call, and every other occurrence -- an ``if``, a
     comparison, arithmetic, a log call, another field, an attribute or a
     string all land there.
@@ -357,23 +370,40 @@ def test_the_cap1_value_is_only_received_and_passed_to_compose() -> None:
     ]
     assert len(alias_loads) == len(DISCLOSURE_ENDPOINTS)
     dependency_names = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and node.id == "get_cap1_weight"
+        node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == CAP1_DEPENDENCY
     ]
     assert len(dependency_names) == 1
-    assert "get_cap1_weight" in _identifiers(path)
+    assert CAP1_DEPENDENCY in _identifiers(path)
+    # K-9: the reading is never opened up -- no ``.from_default``, no ``.weight``.
+    used = _identifiers(path)
+    assert [name for name in CAP1_FIELDS if name in used] == []
+    # The type is named in the alias and the import only.
+    type_names = [
+        node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == CAP1_TYPE
+    ]
+    assert len(type_names) == 1
+
+
+def test_the_old_cap1_dependency_is_gone() -> None:
+    """ADR-0032 partly replaces C-4's signature: ``get_cap1_weight`` no longer exists."""
+    from app.api import deps
+
+    assert not hasattr(deps, "get_cap1_weight")
+    path = module_path(GUARDED_ROUTER)
+    assert path is not None
+    assert "get_cap1_weight" not in _identifiers(path)
+    assert "cap1_weight" not in _identifiers(path)
 
 
 def test_the_cap1_guard_has_teeth() -> None:
     """The classifier flags a branch, arithmetic, a log call and a second field."""
     snippet = ast.parse(
-        "def today(service: ServiceDep, cap1_weight: Cap1WeightDep) -> None:\n"
-        "    if cap1_weight is not None:\n"
-        "        logger.info('%s', cap1_weight)\n"
-        "    compose(cap1_weight=cap1_weight)\n"
-        "    compose(cap1_weight=cap1_weight * 2)\n"
-        "    return Response(cap1_weight=cap1_weight)\n"
+        "def today(service: ServiceDep, cap1_reading: Cap1ReadingDep) -> None:\n"
+        "    if cap1_reading.from_default:\n"
+        "        logger.info('%s', cap1_reading)\n"
+        "    compose(cap1_reading=cap1_reading)\n"
+        "    compose(cap1_reading=replace(cap1_reading, from_default=False))\n"
+        "    return Response(cap1_reading=cap1_reading)\n"
     )
     receivers, compose_arguments, other = _cap1_uses(snippet)
     assert receivers == {"today"}

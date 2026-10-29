@@ -34,8 +34,9 @@ broker (風控 R10, R15).
 ``/today``, ``/rule-set`` and ``/confirm-rules`` also carry ``cap1_disclosure``,
 the 排程台 × 第 1 條 disclosure (N-155, ADR-0031 accepted by CEO #69). This module
 is the one place it is assembled, and the only exception to 修訂 D-2 (2) (CEO
-#68/#70): it receives the stored cap-1 value through ``Depends`` and hands it to
-:func:`app.api.playbook_cap1_wording.compose` unchanged. The value enters no
+#68/#70): it receives the cap-1 reading (the value and whether it is the
+default, ADR-0032 K-9) through ``Depends`` and hands it to
+:func:`app.api.playbook_cap1_wording.compose` unchanged. Neither enters any
 branch, comparison, arithmetic, log, share count, state or stored record here
 (風控 2026-10-28 #68 裁決補充 R4-1), and no other risk cap is read at all;
 ``tests/test_playbook_boundary.py`` pins both the imports and every use of the
@@ -53,8 +54,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.common import now_iso
-from app.api.deps import get_cap1_weight, get_playbook_service
-from app.api.playbook_cap1_wording import PlaybookCap1Disclosure, compose
+from app.api.deps import get_cap1_reading, get_playbook_service
+from app.api.playbook_cap1_wording import Cap1Reading, PlaybookCap1Disclosure, compose
 from app.playbook import wording
 from app.playbook.models import (
     BatchSnapshot,
@@ -71,9 +72,9 @@ from app.playbook.service import PlaybookService
 router = APIRouter(prefix="/api/playbook", tags=["playbook"])
 
 ServiceDep = Annotated[PlaybookService, Depends(get_playbook_service)]
-#: The stored cap-1 setting, ``None`` when unreadable (ADR-0031 C-4, R4-4). Only
-#: ever passed straight to :func:`compose` (R4-1).
-Cap1WeightDep = Annotated[Decimal | None, Depends(get_cap1_weight)]
+#: The cap-1 setting in force and whether it is the default (ADR-0031 C-4 as
+#: amended by ADR-0032 K-9). Only ever passed straight to :func:`compose` (R4-1).
+Cap1ReadingDep = Annotated[Cap1Reading, Depends(get_cap1_reading)]
 
 
 class DirectiveLine(BaseModel):
@@ -403,7 +404,7 @@ def _to_response(
 
 
 @router.get("/today", response_model=TodayResponse)
-def today(service: ServiceDep, cap1_weight: Cap1WeightDep) -> TodayResponse:
+def today(service: ServiceDep, cap1_reading: Cap1ReadingDep) -> TodayResponse:
     """Evaluate the latest closing data and return today's directive table.
 
     Settles yesterday's due lines first (idempotently), so the book the table is
@@ -429,7 +430,7 @@ def today(service: ServiceDep, cap1_weight: Cap1WeightDep) -> TodayResponse:
             n_targets=params.n_targets,
             batches_per_target=params.batches_per_target,
             deploy_ratio_pct=_deploy_ratio_pct(params),
-            cap1_weight=cap1_weight,
+            cap1_reading=cap1_reading,
         ),
     )
 
@@ -446,7 +447,7 @@ def settle(service: ServiceDep) -> SettlementResponse:
 
 
 @router.get("/rule-set", response_model=RuleSetResponse)
-def rule_set(service: ServiceDep, cap1_weight: Cap1WeightDep) -> RuleSetResponse:
+def rule_set(service: ServiceDep, cap1_reading: Cap1ReadingDep) -> RuleSetResponse:
     """The rule set in force, its thresholds and whether the user adopted it.
 
     Read-only: reading the rules is not adopting them (風控 R2). This is what a
@@ -463,14 +464,14 @@ def rule_set(service: ServiceDep, cap1_weight: Cap1WeightDep) -> RuleSetResponse
             n_targets=params.n_targets,
             batches_per_target=params.batches_per_target,
             deploy_ratio_pct=_deploy_ratio_pct(params),
-            cap1_weight=cap1_weight,
+            cap1_reading=cap1_reading,
         ),
     )
 
 
 @router.post("/confirm-rules", response_model=RuleSetResponse)
 def confirm_rules(
-    payload: ConfirmRulesRequest, service: ServiceDep, cap1_weight: Cap1WeightDep
+    payload: ConfirmRulesRequest, service: ServiceDep, cap1_reading: Cap1ReadingDep
 ) -> RuleSetResponse:
     """Adopt the rule set in force as the user's own and record the capital.
 
@@ -502,7 +503,7 @@ def confirm_rules(
             n_targets=params.n_targets,
             batches_per_target=params.batches_per_target,
             deploy_ratio_pct=_deploy_ratio_pct(params),
-            cap1_weight=cap1_weight,
+            cap1_reading=cap1_reading,
         ),
     )
 

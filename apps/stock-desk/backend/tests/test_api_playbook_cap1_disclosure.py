@@ -8,7 +8,9 @@ they differ), ADR-0031 (CEO #69), 修訂 D-2 as rewritten under CEO #70
 is the behaviour:
 
 * **B-1 / R4-2** -- whatever the stored risk budget (cap 1 at 0.05, 0.10, 0.50,
-  unreadable, and every cap at once from TIGHT to LOOSE), ``/today``,
+  unreadable, a stored budget that failed validation so the default stands in
+  -- ``from_default`` True, ADR-0032 K-8 / DL-5 -- and every cap at once from
+  TIGHT to LOOSE), ``/today``,
   ``/rule-set`` and every ``playbook_*`` table are identical; and **R4-5** --
   ``/confirm-rules`` is never refused and writes the same parameters.
 * **B-2** -- the disclosure is on all five modes and all three endpoints,
@@ -23,6 +25,10 @@ is the behaviour:
   of any kind still answers 200 with the same directives. A non-positive
   ``batches_per_target`` takes ①-缺b / ①-缺nb (「風控 2026-10-28 #68 裁決補充二
   （N-155 交件已知限制 2～5）」 第 1 項, four-case table).
+* **②-預設** (P2, 「風控 2026-10-29 N-156 字面定稿與表態」 第 5 項, ADR-0032 K-9) --
+  ②-缺 > ②-預設 > ②, the loaded value in the sentence, and a failed read is
+  never reported as a fallback: ``weight is None`` always comes with
+  ``from_default`` False.
 * **R4-6** -- the advice, settings and portfolio responses do not change.
 
 The sentences are retyped here, character by character, rather than imported:
@@ -50,19 +56,25 @@ from app.api import deps
 from app.api import playbook_cap1_wording as cap1_wording
 from app.api.deps import get_playbook_service
 from app.api.playbook import RuleSetResponse, TodayResponse
-from app.api.playbook_cap1_wording import PlaybookCap1Disclosure, compose, format_pct
+from app.api.playbook_cap1_wording import (
+    Cap1Reading,
+    PlaybookCap1Disclosure,
+    compose,
+    format_pct,
+)
 from app.main import app
 from app.playbook.models import RuleParams
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from app.settings.models import AppSettings
-from app.settings.store import SettingsStore
+from app.settings.store import LoadedSettings, SettingsStore
 from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
 from tests.conftest import ApiHarness
 from tests.import_graph import APP_ROOT, imported_modules
 from tests.playbook_helpers import batch as make_batch
 from tests.playbook_helpers import confirm_rule_set
 from tests.playbook_helpers import params as make_params
+from tests.settings_fallback_helpers import SCHEMA_MISMATCH, write_raw
 
 # 修訂 D-2 (5) ② as rewritten under CEO #70 (風控 N-151 與 #70 D-2 改寫 第二項第 3
 # 點): every risk-budget field at its tightest and at its loosest. One copy, kept
@@ -96,6 +108,12 @@ LINE_4 = (
     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的"
     "股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
 )
+#: ②-預設 (風控 2026-10-29 N-156 第 5 項), retyped.
+LINE_2_DEFAULT = (
+    "第 1 條・單一標的佔比上限目前使用預設值 {cap1_pct}：設定頁的風險預算原本存的內容沒有通過驗證，"
+    "這個值不是原本存的內容；其分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。"
+    "排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。"
+)
 LINE_2_MISSING = (
     "第 1 條・單一標的佔比上限的目前設定值讀取失敗；其分母是庫存的已估值部位市值（不含現金，即"
     "設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，兩者的分母不同，不能直接比較大小。"
@@ -125,6 +143,7 @@ def expected_lines(
     per_target_pct: str | None,
     cap1_pct: str | None,
     per_target_book_pct: str | None,
+    cap1_from_default: bool = False,
 ) -> list[str]:
     """①～④ filled by hand, the 缺值 sentences swapped in where a value is missing."""
     if per_target_pct is None:
@@ -137,7 +156,12 @@ def expected_lines(
             per_target_pct=per_target_pct,
         )
         third = LINE_3.format(n_targets=n_targets, per_target_book_pct=per_target_book_pct)
-    second = LINE_2_MISSING if cap1_pct is None else LINE_2.format(cap1_pct=cap1_pct)
+    if cap1_pct is None:
+        second = LINE_2_MISSING
+    elif cap1_from_default:
+        second = LINE_2_DEFAULT.format(cap1_pct=cap1_pct)
+    else:
+        second = LINE_2.format(cap1_pct=cap1_pct)
     return [first, second, third, LINE_4]
 
 
@@ -173,12 +197,18 @@ DEFAULT_LINES = expected_lines(
     per_target_book_pct="20%",
 )
 
-#: B-1 / R4-2: cap 1 alone at 0.05, 0.10, 0.50 and unreadable, plus TIGHT and LOOSE.
-BUDGETS: dict[str, RiskBudget | None] = {
+#: A stored risk budget that fails validation, so the default stands in for it
+#: and the reading says ``from_default`` (ADR-0032 K-8 / DL-5).
+FALLBACK = "fallback"
+
+#: B-1 / R4-2: cap 1 alone at 0.05, 0.10, 0.50, unreadable and on its default
+#: after a failed validation, plus TIGHT and LOOSE.
+BUDGETS: dict[str, RiskBudget | str | None] = {
     "cap1-0.05": RiskBudget(max_position_weight=0.05),
     "cap1-0.10": RiskBudget(max_position_weight=0.10),
     "cap1-0.50": RiskBudget(max_position_weight=0.50),
     "cap1-unreadable": None,
+    "cap1-fallback": FALLBACK,
     "tight": TIGHT,
     "loose": LOOSE,
 }
@@ -193,18 +223,28 @@ class _UnreadableSettings:
     def load(self) -> AppSettings:
         raise self._error
 
+    def load_with_status(self) -> LoadedSettings:
+        raise self._error
 
-def _settings_provider(root: Path, budget: RiskBudget | None) -> Callable[[], object]:
+
+def _settings_provider(root: Path, budget: RiskBudget | str | None) -> Callable[[], object]:
     """What ``deps._default_settings_store`` answers with for ``budget``.
 
-    ``None`` is a store whose ``load`` raises: the production path then reads
-    ``None`` through the real :func:`deps.get_cap1_weight`, which is what this
-    module tests -- the dependency itself is never overridden here.
+    ``None`` is a store whose reads raise: the production path then reads
+    ``Cap1Reading(None, False)`` through the real :func:`deps.get_cap1_reading`,
+    which is what this module tests -- the dependency itself is never
+    overridden here. :data:`FALLBACK` is a store whose ``risk_budget`` row fails
+    validation, so the same function reads the default with ``from_default``.
     """
     if budget is None:
         unreadable = _UnreadableSettings(sqlite3.OperationalError("database is locked"))
         return lambda: unreadable
     store = SettingsStore(root / "settings.db")
+    if budget == FALLBACK:
+        store.save(AppSettings())
+        write_raw(store, "risk_budget", SCHEMA_MISMATCH)
+        return lambda: store
+    assert isinstance(budget, RiskBudget)
     store.save(AppSettings(risk_budget=budget))
     return lambda: store
 
@@ -294,7 +334,7 @@ def open_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Calla
     def _open(
         name: str,
         *,
-        budget: RiskBudget | None = STORED_BUDGET,
+        budget: RiskBudget | str | None = STORED_BUDGET,
         settings: Callable[[], object] | None = None,
         **seed: Any,
     ) -> Book:
@@ -357,6 +397,7 @@ def test_every_sentence_in_the_module_is_the_approved_one() -> None:
     assert cap1_wording.LINE_BOOK_EXAMPLE == LINE_3
     assert cap1_wording.LINE_INDEPENDENCE == LINE_4
     assert cap1_wording.LINE_CAP1_UNREADABLE == LINE_2_MISSING
+    assert cap1_wording.LINE_CAP1_DEFAULT == LINE_2_DEFAULT
     assert cap1_wording.LINE_PER_TARGET_UNAVAILABLE == LINE_1_MISSING
     assert cap1_wording.LINE_BOOK_EXAMPLE_UNAVAILABLE == LINE_3_MISSING
     assert cap1_wording.LINE_PER_TARGET_NO_BATCHES == LINE_1_MISSING_B
@@ -375,6 +416,7 @@ def test_no_sentence_carries_the_word_for_advice() -> None:
         LINE_1_MISSING_B,
         LINE_1_MISSING_NB,
         LINE_2_MISSING,
+        LINE_2_DEFAULT,
         LINE_3_MISSING,
     ):
         assert "建議" not in sentence
@@ -411,7 +453,7 @@ def test_compose_takes_only_keyword_arguments_and_has_no_defaults() -> None:
         "n_targets",
         "batches_per_target",
         "deploy_ratio_pct",
-        "cap1_weight",
+        "cap1_reading",
     }
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters)
     assert all(p.default is inspect.Parameter.empty for p in parameters)
@@ -441,15 +483,84 @@ def test_the_lines_can_never_be_empty() -> None:
         )
 
 
-def _compose(*, n_targets: int = 5, cap1: Decimal | None = Decimal("0.10")) -> Any:
+def _reading(cap1: Decimal | None, *, from_default: bool = False) -> Cap1Reading:
+    return Cap1Reading(weight=cap1, from_default=from_default)
+
+
+def _compose(
+    *, n_targets: int = 5, cap1: Decimal | None = Decimal("0.10"), from_default: bool = False
+) -> Any:
     return compose(
         rules_version=7,
         deploy_ratio=Decimal("0.70"),
         n_targets=n_targets,
         batches_per_target=3,
         deploy_ratio_pct="70%",
-        cap1_weight=cap1,
+        cap1_reading=_reading(cap1, from_default=from_default),
     )
+
+
+# --- ②-預設 (P2) -------------------------------------------------------------------------
+
+
+def test_a_default_cap1_takes_sentence_2_default_with_the_loaded_value() -> None:
+    """②-預設: the value actually loaded is stated, the rest is unchanged."""
+    disclosure = _compose(cap1=Decimal("0.1"), from_default=True)
+
+    assert disclosure.lines == expected_lines(
+        deploy_ratio_pct="70%",
+        n_targets=5,
+        batches_per_target=3,
+        per_target_pct="14%",
+        cap1_pct="10%",
+        per_target_book_pct="20%",
+        cap1_from_default=True,
+    )
+    assert disclosure.lines[1] == LINE_2_DEFAULT.format(cap1_pct="10%")
+    assert disclosure.cap1_pct == "10%"
+    # {cap1_pct} is the reading's weight, not a constant: another value shows.
+    other = _compose(cap1=Decimal("0.125"), from_default=True)
+    assert other.lines[1] == LINE_2_DEFAULT.format(cap1_pct="12.5%")
+
+
+@pytest.mark.parametrize(
+    ("reading", "expected"),
+    [
+        (Cap1Reading(weight=None, from_default=False), LINE_2_MISSING),
+        (
+            Cap1Reading(weight=Decimal("0.1"), from_default=True),
+            LINE_2_DEFAULT.format(cap1_pct="10%"),
+        ),
+        (Cap1Reading(weight=Decimal("0.1"), from_default=False), LINE_2.format(cap1_pct="10%")),
+    ],
+    ids=["missing", "default", "stored"],
+)
+def test_sentence_2_is_one_of_three_by_precedence(reading: Cap1Reading, expected: str) -> None:
+    """②-缺 > ②-預設 > ②, mutually exclusive; ①, ③ and ④ do not move."""
+    disclosure = compose(
+        rules_version=7,
+        deploy_ratio=Decimal("0.70"),
+        n_targets=5,
+        batches_per_target=3,
+        deploy_ratio_pct="70%",
+        cap1_reading=reading,
+    )
+    reference = _compose()
+    assert disclosure.lines[1] == expected
+    assert [disclosure.lines[i] for i in (0, 2, 3)] == [reference.lines[i] for i in (0, 2, 3)]
+    assert len(disclosure.lines) == 4
+
+
+def test_an_unreadable_value_can_never_be_a_fallback() -> None:
+    """ADR-0032 延伸 7 / DL-5: ``weight is None`` forces ``from_default`` False."""
+    with pytest.raises(ValueError):
+        Cap1Reading(weight=None, from_default=True)
+
+
+def test_the_default_sentence_carries_no_remedy() -> None:
+    """Like ②-缺: no 「請」, no 「覆寫」, no instruction to do anything."""
+    for word in ("請", "覆寫", "確認", "儲存"):
+        assert word not in LINE_2_DEFAULT
 
 
 def test_an_unreadable_cap1_replaces_sentence_2_only() -> None:
@@ -522,7 +633,7 @@ def _compose_batches(n_targets: int, batches: int, cap1: Decimal | None) -> Any:
         n_targets=n_targets,
         batches_per_target=batches,
         deploy_ratio_pct="70%",
-        cap1_weight=cap1,
+        cap1_reading=_reading(cap1),
     )
 
 
@@ -599,10 +710,10 @@ def test_missing_pct_fields_serialise_as_null_not_zero() -> None:
     assert body["per_target_book_pct"] is None
 
 
-# --- deps.get_cap1_weight (C-4, R4-4) -----------------------------------------------
+# --- deps.get_cap1_reading (C-4 as amended by ADR-0032 K-9, R4-4) ----------------------
 
 
-def test_get_cap1_weight_reads_the_stored_value_through_the_shared_store(
+def test_get_cap1_reading_reads_the_stored_value_through_the_shared_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Same store, same field as the advice card; no store built per call."""
@@ -615,14 +726,62 @@ def test_get_cap1_weight_reads_the_stored_value_through_the_shared_store(
         return store
 
     monkeypatch.setattr(deps, "_default_settings_store", provider)
-    assert deps.get_cap1_weight() == Decimal("0.12")
-    assert deps.get_cap1_weight() == Decimal("0.12")
+    expected = Cap1Reading(weight=Decimal("0.12"), from_default=False)
+    assert deps.get_cap1_reading() == expected
+    assert deps.get_cap1_reading() == expected
     assert built == [store, store]  # the memoized provider, never ``SettingsStore(...)``
 
 
-def test_get_cap1_weight_is_built_on_the_memoized_store() -> None:
+def test_get_cap1_reading_says_from_default_for_a_failed_stored_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K-9: ``from_default`` is the settings layer's one judgement, the weight the default."""
+    store = SettingsStore(tmp_path / "settings.db")
+    store.save(AppSettings(risk_budget=RiskBudget(max_position_weight=STORED_CAP1)))
+    write_raw(store, "risk_budget", SCHEMA_MISMATCH)
+    monkeypatch.setattr(deps, "_default_settings_store", lambda: store)
+
+    assert deps.get_cap1_reading() == Cap1Reading(weight=Decimal("0.1"), from_default=True)
+
+
+def test_get_cap1_reading_ignores_fallbacks_of_other_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SettingsStore(tmp_path / "settings.db")
+    store.save(AppSettings(risk_budget=RiskBudget(max_position_weight=STORED_CAP1)))
+    for section in ("cost_model", "alerts", "net_worth"):
+        write_raw(store, section, SCHEMA_MISMATCH)
+    monkeypatch.setattr(deps, "_default_settings_store", lambda: store)
+
+    assert deps.get_cap1_reading() == Cap1Reading(weight=Decimal("0.12"), from_default=False)
+
+
+def test_get_cap1_reading_reads_once_with_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K-9: exactly one ``load_with_status()``, no ``load()``, no raw payload."""
+    calls: list[str] = []
+
+    class _Counting(SettingsStore):
+        def load(self) -> AppSettings:
+            calls.append("load")
+            return super().load()
+
+        def load_with_status(self) -> LoadedSettings:
+            calls.append("load_with_status")
+            return super().load_with_status()
+
+    store = _Counting(tmp_path / "settings.db")
+    monkeypatch.setattr(deps, "_default_settings_store", lambda: store)
+    deps.get_cap1_reading()
+    assert calls == ["load_with_status"]
+    source = inspect.getsource(deps.get_cap1_reading)
+    assert "app_settings" not in source and "_parse_section" not in source
+
+
+def test_get_cap1_reading_is_built_on_the_memoized_store() -> None:
     """C-4: the provider it calls is the ``lru_cache``-d process-wide store."""
-    source = inspect.getsource(deps.get_cap1_weight)
+    source = inspect.getsource(deps.get_cap1_reading)
     assert "_default_settings_store()" in source
     assert "SettingsStore(" not in source
     assert hasattr(deps._default_settings_store, "cache_clear")
@@ -638,16 +797,18 @@ def test_get_cap1_weight_is_built_on_the_memoized_store() -> None:
     ],
     ids=["sqlite", "runtime", "validation", "key"],
 )
-def test_get_cap1_weight_answers_none_on_any_read_failure(
+def test_get_cap1_reading_answers_unreadable_on_any_read_failure(
     monkeypatch: pytest.MonkeyPatch, failure: Exception
 ) -> None:
-    """R4-4: not only ``sqlite3.Error`` -- every failure reads as "unreadable"."""
+    """R4-4 / 延伸 7: every failure reads as "unreadable", never as a fallback."""
     unreadable = _UnreadableSettings(failure)
     monkeypatch.setattr(deps, "_default_settings_store", lambda: unreadable)
-    assert deps.get_cap1_weight() is None
+    reading = deps.get_cap1_reading()
+    assert reading == Cap1Reading(weight=None, from_default=False)
+    assert reading.from_default is False
 
 
-def test_get_cap1_weight_answers_none_when_the_store_cannot_be_built(
+def test_get_cap1_reading_answers_unreadable_when_the_store_cannot_be_built(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R4-4: building the store (and its S2 migration) failing is a read failure too."""
@@ -656,18 +817,23 @@ def test_get_cap1_weight_answers_none_when_the_store_cannot_be_built(
         raise sqlite3.DatabaseError("file is not a database")
 
     monkeypatch.setattr(deps, "_default_settings_store", broken)
-    assert deps.get_cap1_weight() is None
+    assert deps.get_cap1_reading() == Cap1Reading(weight=None, from_default=False)
 
 
+@pytest.mark.parametrize("from_default", [False, True])
 @pytest.mark.parametrize("value", [float("nan"), float("inf")])
-def test_get_cap1_weight_answers_none_for_a_non_finite_value(
-    monkeypatch: pytest.MonkeyPatch, value: float
+def test_get_cap1_reading_answers_unreadable_for_a_non_finite_value(
+    monkeypatch: pytest.MonkeyPatch, value: float, from_default: bool
 ) -> None:
+    """Non-finite is unreadable even when the section was reported as a fallback."""
     fake = SimpleNamespace(
-        load=lambda: SimpleNamespace(risk_budget=SimpleNamespace(max_position_weight=value))
+        load_with_status=lambda: SimpleNamespace(
+            settings=SimpleNamespace(risk_budget=SimpleNamespace(max_position_weight=value)),
+            fallback_sections=("risk_budget",) if from_default else (),
+        )
     )
     monkeypatch.setattr(deps, "_default_settings_store", lambda: fake)
-    assert deps.get_cap1_weight() is None
+    assert deps.get_cap1_reading() == Cap1Reading(weight=None, from_default=False)
 
 
 # --- B-1 / R4-2 / R4-5: nothing the risk budget holds changes anything -------------------
@@ -692,12 +858,16 @@ def _today_and_rule_set(book: Book) -> dict[str, Any]:
 
 def test_the_budget_matrix_moves_cap_1_and_then_every_cap() -> None:
     """The matrix is what 修訂 D-2 (5) ② and R4-2 ask for, not a subset of it."""
-    caps = {name: None if b is None else b.max_position_weight for name, b in BUDGETS.items()}
+    caps = {
+        name: b.max_position_weight if isinstance(b, RiskBudget) else b
+        for name, b in BUDGETS.items()
+    }
     assert caps == {
         "cap1-0.05": 0.05,
         "cap1-0.10": 0.10,
         "cap1-0.50": 0.50,
         "cap1-unreadable": None,
+        "cap1-fallback": FALLBACK,
         "tight": 0.05,
         "loose": 0.50,
     }
@@ -711,12 +881,14 @@ def test_the_budget_matrix_moves_cap_1_and_then_every_cap() -> None:
 
 
 def test_today_rule_set_and_every_playbook_table_are_identical_whatever_the_risk_budget(
-    open_book: Callable[..., Book],
+    open_book: Callable[..., Book], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """B-1 / R4-2 (and PD-4): six budgets, one answer.
+    """B-1 / R4-2 (and PD-4): seven budgets, one answer.
 
-    Cap 1 at 0.05 / 0.10 / 0.50 / unreadable, then every risk-budget field at
-    once from TIGHT to LOOSE (CEO #70). Compared verbatim: ``/today``'s
+    Cap 1 at 0.05 / 0.10 / 0.50 / unreadable / on its default after a failed
+    validation (``from_default`` True; every other entry is False, ADR-0032
+    K-8), then every risk-budget field at once from TIGHT to LOOSE (CEO #70).
+    Compared verbatim: ``/today``'s
     directives, snapshot, page_summary, warnings, attribution and mode_reason;
     ``/rule-set``'s rules, params and attribution; every ``playbook_*`` table.
     """
@@ -728,6 +900,16 @@ def test_today_rule_set_and_every_playbook_table_are_identical_whatever_the_risk
     reference = results["cap1-0.10"]
     for name, result in results.items():
         assert result == reference, name
+    # Not vacuous: the matrix really holds both ``from_default`` values.
+    readings = {
+        name: _reading_for(budget, tmp_path / f"reading-{name}", monkeypatch)
+        for name, budget in BUDGETS.items()
+    }
+    assert {reading.from_default for reading in readings.values()} == {False, True}
+    assert readings["cap1-fallback"] == Cap1Reading(weight=Decimal("0.1"), from_default=True)
+    assert readings["cap1-unreadable"] == Cap1Reading(weight=None, from_default=False)
+    # DL-5: whenever the weight is unreadable, ``from_default`` is False.
+    assert all(not r.from_default for r in readings.values() if r.weight is None)
     # Not vacuous: the book really produced sized buys and sells, and wrote them.
     actions = {line["directive"]["action"] for line in reference["today"]["directives"]}
     assert {"buy", "sell"} <= actions
@@ -737,6 +919,34 @@ def test_today_rule_set_and_every_playbook_table_are_identical_whatever_the_risk
         if line["directive"]["action"] == "buy"
     )
     assert reference["tables"]["playbook_directives"]
+
+
+def _reading_for(
+    budget: RiskBudget | str | None, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> Cap1Reading:
+    """What the real dependency reads for one matrix entry."""
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(deps, "_default_settings_store", _settings_provider(root, budget))
+    return deps.get_cap1_reading()
+
+
+def test_a_fallback_budget_states_the_default_through_every_endpoint(
+    open_book: Callable[..., Book],
+) -> None:
+    """②-預設 end to end: the stored budget failed validation, the default 10% stands."""
+    book = open_book("fallback-default", budget=FALLBACK)
+    for response in (
+        book.client.get("/api/playbook/today"),
+        book.client.get("/api/playbook/rule-set"),
+        book.client.post("/api/playbook/confirm-rules", json={"capital": "1000000"}),
+    ):
+        assert response.status_code == 200
+        disclosure = response.json()["cap1_disclosure"]
+        assert disclosure["lines"][1] == LINE_2_DEFAULT.format(cap1_pct="10%")
+        assert disclosure["cap1_pct"] == "10%"
+        assert len(disclosure["lines"]) == 4
+        # K-8: no new field -- the response shape is the one ② has.
+        assert set(disclosure) == set(PlaybookCap1Disclosure.model_fields)
 
 
 def test_confirm_rules_is_never_refused_and_writes_the_same_params_whatever_the_risk_budget_r4_5(
@@ -994,7 +1204,15 @@ def test_today_does_not_read_the_rule_set_a_second_time(
 
 
 def _disclosure_fragments() -> list[str]:
-    return [TITLE, *STORED_LINES, *DEFAULT_LINES, LINE_4, "單一標的佔比上限", LINE_2_MISSING]
+    return [
+        TITLE,
+        *STORED_LINES,
+        *DEFAULT_LINES,
+        LINE_4,
+        "單一標的佔比上限",
+        LINE_2_MISSING,
+        LINE_2_DEFAULT.format(cap1_pct="10%"),
+    ]
 
 
 def test_no_playbook_table_ever_holds_any_disclosure_text(
@@ -1059,7 +1277,9 @@ def test_only_the_playbook_router_assembles_the_disclosure() -> None:
     """B-4 / H4, statically: no other module imports the sentences or holds the title.
 
     Which also means no alerts, advice, settings, portfolio or EXIT path can emit
-    them: the text exists in one source file and is served by one router.
+    them: the text exists in one source file and is served by one router. The
+    one other importer is ``app.api.deps``, and only for the :class:`Cap1Reading`
+    type its dependency returns (ADR-0032 K-9 defines it in the wording module).
     """
     importers = []
     holders = []
@@ -1070,8 +1290,14 @@ def test_only_the_playbook_router_assembles_the_disclosure() -> None:
             importers.append(module)
         if TITLE in path.read_text(encoding="utf-8"):
             holders.append(module)
-    assert importers == ["app.api.playbook"]
+    assert importers == ["app.api.deps", "app.api.playbook"]
     assert holders == ["app.api.playbook_cap1_wording"]
+    deps_names = {
+        name
+        for name in imported_modules(APP_ROOT / "api" / "deps.py", "app.api.deps")
+        if name.startswith("app.api.playbook_cap1_wording.")
+    }
+    assert deps_names == {"app.api.playbook_cap1_wording.Cap1Reading"}
 
 
 # --- R4-6: the advice side does not change ---------------------------------------------
@@ -1093,6 +1319,7 @@ def test_the_advice_settings_and_portfolio_surfaces_are_untouched() -> None:
         imported = imported_modules(path, f"app.api.{router}")
         assert "app.api.playbook_cap1_wording" not in imported, router
         assert "get_cap1_weight" not in path.read_text(encoding="utf-8"), router
+        assert "get_cap1_reading" not in path.read_text(encoding="utf-8"), router
 
 
 def test_the_settings_response_does_not_carry_the_disclosure(api_harness: ApiHarness) -> None:
