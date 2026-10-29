@@ -23,7 +23,10 @@ clamped:
 
 :class:`AppSettingsPatch` is the ``PUT`` body: every section is optional, so a
 caller can update one section without restating the others, and an omitted
-section is left untouched (never reset to defaults). ``net_worth`` is the one
+section is left untouched (never reset to defaults) -- including a section
+whose stored payload failed validation, which keeps that payload (ADR-0032
+W-1). Carrying such a section is an overwrite, and has to be confirmed by
+naming it in ``overwrite_fallback_sections`` (W-2). ``net_worth`` is the one
 section whose patch shape differs from its stored shape -- the caller sends the
 amount, the server stamps the time -- so a client cannot backdate a figure into
 looking fresher than it is.
@@ -32,6 +35,7 @@ looking fresher than it is.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -178,6 +182,10 @@ class AppSettings(BaseModel):
     net_worth: NetWorthSettings = Field(default_factory=NetWorthSettings)
 
 
+#: A section id, as ``overwrite_fallback_sections`` names it.
+SectionName = Literal["risk_budget", "cost_model", "alerts", "net_worth"]
+
+
 class AppSettingsPatch(BaseModel):
     """The ``PUT /api/settings`` body: any subset of the sections."""
 
@@ -187,6 +195,35 @@ class AppSettingsPatch(BaseModel):
     cost_model: CostModelSettings | None = None
     alerts: AlertSettings | None = None
     net_worth: NetWorthInput | None = None
+    #: The fallback sections (stored, but failing validation) the user has
+    #: confirmed to overwrite with what this body carries (ADR-0032 W-2). A
+    #: carried fallback section missing from here makes the whole write a 409
+    #: that writes nothing. Not part of the stored document.
+    overwrite_fallback_sections: tuple[SectionName, ...] = ()
+
+    def carried_sections(
+        self, *, now: datetime | None = None, valued_book_twd: float | None = None
+    ) -> dict[str, BaseModel]:
+        """The sections this body carries, as they would be stored.
+
+        ``net_worth`` is stamped with ``now`` and the yardstick, as in
+        :meth:`apply_to`; an omitted section is not in the result at all.
+        """
+        carried: dict[str, BaseModel] = {}
+        if self.risk_budget is not None:
+            carried["risk_budget"] = self.risk_budget
+        if self.cost_model is not None:
+            carried["cost_model"] = self.cost_model
+        if self.alerts is not None:
+            carried["alerts"] = self.alerts
+        if self.net_worth is not None:
+            moment = now if now is not None else datetime.now(UTC)
+            carried["net_worth"] = NetWorthSettings(
+                total_net_worth_twd=self.net_worth.total_net_worth_twd,
+                updated_at=moment.isoformat(),
+                valued_book_twd_at_report=valued_book_twd,
+            )
+        return carried
 
     def apply_to(
         self,
@@ -213,19 +250,5 @@ class AppSettingsPatch(BaseModel):
         against, stored alongside it so later reads can restate the comparison
         without repeating the valuation.
         """
-        moment = now if now is not None else datetime.now(UTC)
-        net_worth = (
-            NetWorthSettings(
-                total_net_worth_twd=self.net_worth.total_net_worth_twd,
-                updated_at=moment.isoformat(),
-                valued_book_twd_at_report=valued_book_twd,
-            )
-            if self.net_worth is not None
-            else current.net_worth
-        )
-        return AppSettings(
-            risk_budget=self.risk_budget if self.risk_budget is not None else current.risk_budget,
-            cost_model=self.cost_model if self.cost_model is not None else current.cost_model,
-            alerts=self.alerts if self.alerts is not None else current.alerts,
-            net_worth=net_worth,
-        )
+        carried = self.carried_sections(now=now, valued_book_twd=valued_book_twd)
+        return current.model_copy(update=carried)

@@ -19,6 +19,12 @@ absent row is not a fallback -- a file saved before a section existed (no
 ``net_worth`` row before FR-9) is a valid one. The state is judged afresh on
 every read and never stored; reading takes no lock and writes nothing (K-3).
 
+Writes never write over a fallback section blindly (ADR-0032 Decision 4,
+W-1 + W-2): one the write does not carry keeps its stored payload, and one it
+does carry must be confirmed in ``overwrite_fallback_sections`` or nothing at
+all is written. The judgement is made under ``BEGIN IMMEDIATE`` on rows
+re-read inside the lock (:meth:`SettingsStore.write`).
+
 Writes are not the only thing that changes a stored section: constructing the
 store runs the S2 migration (:mod:`app.settings.migrations`, CEO #63), which
 rewrites a stored cap-1 ``max_position_weight`` of 0.15 to 0.10 once and keeps
@@ -32,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Collection, Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -96,6 +103,37 @@ class LoadedSettings:
 
     settings: AppSettings
     fallback_sections: tuple[str, ...]
+
+
+class FallbackOverwriteRequired(Exception):
+    """A write carried fallback sections without confirming their overwrite (W-2).
+
+    Raised from inside the write's transaction, which is rolled back: no
+    section at all is written. ``sections`` are the offending ones, in
+    ``_SECTIONS`` order.
+    """
+
+    def __init__(self, sections: tuple[str, ...]) -> None:
+        super().__init__(f"overwrite of fallback sections not confirmed: {', '.join(sections)}")
+        self.sections = sections
+
+
+@dataclass(frozen=True)
+class SaveResult:
+    """What one :meth:`SettingsStore.write` found and left behind.
+
+    Both halves come from the one read taken under the write lock, so a caller
+    has no reason to read again: ``loaded`` is exactly what a read would now
+    return, and its ``fallback_sections`` are the fallback sections the write
+    left unwritten (W-1).
+    """
+
+    #: The document as read under the lock, before anything was written.
+    previous: LoadedSettings
+    #: The document in force after the write.
+    loaded: LoadedSettings
+    #: The sections whose rows were written, in ``_SECTIONS`` order.
+    written_sections: tuple[str, ...]
 
 
 class SettingsStore:
@@ -175,30 +213,113 @@ class SettingsStore:
                 fallback.append(name)
         return LoadedSettings(settings=AppSettings(**sections), fallback_sections=tuple(fallback))
 
-    def save(self, settings: AppSettings, *, now: datetime | None = None) -> AppSettings:
-        """Persist every section and return what was written."""
+    def save(
+        self,
+        settings: AppSettings,
+        *,
+        now: datetime | None = None,
+        overwrite_fallback_sections: Collection[str] = (),
+    ) -> AppSettings:
+        """Write the whole document and return the settings now in force.
+
+        Every section is *carried*, so the same rule as :meth:`write` applies:
+        a fallback section not named in ``overwrite_fallback_sections`` refuses
+        the write (:class:`FallbackOverwriteRequired`) and nothing is written.
+        """
+        result = self.write(
+            {name: getattr(settings, name) for name in _SECTIONS},
+            now=now,
+            overwrite_fallback_sections=overwrite_fallback_sections,
+        )
+        return result.loaded.settings
+
+    def write(
+        self,
+        sections: Mapping[str, BaseModel],
+        *,
+        now: datetime | None = None,
+        overwrite_fallback_sections: Collection[str] = (),
+    ) -> SaveResult:
+        """Write the carried ``sections`` without ever writing over a fallback blindly.
+
+        ADR-0032 Decision 4 (W-1 + W-2, K-10), decided and applied under one
+        ``BEGIN IMMEDIATE`` with the rows re-read *inside* the lock (the N-154
+        pattern), so the judgement is about the file as it is when the write
+        lands -- not as some earlier read saw it:
+
+        * **W-1** -- a fallback section that is not carried keeps its stored
+          payload: it is not written at all, so a save of the fee rates can no
+          longer freeze the risk budget's defaults over the user's real data.
+        * **W-2** -- a fallback section that *is* carried must be named in
+          ``overwrite_fallback_sections``; otherwise
+          :class:`FallbackOverwriteRequired` is raised and **no section is
+          written** (the transaction is rolled back), which is what makes the
+          409 sentence true.
+
+        Every other section is written as before: the carried value, or the
+        value in force for one not carried. ``note_cap1_write`` runs only when
+        ``risk_budget`` is actually written, so a kept fallback budget cannot
+        mark a migrated record ``changed_by_user`` with the default's value.
+        """
+        unknown = set(sections) - set(_SECTIONS)
+        if unknown:
+            raise ValueError(f"unknown settings sections: {sorted(unknown)}")
+        for name, value in sections.items():
+            if not isinstance(value, _SECTIONS[name]):
+                raise TypeError(f"section {name!r} must be a {_SECTIONS[name].__name__}")
+        overwrite = frozenset(overwrite_fallback_sections)
         moment = (now if now is not None else datetime.now(UTC)).isoformat()
-        rows = [
-            (name, json.dumps(getattr(settings, name).model_dump(), ensure_ascii=False), moment)
-            for name in _SECTIONS
-        ]
-        with closing(self._connect()) as conn, conn:
-            conn.executemany(
-                """
-                INSERT INTO app_settings (section, payload, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(section) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                rows,
-            )
-            # Same transaction: a migrated record learns that the user has
-            # since written another cap-1 value (F1/F8). Nothing else of the
-            # record moves here (app/settings/migrations.py, I-6).
-            init_migrations_table(conn)
-            note_cap1_write(conn, settings.risk_budget.max_position_weight)
-        return settings
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute("SELECT section, payload FROM app_settings").fetchall()
+                previous = self._judge({str(section): str(payload) for section, payload in rows})
+                blocked = tuple(
+                    name
+                    for name in previous.fallback_sections
+                    if name in sections and name not in overwrite
+                )
+                if blocked:
+                    raise FallbackOverwriteRequired(blocked)
+                kept = tuple(name for name in previous.fallback_sections if name not in sections)
+                values: dict[str, Any] = {
+                    name: sections[name] if name in sections else getattr(previous.settings, name)
+                    for name in _SECTIONS
+                }
+                written = tuple(name for name in _SECTIONS if name not in kept)
+                conn.executemany(
+                    """
+                    INSERT INTO app_settings (section, payload, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(section) DO UPDATE SET
+                        payload = excluded.payload,
+                        updated_at = excluded.updated_at
+                    """,
+                    [
+                        (name, json.dumps(values[name].model_dump(), ensure_ascii=False), moment)
+                        for name in written
+                    ],
+                )
+                # Same transaction: a migrated record learns that the user has
+                # since written another cap-1 value (F1/F8). Nothing else of
+                # the record moves here (app/settings/migrations.py, I-6).
+                init_migrations_table(conn)
+                if "risk_budget" in written:
+                    budget = values["risk_budget"]
+                    assert isinstance(budget, RiskBudget)
+                    note_cap1_write(conn, budget.max_position_weight)
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own; a second
+                # ROLLBACK would replace the real error with its own.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return SaveResult(
+            previous=previous,
+            loaded=LoadedSettings(settings=AppSettings(**values), fallback_sections=kept),
+            written_sections=written,
+        )
 
     @staticmethod
     def _parse_section(

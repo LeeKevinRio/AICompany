@@ -58,7 +58,8 @@ def _combo_id(combo: tuple[str, ...]) -> str:
 
 
 def _seed(harness: ApiHarness, combo: tuple[str, ...]) -> None:
-    harness.settings.save(STORED)
+    # Overwrite confirmed: a previous combination may have left fallbacks behind.
+    harness.settings.save(STORED, overwrite_fallback_sections=SECTIONS)
     break_sections(harness.settings, combo)
 
 

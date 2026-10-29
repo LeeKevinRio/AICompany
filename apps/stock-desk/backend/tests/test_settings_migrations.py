@@ -455,14 +455,14 @@ def test_a_restored_pre_migration_backup_is_migrated_and_announced_again(tmp_pat
 
 
 def _put_cap1(store: SettingsStore, value: float) -> None:
+    """Save cap 1 the way ``PUT {"risk_budget": ...}`` does: that section only.
+
+    The other sections are not carried, so a fallback among them is kept rather
+    than refused (ADR-0032 W-1).
+    """
     current = store.load()
-    store.save(
-        AppSettings(
-            risk_budget=current.risk_budget.model_copy(update={"max_position_weight": value}),
-            cost_model=current.cost_model,
-            alerts=current.alerts,
-            net_worth=current.net_worth,
-        )
+    store.write(
+        {"risk_budget": current.risk_budget.model_copy(update={"max_position_weight": value})}
     )
 
 

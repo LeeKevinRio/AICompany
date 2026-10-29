@@ -33,6 +33,12 @@ confirmation panels, every sentence chosen and filled by
 A fallback ``net_worth`` is never presented as "not entered yet": the
 freshness block says ``fallback`` and drops the not-entered note.
 
+A ``PUT`` never writes over a fallback section blindly (ADR-0032 W-1 + W-2):
+one the body leaves out keeps its stored payload, and the response's
+``partial_save_notice`` names it; one the body carries must also be named in
+``overwrite_fallback_sections``, or the answer is a 409 whose ``detail`` says
+that no setting was written -- and none is.
+
 The risk-budget bounds are the ones declared on
 :class:`app.advice.limits.RiskBudget` and are reused unchanged, whatever the
 settings page asks for: a single name stays at most 50% of equity, gross
@@ -71,7 +77,12 @@ from app.data.quota import (
 from app.portfolio.summary import build_summary, valued_market_value_twd
 from app.portfolio.valuation import PositionValuator
 from app.positions.store import PositionStore
-from app.settings.fallback_wording import SettingsFallbackView, settings_fallback
+from app.settings.fallback_wording import (
+    SettingsFallbackView,
+    overwrite_required_detail,
+    partial_save_notice,
+    settings_fallback,
+)
 from app.settings.migrations import Cap1MigrationRecord, Cap1MigrationStatus
 from app.settings.models import AppSettings, AppSettingsPatch
 from app.settings.net_worth import (
@@ -80,7 +91,12 @@ from app.settings.net_worth import (
     review_net_worth,
     standing_far_above_note,
 )
-from app.settings.store import LoadedSettings, SettingsStore
+from app.settings.store import (
+    FallbackOverwriteRequired,
+    LoadedSettings,
+    SaveResult,
+    SettingsStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +277,10 @@ class SettingsResponse(BaseModel):
     #: N-156: the sections served with their defaults and everything the page
     #: says about them; ``None`` when no section fell back.
     settings_fallback: SettingsFallbackView | None
+    #: ``PUT`` only: replaces「設定已儲存。」when the write left fallback sections
+    #: unwritten (W-1), naming them; ``None`` on ``GET`` and on a ``PUT`` that
+    #: left none.
+    partial_save_notice: str | None
     as_of: str
 
 
@@ -427,6 +447,7 @@ def _response(
     store: SettingsStore,
     *,
     net_worth_notes: list[str] | None = None,
+    saved: bool = False,
 ) -> SettingsResponse:
     settings = loaded.settings
     verified = settings.cost_model.rates_verified
@@ -441,8 +462,26 @@ def _response(
         net_worth=view,
         cap1_migration=_cap1_migration_view(store.cap1_migration(), loaded),
         settings_fallback=settings_fallback(loaded.fallback_sections),
+        partial_save_notice=partial_save_notice(loaded.fallback_sections) if saved else None,
         as_of=now_iso(),
     )
+
+
+def _write(
+    store: SettingsStore, body: AppSettingsPatch, *, valued_book_twd: float | None = None
+) -> SaveResult:
+    """Write what ``body`` carries; a refused overwrite is a 409 that wrote nothing."""
+    try:
+        return store.write(
+            body.carried_sections(valued_book_twd=valued_book_twd),
+            overwrite_fallback_sections=body.overwrite_fallback_sections,
+        )
+    except FallbackOverwriteRequired as refused:
+        logger.info("settings write refused: unconfirmed fallback overwrite %s", refused.sections)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=overwrite_required_detail(refused.sections),
+        ) from None
 
 
 def _review_reported_net_worth(
@@ -483,11 +522,10 @@ def write_settings(
     positions: PositionStoreDep,
     valuator: ValuatorDep,
 ) -> SettingsResponse:
-    current = store.load()
+    # No read here (K-5): the store reads, decides and writes under one lock
+    # (W-1 + W-2), and hands back the document it left behind.
     if body.net_worth is None:
-        # A full write leaves no section on its defaults.
-        saved = store.save(body.apply_to(current))
-        return _response(LoadedSettings(saved, ()), ledger, store)
+        return _response(_write(store, body).loaded, ledger, store, saved=True)
 
     amount = body.net_worth.total_net_worth_twd
     review, valued_book = _review_reported_net_worth(amount, positions, valuator)
@@ -500,17 +538,17 @@ def write_settings(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=review.rejection
         )
 
-    saved = store.save(body.apply_to(current, valued_book_twd=valued_book))
+    result = _write(store, body, valued_book_twd=valued_book)
     # FR-9 (d): no history table, but the change does leave a trace.
     logger.info(
         "net worth updated: previous=%s new=%.2f at=%s valued_book=%s warnings=%d",
-        current.net_worth.total_net_worth_twd,
+        result.previous.settings.net_worth.total_net_worth_twd,
         amount,
-        saved.net_worth.updated_at,
+        result.loaded.settings.net_worth.updated_at,
         valued_book,
         len(review.warnings),
     )
     # ``review.warnings`` is not passed on: the response's warning is rebuilt
     # from what was just stored, so the sentence the user sees now is the same
     # one they will keep seeing on every later read.
-    return _response(LoadedSettings(saved, ()), ledger, store, net_worth_notes=review.notes)
+    return _response(result.loaded, ledger, store, net_worth_notes=review.notes, saved=True)
