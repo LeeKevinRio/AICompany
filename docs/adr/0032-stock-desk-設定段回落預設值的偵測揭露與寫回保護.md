@@ -1,6 +1,6 @@
 # ADR-0032：stock-desk 設定段回落預設值的偵測、揭露與寫回保護
 
-- 狀態：proposed（待 CEO 核可）
+- 狀態：accepted（CEO #74，2026-10-29 核可）
 - 日期：2026-10-29（tech-architect 草案日期 2026-10-28）
 - 決策者：tech-architect（草案）；風控 2026-10-29 字面定稿（含檔末補記；VERDICT: CONDITIONAL APPROVE，required 條件須與本案同批完成）；CEO #72 已裁 E2、#73 已裁 A-1 照常評估（2026-10-29）；本 ADR 待 CEO 核可。
 - 來源簡稱（皆在 `work/` 下）：
@@ -156,7 +156,7 @@
 
 ## 待決
 
-- CEO 核可本 ADR。
+- CEO 核可本 ADR：**已核可**（CEO #74，2026-10-29）。
 - [風控] dev-lead 待辦第 14 項（suggested，交 TA 與 qa-reviewer）：狀態為 `skipped` 時，使用者以 W-2 覆寫把風險預算覆寫成 0.15，下次啟動 S2 遷移會改成 0.10。風控認為是收緊、不算紅線，請 TA 確認是否接受。
 - 決策包新增 CEO 知悉事項（[風控] tech-writer 待辦第 3 項）：由 coordinator 處理；本任務未修改決策包。
 - coordinator 定案：揭露字面（含 W-2 覆寫面板）首選隨後端回應下發，與 K-6 一致；實作若改放前端單一常數檔亦可（[風控] 第 6 項允許），但須單一來源、逐字守門測試與禁用詞掃描。
