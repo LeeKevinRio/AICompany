@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { ErrorPanel } from "../components/ErrorPanel";
+import { FOCUSABLE_SELECTOR, trapTabTarget } from "../lib/focusTrap";
 import { useEmergencyExit } from "../lib/queries";
 import {
   allExitChecksConfirmed,
@@ -62,6 +63,11 @@ export function EmergencyExitControl({
   const [checks, setChecks] = useState<boolean[]>(() => initialExitChecks(checkTexts.length));
   const mutation = useEmergencyExit();
   const isClientMounted = useIsClientMounted();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const previousStepRef = useRef<ExitStep>("idle");
+  const cancelRef = useRef<() => void>(() => {});
 
   // The checklist length only changes when a refetch swaps the degraded
   // fallback for the real block (3 checks <-> 4). Re-seeding keeps a tick
@@ -88,9 +94,60 @@ export function EmergencyExitControl({
     });
   }
 
+  // Keep the latest `cancel` reachable from the document-level Esc listener
+  // without re-subscribing on every render.
+  useEffect(() => {
+    cancelRef.current = cancel;
+  });
+
+  // Focus management (the dialog is portalled to the end of <body>, so the
+  // browser's natural order no longer puts it right after the trigger). Every
+  // step moves focus to the step's heading — not a checkbox, so a stray Space
+  // can never tick a fact the user has not read yet — and any close (取消, Esc,
+  // successful submit) hands focus back to the 全部出清 trigger.
+  useEffect(() => {
+    const wasOpen = previousStepRef.current !== "idle";
+    previousStepRef.current = step;
+    if (step !== "idle") {
+      headingRef.current?.focus();
+    } else if (wasOpen) {
+      triggerRef.current?.focus();
+    }
+  }, [step]);
+
+  // Esc == 取消: closes the dialog and never submits. Locked while the
+  // submission is in flight, same as the (disabled) 取消 button and as
+  // `EditPositionModal`.
+  useEffect(() => {
+    if (step === "idle") return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !mutation.isPending) cancelRef.current();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [step, mutation.isPending]);
+
+  // Focus trap, same approach as `EditPositionModal`: Tab / Shift+Tab wrap
+  // inside the dialog instead of leaking to the page behind it.
+  function handleDialogKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+    const target = trapTabTarget(
+      focusable.length,
+      focusable.findIndex((element) => element === document.activeElement),
+      event.shiftKey,
+    );
+    if (target === null) return;
+    event.preventDefault();
+    focusable[target]?.focus();
+  }
+
   return (
     <div className="flex flex-col items-end gap-2">
       <button
+        ref={triggerRef}
         type="button"
         onClick={openConfirm}
         className="rounded-md border border-neutral-600 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-800"
@@ -112,16 +169,22 @@ export function EmergencyExitControl({
         isClientMounted &&
         createPortal(
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="全部出清確認"
+          onKeyDown={handleDialogKeyDown}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
         >
-          <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-neutral-700 bg-neutral-950 p-5">
+          <div className="max-h-[calc(100vh-2rem)] supports-[height:100dvh]:max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-neutral-700 bg-neutral-950 p-5">
             {step === "confirm" && (
               <>
                 {/* 視覺規範 §4.3 逐字引用（Step 2 標頭）。 */}
-                <h2 className="text-lg font-semibold text-neutral-100">
+                <h2
+                  ref={headingRef}
+                  tabIndex={-1}
+                  className="text-lg font-semibold text-neutral-100"
+                >
                   全部出清 — 確認前請閱讀以下事實
                 </h2>
                 <ul className="mt-4 space-y-3">
@@ -162,7 +225,13 @@ export function EmergencyExitControl({
 
             {step === "final" && (
               <>
-                <h2 className="text-lg font-semibold text-neutral-100">全部出清 — 二次確認</h2>
+                <h2
+                  ref={headingRef}
+                  tabIndex={-1}
+                  className="text-lg font-semibold text-neutral-100"
+                >
+                  全部出清 — 二次確認
+                </h2>
                 {/* 排程台頁面審查 (suggested): Step 3 的覆述是二次確認前最後
                     一次讀到這些事實，對比度不低於 neutral-300。 */}
                 <ul className="mt-4 space-y-2 text-sm text-neutral-300">
