@@ -46,7 +46,7 @@ from tests.settings_fallback_helpers import (
     raw_rows,
     write_raw,
 )
-from tests.test_settings_fallback_wording import DETAIL_409, PARTIAL_SAVE
+from tests.test_settings_fallback_wording import DETAIL_409, NOTHING_SAVED, PARTIAL_SAVE
 
 STORED = AppSettings(
     risk_budget=RiskBudget(max_position_weight=0.07),
@@ -135,6 +135,56 @@ def test_a_put_that_leaves_nothing_behind_has_no_partial_notice(api_harness: Api
     body = api_harness.client.put("/api/settings", json={"alerts": BODIES["alerts"]}).json()
     assert body["settings_fallback"] is None
     assert body["partial_save_notice"] is None
+
+
+# --- K-15 裁示 二-4 (b): an empty body stores nothing the user sent ------------------------
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [("risk_budget", "cost_model", "alerts"), SECTIONS],
+    ids=["three-form-sections", "all-four"],
+)
+def test_an_empty_body_over_fallbacks_says_nothing_was_saved(
+    api_harness: ApiHarness, broken: tuple[str, ...]
+) -> None:
+    """Every form section unticked: body ``{}``, and「設定已儲存。」would be false."""
+    before = _seeded(api_harness, broken)
+
+    response = api_harness.client.put("/api/settings", json={})
+
+    assert response.status_code == 200, response.text
+    names = "、".join(NAMES[name] for name in broken)
+    assert response.json()["partial_save_notice"] == NOTHING_SAVED.format(section_names=names)
+    rows = raw_rows(api_harness.settings)
+    for name in broken:
+        assert rows[name] == before[name]  # W-1: the fallback rows untouched
+    if broken == SECTIONS:
+        assert rows == before  # all four fell back: not one row written
+
+
+def test_a_body_carrying_a_valid_section_keeps_the_original_sentence(
+    api_harness: ApiHarness,
+) -> None:
+    _seeded(api_harness, ("risk_budget", "cost_model"))
+    body = api_harness.client.put("/api/settings", json={"alerts": BODIES["alerts"]}).json()
+    assert body["partial_save_notice"] == PARTIAL_SAVE.format(section_names="風險預算、費率")
+
+
+def test_an_empty_body_without_fallbacks_has_no_notice(api_harness: ApiHarness) -> None:
+    _seeded(api_harness, ())
+    body = api_harness.client.put("/api/settings", json={}).json()
+    assert body["settings_fallback"] is None
+    assert body["partial_save_notice"] is None
+
+
+def test_a_net_worth_put_never_takes_the_nothing_saved_variant(api_harness: ApiHarness) -> None:
+    """The net-worth branch always carries its section, so it always stored something."""
+    _seeded(api_harness, ("risk_budget", "cost_model", "alerts"))
+    body = api_harness.client.put("/api/settings", json={"net_worth": BODIES["net_worth"]}).json()
+    assert body["partial_save_notice"] == PARTIAL_SAVE.format(
+        section_names="風險預算、費率、警示排程"
+    )
 
 
 def test_a_get_never_carries_the_partial_notice(api_harness: ApiHarness) -> None:

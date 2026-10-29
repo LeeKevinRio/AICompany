@@ -138,6 +138,8 @@ DETAIL_409 = (
     "沒有寫入任何設定：{section_names}原本存的內容沒有通過驗證，要寫入這些區段必須先確認覆寫。"
 )
 PARTIAL_SAVE = "設定已儲存。{section_names}沒有寫入，仍使用預設值。"
+#: 「全未寫入」 variant, 「風控 2026-10-29 N-156 K-15 正式核對與裁示」 二-4 (b), retyped.
+NOTHING_SAVED = "沒有儲存任何變更：{section_names}沒有寫入，仍使用預設值。"
 
 #: Every subset of the four sections, empty included (DL-2: 16 combinations).
 COMBOS: list[tuple[str, ...]] = [
@@ -193,6 +195,7 @@ def test_every_sentence_in_the_module_is_the_finalised_one() -> None:
     assert wording.OVERWRITE_NET_WORTH_CONFIRM_LABEL == NET_WORTH_CONFIRM
     assert wording.OVERWRITE_REQUIRED_DETAIL == DETAIL_409
     assert wording.PARTIAL_SAVE_NOTICE == PARTIAL_SAVE
+    assert wording.NOTHING_SAVED_NOTICE == NOTHING_SAVED
 
 
 def test_n3_is_its_own_sentence_not_n1_and_n2_joined() -> None:
@@ -224,7 +227,8 @@ def _every_rendered_text() -> list[str]:
         for text in (
             wording.risk_notice(combo),
             wording.kelly_effective_cap_notice(combo),
-            wording.partial_save_notice(combo),
+            wording.partial_save_notice(combo, carried_nothing=False),
+            wording.partial_save_notice(combo, carried_nothing=True),
         ):
             if text is not None:
                 texts.append(text)
@@ -375,7 +379,21 @@ def test_the_409_detail_names_the_sections_in_order() -> None:
 
 
 def test_the_partial_save_sentence() -> None:
-    assert wording.partial_save_notice(()) is None
-    assert wording.partial_save_notice(("net_worth", "cost_model")) == (
+    assert wording.partial_save_notice((), carried_nothing=False) is None
+    assert wording.partial_save_notice(("net_worth", "cost_model"), carried_nothing=False) == (
         "設定已儲存。費率、帳戶總淨值沒有寫入，仍使用預設值。"
     )
+
+
+def test_the_nothing_saved_variant() -> None:
+    """二-4 (b): nothing carried, fallbacks left -- never 「設定已儲存。」."""
+    assert wording.partial_save_notice((), carried_nothing=True) is None
+    notice = wording.partial_save_notice(("alerts", "risk_budget"), carried_nothing=True)
+    assert notice == "沒有儲存任何變更：風險預算、警示排程沒有寫入，仍使用預設值。"
+    assert "設定已儲存" not in notice
+
+
+def test_the_scan_covers_both_save_sentences() -> None:
+    texts = _every_rendered_text()
+    assert NOTHING_SAVED.format(section_names="風險預算") in texts
+    assert PARTIAL_SAVE.format(section_names="風險預算") in texts

@@ -448,6 +448,7 @@ def _response(
     *,
     net_worth_notes: list[str] | None = None,
     saved: bool = False,
+    carried_nothing: bool = False,
 ) -> SettingsResponse:
     settings = loaded.settings
     verified = settings.cost_model.rates_verified
@@ -462,7 +463,11 @@ def _response(
         net_worth=view,
         cap1_migration=_cap1_migration_view(store.cap1_migration(), loaded),
         settings_fallback=settings_fallback(loaded.fallback_sections),
-        partial_save_notice=partial_save_notice(loaded.fallback_sections) if saved else None,
+        partial_save_notice=(
+            partial_save_notice(loaded.fallback_sections, carried_nothing=carried_nothing)
+            if saved
+            else None
+        ),
         as_of=now_iso(),
     )
 
@@ -525,7 +530,15 @@ def write_settings(
     # No read here (K-5): the store reads, decides and writes under one lock
     # (W-1 + W-2), and hands back the document it left behind.
     if body.net_worth is None:
-        return _response(_write(store, body).loaded, ledger, store, saved=True)
+        # An empty body stores nothing the user sent: the 「全未寫入」 variant
+        # when fallback sections remain (K-15 裁示 二-4 (b)).
+        return _response(
+            _write(store, body).loaded,
+            ledger,
+            store,
+            saved=True,
+            carried_nothing=not body.carried_sections(),
+        )
 
     amount = body.net_worth.total_net_worth_twd
     review, valued_book = _review_reported_net_worth(amount, positions, valuator)
@@ -551,4 +564,12 @@ def write_settings(
     # ``review.warnings`` is not passed on: the response's warning is rebuilt
     # from what was just stored, so the sentence the user sees now is the same
     # one they will keep seeing on every later read.
-    return _response(result.loaded, ledger, store, net_worth_notes=review.notes, saved=True)
+    # This branch always carries net_worth, so never the 「全未寫入」 variant.
+    return _response(
+        result.loaded,
+        ledger,
+        store,
+        net_worth_notes=review.notes,
+        saved=True,
+        carried_nothing=False,
+    )

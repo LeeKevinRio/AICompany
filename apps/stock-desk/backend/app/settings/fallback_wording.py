@@ -209,6 +209,11 @@ OVERWRITE_REQUIRED_DETAIL: Final = (
 #: Replaces「設定已儲存。」when fallback sections were left unwritten.
 PARTIAL_SAVE_NOTICE: Final = "設定已儲存。{section_names}沒有寫入，仍使用預設值。"
 
+#: The「全未寫入」variant (「風控 2026-10-29 N-156 K-15 正式核對與裁示」 二-4 (b)): the
+#: request carried no section at all, so nothing the user sent was stored and
+#: 「設定已儲存。」 would be a false success.
+NOTHING_SAVED_NOTICE: Final = "沒有儲存任何變更：{section_names}沒有寫入，仍使用預設值。"
+
 
 # --- Response shapes ---------------------------------------------------------------
 
@@ -388,9 +393,17 @@ def overwrite_required_detail(sections: Iterable[str]) -> str:
     return OVERWRITE_REQUIRED_DETAIL.format(section_names=section_names(sections))
 
 
-def partial_save_notice(unwritten_fallback_sections: Iterable[str]) -> str | None:
-    """The save confirmation when fallback sections were left unwritten, or ``None``."""
+def partial_save_notice(
+    unwritten_fallback_sections: Iterable[str], *, carried_nothing: bool
+) -> str | None:
+    """The save confirmation when fallback sections were left unwritten, or ``None``.
+
+    ``carried_nothing`` -- the request carried no section at all -- picks the
+    「全未寫入」 variant (K-15 裁示 二-4 (b)); otherwise the original sentence.
+    Keyword-only with no default, so the caller has to say which case it is.
+    """
     unwritten = _ordered(unwritten_fallback_sections)
     if not unwritten:
         return None
-    return PARTIAL_SAVE_NOTICE.format(section_names=section_names(unwritten))
+    template = NOTHING_SAVED_NOTICE if carried_nothing else PARTIAL_SAVE_NOTICE
+    return template.format(section_names=section_names(unwritten))
