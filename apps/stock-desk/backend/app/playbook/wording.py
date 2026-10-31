@@ -25,8 +25,10 @@ approved sentence may be re-worded, shortened or moved behind a tooltip.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
+from typing import NamedTuple
 
 from app.playbook.models import Action, Directive, Mode, RuleParams, RuleSetAuthorship
 
@@ -75,6 +77,23 @@ ATTRIBUTION_NO_USER_RULES = (
 EXIT_ATTRIBUTION = (
     "此指令是你在本次操作中提交的「全部出清」要求之機械執行結果，"
     "非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
+    "無論規則集是否已確認皆可送出。"
+)
+
+#: N-166 風控 S4 (2026-10-31): the ALREADY_PENDING branch's attribution. Every
+#: line that branch describes came from an earlier submission, so
+#: :data:`EXIT_ATTRIBUTION`'s 「本次操作中提交」 would misdate it.
+EXIT_ATTRIBUTION_PRIOR = (
+    "此指令是你在先前操作中提交的「全部出清」要求之機械執行結果，"
+    "非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
+    "無論規則集是否已確認皆可送出。"
+)
+
+#: N-166 風控 S5: the RESULT branch's attribution when earlier, still unsettled
+#: EMERGENCY lines exist next to the ones this submission produced.
+EXIT_ATTRIBUTION_MIXED = (
+    "本次新產生與先前已有的賣出指令，都是你分別在本次與先前操作中提交的「全部出清」"
+    "要求之機械執行結果，非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
     "無論規則集是否已確認皆可送出。"
 )
 
@@ -337,6 +356,62 @@ EMERGENCY_EXIT_EMPTY = (
     "預計 {until} 恢復；S/P 系列停損停利仍照常評估。"
 )
 
+#: N-166 風控 S1 (ADR-0033 C-8 second branch): no new line was written because
+#: every held batch already carries an earlier, still unsettled EMERGENCY sell.
+#: Self-contained on purpose -- the post-submit banner shows no directive rows,
+#: and a user whose first response was lost has to learn the earlier lines from
+#: this sentence alone. Its 「若你尚未…為準」 clause may not be dropped (EX-2).
+EMERGENCY_EXIT_ALREADY_PENDING = (
+    "EMERGENCY_EXIT 已受理：本次未產生新的賣出指令。"
+    "目前全部 {pending_batches} 批、共 {pending_shares} 股的持有批次，"
+    "都已有你先前提交全部出清時產生、尚未結算的賣出指令"
+    "（預定執行日 {pending_execution_dates} 開盤以市價單送出）；"
+    "這些先前的指令仍然有效，本次未取消、未修改，也未重新產生。"
+    "本次回應不是另一筆賣出指令，請勿據此到券商重複下單；"
+    "若你尚未依先前的指令下單，以上述 {pending_batches} 批、共 {pending_shares} 股為準。"
+    "市價單在跌停或無量時可能無法成交，實際成交結果以你的券商回報為準；"
+    "R 系列（新倉進場）自 {executed_at} 起暫停 {freeze_days} 交易日（依交易日曆），"
+    "預計 {until} 恢復；S/P 系列停損停利仍照常評估。"
+)
+
+#: N-166 風控 S2: appended to :data:`EMERGENCY_EXIT_RESULT` when this
+#: submission wrote lines for some batches and others were already covered.
+EMERGENCY_EXIT_PENDING_NOTE = (
+    "另有 {pending_batches} 批、共 {pending_shares} 股已有你先前提交全部出清時產生、"
+    "尚未結算的賣出指令（預定執行日 {pending_execution_dates} 開盤以市價單送出），"
+    "本次未重新產生；這些先前的指令仍然有效，請勿就這 {pending_batches} 批到券商重複下單；"
+    "若你尚未依先前的指令下單，以這 {pending_batches} 批、共 {pending_shares} 股為準。"
+)
+
+#: N-166 風控 S3: appended after S1 or S2 whenever any earlier line's 預定執行日
+#: is before the submission day and it is still unsettled.
+EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE = (
+    "先前的指令中，預定執行日 {past_due_dates} 已過、仍未結算；"
+    "本系統不下單，也無法得知你在券商是否已賣出，請以你的券商回報為準。"
+)
+
+#: N-166 風控 S6 (CEO #77): the last sentence of any of the three branches when
+#: this submission moved a running freeze later. Decided from the value read
+#: under the write lock and the one written in the same transaction; nothing
+#: about it is stored (ADR-0033 C-9).
+EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE = (
+    "因本次再次提交全部出清，R 系列（新倉進場）的預計恢復日由 {previous_until} 延後至 {until}，"
+    "暫停交易日數改自 {executed_at} 起重新計算。"
+)
+
+#: N-166 風控 S7 (F-c): replaces the freeze clause of all three branches -- from
+#: :data:`_FREEZE_CLAUSE_HEAD` to the end -- when the stored 恢復日 is later
+#: than the one this submission computes, so the 「自 {executed_at} 起暫停
+#: {freeze_days} 交易日」 count would be untrue.
+EMERGENCY_EXIT_FREEZE_KEPT_CLAUSE = (
+    "R 系列（新倉進場）維持暫停，預計 {until} 恢復"
+    "（依交易日曆；沿用先前已設定、較晚的恢復日，本次未縮短）；S/P 系列停損停利仍照常評估。"
+)
+
+#: Where the freeze clause starts in RESULT, EMPTY and ALREADY_PENDING alike;
+#: S7 replaces everything from here to the end of the template.
+_FREEZE_CLAUSE_HEAD = "R 系列（新倉進場）自 {executed_at} 起暫停"
+
 #: EMERGENCY_EXIT 確認畫面的事實核取句, in display order (文案閘門 版本 1 底本 +
 #: 覆審定稿 for 2 and the new 4). None of them may be pre-ticked, none may carry
 #: a countdown, and the 快市 note may not appear anywhere in this flow -- the
@@ -365,6 +440,14 @@ EXIT_CONFIRM_CHECKS: tuple[str, ...] = (
 EXIT_CONFIRM_FREEZE_DEGRADED = (
     "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
     "兩者於送出後的執行結果中顯示。"
+)
+
+#: N-166 風控 S9: check 2 in place of the standard one **only** when the
+#: max rule (CEO #77) keeps a stored 恢復日 later than ``as_of`` shifted by the
+#: freeze length, so 「暫停 N 個交易日」 would understate the pause.
+EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
+    "送出後，R 系列（新倉進場）維持暫停（預計恢復日：{FREEZE_UNTIL}，依交易日曆計算；"
+    "沿用先前已設定、較晚的恢復日）。"
 )
 
 #: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
@@ -408,6 +491,15 @@ MODE_REASON_FROZEN = "全凍結：{reason}，凍結至 {until}。"
 MODE_REASON_EMERGENCY = (
     "緊急出清後凍結：R 系列（新倉進場）暫停中"
     "（第 {frozen_day}/{freeze_days} 交易日，依交易日曆），預計 {until} 恢復；"
+    "S/P 系列停損停利仍照常評估。"
+)
+
+#: N-166 風控 S8: the mode line without the day counter, used **only** while
+#: more than ``freeze_days`` trading days remain to the 恢復日 (a stored later
+#: date kept by the max rule). The counter would clamp to 「第 1/N」 for days on
+#: end there, which is untrue; this is 風控's one exception to VETO-4.
+MODE_REASON_EMERGENCY_UNCOUNTED = (
+    "緊急出清後凍結：R 系列（新倉進場）暫停中，預計 {until} 恢復（依交易日曆）；"
     "S/P 系列停損停利仍照常評估。"
 )
 
@@ -539,16 +631,131 @@ def page_summary(
     ]
 
 
-def exit_confirm_checks(*, freeze_days: int, freeze_until: date) -> tuple[str, ...]:
+def exit_confirm_checks(
+    *, freeze_days: int, freeze_until: date, freeze_kept: bool = False
+) -> tuple[str, ...]:
     """The EMERGENCY_EXIT confirmation checks, with the dates of this run filled.
 
     Returned as data so the confirmation screen renders the approved sentences
-    and cannot compose its own.
+    and cannot compose its own. ``freeze_kept`` is the F-c case (風控 S9): the
+    恢復日 is a stored, later one the exit will keep, so check 2 states that
+    instead of a day count that would understate the pause.
     """
+    checks = list(EXIT_CONFIRM_CHECKS)
+    if freeze_kept:
+        checks[1] = EXIT_CONFIRM_FREEZE_KEPT_CHECK
     return tuple(
         check.format(freeze_days=freeze_days, FREEZE_UNTIL=freeze_until.isoformat())
-        for check in EXIT_CONFIRM_CHECKS
+        for check in checks
     )
+
+
+def date_list(days: Iterable[date]) -> str:
+    """De-duplicated, ascending ISO dates joined by 「、」 (風控 N-166 佔位符定義)."""
+    return "、".join(day.isoformat() for day in sorted(set(days)))
+
+
+def freeze_kept_template(template: str) -> str:
+    """``template`` with its freeze clause swapped for S7 (風控 F-c).
+
+    Raises rather than appending when the clause is not found: a template that
+    lost it would otherwise state both freezes at once.
+    """
+    head, found, _ = template.partition(_FREEZE_CLAUSE_HEAD)
+    if not found:
+        raise ValueError("template has no EMERGENCY_EXIT freeze clause to replace")
+    return head + EMERGENCY_EXIT_FREEZE_KEPT_CLAUSE
+
+
+class ExitPending(NamedTuple):
+    """The earlier, still unsettled EMERGENCY lines one exit response describes.
+
+    ``batches`` / ``shares`` count the covered **batches** -- de-duplicated by
+    ``(symbol, batch_no)``, shares from their ``remaining_shares`` -- never the
+    lines: a database written before N-166 can hold two lines for one batch,
+    and adding their shares would double the figure again (風控 佔位符定義).
+    """
+
+    batches: int
+    shares: int
+    execution_dates: tuple[date, ...]
+    past_due_dates: tuple[date, ...]
+
+
+def emergency_exit_message(
+    *,
+    new_batches: int,
+    new_shares: int,
+    execution_date: date,
+    executed_at: date,
+    freeze_days: int,
+    until: date,
+    pending: ExitPending,
+    extended_from: date | None,
+    freeze_kept: bool,
+) -> str:
+    """The EMERGENCY_EXIT message, composed in the order 風控 fixed (N-166).
+
+    * RESULT 支 (lines written now): RESULT ＋［S2］＋［S3］＋［S6］
+    * ALREADY_PENDING 支 (none written, some covered): S1 ＋［S3］＋［S6］
+    * EMPTY 支 (nothing held): EMPTY ＋［S6］
+
+    ``extended_from`` is the 恢復日 read under the lock when this submission
+    moved a running freeze later (S6), else ``None``. ``freeze_kept`` is F-c: a
+    stored, later 恢復日 was kept, and the freeze clause becomes S7. The two
+    cannot both hold -- a kept date did not move.
+    """
+    if new_batches:
+        template = EMERGENCY_EXIT_RESULT
+    elif pending.batches:
+        template = EMERGENCY_EXIT_ALREADY_PENDING
+    else:
+        template = EMERGENCY_EXIT_EMPTY
+    if freeze_kept:
+        template = freeze_kept_template(template)
+    pending_dates = date_list(pending.execution_dates)
+    message = template.format(
+        batches=new_batches,
+        shares=new_shares,
+        execution_date=execution_date.isoformat(),
+        executed_at=executed_at.isoformat(),
+        freeze_days=freeze_days,
+        until=until.isoformat(),
+        pending_batches=pending.batches,
+        pending_shares=pending.shares,
+        pending_execution_dates=pending_dates,
+    )
+    if new_batches and pending.batches:
+        message += EMERGENCY_EXIT_PENDING_NOTE.format(
+            pending_batches=pending.batches,
+            pending_shares=pending.shares,
+            pending_execution_dates=pending_dates,
+        )
+    if pending.batches and pending.past_due_dates:
+        message += EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(
+            past_due_dates=date_list(pending.past_due_dates)
+        )
+    if extended_from is not None:
+        message += EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE.format(
+            previous_until=extended_from.isoformat(),
+            until=until.isoformat(),
+            executed_at=executed_at.isoformat(),
+        )
+    return message
+
+
+def emergency_exit_attribution(*, new_batches: int, pending_batches: int) -> str | None:
+    """Which 歸屬語 an EMERGENCY_EXIT response carries (風控 N-166 對應).
+
+    RESULT 支 without earlier lines -> :data:`EXIT_ATTRIBUTION`; RESULT 支 with
+    them -> S5; ALREADY_PENDING 支 -> S4; EMPTY 支 -> ``None``, because no line
+    exists for the sentence to be about.
+    """
+    if new_batches:
+        return EXIT_ATTRIBUTION_MIXED if pending_batches else EXIT_ATTRIBUTION
+    if pending_batches:
+        return EXIT_ATTRIBUTION_PRIOR
+    return None
 
 
 def directive_line(directive: Directive) -> str:
@@ -596,6 +803,11 @@ def mode_reason_emergency(*, frozen_day: int, freeze_days: int, until: date) -> 
     return MODE_REASON_EMERGENCY.format(
         frozen_day=frozen_day, freeze_days=freeze_days, until=until.isoformat()
     )
+
+
+def mode_reason_emergency_uncounted(*, until: date) -> str:
+    """S8: the EMERGENCY_EXIT mode line with no counter (風控 N-166 F-c only)."""
+    return MODE_REASON_EMERGENCY_UNCOUNTED.format(until=until.isoformat())
 
 
 def fast_market_note(*, vol: float | None, lookback: int, moves: int, move_pct: Decimal) -> str:
