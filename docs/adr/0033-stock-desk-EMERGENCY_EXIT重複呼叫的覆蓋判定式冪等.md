@@ -3,6 +3,7 @@
 - 狀態：accepted（CEO #76、#77，2026-10-29 裁定；落檔前提：新字面經風控核可前不得合併，見 Decision 8）
 - 日期：2026-10-29（tech-architect 草案日期 2026-10-29）
 - 決策者：tech-architect（草案）；CEO #76（方案 (d)）、#77（凍結日取 max）於 2026-10-29 裁定；risk-compliance-officer 負責新字面與歸屬語定稿（**尚未經手**）。
+- 補充（風控 2026-10-31，CONDITIONAL APPROVE）：`EMERGENCY_EXIT_ALREADY_PENDING` 與延長凍結揭露的字面、歸屬語對應、F-c 情境（既有截止日晚於新算值）替代字面與合併前條件，以 `work/reviews/2026-10-31-N166新字面與延長凍結揭露-風控.md` 的 S1～S9 與第 3 節為準；該審查第 3 節任一條件未落地即視同 VETO；本檔原文不改。
 - 來源簡稱（皆在 `work/` 下）：
   - [TA]：`reviews/2026-10-29-N166出清重複呼叫防護評估-tech-architect.md`（Q1～Q5、C-1～C-11、T-1～T-6、F-T1～F-T6，以及該檔的「ADR 草案」一節）
   - [決策包]：`dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`（第 92 行 #76、第 93 行 #77）
