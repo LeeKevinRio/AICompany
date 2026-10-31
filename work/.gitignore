@@ -116,3 +116,8 @@
 !art/2026-10-29-出清後回饋畫面-視覺規範.md
 # N-168 出清後待結算 R 買單方案比較（2026-10-31）
 !prd/2026-10-31-N168出清後待結算R買單-方案比較.md
+# 缺陷重現測試（scratchpad 會隨容器回收，存檔備查；非正式測試，不在 CI 範圍）（2026-10-31）
+!repro/
+!repro/test_n172_repro.py
+!repro/test_n174_repro.py
+!repro/test_n176_repro.py
