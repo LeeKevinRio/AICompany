@@ -33,6 +33,7 @@ import { SkeletonBlock } from "../../components/SkeletonBlock";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { InsufficientPanel } from "../../components/InsufficientPanel";
 import { DataMetaStatusBadge } from "../../components/DataMetaStatusBadge";
+import { SettingsFallbackNoticeLine } from "../../components/SettingsFallbackNoticeLine";
 import { StaleDataAlert } from "./OperationSummaryPanel";
 import {
   KEY_LEVELS_LADDER_RUNG_ANCHOR_CLOSE,
@@ -500,6 +501,19 @@ export function DecisionCardBody({
       </div>
 
       {limitNotices !== null && limitNotices.hasAny && <LimitNoticeBlock notices={limitNotices} />}
+
+      {/*
+        ADR-0032 (N-156; 風控 2026-10-29 N-156 字面定稿 第 2 項, required): the
+        settings-fallback sentence once more in the main view, in the same zone
+        as the limit block above, because the advice card below is collapsed
+        and a user would otherwise not see why an add became a hold. Held and
+        candidate both; never inside a <details>; text-sm and no lighter than
+        neutral-300. The backend's sentence, verbatim, `null` = none. The
+        list-level copy lives in `LimitsCheckList`.
+      */}
+      {(model.kind === "held" || model.kind === "candidate") && (
+        <SettingsFallbackNoticeLine text={response.settings_fallback_notice} className="mt-3" />
+      )}
 
       {/*
         Risk remediation 3-S (C-7): the transitional disclaimer, every kind (held, candidate,

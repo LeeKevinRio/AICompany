@@ -453,7 +453,13 @@ def test_a_violated_cap_2_with_w2_blocks_an_add() -> None:
         ),
         valued_unclassified_lots=UnknownSectorLots(),
     )
-    card = build_advice(symbol="2330", signals=uptrend_signals(), portfolio=context, budget=BUDGET)
+    card = build_advice(
+        budget_from_default=False,
+        symbol="2330",
+        signals=uptrend_signals(),
+        portfolio=context,
+        budget=BUDGET,
+    )
     sector = next(check for check in card["limits_check"] if check["id"] == "sector_weight")
     assert sector["status"] == "violated"
     assert sector["detail"].endswith(

@@ -90,6 +90,7 @@ function makeResponse(card: AdviceCard, held = true): AdviceResponse {
     portfolio_context: {} as unknown as AdviceResponse["portfolio_context"],
     context_notes: [],
     cap1_migration_notice: null,
+    settings_fallback_notice: null,
     advice: card,
     data: {
       status: "fresh",

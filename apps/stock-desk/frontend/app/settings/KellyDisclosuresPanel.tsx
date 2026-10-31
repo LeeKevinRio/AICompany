@@ -71,6 +71,7 @@ import type {
   KellyOriginalValuesView,
   Market,
 } from "../lib/types";
+import { SettingsFallbackNoticeLine } from "../components/SettingsFallbackNoticeLine";
 import { KellyDeleteDialog } from "./KellyDeleteDialog";
 import { KellyManualInputForm } from "./KellyManualInputForm";
 
@@ -212,6 +213,17 @@ export function KellyDisclosuresPanel({
                 <span>{disclosures.effective_cap.label}</span>
                 <span className="text-neutral-100">{disclosures.effective_cap.value}</span>
               </p>
+              {/*
+                ADR-0032 (N-156; 風控 2026-10-29 N-156 字面定稿 第 4 項): the line
+                beside the value, at the value's own size (`text-sm`), only
+                while risk_budget is on its defaults. The backend's sentence,
+                verbatim; the value above is not hidden. The sentence lives only
+                here, beside the value: the backend never sends it without the
+                cap (風控 2026-10-29 N-156 K-15 裁示二-5; pinned by
+                `test_the_value_and_its_line_never_appear_apart`), so there is
+                no standalone fallback for it.
+              */}
+              <SettingsFallbackNoticeLine text={disclosures.settings_fallback_notice} className="mt-2" />
             </div>
           )}
 

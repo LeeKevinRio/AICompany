@@ -218,7 +218,7 @@ def disclosure_client(
     settings = SettingsStore(tmp_path / "settings.db")
     settings.save(AppSettings(risk_budget=RiskBudget(max_position_weight=STORED_CAP1)))
     app.dependency_overrides[get_playbook_service] = lambda: service
-    # The real ``deps.get_cap1_weight`` reads the process-wide store; point that
+    # The real ``deps.get_cap1_reading`` reads the process-wide store; point that
     # store at this test's settings rather than overriding the dependency.
     monkeypatch.setattr(deps, "_default_settings_store", lambda: settings)
     with TestClient(app, headers=CLIENT_HEADERS) as client:

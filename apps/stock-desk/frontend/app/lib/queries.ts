@@ -265,6 +265,10 @@ export function useUpdateSettings() {
       // the overview gauge only stays correct because a route change remounts it.
       void queryClient.invalidateQueries({ queryKey: ["portfolio-limits"] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      // ADR-0032: the advice, limits and Kelly screens say whether a section is
+      // on its defaults; an overwrite must not leave them saying so.
+      void queryClient.invalidateQueries({ queryKey: ["advice"] });
+      void queryClient.invalidateQueries({ queryKey: ["kelly-disclosures"] });
     },
   });
 }

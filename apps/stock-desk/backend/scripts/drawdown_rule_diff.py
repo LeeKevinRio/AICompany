@@ -168,11 +168,22 @@ def replay(
         portfolio = PortfolioContext(symbol=symbol, close=close)
         context = build_context(signals, portfolio)
         dd = signals["risk"]["drawdown"]
+        # No stored settings are read here: the replay compares two rule
+        # versions on the model's own budget, which is not a fallback standing
+        # in for a stored one (ADR-0032 K-13), so E2 does not apply.
         legacy_card = build_advice(
-            symbol=symbol, signals=signals, portfolio=portfolio, ruleset=legacy_rules
+            symbol=symbol,
+            signals=signals,
+            portfolio=portfolio,
+            ruleset=legacy_rules,
+            budget_from_default=False,
         )
         new_card = build_advice(
-            symbol=symbol, signals=signals, portfolio=portfolio, ruleset=new_rules
+            symbol=symbol,
+            signals=signals,
+            portfolio=portfolio,
+            ruleset=new_rules,
+            budget_from_default=False,
         )
         rows.append(
             DayRow(

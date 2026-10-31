@@ -160,6 +160,7 @@ function makeAdvice(overrides: Partial<AdviceResponse> = {}): AdviceResponse {
     },
     context_notes: [],
     cap1_migration_notice: null,
+    settings_fallback_notice: null,
     advice: makeCard(),
     data: META,
     ...overrides,

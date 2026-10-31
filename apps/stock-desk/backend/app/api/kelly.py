@@ -182,6 +182,7 @@ from app.kelly.sample_gate import (
 from app.kelly.store import KellyInputStore
 from app.positions.models import Market
 from app.services.market import MarketDataResolver
+from app.settings.fallback_wording import kelly_effective_cap_notice
 from app.settings.store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -612,6 +613,13 @@ class KellyDisclosuresView(BaseModel):
     #: 落地條件 6's partner to ``f_star_interval``; the two are shown or withheld
     #: together.
     effective_cap: KellyEffectiveCapView | None
+    #: N-156 (風控 2026-10-29 第 4 項): beside ``effective_cap``'s value, at the
+    #: same size, while ``risk_budget`` is on its defaults in the read the value
+    #: was computed from -- 條件 87 then does not hold, and this says so. Only
+    #: with a value to stand beside (``None`` whenever ``effective_cap`` is);
+    #: ``net_worth`` plays no part in cap 5 and never sets it. The value itself
+    #: is not withheld: it is the cap actually in force.
+    settings_fallback_notice: str | None
     #: (h), beside FR-5 欄位 6/7, which are the counts it explains (條件 44).
     boundary_exclusion: str | None
     sample_detail: KellyBacktestSampleDetail | None
@@ -936,6 +944,7 @@ def _disclosures(
     row: KellyInputRow | None,
     *,
     budget: RiskBudget,
+    budget_fallback_notice: str | None,
     k_observed: int,
     k_distinct_specs: int,
     writes_frozen: bool,
@@ -973,6 +982,7 @@ def _disclosures(
             walk_forward=None,
             f_star_interval=None,
             effective_cap=None,
+            settings_fallback_notice=None,
             boundary_exclusion=None,
             sample_detail=None,
             original_values=None,
@@ -1024,6 +1034,7 @@ def _disclosures(
         walk_forward=KELLY_WALK_FORWARD_SCOPE if imported else None,
         f_star_interval=interval,
         effective_cap=cap,
+        settings_fallback_notice=None if cap is None else budget_fallback_notice,
         boundary_exclusion=KELLY_BOUNDARY_TRIP_EXCLUSION if detail is not None else None,
         sample_detail=detail,
         original_values=original,
@@ -1178,11 +1189,14 @@ def read_kelly_disclosures(
     row = store.get(symbol, market)
     stored_symbol = normalize_symbol(symbol)
     k_observed = attempts.k_observed(stored_symbol, market)
+    # One read for the budget and for whether it is the defaults (ADR-0032 K-5).
+    loaded_settings = settings_store.load_with_status()
     return KellyInputDisclosuresView(
         kelly_input=None if row is None else _view(row),
         disclosures=_disclosures(
             row,
-            budget=settings_store.load().risk_budget,
+            budget=loaded_settings.settings.risk_budget,
+            budget_fallback_notice=kelly_effective_cap_notice(loaded_settings.fallback_sections),
             k_observed=k_observed,
             k_distinct_specs=attempts.k_distinct_specs(stored_symbol, market),
             writes_frozen=writes_frozen,

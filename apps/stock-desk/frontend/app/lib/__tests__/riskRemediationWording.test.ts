@@ -207,6 +207,7 @@ describe("DecisionCard 的 3-S 呈現（C-7）", () => {
     portfolio_context: {} as unknown as AdviceResponse["portfolio_context"],
     context_notes: [],
     cap1_migration_notice: null,
+    settings_fallback_notice: null,
     advice,
     data: {
       status: "fresh",

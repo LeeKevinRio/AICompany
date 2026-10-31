@@ -48,7 +48,9 @@ def _advice_card() -> dict[str, Any]:
         quantity=500.0,
         close=110.0,
     )
-    return build_advice(symbol="2330", signals=uptrend_signals(), portfolio=portfolio)
+    return build_advice(
+        budget_from_default=False, symbol="2330", signals=uptrend_signals(), portfolio=portfolio
+    )
 
 
 def _keys(payload: Any) -> set[str]:

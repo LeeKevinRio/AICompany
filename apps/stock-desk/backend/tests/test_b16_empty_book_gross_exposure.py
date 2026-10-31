@@ -209,8 +209,12 @@ def test_the_card_changes_only_cap_3s_entry(scenario: str) -> None:
     )
     after_ctx = _empty_card_context(reported_net_worth(NET_WORTH_TWD))
     before_ctx = after_ctx.model_copy(update={"book_holding_count": None})
-    before = build_advice(symbol="2330", signals=signals, portfolio=before_ctx)
-    after = build_advice(symbol="2330", signals=signals, portfolio=after_ctx)
+    before = build_advice(
+        budget_from_default=False, symbol="2330", signals=signals, portfolio=before_ctx
+    )
+    after = build_advice(
+        budget_from_default=False, symbol="2330", signals=signals, portfolio=after_ctx
+    )
 
     assert {k: v for k, v in before.items() if k != "limits_check"} == {
         k: v for k, v in after.items() if k != "limits_check"

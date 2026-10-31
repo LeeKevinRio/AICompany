@@ -6,12 +6,24 @@ as the price cache and the
 positions table (``STOCK_DESK_DB_PATH``), following ``app/positions/store.py``:
 connections are opened per operation and closed via ``contextlib.closing``.
 
-Reads are forgiving on purpose. A section that is absent, unparseable, or no
+Reads do not refuse to answer. A section that is absent, unparseable, or no
 longer matches the schema (an older build wrote a field that has since been
-removed) falls back to that section's **defaults** and logs a warning, rather
-than taking the API down: settings are preferences, and refusing to serve a
-risk budget because one stored key drifted would be worse than serving the
-conservative default and saying so in the log.
+removed) is served with that section's **defaults** rather than taking the API
+down. Those defaults are not "the conservative choice": a user whose stored
+risk budget was stricter than the defaults is *loosened* by them. So a section
+that was stored but failed validation is a **fallback section**, and every read
+says which ones it served that way: :meth:`SettingsStore.load_with_status`
+returns the values together with ``fallback_sections`` from one and the same
+read, and the callers disclose them (ADR-0032 Decision 1-2, K-1/K-2/K-12). An
+absent row is not a fallback -- a file saved before a section existed (no
+``net_worth`` row before FR-9) is a valid one. The state is judged afresh on
+every read and never stored; reading takes no lock and writes nothing (K-3).
+
+Writes never write over a fallback section blindly (ADR-0032 Decision 4,
+W-1 + W-2): one the write does not carry keeps its stored payload, and one it
+does carry must be confirmed in ``overwrite_fallback_sections`` or nothing at
+all is written. The judgement is made under ``BEGIN IMMEDIATE`` on rows
+re-read inside the lock (:meth:`SettingsStore.write`).
 
 Writes are not the only thing that changes a stored section: constructing the
 store runs the S2 migration (:mod:`app.settings.migrations`, CEO #63), which
@@ -26,10 +38,12 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Collection, Mapping
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -70,6 +84,56 @@ _SECTIONS: dict[str, type[BaseModel]] = {
     # net worth carries its own timestamp inside the payload for that reason.
     "net_worth": NetWorthSettings,
 }
+
+
+#: How one stored section reads: no row, a row that validates, or a row that
+#: does not (bad JSON or a schema mismatch). Only ``invalid`` is a fallback.
+SectionState = Literal["absent", "valid", "invalid"]
+
+
+@dataclass(frozen=True)
+class LoadedSettings:
+    """One read of the settings document: the values in force and the fallbacks.
+
+    ``fallback_sections`` names, in ``_SECTIONS`` order, every section that was
+    stored but failed validation and is therefore served with its defaults
+    (ADR-0032 K-1/K-2). Both halves come from the same ``SELECT``, so whatever
+    a caller discloses is about exactly the values it evaluated with (K-5).
+    """
+
+    settings: AppSettings
+    fallback_sections: tuple[str, ...]
+
+
+class FallbackOverwriteRequired(Exception):
+    """A write carried fallback sections without confirming their overwrite (W-2).
+
+    Raised from inside the write's transaction, which is rolled back: no
+    section at all is written. ``sections`` are the offending ones, in
+    ``_SECTIONS`` order.
+    """
+
+    def __init__(self, sections: tuple[str, ...]) -> None:
+        super().__init__(f"overwrite of fallback sections not confirmed: {', '.join(sections)}")
+        self.sections = sections
+
+
+@dataclass(frozen=True)
+class SaveResult:
+    """What one :meth:`SettingsStore.write` found and left behind.
+
+    Both halves come from the one read taken under the write lock, so a caller
+    has no reason to read again: ``loaded`` is exactly what a read would now
+    return, and its ``fallback_sections`` are the fallback sections the write
+    left unwritten (W-1).
+    """
+
+    #: The document as read under the lock, before anything was written.
+    previous: LoadedSettings
+    #: The document in force after the write.
+    loaded: LoadedSettings
+    #: The sections whose rows were written, in ``_SECTIONS`` order.
+    written_sections: tuple[str, ...]
 
 
 class SettingsStore:
@@ -113,53 +177,168 @@ class SettingsStore:
             return read_cap1_migration(conn)
 
     def load(self) -> AppSettings:
-        """Return the stored settings, falling back to defaults per section."""
+        """Return the stored settings, defaults standing in per fallback section.
+
+        Exactly ``load_with_status().settings``. A caller that shows the user
+        anything derived from these values should call
+        :meth:`load_with_status` instead, so it can say which sections are
+        defaults (ADR-0032 Decision 2).
+        """
+        return self._read().settings
+
+    def load_with_status(self) -> LoadedSettings:
+        """Return the stored settings and the sections that fell back to defaults.
+
+        One ``SELECT`` on a fresh connection, judged on the spot: no lock is
+        taken, nothing is written, and nothing about the outcome is kept
+        (ADR-0032 Decision 1, K-3).
+        """
+        return self._read()
+
+    def _read(self) -> LoadedSettings:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT section, payload FROM app_settings").fetchall()
-        stored = {str(section): str(payload) for section, payload in rows}
-        sections: dict[str, Any] = {}
-        for name, model in _SECTIONS.items():
-            parsed = self._parse_section(name, model, stored.get(name))
-            if parsed is not None:
-                sections[name] = parsed
-        return AppSettings(**sections)
+        return self._judge({str(section): str(payload) for section, payload in rows})
 
-    def save(self, settings: AppSettings, *, now: datetime | None = None) -> AppSettings:
-        """Persist every section and return what was written."""
+    @classmethod
+    def _judge(cls, stored: dict[str, str]) -> LoadedSettings:
+        """Turn raw stored payloads into values plus the fallback sections."""
+        sections: dict[str, Any] = {}
+        fallback: list[str] = []
+        for name, model in _SECTIONS.items():
+            state, parsed = cls._parse_section(name, model, stored.get(name))
+            if state == "valid":
+                sections[name] = parsed
+            elif state == "invalid":
+                fallback.append(name)
+        return LoadedSettings(settings=AppSettings(**sections), fallback_sections=tuple(fallback))
+
+    def save(
+        self,
+        settings: AppSettings,
+        *,
+        now: datetime | None = None,
+        overwrite_fallback_sections: Collection[str] = (),
+    ) -> AppSettings:
+        """Write the whole document and return the settings now in force.
+
+        Every section is *carried*, so the same rule as :meth:`write` applies:
+        a fallback section not named in ``overwrite_fallback_sections`` refuses
+        the write (:class:`FallbackOverwriteRequired`) and nothing is written.
+        """
+        result = self.write(
+            {name: getattr(settings, name) for name in _SECTIONS},
+            now=now,
+            overwrite_fallback_sections=overwrite_fallback_sections,
+        )
+        return result.loaded.settings
+
+    def write(
+        self,
+        sections: Mapping[str, BaseModel],
+        *,
+        now: datetime | None = None,
+        overwrite_fallback_sections: Collection[str] = (),
+    ) -> SaveResult:
+        """Write the carried ``sections`` without ever writing over a fallback blindly.
+
+        ADR-0032 Decision 4 (W-1 + W-2, K-10), decided and applied under one
+        ``BEGIN IMMEDIATE`` with the rows re-read *inside* the lock (the N-154
+        pattern), so the judgement is about the file as it is when the write
+        lands -- not as some earlier read saw it:
+
+        * **W-1** -- a fallback section that is not carried keeps its stored
+          payload: it is not written at all, so a save of the fee rates can no
+          longer freeze the risk budget's defaults over the user's real data.
+        * **W-2** -- a fallback section that *is* carried must be named in
+          ``overwrite_fallback_sections``; otherwise
+          :class:`FallbackOverwriteRequired` is raised and **no section is
+          written** (the transaction is rolled back), which is what makes the
+          409 sentence true.
+
+        Every other section is written as before: the carried value, or the
+        value in force for one not carried. ``note_cap1_write`` runs only when
+        ``risk_budget`` is actually written, so a kept fallback budget cannot
+        mark a migrated record ``changed_by_user`` with the default's value.
+        """
+        unknown = set(sections) - set(_SECTIONS)
+        if unknown:
+            raise ValueError(f"unknown settings sections: {sorted(unknown)}")
+        for name, value in sections.items():
+            if not isinstance(value, _SECTIONS[name]):
+                raise TypeError(f"section {name!r} must be a {_SECTIONS[name].__name__}")
+        overwrite = frozenset(overwrite_fallback_sections)
         moment = (now if now is not None else datetime.now(UTC)).isoformat()
-        rows = [
-            (name, json.dumps(getattr(settings, name).model_dump(), ensure_ascii=False), moment)
-            for name in _SECTIONS
-        ]
-        with closing(self._connect()) as conn, conn:
-            conn.executemany(
-                """
-                INSERT INTO app_settings (section, payload, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(section) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                rows,
-            )
-            # Same transaction: a migrated record learns that the user has
-            # since written another cap-1 value (F1/F8). Nothing else of the
-            # record moves here (app/settings/migrations.py, I-6).
-            init_migrations_table(conn)
-            note_cap1_write(conn, settings.risk_budget.max_position_weight)
-        return settings
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute("SELECT section, payload FROM app_settings").fetchall()
+                previous = self._judge({str(section): str(payload) for section, payload in rows})
+                blocked = tuple(
+                    name
+                    for name in previous.fallback_sections
+                    if name in sections and name not in overwrite
+                )
+                if blocked:
+                    raise FallbackOverwriteRequired(blocked)
+                kept = tuple(name for name in previous.fallback_sections if name not in sections)
+                values: dict[str, Any] = {
+                    name: sections[name] if name in sections else getattr(previous.settings, name)
+                    for name in _SECTIONS
+                }
+                written = tuple(name for name in _SECTIONS if name not in kept)
+                conn.executemany(
+                    """
+                    INSERT INTO app_settings (section, payload, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(section) DO UPDATE SET
+                        payload = excluded.payload,
+                        updated_at = excluded.updated_at
+                    """,
+                    [
+                        (name, json.dumps(values[name].model_dump(), ensure_ascii=False), moment)
+                        for name in written
+                    ],
+                )
+                # Same transaction: a migrated record learns that the user has
+                # since written another cap-1 value (F1/F8). Nothing else of
+                # the record moves here (app/settings/migrations.py, I-6).
+                init_migrations_table(conn)
+                if "risk_budget" in written:
+                    budget = values["risk_budget"]
+                    assert isinstance(budget, RiskBudget)
+                    note_cap1_write(conn, budget.max_position_weight)
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own; a second
+                # ROLLBACK would replace the real error with its own.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return SaveResult(
+            previous=previous,
+            loaded=LoadedSettings(settings=AppSettings(**values), fallback_sections=kept),
+            written_sections=written,
+        )
 
     @staticmethod
-    def _parse_section(name: str, model: type[BaseModel], payload: str | None) -> Any | None:
-        """Validate one stored section, or ``None`` to use the model's defaults."""
+    def _parse_section(
+        name: str, model: type[BaseModel], payload: str | None
+    ) -> tuple[SectionState, Any | None]:
+        """Judge one stored section: its state, and the validated value if any.
+
+        The only place a stored section is judged (ADR-0032 K-4): nothing
+        outside :mod:`app.settings` may read the raw payloads or call this.
+        """
         if payload is None:
-            return None
+            return "absent", None
         try:
-            return model.model_validate_json(payload)
+            return "valid", model.model_validate_json(payload)
         except ValidationError:
+            # Invalid JSON is a ValidationError too (``json_invalid``).
             logger.warning(
                 "stored settings section %r no longer matches its schema; "
-                "falling back to defaults for this section",
+                "serving its defaults and disclosing the fallback",
                 name,
             )
-            return None
+            return "invalid", None

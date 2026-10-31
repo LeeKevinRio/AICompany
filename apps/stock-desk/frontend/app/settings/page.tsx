@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ApiError } from "../lib/api";
 import { useSettings } from "../lib/queries";
 import { SkeletonBlock } from "../components/SkeletonBlock";
+import { SettingsFallbackNotice } from "./SettingsFallbackNotice";
 import { SettingsForm } from "./SettingsForm";
 import { NetWorthSection } from "./NetWorthSection";
 import { DataSourcesSection } from "./DataSourcesSection";
@@ -37,6 +38,10 @@ export default function SettingsPage() {
         )}
         {settings.isSuccess && (
           <>
+            {/* ADR-0032: standing block at the top of the page, only when a section fell back. */}
+            {settings.data.settings_fallback !== null && (
+              <SettingsFallbackNotice fallback={settings.data.settings_fallback} />
+            )}
             <NetWorthSection settings={settings.data} />
             <SettingsForm settings={settings.data} />
             <KellyInputsSection />

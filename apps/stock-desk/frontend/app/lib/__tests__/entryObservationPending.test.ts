@@ -337,6 +337,7 @@ const ADVICE: AdviceResponse = {
   },
   context_notes: [],
   cap1_migration_notice: null,
+  settings_fallback_notice: null,
   advice: {
     symbol: "2330",
     action: "hold",

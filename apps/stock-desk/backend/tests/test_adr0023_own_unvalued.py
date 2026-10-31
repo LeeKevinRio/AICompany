@@ -427,7 +427,9 @@ def test_w_a1_is_not_reached_through_build_advice_when_the_close_was_withheld() 
     6-a itself adds no second withholding check in ``limits.py`` (C-3).
     """
     own = _ctx(own_lots=1, close=None, atr=None)
-    card = build_advice(symbol="2330", signals=uptrend_signals(atr=2.0), portfolio=own)
+    card = build_advice(
+        budget_from_default=False, symbol="2330", signals=uptrend_signals(atr=2.0), portfolio=own
+    )
     cap4 = next(c for c in card["limits_check"] if c["id"] == "per_trade_loss")
     assert cap4["detail"] == _check(_without_overlap(own), "per_trade_loss").detail
     assert cap4["detail"] != _w_a1("per_trade_loss")
@@ -941,9 +943,14 @@ def test_build_advice_add_is_blocked_by_cap_1_with_w_a2() -> None:
         quantity=1_363.0,
         close=110.0,
     )
-    card = build_advice(symbol="2330", signals=uptrend_signals(), portfolio=own)
+    card = build_advice(
+        budget_from_default=False, symbol="2330", signals=uptrend_signals(), portfolio=own
+    )
     reference = build_advice(
-        symbol="2330", signals=uptrend_signals(), portfolio=_without_overlap(own)
+        budget_from_default=False,
+        symbol="2330",
+        signals=uptrend_signals(),
+        portfolio=_without_overlap(own),
     )
     assert reference["aggregated_action"] == "add" and reference["blocked_action"] == "add"
     assert card["action"] == "hold"
@@ -958,7 +965,7 @@ def test_build_advice_add_is_blocked_by_cap_1_with_w_a2() -> None:
 def test_build_advice_sell_side_has_no_range_and_no_still_breached_sentence() -> None:
     own = _ctx(own_lots=1, **_BREACH)
     signals = uptrend_signals(max_drawdown=-0.35, current_drawdown=-0.35)
-    card = build_advice(symbol="2330", signals=signals, portfolio=own)
+    card = build_advice(budget_from_default=False, symbol="2330", signals=signals, portfolio=own)
     assert card["action"] in {"reduce", "stop_loss"}
     assert card["quantity_range"] is None
     assert "仍然超標" not in json.dumps(card, ensure_ascii=False)

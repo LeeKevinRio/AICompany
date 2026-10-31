@@ -686,6 +686,13 @@ export interface AdviceResponse extends EnvelopeBase {
    * verbatim; this app composes nothing around it.
    */
   cap1_migration_notice: string | null;
+  /**
+   * ADR-0032 (N-156) N-1／N-2／N-3: `LimitsCheckList` shows it above the caps
+   * and the position page's main view shows it once more outside the advice
+   * `<details>`; `null` = none (no risk_budget / net_worth fallback, or
+   * `insufficient_data`). Rendered verbatim; this app composes nothing.
+   */
+  settings_fallback_notice: string | null;
 }
 
 /* ============================================================================
@@ -752,6 +759,8 @@ export interface PortfolioLimitsResponse {
    * slots filled by the backend; `null` = none. Rendered verbatim.
    */
   cap1_migration_notice: string | null;
+  /** ADR-0032 (N-156): shown above the gauge's cap list; `null` = none. Verbatim. */
+  settings_fallback_notice: string | null;
   as_of: string;
 }
 
@@ -1326,8 +1335,13 @@ export interface NetWorthInput {
   total_net_worth_twd: number;
 }
 
-/** Backend `NetWorthFreshness` (app/api/settings.py). */
-export type NetWorthFreshness = "absent" | "fresh" | "ageing" | "expired";
+/**
+ * Backend `NetWorthFreshness` (app/api/settings.py). `fallback` (ADR-0032): a
+ * figure was stored but failed validation, so nothing about it can be shown.
+ * The page still decides that from `SettingsResponse.settings_fallback.sections`,
+ * never from this value or from the figure.
+ */
+export type NetWorthFreshness = "absent" | "fresh" | "ageing" | "expired" | "fallback";
 
 /**
  * Backend `NetWorthView` (app/api/settings.py, verified) — the freshness block
@@ -1384,6 +1398,39 @@ export interface Cap1MigrationView {
   notice: Cap1SettingsNotice | null;
 }
 
+/**
+ * Backend `OverwritePanelView` (app/settings/fallback_wording.py): a W-2
+ * confirmation panel shown before saving over fallback sections, every
+ * sentence and label decided there. `checkboxes` is empty on the net-worth
+ * panel, whose confirm button is itself the confirmation.
+ */
+export interface OverwritePanelView {
+  /** The fallback sections this panel covers. */
+  sections: string[];
+  title: string;
+  /** In display order. */
+  paragraphs: string[];
+  checkboxes: { section: string; label: string }[];
+  confirm_label: string;
+  cancel_label: string;
+}
+
+/**
+ * Backend `SettingsFallbackView` (app/settings/fallback_wording.py, ADR-0032):
+ * the sections served with their defaults plus everything the page says about
+ * them. `null` on the response when no section fell back. `sections` is the
+ * only input the page may branch on for anything fallback-related (K-6); every
+ * string here is rendered verbatim.
+ */
+export interface SettingsFallbackView {
+  sections: string[];
+  notice: Cap1SettingsNotice;
+  /** Section id -> the line under that section's h2; fallback sections only. */
+  section_markers: Record<string, string>;
+  form_overwrite_panel: OverwritePanelView | null;
+  net_worth_overwrite_panel: OverwritePanelView | null;
+}
+
 /** Backend `SettingsResponse` (app/api/settings.py, verified). */
 export interface SettingsResponse {
   settings: AppSettings;
@@ -1391,6 +1438,13 @@ export interface SettingsResponse {
   notes: string[];
   net_worth: NetWorthView;
   cap1_migration: Cap1MigrationView | null;
+  /** ADR-0032 (N-156): `null` when no section fell back. */
+  settings_fallback: SettingsFallbackView | null;
+  /**
+   * `PUT` only: replaces「設定已儲存。」when the write left fallback sections
+   * unwritten; `null` on `GET` and on a `PUT` that left none. Verbatim.
+   */
+  partial_save_notice: string | null;
   as_of: string;
 }
 
@@ -1411,6 +1465,13 @@ export interface AppSettingsPatch {
    * would let "I changed a fee rate" refresh a figure nobody looked at.
    */
   net_worth?: NetWorthInput;
+  /**
+   * ADR-0032 W-2: the fallback sections (stored, but failing validation) the
+   * user confirmed overwriting with what this body carries. A fallback section
+   * the user did not confirm is not in the body at all (K-11); one carried
+   * without being listed here is refused with a 409 that writes nothing.
+   */
+  overwrite_fallback_sections?: string[];
 }
 
 /* --- Security directory (backend/app/api/directory.py, FR-4/5/6/7) ------- */
@@ -2133,6 +2194,12 @@ export interface KellyDisclosuresView {
   walk_forward: string | null;
   f_star_interval: string | null;
   effective_cap: KellyEffectiveCapView | null;
+  /**
+   * ADR-0032 (N-156, 風控 第 4 項): the line beside `effective_cap`'s value, at
+   * the value's own size; `null` whenever `effective_cap` is, and when only
+   * `net_worth` fell back. Verbatim.
+   */
+  settings_fallback_notice: string | null;
   boundary_exclusion: string | null;
   sample_detail: KellyBacktestSampleDetail | null;
   original_values: KellyOriginalValuesView | null;

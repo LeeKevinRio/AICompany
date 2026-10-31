@@ -6,7 +6,9 @@ basis, idempotent across starts, the four named cases), the risk review's S2
 changes; any invalid section means no migration, a record, a visible notice,
 and not one byte of stored data changed), and the copy of the two verbatim
 reviews of 2026-10-26: 第1條下修告知逐字審 (#1/#2/#2', 實作約束 2/6) and
-遷移未執行逐字審 (U0-U5, S1/S1', I-1 ~ I-9).
+遷移未執行逐字審 (U0-U5, S1, I-1 ~ I-9), as amended by 「風控 2026-10-29 N-156 字面
+定稿與表態」 第 7 項 (ADR-0032 Decision 8): U3 deleted, U2' rewritten, S1'
+retired, and U2 / U2' chosen by the live fallback state of the same read (R-2).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import re
 import sqlite3
 import threading
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -112,17 +114,15 @@ SKIPPED_U1 = (
     "{new_default_pct}），已存設定沒有任何改動。",
 )
 SKIPPED_U2 = ("目前使用的值", "第 1 條上限目前使用 {current_pct}，取自已存設定。")
+#: U2', as rewritten by 「風控 2026-10-29 N-156 字面定稿與表態」 第 7 項.
 SKIPPED_U2_PRIME = (
     "目前使用的值",
-    "第 1 條上限目前使用 {current_pct}。因為風險預算沒有通過驗證，在本頁按儲存之前，"
-    "系統用的是預設值 {default_pct}，不是原本存的內容。",
+    "第 1 條上限目前使用 {current_pct}，這是預設值，不是原本存的內容；原因與影響見本頁頁首的說明。",
 )
-SKIPPED_U3 = (
-    "頁面與存檔",
-    "在本頁按儲存之前，{section_names}在本頁顯示的是預設值，不是原本存的內容。本頁任何一個"
-    "儲存按鈕都會把所有區段整份寫入，包括{section_names}；原本存的內容會被取代，"
-    "系統內不會保留。",
-)
+#: U3 as it stood before that ruling deleted it on every branch: kept only so
+#: the tests below can assert it is gone.
+RETIRED_U3_LABEL = "頁面與存檔"
+RETIRED_U3_FRAGMENT = "本頁任何一個儲存按鈕都會把所有區段整份寫入"
 SKIPPED_U4 = ("可用的操作", "本欄位可以自行修改數值。改高等於放寬上限，儲存前會先要求你確認。")
 SKIPPED_U5 = (
     "之後",
@@ -133,11 +133,8 @@ SKIPPED_S1 = (
     "第 1 條上限的自動調整於 {attempted_at}未執行，原因是已存設定有區段未通過驗證；"
     "目前使用的上限是 {current_pct}。詳見設定頁。"
 )
-SKIPPED_S1_PRIME = (
-    "第 1 條上限的自動調整於 {attempted_at}未執行，原因是已存設定有區段未通過驗證，"
-    "包括風險預算；目前使用的上限是 {current_pct}，在設定頁儲存之前用的是預設值 "
-    "{default_pct}，不是原本存的內容。詳見設定頁。"
-)
+#: S1' as it stood before the 2026-10-29 ruling retired it: only to assert it is gone.
+RETIRED_S1_PRIME_FRAGMENT = "在設定頁儲存之前用的是預設值"
 
 #: Interpolation of a record dated ``MIGRATED_AT`` under today's constants.
 FIELDS = {
@@ -386,8 +383,15 @@ def test_an_invalid_section_stops_the_migration_and_changes_no_byte(
     assert record.status == "skipped"
     assert record.failed_sections == (section,)
     assert record.new_value is None
-    current = store.load().risk_budget.max_position_weight
-    assert record.settings_notice(current_max_position_weight=current) is not None
+    loaded = store.load_with_status()
+    current = loaded.settings.risk_budget.max_position_weight
+    assert (
+        record.settings_notice(
+            current_max_position_weight=current,
+            risk_budget_fallback="risk_budget" in loaded.fallback_sections,
+        )
+        is not None
+    )
     assert record.short_notice(current_max_position_weight=current) is not None
 
 
@@ -419,7 +423,9 @@ def test_a_repaired_document_with_another_value_ends_not_applicable(tmp_path: Pa
 
     record = _record(store)
     assert record.status == "not_applicable"
-    assert record.settings_notice(current_max_position_weight=0.12) is None
+    assert (
+        record.settings_notice(current_max_position_weight=0.12, risk_budget_fallback=False) is None
+    )
     assert record.short_notice(current_max_position_weight=0.12) is None
     assert store.load().risk_budget.max_position_weight == 0.12
 
@@ -449,14 +455,14 @@ def test_a_restored_pre_migration_backup_is_migrated_and_announced_again(tmp_pat
 
 
 def _put_cap1(store: SettingsStore, value: float) -> None:
+    """Save cap 1 the way ``PUT {"risk_budget": ...}`` does: that section only.
+
+    The other sections are not carried, so a fallback among them is kept rather
+    than refused (ADR-0032 W-1).
+    """
     current = store.load()
-    store.save(
-        AppSettings(
-            risk_budget=current.risk_budget.model_copy(update={"max_position_weight": value}),
-            cost_model=current.cost_model,
-            alerts=current.alerts,
-            net_worth=current.net_worth,
-        )
+    store.write(
+        {"risk_budget": current.risk_budget.model_copy(update={"max_position_weight": value})}
     )
 
 
@@ -496,7 +502,7 @@ def test_with_the_flag_set_1_3_and_the_short_notice_go(tmp_path: Path) -> None:
     _put_cap1(store, 0.12)
     record = _record(store)
 
-    notice = record.settings_notice(current_max_position_weight=0.12)
+    notice = record.settings_notice(current_max_position_weight=0.12, risk_budget_fallback=False)
     assert notice is not None
     assert notice.title == MIGRATED_SETTINGS_TITLE
     kept = [item for item in MIGRATED_SETTINGS_ITEMS if item[0] != "會看到的變化"]
@@ -514,7 +520,10 @@ def test_a_save_leaves_a_skipped_record_and_its_notice_in_place(tmp_path: Path) 
 
     after = _record(store)
     assert after == before
-    assert after.settings_notice(current_max_position_weight=0.12) is not None
+    assert (
+        after.settings_notice(current_max_position_weight=0.12, risk_budget_fallback=False)
+        is not None
+    )
     assert after.short_notice(current_max_position_weight=0.12) is not None
 
 
@@ -538,6 +547,197 @@ def test_a_put_leaves_a_skipped_record_and_its_notices_in_place(
     assert gauge["cap1_migration_notice"] == SKIPPED_S1.format(**FIELDS, current_pct="12.00%")
 
 
+# A value written during a skip is judged at the next start like any other
+# (TA reply 2026-10-29 to risk N-156 to-do 14 / qa NB-7: accepted by design).
+
+#: The sentence every test below carries, verbatim from the TA reply's C-4.
+_ACCEPTED_BY_DESIGN = (
+    "accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it requires "
+    "risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63"
+)
+
+
+def _budget_skipped_store(tmp_path: Path) -> SettingsStore:
+    """Cap 1 stored at 0.12 elsewhere, but the risk budget row itself fails validation."""
+    db = tmp_path / _S2_DB
+    document = _full_document(0.12)
+    document["risk_budget"] = '{"not": "valid"}'
+    _seed(db, document)
+    store = SettingsStore(db, now=MIGRATED_AT)
+    record = _record(store)
+    assert record.status == "skipped"
+    assert record.failed_sections == ("risk_budget",)
+    return store
+
+
+def _overwrite_cap1(store: SettingsStore, value: float) -> None:
+    """The W-2 overwrite of the fallback risk budget, as a confirmed PUT makes it."""
+    store.write(
+        {"risk_budget": RiskBudget(max_position_weight=value)},
+        overwrite_fallback_sections=("risk_budget",),
+    )
+
+
+def _raw_budget(db: Path) -> dict[str, Any]:
+    (row,) = [row for row in _rows(db) if row[0] == "risk_budget"]
+    payload: dict[str, Any] = json.loads(row[1])
+    return payload
+
+
+def test_a_w2_overwrite_to_the_old_default_during_a_skip_is_migrated_on_the_next_start(
+    tmp_path: Path,
+) -> None:
+    """T-1: the confirmed 0.15 is migrated at the next start, and 0.15 again sticks.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    db = store.db_path
+    before = _record(store)
+
+    _overwrite_cap1(store, 0.15)
+
+    # Same process, no restart: the record does not move on a write (I-6).
+    assert _record(store) == before
+    loaded = store.load_with_status()
+    assert loaded.fallback_sections == ()
+    assert loaded.settings.risk_budget.max_position_weight == 0.15
+    notice = before.settings_notice(current_max_position_weight=0.15, risk_budget_fallback=False)
+    assert notice is not None
+    extra = {"current_pct": "15.00%", "section_names": "風險預算"}
+    assert notice.items == tuple(
+        _filled(item, **extra) for item in (SKIPPED_U1, SKIPPED_U2, SKIPPED_U4, SKIPPED_U5)
+    )
+    assert "（已存值等於 15.00% 時改為 10.00%）" in notice.items[0][1]
+    snapshot = _rows(db)
+
+    restarted = SettingsStore(db, now=LATER)
+
+    assert restarted.load().risk_budget.max_position_weight == 0.10
+    record = _record(restarted)
+    assert (record.status, record.previous_value, record.new_value) == ("migrated", 0.15, 0.10)
+    assert record.recorded_at == LATER.isoformat()
+    assert record.failed_sections == ()
+    assert record.changed_by_user is False
+    later = {**FIELDS, "migrated_at": LATER_TEXT, "attempted_at": LATER_TEXT}
+    assert record.short_notice(current_max_position_weight=0.10) == MIGRATED_SHORT.format(**later)
+    migrated = record.settings_notice(current_max_position_weight=0.10, risk_budget_fallback=False)
+    assert migrated is not None
+    assert "會看到的變化" in [label for label, _ in migrated.items]  # 1-3
+    # Only that one key moved, and no other row was written.
+    assert _raw_budget(db) == {
+        **RiskBudget(max_position_weight=0.15).model_dump(),
+        "max_position_weight": 0.10,
+    }
+    after = _rows(db)
+    assert [row for row in after if row[0] != "risk_budget"] == [
+        row for row in snapshot if row[0] != "risk_budget"
+    ]
+
+    # The way out: 0.15 written again after the migration stays.
+    _put_cap1(restarted, 0.15)
+    again = SettingsStore(db, now=LATER + timedelta(days=1))
+    assert again.load().risk_budget.max_position_weight == 0.15
+    final = _record(again)
+    assert final.status == "migrated"
+    assert final.recorded_at == LATER.isoformat()
+    assert final.changed_by_user is True
+
+
+def test_a_plain_save_of_the_old_default_during_a_skip_is_migrated_the_same_way(
+    tmp_path: Path,
+) -> None:
+    """T-2: not a W-2 special case -- an ordinary save of 0.15 meets the same rule.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _skipped_store(tmp_path, "cost_model", max_position_weight=0.12)
+    db = store.db_path
+    _put_cap1(store, 0.15)
+    rows_before = _rows(db)
+
+    # cost_model still broken: skipped again, nothing touched (「所有區段都通過驗證時才會執行」).
+    still = SettingsStore(db, now=LATER)
+    record = _record(still)
+    assert record.status == "skipped"
+    assert record.recorded_at == LATER.isoformat()
+    assert still.load().risk_budget.max_position_weight == 0.15
+    assert _rows(db) == rows_before
+
+    # Repaired: the next start migrates the 0.15.
+    _seed(db, {"cost_model": json.dumps(CostModelSettings(slippage_bps=7.5).model_dump())})
+    repaired = SettingsStore(db, now=LATER + timedelta(days=1))
+    record = _record(repaired)
+    assert record.status == "migrated"
+    assert record.previous_value == 0.15
+    assert repaired.load().risk_budget.max_position_weight == 0.10
+
+
+@pytest.mark.parametrize("value", [0.12, 0.10])
+def test_a_w2_overwrite_during_a_skip_with_another_value_is_kept(
+    tmp_path: Path, value: float
+) -> None:
+    """T-3: only the old default moves; any other confirmed value is the user's.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    _overwrite_cap1(store, value)
+
+    restarted = SettingsStore(store.db_path, now=LATER)
+
+    record = _record(restarted)
+    assert record.status == "not_applicable"
+    assert restarted.load().risk_budget.max_position_weight == value
+    assert (
+        record.settings_notice(current_max_position_weight=value, risk_budget_fallback=False)
+        is None
+    )
+    assert record.short_notice(current_max_position_weight=value) is None
+
+
+def test_a_confirmed_put_of_the_old_default_during_a_skip_is_migrated_after_a_restart(
+    api_harness: ApiHarness, tmp_path: Path
+) -> None:
+    """T-4: the same path through ``PUT /api/settings`` and a rebuilt store.
+
+    accepted by design per TA reply (risk N-156 to-do 14 / qa NB-7); changing it
+    requires risk re-review of U1/U5/S1 (I-6, M-1, M-7) and a CEO ruling on #63.
+    """
+    store = _budget_skipped_store(tmp_path)
+    app.dependency_overrides[get_settings_store] = lambda: store
+
+    response = api_harness.client.put(
+        "/api/settings",
+        json={
+            "risk_budget": {"max_position_weight": 0.15},
+            "overwrite_fallback_sections": ["risk_budget"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["cap1_migration"]["status"] == "skipped"
+
+    restarted = SettingsStore(store.db_path, now=LATER)
+    app.dependency_overrides[get_settings_store] = lambda: restarted
+    body = api_harness.client.get("/api/settings").json()
+    assert body["cap1_migration"]["status"] == "migrated"
+    assert body["settings"]["risk_budget"]["max_position_weight"] == 0.10
+
+
+def test_each_skip_overwrite_test_says_why_it_must_not_be_fixed() -> None:
+    """C-4: the reason travels with every pin, so nobody "fixes" it as a bug."""
+    for test in (
+        test_a_w2_overwrite_to_the_old_default_during_a_skip_is_migrated_on_the_next_start,
+        test_a_plain_save_of_the_old_default_during_a_skip_is_migrated_the_same_way,
+        test_a_w2_overwrite_during_a_skip_with_another_value_is_kept,
+        test_a_confirmed_put_of_the_old_default_during_a_skip_is_migrated_after_a_restart,
+    ):
+        assert _ACCEPTED_BY_DESIGN in " ".join((test.__doc__ or "").split()), test.__name__
+
+
 # --- The copy itself: verbatim, every branch -------------------------------------
 
 
@@ -550,7 +750,7 @@ def test_the_shipped_copy_is_the_finalised_copy_verbatim() -> None:
     short = CAP1_MIGRATION_NOTICES[("migrated", "short")]
     assert isinstance(short, ShortNoticeCopy)
     assert short.text == MIGRATED_SHORT
-    assert short.text_if_risk_budget_failed is None
+    assert [field.name for field in dataclasses.fields(short)] == ["text"]
 
     skipped = CAP1_MIGRATION_NOTICES[("skipped", "settings")]
     assert isinstance(skipped, SettingsNoticeCopy)
@@ -559,7 +759,6 @@ def test_the_shipped_copy_is_the_finalised_copy_verbatim() -> None:
         SKIPPED_U1,
         SKIPPED_U2,
         SKIPPED_U2_PRIME,
-        SKIPPED_U3,
         SKIPPED_U4,
         SKIPPED_U5,
     )
@@ -567,7 +766,8 @@ def test_the_shipped_copy_is_the_finalised_copy_verbatim() -> None:
     skipped_short = CAP1_MIGRATION_NOTICES[("skipped", "short")]
     assert isinstance(skipped_short, ShortNoticeCopy)
     assert skipped_short.text == SKIPPED_S1
-    assert skipped_short.text_if_risk_budget_failed == SKIPPED_S1_PRIME
+    # S1' retired (2026-10-29 第 7 項): one template, no branch.
+    assert [field.name for field in dataclasses.fields(skipped_short)] == ["text"]
 
 
 def test_the_copy_is_keyed_by_status_and_surface() -> None:
@@ -582,7 +782,7 @@ def test_the_copy_is_keyed_by_status_and_surface() -> None:
 
 def test_the_migrated_settings_notice_renders_every_item_in_order(tmp_path: Path) -> None:
     record = _record(_migrated_store(tmp_path))
-    notice = record.settings_notice(current_max_position_weight=0.10)
+    notice = record.settings_notice(current_max_position_weight=0.10, risk_budget_fallback=False)
     assert notice is not None
     assert notice.title == MIGRATED_SETTINGS_TITLE
     assert notice.items == tuple(_filled(item) for item in MIGRATED_SETTINGS_ITEMS)
@@ -606,16 +806,17 @@ def test_the_migrated_short_notice_renders(tmp_path: Path) -> None:
 def test_u2_and_s1_when_risk_budget_validated(tmp_path: Path) -> None:
     store = _skipped_store(tmp_path, "cost_model")
     record = _record(store)
-    current = store.load().risk_budget.max_position_weight
+    loaded = store.load_with_status()
+    current = loaded.settings.risk_budget.max_position_weight
     assert current == 0.15  # the stored value, still in force
+    assert loaded.fallback_sections == ("cost_model",)
 
-    notice = record.settings_notice(current_max_position_weight=current)
+    notice = record.settings_notice(current_max_position_weight=current, risk_budget_fallback=False)
     assert notice is not None
     assert notice.title == SKIPPED_SETTINGS_TITLE
     extra = {"current_pct": "15.00%", "section_names": "費率"}
     assert notice.items == tuple(
-        _filled(item, **extra)
-        for item in (SKIPPED_U1, SKIPPED_U2, SKIPPED_U3, SKIPPED_U4, SKIPPED_U5)
+        _filled(item, **extra) for item in (SKIPPED_U1, SKIPPED_U2, SKIPPED_U4, SKIPPED_U5)
     )
     assert notice.items[0][1] == (
         "2026-10-27 09:02（台北時間），系統檢查已存設定時，費率沒有通過驗證，因此沒有執行"
@@ -628,22 +829,116 @@ def test_u2_and_s1_when_risk_budget_validated(tmp_path: Path) -> None:
     )
 
 
-def test_u2_prime_and_s1_prime_when_risk_budget_failed(tmp_path: Path) -> None:
+def test_u2_prime_and_s1_when_risk_budget_is_a_fallback(tmp_path: Path) -> None:
+    """U2' (rewritten) and S1: S1' is retired, so the short notice is S1 here too."""
     store = _skipped_store(tmp_path, "risk_budget")
     record = _record(store)
-    current = store.load().risk_budget.max_position_weight
+    loaded = store.load_with_status()
+    current = loaded.settings.risk_budget.max_position_weight
     assert current == DEFAULT_MAX_POSITION_WEIGHT  # the section fell back to defaults
+    assert loaded.fallback_sections == ("risk_budget",)
 
-    notice = record.settings_notice(current_max_position_weight=current)
+    notice = record.settings_notice(current_max_position_weight=current, risk_budget_fallback=True)
     assert notice is not None
     extra = {"current_pct": "10.00%", "section_names": "風險預算"}
     assert notice.items == tuple(
-        _filled(item, **extra)
-        for item in (SKIPPED_U1, SKIPPED_U2_PRIME, SKIPPED_U3, SKIPPED_U4, SKIPPED_U5)
+        _filled(item, **extra) for item in (SKIPPED_U1, SKIPPED_U2_PRIME, SKIPPED_U4, SKIPPED_U5)
     )
-    assert record.short_notice(current_max_position_weight=current) == SKIPPED_S1_PRIME.format(
+    assert notice.items[1] == (
+        "目前使用的值",
+        "第 1 條上限目前使用 10.00%，這是預設值，不是原本存的內容；原因與影響見本頁頁首的說明。",
+    )
+    assert record.short_notice(current_max_position_weight=current) == SKIPPED_S1.format(
         **FIELDS, current_pct="10.00%"
     )
+
+
+@pytest.mark.parametrize("snapshot", [("cost_model",), ("risk_budget",), ("risk_budget", "alerts")])
+@pytest.mark.parametrize("live", [False, True])
+def test_u2_or_u2_prime_follows_the_live_state_not_the_snapshot(
+    snapshot: tuple[str, ...], live: bool
+) -> None:
+    """R-2: ``failed_sections`` is the last start's snapshot and decides nothing."""
+    record = Cap1MigrationRecord(
+        status="skipped",
+        previous_value=0.15,
+        new_value=None,
+        failed_sections=snapshot,
+        basis=CAP1_MIGRATION_BASIS,
+        recorded_at=MIGRATED_AT.isoformat(),
+    )
+    notice = record.settings_notice(current_max_position_weight=0.10, risk_budget_fallback=live)
+    assert notice is not None
+    expected = SKIPPED_U2_PRIME if live else SKIPPED_U2
+    assert notice.items[1] == _filled(expected, current_pct="10.00%")
+    assert [label for label, _ in notice.items].count("目前使用的值") == 1
+    # U0 still names the snapshot: it states the migration event itself (R-1).
+    assert notice.items[0][1].startswith(f"{MIGRATED_AT_TEXT}，系統檢查已存設定時，")
+
+
+def test_u3_and_s1_prime_are_gone_from_every_branch() -> None:
+    """2026-10-29 第 7 項: not one sentence of the ``skipped`` copy describes the page."""
+    for failed in (("cost_model",), ("risk_budget",)):
+        for live in (False, True):
+            record = Cap1MigrationRecord(
+                status="skipped",
+                previous_value=0.15,
+                new_value=None,
+                failed_sections=failed,
+                basis=CAP1_MIGRATION_BASIS,
+                recorded_at=MIGRATED_AT.isoformat(),
+            )
+            notice = record.settings_notice(
+                current_max_position_weight=0.10, risk_budget_fallback=live
+            )
+            assert notice is not None
+            assert RETIRED_U3_LABEL not in [label for label, _ in notice.items]
+            text = json.dumps(notice.items, ensure_ascii=False)
+            assert RETIRED_U3_FRAGMENT not in text
+            assert "在本頁按儲存之前" not in text
+            short = record.short_notice(current_max_position_weight=0.10)
+            assert short is not None
+            assert RETIRED_S1_PRIME_FRAGMENT not in short
+
+
+def test_the_settings_page_follows_the_live_state_after_a_repair(
+    api_harness: ApiHarness, tmp_path: Path
+) -> None:
+    """R-2 end to end: started with risk_budget broken, repaired since -- U2, not U2'."""
+    store = _skipped_store(tmp_path, "risk_budget")
+    assert _record(store).failed_sections == ("risk_budget",)
+    _seed(
+        store.db_path,
+        {"risk_budget": json.dumps(RiskBudget(max_position_weight=0.12).model_dump())},
+    )
+    app.dependency_overrides[get_settings_store] = lambda: store
+
+    body = api_harness.client.get("/api/settings").json()
+    assert body["settings_fallback"] is None
+    items = body["cap1_migration"]["notice"]["items"]
+    assert items[1] == {
+        "label": SKIPPED_U2[0],
+        "body": "第 1 條上限目前使用 12.00%，取自已存設定。",
+    }
+    assert body["cap1_migration"]["failed_sections"] == ["risk_budget"]
+
+
+def test_the_settings_page_follows_the_live_state_after_a_later_break(
+    api_harness: ApiHarness, tmp_path: Path
+) -> None:
+    """R-2 the other way: started with only cost_model broken, risk_budget broke since."""
+    store = _skipped_store(tmp_path, "cost_model")
+    _seed(store.db_path, {"risk_budget": '{"not": "valid"}'})
+    app.dependency_overrides[get_settings_store] = lambda: store
+
+    body = api_harness.client.get("/api/settings").json()
+    assert body["settings_fallback"]["sections"] == ["risk_budget", "cost_model"]
+    items = body["cap1_migration"]["notice"]["items"]
+    assert items[1] == {
+        "label": SKIPPED_U2_PRIME[0],
+        "body": SKIPPED_U2_PRIME[1].format(current_pct="10.00%"),
+    }
+    assert body["cap1_migration"]["failed_sections"] == ["cost_model"]
 
 
 def test_section_names_follow_sections_order_joined_by_the_ideographic_comma(
@@ -657,10 +952,9 @@ def test_section_names_follow_sections_order_joined_by_the_ideographic_comma(
     record = _record(SettingsStore(db, now=MIGRATED_AT))
 
     assert record.failed_sections == ("cost_model", "net_worth")
-    notice = record.settings_notice(current_max_position_weight=0.15)
+    notice = record.settings_notice(current_max_position_weight=0.15, risk_budget_fallback=False)
     assert notice is not None
     assert "費率、帳戶總淨值沒有通過驗證" in notice.items[0][1]
-    assert "包括費率、帳戶總淨值；" in notice.items[2][1]
     # Never the internal key.
     assert "cost_model" not in json.dumps(notice.items, ensure_ascii=False)
 
@@ -673,7 +967,7 @@ def test_a_stored_twelve_with_a_broken_cost_model_states_the_rule_not_the_value(
     record = _record(store)
     assert record.previous_value == 0.12
 
-    notice = record.settings_notice(current_max_position_weight=0.12)
+    notice = record.settings_notice(current_max_position_weight=0.12, risk_budget_fallback=False)
     assert notice is not None
     first = notice.items[0][1]
     assert "（已存值等於 15.00% 時改為 10.00%）" in first
@@ -707,7 +1001,9 @@ def test_not_applicable_shows_nothing() -> None:
         basis=CAP1_MIGRATION_BASIS,
         recorded_at=MIGRATED_AT.isoformat(),
     )
-    assert record.settings_notice(current_max_position_weight=0.12) is None
+    assert (
+        record.settings_notice(current_max_position_weight=0.12, risk_budget_fallback=False) is None
+    )
     assert record.short_notice(current_max_position_weight=0.12) is None
 
 
@@ -728,10 +1024,13 @@ def _every_rendered_notice() -> list[str]:
                 recorded_at=MIGRATED_AT.isoformat(),
                 changed_by_user=changed,
             )
-            notice = record.settings_notice(current_max_position_weight=0.10)
-            assert notice is not None
-            texts.append(notice.title)
-            texts.extend(f"{label}｜{body}" for label, body in notice.items)
+            for live in (False, True):
+                notice = record.settings_notice(
+                    current_max_position_weight=0.10, risk_budget_fallback=live
+                )
+                assert notice is not None
+                texts.append(notice.title)
+                texts.extend(f"{label}｜{body}" for label, body in notice.items)
             short = record.short_notice(current_max_position_weight=0.10)
             if short is not None:
                 texts.append(short)
@@ -890,7 +1189,9 @@ def test_item_1_4_has_no_placeholder_and_renders_as_written(tmp_path: Path) -> N
     record = _record(_migrated_store(tmp_path))
     for changed in (False, True):
         variant = dataclasses.replace(record, changed_by_user=changed)
-        notice = variant.settings_notice(current_max_position_weight=0.12)
+        notice = variant.settings_notice(
+            current_max_position_weight=0.12, risk_budget_fallback=False
+        )
         assert notice is not None
         assert ("過去的紀錄", item.body) in notice.items
 

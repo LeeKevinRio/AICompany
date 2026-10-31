@@ -51,9 +51,27 @@ def _import_body() -> dict[str, object]:
     }
 
 
+#: Why the freeze may not simply be switched off (CEO #62 F-d, plus N-156 K-15 二-2).
+FREEZE_PRECONDITIONS = (
+    "解除 Kelly 輸入凍結前須先滿足：(1) 日落字面（KellyInputsSection 引言、「已暫停」按鈕、"
+    "第 5 條「計算方式有誤」）隨之改寫（F-d）；(2) cost_model 回落期間 import-backtest 必須"
+    "直接拒絕（fail-closed），拒絕句先送風控定稿（風控 2026-10-29 N-156 K-15 正式核對與裁示 "
+    "二-2，追蹤 N-167）。"
+)
+
+
 def test_the_freeze_is_on() -> None:
-    assert KELLY_INPUT_WRITES_FROZEN is True
-    assert deps.get_kelly_input_writes_frozen() is True
+    assert KELLY_INPUT_WRITES_FROZEN is True, FREEZE_PRECONDITIONS
+    assert deps.get_kelly_input_writes_frozen() is True, FREEZE_PRECONDITIONS
+
+
+def test_the_freeze_switch_states_the_n156_precondition() -> None:
+    """The precondition travels with the switch itself, not only with this test."""
+    import app.kelly.freeze as freeze
+
+    doc = " ".join((freeze.__doc__ or "").split())
+    assert "二-2" in doc and "N-167" in doc
+    assert "import-backtest" in doc and "cost_model" in doc
 
 
 def test_a_manual_write_is_refused_and_writes_nothing(api_harness: ApiHarness) -> None:
