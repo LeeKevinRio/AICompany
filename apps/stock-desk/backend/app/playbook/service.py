@@ -934,9 +934,16 @@ class PlaybookService:
         )
         # The mode line is rendered for today, not lifted from ``message``: the
         # 「第 N/20 交易日」 counter is only true on the day it was computed, so
-        # nothing may store it (覆審: mode_reason 禁存快照字串).
+        # nothing may store it (覆審: mode_reason 禁存快照字串). It is counted
+        # from the same 依據資料日 :meth:`evaluate_today` uses -- the latest bar
+        # of the same loads, ``as_of`` when none came back -- through the same
+        # function, so the exit's answer and the same day's ``/today`` state the
+        # same line (風控 2026-10-31 第二次裁示 V-16, suggested).
+        data_date = (
+            latest_bar_date(*(series.bars for series in loaded.values()), index_bars) or as_of
+        )
         mode_reason = emergency_mode_reason(
-            calendar=calendar, data_date=as_of, until=until, freeze_days=freeze_days
+            calendar=calendar, data_date=data_date, until=until, freeze_days=freeze_days
         )
         return EmergencyExitResult(
             executed_at=as_of,

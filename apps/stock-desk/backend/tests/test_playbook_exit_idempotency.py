@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -32,7 +32,7 @@ from app.playbook.engine import emergency_mode_reason
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.store import PlaybookStore
 from tests import playbook_helpers as helper
-from tests.api_helpers import CLIENT_HEADERS, recent_bars
+from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
 from tests.exit_idempotency_helpers import (
     FREEZE_DAYS,
     HELD,
@@ -349,6 +349,38 @@ def test_the_uncounted_mode_line_starts_past_freeze_days_plus_one(
         assert f"第 1/{FREEZE_DAYS}" in line
     else:
         assert line == wording.MODE_REASON_EMERGENCY_UNCOUNTED.format(until=until.isoformat())
+
+
+@pytest.mark.parametrize("behind", [0, 1, 2])
+def test_the_exit_and_the_same_day_today_state_the_same_mode_line(
+    tmp_path: Path, behind: int
+) -> None:
+    """V-16 前提 (風控 第二次裁示 suggested): 同一函式、同一依據資料日，逐字相同.
+
+    ``behind`` calendar days of missing bars before the submission day: none,
+    the submission day before its close (counted 「第 1/20」), and two sessions
+    behind (S8 on both).
+    """
+    end = THURSDAY - timedelta(days=behind)
+    prices = FakePriceService()
+    for symbol, _, _, close in HELD:
+        prices.seed(symbol, recent_bars([close] * HISTORY, symbol=symbol, end=end))
+    index = FakePriceService()
+    index.seed("^TWII", recent_bars([20000.0] * HISTORY, symbol="^TWII", end=end))
+    lagging = open_book(tmp_path / "playbook.db", prices=prices, index=index)
+    confirm_rule_set(lagging.store)
+    hold_both(lagging.store)
+
+    exit_line = lagging.service.emergency_exit(today=THURSDAY).mode_reason
+    today_line = lagging.service.evaluate_today(today=THURSDAY).mode_reason
+
+    assert exit_line == today_line
+    if behind < 2:
+        assert f"第 1/{FREEZE_DAYS} 交易日" in exit_line
+    else:
+        assert exit_line == wording.MODE_REASON_EMERGENCY_UNCOUNTED.format(
+            until=until_for(THURSDAY).isoformat()
+        )
 
 
 # --- S6 渲染條件 ------------------------------------------------------------------
