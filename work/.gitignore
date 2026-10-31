@@ -121,3 +121,5 @@
 !repro/test_n172_repro.py
 !repro/test_n174_repro.py
 !repro/test_n176_repro.py
+# N-172 重複指令唯讀偵測：CEO 本機執行指令（2026-10-31）
+!research/N172-重複指令偵測-執行指令-2026-10-31.md
