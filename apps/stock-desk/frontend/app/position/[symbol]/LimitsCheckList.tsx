@@ -25,7 +25,7 @@ export function LimitsCheckList({
   /**
    * The S2 sentence (CEO #63) for cap 1, the backend's verbatim
    * (`AdviceResponse.cap1_migration_notice`) — the same one the risk gauge's
-   * cap-1 row shows (#2', S1/S1', I-2). `null` = none.
+   * cap-1 row shows (#2', S1, I-2). `null` = none.
    */
   cap1MigrationNotice?: string | null;
 }) {
