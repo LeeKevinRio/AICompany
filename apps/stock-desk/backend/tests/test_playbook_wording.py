@@ -539,3 +539,57 @@ def test_the_uncounted_mode_line_carries_no_counter() -> None:
         "S/P 系列停損停利仍照常評估。"
     )
     assert "第 " not in line
+
+
+# --- 出清對話框 Q8：降級句承諾「於送出後的執行結果中顯示」 ------------------------------
+
+
+_Q8_UNTIL = date(2026, 9, 9)
+_Q8_PENDING = wording.ExitPending(
+    batches=1,
+    shares=300,
+    execution_dates=(date(2026, 8, 12),),
+    past_due_dates=(date(2026, 8, 12),),
+)
+_Q8_NONE = wording.ExitPending(batches=0, shares=0, execution_dates=(), past_due_dates=())
+
+
+@pytest.mark.parametrize("freeze_kept", [False, True], ids=["standard", "f-c S7"])
+@pytest.mark.parametrize(
+    ("new_batches", "pending"),
+    [(2, _Q8_NONE), (1, _Q8_PENDING), (0, _Q8_PENDING), (0, _Q8_NONE)],
+    ids=["RESULT", "RESULT+S2", "ALREADY_PENDING S1", "EMPTY"],
+)
+def test_every_accepted_message_states_the_actual_recovery_date(
+    new_batches: int, pending: wording.ExitPending, freeze_kept: bool
+) -> None:
+    """風控 Q8 合併關卡: RESULT、EMPTY、S1 與其 S7 版本都含 {until} 的實際日期."""
+    message = wording.emergency_exit_message(
+        new_batches=new_batches,
+        new_shares=300 * new_batches,
+        execution_date=date(2026, 8, 12),
+        executed_at=date(2026, 8, 13),
+        freeze_days=20,
+        until=_Q8_UNTIL,
+        pending=pending,
+        extended_from=None,
+        freeze_kept=freeze_kept,
+    )
+
+    assert _Q8_UNTIL.isoformat() in message
+    assert "{" not in message
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        wording.EMERGENCY_EXIT_RESULT,
+        wording.EMERGENCY_EXIT_EMPTY,
+        wording.EMERGENCY_EXIT_ALREADY_PENDING,
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_RESULT),
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_EMPTY),
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_ALREADY_PENDING),
+    ],
+)
+def test_every_accepted_template_carries_the_until_placeholder(template: str) -> None:
+    assert "{until}" in template

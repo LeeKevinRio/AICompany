@@ -713,6 +713,23 @@ def test_a_covering_line_of_a_batch_no_longer_held_is_not_reported(book: Book) -
     assert D3.isoformat() not in result.message
 
 
+def test_every_accepted_response_states_its_actual_recovery_date(tmp_path: Path) -> None:
+    """風控 Q8 合併關卡（服務層）: 每一支受理回應的 message 都含實際生效的 {until}."""
+    standard = open_book(tmp_path / "standard.db")
+    kept = open_book(tmp_path / "kept.db")
+    kept.store.freeze_emergency(until=LATE)
+    results = []
+    for book in (standard, kept):
+        results.append(book.service.emergency_exit(today=TUESDAY))  # EMPTY
+        hold_both(book.store)
+        results.append(book.service.emergency_exit(today=TUESDAY))  # RESULT
+        results.append(book.service.emergency_exit(today=TUESDAY))  # S1
+
+    assert {result.freeze_until for result in results} == {until_for(TUESDAY), LATE}
+    for result in results:
+        assert result.freeze_until.isoformat() in result.message
+
+
 # --- C-9: mode_reason、schema、state key ----------------------------------------------
 
 #: ``playbook_*`` tables and their columns as they were before N-166.
