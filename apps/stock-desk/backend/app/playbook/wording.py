@@ -495,9 +495,11 @@ MODE_REASON_EMERGENCY = (
 )
 
 #: N-166 風控 S8: the mode line without the day counter, used **only** while
-#: more than ``freeze_days`` trading days remain to the 恢復日 (a stored later
-#: date kept by the max rule). The counter would clamp to 「第 1/N」 for days on
-#: end there, which is untrue; this is 風控's one exception to VETO-4.
+#: more than ``freeze_days + 1`` trading days remain to the 恢復日 (風控
+#: 2026-10-31 第二次裁示; a stored later date kept by the max rule, or data two
+#: or more sessions behind). The counter would clamp to 「第 1/N」 for days on
+#: end there, which is untrue; this is 風控's one exception to VETO-4. See
+#: :func:`app.playbook.engine.emergency_mode_reason`.
 MODE_REASON_EMERGENCY_UNCOUNTED = (
     "緊急出清後凍結：R 系列（新倉進場）暫停中，預計 {until} 恢復（依交易日曆）；"
     "S/P 系列停損停利仍照常評估。"

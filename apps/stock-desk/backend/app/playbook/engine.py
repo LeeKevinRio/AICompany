@@ -143,13 +143,18 @@ def emergency_mode_reason(
 ) -> str:
     """The EMERGENCY_EXIT mode line for ``data_date``, recomputed on every render.
 
-    The counted sentence (「第 N/{freeze_days} 交易日」) as a rule. When more
-    than ``freeze_days`` trading days remain -- a stored 恢復日 the max rule
-    kept (CEO #77, 風控 F-c) -- the counter would clamp to day 1 for days on end,
-    so 風控 S8 states the 恢復日 alone. Nothing here is stored (C-9): both
+    The counted sentence (「第 N/{freeze_days} 交易日」) as a rule. 風控 S8
+    states the 恢復日 alone, and only when more than ``freeze_days + 1``
+    trading days remain (風控 2026-10-31 第二次裁示). ``trading_days_between``
+    counts ``(data_date, until]``, so on the submission day before its own bar
+    exists -- ``data_date`` one trading day behind -- the count is exactly
+    ``freeze_days + 1``, and 「第 1/{freeze_days}」 is true there (the pause runs
+    自提交日起). Only from ``freeze_days + 2`` on -- data two or more sessions
+    behind, or a stored 恢復日 the max rule kept (CEO #77, F-c) -- would the
+    counter clamp to day 1 for days on end. Nothing here is stored (C-9): both
     branches are a function of ``until``, the calendar and the parameter only.
     """
-    if calendar.trading_days_between(data_date, until) > freeze_days:
+    if calendar.trading_days_between(data_date, until) > freeze_days + 1:
         return wording.mode_reason_emergency_uncounted(until=until)
     return wording.mode_reason_emergency(
         frozen_day=emergency_frozen_day(

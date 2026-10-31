@@ -24,11 +24,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_cap1_weight, get_playbook_service
+from app.data.calendar import TradingCalendar
 from app.main import app
 from app.playbook import store as store_module
 from app.playbook import wording
+from app.playbook.engine import emergency_mode_reason
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.store import PlaybookStore
+from tests import playbook_helpers as helper
 from tests.api_helpers import CLIENT_HEADERS, recent_bars
 from tests.exit_idempotency_helpers import (
     FREEZE_DAYS,
@@ -53,6 +56,11 @@ from tests.playbook_helpers import confirm_rule_set
 
 #: A stored 恢復日 later than any submission here can compute (風控 F-c).
 LATE = date(2026, 12, 31)
+
+
+def _remaining(start: date, end: date) -> int:
+    """Trading days in ``(start, end]`` on the weekday fallback every test here uses."""
+    return TradingCalendar(()).trading_days_between(start, end)
 
 
 @pytest.fixture
@@ -218,6 +226,8 @@ def test_a_later_stored_freeze_is_never_shortened_nor_rewritten(
     book: Book, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """F-T4 + S7: 凍結日不縮短、值沒變就不寫，message 改用 S7 且無「自…起暫停」."""
+    # S8 only beyond freeze_days + 1 (風控 第二次裁示): this case must be past it.
+    assert _remaining(TUESDAY, LATE) >= FREEZE_DAYS + 2
     hold_both(book.store)
     book.store.freeze_emergency(until=LATE)
     traced: list[str] = []
@@ -276,7 +286,8 @@ def test_f_c_replaces_the_freeze_clause_in_every_branch(book: Book) -> None:
 
 
 def test_today_uses_the_uncounted_mode_line_and_the_kept_check(book: Book) -> None:
-    """S8 (/today 在 remaining > freeze_days 的日子) 與 S9 (核取句 2 的 F-c 版)."""
+    """S8 (/today 在 remaining > freeze_days + 1 的日子) 與 S9 (核取句 2 的 F-c 版)."""
+    assert _remaining(TUESDAY, LATE) >= FREEZE_DAYS + 2
     confirm_rule_set(book.store)
     book.store.freeze_emergency(until=LATE)
 
@@ -307,6 +318,37 @@ def test_today_keeps_the_counted_mode_line_inside_the_freeze_length(book: Book) 
     assert evaluation.exit_confirm.checks[1] == wording.EXIT_CONFIRM_CHECKS[1].format(
         freeze_days=FREEZE_DAYS, FREEZE_UNTIL=until_for(TUESDAY).isoformat()
     )
+
+
+@pytest.mark.parametrize(
+    ("behind", "counted"),
+    [(0, True), (1, True), (2, False), (3, False)],
+)
+def test_the_uncounted_mode_line_starts_past_freeze_days_plus_one(
+    behind: int, counted: bool
+) -> None:
+    """風控 第二次裁示 S8 邊界: 剩餘 = freeze_days+1 仍是計數句「第 1/N」, +2 起才是 S8.
+
+    ``behind`` is how many trading days the 依據資料日 trails the submission day:
+    one behind is the submission day before its own close, the commonest moment
+    to look, and its 「第 1/20」 is true (the pause runs 自提交日起).
+    """
+    calendar = helper.calendar()
+    until = calendar.shift(TUESDAY, FREEZE_DAYS)
+    data_date = calendar.shift(TUESDAY, -behind) if behind else TUESDAY
+    assert calendar.trading_days_between(data_date, until) == FREEZE_DAYS + behind
+
+    line = emergency_mode_reason(
+        calendar=calendar, data_date=data_date, until=until, freeze_days=FREEZE_DAYS
+    )
+
+    if counted:
+        assert line == wording.mode_reason_emergency(
+            frozen_day=1, freeze_days=FREEZE_DAYS, until=until
+        )
+        assert f"第 1/{FREEZE_DAYS}" in line
+    else:
+        assert line == wording.MODE_REASON_EMERGENCY_UNCOUNTED.format(until=until.isoformat())
 
 
 # --- S6 渲染條件 ------------------------------------------------------------------
