@@ -305,8 +305,9 @@ export function EmergencyExitControl({
 
       {/*
         視覺規範 §4.4 執行後狀態: 中性色階橫幅，非 rose. The message/mode_reason
-        below are `wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY` and
-        `wording.mode_reason_emergency`, both server-rendered verbatim.
+        below are `wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_ALREADY_PENDING`/
+        `EMERGENCY_EXIT_EMPTY` and `wording.mode_reason_emergency`, both
+        server-rendered verbatim.
       */}
       {mutation.isSuccess && (
         <div className="max-w-sm rounded-md border border-neutral-700 bg-neutral-900 p-4 text-sm text-neutral-200">

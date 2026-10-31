@@ -1910,13 +1910,21 @@ export interface PlaybookEmergencyExitResponse {
   execution_date: string;
   total_shares: number;
   freeze_until: string;
-  //: `wording.EMERGENCY_EXIT_RESULT` or `EMERGENCY_EXIT_EMPTY`, fully rendered.
+  //: `wording.EMERGENCY_EXIT_RESULT`, `EMERGENCY_EXIT_ALREADY_PENDING` or
+  //: `EMERGENCY_EXIT_EMPTY` (ADR-0033 C-8), fully rendered with any 風控 N-166
+  //: notes already appended.
   message: string;
   mode_reason: string;
-  //: EMERGENCY_EXIT 專用歸屬語 (`wording.EXIT_ATTRIBUTION`); `null` only when
-  //: the exit produced no line (no batch held) — the EMPTY contract again.
+  //: EMERGENCY_EXIT 專用歸屬語 (`wording.EXIT_ATTRIBUTION`, or
+  //: `EXIT_ATTRIBUTION_MIXED` / `EXIT_ATTRIBUTION_PRIOR` when earlier lines are
+  //: described); `null` only when the message describes no line (no batch
+  //: held) — the EMPTY contract again.
   attribution: string | null;
+  //: Only the lines this call wrote (ADR-0033 C-7).
   directives: PlaybookDirectiveLine[];
+  //: Earlier, still unsettled EMERGENCY lines covering the other held batches,
+  //: one per batch (ADR-0033 C-7). Additive; nothing is required to render it.
+  pending_directives: PlaybookDirectiveLine[];
   warnings: string[];
   as_of: string;
 }
