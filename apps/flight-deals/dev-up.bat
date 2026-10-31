@@ -7,6 +7,19 @@ REM Double-click it or run it from any directory; all paths derive from %~dp0.
 REM The app is ONE process (web + APScheduler + SQLite). Never add --reload or extra workers: that creates two schedulers.
 REM The app reads apps\flight-deals\.env by itself, so this script does not load any environment variables.
 
+REM Flags: --no-pause (never wait for a key; for scripted runs) and --skip-pull (skip dirty check and git pull), --open (open the browser after start; default is not to).
+set "NO_PAUSE="
+set "SKIP_PULL="
+set "OPEN_BROWSER="
+:parse_args
+if "%~1"=="" goto args_done
+if /i "%~1"=="--no-pause" set "NO_PAUSE=1"
+if /i "%~1"=="--skip-pull" set "SKIP_PULL=1"
+if /i "%~1"=="--open" set "OPEN_BROWSER=1"
+shift
+goto parse_args
+:args_done
+
 set "TARGET_BRANCH=product/flight-deals"
 set "PORT=8795"
 for %%I in ("%~dp0.") do set "APP_DIR=%%~fI"
@@ -45,11 +58,13 @@ if errorlevel 1 (
 
 REM Tracked changes only: untracked files do not block a fast-forward pull.
 set "DIRTY="
+if defined SKIP_PULL goto after_dirty
 for /f "delims=" %%L in ('git -C "%REPO_ROOT%" status --porcelain --untracked-files=no') do set "DIRTY=1"
 if defined DIRTY (
   echo [STOP] You have local changes to tracked files. Please tell Claude before continuing.
   goto fail
 )
+:after_dirty
 
 set "CUR_BRANCH="
 for /f "delims=" %%B in ('git -C "%REPO_ROOT%" rev-parse --abbrev-ref HEAD') do set "CUR_BRANCH=%%B"
@@ -70,6 +85,10 @@ if not "!CUR_BRANCH!"=="%TARGET_BRANCH%" (
 REM ---- 3. pull latest code ----
 echo.
 echo [1/4] Updating code (git pull)
+if defined SKIP_PULL (
+  echo [SKIP] --skip-pull given; using local code.
+  goto after_pull
+)
 REM A missing remote branch (before the first push) or being offline is NOT a failure: keep using local code.
 git -C "%REPO_ROOT%" ls-remote --exit-code --heads origin %TARGET_BRANCH% >nul 2>nul
 if errorlevel 1 (
@@ -81,13 +100,15 @@ if errorlevel 1 (
     goto fail
   )
 )
+:after_pull
 
 REM ---- 4. stop old processes (before install, so Windows does not lock .venv) ----
 echo.
 echo [2/4] Checking for an old server on port %PORT% and for an old flight-deals process
-call :ensure_port_free %PORT%
-if errorlevel 1 goto fail
+REM Order matters: scan and stop old flight-deals processes first, then deal with whatever still holds the port.
 call :ensure_app_free
+if errorlevel 1 goto fail
+call :ensure_port_free %PORT%
 if errorlevel 1 goto fail
 
 REM ---- 5. dependencies ----
@@ -105,7 +126,7 @@ popd
 REM ---- 6. start the single process in its own window kept open by /k ----
 echo.
 echo [4/4] Starting flight-deals
-start "flight-deals" cmd /k "cd /d "%APP_DIR%" && uv run flight-deals --port %PORT%"
+start "flight-deals" cmd /k "cd /d "%APP_DIR%" && uv run flight-deals --port %PORT% --replace"
 
 REM ---- 7. wait for the home page (max 60s) ----
 echo Waiting for http://127.0.0.1:%PORT%/ (up to 60 seconds)...
@@ -121,14 +142,15 @@ goto wait_app
 :app_ok
 echo.
 echo [OK] flight-deals http://127.0.0.1:%PORT%
+echo Already-open pages only need a refresh.
 REM Empty first quoted arg is the window title; otherwise start treats the URL as the title.
-start "" "http://127.0.0.1:%PORT%"
+if defined OPEN_BROWSER start "" "http://127.0.0.1:%PORT%"
 echo.
 echo Done.
 echo To stop: close the 'flight-deals' window.
 echo URL: http://127.0.0.1:%PORT%
 echo.
-pause
+if not defined NO_PAUSE pause
 exit /b 0
 
 :app_timeout
@@ -139,7 +161,7 @@ goto fail
 
 :fail
 echo.
-pause
+if not defined NO_PAUSE pause
 exit /b 1
 
 REM ---- subroutines ----
@@ -172,22 +194,35 @@ for /f "tokens=2,4,5" %%a in ('netstat -ano ^| findstr /C:"LISTENING"') do (
 exit /b 0
 
 :ensure_port_free
-REM %~1 = port. Asks before killing; returns errorlevel 1 if the port stays occupied.
+REM %~1 = port. Kills flight-deals holders silently, asks only for other programs; returns errorlevel 1 if the port stays occupied.
 call :scan_port %~1
 if "!PORT_PIDS!"==" " exit /b 0
 echo.
 echo [NOTICE] Port %~1 is already in use:
+set "OTHER="
 for %%P in (!PORT_PIDS!) do (
   if "%%P"=="4" (
     echo   PID 4 is a Windows system process and cannot be stopped. Reboot and try again.
     exit /b 1
   )
-  for /f "tokens=1" %%N in ('tasklist /FI "PID eq %%P" /NH') do echo   PID %%P: %%N
+  set "IS_FD="
+  REM A PID counts as flight-deals if it was in the last scan or its command line matches the same patterns as :scan_app.
+  if not "!APP_PIDS: %%P =!"=="!APP_PIDS!" set "IS_FD=1"
+  if not defined IS_FD for /f "usebackq delims=" %%Q in (`powershell -NoProfile -Command "$c = (Get-CimInstance Win32_Process -Filter 'ProcessId=%%P').CommandLine; if ($c -like '*flight-deals.exe*' -or $c -like '*-m flight_deals*' -or $c -like '*flight_deals.cli*') { 'yes' }"`) do set "IS_FD=1"
+  set "TAG="
+  if defined IS_FD set "TAG=[flight-deals]"
+  for /f "tokens=1" %%N in ('tasklist /FI "PID eq %%P" /NH') do echo   PID %%P: %%N !TAG!
+  if not defined IS_FD set "OTHER=1"
 )
-choice /c YN /n /m "Stop the old process? [Y/N] "
-if not "!errorlevel!"=="1" (
-  echo Cancelled. Not starting a second copy.
-  exit /b 1
+if defined OTHER (
+  echo   At least one process is NOT flight-deals, so we ask before stopping it.
+  choice /c YN /n /m "Stop the old process? [Y/N] "
+  if not "!errorlevel!"=="1" (
+    echo Cancelled. Not starting a second copy.
+    exit /b 1
+  )
+) else (
+  echo [REPLACE] Port holder is flight-deals only; stopping without asking.
 )
 for %%P in (!PORT_PIDS!) do taskkill /PID %%P /F /T
 call :sleep2
@@ -210,16 +245,13 @@ REM Two copies would each run a scheduler and scan the same watches twice, so an
 call :scan_app
 if "!APP_PIDS!"==" " exit /b 0
 echo.
-echo [NOTICE] An old flight-deals process is still running, PID: !APP_PIDS!
+echo [NOTICE] An old flight-deals process is running, PID: !APP_PIDS!
 REM Show a truncated command line per PID so the user can see what will be stopped.
 for %%P in (!APP_PIDS!) do powershell -NoProfile -Command "$c = (Get-CimInstance Win32_Process -Filter 'ProcessId=%%P').CommandLine; if ($c) { '  PID %%P: ' + $c.Substring(0, [Math]::Min(120, $c.Length)) }"
-echo   Two copies at once would scan every watch twice.
-choice /c YN /n /m "Stop the old flight-deals process? [Y/N] "
-if not "!errorlevel!"=="1" (
-  echo Cancelled. Not starting a second copy.
-  exit /b 1
+for %%P in (!APP_PIDS!) do (
+  echo [REPLACE] stopping old flight-deals PID %%P
+  taskkill /PID %%P /F /T >nul 2>nul
 )
-for %%P in (!APP_PIDS!) do taskkill /PID %%P /F /T >nul 2>nul
 call :sleep2
 call :scan_app
 if not "!APP_PIDS!"==" " (

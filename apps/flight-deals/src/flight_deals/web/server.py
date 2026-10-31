@@ -8,6 +8,7 @@ answers carry them too (500 pages from ``ServerErrorMiddleware`` are out of reac
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -23,7 +24,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from flight_deals.services import EXPLORATION_NOT_FOUND, Services, retention_notice
+from flight_deals.services import (
+    COMPARISON_NOT_FOUND,
+    EXPLORATION_NOT_FOUND,
+    Services,
+    retention_notice,
+)
 from flight_deals.services import airports as airport_lookup
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -40,6 +46,8 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 
+# Files whose content decides the ``?v=`` cache-busting suffix of every page.
+VERSIONED_STATIC = ("app.js", "app.css")
 JsonBody = Annotated[dict[str, Any], Body()]
 AIRPORTS_CACHE_CONTROL = "private, max-age=300"
 NO_STORE = {"Cache-Control": "no-store"}
@@ -80,6 +88,16 @@ async def require_client_header(
     return await call_next(request)
 
 
+def static_version(directory: Path = WEB_DIR / "static") -> str:
+    """First 12 hex digits of the SHA-256 over app.js and app.css: a new release gets a
+    new ``?v=`` and browsers fetch it instead of a stale cached copy."""
+    digest = hashlib.sha256()
+    for name in VERSIONED_STATIC:
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update((directory / name).read_bytes())
+    return digest.hexdigest()[:12]
+
+
 def build_templates() -> Jinja2Templates:
     env = Environment(
         loader=FileSystemLoader(str(WEB_DIR / "templates")),
@@ -99,6 +117,7 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
         openapi_url=None,
     )
     templates = build_templates()
+    version = static_version()
 
     # The last middleware added runs first. Request order, outermost first:
     # SecurityHeaders -> TrustedHost (400, DNS rebinding) -> client header (403) -> router.
@@ -108,7 +127,12 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
     def page(request: Request, name: str, context: dict[str, Any], status: int = 200) -> Response:
-        context = {"nav": name, **services.views.base_context(), **context}
+        context = {
+            "nav": name,
+            "static_version": version,
+            **services.views.base_context(),
+            **context,
+        }
         return templates.TemplateResponse(request, name, context, status_code=status)
 
     def not_found(request: Request, message: str) -> Response:
@@ -139,6 +163,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
         from_exploration: str | None = None,
         depart: str | None = None,
         mode: str | None = None,
+        from_comparison: str | None = None,
+        destination: str | None = None,
     ) -> Response:
         values = services.views.form_values(None)
         extra: dict[str, Any] = {}
@@ -147,6 +173,13 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
             assert values is not None
             values, note, sampled = services.exploration_views.watch_prefill(
                 values, from_exploration, depart, mode
+            )
+            extra = {"prefill_note": note, "prefill_sampled_note": sampled}
+        elif from_comparison is not None:
+            # Same rule for a comparison row (FD-9 FR-W1).
+            assert values is not None
+            values, note, sampled = services.comparison_views.watch_prefill(
+                values, from_comparison, destination
             )
             extra = {"prefill_note": note, "prefill_sampled_note": sampled}
         return page(
@@ -158,6 +191,17 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
     @app.get("/explore", response_class=HTMLResponse)
     def explore(request: Request) -> Response:
         return page(request, "explore.html", services.exploration_views.explore_page())
+
+    @app.get("/explore/compare", response_class=HTMLResponse)
+    def compare(request: Request) -> Response:
+        return page(request, "compare.html", services.comparison_views.compare_page())
+
+    @app.get("/comparisons/{comparison_id}", response_class=HTMLResponse)
+    def comparison_detail(request: Request, comparison_id: int, reused: str = "") -> Response:
+        data = services.comparison_views.comparison_page(comparison_id, reused=reused == "1")
+        if data is None:
+            return not_found(request, COMPARISON_NOT_FOUND)
+        return page(request, "comparison.html", data)
 
     @app.get("/explorations/{exploration_id}", response_class=HTMLResponse)
     def exploration_detail(request: Request, exploration_id: int) -> Response:
@@ -226,7 +270,38 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
             )
         return JSONResponse(status, headers=NO_STORE)
 
+    @app.get("/api/comparisons/{comparison_id}/status")
+    def api_comparison_status(comparison_id: int) -> JSONResponse:
+        # C-64: read-only, four whitelisted fields, never cached, no header needed.
+        status = services.comparison.status(comparison_id)
+        if status is None:
+            return JSONResponse(
+                {"ok": False, "errors": {"_": COMPARISON_NOT_FOUND}},
+                status_code=404,
+                headers=NO_STORE,
+            )
+        return JSONResponse(status, headers=NO_STORE)
+
     # ---- JSON write API ----------------------------------------------------------
+
+    @app.post("/api/comparisons")
+    def api_create_comparison(payload: JsonBody) -> JSONResponse:
+        result = services.comparison.create(payload)
+        if result.status == "invalid":
+            return errors_response(result.errors)
+        if result.ok:
+            return JSONResponse(
+                {"ok": True, "id": result.comparison_id, "reused": result.status == "reused"},
+                status_code=202 if result.status == "created" else 200,
+            )
+        body: dict[str, Any] = {"ok": False, "code": result.status, "message": result.message}
+        if result.status == "quota":
+            body.update(hourly_left=result.hourly_left, needed=result.needed)
+        if result.comparison_id is not None:
+            body["id"] = result.comparison_id
+        if result.progress_url is not None:
+            body["progress_url"] = result.progress_url
+        return JSONResponse(body, status_code=409)
 
     @app.post("/api/explorations")
     def api_create_exploration(payload: JsonBody) -> JSONResponse:

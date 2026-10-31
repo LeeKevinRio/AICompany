@@ -181,11 +181,15 @@ class HealthService:
 
     def no_embedded_summary(self, now: datetime) -> dict[str, int] | None:
         """24-hour "results not embedded" ratio hint: one scan_run SELECT plus one
-        exploration_cell count. Display only: no alert, no breaker effect (FR-H3)."""
+        exploration_cell and one comparison_cell count. Display only: no alert, no breaker
+        effect (FR-H3)."""
         since = now - NO_EMBEDDED_WINDOW
         counts = no_embedded_counts(
             self._repo.scan_query_results_since(since),
-            self._repo.exploration_cell_counts_since(since),
+            [
+                *self._repo.exploration_cell_counts_since(since),
+                *self._repo.comparison_cell_counts_since(since),
+            ],
         )
         return no_embedded_hint(
             counts,

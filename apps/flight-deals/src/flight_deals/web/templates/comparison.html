@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}比價結果{% endblock %}
+{% block content %}
+{% set c = comparison %}
+<div class="page-head">
+  <h1>{{ c.origin_label }}・{{ c.total }} 個目的地比價</h1>
+  <a class="button" href="/explore/compare">返回比價</a>
+</div>
+
+<section class="card">
+  <dl class="facts">
+    <dt>行程</dt><dd>{{ c.trip_type_label }}・{{ c.dates_label }}</dd>
+    <dt>人數與艙等</dt><dd>{{ c.pax_label }}・{{ c.cabin_label }}</dd>
+    <dt>條件</dt><dd>{{ c.max_stops_label }}</dd>
+    <dt>狀態</dt><dd><span class="badge">{{ c.status_label }}</span>・已查 {{ c.done }}／共 {{ c.total }}・對外查詢 {{ c.queries_used }} 次</dd>
+    <dt>建立時間</dt><dd>{{ c.created_at_label }}</dd>
+    {% if c.finished_at_label %}<dt>結束時間</dt><dd>{{ c.finished_at_label }}</dd>{% endif %}
+  </dl>
+  {% if c.reused_note %}<p class="notice" id="comparison-reused-note">{{ c.reused_note }}</p>{% endif %}
+  {% if c.stale and c.stale_note %}<p class="notice" id="comparison-stale-note">{{ c.stale_note }}</p>{% endif %}
+  {% if c.deferred_note %}<p class="notice" id="comparison-deferred-note">{{ c.deferred_note }}</p>{% endif %}
+  {% if c.error_summary %}<p class="notice" id="comparison-error">{{ c.error_summary }}</p>{% endif %}
+</section>
+
+<section class="card" id="comparison-notes">
+  {% if reference_note %}<p class="disclaimer" id="comparison-reference-note">{{ reference_note }}</p>{% endif %}
+  <p class="disclaimer">{{ disclaimer }}</p>
+</section>
+
+{% if c.status in ("queued", "running") %}
+<section class="card" id="comparison-progress" data-total="{{ c.total }}" data-done="{{ c.done }}" data-status-url="/api/comparisons/{{ c.id }}/status">
+  <h2>查詢進度</h2>
+  <p role="status" aria-live="polite"><span id="progress-text">已查 {{ c.done }}／共 {{ c.total }}</span></p>
+  <progress id="progress-bar" max="{{ c.total }}" value="{{ c.done }}" aria-label="比價進度">{{ c.done }}／{{ c.total }}</progress>
+  <p class="hint">頁面會自動更新進度，完成後顯示比價結果。比價進行中，排程掃描將於比價結束後執行。</p>
+  <p id="progress-note" class="notice" role="status" hidden>仍在背景執行，可稍後重新整理。</p>
+  <noscript><p class="hint">未啟用 JavaScript，請手動重新整理頁面查看進度。</p></noscript>
+</section>
+{% else %}
+<section class="card" id="comparison-results">
+  <h2>比價結果</h2>
+  {% if order_note %}<p class="muted">{{ order_note }}</p>{% endif %}
+  {% if no_price_note %}<p class="muted" id="comparison-no-price-note">{{ no_price_note }}</p>{% endif %}
+  {% if single_date_note %}<p class="muted" id="comparison-single-date-note">{{ single_date_note }}</p>{% endif %}
+  {% if rows %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="比價結果（可橫向捲動）">
+  <table class="data comparison">
+    <caption class="sr-only">各目的地的 1 人總價，由低到高排列</caption>
+    <thead>
+      <tr><th scope="col">目的地</th><th scope="col">總價</th><th scope="col">航空</th><th scope="col">轉機</th><th scope="col">飛行時間</th><th scope="col">出發時刻</th><th scope="col">查到時間</th><th scope="col">連結</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <th scope="row">{{ r.destination_label }}</th>
+        {% if r.priced %}
+        <td class="num">{{ r.amount_label }}<div class="muted">{{ c.pax_note }}</div>{% if r.rank_note %}<div class="hint">{{ r.rank_note }}</div>{% endif %}</td>
+        <td>{{ r.carrier or "—" }}</td>
+        <td>{{ r.stops_label or "—" }}</td>
+        <td class="num">{{ r.duration_label or "—" }}</td>
+        <td class="num">{{ r.depart_time or "—" }}</td>
+        <td>{{ r.fetched_at_label or "—" }}</td>
+        {% else %}
+        <td colspan="6"><span class="cal-status">{{ r.label }}</span></td>
+        {% endif %}
+        <td><div class="actions">
+          {% if r.booking_url %}<a href="{{ r.booking_url }}" target="_blank" rel="noopener noreferrer">查票<span class="sr-only">（{{ r.destination_label }}，另開新分頁）</span></a>{% endif %}
+          {% if r.watch_url %}<a href="{{ r.watch_url }}">建立監看<span class="sr-only">（{{ r.destination_label }}）</span></a>{% endif %}
+          {% if r.booking_note %}<span class="hint">{{ r.booking_note }}</span>{% endif %}
+          {% if not r.booking_url and not r.watch_url and not r.booking_note %}<span class="muted">—</span>{% endif %}
+        </div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">沒有可顯示的比價結果。</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -235,8 +235,78 @@ class ExplorationSpec:
         )
 
 
+@dataclass(frozen=True)
+class ComparisonTarget:
+    """One destination of a comparison as query conditions (satisfies SearchConditions).
+
+    Comparisons have no airline or departure-hour filter and always mean 1 adult
+    (ADR-0002 FD-9 Decision 2)."""
+
+    origin: str
+    destination: str
+    max_stops: int | None
+    cabin: Cabin = "economy"
+    adults: int = 1
+    children: int = 0
+    airlines: tuple[str, ...] = ()
+    dep_hour_from: int | None = None
+    dep_hour_to: int | None = None
+
+
+@dataclass(frozen=True)
+class ComparisonSpec:
+    """One date pair compared across 2-8 destinations (already validated; FD-9).
+
+    ``destinations`` keeps the input order (it decides ties); ``return_date`` is None
+    exactly for one-way trips. Passengers are fixed at 1 adult.
+    """
+
+    origin: str
+    destinations: tuple[str, ...]
+    trip_type: TripType
+    depart_date: date
+    return_date: date | None
+    max_stops: int | None
+    cabin: Cabin = "economy"
+    currency: str = "TWD"
+    adults: int = 1
+    children: int = 0
+
+    @property
+    def pair(self) -> DatePair:
+        return DatePair(self.depart_date, self.return_date)
+
+    def target(self, destination: str) -> ComparisonTarget:
+        return ComparisonTarget(
+            origin=self.origin,
+            destination=destination,
+            max_stops=self.max_stops,
+            cabin=self.cabin,
+            adults=self.adults,
+            children=self.children,
+        )
+
+    def condition_key(self) -> str:
+        """Equality key for reuse: destinations as a sorted set, unset values as "-"."""
+        return "|".join(
+            [
+                "cmp1",
+                self.origin,
+                ",".join(sorted(set(self.destinations))),
+                self.trip_type,
+                self.depart_date.isoformat(),
+                self.return_date.isoformat() if self.return_date else "-",
+                "-" if self.max_stops is None else str(self.max_stops),
+                str(self.adults),
+                str(self.children),
+                self.cabin,
+                self.currency,
+            ]
+        )
+
+
 def search_for(cond: SearchConditions, pair: DatePair, currency: str) -> FlightSearch:
-    """The only place a ``FlightSearch`` is built (scans, explorations, booking links)."""
+    """The only place a ``FlightSearch`` is built (scans, explorations, comparisons, links)."""
     spec = cond
     return FlightSearch(
         origin=spec.origin,

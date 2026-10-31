@@ -19,7 +19,10 @@ from flight_deals.domain.trip_labels import (
     BOOKING_FALLBACK_NOTE,
     cabin_label,
     filter_line,
+    flight_duration_label,
+    pax_full_label,
     pax_label,
+    stay_range_label,
     total_price_note,
 )
 from flight_deals.domain.trip_labels import static_texts as trip_static_texts
@@ -47,6 +50,8 @@ BANNED_PHRASES: tuple[str, ...] = (
     "把握",
     "趁",
     "下手",
+    "推薦",
+    "最佳",
 )
 
 SOURCE_LABELS: dict[str, str] = {
@@ -398,6 +403,197 @@ def exploration_static_texts() -> list[str]:
         exploration_reused_note(3),
         exploration_sampled_note(12),
         month_label(2026, 12),
+    ]
+
+
+# ---- multi-destination comparison (ADR-0002 FD-9 Decisions 4-6) ----------------------
+
+COMPARISON_STATUS_LABELS: dict[str, str] = {
+    "queued": "排隊中",
+    "running": "進行中",
+    "done": "已完成",
+    "failed": "已中斷",
+}
+COMPARISON_ROW_LABELS: dict[str, str] = {
+    "ok": "查到價格",
+    "pending": "查詢中",
+    "no_data": "查無航班",
+    "no_embedded_results": "未內嵌結果（請用查票連結人工確認）",
+    "blocked": "被擋或查詢失敗",
+    "error": "被擋或查詢失敗",
+    "currency_mismatch": "幣別不符，未列入排序",
+    "global_hourly_limit": "未查詢（額度不足）",
+    "breaker_open": "未查詢（資料源暫停查詢）",
+    "interrupted": "未查詢（已中斷）",
+}
+COMPARISON_REFERENCE_NOTE = "比價結果為查詢當下參考值，不會寫入任何監看的價格紀錄，也不會推播。"
+COMPARISON_ORDER_NOTE = (
+    "有價格的目的地依 1 人總價由低到高排列，同價依加入順序；"
+    "沒有價格的目的地依加入順序列在後面。排列只依價格，未比較飛行時間與轉機。"
+)
+COMPARISON_NO_PRICE_NOTE = (
+    "沒有價格的目的地未參與比較，不代表沒有機票或價格較高；可用查票連結自行確認。"
+)
+COMPARISON_SINGLE_DATE_NOTE = "只比較這一組日期，其他日期的價格可能不同。"
+COMPARISON_BUSY = "已有比價進行中，同一時間只能進行一個比價或探索"
+COMPARISON_BLOCKED_BY_EXPLORATION = "已有探索進行中，同一時間只能進行一個比價或探索"
+COMPARISON_SCHEDULER_OFF = "排程器未執行，無法在背景比價；請以一般方式啟動服務後再試"
+COMPARISON_NOT_FOUND = "比價已過期或不存在（比價結果保留 7 天）。"
+COMPARISON_RESTARTED = "服務重啟，比價中斷；未查的目的地不會自動補查"
+COMPARISON_DEFERRED_NOTE = "比價進行中，排程掃描與立即查價會順延到比價結束後執行"
+COMPARISON_PREFILL_OK = "已由比價帶入條件，請確認後送出"
+COMPARISON_PREFILL_MISSING = "找不到對應的比價結果，請手動填寫"
+COMPARISON_HOURLY_LIMIT = "已達全域每小時查詢上限"
+COMPARISON_BREAKER_OPEN = "資料源異常（斷路器開啟）"
+COMPARISON_LOCK_TIMEOUT = "掃描佔用過久，比價未執行"
+COMPARISON_PAX_LABEL = pax_full_label(1, 0)
+COMPARISON_NO_LIMIT_STOPS = "轉機不限"
+# Validation (FD-9 Decision 2); field keys follow the request body.
+COMPARISON_DESTINATIONS_INVALID = "目的地格式不正確，請從下拉選取"
+COMPARISON_DESTINATIONS_COUNT = "目的地需選 2 到 8 個"
+COMPARISON_DATE_INPUT_INVALID = "日期輸入方式不正確"
+# Watch detail page: prices exist but every one of them has departed (FD-9 F2).
+DETAIL_ALL_DEPARTED = "已查到的價格，其出發日皆已過，無可顯示的最新價格。"
+
+
+def comparison_destination_unknown(code: str) -> str:
+    return f"找不到目的地 {code}，請從下拉選取"
+
+
+def comparison_destination_unverified(code: str) -> str:
+    return f"目的地 {code} 的城市代碼尚未確認可查價，請改選個別機場"
+
+
+def comparison_destination_duplicate(first: str, second: str) -> str:
+    if first == second:
+        return f"目的地 {first} 重複"
+    return f"目的地 {first} 與 {second} 重複（城市代碼已包含其機場）"
+
+
+def comparison_destination_is_origin(code: str) -> str:
+    return f"目的地 {code} 與出發地相同"
+
+
+def comparison_destination_same_city(code: str) -> str:
+    return f"目的地 {code} 與出發地為同一城市"
+
+
+def comparison_stay_too_far(latest: date) -> str:
+    return f"依旅程天數計算的回程日不可晚於今天起 365 天（{latest.isoformat()}）"
+
+
+def comparison_quota_message(hourly_left: int, needed: int, reserve: int) -> str:
+    text = f"本小時剩餘額度 {hourly_left} 次"
+    if reserve > 0:
+        text += f"（需保留 {reserve} 次給排程掃描）"
+    return f"{text}，本次需要 {needed} 次，本小時額度不足以開始比價，請稍後再試"
+
+
+def comparison_skipped_note(reason: str, count: int) -> str:
+    return f"{reason}，{count} 個目的地未查"
+
+
+def comparison_unfinished_note(done: int, total: int, reason: str) -> str:
+    return f"比價未完成（已查 {done}／共 {total}），原因：{reason}"
+
+
+def comparison_age_note(hours: int) -> str:
+    """Result older than 24 hours (same wording as the exploration note, own function)."""
+    return f"價格為 {hours} 小時前查到，可能已變動"
+
+
+def comparison_created_ago(hours: int) -> str:
+    """Recent-list age of a comparison created more than 24 hours ago."""
+    return f"{hours} 小時前"
+
+
+def comparison_progress_label(done: int, total: int) -> str:
+    return f"已查 {done}／共 {total}"
+
+
+def comparison_reused_note(hours: int) -> str:
+    return f"顯示 {hours} 小時前的比價結果"
+
+
+def comparison_busy_message(path: str) -> str:
+    """409 text naming the progress page of whatever is running (exploration or not)."""
+    text = (
+        COMPARISON_BLOCKED_BY_EXPLORATION if path.startswith("/explorations/") else COMPARISON_BUSY
+    )
+    return f"{text}（進度：{path}）"
+
+
+def comparison_crashed(detail: str) -> str:
+    return f"比價中斷：{detail}"
+
+
+def comparison_stops_label(max_stops: int | None) -> str:
+    if max_stops is None:
+        return COMPARISON_NO_LIMIT_STOPS
+    return "僅直飛" if max_stops == 0 else f"最多轉機 {max_stops} 次"
+
+
+def comparison_dates_label(depart: date, return_date: date | None) -> str:
+    if return_date is None:
+        return f"{depart.isoformat()} 出發"
+    return f"{depart.isoformat()} 出發，{return_date.isoformat()} 回程"
+
+
+def comparison_static_texts() -> list[str]:
+    """Wording added by FD-9 (comparison and the three follow-ups), for the policy tests."""
+    return [
+        *COMPARISON_STATUS_LABELS.values(),
+        *COMPARISON_ROW_LABELS.values(),
+        COMPARISON_REFERENCE_NOTE,
+        COMPARISON_ORDER_NOTE,
+        COMPARISON_NO_PRICE_NOTE,
+        COMPARISON_SINGLE_DATE_NOTE,
+        COMPARISON_BUSY,
+        COMPARISON_BLOCKED_BY_EXPLORATION,
+        COMPARISON_SCHEDULER_OFF,
+        COMPARISON_NOT_FOUND,
+        COMPARISON_RESTARTED,
+        COMPARISON_DEFERRED_NOTE,
+        COMPARISON_PREFILL_OK,
+        COMPARISON_PREFILL_MISSING,
+        COMPARISON_HOURLY_LIMIT,
+        COMPARISON_BREAKER_OPEN,
+        COMPARISON_LOCK_TIMEOUT,
+        COMPARISON_PAX_LABEL,
+        COMPARISON_NO_LIMIT_STOPS,
+        COMPARISON_DESTINATIONS_INVALID,
+        COMPARISON_DESTINATIONS_COUNT,
+        COMPARISON_DATE_INPUT_INVALID,
+        DETAIL_ALL_DEPARTED,
+        comparison_destination_unknown("XYZ"),
+        comparison_destination_unverified("SPK"),
+        comparison_destination_duplicate("NRT", "NRT"),
+        comparison_destination_duplicate("TYO", "NRT"),
+        comparison_destination_is_origin("TPE"),
+        comparison_destination_same_city("TSA"),
+        comparison_stay_too_far(date(2027, 10, 25)),
+        comparison_quota_message(15, 8, 12),
+        comparison_quota_message(3, 8, 0),
+        comparison_skipped_note(COMPARISON_HOURLY_LIMIT, 3),
+        comparison_unfinished_note(3, 8, COMPARISON_BREAKER_OPEN),
+        comparison_reused_note(3),
+        comparison_age_note(25),
+        comparison_created_ago(30),
+        comparison_progress_label(3, 8),
+        comparison_busy_message("/comparisons/3"),
+        comparison_busy_message("/explorations/3"),
+        comparison_crashed("RuntimeError: disk full"),
+        comparison_stops_label(None),
+        comparison_stops_label(0),
+        comparison_stops_label(1),
+        comparison_dates_label(date(2026, 12, 10), date(2026, 12, 15)),
+        comparison_dates_label(date(2026, 12, 10), None),
+        stay_range_label(4, 4),
+        stay_range_label(3, 5),
+        flight_duration_label(205) or "",
+        flight_duration_label(180) or "",
+        flight_duration_label(45) or "",
+        scan_scheduled_text(12),
     ]
 
 
@@ -788,6 +984,11 @@ class CommandScanResult:
     stale_after_hours: int = 24
 
 
+def scan_scheduled_text(sampled: int) -> str:
+    """``/scan`` round that sent no query: only the scheduled pairs are stated (FD-9 F1)."""
+    return f"本輪排定 {sampled} 組日期，未對外查詢"
+
+
 def command_scan_result_message(result: CommandScanResult) -> str:
     title = f"{COMMAND_PREFIX} /scan #{result.watch_id}「{_short_name(result.name)}」"
     lines: list[str] = []
@@ -798,7 +999,10 @@ def command_scan_result_message(result: CommandScanResult) -> str:
         lines.append(f"{title} 查價完成（{label}）")
         if result.failure_reason:
             lines.append(f"本輪未查到價格：{result.failure_reason}")
-        lines.append(f"本輪取樣 {result.sampled} 組日期，對外查詢 {result.queries_used} 次")
+        if result.queries_used == 0:
+            lines.append(scan_scheduled_text(result.sampled))
+        else:
+            lines.append(f"本輪取樣 {result.sampled} 組日期，對外查詢 {result.queries_used} 次")
         if result.skip_notes:
             lines.append("略過：" + "；".join(result.skip_notes))
     if result.amount_minor is not None and result.depart_date is not None:
@@ -1108,4 +1312,5 @@ def all_static_texts() -> list[str]:
         *exploration_static_texts(),
         *command_static_texts(),
         *retention_static_texts(),
+        *comparison_static_texts(),
     ]

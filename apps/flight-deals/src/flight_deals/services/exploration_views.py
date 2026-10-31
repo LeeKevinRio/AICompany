@@ -43,6 +43,7 @@ from flight_deals.services.views import (
     NO_EMBEDDED_REASON,
     NO_MATCH_LABEL,
     ViewService,
+    active_comparison_view,
     active_exploration_view,
     price_levels,
 )
@@ -164,6 +165,7 @@ class ExplorationViewService:
                 for r in self._repo.list_explorations_since(now - timedelta(days=LIST_DAYS))
             ],
             "active": active_exploration_view(self._repo),
+            "active_comparison": active_comparison_view(self._repo),
             "today": today.isoformat(),
             "disclaimer": DISCLAIMER,
         }

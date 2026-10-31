@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from flight_deals.domain.messages import EXPLORATION_NOT_FOUND
+from flight_deals.domain.messages import COMPARISON_NOT_FOUND, EXPLORATION_NOT_FOUND
 from flight_deals.domain.models import Watch
 from flight_deals.ports import Clock
 from flight_deals.services.commands import CommandService
+from flight_deals.services.comparison import ComparisonService
+from flight_deals.services.comparison_views import ComparisonViewService
 from flight_deals.services.digest import DIGEST_ZONE, DigestService
 from flight_deals.services.exploration import ExplorationService
 from flight_deals.services.exploration_views import ExplorationViewService
@@ -33,6 +35,9 @@ class Services:
     digest: DigestService
     exploration: ExplorationService
     exploration_views: ExplorationViewService
+    # Multi-destination comparison (FD-9).
+    comparison: ComparisonService
+    comparison_views: ComparisonViewService
     # Telegram commands (FD-7); None when assembled without them.
     commands: CommandService | None = None
     # Daily purge and weekly VACUUM (FD-7); None when assembled without them.
@@ -40,9 +45,12 @@ class Services:
 
 
 __all__ = [
+    "COMPARISON_NOT_FOUND",
     "EXPLORATION_NOT_FOUND",
     "Clock",
     "CommandService",
+    "ComparisonService",
+    "ComparisonViewService",
     "DIGEST_ZONE",
     "DigestService",
     "ExplorationService",

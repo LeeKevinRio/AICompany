@@ -26,7 +26,7 @@
     {% if watch.return_date %}<dt>回程日</dt><dd>{{ watch.return_date }}</dd>{% endif %}
     {% if watch.window_start %}<dt>最早出發日</dt><dd>{{ watch.window_start }}</dd>{% endif %}
     {% if watch.window_end %}<dt>{% if watch.trip == "來回" %}最晚回程日{% else %}最晚出發日{% endif %}</dt><dd>{{ watch.window_end }}</dd>{% endif %}
-    {% if watch.min_trip_days %}<dt>旅程天數</dt><dd>{{ watch.min_trip_days }}–{{ watch.max_trip_days }} 天</dd>{% endif %}
+    {% if watch.min_trip_days %}<dt>旅程天數</dt><dd>{{ watch.stay_label }}</dd>{% endif %}
     <dt>預算門檻</dt><dd>{{ watch.budget }}</dd>
     <dt>轉機</dt><dd>{{ watch.max_stops }}</dd>
     <dt>人數</dt><dd>{{ watch.pax_full_label or "—" }}</dd>
@@ -53,10 +53,13 @@
 </section>
 {% else %}
 <section class="card">
-  <h2>最便宜的日期組合（前 {{ top|length }} 筆）</h2>
+  <h2>最便宜的日期組合{% if top %}（前 {{ top|length }} 筆）{% endif %}</h2>
   <p class="disclaimer">{{ disclaimer }}</p>
   <p class="muted">{{ sampled_only_note }}</p>
   {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
+  {% if top_empty_note %}
+  <p class="notice" id="top-empty-note">{{ top_empty_note }}</p>
+  {% else %}
   <p class="muted">每個日期組合取最近一次查到的價格，依價格由低到高排列。超過 {{ stale_hours }} 小時未更新的價格標示「可能已過期」。</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜日期組合（可橫向捲動）">
   <table class="data">
@@ -78,6 +81,7 @@
     </tbody>
   </table>
   </div>
+  {% endif %}
 </section>
 
 <section class="card">

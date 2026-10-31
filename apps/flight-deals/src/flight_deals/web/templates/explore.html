@@ -10,6 +10,15 @@
 <p class="notice"><a href="/explorations/{{ active.id }}">探索進行中（{{ active.done }}/{{ active.total }}）</a>，同一時間只能進行一個探索；排程掃描會在探索完成後依序執行。</p>
 {% endif %}
 
+{% if active_comparison %}
+<p class="notice"><a href="/comparisons/{{ active_comparison.id }}">比價進行中（{{ active_comparison.done }}/{{ active_comparison.total }}）</a>，同一時間只能進行一個探索或比價；排程掃描會在比價完成後依序執行。</p>
+{% endif %}
+<section class="card entry-card">
+  <h2>多目的地比價</h2>
+  <p>固定一組日期，對 2 至 8 個目的地各查一次，依 1 位成人的總價由低到高排列。</p>
+  <p><a class="button" href="/explore/compare">前往多目的地比價</a></p>
+</section>
+
 <form id="explore-form" class="form" novalidate data-url="/api/explorations">
   <p class="form-error" data-error-for="_" role="alert"></p>
 

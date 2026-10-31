@@ -17,6 +17,8 @@ from typing import Literal, Protocol
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "flight-deals"
 BACKGROUND_FLAG = "--background"
+# A login start stops a previous instance still holding the database (CEO 2026-10-31).
+REPLACE_FLAG = "--replace"
 
 
 class Registry(Protocol):
@@ -80,7 +82,7 @@ def pythonw_path(project_dir: Path) -> Path:
 
 def expected_command(project_dir: Path) -> str:
     """The Run value this checkout installs (no secrets: those stay in ``.env``)."""
-    return f'"{pythonw_path(project_dir)}" -m flight_deals.cli {BACKGROUND_FLAG}'
+    return f'"{pythonw_path(project_dir)}" -m flight_deals.cli {BACKGROUND_FLAG} {REPLACE_FLAG}'
 
 
 def _normalise(command: str) -> str:

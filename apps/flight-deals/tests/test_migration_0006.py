@@ -50,7 +50,8 @@ def build_v5_db(path: Path, monkeypatch: pytest.MonkeyPatch) -> Database:
     database = build_v4_db(path, monkeypatch)
     monkeypatch.setattr(db_module, "available_migrations", only_up_to(5))
     assert database.migrate() == 5
-    monkeypatch.setattr(db_module, "available_migrations", ORIGINAL_MIGRATIONS)
+    # Later migrations (0007+) have their own tests; stop at 6 here.
+    monkeypatch.setattr(db_module, "available_migrations", only_up_to(6))
     return database
 
 

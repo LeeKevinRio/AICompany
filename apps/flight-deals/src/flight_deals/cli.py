@@ -11,6 +11,9 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import os
+import signal
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -28,6 +31,7 @@ from flight_deals.app import (
     build_telegram_setup_client,
     create_app,
     protect_secret,
+    scheduler_lock_holder_pid,
 )
 from flight_deals.config import (
     BIND_HOST,
@@ -52,6 +56,10 @@ SETUP_LONG_POLL_SECONDS = 10
 SETUP_MIN_POLL_GAP_SECONDS = 1.0
 # Unconfirmed updates come back at once on every call (offset is never sent).
 SETUP_NONEMPTY_GAP_SECONDS = 2.0
+# --replace: how long to wait for the previous instance to let go of the lock.
+REPLACE_TIMEOUT_SECONDS = 15.0
+REPLACE_RETRY_SECONDS = 0.5
+_STILL_ACTIVE = 259  # GetExitCodeProcess value of a running process (Windows)
 
 
 def build_uvicorn_kwargs(port: int) -> dict[str, Any]:
@@ -75,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"no console: log to {LOG_FILE_NAME} next to the database (login autostart)",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="stop a previous instance holding this database's scheduler lock, then start",
+    )
     commands = parser.add_subparsers(dest="command", metavar="<command>")
     commands.add_parser("telegram-setup", help="find your Telegram chat id and send a test")
     auto = commands.add_parser("autostart", help="Windows login autostart (current user)")
@@ -88,13 +101,13 @@ def main(argv: list[str] | None = None) -> int:
         return run_telegram_setup()
     if args.command == "autostart":
         return run_autostart(args.action)
-    return serve(port=args.port, debug=args.debug, background=args.background)
+    return serve(port=args.port, debug=args.debug, background=args.background, replace=args.replace)
 
 
 # ---- service ----------------------------------------------------------------------
 
 
-def serve(*, port: int | None, debug: bool, background: bool) -> int:
+def serve(*, port: int | None, debug: bool, background: bool, replace: bool = False) -> int:
     level = logging.DEBUG if debug else logging.INFO
     if not background:
         setup_logging(level)
@@ -108,7 +121,7 @@ def serve(*, port: int | None, debug: bool, background: bool) -> int:
     if background:
         setup_file_logging(config.db_path.parent / LOG_FILE_NAME, level)
     try:
-        return _serve(config, port or config.port)
+        return _serve(config, port or config.port, replace=replace)
     except Exception:
         # pythonw has no stderr: without this the traceback of e.g. a failed migration
         # would vanish. Logged through the redacting handler (file or stderr).
@@ -116,10 +129,172 @@ def serve(*, port: int | None, debug: bool, background: bool) -> int:
         return EXIT_FAILED
 
 
-def _serve(config: Config, listen_port: int) -> int:
+def _kernel32() -> Any:
+    """kernel32 with explicit prototypes (HANDLE is pointer sized on 64-bit Windows)."""
+    if sys.platform != "win32":  # pragma: no cover - only called on Windows
+        raise OSError("kernel32 is Windows only")
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k.GetExitCodeProcess.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.CloseHandle.restype = wintypes.BOOL
+    k.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    return k
+
+
+_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def process_alive(pid: int) -> bool:
+    """True if a process with this PID exists (never signals it)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = _kernel32()
+        handle = kernel32.OpenProcess(_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == _STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _process_command(pid: int) -> str | None:
+    """Image path (Windows) or command line (elsewhere) of a process, None if unknown."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = _kernel32()
+        handle = kernel32.OpenProcess(_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            return buffer.value
+        finally:
+            kernel32.CloseHandle(handle)
+    proc = Path(f"/proc/{pid}/cmdline")
+    try:
+        if proc.exists():
+            return proc.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def is_flight_deals_process(pid: int) -> bool:
+    """Identity check before terminating: on Windows the image file name starts with
+    "python" (python.exe / pythonw.exe); elsewhere the command line names flight-deals."""
+    command = _process_command(pid)
+    if not command:
+        return False
+    if sys.platform == "win32":
+        return Path(command).name.lower().startswith("python")
+    return "flight_deals" in command or "flight-deals" in command
+
+
+def terminate_process(pid: int) -> None:
+    """Stop the previous instance (and its children on Windows)."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            check=False,
+            timeout=REPLACE_TIMEOUT_SECONDS,
+        )
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
+@dataclass
+class ReplaceHooks:
+    """Process and clock hooks of ``--replace`` (replaced in tests)."""
+
+    alive: Callable[[int], bool] = process_alive
+    is_ours: Callable[[int], bool] = is_flight_deals_process
+    terminate: Callable[[int], None] = terminate_process
+    sleep: Callable[[float], None] = time.sleep
+    monotonic: Callable[[], float] = time.monotonic
+
+
+REPLACE_HOOKS = ReplaceHooks()
+
+
+def take_lock(config: Config, *, replace: bool, hooks: ReplaceHooks | None = None) -> Any:
+    """The scheduler lock; with ``replace`` a live holder (by its header PID) is stopped
+    first and the lock retried every 0.5 s for up to 15 s. Without ``replace``, when the
+    PID is our own or the header cannot be read, the held error is raised unchanged."""
+    hooks = hooks or REPLACE_HOOKS
+    try:
+        return acquire_scheduler_lock(config)
+    except SchedulerLockHeldError:
+        if not replace:
+            raise
+        pid = scheduler_lock_holder_pid(config)
+        if pid is None or pid == os.getpid():
+            raise
+        if hooks.alive(pid):
+            if not hooks.is_ours(pid):
+                log.warning(
+                    "lock holder pid=%d is not a flight-deals process; not terminating", pid
+                )
+            else:
+                log.info("replacing previous instance pid=%d", pid)
+                try:
+                    hooks.terminate(pid)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    # Keep retrying: the holder may still exit on its own.
+                    log.warning("could not terminate pid=%d: %s", pid, exc)
+    deadline = hooks.monotonic() + REPLACE_TIMEOUT_SECONDS
+    while True:
+        hooks.sleep(REPLACE_RETRY_SECONDS)
+        try:
+            return acquire_scheduler_lock(config)
+        except SchedulerLockHeldError:
+            if hooks.monotonic() >= deadline:
+                raise
+
+
+def _serve(config: Config, listen_port: int, *, replace: bool = False) -> int:
     # Before building the app (and migrating the DB): one scheduler per database.
     try:
-        lock = acquire_scheduler_lock(config)
+        lock = take_lock(config, replace=replace)
     except SchedulerLockHeldError as exc:
         log.error("refusing to start: %s", exc)
         return EXIT_CONFIG

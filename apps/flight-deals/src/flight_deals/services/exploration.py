@@ -24,6 +24,7 @@ from flight_deals.domain.messages import (
     EXPLORATION_NO_DATES,
     EXPLORATION_RESTARTED,
     EXPLORATION_SCHEDULER_OFF,
+    comparison_busy_message,
     exploration_quota_message,
     exploration_skipped_note,
 )
@@ -140,6 +141,7 @@ class ExplorationService:
         retention_days: int,
         clock: Clock,
         redactor: Redactor,
+        create_lock: threading.Lock | None = None,
     ) -> None:
         self._repo = repo
         self._query = SourceQuery(sources, health, clock=clock, redactor=redactor)
@@ -153,7 +155,8 @@ class ExplorationService:
         self._clock = clock
         self._redact = redactor
         # Serialises create() calls from concurrent web requests (one exploration at a time).
-        self._create_lock = threading.Lock()
+        # app.py shares it with ComparisonService.create (FD-9 Decision 3).
+        self._create_lock = create_lock or threading.Lock()
         self.hooks = ExplorationHooks()
 
     @property
@@ -199,6 +202,12 @@ class ExplorationService:
                     "busy",
                     active.id,
                     message=f"{EXPLORATION_BUSY}（進度：/explorations/{active.id}）",
+                )
+            comparing = self._repo.active_comparison()
+            if comparing is not None:
+                # FD-9: a running comparison blocks explorations too (no id: not ours).
+                return CreateResult(
+                    "busy", message=comparison_busy_message(f"/comparisons/{comparing.id}")
                 )
             if not self.hooks.scheduler_running():
                 return CreateResult("scheduler_off", message=EXPLORATION_SCHEDULER_OFF)

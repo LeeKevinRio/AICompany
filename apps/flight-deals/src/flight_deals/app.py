@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
+import threading
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -39,6 +41,8 @@ from flight_deals.scheduler import (
 )
 from flight_deals.services import (
     CommandService,
+    ComparisonService,
+    ComparisonViewService,
     DigestService,
     ExplorationService,
     ExplorationViewService,
@@ -78,6 +82,7 @@ __all__ = [
     "build_telegram_setup_client",
     "create_app",
     "protect_secret",
+    "scheduler_lock_holder_pid",
     "scheduler_lock_path",
 ]
 
@@ -286,6 +291,8 @@ def assemble(
         source_names=[s.name for s in active_sources],
         clock=clock,
     )
+    # One create lock for explorations and comparisons: one batch at a time (FD-9).
+    batch_create_lock = threading.Lock()
     # Same source objects (cache, throttle) and scan lock as the scans (FD-6 Decision 3).
     exploration = ExplorationService(
         repo,
@@ -299,9 +306,27 @@ def assemble(
         retention_days=limits.exploration_retention_days,
         clock=clock,
         redactor=redact,
+        create_lock=batch_create_lock,
     )
     exploration_views = ExplorationViewService(
         repo, settings, exploration, clock=clock, link_builder=links
+    )
+    # Comparisons share the sources, scan lock, reuse and retention periods (FD-9).
+    comparison = ComparisonService(
+        repo,
+        scan.sources,
+        health,
+        notifications,
+        settings,
+        scan_lock=scan.lock,
+        create_lock=batch_create_lock,
+        reuse_hours=limits.exploration_reuse_hours,
+        retention_days=limits.exploration_retention_days,
+        clock=clock,
+        redactor=redact,
+    )
+    comparison_views = ComparisonViewService(
+        repo, settings, comparison, clock=clock, link_builder=links
     )
     commands = CommandService(
         repo,
@@ -344,6 +369,8 @@ def assemble(
         digest=digest,
         exploration=exploration,
         exploration_views=exploration_views,
+        comparison=comparison,
+        comparison_views=comparison_views,
         commands=commands,
         retention=retention,
     )
@@ -361,6 +388,8 @@ def assemble(
     views.hooks.scheduler_running = lambda: scheduler.running
     exploration.hooks.schedule = scheduler.schedule_exploration
     exploration.hooks.scheduler_running = lambda: scheduler.running
+    comparison.hooks.schedule = scheduler.schedule_comparison
+    comparison.hooks.scheduler_running = lambda: scheduler.running
     commands.hooks.schedule_scan = scheduler.trigger_command_scan
     commands.hooks.scan_pending = scheduler.scan_pending
     commands.hooks.schedule_manual_digest = scheduler.schedule_manual_digest
@@ -383,6 +412,17 @@ def scheduler_lock_path(config: Config) -> Path:
     """One scheduler per database: the lock file sits next to it as ``<db>.lock``."""
     db_path = config.db_path
     return db_path.with_name(db_path.name + ".lock")
+
+
+_HOLDER_PID = re.compile(r"pid=(\d{1,10}) started_at=\S+")
+
+
+def scheduler_lock_holder_pid(config: Config) -> int | None:
+    """PID written in the lock file header by its holder, or None when the header is
+    missing or unreadable (display data: the caller must still take the lock)."""
+    info = FileSchedulerLock(scheduler_lock_path(config)).holder_info()
+    match = _HOLDER_PID.match(info or "")
+    return int(match.group(1)) if match else None
 
 
 def acquire_scheduler_lock(config: Config) -> FileSchedulerLock:

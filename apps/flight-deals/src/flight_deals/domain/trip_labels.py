@@ -87,6 +87,23 @@ def filter_line(
     return "篩選：" + "；".join(parts) if parts else None
 
 
+def stay_range_label(min_days: int, max_days: int) -> str:
+    """Trip length of a flexible window: "4 天" when equal, otherwise "3–5 天"."""
+    if min_days == max_days:
+        return f"{min_days} 天"
+    return f"{min_days}–{max_days} 天"
+
+
+def flight_duration_label(minutes: int | None) -> str | None:
+    """Total flight time, e.g. "3 小時 25 分", "3 小時", "45 分"; None when unknown."""
+    if minutes is None or minutes <= 0:
+        return None
+    hours, rest = divmod(minutes, 60)
+    if hours == 0:
+        return f"{rest} 分"
+    return f"{hours} 小時" if rest == 0 else f"{hours} 小時 {rest} 分"
+
+
 def static_texts() -> list[str]:
     """Wording added by FD-5, for the banned-phrase test."""
     return [

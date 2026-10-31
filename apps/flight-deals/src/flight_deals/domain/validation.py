@@ -11,9 +11,21 @@ from typing import cast
 from flight_deals.domain.airlines import MAX_AIRLINES, lookup_airline
 from flight_deals.domain.airports import is_selectable, lookup, same_city_group
 from flight_deals.domain.currency import DEFAULT_CURRENCY, major_to_minor
+from flight_deals.domain.messages import (
+    COMPARISON_DATE_INPUT_INVALID,
+    COMPARISON_DESTINATIONS_COUNT,
+    COMPARISON_DESTINATIONS_INVALID,
+    comparison_destination_duplicate,
+    comparison_destination_is_origin,
+    comparison_destination_same_city,
+    comparison_destination_unknown,
+    comparison_destination_unverified,
+    comparison_stay_too_far,
+)
 from flight_deals.domain.models import (
     CABINS,
     Cabin,
+    ComparisonSpec,
     DateMode,
     ExplorationSpec,
     TripType,
@@ -551,6 +563,159 @@ def validate_exploration(raw: Mapping[str, object], today: date) -> ExplorationO
         currency=DEFAULT_CURRENCY,
     )
     return ExplorationOutcome(spec, {})
+
+
+# ---- multi-destination comparison (ADR-0002 FD-9 Decision 2) --------------------------
+
+MIN_DESTINATIONS = 2
+MAX_DESTINATIONS = 8
+DATE_INPUTS = ("fixed", "stay")
+
+
+@dataclass(frozen=True)
+class ComparisonOutcome:
+    spec: ComparisonSpec | None
+    errors: dict[str, str]
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Same code, or a city code together with one of its own airports (TYO + NRT).
+
+    Two airports of one city (NRT + HND) are different queries and do not overlap."""
+    if a == b:
+        return True
+    place_a, place_b = lookup(a), lookup(b)
+    if place_a is None or place_b is None:
+        return False
+    return place_a.city_code == b or place_b.city_code == a
+
+
+def _parse_destinations(
+    raw: Mapping[str, object], origin: str, errors: dict[str, str]
+) -> tuple[str, ...]:
+    """2-8 selectable codes in input order, no overlap, none in the origin's city."""
+    value = raw.get("destinations")
+    if not isinstance(value, list | tuple):
+        errors["destinations"] = COMPARISON_DESTINATIONS_INVALID
+        return ()
+    codes: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            errors["destinations"] = COMPARISON_DESTINATIONS_INVALID
+            return ()
+        codes.append(item.strip().upper())
+    if not MIN_DESTINATIONS <= len(codes) <= MAX_DESTINATIONS:
+        errors["destinations"] = COMPARISON_DESTINATIONS_COUNT
+        return ()
+    for index, code in enumerate(codes):
+        place = lookup(code)
+        if place is None:
+            errors["destinations"] = comparison_destination_unknown(code)
+            return ()
+        if not is_selectable(place):
+            errors["destinations"] = comparison_destination_unverified(code)
+            return ()
+        earlier = next((c for c in codes[:index] if _overlaps(c, code)), None)
+        if earlier is not None:
+            errors["destinations"] = comparison_destination_duplicate(earlier, code)
+            return ()
+        if origin and "origin" not in errors:
+            if code == origin:
+                errors["destinations"] = comparison_destination_is_origin(code)
+                return ()
+            if same_city_group(origin, code):
+                errors["destinations"] = comparison_destination_same_city(code)
+                return ()
+    return tuple(codes)
+
+
+def _parse_origin(raw: Mapping[str, object], errors: dict[str, str]) -> str:
+    origin = _text(raw, "origin").upper() if "origin" in raw else "TPE"
+    if not origin:
+        errors["origin"] = ORIGIN_REQUIRED
+        return origin
+    place = lookup(origin)
+    if place is None:
+        errors["origin"] = UNKNOWN_PLACE
+    elif not is_selectable(place):
+        errors["origin"] = UNVERIFIED_CITY
+    return origin
+
+
+def validate_comparison(raw: Mapping[str, object], today: date) -> ComparisonOutcome:
+    """Validate comparison input (``today`` is the Asia/Taipei date).
+
+    Passengers are always 1 adult; ``adults`` / ``children`` / ``airlines`` /
+    ``dep_hour_*`` are ignored. One-way trips ignore the return date and trip days."""
+    errors: dict[str, str] = {}
+    origin = _parse_origin(raw, errors)
+    destinations = _parse_destinations(raw, origin, errors)
+
+    trip_type_text = _text(raw, "trip_type") or "round_trip"
+    if trip_type_text not in ("round_trip", "one_way"):
+        errors["trip_type"] = "行程型態不正確"
+        trip_type_text = "round_trip"
+    trip_type = cast(TripType, trip_type_text)
+
+    date_input = _text(raw, "date_input") or "fixed"
+    if date_input not in DATE_INPUTS:
+        errors["date_input"] = COMPARISON_DATE_INPUT_INVALID
+
+    latest = today + timedelta(days=MAX_DAYS_AHEAD)
+    too_far = f"日期不可晚於今天起 {MAX_DAYS_AHEAD} 天（{latest.isoformat()}）"
+    depart = _parse_date(raw, "depart_date", errors)
+    if depart is None and "depart_date" not in errors:
+        errors["depart_date"] = "請填寫出發日"
+    elif depart is not None and depart < today:
+        errors["depart_date"] = "日期不可早於今天"
+    elif depart is not None and depart > latest:
+        errors["depart_date"] = too_far
+
+    return_date: date | None = None
+    if trip_type == "round_trip" and "date_input" not in errors:
+        if date_input == "fixed":
+            return_date = _parse_date(raw, "return_date", errors)
+            if return_date is None and "return_date" not in errors:
+                errors["return_date"] = "來回行程請填寫回程日"
+            elif return_date is not None and return_date > latest:
+                errors["return_date"] = too_far
+            elif return_date is not None and depart is not None and return_date < depart:
+                errors["return_date"] = "回程日不可早於出發日"
+        else:
+            trip_days = _parse_int(raw, "trip_days", errors)
+            if "trip_days" in errors:
+                too_large = errors["trip_days"] == TOO_LARGE
+                errors["trip_days"] = TOO_LARGE if too_large else TRIP_DAYS_NOT_INT
+            elif trip_days is None:
+                errors["trip_days"] = TRIP_DAYS_REQUIRED
+            elif not MIN_EXPLORATION_TRIP_DAYS <= trip_days <= MAX_EXPLORATION_TRIP_DAYS:
+                errors["trip_days"] = TRIP_DAYS_RANGE
+            elif depart is not None:
+                return_date = depart + timedelta(days=trip_days)
+                if return_date > latest:
+                    errors["trip_days"] = comparison_stay_too_far(latest)
+
+    max_stops = _parse_max_stops(raw, errors)
+    cabin_text = _text(raw, "cabin") if "cabin" in raw else "economy"
+    cabin: Cabin = "economy"
+    if cabin_text in CABINS:
+        cabin = cabin_text
+    else:
+        errors["cabin"] = CABIN_INVALID
+
+    if errors or depart is None:
+        return ComparisonOutcome(None, errors)
+    spec = ComparisonSpec(
+        origin=origin,
+        destinations=destinations,
+        trip_type=trip_type,
+        depart_date=depart,
+        return_date=return_date if trip_type == "round_trip" else None,
+        max_stops=max_stops,
+        cabin=cabin,
+        currency=DEFAULT_CURRENCY,
+    )
+    return ComparisonOutcome(spec, {})
 
 
 @dataclass(frozen=True)

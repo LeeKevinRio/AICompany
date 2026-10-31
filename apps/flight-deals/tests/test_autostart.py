@@ -66,6 +66,7 @@ def test_expected_command_uses_pythonw_background(project: Path) -> None:
     assert (
         command
         == f'"{project / ".venv" / "Scripts" / "pythonw.exe"}" -m flight_deals.cli --background'
+        " --replace"
     )
     for secret_hint in ("TOKEN", "CHAT_ID", "runas"):
         assert secret_hint not in command

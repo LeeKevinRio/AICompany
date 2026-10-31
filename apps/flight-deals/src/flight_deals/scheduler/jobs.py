@@ -13,6 +13,8 @@ Explorations (ADR-0002 FD-6 Decision 3) run as one-off ``explore:<id>`` date job
 that same worker, so scans and "scan now" requests due meanwhile wait in the executor
 queue and run afterwards (deferred, never dropped). Explorations cut off by a stop are
 marked interrupted at start, before any job is queued; an hourly job purges old ones.
+Comparisons (ADR-0002 FD-9 Decision 3) work the same way with ``compare:<id>`` jobs and
+the hourly ``comparison-purge`` job.
 
 Telegram commands (ADR-0002 FD-7 Decisions 4, 5) add one-off ``cmdscan:<id>`` jobs (a
 manual scan followed by the command's result reply) and ``manual-digest:<update_id>``
@@ -54,6 +56,8 @@ DIGEST_CHECK_JOB_ID = "digest-check"
 DIGEST_RECHECK_JOB_ID = "digest-recheck"
 EXPLORE_PREFIX = "explore:"
 PURGE_JOB_ID = "exploration-purge"
+COMPARE_PREFIX = "compare:"
+COMPARE_PURGE_JOB_ID = "comparison-purge"
 CMDSCAN_PREFIX = "cmdscan:"
 MANUAL_DIGEST_PREFIX = "manual-digest:"
 MAINTENANCE_JOB_ID = "maintenance"
@@ -66,7 +70,15 @@ DIGEST_JOB_IDS = frozenset(
     {DIGEST_JOB_ID, DIGEST_CATCHUP_JOB_ID, DIGEST_CHECK_JOB_ID, DIGEST_RECHECK_JOB_ID}
 )
 # Jobs that are not watch scans; the health page's "next scan" ignores them.
-NON_SCAN_JOB_IDS = DIGEST_JOB_IDS | MAINTENANCE_JOB_IDS | {SWEEP_JOB_ID, PURGE_JOB_ID}
+NON_SCAN_JOB_IDS = (
+    DIGEST_JOB_IDS
+    | MAINTENANCE_JOB_IDS
+    | {
+        SWEEP_JOB_ID,
+        PURGE_JOB_ID,
+        COMPARE_PURGE_JOB_ID,
+    }
+)
 JOB_DEFAULTS: dict[str, Any] = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600}
 WORKER_THREADS = 1
 
@@ -138,8 +150,10 @@ class ScanScheduler:
                 raise SchedulerAlreadyRunningError("a scan scheduler is already running")
             _active = self
         try:
-            # Before any job is queued: a stop or crash never resumes an exploration.
+            # Before any job is queued: a stop or crash never resumes an exploration
+            # or a comparison.
             self._services.exploration.recover_interrupted()
+            self._services.comparison.recover_interrupted()
             self._scheduler.add_listener(self._on_event, EVENT_JOB_MAX_INSTANCES | EVENT_JOB_ERROR)
             self._scheduler.start()
             self._started = True
@@ -155,6 +169,12 @@ class ScanScheduler:
                 self._services.exploration.purge_expired,
                 trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
                 id=PURGE_JOB_ID,
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                self._services.comparison.purge_expired,
+                trigger=IntervalTrigger(hours=1, timezone=UTC_ZONE),
+                id=COMPARE_PURGE_JOB_ID,
                 replace_existing=True,
             )
             self.schedule_digest(startup=True)
@@ -373,12 +393,25 @@ class ScanScheduler:
             max_instances=1,
         )
 
+    def schedule_comparison(self, comparison_id: int) -> None:
+        """Queue one comparison now; it never misfires, whatever the delay."""
+        self._scheduler.add_job(
+            self._compare,
+            trigger="date",
+            run_date=self._clock(),
+            args=[comparison_id],
+            id=f"{COMPARE_PREFIX}{comparison_id}",
+            replace_existing=True,
+            misfire_grace_time=None,
+            max_instances=1,
+        )
+
     def next_run_time(self) -> datetime | None:
         times = [
             when
             for job in self._scheduler.get_jobs()
             if job.id not in NON_SCAN_JOB_IDS
-            and not job.id.startswith((EXPLORE_PREFIX, MANUAL_DIGEST_PREFIX))
+            and not job.id.startswith((EXPLORE_PREFIX, COMPARE_PREFIX, MANUAL_DIGEST_PREFIX))
             and (when := _job_time(job)) is not None
         ]
         return min(times) if times else None
@@ -412,6 +445,10 @@ class ScanScheduler:
     def _explore(self, exploration_id: int) -> None:
         outcome = self._services.exploration.run(exploration_id)
         log.info("exploration %s: %s", exploration_id, outcome)
+
+    def _compare(self, comparison_id: int) -> None:
+        outcome = self._services.comparison.run(comparison_id)
+        log.info("comparison %s: %s", comparison_id, outcome)
 
     def _digest(self) -> None:
         outcome = self._services.digest.send_if_due(self._clock())

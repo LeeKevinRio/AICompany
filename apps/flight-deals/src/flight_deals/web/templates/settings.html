@@ -51,6 +51,9 @@
     {% if active_exploration %}
     <dt>探索</dt><dd><a href="/explorations/{{ active_exploration.id }}">探索進行中（{{ active_exploration.done }}/{{ active_exploration.total }}）</a>，排程掃描會在探索完成後依序執行</dd>
     {% endif %}
+    {% if active_comparison %}
+    <dt>比價</dt><dd><a href="/comparisons/{{ active_comparison.id }}">比價進行中（{{ active_comparison.done }}/{{ active_comparison.total }}）</a>，排程掃描會在比價完成後依序執行</dd>
+    {% endif %}
     <dt>下次預計掃描</dt><dd>{{ next_run or "無（沒有啟用中的監看或排程器未執行）" }}</dd>
     <dt>最近一小時查詢</dt><dd>{{ hourly_used }} / {{ hourly_limit }} 次</dd>
     {% if autostart %}

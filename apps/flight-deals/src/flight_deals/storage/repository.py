@@ -10,6 +10,7 @@ from datetime import date, datetime
 from typing import Any, cast
 
 from flight_deals.domain.models import (
+    ComparisonSpec,
     DatePair,
     ExplorationSpec,
     NotificationKind,
@@ -344,6 +345,108 @@ def _cell(row: sqlite3.Row) -> ExplorationCellRecord:
     )
 
 
+@dataclass(frozen=True)
+class ComparisonRecord:
+    id: int
+    spec: ComparisonSpec
+    condition_key: str
+    status: str
+    total: int
+    done: int
+    queries_used: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_summary: str | None
+    # Lowest priced cell (status ok, same currency); only list queries fill these.
+    # Ties go to the lowest position (input order).
+    min_amount_minor: int | None = None
+    min_destination: str | None = None
+
+
+@dataclass(frozen=True)
+class ComparisonCellRecord:
+    comparison_id: int
+    position: int
+    destination: str
+    status: str
+    reason: str | None
+    source: str | None
+    price_kind: str | None
+    from_cache: bool
+    attempts: int
+    amount_minor: int | None
+    currency: str | None
+    carrier: str | None
+    stops: int | None
+    duration_minutes: int | None
+    depart_time: str | None
+    as_of: datetime | None
+    fetched_at: datetime | None
+    error: str | None
+
+
+def _comparison(row: sqlite3.Row) -> ComparisonRecord:
+    spec = ComparisonSpec(
+        origin=row["origin"],
+        destinations=tuple(code for code in row["destinations"].split(",") if code),
+        trip_type=row["trip_type"],
+        depart_date=date.fromisoformat(row["depart_date"]),
+        return_date=_pd(row["return_date"]),
+        max_stops=row["max_stops"],
+        cabin=row["cabin"],
+        currency=row["currency"],
+        adults=row["adults"],
+        children=row["children"],
+    )
+    keys = row.keys()
+    return ComparisonRecord(
+        id=row["id"],
+        spec=spec,
+        condition_key=row["condition_key"],
+        status=row["status"],
+        total=row["total"],
+        done=row["done"],
+        queries_used=row["queries_used"],
+        created_at=_req_ts(row["created_at"]),
+        started_at=_pts(row["started_at"]),
+        finished_at=_pts(row["finished_at"]),
+        error_summary=row["error_summary"],
+        min_amount_minor=row["min_amount_minor"] if "min_amount_minor" in keys else None,
+        min_destination=row["min_destination"] if "min_destination" in keys else None,
+    )
+
+
+def _comparison_cell(row: sqlite3.Row) -> ComparisonCellRecord:
+    return ComparisonCellRecord(
+        comparison_id=row["comparison_id"],
+        position=row["position"],
+        destination=row["destination"],
+        status=row["status"],
+        reason=row["reason"],
+        source=row["source"],
+        price_kind=row["price_kind"],
+        from_cache=bool(row["from_cache"]),
+        attempts=row["attempts"],
+        amount_minor=row["amount_minor"],
+        currency=row["currency"],
+        carrier=row["carrier"],
+        stops=row["stops"],
+        duration_minutes=row["duration_minutes"],
+        depart_time=row["depart_time"],
+        as_of=_pts(row["as_of"]),
+        fetched_at=_pts(row["fetched_at"]),
+        error=row["error"],
+    )
+
+
+# The cheapest same-currency ok cell of comparison ``m`` (ties: lowest position).
+_COMPARISON_CHEAPEST = (
+    "FROM comparison_cell c WHERE c.comparison_id = m.id AND c.status = 'ok'"
+    " AND c.currency = m.currency ORDER BY c.amount_minor, c.position LIMIT 1"
+)
+
+
 def _watch(row: sqlite3.Row) -> Watch:
     spec = WatchSpec(
         name=row["name"],
@@ -632,15 +735,18 @@ class Repository:
             )
 
     def queries_used_since(self, since: datetime) -> int:
-        """Outbound queries of scans and explorations started at or after ``since``."""
+        """Outbound queries of scans, explorations and comparisons started at or after
+        ``since``."""
         stamp = to_utc_iso(since)
         with self.db.connect() as conn:
             row = conn.execute(
                 "SELECT (SELECT COALESCE(SUM(queries_used), 0) FROM scan_run"
                 "  WHERE started_at >= ?)"
                 " + (SELECT COALESCE(SUM(queries_used), 0) FROM exploration"
+                "  WHERE COALESCE(started_at, created_at) >= ?)"
+                " + (SELECT COALESCE(SUM(queries_used), 0) FROM comparison"
                 "  WHERE COALESCE(started_at, created_at) >= ?) AS n",
-                (stamp, stamp),
+                (stamp, stamp, stamp),
             ).fetchone()
         return int(row["n"])
 
@@ -924,6 +1030,203 @@ class Repository:
                 " SUM(CASE WHEN status = 'no_data' AND reason = 'no_embedded_results'"
                 "  THEN 1 ELSE 0 END) AS hits"
                 " FROM exploration_cell WHERE fetched_at >= ? AND from_cache = 0"
+                " AND status NOT IN ('skipped', 'pending') AND source IS NOT NULL"
+                " GROUP BY source",
+                (to_utc_iso(since),),
+            ).fetchall()
+        return [(r["source"], int(r["total"]), int(r["hits"])) for r in rows]
+
+    # ---- comparisons (ADR-0002 FD-9 Decisions 1, 3) ------------------------------
+
+    def insert_comparison(self, spec: ComparisonSpec, now: datetime) -> int:
+        """The comparison row and one ``pending`` cell per destination, one transaction."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO comparison (condition_key, origin, destinations, trip_type,"
+                " depart_date, return_date, max_stops, cabin, adults, children, currency,"
+                " status, total, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                (
+                    spec.condition_key(),
+                    spec.origin,
+                    ",".join(spec.destinations),
+                    spec.trip_type,
+                    spec.depart_date.isoformat(),
+                    _d(spec.return_date),
+                    spec.max_stops,
+                    spec.cabin,
+                    spec.adults,
+                    spec.children,
+                    spec.currency,
+                    len(spec.destinations),
+                    to_utc_iso(now),
+                ),
+            )
+            comparison_id = int(cast(int, cur.lastrowid))
+            conn.executemany(
+                "INSERT INTO comparison_cell (comparison_id, position, destination)"
+                " VALUES (?, ?, ?)",
+                [(comparison_id, i, code) for i, code in enumerate(spec.destinations)],
+            )
+        return comparison_id
+
+    def get_comparison(self, comparison_id: int) -> ComparisonRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT * FROM comparison WHERE id = ?", (comparison_id,)).fetchone()
+        return _comparison(row) if row else None
+
+    def active_comparison(self) -> ComparisonRecord | None:
+        """The queued or running comparison, if any (at most one by design)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM comparison WHERE status IN ('queued', 'running')"
+                " ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return _comparison(row) if row else None
+
+    def reusable_comparison(self, condition_key: str, since: datetime) -> ComparisonRecord | None:
+        """Latest ``done`` comparison of this key created since ``since`` (a comparison
+        with a skipped destination ends ``failed`` and is never reused)."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM comparison WHERE condition_key = ? AND created_at >= ?"
+                " AND status = 'done' ORDER BY created_at DESC, id DESC LIMIT 1",
+                (condition_key, to_utc_iso(since)),
+            ).fetchone()
+        return _comparison(row) if row else None
+
+    def list_comparisons_since(self, since: datetime) -> list[ComparisonRecord]:
+        """Comparisons created since ``since``, newest first, with their lowest price and
+        its destination (one statement)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT m.*, (SELECT c.amount_minor {_COMPARISON_CHEAPEST}) AS min_amount_minor,"
+                f" (SELECT c.destination {_COMPARISON_CHEAPEST}) AS min_destination"
+                " FROM comparison m WHERE m.created_at >= ?"
+                " ORDER BY m.created_at DESC, m.id DESC",
+                (to_utc_iso(since),),
+            ).fetchall()
+        return [_comparison(r) for r in rows]
+
+    def comparison_cells(self, comparison_id: int) -> list[ComparisonCellRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM comparison_cell WHERE comparison_id = ? ORDER BY position",
+                (comparison_id,),
+            ).fetchall()
+        return [_comparison_cell(r) for r in rows]
+
+    def start_comparison(self, comparison_id: int, now: datetime) -> bool:
+        """queued -> running; False if it is no longer queued (e.g. interrupted)."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE comparison SET status = 'running', started_at = ?"
+                " WHERE id = ? AND status = 'queued'",
+                (to_utc_iso(now), comparison_id),
+            )
+            return cur.rowcount == 1
+
+    def record_comparison_cell(self, comparison_id: int, position: int, update: CellUpdate) -> None:
+        """Write one cell and bump ``done`` / ``queries_used`` in the same transaction."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE comparison_cell SET status = ?, reason = ?, source = ?,"
+                " price_kind = ?, from_cache = ?, attempts = ?, amount_minor = ?,"
+                " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
+                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?"
+                " WHERE comparison_id = ? AND position = ? AND status = 'pending'",
+                (
+                    update.status,
+                    update.reason,
+                    update.source,
+                    update.price_kind,
+                    int(update.from_cache),
+                    update.attempts,
+                    update.amount_minor,
+                    update.currency,
+                    update.carrier,
+                    update.stops,
+                    update.duration_minutes,
+                    update.depart_time,
+                    _ts(update.as_of),
+                    _ts(update.fetched_at),
+                    update.error,
+                    comparison_id,
+                    position,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"comparison {comparison_id} cell {position} is not pending")
+            conn.execute(
+                "UPDATE comparison SET done = done + 1, queries_used = queries_used + ?"
+                " WHERE id = ?",
+                (update.attempts, comparison_id),
+            )
+
+    def finish_comparison(
+        self,
+        comparison_id: int,
+        *,
+        status: str,
+        finished_at: datetime,
+        skip_reason: str,
+        error_summary: str | None,
+    ) -> int:
+        """Mark every still-pending cell skipped and close the comparison (one
+        transaction). Returns how many cells were skipped here."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "UPDATE comparison_cell SET status = 'skipped', reason = ?"
+                " WHERE comparison_id = ? AND status = 'pending'",
+                (skip_reason, comparison_id),
+            )
+            conn.execute(
+                "UPDATE comparison SET status = ?, finished_at = ?, error_summary = ? WHERE id = ?",
+                (status, to_utc_iso(finished_at), error_summary, comparison_id),
+            )
+            return cur.rowcount
+
+    def interrupt_active_comparisons(self, now: datetime, summary: str) -> list[int]:
+        """Queued / running comparisons become ``failed``; pending cells are skipped."""
+        with self.db.connect() as conn:
+            ids = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM comparison WHERE status IN ('queued', 'running')"
+                ).fetchall()
+            ]
+            for comparison_id in ids:
+                conn.execute(
+                    "UPDATE comparison_cell SET status = 'skipped', reason = 'interrupted'"
+                    " WHERE comparison_id = ? AND status = 'pending'",
+                    (comparison_id,),
+                )
+                conn.execute(
+                    "UPDATE comparison SET status = 'failed', finished_at = ?,"
+                    " error_summary = ? WHERE id = ?",
+                    (to_utc_iso(now), summary, comparison_id),
+                )
+        return ids
+
+    def delete_comparisons_created_before(self, cutoff: datetime) -> int:
+        """Retention purge; queued / running comparisons are never deleted."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM comparison WHERE created_at < ?"
+                " AND status NOT IN ('queued', 'running')",
+                (to_utc_iso(cutoff),),
+            )
+            return cur.rowcount
+
+    def comparison_cell_counts_since(self, since: datetime) -> list[tuple[str, int, int]]:
+        """(source, real queries, no_embedded_results) of cells fetched since ``since``;
+        skipped, pending and cache-served cells are not counted."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) AS total,"
+                " SUM(CASE WHEN status = 'no_data' AND reason = 'no_embedded_results'"
+                "  THEN 1 ELSE 0 END) AS hits"
+                " FROM comparison_cell WHERE fetched_at >= ? AND from_cache = 0"
                 " AND status NOT IN ('skipped', 'pending') AND source IS NOT NULL"
                 " GROUP BY source",
                 (to_utc_iso(since),),

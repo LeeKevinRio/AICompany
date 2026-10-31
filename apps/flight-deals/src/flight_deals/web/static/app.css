@@ -468,3 +468,26 @@ table.calendar td.cal-cell .muted,
 table.calendar td.cal-cell .hint { color: var(--color-text); }
 table.calendar td.cal-empty { background: var(--color-bg); border: 1px solid var(--color-border); }
 .cal-status { font-weight: 600; }
+
+/* Comparison: destination chips and result table. */
+.chip-list { display: flex; flex-wrap: wrap; gap: var(--space-2); list-style: none; margin: var(--space-1) 0; padding: 0; min-height: var(--control-height-small); }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral-text);
+  border-radius: 999px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.chip .chip-remove {
+  min-height: var(--control-height-small);
+  padding: 0 var(--space-3);
+  border-radius: 999px;
+  font-size: 13px;
+}
+.entry-card { margin-bottom: var(--space-4); }
+.table-wrap > table.comparison { min-width: 880px; }
+table.comparison th[scope="row"] { text-align: left; font-weight: 600; white-space: nowrap; }

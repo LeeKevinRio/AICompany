@@ -15,6 +15,7 @@ from flight_deals.domain.currency import format_money, minor_to_major_int
 from flight_deals.domain.dates import first_pair
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
+    DETAIL_ALL_DEPARTED,
     DISCLAIMER,
     MAINTENANCE_NEVER,
     MAINTENANCE_TABLE_LABELS,
@@ -45,6 +46,7 @@ from flight_deals.domain.trip_labels import (
     conditions_label,
     dep_window_label,
     pax_full_label,
+    stay_range_label,
     total_price_note,
     total_price_short,
 )
@@ -170,6 +172,14 @@ def active_exploration_view(repo: Repository) -> dict[str, int] | None:
     return {"id": record.id, "done": record.done, "total": record.total}
 
 
+def active_comparison_view(repo: Repository) -> dict[str, int] | None:
+    """The queued / running comparison for the explore, compare and health pages."""
+    record = repo.active_comparison()
+    if record is None:
+        return None
+    return {"id": record.id, "done": record.done, "total": record.total}
+
+
 _ITEM_KEY_REVISION = re.compile(r"^price:\d+:r(\d+):")
 BREAKER_LABELS = {
     "closed": "關閉（正常查詢）",
@@ -210,6 +220,13 @@ def try_note(try_info: Mapping[str, Any]) -> str | None:
     return "；".join(parts) or None
 
 
+def stay_label(spec: WatchSpec) -> str | None:
+    """Trip length of a flexible round trip ("4 天" / "3–5 天"); None otherwise."""
+    if spec.min_trip_days is None or spec.max_trip_days is None:
+        return None
+    return stay_range_label(spec.min_trip_days, spec.max_trip_days)
+
+
 def dates_text(spec: WatchSpec) -> str:
     if spec.date_mode == "fixed":
         if spec.depart_date is None:
@@ -220,7 +237,7 @@ def dates_text(spec: WatchSpec) -> str:
     start = spec.window_start.isoformat() if spec.window_start else "?"
     end = spec.window_end.isoformat() if spec.window_end else "?"
     if spec.trip_type == "round_trip":
-        return f"彈性 {start} ～ {end}，旅程 {spec.min_trip_days}–{spec.max_trip_days} 天"
+        return f"彈性 {start} ～ {end}，旅程 {stay_label(spec) or '?'}"
     return f"彈性出發 {start} ～ {end}"
 
 
@@ -536,6 +553,11 @@ class ViewService:
             current_obs, revision=watch.revision, currency=spec.currency, today=taipei_date(now)
         )
         top = [self._price_row(watch, o, now, stale_hours) for o in priced[:TOP_N]]
+        # FD-9 F2: prices were found, but every one has departed (not "no price yet").
+        today = taipei_date(now)
+        all_departed = (
+            bool(current_obs) and not top and all(o.depart_date < today for o in current_obs)
+        )
 
         runs = self._repo.scan_runs_for_watch(watch.id, limit=TREND_POINTS)
         trend = self._trend(current_obs, runs, watch.revision)
@@ -560,6 +582,7 @@ class ViewService:
                 "window_end": spec.window_end.isoformat() if spec.window_end else None,
                 "min_trip_days": spec.min_trip_days,
                 "max_trip_days": spec.max_trip_days,
+                "stay_label": stay_label(spec),
                 "max_stops": "不限"
                 if spec.max_stops is None
                 else ("僅直飛" if spec.max_stops == 0 else f"最多轉機 {spec.max_stops} 次"),
@@ -581,6 +604,7 @@ class ViewService:
             },
             "has_prices": bool(current_obs),
             "top": top,
+            "top_empty_note": DETAIL_ALL_DEPARTED if all_departed else None,
             "trend": trend,
             "distribution": distribution,
             "weekdays": weekdays,
@@ -898,6 +922,7 @@ class ViewService:
             "hourly_limit": current.global_hourly_query_limit,
             "no_embedded_summary": self._health.no_embedded_summary(now),
             "active_exploration": active_exploration_view(self._repo),
+            "active_comparison": active_comparison_view(self._repo),
             "telegram_commands_enabled": current.telegram_commands_enabled,
             "vacuum_enabled": current.vacuum_enabled,
             "command_status": self.command_status_view(current.telegram_commands_enabled),

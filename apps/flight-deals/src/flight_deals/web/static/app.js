@@ -115,10 +115,18 @@
     const state = {
       trip_type: radioValue(form, "trip_type"),
       date_mode: radioValue(form, "date_mode"),
+      date_input: radioValue(form, "date_input"),
     };
     form.querySelectorAll("[data-show-when]").forEach(function (el) {
-      const parts = el.getAttribute("data-show-when").split("=");
-      el.hidden = state[parts[0]] !== parts[1];
+      // Several conditions may be joined with commas; all of them must match.
+      const visible = el
+        .getAttribute("data-show-when")
+        .split(",")
+        .every(function (condition) {
+          const parts = condition.split("=");
+          return state[parts[0]] === parts[1];
+        });
+      el.hidden = !visible;
     });
     form.querySelectorAll(".js-window-end-label").forEach(function (el) {
       el.textContent =
@@ -277,6 +285,16 @@
       input.value = item.display;
       clearFieldError();
       close();
+      root.dispatchEvent(
+        new CustomEvent("combo-select", { detail: { code: item.code, display: item.display } })
+      );
+      if (root.hasAttribute("data-combo-multi")) {
+        // Multi-select pickers only emit the event; the input is reset for the next pick.
+        hidden.value = "";
+        input.value = "";
+        items = [];
+        list.textContent = "";
+      }
     }
 
     function render(failed) {
@@ -711,11 +729,9 @@
 
   const EXPLORE_NO_PROGRESS_MS = 120000;
 
-  async function pollExploration(root) {
-    const match = /^\/explorations\/(\d+)\/?$/.exec(window.location.pathname);
-    if (!match) return;
-    const id = match[1];
-    const total = parseInt(root.getAttribute("data-total"), 10) || 31;
+  // Shared by the exploration and comparison progress pages.
+  async function pollProgress(root, statusUrl, defaultTotal) {
+    const total = parseInt(root.getAttribute("data-total"), 10) || defaultTotal;
     let lastDone = parseInt(root.getAttribute("data-done"), 10) || 0;
     const text = document.getElementById("progress-text");
     const bar = document.getElementById("progress-bar");
@@ -732,7 +748,7 @@
         if (note) note.hidden = false;
         return;
       }
-      const result = await api("GET", "/api/explorations/" + id + "/status");
+      const result = await api("GET", statusUrl);
       if (token !== pollGeneration) return;
       if (!result.ok || !result.data) continue;
       const data = result.data;
@@ -754,9 +770,185 @@
     }
   }
 
+  async function pollExploration(root) {
+    const match = /^\/explorations\/(\d+)\/?$/.exec(window.location.pathname);
+    if (!match) return;
+    await pollProgress(root, "/api/explorations/" + match[1] + "/status", 31);
+  }
+
   function initExplorationPage() {
     const root = document.getElementById("exploration-progress");
     if (root) pollExploration(root);
+  }
+
+  // ---- multi-destination comparison ------------------------------------------
+
+  function collectCompare(form) {
+    const value = function (name) {
+      const el = form.querySelector('[name="' + name + '"]');
+      return el ? el.value.trim() : "";
+    };
+    const origin = value("origin");
+    const visible = form.querySelector('[data-combo-for="origin"]');
+    const tripType = radioValue(form, "trip_type");
+    const round = tripType === "round_trip";
+    const dateInput = round ? radioValue(form, "date_input") : "fixed";
+    const codes = Array.prototype.map.call(
+      form.querySelectorAll("#compare-destinations li[data-code]"),
+      function (li) {
+        return li.getAttribute("data-code");
+      }
+    );
+    return {
+      origin: (origin || (visible ? visible.value.trim() : "")).toUpperCase(),
+      destinations: codes,
+      trip_type: tripType,
+      date_input: dateInput,
+      depart_date: value("depart_date"),
+      return_date: round && dateInput === "fixed" ? value("return_date") : null,
+      trip_days: round && dateInput === "stay" ? toInt(value("trip_days")) : null,
+      max_stops: value("max_stops"),
+      cabin: value("cabin"),
+    };
+  }
+
+  function initCompareForm() {
+    const form = document.getElementById("compare-form");
+    if (!form) return;
+    initComboboxes(form);
+    const list = document.getElementById("compare-destinations");
+    const empty = document.getElementById("compare-destinations-empty");
+    const live = document.getElementById("compare-destinations-status");
+    const pick = form.querySelector('[data-combo="destination_pick"]');
+    const pickInput = pick ? pick.querySelector(".combo-input") : null;
+    const slot = form.querySelector('[data-error-for="destinations"]');
+    const box = document.getElementById("compare-estimate");
+    const maxItems = parseInt(list.getAttribute("data-max"), 10) || 8;
+
+    const announce = function (text) {
+      if (live) live.textContent = text;
+    };
+    const setPickError = function (text) {
+      if (slot) slot.textContent = text;
+      if (pickInput) {
+        if (text) pickInput.setAttribute("aria-invalid", "true");
+        else pickInput.removeAttribute("aria-invalid");
+      }
+    };
+    const codes = function () {
+      return Array.prototype.map.call(list.querySelectorAll("li[data-code]"), function (li) {
+        return li.getAttribute("data-code");
+      });
+    };
+    const syncEstimate = function () {
+      const count = codes().length;
+      if (empty) empty.hidden = count > 0;
+      if (!box) return;
+      const reserve = box.getAttribute("data-reserve");
+      const available = box.getAttribute("data-available");
+      let text = "預計查詢 " + count + " 次";
+      if (available !== null && available !== "") {
+        text += "／本小時可用 " + available + " 次";
+        if (reserve !== null && reserve !== "") text += "（已保留 " + reserve + " 次給排程）";
+        const short = count > 0 && count > parseInt(available, 10);
+        if (short) text += "。本小時額度不足以開始比價，請稍後再試";
+      }
+      box.textContent = text;
+    };
+    const bindRemove = function (li) {
+      const button = li.querySelector("[data-remove-destination]");
+      if (!button) return;
+      button.addEventListener("click", function () {
+        const name = li.getAttribute("data-label") || li.getAttribute("data-code");
+        li.remove();
+        setPickError("");
+        announce("已移除 " + name);
+        syncEstimate();
+        if (pickInput) pickInput.focus();
+      });
+    };
+
+    list.querySelectorAll("li[data-code]").forEach(bindRemove);
+
+    if (pick) {
+      pick.addEventListener("combo-select", function (event) {
+        const code = String(event.detail.code || "").toUpperCase();
+        const display = event.detail.display || code;
+        if (!code) return;
+        if (codes().indexOf(code) !== -1) {
+          setPickError("已加入此目的地");
+          return;
+        }
+        if (codes().length >= maxItems) {
+          setPickError("最多只能比較 " + maxItems + " 個目的地");
+          return;
+        }
+        const li = document.createElement("li");
+        li.className = "chip";
+        li.setAttribute("data-code", code);
+        li.setAttribute("data-label", display);
+        const label = document.createElement("span");
+        label.textContent = display;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "chip-remove";
+        remove.setAttribute("data-remove-destination", "");
+        remove.setAttribute("aria-label", "移除 " + display);
+        remove.textContent = "移除";
+        li.appendChild(label);
+        li.appendChild(remove);
+        list.appendChild(li);
+        bindRemove(li);
+        setPickError("");
+        announce("已加入 " + display + "，目前 " + codes().length + " 個目的地");
+        syncEstimate();
+      });
+    }
+
+    form.addEventListener("change", function () {
+      syncWatchForm(form);
+    });
+    syncWatchForm(form);
+    syncEstimate();
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      clearErrors(form);
+      const submit = form.querySelector('button[type="submit"]');
+      setBusy(submit, true);
+      const result = await api("POST", form.getAttribute("data-url"), collectCompare(form));
+      setBusy(submit, false);
+      if (result.ok && result.data.id) {
+        window.location.href =
+          "/comparisons/" + result.data.id + (result.data.reused === true ? "?reused=1" : "");
+        return;
+      }
+      const general = form.querySelector('[data-error-for="_"]');
+      if (result.status === 409) {
+        showErrors(form, { _: result.data.message || "目前無法開始比價，請稍後再試" });
+        if (general && result.data.progress_url) {
+          general.appendChild(document.createTextNode(" "));
+          const link = document.createElement("a");
+          link.href = result.data.progress_url;
+          link.textContent = "查看進行中的進度";
+          general.appendChild(link);
+        }
+        return;
+      }
+      const errors = result.data.errors || { _: result.data.message || "無法開始比價，請檢查輸入" };
+      showErrors(form, errors);
+      if (errors.destinations && pickInput) {
+        pickInput.setAttribute("aria-invalid", "true");
+        pickInput.focus();
+      }
+    });
+  }
+
+  function initComparisonPage() {
+    const root = document.getElementById("comparison-progress");
+    if (!root) return;
+    const url = root.getAttribute("data-status-url");
+    if (url) pollProgress(root, url, 8);
   }
 
   async function onAction(button) {
@@ -826,6 +1018,8 @@
     initUnembeddedHint();
     initExploreForm();
     initExplorationPage();
+    initCompareForm();
+    initComparisonPage();
     initSettingsForm();
     initActions();
   });
