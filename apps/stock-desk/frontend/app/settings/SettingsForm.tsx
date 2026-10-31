@@ -644,10 +644,18 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
                 : "未知錯誤"}
           </p>
         )}
-        {mutation.isSuccess && (
+        {mutation.isSuccess && mutation.data.partial_save_notice === null && (
           <p role="status" className="mt-3 rounded-md border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
-            {/* A save that left fallback sections unwritten says so instead (the backend's sentence). */}
-            {mutation.data.partial_save_notice ?? "設定已儲存。"}
+            設定已儲存。
+          </p>
+        )}
+        {/* A save that left fallback sections unwritten (including the "nothing was
+            stored" variant) is not a plain success: amber, the backend's sentence
+            exactly as sent (風控 2026-10-29 N-156 K-15 裁示). No wording or variant
+            logic here; the same box as NetWorthSection's. */}
+        {mutation.isSuccess && mutation.data.partial_save_notice !== null && (
+          <p role="status" className="mt-3 rounded-md border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+            {mutation.data.partial_save_notice}
           </p>
         )}
       </div>

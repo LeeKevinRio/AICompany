@@ -505,15 +505,31 @@ describe("SettingsForm — 標記位置、面板預設關閉、409 與部分儲�
     expect(html).toContain("SENTINEL-500");
   });
 
-  it("部分儲存成功：顯示後端的 partial_save_notice，取代「設定已儲存。」", () => {
+  // The two sentences the backend sends (`fallback_wording.py`: PARTIAL_SAVE_NOTICE
+  // and NOTHING_SAVED_NOTICE, 風控 2026-10-29 N-156 K-15 裁示二-4 (b)), typed out
+  // verbatim here: the box must carry them untouched, with no wording logic of its own.
+  const AMBER_TOKENS = ["border-amber-800", "bg-amber-950/40", "text-sm", "text-amber-200"];
+  const EMERALD_TOKENS = ["border-emerald-900", "bg-emerald-950/40", "text-emerald-300"];
+  const classTokens = (el: { attrs: Record<string, string> }) => (el.attrs.class ?? "").split(/\s+/);
+
+  it.each([
+    ["原句（有帶其他段）", "設定已儲存。風險預算、警示排程沒有寫入，仍使用預設值。"],
+    ["「全未寫入」新句（沒有帶任何段）", "沒有儲存任何變更：風險預算、費率、警示排程沒有寫入，仍使用預設值。"],
+  ])("部分儲存成功，%s：逐字渲染後端句子，套琥珀框，取代「設定已儲存。」的綠框", (_label, sentence) => {
     const html = renderWith(
-      { ...IDLE_MUTATION, isSuccess: true, data: { ...withFallback, partial_save_notice: "SENTINEL-PARTIAL" } },
+      { ...IDLE_MUTATION, isSuccess: true, data: { ...withFallback, partial_save_notice: sentence } },
       SettingsForm,
       { settings: withFallback },
     );
     const statuses = findAll(parseHtml(html), (el) => el.attrs.role === "status");
-    expect(statuses.map(textOf)).toEqual(["SENTINEL-PARTIAL"]);
-    expect(html).not.toContain("設定已儲存。");
+    expect(statuses.map(textOf)).toEqual([sentence]);
+    const [box] = statuses;
+    if (box === undefined) throw new Error("no status box");
+    const tokens = classTokens(box);
+    for (const token of AMBER_TOKENS) expect(tokens, token).toContain(token);
+    for (const token of EMERALD_TOKENS) expect(tokens, token).not.toContain(token);
+    // The "nothing stored" sentence must never sit beside a bare success line.
+    if (sentence.startsWith("沒有儲存任何變更")) expect(html).not.toContain("設定已儲存。");
   });
 
   it("沒有被略過的段時維持「設定已儲存。」", () => {
@@ -524,6 +540,13 @@ describe("SettingsForm — 標記位置、面板預設關閉、409 與部分儲�
     );
     const statuses = findAll(parseHtml(html), (el) => el.attrs.role === "status");
     expect(statuses.map(textOf)).toEqual(["設定已儲存。"]);
+    // partial_save_notice === null: the plain green success line, and no amber box.
+    const [box] = statuses;
+    if (box === undefined) throw new Error("no status box");
+    const tokens = classTokens(box);
+    for (const token of EMERALD_TOKENS) expect(tokens, token).toContain(token);
+    expect(tokens).not.toContain("border-amber-800");
+    expect(html).not.toContain("amber-950/40");
   });
 });
 
