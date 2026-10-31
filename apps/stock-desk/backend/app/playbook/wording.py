@@ -676,6 +676,11 @@ class ExitPending(NamedTuple):
     ``(symbol, batch_no)``, shares from their ``remaining_shares`` -- never the
     lines: a database written before N-166 can hold two lines for one batch,
     and adding their shares would double the figure again (風控 佔位符定義).
+
+    ``execution_dates`` / ``past_due_dates`` are the opposite: taken from
+    **every** covering line, so two lines with two 預定執行日 both show, and a
+    past-due one is never hidden behind a later twin (風控 2026-10-31 第二次裁示
+    第 2 項). :func:`date_list` de-duplicates them for the sentence.
     """
 
     batches: int

@@ -582,7 +582,8 @@ class EmergencyExitResult(BaseModel):
     #: Only the lines **this** call wrote (C-7).
     directives: list[Directive]
     #: The earlier, still unsettled EMERGENCY lines covering the other held
-    #: batches, one per batch (C-7). Additive: nothing has to render it.
+    #: batches -- all of them, a batch logged twice before N-166 included (C-7,
+    #: 風控 第二次裁示 第 2 項). Additive: nothing has to render it.
     pending_directives: list[Directive]
     #: Shares of ``directives`` only -- the figure EMERGENCY_EXIT_RESULT states.
     total_shares: int

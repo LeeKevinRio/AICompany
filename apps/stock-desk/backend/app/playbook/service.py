@@ -236,8 +236,11 @@ class ExitPlan:
     warnings: list[str]
     #: The batches that were covered already, as read under the lock.
     covered: list[BatchState]
-    #: One covering line per covered batch -- the oldest, when a database
-    #: written before N-166 holds more than one (C-4, 風控 去重).
+    #: **Every** covering line of the covered batches, oldest first (C-4). A
+    #: database written before N-166 may hold two for one batch, possibly with
+    #: different 預定執行日; both stay listed, because both are live lines the
+    #: user may have been told about (風控 2026-10-31 第二次裁示 第 2 項). Counts
+    #: come from ``covered``, never from here, so they do not double.
     pending: list[PendingDirective]
     rules_version: int
     #: :func:`effective_freeze_until` of the stored and the computed 恢復日.
@@ -264,23 +267,21 @@ def plan_emergency_exit(
     came back empty.
 
     Only uncovered batches get a line (C-4): a batch already carrying an
-    unsettled EMERGENCY sell keeps that one, and it is reported instead.
+    unsettled EMERGENCY sell keeps it, and it is reported instead -- with every
+    line that covers it, not just one.
     """
-    covering: dict[tuple[str, int], PendingDirective] = {}
-    for item in state.covering:
-        if item.directive.batch_no is not None:
-            # ``covering`` is oldest first, so the first line of a batch wins.
-            covering.setdefault((item.directive.symbol, item.directive.batch_no), item)
+    covering = {
+        (item.directive.symbol, item.directive.batch_no)
+        for item in state.covering
+        if item.directive.batch_no is not None
+    }
 
     directives: list[Directive] = []
     warnings: list[str] = []
     covered: list[BatchState] = []
-    pending: list[PendingDirective] = []
     for batch in state.open_batches:
-        prior = covering.get((batch.symbol, batch.batch_no))
-        if prior is not None:
+        if (batch.symbol, batch.batch_no) in covering:
             covered.append(batch)
-            pending.append(prior)
             continue
         series = loaded.get(batch.symbol, NOTHING_LOADED)
         snapshot = build_market_snapshot(
@@ -317,11 +318,18 @@ def plan_emergency_exit(
                 data_reason=series.reason,
             )
         )
+    # A covering line of a batch that is no longer open (a pre-N-166 duplicate
+    # whose twin already settled it) covers nothing held, so it is not reported.
+    covered_keys = {(batch.symbol, batch.batch_no) for batch in covered}
     return ExitPlan(
         directives=directives,
         warnings=warnings,
         covered=covered,
-        pending=pending,
+        pending=[
+            item
+            for item in state.covering
+            if (item.directive.symbol, item.directive.batch_no) in covered_keys
+        ],
         rules_version=params.version,
         emergency_until=effective_freeze_until(
             stored=state.emergency_until, computed=computed_until

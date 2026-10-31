@@ -550,7 +550,7 @@ def test_an_empty_book_still_takes_the_empty_branch(book: Book) -> None:
 # --- 既有 DB 已有 N-166 之前的重複列 ---------------------------------------------------
 
 
-def _legacy_line(symbol: str, shares: int) -> Directive:
+def _legacy_line(symbol: str, shares: int, *, execution_date: date = WEDNESDAY) -> Directive:
     return Directive(
         symbol=symbol,
         batch_no=1,
@@ -559,7 +559,7 @@ def _legacy_line(symbol: str, shares: int) -> Directive:
         rule_id="EMERGENCY",
         rule_summary="legacy",
         data_date=TUESDAY,
-        execution_date=WEDNESDAY,
+        execution_date=execution_date,
         reference_price=None,
         limit_low=None,
         limit_high=None,
@@ -602,10 +602,14 @@ def test_duplicate_lines_from_before_n166_are_kept_and_counted_once(book: Book) 
 
     assert result.directives == []
     assert emergency_rows(book.store.db_path) == before  # 未清理、也未新增
+    # Every covering line is listed (風控 第二次裁示 suggested), in log order...
     assert [(item.symbol, item.batch_no) for item in result.pending_directives] == [
         ("2330", 1),
         ("2454", 1),
+        ("2330", 1),
+        ("2454", 1),
     ]
+    # ...while the counts the user reads stay per batch.
     assert result.message == already_pending_message(
         batches=2,
         shares=500,
@@ -614,6 +618,99 @@ def test_duplicate_lines_from_before_n166_are_kept_and_counted_once(book: Book) 
         until=until_for(TUESDAY),
     )
     assert "1000 股" not in result.message and "4 批" not in result.message
+
+
+#: Two pre-N-166 lines for one batch: a next-day repeat while the first was unsettled.
+D2 = WEDNESDAY
+D3 = THURSDAY
+FRIDAY = date(2026, 8, 14)
+
+
+def _one_batch_logged_twice(book: Book) -> None:
+    hold(book.store, "2330", 1, shares=300)
+    _log_like_before_n166(
+        book.store,
+        [
+            _legacy_line("2330", 300, execution_date=D2),
+            _legacy_line("2330", 300, execution_date=D3),
+        ],
+    )
+
+
+def test_every_covering_date_is_listed_for_a_batch_logged_twice(book: Book) -> None:
+    """風控 第二次裁示 第 2 項: S1 列出「D2、D3」，不是只列一列；批數股數不翻倍."""
+    _one_batch_logged_twice(book)
+
+    result = book.service.emergency_exit(today=TUESDAY)
+
+    assert [item.execution_date for item in result.pending_directives] == [D2, D3]
+    assert result.message == already_pending_message(
+        batches=1,
+        shares=300,
+        execution_dates=f"{D2.isoformat()}、{D3.isoformat()}",
+        executed_at=TUESDAY,
+        until=until_for(TUESDAY),
+    )
+
+
+def test_both_past_due_dates_are_listed_when_both_have_passed(book: Book) -> None:
+    """D2、D3 都已過期 → S3 兩個日期都列."""
+    _one_batch_logged_twice(book)
+
+    result = book.service.emergency_exit(today=FRIDAY)
+
+    both = f"{D2.isoformat()}、{D3.isoformat()}"
+    assert result.message == already_pending_message(
+        batches=1, shares=300, execution_dates=both, executed_at=FRIDAY, until=until_for(FRIDAY)
+    ) + wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(past_due_dates=both)
+
+
+def test_only_the_passed_date_is_past_due_when_the_other_is_still_ahead(book: Book) -> None:
+    """只有 D2 過期 → S3 只列 D2；S1 仍列 D2、D3."""
+    _one_batch_logged_twice(book)
+
+    result = book.service.emergency_exit(today=THURSDAY)
+
+    assert result.message == already_pending_message(
+        batches=1,
+        shares=300,
+        execution_dates=f"{D2.isoformat()}、{D3.isoformat()}",
+        executed_at=THURSDAY,
+        until=until_for(THURSDAY),
+    ) + wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(past_due_dates=D2.isoformat())
+
+
+def test_a_later_written_line_with_an_earlier_date_still_triggers_s3(book: Book) -> None:
+    """寫入順序不等於執行日順序：先寫 D3、後寫 D2，S3 仍不得漏報 D2."""
+    hold(book.store, "2330", 1, shares=300)
+    _log_like_before_n166(
+        book.store,
+        [
+            _legacy_line("2330", 300, execution_date=D3),
+            _legacy_line("2330", 300, execution_date=D2),
+        ],
+    )
+
+    result = book.service.emergency_exit(today=THURSDAY)
+
+    assert result.message.endswith(
+        wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(past_due_dates=D2.isoformat())
+    )
+    assert f"{D2.isoformat()}、{D3.isoformat()}" in result.message
+
+
+def test_a_covering_line_of_a_batch_no_longer_held_is_not_reported(book: Book) -> None:
+    """未結算覆蓋列若屬於已非 open 的批次，不覆蓋任何持有部位，不列入 pending."""
+    hold(book.store, "2330", 1, shares=300)
+    # 2454 has an unsettled pre-N-166 line but holds nothing (its twin settled it).
+    _log_like_before_n166(
+        book.store, [_legacy_line("2330", 300), _legacy_line("2454", 200, execution_date=D3)]
+    )
+
+    result = book.service.emergency_exit(today=TUESDAY)
+
+    assert [item.symbol for item in result.pending_directives] == ["2330"]
+    assert D3.isoformat() not in result.message
 
 
 # --- C-9: mode_reason、schema、state key ----------------------------------------------
