@@ -383,3 +383,78 @@ def test_every_load_happens_before_the_lock_is_taken(
         "load ^TWII",
     }
     assert loads and max(loads) < begins[0] < commits[0]
+
+
+# --- C-11 edges (qa NB-R4) -------------------------------------------------------
+
+
+def _failing_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Any
+) -> tuple[Path, dict[str, str], Any]:
+    """A held book whose transaction runs ``failure(conn)`` after the first line."""
+    db_path = tmp_path / "playbook.db"
+    seed_held_book(db_path)
+    book = open_book(db_path)
+    book.store.freeze_emergency(until=date(2026, 8, 1))  # the exit would move it
+    before = state_map(db_path)
+    real_insert = store_module._insert_directives
+
+    def insert_one_then(
+        conn: sqlite3.Connection, directives: Sequence[Directive], **kwargs: Any
+    ) -> None:
+        real_insert(conn, list(directives)[:1], **kwargs)
+        failure(conn)
+
+    _TrackedConnection.closed_in_transaction = []
+    monkeypatch.setattr(store_module, "_insert_directives", insert_one_then)
+    monkeypatch.setattr(
+        book.store,
+        "_connect",
+        lambda: sqlite3.connect(db_path, timeout=5, factory=_TrackedConnection),
+    )
+    return db_path, before, book
+
+
+def test_an_error_after_sqlite_rolled_back_on_its_own_is_raised_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-11 ``in_transaction is False`` branch: no second ROLLBACK to mask the error.
+
+    SQLite ends the transaction itself on some errors (a full disk, say). A
+    second ROLLBACK would fail with "no transaction is active" and replace the
+    real error; the guard skips it, so the original is what the caller sees.
+    """
+
+    def sqlite_gave_up(conn: sqlite3.Connection) -> None:
+        conn.execute("ROLLBACK")  # what SQLite does on its own for such errors
+        assert not conn.in_transaction
+        raise sqlite3.OperationalError("database or disk is full")
+
+    db_path, before, book = _failing_exit(tmp_path, monkeypatch, sqlite_gave_up)
+
+    with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+        book.service.emergency_exit(today=TUESDAY)
+
+    assert emergency_rows(db_path) == []
+    assert state_map(db_path) == before
+    assert _TrackedConnection.closed_in_transaction
+    assert not any(_TrackedConnection.closed_in_transaction)
+
+
+def test_a_base_exception_mid_transaction_rolls_back_and_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-11 catches ``BaseException``: an interrupt half-way leaves nothing written."""
+
+    def interrupted(conn: sqlite3.Connection) -> None:
+        raise KeyboardInterrupt
+
+    db_path, before, book = _failing_exit(tmp_path, monkeypatch, interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        book.service.emergency_exit(today=TUESDAY)
+
+    assert emergency_rows(db_path) == []
+    assert state_map(db_path) == before
+    assert _TrackedConnection.closed_in_transaction
+    assert not any(_TrackedConnection.closed_in_transaction)
