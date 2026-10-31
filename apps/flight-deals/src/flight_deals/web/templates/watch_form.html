@@ -104,6 +104,17 @@
         <span id="err-max_trip_days" class="field-error" data-error-for="max_trip_days"></span>
       </div>
     </div>
+    <fieldset class="group" id="weekday-group" data-show-when="date_mode=flexible">
+      <legend>出發星期</legend>
+      {% set _wd = values.depart_weekdays if values.depart_weekdays is defined and values.depart_weekdays is not none else [0, 1, 2, 3, 4, 5, 6] %}
+      <div class="choice-row weekday-row">
+        {% for w in (weekday_options or []) %}
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="{{ w.value }}" {% if w.value in _wd %}checked{% endif %} aria-describedby="h-depart_weekdays err-depart_weekdays"> {{ w.label }}</label>
+        {% endfor %}
+      </div>
+      <small id="h-depart_weekdays" class="hint">全部勾選代表不限；只篩選去程出發日，回程不篩</small>
+      <span id="err-depart_weekdays" class="field-error" data-error-for="depart_weekdays"></span>
+    </fieldset>
   </fieldset>
 
   <fieldset>

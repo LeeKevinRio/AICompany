@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>探索 · 機票低價監看</title>
+  <link rel="stylesheet" href="/static/app.css?v=STATIC">
+  <script src="/static/app.js?v=STATIC" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要內容</a>
+  <header class="site-header">
+    <a class="brand" href="/">flight-deals</a>
+    <nav class="site-nav" aria-label="主選單">
+      <a href="/" >監看列表</a>
+      <a href="/watches/new" >新增監看</a>
+      <a href="/explore" aria-current="page">探索</a>
+      <a href="/notifications" >通知紀錄</a>
+      <a href="/settings" >設定與健康</a>
+    </nav>
+  </header>
+  <div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="notice">此頁的新增、修改、停用、刪除與儲存功能需要啟用 JavaScript。</p></noscript>
+  <main id="main" class="container" tabindex="-1">
+<div class="page-head">
+  <h1>探索一個月內的價格</h1>
+</div>
+<p>對所選月份每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最低價前 5 個日期呈現。</p>
+
+<section class="card entry-card">
+  <h2>多目的地比價</h2>
+  <p>固定一組日期，對 2 至 8 個目的地各查一次，依 1 位成人的總價由低到高排列。</p>
+  <p><a class="button" href="/explore/compare">前往多目的地比價</a></p>
+</section>
+
+<form id="explore-form" class="form" novalidate data-url="/api/explorations">
+  <p class="form-error" data-error-for="_" role="alert"></p>
+
+  <fieldset>
+    <legend>路線</legend>
+    <div class="grid">
+      <div class="field" data-combo="origin">
+        <label for="f-origin">出發地</label>
+        <div class="combo-box">
+          <input id="f-origin" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-origin" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="origin" data-code="TPE" value="台北桃園 TPE" aria-describedby="h-origin st-origin err-origin">
+          <ul id="lb-origin" class="combo-list" role="listbox" aria-label="出發地選項" hidden></ul>
+        </div>
+        <small id="h-origin" class="hint">輸入中文、英文或 3 碼代碼，例如 台北、TPE</small>
+        <span id="st-origin" class="sr-only combo-status" aria-live="polite"></span>
+        <span id="err-origin" class="field-error" data-error-for="origin"></span>
+      </div>
+      <div class="field" data-combo="destination">
+        <label for="f-destination">目的地</label>
+        <div class="combo-box">
+          <input id="f-destination" type="text" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lb-destination" autocomplete="off" autocapitalize="off" spellcheck="false" required data-combo-for="destination" data-code="" value="" aria-describedby="h-destination st-destination err-destination">
+          <ul id="lb-destination" class="combo-list" role="listbox" aria-label="目的地選項" hidden></ul>
+        </div>
+        <small id="h-destination" class="hint">輸入中文、英文或 3 碼代碼，例如 東京、NRT</small>
+        <span id="st-destination" class="sr-only combo-status" aria-live="polite"></span>
+        <span id="err-destination" class="field-error" data-error-for="destination"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>行程</legend>
+    <fieldset class="group">
+      <legend>行程型態</legend>
+      <div class="choice-row">
+        <label class="inline"><input type="radio" name="trip_type" value="round_trip" checked> 來回</label>
+        <label class="inline"><input type="radio" name="trip_type" value="one_way" > 單程</label>
+      </div>
+      <span class="field-error" data-error-for="trip_type"></span>
+    </fieldset>
+    <div class="grid">
+      <div class="field">
+        <label for="f-month">月份</label>
+        <select id="f-month" name="month" aria-describedby="err-month">
+          <option value="2026-10" >2026 年 10 月</option>
+          <option value="2026-11" selected>2026 年 11 月</option>
+          <option value="2026-12" >2026 年 12 月</option>
+          <option value="2027-01" >2027 年 1 月</option>
+          <option value="2027-02" >2027 年 2 月</option>
+          <option value="2027-03" >2027 年 3 月</option>
+          <option value="2027-04" >2027 年 4 月</option>
+          <option value="2027-05" >2027 年 5 月</option>
+          <option value="2027-06" >2027 年 6 月</option>
+          <option value="2027-07" >2027 年 7 月</option>
+          <option value="2027-08" >2027 年 8 月</option>
+          <option value="2027-09" >2027 年 9 月</option>
+        </select>
+        <span id="err-month" class="field-error" data-error-for="month"></span>
+      </div>
+      <div class="field" data-show-when="trip_type=round_trip">
+        <label for="f-trip_days">旅程天數</label>
+        <input id="f-trip_days" type="number" name="trip_days" value="5" min="1" max="30" step="1" inputmode="numeric" aria-describedby="h-trip_days err-trip_days">
+        <small id="h-trip_days" class="hint">1 至 30 天；回程日為出發日加上旅程天數</small>
+        <span id="err-trip_days" class="field-error" data-error-for="trip_days"></span>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>條件</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="f-max_stops">轉機次數上限</label>
+        <select id="f-max_stops" name="max_stops" aria-describedby="err-max_stops">
+          <option value="" selected>不限</option>
+          <option value="0" >僅直飛</option>
+          <option value="1" >最多 1 次</option>
+          <option value="2" >最多 2 次</option>
+        </select>
+        <span id="err-max_stops" class="field-error" data-error-for="max_stops"></span>
+      </div>
+      <div class="field">
+        <label for="f-adults">成人</label>
+        <input id="f-adults" type="number" name="adults" value="1" min="1" max="9" step="1" inputmode="numeric" aria-describedby="h-pax err-adults">
+        <span id="err-adults" class="field-error" data-error-for="adults"></span>
+      </div>
+      <div class="field">
+        <label for="f-children">兒童（2～11 歲）</label>
+        <input id="f-children" type="number" name="children" value="0" min="0" max="8" step="1" inputmode="numeric" aria-describedby="h-pax err-children">
+        <small id="h-pax" class="hint">成人與兒童合計最多 9 人</small>
+        <span id="err-children" class="field-error" data-error-for="children"></span>
+      </div>
+      <div class="field">
+        <label for="f-cabin">艙等</label>
+        <select id="f-cabin" name="cabin" aria-describedby="err-cabin">
+          <option value="economy" selected>經濟艙</option>
+          <option value="premium_economy" >豪華經濟艙</option>
+          <option value="business" >商務艙</option>
+          <option value="first" >頭等艙</option>
+        </select>
+        <span id="err-cabin" class="field-error" data-error-for="cabin"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_from">去程最早出發</label>
+        <select id="f-dep_hour_from" name="dep_hour_from" aria-describedby="h-dep_hour err-dep_hour_from">
+          <option value="" selected>不限</option>
+          <option value="0" >00:00</option>
+          <option value="1" >01:00</option>
+          <option value="2" >02:00</option>
+          <option value="3" >03:00</option>
+          <option value="4" >04:00</option>
+          <option value="5" >05:00</option>
+          <option value="6" >06:00</option>
+          <option value="7" >07:00</option>
+          <option value="8" >08:00</option>
+          <option value="9" >09:00</option>
+          <option value="10" >10:00</option>
+          <option value="11" >11:00</option>
+          <option value="12" >12:00</option>
+          <option value="13" >13:00</option>
+          <option value="14" >14:00</option>
+          <option value="15" >15:00</option>
+          <option value="16" >16:00</option>
+          <option value="17" >17:00</option>
+          <option value="18" >18:00</option>
+          <option value="19" >19:00</option>
+          <option value="20" >20:00</option>
+          <option value="21" >21:00</option>
+          <option value="22" >22:00</option>
+          <option value="23" >23:00</option>
+        </select>
+        <span id="err-dep_hour_from" class="field-error" data-error-for="dep_hour_from"></span>
+      </div>
+      <div class="field">
+        <label for="f-dep_hour_to">去程最晚出發</label>
+        <select id="f-dep_hour_to" name="dep_hour_to" aria-describedby="h-dep_hour err-dep_hour_to">
+          <option value="" selected>不限</option>
+          <option value="0" >00:00</option>
+          <option value="1" >01:00</option>
+          <option value="2" >02:00</option>
+          <option value="3" >03:00</option>
+          <option value="4" >04:00</option>
+          <option value="5" >05:00</option>
+          <option value="6" >06:00</option>
+          <option value="7" >07:00</option>
+          <option value="8" >08:00</option>
+          <option value="9" >09:00</option>
+          <option value="10" >10:00</option>
+          <option value="11" >11:00</option>
+          <option value="12" >12:00</option>
+          <option value="13" >13:00</option>
+          <option value="14" >14:00</option>
+          <option value="15" >15:00</option>
+          <option value="16" >16:00</option>
+          <option value="17" >17:00</option>
+          <option value="18" >18:00</option>
+          <option value="19" >19:00</option>
+          <option value="20" >20:00</option>
+          <option value="21" >21:00</option>
+          <option value="22" >22:00</option>
+          <option value="23" >23:00</option>
+        </select>
+        <small id="h-dep_hour" class="hint">兩者需同時選擇或同時不限；以 Google Flights 時段篩選為準</small>
+        <span id="err-dep_hour_to" class="field-error" data-error-for="dep_hour_to"></span>
+      </div>
+    </div>
+    <details class="airline-picker">
+      <summary>只看這些航空公司（最多 5 家）</summary>
+      <p id="h-airlines" class="hint">由 Google Flights 套用篩選；全部不勾選代表不限航空。</p>
+      <div class="airline-list" id="airline-list" data-max="5">
+        <label class="inline"><input type="checkbox" name="airlines" value="BR"  aria-describedby="h-airlines err-airlines"> 長榮航空（BR）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="CI"  aria-describedby="h-airlines err-airlines"> 中華航空（CI）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="JX"  aria-describedby="h-airlines err-airlines"> 星宇航空（JX）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="IT"  aria-describedby="h-airlines err-airlines"> 台灣虎航（IT）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="JL"  aria-describedby="h-airlines err-airlines"> 日本航空（JL）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="NH"  aria-describedby="h-airlines err-airlines"> 全日空航空（NH）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="MM"  aria-describedby="h-airlines err-airlines"> 樂桃航空（MM）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="GK"  aria-describedby="h-airlines err-airlines"> 捷星日本航空（GK）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="KE"  aria-describedby="h-airlines err-airlines"> 大韓航空（KE）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="OZ"  aria-describedby="h-airlines err-airlines"> 韓亞航空（OZ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="7C"  aria-describedby="h-airlines err-airlines"> 濟州航空（7C）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="LJ"  aria-describedby="h-airlines err-airlines"> 真航空（LJ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="BX"  aria-describedby="h-airlines err-airlines"> 釜山航空（BX）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="TW"  aria-describedby="h-airlines err-airlines"> 德威航空（TW）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="ZE"  aria-describedby="h-airlines err-airlines"> 易斯達航空（ZE）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="CX"  aria-describedby="h-airlines err-airlines"> 國泰航空（CX）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="UO"  aria-describedby="h-airlines err-airlines"> 香港快運（UO）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="HX"  aria-describedby="h-airlines err-airlines"> 香港航空（HX）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="NX"  aria-describedby="h-airlines err-airlines"> 澳門航空（NX）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="HB"  aria-describedby="h-airlines err-airlines"> 大灣區航空（HB）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="SQ"  aria-describedby="h-airlines err-airlines"> 新加坡航空（SQ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="TR"  aria-describedby="h-airlines err-airlines"> 酷航（TR）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="TG"  aria-describedby="h-airlines err-airlines"> 泰國國際航空（TG）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="FD"  aria-describedby="h-airlines err-airlines"> 泰國亞洲航空（FD）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="VZ"  aria-describedby="h-airlines err-airlines"> 泰越捷航空（VZ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="VJ"  aria-describedby="h-airlines err-airlines"> 越捷航空（VJ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="VN"  aria-describedby="h-airlines err-airlines"> 越南航空（VN）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="MH"  aria-describedby="h-airlines err-airlines"> 馬來西亞航空（MH）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="AK"  aria-describedby="h-airlines err-airlines"> 馬來西亞亞洲航空（AK）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="PR"  aria-describedby="h-airlines err-airlines"> 菲律賓航空（PR）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="5J"  aria-describedby="h-airlines err-airlines"> 宿霧太平洋航空（5J）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="MU"  aria-describedby="h-airlines err-airlines"> 中國東方航空（MU）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="CZ"  aria-describedby="h-airlines err-airlines"> 中國南方航空（CZ）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="CA"  aria-describedby="h-airlines err-airlines"> 中國國際航空（CA）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="MF"  aria-describedby="h-airlines err-airlines"> 廈門航空（MF）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="UA"  aria-describedby="h-airlines err-airlines"> 聯合航空（UA）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="DL"  aria-describedby="h-airlines err-airlines"> 達美航空（DL）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="EK"  aria-describedby="h-airlines err-airlines"> 阿聯酋航空（EK）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="QR"  aria-describedby="h-airlines err-airlines"> 卡達航空（QR）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="TK"  aria-describedby="h-airlines err-airlines"> 土耳其航空（TK）</label>
+        <label class="inline"><input type="checkbox" name="airlines" value="QF"  aria-describedby="h-airlines err-airlines"> 澳洲航空（QF）</label>
+      </div>
+    </details>
+    <span id="err-airlines" class="field-error" data-error-for="airlines"></span>
+  </fieldset>
+
+  <p class="notice" data-unembedded-hint role="status" hidden>依實測，此組合 Google 常未內嵌結果，可能無法自動查價，可用查票連結人工查看。</p>
+
+  <p id="explore-estimate" class="estimate" role="status"
+     data-hourly-left="60"
+     data-reserve="12"
+     data-max-cells="31"
+     data-today="2026-10-25">預計查詢最多 31 次／本小時剩餘 60 次（保留 12 次給排程）</p>
+
+  <div class="form-actions">
+    <button type="submit" class="primary" data-busy-label="送出中…">開始探索</button>
+  </div>
+</form>
+
+<section class="card">
+  <h2>最近的探索</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最近的探索（可橫向捲動）">
+  <table class="data">
+    <caption class="sr-only">保留期內的探索紀錄</caption>
+    <thead>
+      <tr><th scope="col">路線</th><th scope="col">月份</th><th scope="col">條件</th><th scope="col">狀態</th><th scope="col">進度</th><th scope="col">建立時間</th><th scope="col">查到最低價</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="/explorations/1">台北桃園 TPE → 東京成田 NRT</a></td>
+        <td>2026 年 12 月</td>
+        <td>來回・不限</td>
+        <td><span class="badge">已完成</span></td>
+        <td class="num">31/31</td>
+        <td>2026-10-25 12:00</td>
+        <td class="num">TWD 5,000（1 人總價）</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note hint">探索結果保留 7 天，之後自動清除。</p>
+</section>
+<p class="disclaimer">價格為查到當下的參考值，實際以航空公司或訂票網站為準。</p>
+  </main>
+  <footer class="site-footer">
+    <p>價格為查到當下的參考值，實際以航空公司或訂票網站為準。資料源為非官方介面，可能隨時失效。</p>
+  </footer>
+</body>
+</html>

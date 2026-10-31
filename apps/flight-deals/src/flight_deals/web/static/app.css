@@ -297,6 +297,19 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .airline-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 0 var(--space-4); }
 .airline-list input:disabled + * { opacity: 0.6; }
 .choice-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; }
+.weekday-row { gap: var(--space-1) var(--space-2); }
+.form label.weekday-option {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-small);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.form label.weekday-option:has(input:checked) { border-color: var(--color-accent); }
+.form label.weekday-option:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.weekday-option input { width: 20px; height: 20px; margin: 0; }
 .static-field { display: flex; flex-direction: column; gap: var(--space-1); }
 .static-field .label { font-weight: 500; }
 .static-field .value { min-height: var(--control-height); display: flex; align-items: center; }

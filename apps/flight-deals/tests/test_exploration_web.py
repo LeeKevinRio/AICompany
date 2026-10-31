@@ -158,7 +158,8 @@ def test_explore_page_context(harness: Harness, queue: Queue) -> None:
     assert values["airlines"] == [] and values["dep_hour_from"] is None
     assert len(data["month_options"]) == 12
     assert data["month_options"][0] == {"value": "2026-10", "label": "2026 年 10 月"}
-    assert data["quota"] == {"hourly_left": 60, "reserve": 12, "max_cells": 31}
+    quota = {k: v for k, v in data["quota"].items() if k != "weekday_counts"}  # FD-10
+    assert quota == {"hourly_left": 60, "reserve": 12, "max_cells": 31}
     assert data["active"] is None and data["recent"] == [] and data["today"] == "2026-10-25"
     exploration_id = start(harness)
     data = harness.services.exploration_views.explore_page()

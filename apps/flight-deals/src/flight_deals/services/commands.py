@@ -36,6 +36,7 @@ from flight_deals.domain.messages import (
     COMMAND_FAILED,
     COMMAND_HELP,
     COMMAND_NOT_TEXT,
+    COMMAND_SCAN_COMPARISON_DEFERRED,
     COMMAND_SCAN_DEFERRED,
     COMMAND_SCAN_EXPIRED,
     COMMAND_SCAN_FOLLOW_UP,
@@ -46,6 +47,7 @@ from flight_deals.domain.messages import (
     COMMAND_TOP_N,
     COMMAND_UNKNOWN,
     SCAN_FAILURE_REASONS,
+    CommandComparisonStatus,
     CommandExplorationStatus,
     CommandPriceRow,
     CommandRunSummary,
@@ -449,7 +451,15 @@ class CommandService:
                 trip_days=spec.trip_days,
                 done=active.done,
                 total=active.total,
+                end_year=spec.end_year,
+                end_month=spec.end_month,
             )
+        comparing = self._repo.active_comparison()
+        comparison = (
+            CommandComparisonStatus(done=comparing.done, total=comparing.total)
+            if comparing is not None
+            else None
+        )
         status = CommandStatus(
             now=now,
             sources=tuple(sources),
@@ -458,6 +468,7 @@ class CommandService:
             scheduler_running=self.hooks.scheduler_running(),
             next_scan_at=self.hooks.next_run_time(),
             exploration=exploration,
+            comparison=comparison,
         )
         return command_status_message(status)
 
@@ -542,6 +553,7 @@ class CommandService:
         if self._scan_running(watch.id, now):
             return CommandReply(COMMAND_SCAN_PENDING)
         deferred = self._repo.active_exploration() is not None
+        comparing = self._repo.active_comparison() is not None
         with self._pending_lock:
             self._pending[watch.id] = (context.update_id, context.bot_id)
         try:
@@ -553,6 +565,8 @@ class CommandService:
         lines = [command_scan_queued(watch.id, watch.spec.name)]
         if deferred:
             lines.append(COMMAND_SCAN_DEFERRED)
+        if comparing:
+            lines.append(COMMAND_SCAN_COMPARISON_DEFERRED)
         lines.append(COMMAND_SCAN_FOLLOW_UP)
         return CommandReply("\n".join(lines))
 

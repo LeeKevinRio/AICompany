@@ -3,9 +3,9 @@
 {% block content %}
 {% set v = values or {} %}
 <div class="page-head">
-  <h1>探索一個月內的價格</h1>
+  <h1>探索出發日價格</h1>
 </div>
-<p>對所選月份每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最低價前 5 個日期呈現。</p>
+<p>對所選月份（最多連續 3 個月）內符合出發星期的每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最便宜前 5 個日期呈現。</p>
 {% if active %}
 <p class="notice"><a href="/explorations/{{ active.id }}">探索進行中（{{ active.done }}/{{ active.total }}）</a>，同一時間只能進行一個探索；排程掃描會在探索完成後依序執行。</p>
 {% endif %}
@@ -60,13 +60,22 @@
     </fieldset>
     <div class="grid">
       <div class="field">
-        <label for="f-month">月份</label>
+        <label for="f-month">起始月份</label>
         <select id="f-month" name="month" aria-describedby="err-month">
           {% for m in (month_options or []) %}
           <option value="{{ m.value }}" {% if v.month == m.value %}selected{% endif %}>{{ m.label }}</option>
           {% endfor %}
         </select>
         <span id="err-month" class="field-error" data-error-for="month"></span>
+      </div>
+      <div class="field">
+        <label for="f-month_to">結束月份</label>
+        <select id="f-month_to" name="month_to" aria-describedby="err-month_to">
+          {% for m in (month_options or []) %}
+          <option value="{{ m.value }}" {% if v.month_to == m.value %}selected{% endif %}>{{ m.label }}</option>
+          {% endfor %}
+        </select>
+        <span id="err-month_to" class="field-error" data-error-for="month_to"></span>
       </div>
       <div class="field" data-show-when="trip_type=round_trip">
         <label for="f-trip_days">旅程天數</label>
@@ -75,6 +84,17 @@
         <span id="err-trip_days" class="field-error" data-error-for="trip_days"></span>
       </div>
     </div>
+    <fieldset class="group" id="ex-weekday-group">
+      <legend>出發星期</legend>
+      {% set _wd = v.depart_weekdays if v.depart_weekdays is defined and v.depart_weekdays is not none else [0, 1, 2, 3, 4, 5, 6] %}
+      <div class="choice-row weekday-row">
+        {% for w in (weekday_options or []) %}
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="{{ w.value }}" {% if w.value in _wd %}checked{% endif %} aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> {{ w.label }}</label>
+        {% endfor %}
+      </div>
+      <small id="ex-h-depart_weekdays" class="hint">全部勾選代表不限；只篩選去程出發日，回程不篩</small>
+      <span id="ex-err-depart_weekdays" class="field-error" data-error-for="depart_weekdays"></span>
+    </fieldset>
   </fieldset>
 
   <fieldset>
@@ -152,6 +172,8 @@
      data-hourly-left="{{ q.hourly_left if q.hourly_left is not none else "" }}"
      data-reserve="{{ q.reserve if q.reserve is not none else "" }}"
      data-max-cells="{{ q.max_cells if q.max_cells is not none else 31 }}"
+     data-weekday-counts='{{ (q.weekday_counts or {})|tojson }}'
+     data-over-limit-text="{{ over_limit_text or "" }}"
      data-today="{{ today or "" }}">預計查詢最多 {{ q.max_cells if q.max_cells is not none else 31 }} 次{% if q.hourly_left is not none %}／本小時剩餘 {{ q.hourly_left }} 次{% if q.reserve is not none %}（保留 {{ q.reserve }} 次給排程）{% endif %}{% endif %}</p>
 
   <div class="form-actions">

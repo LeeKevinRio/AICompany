@@ -14,10 +14,11 @@ from flight_deals.domain.airports import route_label
 from flight_deals.domain.currency import format_money
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.rules import TriggeredItem
-from flight_deals.domain.timeutil import format_taipei, format_travel_date
+from flight_deals.domain.timeutil import WEEKDAY_LABELS, format_taipei, format_travel_date
 from flight_deals.domain.trip_labels import (
     BOOKING_FALLBACK_NOTE,
     cabin_label,
+    depart_weekdays_label,
     filter_line,
     flight_duration_label,
     pax_full_label,
@@ -213,6 +214,8 @@ class DigestRow:
     adults: int = 1
     children: int = 0
     cabin: str = "economy"
+    # "週五、週六出發" for a filtered flexible window; None otherwise (FD-10).
+    weekdays_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -245,6 +248,8 @@ def digest_stale_label(stale_after_hours: int) -> str:
 def _digest_line(row: DigestRow, stale_after_hours: int) -> str:
     name = row.name if len(row.name) <= DIGEST_NAME_MAX else row.name[:DIGEST_NAME_MAX] + "…"
     parts = [f"• {name}", route_label(row.origin, row.destination), cabin_label(row.cabin)]
+    if row.weekdays_label is not None:
+        parts.append(row.weekdays_label)
     if row.amount_minor is None or row.depart_date is None:
         parts.append(f"{DIGEST_NO_PRICE}（{pax_label(row.adults, row.children)}）")
     else:
@@ -331,6 +336,7 @@ EXPLORATION_CELL_LABELS: dict[str, str] = {
     "interrupted": "中斷未查",
     "past": "未查詢（已過去的日期）",
     "out_of_range": "未查詢（超出可查日期範圍）",
+    "weekday_filtered": "未查（星期篩選）",
 }
 EXPLORATION_REFERENCE_NOTE = "探索結果為查詢當下參考值，不會寫入任何監看的價格紀錄，也不會推播。"
 EXPLORATION_BUSY = "已有探索進行中，同一時間只能進行一個探索"
@@ -343,17 +349,40 @@ EXPLORATION_RESTARTED = "服務重啟，探索中斷；未查的日期不會自�
 EXPLORATION_PREFILL_OK = "已從探索帶入條件，請填預算與名稱"
 EXPLORATION_PREFILL_MISSING = "找不到對應的探索結果，請手動填寫"
 
+# ---- departure weekdays and month ranges (ADR-0002 FD-10 Decisions 4, 6, 7) ----------
+
+# Single source of the span limit; validation re-exports it as EXPLORATION_MAX_SPAN_MONTHS
+# (messages cannot import validation, which imports messages).
+EXPLORATION_MAX_SPAN_MONTHS = 3
+WEEKDAYS_REQUIRED = "請至少選一個出發星期"
+WEEKDAYS_INVALID = "出發星期格式不正確，請從選項勾選"
+WEEKDAYS_NO_MATCH_WINDOW = "所選日期區間內沒有符合出發星期的日子"
+WEEKDAYS_NO_MATCH_MONTHS = "所選月份內沒有符合出發星期的日子"
+EXPLORATION_TOO_MANY_CELLS = "請縮小月份範圍或減少星期"
+MONTH_TO_BEFORE = "結束月份不可早於起始月份"
+MONTH_SPAN_TOO_LONG = f"月份範圍最多連續 {EXPLORATION_MAX_SPAN_MONTHS} 個月"
+# Moved verbatim from exploration.html (FD-10 Decision 9, F3).
+EXPLORATION_STALE_FALLBACK = "這是較早前查到的價格，可能已變動。"
+EXPLORATION_MONTH_WATCH_BUTTON = "以整月建立彈性窗監看"
+EXPLORATION_RANGE_WATCH_BUTTON = "以所選月份建立彈性窗監看"
+# Under the top-5 heading, always shown (risk-compliance R1).
+EXPLORATION_TOP_SCOPE_NOTE = "只比較所選月份內符合出發星期、且有查到價格的出發日。"
+WEEKDAY_OPTION_LABELS: tuple[str, ...] = tuple("週" + name for name in WEEKDAY_LABELS)
+
 
 def no_embedded_streak_label(rounds: int) -> str:
     """List-row hint; the round count comes from config (Limits.no_embedded_streak_rounds)."""
     return f"連續 {rounds} 輪 Google 未內嵌結果，請用查票連結確認"
 
 
-def exploration_quota_message(hourly_left: int, needed: int, reserve: int) -> str:
+def exploration_quota_message(
+    hourly_left: int, needed: int, reserve: int, *, months: int = 1
+) -> str:
     text = f"本小時剩餘額度 {hourly_left} 次"
     if reserve > 0:
         text += f"（需保留 {reserve} 次給排程掃描）"
-    return f"{text}，本次需要 {needed} 次，不足以探索整月，請稍後再試"
+    scope = "整月" if months <= 1 else "所選月份"
+    return f"{text}，本次需要 {needed} 次，不足以探索{scope}，請稍後再試"
 
 
 def exploration_skipped_note(reason: str, count: int) -> str:
@@ -372,12 +401,20 @@ def exploration_reused_note(hours: int) -> str:
     return f"顯示 {hours} 小時前的探索結果"
 
 
-def exploration_sampled_note(max_pairs: int) -> str:
-    return f"以整月建立的彈性窗監看每輪最多查 {max_pairs} 組日期，輪換取樣"
+def exploration_sampled_note(max_pairs: int, *, months: int = 1) -> str:
+    scope = "整月" if months <= 1 else "所選月份"
+    return f"以{scope}建立的彈性窗監看每輪最多查 {max_pairs} 組日期，輪換取樣"
 
 
 def month_label(year: int, month: int) -> str:
     return f"{year} 年 {month} 月"
+
+
+def month_range_label(year: int, month: int, end_year: int, end_month: int) -> str:
+    """Single month: ``month_label``; otherwise "2026 年 12 月～2027 年 2 月"."""
+    if (end_year, end_month) == (year, month):
+        return month_label(year, month)
+    return f"{month_label(year, month)}～{month_label(end_year, end_month)}"
 
 
 def exploration_static_texts() -> list[str]:
@@ -402,7 +439,23 @@ def exploration_static_texts() -> list[str]:
         exploration_age_note(25),
         exploration_reused_note(3),
         exploration_sampled_note(12),
+        exploration_sampled_note(12, months=3),
         month_label(2026, 12),
+        WEEKDAYS_REQUIRED,
+        WEEKDAYS_INVALID,
+        WEEKDAYS_NO_MATCH_WINDOW,
+        WEEKDAYS_NO_MATCH_MONTHS,
+        EXPLORATION_TOO_MANY_CELLS,
+        MONTH_TO_BEFORE,
+        MONTH_SPAN_TOO_LONG,
+        EXPLORATION_STALE_FALLBACK,
+        EXPLORATION_MONTH_WATCH_BUTTON,
+        EXPLORATION_RANGE_WATCH_BUTTON,
+        EXPLORATION_TOP_SCOPE_NOTE,
+        *WEEKDAY_OPTION_LABELS,
+        exploration_quota_message(20, 24, 12, months=3),
+        month_range_label(2026, 12, 2027, 2),
+        depart_weekdays_label((4, 5)) or "",
     ]
 
 
@@ -637,6 +690,8 @@ COMMAND_SCAN_PAUSED = "該監看已停用，不會查價。"
 COMMAND_SCAN_EXPIRED = "該監看日期已全部過期，不會查價。"
 COMMAND_SCAN_PENDING = "該監看已在查價中，不重複排入。"
 COMMAND_SCAN_DEFERRED = "探索進行中，將於探索結束後執行。"
+COMMAND_COMPARISON_DEFERRED = "比價進行中，掃描順延"
+COMMAND_SCAN_COMPARISON_DEFERRED = "比價進行中，掃描順延，將於比價結束後執行。"
 COMMAND_SCAN_FOLLOW_UP = "查價完成後會另外回覆結果（服務重啟時可能不會回覆，可用 /watch 查看）。"
 COMMAND_DIGEST_QUEUED = "已排入一則手動摘要，稍後送出；不影響每日排程摘要。"
 COMMAND_NO_EXPLORATION = "目前沒有進行中的探索"
@@ -1043,6 +1098,14 @@ class CommandExplorationStatus:
     trip_days: int | None
     done: int
     total: int
+    end_year: int | None = None
+    end_month: int | None = None
+
+
+@dataclass(frozen=True)
+class CommandComparisonStatus:
+    done: int
+    total: int
 
 
 @dataclass(frozen=True)
@@ -1054,6 +1117,7 @@ class CommandStatus:
     scheduler_running: bool
     next_scan_at: datetime | None
     exploration: CommandExplorationStatus | None
+    comparison: CommandComparisonStatus | None = None
 
 
 def _next_scan_text(status: CommandStatus) -> str:
@@ -1075,10 +1139,21 @@ def _exploration_text(item: CommandExplorationStatus | None) -> str:
     trip = TRIP_TYPE_LABELS.get(item.trip_type, item.trip_type)
     if item.trip_days:
         trip += f" {item.trip_days} 天"
+    months = month_range_label(
+        item.year,
+        item.month,
+        item.end_year if item.end_year is not None else item.year,
+        item.end_month if item.end_month is not None else item.month,
+    )
     return (
-        f"{route_label(item.origin, item.destination)} {month_label(item.year, item.month)}"
+        f"{route_label(item.origin, item.destination)} {months}"
         f" {trip}，已查 {item.done}／共 {item.total}"
     )
+
+
+def comparison_status_text(item: CommandComparisonStatus) -> str:
+    """``/status`` line while a comparison runs (FD-10 Decision 9, F1)."""
+    return f"比價：進行中（已查 {item.done}／共 {item.total}），排程掃描順延"
 
 
 def command_status_message(status: CommandStatus) -> str:
@@ -1095,6 +1170,8 @@ def command_status_message(status: CommandStatus) -> str:
     lines.append(f"本小時查詢額度：已用 {status.hourly_used}／上限 {status.hourly_limit}")
     lines.append(f"下次掃描：{_next_scan_text(status)}")
     lines.append(f"探索：{_exploration_text(status.exploration)}")
+    if status.comparison is not None:
+        lines.append(comparison_status_text(status.comparison))
     return fit_reply(lines, [], [])
 
 
@@ -1136,6 +1213,9 @@ def command_static_texts() -> list[str]:
         COMMAND_SCAN_EXPIRED,
         COMMAND_SCAN_PENDING,
         COMMAND_SCAN_DEFERRED,
+        COMMAND_COMPARISON_DEFERRED,
+        COMMAND_SCAN_COMPARISON_DEFERRED,
+        comparison_status_text(CommandComparisonStatus(3, 8)),
         COMMAND_SCAN_FOLLOW_UP,
         COMMAND_DIGEST_QUEUED,
         COMMAND_NO_EXPLORATION,
@@ -1181,6 +1261,8 @@ MAINTENANCE_TABLE_LABELS: dict[str, str] = {
     "price_observation": "價格觀測",
     "notification": "通知",
     "exploration": "探索",
+    "comparison": "比價",
+    "comparison_cell": "比價明細",
 }
 MAINTENANCE_RUNNING_DEFERRED = "掃描或探索進行中，清除順延"
 VACUUM_DISABLED = "已關閉每週壓縮"

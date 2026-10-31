@@ -10,6 +10,8 @@ from collections.abc import Iterable
 
 from flight_deals.domain.airlines import airlines_label
 from flight_deals.domain.models import CABINS
+from flight_deals.domain.timeutil import WEEKDAY_LABELS
+from flight_deals.domain.weekdays import is_all_weekdays, normalize_weekdays
 
 CABIN_LABELS: dict[str, str] = {
     "economy": "經濟艙",
@@ -87,6 +89,18 @@ def filter_line(
     return "篩選：" + "；".join(parts) if parts else None
 
 
+def depart_weekdays_label(weekdays: Iterable[int]) -> str | None:
+    """Departure weekday filter, e.g. "週五、週六出發"; None when every weekday is selected.
+
+    Monday-to-Sunday order whatever the input order; never abbreviated (no "週末" or
+    similar words, FD-10 Decision 7). The single helper for every summary.
+    """
+    days = normalize_weekdays(weekdays)
+    if is_all_weekdays(days):
+        return None
+    return "、".join("週" + WEEKDAY_LABELS[d] for d in days) + "出發"
+
+
 def stay_range_label(min_days: int, max_days: int) -> str:
     """Trip length of a flexible window: "4 天" when equal, otherwise "3–5 天"."""
     if min_days == max_days:
@@ -118,4 +132,6 @@ def static_texts() -> list[str]:
         dep_window_label(6, 12),
         conditions_label(("BR", "CI"), 6, 12),
         filter_line(("BR", "CI"), 6, 12) or "",
+        depart_weekdays_label((4, 5)) or "",
+        depart_weekdays_label((6, 0, 2)) or "",
     ]

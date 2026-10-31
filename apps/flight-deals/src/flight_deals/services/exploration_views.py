@@ -9,21 +9,28 @@ from typing import Any
 
 from flight_deals.domain.airports import place_label, route_label
 from flight_deals.domain.currency import format_money
-from flight_deals.domain.dates import month_days, month_weeks
+from flight_deals.domain.dates import month_days, month_weekday_counts, month_weeks
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
     DISCLAIMER,
     EXPLORATION_CELL_LABELS,
     EXPLORATION_DONE_WITH_GAPS,
+    EXPLORATION_MAX_SPAN_MONTHS,
+    EXPLORATION_MONTH_WATCH_BUTTON,
     EXPLORATION_PREFILL_MISSING,
     EXPLORATION_PREFILL_OK,
+    EXPLORATION_RANGE_WATCH_BUTTON,
     EXPLORATION_REFERENCE_NOTE,
+    EXPLORATION_STALE_FALLBACK,
     EXPLORATION_STATUS_LABELS,
+    EXPLORATION_TOO_MANY_CELLS,
+    EXPLORATION_TOP_SCOPE_NOTE,
     TRIP_TYPE_LABELS,
     exploration_age_note,
     exploration_sampled_note,
     exploration_unfinished_note,
     month_label,
+    month_range_label,
 )
 from flight_deals.domain.models import CABINS, DatePair, ExplorationSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, weekday_label
@@ -32,9 +39,11 @@ from flight_deals.domain.trip_labels import (
     NO_LIMIT,
     cabin_label,
     conditions_label,
+    depart_weekdays_label,
     total_price_note,
 )
 from flight_deals.domain.validation import MAX_DAYS_AHEAD, exploration_months
+from flight_deals.domain.weekdays import ALL_WEEKDAYS
 from flight_deals.ports import BookingLinkBuilder, Clock
 from flight_deals.services.exploration import ExplorationService
 from flight_deals.services.notifications import safe_booking_url
@@ -73,12 +82,25 @@ def max_stops_label(max_stops: int | None) -> str | None:
 
 
 def exploration_conditions(spec: ExplorationSpec) -> str:
-    """Stops plus airline / hour filters, e.g. "僅直飛｜長榮｜去程 06–12 時"; "不限"."""
+    """Stops, airline / hour filters and weekdays, e.g. "僅直飛｜長榮｜週五、週六出發";
+    "不限" with none of them (all weekdays add nothing)."""
     filters = conditions_label(spec.airlines, spec.dep_hour_from, spec.dep_hour_to)
-    stops = max_stops_label(spec.max_stops)
-    if stops is None:
-        return filters
-    return stops if filters == NO_LIMIT else f"{stops}｜{filters}"
+    parts = [
+        part
+        for part in (
+            max_stops_label(spec.max_stops),
+            None if filters == NO_LIMIT else filters,
+            depart_weekdays_label(spec.depart_weekdays),
+        )
+        if part is not None
+    ]
+    return "｜".join(parts) or NO_LIMIT
+
+
+def spec_month_label(spec: ExplorationSpec) -> str:
+    """ "2026 年 12 月", or "2026 年 12 月～2027 年 2 月" for a range."""
+    end_year, end_month = spec.end
+    return month_range_label(spec.year, spec.month, end_year, end_month)
 
 
 def has_filters(spec: ExplorationSpec) -> bool:
@@ -140,6 +162,8 @@ class ExplorationViewService:
             "destination_label": "",
             "trip_type": "round_trip",
             "month": f"{default_year:04d}-{default_month:02d}",
+            "month_to": f"{default_year:04d}-{default_month:02d}",
+            "depart_weekdays": list(ALL_WEEKDAYS),
             "trip_days": DEFAULT_TRIP_DAYS,
             "max_stops": "",
             "adults": 1,
@@ -155,10 +179,17 @@ class ExplorationViewService:
             "month_options": [
                 {"value": f"{y:04d}-{m:02d}", "label": month_label(y, m)} for y, m in months
             ],
+            "max_months": EXPLORATION_MAX_SPAN_MONTHS,
+            "over_limit_text": EXPLORATION_TOO_MANY_CELLS,
             "quota": {
                 "hourly_left": quota.hourly_left,
                 "reserve": quota.reserve,
                 "max_cells": quota.max_cells,
+                # Queryable departure days per weekday (0 = Monday) of each month option;
+                # the page only adds them up (FD-10 Decision 8).
+                "weekday_counts": {
+                    f"{y:04d}-{m:02d}": list(month_weekday_counts(y, m, today)) for y, m in months
+                },
             },
             "recent": [
                 self._recent_row(r)
@@ -186,7 +217,7 @@ class ExplorationViewService:
         return {
             "id": record.id,
             "route_label": route_label(spec.origin, spec.destination),
-            "month": month_label(spec.year, spec.month),
+            "month": spec_month_label(spec),
             "month_value": spec.month_text,
             "trip_type_label": TRIP_TYPE_LABELS[spec.trip_type],
             "conditions_label": exploration_conditions(spec),
@@ -218,9 +249,18 @@ class ExplorationViewService:
         def view(day: date) -> dict[str, Any]:
             return self._cell_view(record, by_day.get(day), day, created_day, levels, filtered)
 
-        weeks = [
-            [view(d) if d else None for d in week] for week in month_weeks(spec.year, spec.month)
+        calendar_months = [
+            {
+                "year": year,
+                "month": month,
+                "label": month_label(year, month),
+                "weeks": [
+                    [view(d) if d else None for d in week] for week in month_weeks(year, month)
+                ],
+            }
+            for year, month in spec.months
         ]
+        weeks = calendar_months[0]["weeks"]
         top = sorted(
             (c for c in cells if rankable(c, spec.currency)),
             key=lambda c: (c.amount_minor or 0, c.depart_date),
@@ -240,7 +280,9 @@ class ExplorationViewService:
                 "id": record.id,
                 "route_label": route_label(spec.origin, spec.destination),
                 "month": spec.month_text,
-                "month_label": month_label(spec.year, spec.month),
+                "month_to": spec.month_to_text,
+                "month_label": spec_month_label(spec),
+                "weekdays_label": depart_weekdays_label(spec.depart_weekdays),
                 "trip_type": spec.trip_type,
                 "trip_type_label": TRIP_TYPE_LABELS[spec.trip_type],
                 "trip_days": spec.trip_days,
@@ -260,12 +302,22 @@ class ExplorationViewService:
                 "stale": stale,
                 "age_hours": age_hours,
                 "stale_note": exploration_age_note(age_hours) if stale else None,
+                "stale_fallback": EXPLORATION_STALE_FALLBACK,
                 "month_watch_url": f"/watches/new?from_exploration={record.id}&mode=month",
+                "month_watch_label": (
+                    EXPLORATION_MONTH_WATCH_BUTTON
+                    if len(spec.months) == 1
+                    else EXPLORATION_RANGE_WATCH_BUTTON
+                ),
             },
+            "calendar_months": calendar_months,
             "weeks": weeks,
             "top5": top5,
+            "top_scope_note": EXPLORATION_TOP_SCOPE_NOTE,
             "disclaimer": f"{EXPLORATION_REFERENCE_NOTE}{DISCLAIMER}",
-            "sampled_note": exploration_sampled_note(settings.max_pairs_per_scan),
+            "sampled_note": exploration_sampled_note(
+                settings.max_pairs_per_scan, months=len(spec.months)
+            ),
         }
 
     def _booking(self, spec: ExplorationSpec, pair: DatePair) -> tuple[str, str | None]:
@@ -301,6 +353,10 @@ class ExplorationViewService:
             "rank_note": None,
         }
         if cell is None:
+            # Off the selected weekdays first, then past, then beyond the query range.
+            if day.weekday() not in record.spec.depart_weekdays:
+                label = EXPLORATION_CELL_LABELS["weekday_filtered"]
+                return {**base, "status": "weekday_filtered", "label": label}
             key = "past" if day < created_day else "out_of_range"
             return {**base, "status": "not_queried", "label": EXPLORATION_CELL_LABELS[key]}
         spec = record.spec
@@ -350,7 +406,7 @@ class ExplorationViewService:
             return base, EXPLORATION_PREFILL_MISSING, None
         spec = record.spec
         today = taipei_date(self._clock())
-        days = month_days(spec.year, spec.month)
+        days = [day for year, month in spec.months for day in month_days(year, month)]
         values = dict(base)
         values.update(
             origin=spec.origin,
@@ -383,8 +439,11 @@ class ExplorationViewService:
                 max_trip_days="" if stay is None else str(stay),
                 depart_date="",
                 return_date="",
+                depart_weekdays=list(spec.depart_weekdays),
             )
-            note = exploration_sampled_note(self._settings.current().max_pairs_per_scan)
+            note = exploration_sampled_note(
+                self._settings.current().max_pairs_per_scan, months=len(spec.months)
+            )
             return values, EXPLORATION_PREFILL_OK, note
         day = _parse_day(depart)
         if day is None or day not in days:

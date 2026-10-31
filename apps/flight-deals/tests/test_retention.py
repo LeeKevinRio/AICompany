@@ -629,6 +629,8 @@ def test_maintenance_block_and_stats_cache(h: Harness, monkeypatch: pytest.Monke
         "價格觀測",
         "通知",
         "探索",
+        "比價",
+        "比價明細",
     ]
     assert view["last_run_label"] == "尚未執行" and view["last_backup_label"] == "尚未執行"
     assert view["last_vacuum_label"] == "尚未執行" and view["last_run_summary"] is None

@@ -94,9 +94,12 @@ def test_any_condition_change_changes_the_key(change: dict[str, Any]) -> None:
     assert spec(**change).condition_key() != spec().condition_key()
 
 
-def test_exploration_key_golden_unchanged() -> None:  # C-62
+def test_exploration_key_golden_unchanged() -> None:  # C-62, golden v2 since FD-10 (C-75)
     exploration = ExplorationSpec("TPE", "NRT", "round_trip", 2026, 12, 5, None)
-    assert exploration.condition_key() == "v1|TPE|NRT|round_trip|2026-12|5|-|1|0|economy|-|-|-|TWD"
+    assert (
+        exploration.condition_key()
+        == "v2|TPE|NRT|round_trip|2026-12|2026-12|127|5|-|1|0|economy|-|-|-|TWD"
+    )
 
 
 def test_target_cache_key_equals_watch() -> None:  # C-62

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import cast
 
+from flight_deals.domain import messages
 from flight_deals.domain.airlines import MAX_AIRLINES, lookup_airline
 from flight_deals.domain.airports import is_selectable, lookup, same_city_group
 from flight_deals.domain.currency import DEFAULT_CURRENCY, major_to_minor
@@ -15,6 +16,10 @@ from flight_deals.domain.messages import (
     COMPARISON_DATE_INPUT_INVALID,
     COMPARISON_DESTINATIONS_COUNT,
     COMPARISON_DESTINATIONS_INVALID,
+    MONTH_SPAN_TOO_LONG,
+    MONTH_TO_BEFORE,
+    WEEKDAYS_INVALID,
+    WEEKDAYS_REQUIRED,
     comparison_destination_duplicate,
     comparison_destination_is_origin,
     comparison_destination_same_city,
@@ -31,6 +36,7 @@ from flight_deals.domain.models import (
     TripType,
     WatchSpec,
 )
+from flight_deals.domain.weekdays import ALL_WEEKDAYS
 
 _INTEGER = re.compile(r"^-?\d+$")
 MAX_TRIP_DAYS = 60
@@ -310,6 +316,32 @@ def _parse_route(
     return origin, destination
 
 
+def _parse_weekdays(
+    raw: Mapping[str, object], errors: dict[str, str], previous: tuple[int, ...]
+) -> tuple[int, ...]:
+    """``depart_weekdays``: a JSON list of int 0..6 (0 = Monday), sorted and de-duplicated.
+
+    A missing key keeps ``previous`` (all weekdays on create). Booleans, floats, strings
+    and other shapes are rejected (FD-10 Decision 4).
+    """
+    if "depart_weekdays" not in raw:
+        return previous
+    value = raw.get("depart_weekdays")
+    if not isinstance(value, list | tuple):
+        errors["depart_weekdays"] = WEEKDAYS_INVALID
+        return previous
+    days: set[int] = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 6:
+            errors["depart_weekdays"] = WEEKDAYS_INVALID
+            return previous
+        days.add(item)
+    if not days:
+        errors["depart_weekdays"] = WEEKDAYS_REQUIRED
+        return previous
+    return tuple(sorted(days))
+
+
 def _parse_max_stops(raw: Mapping[str, object], errors: dict[str, str]) -> int | None:
     max_stops = _parse_int(raw, "max_stops", errors)
     if max_stops is not None and not 0 <= max_stops <= MAX_STOPS_LIMIT:
@@ -446,6 +478,13 @@ def validate_watch_input(
     if len(name) > MAX_NAME_LENGTH:
         errors["name"] = f"名稱最多 {MAX_NAME_LENGTH} 字"
 
+    # Weekdays only apply to a flexible window; fixed dates always store every weekday.
+    depart_weekdays = ALL_WEEKDAYS
+    if date_mode == "flexible":
+        depart_weekdays = _parse_weekdays(
+            raw, errors, existing.depart_weekdays if existing else ALL_WEEKDAYS
+        )
+
     if errors or budget_major is None:
         return ValidationOutcome(None, errors)
 
@@ -471,6 +510,7 @@ def validate_watch_input(
         airlines=airlines,
         dep_hour_from=hour_from,
         dep_hour_to=hour_to,
+        depart_weekdays=depart_weekdays,
     )
     return ValidationOutcome(spec, {})
 
@@ -482,6 +522,9 @@ MIN_EXPLORATION_TRIP_DAYS = 1
 MAX_EXPLORATION_TRIP_DAYS = 30
 _MONTH_TEXT = re.compile(r"(\d{4})-(\d{2})", re.ASCII)
 MONTH_INVALID = "月份格式錯誤（應為 YYYY-MM）"
+# Consecutive months of one exploration; the number lives in messages, which builds the
+# wording from it (messages cannot import this module).
+EXPLORATION_MAX_SPAN_MONTHS = messages.EXPLORATION_MAX_SPAN_MONTHS
 TRIP_DAYS_REQUIRED = "來回行程請填寫旅程天數"
 TRIP_DAYS_NOT_INT = "旅程天數必須是整數"
 TRIP_DAYS_RANGE = f"旅程天數須介於 {MIN_EXPLORATION_TRIP_DAYS} 到 {MAX_EXPLORATION_TRIP_DAYS}"
@@ -495,6 +538,13 @@ def exploration_months(today: date) -> list[tuple[int, int]]:
     """(year, month) choices: the current Asia/Taipei month and the next 11."""
     first = month_index(today.year, today.month)
     return [(i // 12, i % 12 + 1) for i in range(first, first + EXPLORATION_MONTHS)]
+
+
+def _parse_month(text: str) -> tuple[int, int] | None:
+    match = _MONTH_TEXT.fullmatch(text)
+    if match is None or not 1 <= int(match.group(2)) <= 12:
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 def month_range_error(today: date) -> str:
@@ -520,15 +570,38 @@ def validate_exploration(raw: Mapping[str, object], today: date) -> ExplorationO
         trip_type_text = "round_trip"
     trip_type = cast(TripType, trip_type_text)
 
+    first = month_index(today.year, today.month)
     year = month = 0
-    match = _MONTH_TEXT.fullmatch(_text(raw, "month"))
-    if match is None or not 1 <= int(match.group(2)) <= 12:
+    parsed = _parse_month(_text(raw, "month"))
+    if parsed is None:
         errors["month"] = MONTH_INVALID
     else:
-        year, month = int(match.group(1)), int(match.group(2))
-        first = month_index(today.year, today.month)
+        year, month = parsed
         if not first <= month_index(year, month) < first + EXPLORATION_MONTHS:
             errors["month"] = month_range_error(today)
+
+    # End month (FD-10 Decision 4): missing, blank or equal to the start = single month.
+    end_year: int | None = None
+    end_month: int | None = None
+    end_text = _text(raw, "month_to")
+    if end_text:
+        parsed_end = _parse_month(end_text)
+        if parsed_end is None:
+            errors["month_to"] = MONTH_INVALID
+        else:
+            end_index = month_index(*parsed_end)
+            if not first <= end_index < first + EXPLORATION_MONTHS:
+                errors["month_to"] = month_range_error(today)
+            elif "month" not in errors:
+                start_index = month_index(year, month)
+                if end_index < start_index:
+                    errors["month_to"] = MONTH_TO_BEFORE
+                elif end_index - start_index + 1 > EXPLORATION_MAX_SPAN_MONTHS:
+                    errors["month_to"] = MONTH_SPAN_TOO_LONG
+                elif end_index > start_index:
+                    end_year, end_month = parsed_end
+
+    depart_weekdays = _parse_weekdays(raw, errors, ALL_WEEKDAYS)
 
     trip_days: int | None = None
     if trip_type == "round_trip":
@@ -561,6 +634,9 @@ def validate_exploration(raw: Mapping[str, object], today: date) -> ExplorationO
         dep_hour_from=hour_from,
         dep_hour_to=hour_to,
         currency=DEFAULT_CURRENCY,
+        end_year=end_year,
+        end_month=end_month,
+        depart_weekdays=depart_weekdays,
     )
     return ExplorationOutcome(spec, {})
 

@@ -29,6 +29,7 @@
     {% if watch.min_trip_days %}<dt>旅程天數</dt><dd>{{ watch.stay_label }}</dd>{% endif %}
     <dt>預算門檻</dt><dd>{{ watch.budget }}</dd>
     <dt>轉機</dt><dd>{{ watch.max_stops }}</dd>
+    {% if watch.weekdays_label %}<dt>出發星期</dt><dd>{{ watch.weekdays_label }}</dd>{% endif %}
     <dt>人數</dt><dd>{{ watch.pax_full_label or "—" }}</dd>
     <dt>艙等</dt><dd>{{ watch.cabin_label or watch.cabin }}</dd>
     <dt>航空公司</dt><dd>{{ watch.airlines_label or "不限" }}</dd>

@@ -16,6 +16,7 @@ from flight_deals.domain.messages import DigestRow, DigestSourceRow, daily_diges
 from flight_deals.domain.models import SCANNABLE_STATUSES
 from flight_deals.domain.rules import digest_key
 from flight_deals.domain.timeutil import TAIPEI, taipei_date
+from flight_deals.domain.trip_labels import depart_weekdays_label
 from flight_deals.ports import Clock
 from flight_deals.services.health import HealthService, describe_source
 from flight_deals.services.notifications import NotificationService
@@ -146,6 +147,7 @@ class DigestService:
                     adults=spec.adults,
                     children=spec.children,
                     cabin=spec.cabin,
+                    weekdays_label=depart_weekdays_label(spec.depart_weekdays),
                 )
             )
         known = {r.source: r for r in self._health.records()}

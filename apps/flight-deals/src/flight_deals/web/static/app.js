@@ -162,6 +162,16 @@
     sync();
   }
 
+  // Checked weekday checkboxes as ints 0..6 in DOM order (0 = Monday).
+  function checkedWeekdays(form) {
+    return Array.prototype.map.call(
+      form.querySelectorAll('input[name="depart_weekdays"]:checked'),
+      function (el) {
+        return parseInt(el.value, 10);
+      }
+    );
+  }
+
   function collectWatch(form) {
     const value = function (name) {
       const el = form.querySelector('[name="' + name + '"]');
@@ -204,6 +214,7 @@
     } else {
       payload.window_start = value("window_start");
       payload.window_end = value("window_end");
+      payload.depart_weekdays = checkedWeekdays(form);
       if (tripType === "round_trip") {
         payload.min_trip_days = value("min_trip_days");
         payload.max_trip_days = value("max_trip_days");
@@ -630,9 +641,9 @@
 
   // ---- explore form ----------------------------------------------------------
 
-  // Rough count of departure days from today to the end of the month. The
-  // server decides the real number; this is only a preview.
-  function estimateCells(box, month) {
+  // Legacy preview: departure days from today to the end of one month. Used
+  // only when the server did not provide per-weekday counts.
+  function estimateSingleMonth(box, month) {
     const maxCells = parseInt(box.getAttribute("data-max-cells"), 10) || 31;
     const match = /^(\d{4})-(\d{2})$/.exec(month);
     if (!match) return maxCells;
@@ -652,6 +663,41 @@
     return Math.max(0, Math.min(days, maxCells));
   }
 
+  // Preview of the number of queries: sums the server-provided per-weekday
+  // day counts of every month in the selected range for the checked weekdays.
+  // The server decides the real number; this is only a preview.
+  function estimateCells(box, form) {
+    const startEl = form.querySelector('[name="month"]');
+    const endEl = form.querySelector('[name="month_to"]');
+    const startValue = startEl ? startEl.value : "";
+    let counts = null;
+    try {
+      counts = JSON.parse(box.getAttribute("data-weekday-counts") || "");
+    } catch (err) {
+      counts = null;
+    }
+    if (!counts || typeof counts !== "object" || !startEl) {
+      return estimateSingleMonth(box, startValue);
+    }
+    const keys = Array.prototype.map.call(startEl.options, function (opt) {
+      return opt.value;
+    });
+    const from = keys.indexOf(startValue);
+    if (from < 0) return estimateSingleMonth(box, startValue);
+    let to = endEl ? keys.indexOf(endEl.value) : from;
+    if (to < from) to = from;
+    const checked = checkedWeekdays(form);
+    let total = 0;
+    for (let i = from; i <= to; i += 1) {
+      const row = counts[keys[i]];
+      if (!Array.isArray(row)) return estimateSingleMonth(box, startValue);
+      checked.forEach(function (day) {
+        total += parseInt(row[day], 10) || 0;
+      });
+    }
+    return total;
+  }
+
   function collectExplore(form) {
     const value = function (name) {
       const el = form.querySelector('[name="' + name + '"]');
@@ -669,6 +715,8 @@
       destination: airport("destination"),
       trip_type: tripType,
       month: value("month"),
+      month_to: value("month_to"),
+      depart_weekdays: checkedWeekdays(form),
       trip_days: tripType === "round_trip" ? toInt(value("trip_days")) : null,
       max_stops: value("max_stops"),
       adults: toInt(value("adults")),
@@ -691,10 +739,11 @@
     initComboboxes(form);
     const box = document.getElementById("explore-estimate");
     const monthEl = form.querySelector('[name="month"]');
+    const submitBtn = form.querySelector('button[type="submit"]');
     const syncAll = function () {
       syncWatchForm(form);
       if (!box || !monthEl) return;
-      const cells = estimateCells(box, monthEl.value);
+      const cells = estimateCells(box, form);
       const left = box.getAttribute("data-hourly-left");
       const reserve = box.getAttribute("data-reserve");
       let text = "預計查詢約 " + cells + " 次";
@@ -702,7 +751,12 @@
         text += "／本小時剩餘 " + left + " 次";
         if (reserve !== null && reserve !== "") text += "（保留 " + reserve + " 次給排程）";
       }
+      const maxCells = parseInt(box.getAttribute("data-max-cells"), 10) || 31;
+      const overText = box.getAttribute("data-over-limit-text") || "";
+      const over = cells > maxCells;
+      if (over && overText) text += "。" + overText;
       box.textContent = text;
+      if (submitBtn) submitBtn.disabled = over;
     };
     form.addEventListener("change", syncAll);
     syncAll();

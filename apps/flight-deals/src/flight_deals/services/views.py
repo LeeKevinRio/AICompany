@@ -23,6 +23,7 @@ from flight_deals.domain.messages import (
     SAMPLED_ONLY_NOTE,
     STATUS_LABELS,
     TRIP_TYPE_LABELS,
+    WEEKDAY_OPTION_LABELS,
     date_range_text,
     no_embedded_streak_label,
     reason_label,
@@ -45,6 +46,7 @@ from flight_deals.domain.trip_labels import (
     cabin_label,
     conditions_label,
     dep_window_label,
+    depart_weekdays_label,
     pax_full_label,
     stay_range_label,
     total_price_note,
@@ -237,8 +239,12 @@ def dates_text(spec: WatchSpec) -> str:
     start = spec.window_start.isoformat() if spec.window_start else "?"
     end = spec.window_end.isoformat() if spec.window_end else "?"
     if spec.trip_type == "round_trip":
-        return f"彈性 {start} ～ {end}，旅程 {stay_label(spec) or '?'}"
-    return f"彈性出發 {start} ～ {end}"
+        text = f"彈性 {start} ～ {end}，旅程 {stay_label(spec) or '?'}"
+    else:
+        text = f"彈性出發 {start} ～ {end}"
+    # FD-10: a weekday filter is part of the window; all weekdays add nothing.
+    weekdays = depart_weekdays_label(spec.depart_weekdays)
+    return text if weekdays is None else f"{text}，{weekdays}"
 
 
 def has_filters(spec: WatchSpec) -> bool:
@@ -477,6 +483,7 @@ class ViewService:
                 "airlines": list(_SPEC_DEFAULTS["airlines"]),
                 "dep_hour_from": _SPEC_DEFAULTS["dep_hour_from"],
                 "dep_hour_to": _SPEC_DEFAULTS["dep_hour_to"],
+                "depart_weekdays": list(_SPEC_DEFAULTS["depart_weekdays"]),
             }
         watch = self._repo.get_watch(watch_id)
         if watch is None:
@@ -516,6 +523,7 @@ class ViewService:
             "airlines": list(spec.airlines),
             "dep_hour_from": spec.dep_hour_from,
             "dep_hour_to": spec.dep_hour_to,
+            "depart_weekdays": list(spec.depart_weekdays),
         }
 
     @staticmethod
@@ -535,6 +543,10 @@ class ViewService:
         return {
             "airline_options": options,
             "cabin_options": [{"value": c, "label": cabin_label(c)} for c in CABINS],
+            # Departure weekdays, value 0 = Monday (date.weekday(); FD-10).
+            "weekday_options": [
+                {"value": day, "label": label} for day, label in enumerate(WEEKDAY_OPTION_LABELS)
+            ],
         }
 
     def detail_page(self, watch_id: int) -> dict[str, Any] | None:
@@ -583,6 +595,8 @@ class ViewService:
                 "min_trip_days": spec.min_trip_days,
                 "max_trip_days": spec.max_trip_days,
                 "stay_label": stay_label(spec),
+                # FD-10: "週五、週六出發" for a filtered window, None otherwise.
+                "weekdays_label": depart_weekdays_label(spec.depart_weekdays),
                 "max_stops": "不限"
                 if spec.max_stops is None
                 else ("僅直飛" if spec.max_stops == 0 else f"最多轉機 {spec.max_stops} 次"),

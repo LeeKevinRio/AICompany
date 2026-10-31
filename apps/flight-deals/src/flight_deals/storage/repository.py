@@ -21,6 +21,7 @@ from flight_deals.domain.models import (
     WatchStatus,
 )
 from flight_deals.domain.timeutil import parse_utc_iso, to_utc_iso
+from flight_deals.domain.weekdays import weekdays_from_mask, weekdays_to_mask
 from flight_deals.storage.db import Database
 
 # ``app_setting`` keys holding runtime state (offsets, maintenance results); never shown
@@ -289,6 +290,10 @@ class CellUpdate:
 
 def _exploration(row: sqlite3.Row) -> ExplorationRecord:
     year, month = (int(part) for part in row["month"].split("-"))
+    end_year: int | None = None
+    end_month: int | None = None
+    if row["month_to"] is not None:
+        end_year, end_month = (int(part) for part in row["month_to"].split("-"))
     spec = ExplorationSpec(
         origin=row["origin"],
         destination=row["destination"],
@@ -304,6 +309,9 @@ def _exploration(row: sqlite3.Row) -> ExplorationRecord:
         dep_hour_from=row["dep_hour_from"],
         dep_hour_to=row["dep_hour_to"],
         currency=row["currency"],
+        end_year=end_year,
+        end_month=end_month,
+        depart_weekdays=weekdays_from_mask(row["depart_weekdays"]),
     )
     keys = row.keys()
     return ExplorationRecord(
@@ -470,6 +478,7 @@ def _watch(row: sqlite3.Row) -> Watch:
         airlines=airlines_from_db(row["airlines"]),
         dep_hour_from=row["dep_hour_from"],
         dep_hour_to=row["dep_hour_to"],
+        depart_weekdays=weekdays_from_mask(row["depart_weekdays"]),
     )
     return Watch(
         id=row["id"],
@@ -567,6 +576,7 @@ def _spec_values(spec: WatchSpec) -> dict[str, Any]:
         "airlines": airlines_to_db(spec.airlines),
         "dep_hour_from": spec.dep_hour_from,
         "dep_hour_to": spec.dep_hour_to,
+        "depart_weekdays": weekdays_to_mask(spec.depart_weekdays),
     }
 
 
@@ -829,15 +839,17 @@ class Repository:
         with self.db.connect() as conn:
             cur = conn.execute(
                 "INSERT INTO exploration (condition_key, origin, destination, trip_type, month,"
-                " trip_days, max_stops, cabin, adults, children, airlines, dep_hour_from,"
-                " dep_hour_to, currency, status, total, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                " month_to, depart_weekdays, trip_days, max_stops, cabin, adults, children,"
+                " airlines, dep_hour_from, dep_hour_to, currency, status, total, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
                 (
                     spec.condition_key(),
                     spec.origin,
                     spec.destination,
                     spec.trip_type,
                     spec.month_text,
+                    spec.month_to_text,
+                    weekdays_to_mask(spec.depart_weekdays),
                     spec.trip_days,
                     spec.max_stops,
                     spec.cabin,
@@ -1752,5 +1764,7 @@ class Repository:
                 " UNION ALL SELECT 'price_observation', COUNT(*) FROM price_observation"
                 " UNION ALL SELECT 'notification', COUNT(*) FROM notification"
                 " UNION ALL SELECT 'exploration', COUNT(*) FROM exploration"
+                " UNION ALL SELECT 'comparison', COUNT(*) FROM comparison"
+                " UNION ALL SELECT 'comparison_cell', COUNT(*) FROM comparison_cell"
             ).fetchall()
         return [(str(r["t"]), int(r["n"])) for r in rows]

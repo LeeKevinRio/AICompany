@@ -1,4 +1,5 @@
-"""Exploration mode: one query per departure day of a month (ADR-0002 FD-6 Decision 3).
+"""Exploration mode: one query per departure day of 1-3 months (ADR-0002 FD-6
+Decision 3, FD-10 Decision 4).
 
 ``create`` only validates, checks reuse / busy / quota and writes the exploration with
 every cell ``pending``; the queries run later in the scheduler's single worker thread
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from flight_deals.domain.dates import month_pairs
+from flight_deals.domain.dates import range_pairs
 from flight_deals.domain.messages import (
     EXPLORATION_BREAKER_OPEN,
     EXPLORATION_BUSY,
@@ -24,6 +25,8 @@ from flight_deals.domain.messages import (
     EXPLORATION_NO_DATES,
     EXPLORATION_RESTARTED,
     EXPLORATION_SCHEDULER_OFF,
+    EXPLORATION_TOO_MANY_CELLS,
+    WEEKDAYS_NO_MATCH_MONTHS,
     comparison_busy_message,
     exploration_quota_message,
     exploration_skipped_note,
@@ -31,6 +34,7 @@ from flight_deals.domain.messages import (
 from flight_deals.domain.models import DatePair, search_for
 from flight_deals.domain.timeutil import taipei_date
 from flight_deals.domain.validation import validate_exploration
+from flight_deals.domain.weekdays import is_all_weekdays
 from flight_deals.ports import Clock, FlightPriceSource, Redactor
 from flight_deals.services.health import HealthService
 from flight_deals.services.notifications import NotificationService
@@ -186,9 +190,14 @@ class ExplorationService:
         if outcome.spec is None:
             return CreateResult("invalid", errors=outcome.errors)
         spec = outcome.spec
-        pairs = month_pairs(spec, today)[: self._max_cells]
+        # Cell checks come before reuse, busy and quota: nothing is written or queried.
+        pairs = range_pairs(spec, today)
         if not pairs:
-            return CreateResult("invalid", errors={"month": EXPLORATION_NO_DATES})
+            if is_all_weekdays(spec.depart_weekdays):
+                return CreateResult("invalid", errors={"month": EXPLORATION_NO_DATES})
+            return CreateResult("invalid", errors={"depart_weekdays": WEEKDAYS_NO_MATCH_MONTHS})
+        if len(pairs) > self._max_cells:
+            return CreateResult("invalid", errors={"month_to": EXPLORATION_TOO_MANY_CELLS})
         key = spec.condition_key()
         with self._create_lock:
             reused = self._repo.reusable_exploration(key, now - self._reuse)
@@ -217,7 +226,9 @@ class ExplorationService:
                     "quota",
                     hourly_left=quota.hourly_left,
                     needed=len(pairs),
-                    message=exploration_quota_message(quota.hourly_left, len(pairs), quota.reserve),
+                    message=exploration_quota_message(
+                        quota.hourly_left, len(pairs), quota.reserve, months=len(spec.months)
+                    ),
                 )
             exploration_id = self._repo.insert_exploration(spec, pairs, now)
         try:

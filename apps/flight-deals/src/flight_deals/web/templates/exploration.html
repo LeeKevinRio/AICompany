@@ -16,7 +16,7 @@
     <dt>建立時間</dt><dd>{{ e.created_at_label }}</dd>
     {% if e.finished_at_label %}<dt>結束時間</dt><dd>{{ e.finished_at_label }}</dd>{% endif %}
   </dl>
-  {% if e.stale %}<p class="notice">{{ e.stale_note or "這是較早前查到的價格，可能已變動。" }}</p>{% endif %}
+  {% if e.stale %}<p class="notice">{{ e.stale_note or e.stale_fallback }}</p>{% endif %}
   {% if e.error_summary %}<p class="notice" id="exploration-error">{{ e.error_summary }}</p>{% endif %}
 </section>
 
@@ -34,14 +34,18 @@
 <section class="card">
   <h2>價格日曆</h2>
   <p class="muted">金額為{{ e.pax_note }}，每格是該出發日單次查詢的最低價；依已查到的價格分成低／中／高三段，文字與顏色並列。</p>
+  {% for m in calendar_months %}
+  {%- if calendar_months|length > 1 %}
+  <h3>{{ m.label }}</h3>
+  {%- endif %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="價格日曆（可橫向捲動）">
   <table class="data calendar">
-    <caption class="sr-only">{{ e.route_label }} {{ e.month_label }} 各出發日最低價，週一為每週第一天</caption>
+    <caption class="sr-only">{{ e.route_label }} {{ m.label }} 各出發日最低價，週一為每週第一天</caption>
     <thead>
       <tr>{% for name in ["週一", "週二", "週三", "週四", "週五", "週六", "週日"] %}<th scope="col">{{ name }}</th>{% endfor %}</tr>
     </thead>
     <tbody>
-    {% for week in weeks %}
+    {% for week in m.weeks %}
       <tr>
       {% for cell in week %}
         {% if cell %}
@@ -75,11 +79,13 @@
     </tbody>
   </table>
   </div>
+  {% endfor %}
 </section>
 {% endif %}
 
 <section class="card">
   <h2>最便宜前 5 個日期</h2>
+  {% if top_scope_note %}<p class="muted">{{ top_scope_note }}</p>{% endif %}
   {% if top5 %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜前 5 個日期（可橫向捲動）">
   <table class="data">
@@ -112,7 +118,7 @@
 </section>
 
 {% if e.month_watch_url %}
-<p><a class="button primary" href="{{ e.month_watch_url }}">以整月建立彈性窗監看</a></p>
+<p><a class="button primary" href="{{ e.month_watch_url }}">{{ e.month_watch_label }}</a></p>
 <p class="hint">只會帶入條件到新增監看表單，確認後才會建立；彈性窗監看每輪仍只查部分日期組合。</p>
 {% endif %}
 {% endif %}

@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from flight_deals.domain.dates import is_expired
+from flight_deals.domain.dates import is_expired, weekday_filter_leaves_nothing
+from flight_deals.domain.messages import WEEKDAYS_NO_MATCH_WINDOW
 from flight_deals.domain.models import Watch, WatchStatus
 from flight_deals.domain.timeutil import taipei_date
 from flight_deals.domain.validation import validate_watch_input
@@ -45,9 +46,12 @@ class WatchService:
 
     def create(self, raw: Mapping[str, object]) -> WatchResult:
         now = self._clock()
-        outcome = validate_watch_input(raw, taipei_date(now))
+        today = taipei_date(now)
+        outcome = validate_watch_input(raw, today)
         if outcome.spec is None:
             return WatchResult(None, outcome.errors)
+        if weekday_filter_leaves_nothing(outcome.spec, today):
+            return WatchResult(None, {"depart_weekdays": WEEKDAYS_NO_MATCH_WINDOW})
         watch_id = self._repo.insert_watch(outcome.spec, now)
         self.hooks.changed(watch_id)
         return WatchResult(watch_id, {})
@@ -63,6 +67,10 @@ class WatchService:
             return WatchResult(watch_id, outcome.errors)
         spec = outcome.spec
         shape_changed = spec.search_shape() != existing.spec.search_shape()
+        # Only new conditions are checked: an edit that keeps them (e.g. a rename of a
+        # watch whose remaining days miss its weekdays) is never refused for it.
+        if shape_changed and weekday_filter_leaves_nothing(spec, today):
+            return WatchResult(watch_id, {"depart_weekdays": WEEKDAYS_NO_MATCH_WINDOW})
         revision = existing.revision + 1 if shape_changed else existing.revision
         status: WatchStatus = existing.status
         if shape_changed and existing.status in ("stale", "expired"):

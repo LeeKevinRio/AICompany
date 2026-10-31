@@ -121,8 +121,10 @@ def test_flight_search_still_built_only_in_domain() -> None:
 
 def test_condition_key_prefix_and_unset_values() -> None:
     plain = ExplorationSpec("TPE", "NRT", "one_way", 2026, 12, None, None)
-    assert plain.condition_key() == "v1|TPE|NRT|one_way|2026-12|-|-|1|0|economy|-|-|-|TWD"
-    assert SPEC.condition_key().startswith("v1|")
+    assert (
+        plain.condition_key() == "v2|TPE|NRT|one_way|2026-12|2026-12|127|-|-|1|0|economy|-|-|-|TWD"
+    )
+    assert SPEC.condition_key().startswith("v2|")
     # max_stops 0 is a value, not "unset".
     assert replace(plain, max_stops=0).condition_key() != plain.condition_key()
 

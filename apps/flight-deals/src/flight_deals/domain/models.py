@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal, Protocol
 
+from flight_deals.domain.weekdays import ALL_WEEKDAYS, weekdays_to_mask
+
 TripType = Literal["round_trip", "one_way"]
 DateMode = Literal["fixed", "flexible"]
 WatchStatus = Literal["active", "paused", "stale", "expired"]
@@ -73,12 +75,14 @@ class WatchSpec:
     # Outbound departure window in whole hours (both set or both None, from < to).
     dep_hour_from: int | None = None
     dep_hour_to: int | None = None
+    # Departure weekdays of a flexible window (FD-10); fixed dates always keep all.
+    depart_weekdays: tuple[int, ...] = ALL_WEEKDAYS
 
     def search_shape(self) -> tuple[object, ...]:
         """Fields whose change makes old price history incomparable (bumps revision).
 
-        Name, budget and notification switches are deliberately left out; airlines are
-        compared as a set so the order they were ticked in never matters.
+        Name, budget and notification switches are deliberately left out; airlines and
+        weekdays are compared as sets so the order they were ticked in never matters.
         """
         return (
             self.origin,
@@ -99,6 +103,7 @@ class WatchSpec:
             tuple(sorted(set(self.airlines))),
             self.dep_hour_from,
             self.dep_hour_to,
+            tuple(sorted(set(self.depart_weekdays))),
         )
 
 
@@ -184,9 +189,12 @@ class SearchConditions(Protocol):
 
 @dataclass(frozen=True)
 class ExplorationSpec:
-    """One month explored day by day (already validated; FD-6 Decision 2).
+    """One to three consecutive months explored day by day (already validated; FD-6
+    Decision 2, FD-10 Decision 2).
 
-    ``trip_days`` is set for round trips only: each return is departure + trip_days.
+    ``year`` / ``month`` is the start month; ``end_year`` / ``end_month`` are both None for
+    a single month. ``trip_days`` is set for round trips only: each return is departure +
+    trip_days.
     """
 
     origin: str
@@ -203,25 +211,54 @@ class ExplorationSpec:
     dep_hour_from: int | None = None
     dep_hour_to: int | None = None
     currency: str = "TWD"
+    end_year: int | None = None
+    end_month: int | None = None
+    depart_weekdays: tuple[int, ...] = ALL_WEEKDAYS
 
     @property
     def month_text(self) -> str:
         return f"{self.year:04d}-{self.month:02d}"
 
+    @property
+    def end(self) -> tuple[int, int]:
+        if self.end_year is None or self.end_month is None:
+            return self.year, self.month
+        return self.end_year, self.end_month
+
+    @property
+    def month_to_text(self) -> str | None:
+        """End month "YYYY-MM"; None for a single month (stored as NULL)."""
+        end_year, end_month = self.end
+        if (end_year, end_month) == (self.year, self.month):
+            return None
+        return f"{end_year:04d}-{end_month:02d}"
+
+    @property
+    def months(self) -> list[tuple[int, int]]:
+        """(year, month) from start to end inclusive."""
+        end_year, end_month = self.end
+        first = self.year * 12 + self.month - 1
+        last = end_year * 12 + end_month - 1
+        return [(i // 12, i % 12 + 1) for i in range(first, last + 1)]
+
     def condition_key(self) -> str:
-        """Equality key for reuse: airlines as a set, unset values written as "-"."""
+        """Equality key for reuse (v2): airlines and weekdays as sets, the end month
+        always written out, unset values written as "-"."""
 
         def part(value: int | None) -> str:
             return "-" if value is None else str(value)
 
         airlines = ",".join(sorted(set(self.airlines))) or "-"
+        end_year, end_month = self.end
         return "|".join(
             [
-                "v1",
+                "v2",
                 self.origin,
                 self.destination,
                 self.trip_type,
                 self.month_text,
+                f"{end_year:04d}-{end_month:02d}",
+                str(weekdays_to_mask(self.depart_weekdays)),
                 part(self.trip_days),
                 part(self.max_stops),
                 str(self.adults),
