@@ -416,9 +416,12 @@ describe("KellyDisclosuresPanel — effective_cap 數值旁（風控 第 4 項�
     expect(html).toContain("SENTINEL-CAP-VALUE");
   });
 
-  it("數值區塊不顯示時，揭露句仍然獨立出現，不會被吞掉", () => {
-    const html = renderKelly(kellyView(NOTICE, false));
-    expect(noticeElements(html)).toHaveLength(1);
+  it("數值區塊不顯示時（後端契約：此時揭露句也是 null），不渲染任何揭露句或琥珀框；沒有獨立分支", () => {
+    const html = renderKelly(kellyView(null, false));
+    expect(html).not.toContain("SENTINEL-INTERVAL");
+    expect(html).not.toContain("SENTINEL-CAP-VALUE");
+    expect(noticeElements(html)).toHaveLength(0);
+    expect(elementsOf(parseHtml(html)).filter((el) => (el.attrs.class ?? "").includes("border-amber-800"))).toEqual([]);
   });
 
   it("沒有句子時完全不渲染", () => {
