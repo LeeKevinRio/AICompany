@@ -270,9 +270,13 @@ class EmergencyExitResponse(BaseModel):
     message: str
     #: The mode line for today, recomputed on every response.
     mode_reason: str
-    #: EMERGENCY_EXIT 專用歸屬語; ``None`` when the exit produced no line.
+    #: EMERGENCY_EXIT 專用歸屬語; ``None`` when the message describes no line.
     attribution: str | None
+    #: Only the lines this call wrote (ADR-0033 C-7).
     directives: list[DirectiveLine]
+    #: Earlier, still unsettled EMERGENCY lines covering the other held batches,
+    #: one per batch (C-7). Additive; the client need not render it.
+    pending_directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str
 
@@ -535,7 +539,12 @@ def rebalance(service: ServiceDep) -> RebalanceResponse:
 
 @router.post("/emergency-exit", response_model=EmergencyExitResponse)
 def emergency_exit(service: ServiceDep) -> EmergencyExitResponse:
-    """Liquidate every batch and freeze the schedule for 20 trading days."""
+    """Liquidate every batch and freeze the schedule for 20 trading days.
+
+    Always 200, with no body and no required header, however often it is
+    called (ADR-0033 C-6, 風控 EX-2/EX-3): a repeat writes lines only for held
+    batches nothing covers yet, and its message says which branch it took.
+    """
     result = service.emergency_exit()
     return EmergencyExitResponse(
         executed_at=result.executed_at.isoformat(),
@@ -546,6 +555,7 @@ def emergency_exit(service: ServiceDep) -> EmergencyExitResponse:
         mode_reason=result.mode_reason,
         attribution=result.attribution,
         directives=_lines(result.directives),
+        pending_directives=_lines(result.pending_directives),
         warnings=result.warnings,
         as_of=now_iso(),
     )

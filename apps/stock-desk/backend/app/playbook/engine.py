@@ -138,6 +138,28 @@ def emergency_frozen_day(
     return max(1, min(freeze_days, freeze_days - remaining))
 
 
+def emergency_mode_reason(
+    *, calendar: TradingCalendar, data_date: date, until: date, freeze_days: int
+) -> str:
+    """The EMERGENCY_EXIT mode line for ``data_date``, recomputed on every render.
+
+    The counted sentence (「第 N/{freeze_days} 交易日」) as a rule. When more
+    than ``freeze_days`` trading days remain -- a stored 恢復日 the max rule
+    kept (CEO #77, 風控 F-c) -- the counter would clamp to day 1 for days on end,
+    so 風控 S8 states the 恢復日 alone. Nothing here is stored (C-9): both
+    branches are a function of ``until``, the calendar and the parameter only.
+    """
+    if calendar.trading_days_between(data_date, until) > freeze_days:
+        return wording.mode_reason_emergency_uncounted(until=until)
+    return wording.mode_reason_emergency(
+        frozen_day=emergency_frozen_day(
+            calendar=calendar, data_date=data_date, until=until, freeze_days=freeze_days
+        ),
+        freeze_days=freeze_days,
+        until=until,
+    )
+
+
 def _pct(value: Decimal) -> str:
     return f"{value:+.2f}%"
 
@@ -352,15 +374,11 @@ def _resolve_mode(
     s3_reason: str | None,
 ) -> tuple[Mode, str]:
     if portfolio.emergency_until is not None and data_date <= portfolio.emergency_until:
-        return "emergency_frozen", wording.mode_reason_emergency(
-            frozen_day=emergency_frozen_day(
-                calendar=calendar,
-                data_date=data_date,
-                until=portfolio.emergency_until,
-                freeze_days=params.emergency_freeze_trading_days,
-            ),
-            freeze_days=params.emergency_freeze_trading_days,
+        return "emergency_frozen", emergency_mode_reason(
+            calendar=calendar,
+            data_date=data_date,
             until=portfolio.emergency_until,
+            freeze_days=params.emergency_freeze_trading_days,
         )
     freeze_until = s3_freeze_until or portfolio.freeze_until
     reason = s3_reason or portfolio.freeze_reason

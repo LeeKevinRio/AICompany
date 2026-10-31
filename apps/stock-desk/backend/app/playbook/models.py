@@ -566,22 +566,35 @@ class EmergencyExitResult(BaseModel):
     """What EMERGENCY_EXIT did (CEO 裁決六).
 
     All-or-nothing by construction: the caller cannot name a symbol, so
-    ``directives`` covers every batch that still holds shares. The freeze that
-    follows is the price of the escape hatch -- 逃生門不是後悔藥.
+    between them ``directives`` and ``pending_directives`` cover every batch
+    that still holds shares. The freeze that follows is the price of the escape
+    hatch -- 逃生門不是後悔藥.
+
+    Repeat-safe (ADR-0033, N-166): a batch that already has an unsettled
+    EMERGENCY sell gets no second one, so a repeated submission adds only what
+    the earlier one did not cover.
     """
 
     model_config = ConfigDict(frozen=True)
 
     executed_at: date
     execution_date: date
+    #: Only the lines **this** call wrote (C-7).
     directives: list[Directive]
+    #: The earlier, still unsettled EMERGENCY lines covering the other held
+    #: batches, one per batch (C-7). Additive: nothing has to render it.
+    pending_directives: list[Directive]
+    #: Shares of ``directives`` only -- the figure EMERGENCY_EXIT_RESULT states.
     total_shares: int
+    #: The 恢復日 actually in force after this call: the later of the stored one
+    #: and this submission's own count (CEO #77), never shortened.
     freeze_until: date
     message: str
     warnings: list[str]
-    #: EMERGENCY_EXIT 專用歸屬語 (三輪定稿 題 7), independent of authorship.
-    #: ``None`` when the exit produced no line at all -- the sentence is about a
-    #: 指令 that, in that branch, does not exist.
+    #: EMERGENCY_EXIT 專用歸屬語 (三輪定稿 題 7), independent of authorship:
+    #: ``EXIT_ATTRIBUTION``, or 風控 N-166 S5／S4 when earlier lines are
+    #: described too. ``None`` only when the message describes no line at all
+    #: (EMPTY) -- the sentence is about a 指令 that, there, does not exist.
     attribution: str | None
     #: The mode line for the day the exit was submitted on, rendered now rather
     #: than stored: the 「第 N/20 交易日」 counter is only true for one day.

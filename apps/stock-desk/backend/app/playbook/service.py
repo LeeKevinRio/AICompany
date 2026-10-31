@@ -22,6 +22,7 @@ trailing stop reads it on the same day's close.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import NamedTuple
@@ -30,12 +31,13 @@ from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
 from app.playbook import indicators, wording
 from app.playbook.engine import (
-    emergency_frozen_day,
+    emergency_mode_reason,
     evaluate,
     is_usable,
     settle_directive,
 )
 from app.playbook.models import (
+    BatchState,
     Directive,
     EmergencyExitResult,
     ExitConfirm,
@@ -49,10 +51,9 @@ from app.playbook.models import (
     RuleSetStatus,
     SettledLine,
     SettlementResult,
-    StateEffect,
     UnsettledLine,
 )
-from app.playbook.store import PlaybookStore
+from app.playbook.store import EmergencyExitState, PendingDirective, PlaybookStore
 from app.positions.models import Market
 from app.services.index import IndexServiceResolver, load_market_benchmark
 from app.services.market import MarketDataResolver, load_bars
@@ -170,28 +171,160 @@ def build_index_snapshot(
     )
 
 
+def effective_freeze_until(*, stored: date | None, computed: date) -> date:
+    """The 恢復日 an exit leaves in force: the later of the two (CEO #77, C-5).
+
+    ``computed`` is ``emergency_freeze_trading_days`` shifted from the
+    submission day; ``stored`` is the 恢復日 already on the book. Taking the
+    later one means an exit can extend a freeze but never shorten it -- which
+    also closes the 「縮短凍結」 path a later change of the parameter would
+    otherwise open (附錄 D F3). One function, so the confirmation screen and
+    the exit cannot apply two different rules.
+    """
+    return computed if stored is None else max(stored, computed)
+
+
 def build_exit_confirm(
-    *, params: RuleParams, calendar: TradingCalendar, as_of: date
+    *,
+    params: RuleParams,
+    calendar: TradingCalendar,
+    as_of: date,
+    stored_until: date | None,
 ) -> ExitConfirm:
     """The EMERGENCY_EXIT confirmation facts, counted for ``as_of``.
 
     Computed the same way :meth:`PlaybookService.emergency_exit` computes the
     freeze it will actually apply -- ``params.emergency_freeze_trading_days``
-    shifted from the *submission* day on the trading calendar -- so a screen
-    that renders this block states the freeze the user is about to get, not a
-    mirrored default (覆審: 天數與日期皆為參數與日曆的函數，不得寫死).
+    shifted from the *submission* day on the trading calendar, kept at the
+    stored 恢復日 when that one is later (:func:`effective_freeze_until`) -- so
+    a screen that renders this block states the freeze the user is about to
+    get, not a mirrored default (覆審: 天數與日期皆為參數與日曆的函數，不得寫死;
+    ADR-0033 C-5). When the stored date is the one kept, check 2 is 風控 S9.
 
     The prediction walks days after ``as_of``, which are past the last observed
     bar, so it resolves through the calendar's documented weekday fallback in
     both cases; that is the same answer the exit itself reaches on that day.
     """
     freeze_days = params.emergency_freeze_trading_days
-    freeze_until = calendar.shift(as_of, freeze_days)
+    computed = calendar.shift(as_of, freeze_days)
+    freeze_until = effective_freeze_until(stored=stored_until, computed=computed)
     return ExitConfirm(
         freeze_days=freeze_days,
         freeze_until=freeze_until,
         checks=list(
-            wording.exit_confirm_checks(freeze_days=freeze_days, freeze_until=freeze_until)
+            wording.exit_confirm_checks(
+                freeze_days=freeze_days,
+                freeze_until=freeze_until,
+                freeze_kept=freeze_until != computed,
+            )
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class ExitPlan:
+    """What one EMERGENCY_EXIT decided under the write lock (ADR-0033).
+
+    Satisfies :class:`app.playbook.store.EmergencyExitWrite`: the store writes
+    ``directives`` and ``emergency_until`` from it; the rest is what the
+    response describes.
+    """
+
+    #: Lines for the held batches no unsettled EMERGENCY sell covered yet.
+    directives: list[Directive]
+    #: DATA_GAP_NOTE for every new line whose symbol had no bar (風控 R5).
+    warnings: list[str]
+    #: The batches that were covered already, as read under the lock.
+    covered: list[BatchState]
+    #: One covering line per covered batch -- the oldest, when a database
+    #: written before N-166 holds more than one (C-4, 風控 去重).
+    pending: list[PendingDirective]
+    rules_version: int
+    #: :func:`effective_freeze_until` of the stored and the computed 恢復日.
+    emergency_until: date
+
+
+def plan_emergency_exit(
+    state: EmergencyExitState,
+    *,
+    loaded: Mapping[str, LoadedSeries],
+    params: RuleParams,
+    as_of: date,
+    execution_date: date,
+    computed_until: date,
+) -> ExitPlan:
+    """Decide an EMERGENCY_EXIT from the state read under the lock. Pure.
+
+    Called by :meth:`PlaybookStore.commit_emergency_exit` with the write lock
+    held, so it touches nothing but its arguments (C-3): prices, calendar and
+    parameters were loaded before the lock was taken. A batch that only
+    appeared under the lock -- its symbol never preloaded -- is liquidated all
+    the same, through the :data:`NOTHING_LOADED` path with a
+    :data:`wording.DATA_GAP_NOTE` (風控 R5), exactly like a symbol whose load
+    came back empty.
+
+    Only uncovered batches get a line (C-4): a batch already carrying an
+    unsettled EMERGENCY sell keeps that one, and it is reported instead.
+    """
+    covering: dict[tuple[str, int], PendingDirective] = {}
+    for item in state.covering:
+        if item.directive.batch_no is not None:
+            # ``covering`` is oldest first, so the first line of a batch wins.
+            covering.setdefault((item.directive.symbol, item.directive.batch_no), item)
+
+    directives: list[Directive] = []
+    warnings: list[str] = []
+    covered: list[BatchState] = []
+    pending: list[PendingDirective] = []
+    for batch in state.open_batches:
+        prior = covering.get((batch.symbol, batch.batch_no))
+        if prior is not None:
+            covered.append(batch)
+            pending.append(prior)
+            continue
+        series = loaded.get(batch.symbol, NOTHING_LOADED)
+        snapshot = build_market_snapshot(
+            batch.symbol,
+            series.bars,
+            status=series.status,
+            source=series.source,
+            reason=series.reason,
+        )
+        if snapshot is None:
+            warnings.append(
+                wording.DATA_GAP_NOTE.format(
+                    symbol=batch.symbol, status=series.status, source=series.source
+                )
+            )
+        directives.append(
+            Directive(
+                symbol=batch.symbol,
+                batch_no=batch.batch_no,
+                action="sell",
+                shares=batch.remaining_shares,
+                rule_id="EMERGENCY",
+                rule_summary=(
+                    f"{wording.rule_text('EMERGENCY', params)}｜出清 {batch.remaining_shares} 股"
+                ),
+                data_date=snapshot.data_date if snapshot else as_of,
+                execution_date=execution_date,
+                reference_price=snapshot.close if snapshot else None,
+                limit_low=None,
+                limit_high=None,
+                limit_note=wording.EMERGENCY_EXIT_NO_BAND_NOTE,
+                data_status=series.status,
+                source=series.source,
+                data_reason=series.reason,
+            )
+        )
+    return ExitPlan(
+        directives=directives,
+        warnings=warnings,
+        covered=covered,
+        pending=pending,
+        rules_version=params.version,
+        emergency_until=effective_freeze_until(
+            stored=state.emergency_until, computed=computed_until
         ),
     )
 
@@ -608,6 +741,7 @@ class PlaybookService:
                 params=params,
                 calendar=TradingCalendar(()),
                 as_of=as_of,
+                stored_until=self._store.portfolio_state().emergency_until,
             ),
         )
 
@@ -715,6 +849,7 @@ class PlaybookService:
                     params=self._store.active_params(as_of),
                     calendar=calendar,
                     as_of=as_of,
+                    stored_until=self._store.portfolio_state().emergency_until,
                 ),
             }
         )
@@ -733,140 +868,90 @@ class PlaybookService:
         the user just submitted, not from rules the system holds on their behalf,
         and adding a precondition to the exit is the one thing the exit may not
         have. The authorship record is therefore not read at all here (三輪定稿
-        題 7): the response carries :data:`wording.EXIT_ATTRIBUTION`, which
-        attributes the lines to the submitted action, and never the blocking
-        sentence -- printing 「在你確認規則集之前不會產生指令」 next to lines the
-        exit just produced would contradict the lines themselves.
+        題 7): the response carries an EXIT 歸屬語 (:data:`wording.EXIT_ATTRIBUTION`
+        or, when earlier lines are described, 風控 N-166 S5／S4), which attributes
+        the lines to the submitted action, and never the blocking sentence --
+        printing 「在你確認規則集之前不會產生指令」 next to lines the exit just
+        produced would contradict the lines themselves.
+
+        **Repeat-safe (ADR-0033, CEO #76 方案 (d)).** A second submission -- a
+        double click, a second tab, a retried request -- writes a line only for
+        a held batch no unsettled EMERGENCY sell covers yet, and always answers
+        200 with no new precondition (EX-2, EX-3, C-6). Everything that reaches
+        a resolver happens first; the decision and both writes happen inside one
+        write-locked transaction (:meth:`PlaybookStore.commit_emergency_exit`),
+        so concurrent exits cannot both write and a failure leaves nothing
+        half-written. The 恢復日 is the later of the stored one and this
+        submission's own count (CEO #77): a repeat on a later day extends the
+        freeze and the message says so (風控 S6); a stored later date is kept and
+        stated as kept (風控 S7).
         """
         as_of = today or datetime.now(UTC).date()
-        batches = self._store.list_batches()
-        symbols = sorted({batch.symbol for batch in batches})
+        # Read outside the lock only to know which symbols to load; every
+        # decision below is taken from what the lock re-reads (C-2).
+        symbols = sorted({batch.symbol for batch in self._store.list_batches()})
         loaded = self._load_symbol_bars(symbols, today=as_of)
         index_bars = self._load_index_bars(today=as_of).bars
         calendar = build_calendar(*(series.bars for series in loaded.values()), index_bars)
         params = self._store.active_params(as_of)
-
-        execution_date = calendar.next_trading_day(as_of)
-        freeze_until = calendar.shift(as_of, params.emergency_freeze_trading_days)
-        directives: list[Directive] = []
-        warnings: list[str] = []
-        total = 0
-        for batch in batches:
-            if batch.status != "open" or batch.remaining_shares <= 0:
-                continue
-            series = loaded.get(batch.symbol, NOTHING_LOADED)
-            snapshot = build_market_snapshot(
-                batch.symbol,
-                series.bars,
-                status=series.status,
-                source=series.source,
-                reason=series.reason,
-            )
-            if snapshot is None:
-                warnings.append(
-                    wording.DATA_GAP_NOTE.format(
-                        symbol=batch.symbol, status=series.status, source=series.source
-                    )
-                )
-            total += batch.remaining_shares
-            directives.append(
-                Directive(
-                    symbol=batch.symbol,
-                    batch_no=batch.batch_no,
-                    action="sell",
-                    shares=batch.remaining_shares,
-                    rule_id="EMERGENCY",
-                    rule_summary=(
-                        f"{wording.rule_text('EMERGENCY', params)}"
-                        f"｜出清 {batch.remaining_shares} 股"
-                    ),
-                    data_date=snapshot.data_date if snapshot else as_of,
-                    execution_date=execution_date,
-                    reference_price=snapshot.close if snapshot else None,
-                    limit_low=None,
-                    limit_high=None,
-                    limit_note=wording.EMERGENCY_EXIT_NO_BAND_NOTE,
-                    data_status=series.status,
-                    source=series.source,
-                    data_reason=series.reason,
-                )
-            )
         freeze_days = params.emergency_freeze_trading_days
-        message = (
-            wording.EMERGENCY_EXIT_RESULT.format(
-                batches=len(directives),
-                shares=total,
-                execution_date=execution_date.isoformat(),
-                executed_at=as_of.isoformat(),
-                freeze_days=freeze_days,
-                until=freeze_until.isoformat(),
+        execution_date = calendar.next_trading_day(as_of)
+        computed_until = calendar.shift(as_of, freeze_days)
+
+        state, plan = self._store.commit_emergency_exit(
+            lambda locked: plan_emergency_exit(
+                locked,
+                loaded=loaded,
+                params=params,
+                as_of=as_of,
+                execution_date=execution_date,
+                computed_until=computed_until,
             )
-            if directives
-            else wording.EMERGENCY_EXIT_EMPTY.format(
-                executed_at=as_of.isoformat(),
-                freeze_days=freeze_days,
-                until=freeze_until.isoformat(),
-            )
+        )
+
+        until = plan.emergency_until
+        previous = state.emergency_until
+        pending_dates = tuple(item.directive.execution_date for item in plan.pending)
+        pending = wording.ExitPending(
+            batches=len(plan.covered),
+            shares=sum(batch.remaining_shares for batch in plan.covered),
+            execution_dates=pending_dates,
+            past_due_dates=tuple(day for day in pending_dates if day < as_of),
+        )
+        new_shares = sum(directive.shares for directive in plan.directives)
+        # 風控 S6: only a freeze that was running and is now later was extended.
+        extended = previous is not None and as_of <= previous and until > previous
+        message = wording.emergency_exit_message(
+            new_batches=len(plan.directives),
+            new_shares=new_shares,
+            execution_date=execution_date,
+            executed_at=as_of,
+            freeze_days=freeze_days,
+            until=until,
+            pending=pending,
+            extended_from=previous if extended else None,
+            freeze_kept=until != computed_until,
         )
         # The mode line is rendered for today, not lifted from ``message``: the
         # 「第 N/20 交易日」 counter is only true on the day it was computed, so
         # nothing may store it (覆審: mode_reason 禁存快照字串).
-        mode_reason = wording.mode_reason_emergency(
-            frozen_day=emergency_frozen_day(
-                calendar=calendar,
-                data_date=as_of,
-                until=freeze_until,
-                freeze_days=freeze_days,
-            ),
-            freeze_days=freeze_days,
-            until=freeze_until,
+        mode_reason = emergency_mode_reason(
+            calendar=calendar, data_date=as_of, until=until, freeze_days=freeze_days
         )
-        result = EmergencyExitResult(
+        return EmergencyExitResult(
             executed_at=as_of,
             execution_date=execution_date,
-            directives=directives,
-            total_shares=total,
-            freeze_until=freeze_until,
+            directives=plan.directives,
+            pending_directives=[item.directive for item in plan.pending],
+            total_shares=new_shares,
+            freeze_until=until,
             message=message,
-            warnings=warnings,
-            # 題 7: the EMPTY branch produced no 指令, so there is nothing for the
-            # sentence to attribute and it is not rendered at all.
-            attribution=wording.EXIT_ATTRIBUTION if directives else None,
+            warnings=plan.warnings,
+            attribution=wording.emergency_exit_attribution(
+                new_batches=len(plan.directives), pending_batches=pending.batches
+            ),
             mode_reason=mode_reason,
         )
-        self._store.apply_effects(
-            [
-                StateEffect(
-                    kind="emergency_exit",
-                    value=params.emergency_freeze_trading_days,
-                    note=message,
-                )
-            ],
-            data_date=as_of,
-            calendar=calendar,
-        )
-        self._store.record_directives(
-            PlaybookEvaluation(
-                data_date=as_of,
-                execution_date=execution_date,
-                mode="emergency_frozen",
-                mode_reason=mode_reason,
-                is_schedule_day=calendar.is_schedule_day(as_of),
-                fast_market=FastMarketState(
-                    active=False,
-                    annualized_vol_20d=None,
-                    large_move_days=0,
-                    reason=None,
-                ),
-                rules_version=params.version,
-                params=params,
-                directives=directives,
-                effects=[],
-                warnings=warnings,
-                snapshot=[],
-            )
-        )
-        return result
 
 
 def request_rule_change(

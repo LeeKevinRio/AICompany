@@ -38,12 +38,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.calendar import TradingCalendar
@@ -235,6 +235,139 @@ class PendingDirective(NamedTuple):
 
     directive_id: int
     directive: Directive
+
+
+#: ADR-0033 C-4: a batch is *covered* when a line with these three values is in
+#: the log for its ``(symbol, batch_no)``. ``settled = 0`` and nothing else
+#: decides "still outstanding" -- a line past its 預定執行日 that never got an
+#: opening price is still covered (風控 CEO-1 建議, pending the CEO's ruling).
+EMERGENCY_RULE_ID = "EMERGENCY"
+EMERGENCY_ACTION = "sell"
+
+
+class EmergencyExitState(NamedTuple):
+    """What an EMERGENCY_EXIT may decide on, read under its write lock (C-2).
+
+    The three values are read inside the ``BEGIN IMMEDIATE`` that also writes,
+    so no other exit can change them between the read and the write.
+    """
+
+    #: Batches with ``status = 'open'`` and ``remaining_shares > 0``.
+    open_batches: list[BatchState]
+    #: Every unsettled EMERGENCY sell (C-4), oldest first, duplicates included:
+    #: a database written before N-166 may hold more than one per batch.
+    covering: list[PendingDirective]
+    #: ``emergency_until`` as stored, ``None`` when no exit ever froze the book.
+    emergency_until: date | None
+
+
+class EmergencyExitWrite(Protocol):
+    """What :meth:`PlaybookStore.commit_emergency_exit` writes for a plan.
+
+    Read-only properties so a frozen dataclass or a ``NamedTuple`` satisfies it.
+    """
+
+    @property
+    def directives(self) -> Sequence[Directive]: ...
+
+    @property
+    def rules_version(self) -> int: ...
+
+    @property
+    def emergency_until(self) -> date: ...
+
+
+def _write_state(conn: sqlite3.Connection, values: Mapping[str, str | None]) -> None:
+    """Upsert (or, for ``None``, delete) ``playbook_state`` keys on ``conn``."""
+    for key, value in values.items():
+        if value is None:
+            conn.execute("DELETE FROM playbook_state WHERE key = ?", (key,))
+            continue
+        conn.execute(
+            "INSERT INTO playbook_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def _insert_directives(
+    conn: sqlite3.Connection,
+    directives: Iterable[Directive],
+    *,
+    rules_version: int,
+    moment: str,
+) -> None:
+    """Append ``directives`` to the audit log on ``conn`` (風控 R16).
+
+    The one INSERT both :meth:`PlaybookStore.record_directives` and
+    :meth:`PlaybookStore.commit_emergency_exit` write through (ADR-0033 C-10),
+    so a line logged by either path has the same shape. A line that places no
+    order is written already ``settled`` -- see ``record_directives``.
+    """
+    for directive in directives:
+        conn.execute(
+            """
+            INSERT INTO playbook_directives
+                (created_at, rules_version, symbol, batch_no, action, shares, rule_id,
+                 rule_summary, data_date, execution_date, reference_price, limit_low,
+                 limit_high, limit_note, data_status, source, data_reason, status,
+                 settled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                moment,
+                rules_version,
+                directive.symbol,
+                directive.batch_no,
+                directive.action,
+                directive.shares,
+                directive.rule_id,
+                directive.rule_summary,
+                directive.data_date.isoformat(),
+                directive.execution_date.isoformat(),
+                _text(directive.reference_price),
+                _text(directive.limit_low),
+                _text(directive.limit_high),
+                directive.limit_note,
+                directive.data_status,
+                directive.source,
+                directive.data_reason,
+                directive.status,
+                int(directive.action not in ORDER_ACTIONS),
+            ),
+        )
+
+
+#: Columns :func:`_row_to_pending` reads, in its order.
+_PENDING_SELECT = (
+    "id, symbol, batch_no, action, shares, rule_id, rule_summary, data_date, "
+    "execution_date, reference_price, limit_low, limit_high, limit_note, data_status, "
+    "source, status, data_reason"
+)
+
+
+def _row_to_pending(row: tuple[Any, ...]) -> PendingDirective:
+    return PendingDirective(
+        directive_id=int(row[0]),
+        directive=Directive(
+            symbol=str(row[1]),
+            batch_no=None if row[2] is None else int(row[2]),
+            action=row[3],
+            shares=int(row[4]),
+            rule_id=row[5],
+            rule_summary=str(row[6]),
+            data_date=date.fromisoformat(str(row[7])),
+            execution_date=date.fromisoformat(str(row[8])),
+            reference_price=_decimal(row[9]),
+            limit_low=_decimal(row[10]),
+            limit_high=_decimal(row[11]),
+            limit_note=str(row[12] or ""),
+            data_status=str(row[13]),
+            source=str(row[14]),
+            status=row[15],
+            data_reason=None if row[16] is None else str(row[16]),
+        ),
+    )
 
 
 def _text(value: Decimal | None) -> str | None:
@@ -465,15 +598,7 @@ class PlaybookStore:
 
     def _set_state(self, values: Mapping[str, str | None]) -> None:
         with closing(self._connect()) as conn, conn:
-            for key, value in values.items():
-                if value is None:
-                    conn.execute("DELETE FROM playbook_state WHERE key = ?", (key,))
-                    continue
-                conn.execute(
-                    "INSERT INTO playbook_state (key, value) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    (key, value),
-                )
+            _write_state(conn, values)
 
     def portfolio_state(self) -> PortfolioState:
         """The stored portfolio flags; zero cash / zero deploy until set."""
@@ -788,40 +913,85 @@ class PlaybookStore:
         ``settled``: there is no T+1 outcome coming for it, so leaving it in the
         settlement queue would make the queue lie about what is outstanding.
         """
-        moment = datetime.now(UTC).isoformat()
         with closing(self._connect()) as conn, conn:
-            for directive in evaluation.directives:
-                conn.execute(
-                    """
-                    INSERT INTO playbook_directives
-                        (created_at, rules_version, symbol, batch_no, action, shares, rule_id,
-                         rule_summary, data_date, execution_date, reference_price, limit_low,
-                         limit_high, limit_note, data_status, source, data_reason, status,
-                         settled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        moment,
-                        evaluation.rules_version,
-                        directive.symbol,
-                        directive.batch_no,
-                        directive.action,
-                        directive.shares,
-                        directive.rule_id,
-                        directive.rule_summary,
-                        directive.data_date.isoformat(),
-                        directive.execution_date.isoformat(),
-                        _text(directive.reference_price),
-                        _text(directive.limit_low),
-                        _text(directive.limit_high),
-                        directive.limit_note,
-                        directive.data_status,
-                        directive.source,
-                        directive.data_reason,
-                        directive.status,
-                        int(directive.action not in ORDER_ACTIONS),
-                    ),
+            _insert_directives(
+                conn,
+                evaluation.directives,
+                rules_version=evaluation.rules_version,
+                moment=datetime.now(UTC).isoformat(),
+            )
+
+    def commit_emergency_exit[PlanT: EmergencyExitWrite](
+        self, plan: Callable[[EmergencyExitState], PlanT]
+    ) -> tuple[EmergencyExitState, PlanT]:
+        """Read, decide and write one EMERGENCY_EXIT under a single write lock.
+
+        ADR-0033 (N-166). A repeated exit -- a double click, a second tab, a
+        retried request -- must not log a second sell for a batch that already
+        has one outstanding, and the check that prevents it is only sound under
+        the lock: two exits that both checked first and wrote later would both
+        find nothing and both write. So, on one connection (C-1):
+
+        1. ``BEGIN IMMEDIATE`` takes the write lock up front, waiting out the
+           connection's ``busy_timeout`` like every other writer here.
+        2. The open batches, the covering EMERGENCY lines and
+           ``emergency_until`` are read under it (C-2, C-4).
+        3. ``plan`` decides from those values alone. It is called with the lock
+           held, so it must be pure -- no resolver, no network, no other store
+           call (C-3): everything it needs was loaded before this method ran.
+        4. The 恢復日 is written only when ``plan`` changed it (C-5), then the
+           new lines; both commit together or not at all, so a failure can no
+           longer leave a freeze with no sell lines behind it (附錄 C (ii)).
+
+        Errors follow :func:`app.data.sqlite_util.add_missing_columns` (C-11):
+        roll back if SQLite has not already, then raise unchanged. A lock still
+        held past ``busy_timeout`` is raised as ``database is locked`` -- an
+        exit that silently did nothing would be worse than a loud failure.
+
+        Returns the state read under the lock with the plan that was written,
+        so the caller can describe exactly what this call found and did.
+        """
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                state = self._read_exit_state(conn)
+                decided = plan(state)
+                if decided.emergency_until != state.emergency_until:
+                    _write_state(conn, {STATE_EMERGENCY_UNTIL: decided.emergency_until.isoformat()})
+                _insert_directives(
+                    conn,
+                    decided.directives,
+                    rules_version=decided.rules_version,
+                    moment=datetime.now(UTC).isoformat(),
                 )
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own (a full disk,
+                # say); a second ROLLBACK would then replace the real error.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return state, decided
+
+    @staticmethod
+    def _read_exit_state(conn: sqlite3.Connection) -> EmergencyExitState:
+        batches = conn.execute(
+            f"SELECT {_BATCH_SELECT} FROM playbook_batches "
+            "WHERE status = 'open' AND remaining_shares > 0 ORDER BY symbol, batch_no"
+        ).fetchall()
+        covering = conn.execute(
+            f"SELECT {_PENDING_SELECT} FROM playbook_directives "
+            "WHERE rule_id = ? AND action = ? AND settled = 0 ORDER BY id ASC",
+            (EMERGENCY_RULE_ID, EMERGENCY_ACTION),
+        ).fetchall()
+        until = conn.execute(
+            "SELECT value FROM playbook_state WHERE key = ?", (STATE_EMERGENCY_UNTIL,)
+        ).fetchone()
+        return EmergencyExitState(
+            open_batches=[PlaybookStore._row_to_batch(row) for row in batches],
+            covering=[_row_to_pending(row) for row in covering],
+            emergency_until=None if until is None else _day(until[0]),
+        )
 
     def directive_log(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
@@ -843,9 +1013,7 @@ class PlaybookStore:
         made. :meth:`record_directives` marks them settled on the way in.
         """
         query = (
-            "SELECT id, symbol, batch_no, action, shares, rule_id, rule_summary, data_date, "
-            "execution_date, reference_price, limit_low, limit_high, limit_note, data_status, "
-            "source, status, data_reason FROM playbook_directives "
+            f"SELECT {_PENDING_SELECT} FROM playbook_directives "
             "WHERE settled = 0 AND status = 'pending' "
             f"AND action IN ({_ORDER_ACTION_PLACEHOLDERS})"
         )
@@ -855,30 +1023,7 @@ class PlaybookStore:
             params = (*ORDER_ACTIONS, on_or_before.isoformat())
         with closing(self._connect()) as conn:
             rows = conn.execute(query + " ORDER BY id ASC", params).fetchall()
-        return [
-            PendingDirective(
-                directive_id=int(row[0]),
-                directive=Directive(
-                    symbol=str(row[1]),
-                    batch_no=None if row[2] is None else int(row[2]),
-                    action=row[3],
-                    shares=int(row[4]),
-                    rule_id=row[5],
-                    rule_summary=str(row[6]),
-                    data_date=date.fromisoformat(str(row[7])),
-                    execution_date=date.fromisoformat(str(row[8])),
-                    reference_price=_decimal(row[9]),
-                    limit_low=_decimal(row[10]),
-                    limit_high=_decimal(row[11]),
-                    limit_note=str(row[12] or ""),
-                    data_status=str(row[13]),
-                    source=str(row[14]),
-                    status=row[15],
-                    data_reason=None if row[16] is None else str(row[16]),
-                ),
-            )
-            for row in rows
-        ]
+        return [_row_to_pending(row) for row in rows]
 
     def claim_directive(self, directive_id: int, *, status: str, open_price: Decimal) -> bool:
         """Claim one log row for settlement; ``False`` when it was already taken.
