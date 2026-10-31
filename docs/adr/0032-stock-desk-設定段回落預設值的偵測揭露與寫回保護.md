@@ -3,6 +3,7 @@
 - 狀態：accepted（CEO #74，2026-10-29 核可）
 - 日期：2026-10-29（tech-architect 草案日期 2026-10-28）
 - 決策者：tech-architect（草案）；風控 2026-10-29 字面定稿（含檔末補記；VERDICT: CONDITIONAL APPROVE，required 條件須與本案同批完成）；CEO #72 已裁 E2、#73 已裁 A-1 照常評估（2026-10-29）；本 ADR 待 CEO 核可。
+- 補充（風控 2026-10-29 K-15 正式核對，CONDITIONAL APPROVE，`work/reviews/2026-10-29-N156K15正式核對與裁示-風控.md`）：裁示二-2——Kelly 解除凍結前，cost_model 段回落期間 import-backtest 須 fail-closed 拒絕、拒絕句先送風控（追蹤 N-167），已寫入 `app/kelly/freeze.py` docstring 與守門測試；裁示二-4 (b)——request 未帶任何區段時，部分儲存句改用「全未寫入」變體 `NOTHING_SAVED_NOTICE`（`app/settings/fallback_wording.py`），前端以琥珀框逐字渲染；不修訂本檔條文；本檔原文不改。
 - 來源簡稱（皆在 `work/` 下）：
   - [TA]：`reviews/2026-10-28-N156設定段回落揭露規格-tech-architect.md`（附錄為本 ADR 草案；K-1～K-15 與方案比較）
   - [風控]：`reviews/2026-10-29-N156字面定稿與表態-風控.md`（主文與檔末「補記」）
