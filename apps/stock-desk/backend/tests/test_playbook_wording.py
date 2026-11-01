@@ -593,3 +593,117 @@ def test_every_accepted_message_states_the_actual_recovery_date(
 )
 def test_every_accepted_template_carries_the_until_placeholder(template: str) -> None:
     assert "{until}" in template
+
+
+# --- CEO #87 回審 (風控 2026-10-31)：S10、N1、N1b、N2 逐字 ----------------------------
+
+
+def test_s10_and_its_item_are_verbatim() -> None:
+    assert wording.EMERGENCY_EXIT_STALE_PENDING_NOTE == (
+        "另有 {stale_batches} 批的先前出清賣出指令至今未能結算：{stale_items}。"
+        "這些指令的預定執行日沒有日線開盤價（可能是該日休市，也可能是資料缺漏），"
+        "而之後的交易日已有日線資料，因此本系統不再以這些指令涵蓋上述批次。"
+        "先前的這些指令並未被取消；若日後補得該日的開盤價，帳冊仍可能依該日開盤價判定，"
+        "但同一批次在帳冊的股數不會重複減少，判定的日期與價格可能與你實際賣出的不同。"
+        "本系統不下單，無法得知你是否已就這幾批在券商賣出："
+        "若你已賣出且成交（不論是否依先前的指令），你在券商已無這幾批的持股，"
+        "本則回應前段所述這幾批的賣出指令不適用於你，請勿就這幾批到券商重複下賣單；"
+        "若尚未賣出（包括該日休市、未下單或未成交），以本則回應前段所述的賣出指令為準。"
+    )
+    assert wording.EMERGENCY_EXIT_STALE_ITEM == (
+        "{symbol}第 {batch_no} 批 {shares} 股（未能結算的指令預定執行日 {stale_dates}）"
+    )
+
+
+def test_n1_n1b_and_n2_are_verbatim() -> None:
+    assert wording.SETTLEMENT_EXIT_STALE_NOTE == (
+        "這筆是先前全部出清產生的賣出指令，之後的交易日已有日線資料，本筆仍無法依該日開盤價結算；"
+        "帳冊中這一批{batch_clause}，同一批次在帳冊的股數不會因這些賣出指令重複減少。"
+        "本系統不下單，無法得知你是否已就這批在券商賣出："
+        "若已賣出且成交，你在券商已無這批的持股，請勿再依本筆到券商下賣單；"
+        "若尚未賣出，實際持股以你的券商回報為準。"
+    )
+    assert wording.SETTLEMENT_EXIT_STALE_CLOSED == "已無持股"
+    assert wording.SETTLEMENT_EXIT_STALE_LATER == "另有預定執行日 {later_dates} 的出清賣出指令"
+    assert wording.SETTLEMENT_EXIT_STALE_REOPEN_NOTE == (
+        "這批在帳冊仍記為持有；可再次提交全部出清，替這批產生新的賣出指令。"
+    )
+    assert wording.SETTLEMENT_EXIT_NOTHING_MOVED_NOTE == (
+        "本次判定成交的出清賣出指令中，有 {count} 筆在判定時該批次在帳冊已無持股，"
+        "帳冊股數與現金都未因這幾筆變動：{exit_items}。"
+        "帳冊中這幾批只依另一筆賣出指令減少一次股數，判定的日期與價格可能與你實際賣出的不同；"
+        "實際成交結果以你的券商回報為準。"
+    )
+    assert wording.SETTLEMENT_EXIT_ITEM == "{symbol}第 {batch_no} 批（預定執行日 {execution_date}）"
+
+
+@pytest.mark.parametrize(
+    "sentence", [wording.EMERGENCY_EXIT_STALE_PENDING_NOTE, wording.SETTLEMENT_EXIT_STALE_NOTE]
+)
+def test_the_stale_sentences_say_both_branches(sentence: str) -> None:
+    """風控 必改 6(i): S10、N1 都含「請勿」與「若尚未賣出」——只有「請勿」就擋住出口 (EX-2)."""
+    assert "請勿" in sentence
+    assert "若尚未賣出" in sentence
+    for banned in ("安全", "放心", "已執行", "已出清"):
+        assert banned not in sentence
+
+
+_S10_UNTIL = date(2026, 9, 9)
+_S10_STALE = (
+    wording.ExitStale(symbol="2454", batch_no=1, shares=200, dates=(date(2026, 8, 12),)),
+    wording.ExitStale(
+        symbol="2330", batch_no=1, shares=300, dates=(date(2026, 8, 13), date(2026, 8, 12))
+    ),
+)
+
+
+def _s10_message(*, new_batches: int, pending: wording.ExitPending) -> str:
+    return wording.emergency_exit_message(
+        new_batches=new_batches,
+        new_shares=500 * new_batches,
+        execution_date=date(2026, 8, 14),
+        executed_at=date(2026, 8, 13),
+        freeze_days=20,
+        until=_S10_UNTIL,
+        pending=pending,
+        extended_from=date(2026, 9, 8),
+        freeze_kept=False,
+    )
+
+
+def test_s10_items_are_sorted_per_batch_with_remaining_shares() -> None:
+    assert wording.stale_items(_S10_STALE) == (
+        "2330第 1 批 300 股（未能結算的指令預定執行日 2026-08-12、2026-08-13）、"
+        "2454第 1 批 200 股（未能結算的指令預定執行日 2026-08-12）"
+    )
+
+
+def test_s10_sits_after_s3_and_before_s6_in_both_branches() -> None:
+    """組合順序: RESULT＋［S2］＋［S3］＋［S10］＋［S6］；S1＋［S3］＋［S10］＋［S6］."""
+    pending = wording.ExitPending(
+        batches=1,
+        shares=100,
+        execution_dates=(date(2026, 8, 12),),
+        past_due_dates=(date(2026, 8, 12),),
+        stale=_S10_STALE,
+    )
+    s10 = wording.EMERGENCY_EXIT_STALE_PENDING_NOTE.format(
+        stale_batches=2, stale_items=wording.stale_items(_S10_STALE)
+    )
+    s3 = wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(past_due_dates="2026-08-12")
+    s6 = wording.EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE.format(
+        previous_until="2026-09-08", until="2026-09-09", executed_at="2026-08-13"
+    )
+    for new_batches in (2, 0):
+        message = _s10_message(new_batches=new_batches, pending=pending)
+        assert message.endswith(s3 + s10 + s6)
+        assert message.count(s10) == 1
+
+
+def test_s10_appears_in_result_without_any_covering_batch() -> None:
+    pending = wording.ExitPending(
+        batches=0, shares=0, execution_dates=(), past_due_dates=(), stale=_S10_STALE[:1]
+    )
+    message = _s10_message(new_batches=1, pending=pending)
+    assert "另有 1 批的先前出清賣出指令至今未能結算：2454第 1 批 200 股" in message
+    assert wording.EMERGENCY_EXIT_PENDING_NOTE[:4] not in message.replace("另有 1 批的先前", "")

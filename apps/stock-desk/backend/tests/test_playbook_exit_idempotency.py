@@ -495,16 +495,24 @@ def test_each_branch_carries_its_own_attribution(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("new", "pending", "expected"),
+    ("new", "pending", "stale", "expected"),
     [
-        (2, 0, wording.EXIT_ATTRIBUTION),
-        (1, 1, wording.EXIT_ATTRIBUTION_MIXED),
-        (0, 2, wording.EXIT_ATTRIBUTION_PRIOR),
-        (0, 0, None),
+        (2, 0, 0, wording.EXIT_ATTRIBUTION),
+        (1, 1, 0, wording.EXIT_ATTRIBUTION_MIXED),
+        # CEO #87 回審: S10 describes earlier lines too, so RESULT takes S5.
+        (1, 0, 1, wording.EXIT_ATTRIBUTION_MIXED),
+        (0, 2, 0, wording.EXIT_ATTRIBUTION_PRIOR),
+        (0, 1, 1, wording.EXIT_ATTRIBUTION_PRIOR),
+        (0, 0, 0, None),
     ],
 )
-def test_the_attribution_table(new: int, pending: int, expected: str | None) -> None:
-    assert wording.emergency_exit_attribution(new_batches=new, pending_batches=pending) == expected
+def test_the_attribution_table(new: int, pending: int, stale: int, expected: str | None) -> None:
+    assert (
+        wording.emergency_exit_attribution(
+            new_batches=new, pending_batches=pending, stale_batches=stale
+        )
+        == expected
+    )
 
 
 # --- F-T5 去重之後結算 ---------------------------------------------------------------

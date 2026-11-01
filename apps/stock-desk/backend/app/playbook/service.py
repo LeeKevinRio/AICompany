@@ -963,7 +963,9 @@ class PlaybookService:
             message=message,
             warnings=plan.warnings,
             attribution=wording.emergency_exit_attribution(
-                new_batches=len(plan.directives), pending_batches=pending.batches
+                new_batches=len(plan.directives),
+                pending_batches=pending.batches,
+                stale_batches=len(pending.stale),
             ),
             mode_reason=mode_reason,
         )
