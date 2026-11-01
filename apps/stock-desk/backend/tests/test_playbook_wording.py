@@ -752,3 +752,29 @@ def test_the_nb6_retry_paragraph_is_the_revised_version_verbatim() -> None:
     for banned in ("安全", "放心", "已執行", "已出清", "先前那次是否"):
         assert banned not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
     assert "{" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+
+
+def test_the_nb6_label_and_first_two_paragraphs_are_the_signed_off_wording_verbatim() -> None:
+    """守門: 標籤、第 1 句、第 2 句逐字；不斷言已處理或未處理；不含禁用詞."""
+    assert wording.EXIT_RESULT_UNCONFIRMED_LABEL == "無法確認全部出清的處理結果"
+    assert wording.EXIT_RESULT_UNCONFIRMED_STATES == (
+        "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
+        "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。"
+    )
+    assert wording.EXIT_RESULT_UNCONFIRMED_BADGE == (
+        "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
+        "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+    )
+    parts = (
+        wording.EXIT_RESULT_UNCONFIRMED_LABEL,
+        wording.EXIT_RESULT_UNCONFIRMED_STATES,
+        wording.EXIT_RESULT_UNCONFIRMED_BADGE,
+        wording.EXIT_RESULT_UNCONFIRMED_RETRY,
+    )
+    for part in parts:
+        assert "{" not in part
+        for banned in ("安全", "放心", "已執行", "已出清", "未確認", "請關閉", "視窗"):
+            assert banned not in part
+    # 合併前版本的「只暫停了……而尚未產生賣出指令」在 N-166 之後是不實陳述，不得回來。
+    assert "只暫停了" not in wording.EXIT_RESULT_UNCONFIRMED_STATES
+    assert "尚未產生賣出指令" not in wording.EXIT_RESULT_UNCONFIRMED_STATES

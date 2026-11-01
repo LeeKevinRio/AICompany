@@ -492,16 +492,38 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
     "沿用先前已設定、較晚的恢復日）。"
 )
 
+#: NB-6 出清失敗面板 (N-166 合併後版本, 風控 2026-10-31 已知限制與 NB-6 合併後字面
+#: 裁示 第 3 項): the label and paragraphs 1 and 2. Paragraph 3 is
+#: :data:`EXIT_RESULT_UNCONFIRMED_RETRY` below (revised by CEO #87 回審). The panel
+#: is shown by the client for **every** failed submit -- 5xx, other non-2xx,
+#: network failure, unparsable body -- and nothing else is appended to it (no
+#: backend text, no status code). It must assert neither 「已處理」 nor 「未處理」:
+#: a 500 may land before the write (state i) or after the commit (state iii); the
+#: 「只暫停了」 state (ii) no longer exists since the command and the freeze share
+#: one transaction (ADR-0033 C-1). 「安全」「放心」 may never appear. Wording is
+#: copied verbatim from the ruling; the playbook never emits these strings -- the
+#: client mirrors them and these constants are the single approved source.
+#: Release-coupled with N-166 like paragraph 3.
+EXIT_RESULT_UNCONFIRMED_LABEL = "無法確認全部出清的處理結果"
+EXIT_RESULT_UNCONFIRMED_STATES = (
+    "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
+    "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。"
+)
+EXIT_RESULT_UNCONFIRMED_BADGE = (
+    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
+    "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+)
+
 #: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
 #: (CEO #87 回審): once 判準 Z can write a second line for a batch, 「不會再重複
 #: 產生」 needs its exception stated, or the sentence implies re-sending is
 #: always without effect. The paragraph's two sentences are one unit -- never
 #: split, merged, trimmed or reordered -- and 「安全」「放心」 may never appear.
 #:
-#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The panel
-#: itself -- its label, paragraphs 1 and 2 and the client mirror with its guard
-#: test -- belongs to the 出清畫面包 (N-164/N-165/N-170, PRD FR-8b／FR-11); this
-#: constant is the approved single source the mirror is checked against.
+#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The client
+#: mirror and its guard test belong to the 出清畫面包 (N-164/N-165/N-170, PRD
+#: FR-8b／FR-11); this constant is the approved single source the mirror is
+#: checked against.
 EXIT_RESULT_UNCONFIRMED_RETRY = (
     "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
     "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"
