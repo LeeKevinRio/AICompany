@@ -185,3 +185,32 @@ def test_no_n2_when_every_exit_line_moved_the_book(tmp_path: Path) -> None:
 
     assert wednesday.executed == 1
     assert wednesday.warnings[-1].startswith("T+1 結算：")
+
+
+@pytest.mark.parametrize("state", ["no-batch-row", "skipped", "open-without-shares"])
+def test_no_exit_note_when_the_batch_state_supports_neither_sentence(
+    book: Book, state: str
+) -> None:
+    """N1 只寫 closed／有較晚列兩種值，N1b 只寫仍持有股數的 open 批次；其餘不加註."""
+    if state == "no-batch-row":
+        book.prices.seed("2454", gapped_bars("2454", 50.0, missing={WEDNESDAY}))
+        log_like_before_n166(book.store, [legacy_exit_line("2454", 200)])
+        symbol = "2454"
+    else:
+        log_like_before_n166(book.store, [legacy_exit_line("2330", 300)])
+        batch = book.store.get_batch("2330", 1)
+        assert batch is not None
+        update = {"status": "skipped"} if state == "skipped" else {"remaining_shares": 0}
+        book.store.save_batch(batch.model_copy(update=update))
+        symbol = "2330"
+
+    thursday = book.service.settle_pending(today=THURSDAY)
+
+    assert _reasons(thursday) == [
+        wording.SETTLEMENT_NO_OPEN_PRICE.format(
+            symbol=symbol,
+            execution_date=WEDNESDAY.isoformat(),
+            status="fresh",
+            source="fake",
+        )
+    ]
