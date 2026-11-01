@@ -40,6 +40,7 @@ from app.playbook.engine import (
 )
 from app.playbook.models import (
     BatchState,
+    BatchStatus,
     Directive,
     EmergencyExitResult,
     ExitConfirm,
@@ -592,6 +593,13 @@ class PlaybookService:
         line judged executed while its batch already held nothing gets N2 after
         the summary. Both are read around :meth:`PlaybookStore.settle`, which is
         left exactly as it was.
+
+        G1 (ADR-0035 Decision 6′, CEO #88): a buy whose batch is no longer
+        ``planned`` is refused by the claim itself, so it neither fills nor
+        reaches the book; it stays pending and is listed in ``unsettled`` with
+        :data:`wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE` instead of being
+        dropped like a row another run claimed (N172-T21). This is the one
+        change N-172a makes here (N172-C8); ``settle`` is untouched.
         """
         as_of = today or datetime.now(UTC).date()
         pending = self._store.pending_directives(on_or_before=as_of)
@@ -608,6 +616,7 @@ class PlaybookService:
         settled: list[SettledLine] = []
         unsettled: list[UnsettledLine] = []
         moved_nothing: list[Directive] = []
+        blocked: dict[int, BatchStatus] = {}
         for item in pending:
             directive = item.directive
             series = loaded.get(directive.symbol, NOTHING_LOADED)
@@ -632,7 +641,17 @@ class PlaybookService:
             if not self._store.claim_directive(
                 item.directive_id, status=outcome.status, open_price=opening
             ):
-                # Someone else settled this row between the read and the claim.
+                refused = self._store.batch_blocking_claim(item.directive_id)
+                if refused is not None:
+                    # G1: a buy for a batch that is no longer planned. Not
+                    # claimed, nothing moved; listed with its own reason.
+                    blocked[item.directive_id] = refused
+                    unsettled.append(
+                        UnsettledLine(
+                            directive_id=item.directive_id, directive=directive, reason=""
+                        )
+                    )
+                # Otherwise someone else settled this row between the read and the claim.
                 continue
             if _is_exit_sell(outcome) and outcome.status == "executed":
                 # N2: ``settle`` moves ``min(remaining, shares)``; with nothing
@@ -645,8 +664,10 @@ class PlaybookService:
                 SettledLine(directive_id=item.directive_id, directive=outcome, open_price=opening)
             )
 
-        # N1／N1b are decided after every line of the run has reached the book,
-        # so the batch state they state is the one this settlement leaves.
+        # N1／N1b and the G1 reason are decided after every line of the run has
+        # reached the book, so the batch state they state is the one this
+        # settlement leaves.
+        unsettled = self._with_batch_filled_reasons(unsettled, blocked)
         unsettled = self._with_stale_exit_notes(unsettled, loaded)
         result = SettlementResult(
             settled_on=as_of, settled=settled, unsettled=unsettled, warnings=[]
@@ -680,6 +701,39 @@ class PlaybookService:
         if directive.batch_no is None:
             return None
         return self._store.get_batch(directive.symbol, directive.batch_no)
+
+    def _with_batch_filled_reasons(
+        self, unsettled: list[UnsettledLine], blocked: Mapping[int, BatchStatus]
+    ) -> list[UnsettledLine]:
+        """Give each line G1 refused its :data:`wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE`.
+
+        ``{batch_state}`` is the batch as this settlement leaves it, which can
+        only have moved on from the status the refusal saw (a batch never
+        returns to ``planned``); that status stands in if the batch row is gone.
+        """
+        if not blocked:
+            return unsettled
+        noted: list[UnsettledLine] = []
+        for line in unsettled:
+            refused = blocked.get(line.directive_id)
+            if refused is None:
+                noted.append(line)
+                continue
+            directive = line.directive
+            current = self._batch_of(directive)
+            state = (
+                current.status if current is not None and current.status != "planned" else refused
+            )
+            reason = wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE.format(
+                symbol=directive.symbol,
+                batch_no=directive.batch_no,
+                shares=directive.shares,
+                rule_id=directive.rule_id,
+                execution_date=directive.execution_date.isoformat(),
+                batch_state=wording.SETTLEMENT_BATCH_STATES[state],
+            )
+            noted.append(line.model_copy(update={"reason": reason}))
+        return noted
 
     def _with_stale_exit_notes(
         self, unsettled: list[UnsettledLine], loaded: Mapping[str, LoadedSeries]

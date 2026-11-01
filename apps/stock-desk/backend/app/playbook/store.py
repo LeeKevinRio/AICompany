@@ -50,6 +50,7 @@ from app.data.calendar import TradingCalendar
 from app.data.sqlite_util import add_missing_columns, enable_wal
 from app.playbook.models import (
     BatchState,
+    BatchStatus,
     Directive,
     FastMarketState,
     PlaybookEvaluation,
@@ -1258,14 +1259,46 @@ class PlaybookStore:
         day cannot both reach the book: the second one changes no rows, gets
         ``False`` back and leaves the shares alone. The book is only touched
         after a successful claim, never before it.
+
+        G1 (ADR-0035 Decision 6′, CEO #88): a buy may only fill a ``planned``
+        batch. A batch is bought once in its life -- :meth:`ensure_batches`
+        never resets one -- so a buy whose batch already left ``planned`` is
+        not claimed at all, in the same ``UPDATE``, and nothing reaches the
+        book. That row stays unsettled; :meth:`batch_blocking_claim` tells it
+        apart from a row someone else claimed (N172-T21).
         """
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 "UPDATE playbook_directives SET settled = 1, settled_at = ?, "
-                "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0",
+                "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0 "
+                "AND (action <> 'buy' OR NOT EXISTS (SELECT 1 FROM playbook_batches AS b "
+                "WHERE b.symbol = playbook_directives.symbol "
+                "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned'))",
                 (datetime.now(UTC).isoformat(), str(open_price), status, directive_id),
             )
             return cursor.rowcount == 1
+
+    def batch_blocking_claim(self, directive_id: int) -> BatchStatus | None:
+        """The batch status G1 refused a claim for, or ``None`` (N172-T21).
+
+        Asked after :meth:`claim_directive` returned ``False``. A row is G1's
+        when it is still unsettled, is a buy and its batch is no longer
+        ``planned``; anything else -- ``settled = 1`` -- is a row another
+        settlement claimed first. Neither can change afterwards: a claimed row
+        is never unclaimed and a batch never returns to ``planned``.
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT b.status FROM playbook_directives AS d JOIN playbook_batches AS b "
+                "ON b.symbol = d.symbol AND b.batch_no = d.batch_no "
+                "WHERE d.id = ? AND d.settled = 0 AND d.action = 'buy' "
+                "AND b.status <> 'planned'",
+                (directive_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        status: BatchStatus = row[0]
+        return status
 
     def settle(self, directive: Directive, *, fill_price: Decimal | None = None) -> None:
         """Apply a settled line to the book: fills move shares, MISSED moves nothing.
