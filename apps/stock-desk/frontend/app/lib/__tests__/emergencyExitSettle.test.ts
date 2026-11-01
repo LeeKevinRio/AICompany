@@ -377,20 +377,28 @@ describe("FE-T13(c): a write failure ends the mutation in error; it is never swa
     }
   });
 
-  it("(c4) INV-1 matrix: never a success without the receipt; every error leaves the failure panel's condition true on Step 3", async () => {
+  it("(c4) INV-1 matrix: each scenario ends in its expected status; a success always has the receipt, an error never has half of one", async () => {
     const failure = new Error("injected");
-    type Scenario = { name: string; sink: () => ExitReceiptStore | ExitReceiptSink; request: "ok" | "reject" };
+    type Scenario = {
+      name: string;
+      sink: () => ExitReceiptStore | ExitReceiptSink;
+      request: "ok" | "reject";
+      /** Written down per scenario, so a scenario that silently changes outcome fails here. */
+      expectedStatus: "success" | "error";
+    };
     const scenarios: Scenario[] = [
-      { name: "normal", sink: () => createExitReceiptStore(), request: "ok" },
+      { name: "normal", sink: () => createExitReceiptStore(), request: "ok", expectedStatus: "success" },
       {
         name: "c1 sink throws",
         sink: () => ({ accept: () => { throw failure; } }),
         request: "ok",
+        expectedStatus: "error",
       },
       {
         name: "c2 reducer throws",
         sink: () => createExitReceiptStore({ reducer: () => { throw failure; } }),
         request: "ok",
+        expectedStatus: "error",
       },
       {
         name: "c3 subscriber throws",
@@ -400,8 +408,14 @@ describe("FE-T13(c): a write failure ends the mutation in error; it is never swa
           return s;
         },
         request: "ok",
+        expectedStatus: "success",
       },
-      { name: "mutationFn rejects", sink: () => createExitReceiptStore(), request: "reject" },
+      {
+        name: "mutationFn rejects",
+        sink: () => createExitReceiptStore(),
+        request: "reject",
+        expectedStatus: "error",
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -416,17 +430,15 @@ describe("FE-T13(c): a write failure ends the mutation in error; it is never swa
       const result = observer.getCurrentResult();
       const seqAfter = "getSnapshot" in sink ? (sink.getSnapshot().receipt?.seq ?? 0) : 0;
 
-      if (result.status === "success") {
+      expect(result.status, scenario.name).toBe(scenario.expectedStatus);
+      if (scenario.expectedStatus === "success") {
         // INV-1: success means the response is in the store.
-        expect(scenario.name, scenario.name).toMatch(/normal|c3/);
         expect(seqAfter, scenario.name).toBe(seqBefore + 1);
         expect((sink as ExitReceiptStore).getSnapshot().receipt?.response, scenario.name).toEqual(response());
       } else {
-        expect(result.status, scenario.name).toBe("error");
+        // The dialog shows NB-6 from `isError`; the Step-3 condition itself
+        // (`isError && step === "final"`) is pinned verbatim in exitFlowStructure.
         expect(result.isError, scenario.name).toBe(true);
-        // The dialog's condition (`isError && step === "final"`) holds on Step 3 -> NB-6.
-        const step: "final" = "final";
-        expect(result.isError && step === "final", scenario.name).toBe(true);
         // ... and an error never leaves a half-written receipt behind.
         expect(seqAfter, scenario.name).toBe(seqBefore);
       }
