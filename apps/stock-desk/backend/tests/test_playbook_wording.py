@@ -707,3 +707,22 @@ def test_s10_appears_in_result_without_any_covering_batch() -> None:
     message = _s10_message(new_batches=1, pending=pending)
     assert "另有 1 批的先前出清賣出指令至今未能結算：2454第 1 批 200 股" in message
     assert wording.EMERGENCY_EXIT_PENDING_NOTE[:4] not in message.replace("另有 1 批的先前", "")
+
+
+# --- NB-6 失敗面板第 3 段（N-166 合併後，CEO #87 回審修訂版） ------------------------
+
+
+def test_the_nb6_retry_paragraph_is_the_revised_version_verbatim() -> None:
+    """守門: 修訂版逐字；舊的無例外版本不得回來（在判準 Z 底下是不實陳述）."""
+    assert wording.EXIT_RESULT_UNCONFIRMED_RETRY == (
+        "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
+        "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"
+        "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。"
+        "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。"
+    )
+    assert "不會再重複產生賣出指令；但" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+    # 兩個句號、同一段；永久禁用詞；不得宣稱回應會說明先前那次是否受理。
+    assert wording.EXIT_RESULT_UNCONFIRMED_RETRY.count("。") == 2
+    for banned in ("安全", "放心", "已執行", "已出清", "先前那次是否"):
+        assert banned not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+    assert "{" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY

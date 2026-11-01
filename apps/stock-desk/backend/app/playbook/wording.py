@@ -473,6 +473,23 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
     "沿用先前已設定、較晚的恢復日）。"
 )
 
+#: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
+#: (CEO #87 回審): once 判準 Z can write a second line for a batch, 「不會再重複
+#: 產生」 needs its exception stated, or the sentence implies re-sending is
+#: always without effect. The paragraph's two sentences are one unit -- never
+#: split, merged, trimmed or reordered -- and 「安全」「放心」 may never appear.
+#:
+#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The panel
+#: itself -- its label, paragraphs 1 and 2 and the client mirror with its guard
+#: test -- belongs to the 出清畫面包 (N-164/N-165/N-170, PRD FR-8b／FR-11); this
+#: constant is the approved single source the mirror is checked against.
+EXIT_RESULT_UNCONFIRMED_RETRY = (
+    "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
+    "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"
+    "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。"
+    "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。"
+)
+
 #: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
 #: price; without that price the line stays pending and is named, never guessed.
 SETTLEMENT_NO_OPEN_PRICE = (
