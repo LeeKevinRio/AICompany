@@ -30,7 +30,14 @@ from datetime import date
 from decimal import Decimal
 from typing import NamedTuple
 
-from app.playbook.models import Action, Directive, Mode, RuleParams, RuleSetAuthorship
+from app.playbook.models import (
+    Action,
+    BatchStatus,
+    Directive,
+    Mode,
+    RuleParams,
+    RuleSetAuthorship,
+)
 
 #: 風控 R2 常駐歸屬語, 覆審 VETO-2 A 版逐字. ``{RULE_SET_DATE}`` may only be bound
 #: to the effective date of the rule version in force -- never to "today", and
@@ -316,6 +323,42 @@ NOT_SCHEDULE_DAY_NOTE = (
 SHRINK_NOTE = "鐵律①現金 30%：本批股數由 {planned} 股縮減為 {actual} 股。"
 SHRINK_TO_ZERO_NOTE = "鐵律①現金 30%：{symbol} 第 {batch_no} 批進場後將跌破現金下限，本批不進場。"
 
+#: ADR-0035 Decision 5 / 風控 CEO #87 回審 二-1 (N-174(c), CEO #86 合併門檻):
+#: the 預定執行日's log holds R-series buys this evaluation did not produce --
+#: a later run that turned 凍結／防守, lost its index or symbol data, or would
+#: now defer under R2. The first decision stands (S-α), so the line stays on the
+#: page and this says what it is. Triggered from the lines themselves, never
+#: from another sentence; right after FROZEN_NOTE when the page has one,
+#: otherwise first. ``{entry_items}`` joins :data:`SAME_DAY_EARLIER_ENTRY_ITEM`
+#: with 「、」.
+SAME_DAY_EARLIER_ENTRY_NOTE = (
+    "指令帳冊中有 {entry_count} 筆 R 系列買進指令，"
+    "是同一預定執行日稍早一次評估已產生的指令：{entry_items}。"
+    "本次評估沒有產生這些買進指令，但已產生的指令不會因此取消或修改，"
+    "帳冊會照常以預定執行日開盤價判定，判定成交即記為持有批次並扣除帳冊現金；"
+    "本頁其他說明若提到 R 系列進場不執行、當日不新開倉或當日不產生指令，"
+    "是指本次評估不再產生新的指令，不包括上述已產生的指令。本系統不下單，"
+    "無法得知你是否已依這些指令在券商下單，也無法替你在券商撤單："
+    "若你在券商的買進實際成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），帳冊判定成交的批次將與你的實際持股不符。"
+)
+
+#: One ``{entry_items}`` entry, the N-168 item format.
+SAME_DAY_EARLIER_ENTRY_ITEM = (
+    "{symbol}第 {batch_no} 批買進 {shares} 股（規則 {rule_id}，預定執行日 {execution_date}）"
+)
+
+#: 風控 CEO #87 回審 二-3 第 4 點: a symbol whose data is unusable on this run
+#: but which already has lines in the 預定執行日's log. Right after that
+#: symbol's DATA_GAP_NOTE or DATA_GAP_HOLDING_NOTE, so 「當日不產生指令」 is not
+#: read as cancelling an S1 the earlier run issued.
+SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE = (
+    "{symbol} 本次資料狀態為 {status}，本次未重新評估這檔；"
+    "指令帳冊中這檔的 {line_count} 筆指令，"
+    "是同一預定執行日稍早資料可用時的評估已產生的指令，未因本次資料狀態而取消或修改，"
+    "仍會照常以預定執行日開盤價在帳冊判定。"
+)
+
 #: 鐵律④ (T5). Never a denial: the change is recorded and dated.
 RULE_CHANGE_PENDING = (
     "規則修改已記錄為待生效，生效日 {effective_date}（版本 {version}）；當日不套用。"
@@ -534,6 +577,29 @@ SETTLEMENT_EXIT_NOTHING_MOVED_NOTE = (
     "實際成交結果以你的券商回報為準。"
 )
 SETTLEMENT_EXIT_ITEM = "{symbol}第 {batch_no} 批（預定執行日 {execution_date}）"
+
+#: G1 (ADR-0035 Decision 6′, CEO #88; 風控 CEO #87 回審 二-2): the ``unsettled``
+#: reason of a buy whose 預定執行日 has its opening price but whose batch is no
+#: longer ``planned``, so the book does not fill it. Replaces
+#: :data:`SETTLEMENT_NO_OPEN_PRICE` for that line. ``{batch_state}`` takes one
+#: of :data:`SETTLEMENT_BATCH_STATES` only; a ``planned`` batch never renders it.
+SETTLEMENT_BATCH_ALREADY_FILLED_NOTE = (
+    "{symbol}第 {batch_no} 批買進 {shares} 股（規則 {rule_id}，"
+    "預定執行日 {execution_date}）：該日已有日線開盤價，"
+    "但帳冊中這一批目前{batch_state}，不是待買進狀態，"
+    "帳冊不會依本筆判定成交，股數與現金都未因本筆變動；本筆未結算，維持待結算狀態，"
+    "之後的結算會繼續列出。本系統不下單，無法得知你是否已依本筆在券商買進："
+    "若已買進且成交，你在券商的這檔持股可能多於帳冊所記，多出的股數不在帳冊內，"
+    "S/P 系列不會評估它們的停損停利，全部出清也不會涵蓋它們，"
+    "實際持股以你的券商回報為準；若未下單或未成交，帳冊不受本筆影響。"
+)
+
+#: The three ``{batch_state}`` values, by batch status.
+SETTLEMENT_BATCH_STATES: dict[BatchStatus, str] = {
+    "open": "已記為持有",
+    "closed": "已記為持有後全數賣出",
+    "skipped": "已被跳過",
+}
 
 #: 季末 REBALANCE (CEO 裁決一 / 風控 D-1).
 REBALANCE_RESULT = (
