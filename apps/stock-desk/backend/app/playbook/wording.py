@@ -426,20 +426,39 @@ EXIT_CONFIRM_CHECKS: tuple[str, ...] = (
     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 )
 
-#: 四輪收斂裁決: what stands in for check 2 **only** when the response carried no
-#: ``exit_confirm`` block at all, so neither the freeze length nor the 預計恢復日
-#: can be stated. The fact of the freeze is still disclosed before submit; the
-#: two numbers are named as missing and pointed at the place they do appear
-#: (EMERGENCY_EXIT_RESULT / EMERGENCY_EXIT_EMPTY / MODE_REASON_EMERGENCY all
-#: carry them). It is never rendered on the normal path, and it does not block
-#: the submit -- a missing field may not become a locked door (EX-2 出口零摩擦).
+#: 四輪收斂裁決, revised by 風控 Q8 (2026-10-31, 1b): what stands in for check 2
+#: whenever the page has no usable ``exit_confirm`` block to show -- the response
+#: carried none, or ``/today`` is pending, failed on first load, or failed on a
+#: background refetch (the stale block is never used). The fact of the freeze is
+#: still disclosed before submit; the two numbers are named as missing. It
+#: promises only the 預計恢復日 and only in the result of an **accepted**
+#: submission: a failed submit has no result, and after the N-166 F-c branch (S7)
+#: that result carries ``{until}`` but no day count, so the earlier "兩者於送出後
+#: 的執行結果中顯示" was untrue in both cases. Every accepted message (RESULT,
+#: EMPTY, S1, S7) carries ``{until}``; that is pinned backend-side. It is never
+#: rendered on the normal path, and it does not block the submit -- a missing
+#: field may not become a locked door (EX-2 出口零摩擦).
 #:
 #: The playbook itself never emits this string: the degraded branch is a client
 #: state (no block arrived), so the sentence is mirrored by the client and lives
 #: here as its single approved source.
 EXIT_CONFIRM_FREEZE_DEGRADED = (
     "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
-    "兩者於送出後的執行結果中顯示。"
+    "預計恢復日會在受理後的執行結果中顯示。"
+)
+
+#: 風控 Q11 (2026-10-31, R-6): the notice the client shows inside the Step 2/3
+#: dialog after it replaced a check sentence and, in doing so, cleared at least
+#: one tick the user had already made. Rendered **only** in that case -- never on
+#: open, never when ``/today`` merely failed, never when a changed sentence had
+#: not been ticked, never while a submit is in flight -- so that "有變動的項目已
+#: 改為未勾選" is always true. It is a statement of fact, not a precondition: it
+#: blocks nothing, and ticking again lets the flow continue (EX-2 / EX-5 / H-1).
+#:
+#: Like :data:`EXIT_CONFIRM_FREEZE_DEGRADED`, the playbook never emits it; the
+#: client mirrors it and this constant is its single approved source.
+EXIT_CONFIRM_CHECKS_UPDATED = (
+    "核取句已依最新取得的資料更新，有變動的項目已改為未勾選，請重新閱讀後再勾選。"
 )
 
 #: N-166 風控 S9: check 2 in place of the standard one **only** when the
