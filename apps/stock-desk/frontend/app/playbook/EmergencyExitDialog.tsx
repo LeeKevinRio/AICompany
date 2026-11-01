@@ -76,6 +76,8 @@ export function EmergencyExitDialog({
   const [tick, setTick] = useState(0);
   const isClientMounted = useIsClientMounted();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The dialog's own scroll box: the failure panel reveals its label by scrolling it (V-41).
+  const scrollRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const cancelRef = useRef<() => void>(() => {});
 
@@ -219,7 +221,10 @@ export function EmergencyExitDialog({
             onKeyDown={handleDialogKeyDown}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
           >
-            <div className="max-h-[calc(100vh-2rem)] supports-[height:100dvh]:max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-neutral-700 bg-neutral-950 p-5">
+            <div
+              ref={scrollRef}
+              className="max-h-[calc(100vh-2rem)] supports-[height:100dvh]:max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-neutral-700 bg-neutral-950 p-5"
+            >
               {/* 視覺規範 §4.3 逐字引用（Step 2、Step 3 標頭）。One heading node for both steps. */}
               <h2
                 ref={headingRef}
