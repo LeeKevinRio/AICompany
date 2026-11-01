@@ -66,6 +66,46 @@ describe("createExitReceiptStore", () => {
     expect(b.getSnapshot()).toEqual({ receipt: null, scrolledSeq: 0 });
   });
 
+  it("commits the snapshot before notifying anyone: a subscriber already sees the new receipt", () => {
+    const store = createExitReceiptStore();
+    const seen: Array<number | undefined> = [];
+    store.subscribe(() => seen.push(store.getSnapshot().receipt?.seq));
+    store.accept(receiptResponse());
+    expect(seen).toEqual([1]);
+  });
+
+  it("a failure in the reducer escapes accept() and commits and notifies nothing", () => {
+    const store = createExitReceiptStore({
+      reducer: () => {
+        throw new Error("reducer exploded");
+      },
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const before = store.getSnapshot();
+    expect(() => store.accept(receiptResponse())).toThrow("reducer exploded");
+    expect(store.getSnapshot()).toBe(before);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("a throwing subscriber does not stop the others, does not escape accept(), and is reported once", () => {
+    const onSubscriberError = vi.fn();
+    const store = createExitReceiptStore({ onSubscriberError });
+    const failure = new Error("subscriber exploded");
+    const after = vi.fn();
+    store.subscribe(() => {
+      throw failure;
+    });
+    store.subscribe(after);
+    expect(() => store.accept(receiptResponse())).not.toThrow();
+    expect(store.getSnapshot().receipt?.seq).toBe(1);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(onSubscriberError).toHaveBeenCalledExactlyOnceWith(failure);
+    // The same isolation holds for the scroll marker.
+    expect(() => store.scrollHandled(1)).not.toThrow();
+    expect(onSubscriberError).toHaveBeenCalledTimes(2);
+  });
+
   it("exposes exactly the sink, the snapshots, subscribe and scrollHandled: no clear, no setter, no request", () => {
     expect(Object.keys(createExitReceiptStore()).sort()).toEqual(
       ["accept", "getServerSnapshot", "getSnapshot", "scrollHandled", "subscribe"].sort(),
