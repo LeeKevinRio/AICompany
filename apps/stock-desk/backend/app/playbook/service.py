@@ -59,6 +59,7 @@ from app.playbook.models import (
 )
 from app.playbook.store import (
     LINE_BOUND_EFFECTS,
+    ORDER_ACTIONS,
     R_SERIES_RULE_IDS,
     EmergencyExitState,
     EvaluationCommit,
@@ -400,6 +401,12 @@ def plan_emergency_exit(
     )
 
 
+#: 風控 2026-11-01 解讀點 (c): the logged actions SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE
+#: counts -- decisions that place no order. 買賣 lines are ``ORDER_ACTIONS``; an
+#: action in neither tuple is not counted by either sentence.
+DECISION_RECORD_ACTIONS: tuple[str, ...] = ("defer", "skip")
+
+
 def _is_r_series(directive: Directive) -> bool:
     return directive.rule_id in R_SERIES_RULE_IDS
 
@@ -433,9 +440,13 @@ def same_day_warnings(
       ``rule_summary`` already carries the shrink that applied to it.
     * **INDEX_DATA_GAP_DEFER_NOTE needs an M1 deferral on the list** (二-3
       第 3 點): without one, 「計入順延次數（逐批列示）」 is not true.
-    * **SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE** (二-3 第 4 點) follows the
-      DATA_GAP_NOTE／DATA_GAP_HOLDING_NOTE of a symbol whose data is unusable
-      now but which has lines on the list.
+    * **SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE** (A, 二-3 第 4 點) and
+      **SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE** (B, 風控 2026-11-01 (c))
+      follow, in that order, the DATA_GAP_NOTE／DATA_GAP_HOLDING_NOTE of a
+      symbol whose data is unusable now: A counts its listed 買賣 lines
+      (``ORDER_ACTIONS``), B its 順延／跳過 records
+      (:data:`DECISION_RECORD_ACTIONS`); each only when its count is one or
+      more. Missing anchors put them at the end of the list.
     * **SAME_DAY_EARLIER_ENTRY_NOTE** (二-1) when the list has an R-series buy
       this run produced no buy of the same K1 for: right after FROZEN_NOTE when
       the mode is not ``normal`` (the condition FROZEN_NOTE is written on),
@@ -482,7 +493,9 @@ def same_day_warnings(
         if snapshot is not None and is_usable(snapshot.data_status, snapshot.source):
             continue
         lines = [line for line in logged if line.symbol == symbol]
-        if not lines:
+        orders = sum(1 for line in lines if line.action in ORDER_ACTIONS)
+        decisions = sum(1 for line in lines if line.action in DECISION_RECORD_ACTIONS)
+        if not orders and not decisions:
             continue
         status = "unavailable" if snapshot is None else snapshot.data_status
         source = "none" if snapshot is None else snapshot.source
@@ -490,13 +503,23 @@ def same_day_warnings(
             batch.status == "open" and batch.remaining_shares > 0 for batch in by_symbol[symbol]
         )
         gap = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
-        _insert_after(
-            warnings,
-            gap.format(symbol=symbol, status=status, source=source),
-            wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
-                symbol=symbol, status=status, line_count=len(lines)
-            ),
-        )
+        # DATA_GAP(_HOLDING)_NOTE -> A -> B; each falls back to the end of the
+        # list when the sentence before it is not there (風控 必改 7).
+        anchor = gap.format(symbol=symbol, status=status, source=source)
+        if orders:
+            note = wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
+                symbol=symbol, status=status, line_count=orders
+            )
+            _insert_after(warnings, anchor, note)
+            anchor = note
+        if decisions:
+            _insert_after(
+                warnings,
+                anchor,
+                wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE.format(
+                    symbol=symbol, decision_count=decisions
+                ),
+            )
 
     produced = {decision_key(line) for line in evaluation.directives if line.action == "buy"}
     earlier = sorted(

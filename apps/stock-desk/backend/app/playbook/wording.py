@@ -348,15 +348,27 @@ SAME_DAY_EARLIER_ENTRY_ITEM = (
     "{symbol}第 {batch_no} 批買進 {shares} 股（規則 {rule_id}，預定執行日 {execution_date}）"
 )
 
-#: 風控 CEO #87 回審 二-3 第 4 點: a symbol whose data is unusable on this run
-#: but which already has lines in the 預定執行日's log. Right after that
-#: symbol's DATA_GAP_NOTE or DATA_GAP_HOLDING_NOTE, so 「當日不產生指令」 is not
-#: read as cancelling an S1 the earlier run issued.
+#: 風控 CEO #87 回審 二-3 第 4 點, revised 2026-11-01 (解讀點 (c)): a symbol whose
+#: data is unusable on this run but which already has 買賣 lines (action in
+#: ORDER_ACTIONS) in the 預定執行日's log; {line_count} counts those lines
+#: only, and the sentence is not rendered for zero. Right after that symbol's
+#: DATA_GAP_NOTE or DATA_GAP_HOLDING_NOTE, so 「當日不產生指令」 is not read as
+#: cancelling an S1 the earlier run issued.
 SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE = (
     "{symbol} 本次資料狀態為 {status}，本次未重新評估這檔；"
-    "指令帳冊中這檔的 {line_count} 筆指令，"
-    "是同一預定執行日稍早資料可用時的評估已產生的指令，未因本次資料狀態而取消或修改，"
-    "仍會照常以預定執行日開盤價在帳冊判定。"
+    "指令帳冊中這檔的 {line_count} 筆買賣指令，"
+    "是同一預定執行日稍早這檔資料可用時的評估已產生的指令，"
+    "未因本次資料狀態而取消或修改，仍會照常以預定執行日開盤價在帳冊判定。"
+)
+
+#: 風控 2026-11-01 解讀點 (c), B 句: the same gap next to the symbol's 順延／跳過
+#: records ({decision_count} defer or skip lines, rendered for one or more),
+#: which are not orders and are never judged at an opening price. After the
+#: DATA_GAP sentence and after A when A is there.
+SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE = (
+    "指令帳冊中 {symbol} 的 {decision_count} 筆順延或跳過紀錄，"
+    "是同一預定執行日稍早這檔資料可用時的評估結果；本次未重新評估這檔，"
+    "這些紀錄未因此取消或修改。這幾筆不是買賣指令，帳冊不會依開盤價判定成交。"
 )
 
 #: 鐵律④ (T5). Never a denial: the change is recorded and dated.

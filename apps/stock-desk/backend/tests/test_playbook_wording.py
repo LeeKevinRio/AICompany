@@ -766,12 +766,22 @@ def test_settlement_batch_already_filled_note_and_its_states_are_verbatim() -> N
     }
 
 
-def test_same_day_earlier_lines_data_gap_note_is_verbatim() -> None:
-    """二-3 第 4 點."""
+def test_same_day_earlier_lines_data_gap_notes_are_verbatim() -> None:
+    """二-3 第 4 點 A 句（風控 2026-11-01 (c) 修訂兩處）與新增的 B 句."""
     assert wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE == (
         "{symbol} 本次資料狀態為 {status}，本次未重新評估這檔；"
-        "指令帳冊中這檔的 {line_count} 筆指令，是同一預定執行日稍早資料可用時的評估已產生的指令，"
+        "指令帳冊中這檔的 {line_count} 筆買賣指令，"
+        "是同一預定執行日稍早這檔資料可用時的評估已產生的指令，"
         "未因本次資料狀態而取消或修改，仍會照常以預定執行日開盤價在帳冊判定。"
+    )
+    assert wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE == (
+        "指令帳冊中 {symbol} 的 {decision_count} 筆順延或跳過紀錄，"
+        "是同一預定執行日稍早這檔資料可用時的評估結果；本次未重新評估這檔，"
+        "這些紀錄未因此取消或修改。這幾筆不是買賣指令，帳冊不會依開盤價判定成交。"
+    )
+    # The pre-revision wording may not come back.
+    assert (
+        "筆指令，是同一預定執行日稍早資料可用時" not in wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE
     )
 
 
@@ -787,6 +797,7 @@ def test_the_n172a_sentences_live_in_wording_only_and_the_store_never_imports_it
         "不是待買進狀態",
         "本次未重新評估這檔",
         "已記為持有後全數賣出",
+        "筆順延或跳過紀錄",
     )
     for path in app_root.rglob("*.py"):
         if path.name == "wording.py" and path.parent.name == "playbook":
