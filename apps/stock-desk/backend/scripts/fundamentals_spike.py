@@ -15,25 +15,38 @@ Strictly read-only:
 
 Environment variables (names only; see ``apps/stock-desk/.env.example``):
   SEC_USER_AGENT         required for SEC, format "Your Name your@email"
+  SPIKE_US_HOLDINGS      optional, up to 3 US tickers you hold, e.g. "NVDA,TSLA"; used
+                         only to judge ADR-0038 P-12 (non-USD or IFRS filers)
   FINMIND_API_TOKEN      optional; without it FinMind runs at the anonymous tier
   ALPHA_VANTAGE_API_KEY  optional; without it the Alpha Vantage check is skipped
 
-Planned requests (hard cap ``REQUEST_CAP`` = 20, enforced in code):
+Planned requests (hard cap ``REQUEST_CAP`` = 30, enforced in code):
 
-  SEC EDGAR           4  (ticker map 1, companyfacts AAPL + 2 other tickers 3)
-                      +1 only if the first ticker map path fails (fallback path)
+  SEC EDGAR          10  ticker map 1; companyfacts AAPL, AMZN, INTC 3;
+                         foreign-filer sample TSM 1; AAPL filing list 1 and the
+                         same request again with ETag/If-Modified-Since 1;
+                         ETF sample SPY filing list 1 and companyfacts 1;
+                         SEC fair-access page 1
+                         +1 if the first ticker map path fails (fallback path)
+                         +up to 3 companyfacts, one per ticker in SPIKE_US_HOLDINGS
+                         (the conditional repeat is skipped if AAPL answers
+                         without ETag/Last-Modified, so 9 in that case)
   TWSE OpenAPI        4  (swagger 1, up to 3 sample datasets)
   TPEx OpenAPI        3  (swagger 1, up to 2 sample datasets)
   FinMind             4  (dataset enum from GitHub 1, user_info 1,
                           cash-flow dataset for one TWSE and one TPEx ticker 2)
   Alpha Vantage       1  (TIME_SERIES_DAILY AAPL, compact)
   ------------------------------------------------------------------
-  Normal run         16  worst case 17, cap 20
+  Normal run         22  (no holdings given); worst case 26, cap 30
+
+The ADR-0038 P items (P-1..P-9, P-12) are judged from those same responses:
+section 5 of the output issues no request of its own.
 
 Throttling: SEC hosts are spaced at least 0.25 s apart (<= 4 req/s, well under
 the 10 req/s SEC limit); every other host at least 1.0 s.
 
-Verdict vocabulary printed per check: EXISTS / MISSING / ERROR / SKIPPED.
+Verdict vocabulary printed per check: EXISTS / MISSING / ERROR / SKIPPED, and for
+the P items HOLDS / NOT_HOLD / PARTIAL / MEASURED / INCONCLUSIVE.
 """
 
 from __future__ import annotations
@@ -56,8 +69,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-SCRIPT_VERSION = "1"
-REQUEST_CAP = 20
+SCRIPT_VERSION = "2"
+REQUEST_CAP = 30
 REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_BODY_BYTES = 64 * 1024 * 1024
 SEC_MIN_GAP_SECONDS = 0.25
@@ -67,6 +80,7 @@ MASK = "***"
 ENV_SEC_UA = "SEC_USER_AGENT"
 ENV_FINMIND = "FINMIND_API_TOKEN"
 ENV_ALPHA = "ALPHA_VANTAGE_API_KEY"
+ENV_HOLDINGS = "SPIKE_US_HOLDINGS"
 SECRET_ENV_VARS = (ENV_SEC_UA, ENV_FINMIND, ENV_ALPHA)
 
 EXISTS = "EXISTS"
@@ -84,7 +98,41 @@ SEC_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 SEC_TICKERS = ("AAPL", "AMZN", "INTC")
 #: Used only if both ticker-map paths fail, so companyfacts can still be probed.
 #: These come from public knowledge and are NOT verified by this run.
-SEC_FALLBACK_CIKS = {"AAPL": 320193, "AMZN": 1018724, "INTC": 50863}
+SEC_FALLBACK_CIKS = {
+    "AAPL": 320193,
+    "AMZN": 1018724,
+    "INTC": 50863,
+    "TSM": 1046179,
+    "SPY": 884394,
+}
+SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+SEC_DOCS_URL = "https://www.sec.gov/os/accessing-edgar-data"
+#: A US-listed foreign private issuer (files 20-F, IFRS, reports in TWD): P-12 sample.
+FOREIGN_SAMPLE = "TSM"
+#: A plain ETF: P-4 and P-8 sample (ETFs have no companyfacts).
+ETF_SAMPLE = "SPY"
+#: Dotted class-share ticker as the product spells it; SEC may spell it with a hyphen.
+CLASS_SHARE_SAMPLE = "BRK.B"
+#: Looked up in the ticker map only (no request) for P-4.
+PROBE_TICKERS = ("AAPL", "BRK.B", "GOOG", "GOOGL", "SPY", "TQQQ")
+MAX_HOLDINGS = 3
+HOLDING_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+SUBMISSION_FIELDS = ("accessionNumber", "filingDate", "acceptanceDateTime", "form", "reportDate")
+ACCEPTANCE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?$")
+PERIODIC_FORMS = {"10-K", "10-Q", "20-F"}
+FISCAL_YEAR_END_RE = re.compile(r"^\d{4}$")
+P_TITLES = {
+    "P-1": "every fact carries filed/accn/form/start/end/fy/fp/frame; fy/fp belong to the filing",
+    "P-2": "older filings (comparatives) are retained, so the first-published value can be rebuilt",
+    "P-3": "tag whitelist per item (CapEx, dividends, buyback, revenue) and what is verified",
+    "P-4": "ticker to CIK map; class shares (BRK.B) and ETFs",
+    "P-5": "current rate limit and User-Agent format",
+    "P-6": "filing list fields, conditional requests, companyfacts freshness",
+    "P-7": "response size per issuer",
+    "P-8": "SIC and entity type available; how an ETF is recognised",
+    "P-9": "fiscal year end available",
+    "P-12": "holdings that report in a non-USD currency or under IFRS",
+}
 
 TWSE_SWAGGER_URL = "https://openapi.twse.com.tw/v1/swagger.json"
 TWSE_BASE_URL = "https://openapi.twse.com.tw/v1"
@@ -128,13 +176,22 @@ CONCEPTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("us-gaap", "PaymentsOfDividends"),
         ("us-gaap", "PaymentsOfDividendsCommonStock"),
         ("us-gaap", "DividendsCommonStockCash"),
-        ("us-gaap", "CommonStockDividendsPerShareDeclared"),
-        ("us-gaap", "CommonStockDividendsPerShareCashPaid"),
     ),
     "SBC": (
         ("us-gaap", "ShareBasedCompensation"),
         ("us-gaap", "AllocatedShareBasedCompensationExpense"),
     ),
+    "Revenue": (
+        ("us-gaap", "Revenues"),
+        ("us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"),
+        ("us-gaap", "RevenueFromContractWithCustomerIncludingAssessedTax"),
+        ("us-gaap", "SalesRevenueNet"),
+    ),
+    "NetIncome": (
+        ("us-gaap", "NetIncomeLoss"),
+        ("us-gaap", "ProfitLoss"),
+    ),
+    "DilutedEPS": (("us-gaap", "EarningsPerShareDiluted"),),
     "Shares": (
         ("dei", "EntityCommonStockSharesOutstanding"),
         ("us-gaap", "CommonStockSharesOutstanding"),
@@ -229,6 +286,10 @@ class HttpResult:
     status: int | None
     body: bytes
     error: str | None = None
+    #: Lower-cased copies of a few response headers (validators, size, rate limits).
+    headers: Mapping[str, str] = field(default_factory=dict)
+    #: Bytes received before content decoding (the gzip size when compressed).
+    wire_size: int | None = None
 
 
 Transport = Callable[[str, Mapping[str, str]], HttpResult]
@@ -258,6 +319,28 @@ def _decode_body(raw: bytes, encoding: str) -> bytes:
     return raw
 
 
+HEADERS_KEPT = (
+    "etag",
+    "last-modified",
+    "content-length",
+    "content-encoding",
+    "date",
+    "cache-control",
+    "expires",
+    "retry-after",
+)
+
+
+def keep_headers(items: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Keep only validators, size and rate-limit headers; never cookies or auth."""
+    kept: dict[str, str] = {}
+    for name, value in items:
+        lowered = name.lower()
+        if lowered in HEADERS_KEPT or lowered.startswith(("x-ratelimit", "ratelimit")):
+            kept[lowered] = str(value)
+    return kept
+
+
 def urllib_transport(url: str, headers: Mapping[str, str]) -> HttpResult:
     """Real transport: one GET, bounded body size, never raises."""
     request = urllib.request.Request(url, headers=dict(headers), method="GET")
@@ -265,16 +348,18 @@ def urllib_transport(url: str, headers: Mapping[str, str]) -> HttpResult:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read(MAX_BODY_BYTES + 1)
             status = int(response.status)
-            encoding = response.headers.get("Content-Encoding", "") or ""
+            kept = keep_headers(response.headers.items())
     except urllib.error.HTTPError as exc:
         raw = exc.read(MAX_BODY_BYTES + 1)
         status = int(exc.code)
-        encoding = (exc.headers.get("Content-Encoding", "") or "") if exc.headers else ""
+        kept = keep_headers(exc.headers.items()) if exc.headers else {}
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return HttpResult(None, b"", f"{type(exc).__name__}: {exc}")
     if len(raw) > MAX_BODY_BYTES:
-        return HttpResult(status, b"", f"body larger than {MAX_BODY_BYTES} bytes, discarded")
-    return HttpResult(status, _decode_body(raw, encoding))
+        return HttpResult(status, b"", f"body larger than {MAX_BODY_BYTES} bytes, discarded", kept)
+    return HttpResult(
+        status, _decode_body(raw, kept.get("content-encoding", "")), None, kept, len(raw)
+    )
 
 
 @dataclass
@@ -325,6 +410,7 @@ class Context:
     env: Mapping[str, str]
     today: date
     results: list[Result] = field(default_factory=list)
+    evidence: SecEvidence = field(default_factory=lambda: SecEvidence())
 
     def record(self, section: str, check: str, verdict: str, detail: str = "") -> None:
         self.results.append(Result(section, check, verdict, detail))
@@ -373,6 +459,38 @@ def section_header(ctx: Context, title: str) -> None:
 
 # ---------------------------------------------------------------- SEC analysis
 
+FACT_FIELDS = ("accn", "filed", "form", "end", "fy", "fp", "frame")
+#: Tags whose facts are point-in-time balances; every other tag is a period flow with ``start``.
+INSTANT_TAGS = {
+    ("dei", "EntityCommonStockSharesOutstanding"),
+    ("us-gaap", "CommonStockSharesOutstanding"),
+}
+#: A fiscal-year fact filed within this many days of its period end is the original 10-K.
+ORIGINAL_FILING_MAX_DAYS = 130
+#: Only periods ended longer ago than this are expected to have a settled filing history.
+OLD_PERIOD_AFTER_DAYS = 400
+CURRENCY_UNIT_RE = re.compile(r"^([A-Z]{3})(?:/[A-Za-z]+)?$")
+
+
+@dataclass
+class PeriodInfo:
+    """Everything the facts of one (start, end) period say about who reported it."""
+
+    vals_by_accn: dict[str, str] = field(default_factory=dict)
+    fys: set[str] = field(default_factory=set)
+    min_filed: str | None = None
+
+
+@dataclass
+class FactStats:
+    total: int = 0
+    present: Counter[str] = field(default_factory=Counter)
+    flow_total: int = 0
+    flow_with_start: int = 0
+    periods: dict[tuple[str, str], PeriodInfo] = field(default_factory=dict)
+    fyfp_by_accn: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
+    max_filed: str | None = None
+
 
 @dataclass
 class TagSummary:
@@ -391,6 +509,12 @@ class TagSummary:
     latest_fy: dict[str, Any] | None
     latest_interim: dict[str, Any] | None
     sample_unit: str | None
+    stats: FactStats
+
+    @property
+    def verified(self) -> bool:
+        """Usable as an annual series: still in use and at least three fiscal years."""
+        return not self.stale and self.fps.get("FY", 0) >= 3
 
 
 @dataclass
@@ -409,6 +533,31 @@ class FactsReport:
     cik: object
     namespaces: dict[str, int]
     concepts: dict[str, ConceptReport]
+    #: unit -> number of tags (across the whole document) that report in that unit
+    unit_tags: Counter[str]
+
+    @property
+    def uses_us_gaap(self) -> bool:
+        return self.namespaces.get("us-gaap", 0) > 0
+
+    @property
+    def summaries(self) -> list[TagSummary]:
+        return [s for c in self.concepts.values() for s in c.found]
+
+    @property
+    def max_filed(self) -> str | None:
+        filed = [s.stats.max_filed for s in self.summaries if s.stats.max_filed]
+        return max(filed) if filed else None
+
+
+def foreign_currency_units(unit_tags: Mapping[str, int]) -> list[str]:
+    """Units quoted in a currency other than USD, e.g. TWD or EUR/shares."""
+    found: list[str] = []
+    for unit in unit_tags:
+        match = CURRENCY_UNIT_RE.match(unit)
+        if match and match.group(1) != "USD":
+            found.append(unit)
+    return sorted(found)
 
 
 def _days_between(start: object, end: object) -> int | None:
@@ -431,6 +580,39 @@ def _duration_bucket(days: int | None) -> str:
 
 def _sort_key(entry: Mapping[str, Any]) -> tuple[str, str]:
     return str(entry.get("end", "")), str(entry.get("filed", ""))
+
+
+def _has(row: Mapping[str, Any], name: str) -> bool:
+    return row.get(name) not in (None, "")
+
+
+def collect_stats(entries: list[dict[str, Any]], *, instant: bool) -> FactStats:
+    """Field coverage and per-period reporting history, for the ADR-0038 P items."""
+    stats = FactStats()
+    for row in entries:
+        stats.total += 1
+        for name in FACT_FIELDS:
+            if _has(row, name):
+                stats.present[name] += 1
+        if not instant:
+            stats.flow_total += 1
+            if _has(row, "start"):
+                stats.flow_with_start += 1
+        filed = str(row.get("filed", ""))
+        filed_ok = bool(DATE_RE.match(filed))
+        if filed_ok and (stats.max_filed is None or filed > stats.max_filed):
+            stats.max_filed = filed
+        end = row.get("end")
+        if not isinstance(end, str):
+            continue
+        accn = str(row.get("accn", ""))
+        info = stats.periods.setdefault((str(row.get("start", "")), end), PeriodInfo())
+        info.vals_by_accn[accn] = str(row.get("val"))
+        info.fys.add(str(row.get("fy")))
+        if filed_ok and (info.min_filed is None or filed < info.min_filed):
+            info.min_filed = filed
+        stats.fyfp_by_accn.setdefault(accn, set()).add((str(row.get("fy")), str(row.get("fp"))))
+    return stats
 
 
 def summarize_tag(namespace: str, tag: str, tag_obj: Any, today: date) -> TagSummary:
@@ -479,6 +661,7 @@ def summarize_tag(namespace: str, tag: str, tag_obj: Any, today: date) -> TagSum
         latest_fy=fy_rows[-1] if fy_rows else None,
         latest_interim=interim_rows[-1] if interim_rows else None,
         sample_unit=sample_unit,
+        stats=collect_stats(entries, instant=(namespace, tag) in INSTANT_TAGS),
     )
 
 
@@ -487,6 +670,14 @@ def analyze_companyfacts(doc: Any, today: date) -> FactsReport | None:
         return None
     facts: dict[str, Any] = doc["facts"]
     namespaces = {ns: len(tags) for ns, tags in facts.items() if isinstance(tags, dict)}
+    unit_tags: Counter[str] = Counter()
+    for tags in facts.values():
+        if not isinstance(tags, dict):
+            continue
+        for tag_obj in tags.values():
+            units = tag_obj.get("units") if isinstance(tag_obj, dict) else None
+            if isinstance(units, dict):
+                unit_tags.update(str(unit) for unit in units)
     concepts: dict[str, ConceptReport] = {}
     for concept, candidates in CONCEPTS.items():
         found: list[TagSummary] = []
@@ -504,6 +695,7 @@ def analyze_companyfacts(doc: Any, today: date) -> FactsReport | None:
         cik=doc.get("cik"),
         namespaces=namespaces,
         concepts=concepts,
+        unit_tags=unit_tags,
     )
 
 
@@ -517,6 +709,7 @@ def format_entry(entry: Mapping[str, Any]) -> str:
         f"fp={entry.get('fp')}",
         f"form={entry.get('form')}",
         f"filed={entry.get('filed')}",
+        f"accn={entry.get('accn', '(none)')}",
         f"frame={entry.get('frame', '(none)')}",
         f"dur={f'{days}d' if days is not None else 'n/a'}",
     ]
@@ -580,6 +773,28 @@ def print_facts_report(
     )
 
 
+def print_brief_report(ctx: Context, label: str, report: FactsReport) -> None:
+    """One-screen view for companies probed only for taxonomy and currency (P-12)."""
+    ctx.say(
+        f"  entity={short(report.entity_name, 50)} cik={report.cik} "
+        f"namespaces={dict(report.namespaces)}"
+    )
+    foreign = foreign_currency_units(report.unit_tags)
+    ctx.say(f"  non-USD currency units used: {foreign if foreign else 'none'}")
+    ctx.say(f"  top units by tag count: {dict(report.unit_tags.most_common(6))}")
+    covered = {concept: ("-" if not rep.found else "+") for concept, rep in report.concepts.items()}
+    ctx.say(f"  whitelist concepts with a tag (us-gaap/dei only): {covered}")
+    n_found = sum(1 for rep in report.concepts.values() if rep.found)
+    ctx.record(
+        "SEC",
+        f"{label}/companyfacts-brief",
+        EXISTS if n_found else MISSING,
+        f"{n_found}/{len(report.concepts)} concepts have a us-gaap/dei tag; "
+        f"ifrs-full={'yes' if 'ifrs-full' in report.namespaces else 'no'}; "
+        f"non-USD units={foreign if foreign else 'none'}",
+    )
+
+
 def parse_ticker_map(doc: Any) -> dict[str, int]:
     """Accepts both SEC ticker file layouts; returns {TICKER: cik}."""
     mapping: dict[str, int] = {}
@@ -603,14 +818,280 @@ def parse_ticker_map(doc: Any) -> dict[str, int]:
     return mapping
 
 
+def ticker_variants(ticker: str) -> list[str]:
+    """Spellings of a class-share ticker that different systems use."""
+    upper = ticker.upper()
+    variants = [upper, upper.replace(".", "-"), upper.replace("/", "-"), upper.replace(".", "")]
+    return list(dict.fromkeys(variants))
+
+
+def lookup_ticker(mapping: Mapping[str, int], ticker: str) -> tuple[int | None, str | None]:
+    """Return (cik, spelling that matched); (None, None) when no spelling matches."""
+    for variant in ticker_variants(ticker):
+        if variant in mapping:
+            return mapping[variant], variant
+    return None, None
+
+
+def parse_holdings(raw: str) -> tuple[list[str], list[str]]:
+    """Split the optional holdings list into (accepted, ignored); accepted is capped."""
+    accepted: list[str] = []
+    ignored: list[str] = []
+    for part in re.split(r"[,\s;]+", raw.strip()):
+        if not part:
+            continue
+        ticker = part.upper()
+        if (
+            not HOLDING_RE.match(ticker)
+            or ticker in accepted
+            or ticker in SEC_TICKERS
+            or ticker == FOREIGN_SAMPLE
+            or len(accepted) >= MAX_HOLDINGS
+        ):
+            ignored.append(part)
+        else:
+            accepted.append(ticker)
+    return accepted, ignored
+
+
+# ---------------------------------------------------------------- SEC evidence for the P items
+
+
+@dataclass
+class FactsFetch:
+    status: int | None
+    decoded_bytes: int
+    wire_bytes: int | None
+    last_modified: str | None
+
+
+@dataclass
+class SubmissionsInfo:
+    status: int | None = None
+    ok: bool = False
+    name: str = ""
+    sic: str = ""
+    sic_description: str = ""
+    entity_type: str = ""
+    category: str = ""
+    fiscal_year_end: str = ""
+    exchanges: list[str] = field(default_factory=list)
+    recent_fields: dict[str, bool] = field(default_factory=dict)
+    recent_count: int = 0
+    filing_date_format_ok: bool | None = None
+    acceptance_format_ok: bool | None = None
+    latest_periodic: dict[str, str] | None = None
+
+
+@dataclass
+class SecEvidence:
+    """What the SEC section saw; the ADR-0038 P items are judged from this alone."""
+
+    attempted: bool = False
+    map_from_network: bool = False
+    map_url: str | None = None
+    ticker_map: dict[str, int] = field(default_factory=dict)
+    reports: dict[str, FactsReport] = field(default_factory=dict)
+    facts_fetch: dict[str, FactsFetch] = field(default_factory=dict)
+    holdings: list[str] = field(default_factory=list)
+    submissions: dict[str, SubmissionsInfo] = field(default_factory=dict)
+    submissions_validators: dict[str, str] = field(default_factory=dict)
+    conditional_status: int | None = None
+    conditional_note: str = ""
+    etf_cik_source: str = ""
+    etf_facts_status: int | None = None
+    docs_status: int | None = None
+    docs_limit: int | None = None
+    docs_snippets: list[str] = field(default_factory=list)
+    rate_headers: dict[str, str] = field(default_factory=dict)
+    sec_statuses: list[int | None] = field(default_factory=list)
+
+
+def analyze_submissions(doc: Any, status: int | None) -> SubmissionsInfo:
+    info = SubmissionsInfo(status=status)
+    if not isinstance(doc, dict):
+        return info
+    info.ok = True
+    info.name = str(doc.get("name", ""))
+    info.sic = str(doc.get("sic", "") or "")
+    info.sic_description = str(doc.get("sicDescription", "") or "")
+    info.entity_type = str(doc.get("entityType", "") or "")
+    info.category = str(doc.get("category", "") or "")
+    info.fiscal_year_end = str(doc.get("fiscalYearEnd", "") or "")
+    exchanges = doc.get("exchanges")
+    if isinstance(exchanges, list):
+        info.exchanges = [str(e) for e in exchanges if e]
+    filings = doc.get("filings")
+    recent = filings.get("recent") if isinstance(filings, dict) else None
+    if not isinstance(recent, dict):
+        return info
+    for name in SUBMISSION_FIELDS:
+        info.recent_fields[name] = isinstance(recent.get(name), list) and bool(recent[name])
+    raw_forms = recent.get("form")
+    forms: list[Any] = raw_forms if isinstance(raw_forms, list) else []
+    info.recent_count = len(forms)
+
+    def column(name: str) -> list[Any]:
+        values = recent.get(name)
+        return values if isinstance(values, list) else []
+
+    dates = [str(v) for v in column("filingDate")]
+    stamps = [str(v) for v in column("acceptanceDateTime")]
+    info.filing_date_format_ok = bool(dates) and all(DATE_RE.match(d) for d in dates)
+    info.acceptance_format_ok = bool(stamps) and all(ACCEPTANCE_RE.match(s) for s in stamps)
+    best: dict[str, str] | None = None
+    accessions = column("accessionNumber")
+    for index, form in enumerate(forms):
+        if form not in PERIODIC_FORMS or index >= len(dates):
+            continue
+        if best is None or dates[index] > best["filingDate"]:
+            best = {
+                "form": str(form),
+                "filingDate": dates[index],
+                "acceptanceDateTime": stamps[index] if index < len(stamps) else "",
+                "accessionNumber": str(accessions[index]) if index < len(accessions) else "",
+            }
+    info.latest_periodic = best
+    return info
+
+
+def extract_doc_facts(html: str) -> tuple[int | None, list[str]]:
+    """Pull the documented request limit and User-Agent sentences out of the SEC page."""
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    limit_match = re.search(r"(?i)(\d+)\s+requests?\s+per\s+second", text)
+    limit = int(limit_match.group(1)) if limit_match else None
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    snippets = [
+        short(s.strip(), 240)
+        for s in sentences
+        if re.search(r"(?i)requests?\s+per\s+second|user[- ]agent", s)
+    ]
+    return limit, snippets[:4]
+
+
+def _sec_get(
+    ctx: Context, url: str, headers: Mapping[str, str], *, shown_url: str | None = None
+) -> HttpResult:
+    """GET that also remembers the status so P-5 can look for throttling."""
+    ctx.say(f"GET {shown_url or url}")
+    result = ctx.fetcher.get(url, headers)
+    ctx.say(f"  {describe_http(result)}")
+    ctx.evidence.sec_statuses.append(result.status)
+    return result
+
+
+def _sec_json(
+    ctx: Context, url: str, headers: Mapping[str, str]
+) -> tuple[HttpResult, Any, str | None]:
+    result = _sec_get(ctx, url, headers)
+    if result.status is None or not result.body:
+        return result, None, result.error or "empty body"
+    obj, error = parse_json(result.body)
+    if error:
+        ctx.say(f"  JSON parse failed: {error}; first bytes: {short(result.body[:80], 90)!r}")
+    return result, obj, error
+
+
+def _fetch_facts(
+    ctx: Context, label: str, cik: int, headers: Mapping[str, str], *, mode: str
+) -> None:
+    """One companyfacts request. ``mode``: full, compact or brief (see the printers)."""
+    ev = ctx.evidence
+    result, doc, error = _sec_json(ctx, SEC_FACTS_URL.format(cik=cik), headers)
+    ev.facts_fetch[label] = FactsFetch(
+        result.status,
+        len(result.body),
+        result.wire_size,
+        result.headers.get("last-modified"),
+    )
+    if result.status != 200 or error is not None:
+        ctx.record("SEC", f"{label}/companyfacts", ERROR, describe_http(result))
+        return
+    report = analyze_companyfacts(doc, ctx.today)
+    if report is None:
+        ctx.record("SEC", f"{label}/companyfacts", ERROR, "unexpected JSON layout")
+        return
+    ev.reports[label] = report
+    ctx.record("SEC", f"{label}/companyfacts", EXISTS, describe_http(result))
+    if mode == "brief":
+        print_brief_report(ctx, label, report)
+    else:
+        print_facts_report(ctx, label, report, detailed=mode == "full")
+
+
+def _fetch_submissions(
+    ctx: Context, label: str, cik: int, headers: Mapping[str, str]
+) -> SubmissionsInfo:
+    ev = ctx.evidence
+    result, doc, error = _sec_json(ctx, SEC_SUBMISSIONS_URL.format(cik=cik), headers)
+    info = analyze_submissions(doc if error is None else None, result.status)
+    ev.submissions[label] = info
+    if label == SEC_TICKERS[0]:
+        ev.submissions_validators = {
+            k: v for k, v in result.headers.items() if k in ("etag", "last-modified")
+        }
+        ev.rate_headers.update(
+            {k: v for k, v in result.headers.items() if k.startswith(("x-ratelimit", "ratelimit"))}
+        )
+    if result.status != 200 or not info.ok:
+        ctx.record("SEC", f"{label}/submissions", ERROR, describe_http(result))
+        return info
+    ctx.say(
+        f"  name={short(info.name, 40)} sic={info.sic or '(none)'} "
+        f"sicDescription={short(info.sic_description, 40)!r} "
+        f"entityType={info.entity_type or '(none)'} "
+        f"category={short(info.category, 40)!r} fiscalYearEnd={info.fiscal_year_end or '(none)'} "
+        f"exchanges={info.exchanges}"
+    )
+    ctx.say(
+        f"  filings.recent: {info.recent_count} rows, columns present={info.recent_fields}, "
+        f"filingDate format ok={info.filing_date_format_ok}, "
+        f"acceptanceDateTime format ok={info.acceptance_format_ok}"
+    )
+    if info.latest_periodic:
+        ctx.say(f"  latest periodic filing: {info.latest_periodic}")
+    ctx.record("SEC", f"{label}/submissions", EXISTS, describe_http(result))
+    return info
+
+
+def _check_conditional(ctx: Context, headers: Mapping[str, str]) -> None:
+    """Repeat the AAPL submissions request with validators to see whether 304 is honoured."""
+    ev = ctx.evidence
+    validators = ev.submissions_validators
+    if not validators:
+        ev.conditional_note = "first response carried no ETag or Last-Modified; request skipped"
+        ctx.say(f"  conditional request skipped: {ev.conditional_note}")
+        return
+    conditional = dict(headers)
+    if "etag" in validators:
+        conditional["If-None-Match"] = validators["etag"]
+    if "last-modified" in validators:
+        conditional["If-Modified-Since"] = validators["last-modified"]
+    cik = ev.ticker_map.get(SEC_TICKERS[0]) or SEC_FALLBACK_CIKS[SEC_TICKERS[0]]
+    ctx.say(f"  repeating with validators {sorted(validators)}")
+    result = _sec_get(ctx, SEC_SUBMISSIONS_URL.format(cik=cik), conditional)
+    ev.conditional_status = result.status
+    ev.conditional_note = f"validators sent: {sorted(validators)}; got {describe_http(result)}"
+    ctx.record(
+        "SEC",
+        "conditional-request",
+        EXISTS if result.status == 304 else MISSING,
+        ev.conditional_note,
+    )
+
+
 def run_sec(ctx: Context) -> None:
     section_header(ctx, "1. SEC EDGAR")
+    ev = ctx.evidence
     user_agent = ctx.env.get(ENV_SEC_UA, "").strip()
     if "@" not in user_agent:
         ctx.say(f"  {ENV_SEC_UA} is not set or lacks a contact email; SEC rejects such requests.")
         ctx.say('  Expected format: "Your Name your@email". Section skipped, no request sent.')
         ctx.record("SEC", "all", SKIPPED, f"{ENV_SEC_UA} missing or malformed")
         return
+    ev.attempted = True
     headers = {
         "User-Agent": user_agent,
         "Accept-Encoding": "gzip",
@@ -619,35 +1100,94 @@ def run_sec(ctx: Context) -> None:
 
     mapping: dict[str, int] = {}
     for url in (SEC_TICKER_URL, SEC_TICKER_FALLBACK_URL):
-        result, doc, error = fetch_json(ctx, url, headers)
+        result, doc, error = _sec_json(ctx, url, headers)
         mapping = parse_ticker_map(doc) if error is None else {}
         if result.status == 200 and mapping:
             ctx.say(
                 f"  entries={len(mapping):,} sample={ {t: mapping.get(t) for t in SEC_TICKERS} }"
             )
             ctx.record("SEC", "ticker-map", EXISTS, f"path confirmed: {url}")
+            ev.map_from_network, ev.map_url = True, url
             break
         ctx.record("SEC", f"ticker-map {url}", ERROR, describe_http(result))
     else:
         ctx.say("  Both ticker-map paths failed; using built-in CIKs (NOT verified by this run).")
         mapping = dict(SEC_FALLBACK_CIKS)
+    ev.ticker_map = mapping
 
     for ticker in SEC_TICKERS:
         cik = mapping.get(ticker)
         if cik is None:
             ctx.record("SEC", f"{ticker}/companyfacts", MISSING, "ticker not in ticker map")
             continue
-        url = SEC_FACTS_URL.format(cik=cik)
-        result, doc, error = fetch_json(ctx, url, headers)
-        if result.status != 200 or error is not None:
-            ctx.record("SEC", f"{ticker}/companyfacts", ERROR, describe_http(result))
+        _fetch_facts(
+            ctx, ticker, cik, headers, mode="full" if ticker == SEC_TICKERS[0] else "compact"
+        )
+
+    ctx.say("")
+    ctx.say(
+        f"-- foreign-filer sample ({FOREIGN_SAMPLE}) and your holdings: taxonomy and currency --"
+    )
+    foreign_cik, _ = lookup_ticker(mapping, FOREIGN_SAMPLE)
+    if foreign_cik is None:
+        foreign_cik = SEC_FALLBACK_CIKS[FOREIGN_SAMPLE]
+        ctx.say(f"  {FOREIGN_SAMPLE} not in ticker map; using built-in CIK (NOT verified).")
+    _fetch_facts(ctx, FOREIGN_SAMPLE, foreign_cik, headers, mode="brief")
+
+    holdings, ignored = parse_holdings(ctx.env.get(ENV_HOLDINGS, ""))
+    ev.holdings = holdings
+    if ignored:
+        ctx.say(f"  {ENV_HOLDINGS}: ignored {ignored} (invalid, duplicate, or over {MAX_HOLDINGS})")
+    for ticker in holdings:
+        cik, matched = lookup_ticker(mapping, ticker)
+        if cik is None:
+            ctx.record("SEC", f"holding {ticker}/companyfacts", MISSING, "ticker not in ticker map")
             continue
-        report = analyze_companyfacts(doc, ctx.today)
-        if report is None:
-            ctx.record("SEC", f"{ticker}/companyfacts", ERROR, "unexpected JSON layout")
-            continue
-        ctx.record("SEC", f"{ticker}/companyfacts", EXISTS, describe_http(result))
-        print_facts_report(ctx, ticker, report, detailed=ticker == SEC_TICKERS[0])
+        ctx.say(f"  holding {ticker} resolved as {matched}")
+        _fetch_facts(ctx, ticker, cik, headers, mode="brief")
+
+    ctx.say("")
+    ctx.say("-- filing list (submissions): fields, entity metadata, conditional requests --")
+    aapl_cik = mapping.get(SEC_TICKERS[0])
+    if aapl_cik is not None:
+        _fetch_submissions(ctx, SEC_TICKERS[0], aapl_cik, headers)
+        _check_conditional(ctx, headers)
+
+    ctx.say("")
+    ctx.say(f"-- ETF ({ETF_SAMPLE}): how the SEC treats a fund --")
+    etf_cik, matched = lookup_ticker(mapping, ETF_SAMPLE)
+    ev.etf_cik_source = (
+        f"ticker map ({matched})" if etf_cik is not None else "built-in (not in map)"
+    )
+    if etf_cik is None:
+        etf_cik = SEC_FALLBACK_CIKS[ETF_SAMPLE]
+        ctx.say(f"  {ETF_SAMPLE} not in the ticker map; using built-in CIK (NOT verified).")
+    _fetch_submissions(ctx, ETF_SAMPLE, etf_cik, headers)
+    etf_result = _sec_get(ctx, SEC_FACTS_URL.format(cik=etf_cik), headers)
+    ev.etf_facts_status = etf_result.status
+    ctx.record(
+        "SEC",
+        f"{ETF_SAMPLE}/companyfacts",
+        EXISTS if etf_result.status == 200 else MISSING,
+        f"{describe_http(etf_result)} (a 404 here means the fund has no XBRL facts)",
+    )
+
+    ctx.say("")
+    ctx.say("-- SEC fair-access page: documented request limit and User-Agent rule --")
+    docs_headers = {k: v for k, v in headers.items() if k != "Accept"}
+    docs = _sec_get(ctx, SEC_DOCS_URL, docs_headers)
+    ev.docs_status = docs.status
+    if docs.status == 200 and docs.body:
+        ev.docs_limit, ev.docs_snippets = extract_doc_facts(docs.body.decode("utf-8", "replace"))
+        ctx.say(f"  documented limit: {ev.docs_limit} requests/second")
+        for snippet in ev.docs_snippets:
+            ctx.say(f"  page says: {snippet}")
+        ctx.record("SEC", "fair-access-page", EXISTS, f"limit={ev.docs_limit}")
+    else:
+        ctx.record("SEC", "fair-access-page", ERROR, describe_http(docs))
+    ev.rate_headers.update(
+        {k: v for k, v in docs.headers.items() if k.startswith(("x-ratelimit", "retry-after"))}
+    )
 
 
 # ---------------------------------------------------------------- OpenAPI (TWSE / TPEx)
@@ -960,6 +1500,495 @@ def run_alpha(ctx: Context) -> None:
     ctx.record("AlphaVantage", "daily", ERROR, "no 'Time Series (Daily)' and no known error key")
 
 
+# ---------------------------------------------------------------- ADR-0038 P items
+
+#: Verdicts for P items. HOLDS / NOT_HOLD are decisive; the rest say why not.
+HOLDS = "HOLDS"
+NOT_HOLD = "NOT_HOLD"
+PARTIAL = "PARTIAL"
+MEASURED = "MEASURED"
+INCONCLUSIVE = "INCONCLUSIVE"
+
+#: ADR item code for each whitelist concept (docs: ADR-0038 D-1 point 3).
+ITEM_CONCEPTS = {
+    "OCF": "operating_cash_flow",
+    "CapEx": "capital_expenditure",
+    "Dividends": "dividends_paid",
+    "Buyback": "share_repurchase_paid",
+    "SBC": "stock_based_compensation",
+    "Revenue": "revenue",
+    "NetIncome": "net_income",
+    "DilutedEPS": "diluted_earnings_per_share",
+}
+P1_REQUIRED_FIELDS = ("accn", "filed", "form", "end", "fy", "fp")
+P2_PARTIAL_RATIO = 0.5
+P2_HOLDS_RATIO = 0.9
+
+
+@dataclass
+class PResult:
+    pid: str
+    verdict: str
+    detail: str
+    lines: list[str] = field(default_factory=list)
+
+
+def _us_gaap_reports(ev: SecEvidence) -> dict[str, FactsReport]:
+    """Operating companies reporting in us-gaap among the base tickers and the holdings."""
+    names = [*SEC_TICKERS, *ev.holdings]
+    return {n: ev.reports[n] for n in names if n in ev.reports and ev.reports[n].uses_us_gaap}
+
+
+def _pct(part: int, whole: int) -> str:
+    return f"{part}/{whole} ({100.0 * part / whole:.1f}%)" if whole else "0/0"
+
+
+def eval_p1(ev: SecEvidence) -> PResult:
+    reports = _us_gaap_reports(ev)
+    stats = [s.stats for rep in reports.values() for s in rep.summaries]
+    total = sum(st.total for st in stats)
+    if not total:
+        return PResult("P-1", INCONCLUSIVE, "no us-gaap companyfacts were fetched")
+    present: Counter[str] = Counter()
+    for st in stats:
+        present.update(st.present)
+    flow_total = sum(st.flow_total for st in stats)
+    flow_start = sum(st.flow_with_start for st in stats)
+    periods = [info for st in stats for info in st.periods.values()]
+    multi_fy = sum(1 for info in periods if len(info.fys) > 1)
+    accn_sets = [combos for st in stats for combos in st.fyfp_by_accn.values()]
+    mixed_accn = sum(1 for combos in accn_sets if len(combos) > 1)
+    lines = [f"facts examined: {total:,} across {len(stats)} tags of {sorted(reports)}"]
+    lines.append(
+        "field coverage: "
+        + ", ".join(
+            f"{name} {_pct(present[name], total)}" for name in (*P1_REQUIRED_FIELDS, "frame")
+        )
+    )
+    lines.append(f"start present on period (flow) facts: {_pct(flow_start, flow_total)}")
+    lines.append(
+        f"periods whose facts carry more than one fy: {multi_fy} of {len(periods)}; "
+        f"accn whose facts carry more than one (fy, fp): {mixed_accn} of {len(accn_sets)}"
+    )
+    structural_gaps = [n for n in P1_REQUIRED_FIELDS if present[n] != total]
+    if flow_start != flow_total:
+        structural_gaps.append("start")
+    filing_level = multi_fy > 0 and mixed_accn == 0
+    lines.append(
+        "fy/fp are filing attributes, not period attributes: "
+        + ("yes" if filing_level else "NOT shown by this data")
+    )
+    if structural_gaps:
+        return PResult("P-1", NOT_HOLD, f"keys missing on some facts: {structural_gaps}", lines)
+    if mixed_accn:
+        return PResult(
+            "P-1", NOT_HOLD, "one filing carries several (fy, fp): fy/fp not filing-level", lines
+        )
+    if present["frame"] == total and filing_level:
+        return PResult(
+            "P-1", HOLDS, "all eight fields on every fact; fy/fp are filing-level", lines
+        )
+    return PResult(
+        "P-1",
+        PARTIAL,
+        f"accn/filed/form/start/end/fy/fp on every fact; frame on {_pct(present['frame'], total)} "
+        f"(frame cannot be a key); fy/fp filing-level={'yes' if filing_level else 'not shown'}",
+        lines,
+    )
+
+
+def _is_full_year(start: str, end: str) -> bool:
+    days = _days_between(start, end)
+    return days is not None and 350 <= days <= 380
+
+
+def eval_p2(ev: SecEvidence, today: date) -> PResult:
+    reports = _us_gaap_reports(ev)
+    periods = 0
+    multi = 0
+    changed = 0
+    old_full_years = 0
+    original_kept = 0
+    examples: list[str] = []
+    for label, rep in reports.items():
+        for summary in rep.summaries:
+            for (start, end), info in summary.stats.periods.items():
+                periods += 1
+                if len(info.vals_by_accn) > 1:
+                    multi += 1
+                    if len(set(info.vals_by_accn.values())) > 1:
+                        changed += 1
+                        if len(examples) < 2:
+                            examples.append(
+                                f"{label} {summary.tag} {start or '(instant)'}..{end}: "
+                                f"{dict(list(info.vals_by_accn.items())[:3])}"
+                            )
+                if not (start and _is_full_year(start, end) and info.min_filed):
+                    continue
+                try:
+                    age = (today - date.fromisoformat(end)).days
+                    lag = (date.fromisoformat(info.min_filed) - date.fromisoformat(end)).days
+                except ValueError:
+                    continue
+                if age > OLD_PERIOD_AFTER_DAYS:
+                    old_full_years += 1
+                    if lag <= ORIGINAL_FILING_MAX_DAYS:
+                        original_kept += 1
+    if not periods:
+        return PResult("P-2", INCONCLUSIVE, "no us-gaap companyfacts were fetched")
+    lines = [
+        f"periods seen: {periods:,}; reported by more than one filing: {_pct(multi, periods)}; "
+        f"of those the value differs between filings: {changed}",
+        f"closed full years (older than {OLD_PERIOD_AFTER_DAYS}d) whose earliest fact was filed "
+        f"within {ORIGINAL_FILING_MAX_DAYS} days of period end (= original 10-K kept): "
+        f"{_pct(original_kept, old_full_years)}",
+    ]
+    lines += [f"value changed across filings: {example}" for example in examples]
+    if not old_full_years:
+        return PResult("P-2", INCONCLUSIVE, "no closed full-year periods to test", lines)
+    ratio = original_kept / old_full_years
+    if multi == 0 or ratio < P2_PARTIAL_RATIO:
+        return PResult("P-2", NOT_HOLD, "older filings and comparatives are not retained", lines)
+    verdict = HOLDS if ratio >= P2_HOLDS_RATIO else PARTIAL
+    return PResult(
+        "P-2",
+        verdict,
+        f"original values kept for {_pct(original_kept, old_full_years)} of closed years; "
+        f"{changed} restated period(s) seen",
+        lines,
+    )
+
+
+def eval_p3(ev: SecEvidence) -> PResult:
+    reports = _us_gaap_reports(ev)
+    if not reports:
+        return PResult("P-3", INCONCLUSIVE, "no us-gaap companyfacts were fetched")
+    lines: list[str] = []
+    uncovered: list[str] = []
+    partial: list[str] = []
+    alternates: list[str] = []
+    for concept, item in ITEM_CONCEPTS.items():
+        picks: list[str] = []
+        covered = 0
+        for label, rep in reports.items():
+            concept_report = rep.concepts.get(concept)
+            chosen = next(
+                (s for s in (concept_report.found if concept_report else []) if s.verified), None
+            )
+            if chosen is None:
+                found = [s.tag for s in concept_report.found] if concept_report else []
+                why = f"present but not verified: {found}" if found else "no candidate tag present"
+                picks.append(f"{label}: none ({why})")
+                continue
+            covered += 1
+            is_primary = (chosen.namespace, chosen.tag) == CONCEPTS[concept][0]
+            picks.append(f"{label}: {chosen.tag}{'' if is_primary else ' [alternate]'}")
+            if not is_primary:
+                alternates.append(f"{label}/{item}")
+        lines.append(f"{item}: {covered}/{len(reports)}  " + "; ".join(picks))
+        if covered == 0:
+            uncovered.append(item)
+        elif covered < len(reports):
+            partial.append(item)
+    lines.append(f"items served only by an alternate tag somewhere: {alternates or 'none'}")
+    lines.append("verified = tag still in use (not stale) and at least 3 fiscal-year (fp=FY) facts")
+    if uncovered:
+        return PResult("P-3", NOT_HOLD, f"no verified tag for any company: {uncovered}", lines)
+    if partial:
+        return PResult("P-3", PARTIAL, f"some companies lack a verified tag for: {partial}", lines)
+    return PResult(
+        "P-3", HOLDS, f"every item has a verified tag for all {len(reports)} companies", lines
+    )
+
+
+def eval_p4(ev: SecEvidence) -> PResult:
+    if not ev.attempted:
+        return PResult("P-4", INCONCLUSIVE, "SEC section did not run")
+    if not ev.map_from_network:
+        return PResult("P-4", INCONCLUSIVE, "ticker map was not fetched; built-in CIKs only")
+    mapping = ev.ticker_map
+    lines = [f"map source: {ev.map_url}; entries: {len(mapping):,}"]
+    for ticker in (*PROBE_TICKERS, "ZZZZNOTREAL"):
+        cik, matched = lookup_ticker(mapping, ticker)
+        sharing = sum(1 for value in mapping.values() if value == cik) if cik else 0
+        direct = "direct" if matched == ticker.upper() else f"as {matched}"
+        lines.append(
+            f"{ticker}: "
+            + (f"cik {cik} ({direct}); tickers sharing this cik: {sharing}" if cik else "not found")
+        )
+    lines.append(
+        f"{ETF_SAMPLE} lookup source: {ev.etf_cik_source}; "
+        f"its companyfacts status: {ev.etf_facts_status}"
+    )
+    aapl_cik, _ = lookup_ticker(mapping, SEC_TICKERS[0])
+    if aapl_cik is None:
+        return PResult("P-4", NOT_HOLD, "AAPL is not in the ticker map", lines)
+    _, class_match = lookup_ticker(mapping, CLASS_SHARE_SAMPLE)
+    etf_note = (
+        f"ETF {ETF_SAMPLE}: companyfacts status {ev.etf_facts_status} (failure is detectable)"
+    )
+    if class_match is None:
+        return PResult(
+            "P-4", NOT_HOLD, f"{CLASS_SHARE_SAMPLE} found under no spelling; {etf_note}", lines
+        )
+    if class_match == CLASS_SHARE_SAMPLE.upper():
+        return PResult("P-4", HOLDS, f"class share found as written; {etf_note}", lines)
+    return PResult(
+        "P-4",
+        PARTIAL,
+        f"class share only found as {class_match!r}: dotted tickers need normalising; {etf_note}",
+        lines,
+    )
+
+
+def eval_p5(ev: SecEvidence) -> PResult:
+    if not ev.attempted:
+        return PResult("P-5", INCONCLUSIVE, "SEC section did not run")
+    statuses = [s for s in ev.sec_statuses]
+    throttled = [s for s in statuses if s in (403, 429)]
+    lines = [
+        f"SEC requests sent: {len(statuses)}; statuses seen: {dict(Counter(map(str, statuses)))}",
+        f"observed pace: at most {1 / SEC_MIN_GAP_SECONDS:.0f} requests/second "
+        f"(gap {SEC_MIN_GAP_SECONDS}s)",
+        f"documented limit on the fair-access page: {ev.docs_limit}",
+        f"rate-limit headers seen: {ev.rate_headers or 'none'}",
+        "User-Agent format 'Name email' accepted: "
+        + ("yes" if statuses and not throttled else "no/unknown"),
+    ]
+    lines += [f"page says: {s}" for s in ev.docs_snippets]
+    if throttled:
+        return PResult(
+            "P-5",
+            NOT_HOLD,
+            f"SEC answered 403/429 ({len(throttled)}x): format or pace rejected",
+            lines,
+        )
+    if ev.docs_limit is None:
+        return PResult(
+            "P-5", INCONCLUSIVE, "no throttling seen but the documented limit was not read", lines
+        )
+    return PResult(
+        "P-5",
+        HOLDS,
+        f"documented limit {ev.docs_limit} requests/second; no 403/429 at <= "
+        f"{1 / SEC_MIN_GAP_SECONDS:.0f}/s with the 'Name email' User-Agent",
+        lines,
+    )
+
+
+def eval_p6(ev: SecEvidence) -> PResult:
+    info = ev.submissions.get(SEC_TICKERS[0])
+    if info is None or not info.ok:
+        return PResult("P-6", INCONCLUSIVE, "AAPL submissions were not fetched")
+    needed = ("accessionNumber", "filingDate", "acceptanceDateTime", "form")
+    fields_ok = all(info.recent_fields.get(name) for name in needed)
+    lines = [
+        f"filing list columns present: {info.recent_fields}",
+        f"filingDate YYYY-MM-DD: {info.filing_date_format_ok}; "
+        f"acceptanceDateTime ISO timestamp: {info.acceptance_format_ok}",
+        f"conditional request: {ev.conditional_note or 'not attempted'}",
+    ]
+    report = ev.reports.get(SEC_TICKERS[0])
+    latest = info.latest_periodic
+    if report is not None and latest is not None:
+        facts_filed = report.max_filed
+        behind = (
+            (date.fromisoformat(latest["filingDate"]) - date.fromisoformat(facts_filed)).days
+            if facts_filed and DATE_RE.match(latest["filingDate"])
+            else None
+        )
+        lines.append(
+            f"newest 10-K/10-Q in filing list: {latest['form']} filed {latest['filingDate']}; "
+            f"newest filed date inside companyfacts: {facts_filed}; "
+            f"companyfacts behind by: {behind} day(s) (one snapshot, not a latency measurement)"
+        )
+    fetched = ev.facts_fetch.get(SEC_TICKERS[0])
+    lines.append(f"companyfacts Last-Modified header: {fetched.last_modified if fetched else None}")
+    if not fields_ok:
+        return PResult("P-6", NOT_HOLD, f"filing list lacks columns {needed}", lines)
+    if ev.conditional_status == 304:
+        return PResult(
+            "P-6",
+            HOLDS,
+            "filing list has all columns and honours conditional requests (304)",
+            lines,
+        )
+    return PResult(
+        "P-6",
+        PARTIAL,
+        "filing list has all columns; conditional requests NOT honoured "
+        f"(status {ev.conditional_status}): S2 must download the list each time",
+        lines,
+    )
+
+
+def _mb(size: int | None) -> str:
+    return f"{size / 1e6:.2f} MB" if size else "unknown"
+
+
+def eval_p7(ev: SecEvidence) -> PResult:
+    fetched = {k: v for k, v in ev.facts_fetch.items() if v.status == 200}
+    if not fetched:
+        return PResult("P-7", INCONCLUSIVE, "no companyfacts response was fetched")
+    lines: list[str] = []
+    for label, item in fetched.items():
+        lines.append(
+            f"{label}: decoded {item.decoded_bytes / 1e6:.2f} MB, "
+            f"on the wire (gzip) {_mb(item.wire_bytes)}"
+        )
+    biggest = max(item.decoded_bytes for item in fetched.values())
+    wire_known = [item.wire_bytes for item in fetched.values() if item.wire_bytes]
+    detail = f"largest decoded {biggest / 1e6:.2f} MB"
+    if wire_known:
+        detail += f", largest compressed {max(wire_known) / 1e6:.2f} MB"
+    return PResult(
+        "P-7", MEASURED, detail + " (numbers only; the threshold is the ADR's call)", lines
+    )
+
+
+def eval_p8(ev: SecEvidence) -> PResult:
+    company = ev.submissions.get(SEC_TICKERS[0])
+    fund = ev.submissions.get(ETF_SAMPLE)
+    if company is None or not company.ok:
+        return PResult("P-8", INCONCLUSIVE, "AAPL submissions were not fetched")
+
+    def signature(info: SubmissionsInfo) -> str:
+        return (
+            f"sic={info.sic or '-'} entityType={info.entity_type or '-'} "
+            f"category={info.category or '-'}"
+        )
+
+    lines = [f"AAPL: {signature(company)}"]
+    if not (company.sic and company.entity_type):
+        return PResult("P-8", NOT_HOLD, "SIC or entityType missing for an operating company", lines)
+    if fund is None or not fund.ok:
+        lines.append(f"{ETF_SAMPLE}: submissions not fetched")
+        return PResult(
+            "P-8", INCONCLUSIVE, "SIC/entityType exist but no ETF sample to compare", lines
+        )
+    lines.append(f"{ETF_SAMPLE}: {signature(fund)} (sicDescription {fund.sic_description!r})")
+    lines.append(f"{ETF_SAMPLE} companyfacts status: {ev.etf_facts_status}")
+    if signature(fund) != signature(company):
+        return PResult(
+            "P-8", HOLDS, "SIC and entityType exist and differ between company and ETF", lines
+        )
+    return PResult(
+        "P-8", PARTIAL, "SIC and entityType exist but look the same for company and ETF", lines
+    )
+
+
+def eval_p9(ev: SecEvidence) -> PResult:
+    info = ev.submissions.get(SEC_TICKERS[0])
+    if info is None or not info.ok:
+        return PResult("P-9", INCONCLUSIVE, "AAPL submissions were not fetched")
+    lines = [f"fiscalYearEnd from submissions: {info.fiscal_year_end or '(none)'}"]
+    if not FISCAL_YEAR_END_RE.match(info.fiscal_year_end):
+        return PResult("P-9", NOT_HOLD, "fiscalYearEnd missing or not MMDD", lines)
+    report = ev.reports.get(SEC_TICKERS[0])
+    # Full-year period facts only: a cover-page date (dei shares outstanding) is no year end.
+    ends = sorted(
+        str(s.latest_fy["end"])
+        for s in (report.summaries if report else [])
+        if s.latest_fy
+        and DATE_RE.match(str(s.latest_fy.get("end", "")))
+        and _is_full_year(str(s.latest_fy.get("start", "")), str(s.latest_fy["end"]))
+    )
+    if not ends:
+        return PResult(
+            "P-9", PARTIAL, "fiscalYearEnd present; no companyfacts FY end to cross-check", lines
+        )
+    latest = ends[-1]
+    lines.append(f"latest fiscal-year end in companyfacts: {latest}")
+    if latest[5:7] == info.fiscal_year_end[:2]:
+        return PResult(
+            "P-9",
+            HOLDS,
+            f"fiscalYearEnd {info.fiscal_year_end} matches the {latest} year end month",
+            lines,
+        )
+    return PResult(
+        "P-9",
+        PARTIAL,
+        f"fiscalYearEnd {info.fiscal_year_end} present but month differs from {latest}",
+        lines,
+    )
+
+
+def eval_p12(ev: SecEvidence) -> PResult:
+    lines: list[str] = []
+    flagged: list[str] = []
+
+    def describe(label: str) -> bool | None:
+        rep = ev.reports.get(label)
+        if rep is None:
+            lines.append(f"{label}: companyfacts not fetched")
+            return None
+        foreign = foreign_currency_units(rep.unit_tags)
+        ifrs = "ifrs-full" in rep.namespaces
+        whitelist_units = sorted({u for s in rep.summaries for u in s.units})
+        lines.append(
+            f"{label}: ifrs-full={'yes' if ifrs else 'no'}; non-USD units={foreign or 'none'}; "
+            f"units of whitelist tags={whitelist_units}"
+        )
+        return ifrs or bool(foreign)
+
+    sample = describe(FOREIGN_SAMPLE)
+    checked = [describe(t) for t in (*SEC_TICKERS, *ev.holdings)]
+    for label, outcome in zip((*SEC_TICKERS, *ev.holdings), checked, strict=True):
+        if outcome:
+            flagged.append(label)
+    fetched = [outcome for outcome in checked if outcome is not None]
+    if ev.holdings and fetched:
+        if flagged:
+            return PResult(
+                "P-12", HOLDS, f"non-USD or IFRS filers among checked companies: {flagged}", lines
+            )
+        return PResult(
+            "P-12", NOT_HOLD, f"none of {len(fetched)} checked companies is non-USD or IFRS", lines
+        )
+    if sample:
+        return PResult(
+            "P-12",
+            INCONCLUSIVE,
+            f"{FOREIGN_SAMPLE} proves such filers exist in the SEC data; "
+            f"set {ENV_HOLDINGS} to your US holdings to judge them",
+            lines,
+        )
+    return PResult(
+        "P-12",
+        INCONCLUSIVE,
+        f"no holdings given and the {FOREIGN_SAMPLE} sample was not usable",
+        lines,
+    )
+
+
+def run_p_items(ctx: Context) -> None:
+    section_header(ctx, "5. ADR-0038 P items (judged from the SEC evidence above, no new requests)")
+    ev = ctx.evidence
+    if not ev.attempted:
+        ctx.say("  SEC section did not run, so no P item can be judged.")
+        ctx.record("ADR-0038", "P-items", SKIPPED, "SEC section skipped")
+        return
+    results = [
+        eval_p1(ev),
+        eval_p2(ev, ctx.today),
+        eval_p3(ev),
+        eval_p4(ev),
+        eval_p5(ev),
+        eval_p6(ev),
+        eval_p7(ev),
+        eval_p8(ev),
+        eval_p9(ev),
+        eval_p12(ev),
+    ]
+    for item in results:
+        ctx.say("")
+        ctx.say(f"-- {item.pid}: {P_TITLES[item.pid]}")
+        for line in item.lines:
+            ctx.say(f"   {line}")
+        ctx.record("ADR-0038", item.pid, item.verdict, item.detail)
+
+
 # ---------------------------------------------------------------- orchestration
 
 SECTIONS: tuple[tuple[str, Callable[[Context], None]], ...] = (
@@ -967,6 +1996,7 @@ SECTIONS: tuple[tuple[str, Callable[[Context], None]], ...] = (
     ("TWSE/TPEx", run_twse),
     ("FinMind", run_finmind),
     ("AlphaVantage", run_alpha),
+    ("ADR-0038", run_p_items),
 )
 
 
@@ -986,7 +2016,20 @@ def print_summary(ctx: Context, budget: Budget) -> None:
     ctx.say(f"requests used: {budget.used} / {budget.cap}")
     ctx.say(
         "verdict counts: "
-        + ", ".join(f"{v}={counts.get(v, 0)}" for v in (EXISTS, MISSING, ERROR, SKIPPED))
+        + ", ".join(
+            f"{v}={counts.get(v, 0)}"
+            for v in (
+                EXISTS,
+                MISSING,
+                ERROR,
+                SKIPPED,
+                HOLDS,
+                NOT_HOLD,
+                PARTIAL,
+                MEASURED,
+                INCONCLUSIVE,
+            )
+        )
     )
     for result in ctx.results:
         suffix = f" -- {result.detail}" if result.detail else ""
@@ -1031,6 +2074,11 @@ def main(
     for name in SECRET_ENV_VARS:
         state = "set (value hidden)" if environment.get(name, "").strip() else "NOT set"
         say(f"env {name} is {state}")
+    holdings_given = environment.get(ENV_HOLDINGS, "").strip()
+    say(
+        f"env {ENV_HOLDINGS} is "
+        + ("set" if holdings_given else "NOT set (P-12 uses the sample only)")
+    )
 
     for title, runner in SECTIONS:
         try:
