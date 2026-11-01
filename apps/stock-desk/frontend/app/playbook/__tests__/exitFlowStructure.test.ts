@@ -161,7 +161,10 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
     }
     const queries = read(join(APP_ROOT, "lib/queries.ts"));
     const factory = queries.slice(queries.indexOf("export function emergencyExitMutationOptions("), queries.indexOf("export function useEmergencyExit("));
-    expect(factory).not.toMatch(/scope|mutationKey|networkMode/);
+    // networkMode may only be "always" (FE-R1; asserted in emergencyExitOffline.test.ts);
+    // `retry`, `scope` and keys would each defer or queue a submit.
+    expect(factory).not.toMatch(/\bscope\b|\bmutationKey\b|\bretry\b/);
+    expect(factory.match(/networkMode/g)).toHaveLength(1);
     // The lock is a ref in the page-instance hook, nowhere else (the page only hands it to the dialog).
     const lockUsers = app.filter(({ text }) => /lockRef/.test(text)).map(({ file }) => file).sort();
     expect(lockUsers).toEqual(["playbook/EmergencyExitDialog.tsx", "playbook/page.tsx", "playbook/useEmergencyExitFlow.ts"]);

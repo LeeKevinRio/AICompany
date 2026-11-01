@@ -486,6 +486,20 @@ export function useConfirmPlaybookRules() {
 export function emergencyExitMutationOptions(queryClient: QueryClient, receipts: ExitReceiptSink) {
   return {
     mutationFn: () => postPlaybookEmergencyExit(),
+    // 風控 2026-11-01 FE-R1 (VETO on the default): this mutation, and only this one,
+    // never waits for the browser to report 「online」. With the default
+    // `'online'`, an offline press of 確認送出 leaves the mutation `pending` +
+    // `isPaused` -- the button says 「送出中…」 while nothing has been sent, 取消
+    // and Esc are locked, and when the connection returns TanStack sends the
+    // request by itself, possibly after the user left the page or after the
+    // Taipei midnight, i.e. an irreversible confirmation carrying stale facts
+    // (R-5) and a deferred, queued submit (VETO-4). `'always'` sends now; offline
+    // that fails at once and the NB-6 panel shows, which the user can retry.
+    // Set here and not in `providers.tsx` / `defaultOptions` /
+    // `setMutationDefaults` (FE-C1: the `QueryClient` literal stays untouched).
+    // Deliberately no `retry` (it passes through the tab-focus gate and can pause
+    // too) and no `scope` (it queues): both are deferred submits.
+    networkMode: "always" as const,
     onSuccess: (response: PlaybookEmergencyExitResponse): void => {
       // FIRST action, synchronous, and fenced: TanStack awaits this callback with
       // no try/catch around it (`mutation.ts:246`), so a throw would send an
