@@ -486,8 +486,8 @@ def test_the_index_gap_deferral_note_needs_an_m1_deferral_line(desk: Desk) -> No
     """第 10 點, read literally: the note renders only when the list holds an M1 順延列.
 
     A third index-gap deferral is written as an R3 skip, not as an M1 順延, so the
-    note is not rendered even on the run that wrote it. Pinned so a different
-    ruling shows up here (reported to 風控 with the N-172a hand-off).
+    note is not rendered even on the run that wrote it -- approved as intended by
+    風控 2026-11-01 解讀點 (b): that batch is skipped for good, not deferred.
     """
     batch = desk.store.get_batch("2330", 1)
     assert batch is not None

@@ -159,7 +159,7 @@ def rule_rows(db_path: Path, rule_id: str, action: str) -> list[tuple[Any, ...]]
 def buy_line(
     *,
     symbol: str = "2330",
-    batch_no: int = 1,
+    batch_no: int | None = 1,
     shares: int = ONE_BUY_SHARES,
     data_date: date = TUESDAY,
     execution_date: date = WEDNESDAY,

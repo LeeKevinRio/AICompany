@@ -13,16 +13,17 @@ T20, T21 and 風控 第 8 點.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from app.data.interface import PriceBar
 from app.playbook import wording
 from app.playbook.models import BatchStatus
-from app.playbook.store import PlaybookStore
 from tests.api_helpers import recent_bars
 from tests.same_day_helpers import (
     ONE_BUY_COST,
@@ -242,12 +243,111 @@ def test_a_row_another_settlement_took_is_not_reported_as_g1(
     assert desk.store.portfolio_state().cash == cash
 
 
-def test_a_missing_batch_row_is_not_refused(tmp_path: Path) -> None:
-    """G1 guards a batch that exists and left ``planned``; with no batch row there is
-    nothing to protect, so the claim behaves as before (``settle`` moves nothing)."""
-    store = PlaybookStore(db_path=tmp_path / "playbook.db")
-    log_like_before_n172a(store, [buy_line()])
-    (pending,) = store.pending_directives()
+def _hold_every_batch(desk: Desk) -> None:
+    """Batches 1～3 of 2330 open: any batch G1 could match has left ``planned``."""
+    for batch_no in (1, 2, 3):
+        batch = desk.store.get_batch("2330", batch_no)
+        assert batch is not None
+        desk.store.save_batch(
+            batch.model_copy(
+                update={
+                    "status": "open",
+                    "shares": 100,
+                    "remaining_shares": 100,
+                    "cost": Decimal(90),
+                }
+            )
+        )
 
-    assert store.claim_directive(pending.directive_id, status="executed", open_price=Decimal(100))
-    assert store.batch_blocking_claim(pending.directive_id) is None
+
+@pytest.mark.parametrize("batch_no", [9, None], ids=["no-batch-row", "batch-no-null"])
+def test_a_missing_batch_row_is_not_refused(desk: Desk, batch_no: int | None) -> None:
+    """補充一 S-1 第 3 點 (N172-T21 擴充): a buy with no batch row to match -- its
+    ``batch_no`` names no row, or is NULL -- is not G1's. Every other batch of the
+    symbol has left ``planned``, so a condition that matched loosely would refuse it.
+
+    (i) the claim succeeds, (ii) cash and every batch row are unchanged (``settle``
+    has no batch to fill), (iii) ``unsettled`` carries no G1 reason.
+    """
+    _hold_every_batch(desk)
+    log_like_before_n172a(desk.store, [buy_line(batch_no=batch_no)])
+    (pending,) = desk.store.pending_directives()
+    before = (desk.store.list_batches(), desk.store.portfolio_state().cash)
+
+    result = desk.service.settle_pending(today=WEDNESDAY)
+
+    assert [line.directive_id for line in result.settled] == [pending.directive_id]
+    assert log_rows(desk.store.db_path)[0][5:] == (1, "executed")  # (i) claimed
+    assert desk.store.batch_blocking_claim(pending.directive_id) is None
+    assert (desk.store.list_batches(), desk.store.portfolio_state().cash) == before  # (ii)
+    assert result.unsettled == []  # (iii)
+    assert not [warning for warning in result.warnings if "不是待買進狀態" in warning]
+
+
+def _trace(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def tracing(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        conn: sqlite3.Connection = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", tracing)
+    return statements
+
+
+def _touching(statements: list[str]) -> list[str]:
+    return [sql for sql in statements if "playbook_directives" in sql or "playbook_batches" in sql]
+
+
+def test_the_g1_refusal_is_part_of_the_claim_update(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """補充一 S-1 第 2 點: the refusal is written into the one claiming ``UPDATE`` --
+    no SELECT of the batch first, no second statement."""
+    log_like_before_n172a(desk.store, [buy_line()])
+    _hold_every_batch(desk)
+    (pending,) = desk.store.pending_directives()
+    statements = _trace(monkeypatch)
+
+    claimed = desk.store.claim_directive(
+        pending.directive_id, status="executed", open_price=Decimal(100)
+    )
+
+    assert claimed is False
+    (update,) = _touching(statements)
+    assert update.lstrip().upper().startswith("UPDATE PLAYBOOK_DIRECTIVES")
+    assert "settled = 0" in update
+    assert "NOT EXISTS" in update and "playbook_batches" in update
+    assert "b.status <> 'planned'" in update
+    assert log_rows(desk.store.db_path)[0][5:] == (0, "pending")
+
+
+def test_only_the_update_decides_whether_the_book_moves(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """補充一 S-1 第 4 點: in a settlement run the claim UPDATE comes first; the read
+    that picks the G1 reason comes after it, and nothing is written to the book."""
+    log_like_before_n172a(desk.store, [buy_line()])
+    _hold_every_batch(desk)
+    statements = _trace(monkeypatch)
+
+    result = desk.service.settle_pending(today=WEDNESDAY)
+
+    assert [line.reason for line in result.unsettled] == [_filled_reason(state="open")]
+    touching = _touching(statements)
+    updates = [i for i, sql in enumerate(touching) if sql.lstrip().upper().startswith("UPDATE")]
+    reads = [
+        i
+        for i, sql in enumerate(touching)
+        if sql.lstrip().upper().startswith("SELECT") and "b.status <> 'planned'" in sql
+    ]
+    assert len(updates) == 1 and len(reads) == 1
+    assert updates[0] < reads[0]
+    writes = [
+        sql
+        for sql in statements
+        if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+    ]
+    assert writes == [touching[updates[0]]]  # no cash, no batch, no schedule write
