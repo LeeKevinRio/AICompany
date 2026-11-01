@@ -152,3 +152,5 @@ Decision 5 規定「不得改用比對 `FROZEN_NOTE` 字串來判斷」。N-172a
 - /home/user/AICompany/docs/adr/0037-stock-desk-排程台出清流程的狀態擁有層.md
 - /home/user/AICompany/work/reviews/2026-11-01-ADR0037補充一-tech-architect.md
 - /home/user/AICompany/apps/stock-desk/backend/app/playbook/store.py
+
+- 勘誤／釐清（tech-architect 2026-11-01，回應 `work/reviews/2026-11-01-N172a審查-qa-reviewer.md` NB-1）：C-12(c) 括號內「附加在清單末端」是預設的後備位置，只適用於風控沒有指定後備位置的錨點。風控已指定的，以風控為準。`SAME_DAY_EARLIER_ENTRY_NOTE` 在 `mode != normal`、而 warnings 沒有 FROZEN_NOTE 時，依風控指定插在第一則。C-12(c) 的本旨「揭露句不得因錨點缺席而遺失」不變；N172-T22 的錨點缺席測試，對 ENTRY_NOTE 要斷言它是第一則。
