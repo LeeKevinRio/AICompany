@@ -39,6 +39,11 @@ Planned requests (hard cap ``REQUEST_CAP`` = 30, enforced in code):
   ------------------------------------------------------------------
   Normal run         22  (no holdings given); worst case 26, cap 30
 
+Redirects: urllib never follows them. The Fetcher follows at most 2 hops per request,
+only to https URLs on the same site (any *.sec.gov counts as one site), drops the
+Authorization header when the host changes, and counts and spaces every hop like any
+other request. A page that redirects therefore costs 1 or 2 extra requests of the cap.
+
 The ADR-0038 P items (P-1..P-9, P-12) are judged from those same responses:
 section 5 of the output issues no request of its own.
 
@@ -52,8 +57,10 @@ the P items HOLDS / NOT_HOLD / PARTIAL / MEASURED / INCONCLUSIVE.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gzip
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -67,12 +74,15 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 SCRIPT_VERSION = "2"
 REQUEST_CAP = 30
 REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_BODY_BYTES = 64 * 1024 * 1024
+#: Redirect hops a single get() may follow; each hop costs one request of the cap.
+MAX_REDIRECTS = 2
+REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 SEC_MIN_GAP_SECONDS = 0.25
 DEFAULT_MIN_GAP_SECONDS = 1.0
 MASK = "***"
@@ -290,6 +300,8 @@ class HttpResult:
     headers: Mapping[str, str] = field(default_factory=dict)
     #: Bytes received before content decoding (the gzip size when compressed).
     wire_size: int | None = None
+    #: host+path of each redirect target the Fetcher followed to reach this answer.
+    redirects: tuple[str, ...] = ()
 
 
 Transport = Callable[[str, Mapping[str, str]], HttpResult]
@@ -320,6 +332,7 @@ def _decode_body(raw: bytes, encoding: str) -> bytes:
 
 
 HEADERS_KEPT = (
+    "location",
     "etag",
     "last-modified",
     "content-length",
@@ -341,11 +354,33 @@ def keep_headers(items: Iterable[tuple[str, str]]) -> dict[str, str]:
     return kept
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Hand 3xx answers back to the Fetcher so every hop is counted and spaced."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _open(request: urllib.request.Request, timeout: float) -> Any:
+    return _OPENER.open(request, timeout=timeout)
+
+
 def urllib_transport(url: str, headers: Mapping[str, str]) -> HttpResult:
-    """Real transport: one GET, bounded body size, never raises."""
+    """Real transport: one GET, bounded body size, never raises, never follows redirects."""
     request = urllib.request.Request(url, headers=dict(headers), method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with _open(request, REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read(MAX_BODY_BYTES + 1)
             status = int(response.status)
             kept = keep_headers(response.headers.items())
@@ -353,7 +388,13 @@ def urllib_transport(url: str, headers: Mapping[str, str]) -> HttpResult:
         raw = exc.read(MAX_BODY_BYTES + 1)
         status = int(exc.code)
         kept = keep_headers(exc.headers.items()) if exc.headers else {}
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        OSError,
+        ValueError,
+    ) as exc:
         return HttpResult(None, b"", f"{type(exc).__name__}: {exc}")
     if len(raw) > MAX_BODY_BYTES:
         return HttpResult(status, b"", f"body larger than {MAX_BODY_BYTES} bytes, discarded", kept)
@@ -379,7 +420,7 @@ class Fetcher:
             return "sec.gov", SEC_MIN_GAP_SECONDS
         return host, DEFAULT_MIN_GAP_SECONDS
 
-    def get(self, url: str, headers: Mapping[str, str] | None = None) -> HttpResult:
+    def _once(self, url: str, headers: Mapping[str, str]) -> HttpResult:
         bucket, gap = self._bucket(url)
         last = self._last.get(bucket)
         if last is not None:
@@ -387,9 +428,39 @@ class Fetcher:
             if wait > 0:
                 self.sleep(wait)
         self.budget.take()
-        result = self.transport(url, headers or {})
+        result = self.transport(url, headers)
         self._last[bucket] = self.clock()
         return result
+
+    @staticmethod
+    def _redirect_target(url: str, result: HttpResult) -> str | None:
+        """Where a 3xx points, if it is an https URL on the same site; else None."""
+        location = result.headers.get("location")
+        if result.status not in REDIRECT_STATUSES or not location:
+            return None
+        target = urllib.parse.urljoin(url, location)
+        here, there = urllib.parse.urlsplit(url), urllib.parse.urlsplit(target)
+        same_site = there.hostname == here.hostname or (
+            Fetcher._bucket(url)[0] == Fetcher._bucket(target)[0] == "sec.gov"
+        )
+        return target if there.scheme == "https" and same_site else None
+
+    def get(self, url: str, headers: Mapping[str, str] | None = None) -> HttpResult:
+        """GET with at most MAX_REDIRECTS hops; each hop is a counted, spaced request."""
+        current, current_headers = url, dict(headers or {})
+        followed: list[str] = []
+        result = self._once(current, current_headers)
+        while len(followed) < MAX_REDIRECTS:
+            target = self._redirect_target(current, result)
+            if target is None:
+                break
+            if urllib.parse.urlsplit(target).hostname != urllib.parse.urlsplit(current).hostname:
+                current_headers.pop("Authorization", None)
+            parts = urllib.parse.urlsplit(target)
+            followed.append(f"{parts.hostname}{parts.path}")
+            current = target
+            result = self._once(current, current_headers)
+        return dataclasses.replace(result, redirects=tuple(followed)) if followed else result
 
 
 # ---------------------------------------------------------------- reporting
@@ -427,7 +498,8 @@ def describe_http(result: HttpResult) -> str:
     if result.status is None:
         return f"NO HTTP RESPONSE ({result.error})"
     extra = f" ({result.error})" if result.error else ""
-    return f"HTTP {result.status}, {len(result.body):,} bytes{extra}"
+    hops = f" after redirect to {', '.join(result.redirects)}" if result.redirects else ""
+    return f"HTTP {result.status}, {len(result.body):,} bytes{extra}{hops}"
 
 
 def parse_json(body: bytes) -> tuple[Any, str | None]:
@@ -467,6 +539,8 @@ INSTANT_TAGS = {
 }
 #: A fiscal-year fact filed within this many days of its period end is the original 10-K.
 ORIGINAL_FILING_MAX_DAYS = 130
+#: A tag counts as verified once it has this many distinct full-year periods.
+VERIFIED_MIN_YEARS = 3
 #: Only periods ended longer ago than this are expected to have a settled filing history.
 OLD_PERIOD_AFTER_DAYS = 400
 CURRENCY_UNIT_RE = re.compile(r"^([A-Z]{3})(?:/[A-Za-z]+)?$")
@@ -510,11 +584,13 @@ class TagSummary:
     latest_interim: dict[str, Any] | None
     sample_unit: str | None
     stats: FactStats
+    #: Distinct (start, end) periods of about twelve months, not a count of facts.
+    full_year_periods: int = 0
 
     @property
     def verified(self) -> bool:
-        """Usable as an annual series: still in use and at least three fiscal years."""
-        return not self.stale and self.fps.get("FY", 0) >= 3
+        """Usable as an annual series: still in use and at least three distinct fiscal years."""
+        return not self.stale and self.full_year_periods >= VERIFIED_MIN_YEARS
 
 
 @dataclass
@@ -608,10 +684,12 @@ def collect_stats(entries: list[dict[str, Any]], *, instant: bool) -> FactStats:
         accn = str(row.get("accn", ""))
         info = stats.periods.setdefault((str(row.get("start", "")), end), PeriodInfo())
         info.vals_by_accn[accn] = str(row.get("val"))
-        info.fys.add(str(row.get("fy")))
+        if _has(row, "fy"):
+            info.fys.add(str(row.get("fy")))
         if filed_ok and (info.min_filed is None or filed < info.min_filed):
             info.min_filed = filed
-        stats.fyfp_by_accn.setdefault(accn, set()).add((str(row.get("fy")), str(row.get("fp"))))
+        if _has(row, "fy") and _has(row, "fp"):  # a missing value is not a second fiscal year
+            stats.fyfp_by_accn.setdefault(accn, set()).add((str(row["fy"]), str(row["fp"])))
     return stats
 
 
@@ -662,6 +740,13 @@ def summarize_tag(namespace: str, tag: str, tag_obj: Any, today: date) -> TagSum
         latest_interim=interim_rows[-1] if interim_rows else None,
         sample_unit=sample_unit,
         stats=collect_stats(entries, instant=(namespace, tag) in INSTANT_TAGS),
+        full_year_periods=len(
+            {
+                (str(r["start"]), str(r["end"]))
+                for r in entries
+                if r.get("start") and r.get("end") and _is_full_year(str(r["start"]), str(r["end"]))
+            }
+        ),
     )
 
 
@@ -821,7 +906,7 @@ def parse_ticker_map(doc: Any) -> dict[str, int]:
 def ticker_variants(ticker: str) -> list[str]:
     """Spellings of a class-share ticker that different systems use."""
     upper = ticker.upper()
-    variants = [upper, upper.replace(".", "-"), upper.replace("/", "-"), upper.replace(".", "")]
+    variants = [upper, upper.replace(".", "-"), upper.replace("/", "-")]
     return list(dict.fromkeys(variants))
 
 
@@ -1521,6 +1606,8 @@ ITEM_CONCEPTS = {
     "DilutedEPS": "diluted_earnings_per_share",
 }
 P1_REQUIRED_FIELDS = ("accn", "filed", "form", "end", "fy", "fp")
+#: The ADR calls a gap in these two structural; the other fields only degrade the claim.
+P1_STRUCTURAL_FIELDS = ("accn", "filed")
 P2_PARTIAL_RATIO = 0.5
 P2_HOLDS_RATIO = 0.9
 
@@ -1570,19 +1657,39 @@ def eval_p1(ev: SecEvidence) -> PResult:
         f"periods whose facts carry more than one fy: {multi_fy} of {len(periods)}; "
         f"accn whose facts carry more than one (fy, fp): {mixed_accn} of {len(accn_sets)}"
     )
-    structural_gaps = [n for n in P1_REQUIRED_FIELDS if present[n] != total]
+    structural_gaps = [n for n in P1_STRUCTURAL_FIELDS if present[n] != total]
+    other_gaps = [
+        n for n in P1_REQUIRED_FIELDS if n not in P1_STRUCTURAL_FIELDS and present[n] != total
+    ]
     if flow_start != flow_total:
-        structural_gaps.append("start")
+        other_gaps.append("start")
     filing_level = multi_fy > 0 and mixed_accn == 0
     lines.append(
         "fy/fp are filing attributes, not period attributes: "
         + ("yes" if filing_level else "NOT shown by this data")
     )
     if structural_gaps:
-        return PResult("P-1", NOT_HOLD, f"keys missing on some facts: {structural_gaps}", lines)
+        return PResult(
+            "P-1",
+            NOT_HOLD,
+            f"STRUCTURAL: {structural_gaps} missing on some facts "
+            "(the ADR cannot start F1 as written)",
+            lines,
+        )
     if mixed_accn:
         return PResult(
-            "P-1", NOT_HOLD, "one filing carries several (fy, fp): fy/fp not filing-level", lines
+            "P-1",
+            NOT_HOLD,
+            "CLAIM REFUTED: one filing carries several (fy, fp), so fy/fp are not filing-level",
+            lines,
+        )
+    if other_gaps:
+        return PResult(
+            "P-1",
+            PARTIAL,
+            f"accn and filed are on every fact; NOT on every fact: {other_gaps} "
+            "(not structural per the ADR, but those facts need handling)",
+            lines,
         )
     if present["frame"] == total and filing_level:
         return PResult(
@@ -1607,11 +1714,14 @@ def eval_p2(ev: SecEvidence, today: date) -> PResult:
     periods = 0
     multi = 0
     changed = 0
-    old_full_years = 0
+    in_range = 0
     original_kept = 0
+    excluded_before: list[str] = []
+    gaps: list[str] = []
     examples: list[str] = []
     for label, rep in reports.items():
         for summary in rep.summaries:
+            closed: list[tuple[str, bool]] = []
             for (start, end), info in summary.stats.periods.items():
                 periods += 1
                 if len(info.vals_by_accn) > 1:
@@ -1631,30 +1741,45 @@ def eval_p2(ev: SecEvidence, today: date) -> PResult:
                 except ValueError:
                     continue
                 if age > OLD_PERIOD_AFTER_DAYS:
-                    old_full_years += 1
-                    if lag <= ORIGINAL_FILING_MAX_DAYS:
-                        original_kept += 1
+                    closed.append((end, lag <= ORIGINAL_FILING_MAX_DAYS))
+            # Years before the first original filing in the data (before XBRL, or before the
+            # company's first filing) can only appear as comparatives; they are no evidence
+            # of lost history, so they are listed but kept out of the ratio.
+            kept_ends = [end for end, kept in closed if kept]
+            first_original = min(kept_ends) if kept_ends else None
+            for end, kept in closed:
+                if first_original is not None and end < first_original:
+                    excluded_before.append(f"{label}:{end}")
+                    continue
+                in_range += 1
+                if kept:
+                    original_kept += 1
+                else:
+                    gaps.append(f"{label} {summary.tag} {end}")
     if not periods:
         return PResult("P-2", INCONCLUSIVE, "no us-gaap companyfacts were fetched")
     lines = [
         f"periods seen: {periods:,}; reported by more than one filing: {_pct(multi, periods)}; "
         f"of those the value differs between filings: {changed}",
-        f"closed full years (older than {OLD_PERIOD_AFTER_DAYS}d) whose earliest fact was filed "
-        f"within {ORIGINAL_FILING_MAX_DAYS} days of period end (= original 10-K kept): "
-        f"{_pct(original_kept, old_full_years)}",
+        f"closed full years (older than {OLD_PERIOD_AFTER_DAYS}d) from the first original filing "
+        f"on whose earliest fact was filed within {ORIGINAL_FILING_MAX_DAYS} days of period end "
+        f"(= original 10-K kept): {_pct(original_kept, in_range)}",
+        f"left out of that ratio because they predate the first original filing in the data: "
+        f"{len(excluded_before)} period(s) {sorted(set(excluded_before))[:6]}",
+        f"years inside the range whose original filing is missing: {len(gaps)} {gaps[:4]}",
     ]
     lines += [f"value changed across filings: {example}" for example in examples]
-    if not old_full_years:
+    if not in_range:
         return PResult("P-2", INCONCLUSIVE, "no closed full-year periods to test", lines)
-    ratio = original_kept / old_full_years
+    ratio = original_kept / in_range
     if multi == 0 or ratio < P2_PARTIAL_RATIO:
         return PResult("P-2", NOT_HOLD, "older filings and comparatives are not retained", lines)
     verdict = HOLDS if ratio >= P2_HOLDS_RATIO else PARTIAL
     return PResult(
         "P-2",
         verdict,
-        f"original values kept for {_pct(original_kept, old_full_years)} of closed years; "
-        f"{changed} restated period(s) seen",
+        f"original values kept for {_pct(original_kept, in_range)} of closed years in range "
+        f"({len(excluded_before)} earlier period(s) left out); {changed} restated period(s) seen",
         lines,
     )
 
@@ -1753,7 +1878,7 @@ def eval_p5(ev: SecEvidence) -> PResult:
         f"documented limit on the fair-access page: {ev.docs_limit}",
         f"rate-limit headers seen: {ev.rate_headers or 'none'}",
         "User-Agent format 'Name email' accepted: "
-        + ("yes" if statuses and not throttled else "no/unknown"),
+        + ("yes" if 200 in statuses and not throttled else "no/unknown"),
     ]
     lines += [f"page says: {s}" for s in ev.docs_snippets]
     if throttled:
@@ -1914,51 +2039,68 @@ def eval_p9(ev: SecEvidence) -> PResult:
     )
 
 
+def _reporting_basis(rep: FactsReport) -> tuple[bool, list[str], list[str]]:
+    """(uses IFRS, non-USD units of the whitelist tags, stray non-USD units elsewhere).
+
+    The verdict uses only the first two: a US company's document often carries a few
+    foreign-currency units (bond notionals, derivatives) while it reports in USD.
+    """
+    ifrs = "ifrs-full" in rep.namespaces
+    whitelist_units = {u: 1 for s in rep.summaries for u in s.units}
+    return (
+        ifrs,
+        foreign_currency_units(whitelist_units),
+        foreign_currency_units(rep.unit_tags),
+    )
+
+
 def eval_p12(ev: SecEvidence) -> PResult:
     lines: list[str] = []
-    flagged: list[str] = []
 
     def describe(label: str) -> bool | None:
         rep = ev.reports.get(label)
         if rep is None:
             lines.append(f"{label}: companyfacts not fetched")
             return None
-        foreign = foreign_currency_units(rep.unit_tags)
-        ifrs = "ifrs-full" in rep.namespaces
-        whitelist_units = sorted({u for s in rep.summaries for u in s.units})
+        ifrs, foreign, stray = _reporting_basis(rep)
+        units = sorted({u for s in rep.summaries for u in s.units})
         lines.append(
-            f"{label}: ifrs-full={'yes' if ifrs else 'no'}; non-USD units={foreign or 'none'}; "
-            f"units of whitelist tags={whitelist_units}"
+            f"{label}: ifrs-full={'yes' if ifrs else 'no'}; non-USD units on whitelist tags="
+            f"{foreign or 'none'}; units of whitelist tags={units}; "
+            f"non-USD units elsewhere in the document (not used for the verdict)="
+            f"{[u for u in stray if u not in foreign] or 'none'}"
         )
         return ifrs or bool(foreign)
 
     sample = describe(FOREIGN_SAMPLE)
-    checked = [describe(t) for t in (*SEC_TICKERS, *ev.holdings)]
-    for label, outcome in zip((*SEC_TICKERS, *ev.holdings), checked, strict=True):
-        if outcome:
-            flagged.append(label)
-    fetched = [outcome for outcome in checked if outcome is not None]
-    if ev.holdings and fetched:
-        if flagged:
-            return PResult(
-                "P-12", HOLDS, f"non-USD or IFRS filers among checked companies: {flagged}", lines
-            )
-        return PResult(
-            "P-12", NOT_HOLD, f"none of {len(fetched)} checked companies is non-USD or IFRS", lines
+    holdings = ev.holdings
+    if not holdings:
+        detail = (
+            f"{FOREIGN_SAMPLE} shows what such a filer looks like; "
+            f"set {ENV_HOLDINGS} to your US holdings to judge them"
+            if sample
+            else f"no holdings given and the {FOREIGN_SAMPLE} sample was not usable"
         )
-    if sample:
+        return PResult("P-12", INCONCLUSIVE, detail, lines)
+    outcomes = {ticker: describe(ticker) for ticker in holdings}
+    flagged = [t for t, outcome in outcomes.items() if outcome]
+    unchecked = [t for t, outcome in outcomes.items() if outcome is None]
+    if unchecked:
+        lines.append(f"holdings NOT checked (no companyfacts): {unchecked}")
+    if flagged:
+        note = f"; not checked: {unchecked}" if unchecked else ""
+        return PResult(
+            "P-12", HOLDS, f"non-USD or IFRS filers among your holdings: {flagged}{note}", lines
+        )
+    if unchecked:
         return PResult(
             "P-12",
             INCONCLUSIVE,
-            f"{FOREIGN_SAMPLE} proves such filers exist in the SEC data; "
-            f"set {ENV_HOLDINGS} to your US holdings to judge them",
+            f"no foreign filer among the checked holdings, but these were not checked: {unchecked}",
             lines,
         )
     return PResult(
-        "P-12",
-        INCONCLUSIVE,
-        f"no holdings given and the {FOREIGN_SAMPLE} sample was not usable",
-        lines,
+        "P-12", NOT_HOLD, f"none of your {len(holdings)} holding(s) is non-USD or IFRS", lines
     )
 
 

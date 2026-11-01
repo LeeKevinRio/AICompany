@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import gzip
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -92,6 +93,7 @@ def history_rows(
     last: int = 2025,
     *,
     legacy_comparative: bool = False,
+    drop_original: int | None = None,
     restate: bool = True,
     frame_everywhere: bool = False,
 ) -> list[dict[str, Any]]:
@@ -107,6 +109,8 @@ def history_rows(
         if year > first or legacy_comparative:
             periods.append(year - 1)
         for period in periods:
+            if period == year == drop_original:
+                continue
             value = float(period * 10)
             if restate and period == 2022 and year == 2023:
                 value += 1.0
@@ -570,7 +574,7 @@ def test_urllib_transport_decodes_gzip_and_sends_get(monkeypatch: pytest.MonkeyP
         assert timeout == spike.REQUEST_TIMEOUT_SECONDS
         return _FakeResponse(gzip.compress(b'{"ok": 1}'), encoding="gzip")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spike, "_open", fake_urlopen)
     result = spike.urllib_transport("https://example.test/x", {"User-Agent": "ua"})
     assert (result.status, result.body) == (200, b'{"ok": 1}')
     assert seen[0].get_method() == "GET" and seen[0].data is None
@@ -584,7 +588,7 @@ def test_urllib_transport_reports_http_error_status(monkeypatch: pytest.MonkeyPa
             request.full_url, 403, "Forbidden", headers, io.BytesIO(b"denied")
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spike, "_open", fake_urlopen)
     result = spike.urllib_transport("https://example.test/x", {})
     assert result.status == 403 and result.body == b"denied"
 
@@ -595,18 +599,139 @@ def test_urllib_transport_turns_network_errors_into_results(
     def fake_urlopen(request: urllib.request.Request, timeout: float) -> _FakeResponse:
         raise urllib.error.URLError("tunnel failed")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spike, "_open", fake_urlopen)
     result = spike.urllib_transport("https://example.test/x", {})
     assert result.status is None and "tunnel failed" in (result.error or "")
 
 
 def test_urllib_transport_discards_oversize_body(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spike, "MAX_BODY_BYTES", 4)
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda request, timeout: _FakeResponse(b"123456789")
-    )
+    monkeypatch.setattr(spike, "_open", lambda request, timeout: _FakeResponse(b"123456789"))
     result = spike.urllib_transport("https://example.test/x", {})
     assert result.status == 200 and result.body == b"" and "larger" in (result.error or "")
+
+
+def test_urllib_transport_survives_a_truncated_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    def truncated(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        raise http.client.IncompleteRead(b"abc", 100)
+
+    monkeypatch.setattr(spike, "_open", truncated)
+    result = spike.urllib_transport("https://example.test/x", {})
+    assert result.status is None and "IncompleteRead" in (result.error or "")
+    for failure in (http.client.RemoteDisconnected("gone"), http.client.BadStatusLine("x")):
+
+        def broken(
+            request: urllib.request.Request, timeout: float, exc: Exception = failure
+        ) -> Any:
+            raise exc
+
+        monkeypatch.setattr(spike, "_open", broken)
+        assert spike.urllib_transport("https://example.test/x", {}).status is None
+
+
+def test_no_redirect_handler_refuses_to_build_a_followup_request() -> None:
+    handler = spike._NoRedirect()
+    request = urllib.request.Request("https://example.test/old")
+    result = handler.redirect_request(
+        request,
+        io.BytesIO(b""),
+        301,
+        "Moved",
+        http.client.HTTPMessage(),
+        "https://example.test/new",
+    )
+    assert result is None
+
+
+def _redirecting(routes: dict[str, Any], seen: list[tuple[str, dict[str, str]]]) -> Any:
+    def transport(url: str, headers: Mapping[str, str]) -> Any:
+        seen.append((url, dict(headers)))
+        return routes[url]
+
+    return transport
+
+
+def _moved(location: str, status: int = 301) -> Any:
+    return spike.HttpResult(status, b"", None, {"location": location})
+
+
+def _fetcher(transport: Any, cap: int = 10) -> Any:
+    return spike.Fetcher(transport=transport, budget=spike.Budget(cap), sleep=lambda _s: None)
+
+
+def test_fetcher_follows_a_same_site_redirect_and_counts_every_hop() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    routes = {
+        "https://www.sec.gov/os/old": _moved("/newpath/accessing"),
+        "https://www.sec.gov/newpath/accessing": _moved("https://data.sec.gov/final", 302),
+        "https://data.sec.gov/final": spike.HttpResult(200, b"ok"),
+    }
+    fetcher = _fetcher(_redirecting(routes, seen))
+    result = fetcher.get("https://www.sec.gov/os/old", {"User-Agent": "ua"})
+    assert result.status == 200 and result.body == b"ok"
+    assert result.redirects == ("www.sec.gov/newpath/accessing", "data.sec.gov/final")
+    assert fetcher.budget.used == 3
+    assert all(headers["User-Agent"] == "ua" for _, headers in seen)
+    assert "after redirect to www.sec.gov/newpath/accessing, data.sec.gov/final" in (
+        spike.describe_http(result)
+    )
+
+
+def test_fetcher_stops_after_the_hop_limit_and_hands_back_the_redirect() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    routes = {f"https://example.test/{n}": _moved(f"/{n + 1}") for n in range(6)}
+    fetcher = _fetcher(_redirecting(routes, seen))
+    result = fetcher.get("https://example.test/0")
+    assert result.status == 301 and len(seen) == spike.MAX_REDIRECTS + 1
+    assert fetcher.budget.used == spike.MAX_REDIRECTS + 1
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["http://example.test/plain", "https://evil.test/x", "ftp://example.test/x"],
+)
+def test_fetcher_never_follows_downgrades_or_other_sites(location: str) -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    fetcher = _fetcher(_redirecting({"https://example.test/a": _moved(location)}, seen))
+    result = fetcher.get("https://example.test/a")
+    assert result.status == 301 and len(seen) == 1 and result.redirects == ()
+
+
+def test_fetcher_drops_authorization_when_the_host_changes() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    routes = {
+        "https://www.sec.gov/a": _moved("https://data.sec.gov/b"),
+        "https://data.sec.gov/b": spike.HttpResult(200, b"ok"),
+    }
+    fetcher = _fetcher(_redirecting(routes, seen))
+    fetcher.get("https://www.sec.gov/a", {"Authorization": "Bearer SECRET", "User-Agent": "ua"})
+    assert seen[0][1]["Authorization"] == "Bearer SECRET"
+    assert "Authorization" not in seen[1][1] and seen[1][1]["User-Agent"] == "ua"
+
+
+def test_redirect_hops_respect_the_request_cap() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    routes = {"https://example.test/a": _moved("/b"), "https://example.test/b": _moved("/c")}
+    fetcher = _fetcher(_redirecting(routes, seen), cap=1)
+    with pytest.raises(spike.BudgetExceededError):
+        fetcher.get("https://example.test/a")
+    assert len(seen) == 1
+
+
+def test_a_redirecting_fair_access_page_is_followed_and_still_read() -> None:
+    moved = _moved("https://www.sec.gov/newpath/accessing-edgar-data")
+    net = FakeNet(
+        {
+            spike.SEC_DOCS_URL: moved,
+            "https://www.sec.gov/newpath/accessing-edgar-data": spike.HttpResult(
+                200, FAIR_ACCESS_HTML.encode("utf-8")
+            ),
+        }
+    )
+    _, out = run_main(net)
+    assert len(net.calls) == 23
+    assert "after redirect to www.sec.gov/newpath/accessing-edgar-data" in out
+    assert "[HOLDS] ADR-0038/P-5" in out
 
 
 def test_gzip_decode_falls_back_to_raw_on_bad_data() -> None:
@@ -1052,14 +1177,33 @@ def test_p1_not_hold_when_accn_is_missing_on_some_fact() -> None:
     rows = history_rows()
     rows[3] = _entry("2022-09-28", 1.0, start="2021-09-29", accn=None)
     result = spike.eval_p1(_evidence(AAPL=full_facts(rows)))
-    assert result.verdict == "NOT_HOLD" and "accn" in result.detail
+    assert result.verdict == "NOT_HOLD"
+    assert "STRUCTURAL" in result.detail and "['accn']" in result.detail
 
 
-def test_p1_not_hold_when_start_is_missing_on_a_flow_fact() -> None:
+def test_p1_not_hold_structural_when_filed_is_missing() -> None:
+    rows = history_rows()
+    del rows[3]["filed"]
+    result = spike.eval_p1(_evidence(AAPL=full_facts(rows)))
+    assert result.verdict == "NOT_HOLD" and "['filed']" in result.detail
+
+
+def test_p1_other_missing_fields_are_not_structural() -> None:
+    rows = history_rows()
+    del rows[3]["fy"]
+    del rows[4]["form"]
+    result = spike.eval_p1(_evidence(AAPL=full_facts(rows)))
+    assert result.verdict == "PARTIAL"
+    assert "accn and filed are on every fact" in result.detail
+    assert "'form'" in result.detail and "'fy'" in result.detail
+    assert "STRUCTURAL" not in result.detail
+
+
+def test_p1_partial_when_start_is_missing_on_a_flow_fact() -> None:
     rows = history_rows()
     del rows[0]["start"]
     result = spike.eval_p1(_evidence(AAPL=full_facts(rows)))
-    assert result.verdict == "NOT_HOLD" and "start" in result.detail
+    assert result.verdict == "PARTIAL" and "NOT on every fact: ['start']" in result.detail
 
 
 def test_p1_not_hold_when_one_filing_carries_two_fiscal_years() -> None:
@@ -1067,7 +1211,7 @@ def test_p1_not_hold_when_one_filing_carries_two_fiscal_years() -> None:
     assert rows[2]["accn"] == rows[3]["accn"]
     rows[3] = {**rows[3], "fy": 1999}
     result = spike.eval_p1(_evidence(AAPL=full_facts(rows)))
-    assert result.verdict == "NOT_HOLD" and "not filing-level" in result.detail
+    assert result.verdict == "NOT_HOLD" and "CLAIM REFUTED" in result.detail
 
 
 def test_p1_inconclusive_without_us_gaap_facts() -> None:
@@ -1082,10 +1226,24 @@ def test_p2_holds_when_original_filings_and_comparatives_are_kept() -> None:
     assert any("value changed across filings" in line for line in result.lines)
 
 
-def test_p2_partial_when_earliest_comparatives_lack_their_original_filing() -> None:
+def test_p2_leaves_out_years_before_the_first_original_filing_but_lists_them() -> None:
     rows = history_rows(legacy_comparative=True)
     result = spike.eval_p2(_evidence(AAPL=full_facts(rows)), TODAY)
+    assert result.verdict == "HOLDS"
+    joined = "\n".join(result.lines)
+    assert "predate the first original filing in the data: 8 period(s)" in joined
+    assert "AAPL:2018-09-28" in joined
+    assert "earlier period(s) left out" in result.detail
+
+
+def test_p2_partial_when_an_original_filing_is_missing_inside_the_range() -> None:
+    rows = history_rows(drop_original=2022)
+    result = spike.eval_p2(_evidence(AAPL=full_facts(rows)), TODAY)
     assert result.verdict == "PARTIAL"
+    assert any(
+        "years inside the range whose original filing is missing: 8" in x for x in result.lines
+    )
+    assert any("2022-09-28" in x for x in result.lines)
 
 
 def test_p2_not_hold_when_each_period_appears_in_one_filing_only() -> None:
@@ -1119,6 +1277,30 @@ def test_p3_holds_partial_and_not_hold_by_coverage() -> None:
     nobody = _evidence(INTC=alt_capex_facts(), AAPL=alt_capex_facts())
     assert spike.eval_p3(nobody).verdict == "NOT_HOLD"
     assert spike.eval_p3(spike.SecEvidence(attempted=True)).verdict == "INCONCLUSIVE"
+
+
+def test_verified_counts_distinct_full_years_not_facts() -> None:
+    # One 10-K repeats the same three years under three accession numbers: nine facts, three
+    # years is fine, but the same single year reported in nine filings is not.
+    one_year = [
+        _entry(
+            "2025-09-28",
+            float(n),
+            start="2024-09-29",
+            fy=2025,
+            filed="2025-11-01",
+            accn=f"0000320193-25-0001{n:02d}",
+        )
+        for n in range(9)
+    ]
+    summary = spike.summarize_tag("us-gaap", "X", _tag("USD", one_year), TODAY)
+    assert summary.fps["FY"] == 9 and summary.full_year_periods == 1 and not summary.verified
+    two_years = history_rows(2024, 2025, restate=False)
+    summary = spike.summarize_tag("us-gaap", "X", _tag("USD", two_years), TODAY)
+    assert summary.full_year_periods == 2 and not summary.verified
+    three_years = history_rows(2023, 2025, restate=False)
+    summary = spike.summarize_tag("us-gaap", "X", _tag("USD", three_years), TODAY)
+    assert summary.full_year_periods == 3 and summary.verified
 
 
 def test_p3_stale_or_short_series_is_not_verified() -> None:
@@ -1160,6 +1342,11 @@ def test_p5_holds_when_limit_documented_and_no_throttling() -> None:
     result = spike.eval_p5(ev)
     assert result.verdict == "HOLDS" and "10 requests/second" in result.detail
     assert "{'200': 2, '404': 1}" in result.lines[0]
+
+
+def test_p5_does_not_claim_user_agent_accepted_when_nothing_answered() -> None:
+    result = spike.eval_p5(spike.SecEvidence(attempted=True, docs_limit=10, sec_statuses=[None]))
+    assert any("accepted: no/unknown" in line for line in result.lines)
 
 
 def test_p5_not_hold_on_403_or_429_and_inconclusive_without_documented_limit() -> None:
@@ -1246,24 +1433,72 @@ def test_p9_holds_partial_not_hold_and_inconclusive() -> None:
     assert spike.eval_p9(spike.SecEvidence()).verdict == "INCONCLUSIVE"
 
 
-def test_p12_judges_holdings_when_given_and_otherwise_stays_inconclusive() -> None:
-    ev = _evidence(AAPL=full_facts(), TSM=foreign_facts(), BABA=foreign_facts(), NVDA=full_facts())
+def test_p12_judges_only_the_holdings_never_the_baseline_companies() -> None:
+    ev = _evidence(
+        AAPL=foreign_facts(), AMZN=foreign_facts(), TSM=foreign_facts(), NVDA=full_facts()
+    )
+    ev.holdings = ["NVDA"]
+    result = spike.eval_p12(ev)
+    assert result.verdict == "NOT_HOLD" and "none of your 1 holding(s)" in result.detail
+    assert not any(line.startswith(("AAPL", "AMZN")) for line in result.lines)
+
+
+def test_p12_holds_when_a_holding_is_ifrs_or_reports_in_another_currency() -> None:
+    ev = _evidence(TSM=foreign_facts(), BABA=foreign_facts(), NVDA=full_facts())
     ev.holdings = ["NVDA", "BABA"]
     holds = spike.eval_p12(ev)
     assert holds.verdict == "HOLDS" and "['BABA']" in holds.detail
     assert any(
-        "BABA: ifrs-full=yes; non-USD units=['TWD', 'TWD/shares']" in line for line in holds.lines
+        "BABA: ifrs-full=yes; non-USD units on whitelist tags=none" in x for x in holds.lines
     )
 
-    ev.holdings = ["NVDA"]
-    ev.reports.pop("BABA")
-    assert spike.eval_p12(ev).verdict == "NOT_HOLD"
+    us_gaap_in_yuan = companyfacts(
+        {("us-gaap", "NetCashProvidedByUsedInOperatingActivities"): history_rows()}, unit="CNY"
+    )
+    ev = _evidence(TSM=foreign_facts(), PDD=us_gaap_in_yuan)
+    ev.holdings = ["PDD"]
+    result = spike.eval_p12(ev)
+    assert result.verdict == "HOLDS" and "['PDD']" in result.detail
+    assert any("whitelist tags=['CNY']" in line for line in result.lines)
 
-    ev.holdings = []
+
+def test_p12_a_us_company_with_stray_foreign_units_is_not_foreign() -> None:
+    doc = full_facts()
+    doc["facts"]["us-gaap"]["DebtInstrumentFaceAmount"] = _tag("EUR", history_rows()[:2])
+    doc["facts"]["us-gaap"]["DerivativeNotionalAmount"] = _tag("JPY", history_rows()[:2])
+    ev = _evidence(TSM=foreign_facts(), NVDA=doc)
+    ev.holdings = ["NVDA"]
+    result = spike.eval_p12(ev)
+    assert result.verdict == "NOT_HOLD"
+    line = next(x for x in result.lines if x.startswith("NVDA"))
+    assert "non-USD units on whitelist tags=none" in line
+    assert "(not used for the verdict)=['EUR', 'JPY']" in line
+
+
+def test_p12_unfetched_holding_is_inconclusive_and_never_not_hold() -> None:
+    ev = _evidence(TSM=foreign_facts(), NVDA=full_facts())
+    ev.holdings = ["NVDA", "SPYX"]  # SPYX: ETF or unknown, no companyfacts fetched
+    result = spike.eval_p12(ev)
+    assert result.verdict == "INCONCLUSIVE"
+    assert "['SPYX']" in result.detail
+    assert any("holdings NOT checked (no companyfacts): ['SPYX']" in x for x in result.lines)
+    only_failed = _evidence(TSM=foreign_facts())
+    only_failed.holdings = ["SPYX"]
+    assert spike.eval_p12(only_failed).verdict == "INCONCLUSIVE"
+
+
+def test_p12_a_positive_finding_stands_even_if_another_holding_was_not_fetched() -> None:
+    ev = _evidence(TSM=foreign_facts(), BABA=foreign_facts())
+    ev.holdings = ["BABA", "SPYX"]
+    result = spike.eval_p12(ev)
+    assert result.verdict == "HOLDS" and "not checked: ['SPYX']" in result.detail
+
+
+def test_p12_without_holdings_is_inconclusive() -> None:
+    ev = _evidence(TSM=foreign_facts(), NVDA=full_facts())
     sample_only = spike.eval_p12(ev)
-    assert (
-        sample_only.verdict == "INCONCLUSIVE"
-        and "TSM proves such filers exist" in sample_only.detail
+    assert sample_only.verdict == "INCONCLUSIVE" and "TSM shows what such a filer looks like" in (
+        sample_only.detail
     )
     assert spike.eval_p12(spike.SecEvidence(attempted=True)).verdict == "INCONCLUSIVE"
 
@@ -1281,7 +1516,7 @@ def test_parse_holdings_filters_caps_and_deduplicates() -> None:
 
 
 def test_lookup_ticker_tries_class_share_spellings() -> None:
-    assert spike.ticker_variants("brk.b") == ["BRK.B", "BRK-B", "BRKB"]
+    assert spike.ticker_variants("brk.b") == ["BRK.B", "BRK-B"]  # no dot-less guess
     assert spike.lookup_ticker({"BRK-B": 7}, "BRK.B") == (7, "BRK-B")
     assert spike.lookup_ticker({"BRK.B": 7}, "BRK.B") == (7, "BRK.B")
     assert spike.lookup_ticker({}, "BRK.B") == (None, None)
@@ -1343,7 +1578,7 @@ def test_urllib_transport_records_headers_and_wire_size(monkeypatch: pytest.Monk
         response.headers["Set-Cookie"] = "SECRET"
         return response
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spike, "_open", fake_urlopen)
     result = spike.urllib_transport("https://example.test/x", {})
     assert result.wire_size == len(packed) and result.body == b'{"ok": 1}'
     assert result.headers == {"etag": '"abc"', "content-encoding": "gzip"}
@@ -1357,7 +1592,7 @@ def test_urllib_transport_surfaces_304_with_validators(monkeypatch: pytest.Monke
             request.full_url, 304, "Not Modified", headers, io.BytesIO(b"")
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spike, "_open", fake_urlopen)
     result = spike.urllib_transport("https://example.test/x", {"If-None-Match": '"abc"'})
     assert result.status == 304 and result.body == b"" and result.headers["etag"] == '"abc"'
 
@@ -1378,7 +1613,7 @@ def test_full_run_judges_every_p_item_from_the_same_responses() -> None:
         "[MEASURED] ADR-0038/P-7",
         "[HOLDS] ADR-0038/P-8",
         "[HOLDS] ADR-0038/P-9",
-        "[INCONCLUSIVE] ADR-0038/P-12 -- TSM proves such filers exist",
+        "[INCONCLUSIVE] ADR-0038/P-12 -- TSM shows what such a filer looks like",
     ):
         assert line in out, line
     assert "SPIKE_US_HOLDINGS is NOT set" in out
@@ -1398,9 +1633,7 @@ def test_run_with_holdings_adds_one_request_each_and_judges_p12() -> None:
     assert len(net.calls) == 22 + 3
     assert "requests used: 25 / 30" in out
     assert "ignored ['bad!!', 'msft', 'tsm']" in out or "ignored ['bad!!', 'tsm', 'msft']" in out
-    assert (
-        "[HOLDS] ADR-0038/P-12 -- non-USD or IFRS filers among checked companies: ['BABA']" in out
-    )
+    assert "ADR-0038/P-12 -- non-USD or IFRS filers among your holdings: ['BABA']" in out
     assert "SPIKE_US_HOLDINGS is set" in out
 
 
@@ -1408,7 +1641,18 @@ def test_run_with_holdings_missing_from_ticker_map_reports_it() -> None:
     net = FakeNet()
     _, out = run_main(net, env={**FULL_ENV, "SPIKE_US_HOLDINGS": "ZZZZ"})
     assert "[MISSING] SEC/holding ZZZZ/companyfacts -- ticker not in ticker map" in out
+    assert "[INCONCLUSIVE] ADR-0038/P-12" in out and "['ZZZZ']" in out
+    assert "[NOT_HOLD] ADR-0038/P-12" not in out
     assert len(net.calls) == 22
+
+
+def test_run_with_holding_whose_companyfacts_is_404_is_inconclusive_for_p12() -> None:
+    net = FakeNet(
+        {"https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810": spike.HttpResult(404, b"")}
+    )
+    _, out = run_main(net, env={**FULL_ENV, "SPIKE_US_HOLDINGS": "NVDA"})
+    assert "[ERROR] SEC/NVDA/companyfacts" in out
+    assert "[INCONCLUSIVE] ADR-0038/P-12 -- no foreign filer among the checked holdings" in out
 
 
 def test_first_answer_without_validators_skips_the_conditional_request() -> None:
@@ -1552,10 +1796,40 @@ def test_source_writes_no_files() -> None:
         if isinstance(node, ast.Call):
             func = node.func
             name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-            assert name != "open", "file open"
+            if name == "open":
+                # The only .open() allowed is the URL opener, never a file.
+                assert isinstance(func, ast.Attribute) and ast.unparse(func.value) == "_OPENER"
             assert name not in FILE_WRITE_NAMES, name
     imported = _imported_roots()
     assert not imported & {"shutil", "tempfile", "logging", "csv", "pickle", "zipfile", "tarfile"}
+
+
+def test_source_has_no_process_socket_or_native_code_access() -> None:
+    imported = _imported_roots()
+    assert not imported & {
+        "subprocess",
+        "socket",
+        "ctypes",
+        "ssl",
+        "ftplib",
+        "smtplib",
+        "telnetlib",
+    }
+    assert not imported & {"multiprocessing", "threading", "asyncio", "webbrowser", "pty"}
+    # http.client is imported for its exception type only, never to open a connection.
+    assert "http" in imported
+    for node in ast.walk(SOURCE_TREE):
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in {"HTTPConnection", "HTTPSConnection", "system", "popen"}
+            assert node.attr not in {"Popen", "run", "check_output", "call", "exec_module"}
+        if isinstance(node, ast.Name):
+            assert node.id not in {"eval", "exec", "compile", "__import__"}
+
+
+def test_source_disables_urllib_redirect_following() -> None:
+    assert "class _NoRedirect(urllib.request.HTTPRedirectHandler)" in SOURCE
+    assert "urllib.request.build_opener(_NoRedirect)" in SOURCE
+    assert "urllib.request.urlopen(" not in SOURCE
 
 
 def test_source_only_reads_its_own_file_and_nothing_else_from_disk() -> None:
