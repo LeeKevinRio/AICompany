@@ -226,7 +226,6 @@ export default function PlaybookPage() {
           today={exitToday}
           isPending={flow.isPending}
           isError={flow.isError}
-          error={flow.error}
           lockRef={flow.lockRef}
           onSubmit={flow.submit}
           onClose={flow.close}

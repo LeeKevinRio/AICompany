@@ -3,17 +3,12 @@
 import { useLayoutEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { failureRevealDelta } from "../lib/exitFailureReveal";
-
-/** The 出清失敗面板's text: a label line and exactly three body sentences (風控 必改項 9). */
-export interface ExitFailureWording {
-  readonly label: string;
-  readonly body: readonly [string, string, string];
-}
+import type { ExitFailureWording } from "../lib/playbookView";
 
 /**
  * 出清失敗面板 (視覺規範 §11, PRD FR-8b): exit-only, so the shared red
  * `ErrorPanel` is neither used nor changed (AC-29). The label and the three
- * sentences are the 風控-signed text, passed in from the backend-mirrored
+ * paragraphs are the 風控-signed text, passed in from the backend-mirrored
  * constants and rendered verbatim — one `<p>` each, in order, never merged, never
  * joined with `<br>`, nothing appended (no backend message, no HTTP status, no
  * exception text), for every failure kind (5xx, 4xx, network, unparsable body).

@@ -452,6 +452,40 @@ export const EXIT_CONFIRM_FALLBACK_CHECKS: readonly string[] = [
 export const EXIT_CONFIRM_CHECKS_UPDATED =
   "核取句已依最新取得的資料更新，有變動的項目已改為未勾選，請重新閱讀後再勾選。";
 
+/** The 出清失敗面板's text: a label line and exactly three body paragraphs (風控 必改項 9). */
+export interface ExitFailureWording {
+  readonly label: string;
+  readonly body: readonly [string, string, string];
+}
+
+/**
+ * NB-6 出清失敗面板, 合併後版本 (N-166 and later), copied verbatim from the
+ * backend constants `EXIT_RESULT_UNCONFIRMED_LABEL`, `…_STATES`, `…_BADGE` and
+ * `…_RETRY` (風控 2026-10-31 已知限制與 NB-6 合併後字面 第 3 項; paragraph 3 as
+ * revised by the CEO #87 回審). One panel for every failed submit — 5xx, other
+ * non-2xx, network failure, unparsable body — with nothing appended: no backend
+ * message, no status code. It asserts neither 「已處理」 nor 「未處理」, and says
+ * nothing that makes re-sending sound harmless. Paragraph 3 is one unit with two
+ * sentences — never split, merged, trimmed or reordered. The pre-merge text
+ * (「…只暫停了 R 系列…而尚未產生賣出指令」) is untrue after N-166 and must not
+ * return. Release-coupled with N-166: this text may only ship in a build that
+ * carries it. The backend constants are the single approved source; a guard test
+ * reads `wording.py` and compares byte for byte.
+ */
+export const EXIT_FAILURE_WORDING: ExitFailureWording = {
+  label: "無法確認全部出清的處理結果",
+  body: [
+    "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理：" +
+      "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。",
+    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
+      "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。",
+    "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，" +
+      "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，" +
+      "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。" +
+      "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。",
+  ],
+};
+
 /** Backend-rendered checks when the block is present, the fallback when not. */
 export function exitConfirmChecks(exitConfirm: PlaybookExitConfirm | null): string[] {
   if (exitConfirm === null || exitConfirm.checks.length === 0) {

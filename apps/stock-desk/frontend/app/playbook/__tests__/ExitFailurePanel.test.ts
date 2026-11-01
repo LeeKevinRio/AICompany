@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ExitFailurePanel, type ExitFailureWording } from "../ExitFailurePanel";
+import type { ExitFailureWording } from "../../lib/playbookView";
+import { ExitFailurePanel } from "../ExitFailurePanel";
 
 const WORDING: ExitFailureWording = {
   label: "SENTINEL-LABEL",

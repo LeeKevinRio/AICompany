@@ -20,7 +20,6 @@ export interface EmergencyExitFlow {
   receipt: ExitReceipt | null;
   isPending: boolean;
   isError: boolean;
-  error: unknown;
   /** Synchronous submit lock; the dialog reads it at effect time (FE-C16). */
   lockRef: RefObject<boolean>;
   /** The one trigger button currently mounted, in whichever placement. */
@@ -136,7 +135,6 @@ export function useEmergencyExitFlow(): EmergencyExitFlow {
     receipt,
     isPending: mutation.isPending,
     isError: mutation.isError,
-    error: mutation.error,
     lockRef,
     triggerRef,
     focusLostRef,

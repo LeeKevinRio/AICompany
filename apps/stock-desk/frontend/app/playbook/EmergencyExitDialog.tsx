@@ -3,7 +3,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type { RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ErrorPanel } from "../components/ErrorPanel";
 import {
   createExitDialogState,
   exitDialogReducer,
@@ -12,8 +11,13 @@ import {
 } from "../lib/exitDialogState";
 import type { ExitTodayView } from "../lib/exitDialogState";
 import { FOCUSABLE_SELECTOR, trapTabTarget } from "../lib/focusTrap";
-import { allExitChecksConfirmed, EXIT_CONFIRM_CHECKS_UPDATED } from "../lib/playbookView";
+import {
+  EXIT_CONFIRM_CHECKS_UPDATED,
+  EXIT_FAILURE_WORDING,
+  allExitChecksConfirmed,
+} from "../lib/playbookView";
 import { nextTaipeiMidnight } from "../lib/taipeiDay";
+import { ExitFailurePanel } from "./ExitFailurePanel";
 
 function subscribeNoop(): () => void {
   return () => {};
@@ -56,7 +60,6 @@ export function EmergencyExitDialog({
   today,
   isPending,
   isError,
-  error,
   lockRef,
   onSubmit,
   onClose,
@@ -65,7 +68,6 @@ export function EmergencyExitDialog({
   today: ExitTodayView;
   isPending: boolean;
   isError: boolean;
-  error: unknown;
   /** The page-level synchronous submit lock (FE-C16: read at effect time, never copied to a variable). */
   lockRef: RefObject<boolean>;
   /** Acquires the lock and fires the request; resolved at page level, not here. */
@@ -304,9 +306,7 @@ export function EmergencyExitDialog({
                     ))}
                   </ul>
                   {showFailure && (
-                    <div className="mt-3">
-                      <ErrorPanel label="全部出清送出失敗" error={error} />
-                    </div>
+                    <ExitFailurePanel wording={EXIT_FAILURE_WORDING} scrollContainerRef={scrollRef} />
                   )}
                   <div className="mt-5 flex justify-end gap-2">
                     {/*

@@ -37,7 +37,6 @@ vi.mock("../useEmergencyExitFlow", () => ({
     receipt: flowState.receipt,
     isPending: false,
     isError: false,
-    error: null,
     lockRef: { current: false },
     triggerRef: { current: null },
     focusLostRef: { current: false },

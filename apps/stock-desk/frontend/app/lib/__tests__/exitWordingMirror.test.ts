@@ -13,7 +13,11 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EXIT_CONFIRM_CHECKS_UPDATED, EXIT_CONFIRM_FALLBACK_CHECKS } from "../playbookView";
+import {
+  EXIT_CONFIRM_CHECKS_UPDATED,
+  EXIT_CONFIRM_FALLBACK_CHECKS,
+  EXIT_FAILURE_WORDING,
+} from "../playbookView";
 import {
   pythonStringConstant,
   pythonTupleConstant,
@@ -110,5 +114,50 @@ describe("degraded checklist (風控 Q8 F-3) mirrors wording.py", () => {
     walk(root);
     expect(offenders).toEqual([]);
     expect(wording.includes(retired)).toBe(false);
+  });
+});
+
+describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version) mirrors wording.py", () => {
+  it("label and the three paragraphs are byte-for-byte the backend constants", () => {
+    expect(EXIT_FAILURE_WORDING.label).toBe(pythonStringConstant(wording, "EXIT_RESULT_UNCONFIRMED_LABEL"));
+    expect([...EXIT_FAILURE_WORDING.body]).toEqual([
+      pythonStringConstant(wording, "EXIT_RESULT_UNCONFIRMED_STATES"),
+      pythonStringConstant(wording, "EXIT_RESULT_UNCONFIRMED_BADGE"),
+      pythonStringConstant(wording, "EXIT_RESULT_UNCONFIRMED_RETRY"),
+    ]);
+  });
+
+  it("is the signed-off text, paragraph 3 being the CEO #87 revision", () => {
+    expect(EXIT_FAILURE_WORDING.label).toBe("無法確認全部出清的處理結果");
+    expect(EXIT_FAILURE_WORDING.body[0]).toBe(
+      "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理：" +
+        "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。",
+    );
+    expect(EXIT_FAILURE_WORDING.body[1]).toBe(
+      "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
+        "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。",
+    );
+    expect(EXIT_FAILURE_WORDING.body[2]).toBe(
+      "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，" +
+        "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，" +
+        "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。" +
+        "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。",
+    );
+  });
+
+  it("keeps paragraph 3 as one paragraph with two sentences, and never says 安全/放心", () => {
+    expect(EXIT_FAILURE_WORDING.body).toHaveLength(3);
+    expect(EXIT_FAILURE_WORDING.body[2].match(/。/g)).toHaveLength(2);
+    for (const text of [EXIT_FAILURE_WORDING.label, ...EXIT_FAILURE_WORDING.body]) {
+      expect(text).not.toMatch(/安全|放心|已執行|已出清|未確認|請關閉|視窗/);
+    }
+  });
+
+  it("does not contain the retired pre-merge text, neither paragraph 1's 「只暫停了」 nor the unqualified paragraph 3", () => {
+    const joined = EXIT_FAILURE_WORDING.body.join("");
+    expect(joined).not.toContain("只暫停了");
+    expect(joined).not.toContain("尚未產生賣出指令");
+    expect(joined).not.toContain("若這次其實已產生賣出指令");
+    expect(joined).not.toContain("不會再重複產生賣出指令；但");
   });
 });
