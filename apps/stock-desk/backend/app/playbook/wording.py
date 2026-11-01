@@ -390,6 +390,29 @@ EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE = (
     "本系統不下單，也無法得知你在券商是否已賣出，請以你的券商回報為準。"
 )
 
+#: N-166 風控 S10 (CEO #87／#89 判準 Z): appended after [S3] in the RESULT and
+#: ALREADY_PENDING branches when a held batch has an unsettled EMERGENCY sell
+#: that no longer covers it -- its 預定執行日 has no daily bar while a later day
+#: does. Those lines are not cancelled, so they are disclosed, with both
+#: branches of what the user may already have done (EX-2, R10).
+EMERGENCY_EXIT_STALE_PENDING_NOTE = (
+    "另有 {stale_batches} 批的先前出清賣出指令至今未能結算：{stale_items}。"
+    "這些指令的預定執行日沒有日線開盤價（可能是該日休市，也可能是資料缺漏），"
+    "而之後的交易日已有日線資料，因此本系統不再以這些指令涵蓋上述批次。"
+    "先前的這些指令並未被取消；若日後補得該日的開盤價，帳冊仍可能依該日開盤價判定，"
+    "但同一批次在帳冊的股數不會重複減少，判定的日期與價格可能與你實際賣出的不同。"
+    "本系統不下單，無法得知你是否已就這幾批在券商賣出："
+    "若你已賣出且成交（不論是否依先前的指令），你在券商已無這幾批的持股，"
+    "本則回應前段所述這幾批的賣出指令不適用於你，請勿就這幾批到券商重複下賣單；"
+    "若尚未賣出（包括該日休市、未下單或未成交），以本則回應前段所述的賣出指令為準。"
+)
+
+#: One ``{stale_items}`` entry of S10, joined by 「、」 in (symbol, batch_no)
+#: order. ``{shares}`` is the batch's ``remaining_shares``, never a sum of lines.
+EMERGENCY_EXIT_STALE_ITEM = (
+    "{symbol}第 {batch_no} 批 {shares} 股（未能結算的指令預定執行日 {stale_dates}）"
+)
+
 #: N-166 風控 S6 (CEO #77): the last sentence of any of the three branches when
 #: this submission moved a running freeze later. Decided from the value read
 #: under the write lock and the one written in the same transaction; nothing
@@ -469,6 +492,23 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
     "沿用先前已設定、較晚的恢復日）。"
 )
 
+#: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
+#: (CEO #87 回審): once 判準 Z can write a second line for a batch, 「不會再重複
+#: 產生」 needs its exception stated, or the sentence implies re-sending is
+#: always without effect. The paragraph's two sentences are one unit -- never
+#: split, merged, trimmed or reordered -- and 「安全」「放心」 may never appear.
+#:
+#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The panel
+#: itself -- its label, paragraphs 1 and 2 and the client mirror with its guard
+#: test -- belongs to the 出清畫面包 (N-164/N-165/N-170, PRD FR-8b／FR-11); this
+#: constant is the approved single source the mirror is checked against.
+EXIT_RESULT_UNCONFIRMED_RETRY = (
+    "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
+    "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"
+    "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。"
+    "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。"
+)
+
 #: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
 #: price; without that price the line stays pending and is named, never guessed.
 SETTLEMENT_NO_OPEN_PRICE = (
@@ -481,6 +521,38 @@ SETTLEMENT_SUMMARY = (
     "實際成交結果以你的券商回報為準。"
 )
 SETTLEMENT_NOTHING_PENDING = "T+1 結算：目前沒有待結算指令。"
+
+#: N-166 風控 N1 (CEO #87): appended to :data:`SETTLEMENT_NO_OPEN_PRICE` for an
+#: unsettled EMERGENCY sell that meets 判準 Z while its batch is closed or has a
+#: later EMERGENCY sell -- the line otherwise reads 「賣出 N 股、待結算」 day
+#: after day. ``{batch_clause}`` takes one of the two values below only.
+SETTLEMENT_EXIT_STALE_NOTE = (
+    "這筆是先前全部出清產生的賣出指令，之後的交易日已有日線資料，本筆仍無法依該日開盤價結算；"
+    "帳冊中這一批{batch_clause}，同一批次在帳冊的股數不會因這些賣出指令重複減少。"
+    "本系統不下單，無法得知你是否已就這批在券商賣出："
+    "若已賣出且成交，你在券商已無這批的持股，請勿再依本筆到券商下賣單；"
+    "若尚未賣出，實際持股以你的券商回報為準。"
+)
+SETTLEMENT_EXIT_STALE_CLOSED = "已無持股"
+SETTLEMENT_EXIT_STALE_LATER = "另有預定執行日 {later_dates} 的出清賣出指令"
+
+#: N-166 風控 N1b (suggested, approved): the same line while its batch is still
+#: held and no later EMERGENCY sell exists -- re-submitting the exit is what
+#: opens the door again (EX-3). 「可」 only (D7).
+SETTLEMENT_EXIT_STALE_REOPEN_NOTE = (
+    "這批在帳冊仍記為持有；可再次提交全部出清，替這批產生新的賣出指令。"
+)
+
+#: N-166 風控 N2: right after :data:`SETTLEMENT_SUMMARY` when an EMERGENCY sell
+#: judged executed found its batch already holding nothing, so the book moved
+#: no shares and no cash for it (``{exit_items}`` per :data:`SETTLEMENT_EXIT_ITEM`).
+SETTLEMENT_EXIT_NOTHING_MOVED_NOTE = (
+    "本次判定成交的出清賣出指令中，有 {count} 筆在判定時該批次在帳冊已無持股，"
+    "帳冊股數與現金都未因這幾筆變動：{exit_items}。"
+    "帳冊中這幾批只依另一筆賣出指令減少一次股數，判定的日期與價格可能與你實際賣出的不同；"
+    "實際成交結果以你的券商回報為準。"
+)
+SETTLEMENT_EXIT_ITEM = "{symbol}第 {batch_no} 批（預定執行日 {execution_date}）"
 
 #: 季末 REBALANCE (CEO 裁決一 / 風控 D-1).
 REBALANCE_RESULT = (
@@ -688,6 +760,19 @@ def freeze_kept_template(template: str) -> str:
     return head + EMERGENCY_EXIT_FREEZE_KEPT_CLAUSE
 
 
+class ExitStale(NamedTuple):
+    """One held batch with earlier EMERGENCY lines that no longer cover it (S10).
+
+    ``shares`` is the batch's ``remaining_shares``; ``dates`` are the 預定執行日
+    of every such line of the batch.
+    """
+
+    symbol: str
+    batch_no: int
+    shares: int
+    dates: tuple[date, ...]
+
+
 class ExitPending(NamedTuple):
     """The earlier, still unsettled EMERGENCY lines one exit response describes.
 
@@ -697,15 +782,32 @@ class ExitPending(NamedTuple):
     and adding their shares would double the figure again (風控 佔位符定義).
 
     ``execution_dates`` / ``past_due_dates`` are the opposite: taken from
-    **every** covering line, so two lines with two 預定執行日 both show, and a
-    past-due one is never hidden behind a later twin (風控 2026-10-31 第二次裁示
-    第 2 項). :func:`date_list` de-duplicates them for the sentence.
+    **every** line that still covers its batch under 判準 Z, so two such lines
+    with two 預定執行日 both show, and a past-due one is never hidden behind a
+    later twin (風控 第二次裁示 第 2 項, narrowed by the CEO #87 回審). A line
+    that no longer covers is never listed here; it is in ``stale`` and S10
+    discloses it, so S3 and S10 never speak about the same line.
+    :func:`date_list` de-duplicates the dates for the sentence.
     """
 
     batches: int
     shares: int
     execution_dates: tuple[date, ...]
     past_due_dates: tuple[date, ...]
+    stale: tuple[ExitStale, ...] = ()
+
+
+def stale_items(stale: Iterable[ExitStale]) -> str:
+    """S10 ``{stale_items}``: one entry per batch, (symbol, batch_no) ascending."""
+    return "、".join(
+        EMERGENCY_EXIT_STALE_ITEM.format(
+            symbol=item.symbol,
+            batch_no=item.batch_no,
+            shares=item.shares,
+            stale_dates=date_list(item.dates),
+        )
+        for item in sorted(stale, key=lambda item: (item.symbol, item.batch_no))
+    )
 
 
 def emergency_exit_message(
@@ -722,9 +824,11 @@ def emergency_exit_message(
 ) -> str:
     """The EMERGENCY_EXIT message, composed in the order 風控 fixed (N-166).
 
-    * RESULT 支 (lines written now): RESULT ＋［S2］＋［S3］＋［S6］
-    * ALREADY_PENDING 支 (none written, some covered): S1 ＋［S3］＋［S6］
-    * EMPTY 支 (nothing held): EMPTY ＋［S6］
+    * RESULT 支 (lines written now): RESULT ＋［S2］＋［S3］＋［S10］＋［S6］
+    * ALREADY_PENDING 支 (none written, some covered): S1 ＋［S3］＋［S10］＋［S6］
+    * EMPTY 支 (nothing held): EMPTY ＋［S6］ -- S10 needs a held batch, so never here.
+
+    (The W-B7／W-B1／W-B1p slots 風控 placed between S10 and S6 belong to N-168.)
 
     ``extended_from`` is the 恢復日 read under the lock when this submission
     moved a running freeze later (S6), else ``None``. ``freeze_kept`` is F-c: a
@@ -761,6 +865,11 @@ def emergency_exit_message(
         message += EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(
             past_due_dates=date_list(pending.past_due_dates)
         )
+    if (new_batches or pending.batches) and pending.stale:
+        message += EMERGENCY_EXIT_STALE_PENDING_NOTE.format(
+            stale_batches=len({(item.symbol, item.batch_no) for item in pending.stale}),
+            stale_items=stale_items(pending.stale),
+        )
     if extended_from is not None:
         message += EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE.format(
             previous_until=extended_from.isoformat(),
@@ -770,15 +879,20 @@ def emergency_exit_message(
     return message
 
 
-def emergency_exit_attribution(*, new_batches: int, pending_batches: int) -> str | None:
+def emergency_exit_attribution(
+    *, new_batches: int, pending_batches: int, stale_batches: int
+) -> str | None:
     """Which 歸屬語 an EMERGENCY_EXIT response carries (風控 N-166 對應).
 
-    RESULT 支 without earlier lines -> :data:`EXIT_ATTRIBUTION`; RESULT 支 with
-    them -> S5; ALREADY_PENDING 支 -> S4; EMPTY 支 -> ``None``, because no line
-    exists for the sentence to be about.
+    RESULT 支 without earlier lines -> :data:`EXIT_ATTRIBUTION`; RESULT 支 that
+    also describes earlier lines -- covering ones (S2) **or** ones S10 discloses
+    -> S5 (CEO #87 回審); ALREADY_PENDING 支 -> S4; EMPTY 支 -> ``None``, because
+    no line exists for the sentence to be about.
     """
     if new_batches:
-        return EXIT_ATTRIBUTION_MIXED if pending_batches else EXIT_ATTRIBUTION
+        if pending_batches or stale_batches:
+            return EXIT_ATTRIBUTION_MIXED
+        return EXIT_ATTRIBUTION
     if pending_batches:
         return EXIT_ATTRIBUTION_PRIOR
     return None
