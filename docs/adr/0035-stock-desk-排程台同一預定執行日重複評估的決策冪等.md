@@ -1,6 +1,7 @@
 # ADR-0035：stock-desk 排程台同一預定執行日重複評估的決策冪等（補充 ADR-0033、ADR-0034，不取代）
 
 - 狀態：accepted（CEO #83、#86、#88，2026-10-31 裁定；落檔前提：新字面經風控逐字定稿後才可合併、N-174(c) 揭露句為 N-172a 的合併門檻、`GET /today` 上線排序見 Decision 12，詳見 Decision 5、Decision 11 與 Consequences）
+- 補充一（tech-architect 2026-11-01，回應 `work/reviews/2026-11-01-N172a實作交件-dev-lead.md`「下一步」2(a)、2(d)）：Decision 6′「原子化」項的 SQL 寫法以補充一 S-1 為準；新增 N172-C12（字面定位）與 N172-T22。全文見 `work/reviews/2026-11-01-ADR0035補充一-tech-architect.md` 第「B. 補充一全文」節；本檔原文不改（比照 ADR-0033、ADR-0037 補充先例，CEO 可推翻改為另立取代 ADR）。
 - 日期：2026-10-31（tech-architect 草案與追加評估日期 2026-10-31）
 - 決策者：tech-architect（草案與技術評估）；CEO #83（採方案 (e)／S-α）、#86（N-174(c) 揭露句列為合併門檻）、#88（G1 併入 N-172a）於 2026-10-31 裁定；#84（授權偵測腳本）、#85（資料修復方式）同日裁定，見 Decision 9。風控（risk-compliance-officer）對新字面的審查**進行中**，尚無逐字定稿，見 Decision 11 與待決。
 - 與 ADR-0033、ADR-0034 的關係：
