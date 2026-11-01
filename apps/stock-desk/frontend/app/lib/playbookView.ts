@@ -13,7 +13,8 @@
  * strings, sorts/splits/formats values the backend already sent, and runs
  * the exit-confirmation checkbox state machine. The one deliberate exception
  * (`EXIT_CONFIRM_FALLBACK_CHECKS`, three backend constants copied verbatim for
- * a degraded response) is documented at its own definition.
+ * a degraded response, plus the one-sentence `EXIT_CONFIRM_CHECKS_UPDATED`
+ * notice) is documented at its own definition.
  */
 
 import type {
@@ -419,20 +420,37 @@ export function allExitChecksConfirmed(state: readonly boolean[]): boolean {
  * dropping the sentence outright, which disclosed the freeze one step too late.
  * Neither an invented number nor a `—` where a date belongs is ever rendered,
  * and the exit stays submittable on all four checks: a missing field may not
- * become a locked door (EX-2 出口零摩擦). The numbers themselves are in the
- * post-submit response this same component renders
- * (`wording.EMERGENCY_EXIT_RESULT`/`EMERGENCY_EXIT_EMPTY` and `mode_reason`,
- * all three pinned backend-side as carrying the day count).
+ * become a locked door (EX-2 出口零摩擦). Check 2 is the 風控 Q8 1b revision: it
+ * promises only the 預計恢復日, and only in the result of an *accepted*
+ * submission (a failed submit has no result; the N-166 S7 branch carries the
+ * date but no day count). Every accepted message carries `{until}`, pinned
+ * backend-side.
+ *
+ * The degraded set is used whenever the page has no usable block — the
+ * response carried none, or `/today` is pending, failed on first load, or
+ * failed on a background refetch. The stale block of a failed refetch is never
+ * used (風控 Q8 1a'), and it is chosen when the dialog opens, not stored
+ * outside it (風控 Q11 F-1).
  */
 export const EXIT_CONFIRM_FALLBACK_CHECKS: readonly string[] = [
   "此操作將對目前持有的全部標的、全部批次送出出清指令；" +
     "不可只出清部分標的或部分批次，亦不可指定單一標的" +
     "（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
   "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，" +
-    "兩者於送出後的執行結果中顯示。",
+    "預計恢復日會在受理後的執行結果中顯示。",
   "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
   "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 ];
+
+/**
+ * 風控 Q11 N1, copied verbatim from `wording.EXIT_CONFIRM_CHECKS_UPDATED`. The
+ * dialog shows it only after it replaced a check sentence *and* cleared at
+ * least one tick the user had made (R-6) — so "有變動的項目已改為未勾選" is
+ * always true. The backend constant is the single approved source; a guard test
+ * reads `wording.py` and compares byte for byte.
+ */
+export const EXIT_CONFIRM_CHECKS_UPDATED =
+  "核取句已依最新取得的資料更新，有變動的項目已改為未勾選，請重新閱讀後再勾選。";
 
 /** Backend-rendered checks when the block is present, the fallback when not. */
 export function exitConfirmChecks(exitConfirm: PlaybookExitConfirm | null): string[] {
