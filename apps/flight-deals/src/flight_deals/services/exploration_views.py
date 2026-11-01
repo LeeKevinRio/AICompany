@@ -42,7 +42,11 @@ from flight_deals.domain.trip_labels import (
     depart_weekdays_label,
     total_price_note,
 )
-from flight_deals.domain.validation import MAX_DAYS_AHEAD, exploration_months
+from flight_deals.domain.validation import (
+    MAX_DAYS_AHEAD,
+    MAX_EXPLORATION_TRIP_DAYS,
+    exploration_months,
+)
 from flight_deals.domain.weekdays import ALL_WEEKDAYS
 from flight_deals.ports import BookingLinkBuilder, Clock
 from flight_deals.services.exploration import ExplorationService
@@ -190,6 +194,9 @@ class ExplorationViewService:
                 "weekday_counts": {
                     f"{y:04d}-{m:02d}": list(month_weekday_counts(y, m, today)) for y, m in months
                 },
+                # Round-trip counts per stay length, only for the months whose returns can
+                # pass the horizon (FD-11 Decision 6); the page prefers them when present.
+                "weekday_counts_by_trip": _weekday_counts_by_trip(months, today),
             },
             "recent": [
                 self._recent_row(r)
@@ -461,9 +468,26 @@ class ExplorationViewService:
 
     def _record(self, exploration_id: str | None) -> ExplorationRecord | None:
         text = (exploration_id or "").strip()
-        if not text.isdecimal() or len(text) > 12:
+        if not (text.isascii() and text.isdecimal()) or len(text) > 12:
             return None
         return self._repo.get_exploration(int(text))
+
+
+def _weekday_counts_by_trip(
+    months: list[tuple[int, int]], today: date
+) -> dict[str, dict[str, list[int]]]:
+    """``{"YYYY-MM": {"1": [...7 counts], ..., "30": [...]}}`` for the months where a
+    30-day stay already changes the counts; other months use the plain counts."""
+    table: dict[str, dict[str, list[int]]] = {}
+    for year, month in months:
+        base = month_weekday_counts(year, month, today)
+        if month_weekday_counts(year, month, today, MAX_EXPLORATION_TRIP_DAYS) == base:
+            continue
+        table[f"{year:04d}-{month:02d}"] = {
+            str(days): list(month_weekday_counts(year, month, today, days))
+            for days in range(1, MAX_EXPLORATION_TRIP_DAYS + 1)
+        }
+    return table
 
 
 def _parse_day(text: str | None) -> date | None:

@@ -363,7 +363,7 @@ class ComparisonViewService:
 
     def _record(self, comparison_id: str | None) -> ComparisonRecord | None:
         text = (comparison_id or "").strip()
-        if not text.isdecimal() or len(text) > 12:
+        if not (text.isascii() and text.isdecimal()) or len(text) > 12:
             return None
         return self._repo.get_comparison(int(text))
 

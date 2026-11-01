@@ -51,6 +51,8 @@ VERSIONED_STATIC = ("app.js", "app.css")
 JsonBody = Annotated[dict[str, Any], Body()]
 AIRPORTS_CACHE_CONTROL = "private, max-age=300"
 NO_STORE = {"Cache-Control": "no-store"}
+# Largest id SQLite can bind (FD-11 Decision 5); path ids outside 1..MAX_ROW_ID are 404.
+MAX_ROW_ID = 2**63 - 1
 Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
@@ -106,6 +108,11 @@ def build_templates() -> Jinja2Templates:
         lstrip_blocks=True,
     )
     return Jinja2Templates(env=env)
+
+
+def _row_id_ok(value: int) -> bool:
+    """Whether a path id can name a row at all (an unbindable one would be a 500)."""
+    return 1 <= value <= MAX_ROW_ID
 
 
 def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> FastAPI:
@@ -198,6 +205,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/comparisons/{comparison_id}", response_class=HTMLResponse)
     def comparison_detail(request: Request, comparison_id: int, reused: str = "") -> Response:
+        if not _row_id_ok(comparison_id):
+            return not_found(request, COMPARISON_NOT_FOUND)
         data = services.comparison_views.comparison_page(comparison_id, reused=reused == "1")
         if data is None:
             return not_found(request, COMPARISON_NOT_FOUND)
@@ -205,6 +214,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/explorations/{exploration_id}", response_class=HTMLResponse)
     def exploration_detail(request: Request, exploration_id: int) -> Response:
+        if not _row_id_ok(exploration_id):
+            return not_found(request, EXPLORATION_NOT_FOUND)
         data = services.exploration_views.exploration_page(exploration_id)
         if data is None:
             return not_found(request, EXPLORATION_NOT_FOUND)
@@ -212,6 +223,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/watches/{watch_id}", response_class=HTMLResponse)
     def watch_detail(request: Request, watch_id: int) -> Response:
+        if not _row_id_ok(watch_id):
+            return not_found(request, "找不到此監看，可能已被刪除。")
         data = services.views.detail_page(watch_id)
         if data is None:
             return not_found(request, "找不到此監看，可能已被刪除。")
@@ -219,6 +232,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/watches/{watch_id}/edit", response_class=HTMLResponse)
     def edit_watch(request: Request, watch_id: int) -> Response:
+        if not _row_id_ok(watch_id):
+            return not_found(request, "找不到此監看，可能已被刪除。")
         values = services.views.form_values(watch_id)
         if values is None:
             return not_found(request, "找不到此監看，可能已被刪除。")
@@ -250,6 +265,10 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/api/watches/{watch_id}/scan-status")
     def api_scan_status(watch_id: int) -> JSONResponse:
+        if not _row_id_ok(watch_id):
+            return JSONResponse(
+                {"ok": False, "errors": {"_": "找不到此監看"}}, status_code=404, headers=NO_STORE
+            )
         # C-30: read-only, whitelisted fields, never cached; polled by the detail page.
         status = services.views.scan_status(watch_id)
         if status is None:
@@ -260,6 +279,12 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/api/explorations/{exploration_id}/status")
     def api_exploration_status(exploration_id: int) -> JSONResponse:
+        if not _row_id_ok(exploration_id):
+            return JSONResponse(
+                {"ok": False, "errors": {"_": EXPLORATION_NOT_FOUND}},
+                status_code=404,
+                headers=NO_STORE,
+            )
         # C-46: read-only, four whitelisted fields, never cached, no header needed.
         status = services.exploration.status(exploration_id)
         if status is None:
@@ -272,6 +297,12 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.get("/api/comparisons/{comparison_id}/status")
     def api_comparison_status(comparison_id: int) -> JSONResponse:
+        if not _row_id_ok(comparison_id):
+            return JSONResponse(
+                {"ok": False, "errors": {"_": COMPARISON_NOT_FOUND}},
+                status_code=404,
+                headers=NO_STORE,
+            )
         # C-64: read-only, four whitelisted fields, never cached, no header needed.
         status = services.comparison.status(comparison_id)
         if status is None:
@@ -329,6 +360,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.put("/api/watches/{watch_id}")
     def api_update_watch(watch_id: int, payload: JsonBody) -> JSONResponse:
+        if not _row_id_ok(watch_id):
+            return errors_response({"_": "找不到此監看"}, status=404)
         result = services.watches.update(watch_id, payload)
         if result.watch_id is None:
             return errors_response(result.errors, status=404)
@@ -338,6 +371,8 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.post("/api/watches/{watch_id}/status")
     def api_set_status(watch_id: int, payload: JsonBody) -> JSONResponse:
+        if not _row_id_ok(watch_id):
+            return errors_response({"_": "找不到此監看"}, status=404)
         enabled = payload.get("enabled")
         if not isinstance(enabled, bool):
             return errors_response({"enabled": "enabled 必須是 true 或 false"})
@@ -350,12 +385,16 @@ def create_web_app(services: Services, *, lifespan: Lifespan | None = None) -> F
 
     @app.delete("/api/watches/{watch_id}")
     def api_delete_watch(watch_id: int) -> JSONResponse:
+        if not _row_id_ok(watch_id):
+            return errors_response({"_": "找不到此監看"}, status=404)
         if not services.watches.delete(watch_id):
             return errors_response({"_": "找不到此監看"}, status=404)
         return JSONResponse({"ok": True})
 
     @app.post("/api/watches/{watch_id}/scan")
     def api_scan_now(watch_id: int) -> JSONResponse:
+        if not _row_id_ok(watch_id):
+            return errors_response({"_": "找不到此監看"}, status=404)
         result = services.watches.request_scan(watch_id)
         if result.watch_id is None:
             return errors_response(result.errors, status=404)

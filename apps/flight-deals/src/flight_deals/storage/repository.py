@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -27,6 +28,12 @@ from flight_deals.storage.db import Database
 # ``app_setting`` keys holding runtime state (offsets, maintenance results); never shown
 # or accepted as user settings.
 STATE_PREFIX = "state."
+
+# Comparison destinations are stored comma separated, so storage owns the code shape
+# (ADR-0002 FD-11 Decision 2): exactly three ASCII capitals per place code.
+_PLACE_CODE = re.compile(r"[A-Z]{3}", re.ASCII)
+_COMPARISON_MIN_DESTINATIONS = 2
+_COMPARISON_MAX_DESTINATIONS = 8
 
 
 # List page (C-34, FD-7 Decision 9): no window function over scan_run; each watch looks
@@ -746,17 +753,21 @@ class Repository:
 
     def queries_used_since(self, since: datetime) -> int:
         """Outbound queries of scans, explorations and comparisons started at or after
-        ``since``."""
+        ``since``.
+
+        Batches that never started count by ``created_at``. The OR form is equivalent to
+        coalescing the two stamps, but lets SQLite use the started indexes.
+        """
         stamp = to_utc_iso(since)
         with self.db.connect() as conn:
             row = conn.execute(
                 "SELECT (SELECT COALESCE(SUM(queries_used), 0) FROM scan_run"
                 "  WHERE started_at >= ?)"
                 " + (SELECT COALESCE(SUM(queries_used), 0) FROM exploration"
-                "  WHERE COALESCE(started_at, created_at) >= ?)"
+                "  WHERE (started_at >= ? OR (started_at IS NULL AND created_at >= ?)))"
                 " + (SELECT COALESCE(SUM(queries_used), 0) FROM comparison"
-                "  WHERE COALESCE(started_at, created_at) >= ?) AS n",
-                (stamp, stamp, stamp),
+                "  WHERE (started_at >= ? OR (started_at IS NULL AND created_at >= ?))) AS n",
+                (stamp, stamp, stamp, stamp, stamp),
             ).fetchone()
         return int(row["n"])
 
@@ -1051,7 +1062,12 @@ class Repository:
     # ---- comparisons (ADR-0002 FD-9 Decisions 1, 3) ------------------------------
 
     def insert_comparison(self, spec: ComparisonSpec, now: datetime) -> int:
-        """The comparison row and one ``pending`` cell per destination, one transaction."""
+        """The comparison row and one ``pending`` cell per destination, one transaction.
+
+        Raises ValueError (writing nothing) unless the origin and every destination are
+        three ASCII capitals and there are 2-8 distinct destinations.
+        """
+        _check_comparison_places(spec.origin, spec.destinations)
         with self.db.connect() as conn:
             cur = conn.execute(
                 "INSERT INTO comparison (condition_key, origin, destinations, trip_type,"
@@ -1768,3 +1784,17 @@ class Repository:
                 " UNION ALL SELECT 'comparison_cell', COUNT(*) FROM comparison_cell"
             ).fetchall()
         return [(str(r["t"]), int(r["n"])) for r in rows]
+
+
+def _check_comparison_places(origin: str, destinations: Sequence[str]) -> None:
+    """Reject place codes that would not survive the comma-separated round trip."""
+    if not isinstance(origin, str) or _PLACE_CODE.fullmatch(origin) is None:
+        raise ValueError(f"invalid comparison origin: {origin!r}")
+    count = len(destinations)
+    if not _COMPARISON_MIN_DESTINATIONS <= count <= _COMPARISON_MAX_DESTINATIONS:
+        raise ValueError(f"comparison needs 2-8 destinations, got {count}")
+    for code in destinations:
+        if not isinstance(code, str) or _PLACE_CODE.fullmatch(code) is None:
+            raise ValueError(f"invalid comparison destination: {code!r}")
+    if len(set(destinations)) != count:
+        raise ValueError("comparison destinations must be distinct")

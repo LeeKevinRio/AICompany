@@ -634,7 +634,7 @@ class PollerTiming:
 def bot_id_of(token: str) -> str:
     """The public numeric bot id before the token's colon ("0" if it has none)."""
     head = token.split(":", 1)[0].strip()
-    return head if head.isdigit() else "0"
+    return head if head.isascii() and head.isdecimal() else "0"
 
 
 def parse_chat_id(raw: str | None) -> tuple[int | None, PollerUnavailable | None]:
@@ -818,7 +818,7 @@ class CommandPoller:
         offset: int | None = None
         if state.get(OFFSET_BOT_KEY) == self._bot_id:
             raw = state.get(OFFSET_KEY, "")
-            offset = int(raw) if raw.isdigit() else None
+            offset = int(raw) if raw.isascii() and raw.isdecimal() else None
         self._offset, self._offset_loaded = offset, True
         return offset
 

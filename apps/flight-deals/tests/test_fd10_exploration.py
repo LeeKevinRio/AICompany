@@ -28,6 +28,7 @@ from flight_deals.domain.messages import (
     WEEKDAYS_REQUIRED,
     exploration_quota_message,
     exploration_sampled_note,
+    exploration_too_many_cells,
 )
 from flight_deals.domain.models import ComparisonSpec, ExplorationSpec
 from flight_deals.domain.validation import (
@@ -121,11 +122,11 @@ def no_quota_check(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("overrides", "errors"),
     [
-        ({**THREE_MONTHS}, {"month_to": EXPLORATION_TOO_MANY_CELLS}),  # AC-M3: 90 cells
+        ({**THREE_MONTHS}, {"month_to": exploration_too_many_cells(90, 31)}),  # AC-M3: 90 cells
         # 32 cells: 2026-10 from today (7 days) + 2026-11 (30), Fridays left out.
         (
             {"month": "2026-10", "month_to": "2026-11", "depart_weekdays": [0, 1, 2, 3, 5, 6]},
-            {"month_to": EXPLORATION_TOO_MANY_CELLS},
+            {"month_to": exploration_too_many_cells(32, 31)},
         ),
         ({"month": "2026-10", "depart_weekdays": []}, {"depart_weekdays": WEEKDAYS_REQUIRED}),
         ({"month_to": "2026-11"}, {"month_to": MONTH_TO_BEFORE}),
@@ -153,7 +154,7 @@ def test_31_cells_allowed_32_rejected(harness: Harness, queue: Queue) -> None:  
     no_friday = [0, 1, 2, 3, 5, 6]  # 6 + 26 = 32
     over = post(harness, month="2026-10", month_to="2026-11", depart_weekdays=no_friday)
     assert over.status_code == 422
-    assert over.json()["errors"] == {"month_to": EXPLORATION_TOO_MANY_CELLS}
+    assert over.json()["errors"] == {"month_to": exploration_too_many_cells(32, 31)}
     # Three months of Fridays and Saturdays: 26 cells, allowed.
     created = start(harness, **THREE_MONTHS, depart_weekdays=FRI_SAT)
     assert harness.repo.get_exploration(created).total == 26

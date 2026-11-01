@@ -714,3 +714,62 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-80 UI e2e**（qa-e2e；無人值守依 e2e-fallback）：(1) 新增監看彈性窗預設 7 天全勾，切固定日期隱藏、切回保留；(2) 全部取消送出：欄位旁錯誤、焦點移至錯誤；(3) AC-D5 訊息；(4) 編輯既有監看預設全勾、只改名稱不換 revision、只選週五後詳情顯示「週五出發」與新 revision；(5) 列表、詳情條件摘要含星期；(6) 探索表單預設起始＝結束、7 天全勾、預估文字與 FD-9 逐字相同；(7) 週五＋週六、三個月：預估即時更新；(8) 三個月全選：按鈕停用、顯示「請縮小月份範圍或減少星期」；(9) 結束月早於起始送出：`month_to` 旁錯誤；(10) 跨月結果頁分月標題、「未查（星期篩選）」文字、免責句一次；(11) 375px 只有 table-wrap 捲動；(12) v1 舊結果網址正常無星期／範圍字樣；(13) 「以所選月份建立彈性窗監看」預填起訖與星期、未寫入；(14) 健康頁比價兩列；(15) 實機 Telegram 比價進行中 `/status`／`/scan`（CEO 或總經理手動）。
 - **C-81 效能**（暖機 1 次後 10 次中位數，原始輸出記 `work/tasks/FD-10.md`）：`expand_pairs` 366 天窗 × 旅程 1–60 天（最壞）與 3–9 天，各測全選、(4,)、(4,5)：全選 ≤ 同次執行 FD-9 對照的 110%，有篩選 ≤ 全選；`first_pair` <1 ms；一輪掃描寫入（steady180、12 組）≤146 ms；31 格跨 3 月 `exploration_page` <100 ms、`explore_page` <100 ms；migration 0008 在 steady180 複本耗時只記錄。
 - **C-82 既有期望值保護（AC-F4）**：只能修改直接斷言以下項目的既有期望值，逐條列任務單附理由：`ExplorationSpec.condition_key()` v1 golden（含 C-62）；schema 最新版本 7→8；探索表單 h1、說明句、月份欄位 label 與 name 結構；`table_counts` 列數；`/status`、`/scan` 直接斷言比價行為的測試；其他本節明列形狀變更。`expand_pairs`、`sample_pairs`、`month_pairs`、C-43、C-61 既有測試不得修改；其餘既有測試（1166 項）不得修改且全綠。
+
+## FD-11 增補：穩定性與技術債收斂、首次定版 v0.1.0（2026-11-01，tech-architect 評估；不另開 ADR；總經理落檔）
+
+範圍：收斂 FD-8～FD-10 各批 qa-reviewer 留下的 low 項目（W1～W9）、啟動腳本實測（W11）、版本與文件（W12～W15）。屬 D-3、D-6 範圍：**不新增 migration**（schema 維持 v8），不新增執行期或開發依賴，不改 import 方向表，不新增功能，面向使用者的新文案只有 W7 一句（送風控）。
+
+**修訂既有條文**：FD-9 Decision 3「排 `compare:<id>` job → 202」改為「排 job 與排程失敗的補償都在 lock 內」，`ExplorationService.create` 同樣修改；FD-10 Decision 3 的 `month_weekday_counts(year, month, today)` 改為 `month_weekday_counts(year, month, today, trip_days=None)`，Decision 8「JS 只加總」維持；FD-10 Consequences「預估格數可能高估」由本節結案；C-73「32 回 422（`month_to`）」的訊息改用 `exploration_too_many_cells(needed, limit)`；FD-8 Decision 5「詳情頁 >300 ms 另開後續」結案（實測 72 ms）；FD-8 Decision 4 的 `ix_obs_watch_pair` 冗餘評估仍為開放項，本批不處理。
+
+### Context
+- `queries_used_since` 對 exploration 和 comparison 用 `COALESCE(started_at, created_at) >= ?`，運算式無法走 `idx_*_started`，0004／0007 的 started 索引從未被用到。
+- 0007 的 `destinations` CHECK 只驗長度；`("A,B","CCC")` 能同時通過父表長度與 cell `length=3`，讀回拆成 3 個代碼與 `total=2` 不一致；目前只靠 `validate_comparison` 寫入。
+- `str.isdecimal()`／`isdigit()` 接受非 ASCII 數字；`isdigit()` 接受 `"²"` 但 `int("²")` 會拋 ValueError。
+- `create` 在 lock 外 `schedule()`：排程失敗到補償完成之間，queued 列可被其他請求看成 active（同 key joined、不同 key busy，都指向注定失敗的列）。
+- FastAPI `int` 路徑參數無上限；超過 `2**63-1` 綁定 sqlite3 拋 `OverflowError` 回 500。
+- `month_weekday_counts` 不扣「回程超過可查上限」的日子，最後一兩個月預估多估可能誤停用送出；估算框在 `explore-form` 內，FD-10 快照已排除 form 區。
+- `test_scheduler_jobs_and_next_run_time` 用真實時鐘：`run_date=clock()` 的 date job 立刻觸發並被移除；`_remove_watch_jobs`／`sync_all` 是「先 get 再 `job.remove()`」，web thread 與 scheduler thread 間有 TOCTOU 窗口可能拋 `JobLookupError`。
+- 版號只在 `pyproject.toml` 與 `flight_deals.__version__`，無對外顯示。
+
+### 方案比較
+| 項目 | 採用 | 否決與理由 |
+|---|---|---|
+| W1 started 索引 | 條件改寫成可走索引的 OR（兩式等價），不動 schema | 0009 `DROP INDEX`：要對使用者 DB 備份遷移，換來極小寫入成本；運算式索引仍要 migration |
+| W2 CHECK 強化 | storage 寫入前檢查代碼形狀（序列化格式由 storage 擁有） | 重建 comparison 表：FK-off、資料搬移、C-61 語意都要動；domain `__post_init__`：影響讀舊列與既有測試建構 |
+| W4 幽靈 active | schedule 與補償移進 lock | 維持並接受：會讓 joined／busy 指向失敗列；補償後重試：多一套狀態機 |
+| W5 路徑上限 | web 單一 helper，超界回既有 404 | `Path(ge, le)`：回 422 JSON、HTML 頁變 JSON、0 與負數從 404 變 422；repository 攔 OverflowError：把邊界錯誤推進 storage |
+| W6 預估 | 伺服端只對尾端月份提供依 trip_days 的計數，JS 加總 | 接受多估：PRD 要求等於伺服端；JS 自算 horizon：規則兩份（FD-10 已否決）；預覽 API：成本高 |
+| W8 偶發測試 | 測試用未來時鐘；production 移除 job 改冪等 | `start(paused=True)`：為測試在 production 開縫；改斷言 trigger 定義：失去 `next_run_time()` 語意覆蓋 |
+| 版本顯示 | 不顯示，只加一致性測試 | 健康頁頁尾顯示版本：新文案、新功能，PRD 範圍外 |
+
+### Decision
+1. **W1**：`queries_used_since` 的 exploration、comparison 子查詢條件改為 `(started_at >= ? OR (started_at IS NULL AND created_at >= ?))`；scan_run 子查詢不變；仍單一 SQL；回傳值不變；不新增 migration，最新 schema 版本維持 8。
+2. **W2**：`Repository.insert_comparison` 開連線前檢查 origin 與每個 destination fullmatch `[A-Z]{3}`（ASCII）、destination 2～8 且不重複，不符 `raise ValueError`、不寫任何列；不重建表，0007 不動。
+3. **W3**：外部或已存文字轉整數、或當數字身分判斷時一律 `isascii() and isdecimal()`：`comparison_views._record`、`exploration_views._record`、`commands._load_offset`、`commands.bot_id_of`、`cli.py` 精靈選號。`validation._INTEGER` 不在此限（維持接受全形數字的既有行為）。
+4. **W4**：`ComparisonService.create` 與 `ExplorationService.create` 的 `hooks.schedule(id)` 及失敗補償 `finish_*`（failed、`error_summary=*_SCHEDULER_OFF`）都在 `batch_create_lock` 內；補償拋例外時記 log、仍回 `scheduler_off`。
+5. **W5**：`web/server.py` 唯一常數 `MAX_ROW_ID = 2**63 - 1` 與 helper `_row_id_ok`；所有 `{*_id}` 路由先檢查，超出 `1..MAX_ROW_ID` 回該路由既有 404（HTML 原找不到頁、JSON 原 body、status API 帶 no-store），不新增文案；路徑型別維持 `int`。
+6. **W6**：`domain/dates.month_weekday_counts(year, month, today, trip_days=None)`：None 時逐字不變；有值時再排除 `day + trip_days > today + MAX_DAYS_AHEAD`。`explore_page` 的 `quota` 新增 `weekday_counts_by_trip`，只含「`trip_days=30` 結果與 None 不同」的月份，每月份 1～30 各一列；樣板 `#explore-estimate` 加 `data-weekday-counts-by-trip`；JS 在「來回且 `trip_days` 為 1～30 整數且月份在表中」時用該列，否則用 `data-weekday-counts`，只加總。
+7. **W7**：新增 `messages.exploration_too_many_cells(needed, limit)`（草案「所選範圍需要查詢 {needed} 次，超過單次上限 {limit} 次；請縮小月份範圍或減少星期」，以風控定稿為準）；超量時回 `{"month_to": exploration_too_many_cells(len(pairs), self._max_cells)}`；`EXPLORATION_TOO_MANY_CELLS` 保留供前端停用提示。
+8. **W8**：目標測試改用比真實時間晚 1 天的 FakeClock；`scheduler/jobs.py` 新增唯一 `_remove_job_if_present(job_id)`（`remove_job` 加 `except JobLookupError`）取代「先 get 再 remove」；修測試前先記錄原始 traceback。
+9. **W9**：逐一修 warning 根因；pytest 設定加 `filterwarnings = ["error"]`，不得有 `ignore`。
+10. **W11**：dev-up.bat 三條路徑實測（外部占用答 N／答 Y、`--no-pause` 加 `< NUL`、`--open`）；`--no-pause` 遇外部程序占用必須取消且不殺，不符時只允許加「`NO_PAUSE` 時直接取消」分支。
+11. **版本**：0.1.0 為首個版本；版本來源只有 `pyproject.toml` 與 `flight_deals.__version__`，以測試保證兩者、installed metadata、CHANGELOG 首個已發布標題一致；不在 app 內顯示版本；annotated tag `v0.1.0` 在 review 通過後指向最終 commit，不 push，等 CEO 同意。
+12. **本批不做**：FD-8 180 天列表線性（184.8 ms 已過門檻）；`ix_obs_watch_pair` 冗餘；FD-9 `_run` 迴圈重複；`month_pairs` 包裝保留；「最多 3 個月」只由 domain 守。
+
+### Consequences
+- 好處：started 索引有用且不必遷移；comparison 序列化由寫入端保證；超大 id、Unicode 數字、排程失敗、job 移除競態不再成 500 或殘留；探索預估與伺服端相等；warning 升級為錯誤。
+- 代價：`queries_used_since` 綁定參數 3 → 5、等價靠測試；destinations 只在 storage 守，繞過 Repository 直接寫 SQL 不受保護（接受）；lock 多持有一次 `add_job`；補償失敗時 queued 列擋住後續建立直到下次啟動；`explore.html` 多一個 data attribute（最多約 420 個整數）；`filterwarnings=["error"]` 會讓第三方新 DeprecationWarning 直接擋下測試。
+- 被約束的事：新增依路徑 id 的路由卻不經 `_row_id_ok`；改 `range_pairs` horizon 卻不同步 `month_weekday_counts`；在 lock 外排批次 job；加入任何 `filterwarnings` ignore；在 app 內顯示版本；以 migration 移除任何索引——都要回到本節重評。
+
+### 新增約束
+- **C-83 W1 額度查詢與無 migration**：`migrations/` 仍只有 0001～0008，最新 schema 仍為 8；`queries_used_since` 仍 1 次 SQL、不含 `COALESCE(started_at`；等價測試涵蓋四種邊界（started NULL 且 created ≥ since、started NULL 且 created < since、started ≥ since 且 created < since、started < since 且 created ≥ since 不計入），測試內保留修改前 SQL 原文對照、固定種子隨機資料結果相同；`EXPLAIN QUERY PLAN` 兩個子查詢含 `MULTI-INDEX OR` 與 `idx_exploration_started`、`idx_comparison_started`，不含 `SCAN exploration`／`SCAN comparison`；做不到回報 tech-architect，不得放寬或加 migration；原始 plan 記任務單。
+- **C-84 W5 路徑 id 上限**：`MAX_ROW_ID` 在 `src/` 只定義一次、值 `2**63 - 1`；測試走訪 `app.routes` 所有含 `_id}` 的路由，以 `2**63`、`10**30`、`-(2**63)-1`、`2**63-1`、`0` 呼叫（寫入路由帶 header）一律 404、非 500、各表筆數不變；HTML 回既有找不到文案、status API 帶 no-store；不帶 header 的寫入路由仍 403；`"abc"` 仍 422；C-30、C-46、C-64 既有測試不修改。
+- **C-85 W3 ASCII 數字**：AST 測試：`src/` 每個 `.isdecimal()`／`.isdigit()` 呼叫都在同一 `and` 運算式中、前面已對同一名稱呼叫 `.isascii()`；`_record`（比價、探索）收到 `"１２３"`、`"١٢٣"` 視為無效（空白表單加既有提示），`"123"` 不變；`_load_offset` 遇 `"²"` 回 None 不拋；精靈輸入 `"²"` 要求重輸不拋；`validation._INTEGER` diff 為空。
+- **C-86 W2 寫入前檢查**：直接呼叫 `insert_comparison` 時 destination `"A,B"`、`"TOKY"`、`"nrt"`、`"ＮＲＴ"`、重複、1 個或 9 個，或 origin 不合形狀，皆 ValueError 且兩表 0 筆；API 以 `AAAABBB`、`2026-99-99` 建立回 422 筆數不變；`0007_comparison.sql` diff 為空；C-61 既有測試不修改；檢查不用 `assert`（AST）。
+- **C-87 W4 schedule 在 lock 內**：兩服務皆有注入失敗測試：hook 執行時 `create_lock.locked()` 為 True；hook 內另一 thread（不同 key）`join(0.2)` 後仍在等；hook 拋出後 `active_*()` 為 None、該列 failed、`error_summary` 為對應 `*_SCHEDULER_OFF`、`queries_used_since` 不變、fake source 0 次；第二 thread 結果 `created`；補償拋例外時回 `scheduler_off`、caplog 有紀錄、無未處理例外；C-45、C-63 既有測試不修改且全綠。
+- **C-88 W6 預估相等**：`month_weekday_counts` 在 trip_days None 時輸出與既有測試逐字相同；Python 端模擬 JS 加總（by-trip 優先、否則 base）在「所有月份選項 × trip_days 1～30 × 星期 {全選、(4,)、(4,5)、(0,6)、固定種子隨機 20 組} × today ∈ {2026-10-25、2026-11-30、2026-12-31、2027-01-31、2028-02-29}」與單程、跨 2～3 月範圍下總和都等於 `len(range_pairs)`；`weekday_counts_by_trip` 只含「30 天結果與 None 不同」的月份且最多 2 個；`test_fd10_snapshots.py` diff 為空且全綠；`app.js` 不含 `getDay`／`getUTCDay`／`innerHTML`；`explore_page` <100 ms；e2e：選最後可選月份、來回 30 天全選，預估數字等於送出後伺服端格數。
+- **C-89 W7 文案**：32 格回 422，`errors["month_to"]` 含「32」與「31」且以 `EXPLORATION_TOO_MANY_CELLS` 結尾；31 格允許；`limit` 來自 `max_cells`；範例輸出納入 `all_static_texts()` 通過 BANNED_PHRASES；`data-over-limit-text` 與 C-80 (8) 不變；風控 APPROVE 記任務單後才可 done。
+- **C-90 W8／W9 測試確定性與 warning**（**總經理裁決 2026-11-01**：唯一殘留 warning 為 starlette 1.10 的 `StarletteDeprecationWarning`（要求改裝 `httpx2`），屬第三方且根因修法需新增依賴；本批不引進新套件、不加 ignore，`filterwarnings = ["error"]` 延後到遷移 `httpx2` 的批次，本批驗收改為「全套連跑 3 次全綠且除該第三方 warning 外 0 warnings」）：`JobLookupError` 原始 traceback 記任務單；目標測試不以 `datetime.now(UTC)` 當排程現在時間（須加未來偏移）；單獨連跑 50 次 0 失敗且無 `JobLookupError`；`_remove_job_if_present` 在 `scheduler/` 只定義一次、`scheduler/jobs.py` 不再出現 `.remove()`；monkeypatch `remove_job` 拋 `JobLookupError` 時 `on_watch_deleted`、`on_watch_changed`、`sync_all` 不拋；`pyproject.toml` 的 `filterwarnings == ["error"]`；全套連跑 3 次全綠、摘要 `0 warnings`（原始輸出記任務單）；`scheduler/` 仍只 import services 與 apscheduler。
+- **C-91 W11 啟動腳本**：三條路徑原始輸出記任務單：外部程序占用 8795 答 N（exit 1、PID 仍在）、答 Y（停掉後正常啟動、首頁 200）、`--no-pause` 加 `< NUL`（取消、PID 仍在）；另記 `--open` 與不帶時是否開瀏覽器；只有 `--no-pause` 不符時才允許改 `dev-up.bat` 且只能加取消分支，否則 diff 為空。
+- **C-92 版本與定版**：一致性測試斷言 `importlib.metadata.version("flight-deals")`、`flight_deals.__version__`、`pyproject.toml` 版本、CHANGELOG 首個非 `[Unreleased]` 標題版號都等於 `0.1.0`；`src/` 不新增對外顯示版本的樣板或文案；tag 為 annotated、指向 review 通過後的最終 commit；`git ls-remote --tags origin` 不含 `v0.1.0`。
+- **C-93 既有期望值保護與模組邊界**：只能修改直接斷言以下項目的既有期望值並逐條列任務單：探索超量 422 訊息字串、`queries_used_since` SQL 原文（若有 grep 斷言）、`test_scheduler_jobs_and_next_run_time` 的時鐘建構；`tests/test_snapshot_read.py` diff 為 0（W10）；其餘 1357 項不得修改且全綠；ALLOWED 不變；`services/` 不新增對 `sources`／`scheduler`／`web` 的 import；`retention.py`、`price_snapshot.py` diff 為空；不新增依賴（`pyproject.toml` dependencies 與 dependency-groups 不變，`uv.lock` 原則上 diff 為空）。

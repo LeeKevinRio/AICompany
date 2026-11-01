@@ -192,7 +192,9 @@ def test_defers_while_an_exploration_runs(h: Harness) -> None:  # AC-R8
 
 
 def test_scheduler_jobs_and_next_run_time(tmp_path: Path) -> None:  # C-54
-    clock = FakeClock(datetime.now(UTC).replace(microsecond=0))
+    # FD-11 W8: one day ahead of real time, so the date jobs queued "now" by the fake clock
+    # are not yet due for APScheduler's real-time loop and cannot fire (and vanish) mid-test.
+    clock = FakeClock(datetime.now(UTC).replace(microsecond=0) + timedelta(days=1))
     built = assemble(
         Config(db_path=tmp_path / "s.db"),
         sources=[ScriptedSource(clock)],

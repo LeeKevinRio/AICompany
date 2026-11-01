@@ -171,18 +171,23 @@ class ComparisonService:
                     message=comparison_quota_message(quota.hourly_left, needed, quota.reserve),
                 )
             comparison_id = self._repo.insert_comparison(spec, now)
-        try:
-            self.hooks.schedule(comparison_id)
-        except Exception:
-            log.exception("comparison %s could not be scheduled", comparison_id)
-            self._repo.finish_comparison(
-                comparison_id,
-                status="failed",
-                finished_at=self._clock(),
-                skip_reason="interrupted",
-                error_summary=COMPARISON_SCHEDULER_OFF,
-            )
-            return ComparisonCreateResult("scheduler_off", message=COMPARISON_SCHEDULER_OFF)
+            # Scheduling and its compensation stay inside the lock (FD-11 Decision 4): no
+            # other request may see a queued row that is doomed to fail as active.
+            try:
+                self.hooks.schedule(comparison_id)
+            except Exception:
+                log.exception("comparison %s could not be scheduled", comparison_id)
+                try:
+                    self._repo.finish_comparison(
+                        comparison_id,
+                        status="failed",
+                        finished_at=self._clock(),
+                        skip_reason="interrupted",
+                        error_summary=COMPARISON_SCHEDULER_OFF,
+                    )
+                except Exception:
+                    log.exception("comparison %s could not be marked failed", comparison_id)
+                return ComparisonCreateResult("scheduler_off", message=COMPARISON_SCHEDULER_OFF)
         return ComparisonCreateResult("created", comparison_id)
 
     def status(self, comparison_id: int) -> dict[str, object] | None:

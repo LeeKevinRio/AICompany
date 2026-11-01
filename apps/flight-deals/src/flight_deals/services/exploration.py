@@ -25,11 +25,11 @@ from flight_deals.domain.messages import (
     EXPLORATION_NO_DATES,
     EXPLORATION_RESTARTED,
     EXPLORATION_SCHEDULER_OFF,
-    EXPLORATION_TOO_MANY_CELLS,
     WEEKDAYS_NO_MATCH_MONTHS,
     comparison_busy_message,
     exploration_quota_message,
     exploration_skipped_note,
+    exploration_too_many_cells,
 )
 from flight_deals.domain.models import DatePair, search_for
 from flight_deals.domain.timeutil import taipei_date
@@ -197,7 +197,10 @@ class ExplorationService:
                 return CreateResult("invalid", errors={"month": EXPLORATION_NO_DATES})
             return CreateResult("invalid", errors={"depart_weekdays": WEEKDAYS_NO_MATCH_MONTHS})
         if len(pairs) > self._max_cells:
-            return CreateResult("invalid", errors={"month_to": EXPLORATION_TOO_MANY_CELLS})
+            return CreateResult(
+                "invalid",
+                errors={"month_to": exploration_too_many_cells(len(pairs), self._max_cells)},
+            )
         key = spec.condition_key()
         with self._create_lock:
             reused = self._repo.reusable_exploration(key, now - self._reuse)
@@ -231,18 +234,23 @@ class ExplorationService:
                     ),
                 )
             exploration_id = self._repo.insert_exploration(spec, pairs, now)
-        try:
-            self.hooks.schedule(exploration_id)
-        except Exception:
-            log.exception("exploration %s could not be scheduled", exploration_id)
-            self._repo.finish_exploration(
-                exploration_id,
-                status="failed",
-                finished_at=self._clock(),
-                skip_reason="interrupted",
-                error_summary=EXPLORATION_SCHEDULER_OFF,
-            )
-            return CreateResult("scheduler_off", message=EXPLORATION_SCHEDULER_OFF)
+            # Scheduling and its compensation stay inside the lock (FD-11 Decision 4): no
+            # other request may see a queued row that is doomed to fail as active.
+            try:
+                self.hooks.schedule(exploration_id)
+            except Exception:
+                log.exception("exploration %s could not be scheduled", exploration_id)
+                try:
+                    self._repo.finish_exploration(
+                        exploration_id,
+                        status="failed",
+                        finished_at=self._clock(),
+                        skip_reason="interrupted",
+                        error_summary=EXPLORATION_SCHEDULER_OFF,
+                    )
+                except Exception:
+                    log.exception("exploration %s could not be marked failed", exploration_id)
+                return CreateResult("scheduler_off", message=EXPLORATION_SCHEDULER_OFF)
         return CreateResult("created", exploration_id)
 
     def status(self, exploration_id: int) -> dict[str, object] | None:

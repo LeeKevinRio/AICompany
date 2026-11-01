@@ -500,7 +500,7 @@ def _choose_chat(io: WizardIO, chats: list[Any]) -> Any | None:
         answer = _ask(io, f"選擇編號 1 到 {len(chats)}，直接按 Enter 選 1：")
         if not answer:
             return chats[0]
-        if answer.isdigit() and 1 <= int(answer) <= len(chats):
+        if answer.isascii() and answer.isdecimal() and 1 <= int(answer) <= len(chats):
             return chats[int(answer) - 1]
         io.err("編號不正確，請重新輸入。")
     io.err("沒有選到聊天，結束。")

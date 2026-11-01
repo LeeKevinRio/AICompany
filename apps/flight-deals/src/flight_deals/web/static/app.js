@@ -687,9 +687,29 @@
     let to = endEl ? keys.indexOf(endEl.value) : from;
     if (to < from) to = from;
     const checked = checkedWeekdays(form);
+    // Per-trip-length rows (round trip with a valid stay length only).
+    let byTrip = null;
+    try {
+      byTrip = JSON.parse(box.getAttribute("data-weekday-counts-by-trip") || "");
+    } catch (err) {
+      byTrip = null;
+    }
+    const tripEl = form.querySelector('[name="trip_days"]');
+    const tripText = tripEl ? String(tripEl.value).trim() : "";
+    const tripDays = /^\d+$/.test(tripText) ? parseInt(tripText, 10) : 0;
+    const useTrip =
+      radioValue(form, "trip_type") === "round_trip" &&
+      tripDays >= 1 &&
+      tripDays <= 30 &&
+      byTrip !== null &&
+      typeof byTrip === "object";
     let total = 0;
     for (let i = from; i <= to; i += 1) {
-      const row = counts[keys[i]];
+      let row = counts[keys[i]];
+      if (useTrip && byTrip[keys[i]]) {
+        const tripRow = byTrip[keys[i]][String(tripDays)];
+        if (Array.isArray(tripRow) && tripRow.length === 7) row = tripRow;
+      }
       if (!Array.isArray(row)) return estimateSingleMonth(box, startValue);
       checked.forEach(function (day) {
         total += parseInt(row[day], 10) || 0;
@@ -759,6 +779,7 @@
       if (submitBtn) submitBtn.disabled = over;
     };
     form.addEventListener("change", syncAll);
+    form.addEventListener("input", syncAll);
     syncAll();
     form.addEventListener("submit", async function (event) {
       event.preventDefault();

@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MAX_INSTANCES
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -202,9 +203,15 @@ class ScanScheduler:
         if include_manual:
             prefixes += [MANUAL_PREFIX, CMDSCAN_PREFIX]
         for prefix in prefixes:
-            job = self._scheduler.get_job(f"{prefix}{watch_id}")
-            if job is not None:
-                job.remove()
+            self._remove_job_if_present(f"{prefix}{watch_id}")
+
+    def _remove_job_if_present(self, job_id: str) -> None:
+        """Remove a job that may already be gone: a date job can fire and be dropped by
+        the scheduler thread at any moment, so "get, then remove" is not safe."""
+        try:
+            self._scheduler.remove_job(job_id)
+        except JobLookupError:
+            log.debug("job %s already gone", job_id)
 
     def _schedule(self, watch: Watch, now: datetime, startup_slot: int | None) -> None:
         interval = timedelta(minutes=self._settings().scan_interval_minutes)
@@ -240,7 +247,7 @@ class ScanScheduler:
         now = self._clock()
         for job in self._scheduler.get_jobs():
             if job.id.startswith(WATCH_PREFIX) or (startup and job.id.startswith(STARTUP_PREFIX)):
-                job.remove()
+                self._remove_job_if_present(job.id)
         slot = 0
         for watch in self._services.scan.schedulable_watches():
             interval = timedelta(minutes=self._settings().scan_interval_minutes)

@@ -1,50 +1,109 @@
 # flight-deals 機票低價監看器
 
-個人用的機票低價監看服務：在本機網頁後台設定監看條件，系統依排程查價、保存價格歷史，
-價格符合條件時用 Telegram 推播。規格見 `work/flight-deals-PRD.md`，技術決策見
-`docs/adr/0002-flight-deals-技術棧與資料源.md`。
+個人用的機票低價監看服務（單人使用、跑在自己的電腦上）：在本機網頁後台設定監看條件，系統依排程查價、保存價格歷史，
+價格符合條件時用 Telegram 推播，也能在手機上用 Telegram 指令查詢。規格見 `work/flight-deals-PRD.md`，
+技術決策見 `docs/adr/0002-flight-deals-技術棧與資料源.md`，版本變更見 [`CHANGELOG.md`](CHANGELOG.md)。
 
-> 價格為查到當下的參考值，實際以航空公司或訂票網站為準。
+> 價格為查到當下的參考值，實際以航空公司或訂票網站為準。使用前請先讀下方「使用限制（必讀）」。
 
-## 啟動
+## 功能
 
-需要 [uv](https://docs.astral.sh/uv/)（開發時用 0.12.1）與 Python 3.11 以上。
+### 監看
 
-```bash
-cd apps/flight-deals
-uv sync
-uv run flight-deals            # http://127.0.0.1:8795
-uv run flight-deals --port 8800 --debug
-```
+- 固定日期或彈性窗（一段日期範圍內的日期組合），單程或來回。
+- 出發星期篩選：彈性窗監看可勾選去程出發的星期幾（見下方「出發星期與探索月份範圍」）。
+- 條件：人數（成人、兒童）、艙等、航空公司偏好（可選，最多 5 家）、去程出發時段（可選）；
+  出發地與目的地可用中文、英文或代碼片段搜尋，下拉選取。
+- 價格一律以整組乘客的總價計，畫面與通知都標示人數與艙等。
+- 預算門檻、較上次下跌達一定比例、此監看紀錄新低時推播 Telegram；同一個價格不會重複通知。
+- 列表顯示各監看的目前最低價，以及較前一輪掃描的漲跌；詳情頁有價格歷史與趨勢、最便宜的日期組合，
+  並附查票連結與人工查價連結。
+- 手動「立即查價」，完成後頁面自動更新。
+- 資料保留 180 天（可調，見「資料與備份」）。
 
-從 repo 根目錄也可以用 `uv run --project apps/flight-deals flight-deals`
-（`.claude/launch.json` 的 `flight-deals` 設定就是這個指令）。
+### 探索
 
-加上 `--replace`（`uv run flight-deals --replace`）時，若同一個資料庫已有先前的實例在執行，會先結束它再啟動（最多等 15 秒）；不加時維持原本行為：拒絕啟動並結束。登入自動啟動與 `dev-up.bat` 都帶這個旗標。
+- 「探索」頁：對 1 到 3 個連續月份，每個出發日各查一次，以價格日曆與最低價前 5 個日期呈現。
+- 可勾選出發星期；日曆上每格有查票連結，並可預填新增監看表單（不會自動送出）。
 
-### Windows：一鍵啟動
+### 多目的地比價
+
+- 固定一組日期，對 2 到 8 個目的地各查一次，依總價由低到高列出；每列可預填新增監看表單。
+
+### Telegram
+
+- 每日摘要：每天固定時間推一則。
+- 新低與價格推播。
+- 雙向指令：`/help`、`/list`、`/watch`、`/scan`、`/digest`、`/status`、`/pause`、`/resume`
+  （細節見「Telegram 指令」）。
+
+### 健康頁與資料維護
+
+- 「設定與健康」頁：資料源與斷路器狀態、各項設定、Telegram 測試發送、自動啟動狀態、
+  資料庫大小與各表筆數、上次清除與壓縮結果。
+- 每日自動清除過期資料、清除前備份、定期 `VACUUM`。
+
+### 安全
+
+- 只綁 `127.0.0.1`，只接受 Host 為 `127.0.0.1` 或 `localhost` 的請求。
+- 寫入類請求必須帶自訂 header（`X-Flight-Deals-Client`），否則回 403。
+- 回應帶 CSP（`default-src 'self'` 等）與其他安全標頭。
+- token 只從環境變數或 `.env` 讀取，log 與網頁不顯示原文。
+
+## 啟動與停止
+
+需要 [uv](https://docs.astral.sh/uv/)（開發時用 0.12.1）與 Python 3.11 以上。服務預設監聽
+`http://127.0.0.1:8795`。
+
+服務是單一 process：網頁、排程（APScheduler，單一 worker thread）與 SQLite 都在裡面。
+不要用多 worker 或 `--reload` 啟動，否則會出現兩份排程。
+
+### Windows：一鍵啟動（`dev-up.bat`）
 
 雙擊 `apps\flight-deals\dev-up.bat`（或在任何目錄執行它）。它會依序：
 
 1. 檢查 git、uv 是否已安裝；`.env` 不存在時提示 Telegram 通知會維持關閉（仍會繼續）。
 2. 確認沒有未提交的已追蹤檔案變更；若不在 `product/flight-deals` 分支會詢問是否切換；然後 `git pull --ff-only`；
    遠端還沒有這條分支或離線時印 `[SKIP]`，沿用本機程式碼。
-3. 已有舊的 flight-deals 程序（或占用 8795 的是 flight-deals）時，直接列出 PID 並自動結束再啟動，不會詢問（避免兩份排程重複掃描）；只有非 flight-deals 的程式占用 8795 才會詢問是否結束。腳本支援 `--no-pause`（結尾不等按鍵，供排程或自動化用）、`--skip-pull`（略過未提交檢查與 `git pull`）與 `--open`（啟動後開瀏覽器）。
-4. `uv sync --locked` 安裝依賴，在獨立視窗 `flight-deals` 啟動 `uv run flight-deals`。
-5. 最多等 60 秒到首頁回應，印出 `[OK]` 或 `[FAIL]`，成功後預設不開瀏覽器（已開的頁面重新整理即可，要自動開請加 `--open`）；逾時一樣不開，視窗停住讓你看錯誤。
+3. 已有舊的 flight-deals 程序（或占用 8795 的是 flight-deals）時，直接列出 PID 並自動結束再啟動，不會詢問
+   （避免兩份排程重複掃描）；只有非 flight-deals 的程式占用 8795 才會詢問是否結束。
+4. `uv sync --locked` 安裝依賴，在獨立視窗 `flight-deals` 以 `uv run flight-deals --port 8795 --replace` 啟動。
+5. 最多等 60 秒到首頁回應，印出 `[OK]` 或 `[FAIL]`；成功後預設不開瀏覽器（已開的頁面重新整理即可）；
+   逾時不開瀏覽器，視窗停住讓你看錯誤。
 
-腳本固定用 8795，並以 `--port 8795` 啟動；要改 port 請自行用 `uv run flight-deals --port <port>` 啟動。
+旗標：
 
-停止方式：關閉標題為 `flight-deals` 的視窗。啟動失敗時該視窗不會自動關閉，可直接看錯誤訊息。
+| 旗標 | 作用 |
+| --- | --- |
+| `--open` | 啟動成功後開瀏覽器（預設不開） |
+| `--no-pause` | 結尾不等按鍵（供排程或自動化用） |
+| `--skip-pull` | 略過未提交檢查與 `git pull`，用本機程式碼 |
 
-服務是單一 process：網頁、排程（APScheduler，單一 worker thread）與 SQLite 都在裡面。
-不要用多 worker 或 `--reload` 啟動，否則會出現兩份排程。
+腳本固定用 8795；要改 port 請自行用下方手動指令。
+
+### 手動啟動
+
+```bash
+cd apps/flight-deals
+uv sync
+uv run flight-deals                       # http://127.0.0.1:8795
+uv run flight-deals --port 8795 --replace
+uv run flight-deals --debug               # 詳細 log
+```
+
+從 repo 根目錄也可以用 `uv run --project apps/flight-deals flight-deals`
+（`.claude/launch.json` 的 `flight-deals` 設定就是這個指令）。
+
+- `--port <n>`：指定 port（預設 8795，也可用環境變數 `FLIGHT_DEALS_PORT`）。
+- `--replace`：若同一個資料庫已有先前的實例在執行，先結束它再啟動（最多等 15 秒）；
+  不加時維持原本行為：拒絕啟動並以結束碼 2 結束。
+- `--background`：沒有主控台，log 只寫 `data\flight-deals.log`（登入自動啟動使用）。
 
 ### 登入自動啟動（Windows）
 
 讓服務在你登入 Windows 時自動在背景啟動（沒有視窗、不需要系統管理員權限）。做法是在目前使用者的
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 寫入一個名為 `flight-deals` 的值，
-指令是 `.venv\Scripts\pythonw.exe -m flight_deals.cli --background`，不含任何祕密
+指令是 `.venv\Scripts\pythonw.exe -m flight_deals.cli --background --replace`，不含任何祕密
 （token、chat id 仍只來自 `.env`）。
 
 - **安裝**：先跑過一次 `dev-up.bat`（它會建立 `.venv`），再雙擊 `apps\flight-deals\install-autostart.bat`。
@@ -57,12 +116,35 @@ uv run flight-deals --port 8800 --debug
   它會偵測舊的 flight-deals 程序並自動結束後重新啟動。
 - **紀錄檔**：背景實例不輸出到畫面，只寫 `data\flight-deals.log`（與資料庫同目錄，輪替保留，已被 `.gitignore`，
   token 會被遮蔽）。啟動失敗或被擋下時原因也在這裡。
-- **與其他啟動方式共存**：同一個資料庫只允許一份排程。自動啟動的實例已在跑時，再用 `dev-up.bat` 或手動啟動，
-  後啟動者會拒絕並說明原因（背景模式則寫進 log 後以結束碼 2 結束）。
+- **與其他啟動方式共存**：同一個資料庫只允許一份排程。後啟動的實例若沒有帶 `--replace` 會拒絕並說明原因
+  （背景模式則寫進 log 後以結束碼 2 結束）；帶 `--replace`（`dev-up.bat` 與登入自動啟動都有帶）則會取代舊實例。
 - **限制**：機器沒開或睡眠時仍不會掃描（見下方「已知限制」）；在工作管理員「啟動」分頁被停用的狀態偵測不到；
   若刪掉 `.venv`，登入時會無聲失敗，需重跑 `dev-up.bat` 與 `install-autostart.bat`。
 
-### Telegram 設定精靈
+### 停止
+
+- 用 `dev-up.bat` 或手動啟動：關閉標題為 `flight-deals` 的視窗（手動啟動則在該終端機按 Ctrl+C）。
+  啟動失敗時視窗不會自動關閉，可直接看錯誤訊息。
+- 背景實例：見上方「停止背景實例」。
+
+## Telegram 設定
+
+Telegram 是選用功能：沒設定 bot token 與 chat id 時，服務照常查價，只是不推播（通知紀錄會記成「未送出（未設定）」）。
+bot 由你自己建立，服務不提供共用 bot。
+
+### 建立 Telegram bot
+
+1. 在 Telegram 搜尋 **@BotFather**，傳送 `/newbot`，依指示取名，取得 bot token。
+2. 先在 Telegram 對你的新 bot 傳一則任意訊息。
+3. 取得 chat id：執行 `uv run flight-deals telegram-setup`（見下方），
+   或自行用瀏覽器開啟 `https://api.telegram.org/bot<你的 token>/getUpdates`，
+   在回應 JSON 的 `message.chat.id` 找到。
+4. 把 token 與 chat id 寫進 `.env` 或環境變數（變數名稱見「環境變數」），重新啟動服務。
+5. 到「設定與健康」頁按「發送測試訊息」確認。
+
+token 只從環境變數讀取；網頁、log、資料庫都不會出現 token 原文。
+
+### 設定精靈：`telegram-setup`
 
 不想手動翻 `getUpdates` 時，可用精靈找出 chat id：
 
@@ -87,10 +169,41 @@ uv run flight-deals telegram-setup
 **與 Telegram 指令功能互斥**：服務的指令輪詢運作中時，Telegram 不允許第二個程式同時讀取同一個 bot，
 精靈會印出「指令輪詢運作中，請先在設定頁關閉指令功能或停止服務再執行」並以結束碼 `1` 結束。
 請先到「設定與健康」頁關閉「Telegram 指令功能」（或停止服務），跑完精靈後再開回來。
-（舊版說明「服務執行中也能使用精靈」已不適用。）
 
 結束碼：`0` 成功（含選擇不發測試訊息）；`1` 失敗（沒有 token、逾時沒收到訊息、token 無效、
 指令輪詢運作中或 bot 設有 webhook、測試訊息送失敗、使用者取消）；`2` 設定檔有誤。
+
+### 環境變數
+
+可以寫在 `apps/flight-deals/.env`（已被 `.gitignore`），格式參考 `.env.example`。
+真正的環境變數優先於 `.env`。**不要把真實的 token 或 chat id 寫進任何會被 commit 的檔案。**
+
+| 變數 | 用途 | 預設 |
+| --- | --- | --- |
+| `FLIGHT_DEALS_TELEGRAM_BOT_TOKEN` | Telegram bot token（祕密） | 未設定則不推播 |
+| `FLIGHT_DEALS_TELEGRAM_CHAT_ID` | 接收通知的 chat id | 未設定則不推播 |
+| `FLIGHT_DEALS_DB_PATH` | SQLite 檔案路徑（相對路徑以 `apps/flight-deals/` 為基準） | `apps/flight-deals/data/flight-deals.db` |
+| `FLIGHT_DEALS_SOURCES` | 資料源，逗號分隔 | `google_flights` |
+| `FLIGHT_DEALS_PORT` | 監聽 port | `8795` |
+
+`fixture` 資料源只給測試用，正式啟動時若 `FLIGHT_DEALS_SOURCES` 含 `fixture` 會直接拒絕啟動。
+
+掃描週期、每監看每輪查詢上限、下跌比例門檻、價格過期標示時間、全域每小時查詢上限、
+資料保留天數、Telegram 指令功能與每週壓縮開關，都可以在網頁「設定與健康」頁調整。
+
+## Telegram 使用
+
+### 每日摘要
+
+服務會在每天固定時間用 Telegram 推一則摘要：每個啟用中監看的目前最低價與日期、較前一日的漲跌、
+資料源狀態、上次掃描時間、24 小時內查價失敗的掃描次數，結尾附價格免責說明。
+
+- 預設每天 08:00（台北時間）推播，到「設定與健康」頁可改時間或關閉；時間格式為 `HH:MM`（24 小時制）。
+- **補推規則**：當天的摘要只會推一次。準點時機器沒開或在睡眠，之後當天內啟動或喚醒時會補推一次；
+  隔天不會補前一天的。改摘要時間後，若今天已過新時間且還沒推過，會立刻補推。
+- **未設定 Telegram 時不推**：「通知紀錄」會記成「未送出（未設定）」，日後設定好也不補發當天的。
+- 推送失敗時只在當天內重試，超過次數即停止；通知紀錄頁可看到類型為「每日摘要」的全文與狀態。
+- 摘要最多列 20 個監看，其餘寫「另有 N 個監看未列出」。
 
 ### Telegram 指令
 
@@ -116,6 +229,8 @@ Telegram 設定好（token 與 chat id 皆有）且「設定與健康」頁的�
 - 每則指令與回覆都記在「通知紀錄」，類型為「指令」；回覆送不出去只記為失敗，不重送，指令效果（例如 `/pause`）不回滾。
 - bot token 被撤銷（401）時輪詢會停止，健康頁顯示「已停止」；更新 token 後重新啟動服務。
 
+## 探索與比價
+
 ### 出發星期與探索月份範圍
 
 - 彈性窗監看與探索可勾選「出發星期」（預設七天全勾＝不篩選）；只篩去程出發日，回程不篩，
@@ -124,7 +239,9 @@ Telegram 設定好（token 與 chat id 皆有）且「設定與健康」頁的�
 - 條件摘要（列表、詳情、`/watch`、每日摘要）在非全選時顯示例如「週五、週六出發」。
 - 探索可選起始月份到結束月份，連續最多 3 個月，篩選後總格數最多 31（超過時請縮小月份範圍或減少星期）；
   日曆依月份分段，未勾選星期的日子顯示「未查（星期篩選）」。舊的單月探索紀錄照常可讀，但不會被新條件重用。
-- 比價進行中時，`/status` 多一行「比價：進行中（已查 d／共 t），排程掃描順延」，`/scan` 回覆也會註明。
+- 探索對每個出發日各查一次，背景執行並顯示進度；額度不足時拒絕開始並顯示剩餘額度；
+  同條件 24 小時內直接顯示上次結果，不重查；結果保留 7 天後自動清除；探索結果不寫入任何監看的價格紀錄，也不推播。
+- 探索進行中，排程掃描與立即查價會順延。
 
 ### 多目的地比價
 
@@ -137,9 +254,16 @@ Telegram 設定好（token 與 chat id 皆有）且「設定與健康」頁的�
 - 24 小時內同條件（目的地順序不拘）直接顯示上次結果，不重查；結果保留 7 天後自動清除。
 - 比價結果不寫入任何監看的價格紀錄，也不推播；每列可「建立監看」預填新增監看表單（不會自動送出）。
 - 服務重啟時進行中的比價標為「已中斷」，已查的結果保留，不會自動補查。
+- 比價進行中時，`/status` 多一行「比價：進行中（已查 d／共 t），排程掃描順延」，`/scan` 回覆也會註明。
 
-## 資料保留與備份
+## 資料與備份
 
+資料庫是單一 SQLite 檔案，預設 `apps/flight-deals/data/flight-deals.db`（`data\` 已被 `.gitignore`）。
+
+- **自動升級**：啟動時自動套用 migration。對已有資料的資料庫，套用前先備份成同目錄的
+  `flight-deals.pre-vN.db`（N 為即將套用的 migration 版本）；全新資料庫不產生備份。這類備份不會被自動刪除。
+- **鎖檔**：同一資料庫只允許一份排程，靠同目錄的 `<db>.lock`（例如 `flight-deals.db.lock`）鎖檔，
+  OS 會在程序結束時釋放。
 - **保留期**：價格觀測與掃描紀錄預設 180 天、通知紀錄（含指令）預設 365 天，都可在「設定與健康」頁調整（30 到 3650 天）；
   探索與比價結果維持 7 天。調降保留期不會立刻刪除，下次清除時才生效。
 - **每日清除**：每天在每日摘要時間後 30 分鐘（預設 08:30，台北時間）清除超過保留期的資料；
@@ -148,8 +272,8 @@ Telegram 設定好（token 與 chat id 皆有）且「設定與健康」頁的�
   的最低價與漲跌、「此監看紀錄新低」判斷所需要的觀測；尚未出發的價格通知會保留到保留期之後，避免同一個價格重複通知。
   詳情頁的價格歷史只涵蓋保留期內的資料。
 - **清除前備份**：當天第一次真的要刪資料前，先把資料庫備份成同目錄的
-  `flight-deals.retention-YYYYMMDD.db`（`data\`，已被 `.gitignore` 的 `*.db` 涵蓋）；備份失敗就不刪除，
-  健康頁會顯示原因，下次再試。只保留最近 7 份清除備份，migration 前的 `flight-deals.pre-vN.db` 不會被刪。
+  `flight-deals.retention-YYYYMMDD.db`；備份失敗就不刪除，健康頁會顯示原因，下次再試。
+  只保留最近 7 份清除備份。
 - **壓縮**：清除完成後若距上次壓縮滿 7 天，會執行一次 `VACUUM` 縮小檔案（可在設定頁關閉）；
   磁碟可用空間少於資料庫兩倍時略過並記錄原因。壓縮期間網頁寫入可能短暫等待。
 - 健康頁「資料維護」區塊顯示資料庫大小、各表筆數（每 5 分鐘更新）、上次清除與備份、上次壓縮的前後大小。
@@ -158,54 +282,14 @@ Telegram 設定好（token 與 chat id 皆有）且「設定與健康」頁的�
 
 1. 停止服務（關閉 `dev-up.bat` 視窗，或結束背景的 flight-deals 程序）。
 2. 把 `data\flight-deals.db` 改名留存，並刪除同目錄的 `flight-deals.db-wal`、`flight-deals.db-shm`（若有）。
-3. 把要還原的 `flight-deals.retention-YYYYMMDD.db` 複製一份，改名為 `flight-deals.db`。
+3. 把要還原的 `flight-deals.retention-YYYYMMDD.db`（或 `flight-deals.pre-vN.db`）複製一份，改名為 `flight-deals.db`。
 4. 重新啟動服務。
-
-### 每日摘要
-
-服務會在每天固定時間用 Telegram 推一則摘要：每個啟用中監看的目前最低價與日期、較前一日的漲跌、
-資料源狀態、上次掃描時間、24 小時內查價失敗的掃描次數，結尾附價格免責說明。
-
-- 預設每天 08:00（台北時間）推播，到「設定與健康」頁可改時間或關閉；時間格式為 `HH:MM`（24 小時制）。
-- **補推規則**：當天的摘要只會推一次。準點時機器沒開或在睡眠，之後當天內啟動或喚醒時會補推一次；
-  隔天不會補前一天的。改摘要時間後，若今天已過新時間且還沒推過，會立刻補推。
-- **未設定 Telegram 時不推**：「通知紀錄」會記成「未送出（未設定）」，日後設定好也不補發當天的。
-- 推送失敗時只在當天內重試，超過次數即停止；通知紀錄頁可看到類型為「每日摘要」的全文與狀態。
-- 摘要最多列 20 個監看，其餘寫「另有 N 個監看未列出」。
-
-## 環境變數
-
-可以寫在 `apps/flight-deals/.env`（已被 `.gitignore`），格式參考 `.env.example`。
-真正的環境變數優先於 `.env`。
-
-| 變數 | 用途 | 預設 |
-| --- | --- | --- |
-| `FLIGHT_DEALS_TELEGRAM_BOT_TOKEN` | Telegram bot token（祕密） | 未設定則不推播 |
-| `FLIGHT_DEALS_TELEGRAM_CHAT_ID` | 接收通知的 chat id | 未設定則不推播 |
-| `FLIGHT_DEALS_DB_PATH` | SQLite 檔案路徑 | `apps/flight-deals/data/flight-deals.db` |
-| `FLIGHT_DEALS_SOURCES` | 資料源，逗號分隔 | `google_flights` |
-| `FLIGHT_DEALS_PORT` | 監聽 port | `8795` |
-
-`fixture` 資料源只給測試用，正式啟動時若 `FLIGHT_DEALS_SOURCES` 含 `fixture` 會直接拒絕啟動。
-
-掃描週期、每監看每輪查詢上限、下跌比例門檻、價格過期標示時間、全域每小時查詢上限、
-資料保留天數、Telegram 指令功能與每週壓縮開關，都可以在網頁「設定與健康」頁調整。
-
-## 建立 Telegram bot
-
-1. 在 Telegram 搜尋 **@BotFather**，傳送 `/newbot`，依指示取名，取得 bot token。
-2. 先在 Telegram 對你的新 bot 傳一則任意訊息。
-3. 取得 chat id：執行 `uv run flight-deals telegram-setup`（見上方「Telegram 設定精靈」），
-   或自行用瀏覽器開啟 `https://api.telegram.org/bot<你的 token>/getUpdates`，
-   在回應 JSON 的 `message.chat.id` 找到。
-4. 把 token 與 chat id 寫進 `.env` 或環境變數，重新啟動服務。
-5. 到「設定與健康」頁按「發送測試訊息」確認。
-
-token 只從環境變數讀取；網頁、log、資料庫都不會出現 token 原文。
 
 ## 開發
 
 ```bash
+cd apps/flight-deals
+uv sync
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
@@ -213,23 +297,40 @@ uv run pytest -q                                   # 全程離線，對外連線
 uv run pytest -q -m live tests/test_live_smoke.py  # 手動執行：真的打一次 Google Flights
 ```
 
+測試套件目前保留 1 個第三方（starlette）棄用警告，待遷移 `httpx2` 時一併處理。
+
+架構邊界（原始碼在 `src/flight_deals/`，規則見 ADR-0002「模組邊界與 import 方向」，並以 pytest 掃描 import 檢查）：
+
+- 方向只能往下：`web` 或 `scheduler` → `services` → `ports` 或 `storage` → `domain`；禁止反向與循環 import。
+- `domain/` 只能用標準函式庫。
+- `web/` 不直接 import `storage`、`sources`、`notify`。
+- `fast_flights` 只能在 `sources/google_flights.py` 使用。
+- `app.py` 是唯一組裝具體 adapter 的地方。
+
+架構決策記錄在 `docs/adr/`（本專案為 `0002-flight-deals-技術棧與資料源.md`，各批次以「FDn 增補」小節追加）。
+
 ## 使用限制（必讀）
 
 本工具透過非官方、反向工程的 fast-flights 套件讀取 Google Flights 搜尋結果，Google 並未提供或授權此存取方式，使用行為可能牴觸 Google 服務條款。本工具僅限擁有者個人於本機、低頻使用；不得公開部署、提供他人使用、商業化，或散布、轉售所取得的價格資料。遇到封鎖或驗證要求時不得以更換 IP、第三方代抓、自動解驗證等方式規避。價格為查到當下的參考值，可能與實際售價不同，實際以航空公司或訂票網站為準；本工具不提供任何購買建議。以上說明非法律意見。
 
 ## 已知限制
 
-- **機器沒開就不會掃描。** 排程跑在服務 process 內，筆電睡眠或關機期間不會查價（登入自動啟動也一樣）；
-  重新啟動後只補跑已逾期的監看（逐一錯開），補不回當時的價格。
-- **fast-flights 是非官方介面，隨時可能壞。** 它反向工程 Google Flights，Google 改版、
+- **資料源是非官方介面，隨時可能失效。** fast-flights 反向工程 Google Flights，Google 改版、
   回傳空白頁或封鎖時，查價結果會標成「被擋或格式改變」，連續失敗會觸發斷路器、
   在健康頁顯示「異常」並推一則 Telegram 告警。此時可用詳情頁的「人工查價連結」自行查詢。
+- **價格為參考值。** 以查到當下 Google Flights 回傳的整組乘客總價為準，實際以航空公司或訂票網站為準。
+- **來回＋商務艙（或頭等）＋多人時，Google 不在回應中內嵌結果。** 這類查詢會標成「未內嵌結果」，
+  不計入斷路器；用查票連結在瀏覽器開啟才看得到價格。表單對這個組合有提示。
+- **探索與比價受每小時額度約束。** 全域每小時查詢上限可在設定頁調整，並保留 12 次給排程；
+  額度不足時探索與比價會拒絕開始（比價）或標示未查詢／已中斷。
+- **機器沒開就不會掃描。** 排程跑在服務 process 內，筆電睡眠或關機期間不會查價（登入自動啟動也一樣）；
+  重新啟動後只補跑已逾期的監看（逐一錯開），補不回當時的價格。
 - **只綁 127.0.0.1。** 服務沒有登入機制，只接受來自本機、Host 為 `127.0.0.1` 或
   `localhost` 的請求；從其他機器或手機無法連線，這是刻意的設計。要對外開放必須另開需求加上認證。
 - 只查取樣到的日期：彈性窗日期組合超過每輪上限時會等距取樣並每輪輪換，
   「最便宜時段」只代表已取樣的日期。
+- 出發時段只套用在去程；人數為成人加兒童合計最多 9 位，不支援嬰兒。
 - 不做匯率換算；資料源回傳幣別與監看不一致時照樣記錄，但不參與通知判斷。
-- 只支援經濟艙、1 位成人、來回或單程。
 - 日期最遠只能設到今天起 365 天，彈性窗長度最多 366 天。
 - **通知漏送不會自動補。** Telegram 長時間故障時，同一筆價格重試 3 次仍失敗就不會再通知；
   未設定 Telegram 期間產生的通知會記成「未送出（未設定）」，日後設定好也不會補發。

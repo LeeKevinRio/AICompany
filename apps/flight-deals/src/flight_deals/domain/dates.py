@@ -211,18 +211,23 @@ def month_pairs(spec: ExplorationSpec, today: date) -> list[DatePair]:
 
 
 def month_weekday_counts(
-    year: int, month: int, today: date
+    year: int, month: int, today: date, trip_days: int | None = None
 ) -> tuple[int, int, int, int, int, int, int]:
     """Queryable departure days of one month per weekday (index 0 = Monday).
 
-    Counts days from ``today`` up to the query horizon; the return-date horizon check
-    of ``range_pairs`` is left out, so the estimate may only over-count.
+    Counts days from ``today`` up to the query horizon. Without ``trip_days`` the
+    return-date horizon check of ``range_pairs`` is left out (one-way, or an upper
+    bound); with it, days whose return falls past the horizon are excluded as well, so
+    the counts match ``range_pairs`` for that stay length (FD-11 Decision 6).
     """
     horizon = today + timedelta(days=MAX_DAYS_AHEAD)
     counts = [0] * 7
     for day in month_days(year, month):
-        if today <= day <= horizon:
-            counts[day.weekday()] += 1
+        if not today <= day <= horizon:
+            continue
+        if trip_days is not None and day + timedelta(days=trip_days) > horizon:
+            continue
+        counts[day.weekday()] += 1
     return (counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6])
 
 

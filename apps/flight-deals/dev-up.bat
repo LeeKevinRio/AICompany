@@ -8,6 +8,9 @@ REM The app is ONE process (web + APScheduler + SQLite). Never add --reload or e
 REM The app reads apps\flight-deals\.env by itself, so this script does not load any environment variables.
 
 REM Flags: --no-pause (never wait for a key; for scripted runs) and --skip-pull (skip dirty check and git pull), --open (open the browser after start; default is not to).
+REM Resolve paths before parse_args: SHIFT also shifts %0, which would break %~dp0 afterwards.
+for %%I in ("%~dp0.") do set "APP_DIR=%%~fI"
+for %%I in ("%~dp0..\..") do set "REPO_ROOT=%%~fI"
 set "NO_PAUSE="
 set "SKIP_PULL="
 set "OPEN_BROWSER="
@@ -22,8 +25,6 @@ goto parse_args
 
 set "TARGET_BRANCH=product/flight-deals"
 set "PORT=8795"
-for %%I in ("%~dp0.") do set "APP_DIR=%%~fI"
-for %%I in ("%~dp0..\..") do set "REPO_ROOT=%%~fI"
 
 REM ---- 1. prerequisites ----
 set "MISSING="

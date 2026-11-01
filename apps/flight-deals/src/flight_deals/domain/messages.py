@@ -385,6 +385,12 @@ def exploration_quota_message(
     return f"{text}，本次需要 {needed} 次，不足以探索{scope}，請稍後再試"
 
 
+def exploration_too_many_cells(needed: int, limit: int) -> str:
+    """Over-limit explanation for a range needing more cells than one exploration allows
+    (FD-11 Decision 7); ends with EXPLORATION_TOO_MANY_CELLS."""
+    return f"所選範圍需要查詢 {needed} 次，超過單次上限 {limit} 次；{EXPLORATION_TOO_MANY_CELLS}"
+
+
 def exploration_skipped_note(reason: str, count: int) -> str:
     return f"{reason}，{count} 天未查"
 
@@ -446,6 +452,8 @@ def exploration_static_texts() -> list[str]:
         WEEKDAYS_NO_MATCH_WINDOW,
         WEEKDAYS_NO_MATCH_MONTHS,
         EXPLORATION_TOO_MANY_CELLS,
+        exploration_too_many_cells(32, 31),
+        exploration_too_many_cells(93, 31),
         MONTH_TO_BEFORE,
         MONTH_SPAN_TOO_LONG,
         EXPLORATION_STALE_FALLBACK,
