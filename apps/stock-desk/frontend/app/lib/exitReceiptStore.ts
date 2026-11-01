@@ -46,15 +46,60 @@ export interface ExitReceiptStore extends ExitReceiptSink {
   scrollHandled: (seq: number) => void;
 }
 
-export function createExitReceiptStore(): ExitReceiptStore {
+export interface ExitReceiptStoreOptions {
+  /**
+   * Where an exception thrown by a *subscriber* goes (FE-C4(b)). Default: rethrow
+   * out of band with `void Promise.reject(e)`, the way TanStack treats its own
+   * observer callbacks. Injected so a test can observe it.
+   */
+  onSubscriberError?: (error: unknown) => void;
+  /**
+   * The state transition. Defaults to {@link exitReceiptReducer}; a test injects a
+   * throwing one to prove that a failure *before* the snapshot is committed
+   * escapes `accept()` untouched (FE-T13 c2).
+   */
+  reducer?: typeof exitReceiptReducer;
+}
+
+function rethrowOutOfBand(error: unknown): void {
+  void Promise.reject(error);
+}
+
+export function createExitReceiptStore(options: ExitReceiptStoreOptions = {}): ExitReceiptStore {
+  const reduce = options.reducer ?? exitReceiptReducer;
+  const onSubscriberError = options.onSubscriberError ?? rethrowOutOfBand;
   let state: ExitReceiptStoreState = INITIAL_EXIT_RECEIPT_STATE;
   const listeners = new Set<() => void>();
 
+  /**
+   * The one write path (FE-C4(b)(c)), in this fixed order:
+   *
+   * 1. the reducer computes the new state;
+   * 2. the snapshot is committed;
+   * 3. each subscriber is notified, each in its own try/catch.
+   *
+   * Nothing that can throw may be added before step 2 other than the reducer
+   * itself -- no validation, logging or formatting. A throw in 1 or 2 escapes
+   * untouched: the mutation then ends in `error` and the NB-6 panel shows, so a
+   * success status always means the receipt is in (INV-1). A throw in 3 is
+   * handed to `onSubscriberError` and never escapes: by then the receipt is
+   * committed, and 「accept() returned」 means 「the snapshot is committed」.
+   */
   function dispatch(action: Parameters<typeof exitReceiptReducer>[1]): void {
-    const next = exitReceiptReducer(state, action);
+    const next = reduce(state, action);
     if (next === state) return;
     state = next;
-    for (const listener of [...listeners]) listener();
+    for (const listener of [...listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        try {
+          onSubscriberError(error);
+        } catch (handlerError) {
+          rethrowOutOfBand(handlerError);
+        }
+      }
+    }
   }
 
   return {

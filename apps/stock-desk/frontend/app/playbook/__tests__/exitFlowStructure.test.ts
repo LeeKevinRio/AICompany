@@ -81,10 +81,13 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
     );
     // The factory depends on the narrow sink only.
     expect(factory).toMatch(/emergencyExitMutationOptions\(queryClient: QueryClient, receipts: ExitReceiptSink\)/);
-    // First statement of onSuccess, synchronous, fenced, rethrown out of band.
-    expect(factory).toMatch(
-      /onSuccess: \(response: PlaybookEmergencyExitResponse\): void => \{\s*(?:\/\/[^\n]*\n\s*)*try \{\s*receipts\.accept\(response\);\s*\} catch \(error\) \{\s*void Promise\.reject\(error\);\s*\}\s*\},/,
+    // FE-C4(a) (补充一): the body of onSuccess is one statement -- the sink call --
+    // and nothing catches what it throws.
+    const onSuccessBody = factory.slice(factory.indexOf("onSuccess:"), factory.indexOf("onSettled:"));
+    expect(onSuccessBody).toMatch(
+      /onSuccess: \(response: PlaybookEmergencyExitResponse\): void => \{\s*receipts\.accept\(response\);\s*\},\s*$/,
     );
+    expect(onSuccessBody).not.toMatch(/\btry\b|\bcatch\b|\.catch\(|Promise\.reject/);
     expect(factory).not.toMatch(/async |await |\.then\(/);
     // ... and touches no UI state.
     const onSuccess = factory.slice(factory.indexOf("onSuccess:"), factory.indexOf("onSettled:"));
@@ -103,8 +106,8 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
   it("the store is created in a component, never at module level, on globalThis or on window (FE-C1, VETO-5)", () => {
     const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
     const context = read(join(APP_ROOT, "lib/exitReceiptContext.tsx"));
-    expect(store).toMatch(/export function createExitReceiptStore\(\): ExitReceiptStore \{/);
-    expect(store).toContain("exitReceiptReducer(state, action)");
+    expect(store).toMatch(/export function createExitReceiptStore\(options: ExitReceiptStoreOptions = \{\}\): ExitReceiptStore \{/);
+    expect(store).toContain("options.reducer ?? exitReceiptReducer");
     // No top-level mutable state in the store module: every `let` is indented
     // (inside the factory), and there is no top-level instance anywhere.
     expect(store).not.toMatch(/^(let|var) /m);
@@ -123,6 +126,38 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
     expect(providers).not.toMatch(/defaultOptions|mutationCache|MutationCache|setMutationDefaults/);
     expect(providers).not.toMatch(/from "\.\/playbook|playbook\//);
     expect(providers).not.toMatch(/\bkey=/);
+  });
+
+  it("the store's write path: reducer, then commit, then each subscriber in its own try/catch (FE-C4(b)(c), FE-T13 c5)", () => {
+    const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
+    const dispatch = store.slice(store.indexOf("function dispatch("), store.indexOf("return {\n    getSnapshot"));
+    const reduceAt = dispatch.indexOf("const next = reduce(state, action);");
+    const commitAt = dispatch.indexOf("state = next;");
+    const loopAt = dispatch.indexOf("for (const listener of [...listeners])");
+    expect(reduceAt).toBeGreaterThan(-1);
+    expect(reduceAt).toBeLessThan(commitAt);
+    expect(commitAt).toBeLessThan(loopAt);
+    // Before the commit: the reducer and the no-op test, nothing else (no validation, log, formatting).
+    expect(dispatch.slice(dispatch.indexOf("{") + 1, commitAt).replace(/\s+/g, " ").trim()).toBe(
+      "const next = reduce(state, action); if (next === state) return;",
+    );
+    // Every subscriber call sits inside a try whose catch hands off to onSubscriberError.
+    const loop = dispatch.slice(loopAt);
+    expect(loop.match(/listener\(\)/g)).toHaveLength(1);
+    expect(loop).toMatch(/try \{\s*listener\(\);\s*\} catch \(error\) \{[\s\S]*?onSubscriberError\(error\)/);
+    expect(store).toMatch(/function rethrowOutOfBand\(error: unknown\): void \{\s*void Promise\.reject\(error\);\s*\}/);
+    // accept() and scrollHandled() are the only callers; nothing else writes state.
+    expect(store.match(/\bstate = next;/g)).toHaveLength(1); // the commit is the only assignment after init
+    expect(store.match(/dispatch\(/g)).toHaveLength(3); // definition + two callers
+  });
+
+  it("the failure panel never presents the exception: no error object reaches the dialog or the panel (FE-C4(g))", () => {
+    for (const name of ["EmergencyExitDialog.tsx", "ExitFailurePanel.tsx"]) {
+      const text = read(join(PLAYBOOK, name));
+      expect(text, name).not.toMatch(/error\.message|\.error\b|error=\{|error: unknown|\bApiError\b/);
+    }
+    expect(page).not.toMatch(/flow\.error/);
+    expect(flow).not.toMatch(/mutation\.error|\berror: /);
   });
 
   it("the store holds exactly { receipt, scrolledSeq } and sends nothing (FE-C2, VETO-5)", () => {

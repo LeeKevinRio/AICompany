@@ -501,17 +501,19 @@ export function emergencyExitMutationOptions(queryClient: QueryClient, receipts:
     // too) and no `scope` (it queues): both are deferred submits.
     networkMode: "always" as const,
     onSuccess: (response: PlaybookEmergencyExitResponse): void => {
-      // FIRST action, synchronous, and fenced: TanStack awaits this callback with
-      // no try/catch around it (`mutation.ts:246`), so a throw would send an
-      // already-accepted exit down the failure branch -- 「送出失敗」 for a
-      // submission the backend accepted. Rethrow out of band, the way TanStack
-      // does for its own observer callbacks. It touches no UI state: closing the
-      // dialog and releasing the lock are the page's mutate-level callbacks.
-      try {
-        receipts.accept(response);
-      } catch (error) {
-        void Promise.reject(error);
-      }
+      // The ONLY thing this callback does (ADR-0037 補充一 FE-C4(a)): synchronous,
+      // returns nothing, and nothing catches what `accept()` throws. TanStack awaits
+      // this callback with no try/catch around it (`mutation.ts:246`), so an
+      // exception here ends the mutation in `error` -- the NB-6 panel shows, the
+      // dialog stays open, and re-sending is answered by N-166 with the full
+      // restatement (S1). That is the point (INV-1): a `success` status always means
+      // the receipt is in the store, so 「2xx arrived, dialog closed, no banner」
+      // cannot happen. Swallowing the exception here would produce exactly that
+      // (風控 FE-R3). `accept()` itself commits the snapshot first and isolates
+      // subscriber exceptions, so only a failure *before* the commit can get out.
+      // It touches no UI state: closing the dialog and releasing the lock are the
+      // page's mutate-level callbacks.
+      receipts.accept(response);
     },
     onSettled: (): void => {
       void queryClient.cancelQueries({ queryKey: ["playbook-today"] });
