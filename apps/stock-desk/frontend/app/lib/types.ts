@@ -1971,13 +1971,26 @@ export interface PlaybookEmergencyExitResponse {
   execution_date: string;
   total_shares: number;
   freeze_until: string;
-  //: `wording.EMERGENCY_EXIT_RESULT` or `EMERGENCY_EXIT_EMPTY`, fully rendered.
+  //: `wording.EMERGENCY_EXIT_RESULT`, `EMERGENCY_EXIT_ALREADY_PENDING` or
+  //: `EMERGENCY_EXIT_EMPTY` (ADR-0033 C-8), fully rendered with any 風控 N-166
+  //: notes already appended.
   message: string;
   mode_reason: string;
-  //: EMERGENCY_EXIT 專用歸屬語 (`wording.EXIT_ATTRIBUTION`); `null` only when
-  //: the exit produced no line (no batch held) — the EMPTY contract again.
+  //: EMERGENCY_EXIT 專用歸屬語 (`wording.EXIT_ATTRIBUTION`, or
+  //: `EXIT_ATTRIBUTION_MIXED` / `EXIT_ATTRIBUTION_PRIOR` when earlier lines are
+  //: described); `null` only when the message describes no line (no batch
+  //: held) — the EMPTY contract again.
   attribution: string | null;
+  //: Only the lines this call wrote (ADR-0033 C-7).
   directives: PlaybookDirectiveLine[];
+  //: Earlier, still unsettled EMERGENCY lines that still cover the other held
+  //: batches under 判準 Z (CEO #87／#89) — every one of them, so a batch logged
+  //: twice before N-166 shows both, as the message's date list does (ADR-0033
+  //: C-7, 風控 2026-10-31 第二次裁示 第 2 項). Lines that no longer cover are not
+  //: here; `message` discloses them (S10).
+  //: Additive; nothing is required to render it, and any view that does must
+  //: list them all (or go to 風控 first).
+  pending_directives: PlaybookDirectiveLine[];
   warnings: string[];
   as_of: string;
 }

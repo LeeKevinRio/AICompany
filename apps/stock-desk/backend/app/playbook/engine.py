@@ -138,6 +138,33 @@ def emergency_frozen_day(
     return max(1, min(freeze_days, freeze_days - remaining))
 
 
+def emergency_mode_reason(
+    *, calendar: TradingCalendar, data_date: date, until: date, freeze_days: int
+) -> str:
+    """The EMERGENCY_EXIT mode line for ``data_date``, recomputed on every render.
+
+    The counted sentence (「第 N/{freeze_days} 交易日」) as a rule. 風控 S8
+    states the 恢復日 alone, and only when more than ``freeze_days + 1``
+    trading days remain (風控 2026-10-31 第二次裁示). ``trading_days_between``
+    counts ``(data_date, until]``, so on the submission day before its own bar
+    exists -- ``data_date`` one trading day behind -- the count is exactly
+    ``freeze_days + 1``, and 「第 1/{freeze_days}」 is true there (the pause runs
+    自提交日起). Only from ``freeze_days + 2`` on -- data two or more sessions
+    behind, or a stored 恢復日 the max rule kept (CEO #77, F-c) -- would the
+    counter clamp to day 1 for days on end. Nothing here is stored (C-9): both
+    branches are a function of ``until``, the calendar and the parameter only.
+    """
+    if calendar.trading_days_between(data_date, until) > freeze_days + 1:
+        return wording.mode_reason_emergency_uncounted(until=until)
+    return wording.mode_reason_emergency(
+        frozen_day=emergency_frozen_day(
+            calendar=calendar, data_date=data_date, until=until, freeze_days=freeze_days
+        ),
+        freeze_days=freeze_days,
+        until=until,
+    )
+
+
 def _pct(value: Decimal) -> str:
     return f"{value:+.2f}%"
 
@@ -352,15 +379,11 @@ def _resolve_mode(
     s3_reason: str | None,
 ) -> tuple[Mode, str]:
     if portfolio.emergency_until is not None and data_date <= portfolio.emergency_until:
-        return "emergency_frozen", wording.mode_reason_emergency(
-            frozen_day=emergency_frozen_day(
-                calendar=calendar,
-                data_date=data_date,
-                until=portfolio.emergency_until,
-                freeze_days=params.emergency_freeze_trading_days,
-            ),
-            freeze_days=params.emergency_freeze_trading_days,
+        return "emergency_frozen", emergency_mode_reason(
+            calendar=calendar,
+            data_date=data_date,
             until=portfolio.emergency_until,
+            freeze_days=params.emergency_freeze_trading_days,
         )
     freeze_until = s3_freeze_until or portfolio.freeze_until
     reason = s3_reason or portfolio.freeze_reason

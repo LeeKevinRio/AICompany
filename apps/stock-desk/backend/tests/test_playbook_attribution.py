@@ -234,14 +234,27 @@ def test_the_emergency_exit_is_not_gated_on_the_rule_set_confirmation(
 
 
 def test_the_exit_attribution_is_the_same_sentence_once_the_rules_are_confirmed(
-    harness: Harness,
+    harness: Harness, tmp_path: Path
 ) -> None:
-    """題 7: EXIT 一律用專用句，不看 authorship——兩種狀態下字面必須相同."""
+    """題 7: EXIT 一律用專用句，不看 authorship——兩種狀態下字面必須相同.
+
+    Two books, one confirmed and one not: since N-166 a second exit on the same
+    book is a repeat (ADR-0033) and answers with the ALREADY_PENDING branch, so
+    the comparison has to be between two first exits.
+    """
     _hold_a_batch(harness.store)
     unconfirmed = harness.service.emergency_exit(today=TUESDAY)
-    confirm_rule_set(harness.store)
+    other = PlaybookStore(db_path=tmp_path / "confirmed.db")
+    other.ensure_batches(["2330"], batches_per_target=3)
+    _hold_a_batch(other)
+    confirm_rule_set(other)
+    service = PlaybookService(
+        store=other,
+        market_resolver={"TW": harness.prices},
+        index_resolver={"TW": harness.index, "US": harness.index},
+    )
 
-    confirmed = harness.service.emergency_exit(today=TUESDAY)
+    confirmed = service.emergency_exit(today=TUESDAY)
 
     assert confirmed.attribution == unconfirmed.attribution == wording.EXIT_ATTRIBUTION
     # 規則集的生效日與 EXIT 無關，不得被寫進出口的歸屬語。

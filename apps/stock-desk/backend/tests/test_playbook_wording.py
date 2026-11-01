@@ -430,3 +430,299 @@ def test_the_calendar_helper_is_the_one_used_by_the_counter() -> None:
         )
         == 1
     )
+
+
+# --- N-166 重複出清字面 (風控 2026-10-31 S1～S9，逐字) ---------------------------------
+
+
+def test_n166_s1_already_pending_is_verbatim() -> None:
+    assert wording.EMERGENCY_EXIT_ALREADY_PENDING == (
+        "EMERGENCY_EXIT 已受理：本次未產生新的賣出指令。目前全部 {pending_batches} 批、"
+        "共 {pending_shares} 股的持有批次，都已有你先前提交全部出清時產生、尚未結算的賣出指令"
+        "（預定執行日 {pending_execution_dates} 開盤以市價單送出）；這些先前的指令仍然有效，"
+        "本次未取消、未修改，也未重新產生。本次回應不是另一筆賣出指令，請勿據此到券商重複下單；"
+        "若你尚未依先前的指令下單，以上述 {pending_batches} 批、共 {pending_shares} 股為準。"
+        "市價單在跌停或無量時可能無法成交，實際成交結果以你的券商回報為準；"
+        "R 系列（新倉進場）自 {executed_at} 起暫停 {freeze_days} 交易日（依交易日曆），"
+        "預計 {until} 恢復；S/P 系列停損停利仍照常評估。"
+    )
+
+
+def test_n166_s2_to_s9_are_verbatim() -> None:
+    assert wording.EMERGENCY_EXIT_PENDING_NOTE == (
+        "另有 {pending_batches} 批、共 {pending_shares} 股已有你先前提交全部出清時產生、"
+        "尚未結算的賣出指令（預定執行日 {pending_execution_dates} 開盤以市價單送出），"
+        "本次未重新產生；這些先前的指令仍然有效，請勿就這 {pending_batches} 批到券商重複下單；"
+        "若你尚未依先前的指令下單，以這 {pending_batches} 批、共 {pending_shares} 股為準。"
+    )
+    assert wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE == (
+        "先前的指令中，預定執行日 {past_due_dates} 已過、仍未結算；"
+        "本系統不下單，也無法得知你在券商是否已賣出，請以你的券商回報為準。"
+    )
+    assert wording.EXIT_ATTRIBUTION_PRIOR == (
+        "此指令是你在先前操作中提交的「全部出清」要求之機械執行結果，非本系統的判斷或建議；"
+        "EMERGENCY_EXIT 不依賴規則集，無論規則集是否已確認皆可送出。"
+    )
+    assert wording.EXIT_ATTRIBUTION_MIXED == (
+        "本次新產生與先前已有的賣出指令，都是你分別在本次與先前操作中提交的「全部出清」要求之"
+        "機械執行結果，非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，"
+        "無論規則集是否已確認皆可送出。"
+    )
+    assert wording.EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE == (
+        "因本次再次提交全部出清，R 系列（新倉進場）的預計恢復日由 {previous_until} 延後至 "
+        "{until}，暫停交易日數改自 {executed_at} 起重新計算。"
+    )
+    assert wording.EMERGENCY_EXIT_FREEZE_KEPT_CLAUSE == (
+        "R 系列（新倉進場）維持暫停，預計 {until} 恢復（依交易日曆；沿用先前已設定、較晚的"
+        "恢復日，本次未縮短）；S/P 系列停損停利仍照常評估。"
+    )
+    assert wording.MODE_REASON_EMERGENCY_UNCOUNTED == (
+        "緊急出清後凍結：R 系列（新倉進場）暫停中，預計 {until} 恢復（依交易日曆）；"
+        "S/P 系列停損停利仍照常評估。"
+    )
+    assert wording.EXIT_CONFIRM_FREEZE_KEPT_CHECK == (
+        "送出後，R 系列（新倉進場）維持暫停（預計恢復日：{FREEZE_UNTIL}，依交易日曆計算；"
+        "沿用先前已設定、較晚的恢復日）。"
+    )
+
+
+@pytest.mark.parametrize(
+    "sentence", [wording.EMERGENCY_EXIT_ALREADY_PENDING, wording.EMERGENCY_EXIT_PENDING_NOTE]
+)
+def test_the_pending_sentences_never_claim_completion_or_safety(sentence: str) -> None:
+    """風控 第 3 節 字串檢查: S1、S2 無完成式與「安全」，且都含「請勿」與「仍然有效」."""
+    for banned in ("已產生", "已執行", "已成交", "出清完成", "安全"):
+        assert banned not in sentence, banned
+    assert "請勿" in sentence
+    assert "仍然有效" in sentence
+    # 「請勿重複下單」不得單獨出現：第一次回應遺失的人要有依據可賣 (EX-2，否則 VETO)。
+    assert "若你尚未依先前的指令下單" in sentence
+
+
+def test_the_kept_freeze_clause_replaces_the_tail_of_every_template() -> None:
+    """S7 替換「R 系列（新倉進場）自 {executed_at} 起暫停…」到「…照常評估。」整段."""
+    for template in (
+        wording.EMERGENCY_EXIT_RESULT,
+        wording.EMERGENCY_EXIT_EMPTY,
+        wording.EMERGENCY_EXIT_ALREADY_PENDING,
+    ):
+        kept = wording.freeze_kept_template(template)
+        head = template[: template.index("R 系列（新倉進場）自 {executed_at} 起暫停")]
+        assert kept == head + wording.EMERGENCY_EXIT_FREEZE_KEPT_CLAUSE
+        assert "{executed_at}" not in kept and "{freeze_days}" not in kept
+    with pytest.raises(ValueError, match="freeze clause"):
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_PENDING_NOTE)
+
+
+def test_the_kept_check_only_replaces_check_two() -> None:
+    standard = wording.exit_confirm_checks(freeze_days=20, freeze_until=date(2026, 12, 31))
+    kept = wording.exit_confirm_checks(
+        freeze_days=20, freeze_until=date(2026, 12, 31), freeze_kept=True
+    )
+    assert kept[1] == (
+        "送出後，R 系列（新倉進場）維持暫停（預計恢復日：2026-12-31，依交易日曆計算；"
+        "沿用先前已設定、較晚的恢復日）。"
+    )
+    assert kept[0] == standard[0] and kept[2:] == standard[2:]
+
+
+def test_date_lists_are_deduplicated_ascending_iso_and_joined_by_the_enumeration_comma() -> None:
+    """風控 佔位符定義: {pending_execution_dates}／{past_due_dates}."""
+    days = [date(2026, 8, 13), date(2026, 8, 12), date(2026, 8, 13)]
+    assert wording.date_list(days) == "2026-08-12、2026-08-13"
+
+
+def test_the_uncounted_mode_line_carries_no_counter() -> None:
+    line = wording.mode_reason_emergency_uncounted(until=date(2026, 12, 31))
+    assert line == (
+        "緊急出清後凍結：R 系列（新倉進場）暫停中，預計 2026-12-31 恢復（依交易日曆）；"
+        "S/P 系列停損停利仍照常評估。"
+    )
+    assert "第 " not in line
+
+
+# --- 出清對話框 Q8：降級句承諾「於送出後的執行結果中顯示」 ------------------------------
+
+
+_Q8_UNTIL = date(2026, 9, 9)
+_Q8_PENDING = wording.ExitPending(
+    batches=1,
+    shares=300,
+    execution_dates=(date(2026, 8, 12),),
+    past_due_dates=(date(2026, 8, 12),),
+)
+_Q8_NONE = wording.ExitPending(batches=0, shares=0, execution_dates=(), past_due_dates=())
+
+
+@pytest.mark.parametrize("freeze_kept", [False, True], ids=["standard", "f-c S7"])
+@pytest.mark.parametrize(
+    ("new_batches", "pending"),
+    [(2, _Q8_NONE), (1, _Q8_PENDING), (0, _Q8_PENDING), (0, _Q8_NONE)],
+    ids=["RESULT", "RESULT+S2", "ALREADY_PENDING S1", "EMPTY"],
+)
+def test_every_accepted_message_states_the_actual_recovery_date(
+    new_batches: int, pending: wording.ExitPending, freeze_kept: bool
+) -> None:
+    """風控 Q8 合併關卡: RESULT、EMPTY、S1 與其 S7 版本都含 {until} 的實際日期."""
+    message = wording.emergency_exit_message(
+        new_batches=new_batches,
+        new_shares=300 * new_batches,
+        execution_date=date(2026, 8, 12),
+        executed_at=date(2026, 8, 13),
+        freeze_days=20,
+        until=_Q8_UNTIL,
+        pending=pending,
+        extended_from=None,
+        freeze_kept=freeze_kept,
+    )
+
+    assert _Q8_UNTIL.isoformat() in message
+    assert "{" not in message
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        wording.EMERGENCY_EXIT_RESULT,
+        wording.EMERGENCY_EXIT_EMPTY,
+        wording.EMERGENCY_EXIT_ALREADY_PENDING,
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_RESULT),
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_EMPTY),
+        wording.freeze_kept_template(wording.EMERGENCY_EXIT_ALREADY_PENDING),
+    ],
+)
+def test_every_accepted_template_carries_the_until_placeholder(template: str) -> None:
+    assert "{until}" in template
+
+
+# --- CEO #87 回審 (風控 2026-10-31)：S10、N1、N1b、N2 逐字 ----------------------------
+
+
+def test_s10_and_its_item_are_verbatim() -> None:
+    assert wording.EMERGENCY_EXIT_STALE_PENDING_NOTE == (
+        "另有 {stale_batches} 批的先前出清賣出指令至今未能結算：{stale_items}。"
+        "這些指令的預定執行日沒有日線開盤價（可能是該日休市，也可能是資料缺漏），"
+        "而之後的交易日已有日線資料，因此本系統不再以這些指令涵蓋上述批次。"
+        "先前的這些指令並未被取消；若日後補得該日的開盤價，帳冊仍可能依該日開盤價判定，"
+        "但同一批次在帳冊的股數不會重複減少，判定的日期與價格可能與你實際賣出的不同。"
+        "本系統不下單，無法得知你是否已就這幾批在券商賣出："
+        "若你已賣出且成交（不論是否依先前的指令），你在券商已無這幾批的持股，"
+        "本則回應前段所述這幾批的賣出指令不適用於你，請勿就這幾批到券商重複下賣單；"
+        "若尚未賣出（包括該日休市、未下單或未成交），以本則回應前段所述的賣出指令為準。"
+    )
+    assert wording.EMERGENCY_EXIT_STALE_ITEM == (
+        "{symbol}第 {batch_no} 批 {shares} 股（未能結算的指令預定執行日 {stale_dates}）"
+    )
+
+
+def test_n1_n1b_and_n2_are_verbatim() -> None:
+    assert wording.SETTLEMENT_EXIT_STALE_NOTE == (
+        "這筆是先前全部出清產生的賣出指令，之後的交易日已有日線資料，本筆仍無法依該日開盤價結算；"
+        "帳冊中這一批{batch_clause}，同一批次在帳冊的股數不會因這些賣出指令重複減少。"
+        "本系統不下單，無法得知你是否已就這批在券商賣出："
+        "若已賣出且成交，你在券商已無這批的持股，請勿再依本筆到券商下賣單；"
+        "若尚未賣出，實際持股以你的券商回報為準。"
+    )
+    assert wording.SETTLEMENT_EXIT_STALE_CLOSED == "已無持股"
+    assert wording.SETTLEMENT_EXIT_STALE_LATER == "另有預定執行日 {later_dates} 的出清賣出指令"
+    assert wording.SETTLEMENT_EXIT_STALE_REOPEN_NOTE == (
+        "這批在帳冊仍記為持有；可再次提交全部出清，替這批產生新的賣出指令。"
+    )
+    assert wording.SETTLEMENT_EXIT_NOTHING_MOVED_NOTE == (
+        "本次判定成交的出清賣出指令中，有 {count} 筆在判定時該批次在帳冊已無持股，"
+        "帳冊股數與現金都未因這幾筆變動：{exit_items}。"
+        "帳冊中這幾批只依另一筆賣出指令減少一次股數，判定的日期與價格可能與你實際賣出的不同；"
+        "實際成交結果以你的券商回報為準。"
+    )
+    assert wording.SETTLEMENT_EXIT_ITEM == "{symbol}第 {batch_no} 批（預定執行日 {execution_date}）"
+
+
+@pytest.mark.parametrize(
+    "sentence", [wording.EMERGENCY_EXIT_STALE_PENDING_NOTE, wording.SETTLEMENT_EXIT_STALE_NOTE]
+)
+def test_the_stale_sentences_say_both_branches(sentence: str) -> None:
+    """風控 必改 6(i): S10、N1 都含「請勿」與「若尚未賣出」——只有「請勿」就擋住出口 (EX-2)."""
+    assert "請勿" in sentence
+    assert "若尚未賣出" in sentence
+    for banned in ("安全", "放心", "已執行", "已出清"):
+        assert banned not in sentence
+
+
+_S10_UNTIL = date(2026, 9, 9)
+_S10_STALE = (
+    wording.ExitStale(symbol="2454", batch_no=1, shares=200, dates=(date(2026, 8, 12),)),
+    wording.ExitStale(
+        symbol="2330", batch_no=1, shares=300, dates=(date(2026, 8, 13), date(2026, 8, 12))
+    ),
+)
+
+
+def _s10_message(*, new_batches: int, pending: wording.ExitPending) -> str:
+    return wording.emergency_exit_message(
+        new_batches=new_batches,
+        new_shares=500 * new_batches,
+        execution_date=date(2026, 8, 14),
+        executed_at=date(2026, 8, 13),
+        freeze_days=20,
+        until=_S10_UNTIL,
+        pending=pending,
+        extended_from=date(2026, 9, 8),
+        freeze_kept=False,
+    )
+
+
+def test_s10_items_are_sorted_per_batch_with_remaining_shares() -> None:
+    assert wording.stale_items(_S10_STALE) == (
+        "2330第 1 批 300 股（未能結算的指令預定執行日 2026-08-12、2026-08-13）、"
+        "2454第 1 批 200 股（未能結算的指令預定執行日 2026-08-12）"
+    )
+
+
+def test_s10_sits_after_s3_and_before_s6_in_both_branches() -> None:
+    """組合順序: RESULT＋［S2］＋［S3］＋［S10］＋［S6］；S1＋［S3］＋［S10］＋［S6］."""
+    pending = wording.ExitPending(
+        batches=1,
+        shares=100,
+        execution_dates=(date(2026, 8, 12),),
+        past_due_dates=(date(2026, 8, 12),),
+        stale=_S10_STALE,
+    )
+    s10 = wording.EMERGENCY_EXIT_STALE_PENDING_NOTE.format(
+        stale_batches=2, stale_items=wording.stale_items(_S10_STALE)
+    )
+    s3 = wording.EMERGENCY_EXIT_PENDING_PAST_DUE_NOTE.format(past_due_dates="2026-08-12")
+    s6 = wording.EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE.format(
+        previous_until="2026-09-08", until="2026-09-09", executed_at="2026-08-13"
+    )
+    for new_batches in (2, 0):
+        message = _s10_message(new_batches=new_batches, pending=pending)
+        assert message.endswith(s3 + s10 + s6)
+        assert message.count(s10) == 1
+
+
+def test_s10_appears_in_result_without_any_covering_batch() -> None:
+    pending = wording.ExitPending(
+        batches=0, shares=0, execution_dates=(), past_due_dates=(), stale=_S10_STALE[:1]
+    )
+    message = _s10_message(new_batches=1, pending=pending)
+    assert "另有 1 批的先前出清賣出指令至今未能結算：2454第 1 批 200 股" in message
+    assert wording.EMERGENCY_EXIT_PENDING_NOTE[:4] not in message.replace("另有 1 批的先前", "")
+
+
+# --- NB-6 失敗面板第 3 段（N-166 合併後，CEO #87 回審修訂版） ------------------------
+
+
+def test_the_nb6_retry_paragraph_is_the_revised_version_verbatim() -> None:
+    """守門: 修訂版逐字；舊的無例外版本不得回來（在判準 Z 底下是不實陳述）."""
+    assert wording.EXIT_RESULT_UNCONFIRMED_RETRY == (
+        "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
+        "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"
+        "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。"
+        "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。"
+    )
+    assert "不會再重複產生賣出指令；但" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+    # 兩個句號、同一段；永久禁用詞；不得宣稱回應會說明先前那次是否受理。
+    assert wording.EXIT_RESULT_UNCONFIRMED_RETRY.count("。") == 2
+    for banned in ("安全", "放心", "已執行", "已出清", "先前那次是否"):
+        assert banned not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+    assert "{" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
