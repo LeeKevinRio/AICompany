@@ -1,6 +1,6 @@
 # ADR-0037：stock-desk 排程台出清流程的狀態擁有層——回執存於 Providers 範圍的記憶體 store、對話框提升至頁面層
 
-- 狀態：proposed（待 CEO 核可）
+- 狀態：accepted（CEO #97，2026-11-01 核可；風控對兩項殘留的裁定見 `work/reviews/2026-11-01-ADR0037殘留與r32-風控.md`，networkMode 改 `'always'` 等必改項由該裁定追加，本檔原文不改）
 - 日期：2026-11-01（初稿 2026-10-31 以 0036 編號起草；0036 已由 ADR-0035 Decision 8 預留給「在途單生命週期」，改用 0037）
 - 決策者：tech-architect（草案）；risk-compliance-officer（Q15 裁示採方案 D，2026-11-01）；CEO（核可）
 - 來源簡稱（皆在 `work/reviews/` 下）：
