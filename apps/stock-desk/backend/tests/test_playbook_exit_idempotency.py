@@ -23,7 +23,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_cap1_weight, get_playbook_service
+from app.api.deps import get_cap1_reading, get_playbook_service
+from app.api.playbook_cap1_wording import Cap1Reading
 from app.data.calendar import TradingCalendar
 from app.main import app
 from app.playbook import store as store_module
@@ -866,7 +867,9 @@ def test_the_directive_log_stores_no_message_or_disclosure(book: Book) -> None:
 @pytest.fixture
 def client(book: Book) -> Iterator[TestClient]:
     app.dependency_overrides[get_playbook_service] = lambda: book.service
-    app.dependency_overrides[get_cap1_weight] = lambda: Decimal("0.10")
+    app.dependency_overrides[get_cap1_reading] = lambda: Cap1Reading(
+        weight=Decimal("0.10"), from_default=False
+    )
     with TestClient(app, headers=CLIENT_HEADERS) as test_client:
         yield test_client
     app.dependency_overrides.clear()
