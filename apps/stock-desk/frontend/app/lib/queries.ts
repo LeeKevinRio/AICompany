@@ -449,18 +449,47 @@ export function useConfirmPlaybookRules() {
 }
 
 /**
- * `POST /api/playbook/emergency-exit`. Invalidates `playbook-today` on
- * success so the mode badge / ledger reflect the freeze immediately, without
- * a manual page reload.
+ * Mutation options for `POST /api/playbook/emergency-exit`, split out of the
+ * hook so the settle behaviour can be exercised against a plain
+ * `MutationObserver` in the node test environment (no React, no jsdom).
+ *
+ * `onSettled` runs for success and failure alike (FR-8a, 風控 必改項 11): the
+ * status bar must reflect the backend's real mode after *any* ending, because
+ * a 5xx may sit on either side of the write. It does two things, in this order
+ * (FE-C13, tech-architect Q14):
+ *
+ * 1. `cancelQueries` — `invalidateQueries` only cancels an in-flight request
+ *    when the query already holds data. During the first load there is no
+ *    data, the refetch is folded into the request already in flight, and that
+ *    request (sent before the exit, carrying the pre-exit `normal` mode) would
+ *    be applied when it lands (AC-55). Cancelling first reverts the query to
+ *    its pre-fetch state without dispatching an error, so the skeleton stays.
+ * 2. `invalidateQueries` — starts the fresh request.
+ *
+ * Neither is awaited, and the callback returns nothing: the hook-level
+ * `onSettled` is awaited before the mutation resolves, so returning either
+ * promise would hold 「送出中」 until `/today` answered.
+ */
+export function emergencyExitMutationOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: () => postPlaybookEmergencyExit(),
+    onSettled: (): void => {
+      void queryClient.cancelQueries({ queryKey: ["playbook-today"] });
+      void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
+    },
+  };
+}
+
+/**
+ * `POST /api/playbook/emergency-exit`. The receipt (橫幅) is *not* derived from
+ * this mutation's state: `reset()`, the next `mutate()` and observer unmount
+ * all drop `mutation.data`, so the page keeps the receipt in its own reducer
+ * (`exitReceipt.ts`, VETO-1). Call this hook once, at page level, so the
+ * observer outlives every `/today` state (VETO-2).
  */
 export function useEmergencyExit() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => postPlaybookEmergencyExit(),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
-    },
-  });
+  return useMutation(emergencyExitMutationOptions(queryClient));
 }
 
 /* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */
