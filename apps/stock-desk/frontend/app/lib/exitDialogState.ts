@@ -166,10 +166,21 @@ export function reconcileExitChecks(
         heldAt: offered.source === "formal" ? today.dataUpdatedAt : null,
       });
     }
-    // Identical content, successfully re-fetched just now: the held sentences
-    // were true at this newer moment too, so restart R-4's clock instead of
-    // degrading a set that was just re-confirmed (FE-C18; 待風控確認 Q16).
-    if (current.source === "formal" && current.heldAt !== today.dataUpdatedAt) {
+    // Identical content, successfully re-fetched later than the held moment: the
+    // held sentences were true at this newer moment too, so restart R-4's clock
+    // instead of degrading a set that was just re-confirmed (FE-C18; 風控
+    // 2026-11-01 FE-5). All of: this is a success (checked above), the fetch is
+    // newer than `heldAt`, the lock is not held (checked by the caller of this
+    // function), the held set is the formal one, and the comparison is the very
+    // same strict whole-list one R-3 uses. An error or a retry wait never gets
+    // here -- their `dataUpdatedAt` is not newer. The R-4 test below must see the
+    // *updated* `heldAt`: new success data first, expiry second; the reverse order
+    // would degrade, clear and show N1 for a set whose content did not change.
+    if (
+      current.source === "formal" &&
+      current.heldAt !== null &&
+      today.dataUpdatedAt > current.heldAt
+    ) {
       current = { ...current, heldAt: today.dataUpdatedAt };
     }
   }

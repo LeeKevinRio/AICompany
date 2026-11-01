@@ -2,7 +2,7 @@
 
 import { useLayoutEffect } from "react";
 import type { RefObject } from "react";
-import { shouldHandOffFocus } from "../lib/exitFocus";
+import { consumeTriggerMount, recordTriggerUnmount } from "../lib/exitFocus";
 
 /**
  * The 「全部出清」 trigger: appearance only (視覺規範 §4.2). Button styling is
@@ -39,19 +39,19 @@ export function ExitTriggerButton({
   useLayoutEffect(() => {
     const node = buttonRef.current;
     const active = document.activeElement;
+    // Consumes the flag whether or not it hands off (FE-8(a)); one call, no retry (FE-8(b)).
     if (
-      shouldHandOffFocus({
+      consumeTriggerMount(focusLostRef, {
         dialogOpen,
-        lostFocusOnUnmount: focusLostRef.current,
         activeIsBodyOrNull: active === null || active === document.body,
       })
     ) {
       node?.focus({ preventScroll: true });
     }
-    focusLostRef.current = false;
     return () => {
-      // Runs when this trigger is removed, while the node is still in the DOM.
-      focusLostRef.current = node !== null && document.activeElement === node;
+      // Runs when this trigger is removed, while the node is still in the DOM;
+      // always overwrites the flag with the truth at this moment.
+      recordTriggerUnmount(focusLostRef, node !== null && document.activeElement === node);
     };
     // Mount / unmount only: the effect describes the lifetime of one placement.
   }, []);

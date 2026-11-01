@@ -282,6 +282,77 @@ describe("R-4: a formal set held across a Taipei midnight is replaced by the deg
   });
 });
 
+describe("heldAt update rules (風控 2026-11-01 FE-5)", () => {
+  it("(e1) crossed midnight, then a newer fetch with identical content: heldAt moves, no N1, no step back", () => {
+    const final = exitDialogReducer(withTicks(openFormal(), [0, 1, 2, 3]), { type: "advance" });
+    const after = reconcileExitChecks(
+      final,
+      successToday({ dataUpdatedAt: MORNING_AUG_12 }),
+      MORNING_AUG_12,
+      false,
+    );
+    expect(after.step).toBe("final");
+    expect(after.source).toBe("formal");
+    expect(after.heldAt).toBe(MORNING_AUG_12);
+    expect(after.notice).toBe(false);
+    expect(tickedIndices(after)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("(e2) the order matters: new success data first, then R-4 with the updated heldAt", () => {
+    const ticked = withTicks(openFormal(), [0, 1, 2, 3]);
+    const fresh = successToday({ dataUpdatedAt: MORNING_AUG_12 });
+    // The right order, in one evaluation: no N1, the set is unchanged.
+    const single = reconcileExitChecks(ticked, fresh, MORNING_AUG_12, false);
+    expect(single.notice).toBe(false);
+    expect(single.texts).toEqual(ticked.texts);
+    // The reverse order (expire first, then take the data) is exactly the trap: it
+    // ends on the very same sentences, but has cleared a tick and shown an N1
+    // whose 「有變動的項目」 is untrue.
+    const reversed = reconcileExitChecks(
+      exitDialogReducer(ticked, { type: "expire", now: MORNING_AUG_12 }),
+      fresh,
+      MORNING_AUG_12,
+      false,
+    );
+    expect(reversed.texts).toEqual(ticked.texts);
+    expect(reversed.notice).toBe(true);
+    expect(tickedIndices(reversed)).toEqual([0, 2, 3]);
+  });
+
+  it("an older or equal dataUpdatedAt never moves heldAt (error and retry-wait leave it alone)", () => {
+    const state = openFormal();
+    const same = reconcileExitChecks(state, successToday({ dataUpdatedAt: NOON_AUG_11 }), NOON_AUG_11, false);
+    expect(same).toBe(state);
+    const older = reconcileExitChecks(state, successToday({ dataUpdatedAt: NOON_AUG_11 - 1 }), NOON_AUG_11, false);
+    expect(older).toBe(state);
+    const error = reconcileExitChecks(state, failedToday("error", NOON_AUG_11 + 5000), NOON_AUG_11 + 5000, false);
+    expect(error.heldAt).toBe(NOON_AUG_11);
+  });
+
+  it("never touches a degraded set's clock, and does nothing while the lock is held", () => {
+    const degraded = openDegraded();
+    const sameDegraded = reconcileExitChecks(
+      degraded,
+      successToday({ exitConfirm: null, dataUpdatedAt: NOON_AUG_11 + 5000 }),
+      NOON_AUG_11 + 5000,
+      false,
+    );
+    expect(sameDegraded.heldAt).toBeNull();
+    const formal = openFormal();
+    expect(
+      reconcileExitChecks(formal, successToday({ dataUpdatedAt: NOON_AUG_11 + 5000 }), NOON_AUG_11 + 5000, true),
+    ).toBe(formal);
+  });
+
+  it("the comparison is the whole list: a different sentence count is a change, not 「identical」", () => {
+    const state = withTicks(openFormal(), [0, 1, 2, 3]);
+    const longer = { ...exitConfirmBlock(), checks: [...formalChecks(20, "2026-09-09"), "extra"] };
+    const after = reconcileExitChecks(state, successToday({ exitConfirm: longer, dataUpdatedAt: NOON_AUG_11 + 1 }), NOON_AUG_11 + 1, false);
+    expect(after.texts).toHaveLength(5);
+    expect(after.notice).toBe(true);
+  });
+});
+
 describe("R-5: step 3 (AC-49, AC-50, AC-51, AC-54)", () => {
   function atFinal(open: ExitDialogState): ExitDialogState {
     const ticked = withTicks(open, open.texts.map((_, i) => i));
@@ -452,6 +523,38 @@ describe("planSubmit (FE-T10, FE-C17)", () => {
     const after = exitDialogReducer(state, { type: "expire", now: MORNING_AUG_12 });
     expect(after.step).toBe("confirm");
     expect(after.notice).toBe(true);
+  });
+});
+
+describe("a click turned into a step back never loops (風控 2026-11-01 FE-6)", () => {
+  it("step 3: the click is consumed (no request), and after re-ticking the next click submits exactly once", () => {
+    const final = exitDialogReducer(withTicks(openFormal(), [0, 1, 2, 3]), { type: "advance" });
+    expect(planSubmit(final, MORNING_AUG_12, false)).toBe("stepBack");
+    const back = exitDialogReducer(final, { type: "expire", now: MORNING_AUG_12 });
+    expect(back.step).toBe("confirm");
+    expect(back.source).toBe("degraded");
+    // Re-tick the cleared sentence, continue, and submit: R-4 only concerns a formal set.
+    const again = reduce(back, { type: "toggle", index: 1 }, { type: "advance" });
+    expect(again.step).toBe("final");
+    expect(planSubmit(again, MORNING_AUG_12 + 1000, false)).toBe("submit");
+    expect(planSubmit(again, MORNING_AUG_12 + 2000, true)).toBe("ignore"); // and a second click is locked out
+  });
+
+  it("step 2: 「繼續」 on a stale formal set swaps in place and does not advance", () => {
+    const ticked = withTicks(openFormal(), [0, 1, 2, 3]);
+    expect(planAdvance(ticked, MORNING_AUG_12)).toBe("expire");
+    const after = exitDialogReducer(ticked, { type: "expire", now: MORNING_AUG_12 });
+    expect(after.step).toBe("confirm");
+    expect(after.texts).toEqual(FALLBACK);
+    expect(exitDialogReducer(after, { type: "advance" }).step).toBe("confirm"); // sentence 2 is un-ticked
+  });
+
+  it("the step back never asks for the mutation to be reset: failure state is not part of this machine", () => {
+    // R-5's step back keeps everything about the failed submit (FR-14g): the state
+    // has no field for it, so there is nothing for the transition to clear.
+    expect(Object.keys(openFormal()).sort()).toEqual(
+      ["checks", "confirmedSource", "heldAt", "notice", "source", "step", "texts"].sort(),
+    );
   });
 });
 
