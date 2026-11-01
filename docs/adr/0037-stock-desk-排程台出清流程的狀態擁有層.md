@@ -1,6 +1,7 @@
 # ADR-0037：stock-desk 排程台出清流程的狀態擁有層——回執存於 Providers 範圍的記憶體 store、對話框提升至頁面層
 
 - 狀態：accepted（CEO #97，2026-11-01 核可；風控對兩項殘留的裁定見 `work/reviews/2026-11-01-ADR0037殘留與r32-風控.md`，networkMode 改 `'always'` 等必改項由該裁定追加，本檔原文不改）
+- 補充一（tech-architect 2026-11-01，依風控 `work/reviews/2026-11-01-ADR0037殘留與r32-風控.md` 的 FE-R1、FE-R3 與第 1、2 項裁示）：Decision 2 的「包 try/catch」、FE-C4、FE-T13(c) 以補充一為準；新增 INV-1、FE-C24 與 VETO-4 補註；Consequences 中 `networkMode` 與「送出中離開頁面、之後請求失敗」兩項改為已裁定。全文見 `work/reviews/2026-11-01-ADR0037補充一-tech-architect.md` 第「B. 補充一全文」節；本檔原文不改（coordinator 定案比照 ADR-0033 補充先例，CEO 可推翻改為另立取代 ADR）。
 - 日期：2026-11-01（初稿 2026-10-31 以 0036 編號起草；0036 已由 ADR-0035 Decision 8 預留給「在途單生命週期」，改用 0037）
 - 決策者：tech-architect（草案）；risk-compliance-officer（Q15 裁示採方案 D，2026-11-01）；CEO（核可）
 - 來源簡稱（皆在 `work/reviews/` 下）：
