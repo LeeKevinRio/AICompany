@@ -277,6 +277,11 @@ class ExitPlan:
     emergency_until: date
 
 
+def _is_exit_sell(directive: Directive) -> bool:
+    """An EMERGENCY_EXIT sell line -- the only kind 判準 Z, N1 and N2 speak about."""
+    return directive.rule_id == "EMERGENCY" and directive.action == "sell"
+
+
 def plan_emergency_exit(
     state: EmergencyExitState,
     *,
@@ -441,6 +446,12 @@ class PlaybookService:
           settled at the reference price, and never quietly dropped (風控 R5).
         * **Silent about opinions.** Nothing here re-decides an outcome; the
           engine function does that from the band the line already carries.
+
+        Two EMERGENCY disclosures (風控 CEO #87 回審, N-166): an unsettled exit
+        line that meets 判準 Z gets N1 (or N1b) after its reason, and an exit
+        line judged executed while its batch already held nothing gets N2 after
+        the summary. Both are read around :meth:`PlaybookStore.settle`, which is
+        left exactly as it was.
         """
         as_of = today or datetime.now(UTC).date()
         pending = self._store.pending_directives(on_or_before=as_of)
@@ -456,6 +467,7 @@ class PlaybookService:
         loaded = self._load_symbol_bars(symbols, today=as_of)
         settled: list[SettledLine] = []
         unsettled: list[UnsettledLine] = []
+        moved_nothing: list[Directive] = []
         for item in pending:
             directive = item.directive
             series = loaded.get(directive.symbol, NOTHING_LOADED)
@@ -482,11 +494,20 @@ class PlaybookService:
             ):
                 # Someone else settled this row between the read and the claim.
                 continue
+            if _is_exit_sell(outcome) and outcome.status == "executed":
+                # N2: ``settle`` moves ``min(remaining, shares)``; with nothing
+                # held that is zero shares and zero cash, read here beforehand.
+                held = self._batch_of(outcome)
+                if held is None or held.remaining_shares <= 0:
+                    moved_nothing.append(outcome)
             self._store.settle(outcome, fill_price=opening)
             settled.append(
                 SettledLine(directive_id=item.directive_id, directive=outcome, open_price=opening)
             )
 
+        # N1／N1b are decided after every line of the run has reached the book,
+        # so the batch state they state is the one this settlement leaves.
+        unsettled = self._with_stale_exit_notes(unsettled, loaded)
         result = SettlementResult(
             settled_on=as_of, settled=settled, unsettled=unsettled, warnings=[]
         )
@@ -499,7 +520,88 @@ class PlaybookService:
                 pending=len(unsettled),
             )
         )
+        if moved_nothing:
+            warnings.append(
+                wording.SETTLEMENT_EXIT_NOTHING_MOVED_NOTE.format(
+                    count=len(moved_nothing),
+                    exit_items="、".join(
+                        wording.SETTLEMENT_EXIT_ITEM.format(
+                            symbol=line.symbol,
+                            batch_no=line.batch_no,
+                            execution_date=line.execution_date.isoformat(),
+                        )
+                        for line in moved_nothing
+                    ),
+                )
+            )
         return result.model_copy(update={"warnings": warnings})
+
+    def _batch_of(self, directive: Directive) -> BatchState | None:
+        if directive.batch_no is None:
+            return None
+        return self._store.get_batch(directive.symbol, directive.batch_no)
+
+    def _with_stale_exit_notes(
+        self, unsettled: list[UnsettledLine], loaded: Mapping[str, LoadedSeries]
+    ) -> list[UnsettledLine]:
+        """Append N1 or N1b to each unsettled EMERGENCY sell that meets 判準 Z.
+
+        判準 Z is :func:`exit_line_still_covers` on the very series this
+        settlement loaded, so "the exit no longer counts it" and "the
+        settlement cannot stamp it" are judged from the same data. Then:
+
+        * batch closed -> N1, 「已無持股」;
+        * batch open with a later unsettled EMERGENCY sell -> N1, naming its
+          預定執行日;
+        * batch open, holding shares, no later one -> N1b: re-submitting the
+          exit would write a new line for it (EX-3).
+
+        Anything else (a planned or skipped batch, no batch) gets nothing added.
+        """
+        stale = [
+            index
+            for index, line in enumerate(unsettled)
+            if _is_exit_sell(line.directive)
+            and not exit_line_still_covers(
+                line.directive, loaded.get(line.directive.symbol, NOTHING_LOADED).bars
+            )
+        ]
+        if not stale:
+            return unsettled
+        outstanding = [
+            item.directive
+            for item in self._store.pending_directives()
+            if _is_exit_sell(item.directive)
+        ]
+        noted = list(unsettled)
+        for index in stale:
+            line = unsettled[index]
+            directive = line.directive
+            batch = self._batch_of(directive)
+            if batch is None:
+                continue
+            later = [
+                other.execution_date
+                for other in outstanding
+                if (other.symbol, other.batch_no) == (directive.symbol, directive.batch_no)
+                and other.execution_date > directive.execution_date
+            ]
+            if batch.status == "closed":
+                note = wording.SETTLEMENT_EXIT_STALE_NOTE.format(
+                    batch_clause=wording.SETTLEMENT_EXIT_STALE_CLOSED
+                )
+            elif batch.status == "open" and later:
+                note = wording.SETTLEMENT_EXIT_STALE_NOTE.format(
+                    batch_clause=wording.SETTLEMENT_EXIT_STALE_LATER.format(
+                        later_dates=wording.date_list(later)
+                    )
+                )
+            elif batch.status == "open" and batch.remaining_shares > 0:
+                note = wording.SETTLEMENT_EXIT_STALE_REOPEN_NOTE
+            else:
+                continue
+            noted[index] = line.model_copy(update={"reason": line.reason + note})
+        return noted
 
     def rebalance(self, *, today: date | None = None) -> RebalanceResult:
         """季末 REBALANCE: recompute TOTAL_DEPLOY from the assets of the day.

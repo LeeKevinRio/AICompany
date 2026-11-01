@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from app.data.interface import PriceBar
 from app.playbook import wording
 from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
@@ -27,6 +28,7 @@ HISTORY = 40
 TUESDAY = date(2026, 8, 11)
 WEDNESDAY = date(2026, 8, 12)
 THURSDAY = date(2026, 8, 13)
+FRIDAY = date(2026, 8, 14)
 FREEZE_DAYS = 20
 
 #: The two held batches most tests start from: (symbol, batch_no, shares, close).
@@ -220,3 +222,14 @@ def log_like_before_n166(store: PlaybookStore, lines: list[Directive]) -> None:
             snapshot=[],
         )
     )
+
+
+def gapped_bars(
+    symbol: str, close: float, *, missing: set[date], end: date = SERIES_END
+) -> list[PriceBar]:
+    """A flat daily series ending on ``end`` with the ``missing`` sessions absent."""
+    return [
+        bar
+        for bar in recent_bars([close] * HISTORY, symbol=symbol, end=end)
+        if bar.date not in missing
+    ]

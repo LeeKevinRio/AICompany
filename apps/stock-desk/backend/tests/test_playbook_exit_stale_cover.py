@@ -17,13 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from app.data.interface import PriceBar
 from app.playbook import wording
 from app.playbook.models import Directive
 from app.playbook.service import exit_line_still_covers
 from tests.api_helpers import recent_bars
 from tests.exit_idempotency_helpers import (
     FREEZE_DAYS,
+    FRIDAY,
     HISTORY,
     SERIES_END,
     THURSDAY,
@@ -33,6 +33,7 @@ from tests.exit_idempotency_helpers import (
     already_pending_message,
     emergency_rows,
     extended_note,
+    gapped_bars,
     hold,
     legacy_exit_line,
     log_like_before_n166,
@@ -41,19 +42,6 @@ from tests.exit_idempotency_helpers import (
     until_for,
     weekdays_after,
 )
-
-FRIDAY = date(2026, 8, 14)
-
-
-def gapped_bars(
-    symbol: str, close: float, *, missing: set[date], end: date = SERIES_END
-) -> list[PriceBar]:
-    """A flat daily series ending on ``end`` with the ``missing`` sessions absent."""
-    return [
-        bar
-        for bar in recent_bars([close] * HISTORY, symbol=symbol, end=end)
-        if bar.date not in missing
-    ]
 
 
 def _line(execution_date: date) -> Directive:
