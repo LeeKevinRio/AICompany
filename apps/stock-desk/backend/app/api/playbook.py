@@ -234,6 +234,9 @@ class TodayResponse(BaseModel):
     #: §6 頁面免責句, three sentences in a fixed order (四輪收斂裁決 題 11),
     #: rendered server-side so the page cannot compose or shorten them.
     page_summary: list[str]
+    #: The 預定執行日's lines as logged, one per decision (ADR-0035 Decision 4):
+    #: an earlier call of the same day may have decided them, and every call
+    #: shows the same table. ``no_directive_note`` below reads this list too.
     directives: list[DirectiveLine]
     snapshot: list[BatchSnapshot]
     warnings: list[str]
