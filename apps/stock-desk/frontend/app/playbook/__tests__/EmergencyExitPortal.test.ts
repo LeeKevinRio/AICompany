@@ -141,12 +141,12 @@ describe("EmergencyExitDialog focus management, Esc and focus trap (N-159 a11y)"
   it("returns focus to the trigger that exists now after any close, via isOpen true -> false (FE-C19)", () => {
     expect(trigger).toMatch(/<button\s+ref=\{buttonRef\}/);
     expect(flow).toMatch(
-      /if \(wasOpenRef\.current && !isOpen\) \{\s*triggerRef\.current\?\.focus\(\{ preventScroll: true \}\);/,
+      /if \(wasOpenRef\.current && !isOpen && trigger !== null && document\.activeElement !== trigger\) \{\s*trigger\.focus\(\{ preventScroll: true \}\);/,
     );
     expect(flow).toMatch(/\}, \[isOpen\]\);/);
     // Every close path (取消, Esc, successful submit) goes through setIsOpen(false).
     expect(flow.match(/setIsOpen\(false\)/g)).toHaveLength(2);
-    expect(flow).toMatch(/onSuccess: \(response\) => \{[\s\S]*?setIsOpen\(false\)/);
+    expect(flow).toMatch(/onSuccess: \(\) => \{\s*setIsOpen\(false\);/);
   });
 
   it("closes on Esc through cancel(), locked while submitting, and never calls the submit", () => {

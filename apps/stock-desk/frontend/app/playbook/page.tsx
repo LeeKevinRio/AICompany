@@ -41,8 +41,8 @@ import { useEmergencyExitFlow } from "./useEmergencyExitFlow";
  * so it is still not rendered.
  *
  * The 全部出清 flow is owned *here*, not by the status bar (tech-architect Q14,
- * ADR-0036 draft): the one `useEmergencyExit` observer, the receipt reducer, the
- * dialog's `isOpen`, the submit lock and the trigger ref all live in
+ * ADR-0036 draft): the one `useEmergencyExit` observer, the subscription to the
+ * Providers-scope receipt store, the dialog's `isOpen`, the submit lock and the trigger ref all live in
  * `useEmergencyExitFlow`, so none of it sits below the `today.isSuccess` gate and
  * none of it unmounts when `/today` fails (FR-7a/7b, AC-17, AC-21, AC-22).
  *

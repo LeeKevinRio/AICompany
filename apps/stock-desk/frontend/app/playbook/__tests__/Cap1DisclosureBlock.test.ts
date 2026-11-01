@@ -68,6 +68,7 @@ const { default: PlaybookPage } = await import("../page");
 const { RuleSetConfirmPanel } = await import("../RuleSetConfirmPanel");
 const { ModeStatusBar } = await import("../ModeStatusBar");
 const { ExitTriggerButton } = await import("../ExitTriggerButton");
+const { ExitReceiptStoreProvider } = await import("../../lib/exitReceiptContext");
 
 const SRC_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -165,7 +166,9 @@ function renderPage(
 ): string {
   state.today = today(mode, todayCap1 === "absent" ? undefined : todayCap1);
   state.ruleSet = ruleSet(ruleSetCap1 === "absent" ? undefined : ruleSetCap1);
-  return renderToStaticMarkup(createElement(PlaybookPage));
+  return renderToStaticMarkup(
+    createElement(ExitReceiptStoreProvider, null, createElement(PlaybookPage)),
+  );
 }
 
 function renderBlock(value: PlaybookCap1Disclosure | undefined, level: 2 | 3 = 2): string {

@@ -11,7 +11,7 @@ import type { PlaybookEmergencyExitResponse } from "../lib/types";
  * and stay in this one container in this order (風控 必改項 6); the
  * attribution is never split out.
  *
- * Rendered from the page-level receipt reducer, not from the mutation (VETO-1),
+ * Rendered from the Providers-scope receipt store, not from the mutation (VETO-1),
  * and *outside* the `today.isSuccess` gate, inside the always-present
  * `role="status"` container (FR-7a). `showModeReason` is false only when the
  * status bar is mounted and already shows the identical sentence; the paragraph

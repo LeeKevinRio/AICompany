@@ -41,6 +41,8 @@ import {
   updateSettings,
 } from "./api";
 import { DIRECTORY_STATUS_PROBE_LIMIT, DIRECTORY_STATUS_PROBE_QUERY } from "./directorySearch";
+import { useExitReceiptStore } from "./exitReceiptContext";
+import type { ExitReceiptStore } from "./exitReceiptStore";
 import type {
   AlertRuleInput,
   AlertRulePatch,
@@ -50,6 +52,7 @@ import type {
   KellyManualInput,
   Market,
   PlaybookConfirmRulesInput,
+  PlaybookEmergencyExitResponse,
   PositionPatchInput,
   PositionsResponse,
   UpdatePositionInput,
@@ -450,8 +453,19 @@ export function useConfirmPlaybookRules() {
 
 /**
  * Mutation options for `POST /api/playbook/emergency-exit`, split out of the
- * hook so the settle behaviour can be exercised against a plain
- * `MutationObserver` in the node test environment (no React, no jsdom).
+ * hook so the behaviour can be exercised against a plain `MutationObserver` in
+ * the node test environment (no React, no jsdom).
+ *
+ * `onSuccess` (hook level) records the accepted response in the receipt store
+ * (風控 2026-11-01 FE-2). Hook-level callbacks belong to the *mutation*, not to
+ * an observer, so they run even if `/playbook` has unmounted by the time the
+ * response lands — say the user pressed 返回 while the request was in flight.
+ * The mutate-level `onSuccess` of the page's observer would not run then
+ * (TanStack skips mutate callbacks once the observer has no listener). The
+ * closure captures only the Providers-scope store, which outlives the page, so
+ * the receipt is never lost; a page that mounts later reads it from the store.
+ * Dialog closing stays a page concern and is done by the page's own
+ * mutate-level callback.
  *
  * `onSettled` runs for success and failure alike (FR-8a, 風控 必改項 11): the
  * status bar must reflect the backend's real mode after *any* ending, because
@@ -466,13 +480,19 @@ export function useConfirmPlaybookRules() {
  *    its pre-fetch state without dispatching an error, so the skeleton stays.
  * 2. `invalidateQueries` — starts the fresh request.
  *
- * Neither is awaited, and the callback returns nothing: the hook-level
- * `onSettled` is awaited before the mutation resolves, so returning either
- * promise would hold 「送出中」 until `/today` answered.
+ * Neither is awaited, and the callbacks return nothing: hook-level callbacks
+ * are awaited before the mutation resolves, so returning either promise would
+ * hold 「送出中」 until `/today` answered.
  */
-export function emergencyExitMutationOptions(queryClient: QueryClient) {
+export function emergencyExitMutationOptions(
+  queryClient: QueryClient,
+  receiptStore: ExitReceiptStore,
+) {
   return {
     mutationFn: () => postPlaybookEmergencyExit(),
+    onSuccess: (response: PlaybookEmergencyExitResponse): void => {
+      receiptStore.accept(response);
+    },
     onSettled: (): void => {
       void queryClient.cancelQueries({ queryKey: ["playbook-today"] });
       void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
@@ -483,13 +503,14 @@ export function emergencyExitMutationOptions(queryClient: QueryClient) {
 /**
  * `POST /api/playbook/emergency-exit`. The receipt (橫幅) is *not* derived from
  * this mutation's state: `reset()`, the next `mutate()` and observer unmount
- * all drop `mutation.data`, so the page keeps the receipt in its own reducer
- * (`exitReceipt.ts`, VETO-1). Call this hook once, at page level, so the
+ * all drop `mutation.data`, so the receipt lives in the Providers-scope store
+ * (`exitReceiptStore.ts`, VETO-1). Call this hook once, at page level, so the
  * observer outlives every `/today` state (VETO-2).
  */
 export function useEmergencyExit() {
   const queryClient = useQueryClient();
-  return useMutation(emergencyExitMutationOptions(queryClient));
+  const receiptStore = useExitReceiptStore();
+  return useMutation(emergencyExitMutationOptions(queryClient, receiptStore));
 }
 
 /* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */

@@ -57,7 +57,7 @@ const exitFiles = [
   })),
 ];
 
-describe("the receipt is page state, never mutation state (VETO-1: FE-C1, FE-C3, FE-C4)", () => {
+describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3, FE-C4; Q15 方案 D)", () => {
   it("nothing under app/playbook reads the mutation's data or success, or the mutation cache", () => {
     for (const { file, text } of playbook) {
       expect(text, file).not.toMatch(/\bmutation\.data\b|\bmutation\.isSuccess\b/);
@@ -65,25 +65,57 @@ describe("the receipt is page state, never mutation state (VETO-1: FE-C1, FE-C3,
     }
   });
 
-  it("the banner reads the receipt reducer only: `receipt` comes from the flow hook's useReducer", () => {
-    expect(flow).toMatch(/useReducer\(exitReceiptReducer, null\)/);
+  it("the page reads the receipt from the Providers-scope store; the banner gets only the response", () => {
+    expect(flow).toMatch(/useSyncExternalStore\(\s*receiptStore\.subscribe,\s*receiptStore\.getSnapshot,/);
+    expect(flow).toContain("useExitReceiptStore()");
     expect(page).toMatch(/response=\{receipt\.response\}/);
     expect(read(join(PLAYBOOK, "ExitReceiptBanner.tsx"))).not.toMatch(/useMutation|mutation/);
   });
 
-  it("the receipt is recorded only in the page-level observer's mutate-level onSuccess, never in render or an effect", () => {
-    expect(flow.match(/dispatchReceipt\(/g)).toHaveLength(1);
-    const at = flow.indexOf("dispatchReceipt(");
-    const before = flow.slice(0, at);
-    expect(before.slice(before.lastIndexOf("onSuccess"))).toMatch(/^onSuccess: \(response\) =>/);
-    // And no effect watches the mutation to produce it.
+  it("the receipt is written only by the mutation's hook-level onSuccess, so it survives an unmounted page (風控 FE-2)", () => {
+    const queries = read(join(APP_ROOT, "lib/queries.ts"));
+    expect(queries.match(/receiptStore\.accept\(/g)).toHaveLength(1);
+    const at = queries.indexOf("receiptStore.accept(");
+    expect(queries.slice(queries.lastIndexOf("onSuccess", at), at)).toMatch(
+      /^onSuccess: \(response: PlaybookEmergencyExitResponse\): void => \{\s*$/,
+    );
+    // The page's mutate-level onSuccess does UI only and never touches the store.
+    expect(flow).not.toMatch(/receiptStore\.accept|\.accept\(/);
+    // ... and nothing in render or an effect watching the mutation produces it.
     expect(flow).not.toMatch(/useEffect\([^)]*mutation\.(isSuccess|data|status)/);
+    expect(playbook.filter(({ text }) => /\.accept\(/.test(text))).toEqual([]);
   });
 
-  it("only one receipt reducer exists, and no other component under app/playbook holds a receipt", () => {
-    expect(playbook.filter(({ text }) => /exitReceiptReducer/.test(text)).map(({ file }) => file)).toEqual([
+  it("the store is created in a component, never at module level (no singleton), and reuses the append-only reducer", () => {
+    const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
+    const context = read(join(APP_ROOT, "lib/exitReceiptContext.tsx"));
+    expect(store).toMatch(/export function createExitReceiptStore\(\): ExitReceiptStore \{/);
+    expect(store).toContain("exitReceiptReducer(receipt");
+    // No top-level instance in any file.
+    for (const { file, text } of app) {
+      expect(text, file).not.toMatch(/^(export )?(const|let|var) \w+\s*(:[^=]+)?=\s*createExitReceiptStore\(/m);
+    }
+    expect(context).toContain("useState(() => createExitReceiptStore())");
+    expect(read(join(APP_ROOT, "providers.tsx"))).toContain("<ExitReceiptStoreProvider>");
+  });
+
+  it("the banner is rendered only by app/playbook/page.tsx; no other route shows a receipt (風控 FE-4)", () => {
+    const users = app.filter(({ text }) => /ExitReceiptBanner|useExitReceiptStore|receiptStore/.test(text)).map(({ file }) => file);
+    expect(users.sort()).toEqual([
+      "lib/exitReceiptContext.tsx",
+      "lib/queries.ts",
+      "playbook/ExitReceiptBanner.tsx",
+      "playbook/page.tsx",
       "playbook/useEmergencyExitFlow.ts",
     ]);
+    expect(app.filter(({ text }) => /<ExitReceiptBanner/.test(text)).map(({ file }) => file)).toEqual([
+      "playbook/page.tsx",
+    ]);
+  });
+
+  it("the store holds the receipt and the scrolled marker only: no exit_confirm, dialog state, lock or mutation (F-1)", () => {
+    const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
+    expect(store).not.toMatch(/exit_confirm|exitConfirm|lockRef|useMutation|dialog|ExitDialogState/i);
   });
 
   it("mutation.reset() is used in exactly one place: opening the dialog, to clear the previous round's failure panel (FE-C9)", () => {
@@ -157,9 +189,12 @@ describe("the receipt scroll keys on the receipt alone (FE-C8, FE-T3, 風控 FE-
     expect(flow).not.toMatch(/usePlaybookToday|\btoday\b/);
   });
 
-  it("lastHandledSeq starts at the sequence present on mount and only moves forward", () => {
-    expect(flow).toContain("const lastHandledSeq = useRef(receipt?.seq ?? 0);");
-    expect(flow.match(/lastHandledSeq\.current =/g)).toHaveLength(1);
+  it("the 「already scrolled」 marker lives in the store, per receipt, not in the page instance (風控 FE-3)", () => {
+    expect(flow).toContain("receiptStore.getScrolledSeq()");
+    expect(flow.match(/receiptStore\.markScrolled\(/g)).toHaveLength(1);
+    expect(flow).not.toMatch(/lastHandledSeq|useRef\(receipt/);
+    // The check runs before the mark, at effect time, so a second mount cannot re-scroll.
+    expect(flow.indexOf("getScrolledSeq()")).toBeLessThan(flow.indexOf("markScrolled("));
   });
 
   it("scrolls instantly, never smoothly, and never moves focus", () => {

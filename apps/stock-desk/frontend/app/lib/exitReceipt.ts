@@ -1,6 +1,6 @@
 /**
- * The 受理回執 (the banner shown after `POST /emergency-exit` is accepted) as a
- * page-level piece of state, deliberately *not* derived from the mutation.
+ * The 受理回執 (the banner shown after `POST /emergency-exit` is accepted) as
+ * its own piece of state, deliberately *not* derived from the mutation.
  *
  * Why not `mutation.data` / `useMutationState` (tech-architect Q14, VETO-1):
  * `mutation.reset()`, the next `mutate()` and observer unmount each drop
@@ -11,9 +11,11 @@
  * — never because of what `/today` or the dialog is doing.
  *
  * So the lifecycle is encoded in the reducer's type: one action, `accepted`,
- * and no way to clear. It lives in `PlaybookPage` (`useReducer`), in memory
- * only: nothing here may be written to storage, a cookie, the URL or
- * `history.state` (VETO-3), which is why a reload ends it.
+ * and no way to clear. The reducer runs inside the Providers-scope store
+ * (`exitReceiptStore.ts`, 風控 2026-11-01 Q15 → 方案 D), in memory only: nothing
+ * here may be written to storage, a cookie, the URL or `history.state` (VETO-3),
+ * which is why a reload — a new document — ends it, and a SPA navigation does
+ * not.
  */
 
 import type { PlaybookEmergencyExitResponse } from "./types";
