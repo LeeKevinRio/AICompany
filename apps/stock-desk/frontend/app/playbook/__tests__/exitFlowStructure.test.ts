@@ -51,7 +51,17 @@ const dialog = read(join(PLAYBOOK, "EmergencyExitDialog.tsx"));
 /** The exit-flow libs, with the playbook components. */
 const exitFiles = [
   ...playbook,
-  ...["exitReceipt.ts", "exitDialogState.ts", "taipeiDay.ts", "exitFocus.ts"].map((name) => ({
+  // The receipt store and its context are in the persistence scan too (FE-C5,
+  // VETO-3): the store is the one place a receipt is held, so it is the one place
+  // a write to storage, a cookie, the URL or history.state would matter most.
+  ...[
+    "exitReceipt.ts",
+    "exitReceiptStore.ts",
+    "exitReceiptContext.tsx",
+    "exitDialogState.ts",
+    "taipeiDay.ts",
+    "exitFocus.ts",
+  ].map((name) => ({
     file: `lib/${name}`,
     text: read(join(APP_ROOT, "lib", name)),
   })),
