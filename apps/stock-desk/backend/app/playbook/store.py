@@ -50,6 +50,7 @@ from app.data.calendar import TradingCalendar
 from app.data.sqlite_util import add_missing_columns, enable_wal
 from app.playbook.models import (
     BatchState,
+    BatchStatus,
     Directive,
     FastMarketState,
     PlaybookEvaluation,
@@ -225,6 +226,22 @@ FILL_DEPENDENT_EFFECTS = frozenset(
     {"batch_entered", "batch_reduced", "batch_closed", "p1_done", "p2_done", "p3_marked"}
 )
 
+#: ADR-0035 K2: the R series decides once per ``(symbol, 預定執行日)``.
+R_SERIES_RULE_IDS: tuple[str, ...] = ("R1", "R2", "R3", "M1")
+_R_SERIES_PLACEHOLDERS = ", ".join("?" for _ in R_SERIES_RULE_IDS)
+
+#: ADR-0035 Decision 2 / N172-C4: lines outside K1 and K2. They are the
+#: covering set of ADR-0033 C-4 and the quarterly recomputation, which have
+#: idempotency rules of their own; the evaluation never produces either.
+UNKEYED_RULE_IDS: tuple[str, ...] = ("EMERGENCY", "REBALANCE")
+_UNKEYED_PLACEHOLDERS = ", ".join("?" for _ in UNKEYED_RULE_IDS)
+
+#: N172-C5: effects that belong to the R-series line they came with. They are
+#: applied with that line, in the same transaction, and never without it: a
+#: repeated evaluation whose line is not written may not count a deferral (V2)
+#: or skip a batch a second time.
+LINE_BOUND_EFFECTS = frozenset({"defer_increment", "batch_skipped"})
+
 
 class PendingDirective(NamedTuple):
     """One logged line still awaiting its T+1 outcome, with its log row id.
@@ -261,6 +278,164 @@ class EmergencyExitState(NamedTuple):
     covering: list[PendingDirective]
     #: ``emergency_until`` as stored, ``None`` when no exit ever froze the book.
     emergency_until: date | None
+
+
+class EvaluationCommit(NamedTuple):
+    """What :meth:`PlaybookStore.commit_evaluation` did under its write lock.
+
+    ADR-0035 (N-172a). Both lists are read under the same lock that wrote, so
+    the response built from them states exactly what is in the log (R16).
+    """
+
+    #: The evaluation's lines that were new under K1／K2 and were written now.
+    written: list[Directive]
+    #: Every logged line of the 預定執行日 outside :data:`UNKEYED_RULE_IDS`,
+    #: oldest first, one per K1 (the smallest id) -- what ``/today`` lists
+    #: (Decision 4, N172-C6). Older duplicates stay in the log (C11).
+    logged: list[Directive]
+
+
+def decision_key(directive: Directive) -> tuple[str, int | None, str, str, str]:
+    """K1 (ADR-0035 Decision 1); ``None == None`` is ``batch_no IS batch_no``."""
+    return (
+        directive.symbol,
+        directive.batch_no,
+        directive.rule_id,
+        directive.action,
+        directive.execution_date.isoformat(),
+    )
+
+
+def _is_logged(conn: sqlite3.Connection, directive: Directive) -> bool:
+    """Whether K1 -- or, for the R series, K2 -- already has a line on ``conn``."""
+    if directive.rule_id in R_SERIES_RULE_IDS:
+        row = conn.execute(
+            "SELECT 1 FROM playbook_directives WHERE symbol = ? AND execution_date = ? "
+            f"AND rule_id IN ({_R_SERIES_PLACEHOLDERS}) LIMIT 1",
+            (directive.symbol, directive.execution_date.isoformat(), *R_SERIES_RULE_IDS),
+        ).fetchone()
+        return row is not None
+    row = conn.execute(
+        "SELECT 1 FROM playbook_directives WHERE symbol = ? AND batch_no IS ? "
+        "AND rule_id = ? AND action = ? AND execution_date = ? LIMIT 1",
+        (
+            directive.symbol,
+            directive.batch_no,
+            directive.rule_id,
+            directive.action,
+            directive.execution_date.isoformat(),
+        ),
+    ).fetchone()
+    return row is not None
+
+
+def _new_decisions(conn: sqlite3.Connection, directives: Iterable[Directive]) -> list[Directive]:
+    """The lines of one evaluation that no earlier one logged (K1, K2), read on ``conn``.
+
+    A K2 hit covers the whole R series of the symbol, so a first evaluation that
+    skipped batch 1 cannot be followed by a second one entering batch 2
+    (N172-T9). The lines of this same call are checked against each other too.
+    """
+    fresh: list[Directive] = []
+    taken: set[tuple[str, int | None, str, str, str]] = set()
+    taken_r: set[tuple[str, str]] = set()
+    for directive in directives:
+        if directive.rule_id in UNKEYED_RULE_IDS:
+            fresh.append(directive)
+            continue
+        key = decision_key(directive)
+        r_key = (directive.symbol, directive.execution_date.isoformat())
+        is_r = directive.rule_id in R_SERIES_RULE_IDS
+        if key in taken or (is_r and r_key in taken_r) or _is_logged(conn, directive):
+            continue
+        fresh.append(directive)
+        taken.add(key)
+        if is_r:
+            taken_r.add(r_key)
+    return fresh
+
+
+def _apply_bound_effects(
+    conn: sqlite3.Connection,
+    effects: Iterable[StateEffect],
+    written: Sequence[Directive],
+    *,
+    moment: str,
+) -> None:
+    """Apply :data:`LINE_BOUND_EFFECTS` of the R-series lines written now, on ``conn``.
+
+    Same writes as :meth:`PlaybookStore.apply_effects` makes for these kinds
+    (``defer_count`` set to the engine's value, ``status`` set to skipped), so
+    a line that is written behaves exactly as before; one that is not leaves
+    its batch untouched (N172-C5).
+    """
+    owners = {
+        (directive.symbol, directive.batch_no)
+        for directive in written
+        if directive.rule_id in R_SERIES_RULE_IDS and directive.batch_no is not None
+    }
+    for effect in effects:
+        if effect.kind not in LINE_BOUND_EFFECTS or (effect.symbol, effect.batch_no) not in owners:
+            continue
+        if effect.kind == "defer_increment":
+            conn.execute(
+                "UPDATE playbook_batches SET defer_count = ?, updated_at = ? "
+                "WHERE symbol = ? AND batch_no = ?",
+                (effect.value or 0, moment, effect.symbol, effect.batch_no),
+            )
+        else:
+            conn.execute(
+                "UPDATE playbook_batches SET status = 'skipped', updated_at = ? "
+                "WHERE symbol = ? AND batch_no = ?",
+                (moment, effect.symbol, effect.batch_no),
+            )
+
+
+def _insert_schedule(
+    conn: sqlite3.Connection, directives: Iterable[Directive], *, moment: str
+) -> None:
+    """The queued line of each directive, read and written on ``conn``.
+
+    Same row :meth:`PlaybookStore.record_schedule` writes, with the batch's
+    ``defer_count`` read after the bound effects of this transaction.
+    """
+    for directive in directives:
+        row = (
+            None
+            if directive.batch_no is None
+            else conn.execute(
+                "SELECT defer_count FROM playbook_batches WHERE symbol = ? AND batch_no = ?",
+                (directive.symbol, directive.batch_no),
+            ).fetchone()
+        )
+        conn.execute(
+            "INSERT INTO playbook_schedule "
+            "(symbol, batch_no, scheduled_date, defer_count, status, rule_id, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                directive.symbol,
+                directive.batch_no,
+                directive.execution_date.isoformat(),
+                0 if row is None else int(row[0]),
+                directive.status,
+                directive.rule_id,
+                moment,
+            ),
+        )
+
+
+def _read_logged(conn: sqlite3.Connection, execution_date: date) -> list[Directive]:
+    """Logged lines of ``execution_date`` outside :data:`UNKEYED_RULE_IDS`, one per K1."""
+    rows = conn.execute(
+        f"SELECT {_PENDING_SELECT} FROM playbook_directives "
+        f"WHERE execution_date = ? AND rule_id NOT IN ({_UNKEYED_PLACEHOLDERS}) ORDER BY id ASC",
+        (execution_date.isoformat(), *UNKEYED_RULE_IDS),
+    ).fetchall()
+    lines: dict[tuple[str, int | None, str, str, str], Directive] = {}
+    for row in rows:
+        directive = _row_to_pending(row).directive
+        lines.setdefault(decision_key(directive), directive)
+    return list(lines.values())
 
 
 class EmergencyExitWrite(Protocol):
@@ -923,6 +1098,55 @@ class PlaybookStore:
                 moment=datetime.now(UTC).isoformat(),
             )
 
+    def commit_evaluation(self, evaluation: PlaybookEvaluation) -> EvaluationCommit:
+        """Log one evaluation's new decisions under a single write lock (ADR-0035).
+
+        ``GET /today`` evaluates on every call, and before N-172a each call
+        logged every line again: two calls on a 排程日 queued two R1 buys for
+        one batch and the book paid twice (V1), an R2 day counted one deferral
+        per call (V2), a P1 day sold twice (V3). An evaluation is now idempotent
+        per 預定執行日 and decision, and the check is only sound under the
+        lock, so on one connection (N172-C1):
+
+        1. ``BEGIN IMMEDIATE`` takes the write lock up front.
+        2. K1 ``(symbol, batch_no, rule_id, action, execution_date)`` and, for
+           the R series, K2 ``(symbol, execution_date)`` are re-read for every
+           line (Decisions 1, 2). :data:`UNKEYED_RULE_IDS` are not keyed.
+        3. Only the new lines are inserted, with their schedule rows and their
+           :data:`LINE_BOUND_EFFECTS` (Decision 3, N172-C5); nothing that was
+           logged before is deleted or updated (N172-C11).
+        4. The 預定執行日's logged lines are read back for the response
+           (Decision 4, N172-C6), then everything commits together.
+
+        No resolver, network or other store call runs while the lock is held
+        (N172-C2): ``evaluation`` was computed before this method was called.
+        Errors follow :meth:`commit_emergency_exit` (C-11): roll back if SQLite
+        has not already, then raise unchanged; a lock still held past
+        ``busy_timeout`` is raised as ``database is locked``.
+
+        :meth:`record_directives` and :meth:`record_schedule` stay plain appends
+        for the callers that are not an evaluation (REBALANCE, tests).
+        """
+        moment = datetime.now(UTC).isoformat()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                written = _new_decisions(conn, evaluation.directives)
+                _apply_bound_effects(conn, evaluation.effects, written, moment=moment)
+                _insert_directives(
+                    conn, written, rules_version=evaluation.rules_version, moment=moment
+                )
+                _insert_schedule(conn, written, moment=moment)
+                logged = _read_logged(conn, evaluation.execution_date)
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own (a full disk,
+                # say); a second ROLLBACK would then replace the real error.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return EvaluationCommit(written=written, logged=logged)
+
     def commit_emergency_exit[PlanT: EmergencyExitWrite](
         self, plan: Callable[[EmergencyExitState], PlanT]
     ) -> tuple[EmergencyExitState, PlanT]:
@@ -1035,14 +1259,46 @@ class PlaybookStore:
         day cannot both reach the book: the second one changes no rows, gets
         ``False`` back and leaves the shares alone. The book is only touched
         after a successful claim, never before it.
+
+        G1 (ADR-0035 Decision 6′, CEO #88): a buy may only fill a ``planned``
+        batch. A batch is bought once in its life -- :meth:`ensure_batches`
+        never resets one -- so a buy whose batch already left ``planned`` is
+        not claimed at all, in the same ``UPDATE``, and nothing reaches the
+        book. That row stays unsettled; :meth:`batch_blocking_claim` tells it
+        apart from a row someone else claimed (N172-T21).
         """
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 "UPDATE playbook_directives SET settled = 1, settled_at = ?, "
-                "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0",
+                "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0 "
+                "AND (action <> 'buy' OR NOT EXISTS (SELECT 1 FROM playbook_batches AS b "
+                "WHERE b.symbol = playbook_directives.symbol "
+                "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned'))",
                 (datetime.now(UTC).isoformat(), str(open_price), status, directive_id),
             )
             return cursor.rowcount == 1
+
+    def batch_blocking_claim(self, directive_id: int) -> BatchStatus | None:
+        """The batch status G1 refused a claim for, or ``None`` (N172-T21).
+
+        Asked after :meth:`claim_directive` returned ``False``. A row is G1's
+        when it is still unsettled, is a buy and its batch is no longer
+        ``planned``; anything else -- ``settled = 1`` -- is a row another
+        settlement claimed first. Neither can change afterwards: a claimed row
+        is never unclaimed and a batch never returns to ``planned``.
+        """
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT b.status FROM playbook_directives AS d JOIN playbook_batches AS b "
+                "ON b.symbol = d.symbol AND b.batch_no = d.batch_no "
+                "WHERE d.id = ? AND d.settled = 0 AND d.action = 'buy' "
+                "AND b.status <> 'planned'",
+                (directive_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        status: BatchStatus = row[0]
+        return status
 
     def settle(self, directive: Directive, *, fill_price: Decimal | None = None) -> None:
         """Apply a settled line to the book: fills move shares, MISSED moves nothing.

@@ -2,8 +2,9 @@
 
 Every DB lives under ``tmp_path``. The schema comes from the real ``PlaybookStore`` and
 ``PriceBarCache``; hand-made rows go in through plain ``sqlite3`` so each category can be
-staged exactly. One test drives the production write path (``record_directives`` twice, then
-the claim and settle that ``/today`` runs) to pin the D-A estimate to the cash actually lost.
+staged exactly. One test replays the write path ``/today`` had before N-172a
+(``record_directives`` twice, then the claim before G1 and the unchanged ``settle``) to pin the
+D-A estimate to the cash actually lost.
 No network, no real DB, no ``.env``.
 """
 
@@ -164,13 +165,29 @@ def _three_executed_r1(path: Path, **overrides: Any) -> list[int]:
     return [_executed(path, f"2026-08-11T10:0{i}:00+00:00", **overrides) for i in range(3)]
 
 
+def _claim_before_g1(path: Path, directive_id: int, opening: Decimal) -> bool:
+    """``PlaybookStore.claim_directive`` as it was before N-172a added G1."""
+    with closing(sqlite3.connect(path)) as conn, conn:
+        cursor = conn.execute(
+            "UPDATE playbook_directives SET settled = 1, settled_at = ?, "
+            "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0",
+            (datetime.now(UTC).isoformat(), str(opening), "executed", directive_id),
+        )
+        return cursor.rowcount == 1
+
+
 # ---------------------------------------------------------------- D-A
 
 
 def test_d_a_estimate_matches_the_cash_the_production_path_actually_deducted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """record_directives twice (two /today calls), then settle every row as /today does."""
+    """record_directives twice (two /today calls), then settle every row as /today did.
+
+    The claim is the one ``/today`` ran before N-172a: G1 (ADR-0035 Decision 6′) now
+    refuses the second row, which is exactly the loss this estimate is about, so the
+    pre-G1 ``UPDATE`` is replayed verbatim here to stage the history being measured.
+    """
     path = _db(tmp_path)
     store = PlaybookStore(db_path=path)
     store.ensure_batches(["2330"], batches_per_target=3)
@@ -216,7 +233,7 @@ def test_d_a_estimate_matches_the_cash_the_production_path_actually_deducted(
     store.record_directives(evaluation)
     opening = Decimal("605")
     for pending in store.pending_directives():
-        assert store.claim_directive(pending.directive_id, status="executed", open_price=opening)
+        assert _claim_before_g1(path, pending.directive_id, opening)
         store.settle(
             pending.directive.model_copy(update={"status": "executed"}), fill_price=opening
         )

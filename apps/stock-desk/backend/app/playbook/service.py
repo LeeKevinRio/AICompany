@@ -12,8 +12,9 @@ Order of a run:
    on, and take 依據資料日 ``T`` as the latest bar date seen.
 3. Read the parameter version already effective on ``T`` (鐵律④), the batches,
    the symbol flags and the portfolio state.
-4. Evaluate, then persist: schedule-state effects, the schedule rows and the
-   directive log (風控 R16).
+4. Evaluate, then persist: schedule-state effects, then -- under one write
+   lock -- the new decisions' directive log rows (風控 R16), schedule rows and
+   line-bound effects (ADR-0035).
 
 The peak close (波段最高收盤) is rolled forward before evaluation, because the
 trailing stop reads it on the same day's close.
@@ -34,10 +35,12 @@ from app.playbook.engine import (
     emergency_mode_reason,
     evaluate,
     is_usable,
+    planned_batch_shares,
     settle_directive,
 )
 from app.playbook.models import (
     BatchState,
+    BatchStatus,
     Directive,
     EmergencyExitResult,
     ExitConfirm,
@@ -45,6 +48,7 @@ from app.playbook.models import (
     IndexSnapshot,
     MarketSnapshot,
     PlaybookEvaluation,
+    PortfolioState,
     RebalanceResult,
     RuleChangeReceipt,
     RuleParams,
@@ -53,7 +57,16 @@ from app.playbook.models import (
     SettlementResult,
     UnsettledLine,
 )
-from app.playbook.store import EmergencyExitState, PendingDirective, PlaybookStore
+from app.playbook.store import (
+    LINE_BOUND_EFFECTS,
+    ORDER_ACTIONS,
+    R_SERIES_RULE_IDS,
+    EmergencyExitState,
+    EvaluationCommit,
+    PendingDirective,
+    PlaybookStore,
+    decision_key,
+)
 from app.positions.models import Market
 from app.services.index import IndexServiceResolver, load_market_benchmark
 from app.services.market import MarketDataResolver, load_bars
@@ -388,6 +401,157 @@ def plan_emergency_exit(
     )
 
 
+#: 風控 2026-11-01 解讀點 (c): the logged actions SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE
+#: counts -- decisions that place no order. 買賣 lines are ``ORDER_ACTIONS``; an
+#: action in neither tuple is not counted by either sentence.
+DECISION_RECORD_ACTIONS: tuple[str, ...] = ("defer", "skip")
+
+
+def _is_r_series(directive: Directive) -> bool:
+    return directive.rule_id in R_SERIES_RULE_IDS
+
+
+def _insert_after(warnings: list[str], anchor: str, note: str) -> None:
+    """Put ``note`` right after ``anchor``; at the end if ``anchor`` is not there."""
+    position = warnings.index(anchor) + 1 if anchor in warnings else len(warnings)
+    warnings.insert(position, note)
+
+
+def same_day_warnings(
+    evaluation: PlaybookEvaluation,
+    commit: EvaluationCommit,
+    *,
+    markets: Mapping[str, MarketSnapshot],
+    batches: Sequence[BatchState],
+    portfolio: PortfolioState,
+) -> list[str]:
+    """The evaluation's warnings, reconciled with the logged list the page shows.
+
+    ADR-0035 Decision 4 lists the 預定執行日's logged lines, which an earlier
+    run of the same day may have decided (S-α), so the sentences this run's
+    engine wrote are checked against them (風控 CEO #87 回審 二-1、二-3). Every
+    condition is read from structured data -- the lines, the mode, the
+    snapshots -- never from another sentence (題 12 allowlist). Sentences are
+    only located, to drop or to anchor one, by the exact text their own
+    template renders for the same values.
+
+    * **Shrink notes of a K2-blocked R decision are dropped** (二-3 第 2 點).
+      The symbol's R line on the page is the earlier run's, and its own
+      ``rule_summary`` already carries the shrink that applied to it.
+    * **INDEX_DATA_GAP_DEFER_NOTE needs an M1 deferral on the list** (二-3
+      第 3 點): without one, 「計入順延次數（逐批列示）」 is not true.
+    * **SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE** (A, 二-3 第 4 點) and
+      **SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE** (B, 風控 2026-11-01 (c))
+      follow, in that order, the DATA_GAP_NOTE／DATA_GAP_HOLDING_NOTE of a
+      symbol whose data is unusable now: A counts its listed 買賣 lines
+      (``ORDER_ACTIONS``), B its 順延／跳過 records
+      (:data:`DECISION_RECORD_ACTIONS`); each only when its count is one or
+      more. Missing anchors put them at the end of the list.
+    * **SAME_DAY_EARLIER_ENTRY_NOTE** (二-1) when the list has an R-series buy
+      this run produced no buy of the same K1 for: right after FROZEN_NOTE when
+      the mode is not ``normal`` (the condition FROZEN_NOTE is written on),
+      otherwise first.
+    """
+    warnings = list(evaluation.warnings)
+    logged = commit.logged
+    written_r = {directive.symbol for directive in commit.written if _is_r_series(directive)}
+    blocked_r = {directive.symbol for directive in logged if _is_r_series(directive)} - written_r
+
+    # The engine's two 鐵律① sentences, rendered for the blocked symbols. The
+    # 「{symbol}：」 prefix is the engine's own (``_apply_cash_floor``).
+    stale: set[str] = {
+        wording.SHRINK_TO_ZERO_NOTE.format(symbol=batch.symbol, batch_no=batch.batch_no)
+        for batch in batches
+        if batch.symbol in blocked_r
+    }
+    for directive in evaluation.directives:
+        if (
+            directive.symbol not in blocked_r
+            or directive.action != "buy"
+            or directive.batch_no is None
+            or directive.reference_price is None
+        ):
+            continue
+        planned = planned_batch_shares(
+            batch_no=directive.batch_no,
+            close=directive.reference_price,
+            symbol_batches=[batch for batch in batches if batch.symbol == directive.symbol],
+            total_deploy=portfolio.total_deploy,
+            params=evaluation.params,
+        )
+        shrink = wording.SHRINK_NOTE.format(planned=planned, actual=directive.shares)
+        stale.add(f"{directive.symbol}：{shrink}")
+    if not any(line.rule_id == "M1" and line.action == "defer" for line in logged):
+        stale.add(wording.INDEX_DATA_GAP_DEFER_NOTE)
+    warnings = [warning for warning in warnings if warning not in stale]
+
+    by_symbol: dict[str, list[BatchState]] = {}
+    for batch in batches:
+        by_symbol.setdefault(batch.symbol, []).append(batch)
+    for symbol in sorted(by_symbol):
+        snapshot = markets.get(symbol)
+        if snapshot is not None and is_usable(snapshot.data_status, snapshot.source):
+            continue
+        lines = [line for line in logged if line.symbol == symbol]
+        orders = sum(1 for line in lines if line.action in ORDER_ACTIONS)
+        decisions = sum(1 for line in lines if line.action in DECISION_RECORD_ACTIONS)
+        if not orders and not decisions:
+            continue
+        status = "unavailable" if snapshot is None else snapshot.data_status
+        source = "none" if snapshot is None else snapshot.source
+        holds = any(
+            batch.status == "open" and batch.remaining_shares > 0 for batch in by_symbol[symbol]
+        )
+        gap = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
+        # DATA_GAP(_HOLDING)_NOTE -> A -> B; each falls back to the end of the
+        # list when the sentence before it is not there (風控 必改 7).
+        anchor = gap.format(symbol=symbol, status=status, source=source)
+        if orders:
+            note = wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
+                symbol=symbol, status=status, line_count=orders
+            )
+            _insert_after(warnings, anchor, note)
+            anchor = note
+        if decisions:
+            _insert_after(
+                warnings,
+                anchor,
+                wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE.format(
+                    symbol=symbol, decision_count=decisions
+                ),
+            )
+
+    produced = {decision_key(line) for line in evaluation.directives if line.action == "buy"}
+    earlier = sorted(
+        (
+            line
+            for line in logged
+            if _is_r_series(line) and line.action == "buy" and decision_key(line) not in produced
+        ),
+        key=lambda line: (line.symbol, line.batch_no or 0, line.execution_date),
+    )
+    if earlier:
+        note = wording.SAME_DAY_EARLIER_ENTRY_NOTE.format(
+            entry_count=len(earlier),
+            entry_items="、".join(
+                wording.SAME_DAY_EARLIER_ENTRY_ITEM.format(
+                    symbol=line.symbol,
+                    batch_no=line.batch_no,
+                    shares=line.shares,
+                    rule_id=line.rule_id,
+                    execution_date=line.execution_date.isoformat(),
+                )
+                for line in earlier
+            ),
+        )
+        frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS[evaluation.mode])
+        if evaluation.mode != "normal" and frozen in warnings:
+            _insert_after(warnings, frozen, note)
+        else:
+            warnings.insert(0, note)
+    return warnings
+
+
 class PlaybookService:
     """Loads data, runs one evaluation and persists its consequences."""
 
@@ -452,6 +616,13 @@ class PlaybookService:
         line judged executed while its batch already held nothing gets N2 after
         the summary. Both are read around :meth:`PlaybookStore.settle`, which is
         left exactly as it was.
+
+        G1 (ADR-0035 Decision 6′, CEO #88): a buy whose batch is no longer
+        ``planned`` is refused by the claim itself, so it neither fills nor
+        reaches the book; it stays pending and is listed in ``unsettled`` with
+        :data:`wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE` instead of being
+        dropped like a row another run claimed (N172-T21). This is the one
+        change N-172a makes here (N172-C8); ``settle`` is untouched.
         """
         as_of = today or datetime.now(UTC).date()
         pending = self._store.pending_directives(on_or_before=as_of)
@@ -468,6 +639,7 @@ class PlaybookService:
         settled: list[SettledLine] = []
         unsettled: list[UnsettledLine] = []
         moved_nothing: list[Directive] = []
+        blocked: dict[int, BatchStatus] = {}
         for item in pending:
             directive = item.directive
             series = loaded.get(directive.symbol, NOTHING_LOADED)
@@ -492,7 +664,17 @@ class PlaybookService:
             if not self._store.claim_directive(
                 item.directive_id, status=outcome.status, open_price=opening
             ):
-                # Someone else settled this row between the read and the claim.
+                refused = self._store.batch_blocking_claim(item.directive_id)
+                if refused is not None:
+                    # G1: a buy for a batch that is no longer planned. Not
+                    # claimed, nothing moved; listed with its own reason.
+                    blocked[item.directive_id] = refused
+                    unsettled.append(
+                        UnsettledLine(
+                            directive_id=item.directive_id, directive=directive, reason=""
+                        )
+                    )
+                # Otherwise someone else settled this row between the read and the claim.
                 continue
             if _is_exit_sell(outcome) and outcome.status == "executed":
                 # N2: ``settle`` moves ``min(remaining, shares)``; with nothing
@@ -505,8 +687,10 @@ class PlaybookService:
                 SettledLine(directive_id=item.directive_id, directive=outcome, open_price=opening)
             )
 
-        # N1／N1b are decided after every line of the run has reached the book,
-        # so the batch state they state is the one this settlement leaves.
+        # N1／N1b and the G1 reason are decided after every line of the run has
+        # reached the book, so the batch state they state is the one this
+        # settlement leaves.
+        unsettled = self._with_batch_filled_reasons(unsettled, blocked)
         unsettled = self._with_stale_exit_notes(unsettled, loaded)
         result = SettlementResult(
             settled_on=as_of, settled=settled, unsettled=unsettled, warnings=[]
@@ -540,6 +724,39 @@ class PlaybookService:
         if directive.batch_no is None:
             return None
         return self._store.get_batch(directive.symbol, directive.batch_no)
+
+    def _with_batch_filled_reasons(
+        self, unsettled: list[UnsettledLine], blocked: Mapping[int, BatchStatus]
+    ) -> list[UnsettledLine]:
+        """Give each line G1 refused its :data:`wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE`.
+
+        ``{batch_state}`` is the batch as this settlement leaves it, which can
+        only have moved on from the status the refusal saw (a batch never
+        returns to ``planned``); that status stands in if the batch row is gone.
+        """
+        if not blocked:
+            return unsettled
+        noted: list[UnsettledLine] = []
+        for line in unsettled:
+            refused = blocked.get(line.directive_id)
+            if refused is None:
+                noted.append(line)
+                continue
+            directive = line.directive
+            current = self._batch_of(directive)
+            state = (
+                current.status if current is not None and current.status != "planned" else refused
+            )
+            reason = wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE.format(
+                symbol=directive.symbol,
+                batch_no=directive.batch_no,
+                shares=directive.shares,
+                rule_id=directive.rule_id,
+                execution_date=directive.execution_date.isoformat(),
+                batch_state=wording.SETTLEMENT_BATCH_STATES[state],
+            )
+            noted.append(line.model_copy(update={"reason": reason}))
+        return noted
 
     def _with_stale_exit_notes(
         self, unsettled: list[UnsettledLine], loaded: Mapping[str, LoadedSeries]
@@ -906,8 +1123,21 @@ class PlaybookService:
 
         Settlement runs first: yesterday's lines have to reach the book before
         today's lines are decided, or the same batch would be re-issued every day
-        (the T+1 half of CEO 裁決七). It is idempotent, so calling this endpoint
-        repeatedly is safe.
+        (the T+1 half of CEO 裁決七). Settlement claims each row before the book
+        moves, so running it again settles nothing twice.
+
+        The evaluation itself writes, and before ADR-0035 every call wrote its
+        lines again (N172-C10). It is now idempotent per 預定執行日 and decision
+        (K1, K2), under one write lock (:meth:`PlaybookStore.commit_evaluation`):
+        a repeated call logs only decisions no earlier call of the same
+        預定執行日 made -- a new S1 once the data is back, say -- and applies a
+        deferral or skip only with the line it belongs to. The effects left
+        outside that transaction (pause, blacklist, freeze, defense, trailing,
+        deferral reset) resolve to the same state for the same 依據資料日. The
+        response lists the 預定執行日's **logged** lines (Decision 4), so every
+        refresh shows the same table, and says so when an earlier R1 buy is on
+        it that this run did not produce (Decision 5, S-α) -- see
+        :func:`same_day_warnings`.
 
         Gated on authorship (風控 R2 / 覆審 歸屬語情境 1): a rule-driven directive
         may only be produced from rules the user submitted, so a book with no
@@ -958,21 +1188,27 @@ class PlaybookService:
         self._store.roll_peak_closes(
             {symbol: snapshot.close for symbol, snapshot in markets.items()}
         )
+        book = self._store.list_batches()
+        portfolio = self._store.portfolio_state()
         evaluation = evaluate(
             data_date=data_date,
             calendar=calendar,
             params=params,
             index=index,
             markets=markets,
-            batches=self._store.list_batches(),
+            batches=book,
             symbols=self._store.symbol_states(data_date),
-            portfolio=self._store.portfolio_state(),
+            portfolio=portfolio,
             previous_fast_market=self._store.fast_market_state(),
         )
-        self._store.apply_effects(evaluation.effects, data_date=data_date, calendar=calendar)
+        # The line-bound effects go with their lines, under the lock (C5).
+        self._store.apply_effects(
+            [effect for effect in evaluation.effects if effect.kind not in LINE_BOUND_EFFECTS],
+            data_date=data_date,
+            calendar=calendar,
+        )
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
-        self._store.record_schedule(evaluation)
-        self._store.record_directives(evaluation)
+        commit = self._store.commit_evaluation(evaluation)
         # §6 ②: the effective date of the row actually in force on the 依據資料日,
         # read from the store rather than from ``params`` -- a parameter set that
         # fell back to the system default carries a derived date, and the page
@@ -983,11 +1219,17 @@ class PlaybookService:
         # Read from the loaded series, not the snapshot: when no bar came back
         # at all the snapshot is ``None`` and the loader's own sentence (which
         # source reported what) is exactly what the reader needs (風控 R4-a).
-        warnings = list(evaluation.warnings)
+        warnings = same_day_warnings(
+            evaluation, commit, markets=markets, batches=book, portfolio=portfolio
+        )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
         return evaluation.model_copy(
             update={
+                # Decision 4: what the log holds for this 預定執行日, so 「無」
+                # statements derived from it (``no_directive_note``) read the
+                # same list the page shows (風控 二-3 第 1 點).
+                "directives": commit.logged,
                 "warnings": warnings,
                 "settlement": settlement,
                 "attribution": wording.attribution_note(authorship),

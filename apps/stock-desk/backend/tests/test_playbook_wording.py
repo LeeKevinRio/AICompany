@@ -726,3 +726,93 @@ def test_the_nb6_retry_paragraph_is_the_revised_version_verbatim() -> None:
     for banned in ("安全", "放心", "已執行", "已出清", "先前那次是否"):
         assert banned not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
     assert "{" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+
+
+# --- N-172a (ADR-0035；風控 CEO #87 回審 二-1、二-2、二-3)：逐字與落點 ------------------
+
+
+def test_same_day_earlier_entry_note_and_item_are_verbatim() -> None:
+    """二-1 (CEO #86 合併門檻)."""
+    assert wording.SAME_DAY_EARLIER_ENTRY_NOTE == (
+        "指令帳冊中有 {entry_count} 筆 R 系列買進指令，是同一預定執行日稍早一次評估已產生的指令："
+        "{entry_items}。本次評估沒有產生這些買進指令，但已產生的指令不會因此取消或修改，"
+        "帳冊會照常以預定執行日開盤價判定，判定成交即記為持有批次並扣除帳冊現金；"
+        "本頁其他說明若提到 R 系列進場不執行、當日不新開倉或當日不產生指令，"
+        "是指本次評估不再產生新的指令，不包括上述已產生的指令。"
+        "本系統不下單，無法得知你是否已依這些指令在券商下單，也無法替你在券商撤單："
+        "若你在券商的買進實際成交，實際持股以你的券商回報為準；"
+        "若未成交（包括未下單或已自行撤單），帳冊判定成交的批次將與你的實際持股不符。"
+    )
+    assert wording.SAME_DAY_EARLIER_ENTRY_ITEM == (
+        "{symbol}第 {batch_no} 批買進 {shares} 股（規則 {rule_id}，預定執行日 {execution_date}）"
+    )
+
+
+def test_settlement_batch_already_filled_note_and_its_states_are_verbatim() -> None:
+    """二-2: ``{batch_state}`` has three values and never one for ``planned``."""
+    assert wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE == (
+        "{symbol}第 {batch_no} 批買進 {shares} 股（規則 {rule_id}，預定執行日 {execution_date}）："
+        "該日已有日線開盤價，但帳冊中這一批目前{batch_state}，不是待買進狀態，"
+        "帳冊不會依本筆判定成交，股數與現金都未因本筆變動；本筆未結算，維持待結算狀態，"
+        "之後的結算會繼續列出。本系統不下單，無法得知你是否已依本筆在券商買進："
+        "若已買進且成交，你在券商的這檔持股可能多於帳冊所記，多出的股數不在帳冊內，"
+        "S/P 系列不會評估它們的停損停利，全部出清也不會涵蓋它們，實際持股以你的券商回報為準；"
+        "若未下單或未成交，帳冊不受本筆影響。"
+    )
+    assert wording.SETTLEMENT_BATCH_STATES == {
+        "open": "已記為持有",
+        "closed": "已記為持有後全數賣出",
+        "skipped": "已被跳過",
+    }
+
+
+def test_same_day_earlier_lines_data_gap_notes_are_verbatim() -> None:
+    """二-3 第 4 點 A 句（風控 2026-11-01 (c) 修訂兩處）與新增的 B 句."""
+    assert wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE == (
+        "{symbol} 本次資料狀態為 {status}，本次未重新評估這檔；"
+        "指令帳冊中這檔的 {line_count} 筆買賣指令，"
+        "是同一預定執行日稍早這檔資料可用時的評估已產生的指令，"
+        "未因本次資料狀態而取消或修改，仍會照常以預定執行日開盤價在帳冊判定。"
+    )
+    assert wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE == (
+        "指令帳冊中 {symbol} 的 {decision_count} 筆順延或跳過紀錄，"
+        "是同一預定執行日稍早這檔資料可用時的評估結果；本次未重新評估這檔，"
+        "這些紀錄未因此取消或修改。這幾筆不是買賣指令，帳冊不會依開盤價判定成交。"
+    )
+    # The pre-revision wording may not come back.
+    assert (
+        "筆指令，是同一預定執行日稍早資料可用時" not in wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE
+    )
+
+
+def test_the_n172a_sentences_live_in_wording_only_and_the_store_never_imports_it() -> None:
+    """第 12 點 / N172-C7 (C-10): no other app module carries their text; ``store`` has
+    no import of ``wording`` at all."""
+    import ast
+    from pathlib import Path
+
+    app_root = Path(wording.__file__).resolve().parents[1]
+    fragments = (
+        "同一預定執行日稍早",
+        "不是待買進狀態",
+        "本次未重新評估這檔",
+        "已記為持有後全數賣出",
+        "筆順延或跳過紀錄",
+    )
+    for path in app_root.rglob("*.py"):
+        if path.name == "wording.py" and path.parent.name == "playbook":
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert not [fragment for fragment in fragments if fragment in text], path
+    store_tree = ast.parse((app_root / "playbook" / "store.py").read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(store_tree)
+        if isinstance(node, ast.ImportFrom | ast.Import)
+        for alias in node.names
+    } | {
+        node.module
+        for node in ast.walk(store_tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert not [name for name in imported if "wording" in name]
