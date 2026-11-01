@@ -96,7 +96,7 @@ export function receiptNeedsScroll(
  * After the `scroll-mt-*` scroll, how far to scroll *further* when the bar is
  * taller than the fixed offset assumed (快市啟動 makes it wrap; 風控 必改項 12):
  * a negative number moves the page up so the banner's first line clears the
- * bar. Zero when it already does. This is the "即時量測狀態列高度 + 16px"
+ * bar. Zero when it already does. This is the "measure the bar as it is now, add 16px"
  * fallback — it never loosens the bar's own height limits.
  */
 export function receiptScrollCorrection(bannerTop: number, barBottom: number): number {

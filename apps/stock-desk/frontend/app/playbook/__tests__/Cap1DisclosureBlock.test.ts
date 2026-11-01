@@ -33,6 +33,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../lib/queries", () => ({
   usePlaybookToday: () => ({
+    status: "success",
+    dataUpdatedAt: 0,
     isPending: false,
     isError: false,
     isSuccess: true,
@@ -65,6 +67,7 @@ const { Cap1DisclosureBlock } = await import("../Cap1DisclosureBlock");
 const { default: PlaybookPage } = await import("../page");
 const { RuleSetConfirmPanel } = await import("../RuleSetConfirmPanel");
 const { ModeStatusBar } = await import("../ModeStatusBar");
+const { ExitTriggerButton } = await import("../ExitTriggerButton");
 
 const SRC_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -496,12 +499,26 @@ describe("位置：每個畫面恰好一次，順序固定", () => {
 
 describe("不得出現在 EXIT 流程、alerts、逐筆指令列、page_summary", () => {
   it("EXIT 流程元件內不出現本區塊（原始碼與渲染輸出）", () => {
-    const exitSource = source("playbook/EmergencyExitControl.tsx");
-    expect(exitSource).not.toMatch(/Cap1Disclosure|cap1_disclosure|cap1/i);
+    for (const file of [
+      "playbook/EmergencyExitDialog.tsx",
+      "playbook/ExitTriggerButton.tsx",
+      "playbook/ExitReceiptBanner.tsx",
+      "playbook/useEmergencyExitFlow.ts",
+      "lib/exitDialogState.ts",
+      "lib/exitReceipt.ts",
+    ]) {
+      expect(source(file), file).not.toMatch(/Cap1Disclosure|cap1_disclosure|cap1/i);
+    }
 
     state.today = today("normal", TODAY_DISCLOSURE);
+    const trigger = createElement(ExitTriggerButton, {
+      buttonRef: { current: null },
+      focusLostRef: { current: false },
+      dialogOpen: false,
+      onOpen: () => undefined,
+    });
     const statusBar = renderToStaticMarkup(
-      createElement(ModeStatusBar, { today: state.today as PlaybookTodayResponse }),
+      createElement(ModeStatusBar, { today: state.today as PlaybookTodayResponse, trigger }),
     );
     expect(statusBar).toContain("全部出清");
     expect(statusBar).not.toContain(TODAY_DISCLOSURE.title);
@@ -510,9 +527,16 @@ describe("不得出現在 EXIT 流程、alerts、逐筆指令列、page_summary"
 
   it("the EXIT flow's props carry only exit_confirm, never the disclosure", () => {
     const statusBarSource = source("playbook/ModeStatusBar.tsx");
+    const pageSource = source("playbook/page.tsx");
 
-    expect(statusBarSource).toContain("<EmergencyExitControl exitConfirm={today.exit_confirm} />");
+    // The status bar only hosts the trigger it is handed; the dialog is built by
+    // the page from a view with exactly three fields, of which the content one is
+    // `exit_confirm`.
+    expect(statusBarSource).toContain("{trigger}");
     expect(statusBarSource).not.toMatch(/Cap1Disclosure|cap1_disclosure/);
+    expect(pageSource).toContain("exitConfirm: today.isSuccess ? today.data.exit_confirm : null,");
+    const view = pageSource.slice(pageSource.indexOf("const exitToday"), pageSource.indexOf("};", pageSource.indexOf("const exitToday")));
+    expect(view).not.toMatch(/cap1/i);
   });
 
   it("only page.tsx and RuleSetConfirmPanel.tsx use the block or read the field (no alerts, ledger row, snapshot, settlement)", () => {

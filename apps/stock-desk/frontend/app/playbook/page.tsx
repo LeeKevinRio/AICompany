@@ -2,6 +2,8 @@
 
 import { ErrorPanel } from "../components/ErrorPanel";
 import { SkeletonBlock } from "../components/SkeletonBlock";
+import type { ExitTodayView } from "../lib/exitDialogState";
+import { isReceiptModeReasonHidden } from "../lib/exitReceipt";
 import {
   cap1DisclosureHost,
   fastMarketAdjacentNote,
@@ -14,10 +16,14 @@ import {
 import { usePlaybookToday } from "../lib/queries";
 import { Cap1DisclosureBlock } from "./Cap1DisclosureBlock";
 import { DirectiveLedger } from "./DirectiveLedger";
+import { EmergencyExitDialog } from "./EmergencyExitDialog";
+import { ExitReceiptBanner } from "./ExitReceiptBanner";
+import { ExitTriggerButton } from "./ExitTriggerButton";
 import { ModeStatusBar } from "./ModeStatusBar";
 import { PositionSnapshotTable } from "./PositionSnapshotTable";
 import { RuleSetConfirmPanel } from "./RuleSetConfirmPanel";
 import { SettlementPanel } from "./SettlementPanel";
+import { useEmergencyExitFlow } from "./useEmergencyExitFlow";
 
 /**
  * 排程台 (`/playbook`, 視覺規範 全文). 第 0 層狀態列（`ModeStatusBar`,
@@ -33,9 +39,25 @@ import { SettlementPanel } from "./SettlementPanel";
  * `{PAGE_FRAMING_LINE}` placeholder in the visual spec and has no backend field
  * (risk-compliance ruled it 「MVP 可缺」 because the 歸屬語 already carries it),
  * so it is still not rendered.
+ *
+ * The 全部出清 flow is owned *here*, not by the status bar (tech-architect Q14,
+ * ADR-0036 draft): the one `useEmergencyExit` observer, the receipt reducer, the
+ * dialog's `isOpen`, the submit lock and the trigger ref all live in
+ * `useEmergencyExitFlow`, so none of it sits below the `today.isSuccess` gate and
+ * none of it unmounts when `/today` fails (FR-7a/7b, AC-17, AC-21, AC-22).
+ *
+ * Layout (視覺規範 §2.1 / §10 方案 B), identical in every `/today` state:
+ *   [status bar — sticky, only while `/today` is successful; holds the trigger]
+ *   <main>
+ *     h1 row   — `<h1>`; plus the trigger when `/today` is not successful
+ *     role="status" container — always mounted, same node in all four states;
+ *                holds the receipt banner once there is one
+ *     skeleton | load-failure panel | the page content
+ *   dialog   — sibling of the page content, mounted on `isOpen` only
  */
 export default function PlaybookPage() {
   const today = usePlaybookToday(true);
+  const flow = useEmergencyExitFlow();
   const data = today.data;
   // 快市沿用說明 is rendered next to the badge in `ModeStatusBar`; the same
   // sentence is filtered out of the warnings list below so the page states it
@@ -43,12 +65,71 @@ export default function PlaybookPage() {
   const carriedNote = data === undefined ? null : fastMarketAdjacentNote(data.fast_market);
   const warnings = data === undefined ? [] : visibleWarnings(data.warnings, carriedNote);
 
+  // The dialog sees `exit_confirm` only through `today.isSuccess` (風控 Q8 F-1):
+  // never `today.data?.exit_confirm`, which on a failed refetch would hand it the
+  // stale block of the previous success.
+  const exitToday: ExitTodayView = {
+    status: today.status,
+    dataUpdatedAt: today.dataUpdatedAt,
+    exitConfirm: today.isSuccess ? today.data.exit_confirm : null,
+  };
+
+  // The banner drops its mode_reason paragraph only when the status bar is
+  // mounted (`today.isSuccess` — the very expression gating the bar below) and
+  // shows the identical sentence. Decided here, in the same render as the gate.
+  const receipt = flow.receipt;
+  const modeReasonHidden =
+    receipt !== null &&
+    isReceiptModeReasonHidden(
+      today.isSuccess,
+      today.isSuccess ? today.data.mode_reason : null,
+      receipt.response.mode_reason,
+    );
+
+  // One trigger element, rendered in exactly one of two places picked by the
+  // same `today.isSuccess` test (FE-C12). The two placements share `triggerRef`.
+  const trigger = (
+    <ExitTriggerButton
+      buttonRef={flow.triggerRef}
+      focusLostRef={flow.focusLostRef}
+      dialogOpen={flow.isOpen}
+      onOpen={flow.open}
+    />
+  );
+
   return (
     <div>
-      {today.isSuccess && <ModeStatusBar today={today.data} />}
+      {today.isSuccess && (
+        <ModeStatusBar today={today.data} trigger={trigger} rootRef={flow.statusBarRef} />
+      )}
 
       <main className="mx-auto max-w-5xl px-4 py-8">
-        <h1 className="text-2xl font-bold text-neutral-100">排程台</h1>
+        {/*
+          h1 row (視覺規範 §10, V-33): no background, border, shadow or role; not
+          sticky; its only children are the <h1> and, while `/today` is not
+          successful, the trigger. It never looks like the status bar — no badge
+          slot, no dash, no mode text (風控 F-5).
+        */}
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold text-neutral-100">排程台</h1>
+          {!today.isSuccess && trigger}
+        </div>
+
+        {/*
+          The receipt's live region: always mounted, class-less (zero height when
+          empty), the h1 row's next sibling in every state, and never inside a
+          `today.*` condition, a fragment or a keyed element (FE-C6, V-26) — a
+          live region must exist before its content does.
+        */}
+        <div role="status">
+          {receipt !== null && (
+            <ExitReceiptBanner
+              response={receipt.response}
+              showModeReason={!modeReasonHidden}
+              bannerRef={flow.bannerRef}
+            />
+          )}
+        </div>
 
         {today.isPending && (
           <div className="mt-6 space-y-3">
@@ -139,6 +220,18 @@ export default function PlaybookPage() {
           </>
         )}
       </main>
+
+      {flow.isOpen && (
+        <EmergencyExitDialog
+          today={exitToday}
+          isPending={flow.isPending}
+          isError={flow.isError}
+          error={flow.error}
+          lockRef={flow.lockRef}
+          onSubmit={flow.submit}
+          onClose={flow.close}
+        />
+      )}
     </div>
   );
 }
