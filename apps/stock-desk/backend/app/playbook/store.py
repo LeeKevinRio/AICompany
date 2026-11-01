@@ -237,10 +237,11 @@ class PendingDirective(NamedTuple):
     directive: Directive
 
 
-#: ADR-0033 C-4: a batch is *covered* when a line with these three values is in
-#: the log for its ``(symbol, batch_no)``. ``settled = 0`` and nothing else
-#: decides "still outstanding" -- a line past its 預定執行日 that never got an
-#: opening price is still covered (風控 CEO-1 建議, pending the CEO's ruling).
+#: ADR-0033 C-4: the candidates that may cover a batch are the lines with these
+#: values and ``settled = 0`` for its ``(symbol, batch_no)``. Whether each one
+#: still covers is decided by the service under 判準 Z (CEO #87／#89,
+#: :func:`app.playbook.service.exit_line_still_covers`) from bars loaded before
+#: the lock; this store only reads the rows.
 EMERGENCY_RULE_ID = "EMERGENCY"
 EMERGENCY_ACTION = "sell"
 
@@ -254,8 +255,9 @@ class EmergencyExitState(NamedTuple):
 
     #: Batches with ``status = 'open'`` and ``remaining_shares > 0``.
     open_batches: list[BatchState]
-    #: Every unsettled EMERGENCY sell (C-4), oldest first, duplicates included:
-    #: a database written before N-166 may hold more than one per batch.
+    #: Every unsettled EMERGENCY sell (the C-4 candidates), oldest first,
+    #: duplicates included: a database written before N-166 may hold more than
+    #: one per batch. Which of them still cover is the service's call (判準 Z).
     covering: list[PendingDirective]
     #: ``emergency_until`` as stored, ``None`` when no exit ever froze the book.
     emergency_until: date | None

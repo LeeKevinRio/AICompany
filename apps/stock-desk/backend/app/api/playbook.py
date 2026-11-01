@@ -274,10 +274,12 @@ class EmergencyExitResponse(BaseModel):
     attribution: str | None
     #: Only the lines this call wrote (ADR-0033 C-7).
     directives: list[DirectiveLine]
-    #: Earlier, still unsettled EMERGENCY lines covering the other held batches
-    #: -- every one of them, so a batch logged twice before N-166 shows both, as
-    #: the message's date list does (C-7, 風控 第二次裁示 第 2 項). Additive; the
-    #: client need not render it, and any view that does must list them all.
+    #: Earlier, still unsettled EMERGENCY lines that still cover the other held
+    #: batches under 判準 Z (CEO #87／#89) -- every one of them, so a batch
+    #: logged twice before N-166 shows both, as the message's date list does
+    #: (C-7, 風控 第二次裁示 第 2 項). A line that no longer covers is not here;
+    #: the message discloses it (S10). Additive; the client need not render it,
+    #: and any view that does must list them all.
     pending_directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str

@@ -221,6 +221,33 @@ def build_exit_confirm(
     )
 
 
+def exit_line_still_covers(directive: Directive, bars: Sequence[PriceBar]) -> bool:
+    """判準 Z (CEO #87／#89, 風控 2026-10-31): does this unsettled EMERGENCY sell cover its batch?
+
+    It stops covering only when **both** hold on the symbol's loaded daily
+    series: (1) a bar dated after its 預定執行日 E exists, and (2) no bar dated E
+    exists (a window that does not reach E counts as "no bar"). Then the
+    settlement can never stamp it -- E had no opening price while the market
+    moved on -- so the exit may write a new line for the batch.
+
+    Every other case still covers, by design:
+
+    * E has a bar but the line is unsettled -- the exit does not settle first,
+      so a user who skipped ``/today`` for a day would otherwise be sent to sell
+      a second time (R10). Condition (2) is what keeps this case covered.
+    * Nothing after E yet, or the load failed / came back empty -- a duplicate
+      sell does more harm than an exit held back for a day; S3 says so.
+
+    ``bars`` must be the series :meth:`PlaybookService.settle_pending` would
+    use: the same loader (``_load_symbol_bars``), the same window, closed
+    sessions only (the data layer drops an unfinished one). Never the weekday
+    calendar, the index or another symbol. Pure, so it runs under the lock (C-3).
+    """
+    days = {bar.date for bar in bars}
+    execution = directive.execution_date
+    return execution in days or not any(day > execution for day in days)
+
+
 @dataclass(frozen=True)
 class ExitPlan:
     """What one EMERGENCY_EXIT decided under the write lock (ADR-0033).
@@ -230,18 +257,21 @@ class ExitPlan:
     response describes.
     """
 
-    #: Lines for the held batches no unsettled EMERGENCY sell covered yet.
+    #: Lines for the held batches no unsettled EMERGENCY sell still covers.
     directives: list[Directive]
     #: DATA_GAP_NOTE for every new line whose symbol had no bar (風控 R5).
     warnings: list[str]
     #: The batches that were covered already, as read under the lock.
     covered: list[BatchState]
-    #: **Every** covering line of the covered batches, oldest first (C-4). A
-    #: database written before N-166 may hold two for one batch, possibly with
-    #: different 預定執行日; both stay listed, because both are live lines the
-    #: user may have been told about (風控 2026-10-31 第二次裁示 第 2 項). Counts
-    #: come from ``covered``, never from here, so they do not double.
+    #: **Every** line that still covers a covered batch under 判準 Z, oldest
+    #: first (C-4). A database written before N-166 may hold two for one batch,
+    #: possibly with different 預定執行日; both stay listed (風控 第二次裁示
+    #: 第 2 項). Counts come from ``covered``, never from here, so they do not
+    #: double. Lines that no longer cover are in ``stale`` instead.
     pending: list[PendingDirective]
+    #: Held batches with unsettled EMERGENCY lines that no longer cover them
+    #: (S10), whether or not another line still does (風控: 第三次出清仍列).
+    stale: list[wording.ExitStale]
     rules_version: int
     #: :func:`effective_freeze_until` of the stored and the computed 恢復日.
     emergency_until: date
@@ -266,24 +296,44 @@ def plan_emergency_exit(
     :data:`wording.DATA_GAP_NOTE` (風控 R5), exactly like a symbol whose load
     came back empty.
 
-    Only uncovered batches get a line (C-4): a batch already carrying an
-    unsettled EMERGENCY sell keeps it, and it is reported instead -- with every
-    line that covers it, not just one.
+    Only uncovered batches get a line (C-4 as narrowed by CEO #87／#89): a batch
+    with an unsettled EMERGENCY sell that still covers it under
+    :func:`exit_line_still_covers` keeps it, and it is reported instead -- with
+    every such line. Lines that no longer cover are reported as ``stale``
+    (S10) and are not cancelled.
     """
-    covering = {
-        (item.directive.symbol, item.directive.batch_no)
-        for item in state.covering
-        if item.directive.batch_no is not None
-    }
+    lines: dict[tuple[str, int], list[PendingDirective]] = {}
+    for item in state.covering:
+        if item.directive.batch_no is not None:
+            lines.setdefault((item.directive.symbol, item.directive.batch_no), []).append(item)
 
     directives: list[Directive] = []
     warnings: list[str] = []
     covered: list[BatchState] = []
+    stale: list[wording.ExitStale] = []
+    live_ids: set[int] = set()
     for batch in state.open_batches:
-        if (batch.symbol, batch.batch_no) in covering:
-            covered.append(batch)
-            continue
         series = loaded.get(batch.symbol, NOTHING_LOADED)
+        live: list[int] = []
+        stale_dates: list[date] = []
+        for item in lines.get((batch.symbol, batch.batch_no), []):
+            if exit_line_still_covers(item.directive, series.bars):
+                live.append(item.directive_id)
+            else:
+                stale_dates.append(item.directive.execution_date)
+        if stale_dates:
+            stale.append(
+                wording.ExitStale(
+                    symbol=batch.symbol,
+                    batch_no=batch.batch_no,
+                    shares=batch.remaining_shares,
+                    dates=tuple(stale_dates),
+                )
+            )
+        if live:
+            covered.append(batch)
+            live_ids.update(live)
+            continue
         snapshot = build_market_snapshot(
             batch.symbol,
             series.bars,
@@ -318,18 +368,14 @@ def plan_emergency_exit(
                 data_reason=series.reason,
             )
         )
-    # A covering line of a batch that is no longer open (a pre-N-166 duplicate
-    # whose twin already settled it) covers nothing held, so it is not reported.
-    covered_keys = {(batch.symbol, batch.batch_no) for batch in covered}
+    # A line of a batch that is no longer open (a pre-N-166 duplicate whose
+    # twin already settled it) covers nothing held, so it is not reported.
     return ExitPlan(
         directives=directives,
         warnings=warnings,
         covered=covered,
-        pending=[
-            item
-            for item in state.covering
-            if (item.directive.symbol, item.directive.batch_no) in covered_keys
-        ],
+        pending=[item for item in state.covering if item.directive_id in live_ids],
+        stale=stale,
         rules_version=params.version,
         emergency_until=effective_freeze_until(
             stored=state.emergency_until, computed=computed_until
@@ -925,6 +971,7 @@ class PlaybookService:
             shares=sum(batch.remaining_shares for batch in plan.covered),
             execution_dates=pending_dates,
             past_due_dates=tuple(day for day in pending_dates if day < as_of),
+            stale=tuple(plan.stale),
         )
         new_shares = sum(directive.shares for directive in plan.directives)
         # 風控 S6: only a freeze that was running and is now later was extended.

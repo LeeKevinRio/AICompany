@@ -29,7 +29,6 @@ from app.main import app
 from app.playbook import store as store_module
 from app.playbook import wording
 from app.playbook.engine import emergency_mode_reason
-from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.store import PlaybookStore
 from tests import playbook_helpers as helper
 from tests.api_helpers import CLIENT_HEADERS, FakePriceService, recent_bars
@@ -46,6 +45,8 @@ from tests.exit_idempotency_helpers import (
     extended_note,
     hold,
     hold_both,
+    legacy_exit_line,
+    log_like_before_n166,
     open_book,
     state_map,
     unsettled_per_batch,
@@ -558,51 +559,11 @@ def test_an_empty_book_still_takes_the_empty_branch(book: Book) -> None:
 # --- 既有 DB 已有 N-166 之前的重複列 ---------------------------------------------------
 
 
-def _legacy_line(symbol: str, shares: int, *, execution_date: date = WEDNESDAY) -> Directive:
-    return Directive(
-        symbol=symbol,
-        batch_no=1,
-        action="sell",
-        shares=shares,
-        rule_id="EMERGENCY",
-        rule_summary="legacy",
-        data_date=TUESDAY,
-        execution_date=execution_date,
-        reference_price=None,
-        limit_low=None,
-        limit_high=None,
-        limit_note="",
-        data_status="fresh",
-        source="fake",
-    )
-
-
-def _log_like_before_n166(store: PlaybookStore, lines: list[Directive]) -> None:
-    store.record_directives(
-        PlaybookEvaluation(
-            data_date=TUESDAY,
-            execution_date=WEDNESDAY,
-            mode="emergency_frozen",
-            mode_reason="legacy",
-            is_schedule_day=True,
-            fast_market=FastMarketState(
-                active=False, annualized_vol_20d=None, large_move_days=0, reason=None
-            ),
-            rules_version=1,
-            params=store.active_params(TUESDAY),
-            directives=lines,
-            effects=[],
-            warnings=[],
-            snapshot=[],
-        )
-    )
-
-
 def test_duplicate_lines_from_before_n166_are_kept_and_counted_once(book: Book) -> None:
     """CEO-2 未裁前不清理；面向使用者的批數、股數不因重複列翻倍."""
     hold_both(book.store)
-    doubled = [_legacy_line("2330", 300), _legacy_line("2454", 200)] * 2
-    _log_like_before_n166(book.store, doubled)
+    doubled = [legacy_exit_line("2330", 300), legacy_exit_line("2454", 200)] * 2
+    log_like_before_n166(book.store, doubled)
     before = emergency_rows(book.store.db_path)
     assert len(before) == 4
 
@@ -636,11 +597,11 @@ FRIDAY = date(2026, 8, 14)
 
 def _one_batch_logged_twice(book: Book) -> None:
     hold(book.store, "2330", 1, shares=300)
-    _log_like_before_n166(
+    log_like_before_n166(
         book.store,
         [
-            _legacy_line("2330", 300, execution_date=D2),
-            _legacy_line("2330", 300, execution_date=D3),
+            legacy_exit_line("2330", 300, execution_date=D2),
+            legacy_exit_line("2330", 300, execution_date=D3),
         ],
     )
 
@@ -691,11 +652,11 @@ def test_only_the_passed_date_is_past_due_when_the_other_is_still_ahead(book: Bo
 def test_a_later_written_line_with_an_earlier_date_still_triggers_s3(book: Book) -> None:
     """寫入順序不等於執行日順序：先寫 D3、後寫 D2，S3 仍不得漏報 D2."""
     hold(book.store, "2330", 1, shares=300)
-    _log_like_before_n166(
+    log_like_before_n166(
         book.store,
         [
-            _legacy_line("2330", 300, execution_date=D3),
-            _legacy_line("2330", 300, execution_date=D2),
+            legacy_exit_line("2330", 300, execution_date=D3),
+            legacy_exit_line("2330", 300, execution_date=D2),
         ],
     )
 
@@ -711,8 +672,9 @@ def test_a_covering_line_of_a_batch_no_longer_held_is_not_reported(book: Book) -
     """未結算覆蓋列若屬於已非 open 的批次，不覆蓋任何持有部位，不列入 pending."""
     hold(book.store, "2330", 1, shares=300)
     # 2454 has an unsettled pre-N-166 line but holds nothing (its twin settled it).
-    _log_like_before_n166(
-        book.store, [_legacy_line("2330", 300), _legacy_line("2454", 200, execution_date=D3)]
+    log_like_before_n166(
+        book.store,
+        [legacy_exit_line("2330", 300), legacy_exit_line("2454", 200, execution_date=D3)],
     )
 
     result = book.service.emergency_exit(today=TUESDAY)

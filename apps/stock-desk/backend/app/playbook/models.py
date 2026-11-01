@@ -581,9 +581,11 @@ class EmergencyExitResult(BaseModel):
     execution_date: date
     #: Only the lines **this** call wrote (C-7).
     directives: list[Directive]
-    #: The earlier, still unsettled EMERGENCY lines covering the other held
-    #: batches -- all of them, a batch logged twice before N-166 included (C-7,
-    #: 風控 第二次裁示 第 2 項). Additive: nothing has to render it.
+    #: The earlier, still unsettled EMERGENCY lines that still cover the other
+    #: held batches under 判準 Z -- all of them, a batch logged twice before
+    #: N-166 included (C-7, 風控 第二次裁示 第 2 項). Lines that no longer cover
+    #: are disclosed by S10 in ``message`` instead. Additive: nothing has to
+    #: render it.
     pending_directives: list[Directive]
     #: Shares of ``directives`` only -- the figure EMERGENCY_EXIT_RESULT states.
     total_shares: int

@@ -16,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.playbook import wording
+from app.playbook.models import Directive, FastMarketState, PlaybookEvaluation
 from app.playbook.service import PlaybookService
 from app.playbook.store import PlaybookStore
 from tests.api_helpers import FakePriceService, recent_bars
@@ -176,4 +177,46 @@ def extended_note(*, previous: date, until: date, executed_at: date) -> str:
         previous_until=previous.isoformat(),
         until=until.isoformat(),
         executed_at=executed_at.isoformat(),
+    )
+
+
+def legacy_exit_line(symbol: str, shares: int, *, execution_date: date = WEDNESDAY) -> Directive:
+    """An EMERGENCY sell shaped like the ones the exit wrote before N-166."""
+    return Directive(
+        symbol=symbol,
+        batch_no=1,
+        action="sell",
+        shares=shares,
+        rule_id="EMERGENCY",
+        rule_summary="legacy",
+        data_date=TUESDAY,
+        execution_date=execution_date,
+        reference_price=None,
+        limit_low=None,
+        limit_high=None,
+        limit_note="",
+        data_status="fresh",
+        source="fake",
+    )
+
+
+def log_like_before_n166(store: PlaybookStore, lines: list[Directive]) -> None:
+    """Write ``lines`` the way the exit did before N-166: plain INSERTs, no check."""
+    store.record_directives(
+        PlaybookEvaluation(
+            data_date=TUESDAY,
+            execution_date=WEDNESDAY,
+            mode="emergency_frozen",
+            mode_reason="legacy",
+            is_schedule_day=True,
+            fast_market=FastMarketState(
+                active=False, annualized_vol_20d=None, large_move_days=0, reason=None
+            ),
+            rules_version=1,
+            params=store.active_params(TUESDAY),
+            directives=lines,
+            effects=[],
+            warnings=[],
+            snapshot=[],
+        )
     )
