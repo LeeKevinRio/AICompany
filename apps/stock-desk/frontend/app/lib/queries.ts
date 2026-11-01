@@ -41,8 +41,7 @@ import {
   updateSettings,
 } from "./api";
 import { DIRECTORY_STATUS_PROBE_LIMIT, DIRECTORY_STATUS_PROBE_QUERY } from "./directorySearch";
-import { useExitReceiptStore } from "./exitReceiptContext";
-import type { ExitReceiptStore } from "./exitReceiptStore";
+import type { ExitReceiptSink } from "./exitReceiptStore";
 import type {
   AlertRuleInput,
   AlertRulePatch,
@@ -484,14 +483,21 @@ export function useConfirmPlaybookRules() {
  * are awaited before the mutation resolves, so returning either promise would
  * hold 「送出中」 until `/today` answered.
  */
-export function emergencyExitMutationOptions(
-  queryClient: QueryClient,
-  receiptStore: ExitReceiptStore,
-) {
+export function emergencyExitMutationOptions(queryClient: QueryClient, receipts: ExitReceiptSink) {
   return {
     mutationFn: () => postPlaybookEmergencyExit(),
     onSuccess: (response: PlaybookEmergencyExitResponse): void => {
-      receiptStore.accept(response);
+      // FIRST action, synchronous, and fenced: TanStack awaits this callback with
+      // no try/catch around it (`mutation.ts:246`), so a throw would send an
+      // already-accepted exit down the failure branch -- 「送出失敗」 for a
+      // submission the backend accepted. Rethrow out of band, the way TanStack
+      // does for its own observer callbacks. It touches no UI state: closing the
+      // dialog and releasing the lock are the page's mutate-level callbacks.
+      try {
+        receipts.accept(response);
+      } catch (error) {
+        void Promise.reject(error);
+      }
     },
     onSettled: (): void => {
       void queryClient.cancelQueries({ queryKey: ["playbook-today"] });
@@ -504,13 +510,13 @@ export function emergencyExitMutationOptions(
  * `POST /api/playbook/emergency-exit`. The receipt (橫幅) is *not* derived from
  * this mutation's state: `reset()`, the next `mutate()` and observer unmount
  * all drop `mutation.data`, so the receipt lives in the Providers-scope store
- * (`exitReceiptStore.ts`, VETO-1). Call this hook once, at page level, so the
- * observer outlives every `/today` state (VETO-2).
+ * (`exitReceiptStore.ts`, VETO-1). The caller passes the store's narrow sink; this
+ * module imports no context and no page code. Call this hook once, at page
+ * level, so the observer outlives every `/today` state (VETO-2).
  */
-export function useEmergencyExit() {
+export function useEmergencyExit(receipts: ExitReceiptSink) {
   const queryClient = useQueryClient();
-  const receiptStore = useExitReceiptStore();
-  return useMutation(emergencyExitMutationOptions(queryClient, receiptStore));
+  return useMutation(emergencyExitMutationOptions(queryClient, receipts));
 }
 
 /* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */

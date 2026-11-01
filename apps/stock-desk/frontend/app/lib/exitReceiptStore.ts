@@ -1,6 +1,6 @@
 /**
  * The 受理回執 store: Providers-scope, in-memory, one per document (風控 2026-11-01
- * Q15 → 方案 D, FE-1; tech-architect Q14 備案 D).
+ * Q15 → 方案 D, FE-1; tech-architect ADR-0037 D, FE-C1/C2).
  *
  * Why not page state (the earlier 方案 A): the receipt must end only on a
  * reload or when a newer receipt replaces it. A SPA navigation — the user
@@ -15,56 +15,58 @@
  * document, and with it a new store — empty, because nothing is persisted
  * (VETO-3: no storage, cookie, IndexedDB, URL or `history.state`). The store is
  * created inside a component (`useState(() => …)` in the provider) and handed
- * down by context — never a module-level singleton, which SSR would share
- * across requests.
+ * down by context — never a module-level instance, `globalThis` or `window`
+ * member, which SSR would share across requests (VETO-5).
  *
- * Content: the receipt `{ seq, response }` and the 「已捲過」 marker, nothing
- * else — no `exit_confirm`, no dialog state, no submit lock, no mutation (F-1).
- * The reducer from `exitReceipt.ts` is reused unchanged, so the only way to
- * change the receipt is `accepted`: there is no clear.
+ * State: `{ receipt, scrolledSeq }`, nothing else (FE-C2). The reducer has two
+ * actions, `accepted` and `scrollHandled`, and no way to clear. The store never
+ * sends a request and holds nothing in flight (VETO-5); the submit lock stays in
+ * the page instance — a cross-instance gate is VETO-4.
  */
 
-import { exitReceiptReducer } from "./exitReceipt";
-import type { ExitReceipt, ExitReceiptState } from "./exitReceipt";
+import { INITIAL_EXIT_RECEIPT_STATE, exitReceiptReducer } from "./exitReceipt";
+import type { ExitReceiptStoreState } from "./exitReceipt";
 import type { PlaybookEmergencyExitResponse } from "./types";
 
-export interface ExitReceiptStore {
-  /** The current receipt (a stable reference between changes), or null. */
-  getSnapshot: () => ExitReceiptState;
-  subscribe: (listener: () => void) => () => void;
-  /** Record an accepted response as the newest receipt. Works with no page mounted. */
+/**
+ * The narrow door the mutation's definition-level `onSuccess` is given
+ * (FE-C4): it can record an accepted response and do nothing else.
+ */
+export interface ExitReceiptSink {
   accept: (response: PlaybookEmergencyExitResponse) => void;
-  /** The highest receipt sequence number that a page has already scrolled to. */
-  getScrolledSeq: () => number;
-  /**
-   * Mark `seq` as scrolled to. Deliberately silent: nothing renders from it, so
-   * it does not notify and the snapshot is untouched.
-   */
-  markScrolled: (seq: number) => void;
+}
+
+export interface ExitReceiptStore extends ExitReceiptSink {
+  /** The state; the same reference until something changes. */
+  getSnapshot: () => ExitReceiptStoreState;
+  /** What the server render sees: always the empty initial state. */
+  getServerSnapshot: () => ExitReceiptStoreState;
+  subscribe: (listener: () => void) => () => void;
+  /** Mark receipt `seq` as scrolled to; no-op (no notification) if it already was. */
+  scrollHandled: (seq: number) => void;
 }
 
 export function createExitReceiptStore(): ExitReceiptStore {
-  let receipt: ExitReceiptState = null;
-  let scrolledSeq = 0;
+  let state: ExitReceiptStoreState = INITIAL_EXIT_RECEIPT_STATE;
   const listeners = new Set<() => void>();
 
+  function dispatch(action: Parameters<typeof exitReceiptReducer>[1]): void {
+    const next = exitReceiptReducer(state, action);
+    if (next === state) return;
+    state = next;
+    for (const listener of [...listeners]) listener();
+  }
+
   return {
-    getSnapshot: () => receipt,
+    getSnapshot: () => state,
+    getServerSnapshot: () => INITIAL_EXIT_RECEIPT_STATE,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
-    accept: (response) => {
-      receipt = exitReceiptReducer(receipt, { type: "accepted", response });
-      for (const listener of [...listeners]) listener();
-    },
-    getScrolledSeq: () => scrolledSeq,
-    markScrolled: (seq) => {
-      scrolledSeq = Math.max(scrolledSeq, seq);
-    },
+    accept: (response) => dispatch({ type: "accepted", response }),
+    scrollHandled: (seq) => dispatch({ type: "scrollHandled", seq }),
   };
 }
-
-export type { ExitReceipt };

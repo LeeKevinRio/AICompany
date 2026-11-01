@@ -1,5 +1,5 @@
 /**
- * FE-T7 (tech-architect Q14): the emergency-exit mutation's settle behaviour,
+ * FE-T7 and FE-T13/FE-T14 (tech-architect Q14, ADR-0037 D): the emergency-exit mutation's settle behaviour,
  * driven through a plain `MutationObserver` with the API module mocked.
  *
  * Pins FR-8a / FE-C13: on success *and* on failure `/today` is cancelled and
@@ -12,7 +12,7 @@ import { MutationObserver, QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { createExitReceiptStore } from "../exitReceiptStore";
-import type { ExitReceiptStore } from "../exitReceiptStore";
+import type { ExitReceiptSink, ExitReceiptStore } from "../exitReceiptStore";
 import { emergencyExitMutationOptions } from "../queries";
 import type { PlaybookEmergencyExitResponse } from "../types";
 
@@ -125,48 +125,164 @@ describe("emergencyExitMutationOptions().onSettled", () => {
 
     expect(onSuccess).not.toHaveBeenCalled();
   });
+});
 
-  it("records the accepted response in the receipt store from the hook-level onSuccess, even with no observer listening (風控 FE-2)", async () => {
-    // The page may be gone by the time the response lands (browser back while the
-    // request is in flight). Mutate-level callbacks are dropped then (previous
-    // test); the hook-level onSuccess belongs to the mutation and still runs.
-    postPlaybookEmergencyExit.mockResolvedValue(response());
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Let the mutation's awaited steps (hook-level callbacks, state dispatch) run. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  await new Promise<void>((r) => setTimeout(r, 0));
+}
+
+describe("FE-T13: the FE-2 contract of the definition-level onSuccess (ADR-0037 FE-C4)", () => {
+  it("(a) writes the receipt after the observer unmounted mid-flight, and the mutate-level onSuccess does not run", async () => {
+    const request = deferred<PlaybookEmergencyExitResponse>();
+    postPlaybookEmergencyExit.mockReturnValue(request.promise);
     const observer = new MutationObserver(client, emergencyExitMutationOptions(client, store));
-    expect(observer.hasListeners()).toBe(false);
+    const unsubscribe = observer.subscribe(() => {});
+    const mutateLevelOnSuccess = vi.fn();
+    void observer.mutate(undefined, { onSuccess: mutateLevelOnSuccess }).catch(() => undefined);
+    await flush();
 
-    await observer.mutate();
+    unsubscribe(); // the page has gone: browser back while the request is in flight
+    expect(store.getSnapshot().receipt).toBeNull();
 
-    expect(store.getSnapshot()).toEqual({ seq: 1, response: response() });
+    request.resolve(response());
+    await flush();
+
+    expect(store.getSnapshot().receipt?.seq).toBe(1);
+    expect(mutateLevelOnSuccess).not.toHaveBeenCalled(); // documents mutationObserver.ts:164
   });
 
-  it("does not record a receipt when the exit fails", async () => {
+  it("(b) the sink is called while the mutation is still pending, before success is dispatched", async () => {
+    postPlaybookEmergencyExit.mockResolvedValue(response());
+    const statusAtAccept: string[] = [];
+    const running: MutationObserver<PlaybookEmergencyExitResponse, Error, void, unknown> =
+      new MutationObserver(
+        client,
+        emergencyExitMutationOptions(client, {
+          accept: (r) => {
+            statusAtAccept.push(running.getCurrentResult().status);
+            store.accept(r);
+          },
+        }),
+      );
+    await running.mutate();
+    expect(statusAtAccept).toEqual(["pending"]);
+    expect(running.getCurrentResult().status).toBe("success");
+  });
+
+  it("(c) a sink that throws neither turns the accepted exit into a failure nor loses the rethrow", async () => {
+    postPlaybookEmergencyExit.mockResolvedValue(response());
+    const boom = new Error("store exploded");
+    const sink: ExitReceiptSink = {
+      accept: () => {
+        throw boom;
+      },
+    };
+    // The out-of-band rethrow is `void Promise.reject(error)`; capture it so the
+    // test runner does not see an unhandled rejection.
+    const reject = Promise.reject.bind(Promise);
+    const rethrown: unknown[] = [];
+    const spy = vi.spyOn(Promise, "reject").mockImplementation((reason?: unknown) => {
+      rethrown.push(reason);
+      const p = reject(reason);
+      p.catch(() => undefined);
+      return p;
+    });
+    try {
+      const observer = new MutationObserver(client, emergencyExitMutationOptions(client, sink));
+      const result = await observer.mutate();
+
+      expect(result.message).toBe("message");
+      expect(observer.getCurrentResult().status).toBe("success");
+      expect(observer.getCurrentResult().data?.message).toBe("message");
+      expect(rethrown).toEqual([boom]);
+      // The settle step still ran after the failed write.
+      expect(order).toEqual(["cancel", "invalidate"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("(d) a failed request leaves the store untouched", async () => {
     postPlaybookEmergencyExit.mockRejectedValue(new ApiError("server error", 500));
     const observer = new MutationObserver(client, emergencyExitMutationOptions(client, store));
     await observer.mutate().catch(() => undefined);
-    expect(store.getSnapshot()).toBeNull();
+    expect(store.getSnapshot()).toEqual({ receipt: null, scrolledSeq: 0 });
   });
 
-  it("a second accepted response replaces the first and advances the sequence", async () => {
-    postPlaybookEmergencyExit.mockResolvedValueOnce(response());
-    postPlaybookEmergencyExit.mockResolvedValueOnce({ ...response(), message: "second" });
-    const observer = new MutationObserver(client, emergencyExitMutationOptions(client, store));
-    await observer.mutate();
-    await observer.mutate();
-    expect(store.getSnapshot()?.seq).toBe(2);
-    expect(store.getSnapshot()?.response.message).toBe("second");
+  it("the sink call is the first statement of onSuccess, inside try/catch, and returns nothing", () => {
+    const options = emergencyExitMutationOptions(client, store);
+    expect(options.onSuccess(response())).toBeUndefined();
+    expect(store.getSnapshot().receipt?.seq).toBe(1);
+  });
+});
+
+describe("FE-T14: an old page and a new page each submit; the last arrival wins in either order", () => {
+  async function bothSubmit(arrivalOrder: "first-then-second" | "second-then-first") {
+    const first = deferred<PlaybookEmergencyExitResponse>();
+    const second = deferred<PlaybookEmergencyExitResponse>();
+    postPlaybookEmergencyExit.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const accept = vi.spyOn(store, "accept");
+
+    const oldPage = new MutationObserver(client, emergencyExitMutationOptions(client, store));
+    const newPage = new MutationObserver(client, emergencyExitMutationOptions(client, store));
+    const unsubscribeOld = oldPage.subscribe(() => {});
+    void oldPage.mutate().catch(() => undefined);
+    await flush();
+    unsubscribeOld(); // the old page is gone by the time the new one submits
+    const unsubscribeNew = newPage.subscribe(() => {});
+    void newPage.mutate().catch(() => undefined);
+    await flush();
+
+    const firstResponse = { ...response(), message: "from the old page" };
+    const secondResponse = { ...response(), message: "from the new page" };
+    if (arrivalOrder === "first-then-second") {
+      first.resolve(firstResponse);
+      await flush();
+      second.resolve(secondResponse);
+    } else {
+      second.resolve(secondResponse);
+      await flush();
+      first.resolve(firstResponse);
+    }
+    await flush();
+    unsubscribeNew();
+    return { accept, firstResponse, secondResponse };
+  }
+
+  it("old response first, new second: seq 2 is the new page's, each written once", async () => {
+    const { accept, secondResponse } = await bothSubmit("first-then-second");
+    expect(accept).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().receipt?.seq).toBe(2);
+    expect(store.getSnapshot().receipt?.response).toEqual(secondResponse);
   });
 
-  it("records the receipt before the settle step, and neither awaits /today", async () => {
-    postPlaybookEmergencyExit.mockResolvedValue(response());
-    const seen: string[] = [];
-    store.subscribe(() => seen.push("receipt"));
-    vi.mocked(client.cancelQueries).mockImplementation(() => {
-      seen.push("cancel");
-      return neverSettles();
-    });
-    const observer = new MutationObserver(client, emergencyExitMutationOptions(client, store));
-    await observer.mutate();
-    expect(seen[0]).toBe("receipt");
-    expect(seen).toContain("cancel");
+  it("new response first, old second: still seq 2, and the last to arrive is the one shown", async () => {
+    const { accept, firstResponse } = await bothSubmit("second-then-first");
+    expect(accept).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().receipt?.seq).toBe(2);
+    expect(store.getSnapshot().receipt?.response).toEqual(firstResponse);
+  });
+
+  it("both requests are sent: nothing blocks, queues or de-duplicates the second submit on the client (VETO-4)", async () => {
+    await bothSubmit("first-then-second");
+    expect(postPlaybookEmergencyExit).toHaveBeenCalledTimes(2);
   });
 });

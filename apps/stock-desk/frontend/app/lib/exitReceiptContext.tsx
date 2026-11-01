@@ -5,7 +5,8 @@ import type { ReactNode } from "react";
 import { createExitReceiptStore } from "./exitReceiptStore";
 import type { ExitReceiptStore } from "./exitReceiptStore";
 
-const ExitReceiptStoreContext = createContext<ExitReceiptStore | null>(null);
+/** Exported for tests, which hand a pre-seeded store to the tree; the app only uses the provider. */
+export const ExitReceiptStoreContext = createContext<ExitReceiptStore | null>(null);
 
 /**
  * Owns the one receipt store of this document. Mounted by `Providers`, above

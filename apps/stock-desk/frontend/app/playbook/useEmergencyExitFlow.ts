@@ -46,13 +46,13 @@ export interface EmergencyExitFlow {
  * - focus return on close, and the once-per-receipt scroll.
  */
 export function useEmergencyExitFlow(): EmergencyExitFlow {
-  const mutation = useEmergencyExit();
-  const [isOpen, setIsOpen] = useState(false);
   const receiptStore = useExitReceiptStore();
-  const receipt = useSyncExternalStore(
+  const mutation = useEmergencyExit(receiptStore);
+  const [isOpen, setIsOpen] = useState(false);
+  const { receipt, scrolledSeq } = useSyncExternalStore(
     receiptStore.subscribe,
     receiptStore.getSnapshot,
-    receiptStore.getSnapshot,
+    receiptStore.getServerSnapshot,
   );
 
   // Synchronous submit lock. `mutation.isPending` only flips after a render, so
@@ -115,31 +115,38 @@ export function useEmergencyExitFlow(): EmergencyExitFlow {
   }, [isOpen]);
 
   // FE-C8 / FR-3, per receipt rather than per page instance (風控 FE-3): scroll
-  // the receipt into view once. Whether it was already scrolled to is a marker in
-  // the *store*, next to the receipt, so a page that is mounted again with a
-  // receipt it has shown does not scroll, while one that arrived while the user
-  // was elsewhere and was never shown is scrolled to once on return. The only
-  // dependency is the receipt's sequence number — never `today.*` — so a `/today`
-  // refetch cannot scroll again. No focus moves (§2.4: the banner is not
-  // focusable).
+  // the receipt into view once. Whether it was already scrolled to is the
+  // `scrolledSeq` marker in the *store*, next to the receipt, so a page mounted
+  // again with a receipt it has shown does not scroll, while one that arrived
+  // while the user was elsewhere and was never shown is scrolled to once on
+  // return. While the dialog is open the scroll waits (the receipt is written one
+  // step before the dialog closes) and runs when `isOpen` turns false. The
+  // dependencies are exactly the receipt's sequence number, the marker and
+  // `isOpen` -- never `today.*` -- so a `/today` refetch cannot scroll again. The
+  // effect re-reads the store when it runs rather than trusting the render-time
+  // values, so a StrictMode re-run cannot scroll twice. No focus moves (§2.4: the
+  // banner is not focusable).
   const receiptSeq = receipt?.seq;
   useEffect(() => {
-    if (!shouldScrollForReceipt(receiptSeq, receiptStore.getScrolledSeq())) return;
-    receiptStore.markScrolled(receiptSeq ?? 0);
+    const latest = receiptStore.getSnapshot();
+    const seq = latest.receipt?.seq;
+    if (seq === undefined || !shouldScrollForReceipt(seq, latest.scrolledSeq, isOpen)) return;
     const banner = bannerRef.current;
     if (banner === null) return;
     const barBottom = () => statusBarRef.current?.getBoundingClientRect().bottom ?? 0;
-    if (!receiptNeedsScroll(banner.getBoundingClientRect().top, barBottom(), window.innerHeight)) {
-      return;
+    if (receiptNeedsScroll(banner.getBoundingClientRect().top, barBottom(), window.innerHeight)) {
+      // `behavior: "auto"` — instant, never smooth, whatever prefers-reduced-motion
+      // says (視覺規範 §4.1). `scroll-mt-*` on the banner supplies the offset.
+      banner.scrollIntoView({ block: "start", behavior: "auto" });
+      // 風控 必改項 12: with a tall bar (快市啟動) the fixed offset may fall short;
+      // measure the bar as it is now and nudge so the first line is not covered.
+      const correction = receiptScrollCorrection(banner.getBoundingClientRect().top, barBottom());
+      if (correction !== 0) window.scrollBy({ top: correction, behavior: "auto" });
     }
-    // `behavior: "auto"` — instant, never smooth, whatever prefers-reduced-motion
-    // says (視覺規範 §4.1). `scroll-mt-*` on the banner supplies the offset.
-    banner.scrollIntoView({ block: "start", behavior: "auto" });
-    // 風控 必改項 12: with a tall bar (快市啟動) the fixed offset may fall short;
-    // measure the bar as it is now and nudge so the first line is not covered.
-    const correction = receiptScrollCorrection(banner.getBoundingClientRect().top, barBottom());
-    if (correction !== 0) window.scrollBy({ top: correction, behavior: "auto" });
-  }, [receiptSeq]);
+    // Synchronously, after the scroll: this receipt is dealt with, whether or not
+    // it needed scrolling.
+    receiptStore.scrollHandled(seq);
+  }, [receiptSeq, scrolledSeq, isOpen]);
 
   return {
     isOpen,

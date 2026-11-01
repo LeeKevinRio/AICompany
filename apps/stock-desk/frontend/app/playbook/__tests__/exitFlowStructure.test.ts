@@ -72,38 +72,74 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
     expect(read(join(PLAYBOOK, "ExitReceiptBanner.tsx"))).not.toMatch(/useMutation|mutation/);
   });
 
-  it("the receipt is written only by the mutation's hook-level onSuccess, so it survives an unmounted page (風控 FE-2)", () => {
+  it("the receipt is written only by the mutation's definition-level onSuccess, so it survives an unmounted page (風控 FE-2; FE-C4)", () => {
     const queries = read(join(APP_ROOT, "lib/queries.ts"));
-    expect(queries.match(/receiptStore\.accept\(/g)).toHaveLength(1);
-    const at = queries.indexOf("receiptStore.accept(");
-    expect(queries.slice(queries.lastIndexOf("onSuccess", at), at)).toMatch(
-      /^onSuccess: \(response: PlaybookEmergencyExitResponse\): void => \{\s*$/,
+    expect(queries.match(/receipts\.accept\(/g)).toHaveLength(1);
+    const factory = queries.slice(
+      queries.indexOf("export function emergencyExitMutationOptions("),
+      queries.indexOf("export function useEmergencyExit("),
     );
-    // The page's mutate-level onSuccess does UI only and never touches the store.
-    expect(flow).not.toMatch(/receiptStore\.accept|\.accept\(/);
-    // ... and nothing in render or an effect watching the mutation produces it.
+    // The factory depends on the narrow sink only.
+    expect(factory).toMatch(/emergencyExitMutationOptions\(queryClient: QueryClient, receipts: ExitReceiptSink\)/);
+    // First statement of onSuccess, synchronous, fenced, rethrown out of band.
+    expect(factory).toMatch(
+      /onSuccess: \(response: PlaybookEmergencyExitResponse\): void => \{\s*(?:\/\/[^\n]*\n\s*)*try \{\s*receipts\.accept\(response\);\s*\} catch \(error\) \{\s*void Promise\.reject\(error\);\s*\}\s*\},/,
+    );
+    expect(factory).not.toMatch(/async |await |\.then\(/);
+    // ... and touches no UI state.
+    const onSuccess = factory.slice(factory.indexOf("onSuccess:"), factory.indexOf("onSettled:"));
+    expect(onSuccess).not.toMatch(/setIsOpen|lockRef|focus|scroll|\.current/);
+    // The page's mutate-level callbacks never write a receipt.
+    expect(flow).not.toMatch(/\.accept\(|"accepted"/);
+    expect(playbook.filter(({ text }) => /\.accept\(|"accepted"/.test(text))).toEqual([]);
+    // Not from render, an effect watching the mutation, a MutationCache config,
+    // setMutationDefaults or a cache subscription.
     expect(flow).not.toMatch(/useEffect\([^)]*mutation\.(isSuccess|data|status)/);
-    expect(playbook.filter(({ text }) => /\.accept\(/.test(text))).toEqual([]);
+    for (const { file, text } of app) {
+      expect(text, file).not.toMatch(/setMutationDefaults|new MutationCache|mutationCache:|getMutationCache/);
+    }
   });
 
-  it("the store is created in a component, never at module level (no singleton), and reuses the append-only reducer", () => {
+  it("the store is created in a component, never at module level, on globalThis or on window (FE-C1, VETO-5)", () => {
     const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
     const context = read(join(APP_ROOT, "lib/exitReceiptContext.tsx"));
     expect(store).toMatch(/export function createExitReceiptStore\(\): ExitReceiptStore \{/);
-    expect(store).toContain("exitReceiptReducer(receipt");
-    // No top-level instance in any file.
+    expect(store).toContain("exitReceiptReducer(state, action)");
+    // No top-level mutable state in the store module: every `let` is indented
+    // (inside the factory), and there is no top-level instance anywhere.
+    expect(store).not.toMatch(/^(let|var) /m);
+    expect(store).not.toMatch(/globalThis|window|document|self\./);
     for (const { file, text } of app) {
       expect(text, file).not.toMatch(/^(export )?(const|let|var) \w+\s*(:[^=]+)?=\s*createExitReceiptStore\(/m);
+      expect(text, file).not.toMatch(/(globalThis|window)\.\w*[Rr]eceipt/);
     }
     expect(context).toContain("useState(() => createExitReceiptStore())");
-    expect(read(join(APP_ROOT, "providers.tsx"))).toContain("<ExitReceiptStoreProvider>");
+    const providers = read(join(APP_ROOT, "providers.tsx"));
+    expect(providers).toContain("<ExitReceiptStoreProvider>");
+    // FE-C1: the QueryClient literal is untouched (the 風控 R4 tripwire in
+    // entryObservationPending.test.ts watches it), and Providers stays free of
+    // mutation-cache plumbing and of the playbook.
+    expect(providers).toContain("new QueryClient()");
+    expect(providers).not.toMatch(/defaultOptions|mutationCache|MutationCache|setMutationDefaults/);
+    expect(providers).not.toMatch(/from "\.\/playbook|playbook\//);
+    expect(providers).not.toMatch(/\bkey=/);
   });
 
-  it("the banner is rendered only by app/playbook/page.tsx; no other route shows a receipt (風控 FE-4)", () => {
-    const users = app.filter(({ text }) => /ExitReceiptBanner|useExitReceiptStore|receiptStore/.test(text)).map(({ file }) => file);
-    expect(users.sort()).toEqual([
-      "lib/exitReceiptContext.tsx",
-      "lib/queries.ts",
+  it("the store holds exactly { receipt, scrolledSeq } and sends nothing (FE-C2, VETO-5)", () => {
+    const receipt = read(join(APP_ROOT, "lib/exitReceipt.ts"));
+    const state = receipt.slice(receipt.indexOf("export interface ExitReceiptStoreState"), receipt.indexOf("export const INITIAL_EXIT_RECEIPT_STATE"));
+    expect([...state.matchAll(/readonly (\w+):/g)].map((m) => m[1])).toEqual(["receipt", "scrolledSeq"]);
+    const store = read(join(APP_ROOT, "lib/exitReceiptStore.ts"));
+    expect(store).not.toMatch(/fetch\(|postPlaybook|useMutation|useQuery|XMLHttpRequest|isPending|inFlight/);
+  });
+
+  it("only app/playbook reads or renders a receipt; Providers and queries.ts touch the store's factory, provider or sink only (FE-C21, FE-4)", () => {
+    const readers = app
+      .filter(({ text }) => /ExitReceiptBanner|useExitReceiptStore|useExitReceipt\b/.test(text))
+      .map(({ file }) => file)
+      .sort();
+    expect(readers).toEqual([
+      "lib/exitReceiptContext.tsx", // defines useExitReceiptStore
       "playbook/ExitReceiptBanner.tsx",
       "playbook/page.tsx",
       "playbook/useEmergencyExitFlow.ts",
@@ -111,6 +147,25 @@ describe("the receipt is store state, never mutation state (VETO-1: FE-C1, FE-C3
     expect(app.filter(({ text }) => /<ExitReceiptBanner/.test(text)).map(({ file }) => file)).toEqual([
       "playbook/page.tsx",
     ]);
+    const imports = (name: string) => [...read(join(APP_ROOT, name)).matchAll(/import[^;]*?from "([^"]+)"/g)].map((m) => m[1]);
+    expect(imports("providers.tsx").filter((m) => /exitReceipt/.test(m ?? ""))).toEqual(["./lib/exitReceiptContext"]);
+    expect(imports("lib/queries.ts").filter((m) => /exitReceipt/.test(m ?? ""))).toEqual(["./exitReceiptStore"]);
+    // queries.ts takes the sink as a type only.
+    expect(read(join(APP_ROOT, "lib/queries.ts"))).toContain('import type { ExitReceiptSink } from "./exitReceiptStore";');
+    expect(read(join(APP_ROOT, "lib/queries.ts"))).not.toMatch(/exitReceiptContext|useExitReceiptStore/);
+  });
+
+  it("nothing in the exit flow can gate, delay or queue a submit across page instances (VETO-4: FE-C22)", () => {
+    for (const { file, text } of exitFiles) {
+      expect(text, file).not.toMatch(/\bscope:|useIsMutating|useMutationState|getMutationCache/);
+    }
+    const queries = read(join(APP_ROOT, "lib/queries.ts"));
+    const factory = queries.slice(queries.indexOf("export function emergencyExitMutationOptions("), queries.indexOf("export function useEmergencyExit("));
+    expect(factory).not.toMatch(/scope|mutationKey|networkMode/);
+    // The lock is a ref in the page-instance hook, nowhere else (the page only hands it to the dialog).
+    const lockUsers = app.filter(({ text }) => /lockRef/.test(text)).map(({ file }) => file).sort();
+    expect(lockUsers).toEqual(["playbook/EmergencyExitDialog.tsx", "playbook/page.tsx", "playbook/useEmergencyExitFlow.ts"]);
+    expect(flow).toContain("const lockRef = useRef(false);");
   });
 
   it("the store holds the receipt and the scrolled marker only: no exit_confirm, dialog state, lock or mutation (F-1)", () => {
@@ -180,21 +235,27 @@ describe("the dialog and the observer sit above the isSuccess gate (VETO-2: FE-C
 });
 
 describe("the receipt scroll keys on the receipt alone (FE-C8, FE-T3, 風控 FE-4)", () => {
-  it("the scroll effect's only dependency is the receipt sequence number", () => {
-    const start = flow.indexOf("useEffect(() => {\n    if (!shouldScrollForReceipt");
+  it("the scroll effect depends on exactly [receiptSeq, scrolledSeq, isOpen] and re-reads the store when it runs (FE-C8, FE-T3)", () => {
+    const start = flow.indexOf("useEffect(() => {\n    const latest = receiptStore.getSnapshot();");
     expect(start).toBeGreaterThan(-1);
-    const effect = flow.slice(start, flow.indexOf(");", flow.indexOf("[receiptSeq]", start)) + 2);
-    expect(effect).toMatch(/\}, \[receiptSeq\]\);$/);
+    const effect = flow.slice(start, flow.indexOf("[receiptSeq, scrolledSeq, isOpen]);", start) + "[receiptSeq, scrolledSeq, isOpen]);".length);
+    expect(effect).toMatch(/\}, \[receiptSeq, scrolledSeq, isOpen\]\);$/);
+    expect(effect).toContain("receiptStore.getSnapshot()");
+    expect(effect).toContain("shouldScrollForReceipt(seq, latest.scrolledSeq, isOpen)");
     expect(effect).not.toMatch(/today/);
     expect(flow).not.toMatch(/usePlaybookToday|\btoday\b/);
+    // The marker is written after the scroll, synchronously, and only there.
+    expect(flow.match(/receiptStore\.scrollHandled\(/g)).toHaveLength(1);
+    expect(effect.indexOf("scrollIntoView")).toBeLessThan(effect.indexOf("scrollHandled("));
   });
 
-  it("the 「already scrolled」 marker lives in the store, per receipt, not in the page instance (風控 FE-3)", () => {
-    expect(flow).toContain("receiptStore.getScrolledSeq()");
-    expect(flow.match(/receiptStore\.markScrolled\(/g)).toHaveLength(1);
-    expect(flow).not.toMatch(/lastHandledSeq|useRef\(receipt/);
-    // The check runs before the mark, at effect time, so a second mount cannot re-scroll.
-    expect(flow.indexOf("getScrolledSeq()")).toBeLessThan(flow.indexOf("markScrolled("));
+  it("the 「already scrolled」 marker is in the store, not the page instance: no lastHandledSeq (FE-3)", () => {
+    expect(flow).not.toMatch(/lastHandledSeq|useRef\(receipt|useRef\(0\)/);
+    expect(flow).toContain("receiptStore.getServerSnapshot");
+    // FE-C1: no copy of the receipt in page state; it is only read through the store.
+    for (const { file, text } of playbook) {
+      expect(text, file).not.toMatch(/use(State|Reducer|Ref)(<[^>(]*)?(Receipt|receipt)/);
+    }
   });
 
   it("scrolls instantly, never smoothly, and never moves focus", () => {

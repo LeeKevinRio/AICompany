@@ -26,23 +26,51 @@ export interface ExitReceipt {
   readonly response: PlaybookEmergencyExitResponse;
 }
 
-export type ExitReceiptState = ExitReceipt | null;
+/**
+ * Everything the store holds (tech-architect ADR-0037 FE-C2): the receipt and
+ * the 「already scrolled」 marker, and nothing else — no `exit_confirm`, no dialog
+ * state, no lock, no mutation, no in-flight flag (F-1, VETO-5).
+ */
+export interface ExitReceiptStoreState {
+  readonly receipt: ExitReceipt | null;
+  /** The highest receipt sequence number a page has already scrolled to (0 = none). */
+  readonly scrolledSeq: number;
+}
 
-/** The only action. There is deliberately no clear / reset / dismiss. */
+export const INITIAL_EXIT_RECEIPT_STATE: ExitReceiptStoreState = Object.freeze({
+  receipt: null,
+  scrolledSeq: 0,
+});
+
+/** A newer accepted response: seq +1, replaces the receipt. */
 export interface ExitReceiptAccepted {
   readonly type: "accepted";
   readonly response: PlaybookEmergencyExitResponse;
 }
 
-export type ExitReceiptAction = ExitReceiptAccepted;
+/** A page has dealt with the scroll for receipt `seq`; the receipt itself is untouched. */
+export interface ExitReceiptScrollHandled {
+  readonly type: "scrollHandled";
+  readonly seq: number;
+}
+
+/** The only two actions. There is deliberately no clear / reset / dismiss / setter. */
+export type ExitReceiptAction = ExitReceiptAccepted | ExitReceiptScrollHandled;
 
 export function exitReceiptReducer(
-  state: ExitReceiptState,
+  state: ExitReceiptStoreState,
   action: ExitReceiptAction,
-): ExitReceiptState {
+): ExitReceiptStoreState {
   switch (action.type) {
     case "accepted":
-      return { seq: (state?.seq ?? 0) + 1, response: action.response };
+      return {
+        receipt: { seq: (state.receipt?.seq ?? 0) + 1, response: action.response },
+        scrolledSeq: state.scrolledSeq,
+      };
+    case "scrollHandled":
+      // max(): the marker only moves forward. Same reference when nothing moves,
+      // so a repeated call neither notifies nor re-renders.
+      return action.seq > state.scrolledSeq ? { ...state, scrolledSeq: action.seq } : state;
     default:
       return state;
   }
@@ -67,15 +95,24 @@ export function isReceiptModeReasonHidden(
 }
 
 /**
- * Whether a receipt has not been scrolled to yet (FR-3, FE-C8). The scroll runs
- * once per *new receipt* — never because the banner node mounted (a second
- * receipt may reuse the node) and never because `/today` refetched.
+ * Whether the page should scroll to the receipt now (FR-3, FE-C8; 風控 FE-3 /
+ * tech-architect ADR-0037).
+ *
+ * Once per *receipt*: the receipt is newer than the marker in the store, so a
+ * page mounted again with a receipt it has shown does not scroll, while one that
+ * arrived while the user was elsewhere is scrolled to once on return. Never
+ * because the banner node mounted (a second receipt may reuse the node) and never
+ * because `/today` refetched. Deferred while the dialog is open: the receipt is
+ * written by the mutation's own `onSuccess`, one step before the dialog closes
+ * and, with the dialog still open behind its overlay, a scroll would move the page
+ * under it.
  */
 export function shouldScrollForReceipt(
   receiptSeq: number | undefined,
-  lastHandledSeq: number,
+  scrolledSeq: number,
+  isOpen: boolean,
 ): boolean {
-  return receiptSeq !== undefined && receiptSeq > lastHandledSeq;
+  return receiptSeq !== undefined && receiptSeq > scrolledSeq && !isOpen;
 }
 
 /** 視覺規範 §4.1: the gap a banner keeps below the sticky status bar, in px. */
