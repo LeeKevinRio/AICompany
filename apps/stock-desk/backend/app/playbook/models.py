@@ -358,6 +358,21 @@ class Directive(BaseModel):
     status: DirectiveStatus = "pending"
 
 
+class LabeledBatch(BaseModel):
+    """A batch carrying the W-B2 label (ADR-0034 補充一 S-3; ADR-0035 補充四 2.2(c)).
+
+    ``entry_date`` is what W-B2L's ``{entry_date}`` states. Built by N-168 from
+    the batch label; until then every ``labeled_batches`` is empty, and
+    :func:`app.api.playbook._lines` is the only reader.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    batch_no: int
+    entry_date: date
+
+
 class BatchSnapshot(BaseModel):
     """One open batch as shown in the 部位快照."""
 
@@ -560,6 +575,17 @@ class PlaybookEvaluation(BaseModel):
     #: length from. Present on both service paths, including 歸屬語情境 1 --
     #: the exit is never gated (EX-2 出口零摩擦).
     exit_confirm: ExitConfirm | None = None
+    #: ADR-0035 補充四 2.2(a) (切面): the three in-flight lists ``/today`` carries
+    #: in fields of their own, never mixed into ``directives`` (ADR-0034 補充一
+    #: S-3 第 6 點). All come from the one :meth:`PlaybookStore.read_in_flight`.
+    #: Owner N-171 (ADR-0039 Decision 1): unsettled EMERGENCY sells that still cover.
+    pending_exit_directives: list[Directive] = Field(default_factory=list)
+    #: Owner N-168: stamped, unsettled buys the book may still fill (W-B1 類).
+    entry_before_exit_directives: list[Directive] = Field(default_factory=list)
+    #: Owner N-168: stamped, unsettled buys G1 refuses (G1 擋下類).
+    entry_before_exit_blocked_directives: list[Directive] = Field(default_factory=list)
+    #: ADR-0035 補充四 2.2(c): the batches W-B2／W-B2L label; N-168 fills it.
+    labeled_batches: tuple[LabeledBatch, ...] = ()
 
 
 class EmergencyExitResult(BaseModel):
@@ -602,6 +628,8 @@ class EmergencyExitResult(BaseModel):
     #: The mode line for the day the exit was submitted on, rendered now rather
     #: than stored: the 「第 N/20 交易日」 counter is only true for one day.
     mode_reason: str
+    #: ADR-0035 補充四 2.2(c): the batches W-B2／W-B2L label; N-168 fills it.
+    labeled_batches: tuple[LabeledBatch, ...] = ()
 
 
 class RuleChangeReceipt(BaseModel):

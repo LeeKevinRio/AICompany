@@ -62,8 +62,10 @@ from app.playbook.store import (
     ORDER_ACTIONS,
     R_SERIES_RULE_IDS,
     EmergencyExitState,
+    EntryBeforeExitRead,
     EvaluationCommit,
     PendingDirective,
+    PendingExitRead,
     PlaybookStore,
     decision_key,
 )
@@ -552,6 +554,42 @@ def same_day_warnings(
     return warnings
 
 
+class SettlementRun(NamedTuple):
+    """One settlement and the series it loaded (ADR-0035 補充四 2.4).
+
+    ``loaded`` is what the settlement itself judged opening prices and N1 on,
+    so a later reader classifying exit lines under 判準 Z (ADR-0039 Decision 3)
+    uses the very same series. Empty when nothing was due, because then nothing
+    was loaded.
+    """
+
+    result: SettlementResult
+    loaded: Mapping[str, LoadedSeries]
+
+
+def _pending_exit_lines(
+    read: PendingExitRead, *, loaded: Mapping[str, LoadedSeries] | None, as_of: date
+) -> list[Directive]:
+    """``pending_exit_directives`` from the in-flight read. Owner N-171; ``[]`` in the seam.
+
+    ``loaded`` is the settlement's own series on the authored path and ``None``
+    on the unauthored one, which loads nothing (ADR-0039 Decision 3, 7).
+    """
+    del read, loaded, as_of
+    return []
+
+
+def _entry_before_exit_lines(
+    read: EntryBeforeExitRead,
+) -> tuple[list[Directive], list[Directive]]:
+    """``(entry_before_exit_directives, entry_before_exit_blocked_directives)``.
+
+    Owner N-168 (ADR-0034 補充一 S-3 第 6 點); ``([], [])`` in the seam.
+    """
+    del read
+    return [], []
+
+
 class PlaybookService:
     """Loads data, runs one evaluation and persists its consequences."""
 
@@ -594,6 +632,14 @@ class PlaybookService:
     def settle_pending(self, *, today: date | None = None) -> SettlementResult:
         """Stamp every due T+1 line against its 預定執行日 opening price.
 
+        See :meth:`_settle_pending`, which this returns the result of; the
+        signature and the answer are unchanged (ADR-0035 補充四 2.4).
+        """
+        return self._settle_pending(today or datetime.now(UTC).date()).result
+
+    def _settle_pending(self, as_of: date) -> SettlementRun:
+        """Stamp every due T+1 line, and hand back the series it loaded.
+
         This is the other half of CEO 裁決七 and the reason the book moves at
         all. A line is due once its 預定執行日 has arrived; the outcome is decided
         by :func:`app.playbook.engine.settle_directive` against the *open* of
@@ -622,16 +668,20 @@ class PlaybookService:
         reaches the book; it stays pending and is listed in ``unsettled`` with
         :data:`wording.SETTLEMENT_BATCH_ALREADY_FILLED_NOTE` instead of being
         dropped like a row another run claimed (N172-T21). This is the one
-        change N-172a makes here (N172-C8); ``settle`` is untouched.
+        change N-172a makes here (N172-C8); ``settle`` is untouched. Moving the
+        body under :meth:`settle_pending` into this method is a structural move
+        with no difference in behaviour (ADR-0035 補充四 2.4).
         """
-        as_of = today or datetime.now(UTC).date()
         pending = self._store.pending_directives(on_or_before=as_of)
         if not pending:
-            return SettlementResult(
-                settled_on=as_of,
-                settled=[],
-                unsettled=[],
-                warnings=[wording.SETTLEMENT_NOTHING_PENDING],
+            return SettlementRun(
+                result=SettlementResult(
+                    settled_on=as_of,
+                    settled=[],
+                    unsettled=[],
+                    warnings=[wording.SETTLEMENT_NOTHING_PENDING],
+                ),
+                loaded={},
             )
 
         symbols = sorted({item.directive.symbol for item in pending})
@@ -718,7 +768,7 @@ class PlaybookService:
                     ),
                 )
             )
-        return result.model_copy(update={"warnings": warnings})
+        return SettlementRun(result=result.model_copy(update={"warnings": warnings}), loaded=loaded)
 
     def _batch_of(self, directive: Directive) -> BatchState | None:
         if directive.batch_no is None:
@@ -1078,6 +1128,10 @@ class PlaybookService:
             }
         )
         warnings = [wording.UNAUTHORED_HOLDING_NOTE.format(symbols="、".join(held))] if held else []
+        # The one in-flight read of this path (ADR-0035 補充四 2.3(c)): SELECT
+        # only, so the day still leaves no trace; nothing is loaded for it.
+        in_flight = self._store.read_in_flight()
+        entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
         # The version in force -- what ``rule_set_status`` states and a
         # confirmation would adopt. Nothing is evaluated with it here; it is
         # carried for the figures a response restates (ADR-0031 C-5) and read
@@ -1116,6 +1170,9 @@ class PlaybookService:
                 as_of=as_of,
                 stored_until=self._store.portfolio_state().emergency_until,
             ),
+            pending_exit_directives=_pending_exit_lines(in_flight.exits, loaded=None, as_of=as_of),
+            entry_before_exit_directives=entries,
+            entry_before_exit_blocked_directives=blocked_entries,
         )
 
     def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
@@ -1148,7 +1205,11 @@ class PlaybookService:
         authorship = self._store.rule_set_authorship(as_of)
         if not authorship.user_authored:
             return self._unauthored_evaluation(as_of)
-        settlement = self.settle_pending(today=as_of)
+        run = self._settle_pending(as_of)
+        settlement = run.result
+        # The one in-flight read after the settlement (ADR-0035 補充四 2.3(c)):
+        # every in-flight list of this response derives from it.
+        in_flight = self._store.read_in_flight()
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
         loaded = self._load_symbol_bars(symbols, today=as_of)
@@ -1224,6 +1285,7 @@ class PlaybookService:
         )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
+        entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
         return evaluation.model_copy(
             update={
                 # Decision 4: what the log holds for this 預定執行日, so 「無」
@@ -1249,6 +1311,11 @@ class PlaybookService:
                     as_of=as_of,
                     stored_until=self._store.portfolio_state().emergency_until,
                 ),
+                "pending_exit_directives": _pending_exit_lines(
+                    in_flight.exits, loaded=run.loaded, as_of=as_of
+                ),
+                "entry_before_exit_directives": entries,
+                "entry_before_exit_blocked_directives": blocked_entries,
             }
         )
 
