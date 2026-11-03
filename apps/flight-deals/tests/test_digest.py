@@ -19,6 +19,7 @@ from flight_deals.domain.messages import (
     DIGEST_MAX_WATCH_LINES,
     DISCLAIMER,
     NO_PRICE_ALERT_NOTE,
+    PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
     DigestRow,
     DigestSourceRow,
@@ -525,7 +526,7 @@ def test_list_page_explains_delta(harness: Harness) -> None:
     harness.scan(watch_id)
     page = harness.client.get("/").text
     assert WEB_TEXTS.delta_explain in page
-    assert "較前一輪：目前最低價與上一輪掃描結束時最低價的差額" in page
+    assert "較前一輪：已查到最低價與上一輪掃描結束時最低價的差額" in page
     assert "兩個最低價可能是不同日期" in page
 
 
@@ -563,3 +564,16 @@ def test_next_scan_time_ignores_earlier_digest_job(tmp_path: Path) -> None:  # q
         assert scheduler.next_run_time() == min(scan_times)
     finally:
         scheduler.shutdown()
+
+
+def test_digest_with_watches_carries_the_price_source_note() -> None:  # FD-13 risk ruling
+    kwargs: dict[str, Any] = {
+        "day": date(2026, 10, 26),
+        "sources": [],
+        "last_scan_at": None,
+        "failed_scans_24h": 0,
+        "stale_after_hours": 12,
+    }
+    text = daily_digest_message(**kwargs, rows=[row("a")])
+    assert f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}" in text
+    assert PRICE_SOURCE_NOTE not in daily_digest_message(**kwargs, rows=[])

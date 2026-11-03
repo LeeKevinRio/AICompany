@@ -26,7 +26,12 @@ from flight_deals.domain.airports import (
     suggestion_label,
 )
 from flight_deals.domain.currency import major_to_minor
-from flight_deals.domain.messages import BANNED_PHRASES, price_alert_message
+from flight_deals.domain.messages import (
+    BANNED_PHRASES,
+    DISCLAIMER,
+    PRICE_SOURCE_NOTE,
+    price_alert_message,
+)
 from flight_deals.domain.models import WatchSpec
 from flight_deals.domain.rules import Candidate, TriggeredItem
 from flight_deals.domain.validation import (
@@ -466,3 +471,15 @@ def test_legacy_code_watch_still_works(harness: Harness) -> None:  # AC-S3, AC-V
 def test_endpoint_matches_domain_ranking(harness: Harness, q: str) -> None:  # C-22
     api = [i["code"] for i in harness.client.get("/api/airports", params={"q": q}).json()["items"]]
     assert api == codes(q)
+
+
+def test_alert_carries_the_price_source_note() -> None:  # FD-13 risk ruling
+    text = price_alert_message(
+        watch_name="沖繩",
+        origin="TPE",
+        destination="OKA",
+        trip_type="round_trip",
+        items=_items(1),
+        links=[None],
+    )
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}")

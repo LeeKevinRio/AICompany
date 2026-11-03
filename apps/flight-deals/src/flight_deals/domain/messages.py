@@ -39,6 +39,12 @@ from flight_deals.domain.trip_labels import (
 from flight_deals.domain.trip_labels import static_texts as trip_static_texts
 
 DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票網站為準。"
+# #46 (FD-13 risk ruling): always next to DISCLAIMER, once per page or Telegram message
+# showing prices. Never explain the gap or call either figure more accurate: the
+# 2026-11-03 sample is small and stops at Google's booking page.
+PRICE_SOURCE_NOTE = (
+    "價格取自 Google 預設排序的結果；「最低價格」分頁的數字可能較低，但兩者都可能與訂票頁金額不同。"
+)
 SAMPLED_ONLY_NOTE = "只涵蓋已取樣的日期；未取樣的日期不代表沒有更便宜的價格。"
 
 # Advisory / urgency wording that must never appear in notifications or UI copy
@@ -231,6 +237,7 @@ def price_alert_message(
             lines.append(f"   （{BOOKING_FALLBACK_NOTE}）")
     lines.append("")
     lines.append(DISCLAIMER)
+    lines.append(PRICE_SOURCE_NOTE)
     return "\n".join(lines)
 
 
@@ -265,7 +272,7 @@ DIGEST_WATCH_STALE = "連續查價失敗"
 DIGEST_FLAT = "持平"
 DIGEST_NONE = "—"
 DIGEST_DELTA_NOTE = (
-    "漲跌為目前最低總價與前一日（台北時間）結束時最低總價的差額；"
+    "漲跌為已查到最低總價與前一日（台北時間）結束時最低總價的差額；"
     "只計目前設定的即時價，不含已出發的日期。"
     "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
 )
@@ -373,7 +380,14 @@ def daily_digest_message(
         return "\n".join(
             [header[0], DIGEST_NO_WATCHES, *header[1:], "", DISCLAIMER, NO_PRICE_ALERT_NOTE]
         )
-    footer = ["", DIGEST_DELTA_NOTE, SAMPLED_ONLY_NOTE, DISCLAIMER, NO_PRICE_ALERT_NOTE]
+    footer = [
+        "",
+        DIGEST_DELTA_NOTE,
+        SAMPLED_ONLY_NOTE,
+        DISCLAIMER,
+        PRICE_SOURCE_NOTE,
+        NO_PRICE_ALERT_NOTE,
+    ]
     lines = [_digest_line(r, stale_after_hours) for r in rows]
     shown = min(len(lines), DIGEST_MAX_WATCH_LINES)
 
@@ -561,7 +575,7 @@ COMPARISON_ROW_LABELS: dict[str, str] = {
 }
 COMPARISON_REFERENCE_NOTE = "比價結果不會寫入監看紀錄，也不會推播。"
 # Visible (risk-compliance R11); the tie rules live in the collapsed explanation.
-COMPARISON_ORDER_NOTE = "只依總價由低到高排列，未比較飛行時間與轉機。"
+COMPARISON_ORDER_NOTE = "只依總價由低到高排列，未比較飛行時間、轉機與行李。"
 COMPARISON_ORDER_DETAIL = "同價依加入順序；沒有價格的目的地依加入順序列在後面。"
 COMPARISON_NO_PRICE_NOTE = "沒有價格的目的地未參與排序，不代表沒有機票或價格較高。"
 COMPARISON_SINGLE_DATE_NOTE = "只比較這一組日期，其他日期的價格可能不同。"
@@ -738,7 +752,7 @@ COMMAND_PREFIX = "[flight-deals]"
 COMMAND_HELP = "\n".join(
     [
         f"{COMMAND_PREFIX} 可用指令",
-        "/list：列出啟用中的監看與目前最低價",
+        "/list：列出啟用中的監看與已查到最低價",
         "/watch <編號>：查看單一監看的條件與已查到價格中最便宜的 3 組日期",
         "/scan <編號>：立即查價，完成後另外回覆結果",
         "/digest：立即送出一則摘要",
@@ -763,7 +777,7 @@ COMMAND_TIME_NOTE = "時間為台北時間。"
 # COMMAND_TIME_NOTE.
 COMMAND_WATCH_TIME_NOTE = "查到時間為台北時間；航班時刻為各機場當地時間。"
 COMMAND_DELTA_NOTE = (
-    "較前一輪為目前最低總價與上一輪查價前最低總價的差額；"
+    "較前一輪為已查到最低總價與上一輪查價前最低總價的差額；"
     "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
 )
 COMMAND_SCHEDULER_OFF = "排程未執行，無法排入；請以一般方式啟動服務後再試。"
@@ -982,7 +996,15 @@ def command_list_message(
         extra.append("已過期：" + "、".join(f"#{i}" for i in expired_ids))
     if not rows:
         return "\n".join([f"{COMMAND_PREFIX} {COMMAND_NO_ACTIVE}", *extra])
-    footer = [*extra, "", COMMAND_DELTA_NOTE, SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
+    footer = [
+        *extra,
+        "",
+        COMMAND_DELTA_NOTE,
+        SAMPLED_ONLY_NOTE,
+        COMMAND_TIME_NOTE,
+        DISCLAIMER,
+        PRICE_SOURCE_NOTE,
+    ]
     return fit_reply(
         [command_list_title(len(rows))],
         [command_list_line(r, stale_after_hours) for r in rows],
@@ -1100,6 +1122,7 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
         SAMPLED_ONLY_NOTE,
         COMMAND_WATCH_TIME_NOTE,
         DISCLAIMER,
+        *([PRICE_SOURCE_NOTE] if detail.prices else []),
     ]
     return fit_reply(head, items, footer)
 
@@ -1154,24 +1177,24 @@ def command_scan_result_message(result: CommandScanResult) -> str:
             lines.append(f"本輪取樣 {result.sampled} 組日期，對外查詢 {result.queries_used} 次")
         if result.skip_notes:
             lines.append("略過：" + "；".join(result.skip_notes))
+    footer = ["", COMMAND_DELTA_NOTE, SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
     if result.amount_minor is not None and result.depart_date is not None:
         dates = date_range_text(result.depart_date, result.return_date)
         money = _money_with_note(
             result.amount_minor, result.currency, result.adults, result.children
         )
         delta = command_delta_text(result.delta_direction, result.delta_minor, result.currency)
-        lines.append(f"目前最低價：{money} {dates}（查到 {_short_time(result.fetched_at)}）")
+        lines.append(f"已查到最低價：{money} {dates}（查到 {_short_time(result.fetched_at)}）")
         if result.carried_over:
             lines.append(COMMAND_CARRIED_OVER)
         if result.data_stale:
             lines.append(digest_stale_label(result.stale_after_hours))
         lines.append(f"較前一輪：{delta}")
+        footer.append(PRICE_SOURCE_NOTE)
     else:
         pax = pax_label(result.adults, result.children)
-        lines.append(f"目前最低價：{COMMAND_NO_PRICE}（{pax}）")
-    return fit_reply(
-        lines, [], ["", COMMAND_DELTA_NOTE, SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
-    )
+        lines.append(f"{COMMAND_NO_PRICE}（{pax}）")
+    return fit_reply(lines, [], footer)
 
 
 @dataclass(frozen=True)
@@ -1463,11 +1486,6 @@ def retention_static_texts() -> list[str]:
 # Templates only print ``ui.<field>`` and view-model values; no wording is written there.
 
 
-# #46 (risk-gate M2): visible once next to DISCLAIMER on every page showing prices. The
-# price comes from Google's default sort; the same flight can be lower on its other tab.
-PRICE_SOURCE_NOTE = "價格取自 Google 預設排序的結果；同一航班在 Google「最低價格」分頁可能較低。"
-
-
 @dataclass(frozen=True)
 class UiTexts:
     """Shared web wording, passed to every page as ``ui`` (one instance: WEB_TEXTS)."""
@@ -1490,7 +1508,7 @@ class UiTexts:
     delta_sr_up: str = "較前一輪上漲"
     delta_sr_flat: str = "較前一輪持平"
     delta_explain_detail: str = (
-        "較前一輪：目前最低價與上一輪掃描結束時最低價的差額，"
+        "較前一輪：已查到最低價與上一輪掃描結束時最低價的差額，"
         "只計目前設定的即時價、不含已出發的日期；兩個最低價可能是不同日期。"
     )
     # #7, #21, #44 (R1): never a bare "訂票" button or column.

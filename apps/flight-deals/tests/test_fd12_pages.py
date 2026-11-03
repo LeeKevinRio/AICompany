@@ -333,8 +333,8 @@ def assert_wording_clean(page: Page) -> None:
     assert "查票" not in text
     assert "未在頁面內嵌" not in text and "未內嵌" not in text
     assert "no result section" not in text and "Traceback" not in text
-    # "訂票" only inside 「查看並訂票」 (the disclaimer itself says 訂票網站).
-    leftover = text.replace(DISCLAIMER, "").replace("查看並訂票", "")
+    # "訂票" only inside 「查看並訂票」 (the disclaimer says 訂票網站, the source note 訂票頁).
+    leftover = text.replace(DISCLAIMER, "").replace(PRICE_SOURCE_NOTE, "").replace("查看並訂票", "")
     assert "訂票" not in leftover
     assert "價格以 Google Flights 頁面為準" not in text
     for banned in ("最便宜", "推薦", "最佳", "超值", "目前最便宜"):
@@ -891,7 +891,7 @@ def test_comparison_result_page_structure(harness: Harness) -> None:
     assert_one_disclaimer(page)
     assert ONE_ADULT in page.main.text() and "1 人總價" not in page.price_text()
     assert page.count_visible(RETURN_EXPLAIN) == 1
-    assert page.count_visible("只依總價由低到高排列，未比較飛行時間與轉機。") == 1
+    assert page.count_visible("只依總價由低到高排列，未比較飛行時間、轉機與行李。") == 1
     table = page.main.find_all("table", "comparison")[0]
     headers = [th.text() for th in table.find_all("th")]
     assert "去程航班" in headers and "飛行時間（不含轉機等候）" in headers
@@ -1053,10 +1053,10 @@ def test_price_source_note_once_on_every_page_with_prices(harness: Harness) -> N
         "/notifications",
     ):
         page = get(harness, url)
-        assert page.count(PRICE_SOURCE_NOTE) == 1, url
         assert page.count_visible(PRICE_SOURCE_NOTE) == 1, url
-        assert page.count_in_details(PRICE_SOURCE_NOTE) == 0, url
         if url != "/notifications":  # the log also keeps the sent Telegram text
+            assert page.count(PRICE_SOURCE_NOTE) == 1, url
+            assert page.count_in_details(PRICE_SOURCE_NOTE) == 0, url
             assert_one_disclaimer(page)
 
 

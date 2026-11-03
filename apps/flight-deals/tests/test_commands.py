@@ -41,6 +41,7 @@ from flight_deals.domain.messages import (
     COMMAND_TOO_LONG,
     COMMAND_UNKNOWN,
     DISCLAIMER,
+    PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
 )
 from flight_deals.domain.models import DatePair, ExplorationSpec
@@ -790,7 +791,7 @@ def test_list_of_200_long_names_fits_and_says_how_many_are_hidden(bot: Bot) -> N
     bot.send(msg(1, "/list"))
     reply = bot.notifier.sent[-1]
     assert len(reply) <= COMMAND_REPLY_MAX_CHARS < MAX_MESSAGE_LENGTH
-    assert "另有" in reply and DISCLAIMER in reply
+    assert "另有" in reply and DISCLAIMER in reply and PRICE_SOURCE_NOTE in reply
     shown = sum(1 for line in reply.splitlines() if line.startswith("#"))
     assert f"另有 {200 - shown} 個未列出" in reply
 
@@ -916,7 +917,7 @@ def test_scan_result_reply_follows_the_job(bot: Bot) -> None:  # AC-K4, AC-K5, A
     assert [r.dedupe_key for r in results] == [f"cmd:{BOT_ID}:5:result"]
     reply = bot.notifier.sent[-1]
     assert reply.startswith(f"[flight-deals] /scan #{watch_id}") and "查價完成（成功）" in reply
-    assert "目前最低價：TWD 10,000（1 人總價）" in reply and DISCLAIMER in reply
+    assert "已查到最低價：TWD 10,000（1 人總價）" in reply and DISCLAIMER in reply
     assert results[0].message_text.startswith(f"/scan {watch_id}（查價結果）")
     assert bot.repo.latest_scan_run_for_watch(watch_id).trigger == "manual"
     scheduler._command_scan(watch_id)  # a second run of the same job: no second reply
@@ -931,7 +932,7 @@ def test_scan_result_states_failure_reason(bot: Bot) -> None:  # AC-K5
     bot.assembly.scheduler._command_scan(watch_id)
     reply = bot.notifier.sent[-1]
     assert "本輪未查到價格：資料源被擋或格式改變" in reply
-    assert "目前最低價：尚未查到價格（1 人）" in reply
+    assert "尚未查到價格（1 人）" in reply and "已查到最低價" not in reply
     assert "0 元" not in reply and "TWD 0" not in reply
 
 
@@ -1189,7 +1190,7 @@ def test_scan_result_flags_price_from_earlier_run(bot: Bot) -> None:  # R2
     bot.assembly.scheduler._command_scan(watch_id)
     reply = bot.notifier.sent[-1]
     assert "查價完成（失敗）" in reply and "本輪未查到價格：資料源被擋或格式改變" in reply
-    assert "目前最低價：TWD 10,000（1 人總價） 12/10–12/15（查到 10-25 12:00）" in reply
+    assert "已查到最低價：TWD 10,000（1 人總價） 12/10–12/15（查到 10-25 12:00）" in reply
     assert "此價格為先前掃描查到，本輪未更新" in reply
 
 
@@ -1229,3 +1230,31 @@ def test_command_badge_tone_follows_state(bot: Bot) -> None:  # QA 3
     assert views.command_status_view(True)["tone"] == "warn"
     views.hooks.command_status = lambda: PollerStatus(None, True, True, True, None, None, None, 0)
     assert views.command_status_view(True)["tone"] == "down"
+
+
+def test_price_replies_carry_the_price_source_note(bot: Bot) -> None:  # FD-13 risk ruling
+    bot.commands.hooks.scheduler_running = lambda: True
+    watch_id = bot.create_watch()
+    scheduler = bot.assembly.scheduler
+    bot.commands.hooks.schedule_scan = scheduler.trigger_command_scan
+    together = f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}"
+
+    bot.send(msg(1, f"/watch {watch_id}"))
+    assert "尚未查到價格" in bot.notifier.sent[-1]
+    assert PRICE_SOURCE_NOTE not in bot.notifier.sent[-1]
+
+    bot.source.status_override = "blocked"
+    bot.send(msg(2, f"/scan {watch_id}"))
+    scheduler._command_scan(watch_id)
+    assert "尚未查到價格（1 人）" in bot.notifier.sent[-1]
+    assert PRICE_SOURCE_NOTE not in bot.notifier.sent[-1]
+
+    bot.source.status_override = None
+    bot.clock.advance(hours=1)
+    bot.send(msg(3, f"/scan {watch_id}"))
+    scheduler._command_scan(watch_id)
+    assert together in bot.notifier.sent[-1]
+    for number, command in ((4, "/list"), (5, f"/watch {watch_id}")):
+        bot.send(msg(number, command))
+        assert bot.notifier.sent[-1].count(PRICE_SOURCE_NOTE) == 1, command
+        assert together in bot.notifier.sent[-1], command
