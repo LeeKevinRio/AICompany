@@ -1,6 +1,8 @@
 # ADR-0034：stock-desk 出清時待結算 R 買單的處置（補充 ADR-0033，不取代）
 
 - 狀態：accepted（CEO #79、#80，2026-10-31 裁定；落檔前提：新字面經風控逐字定稿後才可合併、F5（N-172）修法定調前 N-168 不開工實作，見 Decision 8、Decision 9 與 Consequences）
+- 補充一（tech-architect 2026-11-01，回應 `work/reviews/2026-11-01-N168開工前解讀點-dev-lead.md` P2(e)(f)、P3、P6）：Decision 1 的待成交買單於鎖內再分「W-B1 類／G1 擋下類」、L4 戳記範圍、計數口徑、W-B2L 的 API 形狀與欄位名、合併時點，以補充一為準；C-B3、C-B4、C-B8、C-B9 依補充一細化。全文見 `work/reviews/2026-11-01-ADR0034補充一-tech-architect.md` 第「B. 補充一全文」節；本檔原文不改（比照 ADR-0033、0035、0037 補充先例，CEO 可推翻改為另立取代 ADR）。
+- 補充二（risk-compliance-officer 2026-11-01，裁示 N-168 開工前字面題 P2～P5）：新增 W-B1b `EMERGENCY_EXIT_BLOCKED_ENTRY_NOTE`、W-B6b `PENDING_ENTRY_BLOCKED_NOTE`、W-B1d `PENDING_ENTRY_SAME_BATCH_NOTE` 三句定稿、出清三支 message 新組合順序、`/today` 區塊順序（FROZEN → W-B6 → W-B1d → ENTRY → W-B6b）、D5 理由改寫與 ENTRY／A 句排除規則；必改 1～8。全文見 `work/reviews/2026-11-01-N168字面裁示P2至P5-風控.md`；本檔原文不改。
 - 日期：2026-10-31（tech-architect 草案日期 2026-10-31）
 - 決策者：tech-architect（草案與技術評估）；risk-compliance-officer（方案裁示 CONDITIONAL APPROVE B-2a，2026-10-31；字面逐字定稿）；CEO #79（採 B-2a、標示來源採 L4）、#80（B-2b 列為永久紅線）於 2026-10-31 裁定。
 - 與 ADR-0033 的關係：
