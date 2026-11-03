@@ -447,6 +447,10 @@ class UnsettledLine(BaseModel):
     directive_id: int
     directive: Directive
     reason: str
+    #: G1 refused this line's claim in this run (ADR-0035 Decision 6′): its
+    #: batch is no longer ``planned``. Structured, so a reader that must not
+    #: list the line twice (風控 2026-11-01 P2(d), W-B6b) never reads ``reason``.
+    refused_by_g1: bool = False
 
 
 class SettlementResult(BaseModel):

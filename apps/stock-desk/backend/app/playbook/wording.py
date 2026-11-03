@@ -371,6 +371,27 @@ SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE = (
     "這些紀錄未因此取消或修改。這幾筆不是買賣指令，帳冊不會依開盤價判定成交。"
 )
 
+#: W-B6b (風控 2026-11-01 P2(d), N-182; 不限模式): ``/today``'s sentence for the
+#: in-flight R-series buys the book will not fill because their batch row has
+#: left ``planned`` -- G1's own condition (``store.BATCH_LEFT_PLANNED_SQL``), read
+#: after the settlement. Lines G1 refused in this run's settlement are not listed
+#: (``SETTLEMENT_BATCH_ALREADY_FILLED_NOTE`` already names them); rendered for one
+#: line or more. ``{blocked_count}`` counts lines after K1 de-duplication;
+#: ``{entry_items}`` joins :data:`SAME_DAY_EARLIER_ENTRY_ITEM` (the N-168 item
+#: format) with 「、」, by 預定執行日, symbol, batch_no. Placed after
+#: SAME_DAY_EARLIER_ENTRY_NOTE in the block that follows FROZEN_NOTE, or first.
+PENDING_ENTRY_BLOCKED_NOTE = (
+    "尚有 {blocked_count} 筆已產生、尚未結算的 R 系列買進指令，"
+    "因帳冊中對應的批次已不是待買進狀態，帳冊不會依這幾筆判定成交："
+    "{entry_items}。"
+    "這幾筆未被取消，之後的結算會繼續列出。"
+    "本系統不下單，無法得知你是否已依這幾筆在券商下單，也無法替你在券商撤單："
+    "若你在券商的買進實際成交，你在券商的持股可能多於帳冊所記，多出的股數不在帳冊內，"
+    "S/P 系列不會評估它們的停損停利，全部出清也不會涵蓋它們，"
+    "實際持股以你的券商回報為準；"
+    "若未下單或未成交，帳冊不受這幾筆影響。"
+)
+
 #: 鐵律④ (T5). Never a denial: the change is recorded and dated.
 RULE_CHANGE_PENDING = (
     "規則修改已記錄為待生效，生效日 {effective_date}（版本 {version}）；當日不套用。"

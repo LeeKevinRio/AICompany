@@ -23,6 +23,7 @@ trailing stop reads it on the same day's close.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -413,6 +414,20 @@ def _is_r_series(directive: Directive) -> bool:
     return directive.rule_id in R_SERIES_RULE_IDS
 
 
+def g1_blocked_entries(read: EntryBeforeExitRead) -> list[PendingDirective]:
+    """The in-flight buys G1 refuses, one per K1 (the smallest id).
+
+    「批次已非 planned」 is not decided here: :attr:`EntryBeforeExitRead.blocked`
+    is read by the store with G1's own condition (``store.BATCH_LEFT_PLANNED_SQL``).
+    A buy with no batch row or a NULL ``batch_no`` is never in it (風控
+    2026-11-01 共用定義).
+    """
+    lines: dict[tuple[str, int | None, str, str, str], PendingDirective] = {}
+    for item in read.blocked:  # oldest first, so the first per K1 is the smallest id
+        lines.setdefault(decision_key(item.directive), item)
+    return list(lines.values())
+
+
 def _insert_after(warnings: list[str], anchor: str, note: str) -> None:
     """Put ``note`` right after ``anchor``; at the end if ``anchor`` is not there."""
     position = warnings.index(anchor) + 1 if anchor in warnings else len(warnings)
@@ -426,6 +441,8 @@ def same_day_warnings(
     markets: Mapping[str, MarketSnapshot],
     batches: Sequence[BatchState],
     portfolio: PortfolioState,
+    blocked: Sequence[PendingDirective] = (),
+    refused_ids: AbstractSet[int] = frozenset(),
 ) -> list[str]:
     """The evaluation's warnings, reconciled with the logged list the page shows.
 
@@ -453,9 +470,19 @@ def same_day_warnings(
       this run produced no buy of the same K1 for: right after FROZEN_NOTE when
       the mode is not ``normal`` (the condition FROZEN_NOTE is written on),
       otherwise first.
+    * **PENDING_ENTRY_BLOCKED_NOTE** (W-B6b, 風控 2026-11-01 P2(d)／P4／P5, N-182)
+      for ``blocked`` -- the in-flight buys G1 refuses, from the one in-flight
+      read, K1-deduplicated (:func:`g1_blocked_entries`) -- in every mode, minus the
+      lines G1 refused in this run's settlement (``refused_ids``), which
+      ``unsettled`` already names. It follows ENTRY in the same block, so the
+      block is FROZEN_NOTE → ENTRY → W-B6b, or first when FROZEN_NOTE is not
+      there (W-B6 and W-B1d are N-168's). Those buys are not "judged as usual",
+      so they are left out of ENTRY's lines and A's ``{line_count}`` (P5); a
+      sentence whose count drops to zero is not rendered.
     """
     warnings = list(evaluation.warnings)
     logged = commit.logged
+    blocked_keys = {decision_key(item.directive) for item in blocked}
     written_r = {directive.symbol for directive in commit.written if _is_r_series(directive)}
     blocked_r = {directive.symbol for directive in logged if _is_r_series(directive)} - written_r
 
@@ -495,7 +522,11 @@ def same_day_warnings(
         if snapshot is not None and is_usable(snapshot.data_status, snapshot.source):
             continue
         lines = [line for line in logged if line.symbol == symbol]
-        orders = sum(1 for line in lines if line.action in ORDER_ACTIONS)
+        orders = sum(
+            1
+            for line in lines
+            if line.action in ORDER_ACTIONS and decision_key(line) not in blocked_keys
+        )
         decisions = sum(1 for line in lines if line.action in DECISION_RECORD_ACTIONS)
         if not orders and not decisions:
             continue
@@ -528,30 +559,49 @@ def same_day_warnings(
         (
             line
             for line in logged
-            if _is_r_series(line) and line.action == "buy" and decision_key(line) not in produced
+            if _is_r_series(line)
+            and line.action == "buy"
+            and decision_key(line) not in produced
+            and decision_key(line) not in blocked_keys
         ),
         key=lambda line: (line.symbol, line.batch_no or 0, line.execution_date),
     )
+    block: list[str] = []
     if earlier:
-        note = wording.SAME_DAY_EARLIER_ENTRY_NOTE.format(
-            entry_count=len(earlier),
-            entry_items="、".join(
-                wording.SAME_DAY_EARLIER_ENTRY_ITEM.format(
-                    symbol=line.symbol,
-                    batch_no=line.batch_no,
-                    shares=line.shares,
-                    rule_id=line.rule_id,
-                    execution_date=line.execution_date.isoformat(),
-                )
-                for line in earlier
-            ),
+        block.append(
+            wording.SAME_DAY_EARLIER_ENTRY_NOTE.format(
+                entry_count=len(earlier),
+                entry_items="、".join(_entry_item(line) for line in earlier),
+            )
         )
-        frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS[evaluation.mode])
-        if evaluation.mode != "normal" and frozen in warnings:
-            _insert_after(warnings, frozen, note)
-        else:
-            warnings.insert(0, note)
+    listed = sorted(
+        (item.directive for item in blocked if item.directive_id not in refused_ids),
+        key=lambda line: (line.execution_date, line.symbol, line.batch_no or 0),
+    )
+    if listed:
+        block.append(
+            wording.PENDING_ENTRY_BLOCKED_NOTE.format(
+                blocked_count=len(listed),
+                entry_items="、".join(_entry_item(line) for line in listed),
+            )
+        )
+    frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS[evaluation.mode])
+    position = (
+        warnings.index(frozen) + 1 if evaluation.mode != "normal" and frozen in warnings else 0
+    )
+    warnings[position:position] = block
     return warnings
+
+
+def _entry_item(line: Directive) -> str:
+    """One ``{entry_items}`` entry in the N-168 item format (ENTRY and W-B6b)."""
+    return wording.SAME_DAY_EARLIER_ENTRY_ITEM.format(
+        symbol=line.symbol,
+        batch_no=line.batch_no,
+        shares=line.shares,
+        rule_id=line.rule_id,
+        execution_date=line.execution_date.isoformat(),
+    )
 
 
 class SettlementRun(NamedTuple):
@@ -721,7 +771,10 @@ class PlaybookService:
                     blocked[item.directive_id] = refused
                     unsettled.append(
                         UnsettledLine(
-                            directive_id=item.directive_id, directive=directive, reason=""
+                            directive_id=item.directive_id,
+                            directive=directive,
+                            reason="",
+                            refused_by_g1=True,
                         )
                     )
                 # Otherwise someone else settled this row between the read and the claim.
@@ -1281,7 +1334,13 @@ class PlaybookService:
         # at all the snapshot is ``None`` and the loader's own sentence (which
         # source reported what) is exactly what the reader needs (風控 R4-a).
         warnings = same_day_warnings(
-            evaluation, commit, markets=markets, batches=book, portfolio=portfolio
+            evaluation,
+            commit,
+            markets=markets,
+            batches=book,
+            portfolio=portfolio,
+            blocked=g1_blocked_entries(in_flight.entries),
+            refused_ids={line.directive_id for line in settlement.unsettled if line.refused_by_g1},
         )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
