@@ -10,6 +10,7 @@ import {
 } from "../lib/exitReceipt";
 import type { ExitReceipt } from "../lib/exitReceipt";
 import { useEmergencyExit } from "../lib/queries";
+import { useReceiptCompensation } from "./useReceiptCompensation";
 
 export interface EmergencyExitFlow {
   isOpen: boolean;
@@ -45,7 +46,10 @@ export interface EmergencyExitFlow {
  * - `isOpen`, the submit lock and the trigger ref;
  * - focus return on close, and the once-per-receipt scroll.
  */
-export function useEmergencyExitFlow(): EmergencyExitFlow {
+export function useEmergencyExitFlow(
+  /** The `/playbook` data query's fetch status; only the end of a refetch matters (spec §4.2). */
+  fetchStatus: "fetching" | "paused" | "idle" = "idle",
+): EmergencyExitFlow {
   const receiptStore = useExitReceiptStore();
   const mutation = useEmergencyExit(receiptStore);
   const [isOpen, setIsOpen] = useState(false);
@@ -64,6 +68,13 @@ export function useEmergencyExitFlow(): EmergencyExitFlow {
   const focusLostRef = useRef(false);
   const bannerRef = useRef<HTMLDivElement | null>(null);
   const statusBarRef = useRef<HTMLDivElement | null>(null);
+  // Occlusion compensation (spec §4.2): armed by the scroll effect below, fires at
+  // most once per receipt after the first refetch that follows it.
+  const { controller: compensation, isFetchingNow } = useReceiptCompensation(
+    bannerRef,
+    statusBarRef,
+    fetchStatus,
+  );
 
   function open() {
     // The only place `reset()` is used: it clears the previous round's failure
@@ -146,6 +157,9 @@ export function useEmergencyExitFlow(): EmergencyExitFlow {
     // Synchronously, after the scroll: this receipt is dealt with, whether or not
     // it needed scrolling.
     receiptStore.scrollHandled(seq);
+    // Only the page instance that dealt with the receipt may compensate it; a
+    // page mounted with an already-shown receipt returns above and never arms.
+    compensation.arm(seq, isFetchingNow());
   }, [receiptSeq, scrolledSeq, isOpen]);
 
   return {

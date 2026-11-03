@@ -248,7 +248,7 @@ describe("the dialog and the observer sit above the isSuccess gate (VETO-2: FE-C
   it("useEmergencyExit is called exactly once in app/playbook, in the flow hook that the page calls", () => {
     const callers = playbook.filter(({ text }) => /useEmergencyExit\(/.test(text.replace(/export function useEmergencyExit\(/, "")));
     expect(callers.map(({ file }) => file)).toEqual(["playbook/useEmergencyExitFlow.ts"]);
-    expect(page.match(/useEmergencyExitFlow\(\)/g)).toHaveLength(1);
+    expect(page.match(/useEmergencyExitFlow\(today\.fetchStatus\)/g)).toHaveLength(1);
     expect(page.match(/usePlaybookToday\(/g)).toHaveLength(1);
   });
 
@@ -311,6 +311,42 @@ describe("the receipt scroll keys on the receipt alone (FE-C8, FE-T3, 風控 FE-
     expect(flow).not.toMatch(/behavior: "smooth"/);
     const effect = flow.slice(flow.indexOf("const receiptSeq"));
     expect(effect).not.toMatch(/\.focus\(/);
+  });
+});
+
+describe("occlusion compensation wiring (spec r3.5a §4.2, FR-3, AC-68)", () => {
+  const comp = read(join(PLAYBOOK, "useReceiptCompensation.ts"));
+  const lib = read(join(APP_ROOT, "lib/receiptCompensation.ts"));
+
+  it("is armed only by the scroll effect, right after the marker is written, so a page mounted with a shown receipt never compensates", () => {
+    expect(flow.match(/compensation\.arm\(/g)).toHaveLength(1);
+    expect(flow.indexOf("compensation.arm(")).toBeGreaterThan(flow.indexOf("receiptStore.scrollHandled("));
+    // The early return for "already scrolled / dialog open" sits before the arm call.
+    expect(flow.indexOf("compensation.arm(")).toBeGreaterThan(flow.indexOf("shouldScrollForReceipt(seq"));
+  });
+
+  it("detects manual scrolling from input events, never from a scrollY difference", () => {
+    for (const ev of ["wheel", "touchmove", "keydown"]) expect(comp).toContain(`"${ev}"`);
+    expect(comp).not.toMatch(/scrollY|pageYOffset|addEventListener\("scroll"/);
+    expect(lib).not.toMatch(/scrollY|pageYOffset/);
+  });
+
+  it("scrolls instantly, never moves focus, uses 12 to trigger and 16 as target", () => {
+    expect(comp).toContain('behavior: "auto"');
+    expect(comp + lib).not.toMatch(/behavior: "smooth"|\.focus\(|scrollIntoView/);
+    expect(lib).toContain("COMPENSATION_TRIGGER_GAP_PX = 12");
+    expect(lib).toContain("COMPENSATION_TARGET_GAP_PX = 16");
+  });
+
+  it("reads the bar height with getBoundingClientRect and applies no safety valve", () => {
+    expect(comp).toContain("getBoundingClientRect()");
+    expect(comp + lib).not.toMatch(/OVER_HALF|innerHeight \* 0\.5|0\.5 \* /);
+  });
+
+  it("the compensation opens no query observer and adds nothing to the store", () => {
+    expect(comp).not.toMatch(/useQuery|useIsFetching|useQueryClient|useExitReceiptStore/);
+    expect(lib).not.toMatch(/import /);
+    expect(read(join(APP_ROOT, "lib/exitReceipt.ts"))).not.toMatch(/compensat/i);
   });
 });
 

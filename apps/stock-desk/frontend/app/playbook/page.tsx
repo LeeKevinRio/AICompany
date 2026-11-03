@@ -57,7 +57,7 @@ import { useEmergencyExitFlow } from "./useEmergencyExitFlow";
  */
 export default function PlaybookPage() {
   const today = usePlaybookToday(true);
-  const flow = useEmergencyExitFlow();
+  const flow = useEmergencyExitFlow(today.fetchStatus);
   const data = today.data;
   // 快市沿用說明 is rendered next to the badge in `ModeStatusBar`; the same
   // sentence is filtered out of the warnings list below so the page states it
