@@ -801,3 +801,10 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-107 UI e2e**：1120、768、360 px 無橫向捲動（表格捲動區除外）；主卡與「到 Google Flights 查看並訂票」在 1366×768 與 390×844 首屏可點；Tab 可走過所有按鈕與 summary；新舊資料混合不錯位、無 None；來回監看無回程班次；深淺色對比腳本重算；CSP 無違規；實際點開 3 條訂票連結（單程、來回、轉機）確認結果頁可依航班號碼找到該班。
 
 **實作期補記**：C-106 允許修改的既有斷言另含風控核可的 PRD 文案列（qa-reviewer 列舉四條，已記任務單 AC-F4）；C-40 切換併入 UI view model commit（tech-architect 同意）；`safe_booking_url()` 新增 runtime allowlist（https、google.com 或 www.google.com、/travel/flights），屬 Codex 第二意見的縱深防禦；列表過期門檻由 `SettingsService` listener 更新快取，直接改 DB 不在支援範圍。
+
+## FD-13 增補：不採用 Google「最低價格」分頁數字（2026-11-03，總經理依實測決定；風控接受）
+
+- **Context**：FD-12 發現分頁數字可能低於系統價格。伺服器頁加 `tfu` 參數後價格不變，該數字只能從瀏覽器載入後的 `GetShoppingResults` RPC 取得。
+- **Decision**：繼續使用伺服器頁的預設結果，不接該 RPC。5 筆實測的分頁低價都沒有延續到 Google 訂票頁（紀錄見 `work/tasks/FD-13.md`）。
+- **Consequences**：通知、預算門檻與比價排序的基準不變；門檻落在分頁數字與系統價之間時不會通知，屬保守方向。樣本僅 5 筆且航空公司站上金額未驗證，揭露靠 `PRICE_SOURCE_NOTE`。
+- **重開條件**：出現分頁低價延續到訂票頁或航空公司網站的樣本；取價來源改變。
