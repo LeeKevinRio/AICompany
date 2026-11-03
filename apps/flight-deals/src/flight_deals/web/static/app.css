@@ -18,7 +18,18 @@
   --control-height-small: 32px;
   --radius: 8px;
   --radius-small: 4px;
+  --radius-large: 12px;
+  --radius-pill: 999px;
   --max-width: 1120px;
+  --touch-target: 44px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-price: 28px;
+  --text-price-hero: 36px;
+  --text-price-hero-small: 32px;
 
   --color-bg: #f7f7f5;
   --color-surface: #ffffff;
@@ -44,6 +55,7 @@
   --color-chart-bg: #f2f5fa;
   --color-chart-line: #1f5fbf;
   --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,6 +84,7 @@
     --color-chart-bg: #1a1f27;
     --color-chart-line: #6ea0f0;
     --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -175,7 +188,7 @@ h3 { font-size: 15px; margin: var(--space-4) 0 var(--space-2); }
 .muted { color: var(--color-muted); }
 .note { font-size: 13px; }
 /* Disclaimer sits next to the prices at body size (risk floor), never smaller. */
-.disclaimer { margin: 0 0 var(--space-3); color: var(--color-text); font-size: inherit; }
+.disclaimer, .price-source-note { margin: 0 0 var(--space-3); color: var(--color-text); font-size: inherit; }
 .notice {
   background: var(--color-warn-bg);
   color: var(--color-warn-text);
@@ -215,7 +228,8 @@ button[aria-busy="true"] { cursor: progress; }
 .small { font-size: 13px; min-height: var(--control-height-small); padding: 0 var(--space-3); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
-.table-wrap { overflow-x: auto; max-width: 100%; }
+/* Positioned so .sr-only cells inside scroll with the table instead of widening the page. */
+.table-wrap { position: relative; overflow-x: auto; max-width: 100%; }
 .table-wrap:focus-visible { outline-offset: -2px; }
 table.data { width: 100%; border-collapse: collapse; }
 .table-wrap > table.data { min-width: 640px; }
@@ -231,9 +245,10 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .badge {
   display: inline-block;
-  padding: 0 var(--space-2);
-  border-radius: 999px;
-  font-size: 12px;
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 600;
   background: var(--color-neutral-bg);
   color: var(--color-neutral-text);
   white-space: nowrap;
@@ -447,13 +462,22 @@ details > summary { cursor: pointer; padding: var(--space-1) 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button, button, input, select { transition: none; }
+  .button, button, input, select, .watch-card, details.fold > summary { transition: none; }
 }
 
-.delta { font-weight: 600; white-space: nowrap; }
-.delta-down { color: var(--color-ok-text); }
-.delta-up { color: var(--color-bad-text); }
-.delta-flat { color: var(--color-neutral-text); }
+.delta {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delta-down { background: var(--color-ok-bg); color: var(--color-ok-text); }
+.delta-up { background: var(--color-bad-bg); color: var(--color-bad-text); }
+.delta-flat { background: var(--color-neutral-bg); color: var(--color-neutral-text); }
 .check-label { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; }
 
 /* Exploration: progress bar, estimate line and price calendar. */
@@ -464,7 +488,7 @@ progress {
   accent-color: var(--color-accent);
 }
 .estimate { font-weight: 600; margin: var(--space-3) 0; }
-.table-wrap > table.calendar { min-width: 760px; table-layout: fixed; }
+.table-wrap > table.calendar { min-width: 840px; table-layout: fixed; }
 table.calendar th { text-align: center; }
 table.calendar td.cal-cell {
   min-width: 0;
@@ -491,16 +515,193 @@ table.calendar td.cal-empty { background: var(--color-bg); border: 1px solid var
   padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
   background: var(--color-neutral-bg);
   color: var(--color-neutral-text);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   max-width: 100%;
   overflow-wrap: anywhere;
 }
 .chip .chip-remove {
   min-height: var(--control-height-small);
   padding: 0 var(--space-3);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 13px;
 }
 .entry-card { margin-bottom: var(--space-4); }
 .table-wrap > table.comparison { min-width: 880px; }
 table.comparison th[scope="row"] { text-align: left; font-weight: 600; white-space: nowrap; }
+
+/* FD-12: watch cards, main price card, flight rows, folds. No animation but hover colour. */
+.page-notes { margin: 0 0 var(--space-4); }
+.page-notes p { margin: 0 0 var(--space-2); color: var(--color-text); font-size: inherit; }
+.page-notes .reference-note { color: var(--color-muted); }
+.return-explain, .calendar-note, .order-note, .distribution-legend { margin: 0 0 var(--space-3); font-size: inherit; }
+.booking-hint { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--color-text); }
+.delta-explain { margin: var(--space-3) 0 0; color: var(--color-muted); font-size: var(--text-sm); }
+.delta-explain p { margin: 0; }
+.source-note { margin: calc(-1 * var(--space-2)) 0 var(--space-4); }
+
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.watch-card, .price-card {
+  min-width: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-large);
+  box-shadow: var(--shadow-card);
+}
+.watch-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  transition: border-color 120ms;
+}
+.watch-card:hover { border-color: var(--color-accent); }
+.card-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.card-title { margin: 0; font-size: var(--text-lg); font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.card-meta { margin: 0; color: var(--color-muted); font-size: var(--text-sm); }
+.price-block { display: flex; flex-direction: column; gap: var(--space-1); }
+.price-label { color: var(--color-muted); font-size: var(--text-sm); }
+.price-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.price-amount {
+  font-size: var(--text-price);
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.price-sub { font-size: var(--text-sm); color: var(--color-text); }
+.price-meta { font-size: var(--text-sm); color: var(--color-muted); }
+.price-meta .badge { margin-left: var(--space-1); }
+.price-dates { font-size: var(--text-sm); }
+.card-foot { display: flex; flex-direction: column; gap: var(--space-2); margin-top: auto; }
+.card-scanned { margin: 0; font-size: var(--text-sm); }
+.card-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); }
+.booking-note { margin: 0; }
+details.more { flex: 0 0 auto; }
+details.more[open] { flex-basis: 100%; }
+details.more > summary.button { list-style: none; }
+details.more > summary.button::-webkit-details-marker { display: none; }
+details.more > summary.button::after { content: " ▸"; }
+details.more[open] > summary.button::after { content: " ▾"; }
+.more-actions { margin-top: var(--space-2); }
+
+/* Main price card: same chrome as a list card, only larger type and top position. */
+.price-card { padding: var(--space-5); margin-bottom: var(--space-4); }
+.price-card-title { margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
+.price-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: var(--space-5);
+}
+.price-col { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.price-card .price-amount { font-size: var(--text-price-hero); }
+.price-card .price-sub { font-size: var(--text-base); }
+.price-card .return-explain { margin-top: var(--space-3); }
+.flight-col { min-width: 0; }
+.flight-note { margin: var(--space-2) 0 0; color: var(--color-muted); font-size: var(--text-sm); }
+.cta { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.cta-button {
+  min-height: 48px;
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: normal;
+  text-align: center;
+}
+.cta-hint { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--color-text); }
+.cta .hint { margin: var(--space-1) 0 0; }
+.settings-link { margin: 0 0 var(--space-4); }
+
+/* Flight row: airline and number, then times and stops. */
+.flight { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.flight-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+.flight-leg { font-size: var(--text-sm); font-weight: 600; color: var(--color-muted); }
+.flight-airline { font-size: var(--text-base); font-weight: 600; overflow-wrap: anywhere; }
+.price-card .flight-airline { font-size: var(--text-lg); }
+.flight-no { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); overflow-wrap: anywhere; }
+.flight-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.flight-times { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.flight-time { font-size: var(--text-lg); font-weight: 600; }
+.flight-airport { font-size: var(--text-sm); color: var(--color-muted); }
+.flight-arrow { color: var(--color-muted); padding: 0 var(--space-1); }
+.day-offset { margin-left: 2px; font-size: var(--text-sm); font-weight: 600; color: var(--color-warn-text); }
+.flight-meta { font-size: var(--text-sm); color: var(--color-text); }
+.flight-compact .flight-airline, .flight-compact .flight-time { font-size: var(--text-sm); }
+.flight-compact .flight-no, .flight-compact .flight-meta, .flight-compact .flight-airport,
+.flight-compact .day-offset { font-size: var(--text-xs); }
+.flight-compact .flight-arrow { padding: 0 2px; }
+
+/* Tables that carry a flight column. */
+.table-wrap > table.flights { min-width: 720px; }
+table.flights td.cell-flight { min-width: 220px; }
+.cell-amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.th-sub { display: block; font-weight: 400; }
+.cell-link .hint { margin-top: var(--space-1); }
+.cal-pax { font-size: var(--text-xs); }
+/* Muted grey falls under 4.5:1 on the heat colours, so calendar cells use body text. */
+table.calendar td.cal-cell .flight-no,
+table.calendar td.cal-cell .flight-airport,
+table.calendar td.cal-cell .flight-arrow { color: var(--color-text); }
+.heat-time { font-size: var(--text-xs); color: var(--color-text); }
+
+/* Collapsible regions (details). Summary state is text only; no rotation or animation. */
+details.fold { margin: 0 0 var(--space-3); }
+details.fold > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  list-style: none;
+  transition: background-color 120ms;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸"; color: var(--color-muted); }
+details.fold[open] > summary::before { content: "▾"; }
+details.fold > summary:hover { background: var(--color-bg); }
+.fold-title { font-weight: 600; }
+.fold-sub { color: var(--color-muted); font-size: var(--text-sm); font-weight: 400; overflow-wrap: anywhere; min-width: 0; }
+.fold-body { padding-top: var(--space-3); }
+details.fold-inline { margin: 0; }
+
+details.explain { margin: var(--space-1) 0 0; }
+details.explain > summary {
+  display: inline-block;
+  padding: var(--space-1) 0;
+  font-size: var(--text-sm);
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.explain-body { margin: var(--space-1) 0 0; max-width: 60ch; font-size: var(--text-sm); color: var(--color-muted); }
+.tech-details .error-text { color: var(--color-muted); font-size: var(--text-sm); }
+
+/* FD-12 phone layout; last so it wins over the component rules above. */
+@media (max-width: 600px) {
+  /* Phone: keep the booking button on the first screen, right after the flight (C-107). */
+  .price-card { display: flex; flex-direction: column; }
+  .price-card > .price-card-title { order: 0; }
+  .price-card > .price-card-body { order: 1; }
+  .price-card > .cta { order: 2; }
+  .price-card > .return-explain { order: 3; }
+  .watch-card { padding: var(--space-3) var(--space-4); }
+  .price-card { padding: var(--space-4); }
+  .price-card-body { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .price-card .price-amount { font-size: var(--text-price-hero-small); }
+  .card-actions > .button, .card-actions > button, .card-actions > details.more { flex: 1 1 auto; }
+  .card-actions .button, .card-actions button, .card-actions summary { min-height: var(--touch-target); }
+  .card-actions > .booking { flex-basis: 100%; }
+  .cta-button { width: 100%; }
+  .more-actions > * { flex: 1 1 auto; min-height: var(--touch-target); }
+  details.fold > summary { min-height: 48px; }
+  details.explain > summary { min-height: var(--touch-target); display: inline-flex; align-items: center; }
+  .card-actions > details.more > summary { width: 100%; }
+}

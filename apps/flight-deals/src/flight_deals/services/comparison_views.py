@@ -14,44 +14,58 @@ from flight_deals.domain.airports import place_label
 from flight_deals.domain.currency import format_money
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
+    COMPARISON_BREAKER_OPEN,
     COMPARISON_DEFERRED_NOTE,
+    COMPARISON_HOURLY_LIMIT,
+    COMPARISON_LOCK_TIMEOUT,
     COMPARISON_NO_PRICE_NOTE,
+    COMPARISON_ORDER_DETAIL,
     COMPARISON_ORDER_NOTE,
     COMPARISON_PAX_LABEL,
     COMPARISON_PREFILL_MISSING,
     COMPARISON_PREFILL_OK,
+    COMPARISON_PROGRESS_EXPLAIN,
+    COMPARISON_PROGRESS_HINT,
     COMPARISON_REFERENCE_NOTE,
+    COMPARISON_RESTARTED,
     COMPARISON_ROW_LABELS,
+    COMPARISON_SCHEDULER_OFF,
     COMPARISON_SINGLE_DATE_NOTE,
     COMPARISON_STATUS_LABELS,
     DISCLAIMER,
     TRIP_TYPE_LABELS,
+    WEB_BOOKING_FALLBACK_NOTE,
     comparison_age_note,
     comparison_created_ago,
     comparison_dates_label,
     comparison_progress_label,
     comparison_reused_note,
     comparison_stops_label,
+    comparison_table_caption,
     comparison_unfinished_note,
+    flight_column_label,
 )
 from flight_deals.domain.models import CABINS, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date
 from flight_deals.domain.trip_labels import (
-    BOOKING_FALLBACK_NOTE,
     cabin_label,
     flight_duration_label,
-    total_price_note,
+    web_price_note,
 )
 from flight_deals.domain.validation import MAX_DAYS_AHEAD, MAX_DESTINATIONS, MIN_DESTINATIONS
 from flight_deals.ports import BookingLinkBuilder, Clock
 from flight_deals.services.comparison import ComparisonService, comparison_url, exploration_url
-from flight_deals.services.exploration_views import stops_label
+from flight_deals.services.exploration_views import money_with_web_note, stops_label
 from flight_deals.services.notifications import safe_booking_url
 from flight_deals.services.settings import SettingsService
 from flight_deals.services.views import (
     NO_EMBEDDED_REASON,
     active_comparison_view,
     active_exploration_view,
+    fetched_label,
+    flight_view,
+    known_error_label,
+    web_pax_view,
 )
 from flight_deals.storage.repository import (
     ComparisonCellRecord,
@@ -62,6 +76,15 @@ from flight_deals.storage.repository import (
 LIST_DAYS = 7
 STALE_HOURS = 24
 DEFAULT_TRIP_DAYS = 5
+# Summaries written by the system itself; anything else (an exception) is shown as
+# "查詢失敗" (FR-12).
+KNOWN_SUMMARIES = (
+    COMPARISON_SCHEDULER_OFF,
+    COMPARISON_RESTARTED,
+    COMPARISON_LOCK_TIMEOUT,
+    COMPARISON_HOURLY_LIMIT,
+    COMPARISON_BREAKER_OPEN,
+)
 
 __all__ = [
     "ComparisonViewService",
@@ -176,8 +199,7 @@ class ComparisonViewService:
         age_hours = int((now - record.created_at).total_seconds() // 3600)
         old = now - record.created_at > timedelta(hours=STALE_HOURS)
         cheapest = (
-            format_money(record.min_amount_minor, spec.currency)
-            + total_price_note(spec.adults, spec.children)
+            money_with_web_note(record.min_amount_minor, spec.currency, spec.adults, spec.children)
             if record.min_amount_minor is not None
             else None
         )
@@ -221,9 +243,12 @@ class ComparisonViewService:
         )
         error_summary = None
         if record.status == "failed":
-            reason = record.error_summary or COMPARISON_ROW_LABELS["interrupted"]
+            reason = (
+                known_error_label(record.error_summary, KNOWN_SUMMARIES)
+                or COMPARISON_ROW_LABELS["interrupted"]
+            )
             error_summary = comparison_unfinished_note(record.done, record.total, reason)
-        pax_note = total_price_note(spec.adults, spec.children)
+        pax_note = web_price_note(spec.adults, spec.children)
         return {
             "comparison": {
                 "id": record.id,
@@ -236,7 +261,8 @@ class ComparisonViewService:
                 "max_stops_label": comparison_stops_label(spec.max_stops),
                 "cabin_label": cabin_label(spec.cabin),
                 "pax_label": COMPARISON_PAX_LABEL,
-                "pax_note": pax_note,
+                "flight_column": flight_column_label(spec.trip_type),
+                **web_pax_view(spec.trip_type, spec.adults, spec.children, spec.cabin),
                 "status": record.status,
                 "status_label": COMPARISON_STATUS_LABELS.get(record.status, record.status),
                 "done": record.done,
@@ -262,9 +288,13 @@ class ComparisonViewService:
                 self._row(record, c, pax_note) for c in comparison_order(cells, spec.currency)
             ],
             "order_note": COMPARISON_ORDER_NOTE,
+            "order_detail": COMPARISON_ORDER_DETAIL,
             "no_price_note": COMPARISON_NO_PRICE_NOTE,
             "single_date_note": COMPARISON_SINGLE_DATE_NOTE,
             "reference_note": COMPARISON_REFERENCE_NOTE,
+            "table_caption": comparison_table_caption(spec.adults, spec.children),
+            "progress_hint": COMPARISON_PROGRESS_HINT,
+            "progress_explain": COMPARISON_PROGRESS_EXPLAIN,
             "disclaimer": DISCLAIMER,
         }
 
@@ -275,10 +305,10 @@ class ComparisonViewService:
         if url:
             return url, None
         fallback = google_flights_url(spec.origin, destination, spec.depart_date, spec.return_date)
-        return fallback, BOOKING_FALLBACK_NOTE
+        return fallback, WEB_BOOKING_FALLBACK_NOTE
 
     def _row(
-        self, record: ComparisonRecord, cell: ComparisonCellRecord, pax_note: str
+        self, record: ComparisonRecord, cell: ComparisonCellRecord, pax_note: str | None
     ) -> dict[str, Any]:
         priced = bool(cell.status == "ok" and cell.amount_minor is not None and cell.currency)
         booking_url: str | None = None
@@ -310,7 +340,11 @@ class ComparisonViewService:
             "stops_label": stops_label(cell.stops) if priced else None,
             "duration_label": flight_duration_label(cell.duration_minutes) if priced else None,
             "depart_time": cell.depart_time if priced else None,
+            # Price, flight and link of a row come from the same stored cell.
+            "flight": flight_view(cell, record.spec.trip_type) if priced else None,
+            "manual_check": cell.status == "no_data" and cell.reason == NO_EMBEDDED_REASON,
             "fetched_at_label": format_taipei(cell.fetched_at) if cell.fetched_at else None,
+            "fetched_label": fetched_label(cell.fetched_at) if cell.fetched_at else None,
             "booking_url": booking_url,
             "booking_note": booking_note,
             "watch_url": watch_url,

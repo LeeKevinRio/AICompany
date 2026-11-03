@@ -1,7 +1,10 @@
 """Passenger, cabin and filter wording (pure functions, ADR-0002 FD-5 Decision 5, C-40).
 
-Every price shown anywhere is the total for the whole party, so the passenger note
-always accompanies it ("（1 人總價）" included). No per-person price is ever derived.
+Every price shown anywhere is the total for the whole party; no per-person price is
+ever derived. Telegram, digests and the notification log always carry the passenger
+note ("（1 人總價）" included). Web pages follow C-40 as revised by FD-12: with more
+than one traveller every price carries ``web_price_note``; with one traveller the
+page / card summary line shows ``pax_summary`` instead.
 """
 
 from __future__ import annotations
@@ -50,6 +53,28 @@ def total_price_short(adults: int, children: int) -> str:
 def total_price_note(adults: int, children: int) -> str:
     """Note that follows every displayed price: "（2 大 1 小總價）" / "（1 人總價）"."""
     return f"（{total_price_short(adults, children)}）"
+
+
+def web_price_note(adults: int, children: int) -> str | None:
+    """Web note next to every price (C-40, FD-12): None for one traveller, otherwise
+    "2 大 1 小總價" / "2 人總價"."""
+    if adults + children <= 1:
+        return None
+    return total_price_short(adults, children)
+
+
+def web_price_caption(trip_type: str, adults: int, children: int) -> str | None:
+    """Price caption on the web: "來回總價", "來回・2 大 1 小總價", "2 大 1 小總價" or None
+    (one-way, one traveller)."""
+    note = web_price_note(adults, children)
+    if trip_type == "round_trip":
+        return "來回總價" if note is None else f"來回・{note}"
+    return note
+
+
+def pax_summary(adults: int, children: int, cabin: str) -> str:
+    """Summary line of a page or card: "1 位成人・經濟艙" (C-40 condition (a))."""
+    return f"{pax_full_label(adults, children)}・{cabin_label(cabin)}"
 
 
 def dep_window_label(dep_hour_from: int | None, dep_hour_to: int | None) -> str:

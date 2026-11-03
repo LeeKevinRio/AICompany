@@ -6,15 +6,22 @@ whether to buy. Templates here are the single source for notification text.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
-from datetime import date, datetime
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, fields, replace
+from datetime import UTC, date, datetime
 
 from flight_deals.domain.airports import route_label
 from flight_deals.domain.currency import format_money
+from flight_deals.domain.flight_summary import UNKNOWN, FlightFacts, FlightSummary, flight_summary
+from flight_deals.domain.flight_summary import static_texts as flight_static_texts
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.rules import TriggeredItem
-from flight_deals.domain.timeutil import WEEKDAY_LABELS, format_taipei, format_travel_date
+from flight_deals.domain.timeutil import (
+    WEEKDAY_LABELS,
+    format_taipei,
+    format_travel_date,
+    weekday_label,
+)
 from flight_deals.domain.trip_labels import (
     BOOKING_FALLBACK_NOTE,
     cabin_label,
@@ -23,8 +30,11 @@ from flight_deals.domain.trip_labels import (
     flight_duration_label,
     pax_full_label,
     pax_label,
+    pax_summary,
     stay_range_label,
     total_price_note,
+    web_price_caption,
+    web_price_note,
 )
 from flight_deals.domain.trip_labels import static_texts as trip_static_texts
 
@@ -72,7 +82,9 @@ STATUS_LABELS: dict[str, str] = {
     "active": "啟用中",
     "paused": "已停用",
     "stale": "啟用中（連續查價失敗）",
-    "expired": "已過期",
+    # Watch-level state on the web: every date has passed (FD-12 #40). Kept apart from
+    # the price-level "可能已過期"; Telegram keeps COMMAND_STATUS_LABELS.
+    "expired": "已結束",
 }
 
 
@@ -99,6 +111,70 @@ def date_range_text(depart: date, return_date: date | None) -> str:
     if return_date is not None:
         text += "–" + format_travel_date(return_date)
     return text
+
+
+# ---- flight details in Telegram (ADR-0002 FD-12 section 7, risk-compliance R14 / C1) ----
+# A part that is unknown is left out (never "—" or None); rows without any FD-12 field
+# keep the pre-FD-12 wording verbatim.
+LOCAL_TIME_LABEL = "當地時間"
+
+
+def _flight_times(summary: FlightSummary, *, compact: bool) -> str | None:
+    """ "06:50 → 10:30+1" (or "06:50→10:30+1"); one known end is "06:50 出發" / "10:30 抵達"."""
+    depart = summary.depart_time if summary.depart_time != UNKNOWN else None
+    arrive = summary.arrive_time if summary.arrive_time != UNKNOWN else None
+    if depart and arrive:
+        return summary.times_compact if compact else summary.times
+    if depart:
+        return f"{depart} 出發"
+    if arrive:
+        return f"{arrive}{summary.day_offset or ''} 抵達"
+    return None
+
+
+def _flight_who(summary: FlightSummary) -> str:
+    return " ".join(
+        part for part in (summary.airline, summary.flight_numbers) if part and part != UNKNOWN
+    )
+
+
+def flight_alert_line(cand: FlightFacts, trip_type: str) -> str:
+    """The price alert's flight line (one line, FD-12 #37):
+    "   航班：長榮航空 BR 184｜去程 06:50 → 10:30（當地時間，直飛）"."""
+    summary = flight_summary(
+        cand, trip_type="round_trip" if trip_type == "round_trip" else "one_way"
+    )
+    legacy = f"   航空公司：{cand.carrier or '未提供'}"
+    if not summary.detailed:
+        return legacy
+    times = _flight_times(summary, compact=False)
+    who = _flight_who(summary)
+    stops = summary.stops_short
+    if times:
+        # "去程" only labels a time, as in /watch; never left on its own.
+        notes = "，".join(note for note in (LOCAL_TIME_LABEL, stops) if note)
+        when = " ".join(part for part in (summary.leg_label, times) if part)
+        parts = [part for part in (who, f"{when}（{notes}）") if part]
+    elif who:
+        parts = [who + (f"（{stops}）" if stops else "")]
+    else:
+        return legacy
+    return "   航班：" + "｜".join(parts)
+
+
+def flight_command_text(row: FlightFacts, trip_type: str) -> str:
+    """The /watch airline field (FD-12 #38): "長榮航空 BR 184 去程 06:50→10:30"."""
+    summary = flight_summary(
+        row, trip_type="round_trip" if trip_type == "round_trip" else "one_way"
+    )
+    legacy = row.carrier or "航空公司未提供"
+    if not summary.detailed:
+        return legacy
+    times = _flight_times(summary, compact=True)
+    parts = [
+        part for part in (_flight_who(summary), summary.leg_label if times else None, times) if part
+    ]
+    return " ".join(parts) or legacy
 
 
 def price_alert_message(
@@ -139,7 +215,7 @@ def price_alert_message(
             f"{index}. 查到 {route} {dates} {format_money(cand.amount_minor, cand.currency)}{note}"
         )
         lines.append(f"   觸發原因：{item_reasons_text(item)}")
-        lines.append(f"   航空公司：{cand.carrier or '未提供'}")
+        lines.append(flight_alert_line(cand, trip_type))
         lines.append(
             f"   查到時間：{format_taipei(cand.fetched_at)}（台北時間）"
             f"｜來源：{source_label(cand.source)}"
@@ -327,7 +403,7 @@ EXPLORATION_CELL_LABELS: dict[str, str] = {
     "ok": "查到價格",
     "pending": "查詢中",
     "no_data": "無資料",
-    "no_embedded_results": "未內嵌結果",
+    "no_embedded_results": "需人工查價",
     "blocked": "被擋",
     "error": "錯誤",
     "currency_mismatch": "幣別不符，未列入排名",
@@ -338,7 +414,7 @@ EXPLORATION_CELL_LABELS: dict[str, str] = {
     "out_of_range": "未查詢（超出可查日期範圍）",
     "weekday_filtered": "未查（星期篩選）",
 }
-EXPLORATION_REFERENCE_NOTE = "探索結果為查詢當下參考值，不會寫入任何監看的價格紀錄，也不會推播。"
+EXPLORATION_REFERENCE_NOTE = "探索結果不會寫入監看紀錄，也不會推播。"
 EXPLORATION_BUSY = "已有探索進行中，同一時間只能進行一個探索"
 EXPLORATION_SCHEDULER_OFF = "排程器未執行，無法在背景探索；請以一般方式啟動服務後再試"
 EXPLORATION_NO_DATES = "此月份沒有可查詢的出發日（已過去或超出可查日期範圍）"
@@ -346,6 +422,7 @@ EXPLORATION_NOT_FOUND = "探索已過期或不存在（探索結果保留 7 天�
 EXPLORATION_HOURLY_LIMIT = "已達全域每小時查詢上限"
 EXPLORATION_BREAKER_OPEN = "資料源異常（斷路器開啟）"
 EXPLORATION_RESTARTED = "服務重啟，探索中斷；未查的日期不會自動補查"
+EXPLORATION_LOCK_TIMEOUT = "掃描佔用過久，探索未執行"
 EXPLORATION_PREFILL_OK = "已從探索帶入條件，請填預算與名稱"
 EXPLORATION_PREFILL_MISSING = "找不到對應的探索結果，請手動填寫"
 
@@ -368,11 +445,6 @@ EXPLORATION_RANGE_WATCH_BUTTON = "以所選月份建立彈性窗監看"
 # Under the top-5 heading, always shown (risk-compliance R1).
 EXPLORATION_TOP_SCOPE_NOTE = "只比較所選月份內符合出發星期、且有查到價格的出發日。"
 WEEKDAY_OPTION_LABELS: tuple[str, ...] = tuple("週" + name for name in WEEKDAY_LABELS)
-
-
-def no_embedded_streak_label(rounds: int) -> str:
-    """List-row hint; the round count comes from config (Limits.no_embedded_streak_rounds)."""
-    return f"連續 {rounds} 輪 Google 未內嵌結果，請用查票連結確認"
 
 
 def exploration_quota_message(
@@ -436,9 +508,9 @@ def exploration_static_texts() -> list[str]:
         EXPLORATION_HOURLY_LIMIT,
         EXPLORATION_BREAKER_OPEN,
         EXPLORATION_RESTARTED,
+        EXPLORATION_LOCK_TIMEOUT,
         EXPLORATION_PREFILL_OK,
         EXPLORATION_PREFILL_MISSING,
-        no_embedded_streak_label(3),
         exploration_quota_message(20, 31, 12),
         exploration_skipped_note(EXPLORATION_HOURLY_LIMIT, 3),
         exploration_unfinished_note(12, 31, EXPLORATION_BREAKER_OPEN),
@@ -479,7 +551,7 @@ COMPARISON_ROW_LABELS: dict[str, str] = {
     "ok": "查到價格",
     "pending": "查詢中",
     "no_data": "查無航班",
-    "no_embedded_results": "未內嵌結果（請用查票連結人工確認）",
+    "no_embedded_results": "需人工查價",
     "blocked": "被擋或查詢失敗",
     "error": "被擋或查詢失敗",
     "currency_mismatch": "幣別不符，未列入排序",
@@ -487,14 +559,11 @@ COMPARISON_ROW_LABELS: dict[str, str] = {
     "breaker_open": "未查詢（資料源暫停查詢）",
     "interrupted": "未查詢（已中斷）",
 }
-COMPARISON_REFERENCE_NOTE = "比價結果為查詢當下參考值，不會寫入任何監看的價格紀錄，也不會推播。"
-COMPARISON_ORDER_NOTE = (
-    "有價格的目的地依 1 人總價由低到高排列，同價依加入順序；"
-    "沒有價格的目的地依加入順序列在後面。排列只依價格，未比較飛行時間與轉機。"
-)
-COMPARISON_NO_PRICE_NOTE = (
-    "沒有價格的目的地未參與比較，不代表沒有機票或價格較高；可用查票連結自行確認。"
-)
+COMPARISON_REFERENCE_NOTE = "比價結果不會寫入監看紀錄，也不會推播。"
+# Visible (risk-compliance R11); the tie rules live in the collapsed explanation.
+COMPARISON_ORDER_NOTE = "只依總價由低到高排列，未比較飛行時間與轉機。"
+COMPARISON_ORDER_DETAIL = "同價依加入順序；沒有價格的目的地依加入順序列在後面。"
+COMPARISON_NO_PRICE_NOTE = "沒有價格的目的地未參與排序，不代表沒有機票或價格較高。"
 COMPARISON_SINGLE_DATE_NOTE = "只比較這一組日期，其他日期的價格可能不同。"
 COMPARISON_BUSY = "已有比價進行中，同一時間只能進行一個比價或探索"
 COMPARISON_BLOCKED_BY_EXPLORATION = "已有探索進行中，同一時間只能進行一個比價或探索"
@@ -607,6 +676,7 @@ def comparison_static_texts() -> list[str]:
         *COMPARISON_ROW_LABELS.values(),
         COMPARISON_REFERENCE_NOTE,
         COMPARISON_ORDER_NOTE,
+        COMPARISON_ORDER_DETAIL,
         COMPARISON_NO_PRICE_NOTE,
         COMPARISON_SINGLE_DATE_NOTE,
         COMPARISON_BUSY,
@@ -689,6 +759,9 @@ COMMAND_NO_PRICE = "尚未查到價格"
 COMMAND_NONE = "—"
 COMMAND_FLAT = "＝"
 COMMAND_TIME_NOTE = "時間為台北時間。"
+# /watch only (FD-12 #45): its rows also carry local flight times; /list and /scan keep
+# COMMAND_TIME_NOTE.
+COMMAND_WATCH_TIME_NOTE = "查到時間為台北時間；航班時刻為各機場當地時間。"
 COMMAND_DELTA_NOTE = (
     "較前一輪為目前最低總價與上一輪查價前最低總價的差額；"
     "兩個最低價可能是不同日期，差額不代表同一行程的漲跌。"
@@ -932,6 +1005,13 @@ class CommandPriceRow:
     booking_note: str | None
     fetched_at: datetime | None = None
     data_stale: bool = False
+    # Flight details of the observation (FD-12); None when unknown.
+    depart_time: str | None = None
+    duration_minutes: int | None = None
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1005,7 +1085,7 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
             dates = date_range_text(row.depart_date, row.return_date)
             money = _money_with_note(row.amount_minor, row.currency, detail.adults, detail.children)
             entry = (
-                f"{index}. {dates} {money}｜{row.carrier or '航空公司未提供'}"
+                f"{index}. {dates} {money}｜{flight_command_text(row, detail.trip_type)}"
                 f"｜{stops_text(row.stops)}｜查到 {_short_time(row.fetched_at)}"
             )
             if row.data_stale:
@@ -1014,7 +1094,13 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
             if row.booking_note:
                 entry += f"\n   （{row.booking_note}）"
             items.append(entry)
-    footer = ["", *_run_lines(detail.last_run), SAMPLED_ONLY_NOTE, COMMAND_TIME_NOTE, DISCLAIMER]
+    footer = [
+        "",
+        *_run_lines(detail.last_run),
+        SAMPLED_ONLY_NOTE,
+        COMMAND_WATCH_TIME_NOTE,
+        DISCLAIMER,
+    ]
     return fit_reply(head, items, footer)
 
 
@@ -1215,6 +1301,7 @@ def command_static_texts() -> list[str]:
         COMMAND_NO_ACTIVE,
         COMMAND_NO_PRICE,
         COMMAND_TIME_NOTE,
+        COMMAND_WATCH_TIME_NOTE,
         COMMAND_DELTA_NOTE,
         COMMAND_SCHEDULER_OFF,
         COMMAND_SCAN_PAUSED,
@@ -1372,6 +1459,262 @@ def retention_static_texts() -> list[str]:
     ]
 
 
+# ---- web page wording (ADR-0002 FD-12, PRD v0.2 wording table) ----------------------
+# Templates only print ``ui.<field>`` and view-model values; no wording is written there.
+
+
+# #46 (risk-gate M2): visible once next to DISCLAIMER on every page showing prices. The
+# price comes from Google's default sort; the same flight can be lower on its other tab.
+PRICE_SOURCE_NOTE = "價格取自 Google 預設排序的結果；同一航班在 Google「最低價格」分頁可能較低。"
+
+
+@dataclass(frozen=True)
+class UiTexts:
+    """Shared web wording, passed to every page as ``ui`` (one instance: WEB_TEXTS)."""
+
+    help_summary: str = "說明"
+    price_source_note: str = PRICE_SOURCE_NOTE
+    # M3: flight time adds up the segments only.
+    duration_column: str = "飛行時間（不含轉機等候）"
+    tech_details_summary: str = "技術細節"
+    # FR-11: only shown for a unit without any price (#2, #19, #25, #32).
+    manual_check: str = "需人工查價"
+    manual_check_explain: str = (
+        "Google 沒有在頁面中提供此查詢的結果（常見於來回＋商務艙＋多人），"
+        "系統無法自動查價。可到 Google Flights 自行查看。"
+    )
+    # #4 (R6): visible short sentence; the full qualification sits in the explanation.
+    delta_explain: str = "較前一輪＝與上一輪最低價的差額，可能是不同日期。"
+    # Screen-reader words of the symmetric change badges (R6); the amount follows.
+    delta_sr_down: str = "較前一輪下跌"
+    delta_sr_up: str = "較前一輪上漲"
+    delta_sr_flat: str = "較前一輪持平"
+    delta_explain_detail: str = (
+        "較前一輪：目前最低價與上一輪掃描結束時最低價的差額，"
+        "只計目前設定的即時價、不含已出發的日期；兩個最低價可能是不同日期。"
+    )
+    # #7, #21, #44 (R1): never a bare "訂票" button or column.
+    booking_button: str = "到 Google Flights 查看並訂票"
+    booking_button_short: str = "查看並訂票"
+    booking_hint: str = (
+        "開啟 Google Flights 該日期組合的結果頁（非直接訂位），請依航空公司與起降時刻選擇。"
+    )
+    new_tab_sr: str = "（另開新分頁）"
+    # #8 (R2): the settings link keeps its wording and the "first pair" remark.
+    manual_link: str = "到 Google Flights 人工查價"
+    settings_manual_link: str = "（開啟搜尋頁，帶入第一組日期）"
+    # #12 (R4).
+    best_card_title: str = "已查到最低價"
+    price_prefix: str = "查到"
+    price_column: str = "查到價格"
+    # #43 (R10): visible once on every page with round-trip prices.
+    return_leg_explain: str = (
+        "只列去程航班；回程需在 Google Flights 選擇，價格可能因回程不同而改變。"
+    )
+    local_time_explain: str = "航班時刻為各機場當地時間。"
+    not_scanned: str = "尚未查價"
+    # #47: scanned at least once, nothing to display now (manual check, ended, departed).
+    no_displayable_price: str = "目前無可顯示的價格"
+    # #10.
+    detail_no_price: str = "尚未查到價格。"
+    detail_no_price_explain: str = (
+        "排程會依掃描週期自動查價，也可以按「立即查價」。"
+        "若一直沒有資料，請到「設定與健康」頁確認資料源狀態。"
+    )
+    # #15 (R7).
+    distribution_legend: str = "只含已取樣日期。顏色：綠＝較便宜三分之一、紅＝較貴三分之一。"
+    # #17, #18.
+    limit_reached_note: str = "日期組合超過單輪上限，本輪取樣查詢，下輪輪換。"
+    global_limit_note: str = "已達每小時查詢上限，部分日期未查。"
+    # FR-12: shown instead of any untranslated diagnostic.
+    query_failed: str = "查詢失敗"
+    # #20.
+    old_revision_note: str = "修改前設定的價格，僅供查閱，不參與通知比較。"
+    # Row-level qualifiers (FR-9, FR-13: always visible).
+    kind_cached: str = "快取價，非即時"
+    data_time_unknown: str = "資料時間未知"
+    stale_badge: str = "可能已過期"
+    # #27 (R9).
+    unembedded_form_hint: str = "依實測，此組合常無法自動查價，可能需人工查價。"
+    # #39.
+    other_pairs_title: str = "其他日期組合（依價格）"
+    # #40.
+    watch_ended: str = "已結束"
+    # #42 pattern; ``stale_rounds_label`` fills in the configured round count.
+    stale_rounds: str = "近 {rounds} 輪未更新"
+    # #41.
+    list_empty: str = "還沒有監看。"
+
+
+WEB_TEXTS = UiTexts()
+
+# #9 (R3): web fallback-link note; BOOKING_FALLBACK_NOTE stays for Telegram.
+WEB_BOOKING_FALLBACK_NOTE = "連結只帶航線與日期；人數、艙等、篩選請在 Google 重選"
+# #13: page-level source line, only when every price on the page is Google Flights live.
+SOURCE_PAGE_LIVE_NOTE = "價格來源：Google Flights（即時價）"
+# #24, #33: short progress lines; the deferred-scan sentence moves into the explanation.
+EXPLORATION_PROGRESS_HINT = "自動更新中，完成後顯示價格日曆。"
+EXPLORATION_PROGRESS_EXPLAIN = "探索進行中，排程掃描將於探索結束後執行。"
+COMPARISON_PROGRESS_HINT = "自動更新中，完成後顯示比價結果。"
+COMPARISON_PROGRESS_EXPLAIN = "比價進行中，排程掃描將於比價結束後執行。"
+# #26.
+EXPLORATION_WATCH_HINT = "只帶入條件，確認後才建立。"
+# #23 (R8).
+EXPLORATION_CALENDAR_NOTE = "每格為該出發日單次查到的最低價；低／中／高只與本次已查到的價格相比。"
+
+
+def _short_taipei(moment: datetime) -> str:
+    """ "11/01 14:31" (Asia/Taipei)."""
+    return format_taipei(moment)[5:].replace("-", "/")
+
+
+def fetched_range_label(first: datetime, last: datetime) -> str:
+    """Visible line above the exploration calendar (cells carry no time each):
+    "查到時間：11/01 14:31～14:33"; another day shows its date, one moment shows once."""
+    start, end = _short_taipei(min(first, last)), _short_taipei(max(first, last))
+    if start == end:
+        return f"查到時間：{start}"
+    if start[:5] == end[:5]:
+        end = end[6:]
+    return f"查到時間：{start}～{end}"
+
+
+def stale_rounds_label(rounds: int) -> str:
+    """#42 "近 3 輪未更新"; the count comes from Limits.no_embedded_streak_rounds."""
+    return WEB_TEXTS.stale_rounds.format(rounds=rounds)
+
+
+def top_explain(stale_hours: int) -> str:
+    """#11, collapsed under "其他日期組合"."""
+    return (
+        "每個日期組合取最近一次查到的價格，依價格由低到高排列。"
+        f"超過 {stale_hours} 小時未更新的價格標示「{WEB_TEXTS.stale_badge}」。"
+    )
+
+
+def source_page_note(sources: Iterable[tuple[str, str]]) -> str | None:
+    """Page-level source line when every (source, price_kind) is Google Flights live;
+    None otherwise, and then every row shows its own source (#13)."""
+    pairs = list(sources)
+    if pairs and all(pair == ("google_flights", "live") for pair in pairs):
+        return SOURCE_PAGE_LIVE_NOTE
+    return None
+
+
+def row_source_text(source: str, price_kind: str) -> str:
+    """Per-row source when the page has no page-level note: "Google Flights（即時價）"."""
+    return f"{source_label(source)}（{PRICE_KIND_LABELS.get(price_kind, price_kind)}）"
+
+
+def flight_column_label(trip_type: str) -> str:
+    """Flight column heading (risk-gate M5): "去程航班" for round trips, else "航班"."""
+    return "去程航班" if trip_type == "round_trip" else "航班"
+
+
+def exploration_calendar_note(adults: int, children: int) -> str:
+    """#23: one person is covered by the page summary; several get "金額為 N 人總價"."""
+    note = web_price_note(adults, children)
+    if note is None:
+        return EXPLORATION_CALENDAR_NOTE
+    return f"金額為 {note}，{EXPLORATION_CALENDAR_NOTE}"
+
+
+def health_no_embedded_note(ratio_pct: int, count: int, total: int) -> str:
+    """#35 (R9)."""
+    return (
+        f"過去 24 小時有 {ratio_pct}%（{count}/{total}）查詢 Google 未提供結果"
+        "（可能是非同步載入或封鎖），需人工查價。"
+    )
+
+
+def comparison_table_caption(adults: int, children: int) -> str:
+    """#34: screen-reader caption of the comparison table, party size kept."""
+    return f"各目的地的 {pax_label(adults, children)}總價，由低到高排列"
+
+
+def date_range_weekday_text(depart: date, return_date: date | None) -> str:
+    """ "12/10（週四）–12/15（週二）" / "12/10（週四）"."""
+    text = f"{format_travel_date(depart)}（{weekday_label(depart)}）"
+    if return_date is not None:
+        text += f"–{format_travel_date(return_date)}（{weekday_label(return_date)}）"
+    return text
+
+
+def watch_settings_summary(
+    *,
+    origin: str,
+    destination: str,
+    trip_type: str,
+    dates: str,
+    budget: str,
+    budget_note: str | None,
+) -> str:
+    """Collapsed settings title on the detail page: route・trip・dates・budget (FR-16)."""
+    trip = TRIP_TYPE_LABELS.get(trip_type, trip_type)
+    budget_text = f"預算 {budget}" + (f"（{budget_note}）" if budget_note else "")
+    return f"{origin} → {destination}・{trip}・{dates}・{budget_text}"
+
+
+def web_static_texts() -> list[str]:
+    """Wording added by FD-12, for the banned-phrase test."""
+    return [
+        *(str(getattr(WEB_TEXTS, f.name)) for f in fields(UiTexts)),
+        WEB_BOOKING_FALLBACK_NOTE,
+        PRICE_SOURCE_NOTE,
+        flight_column_label("round_trip"),
+        flight_column_label("one_way"),
+        SOURCE_PAGE_LIVE_NOTE,
+        EXPLORATION_PROGRESS_HINT,
+        EXPLORATION_PROGRESS_EXPLAIN,
+        COMPARISON_PROGRESS_HINT,
+        COMPARISON_PROGRESS_EXPLAIN,
+        EXPLORATION_WATCH_HINT,
+        EXPLORATION_CALENDAR_NOTE,
+        stale_rounds_label(3),
+        fetched_range_label(
+            datetime(2026, 11, 1, 6, 31, tzinfo=UTC), datetime(2026, 11, 1, 6, 33, tzinfo=UTC)
+        ),
+        fetched_range_label(
+            datetime(2026, 11, 1, 6, 31, tzinfo=UTC), datetime(2026, 11, 2, 1, tzinfo=UTC)
+        ),
+        fetched_range_label(
+            datetime(2026, 11, 1, 6, 31, tzinfo=UTC), datetime(2026, 11, 1, 6, 31, tzinfo=UTC)
+        ),
+        top_explain(24),
+        row_source_text("google_flights", "live"),
+        row_source_text("google_flights", "cached"),
+        row_source_text("fixture", "live"),
+        exploration_calendar_note(1, 0),
+        exploration_calendar_note(2, 1),
+        health_no_embedded_note(40, 4, 10),
+        comparison_table_caption(1, 0),
+        date_range_weekday_text(date(2026, 12, 10), date(2026, 12, 15)),
+        date_range_weekday_text(date(2026, 12, 10), None),
+        watch_settings_summary(
+            origin="TPE",
+            destination="NRT",
+            trip_type="round_trip",
+            dates="固定 2026-12-10 出發，2026-12-15 回程",
+            budget="TWD 12,000",
+            budget_note=None,
+        ),
+        watch_settings_summary(
+            origin="TPE",
+            destination="NRT",
+            trip_type="one_way",
+            dates="固定 2026-12-10 出發",
+            budget="TWD 30,000",
+            budget_note=web_price_note(2, 1),
+        ),
+        pax_summary(1, 0, "economy"),
+        pax_summary(2, 1, "business"),
+        web_price_caption("round_trip", 1, 0) or "",
+        web_price_caption("round_trip", 2, 1) or "",
+        web_price_caption("one_way", 2, 1) or "",
+        *flight_static_texts(),
+    ]
+
+
 def all_static_texts() -> list[str]:
     """Static wording used in templates (for wording-policy tests)."""
     return [
@@ -1403,4 +1746,5 @@ def all_static_texts() -> list[str]:
         *command_static_texts(),
         *retention_static_texts(),
         *comparison_static_texts(),
+        *web_static_texts(),
     ]

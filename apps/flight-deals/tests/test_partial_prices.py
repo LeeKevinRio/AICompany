@@ -6,7 +6,7 @@ from typing import Any
 
 from flight_deals.domain.models import FlightSearch
 from flight_deals.ports import SourceResult
-from flight_deals.services.views import parse_notes, try_note
+from flight_deals.services.views import pair_note, parse_notes
 from flight_deals.sources._support import Throttle, TTLCache
 from flight_deals.sources.google_flights import GoogleFlightsSource
 from tests.conftest import Harness
@@ -67,7 +67,7 @@ def last_try(h: Harness, watch_id: int) -> dict[str, Any]:
 
 def sampled_note(h: Harness, watch_id: int) -> str | None:
     page = h.services.views.detail_page(watch_id)
-    note: str | None = page["last_run"]["pairs"][0]["error"]
+    note: str | None = page["last_run"]["pairs"][0]["note"]
     return note
 
 
@@ -154,5 +154,7 @@ def test_note_helpers_ignore_non_integer_counts() -> None:
     assert parse_notes({"unpriced": "2", "malformed": True}) == []
     assert parse_notes({"unpriced": 0, "malformed": 0}) == []
     assert parse_notes({}) == []
-    assert try_note({"error": "timeout: x", "unpriced": 3}) == ("timeout: x；略過 3 筆無價格航班")
-    assert try_note({"error": None}) is None
+    # FD-12 FR-12: the adapter text never reaches the page, only "查詢失敗".
+    entry = {"status": "error", "tries": [{"error": "timeout: x", "unpriced": 3}]}
+    assert pair_note(entry) == "查詢失敗；略過 3 筆無價格航班"
+    assert pair_note({"status": "ok", "tries": [{"error": None}]}) is None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from urllib.parse import urlsplit
 
 from flight_deals.domain.messages import (
     command_record_text,
@@ -41,15 +42,40 @@ log = logging.getLogger(__name__)
 NOT_CONFIGURED = "Telegram 未設定，訊息未送出"
 
 
+BOOKING_HOSTS = frozenset({"google.com", "www.google.com"})
+BOOKING_PATH_PREFIX = "/travel/flights"
+
+
+def is_google_flights_url(url: object) -> bool:
+    """https, host google.com / www.google.com, path under /travel/flights (FD-12 C-102)."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "https"
+        and (parts.hostname or "") in BOOKING_HOSTS
+        and (parts.path == BOOKING_PATH_PREFIX or parts.path.startswith(f"{BOOKING_PATH_PREFIX}/"))
+    )
+
+
 def safe_booking_url(builder: BookingLinkBuilder | None, search: FlightSearch) -> str | None:
-    """Exact booking link, or None so callers fall back to the text search (Decision 7)."""
+    """Exact booking link, or None so callers fall back to the text search (Decision 7).
+
+    A link outside Google Flights is never handed out, whatever the builder returns."""
     if builder is None:
         return None
     try:
-        return builder.url(search)
+        url = builder.url(search)
     except Exception:
         log.warning("booking link could not be built; using the text search link")
         return None
+    if url is not None and not is_google_flights_url(url):
+        log.warning("booking link is not a Google Flights URL; using the text search link")
+        return None
+    return url
 
 
 class NotificationService:

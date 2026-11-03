@@ -19,11 +19,11 @@ from flight_deals.domain.messages import (
     EXPLORATION_PREFILL_MISSING,
     EXPLORATION_PREFILL_OK,
     EXPLORATION_REFERENCE_NOTE,
+    WEB_BOOKING_FALLBACK_NOTE,
     all_static_texts,
     exploration_age_note,
 )
 from flight_deals.domain.models import FlightSearch
-from flight_deals.domain.trip_labels import BOOKING_FALLBACK_NOTE
 from flight_deals.domain.validation import validate_watch_input
 from flight_deals.ports import SourceResult
 from flight_deals.services.exploration_views import cell_label
@@ -48,6 +48,10 @@ CELL_KEYS = {
     "watch_url",
     "return_date",
     "rank_note",
+    # FD-12: flight summary and the manual-check flag (additive).
+    "flight",
+    "manual_check",
+    "fetched_label",
 }
 
 
@@ -180,7 +184,7 @@ def test_recent_list_shows_cheapest_and_hides_old(harness: Harness, queue: Queue
     [row] = harness.services.exploration_views.explore_page()["recent"]
     assert row["id"] == exploration_id and row["month"] == "2026 年 12 月"
     assert row["status_label"] == "已完成" and (row["done"], row["total"]) == (31, 31)
-    assert row["cheapest_label"] == "TWD 8,000（1 人總價）"
+    assert row["cheapest_label"] == "TWD 8,000"  # C-40 (FD-12): no note for one person
     harness.clock.advance(days=7, minutes=1)
     assert harness.services.exploration_views.explore_page()["recent"] == []
 
@@ -212,13 +216,18 @@ def test_calendar_structure_levels_and_links(
     assert first["watch_url"] == f"/watches/new?from_exploration={exploration_id}&depart=2026-12-01"
     assert {c["level"] for c in cells} == {"低", "中", "高"}
     exploration = page["exploration"]
-    assert exploration["pax_note"] == "（1 人總價）"
+    # C-40 (FD-12): one traveller gets the summary line, not a note per price.
+    assert exploration["pax_note"] is None
+    assert exploration["pax_summary"] == "1 位成人・經濟艙"
     assert exploration["month_watch_url"] == (
         f"/watches/new?from_exploration={exploration_id}&mode=month"
     )
-    assert EXPLORATION_REFERENCE_NOTE in page["disclaimer"] and DISCLAIMER in page["disclaimer"]
+    # FD-12 C-101: the disclaimer key carries DISCLAIMER only; the reference note is its own.
+    assert page["disclaimer"] == DISCLAIMER
+    assert page["reference_note"] == EXPLORATION_REFERENCE_NOTE
     html = harness.client.get(f"/explorations/{exploration_id}").text
-    assert "探索結果為查詢當下參考值" in html and DISCLAIMER in html and "1 人總價" in html
+    assert EXPLORATION_REFERENCE_NOTE in html and html.count(DISCLAIMER) == 1
+    assert "1 人總價" not in html and "1 位成人・經濟艙" in html
 
 
 def test_top5_order_ties_and_exclusions(harness: Harness, queue: Queue) -> None:  # AC-S4
@@ -284,7 +293,8 @@ def test_every_no_price_label(harness: Harness, queue: Queue) -> None:  # AC-S3
     assert by_date["2026-10-24"]["label"] == EXPLORATION_CELL_LABELS["past"]
     assert by_date["2026-10-24"]["status"] == "not_queried"
     assert by_date["2026-10-24"]["booking_url"] is None
-    assert by_date["2026-10-25"]["label"] == "未內嵌結果"
+    assert by_date["2026-10-25"]["label"] == "需人工查價"  # FD-12 #25
+    assert by_date["2026-10-25"]["manual_check"] is True
     assert by_date["2026-10-25"]["booking_url"]  # manual check still possible (FR-S4)
     assert by_date["2026-10-26"]["label"] == "被擋"
     assert by_date["2026-10-27"]["label"] == "錯誤"
@@ -345,7 +355,7 @@ def test_booking_link_fallback(harness: Harness, queue: Queue, links: FakeLinks)
         for c in flat_cells(harness.services.exploration_views.exploration_page(exploration_id))
         if c["status"] == "ok"
     ]
-    assert cells and all(c["booking_note"] == BOOKING_FALLBACK_NOTE for c in cells)
+    assert cells and all(c["booking_note"] == WEB_BOOKING_FALLBACK_NOTE for c in cells)
     assert all("google.com/travel/flights" in c["booking_url"] for c in cells)
 
 

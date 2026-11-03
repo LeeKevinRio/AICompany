@@ -435,6 +435,7 @@ def wording_surfaces() -> dict[str, str]:
         "domain/validation.py",
         "domain/airlines.py",
         "domain/trip_labels.py",
+        "domain/flight_summary.py",
     ):
         constants = _string_constants(SRC / module)
         if module == "domain/messages.py":

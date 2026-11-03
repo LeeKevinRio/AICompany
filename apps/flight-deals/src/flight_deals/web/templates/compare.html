@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}多目的地比價{% endblock %}
+{# The disclaimer sits above the recent-results table; the footer copy is dropped (C-101). #}
+{% block footer_disclaimer %}{% endblock %}
 {% block content %}
 {% set v = values or {} %}
 {% set q = quota or {} %}
@@ -127,6 +129,8 @@
   </div>
 </form>
 
+<p class="disclaimer">{{ disclaimer }}</p>
+{% if recent|selectattr("cheapest_label")|list %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
 <section class="card" id="compare-recent">
   <h2>最近的比價</h2>
   {% if recent %}
@@ -155,5 +159,4 @@
   <p class="muted">最近 7 天沒有比價紀錄。</p>
   {% endif %}
 </section>
-<p class="disclaimer">{{ disclaimer }}</p>
 {% endblock %}

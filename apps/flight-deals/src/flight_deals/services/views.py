@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, TypeVar
@@ -13,6 +13,7 @@ from flight_deals.domain.airlines import AIRLINES, lookup_airline
 from flight_deals.domain.airports import place_label, route_label
 from flight_deals.domain.currency import format_money, minor_to_major_int
 from flight_deals.domain.dates import first_pair
+from flight_deals.domain.flight_summary import FlightFacts, FlightSummary, flight_summary
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
     DETAIL_ALL_DEPARTED,
@@ -23,34 +24,51 @@ from flight_deals.domain.messages import (
     SAMPLED_ONLY_NOTE,
     STATUS_LABELS,
     TRIP_TYPE_LABELS,
+    WEB_BOOKING_FALLBACK_NOTE,
+    WEB_TEXTS,
     WEEKDAY_OPTION_LABELS,
     date_range_text,
-    no_embedded_streak_label,
+    date_range_weekday_text,
+    health_no_embedded_note,
     reason_label,
     retention_backup_failed,
     retention_failed,
     retention_note,
     retention_summary,
+    row_source_text,
     size_label,
     source_label,
+    source_page_note,
+    stale_rounds_label,
     stats_time_note,
+    top_explain,
     vacuum_failed,
     vacuum_result_text,
     vacuum_skipped_disk,
+    watch_settings_summary,
 )
-from flight_deals.domain.models import CABINS, DatePair, Watch, WatchSpec, search_for
+from flight_deals.domain.models import (
+    CABINS,
+    DatePair,
+    TripType,
+    Watch,
+    WatchSpec,
+    search_for,
+)
 from flight_deals.domain.timeutil import format_taipei, taipei_date, to_utc_iso, weekday_label
 from flight_deals.domain.trip_labels import (
-    BOOKING_FALLBACK_NOTE,
     airlines_text,
     cabin_label,
     conditions_label,
     dep_window_label,
     depart_weekdays_label,
     pax_full_label,
+    pax_summary,
     stay_range_label,
     total_price_note,
     total_price_short,
+    web_price_caption,
+    web_price_note,
 )
 from flight_deals.ports import AutostartProbe, BookingLinkBuilder, Clock
 from flight_deals.services.digest import taipei_midnight
@@ -134,17 +152,93 @@ _SPEC_DEFAULTS: dict[str, Any] = {
 # FR-A10: with an airline / time filter, "no data" means nothing matched the filter.
 NO_MATCH_LABEL = "依目前航空／時段條件沒有符合的班次"
 # no_data sub-reason from the source: nothing embedded in the page (ADR FD-5 status row).
+# Shown as the short label ``ui.manual_check`` (FD-12 FR-11), never as "查詢失敗".
 NO_EMBEDDED_REASON = "no_embedded_results"
-NO_EMBEDDED_LABEL = (
-    "Google 未在頁面內嵌此查詢的結果（多為來回＋商務艙＋多人），無法自動查價；請用查票連結人工查看"
-)
 
 
-def no_embedded_note(query_results: Sequence[Mapping[str, Any]]) -> str | None:
-    """List / detail note when the latest run hit pages without embedded results."""
-    if any(r.get("reason") == NO_EMBEDDED_REASON for r in query_results):
-        return NO_EMBEDDED_LABEL
-    return None
+def hit_no_embedded(query_results: Sequence[Mapping[str, Any]]) -> bool:
+    """The run hit at least one page without embedded results."""
+    return any(
+        r.get("status") == "no_data" and r.get("reason") == NO_EMBEDDED_REASON
+        for r in query_results
+    )
+
+
+def flight_view(facts: FlightFacts | None, trip_type: TripType) -> FlightSummary | None:
+    """The one way pages get flight wording (ADR-0002 FD-12, C-98)."""
+    return None if facts is None else flight_summary(facts, trip_type=trip_type)
+
+
+def kind_badge(price_kind: str, as_of_basis: str) -> str | None:
+    """Row qualifier that must stay visible (FR-9): cached price, data time unknown."""
+    if price_kind != "cached":
+        return None
+    if as_of_basis == "fetch_time":
+        return f"{WEB_TEXTS.kind_cached}；{WEB_TEXTS.data_time_unknown}"
+    return WEB_TEXTS.kind_cached
+
+
+def fetched_label(moment: datetime) -> str:
+    """Visible "查到時間" next to a price (risk-compliance R4)."""
+    return f"{WEB_TEXTS.price_prefix}時間 {format_taipei(moment)}"
+
+
+def pair_note(entry: Mapping[str, Any]) -> str | None:
+    """Explanation column of one sampled pair (FR-12): skip reason, "需人工查價" and the
+    skipped-itinerary counts, joined by "；". An error without a known label becomes
+    "查詢失敗"; adapter text is never returned."""
+    parts: list[str] = []
+    reason = entry.get("reason")
+    if isinstance(reason, str) and reason in SKIP_REASON_LABELS:
+        parts.append(SKIP_REASON_LABELS[reason])
+    if entry.get("status") == "no_data" and reason == NO_EMBEDDED_REASON:
+        parts.append(WEB_TEXTS.manual_check)
+    tries = entry.get("tries")
+    last = tries[-1] if isinstance(tries, list) and tries else {}
+    last = last if isinstance(last, Mapping) else {}
+    if last.get("error") and not parts:
+        parts.append(WEB_TEXTS.query_failed)
+    parts.extend(parse_notes(last))
+    return "；".join(parts) or None
+
+
+def run_note(run: ScanRunRecord) -> str | None:
+    """Note of a scan run from its structured per-pair results only (FR-12): distinct
+    status / skip labels of the pairs that did not succeed. ``error_summary`` is never
+    parsed; with a summary but no label the note is "查詢失敗"."""
+    if not run.error_summary:
+        return None
+    labels: list[str] = []
+    for entry in run.query_results:
+        status = str(entry.get("status") or "skipped")
+        reason = entry.get("reason")
+        label: str | None = None
+        if status == "no_data" and reason == NO_EMBEDDED_REASON:
+            label = WEB_TEXTS.manual_check
+        elif isinstance(reason, str) and reason in SKIP_REASON_LABELS:
+            label = SKIP_REASON_LABELS[reason]
+        elif status not in ("ok", "no_data"):
+            label = QUERY_STATUS_LABELS.get(status)
+        tries = entry.get("tries")
+        last = tries[-1] if isinstance(tries, list) and tries else {}
+        last = last if isinstance(last, Mapping) else {}
+        # Only the unrecognised-format count: unpriced itineraries are expected.
+        for text in (label, *parse_notes({"malformed": last.get("malformed")})):
+            if text and text not in labels:
+                labels.append(text)
+    return "；".join(labels) or WEB_TEXTS.query_failed
+
+
+def known_error_label(text: str | None, known: Iterable[str]) -> str | None:
+    """Exploration / comparison summaries that are system constants (scheduler off,
+    restart, quota or breaker skip notes) are shown as they are; anything else, such as
+    an exception, becomes "查詢失敗" (FR-12)."""
+    if not text:
+        return None
+    for item in known:
+        if text == item or text.startswith(item + "，"):
+            return text
+    return WEB_TEXTS.query_failed
 
 
 PriceLevel = Literal["cheap", "mid", "pricey"]
@@ -214,14 +308,6 @@ def parse_notes(try_info: Mapping[str, Any]) -> list[str]:
     return notes
 
 
-def try_note(try_info: Mapping[str, Any]) -> str | None:
-    """Explanation column for one query try: adapter error plus skipped-itinerary notes."""
-    error = try_info.get("error")
-    parts = [str(error)] if error else []
-    parts.extend(parse_notes(try_info))
-    return "；".join(parts) or None
-
-
 def stay_label(spec: WatchSpec) -> str | None:
     """Trip length of a flexible round trip ("4 天" / "3–5 天"); None otherwise."""
     if spec.min_trip_days is None or spec.max_trip_days is None:
@@ -251,13 +337,24 @@ def has_filters(spec: WatchSpec) -> bool:
     return bool(spec.airlines) or spec.dep_hour_from is not None
 
 
+def web_pax_view(trip_type: str, adults: int, children: int, cabin: str) -> dict[str, Any]:
+    """Web price notes (C-40 as revised by FD-12): ``pax_note`` only with more than one
+    traveller (shown next to every price); ``pax_summary`` is the visible summary line
+    ("1 位成人・<cabin>"); ``price_caption`` heads price columns ("來回總價")."""
+    return {
+        "pax_note": web_price_note(adults, children),
+        "pax_summary": pax_summary(adults, children, cabin),
+        "price_caption": web_price_caption(trip_type, adults, children),
+    }
+
+
 def trip_view(spec: WatchSpec) -> dict[str, Any]:
-    """Passenger / cabin / filter labels shared by list, detail and notifications."""
+    """Passenger / cabin / filter labels shared by the list and detail pages."""
     return {
         "adults": spec.adults,
         "children": spec.children,
         "cabin": spec.cabin,
-        "pax_note": total_price_note(spec.adults, spec.children),
+        **web_pax_view(spec.trip_type, spec.adults, spec.children, spec.cabin),
         "pax_short": total_price_short(spec.adults, spec.children),
         "pax_full_label": pax_full_label(spec.adults, spec.children),
         "cabin_label": cabin_label(spec.cabin),
@@ -309,17 +406,26 @@ class ViewService:
         self._max_attempts = notification_max_attempts
         self._breaker_threshold = breaker_threshold
         self._clock = clock
+        # The list page shows "可能已過期" without an extra settings read per request
+        # (C-55: 1 + N connections); kept current through the settings listener.
+        self._stale_hours = settings.current().stale_after_hours
+        settings.listeners.append(self._on_settings_changed)
         self.hooks = ViewHooks()
         # Set by app.py; None leaves the health page's data maintenance block out.
         self.retention: RetentionService | None = None
 
+    def _on_settings_changed(self, _before: Any, after: Any) -> None:
+        self._stale_hours = int(after.stale_after_hours)
+
     # ---- shared page context -------------------------------------------------
 
     def base_context(self) -> dict[str, Any]:
-        """Values every page needs: footer disclaimer and today's Asia/Taipei date."""
+        """Values every page needs: footer disclaimer, shared wording (``ui``) and
+        today's Asia/Taipei date."""
         return {
             "disclaimer": DISCLAIMER,
             "sampled_only_note": SAMPLED_ONLY_NOTE,
+            "ui": WEB_TEXTS,
             "today": taipei_date(self._clock()).isoformat(),
         }
 
@@ -329,11 +435,19 @@ class ViewService:
         return now - fetched_at > timedelta(hours=hours)
 
     def _price_row(
-        self, watch: Watch, obs: ObservationRecord, now: datetime, stale_hours: int
+        self,
+        watch: Watch,
+        obs: ObservationRecord,
+        now: datetime,
+        stale_hours: int,
+        *,
+        with_flight: bool = True,
     ) -> dict[str, Any]:
+        """One price row. Price, flight and booking link come from this one observation."""
         spec = watch.spec
         return {
             "dates": date_range_text(obs.depart_date, obs.return_date),
+            "dates_weekday": date_range_weekday_text(obs.depart_date, obs.return_date),
             "depart": obs.depart_date.isoformat(),
             "return": obs.return_date.isoformat() if obs.return_date else None,
             "weekday": weekday_label(obs.depart_date),
@@ -342,9 +456,15 @@ class ViewService:
             "carrier": obs.carrier or "未提供",
             "stops": "直飛" if obs.stops == 0 else (f"轉機 {obs.stops} 次" if obs.stops else "—"),
             "fetched_text": format_taipei(obs.fetched_at),
+            "fetched_label": fetched_label(obs.fetched_at),
             "stale": self._is_stale(obs.fetched_at, now, stale_hours),
             "source": source_label(obs.source),
+            "source_key": obs.source,
             "kind": PRICE_KIND_LABELS.get(obs.price_kind, obs.price_kind),
+            "kind_key": obs.price_kind,
+            "kind_badge": kind_badge(obs.price_kind, obs.as_of_basis),
+            # Set by the page: None when one page-level source line covers every row.
+            "source_text": row_source_text(obs.source, obs.price_kind),
             "data_time_unknown": obs.price_kind == "cached" and obs.as_of_basis == "fetch_time",
             "currency_mismatch": obs.currency != spec.currency,
             "link": google_flights_url(
@@ -352,6 +472,8 @@ class ViewService:
             ),
             **self._booking(watch, DatePair(obs.depart_date, obs.return_date), obs.watch_revision),
             "depart_time": obs.depart_time,
+            # Old-revision rows keep only the airline column (FR-6).
+            "flight": flight_view(obs, spec.trip_type) if with_flight else None,
             "revision": obs.watch_revision,
         }
 
@@ -367,7 +489,7 @@ class ViewService:
             "booking_url": google_flights_url(
                 spec.origin, spec.destination, pair.depart, pair.return_date
             ),
-            "booking_note": BOOKING_FALLBACK_NOTE,
+            "booking_note": WEB_BOOKING_FALLBACK_NOTE,
         }
 
     def _link_pair(self, spec: WatchSpec) -> DatePair | None:
@@ -392,6 +514,14 @@ class ViewService:
             return {"booking_url": None, "booking_note": None}
         return self._booking(watch, first, watch.revision)
 
+    def _future_watch_booking(self, watch: Watch, today: date) -> dict[str, str | None]:
+        """Manual-check link of a card without a price: the first pair still ahead, never
+        a departed date (FD-12, list card rule)."""
+        first = self._link_pair(watch.spec)
+        if first is None or first.depart < today:
+            return {"booking_url": None, "booking_note": None}
+        return self._booking(watch, first, watch.revision)
+
     # ---- pages ---------------------------------------------------------------
 
     def list_page(self) -> dict[str, Any]:
@@ -399,6 +529,7 @@ class ViewService:
         now = self._clock()
         today = taipei_date(now)
         midnight = taipei_midnight(now)
+        stale_hours = self._stale_hours
         # Watches carry their latest run's results in the same single query (C-34).
         for item in self._repo.list_watches_with_last_results(self._streak_rounds):
             watch, last_results = item.watch, item.last_results
@@ -418,6 +549,16 @@ class ViewService:
                 today=today,
             )
             cheapest = snapshot.cheapest
+            streak = no_embedded_streak(item.recent_rounds, self._streak_rounds)
+            if cheapest is not None:
+                # Card price, flight and button come from this one observation (FD-12).
+                booking = self._booking(
+                    watch, DatePair(cheapest.depart_date, cheapest.return_date), watch.revision
+                )
+            elif watch.status != "expired":
+                booking = self._future_watch_booking(watch, today)
+            else:
+                booking = {"booking_url": None, "booking_note": None}
             rows.append(
                 {
                     "id": watch.id,
@@ -434,6 +575,7 @@ class ViewService:
                     "status_label": STATUS_LABELS[watch.status],
                     "enabled": watch.status in ("active", "stale"),
                     "expired": watch.status == "expired",
+                    "ended": watch.status == "expired",
                     "min_price": (
                         format_money(cheapest.amount_minor, cheapest.currency) if cheapest else None
                     ),
@@ -442,12 +584,42 @@ class ViewService:
                         if cheapest
                         else None
                     ),
+                    "dates_weekday_label": (
+                        date_range_weekday_text(cheapest.depart_date, cheapest.return_date)
+                        if cheapest
+                        else None
+                    ),
+                    "cheapest_fetched_label": fetched_label(cheapest.fetched_at)
+                    if cheapest
+                    else None,
+                    "stale": cheapest is not None
+                    and self._is_stale(cheapest.fetched_at, now, stale_hours),
+                    "flight": flight_view(cheapest, spec.trip_type),
+                    **booking,
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
+                    # Replaces the price block of a card without a price (#47).
+                    "no_price_label": (
+                        None
+                        if cheapest is not None
+                        else WEB_TEXTS.no_displayable_price
+                        if watch.last_scanned_at
+                        else WEB_TEXTS.not_scanned
+                    ),
                     "link": self.watch_link(watch),
-                    "no_embedded_note": no_embedded_note(last_results),
-                    "no_embedded_streak": no_embedded_streak(
-                        item.recent_rounds, self._streak_rounds
+                    # FR-11: "需人工查價" only without any price; with a price the streak
+                    # becomes the short "近 N 輪未更新" label.
+                    "manual_check": cheapest is None and hit_no_embedded(last_results),
+                    "no_embedded_streak": streak,
+                    "stale_rounds_label": (
+                        stale_rounds_label(self._streak_rounds)
+                        if streak and cheapest is not None
+                        else None
+                    ),
+                    "filters_label": (
+                        conditions_label(spec.airlines, spec.dep_hour_from, spec.dep_hour_to)
+                        if has_filters(spec)
+                        else None
                     ),
                     **trip_view(spec),
                 }
@@ -455,7 +627,6 @@ class ViewService:
         return {
             "watches": rows,
             "disclaimer": DISCLAIMER,
-            "no_embedded_streak_label": no_embedded_streak_label(self._streak_rounds),
         }
 
     def form_values(self, watch_id: int | None) -> dict[str, Any] | None:
@@ -567,6 +738,10 @@ class ViewService:
         top = [self._price_row(watch, o, now, stale_hours) for o in priced[:TOP_N]]
         # FD-9 F2: prices were found, but every one has departed (not "no price yet").
         today = taipei_date(now)
+        # Main card = the snapshot minimum, which is also top[0] (same tie-break).
+        snapshot = Snapshot.build(
+            current_obs, revision=watch.revision, currency=spec.currency, today=today
+        )
         all_departed = (
             bool(current_obs) and not top and all(o.depart_date < today for o in current_obs)
         )
@@ -576,10 +751,20 @@ class ViewService:
         distribution, weekdays = self._distribution(watch, list(latest.values()), now, stale_hours)
         recent_prices = [self._price_row(watch, o, now, stale_hours) for o in current_obs[:30]]
         old = [
-            self._price_row(watch, o, now, stale_hours)
+            self._price_row(watch, o, now, stale_hours, with_flight=False)
             for o in self._repo.old_revision_observations(watch.id, watch.revision)
         ]
         last_run = next((r for r in runs if r.finished_at is not None), None)
+        shown = [*top, *recent_prices, *old]
+        source_note = source_page_note((r["source_key"], r["kind_key"]) for r in shown)
+        if source_note is not None:
+            for row in shown:
+                row["source_text"] = None
+        budget = (
+            format_money(spec.budget_amount_minor, spec.currency)
+            if spec.budget_amount_minor
+            else "未設定"
+        )
         return {
             "watch": {
                 "id": watch.id,
@@ -607,6 +792,18 @@ class ViewService:
                 ),
                 **trip_view(spec),
                 **self.watch_booking(watch),
+                "settings_summary": watch_settings_summary(
+                    origin=spec.origin,
+                    destination=spec.destination,
+                    trip_type=spec.trip_type,
+                    dates=dates_text(spec),
+                    budget=budget,
+                    budget_note=(
+                        web_price_note(spec.adults, spec.children)
+                        if spec.budget_amount_minor
+                        else None
+                    ),
+                ),
                 "notify_on_new_low": spec.notify_on_new_low,
                 "status": watch.status,
                 "status_label": STATUS_LABELS[watch.status],
@@ -618,6 +815,13 @@ class ViewService:
             },
             "has_prices": bool(current_obs),
             "top": top,
+            "best": top[0] if top else None,
+            "best_delta": delta_view(snapshot.delta_since_previous_run()) if top else None,
+            "top_explain": top_explain(stale_hours),
+            "source_note": source_note,
+            "manual_check": snapshot.cheapest is None
+            and last_run is not None
+            and hit_no_embedded(last_run.query_results),
             "top_empty_note": DETAIL_ALL_DEPARTED if all_departed else None,
             "trend": trend,
             "distribution": distribution,
@@ -738,7 +942,8 @@ class ViewService:
             "total_pairs": run.total_pairs,
             "limit_reached": run.limit_reached,
             "global_limit_reached": run.global_limit_reached,
-            "error": run.error_summary,
+            # Chinese labels only (FR-12); error_summary stays in the database and logs.
+            "note": run_note(run),
             "old_revision": False,
             "revision": run.watch_revision,
         }
@@ -756,17 +961,17 @@ class ViewService:
             pairs.append(
                 {
                     "dates": date_range_text(pair.depart, pair.return_date),
+                    "dates_weekday": date_range_weekday_text(pair.depart, pair.return_date),
                     "depart": depart,
                     "return": ret,
                     "status": (
-                        NO_EMBEDDED_LABEL
+                        WEB_TEXTS.manual_check
                         if status == "no_data" and result.get("reason") == NO_EMBEDDED_REASON
                         else NO_MATCH_LABEL
                         if filtered and status == "no_data"
                         else QUERY_STATUS_LABELS.get(status, status)
                     ),
                     "status_key": status,
-                    "reason": SKIP_REASON_LABELS.get(str(result.get("reason")), None),
                     "from_cache": bool(result.get("from_cache")),
                     "source": source_label(str(result["source"])) if result.get("source") else "—",
                     "amount_text": (
@@ -774,11 +979,10 @@ class ViewService:
                         if isinstance(amount, int) and currency
                         else None
                     ),
-                    "error": try_note((result.get("tries") or [{}])[-1]) if result else None,
+                    "note": pair_note(result) if result else None,
                 }
             )
         view["pairs"] = pairs
-        view["no_embedded_note"] = no_embedded_note(run.query_results)
         return view
 
     def scan_status(self, watch_id: int) -> dict[str, Any] | None:
@@ -934,7 +1138,7 @@ class ViewService:
             "usage": usage,
             "hourly_used": self._repo.queries_used_since(now - timedelta(hours=1)),
             "hourly_limit": current.global_hourly_query_limit,
-            "no_embedded_summary": self._health.no_embedded_summary(now),
+            "no_embedded_summary": self._no_embedded_summary(now),
             "active_exploration": active_exploration_view(self._repo),
             "active_comparison": active_comparison_view(self._repo),
             "telegram_commands_enabled": current.telegram_commands_enabled,
@@ -942,6 +1146,14 @@ class ViewService:
             "command_status": self.command_status_view(current.telegram_commands_enabled),
             "maintenance": self.maintenance_view(now),
         }
+
+    def _no_embedded_summary(self, now: datetime) -> dict[str, Any] | None:
+        """Health-page ratio hint with its #35 sentence composed here (FD-12)."""
+        summary = self._health.no_embedded_summary(now)
+        if summary is None:
+            return None
+        note = health_no_embedded_note(summary["ratio_pct"], summary["count"], summary["total"])
+        return {**summary, "note": note}
 
     def maintenance_view(self, now: datetime) -> dict[str, Any] | None:
         """Health-page data maintenance block (FR-H4); counts are cached (FR-H6)."""

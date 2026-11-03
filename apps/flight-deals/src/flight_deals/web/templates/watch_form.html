@@ -192,7 +192,7 @@
   </fieldset>
 
   {% set _pax = ((values.adults or 1)|int) + ((values.children or 0)|int) %}
-  <p class="notice" data-unembedded-hint role="status" {% if not (values.trip_type == "round_trip" and values.cabin in ("business", "first") and _pax >= 2) %}hidden{% endif %}>依實測，此組合 Google 常未內嵌結果，可能無法自動查價，可用查票連結人工查看。</p>
+  <p class="notice" data-unembedded-hint role="status" {% if not (values.trip_type == "round_trip" and values.cabin in ("business", "first") and _pax >= 2) %}hidden{% endif %}>{{ ui.unembedded_form_hint }}</p>
 
   <div class="form-actions">
     <button type="submit" class="primary" data-busy-label="儲存中…">{% if mode == "edit" %}儲存修改{% else %}建立監看{% endif %}</button>

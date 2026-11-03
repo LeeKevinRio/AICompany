@@ -13,34 +13,46 @@ from flight_deals.domain.dates import month_days, month_weekday_counts, month_we
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
     DISCLAIMER,
+    EXPLORATION_BREAKER_OPEN,
     EXPLORATION_CELL_LABELS,
     EXPLORATION_DONE_WITH_GAPS,
+    EXPLORATION_HOURLY_LIMIT,
+    EXPLORATION_LOCK_TIMEOUT,
     EXPLORATION_MAX_SPAN_MONTHS,
     EXPLORATION_MONTH_WATCH_BUTTON,
     EXPLORATION_PREFILL_MISSING,
     EXPLORATION_PREFILL_OK,
+    EXPLORATION_PROGRESS_EXPLAIN,
+    EXPLORATION_PROGRESS_HINT,
     EXPLORATION_RANGE_WATCH_BUTTON,
     EXPLORATION_REFERENCE_NOTE,
+    EXPLORATION_RESTARTED,
+    EXPLORATION_SCHEDULER_OFF,
     EXPLORATION_STALE_FALLBACK,
     EXPLORATION_STATUS_LABELS,
     EXPLORATION_TOO_MANY_CELLS,
     EXPLORATION_TOP_SCOPE_NOTE,
+    EXPLORATION_WATCH_HINT,
     TRIP_TYPE_LABELS,
+    WEB_BOOKING_FALLBACK_NOTE,
     exploration_age_note,
+    exploration_calendar_note,
     exploration_sampled_note,
     exploration_unfinished_note,
+    fetched_range_label,
+    flight_column_label,
     month_label,
     month_range_label,
 )
 from flight_deals.domain.models import CABINS, DatePair, ExplorationSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, weekday_label
 from flight_deals.domain.trip_labels import (
-    BOOKING_FALLBACK_NOTE,
     NO_LIMIT,
     cabin_label,
     conditions_label,
     depart_weekdays_label,
-    total_price_note,
+    pax_summary,
+    web_price_note,
 )
 from flight_deals.domain.validation import (
     MAX_DAYS_AHEAD,
@@ -58,7 +70,11 @@ from flight_deals.services.views import (
     ViewService,
     active_comparison_view,
     active_exploration_view,
+    fetched_label,
+    flight_view,
+    known_error_label,
     price_levels,
+    web_pax_view,
 )
 from flight_deals.storage.repository import (
     ExplorationCellRecord,
@@ -71,6 +87,23 @@ LIST_DAYS = 7
 STALE_HOURS = 24
 LEVEL_TEXT = {"cheap": "低", "mid": "中", "pricey": "高"}
 DEFAULT_TRIP_DAYS = 5
+# Summaries written by the system itself; any other text (an exception) is shown as
+# "查詢失敗" (FR-12). Skip notes start with the quota / breaker constant.
+KNOWN_SUMMARIES = (
+    EXPLORATION_SCHEDULER_OFF,
+    EXPLORATION_RESTARTED,
+    EXPLORATION_HOURLY_LIMIT,
+    EXPLORATION_BREAKER_OPEN,
+    EXPLORATION_LOCK_TIMEOUT,
+)
+
+
+def money_with_web_note(amount_minor: int, currency: str, adults: int, children: int) -> str:
+    """Recent-list price: the bare amount for one traveller, "TWD 9,000・2 大 1 小總價"
+    otherwise (C-40 as revised by FD-12)."""
+    money = format_money(amount_minor, currency)
+    note = web_price_note(adults, children)
+    return money if note is None else f"{money}・{note}"
 
 
 def stops_label(stops: int | None) -> str | None:
@@ -216,8 +249,7 @@ class ExplorationViewService:
     def _recent_row(self, record: ExplorationRecord) -> dict[str, Any]:
         spec = record.spec
         cheapest = (
-            format_money(record.min_amount_minor, spec.currency)
-            + total_price_note(spec.adults, spec.children)
+            money_with_web_note(record.min_amount_minor, spec.currency, spec.adults, spec.children)
             if record.min_amount_minor is not None
             else None
         )
@@ -228,6 +260,8 @@ class ExplorationViewService:
             "month_value": spec.month_text,
             "trip_type_label": TRIP_TYPE_LABELS[spec.trip_type],
             "conditions_label": exploration_conditions(spec),
+            # M6: the party and cabin of the prices in this row.
+            "pax_summary": pax_summary(spec.adults, spec.children, spec.cabin),
             "status": record.status,
             "status_label": self._status_label(
                 record, record.status == "done" and record.done < record.total
@@ -279,9 +313,13 @@ class ExplorationViewService:
         stale = now - finished > timedelta(hours=STALE_HOURS)
         error_summary = None
         if record.status == "failed" or gaps:
-            reason = record.error_summary or EXPLORATION_CELL_LABELS["interrupted"]
+            reason = (
+                known_error_label(record.error_summary, KNOWN_SUMMARIES)
+                or EXPLORATION_CELL_LABELS["interrupted"]
+            )
             error_summary = exploration_unfinished_note(record.done, record.total, reason)
         settings = self._settings.current()
+        fetched = [c.fetched_at for c in cells if c.status == "ok" and c.fetched_at]
         return {
             "exploration": {
                 "id": record.id,
@@ -293,7 +331,7 @@ class ExplorationViewService:
                 "trip_type": spec.trip_type,
                 "trip_type_label": TRIP_TYPE_LABELS[spec.trip_type],
                 "trip_days": spec.trip_days,
-                "pax_note": total_price_note(spec.adults, spec.children),
+                **web_pax_view(spec.trip_type, spec.adults, spec.children, spec.cabin),
                 "cabin_label": cabin_label(spec.cabin),
                 "conditions_label": exploration_conditions(spec),
                 "status": record.status,
@@ -316,12 +354,23 @@ class ExplorationViewService:
                     if len(spec.months) == 1
                     else EXPLORATION_RANGE_WATCH_BUTTON
                 ),
+                "month_watch_hint": EXPLORATION_WATCH_HINT,
+                "flight_column": flight_column_label(spec.trip_type),
             },
             "calendar_months": calendar_months,
             "weeks": weeks,
             "top5": top5,
             "top_scope_note": EXPLORATION_TOP_SCOPE_NOTE,
-            "disclaimer": f"{EXPLORATION_REFERENCE_NOTE}{DISCLAIMER}",
+            # Only DISCLAIMER here: it is printed once, next to the calendar (C-101).
+            "disclaimer": DISCLAIMER,
+            "reference_note": EXPLORATION_REFERENCE_NOTE,
+            "calendar_note": exploration_calendar_note(spec.adults, spec.children),
+            # Cells show no time each; the calendar shows the range once (R4).
+            "fetched_range_label": (
+                fetched_range_label(min(fetched), max(fetched)) if fetched else None
+            ),
+            "progress_hint": EXPLORATION_PROGRESS_HINT,
+            "progress_explain": EXPLORATION_PROGRESS_EXPLAIN,
             "sampled_note": exploration_sampled_note(
                 settings.max_pairs_per_scan, months=len(spec.months)
             ),
@@ -332,7 +381,7 @@ class ExplorationViewService:
         if url:
             return url, None
         fallback = google_flights_url(spec.origin, spec.destination, pair.depart, pair.return_date)
-        return fallback, BOOKING_FALLBACK_NOTE
+        return fallback, WEB_BOOKING_FALLBACK_NOTE
 
     def _cell_view(
         self,
@@ -352,6 +401,9 @@ class ExplorationViewService:
             "carrier": None,
             "stops_label": None,
             "depart_time": None,
+            "fetched_label": None,
+            "flight": None,
+            "manual_check": False,
             "level": None,
             "booking_url": None,
             "booking_note": None,
@@ -383,6 +435,12 @@ class ExplorationViewService:
             "carrier": cell.carrier if priced else None,
             "stops_label": stops_label(cell.stops) if priced else None,
             "depart_time": cell.depart_time if priced else None,
+            # Price, flight and link of a cell come from the same stored cell.
+            "flight": flight_view(cell, spec.trip_type) if priced else None,
+            "fetched_label": (
+                fetched_label(cell.fetched_at) if priced and cell.fetched_at else None
+            ),
+            "manual_check": cell.status == "no_data" and cell.reason == NO_EMBEDDED_REASON,
             "level": LEVEL_TEXT[level] if level else None,
             "rank_note": (
                 EXPLORATION_CELL_LABELS["currency_mismatch"]

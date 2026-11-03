@@ -18,7 +18,7 @@
   <h2>資料源狀態</h2>
   <div class="table-wrap" tabindex="0" role="region" aria-label="資料源狀態（可橫向捲動）">
   <table class="data">
-    <thead><tr><th>資料源</th><th>狀態</th><th>斷路器</th><th>連續失敗</th><th>最近成功</th><th>最近失敗</th><th>最近失敗原因</th></tr></thead>
+    <thead><tr><th>資料源</th><th>狀態</th><th>斷路器</th><th>連續失敗</th><th>最近成功</th><th>最近失敗</th></tr></thead>
     <tbody>
     {% for h in health %}
       <tr>
@@ -28,14 +28,22 @@
         <td class="num">{{ h.failures }}（門檻 {{ h.threshold }}）</td>
         <td>{{ h.last_success or "—" }}</td>
         <td>{{ h.last_failure or "—" }}</td>
-        <td class="muted error-text">{{ h.last_error or "—" }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
   {% if no_embedded_summary %}
-  <p class="notice">過去 24 小時有 {{ no_embedded_summary.ratio_pct }}%（{{ no_embedded_summary.count }}/{{ no_embedded_summary.total }}）查詢未內嵌結果，可能是 Google 非同步載入或封鎖，請用查票連結確認。</p>
+  <p class="notice">{{ no_embedded_summary.note }}</p>
+  {% endif %}
+  {% set failing = health|selectattr("last_error")|list %}
+  {% if failing %}
+  <details class="explain tech-details">
+    <summary>{{ ui.tech_details_summary }}</summary>
+    <dl class="facts">
+      {% for h in failing %}<dt>{{ h.name }}</dt><dd class="error-text">{{ h.last_error }}</dd>{% endfor %}
+    </dl>
+  </details>
   {% endif %}
 </section>
 
@@ -62,7 +70,7 @@
   </dl>
   {% if events %}
   <details>
-    <summary>排程事件（略過、錯誤）</summary>
+    <summary>{{ ui.tech_details_summary }}：排程事件（略過、錯誤）</summary>
     <div class="table-wrap" tabindex="0" role="region" aria-label="排程事件（可橫向捲動）">
     <table class="data compact">
       <thead><tr><th>時間</th><th>事件</th><th>說明</th></tr></thead>
@@ -80,8 +88,13 @@
     <dt>狀態</dt><dd><span class="badge health-{{ command_status.tone }}">{{ command_status.label }}</span></dd>
     <dt>最近指令</dt><dd>{{ command_status.last_command_at_label or "—" }}</dd>
     <dt>未授權訊息</dt><dd>本次啟動以來 {{ command_status.ignored_count }} 則未授權訊息（不執行、不回覆、不記錄內容）</dd>
-    <dt>最近錯誤</dt><dd class="error-text">{{ command_status.last_error_label or "—" }}</dd>
   </dl>
+  {% if command_status.last_error_label %}
+  <details class="explain tech-details">
+    <summary>{{ ui.tech_details_summary }}</summary>
+    <p class="error-text">{{ command_status.last_error_label }}</p>
+  </details>
+  {% endif %}
   {% else %}
   <p class="muted">指令輪詢狀態暫時無法取得。</p>
   {% endif %}

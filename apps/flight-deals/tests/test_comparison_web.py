@@ -24,6 +24,7 @@ from flight_deals.domain.messages import (
     COMPARISON_ROW_LABELS,
     COMPARISON_SINGLE_DATE_NOTE,
     DISCLAIMER,
+    WEB_BOOKING_FALLBACK_NOTE,
     all_static_texts,
     comparison_age_note,
     comparison_created_ago,
@@ -33,7 +34,6 @@ from flight_deals.domain.messages import (
     exploration_age_note,
 )
 from flight_deals.domain.models import FlightSearch, PriceQuote
-from flight_deals.domain.trip_labels import BOOKING_FALLBACK_NOTE
 from flight_deals.ports import SourceResult
 from flight_deals.services.comparison_views import comparison_order, row_label
 from flight_deals.storage.repository import ComparisonCellRecord
@@ -59,6 +59,10 @@ ROW_KEYS = {
     "booking_url",
     "booking_note",
     "watch_url",
+    # FD-12: flight summary and the manual-check flag (additive).
+    "flight",
+    "manual_check",
+    "fetched_label",
 }
 # AC-S1 plus the remaining row kinds, in input order.
 SIX = ["NRT", "OSA", "SEL", "BKK", "SIN", "HKG"]
@@ -213,7 +217,8 @@ def test_result_rows(harness: Harness, queue: Queue, links: FakeLinks) -> None: 
     assert all(set(r) == ROW_KEYS for r in rows)
     assert [r["destination"] for r in rows] == ["OSA", "NRT", "SEL", "BKK", "SIN", "HKG"]
     assert [r["amount_label"] for r in rows[:2]] == ["TWD 7,800", "TWD 9,200"]
-    assert rows[0]["pax_note"] == "（1 人總價）" and rows[0]["stops_label"] == "轉機 1 次"
+    # C-40 (FD-12): one traveller has no note next to the price on the web.
+    assert rows[0]["pax_note"] is None and rows[0]["stops_label"] == "轉機 1 次"
     assert rows[1]["stops_label"] == "直飛" and rows[1]["duration_label"] == "3 小時 25 分"
     assert rows[1]["carrier"] == "長榮航空" and rows[1]["depart_time"] == "07:55"
     assert rows[1]["destination_label"].endswith("NRT") and rows[1]["fetched_at_label"]
@@ -240,14 +245,15 @@ def test_builder_failure_falls_back_to_text_link(
     comparison_id = compared(harness, queue)
     rows = harness.services.comparison_views.comparison_page(comparison_id)["rows"]
     assert all(r["booking_url"].startswith("https://www.google.com/travel/flights?") for r in rows)
-    assert {r["booking_note"] for r in rows} == {BOOKING_FALLBACK_NOTE}
+    assert {r["booking_note"] for r in rows} == {WEB_BOOKING_FALLBACK_NOTE}
 
 
 def test_summary_and_notes(harness: Harness, queue: Queue) -> None:  # AC-S4
     comparison_id = compared(harness, queue, max_stops="0", cabin="business")
     data = harness.services.comparison_views.comparison_page(comparison_id)
     c = data["comparison"]
-    assert c["pax_label"] == "1 位成人" and c["pax_note"] == "（1 人總價）"
+    assert c["pax_label"] == "1 位成人" and c["pax_note"] is None  # C-40 (FD-12)
+    assert c["pax_summary"] == "1 位成人・商務艙" and c["price_caption"] == "來回總價"
     assert c["dates_label"] == "2026-12-10 出發，2026-12-15 回程"
     assert (c["max_stops_label"], c["cabin_label"], c["trip_type_label"]) == (
         "僅直飛",
@@ -267,8 +273,9 @@ def test_page_text(harness: Harness, queue: Queue, links: FakeLinks) -> None:  #
     page = harness.client.get(f"/comparisons/{comparison_id}")
     assert page.status_code == 200
     text = page.text
-    for snippet in ("1 位成人", "（1 人總價）", DISCLAIMER, COMPARISON_REFERENCE_NOTE, "TWD 7,800"):
+    for snippet in ("1 位成人", DISCLAIMER, COMPARISON_REFERENCE_NOTE, "TWD 7,800"):
         assert snippet in text, snippet
+    assert "（1 人總價）" not in text  # C-40 (FD-12): the summary line says "1 位成人"
     assert re.search(r'href="/explore"[^>]*aria-current="page"', text)
     unfinished = comparison_unfinished_note(5, 6, "已達全域每小時查詢上限，1 個目的地未查")
     assert unfinished in text  # AC-S7
@@ -423,7 +430,7 @@ def test_recent_rows_and_active(harness: Harness, queue: Queue) -> None:  # AC-K
     by_id = {r["id"]: r for r in data["recent"]}
     row = by_id[done]
     assert row["url"] == f"/comparisons/{done}" and row["destination_count"] == 3
-    assert row["cheapest_label"] == "TWD 8,000（1 人總價）"
+    assert row["cheapest_label"] == "TWD 8,000"  # C-40 (FD-12): no note for one person
     assert row["cheapest_destination_label"].endswith("OSA")
     assert row["status_label"] == "已完成" and row["finished_at_label"]
     assert by_id[running]["cheapest_label"] is None

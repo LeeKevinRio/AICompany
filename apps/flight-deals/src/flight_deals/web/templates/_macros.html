@@ -1,0 +1,67 @@
+{#- Shared presentation macros (FD-12). Import with context so `ui` is visible.
+    Text comes from view-model keys; only structural glyphs live here. -#}
+
+{% macro ext_link(url, label, sr_context=none, cls="") -%}
+<a{% if cls %} class="{{ cls }}"{% endif %} href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ label }}<span class="ext-arrow" aria-hidden="true"> ↗</span><span class="sr-only">{% if sr_context %}（{{ sr_context }}）{% endif %}{{ ui.new_tab_sr }}</span></a>
+{%- endmacro %}
+
+{#- One flight (outbound only). `f` is a FlightSummary; every field is already display text. -#}
+{% macro flight(f, duration=true, compact=false) -%}
+{% if f %}
+<div class="flight{% if compact %} flight-compact{% endif %}">
+  <span class="sr-only">{{ f.sr_text }}</span>
+  <div class="flight-id" aria-hidden="true">
+    {% if f.leg_label and not compact %}<span class="flight-leg">{{ f.leg_label }}</span>{% endif %}
+    <span class="flight-airline">{{ f.airline }}</span>
+    <span class="flight-no">{{ f.flight_numbers }}</span>
+  </div>
+  <div class="flight-line" aria-hidden="true">
+    <span class="flight-times"><span class="flight-time">{{ f.depart_time }}</span>{% if f.depart_airport and not compact %}<span class="flight-airport"> {{ f.depart_airport }}</span>{% endif %}<span class="flight-arrow">→</span><span class="flight-time">{{ f.arrive_time }}</span>{% if f.day_offset %}<span class="day-offset">{{ f.day_offset }}</span>{% endif %}{% if f.arrive_airport and not compact %}<span class="flight-airport"> {{ f.arrive_airport }}</span>{% endif %}</span>
+    <span class="flight-meta">{% if compact %}{{ f.stops_short or f.stops }}{% else %}{{ f.stops }}{% if duration %}・{{ f.duration_text or "—" }}{% endif %}{% endif %}</span>
+  </div>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{#- Price summary line (C-40): one adult shows the party summary, several people show the
+    total-price caption plus the cabin. -#}
+{% macro price_line(caption, pax_note, pax_summary, cabin) -%}
+{%- if pax_note -%}
+{{ caption }}{% if cabin %}・{{ cabin }}{% endif %}
+{%- else -%}
+{% if caption %}{{ caption }}・{% endif %}{{ pax_summary }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro delta_badge(d, prefix="") -%}
+{% if d and d.direction == "down" -%}
+<span class="delta delta-down" aria-hidden="true">{{ prefix }}↓ {{ d.amount_label }}</span><span class="sr-only">{{ ui.delta_sr_down }} {{ d.amount_label }}</span>
+{%- elif d and d.direction == "up" -%}
+<span class="delta delta-up" aria-hidden="true">{{ prefix }}↑ {{ d.amount_label }}</span><span class="sr-only">{{ ui.delta_sr_up }} {{ d.amount_label }}</span>
+{%- elif d and d.direction == "flat" -%}
+<span class="delta delta-flat" aria-hidden="true">{{ prefix }}＝</span><span class="sr-only">{{ ui.delta_sr_flat }}</span>
+{%- endif %}
+{%- endmacro %}
+
+{#- Price age and staleness badges next to a price. -#}
+{% macro price_meta(fetched, stale=false, rounds=none, kind=none, source=none) -%}
+<span class="price-time">{{ fetched }}</span>
+{%- if source %}<span class="price-source">・{{ source }}</span>{% endif %}
+{%- if stale %} <span class="badge warn">{{ ui.stale_badge }}</span>{% endif %}
+{%- if rounds %} <span class="badge warn">{{ rounds }}</span>{% endif %}
+{%- if kind %} <span class="badge warn">{{ kind }}</span>{% endif %}
+{%- endmacro %}
+
+{#- Collapsible region for secondary tables; counts are real row counts. -#}
+{% macro fold(title, count=none, unit="筆", cls="") -%}
+<details class="fold{% if cls %} {{ cls }}{% endif %}">
+  <summary><span class="fold-title">{{ title }}</span>{% if count is not none %}<span class="fold-sub">（{{ count }} {{ unit }}）</span>{% endif %}</summary>
+  <div class="fold-body">
+    {{ caller() }}
+  </div>
+</details>
+{%- endmacro %}
+
+{% macro help_note(text) -%}
+<details class="explain"><summary>{{ ui.help_summary }}</summary><p class="explain-body">{{ text }}</p></details>
+{%- endmacro %}

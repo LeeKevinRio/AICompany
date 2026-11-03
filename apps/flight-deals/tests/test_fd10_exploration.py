@@ -387,7 +387,8 @@ def test_range_page_html(harness: Harness, queue: Queue) -> None:  # C-76, AC-M6
     single = harness.client.get(f"/explorations/{explored(harness, queue)}").text
     # Disclaimer and legend once per page, as on a single-month page (not once per month).
     assert html.count(DISCLAIMER) == single.count(DISCLAIMER) >= 1
-    assert html.count("分成低／中／高三段") == single.count("分成低／中／高三段") == 1
+    legend = "低／中／高只與本次已查到的價格相比"  # FD-12 #23 (R8)
+    assert html.count(legend) == single.count(legend) == 1
     assert "未查（星期篩選）" in html
     assert EXPLORATION_RANGE_WATCH_BUTTON in html
 

@@ -514,8 +514,17 @@ def test_compose_uses_stale_after_hours_setting(harness: Harness) -> None:
 
 
 def test_list_page_explains_delta(harness: Harness) -> None:
-    harness.create_watch()
+    from flight_deals.domain.messages import WEB_TEXTS
+
+    # FD-12 #4 (R6): with a change shown, the short sentence is visible and the full
+    # qualification stays on the page inside the collapsed explanation.
+    watch_id = harness.create_watch()
+    harness.scan(watch_id)
+    harness.clock.advance(hours=7)
+    harness.source.default_price = 9_000
+    harness.scan(watch_id)
     page = harness.client.get("/").text
+    assert WEB_TEXTS.delta_explain in page
     assert "較前一輪：目前最低價與上一輪掃描結束時最低價的差額" in page
     assert "兩個最低價可能是不同日期" in page
 

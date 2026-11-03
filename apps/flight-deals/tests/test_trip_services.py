@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from flight_deals.app import create_app
 from flight_deals.config import Config
+from flight_deals.domain.messages import WEB_BOOKING_FALLBACK_NOTE
 from flight_deals.domain.models import FlightSearch, PriceQuote
 from flight_deals.domain.trip_labels import BOOKING_FALLBACK_NOTE
 from flight_deals.services.views import NO_MATCH_LABEL
@@ -251,25 +252,28 @@ def test_builder_failure_falls_back_with_note(broken_links: Harness) -> None:  #
     h.scan(watch_id)
     text = h.notifier.sent[-1]
     assert "q=Flights%20to%20NRT" in text and BOOKING_FALLBACK_NOTE in text
+    # FD-12 #9 (R3): the web uses its own note; Telegram keeps BOOKING_FALLBACK_NOTE.
     detail = h.services.views.detail_page(watch_id)
-    assert detail["watch"]["booking_note"] == BOOKING_FALLBACK_NOTE
+    assert detail["watch"]["booking_note"] == WEB_BOOKING_FALLBACK_NOTE
     assert "q=Flights" in detail["watch"]["booking_url"]
     row = detail["top"][0]
-    assert row["booking_note"] == BOOKING_FALLBACK_NOTE and "q=Flights" in row["booking_url"]
+    assert row["booking_note"] == WEB_BOOKING_FALLBACK_NOTE and "q=Flights" in row["booking_url"]
     page = h.client.get(f"/watches/{watch_id}").text
-    assert BOOKING_FALLBACK_NOTE in page
+    assert WEB_BOOKING_FALLBACK_NOTE in page and BOOKING_FALLBACK_NOTE not in page
 
 
 # ---- read models and pages (C-40) -------------------------------------------------------------
 
 
 def test_list_row_labels(harness: Harness) -> None:  # AC-A14, AC-V3
-    create_family(harness)
+    harness.scan(create_family(harness))  # FD-12: the cabin shows on a priced card
     harness.create_watch(name="單人")
     family, single = harness.services.views.list_page()["watches"]
-    assert family["pax_note"] == "（2 大 1 小總價）" and family["cabin_label"] == "商務艙"
+    # C-40 as revised by FD-12: web notes without brackets, none for one traveller.
+    assert family["pax_note"] == "2 大 1 小總價" and family["cabin_label"] == "商務艙"
     assert family["conditions_label"] == "長榮、華航｜去程 06–12 時"
-    assert single["pax_note"] == "（1 人總價）" and single["cabin_label"] == "經濟艙"
+    assert single["pax_note"] is None and single["cabin_label"] == "經濟艙"
+    assert single["pax_summary"] == "1 位成人・經濟艙" and single["price_caption"] == "來回總價"
     assert single["conditions_label"] == "不限"
     page = harness.client.get("/").text
     assert "2 大 1 小總價" in page and "商務艙" in page and "長榮、華航" in page
@@ -284,7 +288,7 @@ def test_detail_labels_links_and_prices(harness: Harness) -> None:  # AC-P1, AC-
     assert watch["pax_full_label"] == "2 位成人、1 位兒童"
     assert watch["cabin_label"] == "商務艙" and watch["airlines_label"] == "長榮、華航"
     assert watch["dep_window_label"] == "去程 06–12 時"
-    assert watch["pax_note"] == "（2 大 1 小總價）"
+    assert watch["pax_note"] == "2 大 1 小總價"  # C-40 (FD-12): web form, no brackets
     assert watch["booking_url"].startswith(TFS_PREFIX) and watch["booking_note"] is None
     row = data["top"][0]
     assert row["amount_text"] == "TWD 18,509"
@@ -300,7 +304,8 @@ def test_single_adult_detail_label(harness: Harness) -> None:  # AC-P2, AC-C5
     watch = harness.services.views.detail_page(watch_id)["watch"]
     assert watch["pax_full_label"] == "1 位成人" and watch["cabin_label"] == "經濟艙"
     assert watch["airlines_label"] == "不限" and watch["dep_window_label"] == "不限"
-    assert watch["pax_note"] == "（1 人總價）"
+    # C-40 (FD-12): one traveller has the summary line instead of a note per price.
+    assert watch["pax_note"] is None and watch["pax_summary"] == "1 位成人・經濟艙"
 
 
 def test_old_revision_rows_use_text_link_with_note(harness: Harness) -> None:  # C-42
@@ -308,7 +313,7 @@ def test_old_revision_rows_use_text_link_with_note(harness: Harness) -> None:  #
     harness.scan(watch_id)
     put(harness, f"/api/watches/{watch_id}", {**FAMILY, "adults": 3})
     old = harness.services.views.detail_page(watch_id)["old_prices"]
-    assert old and old[0]["booking_note"] == BOOKING_FALLBACK_NOTE
+    assert old and old[0]["booking_note"] == WEB_BOOKING_FALLBACK_NOTE
     assert "q=Flights" in old[0]["booking_url"]
 
 
@@ -423,7 +428,7 @@ def _no_embedded_html() -> str:
 
 
 def test_no_embedded_results_is_explained_and_never_a_failure(harness: Harness) -> None:
-    from flight_deals.services.views import NO_EMBEDDED_LABEL
+    from flight_deals.domain.messages import WEB_TEXTS
     from tests.test_partial_prices import use_pages
 
     use_pages(harness, _no_embedded_html())
@@ -441,13 +446,17 @@ def test_no_embedded_results_is_explained_and_never_a_failure(harness: Harness) 
     assert run.query_results[0]["status"] == "no_data"
     assert run.query_results[0]["reason"] == "no_embedded_results"
     assert run.error_summary is None
+    # FD-12 FR-11 / #19: the short label "需人工查價", never "查詢失敗".
     detail = harness.services.views.detail_page(watch_id)
-    assert {p["status"] for p in detail["last_run"]["pairs"]} == {NO_EMBEDDED_LABEL}
-    assert detail["last_run"]["no_embedded_note"] == NO_EMBEDDED_LABEL
+    assert {p["status"] for p in detail["last_run"]["pairs"]} == {WEB_TEXTS.manual_check}
+    assert {p["note"] for p in detail["last_run"]["pairs"]} == {WEB_TEXTS.manual_check}
+    assert "no_embedded_note" not in detail["last_run"] and detail["manual_check"] is True
     [row] = harness.services.views.list_page()["watches"]
-    assert row["no_embedded_note"] == NO_EMBEDDED_LABEL
-    assert NO_EMBEDDED_LABEL in harness.client.get("/").text
-    assert NO_EMBEDDED_LABEL in harness.client.get(f"/watches/{watch_id}").text
+    assert row["manual_check"] is True and "no_embedded_note" not in row
+    for url in ("/", f"/watches/{watch_id}"):
+        text = harness.client.get(url).text
+        assert WEB_TEXTS.manual_check in text and WEB_TEXTS.query_failed not in text
+        assert "未在頁面內嵌" not in text
 
 
 def test_no_embedded_note_clears_once_results_return(harness: Harness) -> None:
@@ -460,7 +469,7 @@ def test_no_embedded_note_clears_once_results_return(harness: Harness) -> None:
     harness.clock.advance(hours=7)
     harness.scan(watch_id)
     [row] = harness.services.views.list_page()["watches"]
-    assert row["no_embedded_note"] is None
+    assert row["manual_check"] is False and row["min_price"]  # FD-12: key renamed
 
 
 def test_partial_update_keeps_trip_options(harness: Harness) -> None:  # qa B2
@@ -487,11 +496,12 @@ def test_partial_update_keeps_trip_options(harness: Harness) -> None:  # qa B2
 
 
 def test_list_row_pax_short_and_templates_have_no_cabin_literal(harness: Harness) -> None:
-    create_family(harness)
+    harness.scan(create_family(harness))  # FD-12: the cabin shows on a priced card
     [row] = harness.services.views.list_page()["watches"]
     assert row["pax_short"] == "2 大 1 小總價"
     page = harness.client.get("/").text
-    assert "商務艙・2 大 1 小總價" in page
+    assert "2 大 1 小總價" in page and "商務艙" in page  # FD-12 card layout
+    assert row["pax_summary"] == "2 位成人、1 位兒童・商務艙"
     for name in ("index.html", "watch_form.html"):
         text = (SRC / "web" / "templates" / name).read_text(encoding="utf-8")
         assert "經濟艙" not in text and 'replace("（"' not in text, name

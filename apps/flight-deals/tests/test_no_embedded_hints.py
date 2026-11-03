@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from flight_deals.config import Limits
+from flight_deals.domain.messages import health_no_embedded_note
 from flight_deals.domain.models import FlightSearch
 from flight_deals.ports import SourceResult
 from flight_deals.services.health import (
@@ -128,7 +129,10 @@ def test_three_rounds_mark_and_a_priced_round_clears(harness: Harness) -> None: 
     scan_round(harness, watch_id)
     assert streak(harness)
     page = harness.client.get("/").text
-    assert "連續 3 輪" in page
+    # FD-12 FR-11: without any price the card only says "需人工查價" (no streak label).
+    assert "需人工查價" in page and "連續 3 輪" not in page
+    (row,) = harness.services.views.list_page()["watches"]
+    assert row["manual_check"] is True and row["stale_rounds_label"] is None
     priced(harness)
     scan_round(harness, watch_id)
     assert not streak(harness)
@@ -234,18 +238,31 @@ def test_health_page_ratio_counts_exploration_cells(harness: Harness) -> None:
     for _ in range(3):
         scan_round(harness, watch_id)
     summary = harness.services.views.settings_page()["no_embedded_summary"]
-    assert summary == {"ratio_pct": 100, "count": 10, "total": 10}
+    assert {k: summary[k] for k in ("ratio_pct", "count", "total")} == {
+        "ratio_pct": 100,
+        "count": 10,
+        "total": 10,
+    }
+    assert summary["note"] == health_no_embedded_note(100, 10, 10)  # FD-12 #35
     html = harness.client.get("/settings").text
-    assert "可能是 Google 非同步載入或封鎖" in html
+    assert "（可能是非同步載入或封鎖），需人工查價。" in html
 
 
 def test_streak_label_comes_from_config(harness: Harness) -> None:
-    from flight_deals.domain.messages import no_embedded_streak_label
+    from flight_deals.domain.messages import stale_rounds_label
 
+    # FD-12 #42: a priced watch whose latest rounds were not embedded gets the short
+    # "近 N 輪未更新" label; N comes from config, the template never writes it.
     rounds = Limits().no_embedded_streak_rounds
-    label = harness.services.views.list_page()["no_embedded_streak_label"]
-    assert (
-        label == no_embedded_streak_label(rounds) == "連續 3 輪 Google 未內嵌結果，請用查票連結確認"
-    )
+    watch_id = harness.create_watch()
+    priced(harness)
+    scan_round(harness, watch_id)
+    not_embedded(harness)
+    for _ in range(rounds):
+        scan_round(harness, watch_id)
+    (row,) = harness.services.views.list_page()["watches"]
+    assert row["stale_rounds_label"] == stale_rounds_label(rounds) == "近 3 輪未更新"
+    assert row["manual_check"] is False and row["min_price"]
+    assert "no_embedded_streak_label" not in harness.services.views.list_page()
     template = (SRC / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert "連續 3 輪" not in template and "{{ no_embedded_streak_label }}" in template
+    assert "近 3 輪" not in template and "連續 3 輪" not in template

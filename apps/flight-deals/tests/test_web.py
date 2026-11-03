@@ -349,6 +349,8 @@ def test_every_page_has_footer_disclaimer_from_constant(harness: Harness) -> Non
     base = (WEB_DIR / "templates" / "base.html").read_text(encoding="utf-8")
     assert DISCLAIMER not in base and "{{ disclaimer }}" in base
     watch_id = harness.create_watch()
+    # FD-12 FR-10 / C-101: exactly once per page. Pages that show prices print it next to
+    # their first price block (overriding the footer block); the others keep the footer.
     for url in (
         "/",
         "/watches/new",
@@ -359,8 +361,10 @@ def test_every_page_has_footer_disclaimer_from_constant(harness: Harness) -> Non
         "/watches/9999",
     ):
         html = harness.client.get(url).text
+        assert html.count(DISCLAIMER) == 1, url
         footer = html.split('<footer class="site-footer">', 1)[1]
-        assert DISCLAIMER in footer, url
+        if url not in ("/", f"/watches/{watch_id}"):
+            assert DISCLAIMER in footer, url
 
 
 def test_date_inputs_have_taipei_today_min(harness: Harness) -> None:
@@ -377,11 +381,11 @@ def test_list_column_and_sampling_notes(harness: Harness) -> None:
     )
     harness.scan(watch_id)
     page = harness.client.get(f"/watches/{watch_id}").text
-    top = page.split("最便宜的日期組合", 1)[1].split("</section>", 1)[0]
-    old = page.split("舊設定的價格紀錄", 1)[1].split("</section>", 1)[0]
-    for section in (top, old):
-        assert "只涵蓋已取樣的日期" in section
-        assert "價格為查到當下的參考值" in section
+    # FD-12 FR-10 (R7): each sentence exactly once on the detail page, not repeated in
+    # the top list or the old-settings section.
+    assert "已查到最低價" in page and "舊設定的價格紀錄" in page
+    assert page.count("只涵蓋已取樣的日期") == 1
+    assert page.count("價格為查到當下的參考值") == 1
     assert "muted-badge" not in page
 
 

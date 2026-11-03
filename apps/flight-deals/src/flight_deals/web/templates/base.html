@@ -25,7 +25,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">
-    <p>{{ disclaimer }}資料源為非官方介面，可能隨時失效。</p>
+    <p>{% block footer_disclaimer %}{{ disclaimer }}{% endblock %}資料源為非官方介面，可能隨時失效。</p>
   </footer>
 </body>
 </html>

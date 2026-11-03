@@ -1,5 +1,8 @@
 {% extends "base.html" %}
+{% from "_macros.html" import ext_link, flight, fold, help_note with context %}
 {% block title %}探索結果{% endblock %}
+{# The disclaimer is printed once next to the calendar; the footer copy is dropped (C-101). #}
+{% block footer_disclaimer %}{% endblock %}
 {% block content %}
 {% set e = exploration %}
 <div class="page-head">
@@ -10,22 +13,34 @@
 <section class="card">
   <dl class="facts">
     <dt>行程</dt><dd>{{ e.trip_type_label }}{% if e.trip_days %}・{{ e.trip_days }} 天{% endif %}</dd>
-    <dt>人數與艙等</dt><dd>{{ e.pax_note }}・{{ e.cabin_label }}</dd>
-    <dt>條件</dt><dd>{{ e.conditions_label }}</dd>
-    <dt>狀態</dt><dd><span class="badge">{{ e.status_label }}</span>・已查 {{ e.done }}／共 {{ e.total }}・對外查詢 {{ e.queries_used }} 次</dd>
+    <dt>人數與艙等</dt><dd>{{ e.pax_summary }}</dd>
+    <dt>狀態</dt><dd><span class="badge">{{ e.status_label }}</span>・已查 {{ e.done }}／共 {{ e.total }}</dd>
     <dt>建立時間</dt><dd>{{ e.created_at_label }}</dd>
     {% if e.finished_at_label %}<dt>結束時間</dt><dd>{{ e.finished_at_label }}</dd>{% endif %}
   </dl>
   {% if e.stale %}<p class="notice">{{ e.stale_note or e.stale_fallback }}</p>{% endif %}
   {% if e.error_summary %}<p class="notice" id="exploration-error">{{ e.error_summary }}</p>{% endif %}
+  {% call fold("查詢條件", none) %}
+  <dl class="facts">
+    <dt>條件</dt><dd>{{ e.conditions_label }}</dd>
+    <dt>對外查詢</dt><dd>{{ e.queries_used }} 次</dd>
+  </dl>
+  {% endcall %}
 </section>
+
+<div class="page-notes">
+  <p class="disclaimer">{{ disclaimer }}</p>
+  <p class="price-source-note">{{ ui.price_source_note }}</p>
+  {% if reference_note %}<p class="reference-note muted">{{ reference_note }}</p>{% endif %}
+</div>
 
 {% if e.status in ("queued", "running") %}
 <section class="card" id="exploration-progress" data-total="{{ e.total }}" data-done="{{ e.done }}">
   <h2>查詢進度</h2>
   <p role="status" aria-live="polite"><span id="progress-text">已查 {{ e.done }}／共 {{ e.total }}</span></p>
   <progress id="progress-bar" max="{{ e.total }}" value="{{ e.done }}" aria-label="探索進度">{{ e.done }}／{{ e.total }}</progress>
-  <p class="hint">頁面會自動更新進度，完成後顯示價格日曆。探索進行中，排程掃描將於探索結束後執行。</p>
+  <p class="hint">{{ progress_hint }}</p>
+  {% if progress_explain %}{{ help_note(progress_explain) }}{% endif %}
   <p id="progress-note" class="notice" role="status" hidden>仍在背景執行，可稍後重新整理。</p>
   <noscript><p class="hint">未啟用 JavaScript，請手動重新整理頁面查看進度。</p></noscript>
 </section>
@@ -33,7 +48,11 @@
 {% if weeks %}
 <section class="card">
   <h2>價格日曆</h2>
-  <p class="muted">金額為{{ e.pax_note }}，每格是該出發日單次查詢的最低價；依已查到的價格分成低／中／高三段，文字與顏色並列。</p>
+  {% if top5 and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if top5 %}<p class="booking-hint">{{ ui.booking_hint }}</p>
+  <p class="flight-note">{{ ui.local_time_explain }}</p>{% endif %}
+  <p class="calendar-note">{{ calendar_note }}</p>
+  {% if fetched_range_label %}<p class="price-time">{{ fetched_range_label }}</p>{% endif %}
   {% for m in calendar_months %}
   {%- if calendar_months|length > 1 %}
   <h3>{{ m.label }}</h3>
@@ -55,16 +74,15 @@
           <div class="cal-day"><strong>{{ cell.day }}</strong> <span class="muted">{{ cell.weekday_label }}</span></div>
           {% if cell.amount_label %}
           <div class="heat-price">{{ cell.amount_label }}</div>
+          {% if e.pax_note %}<div class="cal-pax">{{ e.pax_note }}</div>{% endif %}
           {% if cell.rank_note %}<div class="cal-status">{{ cell.rank_note }}</div>{% endif %}
           {% if lvl_text %}<div>價位：{{ lvl_text }}</div>{% endif %}
-          {% if cell.carrier %}<div>{{ cell.carrier }}</div>{% endif %}
-          {% if cell.stops_label %}<div>{{ cell.stops_label }}</div>{% endif %}
-          {% if cell.depart_time %}<div>{{ cell.depart_time }} 出發</div>{% endif %}
+          {{ flight(cell.flight, compact=true) }}
           {% else %}
           <div class="cal-status">{{ cell.label }}</div>
           {% endif %}
           {% if cell.booking_url %}
-          <div><a href="{{ cell.booking_url }}" target="_blank" rel="noopener noreferrer">查票<span class="sr-only">（{{ cell.date }}，另開新分頁）</span></a>{% if cell.booking_note %} <span class="hint">{{ cell.booking_note }}</span>{% endif %}</div>
+          <div>{{ ext_link(cell.booking_url, ui.booking_button_short if cell.amount_label else ui.manual_link, cell.date) }}{% if cell.booking_note %} <span class="hint">{{ cell.booking_note }}</span>{% endif %}</div>
           {% elif cell.booking_note %}
           <div class="hint">{{ cell.booking_note }}</div>
           {% endif %}
@@ -88,25 +106,22 @@
   {% if top_scope_note %}<p class="muted">{{ top_scope_note }}</p>{% endif %}
   {% if top5 %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="最便宜前 5 個日期（可橫向捲動）">
-  <table class="data">
+  <table class="data flights">
     <caption class="sr-only">依總價由低到高，同價依日期由早到晚</caption>
     <thead>
-      <tr><th scope="col">名次</th><th scope="col">出發日</th><th scope="col">總價</th><th scope="col">航空</th><th scope="col">轉機</th><th scope="col">出發時刻</th><th scope="col">連結</th></tr>
+      <tr><th scope="col">名次</th><th scope="col">出發日</th><th scope="col">{{ ui.price_column }}{% if e.price_caption %}<span class="th-sub">{{ e.price_caption }}</span>{% endif %}</th><th scope="col">{{ e.flight_column }}</th><th scope="col">連結</th></tr>
     </thead>
     <tbody>
     {% for t in top5 %}
       <tr>
         <td class="num">{{ loop.index }}</td>
         <td>{{ t.date }} {{ t.weekday_label }}{% if t.return_date %}<div class="muted">回 {{ t.return_date }}</div>{% endif %}</td>
-        <td class="num">{{ t.amount_label }}<div class="muted">{{ e.pax_note }}</div></td>
-        <td>{{ t.carrier or "—" }}</td>
-        <td>{{ t.stops_label or "—" }}</td>
-        <td class="num">{{ t.depart_time or "—" }}</td>
-        <td><div class="actions">
-          {% if t.booking_url %}<a href="{{ t.booking_url }}" target="_blank" rel="noopener noreferrer">查票<span class="sr-only">（{{ t.date }}，另開新分頁）</span></a>{% endif %}
+        <td class="cell-price"><div class="cell-amount">{{ t.amount_label }}</div>{% if e.pax_note %}<div class="price-sub">{{ e.pax_note }}</div>{% endif %}{% if t.fetched_label %}<div class="price-meta"><span class="price-time">{{ t.fetched_label }}</span></div>{% endif %}</td>
+        <td class="cell-flight">{{ flight(t.flight) }}</td>
+        <td class="cell-link"><div class="actions">
+          {% if t.booking_url %}{{ ext_link(t.booking_url, ui.booking_button_short, t.date) }}{% endif %}
           {% if t.watch_url %}<a href="{{ t.watch_url }}">建立監看<span class="sr-only">（{{ t.date }}）</span></a>{% endif %}
-          {% if t.booking_note %}<span class="hint">{{ t.booking_note }}</span>{% endif %}
-        </div></td>
+        </div>{% if t.booking_note %}<div class="hint">{{ t.booking_note }}</div>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -119,10 +134,9 @@
 
 {% if e.month_watch_url %}
 <p><a class="button primary" href="{{ e.month_watch_url }}">{{ e.month_watch_label }}</a></p>
-<p class="hint">只會帶入條件到新增監看表單，確認後才會建立；彈性窗監看每輪仍只查部分日期組合。</p>
+<p class="hint">{{ e.month_watch_hint }}</p>
 {% endif %}
 {% endif %}
 
-<p class="disclaimer">{{ disclaimer }}</p>
 {% if sampled_note %}<p class="muted">{{ sampled_note }}</p>{% endif %}
 {% endblock %}

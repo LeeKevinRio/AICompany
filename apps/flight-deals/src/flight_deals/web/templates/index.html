@@ -1,5 +1,8 @@
 {% extends "base.html" %}
+{% from "_macros.html" import ext_link, flight, price_line, delta_badge, price_meta, help_note with context %}
 {% block title %}監看列表{% endblock %}
+{# Pages that print the disclaimer next to the first price drop the footer copy (C-101). #}
+{% block footer_disclaimer %}{% if not watches %}{{ disclaimer }}{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>監看列表</h1>
@@ -7,77 +10,96 @@
 </div>
 {% if not watches %}
 <div class="empty">
-  <p>還沒有任何監看。</p>
-  <p>建立一個監看後，系統會依排程查價並保存價格紀錄。</p>
+  <p>{{ ui.list_empty }}</p>
   <a class="button primary" href="/watches/new">建立第一個監看</a>
 </div>
 {% else %}
-<p class="disclaimer">{{ disclaimer }}</p>
-<div class="table-wrap" tabindex="0" role="region" aria-label="監看列表（可橫向捲動）">
-<table class="data">
-  <thead>
-    <tr>
-      <th>名稱／路線</th>
-      <th>日期設定</th>
-      <th>預算</th>
-      <th>狀態</th>
-      <th>已查到最低價</th>
-      <th>較前一輪</th>
-      <th>上次查價</th>
-      <th>操作</th>
-    </tr>
-  </thead>
-  <tbody>
+{% set priced = watches|selectattr("min_price")|list %}
+{% set round_trip_priced = priced|selectattr("flight")|selectattr("flight.is_outbound_only")|list %}
+{% set booking_shown = priced|selectattr("booking_url")|list %}
+<div class="page-notes">
+  <p class="disclaimer">{{ disclaimer }}</p>
+  {% if priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
+  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if booking_shown %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
+  {% if priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
+</div>
+<div class="watch-grid">
   {% for w in watches %}
-    <tr data-watch-id="{{ w.id }}">
-      <td>
-        <a href="/watches/{{ w.id }}"><strong>{{ w.name }}</strong></a>
-        <div class="muted">{{ w.route }}・{{ w.trip }}</div>
-        <div class="muted">{{ w.cabin_label }}・{{ w.pax_short }}</div>
-        <div class="muted">條件：{{ w.conditions_label }}</div>
-        {% if w.no_embedded_streak %}<div><span class="badge warn">{{ no_embedded_streak_label }}</span></div>{% endif %}
-        {% if w.no_embedded_note %}<div class="hint">{{ w.no_embedded_note }}</div>{% endif %}
-      </td>
-      <td>{{ w.dates }}</td>
-      <td class="num">{{ w.budget }}</td>
-      <td><span class="badge status-{{ w.status }}">{{ w.status_label }}</span></td>
-      <td class="num">
-        {% if w.min_price %}
-          {{ w.min_price }}{% if w.pax_note %}<div class="muted">{{ w.pax_note }}</div>{% endif %}<div class="muted">{{ w.min_price_dates }}</div>
-        {% else %}
-          <span class="muted">尚未查價</span>
-        {% endif %}
-      </td>
-      <td class="num">
-        {% if w.delta and w.delta.direction == "down" %}
-          <span class="delta delta-down" aria-hidden="true">↓ {{ w.delta.amount_label }}</span><span class="sr-only">較前一輪下跌 {{ w.delta.amount_label }}</span>
-        {% elif w.delta and w.delta.direction == "up" %}
-          <span class="delta delta-up" aria-hidden="true">↑ {{ w.delta.amount_label }}</span><span class="sr-only">較前一輪上漲 {{ w.delta.amount_label }}</span>
-        {% elif w.delta and w.delta.direction == "flat" %}
-          <span class="delta delta-flat" aria-hidden="true">＝</span><span class="sr-only">較前一輪持平</span>
-        {% else %}
-          <span class="muted" aria-hidden="true">—</span><span class="sr-only">無前一輪可比較</span>
-        {% endif %}
-      </td>
-      <td>{% if w.last_scanned %}{{ w.last_scanned }}{% else %}<span class="muted">尚未查價</span>{% endif %}</td>
-      <td><div class="actions">
-        <a class="button small" href="/watches/{{ w.id }}">詳情</a>
-        <a class="button small" href="/watches/{{ w.id }}/edit">修改</a>
-        {% if not w.expired %}
-          {% if w.enabled %}
-          <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="false">停用</button>
-          <button type="button" class="small" data-action="scan-now" data-watch-id="{{ w.id }}" data-busy-label="查價中…">立即查價</button>
+  <article class="watch-card" data-watch-id="{{ w.id }}" aria-labelledby="watch-name-{{ w.id }}">
+    <header class="card-head">
+      <h2 class="card-title" id="watch-name-{{ w.id }}"><a href="/watches/{{ w.id }}">{{ w.name }}</a></h2>
+      <div class="badges">
+        <span class="badge status-{{ w.status }}">{{ w.status_label }}</span>
+        {% if w.manual_check %}<span class="badge warn">{{ ui.manual_check }}</span>{% endif %}
+      </div>
+    </header>
+    <p class="card-meta">{{ w.route }}・{{ w.trip }}</p>
+
+    {% if w.min_price %}
+    <div class="price-block">
+      <div class="price-label">{{ ui.best_card_title }}</div>
+      <div class="price-row">
+        <span class="price-amount">{{ w.min_price }}</span>
+        {{ delta_badge(w.delta) }}
+      </div>
+      <div class="price-sub">{{ price_line(w.price_caption, w.pax_note, w.pax_summary, w.cabin_label) }}</div>
+      <div class="price-meta">{{ price_meta(w.cheapest_fetched_label, w.stale, w.stale_rounds_label) }}</div>
+      <div class="price-dates">{{ w.dates_weekday_label }}</div>
+    </div>
+    {{ flight(w.flight) }}
+    {% else %}
+    <p class="muted">{{ w.no_price_label }}</p>
+    {% if w.manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}
+    {% endif %}
+
+    <div class="card-foot">
+      {% if w.last_scanned %}<p class="muted card-scanned">上次查價 {{ w.last_scanned }}</p>{% endif %}
+      <div class="card-actions">
+        {% if w.booking_url %}
+          {% if w.min_price %}
+          {{ ext_link(w.booking_url, ui.booking_button_short, w.name, "button primary small booking") }}
           {% else %}
-          <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="true">啟用</button>
+          {{ ext_link(w.booking_url, ui.manual_link, w.name, "button small booking") }}
           {% endif %}
         {% endif %}
-        <button type="button" class="small danger" data-action="delete-watch" data-watch-id="{{ w.id }}" data-watch-name="{{ w.name }}">刪除</button>
-      </div></td>
-    </tr>
+        <a class="button small" href="/watches/{{ w.id }}">詳情</a>
+        {% if not w.expired and w.enabled %}
+        <button type="button" class="small" data-action="scan-now" data-watch-id="{{ w.id }}" data-busy-label="查價中…">立即查價</button>
+        {% endif %}
+        <details class="more">
+          <summary class="button small">更多</summary>
+          <div class="actions more-actions">
+            <a class="button small" href="/watches/{{ w.id }}/edit">修改</a>
+            {% if not w.expired %}
+              {% if w.enabled %}
+              <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="false">停用</button>
+              {% else %}
+              <button type="button" class="small" data-action="set-enabled" data-watch-id="{{ w.id }}" data-enabled="true">啟用</button>
+              {% endif %}
+            {% endif %}
+            <button type="button" class="small danger" data-action="delete-watch" data-watch-id="{{ w.id }}" data-watch-name="{{ w.name }}">刪除</button>
+          </div>
+        </details>
+      </div>
+      {% if w.booking_url and w.booking_note %}<p class="hint booking-note">{{ w.booking_note }}</p>{% endif %}
+    </div>
+
+    <details class="fold fold-inline">
+      <summary><span class="fold-title">監看條件</span></summary>
+      <div class="fold-body">
+        <dl class="facts">
+          <dt>日期設定</dt><dd>{{ w.dates }}</dd>
+          <dt>預算</dt><dd>{{ w.budget }}{% if w.pax_note %} <span class="muted">{{ w.pax_note }}</span>{% endif %}</dd>
+          {% if w.filters_label %}<dt>條件</dt><dd>{{ w.filters_label }}</dd>{% endif %}
+        </dl>
+      </div>
+    </details>
+  </article>
   {% endfor %}
-  </tbody>
-</table>
 </div>
-<p class="note hint">較前一輪：目前最低價與上一輪掃描結束時最低價的差額，只計目前設定的即時價、不含已出發的日期；兩個最低價可能是不同日期。</p>
+{% if watches|selectattr("delta")|list %}
+<div class="delta-explain"><p>{{ ui.delta_explain }}</p>{{ help_note(ui.delta_explain_detail) }}</div>
+{% endif %}
 {% endif %}
 {% endblock %}

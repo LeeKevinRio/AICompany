@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}通知紀錄{% endblock %}
+{# The log shows prices, so #46 sits next to the disclaimer here too (risk-gate M2). #}
+{% block footer_disclaimer %}{{ disclaimer }}{% if notifications|rejectattr("price", "eq", "—")|list %}{{ ui.price_source_note }}{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head"><h1>通知紀錄</h1></div>
 {% if not notifications %}

@@ -378,6 +378,12 @@ class CommandService:
                     booking_note=note,
                     fetched_at=obs.fetched_at,
                     data_stale=self._stale(obs.fetched_at, now, stale_hours),
+                    depart_time=obs.depart_time,
+                    duration_minutes=obs.duration_minutes,
+                    flight_numbers=obs.flight_numbers,
+                    arrive_time=obs.arrive_time,
+                    arrive_day_offset=obs.arrive_day_offset,
+                    route_airports=obs.route_airports,
                 )
             )
         return rows

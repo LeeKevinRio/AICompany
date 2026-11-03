@@ -478,7 +478,8 @@ def test_no_embedded_results_are_not_failures(harness: Harness, queue: Queue) ->
     assert {(c.status, c.reason) for c in cells} == {("no_data", "no_embedded_results")}
     # The health page's 24-hour ratio counts comparison cells too (C-63).
     summary = harness.services.views.settings_page()["no_embedded_summary"]
-    assert summary == {"ratio_pct": 100, "count": 10, "total": 10}
+    counts = {k: summary[k] for k in ("ratio_pct", "count", "total")}
+    assert counts == {"ratio_pct": 100, "count": 10, "total": 10}  # FD-12 adds "note"
 
 
 def test_hourly_usage_includes_comparisons(harness: Harness, queue: Queue) -> None:  # AC-R11
