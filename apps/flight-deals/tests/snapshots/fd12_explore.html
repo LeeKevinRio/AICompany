@@ -23,9 +23,9 @@
   <noscript><p class="notice">此頁的新增、修改、停用、刪除與儲存功能需要啟用 JavaScript。</p></noscript>
   <main id="main" class="container" tabindex="-1">
 <div class="page-head">
-  <h1>探索一個月內的價格</h1>
+  <h1>探索出發日價格</h1>
 </div>
-<p>對所選月份每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最低價前 5 個日期呈現。</p>
+<p>對所選月份（最多連續 3 個月）內符合出發星期的每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最便宜前 5 個日期呈現。</p>
 
 <section class="card entry-card">
   <h2>多目的地比價</h2>
@@ -74,7 +74,7 @@
     </fieldset>
     <div class="grid">
       <div class="field">
-        <label for="f-month">月份</label>
+        <label for="f-month">起始月份</label>
         <select id="f-month" name="month" aria-describedby="err-month">
           <option value="2026-10" >2026 年 10 月</option>
           <option value="2026-11" selected>2026 年 11 月</option>
@@ -91,6 +91,24 @@
         </select>
         <span id="err-month" class="field-error" data-error-for="month"></span>
       </div>
+      <div class="field">
+        <label for="f-month_to">結束月份</label>
+        <select id="f-month_to" name="month_to" aria-describedby="err-month_to">
+          <option value="2026-10" >2026 年 10 月</option>
+          <option value="2026-11" selected>2026 年 11 月</option>
+          <option value="2026-12" >2026 年 12 月</option>
+          <option value="2027-01" >2027 年 1 月</option>
+          <option value="2027-02" >2027 年 2 月</option>
+          <option value="2027-03" >2027 年 3 月</option>
+          <option value="2027-04" >2027 年 4 月</option>
+          <option value="2027-05" >2027 年 5 月</option>
+          <option value="2027-06" >2027 年 6 月</option>
+          <option value="2027-07" >2027 年 7 月</option>
+          <option value="2027-08" >2027 年 8 月</option>
+          <option value="2027-09" >2027 年 9 月</option>
+        </select>
+        <span id="err-month_to" class="field-error" data-error-for="month_to"></span>
+      </div>
       <div class="field" data-show-when="trip_type=round_trip">
         <label for="f-trip_days">旅程天數</label>
         <input id="f-trip_days" type="number" name="trip_days" value="5" min="1" max="30" step="1" inputmode="numeric" aria-describedby="h-trip_days err-trip_days">
@@ -98,6 +116,20 @@
         <span id="err-trip_days" class="field-error" data-error-for="trip_days"></span>
       </div>
     </div>
+    <fieldset class="group" id="ex-weekday-group">
+      <legend>出發星期</legend>
+      <div class="choice-row weekday-row">
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="0" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週一</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="1" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週二</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="2" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週三</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="3" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週四</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="4" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週五</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="5" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週六</label>
+        <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="6" checked aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> 週日</label>
+      </div>
+      <small id="ex-h-depart_weekdays" class="hint">全部勾選代表不限；只篩選去程出發日，回程不篩</small>
+      <span id="ex-err-depart_weekdays" class="field-error" data-error-for="depart_weekdays"></span>
+    </fieldset>
   </fieldset>
 
   <fieldset>
@@ -248,12 +280,15 @@
     <span id="err-airlines" class="field-error" data-error-for="airlines"></span>
   </fieldset>
 
-  <p class="notice" data-unembedded-hint role="status" hidden>依實測，此組合 Google 常未內嵌結果，可能無法自動查價，可用查票連結人工查看。</p>
+  <p class="notice" data-unembedded-hint role="status" hidden>依實測，此組合常無法自動查價，可能需人工查價。</p>
 
   <p id="explore-estimate" class="estimate" role="status"
      data-hourly-left="60"
      data-reserve="12"
      data-max-cells="31"
+     data-weekday-counts='{"2026-10": [1, 1, 1, 1, 1, 1, 1], "2026-11": [5, 4, 4, 4, 4, 4, 5], "2026-12": [4, 5, 5, 5, 4, 4, 4], "2027-01": [4, 4, 4, 4, 5, 5, 5], "2027-02": [4, 4, 4, 4, 4, 4, 4], "2027-03": [5, 5, 5, 4, 4, 4, 4], "2027-04": [4, 4, 4, 5, 5, 4, 4], "2027-05": [5, 4, 4, 4, 4, 5, 5], "2027-06": [4, 5, 5, 4, 4, 4, 4], "2027-07": [4, 4, 4, 5, 5, 5, 4], "2027-08": [5, 5, 4, 4, 4, 4, 5], "2027-09": [4, 4, 5, 5, 4, 4, 4]}'
+     data-weekday-counts-by-trip='{"2027-09": {"1": [4, 4, 5, 5, 4, 4, 4], "10": [4, 4, 5, 5, 4, 4, 4], "11": [4, 4, 5, 5, 4, 4, 4], "12": [4, 4, 5, 5, 4, 4, 4], "13": [4, 4, 5, 5, 4, 4, 4], "14": [4, 4, 5, 5, 4, 4, 4], "15": [4, 4, 5, 5, 4, 4, 4], "16": [4, 4, 5, 5, 4, 4, 4], "17": [4, 4, 5, 5, 4, 4, 4], "18": [4, 4, 5, 5, 4, 4, 4], "19": [4, 4, 5, 5, 4, 4, 4], "2": [4, 4, 5, 5, 4, 4, 4], "20": [4, 4, 5, 5, 4, 4, 4], "21": [4, 4, 5, 5, 4, 4, 4], "22": [4, 4, 5, 5, 4, 4, 4], "23": [4, 4, 5, 5, 4, 4, 4], "24": [4, 4, 5, 5, 4, 4, 4], "25": [4, 4, 5, 5, 4, 4, 4], "26": [4, 4, 5, 4, 4, 4, 4], "27": [4, 4, 4, 4, 4, 4, 4], "28": [4, 3, 4, 4, 4, 4, 4], "29": [3, 3, 4, 4, 4, 4, 4], "3": [4, 4, 5, 5, 4, 4, 4], "30": [3, 3, 4, 4, 4, 4, 3], "4": [4, 4, 5, 5, 4, 4, 4], "5": [4, 4, 5, 5, 4, 4, 4], "6": [4, 4, 5, 5, 4, 4, 4], "7": [4, 4, 5, 5, 4, 4, 4], "8": [4, 4, 5, 5, 4, 4, 4], "9": [4, 4, 5, 5, 4, 4, 4]}}'
+     data-over-limit-text="請縮小月份範圍或減少星期"
      data-today="2026-10-25">預計查詢最多 31 次／本小時剩餘 60 次（保留 12 次給排程）</p>
 
   <div class="form-actions">
@@ -261,7 +296,8 @@
   </div>
 </form>
 
-<section class="card">
+<p class="disclaimer">價格為查到當下的參考值，實際以航空公司或訂票網站為準。</p>
+<p class="price-source-note">價格取自 Google 預設排序的結果；同一航班在 Google「最低價格」分頁可能較低。</p><section class="card">
   <h2>最近的探索</h2>
   <div class="table-wrap" tabindex="0" role="region" aria-label="最近的探索（可橫向捲動）">
   <table class="data">
@@ -273,21 +309,20 @@
       <tr>
         <td><a href="/explorations/1">台北桃園 TPE → 東京成田 NRT</a></td>
         <td>2026 年 12 月</td>
-        <td>來回・不限</td>
+        <td>來回・不限｜1 位成人・經濟艙</td>
         <td><span class="badge">已完成</span></td>
         <td class="num">31/31</td>
         <td>2026-10-25 12:00</td>
-        <td class="num">TWD 5,000（1 人總價）</td>
+        <td class="num">TWD 5,000</td>
       </tr>
     </tbody>
   </table>
   </div>
   <p class="note hint">探索結果保留 7 天，之後自動清除。</p>
 </section>
-<p class="disclaimer">價格為查到當下的參考值，實際以航空公司或訂票網站為準。</p>
   </main>
   <footer class="site-footer">
-    <p>價格為查到當下的參考值，實際以航空公司或訂票網站為準。資料源為非官方介面，可能隨時失效。</p>
+    <p>資料源為非官方介面，可能隨時失效。</p>
   </footer>
 </body>
 </html>
