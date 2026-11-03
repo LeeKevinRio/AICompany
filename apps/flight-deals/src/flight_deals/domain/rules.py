@@ -29,6 +29,14 @@ class Candidate:
     source: str
     carrier: str | None
     fetched_at: datetime
+    # Flight details of the cheapest itinerary (FD-12); None when unknown.
+    stops: int | None = None
+    depart_time: str | None = None
+    duration_minutes: int | None = None
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 @dataclass(frozen=True)

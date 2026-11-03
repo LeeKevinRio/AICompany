@@ -376,3 +376,25 @@ class PriceQuote:
     duration_minutes: int | None
     # Local departure time "HH:MM" of the first segment; optional (FD-5 Decision 4).
     depart_time: str | None = None
+    # Flight details of this itinerary (FD-12, C-94); all optional, None when unknown.
+    # "BR184" / "CZ3088,CZ3575": airline code + number per segment, in segment order.
+    flight_numbers: str | None = None
+    # Local arrival time "HH:MM" at the final airport; set together with the offset.
+    arrive_time: str | None = None
+    # Local arrival date minus local departure date (-1..3).
+    arrive_day_offset: int | None = None
+    # "TPE,NRT" / "TPE,SZX,SHA": origin plus every segment's arrival airport.
+    route_airports: str | None = None
+
+
+def quote_rank_key(q: PriceQuote) -> tuple[int, int, str, int, str]:
+    """Order of quotes from one query (ADR-0002 FD-12, C-97): lower price, then a known
+    departure time, earlier departure, fewer stops, smaller flight numbers. ``min`` keeps
+    the first of fully equal quotes (payload order)."""
+    return (
+        q.amount_minor,
+        0 if q.depart_time else 1,
+        q.depart_time or "",
+        q.stops if q.stops is not None else 99,
+        q.flight_numbers or "~",
+    )

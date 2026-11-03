@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -140,7 +140,14 @@ Handler = Callable[[FlightSearch], "SourceResult"]
 
 
 class ScriptedSource:
-    """Programmable source: ``prices`` maps (depart, return) ISO pairs to whole TWD."""
+    """Programmable source: ``prices`` maps (depart, return) ISO pairs to whole TWD.
+
+    ``flight`` (opt-in, FD-12) overrides ``PriceQuote`` fields of every quote, e.g.
+    ``{"flight_numbers": "BR184", "arrive_time": "12:00", "arrive_day_offset": 0,
+    "route_airports": "TPE,NRT", "depart_time": "07:55"}``; ``flights`` does the same
+    per (depart, return) ISO pair and wins over ``flight``. Without either, quotes keep
+    the pre-FD-12 shape (no flight details).
+    """
 
     def __init__(
         self,
@@ -150,6 +157,7 @@ class ScriptedSource:
         price_kind: PriceKind = "live",
         default_price: int | None = 10_000,
         currency: str | None = None,
+        flight: dict[str, Any] | None = None,
     ) -> None:
         self._clock = clock
         self._name = name
@@ -162,6 +170,8 @@ class ScriptedSource:
         self.calls: list[FlightSearch] = []
         self.handler: Handler | None = None
         self.price_fn: Callable[[FlightSearch], int | None] | None = None
+        self.flight: dict[str, Any] | None = flight
+        self.flights: dict[tuple[str, str | None], dict[str, Any]] = {}
 
     @property
     def name(self) -> str:
@@ -205,6 +215,9 @@ class ScriptedSource:
             stops=0,
             duration_minutes=180,
         )
+        details = self.flights.get(key, self.flight)
+        if details:
+            quote = replace(quote, **details)
         return SourceResult(self._name, "ok", now, quotes=(quote,))
 
 

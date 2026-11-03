@@ -299,6 +299,13 @@ class ScanService:
                 source=cheapest.source,
                 carrier=cheapest.carrier,
                 fetched_at=cheapest.fetched_at,
+                stops=cheapest.stops,
+                depart_time=cheapest.depart_time,
+                duration_minutes=cheapest.duration_minutes,
+                flight_numbers=cheapest.flight_numbers,
+                arrive_time=cheapest.arrive_time,
+                arrive_day_offset=cheapest.arrive_day_offset,
+                route_airports=cheapest.route_airports,
             )
         return outcome
 

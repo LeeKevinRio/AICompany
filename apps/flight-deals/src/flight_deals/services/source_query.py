@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from flight_deals.domain.models import DatePair, FlightSearch, PriceQuote
+from flight_deals.domain.models import DatePair, FlightSearch, PriceQuote, quote_rank_key
 from flight_deals.ports import Clock, FlightPriceSource, Redactor, SourceResult
 from flight_deals.services.health import HealthService
 
@@ -108,13 +108,13 @@ class SourceQuery:
             if result.status == "ok":
                 cheapest = min(
                     (q for q in result.quotes if q.currency == currency),
-                    key=lambda q: q.amount_minor,
+                    key=quote_rank_key,
                     default=None,
                 )
                 if cheapest is None:
                     entry["status"] = "currency_mismatch"
                     outcome.error = "來源回傳幣別與監看幣別不一致，未納入通知判斷"
-                    cheapest = min(result.quotes, key=lambda q: q.amount_minor)
+                    cheapest = min(result.quotes, key=quote_rank_key)
                 entry.update(amount_minor=cheapest.amount_minor, currency=cheapest.currency)
                 if stats is not None and stats.malformed > 0:
                     # Unpriced itineraries are expected and stay out of error_summary;

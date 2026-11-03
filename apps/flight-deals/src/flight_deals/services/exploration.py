@@ -22,6 +22,7 @@ from flight_deals.domain.messages import (
     EXPLORATION_BREAKER_OPEN,
     EXPLORATION_BUSY,
     EXPLORATION_HOURLY_LIMIT,
+    EXPLORATION_LOCK_TIMEOUT,
     EXPLORATION_NO_DATES,
     EXPLORATION_RESTARTED,
     EXPLORATION_SCHEDULER_OFF,
@@ -115,6 +116,10 @@ def cell_update(
             as_of=quote.as_of,
             fetched_at=quote.fetched_at,
             error=error if mismatch else None,
+            flight_numbers=quote.flight_numbers,
+            arrive_time=quote.arrive_time,
+            arrive_day_offset=quote.arrive_day_offset,
+            route_airports=quote.route_airports,
         )
     if status not in ("no_data", "blocked", "error"):
         # Nothing was asked: every source's breaker was open.
@@ -270,7 +275,7 @@ class ExplorationService:
     def run(self, exploration_id: int) -> str:
         """Body of the ``explore:<id>`` job; runs on the scheduler's single worker."""
         if not self._scan_lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
-            self._fail(exploration_id, "掃描佔用過久，探索未執行")
+            self._fail(exploration_id, EXPLORATION_LOCK_TIMEOUT)
             return "failed"
         try:
             if not self._repo.start_exploration(exploration_id, self._clock()):

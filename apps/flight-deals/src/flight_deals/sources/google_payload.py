@@ -12,15 +12,17 @@ its own:
 * unpriced  -- ``k[1][0] == []`` (the only "no price" shape observed live)
 * malformed -- anything else
 
-Only the price is required. Carrier, stop count, duration and the first segment's
-departure time are optional and fall back to ``None``. Records use the shape expected
-by ``sources._records``.
+Only the price is required. Carrier, stop count, duration, the first segment's
+departure time and the per-segment flight details (airline code, flight number,
+airports, arrival time, local dates; FD-12) are optional and fall back to ``None``.
+Records use the shape expected by ``sources._records``.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from html.parser import HTMLParser
 from typing import Any
 
@@ -40,7 +42,13 @@ INFO_SEGMENTS = 2  # k[0][2]: list of segments
 SEGMENT_FROM = 3  # segment[3]: departure airport code
 SEGMENT_TO = 6  # segment[6]: arrival airport code
 SEGMENT_DEPART_TIME = 8  # segment[8]: local departure time, [h, m] or [h]
+SEGMENT_ARRIVE_TIME = 10  # segment[10]: local arrival time, [h, m] or [h]
 SEGMENT_DURATION = 11  # segment[11]: minutes
+SEGMENT_DEPART_DATE = 20  # segment[20]: local departure date [y, m, d]
+SEGMENT_ARRIVE_DATE = 21  # segment[21]: local arrival date [y, m, d]
+SEGMENT_FLIGHT = 22  # segment[22]: [airline code, flight number, None, airline name]
+FLIGHT_CODE = 0
+FLIGHT_NUMBER = 1
 
 
 class PayloadFormatError(ValueError):
@@ -158,6 +166,35 @@ def depart_time_text(value: Any) -> str | None:
     return f"{hour:02d}:{minute:02d}"
 
 
+def local_date_text(value: Any) -> str | None:
+    """``[y, m, d]`` of a real calendar date -> ISO "YYYY-MM-DD"; anything else -> None."""
+    if not isinstance(value, list) or len(value) != 3 or not all(_is_int(v) for v in value):
+        return None
+    try:
+        return date(value[0], value[1], value[2]).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def _flight(segment: list[Any]) -> dict[str, Any]:
+    """One segment as a record ``flights[i]`` dict (strings normalised or None).
+
+    The flight number must already be a string in the payload; an int is not accepted
+    (validation of the code / number shape happens in ``sources._records``).
+    """
+    duration = _at(segment, SEGMENT_DURATION)
+    return {
+        "duration": duration if _is_positive_int(duration) else None,
+        "code": _optional_str(_at(segment, SEGMENT_FLIGHT, FLIGHT_CODE)),
+        "number": _optional_str(_at(segment, SEGMENT_FLIGHT, FLIGHT_NUMBER)),
+        "from": _optional_str(_at(segment, SEGMENT_FROM)),
+        "to": _optional_str(_at(segment, SEGMENT_TO)),
+        "arrive_time": depart_time_text(_at(segment, SEGMENT_ARRIVE_TIME)),
+        "depart_date": local_date_text(_at(segment, SEGMENT_DEPART_DATE)),
+        "arrive_date": local_date_text(_at(segment, SEGMENT_ARRIVE_DATE)),
+    }
+
+
 def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     info = _at(itinerary, ITINERARY_INFO)
     names = _at(info, INFO_CARRIER_NAMES)
@@ -168,9 +205,7 @@ def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     flights: list[dict[str, Any]] = []
     depart_time: str | None = None
     if isinstance(segments, list) and all(isinstance(s, list) for s in segments):
-        for segment in segments:
-            duration = _at(segment, SEGMENT_DURATION)
-            flights.append({"duration": duration if _is_positive_int(duration) else None})
+        flights = [_flight(segment) for segment in segments]
         if segments:
             depart_time = depart_time_text(_at(segments[0], SEGMENT_DEPART_TIME))
     return {

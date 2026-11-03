@@ -150,6 +150,11 @@ class ObservationRecord:
     stops: int | None
     duration_minutes: int | None
     depart_time: str | None = None
+    # Flight details (FD-12); NULL for rows written before migration 0009.
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 @dataclass(frozen=True)
@@ -272,6 +277,11 @@ class ExplorationCellRecord:
     as_of: datetime | None
     fetched_at: datetime | None
     error: str | None
+    # Flight details (FD-12); only ok cells carry them.
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +303,11 @@ class CellUpdate:
     as_of: datetime | None = None
     fetched_at: datetime | None = None
     error: str | None = None
+    # Flight details (FD-12); set only for ok cells.
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 def _exploration(row: sqlite3.Row) -> ExplorationRecord:
@@ -357,6 +372,10 @@ def _cell(row: sqlite3.Row) -> ExplorationCellRecord:
         as_of=_pts(row["as_of"]),
         fetched_at=_pts(row["fetched_at"]),
         error=row["error"],
+        flight_numbers=row["flight_numbers"],
+        arrive_time=row["arrive_time"],
+        arrive_day_offset=row["arrive_day_offset"],
+        route_airports=row["route_airports"],
     )
 
 
@@ -399,6 +418,11 @@ class ComparisonCellRecord:
     as_of: datetime | None
     fetched_at: datetime | None
     error: str | None
+    # Flight details (FD-12); only ok cells carry them.
+    flight_numbers: str | None = None
+    arrive_time: str | None = None
+    arrive_day_offset: int | None = None
+    route_airports: str | None = None
 
 
 def _comparison(row: sqlite3.Row) -> ComparisonRecord:
@@ -452,6 +476,10 @@ def _comparison_cell(row: sqlite3.Row) -> ComparisonCellRecord:
         as_of=_pts(row["as_of"]),
         fetched_at=_pts(row["fetched_at"]),
         error=row["error"],
+        flight_numbers=row["flight_numbers"],
+        arrive_time=row["arrive_time"],
+        arrive_day_offset=row["arrive_day_offset"],
+        route_airports=row["route_airports"],
     )
 
 
@@ -519,6 +547,10 @@ def _observation(row: sqlite3.Row) -> ObservationRecord:
         stops=row["stops"],
         duration_minutes=row["duration_minutes"],
         depart_time=row["depart_time"],
+        flight_numbers=row["flight_numbers"],
+        arrive_time=row["arrive_time"],
+        arrive_day_offset=row["arrive_day_offset"],
+        route_airports=row["route_airports"],
     )
 
 
@@ -951,7 +983,9 @@ class Repository:
                 "UPDATE exploration_cell SET status = ?, reason = ?, source = ?,"
                 " price_kind = ?, from_cache = ?, attempts = ?, amount_minor = ?,"
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
-                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?"
+                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
+                " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
+                " route_airports = ?"
                 " WHERE exploration_id = ? AND depart_date = ? AND status = 'pending'",
                 (
                     update.status,
@@ -969,6 +1003,10 @@ class Repository:
                     _ts(update.as_of),
                     _ts(update.fetched_at),
                     update.error,
+                    update.flight_numbers,
+                    update.arrive_time,
+                    update.arrive_day_offset,
+                    update.route_airports,
                     exploration_id,
                     depart.isoformat(),
                 ),
@@ -1161,7 +1199,9 @@ class Repository:
                 "UPDATE comparison_cell SET status = ?, reason = ?, source = ?,"
                 " price_kind = ?, from_cache = ?, attempts = ?, amount_minor = ?,"
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
-                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?"
+                " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
+                " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
+                " route_airports = ?"
                 " WHERE comparison_id = ? AND position = ? AND status = 'pending'",
                 (
                     update.status,
@@ -1179,6 +1219,10 @@ class Repository:
                     _ts(update.as_of),
                     _ts(update.fetched_at),
                     update.error,
+                    update.flight_numbers,
+                    update.arrive_time,
+                    update.arrive_day_offset,
+                    update.route_airports,
                     comparison_id,
                     position,
                 ),
@@ -1270,8 +1314,9 @@ class Repository:
             cur = conn.execute(
                 "INSERT INTO price_observation (scan_run_id, watch_id, watch_revision, source,"
                 " price_kind, depart_date, return_date, amount_minor, currency, as_of,"
-                " as_of_basis, fetched_at, carrier, stops, duration_minutes, depart_time)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " as_of_basis, fetched_at, carrier, stops, duration_minutes, depart_time,"
+                " flight_numbers, arrive_time, arrive_day_offset, route_airports)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     scan_run_id,
                     watch_id,
@@ -1289,6 +1334,10 @@ class Repository:
                     quote.stops,
                     quote.duration_minutes,
                     quote.depart_time,
+                    quote.flight_numbers,
+                    quote.arrive_time,
+                    quote.arrive_day_offset,
+                    quote.route_airports,
                 ),
             )
             return int(cast(int, cur.lastrowid))
