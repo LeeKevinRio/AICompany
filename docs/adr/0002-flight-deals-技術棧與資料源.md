@@ -773,3 +773,31 @@ CEO 2026-10-26 回覆：ADR 與收斂裁決照現狀核可（第 5 項）。第 
 - **C-91 W11 啟動腳本**：三條路徑原始輸出記任務單：外部程序占用 8795 答 N（exit 1、PID 仍在）、答 Y（停掉後正常啟動、首頁 200）、`--no-pause` 加 `< NUL`（取消、PID 仍在）；另記 `--open` 與不帶時是否開瀏覽器；只有 `--no-pause` 不符時才允許改 `dev-up.bat` 且只能加取消分支，否則 diff 為空。
 - **C-92 版本與定版**：一致性測試斷言 `importlib.metadata.version("flight-deals")`、`flight_deals.__version__`、`pyproject.toml` 版本、CHANGELOG 首個非 `[Unreleased]` 標題版號都等於 `0.1.0`；`src/` 不新增對外顯示版本的樣板或文案；tag 為 annotated、指向 review 通過後的最終 commit；`git ls-remote --tags origin` 不含 `v0.1.0`。
 - **C-93 既有期望值保護與模組邊界**：只能修改直接斷言以下項目的既有期望值並逐條列任務單：探索超量 422 訊息字串、`queries_used_since` SQL 原文（若有 grep 斷言）、`test_scheduler_jobs_and_next_run_time` 的時鐘建構；`tests/test_snapshot_read.py` diff 為 0（W10）；其餘 1357 項不得修改且全綠；ALLOWED 不變；`services/` 不新增對 `sources`／`scheduler`／`web` 的 import；`retention.py`、`price_snapshot.py` diff 為空；不新增依賴（`pyproject.toml` dependencies 與 dependency-groups 不變，`uv.lock` 原則上 diff 為空）。
+
+## FD-12 增補：航班細節、網頁減字與卡片化（2026-11-01，tech-architect 評估；不另開 ADR）
+
+**範圍**：解析並保存最低價那班的航班號碼、抵達時刻與日差、航線機場串；網頁四頁與 Telegram 兩處顯示航班；網頁文案精簡並卡片化。不新增執行期依賴、不改 import 方向表；新增 migration 0009（純 ADD COLUMN）與 `domain/flight_summary.py`。
+
+**修訂既有條文**：C-40 依第 5 節；FD-5 Decision 4「抵達時刻本批不存」結案；FD-5 9a 網頁說明改「需人工查價」加收合說明（Telegram 不變）；C-76、C-78 F3「與 FD-9 逐字相同」由 C-104 取代；C-83「migrations 只有 0001～0008」限 FD-11 批次。
+
+**方案比較**：A 三表各加 4 離散欄（採用：CHECK 可約束、與最低價同列、不碰索引與快照 SQL、遷移快；缺點：不存中間段時刻與機型）；B 單一 `segments_json`（否決：只能 json_valid、各頁解讀易漂移）；C segment 子表（否決：join、cascade、破壞 C-55 SQL 次數）；D `duration_minutes` 改 info[9]（否決：新舊語意混用，另案）。
+
+**Consequences**：好處是看得到哪班、幾點到、哪裡轉機；舊列自然降級；快照、索引、清除語意零變動；同價取捨可重現；網頁與 Telegram 共用組字。代價是 payload 位置逆向取得，Google 改版時新欄靜默降為「—」（價格不受影響）；中間段時刻與機型不存；同價選中班次可能與 v0.1.0 不同；列表每卡多 1 條 tfs；網頁與 Telegram 人數註記規則分岔；HTML 快照整批重錄。約束：顯示中間段、機型、回程班次或改 info[9] 要重評；航班欄位進 `_SNAPSHOT_COLUMNS` 或索引要回 FD-8 重評；tfs 加航空限定要回 FD-5 Decision 7 重評（本節否決）。
+
+**新增約束**
+- **C-94 解析與推導**：`google_payload.py` 只用 stdlib；`ParseStats`、`classify_itinerary`、`itinerary_key` diff 空；4 欄只在 `_records.quotes_from_records` 推導。BR184 fixture 斷言 `flight_numbers=="BR184"`、`arrive_time=="12:00"`、`arrive_day_offset==0`、`route_airports=="TPE,NRT"`、`depart_time=="07:55"`；SHA fixture 最低價 `route_airports=="TPE,SZX,SHA"`、`flight_numbers=="CZ3088,CZ3575"`，C-39 數字（9／7／2／463300）不變。異常案例：seg[22] None、非 list、號碼 "18A"、號碼 int 184、代碼 "br"、7 段、缺 [21]、[21]=(2026,2,30)、first[20]≠查詢日、日差 4、日差 −1、轉機換機場、抵達 [24,0]；價格等既有欄位與 ParseStats 不變，只有對應欄位 None。合成 payload：+1、一次轉機、BR＋JL、seg[22] 缺漏、抵達日缺漏。測試交叉檢查兩份 fixture 推出的抵達時刻等於 info[8]。`duration_minutes` 推導 diff 空。
+- **C-95 Migration 0009**：只含 12 條 ADD COLUMN；v8 含資料 DB（三表各 ≥2 列、cell ok 與 no_data）遷移後筆數不變、舊欄相等、新欄 NULL；`pre-v9` 備份可開啟、新 DB 不產生備份；integrity ok、foreign_key_check 空、版本 9；0001～0008 diff 空。CHECK 拒絕 `'br184'`、`'BR184,'`、`',BR184'`、`'BR184,,JL99'`、`'BR 184'`、`arrive_time='7:55'`、offset 4／−2／1.5、arrive_time 與 offset 一有一無、`'TPE'`、`'TPE,NR'`、`'tpe,nrt'`；接受 `'BR184'`、`'CZ3088,CZ3575'`、offset −1、`'TPE,SZX,SHA'`。
+- **C-96 快照路徑與效能**：2.2 符號與檔案 diff 空；C-55～C-58 既有測試不改全綠；`list_page` SQL 次數 1＋N；2.3 門檻逐項量測記任務單，未達標不得 done。
+- **C-97 同價取捨**：`quote_rank_key` 只定義一次、`source_query.py` 兩處 min 使用；測試同價 08:10 對 07:55 選 07:55、同時刻直飛優先、有時刻優先、不同價選低價、全同取第一筆；`price_snapshot.py` diff 空；頁面 flight 與價格同源；同價改變的既有測試列 AC-F4。
+- **C-98 共用顯示**：`flight_summary.py` 只 import stdlib 與 domain；`" → "` 航班號碼字串只在此模組產生（grep 測試）；逐欄單元測試（FR-2 七個 Given、舊資料、同航空兩段只列一次、有抵達無日差顯示「—」、「−1」為 U+2212）；輸出無 None；列入 `wording_surfaces`。
+- **C-99 view model 與診斷**：4.3 key 與型別各有斷言、移除的 key 不存在；遞迴走訪四頁 view model 不含 adapter 原文、例外類別名、`no result section`、`Traceback`、`Error:`；設定頁原文只在 `<details>`；未對照英文錯誤顯示「查詢失敗」。
+- **C-100 人數註記**：依第 5 節；網頁 1 人四頁價格旁無「1 人總價」、頁首、主卡與每張列表卡有「1 位成人」；2 大 1 小列表與詳情逐價格有「2 大 1 小總價」；Telegram 通知與摘要 1 人仍「（1 人總價）」；通知紀錄頁不變。
+- **C-101 誠實揭露與收合**：列表、詳情、探索結果、比價結果、探索表單、比價表單完整 `DISCLAIMER` 整份 HTML 恰 1 次、不在 `<details>`；`base.html` 頁尾免責放可覆寫 block；詳情 `SAMPLED_ONLY_NOTE` 恰 1 次可見；FR-13 必須可見項目不在 `<details>`；其他說明用 `<details>`、無 JS 可展開；探索 `disclaimer` 只等於 `DISCLAIMER`。
+- **C-102 訂票連結**：每個顯示航班的位置有連結，href 等於 tfs（或備援並附 `WEB_BOOKING_FALLBACK_NOTE`），`target="_blank"`、`rel` 含 `noopener noreferrer`；外部網域只有 Google Flights；tfs 不加航空限定、C-42 golden 不變；網頁不再出現「查票」與單獨「訂票」；Telegram「查票連結：」不變。
+- **C-103 Telegram**：依第 7 節與第 0 節第 3 點；`price_alert_message` 行數不變；非 detailed 逐字相同；`/watch` 最長情境 ≤3800 字；其他組字函式既有測試不改；新字串通過 BANNED_PHRASES；實機由 CEO 或總經理手動驗收。
+- **C-104 HTML 快照**：依第 6 節。
+- **C-105 文案與風控閘門**：文案依 PRD v0.2 對照表（風控已核可）；增補字串列任務單；新字串都在 `messages.py`、`trip_labels.py`、`flight_summary.py` 並列入 `all_static_texts()`；樣板不寫死；risk-gate 實際渲染文案與對照表差異為 0。
+- **C-106 模組邊界與既有期望值**：`test_architecture.py` ALLOWED 不變；`services/` 不新增對 `sources`、`scheduler`、`web` 的 import；`retention.py`、`price_snapshot.py`、`db.py` diff 空；不新增依賴；既有 1442 項只能修改直接斷言以下者並列 AC-F4：網頁「（1 人總價）」、「查票」、「未內嵌」與 `NO_EMBEDDED_LABEL`、逐列「Google Flights（即時價）」、移除的 view model key、快照、同價取捨改變的 carrier 與 depart_time、schema 版本 8→9；pytest 連跑 3 次、ruff、format、mypy 通過。
+- **C-107 UI e2e**：1120、768、360 px 無橫向捲動（表格捲動區除外）；主卡與「到 Google Flights 查看並訂票」在 1366×768 與 390×844 首屏可點；Tab 可走過所有按鈕與 summary；新舊資料混合不錯位、無 None；來回監看無回程班次；深淺色對比腳本重算；CSP 無違規；實際點開 3 條訂票連結（單程、來回、轉機）確認結果頁可依航班號碼找到該班。
+
+**實作期補記**：C-106 允許修改的既有斷言另含風控核可的 PRD 文案列（qa-reviewer 列舉四條，已記任務單 AC-F4）；C-40 切換併入 UI view model commit（tech-architect 同意）；`safe_booking_url()` 新增 runtime allowlist（https、google.com 或 www.google.com、/travel/flights），屬 Codex 第二意見的縱深防禦；列表過期門檻由 `SettingsService` listener 更新快取，直接改 DB 不在支援範圍。
