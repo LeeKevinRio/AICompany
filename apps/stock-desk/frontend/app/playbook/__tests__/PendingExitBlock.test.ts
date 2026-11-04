@@ -54,7 +54,7 @@ vi.mock("../../lib/queries", () => ({
   }),
 }));
 
-const { PendingExitBlock, leadWithReadAt } = await import("../PendingExitBlock");
+const { PendingExitBlock, leadWithReadAt, withNoBreakDates } = await import("../PendingExitBlock");
 const { default: PlaybookPage } = await import("../page");
 const { ExitReceiptStoreProvider } = await import("../../lib/exitReceiptContext");
 
@@ -427,7 +427,7 @@ describe("forbidden classes and attributes (風控 4.3, VP-12, VP-15, VP-23, R-6
   const classes = nodes.map((e) => e.attrs["class"] ?? "").join(" ");
 
   it.each([
-    "truncate", "line-clamp", "overflow-", "max-h-", "nowrap", "break-all", "sticky", "fixed", "absolute",
+    "truncate", "line-clamp", "overflow-", "max-h-", "break-all", "sticky", "fixed", "absolute",
     "hidden", "sr-only", "invisible", "opacity-", "text-ellipsis", "whitespace-pre", "keep-all",
     "line-through", "underline", "italic", "uppercase", "flex", "grid", "table", "rounded", "shadow",
     "transition", "animate", "list-disc", "list-decimal",
@@ -469,9 +469,158 @@ describe("forbidden classes and attributes (風控 4.3, VP-12, VP-15, VP-23, R-6
   it("the component source contains none of the forbidden tokens either", () => {
     const src = readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8");
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    for (const bad of ["truncate", "line-clamp", "overflow-", "max-h-", "nowrap", "break-all", "sticky", "aria-label=", "title=", "aria-describedby", "aria-live", "role="]) {
+    for (const bad of ["truncate", "line-clamp", "overflow-", "max-h-", "break-all", "sticky", "aria-label=", "title=", "aria-describedby", "aria-live", "role="]) {
       expect(code, bad).not.toContain(bad);
     }
+  });
+});
+
+/* ------------------------------------------------- ISO date no-break (VP-14) */
+
+const ISO_DATE_FULL = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Elements carrying a nowrap class that are NOT a bare ISO-date span inside a p. */
+function nowrapViolations(root: Node): Node[] {
+  return [root, ...all(root)].filter((e) => {
+    if (!(e.attrs["class"] ?? "").includes("nowrap")) return false;
+    const ok =
+      e.tag === "span" &&
+      e.attrs["class"] === "whitespace-nowrap" &&
+      Object.keys(e.attrs).length === 1 &&
+      e.children.length === 1 &&
+      typeof e.children[0] === "string" &&
+      ISO_DATE_FULL.test(e.children[0]) &&
+      e.parent !== null &&
+      e.parent.tag === "p";
+    return !ok;
+  });
+}
+
+function datedBlock(): PlaybookPendingExitBlock {
+  return block({
+    sections: [
+      section("covering", "SENTINEL-LABEL-covering", [
+        row(1, {
+          text: "T-A 2026-11-11 T-B 2026-11-12/2026-11-13 T-C",
+          notes: ["2026-11-05", "N-B no date", "N-C 2026-11-02 end"],
+          entry_before_exit_note: "ENTRY 2026-11-11 kept",
+        }),
+        row(2, { text: "SHARES 200 LOT 12345-67-891 AND 2026-1-1 AND 20261-11-11 AND 2026-11-111" }),
+        row(3, { text: "SENTINEL-PLAIN-3" }),
+      ]),
+    ],
+  });
+}
+
+describe("ISO date no-break span (VP-14, spec r1 section 7 exception)", () => {
+  const DATED_TEXT = "T-A 2026-11-11 T-B 2026-11-12/2026-11-13 T-C";
+
+  function datedRows(): Node[] {
+    return byTestId(blockNode(renderBlock(datedBlock())), "pending-exit-row");
+  }
+
+  it("wraps every ISO date in text, notes and the entry note, and nothing else is nowrap", () => {
+    const node = blockNode(renderBlock(datedBlock()));
+    const spans = all(node).filter((e) => e.tag === "span");
+    expect(spans.map(text)).toEqual([
+      "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-05", "2026-11-02", "2026-11-11",
+    ]);
+    expect(nowrapViolations(node)).toEqual([]);
+  });
+
+  it("each span holds only date characters, one text child, a class and nothing else", () => {
+    for (const span of all(blockNode(renderBlock(datedBlock()))).filter((e) => e.tag === "span")) {
+      expect(text(span)).toMatch(ISO_DATE_FULL);
+      expect(span.children).toHaveLength(1);
+      expect(span.attrs).toEqual({ class: "whitespace-nowrap" });
+      expect(span.parent!.tag).toBe("p");
+    }
+  });
+
+  it("textContent of every row paragraph equals the backend string byte for byte", () => {
+    const lis = datedRows();
+    expect(text(elems(lis[0]!)[0]!)).toBe(DATED_TEXT);
+    expect(elems(lis[0]!).slice(1).map(text)).toEqual(["2026-11-05", "N-B no date", "N-C 2026-11-02 end", "ENTRY 2026-11-11 kept"]);
+  });
+
+  it("adds no whitespace, no empty string and no extra text node around a span", () => {
+    const p = elems(datedRows()[0]!)[0]!;
+    expect(p.children.map((c) => (typeof c === "string" ? c : `<${text(c)}>`))).toEqual([
+      "T-A ", "<2026-11-11>", " T-B ", "<2026-11-12>", "/", "<2026-11-13>", " T-C",
+    ]);
+    // A date that is the whole string leaves exactly one child.
+    const only = elems(datedRows()[0]!)[1]!;
+    expect(only.children).toHaveLength(1);
+    expect(text(only)).toBe("2026-11-05");
+    expect(only.attrs["class"]).toBe("mt-1 break-words text-sm text-neutral-300");
+  });
+
+  it("the paragraph stays white-space: normal (no nowrap on it or any container)", () => {
+    const node = blockNode(renderBlock(datedBlock()));
+    for (const e of all(node).filter((n) => n.tag !== "span")) expect(e.attrs["class"] ?? "").not.toContain("nowrap");
+    expect(node.attrs["class"]).toBe("mb-6 mt-6");
+    expect(elems(datedRows()[0]!)[0]!.attrs["class"]).toBe("break-words text-sm text-neutral-100");
+  });
+
+  it("does not wrap digit runs that are not a lone ISO date", () => {
+    const p = elems(datedRows()[1]!)[0]!;
+    expect(p.children.every((c) => typeof c === "string")).toBe(true);
+    expect(text(p)).toBe("SHARES 200 LOT 12345-67-891 AND 2026-1-1 AND 20261-11-11 AND 2026-11-111");
+  });
+
+  it("a string with no date is returned unchanged and renders identically to a plain string", () => {
+    expect(withNoBreakDates("SENTINEL-PLAIN-3")).toBe("SENTINEL-PLAIN-3");
+    expect(withNoBreakDates("")).toBe("");
+    const p = elems(datedRows()[2]!)[0]!;
+    expect(p.children).toEqual(["SENTINEL-PLAIN-3"]);
+  });
+
+  it("lead, section lead and closing notes get the same treatment; title and labels are untouched; stamp is never wrapped", () => {
+    expect(formatDateTime("2026-10-28T00:00:00+00:00")).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    const stamp = formatDateTime("2026-10-28T00:00:00+00:00");
+    const b = datedBlock();
+    b.lead_template = "LEAD 2026-11-11 {read_at}";
+    b.sections[0]!.lead = "SLEAD 2026-11-11";
+    b.title = "TITLE 2026-11-11";
+    b.closing_notes = ["CLOSE 2026-11-11"];
+    const node = blockNode(renderBlock(b));
+    const [h2, lead, sec] = elems(node);
+    const closing = byTestId(node, "pending-exit-closing")[0]!;
+    expect(all(h2!).filter((n) => n.tag === "span")).toHaveLength(0);
+    for (const e of [lead!, elems(sec!)[1]!, closing]) {
+      expect(all(e).filter((n) => n.tag === "span").map(text)).toEqual(["2026-11-11"]);
+    }
+    expect(text(h2!)).toBe("TITLE 2026-11-11");
+    expect(text(lead!)).toBe(`LEAD 2026-11-11 ${stamp}`);
+    expect(text(closing)).toBe("CLOSE 2026-11-11");
+    expect(nowrapViolations(node)).toEqual([]);
+  });
+
+  it("never substitutes U+2011 or any other character for the hyphen (r2 constraint 3)", () => {
+    const markup = renderBlock(datedBlock());
+    expect(markup).not.toContain("\u2011");
+    expect(withNoBreakDates("2026-11-11")).toMatchObject({ props: { children: [expect.objectContaining({ props: expect.objectContaining({ children: "2026-11-11" }) })] } });
+    const src = readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8");
+    expect(src).not.toMatch(/\u2011|\u2010|\u00ad/i);
+    expect(src).not.toContain("\u2011");
+  });
+
+  it("the guard turns red when nowrap appears anywhere but on a bare date span", () => {
+    const bad = (m: string) => parse(m);
+    expect(nowrapViolations(bad('<p class="whitespace-nowrap">x</p>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<p><span class="whitespace-nowrap">not a date</span></p>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<p><span class="whitespace-nowrap" title="x">2026-11-11</span></p>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<p><span class="a whitespace-nowrap">2026-11-11</span></p>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<div><span class="whitespace-nowrap">2026-11-11</span></div>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<section class="text-nowrap"><p>x</p></section>'))).toHaveLength(1);
+    expect(nowrapViolations(bad('<p><span class="whitespace-nowrap">2026-11-11</span></p>'))).toHaveLength(0);
+  });
+
+  it("the source keeps exactly one nowrap token, on the date span", () => {
+    const src = readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code.match(/nowrap/g)).toHaveLength(1);
+    expect(code).toContain('className="whitespace-nowrap"');
   });
 });
 

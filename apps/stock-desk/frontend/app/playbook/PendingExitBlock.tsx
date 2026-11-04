@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { Fragment, useId, type ReactNode } from "react";
 import { formatDateTime } from "../lib/format";
 import { usePlaybookToday } from "../lib/queries";
 import type { PlaybookPendingExitBlock } from "../lib/types";
@@ -11,6 +11,35 @@ const READ_AT_PLACEHOLDER = "{read_at}";
  */
 export function leadWithReadAt(template: string, asOf: string): string {
   return template.replace(READ_AT_PLACEHOLDER, () => formatDateTime(asOf));
+}
+
+/**
+ * An ISO calendar date (`2026-11-11`) not embedded in a longer digit run.
+ * Browsers may break a line after a hyphen, which would split a date the user
+ * checks against a broker, so each match is kept on one line.
+ */
+const ISO_DATE = /(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/g;
+
+/**
+ * Render a backend string verbatim, wrapping only ISO date tokens in an inline
+ * `whitespace-nowrap` span. Only text nodes are split: no characters are added,
+ * dropped or reordered, and a string without a date is returned untouched.
+ */
+export function withNoBreakDates(value: string): ReactNode {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const m of value.matchAll(ISO_DATE)) {
+    if (m.index > last) parts.push(value.slice(last, m.index));
+    parts.push(
+      <span key={m.index} className="whitespace-nowrap">
+        {m[0]}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (parts.length === 0) return value;
+  if (last < value.length) parts.push(value.slice(last));
+  return <Fragment>{parts}</Fragment>;
 }
 
 /** True when the block carries at least one row; otherwise nothing is rendered. */
@@ -32,7 +61,9 @@ export function hasPendingExitRows(block: PlaybookPendingExitBlock): boolean {
  *
  * Presentation follows work/art/2026-11-04-待執行出清指令區塊-視覺規範.md r1
  * section 1.3 (class skeleton). Do not add truncation, overflow, sticky,
- * nowrap/break-all, aria-label, title or aria-describedby here.
+ * break-all, aria-label, title or aria-describedby here. `whitespace-nowrap` is allowed only on the
+ * ISO date span built by `withNoBreakDates` (spec r1 section 7 exception); never
+ * on a container.
  */
 export function PendingExitBlock() {
   const today = usePlaybookToday(true);
@@ -50,7 +81,7 @@ export function PendingExitBlock() {
         {block.title}
       </h2>
       <p className="mt-2 break-words text-sm text-neutral-300">
-        {leadWithReadAt(block.lead_template, data.as_of)}
+        {withNoBreakDates(leadWithReadAt(block.lead_template, data.as_of))}
       </p>
 
       {block.sections.map((s) => (
@@ -66,20 +97,20 @@ export function PendingExitBlock() {
             </h3>
           )}
           <p className={`${s.label !== null ? "mt-1 " : ""}break-words text-sm text-neutral-300`}>
-            {s.lead}
+            {withNoBreakDates(s.lead)}
           </p>
           <ul className="mt-2 divide-y divide-neutral-800 border-y border-neutral-800">
             {s.rows.map((r) => (
               <li key={`${r.symbol}-${r.batch_no}`} data-testid="pending-exit-row" className="py-3">
-                <p className="break-words text-sm text-neutral-100">{r.text}</p>
+                <p className="break-words text-sm text-neutral-100">{withNoBreakDates(r.text)}</p>
                 {r.notes.map((n, i) => (
                   <p key={i} className="mt-1 break-words text-sm text-neutral-300">
-                    {n}
+                    {withNoBreakDates(n)}
                   </p>
                 ))}
                 {r.entry_before_exit_note !== null && (
                   <p className="mt-1 break-words text-sm text-neutral-300">
-                    {r.entry_before_exit_note}
+                    {withNoBreakDates(r.entry_before_exit_note)}
                   </p>
                 )}
               </li>
@@ -94,7 +125,7 @@ export function PendingExitBlock() {
           data-testid="pending-exit-closing"
           className="mt-4 break-words text-sm text-neutral-300"
         >
-          {c}
+          {withNoBreakDates(c)}
         </p>
       ))}
     </section>
