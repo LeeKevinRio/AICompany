@@ -479,6 +479,28 @@ def same_day_warnings(
       there (W-B6 and W-B1d are N-168's). Those buys are not "judged as usual",
       so they are left out of ENTRY's lines and A's ``{line_count}`` (P5); a
       sentence whose count drops to zero is not rendered.
+
+    Known limit -- two snapshots (ADR-0035 補充四 釐清一 E-2, accepted; 風控
+    2026-11-04 第 11 點). ``blocked`` comes from the one in-flight read, taken
+    before the evaluation (補充四 2.3(c)); ``commit.logged`` is read later,
+    under the commit's write lock. The only trigger is a **concurrent
+    settlement**: between this request's in-flight read and its commit,
+    another request settles a different buy of the same batch, which moves
+    the batch from ``planned`` to ``open``. Inside that concurrency window,
+    ENTRY／A may state of a buy that G1 will refuse that the book will judge it
+    as usual -- the known residue of 風控 2026-11-01 必改 5, assigned to
+    F2／N-169. W-B6b does not list that buy in the same response; the next
+    ``/today`` reads the batch as no longer ``planned`` and moves the buy from
+    ENTRY／A to W-B6b. The reverse error cannot occur, because a batch never
+    returns to ``planned``. A single request never reaches this window: the
+    only batch change its commit can make is ``batch_skipped``, applied with an
+    R-series line written in that same commit (N172-C5), and K2 writes no
+    R-series line for a symbol that already has a logged R1 buy on the same
+    預定執行日, so that symbol's batches do not change in the commit
+    (``apply_effects`` applies neither ``batch_skipped`` nor a fill). A test
+    pins this premise. Re-reading ``blocked`` under the lock is vetoed (R-4,
+    and W-B6b and ENTRY／A would then come from two snapshots); removing the
+    residue needs a new 補充 from tech-architect.
     """
     warnings = list(evaluation.warnings)
     logged = commit.logged
