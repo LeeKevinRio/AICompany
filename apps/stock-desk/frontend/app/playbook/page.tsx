@@ -20,6 +20,7 @@ import { EmergencyExitDialog } from "./EmergencyExitDialog";
 import { ExitReceiptBanner } from "./ExitReceiptBanner";
 import { ExitTriggerButton } from "./ExitTriggerButton";
 import { ModeStatusBar } from "./ModeStatusBar";
+import { PendingExitBlock } from "./PendingExitBlock";
 import { PositionSnapshotTable } from "./PositionSnapshotTable";
 import { RuleSetConfirmPanel } from "./RuleSetConfirmPanel";
 import { SettlementPanel } from "./SettlementPanel";
@@ -147,6 +148,9 @@ export default function PlaybookPage() {
 
         {today.isSuccess && data !== undefined && (
           <>
+            {/* N-171 group A: first in the fragment, right after the receipt slot (art r1 section 1.1). */}
+            <PendingExitBlock />
+
             {/* 風控 R2 常駐歸屬語；EMPTY 契約：null 時不渲染整行。 */}
             {shouldRenderAttribution(data.attribution) && (
               <p className="mt-4 rounded-md border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200">
