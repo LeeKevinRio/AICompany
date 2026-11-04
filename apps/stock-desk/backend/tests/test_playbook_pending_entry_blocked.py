@@ -22,14 +22,20 @@ from __future__ import annotations
 
 import ast
 import inspect
+import itertools
 import sqlite3
+from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.deps import get_cap1_reading, get_playbook_service
+from app.api.playbook_cap1_wording import Cap1Reading
+from app.main import app
 from app.playbook import engine as engine_module
 from app.playbook import service as service_module
 from app.playbook import store as store_module
@@ -46,6 +52,7 @@ from app.playbook.store import (
     decision_key,
 )
 from tests import playbook_helpers as helper
+from tests.api_helpers import CLIENT_HEADERS
 from tests.same_day_helpers import (
     MONDAY,
     ONE_BUY_SHARES,
@@ -89,6 +96,9 @@ def _item(line: Directive) -> str:
 
 
 def _w_b6b(*lines: Directive) -> str:
+    # 風控 2026-11-04 第 10 點: the sentence says 「R 系列買進指令」, so every
+    # line it is expected to count is an R-series buy.
+    assert all(line.action == "buy" and line.rule_id in R_SERIES_RULE_IDS for line in lines)
     return wording.PENDING_ENTRY_BLOCKED_NOTE.format(
         blocked_count=len(lines), entry_items="、".join(_item(line) for line in lines)
     )
@@ -130,11 +140,17 @@ def test_w_b6b_is_the_ruling_sentence_verbatim() -> None:
 FORBIDDEN = ("需", "應", "建議", "務必", "盡快", "否則", "安全", "已取消", "已撤單", "你已買進")
 
 
+#: 風控 2026-11-04 第 9 點: the one exemption from 「應」, verbatim -- not every 「對應」.
+EXEMPT_CORRESPONDING = "對應的批次"
+
+
 def test_w_b6b_passes_the_string_guards() -> None:
     sentence = wording.PENDING_ENTRY_BLOCKED_NOTE
-    # 「對應」 is the ruling's own wording (「對應的批次」), approved as passing;
-    # the 禁用詞 「應」 is the modal "should", which it is not.
-    modal = sentence.replace("對應", "")
+    # The ruling's own 「對應的批次」 is not the modal "should"; exactly that phrase,
+    # exactly once, is exempt, and no other 「應」 may remain (e.g. 「對應該」).
+    assert sentence.count(EXEMPT_CORRESPONDING) == 1
+    modal = sentence.replace(EXEMPT_CORRESPONDING, "", 1)
+    assert modal.count("應") == 0
     for banned in FORBIDDEN:
         assert banned not in modal, banned
     assert "本系統不下單" in sentence
@@ -637,3 +653,194 @@ def test_a_is_not_rendered_but_b_is_when_only_decisions_are_left(desk: Desk) -> 
     assert not [warning for warning in run.warnings if "筆買賣指令" in warning]
     assert _entry_notes(run.warnings) == []
     assert _blocked_notes(run.warnings) == [_w_b6b(blocked)]
+
+
+# --- 風控 2026-11-04 第 8 點 (b)(c): authored modes only ---------------------------------
+
+
+@pytest.fixture
+def unauthored(tmp_path: Path) -> Desk:
+    """No submitted rule set, but a held batch and a blocked buy in the log."""
+    desk = open_desk(tmp_path / "playbook.db", seed=False)
+    desk.store.ensure_batches(["2330"], batches_per_target=3)
+    hold(desk.store, "2330", 1)
+    log_like_before_n172a(desk.store, [buy_line(execution_date=THURSDAY)])
+    assert not desk.store.rule_set_authorship(TUESDAY).user_authored
+    assert desk.store.read_in_flight().entries.blocked  # W-B6b would have a line
+    return desk
+
+
+@pytest.fixture
+def unauthored_client(unauthored: Desk) -> Iterator[TestClient]:
+    app.dependency_overrides[get_playbook_service] = lambda: unauthored.service
+    app.dependency_overrides[get_cap1_reading] = lambda: Cap1Reading(
+        weight=Decimal("0.10"), from_default=False
+    )
+    with TestClient(app, headers=CLIENT_HEADERS) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+def test_the_unauthored_path_neither_computes_nor_renders_w_b6b(
+    unauthored: Desk, unauthored_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``mode="unconfirmed"`` is outside 「不限模式」 (風控 2026-11-04 第 8 點): no
+    settlement, no G1 refusal, no ENTRY／A to correct."""
+    calls: list[str] = []
+
+    def refuse(name: str) -> Any:
+        def called(*args: Any, **kwargs: Any) -> Any:
+            calls.append(name)
+            raise AssertionError(name)
+
+        return called
+
+    monkeypatch.setattr(service_module, "g1_blocked_entries", refuse("g1_blocked_entries"))
+    monkeypatch.setattr(service_module, "same_day_warnings", refuse("same_day_warnings"))
+
+    run = unauthored.service.evaluate_today(today=TUESDAY)
+    response = unauthored_client.get("/api/playbook/today")
+
+    assert run.mode == "unconfirmed"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "unconfirmed"
+    fragment = "帳冊不會依這幾筆判定成交"
+    for warnings in (run.warnings, body["warnings"]):
+        assert _blocked_notes(warnings) == []
+        assert not [warning for warning in warnings if fragment in warning]
+    assert fragment not in response.text
+    assert calls == []
+
+
+@pytest.mark.parametrize("today", [TUESDAY, WEDNESDAY], ids=["schedule-day", "not-schedule-day"])
+def test_w_b6b_is_rendered_in_normal_mode(desk: Desk, today: date) -> None:
+    """Authored and not frozen: W-B6b is rendered, first (no FROZEN_NOTE)."""
+    stuck = buy_line(execution_date=THURSDAY)
+    log_like_before_n172a(desk.store, [stuck])
+    hold(desk.store, "2330", 1)
+
+    run = desk.service.evaluate_today(today=today)
+
+    assert run.mode == "normal"
+    assert desk.store.rule_set_authorship(today).user_authored
+    frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS["normal"])
+    assert frozen not in run.warnings
+    assert _blocked_notes(run.warnings) == [_w_b6b(stuck)]
+    assert run.warnings[0] == _w_b6b(stuck)
+
+
+# --- 風控 2026-11-04 第 10 點: R-series only, the item order, one item template ----------
+
+
+def test_every_buy_the_app_writes_is_an_r_series_line(tmp_path: Path) -> None:
+    """W-B6b says 「R 系列買進指令」 without filtering on ``rule_id`` (解讀點 9).
+    That holds only while every buy the app constructs is an R-series one: no
+    call in ``app/`` passes ``action="buy"`` without an R-series ``rule_id``,
+    and no update dict sets ``"action": "buy"``. A new buy source turns this
+    red, and W-B6b and ENTRY go back to 風控."""
+    app_root = Path(wording.__file__).resolve().parents[1]
+    sites: list[str] = []
+    for path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                pairs = zip(node.keys, node.values, strict=True)
+                assert not [
+                    key
+                    for key, value in pairs
+                    if isinstance(key, ast.Constant)
+                    and key.value == "action"
+                    and isinstance(value, ast.Constant)
+                    and value.value == "buy"
+                ], path
+            if not isinstance(node, ast.Call):
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            action = keywords.get("action")
+            if not (isinstance(action, ast.Constant) and action.value == "buy"):
+                continue
+            rule_id = keywords.get("rule_id")
+            assert isinstance(rule_id, ast.Constant), f"{path}:{node.lineno}"
+            assert rule_id.value in R_SERIES_RULE_IDS, f"{path}:{node.lineno}"
+            sites.append(f"{path.relative_to(app_root).as_posix()}:{rule_id.value}")
+    assert sites == ["playbook/engine.py:R1"]
+
+    # And at run time: the engine's own buy, blocked, is what W-B6b counts.
+    desk = open_desk(tmp_path / "playbook.db")
+    desk.service.evaluate_today(today=TUESDAY)
+    hold(desk.store, "2330", 1)
+    run = desk.service.evaluate_today(today=TUESDAY)
+    lines = [item.directive for item in g1_blocked_entries(desk.store.read_in_flight().entries)]
+    assert lines and all(line.rule_id in R_SERIES_RULE_IDS for line in lines)
+    assert _blocked_notes(run.warnings) == [_w_b6b(*lines)]
+
+
+def test_the_items_are_ordered_by_date_then_symbol_then_batch(desk: Desk) -> None:
+    """``{entry_items}`` ascends by (預定執行日, symbol, batch_no) whatever the read
+    order (風控 2026-11-01 共用定義, 2026-11-04 第 10 點). The lines are chosen
+    so each key decides over the next one: an earlier date wins over a larger
+    symbol, a smaller symbol over a smaller batch_no, and batch 2 sorts before
+    batch 10 (a number, not a string)."""
+    lines = [
+        buy_line(symbol="2454", batch_no=1, execution_date=WEDNESDAY),
+        buy_line(symbol="2330", batch_no=2, execution_date=THURSDAY),
+        buy_line(symbol="2330", batch_no=10, execution_date=THURSDAY),
+        buy_line(symbol="2454", batch_no=1, execution_date=THURSDAY),
+    ]
+    expected = sorted(lines, key=lambda line: (line.execution_date, line.symbol, line.batch_no))
+    assert expected == lines
+    evaluation = evaluation_of(desk.store, [])
+    for order in itertools.permutations(range(len(lines))):
+        warnings = same_day_warnings(
+            evaluation,
+            EvaluationCommit(written=[], logged=[]),
+            markets={},
+            batches=[],
+            portfolio=helper.portfolio(),
+            blocked=[PendingDirective(index + 1, lines[index]) for index in order],
+        )
+        assert _blocked_notes(warnings) == [_w_b6b(*expected)], order
+
+
+def test_the_item_template_exists_once(desk: Desk) -> None:
+    """ENTRY and W-B6b share :data:`wording.SAME_DAY_EARLIER_ENTRY_ITEM` (解讀點 10):
+    no second constant holds it, no other module spells it, and the service
+    formats it in one place that both sentences go through."""
+    item = wording.SAME_DAY_EARLIER_ENTRY_ITEM
+    assert [name for name, value in vars(wording).items() if value == item] == [
+        "SAME_DAY_EARLIER_ENTRY_ITEM"
+    ]
+    app_root = Path(wording.__file__).resolve().parents[1]
+    spelled = [
+        path.relative_to(app_root).as_posix()
+        for path in sorted(app_root.rglob("*.py"))
+        if path.name != "wording.py" and "批買進 {shares} 股" in path.read_text(encoding="utf-8")
+    ]
+    assert spelled == []
+    tree = ast.parse(Path(service_module.__file__).read_text(encoding="utf-8"))
+    users = [
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef)
+        and any(
+            isinstance(node, ast.Attribute) and node.attr == "SAME_DAY_EARLIER_ENTRY_ITEM"
+            for node in ast.walk(function)
+        )
+    ]
+    assert users == ["_entry_item"]
+    (reconcile,) = [
+        function
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef) and function.name == "same_day_warnings"
+    ]
+    called = [
+        node.func.id
+        for node in ast.walk(reconcile)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert called.count("_entry_item") == 2  # ENTRY, W-B6b
+    # Rendered, the two sentences carry the same item text for the same line.
+    line = buy_line()
+    rendered = _item(line)
+    assert rendered in _entry(line) and rendered in _w_b6b(line)
