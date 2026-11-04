@@ -469,7 +469,8 @@ export interface ExitFailureWording {
  * sentences — never split, merged, trimmed or reordered. The pre-merge text
  * (「…只暫停了 R 系列…而尚未產生賣出指令」) is untrue after N-166 and must not
  * return. Release-coupled with N-166: this text may only ship in a build that
- * carries it. The backend constants are the single approved source; a guard test
+ * carries it; paragraph 2 is also release-coupled with N-171 (see below). The
+ * backend constants are the single approved source; a guard test
  * reads `wording.py` and compares byte for byte.
  *
  * Paragraph 2 is 風控 2026-11-04 第 3 點's second version (three sentences, one

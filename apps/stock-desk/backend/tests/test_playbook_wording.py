@@ -886,18 +886,21 @@ _NB6_P2_FIRST = (
     "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
     "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
 )
-#: Fragments only the 2026-11-03 revision has; split so this file never holds them whole.
+#: The three places the 2026-11-03 revision differs from the second version
+#: (風控 2026-11-04 N-171-A 解讀點 3 (b)); split so this file never holds them whole.
 _NB6_P2_1103_ONLY = (
-    "區塊會列出" + "目前尚未結算的出清賣出指令",
-    "該區塊沒有出現" + "，不代表這次未受理",
+    "會列出" + "目前尚未結算",
+    "該區塊沒有出現" + "，",
     "指令結算後" + "也不再列於該區塊",
 )
 
 
 def _literals_everywhere() -> list[str]:
-    """Every string literal under backend ``app/`` and frontend ``app/`` (tests excluded).
+    """Every string *value* under backend ``app/`` and frontend ``app/`` (tests excluded).
 
-    Adjacent / ``+``-joined literals are joined first, so a split constant is one string.
+    Values, never source text (風控 解讀點 3 (a)): the AST already joins adjacent
+    Python literals, and ``"…" + "…"`` in the TS sources is joined before the
+    literals are read, so a constant split over lines is one string.
     """
     import ast
     from pathlib import Path
@@ -925,6 +928,7 @@ def test_nb6_paragraph_2_names_the_block_and_keeps_three_sentences() -> None:
     assert f"「{wording.PENDING_EXIT_BLOCK_TITLE}」區塊" in badge
     assert badge.count("。") == 3
     assert "所屬批次在帳冊仍記為持有" in badge
+    assert "應" not in badge  # no exemption at all (風控 解讀點 6)
     for banned in ("安全", "放心", "已執行", "已出清", "已成交", "全部尚未結算", "按取消"):
         assert banned not in badge
 
@@ -938,4 +942,5 @@ def test_nb6_paragraph_2_earlier_versions_are_gone_everywhere() -> None:
     second_count = sum(literal.count(second) for literal in literals)
     assert first_count == second_count >= 2  # backend constant and frontend mirror
     for fragment in _NB6_P2_1103_ONLY:
+        assert fragment not in second
         assert not any(fragment in literal for literal in literals), fragment

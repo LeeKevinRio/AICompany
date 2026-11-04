@@ -385,11 +385,13 @@ def test_the_settlement_unauthored_note_is_the_signed_off_text_verbatim() -> Non
     )
     note = wording.SETTLEMENT_UNAUTHORED_NOTE
     assert "{" not in note and "本系統不下單" in note
-    # 「本回應」 is the noun 回應 (the response), not the modal 應; exempted
-    # verbatim and exactly once, the way 風控 2026-11-04 第 9 點 narrows an
-    # exemption, and 應 must not appear anywhere else.
-    assert note.count("本回應") == 1
-    stripped = note.replace("本回應", "")
+    # 「本回應的」 is the noun 回應 (the response), not the modal 應; exempted
+    # verbatim -- the trailing 的 closes the right edge, so a later 「本回應該」
+    # cannot hide a modal -- and exactly once (風控 2026-11-04 N-171-A 解讀點 6,
+    # same principle as 第 9 點); 應 must not appear anywhere else.
+    assert note.count("本回應的") == 1
+    stripped = note.replace("本回應的", "")
+    assert "應" not in stripped
     for banned in BANNED:
         assert banned not in stripped, banned
 

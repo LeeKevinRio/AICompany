@@ -149,3 +149,9 @@ def test_the_retired_a2_is_gone_and_the_revision_scopes_to_held_batches() -> Non
     assert not any(RETIRED_A2 in literal for literal in literals)
     assert "所屬批次在帳冊仍記為持有" in wording.PENDING_EXIT_BLOCK_LEAD
     assert wording.PENDING_EXIT_BLOCK_LEAD.count("{read_at}") == 1
+
+
+def test_a2_and_a15_carry_no_modal_ying_and_get_no_exemption() -> None:
+    """風控 2026-11-04 N-171-A 解讀點 6: 「應」 is 0 in A-2 (revised) and A-15, no exemption."""
+    for name in ("PENDING_EXIT_BLOCK_LEAD", "PENDING_EXIT_SHARES_REDUCED_NOTE"):
+        assert "應" not in getattr(wording, name), name

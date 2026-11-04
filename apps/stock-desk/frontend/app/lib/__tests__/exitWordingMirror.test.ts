@@ -165,6 +165,7 @@ describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version
     expect(EXIT_FAILURE_WORDING.body[1]).toContain(`「${title}」區塊`);
     expect(EXIT_FAILURE_WORDING.body[1].match(/。/g)).toHaveLength(3);
     expect(EXIT_FAILURE_WORDING.body[1]).toContain("所屬批次在帳冊仍記為持有");
+    expect(EXIT_FAILURE_WORDING.body[1]).not.toContain("應");
   });
 
   it("no earlier version of paragraph 2 is left in the frontend sources (grep guard)", () => {
@@ -173,9 +174,12 @@ describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version
     const first =
       "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
       "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。";
+    // The three places the 2026-11-03 revision differs from the second version
+    // (風控 2026-11-04 N-171-A 解讀點 3 (b)). Every check below runs on joined
+    // string values, never on raw source text (解讀點 3 (a)).
     const retired1103 = [
-      "區塊會列出" + "目前尚未結算的出清賣出指令",
-      "該區塊沒有出現" + "，不代表這次未受理",
+      "會列出" + "目前尚未結算",
+      "該區塊沒有出現" + "，",
       "指令結算後" + "也不再列於該區塊",
     ];
     expect(EXIT_FAILURE_WORDING.body[1].startsWith(first)).toBe(true);
@@ -201,7 +205,15 @@ describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version
     expect(offenders).toEqual([]);
     expect(secondCount).toBe(1);
     expect(firstCount).toBe(secondCount);
-    for (const fragment of retired1103) expect(wording.includes(fragment)).toBe(false);
+    // wording.py: adjacent Python literals joined, so a split constant is one value.
+    const joinedWording = wording.replace(/"\s*\n\s*"/g, "");
+    for (const fragment of retired1103) {
+      expect(EXIT_FAILURE_WORDING.body[1]).not.toContain(fragment);
+      expect(joinedWording.includes(fragment)).toBe(false);
+    }
+    expect(joinedWording.split(first).length - 1).toBe(
+      joinedWording.split(EXIT_FAILURE_WORDING.body[1]).length - 1,
+    );
   });
 
   it("does not contain the retired pre-merge text, neither paragraph 1's 「只暫停了」 nor the unqualified paragraph 3", () => {
