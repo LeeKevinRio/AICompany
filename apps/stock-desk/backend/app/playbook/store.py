@@ -236,6 +236,21 @@ _R_SERIES_PLACEHOLDERS = ", ".join("?" for _ in R_SERIES_RULE_IDS)
 UNKEYED_RULE_IDS: tuple[str, ...] = ("EMERGENCY", "REBALANCE")
 _UNKEYED_PLACEHOLDERS = ", ".join("?" for _ in UNKEYED_RULE_IDS)
 
+#: 「批次已非 planned」 (ADR-0035 補充一 S-1; ADR-0034 補充一 S-1 第 3 點; 補充四
+#: S-5 第 4 點): a batch row with the line's ``(symbol, batch_no)`` exists and
+#: has left ``planned``. A SQL condition over the ``playbook_directives`` row in
+#: scope, and the one definition of it: G1's refusal in
+#: :meth:`PlaybookStore.claim_directive`, the reason pick in
+#: :meth:`PlaybookStore.batch_blocking_claim` and the in-flight G1 擋下類 in
+#: :func:`_read_entry_before_exit` all splice this constant, so they cannot
+#: drift apart; N-168 splices it too. A missing batch row or a NULL ``batch_no``
+#: matches no row (``=`` is never true for NULL), so neither is G1's.
+BATCH_LEFT_PLANNED_SQL = (
+    "EXISTS (SELECT 1 FROM playbook_batches AS b "
+    "WHERE b.symbol = playbook_directives.symbol "
+    "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned')"
+)
+
 #: N172-C5: effects that belong to the R-series line they came with. They are
 #: applied with that line, in the same transaction, and never without it: a
 #: repeated evaluation whose line is not written may not count a deferral (V2)
@@ -293,7 +308,16 @@ class PendingExitRead(NamedTuple):
 
 
 class EntryBeforeExitRead(NamedTuple):
-    """N-168's part of :class:`InFlightRead` (ADR-0034 補充一 S-3). Empty in the seam."""
+    """N-168's part of :class:`InFlightRead` (ADR-0034 補充一 S-3).
+
+    ``blocked`` is N-182's (補充四 S-5 第 4 點): the G1 擋下類 source N-168
+    builds on. N-168 adds its own fields next to it.
+    """
+
+    #: Every unsettled pending buy G1 refuses -- its batch has left ``planned``
+    #: (:data:`BATCH_LEFT_PLANNED_SQL`) -- due or not, oldest first, duplicates
+    #: kept (風控 2026-11-01 P2(d), W-B6b).
+    blocked: tuple[PendingDirective, ...] = ()
 
 
 class InFlightRead(NamedTuple):
@@ -315,9 +339,16 @@ def _read_pending_exits(conn: sqlite3.Connection) -> PendingExitRead:
 
 
 def _read_entry_before_exit(conn: sqlite3.Connection) -> EntryBeforeExitRead:
-    """N-168's in-flight read on ``conn``. A stub in the seam: no statement runs."""
-    del conn
-    return EntryBeforeExitRead()
+    """N-168's in-flight read on ``conn``, inside :meth:`PlaybookStore.read_in_flight`.
+
+    N-182: the G1 擋下類, by G1's own condition. N-168 extends this read.
+    """
+    rows = conn.execute(
+        f"SELECT {_PENDING_SELECT} FROM playbook_directives "
+        "WHERE action = 'buy' AND settled = 0 AND status = 'pending' "
+        f"AND {BATCH_LEFT_PLANNED_SQL} ORDER BY id ASC"
+    ).fetchall()
+    return EntryBeforeExitRead(blocked=tuple(_row_to_pending(row) for row in rows))
 
 
 class EvaluationCommit(NamedTuple):
@@ -1329,16 +1360,15 @@ class PlaybookStore:
         batch. A batch is bought once in its life -- :meth:`ensure_batches`
         never resets one -- so a buy whose batch already left ``planned`` is
         not claimed at all, in the same ``UPDATE``, and nothing reaches the
-        book. That row stays unsettled; :meth:`batch_blocking_claim` tells it
-        apart from a row someone else claimed (N172-T21).
+        book. The condition is :data:`BATCH_LEFT_PLANNED_SQL`. That row stays
+        unsettled; :meth:`batch_blocking_claim` tells it apart from a row
+        someone else claimed (N172-T21).
         """
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 "UPDATE playbook_directives SET settled = 1, settled_at = ?, "
                 "settled_open_price = ?, status = ? WHERE id = ? AND settled = 0 "
-                "AND (action <> 'buy' OR NOT EXISTS (SELECT 1 FROM playbook_batches AS b "
-                "WHERE b.symbol = playbook_directives.symbol "
-                "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned'))",
+                f"AND (action <> 'buy' OR NOT {BATCH_LEFT_PLANNED_SQL})",
                 (datetime.now(UTC).isoformat(), str(open_price), status, directive_id),
             )
             return cursor.rowcount == 1
@@ -1354,10 +1384,11 @@ class PlaybookStore:
         """
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT b.status FROM playbook_directives AS d JOIN playbook_batches AS b "
-                "ON b.symbol = d.symbol AND b.batch_no = d.batch_no "
-                "WHERE d.id = ? AND d.settled = 0 AND d.action = 'buy' "
-                "AND b.status <> 'planned'",
+                "SELECT (SELECT batch.status FROM playbook_batches AS batch "
+                "WHERE batch.symbol = playbook_directives.symbol "
+                "AND batch.batch_no = playbook_directives.batch_no) "
+                "FROM playbook_directives WHERE id = ? AND settled = 0 AND action = 'buy' "
+                f"AND {BATCH_LEFT_PLANNED_SQL}",
                 (directive_id,),
             ).fetchone()
         if row is None:
