@@ -1737,8 +1737,9 @@ export interface PlaybookDirectiveLine {
   //: W-B2L for a sell line of a labeled batch, in a field of its own — never
   //: part of `line` (ADR-0034 補充一 S-3 第 4 點; ADR-0035 補充四 2.2(b)/(d)).
   //: Owner N-168: non-null only on an S/P/EMERGENCY sell of a batch carrying
-  //: W-B2 (an S2 line, `batch_no` null, when any batch of its symbol does);
-  //: render it on the same row as `line`, unfolded, never as a tooltip.
+  //: W-B2 — W-B2L; on an S2 line (`batch_no` null) of a symbol with such a
+  //: batch it is W-B2LS (+ W-B2LSr) or W-B2LSf instead, already composed.
+  //: Render it verbatim on the same row as `line`, unfolded, never as a tooltip.
   //: Optional because an older backend does not send it; a missing key reads as `null`.
   entry_before_exit_note?: string | null;
 }
