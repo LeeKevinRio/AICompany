@@ -22,7 +22,7 @@ trailing stop reads it on the same day's close.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -297,6 +297,49 @@ def _is_exit_sell(directive: Directive) -> bool:
     return directive.rule_id == "EMERGENCY" and directive.action == "sell"
 
 
+class ExitBatchClass(NamedTuple):
+    """One open batch and its unsettled EMERGENCY sells, split under 判準 Z.
+
+    ``live`` still cover the batch, ``stale`` no longer do; both keep the
+    order of :attr:`EmergencyExitState.covering` (oldest first). A batch with
+    neither is still listed -- the exit writes it a new line.
+    """
+
+    batch: BatchState
+    live: list[PendingDirective]
+    stale: list[PendingDirective]
+
+
+def classify_exit_batches(
+    state: EmergencyExitState, series_for: Callable[[str], Sequence[PriceBar]]
+) -> list[ExitBatchClass]:
+    """判準 Z for every open batch of ``state``, one entry each, in batch order. Pure.
+
+    The single place EMERGENCY sells are told apart (ADR-0039 Decision 3,
+    N171-C2″): :func:`plan_emergency_exit` decides from it under the write
+    lock, and ``/today``'s pending-exit block classifies with it after the
+    settlement. Each line is judged by :func:`exit_line_still_covers` alone,
+    on ``series_for(symbol)`` -- the exit's preloaded series, or on ``/today``
+    the very series the settlement judged N1 on (``SettlementRun.loaded``), so
+    the two pages of one response cannot disagree (風控 P-1). A line without a
+    ``batch_no`` belongs to no batch and is in no entry.
+    """
+    lines: dict[tuple[str, int], list[PendingDirective]] = {}
+    for item in state.covering:
+        if item.directive.batch_no is not None:
+            lines.setdefault((item.directive.symbol, item.directive.batch_no), []).append(item)
+
+    classes: list[ExitBatchClass] = []
+    for batch in state.open_batches:
+        bars = series_for(batch.symbol)
+        live: list[PendingDirective] = []
+        stale: list[PendingDirective] = []
+        for item in lines.get((batch.symbol, batch.batch_no), []):
+            (live if exit_line_still_covers(item.directive, bars) else stale).append(item)
+        classes.append(ExitBatchClass(batch=batch, live=live, stale=stale))
+    return classes
+
+
 def plan_emergency_exit(
     state: EmergencyExitState,
     *,
@@ -320,39 +363,31 @@ def plan_emergency_exit(
     with an unsettled EMERGENCY sell that still covers it under
     :func:`exit_line_still_covers` keeps it, and it is reported instead -- with
     every such line. Lines that no longer cover are reported as ``stale``
-    (S10) and are not cancelled.
+    (S10) and are not cancelled. Which line is which is
+    :func:`classify_exit_batches`'s call.
     """
-    lines: dict[tuple[str, int], list[PendingDirective]] = {}
-    for item in state.covering:
-        if item.directive.batch_no is not None:
-            lines.setdefault((item.directive.symbol, item.directive.batch_no), []).append(item)
-
     directives: list[Directive] = []
     warnings: list[str] = []
     covered: list[BatchState] = []
     stale: list[wording.ExitStale] = []
     live_ids: set[int] = set()
-    for batch in state.open_batches:
+    for entry in classify_exit_batches(
+        state, lambda symbol: loaded.get(symbol, NOTHING_LOADED).bars
+    ):
+        batch = entry.batch
         series = loaded.get(batch.symbol, NOTHING_LOADED)
-        live: list[int] = []
-        stale_dates: list[date] = []
-        for item in lines.get((batch.symbol, batch.batch_no), []):
-            if exit_line_still_covers(item.directive, series.bars):
-                live.append(item.directive_id)
-            else:
-                stale_dates.append(item.directive.execution_date)
-        if stale_dates:
+        if entry.stale:
             stale.append(
                 wording.ExitStale(
                     symbol=batch.symbol,
                     batch_no=batch.batch_no,
                     shares=batch.remaining_shares,
-                    dates=tuple(stale_dates),
+                    dates=tuple(item.directive.execution_date for item in entry.stale),
                 )
             )
-        if live:
+        if entry.live:
             covered.append(batch)
-            live_ids.update(live)
+            live_ids.update(item.directive_id for item in entry.live)
             continue
         snapshot = build_market_snapshot(
             batch.symbol,
