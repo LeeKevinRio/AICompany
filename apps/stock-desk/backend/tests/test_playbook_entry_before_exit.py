@@ -1122,6 +1122,24 @@ def test_the_w_b2l_rule_on_lines() -> None:
 # --- 補充四釐清七 E-30 第 5 點 (a)～(d): premise P on an S2 line ------------------------
 
 
+def test_m1_shares_of_a_thousand_or_more_print_as_plain_integers() -> None:
+    """風控 2026-11-04 第 4 點 (撤回 ``_format_shares``), pinned with 1234 shares
+    (qa-reviewer M-1): every other test uses fewer than 1000, where both look alike."""
+    item = "2330第 1 批 1234 股"
+    w_b7 = wording.exit_entry_notes(
+        wording.ExitEntries(labeled=(wording.ExitLabeled("2330", 1, 1234),)),
+        describes_lines=True,
+    )
+    assert w_b7 == _w_b7(("2330", 1, 1234))
+    w_b2ls = _s2_note(1234, (_label(1, WEDNESDAY, 1234, open_shares=1234),))
+    assert w_b2ls == _w_b2ls((1, WEDNESDAY, 1234), shares=1234)
+    w_b2lsf = _s2_note(1000, (_label(1, WEDNESDAY, 1234, open_shares=1234),))
+    assert w_b2lsf == _w_b2lsf((1, WEDNESDAY, 1234))
+    for text in (w_b7, w_b2ls, w_b2lsf):
+        assert text is not None
+        assert item in text and "1,234" not in text
+
+
 def test_e30a_p_holds_with_and_without_w_b2lsr() -> None:
     """P: ``shares`` == the symbol's open shares in the labels' book, items ≤ ``shares``."""
     exact = (_label(1, WEDNESDAY, 666, open_shares=666),)
@@ -1430,7 +1448,9 @@ def test_e11_w_b2l_is_rendered_by_one_rule_only() -> None:
     """QB-13 as 補充四釐清六 E-26 第 4 點 words it: AST only, docstrings and comments
     aside. The W-B2L family is read in ``entry_before_exit_note`` alone, which is
     called exactly twice in ``app/`` -- ``_lines`` and ``_labeled_snapshot`` -- and
-    never from N-171's code (第 3 點)."""
+    never from N-171's code (第 3 點). Nothing may take a name of the family into
+    another module either -- ``from app.playbook.wording import …`` and a bare
+    ``Name`` use would slip past the attribute scan (qa-reviewer L-1)."""
     app_root = Path(wording.__file__).resolve().parents[1]
     family = {
         "ENTRY_BEFORE_EXIT_NOTE",
@@ -1440,6 +1460,7 @@ def test_e11_w_b2l_is_rendered_by_one_rule_only() -> None:
     }
     readers: list[tuple[str, str, str]] = []
     calls: list[tuple[str, str]] = []
+    smuggled: list[tuple[str, str]] = []
     for path in sorted(app_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
@@ -1453,6 +1474,14 @@ def test_e11_w_b2l_is_rendered_by_one_rule_only() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and node.attr in family:
                 readers.append((where, owner_of(node), node.attr))
+            if isinstance(node, ast.ImportFrom):
+                smuggled.extend(
+                    (where, alias.name)
+                    for alias in node.names
+                    if alias.name in family or alias.name == "*"
+                )
+            if isinstance(node, ast.Name) and node.id in family and where != "playbook/wording.py":
+                smuggled.append((where, node.id))
             if isinstance(node, ast.Call) and (
                 getattr(node.func, "id", None) == "entry_before_exit_note"
                 or getattr(node.func, "attr", None) == "entry_before_exit_note"
@@ -1465,6 +1494,24 @@ def test_e11_w_b2l_is_rendered_by_one_rule_only() -> None:
         ("api/playbook.py", "_lines"),
         ("playbook/service.py", "_labeled_snapshot"),
     ]
+    assert smuggled == []
+
+
+def test_e11_the_scan_sees_an_imported_name() -> None:
+    """L-1's scan itself: a module importing a family name is reported."""
+    tree = ast.parse(
+        "from app.playbook.wording import ENTRY_BEFORE_EXIT_SYMBOL_NOTE as note\n"
+        "text = ENTRY_BEFORE_EXIT_NOTE\n"
+    )
+    imported = [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    ]
+    named = [node.id for node in ast.walk(tree) if isinstance(node, ast.Name)]
+    assert imported == ["ENTRY_BEFORE_EXIT_SYMBOL_NOTE"]
+    assert "ENTRY_BEFORE_EXIT_NOTE" in named
 
 
 def test_e26_both_callers_get_the_one_labeled_tuple_of_the_response(
