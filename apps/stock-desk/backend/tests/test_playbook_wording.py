@@ -761,9 +761,16 @@ def test_the_nb6_label_and_first_two_paragraphs_are_the_signed_off_wording_verba
         "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
         "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。"
     )
+    # Paragraph 2 is 風控 2026-11-04 第 3 點's second version (ADR-0039 補充一 S-7 第 2 點).
     assert wording.EXIT_RESULT_UNCONFIRMED_BADGE == (
-        "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
-        "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+        "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）"
+        "目前是否已暫停，但不會顯示賣出指令；若這次送出前 R 系列就已暫停，"
+        "徽章也無法顯示這次是否已受理。重新取得資料後，"
+        "排程台上的「全部出清產生、尚未結算的賣出指令」區塊會列出所屬批次在帳冊仍記為持"
+        "有、尚未結算的出清賣出指令；若這次送出前就已有這類指令，"
+        "該區塊也無法顯示這次是否已受理。該區塊沒有出現或未列出某一批，"
+        "不代表這次未受理：例如沒有持有批次時不會產生賣出指令，指令結算後、"
+        "或所屬批次在帳冊已不再記為持有時，也不再列於該區塊。"
     )
     parts = (
         wording.EXIT_RESULT_UNCONFIRMED_LABEL,
@@ -868,3 +875,67 @@ def test_the_n172a_sentences_live_in_wording_only_and_the_store_never_imports_it
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert not [name for name in imported if "wording" in name]
+
+
+# --- NB-6 第 2 段第二版（風控 2026-11-04 第 3 點；ADR-0039 Decision 13、補充一 S-7 第 2 點） ----
+
+#: The first version of paragraph 2 is exactly the second version's first
+#: sentence, so "grep 為 0" means: it never stands alone as a whole literal and
+#: never appears except as the opening of the second version.
+_NB6_P2_FIRST = (
+    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
+    "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+)
+#: Fragments only the 2026-11-03 revision has; split so this file never holds them whole.
+_NB6_P2_1103_ONLY = (
+    "區塊會列出" + "目前尚未結算的出清賣出指令",
+    "該區塊沒有出現" + "，不代表這次未受理",
+    "指令結算後" + "也不再列於該區塊",
+)
+
+
+def _literals_everywhere() -> list[str]:
+    """Every string literal under backend ``app/`` and frontend ``app/`` (tests excluded).
+
+    Adjacent / ``+``-joined literals are joined first, so a split constant is one string.
+    """
+    import ast
+    from pathlib import Path
+
+    backend_app = Path(wording.__file__).resolve().parents[1]
+    literals = [
+        node.value
+        for path in sorted(backend_app.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    frontend_app = backend_app.parents[1] / "frontend" / "app"
+    joiner = re.compile(r'"\s*\+\s*"')
+    for path in sorted(frontend_app.rglob("*.ts*")):
+        if "__tests__" in path.parts or "node_modules" in path.parts:
+            continue
+        source = joiner.sub("", path.read_text(encoding="utf-8"))
+        literals.extend(re.findall(r'"((?:[^"\\\n]|\\.)*)"', source))
+    return literals
+
+
+def test_nb6_paragraph_2_names_the_block_and_keeps_three_sentences() -> None:
+    badge = wording.EXIT_RESULT_UNCONFIRMED_BADGE
+    assert wording.PENDING_EXIT_BLOCK_TITLE in badge
+    assert f"「{wording.PENDING_EXIT_BLOCK_TITLE}」區塊" in badge
+    assert badge.count("。") == 3
+    assert "所屬批次在帳冊仍記為持有" in badge
+    for banned in ("安全", "放心", "已執行", "已出清", "已成交", "全部尚未結算", "按取消"):
+        assert banned not in badge
+
+
+def test_nb6_paragraph_2_earlier_versions_are_gone_everywhere() -> None:
+    literals = _literals_everywhere()
+    second = wording.EXIT_RESULT_UNCONFIRMED_BADGE
+    assert second.startswith(_NB6_P2_FIRST) and second != _NB6_P2_FIRST
+    assert _NB6_P2_FIRST not in literals  # never a whole constant on its own
+    first_count = sum(literal.count(_NB6_P2_FIRST) for literal in literals)
+    second_count = sum(literal.count(second) for literal in literals)
+    assert first_count == second_count >= 2  # backend constant and frontend mirror
+    for fragment in _NB6_P2_1103_ONLY:
+        assert not any(fragment in literal for literal in literals), fragment

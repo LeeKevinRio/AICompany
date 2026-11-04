@@ -559,6 +559,15 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
 #: copied verbatim from the ruling; the playbook never emits these strings -- the
 #: client mirrors them and these constants are the single approved source.
 #: Release-coupled with N-166 like paragraph 3.
+#:
+#: Paragraph 2 (:data:`EXIT_RESULT_UNCONFIRMED_BADGE`) is the 風控 2026-11-04 第 3 點
+#: second version: three sentences, one paragraph -- never split, merged or
+#: reordered. It names the N-171 block by :data:`PENDING_EXIT_BLOCK_TITLE`
+#: verbatim and scopes it to batches the book still holds, so it may only ship
+#: in a build that carries that block, with a backend no older than the client
+#: (風控 2026-11-03 上線耦合); its earlier versions may not come back. Replaced
+#: atomically with the client mirror and both guard tests (ADR-0039 Decision 13).
+#: Re-reviewed when group B ships.
 EXIT_RESULT_UNCONFIRMED_LABEL = "無法確認全部出清的處理結果"
 EXIT_RESULT_UNCONFIRMED_STATES = (
     "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
@@ -567,6 +576,11 @@ EXIT_RESULT_UNCONFIRMED_STATES = (
 EXIT_RESULT_UNCONFIRMED_BADGE = (
     "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
     "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+    "重新取得資料後，"
+    "排程台上的「全部出清產生、尚未結算的賣出指令」區塊會列出所屬批次在帳冊仍記為持有、"
+    "尚未結算的出清賣出指令；若這次送出前就已有這類指令，該區塊也無法顯示這次是否已受理。"
+    "該區塊沒有出現或未列出某一批，不代表這次未受理：例如沒有持有批次時不會產生賣出指令，"
+    "指令結算後、或所屬批次在帳冊已不再記為持有時，也不再列於該區塊。"
 )
 
 #: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
