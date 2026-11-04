@@ -941,3 +941,8 @@ golden 中只有 `after_exit` 情境會被 N-168 改到。這個情境的設定�
  - N-171 各行的 note 只從 `DirectiveLine` 複製；
  - 後合併的一方已補上整合測試。
  - E-11 第 6 點。
+
+
+（coordinator 2026-11-04 附加：釐清三原文轉存自 `work/reviews/2026-11-04-ADR0035補充四釐清三-tech-architect.md`）
+
+## 釐清三（tech-architect 2026-11-04，回應 `work/reviews/2026-11-04-N182補件交件-dev-lead.md` 第四段第 3 點）：`_settle_pending` 開頭的 `pending_directives(on_or_before=as_of)` 與 `_with_stale_exit_notes` 內的 `pending_directives()` 屬於結算自身的讀取，不是 R-4 的在途讀取點；條件是這類讀取只出現在 `_settle_pending` 及其呼叫的 helper 內，結果只進 `SettlementResult`，不得被 N-171、N-168、N-182 的任何在途清單、W-B6／W-B6b、ENTRY／A 的排除所引用；在結算內為在途清單新增讀取，仍屬 R-4；qa-reviewer 依 QB-7 grep 時，以這兩處為僅有的白名單，第三處即 BLOCKING。
