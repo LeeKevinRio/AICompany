@@ -335,7 +335,16 @@ const SCANNED_FILES = [
   "../../playbook/DirectiveLedger.tsx",
   "../../playbook/PositionSnapshotTable.tsx",
   "../../playbook/SettlementPanel.tsx",
-  "../../playbook/EmergencyExitControl.tsx",
+  // 出清畫面 Q14 重構 (tech-architect): the old `EmergencyExitControl` was split
+  // into the dialog, the page-level flow hook, the trigger and the receipt banner.
+  // The same hard-coded, risk-approved literals (step headings, the four button
+  // labels, 「送出中…」, the banner's container) live in these files now.
+  "../../playbook/EmergencyExitDialog.tsx",
+  "../../playbook/ExitTriggerButton.tsx",
+  "../../playbook/ExitReceiptBanner.tsx",
+  "../../playbook/useEmergencyExitFlow.ts",
+  "../exitDialogState.ts",
+  "../exitReceipt.ts",
   // 規則集確認 + 資本設定入口 (派工單 2026-08-12): the block's own functional
   // labels (區塊標題／小標／資本欄標籤／按鈕／失敗標籤), the two sentences stating
   // what confirming means and the 資金用途句 next to the capital field (五輪定稿

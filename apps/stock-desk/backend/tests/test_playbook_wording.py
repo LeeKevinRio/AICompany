@@ -218,20 +218,46 @@ def test_the_exit_confirmation_has_four_checks_and_no_fast_market_note() -> None
 
 
 def test_the_degraded_freeze_check_states_the_freeze_without_inventing_numbers() -> None:
-    """四輪收斂裁決: 降級句只說「暫停」與「兩個數字這次取不到」，不得補假數字."""
+    """風控 Q8 1b: 降級句只說「暫停」與「兩個數字這次取不到」，只承諾恢復日於受理後顯示."""
     sentence = wording.EXIT_CONFIRM_FREEZE_DEGRADED
 
     assert sentence == (
         "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
-        "兩者於送出後的執行結果中顯示。"
+        "預計恢復日會在受理後的執行結果中顯示。"
     )
     assert not re.findall(r"\d", sentence)
     assert "{" not in sentence
     assert "—" not in sentence
+    # 舊句的「兩者於送出後的執行結果中顯示」在送出失敗與 S7（只有恢復日）時不實，不得回歸。
+    assert "兩者" not in sentence
+    assert "於送出後的執行結果中顯示" not in sentence
     # 降級句只服務降級分支：正常路徑的四句裡不得出現它。
     assert sentence not in wording.exit_confirm_checks(
         freeze_days=20, freeze_until=date(2026, 9, 9)
     )
+
+
+def test_the_degraded_check_differs_from_the_formal_one_only_in_the_second_sentence() -> None:
+    """前端逐句比對靠這個：降級清單與正式清單只有第 2 句不同，其餘三句逐字相同."""
+    formal = wording.exit_confirm_checks(freeze_days=20, freeze_until=date(2026, 9, 9))
+    degraded = (
+        wording.EXIT_CONFIRM_CHECKS[0],
+        wording.EXIT_CONFIRM_FREEZE_DEGRADED,
+        wording.EXIT_CONFIRM_CHECKS[2],
+        wording.EXIT_CONFIRM_CHECKS[3],
+    )
+    assert [i for i, (a, b) in enumerate(zip(formal, degraded, strict=True)) if a != b] == [1]
+
+
+def test_the_checks_updated_notice_is_the_signed_off_sentence() -> None:
+    """風控 Q11 N1 逐字定稿；只陳述事實，不勸阻、不倒數、不提模式或資料過時."""
+    notice = wording.EXIT_CONFIRM_CHECKS_UPDATED
+
+    assert notice == "核取句已依最新取得的資料更新，有變動的項目已改為未勾選，請重新閱讀後再勾選。"
+    assert "{" not in notice
+    assert not re.findall(r"\d", notice)
+    for banned in ("模式", "過時", "錯誤", "安全", "放心", "請勿", "務必", "立即", "倒數"):
+        assert banned not in notice
 
 
 def test_the_three_post_submit_sentences_all_carry_the_freeze_day_count() -> None:
@@ -726,6 +752,32 @@ def test_the_nb6_retry_paragraph_is_the_revised_version_verbatim() -> None:
     for banned in ("安全", "放心", "已執行", "已出清", "先前那次是否"):
         assert banned not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
     assert "{" not in wording.EXIT_RESULT_UNCONFIRMED_RETRY
+
+
+def test_the_nb6_label_and_first_two_paragraphs_are_the_signed_off_wording_verbatim() -> None:
+    """守門: 標籤、第 1 句、第 2 句逐字；不斷言已處理或未處理；不含禁用詞."""
+    assert wording.EXIT_RESULT_UNCONFIRMED_LABEL == "無法確認全部出清的處理結果"
+    assert wording.EXIT_RESULT_UNCONFIRMED_STATES == (
+        "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
+        "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。"
+    )
+    assert wording.EXIT_RESULT_UNCONFIRMED_BADGE == (
+        "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
+        "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+    )
+    parts = (
+        wording.EXIT_RESULT_UNCONFIRMED_LABEL,
+        wording.EXIT_RESULT_UNCONFIRMED_STATES,
+        wording.EXIT_RESULT_UNCONFIRMED_BADGE,
+        wording.EXIT_RESULT_UNCONFIRMED_RETRY,
+    )
+    for part in parts:
+        assert "{" not in part
+        for banned in ("安全", "放心", "已執行", "已出清", "未確認", "請關閉", "視窗"):
+            assert banned not in part
+    # 合併前版本的「只暫停了……而尚未產生賣出指令」在 N-166 之後是不實陳述，不得回來。
+    assert "只暫停了" not in wording.EXIT_RESULT_UNCONFIRMED_STATES
+    assert "尚未產生賣出指令" not in wording.EXIT_RESULT_UNCONFIRMED_STATES
 
 
 # --- N-172a (ADR-0035；風控 CEO #87 回審 二-1、二-2、二-3)：逐字與落點 ------------------
