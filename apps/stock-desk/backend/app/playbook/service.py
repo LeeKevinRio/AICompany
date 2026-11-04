@@ -33,6 +33,7 @@ from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
 from app.playbook import indicators, wording
 from app.playbook.engine import (
+    _symbol_average_cost,
     emergency_mode_reason,
     evaluate,
     is_usable,
@@ -738,9 +739,25 @@ def labeled_batches_of(batches: Sequence[BatchState]) -> tuple[LabeledBatch, ...
     batch is open -- through the end of the freeze too -- and stops when it
     closes. A labeled batch always has an ``entry_date``: both are written by
     the same fill.
+
+    Both share counts are read from ``batches`` itself, the list the caller's
+    lines were computed on (補充四釐清七 E-29): the batch's ``remaining_shares``,
+    and its symbol's open shares through the engine's own
+    ``_symbol_average_cost`` -- the very count an S2 line on this list carries
+    -- so no second open／cost／shares predicate exists.
     """
+    open_shares = {
+        symbol: _symbol_average_cost([batch for batch in batches if batch.symbol == symbol])[1]
+        for symbol in {batch.symbol for batch in batches}
+    }
     return tuple(
-        LabeledBatch(symbol=batch.symbol, batch_no=batch.batch_no, entry_date=batch.entry_date)
+        LabeledBatch(
+            symbol=batch.symbol,
+            batch_no=batch.batch_no,
+            entry_date=batch.entry_date,
+            remaining_shares=batch.remaining_shares,
+            symbol_open_shares=open_shares[batch.symbol],
+        )
         for batch in batches
         if batch.status == "open"
         and batch.entry_before_exit_on is not None
@@ -748,26 +765,89 @@ def labeled_batches_of(batches: Sequence[BatchState]) -> tuple[LabeledBatch, ...
     )
 
 
-def entry_before_exit_note(
-    symbol: str, batch_no: int | None, *, labeled_batches: Sequence[LabeledBatch]
-) -> str | None:
-    """W-B2L for ``(symbol, batch_no)``, or ``None`` when that batch carries no label.
+def _listed_on_an_s2_line(batch: LabeledBatch) -> bool:
+    """Whether a labeled batch is an item of W-B2LS／W-B2LSf (補充四釐清七 E-30 第 2 點).
 
-    ADR-0034 補充一 S-3 第 4 點. The one place :data:`wording.ENTRY_BEFORE_EXIT_NOTE`
-    is rendered: :func:`app.api.playbook._lines` applies it to every sell line,
-    and :meth:`PlaybookService.evaluate_today` to the batch row right after W-B2,
-    so a line and its batch never disagree. A line with no ``batch_no`` (S2,
-    the whole symbol) carries it when any open batch of the symbol is labeled;
-    ``{entry_date}`` then lists every such batch's date (:func:`wording.date_list`).
+    風控 2026-11-04 E-30 裁示第二節之 2: a labeled batch with no ``remaining_shares``
+    adds nothing to an S2 line and is left out of both sentences; the batch row
+    keeps its W-B2／W-B2L.
     """
-    dates = [
-        batch.entry_date
-        for batch in labeled_batches
-        if batch.symbol == symbol and (batch_no is None or batch.batch_no == batch_no)
-    ]
-    if not dates:
+    return batch.remaining_shares > 0
+
+
+def entry_before_exit_note(
+    symbol: str,
+    batch_no: int | None,
+    *,
+    labeled_batches: Sequence[LabeledBatch],
+    shares: int | None = None,
+) -> str | None:
+    """W-B2L, or W-B2LS［＋W-B2LSr］, for one row; ``None`` when nothing it names is labeled.
+
+    ADR-0034 補充一 S-3 第 3、4 點; 補充四釐清六 E-26, 釐清七 E-30、E-31. The one place
+    the W-B2L family is rendered. Its two callers get the same
+    ``labeled_batches`` of one response: :func:`app.api.playbook._lines` for
+    every sell line and :func:`_labeled_snapshot` for the batch row right after
+    W-B2, so a line and its batch never disagree.
+
+    * A row with a ``batch_no`` -- a batch row, an S/P/EMERGENCY line -- gets
+      :data:`wording.ENTRY_BEFORE_EXIT_NOTE` when that batch is labeled.
+    * A sell line with none -- S2, the whole symbol; only ``_lines`` passes it,
+      with the line's ``shares`` -- never gets W-B2L (風控 2026-11-04 第 5 點).
+      Its items are the symbol's labeled batches (:func:`_listed_on_an_s2_line`)
+      by batch_no. W-B2LS is rendered only under premise P (E-30 第 3 點): the
+      line's ``shares`` equal the symbol's open shares in the labels' own book,
+      the same value on every item, and the items' ``remaining_shares`` add up
+      to no more than ``shares``. That is what tells an S2 line computed on this
+      book from one an earlier evaluation of the day logged on another
+      (E-28). W-B2LSr follows in the same field while ``shares`` exceed that
+      sum. When P fails the line gets
+      :data:`wording.ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE` (W-B2LSf, 風控
+      2026-11-04 E-30 裁示 (δ)) with the same items and never W-B2LSr -- no
+      exception, no fallback to W-B2LS. No item left after the filter: ``None``.
+
+    Known residue (風控 E-30 裁示第二節之 3, accepted): when a settlement between
+    two evaluations of the day fills a labeled batch and shrinks another by
+    exactly as many shares, P holds and W-B2LS is rendered although the logged
+    line was computed without that batch -- an S2 line records no make-up.
+    """
+    if batch_no is not None:
+        dates = [
+            batch.entry_date
+            for batch in labeled_batches
+            if (batch.symbol, batch.batch_no) == (symbol, batch_no)
+        ]
+        if not dates:
+            return None
+        return wording.ENTRY_BEFORE_EXIT_NOTE.format(entry_date=wording.date_list(dates))
+    items = sorted(
+        (
+            batch
+            for batch in labeled_batches
+            if batch.symbol == symbol and _listed_on_an_s2_line(batch)
+        ),
+        key=lambda batch: batch.batch_no,
+    )
+    if not items:
         return None
-    return wording.ENTRY_BEFORE_EXIT_NOTE.format(entry_date=wording.date_list(dates))
+    listed = sum(batch.remaining_shares for batch in items)
+    values = {
+        "labeled_count": len(items),
+        "labeled_items": wording.labeled_items(
+            wording.ExitLabeled(
+                symbol=batch.symbol, batch_no=batch.batch_no, shares=batch.remaining_shares
+            )
+            for batch in items
+        ),
+        "entry_dates": wording.date_list(batch.entry_date for batch in items),
+    }
+    held = {batch.symbol_open_shares for batch in items}
+    if shares is None or held != {shares} or listed > shares:
+        return wording.ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE.format(**values)
+    note = wording.ENTRY_BEFORE_EXIT_SYMBOL_NOTE.format(**values)
+    if shares > listed:
+        note += wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE
+    return note
 
 
 def _labeled_snapshot(
@@ -1309,7 +1389,8 @@ class PlaybookService:
             )
         )
         if labeled_fills:
-            # ADR-0034 W-B3: right after SETTLEMENT_SUMMARY.
+            # ADR-0034 W-B3: right after SETTLEMENT_SUMMARY, before N2 (風控
+            # 2026-11-04 第 1 點: N2 follows W-B3 when both are in one settlement).
             fills = _in_item_order(labeled_fills)
             warnings.append(
                 wording.SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE.format(

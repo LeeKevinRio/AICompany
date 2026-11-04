@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import random
 import re
 import sqlite3
 import threading
@@ -42,16 +43,25 @@ from app.api import playbook as api_module
 from app.api.deps import get_cap1_reading, get_playbook_service
 from app.api.playbook_cap1_wording import Cap1Reading
 from app.main import app
+from app.playbook import engine as engine_module
 from app.playbook import service as service_module
 from app.playbook import store as store_module
 from app.playbook import wording
-from app.playbook.models import BatchStatus, Directive, EmergencyExitResult, LabeledBatch
+from app.playbook.models import (
+    BatchSnapshot,
+    BatchState,
+    BatchStatus,
+    Directive,
+    EmergencyExitResult,
+    LabeledBatch,
+)
 from app.playbook.store import (
     BATCH_LEFT_PLANNED_SQL,
     EntryBeforeExitRead,
     PendingDirective,
     PlaybookStore,
 )
+from tests import playbook_helpers as helper
 from tests.api_helpers import CLIENT_HEADERS
 from tests.same_day_helpers import (
     MONDAY,
@@ -60,6 +70,7 @@ from tests.same_day_helpers import (
     TUESDAY,
     WEDNESDAY,
     Desk,
+    bars,
     buy_line,
     hold,
     log_like_before_n172a,
@@ -70,6 +81,10 @@ from tests.seam_helpers import SCENARIOS, FullyClockedService, clocked_desk
 REPO = Path(__file__).resolve().parents[4]
 PLAN = REPO / "work/reviews/2026-10-31-N168方案裁示-風控.md"
 RULING = REPO / "work/reviews/2026-11-01-N168字面裁示P2至P5-風控.md"
+#: 風控 2026-11-04 S3～S6: W-B2L and W-B3 revised, W-B2LS and W-B2LSr new.
+REVISION = REPO / "work/reviews/2026-11-04-N168停止點S3至S6裁示-風控.md"
+#: 風控 2026-11-04 E-30 裁示: W-B2LSf, (δ).
+UNMATCHED_RULING = REPO / "work/reviews/2026-11-04-N168釐清七E30裁示-風控.md"
 FRIDAY = date(2026, 8, 14)
 
 
@@ -84,9 +99,20 @@ def _ruling_sentence(path: Path, identifier: str) -> str:
         for index, line in enumerate(lines)
         if line.startswith(("####", "**")) and f"`{identifier}`" in line
     ]
+    return _paragraph_after(lines, heading)
+
+
+def _paragraph_after(lines: list[str], heading: int) -> str:
     body = next(line for line in lines[heading + 1 :] if line.startswith("「"))
     assert body.endswith("」")
     return body[1:-1]
+
+
+def _revised_sentence(marker: str, path: Path = REVISION) -> str:
+    """The first 「…」 paragraph after the one bold line of ``path`` holding ``marker``."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    (heading,) = [index for index, line in enumerate(lines) if marker in line and "**" in line]
+    return _paragraph_after(lines, heading)
 
 
 def _ruling_item(path: Path, marker: str) -> str:
@@ -101,19 +127,54 @@ SENTENCES = {
     "EMERGENCY_EXIT_PENDING_ENTRY_NOTE": PLAN,  # W-B1
     "EMERGENCY_EXIT_PENDING_ENTRY_PAST_DUE_NOTE": PLAN,  # W-B1p
     "ENTRY_BEFORE_EXIT_LABEL": PLAN,  # W-B2
-    "ENTRY_BEFORE_EXIT_NOTE": PLAN,  # W-B2L
-    "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE": PLAN,  # W-B3
     "PENDING_ENTRY_FROZEN_NOTE": PLAN,  # W-B6
     "EMERGENCY_EXIT_LABELED_BATCH_NOTE": PLAN,  # W-B7
     "EMERGENCY_EXIT_BLOCKED_ENTRY_NOTE": RULING,  # W-B1b
     "PENDING_ENTRY_SAME_BATCH_NOTE": RULING,  # W-B1d
 }
+#: 風控 2026-11-04: the revised and the new sentences, by the bold line naming each.
+REVISED = {
+    "ENTRY_BEFORE_EXIT_NOTE": "**W-B2L 修訂版",  # 第 6 點 (F-11)
+    "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE": "**W-B3 修訂版",  # 第 2 點 (D7)
+    "ENTRY_BEFORE_EXIT_SYMBOL_NOTE": "`ENTRY_BEFORE_EXIT_SYMBOL_NOTE`",  # 第 5 點 W-B2LS
+    "ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE": "`ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE`",  # W-B2LSr
+}
+ALL_SENTENCES = (*SENTENCES, *REVISED, "ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE")
 
 
 @pytest.mark.parametrize("name", sorted(SENTENCES))
 def test_every_sentence_is_the_ruling_verbatim(name: str) -> None:
     """必改 1: copied, not retyped (ADR-0034 Decision 8)."""
     assert getattr(wording, name) == _ruling_sentence(SENTENCES[name], name)
+
+
+@pytest.mark.parametrize("name", sorted(REVISED))
+def test_every_revised_sentence_is_the_2026_11_04_ruling_verbatim(name: str) -> None:
+    """風控 2026-11-04 第 2、5、6 點: read from that file, never from the 10-31 one."""
+    assert getattr(wording, name) == _revised_sentence(REVISED[name])
+
+
+def test_w_b2lsf_is_the_e30_ruling_verbatim() -> None:
+    """風控 2026-11-04 E-30 裁示第二節之 1: read from that file."""
+    assert wording.ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE == _revised_sentence(
+        "`ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE`", UNMATCHED_RULING
+    )
+
+
+def test_w_b2lsf_has_the_placeholders_of_w_b2ls() -> None:
+    def fields(template: str) -> list[str]:
+        return sorted(re.findall(r"{(\w+)}", template))
+
+    assert fields(wording.ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE) == fields(
+        wording.ENTRY_BEFORE_EXIT_SYMBOL_NOTE
+    )
+
+
+def test_the_revisions_replaced_what_they_revise() -> None:
+    assert wording.ENTRY_BEFORE_EXIT_NOTE != _ruling_sentence(PLAN, "ENTRY_BEFORE_EXIT_NOTE")
+    assert wording.SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE != _ruling_sentence(
+        PLAN, "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE"
+    )
 
 
 def test_the_item_formats_are_the_rulings_verbatim() -> None:
@@ -148,14 +209,11 @@ def test_the_new_sentences_pass_the_string_guards(name: str) -> None:
     assert "已成交" not in sentence
 
 
-#: Phrases of 風控's own 2026-10-31 sentences that hold a forbidden character
-#: without being the forbidden word (「對應」 is not the modal 「應」, 「如需」 is
-#: not the urging 「需」 of D7). Listed verbatim, each exactly once, for 風控 to
-#: confirm like 2026-11-04 第 9 點; nothing else is exempt.
+#: 風控 2026-11-04 第 2 點: the only two exemptions, verbatim, each exactly once in
+#: its own sentence; 「應」 must be gone once it is taken out. W-B3 and W-B2LS get none.
 SENTENCE_EXEMPTIONS: dict[str, str] = {
     "ENTRY_BEFORE_EXIT_NOTE": "對應這批",
     "EMERGENCY_EXIT_LABELED_BATCH_NOTE": "對應這幾批",
-    "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE": "如需",
 }
 
 
@@ -169,18 +227,36 @@ SENTENCE_EXEMPTIONS: dict[str, str] = {
         "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE",
         "PENDING_ENTRY_FROZEN_NOTE",
         "EMERGENCY_EXIT_LABELED_BATCH_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE",
     ],
 )
 def test_the_w_series_carries_no_forbidden_word(name: str) -> None:
-    """風控 2026-10-31 逐條意見 (PRD AC 字串檢查), with the exemptions above."""
+    """風控 2026-10-31 逐條意見 (PRD AC 字串檢查), 2026-11-04 第 2 點 and 第 5 點 (iii)."""
     sentence = getattr(wording, name)
     exempt = SENTENCE_EXEMPTIONS.get(name)
     if exempt is not None:
         assert sentence.count(exempt) == 1
         sentence = sentence.replace(exempt, "", 1)
+    assert sentence.count("應") == 0 and sentence.count("需") == 0, name
     for banned in FORBIDDEN:
         assert banned not in sentence, (name, banned)
     assert "需再次出清" not in sentence  # D7
+
+
+def test_w_b3_w_b2ls_and_w_b2lsf_need_no_exemption() -> None:
+    for name in (
+        "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE",
+    ):
+        sentence = getattr(wording, name)
+        assert name not in SENTENCE_EXEMPTIONS
+        assert (sentence.count("需"), sentence.count("應"), sentence.count("對應")) == (0, 0, 0)
+    assert wording.SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE.endswith(
+        "可再次提交全部出清，替這些批次產生賣出指令。"
+    )
 
 
 @pytest.mark.parametrize(
@@ -191,24 +267,92 @@ def test_the_w_series_carries_no_forbidden_word(name: str) -> None:
         "ENTRY_BEFORE_EXIT_NOTE",
         "SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE",
         "EMERGENCY_EXIT_LABELED_BATCH_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE",
     ],
 )
 def test_the_disclosures_say_the_system_places_no_order(name: str) -> None:
+    """風控 2026-11-04 第 3 點 (d): W-B1p, W-B2 and W-B2LSr are the exceptions, held
+    by the combined-unit assertions (a)～(c) below instead."""
     assert "本系統不下單" in getattr(wording, name)
 
 
 def test_the_sentences_live_in_wording_only() -> None:
     """ADR-0034 Decision 8: no other module under ``app/`` holds a piece of them."""
     app_root = Path(wording.__file__).resolve().parents[1]
-    texts = [getattr(wording, name) for name in SENTENCES]
+    texts = [getattr(wording, name) for name in ALL_SENTENCES]
     for path in sorted(app_root.rglob("*.py")):
         if path.name == "wording.py":
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                cjk = sum(1 for char in node.value if "一" <= char <= "鿿")
+                cjk = sum(1 for char in node.value if "\u4e00" <= char <= "\u9fff")
                 for text in texts:
                     assert not (cjk >= 6 and node.value in text), (path, node.value)
+
+
+# --- 風控 2026-11-04 第 3 點 (a)～(c): the combined units ------------------------------------
+
+#: W-B1's last words (after its last placeholder) and W-B1p's first words.
+_W_B1_TAIL = wording.EMERGENCY_EXIT_PENDING_ENTRY_NOTE.rsplit("}", 1)[1]
+_W_B1P_HEAD = wording.EMERGENCY_EXIT_PENDING_ENTRY_PAST_DUE_NOTE.split("{", 1)[0]
+_W_B2LS_HEAD = wording.ENTRY_BEFORE_EXIT_SYMBOL_NOTE.split("{", 1)[0]
+_W_B2LS_TAIL = wording.ENTRY_BEFORE_EXIT_SYMBOL_NOTE.rsplit("}", 1)[1]
+_REST = wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE
+
+
+def assert_w_b1p_follows_w_b1(message: str) -> None:
+    """(a): wherever W-B1p is, W-B1 is right before it."""
+    if _W_B1P_HEAD in message:
+        assert message.count(_W_B1P_HEAD) == 1
+        assert message[: message.index(_W_B1P_HEAD)].endswith(_W_B1_TAIL)
+
+
+def assert_labels_carry_their_note(snapshot: list[Any]) -> None:
+    """(b): every labeled batch row has its W-B2L, which says 「本系統不下單」."""
+    for row in snapshot:
+        label = (
+            row["entry_before_exit_label"] if isinstance(row, dict) else row.entry_before_exit_label
+        )
+        note = (
+            row["entry_before_exit_note"] if isinstance(row, dict) else row.entry_before_exit_note
+        )
+        if label is not None:
+            assert note is not None and "本系統不下單" in note
+
+
+def assert_w_b2lsr_follows_w_b2ls(note: str | None) -> None:
+    """(c): W-B2LSr only right after W-B2LS, in the same field, once."""
+    if note is not None and _REST in note:
+        assert note.count(_REST) == 1 and note.endswith(_REST)
+        rest_free = note[: -len(_REST)]
+        assert rest_free.startswith(_W_B2LS_HEAD) and rest_free.endswith(_W_B2LS_TAIL)
+
+
+@pytest.mark.parametrize("labeled", [(), (("2330", 1, 300),)])
+@pytest.mark.parametrize("entries", [0, 1, 2])
+@pytest.mark.parametrize("past_due", [False, True])
+@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("describes_lines", [False, True])
+def test_a_every_composition_keeps_w_b1p_right_after_w_b1(
+    labeled: tuple[tuple[str, int, int], ...],
+    entries: int,
+    past_due: bool,
+    blocked: bool,
+    describes_lines: bool,
+) -> None:
+    lines = [buy_line(batch_no=index + 1) for index in range(entries)]
+    notes = wording.exit_entry_notes(
+        wording.ExitEntries(
+            labeled=tuple(wording.ExitLabeled(*item) for item in labeled),
+            entry_items=tuple(_item(line) for line in lines),
+            past_due_dates=(MONDAY,) if past_due else (),
+            blocked_items=(_item(buy_line(batch_no=9)),) if blocked else (),
+        ),
+        describes_lines=describes_lines,
+    )
+    assert_w_b1p_follows_w_b1(notes)
+    assert (_W_B1P_HEAD in notes) is bool(entries and past_due)
 
 
 # --- shared helpers ------------------------------------------------------------------------
@@ -269,7 +413,7 @@ def _w_b7(*batches: tuple[str, int, int]) -> str:
         labeled_count=len(batches),
         labeled_items="、".join(
             wording.EMERGENCY_EXIT_LABELED_ITEM.format(
-                symbol=symbol, batch_no=batch_no, shares=f"{shares:,}"
+                symbol=symbol, batch_no=batch_no, shares=shares
             )
             for symbol, batch_no, shares in batches
         ),
@@ -427,6 +571,7 @@ def test_t_b7_a_past_due_buy_is_stamped_and_gets_w_b1p(tmp_path: Path) -> None:
 
     assert _stamps(desk.store.db_path) == [(1, TUESDAY.isoformat())]
     assert result.message.endswith(_w_b1(late) + _w_b1p(MONDAY))
+    assert_w_b1p_follows_w_b1(result.message)
 
 
 def test_t_b10_a_row_is_stamped_once_by_the_first_exit(
@@ -566,6 +711,7 @@ def _exit(desk: Desk, branch: str) -> EmergencyExitResult:
     result = desk.service.emergency_exit(today=TUESDAY)
     if branch == "already_pending":
         result = desk.service.emergency_exit(today=TUESDAY)
+    assert_w_b1p_follows_w_b1(result.message)
     return result
 
 
@@ -621,6 +767,7 @@ def test_7c_w_b1p_counts_only_w_b1s_lines(tmp_path: Path) -> None:
     result = desk.service.emergency_exit(today=TUESDAY)
 
     assert result.message.endswith(_w_b1(entry) + _w_b1b(blocked_late))
+    assert_w_b1p_follows_w_b1(result.message)
     assert "已過、仍未結算；本系統無法得知你在券商是否已買進" not in result.message
 
 
@@ -661,7 +808,9 @@ def test_t_b4_the_fill_labels_the_batch_and_the_label_survives(tmp_path: Path) -
     batch = desk.store.get_batch("2330", 1)
     assert batch is not None and batch.status == "open"
     assert batch.entry_before_exit_on == TUESDAY  # the exit's as_of (C-B3)
-    assert run.labeled_batches == (LabeledBatch(symbol="2330", batch_no=1, entry_date=WEDNESDAY),)
+    assert run.labeled_batches == (
+        _label(1, WEDNESDAY, ONE_BUY_SHARES, open_shares=ONE_BUY_SHARES),
+    )
     # W-B3, right after SETTLEMENT_SUMMARY (D5).
     assert run.settlement is not None
     summary = next(w for w in run.settlement.warnings if w.startswith("T+1 結算：依"))
@@ -682,6 +831,7 @@ def test_the_batch_row_carries_w_b2_then_w_b2l_while_open(tmp_path: Path) -> Non
     desk, _ = _labeled_desk(tmp_path)
     run = desk.service.evaluate_today(today=WEDNESDAY)
 
+    assert_labels_carry_their_note(run.snapshot)
     rows = {(row.batch_no, row.status): row for row in run.snapshot}
     labeled = rows[(1, "open")]
     assert labeled.entry_before_exit_on == TUESDAY
@@ -775,7 +925,9 @@ def test_t_b9_a_later_exit_sells_the_labeled_batch_once_with_w_b7_and_w_b2l(
 
     (line,) = again.directives
     assert (line.batch_no, line.action, line.rule_id) == (1, "sell", "EMERGENCY")
-    assert again.labeled_batches == (LabeledBatch(symbol="2330", batch_no=1, entry_date=WEDNESDAY),)
+    assert again.labeled_batches == (
+        _label(1, WEDNESDAY, ONE_BUY_SHARES, open_shares=ONE_BUY_SHARES),
+    )
     assert _w_b7(("2330", 1, ONE_BUY_SHARES)) in again.message
     assert again.attribution == wording.EXIT_ATTRIBUTION
 
@@ -846,6 +998,7 @@ def test_e11_the_pending_exit_row_and_its_line_carry_the_same_w_b2l(tmp_path: Pa
     assert snapshot["entry_before_exit_label"] == wording.ENTRY_BEFORE_EXIT_LABEL
     assert snapshot["entry_before_exit_note"] == line["entry_before_exit_note"]
     assert snapshot["entry_before_exit_on"] == TUESDAY.isoformat()
+    assert_labels_carry_their_note(body["snapshot"])
 
 
 def test_the_unauthored_rows_carry_w_b2l_too(tmp_path: Path) -> None:
@@ -869,69 +1022,474 @@ def test_the_unauthored_rows_carry_w_b2l_too(tmp_path: Path) -> None:
     assert desk.prices.calls == []
 
 
-def test_the_w_b2l_rule_on_lines() -> None:
-    """補充一 S-3 第 4 點: sells of a labeled batch; S2 by symbol; nothing else."""
-    labeled = (
-        LabeledBatch(symbol="2330", batch_no=1, entry_date=WEDNESDAY),
-        LabeledBatch(symbol="2330", batch_no=3, entry_date=MONDAY),
+def _label(
+    batch_no: int,
+    entry_date: date,
+    remaining_shares: int,
+    *,
+    open_shares: int,
+    symbol: str = "2330",
+) -> LabeledBatch:
+    return LabeledBatch(
+        symbol=symbol,
+        batch_no=batch_no,
+        entry_date=entry_date,
+        remaining_shares=remaining_shares,
+        symbol_open_shares=open_shares,
     )
-    sell = buy_line().model_copy(update={"action": "sell", "rule_id": "S1"})
+
+
+def _w_b2ls(*batches: tuple[int, date, int], shares: int) -> str:
+    """W-B2LS for 2330's ``(batch_no, entry_date, remaining_shares)``, ［＋W-B2LSr］."""
+    ordered = sorted(batches)
+    note = wording.ENTRY_BEFORE_EXIT_SYMBOL_NOTE.format(
+        labeled_count=len(ordered),
+        labeled_items="、".join(
+            wording.EMERGENCY_EXIT_LABELED_ITEM.format(
+                symbol="2330", batch_no=batch_no, shares=remaining
+            )
+            for batch_no, _, remaining in ordered
+        ),
+        entry_dates=wording.date_list(day for _, day, _ in ordered),
+    )
+    if shares > sum(remaining for _, _, remaining in ordered):
+        note += wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE
+    return note
+
+
+def _w_b2lsf(*batches: tuple[int, date, int]) -> str:
+    """W-B2LSf for 2330's ``(batch_no, entry_date, remaining_shares)``; never W-B2LSr."""
+    ordered = sorted(batches)
+    return wording.ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE.format(
+        labeled_count=len(ordered),
+        labeled_items="、".join(
+            wording.EMERGENCY_EXIT_LABELED_ITEM.format(
+                symbol="2330", batch_no=batch_no, shares=remaining
+            )
+            for batch_no, _, remaining in ordered
+        ),
+        entry_dates=wording.date_list(day for _, day, _ in ordered),
+    )
+
+
+_SELL = buy_line().model_copy(update={"action": "sell", "rule_id": "S1"})
+_S2 = _SELL.model_copy(update={"batch_no": None, "rule_id": "S2"})
+
+
+def _s2_note(shares: int, labeled: tuple[LabeledBatch, ...]) -> str | None:
+    (line,) = api_module._lines(
+        [_S2.model_copy(update={"shares": shares})], labeled_batches=labeled
+    )
+    return line.entry_before_exit_note
+
+
+def test_the_w_b2l_rule_on_lines() -> None:
+    """補充一 S-3 第 4 點; 風控 2026-11-04 第 5 點: W-B2L on a batch's sells, W-B2LS on S2."""
+    labeled = (
+        _label(3, MONDAY, 200, open_shares=866),
+        _label(1, WEDNESDAY, 666, open_shares=866),
+    )
     lines = [
-        sell,
+        _SELL,
         buy_line(),  # a buy of the labeled batch
-        sell.model_copy(update={"batch_no": 2}),  # an unlabeled batch
-        sell.model_copy(update={"batch_no": None, "rule_id": "S2"}),  # S2: whole symbol
-        sell.model_copy(update={"symbol": "2454", "batch_no": None, "rule_id": "S2"}),
-        sell.model_copy(update={"action": "defer", "rule_id": "R2"}),
+        _SELL.model_copy(update={"batch_no": 2}),  # an unlabeled batch
+        _S2.model_copy(update={"shares": 866}),  # S2 of exactly the two labeled batches
+        _SELL.model_copy(update={"symbol": "2454", "batch_no": None, "rule_id": "S2"}),
+        _SELL.model_copy(update={"action": "defer", "rule_id": "R2"}),
     ]
 
-    notes = [
-        line.entry_before_exit_note for line in api_module._lines(lines, labeled_batches=labeled)
-    ]
+    built = api_module._lines(lines, labeled_batches=labeled)
+    notes = [line.entry_before_exit_note for line in built]
 
     assert notes == [
         _w_b2l(WEDNESDAY),
         None,
         None,
-        wording.ENTRY_BEFORE_EXIT_NOTE.format(entry_date=f"{MONDAY}、{WEDNESDAY}"),
+        _w_b2ls((1, WEDNESDAY, 666), (3, MONDAY, 200), shares=866),
         None,
         None,
     ]
+    for note in notes:
+        assert_w_b2lsr_follows_w_b2ls(note)
+        if note is not None and note.startswith(_W_B2LS_HEAD):
+            assert wording.ENTRY_BEFORE_EXIT_NOTE.split("{", 1)[0] not in note  # never W-B2L
     assert all(
         line.line == wording.directive_line(directive)
-        for line, directive in zip(
-            api_module._lines(lines, labeled_batches=labeled), lines, strict=True
-        )
+        for line, directive in zip(built, lines, strict=True)
     )
 
 
+# --- 補充四釐清七 E-30 第 5 點 (a)～(d): premise P on an S2 line ------------------------
+
+
+def test_e30a_p_holds_with_and_without_w_b2lsr() -> None:
+    """P: ``shares`` == the symbol's open shares in the labels' book, items ≤ ``shares``."""
+    exact = (_label(1, WEDNESDAY, 666, open_shares=666),)
+    assert _s2_note(666, exact) == _w_b2ls((1, WEDNESDAY, 666), shares=666)
+    assert wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE not in str(_s2_note(666, exact))
+
+    more = (_label(1, WEDNESDAY, 666, open_shares=966),)
+    note = _s2_note(966, more)
+    assert note == _w_b2ls((1, WEDNESDAY, 666), shares=966)
+    assert note is not None and note.endswith(wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE)
+    assert_w_b2lsr_follows_w_b2ls(note)
+
+
+@pytest.mark.parametrize(
+    ("shares", "labeled", "expected"),
+    [
+        # shares ≠ the symbol's open shares: an S2 logged on another book (E-28).
+        (
+            300,
+            (_label(1, WEDNESDAY, 666, open_shares=966),),
+            ((1, WEDNESDAY, 666),),
+        ),
+        (
+            966,
+            (_label(1, WEDNESDAY, 666, open_shares=666),),
+            ((1, WEDNESDAY, 666),),
+        ),
+        # the items add up to more than the line sells.
+        (
+            300,
+            (_label(1, WEDNESDAY, 666, open_shares=300),),
+            ((1, WEDNESDAY, 666),),
+        ),
+        # two items that disagree on the symbol's open shares.
+        (
+            966,
+            (
+                _label(1, WEDNESDAY, 666, open_shares=966),
+                _label(3, MONDAY, 200, open_shares=866),
+            ),
+            ((1, WEDNESDAY, 666), (3, MONDAY, 200)),
+        ),
+        # a zero-share labeled batch is left out of W-B2LSf too.
+        (
+            300,
+            (
+                _label(1, WEDNESDAY, 666, open_shares=966),
+                _label(2, MONDAY, 0, open_shares=966),
+            ),
+            ((1, WEDNESDAY, 666),),
+        ),
+    ],
+    ids=[
+        "shares-below-holding",
+        "shares-above-holding",
+        "items-above-shares",
+        "split-holding",
+        "zero-share-batch-left-out",
+    ],
+)
+def test_e30a_p_fails_and_w_b2lsf_is_rendered(
+    shares: int,
+    labeled: tuple[LabeledBatch, ...],
+    expected: tuple[tuple[int, date, int], ...],
+) -> None:
+    """風控 E-30 裁示 (δ), 條件 (b): exactly W-B2LSf, never W-B2LSr, never W-B2LS."""
+    note = _s2_note(shares, labeled)
+    assert note == _w_b2lsf(*expected)
+    assert wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE not in note
+    assert not note.startswith(_W_B2LS_HEAD)
+
+
+@pytest.mark.parametrize("shares", [300, 666, 966])
+def test_e30_no_item_left_after_the_filter_is_none(shares: int) -> None:
+    """風控 E-30 裁示 條件 (c) and 第二節之 2: P failing or holding, no item, no note."""
+    zero = (
+        _label(1, WEDNESDAY, 0, open_shares=966),
+        _label(3, MONDAY, 0, open_shares=966),
+    )
+    assert _s2_note(shares, zero) is None
+    # The batch rows keep their W-B2L: the filter is the S2 branch's only.
+    (line,) = api_module._lines([_SELL], labeled_batches=zero)
+    assert line.entry_before_exit_note == _w_b2l(WEDNESDAY)
+
+
+def test_e30_a_zero_share_batch_is_not_counted_when_p_holds() -> None:
+    labeled = (
+        _label(1, WEDNESDAY, 666, open_shares=666),
+        _label(2, MONDAY, 0, open_shares=666),
+    )
+    assert _s2_note(666, labeled) == _w_b2ls((1, WEDNESDAY, 666), shares=666)
+
+
+def test_e30b_an_s2_logged_earlier_in_the_day_is_checked_against_this_book(
+    tmp_path: Path,
+) -> None:
+    """E-28 第 2 點 / E-30 第 5 點 (b): run 1 logs S2 for batch 2 alone; a back-filled
+    bar then fills batch 1's stamped buy; run 2 lists run 1's S2 line, whose shares
+    no longer match the book the labels come from."""
+    desk = _desk(tmp_path)
+    log_like_before_n172a(desk.store, [buy_line(execution_date=WEDNESDAY)])
+    desk.service.emergency_exit(today=TUESDAY)  # EMPTY: stamps the buy
+    hold(desk.store, "2330", 2, shares=300)
+    crashed = bars("2330", 100.0, {THURSDAY: 80.0})
+    desk.prices.seed("2330", [bar for bar in crashed if bar.date != WEDNESDAY])
+
+    first = desk.service.evaluate_today(today=THURSDAY)
+    (s2,) = [line for line in first.directives if line.rule_id == "S2"]
+    assert s2.shares == 300 and first.labeled_batches == ()
+
+    desk.prices.seed("2330", crashed)  # Wednesday's bar is back
+    second = desk.service.evaluate_today(today=THURSDAY)
+    desk.service.pinned = THURSDAY
+    with _client(desk) as client:
+        body = client.get("/api/playbook/today").json()
+
+    assert second.settlement is not None and second.settlement.executed == 1
+    (labeled,) = second.labeled_batches
+    assert (labeled.batch_no, labeled.remaining_shares, labeled.symbol_open_shares) == (
+        1,
+        ONE_BUY_SHARES,
+        300 + ONE_BUY_SHARES,
+    )
+    (logged,) = [line for line in second.directives if line.rule_id == "S2"]
+    assert logged == s2  # run 1's line, as logged (ADR-0035 Decision 4)
+    (line,) = [line for line in body["directives"] if line["directive"]["rule_id"] == "S2"]
+    note = line["entry_before_exit_note"]
+    assert note == _w_b2lsf((1, WEDNESDAY, ONE_BUY_SHARES))  # 風控 E-30 裁示 條件 (b)
+    assert wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE not in note
+    (row,) = [row for row in body["snapshot"] if row["batch_no"] == 1]
+    assert row["entry_before_exit_note"] == _w_b2l(WEDNESDAY)  # the batch row still says it
+
+
+def test_e30c_an_s2_line_and_the_labels_of_its_own_book_always_satisfy_p() -> None:
+    """E-30 第 5 點 (c), property: random books, the engine's own S2, the same book's labels."""
+    rng = random.Random(168)
+    checked = 0
+    for _ in range(400):
+        book: list[BatchState] = []
+        for batch_no in (1, 2, 3):
+            status = rng.choice(["open", "open", "planned", "closed", "skipped"])
+            if status == "open":
+                shares = rng.randint(1, 900)
+                state = helper.batch(
+                    batch_no=batch_no,
+                    cost=str(rng.randint(50, 200)),
+                    shares=shares,
+                    remaining=rng.choice([0, rng.randint(1, shares)]),
+                )
+                if rng.random() < 0.6:
+                    state = state.model_copy(update={"entry_before_exit_on": TUESDAY})
+            else:
+                state = helper.batch(batch_no=batch_no, status=status, cost=None, shares=0)
+            book.append(state)
+        evaluation = engine_module.evaluate(
+            data_date=TUESDAY,
+            calendar=helper.calendar(),
+            params=helper.params(),
+            index=helper.index(),
+            markets={"2330": helper.market(close="10")},
+            batches=book,
+            symbols={},
+            portfolio=helper.portfolio(),
+        )
+        lines = [line for line in evaluation.directives if line.rule_id == "S2"]
+        labeled = service_module.labeled_batches_of(book)
+        listed = [batch for batch in labeled if batch.remaining_shares > 0]
+        if not lines or not listed:
+            continue
+        (s2,) = lines
+        note = service_module.entry_before_exit_note(
+            s2.symbol, None, labeled_batches=labeled, shares=s2.shares
+        )
+        assert note is not None and note.startswith(_W_B2LS_HEAD), book
+        assert_w_b2lsr_follows_w_b2ls(note)
+        checked += 1
+    assert checked > 50
+
+
+def test_e30d_the_batch_rows_never_reach_the_s2_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E-30 第 1 點 / E-31 第 2 點: ``_labeled_snapshot`` always passes an int batch_no."""
+    seen: list[int | None] = []
+    real = service_module.entry_before_exit_note
+
+    def spy(symbol: str, batch_no: int | None, **kwargs: Any) -> str | None:
+        seen.append(batch_no)
+        return real(symbol, batch_no, **kwargs)
+
+    monkeypatch.setattr(service_module, "entry_before_exit_note", spy)
+    labeled = (_label(1, WEDNESDAY, 666, open_shares=966),)
+    rows = engine_module._snapshot_rows(
+        [
+            helper.batch(batch_no=1, shares=666).model_copy(
+                update={"entry_before_exit_on": TUESDAY}
+            ),
+            helper.batch(batch_no=2, shares=300),
+        ],
+        {},
+    )
+
+    service_module._labeled_snapshot(rows, labeled)
+
+    assert seen == [1]
+    assert BatchSnapshot.model_fields["batch_no"].annotation is int
+    tree = ast.parse(inspect.cleandoc("\n" + inspect.getsource(service_module._labeled_snapshot)))
+    (call,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "entry_before_exit_note"
+    ]
+    assert isinstance(call.args[1], ast.Attribute) and call.args[1].attr == "batch_no"
+
+
+def test_e30_the_s2_branch_never_raises_or_asserts() -> None:
+    """E-30 第 4 點 / 風控 E-30 裁示 條件 (d): no ``raise`` and no ``assert`` in the rule."""
+    for function in (service_module.entry_before_exit_note, service_module._listed_on_an_s2_line):
+        tree = ast.parse(inspect.cleandoc("\n" + inspect.getsource(function)))
+        assert not [n for n in ast.walk(tree) if isinstance(n, ast.Raise | ast.Assert)]
+
+
+def test_e30_6_an_exact_offset_is_the_accepted_residue(tmp_path: Path) -> None:
+    """風控 E-30 裁示第二節之 3 (b): a known residue, not a bug, pinned.
+
+    Run 1 logs S2 over batches 2 and 3 (300 + 666). Between the two runs of the
+    day the back-filled Wednesday bar fills labeled batch 1 (666) and an S1 sells
+    batch 3 (666) out: the book's open shares are 966 again, so P holds and
+    run 1's line gets W-B2LS -- although it was computed without batch 1.
+    """
+    desk = _desk(tmp_path)
+    log_like_before_n172a(desk.store, [buy_line(execution_date=WEDNESDAY)])
+    desk.service.emergency_exit(today=TUESDAY)  # EMPTY: stamps batch 1's buy
+    hold(desk.store, "2330", 2, shares=300)
+    hold(desk.store, "2330", 3, shares=ONE_BUY_SHARES)
+    stop = buy_line(batch_no=3, execution_date=WEDNESDAY).model_copy(
+        update={"action": "sell", "rule_id": "S1", "limit_low": None, "limit_high": None}
+    )
+    log_like_before_n172a(desk.store, [stop])
+    crashed = bars("2330", 100.0, {THURSDAY: 80.0})
+    desk.prices.seed("2330", [bar for bar in crashed if bar.date != WEDNESDAY])
+
+    first = desk.service.evaluate_today(today=THURSDAY)
+    (s2,) = [line for line in first.directives if line.rule_id == "S2"]
+    assert s2.shares == 300 + ONE_BUY_SHARES
+
+    desk.prices.seed("2330", crashed)
+    desk.service.pinned = THURSDAY
+    with _client(desk) as client:
+        body = client.get("/api/playbook/today").json()
+
+    batch_3 = desk.store.get_batch("2330", 3)
+    assert batch_3 is not None and batch_3.status == "closed"
+    (line,) = [line for line in body["directives"] if line["directive"]["rule_id"] == "S2"]
+    assert line["directive"]["shares"] == s2.shares
+    assert line["entry_before_exit_note"] == _w_b2ls(
+        (1, WEDNESDAY, ONE_BUY_SHARES), shares=300 + ONE_BUY_SHARES
+    )
+
+
+def _crash(desk: Desk, day: date, close: float) -> None:
+    """2330 closes at ``close`` on ``day``: below 均成本 × 0.85 fires S2 (engine.py S2)."""
+    desk.prices.seed("2330", bars("2330", 100.0, {day: close}))
+
+
+def test_ii_an_s2_line_of_this_evaluation_covers_its_labeled_batches(tmp_path: Path) -> None:
+    """風控 2026-11-04 第 5 點 (i)(ii): this run's S2 is computed on ``book``, the same
+    book the labels come from, so their ``remaining_shares`` never exceed its shares."""
+    desk, _ = _labeled_desk(tmp_path)
+    desk.service.evaluate_today(today=WEDNESDAY)  # batch 1 open, labeled, 666 shares
+    hold(desk.store, "2330", 3, shares=300)  # and an unlabeled one
+    _crash(desk, THURSDAY, 80.0)
+
+    run = desk.service.evaluate_today(today=THURSDAY)
+    with _client(desk) as client:
+        desk.service.pinned = THURSDAY
+        body = client.get("/api/playbook/today").json()
+
+    (s2,) = [line for line in run.directives if line.rule_id == "S2"]
+    assert s2.batch_no is None and s2.shares == 966
+    held = {(batch.symbol, batch.batch_no): batch for batch in desk.store.list_batches()}
+    labeled = [batch for batch in run.labeled_batches if batch.symbol == s2.symbol]
+    assert sum(held[(batch.symbol, batch.batch_no)].remaining_shares for batch in labeled) <= (
+        s2.shares
+    )
+    (line,) = [line for line in body["directives"] if line["directive"]["rule_id"] == "S2"]
+    assert line["entry_before_exit_note"] == _w_b2ls((1, WEDNESDAY, 666), shares=966)
+    assert_w_b2lsr_follows_w_b2ls(line["entry_before_exit_note"])
+    assert_labels_carry_their_note(body["snapshot"])
+
+
+def test_ii_an_s2_line_of_only_labeled_batches_gets_no_rest_sentence(tmp_path: Path) -> None:
+    desk, _ = _labeled_desk(tmp_path)
+    desk.service.evaluate_today(today=WEDNESDAY)
+    _crash(desk, THURSDAY, 80.0)
+
+    with _client(desk) as client:
+        desk.service.pinned = THURSDAY
+        body = client.get("/api/playbook/today").json()
+
+    (line,) = [line for line in body["directives"] if line["directive"]["rule_id"] == "S2"]
+    assert line["directive"]["shares"] == ONE_BUY_SHARES
+    assert line["entry_before_exit_note"] == _w_b2ls((1, WEDNESDAY, ONE_BUY_SHARES), shares=666)
+    assert wording.ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE not in line["entry_before_exit_note"]
+
+
 def test_e11_w_b2l_is_rendered_by_one_rule_only() -> None:
-    """QB-13: ``ENTRY_BEFORE_EXIT_NOTE`` is read in ``entry_before_exit_note`` and nowhere else."""
+    """QB-13 as 補充四釐清六 E-26 第 4 點 words it: AST only, docstrings and comments
+    aside. The W-B2L family is read in ``entry_before_exit_note`` alone, which is
+    called exactly twice in ``app/`` -- ``_lines`` and ``_labeled_snapshot`` -- and
+    never from N-171's code (第 3 點)."""
     app_root = Path(wording.__file__).resolve().parents[1]
-    readers: list[tuple[str, str]] = []
+    family = {
+        "ENTRY_BEFORE_EXIT_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE",
+        "ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE",
+    }
+    readers: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str]] = []
     for path in sorted(app_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+        def owner_of(node: ast.AST, parents: dict[ast.AST, ast.AST] = parents) -> str:
+            while node in parents and not isinstance(node, ast.FunctionDef):
+                node = parents[node]
+            return node.name if isinstance(node, ast.FunctionDef) else ""
+
+        where = path.relative_to(app_root).as_posix()
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "ENTRY_BEFORE_EXIT_NOTE":
-                owner: ast.AST = node
-                while owner in parents and not isinstance(owner, ast.FunctionDef):
-                    owner = parents[owner]
-                name = owner.name if isinstance(owner, ast.FunctionDef) else ""
-                readers.append((path.relative_to(app_root).as_posix(), name))
-    assert readers == [("playbook/service.py", "entry_before_exit_note")]
-    callers = {
-        function.name
-        for module in (api_module, service_module)
-        for function in ast.walk(ast.parse(Path(inspect.getfile(module)).read_text("utf-8")))
-        if isinstance(function, ast.FunctionDef)
-        and any(
-            isinstance(node, ast.Call)
-            and getattr(node.func, "id", None) == "entry_before_exit_note"
-            for node in ast.walk(function)
-        )
-    }
-    assert callers == {"_lines", "_labeled_snapshot"}
+            if isinstance(node, ast.Attribute) and node.attr in family:
+                readers.append((where, owner_of(node), node.attr))
+            if isinstance(node, ast.Call) and (
+                getattr(node.func, "id", None) == "entry_before_exit_note"
+                or getattr(node.func, "attr", None) == "entry_before_exit_note"
+            ):
+                calls.append((where, owner_of(node)))
+    assert sorted(readers) == sorted(
+        ("playbook/service.py", "entry_before_exit_note", name) for name in family
+    )
+    assert sorted(calls) == [
+        ("api/playbook.py", "_lines"),
+        ("playbook/service.py", "_labeled_snapshot"),
+    ]
+
+
+def test_e26_both_callers_get_the_one_labeled_tuple_of_the_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-26 第 2 點: on ``/today`` the batch row and the sell lines use the very tuple
+    written into ``evaluation.labeled_batches``."""
+    desk, _ = _labeled_desk(tmp_path)
+    desk.service.evaluate_today(today=WEDNESDAY)
+    desk.service.emergency_exit(today=THURSDAY)  # a pending sell on labeled batch 1
+    real = service_module.entry_before_exit_note
+    seen: list[tuple[int | None, int]] = []
+
+    def spy(symbol: str, batch_no: int | None, **kwargs: Any) -> str | None:
+        seen.append((batch_no, id(kwargs["labeled_batches"])))
+        return real(symbol, batch_no, **kwargs)
+
+    monkeypatch.setattr(service_module, "entry_before_exit_note", spy)
+    monkeypatch.setattr(api_module, "entry_before_exit_note", spy)
+    desk.service.pinned = THURSDAY
+    with _client(desk) as client:
+        body = client.get("/api/playbook/today").json()
+
+    assert [line["directive"]["batch_no"] for line in body["pending_exit_directives"]] == [1]
+    assert len(seen) >= 2 and len({identity for _, identity in seen}) == 1
 
 
 def test_e11_the_exit_read_and_the_exit_plan_never_see_a_buy() -> None:
@@ -1209,6 +1767,66 @@ def test_seam_filled_entry_before_exit_directives_on_the_golden_scenarios(
             if name.startswith("today") and (scenario, name) != ("after_exit", "today"):
                 assert body["entry_before_exit_directives"] == [], (scenario, name)
     assert golden_bodies["unauthored"]["exit"]["entry_before_exit_directives"] == []
+
+
+_LABEL_KEYS = ("entry_before_exit_on", "entry_before_exit_label", "entry_before_exit_note")
+_LINE_LISTS = (
+    "directives",
+    "pending_directives",
+    "pending_exit_directives",
+    "entry_before_exit_directives",
+    "entry_before_exit_blocked_directives",
+)
+
+
+def test_e24_the_label_keys_on_the_golden_scenarios(
+    golden_bodies: dict[str, dict[str, Any]],
+) -> None:
+    """補充四釐清六 E-24 第 3 點 (BLOCKING; not a ``filled`` entry): T2 drops these keys,
+    so they are pinned here, on all nine responses, by exact value.
+
+    (a) Only ``after_exit.today_next_day``'s batch 1 -- whose stamped R1 buy the
+        2026-08-12 settlement filled -- carries the label, stamped with the
+        exit's as_of (2026-08-11), W-B2, and W-B2L for its entry_date.
+    (b) No ``DirectiveLine`` of any response carries a note: the golden has no
+        sell line of a labeled batch (E-8 as E-24 第 4 點 rereads it).
+    """
+    responses = [
+        (scenario, name, body)
+        for scenario, bodies in golden_bodies.items()
+        for name, body in bodies.items()
+    ]
+    assert len(responses) == 9
+    labeled_rows = []
+    for scenario, name, body in responses:
+        for row in body.get("snapshot", []):
+            values = tuple(row[key] for key in _LABEL_KEYS)
+            if (scenario, name, row["symbol"], row["batch_no"]) == (
+                "after_exit",
+                "today_next_day",
+                "2330",
+                1,
+            ):
+                labeled_rows.append(row)
+                assert row["status"] == "open" and row["entry_date"] == WEDNESDAY.isoformat()
+                assert values == (
+                    TUESDAY.isoformat(),
+                    wording.ENTRY_BEFORE_EXIT_LABEL,
+                    wording.ENTRY_BEFORE_EXIT_NOTE.format(entry_date=WEDNESDAY.isoformat()),
+                )
+            else:
+                assert values == (None, None, None), (scenario, name, row["batch_no"])
+        assert_labels_carry_their_note(body.get("snapshot", []))
+        for key in _LINE_LISTS:
+            for line in body.get(key, []):
+                assert line["entry_before_exit_note"] is None, (scenario, name, key)
+        block = body.get("pending_exit_block")
+        for section in [] if block is None else block["sections"]:
+            for row in section["rows"]:
+                assert row["entry_before_exit_note"] is None, (scenario, name)
+        if "message" in body:
+            assert_w_b1p_follows_w_b1(body["message"])
+    assert len(labeled_rows) == 1
 
 
 def test_seam_filled_in_flight_entries_on_the_golden_scenario(tmp_path: Path) -> None:

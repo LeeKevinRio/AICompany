@@ -381,10 +381,11 @@ def _lines(
     the labels.
 
     The W-B2L rule (N-168): only a sell line -- S, P or EMERGENCY -- carries
-    ``entry_before_exit_note``, and only when its ``(symbol, batch_no)`` is one
-    of ``labeled_batches``, or, with no ``batch_no`` (S2), when any batch of its
-    symbol is (:func:`entry_before_exit_note`). A buy, a 順延／跳過／無動作 line
-    and every line of an unlabeled batch get ``None``.
+    ``entry_before_exit_note``: W-B2L when its ``(symbol, batch_no)`` is one of
+    ``labeled_batches``; with no ``batch_no`` (S2), W-B2LS［＋W-B2LSr］ or W-B2LSf
+    when a batch of its symbol is, decided with the line's ``shares``
+    (:func:`entry_before_exit_note`). A buy, a 順延／跳過／無動作 line and every
+    line of an unlabeled batch get ``None``.
     """
     return [
         DirectiveLine(
@@ -392,7 +393,10 @@ def _lines(
             directive=directive,
             entry_before_exit_note=(
                 entry_before_exit_note(
-                    directive.symbol, directive.batch_no, labeled_batches=labeled_batches
+                    directive.symbol,
+                    directive.batch_no,
+                    labeled_batches=labeled_batches,
+                    shares=directive.shares,
                 )
                 if directive.action == "sell"
                 else None

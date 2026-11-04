@@ -366,9 +366,14 @@ class Directive(BaseModel):
 class LabeledBatch(BaseModel):
     """A batch carrying the W-B2 label (ADR-0034 補充一 S-3; ADR-0035 補充四 2.2(c)).
 
-    ``entry_date`` is what W-B2L's ``{entry_date}`` states. Built by N-168 from
-    the batch label; until then every ``labeled_batches`` is empty, and
-    :func:`app.api.playbook._lines` is the only reader.
+    ``entry_date`` is what W-B2L's ``{entry_date}`` states. Built by the service
+    (:func:`app.playbook.service.labeled_batches_of`) from one list of batches --
+    ``book`` on ``/today``, the exit's C-2 open batches, ``list_batches`` while
+    unauthored -- and read only through the W-B2L rule
+    :func:`app.playbook.service.entry_before_exit_note`, which ``_lines`` and the
+    batch rows call. The two share counts come from that same list (補充四釐清七
+    E-29): W-B2LS states ``remaining_shares`` and checks an S2 line against
+    ``symbol_open_shares``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -376,6 +381,11 @@ class LabeledBatch(BaseModel):
     symbol: str
     batch_no: int
     entry_date: date
+    #: E-29: this batch's ``remaining_shares`` in that list.
+    remaining_shares: int
+    #: E-29: ``engine._symbol_average_cost(...)[1]`` of the symbol in that list --
+    #: the share count an S2 line computed on it carries.
+    symbol_open_shares: int
 
 
 class BatchSnapshot(BaseModel):
