@@ -1887,7 +1887,9 @@ export interface PlaybookTodayResponse {
   //: its own and never mixed into `directives` or each other (ADR-0034 補充一
   //: S-3 第 6 點). Optional because an older backend does not send them; a
   //: missing key reads as `[]`. No view renders them yet.
-  //: Owner N-171 (ADR-0039 Decision 1): unsettled EMERGENCY sells that still cover.
+  //: Owner N-171 (ADR-0039 Decision 1): every unsettled EMERGENCY sell on an open
+  //: batch -- covering, stale and unclassified alike -- by symbol, batch_no,
+  //: execution_date, id. Raw data: no view renders text from it (補充一 S-1 第 4 點).
   pending_exit_directives?: PlaybookDirectiveLine[];
   //: Owner N-168 (ADR-0034 補充一 S-3 第 6 點): W-B1 類.
   entry_before_exit_directives?: PlaybookDirectiveLine[];

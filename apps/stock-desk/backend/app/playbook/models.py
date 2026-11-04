@@ -647,7 +647,9 @@ class PlaybookEvaluation(BaseModel):
     #: ADR-0035 補充四 2.2(a) (切面): the three in-flight lists ``/today`` carries
     #: in fields of their own, never mixed into ``directives`` (ADR-0034 補充一
     #: S-3 第 6 點). All come from the one :meth:`PlaybookStore.read_in_flight`.
-    #: Owner N-171 (ADR-0039 Decision 1): unsettled EMERGENCY sells that still cover.
+    #: Owner N-171 (ADR-0039 Decision 1): every unsettled EMERGENCY sell on an open
+    #: batch -- covering, stale and unclassified alike -- by symbol, batch_no,
+    #: execution_date, id. Raw data: no view renders text from it (補充一 S-1 第 4 點).
     pending_exit_directives: list[Directive] = Field(default_factory=list)
     #: Owner N-168: stamped, unsettled buys the book may still fill (W-B1 類).
     entry_before_exit_directives: list[Directive] = Field(default_factory=list)
