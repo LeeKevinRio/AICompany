@@ -68,6 +68,8 @@ vi.mock("../../lib/queries", () => ({
 }));
 
 const { default: PlaybookPage } = await import("../page");
+// The page reads the exit receipt store (ADR-0037), mounted by `providers.tsx` in the app.
+const { ExitReceiptStoreProvider } = await import("../../lib/exitReceiptContext");
 
 const SEAM_LISTS = [
   "pending_exit_directives",
@@ -114,7 +116,9 @@ function withSeamKeys(body: PlaybookTodayResponse): PlaybookTodayResponse {
 
 function render(body: PlaybookTodayResponse): string {
   state.today = body;
-  return renderToStaticMarkup(createElement(PlaybookPage));
+  return renderToStaticMarkup(
+    createElement(ExitReceiptStoreProvider, null, createElement(PlaybookPage)),
+  );
 }
 
 const CASES: [string, string][] = [

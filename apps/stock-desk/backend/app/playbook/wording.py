@@ -525,20 +525,39 @@ EXIT_CONFIRM_CHECKS: tuple[str, ...] = (
     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。",
 )
 
-#: 四輪收斂裁決: what stands in for check 2 **only** when the response carried no
-#: ``exit_confirm`` block at all, so neither the freeze length nor the 預計恢復日
-#: can be stated. The fact of the freeze is still disclosed before submit; the
-#: two numbers are named as missing and pointed at the place they do appear
-#: (EMERGENCY_EXIT_RESULT / EMERGENCY_EXIT_EMPTY / MODE_REASON_EMERGENCY all
-#: carry them). It is never rendered on the normal path, and it does not block
-#: the submit -- a missing field may not become a locked door (EX-2 出口零摩擦).
+#: 四輪收斂裁決, revised by 風控 Q8 (2026-10-31, 1b): what stands in for check 2
+#: whenever the page has no usable ``exit_confirm`` block to show -- the response
+#: carried none, or ``/today`` is pending, failed on first load, or failed on a
+#: background refetch (the stale block is never used). The fact of the freeze is
+#: still disclosed before submit; the two numbers are named as missing. It
+#: promises only the 預計恢復日 and only in the result of an **accepted**
+#: submission: a failed submit has no result, and after the N-166 F-c branch (S7)
+#: that result carries ``{until}`` but no day count, so the earlier "兩者於送出後
+#: 的執行結果中顯示" was untrue in both cases. Every accepted message (RESULT,
+#: EMPTY, S1, S7) carries ``{until}``; that is pinned backend-side. It is never
+#: rendered on the normal path, and it does not block the submit -- a missing
+#: field may not become a locked door (EX-2 出口零摩擦).
 #:
 #: The playbook itself never emits this string: the degraded branch is a client
 #: state (no block arrived), so the sentence is mirrored by the client and lives
 #: here as its single approved source.
 EXIT_CONFIRM_FREEZE_DEGRADED = (
     "送出後，R 系列（新倉進場）暫停；本次未能取得暫停交易日數與預計恢復日，"
-    "兩者於送出後的執行結果中顯示。"
+    "預計恢復日會在受理後的執行結果中顯示。"
+)
+
+#: 風控 Q11 (2026-10-31, R-6): the notice the client shows inside the Step 2/3
+#: dialog after it replaced a check sentence and, in doing so, cleared at least
+#: one tick the user had already made. Rendered **only** in that case -- never on
+#: open, never when ``/today`` merely failed, never when a changed sentence had
+#: not been ticked, never while a submit is in flight -- so that "有變動的項目已
+#: 改為未勾選" is always true. It is a statement of fact, not a precondition: it
+#: blocks nothing, and ticking again lets the flow continue (EX-2 / EX-5 / H-1).
+#:
+#: Like :data:`EXIT_CONFIRM_FREEZE_DEGRADED`, the playbook never emits it; the
+#: client mirrors it and this constant is its single approved source.
+EXIT_CONFIRM_CHECKS_UPDATED = (
+    "核取句已依最新取得的資料更新，有變動的項目已改為未勾選，請重新閱讀後再勾選。"
 )
 
 #: N-166 風控 S9: check 2 in place of the standard one **only** when the
@@ -549,16 +568,38 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
     "沿用先前已設定、較晚的恢復日）。"
 )
 
+#: NB-6 出清失敗面板 (N-166 合併後版本, 風控 2026-10-31 已知限制與 NB-6 合併後字面
+#: 裁示 第 3 項): the label and paragraphs 1 and 2. Paragraph 3 is
+#: :data:`EXIT_RESULT_UNCONFIRMED_RETRY` below (revised by CEO #87 回審). The panel
+#: is shown by the client for **every** failed submit -- 5xx, other non-2xx,
+#: network failure, unparsable body -- and nothing else is appended to it (no
+#: backend text, no status code). It must assert neither 「已處理」 nor 「未處理」:
+#: a 500 may land before the write (state i) or after the commit (state iii); the
+#: 「只暫停了」 state (ii) no longer exists since the command and the freeze share
+#: one transaction (ADR-0033 C-1). 「安全」「放心」 may never appear. Wording is
+#: copied verbatim from the ruling; the playbook never emits these strings -- the
+#: client mirrors them and these constants are the single approved source.
+#: Release-coupled with N-166 like paragraph 3.
+EXIT_RESULT_UNCONFIRMED_LABEL = "無法確認全部出清的處理結果"
+EXIT_RESULT_UNCONFIRMED_STATES = (
+    "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
+    "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。"
+)
+EXIT_RESULT_UNCONFIRMED_BADGE = (
+    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
+    "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+)
+
 #: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
 #: (CEO #87 回審): once 判準 Z can write a second line for a batch, 「不會再重複
 #: 產生」 needs its exception stated, or the sentence implies re-sending is
 #: always without effect. The paragraph's two sentences are one unit -- never
 #: split, merged, trimmed or reordered -- and 「安全」「放心」 may never appear.
 #:
-#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The panel
-#: itself -- its label, paragraphs 1 and 2 and the client mirror with its guard
-#: test -- belongs to the 出清畫面包 (N-164/N-165/N-170, PRD FR-8b／FR-11); this
-#: constant is the approved single source the mirror is checked against.
+#: Release-coupled (風控 硬性條件): only in a build that carries 判準 Z. The client
+#: mirror and its guard test belong to the 出清畫面包 (N-164/N-165/N-170, PRD
+#: FR-8b／FR-11); this constant is the approved single source the mirror is
+#: checked against.
 EXIT_RESULT_UNCONFIRMED_RETRY = (
     "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，"
     "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，"

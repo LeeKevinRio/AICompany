@@ -41,6 +41,7 @@ import {
   updateSettings,
 } from "./api";
 import { DIRECTORY_STATUS_PROBE_LIMIT, DIRECTORY_STATUS_PROBE_QUERY } from "./directorySearch";
+import type { ExitReceiptSink } from "./exitReceiptStore";
 import type {
   AlertRuleInput,
   AlertRulePatch,
@@ -50,6 +51,7 @@ import type {
   KellyManualInput,
   Market,
   PlaybookConfirmRulesInput,
+  PlaybookEmergencyExitResponse,
   PositionPatchInput,
   PositionsResponse,
   UpdatePositionInput,
@@ -453,18 +455,88 @@ export function useConfirmPlaybookRules() {
 }
 
 /**
- * `POST /api/playbook/emergency-exit`. Invalidates `playbook-today` on
- * success so the mode badge / ledger reflect the freeze immediately, without
- * a manual page reload.
+ * Mutation options for `POST /api/playbook/emergency-exit`, split out of the
+ * hook so the behaviour can be exercised against a plain `MutationObserver` in
+ * the node test environment (no React, no jsdom).
+ *
+ * `onSuccess` (hook level) records the accepted response in the receipt store
+ * (風控 2026-11-01 FE-2). Hook-level callbacks belong to the *mutation*, not to
+ * an observer, so they run even if `/playbook` has unmounted by the time the
+ * response lands — say the user pressed 返回 while the request was in flight.
+ * The mutate-level `onSuccess` of the page's observer would not run then
+ * (TanStack skips mutate callbacks once the observer has no listener). The
+ * closure captures only the Providers-scope store, which outlives the page, so
+ * the receipt is never lost; a page that mounts later reads it from the store.
+ * Dialog closing stays a page concern and is done by the page's own
+ * mutate-level callback.
+ *
+ * `onSettled` runs for success and failure alike (FR-8a, 風控 必改項 11): the
+ * status bar must reflect the backend's real mode after *any* ending, because
+ * a 5xx may sit on either side of the write. It does two things, in this order
+ * (FE-C13, tech-architect Q14):
+ *
+ * 1. `cancelQueries` — `invalidateQueries` only cancels an in-flight request
+ *    when the query already holds data. During the first load there is no
+ *    data, the refetch is folded into the request already in flight, and that
+ *    request (sent before the exit, carrying the pre-exit `normal` mode) would
+ *    be applied when it lands (AC-55). Cancelling first reverts the query to
+ *    its pre-fetch state without dispatching an error, so the skeleton stays.
+ * 2. `invalidateQueries` — starts the fresh request.
+ *
+ * Neither is awaited, and the callbacks return nothing: hook-level callbacks
+ * are awaited before the mutation resolves, so returning either promise would
+ * hold 「送出中」 until `/today` answered.
  */
-export function useEmergencyExit() {
-  const queryClient = useQueryClient();
-  return useMutation({
+export function emergencyExitMutationOptions(queryClient: QueryClient, receipts: ExitReceiptSink) {
+  return {
     mutationFn: () => postPlaybookEmergencyExit(),
-    onSuccess: () => {
+    // 風控 2026-11-01 FE-R1 (VETO on the default): this mutation, and only this one,
+    // never waits for the browser to report 「online」. With the default
+    // `'online'`, an offline press of 確認送出 leaves the mutation `pending` +
+    // `isPaused` -- the button says 「送出中…」 while nothing has been sent, 取消
+    // and Esc are locked, and when the connection returns TanStack sends the
+    // request by itself, possibly after the user left the page or after the
+    // Taipei midnight, i.e. an irreversible confirmation carrying stale facts
+    // (R-5) and a deferred, queued submit (VETO-4). `'always'` sends now; offline
+    // that fails at once and the NB-6 panel shows, which the user can retry.
+    // Set here and not in `providers.tsx` / `defaultOptions` /
+    // `setMutationDefaults` (FE-C1: the `QueryClient` literal stays untouched).
+    // Deliberately no `retry` (it passes through the tab-focus gate and can pause
+    // too) and no `scope` (it queues): both are deferred submits.
+    networkMode: "always" as const,
+    onSuccess: (response: PlaybookEmergencyExitResponse): void => {
+      // The ONLY thing this callback does (ADR-0037 補充一 FE-C4(a)): synchronous,
+      // returns nothing, and nothing catches what `accept()` throws. TanStack awaits
+      // this callback with no try/catch around it (`mutation.ts:246`), so an
+      // exception here ends the mutation in `error` -- the NB-6 panel shows, the
+      // dialog stays open, and re-sending is answered by N-166 with the full
+      // restatement (S1). That is the point (INV-1): a `success` status always means
+      // the receipt is in the store, so 「2xx arrived, dialog closed, no banner」
+      // cannot happen. Swallowing the exception here would produce exactly that
+      // (風控 FE-R3). `accept()` itself commits the snapshot first and isolates
+      // subscriber exceptions, so only a failure *before* the commit can get out.
+      // It touches no UI state: closing the dialog and releasing the lock are the
+      // page's mutate-level callbacks.
+      receipts.accept(response);
+    },
+    onSettled: (): void => {
+      void queryClient.cancelQueries({ queryKey: ["playbook-today"] });
       void queryClient.invalidateQueries({ queryKey: ["playbook-today"] });
     },
-  });
+  };
+}
+
+/**
+ * `POST /api/playbook/emergency-exit`. The receipt (橫幅) is *not* derived from
+ * this mutation's state: `reset()`, the next `mutate()` and observer unmount
+ * all drop `mutation.data`, so the receipt lives in the Providers-scope store
+ * (`exitReceiptStore.ts`, VETO-1). The caller passes the store's narrow sink; this
+ * module imports no context and no page code. Call this hook once, at page
+ * level, so the observer outlives every `/today` state (VETO-2).
+ */
+export function useEmergencyExit(receipts: ExitReceiptSink) {
+  const queryClient = useQueryClient();
+  return useMutation(emergencyExitMutationOptions(queryClient, receipts));
 }
 
 /* --- Kelly input (ADR-0006 D-8, C5, app/api/kelly.py) -------------------- */
