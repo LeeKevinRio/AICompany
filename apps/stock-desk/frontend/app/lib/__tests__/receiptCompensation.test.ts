@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMPENSATION_MAX_STABLE_WAIT_FRAMES,
   createReceiptCompensation,
+  fetchStatusSignal,
   isScrollKey,
   receiptCompensationDelta,
 } from "../receiptCompensation";
@@ -232,5 +233,67 @@ describe("compensation controller (V-47 a-d, FR-3 iv, AC-33)", () => {
     expect(h.pendingFrames()).toBe(0);
     h.flushFrames();
     expect(h.scrolls).toEqual([]);
+  });
+});
+
+describe("offline pause is not the end of a refetch (N-183)", () => {
+  it("fetchStatusSignal: only idle ends a refetch, paused changes nothing", () => {
+    expect(fetchStatusSignal("fetching")).toBe(true);
+    expect(fetchStatusSignal("idle")).toBe(false);
+    expect(fetchStatusSignal("paused")).toBeNull();
+  });
+
+  // Mirrors the hook: a null signal is skipped, anything else is forwarded.
+  const feed = (h: ReturnType<typeof harness>, status: "fetching" | "paused" | "idle") => {
+    const signal = fetchStatusSignal(status);
+    if (signal !== null) h.controller.fetchingChanged(signal);
+  };
+
+  it("(a) paused does not judge; the real end after reconnecting does", () => {
+    const h = harness(covered);
+    h.controller.arm(1, false);
+    feed(h, "fetching");
+    feed(h, "paused"); // went offline mid-refetch
+    h.flushFrames();
+    expect(h.scrolls).toEqual([]);
+    expect(h.controller.state.phase).toBe("waiting");
+    feed(h, "fetching"); // reconnected, the retry runs
+    feed(h, "idle"); // the refetch really ended
+    h.flushFrames();
+    expect(h.scrolls).toEqual([160 - (277 + 16)]);
+    expect(h.controller.state.phase).toBe("done");
+  });
+
+  it("(a) paused straight after arm (refetch in flight) keeps waiting for idle", () => {
+    const h = harness(covered);
+    h.controller.arm(1, true);
+    feed(h, "paused");
+    h.flushFrames();
+    expect(h.scrolls).toEqual([]);
+    feed(h, "idle");
+    h.flushFrames();
+    expect(h.scrolls).toHaveLength(1);
+  });
+
+  // KNOWN LIMITATION (handoff interpretation point 4): if the refetch already ended
+  // before `arm`, the controller does not look back; it waits for the NEXT refetch
+  // (in-flight -> idle). Accepted: the first scroll uses the live bar height, so
+  // the loss window is tiny. This test pins the behaviour; change it only together
+  // with the spec.
+  it("(b) known limitation: a refetch that ended before arm is not judged, the next one is", () => {
+    const h = harness(covered);
+    feed(h, "fetching");
+    feed(h, "idle"); // ended before arm
+    h.controller.arm(1, false);
+    h.flushFrames();
+    expect(h.scrolls).toEqual([]);
+    expect(h.controller.state.phase).toBe("waiting");
+    feed(h, "idle"); // idle again without a new fetch: still not a sync point
+    h.flushFrames();
+    expect(h.scrolls).toEqual([]);
+    feed(h, "fetching"); // the next refetch
+    feed(h, "idle");
+    h.flushFrames();
+    expect(h.scrolls).toEqual([160 - (277 + 16)]);
   });
 });

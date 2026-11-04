@@ -64,6 +64,17 @@ export function isScrollKey(key: string): boolean {
   return SCROLL_KEYS.has(key);
 }
 
+/**
+ * Maps a TanStack `fetchStatus` to the controller's in-flight signal: `true` while
+ * fetching, `false` only when idle (the refetch really ended), and `null` for
+ * `"paused"` (offline), which must change nothing: a paused fetch has not ended.
+ */
+export function fetchStatusSignal(status: "fetching" | "paused" | "idle"): boolean | null {
+  if (status === "fetching") return true;
+  if (status === "idle") return false;
+  return null;
+}
+
 export interface CompensationMeasure {
   bannerTop: number;
   barBottom: number | null;

@@ -327,8 +327,8 @@ describe("occlusion compensation wiring (spec r3.5a §4.2, FR-3, AC-68)", () => 
 
   it("detects manual scrolling from input events, never from a scrollY difference", () => {
     for (const ev of ["wheel", "touchmove", "keydown"]) expect(comp).toContain(`"${ev}"`);
-    expect(comp).not.toMatch(/scrollY|pageYOffset|addEventListener\("scroll"/);
-    expect(lib).not.toMatch(/scrollY|pageYOffset/);
+    expect(comp).not.toMatch(/scrollY|pageYOffset|addEventListener\("scroll"|onscroll/i);
+    expect(lib).not.toMatch(/scrollY|pageYOffset|onscroll/i);
   });
 
   it("scrolls instantly, never moves focus, uses 12 to trigger and 16 as target", () => {
@@ -340,7 +340,13 @@ describe("occlusion compensation wiring (spec r3.5a §4.2, FR-3, AC-68)", () => 
 
   it("reads the bar height with getBoundingClientRect and applies no safety valve", () => {
     expect(comp).toContain("getBoundingClientRect()");
-    expect(comp + lib).not.toMatch(/OVER_HALF|innerHeight \* 0\.5|0\.5 \* /);
+    // Any viewport or element-height reference could host a safety valve: ban them all.
+    expect(comp).not.toMatch(/innerHeight|visualViewport|clientHeight/);
+    expect(lib).not.toMatch(/innerHeight|visualViewport|clientHeight/);
+    expect(comp + lib).not.toMatch(/OVER_HALF/);
+    // Only "idle" ends a refetch: the hook routes fetchStatus through the signal map.
+    expect(comp).toContain("fetchStatusSignal(fetchStatus)");
+    expect(comp).not.toMatch(/fetchStatus\s*===/);
   });
 
   it("the compensation opens no query observer and adds nothing to the store", () => {
