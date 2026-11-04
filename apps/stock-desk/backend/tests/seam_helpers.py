@@ -8,14 +8,24 @@ compares today's responses, minus the keys the seam adds, with that record.
 Every clock is pinned: ``evaluate_today`` through :class:`ClockedService`, and
 ``emergency_exit`` here, so the bodies are identical run to run once the
 ``as_of`` timestamps are dropped.
+
+The golden is frozen byte for byte at ``5c2d3e1`` (ADR-0035 補充四釐清二 E-5,
+:data:`GOLDEN_SHA256`). A legitimate difference after the seam is registered in
+``tests/golden/seam/approved/<owner>.json`` (E-6) and read by
+:func:`load_registrations`; SEAM-T2 compares each body with the golden *after*
+:func:`expected_bodies` applied the registered deltas, with the clock keys, the
+seam's keys and every registered ``added_keys`` dropped (:func:`dropped_keys`).
 """
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -39,6 +49,22 @@ from tests.same_day_helpers import (
 )
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "seam" / "pre_seam_responses.json"
+
+#: sha256 of ``git show 5c2d3e1:apps/stock-desk/backend/tests/golden/seam/pre_seam_responses.json``
+#: (釐清二 E-5 第 2 點). Written once by the mechanism commit; never edited.
+GOLDEN_SHA256 = "3e2d4bfe01321a8b6936b37056d9cb2f4c69db86a29a8146fba127de012abf7c"
+
+#: 釐清二 E-6 第 1 點: one registration file per owner.
+APPROVED = GOLDEN.parent / "approved"
+
+#: The four keys the seam itself added (ADR-0035 補充四 2.2), always dropped.
+SEAM_LIST_KEYS = (
+    "pending_exit_directives",
+    "entry_before_exit_directives",
+    "entry_before_exit_blocked_directives",
+)
+SEAM_NOTE_KEY = "entry_before_exit_note"
+SEAM_KEYS = frozenset({*SEAM_LIST_KEYS, SEAM_NOTE_KEY})
 
 
 class FullyClockedService(ClockedService):
@@ -83,6 +109,223 @@ def without(value: Any, keys: frozenset[str]) -> Any:
 
 #: Wall-clock fields; never part of a comparison.
 CLOCK_KEYS = frozenset({"as_of"})
+
+
+def golden_sha256() -> str:
+    return hashlib.sha256(GOLDEN.read_bytes()).hexdigest()
+
+
+# --- 釐清二 E-6: the approved-difference registry ---------------------------------------
+
+#: E-6 第 2 點: what a ``filled`` entry may name, per kind.
+FILLED_NAMES: dict[str, frozenset[str]] = {
+    "today_lists": frozenset(SEAM_LIST_KEYS),
+    "note": frozenset({SEAM_NOTE_KEY}),
+    "in_flight": frozenset({"exits", "entries"}),
+}
+DELTA_OPS = frozenset({"replace", "insert", "remove"})
+_REGISTRATION_KEYS = frozenset({"owner", "added_keys", "filled", "deltas"})
+_DELTA_KEYS = frozenset({"id", "source", "approval", "scenario", "body", "path", "op"})
+#: Characters that would make a path element a pattern rather than a key (E-6 第 4 點).
+_PATTERN_CHARACTERS = frozenset("*?[]{}()|^$\\")
+
+
+class RegistryError(AssertionError):
+    """A registration file breaks 釐清二 E-6; SEAM-T2 fails on it."""
+
+
+@dataclass(frozen=True)
+class Registration:
+    """One ``approved/<owner>.json`` file, validated (E-6 第 2 點)."""
+
+    file: str
+    owner: str
+    added_keys: tuple[str, ...]
+    #: ``(kind, name)`` pairs, e.g. ``("today_lists", "pending_exit_directives")``.
+    filled: tuple[tuple[str, str], ...]
+    #: ``(kind, name, test node id)`` for each ``filled`` entry.
+    filled_tests: tuple[tuple[str, str, str], ...]
+    deltas: tuple[dict[str, Any], ...]
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RegistryError(message)
+
+
+def parse_registration(file: str, raw: Any) -> Registration:
+    """Validate one file's content; raises :class:`RegistryError` on any breach."""
+    _require(isinstance(raw, dict), f"{file}: not an object")
+    _require(set(raw) == _REGISTRATION_KEYS, f"{file}: keys must be {sorted(_REGISTRATION_KEYS)}")
+    owner = raw["owner"]
+    _require(isinstance(owner, str) and owner != "", f"{file}: owner")
+    _require(file == f"{owner}.json", f"{file}: one file per owner, named <owner>.json")
+
+    added: list[str] = []
+    for item in raw["added_keys"]:
+        _require(
+            isinstance(item, dict) and set(item) == {"key", "source"}, f"{file}: added_keys item"
+        )
+        _require(isinstance(item["source"], str) and item["source"] != "", f"{file}: source")
+        key = item["key"]
+        _require(isinstance(key, str) and key != "", f"{file}: added key")
+        _require(not set(key) & _PATTERN_CHARACTERS, f"{file}: pattern in added key {key!r}")
+        added.append(key)
+
+    filled: list[tuple[str, str]] = []
+    filled_tests: list[tuple[str, str, str]] = []
+    for item in raw["filled"]:
+        _require(
+            isinstance(item, dict) and set(item) == {"kind", "name", "source", "test"},
+            f"{file}: filled item",
+        )
+        kind, name = item["kind"], item["name"]
+        _require(kind in FILLED_NAMES, f"{file}: filled kind {kind!r}")
+        _require(name in FILLED_NAMES[kind], f"{file}: filled name {name!r} for {kind}")
+        _require(isinstance(item["source"], str) and item["source"] != "", f"{file}: source")
+        test = item["test"]
+        _require(isinstance(test, str) and "::" in test, f"{file}: test node id")
+        filled.append((kind, name))
+        filled_tests.append((kind, name, test))
+
+    deltas: list[dict[str, Any]] = []
+    for item in raw["deltas"]:
+        _require(isinstance(item, dict), f"{file}: delta")
+        op = item.get("op")
+        _require(op in DELTA_OPS, f"{file}: op {op!r}")
+        required = set(_DELTA_KEYS)
+        if op in ("replace", "remove"):
+            required.add("before")
+        if op in ("replace", "insert"):
+            required.add("after")
+        _require(set(item) == required, f"{file}: delta {item.get('id')!r} keys")
+        for key in ("id", "source", "approval", "scenario", "body"):
+            _require(isinstance(item[key], str) and item[key] != "", f"{file}: delta {key}")
+        path = item["path"]
+        _require(isinstance(path, list) and path != [], f"{file}: delta path")
+        for step in path:
+            _require(
+                (isinstance(step, int) and not isinstance(step, bool))
+                or (isinstance(step, str) and step != "" and not set(step) & _PATTERN_CHARACTERS),
+                f"{file}: path element {step!r}",
+            )
+        if op == "replace":
+            _require(item["after"] != item["before"], f"{file}: empty delta {item['id']}")
+            _require(
+                not isinstance(item["before"], list), f"{file}: whole-list replace {item['id']}"
+            )
+        deltas.append(item)
+    return Registration(
+        file=file,
+        owner=owner,
+        added_keys=tuple(added),
+        filled=tuple(filled),
+        filled_tests=tuple(filled_tests),
+        deltas=tuple(deltas),
+    )
+
+
+def load_registrations(directory: Path = APPROVED) -> list[Registration]:
+    """Every registration file, in file-name order (E-6 第 3 點 2))."""
+    files = sorted(directory.glob("*.json")) if directory.is_dir() else []
+    registrations = [
+        parse_registration(path.name, json.loads(path.read_text(encoding="utf-8")))
+        for path in files
+    ]
+    ids = [delta["id"] for registration in registrations for delta in registration.deltas]
+    _require(len(ids) == len(set(ids)), f"duplicate delta id among {ids}")
+    return registrations
+
+
+def _keys_at_any_depth(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return set(value) | {key for item in value.values() for key in _keys_at_any_depth(item)}
+    if isinstance(value, list):
+        return {key for item in value for key in _keys_at_any_depth(item)}
+    return set()
+
+
+def dropped_keys(registrations: Sequence[Registration], golden: Any) -> frozenset[str]:
+    """Clock keys ∪ the seam's four ∪ every ``added_keys`` (E-6 第 3 點 3))."""
+    added = {key for registration in registrations for key in registration.added_keys}
+    collisions = added & (_keys_at_any_depth(golden) | CLOCK_KEYS | SEAM_KEYS)
+    _require(not collisions, f"added_keys already in the golden: {sorted(collisions)}")
+    return CLOCK_KEYS | SEAM_KEYS | frozenset(added)
+
+
+def filled(registrations: Sequence[Registration], kind: str) -> frozenset[str]:
+    """The names of ``kind`` some owner registered as filled (E-6 第 6 點)."""
+    return frozenset(
+        name
+        for registration in registrations
+        for filled_kind, name in registration.filled
+        if filled_kind == kind
+    )
+
+
+def _parent(document: Any, path: Sequence[Any], where: str) -> Any:
+    node = document
+    for step in path[:-1]:
+        if isinstance(node, dict):
+            _require(isinstance(step, str) and step in node, f"{where}: no key {step!r}")
+        else:
+            _require(
+                isinstance(node, list) and isinstance(step, int) and 0 <= step < len(node),
+                f"{where}: no index {step!r}",
+            )
+        node = node[step]
+    return node
+
+
+def expected_bodies(golden: Any, registrations: Sequence[Registration]) -> Any:
+    """The golden with every registered delta applied, file then in-file order (E-6 第 3 點 4))."""
+    expected = copy.deepcopy(golden)
+    touched: dict[tuple[Any, ...], str] = {}
+    for registration in registrations:
+        for delta in registration.deltas:
+            where = f"{registration.file}:{delta['id']}"
+            _require(delta["scenario"] in expected, f"{where}: scenario")
+            _require(delta["body"] in expected[delta["scenario"]], f"{where}: body")
+            document = expected[delta["scenario"]][delta["body"]]
+            parent = _parent(document, delta["path"], where)
+            # Two owners may not land on one list or one leaf (E-6 第 4 點).
+            full = (delta["scenario"], delta["body"], *delta["path"])
+            shared = [full, full[:-1]] if isinstance(parent, list) else [full]
+            for key in shared:
+                other = touched.get(key)
+                _require(
+                    other is None or other == registration.owner,
+                    f"{where}: shares {key} with {other}",
+                )
+                touched[key] = registration.owner
+            last = delta["path"][-1]
+            op = delta["op"]
+            if last == "message":
+                _require(op == "replace", f"{where}: message may only be replaced")
+                _require(
+                    isinstance(delta["after"], str) and delta["after"].startswith(delta["before"]),
+                    f"{where}: a message may only be appended to (C-B5)",
+                )
+            if op == "insert":
+                _require(
+                    isinstance(parent, list) and isinstance(last, int) and 0 <= last <= len(parent),
+                    f"{where}: insert index",
+                )
+                parent.insert(last, delta["after"])
+                continue
+            if isinstance(parent, dict):
+                _require(isinstance(last, str) and last in parent, f"{where}: no key {last!r}")
+            else:
+                _require(
+                    isinstance(parent, list) and isinstance(last, int) and 0 <= last < len(parent),
+                    f"{where}: no index {last!r}",
+                )
+            _require(parent[last] == delta["before"], f"{where}: before does not match")
+            if op == "replace":
+                parent[last] = delta["after"]
+            else:
+                del parent[last]
+    return expected
 
 
 def authored(db_path: Path) -> dict[str, Any]:
