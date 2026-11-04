@@ -524,6 +524,71 @@ class ExitConfirm(BaseModel):
     checks: list[str]
 
 
+#: ADR-0039 Decision 1: which kind of row / section of the pending-exit block --
+#: still covering its batch under 判準 Z, no longer covering it, or not
+#: classified at all (the unauthored path loads no bars, so it never judges).
+PendingExitCoverage = Literal["covering", "stale", "unclassified"]
+
+
+class PendingExitRow(BaseModel):
+    """One row of the pending-exit block: one batch, in one kind (ADR-0039 Decision 4).
+
+    One ``(symbol, batch_no)`` per kind (風控 F-8(1)); ``shares`` is the batch's
+    ``remaining_shares`` as read, never a sum of its lines (C4″, P-6). ``text``
+    and ``notes`` are already rendered sentences in their fixed order (補充一
+    S-1 第 4 點). ``directives`` are the row's own lines -- the EMERGENCY sells
+    of this batch in this kind, oldest first -- kept so the response can derive
+    the row's W-B2L through ``_lines`` (Decision 9); they are not sent.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    batch_no: int
+    shares: int
+    coverage: PendingExitCoverage
+    #: 風控 P-2: whether the batch has a line that still covers it. ``True`` on
+    #: a covering row, decides A-11／A-12 on a stale row, ``None`` when
+    #: unclassified -- the unauthored path cannot know (P-3).
+    batch_has_covering: bool | None
+    #: The row's lines' 預定執行日, de-duplicated and ascending.
+    execution_dates: list[date]
+    text: str
+    notes: list[str]
+    directives: list[Directive]
+
+
+class PendingExitSection(BaseModel):
+    """One section of the pending-exit block: label, lead, rows (ADR-0039 Decision 1)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: PendingExitCoverage
+    #: A-7 or A-8; ``None`` when the section is rendered without a label.
+    label: str | None
+    #: A-3, A-9 or A-4.
+    lead: str
+    rows: list[PendingExitRow]
+
+
+class PendingExitBlock(BaseModel):
+    """The pending-exit block (A-1 its title), composed by the service (ADR-0039 Decision 1, 5).
+
+    Never empty: with no row at all there is no block (``None``, C14).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: A-1.
+    title: str
+    #: A-2 with ``{read_at}`` left in place for the client (Decision 16 P-8, C19).
+    lead_template: str
+    #: covering then stale on the authored path; unclassified alone otherwise.
+    sections: list[PendingExitSection]
+    #: [A-14] authored; [A-13, A-14] unauthored.
+    closing_notes: list[str]
+
+
 class PlaybookEvaluation(BaseModel):
     """Everything one schedule-day evaluation produced."""
 
@@ -586,6 +651,10 @@ class PlaybookEvaluation(BaseModel):
     entry_before_exit_blocked_directives: list[Directive] = Field(default_factory=list)
     #: ADR-0035 補充四 2.2(c): the batches W-B2／W-B2L label; N-168 fills it.
     labeled_batches: tuple[LabeledBatch, ...] = ()
+    #: ADR-0039 Decision 1 (N-171, additive): the pending-exit block built from
+    #: the same in-flight read as ``pending_exit_directives``, which holds every
+    #: line of it in all three kinds; ``None`` when it has no row.
+    pending_exit_block: PendingExitBlock | None = None
 
 
 class EmergencyExitResult(BaseModel):

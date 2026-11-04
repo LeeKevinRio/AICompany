@@ -281,7 +281,15 @@ class EmergencyExitState(NamedTuple):
 
 
 class PendingExitRead(NamedTuple):
-    """N-171's part of :class:`InFlightRead` (ADR-0039 Decision 2). Empty in the seam."""
+    """N-171's part of :class:`InFlightRead` (ADR-0039 Decision 2).
+
+    The EMERGENCY_EXIT state itself -- the open batches and every unsettled
+    EMERGENCY sell -- read by :meth:`PlaybookStore._read_exit_state`, the very
+    query the exit decides from under its lock, so ``/today`` has no candidate
+    SQL of its own (N171-C2″). Which lines still cover is the service's call.
+    """
+
+    state: EmergencyExitState
 
 
 class EntryBeforeExitRead(NamedTuple):
@@ -302,9 +310,8 @@ class InFlightRead(NamedTuple):
 
 
 def _read_pending_exits(conn: sqlite3.Connection) -> PendingExitRead:
-    """N-171's in-flight read on ``conn``. A stub in the seam: no statement runs."""
-    del conn
-    return PendingExitRead()
+    """N-171's in-flight read on ``conn``: SELECTs only, through ``_read_exit_state``."""
+    return PendingExitRead(state=PlaybookStore._read_exit_state(conn))
 
 
 def _read_entry_before_exit(conn: sqlite3.Connection) -> EntryBeforeExitRead:

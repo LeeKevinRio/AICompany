@@ -1,0 +1,24 @@
+{
+ "owner": "n171a",
+ "added_keys": [
+  {
+   "key": "pending_exit_block",
+   "source": "ADR-0039 Decision 1（補充一 S-1、S-7 第 3 點）"
+  }
+ ],
+ "filled": [
+  {
+   "kind": "today_lists",
+   "name": "pending_exit_directives",
+   "source": "ADR-0039 Decision 1、2（補充四 S-3 擁有項；釐清二 E-9 第 2 點）",
+   "test": "tests/test_playbook_pending_exit_block.py::test_seam_filled_pending_exit_directives_on_the_golden_scenarios"
+  },
+  {
+   "kind": "in_flight",
+   "name": "exits",
+   "source": "ADR-0039 Decision 2（_read_pending_exits 呼叫 _read_exit_state；釐清二 E-9 第 2 點）",
+   "test": "tests/test_playbook_pending_exit_block.py::test_seam_filled_in_flight_exits_on_the_golden_scenario"
+  }
+ ],
+ "deltas": []
+}
