@@ -47,6 +47,7 @@ arrives through the cap-1 dependency in :mod:`app.api.deps`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Annotated
 
@@ -62,6 +63,7 @@ from app.playbook.models import (
     Directive,
     ExitConfirm,
     FastMarketState,
+    LabeledBatch,
     PlaybookEvaluation,
     RuleParams,
     RuleSetStatus,
@@ -84,6 +86,10 @@ class DirectiveLine(BaseModel):
 
     line: str
     directive: Directive
+    #: W-B2L for a sell line of a labeled batch (ADR-0034 補充一 S-3 第 4 點), in a
+    #: field of its own -- never appended to ``line`` (VETO). Set only by
+    #: :func:`_lines`; ``None`` until N-168 implements the rule (ADR-0035 補充四 2.2(b)).
+    entry_before_exit_note: str | None = None
 
 
 class SettledLineResponse(BaseModel):
@@ -262,6 +268,15 @@ class TodayResponse(BaseModel):
     #: never part of ``page_summary`` or ``warnings`` (風控 #68 裁決 2.2).
     cap1_disclosure: PlaybookCap1Disclosure
     as_of: str
+    #: ADR-0035 補充四 2.2(a) (切面): three in-flight lists, each in its own field
+    #: and never mixed into ``directives`` or each other (ADR-0034 補充一 S-3 第 6
+    #: 點). ``[]`` until their owners fill them, all from one ``read_in_flight``.
+    #: Owner N-171 (ADR-0039 Decision 1).
+    pending_exit_directives: list[DirectiveLine] = Field(default_factory=list)
+    #: Owner N-168 (W-B1 類).
+    entry_before_exit_directives: list[DirectiveLine] = Field(default_factory=list)
+    #: Owner N-168 (G1 擋下類).
+    entry_before_exit_blocked_directives: list[DirectiveLine] = Field(default_factory=list)
 
 
 class EmergencyExitResponse(BaseModel):
@@ -289,9 +304,25 @@ class EmergencyExitResponse(BaseModel):
     as_of: str
 
 
-def _lines(directives: list[Directive]) -> list[DirectiveLine]:
+def _lines(
+    directives: Sequence[Directive], *, labeled_batches: Sequence[LabeledBatch]
+) -> list[DirectiveLine]:
+    """Every :class:`DirectiveLine` of every response is built here and nowhere else.
+
+    ADR-0035 補充四 2.5 / ADR-0034 補充一 S-3 第 4 點: ``line`` is
+    :func:`wording.directive_line` verbatim, because the client splits it on
+    「｜」 and renders fixed positions -- nothing is ever appended to it (VETO).
+    ``labeled_batches`` is required and keyword-only so no call site can forget
+    the labels; the rule that turns them into ``entry_before_exit_note`` is
+    N-168's, and until then the note is always ``None``.
+    """
+    del labeled_batches  # read by N-168's rule only
     return [
-        DirectiveLine(line=wording.directive_line(directive), directive=directive)
+        DirectiveLine(
+            line=wording.directive_line(directive),
+            directive=directive,
+            entry_before_exit_note=None,
+        )
         for directive in directives
     ]
 
@@ -395,7 +426,7 @@ def _to_response(
             else evaluation.rules_effective_date.isoformat()
         ),
         page_summary=evaluation.page_summary,
-        directives=_lines(evaluation.directives),
+        directives=_lines(evaluation.directives, labeled_batches=evaluation.labeled_batches),
         snapshot=evaluation.snapshot,
         warnings=evaluation.warnings,
         rules_fully_evaluated=evaluation.rules_fully_evaluated,
@@ -411,6 +442,16 @@ def _to_response(
         exit_confirm=evaluation.exit_confirm,
         cap1_disclosure=cap1_disclosure,
         as_of=now_iso(),
+        pending_exit_directives=_lines(
+            evaluation.pending_exit_directives, labeled_batches=evaluation.labeled_batches
+        ),
+        entry_before_exit_directives=_lines(
+            evaluation.entry_before_exit_directives, labeled_batches=evaluation.labeled_batches
+        ),
+        entry_before_exit_blocked_directives=_lines(
+            evaluation.entry_before_exit_blocked_directives,
+            labeled_batches=evaluation.labeled_batches,
+        ),
     )
 
 
@@ -539,7 +580,7 @@ def rebalance(service: ServiceDep) -> RebalanceResponse:
         deployed_value=None if result.deployed_value is None else str(result.deployed_value),
         overshoot=None if result.overshoot is None else str(result.overshoot),
         message=result.message,
-        directives=_lines(result.directives),
+        directives=_lines(result.directives, labeled_batches=()),
         warnings=result.warnings,
         as_of=now_iso(),
     )
@@ -562,8 +603,10 @@ def emergency_exit(service: ServiceDep) -> EmergencyExitResponse:
         message=result.message,
         mode_reason=result.mode_reason,
         attribution=result.attribution,
-        directives=_lines(result.directives),
-        pending_directives=_lines(result.pending_directives),
+        directives=_lines(result.directives, labeled_batches=result.labeled_batches),
+        pending_directives=_lines(
+            result.pending_directives, labeled_batches=result.labeled_batches
+        ),
         warnings=result.warnings,
         as_of=now_iso(),
     )

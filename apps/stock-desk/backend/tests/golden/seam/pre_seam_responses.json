@@ -1,0 +1,796 @@
+{
+ "after_exit": {
+  "exit": {
+   "attribution": "此指令是你在本次操作中提交的「全部出清」要求之機械執行結果，非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，無論規則集是否已確認皆可送出。",
+   "directives": [
+    {
+     "directive": {
+      "action": "sell",
+      "batch_no": 2,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": null,
+      "limit_low": null,
+      "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+      "reference_price": "100.0",
+      "rule_id": "EMERGENCY",
+      "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+      "shares": 300,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 2 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    },
+    {
+     "directive": {
+      "action": "sell",
+      "batch_no": 3,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": null,
+      "limit_low": null,
+      "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+      "reference_price": "100.0",
+      "rule_id": "EMERGENCY",
+      "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+      "shares": 300,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 3 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "executed_at": "2026-08-11",
+   "execution_date": "2026-08-12",
+   "freeze_until": "2026-09-08",
+   "message": "EMERGENCY_EXIT 已受理：已產生 2 批、共 600 股的賣出指令，預定執行日 2026-08-12 開盤以市價單送出，市價單在跌停或無量時可能無法成交，實際成交結果以你的券商回報為準；R 系列（新倉進場）自 2026-08-11 起暫停 20 交易日（依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "mode_reason": "緊急出清後凍結：R 系列（新倉進場）暫停中（第 1/20 交易日，依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "pending_directives": [],
+   "total_shares": 600,
+   "warnings": []
+  },
+  "exit_repeat": {
+   "attribution": "此指令是你在先前操作中提交的「全部出清」要求之機械執行結果，非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，無論規則集是否已確認皆可送出。",
+   "directives": [],
+   "executed_at": "2026-08-11",
+   "execution_date": "2026-08-12",
+   "freeze_until": "2026-09-08",
+   "message": "EMERGENCY_EXIT 已受理：本次未產生新的賣出指令。目前全部 2 批、共 600 股的持有批次，都已有你先前提交全部出清時產生、尚未結算的賣出指令（預定執行日 2026-08-12 開盤以市價單送出）；這些先前的指令仍然有效，本次未取消、未修改，也未重新產生。本次回應不是另一筆賣出指令，請勿據此到券商重複下單；若你尚未依先前的指令下單，以上述 2 批、共 600 股為準。市價單在跌停或無量時可能無法成交，實際成交結果以你的券商回報為準；R 系列（新倉進場）自 2026-08-11 起暫停 20 交易日（依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "mode_reason": "緊急出清後凍結：R 系列（新倉進場）暫停中（第 1/20 交易日，依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "pending_directives": [
+    {
+     "directive": {
+      "action": "sell",
+      "batch_no": 2,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": null,
+      "limit_low": null,
+      "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+      "reference_price": "100.0",
+      "rule_id": "EMERGENCY",
+      "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+      "shares": 300,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 2 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    },
+    {
+     "directive": {
+      "action": "sell",
+      "batch_no": 3,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": null,
+      "limit_low": null,
+      "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+      "reference_price": "100.0",
+      "rule_id": "EMERGENCY",
+      "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+      "shares": 300,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 3 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "total_shares": 0,
+   "warnings": []
+  },
+  "today": {
+   "attribution": "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-11",
+   "directives": [
+    {
+     "directive": {
+      "action": "buy",
+      "batch_no": 1,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": "102.00",
+      "limit_low": "98.00",
+      "limit_note": "限價帶",
+      "reference_price": "100",
+      "rule_id": "R1",
+      "rule_summary": "R1 排程日進場",
+      "shares": 666,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 1 批｜買進｜666 股｜規則 R1｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "execution_date": "2026-08-12",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-08，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-08"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": 0.0,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": "2026-08-11",
+    "reason": null
+   },
+   "is_schedule_day": true,
+   "mode": "emergency_frozen",
+   "mode_label": "緊急出清後凍結",
+   "mode_reason": "緊急出清後凍結：R 系列（新倉進場）暫停中（第 1/20 交易日，依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-11 收盤資料計算。",
+    "採用規則版本 1（生效日 2026-01-01）。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": "2026-01-01",
+   "rules_fully_evaluated": false,
+   "rules_version": 1,
+   "settlement": {
+    "executed": 0,
+    "missed": 0,
+    "settled": [],
+    "settled_on": "2026-08-11",
+    "unsettled": [],
+    "warnings": [
+     "T+1 結算：目前沒有待結算指令。"
+    ]
+   },
+   "snapshot": [
+    {
+     "batch_no": 1,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    },
+    {
+     "batch_no": 2,
+     "close": "100.0",
+     "cost": "100",
+     "entry_date": "2026-07-01",
+     "peak_close": "100",
+     "remaining_shares": 300,
+     "status": "open",
+     "symbol": "2330",
+     "unrealized_pct": "0.0"
+    },
+    {
+     "batch_no": 3,
+     "close": "100.0",
+     "cost": "100",
+     "entry_date": "2026-07-01",
+     "peak_close": "100",
+     "remaining_shares": 300,
+     "status": "open",
+     "symbol": "2330",
+     "unrealized_pct": "0.0"
+    }
+   ],
+   "warnings": [
+    "目前為緊急出清後凍結模式：R 系列進場不執行；S／P 系列停損停利仍照常評估。",
+    "指令帳冊中有 1 筆 R 系列買進指令，是同一預定執行日稍早一次評估已產生的指令：2330第 1 批買進 666 股（規則 R1，預定執行日 2026-08-12）。本次評估沒有產生這些買進指令，但已產生的指令不會因此取消或修改，帳冊會照常以預定執行日開盤價判定，判定成交即記為持有批次並扣除帳冊現金；本頁其他說明若提到 R 系列進場不執行、當日不新開倉或當日不產生指令，是指本次評估不再產生新的指令，不包括上述已產生的指令。本系統不下單，無法得知你是否已依這些指令在券商下單，也無法替你在券商撤單：若你在券商的買進實際成交，實際持股以你的券商回報為準；若未成交（包括未下單或已自行撤單），帳冊判定成交的批次將與你的實際持股不符。"
+   ]
+  },
+  "today_next_day": {
+   "attribution": "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-12",
+   "directives": [],
+   "execution_date": "2026-08-13",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-09，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-09"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": 0.0,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": "2026-08-12",
+    "reason": null
+   },
+   "is_schedule_day": false,
+   "mode": "emergency_frozen",
+   "mode_label": "緊急出清後凍結",
+   "mode_reason": "緊急出清後凍結：R 系列（新倉進場）暫停中（第 1/20 交易日，依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-12 收盤資料計算。",
+    "採用規則版本 1（生效日 2026-01-01）。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": "2026-01-01",
+   "rules_fully_evaluated": false,
+   "rules_version": 1,
+   "settlement": {
+    "executed": 3,
+    "missed": 0,
+    "settled": [
+     {
+      "directive": {
+       "action": "buy",
+       "batch_no": 1,
+       "data_date": "2026-08-11",
+       "data_reason": null,
+       "data_status": "fresh",
+       "execution_date": "2026-08-12",
+       "limit_high": "102.00",
+       "limit_low": "98.00",
+       "limit_note": "限價帶",
+       "reference_price": "100",
+       "rule_id": "R1",
+       "rule_summary": "R1 排程日進場",
+       "shares": 666,
+       "source": "fake",
+       "status": "executed",
+       "symbol": "2330"
+      },
+      "directive_id": 1,
+      "line": "2330第 1 批｜買進｜666 股｜規則 R1｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）",
+      "open_price": "100.0",
+      "status": "executed"
+     },
+     {
+      "directive": {
+       "action": "sell",
+       "batch_no": 2,
+       "data_date": "2026-08-11",
+       "data_reason": null,
+       "data_status": "fresh",
+       "execution_date": "2026-08-12",
+       "limit_high": null,
+       "limit_low": null,
+       "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+       "reference_price": "100.0",
+       "rule_id": "EMERGENCY",
+       "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+       "shares": 300,
+       "source": "fake",
+       "status": "executed",
+       "symbol": "2330"
+      },
+      "directive_id": 2,
+      "line": "2330第 2 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）",
+      "open_price": "100.0",
+      "status": "executed"
+     },
+     {
+      "directive": {
+       "action": "sell",
+       "batch_no": 3,
+       "data_date": "2026-08-11",
+       "data_reason": null,
+       "data_status": "fresh",
+       "execution_date": "2026-08-12",
+       "limit_high": null,
+       "limit_low": null,
+       "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+       "reference_price": "100.0",
+       "rule_id": "EMERGENCY",
+       "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+       "shares": 300,
+       "source": "fake",
+       "status": "executed",
+       "symbol": "2330"
+      },
+      "directive_id": 3,
+      "line": "2330第 3 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）",
+      "open_price": "100.0",
+      "status": "executed"
+     }
+    ],
+    "settled_on": "2026-08-12",
+    "unsettled": [],
+    "warnings": [
+     "T+1 結算：依 2026-08-12 開盤價判定，成交 3 筆、未成交（MISSED）0 筆、未結算 0 筆；實際成交結果以你的券商回報為準。"
+    ]
+   },
+   "snapshot": [
+    {
+     "batch_no": 1,
+     "close": "100.0",
+     "cost": "100.0",
+     "entry_date": "2026-08-12",
+     "peak_close": "100.0",
+     "remaining_shares": 666,
+     "status": "open",
+     "symbol": "2330",
+     "unrealized_pct": "0"
+    },
+    {
+     "batch_no": 2,
+     "close": "100.0",
+     "cost": "100",
+     "entry_date": "2026-07-01",
+     "peak_close": "100",
+     "remaining_shares": 0,
+     "status": "closed",
+     "symbol": "2330",
+     "unrealized_pct": "0.0"
+    },
+    {
+     "batch_no": 3,
+     "close": "100.0",
+     "cost": "100",
+     "entry_date": "2026-07-01",
+     "peak_close": "100",
+     "remaining_shares": 0,
+     "status": "closed",
+     "symbol": "2330",
+     "unrealized_pct": "0.0"
+    }
+   ],
+   "warnings": [
+    "目前為緊急出清後凍結模式：R 系列進場不執行；S／P 系列停損停利仍照常評估。"
+   ]
+  }
+ },
+ "authored": {
+  "today": {
+   "attribution": "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-11",
+   "directives": [
+    {
+     "directive": {
+      "action": "buy",
+      "batch_no": 1,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": "102.0",
+      "limit_low": "98.0",
+      "limit_note": "限價帶 98.00–102.00（T 收盤 100.00 ±2%）；開盤價超出即標記 MISSED，不追價。",
+      "reference_price": "100.0",
+      "rule_id": "R1",
+      "rule_summary": "R1 排程日進場：排程日買進該檔下一批。｜排程日進場第 1 批，參考價 100.00，股數 666",
+      "shares": 666,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 1 批｜買進｜666 股｜規則 R1｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "execution_date": "2026-08-12",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-08，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-08"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": 0.0,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": "2026-08-11",
+    "reason": null
+   },
+   "is_schedule_day": true,
+   "mode": "normal",
+   "mode_label": "正常",
+   "mode_reason": "正常模式：M1 未觸發，組合未凍結。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-11 收盤資料計算。",
+    "採用規則版本 1（生效日 2026-01-01）。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": "2026-01-01",
+   "rules_fully_evaluated": true,
+   "rules_version": 1,
+   "settlement": {
+    "executed": 0,
+    "missed": 0,
+    "settled": [],
+    "settled_on": "2026-08-11",
+    "unsettled": [],
+    "warnings": [
+     "T+1 結算：目前沒有待結算指令。"
+    ]
+   },
+   "snapshot": [
+    {
+     "batch_no": 1,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    },
+    {
+     "batch_no": 2,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    },
+    {
+     "batch_no": 3,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    }
+   ],
+   "warnings": []
+  },
+  "today_again": {
+   "attribution": "此指令是你於 2026-01-01 自行設定的規則之機械執行結果，非本系統的判斷或建議。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-11",
+   "directives": [
+    {
+     "directive": {
+      "action": "buy",
+      "batch_no": 1,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": "102.0",
+      "limit_low": "98.0",
+      "limit_note": "限價帶 98.00–102.00（T 收盤 100.00 ±2%）；開盤價超出即標記 MISSED，不追價。",
+      "reference_price": "100.0",
+      "rule_id": "R1",
+      "rule_summary": "R1 排程日進場：排程日買進該檔下一批。｜排程日進場第 1 批，參考價 100.00，股數 666",
+      "shares": 666,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 1 批｜買進｜666 股｜規則 R1｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "execution_date": "2026-08-12",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-08，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-08"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": 0.0,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": "2026-08-11",
+    "reason": null
+   },
+   "is_schedule_day": true,
+   "mode": "normal",
+   "mode_label": "正常",
+   "mode_reason": "正常模式：M1 未觸發，組合未凍結。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-11 收盤資料計算。",
+    "採用規則版本 1（生效日 2026-01-01）。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": "2026-01-01",
+   "rules_fully_evaluated": true,
+   "rules_version": 1,
+   "settlement": {
+    "executed": 0,
+    "missed": 0,
+    "settled": [],
+    "settled_on": "2026-08-11",
+    "unsettled": [],
+    "warnings": [
+     "T+1 結算：目前沒有待結算指令。"
+    ]
+   },
+   "snapshot": [
+    {
+     "batch_no": 1,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    },
+    {
+     "batch_no": 2,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    },
+    {
+     "batch_no": 3,
+     "close": "100.0",
+     "cost": null,
+     "entry_date": null,
+     "peak_close": null,
+     "remaining_shares": 0,
+     "status": "planned",
+     "symbol": "2330",
+     "unrealized_pct": null
+    }
+   ],
+   "warnings": []
+  }
+ },
+ "unauthored": {
+  "exit": {
+   "attribution": "此指令是你在本次操作中提交的「全部出清」要求之機械執行結果，非本系統的判斷或建議；EMERGENCY_EXIT 不依賴規則集，無論規則集是否已確認皆可送出。",
+   "directives": [
+    {
+     "directive": {
+      "action": "sell",
+      "batch_no": 1,
+      "data_date": "2026-08-11",
+      "data_reason": null,
+      "data_status": "fresh",
+      "execution_date": "2026-08-12",
+      "limit_high": null,
+      "limit_low": null,
+      "limit_note": "EMERGENCY_EXIT 指令不設滑價帶，T+1 開盤以市價單送出；市價單在跌停或無量時可能無法成交。",
+      "reference_price": "100.0",
+      "rule_id": "EMERGENCY",
+      "rule_summary": "EMERGENCY_EXIT：使用者提交全部出清，系統產生全部持倉的賣出指令，並自提交日起暫停 R 系列（新倉進場）20 交易日；S/P 系列停損停利仍照常評估。｜出清 300 股",
+      "shares": 300,
+      "source": "fake",
+      "status": "pending",
+      "symbol": "2330"
+     },
+     "line": "2330第 1 批｜賣出｜300 股｜規則 EMERGENCY｜依據資料日 2026-08-11｜預定執行日 2026-08-12｜參考價 100.00（依據交易日收盤價，不反映今日盤中變動）"
+    }
+   ],
+   "executed_at": "2026-08-11",
+   "execution_date": "2026-08-12",
+   "freeze_until": "2026-09-08",
+   "message": "EMERGENCY_EXIT 已受理：已產生 1 批、共 300 股的賣出指令，預定執行日 2026-08-12 開盤以市價單送出，市價單在跌停或無量時可能無法成交，實際成交結果以你的券商回報為準；R 系列（新倉進場）自 2026-08-11 起暫停 20 交易日（依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "mode_reason": "緊急出清後凍結：R 系列（新倉進場）暫停中（第 1/20 交易日，依交易日曆），預計 2026-09-08 恢復；S/P 系列停損停利仍照常評估。",
+   "pending_directives": [],
+   "total_shares": 300,
+   "warnings": []
+  },
+  "today": {
+   "attribution": "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。本模組僅依你設定的規則集產生進場、停損、停利指令，在你確認規則集之前不會產生這類指令。你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-11",
+   "directives": [],
+   "execution_date": "2026-08-11",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-08，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-08"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": null,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": null,
+    "reason": null
+   },
+   "is_schedule_day": false,
+   "mode": "unconfirmed",
+   "mode_label": "待確認規則集",
+   "mode_reason": "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。本模組僅依你設定的規則集產生進場、停損、停利指令，在你確認規則集之前不會產生這類指令。你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-11 收盤資料計算。",
+    "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": null,
+   "rules_fully_evaluated": false,
+   "rules_version": 0,
+   "settlement": null,
+   "snapshot": [],
+   "warnings": [
+    "【S/P 系列停損停利今日未依規則評估】規則集尚無你本人的設定或修改紀錄，本模組今日不產生規則驅動指令；你目前持有 2330 尚未出清，其停損/停利（S/P 系列）今日未依規則評估。"
+   ]
+  },
+  "today_after_exit": {
+   "attribution": "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。本模組僅依你設定的規則集產生進場、停損、停利指令，在你確認規則集之前不會產生這類指令。你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。",
+   "cap1_disclosure": {
+    "cap1_pct": "10%",
+    "lines": [
+     "依此規則集的參數（部署比例 70%、5 檔均分、每檔分 3 批），每檔標的的預定投入金額為 TOTAL_DEPLOY ÷ 5，約為計算 TOTAL_DEPLOY 當時排程台總資產（含現金）的 14%；實際股數依各批進場時的收盤價換算，實際成本與日後市值的佔比可能與此數不同。",
+     "第 1 條・單一標的佔比上限目前設定為 10%，分母是庫存的已估值部位市值（不含現金，即設定頁所稱的「總資產」）。排程台與庫存是兩套獨立帳冊，上述兩個百分比的分母不同，不能直接比較大小。",
+     "如果你也把排程台的持股記入庫存，第 1 條會以庫存的分母計算這些持股的佔比：例如庫存只有排程台的 5 檔且各檔市值相同時，每檔約佔 20%；達到或超過第 1 條設定值時，個股頁會顯示該檔已達或超過上限。",
+     "排程台計算股數時不讀取第 1 條或其他任何一條風險上限的設定，也不會因這些上限調整任何一批的股數；兩邊各自計算，本系統不會自動調和兩者的結果。"
+    ],
+    "per_target_book_pct": "20%",
+    "per_target_pct": "14%",
+    "rules_version": 1,
+    "title": "排程台每檔規模與第 1 條上限"
+   },
+   "data_date": "2026-08-11",
+   "directives": [],
+   "execution_date": "2026-08-11",
+   "exit_confirm": {
+    "checks": [
+     "此操作將對目前持有的全部標的、全部批次送出出清指令；不可只出清部分標的或部分批次，亦不可指定單一標的（如需針對單一標的停損，請改用該標的的 S 系列規則）。",
+     "送出後，R 系列（新倉進場）暫停 20 個交易日（預計恢復日：2026-09-08，依交易日曆計算）。",
+     "凍結期間內，S／P 系列（停損／停利）仍照常評估；凍結期間仍可再次送出全部出清。",
+     "本操作產生的是賣出指令，不是成交：T+1 開盤以市價單送出，跌停或無量時可能無法成交。"
+    ],
+    "freeze_days": 20,
+    "freeze_until": "2026-09-08"
+   },
+   "fast_market": {
+    "active": false,
+    "annualized_vol_20d": null,
+    "carried_forward": false,
+    "carried_note": null,
+    "large_move_days": 0,
+    "measured_on": null,
+    "reason": null
+   },
+   "is_schedule_day": false,
+   "mode": "unconfirmed",
+   "mode_label": "待確認規則集",
+   "mode_reason": "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。本模組僅依你設定的規則集產生進場、停損、停利指令，在你確認規則集之前不會產生這類指令。你隨時可送出全部出清（EMERGENCY_EXIT），不受此限制。",
+   "no_directive_note": null,
+   "page_summary": [
+    "本頁面指令依 2026-08-11 收盤資料計算。",
+    "目前使用的是系統預設規則集，尚無你本人的設定或修改紀錄。",
+    "今日指令帳冊中的每筆指令是你自行設定的規則之機械執行結果，非本系統的判斷或建議；實際成交結果以你的券商回報為準。"
+   ],
+   "rules_effective_date": null,
+   "rules_fully_evaluated": false,
+   "rules_version": 0,
+   "settlement": null,
+   "snapshot": [],
+   "warnings": [
+    "【S/P 系列停損停利今日未依規則評估】規則集尚無你本人的設定或修改紀錄，本模組今日不產生規則驅動指令；你目前持有 2330 尚未出清，其停損/停利（S/P 系列）今日未依規則評估。"
+   ]
+  }
+ }
+}

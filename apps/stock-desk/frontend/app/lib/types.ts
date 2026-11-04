@@ -1734,6 +1734,11 @@ export interface PlaybookDirective {
 export interface PlaybookDirectiveLine {
   line: string;
   directive: PlaybookDirective;
+  //: W-B2L for a sell line of a labeled batch, in a field of its own — never
+  //: part of `line` (ADR-0034 補充一 S-3 第 4 點; ADR-0035 補充四 2.2(b)/(d)).
+  //: Owner N-168; the backend sends `null` until then. Optional because an
+  //: older backend does not send it; a missing key reads as `null`.
+  entry_before_exit_note?: string | null;
 }
 
 /** Backend `SettledLineResponse` (app/api/playbook.py). */
@@ -1878,6 +1883,16 @@ export interface PlaybookTodayResponse {
   //: nothing is rendered and nothing is written in its place.
   cap1_disclosure?: PlaybookCap1Disclosure;
   as_of: string;
+  //: ADR-0035 補充四 2.2(a)/(d) (切面): three in-flight lists, each in a field of
+  //: its own and never mixed into `directives` or each other (ADR-0034 補充一
+  //: S-3 第 6 點). Optional because an older backend does not send them; a
+  //: missing key reads as `[]`. No view renders them yet.
+  //: Owner N-171 (ADR-0039 Decision 1): unsettled EMERGENCY sells that still cover.
+  pending_exit_directives?: PlaybookDirectiveLine[];
+  //: Owner N-168 (ADR-0034 補充一 S-3 第 6 點): W-B1 類.
+  entry_before_exit_directives?: PlaybookDirectiveLine[];
+  //: Owner N-168 (ADR-0034 補充一 S-3 第 6 點): G1 擋下類.
+  entry_before_exit_blocked_directives?: PlaybookDirectiveLine[];
 }
 
 /** Backend `BatchSnapshot` (app/playbook/models.py) — one row of 部位快照. */

@@ -280,6 +280,39 @@ class EmergencyExitState(NamedTuple):
     emergency_until: date | None
 
 
+class PendingExitRead(NamedTuple):
+    """N-171's part of :class:`InFlightRead` (ADR-0039 Decision 2). Empty in the seam."""
+
+
+class EntryBeforeExitRead(NamedTuple):
+    """N-168's part of :class:`InFlightRead` (ADR-0034 補充一 S-3). Empty in the seam."""
+
+
+class InFlightRead(NamedTuple):
+    """What :meth:`PlaybookStore.read_in_flight` read, in one read transaction.
+
+    ADR-0035 補充四 2.3 (切面): the two parts are fixed; what each holds is its
+    owner's (S-3).
+    """
+
+    #: Owner N-171.
+    exits: PendingExitRead
+    #: Owner N-168.
+    entries: EntryBeforeExitRead
+
+
+def _read_pending_exits(conn: sqlite3.Connection) -> PendingExitRead:
+    """N-171's in-flight read on ``conn``. A stub in the seam: no statement runs."""
+    del conn
+    return PendingExitRead()
+
+
+def _read_entry_before_exit(conn: sqlite3.Connection) -> EntryBeforeExitRead:
+    """N-168's in-flight read on ``conn``. A stub in the seam: no statement runs."""
+    del conn
+    return EntryBeforeExitRead()
+
+
 class EvaluationCommit(NamedTuple):
     """What :meth:`PlaybookStore.commit_evaluation` did under its write lock.
 
@@ -1218,6 +1251,31 @@ class PlaybookStore:
             covering=[_row_to_pending(row) for row in covering],
             emergency_until=None if until is None else _day(until[0]),
         )
+
+    def read_in_flight(self) -> InFlightRead:
+        """The one in-flight read of ``/today`` (ADR-0035 補充四 2.3).
+
+        One connection, one ``BEGIN`` (DEFERRED: no write lock is taken), the
+        two reads, ``COMMIT``. Both parts are read inside the same read
+        transaction, so they describe one snapshot -- the lists N-171 and N-168
+        derive from them cannot disagree about a row. SELECT only; the caller
+        reads once per ``evaluate_today``, on either path.
+
+        Errors follow :meth:`commit_emergency_exit` (C-11): roll back if SQLite
+        has not already, then raise unchanged.
+        """
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN")
+            try:
+                read = InFlightRead(
+                    exits=_read_pending_exits(conn), entries=_read_entry_before_exit(conn)
+                )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return read
 
     def directive_log(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
