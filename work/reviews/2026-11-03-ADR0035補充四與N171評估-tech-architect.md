@@ -1111,3 +1111,51 @@ golden 中只有 `after_exit` 情境會被 N-168 改到。這個情境的設定�
  - golden 零 diff，`GOLDEN_SHA256` 未改；頂層 `warnings` 零 diff（C18）。
  - 測試 diff 只有 E-20 第 2、3 點所允許的部分；`test_api_playbook.py` 零 diff。
  - PR 說明列出 D1～D3 與 E-20 的每一處連動。
+
+
+## 釐清六（tech-architect 2026-11-04，回應 `work/reviews/2026-11-04-N168後端停止點-dev-lead.md` S1、S2、I3、I5）
+
+- 性質：釐清釐清一 E-1 第 3 點與 E-3 QB-10、釐清二 E-8、E-11 第 3 點與第 6 點、E-12 QB-13。不改任何固定項，不改 S-6 判準，不改 golden，不授權重錄。
+- 依據：ADR-0034 Decision 5（W-B6）、補充一 S-1、S-3 第 3、4 點；風控 `work/reviews/2026-11-01-N168字面裁示P2至P5-風控.md` P4、P5、必改 3、6；N-168 分支 `8efacd8`（讀碼，未執行）。
+
+### E-23 N-182 守門檔中的一處切面期斷言（S1）
+1. 判定：`tests/test_playbook_pending_entry_blocked.py::test_the_block_order_in_an_emergency_freeze` 在凍結期的期望值 `[ENTRY, W-B6b]`，是 N-182 在 W-B6 尚為 stub（`same_day_warnings` 的 `entries=()`）時寫下的斷言；該檔模組 docstring 與該測試 docstring 均寫明 W-B6 不在 N-182 範圍內。P4「W-B6 列過的列從 ENTRY 排除」早於 N-182，N-168 填入 W-B6 後此期望值必然改變，性質比照 E-4 第 1 點 (b)。這不算改寫 E-1 第 1 點所列的 N-182 建立項目。
+2. 准改範圍：只限這個測試函式，只限下列四處；名稱、fixture、其餘各行與檔內其他測試、helper（`_item`、`_entry`、`_w_b6b`、`_blocked_notes`、`_entry_notes`）、模組 docstring，一律零改動；不新增 helper，不新增 import。
+ (a) 第 482 行改為：`assert second.warnings[position + 1 : position + 3] == [w_b6, _w_b6b(blocked)]`，其中 `w_b6 = wording.PENDING_ENTRY_FROZEN_NOTE.format(entry_count=1, entry_items=_item(entry))`，此賦值寫在本函式內。
+ (b) 第 483 行改為：`assert _blocked_notes(second.warnings) == [w_b6, _w_b6b(blocked)]`。理由：W-B6 也以「尚有 」開頭，原本的 `len(...) == 1` 在 W-B6 渲染後必然變成 2；改成精確串列相等比原斷言更嚴格。
+ (c) 新增一行：`assert _entry_notes(second.warnings) == []`（P4、P5：全部被排除時 ENTRY 不渲染）。
+ (d) 該函式的 docstring 可改寫為描述新的期望：凍結期 2330 的 R1 有戳記、批次為 planned，歸 W-B6，因此不進 ENTRY；2454 的列歸 W-B6b；並註明「N-168 依補充四釐清六 E-23 調整」。
+ 若依 (a)～(c) 實測仍有紅燈，PR 停住送 tech-architect，不得改用其他寫法。
+3. 落地：在 N-168 分支上新增一個只改此檔的 `test:` commit，不得 amend、rebase 既有 commit。PR 說明列出：`c5565eb` 上此測試為紅、本 commit 之後轉綠，以及 (a)～(d) 逐條對應。
+4. `test_the_block_is_placed_after_frozen_note_or_first` 不傳 `entries`，仍是 ENTRY → W-B6b 順序的守門測試，零改動；它必須維持綠燈。
+5. 釐清 E-1 第 3 點「不得讓 ENTRY 的排除改讀 `blocked` 以外的來源」：這句約束的是「批次已非 planned」的排除，該排除仍只用 `blocked`（`blocked_keys`）。ENTRY 對 W-B6 列的排除是 P4 另訂的排除，來源是同一次 `read_in_flight` 的 `entries`（經 `_entry_before_exit_lines` 以 `blocked` 的 id 切分後的 W-B1 類），不違反該句。A 不做 W-B6 排除（P5 只對 ENTRY）。
+6. 不構成先例：N-182 守門檔的其他既有斷言，仍依 E-1 第 3、4 點處理。
+
+### E-24 E-8 預測的更正（S2）
+1. 判定：`after_exit.today_next_day.snapshot` 中，批次 1 的 `entry_before_exit_on`、`entry_before_exit_label`、`entry_before_exit_note` 為非 null，依 E-8 末段的字面屬 E-8 以外。原因是 E-8 的預測只考慮了賣出列，漏掉同一情境 8/12 的結算讓有戳記的買單成交，批次 1 因此轉為 open 並帶標示（C-B6、C-B8、補充一 S-3 第 3 點）。
+2. 本條即 E-7 第 3 點的書面核准。這三個鍵都在刪除鍵內（兩個登記為 `added_keys`，一個是切面鍵），不是 `deltas`，不需要也不得編 id；`n168.json` 不改。新增鍵不是 remove，也不改既有揭露，不需要 E-7 第 3 點的風控另行確認；字面仍以合併前的逐字核可為準。
+3. 補位條件（BLOCKING）：T2 不比對刪除鍵，所以在 `tests/test_playbook_entry_before_exit.py` 以 golden 情境（`golden_bodies`）新增一條測試，對 9 個回應逐一斷言：
+ (a) 每個 `snapshot` 列的這三個鍵，只有 `after_exit.today_next_day` 的批次 1 為非 null，值以精確值斷言：`entry_before_exit_on` 為出清的 as_of；`entry_before_exit_label` 為 `wording.ENTRY_BEFORE_EXIT_LABEL`；`entry_before_exit_note` 為 `wording.ENTRY_BEFORE_EXIT_NOTE` 以該批次 `entry_date` 渲染的結果。其餘各列各回應一律為 null。
+ (b) 每個回應中每一個 `DirectiveLine` 的 `entry_before_exit_note` 為 null（E-8「golden 中沒有標示批次上的賣出列」的預測，以此釘住）。若實測不成立，停住送 tech-architect。
+ 這條測試不登記進 `filled`：`filled` 的種類由機制固定，N-168 不得擴充機制（E-10 第 3 點、E-13 第 5 點）。在 PR 說明列出它的 node id。
+4. E-8「預期不會出現」清單中的「W-B2／W-B2L 的非 null 值」，改讀為「`DirectiveLine.entry_before_exit_note` 的非 null 值」。
+
+### E-25 E-11 第 6 點改寫（I3）
+1. 改為：ENTRY 排除 W-B6 列時，以 `store.decision_key`（K1）比對；比對集合只取自同一次 `read_in_flight` 的 `entries`，經 `_entry_before_exit_lines` 得出、且只在 `emergency_frozen` 模式下取用的那份 W-B6 列；不得在鎖內另讀戳記，也不得另寫一份 K1 定義。
+2. 理由：`EvaluationCommit.logged` 不帶 id。`logged` 與 `entries` 雖然各自都是每個 K1 留最小 id，但取自不同母體，選出的 id 可能不同；用 id 比對時，同一個 K1 可能同時出現在 W-B6 與 ENTRY，違反必改 3、6。N-182 的 `blocked_keys` 也以 K1 比對。
+3. 不得為了改用 id 比對而去改 `EvaluationCommit`。
+
+### E-26 E-11 第 3 點第 2 小點改寫（I5）
+1. 改為：`app/` 內，`wording.ENTRY_BEFORE_EXIT_NOTE` 只能在 `service.entry_before_exit_note` 內被引用；該函式的呼叫者恰好兩個：`api.playbook._lines`（賣出列，補充一 S-3 第 4 點）與 `service._labeled_snapshot`（`BatchSnapshot` 批次列，補充一 S-3 第 3 點）。
+2. 同一份回應中，兩個呼叫者拿到的 `labeled_batches` 必須是同一個值：`/today` 用的就是寫進 `evaluation.labeled_batches` 的那一個 tuple。出清回應日後若帶批次快照，同樣適用。
+3. N-171 的程式（`_pending_exit_lines`、`_pending_exit_block` 等）不得呼叫上列任一函式；`labeled_batches` 只准原樣轉給 `_lines`，各列的 note 只從 `DirectiveLine` 複製。
+4. QB-13 的 grep 口徑改為 AST 層級：統計 `app/` 內對 `ENTRY_BEFORE_EXIT_NOTE` 的屬性引用，以及對 `entry_before_exit_note(` 的呼叫點；docstring 與註解不計入。
+
+### E-27 S-7 增列檢查項
+- QB-16（N-168 的 PR）：
+ - E-23：`git diff <merge base> <head> -- apps/stock-desk/backend/tests/test_playbook_pending_entry_blocked.py` 只含 E-23 第 2 點 (a)～(d)，且在單獨一個 `test:` commit；`test_the_block_is_placed_after_frozen_note_or_first` 零 diff、綠燈。QB-10「既有斷言零改動」以此為唯一例外。
+ - E-24 第 3 點的測試存在、在 golden 情境上執行、綠燈；`n168.json` 的 `deltas` 恰好是 D1～D5。
+ - E-25：`same_day_warnings` 中 W-B6 的排除集合只取自 `entries`，用 `decision_key` 比對；`evaluate_today` 傳入的 `entries` 與 `blocked` 出自同一個 `in_flight`。
+ - E-26 第 1～4 點。
+
+（釐清六原文另存：`work/reviews/2026-11-04-N168停止點S1S2I3I5裁示與釐清六-tech-architect.md`。）
