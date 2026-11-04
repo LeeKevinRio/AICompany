@@ -763,6 +763,14 @@ PRE_N166_COLUMNS: dict[str, list[str]] = {
     ],
 }
 
+#: ADR-0034 (N-168, accepted): the two nullable columns its L4 stamp needs, added
+#: through ``_MIGRATIONS`` after every column above (Consequences 「需遷移兩欄」, C-B7).
+#: Nothing else has been added since N-166.
+ADR0034_COLUMNS: dict[str, list[str]] = {
+    "playbook_batches": ["entry_before_exit_on"],
+    "playbook_directives": ["exit_stamped_on"],
+}
+
 #: The only indexes on those tables before N-166: SQLite's own, for the text
 #: primary keys. No unique index on the directive log (ADR-0033 方案 (e) 未採).
 PRE_N166_INDEXES = frozenset(
@@ -840,7 +848,10 @@ def test_the_exit_adds_no_column_table_or_state_key(book: Book) -> None:
             for table in PRE_N166_COLUMNS
         }
     assert names == set(PRE_N166_COLUMNS) | PRE_N166_INDEXES
-    assert columns == PRE_N166_COLUMNS
+    assert columns == {
+        table: [*before_n166, *ADR0034_COLUMNS.get(table, [])]
+        for table, before_n166 in PRE_N166_COLUMNS.items()
+    }
     after = set(state_map(book.store.db_path))
     assert after <= PRE_N166_STATE_KEYS
     # confirm_rule_set and the evaluation write their own keys; the exits add

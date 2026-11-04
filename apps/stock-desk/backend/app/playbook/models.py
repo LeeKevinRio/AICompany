@@ -226,6 +226,11 @@ class BatchState(BaseModel):
     missed_count: int = 0
     #: The schedule day this batch is queued for, if any.
     scheduled_date: date | None = None
+    #: ADR-0034 L4 (補充一 S-3 第 2 點): the EMERGENCY_EXIT ``as_of`` stamped on the
+    #: buy that filled this batch, copied by :meth:`PlaybookStore.settle` when it
+    #: filled (C-B6). ``None`` for every other batch; never back-filled, never
+    #: cleared. The 落檔事實 W-B2／W-B2L are decided from (風控 D6).
+    entry_before_exit_on: date | None = None
 
 
 class SymbolState(BaseModel):
@@ -388,6 +393,16 @@ class BatchSnapshot(BaseModel):
     peak_close: Decimal | None
     #: (close - cost) / cost in percent; ``None`` when either side is unknown.
     unrealized_pct: Decimal | None
+    #: ADR-0034 補充一 S-3 第 3 點 (C-B8): :attr:`BatchState.entry_before_exit_on`
+    #: as stored, copied by the engine and nothing else.
+    entry_before_exit_on: date | None = None
+    #: W-B2 ``ENTRY_BEFORE_EXIT_LABEL`` while the batch is open and labeled;
+    #: rendered by the service, never by the engine.
+    entry_before_exit_label: str | None = None
+    #: W-B2L ``ENTRY_BEFORE_EXIT_NOTE``, same condition, right after W-B2 on the
+    #: batch row (same row, never folded, never a tooltip). Rendered by the service
+    #: through the one W-B2L rule :func:`app.playbook.service.entry_before_exit_note`.
+    entry_before_exit_note: str | None = None
 
 
 class FastMarketState(BaseModel):
@@ -705,6 +720,13 @@ class EmergencyExitResult(BaseModel):
     mode_reason: str
     #: ADR-0035 補充四 2.2(c): the batches W-B2／W-B2L label; N-168 fills it.
     labeled_batches: tuple[LabeledBatch, ...] = ()
+    #: ADR-0034 C-B4 (補充一 S-3 第 6 點), additive: the unsettled pending buys read
+    #: under this exit's write lock, one per K1, by 預定執行日, symbol, batch_no --
+    #: W-B1 類 (the book may still fill them). Never mixed into ``directives`` or
+    #: ``pending_directives`` (VETO-2).
+    entry_before_exit_directives: list[Directive] = Field(default_factory=list)
+    #: The same, G1 擋下類 (their batch has left ``planned``; W-B1b).
+    entry_before_exit_blocked_directives: list[Directive] = Field(default_factory=list)
 
 
 class RuleChangeReceipt(BaseModel):

@@ -461,7 +461,13 @@ def test_t5_the_line_is_never_touched_and_the_note_stays_null() -> None:
     sell = buy_line().model_copy(update={"action": "sell", "rule_id": "S1"})
     (line,) = api_module._lines([sell], labeled_batches=labeled)
     assert line.line == wording.directive_line(sell)
-    assert line.entry_before_exit_note is None
+    # 釐清二 E-6 第 6 點 (N-168): the note is the W-B2L rule's, never part of ``line``.
+    assert line.entry_before_exit_note == wording.ENTRY_BEFORE_EXIT_NOTE.format(
+        entry_date=TUESDAY.isoformat()
+    )
+    unlabeled = sell.model_copy(update={"batch_no": 2})
+    (other,) = api_module._lines([unlabeled], labeled_batches=labeled)
+    assert other.entry_before_exit_note is None
 
 
 def test_t5_the_service_fields_default_to_empty() -> None:

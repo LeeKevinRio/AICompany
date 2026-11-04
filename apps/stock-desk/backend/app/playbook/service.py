@@ -40,6 +40,7 @@ from app.playbook.engine import (
     settle_directive,
 )
 from app.playbook.models import (
+    BatchSnapshot,
     BatchState,
     BatchStatus,
     Directive,
@@ -47,6 +48,7 @@ from app.playbook.models import (
     ExitConfirm,
     FastMarketState,
     IndexSnapshot,
+    LabeledBatch,
     MarketSnapshot,
     PendingExitBlock,
     PendingExitCoverage,
@@ -69,6 +71,7 @@ from app.playbook.store import (
     EmergencyExitState,
     EntryBeforeExitRead,
     EvaluationCommit,
+    ExitEntryRead,
     PendingDirective,
     PendingExitRead,
     PlaybookStore,
@@ -482,6 +485,7 @@ def same_day_warnings(
     portfolio: PortfolioState,
     blocked: Sequence[PendingDirective] = (),
     refused_ids: AbstractSet[int] = frozenset(),
+    entries: Sequence[Directive] = (),
 ) -> list[str]:
     """The evaluation's warnings, reconciled with the logged list the page shows.
 
@@ -513,11 +517,19 @@ def same_day_warnings(
       for ``blocked`` -- the in-flight buys G1 refuses, from the one in-flight
       read, K1-deduplicated (:func:`g1_blocked_entries`) -- in every mode, minus the
       lines G1 refused in this run's settlement (``refused_ids``), which
-      ``unsettled`` already names. It follows ENTRY in the same block, so the
-      block is FROZEN_NOTE → ENTRY → W-B6b, or first when FROZEN_NOTE is not
-      there (W-B6 and W-B1d are N-168's). Those buys are not "judged as usual",
-      so they are left out of ENTRY's lines and A's ``{line_count}`` (P5); a
+      ``unsettled`` already names. Those buys are not "judged as usual", so
+      they are left out of ENTRY's lines and A's ``{line_count}`` (P5); a
       sentence whose count drops to zero is not rendered.
+    * **PENDING_ENTRY_FROZEN_NOTE** (W-B6, ADR-0034; 風控 2026-11-01 P4／P5,
+      N-168) in the ``emergency_frozen`` mode for ``entries`` -- the stamped
+      buys of the same in-flight read that are not G1's
+      (:func:`_entry_before_exit_lines`) -- followed by
+      **PENDING_ENTRY_SAME_BATCH_NOTE** (W-B1d) when two of them share a
+      batch. ENTRY leaves out what W-B6 lists (P4), matched by K1 on the same
+      read (補充四釐清二 E-11 第 6 點), and is not rendered when nothing is left.
+
+    The block is FROZEN_NOTE → W-B6 → W-B1d → ENTRY → W-B6b, or first when
+    FROZEN_NOTE is not there (P4: the anchor missing never drops a sentence).
 
     Known limit -- two snapshots (ADR-0035 補充四 釐清一 E-2, accepted; 風控
     2026-11-04 第 11 點). ``blocked`` comes from the one in-flight read, taken
@@ -615,6 +627,8 @@ def same_day_warnings(
                 ),
             )
 
+    frozen_entries = list(entries) if evaluation.mode == "emergency_frozen" else []
+    listed_keys = {decision_key(line) for line in frozen_entries}
     produced = {decision_key(line) for line in evaluation.directives if line.action == "buy"}
     earlier = sorted(
         (
@@ -624,10 +638,11 @@ def same_day_warnings(
             and line.action == "buy"
             and decision_key(line) not in produced
             and decision_key(line) not in blocked_keys
+            and decision_key(line) not in listed_keys
         ),
         key=lambda line: (line.symbol, line.batch_no or 0, line.execution_date),
     )
-    block: list[str] = []
+    block: list[str] = _pending_entry_frozen_notes(frozen_entries)
     if earlier:
         block.append(
             wording.SAME_DAY_EARLIER_ENTRY_NOTE.format(
@@ -652,6 +667,127 @@ def same_day_warnings(
     )
     warnings[position:position] = block
     return warnings
+
+
+def _pending_entry_frozen_notes(entries: Sequence[Directive]) -> list[str]:
+    """［W-B6］＋［W-B1d］ for ``entries``, already K1-deduplicated and in item order.
+
+    Empty when there is no line: W-B6 is rendered for one line or more, and
+    W-B1d only describes W-B6's lines (「上述買進指令中」).
+    """
+    if not entries:
+        return []
+    notes = [
+        wording.PENDING_ENTRY_FROZEN_NOTE.format(
+            entry_count=len(entries), entry_items="、".join(_entry_item(line) for line in entries)
+        )
+    ]
+    same_batch = wording.same_batch_note(_same_batches(entries))
+    if same_batch is not None:
+        notes.append(same_batch)
+    return notes
+
+
+def _same_batches(lines: Sequence[Directive]) -> list[wording.SameBatch]:
+    """W-B1d's batches: a ``(symbol, batch_no)`` two or more of ``lines`` name.
+
+    ``lines`` are one per K1 already, so two of them on one batch are two
+    K1-distinct buys (風控 2026-11-01 必改 6). A line with no ``batch_no`` names
+    no batch, and 「第 {batch_no} 批」 could not state it.
+    """
+    dates: dict[tuple[str, int], list[date]] = {}
+    for line in lines:
+        if line.batch_no is not None:
+            dates.setdefault((line.symbol, line.batch_no), []).append(line.execution_date)
+    return [
+        wording.SameBatch(symbol=symbol, batch_no=batch_no, dates=tuple(days))
+        for (symbol, batch_no), days in dates.items()
+        if len(days) > 1
+    ]
+
+
+def _one_per_k1(items: Sequence[PendingDirective]) -> list[PendingDirective]:
+    """``items`` (oldest first) with one per K1 kept, the smallest id (風控 2026-11-01 共用定義)."""
+    lines: dict[tuple[str, int | None, str, str, str], PendingDirective] = {}
+    for item in items:
+        lines.setdefault(decision_key(item.directive), item)
+    return list(lines.values())
+
+
+def _in_item_order(items: Sequence[PendingDirective]) -> list[Directive]:
+    """By 預定執行日, symbol, batch_no -- the ``{entry_items}`` order -- then log id."""
+    return [
+        item.directive
+        for item in sorted(
+            items,
+            key=lambda item: (
+                item.directive.execution_date,
+                item.directive.symbol,
+                item.directive.batch_no or 0,
+                item.directive_id,
+            ),
+        )
+    ]
+
+
+def labeled_batches_of(batches: Sequence[BatchState]) -> tuple[LabeledBatch, ...]:
+    """The batches W-B2／W-B2L label: open, with an L4 stamp copied onto them (風控 D6).
+
+    Decided from the stored fact (:attr:`BatchState.entry_before_exit_on`), never
+    from ``emergency_until`` or a date comparison (VETO-1). It lasts while the
+    batch is open -- through the end of the freeze too -- and stops when it
+    closes. A labeled batch always has an ``entry_date``: both are written by
+    the same fill.
+    """
+    return tuple(
+        LabeledBatch(symbol=batch.symbol, batch_no=batch.batch_no, entry_date=batch.entry_date)
+        for batch in batches
+        if batch.status == "open"
+        and batch.entry_before_exit_on is not None
+        and batch.entry_date is not None
+    )
+
+
+def entry_before_exit_note(
+    symbol: str, batch_no: int | None, *, labeled_batches: Sequence[LabeledBatch]
+) -> str | None:
+    """W-B2L for ``(symbol, batch_no)``, or ``None`` when that batch carries no label.
+
+    ADR-0034 補充一 S-3 第 4 點. The one place :data:`wording.ENTRY_BEFORE_EXIT_NOTE`
+    is rendered: :func:`app.api.playbook._lines` applies it to every sell line,
+    and :meth:`PlaybookService.evaluate_today` to the batch row right after W-B2,
+    so a line and its batch never disagree. A line with no ``batch_no`` (S2,
+    the whole symbol) carries it when any open batch of the symbol is labeled;
+    ``{entry_date}`` then lists every such batch's date (:func:`wording.date_list`).
+    """
+    dates = [
+        batch.entry_date
+        for batch in labeled_batches
+        if batch.symbol == symbol and (batch_no is None or batch.batch_no == batch_no)
+    ]
+    if not dates:
+        return None
+    return wording.ENTRY_BEFORE_EXIT_NOTE.format(entry_date=wording.date_list(dates))
+
+
+def _labeled_snapshot(
+    rows: Sequence[BatchSnapshot], labeled_batches: Sequence[LabeledBatch]
+) -> list[BatchSnapshot]:
+    """The 部位快照 with W-B2 and W-B2L on each labeled batch row (C-B8; 補充一 S-3 第 3 點)."""
+    labeled = {(batch.symbol, batch.batch_no) for batch in labeled_batches}
+    return [
+        row.model_copy(
+            update={
+                "entry_before_exit_label": wording.ENTRY_BEFORE_EXIT_LABEL,
+                "entry_before_exit_note": entry_before_exit_note(
+                    row.symbol, row.batch_no, labeled_batches=labeled_batches
+                ),
+            }
+        )
+        if (row.symbol, row.batch_no) in labeled
+        else row
+        for row in rows
+    ]
 
 
 def _entry_item(line: Directive) -> str:
@@ -913,10 +1049,56 @@ def _entry_before_exit_lines(
 ) -> tuple[list[Directive], list[Directive]]:
     """``(entry_before_exit_directives, entry_before_exit_blocked_directives)``.
 
-    Owner N-168 (ADR-0034 補充一 S-3 第 6 點); ``([], [])`` in the seam.
+    Owner N-168 (ADR-0034 C-B9, 補充一 S-3 第 6 點). Both from the one in-flight
+    read, so after the settlement: the stamped, still unsettled buys, one per
+    K1, in ``{entry_items}`` order. They are split again now, not by the stamp
+    (補充一 S-1 第 5 點): a stamped line is G1 擋下類 exactly when it is in
+    :attr:`EntryBeforeExitRead.blocked` -- G1's own condition, the same
+    snapshot (釐清一 E-1 第 3 點) -- so a line that was W-B1 類 at the exit and
+    whose batch another line filled since is listed as blocked.
     """
-    del read
-    return [], []
+    blocked_ids = {item.directive_id for item in read.blocked}
+    stamped = _one_per_k1(read.stamped)
+    return (
+        _in_item_order([item for item in stamped if item.directive_id not in blocked_ids]),
+        _in_item_order([item for item in stamped if item.directive_id in blocked_ids]),
+    )
+
+
+def _exit_entries(
+    read: ExitEntryRead,
+    *,
+    open_batches: Sequence[BatchState],
+    named: Sequence[Directive],
+    as_of: date,
+) -> tuple[wording.ExitEntries, list[Directive], list[Directive]]:
+    """The N-168 part of one exit response, from what its write lock read (ADR-0034).
+
+    ``named`` are the sells the message describes -- written now or still
+    covering (W-B7's 「上述賣出指令」); ``open_batches`` is C-2's first read,
+    which carries the labels (補充一 S-3 第 7 點). Returns the sentences' inputs
+    and the two lists of C-B4: W-B1 類 and G1 擋下類, one per K1, in item order.
+    """
+    labeled = {(batch.symbol, batch.batch_no) for batch in labeled_batches_of(open_batches)}
+    described = {(line.symbol, line.batch_no) for line in named}
+    entries = _in_item_order(_one_per_k1(read.entries))
+    blocked = _in_item_order(_one_per_k1(read.blocked))
+    notes = wording.ExitEntries(
+        labeled=tuple(
+            wording.ExitLabeled(
+                symbol=batch.symbol, batch_no=batch.batch_no, shares=batch.remaining_shares
+            )
+            for batch in open_batches
+            if (batch.symbol, batch.batch_no) in labeled & described
+        ),
+        entry_items=tuple(_entry_item(line) for line in entries),
+        past_due_dates=tuple(
+            line.execution_date for line in entries if line.execution_date < as_of
+        ),
+        same_batch=tuple(_same_batches(entries)),
+        blocked_items=tuple(_entry_item(line) for line in blocked),
+    )
+    return notes, entries, blocked
 
 
 class PlaybookService:
@@ -1018,8 +1200,12 @@ class PlaybookService:
         Two EMERGENCY disclosures (風控 CEO #87 回審, N-166): an unsettled exit
         line that meets 判準 Z gets N1 (or N1b) after its reason, and an exit
         line judged executed while its batch already held nothing gets N2 after
-        the summary. Both are read around :meth:`PlaybookStore.settle`, which is
-        left exactly as it was.
+        the summary. Both are read around :meth:`PlaybookStore.settle`.
+
+        ADR-0034 (N-168): ``settle`` is handed the log row id, so a fill copies
+        the row's L4 stamp onto its batch (C-B6) -- no mode is read for it. A
+        buy judged executed whose batch then carries the label is listed in
+        W-B3, right after the summary.
 
         G1 (ADR-0035 Decision 6′, CEO #88): a buy whose batch is no longer
         ``planned`` is refused by the claim itself, so it neither fills nor
@@ -1047,6 +1233,7 @@ class PlaybookService:
         settled: list[SettledLine] = []
         unsettled: list[UnsettledLine] = []
         moved_nothing: list[Directive] = []
+        labeled_fills: list[PendingDirective] = []
         blocked: dict[int, BatchStatus] = {}
         for item in pending:
             directive = item.directive
@@ -1093,7 +1280,13 @@ class PlaybookService:
                 held = self._batch_of(outcome)
                 if held is None or held.remaining_shares <= 0:
                     moved_nothing.append(outcome)
-            self._store.settle(outcome, fill_price=opening)
+            self._store.settle(outcome, fill_price=opening, directive_id=item.directive_id)
+            if outcome.action == "buy" and outcome.status == "executed":
+                # W-B3: the fill copied an L4 stamp onto its batch (C-B6), read
+                # back from the book it just wrote.
+                filled = self._batch_of(outcome)
+                if filled is not None and filled.entry_before_exit_on is not None:
+                    labeled_fills.append(PendingDirective(item.directive_id, outcome))
             settled.append(
                 SettledLine(directive_id=item.directive_id, directive=outcome, open_price=opening)
             )
@@ -1115,6 +1308,14 @@ class PlaybookService:
                 pending=len(unsettled),
             )
         )
+        if labeled_fills:
+            # ADR-0034 W-B3: right after SETTLEMENT_SUMMARY.
+            fills = _in_item_order(labeled_fills)
+            warnings.append(
+                wording.SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE.format(
+                    count=len(fills), entry_items="、".join(_entry_item(line) for line in fills)
+                )
+            )
         if moved_nothing:
             warnings.append(
                 wording.SETTLEMENT_EXIT_NOTHING_MOVED_NOTE.format(
@@ -1481,10 +1682,11 @@ class PlaybookService:
         resolves through the calendar's weekday fallback (see
         :func:`build_exit_confirm`).
         """
+        book = self._store.list_batches()
         held = sorted(
             {
                 batch.symbol
-                for batch in self._store.list_batches()
+                for batch in book
                 if batch.status == "open" and batch.remaining_shares > 0
             }
         )
@@ -1536,6 +1738,8 @@ class PlaybookService:
             pending_exit_directives=exits.directives,
             entry_before_exit_directives=entries,
             entry_before_exit_blocked_directives=blocked_entries,
+            # W-B2L on the pending-exit rows of a labeled batch (ADR-0039 Decision 9).
+            labeled_batches=labeled_batches_of(book),
             pending_exit_block=exits.block,
         )
 
@@ -1644,6 +1848,7 @@ class PlaybookService:
         # Read from the loaded series, not the snapshot: when no bar came back
         # at all the snapshot is ``None`` and the loader's own sentence (which
         # source reported what) is exactly what the reader needs (風控 R4-a).
+        entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
         warnings = same_day_warnings(
             evaluation,
             commit,
@@ -1652,10 +1857,12 @@ class PlaybookService:
             portfolio=portfolio,
             blocked=g1_blocked_entries(in_flight.entries),
             refused_ids={line.directive_id for line in settlement.unsettled if line.refused_by_g1},
+            entries=entries,
         )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
-        entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
+        # W-B2／W-B2L: the book this evaluation ran on (C-B8, 補充一 S-3 第 3、4 點).
+        labeled = labeled_batches_of(book)
         # Classified on the settlement's own series (ADR-0039 Decision 3, 風控 P-1).
         exits = _pending_exit_lines(in_flight.exits, loaded=run.loaded, as_of=as_of)
         return evaluation.model_copy(
@@ -1664,6 +1871,8 @@ class PlaybookService:
                 # statements derived from it (``no_directive_note``) read the
                 # same list the page shows (風控 二-3 第 1 點).
                 "directives": commit.logged,
+                "snapshot": _labeled_snapshot(evaluation.snapshot, labeled),
+                "labeled_batches": labeled,
                 "warnings": warnings,
                 "settlement": settlement,
                 "attribution": wording.attribution_note(authorship),
@@ -1734,7 +1943,7 @@ class PlaybookService:
         execution_date = calendar.next_trading_day(as_of)
         computed_until = calendar.shift(as_of, freeze_days)
 
-        state, plan = self._store.commit_emergency_exit(
+        state, plan, read = self._store.commit_emergency_exit(
             lambda locked: plan_emergency_exit(
                 locked,
                 loaded=loaded,
@@ -1742,7 +1951,14 @@ class PlaybookService:
                 as_of=as_of,
                 execution_date=execution_date,
                 computed_until=computed_until,
-            )
+            ),
+            stamped_on=as_of,
+        )
+        entries, entry_lines, blocked_lines = _exit_entries(
+            read,
+            open_batches=state.open_batches,
+            named=[*plan.directives, *(item.directive for item in plan.pending)],
+            as_of=as_of,
         )
 
         until = plan.emergency_until
@@ -1768,6 +1984,7 @@ class PlaybookService:
             pending=pending,
             extended_from=previous if extended else None,
             freeze_kept=until != computed_until,
+            entries=entries,
         )
         # The mode line is rendered for today, not lifted from ``message``: the
         # 「第 N/20 交易日」 counter is only true on the day it was computed, so
@@ -1791,12 +2008,16 @@ class PlaybookService:
             freeze_until=until,
             message=message,
             warnings=plan.warnings,
+            # W-B1／W-B1b describe earlier R lines, so they never pick the 歸屬語.
             attribution=wording.emergency_exit_attribution(
                 new_batches=len(plan.directives),
                 pending_batches=pending.batches,
                 stale_batches=len(pending.stale),
             ),
             mode_reason=mode_reason,
+            labeled_batches=labeled_batches_of(state.open_batches),
+            entry_before_exit_directives=entry_lines,
+            entry_before_exit_blocked_directives=blocked_lines,
         )
 
 
