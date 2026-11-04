@@ -1041,3 +1041,73 @@ golden 中只有 `after_exit` 情境會被 N-168 改到。這個情境的設定�
  - E-14 第 2 點 (a)～(d)；
  - E-15 第 1、3、5 點；
  - E-16 全部。
+
+
+---
+
+（coordinator 2026-11-04 附加：釐清五原文轉存自 `work/reviews/2026-11-04-N171A結算句golden差異核准-tech-architect.md`）
+
+## 釐清五（tech-architect 2026-11-04，`SETTLEMENT_NOTHING_PENDING` 改寫在 SEAM golden 上的差異登記與字面替換連動）
+
+- 性質：釐清 E-6、E-7 第 3 點、E-9 第 2 點、E-11 第 5 點與 E-12 QB-12；E-20 訂定「字面替換的連動」處理規則，適用切面之後每一個 PR。不改任何固定項，不改 S-6 判準，不改 golden，不授權重錄。
+- 依據：`work/reviews/2026-11-04-N171A最終字面終核-風控.md` 第二節逐條意見第 1 項（required）與第四節第 2 點；ADR-0039 Decision 17、附錄 A C18、附錄 B T21、補充一 S-3 第 3、4 點；補充四 SEAM-T6；釐清二 E-5～E-9、E-11；釐清三；釐清四 E-13、E-14。
+- 核准檔：`work/reviews/2026-11-04-N171A結算句golden差異核准-tech-architect.md`。
+
+### E-18 擁有者與範圍
+1. `SETTLEMENT_NOTHING_PENDING` 的改寫是 N-171-A 的合併條件，差異登記在 `approved/n171a.json`，不另立擁有者檔。
+2. E-9 第 2 點「`deltas` 必須為空」改為：`n171a.json` 的 `deltas` 恰好是 N171A-D1～D3 三筆，經 E-7 第 3 點核准。出現第四筆時，仍依 E-9 第 2 點停住。
+3. 範圍只限 `wording.py` 中這一個常數的值：
+ - 常數名不改；
+ - 新值是一個不含佔位符的靜態字串，在 `settlement.warnings` 中仍只佔一個元素；
+ - `_settle_pending`（含輸出這句的分支與其條件）、`settle_pending`、`settle_on_request` 零 diff；
+ - 不新增讀取、分支或日期判斷。
+ 若定稿需要佔位符、條件變體、拆成多個元素，或需要知道「有沒有未到期的列」，就超出本釐清：PR 停住，送 tech-architect。這類需求會觸及補充一 S-3 第 3 點、SEAM-T6 與釐清三。
+4. 與既有條文不衝突：
+ - ADR-0039 Decision 17、C18、T21 所稱的 `warnings`，是 `/today` 頂層的 `TodayResponse.warnings`，不含 `settlement.warnings`。頂層 `warnings` 仍須零 diff。
+ - 補充一 S-3 第 3 點與 E-11 第 5 點約束的是 `_settle_pending` 的程式與新增句子。替換既有常數的值，只在本條範圍內例外；N-171-A 不得以此為由，在結算 warnings 上新增、移除或重排任何句子。
+ - 補充一 S-3 第 4 點「不得同時有 `SETTLEMENT_NOTHING_PENDING`」以識別名約束，改值之後照樣成立。
+5. 不採獨立先行 PR：機制 `01e99cb` 在 N-171-A 的 PR 內。先行 PR 須先走 E-13 第 5 點，三個 PR 串行，安全上沒有增益。
+
+### E-19 三筆差異與落地方式
+1. 三筆差異如下：
+
+ | id | scenario | body | path | op | before |
+ |---|---|---|---|---|---|
+ | N171A-D1 | after_exit | today | ["settlement","warnings",0] | replace | "T+1 結算：目前沒有待結算指令。" |
+ | N171A-D2 | authored | today | ["settlement","warnings",0] | replace | 同上 |
+ | N171A-D3 | authored | today_again | ["settlement","warnings",0] | replace | 同上 |
+
+ - `after` 為風控逐字核可的定稿，三筆相同。
+ - `source` 寫風控終核與逐字核可檔的路徑。
+ - `approval` 寫核准檔的路徑。
+2. 原子單位：只在風控逐字核可檔存在之後，以**一個 commit** 同時落地以下三件：
+ - (a) `wording.py` 該常數的值，以及它的 `#:` 註解；註解寫明輸出條件與風控出處；
+ - (b) `n171a.json` 的三筆 `deltas`：`after` 逐字等於定稿，`source` 已填入核可檔路徑；
+ - (c) `tests/test_playbook_wording.py` 新增這個常數的逐字守門測試。
+ 該 commit 上 SEAM-T1～T8 全綠。`approved/` 下不得留有任何佔位符。不得 rebase、不得 force push；PR 仍以 merge commit 合併（E-14 第 2 點 (d)）。
+3. 預期不受影響：`after_exit.today_next_day`、`after_exit.exit`、`after_exit.exit_repeat`、`unauthored` 的三個回應。實際 diff 多出或少掉任何一處，PR 停住。
+4. 與 N-168 的關係：N168-D5 在 `after_exit.today_next_day.settlement.warnings`，與 D1～D3 不在同一個 list。N-168 若在 D1～D3 所在的 list 上出現差異，依 E-6 第 4 點停住，由 tech-architect 裁定。
+
+### E-20 字面替換的連動（測試）
+1. 以識別名引用常數的斷言：零 diff，自動跟著變，不算斷言改動。
+2. 該常數本身的逐字守門測試（斷言常數等於某個字面）：新增，或只把字串字面整條換掉，都屬於字面替換的連動，不算 SEAM-T6 或 E-4 所指的斷言改動。要放在 E-19 第 2 點的同一個 commit，並在 PR 說明列出。
+3. 其他測試若以完整字面寫死舊句：只准把舊字串整條換成新定稿。斷言的欄位、運算子、位置與筆數都不得改。放在同一個 commit，並在 PR 說明逐條列出。
+4. 以子字串、前綴、關鍵詞或否定式（例如 `in`、`not in`、`startswith`）斷言舊句內容的，屬於語意斷言，不得當成連動處理，依 E-7 第 3 點送核。
+5. golden 不適用本條，只能依 E-6 登記。
+6. 前端目前沒有這句的鏡射，`SettlementPanel` 原樣渲染。以識別名指涉的註解不必改。日後若新增鏡射，比照 Decision 13 的原子單位。
+7. 字面整檔掃描與禁用詞測試（含 `test_c6_*`、`test_i_*`）若轉紅：停住送風控，不得收窄掃描範圍或放寬白名單。
+
+### E-21 `POST /settle` 現況（讀碼）
+- SEAM-T6 所指的既有測試（`test_api_playbook.py` 的 settle 三條，以及 `/today` 結算那一條）都不斷言 `warnings`，零 diff。
+- N-171-A 新增的 `test_playbook_settle_on_request.py` 以識別名引用（`:111`、`:214`），零 diff。
+- `:376-381` 是 `SETTLEMENT_UNAUTHORED_NOTE` 的逐字守門測試，不是本句，不改。
+- 寫死本句的地方只有 golden 那 3 處。
+
+### E-22 S-7 增列檢查項
+- QB-15（N-171-A 的 PR）：
+ - `n171a.json` 的 `deltas` 恰好是 N171A-D1～D3，內容與 E-19 第 1 點逐欄一致；`after` 與風控核可檔逐字相同；`approved/` 下 grep `<<` 為 0。
+ - E-19 第 2 點的三件東西在同一個 commit。
+ - `service.py` 中 `_settle_pending`、`settle_pending`、`settle_on_request` 零 diff。該 commit 的 `wording.py` diff 只有這個常數與它的註解。常數名不變，`app/` 內 grep `SETTLEMENT_NOTHING_PENDING` 的命中數與改動前相同。
+ - golden 零 diff，`GOLDEN_SHA256` 未改；頂層 `warnings` 零 diff（C18）。
+ - 測試 diff 只有 E-20 第 2、3 點所允許的部分；`test_api_playbook.py` 零 diff。
+ - PR 說明列出 D1～D3 與 E-20 的每一處連動。
