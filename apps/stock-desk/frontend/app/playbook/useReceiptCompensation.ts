@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
-import { createReceiptCompensation, isScrollKey } from "../lib/receiptCompensation";
+import { createReceiptCompensation, fetchStatusSignal, isScrollKey } from "../lib/receiptCompensation";
 import type { CompensationController } from "../lib/receiptCompensation";
 
 /**
@@ -58,8 +58,10 @@ export function useReceiptCompensation(
 
   // Fed by the page from its own `/today` query (a hook-free module boundary: this
   // file opens no query observer).
-  const fetching = fetchStatus === "fetching";
+  // Only "idle" ends a refetch; "paused" (offline) leaves the state untouched.
+  const fetching = fetchStatusSignal(fetchStatus);
   useEffect(() => {
+    if (fetching === null) return;
     fetchingRef.current = fetching;
     controller.fetchingChanged(fetching);
   }, [controller, fetching]);
