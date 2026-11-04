@@ -460,8 +460,9 @@ def test_w_b6b_does_not_fill_the_seam_lists(desk: Desk) -> None:
 
 
 def test_the_block_order_in_an_emergency_freeze(tmp_path: Path) -> None:
-    """2330's earlier R1 (planned) is ENTRY's; 2454's (batch open) is W-B6b's.
-    W-B6 and W-B1d (N-168) are not part of this change."""
+    """In the exit freeze, 2330's earlier R1 carries the exit's stamp and its batch
+    is still planned, so it is W-B6's and not ENTRY's; 2454's (batch open) is
+    W-B6b's. N-168 adjusted this per ADR-0035 補充四釐清六 E-23."""
     desk = open_desk(tmp_path / "playbook.db", symbols=("2330", "2454"))
     blocked = buy_line(symbol="2454")
     log_like_before_n172a(desk.store, [blocked])
@@ -479,8 +480,10 @@ def test_the_block_order_in_an_emergency_freeze(tmp_path: Path) -> None:
     assert second.mode == "emergency_frozen"
     frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS["emergency_frozen"])
     position = second.warnings.index(frozen)
-    assert second.warnings[position + 1 : position + 3] == [_entry(entry), _w_b6b(blocked)]
-    assert len(_blocked_notes(second.warnings)) == 1
+    w_b6 = wording.PENDING_ENTRY_FROZEN_NOTE.format(entry_count=1, entry_items=_item(entry))
+    assert second.warnings[position + 1 : position + 3] == [w_b6, _w_b6b(blocked)]
+    assert _blocked_notes(second.warnings) == [w_b6, _w_b6b(blocked)]
+    assert _entry_notes(second.warnings) == []
 
 
 def _reconcile(
