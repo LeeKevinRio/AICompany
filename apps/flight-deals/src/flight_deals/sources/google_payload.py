@@ -153,13 +153,14 @@ def _is_int(value: Any) -> bool:
 
 
 def depart_time_text(value: Any) -> str | None:
-    """``[h, m]`` -> "HH:MM", ``[h]`` -> "HH:00"; any other shape -> None.
+    """``[h, m]`` -> "HH:MM", ``[h]`` -> "HH:00", ``[None, m]`` -> "00:MM"; else None.
 
     Local time at the departure airport, never converted (ADR-0002 FD-5 Decision 4).
+    Google leaves out hour 0: seen live 2026-11-04, matching the itinerary's ISO times.
     """
     if not isinstance(value, list) or not 1 <= len(value) <= 2:
         return None
-    hour = value[0]
+    hour = 0 if len(value) == 2 and value[0] is None else value[0]
     minute = value[1] if len(value) == 2 else 0
     if not (_is_int(hour) and _is_int(minute)) or not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
