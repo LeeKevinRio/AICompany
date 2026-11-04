@@ -944,3 +944,35 @@ def test_nb6_paragraph_2_earlier_versions_are_gone_everywhere() -> None:
     for fragment in _NB6_P2_1103_ONLY:
         assert fragment not in second
         assert not any(fragment in literal for literal in literals), fragment
+
+
+# --- SETTLEMENT_NOTHING_PENDING（風控 2026-11-04 逐字定稿；釐清五 E-19、E-20 第 2 點） ----------
+
+
+def test_settlement_nothing_pending_is_the_signed_off_text_verbatim() -> None:
+    """work/reviews/2026-11-04-結算句逐字定稿-風控.md.
+
+    「判定」, never 「處理」: 處理 is NB-6 第 1 段's word for the exit submission.
+    """
+    assert wording.SETTLEMENT_NOTHING_PENDING == (
+        "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+    )
+    note = wording.SETTLEMENT_NOTHING_PENDING
+    assert "沒有判定任何指令" in note
+    assert "處理" not in note
+    assert "{" not in note and note.startswith("T+1 結算：")
+    # Character-level: no 已 and no 應 at all, so no exemption is needed (風控 2026-11-04).
+    for banned in (
+        "安全",
+        "放心",
+        "已",
+        "出清完成",
+        "需",
+        "應",
+        "務必",
+        "盡快",
+        "否則",
+        "保證",
+        "建議",
+    ):
+        assert banned not in note, banned

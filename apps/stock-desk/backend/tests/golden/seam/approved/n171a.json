@@ -20,5 +20,51 @@
    "test": "tests/test_playbook_pending_exit_block.py::test_seam_filled_in_flight_exits_on_the_golden_scenario"
   }
  ],
- "deltas": []
+ "deltas": [
+  {
+   "id": "N171A-D1",
+   "source": "風控 2026-11-04 N-171-A 最終字面終核 required（work/reviews/2026-11-04-N171A最終字面終核-風控.md 第二節逐條意見第 1 項）；SETTLEMENT_NOTHING_PENDING 逐字定稿：work/reviews/2026-11-04-結算句逐字定稿-風控.md；D1～D3 既有揭露改變確認：work/reviews/2026-11-04-結算句golden差異確認-風控.md；渲染條件不變（_settle_pending：pending_directives(on_or_before=as_of) 為空）",
+   "approval": "work/reviews/2026-11-04-N171A結算句golden差異核准-tech-architect.md",
+   "scenario": "after_exit",
+   "body": "today",
+   "path": [
+    "settlement",
+    "warnings",
+    0
+   ],
+   "op": "replace",
+   "before": "T+1 結算：目前沒有待結算指令。",
+   "after": "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+  },
+  {
+   "id": "N171A-D2",
+   "source": "風控 2026-11-04 N-171-A 最終字面終核 required（work/reviews/2026-11-04-N171A最終字面終核-風控.md 第二節逐條意見第 1 項）；SETTLEMENT_NOTHING_PENDING 逐字定稿：work/reviews/2026-11-04-結算句逐字定稿-風控.md；D1～D3 既有揭露改變確認：work/reviews/2026-11-04-結算句golden差異確認-風控.md；渲染條件不變（_settle_pending：pending_directives(on_or_before=as_of) 為空）",
+   "approval": "work/reviews/2026-11-04-N171A結算句golden差異核准-tech-architect.md",
+   "scenario": "authored",
+   "body": "today",
+   "path": [
+    "settlement",
+    "warnings",
+    0
+   ],
+   "op": "replace",
+   "before": "T+1 結算：目前沒有待結算指令。",
+   "after": "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+  },
+  {
+   "id": "N171A-D3",
+   "source": "風控 2026-11-04 N-171-A 最終字面終核 required（work/reviews/2026-11-04-N171A最終字面終核-風控.md 第二節逐條意見第 1 項）；SETTLEMENT_NOTHING_PENDING 逐字定稿：work/reviews/2026-11-04-結算句逐字定稿-風控.md；D1～D3 既有揭露改變確認：work/reviews/2026-11-04-結算句golden差異確認-風控.md；渲染條件不變（_settle_pending：pending_directives(on_or_before=as_of) 為空）",
+   "approval": "work/reviews/2026-11-04-N171A結算句golden差異核准-tech-architect.md",
+   "scenario": "authored",
+   "body": "today_again",
+   "path": [
+    "settlement",
+    "warnings",
+    0
+   ],
+   "op": "replace",
+   "before": "T+1 結算：目前沒有待結算指令。",
+   "after": "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+  }
+ ]
 }

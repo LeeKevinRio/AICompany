@@ -731,7 +731,16 @@ SETTLEMENT_SUMMARY = (
     "未成交（MISSED）{missed} 筆、未結算 {pending} 筆；"
     "實際成交結果以你的券商回報為準。"
 )
-SETTLEMENT_NOTHING_PENDING = "T+1 結算：目前沒有待結算指令。"
+#: The only warning of a settlement that judged nothing: rendered by
+#: :meth:`app.playbook.service.PlaybookService._settle_pending` only when
+#: ``pending_directives(on_or_before=as_of)`` is empty, so nothing in range was
+#: judged and every line outside it (預定執行日 after ``as_of``) is still pending.
+#: Static, one element of ``settlement.warnings``, no placeholder. 風控 2026-11-04
+#: 逐字定稿 (work/reviews/2026-11-04-結算句逐字定稿-風控.md; golden D1～D3 confirmed
+#: in work/reviews/2026-11-04-結算句golden差異確認-風控.md).
+SETTLEMENT_NOTHING_PENDING = (
+    "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+)
 
 #: N171-C17′ (ADR-0039 補充一 S-3; 風控 2026-11-04 第 2 點, 逐字定稿): the one
 #: warning of ``POST /api/playbook/settle`` while no user rule set exists. Only
