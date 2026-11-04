@@ -3,12 +3,15 @@
 Structure only -- no wording, no behaviour. SEAM-T1～T7 here; SEAM-T8 is the
 frontend's (``app/playbook/__tests__/TodaySeamFixture.test.tsx``).
 
-* T1 -- the new keys exist and are empty / ``null``, on every scenario.
+* T1 -- the new keys exist and are empty / ``null``, on every scenario, except
+  what an owner registered as ``filled`` (補充四釐清二 E-6 第 6 點).
 * T2 -- with the new keys dropped, every body equals the one recorded on the
-  pre-seam code (``tests/golden/seam/pre_seam_responses.json``).
+  pre-seam code (``tests/golden/seam/pre_seam_responses.json``, frozen by
+  sha256) with the registered deltas applied (釐清二 E-5, E-6).
 * T3 -- ``read_in_flight`` runs exactly once per ``evaluate_today``, on both
   paths; on the authored one after ``_settle_pending``.
-* T4 -- ``read_in_flight`` runs ``BEGIN``, SELECTs and ``COMMIT`` only.
+* T4 -- ``read_in_flight`` runs ``BEGIN``, SELECTs and ``COMMIT`` only; the
+  parts no owner registered as filled are still their stub defaults.
 * T5 -- ``DirectiveLine(`` appears in ``_lines`` only; ``labeled_batches`` is
   keyword-only with no default.
 * T6 -- ``settle_pending(today=d) == _settle_pending(d).result``.
@@ -46,10 +49,20 @@ from tests.same_day_helpers import (
     log_like_before_n172a,
 )
 from tests.seam_helpers import (
+    APPROVED,
     CLOCK_KEYS,
     GOLDEN,
+    GOLDEN_SHA256,
     SCENARIOS,
+    Registration,
+    RegistryError,
     clocked_desk,
+    dropped_keys,
+    expected_bodies,
+    filled,
+    golden_sha256,
+    load_registrations,
+    parse_registration,
     without,
 )
 
@@ -62,6 +75,12 @@ NOTE = "entry_before_exit_note"
 SEAM_KEYS = frozenset({*TODAY_LISTS, NOTE})
 
 APP_ROOT = Path(api_module.__file__).resolve().parents[1]
+TESTS_ROOT = Path(__file__).resolve().parent
+
+
+@pytest.fixture(scope="module")
+def registrations() -> list[Registration]:
+    return load_registrations()
 
 
 @pytest.fixture(scope="module")
@@ -80,15 +99,21 @@ def _directive_lines(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
 
 @pytest.mark.parametrize("scenario", sorted(SCENARIOS))
 def test_t1_the_new_keys_are_there_and_empty(
-    bodies: dict[str, dict[str, Any]], scenario: str
+    bodies: dict[str, dict[str, Any]], scenario: str, registrations: list[Registration]
 ) -> None:
+    filled_lists = filled(registrations, "today_lists")
+    note_filled = bool(filled(registrations, "note"))
     lines = 0
     for name, body in bodies[scenario].items():
         if name.startswith("today"):
             for key in TODAY_LISTS:
-                assert body[key] == [], (scenario, name, key)
+                assert key in body, (scenario, name, key)
+                if key not in filled_lists:
+                    assert body[key] == [], (scenario, name, key)
         for line in _directive_lines(body):
-            assert NOTE in line and line[NOTE] is None, (scenario, name)
+            assert NOTE in line, (scenario, name)
+            if not note_filled:
+                assert line[NOTE] is None, (scenario, name)
             lines += 1
     assert lines  # each scenario carries directive lines to check
 
@@ -105,12 +130,162 @@ def test_t1_the_scenarios_cover_the_three_paths(bodies: dict[str, dict[str, Any]
 
 
 def test_t2_without_the_new_keys_every_body_is_the_pre_seam_one(
-    bodies: dict[str, dict[str, Any]],
+    bodies: dict[str, dict[str, Any]], registrations: list[Registration]
 ) -> None:
+    """釐清二 E-6 第 3 點: sha256, registrations, dropped keys, deltas, exact equality."""
+    assert golden_sha256() == GOLDEN_SHA256  # 1) the golden is the frozen one
     recorded = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    now = without(bodies, CLOCK_KEYS | SEAM_KEYS)
-    assert now == recorded
     assert not _keys(recorded) & SEAM_KEYS  # the record predates the seam
+    drop = dropped_keys(registrations, recorded)  # 3)
+    assert drop >= CLOCK_KEYS | SEAM_KEYS
+    expected = expected_bodies(recorded, registrations)  # 4)
+    now = without(bodies, drop)
+    assert now == expected  # 5)
+
+
+def test_t2_every_filled_entry_names_a_test_that_exists(
+    registrations: list[Registration],
+) -> None:
+    """E-6 第 6 點: each ``filled`` entry points at an exact-value test."""
+    for registration in registrations:
+        for _, _, node in registration.filled_tests:
+            file, _, name = node.partition("::")
+            path = TESTS_ROOT.parent / file
+            assert path.is_file(), node
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            names = {
+                function.name
+                for function in ast.walk(tree)
+                if isinstance(function, ast.FunctionDef)
+            }
+            assert name.split("[")[0] in names, node
+
+
+def test_t2_registration_files_are_one_per_owner_and_json() -> None:
+    if APPROVED.is_dir():
+        for path in APPROVED.iterdir():
+            assert path.suffix == ".json" or path.name == ".gitkeep", path
+
+
+def _registration(**changes: Any) -> dict[str, Any]:
+    raw: dict[str, Any] = {"owner": "x", "added_keys": [], "filled": [], "deltas": []}
+    raw.update(changes)
+    return raw
+
+
+def _delta(**changes: Any) -> dict[str, Any]:
+    delta: dict[str, Any] = {
+        "id": "X-D1",
+        "source": "ADR",
+        "approval": "work/reviews/x.md",
+        "scenario": "authored",
+        "body": "today",
+        "path": ["mode_label"],
+        "op": "replace",
+        "before": "正常",
+        "after": "正常（改）",
+    }
+    delta.update(changes)
+    return delta
+
+
+def _insert(**changes: Any) -> dict[str, Any]:
+    delta = _delta(scenario="after_exit", op="insert", **changes)
+    del delta["before"]
+    return delta
+
+
+def _golden() -> Any:
+    return json.loads(GOLDEN.read_text(encoding="utf-8"))
+
+
+def test_t2_registry_applies_a_valid_replace_and_insert() -> None:
+    golden = _golden()
+    before = golden["authored"]["today"]["mode_label"]
+    warnings = golden["after_exit"]["today"]["warnings"]
+    registration = parse_registration(
+        "x.json",
+        _registration(
+            deltas=[
+                _delta(before=before, after=before + "（改）"),
+                _insert(id="X-D2", path=["warnings", len(warnings)]),
+            ]
+        ),
+    )
+    expected = expected_bodies(golden, [registration])
+    assert expected["authored"]["today"]["mode_label"] == before + "（改）"
+    assert expected["after_exit"]["today"]["warnings"][-1] == "正常（改）"
+    assert golden == _golden()  # the golden itself is never touched
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (_registration(deltas=[_delta(before="not the golden value")]), "before does not match"),
+        (_registration(deltas=[_delta(after="正常")]), "empty delta"),
+        (_registration(deltas=[_delta(path=["*"])]), "path element"),
+        (_registration(deltas=[_delta(path=["warnings"], before=[], after=["x"])]), "whole-list"),
+        (_registration(deltas=[_delta(op="move")]), "op"),
+        (_registration(deltas=[_delta(op="insert")]), "keys"),
+        (_registration(deltas=[_insert(path=["warnings", 99])]), "insert index"),
+        (_registration(owner="y"), "one file per owner"),
+        (
+            _registration(
+                filled=[
+                    {"kind": "today_lists", "name": "directives", "source": "s", "test": "t::u"}
+                ]
+            ),
+            "filled name",
+        ),
+    ],
+)
+def test_t2_registry_rejects_what_e6_forbids(raw: dict[str, Any], message: str) -> None:
+    with pytest.raises(RegistryError, match=message):
+        expected_bodies(_golden(), [parse_registration("x.json", raw)])
+
+
+def test_t2_registry_rejects_an_added_key_the_golden_already_has() -> None:
+    registration = parse_registration(
+        "x.json", _registration(added_keys=[{"key": "title", "source": "ADR"}])
+    )
+    with pytest.raises(RegistryError, match="already in the golden"):
+        dropped_keys([registration], _golden())
+
+
+def test_t2_registry_rejects_a_message_that_is_not_appended_to() -> None:
+    golden = _golden()
+    message = golden["after_exit"]["exit"]["message"]
+    raw = _registration(
+        deltas=[
+            _delta(scenario="after_exit", body="exit", path=["message"], before=message, after="x")
+        ]
+    )
+    with pytest.raises(RegistryError, match="appended"):
+        expected_bodies(golden, [parse_registration("x.json", raw)])
+
+
+def test_t2_registry_rejects_two_owners_on_one_list_and_duplicate_ids(tmp_path: Path) -> None:
+    golden = _golden()
+    warnings = golden["after_exit"]["today"]["warnings"]
+    insert = _insert(path=["warnings", len(warnings)])
+    first = parse_registration("x.json", _registration(deltas=[insert]))
+    second = parse_registration("y.json", _registration(owner="y", deltas=[{**insert, "id": "Y"}]))
+    with pytest.raises(RegistryError, match="shares"):
+        expected_bodies(golden, [first, second])
+
+    for owner in ("x", "y"):
+        (tmp_path / f"{owner}.json").write_text(
+            json.dumps(_registration(owner=owner, deltas=[insert])), encoding="utf-8"
+        )
+    with pytest.raises(RegistryError, match="duplicate delta id"):
+        load_registrations(tmp_path)
+
+
+def test_t2_an_empty_registry_is_the_original_comparison() -> None:
+    """Equivalence with the pre-registry T2 when nothing is registered (E-10 第 4 點)."""
+    golden = _golden()
+    assert expected_bodies(golden, []) == golden
+    assert dropped_keys([], golden) == CLOCK_KEYS | SEAM_KEYS
 
 
 def _keys(value: Any) -> set[str]:
@@ -208,7 +383,13 @@ def test_t4_the_read_is_begin_selects_commit(
 
     assert statements[0] == "BEGIN" and statements[-1] == "COMMIT"
     assert all(sql.lstrip().upper().startswith("SELECT") for sql in statements[1:-1])
-    assert read == InFlightRead(exits=PendingExitRead(), entries=EntryBeforeExitRead())
+    # 釐清二 E-6 第 6 點: a part no owner registered as filled is still the stub's.
+    in_flight = filled(load_registrations(), "in_flight")
+    defaults: dict[str, Any] = {"exits": PendingExitRead, "entries": EntryBeforeExitRead}
+    assert set(defaults) == set(InFlightRead._fields)
+    for name, default in defaults.items():
+        if name not in in_flight:
+            assert getattr(read, name) == default(), name
 
 
 def test_t4_a_failing_read_rolls_back_and_raises(

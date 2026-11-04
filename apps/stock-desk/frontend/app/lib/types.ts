@@ -1887,12 +1887,70 @@ export interface PlaybookTodayResponse {
   //: its own and never mixed into `directives` or each other (ADR-0034 補充一
   //: S-3 第 6 點). Optional because an older backend does not send them; a
   //: missing key reads as `[]`. No view renders them yet.
-  //: Owner N-171 (ADR-0039 Decision 1): unsettled EMERGENCY sells that still cover.
+  //: Owner N-171 (ADR-0039 Decision 1): every unsettled EMERGENCY sell on an open
+  //: batch -- covering, stale and unclassified alike -- by symbol, batch_no,
+  //: execution_date, id. Raw data: no view renders text from it (補充一 S-1 第 4 點).
   pending_exit_directives?: PlaybookDirectiveLine[];
   //: Owner N-168 (ADR-0034 補充一 S-3 第 6 點): W-B1 類.
   entry_before_exit_directives?: PlaybookDirectiveLine[];
   //: Owner N-168 (ADR-0034 補充一 S-3 第 6 點): G1 擋下類.
   entry_before_exit_blocked_directives?: PlaybookDirectiveLine[];
+  //: Owner N-171 (ADR-0039 Decision 1, additive): the pending-exit block,
+  //: composed server-side. Optional because an older backend does not send it;
+  //: a missing key or `null` renders nothing at all (C1, C14). Render only when
+  //: the query succeeded and this is non-null, in the order the backend gives —
+  //: never re-sorted, filtered or re-worded, and never from
+  //: `pending_exit_directives`, which is raw data (C22).
+  pending_exit_block?: PlaybookPendingExitBlock | null;
+}
+
+/** Which kind a pending-exit row / section is (ADR-0039 Decision 1). */
+export type PlaybookPendingExitCoverage = "covering" | "stale" | "unclassified";
+
+/**
+ * Backend `PendingExitRowResponse` (app/api/playbook.py). Render `text`, then
+ * `notes` in list order, then `entry_before_exit_note` when non-null — the
+ * fixed same-row order of ADR-0039 補充一 S-1 第 4 點.
+ */
+export interface PlaybookPendingExitRow {
+  symbol: string;
+  batch_no: number;
+  //: The batch's `remaining_shares` as read; never a sum of lines.
+  shares: number;
+  coverage: PlaybookPendingExitCoverage;
+  //: 風控 P-2; `null` on an unclassified (unauthored) row.
+  batch_has_covering: boolean | null;
+  //: ISO dates, de-duplicated, ascending.
+  execution_dates: string[];
+  //: A-5, or `EMERGENCY_EXIT_STALE_ITEM` on a stale row.
+  text: string;
+  //: Same-row notes, already ordered: [A-6], [A-15]; or A-11/A-12, [A-15].
+  notes: string[];
+  //: W-B2L (N-168); `null` until N-168 lands — then nothing is rendered for it.
+  entry_before_exit_note: string | null;
+}
+
+/** Backend `PendingExitSectionResponse`: `label` (when non-null), `lead`, then `rows`. */
+export interface PlaybookPendingExitSection {
+  kind: PlaybookPendingExitCoverage;
+  //: A-7 or A-8; `null` means no label is rendered.
+  label: string | null;
+  //: A-3, A-9 or A-4.
+  lead: string;
+  rows: PlaybookPendingExitRow[];
+}
+
+/**
+ * Backend `PendingExitBlockResponse` — the pending-exit block, titled A-1 (ADR-0039 Decision 1, 5).
+ * Order: `title`, `lead_template` with `{read_at}` replaced exactly once by
+ * `formatDateTime(as_of)` of the same response (Decision 16 P-8, C19), each
+ * section in list order, then `closing_notes` in list order.
+ */
+export interface PlaybookPendingExitBlock {
+  title: string;
+  lead_template: string;
+  sections: PlaybookPendingExitSection[];
+  closing_notes: string[];
 }
 
 /** Backend `BatchSnapshot` (app/playbook/models.py) — one row of 部位快照. */

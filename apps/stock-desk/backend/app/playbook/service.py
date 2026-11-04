@@ -22,7 +22,7 @@ trailing stop reads it on the same day's close.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -48,6 +48,10 @@ from app.playbook.models import (
     FastMarketState,
     IndexSnapshot,
     MarketSnapshot,
+    PendingExitBlock,
+    PendingExitCoverage,
+    PendingExitRow,
+    PendingExitSection,
     PlaybookEvaluation,
     PortfolioState,
     RebalanceResult,
@@ -298,6 +302,49 @@ def _is_exit_sell(directive: Directive) -> bool:
     return directive.rule_id == "EMERGENCY" and directive.action == "sell"
 
 
+class ExitBatchClass(NamedTuple):
+    """One open batch and its unsettled EMERGENCY sells, split under 判準 Z.
+
+    ``live`` still cover the batch, ``stale`` no longer do; both keep the
+    order of :attr:`EmergencyExitState.covering` (oldest first). A batch with
+    neither is still listed -- the exit writes it a new line.
+    """
+
+    batch: BatchState
+    live: list[PendingDirective]
+    stale: list[PendingDirective]
+
+
+def classify_exit_batches(
+    state: EmergencyExitState, series_for: Callable[[str], Sequence[PriceBar]]
+) -> list[ExitBatchClass]:
+    """判準 Z for every open batch of ``state``, one entry each, in batch order. Pure.
+
+    The single place EMERGENCY sells are told apart (ADR-0039 Decision 3,
+    N171-C2″): :func:`plan_emergency_exit` decides from it under the write
+    lock, and ``/today``'s pending-exit block classifies with it after the
+    settlement. Each line is judged by :func:`exit_line_still_covers` alone,
+    on ``series_for(symbol)`` -- the exit's preloaded series, or on ``/today``
+    the very series the settlement judged N1 on (``SettlementRun.loaded``), so
+    the two pages of one response cannot disagree (風控 P-1). A line without a
+    ``batch_no`` belongs to no batch and is in no entry.
+    """
+    lines: dict[tuple[str, int], list[PendingDirective]] = {}
+    for item in state.covering:
+        if item.directive.batch_no is not None:
+            lines.setdefault((item.directive.symbol, item.directive.batch_no), []).append(item)
+
+    classes: list[ExitBatchClass] = []
+    for batch in state.open_batches:
+        bars = series_for(batch.symbol)
+        live: list[PendingDirective] = []
+        stale: list[PendingDirective] = []
+        for item in lines.get((batch.symbol, batch.batch_no), []):
+            (live if exit_line_still_covers(item.directive, bars) else stale).append(item)
+        classes.append(ExitBatchClass(batch=batch, live=live, stale=stale))
+    return classes
+
+
 def plan_emergency_exit(
     state: EmergencyExitState,
     *,
@@ -321,39 +368,31 @@ def plan_emergency_exit(
     with an unsettled EMERGENCY sell that still covers it under
     :func:`exit_line_still_covers` keeps it, and it is reported instead -- with
     every such line. Lines that no longer cover are reported as ``stale``
-    (S10) and are not cancelled.
+    (S10) and are not cancelled. Which line is which is
+    :func:`classify_exit_batches`'s call.
     """
-    lines: dict[tuple[str, int], list[PendingDirective]] = {}
-    for item in state.covering:
-        if item.directive.batch_no is not None:
-            lines.setdefault((item.directive.symbol, item.directive.batch_no), []).append(item)
-
     directives: list[Directive] = []
     warnings: list[str] = []
     covered: list[BatchState] = []
     stale: list[wording.ExitStale] = []
     live_ids: set[int] = set()
-    for batch in state.open_batches:
+    for entry in classify_exit_batches(
+        state, lambda symbol: loaded.get(symbol, NOTHING_LOADED).bars
+    ):
+        batch = entry.batch
         series = loaded.get(batch.symbol, NOTHING_LOADED)
-        live: list[int] = []
-        stale_dates: list[date] = []
-        for item in lines.get((batch.symbol, batch.batch_no), []):
-            if exit_line_still_covers(item.directive, series.bars):
-                live.append(item.directive_id)
-            else:
-                stale_dates.append(item.directive.execution_date)
-        if stale_dates:
+        if entry.stale:
             stale.append(
                 wording.ExitStale(
                     symbol=batch.symbol,
                     batch_no=batch.batch_no,
                     shares=batch.remaining_shares,
-                    dates=tuple(stale_dates),
+                    dates=tuple(item.directive.execution_date for item in entry.stale),
                 )
             )
-        if live:
+        if entry.live:
             covered.append(batch)
-            live_ids.update(live)
+            live_ids.update(item.directive_id for item in entry.live)
             continue
         snapshot = build_market_snapshot(
             batch.symbol,
@@ -639,16 +678,234 @@ class SettlementRun(NamedTuple):
     loaded: Mapping[str, LoadedSeries]
 
 
+def exit_row_past_due(execution_dates: Sequence[date], *, as_of: date) -> bool:
+    """A-6's predicate (ADR-0039 補充一 S-2, N171-C23): is any 預定執行日 before ``as_of``?
+
+    A plain date comparison and nothing else -- 風控 2026-11-04 第 1 點 accepts
+    A-6 as "not a classification" on exactly that condition. ``as_of`` is the
+    UTC day :meth:`PlaybookService.evaluate_today` runs for (``today or
+    datetime.now(UTC).date()``), the basis S3 uses too, never the 依據資料日.
+    It takes no trading-day table and no bars, and reaches no data source, so
+    it answers the same on the unauthored path, which loads nothing. Pure; the
+    only place the pending-exit block decides whether a row carries A-6.
+    """
+    return any(day < as_of for day in execution_dates)
+
+
+def exit_row_shares_reduced(line_shares: Sequence[int], *, remaining_shares: int) -> bool:
+    """A-15's predicate (ADR-0039 補充一 S-1, N171-C22): does a line ask for more than is held?
+
+    ``line_shares`` are the ``shares`` of the row's own EMERGENCY sells and
+    ``remaining_shares`` the batch's, both from the same in-flight read. True
+    when a later S/P settlement left the batch smaller than the exit line that
+    still names its old size (風控 P-6). Reads the book only -- no
+    classification, no bars -- so every kind of row, unauthored included, uses
+    it. Pure.
+    """
+    return any(shares > remaining_shares for shares in line_shares)
+
+
+class PendingExitView(NamedTuple):
+    """What N-171 adds to ``/today`` from one in-flight read (ADR-0039 Decision 1)."""
+
+    #: Every line of the block, all three kinds, by symbol, batch_no,
+    #: 預定執行日 and log id: the raw data, never what the client renders.
+    directives: list[Directive]
+    #: ``None`` when the block has no row (C14).
+    block: PendingExitBlock | None
+
+
+def _exit_row(
+    batch: BatchState,
+    items: Sequence[PendingDirective],
+    *,
+    coverage: PendingExitCoverage,
+    batch_has_covering: bool | None,
+    as_of: date,
+) -> PendingExitRow:
+    """One row, its sentences in the fixed same-row order (補充一 S-1 第 4 點).
+
+    covering／unclassified: A-5 →［A-6］→［A-15］; stale: STALE_ITEM → A-11 or
+    A-12 →［A-15］. W-B2L is not here: the response derives it per row through
+    ``_lines`` and never puts it in ``text`` or ``notes`` (Decision 9, C15).
+    """
+    dates = sorted({item.directive.execution_date for item in items})
+    notes: list[str] = []
+    if coverage == "stale":
+        text = wording.EMERGENCY_EXIT_STALE_ITEM.format(
+            symbol=batch.symbol,
+            batch_no=batch.batch_no,
+            shares=batch.remaining_shares,
+            stale_dates=wording.date_list(dates),
+        )
+        notes.append(
+            wording.PENDING_EXIT_STALE_ALSO_COVERED_NOTE
+            if batch_has_covering
+            else wording.PENDING_EXIT_STALE_UNCOVERED_NOTE
+        )
+    else:
+        text = wording.PENDING_EXIT_ITEM.format(
+            symbol=batch.symbol,
+            batch_no=batch.batch_no,
+            shares=batch.remaining_shares,
+            execution_dates=wording.date_list(dates),
+        )
+        if exit_row_past_due(dates, as_of=as_of):
+            # {past_due_dates}: the row's dates that are past, S3's definition.
+            notes.append(
+                wording.PENDING_EXIT_PAST_DUE_NOTE.format(
+                    past_due_dates=wording.date_list(day for day in dates if day < as_of)
+                )
+            )
+    if exit_row_shares_reduced(
+        [item.directive.shares for item in items], remaining_shares=batch.remaining_shares
+    ):
+        notes.append(wording.PENDING_EXIT_SHARES_REDUCED_NOTE)
+    return PendingExitRow(
+        symbol=batch.symbol,
+        batch_no=batch.batch_no,
+        shares=batch.remaining_shares,
+        coverage=coverage,
+        batch_has_covering=batch_has_covering,
+        execution_dates=dates,
+        text=text,
+        notes=notes,
+        directives=[item.directive for item in items],
+    )
+
+
+def _by_batch(rows: list[PendingExitRow]) -> list[PendingExitRow]:
+    return sorted(rows, key=lambda row: (row.symbol, row.batch_no))
+
+
 def _pending_exit_lines(
     read: PendingExitRead, *, loaded: Mapping[str, LoadedSeries] | None, as_of: date
-) -> list[Directive]:
-    """``pending_exit_directives`` from the in-flight read. Owner N-171; ``[]`` in the seam.
+) -> PendingExitView:
+    """``pending_exit_directives`` and ``pending_exit_block`` from the in-flight read.
 
-    ``loaded`` is the settlement's own series on the authored path and ``None``
-    on the unauthored one, which loads nothing (ADR-0039 Decision 3, 7).
+    Owner N-171 (ADR-0039 Decision 1～8; 補充一 S-1, S-2). Candidates are
+    exactly what ``_read_exit_state`` read: unsettled EMERGENCY sells of
+    batches that are open with ``remaining_shares > 0`` -- 帳冊仍記為持有, the
+    definition A-2 and NB-6 paragraph 2 share (補充一 S-4) -- and no buy line.
+    Nothing here reads the store, loads bars or writes (C9).
+
+    * ``loaded`` is the settlement's own series on the authored path
+      (``SettlementRun.loaded``): rows are split by :func:`classify_exit_batches`
+      on it, so a stale row here is a line the same response's settlement
+      gives N1 (風控 P-1). A symbol the settlement did not load counts as
+      nothing loaded, which keeps every line covering -- the exit's own
+      degradation (AC-N171-9).
+    * ``None`` on the unauthored path, which loads nothing: no classification
+      at all, one unclassified row per batch with every line (P-3, C10).
+
+    ``as_of`` is :meth:`PlaybookService.evaluate_today`'s, for A-6 only.
     """
-    del read, loaded, as_of
-    return []
+    state = read.state
+    sections: list[PendingExitSection] = []
+    placed: list[PendingDirective] = []
+    if loaded is None:
+        lines: dict[tuple[str, int], list[PendingDirective]] = {}
+        for item in state.covering:
+            if item.directive.batch_no is not None:
+                key = (item.directive.symbol, item.directive.batch_no)
+                lines.setdefault(key, []).append(item)
+        rows: list[PendingExitRow] = []
+        for batch in state.open_batches:
+            items = lines.get((batch.symbol, batch.batch_no), [])
+            if items:
+                placed.extend(items)
+                rows.append(
+                    _exit_row(
+                        batch,
+                        items,
+                        coverage="unclassified",
+                        batch_has_covering=None,
+                        as_of=as_of,
+                    )
+                )
+        if rows:
+            sections.append(
+                PendingExitSection(
+                    kind="unclassified",
+                    label=None,
+                    lead=wording.PENDING_EXIT_UNCLASSIFIED_LEAD,
+                    rows=_by_batch(rows),
+                )
+            )
+        closing = [wording.PENDING_EXIT_UNAUTHORED_NOTE, wording.PENDING_EXIT_RECEIPT_OVERLAP_NOTE]
+    else:
+        series = loaded
+        classes = classify_exit_batches(
+            state, lambda symbol: series.get(symbol, NOTHING_LOADED).bars
+        )
+        covering: list[PendingExitRow] = []
+        stale: list[PendingExitRow] = []
+        for entry in classes:
+            placed.extend((*entry.live, *entry.stale))
+            if entry.live:
+                covering.append(
+                    _exit_row(
+                        entry.batch,
+                        entry.live,
+                        coverage="covering",
+                        batch_has_covering=True,
+                        as_of=as_of,
+                    )
+                )
+            if entry.stale:
+                stale.append(
+                    _exit_row(
+                        entry.batch,
+                        entry.stale,
+                        coverage="stale",
+                        batch_has_covering=bool(entry.live),
+                        as_of=as_of,
+                    )
+                )
+        if covering:
+            sections.append(
+                PendingExitSection(
+                    kind="covering",
+                    # A-7 only when the stale section is on the page too.
+                    label=wording.PENDING_EXIT_COVERED_LABEL if stale else None,
+                    lead=wording.PENDING_EXIT_COVERED_LEAD,
+                    rows=_by_batch(covering),
+                )
+            )
+        if stale:
+            sections.append(
+                PendingExitSection(
+                    kind="stale",
+                    label=wording.PENDING_EXIT_STALE_LABEL,
+                    lead=wording.PENDING_EXIT_STALE_LEAD,
+                    rows=_by_batch(stale),
+                )
+            )
+        closing = [wording.PENDING_EXIT_RECEIPT_OVERLAP_NOTE]
+
+    directives = [
+        item.directive
+        for item in sorted(
+            placed,
+            key=lambda item: (
+                item.directive.symbol,
+                item.directive.batch_no or 0,
+                item.directive.execution_date,
+                item.directive_id,
+            ),
+        )
+    ]
+    if not sections:
+        return PendingExitView(directives=directives, block=None)
+    return PendingExitView(
+        directives=directives,
+        block=PendingExitBlock(
+            title=wording.PENDING_EXIT_BLOCK_TITLE,
+            lead_template=wording.PENDING_EXIT_BLOCK_LEAD,
+            sections=sections,
+            closing_notes=closing,
+        ),
+    )
 
 
 def _entry_before_exit_lines(
@@ -708,6 +965,35 @@ class PlaybookService:
         signature and the answer are unchanged (ADR-0035 補充四 2.4).
         """
         return self._settle_pending(today or datetime.now(UTC).date()).result
+
+    def settle_on_request(self, *, today: date | None = None) -> SettlementResult:
+        """``POST /api/playbook/settle``: :meth:`settle_pending`, gated on authorship.
+
+        N171-C17′ (ADR-0039 補充一 S-3; 風控 2026-11-04 第 2 點). A-13 tells the
+        user that, until they confirm a rule set, the book will not judge their
+        exit lines against the opening price -- so no request path may settle
+        while ``rule_set_authorship(as_of).user_authored`` is false (風控 P-4).
+        The authorship read is the same one :meth:`evaluate_today` makes and the
+        first thing done here: before any ``pending_directives``, any load and
+        any claim. Unauthored, nothing is read beyond it, nothing is loaded and
+        nothing is written; the answer is an empty settlement whose only warning
+        is :data:`wording.SETTLEMENT_UNAUTHORED_NOTE` (``executed`` and
+        ``missed`` are its properties, both 0).
+
+        Authored, this is :meth:`settle_pending` unchanged. The gate lives here
+        rather than in :meth:`settle_pending` or :meth:`_settle_pending` so
+        neither moves (ADR-0035 補充四 2.4, SEAM-T6) and the authored ``/today``
+        does not read authorship twice; :meth:`evaluate_today` never calls this.
+        """
+        as_of = today or datetime.now(UTC).date()
+        if not self._store.rule_set_authorship(as_of).user_authored:
+            return SettlementResult(
+                settled_on=as_of,
+                settled=[],
+                unsettled=[],
+                warnings=[wording.SETTLEMENT_UNAUTHORED_NOTE],
+            )
+        return self.settle_pending(today=as_of)
 
     def _settle_pending(self, as_of: date) -> SettlementRun:
         """Stamp every due T+1 line, and hand back the series it loaded.
@@ -1207,6 +1493,8 @@ class PlaybookService:
         # only, so the day still leaves no trace; nothing is loaded for it.
         in_flight = self._store.read_in_flight()
         entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
+        # Unclassified: this path loads no bars to judge 判準 Z on (ADR-0039 Decision 7).
+        exits = _pending_exit_lines(in_flight.exits, loaded=None, as_of=as_of)
         # The version in force -- what ``rule_set_status`` states and a
         # confirmation would adopt. Nothing is evaluated with it here; it is
         # carried for the figures a response restates (ADR-0031 C-5) and read
@@ -1245,9 +1533,10 @@ class PlaybookService:
                 as_of=as_of,
                 stored_until=self._store.portfolio_state().emergency_until,
             ),
-            pending_exit_directives=_pending_exit_lines(in_flight.exits, loaded=None, as_of=as_of),
+            pending_exit_directives=exits.directives,
             entry_before_exit_directives=entries,
             entry_before_exit_blocked_directives=blocked_entries,
+            pending_exit_block=exits.block,
         )
 
     def evaluate_today(self, *, today: date | None = None) -> PlaybookEvaluation:
@@ -1367,6 +1656,8 @@ class PlaybookService:
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
         entries, blocked_entries = _entry_before_exit_lines(in_flight.entries)
+        # Classified on the settlement's own series (ADR-0039 Decision 3, 風控 P-1).
+        exits = _pending_exit_lines(in_flight.exits, loaded=run.loaded, as_of=as_of)
         return evaluation.model_copy(
             update={
                 # Decision 4: what the log holds for this 預定執行日, so 「無」
@@ -1392,11 +1683,10 @@ class PlaybookService:
                     as_of=as_of,
                     stored_until=self._store.portfolio_state().emergency_until,
                 ),
-                "pending_exit_directives": _pending_exit_lines(
-                    in_flight.exits, loaded=run.loaded, as_of=as_of
-                ),
+                "pending_exit_directives": exits.directives,
                 "entry_before_exit_directives": entries,
                 "entry_before_exit_blocked_directives": blocked_entries,
+                "pending_exit_block": exits.block,
             }
         )
 

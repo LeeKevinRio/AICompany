@@ -64,6 +64,8 @@ from app.playbook.models import (
     ExitConfirm,
     FastMarketState,
     LabeledBatch,
+    PendingExitBlock,
+    PendingExitCoverage,
     PlaybookEvaluation,
     RuleParams,
     RuleSetStatus,
@@ -90,6 +92,59 @@ class DirectiveLine(BaseModel):
     #: field of its own -- never appended to ``line`` (VETO). Set only by
     #: :func:`_lines`; ``None`` until N-168 implements the rule (ADR-0035 補充四 2.2(b)).
     entry_before_exit_note: str | None = None
+
+
+class PendingExitRowResponse(BaseModel):
+    """One row of ``pending_exit_block`` (ADR-0039 Decision 1, 4; 補充一 S-1).
+
+    The client renders ``text``, then ``notes`` in list order, then
+    ``entry_before_exit_note`` -- nothing else, in no other order, and it never
+    renders ``pending_exit_directives`` as text (C22, T27).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    batch_no: int
+    #: The batch's ``remaining_shares`` as read (P-6), never a sum of lines.
+    shares: int
+    coverage: PendingExitCoverage
+    #: 風控 P-2; ``None`` on an unclassified row.
+    batch_has_covering: bool | None
+    #: ISO dates of the row's own lines, de-duplicated, ascending.
+    execution_dates: list[str]
+    #: A-5, or ``EMERGENCY_EXIT_STALE_ITEM`` on a stale row.
+    text: str
+    #: [A-6]／[A-15] on covering and unclassified rows; A-11 or A-12, [A-15] on stale ones.
+    notes: list[str]
+    #: W-B2L, copied from the ``DirectiveLine`` :func:`_lines` builds for the
+    #: row's lines (Decision 9; 釐清二 E-11 第 3 點). ``None`` until N-168.
+    entry_before_exit_note: str | None
+
+
+class PendingExitSectionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: PendingExitCoverage
+    label: str | None
+    lead: str
+    rows: list[PendingExitRowResponse]
+
+
+class PendingExitBlockResponse(BaseModel):
+    """The pending-exit block (A-1 its title), as composed server-side (ADR-0039 Decision 1, 5).
+
+    Render order: ``title``, ``lead_template`` with ``{read_at}`` replaced once
+    by ``formatDateTime(as_of)`` of this response (C19), then each section's
+    ``label`` (when not ``None``), ``lead`` and rows, then ``closing_notes``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    lead_template: str
+    sections: list[PendingExitSectionResponse]
+    closing_notes: list[str]
 
 
 class SettledLineResponse(BaseModel):
@@ -277,6 +332,10 @@ class TodayResponse(BaseModel):
     entry_before_exit_directives: list[DirectiveLine] = Field(default_factory=list)
     #: Owner N-168 (G1 擋下類).
     entry_before_exit_blocked_directives: list[DirectiveLine] = Field(default_factory=list)
+    #: ADR-0039 Decision 1 (N-171, additive): the pending-exit block, or ``None``
+    #: when it has no row -- then the page shows nothing for it at all (C14).
+    #: ``pending_exit_directives`` above holds the same lines as raw data.
+    pending_exit_block: PendingExitBlockResponse | None = None
 
 
 class EmergencyExitResponse(BaseModel):
@@ -325,6 +384,47 @@ def _lines(
         )
         for directive in directives
     ]
+
+
+def _pending_exit_block(
+    block: PendingExitBlock | None, *, labeled_batches: Sequence[LabeledBatch]
+) -> PendingExitBlockResponse | None:
+    """The block as sent; each row's W-B2L is its first line's, as :func:`_lines` built it.
+
+    Every line of a row is one batch's, so they all carry the same note
+    (ADR-0039 Decision 9); nothing here reads ``labeled_batches`` itself.
+    """
+    if block is None:
+        return None
+    return PendingExitBlockResponse(
+        title=block.title,
+        lead_template=block.lead_template,
+        sections=[
+            PendingExitSectionResponse(
+                kind=section.kind,
+                label=section.label,
+                lead=section.lead,
+                rows=[
+                    PendingExitRowResponse(
+                        symbol=row.symbol,
+                        batch_no=row.batch_no,
+                        shares=row.shares,
+                        coverage=row.coverage,
+                        batch_has_covering=row.batch_has_covering,
+                        execution_dates=[day.isoformat() for day in row.execution_dates],
+                        text=row.text,
+                        notes=list(row.notes),
+                        entry_before_exit_note=_lines(
+                            row.directives, labeled_batches=labeled_batches
+                        )[0].entry_before_exit_note,
+                    )
+                    for row in section.rows
+                ],
+            )
+            for section in block.sections
+        ],
+        closing_notes=list(block.closing_notes),
+    )
 
 
 def _settlement_response(result: SettlementResult) -> SettlementResponse:
@@ -452,6 +552,9 @@ def _to_response(
             evaluation.entry_before_exit_blocked_directives,
             labeled_batches=evaluation.labeled_batches,
         ),
+        pending_exit_block=_pending_exit_block(
+            evaluation.pending_exit_block, labeled_batches=evaluation.labeled_batches
+        ),
     )
 
 
@@ -494,8 +597,14 @@ def settle(service: ServiceDep) -> SettlementResponse:
     Takes no body: the lines to settle are the ones already in the log, and the
     price is the market's, not the caller's. Safe to call repeatedly -- a line
     that was already settled is not settled again.
+
+    Gated on authorship (N171-C17′, ADR-0039 補充一 S-3): with no user rule set
+    it settles, loads and writes nothing and answers 200 with
+    ``SETTLEMENT_UNAUTHORED_NOTE`` alone. Always through
+    :meth:`PlaybookService.settle_on_request`; nothing under ``app/api/`` calls
+    ``settle_pending`` directly.
     """
-    return _settlement_response(service.settle_pending())
+    return _settlement_response(service.settle_on_request())
 
 
 @router.get("/rule-set", response_model=RuleSetResponse)

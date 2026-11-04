@@ -469,16 +469,29 @@ export interface ExitFailureWording {
  * sentences — never split, merged, trimmed or reordered. The pre-merge text
  * (「…只暫停了 R 系列…而尚未產生賣出指令」) is untrue after N-166 and must not
  * return. Release-coupled with N-166: this text may only ship in a build that
- * carries it. The backend constants are the single approved source; a guard test
+ * carries it; paragraph 2 is also release-coupled with N-171 (see below). The
+ * backend constants are the single approved source; a guard test
  * reads `wording.py` and compares byte for byte.
+ *
+ * Paragraph 2 is 風控 2026-11-04 第 3 點's second version (three sentences, one
+ * paragraph). It names the N-171 pending-exit block by its title verbatim, so it
+ * may only ship with that block and a backend no older than this client; it was
+ * replaced atomically with the backend constant and both guard tests
+ * (ADR-0039 Decision 13). Earlier versions of paragraph 2 may not return.
  */
 export const EXIT_FAILURE_WORDING: ExitFailureWording = {
   label: "無法確認全部出清的處理結果",
   body: [
     "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理：" +
       "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。",
-    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
-      "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。",
+    "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）" +
+      "目前是否已暫停，但不會顯示賣出指令；若這次送出前 R 系列就已暫停，" +
+      "徽章也無法顯示這次是否已受理。重新取得資料後，" +
+      "排程台上的「全部出清產生、尚未結算的賣出指令」區塊會列出所屬批次在帳冊仍記為持有" +
+      "、尚未結算的出清賣出指令；若這次送出前就已有這類指令，" +
+      "該區塊也無法顯示這次是否已受理。該區塊沒有出現或未列出某一批，不代表這次未受理：" +
+      "例如沒有持有批次時不會產生賣出指令，指令結算後、" +
+      "或所屬批次在帳冊已不再記為持有時，也不再列於該區塊。",
     "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，" +
       "除非該指令的預定執行日沒有日線開盤價、且之後的交易日已有日線資料，" +
       "這時會為該批次另行產生賣出指令；但再次送出可能延後 R 系列（新倉進場）的預計恢復日。" +

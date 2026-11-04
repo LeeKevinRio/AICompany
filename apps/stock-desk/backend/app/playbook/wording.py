@@ -580,6 +580,15 @@ EXIT_CONFIRM_FREEZE_KEPT_CHECK = (
 #: copied verbatim from the ruling; the playbook never emits these strings -- the
 #: client mirrors them and these constants are the single approved source.
 #: Release-coupled with N-166 like paragraph 3.
+#:
+#: Paragraph 2 (:data:`EXIT_RESULT_UNCONFIRMED_BADGE`) is the 風控 2026-11-04 第 3 點
+#: second version: three sentences, one paragraph -- never split, merged or
+#: reordered. It names the N-171 block by :data:`PENDING_EXIT_BLOCK_TITLE`
+#: verbatim and scopes it to batches the book still holds, so it may only ship
+#: in a build that carries that block, with a backend no older than the client
+#: (風控 2026-11-03 上線耦合); its earlier versions may not come back. Replaced
+#: atomically with the client mirror and both guard tests (ADR-0039 Decision 13).
+#: Re-reviewed when group B ships.
 EXIT_RESULT_UNCONFIRMED_LABEL = "無法確認全部出清的處理結果"
 EXIT_RESULT_UNCONFIRMED_STATES = (
     "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理："
@@ -588,6 +597,11 @@ EXIT_RESULT_UNCONFIRMED_STATES = (
 EXIT_RESULT_UNCONFIRMED_BADGE = (
     "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，"
     "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。"
+    "重新取得資料後，"
+    "排程台上的「全部出清產生、尚未結算的賣出指令」區塊會列出所屬批次在帳冊仍記為持有、"
+    "尚未結算的出清賣出指令；若這次送出前就已有這類指令，該區塊也無法顯示這次是否已受理。"
+    "該區塊沒有出現或未列出某一批，不代表這次未受理：例如沒有持有批次時不會產生賣出指令，"
+    "指令結算後、或所屬批次在帳冊已不再記為持有時，也不再列於該區塊。"
 )
 
 #: NB-6 出清失敗面板 第 3 段，N-166 合併後版本 as revised by 風控 2026-10-31
@@ -607,6 +621,105 @@ EXIT_RESULT_UNCONFIRMED_RETRY = (
     "再次送出若取得回應，回應會說明該次的處理結果，包括先前已有、尚未結算的賣出指令。"
 )
 
+#: N-171 群組 A: the pending-exit block on ``/today`` (ADR-0039 Decision 1, 4, 5;
+#: 補充一 S-1, S-2). Verbatim from 風控 2026-11-03 第二節之 2 (A-1, A-3～A-9,
+#: A-11～A-14) and 風控 2026-11-04 (A-2 revised, A-15); A-10 is the existing
+#: :data:`EMERGENCY_EXIT_STALE_ITEM`. The service composes the block in the fixed
+#: order and the client renders it as given -- it never reorders, filters or
+#: writes text of its own:
+#:
+#: * authored: A-1 → A-2 →［A-7］→ A-3 → covering rows (A-5 ＋［A-6］＋［A-15］)
+#:   →［A-8 → A-9 → stale rows (STALE_ITEM ＋ A-11 or A-12 ＋［A-15］)］→ A-14;
+#: * unauthored: A-1 → A-2 → A-4 → rows (A-5 ＋［A-6］＋［A-15］) → A-13 → A-14.
+#:
+#: ``{read_at}`` in A-2 is left in place: the client substitutes
+#: ``formatDateTime(as_of)`` of the same response, exactly once (P-8). 「建議」
+#: appears only in A-2's attribution negation 「非本系統的判斷或建議」 (allowlisted).
+
+#: A-1, the block's title. NB-6 paragraph 2 names the block by this exact text.
+PENDING_EXIT_BLOCK_TITLE = "全部出清產生、尚未結算的賣出指令"
+#: A-2 (風控 2026-11-04 revision): always rendered with the block, before every row.
+PENDING_EXIT_BLOCK_LEAD = (
+    "本區塊依 {read_at} 讀取的紀錄，列出你先前提交「全部出清」時產生、帳冊尚未結算，"
+    "且所屬批次在帳冊仍記為持有的賣出指令；這些指令是該要求的機械執行結果，"
+    "非本系統的判斷或建議。它們不由規則集產生，不列入指令帳冊，"
+    "也不是依本頁面所載收盤資料重新計算的結果；"
+    "本頁其他說明若提到指令帳冊中的指令或未產生指令，不包括本區塊的指令。"
+    "所屬批次在帳冊已不再記為持有的出清賣出指令，即使尚未結算，也不列入本區塊；"
+    "未列入不代表該指令已經結算或被取消，也不代表你在券商已賣出這批。本系統不下單，"
+    "無法得知你是否已依出清賣出指令在券商下單或成交，實際持股以你的券商回報為準。"
+)
+#: A-3: the covering section's lead (authored path, one covering row or more).
+PENDING_EXIT_COVERED_LEAD = (
+    "下列指令仍涵蓋所列批次。若你已依這些指令在券商賣出且成交，你在券商已無這幾批的持股，"
+    "請勿就同一批到券商重複下賣單；若你在券商仍持有這幾批而尚未賣出（包括未下單或未成交），"
+    "以下列批次與股數為準。市價單在跌停或無量時可能無法成交，"
+    "實際成交結果以你的券商回報為準。"
+)
+#: A-4: the only lead of the unauthored path, whose rows are not classified.
+PENDING_EXIT_UNCLASSIFIED_LEAD = (
+    "若你已依下列指令在券商賣出且成交，你在券商已無這幾批的持股，"
+    "請勿就同一批到券商重複下賣單；若你在券商仍持有這幾批而尚未賣出（包括未下單或未成交），"
+    "以下列批次與股數為準。市價單在跌停或無量時可能無法成交，"
+    "實際成交結果以你的券商回報為準。"
+)
+#: A-5: a covering or unclassified row; ``{shares}`` is the batch's ``remaining_shares``.
+PENDING_EXIT_ITEM = (
+    "{symbol}第 {batch_no} 批賣出 {shares} 股（預定執行日 {execution_dates} 開盤以市價單送出）"
+)
+#: A-6: on a covering or unclassified row when :func:`app.playbook.service.exit_row_past_due`.
+PENDING_EXIT_PAST_DUE_NOTE = (
+    "預定執行日 {past_due_dates} 已過、仍未結算；本系統不下單，"
+    "也無法得知你在券商是否已賣出這批，請以你的券商回報為準。"
+)
+#: A-7: the covering section's label, only when the stale section is there too.
+PENDING_EXIT_COVERED_LABEL = "仍涵蓋所列批次的指令"
+#: A-8: the stale section's label (authored path only).
+PENDING_EXIT_STALE_LABEL = "已不再涵蓋該批次、仍未結算的先前指令"
+#: A-9: the stale section's lead.
+PENDING_EXIT_STALE_LEAD = (
+    "下列先前的出清賣出指令至今未能結算：其預定執行日沒有日線開盤價（可能是該日休市，"
+    "也可能是資料缺漏），而之後的交易日已有日線資料，因此本系統不再以這些指令涵蓋所列批次。"
+    "這些指令並未被取消；若日後補得該日的開盤價，帳冊仍可能依該日開盤價判定，"
+    "但同一批次在帳冊的股數不會重複減少，判定的日期與價格可能與你實際賣出的不同。"
+    "本系統不下單，無法得知你是否已就這幾批在券商賣出："
+    "若你已賣出且成交（不論是否依先前的指令），你在券商已無這幾批的持股，"
+    "本區塊所列這幾批的賣出指令都不適用於你，請勿就這幾批到券商重複下賣單；"
+    "若尚未賣出（包括該日休市、未下單或未成交），見各列的說明。"
+)
+#: A-11: on a stale row whose batch also has a covering line.
+PENDING_EXIT_STALE_ALSO_COVERED_NOTE = (
+    "這批另有上列仍涵蓋的賣出指令；若你在券商仍持有這批而尚未賣出，以上列該批的賣出指令為準。"
+)
+#: A-12: on a stale row whose batch has no covering line.
+PENDING_EXIT_STALE_UNCOVERED_NOTE = (
+    "這批目前沒有仍涵蓋它的出清賣出指令，帳冊仍記為持有；若你在券商仍持有這批而尚未賣出，"
+    "可再次提交全部出清，替這批產生新的賣出指令。"
+)
+#: A-13: closes the unauthored path's rows, before A-14.
+PENDING_EXIT_UNAUTHORED_NOTE = (
+    "目前尚無你本人的規則集設定或修改紀錄，本頁不執行結算，也不載入日線資料："
+    "在你確認規則集之前，帳冊不會依預定執行日開盤價判定上列指令，它們會持續列在本區塊；"
+    "本頁也無法判斷其中是否有因預定執行日沒有日線開盤價、已不再涵蓋該批次的指令。"
+    "本頁其他說明若提到你目前持有某檔、尚未出清，是指帳冊尚未結算上列指令而仍記為持有，"
+    "不是指上列指令未產生，也不代表你在券商的持股狀態。"
+)
+#: A-14: always the block's last sentence; never decided from the receipt store.
+PENDING_EXIT_RECEIPT_OVERLAP_NOTE = (
+    "本頁若同時顯示以「EMERGENCY_EXIT 已受理」開頭的說明，其中所述、"
+    "尚未結算的賣出指令與本區塊所列的是同一組指令，不是另外一組。"
+)
+#: A-15 (風控 2026-11-04 第 4 點, required): on any row one of whose lines asks for
+#: more shares than the batch still holds (:func:`app.playbook.service.exit_row_shares_reduced`).
+PENDING_EXIT_SHARES_REDUCED_NOTE = (
+    "這批在出清賣出指令產生之後，帳冊又依其他賣出指令（例如停損、停利）判定賣出一部分，"
+    "因此上列股數是帳冊目前仍記為持有的股數，少於這批出清賣出指令產生時所列的股數。"
+    "本系統不下單，無法得知你是否已依那些其他賣出指令在券商賣出：若已賣出且成交，"
+    "上列股數已扣除那部分；若未下單或未成交，你在券商的這批持股可能多於上列股數，"
+    "多出的股數不在帳冊內，S/P 系列不會評估它們的停損停利，再次提交全部出清也不會涵蓋它們，"
+    "實際持股以你的券商回報為準。"
+)
+
 #: T+1 結算 (CEO 裁決七). A line is settled against the 預定執行日's opening
 #: price; without that price the line stays pending and is named, never guessed.
 SETTLEMENT_NO_OPEN_PRICE = (
@@ -618,7 +731,31 @@ SETTLEMENT_SUMMARY = (
     "未成交（MISSED）{missed} 筆、未結算 {pending} 筆；"
     "實際成交結果以你的券商回報為準。"
 )
-SETTLEMENT_NOTHING_PENDING = "T+1 結算：目前沒有待結算指令。"
+#: The only warning of a settlement that judged nothing: rendered by
+#: :meth:`app.playbook.service.PlaybookService._settle_pending` only when
+#: ``pending_directives(on_or_before=as_of)`` is empty, so nothing in range was
+#: judged and every line outside it (預定執行日 after ``as_of``) is still pending.
+#: Static, one element of ``settlement.warnings``, no placeholder. 風控 2026-11-04
+#: 逐字定稿 (work/reviews/2026-11-04-結算句逐字定稿-風控.md; golden D1～D3 confirmed
+#: in work/reviews/2026-11-04-結算句golden差異確認-風控.md).
+SETTLEMENT_NOTHING_PENDING = (
+    "T+1 結算：本次結算沒有判定任何指令；預定執行日在本次結算範圍之外的指令，維持待結算。"
+)
+
+#: N171-C17′ (ADR-0039 補充一 S-3; 風控 2026-11-04 第 2 點, 逐字定稿): the one
+#: warning of ``POST /api/playbook/settle`` while no user rule set exists. Only
+#: :meth:`app.playbook.service.PlaybookService.settle_on_request` returns it, and
+#: alone -- never with :data:`SETTLEMENT_NOTHING_PENDING` or
+#: :data:`SETTLEMENT_SUMMARY`. ``/today`` never carries it: its unauthored path
+#: keeps ``settlement=None``. Re-reviewed with A-13 if N-175 ever settles while
+#: unauthored, or authorship gains a true→false path (補充一 S-6).
+SETTLEMENT_UNAUTHORED_NOTE = (
+    "T+1 結算：目前尚無你本人的規則集設定或修改紀錄，本次未執行結算，也未載入日線資料；"
+    "本回應的成交筆數與未成交（MISSED）筆數為 0、已結算與未結算清單皆為空，"
+    "是因為未執行結算，不代表目前沒有待結算指令。若你先前提交全部出清時已產生賣出指令，"
+    "在你確認規則集之前，帳冊不會依預定執行日開盤價判定它們，它們維持待結算狀態。"
+    "本系統不下單，無法得知你是否已在券商下單或成交，實際持股以你的券商回報為準。"
+)
 
 #: N-166 風控 N1 (CEO #87): appended to :data:`SETTLEMENT_NO_OPEN_PRICE` for an
 #: unsettled EMERGENCY sell that meets 判準 Z while its batch is closed or has a

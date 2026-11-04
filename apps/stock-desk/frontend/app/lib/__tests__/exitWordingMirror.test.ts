@@ -133,9 +133,16 @@ describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version
       "這次送出未取得可確認結果的回應。目前可能尚未處理，也可能已受理：" +
         "R 系列（新倉進場）已暫停，持有批次也都已有賣出指令。",
     );
+    // Paragraph 2: 風控 2026-11-04 第 3 點's second version (ADR-0039 Decision 13).
     expect(EXIT_FAILURE_WORDING.body[1]).toBe(
-      "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
-        "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。",
+      "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）" +
+        "目前是否已暫停，但不會顯示賣出指令；若這次送出前 R 系列就已暫停，" +
+        "徽章也無法顯示這次是否已受理。重新取得資料後，" +
+        "排程台上的「全部出清產生、尚未結算的賣出指令」區塊會列出所屬批次在帳冊仍記為持" +
+        "有、尚未結算的出清賣出指令；若這次送出前就已有這類指令，" +
+        "該區塊也無法顯示這次是否已受理。該區塊沒有出現或未列出某一批，" +
+        "不代表這次未受理：例如沒有持有批次時不會產生賣出指令，指令結算後、" +
+        "或所屬批次在帳冊已不再記為持有時，也不再列於該區塊。",
     );
     expect(EXIT_FAILURE_WORDING.body[2]).toBe(
       "你可以再次送出：已有尚未結算之出清賣出指令的持有批次，不會再重複產生賣出指令，" +
@@ -151,6 +158,62 @@ describe("NB-6 failure panel (風控 必改項 9、10; merged-with-N-166 version
     for (const text of [EXIT_FAILURE_WORDING.label, ...EXIT_FAILURE_WORDING.body]) {
       expect(text).not.toMatch(/安全|放心|已執行|已出清|未確認|請關閉|視窗/);
     }
+  });
+
+  it("paragraph 2 names the N-171 block by wording.PENDING_EXIT_BLOCK_TITLE and keeps three sentences", () => {
+    const title = pythonStringConstant(wording, "PENDING_EXIT_BLOCK_TITLE");
+    expect(EXIT_FAILURE_WORDING.body[1]).toContain(`「${title}」區塊`);
+    expect(EXIT_FAILURE_WORDING.body[1].match(/。/g)).toHaveLength(3);
+    expect(EXIT_FAILURE_WORDING.body[1]).toContain("所屬批次在帳冊仍記為持有");
+    expect(EXIT_FAILURE_WORDING.body[1]).not.toContain("應");
+  });
+
+  it("no earlier version of paragraph 2 is left in the frontend sources (grep guard)", () => {
+    // The first version is exactly the second version's first sentence, so it
+    // may only appear as that opening; the 2026-11-03 revision's own clauses not at all.
+    const first =
+      "頁面上方的狀態列在重新取得資料後，其模式徽章會顯示 R 系列（新倉進場）目前是否已暫停，" +
+      "但不會顯示賣出指令；若這次送出前 R 系列就已暫停，徽章也無法顯示這次是否已受理。";
+    // The three places the 2026-11-03 revision differs from the second version
+    // (風控 2026-11-04 N-171-A 解讀點 3 (b)). Every check below runs on joined
+    // string values, never on raw source text (解讀點 3 (a)).
+    const retired1103 = [
+      "會列出" + "目前尚未結算",
+      "該區塊沒有出現" + "，",
+      "指令結算後" + "也不再列於該區塊",
+    ];
+    expect(EXIT_FAILURE_WORDING.body[1].startsWith(first)).toBe(true);
+    expect(EXIT_FAILURE_WORDING.body[1]).not.toBe(first);
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    let firstCount = 0;
+    let secondCount = 0;
+    const offenders: string[] = [];
+    function walk(dir: string): void {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          if (entry !== "__tests__" && entry !== "node_modules" && entry !== ".next") walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry)) {
+          const joined = readFileSync(full, "utf-8").replace(/"\s*\+\s*"/g, "");
+          firstCount += joined.split(first).length - 1;
+          secondCount += joined.split(EXIT_FAILURE_WORDING.body[1]).length - 1;
+          if (retired1103.some((fragment) => joined.includes(fragment))) offenders.push(full);
+        }
+      }
+    }
+    walk(root);
+    expect(offenders).toEqual([]);
+    expect(secondCount).toBe(1);
+    expect(firstCount).toBe(secondCount);
+    // wording.py: adjacent Python literals joined, so a split constant is one value.
+    const joinedWording = wording.replace(/"\s*\n\s*"/g, "");
+    for (const fragment of retired1103) {
+      expect(EXIT_FAILURE_WORDING.body[1]).not.toContain(fragment);
+      expect(joinedWording.includes(fragment)).toBe(false);
+    }
+    expect(joinedWording.split(first).length - 1).toBe(
+      joinedWording.split(EXIT_FAILURE_WORDING.body[1]).length - 1,
+    );
   });
 
   it("does not contain the retired pre-merge text, neither paragraph 1's 「只暫停了」 nor the unqualified paragraph 3", () => {
