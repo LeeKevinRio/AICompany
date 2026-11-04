@@ -672,6 +672,35 @@ class PlaybookService:
         """
         return self._settle_pending(today or datetime.now(UTC).date()).result
 
+    def settle_on_request(self, *, today: date | None = None) -> SettlementResult:
+        """``POST /api/playbook/settle``: :meth:`settle_pending`, gated on authorship.
+
+        N171-C17′ (ADR-0039 補充一 S-3; 風控 2026-11-04 第 2 點). A-13 tells the
+        user that, until they confirm a rule set, the book will not judge their
+        exit lines against the opening price -- so no request path may settle
+        while ``rule_set_authorship(as_of).user_authored`` is false (風控 P-4).
+        The authorship read is the same one :meth:`evaluate_today` makes and the
+        first thing done here: before any ``pending_directives``, any load and
+        any claim. Unauthored, nothing is read beyond it, nothing is loaded and
+        nothing is written; the answer is an empty settlement whose only warning
+        is :data:`wording.SETTLEMENT_UNAUTHORED_NOTE` (``executed`` and
+        ``missed`` are its properties, both 0).
+
+        Authored, this is :meth:`settle_pending` unchanged. The gate lives here
+        rather than in :meth:`settle_pending` or :meth:`_settle_pending` so
+        neither moves (ADR-0035 補充四 2.4, SEAM-T6) and the authored ``/today``
+        does not read authorship twice; :meth:`evaluate_today` never calls this.
+        """
+        as_of = today or datetime.now(UTC).date()
+        if not self._store.rule_set_authorship(as_of).user_authored:
+            return SettlementResult(
+                settled_on=as_of,
+                settled=[],
+                unsettled=[],
+                warnings=[wording.SETTLEMENT_UNAUTHORED_NOTE],
+            )
+        return self.settle_pending(today=as_of)
+
     def _settle_pending(self, as_of: date) -> SettlementRun:
         """Stamp every due T+1 line, and hand back the series it loaded.
 

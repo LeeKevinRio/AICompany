@@ -494,8 +494,14 @@ def settle(service: ServiceDep) -> SettlementResponse:
     Takes no body: the lines to settle are the ones already in the log, and the
     price is the market's, not the caller's. Safe to call repeatedly -- a line
     that was already settled is not settled again.
+
+    Gated on authorship (N171-C17′, ADR-0039 補充一 S-3): with no user rule set
+    it settles, loads and writes nothing and answers 200 with
+    ``SETTLEMENT_UNAUTHORED_NOTE`` alone. Always through
+    :meth:`PlaybookService.settle_on_request`; nothing under ``app/api/`` calls
+    ``settle_pending`` directly.
     """
-    return _settlement_response(service.settle_pending())
+    return _settlement_response(service.settle_on_request())
 
 
 @router.get("/rule-set", response_model=RuleSetResponse)

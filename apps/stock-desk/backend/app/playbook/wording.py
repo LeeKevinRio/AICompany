@@ -599,6 +599,21 @@ SETTLEMENT_SUMMARY = (
 )
 SETTLEMENT_NOTHING_PENDING = "T+1 結算：目前沒有待結算指令。"
 
+#: N171-C17′ (ADR-0039 補充一 S-3; 風控 2026-11-04 第 2 點, 逐字定稿): the one
+#: warning of ``POST /api/playbook/settle`` while no user rule set exists. Only
+#: :meth:`app.playbook.service.PlaybookService.settle_on_request` returns it, and
+#: alone -- never with :data:`SETTLEMENT_NOTHING_PENDING` or
+#: :data:`SETTLEMENT_SUMMARY`. ``/today`` never carries it: its unauthored path
+#: keeps ``settlement=None``. Re-reviewed with A-13 if N-175 ever settles while
+#: unauthored, or authorship gains a true→false path (補充一 S-6).
+SETTLEMENT_UNAUTHORED_NOTE = (
+    "T+1 結算：目前尚無你本人的規則集設定或修改紀錄，本次未執行結算，也未載入日線資料；"
+    "本回應的成交筆數與未成交（MISSED）筆數為 0、已結算與未結算清單皆為空，"
+    "是因為未執行結算，不代表目前沒有待結算指令。若你先前提交全部出清時已產生賣出指令，"
+    "在你確認規則集之前，帳冊不會依預定執行日開盤價判定它們，它們維持待結算狀態。"
+    "本系統不下單，無法得知你是否已在券商下單或成交，實際持股以你的券商回報為準。"
+)
+
 #: N-166 風控 N1 (CEO #87): appended to :data:`SETTLEMENT_NO_OPEN_PRICE` for an
 #: unsettled EMERGENCY sell that meets 判準 Z while its batch is closed or has a
 #: later EMERGENCY sell -- the line otherwise reads 「賣出 N 股、待結算」 day
