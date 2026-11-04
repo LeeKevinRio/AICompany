@@ -30,16 +30,20 @@ from typing import Any
 
 import pytest
 
+from app.playbook import engine as engine_module
+from app.playbook import service as service_module
 from app.playbook import store as store_module
 from app.playbook import wording
 from app.playbook.models import BatchStatus, Directive, PlaybookEvaluation
 from app.playbook.service import g1_blocked_entries, same_day_warnings
 from app.playbook.store import (
     BATCH_LEFT_PLANNED_SQL,
+    R_SERIES_RULE_IDS,
     EntryBeforeExitRead,
     EvaluationCommit,
     PendingDirective,
     PlaybookStore,
+    decision_key,
 )
 from tests import playbook_helpers as helper
 from tests.same_day_helpers import (
@@ -514,3 +518,122 @@ def test_the_shares_are_listed_per_line(desk: Desk) -> None:
     (note,) = _blocked_notes(run.warnings)
     assert note == _w_b6b(first, second)
     assert "買進 100 股" in note and f"買進 {ONE_BUY_SHARES} 股" in note
+
+
+# --- 釐清一 E-2 第 5 點 (b): within one request K2 keeps the two snapshots equal --------
+
+
+def _batch_statuses(store: PlaybookStore, symbol: str) -> dict[int, BatchStatus]:
+    return {
+        batch.batch_no: batch.status for batch in store.list_batches() if batch.symbol == symbol
+    }
+
+
+def _classified_from_the_database(
+    store: PlaybookStore, execution_date: date
+) -> tuple[list[Directive], list[Directive]]:
+    """ENTRY's and W-B6b's lines, recomputed from the rows and batches alone.
+
+    The 待成交買單 (``settled = 0 AND status = 'pending'``) whose batch row has
+    left ``planned`` are W-B6b's, every 預定執行日, K1-deduplicated; the
+    R-series ones of ``execution_date`` whose batch is still ``planned`` are
+    ENTRY's. Read straight from the database, not through the service.
+    """
+    seen: set[tuple[str, int | None, str, str, str]] = set()
+    entry: list[Directive] = []
+    blocked: list[Directive] = []
+    for item in store.pending_directives():
+        line = item.directive
+        if line.action != "buy" or decision_key(line) in seen:
+            continue
+        seen.add(decision_key(line))
+        batch = None if line.batch_no is None else store.get_batch(line.symbol, line.batch_no)
+        if batch is not None and batch.status != "planned":
+            blocked.append(line)
+        elif line.execution_date == execution_date and line.rule_id in R_SERIES_RULE_IDS:
+            entry.append(line)
+    entry.sort(key=lambda line: (line.symbol, line.batch_no or 0, line.execution_date))
+    blocked.sort(key=lambda line: (line.execution_date, line.symbol, line.batch_no or 0))
+    return entry, blocked
+
+
+def test_an_r3_skip_behind_a_logged_r1_moves_no_batch_and_no_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The premise of the accepted two-snapshot limit (釐清一 E-2 第 2、5 點, 風控
+    2026-11-04 第 11 點 (b)): only a concurrent settlement can move a batch
+    between the in-flight read and the commit. Here 2330's batch 1 already has
+    a logged R1 buy for Wednesday and has used up its deferrals, so the engine
+    decides R3 skip (with ``batch_skipped``) for it; K2 writes no line for 2330,
+    so the skip is not applied. 2454 has a blocked R1 buy, so both ENTRY and
+    W-B6b are in play."""
+    desk = open_desk(tmp_path / "playbook.db", symbols=("2330", "2454"))
+    desk.service.evaluate_today(today=TUESDAY)  # logs R1 2330 #1 and 2454 #1 for Wednesday
+    batch = desk.store.get_batch("2330", 1)
+    assert batch is not None
+    limit = desk.store.active_params(TUESDAY).r3_max_defers
+    desk.store.save_batch(batch.model_copy(update={"defer_count": limit}))
+    hold(desk.store, "2454", 1)
+    before = {symbol: _batch_statuses(desk.store, symbol) for symbol in ("2330", "2454")}
+    engine_runs: list[PlaybookEvaluation] = []
+    real_evaluate = engine_module.evaluate
+
+    def spying(**kwargs: Any) -> PlaybookEvaluation:
+        result = real_evaluate(**kwargs)
+        engine_runs.append(result)
+        return result
+
+    monkeypatch.setattr(service_module, "evaluate", spying)
+
+    run = desk.service.evaluate_today(today=TUESDAY)
+
+    # The engine did decide the skip this time...
+    (engine,) = engine_runs
+    (skip,) = [line for line in engine.directives if line.symbol == "2330"]
+    assert (skip.rule_id, skip.action, skip.batch_no) == ("R3", "skip", 1)
+    assert ("batch_skipped", "2330", 1) in {
+        (effect.kind, effect.symbol, effect.batch_no) for effect in engine.effects
+    }
+    assert not [
+        line for line in engine.directives if line.action == "buy" and line.symbol == "2330"
+    ]
+    # ...and neither symbol's batches moved.
+    after = {symbol: _batch_statuses(desk.store, symbol) for symbol in ("2330", "2454")}
+    assert after == before
+    assert before["2330"][1] == "planned"
+    # The response classified exactly what the database classifies afterwards.
+    entry, blocked = _classified_from_the_database(desk.store, run.execution_date)
+    assert [(line.symbol, line.batch_no) for line in entry] == [("2330", 1)]
+    assert [(line.symbol, line.batch_no) for line in blocked] == [("2454", 1)]
+    assert _entry_notes(run.warnings) == [_entry(*entry)]
+    assert _blocked_notes(run.warnings) == [_w_b6b(*blocked)]
+
+
+# --- qa-reviewer 2026-11-04 跟進: A drops to zero while B does not ---------------------
+
+
+def test_a_is_not_rendered_but_b_is_when_only_decisions_are_left(desk: Desk) -> None:
+    """2330 is unusable now and its Wednesday list holds one blocked R1 buy and
+    one R2 deferral (two R lines of one 預定執行日: a pre-N-172a log). Once the
+    buy is excluded A counts 0 and is not rendered (風控 2026-11-01 P5); B still
+    counts the deferral and follows the DATA_GAP sentence directly, the
+    「只有 defer 或 skip 列」 case of 風控 2026-11-01 解讀點 (c). W-B6b names the buy."""
+    blocked = buy_line()
+    deferral = buy_line(batch_no=2).model_copy(
+        update={"action": "defer", "shares": 0, "rule_id": "R2", "rule_summary": "R2 順延"}
+    )
+    log_like_before_n172a(desk.store, [blocked, deferral])
+    hold(desk.store, "2330", 1)
+    desk.prices.seed("2330", [])
+
+    run = desk.service.evaluate_today(today=TUESDAY)
+
+    assert run.execution_date == WEDNESDAY
+    gap = wording.DATA_GAP_HOLDING_NOTE.format(symbol="2330", status="unavailable", source="none")
+    b = wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE.format(symbol="2330", decision_count=1)
+    position = run.warnings.index(gap)
+    assert run.warnings[position + 1] == b
+    assert not [warning for warning in run.warnings if warning.startswith("2330 本次資料狀態為")]
+    assert not [warning for warning in run.warnings if "筆買賣指令" in warning]
+    assert _entry_notes(run.warnings) == []
+    assert _blocked_notes(run.warnings) == [_w_b6b(blocked)]
