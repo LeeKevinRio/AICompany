@@ -43,6 +43,7 @@ from flight_deals.domain.messages import (
     DISCLAIMER,
     PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
+    SPLIT_TICKET_NOTE,
 )
 from flight_deals.domain.models import DatePair, ExplorationSpec
 from flight_deals.logging_setup import setup_logging
@@ -1258,3 +1259,26 @@ def test_price_replies_carry_the_price_source_note(bot: Bot) -> None:  # FD-13 r
         bot.send(msg(number, command))
         assert bot.notifier.sent[-1].count(PRICE_SOURCE_NOTE) == 1, command
         assert together in bot.notifier.sent[-1], command
+
+
+def test_split_ticket_note_only_on_round_trip_replies_with_links(bot: Bot) -> None:  # FD-14
+    bot.commands.hooks.scheduler_running = lambda: True
+    scheduler = bot.assembly.scheduler
+    bot.commands.hooks.schedule_scan = scheduler.trigger_command_scan
+    round_trip = bot.create_watch()
+    one_way = bot.create_watch(destination="BKK", trip_type="one_way", return_date="")
+
+    bot.send(msg(1, f"/watch {round_trip}"))
+    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]  # no price yet
+
+    for number, watch_id in ((2, round_trip), (3, one_way)):
+        bot.send(msg(number, f"/scan {watch_id}"))
+        scheduler._command_scan(watch_id)
+        assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+
+    bot.send(msg(4, f"/watch {round_trip}"))
+    assert bot.notifier.sent[-1].endswith(f"{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")
+    bot.send(msg(5, f"/watch {one_way}"))
+    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+    bot.send(msg(6, "/list"))
+    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]

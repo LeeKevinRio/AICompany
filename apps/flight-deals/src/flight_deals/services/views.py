@@ -816,6 +816,14 @@ class ViewService:
             "has_prices": bool(current_obs),
             "top": top,
             "best": top[0] if top else None,
+            # Round-trip amounts and links can still sit in the folded record table when
+            # no price ranks (other currency); the note must stay visible (FD-14).
+            "split_note_without_card": (
+                spec.trip_type == "round_trip"
+                and bool(current_obs)
+                and not top
+                and not all_departed
+            ),
             "best_delta": delta_view(snapshot.delta_since_previous_run()) if top else None,
             "top_explain": top_explain(stale_hours),
             "source_note": source_note,

@@ -49,6 +49,7 @@
 <section class="card">
   <h2>價格日曆</h2>
   {% if top5 and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if has_priced_cell and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
   {% if top5 %}<p class="booking-hint">{{ ui.booking_hint }}</p>
   <p class="flight-note">{{ ui.local_time_explain }}</p>{% endif %}
   <p class="calendar-note">{{ calendar_note }}</p>

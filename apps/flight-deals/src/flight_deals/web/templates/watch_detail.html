@@ -57,7 +57,8 @@
       <p class="flight-note">{{ ui.local_time_explain }}</p>
     </div>
   </div>
-  {% if best.flight and best.flight.is_outbound_only %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if best.flight and best.flight.is_outbound_only %}<p class="return-explain">{{ ui.return_leg_explain }}</p>
+  <p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
   <div class="cta">
     {{ ext_link(best.booking_url or best.link, ui.booking_button, best.dates, "button primary cta-button") }}
     <p class="cta-hint">{{ ui.booking_hint }}</p>
@@ -68,6 +69,7 @@
 {% elif top_empty_note %}
 <p class="notice" id="top-empty-note">{{ top_empty_note }}</p>
 {% endif %}
+{% if split_note_without_card %}<p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
 {% if has_prices and not best and manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}
 
 {% macro price_head() -%}

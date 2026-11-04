@@ -360,6 +360,10 @@ class ExplorationViewService:
             "calendar_months": calendar_months,
             "weeks": weeks,
             "top5": top5,
+            # A currency-mismatch cell shows an amount and a link but is not in top5.
+            "has_priced_cell": any(
+                c.status == "ok" and c.amount_minor is not None and c.currency for c in cells
+            ),
             "top_scope_note": EXPLORATION_TOP_SCOPE_NOTE,
             # Only DISCLAIMER here: it is printed once, next to the calendar (C-101).
             "disclaimer": DISCLAIMER,

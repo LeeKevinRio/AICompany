@@ -30,6 +30,7 @@ from flight_deals.domain.messages import (
     BANNED_PHRASES,
     DISCLAIMER,
     PRICE_SOURCE_NOTE,
+    SPLIT_TICKET_NOTE,
     price_alert_message,
 )
 from flight_deals.domain.models import WatchSpec
@@ -482,4 +483,33 @@ def test_alert_carries_the_price_source_note() -> None:  # FD-13 risk ruling
         items=_items(1),
         links=[None],
     )
-    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}")
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")
+    one_way = price_alert_message(
+        watch_name="沖繩",
+        origin="TPE",
+        destination="OKA",
+        trip_type="one_way",
+        items=_items(1),
+        links=[None],
+    )
+    assert one_way.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}")
+    assert SPLIT_TICKET_NOTE not in one_way
+
+
+def test_alert_notes_survive_the_item_limit_and_long_links() -> None:  # FD-14 R4
+    longest = max((p for p in PLACES if is_selectable(p)), key=lambda p: len(p.display_name))
+    other = next(p for p in PLACES if p.code != longest.code and len(p.display_name) >= 6)
+    text = price_alert_message(
+        watch_name="名" * 80,
+        origin=longest.code,
+        destination=other.code,
+        trip_type="round_trip",
+        items=_items(5),  # LimitsConfig.alert_max_items
+        links=["https://www.google.com/travel/flights/search?tfs=" + "x" * 450]
+        * 5,  # about 3x a real link
+        airlines=("BR", "CI", "JX"),
+        dep_hour_from=6,
+        dep_hour_to=22,
+    )
+    assert len(text) < MAX_MESSAGE_LENGTH
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")

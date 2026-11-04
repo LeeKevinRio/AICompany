@@ -45,6 +45,9 @@ DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票
 PRICE_SOURCE_NOTE = (
     "價格取自 Google 預設排序的結果；「最低價格」分頁的數字可能較低，但兩者都可能與訂票頁金額不同。"
 )
+# FD-14 risk ruling: visible wherever a round-trip price leads to booking. The system
+# cannot tell whether a given price is split, so never assert it either way.
+SPLIT_TICKET_NOTE = "來回可能要分開買多張機票，退改與行李規定可能不同；是否分開請看訂票頁。"
 SAMPLED_ONLY_NOTE = "只涵蓋已取樣的日期；未取樣的日期不代表沒有更便宜的價格。"
 
 # Advisory / urgency wording that must never appear in notifications or UI copy
@@ -238,6 +241,8 @@ def price_alert_message(
     lines.append("")
     lines.append(DISCLAIMER)
     lines.append(PRICE_SOURCE_NOTE)
+    if trip_type == "round_trip":
+        lines.append(SPLIT_TICKET_NOTE)
     return "\n".join(lines)
 
 
@@ -1123,6 +1128,7 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
         COMMAND_WATCH_TIME_NOTE,
         DISCLAIMER,
         *([PRICE_SOURCE_NOTE] if detail.prices else []),
+        *([SPLIT_TICKET_NOTE] if detail.prices and detail.trip_type == "round_trip" else []),
     ]
     return fit_reply(head, items, footer)
 
@@ -1492,6 +1498,7 @@ class UiTexts:
 
     help_summary: str = "說明"
     price_source_note: str = PRICE_SOURCE_NOTE
+    split_ticket_note: str = SPLIT_TICKET_NOTE
     # M3: flight time adds up the segments only.
     duration_column: str = "飛行時間（不含轉機等候）"
     tech_details_summary: str = "技術細節"

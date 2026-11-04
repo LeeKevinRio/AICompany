@@ -18,9 +18,11 @@ from urllib.parse import urlparse
 import pytest
 
 from flight_deals.domain.messages import (
+    DETAIL_ALL_DEPARTED,
     DISCLAIMER,
     PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
+    SPLIT_TICKET_NOTE,
     WEB_TEXTS,
     all_static_texts,
 )
@@ -333,8 +335,13 @@ def assert_wording_clean(page: Page) -> None:
     assert "查票" not in text
     assert "未在頁面內嵌" not in text and "未內嵌" not in text
     assert "no result section" not in text and "Traceback" not in text
-    # "訂票" only inside 「查看並訂票」 (the disclaimer says 訂票網站, the source note 訂票頁).
-    leftover = text.replace(DISCLAIMER, "").replace(PRICE_SOURCE_NOTE, "").replace("查看並訂票", "")
+    # "訂票" only inside 「查看並訂票」 and the three approved sentences as a whole.
+    leftover = (
+        text.replace(DISCLAIMER, "")
+        .replace(PRICE_SOURCE_NOTE, "")
+        .replace(SPLIT_TICKET_NOTE, "")
+        .replace("查看並訂票", "")
+    )
     assert "訂票" not in leftover
     assert "價格以 Google Flights 頁面為準" not in text
     for banned in ("最便宜", "推薦", "最佳", "超值", "目前最便宜"):
@@ -1241,3 +1248,108 @@ def test_list_priced_card_has_neither_no_price_label(harness: Harness) -> None: 
 
 def test_no_displayable_price_is_policy_checked() -> None:  # N2, #47
     assert NO_DISPLAYABLE_PRICE in all_static_texts()
+
+
+# ======================================================================================
+# FD-14: split-ticket note
+# ======================================================================================
+
+
+def test_split_ticket_note_once_and_visible_on_round_trip_pages(harness: Harness) -> None:
+    watch_id = priced_round_trip(harness)
+    exploration_id = done_exploration(harness)
+    comparison_id = done_comparison(harness)
+    for url in (
+        "/",
+        f"/watches/{watch_id}",
+        f"/explorations/{exploration_id}",
+        f"/comparisons/{comparison_id}",
+    ):
+        page = get(harness, url)
+        assert page.count(SPLIT_TICKET_NOTE) == 1, url
+        assert page.count_visible(SPLIT_TICKET_NOTE) == 1, url
+        assert page.count_in_details(SPLIT_TICKET_NOTE) == 0, url
+        note = next(
+            n for n in page.main.descendants() if SPLIT_TICKET_NOTE in n.text() and n.tag == "p"
+        )
+        assert "return-explain" in note.classes, url  # keeps its place on the phone layout
+
+
+def test_split_ticket_note_absent_on_one_way_pages(harness: Harness) -> None:
+    watch_id = priced_one_way(harness)
+    for url in (
+        "/",
+        f"/watches/{watch_id}",
+        f"/explorations/{one_way_exploration(harness)}",
+        f"/comparisons/{one_way_comparison(harness)}",
+    ):
+        assert SPLIT_TICKET_NOTE not in get(harness, url).html, url
+
+
+def test_split_ticket_note_absent_without_a_price(harness: Harness) -> None:
+    watch_id = harness.create_watch()
+    for url in ("/", f"/watches/{watch_id}"):
+        assert SPLIT_TICKET_NOTE not in get(harness, url).html, url
+
+
+def test_split_ticket_note_once_on_a_mixed_list(harness: Harness) -> None:
+    priced_round_trip(harness)
+    priced_one_way(harness)
+    assert get(harness, "/").count(SPLIT_TICKET_NOTE) == 1
+
+
+def test_split_ticket_note_stays_when_only_mismatched_cells_are_priced(
+    harness: Harness,
+) -> None:  # FD-14 R3: top5 is empty, the calendar still shows amounts and links
+    harness.source.currency = "JPY"
+    exploration_id = done_exploration(harness)
+    html = get(harness, f"/explorations/{exploration_id}").html
+    assert RETURN_EXPLAIN not in html
+    assert SPLIT_TICKET_NOTE in html
+
+
+def test_split_ticket_note_is_not_written_back_into_old_notifications(
+    harness: Harness,
+) -> None:  # FD-14 R6: the log shows the text as it was sent
+    priced_round_trip(harness)
+    record = harness.repo.list_notifications()[0]
+    assert SPLIT_TICKET_NOTE in record.message_text  # a round-trip alert carries it now
+    old_text = record.message_text.replace(SPLIT_TICKET_NOTE, "").rstrip()
+    harness.repo.update_notification_text(record.id, old_text)
+
+    page = get(harness, "/notifications")
+    assert SPLIT_TICKET_NOTE not in page.html
+    assert page.count_in_details(old_text.splitlines()[0]) == 1
+
+
+def test_one_way_notifications_never_carry_the_split_ticket_note(harness: Harness) -> None:
+    priced_one_way(harness)
+    assert harness.notifier.sent
+    assert SPLIT_TICKET_NOTE not in get(harness, "/notifications").html
+
+
+def test_split_ticket_note_stays_on_a_detail_page_without_a_main_card(
+    harness: Harness,
+) -> None:  # FD-14 risk re-review: other-currency records still show amounts and links
+    harness.source.currency = "JPY"
+    watch_id = priced_round_trip(harness)
+    page = get(harness, f"/watches/{watch_id}")
+    assert not page.main.find_all("section", "price-card")
+    assert page.count(SPLIT_TICKET_NOTE) == 1
+    assert page.count_visible(SPLIT_TICKET_NOTE) == 1
+    assert page.count_in_details(SPLIT_TICKET_NOTE) == 0
+
+
+def test_split_ticket_note_absent_when_every_date_has_departed(harness: Harness) -> None:
+    harness.source.currency = "JPY"
+    watch_id = priced_round_trip(harness)
+    harness.clock.advance(days=120)
+    html = get(harness, f"/watches/{watch_id}").html
+    assert DETAIL_ALL_DEPARTED in html
+    assert SPLIT_TICKET_NOTE not in html
+
+
+def test_one_way_detail_without_a_main_card_has_no_split_ticket_note(harness: Harness) -> None:
+    harness.source.currency = "JPY"
+    watch_id = priced_one_way(harness)
+    assert SPLIT_TICKET_NOTE not in get(harness, f"/watches/{watch_id}").html

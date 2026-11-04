@@ -49,7 +49,8 @@
 {% else %}
 <section class="card" id="comparison-results">
   <h2>比價結果</h2>
-  {% if rows and c.trip_type == "round_trip" and rows|selectattr("priced")|list %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if rows and c.trip_type == "round_trip" and rows|selectattr("priced")|list %}<p class="return-explain">{{ ui.return_leg_explain }}</p>
+  <p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
   {% if rows|selectattr("priced")|list %}<p class="booking-hint">{{ ui.booking_hint }}</p>
   <p class="flight-note">{{ ui.local_time_explain }}</p>{% endif %}
   {% if order_note %}<p class="order-note">{{ order_note }}</p>{% endif %}

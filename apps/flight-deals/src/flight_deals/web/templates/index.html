@@ -20,7 +20,8 @@
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   {% if priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
-  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
+  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain }}</p>
+  <p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
   {% if booking_shown %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
   {% if priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
 </div>

@@ -21,6 +21,7 @@ from flight_deals.domain.messages import (
     NO_PRICE_ALERT_NOTE,
     PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
+    SPLIT_TICKET_NOTE,
     DigestRow,
     DigestSourceRow,
     daily_digest_message,
@@ -576,4 +577,5 @@ def test_digest_with_watches_carries_the_price_source_note() -> None:  # FD-13 r
     }
     text = daily_digest_message(**kwargs, rows=[row("a")])
     assert f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}" in text
+    assert SPLIT_TICKET_NOTE not in text  # FD-14: no booking link in the digest
     assert PRICE_SOURCE_NOTE not in daily_digest_message(**kwargs, rows=[])
