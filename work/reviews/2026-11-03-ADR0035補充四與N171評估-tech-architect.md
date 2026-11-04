@@ -1159,3 +1159,67 @@ golden 中只有 `after_exit` 情境會被 N-168 改到。這個情境的設定�
  - E-26 第 1～4 點。
 
 （釐清六原文另存：`work/reviews/2026-11-04-N168停止點S1S2I3I5裁示與釐清六-tech-architect.md`。）
+
+
+## 釐清七（tech-architect 2026-11-04，回應風控 `work/reviews/2026-11-04-N168停止點S3至S6裁示-風控.md` 第二節第 4～6 點）
+
+- 性質：依 S-6 R-3 修正 S-3 固定項 `LabeledBatch`（2.2(c)）；釐清 E-24 第 3 點、E-26、E-12 QB-13。不改 `_lines` 簽名與其他固定項，不改 golden，不授權重錄。
+- 依據：風控同檔第 4 點（S5 (i) 原始整數）、第 5 點（W-B2LS／W-B2LSr 與條件 (i)～(iv)）、第 6 點（W-B2L 修訂）；ADR-0035 Decision 4；ADR-0034 C-B8、C-B11；N-168 worktree `8efacd8`（讀碼，未執行）。
+
+### E-28 S2 列的渲染路徑（風控第 5 點條件 (ii)）
+1. S2 列（`action='sell'`、`batch_no` 為 NULL）只由 engine `_evaluate_symbol_stop` 產生。`_lines` 的呼叫點中，只有 `/today` 的 `directives` 可能含 S2：
+ - EMERGENCY 逐批產生，`batch_no` 不是 NULL：出清回應的 `directives`、`pending_directives`，以及 `pending_exit_directives` 與 N-171 區塊都是 EMERGENCY；
+ - `entry_before_exit_*` 只有 buy；
+ - rebalance 傳 `labeled_batches=()`。
+2. `/today` 的 `directives` 是 `commit.logged`。同一預定執行日稍早一次評估記下的 S2 列會原樣顯示，它的 `shares` 是用當時的 book 算的；`labeled_batches` 則是用本次的 `book` 算的（`labeled_batches_of(book)`）。兩次評估之間，只要該 symbol 的批次變動（V4 後補 bar 或前次載入失敗後的結算成交、`POST /settle`、其他改動批次的寫入），兩者的批次集合就不一致。單一請求內，engine 與標示用的是同一份 `book`，條件 (i) 成立。
+3. 「標示批次 `remaining_shares` 合計 ≤ `shares`」是必要條件，但不充分：稍早的列記下之後，若又有帶標示的批次成交，只要其他批次夠大，合計仍然 ≤ `shares`，但這一列並不包含那一批。
+
+### E-29 `LabeledBatch` 固定項修訂（R-3）
+1. `LabeledBatch` 新增兩個必填、無預設值的欄位：
+ - `remaining_shares: int`：該批的剩餘股數；
+ - `symbol_open_shares: int`：與該批同一份批次清單中，該 symbol 的 `engine._symbol_average_cost(...)[1]`。
+ 兩者都和標示取自同一份批次清單（`/today` 為 `book`，出清為 C-2 讀到的 open 批次，unauthored 為 `list_batches`）。不得另寫 open／cost／`remaining_shares` 的述詞；engine 零 diff（C-B11）。
+2. 其他固定項不變：`_lines` 的簽名、`labeled_batches` 的欄位型別、`read_in_flight`、`types.ts`（`LabeledBatch` 不序列化）。
+3. R-3 的處理：
+ - 若 N-171-A 已合進 product（worktree 已含 `_pending_exit_block`／`pending_exit_block`，由 coordinator 確認），「N-171-A 先合」的回退在實質上已經滿足。
+ - 若尚未合併，本條的 commit 要等 N-171-A 合併、N-168 merge product 之後才能落地。
+ - E-13 第 5 點「N-168 先過閘門時以 cherry-pick 先行」的路徑，對 N-168 取消。
+4. QB-6／E-15 的例外：在 `LabeledBatch` 的程式行中，只准新增本條的兩個欄位，docstring 可以同時改正（含 I11 所指「`_lines` is the only reader」）。SEAM T5 第 460 行的 `LabeledBatch(...)` 補上兩個引數，屬 E-4 第 3 點的 fixture 變更：斷言零改動，並在 PR 說明列出。
+5. 對 N-171 沒有影響：N-171 不建構 `LabeledBatch`，只把 `labeled_batches` 原樣轉給 `_lines`（E-26 第 3 點）。
+
+### E-30 W-B2LS／W-B2LSr 的渲染規則與守門
+1. 在 `service.entry_before_exit_note` 的 `batch_no is None` 分支實作。簽名歸 N-168 擁有，可以新增 keyword 參數傳入該列的 `shares`。批次列（`_labeled_snapshot`）的 `batch_no` 一律是 int，不得走到這個分支。
+2. 項目：同一 symbol 的標示批次中 `remaining_shares > 0` 的那些，依 batch_no 遞增，以 `wording.labeled_items` 渲染，股數印原始整數（S5 (i)）。沒有任何項目時回傳 None。`remaining_shares` 為 0 的標示批次不列入；這點請風控確認。
+3. 前提 P：`shares == symbol_open_shares`（同一 symbol 各項目的這個值必須相同，不同時視為 P 不成立），而且項目合計 ≤ `shares`。
+ - P 成立：渲染 W-B2LS；`shares` 大於項目合計時，再接 W-B2LSr。
+4. P 不成立：
+ - 不得 raise，不得用 `assert`，不得照常渲染 W-B2LS；
+ - 改為回傳風控所定的處置：(β) None，或 (δ) 另定的後備句。
+ - 風控定案之前，此分支不得合併。
+5. 守門放在 service 層的這個函式；engine、API、前端都不做判斷。測試（BLOCKING）：
+ - (a) 分支的單元測試：P 成立時，有、無 W-B2LSr 兩種；P 不成立時，`shares` ≠ 持有合計、項目合計 > `shares` 兩種。
+ - (b) 整合測試：同一預定執行日評估兩次，兩次之間讓同一 symbol 的一筆打過戳記的買單成交（後補 bar 或 `POST /settle`）；斷言第二次回應的 S2 列依第 4 點處置。
+ - (c) property test：任意 book 上，engine 以該 book 產出的 S2 列，搭配同一份 book 的 `labeled_batches_of`，P 恆成立。
+ - (d) `_labeled_snapshot` 不會走到 S2 分支。
+6. 已知殘留（交風控）：兩次評估之間批次增減的股數剛好抵銷、合計不變時，P 成立，但該列當時的組成可能不同。
+
+### E-31 E-26 的擴充
+1. `app/` 內，`ENTRY_BEFORE_EXIT_NOTE`、`ENTRY_BEFORE_EXIT_SYMBOL_NOTE`、`ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE`（以及風控若另定的後備句常數）的屬性引用，只能出現在 `service.entry_before_exit_note` 內。該函式可以呼叫 `wording.labeled_items`（與 W-B7 共用項目模板）。
+2. `entry_before_exit_note(` 的呼叫者仍然恰好兩個（E-26 第 1 點），而且只有 `_lines` 會傳入 `batch_no=None`。
+3. QB-13 的 AST 口徑擴及第 1 點的全部常數；`DirectiveLine(` 只能在 `_lines` 內，`_lines` 的簽名不變（SEAM-T5）。
+4. golden：預期沒有新的差異。若 E-24 第 3 點 (b) 的測試發現 golden 中有任何 `DirectiveLine` 的 note 不是 null，停住送 tech-architect。
+5. W-B2L 的改值依 E-20 處理：
+ - 以識別名引用的地方自動跟著變；
+ - 逐字抽取測試的來源改成風控 11-04 檔；
+ - 常數值、抽取來源、逐字守門放在同一個 commit，並在 PR 說明列出。
+
+### E-32 E-24 第 3 點 (a) 照常成立
+(a) 以識別名定義；批次列一律走 W-B2L；這個鍵在 T2 的刪除鍵內，golden 沒有差異，`n168.json` 不改。測試若把整句字面寫死，依 E-20 第 3 點整條替換。
+
+### E-33 S-7 增列檢查項
+- QB-17（N-168 的 PR）：
+ - E-29：`LabeledBatch` 的 diff 只有第 1 點的兩個欄位與 docstring；兩個值都出自同一份批次清單；`symbol_open_shares` 經 `_symbol_average_cost` 計算；engine 零 diff；第 3 點的合併時點；SEAM T5 只改 fixture。
+ - E-30 第 1～5 點的測試存在且綠燈；不得 raise，也沒有 `assert`。
+ - E-31 第 1～3 點的 AST 檢查。
+
+（釐清七原文另存：`work/reviews/2026-11-04-N168風控S5S6技術補裁與釐清七-tech-architect.md`。E-29 第 3 點時點：N-171-A 已於 a320f5d 合進 product，coordinator 2026-11-04 確認。）
