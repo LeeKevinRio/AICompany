@@ -36,6 +36,11 @@ BEST_INDEX = 2  # payload[2][0]: "best flights" itinerary list (None / missing w
 RESULTS_INDEX = 3  # payload[3][0]: "other flights" itinerary list (None when absent)
 ITINERARY_INFO = 0  # k[0]: flight info
 ITINERARY_PRICE = 1  # k[1]: [[None, price], token] or [[], token]
+ITINERARY_BAGGAGE = 4  # k[4]: [None, None, None, None, <code>, ...]
+BAGGAGE_CODE = 4
+# Google says "fare excludes the overhead bin" for exactly this code (FD-15). It
+# belongs to the price: on a round trip, to the cheapest outbound + return pair.
+NO_OVERHEAD_BIN_CODE = 3
 INFO_CARRIER_CODE = 0  # k[0][0]: airline code or "multi"
 INFO_CARRIER_NAMES = 1  # k[0][1]: list of airline names
 INFO_SEGMENTS = 2  # k[0][2]: list of segments
@@ -196,6 +201,12 @@ def _flight(segment: list[Any]) -> dict[str, Any]:
     }
 
 
+def _overhead_bin_excluded(itinerary: list[Any]) -> bool | None:
+    """True only for the exact code; anything else is unknown, never "included"."""
+    code = _at(itinerary, ITINERARY_BAGGAGE, BAGGAGE_CODE)
+    return True if _is_int(code) and code == NO_OVERHEAD_BIN_CODE else None
+
+
 def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     info = _at(itinerary, ITINERARY_INFO)
     names = _at(info, INFO_CARRIER_NAMES)
@@ -215,6 +226,7 @@ def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
         "airlines": airlines,
         "flights": flights,
         "depart_time": depart_time,
+        "overhead_bin_excluded": _overhead_bin_excluded(itinerary),
     }
 
 

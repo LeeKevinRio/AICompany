@@ -23,6 +23,11 @@
 {% endif %}
 {%- endmacro %}
 
+{#- FD-15: belongs to the price, so it stays outside the flight block. -#}
+{% macro overhead_bin(label) -%}
+{% if label %}<div class="overhead-bin"><span class="badge">{{ label }}</span></div>{% endif %}
+{%- endmacro %}
+
 {#- Price summary line (C-40): one adult shows the party summary, several people show the
     total-price caption plus the cabin. -#}
 {% macro price_line(caption, pax_note, pax_summary, cabin) -%}

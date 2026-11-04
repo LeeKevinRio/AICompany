@@ -30,6 +30,7 @@ from flight_deals.domain.messages import (
     date_range_text,
     date_range_weekday_text,
     health_no_embedded_note,
+    overhead_bin_label,
     reason_label,
     retention_backup_failed,
     retention_failed,
@@ -474,6 +475,7 @@ class ViewService:
             "depart_time": obs.depart_time,
             # Old-revision rows keep only the airline column (FR-6).
             "flight": flight_view(obs, spec.trip_type) if with_flight else None,
+            "overhead_bin_label": overhead_bin_label(obs.overhead_bin_excluded, spec.trip_type),
             "revision": obs.watch_revision,
         }
 
@@ -595,6 +597,11 @@ class ViewService:
                     "stale": cheapest is not None
                     and self._is_stale(cheapest.fetched_at, now, stale_hours),
                     "flight": flight_view(cheapest, spec.trip_type),
+                    "overhead_bin_label": (
+                        overhead_bin_label(cheapest.overhead_bin_excluded, spec.trip_type)
+                        if cheapest
+                        else None
+                    ),
                     **booking,
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,

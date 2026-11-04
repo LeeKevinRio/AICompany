@@ -155,6 +155,7 @@ class ObservationRecord:
     arrive_time: str | None = None
     arrive_day_offset: int | None = None
     route_airports: str | None = None
+    overhead_bin_excluded: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -282,6 +283,7 @@ class ExplorationCellRecord:
     arrive_time: str | None = None
     arrive_day_offset: int | None = None
     route_airports: str | None = None
+    overhead_bin_excluded: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,7 @@ class CellUpdate:
     arrive_time: str | None = None
     arrive_day_offset: int | None = None
     route_airports: str | None = None
+    overhead_bin_excluded: bool | None = None
 
 
 def _exploration(row: sqlite3.Row) -> ExplorationRecord:
@@ -376,6 +379,7 @@ def _cell(row: sqlite3.Row) -> ExplorationCellRecord:
         arrive_time=row["arrive_time"],
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
+        overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
     )
 
 
@@ -423,6 +427,7 @@ class ComparisonCellRecord:
     arrive_time: str | None = None
     arrive_day_offset: int | None = None
     route_airports: str | None = None
+    overhead_bin_excluded: bool | None = None
 
 
 def _comparison(row: sqlite3.Row) -> ComparisonRecord:
@@ -480,6 +485,7 @@ def _comparison_cell(row: sqlite3.Row) -> ComparisonCellRecord:
         arrive_time=row["arrive_time"],
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
+        overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
     )
 
 
@@ -551,6 +557,7 @@ def _observation(row: sqlite3.Row) -> ObservationRecord:
         arrive_time=row["arrive_time"],
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
+        overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
     )
 
 
@@ -985,7 +992,7 @@ class Repository:
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
                 " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
                 " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
-                " route_airports = ?"
+                " route_airports = ?, overhead_bin_excluded = ?"
                 " WHERE exploration_id = ? AND depart_date = ? AND status = 'pending'",
                 (
                     update.status,
@@ -1007,6 +1014,7 @@ class Repository:
                     update.arrive_time,
                     update.arrive_day_offset,
                     update.route_airports,
+                    1 if update.overhead_bin_excluded is True else None,
                     exploration_id,
                     depart.isoformat(),
                 ),
@@ -1201,7 +1209,7 @@ class Repository:
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
                 " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
                 " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
-                " route_airports = ?"
+                " route_airports = ?, overhead_bin_excluded = ?"
                 " WHERE comparison_id = ? AND position = ? AND status = 'pending'",
                 (
                     update.status,
@@ -1223,6 +1231,7 @@ class Repository:
                     update.arrive_time,
                     update.arrive_day_offset,
                     update.route_airports,
+                    1 if update.overhead_bin_excluded is True else None,
                     comparison_id,
                     position,
                 ),
@@ -1315,8 +1324,9 @@ class Repository:
                 "INSERT INTO price_observation (scan_run_id, watch_id, watch_revision, source,"
                 " price_kind, depart_date, return_date, amount_minor, currency, as_of,"
                 " as_of_basis, fetched_at, carrier, stops, duration_minutes, depart_time,"
-                " flight_numbers, arrive_time, arrive_day_offset, route_airports)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " flight_numbers, arrive_time, arrive_day_offset, route_airports,"
+                " overhead_bin_excluded)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     scan_run_id,
                     watch_id,
@@ -1338,6 +1348,7 @@ class Repository:
                     quote.arrive_time,
                     quote.arrive_day_offset,
                     quote.route_airports,
+                    1 if quote.overhead_bin_excluded is True else None,
                 ),
             )
             return int(cast(int, cur.lastrowid))

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, fold, help_note with context %}
+{% from "_macros.html" import ext_link, flight, overhead_bin, fold, help_note with context %}
 {% block title %}比價結果{% endblock %}
 {# The disclaimer is printed once above the results; the footer copy is dropped (C-101). #}
 {% block footer_disclaimer %}{% endblock %}
@@ -33,6 +33,7 @@
 <div class="page-notes" id="comparison-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   <p class="price-source-note">{{ ui.price_source_note }}</p>
+  {% if c.status not in ("queued", "running") and rows|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
   {% if reference_note %}<p class="reference-note muted" id="comparison-reference-note">{{ reference_note }}</p>{% endif %}
 </div>
 
@@ -71,6 +72,7 @@
         {% if r.priced %}
         <td class="cell-price">
           <div class="cell-amount">{{ r.amount_label }}</div>
+          {{- overhead_bin(r.overhead_bin_label) }}
           {% if c.pax_note %}<div class="price-sub">{{ c.pax_note }}</div>{% endif %}
           {% if r.rank_note %}<div class="hint">{{ r.rank_note }}</div>{% endif %}
           <div class="price-meta"><span class="price-time">{{ r.fetched_label or "—" }}</span></div>

@@ -41,6 +41,8 @@ from flight_deals.domain.messages import (
     COMMAND_TOO_LONG,
     COMMAND_UNKNOWN,
     DISCLAIMER,
+    OVERHEAD_BIN_LABELS,
+    OVERHEAD_BIN_NOTE,
     PRICE_SOURCE_NOTE,
     SAMPLED_ONLY_NOTE,
     SPLIT_TICKET_NOTE,
@@ -1282,3 +1284,24 @@ def test_split_ticket_note_only_on_round_trip_replies_with_links(bot: Bot) -> No
     assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
     bot.send(msg(6, "/list"))
     assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+
+
+def test_watch_label_sits_after_the_amount_and_note_stays(bot: Bot) -> None:  # FD-15 R4
+    bot.source.flight = {"carrier": "長榮航空", "stops": 0, "overhead_bin_excluded": True}
+    watch_id = bot.create_watch()
+    bot.services.scan.scan_watch(watch_id, "scheduled")
+    bot.send(msg(1, f"/watch {watch_id}"))
+    reply = bot.notifier.sent[-1]
+    assert f"（1 人總價）｜{OVERHEAD_BIN_LABELS['round_trip']}｜" in reply
+    assert reply.endswith(f"{SPLIT_TICKET_NOTE}\n{OVERHEAD_BIN_NOTE}")
+    for command in ("/list", f"/scan {watch_id}"):
+        bot.send(msg(2 if command == "/list" else 3, command))
+        assert OVERHEAD_BIN_NOTE not in bot.notifier.sent[-1], command
+
+
+def test_watch_without_a_mark_has_no_label_or_note(bot: Bot) -> None:
+    watch_id = bot.create_watch()
+    bot.services.scan.scan_watch(watch_id, "scheduled")
+    bot.send(msg(1, f"/watch {watch_id}"))
+    assert OVERHEAD_BIN_NOTE not in bot.notifier.sent[-1]
+    assert OVERHEAD_BIN_LABELS["round_trip"] not in bot.notifier.sent[-1]

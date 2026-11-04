@@ -188,7 +188,7 @@ h3 { font-size: 15px; margin: var(--space-4) 0 var(--space-2); }
 .muted { color: var(--color-muted); }
 .note { font-size: 13px; }
 /* Disclaimer sits next to the prices at body size (risk floor), never smaller. */
-.disclaimer, .price-source-note { margin: 0 0 var(--space-3); color: var(--color-text); font-size: inherit; }
+.disclaimer, .price-source-note, .overhead-bin-note { margin: 0 0 var(--space-3); color: var(--color-text); font-size: inherit; }
 .notice {
   background: var(--color-warn-bg);
   color: var(--color-warn-text);
@@ -536,7 +536,7 @@ table.comparison th[scope="row"] { text-align: left; font-weight: 600; white-spa
 .return-explain, .calendar-note, .order-note, .distribution-legend { margin: 0 0 var(--space-3); font-size: inherit; }
 .booking-hint { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--color-text); }
 .delta-explain { margin: var(--space-3) 0 0; color: var(--color-muted); font-size: var(--text-sm); }
-.delta-explain p { margin: 0; }
+.delta-explain > p { margin: 0; font-size: var(--text-base); color: var(--color-text); }
 .source-note { margin: calc(-1 * var(--space-2)) 0 var(--space-4); }
 
 .watch-grid {
@@ -684,6 +684,10 @@ details.explain > summary {
 .explain-body { margin: var(--space-1) 0 0; max-width: 60ch; font-size: var(--text-sm); color: var(--color-muted); }
 .tech-details .error-text { color: var(--color-muted); font-size: var(--text-sm); }
 
+/* FD-15: long label under a price; wraps instead of clipping in calendar cells. */
+.overhead-bin { margin-top: var(--space-1); }
+.overhead-bin .badge { white-space: normal; }
+
 /* FD-12 phone layout; last so it wins over the component rules above. */
 @media (max-width: 600px) {
   /* Phone: keep the booking button on the first screen, right after the flight (C-107). */
@@ -692,6 +696,7 @@ details.explain > summary {
   .price-card > .price-card-body { order: 1; }
   .price-card > .cta { order: 2; }
   .price-card > .return-explain { order: 3; }
+  .price-card > .delta-explain { order: 3; }
   .watch-card { padding: var(--space-3) var(--space-4); }
   .price-card { padding: var(--space-4); }
   .price-card-body { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }

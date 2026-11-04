@@ -168,6 +168,7 @@ def quotes_from_records(
                 arrive_time=arrive_time,
                 arrive_day_offset=arrive_day_offset,
                 route_airports=_route_airports(segs),
+                overhead_bin_excluded=True if record.get("overhead_bin_excluded") is True else None,
             )
         )
     return quotes

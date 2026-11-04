@@ -384,6 +384,7 @@ class CommandService:
                     arrive_time=obs.arrive_time,
                     arrive_day_offset=obs.arrive_day_offset,
                     route_airports=obs.route_airports,
+                    overhead_bin_excluded=obs.overhead_bin_excluded,
                 )
             )
         return rows

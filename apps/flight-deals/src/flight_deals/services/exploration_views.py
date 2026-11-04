@@ -12,6 +12,7 @@ from flight_deals.domain.currency import format_money
 from flight_deals.domain.dates import month_days, month_weekday_counts, month_weeks
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
+    COMPARISON_ORDER_NOTE,
     DISCLAIMER,
     EXPLORATION_BREAKER_OPEN,
     EXPLORATION_CELL_LABELS,
@@ -43,6 +44,7 @@ from flight_deals.domain.messages import (
     flight_column_label,
     month_label,
     month_range_label,
+    overhead_bin_label,
 )
 from flight_deals.domain.models import CABINS, DatePair, ExplorationSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, weekday_label
@@ -360,6 +362,15 @@ class ExplorationViewService:
             "calendar_months": calendar_months,
             "weeks": weeks,
             "top5": top5,
+            # Risk ruling FD-15: the ranked list mixes marked and unmarked prices.
+            "top_order_note": COMPARISON_ORDER_NOTE if len(top5) >= 2 else None,
+            "has_overhead_bin_label": any(
+                c.status == "ok"
+                and c.amount_minor is not None
+                and c.currency
+                and c.overhead_bin_excluded
+                for c in cells
+            ),
             # A currency-mismatch cell shows an amount and a link but is not in top5.
             "has_priced_cell": any(
                 c.status == "ok" and c.amount_minor is not None and c.currency for c in cells
@@ -441,6 +452,9 @@ class ExplorationViewService:
             "depart_time": cell.depart_time if priced else None,
             # Price, flight and link of a cell come from the same stored cell.
             "flight": flight_view(cell, spec.trip_type) if priced else None,
+            "overhead_bin_label": (
+                overhead_bin_label(cell.overhead_bin_excluded, spec.trip_type) if priced else None
+            ),
             "fetched_label": (
                 fetched_label(cell.fetched_at) if priced and cell.fetched_at else None
             ),

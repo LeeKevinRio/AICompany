@@ -385,6 +385,9 @@ class PriceQuote:
     arrive_day_offset: int | None = None
     # "TPE,NRT" / "TPE,SZX,SHA": origin plus every segment's arrival airport.
     route_airports: str | None = None
+    # True when Google marks this price as excluding the overhead bin; None when not
+    # marked or unknown. Display only: never used for ranking, budgets or alerts (FD-15).
+    overhead_bin_excluded: bool | None = None
 
 
 def quote_rank_key(q: PriceQuote) -> tuple[int, int, str, int, str]:

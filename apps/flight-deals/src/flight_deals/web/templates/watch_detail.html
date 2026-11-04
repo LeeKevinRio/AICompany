@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, price_line, delta_badge, price_meta, fold, help_note with context %}
+{% from "_macros.html" import ext_link, flight, overhead_bin, price_line, delta_badge, price_meta, fold, help_note with context %}
 {% block title %}{{ watch.name }}{% endblock %}
 {# The disclaimer sits next to the main price card; the footer copy is dropped (C-101). #}
 {% block footer_disclaimer %}{% endblock %}
@@ -23,6 +23,7 @@
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   {% if has_prices %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
+  {% if has_prices and (top + recent_prices)|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
   {% if has_prices %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
 </div>
 
@@ -47,10 +48,10 @@
         <span class="price-amount">{{ best.amount_text }}</span>
         {{ delta_badge(best_delta, "較前一輪 ") }}
       </div>
+      {{- overhead_bin(best.overhead_bin_label) }}
       <div class="price-sub">{{ price_line(watch.price_caption, watch.pax_note, watch.pax_summary, watch.cabin_label) }}</div>
       <div class="price-meta">{{ price_meta(best.fetched_label, best.stale, none, best.kind_badge, best.source_text) }}{% if best.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</div>
       <div class="price-dates">{{ best.dates_weekday }}</div>
-      {% if best_delta %}<div class="delta-explain"><p>{{ ui.delta_explain }}</p>{{ help_note(ui.delta_explain_detail) }}</div>{% endif %}
     </div>
     <div class="flight-col">
       {{ flight(best.flight) }}
@@ -64,6 +65,8 @@
     <p class="cta-hint">{{ ui.booking_hint }}</p>
     {% if best.booking_note %}<p class="hint">{{ best.booking_note }}</p>{% endif %}
   </div>
+  {# After the button: the two page notes must not push it off the phone's first screen. #}
+  {% if best_delta %}<div class="delta-explain"><p>{{ ui.delta_explain }}</p>{{ help_note(ui.delta_explain_detail) }}</div>{% endif %}
 </section>
 {% if source_note %}<p class="note muted source-note">{{ source_note }}</p>{% endif %}
 {% elif top_empty_note %}
@@ -82,6 +85,7 @@
       <td>{{ p.dates_weekday }}</td>
       <td class="cell-price">
         <div class="cell-amount">{{ p.amount_text }}</div>
+        {{- overhead_bin(p.overhead_bin_label) }}
         {% if watch.pax_note %}<div class="price-sub">{{ watch.pax_note }}</div>{% endif %}
         <div class="price-meta">{{ price_meta(p.fetched_label, p.stale, none, p.kind_badge, p.source_text) }}</div>
         {% if p.currency_mismatch %}<div><span class="badge warn">幣別不符，不參與通知</span></div>{% endif %}

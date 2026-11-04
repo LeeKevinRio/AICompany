@@ -44,6 +44,7 @@ from flight_deals.domain.messages import (
     comparison_table_caption,
     comparison_unfinished_note,
     flight_column_label,
+    overhead_bin_label,
 )
 from flight_deals.domain.models import CABINS, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date
@@ -342,6 +343,11 @@ class ComparisonViewService:
             "depart_time": cell.depart_time if priced else None,
             # Price, flight and link of a row come from the same stored cell.
             "flight": flight_view(cell, record.spec.trip_type) if priced else None,
+            "overhead_bin_label": (
+                overhead_bin_label(cell.overhead_bin_excluded, record.spec.trip_type)
+                if priced
+                else None
+            ),
             "manual_check": cell.status == "no_data" and cell.reason == NO_EMBEDDED_REASON,
             "fetched_at_label": format_taipei(cell.fetched_at) if cell.fetched_at else None,
             "fetched_label": fetched_label(cell.fetched_at) if cell.fetched_at else None,

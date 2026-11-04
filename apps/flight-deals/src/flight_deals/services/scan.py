@@ -306,6 +306,7 @@ class ScanService:
                 arrive_time=cheapest.arrive_time,
                 arrive_day_offset=cheapest.arrive_day_offset,
                 route_airports=cheapest.route_airports,
+                overhead_bin_excluded=cheapest.overhead_bin_excluded,
             )
         return outcome
 
