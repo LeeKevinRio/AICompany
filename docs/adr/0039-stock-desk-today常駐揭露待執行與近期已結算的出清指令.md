@@ -327,6 +327,7 @@
  - (a) AST／簽名測試：`exit_row_past_due` 不收 calendar 與 bars；函式體不引用 `TradingCalendar`、`calendar`、`load_` 或任何 resolver；
  - (b) unauthored 回應出現 A-6 時，market resolver 與 index resolver 的呼叫次數都是 0；
  - (c) property test：任意日期序列與 `as_of` 下，結果等於 `any(d < as_of)`。
+ - (d)（風控 2026-11-04 確認時追加，見 `work/reviews/2026-11-04-ADR0039補充一確認-風控.md`）：A-6 只能在 `exit_row_past_due` 回傳 True 時附上，且全程式只有這一個呼叫點，以靜態掃描斷言。
 
 ### S-3 N171-C17 的形狀（取代 v2 附錄 A 的 C17）
 1. 位置：新增 service 方法 `PlaybookService.settle_on_request(*, today: date | None = None) -> SettlementResult`，歸 N-171 擁有。
