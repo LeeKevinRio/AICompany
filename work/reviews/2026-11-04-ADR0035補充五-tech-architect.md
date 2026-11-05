@@ -297,3 +297,10 @@
 
 ---
 （coordinator 2026-11-04 落檔：tech-architect 回報 code block 逐字轉存。）
+
+## X-14 補註：對 `test_the_exit_adds_no_column_table_or_state_key` 的連動（2026-11-04）
+1. X-4 新增的 `settled_after_id` 欄位與 `STATE_SETTLED_AFTER_ID_FLOOR`，會讓這支測試的欄位串列、`after <= PRE_N166_STATE_KEYS`、`declared == PRE_N166_STATE_KEYS` 三條斷言轉紅。這些新增與 ADR-0033 C-9 無關：C-9 管的是出清路徑不儲存 mode_reason 與旗標；本補充的欄位與鍵不由出清寫入。
+2. 准改範圍：比照 N-168 的 `ADR0034_COLUMNS`，新增具名常數，內容為：`playbook_directives` 末尾多 `settled_after_id`，state key 多 floor 鍵。三條斷言的期望值改為「既有期望 ∪ 本常數」，仍用精確相等；`PRE_N166_*` 與其他斷言零 diff。放在 N-188 PR 的單獨一個 `test:` commit，PR 說明列出。
+3. 併入 QB-18.7 檢查。
+
+（X-14 由 coordinator 2026-11-05 附加，原文見 `work/reviews/2026-11-05-N168之I8追認與補充五X14-tech-architect.md`。）
