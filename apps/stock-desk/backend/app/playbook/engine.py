@@ -1097,6 +1097,9 @@ def _snapshot_rows(
                 remaining_shares=batch.remaining_shares,
                 peak_close=batch.peak_close,
                 unrealized_pct=unrealized,
+                # ADR-0034 C-B8: copied as stored; the label sentences are the
+                # service's to render (補充一 S-3 第 3 點).
+                entry_before_exit_on=batch.entry_before_exit_on,
             )
         )
     return rows

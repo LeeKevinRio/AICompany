@@ -332,7 +332,12 @@ def desk(tmp_path: Path) -> Desk:
 
 
 def test_entry_note_after_an_emergency_freeze(desk: Desk) -> None:
-    """出清凍結: an exit after the first run turns the second one 緊急出清後凍結."""
+    """出清凍結: an exit after the first run turns the second one 緊急出清後凍結.
+
+    ADR-0034 (N-168): the exit stamped the pending R1 buy, so W-B6 names it right
+    after FROZEN_NOTE and ENTRY, which may not list it again, is not rendered
+    (風控 2026-11-01 P4／P5).
+    """
     desk.service.evaluate_today(today=TUESDAY)
     desk.service.emergency_exit(today=TUESDAY)
     second = desk.service.evaluate_today(today=TUESDAY)
@@ -340,7 +345,17 @@ def test_entry_note_after_an_emergency_freeze(desk: Desk) -> None:
     assert second.mode == "emergency_frozen"
     frozen = wording.FROZEN_NOTE.format(mode=wording.MODE_LABELS["emergency_frozen"])
     position = second.warnings.index(frozen)
-    assert second.warnings[position + 1] == _entry_note(("2330", 1, ONE_BUY_SHARES))
+    assert second.warnings[position + 1] == wording.PENDING_ENTRY_FROZEN_NOTE.format(
+        entry_count=1,
+        entry_items=wording.SAME_DAY_EARLIER_ENTRY_ITEM.format(
+            symbol="2330",
+            batch_no=1,
+            shares=ONE_BUY_SHARES,
+            rule_id="R1",
+            execution_date=WEDNESDAY.isoformat(),
+        ),
+    )
+    assert _entry_note(("2330", 1, ONE_BUY_SHARES)) not in second.warnings
     assert [(line.rule_id, line.action) for line in second.directives] == [("R1", "buy")]
 
 

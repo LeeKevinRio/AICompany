@@ -1,4 +1,7 @@
+import { Fragment } from "react";
 import { formatDateTime, formatMoney, pnlColorClass } from "../lib/format";
+import { withNoBreakDates } from "../lib/noBreakDates";
+import { collectRowNotes } from "../lib/rowNotes";
 import { formatScaledPercent } from "../lib/playbookView";
 import type { PlaybookBatchSnapshot } from "../lib/types";
 
@@ -43,7 +46,7 @@ export function PositionSnapshotTable({
       {snapshot.length === 0 ? (
         <p className="mt-3 text-sm text-neutral-400">無。</p>
       ) : (
-        <div className="mt-3 overflow-x-auto rounded-md border border-neutral-800">
+        <div className="@container mt-3 overflow-x-auto rounded-md border border-neutral-800">
           <table className="w-full min-w-[640px] text-left text-sm">
             <caption className="sr-only">部位快照</caption>
             <thead className="bg-neutral-900 text-neutral-400">
@@ -56,26 +59,67 @@ export function PositionSnapshotTable({
               </tr>
             </thead>
             <tbody>
-              {snapshot.map((batch) => (
-                <tr key={`${batch.symbol}-${batch.batch_no}`} className="border-t border-neutral-800">
-                  <td className="whitespace-nowrap px-3 py-2 font-medium text-neutral-100">
-                    {batch.symbol}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-neutral-300">第 {batch.batch_no} 批</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                    {formatMoney(batch.cost, "TWD", 2)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                    {formatMoney(batch.close, "TWD", 2)}
-                  </td>
-                  <td className={`whitespace-nowrap px-3 py-2 ${pnlColorClass(batch.unrealized_pct)}`}>
-                    {formatScaledPercent(batch.unrealized_pct)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                    {formatMoney(batch.peak_close, "TWD", 2)}
-                  </td>
-                </tr>
-              ))}
+              {snapshot.map((batch) => {
+                const label = batch.entry_before_exit_label ?? null;
+                const notes = collectRowNotes(batch);
+                const hasSub = (label !== null && label !== "") || notes.length > 0;
+                const cell = hasSub ? "pb-1 pt-2" : "py-2";
+                return (
+                  <Fragment key={`${batch.symbol}-${batch.batch_no}`}>
+                    <tr data-testid="snapshot-batch-row" className="border-t border-neutral-800">
+                      <td className={`whitespace-nowrap px-3 ${cell} font-medium text-neutral-100`}>
+                        {batch.symbol}
+                      </td>
+                      <td className={`whitespace-nowrap px-3 ${cell} text-neutral-300`}>第 {batch.batch_no} 批</td>
+                      <td className={`whitespace-nowrap px-3 ${cell} text-neutral-300`}>
+                        {formatMoney(batch.cost, "TWD", 2)}
+                      </td>
+                      <td className={`whitespace-nowrap px-3 ${cell} text-neutral-300`}>
+                        {formatMoney(batch.close, "TWD", 2)}
+                      </td>
+                      <td className={`whitespace-nowrap px-3 ${cell} ${pnlColorClass(batch.unrealized_pct)}`}>
+                        {formatScaledPercent(batch.unrealized_pct)}
+                      </td>
+                      <td className={`whitespace-nowrap px-3 ${cell} text-neutral-300`}>
+                        {formatMoney(batch.peak_close, "TWD", 2)}
+                      </td>
+                    </tr>
+                    {hasSub && (
+                      <tr data-testid="snapshot-note-row">
+                        <td colSpan={COLUMN_HEADERS.length} className="px-3 pb-3 pt-0">
+                          {/*
+                            N-168 (art spec 3.2): pinned to the scroller's visible width so the
+                            label and notes are readable without horizontal scrolling at 375px.
+                            No whitespace-nowrap, overflow, truncation or title here.
+                          */}
+                          <div
+                            data-testid="snapshot-note-pin"
+                            className="sticky left-3 w-[calc(100cqw-1.5rem)]"
+                          >
+                            {label !== null && label !== "" && (
+                              <p className="break-words text-sm font-semibold text-neutral-100">
+                                {withNoBreakDates(label)}
+                              </p>
+                            )}
+                            {notes.length > 0 && (
+                              <div
+                                data-testid="row-notes"
+                                className={`${label !== null && label !== "" ? "mt-1 " : ""}space-y-1`}
+                              >
+                                {notes.map((note, i) => (
+                                  <p key={i} className="break-words text-sm text-neutral-300">
+                                    {withNoBreakDates(note)}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

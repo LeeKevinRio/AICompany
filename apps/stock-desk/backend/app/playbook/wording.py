@@ -392,6 +392,170 @@ PENDING_ENTRY_BLOCKED_NOTE = (
     "若未下單或未成交，帳冊不受這幾筆影響。"
 )
 
+# --- N-168 (ADR-0034 B-2a + L4; 補充一; 補充二) ---------------------------------
+# Every sentence below is 風控's, copied by program from the 「…」 of
+# work/reviews/2026-10-31-N168方案裁示-風控.md (W-B1, W-B1p, W-B2, W-B6, W-B7),
+# work/reviews/2026-11-01-N168字面裁示P2至P5-風控.md (W-B1b, W-B1d) and
+# work/reviews/2026-11-04-N168停止點S3至S6裁示-風控.md (W-B2L and W-B3 as revised,
+# W-B2LS, W-B2LSr); tests/test_playbook_entry_before_exit.py re-reads all three.
+# Shares are plain integers in every one of them (風控 2026-11-04 第 4 點).
+
+#: W-B7 (ADR-0034 Decision 5; 風控 2026-10-31 第二節之五): RESULT and ALREADY_PENDING
+#: branches, after [S10], when a line written now or a covering one is on a labeled
+#: batch (W-B2). ``{labeled_count}`` counts those batches; ``{labeled_items}`` joins
+#: :data:`EMERGENCY_EXIT_LABELED_ITEM` with 「、」 by symbol, batch_no.
+EMERGENCY_EXIT_LABELED_BATCH_NOTE = (
+    "上述賣出指令中，有 {labeled_count} 批來自你提交全部出清前已產生、"
+    "之後在帳冊判定成交的 R 系列買進指令：{labeled_items}。本系統不下單："
+    "若你在券商的這些買進實際成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），你在券商並無對應這幾批的持股，"
+    "這幾批的賣出指令不適用於你，請勿就這幾批到券商下賣單；"
+    "這幾批的賣出指令在帳冊判定成交後，帳冊即不再將其記為持有，"
+    "帳冊現金會因買進與賣出的判定價格不同，與你的實際現金有差額。"
+)
+
+#: One ``{labeled_items}`` entry (W-B7, W-B2LS); ``{shares}`` is the batch's
+#: ``remaining_shares`` as a plain integer, like every share count of the exit
+#: message (風控 2026-11-04 第 4 點, withdrawing ``_format_shares``).
+EMERGENCY_EXIT_LABELED_ITEM = "{symbol}第 {batch_no} 批 {shares} 股"
+
+#: W-B1 (ADR-0034 Decision 5): all three branches, after [W-B7], when at least one
+#: 待成交買單 read under the exit's lock is W-B1 類 (補充一 S-1; W-B1b's lines left
+#: out, 風控 2026-11-01 必改 3). ``{entry_count}`` counts lines after K1 de-duplication;
+#: ``{entry_items}`` joins :data:`SAME_DAY_EARLIER_ENTRY_ITEM` with 「、」 by
+#: 預定執行日, symbol, batch_no. Triggers no EXIT 歸屬語.
+EMERGENCY_EXIT_PENDING_ENTRY_NOTE = (
+    "另有 {entry_count} 筆在本次提交前已產生、尚未結算的 R 系列買進指令，"
+    "不在本次出清範圍，本次未取消、未修改：{entry_items}。本次 R 系列（新倉進場）暫停，"
+    "是指暫停期間不再產生新的進場指令，不包括上述已產生的指令。本系統不下單，"
+    "無法得知你是否已依這些指令在券商下單，也無法替你在券商撤單；"
+    "帳冊會照常以預定執行日開盤價判定，判定成交即記為持有批次並扣除帳冊現金。"
+    "若你在券商的買進實際成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），帳冊判定成交的批次將與你的實際持股不符。"
+    "上述批次在帳冊記為持有後，可再次提交全部出清，替它們產生賣出指令。"
+)
+
+#: W-B1p: right after W-B1, when one of W-B1's lines has a 預定執行日 before the
+#: submission day (S3's rule); ``{entry_past_due_dates}`` are those dates through
+#: :func:`date_list`. Never counts a W-B1b line (必改 3).
+EMERGENCY_EXIT_PENDING_ENTRY_PAST_DUE_NOTE = (
+    "上述買進指令中，預定執行日 {entry_past_due_dates} 已過、仍未結算；"
+    "本系統無法得知你在券商是否已買進，請以你的券商回報為準。"
+)
+
+#: W-B1d (風控 2026-11-01 P3): right after W-B1p on the exit, right after W-B6 on
+#: ``/today``, when two or more K1-distinct lines of that sentence share one
+#: ``(symbol, batch_no)``. ``{dup_batches}`` counts those batches; ``{dup_items}``
+#: joins :data:`PENDING_ENTRY_SAME_BATCH_ITEM` with 「、」 by symbol, batch_no.
+PENDING_ENTRY_SAME_BATCH_NOTE = (
+    "上述買進指令中，有 {dup_batches} 批各有不只一筆指令：{dup_items}。"
+    "同一批次在帳冊最多只會依其中一筆判定成交並記為持有，"
+    "其餘各筆不會再使帳冊的股數與現金變動。本系統不下單，"
+    "無法得知你是否已就同一批次在券商下單不只一次，也無法替你在券商撤單："
+    "若你在券商就同一批次的買進實際成交不只一次，你在券商的持股可能多於帳冊所記，"
+    "多出的股數不在帳冊內，S/P 系列不會評估它們的停損停利，全部出清也不會涵蓋它們，"
+    "實際持股以你的券商回報為準；若成交不超過一次，以前述說明為準。"
+)
+
+#: One ``{dup_items}`` entry; ``{dup_dates}`` through :func:`date_list`.
+PENDING_ENTRY_SAME_BATCH_ITEM = "{symbol}第 {batch_no} 批（預定執行日 {dup_dates}）"
+
+#: W-B1b (風控 2026-11-01 P2(a)～(c)): all three branches, after [W-B1d], for the
+#: 待成交買單 read under the exit's lock whose batch has left ``planned`` -- G1's own
+#: condition (``store.BATCH_LEFT_PLANNED_SQL``). ``{blocked_count}`` counts lines
+#: after K1 de-duplication; ``{entry_items}`` as in W-B1. Triggers no EXIT 歸屬語.
+EMERGENCY_EXIT_BLOCKED_ENTRY_NOTE = (
+    "另有 {blocked_count} 筆在本次提交前已產生、尚未結算的 R 系列買進指令，"
+    "因帳冊中對應的批次已不是待買進狀態，帳冊不會依這幾筆判定成交：{entry_items}。"
+    "這幾筆本次未取消、未修改，之後的結算會繼續列出。本系統不下單，"
+    "無法得知你是否已依這幾筆在券商下單，也無法替你在券商撤單：若你在券商的買進實際成交，"
+    "你在券商的持股可能多於帳冊所記，多出的股數不在帳冊內，不在本次出清範圍，"
+    "S/P 系列也不會評估它們的停損停利，實際持股以你的券商回報為準；若未下單或未成交，"
+    "帳冊不受這幾筆影響。"
+)
+
+#: W-B6 (ADR-0034 Decision 5; 風控 2026-11-01 P4／P5): ``/today`` in the
+#: ``emergency_frozen`` mode, first in the block after FROZEN_NOTE (FROZEN →
+#: W-B6 → W-B1d → ENTRY → W-B6b), for the stamped 待成交買單 the book may still
+#: fill. Its lines are left out of SAME_DAY_EARLIER_ENTRY_NOTE. Counts and
+#: items as in W-B1.
+PENDING_ENTRY_FROZEN_NOTE = (
+    "尚有 {entry_count} 筆在全部出清提交前已產生、尚未結算的 R 系列買進指令："
+    "{entry_items}。暫停期間不再產生新的進場指令，但這幾筆已產生的指令未被取消，"
+    "帳冊會照常以預定執行日開盤價判定，判定成交即記為持有批次並扣除帳冊現金。"
+    "本系統不下單，也無法替你在券商撤單：若你在券商的買進實際成交，"
+    "實際持股以你的券商回報為準；若未成交（包括未下單或已自行撤單），"
+    "帳冊判定成交的批次將與你的實際持股不符。"
+)
+
+#: W-B2 (ADR-0034 Decision 5, 風控 D1): the label of an open batch whose buy was
+#: stamped by an exit (``entry_before_exit_on``); kept until the batch closes.
+#: Never shortened or cut off to fit -- 風控 reviews any layout that cannot hold it.
+ENTRY_BEFORE_EXIT_LABEL = "出清前的買進指令，暫停期間記入帳冊"
+
+#: W-B2L (revised by 風控 2026-11-04 第 6 點, F-11): right after W-B2 on the batch
+#: row, and on every S/P/EMERGENCY line of that batch that names it (a
+#: ``batch_no``), in a field of its own (never part of ``directive_line``, VETO).
+#: An S2 line gets W-B2LS instead. ``{entry_date}`` is the batch's
+#: ``entry_date``. Rendered only by :func:`app.playbook.service.entry_before_exit_note`.
+ENTRY_BEFORE_EXIT_NOTE = (
+    "此批次來自你提交全部出清前已產生的 R 系列買進指令，"
+    "於 {entry_date} 以開盤價在帳冊判定成交後記為持有，"
+    "不在它記為持有之前你提交的全部出清範圍內。本系統不下單："
+    "若你在券商的這筆買進實際成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），你在券商並無對應這批的持股，"
+    "請勿就這批到券商下賣單。"
+)
+
+#: W-B2LS (風控 2026-11-04 S6 第 5 點): instead of W-B2L on a sell line with no
+#: ``batch_no`` (S2, the whole symbol) when an open batch of that symbol carries
+#: W-B2. ``{labeled_count}`` counts those batches; ``{labeled_items}`` joins
+#: :data:`EMERGENCY_EXIT_LABELED_ITEM` (``remaining_shares``, plain integer) with 「、」
+#: by batch_no; ``{entry_dates}`` is their ``entry_date`` through :func:`date_list`.
+ENTRY_BEFORE_EXIT_SYMBOL_NOTE = (
+    "本列賣出股數包含這檔在帳冊中的 {labeled_count} 批：{labeled_items}。"
+    "這幾批來自你提交全部出清前已產生的 R 系列買進指令，"
+    "於 {entry_dates} 以開盤價在帳冊判定成交後記為持有，"
+    "不在它們記為持有之前你提交的全部出清範圍內。本系統不下單："
+    "若你在券商的這些買進實際成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），你在券商並無這幾批的持股，"
+    "本列賣出股數會多於你在券商的實際持股，請勿就這幾批的股數到券商下賣單。"
+)
+
+#: W-B2LSf (風控 2026-11-04 E-30 裁示第二節之 1, (δ)): instead of W-B2LS when premise P
+#: fails on an S2 line (補充四釐清七 E-30 第 3、4 點) and at least one item is left after
+#: the ``remaining_shares > 0`` filter. Same field and placeholders as W-B2LS; never
+#: followed by W-B2LSr.
+ENTRY_BEFORE_EXIT_SYMBOL_UNMATCHED_NOTE = (
+    "本列賣出股數是依產生本列時的帳冊計算的；"
+    "帳冊中這檔目前記為持有的批次與股數可能已與當時不同，"
+    "本系統無法確認本列股數是否包含下列 {labeled_count} 批：{labeled_items}。"
+    "這幾批來自你提交全部出清前已產生的 R 系列買進指令，"
+    "於 {entry_dates} 以開盤價在帳冊判定成交後記為持有，"
+    "不在它們記為持有之前你提交的全部出清範圍內。本系統不下單："
+    "若你在券商的這些買進實際成交，實際持股以你的券商回報為準，"
+    "本列賣出股數可能少於你在券商的這檔持股；若未成交（包括未下單或已自行撤單），"
+    "你在券商並無這幾批的持股，本列賣出股數可能多於你在券商的實際持股，"
+    "請勿就超過你在券商實際持股的股數到券商下賣單。"
+)
+
+#: W-B2LSr: appended to W-B2LS, in the same field, only when the line's ``shares``
+#: exceed those batches' ``remaining_shares`` together.
+ENTRY_BEFORE_EXIT_SYMBOL_REST_NOTE = "本列其他批次的股數不受這幾批影響，以本列為準。"
+
+#: W-B3 (ADR-0034 Decision 5; last sentence revised by 風控 2026-11-04 第 2 點, D7):
+#: ``settlement.warnings``, right after SETTLEMENT_SUMMARY and before N2, when
+#: this run judged a stamped buy executed and so labeled its batch. ``{count}``
+#: counts those lines; ``{entry_items}`` as in W-B1.
+SETTLEMENT_ENTRY_BEFORE_EXIT_NOTE = (
+    "本次結算中，有 {count} 筆是你提交全部出清前已產生的 R 系列買進指令，"
+    "帳冊已依預定執行日開盤價判定成交，記為持有批次並扣除帳冊現金：{entry_items}。"
+    "這些批次未涵蓋在先前的出清內，S/P 系列停損停利會照常評估它們。本系統不下單，"
+    "無法得知你在券商的這些買進是否實際成交：若已成交，實際持股以你的券商回報為準；"
+    "若未成交（包括未下單或已自行撤單），這些批次與你的實際持股不符。可再次提交全部出清，"
+    "替這些批次產生賣出指令。"
+)
+
 #: 鐵律④ (T5). Never a denial: the change is recorded and dated.
 RULE_CHANGE_PENDING = (
     "規則修改已記錄為待生效，生效日 {effective_date}（版本 {version}）；當日不套用。"
@@ -778,9 +942,11 @@ SETTLEMENT_EXIT_STALE_REOPEN_NOTE = (
     "這批在帳冊仍記為持有；可再次提交全部出清，替這批產生新的賣出指令。"
 )
 
-#: N-166 風控 N2: right after :data:`SETTLEMENT_SUMMARY` when an EMERGENCY sell
-#: judged executed found its batch already holding nothing, so the book moved
-#: no shares and no cash for it (``{exit_items}`` per :data:`SETTLEMENT_EXIT_ITEM`).
+#: N-166 風控 N2: when an EMERGENCY sell judged executed found its batch already
+#: holding nothing, so the book moved no shares and no cash for it
+#: (``{exit_items}`` per :data:`SETTLEMENT_EXIT_ITEM`). 風控 2026-11-04 第 1 點:
+#: settlement.warnings 中緊接在 SETTLEMENT_SUMMARY 之後；同一次結算也有 W-B3 時，
+#: 緊接在 W-B3 之後.
 SETTLEMENT_EXIT_NOTHING_MOVED_NOTE = (
     "本次判定成交的出清賣出指令中，有 {count} 筆在判定時該批次在帳冊已無持股，"
     "帳冊股數與現金都未因這幾筆變動：{exit_items}。"
@@ -1055,6 +1221,109 @@ class ExitPending(NamedTuple):
     stale: tuple[ExitStale, ...] = ()
 
 
+class SameBatch(NamedTuple):
+    """One W-B1d ``{dup_items}`` entry: a batch two or more K1-distinct buys name.
+
+    ``dates`` are the 預定執行日 of those buys; :func:`date_list` de-duplicates
+    and orders them for the sentence.
+    """
+
+    symbol: str
+    batch_no: int
+    dates: tuple[date, ...]
+
+
+def same_batch_note(batches: Iterable[SameBatch]) -> str | None:
+    """W-B1d for ``batches``, by symbol then batch_no; ``None`` when there is none."""
+    ordered = sorted(batches, key=lambda item: (item.symbol, item.batch_no))
+    if not ordered:
+        return None
+    return PENDING_ENTRY_SAME_BATCH_NOTE.format(
+        dup_batches=len(ordered),
+        dup_items="、".join(
+            PENDING_ENTRY_SAME_BATCH_ITEM.format(
+                symbol=item.symbol, batch_no=item.batch_no, dup_dates=date_list(item.dates)
+            )
+            for item in ordered
+        ),
+    )
+
+
+class ExitLabeled(NamedTuple):
+    """One W-B7 ``{labeled_items}`` entry: a labeled batch a sell of this response names.
+
+    ``shares`` is the batch's ``remaining_shares``.
+    """
+
+    symbol: str
+    batch_no: int
+    shares: int
+
+
+class ExitEntries(NamedTuple):
+    """What the N-168 sentences of one EMERGENCY_EXIT message describe (ADR-0034).
+
+    Read under the exit's write lock: the labeled batches its new or covering
+    lines are on (W-B7), and the 待成交買單 split by G1's condition -- W-B1 類
+    (W-B1, W-B1p, W-B1d) and G1 擋下類 (W-B1b). The two item lists are already
+    rendered, K1-deduplicated and ordered by the service, which formats the one
+    ``{entry_items}`` template for every sentence that has it.
+    """
+
+    labeled: tuple[ExitLabeled, ...] = ()
+    #: W-B1's items; empty means W-B1, W-B1p and W-B1d are not rendered.
+    entry_items: tuple[str, ...] = ()
+    #: W-B1p: the 預定執行日 of W-B1's lines that are before the submission day.
+    past_due_dates: tuple[date, ...] = ()
+    #: W-B1d: the batches two or more of W-B1's lines share.
+    same_batch: tuple[SameBatch, ...] = ()
+    #: W-B1b's items.
+    blocked_items: tuple[str, ...] = ()
+
+
+#: An exit that read no labeled batch and no 待成交買單: no N-168 sentence at all.
+NO_EXIT_ENTRIES = ExitEntries()
+
+
+def labeled_items(labeled: Iterable[ExitLabeled]) -> str:
+    """W-B7 ``{labeled_items}``: one entry per batch, (symbol, batch_no) ascending."""
+    return "、".join(
+        EMERGENCY_EXIT_LABELED_ITEM.format(
+            symbol=item.symbol, batch_no=item.batch_no, shares=item.shares
+        )
+        for item in sorted(labeled, key=lambda item: (item.symbol, item.batch_no))
+    )
+
+
+def exit_entry_notes(entries: ExitEntries, *, describes_lines: bool) -> str:
+    """［W-B7］＋［W-B1］＋［W-B1p］＋［W-B1d］＋［W-B1b］, in 風控's order (2026-11-01 P2(c)).
+
+    ``describes_lines`` is the RESULT or ALREADY_PENDING branch: W-B7 speaks of
+    「上述賣出指令」, so the EMPTY branch never carries it. W-B1p and W-B1d speak
+    of 「上述買進指令」, W-B1's lines, so they only follow W-B1.
+    """
+    notes = ""
+    if describes_lines and entries.labeled:
+        notes += EMERGENCY_EXIT_LABELED_BATCH_NOTE.format(
+            labeled_count=len({(item.symbol, item.batch_no) for item in entries.labeled}),
+            labeled_items=labeled_items(entries.labeled),
+        )
+    if entries.entry_items:
+        notes += EMERGENCY_EXIT_PENDING_ENTRY_NOTE.format(
+            entry_count=len(entries.entry_items), entry_items="、".join(entries.entry_items)
+        )
+        if entries.past_due_dates:
+            notes += EMERGENCY_EXIT_PENDING_ENTRY_PAST_DUE_NOTE.format(
+                entry_past_due_dates=date_list(entries.past_due_dates)
+            )
+        notes += same_batch_note(entries.same_batch) or ""
+    if entries.blocked_items:
+        notes += EMERGENCY_EXIT_BLOCKED_ENTRY_NOTE.format(
+            blocked_count=len(entries.blocked_items), entry_items="、".join(entries.blocked_items)
+        )
+    return notes
+
+
 def stale_items(stale: Iterable[ExitStale]) -> str:
     """S10 ``{stale_items}``: one entry per batch, (symbol, batch_no) ascending."""
     return "、".join(
@@ -1079,14 +1348,20 @@ def emergency_exit_message(
     pending: ExitPending,
     extended_from: date | None,
     freeze_kept: bool,
+    entries: ExitEntries = NO_EXIT_ENTRIES,
 ) -> str:
-    """The EMERGENCY_EXIT message, composed in the order 風控 fixed (N-166).
+    """The EMERGENCY_EXIT message, composed in the order 風控 fixed (N-166, N-168).
 
-    * RESULT 支 (lines written now): RESULT ＋［S2］＋［S3］＋［S10］＋［S6］
-    * ALREADY_PENDING 支 (none written, some covered): S1 ＋［S3］＋［S10］＋［S6］
-    * EMPTY 支 (nothing held): EMPTY ＋［S6］ -- S10 needs a held batch, so never here.
+    * RESULT 支 (lines written now): RESULT ＋［S2］＋［S3］＋［S10］＋［W-B7］＋
+      ［W-B1］＋［W-B1p］＋［W-B1d］＋［W-B1b］＋［S6］
+    * ALREADY_PENDING 支 (none written, some covered): S1 ＋［S3］＋［S10］＋
+      ［W-B7］＋［W-B1］＋［W-B1p］＋［W-B1d］＋［W-B1b］＋［S6］
+    * EMPTY 支 (nothing held): EMPTY ＋［W-B1］＋［W-B1p］＋［W-B1d］＋［W-B1b］＋［S6］
+      -- S10 and W-B7 need a held batch, so never here.
 
-    (The W-B7／W-B1／W-B1p slots 風控 placed between S10 and S6 belong to N-168.)
+    The three branch templates are never edited; the N-168 sentences
+    (``entries``, :func:`exit_entry_notes`) are appended only (ADR-0034 C-B5,
+    風控 2026-11-01 P2(b)(c)).
 
     ``extended_from`` is the 恢復日 read under the lock when this submission
     moved a running freeze later (S6), else ``None``. ``freeze_kept`` is F-c: a
@@ -1128,6 +1403,7 @@ def emergency_exit_message(
             stale_batches=len({(item.symbol, item.batch_no) for item in pending.stale}),
             stale_items=stale_items(pending.stale),
         )
+    message += exit_entry_notes(entries, describes_lines=bool(new_batches or pending.batches))
     if extended_from is not None:
         message += EMERGENCY_EXIT_FREEZE_EXTENDED_NOTE.format(
             previous_until=extended_from.isoformat(),

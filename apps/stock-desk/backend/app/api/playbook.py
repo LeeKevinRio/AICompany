@@ -71,7 +71,7 @@ from app.playbook.models import (
     RuleSetStatus,
     SettlementResult,
 )
-from app.playbook.service import PlaybookService
+from app.playbook.service import PlaybookService, entry_before_exit_note
 
 router = APIRouter(prefix="/api/playbook", tags=["playbook"])
 
@@ -90,7 +90,7 @@ class DirectiveLine(BaseModel):
     directive: Directive
     #: W-B2L for a sell line of a labeled batch (ADR-0034 補充一 S-3 第 4 點), in a
     #: field of its own -- never appended to ``line`` (VETO). Set only by
-    #: :func:`_lines`; ``None`` until N-168 implements the rule (ADR-0035 補充四 2.2(b)).
+    #: :func:`_lines` (ADR-0035 補充四 2.2(b)); ``None`` on every other line.
     entry_before_exit_note: str | None = None
 
 
@@ -361,6 +361,12 @@ class EmergencyExitResponse(BaseModel):
     pending_directives: list[DirectiveLine]
     warnings: list[str]
     as_of: str
+    #: ADR-0034 C-B4 (補充一 S-3 第 6 點), additive: the pending R buys this exit
+    #: read under its lock and stamped, one per K1 -- W-B1 類, then G1 擋下類. In
+    #: fields of their own, never in ``directives`` or ``pending_directives``
+    #: (VETO-2); ``message`` already states them (W-B1, W-B1b).
+    entry_before_exit_directives: list[DirectiveLine] = Field(default_factory=list)
+    entry_before_exit_blocked_directives: list[DirectiveLine] = Field(default_factory=list)
 
 
 def _lines(
@@ -372,15 +378,29 @@ def _lines(
     :func:`wording.directive_line` verbatim, because the client splits it on
     「｜」 and renders fixed positions -- nothing is ever appended to it (VETO).
     ``labeled_batches`` is required and keyword-only so no call site can forget
-    the labels; the rule that turns them into ``entry_before_exit_note`` is
-    N-168's, and until then the note is always ``None``.
+    the labels.
+
+    The W-B2L rule (N-168): only a sell line -- S, P or EMERGENCY -- carries
+    ``entry_before_exit_note``: W-B2L when its ``(symbol, batch_no)`` is one of
+    ``labeled_batches``; with no ``batch_no`` (S2), W-B2LS［＋W-B2LSr］ or W-B2LSf
+    when a batch of its symbol is, decided with the line's ``shares``
+    (:func:`entry_before_exit_note`). A buy, a 順延／跳過／無動作 line and every
+    line of an unlabeled batch get ``None``.
     """
-    del labeled_batches  # read by N-168's rule only
     return [
         DirectiveLine(
             line=wording.directive_line(directive),
             directive=directive,
-            entry_before_exit_note=None,
+            entry_before_exit_note=(
+                entry_before_exit_note(
+                    directive.symbol,
+                    directive.batch_no,
+                    labeled_batches=labeled_batches,
+                    shares=directive.shares,
+                )
+                if directive.action == "sell"
+                else None
+            ),
         )
         for directive in directives
     ]
@@ -718,4 +738,10 @@ def emergency_exit(service: ServiceDep) -> EmergencyExitResponse:
         ),
         warnings=result.warnings,
         as_of=now_iso(),
+        entry_before_exit_directives=_lines(
+            result.entry_before_exit_directives, labeled_batches=result.labeled_batches
+        ),
+        entry_before_exit_blocked_directives=_lines(
+            result.entry_before_exit_blocked_directives, labeled_batches=result.labeled_batches
+        ),
     )

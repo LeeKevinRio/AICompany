@@ -168,6 +168,12 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 風控 2026-09-15 R3: the data layer's reason (spliced sources, served from
     # cache) travels with the line it was decided on; older rows read back NULL.
     ("playbook_directives", "data_reason", "TEXT"),
+    # ADR-0034 L4 (補充一 S-3 第 2 點): the EMERGENCY_EXIT ``as_of`` stamped on a buy
+    # that was pending when the exit ran, and the copy :meth:`PlaybookStore.settle`
+    # puts on the batch it fills (C-B6). Nullable, never back-filled (C-B7): an
+    # older database holds no freeze history to stamp from.
+    ("playbook_directives", "exit_stamped_on", "TEXT"),
+    ("playbook_batches", "entry_before_exit_on", "TEXT"),
 )
 
 _BATCH_COLUMNS = (
@@ -186,6 +192,9 @@ _BATCH_COLUMNS = (
     "defer_count",
     "missed_count",
     "scheduled_date",
+    # ADR-0034 C-B7: through BatchState, _row_to_batch and save_batch as well, or
+    # the wholesale INSERT OR REPLACE would wash the label back to NULL.
+    "entry_before_exit_on",
 )
 
 _BATCH_SELECT = ", ".join(_BATCH_COLUMNS)
@@ -250,6 +259,11 @@ BATCH_LEFT_PLANNED_SQL = (
     "WHERE b.symbol = playbook_directives.symbol "
     "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned')"
 )
+
+#: ADR-0034 Decision 1 (C-B1): a 待成交 R 買單. No ``execution_date`` bound (a
+#: past-due one still counts), no ``rule_id LIKE 'R%'`` (that would take in
+#: ``REBALANCE``), never through :meth:`PlaybookStore.pending_directives` (VETO-2).
+_PENDING_ENTRY_WHERE = "action = 'buy' AND settled = 0 AND status = 'pending'"
 
 #: N172-C5: effects that belong to the R-series line they came with. They are
 #: applied with that line, in the same transaction, and never without it: a
@@ -318,6 +332,12 @@ class EntryBeforeExitRead(NamedTuple):
     #: (:data:`BATCH_LEFT_PLANNED_SQL`) -- due or not, oldest first, duplicates
     #: kept (風控 2026-11-01 P2(d), W-B6b).
     blocked: tuple[PendingDirective, ...] = ()
+    #: N-168 (ADR-0034 C-B9, 補充一 S-3 第 6 點): every unsettled pending buy an
+    #: EMERGENCY_EXIT stamped (``exit_stamped_on IS NOT NULL``), due or not, oldest
+    #: first, duplicates kept. Not classified here: a stamped row is G1 擋下類
+    #: exactly when it is also in ``blocked`` (補充一 S-1 第 5 點, 釐清一 E-1 第 3 點),
+    #: so both come from this one snapshot and one condition.
+    stamped: tuple[PendingDirective, ...] = ()
 
 
 class InFlightRead(NamedTuple):
@@ -341,14 +361,68 @@ def _read_pending_exits(conn: sqlite3.Connection) -> PendingExitRead:
 def _read_entry_before_exit(conn: sqlite3.Connection) -> EntryBeforeExitRead:
     """N-168's in-flight read on ``conn``, inside :meth:`PlaybookStore.read_in_flight`.
 
-    N-182: the G1 擋下類, by G1's own condition. N-168 extends this read.
+    N-182: the G1 擋下類, by G1's own condition. N-168 adds the stamped buys
+    (ADR-0034 C-B9), read in the same transaction so the two agree on a row.
     """
     rows = conn.execute(
         f"SELECT {_PENDING_SELECT} FROM playbook_directives "
         "WHERE action = 'buy' AND settled = 0 AND status = 'pending' "
         f"AND {BATCH_LEFT_PLANNED_SQL} ORDER BY id ASC"
     ).fetchall()
-    return EntryBeforeExitRead(blocked=tuple(_row_to_pending(row) for row in rows))
+    stamped = conn.execute(
+        f"SELECT {_PENDING_SELECT} FROM playbook_directives "
+        f"WHERE {_PENDING_ENTRY_WHERE} AND exit_stamped_on IS NOT NULL ORDER BY id ASC"
+    ).fetchall()
+    return EntryBeforeExitRead(
+        blocked=tuple(_row_to_pending(row) for row in rows),
+        stamped=tuple(_row_to_pending(row) for row in stamped),
+    )
+
+
+class ExitEntryRead(NamedTuple):
+    """The 待成交買單 one EMERGENCY_EXIT read under its write lock (ADR-0034 Decision 2).
+
+    The fourth read of C-2, kept out of :class:`EmergencyExitState` (補充四釐清二
+    E-11 第 1 點): it decides no branch and joins no covering set (C-B2), and
+    ``/today``'s exit read must not carry buys. Both are oldest first,
+    duplicates kept; the split is G1's condition (補充一 S-1 第 2 點).
+    """
+
+    #: W-B1 類: the book may still fill them -- a planned batch, no batch row or a
+    #: NULL ``batch_no``.
+    entries: tuple[PendingDirective, ...] = ()
+    #: G1 擋下類: the batch row exists and has left ``planned``
+    #: (:data:`BATCH_LEFT_PLANNED_SQL`); the book will not fill them (W-B1b).
+    blocked: tuple[PendingDirective, ...] = ()
+
+
+def _read_and_stamp_exit_entries(conn: sqlite3.Connection, *, stamped_on: date) -> ExitEntryRead:
+    """Read the 待成交買單 and stamp them, on the exit's own ``conn`` (ADR-0034 C-B1, C-B3).
+
+    Called inside :meth:`PlaybookStore.commit_emergency_exit`'s ``BEGIN IMMEDIATE``,
+    never in a transaction of its own (VETO-5). L4 stamps both classes
+    (補充一 S-1 第 4 點): the stamp records 「出清當時尚未結算、不在該次出清範圍」,
+    true of either; G1 keeps the blocked ones from ever filling, so their stamp
+    never reaches a batch. A row is stamped once -- the UPDATE runs only for rows
+    still ``NULL`` and only when there is one, so a repeated exit writes nothing at
+    all (ADR-0033 F-T1, T-3).
+    """
+    rows = conn.execute(
+        f"SELECT {_PENDING_SELECT}, exit_stamped_on IS NULL, {BATCH_LEFT_PLANNED_SQL} "
+        f"FROM playbook_directives WHERE {_PENDING_ENTRY_WHERE} ORDER BY id ASC"
+    ).fetchall()
+    unstamped = [int(row[0]) for row in rows if row[-2]]
+    if unstamped:
+        placeholders = ", ".join("?" for _ in unstamped)
+        conn.execute(
+            "UPDATE playbook_directives SET exit_stamped_on = ? "
+            f"WHERE id IN ({placeholders}) AND exit_stamped_on IS NULL",
+            (stamped_on.isoformat(), *unstamped),
+        )
+    return ExitEntryRead(
+        entries=tuple(_row_to_pending(row[:-2]) for row in rows if not row[-1]),
+        blocked=tuple(_row_to_pending(row[:-2]) for row in rows if row[-1]),
+    )
 
 
 class EvaluationCommit(NamedTuple):
@@ -730,6 +804,7 @@ class PlaybookStore:
             defer_count,
             missed_count,
             scheduled,
+            entry_before_exit_on,
         ) = row
         return BatchState(
             symbol=str(symbol),
@@ -747,6 +822,7 @@ class PlaybookStore:
             defer_count=int(defer_count),
             missed_count=int(missed_count),
             scheduled_date=_day(scheduled),
+            entry_before_exit_on=_day(entry_before_exit_on),
         )
 
     def save_batch(self, batch: BatchState) -> None:
@@ -757,8 +833,9 @@ class PlaybookStore:
                 INSERT OR REPLACE INTO playbook_batches
                     (symbol, batch_no, status, entry_date, cost, shares, remaining_shares,
                      peak_close, p1_done, p2_done, p3_last_date, trailing_active,
-                     defer_count, missed_count, scheduled_date, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     defer_count, missed_count, scheduled_date, entry_before_exit_on,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     batch.symbol,
@@ -776,6 +853,7 @@ class PlaybookStore:
                     batch.defer_count,
                     batch.missed_count,
                     _iso(batch.scheduled_date),
+                    _iso(batch.entry_before_exit_on),
                     datetime.now(UTC).isoformat(),
                 ),
             )
@@ -1219,8 +1297,8 @@ class PlaybookStore:
         return EvaluationCommit(written=written, logged=logged)
 
     def commit_emergency_exit[PlanT: EmergencyExitWrite](
-        self, plan: Callable[[EmergencyExitState], PlanT]
-    ) -> tuple[EmergencyExitState, PlanT]:
+        self, plan: Callable[[EmergencyExitState], PlanT], *, stamped_on: date
+    ) -> tuple[EmergencyExitState, PlanT, ExitEntryRead]:
         """Read, decide and write one EMERGENCY_EXIT under a single write lock.
 
         ADR-0033 (N-166). A repeated exit -- a double click, a second tab, a
@@ -1239,14 +1317,21 @@ class PlaybookStore:
         4. The 恢復日 is written only when ``plan`` changed it (C-5), then the
            new lines; both commit together or not at all, so a failure can no
            longer leave a freeze with no sell lines behind it (附錄 C (ii)).
+        5. ADR-0034 (N-168): the 待成交買單 are read on the same connection and
+           stamped with ``stamped_on`` -- the exit's ``as_of`` -- in the same
+           transaction (C-B1, C-B3, VETO-5), by
+           :func:`_read_and_stamp_exit_entries`. That fourth read decides no
+           branch: ``plan`` never sees it (C-B2), and it stays out of
+           :class:`EmergencyExitState` (補充四釐清二 E-11 第 1 點).
 
         Errors follow :func:`app.data.sqlite_util.add_missing_columns` (C-11):
         roll back if SQLite has not already, then raise unchanged. A lock still
         held past ``busy_timeout`` is raised as ``database is locked`` -- an
         exit that silently did nothing would be worse than a loud failure.
 
-        Returns the state read under the lock with the plan that was written,
-        so the caller can describe exactly what this call found and did.
+        Returns the state read under the lock with the plan that was written and
+        the buys read and stamped with it, so the caller can describe exactly what
+        this call found and did.
         """
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1261,6 +1346,7 @@ class PlaybookStore:
                     rules_version=decided.rules_version,
                     moment=datetime.now(UTC).isoformat(),
                 )
+                entries = _read_and_stamp_exit_entries(conn, stamped_on=stamped_on)
                 conn.execute("COMMIT")
             except BaseException:
                 # SQLite may already have rolled back on its own (a full disk,
@@ -1268,7 +1354,7 @@ class PlaybookStore:
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
-        return state, decided
+        return state, decided, entries
 
     @staticmethod
     def _read_exit_state(conn: sqlite3.Connection) -> EmergencyExitState:
@@ -1396,7 +1482,13 @@ class PlaybookStore:
         status: BatchStatus = row[0]
         return status
 
-    def settle(self, directive: Directive, *, fill_price: Decimal | None = None) -> None:
+    def settle(
+        self,
+        directive: Directive,
+        *,
+        fill_price: Decimal | None = None,
+        directive_id: int | None = None,
+    ) -> None:
         """Apply a settled line to the book: fills move shares, MISSED moves nothing.
 
         Called with the directive **after** :func:`app.playbook.engine.settle_directive`
@@ -1410,6 +1502,12 @@ class PlaybookStore:
         Cash moves here and nowhere else: a buy takes ``price × shares`` out of
         the pool and a sell puts it back, so 鐵律① reads a cash balance that has
         actually advanced rather than the opening figure forever.
+
+        ADR-0034 C-B6: a buy that fills copies its log row's L4 stamp
+        (``exit_stamped_on``, read by ``directive_id``) onto the batch as
+        ``entry_before_exit_on``. Only a fill does: MISSED moves nothing and labels
+        nothing, and a caller with no log row id (a line replayed by hand) has no
+        stamp to copy. No mode is read here.
         """
         if directive.status == "missed" and directive.batch_no is not None:
             # CEO 裁決 E-2: a MISSED line moves no shares, but it is not free --
@@ -1427,6 +1525,7 @@ class PlaybookStore:
         price = fill_price if fill_price is not None else directive.reference_price
         price = price or Decimal("0")
         if directive.action == "buy":
+            stamp = None if directive_id is None else self._exit_stamp(directive_id)
             batch = batch.model_copy(
                 update={
                     "status": "open",
@@ -1435,6 +1534,7 @@ class PlaybookStore:
                     "shares": directive.shares,
                     "remaining_shares": directive.shares,
                     "peak_close": price,
+                    "entry_before_exit_on": batch.entry_before_exit_on if stamp is None else stamp,
                 }
             )
             self.set_cash(self.portfolio_state().cash - price * Decimal(directive.shares))
@@ -1456,6 +1556,14 @@ class PlaybookStore:
             batch = batch.model_copy(update=changes)
         self.save_batch(batch)
         self._mark_schedule(directive)
+
+    def _exit_stamp(self, directive_id: int) -> date | None:
+        """The L4 stamp of one log row, ``None`` when it has none (ADR-0034 C-B6)."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT exit_stamped_on FROM playbook_directives WHERE id = ?", (directive_id,)
+            ).fetchone()
+        return None if row is None else _day(row[0])
 
     def _mark_schedule(self, directive: Directive) -> None:
         with closing(self._connect()) as conn, conn:

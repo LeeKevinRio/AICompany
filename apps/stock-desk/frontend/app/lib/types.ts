@@ -1736,8 +1736,11 @@ export interface PlaybookDirectiveLine {
   directive: PlaybookDirective;
   //: W-B2L for a sell line of a labeled batch, in a field of its own — never
   //: part of `line` (ADR-0034 補充一 S-3 第 4 點; ADR-0035 補充四 2.2(b)/(d)).
-  //: Owner N-168; the backend sends `null` until then. Optional because an
-  //: older backend does not send it; a missing key reads as `null`.
+  //: Owner N-168: non-null only on an S/P/EMERGENCY sell of a batch carrying
+  //: W-B2 — W-B2L; on an S2 line (`batch_no` null) of a symbol with such a
+  //: batch it is W-B2LS (+ W-B2LSr) or W-B2LSf instead, already composed.
+  //: Render it verbatim on the same row as `line`, unfolded, never as a tooltip.
+  //: Optional because an older backend does not send it; a missing key reads as `null`.
   entry_before_exit_note?: string | null;
 }
 
@@ -1968,6 +1971,17 @@ export interface PlaybookBatchSnapshot {
   //: is a stringified `Decimal` already scaled, so `formatPercent` (which
   //: multiplies by 100) must not be used here; see `formatScaledPercent`.
   unrealized_pct: string | null;
+  //: ADR-0034 補充一 S-3 第 3 點 (N-168), additive; optional because an older
+  //: backend does not send them, and a missing key reads as `null`.
+  //: The stored L4 fact (ISO date of the exit that stamped the buy); raw data,
+  //: kept after the batch closes. Never render text from it.
+  entry_before_exit_on?: string | null;
+  //: W-B2 `ENTRY_BEFORE_EXIT_LABEL`, non-null only while the batch is open and
+  //: labeled. Render verbatim; never shortened or cut off (風控 回審 if it does not fit).
+  entry_before_exit_label?: string | null;
+  //: W-B2L `ENTRY_BEFORE_EXIT_NOTE`, same condition: on the same batch row,
+  //: right after `entry_before_exit_label`, unfolded, never as a tooltip.
+  entry_before_exit_note?: string | null;
 }
 
 /**
@@ -2066,6 +2080,13 @@ export interface PlaybookEmergencyExitResponse {
   pending_directives: PlaybookDirectiveLine[];
   warnings: string[];
   as_of: string;
+  //: ADR-0034 C-B4 (補充一 S-3 第 6 點, N-168), additive: the pending R buys this
+  //: exit read under its lock and stamped, one per K1 — W-B1 類, then G1 擋下類.
+  //: Raw data: `message` already states them (W-B1, W-B1b); never mixed into
+  //: `directives` or `pending_directives`. Optional because an older backend
+  //: does not send them; a missing key reads as `[]`.
+  entry_before_exit_directives?: PlaybookDirectiveLine[];
+  entry_before_exit_blocked_directives?: PlaybookDirectiveLine[];
 }
 
 /* --- Kelly input (ADR-0006 D-8, C5, backend/app/api/kelly.py + app/kelly/models.py) --- */

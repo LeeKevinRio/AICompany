@@ -226,6 +226,11 @@ class BatchState(BaseModel):
     missed_count: int = 0
     #: The schedule day this batch is queued for, if any.
     scheduled_date: date | None = None
+    #: ADR-0034 L4 (補充一 S-3 第 2 點): the EMERGENCY_EXIT ``as_of`` stamped on the
+    #: buy that filled this batch, copied by :meth:`PlaybookStore.settle` when it
+    #: filled (C-B6). ``None`` for every other batch; never back-filled, never
+    #: cleared. The 落檔事實 W-B2／W-B2L are decided from (風控 D6).
+    entry_before_exit_on: date | None = None
 
 
 class SymbolState(BaseModel):
@@ -361,9 +366,14 @@ class Directive(BaseModel):
 class LabeledBatch(BaseModel):
     """A batch carrying the W-B2 label (ADR-0034 補充一 S-3; ADR-0035 補充四 2.2(c)).
 
-    ``entry_date`` is what W-B2L's ``{entry_date}`` states. Built by N-168 from
-    the batch label; until then every ``labeled_batches`` is empty, and
-    :func:`app.api.playbook._lines` is the only reader.
+    ``entry_date`` is what W-B2L's ``{entry_date}`` states. Built by the service
+    (:func:`app.playbook.service.labeled_batches_of`) from one list of batches --
+    ``book`` on ``/today``, the exit's C-2 open batches, ``list_batches`` while
+    unauthored -- and read only through the W-B2L rule
+    :func:`app.playbook.service.entry_before_exit_note`, which ``_lines`` and the
+    batch rows call. The two share counts come from that same list (補充四釐清七
+    E-29): W-B2LS states ``remaining_shares`` and checks an S2 line against
+    ``symbol_open_shares``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -371,6 +381,11 @@ class LabeledBatch(BaseModel):
     symbol: str
     batch_no: int
     entry_date: date
+    #: E-29: this batch's ``remaining_shares`` in that list.
+    remaining_shares: int
+    #: E-29: ``engine._symbol_average_cost(...)[1]`` of the symbol in that list --
+    #: the share count an S2 line computed on it carries.
+    symbol_open_shares: int
 
 
 class BatchSnapshot(BaseModel):
@@ -388,6 +403,16 @@ class BatchSnapshot(BaseModel):
     peak_close: Decimal | None
     #: (close - cost) / cost in percent; ``None`` when either side is unknown.
     unrealized_pct: Decimal | None
+    #: ADR-0034 補充一 S-3 第 3 點 (C-B8): :attr:`BatchState.entry_before_exit_on`
+    #: as stored, copied by the engine and nothing else.
+    entry_before_exit_on: date | None = None
+    #: W-B2 ``ENTRY_BEFORE_EXIT_LABEL`` while the batch is open and labeled;
+    #: rendered by the service, never by the engine.
+    entry_before_exit_label: str | None = None
+    #: W-B2L ``ENTRY_BEFORE_EXIT_NOTE``, same condition, right after W-B2 on the
+    #: batch row (same row, never folded, never a tooltip). Rendered by the service
+    #: through the one W-B2L rule :func:`app.playbook.service.entry_before_exit_note`.
+    entry_before_exit_note: str | None = None
 
 
 class FastMarketState(BaseModel):
@@ -705,6 +730,13 @@ class EmergencyExitResult(BaseModel):
     mode_reason: str
     #: ADR-0035 補充四 2.2(c): the batches W-B2／W-B2L label; N-168 fills it.
     labeled_batches: tuple[LabeledBatch, ...] = ()
+    #: ADR-0034 C-B4 (補充一 S-3 第 6 點), additive: the unsettled pending buys read
+    #: under this exit's write lock, one per K1, by 預定執行日, symbol, batch_no --
+    #: W-B1 類 (the book may still fill them). Never mixed into ``directives`` or
+    #: ``pending_directives`` (VETO-2).
+    entry_before_exit_directives: list[Directive] = Field(default_factory=list)
+    #: The same, G1 擋下類 (their batch has left ``planned``; W-B1b).
+    entry_before_exit_blocked_directives: list[Directive] = Field(default_factory=list)
 
 
 class RuleChangeReceipt(BaseModel):
