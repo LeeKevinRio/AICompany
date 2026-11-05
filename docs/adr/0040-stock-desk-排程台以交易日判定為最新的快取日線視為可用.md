@@ -1,11 +1,13 @@
 # ADR-0040：stock-desk 排程台把「資料層判定已含最新交易日」的快取日線視為可用（R6 重新解讀；限定範圍豁免 N172-C3、C-B11）
 
 - 狀態：proposed（CEO 書面核可本文後改為 accepted）
-- 日期：2026-11-05
+- 日期：2026-11-05（同日第一次修訂：併入 [風控-0040] C-1～C-10 與 N-168 合併後的時序，見文末「修訂紀錄」）
 - 決策者：
-  - tech-architect（草案）
+  - tech-architect（草案、第一次修訂）
   - CEO #108（2026-11-05）：核可方向 (乙)，條件依風控 [風控-1105] B-5 選項 1。本文轉 accepted 另需 CEO 書面核可（見「待決」）
-  - risk-compliance-officer：R6 重新解讀的條件；N190-I、B-2、B-4 逐字定稿
+  - risk-compliance-officer：
+    - R6 重新解讀的條件；N190-I、B-2、B-4 逐字定稿；
+    - 2026-11-05 對本文 CONDITIONAL APPROVE（[風控-0040]）：C-1～C-4 為轉 accepted 前必須併入的條件（本版已併入）；C-5 三句、A-5(a) 通知、上線後更新通知逐字定稿。
 - 適用範圍：僅 product/stock-desk。程式路徑相對於 `apps/stock-desk/backend/`。
 - 與既有 ADR 的關係：
   - 限定範圍豁免 ADR-0035 N172-C3 與 ADR-0034 C-B11，範圍見 Decision 12。
@@ -17,10 +19,14 @@
   - [TA-1105] `2026-11-05-N190修正方向評估-tech-architect.md`
   - [風控-1104] `2026-11-04-N190重裁-風控.md`（N190-I 逐字）
   - [風控-1105] `2026-11-05-N177修復與N190字面裁示-風控.md`（B-1～B-5）
+  - [風控-0040] `2026-11-05-ADR0040與補充五修正一審查-風控.md`（C-1～C-10、A-1～A-9；C-5 三句與兩則 CEO 通知逐字）
+  - [風控-N168] `2026-11-05-N168終審-風控.md`（T3 回審觸發條件）
   - [M1] `2026-11-05-ADR0035補充五修正一-tech-architect.md`（M1-3）
   - 實測腳本：`/tmp/claude-0/-home-user-AICompany/3f76d891-50d3-55e1-b39d-925b8a90241a/scratchpad/n190/test_n190.py`、`test_n190_sched.py`。這是 session 暫存檔，不是永久檔，QB-7 要求移植進 repo。
-- 程式位置：worktree bf03a9c 的快照，請以內容定位。全部是讀碼判定，未執行。
-- 字面規則：本檔只寫識別名，逐字以風控定稿為準，只放在 `wording.py`。
+- 程式位置：worktree bf03a9c 的快照。N-168 已於 2026-11-05 以 9253032 合入 product，行號可能位移，請以內容定位。全部是讀碼判定，未執行。
+- 字面規則：本檔只寫識別名，不抄字面。
+  - 產品內字面逐字以風控定稿為準，只放在 `wording.py`。
+  - 給 CEO 的通知由 coordinator 從風控原檔逐字轉送，不進 repo 程式。
 
 ## Context（背景）
 
@@ -49,7 +55,7 @@
 4. **`is_within_ttl` 的語意**（讀碼確認）：`CACHED_STALE` 只從三處回傳，三處都只在 `judge()` 判為 `HAS_LATEST_SESSION` 時才給 `is_within_ttl=True`：
    - layer 0（data/service.py:848-852）；在 S3-1 改判為 REFETCH 的情況下，不會走到這裡；
    - 全部來源失敗後的降級（:996-1013）；
-   - cache-only（:471-486；playbook 不使用）。
+   - cache-only（:471-486，`get_cached_bars`；playbook 不使用：`load_bars`／`load_market_benchmark` 走 `get_daily_bars`）。
    R-8 分支一律給 False（:789-795、:830-836）。live rung 一律為 None。`judge()` 的 `HAS_LATEST_SESSION` 等價於 `max(bar.date) >= expected_session(policy, requested_end, now)`（freshness.py:184）。
 5. **限制**：
    - ADR-0005：:324 否決第五個 `DataStatus`；I-3 規定揭露只能往悲觀方向，快取結果維持 `CACHED_STALE`。
@@ -98,6 +104,16 @@
 | B-2（`INDEX_DATA_GAP_NOTE` 併入 (甲)） | **保留，收窄；另寫 M1 記號** | Decision 9 第 3 點 |
 | B-1 三句 | **移除，不實作** | Decision 10 |
 
+### 五、release 閘門的落實方式（[風控-0040] C-3）
+
+| 方案 | 結論 |
+|---|---|
+| **(r1) P-A、P-B 在同一個 PR 內分組 commit，以 merge commit 或 squash 合入 product** | **採用**（與 r2 擇一） |
+| **(r2) P-A、P-B 先各自合進 N-190 整合分支，再由整合分支一次 merge 進 product** | **採用**（與 r1 擇一） |
+| (r3) P-A 先合進 product，P-A 本身帶 B-1 三句，P-B 落地時移除 | 只當例外 |
+| (r4) P-A 先合進 product、不帶 B-1（原 QB-14） | 否決。product 上會出現違反 Decision 11 的可部署 commit |
+| 以 rebase-and-merge 逐筆合入 | 否決。P-A 的 commit 會單獨出現在 product 的 first-parent 上，等同 r4 |
+
 ## Decision（決策）
 
 1. **可用判定（R6 的 ADR-0040 解讀）**：一份 snapshot（`MarketSnapshot` 或 `IndexSnapshot`）可以產生可執行指令，若且唯若：
@@ -110,10 +126,15 @@
    - ②：(c) 的 ttl；
    - ③：(a)；
    - ④：與 ② 是資料層的同一個判定（Context 4），以 (d1) 實作，並由 QB-4 的契約測試釘住「② ⇒ ④」。
+
+   **ttl 為 None 的路徑（[風控-0040] C-4）**：正式路徑上，送進 `is_usable` 的 `cached_stale` snapshot 必須帶非 None 的 `is_within_ttl`。
+   - 為 None 時，判定仍是不可用（悲觀方向）。
+   - 但缺漏句的「依鐵律⑤」歸因會再次成為誤歸因，也就是 N-190 靜默回來。
+   - 由 QB-4(c)(d) 釘住。
 2. **位置與簽名**：
    - 唯一的定義是 `app/playbook/engine.py` 的 `is_usable(status: str, source: str, *, is_within_ttl: bool | None) -> bool`。keyword 必填、沒有預設值，所以呼叫點漏傳會直接報錯。
    - 原常數 `USABLE_DATA_STATUSES` 可以改名為 live 集合，engine.py:55-57 錯誤的前提註解要改寫。
-   - 呼叫點共 7 個，都只加 `is_within_ttl=<snapshot>.is_within_ttl`：
+   - 呼叫點共 7 個，都只加 `is_within_ttl=<snapshot>.is_within_ttl`（行號以 bf03a9c 為準，合入 9253032 後依內容定位）：
      - engine.py:239（S3 未實現）、:263（M1）、:322（快市）、:1128（`index_usable`）、:1197（S/P／R）；
      - service.py:583（`same_day_warnings`）、:1272（rebalance）。
    - 不收 market、clock、旗標或 `RuleParams`。
@@ -129,11 +150,11 @@
      - 排程日 `index_gap_defer` 不成立，R 不因指數順延。
    - `disclosed_status` 不變：TTL 內的快取仍然是 `cached_stale`，不升級成 backup（ADR-0005 I-3）。
    - 指數 ttl False 時（S1′-c）照舊不可用，M1 沿用前一狀態。
-5. **其他呼叫點同步適用**：
+5. **其他呼叫點同步適用**（[風控-0040] A-7 APPROVE）：
    - S3 組合未實現（engine.py:239）；
-   - rebalance（service.py:1272）：TTL 內的快取不再造成 `insufficient_data`；
+   - rebalance（service.py:1272）：TTL 內的快取不再造成 `insufficient_data`。公式不改，但 TOTAL_DEPLOY 的重算行為會改變（以前因快取而不算的日子，現在會算）。CEO 對本文的書面核可必須明文涵蓋這一點。
    - `same_day_warnings`（service.py:583）。
-   這三處用同一個 `is_usable`，不得另立例外。
+   這三處用同一個 `is_usable`，不得另立例外。[風控-1105] B-3「S3 若會產生 sell 列，PR 停下來送風控」維持。
 6. **US ladder**：
    - 判定式與市場無關，`is_within_ttl` 由資料層依各市場的 policy 判定。
    - 本 ADR 只核定 TW（`PLAYBOOK_MARKET == "TW"`，service.py:86），以守門測試釘住。
@@ -156,13 +177,24 @@
    - P-3：來源失敗（R-8）。預期交易日晚於 D，而且最近一次提問失敗，ttl 為 False。
    - P-4：稍早可用，本次 unavailable（快取被 ADR-0024 拒收，或列被刪）。這時沒有 snapshot，也沒有 data_date，(甲) 無從比對，保留原句，列為殘留 R-3。
    - 同一個請求內的 P-1、P-2，由 (i) 消除。
-9. **(甲) 的收窄規格**（取代 N190-C8、C9 的觸發部分；其餘不變）：
+9. **(甲) 的收窄規格**（取代 N190-C8、C9 的觸發部分；N190-C9「整句移除；稍早有指令列時 A 句照常出現」保留；其餘不變）：
    1. 記號表：新表（表名由 dev-lead 定），欄位為 `kind`、`subject`、`execution_date`、`data_date`、`created_at`。
       - 不設 UNIQUE、不設 PK 索引，避開 N172-C9 的疑義。
       - 在 `commit_evaluation` 的同一個 `BEGIN IMMEDIATE` 內，以「不存在才 INSERT」寫入；同一個鎖內先讀出「本次寫入前就已存在」的記號，經 `EvaluationCommit` 的加法欄位帶出。
       - `commit_evaluation` 加 keyword 參數 `marks=()`。
       - 持鎖期間零 I/O（ADR-0033 C-3）。不 DELETE。
-   2. `kind="SP"`：該檔在 `book` 內有 batch，而且用同一個 `is_usable` 判為可用時寫入 (symbol, `evaluation.execution_date`, `snapshot.data_date`)。
+   2. `kind="SP"`（[風控-0040] C-2）：只在 engine 該次**確實評估了這檔的 S/P** 時，寫入 (symbol, `evaluation.execution_date`, `snapshot.data_date`)。
+      - 判定由 service 內的純函式 `sp_evaluated(symbol_batches, snapshot)` 做。三個條件同時成立才為真：
+        - snapshot 存在；
+        - 用同一個 `is_usable` 判為可用；
+        - 該檔至少一個 batch 滿足 engine 的 S/P 批次閘門：`status == "open"`、`cost is not None`、`remaining_shares > 0`。
+      - 這個閘門和 engine.py:420（`_evaluate_batch_exits`）同義，也和 S2 用的 `_symbol_average_cost`（engine.py:213）是同一個判斷條件。暫停、黑名單只影響 R（engine.py:1254），不影響 S/P。
+      - `symbol_batches` 必須是同一次交給 engine 的那一份 batch 列表。
+      - 結果：
+        - 只有 planned 批次、沒有持股，或只有 cost 為 NULL 的 open 批次時，沒有 SP 記號；
+        - 未持有的標的沒有 SP 記號，保留原 `DATA_GAP_NOTE`；有 A 句時照常加 A 句（N-172a 解讀點 (c)）；
+        - cost 為 NULL 的 open 批次會讓 engine.py:1203 判為持有、渲染 HOLDING 句，但因為沒有記號，HOLDING 句保留原句。
+      - 等價性由 QB-12 的表格測試釘住。
    3. `kind="M1"`：只在 `index is not None`、`is_usable(index…)` 為真、`index.monthly_line is not None` 三者都成立時，寫入 ("^TWII", execution_date, `index.data_date`)。
       - 判定由 service 內的純函式 `m1_evaluated(index)` 做，並以表格測試證明它與 `_defense_transition` 的三個分支等價。
       - 不能用 `fast_market_measured_on` 推斷，原因有兩個：
@@ -173,32 +205,41 @@
       - `is_within_ttl is not True`；
       - `source != DEMO_SOURCE`；
       - 存在 (kind, subject, execution_date, 本次 `snapshot.data_date`) 相同的既存記號。
-      不成立時保留原句。
-   5. SP 照 [風控-1105] B-4 的規則：
-      - logged 中沒有該 symbol 屬於 `SETTLED_SINCE_RULE_IDS` 的 sell 列時，B-4 句取代 HOLDING 句的位置；
-      - 順序：有 A 句時是變體 → A → B；只有 B 句時是變體 → B；
-      - `if not orders and not decisions: continue` 不得讓 (甲) 被跳過；
-      - 有 S/P sell 列時，保留 HOLDING 句加 A 句。
+      不成立時保留原句（之後依 Decision 16 第 1 點，由 C-5 變體接手）。
+   5. SP 的句子組合（[風控-1105] B-4；[風控-0040] C-1）。下面的「S/P sell 列」指 logged 中該 symbol、rule_id 屬於 `SETTLED_SINCE_RULE_IDS` 的 sell 列：
+      - 記號存在、**沒有** S/P sell 列：B-4 句取代 HOLDING 句的位置。順序：有 A 句時是 B-4 → A → B；只有 B 句時是 B-4 → B。
+      - 記號存在、**有** S/P sell 列：**HOLDING 句不渲染**（N190-C9），A 句照常出現，B 句接在 A 之後；不渲染 B-4。
+      - 記號不存在：保留原 HOLDING 句。
+      - `if not orders and not decisions: continue` 不得讓 (甲) 被跳過。
+      - 句子的定位與替換用結構化欄位，不比對字串（QB-11）。
    6. M1 照 [風控-1105] B-2：只取代 `INDEX_DATA_GAP_NOTE` 的 status 分支，不取代 insufficient_data 分支。`FAST_MARKET_CARRIED_NOTE` 保留；`INDEX_DATA_GAP_DEFER_NOTE` 照現行過濾。
    7. 授權：本 ADR 授權 `GET /today` 新增記號寫入，補充 ADR-0039「GET /today 不新增寫入」這條限制（該限制原本只約束 ADR-0039 自己的範圍），也補充 ADR-0035 `commit_evaluation` 鎖內的內容。記號寫入不影響 K1、K2。
-10. **B-1 移除與走不到的證明**：
+10. **B-1 移除與走不到的證明**（[風控-0040] A-1 APPROVE）：
     - B-1 的觸發條件是 `cached_stale` ∧ `is_within_ttl is True` ∧ 來源屬可用集合。依 Decision 1，這三項合起來就是 `is_usable` 為真。
     - engine 只在 `not is_usable` 時才產生 `DATA_GAP_NOTE`／`DATA_GAP_HOLDING_NOTE`（engine.py:1197-1207）與 `INDEX_DATA_GAP_NOTE` 的 status 分支（:263-266）。
     - 兩個條件互斥，所以 B-1 要替換的原句不會出現，B-1 走不到。
     - 因此三句都不實作；QB-13 用性質測試釘住這個互斥。
     - 這一點成立的前提是 Decision 11 的 release 閘門。
-11. **交付單位與 release 閘門**：
+11. **交付單位與 release 閘門**（[風控-0040] C-3）：
     - P-A：(i) ＋ N190-I ＋ (甲)（SP、M1 記號）＋ B-2 ＋ B-4。
     - P-B：(乙)（Decision 1～6）。
-    - 兩者必須在同一個 release。**P-B 不得單獨上線**，因為它會新增 P-1 的不實句。
-    - P-A 若單獨上線，必須帶 B-1 三句（恢復 [風控-1105] B-1 的時程），並在 P-B 落地時移除。
-    - 分支從最新的 product 開，**不得併入 N-168**。
+    - **不變式**：product 的 first-parent 歷史上，不得存在「含 P-A、不含 P-B、也不含 B-1 三句」的 commit。
+    - **合入方式**：P-A 與 P-B 以**同一次 merge** 進 product，二選一：
+      - (r1) 同一個 PR 內分組 commit（P-A 在前、P-B 在後），以 merge commit 或 squash 合入；
+      - (r2) 先各自合進 N-190 整合分支，再由整合分支一次 merge 進 product。
+      - 兩種都**不得**用 rebase-and-merge。
+    - **例外**：P-A 必須先合時，P-A 本身要帶 B-1 三句（恢復 [風控-1105] B-1 的時程）；P-B 的 PR 移除這三句。
+    - **回滾**：
+      - 不得只回滾 P-B 而保留 P-A，除非同一個回滾 commit 補回 B-1 三句；
+      - P-A 與 P-B 一起回滾時，另受 Decision 14 第 4 點約束。
+    - devops-sre 把不變式、合入方式、回滾規則列入 release-flow。
 12. **對 accepted ADR 的豁免與補充清單**：
 
 | ADR／條文 | 性質 | 內容 |
 |---|---|---|
 | ADR-0035 N172-C3（engine.py 零 diff），以及 Decision 3、Consequences「engine 不改」 | **豁免（限定範圍）** | 只限 engine.py 內 `is_usable` 的定義（含上方常數與註解），以及 5 個呼叫點新增的引數。其餘一行都不准改（QB-1） |
 | ADR-0034 C-B11（R、S、P 的 engine 邏輯不改） | **豁免（限定範圍）** | 同上。規則本身零改動；只有資料可用閘門改變，結果是被評估的情況變多 |
+| CEO #108「只限 `is_usable` 與 snapshot／`LoadedSeries` 的欄位」 | **範圍延伸（待 CEO 書面明文核可）** | `services/index.py` 的 `LoadedBenchmark` 加同一個欄位（QB-2 釘住）；service.py 的 `same_day_warnings`、rebalance 兩個呼叫點一併適用。風控判為可接受的延伸（[風控-0040] A-8），但只有 CEO 能正式延伸 |
 | ADR-0035 Decision 4、5，補充二（A、B 句），補充五 | 補充 | (甲) 變體的位置與順序依 Decision 9；`EvaluationCommit` 與 `commit_evaluation` 加法擴充 |
 | ADR-0035 N172-C9 | 補充（無衝突） | 記號表不設 UNIQUE |
 | ADR-0039 Decision 3、「GET /today 不新增寫入」 | 補充 | (i) 把 `run.loaded` 的沿用擴大到評估；記號寫入的授權 |
@@ -212,15 +253,21 @@
 | ADR-0036（保留中） | 不涉入 | N-189(a) 解除遮蔽之後，K3／N-176 的必要性提高，交 ADR-0036 |
 
 13. **時序**：
-    - N-168：分支已完成，待驗收與合併。N-190（P-A、P-B）另開獨立分支，不併入 N-168。
-      - 誰先就緒誰先合。後合的一方 merge 最新 product（不 rebase），跑完整 CI 與 seam golden，由 qa-reviewer 審 merge commit 裡的衝突解法。
+    - **N-168：已於 2026-11-05 以 9253032 合入 product，狀態 done。** 原本「誰先就緒誰先合」的問題已經定案：N-168 先合，N-190 是後合的一方。
+      - N-190 分支（或 (r2) 的整合分支）若從 9253032 之前的 product 開出，合入 product 前必須 merge 最新的 product（不 rebase），跑完整 CI 與 seam golden，由 qa-reviewer 審 merge commit 裡的衝突解法。
       - 衝突熱點：`evaluate_today` 的載入與回傳區塊、`same_day_warnings`、`wording.py`、`tests/golden/seam/approved/`、settlement warnings、`models.py`、`store.py` 的 `commit_evaluation`。
-      - N-168 若對 engine.py 有任何 diff，PR 停下來送 TA（違反 C-B11）。
-    - 整體順序：N-190（P-A ＋ P-B，同一個 release）→ N-177a → 第三包（N-188 ＋ N-189 的 D1、D2 ＋ W-B2LS 回審 ＋ B-3 的 EMERGENCY 反方向缺口），第三包緊接在 N-177 之後。第三包要等 N-168 合併。
-    - **N-177a**：
-      - (乙) 會讓被預載的持有標的再度每天重發 S2，也讓黑名單起算日跟著往後推（A-5）。[風控-1105] A-1 的內部通知已經涵蓋這個現象，必須在 N-190 部署前送達 CEO。
-      - 建議 N-177a 在偵測結果出來後，與 N-190 同一個 release，或緊接其後。不以 N-177a 卡住 N-190，因為不上 N-190，這些標的連 S1 停損都不會評估。
-      - [風控-1105] A-2 條件一的位置「緊接 N-190 第一包之後」，改讀為「緊接 N-190 這個 release 之後」，送風控確認。
+      - QB-1 的 `<base>` 是 N-190 最後一次 merge 進來的 product commit，所以 N-168 的改動不計入 QB-1。
+      - 事後查核（取代原「N-168 若對 engine.py 有 diff 就停下」）：qa-reviewer 在 N-190 PR 審查時，確認 `git diff 9253032^1 9253032 -- app/playbook/engine.py` 為空。不為空時送 TA 判斷是否違反 C-B11。
+      - N-190 必須在 N-168 之後的**下一個** release 上線。否則觸發 [風控-N168] T3(a)，W-B3「會照常評估」送回風控。
+    - 整體順序：N-190（P-A ＋ P-B，同一次 merge、同一個 release）→ N-177a → 第三包。
+      - 第三包內容：N-188 ＋ N-189 的 D1、D2 ＋ W-B2LS 回審 ＋ B-3 的 EMERGENCY 反方向缺口。
+      - 第三包緊接在 N-177 之後；它原本的前提「N-168 合併」已經滿足。
+    - **N-177a**（[風控-0040] A-3 APPROVE 位置改讀）：
+      - (乙) 會讓被預載的持有標的再度每天重發 S2，也讓黑名單起算日跟著往後推（A-5）。[風控-1105] A-1 的內部通知已經涵蓋這個現象。
+      - **A-1 送達是 N-190 部署的必要條件**：coordinator 必須書面確認 A-1 通知已送達 CEO，並附送達日期。
+      - [風控-1105] A-2 條件一的位置改讀為「緊接 N-190 這個 release 之後」，風控已確認。「緊接」的定義：N-190 release 之後的**下一個** release 必須含 N-177a，中間不得夾其他功能 release（hotfix 除外）。
+      - N-177a 若沒趕上，(c) 依 A-2 條件一回復為 required；同時觸發 [風控-N168] T3(b)。偵測閘門不變。
+      - 不以 N-177a 卡住 N-190，因為不上 N-190，這些標的連 S1 停損都不會評估。
     - **N-188、N-189 的頻率**（風控 [風控-1105] B-5 第 2 點已書面接受，期限是第三包緊接在 N-177 之後）：
       - N-188：依 [M1] M1-3，note 出現的總次數會從接近 0 回到正常水準，單一列被觸發的機率不變。前提是 (i) 已上線，本 ADR 讓這個前提成立。日後若回退 (i)，觸發會增加（方向是多觸發，字面仍為真），必須回 TA 與風控。
       - N-189(a)：遮蔽解除。每一次休市或開盤價晚到的事件，約多一張同批賣單；由 N190-I（較早列）與 D1（第三包）揭露。
@@ -237,10 +284,41 @@
     - 改寫 `data_status`／`source`，或新增 `DataStatus`；
     - playbook 引用 `judge`、`expected_session`、`latest_completed_session`、`Verdict`、`policy_for` 或 `*_POLICY`；
     - engine.py 在 QB-1 以外的 diff；`app/data/**` 的任何 diff；
-    - `Directive` 或 store 指令表新增欄位（不在 CEO 的範圍內）；
-    - 實作 B-1 三句（Decision 11 的例外除外）；
+    - `Directive` 或 store 指令表新增欄位（不在 CEO 的範圍內；另案見 Decision 16 第 4 點）；
+    - 實作 B-1 三句（Decision 11 的例外與回滾規則除外）；
     - (d4) 的額外條件；
-    - 併入 N-168。
+    - P-A 不帶 B-1 而先於 P-B 進入 product 的 first-parent；以 rebase-and-merge 合入 P-A／P-B；只回滾 P-B 而不補回 B-1；
+    - 以 rebase 吸收最新 product（含 N-168），只能用 merge；
+    - 前端從 `data_status` 或「這列存在」推斷 ttl，或把傳給徽章的 `isWithinTtl` 寫死為 true（[風控-0040] A-6 R-5 條件）。
+16. **後續單與期限（[風控-0040] C-5～C-10；都不擋 N-190 的 P-A／P-B，各自只受期限約束；編號對照見「修訂紀錄」）**：
+    1. **C-5：缺漏句的 ttl 變體**（dev-lead，期限第三包）。
+       - 問題：同一頁上，可執行的指令列記 `cached_stale`，另一檔的缺漏句又寫「資料狀態為 cached_stale…依鐵律⑤當日不產生指令」。組合起來有誤導空間。
+       - 字面：三個變體句，識別名暫稱 C5-持有、C5-未持有、C5-指數。逐字從 [風控-0040] A-6「C-5 三句逐字定稿」抽取，用程式比對。常數名由 dev-lead 定，只放在 `wording.py`。
+       - 觸發（全部用結構化欄位）：本次 snapshot 存在，`status == "cached_stale"`、`is_within_ttl is not True`、`source != DEMO_SOURCE`，而且 (甲)／B-4／B-2 都不成立。
+       - 優先順序：(甲) > C-5 變體 > 原句。
+       - 實作：在 service 整句替換、佔原句的位置，不比對字串。
+         - C5-持有取代 `DATA_GAP_HOLDING_NOTE`，C5-未持有取代 `DATA_GAP_NOTE`；兩者的選擇用和 engine.py:1203-1205 同義的持有判斷條件（純函式加表格測試）。
+         - C5-指數只取代 `INDEX_DATA_GAP_NOTE` 的 status 分支，不取代 `insufficient_data` 分支。
+         - 只限 `/today` 的評估路徑；原常數不改；engine 零 diff。
+       - 三句不含 B-1 獨有片段，不影響 QB-13。
+    2. **C-6：R-4 的產品內防護**（TA 提案，P1，期限第三包）。
+       - 內容：「評估時點已晚於預定執行日開盤」的結構化揭露。
+       - 開盤時刻（VS-2）尚未查證，而且 playbook 不得自行計算交易日（Decision 15），所以判定來源要由資料層提供，屬 ADR-0009 修訂。
+       - 字面由 creative-lead 擬稿，送風控定稿。可能涉及 CEO 範圍時，先送 CEO。
+    3. **C-7：R-2 的資料層小單**（data-engineer，P2）：
+       - 任何改動 `is_within_ttl` 語意的 diff，都要回 TA 與風控；
+       - QB-4(c) 的契約測試不得刪除或弱化。
+    4. **C-8：R-5 帳冊徽章**（風控暫行接受）：
+       - 前端約束由 QB-21 釘住，常態適用，不限於 N-190；
+       - 讓 `Directive` 帶 ttl 屬於 Decision 15 禁止的範圍，另開單送 CEO 核可範圍，期限隨 C-5。
+    5. **C-9：R-10 修正**（TA 提案，期限第三包）。
+       - 問題：P-1 落在排程日、M1 記號已存在時，新寫入的順延列帶 `INDEX_GAP_DEFER_NOTE`，「M1 今日未評估」為假，而且會累計順延次數。
+       - 修正若涉及 engine 或 K2，要另出 ADR 送 CEO 核可。
+    6. **C-10：部署前後的 CEO 通知**（coordinator）：
+       - 部署前必須完成：
+         - A-1 送達的書面確認，附送達日期（Decision 13）；
+         - R-4 操作事實通知送達 CEO。識別名「A5a 操作事實通知」，逐字見 [風控-0040] A-5(a)。
+       - 部署完成當日：送出「上線後更新通知」，取代先前的 B-5 範圍補充句。識別名「上線後更新通知」，逐字見 [風控-0040]「送 CEO 時要一併說明的事項」第 9 點。
 
 ## Consequences（後果）
 
@@ -253,73 +331,88 @@
 
 **代價**
 - engine 有限定範圍的 diff；`GET /today` 新增記號寫入；指令列上的 `cached_stale` 變多。
+- rebalance 的 TOTAL_DEPLOY 重算行為改變（Decision 5）。
+- release 必須是 P-A 與 P-B 同一次 merge；分開上線要多做 B-1 三句再移除。
+- 部署多了兩個前置條件（A-1 送達確認、A5a 通知），部署當日要送更新通知。
 
-**殘留**（給風控與 CEO 看）
+**殘留**（風控已逐項裁示，[風控-0040]）
 - R-1：ttl False 的窗口（P-1～P-3）仍然不產生指令。這符合 R6，因為資料確實少一個交易日。同一 data_date 的重新載入由 (甲) 揭露。
   - 「live 回應但沒有最新 bar 判為 fresh 可用，同一批 bar 從快取讀出卻不可用」的不對稱是既有的資料層語意，另案處理：devops-sre 查證 TWSE 公布時間與排程 15:10 的時點；data-engineer 與 TA 評估 cutoff 之後的冷卻（屬 ADR-0009 修訂）。
-- R-2：降級路徑的 `is_within_ttl` 判定不含 S3-1 的正向證據（data/service.py:1004-1013）。13:30～15:00 之間，若來源全部失敗，而同市場已有別的序列取得 T 的 bar，T-1 的快取仍會判為 ttl True 而可用。頻率低。建議另開資料層小單（ADR-0009 修訂），由風控決定是否列為阻擋項。
-- R-3：P-4（稍早可用、本次 unavailable）保留原句。
+- R-2：降級路徑的 `is_within_ttl` 判定不含 S3-1 的正向證據（data/service.py:1004-1013）。13:30～15:00 之間，若來源全部失敗，而同市場已有別的序列取得 T 的 bar，T-1 的快取仍會判為 ttl True 而可用。
+  - 風控：**不列為阻擋項**。理由是頻率低、`data_reason` 會寫入指令列並在帳冊顯示，錯誤方向和 first-touch 相同。
+  - 條件見 Decision 16 第 3 點（C-7）。
+- R-3：P-4（稍早可用、本次 unavailable）保留原句。風控接受。
 - R-4：在早上、或 13:30～15:00 評估時，依據的是 T-1 的資料，預定執行日是當天。若開盤後才看到，帳冊仍會以當天開盤價判定成交（R10）。
   - 這是既有的 first-touch 行為（ADR-0035「週三早上窗口」）。(乙) 讓它不再取決於誰先載入：前一晚沒開 `/today` 的日子都會出現。
-  - 要風控裁示是否另立揭露或防護。
-- R-5：指令帳冊的徽章（DirectiveLedger.tsx:69-76）傳入的 `isWithinTtl=null`，所以 `cached_stale` 列會顯示「快取資料…可能未含最近交易日」。方向是悲觀、有保留的說法，但列在 TTL 內時略有誤導。
-  - 要讓 `Directive` 帶上 ttl，必須擴大範圍，另案處理。
-  - 列入風控回審。
-- R-6：qa 新現象 5（M1 defer 列顯示 fresh）是設計如此：指令列的狀態記的是該檔自己的 snapshot。
-- R-7：TW 的公布時間未查證，過度宣稱窗口最多 30 分鐘（ADR-0009 D-2）。行為與 first-touch 相同。
+  - 風控：不擋 N-190，但會造成帳冊與實際持股持久分歧，不能只記為殘留。處理分兩段：
+    - 部署前送 CEO 的 A5a 操作事實通知（C-10）；
+    - 產品內防護（C-6）。
+- R-5：指令帳冊的徽章（DirectiveLedger.tsx:69-76）傳入的 `isWithinTtl=null`，所以 `cached_stale` 列會顯示「快取資料…可能未含最近交易日」。
+  - 風控：**暫行接受**，字面為真。
+  - 條件見 Decision 16 第 4 點（C-8）與 QB-21。
+- R-6：qa 新現象 5（M1 defer 列顯示 fresh）是設計如此：指令列的狀態記的是該檔自己的 snapshot。風控接受。
+- R-7：TW 的公布時間未查證，過度宣稱窗口最多 30 分鐘（ADR-0009 D-2）。行為與 first-touch 相同。風控接受。
 - R-8：歷史不修復。N-190 期間未評估的停損日、累計過高的 R 順延次數、被跳過的批次都會保留。#106 的回溯檢查只列出這些項目；任何修復都由 CEO 逐項裁示，不做自動遷移。
-- R-9：頭段是 demo、尾段是真實資料的混源序列，來源判定只看最後一列。這與現行 fresh 增量抓取的情況相同，不是新問題。
-- R-10：P-1 落在排程日時，同一預定執行日稍早沒有 R 列的標的，仍可能被記一次 M1 順延（K2 的既有語意）。次數比現況少。
-- R-11：記號表不刪資料，量級是「標的數 × 交易日」，很小。
+- R-9：頭段是 demo、尾段是真實資料的混源序列，來源判定只看最後一列。這與現行 fresh 增量抓取的情況相同，不是新問題。風控接受。
+- R-10：P-1 落在排程日、M1 記號已存在時，同一預定執行日稍早沒有 R 列的標的，仍可能被記一次 M1 順延（K2 的既有語意）。
+  - 新寫入的順延列帶 `INDEX_GAP_DEFER_NOTE`，「M1 今日未評估」在這種情況下為假，而且會計次。
+  - 風控：**暫行接受**（方向是少買、次數比現況少）。修正見 Decision 16 第 5 點（C-9）。
+- R-11：記號表不刪資料，量級是「標的數 × 交易日」，很小。風控接受。
 - R-12：N-188、N-189、N-177 的 S2 重發、黑名單起算日，都隨著遮蔽解除而恢復發生，期限依 Decision 13。
+- R-13：C-5 上線前（第三包），同頁「可執行列記 `cached_stale`」與「缺漏句寫 cached_stale 不產生指令」並存，組合起來有誤導空間；每句單獨看都為真。
 
 ## 待決
 
-- **CEO 書面核可**：見回報的「需要 CEO 書面核可的事項」。
+- **CEO 書面核可**：見回報的「CEO 書面核可的最終事項清單」。
+  - 核可範圍是本文加上 [風控-0040] 的條件。
+  - 必須明文列出 Decision 12 的「範圍延伸」一列，以及 Decision 5 的 TOTAL_DEPLOY 重算行為。
 - **風控**：
-  - 確認 B-1 移除（Decision 10、11）；
-  - 確認 (甲) 收窄的條件（Decision 9）；
-  - 確認 N-177a 的位置改讀（Decision 13）；
-  - R-2 是否列為阻擋項；
-  - R-4 的裁示；
-  - 回審 R-5 的帳冊徽章、`DATA_GAP_*`（現在只剩過時、unavailable、demo 三種情況，「依鐵律⑤」的歸因是否已恢復為真）、A 句、`FAST_MARKET_*`；
-  - 確認 rebalance 與 S3 同步適用（Decision 5）。
-- **dev-lead**：依附錄 A、附錄 B 實作。
+  - C-1～C-4 已併入，依 [風控-0040] 不必再審一輪；
+  - 只需確認「修訂紀錄」中 C-6～C-10 的編號對照。
+- **coordinator**：
+  - Decision 16 第 6 點（C-10）的兩項部署前條件與部署當日通知；
+  - 開單：C-5（dev-lead）、C-6（TA）、C-7（data-engineer）、C-8 的 Directive ttl 範圍（送 CEO）、C-9（TA）。
+- **dev-lead**：依附錄 A、附錄 B 實作；合入方式依 Decision 11。
 - **data-engineer**：另案處理三件事：
   - `interface.py:36` 過時的 docstring；
   - `LoadedBenchmark.meta()` 沒有輸出 ttl（屬 ADR-0005 D-2 的缺口）；
-  - R-2。
-- **devops-sre**：查證 TWSE 公布時間；把 Decision 11 的 release 閘門與 Decision 14 第 4 點列入 release-flow。
+  - R-2（C-7，P2）。
+- **devops-sre**：
+  - 查證 TWSE 公布時間與開盤時刻（VS-2，C-6 的前提）；
+  - 把 Decision 11 的不變式、合入方式、回滾規則，以及 Decision 14 第 4 點列入 release-flow。
 
 ## 附錄 A：N190-QB 約束清單（qa-reviewer 列為 BLOCKING）
 
-本清單取代 N190-C1、C11；保留 N190-C2～C7、C10。N190-C8、C9 依 QB-11 修訂。
+本清單取代 N190-C1、C11；保留 N190-C2～C7、C10。N190-C8、C9 的觸發部分依 QB-11 修訂；N190-C9「整句移除；稍早有指令列時 A 句照常出現」保留。
 
-- QB-1：`git diff <base>..HEAD -- app/playbook/engine.py` 只能出現兩類 hunk：
+- QB-1：`git diff <base>..HEAD -- app/playbook/engine.py` 只能出現兩類 hunk，其餘一律 BLOCKING：
   - `is_usable` 的定義、其上方的常數與註解；
   - engine.py:239、:263、:322、:1128、:1197 這 5 處各加一個 `is_within_ttl=` 引數。
-  其餘一律 BLOCKING。
+  - `<base>` 是 N-190 最後一次 merge 進來的 product commit（Decision 13）。
 - QB-2：
   - `app/data/**`、`app/services/market.py`、`app/api/**`、前端：零 diff；
   - `app/services/index.py`：只有 `LoadedBenchmark` 加欄位，以及 `load_market_benchmark` 兩個回傳分支的照抄；
   - `meta()` 零 diff。
-- QB-3：`is_usable` 窮舉真值表測試，涵蓋：
+- QB-3：`is_usable` 窮舉真值表測試，結果必須符合 Decision 1。涵蓋：
   - status：fresh、backup、cached_stale、unavailable、未知值；
   - source：twse、yfinance、`demo_synthetic`、none；
   - ttl：True、False、None。
-  結果必須符合 Decision 1。
-- QB-4：單一實作，三部分：
+- QB-4：單一實作，四部分：
   - (a) AST 或 grep 檢查：`app/playbook/**` 不引用 Decision 15 列出的符號；
   - (b) `is_within_ttl` 只從載入結果原樣傳遞；
-  - (c) 資料層契約測試（只加測試）：用真實的 `MarketDataService` 與固定時鐘，涵蓋 layer 0、降級兩條路徑；凡是 `CACHED_STALE` 且 `is_within_ttl` 為 True，`max(bar.date) >= expected_session(policy_for(market), requested_end=end, now=clock())` 都成立。
+  - (c) 資料層契約測試（只加測試）：
+    - 用真實的 `MarketDataService` 與固定時鐘；
+    - 涵蓋 Context 4 的**三個出口**：layer 0、降級、cache-only（`get_cached_bars`）；
+    - 斷言：凡是 `CACHED_STALE` 且 `is_within_ttl` 為 True，`max(bar.date) >= expected_session(policy_for(market), requested_end=end, now=clock())` 都成立。
+    - 這組測試不得刪除或弱化（C-7）。
+  - (d) T1～T14 的整合情境另外斷言：凡是送進 `is_usable` 的 `cached_stale` snapshot，`is_within_ttl is not None`。以測試內的 spy 包住 `is_usable` 記錄引數，不改產品碼（C-4）。
 - QB-5：不得有旗標。`is_usable` 的簽名逐字等於 Decision 2；不讀環境變數、設定或 `RuleParams`。
 - QB-6：TTL 情境下，指令列的 `data_status == "cached_stale"`、`source` 照抄；`DataStatus` 仍然只有 4 個值。
-- QB-7：附錄 B 的測試都在 repo 的 `tests/` 內，並且使用：
+- QB-7：附錄 B 的測試都在 repo 的 `tests/` 內，不得用 `FakePriceService`。必須使用：
   - `tests/market_service_helpers.py` 的 `equity_service`、`index_service`；
   - tmp `PriceBarCache`、固定時鐘；
   - 真實的 `PlaybookService`、`PlaybookStore`；
   - 真實的 `scheduler.refresh_market_data`，以及 `get_bars`／`get_signals` 函式。
-  不得用 `FakePriceService`。
 - QB-8：三種負向情況（過時、unavailable、demo）每一種都有具名測試，個股與指數各一條：
   - 結果：不產生指令；`rules_fully_evaluated` 為 False；照舊產生缺漏句；指數沿用前一狀態，排程日順延。
   - 過時要涵蓋 CHECKED_RECENTLY 與 R-8 兩種。
@@ -329,25 +422,47 @@
 - QB-11：(甲) 依 Decision 9：
   - 寫入與讀取在同一個鎖內；
   - 渲染條件逐項用結構化欄位判定；
+  - 句子組合依 Decision 9 第 5 點：記號存在且有 S/P sell 列時，HOLDING 句不出現、B-4 不出現、A 句出現、B 句在 A 之後；
   - 不得比對字串；
   - 記號表沒有 UNIQUE。
-- QB-12：`m1_evaluated` 與 `_defense_transition` 三個分支等價的表格測試。
+- QB-12：兩組等價表格測試：
+  - `m1_evaluated` 與 `_defense_transition` 三個分支等價；
+  - `sp_evaluated` 與 engine 的 S/P 閘門等價（engine.py:420 與 :213 的判斷條件），表格至少涵蓋：
+    - 只有 planned；
+    - open 但 `remaining_shares == 0`；
+    - open 但 cost 為 NULL；
+    - 合格 open 批次加暫停；
+    - 合格 open 批次加黑名單；
+    - S2 觸發；
+    - 不可用 snapshot；
+    - snapshot 為 None。
 - QB-13：
-  - `wording.py` 中，B-1 獨有的片段「資料層判定這份快取仍在有效期間內」出現 0 次（Decision 11 的例外除外）；
+  - `wording.py` 中，B-1 獨有的片段「資料層判定這份快取仍在有效期間內」出現 0 次（Decision 11 的例外與回滾規則除外）；
   - 性質測試：任意 `cached_stale`＋ttl True＋非 demo 的 snapshot，engine 都不會為它產生 `DATA_GAP_*` 或 `INDEX_DATA_GAP_NOTE` 的 status 分支。
-- QB-14：PR 說明寫明 Decision 11 的 release 閘門；P-B 的 PR 必須以 P-A 已合併為前提。
+- QB-14：release 閘門（Decision 11）：
+  - PR 說明寫明 Decision 11 的不變式與所採的合入方式（r1 或 r2）；
+  - 合入後，product first-parent 上 P-A 與 P-B 由同一個 merge commit（或同一個 squash commit）帶入；不得用 rebase-and-merge；
+  - 若走例外（P-A 先合）：P-A 的 diff 內 `wording.py` 含 B-1 三句，P-B 的 diff 移除；
+  - 任何只 revert P-B 的回滾 PR，必須在同一個 commit 補回 B-1 三句，否則 BLOCKING。
 - QB-15：`PLAYBOOK_MARKET == "TW"` 守門測試。
 - QB-16：N190-C10。seam golden 的差異依 approved 逐條登記，不得重錄。
-- QB-17：既有的 `cached_stale` 測試斷言不改，因為 ttl 為 None 時仍然不可用：
+- QB-17：既有的 `cached_stale` 測試斷言不改，因為 ttl 為 None 時仍然不可用。若必須改，PR 停下來送 TA。涵蓋：
   - `test_playbook_acceptance.py` :506、:553、:567、:797、:804；
   - `test_playbook_same_day_anchors.py` :242-321；
   - ADR-0039 的 T15。
-  若必須改，PR 停下來送 TA。
 - QB-18：Decision 14 的四條；`_settle_pending` 零 diff。
 - QB-19：rebalance：TTL 內的快取可以計算；ttl False 時為 `insufficient_data`。
-- QB-20：分支不含 N-168 的 commit；合併規則依 Decision 13。
+- QB-20：N-168 合併後的整合（Decision 13）：
+  - N-190 分支（或整合分支）合入 product 前，已 merge 含 9253032 的最新 product，方式是 merge、不得 rebase；
+  - merge commit 的衝突解法經 qa-reviewer 審過；
+  - merge 之後重跑完整 CI 與 seam golden，全綠；
+  - 確認 `git diff 9253032^1 9253032 -- app/playbook/engine.py` 為空，不為空時送 TA。
+- QB-21：前端徽章 ttl（C-8；常態適用，任何改到前端的 PR 都要檢查）：
+  - 傳給 `DataMetaStatusBadge` 的 `isWithinTtl`，在指令帳冊路徑上不得為 `true` 字面；
+  - 不得由 `data_status` 或「這列存在」推導；
+  - 在 Directive 帶 ttl 的另案經 CEO 核可前，維持 `null`。
 
-## 附錄 B：測試清單（全部依 QB-7）
+## 附錄 B：測試清單（全部依 QB-7；T1～T14 另加 QB-4(d) 的斷言）
 
 - T1：[qa-1104] 的 (a)，到期列：評估沿用結算序列，batch 2 的 S1 照常評估。
 - T2：(b2) 對照組重新載入：可用；沒有缺漏句，也沒有 A 句；`directives` 與第一次相同。
@@ -358,7 +473,7 @@
 - T4：S1（15:10 預載）：16:00 產生 S1，`data_status` 為 cached_stale。這是翻轉 N190-C11「scheduler 預熱」的具名測試，改為斷言通過。
 - T5：S1-neg：不變。
 - T6：S1′-a：不可用（負向，過時）。
-  - 若早上已評估過，出 B-4；沒有則保留原句。
+  - 若早上已評估過這檔的 S/P（`sp_evaluated` 為真），出 B-4；沒有則保留原句。
 - T7：S1′-b：17:00 可用。
 - T8：S1′-c：15:30 的行為釘住；16:15 的指數 ttl False，M1 不評估（負向）。
 - T9：S2-bars、S2-signals：可用；M1 照常評估。
@@ -366,9 +481,36 @@
 - T11：S3-def：防守開啟，S1 用 0.93 門檻。
 - T12：S3-sector 的短、長、cold 三種窗口。
 - T13：P-1：早上可用、15:30 ttl False、同一 data_date：
-  - 出 B-4；
-  - 有 S/P sell 列時出 HOLDING ＋ A；
+  - 沒有 S/P sell 列時出 B-4；
+  - 有 S/P sell 列時，HOLDING 句不出現、B-4 不出現、A 句出現、B 句接在 A 之後；
+  - 只有 planned 批次、或只有 cost 為 NULL 的 open 批次時，沒有 SP 記號，保留原句；
   - 指數出 B-2；
   - 沒有記號時保留原句。
 - T14：P-4：unavailable 時保留原句。
-- T15：QB-3、QB-4、QB-8、QB-12、QB-13、QB-15、QB-19 的對應測試。
+- T15：QB-3、QB-4（含 (c) 的三個出口與 (d) 的 spy 斷言）、QB-8、QB-12、QB-13、QB-14、QB-15、QB-19、QB-21 的對應測試或檢查。
+
+## 修訂紀錄
+
+### 2026-11-05 第一次修訂（tech-architect；依 [風控-0040] 與 N-168 合併）
+
+C-1～C-5 的編號出自 [風控-0040] 本文。C-6～C-10 在 [風控-0040] 中只以「C-5～C-10」的範圍寫法出現，沒有逐項命名；下表的 C-6～C-10 對照是 TA 依該檔「下一步」第 1 點的開單順序**暫定**，待風控確認。條文依內容撰寫，編號若需調整，不影響條文。
+
+| 項目 | 內容（出處） | 改動位置 |
+|---|---|---|
+| C-1 | HOLDING 句的一致性：記號存在且有 S/P sell 列時，HOLDING 不渲染（N190-C9），A 照常，B 接在 A 後（A-2） | Decision 9 前言、第 5 點；QB-11；T13；附錄 A 前言 |
+| C-2 | SP 記號條件改為 engine 確實評估了 S/P，以 `sp_evaluated` 判定並做等價表格測試（A-2） | Decision 9 第 2 點；QB-12；T6；T13 |
+| C-3 | release 閘門漏洞：同一次 merge、P-A 先合須帶 B-1、不得只回滾 P-B（A-1） | Options 五；Decision 11；Decision 15；QB-13；QB-14 |
+| C-4 | ttl 為 None 的路徑：契約測試涵蓋三個出口；整合情境斷言 ttl 不為 None（A-6） | Context 4（補 cache-only 出口名稱）；Decision 1 末段；QB-4(c)(d)；附錄 B 前言、T15 |
+| C-5 | 缺漏句 ttl 變體三句，期限第三包（A-6「C-5 三句逐字定稿」） | Decision 16 第 1 點；殘留 R-13 |
+| C-6（暫定） | R-4 產品內防護，TA 提案，P1，期限第三包（A-5(b)） | Decision 16 第 2 點；殘留 R-4；待決 |
+| C-7（暫定） | R-2 不列阻擋項；資料層小單 P2；改 ttl 語意回 TA 與風控；QB-4(c) 不得弱化（A-4） | Decision 16 第 3 點；QB-4(c)；殘留 R-2 |
+| C-8（暫定） | R-5 暫行接受；前端不得推斷或寫死 ttl；Directive 帶 ttl 另案送 CEO（A-6） | Decision 15；Decision 16 第 4 點；QB-21；殘留 R-5 |
+| C-9（暫定） | R-10 暫行接受，TA 修正提案期限第三包（「其他殘留」） | Decision 16 第 5 點；殘留 R-10 |
+| C-10（暫定） | A5a 操作事實通知部署前送達；A-1 送達書面確認；部署當日更新通知（A-5(a)、A-3、「送 CEO 事項」第 5、9 點） | Decision 13；Decision 16 第 6 點；Consequences 代價 |
+| 其他：A-3 | N-177a「緊接」的定義、沒趕上時回復 required | Decision 13 |
+| 其他：A-7 | rebalance 的 TOTAL_DEPLOY 重算行為要 CEO 明文涵蓋；B-3 的 S3 sell 停下規則維持 | Decision 5；Consequences 代價 |
+| 其他：A-8 | 範圍延伸要 CEO 明文核可 | Decision 12 新增一列；待決 |
+| 其他：殘留裁示 | R-3、R-6、R-7、R-9、R-11 接受；R-8 由 CEO；R-12 依期限 | Consequences 殘留 |
+| 其他：N-168 已合併 | N-168 已於 2026-11-05 以 9253032 合入 product；N-190 改為後合方，用 merge 吸收；QB-1 base 定義；事後查核 engine diff；[風控-N168] T3(a)(b) | 標頭「程式位置」；Decision 2；Decision 13；Decision 15；QB-1；QB-20 |
+
+不在本 ADR 的範圍：[風控-0040] 的 M-1、M-2 屬 ADR-0035 補充五修正一，另行併入該文件。
