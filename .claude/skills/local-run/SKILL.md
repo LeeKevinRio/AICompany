@@ -36,6 +36,9 @@ bash apps/stock-desk/dev-up.sh
 開「stock-desk backend」視窗 → 等後端 `/health` 通過 → 再開「stock-desk scheduler」「stock-desk frontend」視窗
 (訊息為英文,避免中文在 cmd 被讀錯)→ 前端有回應後印出 backend / scheduler / frontend 三行狀態並自動開瀏覽器。
 
+- **自我更新防護(N-191)**:`git pull` 可能改寫 `dev-up.bat` 自己,而 cmd.exe 依位元組位移邊讀邊執行,會從新檔中段接著讀而報錯。
+  所以 bat 啟動時先複製自己到 `%TEMP%\stock-desk-dev-up.bat` 再執行副本(原路徑用環境變數 `DEVUP_SRC_DIR` 傳入,取代 `%~dp0`);
+  `dev-up.sh` 則把主體包進 `main()` 並以 `main "$@"; exit $?` 結尾。改這兩支腳本時**不要**把主流程搬出防護區塊,也不要在結尾之後加指令。
 - scheduler 啟動指令為 `uv run python -m app.scheduler`,與後端同在 `backend/` 目錄(共用同一顆主 DB `./data/stock-desk.db`),
   環境變數(`STOCK_DESK_DB_PATH` 等)由父程序繼承。
 - **`.env` 載入(本次起)**:若 `apps\stock-desk\.env` 存在,bat 會設定 `UV_ENV_FILE` 指向它(等同 `uv run --env-file`),

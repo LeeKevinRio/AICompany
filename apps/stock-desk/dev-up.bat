@@ -2,17 +2,34 @@
 setlocal enabledelayedexpansion
 title stock-desk dev-up
 
+REM Self-update guard: cmd.exe reads a batch file by byte offset while it runs, so the git pull step
+REM below (which may rewrite this very file) would make it continue from the middle of the new version.
+REM Fix: run a private copy from %TEMP%; the original on disk is then free to be replaced.
+REM DEVUP_SRC_DIR carries the original folder (with trailing backslash) into the copy, replacing %~dp0.
+REM The whole IF block is parsed before it runs, so the parent never reads the changed file again.
+if not defined DEVUP_SRC_DIR (
+  set "DEVUP_SRC_DIR=%~dp0"
+  copy /y "%~f0" "%TEMP%\stock-desk-dev-up.bat" >nul
+  if errorlevel 1 (
+    echo [ERROR] Cannot copy dev-up.bat to the temp folder - please send a screenshot to Claude
+    pause
+    exit /b 1
+  )
+  call "%TEMP%\stock-desk-dev-up.bat"
+  exit /b !errorlevel!
+)
+
 REM One-click launcher for stock-desk on Windows: git pull + backend + scheduler + frontend.
-REM Double-click it or run it from any directory; all paths derive from %~dp0.
+REM Double-click it or run it from any directory; all paths derive from the script folder (%~dp0, kept in DEVUP_SRC_DIR).
 REM Backend and scheduler MUST start from the backend directory so SQLite resolves to the same ./data/stock-desk.db.
 REM Order: backend, then wait for /health, then scheduler, then frontend, then status lines.
 REM Secrets: apps\stock-desk\.env (git-ignored, optional) is loaded for the backend and the scheduler via UV_ENV_FILE.
 REM Variables already set in Windows win over the file. No .env file is fine: the stack starts without those settings.
 
 set "TARGET_BRANCH=product/stock-desk"
-set "BACKEND_DIR=%~dp0backend"
-set "FRONTEND_DIR=%~dp0frontend"
-for %%I in ("%~dp0..\..") do set "REPO_ROOT=%%~fI"
+set "BACKEND_DIR=%DEVUP_SRC_DIR%backend"
+set "FRONTEND_DIR=%DEVUP_SRC_DIR%frontend"
+for %%I in ("%DEVUP_SRC_DIR%..\..") do set "REPO_ROOT=%%~fI"
 
 REM ---- 1. prerequisites ----
 set "MISSING="
@@ -74,7 +91,7 @@ if not "!CUR_BRANCH!"=="%TARGET_BRANCH%" (
 REM ---- 2b. optional .env for the backend and the scheduler ----
 REM uv reads UV_ENV_FILE (the same option as "uv run --env-file"); the start commands below inherit it.
 REM uv fails on a missing file, so point it at the file only when it exists. Only the path is echoed, never the contents.
-set "ENV_FILE=%~dp0.env"
+set "ENV_FILE=%DEVUP_SRC_DIR%.env"
 if exist "%ENV_FILE%" (
   set "UV_ENV_FILE=!ENV_FILE!"
   echo.
