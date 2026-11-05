@@ -1,4 +1,6 @@
 import { DataMetaStatusBadge } from "../components/DataMetaStatusBadge";
+import { withNoBreakDates } from "../lib/noBreakDates";
+import { collectRowNotes } from "../lib/rowNotes";
 import type { PlaybookDirectiveLine } from "../lib/types";
 import {
   directiveStatusLabel,
@@ -24,6 +26,7 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
   const { directive } = item;
   const parts = splitDirectiveLine(item.line);
   const visual = ruleFamilyVisual(directive.rule_id);
+  const notes = collectRowNotes(item);
 
   return (
     <li
@@ -49,6 +52,21 @@ function DirectiveRow({ item }: { item: PlaybookDirectiveLine }) {
         <span>{parts[5]}</span>
         <span>{parts[6]}</span>
       </div>
+
+      {/*
+        N-168 same-row notes (art spec 2026-11-04 1.3): right after `line`'s last
+        segment, before `limit_note`. Separate <p>s, never spliced into `line`.
+        No container at all when there is nothing to show.
+      */}
+      {notes.length > 0 && (
+        <div data-testid="row-notes" className="mt-2 space-y-1">
+          {notes.map((note, i) => (
+            <p key={i} className="break-words text-sm text-neutral-300">
+              {withNoBreakDates(note)}
+            </p>
+          ))}
+        </div>
+      )}
 
       {/*
         排程台頁面審查 (suggested)：限價帶說明句（含「停損不設滑價帶」與市價單

@@ -616,11 +616,13 @@ describe("ISO date no-break span (VP-14, spec r1 section 7 exception)", () => {
     expect(nowrapViolations(bad('<p><span class="whitespace-nowrap">2026-11-11</span></p>'))).toHaveLength(0);
   });
 
-  it("the source keeps exactly one nowrap token, on the date span", () => {
-    const src = readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8");
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    expect(code.match(/nowrap/g)).toHaveLength(1);
-    expect(code).toContain('className="whitespace-nowrap"');
+  it("the shared helper keeps exactly one nowrap token, on the date span; the block has none", () => {
+    const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const helper = strip(readFileSync(new URL("../../lib/noBreakDates.tsx", import.meta.url), "utf8"));
+    expect(helper.match(/nowrap/g)).toHaveLength(1);
+    expect(helper).toContain('className="whitespace-nowrap"');
+    const block = strip(readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8"));
+    expect(block).not.toContain("nowrap");
   });
 });
 
@@ -628,9 +630,9 @@ describe("independence (C7, C19, C22, T27)", () => {
   const src = readFileSync(new URL("../PendingExitBlock.tsx", import.meta.url), "utf8");
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-  it("imports only the today query, format and types; no receipt store, mutation or other hook", () => {
+  it("imports only the today query, format, the date helper and types; no receipt store, mutation or other hook", () => {
     const imports = [...code.matchAll(/from "([^"]+)"/g)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(["../lib/format", "../lib/queries", "../lib/types", "react"]);
+    expect(imports.sort()).toEqual(["../lib/format", "../lib/noBreakDates", "../lib/queries", "../lib/types", "react"]);
     expect(code).toContain("usePlaybookToday(true)");
     expect(code).not.toMatch(/useEmergencyExit|useMutation|useQueryClient|ReceiptStore|exitReceipt|useConfirmPlaybookRules|setQueryData/);
   });
