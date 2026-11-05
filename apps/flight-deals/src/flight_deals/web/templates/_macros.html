@@ -23,9 +23,9 @@
 {% endif %}
 {%- endmacro %}
 
-{#- FD-15: belongs to the price, so it stays outside the flight block. -#}
-{% macro overhead_bin(label) -%}
-{% if label %}<div class="overhead-bin"><span class="badge">{{ label }}</span></div>{% endif %}
+{#- FD-15, FD-16: these belong to the price, so they stay outside the flight block. -#}
+{% macro price_labels(split, overhead) -%}
+{% if split or overhead %}<div class="price-labels">{% if split %}<span class="badge">{{ split }}</span>{% endif %}{% if overhead %}<span class="badge">{{ overhead }}</span>{% endif %}</div>{% endif %}
 {%- endmacro %}
 
 {#- Price summary line (C-40): one adult shows the party summary, several people show the

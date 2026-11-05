@@ -21,7 +21,7 @@ from flight_deals.domain.messages import (
     OVERHEAD_BIN_LABELS,
     OVERHEAD_BIN_NOTE,
     PRICE_SOURCE_NOTE,
-    SPLIT_TICKET_NOTE,
+    ROUND_TRIP_NOTE,
     WEB_TEXTS,
     command_watch_message,
     daily_digest_message,
@@ -190,7 +190,7 @@ def test_migration_keeps_rows_and_backs_up(tmp_path: Path, monkeypatch: pytest.M
     with database.connect() as conn:
         before = conn.execute("SELECT COUNT(*) FROM comparison_cell").fetchone()[0]
     monkeypatch.setattr(db_module, "available_migrations", ORIGINAL_MIGRATIONS)
-    assert database.migrate() == 10
+    assert database.migrate() == 11
     with database.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM comparison_cell").fetchone()[0] == before
         rows = conn.execute("SELECT overhead_bin_excluded FROM comparison_cell").fetchall()
@@ -236,13 +236,13 @@ def test_list_label_is_outside_the_flight_block(harness: Harness) -> None:
     page = get(harness, "/")
     assert page.count_visible(ROUND_TRIP) == 1
     assert ONE_WAY not in page.html
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
     flights = page.main.find_all(None, "flight")
     assert flights
     for flight in flights:
         assert ROUND_TRIP not in flight.text()
         assert ROUND_TRIP not in flight.find_all(None, "sr-only")[0].text()
-    assert OVERHEAD_BIN_NOTE in page.main.find_all(None, "page-notes")[0].text()
+    assert ROUND_TRIP_NOTE in page.main.find_all(None, "page-notes")[0].text()
 
 
 def test_one_way_uses_its_own_wording(harness: Harness) -> None:
@@ -259,8 +259,8 @@ def test_detail_main_card_and_unmarked_row(harness: Harness) -> None:
     card = page.main.find_all("section", "price-card")[0]
     assert ROUND_TRIP in card.text()
     assert ROUND_TRIP not in card.find_all(None, "flight")[0].text()
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
-    assert page.count_in_details(OVERHEAD_BIN_NOTE) == 0
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    assert page.count_in_details(ROUND_TRIP_NOTE) == 0
 
 
 def test_note_appears_for_a_label_only_in_the_other_pairs_table(harness: Harness) -> None:
@@ -274,7 +274,7 @@ def test_note_appears_for_a_label_only_in_the_other_pairs_table(harness: Harness
     card = page.main.find_all("section", "price-card")[0]
     assert ROUND_TRIP not in card.text()  # the cheapest pair is not marked
     assert ROUND_TRIP in page.html
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
 
 
 def test_note_appears_for_an_other_currency_row(harness: Harness) -> None:
@@ -283,7 +283,7 @@ def test_note_appears_for_an_other_currency_row(harness: Harness) -> None:
     page = get(harness, f"/watches/{watch_id}")
     assert not page.main.find_all("section", "price-card")
     assert ROUND_TRIP in page.html
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
 
 
 def test_note_stays_when_only_departed_rows_are_marked(harness: Harness) -> None:
@@ -292,7 +292,7 @@ def test_note_stays_when_only_departed_rows_are_marked(harness: Harness) -> None
     page = get(harness, f"/watches/{watch_id}")
     assert DETAIL_ALL_DEPARTED in page.html
     assert not page.main.find_all("section", "price-card")
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
     assert page.count_in_details(ROUND_TRIP) >= 1  # only the folded records show it
 
 
@@ -305,7 +305,7 @@ def test_unmarked_old_and_no_price_pages_stay_silent(harness: Harness) -> None:
         html = get(harness, url).html
         assert OVERHEAD_BIN_NOTE not in html, url
         assert ROUND_TRIP not in html and ONE_WAY not in html, url
-        assert "含手提行李" not in html, url
+        assert "含手提行李" not in html.replace(ROUND_TRIP_NOTE, ""), url
 
 
 def test_exploration_calendar_top5_and_note(harness: Harness) -> None:
@@ -313,7 +313,7 @@ def test_exploration_calendar_top5_and_note(harness: Harness) -> None:
     service = harness.services.exploration
     exploration_id = _explored(harness, service)
     page = get(harness, f"/explorations/{exploration_id}")
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
     calendar = page.main.find_all("table", "calendar")[0]
     assert ROUND_TRIP in calendar.text()
     flights = calendar.find_all(None, "flight")
@@ -346,7 +346,7 @@ def test_exploration_note_stays_for_mismatched_cells(harness: Harness) -> None:
     exploration_id = _explored(harness, harness.services.exploration)
     page = get(harness, f"/explorations/{exploration_id}")
     assert RETURN_EXPLAIN not in page.html  # top5 is empty
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
 
 
 def test_top5_carries_the_order_note(harness: Harness) -> None:
@@ -373,7 +373,7 @@ def test_marked_comparison_shows_label_and_note(harness: Harness) -> None:
     harness.source.flight = MARKED
     comparison_id = compared(harness, ComparisonQueue(harness.services.comparison))
     page = get(harness, f"/comparisons/{comparison_id}")
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
     assert ROUND_TRIP in page.html
     flights = page.main.find_all(None, "flight")
     assert flights
@@ -406,10 +406,8 @@ def test_alert_label_follows_the_price_line_and_note_comes_last() -> None:
     assert lines[first + 1] == f"   {ROUND_TRIP}"
     assert lines[first + 2].startswith("   觸發原因")
     assert text.count(ROUND_TRIP) == 1
-    assert text.count(OVERHEAD_BIN_NOTE) == 1
-    assert text.endswith(
-        f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}\n{OVERHEAD_BIN_NOTE}"
-    )
+    assert OVERHEAD_BIN_NOTE not in text and text.count(ROUND_TRIP_NOTE) == 1
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{ROUND_TRIP_NOTE}")
 
 
 def test_alert_without_a_mark_is_unchanged() -> None:
@@ -431,7 +429,7 @@ def test_fully_marked_alert_at_the_item_limit_still_fits() -> None:
         dep_hour_to=22,
     )
     assert len(text) < MAX_MESSAGE_LENGTH
-    assert text.endswith(OVERHEAD_BIN_NOTE)
+    assert text.endswith(ROUND_TRIP_NOTE)
 
 
 def test_digest_has_no_label_or_note() -> None:
@@ -447,7 +445,7 @@ def test_digest_has_no_label_or_note() -> None:
 
 
 def test_wording_stays_within_the_ruling() -> None:
-    approved = [OVERHEAD_BIN_NOTE, ROUND_TRIP, ONE_WAY]
+    approved = [ROUND_TRIP_NOTE, OVERHEAD_BIN_NOTE, ROUND_TRIP, ONE_WAY]
     for phrase in BANNED_PHRASES:
         assert all(phrase not in text for text in approved), phrase
     for text in web_static_texts():
@@ -511,7 +509,7 @@ def test_mark_changes_neither_price_nor_trigger(harness: Harness) -> None:
 def test_marked_alert_carries_label_and_note(harness: Harness) -> None:
     marked_round_trip(harness)
     assert ROUND_TRIP in harness.notifier.sent[-1]
-    assert OVERHEAD_BIN_NOTE in harness.notifier.sent[-1]
+    assert ROUND_TRIP_NOTE in harness.notifier.sent[-1]
 
 
 # ---- risk re-review: /watch limits, real message wording, moved delta note -----------------------
@@ -532,7 +530,7 @@ def test_fully_marked_longest_watch_fits_with_every_note() -> None:
     text = command_watch_message(detail(longest))
     assert len(text) <= COMMAND_REPLY_MAX_CHARS
     assert text.count(ROUND_TRIP) == 3
-    assert text.endswith(f"{SPLIT_TICKET_NOTE}\n{OVERHEAD_BIN_NOTE}")
+    assert text.endswith(ROUND_TRIP_NOTE)
 
 
 def test_cut_watch_reply_keeps_the_note() -> None:
@@ -540,7 +538,7 @@ def test_cut_watch_reply_keeps_the_note() -> None:
     text = command_watch_message(detail(_marked_rows(booking_url=long_link)))
     assert len(text) <= COMMAND_REPLY_MAX_CHARS
     assert text.count(long_link) < 3  # rows were dropped
-    assert text.endswith(f"{SPLIT_TICKET_NOTE}\n{OVERHEAD_BIN_NOTE}")
+    assert text.endswith(ROUND_TRIP_NOTE)
 
 
 def test_real_telegram_output_stays_within_the_ruling() -> None:
@@ -551,7 +549,7 @@ def test_real_telegram_output_stays_within_the_ruling() -> None:
     ]
     for text in messages:
         leftover = text
-        for sentence in (OVERHEAD_BIN_NOTE, ROUND_TRIP, ONE_WAY):
+        for sentence in (ROUND_TRIP_NOTE, OVERHEAD_BIN_NOTE, ROUND_TRIP, ONE_WAY):
             leftover = leftover.replace(sentence, "")
         for phrase in (
             "含手提行李",

@@ -263,7 +263,7 @@ def test_migrated_records_read_as_all_weekdays(
 
 def test_new_db_gets_no_backup(tmp_path: Path) -> None:  # C-71
     database = Database(tmp_path / "fresh.db")
-    assert database.migrate() == 10  # FD-12 adds 0009, FD-15 adds 0010
+    assert database.migrate() == 11  # FD-12 adds 0009, FD-15 0010, FD-16 0011
     assert sorted(p.name for p in tmp_path.glob("*.db")) == ["fresh.db"]
 
 

@@ -30,7 +30,7 @@ from flight_deals.domain.messages import (
     BANNED_PHRASES,
     DISCLAIMER,
     PRICE_SOURCE_NOTE,
-    SPLIT_TICKET_NOTE,
+    ROUND_TRIP_NOTE,
     price_alert_message,
 )
 from flight_deals.domain.models import WatchSpec
@@ -483,7 +483,7 @@ def test_alert_carries_the_price_source_note() -> None:  # FD-13 risk ruling
         items=_items(1),
         links=[None],
     )
-    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{ROUND_TRIP_NOTE}")
     one_way = price_alert_message(
         watch_name="沖繩",
         origin="TPE",
@@ -493,7 +493,7 @@ def test_alert_carries_the_price_source_note() -> None:  # FD-13 risk ruling
         links=[None],
     )
     assert one_way.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}")
-    assert SPLIT_TICKET_NOTE not in one_way
+    assert ROUND_TRIP_NOTE not in one_way
 
 
 def test_alert_notes_survive_the_item_limit_and_long_links() -> None:  # FD-14 R4
@@ -512,4 +512,4 @@ def test_alert_notes_survive_the_item_limit_and_long_links() -> None:  # FD-14 R
         dep_hour_to=22,
     )
     assert len(text) < MAX_MESSAGE_LENGTH
-    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")
+    assert text.endswith(f"{DISCLAIMER}\n{PRICE_SOURCE_NOTE}\n{ROUND_TRIP_NOTE}")

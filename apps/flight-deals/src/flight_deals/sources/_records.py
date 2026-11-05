@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 from flight_deals.domain.currency import major_to_minor
-from flight_deals.domain.models import PriceKind, PriceQuote
+from flight_deals.domain.models import PriceKind, PriceQuote, SegmentRef
 
 
 class RecordFormatError(ValueError):
@@ -113,6 +113,19 @@ def _route_airports(segs: Sequence[Mapping[str, Any]]) -> str | None:
     return ",".join(codes)
 
 
+def _segment_refs(segs: Sequence[Mapping[str, Any]]) -> tuple[SegmentRef, ...]:
+    """What selecting this itinerary on Google's return page needs; () when incomplete."""
+    refs: list[SegmentRef] = []
+    for seg in segs:
+        origin, day = _text(seg, "from"), _text(seg, "depart_date")
+        destination = _text(seg, "to")
+        code, number = _text(seg, "code"), _text(seg, "number")
+        if not (origin and day and destination and code and number):
+            return ()
+        refs.append(SegmentRef(origin, day, destination, code, number))
+    return tuple(refs)
+
+
 def _segments(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     segs = record.get("flights")
     if not isinstance(segs, list):
@@ -149,6 +162,7 @@ def quotes_from_records(
             else None
         )
         arrive_time, arrive_day_offset = _arrival(segs, depart_date)
+        split = record.get("split_ticket")
         quotes.append(
             PriceQuote(
                 source=source,
@@ -169,6 +183,8 @@ def quotes_from_records(
                 arrive_day_offset=arrive_day_offset,
                 route_airports=_route_airports(segs),
                 overhead_bin_excluded=True if record.get("overhead_bin_excluded") is True else None,
+                split_ticket=split if split is True or split is False else None,
+                segment_refs=_segment_refs(segs),
             )
         )
     return quotes

@@ -17,6 +17,7 @@ from flight_deals.domain.models import (
     NotificationKind,
     PriceKind,
     PriceQuote,
+    ReturnLeg,
     Watch,
     WatchSpec,
     WatchStatus,
@@ -156,6 +157,31 @@ class ObservationRecord:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
+    # Return flight of this price (FD-16); only the cheapest of a round has one.
+    return_carrier: str | None = None
+    return_stops: int | None = None
+    return_depart_time: str | None = None
+    return_duration_minutes: int | None = None
+    return_flight_numbers: str | None = None
+    return_arrive_time: str | None = None
+    return_arrive_day_offset: int | None = None
+    return_route_airports: str | None = None
+
+    @property
+    def return_leg(self) -> ReturnLeg | None:
+        if not self.return_flight_numbers:
+            return None
+        return ReturnLeg(
+            carrier=self.return_carrier,
+            stops=self.return_stops,
+            depart_time=self.return_depart_time,
+            duration_minutes=self.return_duration_minutes,
+            flight_numbers=self.return_flight_numbers,
+            arrive_time=self.return_arrive_time,
+            arrive_day_offset=self.return_arrive_day_offset,
+            route_airports=self.return_route_airports,
+        )
 
 
 @dataclass(frozen=True)
@@ -284,6 +310,7 @@ class ExplorationCellRecord:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -311,6 +338,7 @@ class CellUpdate:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
 
 
 def _exploration(row: sqlite3.Row) -> ExplorationRecord:
@@ -380,6 +408,7 @@ def _cell(row: sqlite3.Row) -> ExplorationCellRecord:
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
         overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
+        split_ticket=True if row["split_ticket"] == 1 else None,
     )
 
 
@@ -428,6 +457,7 @@ class ComparisonCellRecord:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
 
 
 def _comparison(row: sqlite3.Row) -> ComparisonRecord:
@@ -486,6 +516,7 @@ def _comparison_cell(row: sqlite3.Row) -> ComparisonCellRecord:
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
         overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
+        split_ticket=True if row["split_ticket"] == 1 else None,
     )
 
 
@@ -558,6 +589,15 @@ def _observation(row: sqlite3.Row) -> ObservationRecord:
         arrive_day_offset=row["arrive_day_offset"],
         route_airports=row["route_airports"],
         overhead_bin_excluded=True if row["overhead_bin_excluded"] == 1 else None,
+        split_ticket=True if row["split_ticket"] == 1 else None,
+        return_carrier=row["return_carrier"],
+        return_stops=row["return_stops"],
+        return_depart_time=row["return_depart_time"],
+        return_duration_minutes=row["return_duration_minutes"],
+        return_flight_numbers=row["return_flight_numbers"],
+        return_arrive_time=row["return_arrive_time"],
+        return_arrive_day_offset=row["return_arrive_day_offset"],
+        return_route_airports=row["return_route_airports"],
     )
 
 
@@ -992,7 +1032,7 @@ class Repository:
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
                 " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
                 " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
-                " route_airports = ?, overhead_bin_excluded = ?"
+                " route_airports = ?, overhead_bin_excluded = ?, split_ticket = ?"
                 " WHERE exploration_id = ? AND depart_date = ? AND status = 'pending'",
                 (
                     update.status,
@@ -1015,6 +1055,7 @@ class Repository:
                     update.arrive_day_offset,
                     update.route_airports,
                     1 if update.overhead_bin_excluded is True else None,
+                    1 if update.split_ticket is True else None,
                     exploration_id,
                     depart.isoformat(),
                 ),
@@ -1209,7 +1250,7 @@ class Repository:
                 " currency = ?, carrier = ?, stops = ?, duration_minutes = ?,"
                 " depart_time = ?, as_of = ?, fetched_at = ?, error = ?,"
                 " flight_numbers = ?, arrive_time = ?, arrive_day_offset = ?,"
-                " route_airports = ?, overhead_bin_excluded = ?"
+                " route_airports = ?, overhead_bin_excluded = ?, split_ticket = ?"
                 " WHERE comparison_id = ? AND position = ? AND status = 'pending'",
                 (
                     update.status,
@@ -1232,6 +1273,7 @@ class Repository:
                     update.arrive_day_offset,
                     update.route_airports,
                     1 if update.overhead_bin_excluded is True else None,
+                    1 if update.split_ticket is True else None,
                     comparison_id,
                     position,
                 ),
@@ -1325,8 +1367,8 @@ class Repository:
                 " price_kind, depart_date, return_date, amount_minor, currency, as_of,"
                 " as_of_basis, fetched_at, carrier, stops, duration_minutes, depart_time,"
                 " flight_numbers, arrive_time, arrive_day_offset, route_airports,"
-                " overhead_bin_excluded)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " overhead_bin_excluded, split_ticket)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     scan_run_id,
                     watch_id,
@@ -1349,9 +1391,34 @@ class Repository:
                     quote.arrive_day_offset,
                     quote.route_airports,
                     1 if quote.overhead_bin_excluded is True else None,
+                    1 if quote.split_ticket is True else None,
                 ),
             )
             return int(cast(int, cur.lastrowid))
+
+    def set_observation_return_leg(
+        self, observation_id: int, scan_run_id: int, leg: ReturnLeg
+    ) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE price_observation SET return_carrier = ?, return_stops = ?,"
+                " return_depart_time = ?, return_duration_minutes = ?,"
+                " return_flight_numbers = ?, return_arrive_time = ?,"
+                " return_arrive_day_offset = ?, return_route_airports = ?"
+                " WHERE id = ? AND scan_run_id = ?",
+                (
+                    leg.carrier,
+                    leg.stops,
+                    leg.depart_time,
+                    leg.duration_minutes,
+                    leg.flight_numbers,
+                    leg.arrive_time,
+                    leg.arrive_day_offset,
+                    leg.route_airports,
+                    observation_id,
+                    scan_run_id,
+                ),
+            )
 
     def min_amount(
         self,

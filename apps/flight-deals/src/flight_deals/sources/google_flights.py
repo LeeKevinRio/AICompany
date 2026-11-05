@@ -10,6 +10,7 @@ blocked / error; an empty or unparseable answer is ``blocked``, never "no flight
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -18,9 +19,18 @@ from urllib.parse import urlencode
 
 from fast_flights import FlightQuery, Passengers, create_query, fetch_flights_html
 
-from flight_deals.domain.models import Cabin, FlightSearch, PriceKind, PriceQuote, QueryStatus
+from flight_deals.domain.models import (
+    Cabin,
+    FlightSearch,
+    PriceKind,
+    PriceQuote,
+    QueryStatus,
+    ReturnLeg,
+    SegmentRef,
+    quote_rank_key,
+)
 from flight_deals.domain.timeutil import utc_now
-from flight_deals.ports import Clock, ParseStats, SourceResult
+from flight_deals.ports import Clock, ParseStats, ReturnLegResult, SourceResult
 from flight_deals.redact import redact_truncate
 from flight_deals.sources._records import RecordFormatError, quotes_from_records
 from flight_deals.sources._support import (
@@ -37,6 +47,8 @@ from flight_deals.sources.google_payload import (
     extract_payload,
     parse_payload,
 )
+
+log = logging.getLogger(__name__)
 
 SOURCE_NAME = "google_flights"
 LANGUAGE = "zh-TW"
@@ -109,6 +121,58 @@ def build_query(search: FlightSearch) -> Any:
     )
 
 
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        out.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(out)
+
+
+def _string_field(number: int, value: bytes) -> bytes:
+    return _varint(number << 3 | 2) + _varint(len(value)) + value
+
+
+def selected_flight_bytes(refs: tuple[SegmentRef, ...]) -> bytes:
+    """FlightData field 4, one per segment. fast_flights' proto has no such field; it was
+    read from a browser URL (2026-11-04), so this is tied to its version like the rest."""
+    return b"".join(
+        _string_field(
+            4,
+            _string_field(1, ref.origin.encode())
+            + _string_field(2, ref.depart_date.encode())
+            + _string_field(3, ref.destination.encode())
+            + _string_field(5, ref.code.encode())
+            + _string_field(6, ref.number.encode()),
+        )
+        for ref in refs
+    )
+
+
+def build_return_query(search: FlightSearch, refs: tuple[SegmentRef, ...]) -> Any:
+    """The same query with the outbound flight selected: Google then lists return flights."""
+    query = build_query(search)
+    query.flight_data[0].MergeFromString(selected_flight_bytes(refs))
+    return query
+
+
+def fetch_return_page(search: FlightSearch, refs: tuple[SegmentRef, ...]) -> str:
+    html: str = fetch_flights_html(build_return_query(search, refs))
+    return html
+
+
+def ticket_mark_applies(search: FlightSearch) -> bool:
+    """The separate-tickets mark was only verified for one adult in economy, round trip."""
+    return (
+        search.pair.return_date is not None
+        and search.adults == 1
+        and search.children == 0
+        and search.cabin == "economy"
+    )
+
+
 class GoogleFlightsLinkBuilder:
     """``ports.BookingLinkBuilder``: exact Google Flights URL from the query's ``tfs``.
 
@@ -141,6 +205,7 @@ class GoogleFlightsSource:
         throttle: Throttle,
         cache: TTLCache[tuple[object, ...], SourceResult],
         fetch: FetchFn = fetch_live,
+        fetch_return: Callable[[FlightSearch, tuple[SegmentRef, ...]], str] = fetch_return_page,
         clock: Clock = utc_now,
         sleep: Callable[[float], None] = time.sleep,
         runner: TimeoutRunner | None = None,
@@ -151,6 +216,7 @@ class GoogleFlightsSource:
         self._throttle = throttle
         self._cache = cache
         self._fetch = fetch
+        self._fetch_return = fetch_return
         self._clock = clock
         self._sleep = sleep
         self._runner = runner
@@ -162,6 +228,73 @@ class GoogleFlightsSource:
     @property
     def price_kind(self) -> PriceKind:
         return "live"
+
+    @property
+    def source_name(self) -> str:
+        return SOURCE_NAME
+
+    def return_leg(self, search: FlightSearch, quote: PriceQuote) -> ReturnLegResult:
+        """One request, no retry and no cache; failures only hide the return flight.
+
+        Picks the cheapest return flight whose total equals ``quote`` and whose marks match
+        it, so the flight shown cannot contradict the labels on the price (FD-16 R4).
+        """
+        return_date = search.pair.return_date
+        if return_date is None or not quote.segment_refs or quote.split_ticket is None:
+            return ReturnLegResult("no_match")
+        self._throttle.wait()
+        fetched_at = self._clock()
+        try:
+            html = call_with_timeout(
+                lambda: self._fetch_return(search, quote.segment_refs),
+                self._timeout,
+                self._runner,
+            )
+            page = parse_payload(extract_payload(html))
+        except PayloadErrorStatus:
+            return ReturnLegResult("no_embedded", 1)
+        except PayloadFormatError:
+            return ReturnLegResult("blocked", 1)
+        except Exception as exc:  # any network or library failure while fetching
+            log.warning("return leg lookup failed: %s", type(exc).__name__)
+            return ReturnLegResult("error", 1)
+        if page.no_results:
+            return ReturnLegResult("no_embedded", 1)
+        try:
+            # A return flight's first segment leaves on the return date.
+            options = quotes_from_records(
+                page.records,
+                source=SOURCE_NAME,
+                price_kind="live",
+                currency=quote.currency,
+                depart_date=return_date,
+                return_date=return_date,
+                fetched_at=fetched_at,
+            )
+        except RecordFormatError:
+            return ReturnLegResult("blocked", 1)
+        matches = [
+            option
+            for option in options
+            if option.amount_minor == quote.amount_minor
+            and option.split_ticket is quote.split_ticket
+            and option.overhead_bin_excluded is quote.overhead_bin_excluded
+            and option.flight_numbers
+        ]
+        if not matches:
+            return ReturnLegResult("no_match", 1)
+        best = min(matches, key=quote_rank_key)
+        leg = ReturnLeg(
+            carrier=best.carrier,
+            stops=best.stops,
+            depart_time=best.depart_time,
+            duration_minutes=best.duration_minutes,
+            flight_numbers=best.flight_numbers,
+            arrive_time=best.arrive_time,
+            arrive_day_offset=best.arrive_day_offset,
+            route_airports=best.route_airports,
+        )
+        return ReturnLegResult("ok", 1, leg)
 
     def search(self, query: FlightSearch) -> SourceResult:
         key = query.cache_key()
@@ -266,4 +399,8 @@ class GoogleFlightsSource:
             return result("blocked", f"unexpected result format: {exc}", stats)
         if not quotes:
             return result("blocked", "no priced itineraries after conversion", stats)
+        if query.pair.return_date is None and any(q.split_ticket for q in quotes):
+            log.warning("one-way result carries a separate-tickets mark; ignored")
+        if not ticket_mark_applies(query):
+            quotes = [replace(q, split_ticket=None) for q in quotes]
         return result("ok", None, stats, tuple(quotes))

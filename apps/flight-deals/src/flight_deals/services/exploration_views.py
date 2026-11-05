@@ -45,6 +45,7 @@ from flight_deals.domain.messages import (
     month_label,
     month_range_label,
     overhead_bin_label,
+    split_ticket_label,
 )
 from flight_deals.domain.models import CABINS, DatePair, ExplorationSpec, search_for
 from flight_deals.domain.timeutil import format_taipei, taipei_date, weekday_label
@@ -454,6 +455,9 @@ class ExplorationViewService:
             "flight": flight_view(cell, spec.trip_type) if priced else None,
             "overhead_bin_label": (
                 overhead_bin_label(cell.overhead_bin_excluded, spec.trip_type) if priced else None
+            ),
+            "split_ticket_label": (
+                split_ticket_label(cell.split_ticket, spec.trip_type) if priced else None
             ),
             "fetched_label": (
                 fetched_label(cell.fetched_at) if priced and cell.fetched_at else None

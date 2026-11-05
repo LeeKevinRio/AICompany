@@ -101,7 +101,12 @@ def test_arrive_time_check_copies_0003_depart_time() -> None:  # C-95
 
 def test_earlier_migrations_are_unchanged() -> None:  # C-95
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names == [*EARLIER, "0009_flight_details.sql", "0010_overhead_bin_excluded.sql"]
+    assert names == [
+        *EARLIER,
+        "0009_flight_details.sql",
+        "0010_overhead_bin_excluded.sql",
+        "0011_split_ticket_and_return_leg.sql",
+    ]
     for name, digest in EARLIER.items():
         data = (MIGRATIONS / name).read_bytes().replace(b"\r\n", b"\n")
         assert hashlib.sha256(data).hexdigest() == digest, name
@@ -146,9 +151,9 @@ def test_v8_data_survives_new_columns_are_null_and_backup_is_taken(
         )
 
 
-def test_new_db_is_v10_without_backup(tmp_path: Path) -> None:  # C-95, FD-15 adds 0010
+def test_new_db_is_v11_without_backup(tmp_path: Path) -> None:  # C-95, FD-15 adds 0010
     database = Database(tmp_path / "fresh.db")
-    assert database.migrate() == 10
+    assert database.migrate() == 11
     assert sorted(p.name for p in tmp_path.glob("*.db")) == ["fresh.db"]
 
 

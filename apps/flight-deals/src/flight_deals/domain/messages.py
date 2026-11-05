@@ -45,12 +45,18 @@ DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票
 PRICE_SOURCE_NOTE = (
     "價格取自 Google 預設排序的結果；「最低價格」分頁的數字可能較低，但兩者都可能與訂票頁金額不同。"
 )
-# FD-14 risk ruling: visible wherever a round-trip price leads to booking. The system
-# cannot tell whether a given price is split, so never assert it either way.
-SPLIT_TICKET_NOTE = "來回可能要分開買多張機票，退改與行李規定可能不同；是否分開請看訂票頁。"
+# FD-16 risk ruling: always visible with round-trip prices, whatever the marks say. The
+# same flights can have several prices and ways to buy, and a missing mark proves nothing.
+ROUND_TRIP_NOTE = (
+    "標示來自 Google，沒有標示不代表單張機票或含手提行李。"
+    "同班可能有多種價格與買法，是否分開請看訂票頁各選項；"
+    "分開時退改與行李規定可能不同，以航空公司或訂票網站為準。"
+)
+# Says what Google marks on this price, not how it must be bought (FD-16 risk ruling).
+SPLIT_TICKET_LABEL = "Google 標示此價要分開買"
 # FD-15 risk ruling: these belong to the price, never next to an airline. On a round trip
-# Google's mark covers the cheapest outbound + return pair, while only the outbound
-# flight is shown. Never name which leg or airline, and an unmarked price claims nothing.
+# Google's mark covers the cheapest outbound + return pair, and most rows list only the
+# outbound flight. Never name which leg or airline, and an unmarked price claims nothing.
 OVERHEAD_BIN_LABELS: dict[str, str] = {
     "round_trip": "此價至少一程不含手提行李",
     "one_way": "票價不含手提行李",
@@ -60,6 +66,10 @@ OVERHEAD_BIN_NOTE = "手提行李標示來自 Google；沒有標示不代表含�
 
 def overhead_bin_label(excluded: bool | None, trip_type: str) -> str | None:
     return OVERHEAD_BIN_LABELS.get(trip_type) if excluded is True else None
+
+
+def split_ticket_label(split: bool | None, trip_type: str) -> str | None:
+    return SPLIT_TICKET_LABEL if split is True and trip_type == "round_trip" else None
 
 
 SAMPLED_ONLY_NOTE = "只涵蓋已取樣的日期；未取樣的日期不代表沒有更便宜的價格。"
@@ -237,9 +247,12 @@ def price_alert_message(
         lines.append(
             f"{index}. 查到 {route} {dates} {format_money(cand.amount_minor, cand.currency)}{note}"
         )
-        bin_label = overhead_bin_label(cand.overhead_bin_excluded, trip_type)
-        if bin_label:
-            lines.append(f"   {bin_label}")
+        for label in (
+            split_ticket_label(cand.split_ticket, trip_type),
+            overhead_bin_label(cand.overhead_bin_excluded, trip_type),
+        ):
+            if label:
+                lines.append(f"   {label}")
         lines.append(f"   觸發原因：{item_reasons_text(item)}")
         lines.append(flight_alert_line(cand, trip_type))
         lines.append(
@@ -259,8 +272,8 @@ def price_alert_message(
     lines.append(DISCLAIMER)
     lines.append(PRICE_SOURCE_NOTE)
     if trip_type == "round_trip":
-        lines.append(SPLIT_TICKET_NOTE)
-    if any(item.candidate.overhead_bin_excluded for item in items):
+        lines.append(ROUND_TRIP_NOTE)
+    elif any(item.candidate.overhead_bin_excluded for item in items):
         lines.append(OVERHEAD_BIN_NOTE)
     return "\n".join(lines)
 
@@ -1059,6 +1072,7 @@ class CommandPriceRow:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -1131,8 +1145,11 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
         for index, row in enumerate(detail.prices, start=1):
             dates = date_range_text(row.depart_date, row.return_date)
             money = _money_with_note(row.amount_minor, row.currency, detail.adults, detail.children)
-            bin_label = overhead_bin_label(row.overhead_bin_excluded, detail.trip_type)
-            amount = f"{money}｜{bin_label}" if bin_label else money
+            labels = (
+                split_ticket_label(row.split_ticket, detail.trip_type),
+                overhead_bin_label(row.overhead_bin_excluded, detail.trip_type),
+            )
+            amount = "｜".join([money, *(label for label in labels if label)])
             entry = (
                 f"{index}. {dates} {amount}｜{flight_command_text(row, detail.trip_type)}"
                 f"｜{stops_text(row.stops)}｜查到 {_short_time(row.fetched_at)}"
@@ -1150,8 +1167,13 @@ def command_watch_message(detail: CommandWatchDetail) -> str:
         COMMAND_WATCH_TIME_NOTE,
         DISCLAIMER,
         *([PRICE_SOURCE_NOTE] if detail.prices else []),
-        *([SPLIT_TICKET_NOTE] if detail.prices and detail.trip_type == "round_trip" else []),
-        *([OVERHEAD_BIN_NOTE] if any(r.overhead_bin_excluded for r in detail.prices) else []),
+        *([ROUND_TRIP_NOTE] if detail.prices and detail.trip_type == "round_trip" else []),
+        *(
+            [OVERHEAD_BIN_NOTE]
+            if detail.trip_type != "round_trip"
+            and any(r.overhead_bin_excluded for r in detail.prices)
+            else []
+        ),
     ]
     return fit_reply(head, items, footer)
 
@@ -1521,7 +1543,7 @@ class UiTexts:
 
     help_summary: str = "說明"
     price_source_note: str = PRICE_SOURCE_NOTE
-    split_ticket_note: str = SPLIT_TICKET_NOTE
+    round_trip_note: str = ROUND_TRIP_NOTE
     overhead_bin_note: str = OVERHEAD_BIN_NOTE
     # M3: flight time adds up the segments only.
     duration_column: str = "飛行時間（不含轉機等候）"
@@ -1559,6 +1581,11 @@ class UiTexts:
     # #43 (R10): visible once on every page with round-trip prices.
     return_leg_explain: str = (
         "只列去程航班；回程需在 Google Flights 選擇，價格可能因回程不同而改變。"
+    )
+    # FD-16 risk ruling: a page listing at least one return flight (list rows can be mixed).
+    return_leg_explain_listed: str = (
+        "回程要到 Google Flights 自己選；有列出的回程是查到價格當下的組合。"
+        "價格可能已變，換回程也可能不同。"
     )
     local_time_explain: str = "航班時刻為各機場當地時間。"
     not_scanned: str = "尚未查價"
@@ -1711,6 +1738,7 @@ def web_static_texts() -> list[str]:
         WEB_BOOKING_FALLBACK_NOTE,
         PRICE_SOURCE_NOTE,
         *OVERHEAD_BIN_LABELS.values(),
+        SPLIT_TICKET_LABEL,
         flight_column_label("round_trip"),
         flight_column_label("one_way"),
         SOURCE_PAGE_LIVE_NOTE,

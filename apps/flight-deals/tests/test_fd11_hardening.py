@@ -166,8 +166,8 @@ def statements(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_no_new_migration_and_schema_stays_8(harness: Harness) -> None:  # C-83
     # C-83 covered the FD-11 batch only; FD-12 adds 0009, FD-15 adds 0010.
     names = sorted(p.name[:4] for p in MIGRATIONS.glob("*.sql"))
-    assert names == [f"{n:04d}" for n in range(1, 11)]
-    assert harness.repo.db.schema_version() == 10
+    assert names == [f"{n:04d}" for n in range(1, 12)]
+    assert harness.repo.db.schema_version() == 11
 
 
 def test_queries_used_since_is_one_statement_without_coalesce(

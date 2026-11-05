@@ -41,6 +41,7 @@ BAGGAGE_CODE = 4
 # Google says "fare excludes the overhead bin" for exactly this code (FD-15). It
 # belongs to the price: on a round trip, to the cheapest outbound + return pair.
 NO_OVERHEAD_BIN_CODE = 3
+ITINERARY_TICKETS = 6  # k[6]: 1 when Google marks this price as separate tickets, else 0
 INFO_CARRIER_CODE = 0  # k[0][0]: airline code or "multi"
 INFO_CARRIER_NAMES = 1  # k[0][1]: list of airline names
 INFO_SEGMENTS = 2  # k[0][2]: list of segments
@@ -207,6 +208,14 @@ def _overhead_bin_excluded(itinerary: list[Any]) -> bool | None:
     return True if _is_int(code) and code == NO_OVERHEAD_BIN_CODE else None
 
 
+def _split_ticket(itinerary: list[Any]) -> bool | None:
+    """Google's "separate tickets" mark for this price; None for any unrecognised value."""
+    value = _at(itinerary, ITINERARY_TICKETS)
+    if not _is_int(value):
+        return None
+    return {1: True, 0: False}.get(value)
+
+
 def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
     info = _at(itinerary, ITINERARY_INFO)
     names = _at(info, INFO_CARRIER_NAMES)
@@ -227,6 +236,7 @@ def _record(itinerary: list[Any], price: int) -> dict[str, Any]:
         "flights": flights,
         "depart_time": depart_time,
         "overhead_bin_excluded": _overhead_bin_excluded(itinerary),
+        "split_ticket": _split_ticket(itinerary),
     }
 
 

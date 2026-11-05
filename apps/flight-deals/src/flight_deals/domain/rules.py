@@ -38,6 +38,7 @@ class Candidate:
     arrive_day_offset: int | None = None
     route_airports: str | None = None
     overhead_bin_excluded: bool | None = None
+    split_ticket: bool | None = None
 
 
 @dataclass(frozen=True)

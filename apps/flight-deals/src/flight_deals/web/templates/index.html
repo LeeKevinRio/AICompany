@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, overhead_bin, price_line, delta_badge, price_meta, help_note with context %}
+{% from "_macros.html" import ext_link, flight, price_labels, price_line, delta_badge, price_meta, help_note with context %}
 {% block title %}監看列表{% endblock %}
 {# Pages that print the disclaimer next to the first price drop the footer copy (C-101). #}
 {% block footer_disclaimer %}{% if not watches %}{{ disclaimer }}{% endif %}{% endblock %}
@@ -20,9 +20,9 @@
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   {% if priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
-  {% if priced|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
-  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain }}</p>
-  <p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
+  {% if not round_trip_priced and priced|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain_listed if priced|selectattr("return_flight")|list else ui.return_leg_explain }}</p>
+  <p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
   {% if booking_shown %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
   {% if priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
 </div>
@@ -45,12 +45,13 @@
         <span class="price-amount">{{ w.min_price }}</span>
         {{ delta_badge(w.delta) }}
       </div>
-      {{- overhead_bin(w.overhead_bin_label) }}
+      {{- price_labels(w.split_ticket_label, w.overhead_bin_label) }}
       <div class="price-sub">{{ price_line(w.price_caption, w.pax_note, w.pax_summary, w.cabin_label) }}</div>
       <div class="price-meta">{{ price_meta(w.cheapest_fetched_label, w.stale, w.stale_rounds_label) }}</div>
       <div class="price-dates">{{ w.dates_weekday_label }}</div>
     </div>
     {{ flight(w.flight) }}
+    {{ flight(w.return_flight) }}
     {% else %}
     <p class="muted">{{ w.no_price_label }}</p>
     {% if w.manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}

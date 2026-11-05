@@ -119,6 +119,10 @@ class HealthService:
             record = SourceHealthRecord(source, True, "closed", 0, None, None, None, None)
         return record
 
+    def is_closed(self, source: str) -> bool:
+        """Read-only, unlike ``allow`` (which may move the breaker to half-open)."""
+        return self._get(source).breaker_state == "closed"
+
     def allow(self, source: str) -> bool:
         """Whether a query may be sent now; moves open -> half_open after cooldown."""
         record = self._get(source)

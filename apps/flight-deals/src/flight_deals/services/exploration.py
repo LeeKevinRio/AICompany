@@ -121,6 +121,7 @@ def cell_update(
             arrive_day_offset=quote.arrive_day_offset,
             route_airports=quote.route_airports,
             overhead_bin_excluded=quote.overhead_bin_excluded,
+            split_ticket=quote.split_ticket,
         )
     if status not in ("no_data", "blocked", "error"):
         # Nothing was asked: every source's breaker was open.

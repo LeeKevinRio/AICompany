@@ -44,8 +44,8 @@ from flight_deals.domain.messages import (
     OVERHEAD_BIN_LABELS,
     OVERHEAD_BIN_NOTE,
     PRICE_SOURCE_NOTE,
+    ROUND_TRIP_NOTE,
     SAMPLED_ONLY_NOTE,
-    SPLIT_TICKET_NOTE,
 )
 from flight_deals.domain.models import DatePair, ExplorationSpec
 from flight_deals.logging_setup import setup_logging
@@ -1271,19 +1271,19 @@ def test_split_ticket_note_only_on_round_trip_replies_with_links(bot: Bot) -> No
     one_way = bot.create_watch(destination="BKK", trip_type="one_way", return_date="")
 
     bot.send(msg(1, f"/watch {round_trip}"))
-    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]  # no price yet
+    assert ROUND_TRIP_NOTE not in bot.notifier.sent[-1]  # no price yet
 
     for number, watch_id in ((2, round_trip), (3, one_way)):
         bot.send(msg(number, f"/scan {watch_id}"))
         scheduler._command_scan(watch_id)
-        assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+        assert ROUND_TRIP_NOTE not in bot.notifier.sent[-1]
 
     bot.send(msg(4, f"/watch {round_trip}"))
-    assert bot.notifier.sent[-1].endswith(f"{PRICE_SOURCE_NOTE}\n{SPLIT_TICKET_NOTE}")
+    assert bot.notifier.sent[-1].endswith(f"{PRICE_SOURCE_NOTE}\n{ROUND_TRIP_NOTE}")
     bot.send(msg(5, f"/watch {one_way}"))
-    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+    assert ROUND_TRIP_NOTE not in bot.notifier.sent[-1]
     bot.send(msg(6, "/list"))
-    assert SPLIT_TICKET_NOTE not in bot.notifier.sent[-1]
+    assert ROUND_TRIP_NOTE not in bot.notifier.sent[-1]
 
 
 def test_watch_label_sits_after_the_amount_and_note_stays(bot: Bot) -> None:  # FD-15 R4
@@ -1293,7 +1293,7 @@ def test_watch_label_sits_after_the_amount_and_note_stays(bot: Bot) -> None:  # 
     bot.send(msg(1, f"/watch {watch_id}"))
     reply = bot.notifier.sent[-1]
     assert f"（1 人總價）｜{OVERHEAD_BIN_LABELS['round_trip']}｜" in reply
-    assert reply.endswith(f"{SPLIT_TICKET_NOTE}\n{OVERHEAD_BIN_NOTE}")
+    assert reply.endswith(ROUND_TRIP_NOTE) and OVERHEAD_BIN_NOTE not in reply
     for command in ("/list", f"/scan {watch_id}"):
         bot.send(msg(2 if command == "/list" else 3, command))
         assert OVERHEAD_BIN_NOTE not in bot.notifier.sent[-1], command

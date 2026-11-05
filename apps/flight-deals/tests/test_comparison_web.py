@@ -43,6 +43,7 @@ from tests.test_comparison_service import TRIP, Queue, compared, set_limit, star
 SRC = Path(__file__).resolve().parents[1] / "src" / "flight_deals"
 ROW_KEYS = {
     "overhead_bin_label",
+    "split_ticket_label",
     "position",
     "destination",
     "destination_label",

@@ -363,6 +363,7 @@ def test_optional_fields_fall_back_to_none(clock: FakeClock) -> None:  # Decisio
         "flights": [],
         "depart_time": None,
         "overhead_bin_excluded": None,
+        "split_ticket": False,
     }
     source, _ = make_source(Recorder(page_html(payload)), clock)
     quote = min(source.search(SHA_SEARCH).quotes, key=lambda q: q.amount_minor)

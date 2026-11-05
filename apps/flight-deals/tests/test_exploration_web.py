@@ -34,6 +34,7 @@ from tests.test_exploration_service import DECEMBER, Queue, post, start
 SRC = Path(__file__).resolve().parents[1] / "src" / "flight_deals"
 CELL_KEYS = {
     "overhead_bin_label",
+    "split_ticket_label",
     "date",
     "day",
     "weekday_label",

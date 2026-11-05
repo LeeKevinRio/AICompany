@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
 
-from flight_deals.domain.models import FlightSearch, PriceKind, PriceQuote, QueryStatus
+from flight_deals.domain.models import (
+    FlightSearch,
+    PriceKind,
+    PriceQuote,
+    QueryStatus,
+    ReturnLeg,
+)
 
 Redactor = Callable[[str], str]
 Clock = Callable[[], datetime]
@@ -53,6 +59,28 @@ class SourceResult:
     @property
     def is_failure(self) -> bool:
         return self.status in ("blocked", "error")
+
+
+ReturnLookupOutcome = Literal["ok", "no_match", "no_embedded", "blocked", "error"]
+
+
+@dataclass(frozen=True)
+class ReturnLegResult:
+    """``attempts`` counts requests actually sent; ``leg`` is set only for ``ok``."""
+
+    outcome: ReturnLookupOutcome
+    attempts: int = 0
+    leg: ReturnLeg | None = None
+
+
+class ReturnLegLookup(Protocol):
+    """Finds the return flight of one round-trip quote (ADR-0002 FD-16). Never raises for
+    a source failure, and never touches the circuit breaker."""
+
+    @property
+    def source_name(self) -> str: ...
+
+    def return_leg(self, search: FlightSearch, quote: PriceQuote) -> ReturnLegResult: ...
 
 
 class FlightPriceSource(Protocol):

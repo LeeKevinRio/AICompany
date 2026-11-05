@@ -258,6 +258,7 @@ def assemble(
         redactor=redact,
         link_builder=links,
     )
+    return_legs = next((s for s in active_sources if isinstance(s, GoogleFlightsSource)), None)
     scan = ScanService(
         repo,
         active_sources,
@@ -268,6 +269,7 @@ def assemble(
         stale_after_failed_scans=limits.watch_stale_after_failed_scans,
         clock=clock,
         redactor=redact,
+        return_legs=return_legs,
     )
     watches = WatchService(repo, clock=clock)
     views = ViewService(

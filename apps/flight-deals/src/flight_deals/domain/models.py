@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal, Protocol
 
@@ -361,6 +361,31 @@ def search_for(cond: SearchConditions, pair: DatePair, currency: str) -> FlightS
 
 
 @dataclass(frozen=True)
+class SegmentRef:
+    """One flight segment, enough to select it on Google's return page (FD-16)."""
+
+    origin: str
+    depart_date: str  # local date, ISO
+    destination: str
+    code: str
+    number: str
+
+
+@dataclass(frozen=True)
+class ReturnLeg:
+    """The return flight of a round-trip price; has the fields of ``FlightFacts``."""
+
+    carrier: str | None
+    stops: int | None
+    depart_time: str | None
+    duration_minutes: int | None
+    flight_numbers: str | None
+    arrive_time: str | None
+    arrive_day_offset: int | None
+    route_airports: str | None
+
+
+@dataclass(frozen=True)
 class PriceQuote:
     source: str
     price_kind: PriceKind
@@ -388,6 +413,11 @@ class PriceQuote:
     # True when Google marks this price as excluding the overhead bin; None when not
     # marked or unknown. Display only: never used for ranking, budgets or alerts (FD-15).
     overhead_bin_excluded: bool | None = None
+    # Google's separate-tickets mark for this price: True / False as listed, None when
+    # unknown. Display only; only True is stored and shown (FD-16).
+    split_ticket: bool | None = None
+    # Not stored: selects this outbound flight when looking up its return leg.
+    segment_refs: tuple[SegmentRef, ...] = field(default=(), compare=False, repr=False)
 
 
 def quote_rank_key(q: PriceQuote) -> tuple[int, int, str, int, str]:

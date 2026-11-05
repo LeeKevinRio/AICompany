@@ -40,6 +40,7 @@ from flight_deals.domain.messages import (
     size_label,
     source_label,
     source_page_note,
+    split_ticket_label,
     stale_rounds_label,
     stats_time_note,
     top_explain,
@@ -168,6 +169,14 @@ def hit_no_embedded(query_results: Sequence[Mapping[str, Any]]) -> bool:
 def flight_view(facts: FlightFacts | None, trip_type: TripType) -> FlightSummary | None:
     """The one way pages get flight wording (ADR-0002 FD-12, C-98)."""
     return None if facts is None else flight_summary(facts, trip_type=trip_type)
+
+
+def return_flight_view(obs: ObservationRecord | None, currency: str) -> FlightSummary | None:
+    """Only the observation's own return flight, for a live price in the watch's currency."""
+    if obs is None or obs.price_kind != "live" or obs.currency != currency:
+        return None
+    leg = obs.return_leg
+    return None if leg is None else flight_summary(leg, trip_type="round_trip", returning=True)
 
 
 def kind_badge(price_kind: str, as_of_basis: str) -> str | None:
@@ -476,6 +485,8 @@ class ViewService:
             # Old-revision rows keep only the airline column (FR-6).
             "flight": flight_view(obs, spec.trip_type) if with_flight else None,
             "overhead_bin_label": overhead_bin_label(obs.overhead_bin_excluded, spec.trip_type),
+            "split_ticket_label": split_ticket_label(obs.split_ticket, spec.trip_type),
+            "return_flight": return_flight_view(obs, spec.currency) if with_flight else None,
             "revision": obs.watch_revision,
         }
 
@@ -602,6 +613,12 @@ class ViewService:
                         if cheapest
                         else None
                     ),
+                    "split_ticket_label": (
+                        split_ticket_label(cheapest.split_ticket, spec.trip_type)
+                        if cheapest
+                        else None
+                    ),
+                    "return_flight": return_flight_view(cheapest, spec.currency),
                     **booking,
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
@@ -823,13 +840,11 @@ class ViewService:
             "has_prices": bool(current_obs),
             "top": top,
             "best": top[0] if top else None,
-            # Round-trip amounts and links can still sit in the folded record table when
-            # no price ranks (other currency); the note must stay visible (FD-14).
-            "split_note_without_card": (
-                spec.trip_type == "round_trip"
-                and bool(current_obs)
-                and not top
-                and not all_departed
+            "is_round_trip": spec.trip_type == "round_trip",
+            # Round-trip amounts and labels can still sit in the folded record table when
+            # no price ranks (other currency, all departed); the note stays visible (FD-16).
+            "round_trip_note_without_card": (
+                spec.trip_type == "round_trip" and bool(current_obs) and not top
             ),
             "best_delta": delta_view(snapshot.delta_since_previous_run()) if top else None,
             "top_explain": top_explain(stale_hours),

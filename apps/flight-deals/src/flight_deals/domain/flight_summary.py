@@ -21,6 +21,7 @@ from flight_deals.domain.trip_labels import flight_duration_label
 
 UNKNOWN = "—"
 OUTBOUND_LABEL = "去程"
+RETURN_LABEL = "回程"
 NONSTOP_LABEL = "直飛"
 FLIGHT_UNKNOWN_SR = "航班資訊未提供"
 MINUS_SIGN = "−"  # "−", never the ASCII hyphen
@@ -159,8 +160,10 @@ def _stops(facts: FlightFacts) -> tuple[str, str | None]:
     return short, short
 
 
-def flight_summary(facts: FlightFacts, *, trip_type: TripType) -> FlightSummary:
-    leg = OUTBOUND_LABEL if trip_type == "round_trip" else None
+def flight_summary(
+    facts: FlightFacts, *, trip_type: TripType, returning: bool = False
+) -> FlightSummary:
+    leg = RETURN_LABEL if returning else (OUTBOUND_LABEL if trip_type == "round_trip" else None)
     airline = _airline(facts)
     numbers = format_flight_numbers(facts.flight_numbers)
     depart = facts.depart_time or UNKNOWN
@@ -198,7 +201,7 @@ def flight_summary(facts: FlightFacts, *, trip_type: TripType) -> FlightSummary:
         spoken.append(FLIGHT_UNKNOWN_SR)
     return FlightSummary(
         leg_label=leg,
-        is_outbound_only=leg is not None,
+        is_outbound_only=leg == OUTBOUND_LABEL,
         airline=airline,
         flight_numbers=numbers or UNKNOWN,
         depart_time=depart,

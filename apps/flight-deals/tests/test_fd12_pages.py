@@ -21,8 +21,8 @@ from flight_deals.domain.messages import (
     DETAIL_ALL_DEPARTED,
     DISCLAIMER,
     PRICE_SOURCE_NOTE,
+    ROUND_TRIP_NOTE,
     SAMPLED_ONLY_NOTE,
-    SPLIT_TICKET_NOTE,
     WEB_TEXTS,
     all_static_texts,
 )
@@ -339,7 +339,7 @@ def assert_wording_clean(page: Page) -> None:
     leftover = (
         text.replace(DISCLAIMER, "")
         .replace(PRICE_SOURCE_NOTE, "")
-        .replace(SPLIT_TICKET_NOTE, "")
+        .replace(ROUND_TRIP_NOTE, "")
         .replace("查看並訂票", "")
     )
     assert "訂票" not in leftover
@@ -1266,11 +1266,11 @@ def test_split_ticket_note_once_and_visible_on_round_trip_pages(harness: Harness
         f"/comparisons/{comparison_id}",
     ):
         page = get(harness, url)
-        assert page.count(SPLIT_TICKET_NOTE) == 1, url
-        assert page.count_visible(SPLIT_TICKET_NOTE) == 1, url
-        assert page.count_in_details(SPLIT_TICKET_NOTE) == 0, url
+        assert page.count(ROUND_TRIP_NOTE) == 1, url
+        assert page.count_visible(ROUND_TRIP_NOTE) == 1, url
+        assert page.count_in_details(ROUND_TRIP_NOTE) == 0, url
         note = next(
-            n for n in page.main.descendants() if SPLIT_TICKET_NOTE in n.text() and n.tag == "p"
+            n for n in page.main.descendants() if ROUND_TRIP_NOTE in n.text() and n.tag == "p"
         )
         assert "return-explain" in note.classes, url  # keeps its place on the phone layout
 
@@ -1283,19 +1283,19 @@ def test_split_ticket_note_absent_on_one_way_pages(harness: Harness) -> None:
         f"/explorations/{one_way_exploration(harness)}",
         f"/comparisons/{one_way_comparison(harness)}",
     ):
-        assert SPLIT_TICKET_NOTE not in get(harness, url).html, url
+        assert ROUND_TRIP_NOTE not in get(harness, url).html, url
 
 
 def test_split_ticket_note_absent_without_a_price(harness: Harness) -> None:
     watch_id = harness.create_watch()
     for url in ("/", f"/watches/{watch_id}"):
-        assert SPLIT_TICKET_NOTE not in get(harness, url).html, url
+        assert ROUND_TRIP_NOTE not in get(harness, url).html, url
 
 
 def test_split_ticket_note_once_on_a_mixed_list(harness: Harness) -> None:
     priced_round_trip(harness)
     priced_one_way(harness)
-    assert get(harness, "/").count(SPLIT_TICKET_NOTE) == 1
+    assert get(harness, "/").count(ROUND_TRIP_NOTE) == 1
 
 
 def test_split_ticket_note_stays_when_only_mismatched_cells_are_priced(
@@ -1305,7 +1305,7 @@ def test_split_ticket_note_stays_when_only_mismatched_cells_are_priced(
     exploration_id = done_exploration(harness)
     html = get(harness, f"/explorations/{exploration_id}").html
     assert RETURN_EXPLAIN not in html
-    assert SPLIT_TICKET_NOTE in html
+    assert ROUND_TRIP_NOTE in html
 
 
 def test_split_ticket_note_is_not_written_back_into_old_notifications(
@@ -1313,19 +1313,19 @@ def test_split_ticket_note_is_not_written_back_into_old_notifications(
 ) -> None:  # FD-14 R6: the log shows the text as it was sent
     priced_round_trip(harness)
     record = harness.repo.list_notifications()[0]
-    assert SPLIT_TICKET_NOTE in record.message_text  # a round-trip alert carries it now
-    old_text = record.message_text.replace(SPLIT_TICKET_NOTE, "").rstrip()
+    assert ROUND_TRIP_NOTE in record.message_text  # a round-trip alert carries it now
+    old_text = record.message_text.replace(ROUND_TRIP_NOTE, "").rstrip()
     harness.repo.update_notification_text(record.id, old_text)
 
     page = get(harness, "/notifications")
-    assert SPLIT_TICKET_NOTE not in page.html
+    assert ROUND_TRIP_NOTE not in page.html
     assert page.count_in_details(old_text.splitlines()[0]) == 1
 
 
 def test_one_way_notifications_never_carry_the_split_ticket_note(harness: Harness) -> None:
     priced_one_way(harness)
     assert harness.notifier.sent
-    assert SPLIT_TICKET_NOTE not in get(harness, "/notifications").html
+    assert ROUND_TRIP_NOTE not in get(harness, "/notifications").html
 
 
 def test_split_ticket_note_stays_on_a_detail_page_without_a_main_card(
@@ -1335,21 +1335,21 @@ def test_split_ticket_note_stays_on_a_detail_page_without_a_main_card(
     watch_id = priced_round_trip(harness)
     page = get(harness, f"/watches/{watch_id}")
     assert not page.main.find_all("section", "price-card")
-    assert page.count(SPLIT_TICKET_NOTE) == 1
-    assert page.count_visible(SPLIT_TICKET_NOTE) == 1
-    assert page.count_in_details(SPLIT_TICKET_NOTE) == 0
+    assert page.count(ROUND_TRIP_NOTE) == 1
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    assert page.count_in_details(ROUND_TRIP_NOTE) == 0
 
 
-def test_split_ticket_note_absent_when_every_date_has_departed(harness: Harness) -> None:
-    harness.source.currency = "JPY"
+def test_round_trip_note_stays_when_every_date_has_departed(harness: Harness) -> None:
+    harness.source.currency = "JPY"  # FD-16 R3: the folded records can still show labels
     watch_id = priced_round_trip(harness)
     harness.clock.advance(days=120)
-    html = get(harness, f"/watches/{watch_id}").html
-    assert DETAIL_ALL_DEPARTED in html
-    assert SPLIT_TICKET_NOTE not in html
+    page = get(harness, f"/watches/{watch_id}")
+    assert DETAIL_ALL_DEPARTED in page.html
+    assert page.count_visible(ROUND_TRIP_NOTE) == 1
 
 
 def test_one_way_detail_without_a_main_card_has_no_split_ticket_note(harness: Harness) -> None:
     harness.source.currency = "JPY"
     watch_id = priced_one_way(harness)
-    assert SPLIT_TICKET_NOTE not in get(harness, f"/watches/{watch_id}").html
+    assert ROUND_TRIP_NOTE not in get(harness, f"/watches/{watch_id}").html

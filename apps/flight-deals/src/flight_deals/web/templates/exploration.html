@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, overhead_bin, fold, help_note with context %}
+{% from "_macros.html" import ext_link, flight, price_labels, fold, help_note with context %}
 {% block title %}探索結果{% endblock %}
 {# The disclaimer is printed once next to the calendar; the footer copy is dropped (C-101). #}
 {% block footer_disclaimer %}{% endblock %}
@@ -31,7 +31,7 @@
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   <p class="price-source-note">{{ ui.price_source_note }}</p>
-  {% if e.status not in ("queued", "running") and has_overhead_bin_label %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+  {% if e.status not in ("queued", "running") and e.trip_type != "round_trip" and has_overhead_bin_label %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
   {% if reference_note %}<p class="reference-note muted">{{ reference_note }}</p>{% endif %}
 </div>
 
@@ -50,7 +50,7 @@
 <section class="card">
   <h2>價格日曆</h2>
   {% if top5 and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.return_leg_explain }}</p>{% endif %}
-  {% if has_priced_cell and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
+  {% if has_priced_cell and e.trip_type == "round_trip" %}<p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
   {% if top5 %}<p class="booking-hint">{{ ui.booking_hint }}</p>
   <p class="flight-note">{{ ui.local_time_explain }}</p>{% endif %}
   <p class="calendar-note">{{ calendar_note }}</p>
@@ -76,7 +76,7 @@
           <div class="cal-day"><strong>{{ cell.day }}</strong> <span class="muted">{{ cell.weekday_label }}</span></div>
           {% if cell.amount_label %}
           <div class="heat-price">{{ cell.amount_label }}</div>
-          {{- overhead_bin(cell.overhead_bin_label) }}
+          {{- price_labels(cell.split_ticket_label, cell.overhead_bin_label) }}
           {% if e.pax_note %}<div class="cal-pax">{{ e.pax_note }}</div>{% endif %}
           {% if cell.rank_note %}<div class="cal-status">{{ cell.rank_note }}</div>{% endif %}
           {% if lvl_text %}<div>價位：{{ lvl_text }}</div>{% endif %}
@@ -120,7 +120,7 @@
       <tr>
         <td class="num">{{ loop.index }}</td>
         <td>{{ t.date }} {{ t.weekday_label }}{% if t.return_date %}<div class="muted">回 {{ t.return_date }}</div>{% endif %}</td>
-        <td class="cell-price"><div class="cell-amount">{{ t.amount_label }}</div>{{- overhead_bin(t.overhead_bin_label) }}{% if e.pax_note %}<div class="price-sub">{{ e.pax_note }}</div>{% endif %}{% if t.fetched_label %}<div class="price-meta"><span class="price-time">{{ t.fetched_label }}</span></div>{% endif %}</td>
+        <td class="cell-price"><div class="cell-amount">{{ t.amount_label }}</div>{{- price_labels(t.split_ticket_label, t.overhead_bin_label) }}{% if e.pax_note %}<div class="price-sub">{{ e.pax_note }}</div>{% endif %}{% if t.fetched_label %}<div class="price-meta"><span class="price-time">{{ t.fetched_label }}</span></div>{% endif %}</td>
         <td class="cell-flight">{{ flight(t.flight) }}</td>
         <td class="cell-link"><div class="actions">
           {% if t.booking_url %}{{ ext_link(t.booking_url, ui.booking_button_short, t.date) }}{% endif %}

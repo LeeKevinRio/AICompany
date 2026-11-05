@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, overhead_bin, fold, help_note with context %}
+{% from "_macros.html" import ext_link, flight, price_labels, fold, help_note with context %}
 {% block title %}比價結果{% endblock %}
 {# The disclaimer is printed once above the results; the footer copy is dropped (C-101). #}
 {% block footer_disclaimer %}{% endblock %}
@@ -33,7 +33,7 @@
 <div class="page-notes" id="comparison-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
   <p class="price-source-note">{{ ui.price_source_note }}</p>
-  {% if c.status not in ("queued", "running") and rows|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+  {% if c.status not in ("queued", "running") and c.trip_type != "round_trip" and rows|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
   {% if reference_note %}<p class="reference-note muted" id="comparison-reference-note">{{ reference_note }}</p>{% endif %}
 </div>
 
@@ -51,7 +51,7 @@
 <section class="card" id="comparison-results">
   <h2>比價結果</h2>
   {% if rows and c.trip_type == "round_trip" and rows|selectattr("priced")|list %}<p class="return-explain">{{ ui.return_leg_explain }}</p>
-  <p class="return-explain">{{ ui.split_ticket_note }}</p>{% endif %}
+  <p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
   {% if rows|selectattr("priced")|list %}<p class="booking-hint">{{ ui.booking_hint }}</p>
   <p class="flight-note">{{ ui.local_time_explain }}</p>{% endif %}
   {% if order_note %}<p class="order-note">{{ order_note }}</p>{% endif %}
@@ -72,7 +72,7 @@
         {% if r.priced %}
         <td class="cell-price">
           <div class="cell-amount">{{ r.amount_label }}</div>
-          {{- overhead_bin(r.overhead_bin_label) }}
+          {{- price_labels(r.split_ticket_label, r.overhead_bin_label) }}
           {% if c.pax_note %}<div class="price-sub">{{ c.pax_note }}</div>{% endif %}
           {% if r.rank_note %}<div class="hint">{{ r.rank_note }}</div>{% endif %}
           <div class="price-meta"><span class="price-time">{{ r.fetched_label or "—" }}</span></div>

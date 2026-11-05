@@ -6,14 +6,15 @@ import logging
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
-from typing import Any
+from datetime import date, timedelta
+from typing import Any, cast
 
 from flight_deals.domain.dates import expand_pairs, is_expired, sample_pairs
 from flight_deals.domain.models import (
     SCANNABLE_STATUSES,
     DatePair,
     PriceKind,
+    PriceQuote,
     Watch,
     WatchStatus,
     search_for,
@@ -25,7 +26,7 @@ from flight_deals.domain.rules import (
     should_rearm,
 )
 from flight_deals.domain.timeutil import taipei_date
-from flight_deals.ports import Clock, FlightPriceSource, Redactor
+from flight_deals.ports import Clock, FlightPriceSource, Redactor, ReturnLegLookup
 from flight_deals.services.health import HealthService
 from flight_deals.services.notifications import NotificationService
 from flight_deals.services.settings import SettingsService
@@ -54,6 +55,7 @@ class _PairOutcome:
     failure: bool = False
     candidate: Candidate | None = None
     error: str | None = None
+    quote: PriceQuote | None = None
 
 
 class ScanService:
@@ -69,9 +71,11 @@ class ScanService:
         stale_after_failed_scans: int,
         clock: Clock,
         redactor: Redactor,
+        return_legs: ReturnLegLookup | None = None,
     ) -> None:
         self._repo = repo
         self._sources = list(sources)
+        self._return_legs = return_legs
         self._query = SourceQuery(self._sources, health, clock=clock, redactor=redactor)
         self._health = health
         self._notifications = notifications
@@ -175,6 +179,7 @@ class ScanService:
         errors: list[str] = []
         queries = 0
         any_success = any_failure = global_hit = False
+        priced: list[_PairOutcome] = []
         try:
             # Soft cap: the check happens before each date pair, and one pair may use
             # several attempts (retries), so an hour can exceed the limit slightly.
@@ -193,10 +198,13 @@ class ScanService:
                 any_failure |= outcome.failure or not outcome.success
                 if outcome.candidate is not None:
                     candidates.append(outcome.candidate)
+                    priced.append(outcome)
                 if outcome.error:
                     errors.append(outcome.error)
             if global_hit:
                 errors.append("已達全域每小時查詢上限，部分日期本輪未查")
+            self._lookup_return_leg(watch, run_id, priced, hourly_left)
+            queries = self._spent
 
             if any_success and not any_failure and not global_hit:
                 status = "ok"
@@ -245,6 +253,72 @@ class ScanService:
         for source, error in self._opened_sources:
             self._notifications.send_ops_failure(source, error)
         return ScanOutcome(watch.id, status, run_id, queries, notification_id)
+
+    def _lookup_return_leg(
+        self, watch: Watch, run_id: int, priced: list[_PairOutcome], hourly_left: int
+    ) -> None:
+        """Find the return flight of this round's cheapest price (ADR-0002 FD-16).
+
+        Never changes the run's status, the breaker or any alert; a failure only leaves the
+        price without a return flight. The cheapest uses the snapshot's order, so the row
+        written is the one the main card shows.
+        """
+        lookup = self._return_legs
+        spec = watch.spec
+        if (
+            lookup is None
+            or spec.trip_type != "round_trip"
+            or spec.adults != 1
+            or spec.children != 0
+            or spec.cabin != "economy"
+        ):
+            return
+        eligible = [
+            outcome
+            for outcome in priced
+            if outcome.quote is not None
+            and outcome.quote.currency == spec.currency
+            and outcome.quote.price_kind == "live"
+            and outcome.quote.source == lookup.source_name
+        ]
+        if not eligible:
+            return
+
+        def order(outcome: _PairOutcome) -> tuple[int, date, date]:
+            quote = cast(PriceQuote, outcome.quote)
+            return (
+                quote.amount_minor,
+                quote.depart_date,
+                quote.return_date or quote.depart_date,
+            )
+
+        chosen = min(eligible, key=order)
+        quote = cast(PriceQuote, chosen.quote)
+        candidate = cast(Candidate, chosen.candidate)
+        if not self._health.is_closed(lookup.source_name):
+            chosen.entry["return_lookup"] = "skipped_breaker"
+            return
+        if self._spent >= hourly_left:
+            chosen.entry["return_lookup"] = "skipped_quota"
+            return
+        if not quote.segment_refs or quote.split_ticket is None:
+            chosen.entry["return_lookup"] = "skipped_no_refs"
+            return
+        search = search_for(spec, DatePair(quote.depart_date, quote.return_date), spec.currency)
+        # Counted up front: an unexpected error after the request must not escape the quota.
+        self._spent += 1
+        try:
+            result = lookup.return_leg(search, quote)
+            self._spent += result.attempts - 1
+            outcome_name: str = result.outcome
+            if result.outcome == "ok" and result.leg is not None:
+                self._repo.set_observation_return_leg(
+                    cast(int, candidate.observation_id), run_id, result.leg
+                )
+        except Exception as exc:
+            log.warning("return leg lookup failed: %s", type(exc).__name__)
+            outcome_name = "error"
+        chosen.entry["return_lookup"] = outcome_name
 
     def _abort_run(
         self,
@@ -307,7 +381,9 @@ class ScanService:
                 arrive_day_offset=cheapest.arrive_day_offset,
                 route_airports=cheapest.route_airports,
                 overhead_bin_excluded=cheapest.overhead_bin_excluded,
+                split_ticket=cheapest.split_ticket,
             )
+            outcome.quote = cheapest
         return outcome
 
     def _add_spent(self, attempts: int) -> None:
