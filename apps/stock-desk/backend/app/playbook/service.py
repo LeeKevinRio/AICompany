@@ -508,7 +508,9 @@ def sp_evaluated(symbol_batches: Sequence[BatchState], snapshot: MarketSnapshot 
     by. 暫停／黑名單 only stop the R series, so they do not enter here.
     ``symbol_batches`` is the very list handed to the engine.
     """
-    if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+    if snapshot is None or not is_usable(
+        snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+    ):
         return False
     return any(
         batch.status == "open" and batch.cost is not None and batch.remaining_shares > 0
@@ -526,7 +528,7 @@ def m1_evaluated(index: IndexSnapshot | None) -> bool:
     """
     return (
         index is not None
-        and is_usable(index.data_status, index.source)
+        and is_usable(index.data_status, index.source, is_within_ttl=index.is_within_ttl)
         and index.monthly_line is not None
     )
 
@@ -573,13 +575,15 @@ def _evaluated_earlier(
 ) -> bool:
     """(甲)'s rendering condition (ADR-0040 Decision 9 第 4 點), on structured fields only.
 
-    This run's snapshot is there, ``cached_stale`` and not demo, and a mark of
+    This run's snapshot is there, ``cached_stale``, not within TTL (``is_within_ttl
+    is not True``) and not demo, and a mark of
     the same kind, subject, 預定執行日 and the snapshot's own 依據資料日 existed
     before this run's commit.
     """
     return (
         snapshot is not None
         and snapshot.data_status == "cached_stale"
+        and snapshot.is_within_ttl is not True
         and snapshot.source != DEMO_SOURCE
         and EvaluationMark(kind, subject, execution_date, snapshot.data_date) in marks
     )
@@ -747,7 +751,9 @@ def same_day_warnings(
         by_symbol.setdefault(batch.symbol, []).append(batch)
     for symbol in sorted(by_symbol):
         snapshot = markets.get(symbol)
-        if snapshot is not None and is_usable(snapshot.data_status, snapshot.source):
+        if snapshot is not None and is_usable(
+            snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+        ):
             continue
         lines = [line for line in logged if line.symbol == symbol]
         orders = sum(
@@ -1839,7 +1845,9 @@ class PlaybookService:
                 reason=series.reason,
                 is_within_ttl=series.is_within_ttl,
             )
-            if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+            if snapshot is None or not is_usable(
+                snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+            ):
                 missing.append(batch.symbol)
                 continue
             deployed += snapshot.close * Decimal(batch.remaining_shares)

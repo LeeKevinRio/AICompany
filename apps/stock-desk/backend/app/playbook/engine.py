@@ -52,17 +52,27 @@ from app.playbook.models import (
     SymbolState,
 )
 
-#: Ladder rungs whose data may drive an executable directive (風控 R6). A
-#: ``cached_stale`` rung is excluded even when it sits inside its TTL: the rung
-#: itself means no live source answered.
-USABLE_DATA_STATUSES: frozenset[str] = frozenset({"fresh", "backup"})
+#: Ladder rungs a live source answered on (風控 R6). Usable on their own; a
+#: ``cached_stale`` rung is usable only when the data layer judged that cache to
+#: hold the latest session (ADR-0040 Decision 1). ``cached_stale`` does not mean
+#: "no live source answered" since ADR-0009 D-4 opened layer 0 to TW.
+LIVE_DATA_STATUSES: frozenset[str] = frozenset({"fresh", "backup"})
 
 _HUNDRED = Decimal("100")
 
 
-def is_usable(status: str, source: str) -> bool:
-    """Whether a snapshot may produce an executable line (鐵律⑤ / 風控 R6)."""
-    return status in USABLE_DATA_STATUSES and source != DEMO_SOURCE
+def is_usable(status: str, source: str, *, is_within_ttl: bool | None) -> bool:
+    """Whether a snapshot may produce an executable line (鐵律⑤ / 風控 R6, ADR-0040).
+
+    Not demo, and either a live rung or a ``cached_stale`` answer whose
+    ``is_within_ttl`` is ``True`` -- the data layer's own judgement that the cache
+    holds the latest session it expects. ``None`` and ``False`` are not usable,
+    nor is any other status. ``is_within_ttl`` has no default, so a call site
+    that forgets it fails instead of reading as "not within TTL".
+    """
+    if source == DEMO_SOURCE:
+        return False
+    return status in LIVE_DATA_STATUSES or (status == "cached_stale" and is_within_ttl is True)
 
 
 def _limit_band(reference: Decimal, pct: Decimal) -> tuple[Decimal, Decimal]:
@@ -236,7 +246,9 @@ def _portfolio_unrealized_pct(
         snapshot = markets.get(batch.symbol)
         if batch.status != "open" or batch.cost is None or batch.remaining_shares <= 0:
             continue
-        if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+        if snapshot is None or not is_usable(
+            snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+        ):
             continue
         quantity = Decimal(batch.remaining_shares)
         cost_basis += batch.cost * quantity
@@ -260,7 +272,9 @@ def _defense_transition(
     """
     effects: list[StateEffect] = []
     warnings: list[str] = []
-    if index is None or not is_usable(index.data_status, index.source):
+    if index is None or not is_usable(
+        index.data_status, index.source, is_within_ttl=index.is_within_ttl
+    ):
         status = "unavailable" if index is None else index.data_status
         source = "none" if index is None else index.source
         warnings.append(wording.INDEX_DATA_GAP_NOTE.format(status=status, source=source))
@@ -319,7 +333,9 @@ def _fast_market(
     relaxes on a carried verdict either: a carried ``active`` stays active until
     a usable reading says otherwise.
     """
-    if index is None or not is_usable(index.data_status, index.source):
+    if index is None or not is_usable(
+        index.data_status, index.source, is_within_ttl=index.is_within_ttl
+    ):
         status = "unavailable" if index is None else index.data_status
         carried = previous or FastMarketState(
             active=False, annualized_vol_20d=None, large_move_days=0, reason=None
@@ -1128,7 +1144,9 @@ def evaluate(
     defense_active, effects, warnings = _defense_transition(index, portfolio, params)
     fast_market, fast_market_warnings = _fast_market(index, params, previous_fast_market)
     warnings.extend(fast_market_warnings)
-    index_usable = index is not None and is_usable(index.data_status, index.source)
+    index_usable = index is not None and is_usable(
+        index.data_status, index.source, is_within_ttl=index.is_within_ttl
+    )
     index_status = "unavailable" if index is None else index.data_status
 
     # --- S3 組合熔斷 --------------------------------------------------------
@@ -1197,7 +1215,9 @@ def evaluate(
     for symbol in sorted(by_symbol):
         symbol_batches = sorted(by_symbol[symbol], key=lambda item: item.batch_no)
         snapshot = markets.get(symbol)
-        if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+        if snapshot is None or not is_usable(
+            snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+        ):
             status = "unavailable" if snapshot is None else snapshot.data_status
             source = "none" if snapshot is None else snapshot.source
             # S-2: on a symbol that still holds shares the gap also means the
