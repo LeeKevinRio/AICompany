@@ -1,6 +1,6 @@
 """SQLite persistence for everything the playbook has to remember between days.
 
-Six tables in the same database file as the price cache and the position book
+Eight tables in the same database file as the price cache and the position book
 (``STOCK_DESK_DB_PATH``), following ``app/positions/store.py``: connections are
 opened per operation and closed via ``contextlib.closing``, and every money
 column is TEXT so ``Decimal`` round-trips exactly.
@@ -19,6 +19,9 @@ column is TEXT so ``Decimal`` round-trips exactly.
   rule-set confirmation flag the 歸屬語 reads (風控 R2).
 * ``playbook_directives`` -- every line ever produced, with its rules version,
   input provenance and T+1 outcome (風控 required R16).
+* ``playbook_fill_moves`` -- ADR-0041 (N-177a): which batch an S2 judged
+  executed moved and by how many shares, one row per batch, or one zero-move
+  row when it moved none. Append only; nothing back-fills older S2 lines.
 
 The split between "decided" and "filled" is deliberate. Rule *state* (pause,
 blacklist, freeze, deferral, skip) is applied the moment the rule fires, because
@@ -60,6 +63,14 @@ from app.playbook.models import (
     StateEffect,
     SymbolState,
 )
+
+#: N177-C8 / ADR-0041: the S2 fill audit table and the two writers allowed in
+#: its ``source`` column. Defined ahead of ``_SCHEMA`` because its DDL is built
+#: from them; the rest of the S2 constants sit next to
+#: :data:`BATCH_LEFT_PLANNED_SQL`. ``repair`` is the offline tool's only (第 6.9 節).
+FILL_MOVES_TABLE = "playbook_fill_moves"
+FILL_MOVE_SOURCE_SETTLE = "settle"
+FILL_MOVE_SOURCE_REPAIR = "repair"
 
 _SCHEMA = (
     """
@@ -150,6 +161,21 @@ _SCHEMA = (
         settled INTEGER NOT NULL DEFAULT 0,
         settled_at TEXT,
         settled_open_price TEXT
+    )
+    """,
+    f"""
+    CREATE TABLE IF NOT EXISTS {FILL_MOVES_TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        directive_id INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        batch_no INTEGER,
+        shares_moved INTEGER NOT NULL,
+        price TEXT NOT NULL,
+        source TEXT NOT NULL
+            CHECK (source IN ('{FILL_MOVE_SOURCE_SETTLE}', '{FILL_MOVE_SOURCE_REPAIR}')),
+        created_at TEXT NOT NULL,
+        CHECK ((batch_no IS NULL AND shares_moved = 0)
+            OR (batch_no IS NOT NULL AND shares_moved > 0))
     )
     """,
 )
@@ -259,6 +285,45 @@ BATCH_LEFT_PLANNED_SQL = (
     "WHERE b.symbol = playbook_directives.symbol "
     "AND b.batch_no = playbook_directives.batch_no AND b.status <> 'planned')"
 )
+
+
+class S2FillEntry(NamedTuple):
+    """The column values of a log row that :meth:`PlaybookStore.settle` books as an S2 fill."""
+
+    status: str
+    action: str
+    rule_id: str
+
+
+#: N177-C4 / ADR-0035 補充五修正一 M1-2: the one definition of "an S2 judged
+#: executed", which moves the book across batches in PlaybookStore.settle.
+#: ``batch_no IS NULL`` is part of the entry. Both is_s2_fill and
+#: s2_fill_entry_sql derive from it; no other literal may restate it.
+S2_FILL_ENTRY = S2FillEntry(status="executed", action="sell", rule_id="S2")
+
+
+def s2_fill_entry_sql(alias: str) -> str:
+    """:data:`S2_FILL_ENTRY` as a SQL condition over the ``playbook_directives`` alias."""
+    assert alias.isidentifier()
+    return (
+        f"{alias}.status = '{S2_FILL_ENTRY.status}' AND "
+        f"{alias}.action = '{S2_FILL_ENTRY.action}' AND "
+        f"{alias}.rule_id = '{S2_FILL_ENTRY.rule_id}' AND {alias}.batch_no IS NULL"
+    )
+
+
+def is_s2_fill(directive: Directive) -> bool:
+    """Whether :meth:`PlaybookStore.settle` books ``directive`` as an S2 fill (N177-C4)."""
+    return (
+        directive.status == S2_FILL_ENTRY.status
+        and directive.action == S2_FILL_ENTRY.action
+        and directive.rule_id == S2_FILL_ENTRY.rule_id
+        and directive.batch_no is None
+    )
+
+
+#: N177-C5: same predicate as engine._symbol_average_cost (engine.py:213), alias b.
+S2_ELIGIBLE_BATCH_SQL = "b.status = 'open' AND b.remaining_shares > 0 AND b.cost IS NOT NULL"
 
 #: ADR-0034 Decision 1 (C-B1): a 待成交 R 買單. No ``execution_date`` bound (a
 #: past-due one still counts), no ``rule_id LIKE 'R%'`` (that would take in
@@ -610,6 +675,25 @@ def _write_state(conn: sqlite3.Connection, values: Mapping[str, str | None]) -> 
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+
+def _add_cash(conn: sqlite3.Connection, delta: Decimal) -> None:
+    """Read ``cash`` on ``conn`` and write it back moved by ``delta`` (N-177 修訂一 1.3(3)).
+
+    Called only inside a settlement's ``BEGIN IMMEDIATE``, so the read and the
+    write see no other writer in between. A missing key reads as zero, as in
+    :meth:`PlaybookStore.portfolio_state`; the key is written even when
+    ``delta`` is zero, as ``set_cash`` always did.
+    """
+    row = conn.execute("SELECT value FROM playbook_state WHERE key = ?", (STATE_CASH,)).fetchone()
+    cash = Decimal("0") if row is None else Decimal(str(row[0]))
+    _write_state(conn, {STATE_CASH: str(cash + delta)})
+
+
+def _settle_price(directive: Directive, fill_price: Decimal | None) -> Decimal:
+    """The price a settled line moves cash at: the 開盤價, else the 參考價, else zero."""
+    price = fill_price if fill_price is not None else directive.reference_price
+    return price or Decimal("0")
 
 
 def _insert_directives(
@@ -1497,7 +1581,8 @@ class PlaybookStore:
         ``fill_price`` is the 開盤價 the line actually filled at; the batch cost
         and the cash movement are both taken from it, because that is the number
         the money moved at. Without one (a caller replaying a line by hand) the
-        參考價 stands in, which is the only other price the line carries.
+        參考價 stands in, which is the only other price the line carries
+        (:func:`_settle_price`).
 
         Cash moves here and nowhere else: a buy takes ``price × shares`` out of
         the pool and a sell puts it back, so 鐵律① reads a cash balance that has
@@ -1508,7 +1593,20 @@ class PlaybookStore:
         ``entry_before_exit_on``. Only a fill does: MISSED moves nothing and labels
         nothing, and a caller with no log row id (a line replayed by hand) has no
         stamp to copy. No mode is read here.
+
+        ADR-0041 (N-177a): an S2 judged executed (:func:`is_s2_fill`) sells the
+        whole symbol across its batches in :meth:`_settle_s2_fill` and leaves an
+        audit row per batch in ``playbook_fill_moves``; it needs its log row id,
+        so one without is refused before anything is written.
         """
+        if is_s2_fill(directive):
+            if directive_id is None:
+                raise ValueError("an S2 fill is booked against its log row; directive_id is None")
+            self._settle_s2_fill(
+                directive, price=_settle_price(directive, fill_price), directive_id=directive_id
+            )
+            self._mark_schedule(directive)
+            return
         if directive.status == "missed" and directive.batch_no is not None:
             # CEO 裁決 E-2: a MISSED line moves no shares, but it is not free --
             # the retry counter is what the R3-aligned ceiling reads.
@@ -1522,8 +1620,7 @@ class PlaybookStore:
         if batch is None:
             self._mark_schedule(directive)
             return
-        price = fill_price if fill_price is not None else directive.reference_price
-        price = price or Decimal("0")
+        price = _settle_price(directive, fill_price)
         if directive.action == "buy":
             stamp = None if directive_id is None else self._exit_stamp(directive_id)
             batch = batch.model_copy(
@@ -1556,6 +1653,78 @@ class PlaybookStore:
             batch = batch.model_copy(update=changes)
         self.save_batch(batch)
         self._mark_schedule(directive)
+
+    def _settle_s2_fill(self, directive: Directive, *, price: Decimal, directive_id: int) -> None:
+        """Book one S2 fill across the symbol's batches under a single write lock.
+
+        ADR-0041 / N177-C5～C8, on one connection like :meth:`commit_evaluation`:
+
+        1. ``BEGIN IMMEDIATE``.
+        2. The eligible batches (:data:`S2_ELIGIBLE_BATCH_SQL`, the engine's
+           均成本 set), oldest ``batch_no`` first.
+        3. ``directive.shares`` is taken from them in that order, each batch
+           losing ``min(remaining, left)``; one left with none is closed. Only
+           ``remaining_shares``, ``status`` and ``updated_at`` are written.
+        4. Cash rises by ``price × Σmoved``, only when Σmoved > 0.
+        5. One ``playbook_fill_moves`` row per batch moved, or exactly one
+           zero-move row (``batch_no`` NULL) when none was.
+        6. ``COMMIT``; on any error roll back if SQLite has not already and
+           raise unchanged (C-11). Nothing else runs while the lock is held.
+        """
+        moment = datetime.now(UTC).isoformat()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                eligible = conn.execute(
+                    "SELECT b.batch_no, b.remaining_shares FROM playbook_batches AS b "
+                    f"WHERE b.symbol = ? AND {S2_ELIGIBLE_BATCH_SQL} ORDER BY b.batch_no ASC",
+                    (directive.symbol,),
+                ).fetchall()
+                left = directive.shares
+                moves: list[tuple[int | None, int]] = []
+                for batch_no, remaining in eligible:
+                    if left <= 0:
+                        break
+                    moved = min(int(remaining), left)
+                    left -= moved
+                    after = int(remaining) - moved
+                    conn.execute(
+                        "UPDATE playbook_batches SET remaining_shares = ?, status = ?, "
+                        "updated_at = ? WHERE symbol = ? AND batch_no = ?",
+                        (
+                            after,
+                            "closed" if after == 0 else "open",
+                            moment,
+                            directive.symbol,
+                            int(batch_no),
+                        ),
+                    )
+                    moves.append((int(batch_no), moved))
+                total = sum(moved for _, moved in moves)
+                if total > 0:
+                    _add_cash(conn, price * Decimal(total))
+                for batch_no, moved in moves or [(None, 0)]:
+                    conn.execute(
+                        f"INSERT INTO {FILL_MOVES_TABLE} "
+                        "(directive_id, symbol, batch_no, shares_moved, price, source, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            directive_id,
+                            directive.symbol,
+                            batch_no,
+                            moved,
+                            str(price),
+                            FILL_MOVE_SOURCE_SETTLE,
+                            moment,
+                        ),
+                    )
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own (a full disk,
+                # say); a second ROLLBACK would then replace the real error.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
 
     def _exit_stamp(self, directive_id: int) -> date | None:
         """The L4 stamp of one log row, ``None`` when it has none (ADR-0034 C-B6)."""
